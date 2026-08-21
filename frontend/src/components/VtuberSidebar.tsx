@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Avatar, Spin } from 'antd'
 import { useLocation, useNavigate, matchPath } from 'react-router-dom'
 import { api, resolveAsset } from '../api/api'
@@ -16,17 +16,24 @@ export default function VtuberSidebar() {
   const navigate = useNavigate()
   const location = useLocation()
 
-  useEffect(() => {
-    let cancelled = false
+  const load = useCallback(() => {
     api
       .listVtubers()
-      .then((data) => !cancelled && setVtubers(data))
-      .catch((e: Error) => !cancelled && setError(e.message))
-      .finally(() => !cancelled && setLoading(false))
-    return () => {
-      cancelled = true
-    }
+      .then((data) => setVtubers(data))
+      .catch((e: Error) => setError(e.message))
+      .finally(() => setLoading(false))
   }, [])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  // 抓取任务结束（TopBar 轮询发现 running→空闲边沿）后自动刷新列表数据
+  useEffect(() => {
+    const onFetchIdle = () => load()
+    window.addEventListener('ddtoolkit:fetch-idle', onFetchIdle)
+    return () => window.removeEventListener('ddtoolkit:fetch-idle', onFetchIdle)
+  }, [load])
 
   if (loading) {
     return (

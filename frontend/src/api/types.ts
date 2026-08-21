@@ -110,6 +110,25 @@ export interface UpdatePostsResult {
   }[]
 }
 
+/** GET /vtuber/fetch-status：账号信息抓取实时状态 */
+export interface AccountFetchStatus {
+  running: boolean
+  current: string | null
+  index: number
+  total: number
+}
+
+/** GET /vtuber/fetch-status：帖子抓取实时状态 */
+export interface PostFetchStatus {
+  running: boolean
+  target: string | null
+}
+
+export interface FetchStatus {
+  account: AccountFetchStatus
+  post: PostFetchStatus
+}
+
 /** stats_json 解析后的统计字段（B 站口径） */
 export interface PostStatsJson {
   view?: number

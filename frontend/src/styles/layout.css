@@ -86,6 +86,23 @@ body {
   flex-shrink: 0;
 }
 
+.topbar-status-dot.busy {
+  background: #faad14;
+  animation: status-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes status-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.8);
+  }
+}
+
 .topbar-spacer {
   flex: 1;
 }

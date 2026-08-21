@@ -16,7 +16,7 @@ from app.schemas.vtuber import (
 from app.services.scheduler import (
     async_fetch_and_update, async_fetch_vtuber, is_fetch_running,
     async_fetch_posts, async_fetch_all_posts, is_post_fetch_running,
-    async_update_unarchived_posts,
+    async_update_unarchived_posts, get_fetch_status,
 )
 
 router = APIRouter()
@@ -27,6 +27,14 @@ router = APIRouter()
 @router.get("/vtuber/list", response_model=list[VTuberOut])
 def list_vtubers(db: Session = Depends(get_db)):
     return [VTuberOut.model_validate(v, from_attributes=True) for v in VTuberRepo(db).all()]
+
+
+# 注意：本路由必须注册在 /vtuber/{vtuber_id} 之前，否则会被 int 路径参数捕获并 422
+@router.get("/vtuber/fetch-status")
+def fetch_status():
+    """抓取任务实时状态（TopBar 轮询用）：
+    account=账号信息抓取（running/current/index/total），post=帖子抓取（running/target）。"""
+    return get_fetch_status()
 
 
 @router.get("/vtuber/{vtuber_id}", response_model=VTuberOut)

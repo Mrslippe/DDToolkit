@@ -63,6 +63,40 @@ def _needs_avatar_download(acc: Account, new_avatar: str | None, file_exists: bo
 _fetch_lock = threading.Lock()
 _fetch_running = False
 
+# ── 实时状态（供 /vtuber/fetch-status 轮询；仅简单赋值，GIL 下线程安全）──
+_status: dict = {
+    "account": {"running": False, "current": None, "index": 0, "total": 0},
+    "post": {"running": False, "target": None},
+}
+
+
+def _set_account_progress(current: str | None, index: int, total: int) -> None:
+    _status["account"]["current"] = current
+    _status["account"]["index"] = index
+    _status["account"]["total"] = total
+
+
+def _reset_account_status() -> None:
+    _set_account_progress(None, 0, 0)
+    _status["account"]["running"] = False
+
+
+def _set_post_target(target: str | None) -> None:
+    _status["post"]["target"] = target
+
+
+def _reset_post_status() -> None:
+    _set_post_target(None)
+    _status["post"]["running"] = False
+
+
+def get_fetch_status() -> dict:
+    """返回账号信息 / 帖子两类抓取任务的实时状态快照。"""
+    return {
+        "account": dict(_status["account"]),
+        "post": dict(_status["post"]),
+    }
+
 
 @dataclass
 class FetchResult:
@@ -150,6 +184,7 @@ async def async_fetch_and_update() -> FetchResult:
         return FetchResult(details=["上一次抓取仍在进行中，已跳过"])
 
     _fetch_running = True
+    _status["account"]["running"] = True
     result = FetchResult()
 
     # 风控状态为本任务上下文内的干净初值（ContextVar 隔离，见 fetcher.py）
@@ -175,6 +210,7 @@ async def async_fetch_and_update() -> FetchResult:
 
         while idx < len(accounts):
             acc = accounts[idx]
+            _set_account_progress(acc.display_name or str(acc.platform_uid), idx + 1, len(accounts))
 
             ok = await _fetch_one_account(acc, db, client=client)
 
@@ -224,6 +260,7 @@ async def async_fetch_and_update() -> FetchResult:
         db.close()
         await client.aclose()
         _fetch_running = False
+        _reset_account_status()
         _fetch_lock.release()
 
     return result
@@ -250,6 +287,7 @@ async def async_fetch_vtuber(vtuber_id: int) -> FetchResult:
         return FetchResult(details=["上一次抓取仍在进行中，已跳过"])
 
     _fetch_running = True
+    _status["account"]["running"] = True
     result = FetchResult()
     clear_rate_limit()
     client = httpx.AsyncClient(timeout=15.0)
@@ -270,6 +308,7 @@ async def async_fetch_vtuber(vtuber_id: int) -> FetchResult:
         idx = 0
         while idx < len(accounts):
             acc = accounts[idx]
+            _set_account_progress(acc.display_name or str(acc.platform_uid), idx + 1, len(accounts))
             ok = await _fetch_one_account(acc, db, client=client)
 
             if was_rate_limited():
@@ -304,6 +343,7 @@ async def async_fetch_vtuber(vtuber_id: int) -> FetchResult:
         db.close()
         await client.aclose()
         _fetch_running = False
+        _reset_account_status()
         _fetch_lock.release()
 
     return result
@@ -551,6 +591,8 @@ async def async_fetch_posts(mid: int, video_pages: int, dynamics_pages: int) -> 
         return PostFetchResult()
 
     _post_fetch_running = True
+    _status["post"]["running"] = True
+    _set_post_target(str(mid))
     db: Session = SessionLocal()
     client = httpx.AsyncClient(timeout=15.0)
     try:
@@ -563,6 +605,7 @@ async def async_fetch_posts(mid: int, video_pages: int, dynamics_pages: int) -> 
         db.close()
         await client.aclose()
         _post_fetch_running = False
+        _reset_post_status()
         _post_fetch_lock.release()
 
 
@@ -575,6 +618,7 @@ async def async_fetch_all_posts() -> dict:
         return {"status": "skipped", "message": "帖子抓取任务正在进行中"}
 
     _post_fetch_running = True
+    _status["post"]["running"] = True
     total = {"videos": 0, "dynamics": 0, "stored": 0, "skipped": 0}
     details = []
     db: Session = SessionLocal()
@@ -592,6 +636,7 @@ async def async_fetch_all_posts() -> dict:
             return {"status": "done", "total": total, "details": details}
 
         for idx, acc in enumerate(accounts):
+            _set_post_target(acc.display_name or str(acc.platform_uid))
             logger.info(f"[{idx+1}/{len(accounts)}] 全量抓取 {acc.display_name or acc.platform_uid} 的帖子...")
             try:
                 r = await _fetch_posts_core(int(acc.platform_uid), -1, -1, db, client=client)
@@ -622,6 +667,7 @@ async def async_fetch_all_posts() -> dict:
         db.close()
         await client.aclose()
         _post_fetch_running = False
+        _reset_post_status()
         _post_fetch_lock.release()
 
     return {"status": "done", "total": total, "details": details}
@@ -660,6 +706,7 @@ async def async_update_unarchived_posts(name: str | None = None) -> dict:
         return {"status": "skipped", "message": "帖子抓取任务正在进行中"}
 
     _post_fetch_running = True
+    _status["post"]["running"] = True
     db: Session = SessionLocal()
     client = httpx.AsyncClient(timeout=15.0)
     total = {"dynamics": 0, "stored": 0, "skipped": 0}
@@ -692,6 +739,7 @@ async def async_update_unarchived_posts(name: str | None = None) -> dict:
                     "total": total, "details": details}
 
         for idx, acc in enumerate(accounts):
+            _set_post_target(acc.display_name or str(acc.platform_uid))
             logger.info(f"[{idx+1}/{len(accounts)}] 更新未归档动态 {acc.display_name or acc.platform_uid} ...")
             try:
                 r = await _fetch_posts_core(int(acc.platform_uid), -1, -1, db,
@@ -723,6 +771,7 @@ async def async_update_unarchived_posts(name: str | None = None) -> dict:
         db.close()
         await client.aclose()
         _post_fetch_running = False
+        _reset_post_status()
         _post_fetch_lock.release()
 
     return {"status": "done", "archived": archived, "total": total, "details": details}

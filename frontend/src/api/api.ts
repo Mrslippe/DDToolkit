@@ -1,4 +1,4 @@
-import type { FetchPostsResult, FetchResult, Post, PostPage, PostStats, UpdatePostsResult, VTuber } from './types'
+import type { FetchPostsResult, FetchResult, FetchStatus, Post, PostPage, PostStats, UpdatePostsResult, VTuber } from './types'
 
 /**
  * API 基地址：
@@ -33,6 +33,9 @@ export interface PostListParams {
 export const api = {
   /** 全部 VTuber（含嵌套 accounts） */
   listVtubers: () => request<VTuber[]>('/vtuber/list'),
+
+  /** 抓取任务实时状态（TopBar 轮询用） */
+  getFetchStatus: () => request<FetchStatus>('/vtuber/fetch-status'),
 
   /** 单个 VTuber */
   getVtuber: (id: number) => request<VTuber>(`/vtuber/${id}`),
