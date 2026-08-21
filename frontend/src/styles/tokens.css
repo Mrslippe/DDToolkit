@@ -36,4 +36,6 @@
   /* 尺寸 */
   --topbar-height: 56px;
   --sidebar-width: 300px;
+  /* 窗口圆角度数（L3 自绘方案，随改随生效） */
+  --radius-window: 12px;
 }

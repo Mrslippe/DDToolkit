@@ -195,7 +195,15 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![get_backend_port])
         .setup(|app| {
             let port = free_port();
-            let data_dir = app.path().app_data_dir()?;
+            let mut data_dir = app.path().app_data_dir()?;
+            // dev 构建使用独立数据目录，避免调试抓取/登录写进「生产」数据
+            #[cfg(debug_assertions)]
+            {
+                data_dir = data_dir.with_file_name(format!(
+                    "{}-dev",
+                    data_dir.file_name().unwrap_or_default().to_string_lossy()
+                ));
+            }
             std::fs::create_dir_all(&data_dir)?;
             println!("[ddtoolkit] data dir = {}", data_dir.display());
             println!("[ddtoolkit] backend port = {}", port);

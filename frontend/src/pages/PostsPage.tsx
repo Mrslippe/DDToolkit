@@ -131,29 +131,41 @@ export default function PostsPage() {
     }
   }, [selectedAccount])
 
-  // 帖子列表（服务端分页 + 过滤）
+  // 帖子列表（服务端分页 + 过滤）；AbortController：切换 VTuber/翻页时
+  // 取消在途请求，防止慢响应把旧数据写回新视图
   useEffect(() => {
     if (!selectedAccount) return
     setLoading(true)
     setError(null)
-    let cancelled = false
+    const controller = new AbortController()
+    let aborted = false
     api
-      .listPosts(selectedAccount.platform, selectedAccount.platform_uid, {
-        page,
-        page_size: PAGE_SIZE,
-        type: typeFilter,
-        is_archived: archived === 'all' ? undefined : archived === 'archived',
-      })
+      .listPosts(
+        selectedAccount.platform,
+        selectedAccount.platform_uid,
+        {
+          page,
+          page_size: PAGE_SIZE,
+          type: typeFilter,
+          is_archived: archived === 'all' ? undefined : archived === 'archived',
+        },
+        controller.signal,
+      )
       .then((p) => {
-        if (cancelled) return
         setPosts(p.items)
         setTotal(p.total)
       })
-      .catch((e: Error) => !cancelled && setError(e.message))
-      .finally(() => !cancelled && setLoading(false))
-    return () => {
-      cancelled = true
-    }
+      .catch((e: Error) => {
+        if (e.name === 'AbortError') {
+          aborted = true // 已被新一次加载取代，不动任何状态
+          return
+        }
+        setError(e.message)
+      })
+      .finally(() => {
+        if (!aborted) setLoading(false)
+      })
+    return () => controller.abort()
   }, [selectedAccount, page, typeFilter, archived])
 
   const changeAccount = (uid: string) => {
@@ -358,14 +370,14 @@ export default function PostsPage() {
         </ToggleGroup>
       </div>
 
-      {/* 帖子卡片流 */}
+      {/* 帖子卡片流：重取数据时保留旧内容降透明度，仅首次加载才显示骨架屏 */}
       {error ? (
         <Alert variant="destructive">
           <CircleAlert />
           <AlertTitle>加载失败</AlertTitle>
           <AlertDescription>{error}</AlertDescription>
         </Alert>
-      ) : loading ? (
+      ) : loading && posts.length === 0 ? (
         <div className="post-grid">
           {Array.from({ length: 5 }, (_, i) => (
             <div key={i} className="post-card sk" aria-hidden>
@@ -383,7 +395,7 @@ export default function PostsPage() {
           暂无帖子，点击上方「抓取帖子」或「更新动态」获取
         </div>
       ) : (
-        <div className="post-grid">
+        <div className={`post-grid${loading ? ' is-refetching' : ''}`}>
           {posts.map((p) => (
             <PostCard key={p.id} post={p} onClick={() => setDrawerPost(p)} />
           ))}

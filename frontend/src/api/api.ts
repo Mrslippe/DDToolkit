@@ -52,14 +52,14 @@ export const api = {
   /** 单个 VTuber */
   getVtuber: (id: number) => request<VTuber>(`/vtuber/${id}`),
 
-  /** 帖子列表（服务端分页 + 过滤） */
-  listPosts: (platform: string, uid: string, params: PostListParams) => {
+  /** 帖子列表（服务端分页 + 过滤）；可传 signal 取消在途请求（切换 VTuber 防回写） */
+  listPosts: (platform: string, uid: string, params: PostListParams, signal?: AbortSignal) => {
     const q = new URLSearchParams()
     q.set('page', String(params.page))
     q.set('page_size', String(params.page_size))
     if (params.type) q.set('type', params.type)
     if (params.is_archived !== undefined) q.set('is_archived', String(params.is_archived))
-    return request<PostPage>(`/posts/${platform}/${uid}/paginated?${q.toString()}`)
+    return request<PostPage>(`/posts/${platform}/${uid}/paginated?${q.toString()}`, { signal })
   },
 
   /** 帖子统计概览（总数/类型分布/时间跨度） */

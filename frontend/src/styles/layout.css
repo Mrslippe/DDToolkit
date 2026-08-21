@@ -8,7 +8,6 @@ body,
 
 body {
   margin: 0;
-  background: var(--c-bg-page);
   color: var(--c-text-main);
   font-family: var(--font-family);
 }
@@ -18,6 +17,33 @@ body {
   flex-direction: column;
   height: 100%;
   overflow: hidden;
+  /* L3 自绘窗口圆角：度数随改随生效（透明窗口 + 壳层裁剪） */
+  border-radius: var(--radius-window, 12px);
+  background: var(--c-bg-page);
+  box-shadow: 0 0 0 1px var(--c-border);
+}
+
+/* 最大化时去掉圆角，避免四角留空 */
+html.window-maximized .app-shell,
+html.window-maximized body {
+  border-radius: 0;
+}
+
+/* 全局细滚动条（WebView2 = Chromium 内核，webkit 私有属性全支持） */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--c-border);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--c-primary);
+}
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 .app-body {
@@ -35,7 +61,6 @@ body {
   height: var(--topbar-height);
   padding: 0 16px 0 12px;
   background: var(--c-primary);
-  border-radius: var(--radius-card) var(--radius-card) 0 0;
   flex-shrink: 0;
 }
 

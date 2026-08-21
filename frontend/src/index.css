@@ -58,7 +58,10 @@
   * {
     @apply border-border outline-ring/50;
   }
+  /* L3 透明窗口方案：body 保持透明，由 .app-shell 自绘圆角与底色；
+     浏览器模式下透明处显示浏览器默认白底，观感一致 */
+  html,
   body {
-    @apply bg-background text-foreground;
+    background: transparent;
   }
 }

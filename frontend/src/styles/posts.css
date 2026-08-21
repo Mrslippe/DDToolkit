@@ -106,6 +106,13 @@
   gap: 12px;
 }
 
+/* 重取数据时保留旧内容：降透明 + 禁点击，避免整屏骨架闪动 */
+.post-grid.is-refetching {
+  opacity: 0.55;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+
 .post-card {
   display: flex;
   flex-direction: row;
