@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>http-test（Better DD Toolkit）项目架构分析报告</title>
+<style>
+  :root{
+    --bg:#f4f6f9; --card:#ffffff; --ink:#1f2937; --sub:#5b6b7c; --line:#e2e8f0;
+    --blue:#2e86c1; --blue-d:#1b4f8a; --green:#27ae60; --orange:#e67e22;
+    --red:#c0392b; --purple:#8e44ad; --gold:#b7950b;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:"Segoe UI","Microsoft YaHei","PingFang SC",system-ui,sans-serif;
+    line-height:1.65;font-size:15px}
+  .wrap{max-width:1180px;margin:0 auto;padding:28px 20px 80px}
+  header.cover{background:linear-gradient(135deg,#1f3a5f 0%,#2e6da4 60%,#3f9ac9 100%);
+    color:#fff;border-radius:14px;padding:42px 46px;margin-bottom:26px}
+  header.cover h1{margin:0 0 10px;font-size:30px;letter-spacing:.5px}
+  header.cover .sub{font-size:15px;opacity:.92}
+  .meta{display:flex;flex-wrap:wrap;gap:10px;margin-top:20px}
+  .chip{background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.35);
+    border-radius:999px;padding:4px 14px;font-size:13px}
+  nav.toc{background:var(--card);border:1px solid var(--line);border-radius:12px;
+    padding:20px 26px;margin-bottom:26px}
+  nav.toc h2{margin:0 0 12px;font-size:16px;color:var(--blue-d)}
+  nav.toc ol{margin:0;padding-left:22px;columns:2;column-gap:40px;font-size:14px}
+  nav.toc li{margin:3px 0}
+  nav.toc a{color:var(--blue);text-decoration:none}
+  nav.toc a:hover{text-decoration:underline}
+  section{background:var(--card);border:1px solid var(--line);border-radius:12px;
+    padding:28px 34px;margin-bottom:26px}
+  h2.sec{font-size:22px;color:var(--blue-d);margin:0 0 6px;padding-bottom:10px;
+    border-bottom:2px solid var(--line)}
+  h2.sec .no{color:#aab7c4;font-size:16px;margin-right:8px}
+  h3{font-size:17px;color:#1f3a5f;margin:24px 0 8px}
+  p{margin:8px 0}
+  .lead{color:var(--sub)}
+  figure{margin:22px 0;background:#fbfdff;border:1px solid var(--line);border-radius:10px;
+    padding:14px}
+  figure img{width:100%;height:auto;display:block;background:#fff;border-radius:6px}
+  figcaption{text-align:center;font-size:13px;color:var(--sub);margin-top:8px}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:13.5px}
+  th,td{border:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
+  th{background:#eef4fb;color:var(--blue-d);font-weight:600;white-space:nowrap}
+  tr:nth-child(even) td{background:#fafbfd}
+  code{background:#eef1f5;border-radius:4px;padding:1px 6px;
+    font-family:Consolas,"Cascadia Mono",monospace;font-size:13px;color:#0f4c81}
+  pre{background:#1e293b;color:#dbe7f3;border-radius:10px;padding:16px 18px;
+    overflow-x:auto;font-size:13px;line-height:1.6}
+  pre code{background:none;color:inherit;padding:0}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:860px){.grid2{grid-template-columns:1fr}nav.toc ol{columns:1}}
+  .stat-row{display:flex;flex-wrap:wrap;gap:14px;margin:16px 0}
+  .stat{flex:1 1 160px;background:#f5f9fd;border:1px solid var(--line);
+    border-radius:10px;padding:14px 16px;text-align:center}
+  .stat b{display:block;font-size:26px;color:var(--blue-d)}
+  .stat span{font-size:12.5px;color:var(--sub)}
+  .tag{display:inline-block;border-radius:5px;padding:1px 8px;font-size:12px;
+    margin:0 3px 3px 0;border:1px solid}
+  .t-blue{background:#eaf2fb;color:#1b4f8a;border-color:#bcd7ec}
+  .t-green{background:#eaf7ef;color:#1e6b3c;border-color:#bfe3cd}
+  .t-orange{background:#fdf2e9;color:#9c4a0b;border-color:#f0d3b7}
+  .t-red{background:#fdf0ef;color:#7b241c;border-color:#f0c5c0}
+  .t-purple{background:#f5eef8;color:#5b2c6f;border-color:#ddc6ea}
+  .t-gold{background:#fef9e7;color:#7d6608;border-color:#ecdc9e}
+  .note{border-left:4px solid var(--blue);background:#eef4fb;border-radius:0 8px 8px 0;
+    padding:10px 16px;margin:14px 0;font-size:14px}
+  .warn{border-left:4px solid var(--red);background:#fdf0ef;border-radius:0 8px 8px 0;
+    padding:10px 16px;margin:14px 0;font-size:14px}
+  .ok{border-left:4px solid var(--green);background:#eaf7ef;border-radius:0 8px 8px 0;
+    padding:10px 16px;margin:14px 0;font-size:14px}
+  ul,ol{margin:8px 0;padding-left:24px}
+  li{margin:4px 0}
+  footer{text-align:center;color:#8a97a5;font-size:13px;margin-top:10px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="cover">
+  <h1>http-test（Better DD Toolkit）项目架构分析报告</h1>
+  <div class="sub">B 站 VTuber 数据监控后端服务 —— 框架、数据模型、抓取管线、认证机制与演进历史全景分析</div>
+  <div class="meta">
+    <span class="chip">分析对象：E:\work\Project\http-test</span>
+    <span class="chip">最新版本：v0.3.2（devlog 013）</span>
+    <span class="chip">代码规模：约 2,900 行 Python</span>
+    <span class="chip">数据库：SQLite（Alembic rev c002）</span>
+    <span class="chip">报告生成：2026-08-17</span>
+  </div>
+</header>
+
+<nav class="toc">
+  <h2>目录</h2>
+  <ol>
+    <li><a href="#s1">项目概览</a></li>
+    <li><a href="#s2">技术栈与依赖</a></li>
+    <li><a href="#s3">目录结构详解</a></li>
+    <li><a href="#s4">系统架构总览（架构图）</a></li>
+    <li><a href="#s5">数据模型与 ER 设计</a></li>
+    <li><a href="#s6">启动与生命周期</a></li>
+    <li><a href="#s7">数据抓取子系统</a></li>
+    <li><a href="#s8">认证与反爬签名</a></li>
+    <li><a href="#s9">手动抓取时序</a></li>
+    <li><a href="#s10">REST API 端点全表</a></li>
+    <li><a href="#s11">配置项</a></li>
+    <li><a href="#s12">数据库迁移历史</a></li>
+    <li><a href="#s13">测试体系</a></li>
+    <li><a href="#s14">数据资产现状</a></li>
+    <li><a href="#s15">版本演进时间线</a></li>
+    <li><a href="#s16">代码质量观察</a></li>
+    <li><a href="#s17">改进建议</a></li>
+    <li><a href="#s18">附录：完整文件清单</a></li>
+    <li><a href="#s19">修复记录（v0.3.2）</a></li>
+  </ol>
+</nav>
+
+<!-- ================= 1 项目概览 ================= -->
+<section id="s1">
+  <h2 class="sec"><span class="no">§1</span>项目概览</h2>
+  <p><strong>http-test</strong> 是名为 <strong>Better DD Toolkit</strong> 的 VTuber 数据监控与管理的<strong>后端服务</strong>。
+  它以 Bilibili 为数据源，自动抓取 VTuber 的昵称、签名、粉丝数、直播状态、视频投稿与动态（帖子），
+  持久化到本地 SQLite，并通过 REST API 对外提供查询与抓取触发能力。</p>
+
+  <div class="stat-row">
+    <div class="stat"><b>12</b><span>个迭代版本（3 天）</span></div>
+    <div class="stat"><b>16</b><span>个 REST 端点</span></div>
+    <div class="stat"><b>3</b><span>张数据表（三表重构）</span></div>
+    <div class="stat"><b>11,055</b><span>条帖子数据</span></div>
+    <div class="stat"><b>718</b><span>张本地头像缓存</span></div>
+    <div class="stat"><b>26</b><span>个自动化测试</span></div>
+  </div>
+
+  <h3>核心能力</h3>
+  <ul>
+    <li><strong>VTuber / 账号 / 帖子三级 CRUD</strong>：支持多平台账号归属同一 VTuber 的数据模型；</li>
+    <li><strong>定时数据抓取</strong>：APScheduler 每 5 分钟（±30s 抖动）全量刷新账号信息与粉丝数；</li>
+    <li><strong>帖子（动态/投稿）抓取</strong>：按名字模糊匹配或全库全量，分页/游标拉取视频投稿与六类动态，并按内容类型调用详情接口补全数据；</li>
+    <li><strong>登录态自动维护</strong>：Cookie 心跳校验 → refresh_token 续期 → 终端二维码扫码三级兜底，凭据自动写回 <code>.env</code>；</li>
+    <li><strong>WBI 签名与反风控</strong>：自实现 B 站 WBI 签名算法，内置限流检测、冷却自愈与断点续抓；</li>
+    <li><strong>名单发现与导入</strong>：独立脚本从 <code>vtbs.moe</code> 拉取 3000+ VTuber 名单生成 CSV，服务启动时按 <code>flag=1</code> 去重导入；</li>
+    <li><strong>头像本地缓存</strong>：头像下载到 <code>static/avatars/</code> 并经 <code>/static</code> 对外服务。</li>
+  </ul>
+
+  <div class="note">项目曾内置 Flet 桌面客户端（v0.1.0），v0.1.4 起移除前端、专注后端；批量发现/直播区扫描等重操作也于 v0.2.4 拆分为独立脚本，服务端保持轻量。</div>
+</section>
+
+<!-- ================= 2 技术栈 ================= -->
+<section id="s2">
+  <h2 class="sec"><span class="no">§2</span>技术栈与依赖</h2>
+  <table>
+    <tr><th style="width:200px">层级</th><th>选型</th><th>用途</th></tr>
+    <tr><td>语言 / 运行时</td><td>Python 3.14</td><td>开发语言（.pyc 为 cpython-314，实测 Python 3.14.1）</td></tr>
+    <tr><td>Web 框架</td><td>FastAPI ≥0.115</td><td>REST API、lifespan 生命周期、CORS、静态挂载、自动 OpenAPI 文档</td></tr>
+    <tr><td>ASGI 服务器</td><td>uvicorn[standard] ≥0.30</td><td>开发/生产运行服务器</td></tr>
+    <tr><td>ORM</td><td>SQLAlchemy ≥2.0</td><td>模型定义、会话管理、关系映射（declarative_base 2.0 新路径）</td></tr>
+    <tr><td>数据库</td><td>SQLite（vtuber.db）</td><td>本地嵌入式数据库，check_same_thread=False 适配异步</td></tr>
+    <tr><td>迁移</td><td>Alembic ≥1.13</td><td>schema 版本化（当前 rev c002，4 个迁移脚本）</td></tr>
+    <tr><td>定时任务</td><td>APScheduler ≥3.10</td><td>BackgroundScheduler 线程，每 5 分钟抓取</td></tr>
+    <tr><td>HTTP 客户端</td><td>httpx ≥0.27</td><td>异步调用 B 站 API 与 vtbs.moe</td></tr>
+    <tr><td>重试</td><td>tenacity ≥8.0</td><td>抓取接口失败重试（3 次指数退避）</td></tr>
+    <tr><td>配置</td><td>python-dotenv ≥1.0</td><td>加载 / 回写 .env 凭证</td></tr>
+    <tr><td>终端二维码</td><td>qrcode ≥7.0</td><td>扫码登录时终端 ASCII 二维码</td></tr>
+    <tr><td>数据校验</td><td>Pydantic v2</td><td>请求/响应 Schema（from_attributes=True 直接序列化 ORM）</td></tr>
+    <tr><td>测试</td><td>pytest ≥7.0 + TestClient</td><td>14 个 API 测试，独立测试库 test_vtuber.db</td></tr>
+  </table>
+  <p class="lead">依赖清单见 <code>requirements.txt</code>（10 项）。整个项目无前端框架、无消息队列、无 Redis——单进程 + 线程锁 + SQLite 的轻量架构。</p>
+</section>
+
+<!-- ================= 3 目录结构 ================= -->
+<section id="s3">
+  <h2 class="sec"><span class="no">§3</span>目录结构详解</h2>
+  <pre><code>http-test/
+├── app/
+│   ├── main.py                    # FastAPI 入口：日志配置、lifespan、CORS、路由注册、/static 挂载（72 行）
+│   ├── core/
+│   │   ├── config.py              # Settings 配置中心，.env 加载（39 行）
+│   │   └── database.py            # engine / SessionLocal / Base / get_db 依赖（21 行）
+│   ├── dependencies/
+│   │   └── get_db.py              # re-export core.database.get_db（3 行）
+│   ├── models/
+│   │   └── vtuber.py              # VTuber / Account / Post 三 ORM 模型（81 行）
+│   ├── schemas/
+│   │   └── vtuber.py              # Pydantic v2 入参/出参 Schema，9 个模型（129 行）
+│   ├── repositories/
+│   │   └── vtuber_repo.py         # VTuberRepo / AccountRepo / PostRepo 数据访问层（129 行）
+│   ├── routers/
+│   │   └── vtuber.py              # 16 个 API 端点 + 抓取触发（187 行）
+│   └── services/                  # 业务核心层
+│       ├── fetcher.py             # B 站 API 客户端：用户/统计/视频/动态/详情 + 风控检测（677 行）
+│       ├── scheduler.py           # 定时调度 + 抓取编排 + 帖子抓取 + 锁（455 行）
+│       ├── auth.py                # BilibiliAuth 单例：心跳/续期/扫码 + .env 回写（443 行）
+│       ├── wbi.py                 # WBI 签名算法实现（78 行）
+│       └── importer.py            # CSV 导入与去重（97 行）
+├── alembic/
+│   ├── env.py                     # 迁移环境（render_as_batch 适配 SQLite）
+│   └── versions/
+│       ├── a001_init_v2.py        # vtubers + accounts 初始化
+│       ├── b001_posts_v2.py       # 重建 accounts + 新建 posts
+│       ├── c001_post_archived.py  # posts 增加 is_archived
+│       └── c002_posts_per_uid_dedup.py  # 唯一约束改为按 UID 去重（重建表）
+├── scripts/
+│   └── discover_vtubers.py        # 独立发现脚本：vtbs.moe → 粉丝数 → vtubers.csv（143 行）
+├── tests/
+│   └── test_vtuber_api.py         # 14 个 API 测试（135 行）
+├── devlog/                        # 12 篇开发日志（001 ~ 012，项目演化完整记录）
+├── docs/                          # 本报告 + 架构图生成脚本 + diagrams/
+├── static/avatars/                # 718 张头像本地缓存
+├── vtubers.csv                    # VTuber 名单（9,482 行数据，4 个 flag=1）
+├── vtuber.db / test_vtuber.db     # 生产 / 测试数据库
+├── logs/app.log                   # 日志文件（FileHandler 正常写入，devlog/013 已修复）
+├── requirements.txt  .env  .env.example  .gitignore  alembic.ini
+└── vtubers.session.sql            # IDE 会话残留（SELECT * FROM events，无关紧要）</code></pre>
+  <p class="lead">分层关系：<code>routers → repositories → models</code>（经典三层），<code>schemas</code> 负责出入参边界校验，
+  <code>services</code> 承载全部外部 I/O 业务（抓取/认证/签名/调度/导入）。依赖方向自外向内，services 直接使用
+  <code>SessionLocal</code> 自管会话，与 Web 请求的 <code>Depends(get_db)</code> 会话体系解耦。</p>
+</section>
+
+<!-- ================= 4 架构总览 ================= -->
+<section id="s4">
+  <h2 class="sec"><span class="no">§4</span>系统架构总览</h2>
+  <p class="lead">下图展示完整六层架构：客户端层（Web + 独立脚本）→ 接口层（FastAPI 路由）→ 服务层（抓取/认证/签名/调度/导入）→
+  外部系统（B 站 API）与核心支撑层（配置/ORM/仓储）→ 数据层（SQLite / 头像 / 日志 / CSV）。</p>
+  <figure>
+    <img src="diagrams/01_system_architecture.svg" alt="系统整体分层架构图">
+    <figcaption>图 1 · Better DD Toolkit 系统分层架构（自研 SVG，可缩放）</figcaption>
+  </figure>
+
+  <h3>分层职责说明</h3>
+  <table>
+    <tr><th style="width:150px">层</th><th>组成</th><th>职责与关键机制</th></tr>
+    <tr><td>① 客户端层</td><td>浏览器 / curl；discover_vtubers.py</td><td>REST 调用（Swagger <code>/docs</code> 可调试）；脚本独立拉名单写 CSV，不依赖项目模块</td></tr>
+    <tr><td>② 接口层</td><td>main.py + routers/vtuber.py</td><td>16 个端点；CORS 全开放；<code>/static</code> 头像静态挂载；lifespan 编排启动/关停</td></tr>
+    <tr><td>③ 服务层</td><td>scheduler / fetcher / auth / wbi / importer</td><td>定时调度与锁；B 站 API 调用与风控检测；Cookie 生命周期；WBI 签名；CSV 导入去重</td></tr>
+    <tr><td>④ 外部系统</td><td>Bilibili Web API</td><td>空间/粉丝/投稿/动态/详情/认证共 9 类接口；vtbs.moe 名单接口（仅脚本使用）</td></tr>
+    <tr><td>⑤ 核心支撑层</td><td>config / database / models / schemas / repositories</td><td>配置中心；会话工厂；ORM 三模型；Pydantic 校验；CRUD 仓储</td></tr>
+    <tr><td>⑥ 数据层</td><td>vtuber.db / static/avatars / logs / vtubers.csv</td><td>SQLite 持久化；头像本地缓存；运行日志；名单源文件</td></tr>
+  </table>
+
+  <h3>请求生命周期（典型读路径）</h3>
+  <pre><code>HTTP GET /vtuber/list
+  → FastAPI 路由 list_vtubers(db=Depends(get_db))   # 依赖注入，每请求一个 Session
+  → VTuberRepo(db).all()                             # joinedload(VTuber.accounts) 预加载
+  → SQLAlchemy 查询 SQLite → 返回 ORM 对象列表
+  → VTuberOut.model_validate(v, from_attributes=True) # Pydantic v2 序列化（含嵌套账号）
+  → JSON 200 响应</code></pre>
+
+  <h3>常驻后台活动</h3>
+  <p>服务运行期同时存在 <strong>三路并发活动</strong>：① uvicorn Web 请求处理；② APScheduler 后台线程（每 5 分钟抓取）；
+  ③ <code>auth_manager.run_maintenance()</code> asyncio 任务（每 30 分钟维护登录态）。手动触发的抓取与定时抓取之间由
+  <code>threading.Lock</code>（非阻塞获取）互斥；帖子抓取另设独立锁 <code>_post_fetch_lock</code>，两类任务互不阻塞。</p>
+</section>
+
+<!-- ================= 5 数据模型 ================= -->
+<section id="s5">
+  <h2 class="sec"><span class="no">§5</span>数据模型与 ER 设计</h2>
+  <p class="lead">v0.3.0 将早期单表重构为三表：<code>vtubers</code>（主播本体，平台无关）→
+  <code>accounts</code>（各平台账号）→ <code>posts</code>（动态/投稿）。posts 刻意<strong>不设外键</strong>，
+  以 <code>(platform, platform_uid)</code> 与 accounts 逻辑关联。</p>
+  <figure>
+    <img src="diagrams/02_er_diagram.svg" alt="三表 ER 图">
+    <figcaption>图 2 · SQLite 三表数据模型与去重约束（vtubers 1—N accounts；posts 逻辑关联）</figcaption>
+  </figure>
+
+  <h3>设计要点</h3>
+  <ul>
+    <li><strong>多平台设计</strong>：一个 VTuber 可挂多个平台账号（bilibili/youtube/twitter…），当前库内 4 个账号均为 bilibili；</li>
+    <li><strong>级联删除</strong>：<code>accounts</code> 外键带 <code>cascade="all, delete-orphan"</code>，删 VTuber 自动删其账号（测试用例 <code>test_cascade_delete</code> 覆盖）；</li>
+    <li><strong>posts 独立于 accounts</strong>：无外键，删除账号不牵连帖子；帖子按 <code>(platform, platform_uid, platform_post_id)</code> 唯一——联合投稿视频会出现在多个 V 的列表里，全局去重会让第二个 V 抓取时违反唯一约束，因此 v0.3.1（迁移 c002）改为按 UID 去重，每个 V 的帖子列表完整（迁移注释原文说明）；</li>
+    <li><strong>三层去重防线</strong>：① 抓取前预读 <code>existing_ids</code> 内存集合（命中直接 skip，不发起详情请求）→ ② 数据库唯一约束 → ③ <code>IntegrityError</code> 捕获回滚跳过（<code>_safe_store_post</code>）；</li>
+    <li><strong>结构化 + 兜底</strong>：<code>body_json</code> 存类型差异数据（图文/视频/专栏各有结构），<code>stats_json</code> 存统计数据，<code>raw_json</code> 保留平台原始响应以防后续需要重解析；</li>
+    <li><strong>时间统一 UTC</strong>：<code>_now()</code> 默认值 + <code>published_at</code> 解析时统一 <code>timezone.utc</code>。</li>
+  </ul>
+
+  <h3>Post 类型枚举（抓取侧映射）</h3>
+  <table>
+    <tr><th>存储 type</th><th>来源</th><th>详情补全接口</th></tr>
+    <tr><td><code>video</code></td><td>投稿列表 / 动态 ARCHIVE</td><td><code>fetch_video_detail(bvid)</code> — 完整简介、分 P、播放/弹幕统计</td></tr>
+    <tr><td><code>image</code> / <code>text</code></td><td>动态 DRAW / OPUS / WORD</td><td><code>fetch_dynamic_detail(dynamic_id)</code> — OPUS 格式完整数据</td></tr>
+    <tr><td><code>article</code></td><td>动态 ARTICLE</td><td><code>fetch_article_detail(cv_id)</code> — 专栏全文 HTML + 阅读统计</td></tr>
+    <tr><td><code>repost</code></td><td>动态 FORWARD / COMMON</td><td>递归解析内层 origin，附言在 module_dynamic.desc</td></tr>
+    <tr><td><code>live</code></td><td>动态 LIVE_RCMD</td><td>使用 feed 数据（room_id / live_state）</td></tr>
+  </table>
+</section>
+
+<!-- ================= 6 生命周期 ================= -->
+<section id="s6">
+  <h2 class="sec"><span class="no">§6</span>启动与生命周期</h2>
+  <p class="lead"><code>app/main.py</code> 使用 FastAPI <code>@asynccontextmanager</code> 的 lifespan 编排启动与优雅关停。</p>
+  <figure>
+    <img src="diagrams/03_lifespan.svg" alt="应用启动与关停流程图">
+    <figcaption>图 3 · lifespan 启动/关停流程（含 5 秒延迟抓取分支与三个常驻后台活动）</figcaption>
+  </figure>
+  <div class="note"><strong>启动即自愈</strong>：检测到 CSV 新导入的 VTuber（<code>result["created"] &gt; 0</code>）时，
+  5 秒后自动触发一次全量抓取（<code>_delayed_fetch(5)</code>），新名单无需等待下一个定时周期。
+  关停路径依次 <code>auth_task.cancel()</code> → <code>shutdown_scheduler(wait=False)</code>，保证无挂起任务阻塞退出。</div>
+</section>
+
+<!-- ================= 7 抓取子系统 ================= -->
+<section id="s7">
+  <h2 class="sec"><span class="no">§7</span>数据抓取子系统</h2>
+
+  <h3>7.1 定时抓取（账号信息 + 粉丝数）</h3>
+  <p class="lead">APScheduler 每 5 分钟触发，逐账号抓取用户信息与统计；内置请求节流、批量休息与风控冷却自愈。</p>
+  <figure>
+    <img src="diagrams/04_fetch_flow.svg" alt="定时抓取与风控流程图">
+    <figcaption>图 4 · async_fetch_and_update() 抓取流程与风控自愈分支</figcaption>
+  </figure>
+  <ul>
+    <li><strong>双接口抓取</strong>：<code>fetch_bilibili_user_info</code>（昵称/签名/头像/直播状态/直播间）+ <code>fetch_bilibili_user_stat</code>（粉丝/关注数）；两者均带 tenacity 重试 ≤3 次、指数退避 2~10s；</li>
+    <li><strong>节流参数</strong>：每账号请求间随机 3~5s；每处理 10 个账号强制休息 60s；定时抖动 ±30s（防周期性特征）；</li>
+    <li><strong>风控自愈</strong>：检测到 HTTP 412 / code -509、-412、-799 / 消息含“频繁”“请求过于”时：先 <code>commit</code> 已更新的数据 → <code>clear_rate_limit()</code> → 冷却 600s → 重建 Session 重读列表 → 从原 <code>idx</code> 继续（断点续抓，不重头再来）；</li>
+    <li><strong>头像缓存</strong>：头像 URL 变化才下载到 <code>static/avatars/{uid}.jpg|png</code>，失败仅 warning 不中断流程；</li>
+    <li><strong>并发互斥</strong>：<code>threading.Lock</code> 非阻塞获取，定时与手动触发重叠时后者直接跳过（返回 <code>{"status":"skipped"}</code>）。</li>
+  </ul>
+
+  <h3>7.2 帖子抓取（视频投稿 + 动态）</h3>
+  <p class="lead">按指令触发（非常驻任务）：<code>/vtuber/fetch-posts</code>（按名字模糊匹配）与 <code>/vtuber/fetch-all-posts</code>（全库全量）。</p>
+  <figure>
+    <img src="diagrams/05_post_fetch_flow.svg" alt="帖子抓取链路图">
+    <figcaption>图 5 · _fetch_posts_core() 帖子抓取链路：双通道列表 → 去重 → 类型化详情补全 → 落库</figcaption>
+  </figure>
+  <ul>
+    <li><strong>双通道列表</strong>：视频用 <code>/x/space/wbi/arc/search</code> 分页（WBI 签名，ps=30，按发布时间排序），动态用 <code>/x/polymer/web-dynamic/v1/feed/space</code> 游标翻页（<code>has_more</code>/<code>next_offset</code>）；</li>
+    <li><strong>全量模式</strong>：<code>video_pages=-1</code> 翻页到空、<code>dynamics_pages=-1</code> 翻到 <code>has_more=false</code>；</li>
+    <li><strong>类型化详情补全</strong>（v0.3.1 重点优化）：feed 数据为摘要，按 type 路由到三个详情接口补全正文/全文/统计，失败回退 feed 数据并打 warning；</li>
+    <li><strong>动态类型解析器</strong>：按 <code>major.type</code>（OPUS/DRAW/ARTICLE/ARCHIVE/LIVE/COMMON）递归解析正文、封面、标题与链接（转发递归解析内层 origin），约 200 行解析逻辑集中在 <code>fetcher.py</code>；</li>
+    <li><strong>防 Ban 节奏</strong>：视频每页后 sleep 1s；动态每页后 sleep 20s；每条详情后随机 0.5~2s；全量任务账号间 20s；风控冷却 600s；</li>
+    <li><strong>落库</strong>：<code>_safe_store_post</code> 逐条插入，唯一约束冲突回滚跳过，末尾统一 <code>commit</code>，返回 <code>PostFetchResult{videos, dynamics, stored, skipped, rate_limited}</code>。</li>
+  </ul>
+
+  <h3>7.3 WBI 签名原理</h3>
+  <p>B 站部分接口（空间/投稿）要求 WBI 签名，<code>wbi.py</code> 完整实现了该算法：</p>
+  <pre><code>1. get_wbi_keys()        → 调 /x/web-interface/nav 取 wbi_img.img_url / sub_url
+                           → 截取文件名得 img_key + sub_key（内存缓存 30 分钟，登录态变化时清除）
+2. get_mixin_key()       → raw = img_key + sub_key，按 64 位固定置换表重排取前 32 位 = mixin_key
+3. encrypt_wbi(params)   → 参数加 wts（当前秒级时间戳）→ 按键排序 → urlencode
+                           → md5(query_str + mixin_key) = w_rid
+4. sign_params()         → 返回 {原参数, w_rid, wts}
+5. 请求 URL              → https://api.bilibili.com/...?{params}&w_rid={w_rid}&wts={wts}</code></pre>
+</section>
+
+<!-- ================= 8 认证子系统 ================= -->
+<section id="s8">
+  <h2 class="sec"><span class="no">§8</span>认证与登录态维护</h2>
+  <p class="lead"><code>auth.py</code> 的 <code>BilibiliAuth</code> 单例管理 Cookie 全生命周期：
+  每次请求动态构建 <code>Cookie</code> 头（永远是内存中的最新值），维护循环每 30 分钟执行三级策略。</p>
+  <figure>
+    <img src="diagrams/06_auth_flow.svg" alt="认证维护状态机">
+    <figcaption>图 6 · run_maintenance() 三级认证策略：心跳 → refresh_token 续期 → 二维码扫码兜底</figcaption>
+  </figure>
+  <ul>
+    <li><strong>阶段 1 心跳</strong>：<code>GET /x/web-interface/nav</code> 校验 <code>isLogin</code>；有效则顺手调 <code>/cookie/info</code> 刷新 refresh_token 存量；</li>
+    <li><strong>阶段 2 续期</strong>：Session 过期后 <code>POST /cookie/refresh</code>（csrf + refresh_token）换新 SESSDATA，从 <code>Set-Cookie</code> 头解析（httpx cookie jar + 原始头正则双通道兜底）；</li>
+    <li><strong>阶段 3 扫码</strong>：全部失效时生成二维码（终端 ASCII 打印 + 链接），每 2s 轮询最长 3 分钟；识别 86090 等待 / 86101 已扫 / 86038 过期 / code=0 成功；成功后访问回调 URL 种 Cookie、nav 复核登录态，提取 SESSDATA/bili_jct/uid/refresh_token；</li>
+    <li><strong>持久化闭环</strong>：任何 Cookie 变化都 <code>_save_to_env()</code> 写回 <code>.env</code>（按键替换式改写 + <code>load_dotenv(override=True)</code> 重载），重启免登录；登录成功后清除 WBI 密钥缓存强制换新签名密钥；</li>
+    <li><strong>请求头伪装</strong>：统一 Chrome UA + Referer/Origin 伪装 + Accept-Language，降低风控概率。</li>
+  </ul>
+</section>
+
+<!-- ================= 9 时序 ================= -->
+<section id="s9">
+  <h2 class="sec"><span class="no">§9</span>手动抓取时序</h2>
+  <p class="lead">以 <code>POST /vtuber/fetch</code> 为例的完整调用时序（同步等待抓取完成后返回结果）：</p>
+  <figure>
+    <img src="diagrams/07_sequence.svg" alt="手动抓取时序图">
+    <figcaption>图 7 · 手动触发抓取时序图（Router → scheduler → fetcher → B 站 API → SQLite）</figcaption>
+  </figure>
+  <div class="note">端点通过 <code>is_fetch_running()</code> 防重入；响应包含 <code>success / failed / skipped / details</code> 明细。
+  由于在请求协程内同步等待全部账号抓取完成，大批量时响应耗时会随账号数线性增长——这也是全量抓取主要走定时任务/脚本的原因。</div>
+</section>
+
+<!-- ================= 10 API 端点 ================= -->
+<section id="s10">
+  <h2 class="sec"><span class="no">§10</span>REST API 端点全表</h2>
+  <p class="lead">共 16 个端点，按资源分四组；全部挂载于 <code>app/routers/vtuber.py</code> 的单一 APIRouter（无前缀）。</p>
+  <table>
+    <tr><th>方法</th><th>路径</th><th>说明</th><th>返回</th></tr>
+    <tr><td>GET</td><td><code>/vtuber/list</code></td><td>全部 VTuber（含嵌套 accounts，joinedload 预加载）</td><td><code>list[VTuberOut]</code></td></tr>
+    <tr><td>GET</td><td><code>/vtuber/{vtuber_id}</code></td><td>按 ID 查询，不存在 404</td><td><code>VTuberOut</code></td></tr>
+    <tr><td>POST</td><td><code>/vtuber</code></td><td>新建 VTuber</td><td>201 <code>VTuberOut</code></td></tr>
+    <tr><td>PUT</td><td><code>/vtuber/{vtuber_id}</code></td><td>更新（exclude_unset 部分更新）</td><td><code>VTuberOut</code></td></tr>
+    <tr><td>DELETE</td><td><code>/vtuber/{vtuber_id}</code></td><td>删除（级联删账号）</td><td>204</td></tr>
+    <tr><td>GET</td><td><code>/vtuber/{vtuber_id}/accounts</code></td><td>VTuber 的账号列表</td><td><code>list[AccountOut]</code></td></tr>
+    <tr><td>POST</td><td><code>/vtuber/{vtuber_id}/accounts</code></td><td>为 VTuber 添加账号</td><td>201 <code>AccountOut</code></td></tr>
+    <tr><td>PUT</td><td><code>/account/{account_id}</code></td><td>更新账号</td><td><code>AccountOut</code></td></tr>
+    <tr><td>DELETE</td><td><code>/account/{account_id}</code></td><td>删除账号（不牵连帖子）</td><td>204</td></tr>
+    <tr><td>GET</td><td><code>/posts/{platform}/{platform_uid}</code></td><td>某平台账号的帖子，按发布时间倒序</td><td><code>list[PostOut]</code></td></tr>
+    <tr><td>POST</td><td><code>/posts</code></td><td>新建帖子（平台直连，不校验账号存在）</td><td>201 <code>PostOut</code></td></tr>
+    <tr><td>PUT</td><td><code>/post/{post_id}</code></td><td>部分更新（PostUpdate 全字段可选）</td><td><code>PostOut</code></td></tr>
+    <tr><td>DELETE</td><td><code>/post/{post_id}</code></td><td>删除帖子</td><td>204</td></tr>
+    <tr><td>GET|POST</td><td><code>/vtuber/fetch</code></td><td>手动触发全量账号抓取（同步等待完成）</td><td><code>{status, message, result}</code></td></tr>
+    <tr><td>POST</td><td><code>/vtuber/fetch-posts</code></td><td>按名字模糊匹配抓帖子；<code>name, platform, video_pages, dynamics_pages</code>（-1=全量）</td><td><code>{status, total, details}</code></td></tr>
+    <tr><td>POST</td><td><code>/vtuber/fetch-all-posts</code></td><td>全库所有 bilibili 账号全量抓帖子</td><td><code>{status, total, details}</code></td></tr>
+  </table>
+  <p class="lead">交互式 OpenAPI 文档：运行 <code>uvicorn app.main:app</code> 后访问 <code>http://127.0.0.1:8000/docs</code>。</p>
+</section>
+
+<!-- ================= 11 配置 ================= -->
+<section id="s11">
+  <h2 class="sec"><span class="no">§11</span>配置项（app/core/config.py）</h2>
+  <table>
+    <tr><th>配置项</th><th>默认值</th><th>说明</th></tr>
+    <tr><td><code>APP_NAME</code></td><td>Better DD Toolkit</td><td>应用名（未用于 Swagger 标题）</td></tr>
+    <tr><td><code>VERSION</code></td><td>0.3.1</td><td>与 devlog 同步（devlog/013 修复：此前停留在 0.1.0）</td></tr>
+    <tr><td><code>DATABASE_URL</code></td><td>sqlite:///./vtuber.db</td><td>相对工作目录；测试用独立 test_vtuber.db</td></tr>
+    <tr><td><code>BILI_SESSDATA / BILI_BIJI_JCT / BILI_DEDE_USER_ID / BILI_BUVID_3 / BILI_REFRESH_TOKEN</code></td><td>（.env）</td><td>B 站 Cookie 凭证五件套；auth 自动回写</td></tr>
+    <tr><td><code>FETCH_INTERVAL_MINUTES</code></td><td>5</td><td>定时抓取周期</td></tr>
+    <tr><td><code>FETCH_JITTER_SECONDS</code></td><td>30</td><td>定时抖动（±30s 防周期性特征）</td></tr>
+    <tr><td><code>REQUEST_INTERVAL_MIN / MAX</code></td><td>3.0 / 5.0</td><td>账号间随机请求间隔</td></tr>
+    <tr><td><code>FETCH_BATCH_SIZE / FETCH_BATCH_COOLDOWN</code></td><td>10 / 60</td><td>每 10 个账号休息 60s</td></tr>
+    <tr><td><code>RATE_LIMIT_COOLDOWN</code></td><td>600</td><td>风控冷却 10 分钟</td></tr>
+    <tr><td><code>VTUBER_LIST_FILE</code></td><td>vtubers.csv</td><td>启动导入的名单文件</td></tr>
+    <tr><td><code>LOG_LEVEL / LOG_FILE</code></td><td>INFO / logs/app.log</td><td>日志级别与文件路径</td></tr>
+    <tr><td><code>CORS_ORIGINS</code></td><td>*（可用环境变量配置）</td><td>CORS 允许来源（逗号分隔）；通配符来源时不允许携带凭据（浏览器 CORS 规范，devlog/013）</td></tr>
+  </table>
+</section>
+
+<!-- ================= 12 迁移历史 ================= -->
+<section id="s12">
+  <h2 class="sec"><span class="no">§12</span>数据库迁移历史（Alembic）</h2>
+  <table>
+    <tr><th>修订</th><th>脚本</th><th>变更内容</th><th>备注</th></tr>
+    <tr><td><code>a001</code></td><td>a001_init_v2.py</td><td>创建 vtubers + accounts（含唯一约束、索引）</td><td>v0.3.0 清空旧迁移后重建；旧版迁移（350a…、fb9e…、b63a…、dd5e…、01ab…）已被历史删除</td></tr>
+    <tr><td><code>b001</code></td><td>b001_posts_v2.py</td><td>DROP IF EXISTS 后重建 accounts，新建 posts（platform+pid 全局唯一）</td><td>修复“全新库 drop 报 no such table”问题</td></tr>
+    <tr><td><code>c001</code></td><td>c001_post_archived.py</td><td>posts 增加 is_archived（默认 0）</td><td>支持帖子归档标记</td></tr>
+    <tr><td><code>c002</code></td><td>c002_posts_per_uid_dedup.py</td><td>唯一约束改为 (platform, platform_uid, platform_post_id)</td><td>联合投稿按 V 各存一份；SQLite 不支持改约束 → 重命名旧表 + 重建 + 数据回填 + 索引重建（含降级路径，按 MIN(id) 去重回滚）</td></tr>
+  </table>
+  <p class="lead">当前库 <code>alembic_version</code> 表记录为 <code>c002</code>，与模型一致。注意：应用运行期使用
+  <code>Base.metadata.create_all()</code> 建表（create_all 不建 alembic_version），Alembic 与 create_all 双轨并存——
+  <code>env.py</code> 通过 <code>from app.main import Base</code> 取元数据（会把整个应用模块导入迁移上下文，耦合偏重，见 §16）。</p>
+</section>
+
+<!-- ================= 13 测试 ================= -->
+<section id="s13">
+  <h2 class="sec"><span class="no">§13</span>测试体系</h2>
+  <p><code>tests/</code> 共 <strong>26 个用例</strong>（<code>test_vtuber_api.py</code> 14 个 API 用例 + <code>test_services.py</code> 12 个修复项用例，devlog/013 新增），基于 FastAPI TestClient + pytest：</p>
+  <ul>
+    <li><strong>隔离策略</strong>：独立 SQLite（test_vtuber.db）+ <code>app.dependency_overrides[get_db]</code> 注入测试会话；fixture 每个用例前后清表/重建；</li>
+    <li><strong>覆盖范围</strong>：VTuber CRUD 5 例、Account CRUD 4 例、Post 2 例、404 错误 2 例、级联删除 1 例；</li>
+    <li><strong>新增覆盖（devlog/013）</strong>：风控 ContextVar 任务隔离 ×3、动态类型映射（含 MUSIC）×2、头像扩展名推导、CORS 凭据规范、importer 去重/注入会话 ×3、WBI 混钥与签名确定性、版本号同步 —— 共 12 例；</li>
+    <li><strong>仍未覆盖</strong>：认证（auth）状态机、调度器编排，以及网络层（httpx 未 mock 的接口级测试）——见 §16。</li>
+  </ul>
+</section>
+
+<!-- ================= 14 数据现状 ================= -->
+<section id="s14">
+  <h2 class="sec"><span class="no">§14</span>数据资产现状（实测）</h2>
+  <h3>数据库 vtuber.db</h3>
+  <table>
+    <tr><th>表</th><th>行数</th><th>说明</th></tr>
+    <tr><td><code>vtubers</code></td><td>4</td><td>星瞳official、七海Nana7mi、明前奶绿、恬豆发芽了</td></tr>
+    <tr><td><code>accounts</code></td><td>4</td><td>全部为 bilibili；粉丝数 1,128,211 / 1,112,830 / 346,455 / 289,959；当前无直播中</td></tr>
+    <tr><td><code>posts</code></td><td>11,055</td><td>时间跨度 2019-06-13 ~ 2026-08-13；is_archived=0</td></tr>
+    <tr><td><code>alembic_version</code></td><td>1</td><td>rev = c002</td></tr>
+  </table>
+  <h3>posts 类型分布</h3>
+  <table>
+    <tr><th>type</th><td><code>video</code></td><td><code>image</code></td><td><code>text</code></td><td><code>repost</code></td><td><code>article</code></td><td><code>live</code></td><td><code>music</code></td></tr>
+    <tr><th>数量</th><td>3,554</td><td>3,829</td><td>1,934</td><td>1,718</td><td>11</td><td>2</td><td>7</td></tr>
+  </table>
+  <div class="ok"><strong>已修复（devlog/013）</strong>：<code>dynamic_type_music</code>（7 条）原为 <code>_map_dynamic_type</code> 未覆盖
+  <code>DYNAMIC_TYPE_MUSIC</code> 枚举而泄漏的原始值。现已补充映射，并由 <code>scripts/repair_post_types.py</code>
+  一次性修复存量数据（剩余 0 条，分布中显示为 <code>music: 7</code>）。</div>
+  <h3>其他资产</h3>
+  <ul>
+    <li><strong>vtubers.csv</strong>：9,482 行数据（由发现脚本生成，粉丝数倒序），仅 4 行 <code>flag=1</code>（与库内 4 个 VTuber 对应）；</li>
+    <li><strong>static/avatars/</strong>：718 个本地头像缓存文件（jpg/png，以平台 UID 命名）；</li>
+    <li><strong>logs/app.log</strong>：已修复，服务启动后正常落盘（devlog/013，实测 13+ 行启动/调度/认证日志）；</li>
+    <li><strong>.env</strong>：已配置 BILI_* 五件套凭证（gitignore 已排除，仅本地存在）。</li>
+  </ul>
+</section>
+
+<!-- ================= 15 版本演进 ================= -->
+<section id="s15">
+  <h2 class="sec"><span class="no">§15</span>版本演进时间线</h2>
+  <p class="lead">项目在 2026-08-04 至 08-06 三天内完成 12 个版本迭代，<code>devlog/</code> 逐版记录了动机与变更：</p>
+  <figure>
+    <img src="diagrams/08_evolution_timeline.svg" alt="版本演进时间线">
+    <figcaption>图 8 · v0.1.0 → v0.3.1 演进时间线（蓝：基础搭建 · 橙：数据增强 · 绿：三表重构）</figcaption>
+  </figure>
+  <table>
+    <tr><th>版本</th><th>日期</th><th>主题</th><th>要点</th></tr>
+    <tr><td>v0.1.0</td><td>08-04</td><td>项目初始化</td><td>单表 vtubers + WBI 签名 + 5 分钟定时 + Flet 桌面端 + Demo 数据</td></tr>
+    <tr><td>v0.1.1</td><td>08-04</td><td>已知问题修复</td><td>依赖固化、配置集中化（Settings）、日志持久化、.gitignore/.env.example、7 个测试</td></tr>
+    <tr><td>v0.1.2</td><td>08-04</td><td>Cookie 自动续期与扫码登录</td><td>auth.py 三级策略（心跳→续期→扫码）、qrcode 终端展示、.env 回写</td></tr>
+    <tr><td>v0.1.3</td><td>08-04</td><td>手动触发抓取</td><td><code>POST /vtuber/fetch</code>、FetchResult、threading.Lock 防重叠</td></tr>
+    <tr><td>v0.1.4</td><td>08-04</td><td>移除 Flet 前端</td><td>专注后端，前端独立开发</td></tr>
+    <tr><td>v0.2.0</td><td>08-04</td><td>扩展数据字段</td><td>签名/直播状态/直播间字段；“变动/稳定”字段差异化更新策略</td></tr>
+    <tr><td>v0.2.1</td><td>08-04</td><td>文件导入与去重</td><td>移除 Demo 数据，vtubers.txt 导入 + UID 去重 + 新名单自动触发抓取</td></tr>
+    <tr><td>v0.2.2</td><td>08-04</td><td>头像持久化</td><td>avatar URL + 本地缓存路径双字段、/static 静态挂载</td></tr>
+    <tr><td>v0.2.3</td><td>08-04</td><td>直播区发现</td><td>直播虚拟区扫描发现（v0.2.4 起移至脚本）</td></tr>
+    <tr><td>v0.2.4</td><td>08-04</td><td>拆分发现脚本</td><td>discover_vtubers.py 独立化（vtbs.moe 3000+ 名单）、服务端精简</td></tr>
+    <tr><td>v0.3.0</td><td>08-05</td><td>数据库重构三表</td><td>vtubers/accounts/posts 多平台模型、CSV 格式 flag 化、迁移重置 a001</td></tr>
+    <tr><td>v0.3.1</td><td>08-06</td><td>帖子抓取链路优化</td><td>详情补全修复、分页参数化与全量拉取、is_archived、锁与频率控制、按 UID 去重</td></tr>
+    <tr><td><strong>v0.3.2</strong></td><td><strong>08-17</strong></td><td><strong>修复建议落地</strong></td><td><strong>日志落盘修复、风控 ContextVar 隔离、版本同步、MUSIC 映射+存量修复、CORS 规范、客户端复用、12 个新测试（devlog/013，本报告 §19）</strong></td></tr>
+  </table>
+</section>
+
+<!-- ================= 16 代码质量 ================= -->
+<section id="s16">
+  <h2 class="sec"><span class="no">§16</span>代码质量观察</h2>
+
+  <h3>亮点</h3>
+  <div class="ok">✔ 分层清晰、职责单一：routers → repositories → models 经典三层，services 独立承载外部 I/O；Pydantic v2 统一出入参校验与序列化。<br>
+  ✔ 防御性设计扎实：三层去重（内存集合 + 唯一约束 + IntegrityError 兜底）、tenacity 重试、风控检测→冷却→断点续抓的自愈闭环、防 Ban 节流参数细分（3~5s / 60s / 20s / 0.5~2s / jitter）。<br>
+  ✔ 工程习惯良好：12 篇 devlog 完整记录动机与权衡；.gitignore 排除 .env/*.db/logs；测试库隔离；迁移脚本含降级路径与数据回填。<br>
+  ✔ raw_json 兜底保留平台原始响应，后续可无损重解析历史数据。</div>
+
+  <h3>发现的问题（按严重度）<span class="tag t-green" style="margin-left:10px">v0.3.2 已修复 P1–P4 及 P5 主要项，详见 §19</span></h3>
+  <div class="warn"><strong>P1 · 日志文件恒为空（已实证）</strong> <span class="tag t-green">✅ 已修复</span>：<code>logs/app.log</code> 为 0 字节。
+  根因：<code>main.py</code> 第 13 行 <code>from app.services.scheduler import ...</code> 触发 scheduler 模块导入，其第 27 行先执行了
+  <code>logging.basicConfig(level=...)</code>；随后 <code>main.py</code> 第 19 行的 <code>basicConfig(handlers=[FileHandler, StreamHandler])</code>
+  因“根 logger 已配置过”而被静默忽略——FileHandler 从未注册。修复：删除 scheduler.py 的 basicConfig（devlog/013，启动实测日志正常落盘）。</div>
+  <div class="warn"><strong>P2 · 全局风控标志无并发保护</strong> <span class="tag t-green">✅ 已修复</span>：<code>fetcher.py</code> 的 <code>_rate_limited</code> 是模块级全局变量，
+  由两大抓取任务共享（虽然各有锁互斥，但跨任务仍可能互相污染——帖子任务触发风控可能被账号抓取任务读到并误冷却）。
+  已改为 <code>contextvars.ContextVar</code> 任务级隔离 + 任务启动时重置（附隔离单测）。</div>
+  <div class="warn"><strong>P3 · 配置版本号未同步</strong> <span class="tag t-green">✅ 已修复</span>：<code>settings.VERSION</code> 已更新为 0.3.1。</div>
+  <div class="note"><strong>P4 · 动态类型映射缺项</strong> <span class="tag t-green">✅ 已修复</span>：<code>DYNAMIC_TYPE_MUSIC</code> 未在映射表，导致库中出现 7 条
+  <code>type='dynamic_type_music'</code> 的原始值泄漏（fallback <code>raw.lower()</code> 直接把枚举名存库）。
+  已补映射（→ <code>music</code>）并执行 <code>scripts/repair_post_types.py</code> 修复存量数据（剩余 0 条）。</div>
+  <div class="note"><strong>P5 · 其他小项</strong>：
+  ① 每次抓取新建 <code>httpx.AsyncClient</code>（连接不复用）——<span class="tag t-green">已修复</span>（任务级复用）；② 头像扩展名判定 <code>".jpg" in url else ".png"</code>
+  对 gif/webp 会存错扩展名——<span class="tag t-green">已修复</span>（<code>_avatar_ext</code> 按 URL 路径推导）；③ <code>alembic/env.py</code> 从 <code>app.main</code> 导入 Base，迁移上下文耦合整个应用（含日志副作用）——<span class="tag t-green">已修复</span>（改从 core.database 导入并显式注册模型）；
+  ④ create_all 与 Alembic 双轨建表存在 drift 风险——<span class="tag t-orange">未处理</span>；⑤ REST API 本身无鉴权且 CORS <code>allow_origins=["*"]</code> +
+  <code>allow_credentials=True</code>，公网部署需收紧——<span class="tag t-green">已修复</span>（<code>CORS_ORIGINS</code> 可配置；通配符来源时不携带凭据，符合浏览器规范；API 鉴权仍建议后续增加）；⑥ <code>_fetch_one_account</code> 返回语义混合（风控/无数据都计入 failed）——<span class="tag t-orange">未处理</span>；
+  ⑦ fetch/auth/wbi/调度/导入均无测试覆盖（httpx 未 mock）——<span class="tag t-green">部分修复</span>（新增 12 个修复项单测；网络层 mock 与 auth 状态机测试仍缺）。</div>
+</section>
+
+<!-- ================= 17 改进建议 ================= -->
+<section id="s17">
+  <h2 class="sec"><span class="no">§17</span>改进建议</h2>
+  <ol>
+    <li><strong>修复日志双配置问题（P1）</strong> <span class="tag t-green">✅ 已完成</span>：统一日志初始化时机与方式，恢复文件日志后运行一次全链路以验证；</li>
+    <li><strong>重构风控状态传递（P2）</strong> <span class="tag t-green">✅ 已完成</span>：将 <code>_rate_limited</code> 从模块级全局改为任务级状态，避免跨任务污染；</li>
+    <li><strong>版本信息单一来源</strong> <span class="tag t-green">✅ 已同步</span>：<code>settings.VERSION</code> 与 devlog/发布流程打通（如 pyproject 统一管理）——已更新为 0.3.1；</li>
+    <li><strong>补全动态类型映射（P4）</strong> <span class="tag t-green">✅ 已完成</span>：覆盖 MUSIC 等缺项，并对存量 7 条数据做一次性修复；</li>
+    <li><strong>测试扩展</strong> <span class="tag t-orange">部分完成</span>：用 <code>httpx.MockTransport</code> / respx mock 外部 API，为 fetcher/wbi/scheduler/importer 补单测；为 auth 状态机补状态转移测试——已新增 12 个修复项单测，网络 mock 仍建议后续补齐；</li>
+    <li><strong>性能</strong> <span class="tag t-green">✅ 已完成</span>：复用 <code>httpx.AsyncClient</code>（连接池 + HTTP/2）；抓取会话批量 commit 而非逐条——客户端复用已落地，批量 commit 仍可优化；</li>
+    <li><strong>架构演进</strong>：若账号量增长，考虑 SQLite → PostgreSQL 迁移（Alembic 已就绪）、调度器升级为独立 worker（如 Celery/APScheduler+持久化 jobstore），并为 API 增加鉴权与 CORS 白名单；</li>
+    <li><strong>观测性</strong>：引入结构化日志（JSON）与抓取指标（成功率/风控次数/耗时），便于长期运营。</li>
+  </ol>
+</section>
+
+<!-- ================= 18 附录 ================= -->
+<section id="s18">
+  <h2 class="sec"><span class="no">§18</span>附录：完整文件清单</h2>
+  <pre><code>app/main.py · app/core/{config,database}.py · app/dependencies/get_db.py
+app/models/vtuber.py · app/schemas/vtuber.py · app/repositories/vtuber_repo.py
+app/routers/vtuber.py · app/services/{fetcher,scheduler,auth,wbi,importer}.py
+alembic/{env.py,script.py.mako,README,alembic.ini}
+alembic/versions/{a001_init_v2,b001_posts_v2,c001_post_archived,c002_posts_per_uid_dedup}.py
+scripts/discover_vtubers.py · scripts/repair_post_types.py · tests/{test_vtuber_api,test_services}.py
+devlog/001~013（开发日志）· docs/{本报告,gen_diagrams.py,diagrams/8 张 SVG}
+requirements.txt · .env · .env.example · .gitignore · alembic.ini
+vtubers.csv（9,482 行）· vtuber.db · test_vtuber.db · logs/app.log · vtubers.session.sql
+static/avatars/（718 个缓存文件）</code></pre>
+  <p class="lead">本报告中的 8 张架构图由 <code>docs/gen_diagrams.py</code> 生成（纯 Python 手绘 SVG，无第三方依赖），
+  修改后运行 <code>python docs/gen_diagrams.py</code> 即可重新生成。报告文件：<code>docs/项目架构分析报告.html</code>（本文件），
+  直接双击用浏览器打开即可查看全部图表。</p>
+</section>
+
+<!-- ================= 19 修复记录 ================= -->
+<section id="s19">
+  <h2 class="sec"><span class="no">§19</span>修复记录（v0.3.2 · 2026-08-17 · devlog/013）</h2>
+  <p class="lead">根据 §16/§17 的修复建议，逐项落地并实测验证。完整记录见 <code>devlog/013-20260817-v0.3.2-修复建议落地.md</code>。</p>
+  <table>
+    <tr><th style="width:90px">编号</th><th style="width:250px">问题</th><th>修复方式</th><th style="width:230px">验证结果</th></tr>
+    <tr><td><span class="tag t-red">P1</span></td><td>日志文件恒为空（scheduler 抢先 basicConfig）</td><td>删除 scheduler.py 的 basicConfig，根日志配置统一由 main.py 完成</td><td>启动实测 logs/app.log 写入 13+ 行 ✓</td></tr>
+    <tr><td><span class="tag t-red">P2</span></td><td>风控全局标志并发污染</td><td>改为 <code>contextvars.ContextVar</code> 任务级隔离；抓取任务启动时重置</td><td>并行任务隔离单测 ✓</td></tr>
+    <tr><td><span class="tag t-red">P3</span></td><td>版本号停留在 0.1.0</td><td>settings.VERSION → 0.3.1</td><td>版本同步单测 ✓</td></tr>
+    <tr><td><span class="tag t-red">P4</span></td><td>DYNAMIC_TYPE_MUSIC 映射缺项（7 条脏数据）</td><td>补映射（→ music）+ <code>scripts/repair_post_types.py</code> 一次性修复存量</td><td>修复 7 条，剩余 0 ✓</td></tr>
+    <tr><td><span class="tag t-orange">P5①</span></td><td>每次请求新建 httpx.AsyncClient</td><td>fetcher 各函数新增可选 client 参数；scheduler 任务级复用 + aclose</td><td>全量测试通过 ✓</td></tr>
+    <tr><td><span class="tag t-orange">P5②</span></td><td>头像扩展名误判（gif/webp 存成 png）</td><td>新增 <code>_avatar_ext()</code> 按 URL 路径推导</td><td>5 组用例 ✓</td></tr>
+    <tr><td><span class="tag t-orange">P5③</span></td><td>alembic/env.py 耦合 app.main</td><td>改为 <code>from app.core.database import Base</code> + 显式注册模型</td><td><code>alembic current</code> → c002 (head) ✓</td></tr>
+    <tr><td><span class="tag t-orange">P5⑤</span></td><td>CORS 通配符 + 凭据组合不合规范</td><td><code>CORS_ORIGINS</code> 可配置；通配符来源时 <code>allow_credentials=False</code></td><td>实测响应头符合规范 ✓</td></tr>
+    <tr><td><span class="tag t-orange">P5⑦</span></td><td>服务层无测试</td><td>新增 <code>tests/test_services.py</code> 12 个用例（风控/映射/头像/CORS/importer/WBI）</td><td>26 passed ✓</td></tr>
+    <tr><td><span class="tag t-blue">附带</span></td><td>importer 列表文件缺失时自建会话未关闭</td><td>路径校验前置 + db 参数可注入（可测性）</td><td>缺失文件用例 ✓</td></tr>
+  </table>
+  <div class="note"><strong>仍未处理（后续建议）</strong>：create_all 与 Alembic 双轨 drift（P5④）、
+  <code>_fetch_one_account</code> 返回语义（P5⑥）、网络层 httpx.MockTransport 接口级测试、auth 状态机测试、
+  REST API 鉴权、SQLite → PostgreSQL、结构化日志与抓取指标。</div>
+</section>
+
+<footer>Better DD Toolkit（http-test）项目架构分析报告 · 基于 2026-08-17 静态代码审阅与数据库实测 · 8 张 SVG 架构图 · 修复记录见 §19（v0.3.2）· 生成工具 docs/gen_diagrams.py</footer>
+</div>
+</body>
+</html>
