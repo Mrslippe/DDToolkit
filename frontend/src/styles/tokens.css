@@ -10,7 +10,7 @@
 :root {
   /* 主色系 */
   --c-primary: #ffa2b4;        /* 顶栏粉 */
-  --c-primary-deep: #fb77a1;   /* 强调粉（antd colorPrimary 同步） */
+  --c-primary-deep: #fb77a1;   /* 强调粉（shadcn --primary 同步） */
   --c-accent: #fc7079;
   --c-live: #e14444;           /* 直播中红 */
 

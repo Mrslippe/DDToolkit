@@ -1,23 +1,16 @@
 import React, { useEffect, useState } from 'react'
 import ReactDOM from 'react-dom/client'
-import { App as AntApp, Button, ConfigProvider, Result, Spin } from 'antd'
-import zhCN from 'antd/locale/zh_CN'
 import { BrowserRouter } from 'react-router-dom'
-import 'antd/dist/reset.css'
+import { Loader2, RotateCcw } from 'lucide-react'
+import { Toaster } from '@/components/ui/sonner'
+import { TooltipProvider } from '@/components/ui/tooltip'
+import { Button } from '@/components/ui/button'
+import './index.css'
 import './styles/tokens.css'
 import App from './App'
 import { setApiBase } from './api/api'
 
 const isTauri = '__TAURI_INTERNALS__' in window
-
-const theme = {
-  token: {
-    colorPrimary: '#fb77a1',
-    borderRadius: 8,
-    fontFamily:
-      "'Alimama FangYuanTi VF', system-ui, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif",
-  },
-}
 
 /** 桌面端引导：取 sidecar 端口 → 轮询 /healthz 就绪 → 注入 API 地址 */
 async function tauriBootstrap(): Promise<boolean> {
@@ -41,6 +34,29 @@ async function tauriBootstrap(): Promise<boolean> {
 
 type BootState = 'ready' | 'pending' | 'failed'
 
+function BootScreen({ state }: { state: Exclude<BootState, 'ready'> }) {
+  return (
+    <div className="flex h-screen flex-col items-center justify-center gap-4 text-muted-foreground">
+      {state === 'pending' ? (
+        <>
+          <Loader2 className="size-8 animate-spin text-primary" />
+          <div>后端服务启动中，首次运行可能需要几秒…</div>
+        </>
+      ) : (
+        <>
+          <div className="text-lg font-semibold text-foreground">后端启动失败</div>
+          <div className="max-w-md text-center text-sm">
+            内置后端服务未能在时限内就绪。请关闭应用后重新打开；若反复失败，可删除数据目录后重试。
+          </div>
+          <Button variant="outline" onClick={() => window.location.reload()}>
+            <RotateCcw /> 重试
+          </Button>
+        </>
+      )}
+    </div>
+  )
+}
+
 function Root() {
   const [state, setState] = useState<BootState>(isTauri ? 'pending' : 'ready')
 
@@ -49,38 +65,15 @@ function Root() {
     tauriBootstrap().then((ok) => setState(ok ? 'ready' : 'failed'))
   }, [])
 
-  if (state === 'pending') {
-    return (
-      <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', gap: 16, alignItems: 'center', justifyContent: 'center' }}>
-        <Spin size="large" />
-        <div style={{ color: '#647489' }}>后端服务启动中，首次运行可能需要几秒…</div>
-      </div>
-    )
-  }
-
-  if (state === 'failed') {
-    return (
-      <Result
-        status="error"
-        title="后端启动失败"
-        subTitle="内置后端服务未能在时限内就绪。请关闭应用后重新打开；若反复失败，可删除数据目录后重试。"
-        extra={
-          <Button type="primary" onClick={() => window.location.reload()}>
-            重试
-          </Button>
-        }
-      />
-    )
-  }
+  if (state !== 'ready') return <BootScreen state={state} />
 
   return (
-    <ConfigProvider locale={zhCN} theme={theme}>
-      <AntApp>
-        <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-          <App />
-        </BrowserRouter>
-      </AntApp>
-    </ConfigProvider>
+    <TooltipProvider delayDuration={200}>
+      <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <App />
+      </BrowserRouter>
+      <Toaster position="top-center" richColors />
+    </TooltipProvider>
   )
 }
 

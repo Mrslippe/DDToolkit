@@ -1,5 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import { App as AntApp } from 'antd'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { api } from '../api/api'
 import type { FetchStatus } from '../api/types'
 import './../styles/layout.css'
@@ -19,12 +28,12 @@ async function tauriWindow() {
  * - 状态来自 GET /vtuber/fetch-status 轮询；任务结束沿触发
  *   'ddtoolkit:fetch-idle' 事件，供 VtuberSidebar 等组件刷新数据。
  * - 桌面端（Tauri）：头部为拖拽区，最小化/关闭接原生窗口；
- *   有抓取任务运行时关闭需二次确认。
+ *   有抓取任务运行时关闭需二次确认（AlertDialog）。
  */
 export default function TopBar() {
   const [status, setStatus] = useState<FetchStatus | null>(null)
+  const [confirmClose, setConfirmClose] = useState(false)
   const prevRunning = useRef(false)
-  const { modal } = AntApp.useApp()
 
   useEffect(() => {
     let cancelled = false
@@ -75,20 +84,8 @@ export default function TopBar() {
 
   const handleMinimize = () => void tauriWindow().then((w) => w.minimize())
 
-  const handleClose = () => {
-    if (busy) {
-      modal.confirm({
-        title: '抓取任务正在进行中',
-        content: '关闭窗口会中断后台抓取进程，确定退出吗？',
-        okText: '退出',
-        okButtonProps: { danger: true },
-        cancelText: '取消',
-        onOk: () => void tauriWindow().then((w) => w.close()),
-      })
-    } else {
-      void tauriWindow().then((w) => w.close())
-    }
-  }
+  const closeApp = () => void tauriWindow().then((w) => w.close())
+  const handleClose = () => (busy ? setConfirmClose(true) : closeApp())
 
   return (
     <header className="topbar" {...(isTauri ? { 'data-tauri-drag-region': true } : {})}>
@@ -129,6 +126,26 @@ export default function TopBar() {
           ✕
         </button>
       </div>
+
+      <AlertDialog open={confirmClose} onOpenChange={setConfirmClose}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>抓取任务正在进行中</AlertDialogTitle>
+            <AlertDialogDescription>
+              关闭窗口会中断后台抓取进程，确定退出吗？
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90"
+              onClick={closeApp}
+            >
+              退出
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </header>
   )
 }

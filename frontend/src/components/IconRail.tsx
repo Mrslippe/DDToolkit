@@ -1,6 +1,10 @@
 import type { ReactNode } from 'react'
-import { AppstoreOutlined } from '@ant-design/icons'
-import { Tooltip } from 'antd'
+import { LayoutGrid } from 'lucide-react'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '@/components/ui/tooltip'
 import './../styles/layout.css'
 
 interface RailItem {
@@ -11,7 +15,7 @@ interface RailItem {
 
 /** 工具栏入口：后续新增功能时在此扩展 */
 const RAIL_ITEMS: RailItem[] = [
-  { key: 'posts', icon: <AppstoreOutlined />, title: '帖子浏览' },
+  { key: 'posts', icon: <LayoutGrid className="size-[18px]" />, title: '帖子浏览' },
 ]
 
 /**
@@ -22,14 +26,17 @@ export default function IconRail() {
   return (
     <nav className="icon-rail">
       {RAIL_ITEMS.map((item, i) => (
-        <Tooltip key={item.key} title={item.title} placement="right">
-          <button
-            type="button"
-            className={`icon-rail-btn${i === 0 ? ' active' : ''}`}
-            aria-label={item.title}
-          >
-            {item.icon}
-          </button>
+        <Tooltip key={item.key}>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              className={`icon-rail-btn${i === 0 ? ' active' : ''}`}
+              aria-label={item.title}
+            >
+              {item.icon}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="right">{item.title}</TooltipContent>
         </Tooltip>
       ))}
     </nav>

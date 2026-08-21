@@ -132,14 +132,9 @@
   overflow: hidden;
 }
 
-.post-card-cover .post-card-cover-img,
-.post-card-cover .ant-image,
-.post-card-cover .ant-image-img {
+.post-card-cover .post-card-cover-img {
   width: 100%;
   height: 100%;
-}
-
-.post-card-cover .post-card-cover-img {
   object-fit: cover;
 }
 
@@ -250,8 +245,9 @@
   white-space: nowrap;
 }
 
-.stat-badge .anticon {
-  font-size: 11px;
+.stat-badge svg {
+  width: 12px;
+  height: 12px;
 }
 
 /* 详情抽屉统计徽章行 */
@@ -259,6 +255,45 @@
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+/* 富文本排版（B 站 Delta / HTML 全文）：tailwind preflight 清掉了
+   标题尺寸、列表符号等浏览器默认值，这里按阅读体验恢复 */
+.rich-text h1 {
+  font-size: 1.5em;
+  font-weight: 700;
+}
+.rich-text h2 {
+  font-size: 1.3em;
+  font-weight: 700;
+}
+.rich-text h3 {
+  font-size: 1.15em;
+  font-weight: 600;
+}
+.rich-text blockquote {
+  border-left: 3px solid var(--c-primary);
+  padding-left: 1em;
+  color: var(--c-text-sub);
+}
+.rich-text ul {
+  list-style: disc;
+  padding-left: 1.6em;
+}
+.rich-text ol {
+  list-style: decimal;
+  padding-left: 1.6em;
+}
+.rich-text pre {
+  background: var(--c-bg-page);
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  padding: 0.75em;
+  overflow: auto;
+}
+.rich-text a {
+  color: var(--c-primary-deep);
+  text-decoration: underline;
 }
 
 /* 骨架屏（粉色系 shimmer） */

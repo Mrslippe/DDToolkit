@@ -1,9 +1,9 @@
 import {
-  CommentOutlined,
-  HeartOutlined,
-  PlayCircleOutlined,
-  RetweetOutlined,
-} from '@ant-design/icons'
+  MessageCircle,
+  Heart,
+  CirclePlay,
+  Repeat2,
+} from 'lucide-react'
 import type { Post } from '../api/types'
 import { formatDateTime, parseBody, parseStats, postDisplayTitle, postTypeLabel } from '../utils/format'
 import SmartImage from './SmartImage'
@@ -50,10 +50,10 @@ export default function PostCard({ post, onClick }: Props) {
         {post.summary && <p className="post-card-summary">{post.summary}</p>}
         <div className="post-card-footer">
           <div className="post-card-badges">
-            {stats.view !== undefined && <StatBadge icon={<PlayCircleOutlined />} value={stats.view} label="播放" />}
-            {stats.like !== undefined && <StatBadge icon={<HeartOutlined />} value={stats.like} label="点赞" />}
-            {stats.comment !== undefined && <StatBadge icon={<CommentOutlined />} value={stats.comment} label="评论" />}
-            {stats.forward !== undefined && <StatBadge icon={<RetweetOutlined />} value={stats.forward} label="转发" />}
+            {stats.view !== undefined && <StatBadge icon={<CirclePlay />} value={stats.view} label="播放" />}
+            {stats.like !== undefined && <StatBadge icon={<Heart />} value={stats.like} label="点赞" />}
+            {stats.comment !== undefined && <StatBadge icon={<MessageCircle />} value={stats.comment} label="评论" />}
+            {stats.forward !== undefined && <StatBadge icon={<Repeat2 />} value={stats.forward} label="转发" />}
             {!stats.view && !stats.like && !stats.comment && !stats.forward && stats.danmaku !== undefined && (
               <StatBadge value={stats.danmaku} label="弹幕" />
             )}

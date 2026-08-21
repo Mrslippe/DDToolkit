@@ -1,5 +1,5 @@
 import { Component, type ReactNode } from 'react'
-import { Alert, Button } from 'antd'
+import { Button } from '@/components/ui/button'
 
 interface Props {
   children: ReactNode
@@ -24,27 +24,27 @@ export default class ErrorBoundary extends Component<Props, State> {
   render() {
     if (this.state.error) {
       return (
-        <div style={{ padding: 48, maxWidth: 720, margin: '0 auto' }}>
-          <Alert
-            type="error"
-            showIcon
-            message="页面渲染出错"
-            description={
-              <div>
-                <pre style={{ whiteSpace: 'pre-wrap', fontSize: 12 }}>{this.state.error.message}</pre>
-                <Button
-                  type="primary"
-                  size="small"
-                  onClick={() => {
-                    this.setState({ error: null })
-                    window.location.reload()
-                  }}
-                >
-                  重新加载
-                </Button>
-              </div>
-            }
-          />
+        <div className="mx-auto max-w-[720px] p-12">
+          <div
+            role="alert"
+            className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-red-600"
+          >
+            <div className="flex items-center gap-2 font-medium">页面渲染出错</div>
+            <pre className="mt-2 overflow-auto whitespace-pre-wrap text-xs text-red-500/90">
+              {this.state.error.message}
+            </pre>
+          </div>
+          <div className="mt-4">
+            <Button
+              size="sm"
+              onClick={() => {
+                this.setState({ error: null })
+                window.location.reload()
+              }}
+            >
+              重新加载
+            </Button>
+          </div>
         </div>
       )
     }

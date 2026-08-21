@@ -1,4 +1,4 @@
-# UI 元素命名注册表（UI-MAP）
+﻿# UI 元素命名注册表（UI-MAP）
 
 > 修改前端界面时，按本文档名称精确指定目标区域/元素。
 > 结构约定：`组件文件 → CSS 类名 → 关键子元素`。设计令牌统一在 `src/styles/tokens.css`。
@@ -40,7 +40,7 @@
 | 栏头 | `.sidebar-header` | h3「VTuber 列表」+ 计数 |
 | 计数 | `.sidebar-count` | 「共 N 位」 |
 | 条目 | `.vtuber-item(.active)` | 点击导航 `/vtubers/:id`，当前路由高亮 |
-| ├ 头像 | antd Avatar(40) | 本地缓存优先 |
+| ├ 头像 | shadcn Avatar(40, size-10) | 本地缓存优先 |
 | ├ 名字行 | `.vtuber-name-row` | 含直播标识 |
 | │ ├ 名字 | `.vtuber-name` | 单行截断 |
 | │ ├ 直播红点 | `.live-dot` | title="直播中" |
@@ -71,7 +71,7 @@
 | 名字行 | `.vtuber-header-name-row` | |
 | ├ 标题 | h2 `.vtuber-header-name` | VTuber 名 |
 | ├ 直播标签 | `.live-tag` | tooltip=直播间标题 |
-| ├ 账号切换 | antd Select（多账号时显示） | 按 platform_uid 切换 |
+| ├ 账号切换 | shadcn Select（多账号时显示） | 按 platform_uid 切换 |
 | 元信息行 | `.vtuber-header-meta` | 签名 · 粉丝 · 上次抓取时间 |
 | 操作按钮组 | 「抓取账号」「抓取帖子」「更新动态」 | 第三个为 primary |
 
@@ -80,7 +80,7 @@
 |---|---|---|
 | 筛选行容器 | `.type-chips-row` | chips 左、归档开关右 |
 | 类型筛选组 | `.type-chips` > `button.type-chip(.active)` | 全部N/视频N/图文N…计数来自 stats.by_type |
-| 归档过滤 | antd Segmented：全部/未归档/已归档 | 映射查询参数 is_archived |
+| 归档过滤 | ToggleGroup(single)：全部/未归档/已归档 | 映射查询参数 is_archived |
 
 **卡片流**
 | 名称 | 类名 | 说明 |
@@ -97,11 +97,11 @@
 | ├ 底行 | `.post-card-footer` | 徽章行 + 日期两端对齐 |
 | │ ├ 徽章行 | `.post-card-badges` > `<StatBadge>` `.stat-badge` | 播放/点赞/评论/转发 |
 | │ └ 日期 | `.post-card-date` | published_at 前 10 位 |
-| 分页 | `.posts-footer` > antd Pagination | 服务端分页 20 条/页 |
+| 分页 | `.posts-footer` > PaginationLite(自建) | 服务端分页 20 条/页 |
 | 占位态 | `.posts-placeholder` | 加载 Spin / 空列表 / 错误 Alert 复用区 |
 
 ### B2. 详情抽屉 `<PostDetailDrawer>`（components/PostDetailDrawer.tsx）
-antd Drawer 720px，标题=postDisplayTitle。
+Sheet 右侧抽屉 sm:max-w-[720px]，标题=postDisplayTitle。
 | 名称 | 实现 | 说明 |
 |---|---|---|
 | 元信息行 | Space：TypeTag + 发布时间 + 平台ID + 原文链接 | |
@@ -112,7 +112,7 @@ antd Drawer 720px，标题=postDisplayTitle。
 | 转发原文卡 | `OriginCard` | body_json.origin：标题/文本/图片九宫格/原文链接 |
 | 图片组 | SmartImage 120×120 ×n | |
 | 附加字段 | bvid / cv_id / description | code 样式 |
-| 原始 JSON | antd Collapse「原始响应 raw_json」 | 排查用 |
+| 原始 JSON | Collapsible「原始响应 raw_json」 | 排查用 |
 
 ---
 
@@ -121,7 +121,7 @@ antd Drawer 720px，标题=postDisplayTitle。
 | 令牌 | 值 | 用途 |
 |---|---|---|
 | `--c-primary` | #ffa2b4 | 顶栏底色 |
-| `--c-primary-deep` | #fb77a1 | 强调色（antd colorPrimary 同步） |
+| `--c-primary-deep` | #fb77a1 | 强调色（shadcn --primary 同步） |
 | `--c-accent` | #fc7079 | hover 强调 |
 | `--c-live` | #e14444 | 直播中红 |
 | `--c-bg-page` | #fffbfb | 页面底色 |

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Avatar, Spin } from 'antd'
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
+import { Skeleton } from '@/components/ui/skeleton'
 import { useLocation, useNavigate, matchPath } from 'react-router-dom'
 import { api, resolveAsset } from '../api/api'
 import type { VTuber } from '../api/types'
@@ -38,9 +39,15 @@ export default function VtuberSidebar() {
   if (loading) {
     return (
       <aside className="sidebar">
-        <div className="sidebar-tip">
-          <Spin />
-        </div>
+        {Array.from({ length: 6 }, (_, i) => (
+          <div key={i} className="flex items-center gap-3 rounded-lg p-2.5">
+            <Skeleton className="size-10 shrink-0 rounded-full" />
+            <div className="flex-1 space-y-2">
+              <Skeleton className="h-3.5 w-3/5" />
+              <Skeleton className="h-3 w-4/5" />
+            </div>
+          </div>
+        ))}
       </aside>
     )
   }
@@ -69,6 +76,7 @@ export default function VtuberSidebar() {
         const avatarSrc =
           resolveAsset(bili?.avatar_path) ?? bili?.avatar_url ?? undefined
         const isLive = (bili?.live_status ?? 0) === 1
+        const matched = matchPath('/vtubers/:id', location.pathname)
         return (
           <VtuberItem
             key={v.id}
@@ -76,8 +84,7 @@ export default function VtuberSidebar() {
             avatarSrc={avatarSrc}
             sign={bili?.sign ?? null}
             isLive={isLive}
-            active={matchPath('/vtubers/:id', location.pathname) !== null &&
-              Number(matchPath('/vtubers/:id', location.pathname)?.params.id) === v.id}
+            active={matched !== null && Number(matched.params.id) === v.id}
             onClick={() => navigate(`/vtubers/${v.id}`)}
           />
         )
@@ -98,8 +105,9 @@ interface VtuberItemProps {
 function VtuberItem({ vtuber, avatarSrc, sign, isLive, active, onClick }: VtuberItemProps) {
   return (
     <div className={`vtuber-item${active ? ' active' : ''}`} onClick={onClick}>
-      <Avatar size={40} src={avatarSrc}>
-        {vtuber.name.slice(0, 1)}
+      <Avatar className="size-10 shrink-0">
+        <AvatarImage src={avatarSrc} referrerPolicy="no-referrer" />
+        <AvatarFallback>{vtuber.name.slice(0, 1)}</AvatarFallback>
       </Avatar>
       <div className="vtuber-info">
         <div className="vtuber-name-row">
