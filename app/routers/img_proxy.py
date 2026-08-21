@@ -23,8 +23,9 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-PROJECT_ROOT = Path(__file__).parent.parent.parent
-CACHE_DIR = PROJECT_ROOT / settings.IMG_CACHE_DIR
+CACHE_DIR = Path(settings.IMG_CACHE_DIR)
+if not CACHE_DIR.is_absolute():
+    CACHE_DIR = settings.DATA_DIR / CACHE_DIR
 _ALLOWED_HOSTS = tuple(
     s.strip().lower() for s in settings.IMG_PROXY_ALLOWED_HOSTS.split(",") if s.strip()
 )

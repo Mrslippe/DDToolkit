@@ -30,7 +30,7 @@ from app.services.fetcher import (
 # logs/app.log 恒为空（修复记录见 devlog/013）。
 logger = logging.getLogger(__name__)
 
-AVATAR_DIR = Path(__file__).parent.parent.parent / "static" / "avatars"
+AVATAR_DIR = settings.DATA_DIR / "static" / "avatars"
 
 # 允许的头像扩展名（修复：原来 ".jpg" in url 的判定会把 gif/webp 等存成 png）
 _ALLOWED_AVATAR_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
@@ -43,12 +43,13 @@ def _avatar_ext(url: str) -> str:
 
 
 def _avatar_missing(acc: Account) -> bool:
-    """头像本地文件是否缺失（avatar_path 相对项目根）。
+    """头像本地文件是否缺失（avatar_path 相对 DATA_DIR 存储）。
     修复（devlog/019）：此前仅 URL 变化才下载——初次下载失败或文件被删后
     永远不会补下；全量更新时改为先检查文件再下载缺失头像。"""
     if not acc.avatar_path:
         return True
-    return not (Path(__file__).parent.parent.parent / acc.avatar_path).exists()
+    p = Path(acc.avatar_path)
+    return not (p if p.is_absolute() else settings.DATA_DIR / p).exists()
 
 
 def _needs_avatar_download(acc: Account, new_avatar: str | None, file_exists: bool) -> bool:

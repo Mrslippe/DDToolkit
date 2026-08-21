@@ -29,3 +29,12 @@ node_modules/
 
 # 本地缓存（图片代理磁盘缓存，可随时重建）
 static/img-cache/
+
+# 桌面端构建产物（PyInstaller / Tauri）
+/dist/
+/build/
+*.spec
+frontend/src-tauri/target/
+frontend/src-tauri/binaries/
+frontend/src-tauri/gen/
+/dist-portable/

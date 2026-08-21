@@ -2,7 +2,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
-from pathlib import Path
 import asyncio
 import logging
 import os
@@ -15,7 +14,7 @@ from app.services.auth import auth_manager
 from app.services.importer import import_from_file
 
 # --- 日志 ---
-os.makedirs(os.path.dirname(settings.LOG_FILE), exist_ok=True)
+os.makedirs(settings.DATA_DIR / "logs", exist_ok=True)
 logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL),
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -71,7 +70,14 @@ app.include_router(vtuber.router)
 app.include_router(img_proxy.router)
 
 # 挂载静态文件目录，头像缓存可通过 /static/avatars/{uid}.jpg 访问
-static_dir = Path(__file__).parent.parent / "static"
+# （目录随数据根 DATA_DIR 走，桌面端打包后位于数据目录）
+static_dir = settings.DATA_DIR / "static"
 static_dir.mkdir(exist_ok=True)
 (static_dir / "avatars").mkdir(exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+
+@app.get("/healthz")
+def healthz():
+    """探活端点：桌面端启动器/前端等待后端就绪用。"""
+    return {"ok": True, "version": settings.VERSION}

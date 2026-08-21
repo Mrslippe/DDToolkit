@@ -2,14 +2,26 @@ import type { FetchPostsResult, FetchResult, FetchStatus, Post, PostPage, PostSt
 
 /**
  * API 基地址：
- * - 开发环境默认走 Vite 代理（/api → http://127.0.0.1:8000，见 vite.config.ts）
+ * - Web 开发默认走 Vite 代理（/api → http://127.0.0.1:8000，见 vite.config.ts）
  * - 也可用 VITE_API_BASE 直连后端（如 http://127.0.0.1:8000），后端 CORS 已放开
+ * - 桌面端（Tauri）启动时通过 setApiBase 注入 sidecar 实际端口
  */
-export const API_BASE: string =
+export const DEFAULT_API_BASE: string =
   (import.meta.env.VITE_API_BASE as string | undefined) ?? '/api'
 
+let apiBase = DEFAULT_API_BASE
+
+/** 桌面端引导完成后注入真实后端基地址 */
+export function setApiBase(base: string): void {
+  apiBase = base.replace(/\/+$/, '')
+}
+
+export function getApiBase(): string {
+  return apiBase
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const resp = await fetch(`${API_BASE}${path}`, init)
+  const resp = await fetch(`${apiBase}${path}`, init)
   if (!resp.ok) {
     let detail = `${resp.status} ${resp.statusText}`
     try {
@@ -82,12 +94,12 @@ export const api = {
 /** 后端返回的相对资源路径（如 static/avatars/x.jpg）→ 可访问 URL */
 export function resolveAsset(path: string | null | undefined): string | undefined {
   if (!path) return undefined
-  return `${API_BASE}/${path.replace(/^\/+/, '')}`
+  return `${apiBase}/${path.replace(/^\/+/, '')}`
 }
 
 /** 图片代理 URL（直连 CDN 失败时的兜底链路，后端 /img-proxy 带磁盘缓存） */
 export function imgProxyUrl(src: string): string {
-  return `${API_BASE}/img-proxy?url=${encodeURIComponent(src)}`
+  return `${apiBase}/img-proxy?url=${encodeURIComponent(src)}`
 }
 
 export type { Post }

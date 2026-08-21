@@ -4,7 +4,6 @@ import logging
 import os
 import re
 import time
-from pathlib import Path
 from typing import Optional
 
 import httpx
@@ -13,7 +12,8 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-ENV_PATH = Path(__file__).parent.parent.parent / ".env"
+# 凭据文件随数据目录走（桌面端 = %APPDATA%/DDtoolkit/.env，开发 = 项目根 .env）
+ENV_PATH = settings.DATA_DIR / ".env"
 
 BASE_HEADERS = {
     "User-Agent": (
