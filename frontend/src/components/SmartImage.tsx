@@ -21,6 +21,10 @@ interface Props extends Omit<ImageProps, 'src'> {
 export default function SmartImage({ src, proxyPreview = true, ...rest }: Props) {
   const [stage, setStage] = useState<Stage>('direct')
 
+  // 显式传入 preview=false 时禁用预览（避免与外层点击行为冲突，一操作一行为）
+  const { preview: previewProp, ...imageProps } = rest
+  const previewEnabled = previewProp !== false
+
   const direct = src ? normalizeImageUrl(src) : undefined
   const proxy = direct ? imgProxyUrl(direct) : undefined
   const current = stage === 'direct' ? direct : stage === 'proxy' ? proxy : undefined
@@ -29,8 +33,8 @@ export default function SmartImage({ src, proxyPreview = true, ...rest }: Props)
     return (
       <div
         style={{
-          width: rest.width ?? 120,
-          height: rest.height ?? 120,
+          width: imageProps.width ?? 120,
+          height: imageProps.height ?? 120,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -46,10 +50,10 @@ export default function SmartImage({ src, proxyPreview = true, ...rest }: Props)
 
   return (
     <Image
-      {...rest}
+      {...imageProps}
       src={current}
       referrerPolicy="no-referrer"
-      preview={proxyPreview ? { src: proxy } : undefined}
+      preview={previewEnabled ? (proxyPreview ? { src: proxy } : undefined) : false}
       onError={() => {
         if (stage === 'direct') setStage('proxy')
         else setStage('failed')

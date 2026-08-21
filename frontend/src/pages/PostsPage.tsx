@@ -1,49 +1,42 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
 import {
   Alert,
   App as AntApp,
   Avatar,
   Button,
-  Card,
-  Descriptions,
+  Pagination,
+  Segmented,
   Select,
   Space,
-  Spin,
-  Statistic,
-  Table,
-  Tabs,
-  Tag,
   Tooltip,
-  Typography,
 } from 'antd'
-import {
-  ArrowLeftOutlined,
-  ClockCircleOutlined,
-  ReloadOutlined,
-  ThunderboltOutlined,
-} from '@ant-design/icons'
-import type { ColumnsType } from 'antd/es/table'
+import { ReloadOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import { api, resolveAsset } from '../api/api'
-import type { Account, Post, PostStats } from '../api/types'
-import { formatCount, formatDateTime, parseStats, postDisplayTitle, postTypeLabel } from '../utils/format'
+import type { Account, Post, PostStats, VTuber } from '../api/types'
+import { formatCount, formatDateTime, postTypeLabel } from '../utils/format'
+import PostCard from '../components/PostCard'
 import PostDetailDrawer from '../components/PostDetailDrawer'
-import TypeTag from '../components/TypeTag'
-
-const { Text, Title } = Typography
+import './../styles/posts.css'
 
 const PAGE_SIZE = 20
 
 const TYPE_ORDER = ['video', 'video_dynamic', 'image', 'text', 'repost', 'article', 'music', 'live']
 
-/** 帖子列表页：账号信息 + 统计概览 + 类型过滤 + 服务端分页表格 + 详情抽屉 + 抓取按钮 */
+/** 归档过滤：all=全部（含已归档） unarchived=仅未归档 archived=仅已归档 */
+type ArchivedFilter = 'all' | 'unarchived' | 'archived'
+
+/**
+ * 帖子面板（右栏 /vtubers/:id）：
+ * VTuber 信息条 + 类型筛选 chips + 帖子卡片流（服务端分页）+ 详情抽屉 + 抓取操作。
+ * 视觉参照设计稿 Frame1672。
+ */
 export default function PostsPage() {
   const { id } = useParams()
   const vtuberId = Number(id)
-  const navigate = useNavigate()
   const { message } = AntApp.useApp()
 
-  const [vtuber, setVtuber] = useState<Awaited<ReturnType<typeof api.getVtuber>> | null>(null)
+  const [vtuber, setVtuber] = useState<VTuber | null>(null)
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null)
   const [stats, setStats] = useState<PostStats | null>(null)
 
@@ -51,6 +44,7 @@ export default function PostsPage() {
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
   const [typeFilter, setTypeFilter] = useState<string>()
+  const [archived, setArchived] = useState<ArchivedFilter>('all')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [fetching, setFetching] = useState(false)
@@ -102,6 +96,7 @@ export default function PostsPage() {
         page,
         page_size: PAGE_SIZE,
         type: typeFilter,
+        is_archived: archived === 'all' ? undefined : archived === 'archived',
       })
       .then((p) => {
         if (cancelled) return
@@ -113,7 +108,7 @@ export default function PostsPage() {
     return () => {
       cancelled = true
     }
-  }, [selectedAccount, page, typeFilter])
+  }, [selectedAccount, page, typeFilter, archived])
 
   const changeAccount = (uid: string) => {
     const acc = vtuber?.accounts.find((a) => a.platform_uid === uid) ?? null
@@ -176,238 +171,180 @@ export default function PostsPage() {
     }
   }, [vtuber, fetching])
 
-  const columns = useMemo<ColumnsType<Post>>(
-    () => [
-      {
-        title: '类型',
-        dataIndex: 'type',
-        width: 80,
-        render: (t: string) => <TypeTag type={t} />,
-      },
-      {
-        title: '标题',
-        dataIndex: 'title',
-        ellipsis: { showTitle: true },
-        render: (_t: string | null, r) => <span>{postDisplayTitle(r)}</span>,
-      },
-      {
-        title: '摘要',
-        dataIndex: 'summary',
-        ellipsis: { showTitle: true },
-        width: 300,
-        render: (s: string | null) => (s ? <Text type="secondary">{s}</Text> : '-'),
-      },
-      {
-        title: '统计',
-        key: 'stats',
-        width: 130,
-        render: (_, r) => {
-          const st = parseStats(r.stats_json)
-          const parts = [
-            st.view !== undefined ? `播 ${formatCount(st.view)}` : null,
-            st.like !== undefined ? `赞 ${formatCount(st.like)}` : null,
-          ].filter(Boolean)
-          return <Text type="secondary">{parts.length ? parts.join(' · ') : '-'}</Text>
-        },
-      },
-      {
-        title: '发布时间',
-        dataIndex: 'published_at',
-        width: 150,
-        render: (t: string | null) => (
-          <span style={{ whiteSpace: 'nowrap' }}>{formatDateTime(t)}</span>
-        ),
-      },
-      {
-        title: '操作',
-        key: 'action',
-        width: 80,
-        render: (_, r) => (
-          <Button type="link" size="small" onClick={() => setDrawerPost(r)}>
-            详情
-          </Button>
-        ),
-      },
-    ],
-    [],
-  )
-
-  const tabItems = useMemo(() => {
+  // 类型筛选 chips：全部 N / 视频 N / 图文 N ...（计数来自统计概览）
+  const chipItems = useMemo(() => {
     const counts = stats?.by_type ?? {}
     const types = Object.keys(counts).sort(
-      (a, b) => (TYPE_ORDER.indexOf(a) - TYPE_ORDER.indexOf(b)) || (counts[b] - counts[a]),
+      (a, b) => TYPE_ORDER.indexOf(a) - TYPE_ORDER.indexOf(b) || counts[b] - counts[a],
     )
     return [
-      { key: 'all', label: `全部 ${stats?.total ?? ''}` },
-      ...types.map((t) => ({ key: t, label: `${postTypeLabel(t)} ${counts[t]}` })),
+      { key: 'all', label: '全部', count: stats?.total ?? total },
+      ...types.map((t) => ({ key: t, label: postTypeLabel(t), count: counts[t] })),
     ]
-  }, [stats])
+  }, [stats, total])
 
   // 注意：所有 Hook 必须在此提前返回之前执行完（Rules of Hooks）
-  if (!vtuber) {
+  if (!vtuber && !error) {
     return (
-      <div style={{ textAlign: 'center', padding: 80 }}>
-        <Spin size="large" />
+      <div className="posts-panel">
+        <div className="post-grid">
+          {Array.from({ length: 5 }, (_, i) => (
+            <div key={i} className="post-card sk" aria-hidden>
+              <div className="post-card-cover sk-block" />
+              <div className="post-card-body">
+                <div className="sk-block sk-line w60" />
+                <div className="sk-block sk-line w90" />
+                <div className="sk-block sk-line w40" />
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     )
   }
 
-  const avatarSrc = resolveAsset(selectedAccount?.avatar_path) ?? selectedAccount?.avatar_url ?? undefined
+  if (!vtuber) {
+    return (
+      <div className="posts-panel">
+        <Alert type="warning" showIcon message="无法加载" description={error} />
+      </div>
+    )
+  }
+
+  const bili = selectedAccount
+  const avatarSrc = resolveAsset(bili?.avatar_path) ?? bili?.avatar_url ?? undefined
+  const isLive = (bili?.live_status ?? 0) === 1
+  const accounts = vtuber.accounts.filter((a) => a.platform_uid)
 
   return (
-    <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      <Space size={8}>
-        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/')}>
-          返回
-        </Button>
-        <Title level={4} style={{ margin: 0 }}>
-          {vtuber.name}
-        </Title>
-      </Space>
-
-      {/* 账号信息条 */}
-      <Card size="small">
-        <Space size={20} align="start" wrap>
-          <Avatar size={64} src={avatarSrc} />
-          <Descriptions
-            size="small"
-            column={{ xs: 1, sm: 2, md: 4 }}
-            items={[
-              {
-                key: 'account',
-                label: '账号',
-                children:
-                  (vtuber.accounts.length > 1 && selectedAccount ? (
-                    <Select
-                      size="small"
-                      value={selectedAccount.platform_uid}
-                      onChange={changeAccount}
-                      options={vtuber.accounts.map((a) => ({
-                        value: a.platform_uid,
-                        label: `${a.platform} / ${a.platform_uid}`,
-                      }))}
-                    />
-                  ) : (
-                    <Text>
-                      {selectedAccount?.platform} / {selectedAccount?.platform_uid}
-                    </Text>
-                  )),
-              },
-              {
-                key: 'followers',
-                label: '粉丝',
-                children: (
-                  <Text strong>{formatCount(selectedAccount?.followers_count)}</Text>
-                ),
-              },
-              {
-                key: 'live',
-                label: '直播',
-                children: (selectedAccount?.live_status ?? 0) === 1 ? (
-                  <Tooltip title={selectedAccount?.live_title}>
-                    <Tag color="red">直播中 · {selectedAccount?.room_id}</Tag>
-                  </Tooltip>
-                ) : (
-                  <Text type="secondary">离线</Text>
-                ),
-              },
-              {
-                key: 'lastfetch',
-                label: '上次抓取',
-                children: (
-                  <Text type="secondary">{formatDateTime(selectedAccount?.last_fetched_at)}</Text>
-                ),
-              },
-            ]}
-          />
-          <Space style={{ marginLeft: 'auto' }}>
-            <Button
-              icon={<ThunderboltOutlined />}
-              loading={fetching}
-              onClick={handleFetch}
-            >
-              抓取账号信息
-            </Button>
-            <Button
-              icon={<ReloadOutlined />}
-              loading={fetching}
-              onClick={handleFetchPosts}
-            >
-              抓取帖子（{vtuber.name}）
-            </Button>
-            <Button
-              type="primary"
-              icon={<ReloadOutlined />}
-              loading={fetching}
-              onClick={handleUpdatePosts}
-            >
-              更新未归档动态
-            </Button>
-          </Space>
+    <div className="posts-panel">
+      {/* VTuber 信息条 */}
+      <div className="vtuber-header">
+        <Avatar size={56} src={avatarSrc}>
+          {vtuber.name.slice(0, 1)}
+        </Avatar>
+        <div className="vtuber-header-info">
+          <div className="vtuber-header-name-row">
+            <h2 className="vtuber-header-name">{vtuber.name}</h2>
+            {isLive && (
+              <Tooltip title={bili?.live_title}>
+                <span className="live-tag">
+                  <i className="live-dot" />
+                  直播中
+                </span>
+              </Tooltip>
+            )}
+            {accounts.length > 1 && bili && (
+              <Select
+                size="small"
+                value={bili.platform_uid}
+                onChange={changeAccount}
+                options={accounts.map((a) => ({
+                  value: a.platform_uid,
+                  label: `${a.platform} / ${a.display_name ?? a.platform_uid}`,
+                }))}
+              />
+            )}
+          </div>
+          <div className="vtuber-header-meta">
+            {bili?.sign ? `${bili.sign} · ` : ''}
+            粉丝 {formatCount(bili?.followers_count)} · 上次抓取 {formatDateTime(bili?.last_fetched_at)}
+          </div>
+        </div>
+        <Space size={8} wrap style={{ justifyContent: 'flex-end' }}>
+          <Button icon={<ThunderboltOutlined />} loading={fetching} onClick={handleFetch}>
+            抓取账号
+          </Button>
+          <Button icon={<ReloadOutlined />} loading={fetching} onClick={handleFetchPosts}>
+            抓取帖子
+          </Button>
+          <Button
+            type="primary"
+            icon={<ReloadOutlined />}
+            loading={fetching}
+            onClick={handleUpdatePosts}
+          >
+            更新动态
+          </Button>
         </Space>
-      </Card>
+      </div>
 
-      {/* 统计概览 */}
-      {stats && (
-        <Card size="small">
-          <Space size={40} wrap>
-            <Statistic title="帖子总数" value={stats.total} />
-            {TYPE_ORDER.filter((t) => stats.by_type[t]).map((t) => (
-              <Statistic key={t} title={postTypeLabel(t)} value={stats.by_type[t]} />
-            ))}
-            <Statistic title="已归档" value={stats.archived} />
-            <Statistic
-              title="时间跨度"
-              valueRender={() => (
-                <Text type="secondary" style={{ fontSize: 13 }}>
-                  <ClockCircleOutlined /> {formatDateTime(stats.earliest)} ~ {formatDateTime(stats.latest)}
-                </Text>
-              )}
-            />
-          </Space>
-        </Card>
+      {/* 类型筛选 chips + 归档过滤 */}
+      <div className="type-chips-row">
+        <div className="type-chips">
+          {chipItems.map((c) => (
+            <button
+              key={c.key}
+              className={`type-chip${(typeFilter ?? 'all') === c.key ? ' active' : ''}`}
+              onClick={() => {
+                setTypeFilter(c.key === 'all' ? undefined : c.key)
+                setPage(1)
+              }}
+            >
+              {c.label} {c.count}
+            </button>
+          ))}
+        </div>
+        <Segmented
+          size="small"
+          value={archived}
+          onChange={(v) => {
+            setArchived(v as ArchivedFilter)
+            setPage(1)
+          }}
+          options={[
+            { label: '全部', value: 'all' },
+            { label: '未归档', value: 'unarchived' },
+            { label: '已归档', value: 'archived' },
+          ]}
+        />
+      </div>
+
+      {/* 帖子卡片流 */}
+      {error ? (
+        <Alert type="error" showIcon message="加载失败" description={error} />
+      ) : loading ? (
+        <div className="post-grid">
+          {Array.from({ length: 5 }, (_, i) => (
+            <div key={i} className="post-card sk" aria-hidden>
+              <div className="post-card-cover sk-block" />
+              <div className="post-card-body">
+                <div className="sk-block sk-line w60" />
+                <div className="sk-block sk-line w90" />
+                <div className="sk-block sk-line w40" />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : posts.length === 0 ? (
+        <div className="posts-placeholder">暂无帖子，点击上方「抓取帖子」或「更新动态」获取</div>
+      ) : (
+        <div className="post-grid">
+          {posts.map((p) => (
+            <PostCard key={p.id} post={p} onClick={() => setDrawerPost(p)} />
+          ))}
+        </div>
       )}
 
-      {/* 帖子表格 */}
-      <Card size="small">
-        {error ? (
-          <Alert type="error" showIcon message="加载失败" description={error} />
-        ) : (
-          <Tabs
-            activeKey={typeFilter ?? 'all'}
-            onChange={(k) => {
-              setTypeFilter(k === 'all' ? undefined : k)
-              setPage(1)
-            }}
-            items={tabItems}
+      {/* 分页 */}
+      {total > PAGE_SIZE && !error && (
+        <div className="posts-footer">
+          <Pagination
+            current={page}
+            pageSize={PAGE_SIZE}
+            total={total}
+            showSizeChanger={false}
+            showTotal={(t) => `共 ${t} 条`}
+            onChange={(p) => setPage(p)}
           />
-        )}
-        <Table<Post>
-          rowKey="id"
-          size="middle"
-          loading={loading}
-          columns={columns}
-          dataSource={posts}
-          pagination={{
-            current: page,
-            pageSize: PAGE_SIZE,
-            total,
-            showSizeChanger: false,
-            showTotal: (t) => `共 ${t} 条`,
-            onChange: (p) => setPage(p),
-          }}
-          onRow={(r) => ({
-            style: { cursor: 'pointer' },
-            onClick: () => setDrawerPost(r),
-          })}
-        />
-      </Card>
+        </div>
+      )}
 
       <PostDetailDrawer
         post={drawerPost}
         open={drawerPost !== null}
         onClose={() => setDrawerPost(null)}
       />
-    </Space>
+    </div>
   )
 }

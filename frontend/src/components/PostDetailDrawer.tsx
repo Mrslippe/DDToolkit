@@ -8,7 +8,7 @@ import {
   StarOutlined,
   TeamOutlined,
 } from '@ant-design/icons'
-import { Card, Collapse, Descriptions, Divider, Drawer, Space, Tag, Typography } from 'antd'
+import { Card, Collapse, Divider, Drawer, Space, Tag, Typography } from 'antd'
 import type { Post } from '../api/types'
 import {
   formatCount,
@@ -19,6 +19,7 @@ import {
 } from '../utils/format'
 import DeltaRenderer from './DeltaRenderer'
 import SmartImage from './SmartImage'
+import StatBadge from './StatBadge'
 import TypeTag from './TypeTag'
 
 const { Text, Paragraph } = Typography
@@ -128,23 +129,13 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
           )}
         </Space>
 
-        {/* 统计 */}
+        {/* 统计徽章行 */}
         {statItems.length > 0 && (
-          <Descriptions
-            size="small"
-            column={4}
-            bordered
-            items={statItems.map((s) => ({
-              key: s.key,
-              label: s.label,
-              children: (
-                <Space size={4}>
-                  {s.icon}
-                  {formatCount(s.value as number)}
-                </Space>
-              ),
-            }))}
-          />
+          <div className="drawer-stats">
+            {statItems.map((s) => (
+              <StatBadge key={s.key} icon={s.icon} value={s.value as number} label={s.label} />
+            ))}
+          </div>
         )}
 
         {/* 直播预约 */}

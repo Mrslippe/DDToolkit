@@ -1,0 +1,39 @@
+/* ── Design Tokens：提取自 other-sources/react 设计稿（Pixso Frame1672）── */
+
+@font-face {
+  font-family: 'Alimama FangYuanTi VF';
+  src: url('../assets/fonts/AlimamaFangYuanTiVF-VF.ttf') format('truetype');
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+:root {
+  /* 主色系 */
+  --c-primary: #ffa2b4;        /* 顶栏粉 */
+  --c-primary-deep: #fb77a1;   /* 强调粉（antd colorPrimary 同步） */
+  --c-accent: #fc7079;
+  --c-live: #e14444;           /* 直播中红 */
+
+  /* 背景 / 卡片 */
+  --c-bg-page: #fffbfb;        /* 页面近白底 */
+  --c-bg-card: #ffffff;
+  --c-border: rgba(206, 206, 206, 0.56);
+
+  /* 文字 */
+  --c-text-main: #4b5a6b;
+  --c-text-sub: #647489;
+  --c-text-on-primary: #ffffff;
+
+  /* 圆角 / 阴影 */
+  --radius-card: 10px;
+  --radius-sm: 8px;
+  --shadow-card: 0 2px 8px rgba(255, 162, 180, 0.25);
+
+  /* 字体 */
+  --font-family: 'Alimama FangYuanTi VF', system-ui, -apple-system, 'Segoe UI',
+    'PingFang SC', 'Microsoft YaHei', sans-serif;
+
+  /* 尺寸 */
+  --topbar-height: 56px;
+  --sidebar-width: 300px;
+}

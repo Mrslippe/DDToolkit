@@ -1,0 +1,326 @@
+/* ── 帖子面板（右栏）：信息条 / 类型筛选 chips / 卡片流 ── */
+
+.posts-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+/* VTuber 信息条 */
+.vtuber-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--c-bg-card);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+
+.vtuber-header-info {
+  min-width: 0;
+  flex: 1;
+}
+
+.vtuber-header-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.vtuber-header-name {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--c-text-main);
+}
+
+.vtuber-header-meta {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--c-text-sub);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(225, 68, 68, 0.08);
+  color: var(--c-live);
+  font-size: 12px;
+}
+
+/* 类型筛选行：chips + 归档开关 */
+.type-chips-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* 类型筛选 chips（设计稿 "默认" 标签样式） */
+.type-chips {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.type-chip {
+  border: 1px solid var(--c-border);
+  background: var(--c-bg-card);
+  color: var(--c-text-sub);
+  border-radius: 999px;
+  padding: 4px 14px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.type-chip:hover {
+  border-color: var(--c-primary);
+  color: var(--c-accent);
+}
+
+.type-chip.active {
+  background: var(--c-primary-deep);
+  border-color: var(--c-primary-deep);
+  color: #fff;
+  font-weight: 600;
+}
+
+/* 帖子流：单列瀑布流 */
+.post-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.post-card {
+  display: flex;
+  flex-direction: row;
+  background: var(--c-bg-card);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-card);
+  overflow: hidden;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.post-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--c-primary);
+  box-shadow: var(--shadow-card);
+}
+
+.post-card-cover {
+  position: relative;
+  width: 220px;
+  flex-shrink: 0;
+  aspect-ratio: 16 / 10;
+  background: var(--c-bg-page);
+  overflow: hidden;
+}
+
+.post-card-cover .post-card-cover-img,
+.post-card-cover .ant-image,
+.post-card-cover .ant-image-img {
+  width: 100%;
+  height: 100%;
+}
+
+.post-card-cover .post-card-cover-img {
+  object-fit: cover;
+}
+
+.post-card-cover-fallback {
+  width: 100%;
+  height: 100%;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  align-items: center;
+  justify-content: center;
+  padding: 14px;
+  font-size: 13px;
+  color: var(--c-text-sub);
+  line-height: 1.6;
+  overflow: hidden;
+}
+
+.post-card-type {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  font-size: 12px;
+  backdrop-filter: blur(2px);
+}
+
+.post-card-duration {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.post-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px 12px;
+  flex: 1;
+}
+
+.post-card-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--c-text-main);
+  line-height: 1.5;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.post-card-summary {
+  margin: 0;
+  font-size: 12px;
+  color: var(--c-text-sub);
+  line-height: 1.6;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.post-card-footer {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.post-card-badges {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.post-card-date {
+  font-size: 12px;
+  color: var(--c-text-sub);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* 统计徽章（"29.2万" 胶囊） */
+.stat-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 8px;
+  border: 1px solid var(--c-border);
+  border-radius: 999px;
+  background: var(--c-bg-page);
+  color: var(--c-text-sub);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.stat-badge .anticon {
+  font-size: 11px;
+}
+
+/* 详情抽屉统计徽章行 */
+.drawer-stats {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* 骨架屏（粉色系 shimmer） */
+.post-card.sk {
+  pointer-events: none;
+}
+
+.sk-block {
+  border-radius: 6px;
+  background: linear-gradient(100deg, #f4eef1 40%, #fdf6f8 50%, #f4eef1 60%);
+  background-size: 200% 100%;
+  animation: sk-shimmer 1.4s ease infinite;
+}
+
+@keyframes sk-shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+
+.sk .sk-line {
+  height: 14px;
+}
+
+.sk .sk-line + .sk-line {
+  margin-top: 8px;
+}
+
+.sk .w90 {
+  width: 90%;
+}
+
+.sk .w60 {
+  width: 60%;
+}
+
+.sk .w40 {
+  width: 40%;
+}
+
+/* 底部：分页 + 空态/加载态 */
+.posts-footer {
+  display: flex;
+  justify-content: center;
+  padding: 8px 0 16px;
+}
+
+.posts-placeholder {
+  padding: 64px 0;
+  text-align: center;
+  color: var(--c-text-sub);
+  font-size: 14px;
+}
+
+/* 响应式：<640px 时卡片改纵向堆叠 */
+@media (max-width: 640px) {
+  .post-card {
+    flex-direction: column;
+  }
+
+  .post-card-cover {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+  }
+}

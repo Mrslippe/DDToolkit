@@ -1,0 +1,318 @@
+/* ── 应用壳布局：TopBar + 左栏 VTuber 列表 + 右栏内容区 ── */
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--c-bg-page);
+  color: var(--c-text-main);
+  font-family: var(--font-family);
+}
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.app-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+/* ── TopBar ── */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: var(--topbar-height);
+  padding: 0 16px 0 12px;
+  background: var(--c-primary);
+  border-radius: var(--radius-card) var(--radius-card) 0 0;
+  flex-shrink: 0;
+}
+
+.topbar-logo {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  background: #fff;
+  color: var(--c-accent);
+  font-size: 22px;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+  /* TODO(独立窗体阶段): 替换为 <img src={logo} /> 图片 LOGO */
+}
+
+.topbar-title {
+  color: var(--c-text-on-primary);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.topbar-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-left: 4px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.94);
+  color: var(--c-text-sub);
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.topbar-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #52c41a;
+  flex-shrink: 0;
+}
+
+.topbar-spacer {
+  flex: 1;
+}
+
+/* 装饰性窗口按钮（独立窗体阶段接线） */
+.topbar-window-controls {
+  display: flex;
+  gap: 6px;
+}
+
+.topbar-win-btn {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.35);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.topbar-win-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.topbar-win-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* ── 最左侧工具栏（功能入口占位） ── */
+
+.icon-rail {
+  width: 52px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding-top: 12px;
+  background: var(--c-bg-card);
+  border-right: 1px solid var(--c-border);
+}
+
+.icon-rail-btn {
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--c-text-sub);
+  font-size: 18px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.icon-rail-btn:hover {
+  background: var(--c-bg-page);
+  color: var(--c-accent);
+}
+
+.icon-rail-btn.active {
+  background: var(--c-primary-deep);
+  color: #fff;
+}
+
+/* ── 左栏：VTuber 列表 ── */
+
+.sidebar {
+  width: var(--sidebar-width);
+  flex-shrink: 0;
+  overflow-y: auto;
+  padding: 12px;
+  border-right: 1px solid var(--c-border);
+  background: var(--c-bg-card);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sidebar-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 2px 4px 0;
+}
+
+.sidebar-header h3 {
+  margin: 0;
+  font-size: 15px;
+  color: var(--c-text-main);
+}
+
+.sidebar-count {
+  font-size: 12px;
+  color: var(--c-text-sub);
+}
+
+.vtuber-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.vtuber-item:hover {
+  background: var(--c-bg-page);
+  border-color: var(--c-border);
+}
+
+.vtuber-item.active {
+  background: var(--c-bg-page);
+  border-color: var(--c-primary);
+  box-shadow: var(--shadow-card);
+}
+
+.vtuber-info {
+  min-width: 0;
+  flex: 1;
+}
+
+.vtuber-name-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.vtuber-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--c-text-main);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--c-live);
+  flex-shrink: 0;
+}
+
+.live-label {
+  font-size: 11px;
+  color: var(--c-live);
+  flex-shrink: 0;
+}
+
+.vtuber-sign {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--c-text-sub);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-tip {
+  padding: 24px 12px;
+  text-align: center;
+  color: var(--c-text-sub);
+  font-size: 13px;
+}
+
+/* ── 右栏内容区 ── */
+
+.app-main {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+/* 空置界面 */
+.empty-state {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.empty-state-card {
+  text-align: center;
+  padding: 48px 56px;
+  border: 1.5px dashed var(--c-primary);
+  border-radius: var(--radius-card);
+  background: var(--c-bg-card);
+}
+
+.empty-state-logo {
+  width: 72px;
+  height: 72px;
+  margin: 0 auto 16px;
+  border-radius: 50%;
+  background: var(--c-bg-page);
+  border: 1px solid var(--c-border);
+  color: var(--c-primary-deep);
+  font-size: 40px;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+}
+
+.empty-state-title {
+  margin: 0 0 6px;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--c-text-main);
+}
+
+.empty-state-desc {
+  margin: 0;
+  font-size: 13px;
+  color: var(--c-text-sub);
+}
