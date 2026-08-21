@@ -96,7 +96,7 @@ mod winjob {
 }
 
 /// 启动后端并接管其输出流；返回子进程句柄。
-/// - release：PyInstaller sidecar exe（Tauri 外部二进制约定）
+/// - release：onedir 后端目录（Tauri resources 打包，免 onefile 解压开销）
 /// - debug：直接跑 `python backend_main.py` —— 改后端零打包、日志直出终端
 fn spawn_backend(
     app: &tauri::AppHandle,
@@ -106,8 +106,26 @@ fn spawn_backend(
     let (mut rx, child) = {
         #[cfg(not(debug_assertions))]
         {
+            // 多候选探测：resource_dir 与主程序同级的 binaries/backend 布局差异防御
+            let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+            if let Ok(res) = app.path().resource_dir() {
+                candidates.push(res.join("binaries").join("backend"));
+            }
+            if let Ok(exe) = std::env::current_exe() {
+                if let Some(dir) = exe.parent() {
+                    candidates.push(dir.join("binaries").join("backend"));
+                    candidates.push(dir.to_path_buf());
+                }
+            }
+            let backend_dir = candidates
+                .iter()
+                .find(|d| d.join("ddtoolkit-backend.exe").exists())
+                .cloned()
+                .ok_or("未找到后端目录 binaries/backend/ddtoolkit-backend.exe")?;
+            println!("[ddtoolkit] backend dir = {}", backend_dir.display());
             app.shell()
-                .sidecar("ddtoolkit-backend")?
+                .command(backend_dir.join("ddtoolkit-backend.exe").to_string_lossy().to_string())
+                .current_dir(&backend_dir)
                 .env("DDTOOLKIT_PORT", port.to_string())
                 .env("DDTOOLKIT_DATA_DIR", data_dir.to_string_lossy().to_string())
                 .env("DDTOOLKIT_PARENT_PID", std::process::id().to_string())

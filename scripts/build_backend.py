@@ -1,10 +1,13 @@
-"""打包桌面端后端为 Tauri sidecar 可执行文件（PyInstaller --onefile）。
+"""打包桌面端后端为 Tauri 资源目录（PyInstaller --onedir）。
+
+onedir 相比 onefile：免去每次启动解压 %TEMP% 的开销（冷启动 2-4s → <0.5s），
+杀软误报率也更低；代价是分发形态为目录，由 Tauri resources 机制整体打包。
 
 用法:
     python scripts/build_backend.py
 
 产物:
-    frontend/src-tauri/binaries/ddtoolkit-backend-x86_64-pc-windows-msvc.exe
+    frontend/src-tauri/binaries/backend/   （ddtoolkit-backend.exe + _internal/）
 """
 import shutil
 import subprocess
@@ -13,8 +16,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 NAME = "ddtoolkit-backend"
-TRIPLE = "x86_64-pc-windows-msvc"
 BINARIES = ROOT / "frontend" / "src-tauri" / "binaries"
+BACKEND_DIR = BINARIES / "backend"
 
 # uvicorn 运行时按字符串动态导入 loop/protocol 实现，需显式声明
 HIDDEN_IMPORTS = [
@@ -35,7 +38,7 @@ HIDDEN_IMPORTS = [
 
 def main() -> None:
     cmd = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean",
-           "--onefile", "--name", NAME,
+           "--onedir", "--name", NAME,
            "--distpath", str(ROOT / "dist"),
            "--workpath", str(ROOT / "build"),
            "--specpath", str(ROOT / "scripts"),
@@ -47,12 +50,15 @@ def main() -> None:
     print("[build]", " ".join(cmd))
     subprocess.run(cmd, cwd=ROOT, check=True)
 
-    src = ROOT / "dist" / f"{NAME}.exe"
-    BINARIES.mkdir(parents=True, exist_ok=True)
-    dst = BINARIES / f"{NAME}-{TRIPLE}.exe"
-    shutil.copy2(src, dst)
-    size_mb = dst.stat().st_size / 1024 / 1024
-    print(f"[build] sidecar -> {dst}  ({size_mb:.1f} MB)")
+    # 整目录搬运（exe + _internal/ 依赖），Tauri resources 按此路径整体打包
+    src_dir = ROOT / "dist" / NAME
+    if not (src_dir / f"{NAME}.exe").exists():
+        raise SystemExit(f"[build] 未找到 onedir 产物: {src_dir}")
+    if BACKEND_DIR.exists():
+        shutil.rmtree(BACKEND_DIR)
+    shutil.copytree(src_dir, BACKEND_DIR)
+    size_mb = sum(f.stat().st_size for f in BACKEND_DIR.rglob("*")) / 1024 / 1024
+    print(f"[build] backend dir -> {BACKEND_DIR}  ({size_mb:.1f} MB)")
 
 
 if __name__ == "__main__":
