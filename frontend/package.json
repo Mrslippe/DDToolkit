@@ -11,8 +11,8 @@
     "build:backend": "python ../scripts/build_backend.py",
     "collect:portable": "python ../scripts/collect_portable.py",
     "tauri": "tauri",
-    "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "tauri:dev": "chcp 65001 && tauri dev",
+    "tauri:build": "chcp 65001 && tauri build"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",

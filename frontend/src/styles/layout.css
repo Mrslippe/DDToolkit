@@ -46,6 +46,159 @@ html.window-maximized body {
   background: transparent;
 }
 
+/* ── 启动幕：主色铺底 + 中央 LOGO + 信封上下展开 ── */
+
+/* 揭幕后内容错峰淡入（很轻量，仅页面加载时播一次） */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.topbar,
+.icon-rail,
+.sidebar,
+.app-main {
+  animation: rise-in 0.35s ease backwards;
+}
+.topbar {
+  animation-delay: 0.25s;
+}
+.icon-rail {
+  animation-delay: 0.33s;
+}
+.sidebar {
+  animation-delay: 0.38s;
+}
+.app-main {
+  animation-delay: 0.45s;
+}
+
+.splash {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+}
+
+/* 折缝高光：闭合态两片面板交界处的一条细线，强化信封隐喻 */
+.splash::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(50% - 0.5px);
+  height: 1px;
+  background: rgba(255, 255, 255, 0.28);
+  z-index: 0;
+}
+
+.splash-open::before {
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+
+.splash-panel {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  height: 50.5%;
+  background: var(--c-primary);
+}
+
+.splash-panel-top {
+  top: 0;
+}
+
+.splash-panel-bottom {
+  bottom: 0;
+}
+
+/* 展开动画：上片上滑、下片下滑 */
+.splash-open .splash-panel-top {
+  animation: splash-slide-up 0.7s cubic-bezier(0.7, 0, 0.3, 1) forwards;
+}
+
+.splash-open .splash-panel-bottom {
+  animation: splash-slide-down 0.7s cubic-bezier(0.7, 0, 0.3, 1) forwards;
+}
+
+@keyframes splash-slide-up {
+  to {
+    transform: translateY(-101%);
+  }
+}
+
+@keyframes splash-slide-down {
+  to {
+    transform: translateY(101%);
+  }
+}
+
+.splash-center {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.splash-logo {
+  width: 88px;
+  height: 88px;
+  border-radius: 22px;
+  background: #fff;
+  color: var(--c-accent);
+  font-size: 52px;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+}
+
+/* 展开/失败态：LOGO 淡出（展开态延迟 150ms 错峰——先开盖再取物） */
+.splash-logo-static {
+  animation: splash-logo-out 0.55s ease forwards;
+}
+
+.splash-open .splash-logo {
+  animation: splash-logo-out 0.55s ease 0.15s forwards;
+}
+
+/* 闭合等待态：LOGO 呼吸 */
+.splash-logo-pulse {
+  animation: splash-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes splash-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.35);
+  }
+  50% {
+    transform: scale(1.06);
+    box-shadow: 0 0 0 18px rgba(255, 255, 255, 0);
+  }
+}
+
+@keyframes splash-logo-out {
+  to {
+    opacity: 0;
+    transform: scale(0.85);
+  }
+}
+
 .app-body {
   display: flex;
   flex: 1;
@@ -55,6 +208,7 @@ html.window-maximized body {
 /* ── TopBar ── */
 
 .topbar {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -88,12 +242,15 @@ html.window-maximized body {
   white-space: nowrap;
 }
 
+/* 状态胶囊：顶栏水平居中（脱离 flex 流，绝对定位） */
 .topbar-status {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
   align-items: center;
   gap: 8px;
-  min-width: 0;
-  margin-left: 4px;
+  max-width: 46%;
   padding: 3px 10px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.94);
@@ -109,6 +266,25 @@ html.window-maximized body {
   border-radius: 50%;
   background: #52c41a;
   flex-shrink: 0;
+}
+
+/* 操作成功覆盖态 */
+.topbar-status-dot.ok {
+  background: var(--c-primary-deep);
+}
+
+/* 胶囊文案变更时的渐隐渐显 */
+.pill-text-fade {
+  animation: pill-fade-in 0.3s ease;
+}
+
+@keyframes pill-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .topbar-status-dot.busy {

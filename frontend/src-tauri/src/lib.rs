@@ -19,6 +19,13 @@ fn get_backend_port(port: State<'_, BackendPort>) -> u16 {
     *port.0.lock().unwrap()
 }
 
+/// 显示主窗口。应用自有命令不受 capability 权限约束，
+/// 避免 core:window:allow-show 缺失导致前端 show() 被静默拒绝
+#[tauri::command]
+fn present_window(window: tauri::Window) {
+    let _ = window.show();
+}
+
 fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0")
         .expect("绑定空闲端口失败")
@@ -129,6 +136,9 @@ fn spawn_backend(
                 .env("DDTOOLKIT_PORT", port.to_string())
                 .env("DDTOOLKIT_DATA_DIR", data_dir.to_string_lossy().to_string())
                 .env("DDTOOLKIT_PARENT_PID", std::process::id().to_string())
+                // 强制子进程 UTF-8 输出（onedir 同样生效）
+                .env("PYTHONUTF8", "1")
+                .env("PYTHONIOENCODING", "utf-8")
                 .spawn()?
         }
         #[cfg(debug_assertions)]
@@ -150,6 +160,9 @@ fn spawn_backend(
                 .env("DDTOOLKIT_PORT", port.to_string())
                 .env("DDTOOLKIT_DATA_DIR", data_dir.to_string_lossy().to_string())
                 .env("DDTOOLKIT_PARENT_PID", std::process::id().to_string())
+                // 强制子进程 UTF-8 输出，避免管道模式下回退 GBK 导致终端乱码
+                .env("PYTHONUTF8", "1")
+                .env("PYTHONIOENCODING", "utf-8")
                 .spawn()?
         }
     };
@@ -192,7 +205,10 @@ pub fn run() {
         .manage(BackendPort(Mutex::new(0)))
         .manage(BackendChild(Mutex::new(None)))
         .manage(BackendJob(Mutex::new(0)))
-        .invoke_handler(tauri::generate_handler![get_backend_port])
+        .invoke_handler(tauri::generate_handler![
+            get_backend_port,
+            present_window
+        ])
         .setup(|app| {
             let port = free_port();
             let mut data_dir = app.path().app_data_dir()?;
@@ -233,6 +249,24 @@ pub fn run() {
             }
 
             *app.state::<BackendChild>().0.lock().unwrap() = Some(child);
+
+            // 兜底显示线程：窗口以 visible:false 创建，正常由前端 JS 在静态幕
+            // 绘制后调用 show()。若该链路失败（vite 冷启动依赖重载、动态 import
+            // 竞态等），8 秒后此处补显——show() 幂等，JS 已显示则无任何副作用，
+            // 保证窗口「最多迟到 8 秒」而非永不出现。
+            {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(8));
+                    if let Some(w) = handle.get_webview_window("main") {
+                        if matches!(w.is_visible(), Ok(false)) {
+                            let _ = w.show();
+                            println!("[ddtoolkit] fallback: 窗口仍隐藏，已兜底显示");
+                        }
+                    }
+                });
+            }
+
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -242,30 +276,50 @@ pub fn run() {
                 if let Some(child) =
                     app_handle.state::<BackendChild>().0.lock().unwrap().take()
                 {
-                    let pid = child.pid();
-                    let _ = child.kill();
-                    // 第一道防线：按引导器进程树强杀（onefile 孙进程可能脱离树，
-                    // 由 Job Object 与后端看门狗兜底）
                     #[cfg(target_os = "windows")]
                     {
                         use std::os::windows::process::CommandExt;
                         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-                        match std::process::Command::new("taskkill")
-                            .args(["/PID", &pid.to_string(), "/T", "/F"])
-                            .creation_flags(CREATE_NO_WINDOW)
-                            .output()
-                        {
-                            Ok(o) if o.status.success() => {
-                                println!("[ddtoolkit] taskkill /T ok (pid {pid})")
+
+                        // 先探活：Job Object 通常已瞬间清理整棵进程树，
+                        // 此时 taskkill 只会报「没有找到进程」——直接跳过
+                        fn alive(pid: u32) -> bool {
+                            unsafe {
+                                let h = windows_sys::Win32::System::Threading::OpenProcess(
+                                    windows_sys::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION,
+                                    0,
+                                    pid,
+                                );
+                                if h.is_null() {
+                                    return false;
+                                }
+                                let mut code: u32 = 0;
+                                let ok = windows_sys::Win32::System::Threading::GetExitCodeProcess(
+                                    h, &mut code,
+                                );
+                                windows_sys::Win32::Foundation::CloseHandle(h);
+                                ok != 0 && code == 259 // STILL_ACTIVE
                             }
-                            Ok(o) => println!(
-                                "[ddtoolkit] taskkill failed: {}",
-                                String::from_utf8_lossy(&o.stderr)
-                            ),
-                            Err(e) => println!("[ddtoolkit] taskkill spawn err: {e}"),
+                        }
+
+                        let pid = child.pid();
+                        if !alive(pid) {
+                            println!("[ddtoolkit] backend already exited (job cleanup)");
+                        } else {
+                            // 兜底强杀进程树；只记录结果不回显系统本地化 stderr（避免 GBK 乱码）
+                            let ok = std::process::Command::new("taskkill")
+                                .args(["/PID", &pid.to_string(), "/T", "/F"])
+                                .creation_flags(CREATE_NO_WINDOW)
+                                .status()
+                                .map(|s| s.success())
+                                .unwrap_or(false);
+                            println!(
+                                "[ddtoolkit] backend tree {} (pid {pid})",
+                                if ok { "terminated" } else { "terminate FAILED" },
+                            );
                         }
                     }
-                    println!("[ddtoolkit] backend process killed (pid {pid})");
+                    println!("[ddtoolkit] exit cleanup done");
                 }
             }
         });
