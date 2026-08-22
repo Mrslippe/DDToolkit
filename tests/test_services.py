@@ -525,3 +525,25 @@ def test_avatar_missing():
         assert _avatar_missing(acc3) is False
     finally:
         real.unlink(missing_ok=True)
+
+
+def test_safe_json_parse_fallback():
+    """回归（用户实测 2026-08-22）：更新动态合并视频统计时
+    _safe_json_parse 被以双参调用但签名只有单参 → TypeError 中断整个任务。
+    修复：签名支持可选 fallback；并保证非 dict 的合法 JSON 也回退。"""
+    from app.services.scheduler import _safe_json_parse
+
+    # 双参调用形态（视频统计合并 / 专栏 delta 补全）
+    assert _safe_json_parse('{"view":5}', {}) == {"view": 5}
+    assert _safe_json_parse(None, {"a": 1}) == {"a": 1}
+    assert _safe_json_parse("not-json", {}) == {}
+
+    # 单参调用形态（历史代码路径）兼容
+    assert _safe_json_parse('{"like":2}') == {"like": 2}
+    assert _safe_json_parse("") == {}
+    assert _safe_json_parse(None) == {}
+    assert _safe_json_parse("bad") == {}
+
+    # 非 dict 的合法 JSON（如 "[]" / "3"）必须回退，避免 ** 展开崩溃
+    assert _safe_json_parse("[1,2]", {}) == {}
+    assert _safe_json_parse('"text"', {}) == {}

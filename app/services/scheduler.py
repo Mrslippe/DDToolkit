@@ -386,13 +386,20 @@ class PostFetchResult:
     archived_stop: bool = False      # 是否因归档边界提前停止（devlog/016）
 
 
-def _safe_json_parse(s: str | None):
+def _safe_json_parse(s: str | None, fallback: dict | None = None) -> dict:
+    """安全解析 JSON 字符串；空值/解析失败返回 fallback（默认空字典）。
+
+    第二参数供调用方在「合并进现有 dict」场景下显式传 {}，语义更清晰。
+    """
+    if fallback is None:
+        fallback = {}
     if not s:
-        return {}
+        return fallback
     try:
-        return _json.loads(s)
+        parsed = _json.loads(s)
+        return parsed if isinstance(parsed, dict) else fallback
     except (_json.JSONDecodeError, TypeError):
-        return {}
+        return fallback
 
 
 def _safe_store_post(post_repo: PostRepo, data: dict) -> bool:
