@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { toast } from 'sonner'
-import { RefreshCw, Zap, ChevronLeft, ChevronRight } from 'lucide-react'
+import {
+  RefreshCw,
+  Zap,
+  ChevronLeft,
+  ChevronRight,
+  Loader2,
+} from 'lucide-react'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import {
@@ -35,6 +41,16 @@ const TYPE_ORDER = ['video', 'video_dynamic', 'image', 'text', 'repost', 'articl
 
 /** 归档过滤：all=全部（含已归档） unarchived=仅未归档 archived=仅已归档 */
 type ArchivedFilter = 'all' | 'unarchived' | 'archived'
+
+/** 成功类提示走顶栏状态胶囊（渐隐渐显），错误仍用 toast */
+function pill(text: string) {
+  window.dispatchEvent(new CustomEvent('ddtoolkit:pill-message', { detail: { text } }))
+}
+
+/** 通知 TopBar 立即轮询一次抓取状态（点击按钮/任务结束时即时反馈） */
+function kickPoll() {
+  window.dispatchEvent(new Event('ddtoolkit:kick-poll'))
+}
 
 /** 轻量分页器（服务端分页）：上一页 / 第 x / y 页 / 下一页 */
 function PaginationLite({
@@ -97,6 +113,14 @@ export default function PostsPage() {
 
   const [drawerPost, setDrawerPost] = useState<Post | null>(null)
 
+  // 抓取/更新任务完成（fetch-idle 边沿）→ 静默重拉统计与当前页帖子
+  const [refreshTick, setRefreshTick] = useState(0)
+  useEffect(() => {
+    const handler = () => setRefreshTick((t) => t + 1)
+    window.addEventListener('ddtoolkit:fetch-idle', handler)
+    return () => window.removeEventListener('ddtoolkit:fetch-idle', handler)
+  }, [])
+
   // 加载 VTuber 与默认账号
   useEffect(() => {
     let cancelled = false
@@ -129,7 +153,7 @@ export default function PostsPage() {
     return () => {
       cancelled = true
     }
-  }, [selectedAccount])
+  }, [selectedAccount, refreshTick])
 
   // 帖子列表（服务端分页 + 过滤）；AbortController：切换 VTuber/翻页时
   // 取消在途请求，防止慢响应把旧数据写回新视图
@@ -166,7 +190,7 @@ export default function PostsPage() {
         if (!aborted) setLoading(false)
       })
     return () => controller.abort()
-  }, [selectedAccount, page, typeFilter, archived])
+  }, [selectedAccount, page, typeFilter, archived, refreshTick])
 
   const changeAccount = (uid: string) => {
     const acc = vtuber?.accounts.find((a) => a.platform_uid === uid) ?? null
@@ -178,56 +202,65 @@ export default function PostsPage() {
   const handleFetch = useCallback(async () => {
     if (!vtuber || fetching) return
     setFetching(true)
+    kickPoll() // 立即刷新胶囊 → 显示「抓取中」
     try {
       const r = await api.fetchVtuber(vtuberId)
       if (r.status === 'skipped') {
         toast.warning(r.message ?? '抓取任务正在进行中')
       } else {
         const s = r.result
-        toast.success(`账号信息抓取完成: 成功 ${s?.success ?? 0} · 失败 ${s?.failed ?? 0}`)
+        pill(`账号信息更新完成 · 成功 ${s?.success ?? 0} · 失败 ${s?.failed ?? 0}`)
       }
     } catch (e) {
       toast.error(`抓取失败: ${(e as Error).message}`)
     } finally {
       setFetching(false)
+      kickPoll()
     }
   }, [vtuber, vtuberId, fetching])
 
   const handleFetchPosts = useCallback(async () => {
     if (!vtuber || fetching) return
     setFetching(true)
+    kickPoll()
     try {
       const r = await api.fetchPostsByName(vtuber.name)
       if (r.status === 'skipped') {
         toast.warning(r.message ?? '帖子抓取正在进行中')
       } else {
-        toast.success(
-          `帖子抓取完成: 存储 ${r.total?.stored ?? 0} · 跳过 ${r.total?.skipped ?? 0} · 视频 ${r.total?.videos ?? 0}`,
+        pill(
+          `帖子抓取完成 · 存储 ${r.total?.stored ?? 0} · 跳过 ${r.total?.skipped ?? 0}` +
+            ` · 预归档 ${r.archived_first ?? 0}`,
         )
       }
     } catch (e) {
       toast.error(`帖子抓取失败: ${(e as Error).message}`)
     } finally {
       setFetching(false)
+      kickPoll()
     }
   }, [vtuber, fetching])
 
   const handleUpdatePosts = useCallback(async () => {
     if (!vtuber || fetching) return
     setFetching(true)
+    kickPoll()
     try {
       const r = await api.updateUnarchivedPosts(vtuber.name)
       if (r.status === 'skipped') {
         toast.warning(r.message ?? '更新任务正在进行中')
       } else {
-        toast.success(
-          `未归档动态更新完成: 归档 ${r.archived ?? 0} · 新增 ${r.total?.stored ?? 0} · 跳过 ${r.total?.skipped ?? 0}`,
+        const incremental = r.details?.some((d) => d.stopped_early) ? ' · 增量模式' : ''
+        pill(
+          `动态更新完成 · 新增 ${r.total?.stored ?? 0}` +
+            ` · 跳过 ${r.total?.skipped ?? 0}${incremental}`,
         )
       }
     } catch (e) {
       toast.error(`更新失败: ${(e as Error).message}`)
     } finally {
       setFetching(false)
+      kickPoll()
     }
   }, [vtuber, fetching])
 
@@ -249,17 +282,9 @@ export default function PostsPage() {
   if (!vtuber && !error) {
     return (
       <div className="posts-panel">
-        <div className="post-grid">
-          {Array.from({ length: 5 }, (_, i) => (
-            <div key={i} className="post-card sk" aria-hidden>
-              <div className="post-card-cover sk-block" />
-              <div className="post-card-body">
-                <div className="sk-block sk-line w60" />
-                <div className="sk-block sk-line w90" />
-                <div className="sk-block sk-line w40" />
-              </div>
-            </div>
-          ))}
+        <div className="posts-placeholder">
+          <Loader2 className="mr-2 inline size-4 animate-spin align-[-2px] text-primary" />
+          正在加载 VTuber 信息…
         </div>
       </div>
     )
@@ -370,29 +395,20 @@ export default function PostsPage() {
         </ToggleGroup>
       </div>
 
-      {/* 帖子卡片流：重取数据时保留旧内容降透明度，仅首次加载才显示骨架屏 */}
+      {/* 帖子卡片流：统一无闪动——重取保留旧内容降透明；空列表内嵌小 spinner，
+          任何状态切换都不发生整屏布局替换 */}
       {error ? (
         <Alert variant="destructive">
           <CircleAlert />
           <AlertTitle>加载失败</AlertTitle>
           <AlertDescription>{error}</AlertDescription>
         </Alert>
-      ) : loading && posts.length === 0 ? (
-        <div className="post-grid">
-          {Array.from({ length: 5 }, (_, i) => (
-            <div key={i} className="post-card sk" aria-hidden>
-              <div className="post-card-cover sk-block" />
-              <div className="post-card-body">
-                <div className="sk-block sk-line w60" />
-                <div className="sk-block sk-line w90" />
-                <div className="sk-block sk-line w40" />
-              </div>
-            </div>
-          ))}
-        </div>
       ) : posts.length === 0 ? (
         <div className="posts-placeholder">
-          暂无帖子，点击上方「抓取帖子」或「更新动态」获取
+          {loading && (
+            <Loader2 className="mr-2 inline size-4 animate-spin align-[-2px] text-primary" />
+          )}
+          {loading ? '正在加载帖子…' : '暂无帖子，点击上方「抓取帖子」或「更新动态」获取'}
         </div>
       ) : (
         <div className={`post-grid${loading ? ' is-refetching' : ''}`}>

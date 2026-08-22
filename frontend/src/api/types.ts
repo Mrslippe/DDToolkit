@@ -81,6 +81,8 @@ export interface FetchResult {
 export interface FetchPostsResult {
   status: string
   message?: string
+  /** 前置归档规则刷新的条数（v0.4.7） */
+  archived_first?: number
   total?: {
     videos: number
     dynamics: number
@@ -106,16 +108,29 @@ export interface UpdatePostsResult {
     stored: number
     skipped: number
     archived_stop: boolean
+    stopped_early: boolean
     rate_limited: boolean
   }[]
 }
 
 /** GET /vtuber/fetch-status：账号信息抓取实时状态 */
+export interface AccountSnapshot {
+  platform_uid: string
+  display_name: string | null
+  sign: string | null
+  followers_count: number | null
+  live_status: number | null
+  live_title: string | null
+  avatar_path: string | null
+}
+
 export interface AccountFetchStatus {
   running: boolean
   current: string | null
   index: number
   total: number
+  /** 本轮任务内已完成的账号字段快照（按完成顺序追加），供侧栏就地增量刷新 */
+  recent: AccountSnapshot[]
 }
 
 /** GET /vtuber/fetch-status：帖子抓取实时状态 */

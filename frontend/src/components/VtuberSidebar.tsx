@@ -3,8 +3,34 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useLocation, useNavigate, matchPath } from 'react-router-dom'
 import { api, resolveAsset } from '../api/api'
-import type { VTuber } from '../api/types'
+import type { AccountSnapshot, VTuber } from '../api/types'
 import './../styles/layout.css'
+
+/** 把抓取完成的账号快照就地合并进侧栏数据（按 bilibili platform_uid 匹配） */
+function mergeSnapshots(list: VTuber[], updates: AccountSnapshot[]): VTuber[] {
+  const byUid = new Map(updates.map((u) => [u.platform_uid, u]))
+  return list.map((v) => {
+    const bili = v.accounts.find((a) => a.platform === 'bilibili')
+    const hit = bili ? byUid.get(bili.platform_uid) : undefined
+    if (!bili || !hit) return v
+    return {
+      ...v,
+      accounts: v.accounts.map((a) =>
+        a.platform === 'bilibili' && a.platform_uid === hit.platform_uid
+          ? {
+              ...a,
+              display_name: hit.display_name ?? a.display_name,
+              sign: hit.sign ?? a.sign,
+              followers_count: hit.followers_count ?? a.followers_count,
+              live_status: hit.live_status ?? a.live_status,
+              live_title: hit.live_title ?? a.live_title,
+              avatar_path: hit.avatar_path ?? a.avatar_path,
+            }
+          : a,
+      ),
+    }
+  })
+}
 
 /**
  * 常驻左栏：VTuber 纵向列表（头像 + 名字 + 签名），直播中显示红点。
@@ -35,6 +61,17 @@ export default function VtuberSidebar() {
     window.addEventListener('ddtoolkit:fetch-idle', onFetchIdle)
     return () => window.removeEventListener('ddtoolkit:fetch-idle', onFetchIdle)
   }, [load])
+
+  // 抓取过程中每完成一条账号信息 → 用增量快照就地更新对应条目（零请求）
+  useEffect(() => {
+    const onProgress = (e: Event) => {
+      const updates = (e as CustomEvent<AccountSnapshot[]>).detail
+      if (!Array.isArray(updates) || updates.length === 0) return
+      setVtubers((prev) => mergeSnapshots(prev, updates))
+    }
+    window.addEventListener('ddtoolkit:account-progress', onProgress)
+    return () => window.removeEventListener('ddtoolkit:account-progress', onProgress)
+  }, [])
 
   if (loading) {
     return (

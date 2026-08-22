@@ -14,7 +14,8 @@ import type { FetchStatus } from '../api/types'
 import './../styles/layout.css'
 
 const POLL_ACTIVE_MS = 3000 // 有任务运行时的高频轮询
-const POLL_IDLE_MS = 15000 // 空闲时的低频轮询
+const POLL_IDLE_MS = 10000 // 空闲时的低频轮询
+const PILL_MS = 4000 // 操作结果覆盖态的展示时长
 
 const isTauri = '__TAURI_INTERNALS__' in window
 
@@ -33,7 +34,9 @@ async function tauriWindow() {
 export default function TopBar() {
   const [status, setStatus] = useState<FetchStatus | null>(null)
   const [confirmClose, setConfirmClose] = useState(false)
+  const [pillMsg, setPillMsg] = useState<string | null>(null)
   const prevRunning = useRef(false)
+  const seenRecent = useRef(0)
 
   useEffect(() => {
     let cancelled = false
@@ -45,6 +48,22 @@ export default function TopBar() {
         const s = await api.getFetchStatus()
         if (cancelled) return
         active = s.account.running || s.post.running
+
+        // 账号快照增量 → 派发事件，侧栏就地刷新（每完成一条触发一次）
+        const recent = s.account.recent ?? []
+        if (recent.length > seenRecent.current) {
+          const fresh = recent.slice(seenRecent.current)
+          seenRecent.current = recent.length
+          window.dispatchEvent(
+            new CustomEvent('ddtoolkit:account-progress', { detail: fresh }),
+          )
+        } else if (recent.length < seenRecent.current) {
+          seenRecent.current = recent.length // 新一轮任务，基线重置
+        }
+
+        // 新任务启动时立即让位给实时状态显示
+        if (active) setPillMsg(null)
+
         setStatus((prev) => {
           const wasRunning = prev ? prev.account.running || prev.post.running : prevRunning.current
           if (wasRunning && !active) {
@@ -61,11 +80,36 @@ export default function TopBar() {
       }
     }
 
+    pollRef.current = poll
     poll()
     return () => {
       cancelled = true
       if (timer !== undefined) clearTimeout(timer)
     }
+  }, [])
+
+  // 操作按钮点击/完成时「踢一脚」：胶囊即时反映任务启动与结束，
+  // 不必等下一轮轮询
+  const pollRef = useRef<() => void>(() => {})
+  useEffect(() => {
+    const kick = () => pollRef.current?.()
+    window.addEventListener('ddtoolkit:kick-poll', kick)
+    return () => window.removeEventListener('ddtoolkit:kick-poll', kick)
+  }, [])
+
+  // 成功类操作提示覆盖态：优先于常规状态文案，PILL_MS 后自动还原；
+  // 新任务启动时由轮询立即清除让位
+  const pillTimer = useRef<number | undefined>(undefined)
+  useEffect(() => {
+    const onPill = (e: Event) => {
+      const text = (e as CustomEvent<{ text?: string }>).detail?.text
+      if (!text) return
+      setPillMsg(text)
+      if (pillTimer.current !== undefined) clearTimeout(pillTimer.current)
+      pillTimer.current = window.setTimeout(() => setPillMsg(null), PILL_MS)
+    }
+    window.addEventListener('ddtoolkit:pill-message', onPill)
+    return () => window.removeEventListener('ddtoolkit:pill-message', onPill)
   }, [])
 
   const busy = status ? status.account.running || status.post.running : false
@@ -82,6 +126,11 @@ export default function TopBar() {
     dotClass = 'topbar-status-dot busy'
   }
 
+  // 显示优先级：覆盖消息（且无任务运行）> 实时状态
+  const showOverride = pillMsg !== null && !busy
+  const displayText = showOverride ? pillMsg! : statusText
+  const displayDot = showOverride ? 'topbar-status-dot ok' : dotClass
+
   const handleMinimize = () => void tauriWindow().then((w) => w.minimize())
 
   const closeApp = () => void tauriWindow().then((w) => w.close())
@@ -94,8 +143,10 @@ export default function TopBar() {
       <h1 className="topbar-title">DDtoolkit</h1>
 
       <span className="topbar-status">
-        <i className={dotClass} />
-        {statusText}
+        <i className={displayDot} />
+        <span key={displayText} className="pill-text-fade">
+          {displayText}
+        </span>
       </span>
 
       <div className="topbar-spacer" />

@@ -16,7 +16,7 @@ from app.schemas.vtuber import (
 from app.services.scheduler import (
     async_fetch_and_update, async_fetch_vtuber, is_fetch_running,
     async_fetch_posts, async_fetch_all_posts, is_post_fetch_running,
-    async_update_unarchived_posts, get_fetch_status,
+    async_update_unarchived_posts, get_fetch_status, archive_old_posts,
 )
 
 router = APIRouter()
@@ -206,6 +206,8 @@ async def fetch_posts_by_name(name: str, platform: str = "bilibili",
     """
     按 VTuber 名字抓取帖子。name 支持模糊匹配。
     video_pages=-1 全量拉取视频，dynamics_pages=-1 全量拉取动态。
+    抓取前先执行归档规则刷新 is_archived，使抓取循环的归档边界剪枝
+    立即生效——已归档条目不再产生任何网络请求（v0.4.7）。
     示例: POST /vtuber/fetch-posts?name=明前奶绿&video_pages=-1&dynamics_pages=-1
     """
     if is_post_fetch_running():
@@ -214,6 +216,9 @@ async def fetch_posts_by_name(name: str, platform: str = "bilibili",
     vtubers = db.query(VTuber).filter(VTuber.name.contains(name)).all()
     if not vtubers:
         raise HTTPException(404, f"未找到名字包含 '{name}' 的 VTuber")
+
+    # 前置归档：让 archived_ids 尽量完整，边界后的历史页零请求跳过
+    archived_first = archive_old_posts(db=db)
 
     acc_repo = AccountRepo(db)
     total = {"videos": 0, "dynamics": 0, "stored": 0, "skipped": 0}
@@ -229,7 +234,8 @@ async def fetch_posts_by_name(name: str, platform: str = "bilibili",
                 for k in ("videos", "dynamics", "stored", "skipped"):
                     total[k] += getattr(r, k)
 
-    return {"status": "done", "total": total, "details": results}
+    return {"status": "done", "archived_first": archived_first,
+            "total": total, "details": results}
 
 
 @router.post("/vtuber/fetch-all-posts")

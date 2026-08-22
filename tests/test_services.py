@@ -547,3 +547,82 @@ def test_safe_json_parse_fallback():
     # 非 dict 的合法 JSON（如 "[]" / "3"）必须回退，避免 ** 展开崩溃
     assert _safe_json_parse("[1,2]", {}) == {}
     assert _safe_json_parse('"text"', {}) == {}
+
+
+def test_fetch_posts_core_stops_on_existing(monkeypatch, db):
+    """v0.4.7 增量模式：动态流遇到库中已有帖子即停（首页首条豁免防置顶误停）。
+    场景：库中已有 OLD1；feed 第一页 = [OLD1(置顶位,豁免), NEW1(新), OLD1?不重复]
+    → NEW1 入库；第二页首条 OLD2 已存在 → 立即停止，不再请求第三页。"""
+    from app.services import scheduler as sch
+
+    db.add_all([
+        PostModel(platform="bilibili", platform_uid="123", platform_post_id="OLD1",
+                  type="text", published_at=None, is_archived=False),
+        PostModel(platform="bilibili", platform_uid="123", platform_post_id="OLD2",
+                  type="text", published_at=None, is_archived=False),
+    ])
+    db.commit()
+
+    pages = [
+        {"items": [_post_item("OLD1"), _post_item("NEW1")], "has_more": True,
+         "next_offset": "p2"},
+        {"items": [_post_item("OLD2"), _post_item("NEW2")], "has_more": True,
+         "next_offset": "p3"},
+        {"items": [_post_item("NEVER")], "has_more": False},
+    ]
+    calls = {"n": 0}
+
+    async def fake_dynamics(mid, offset="", client=None):
+        calls["n"] += 1
+        return pages[calls["n"] - 1] if calls["n"] <= 3 else None
+
+    async def fake_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(sch, "fetch_bilibili_dynamics", fake_dynamics)
+    monkeypatch.setattr("asyncio.sleep", fake_sleep)
+
+    async def run():
+        r = await sch._fetch_posts_core(123, 0, 10, db,
+                                        include_videos=False, stop_on_existing=True)
+        return r, calls["n"]
+
+    r, n = asyncio.run(run())
+    assert r.stopped_early is True       # 第二页首条 OLD2 命中即停
+    assert n == 2                        # 第三页零请求
+    assert r.stored == 1                 # 仅第一页的 NEW1 入库（NEW2 未到达即停）
+    assert db.query(PostModel).filter(
+        PostModel.platform_post_id == "NEW2").count() == 0
+
+
+def test_fetch_posts_core_stop_exempt_first_item(monkeypatch, db):
+    """首页首条豁免：置顶旧帖在流首不触发停止，其后的新帖正常入库。"""
+    from app.services import scheduler as sch
+
+    db.add(PostModel(platform="bilibili", platform_uid="123",
+                     platform_post_id="PIN", type="text"))
+    db.commit()
+
+    pages = [
+        {"items": [_post_item("PIN"), _post_item("FRESH")], "has_more": False},
+    ]
+    calls = {"n": 0}
+
+    async def fake_dynamics(mid, offset="", client=None):
+        calls["n"] += 1
+        return pages[0]
+
+    async def fake_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(sch, "fetch_bilibili_dynamics", fake_dynamics)
+    monkeypatch.setattr("asyncio.sleep", fake_sleep)
+
+    async def run():
+        return await sch._fetch_posts_core(123, 0, 10, db,
+                                           include_videos=False, stop_on_existing=True)
+
+    r = asyncio.run(run())
+    assert r.stopped_early is False      # FRESH 是新帖，未误停
+    assert r.stored == 1
+    assert calls["n"] == 1               # has_more=False 自然结束

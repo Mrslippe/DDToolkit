@@ -66,9 +66,30 @@ _fetch_running = False
 
 # ── 实时状态（供 /vtuber/fetch-status 轮询；仅简单赋值，GIL 下线程安全）──
 _status: dict = {
-    "account": {"running": False, "current": None, "index": 0, "total": 0},
+    "account": {"running": False, "current": None, "index": 0, "total": 0,
+                "recent": []},   # 最近完成的账号字段快照，供前端就地增量刷新侧栏
     "post": {"running": False, "target": None},
 }
+
+
+def _push_account_snapshot(acc) -> None:
+    """账号信息抓取提交后，把最新字段快照推入 recent（上限 100 条）。
+
+    前端 TopBar 轮询发现 recent 增长即派发 account-progress 事件，
+    VtuberSidebar 按 platform_uid 就地合并，避免全表重刷。
+    """
+    recent = _status["account"].setdefault("recent", [])
+    recent.append({
+        "platform_uid": str(acc.platform_uid),
+        "display_name": acc.display_name,
+        "sign": acc.sign,
+        "followers_count": acc.followers_count,
+        "live_status": acc.live_status,
+        "live_title": acc.live_title,
+        "avatar_path": acc.avatar_path,
+    })
+    if len(recent) > 100:
+        del recent[:-100]
 
 
 def _set_account_progress(current: str | None, index: int, total: int) -> None:
@@ -186,6 +207,7 @@ async def async_fetch_and_update() -> FetchResult:
 
     _fetch_running = True
     _status["account"]["running"] = True
+    _status["account"]["recent"] = []   # 每轮自包含：清空上一任务的快照
     result = FetchResult()
 
     # 风控状态为本任务上下文内的干净初值（ContextVar 隔离，见 fetcher.py）
@@ -239,6 +261,7 @@ async def async_fetch_and_update() -> FetchResult:
 
             if ok:
                 db.commit()
+                _push_account_snapshot(acc)
                 result.success += 1
             else:
                 result.failed += 1
@@ -289,6 +312,7 @@ async def async_fetch_vtuber(vtuber_id: int) -> FetchResult:
 
     _fetch_running = True
     _status["account"]["running"] = True
+    _status["account"]["recent"] = []   # 每轮自包含：清空上一任务的快照
     result = FetchResult()
     clear_rate_limit()
     client = httpx.AsyncClient(timeout=15.0)
@@ -328,6 +352,7 @@ async def async_fetch_vtuber(vtuber_id: int) -> FetchResult:
 
             if ok:
                 db.commit()
+                _push_account_snapshot(acc)
                 result.success += 1
             else:
                 result.failed += 1
@@ -384,6 +409,7 @@ class PostFetchResult:
     skipped: int = 0
     rate_limited: bool = False
     archived_stop: bool = False      # 是否因归档边界提前停止（devlog/016）
+    stopped_early: bool = False      # 增量模式：遇到已入库帖子即停（v0.4.7）
 
 
 def _safe_json_parse(s: str | None, fallback: dict | None = None) -> dict:
@@ -415,12 +441,16 @@ def _safe_store_post(post_repo: PostRepo, data: dict) -> bool:
 
 async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db: Session,
                             client: httpx.AsyncClient | None = None,
-                            include_videos: bool = True) -> PostFetchResult:
+                            include_videos: bool = True,
+                            stop_on_existing: bool = False) -> PostFetchResult:
     """单个账号的帖子抓取核心逻辑（不含锁与 session 管理）。
     video_pages=-1   → 全量拉取视频直到无更多结果。
     dynamics_pages=-1 → 全量拉取动态直到 has_more=false。
     include_videos=False → 只抓动态（更新未归档动态用）。
     client 复用连接池；未传入时自建并在结束/异常时关闭。
+    stop_on_existing=True → 增量模式：动态流按时间倒序翻页，遇到第一条
+    库中已有的帖子即停止（更早的必然已入库），通常第 1 页即返回；
+    首页首条豁免判定——B站常把置顶旧帖排在流首，避免误停漏抓新帖。
 
     归档边界（devlog/016）：动态/视频按时间倒序翻页，一旦某一整页的帖子
     全部已归档（is_archived=1，即早于归档截止日），更早的页必然也已归档，
@@ -483,6 +513,7 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
         # ── 动态 ──
         offset = ""
         dyn_page = 0
+        stop_now = False
         while True:
             if dynamics_pages > 0 and dyn_page >= dynamics_pages:
                 break
@@ -497,13 +528,19 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
             if all(d["platform_post_id"] in archived_ids for d in data.get("items", [])):
                 result.archived_stop = True
                 break
-            for d in data.get("items", []):
+            for idx, d in enumerate(data.get("items", [])):
                 # 双保险：直播开播动态（fetcher 已过滤，此处兜底，见 devlog/018）
                 if d["type"] == "live":
                     continue
                 result.dynamics += 1
                 if d["platform_post_id"] in existing_ids:
                     result.skipped += 1
+                    # 增量模式：遇到已入库即认为更早的都已入库（首页首条豁免，
+                    # 防置顶旧帖排在流首导致误停漏抓新帖，见 docstring）
+                    if stop_on_existing and not (dyn_page == 0 and idx == 0):
+                        result.stopped_early = True
+                        stop_now = True
+                        break
                     continue
 
                 # 图文 / 纯文字 → detail API 拿 OPUS 格式完整数据
@@ -578,6 +615,10 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
                     result.skipped += 1
                 existing_ids.add(d["platform_post_id"])
             dyn_page += 1
+            if stop_now:
+                # 增量边界已确认：更早的动态必然已在库中，立即收工
+                db.commit()
+                return result
             if not data.get("has_more"):
                 break
             offset = data.get("next_offset", "")
@@ -751,7 +792,8 @@ async def async_update_unarchived_posts(name: str | None = None) -> dict:
             logger.info(f"[{idx+1}/{len(accounts)}] 更新未归档动态 {acc.display_name or acc.platform_uid} ...")
             try:
                 r = await _fetch_posts_core(int(acc.platform_uid), -1, -1, db,
-                                            client=client, include_videos=False)
+                                            client=client, include_videos=False,
+                                            stop_on_existing=True)
             except Exception as e:
                 logger.error(f"更新动态异常 uid={acc.platform_uid}: {e}", exc_info=True)
                 db.rollback()
