@@ -21,6 +21,15 @@
       ;(function () {
         var lines = []
         var open = true
+        function log(msg) {
+          lines.push(
+            '[' +
+              new Date().toLocaleTimeString('zh-CN', { hour12: false }) +
+              '] ' +
+              msg,
+          )
+          render()
+        }
         function render() {
           if (!lines.length) return
           var box = document.getElementById('boot-diag')
@@ -91,6 +100,10 @@
         window.addEventListener('unhandledrejection', function (e) {
           log('[promise] ' + String(e.reason))
         })
+        // 全局禁用浏览器右键菜单（捕获阶段，先于一切渲染生效）
+        document.addEventListener('contextmenu', function (e) {
+          e.preventDefault()
+        }, true)
         window.__bootLog = log
         // React 就绪后不再整版弹出，仅保留徽章待查
         window.__bootFold = function () {

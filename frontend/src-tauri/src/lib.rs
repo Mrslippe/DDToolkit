@@ -250,6 +250,31 @@ pub fn run() {
 
             *app.state::<BackendChild>().0.lock().unwrap() = Some(child);
 
+            // 窗口轮廓统一交给前端 CSS 圆角：
+            // 1) 关 DWM 阴影/边框描线（矩形轮廓的来源）
+            // 2) 关 Win11 系统圆角（~8px，与前端 12px 双弧线打架）
+            #[cfg(target_os = "windows")]
+            {
+                use windows_sys::Win32::Graphics::Dwm::{
+                    DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE,
+                    DWMWCP_DONOTROUND,
+                };
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.set_shadow(false);
+                    if let Ok(hwnd) = w.hwnd() {
+                        let pref = DWMWCP_DONOTROUND; // 3
+                        unsafe {
+                            DwmSetWindowAttribute(
+                                hwnd.0,
+                                DWMWA_WINDOW_CORNER_PREFERENCE as u32,
+                                &pref as *const _ as *const core::ffi::c_void,
+                                4,
+                            );
+                        }
+                    }
+                }
+            }
+
             // 兜底显示线程：窗口以 visible:false 创建，正常由前端 JS 在静态幕
             // 绘制后调用 show()。若该链路失败（vite 冷启动依赖重载、动态 import
             // 竞态等），8 秒后此处补显——show() 幂等，JS 已显示则无任何副作用，
@@ -272,6 +297,24 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("Tauri 初始化失败")
         .run(|app_handle, event| {
+            // 诊断：记录退出路径（点 VTuber 后窗口消失——定位是窗口销毁/退出请求/宿主请求）
+            match &event {
+                RunEvent::Ready => println!("[ddtoolkit] RunEvent::Ready"),
+                RunEvent::ExitRequested { code, .. } => {
+                    println!("[ddtoolkit] RunEvent::ExitRequested code={code:?}")
+                }
+                RunEvent::Exit => println!("[ddtoolkit] RunEvent::Exit"),
+                RunEvent::WindowEvent { label, event: ev, .. } => match ev {
+                    tauri::WindowEvent::CloseRequested { .. } => {
+                        println!("[ddtoolkit] WindowEvent[{label}] CloseRequested")
+                    }
+                    tauri::WindowEvent::Destroyed => {
+                        println!("[ddtoolkit] WindowEvent[{label}] Destroyed")
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
             if let RunEvent::Exit = event {
                 if let Some(child) =
                     app_handle.state::<BackendChild>().0.lock().unwrap().take()
