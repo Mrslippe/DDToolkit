@@ -19,6 +19,7 @@ class VTuber(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, index=True, nullable=False)
+    faction = Column(String, nullable=True)            # 阵营（手动维护）
     birthday = Column(String, nullable=True)          # MM-DD
     debut_date = Column(String, nullable=True)         # YYYY-MM-DD 或仅 YYYY
     setting = Column(Text, nullable=True)              # 角色设定

@@ -5,13 +5,13 @@ from contextlib import asynccontextmanager
 import asyncio
 import logging
 import os
+import sqlite3
 
 from app.core.config import settings
 from app.core.database import engine, Base
 from app.routers import vtuber, img_proxy
-from app.services.scheduler import start_scheduler, shutdown_scheduler, async_fetch_and_update
+from app.services.scheduler import start_scheduler, shutdown_scheduler
 from app.services.auth import auth_manager
-from app.services.importer import import_from_file
 
 # --- 日志 ---
 os.makedirs(settings.DATA_DIR / "logs", exist_ok=True)
@@ -26,30 +26,29 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _migrate() -> None:
+    """轻量列迁移：create_all 不会给已存在的表补列，这里显式补齐（幂等）。"""
+    db_path = settings.DATABASE_URL.replace("sqlite:///", "")
+    with sqlite3.connect(db_path) as conn:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(vtubers)")}
+        if "faction" not in cols:
+            conn.execute("ALTER TABLE vtubers ADD COLUMN faction VARCHAR")
+            logger.info("迁移: vtubers.faction 列已添加")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("启动中...")
     Base.metadata.create_all(bind=engine)
-
-    result = import_from_file()
-    logger.info(f"VTuber 导入: 新增 {result['created']}, 跳过 {result['skipped']}")
+    _migrate()
 
     scheduler = start_scheduler()
     auth_task = asyncio.create_task(auth_manager.run_maintenance())
-
-    if result["created"] > 0:
-        logger.info(f"检测到 {result['created']} 个新 VTuber，5 秒后自动抓取...")
-        asyncio.create_task(_delayed_fetch(5))
 
     yield
     logger.info("关闭中...")
     auth_task.cancel()
     shutdown_scheduler(scheduler)
-
-
-async def _delayed_fetch(delay: float):
-    await asyncio.sleep(delay)
-    await async_fetch_and_update()
 
 
 app = FastAPI(lifespan=lifespan)

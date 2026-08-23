@@ -50,6 +50,7 @@ class VTuberOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
     name: str
+    faction: str | None = None
     birthday: str | None = None
     debut_date: str | None = None
     setting: str | None = None
@@ -62,6 +63,7 @@ class VTuberOut(BaseModel):
 
 class VTuberCreate(BaseModel):
     name: str
+    faction: str | None = None
     birthday: str | None = None
     debut_date: str | None = None
     setting: str | None = None
@@ -70,6 +72,7 @@ class VTuberCreate(BaseModel):
 
 
 class VTuberUpdate(BaseModel):
+    faction: str | None = None
     name: str | None = None
     birthday: str | None = None
     debut_date: str | None = None

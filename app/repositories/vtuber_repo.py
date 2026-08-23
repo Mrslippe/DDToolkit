@@ -1,4 +1,4 @@
-from datetime import datetime
+﻿from datetime import datetime
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
@@ -37,7 +37,7 @@ class VTuberRepo:
         return obj
 
     def delete(self, id: int) -> bool:
-        obj = self.db.query(VTuber).filter(VTuber.id == id).first()
+        obj = self.get(id)
         if not obj:
             return False
         self.db.delete(obj)
@@ -184,3 +184,12 @@ class PostRepo:
         self.db.delete(obj)
         self.db.commit()
         return True
+
+    def delete_by_platform_uids(self, platform_uids: list[str]) -> int:
+        """按账号组清空帖子（解订阅用：posts 表独立，无外键联删）。"""
+        if not platform_uids:
+            return 0
+        n = self.db.query(Post).filter(Post.platform_uid.in_(platform_uids)).delete(
+            synchronize_session=False
+        )
+        return n

@@ -62,8 +62,16 @@ def update_vtuber(vtuber_id: int, data: VTuberUpdate, db: Session = Depends(get_
 
 @router.delete("/vtuber/{vtuber_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_vtuber(vtuber_id: int, db: Session = Depends(get_db)):
-    if not VTuberRepo(db).delete(vtuber_id):
+    """解除订阅：删除 VTuber（accounts 级联）+ 连带清除其全部帖子记录。
+    posts 表独立无外键，需按账号 uid 显式清理，避免孤儿数据。"""
+    v = VTuberRepo(db).get(vtuber_id)
+    if not v:
         raise HTTPException(404, f"VTuber id={vtuber_id} 不存在")
+
+    uids = [a.platform_uid for a in v.accounts if a.platform_uid]
+    n_posts = PostRepo(db).delete_by_platform_uids(uids)
+    logger.info(f"解除订阅 VTuber#{vtuber_id} ({v.name})：连带清除帖子 {n_posts} 条")
+    VTuberRepo(db).delete(vtuber_id)
 
 
 # ── Account CRUD ───────────────────────────────────────────────────
@@ -281,3 +289,107 @@ async def update_unarchived_posts(name: str | None = None):
     if is_post_fetch_running():
         return {"status": "skipped", "message": "帖子抓取任务正在进行中"}
     return await async_update_unarchived_posts(name)
+
+
+# ── 候选池 + 添加 VTuber（v0.5：csv 降级为离线索引，启动不再导入） ──────
+
+from fastapi import BackgroundTasks
+from pydantic import BaseModel
+
+from app.models.vtuber import Account
+from app.services import pool
+
+
+class AdoptRequest(BaseModel):
+    platform: str = "bilibili"
+    platform_uid: str
+    faction: str | None = None
+
+
+async def _fetch_adopted(vtuber_id: int) -> None:
+    """BackgroundTasks 回调：响应送达后在事件循环上执行单V账号抓取。"""
+    await async_fetch_vtuber(vtuber_id)
+
+
+@router.get("/vtuber/pool/search")
+def search_pool(kw: str, db: Session = Depends(get_db)):
+    """候选池检索：本地 csv 索引按 名称关键词/uid前缀 匹配，
+    自动剔除已入库账号。示例: GET /vtuber/pool/search?kw=塔菲"""
+    kw = (kw or "").strip()
+    if not kw:
+        return []
+    hits = pool.search_pool(kw, limit=20)
+    existing = {
+        (a.platform, a.platform_uid)
+        for a in db.query(Account.platform, Account.platform_uid).all()
+    }
+    return [h for h in hits if (h["platform"], h["platform_uid"]) not in existing]
+
+
+@router.post("/vtuber/adopt", response_model=VTuberOut, status_code=status.HTTP_201_CREATED)
+def adopt_vtuber(data: AdoptRequest, background: BackgroundTasks, db: Session = Depends(get_db)):
+    """从候选池收录 VTuber：建库后立即调度该 V 的账号信息抓取。
+    仅接受池内存在的 (platform, platform_uid)，名称以池为准防伪造。
+
+    注意：本端点为同步函数（线程池执行），抓取调度必须走 BackgroundTasks
+    ——直接 asyncio.create_task 会因工作线程无事件循环抛 RuntimeError，
+    造成「数据已入库但响应 500、抓取未启动」的双重故障（v0.5 实测）。"""
+    hit = pool.find_in_pool(data.platform, data.platform_uid)
+    if not hit:
+        raise HTTPException(404, "候选池中不存在该 platform_uid，请先在添加浮窗中检索选择")
+
+    exists = db.query(Account).filter(
+        Account.platform == data.platform,
+        Account.platform_uid == data.platform_uid,
+    ).first()
+    if exists:
+        raise HTTPException(409, f"该账号已入库（VTuber#{exists.vtuber_id}）")
+
+    vtuber = VTuber(name=hit["name"], faction=data.faction)
+    db.add(vtuber)
+    db.flush()
+    acc = Account(
+        vtuber_id=vtuber.id,
+        platform=data.platform,
+        platform_uid=data.platform_uid,
+        display_name=hit["name"],
+    )
+    db.add(acc)
+    db.commit()
+    db.refresh(vtuber)
+
+    # 响应送达后由事件循环执行（BackgroundTasks 原生支持异步回调）
+    background.add_task(_fetch_adopted, vtuber.id)
+    return VTuberOut.model_validate(vtuber, from_attributes=True)
+
+
+@router.post("/vtuber/fetch-accounts")
+async def batch_fetch_accounts(background: BackgroundTasks):
+    """批量任务：全量抓取所有 VTuber 的账号信息（后台执行，立即返回）。"""
+    if is_fetch_running():
+        raise HTTPException(409, "账号信息抓取任务正在进行中")
+    background.add_task(async_fetch_and_update)
+    return {"status": "started"}
+
+
+@router.post("/vtuber/batch/fetch-all-posts")
+async def batch_fetch_all_posts(background: BackgroundTasks):
+    if is_post_fetch_running():
+        raise HTTPException(409, "帖子抓取任务正在进行中")
+    background.add_task(async_fetch_all_posts)
+    return {"status": "started"}
+
+
+@router.post("/vtuber/batch/update-unarchived")
+async def batch_update_unarchived(background: BackgroundTasks):
+    if is_post_fetch_running():
+        raise HTTPException(409, "帖子抓取任务正在进行中")
+    background.add_task(async_update_unarchived_posts)
+    return {"status": "started"}
+
+
+@router.post("/vtuber/batch/archive")
+def batch_archive(days: int = Query(30, ge=1), db: Session = Depends(get_db)):
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    n = PostRepo(db).archive_before(cutoff)
+    return {"status": "done", "archived": n}
