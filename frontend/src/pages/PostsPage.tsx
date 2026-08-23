@@ -1,36 +1,40 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import {
+  AlignJustify,
+  Calendar,
+  LayoutGrid,
+  Mail,
   RefreshCw,
+  Trash2,
   Zap,
   ChevronLeft,
   ChevronRight,
   Loader2,
 } from 'lucide-react'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import {
   ToggleGroup,
   ToggleGroupItem,
 } from '@/components/ui/toggle-group'
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from '@/components/ui/tooltip'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { CircleAlert } from 'lucide-react'
+import heroDivider from '../assets/icons/hero-divider.svg'
 import { api, resolveAsset } from '../api/api'
 import type { Account, Post, PostStats, VTuber } from '../api/types'
-import { formatCount, formatDateTime, postTypeLabel } from '../utils/format'
+import { formatCount, postTypeLabel } from '../utils/format'
 import PostCard from '../components/PostCard'
 import PostDetailDrawer from '../components/PostDetailDrawer'
 import './../styles/posts.css'
@@ -112,6 +116,10 @@ export default function PostsPage() {
   const [fetching, setFetching] = useState(false)
 
   const [drawerPost, setDrawerPost] = useState<Post | null>(null)
+  const [confirmDel, setConfirmDel] = useState(false)
+  // 双视图：cards=展示页（默认）/ list=帖子列表页
+  const [view, setView] = useState<'cards' | 'list'>('cards')
+  const navigate = useNavigate()
 
   // 抓取/更新任务完成（fetch-idle 边沿）→ 静默重拉统计与当前页帖子
   const [refreshTick, setRefreshTick] = useState(0)
@@ -121,7 +129,12 @@ export default function PostsPage() {
     return () => window.removeEventListener('ddtoolkit:fetch-idle', handler)
   }, [])
 
-  // 加载 VTuber 与默认账号
+  // 加载 VTuber 与默认账号。
+  // refreshTick（fetch-idle 边沿）时重拉本体，让抓取期间点开的 V 在完成
+  // 后自动补齐头像/签名/粉丝数（此前仅统计和帖子刷新，头部永远停留空快照）。
+  // selectedAccount 按 uid 取【新】account 对象（而非保留旧引用）——
+  // 头部 bili=selectedAccount 直接读它，旧引用会背着抓取前的空快照。
+  // uid 未变时仅引用变化，posts effect 因 refreshTick 同步变化只会跑一次。
   useEffect(() => {
     let cancelled = false
     api
@@ -131,7 +144,11 @@ export default function PostsPage() {
         setVtuber(v)
         const accounts = v.accounts.filter((a) => a.platform_uid)
         if (accounts.length > 0) {
-          setSelectedAccount(accounts[0])
+          setSelectedAccount((prev) =>
+            prev
+              ? accounts.find((a) => a.platform_uid === prev.platform_uid) ?? accounts[0]
+              : accounts[0],
+          )
         } else {
           setError('该 VTuber 没有可用账号')
         }
@@ -140,7 +157,7 @@ export default function PostsPage() {
     return () => {
       cancelled = true
     }
-  }, [vtuberId])
+  }, [vtuberId, refreshTick])
 
   // 统计概览
   useEffect(() => {
@@ -191,13 +208,6 @@ export default function PostsPage() {
       })
     return () => controller.abort()
   }, [selectedAccount, page, typeFilter, archived, refreshTick])
-
-  const changeAccount = (uid: string) => {
-    const acc = vtuber?.accounts.find((a) => a.platform_uid === uid) ?? null
-    setSelectedAccount(acc)
-    setPage(1)
-    setTypeFilter(undefined)
-  }
 
   const handleFetch = useCallback(async () => {
     if (!vtuber || fetching) return
@@ -264,6 +274,19 @@ export default function PostsPage() {
     }
   }, [vtuber, fetching])
 
+  const handleDeleteVtuber = useCallback(async () => {
+    if (!vtuber) return
+    try {
+      await api.deleteVtuber(vtuberId)
+      toast.success(`已解除订阅「${vtuber.name}」`)
+      window.dispatchEvent(new Event('ddtoolkit:data-changed'))
+      navigate('/')
+    } catch (e) {
+      toast.error(`解除订阅失败: ${(e as Error).message}`)
+      setConfirmDel(false)
+    }
+  }, [vtuber, vtuberId, navigate])
+
   // 类型筛选 chips：全部 N / 视频 N / 图文 N ...（计数来自统计概览）
   const chipItems = useMemo(() => {
     const counts = stats?.by_type ?? {}
@@ -307,50 +330,113 @@ export default function PostsPage() {
   const isLive = (bili?.live_status ?? 0) === 1
   const accounts = vtuber.accounts.filter((a) => a.platform_uid)
 
-  return (
+  // 平台粉丝展示：徽章集按每集 3 枚切分（集内横排、集间纵向间隔 10）。
+  // 注意：此处位于 early return 之后，禁止使用 hook（Rules of Hooks），
+  // 纯计算即可——数据量极小，无性能顾虑
+  const pillSets: Account[][] = []
+  for (let i = 0; i < accounts.length; i += 3) pillSets.push(accounts.slice(i, i + 3))
+
+return (
     <div className="posts-panel">
-      {/* VTuber 信息条 */}
-      <div className="vtuber-header">
-        <Avatar className="size-14">
-          <AvatarImage src={avatarSrc} referrerPolicy="no-referrer" />
-          <AvatarFallback>{vtuber.name.slice(0, 1)}</AvatarFallback>
-        </Avatar>
-        <div className="vtuber-header-info">
-          <div className="vtuber-header-name-row">
-            <h2 className="vtuber-header-name">{vtuber.name}</h2>
-            {isLive && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="live-tag">
-                    <i className="live-dot" />
-                    直播中
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent>{bili?.live_title}</TooltipContent>
-              </Tooltip>
-            )}
-            {accounts.length > 1 && bili && (
-              <Select value={bili.platform_uid} onValueChange={changeAccount}>
-                <SelectTrigger size="sm" className="w-auto">
-                  <SelectValue placeholder="选择账号" />
-                </SelectTrigger>
-                <SelectContent>
-                  {accounts.map((a) => (
-                    <SelectItem key={a.id} value={a.platform_uid}>
-                      {a.platform} / {a.display_name ?? a.platform_uid}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-          </div>
-          <div className="vtuber-header-meta">
-            {bili?.sign ? `${bili.sign} · ` : ''}
-            粉丝 {formatCount(bili?.followers_count)} · 上次抓取{' '}
-            {formatDateTime(bili?.last_fetched_at)}
-          </div>
+      {/* 右栏永久背景：当前 V 头像铺底 + 渐变纱罩（后续接自定义接口），两视图常驻 */}
+      {avatarSrc && (
+        <div
+          className="hero-backdrop"
+          style={{ backgroundImage: `url(${avatarSrc})` }}
+        />
+      )}
+
+      {/* 顶部工具条：贴面板顶常驻，仅视图切换光条 */}
+      <div className="view-toolbar">
+        <div className="glow-bar">
+          <button type="button" className="view-btn off" title="日历视图 · 开发中">
+            <Calendar className="size-6" />
+          </button>
+          <button
+            type="button"
+            className={`view-btn ${view === 'cards' ? 'on' : 'off'}`}
+            title="展示页"
+            onClick={() => setView('cards')}
+          >
+            <LayoutGrid className="size-6" />
+          </button>
+          <button
+            type="button"
+            className={`view-btn ${view === 'list' ? 'on' : 'off'}`}
+            title="帖子列表"
+            onClick={() => setView('list')}
+          >
+            <AlignJustify className="size-6" />
+          </button>
+          <button type="button" className="view-btn off" title="动态视图 · 开发中">
+            <Mail className="size-6" />
+          </button>
         </div>
-        <div className="flex flex-wrap justify-end gap-2">
+      </div>
+
+      <div className="view-body">
+
+        {view === 'cards' && (
+          <div className="hero-scroll">
+            {/* Hero：头像 / 直播徽标 / 名字 / 签名 / 平台药丸 / 分隔饰条 / 阵营徽标 */}
+            <div className="hero">
+              <Avatar className="hero-avatar">
+                <AvatarImage src={avatarSrc} referrerPolicy="no-referrer" />
+                <AvatarFallback>{vtuber.name.slice(0, 1)}</AvatarFallback>
+              </Avatar>
+
+              {/* 直播状态：始终显示（未开播=灰点+「未开播」） */}
+              <span className={`live-tag${isLive ? ' live' : ' off'}`} title={isLive ? (bili?.live_title ?? '直播中') : '未开播'}>
+                <i className="live-dot" />
+                <span className="truncate">{isLive ? (bili?.live_title ?? '直播中') : '未开播'}</span>
+              </span>
+
+              <div className="hero-name-block">
+                <h2 className="hero-name">{vtuber.name}</h2>
+                {bili?.sign && <p className="hero-sign">{bili.sign}</p>}
+              </div>
+
+              <div className="stat-sets">
+                {pillSets.map((set, si) => (
+                  <div className="stat-set" key={si}>
+                    {set.map((a, i) => {
+                      const gi = si * 3 + i
+                      return (
+                        <div
+                          key={a.id}
+                          className={`stat-pill${gi % 2 === 0 ? ' pink' : ' coral'}`}
+                          title={`${a.platform} 粉丝数`}
+                        >
+                          <span className="pill-logo">{a.platform.slice(0, 1).toUpperCase()}</span>
+                          <span className="pill-value">{formatCount(a.followers_count)}</span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                ))}
+              </div>
+
+              <img src={heroDivider} alt="" className="hero-divider" />
+
+              {vtuber.faction && (
+                <div className="stat-sets">
+                  <div className="stat-set">
+                    <span className="faction-badge">
+                      <span className="pill-logo">阵</span>
+                      {vtuber.faction}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {view === 'list' && (
+          <div className="list-scroll">
+            <div className="list-inner">
+        {/* 操作按钮组：置顶于帖子列表页 */}
+        <div className="header-actions">
           <Button variant="outline" size="sm" disabled={fetching} onClick={handleFetch}>
             <Zap /> 抓取账号
           </Button>
@@ -360,68 +446,100 @@ export default function PostsPage() {
           <Button size="sm" disabled={fetching} onClick={handleUpdatePosts}>
             <RefreshCw /> 更新动态
           </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-red-500 hover:text-red-500 hover:border-red-400"
+            onClick={() => setConfirmDel(true)}
+          >
+            <Trash2 /> 解除订阅
+          </Button>
         </div>
+
+        {/* 类型筛选 chips + 归档过滤 */}
+        <div className="type-chips-row">
+          <div className="type-chips">
+            {chipItems.map((c) => (
+              <button
+                key={c.key}
+                className={`type-chip${(typeFilter ?? 'all') === c.key ? ' active' : ''}`}
+                onClick={() => {
+                  setTypeFilter(c.key === 'all' ? undefined : c.key)
+                  setPage(1)
+                }}
+              >
+                {c.label} {c.count}
+              </button>
+            ))}
+          </div>
+          <ToggleGroup
+            type="single"
+            size="sm"
+            value={archived}
+            onValueChange={(v) => {
+              if (!v) return
+              setArchived(v as ArchivedFilter)
+              setPage(1)
+            }}
+          >
+            <ToggleGroupItem value="all">全部</ToggleGroupItem>
+            <ToggleGroupItem value="unarchived">未归档</ToggleGroupItem>
+            <ToggleGroupItem value="archived">已归档</ToggleGroupItem>
+          </ToggleGroup>
+        </div>
+
+        {/* 帖子卡片流：统一无闪动——重取保留旧内容降透明；空列表内嵌小 spinner，
+           任何状态切换都不发生整屏布局替换 */}
+        {error ? (
+          <Alert variant="destructive">
+            <CircleAlert />
+            <AlertTitle>加载失败</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        ) : posts.length === 0 ? (
+          <div className="posts-placeholder">
+            {loading && (
+              <Loader2 className="mr-2 inline size-4 animate-spin align-[-2px] text-primary" />
+            )}
+            {loading ? '正在加载帖子…' : '暂无帖子，点击上方「抓取帖子」或「更新动态」获取'}
+          </div>
+        ) : (
+          <div className={`post-grid${loading ? ' is-refetching' : ''}`}>
+            {posts.map((p) => (
+              <PostCard key={p.id} post={p} onClick={() => setDrawerPost(p)} />
+            ))}
+          </div>
+        )}
+
+        {/* 分页 */}
+        {total > PAGE_SIZE && !error && (
+          <PaginationLite page={page} totalPages={totalPages} onChange={setPage} />
+        )}
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* 类型筛选 chips + 归档过滤 */}
-      <div className="type-chips-row">
-        <div className="type-chips">
-          {chipItems.map((c) => (
-            <button
-              key={c.key}
-              className={`type-chip${(typeFilter ?? 'all') === c.key ? ' active' : ''}`}
-              onClick={() => {
-                setTypeFilter(c.key === 'all' ? undefined : c.key)
-                setPage(1)
-              }}
+      <AlertDialog open={confirmDel} onOpenChange={setConfirmDel}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>解除订阅？</AlertDialogTitle>
+            <AlertDialogDescription>
+              将删除「{vtuber.name}」的全部账号信息及其帖子记录（不可恢复）。
+              确认解除订阅吗？
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-500 text-white hover:bg-red-500/90"
+              onClick={handleDeleteVtuber}
             >
-              {c.label} {c.count}
-            </button>
-          ))}
-        </div>
-        <ToggleGroup
-          type="single"
-          size="sm"
-          value={archived}
-          onValueChange={(v) => {
-            if (!v) return
-            setArchived(v as ArchivedFilter)
-            setPage(1)
-          }}
-        >
-          <ToggleGroupItem value="all">全部</ToggleGroupItem>
-          <ToggleGroupItem value="unarchived">未归档</ToggleGroupItem>
-          <ToggleGroupItem value="archived">已归档</ToggleGroupItem>
-        </ToggleGroup>
-      </div>
-
-      {/* 帖子卡片流：统一无闪动——重取保留旧内容降透明；空列表内嵌小 spinner，
-          任何状态切换都不发生整屏布局替换 */}
-      {error ? (
-        <Alert variant="destructive">
-          <CircleAlert />
-          <AlertTitle>加载失败</AlertTitle>
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      ) : posts.length === 0 ? (
-        <div className="posts-placeholder">
-          {loading && (
-            <Loader2 className="mr-2 inline size-4 animate-spin align-[-2px] text-primary" />
-          )}
-          {loading ? '正在加载帖子…' : '暂无帖子，点击上方「抓取帖子」或「更新动态」获取'}
-        </div>
-      ) : (
-        <div className={`post-grid${loading ? ' is-refetching' : ''}`}>
-          {posts.map((p) => (
-            <PostCard key={p.id} post={p} onClick={() => setDrawerPost(p)} />
-          ))}
-        </div>
-      )}
-
-      {/* 分页 */}
-      {total > PAGE_SIZE && !error && (
-        <PaginationLite page={page} totalPages={totalPages} onChange={setPage} />
-      )}
+              确认解除订阅
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <PostDetailDrawer
         post={drawerPost}

@@ -1,0 +1,15 @@
+<svg viewBox="0 0 43.7927 78.7461" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="43.792725" height="78.746117" fill="none" customFrame="#000000">
+	<defs>
+		<filter id="pixso_custom_mask_type_alpha">
+			<feColorMatrix type="matrix" values="0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 1 0 " />
+		</filter>
+	</defs>
+	<mask id="mask_69" width="43.792686" height="78.746109" x="0.000000" y="-0.000008" maskUnits="userSpaceOnUse">
+		<g filter="url(#pixso_custom_mask_type_alpha)">
+			<path id="矩形 3" d="M0 -7.62939e-06L43.7927 -7.62939e-06L43.7927 78.7461L0 78.7461L0 -7.62939e-06Z" fill="rgb(196,196,196)" fill-rule="evenodd" />
+		</g>
+	</mask>
+	<g id="蒙版" mask="url(#mask_69)">
+		<path id="椭圆 1" d="M68.378 40.1451C68.378 53.7891 57.3708 64.8497 43.7926 64.8497C30.2145 64.8497 19.2073 53.7891 19.2073 40.1451C19.2073 26.5011 30.2145 15.4404 43.7926 15.4404C57.3708 15.4404 68.378 26.5011 68.378 40.1451Z" fill="rgb(0,0,0)" fill-rule="evenodd" />
+	</g>
+</svg>

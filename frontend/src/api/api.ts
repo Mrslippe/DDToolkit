@@ -1,4 +1,4 @@
-import type { FetchPostsResult, FetchResult, FetchStatus, Post, PostPage, PostStats, UpdatePostsResult, VTuber } from './types'
+import type { FetchPostsResult, FetchResult, FetchStatus, PoolItem, Post, PostPage, PostStats, UpdatePostsResult, VTuber } from './types'
 
 /**
  * API 基地址：
@@ -32,7 +32,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new Error(detail)
   }
-  return (await resp.json()) as T
+  const text = await resp.text()
+  return (text ? JSON.parse(text) : null) as T
 }
 
 export interface PostListParams {
@@ -51,6 +52,9 @@ export const api = {
 
   /** 单个 VTuber */
   getVtuber: (id: number) => request<VTuber>(`/vtuber/${id}`),
+
+  /** 解除订阅：删除 VTuber（连带删其账号与全部帖子记录） */
+  deleteVtuber: (id: number) => request<void>(`/vtuber/${id}`, { method: 'DELETE' }),
 
   /** 帖子列表（服务端分页 + 过滤）；可传 signal 取消在途请求（切换 VTuber 防回写） */
   listPosts: (platform: string, uid: string, params: PostListParams, signal?: AbortSignal) => {
@@ -89,6 +93,40 @@ export const api = {
     })
     return request<FetchPostsResult>(`/vtuber/fetch-posts?${q.toString()}`, { method: 'POST' })
   },
+
+  // ── 候选池 / 收录（v0.5） ──────────────────────────────────────
+
+  /** 候选池检索：名称关键词 / uid 前缀，已入库条目自动剔除 */
+  searchPool: (kw: string) =>
+    request<PoolItem[]>(`/vtuber/pool/search?kw=${encodeURIComponent(kw)}`),
+
+  /** 从候选池收录 VTuber（后端建库后自动调度单V账号抓取） */
+  adoptVtuber: (platform: string, platformUid: string, faction?: string) =>
+    request<VTuber>('/vtuber/adopt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ platform, platform_uid: platformUid, faction: faction || null }),
+    }),
+
+  // ── 批量任务（拉取浮窗）────────────────────────────────────────
+
+  /** 全量账号信息抓取（后台执行） */
+  batchFetchAccounts: () =>
+    request<{ status: string }>('/vtuber/fetch-accounts', { method: 'POST' }),
+
+  /** 全量帖子抓取（视频+动态，后台执行） */
+  batchFetchAllPosts: () =>
+    request<{ status: string }>('/vtuber/batch/fetch-all-posts', { method: 'POST' }),
+
+  /** 更新未归档帖（后台执行） */
+  batchUpdateUnarchived: () =>
+    request<{ status: string }>('/vtuber/batch/update-unarchived', { method: 'POST' }),
+
+  /** 归档旧帖（默认 30 天前，同步返回归档数） */
+  batchArchive: (days = 30) =>
+    request<{ status: string; archived: number }>(`/vtuber/batch/archive?days=${days}`, {
+      method: 'POST',
+    }),
 }
 
 /** 后端返回的相对资源路径（如 static/avatars/x.jpg）→ 可访问 URL */

@@ -21,6 +21,7 @@ export interface Account {
 export interface VTuber {
   id: number
   name: string
+  faction: string | null
   birthday: string | null
   debut_date: string | null
   setting: string | null
@@ -29,6 +30,13 @@ export interface VTuber {
   created_at: string | null
   updated_at: string | null
   accounts: Account[]
+}
+
+/** 候选池条目（vtubers.csv 离线索引） */
+export interface PoolItem {
+  name: string
+  platform: string
+  platform_uid: string
 }
 
 export interface Post {

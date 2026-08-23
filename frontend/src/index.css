@@ -22,10 +22,11 @@
   --accent-foreground: #fc7079;
   --destructive: #e14444;
   --destructive-foreground: #ffffff;
-  --border: #eddce1;
-  --input: #eddce1;
+  /* 极简方形语言：全局零圆角 + 发丝描边 */
+  --border: rgba(210, 216, 222, 0.55);
+  --input: rgba(210, 216, 222, 0.55);
   --ring: #fb77a1;
-  --radius: 0.5rem;
+  --radius: 0rem;
 }
 
 @theme inline {

@@ -1,0 +1,16 @@
+<svg viewBox="0 0 47.634 149" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="47.634033" height="149.000000" fill="none" customFrame="#000000">
+	<defs>
+		<filter id="pixso_custom_mask_type_alpha">
+			<feColorMatrix type="matrix" values="0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 1 0 " />
+		</filter>
+	</defs>
+	<mask id="mask_67" width="47.634144" height="149.000000" x="-0.000244" y="0.000000" maskUnits="userSpaceOnUse">
+		<g filter="url(#pixso_custom_mask_type_alpha)">
+			<path id="矩形 5" d="M-0.000244141 0L47.6339 0L47.6339 149L-0.000244141 149L-0.000244141 0Z" fill="rgb(196,196,196)" fill-rule="evenodd" />
+		</g>
+	</mask>
+	<g id="蒙版" mask="url(#mask_67)">
+		<path id="椭圆 4" d="M47.634 80.2902C47.634 118.238 17.0201 149 -20.744 149C-58.5082 149 -89.1221 118.238 -89.1221 80.2902C-89.1221 42.3428 -58.5082 11.5803 -20.744 11.5803C17.0201 11.5803 47.634 42.3428 47.634 80.2902Z" fill="rgb(0,0,0)" fill-rule="evenodd" />
+		<path id="椭圆 3" d="M9.98768 79.9042C9.98768 104.421 -9.79095 124.295 -34.1891 124.295C-58.5873 124.295 -78.366 104.421 -78.366 79.9042C-78.366 55.3876 -58.5873 35.513 -34.1891 35.513C-9.79095 35.513 9.98768 55.3876 9.98768 79.9042Z" fill="rgb(255,255,255)" fill-rule="evenodd" />
+	</g>
+</svg>

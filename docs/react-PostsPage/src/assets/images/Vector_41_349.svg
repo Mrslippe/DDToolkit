@@ -1,0 +1,14 @@
+<svg viewBox="0 0 394.751 23.7513" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="394.751221" height="23.751282" fill="none" customFrame="#000000">
+	<defs>
+		<g id="pixso_custom_effect_0">
+			<effect visibility="visible" effectType="" stdDeviation="3" />
+		</g>
+		<filter id="filter_0" width="394.751221" height="23.751282" x="0.000000" y="0.000000" filterUnits="userSpaceOnUse" customEffect="url(#pixso_custom_effect_0)" color-interpolation-filters="sRGB">
+			<feFlood flood-opacity="0" result="BackgroundImageFix" />
+			<feBlend result="shape" in="SourceGraphic" in2="BackgroundImageFix" mode="normal" />
+		</filter>
+	</defs>
+	<g filter="url(#filter_0)">
+		<path id="分割线" d="M11.8757 11.8756L382.876 11.8756" stroke="rgb(255,255,255)" stroke-opacity="0.689999998" stroke-linecap="round" stroke-width="3.000000" />
+	</g>
+</svg>

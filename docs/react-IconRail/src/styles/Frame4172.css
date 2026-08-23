@@ -1,0 +1,218 @@
+
+.scroll-container {
+  height: 100%;
+  width: 100%;
+  overflow: auto;
+}
+
+.Pixso-frame-41_72,.frame-content-41_72,.Pixso-frame-41_73,.frame-content-41_73 {
+  flex-direction: column;
+  align-items: center;
+}
+
+.Pixso-frame-41_72,.frame-content-41_72 {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+.Pixso-frame-41_72 {
+  height: 740px;
+  overflow: hidden;
+  border-radius: 0px 0px 0px 10px;
+  background-color: rgba(75, 90, 111, 1);
+  mix-blend-mode: normal;
+}
+
+.frame-content-41_72 {
+  height: 100%;
+}
+
+.Pixso-frame-41_73 {
+  height: 475px;
+  overflow: hidden;
+  mix-blend-mode: normal;
+}
+
+.frame-content-41_73 {
+  height: 100%;
+}
+
+.Pixso-frame-41_74,.frame-content-41_74,.Pixso-frame-41_80,.frame-content-41_80,.Pixso-frame-41_87,.frame-content-41_87 {
+  flex-direction: row;
+  justify-content: center;
+}
+
+.Pixso-frame-41_74,.frame-content-41_74 {
+  width: 100%;
+  align-items: center;
+}
+
+.Pixso-frame-41_74 {
+  height: 79px;
+  background-color: rgba(100, 116, 139, 1);
+  mix-blend-mode: normal;
+}
+
+.frame-content-41_74 {
+  gap: 10px;
+  height: 100%;
+}
+
+.Pixso-group-41_75 {
+  width: 40px;
+  height: 40px;
+  mix-blend-mode: normal;
+}
+
+.Pixso-vector-41_77,.Pixso-vector-41_83,.Pixso-vector-41_90,.Pixso-vector-41_97,.Pixso-vector-41_103 {
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+}
+
+.Pixso-vector-41_77 {
+  width: 73.44%;
+  height: 77.74%;
+  background-image: url(@/assets/images/Boolean_operation_41_77.svg);
+  position: absolute;
+  left: 13.28%;
+  right: 13.28%;
+  top: 11.13%;
+  bottom: 11.13%;
+}
+
+.Pixso-frame-41_80,.frame-content-41_80,.Pixso-frame-41_87,.frame-content-41_87 {
+  align-items: center;
+}
+
+.Pixso-frame-41_80 {
+  width: 79px;
+  height: 79px;
+  opacity: 0.6;
+  mix-blend-mode: normal;
+}
+
+.frame-content-41_80 {
+  gap: 10px;
+  width: 100%;
+  height: 100%;
+}
+
+.Pixso-group-41_81 {
+  width: 40px;
+  height: 40px;
+  mix-blend-mode: normal;
+}
+
+.Pixso-vector-41_83 {
+  width: 78.12%;
+  height: 78.12%;
+  background-image: url(@/assets/images/Boolean_operation_41_83.svg);
+  position: absolute;
+  left: 10.94%;
+  right: 10.94%;
+  top: 10.94%;
+  bottom: 10.94%;
+}
+
+.Pixso-frame-41_87 {
+  width: 79px;
+  height: 79px;
+  opacity: 0.6;
+  mix-blend-mode: normal;
+}
+
+.frame-content-41_87 {
+  padding: 31.5px 20px 31.5px 20px;
+  width: 100%;
+  height: 100%;
+}
+
+.Pixso-group-41_88 {
+  width: 40px;
+  height: 40px;
+  mix-blend-mode: normal;
+}
+
+.Pixso-vector-41_90,.Pixso-vector-41_103 {
+  left: 50%;
+  top: 50%;
+}
+
+.Pixso-vector-41_90 {
+  width: 22px;
+  height: 28px;
+  background-image: url(@/assets/images/Boolean_operation_41_90.svg);
+  position: absolute;
+  transform: translateX(calc(-50% + 0px)) translateY(calc(-50% + -1px));
+}
+
+.Pixso-frame-41_95,.frame-content-41_95 {
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.Pixso-frame-41_95 {
+  height: 265px;
+  overflow: hidden;
+  mix-blend-mode: normal;
+}
+
+.frame-content-41_95 {
+  padding: 3px 0px 3px 0px;
+  height: 100%;
+}
+
+.Pixso-frame-41_96,.frame-content-41_96,.Pixso-frame-41_100,.frame-content-41_100 {
+  flex-direction: row;
+  justify-content: center;
+}
+
+.Pixso-frame-41_96,.frame-content-41_96,.Pixso-frame-41_100,.frame-content-41_100 {
+  align-items: center;
+}
+
+.Pixso-frame-41_96 {
+  width: 79px;
+  height: 79px;
+  opacity: 0.6;
+  mix-blend-mode: normal;
+}
+
+.frame-content-41_96 {
+  width: 100%;
+  height: 100%;
+}
+
+.Pixso-vector-41_97 {
+  width: 30px;
+  height: 30px;
+  background-image: url(@/assets/images/reload.svg);
+}
+
+.Pixso-frame-41_100 {
+  width: 79px;
+  height: 79px;
+  opacity: 0.6;
+  mix-blend-mode: normal;
+}
+
+.frame-content-41_100 {
+  gap: 10px;
+  width: 100%;
+  height: 100%;
+}
+
+.Pixso-group-41_101 {
+  width: 40px;
+  height: 40px;
+  mix-blend-mode: normal;
+}
+
+.Pixso-vector-41_103 {
+  width: 35px;
+  height: 34.998046875px;
+  background-image: url(@/assets/images/Boolean_operation_41_103.svg);
+  position: absolute;
+  transform: translateX(calc(-50% + 0px)) translateY(calc(-50% + -0.0009765625px));
+}

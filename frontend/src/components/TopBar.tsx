@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
+import { Copy, Minus, Square, X } from 'lucide-react'
+import spinnerSvg from '../assets/icons/Frame_41_8.svg'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -25,11 +27,12 @@ async function tauriWindow() {
 }
 
 /**
- * 顶栏：LOGO 占位 + 标题 + 实时抓取状态 + 窗口控制按钮。
- * - 状态来自 GET /vtuber/fetch-status 轮询；任务结束沿触发
- *   'ddtoolkit:fetch-idle' 事件，供 VtuberSidebar 等组件刷新数据。
- * - 桌面端（Tauri）：头部为拖拽区，最小化/关闭接原生窗口；
- *   有抓取任务运行时关闭需二次确认（AlertDialog）。
+ * 顶栏（视觉严格按 docs/react Pixso 设计稿 Frame411）：
+ * 千图小兔体 LOGO + 字小魂锐艺黑标题 + 居中状态文字 + 通栏窗口控制钮。
+ * - 状态来自 GET /vtuber/fetch-status 轮询；抓取中显示设计稿加载图标；
+ *   任务结束沿触发 'ddtoolkit:fetch-idle' 事件，供 VtuberSidebar 等组件刷新数据。
+ * - 账号快照增量派发 'ddtoolkit:account-progress'，侧栏就地合并零请求刷新。
+ * - 桌面端：头部为拖拽区，最小化/关闭接原生窗口；有任务运行时关闭需二次确认。
  */
 export default function TopBar() {
   const [status, setStatus] = useState<FetchStatus | null>(null)
@@ -88,7 +91,7 @@ export default function TopBar() {
     }
   }, [])
 
-  // 操作按钮点击/完成时「踢一脚」：胶囊即时反映任务启动与结束，
+  // 操作按钮点击/完成时「踢一脚」：状态即时反映任务启动与结束，
   // 不必等下一轮轮询
   const pollRef = useRef<() => void>(() => {})
   useEffect(() => {
@@ -136,14 +139,51 @@ export default function TopBar() {
   const closeApp = () => void tauriWindow().then((w) => w.close())
   const handleClose = () => (busy ? setConfirmClose(true) : closeApp())
 
+  // 最大化状态跟踪：onResized 触发时重查 isMaximized，切换 还原/最大化 图标
+  const [isMax, setIsMax] = useState(false)
+  useEffect(() => {
+    if (!isTauri) return
+    let disposed = false
+    let unlisten: (() => void) | undefined
+    const update = () => {
+      void import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
+        if (disposed) return
+        void getCurrentWindow()
+          .isMaximized()
+          .then(setIsMax)
+      })
+    }
+    update()
+    void import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
+      if (disposed) return
+      void getCurrentWindow()
+        .onResized(update)
+        .then((u) => {
+          unlisten = u
+        })
+    })
+    return () => {
+      disposed = true
+      unlisten?.()
+    }
+  }, [])
+
+  const handleToggleMaximize = () =>
+    void tauriWindow().then((w) => w.toggleMaximize())
+
   return (
     <header className="topbar" {...(isTauri ? { 'data-tauri-drag-region': true } : {})}>
-      {/* TODO(独立窗体阶段): LOGO 区域后续替换为图片 <img src="/logo.png" alt="logo" /> */}
-      <div className="topbar-logo">D</div>
+      <div className="topbar-logo-zone">
+        <div className="topbar-logo">D</div>
+      </div>
       <h1 className="topbar-title">DDtoolkit</h1>
 
       <span className="topbar-status">
-        <i className={displayDot} />
+        {displayDot.includes('busy') ? (
+          <img src={spinnerSvg} alt="" className="topbar-status-spinner" />
+        ) : (
+          <i className={displayDot} />
+        )}
         <span key={displayText} className="pill-text-fade">
           {displayText}
         </span>
@@ -159,22 +199,23 @@ export default function TopBar() {
           title={isTauri ? '最小化' : '最小化（桌面端可用）'}
           onClick={handleMinimize}
         >
-          —
-        </button>
-        <button
-          className="topbar-win-btn"
-          title="刷新"
-          onClick={() => window.location.reload()}
-        >
-          ⟳
+          <Minus className="size-[30px]" />
         </button>
         <button
           className="topbar-win-btn"
           disabled={!isTauri}
+          title={isMax ? '还原' : '最大化'}
+          onClick={handleToggleMaximize}
+        >
+          {isMax ? <Copy className="size-5" /> : <Square className="size-5" />}
+        </button>
+        <button
+          className="topbar-win-btn close"
+          disabled={!isTauri}
           title={isTauri ? '关闭' : '关闭（桌面端可用）'}
           onClick={handleClose}
         >
-          ✕
+          <X className="size-[30px]" />
         </button>
       </div>
 

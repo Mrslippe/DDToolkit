@@ -1,62 +1,317 @@
-/* ── 帖子面板（右栏）：信息条 / 类型筛选 chips / 卡片流 ── */
+/* ── 帖子面板（右栏）：档案页式布局（Frame41301）────
+   结构：全屏模糊背景 + 滚动内容层（工具条 / hero / 帖子流）┘
+
+/* ── 帖子面板（右栏）：常驻模糊背景 + 置顶工具条 + 双视图滚动层 ── */
 
 .posts-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* 右栏永久背景层：当前 V 头像铺底（后续接自定义接口）；两视图都浮于其上。
+   注意：不使用 filter: blur——透明 Tauri 窗口 + 全尺寸 blur 合成层是
+   WebView2 GPU 合成器的已知不稳定组合（点开 V 曾致宿主进程整体退出）。
+   以灰度降透明 + 纱罩的静态近似替代，视觉意图保留、零 GPU 滤镜风险。 */
+.hero-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  opacity: 0.18;
+  pointer-events: none;
+}
+
+.hero-backdrop::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(180deg, rgba(255, 251, 251, 0.55), rgba(255, 238, 242, 0.72)),
+    radial-gradient(120% 90% at 50% 0%, rgba(255, 251, 251, 0.9), rgba(255, 251, 251, 0.35));
+}
+
+/* 顶部工具条：贴面板顶（上方零缝隙），66px 行内光条贴顶居中（口播规格 1.1） */
+.view-toolbar {
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+  width: 100%;
+  height: 66px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 0;
+}
+
+/* 视图滚动层容器 */
+.view-body {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  min-height: 0;
+}
+
+/* 展示页滚动层：底部留白 134px；子元素全宽（设计稿 70px 侧距被无收缩子元素溢出抵消） */
+.hero-scroll {
+  height: 100%;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  padding: 0 0 134px;
+}
+
+/* 列表页滚动层 */
+.list-scroll {
+  height: 100%;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 16px 24px;
+}
+
+.list-scroll > .list-inner {
+  width: 100%;
+  max-width: 900px;
   display: flex;
   flex-direction: column;
   gap: 14px;
-  max-width: 900px;
-  margin: 0 auto;
+  align-items: stretch;
 }
 
-/* VTuber 信息条 */
-.vtuber-header {
+.glow-bar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
-  background: var(--c-bg-card);
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius-card);
-  box-shadow: var(--shadow-card);
+  justify-content: center;
+  gap: 10px;
+  width: 443px;
+  height: 59px;
+  /* 设计稿软光带：矩形渐变、无圆角；图标条内居中 */
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.68) 29.4%, rgba(255, 255, 255, 0) 100%);
 }
 
-.vtuber-header-info {
-  min-width: 0;
-  flex: 1;
-}
-
-.vtuber-header-name-row {
+.view-btn {
+  width: 50px;
+  height: 50px;
+  border: none;
+  background: transparent;
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: center;
+  cursor: pointer;
+  border-radius: 0;
+  transition: opacity 0.15s ease;
+}
+
+.view-btn.on {
+  opacity: 0.8;
+}
+
+.view-btn.off {
+  opacity: 0.4;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
   flex-wrap: wrap;
+  gap: 8px;
 }
 
-.vtuber-header-name {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 700;
-  color: var(--c-text-main);
+.header-actions .btn-light {
+  background: rgba(255, 255, 255, 0.85);
 }
 
-.vtuber-header-meta {
-  margin-top: 2px;
-  font-size: 12px;
-  color: var(--c-text-sub);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+/* Hero：主题展示栏（口播规格 1.2）：宽填充、纵向居中、间隔 10、头像距上缘 23 */
+.hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 23px 15px 0;
 }
 
+.hero-avatar {
+  width: 179px;
+  height: 179px;
+  filter: drop-shadow(0 1px 8px rgba(0, 0, 0, 0.98));
+}
+
+/* 直播状态：始终显示（1.2.2），基类排版；`.live` 直播中 / `.off` 未开播双态 */
 .live-tag {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 1px 8px;
-  border-radius: 999px;
+  gap: 10px;
+  height: 23px;
+  padding: 1px 7px 0 10px;
+  border-radius: 8px;
+  font-size: 14px;
+  letter-spacing: 3px;
+  font-weight: 500;
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.live-tag.live {
   background: rgba(225, 68, 68, 0.08);
-  color: var(--c-live);
-  font-size: 12px;
+  border: 1px solid rgba(225, 68, 68, 0.75);
+  color: #000;
+}
+
+.live-tag.off {
+  background: rgba(100, 116, 139, 0.05);
+  border: 1px solid rgba(100, 116, 139, 0.35);
+  color: rgba(94, 94, 94, 0.76);
+}
+
+.live-tag .live-dot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  background: var(--c-live);
+}
+
+.live-tag.off .live-dot {
+  background: #9aa6b5;
+}
+
+/* 名字和签名块（1.2.3）：宽填充/高110/间距 0 */
+.hero-name-block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0;
+  width: 100%;
+  height: 110px;
+}
+
+/* 名字（1.2.3.1）：宽适应内容，高 68，字 57，双向居中 */
+.hero-name {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 68px;
+  max-width: 100%;
+  margin: 0;
+  font-size: 57px;
+  font-weight: 500;
+  color: #000;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.25);
+  letter-spacing: 0;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+/* 签名（1.2.3.2）：宽适应内容，高 30，字 25，双向居中 */
+.hero-sign {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 30px;
+  max-width: 100%;
+  font-size: 25px;
+  font-weight: 600;
+  letter-spacing: 3px;
+  color: rgba(94, 94, 94, 0.76);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+/* 平台粉丝展示（1.2.4）：宽适应内容，不定数徽章集纵向居中排列，集间隔 10 */
+.stat-sets {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: fit-content;
+}
+
+/* 徽章集（1.2.4.1）：高 37，距上下缘 13，集内徽章横排间隔 10 */
+.stat-set {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 0;
+}
+
+.stat-pill {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 191px;
+  height: 37px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.94);
+  overflow: hidden;
+}
+
+.stat-pill.pink {
+  background: rgba(251, 119, 161, 1);
+}
+
+.stat-pill.coral {
+  background: rgba(252, 112, 121, 1);
+}
+
+/* 平台 LOGO 占位框（后续替换为图片资源） */
+.pill-logo {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  margin-left: 6px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.25);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+}
+
+.pill-value {
+  color: #fff;
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: 3px;
+  white-space: nowrap;
+}
+
+/* 分隔饰条：设计稿 SVG（394×24，assets/icons/hero-divider.svg） */
+.hero-divider {
+  width: 394px;
+  max-width: 90%;
+  height: 24px;
+  display: block;
+  margin: 0;
+}
+
+/* 其他平台链接（1.2.6）：等效 1.2.4 徽章集结构，复用 .stat-sets/.stat-set */
+.faction-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 37px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.94);
+  padding: 0 14px 0 6px;
+  background: rgba(252, 112, 121, 1);
+  color: #fff;
+  font-size: 20px;
+  font-weight: 600;
 }
 
 /* 类型筛选行：chips + 归档开关 */
