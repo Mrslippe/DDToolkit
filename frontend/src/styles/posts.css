@@ -1,7 +1,5 @@
-/* ── 帖子面板（右栏）：档案页式布局（Frame41301）────
-   结构：全屏模糊背景 + 滚动内容层（工具条 / hero / 帖子流）┘
-
-/* ── 帖子面板（右栏）：常驻模糊背景 + 置顶工具条 + 双视图滚动层 ── */
+/* ── 帖子面板（右栏）：档案页式布局（Frame41301）──
+   结构：全屏模糊背景 + 滚动内容层（工具条 / hero / 帖子流） */
 
 .posts-panel {
   position: relative;
@@ -143,7 +141,7 @@
 .hero-avatar {
   width: 179px;
   height: 179px;
-  filter: drop-shadow(0 1px 8px rgba(0, 0, 0, 0.98));
+  filter: drop-shadow(0 0px 2px rgba(0, 0, 0, 0.98));
 }
 
 /* 直播状态：始终显示（1.2.2），基类排版；`.live` 直播中 / `.off` 未开播双态 */
@@ -314,13 +312,152 @@
   font-weight: 600;
 }
 
-/* 类型筛选行：chips + 归档开关 */
+/* 类型筛选行：chips + 搜索/时间范围筛选 */
 .type-chips-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
+}
+
+/* 筛选行右侧工具：搜索浮片 + 时间筛选（浮片语言，与侧栏工具行一致） */
+.chips-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.search-float {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.search-float-icon {
+  position: absolute;
+  left: 9px;
+  width: 13px;
+  height: 13px;
+  color: #9aa6b5;
+  pointer-events: none;
+}
+
+.search-float input {
+  width: 190px;
+  height: 30px;
+  padding: 0 10px 0 28px;
+  border: none;
+  outline: none;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+  color: var(--c-text-main);
+  font-family: inherit;
+  font-size: 12.5px;
+}
+
+.search-float input::placeholder {
+  color: #9aa6b5;
+}
+
+.search-float input:focus {
+  box-shadow: inset 0 0 0 1.5px var(--c-primary), 0 1px 4px rgba(0, 0, 0, 0.18);
+}
+
+.time-wrap {
+  position: relative;
+}
+
+.time-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+  color: var(--c-text-main);
+  font-family: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 240px;
+  overflow: hidden;
+}
+
+.time-btn.active {
+  background: var(--c-primary-deep);
+  color: #fff;
+}
+
+.time-pop {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 30;
+  width: 240px;
+  padding: 12px;
+  background: #fff;
+  border: 1px solid var(--c-border);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.16);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.time-pop label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--c-text-sub);
+  white-space: nowrap;
+}
+
+.time-pop input[type='date'] {
+  flex: 1;
+  height: 28px;
+  padding: 0 6px;
+  border: 1px solid var(--c-border);
+  outline: none;
+  font-family: inherit;
+  font-size: 12.5px;
+  color: var(--c-text-main);
+  min-width: 0;
+}
+
+.time-pop input[type='date']:focus {
+  border-color: var(--c-primary);
+}
+
+.time-pop-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.time-pop-actions button {
+  height: 26px;
+  padding: 0 12px;
+  border: 1px solid var(--c-border);
+  background: #fff;
+  color: var(--c-text-main);
+  font-family: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.time-pop-actions button.primary {
+  background: var(--c-primary-deep);
+  border-color: var(--c-primary-deep);
+  color: #fff;
+}
+
+.time-pop-actions button:hover {
+  filter: brightness(0.96);
 }
 
 /* 类型筛选 chips（设计稿 "默认" 标签样式） */

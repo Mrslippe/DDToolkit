@@ -1,5 +1,7 @@
 import httpx
+import json
 import logging
+import urllib.parse
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
 from typing import Optional, Dict, Any
@@ -7,7 +9,6 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_resul
 
 from app.services import wbi
 from app.services.auth import auth_manager
-import urllib.parse
 
 
 logger = logging.getLogger(__name__)
@@ -160,7 +161,6 @@ async def fetch_bilibili_user_stat(mid: int, client: Optional[httpx.AsyncClient]
                 # UTF-8 解码失败，尝试 GBK
                 try:
                     raw_text = content.decode('gbk')
-                    import json
                     data = json.loads(raw_text)
                 except Exception as e:
                     logger.warning(f"⚠️ GBK 解码也失败: {e}, mid={mid}")
@@ -636,13 +636,11 @@ def _delta_to_plain_text(delta: str) -> str:
 
 
 def _dump_json(obj) -> str:
-    import json
     return json.dumps(obj, ensure_ascii=False, default=str)
 
 
 def _safe_json_parse(s: str | None, default=None):
     """安全解析 JSON 字符串，失败返回 default"""
-    import json
     if not s:
         return default
     try:

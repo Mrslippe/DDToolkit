@@ -1,25 +1,73 @@
-import logging as _logging
-from datetime import datetime, timedelta, timezone
+import logging
+from datetime import date, datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-
-logger = _logging.getLogger(__name__)
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from pydantic import BaseModel
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+
 from app.core.database import get_db
+from app.models.vtuber import VTuber, Post, Account
 from app.repositories.vtuber_repo import VTuberRepo, AccountRepo, PostRepo
-from app.models.vtuber import VTuber, Post
 from app.schemas.vtuber import (
     VTuberOut, VTuberCreate, VTuberUpdate,
     AccountOut, AccountCreate, AccountUpdate,
     PostOut, PostCreate, PostUpdate, PostPage, PostStats,
 )
-from app.services.scheduler import (
-    async_fetch_and_update, async_fetch_vtuber, is_fetch_running,
-    async_fetch_posts, async_fetch_all_posts, is_post_fetch_running,
-    async_update_unarchived_posts, get_fetch_status, archive_old_posts,
-)
+from app.services import pool
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# 冷启动优化：scheduler 依赖链（apscheduler/tenacity/httpx/fetcher）较重，
+# 经此包装函数延迟到首次调用才 import。调用点写法不变；测试 monkeypatch
+# 直接 setattr 本模块属性即可替换包装函数，行为与直接导入完全一致。
+_sch_cache = None
+
+
+def _sched():
+    global _sch_cache
+    if _sch_cache is None:
+        from app.services import scheduler
+        _sch_cache = scheduler
+    return _sch_cache
+
+
+async def async_fetch_and_update():
+    return await _sched().async_fetch_and_update()
+
+
+async def async_fetch_vtuber(vtuber_id: int):
+    return await _sched().async_fetch_vtuber(vtuber_id)
+
+
+def is_fetch_running():
+    return _sched().is_fetch_running()
+
+
+async def async_fetch_posts(mid: int, video_pages: int, dynamics_pages: int):
+    return await _sched().async_fetch_posts(mid, video_pages, dynamics_pages)
+
+
+async def async_fetch_all_posts():
+    return await _sched().async_fetch_all_posts()
+
+
+def is_post_fetch_running():
+    return _sched().is_post_fetch_running()
+
+
+async def async_update_unarchived_posts(name: str | None = None):
+    return await _sched().async_update_unarchived_posts(name)
+
+
+def get_fetch_status():
+    return _sched().get_fetch_status()
+
+
+def archive_old_posts(cutoff_days: int = 30, db=None):
+    return _sched().archive_old_posts(cutoff_days, db)
 
 
 # ── VTuber CRUD ────────────────────────────────────────────────────
@@ -47,9 +95,12 @@ def get_vtuber(vtuber_id: int, db: Session = Depends(get_db)):
 
 @router.post("/vtuber", response_model=VTuberOut, status_code=status.HTTP_201_CREATED)
 def create_vtuber(data: VTuberCreate, db: Session = Depends(get_db)):
-    return VTuberOut.model_validate(
-        VTuberRepo(db).create(data.model_dump()), from_attributes=True
-    )
+    try:
+        v = VTuberRepo(db).create(data.model_dump())
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "创建失败：数据违反唯一约束")
+    return VTuberOut.model_validate(v, from_attributes=True)
 
 
 @router.put("/vtuber/{vtuber_id}", response_model=VTuberOut)
@@ -68,7 +119,7 @@ def delete_vtuber(vtuber_id: int, db: Session = Depends(get_db)):
     if not v:
         raise HTTPException(404, f"VTuber id={vtuber_id} 不存在")
 
-    uids = [a.platform_uid for a in v.accounts if a.platform_uid]
+    uids = [(a.platform, a.platform_uid) for a in v.accounts if a.platform_uid]
     n_posts = PostRepo(db).delete_by_platform_uids(uids)
     logger.info(f"解除订阅 VTuber#{vtuber_id} ({v.name})：连带清除帖子 {n_posts} 条")
     VTuberRepo(db).delete(vtuber_id)
@@ -90,14 +141,21 @@ def list_accounts(vtuber_id: int, db: Session = Depends(get_db)):
 def create_account(vtuber_id: int, data: AccountCreate, db: Session = Depends(get_db)):
     if not VTuberRepo(db).get(vtuber_id):
         raise HTTPException(404, f"VTuber id={vtuber_id} 不存在")
-    return AccountOut.model_validate(
-        AccountRepo(db).create(vtuber_id, data.model_dump()), from_attributes=True
-    )
+    try:
+        acc = AccountRepo(db).create(vtuber_id, data.model_dump())
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, f"该 (platform, platform_uid) 账号已存在")
+    return AccountOut.model_validate(acc, from_attributes=True)
 
 
 @router.put("/account/{account_id}", response_model=AccountOut)
 def update_account(account_id: int, data: AccountUpdate, db: Session = Depends(get_db)):
-    acc = AccountRepo(db).update(account_id, data.model_dump(exclude_unset=True))
+    try:
+        acc = AccountRepo(db).update(account_id, data.model_dump(exclude_unset=True))
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "该 (platform, platform_uid) 账号已存在")
     if not acc:
         raise HTTPException(404, f"Account id={account_id} 不存在")
     return AccountOut.model_validate(acc, from_attributes=True)
@@ -105,8 +163,15 @@ def update_account(account_id: int, data: AccountUpdate, db: Session = Depends(g
 
 @router.delete("/account/{account_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_account(account_id: int, db: Session = Depends(get_db)):
-    if not AccountRepo(db).delete(account_id):
+    """删除账号并同步清理其帖子（修复：原来只删 account，帖子成孤儿数据）。"""
+    repo = AccountRepo(db)
+    acc = repo.get(account_id)
+    if not acc:
         raise HTTPException(404, f"Account id={account_id} 不存在")
+    if acc.platform_uid:
+        n_posts = PostRepo(db).delete_by_platform_uids([(acc.platform, acc.platform_uid)])
+        logger.info(f"删除 Account#{account_id} ({acc.platform}:{acc.platform_uid})：连带清除帖子 {n_posts} 条")
+    repo.delete(account_id)
 
 
 # ── Post CRUD ──────────────────────────────────────────────────────
@@ -127,12 +192,24 @@ def list_posts_paginated(
     page_size: int = Query(50, ge=1, le=200),
     post_type: str | None = Query(None, alias="type"),
     is_archived: bool | None = None,
+    q: str | None = Query(None, max_length=100),
+    date_from: date | None = Query(None),
+    date_to: date | None = Query(None),
     db: Session = Depends(get_db),
 ):
-    """服务端分页 + 过滤（type / is_archived），供前端帖子列表使用。"""
+    """服务端分页 + 过滤（type / is_archived / q 搜索 / 发布时间范围）。
+    date_to 为排他次日零点换算，包含结束日全天。"""
     repo = PostRepo(db)
+    # 库内 published_at 为 naive UTC 字符串：比较参数须同为 naive
+    date_from_dt = (
+        datetime.combine(date_from, datetime.min.time()) if date_from else None
+    )
+    date_to_dt = (
+        datetime.combine(date_to, datetime.min.time()) + timedelta(days=1) if date_to else None
+    )
     total, items = repo.paginated(platform, platform_uid, page, page_size,
-                                  post_type, is_archived)
+                                  post_type, is_archived, q,
+                                  date_from_dt, date_to_dt)
     return PostPage(
         items=[PostOut.model_validate(p, from_attributes=True) for p in items],
         total=total, page=page, page_size=page_size,
@@ -147,9 +224,12 @@ def post_stats(platform: str, platform_uid: str, db: Session = Depends(get_db)):
 
 @router.post("/posts", response_model=PostOut, status_code=status.HTTP_201_CREATED)
 def create_post(data: PostCreate, db: Session = Depends(get_db)):
-    return PostOut.model_validate(
-        PostRepo(db).create(data.model_dump()), from_attributes=True
-    )
+    try:
+        p = PostRepo(db).create(data.model_dump())
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "该 (platform, platform_uid, platform_post_id) 帖子已存在")
+    return PostOut.model_validate(p, from_attributes=True)
 
 
 @router.put("/post/{post_id}", response_model=PostOut)
@@ -292,13 +372,6 @@ async def update_unarchived_posts(name: str | None = None):
 
 
 # ── 候选池 + 添加 VTuber（v0.5：csv 降级为离线索引，启动不再导入） ──────
-
-from fastapi import BackgroundTasks
-from pydantic import BaseModel
-
-from app.models.vtuber import Account
-from app.services import pool
-
 
 class AdoptRequest(BaseModel):
     platform: str = "bilibili"

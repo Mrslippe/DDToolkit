@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import (
     Column, Integer, String, Boolean, Text, DateTime,
-    ForeignKey, UniqueConstraint,
+    ForeignKey, UniqueConstraint, Index,
 )
 from sqlalchemy.orm import relationship
 
@@ -36,6 +36,7 @@ class Account(Base):
     __tablename__ = "accounts"
     __table_args__ = (
         UniqueConstraint("platform", "platform_uid", name="uq_account_platform_uid"),
+        Index("ix_accounts_vtuber_id", "vtuber_id"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -62,6 +63,10 @@ class Post(Base):
     __tablename__ = "posts"
     __table_args__ = (
         UniqueConstraint("platform", "platform_uid", "platform_post_id", name="uq_post_platform_uid_pid"),
+        # 热路径查询：按账号分页 + 时间倒序（vtuber_repo.paginated）
+        Index("ix_posts_platform_uid_published", "platform", "platform_uid", "published_at"),
+        # 归档规则：is_archived=0 AND published_at < cutoff
+        Index("ix_posts_published_at", "published_at"),
     )
 
     id = Column(Integer, primary_key=True, index=True)

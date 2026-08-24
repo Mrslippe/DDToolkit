@@ -128,18 +128,25 @@ class FetchResult:
     details: list[str] = field(default_factory=list)
 
 
-async def _download_avatar(url: str, uid: str) -> str | None:
+async def _download_avatar(url: str, uid: str, client: httpx.AsyncClient | None = None) -> str | None:
     AVATAR_DIR.mkdir(parents=True, exist_ok=True)
     ext = _avatar_ext(url)
     filepath = AVATAR_DIR / f"{uid}{ext}"
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(url)
-            if resp.status_code == 200:
-                filepath.write_bytes(resp.content)
-                return f"static/avatars/{uid}{ext}"
+        if client is None:
+            client = httpx.AsyncClient(timeout=15.0)
+            own = True
+        else:
+            own = False
+        resp = await client.get(url)
+        if resp.status_code == 200:
+            filepath.write_bytes(resp.content)
+            return f"static/avatars/{uid}{ext}"
     except Exception as e:
         logger.warning(f"头像下载失败 {uid}: {e}")
+    finally:
+        if client is not None and own:
+            await client.aclose()
     return None
 
 
@@ -164,7 +171,7 @@ async def _fetch_one_account(acc: Account, db: Session, client: httpx.AsyncClien
                 file_exists = not _avatar_missing(acc)
                 if _needs_avatar_download(acc, new_avatar, file_exists):
                     acc.avatar_url = new_avatar
-                    acc.avatar_path = await _download_avatar(new_avatar, acc.platform_uid)
+                    acc.avatar_path = await _download_avatar(new_avatar, acc.platform_uid, client=client)
                     if not file_exists:
                         logger.info(f"补下缺失头像 uid={acc.platform_uid} → {acc.avatar_path}")
 
@@ -219,9 +226,7 @@ async def async_fetch_and_update() -> FetchResult:
     db: Session = SessionLocal()
     try:
         logger.info("开始抓取数据...")
-        accounts = db.query(Account).filter(
-            Account.platform_uid != None, Account.platform_uid != ""
-        ).all()
+        accounts = AccountRepo(db).all_for_fetch()
 
         if not accounts:
             logger.warning("没有可抓取的账号。")
@@ -248,9 +253,7 @@ async def async_fetch_and_update() -> FetchResult:
                 clear_rate_limit()
                 await asyncio.sleep(settings.RATE_LIMIT_COOLDOWN)
                 db = SessionLocal()
-                accounts = db.query(Account).filter(
-                    Account.platform_uid != None, Account.platform_uid != ""
-                ).all()
+                accounts = AccountRepo(db).all_for_fetch()
                 logger.info(f"冷却完毕，从第 {idx+1} 个继续...")
                 continue
 
@@ -343,6 +346,14 @@ async def async_fetch_vtuber(vtuber_id: int) -> FetchResult:
                 clear_rate_limit()
                 await asyncio.sleep(settings.RATE_LIMIT_COOLDOWN)
                 db = SessionLocal()
+                # 修复：冷却后必须按 vtuber_id 重查 accounts —— 旧会话已关闭，
+                # 原列表里的 acc 是 detached 对象，继续赋值不会进入新会话，
+                # 后续更新会静默丢失（async_fetch_and_update 有重查，此处遗漏）。
+                accounts = db.query(Account).filter(
+                    Account.vtuber_id == vtuber_id,
+                    Account.platform_uid != None,
+                    Account.platform_uid != "",
+                ).all()
                 continue
 
             await asyncio.sleep(
@@ -428,15 +439,20 @@ def _safe_json_parse(s: str | None, fallback: dict | None = None) -> dict:
         return fallback
 
 
-def _safe_store_post(post_repo: PostRepo, data: dict) -> bool:
+def _safe_store_post(post_repo: PostRepo, data: dict, commit: bool = True) -> bool:
     """存储单条帖子；唯一约束冲突时回滚并跳过，返回是否成功"""
     try:
-        post_repo.create(data)
+        post_repo.create(data, commit=commit)
         return True
     except IntegrityError:
         post_repo.db.rollback()
         logger.warning(f"帖子已存在，跳过: pid={data.get('platform_post_id')}, type={data.get('type')}")
         return False
+
+
+# 批量入库：每攒满 N 条才 commit 一次，避免每条帖子一次 fsync
+# （SQLite 每次 commit 都会触发磁盘同步，全量 1 万帖时性能差异巨大）
+_POST_BATCH_SIZE = 50
 
 
 async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db: Session,
@@ -468,6 +484,7 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
     try:
         platform_uid = str(mid)
         post_repo = PostRepo(db)
+        # 已入库帖子 ID 集合：内存去重，避免触发唯一约束回滚
         existing_ids = {
             r[0] for r in db.query(Post.platform_post_id).filter(
                 Post.platform == "bilibili", Post.platform_uid == platform_uid
@@ -480,6 +497,30 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
                 Post.is_archived == True,  # noqa: E712
             ).all()
         }
+
+        # 批量入库：pending 攒满 _POST_BATCH_SIZE 才 commit；
+        # 冲突（并发抓取竞态）时回滚整批并逐条重插定位重复项
+        pending: list[dict] = []
+
+        def _flush_pending() -> None:
+            nonlocal pending
+            if not pending:
+                return
+            try:
+                for d in pending:
+                    db.add(Post(**d))
+                db.commit()
+                result.stored += len(pending)
+            except IntegrityError:
+                db.rollback()
+                saved = 0
+                for d in pending:
+                    if _safe_store_post(post_repo, d):
+                        saved += 1
+                    else:
+                        result.skipped += 1
+                result.stored += saved
+            pending = []
 
         # ── 视频投稿 ──
         if include_videos:
@@ -502,11 +543,10 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
                     if v["platform_post_id"] in existing_ids:
                         result.skipped += 1
                         continue
-                    if _safe_store_post(post_repo, v):
-                        result.stored += 1
-                    else:
-                        result.skipped += 1
+                    pending.append(v)
                     existing_ids.add(v["platform_post_id"])
+                    if len(pending) >= _POST_BATCH_SIZE:
+                        _flush_pending()
                 page += 1
                 await asyncio.sleep(1)
 
@@ -609,22 +649,21 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
                             )
                             await asyncio.sleep(random.uniform(0.5, 2.0))
 
-                if _safe_store_post(post_repo, d):
-                    result.stored += 1
-                else:
-                    result.skipped += 1
+                pending.append(d)
                 existing_ids.add(d["platform_post_id"])
+                if len(pending) >= _POST_BATCH_SIZE:
+                    _flush_pending()
             dyn_page += 1
             if stop_now:
                 # 增量边界已确认：更早的动态必然已在库中，立即收工
-                db.commit()
+                _flush_pending()
                 return result
             if not data.get("has_more"):
                 break
             offset = data.get("next_offset", "")
             await asyncio.sleep(20)
 
-        db.commit()
+        _flush_pending()
         return result
     finally:
         if own_client:
@@ -674,11 +713,7 @@ async def async_fetch_all_posts() -> dict:
     client = httpx.AsyncClient(timeout=15.0)
 
     try:
-        accounts = db.query(Account).filter(
-            Account.platform == "bilibili",
-            Account.platform_uid != None,
-            Account.platform_uid != "",
-        ).all()
+        accounts = AccountRepo(db).all_for_fetch(platform="bilibili")
 
         if not accounts:
             logger.warning("没有可抓取的 bilibili 账号")
@@ -768,19 +803,15 @@ async def async_update_unarchived_posts(name: str | None = None) -> dict:
         logger.info(f"归档规则执行完成: {archived} 条帖子已归档（早于 30 天前）")
 
         # 2. 定位目标账号
-        q = db.query(Account).filter(
-            Account.platform == "bilibili",
-            Account.platform_uid != None,
-            Account.platform_uid != "",
-        )
+        q = AccountRepo(db).all_for_fetch(platform="bilibili")
         if name:
             vids = [v.id for v in db.query(VTuber).filter(VTuber.name.contains(name)).all()]
             if not vids:
                 return {"status": "done", "archived": archived,
                         "message": f"未找到名字包含 '{name}' 的 VTuber",
                         "total": total, "details": details}
-            q = q.filter(Account.vtuber_id.in_(vids))
-        accounts = q.all()
+            q = [a for a in q if a.vtuber_id in vids]
+        accounts = q
 
         if not accounts:
             logger.warning("没有可抓取的 bilibili 账号")

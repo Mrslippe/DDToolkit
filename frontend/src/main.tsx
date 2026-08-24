@@ -1,3 +1,4 @@
+import './bootDiag' // 首个 import：诊断陷阱先于一切业务代码注册（CSP 放行同源脚本）
 import React, { useEffect, useState } from 'react'
 import ReactDOM from 'react-dom/client'
 import { RotateCcw } from 'lucide-react'
@@ -12,16 +13,20 @@ import { setApiBase } from './api/api'
 
 const isTauri = '__TAURI_INTERNALS__' in window
 
-// 窗口以 visible:false 创建：模块一加载立即显示。此刻 index.html 静态幕已随
-// DOM 解析绘制完成（module script 天然 defer），用户见到的首帧必为粉色。
-// 走应用自有命令 present_window——不受 capability 权限约束（此前
-// getCurrentWindow().show() 因缺 allow-show 权限被静默拒绝，正是动画不可见的根因）。
-// api/core 的动态导入与 tauriBootstrap 同源，实践中稳定可用；仍留诊断留痕
+// 冷启动计时（方案 0 埋点）：与后端 sidecar.log / Rust stdout 的 [perf] 行对照
+const _t0 = performance.now()
+const perfLog = (step: string) =>
+  window.__bootLog?.(`[perf] ${step} +${Math.round(performance.now() - _t0)}ms`)
+
+// 窗口以 visible:false 创建（见 tauri.conf.json）：此刻 index.html 静态粉幕已随
+// DOM 解析绘制完成（module script 天然 defer），invoke 显示窗口后首帧即粉色，
+// 彻底规避 WebView2 首绘前的白屏（白色闪屏修复，见 devlog/021）。
 if (isTauri) {
   import('@tauri-apps/api/core')
     .then(({ invoke }) => invoke('present_window'))
-    .catch((err) => window.__bootLog?.('[show] ' + String(err)))
+    .catch((err) => window.__bootLog?.('[present_window] ' + String(err)))
 }
+perfLog('模块求值完成')
 
 /** 桌面端引导：取 sidecar 端口 → 轮询 /healthz 就绪 → 注入 API 地址 */
 async function tauriBootstrap(): Promise<boolean> {
@@ -94,6 +99,11 @@ function Main() {
 function Root() {
   const [state, setState] = useState<BootState>(isTauri ? 'pending' : 'done')
 
+  // 启动计时：React 挂载
+  useEffect(() => {
+    perfLog('React 挂载完成')
+  }, [])
+
   // React Splash 已在首帧接管视觉（与 index.html 静态启动幕像素级一致），
   // 移除静态节点；诊断面板折叠为徽章待查（不再整版弹出）
   useEffect(() => {
@@ -103,7 +113,11 @@ function Root() {
 
   useEffect(() => {
     if (!isTauri) return
-    tauriBootstrap().then((ok) => setState(ok ? 'opening' : 'failed'))
+    perfLog('tauriBootstrap 开始')
+    tauriBootstrap().then((ok) => {
+      perfLog(ok ? 'healthz OK → opening' : 'healthz 超时 → failed')
+      setState(ok ? 'opening' : 'failed')
+    })
   }, [])
 
   // 揭幕开始：html 首绘底色切回透明，恢复 L3 圆角透出桌面
@@ -117,18 +131,21 @@ function Root() {
   useEffect(() => {
     if (state !== 'opening') return
     window.__bootFold?.()
-    const timer = window.setTimeout(() => setState('done'), ENVELOPE_MS)
+    const timer = window.setTimeout(() => {
+      perfLog('揭幕完成（应用壳可见）')
+      setState('done')
+    }, ENVELOPE_MS)
     return () => clearTimeout(timer)
   }, [state])
 
   return (
-    <React.StrictMode>
+    <>
       {/* opening 阶段即挂载 App 在幕布之下，动画结束时无缝接管 */}
       {state !== 'pending' && state !== 'failed' && <Main />}
       {state !== 'done' && (
         <Splash state={state} onRetry={() => window.location.reload()} />
       )}
-    </React.StrictMode>
+    </>
   )
 }
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import {
@@ -7,6 +7,7 @@ import {
   LayoutGrid,
   Mail,
   RefreshCw,
+  Search,
   Trash2,
   Zap,
   ChevronLeft,
@@ -25,10 +26,6 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
-import {
-  ToggleGroup,
-  ToggleGroupItem,
-} from '@/components/ui/toggle-group'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { CircleAlert } from 'lucide-react'
 import heroDivider from '../assets/icons/hero-divider.svg'
@@ -110,7 +107,7 @@ export default function PostsPage() {
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
   const [typeFilter, setTypeFilter] = useState<string>()
-  const [archived, setArchived] = useState<ArchivedFilter>('all')
+  const [archived] = useState<ArchivedFilter>('all')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [fetching, setFetching] = useState(false)
@@ -120,6 +117,35 @@ export default function PostsPage() {
   // 双视图：cards=展示页（默认）/ list=帖子列表页
   const [view, setView] = useState<'cards' | 'list'>('cards')
   const navigate = useNavigate()
+
+  // 列表页筛选：搜索关键词（防抖后生效）+ 发布时间范围
+  const [searchInput, setSearchInput] = useState('')
+  const [searchKw, setSearchKw] = useState('')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+  const [timePopOpen, setTimePopOpen] = useState(false)
+  const timeWrapRef = useRef<HTMLDivElement>(null)
+  const searchTimer = useRef<number>()
+
+  // 时间下拉：点击面板外自动关闭
+  useEffect(() => {
+    if (!timePopOpen) return
+    const onDown = (e: MouseEvent) => {
+      if (timeWrapRef.current && !timeWrapRef.current.contains(e.target as Node)) {
+        setTimePopOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [timePopOpen])
+  useEffect(() => {
+    window.clearTimeout(searchTimer.current)
+    searchTimer.current = window.setTimeout(() => setSearchKw(searchInput.trim()), 300)
+    return () => window.clearTimeout(searchTimer.current)
+  }, [searchInput])
+
+  // 稳定回调：PostCard 已 memo，依赖它做浅比较
+  const openPost = useCallback((p: Post) => setDrawerPost(p), [])
 
   // 抓取/更新任务完成（fetch-idle 边沿）→ 静默重拉统计与当前页帖子
   const [refreshTick, setRefreshTick] = useState(0)
@@ -159,9 +185,14 @@ export default function PostsPage() {
     }
   }, [vtuberId, refreshTick])
 
-  // 统计概览
+  // 统计概览（仅列表视图需要；依赖账号 key 而非对象引用——
+  // fetch-idle 时 setSelectedAccount 换新对象但 key 不变，避免重复请求）
+  const accountKey = selectedAccount
+    ? `${selectedAccount.platform}:${selectedAccount.platform_uid}`
+    : null
+
   useEffect(() => {
-    if (!selectedAccount) return
+    if (!selectedAccount || view !== 'list') return
     let cancelled = false
     api
       .postStats(selectedAccount.platform, selectedAccount.platform_uid)
@@ -170,12 +201,12 @@ export default function PostsPage() {
     return () => {
       cancelled = true
     }
-  }, [selectedAccount, refreshTick])
+  }, [accountKey, refreshTick, view])
 
   // 帖子列表（服务端分页 + 过滤）；AbortController：切换 VTuber/翻页时
   // 取消在途请求，防止慢响应把旧数据写回新视图
   useEffect(() => {
-    if (!selectedAccount) return
+    if (!selectedAccount || view !== 'list') return
     setLoading(true)
     setError(null)
     const controller = new AbortController()
@@ -189,6 +220,9 @@ export default function PostsPage() {
           page_size: PAGE_SIZE,
           type: typeFilter,
           is_archived: archived === 'all' ? undefined : archived === 'archived',
+          q: searchKw || undefined,
+          date_from: dateFrom || undefined,
+          date_to: dateTo || undefined,
         },
         controller.signal,
       )
@@ -207,7 +241,7 @@ export default function PostsPage() {
         if (!aborted) setLoading(false)
       })
     return () => controller.abort()
-  }, [selectedAccount, page, typeFilter, archived, refreshTick])
+  }, [accountKey, page, typeFilter, archived, refreshTick, view, searchKw, dateFrom, dateTo])
 
   const handleFetch = useCallback(async () => {
     if (!vtuber || fetching) return
@@ -456,7 +490,7 @@ return (
           </Button>
         </div>
 
-        {/* 类型筛选 chips + 归档过滤 */}
+        {/* 类型筛选 chips + 搜索 / 时间范围筛选 */}
         <div className="type-chips-row">
           <div className="type-chips">
             {chipItems.map((c) => (
@@ -472,20 +506,72 @@ return (
               </button>
             ))}
           </div>
-          <ToggleGroup
-            type="single"
-            size="sm"
-            value={archived}
-            onValueChange={(v) => {
-              if (!v) return
-              setArchived(v as ArchivedFilter)
-              setPage(1)
-            }}
-          >
-            <ToggleGroupItem value="all">全部</ToggleGroupItem>
-            <ToggleGroupItem value="unarchived">未归档</ToggleGroupItem>
-            <ToggleGroupItem value="archived">已归档</ToggleGroupItem>
-          </ToggleGroup>
+          <div className="chips-tools">
+            <div className="search-float">
+              <Search className="search-float-icon" />
+              <input
+                value={searchInput}
+                onChange={(e) => {
+                  setSearchInput(e.target.value)
+                  setPage(1)
+                }}
+                placeholder="搜索标题/摘要"
+              />
+            </div>
+            <div className="time-wrap" ref={timeWrapRef}>
+              <button
+                type="button"
+                className={`time-btn${dateFrom || dateTo ? ' active' : ''}`}
+                onClick={() => setTimePopOpen((o) => !o)}
+              >
+                <Calendar className="size-4" />
+                {dateFrom || dateTo ? `${dateFrom || '…'} ~ ${dateTo || '…'}` : '时间'}
+              </button>
+              {timePopOpen && (
+                <div className="time-pop" onMouseDown={(e) => e.stopPropagation()}>
+                  <label>
+                    起
+                    <input
+                      type="date"
+                      value={dateFrom}
+                      max={dateTo || undefined}
+                      onChange={(e) => setDateFrom(e.target.value)}
+                    />
+                  </label>
+                  <label>
+                    止
+                    <input
+                      type="date"
+                      value={dateTo}
+                      min={dateFrom || undefined}
+                      onChange={(e) => setDateTo(e.target.value)}
+                    />
+                  </label>
+                  <div className="time-pop-actions">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDateFrom('')
+                        setDateTo('')
+                      }}
+                    >
+                      清除
+                    </button>
+                    <button
+                      type="button"
+                      className="primary"
+                      onClick={() => {
+                        setPage(1)
+                        setTimePopOpen(false)
+                      }}
+                    >
+                      应用
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
 
         {/* 帖子卡片流：统一无闪动——重取保留旧内容降透明；空列表内嵌小 spinner，
@@ -506,7 +592,7 @@ return (
         ) : (
           <div className={`post-grid${loading ? ' is-refetching' : ''}`}>
             {posts.map((p) => (
-              <PostCard key={p.id} post={p} onClick={() => setDrawerPost(p)} />
+              <PostCard key={p.id} post={p} onOpen={openPost} />
             ))}
           </div>
         )}

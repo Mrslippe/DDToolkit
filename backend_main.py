@@ -11,8 +11,12 @@ import shutil
 import socket
 import sys
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
+
+# 启动计时基线（冷启动优化，见 devlog/021）：各阶段以毫秒记入 sidecar.log
+_t0 = time.perf_counter()
 
 
 def _slog(msg: str) -> None:
@@ -32,6 +36,10 @@ def _slog(msg: str) -> None:
             f.write(f"[{stamp}] {msg}\n")
     except OSError:
         pass  # 日志失败绝不影响主流程
+
+
+def _perf(msg: str) -> None:
+    _slog(f"[perf] {msg} +{int((time.perf_counter() - _t0) * 1000)}ms")
 
 
 def _data_dir() -> Path:
@@ -88,6 +96,7 @@ def _watch_parent(parent_pid: int) -> None:
 
 
 def main() -> None:
+    _perf("进程启动")
     data_dir = _data_dir()
     os.environ.setdefault("DDTOOLKIT_DATA_DIR", str(data_dir))
     _bootstrap_resources(data_dir)
@@ -108,12 +117,15 @@ def main() -> None:
         _slog("watchdog NOT armed: DDTOOLKIT_PARENT_PID missing/invalid")
 
     import uvicorn
+    _perf("import uvicorn 完成")
 
     from app.main import app  # noqa: E402  延迟导入，确保环境变量先就位
+    _perf("import app.main 完成")
 
     port = int(port_env or _free_port())
     # 启动器/调试用：就绪标记行
     print(f"DDTOOLKIT_READY http://127.0.0.1:{port}", flush=True)
+    _perf("uvicorn.run 调用前")
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
 
 

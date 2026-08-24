@@ -231,3 +231,48 @@ def test_fetch_vtuber_endpoint(client, monkeypatch):
     assert r["result"]["success"] == 1
     # 不存在的 VTuber → 404
     assert client.post("/vtuber/99999/fetch").status_code == 404
+
+
+# ── 优化项：唯一约束 409 / 删帖作用域 ───────────────────────────────────
+
+def test_duplicate_account_returns_409(client):
+    vid = client.post("/vtuber", json={"name": "测试"}).json()["id"]
+    payload = {"platform": "bilibili", "platform_uid": "123"}
+    assert client.post(f"/vtuber/{vid}/accounts", json=payload).status_code == 201
+    r = client.post(f"/vtuber/{vid}/accounts", json=payload)
+    assert r.status_code == 409  # 修复：此前 IntegrityError 冒泡成 500
+
+
+def test_duplicate_post_returns_409(client):
+    data = {"platform": "bilibili", "platform_uid": "U1", "platform_post_id": "p1", "type": "text"}
+    assert client.post("/posts", json=data).status_code == 201
+    assert client.post("/posts", json=data).status_code == 409
+
+
+def test_delete_account_cleans_posts(client):
+    """修复：删单个账号此前只删 account，其帖子成孤儿数据。"""
+    vid = client.post("/vtuber", json={"name": "测试"}).json()["id"]
+    aid = client.post(f"/vtuber/{vid}/accounts",
+                      json={"platform": "bilibili", "platform_uid": "U1"}).json()["id"]
+    client.post("/posts", json={
+        "platform": "bilibili", "platform_uid": "U1", "platform_post_id": "p1", "type": "text",
+    })
+    assert client.delete(f"/account/{aid}").status_code == 204
+    assert client.get("/posts/bilibili/U1").json() == []
+
+
+def test_delete_vtuber_does_not_delete_other_platform_same_uid(client):
+    """修复：解订阅删帖曾只按 platform_uid 过滤，跨平台同 UID 会误删。"""
+    vid1 = client.post("/vtuber", json={"name": "A"}).json()["id"]
+    client.post(f"/vtuber/{vid1}/accounts", json={"platform": "bilibili", "platform_uid": "123"})
+    vid2 = client.post("/vtuber", json={"name": "B"}).json()["id"]
+    client.post(f"/vtuber/{vid2}/accounts", json={"platform": "youtube", "platform_uid": "123"})
+    client.post("/posts", json={
+        "platform": "bilibili", "platform_uid": "123", "platform_post_id": "B1", "type": "text",
+    })
+    client.post("/posts", json={
+        "platform": "youtube", "platform_uid": "123", "platform_post_id": "Y1", "type": "text",
+    })
+    assert client.delete(f"/vtuber/{vid1}").status_code == 204
+    assert client.get("/posts/bilibili/123").json() == []
+    assert len(client.get("/posts/youtube/123").json()) == 1  # youtube 帖保留

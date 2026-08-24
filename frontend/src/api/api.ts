@@ -1,4 +1,4 @@
-import type { FetchPostsResult, FetchResult, FetchStatus, PoolItem, Post, PostPage, PostStats, UpdatePostsResult, VTuber } from './types'
+import type { FetchPostsResult, FetchResult, FetchStatus, PoolItem, PostPage, PostStats, UpdatePostsResult, VTuber } from './types'
 
 /**
  * API 基地址：
@@ -41,6 +41,9 @@ export interface PostListParams {
   page_size: number
   type?: string
   is_archived?: boolean
+  q?: string
+  date_from?: string
+  date_to?: string
 }
 
 export const api = {
@@ -63,6 +66,9 @@ export const api = {
     q.set('page_size', String(params.page_size))
     if (params.type) q.set('type', params.type)
     if (params.is_archived !== undefined) q.set('is_archived', String(params.is_archived))
+    if (params.q) q.set('q', params.q)
+    if (params.date_from) q.set('date_from', params.date_from)
+    if (params.date_to) q.set('date_to', params.date_to)
     return request<PostPage>(`/posts/${platform}/${uid}/paginated?${q.toString()}`, { signal })
   },
 
@@ -96,9 +102,9 @@ export const api = {
 
   // ── 候选池 / 收录（v0.5） ──────────────────────────────────────
 
-  /** 候选池检索：名称关键词 / uid 前缀，已入库条目自动剔除 */
-  searchPool: (kw: string) =>
-    request<PoolItem[]>(`/vtuber/pool/search?kw=${encodeURIComponent(kw)}`),
+  /** 候选池检索：名称关键词 / uid 前缀，已入库条目自动剔除；signal 用于防抖取消在途请求 */
+  searchPool: (kw: string, signal?: AbortSignal) =>
+    request<PoolItem[]>(`/vtuber/pool/search?kw=${encodeURIComponent(kw)}`, { signal }),
 
   /** 从候选池收录 VTuber（后端建库后自动调度单V账号抓取） */
   adoptVtuber: (platform: string, platformUid: string, faction?: string) =>
@@ -139,5 +145,3 @@ export function resolveAsset(path: string | null | undefined): string | undefine
 export function imgProxyUrl(src: string): string {
   return `${apiBase}/img-proxy?url=${encodeURIComponent(src)}`
 }
-
-export type { Post }

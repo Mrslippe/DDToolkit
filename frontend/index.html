@@ -2,7 +2,10 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23ffa2b4'/%3E%3Ctext x='16' y='23' font-size='20' font-weight='800' text-anchor='middle' fill='%23fc7079' font-family='sans-serif'%3ED%3C/text%3E%3C/svg%3E"
+    />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>DDtoolkit</title>
     <style>
@@ -15,106 +18,6 @@
   </head>
   <body>
     <div id="root"></div>
-    <script>
-      // 启动诊断陷阱：未捕获异常 / Promise 拒绝全部记录并常驻显示。
-      // React 就绪后折叠为右上角徽章待查；支持一键复制全文。
-      ;(function () {
-        var lines = []
-        var open = true
-        function log(msg) {
-          lines.push(
-            '[' +
-              new Date().toLocaleTimeString('zh-CN', { hour12: false }) +
-              '] ' +
-              msg,
-          )
-          render()
-        }
-        function render() {
-          if (!lines.length) return
-          var box = document.getElementById('boot-diag')
-          if (!box) {
-            box = document.createElement('div')
-            box.id = 'boot-diag'
-            box.style.cssText =
-              'position:fixed;top:8px;right:8px;z-index:10000;width:min(560px,92vw);' +
-              'font:12px/1.6 Consolas,monospace;border-radius:8px;overflow:hidden;' +
-              'box-shadow:0 4px 16px rgba(0,0,0,.35)'
-            box.innerHTML =
-              '<div id="bd-head" style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:#7f1d1d;color:#fecaca;cursor:pointer">' +
-              '<span id="bd-title">启动诊断</span><span style="flex:1"></span>' +
-              '<button id="bd-copy">复制</button>' +
-              '<button id="bd-toggle">收起</button></div>' +
-              '<pre id="bd-body" style="margin:0;padding:10px;background:#111827;color:#fca5a5;max-height:50vh;overflow:auto;white-space:pre-wrap"></pre>'
-            document.body.appendChild(box)
-            var st =
-              'all:unset;cursor:pointer;padding:1px 10px;border-radius:4px;background:#991b1b;color:#fff;font:inherit'
-            box.querySelector('#bd-copy').style.cssText = st
-            box.querySelector('#bd-toggle').style.cssText = st
-            box.querySelector('#bd-copy').onclick = function () {
-              try {
-                navigator.clipboard.writeText(lines.join('\n'))
-                this.textContent = '已复制'
-              } catch (e) {
-                this.textContent = '复制失败'
-              }
-            }
-            box.querySelector('#bd-toggle').onclick = toggle
-            box.querySelector('#bd-head').onclick = toggle
-          }
-          function toggle() {
-            open = !open
-            document.getElementById('bd-body').style.display = open ? 'block' : 'none'
-          }
-          document.getElementById('bd-title').textContent = '启动诊断 ' + lines.length + ' 条'
-          document.getElementById('bd-body').textContent = lines.join('\n')
-        }
-        window.addEventListener('error', function (e) {
-          log('[error] ' + (e.message || e.filename || 'unknown'))
-        })
-        // 捕获阶段：资源加载失败（img/css/js 404 等）不冒泡，只有 capture 能收到
-        window.addEventListener(
-          'error',
-          function (e) {
-            var t = e.target
-            if (t && t !== window && (t.src || t.href)) {
-              log('[resource] ' + (t.src || t.href))
-            }
-          },
-          true,
-        )
-        // console.error 钩子：React 内部错误（如渲染崩溃）只走这里，
-        // 过滤 React 开发警告保持信号干净
-        try {
-          var origError = console.error
-          console.error = function () {
-            var msg = Array.prototype.map
-              .call(arguments, function (a) {
-                return typeof a === 'string' ? a : (a && a.message) || String(a)
-              })
-              .join(' ')
-            if (!msg.startsWith('Warning:')) log('[console.error] ' + msg)
-            origError.apply(console, arguments)
-          }
-        } catch (e) {}
-        window.addEventListener('unhandledrejection', function (e) {
-          log('[promise] ' + String(e.reason))
-        })
-        // 全局禁用浏览器右键菜单（捕获阶段，先于一切渲染生效）
-        document.addEventListener('contextmenu', function (e) {
-          e.preventDefault()
-        }, true)
-        window.__bootLog = log
-        // React 就绪后不再整版弹出，仅保留徽章待查
-        window.__bootFold = function () {
-          open = false
-          var b = document.getElementById('bd-body')
-          if (b) b.style.display = 'none'
-          var t = document.getElementById('bd-toggle')
-          if (t) t.textContent = '展开'
-        }
-      })()
-    </script>
     <!-- 静态启动幕：纯 HTML 内联样式，HTML 解析即绘制（不等待 JS/CSS bundle），
          消除启动白闪。React 挂载后由像素级一致的 Splash 组件接管并移除此节点 -->
     <div

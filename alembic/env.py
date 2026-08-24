@@ -14,14 +14,20 @@ sys.path.append(str(Path(__file__).parent.parent))
 from app.core.database import Base
 import app.models.vtuber  # noqa: F401  # 注册 ORM 模型到 Base.metadata
 
+# 修复：打包环境下数据库位于 DDTOOLKIT_DATA_DIR 指向的数据目录，
+# alembic.ini 里写死的 sqlite:///./vtuber.db 会打错库；一律以 settings 为准。
+from app.core.config import settings  # noqa: E402
+
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
+config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # disable_existing_loggers=False：防止迁移时 fileConfig 关掉应用已有 logger
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # add your model's MetaData object here
 # for 'autogenerate' support

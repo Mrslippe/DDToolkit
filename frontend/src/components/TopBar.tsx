@@ -11,6 +11,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import { useIsMaximized } from '../hooks/useIsMaximized'
 import { api } from '../api/api'
 import type { FetchStatus } from '../api/types'
 import './../styles/layout.css'
@@ -40,12 +41,21 @@ export default function TopBar() {
   const [pillMsg, setPillMsg] = useState<string | null>(null)
   const prevRunning = useRef(false)
   const seenRecent = useRef(0)
+  // 轮询并发保护：kick-poll 在请求 in-flight 期间再次触发时只打标记，
+  // 请求结束后立即补一轮——否则会并行跑两条轮询链，频率翻倍且不收敛
+  const inFlight = useRef(false)
+  const pendingKick = useRef(false)
 
   useEffect(() => {
     let cancelled = false
     let timer: number | undefined
 
     const poll = async () => {
+      if (inFlight.current) {
+        pendingKick.current = true
+        return
+      }
+      inFlight.current = true
       let active = false
       try {
         const s = await api.getFetchStatus()
@@ -77,9 +87,16 @@ export default function TopBar() {
         })
       } catch {
         /* 后端不可达时保持上次状态，按空闲节奏重试 */
-      }
-      if (!cancelled) {
-        timer = window.setTimeout(poll, active ? POLL_ACTIVE_MS : POLL_IDLE_MS)
+      } finally {
+        inFlight.current = false
+        if (!cancelled) {
+          if (pendingKick.current) {
+            pendingKick.current = false
+            timer = window.setTimeout(poll, 0)
+          } else {
+            timer = window.setTimeout(poll, active ? POLL_ACTIVE_MS : POLL_IDLE_MS)
+          }
+        }
       }
     }
 
@@ -140,33 +157,7 @@ export default function TopBar() {
   const handleClose = () => (busy ? setConfirmClose(true) : closeApp())
 
   // 最大化状态跟踪：onResized 触发时重查 isMaximized，切换 还原/最大化 图标
-  const [isMax, setIsMax] = useState(false)
-  useEffect(() => {
-    if (!isTauri) return
-    let disposed = false
-    let unlisten: (() => void) | undefined
-    const update = () => {
-      void import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
-        if (disposed) return
-        void getCurrentWindow()
-          .isMaximized()
-          .then(setIsMax)
-      })
-    }
-    update()
-    void import('@tauri-apps/api/window').then(({ getCurrentWindow }) => {
-      if (disposed) return
-      void getCurrentWindow()
-        .onResized(update)
-        .then((u) => {
-          unlisten = u
-        })
-    })
-    return () => {
-      disposed = true
-      unlisten?.()
-    }
-  }, [])
+  const isMax = useIsMaximized()
 
   const handleToggleMaximize = () =>
     void tauriWindow().then((w) => w.toggleMaximize())

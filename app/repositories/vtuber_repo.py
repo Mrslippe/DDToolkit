@@ -1,6 +1,6 @@
 ﻿from datetime import datetime
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.vtuber import VTuber, Account, Post
@@ -83,9 +83,14 @@ class AccountRepo:
         self.db.commit()
         return True
 
-    def all_for_fetch(self) -> list[Account]:
-        """返回所有可用于抓取的 Account（有 platform_uid 的）"""
-        return self.db.query(Account).filter(Account.platform_uid != None, Account.platform_uid != "").all()
+    def all_for_fetch(self, platform: str | None = None) -> list[Account]:
+        """返回所有可用于抓取的 Account（有 platform_uid 的）；platform 可选过滤"""
+        q = self.db.query(Account).filter(
+            Account.platform_uid != None, Account.platform_uid != ""  # noqa: E711
+        )
+        if platform:
+            q = q.filter(Account.platform == platform)
+        return q.all()
 
 
 # ── Post ───────────────────────────────────────────────────────────
@@ -104,18 +109,36 @@ class PostRepo:
 
     def paginated(self, platform: str, platform_uid: str, page: int = 1,
                   page_size: int = 50, post_type: str | None = None,
-                  is_archived: bool | None = None) -> tuple[int, list[Post]]:
-        """服务端分页 + 过滤（前端列表用；旧 by_uid 保持兼容）。返回 (total, items)"""
-        q = self.db.query(Post).filter(
+                  is_archived: bool | None = None,
+                  q: str | None = None,
+                  date_from: datetime | None = None,
+                  date_to: datetime | None = None) -> tuple[int, list[Post]]:
+        """服务端分页 + 过滤（前端列表用；旧 by_uid 保持兼容）。返回 (total, items)
+
+        q        标题/摘要模糊匹配（OR 语义）
+        date_from/date_to 发布时间范围：from 含当天零点起；to 为次日零点排他
+                 （即包含结束日全天）；设范围时 published_at 为空的帖子被排除
+        """
+        query = self.db.query(Post).filter(
             Post.platform == platform, Post.platform_uid == platform_uid
         )
         if post_type:
-            q = q.filter(Post.type == post_type)
+            query = query.filter(Post.type == post_type)
         if is_archived is not None:
-            q = q.filter(Post.is_archived == is_archived)
-        total = q.count()
+            query = query.filter(Post.is_archived == is_archived)
+        if q:
+            kw = f"%{q.strip()}%"
+            query = query.filter(or_(
+                Post.title.ilike(kw),
+                Post.summary.ilike(kw),
+            ))
+        if date_from is not None:
+            query = query.filter(Post.published_at >= date_from)
+        if date_to is not None:
+            query = query.filter(Post.published_at < date_to)
+        total = query.count()
         items = (
-            q.order_by(Post.published_at.desc())
+            query.order_by(Post.published_at.desc())
             .offset((page - 1) * page_size)
             .limit(page_size)
             .all()
@@ -159,11 +182,13 @@ class PostRepo:
     def get(self, id: int) -> Post | None:
         return self.db.query(Post).filter(Post.id == id).first()
 
-    def create(self, data: dict) -> Post:
+    def create(self, data: dict, commit: bool = True) -> Post:
+        """新增帖子。commit=False 时仅 add 不提交（批量入库用，见 scheduler._fetch_posts_core）。"""
         obj = Post(**data)
         self.db.add(obj)
-        self.db.commit()
-        self.db.refresh(obj)
+        if commit:
+            self.db.commit()
+            self.db.refresh(obj)
         return obj
 
     def update(self, id: int, data: dict) -> Post | None:
@@ -185,11 +210,18 @@ class PostRepo:
         self.db.commit()
         return True
 
-    def delete_by_platform_uids(self, platform_uids: list[str]) -> int:
-        """按账号组清空帖子（解订阅用：posts 表独立，无外键联删）。"""
+    def delete_by_platform_uids(self, platform_uids: list[tuple[str, str]]) -> int:
+        """按 (platform, platform_uid) 账号组清空帖子（解订阅用：posts 表独立，无外键联删）。
+
+        修复：原先只按 platform_uid 过滤，同一 V 在 bilibili/youtube 上有相同 UID 时
+        会误删另一个平台的帖子；改为平台+UID 组合匹配。
+        """
         if not platform_uids:
             return 0
-        n = self.db.query(Post).filter(Post.platform_uid.in_(platform_uids)).delete(
-            synchronize_session=False
-        )
+        from sqlalchemy import or_
+        cond = or_(*[
+            (Post.platform == p) & (Post.platform_uid == uid)
+            for p, uid in platform_uids
+        ])
+        n = self.db.query(Post).filter(cond).delete(synchronize_session=False)
         return n

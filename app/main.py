@@ -5,13 +5,13 @@ from contextlib import asynccontextmanager
 import asyncio
 import logging
 import os
-import sqlite3
+import time
+
+from sqlalchemy import inspect, text
 
 from app.core.config import settings
 from app.core.database import engine, Base
 from app.routers import vtuber, img_proxy
-from app.services.scheduler import start_scheduler, shutdown_scheduler
-from app.services.auth import auth_manager
 
 # --- 日志 ---
 os.makedirs(settings.DATA_DIR / "logs", exist_ok=True)
@@ -25,29 +25,120 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# 启动计时：冷启动优化（devlog/021）——各阶段毫秒时间戳，对照方案 0 基线
+_t0 = time.monotonic()
 
-def _migrate() -> None:
-    """轻量列迁移：create_all 不会给已存在的表补列，这里显式补齐（幂等）。"""
-    db_path = settings.DATABASE_URL.replace("sqlite:///", "")
-    with sqlite3.connect(db_path) as conn:
-        cols = {r[1] for r in conn.execute("PRAGMA table_info(vtubers)")}
-        if "faction" not in cols:
-            conn.execute("ALTER TABLE vtubers ADD COLUMN faction VARCHAR")
-            logger.info("迁移: vtubers.faction 列已添加")
+
+def _perf(step: str) -> None:
+    logger.info(f"[perf] {step} +{int((time.monotonic() - _t0) * 1000)}ms")
+
+
+# ── 统一 schema 管理（alembic 迁移链为准） ──────────────────────────────
+
+# 迁移链最新版本。新加迁移时必须同步更新（tests 会断言与 alembic head 一致）。
+MIGRATION_HEAD = "d001"
+
+
+def _alembic_config():
+    """按需加载 alembic（冷启动快路径不 import，慢路径才进）。"""
+    from alembic.config import Config
+    from app.core.config import PROJECT_ROOT
+    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
+    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
+    cfg.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+    return cfg
+
+
+def _sync_legacy_schema() -> None:
+    """把 create_all 时代生成的旧库同步到与 ORM 模型一致（补列/索引），再 stamp head。
+
+    仅对「有表但无 alembic_version」的旧库生效；全新库直接 alembic upgrade head。
+    幂等：缺列补列、缺索引建索引。彻底取代旧 _migrate() 的硬编码 ALTER。
+    """
+    inspector = inspect(engine)
+    existing_tables = set(inspector.get_table_names())
+    with engine.begin() as conn:
+        for table in Base.metadata.sorted_tables:
+            if table.name not in existing_tables:
+                table.create(conn)
+                continue
+            have_cols = {c["name"] for c in inspector.get_columns(table.name)}
+            for col in table.columns:
+                if col.name in have_cols:
+                    continue
+                coltype = col.type.compile(dialect=engine.dialect)
+                if col.nullable is False and col.server_default is None:
+                    coltype += " NOT NULL"
+                conn.execute(text(
+                    f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {coltype}'
+                ))
+                logger.info(f"迁移: {table.name}.{col.name} 列已添加")
+            have_idx = {i["name"] for i in inspector.get_indexes(table.name)}
+            for idx in table.indexes:
+                if idx.name and idx.name not in have_idx:
+                    cols = ", ".join(f'"{c.name}"' for c in idx.columns)
+                    conn.execute(text(f'CREATE INDEX "{idx.name}" ON "{table.name}" ({cols})'))
+                    logger.info(f"迁移: 索引 {idx.name} 已创建")
+
+
+def _run_migrations() -> None:
+    """统一 schema 管理：以 alembic 迁移链为准。
+
+    四种库形态（冷启动优化：已是最新版本的库走快路径，不再加载 alembic）：
+    - 全新库（无任何表）                → alembic upgrade head 全量建表
+    - create_all 时代的旧库              → 补列/索引到与模型一致后 stamp head
+    - 迁移链上但版本落后                 → alembic upgrade head 增量升级
+    - 版本 == MIGRATION_HEAD（常态）     → 直接返回，零 alembic 开销
+    """
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    if not tables:
+        _perf("迁移: 全新库")
+        from alembic import command
+        command.upgrade(_alembic_config(), "head")
+        return
+    if "alembic_version" not in tables:
+        _perf("迁移: create_all 旧库桥接")
+        _sync_legacy_schema()
+        from alembic import command
+        command.stamp(_alembic_config(), "head")
+        return
+    with engine.connect() as conn:
+        current = conn.execute(
+            text("SELECT version_num FROM alembic_version")
+        ).scalar_one_or_none()
+    if current == MIGRATION_HEAD:
+        return  # 快路径：已是最新，跳过 alembic 模块加载
+    _perf(f"迁移: {current} -> {MIGRATION_HEAD}")
+    from alembic import command
+    command.upgrade(_alembic_config(), "head")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("启动中...")
-    Base.metadata.create_all(bind=engine)
-    _migrate()
+    _perf("lifespan 开始")
+
+    # 延迟导入：apscheduler/tenacity/httpx/auth 不参与 app 构建期导入，
+    # 让 uvicorn 尽可能早绑定端口（冷启动优化）
+    from app.services.scheduler import start_scheduler, shutdown_scheduler
+    from app.services.auth import auth_manager
+
+    _run_migrations()
+    _perf("迁移完成")
 
     scheduler = start_scheduler()
     auth_task = asyncio.create_task(auth_manager.run_maintenance())
+    _perf("调度器+auth 就绪")
 
     yield
     logger.info("关闭中...")
     auth_task.cancel()
+    try:
+        await auth_task
+    except asyncio.CancelledError:
+        pass  # 正常取消，避免 CancelledError 噪音
+    await img_proxy.close_client()
     shutdown_scheduler(scheduler)
 
 

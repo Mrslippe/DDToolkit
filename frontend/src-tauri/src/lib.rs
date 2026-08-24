@@ -4,7 +4,15 @@ use tauri::{Manager, RunEvent, State};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
-/// 后端子进程句柄，退出时 kill 防止孤儿进程
+// 启动计时基线（冷启动优化，见 devlog/021）：各阶段毫秒时间戳输出到终端
+static T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+fn perf(step: &str) {
+    let t0 = *T0.get_or_init(std::time::Instant::now);
+    println!("[ddtoolkit][perf] {step} +{}ms", t0.elapsed().as_millis());
+}
+
+/// 后端进程句柄，退出时 kill 防止孤儿进程
 struct BackendChild(Mutex<Option<CommandChild>>);
 
 /// 后端监听端口，供前端经 get_backend_port 查询
@@ -19,8 +27,9 @@ fn get_backend_port(port: State<'_, BackendPort>) -> u16 {
     *port.0.lock().unwrap()
 }
 
-/// 显示主窗口。应用自有命令不受 capability 权限约束，
-/// 避免 core:window:allow-show 缺失导致前端 show() 被静默拒绝
+/// 显示主窗口。窗口默认 visible:false（见 tauri.conf.json），页面绘制完成后
+/// 由前端 invoke 显示，避免 WebView2 首绘前的白屏（白色闪屏修复，见 devlog/021）。
+/// show() 幂等：重复调用无副作用。
 #[tauri::command]
 fn present_window(window: tauri::Window) {
     let _ = window.show();
@@ -210,6 +219,8 @@ pub fn run() {
             present_window
         ])
         .setup(|app| {
+            perf("setup 开始");
+
             let port = free_port();
             let mut data_dir = app.path().app_data_dir()?;
             // dev 构建使用独立数据目录，避免调试抓取/登录写进「生产」数据
@@ -237,6 +248,7 @@ pub fn run() {
 
             let child = spawn_backend(app.handle(), port, &data_dir)?;
             let backend_pid = child.pid();
+            perf("后端已 spawn");
 
             #[cfg(target_os = "windows")]
             {
@@ -275,22 +287,9 @@ pub fn run() {
                 }
             }
 
-            // 兜底显示线程：窗口以 visible:false 创建，正常由前端 JS 在静态幕
-            // 绘制后调用 show()。若该链路失败（vite 冷启动依赖重载、动态 import
-            // 竞态等），8 秒后此处补显——show() 幂等，JS 已显示则无任何副作用，
-            // 保证窗口「最多迟到 8 秒」而非永不出现。
-            {
-                let handle = app.handle().clone();
-                std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_secs(8));
-                    if let Some(w) = handle.get_webview_window("main") {
-                        if matches!(w.is_visible(), Ok(false)) {
-                            let _ = w.show();
-                            println!("[ddtoolkit] fallback: 窗口仍隐藏，已兜底显示");
-                        }
-                    }
-                });
-            }
+            // 窗口以 visible:true 创建（见 tauri.conf.json）：静态粉幕随 WebView
+            // 首绘即显示，不再依赖 JS show() 链路，故原 8 秒兜底显示线程已删除。
+            perf("setup 完成");
 
             Ok(())
         })
@@ -299,7 +298,10 @@ pub fn run() {
         .run(|app_handle, event| {
             // 诊断：记录退出路径（点 VTuber 后窗口消失——定位是窗口销毁/退出请求/宿主请求）
             match &event {
-                RunEvent::Ready => println!("[ddtoolkit] RunEvent::Ready"),
+                RunEvent::Ready => {
+                    println!("[ddtoolkit] RunEvent::Ready");
+                    perf("RunEvent::Ready")
+                }
                 RunEvent::ExitRequested { code, .. } => {
                     println!("[ddtoolkit] RunEvent::ExitRequested code={code:?}")
                 }

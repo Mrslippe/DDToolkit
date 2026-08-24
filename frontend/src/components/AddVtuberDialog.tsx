@@ -38,7 +38,8 @@ export default function AddVtuberDialog({ open, onOpenChange, onAdded }: Props) 
     }
   }, [open])
 
-  // 输入防抖检索
+  // 输入防抖检索：AbortController 取消在途请求 + 序号校验，
+  // 修复：此前快速连续输入时旧请求晚到会覆盖新关键词的结果（竞态）
   useEffect(() => {
     if (!open) return
     window.clearTimeout(timerRef.current)
@@ -49,18 +50,24 @@ export default function AddVtuberDialog({ open, onOpenChange, onAdded }: Props) 
       return
     }
     setSearching(true)
+    const controller = new AbortController()
     timerRef.current = window.setTimeout(async () => {
       try {
-        const r = await api.searchPool(q)
+        const r = await api.searchPool(q, controller.signal)
+        if (controller.signal.aborted) return
         setResults(r)
       } catch (e) {
+        if ((e as Error).name === 'AbortError') return // 已被更新的关键词取代
         toast.error(`候选池检索失败：${(e as Error).message}`)
         setResults([])
       } finally {
-        setSearching(false)
+        if (!controller.signal.aborted) setSearching(false)
       }
     }, 250)
-    return () => window.clearTimeout(timerRef.current)
+    return () => {
+      window.clearTimeout(timerRef.current)
+      controller.abort()
+    }
   }, [kw, open])
 
   const adopt = async (item: PoolItem) => {

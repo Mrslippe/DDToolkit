@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Download, Plus, Search } from 'lucide-react'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -245,6 +245,9 @@ export default function VtuberSidebar() {
   const matched = matchPath('/vtubers/:id', location.pathname)
   const { bar, thumbProps } = useOverlayScrollbar(sidebarRef, `${loading}|${filtered.length}`)
 
+  // 稳定回调：memo 化的 VtuberItem 依赖它做浅比较，避免搜索/轮询每帧新建闭包
+  const handleSelect = useCallback((id: number) => navigate(`/vtubers/${id}`), [navigate])
+
   if (loading) {
     return (
       <div className="sidebar-shell">
@@ -331,7 +334,7 @@ export default function VtuberSidebar() {
           key={v.id}
           vtuber={v}
           active={matched !== null && Number(matched.params.id) === v.id}
-          onClick={() => navigate(`/vtubers/${v.id}`)}
+          onSelect={handleSelect}
         />
       ))}
 
@@ -355,17 +358,17 @@ export default function VtuberSidebar() {
 interface VtuberItemProps {
   vtuber: VTuber
   active: boolean
-  onClick: () => void
+  onSelect: (id: number) => void
 }
 
-function VtuberItem({ vtuber, active, onClick }: VtuberItemProps) {
+const VtuberItem = memo(function VtuberItem({ vtuber, active, onSelect }: VtuberItemProps) {
   const bili = biliAccount(vtuber)
   const avatarSrc = resolveAsset(bili?.avatar_path) ?? bili?.avatar_url ?? undefined
   const sign = bili?.sign ?? null
   const isLiveNow = (bili?.live_status ?? 0) === 1
 
   return (
-    <div className={`vtuber-item${active ? ' active' : ''}`} onClick={onClick}>
+    <div className={`vtuber-item${active ? ' active' : ''}`} onClick={() => onSelect(vtuber.id)}>
       <Avatar className="size-[65px] shrink-0">
         <AvatarImage src={avatarSrc} referrerPolicy="no-referrer" />
         <AvatarFallback>{vtuber.name.slice(0, 1)}</AvatarFallback>
@@ -382,4 +385,4 @@ function VtuberItem({ vtuber, active, onClick }: VtuberItemProps) {
       <div className="vtuber-emblem" aria-hidden />
     </div>
   )
-}
+})

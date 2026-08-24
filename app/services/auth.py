@@ -3,6 +3,8 @@ import asyncio
 import logging
 import os
 import re
+import tempfile
+import threading
 import time
 from typing import Optional
 
@@ -14,6 +16,9 @@ logger = logging.getLogger(__name__)
 
 # 凭据文件随数据目录走（桌面端 = %APPDATA%/DDtoolkit/.env，开发 = 项目根 .env）
 ENV_PATH = settings.DATA_DIR / ".env"
+
+# .env 写锁：QR 续期与刷新并发时避免互相覆盖（写文件非原子，见 _save_to_env）
+_env_lock = threading.Lock()
 
 BASE_HEADERS = {
     "User-Agent": (
@@ -78,28 +83,40 @@ class BilibiliAuth:
             logger.warning(f".env 文件不存在: {ENV_PATH}")
             return
 
-        lines = ENV_PATH.read_text(encoding="utf-8").splitlines(keepends=True)
-        new_lines = []
-        seen = set()
-        target_keys = {
-            "BILI_SESSDATA", "BILI_BIJI_JCT", "BILI_DEDE_USER_ID",
-            "BILI_BUVID_3", "BILI_REFRESH_TOKEN",
-        }
+        # 修复：临时文件 + os.replace 原子替换，进程中断不会留下半写文件；
+        # threading.Lock 防止 QR 续期与刷新并发写互相覆盖
+        with _env_lock:
+            lines = ENV_PATH.read_text(encoding="utf-8").splitlines(keepends=True)
+            new_lines = []
+            seen = set()
+            target_keys = {
+                "BILI_SESSDATA", "BILI_BIJI_JCT", "BILI_DEDE_USER_ID",
+                "BILI_BUVID_3", "BILI_REFRESH_TOKEN",
+            }
 
-        for line in lines:
-            key = line.split("=", 1)[0].strip() if "=" in line else ""
-            if key in target_keys:
+            for line in lines:
+                key = line.split("=", 1)[0].strip() if "=" in line else ""
+                if key in target_keys:
+                    if key not in seen:
+                        seen.add(key)
+                        new_lines.append(_env_line_for(key, self))
+                else:
+                    new_lines.append(line)
+
+            for key in target_keys:
                 if key not in seen:
-                    seen.add(key)
                     new_lines.append(_env_line_for(key, self))
-            else:
-                new_lines.append(line)
 
-        for key in target_keys:
-            if key not in seen:
-                new_lines.append(_env_line_for(key, self))
-
-        ENV_PATH.write_text("".join(new_lines), encoding="utf-8")
+            fd, tmp_path = tempfile.mkstemp(
+                dir=str(ENV_PATH.parent), prefix=".env.", suffix=".tmp"
+            )
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write("".join(new_lines))
+                os.replace(tmp_path, ENV_PATH)
+            finally:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
         _reload_env()
 
     def _parse_set_cookie(self, response: httpx.Response) -> dict:
@@ -404,6 +421,10 @@ def _env_line_for(key: str, auth: BilibiliAuth) -> str:
 def _reload_env():
     from dotenv import load_dotenv
     load_dotenv(ENV_PATH, override=True)
+    # 同步 settings 类属性：它们导入期读死，不刷新会导致后续读取到旧值
+    for key in ("BILI_SESSDATA", "BILI_BIJI_JCT", "BILI_DEDE_USER_ID",
+                "BILI_BUVID_3", "BILI_REFRESH_TOKEN"):
+        setattr(settings, key, os.getenv(key, ""))
 
 
 def _print_qrcode(url: str):

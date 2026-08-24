@@ -626,3 +626,244 @@ def test_fetch_posts_core_stop_exempt_first_item(monkeypatch, db):
     assert r.stopped_early is False      # FRESH 是新帖，未误停
     assert r.stored == 1
     assert calls["n"] == 1               # has_more=False 自然结束
+
+
+# ── 优化项：img_proxy SSRF 重定向加固 / 批量入库 / 跨平台删帖 ────────────
+
+def test_img_proxy_reject_redirect_to_internal():
+    """回归（SSRF）：302 跳到内网地址必须被拒（原实现 follow_redirects 直接跟随）。"""
+    import httpx as httpx_mod
+    from fastapi import HTTPException
+
+    def handler(request):
+        return httpx_mod.Response(302, headers={"location": "http://169.254.169.254/meta"})
+
+    async def run():
+        async with httpx_mod.AsyncClient(transport=httpx_mod.MockTransport(handler)) as c:
+            with pytest.raises(HTTPException) as ei:
+                await img_proxy.fetch_remote("https://i0.hdslb.com/bfs/x.png", client=c)
+            assert ei.value.status_code == 403
+
+    asyncio.run(run())
+
+
+def test_img_proxy_follows_allowed_redirect():
+    """同域（白名单内）重定向仍可用，且命中最终资源。"""
+    import httpx as httpx_mod
+
+    def handler(request):
+        if request.url.path == "/a":
+            return httpx_mod.Response(302, headers={"location": "/b.jpg"})
+        return httpx_mod.Response(200, content=b"IMG", headers={"content-type": "image/jpeg"})
+
+    async def run():
+        async with httpx_mod.AsyncClient(transport=httpx_mod.MockTransport(handler)) as c:
+            body, ctype = await img_proxy.fetch_remote("https://i0.hdslb.com/a", client=c)
+            assert body == b"IMG"
+            assert ctype == "image/jpeg"
+
+    asyncio.run(run())
+
+
+def test_img_proxy_rejects_non_image_content_type():
+    """text/html 不得作为图片代理结果回吐（防存储型 XSS）。"""
+    import httpx as httpx_mod
+
+    def handler(request):
+        return httpx_mod.Response(200, content=b"<html>", headers={"content-type": "text/html"})
+
+    async def run():
+        async with httpx_mod.AsyncClient(transport=httpx_mod.MockTransport(handler)) as c:
+            assert await img_proxy.fetch_remote("https://i0.hdslb.com/x.png", client=c) is None
+
+    asyncio.run(run())
+
+
+def test_img_proxy_rejects_oversized_body(monkeypatch):
+    import httpx as httpx_mod
+
+    monkeypatch.setattr(img_proxy, "_MAX_BODY", 100)
+
+    def handler(request):
+        return httpx_mod.Response(200, content=b"x" * 200, headers={"content-type": "image/jpeg"})
+
+    async def run():
+        async with httpx_mod.AsyncClient(transport=httpx_mod.MockTransport(handler)) as c:
+            assert await img_proxy.fetch_remote("https://i0.hdslb.com/x.png", client=c) is None
+
+    asyncio.run(run())
+
+
+def test_fetch_posts_core_batch_commit(monkeypatch, db):
+    """批量入库：120 条帖子分 3 批 commit，全部落库（跨会话可见）。"""
+    from app.services import scheduler as sch
+
+    n_items = 120
+    videos = [_post_item(f"V{i:04d}") for i in range(n_items)]
+    calls = {"n": 0}
+
+    async def fake_videos(mid, page=1, client=None):
+        calls["n"] += 1
+        return videos if calls["n"] == 1 else []
+
+    async def fake_sleep(_seconds):
+        return None
+
+    async def fake_dynamics(mid, offset="", client=None):
+        return None
+
+    monkeypatch.setattr(sch, "fetch_bilibili_videos", fake_videos)
+    monkeypatch.setattr(sch, "fetch_bilibili_dynamics", fake_dynamics)
+    monkeypatch.setattr("asyncio.sleep", fake_sleep)
+
+    async def run():
+        return await sch._fetch_posts_core(123, 1, 0, db, include_videos=True)
+
+    r = asyncio.run(run())
+    assert r.videos == n_items
+    assert r.stored == n_items
+    assert r.skipped == 0
+    assert db.query(PostModel).filter(
+        PostModel.platform == "bilibili", PostModel.platform_uid == "123"
+    ).count() == n_items
+
+
+def test_fetch_posts_core_batch_dedup_after_restart(monkeypatch, db):
+    """批量入库幂等：第二次全量抓同一批帖子全部跳过（内存 existing_ids 去重）。"""
+    from app.services import scheduler as sch
+
+    videos = [_post_item("V0001"), _post_item("V0002")]
+    calls = {"n": 0}
+
+    async def fake_videos(mid, page=1, client=None):
+        calls["n"] += 1
+        return videos  # 每次都返回同一批：第二次应全部命中 existing_ids 去重
+
+    async def fake_sleep(_seconds):
+        return None
+
+    async def fake_dynamics(mid, offset="", client=None):
+        return None
+
+    monkeypatch.setattr(sch, "fetch_bilibili_videos", fake_videos)
+    monkeypatch.setattr(sch, "fetch_bilibili_dynamics", fake_dynamics)
+    monkeypatch.setattr("asyncio.sleep", fake_sleep)
+
+    async def run():
+        await sch._fetch_posts_core(123, 1, 0, db, include_videos=True)
+        return await sch._fetch_posts_core(123, 1, 0, db, include_videos=True)
+
+    r = asyncio.run(run())
+    assert r.stored == 0
+    assert r.skipped == 2
+
+
+def test_delete_by_platform_uids_platform_scoped(db):
+    """解订阅删帖按 (platform, platform_uid) 过滤：跨平台同 UID 不误删。"""
+    db.add_all([
+        PostModel(platform="bilibili", platform_uid="123", platform_post_id="B1", type="text"),
+        PostModel(platform="youtube", platform_uid="123", platform_post_id="Y1", type="text"),
+    ])
+    db.commit()
+    n = PostRepo(db).delete_by_platform_uids([("bilibili", "123")])
+    assert n == 1
+    assert db.query(PostModel).filter(PostModel.platform == "youtube").count() == 1
+
+
+def test_async_fetch_vtuber_relinks_session_after_cooldown(monkeypatch):
+    """回归（高）：风控冷却后必须重查 accounts——旧会话已关闭，沿用旧列表里的
+    detached 对象会导致恢复后的更新静默丢失（async_fetch_and_update 有重查，
+    原 async_fetch_vtuber 遗漏）。"""
+    from app.services import scheduler as sch
+    from app.services.fetcher import _rate_limit_ctx
+
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine)
+    Maker = sessionmaker(bind=engine)
+
+    session_a = Maker()
+    v = VTuber(name="单V")
+    session_a.add(v)
+    session_a.commit()
+    session_a.add(Account(vtuber_id=v.id, platform="bilibili", platform_uid="999",
+                          display_name="旧名"))
+    session_a.commit()
+    vid = v.id  # 会话关闭前取出 id（commit 后属性会 expire，关闭后读取即报 detached）
+    session_a.close()
+
+    # 每次调用返回全新会话（模拟函数内部 reopen）
+    monkeypatch.setattr(sch, "SessionLocal", Maker)
+
+    state = {"calls": 0}
+
+    async def fake_fetch(acc, _db, client=None):
+        state["calls"] += 1
+        if state["calls"] == 1:
+            _rate_limit_ctx.set((True, "code=-412"))
+            return False
+        acc.display_name = "新名"   # 若 acc 来自已关闭会话，此赋值不会落库
+        return True
+
+    async def fake_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(sch, "_fetch_one_account", fake_fetch)
+    monkeypatch.setattr("asyncio.sleep", fake_sleep)
+
+    r = asyncio.run(sch.async_fetch_vtuber(vid))
+    assert state["calls"] == 2           # 冷却后继续抓取
+    assert r.success == 1
+
+    check = Maker()
+    try:
+        acc = check.query(Account).filter(Account.platform_uid == "999").one()
+        assert acc.display_name == "新名"  # 冷却后重查的账号更新已落库
+    finally:
+        check.close()
+
+
+def test_save_to_env_atomic_keeps_other_keys(monkeypatch):
+    """auth._save_to_env：原子替换且不丢失其他配置行（含临时文件无残留）。"""
+    import pathlib
+    import shutil
+    from app.services import auth as auth_mod
+
+    d = pathlib.Path(__file__).parent / "_env_test"
+    shutil.rmtree(d, ignore_errors=True)
+    d.mkdir(parents=True)
+    env = d / ".env"
+    env.write_text("FOO=bar\nBILI_SESSDATA=old\nBAZ=qux\n", encoding="utf-8")
+    monkeypatch.setattr(auth_mod, "ENV_PATH", env)
+    monkeypatch.setattr(auth_mod, "_reload_env", lambda: None)  # 隔离 os.environ 污染
+
+    a = auth_mod.BilibiliAuth()
+    a.sessdata = "new-sess"
+    a.bili_jct = "jct"
+    a.dede_user_id = "123"
+    a.buvid3 = "b3"
+    a.refresh_token = "rt"
+    a._save_to_env()
+
+    text = env.read_text(encoding="utf-8")
+    assert "FOO=bar" in text and "BAZ=qux" in text
+    assert "BILI_SESSDATA=new-sess" in text
+    assert "BILI_SESSDATA=old" not in text
+    assert not list(d.glob("*.tmp"))       # 临时文件已清理
+    shutil.rmtree(d, ignore_errors=True)
+
+
+# ── 冷启动优化：迁移快路径与 alembic head 一致性 ────────────────────────
+
+def test_migration_head_matches_alembic():
+    """_run_migrations 快路径依赖 MIGRATION_HEAD 跳过 alembic 加载；
+    若新增迁移而忘记同步该常量，冷启动快路径会把旧库误判为已最新。"""
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    from app.core.config import PROJECT_ROOT
+    from app.main import MIGRATION_HEAD
+
+    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
+    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
+    head = ScriptDirectory.from_config(cfg).get_current_head()
+    assert MIGRATION_HEAD == head, f"MIGRATION_HEAD={MIGRATION_HEAD!r} != alembic head={head!r}"

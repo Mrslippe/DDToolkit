@@ -2,22 +2,23 @@
 
 @font-face {
   font-family: 'Alimama FangYuanTi VF';
-  src: url('../assets/fonts/AlimamaFangYuanTiVF-VF.ttf') format('truetype');
+  src: url('../assets/fonts/AlimamaFangYuanTiVF-VF.woff2') format('woff2');
   font-weight: 100 900;
   font-display: swap;
 }
 
-/* 设计稿专用字体（源自 docs/react Pixso 导出） */
+/* 设计稿专用字体（源自 docs/react Pixso 导出）
+   已子集化：QianTu 仅含 LOGO 字母 "D"，ZiXiao 仅含标题 "DDtoolkit"（约 14.8MB → 2.9MB） */
 @font-face {
   font-family: 'QianTu XiaoTuTi';
-  src: url('../assets/fonts/QianTuXiaoTuTi.ttf') format('truetype');
+  src: url('../assets/fonts/QianTuXiaoTuTi.woff2') format('woff2');
   font-weight: 400;
   font-display: swap;
 }
 
 @font-face {
   font-family: 'ZiXiao HunRui YiHe';
-  src: url('../assets/fonts/ZiXiaoHunRuiYiHe.ttf') format('truetype');
+  src: url('../assets/fonts/ZiXiaoHunRuiYiHe.woff2') format('woff2');
   font-weight: 400;
   font-display: swap;
 }
