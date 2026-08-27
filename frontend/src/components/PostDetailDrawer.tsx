@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import {
   Calendar,
   ChevronDown,
@@ -119,10 +119,15 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 /** 帖子详情抽屉：标题/封面/正文（Delta/HTML/纯文本）/图片/统计/预约/转发原文/链接/JSON */
 export default function PostDetailDrawer({ post, open, onClose }: Props) {
   const [rawOpen, setRawOpen] = useState(false)
-  if (!post) return null
+  // 末帧保留：关闭只翻 open，组件仍挂载走 radix 退场动画——
+  // 期间渲染最后一次的帖子内容（post 已随父级保留，此 ref 兜底防 null）
+  const lastPostRef = useRef<Post | null>(post)
+  if (post) lastPostRef.current = post
+  const shown = post ?? lastPostRef.current
+  if (!shown) return null
 
-  const body = parseBody(post.body_json)
-  const stats = parseStats(post.stats_json)
+  const body = parseBody(shown.body_json)
+  const stats = parseStats(shown.stats_json)
   const images = body.images ?? []
   const isHtml = typeof body.content === 'string' && /<[a-z][\s\S]*>/i.test(body.content)
 
@@ -145,18 +150,18 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
       >
         <SheetHeader className="p-0">
           <SheetTitle className="pr-8 text-base leading-snug">
-            {postDisplayTitle(post)}
+            {postDisplayTitle(shown)}
           </SheetTitle>
         </SheetHeader>
 
         <div className="mt-4 space-y-4">
           {/* 元信息 */}
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm text-muted-foreground">
-            <TypeTag type={post.type} />
-            <span>发布于 {formatDateTime(post.published_at)}</span>
-            <span>ID: {post.platform_post_id}</span>
-            {post.permalink && (
-              <a href={post.permalink} target="_blank" rel="noreferrer"
+            <TypeTag type={shown.type} />
+            <span>发布于 {formatDateTime(shown.published_at)}</span>
+            <span>ID: {shown.platform_post_id}</span>
+            {shown.permalink && (
+              <a href={shown.permalink} target="_blank" rel="noreferrer"
                 className="inline-flex items-center gap-1 text-primary hover:underline">
                 <Link2 className="size-3.5" /> 查看原文
               </a>
@@ -184,9 +189,9 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
           )}
 
           {/* 封面 */}
-          {post.cover_url && (
+          {shown.cover_url && (
             <SmartImage
-              src={post.cover_url}
+              src={shown.cover_url}
               alt="封面"
               className="w-full rounded-lg object-contain"
               style={{ maxHeight: 320 }}
@@ -214,8 +219,8 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
           ) : (
             body.text && <p className="whitespace-pre-wrap text-sm">{body.text}</p>
           )}
-          {!body.delta && !body.content && !body.text && post.summary && (
-            <p className="text-sm text-muted-foreground">{post.summary}</p>
+          {!body.delta && !body.content && !body.text && shown.summary && (
+            <p className="text-sm text-muted-foreground">{shown.summary}</p>
           )}
 
           {/* 转发原文 */}
@@ -248,7 +253,7 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
           )}
 
           {/* 原始 JSON */}
-          {post.raw_json && (
+          {shown.raw_json && (
             <Collapsible open={rawOpen} onOpenChange={setRawOpen}>
               <CollapsibleTrigger asChild>
                 <Button variant="ghost" size="sm" className="text-muted-foreground">
@@ -258,7 +263,7 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
               </CollapsibleTrigger>
               <CollapsibleContent>
                 <pre className="max-h-80 overflow-auto rounded-md bg-muted p-3 text-xs">
-                  {post.raw_json}
+                  {shown.raw_json}
                 </pre>
               </CollapsibleContent>
             </Collapsible>

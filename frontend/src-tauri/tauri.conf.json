@@ -25,7 +25,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' http://127.0.0.1:* https://*.hdslb.com http://*.hdslb.com data: blob:; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:*"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' http://127.0.0.1:* https://*.hdslb.com http://*.hdslb.com https://*.sinaimg.cn http://*.sinaimg.cn https://*.wbcdn.cn http://*.wbcdn.cn data: blob:; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:*"
     }
   },
   "bundle": {

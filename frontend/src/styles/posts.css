@@ -22,6 +22,8 @@
   background-repeat: no-repeat;
   opacity: 0.18;
   pointer-events: none;
+  /* 换装淡入：key=头像 src，随场景切换淡入新纱罩（关键帧在 layout.css） */
+  animation: backdrop-in 0.25s ease-out backwards;
 }
 
 .hero-backdrop::after {
@@ -31,6 +33,34 @@
   background:
     linear-gradient(180deg, rgba(255, 251, 251, 0.55), rgba(255, 238, 242, 0.72)),
     radial-gradient(120% 90% at 50% 0%, rgba(255, 251, 251, 0.9), rgba(255, 251, 251, 0.35));
+}
+
+/* 自定义背景：全图清晰显示（opacity 1），纱罩 ::after 保留保文字可读 */
+.hero-backdrop.custom {
+  opacity: 1;
+}
+
+/* 背景工具组：卡片页工具行右上角浮片（ImagePlus 换背景）；
+   默认隐藏（opacity 0 + 禁点击），悬停工具行浮现，移出 900ms 后渐隐 */
+.bg-tools {
+  position: absolute;
+  right: 12px;
+  top: 18px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+
+.bg-tools.on {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.bg-set {
+  width: 32px;
 }
 
 /* 顶部工具条：贴面板顶（上方零缝隙），66px 行内光条贴顶居中（口播规格 1.1） */
@@ -52,11 +82,35 @@
   z-index: 1;
   flex: 1;
   min-height: 0;
+  /* 兄弟高度正确分配：操作钮行(flex:none) + 滚动区(flex:1)，杜绝整体 100% 高度溢出裁底 */
+  display: flex;
+  flex-direction: column;
+}
+
+.view-body:not(.scene-exit) {
+  animation: scene-in 0.22s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* reduced-motion：入场/换装动画一并禁用（退场 .scene-exit 已有独立守卫） */
+@media (prefers-reduced-motion: reduce) {
+  .view-body:not(.scene-exit) {
+    animation: none;
+  }
+
+  .hero-backdrop {
+    animation: none;
+  }
+
+  .actions-toggle svg,
+  .actions-extra {
+    transition: none;
+  }
 }
 
 /* 展示页滚动层：底部留白 134px；子元素全宽（设计稿 70px 侧距被无收缩子元素溢出抵消） */
 .hero-scroll {
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -66,14 +120,30 @@
 }
 
 /* 列表页滚动层 */
+/* 筛选条固定顶：不随帖子流滚动，天然分隔操作钮行与滚动区；
+   与列表内容同轴（900px）居中；此处非常驻滚动容器，胶囊阴影不再被纵向裁剪 */
+.chips-bar {
+  flex: none;
+  width: 100%;
+  padding: 10px 16px 8px;
+}
+
+.chips-bar-inner {
+  width: 100%;
+  max-width: 900px;
+  margin: 0 auto;
+}
+
 .list-scroll {
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 14px;
-  padding: 12px 16px 24px;
+  /* padding-top 落在滚动区剪裁缘之内、内容之上——卡片网格顶部阴影不被 overflow-y 切断 */
+  padding: 8px 16px 24px;
 }
 
 .list-scroll > .list-inner {
@@ -122,11 +192,101 @@
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
+  padding: 12px 16px 0;
 }
 
-.header-actions .btn-light {
-  background: rgba(255, 255, 255, 0.85);
+/* 账号切换器（多平台订阅：同一 V 的 bilibili/微博账号切换帖子目标） */
+.account-switch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: auto;
+  min-width: 0;
 }
+
+.acc-switch-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  /* 浮片化：白卡 + 2px 圆角 + 浮片阴影，去发丝边（不加斜切，保文本可读） */
+  border: none;
+  background: var(--c-bg-card);
+  box-shadow: var(--pill-shadow);
+  border-radius: 2px;
+  font-size: 12px;
+  color: rgba(30, 30, 30, 0.72);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, box-shadow 0.15s;
+}
+
+.acc-switch-btn:hover {
+  background: var(--pill-bg-hover);
+}
+
+.acc-switch-btn.on {
+  background: var(--c-primary-deep);
+  color: #fff;
+  font-weight: 600;
+}
+
+.acc-switch-platform {
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(251, 119, 161, 0.14);
+  color: var(--c-primary, #fb77a1);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.acc-switch-name {
+  display: inline-block;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+
+/* ── 右侧操作按钮组：可收起浮片群 ──
+   收起态 [展开钮][更新动态]；展开时 .actions-extra 向左滑出四钮并淡入，
+   max-width 0→480 驱动，margin-left 抵消父 gap 实现无缝贴合；
+   padding 出血给子钮浮片阴影防 overflow 裁切。 */
+.actions-toggle svg {
+  transition: transform 0.3s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.actions-toggle.open svg {
+  transform: rotate(180deg);
+}
+
+.actions-extra {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 0;
+  opacity: 0;
+  overflow: hidden;
+  transform: translateX(10px);
+  margin-left: -8px;
+  padding: 8px 0;
+  margin-block: -8px;
+  transition:
+    max-width 0.32s cubic-bezier(0.22, 0.61, 0.36, 1),
+    opacity 0.2s ease,
+    transform 0.32s cubic-bezier(0.22, 0.61, 0.36, 1),
+    margin-left 0.32s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.actions-extra.open {
+  max-width: 480px;
+  opacity: 1;
+  transform: none;
+  margin-left: 0;
+}
+
+
 
 /* Hero：主题展示栏（口播规格 1.2）：宽填充、纵向居中、间隔 10、头像距上缘 23 */
 .hero {
@@ -247,20 +407,31 @@
 .stat-pill {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 10px;
   width: 191px;
   height: 37px;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.94);
+  border-radius: 2px;
+  box-shadow: 1px 2px 4px rgba(15, 23, 42, 0.12);
+  padding-right: 12px;
   overflow: hidden;
 }
 
 .stat-pill.pink {
-  background: rgba(251, 119, 161, 1);
+  background: var(--pill-fill-pink);
 }
 
 .stat-pill.coral {
-  background: rgba(252, 112, 121, 1);
+  background: var(--pill-fill-coral);
+}
+
+/* 平台图像底：docs/design/pills 拷贝资产（现均为 191×37 全不透明同规格）。
+   100% 100% 强制铺满整盒：即使未来素材尺寸/透明不符也不会出现裁切或透视穿帮；
+   底色兜底仅防御未替换前的带透明角素材。 */
+.stat-pill.image {
+  background-size: 100% 100%;
+  background-position: center;
+  background-color: rgba(255, 82, 136, 0.9);
 }
 
 /* 平台 LOGO 占位框（后续替换为图片资源） */
@@ -285,7 +456,10 @@
   font-size: 26px;
   font-weight: 600;
   letter-spacing: 3px;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  /* 图像底可读性：浅色底上保证白字对比（用户指定追加） */
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
 
 /* 分隔饰条：设计稿 SVG（394×24，assets/icons/hero-divider.svg） */
@@ -303,8 +477,8 @@
   align-items: center;
   gap: 8px;
   height: 37px;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.94);
+  border-radius: 2px;
+  box-shadow: 1px 2px 4px rgba(15, 23, 42, 0.12);
   padding: 0 14px 0 6px;
   background: rgba(252, 112, 121, 1);
   color: #fff;
@@ -318,7 +492,8 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  flex-wrap: wrap;
+  /* 搜索栏永不掉行：超宽时由 .type-chips 行内横向滚动兜底 */
+  flex-wrap: nowrap;
 }
 
 /* 筛选行右侧工具：搜索浮片 + 时间筛选（浮片语言，与侧栏工具行一致） */
@@ -326,6 +501,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-shrink: 0;
 }
 
 .search-float {
@@ -369,28 +545,16 @@
   position: relative;
 }
 
+/* 时间筛选钮：配方走 .float-pill（斜切白卡）；overflow 会裁掉 ::before 阴影，
+   长区间文案的截断下沉到 .time-btn-label */
 .time-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 30px;
-  padding: 0 12px;
-  border: none;
-  border-radius: 999px;
-  background: #fff;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
-  color: var(--c-text-main);
-  font-family: inherit;
-  font-size: 12.5px;
-  cursor: pointer;
-  white-space: nowrap;
   max-width: 240px;
-  overflow: hidden;
 }
 
-.time-btn.active {
-  background: var(--c-primary-deep);
-  color: #fff;
+.time-btn-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .time-pop {
@@ -457,22 +621,30 @@
 }
 
 .time-pop-actions button:hover {
-  filter: brightness(0.96);
+  background: var(--pill-bg-hover);
 }
 
-/* 类型筛选 chips（设计稿 "默认" 标签样式） */
+/* 类型筛选 chips（设计稿 "默认" 标签样式）：
+   不换行，极端超宽时行内横向滚动兜底（右侧工具区雷打不动） */
 .type-chips {
   display: flex;
   gap: 8px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  min-width: 0;
+  overflow-x: auto;
+  /* overflow-x:auto 会把 overflow-y 计算为 auto，裁掉胶囊顶部/端部阴影；
+     padding 四向出血 + 负 margin 抵消布局高度，阴影完整显示 */
+  padding: 6px;
+  margin: -6px 0;
 }
 
 .type-chip {
-  border: 1px solid var(--c-border);
+  border: none;
   background: var(--c-bg-card);
   color: var(--c-text-sub);
   border-radius: 999px;
   padding: 4px 14px;
+  box-shadow: var(--pill-shadow);
   font-size: 13px;
   font-family: inherit;
   cursor: pointer;
@@ -480,7 +652,7 @@
 }
 
 .type-chip:hover {
-  border-color: var(--c-primary);
+  background: var(--pill-bg-hover);
   color: var(--c-accent);
 }
 
@@ -509,17 +681,29 @@
   display: flex;
   flex-direction: row;
   background: var(--c-bg-card);
-  border: 1px solid var(--c-border);
-  border-radius: var(--radius-card);
+  /* 浮片化：2px 圆角 + 浮片阴影，去发丝边（阴影绘于边框外，自身 overflow:hidden 不裁） */
+  border: none;
+  border-radius: 2px;
+  box-shadow: var(--pill-shadow);
   overflow: hidden;
   cursor: pointer;
-  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 .post-card:hover {
   transform: translateY(-2px);
-  border-color: var(--c-primary);
-  box-shadow: var(--shadow-card);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.16);
+}
+
+/* hover 标题变色（替代旧 border-color 变主色） */
+.post-card:hover .post-card-title {
+  color: var(--c-accent);
+}
+
+/* 键盘聚焦态：仅描边，不依赖边框色（已无边框） */
+.post-card:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
 }
 
 .post-card-cover {
@@ -537,18 +721,35 @@
   object-fit: cover;
 }
 
-.post-card-cover-fallback {
+/* 纯文字帖封面：纸纹斜条底 + 居中大标题（替代原摘要兜底，避免空洞） */
+.post-card-cover-paper {
   width: 100%;
   height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  background-color: #fcf7ec;
+  background-image: repeating-linear-gradient(
+    45deg,
+    rgba(186, 164, 120, 0.16) 0,
+    rgba(186, 164, 120, 0.16) 1px,
+    transparent 1px,
+    transparent 12px
+  );
+  overflow: hidden;
+}
+
+.paper-title {
+  font-family: var(--font-title);
+  font-size: 20px;
+  font-weight: 700;
+  color: #3a332b;
+  line-height: 1.5;
+  text-align: center;
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 4;
-  align-items: center;
-  justify-content: center;
-  padding: 14px;
-  font-size: 13px;
-  color: var(--c-text-sub);
-  line-height: 1.6;
   overflow: hidden;
 }
 
@@ -557,7 +758,7 @@
   top: 8px;
   left: 8px;
   padding: 1px 8px;
-  border-radius: 999px;
+  border-radius: 3px;
   background: rgba(0, 0, 0, 0.45);
   color: #fff;
   font-size: 12px;
@@ -625,6 +826,7 @@
 .post-card-date {
   font-size: 12px;
   color: var(--c-text-sub);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
   flex-shrink: 0;
 }
@@ -636,11 +838,12 @@
   gap: 3px;
   padding: 1px 8px;
   border: 1px solid var(--c-border);
-  border-radius: 999px;
+  border-radius: 3px;
   background: var(--c-bg-page);
   color: var(--c-text-sub);
   font-size: 12px;
   line-height: 18px;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
@@ -713,6 +916,12 @@
   }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .sk-block {
+    animation: none;
+  }
+}
+
 .sk .sk-line {
   height: 14px;
 }
@@ -734,10 +943,52 @@
 }
 
 /* 底部：分页 + 空态/加载态 */
-.posts-footer {
+/* 无限滚动尾巴：哨兵（1px 不可见，仅驱动 IO）+ 加载中行 + 到底标记 */
+.load-sentinel {
+  height: 1px;
+  flex: none;
+}
+
+.load-more-tip {
   display: flex;
+  align-items: center;
   justify-content: center;
-  padding: 8px 0 16px;
+  padding: 10px 0;
+  color: var(--c-text-sub);
+  font-size: 13px;
+}
+
+.load-end {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: center;
+  padding: 14px 0 6px;
+  color: var(--c-text-sub);
+  font-size: 12px;
+  opacity: 0.65;
+}
+
+.load-end::before,
+.load-end::after {
+  content: '';
+  height: 1px;
+  width: 48px;
+  background: rgba(15, 23, 42, 0.12);
+}
+
+.load-more-error {
+  gap: 6px;
+}
+
+.load-more-error button {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--c-accent, #fb77a1);
+  font-size: 13px;
+  cursor: pointer;
+  text-decoration: underline;
 }
 
 .posts-placeholder {
@@ -756,5 +1007,70 @@
   .post-card-cover {
     width: 100%;
     aspect-ratio: 16 / 9;
+  }
+}
+
+/* ── 详情抽屉动效：对齐全局运动语言（微位移+淡出/淡入，遮罩与面板严格同步）──
+   unlayered CSS 压过 tw-animate-css 的 utilities layer；覆盖 animation-name 后
+   animationend 照常触发，radix 仍等动画结束再卸载 */
+[data-slot='sheet-content'] {
+  animation-name: drawer-in;
+  animation-duration: 260ms;
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+[data-slot='sheet-content'][data-state='closed'] {
+  animation-name: drawer-out;
+  animation-duration: 200ms;
+  animation-timing-function: cubic-bezier(0.55, 0, 0.55, 0.2);
+}
+
+/* 遮罩：完全自持动画（不依赖 tw-animate 的 exit/变量链——那条链运行时解析
+   失败会导致瞬消），与面板同拍渐隐/渐入；fill both 防卸载前闪回 */
+[data-slot='sheet-overlay'][data-state='closed'] {
+  animation-name: drawer-veil-out;
+  animation-duration: 200ms;
+  animation-timing-function: cubic-bezier(0.55, 0, 0.55, 0.2);
+  animation-fill-mode: both;
+}
+
+[data-slot='sheet-overlay'][data-state='open'] {
+  animation-name: drawer-veil-in;
+  animation-duration: 260ms;
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+  animation-fill-mode: both;
+}
+
+/* 单帧微位移：插值到元素自身终态（面板基态 transform:none / 遮罩基态 opacity 1） */
+@keyframes drawer-in {
+  from {
+    opacity: 0;
+    transform: translateX(48px);
+  }
+}
+
+@keyframes drawer-out {
+  to {
+    opacity: 0;
+    transform: translateX(48px);
+  }
+}
+
+@keyframes drawer-veil-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes drawer-veil-out {
+  to {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-slot='sheet-content'],
+  [data-slot='sheet-overlay'] {
+    animation-duration: 0.01ms;
   }
 }

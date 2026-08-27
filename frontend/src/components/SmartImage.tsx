@@ -36,11 +36,16 @@ export default function SmartImage({
   preview = true,
   proxyPreview = true,
 }: Props) {
-  const [stage, setStage] = useState<Stage>('direct')
   const [open, setOpen] = useState(false)
 
   const direct = src ? normalizeImageUrl(src) : undefined
   const proxy = direct ? imgProxyUrl(direct) : undefined
+  // 微博图床(sinaimg/wbcdn)防盗链对应用自身来源一律 403：直连注定失败，
+  // 初始 stage 直接走代理（img-proxy 已按主机带 weibo.com Referer，可正常拉取）
+  const needProxyFromStart =
+    !!direct &&
+    (direct.includes('sinaimg.cn') || direct.includes('wbcdn.cn'))
+  const [stage, setStage] = useState<Stage>(needProxyFromStart ? 'proxy' : 'direct')
   const current = stage === 'direct' ? direct : stage === 'proxy' ? proxy : undefined
   // 灯箱优先代理（防盗链），代理不可用回退直连
   const previewSrc = (proxyPreview && proxy) || direct

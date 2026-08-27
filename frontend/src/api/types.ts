@@ -26,6 +26,7 @@ export interface VTuber {
   debut_date: string | null
   setting: string | null
   avatar: string | null
+  background_path: string | null
   notes: string | null
   created_at: string | null
   updated_at: string | null
@@ -97,6 +98,10 @@ export interface FetchPostsResult {
     stored: number
     skipped: number
   }
+  /** 任一账号触发风控提前结束（B：前端据此提示"部分内容未抓全"） */
+  rate_limited?: boolean
+  /** 视频缺失估计 = B站参考总数 - 本轮已覆盖（方案 2） */
+  video_missing?: number | null
   details?: Record<string, unknown>[]
 }
 
@@ -105,6 +110,8 @@ export interface UpdatePostsResult {
   status: string
   message?: string
   archived?: number
+  /** 任一账号触发风控/中断（方案 1：前端据此提示） */
+  rate_limited?: boolean
   total?: {
     dynamics: number
     stored: number
@@ -139,12 +146,32 @@ export interface AccountFetchStatus {
   total: number
   /** 本轮任务内已完成的账号字段快照（按完成顺序追加），供侧栏就地增量刷新 */
   recent: AccountSnapshot[]
+  /** 最近一次任务完成汇总（方案 1：TopBar 据此弹完成报告） */
+  last_result?: {
+    seq: number
+    label: string
+    success: number
+    failed: number
+    skipped: number
+  }
 }
 
 /** GET /vtuber/fetch-status：帖子抓取实时状态 */
 export interface PostFetchStatus {
   running: boolean
   target: string | null
+  /** 最近一次任务完成汇总（方案 1+2：含中断账号与视频缺失估计） */
+  last_result?: {
+    seq: number
+    kind: string
+    label: string
+    videos: number
+    dynamics: number
+    stored: number
+    skipped: number
+    issues: { label: string; stop_reason: string; error: string | null }[]
+    video_missing: number | null
+  }
 }
 
 export interface FetchStatus {
@@ -152,8 +179,7 @@ export interface FetchStatus {
   post: PostFetchStatus
 }
 
-/** stats_json 解析后的统计字段（B 站口径） */
-export interface PostStatsJson {
+/** stats_json 解析后的统计字段（B 站口径） */export interface PostStatsJson {
   view?: number
   like?: number
   comment?: number
@@ -207,4 +233,25 @@ export interface PostBodyJson {
   room_id?: string
   live_status?: number
   [key: string]: unknown
+}
+
+/** GET /auth/{platform}/status：平台登录态 */
+export interface AuthStatus {
+  logged_in: boolean
+  needs_login: boolean
+  uid: string | null
+  name: string | null
+}
+
+/** POST /auth/{platform}/qr/start */
+export interface QrStartResult {
+  qr_id: string
+  url?: string
+  image?: string
+}
+
+/** GET /auth/{platform}/qr/check */
+export interface QrCheckResult {
+  status: 'waiting' | 'scanned' | 'confirmed' | 'expired' | 'failed'
+  detail?: string
 }

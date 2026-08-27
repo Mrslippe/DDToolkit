@@ -28,12 +28,15 @@ function SheetPortal({
   return <SheetPrimitive.Portal data-slot="sheet-portal" {...props} />
 }
 
-function SheetOverlay({
-  className,
-  ...props
-}: React.ComponentProps<typeof SheetPrimitive.Overlay>) {
+/* forwardRef 必须：DialogPortal 的 Presence 靠 ref 测量 portal 子元素决定
+   退场等待；React 18 下普通函数组件丢 ref → 遮罩关闭时被判定无动画瞬消 */
+const SheetOverlay = React.forwardRef<
+  React.ElementRef<typeof SheetPrimitive.Overlay>,
+  React.ComponentPropsWithoutRef<typeof SheetPrimitive.Overlay>
+>(({ className, ...props }, ref) => {
   return (
     <SheetPrimitive.Overlay
+      ref={ref}
       data-slot="sheet-overlay"
       className={cn(
         "fixed inset-0 z-50 bg-black/50 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0",
@@ -42,7 +45,8 @@ function SheetOverlay({
       {...props}
     />
   )
-}
+})
+SheetOverlay.displayName = "SheetOverlay"
 
 function SheetContent({
   className,

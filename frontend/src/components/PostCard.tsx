@@ -13,6 +13,8 @@ import './../styles/posts.css'
 
 interface Props {
   post: Post
+  /** 列表内序号：驱动依次入场动画（--rise-i） */
+  index: number
   /** 打开详情抽屉（稳定引用；组件已 memo，避免父级每次渲染新建闭包击穿缓存） */
   onOpen: (post: Post) => void
 }
@@ -25,7 +27,7 @@ function formatDuration(sec?: number): string | null {
 }
 
 /** 帖子卡片（设计稿 16_335 详情卡样式）：封面 + 类型角标 + 标题/摘要 + 统计徽章行 */
-const PostCard = memo(function PostCard({ post, onOpen }: Props) {
+const PostCard = memo(function PostCard({ post, index, onOpen }: Props) {
   // 解析结果按原始 JSON 缓存：body_json 可能很大（B站完整 body），
   // 抽屉开合/loading 翻转等无关渲染不再重复 JSON.parse
   const body = useMemo(() => parseBody(post.body_json), [post.body_json])
@@ -36,13 +38,31 @@ const PostCard = memo(function PostCard({ post, onOpen }: Props) {
 
   const coverSrc = post.cover_url ?? images[0]?.url
 
+  // 键盘可达：光标 Tab 到卡片，Enter / Space 打开详情（Space 需 preventDefault 防滚动）
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      onOpen(post)
+    }
+  }
+
   return (
-    <article className="post-card" onClick={() => onOpen(post)}>
+    <article
+      className="post-card anim-rise"
+      style={{ '--rise-i': index } as React.CSSProperties}
+      role="button"
+      tabIndex={0}
+      aria-label={`查看帖子：${title}`}
+      onClick={() => onOpen(post)}
+      onKeyDown={handleKeyDown}
+    >
       <div className="post-card-cover">
         {coverSrc ? (
           <SmartImage src={coverSrc} preview={false} className="post-card-cover-img" />
         ) : (
-          <div className="post-card-cover-fallback">{post.summary ?? title}</div>
+          <div className="post-card-cover-paper">
+            <span className="paper-title">{title}</span>
+          </div>
         )}
         <span className="post-card-type">{postTypeLabel(post.type)}</span>
         {duration && <span className="post-card-duration">{duration}</span>}

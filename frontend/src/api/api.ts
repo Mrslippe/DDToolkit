@@ -1,4 +1,4 @@
-import type { FetchPostsResult, FetchResult, FetchStatus, PoolItem, PostPage, PostStats, UpdatePostsResult, VTuber } from './types'
+import type { Account, FetchPostsResult, FetchResult, FetchStatus, PoolItem, PostPage, PostStats, UpdatePostsResult, VTuber } from './types'
 
 /**
  * API 基地址：
@@ -56,6 +56,17 @@ export const api = {
   /** 单个 VTuber */
   getVtuber: (id: number) => request<VTuber>(`/vtuber/${id}`),
 
+  /** 上传卡片页自定义背景，返回更新后的 VTuber（含 background_path） */
+  uploadBackground: (id: number, file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return request<VTuber>(`/vtuber/${id}/background`, { method: 'POST', body: form })
+  },
+
+  /** 清除自定义背景，回退头像铺底，返回更新后的 VTuber */
+  clearBackground: (id: number) =>
+    request<VTuber>(`/vtuber/${id}/background`, { method: 'DELETE' }),
+
   /** 解除订阅：删除 VTuber（连带删其账号与全部帖子记录） */
   deleteVtuber: (id: number) => request<void>(`/vtuber/${id}`, { method: 'DELETE' }),
 
@@ -90,15 +101,25 @@ export const api = {
     return request<UpdatePostsResult>(`/vtuber/update-posts${q}`, { method: 'POST' })
   },
 
-  /** 按 VTuber 名字触发帖子抓取 */
-  fetchPostsByName: (name: string, videoPages = 2, dynamicsPages = 3) => {
+  /** 按 VTuber 名字触发帖子抓取；full=true → 后台全量（视频+动态 -1，任务立即返回） */
+  fetchPostsByName: (name: string, videoPages = 2, dynamicsPages = 3, full = false, platform = 'bilibili') => {
     const q = new URLSearchParams({
       name,
+      platform,
       video_pages: String(videoPages),
       dynamics_pages: String(dynamicsPages),
     })
+    if (full) q.set('full', 'true')
     return request<FetchPostsResult>(`/vtuber/fetch-posts?${q.toString()}`, { method: 'POST' })
   },
+
+  /** 给 VTuber 添加平台账号（bilibili / weibo；添加后可触发账号信息抓取） */
+  addAccount: (vtuberId: number, data: { platform: string; platform_uid: string; display_name?: string }) =>
+    request<Account>('/vtuber/' + vtuberId + '/accounts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    }),
 
   // ── 候选池 / 收录（v0.5） ──────────────────────────────────────
 
@@ -133,6 +154,26 @@ export const api = {
     request<{ status: string; archived: number }>(`/vtuber/batch/archive?days=${days}`, {
       method: 'POST',
     }),
+
+  // ── 登录（B 站 / 微博统一扫码 UI）─────────────────────────────────
+
+  /** 生成扫码登录二维码：bilibili 返回 url；weibo 返回 image(base64 data URL) */
+  startQrLogin: (platform: 'bilibili' | 'weibo') =>
+    request<{ qr_id: string; url?: string; image?: string }>(`/auth/${platform}/qr/start`, {
+      method: 'POST',
+    }),
+
+  /** 轮询扫码状态：waiting / scanned / confirmed / expired / failed */
+  checkQrLogin: (platform: 'bilibili' | 'weibo', qrId: string) =>
+    request<{ status: string; detail?: string }>(
+      `/auth/${platform}/qr/check?qr_id=${encodeURIComponent(qrId)}`,
+    ),
+
+  /** 登录态（TopBar 徽章 / 登录对话框展示） */
+  authStatus: (platform: 'bilibili' | 'weibo') =>
+    request<{ logged_in: boolean; needs_login: boolean; uid: string | null; name: string | null }>(
+      `/auth/${platform}/status`,
+    ),
 }
 
 /** 后端返回的相对资源路径（如 static/avatars/x.jpg）→ 可访问 URL */

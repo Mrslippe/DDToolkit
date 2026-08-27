@@ -1,4 +1,9 @@
-/* ── Design Tokens：MomoTalk 极简风（方形化 + 深色图标栏）── */
+/* ── Design Tokens：MomoTalk 极简风（方形化 + 深色图标栏）──
+   圆角/阴影豁免收敛为三族（详见 docs/UI-MAP.md）：
+   ① 列表工具行「浮片」（斜切白卡 --pill-skew）
+   ② 帖子面板「药丸族」（type-chip/search/角标/stat-badge/duration/glow-bar）
+   ③ 功能性气泡（live-tag / popover 阴影 / 粉丝 stat-pill）
+   其余一律回「方形零圆角零阴影」总纲。 */
 
 @font-face {
   font-family: 'Alimama FangYuanTi VF';
@@ -7,7 +12,7 @@
   font-display: swap;
 }
 
-/* 设计稿专用字体（源自 docs/react Pixso 导出）
+/* 设计稿专用字体（源自 docs/design/react-* Pixso 导出）
    已子集化：QianTu 仅含 LOGO 字母 "D"，ZiXiao 仅含标题 "DDtoolkit"（约 14.8MB → 2.9MB） */
 @font-face {
   font-family: 'QianTu XiaoTuTi';
@@ -36,14 +41,29 @@
   --c-bg-list: #fffbfb;        /* 列表栏底（Frame41109 设计稿同页近白） */
   --c-border: rgba(210, 216, 222, 0.55);   /* 发丝级描边 */
 
-  /* 图标栏（深蓝灰实底，精确对齐 Frame4172 设计稿） */
+  /* 图标栏（深蓝灰实底） */
   --c-rail: #4b5a6f;
   --c-rail-active-bg: #647489;
-  --rail-width: 79px;
+  --rail-width: 50px;
+
+/* 浮片系统（自定义风格：斜切圆角矩形白卡，豁免全局方形规则） */
+  --pill-bg: #ffffff;
+  --pill-bg-hover: #eef1f5;
+  --pill-radius: 3px;
+  --pill-skew: -10deg;
+  --pill-h-sm: 25px;
+  --pill-h-md: 30px;
+  --pill-shadow: 0 2px 6px rgba(15, 23, 42, 0.12);
+  --pill-fg: #3d4a5c;
+  --pill-ring: inset 0 0 0 1.5px var(--c-primary);
+
+  /* 粉丝徽章底色（加深版：白字 26px 对比从 2.5:1 → 3.4:1） */
+  --pill-fill-pink: #e35d8b;
+  --pill-fill-coral: #e05261;
 
   /* 文字 */
   --c-text-main: #4b5a6b;
-  --c-text-sub: #647489;
+  --c-text-sub: #5b6c7e;   /* 加深一档：浅粉底(--secondary)上也稳 ≥4.5:1 对比 */
   --c-text-on-primary: #ffffff;
 
   /* 圆角 / 阴影：极简方形语言——卡片与选中框零圆角零阴影 */
@@ -61,9 +81,9 @@
   --font-logo: 'QianTu XiaoTuTi', var(--font-family);
   --font-title: 'ZiXiao HunRui YiHe', var(--font-family);
 
-  /* 尺寸（严格按参考图比例 @1440×800；顶栏 69px 来自 Pixso 设计稿） */
-  --topbar-height: 69px;
+  /* 尺寸（紧凑壳层：顶栏 40 / 工具栏 50；侧栏 492 沿用档案页规格） */
+  --topbar-height: 40px;
   --sidebar-width: 492px;
   /* 窗口圆角度数（L3 自绘方案，随改随生效） */
-  --radius-window: 12px;
+  --radius-window: 4px;
 }

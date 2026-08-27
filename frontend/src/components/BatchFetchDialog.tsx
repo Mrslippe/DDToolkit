@@ -9,6 +9,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { api } from '../api/api'
+import { useFetchBusy } from '../fetchBusy'
 
 interface Props {
   open: boolean
@@ -60,6 +61,7 @@ const ACTIONS: BatchAction[] = [
 /** 批量任务浮窗：四项后台任务触发器；进度经 TopBar 状态胶囊反馈。 */
 export default function BatchFetchDialog({ open, onOpenChange }: Props) {
   const [busyKey, setBusyKey] = useState<string | null>(null)
+  const fetchBusy = useFetchBusy()
 
   const run = async (a: BatchAction) => {
     setBusyKey(a.key)
@@ -85,7 +87,10 @@ export default function BatchFetchDialog({ open, onOpenChange }: Props) {
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>批量任务</DialogTitle>
-          <DialogDescription>任务后台执行；运行中再次触发会被拒绝。</DialogDescription>
+          <DialogDescription>
+            任务后台执行；运行中再次触发会被拒绝。
+            {fetchBusy ? '（当前已有抓取任务进行中）' : ''}
+          </DialogDescription>
         </DialogHeader>
 
         <div className="flex flex-col gap-2">
@@ -93,7 +98,8 @@ export default function BatchFetchDialog({ open, onOpenChange }: Props) {
             <button
               key={a.key}
               type="button"
-              disabled={busyKey !== null}
+              disabled={busyKey !== null || (fetchBusy && a.key !== 'archive')}
+              title={fetchBusy && a.key !== 'archive' ? '已有抓取任务进行中，请稍后再试' : undefined}
               onClick={() => run(a)}
               className="flex items-center gap-3 border border-border p-3 text-left transition-colors hover:bg-[var(--sel-bg-hover)] disabled:opacity-60"
             >

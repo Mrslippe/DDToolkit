@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { Copy, Minus, Square, X } from 'lucide-react'
+import { Copy, LogIn, Minus, Square, X } from 'lucide-react'
 import spinnerSvg from '../assets/icons/Frame_41_8.svg'
+import LoginDialog from './LoginDialog'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -12,9 +13,20 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { useIsMaximized } from '../hooks/useIsMaximized'
+import { setFetchBusy } from '../fetchBusy'
 import { api } from '../api/api'
-import type { FetchStatus } from '../api/types'
+import type { AuthStatus, FetchStatus, PostFetchStatus } from '../api/types'
 import './../styles/layout.css'
+
+/** 中断原因 → 可读文案（已完成对话框用） */
+const REASON_TEXT: Record<string, string> = {
+  rate_limited: '风控截断',
+  network_error: '网络失败',
+  error: '异常',
+  archived_boundary: '归档边界（预期）',
+  page_limit: '页数上限（预期）',
+  stopped_early: '增量命中（预期）',
+}
 
 const POLL_ACTIVE_MS = 3000 // 有任务运行时的高频轮询
 const POLL_IDLE_MS = 10000 // 空闲时的低频轮询
@@ -28,7 +40,7 @@ async function tauriWindow() {
 }
 
 /**
- * 顶栏（视觉严格按 docs/react Pixso 设计稿 Frame411）：
+ * 顶栏（视觉严格按 docs/design/react-topbar Pixso 设计稿 Frame411）：
  * 千图小兔体 LOGO + 字小魂锐艺黑标题 + 居中状态文字 + 通栏窗口控制钮。
  * - 状态来自 GET /vtuber/fetch-status 轮询；抓取中显示设计稿加载图标；
  *   任务结束沿触发 'ddtoolkit:fetch-idle' 事件，供 VtuberSidebar 等组件刷新数据。
@@ -39,12 +51,27 @@ export default function TopBar() {
   const [status, setStatus] = useState<FetchStatus | null>(null)
   const [confirmClose, setConfirmClose] = useState(false)
   const [pillMsg, setPillMsg] = useState<string | null>(null)
+  // 登录：浮窗开关 + 两平台登录态（约 60s 轮询一次，供入口徽章提示）
+  const [loginOpen, setLoginOpen] = useState(false)
+  const [auths, setAuths] = useState<{ bili: AuthStatus | null; weibo: AuthStatus | null }>({
+    bili: null,
+    weibo: null,
+  })
+  // 全量抓取完成的常驻报告：需用户手动关闭（AlertDialog 默认不支持点外部/ESC 关闭）
+  const [doneReport, setDoneReport] = useState<NonNullable<PostFetchStatus['last_result']> | null>(null)
   const prevRunning = useRef(false)
   const seenRecent = useRef(0)
   // 轮询并发保护：kick-poll 在请求 in-flight 期间再次触发时只打标记，
   // 请求结束后立即补一轮——否则会并行跑两条轮询链，频率翻倍且不收敛
   const inFlight = useRef(false)
   const pendingKick = useRef(false)
+  // 任务完成汇总（方案 1+2）：首次轮询只记基线；仅「轮询曾目睹运行」的任务完成才弹报告
+  const seenAccSeq = useRef(-1)
+  const seenPostSeq = useRef(-1)
+  const prevAccRunning = useRef(false)
+  const prevPostRunning = useRef(false)
+  const sawAccRun = useRef(false)
+  const sawPostRun = useRef(false)
 
   useEffect(() => {
     let cancelled = false
@@ -61,6 +88,7 @@ export default function TopBar() {
         const s = await api.getFetchStatus()
         if (cancelled) return
         active = s.account.running || s.post.running
+        setFetchBusy(s.account.running, s.post.running)
 
         // 账号快照增量 → 派发事件，侧栏就地刷新（每完成一条触发一次）
         const recent = s.account.recent ?? []
@@ -76,6 +104,55 @@ export default function TopBar() {
 
         // 新任务启动时立即让位给实时状态显示
         if (active) setPillMsg(null)
+
+        // 观察到「空闲→运行」：记为曾目睹运行。只有轮询目睹过的任务完成时才弹
+        // 完成报告——手动快速任务（同步按钮已在页面内反馈）大概率在目睹前结束，
+        // 不会被重复播报；长任务/后台任务则必然被目睹并获得完成汇总（方案 1+2）。
+        if (s.account.running && !prevAccRunning.current) sawAccRun.current = true
+        if (s.post.running && !prevPostRunning.current) sawPostRun.current = true
+        prevAccRunning.current = s.account.running
+        prevPostRunning.current = s.post.running
+
+        const accRes = s.account.last_result
+        if (accRes && accRes.seq !== seenAccSeq.current) {
+          if (seenAccSeq.current < 0) {
+            seenAccSeq.current = accRes.seq // 首次轮询仅记基线，不弹报告
+          } else if (sawAccRun.current && !s.account.running) {
+            seenAccSeq.current = accRes.seq
+            sawAccRun.current = false
+            window.dispatchEvent(
+              new CustomEvent('ddtoolkit:pill-message', {
+                detail: {
+                  text: `账号信息抓取完成 · 成功 ${accRes.success ?? 0} · 失败 ${accRes.failed ?? 0}`,
+                },
+              }),
+            )
+          }
+        }
+        const postRes = s.post.last_result
+        if (postRes && postRes.seq !== seenPostSeq.current) {
+          if (seenPostSeq.current < 0) {
+            seenPostSeq.current = postRes.seq
+          } else if (sawPostRun.current && !s.post.running) {
+            seenPostSeq.current = postRes.seq
+            sawPostRun.current = false
+            if (postRes.kind === 'full_all' || postRes.kind === 'full_vtuber') {
+              // 全量抓取完成 → 常驻对话框，需用户手动关闭（内容含全部中断账号）
+              setDoneReport(postRes)
+            } else {
+              // 其余后台任务（如批量更新动态）仍走瞬时胶囊
+              let text = `帖子抓取完成 · 存储 ${postRes.stored ?? 0} · 跳过 ${postRes.skipped ?? 0}`
+              if (postRes.video_missing) {
+                text += ` · 视频可能缺 ${postRes.video_missing}`
+              } else if (postRes.issues?.length) {
+                text += ` · ${postRes.issues.length} 处中断(${postRes.issues[0].stop_reason})`
+              }
+              window.dispatchEvent(
+                new CustomEvent('ddtoolkit:pill-message', { detail: { text } }),
+              )
+            }
+          }
+        }
 
         setStatus((prev) => {
           const wasRunning = prev ? prev.account.running || prev.post.running : prevRunning.current
@@ -115,6 +192,28 @@ export default function TopBar() {
     const kick = () => pollRef.current?.()
     window.addEventListener('ddtoolkit:kick-poll', kick)
     return () => window.removeEventListener('ddtoolkit:kick-poll', kick)
+  }, [])
+
+  // 登录态轮询：约 60s 一次，驱动入口徽章（B 站会话过期 → 红点提示扫码）
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      try {
+        const [b, w] = await Promise.all([
+          api.authStatus('bilibili'),
+          api.authStatus('weibo'),
+        ])
+        if (!cancelled) setAuths({ bili: b, weibo: w })
+      } catch {
+        /* 后端不可达时保持上次状态 */
+      }
+    }
+    void load()
+    const timer = window.setInterval(load, 60_000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
   }, [])
 
   // 成功类操作提示覆盖态：优先于常规状态文案，PILL_MS 后自动还原；
@@ -182,6 +281,22 @@ export default function TopBar() {
 
       <div className="topbar-spacer" />
 
+      {/* 登录入口：B 站会话过期时红点徽章提示扫码 */}
+      <div className="topbar-login">
+        <button
+          className="topbar-login-btn"
+          title={
+            auths.bili?.needs_login
+              ? 'B 站登录已过期，点击扫码登录'
+              : '账号登录（B 站 / 微博）'
+          }
+          onClick={() => setLoginOpen(true)}
+        >
+          <LogIn className="size-[16px]" />
+          {auths.bili?.needs_login && <i className="topbar-login-badge" />}
+        </button>
+      </div>
+
       {/* Web 下仅装饰（禁用）；桌面端接原生窗口控制 */}
       <div className="topbar-window-controls">
         <button
@@ -190,7 +305,7 @@ export default function TopBar() {
           title={isTauri ? '最小化' : '最小化（桌面端可用）'}
           onClick={handleMinimize}
         >
-          <Minus className="size-[30px]" />
+          <Minus className="size-[16px]" />
         </button>
         <button
           className="topbar-win-btn"
@@ -198,7 +313,7 @@ export default function TopBar() {
           title={isMax ? '还原' : '最大化'}
           onClick={handleToggleMaximize}
         >
-          {isMax ? <Copy className="size-5" /> : <Square className="size-5" />}
+            {isMax ? <Copy className="size-[13px]" /> : <Square className="size-[13px]" />}
         </button>
         <button
           className="topbar-win-btn close"
@@ -206,9 +321,45 @@ export default function TopBar() {
           title={isTauri ? '关闭' : '关闭（桌面端可用）'}
           onClick={handleClose}
         >
-          <X className="size-[30px]" />
+          <X className="size-[16px]" />
         </button>
       </div>
+
+      <LoginDialog open={loginOpen} onOpenChange={setLoginOpen} />
+
+      {/* 全量抓取完成报告：常驻对话框，仅「知道了」可关闭（AlertDialog 不响应外部点击/ESC） */}
+      <AlertDialog
+        open={doneReport !== null}
+        onOpenChange={(o) => {
+          if (!o) setDoneReport(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>全量帖子抓取完成</AlertDialogTitle>
+            <AlertDialogDescription>
+              存储 {doneReport?.stored ?? 0} · 跳过 {doneReport?.skipped ?? 0}
+              {doneReport?.video_missing ? ` · 视频可能缺 ${doneReport.video_missing}` : ''}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {doneReport && doneReport.issues.length > 0 && (
+            <div className="max-h-60 overflow-y-auto rounded border border-border p-3 text-left text-xs text-muted-foreground">
+              <div className="mb-1.5 font-medium text-foreground">
+                中断账号（{doneReport.issues.length}）
+              </div>
+              {doneReport.issues.map((it, i) => (
+                <p key={i} className="py-0.5">
+                  {it.label} · {REASON_TEXT[it.stop_reason] ?? it.stop_reason}
+                  {it.error ? `：${it.error}` : ''}
+                </p>
+              ))}
+            </div>
+          )}
+          <AlertDialogFooter>
+            <AlertDialogAction onClick={() => setDoneReport(null)}>知道了</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={confirmClose} onOpenChange={setConfirmClose}>
         <AlertDialogContent>

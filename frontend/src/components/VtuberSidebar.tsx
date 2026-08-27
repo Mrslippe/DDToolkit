@@ -2,13 +2,6 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Download, Plus, Search } from 'lucide-react'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Skeleton } from '@/components/ui/skeleton'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import AddVtuberDialog from './AddVtuberDialog'
 import BatchFetchDialog from './BatchFetchDialog'
 import { useLocation, useNavigate, matchPath } from 'react-router-dom'
@@ -158,7 +151,12 @@ export default function VtuberSidebar() {
   const [error, setError] = useState<string | null>(null)
 
   const [query, setQuery] = useState('')
-  const [liveFilter, setLiveFilter] = useState<'all' | 'live' | 'offline'>('all')
+  // 组合筛选：组内多选 OR、组间 AND，空数组=该组不生效（替代原单选直播过滤）
+  type FilterState = { live: string[]; platform: string[]; faction: string[] }
+  const EMPTY_FILTERS: FilterState = { live: [], platform: [], faction: [] }
+  const [filters, setFilters] = useState<FilterState>(EMPTY_FILTERS)
+  const [filterOpen, setFilterOpen] = useState(false)
+  const filterWrapRef = useRef<HTMLDivElement>(null)
   // 排序逻辑保留（后续接入筛选浮窗）；当前恒为默认顺序
   const [sortKey] = useState<SortKey>('default')
   const [addOpen, setAddOpen] = useState(false)
@@ -222,8 +220,15 @@ export default function VtuberSidebar() {
   const filtered = useMemo(() => {
     const kw = query.trim().toLowerCase()
     let list = vtubers
-    if (liveFilter !== 'all') {
-      list = list.filter((v) => (liveFilter === 'live' ? isLive(v) : !isLive(v)))
+    if (filters.live.length > 0) {
+      list = list.filter((v) => filters.live.includes(isLive(v) ? 'live' : 'offline'))
+    }
+    if (filters.platform.length > 0) {
+      list = list.filter((v) => v.accounts.some((a) => filters.platform.includes(a.platform)))
+    }
+    if (filters.faction.length > 0) {
+      // 阵营筛选激活时，无阵营条目被排除（已知边界）
+      list = list.filter((v) => !!v.faction && filters.faction.includes(v.faction))
     }
     if (kw) {
       list = list.filter(
@@ -240,7 +245,40 @@ export default function VtuberSidebar() {
       list = [...list].sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'))
     }
     return list
-  }, [vtubers, query, liveFilter, sortKey])
+  }, [vtubers, query, filters, sortKey])
+
+  // 筛选弹窗选项：平台 / 阵营从已载数据动态提取（阵营剔除空值）
+  const platformOptions = useMemo(
+    () => [...new Set(vtubers.flatMap((v) => v.accounts.map((a) => a.platform)))],
+    [vtubers],
+  )
+  const factionOptions = useMemo(
+    () => [...new Set(vtubers.map((v) => v.faction).filter((f): f is string => !!f))],
+    [vtubers],
+  )
+  const filterActive =
+    filters.live.length > 0 || filters.platform.length > 0 || filters.faction.length > 0
+
+  // 组内多选切换（即时生效，无应用钮）
+  const toggleFilter = useCallback((group: keyof FilterState, value: string) => {
+    setFilters((prev) => {
+      const cur = prev[group]
+      const next = cur.includes(value) ? cur.filter((x) => x !== value) : [...cur, value]
+      return { ...prev, [group]: next }
+    })
+  }, [])
+
+  // 筛选弹窗：点击面板外自动关闭（与帖子页 time-pop 同模式）
+  useEffect(() => {
+    if (!filterOpen) return
+    const onDown = (e: MouseEvent) => {
+      if (filterWrapRef.current && !filterWrapRef.current.contains(e.target as Node)) {
+        setFilterOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [filterOpen])
 
   const matched = matchPath('/vtubers/:id', location.pathname)
   const { bar, thumbProps } = useOverlayScrollbar(sidebarRef, `${loading}|${filtered.length}`)
@@ -282,7 +320,7 @@ export default function VtuberSidebar() {
         <div className="list-toolbar">
         <button
           type="button"
-          className="list-float list-add-btn"
+          className="float-pill float-pill--icon list-add-btn"
           title="添加 VTuber"
           onClick={() => setAddOpen(true)}
         >
@@ -300,20 +338,103 @@ export default function VtuberSidebar() {
           />
         </div>
 
-        <Select value={liveFilter} onValueChange={(v) => setLiveFilter(v as typeof liveFilter)}>
-          <SelectTrigger className="list-filter-btn [&>svg]:size-2.5 [&>svg]:opacity-70">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">全部</SelectItem>
-            <SelectItem value="live">直播中</SelectItem>
-            <SelectItem value="offline">未直播</SelectItem>
-          </SelectContent>
-        </Select>
+        <div className="filter-wrap" ref={filterWrapRef}>
+          <button
+            type="button"
+            className={`float-pill float-pill--text list-filter-btn${filterActive ? ' on' : ''}`}
+            title="组合筛选（状态 / 平台 / 阵营）"
+            onClick={() => setFilterOpen((o) => !o)}
+          >
+            默认
+            <svg
+              className="pill-caret"
+              viewBox="0 0 6.63232 6.63232"
+              width="6.632324"
+              height="6.632324"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+              aria-hidden
+            >
+              <path
+                d="M5.96034 0.5L0.960327 0.500005L4.46033 5.5L5.96034 0.5Z"
+                fill="currentColor"
+                fillRule="evenodd"
+              />
+              <path
+                d="M5.96034 0.5L4.46033 5.5L0.960327 0.500005L5.96034 0.5Z"
+                fillRule="evenodd"
+                stroke="currentColor"
+                strokeWidth="1"
+              />
+            </svg>
+          </button>
+          {filterOpen && (
+            <div className="filter-pop">
+              <div className="filter-pop-group">
+                <span className="filter-pop-label">状态</span>
+                <div className="filter-pop-chips">
+                  <button
+                    type="button"
+                    className={`filter-chip${filters.live.includes('live') ? ' on' : ''}`}
+                    onClick={() => toggleFilter('live', 'live')}
+                  >
+                    直播中
+                  </button>
+                  <button
+                    type="button"
+                    className={`filter-chip${filters.live.includes('offline') ? ' on' : ''}`}
+                    onClick={() => toggleFilter('live', 'offline')}
+                  >
+                    未直播
+                  </button>
+                </div>
+              </div>
+              {platformOptions.length > 0 && (
+                <div className="filter-pop-group">
+                  <span className="filter-pop-label">平台</span>
+                  <div className="filter-pop-chips">
+                    {platformOptions.map((p) => (
+                      <button
+                        key={p}
+                        type="button"
+                        className={`filter-chip${filters.platform.includes(p) ? ' on' : ''}`}
+                        onClick={() => toggleFilter('platform', p)}
+                      >
+                        {p}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {factionOptions.length > 0 && (
+                <div className="filter-pop-group">
+                  <span className="filter-pop-label">阵营</span>
+                  <div className="filter-pop-chips">
+                    {factionOptions.map((f) => (
+                      <button
+                        key={f}
+                        type="button"
+                        className={`filter-chip${filters.faction.includes(f) ? ' on' : ''}`}
+                        onClick={() => toggleFilter('faction', f)}
+                      >
+                        {f}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div className="filter-pop-actions">
+                <button type="button" onClick={() => setFilters(EMPTY_FILTERS)}>
+                  重置
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
 
         <button
           type="button"
-          className="list-float list-pull-btn"
+          className="float-pill float-pill--icon list-pull-btn"
           title="批量任务（抓取 / 更新 / 归档）"
           onClick={() => setBatchOpen(true)}
         >
@@ -329,14 +450,22 @@ export default function VtuberSidebar() {
         <div className="sidebar-tip">没有匹配「{query}」的 VTuber</div>
       )}
 
-      {filtered.map((v) => (
-        <VtuberItem
-          key={v.id}
-          vtuber={v}
-          active={matched !== null && Number(matched.params.id) === v.id}
-          onSelect={handleSelect}
-        />
-      ))}
+      {filtered.length > 0 && (
+        <div
+          className="vtuber-list"
+          key={`${query}|${filters.live.join(',')}|${filters.platform.join(',')}|${filters.faction.join(',')}|${vtubers.length}`}
+        >
+          {filtered.map((v, i) => (
+            <VtuberItem
+              key={v.id}
+              vtuber={v}
+              index={i}
+              active={matched !== null && Number(matched.params.id) === v.id}
+              onSelect={handleSelect}
+            />
+          ))}
+        </div>
+      )}
 
       </aside>
 
@@ -357,19 +486,25 @@ export default function VtuberSidebar() {
 
 interface VtuberItemProps {
   vtuber: VTuber
+  /** 列表内序号：驱动依次入场动画（--rise-i） */
+  index: number
   active: boolean
   onSelect: (id: number) => void
 }
 
-const VtuberItem = memo(function VtuberItem({ vtuber, active, onSelect }: VtuberItemProps) {
+const VtuberItem = memo(function VtuberItem({ vtuber, index, active, onSelect }: VtuberItemProps) {
   const bili = biliAccount(vtuber)
   const avatarSrc = resolveAsset(bili?.avatar_path) ?? bili?.avatar_url ?? undefined
   const sign = bili?.sign ?? null
   const isLiveNow = (bili?.live_status ?? 0) === 1
 
   return (
-    <div className={`vtuber-item${active ? ' active' : ''}`} onClick={() => onSelect(vtuber.id)}>
-      <Avatar className="size-[65px] shrink-0">
+    <div
+      className={`vtuber-item anim-rise${active ? ' active' : ''}`}
+      style={{ '--rise-i': index } as React.CSSProperties}
+      onClick={() => onSelect(vtuber.id)}
+    >
+      <Avatar className="size-[58px] shrink-0">
         <AvatarImage src={avatarSrc} referrerPolicy="no-referrer" />
         <AvatarFallback>{vtuber.name.slice(0, 1)}</AvatarFallback>
       </Avatar>

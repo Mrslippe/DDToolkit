@@ -85,6 +85,8 @@ html.window-maximized body {
   inset: 0;
   z-index: 200;
   overflow: hidden;
+  /* 与壳层同圆角：透明窗口下信封幕四角不露方角 */
+  border-radius: var(--radius-window, 4px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -206,7 +208,7 @@ html.window-maximized body {
   min-height: 0;
 }
 
-/* ── TopBar（严格按 docs/react Pixso 设计稿 Frame411 规格） ── */
+/* ── TopBar（严格按 docs/design/react-topbar Pixso 设计稿 Frame411 规格） ── */
 
 .topbar {
   position: relative;
@@ -217,10 +219,10 @@ html.window-maximized body {
   flex-shrink: 0;
 }
 
-/* LOGO 占位区：96×69 容器横跨顶栏全高，44×44 纯白矩形双向居中，
-   盒上千图小兔体粉色粗体 D（规格由口播指令定案） */
+/* LOGO 占位区：72×40 容器横跨顶栏全高，28×28 纯白矩形双向居中，
+   盒上千图小兔体粉色粗体 D */
 .topbar-logo-zone {
-  width: 96px;
+  width: 72px;
   height: var(--topbar-height);
   flex-shrink: 0;
   display: flex;
@@ -229,12 +231,12 @@ html.window-maximized body {
 }
 
 .topbar-logo {
-  width: 44px;
-  height: 44px;
+  width: 28px;
+  height: 28px;
   background: #fff;
   color: var(--c-accent);
   font-family: var(--font-logo);
-  font-size: 26px;
+  font-size: 17px;
   font-weight: 700;
   line-height: 1;
   display: flex;
@@ -243,9 +245,9 @@ html.window-maximized body {
   user-select: none;
 }
 
-/* 标题区：定宽 219×69，文字垂直居中、水平左对齐（设计稿 41_6 尺寸） */
+/* 标题区：定宽 150×40，文字垂直居中、水平左对齐 */
 .topbar-title {
-  width: 219px;
+  width: 150px;
   height: var(--topbar-height);
   flex-shrink: 0;
   display: flex;
@@ -253,34 +255,35 @@ html.window-maximized body {
   justify-content: flex-start;
   color: var(--c-text-on-primary);
   font-family: var(--font-title);
-  font-size: 24px;
+  font-size: 15px;
   font-weight: 400;
-  letter-spacing: 8px;
+  letter-spacing: 5px;
   margin: 0;
   white-space: nowrap;
   user-select: none;
 }
 
-/* 状态显示：19px 方圆体 Medium 白字 + 状态点/加载图标（设计稿 41_22） */
+/* 状态显示：13px 方圆体 Medium 白字 + 状态点/加载图标 */
 .topbar-status {
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
   max-width: 46%;
-  color: #fff;
+color: #fff;
   font-size: 19px;
   font-weight: 500;
+  font-variant-numeric: tabular-nums;  /* 进度 3/14 等数字对齐 */
   white-space: nowrap;
   overflow: hidden;
   user-select: none;
 }
 
 .topbar-status-dot {
-  width: 10px;
-  height: 10px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   background: #52c41a;
   flex-shrink: 0;
@@ -324,8 +327,8 @@ html.window-maximized body {
 
 /* 抓取中：设计稿加载图标（Frame_41_8.svg）替代脉冲圆点 */
 .topbar-status-spinner {
-  width: 24px;
-  height: 24px;
+  width: 16px;
+  height: 16px;
   flex-shrink: 0;
   animation: spinner-rotate 1.1s linear infinite;
 }
@@ -340,7 +343,7 @@ html.window-maximized body {
   flex: 1;
 }
 
-/* 窗口控制：三格 90×69 通栏贴合，无间距无右缘留白；
+/* 窗口控制：三格 46×40 通栏贴合，无间距无右缘留白；
    hover——普通钮浅粉、关闭钮酒红 */
 .topbar-window-controls {
   display: flex;
@@ -348,7 +351,7 @@ html.window-maximized body {
 }
 
 .topbar-win-btn {
-  width: 90px;
+  width: 46px;
   height: var(--topbar-height);
   border: none;
   border-radius: 0;
@@ -374,6 +377,43 @@ html.window-maximized body {
   cursor: default;
 }
 
+/* 登录入口：与窗口控制同规格的 46px 格；会话过期红点徽章 */
+.topbar-login {
+  display: flex;
+  align-items: center;
+}
+
+.topbar-login-btn {
+  position: relative;
+  width: 46px;
+  height: var(--topbar-height);
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  transition: background-color 0.15s ease;
+}
+
+.topbar-login-btn:hover {
+  background: #ffbccb;
+}
+
+.topbar-login-badge {
+  position: absolute;
+  top: 14px;
+  right: 12px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e5484d;
+  border: 1.5px solid #fff;
+  box-sizing: border-box;
+}
+
 /* ── 最左侧工具栏：深蓝灰实底，通栏单元格（参考图 MomoTalk rail） ── */
 
 .icon-rail {
@@ -395,10 +435,10 @@ html.window-maximized body {
   flex: 1;
 }
 
-/* 单元格：撑满整栏宽、上下贴合（79×79），透明底 + 整钮降透明（Frame4172） */
+/* 单元格：撑满整栏宽、上下贴合（50×50），透明底 + 整钮降透明 */
 .icon-rail-btn {
   width: 100%;
-  height: 79px;
+  height: var(--rail-width);
   border: none;
   border-radius: 0;
   background: transparent;
@@ -497,17 +537,288 @@ html.window-maximized body {
   z-index: 5;
 }
 
-/* 浮片基型：白底胶囊 + 轻阴影（豁免全局方形规则） */
-.list-float {
-  height: 25px;
-  flex-shrink: 0;
-  border: none;
-  border-radius: 999px;
-  background: #fff;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+/* ── 浮片系统（自定义风格：斜切圆角矩形白卡，豁免全局方形规则）──
+   用法：按钮挂 .float-pill，变体 --icon / --text，尺寸 --md，激活 .on；
+   斜切白底画在 ::before 上，内容保持直立。搜索胶囊为遗留例外，未入体系。 */
+.float-pill {
+  position: relative;
+  isolation: isolate;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 4px;
+  height: var(--pill-h-sm);
+  padding: 0 10px;
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--c-text-main);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.float-pill::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--pill-bg);
+  border-radius: var(--pill-radius);
+  transform: skewX(var(--pill-skew));
+  box-shadow: var(--pill-shadow);
+  transition: background-color 0.15s ease;
+}
+
+.float-pill--md {
+  height: var(--pill-h-md);
+  font-size: 12.5px;
+}
+
+.float-pill--icon {
+  width: 25px;
+  padding: 0;
+  color: var(--pill-fg-icon);
+}
+
+.float-pill--text {
+  padding: 0 8px;
+}
+
+/* 危险动作（解除订阅等）：红字红图标，其余形态不变 */
+.float-pill--danger {
+  color: var(--destructive);
+}
+
+.float-pill.on {
+  color: #fff;
+}
+
+.float-pill.on::before {
+  background: var(--c-primary-deep);
+}
+
+.float-pill:hover::before {
+  background: var(--pill-bg-hover);
+}
+
+/* 激活浮片例外：hover 保持主色底不变灰 */
+.float-pill.on:hover::before {
+  background: var(--c-primary-deep);
+}
+
+.float-pill:focus-visible {
+  outline: none;
+}
+
+.float-pill:focus-visible::before {
+  box-shadow: var(--pill-ring), var(--pill-shadow);
+}
+
+.float-pill:disabled {
+  opacity: 0.45;
+  cursor: default;
+  pointer-events: none;
+}
+
+/* 工具行局部几何：仅宽度（配方统一走 .float-pill） */
+.list-add-btn {
+  width: 50px;
+}
+
+.list-pull-btn {
+  width: 44px;
+}
+
+.list-filter-btn {
+  width: 89px;
+  font-size: 13px;
+  line-height: 1;
+}
+
+/* 下拉三角（内联 SVG，currentColor 继承）：绝对定位于浮片右上角 */
+.pill-caret {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6.63px;
+  height: 6.63px;
+  color: #64748b;
+}
+
+.float-pill.on .pill-caret {
+  color: #fff;
+}
+
+/* ── 条目入场动画：由下而上滑入渐显，依次步进（--rise-i 序号，CSS 层封顶）── */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.anim-rise {
+  animation: rise-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: min(calc(var(--rise-i, 0) * 45ms), 400ms);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .anim-rise {
+    animation: none;
+  }
+}
+
+/* 全局动效降级：信封揭幕/呼吸/脉冲/旋转/文案渐显全部停用（直接呈现终态）。
+   仅 .rise-in/.scene-in 等入场已在上方/下方各自覆盖；此处补齐其余全部。 */
+@media (prefers-reduced-motion: reduce) {
+  .topbar,
+  .icon-rail,
+  .sidebar,
+  .app-main {
+    animation: none;
+  }
+  .splash-panel-top,
+  .splash-panel-bottom {
+    animation: none;
+    transform: translateY(-101%);
+  }
+  .splash-panel-bottom {
+    transform: translateY(101%);
+  }
+  .splash-logo-pulse,
+  .splash-logo-static,
+  .splash-open .splash-logo {
+    animation: none;
+  }
+  .topbar-status-dot.busy {
+    animation: none;
+  }
+  .topbar-status-spinner {
+    animation: none;
+  }
+  .pill-text-fade {
+    animation: none;
+  }
+}
+
+/* 场景退场：整块下滑渐隐（与 rise-in 镜像闭合）。
+   0.18s 比 PostsPage.EXIT_MS=200 短 20ms：动画必在类移除前结束，杜绝竞态闪帧 */
+@keyframes fall-out {
+  to {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+}
+
+.scene-exit {
+  animation: fall-out 0.18s cubic-bezier(0.55, 0, 0.55, 0.2) both;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scene-exit {
+    animation: none;
+  }
+}
+
+/* 场景入场：整块淡入上滑（view-body 按场景 key 重挂时播放），
+   罩住场景内未挂 rise-in 的元素（hero 头像/名字、按钮组/chips 等），杜绝瞬现帧。
+   仅 from 帧：插值到元素自身终态 */
+@keyframes scene-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+/* 背景换装：纱罩随场景入场淡入（backdrop 按头像 src 换 key 重挂时播放）。
+   仅 from 帧：插值到 .hero-backdrop 自身基态 opacity 0.18 */
+@keyframes backdrop-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* 独立筛选弹窗：锚定触发器下方（与 time-pop 同交互模式：白底方卡+发丝边+点外关闭） */
+.filter-wrap {
+  position: relative;
+  /* 工具行唯一可收缩项会先被压掉（行内容 447px > 可用 428px），
+     导致触发器从包裹层溢出、与拉取钮视觉错位——与搜索框/浮片同等禁缩 */
+  flex-shrink: 0;
+}
+
+.filter-pop {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 30;
+  width: 264px;
+  padding: 12px;
+  background: #fff;
+  border: 1px solid var(--c-border);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.16);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.filter-pop-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.filter-pop-label {
+  font-size: 12px;
+  color: var(--c-text-sub);
+}
+
+.filter-pop-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.filter-chip {
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--c-border);
+  background: #fff;
+  color: var(--c-text-main);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.filter-chip.on {
+  background: var(--c-primary-deep);
+  border-color: var(--c-primary-deep);
+  color: #fff;
+}
+
+.filter-pop-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.filter-pop-actions button {
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--c-border);
+  background: #fff;
+  color: var(--c-text-main);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.filter-pop-actions button:hover {
+  background: var(--pill-bg-hover);
 }
 
 /* 搜索框：固定 240×25 浮片 */
@@ -548,48 +859,15 @@ html.window-maximized body {
   color: #64748b;
 }
 
-/* 下拉钮：89×25，12px 黑字 + 字距 2px + 右侧小箭头 */
-.list-filter-btn {
-  height: 25px;
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 3px;
-  width: 89px;
-  padding: 0 8px;
-  border: none;
-  border-radius: 999px;
-  background: #fff;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
-  color: #000;
-  font-size: 12px;
-  letter-spacing: 2px;
-  font-family: inherit;
-  cursor: pointer;
-}
-
-/* 添加钮：25×25 方形浮片 */
-.list-add-btn {
-  width: 25px;
-  color: var(--c-text-main);
-}
-
-/* 拉取（批量任务）键：44×25 浮片 */
-.list-pull-btn {
-  width: 44px;
-  color: var(--text-main, #000);
-}
-
 /* VTuber 条目（Frame41109）：84px 通栏行、无分隔线；
    交互态沿用左缘粉竖条 + 浅粉底；右侧 107px 阵营标识区空置 */
 .vtuber-item {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 14px;
-  height: 84px;
-  /* 纵向 flex 容器内禁止压缩：列表溢出时保持 84px 并交给侧栏滚动 */
+  gap: 12px;
+  height: 76px;
+  /* 纵向 flex 容器内禁止压缩：列表溢出时保持 76px 并交给侧栏滚动 */
   flex-shrink: 0;
   padding: 6px 0 6px 26px;
   background: transparent;
@@ -623,7 +901,7 @@ html.window-maximized body {
 
 /* 阵营标识槽位：每行最右侧 60px 区域，紧贴右缘，暂空置（后续挂载图片资源） */
 .vtuber-emblem {
-  width: 60px;
+  width: 54px;
   height: 100%;
   flex-shrink: 0;
 }
@@ -635,7 +913,7 @@ html.window-maximized body {
 }
 
 .vtuber-name {
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 500;
   color: #000;
   overflow: hidden;
@@ -660,6 +938,8 @@ html.window-maximized body {
 
 .vtuber-sign {
   margin-top: 3px;
+  height: 13px;
+  line-height: 13px;
   font-size: 13px;
   color: var(--c-text-sub);
   overflow: hidden;

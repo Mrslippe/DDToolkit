@@ -22,25 +22,25 @@ interface RailItem {
   wired?: boolean
 }
 
-/** 图标视觉尺寸逐一对齐 Frame4172 设计稿（40×40 组内矢量实测）；帖子居首位 */
+/** 图标视觉尺寸随 50×50 紧凑栏等比缩放（原 79 栏 ×0.63 取整）；帖子居首位 */
 const TOP_ITEMS: RailItem[] = [
   {
     key: 'posts',
-    icon: <FileText className="h-[28px] w-[22px]" />,
+    icon: <FileText className="h-[18px] w-[14px]" />,
     title: '帖子浏览',
     wired: true,
   },
-  { key: 'user', icon: <User className="h-[31px] w-[29px]" />, title: '用户 · 开发中' },
-  { key: 'calendar', icon: <CalendarDays className="size-[31px]" />, title: '日历 · 开发中' },
+  { key: 'user', icon: <User className="h-[20px] w-[18px]" />, title: '用户 · 开发中' },
+  { key: 'calendar', icon: <CalendarDays className="size-[20px]" />, title: '日历 · 开发中' },
 ]
 
 const BOTTOM_ITEMS: RailItem[] = [
-  { key: 'refresh', icon: <RotateCw className="size-[30px]" />, title: '刷新 · 开发中' },
-  { key: 'settings', icon: <Settings className="size-[35px]" />, title: '设置 · 开发中' },
+  { key: 'refresh', icon: <RotateCw className="size-[19px]" />, title: '刷新 · 开发中' },
+  { key: 'settings', icon: <Settings className="size-[22px]" />, title: '设置 · 开发中' },
 ]
 
 /**
- * 最左侧工具栏（严格按 docs/react-IconRail Frame4172）：
+ * 最左侧工具栏（严格按 docs/design/react-IconRail Frame4172）：
  * 深蓝灰 #4b5a6f 通栏单元格 79×79；未选中整钮 opacity .6，
  * 选中实底 #647489 全亮。顶部功能组 + 底部工具组贴底。
  */
