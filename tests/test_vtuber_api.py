@@ -1,4 +1,5 @@
 import pytest
+from datetime import datetime, timezone
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -9,7 +10,8 @@ TestingSession = sessionmaker(bind=test_engine, autoflush=False, autocommit=Fals
 
 from app.main import app
 from app.core.database import Base, get_db
-from app.models.vtuber import VTuber, Account, Post
+from app.models.vtuber import VTuber, Account, Post, AccountStatSnapshot
+from app.repositories.vtuber_repo import AccountStatSnapshotRepo
 
 
 def override_get_db():
@@ -28,7 +30,7 @@ def setup_db():
     Base.metadata.create_all(bind=test_engine)
     db = TestingSession()
     try:
-        for t in (Post, Account, VTuber):
+        for t in (Post, AccountStatSnapshot, Account, VTuber):
             db.query(t).delete()
         db.commit()
     finally:
@@ -171,6 +173,17 @@ def test_posts_paginated_filter_by_type(client):
     assert len(legacy) == 10
 
 
+def test_posts_paginated_filter_multi_type(client):
+    # 逗号分隔多型（前端「投稿/图文」分组 chip）：video+text → 全部 10 条
+    _seed_posts(client, n=10)
+    r = client.get("/posts/bilibili/U1/paginated?type=video,text").json()
+    assert r["total"] == 10
+    assert all(p["type"] in ("video", "text") for p in r["items"])
+    # 逗号带空格同样生效（strip 容错）
+    r2 = client.get("/posts/bilibili/U1/paginated?type=video,%20text").json()
+    assert r2["total"] == 10
+
+
 def test_posts_stats(client):
     _seed_posts(client, n=10)
     r = client.get("/posts/bilibili/U1/stats").json()
@@ -276,3 +289,97 @@ def test_delete_vtuber_does_not_delete_other_platform_same_uid(client):
     assert client.delete(f"/vtuber/{vid1}").status_code == 204
     assert client.get("/posts/bilibili/123").json() == []
     assert len(client.get("/posts/youtube/123").json()) == 1  # youtube 帖保留
+
+
+# ── 自定义背景：上传 / 清除 ─────────────────────────────────────────────
+
+def test_set_and_clear_background(client, monkeypatch):
+    """沙箱限制：不用 pytest tmp_path（%TEMP% 可能无权限），改用工作区临时目录。"""
+    import shutil
+    from pathlib import Path
+
+    from app.core.config import settings
+
+    bg_dir = Path("./.bgtest")
+    bg_dir.mkdir(exist_ok=True)
+    old_dir = settings.DATA_DIR
+    monkeypatch.setattr(settings, "DATA_DIR", bg_dir)
+    try:
+        vid = client.post("/vtuber", json={"name": "背景测试"}).json()["id"]
+        png = b"\x89PNG\r\n\x1a\n" + b"0" * 64  # 伪 PNG 字节
+        r = client.post(
+            f"/vtuber/{vid}/background",
+            files={"file": ("bg.png", png, "image/png")},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["background_path"] and body["background_path"].startswith("static/custom_bg/")
+        assert (bg_dir / body["background_path"]).exists()  # 落盘
+        # VTuberOut 序列化已含背景字段（前端直接取用）
+        assert client.get(f"/vtuber/{vid}").json()["background_path"] == body["background_path"]
+        # 非图片类型 → 415
+        bad = client.post(
+            f"/vtuber/{vid}/background",
+            files={"file": ("bg.txt", b"not-an-image", "text/plain")},
+        )
+        assert bad.status_code == 415
+        # 不存在 → 404
+        assert client.post(
+            "/vtuber/99999/background", files={"file": ("b.png", png, "image/png")},
+        ).status_code == 404
+        # 清除：字段置空 + 文件删除
+        r2 = client.delete(f"/vtuber/{vid}/background")
+        assert r2.status_code == 200
+        assert r2.json()["background_path"] is None
+        assert not (bg_dir / body["background_path"]).exists()
+    finally:
+        shutil.rmtree(bg_dir, ignore_errors=True)
+        settings.DATA_DIR = old_dir
+
+
+# ── Account 统计快照端点（P0，v0.5.0） ───────────────────────────────
+
+def test_list_account_stat_snapshots(client):
+    vid = client.post("/vtuber", json={"name": "测试"}).json()["id"]
+    aid = client.post(
+        f"/vtuber/{vid}/accounts",
+        json={"platform": "bilibili", "platform_uid": "123"},
+    ).json()["id"]
+
+    db = TestingSession()
+    repo = AccountStatSnapshotRepo(db)
+    repo.add(aid, 1000, 0, None, captured_at=datetime(2026, 8, 1, tzinfo=timezone.utc))
+    repo.add(aid, 1100, 1, "开播了", captured_at=datetime(2026, 8, 2, tzinfo=timezone.utc))
+    db.commit()
+    db.close()
+
+    resp = client.get(f"/account/{aid}/stat-snapshots")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 2
+    assert data[0]["followers_count"] == 1100           # 时间倒序：最新的在前
+    assert data[0]["live_status"] == 1
+    assert data[0]["live_title"] == "开播了"
+    assert data[0]["captured_at"].endswith(("Z", "+00:00"))  # naive UTC 补时区，前端按本地解析不偏 8h
+    assert data[1]["followers_count"] == 1000
+
+
+def test_stat_snapshots_limit_and_404(client):
+    vid = client.post("/vtuber", json={"name": "测试"}).json()["id"]
+    aid = client.post(
+        f"/vtuber/{vid}/accounts",
+        json={"platform": "bilibili", "platform_uid": "123"},
+    ).json()["id"]
+
+    db = TestingSession()
+    repo = AccountStatSnapshotRepo(db)
+    for i in range(5):
+        repo.add(aid, i * 100, 0)
+    db.commit()
+    db.close()
+
+    assert len(client.get(f"/account/{aid}/stat-snapshots?limit=3").json()) == 3
+    # limit 超上限被 Query 约束拒绝（422）
+    assert client.get(f"/account/{aid}/stat-snapshots?limit=99999").status_code == 422
+    # 账号不存在 → 404
+    assert client.get("/account/99999/stat-snapshots").status_code == 404

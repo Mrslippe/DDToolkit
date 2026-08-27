@@ -22,8 +22,9 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.config import settings
 from app.core.database import Base
-from app.models.vtuber import VTuber, Account, Post as PostModel
-from app.repositories.vtuber_repo import PostRepo
+from app.models.vtuber import VTuber, Account, Post as PostModel, AccountStatSnapshot
+from app.repositories.vtuber_repo import PostRepo, AccountStatSnapshotRepo
+from app.services import scheduler
 from app.services.fetcher import (
     _detect_rate_limit, _map_dynamic_type,
     _parse_pub_time, _parse_dynamic_pub_time,
@@ -89,7 +90,7 @@ def test_rate_limit_clear_resets_context():
 # ── P3：版本号 ────────────────────────────────────────────────────────
 
 def test_version_synced_with_devlog():
-    assert settings.VERSION == "0.3.1"
+    assert settings.VERSION == "0.5.0"
 
 
 # ── P4：动态类型映射 ──────────────────────────────────────────────────
@@ -665,6 +666,62 @@ def test_img_proxy_follows_allowed_redirect():
     asyncio.run(run())
 
 
+def test_img_proxy_referer_sinaimg():
+    """防盗链：微博图床（sinaimg）请求必须带 weibo.com Referer，否则 403。"""
+    import httpx as httpx_mod
+
+    seen = {}
+
+    def handler(request):
+        seen["referer"] = request.headers.get("referer")
+        return httpx_mod.Response(200, content=b"IMG", headers={"content-type": "image/jpeg"})
+
+    async def run():
+        async with httpx_mod.AsyncClient(transport=httpx_mod.MockTransport(handler)) as c:
+            body, _ = await img_proxy.fetch_remote("https://wx1.sinaimg.cn/large/abc.jpg", client=c)
+            return body
+
+    assert asyncio.run(run()) == b"IMG"
+    assert seen["referer"] == "https://weibo.com/"
+
+
+def test_img_proxy_referer_hdslb():
+    import httpx as httpx_mod
+
+    seen = {}
+
+    def handler(request):
+        seen["referer"] = request.headers.get("referer")
+        return httpx_mod.Response(200, content=b"IMG", headers={"content-type": "image/jpeg"})
+
+    async def run():
+        async with httpx_mod.AsyncClient(transport=httpx_mod.MockTransport(handler)) as c:
+            await img_proxy.fetch_remote("https://i0.hdslb.com/bfs/a.jpg", client=c)
+
+    asyncio.run(run())
+    assert seen["referer"] == "https://www.bilibili.com/"
+
+
+def test_img_proxy_referer_redirect_keeps_host():
+    """防盗链在重定向后按新主机动态携带（微博图床 → weibo.com Referer）。"""
+    import httpx as httpx_mod
+
+    headers_seen = []
+
+    def handler(request):
+        headers_seen.append(request.headers.get("referer"))
+        if request.url.path == "/a":
+            return httpx_mod.Response(302, headers={"location": "/b.jpg"})
+        return httpx_mod.Response(200, content=b"IMG", headers={"content-type": "image/jpeg"})
+
+    async def run():
+        async with httpx_mod.AsyncClient(transport=httpx_mod.MockTransport(handler)) as c:
+            await img_proxy.fetch_remote("https://wx1.sinaimg.cn/a", client=c)
+
+    asyncio.run(run())
+    assert headers_seen == ["https://weibo.com/", "https://weibo.com/"]
+
+
 def test_img_proxy_rejects_non_image_content_type():
     """text/html 不得作为图片代理结果回吐（防存储型 XSS）。"""
     import httpx as httpx_mod
@@ -704,7 +761,7 @@ def test_fetch_posts_core_batch_commit(monkeypatch, db):
 
     async def fake_videos(mid, page=1, client=None):
         calls["n"] += 1
-        return videos if calls["n"] == 1 else []
+        return {"items": videos, "total": len(videos)} if calls["n"] == 1 else {"items": [], "total": len(videos)}
 
     async def fake_sleep(_seconds):
         return None
@@ -737,7 +794,7 @@ def test_fetch_posts_core_batch_dedup_after_restart(monkeypatch, db):
 
     async def fake_videos(mid, page=1, client=None):
         calls["n"] += 1
-        return videos  # 每次都返回同一批：第二次应全部命中 existing_ids 去重
+        return {"items": videos, "total": len(videos)}  # 每次都返回同一批：第二次应全部命中 existing_ids 去重
 
     async def fake_sleep(_seconds):
         return None
@@ -823,26 +880,26 @@ def test_async_fetch_vtuber_relinks_session_after_cooldown(monkeypatch):
 
 
 def test_save_to_env_atomic_keeps_other_keys(monkeypatch):
-    """auth._save_to_env：原子替换且不丢失其他配置行（含临时文件无残留）。"""
+    """env_store.save_env_keys：原子替换且不丢失其他配置行（含临时文件无残留）。"""
     import pathlib
     import shutil
-    from app.services import auth as auth_mod
+    from app.services import env_store
 
     d = pathlib.Path(__file__).parent / "_env_test"
     shutil.rmtree(d, ignore_errors=True)
     d.mkdir(parents=True)
     env = d / ".env"
     env.write_text("FOO=bar\nBILI_SESSDATA=old\nBAZ=qux\n", encoding="utf-8")
-    monkeypatch.setattr(auth_mod, "ENV_PATH", env)
-    monkeypatch.setattr(auth_mod, "_reload_env", lambda: None)  # 隔离 os.environ 污染
+    monkeypatch.setattr(env_store, "ENV_PATH", env)
+    monkeypatch.setattr(env_store, "reload_env_keys", lambda keys: None)  # 隔离 os.environ 污染
 
-    a = auth_mod.BilibiliAuth()
-    a.sessdata = "new-sess"
-    a.bili_jct = "jct"
-    a.dede_user_id = "123"
-    a.buvid3 = "b3"
-    a.refresh_token = "rt"
-    a._save_to_env()
+    env_store.save_env_keys({
+        "BILI_SESSDATA": "new-sess",
+        "BILI_BIJI_JCT": "jct",
+        "BILI_DEDE_USER_ID": "123",
+        "BILI_BUVID_3": "b3",
+        "BILI_REFRESH_TOKEN": "rt",
+    })
 
     text = env.read_text(encoding="utf-8")
     assert "FOO=bar" in text and "BAZ=qux" in text
@@ -867,3 +924,89 @@ def test_migration_head_matches_alembic():
     cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
     head = ScriptDirectory.from_config(cfg).get_current_head()
     assert MIGRATION_HEAD == head, f"MIGRATION_HEAD={MIGRATION_HEAD!r} != alembic head={head!r}"
+
+
+# ── P0：账号统计快照（v0.5.0） ───────────────────────────────────────
+
+def _snapshot_test_db():
+    """内存 SQLite（StaticPool：所有连接共享同一库）+ 建全量表。"""
+    from sqlalchemy.pool import StaticPool
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(bind=engine)
+    return engine, sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+
+def test_account_fetch_writes_stat_snapshot(monkeypatch):
+    """P0 验收：全量账号抓取成功后，每个账号落一条统计快照。
+
+    端到端走 async_fetch_and_update 真路径（mock 掉网络抓取与节奏等待），
+    验证 _record_stat_snapshot 挂在成功分支且随事务提交。
+    """
+    engine, Testing = _snapshot_test_db()
+    db = Testing()
+    v = VTuber(name="测试V")
+    db.add(v)
+    db.commit()
+    db.refresh(v)
+    acc = Account(vtuber_id=v.id, platform="bilibili", platform_uid="11073",
+                  display_name="测试", followers_count=100,
+                  live_status=1, live_title="今晚开播")
+    db.add(acc)
+    db.commit()
+    db.refresh(acc)
+    db.close()
+
+    monkeypatch.setattr(scheduler, "SessionLocal", Testing)
+    monkeypatch.setattr(scheduler.settings, "REQUEST_INTERVAL_MIN", 0.0)
+    monkeypatch.setattr(scheduler.settings, "REQUEST_INTERVAL_MAX", 0.0)
+    monkeypatch.setattr(scheduler.settings, "FETCH_BATCH_SIZE", 10 ** 9)
+    monkeypatch.setattr(scheduler.settings, "FETCH_BATCH_COOLDOWN", 0)
+
+    async def fake_fetch(acc, db, client=None):
+        acc.followers_count += 1   # 模拟抓取到新粉丝数
+        return True
+
+    monkeypatch.setattr(scheduler, "_fetch_one_account", fake_fetch)
+
+    result = asyncio.run(scheduler.async_fetch_and_update(check_yield=False))
+    assert result.success == 1
+
+    db = Testing()
+    rows = (
+        db.query(AccountStatSnapshot)
+        .filter(AccountStatSnapshot.account_id == acc.id)
+        .all()
+    )
+    assert len(rows) == 1
+    assert rows[0].followers_count == 101      # 记录的是抓取后的最新值
+    assert rows[0].live_status == 1
+    assert rows[0].live_title == "今晚开播"
+    assert rows[0].captured_at is not None
+    db.close()
+
+
+def test_stat_snapshot_repo_recent_ordering():
+    """只读端点数据源：按时间倒序 + limit 生效。"""
+    engine, Testing = _snapshot_test_db()
+    db = Testing()
+    v = VTuber(name="V")
+    db.add(v)
+    db.commit()
+    db.refresh(v)
+    acc = Account(vtuber_id=v.id, platform="bilibili", platform_uid="1")
+    db.add(acc)
+    db.commit()
+    db.refresh(acc)
+
+    repo = AccountStatSnapshotRepo(db)
+    repo.add(acc.id, 100, 0, None, captured_at=datetime(2026, 8, 1, tzinfo=timezone.utc))
+    repo.add(acc.id, 120, 1, "标题", captured_at=datetime(2026, 8, 2, tzinfo=timezone.utc))
+    db.commit()
+
+    rows = repo.recent(acc.id, limit=1)
+    assert len(rows) == 1
+    assert rows[0].followers_count == 120
+    assert rows[0].live_title == "标题"
+    db.close()

@@ -40,7 +40,7 @@ _MAX_REDIRECTS = 3
 _MAX_BODY = 10 * 1024 * 1024  # 10MB：防上游投喂超大响应撑爆磁盘
 _ALLOWED_CTYPES = {
     "image/jpeg", "image/png", "image/gif", "image/webp", "image/avif",
-    "image/bmp", "image/x-icon", "image/svg+xml", "application/octet-stream",
+    "image/bmp", "image/x-icon", "application/octet-stream",
 }
 _CACHE_TTL = 7 * 24 * 3600      # 缓存有效期（与 Cache-Control 一致）
 _CLEANUP_INTERVAL = 3600        # 过期文件清理的最短间隔
@@ -94,12 +94,30 @@ def _validate_url(url: str) -> str:
     return url
 
 
+def _host_of(url: str) -> str:
+    return (urlparse(url).netloc.split(":")[0] or "").lower()
+
+
+def _referer_for(host: str) -> str | None:
+    """防盗链 Referer：微博图床（sinaimg/wbcdn）要求带合法来源才 200，否则 403
+    （实测：无 Referer 或非微博域来源 → 403）；B 站图床（hdslb）无需但带上也无害。"""
+    h = (host or "").lower()
+    if h.endswith(".sinaimg.cn") or h.endswith(".wbcdn.cn"):
+        return "https://weibo.com/"
+    if h.endswith(".hdslb.com") or h == "hdslb.com":
+        return "https://www.bilibili.com/"
+    return None
+
+
 async def fetch_remote(url: str, client: httpx.AsyncClient | None = None) -> tuple[bytes, str] | None:
     """拉取远端图片，返回 (bytes, content-type)；失败返回 None（可注入测试）。
 
     修复（SSRF）：原来 follow_redirects=True 只校验初始 URL，302 跳转到内网
     地址（如 127.0.0.1、169.254.169.254）会直接跟随。改为逐跳重新 _validate_url，
     任一跳不通过即拒绝；同时限制跳数、响应大小与 content-type。
+
+    防盗链：按请求主机动态带 Referer（sinaimg/wbcdn → weibo.com，hdslb → bilibili），
+    否则微博图床返回 403（修复：此前不带 Referer，全部 403，图片代理形同虚设）。
     """
     if client is None:
         client = _shared_client()
@@ -107,7 +125,12 @@ async def fetch_remote(url: str, client: httpx.AsyncClient | None = None) -> tup
     for _ in range(_MAX_REDIRECTS + 1):
         _validate_url(current)
         try:
-            resp = await client.get(current, headers={"User-Agent": _UA})
+            # 防盗链 Referer 按当前主机动态附带（含重定向跳转后的新主机）
+            ref = _referer_for(_host_of(current))
+            headers = {"User-Agent": _UA}
+            if ref:
+                headers["Referer"] = ref
+            resp = await client.get(current, headers=headers)
         except Exception as e:
             logger.warning(f"图片代理拉取失败: {e}, url={current[:120]}")
             return None

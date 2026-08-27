@@ -14,7 +14,7 @@ load_dotenv(DATA_DIR / ".env")
 
 class Settings:
     APP_NAME: str = "Better DD Toolkit"
-    VERSION: str = "0.3.1"   # 与 devlog 最新版本保持一致（修复：此前停留在 0.1.0）
+    VERSION: str = "0.5.0"   # 与 devlog 最新版本保持一致（v0.5.0：候选池/微博登录/P0 快照）
 
     # 数据目录
     DATA_DIR: Path = DATA_DIR
@@ -28,6 +28,12 @@ class Settings:
     BILI_DEDE_USER_ID: str = os.getenv("BILI_DEDE_USER_ID", "")
     BILI_BUVID_3: str = os.getenv("BILI_BUVID_3", "")
     BILI_REFRESH_TOKEN: str = os.getenv("BILI_REFRESH_TOKEN", "")
+
+    # 微博 API（扫码登录后写入：SUB/SUBP/SSOLoginState/M_WEIBOCN_PARAMS 组合串；
+    # 未登录时为空。UID/昵称供登录态展示）
+    WEIBO_COOKIE: str = os.getenv("WEIBO_COOKIE", "")
+    WEIBO_UID: str = os.getenv("WEIBO_UID", "")
+    WEIBO_NAME: str = os.getenv("WEIBO_NAME", "")
 
     # 调度器
     FETCH_INTERVAL_MINUTES: int = 5
@@ -48,8 +54,8 @@ class Settings:
     LOG_LEVEL: str = "INFO"
     LOG_FILE: str = str(DATA_DIR / "logs" / "app.log")
 
-    # 图片代理（/img-proxy 兜底链路）
-    IMG_PROXY_ALLOWED_HOSTS: str = os.getenv("IMG_PROXY_ALLOWED_HOSTS", "hdslb.com")
+    # 图片代理（/img-proxy 兜底链路）：B 站图床 + 微博图床
+    IMG_PROXY_ALLOWED_HOSTS: str = os.getenv("IMG_PROXY_ALLOWED_HOSTS", "hdslb.com,sinaimg.cn,wbcdn.cn")
     IMG_CACHE_DIR: str = str(DATA_DIR / "static" / "img-cache")
 
 

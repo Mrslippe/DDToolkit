@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import logging
 import random
 import threading
+import time
 import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -17,13 +18,14 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.database import SessionLocal
 from app.models.vtuber import Account, VTuber, Post
-from app.repositories.vtuber_repo import VTuberRepo, AccountRepo, PostRepo
+from app.repositories.vtuber_repo import VTuberRepo, AccountRepo, PostRepo, AccountStatSnapshotRepo
 from app.services.fetcher import (
     fetch_bilibili_user_info, fetch_bilibili_user_stat,
     fetch_bilibili_videos, fetch_bilibili_dynamics,
     fetch_article_detail, fetch_video_detail, fetch_dynamic_detail,
     was_rate_limited, clear_rate_limit, rate_limit_info,
 )
+from app.services.platforms import registry
 
 # 注意：此处不调用 logging.basicConfig —— 根日志配置统一由 app/main.py 完成。
 # 历史上这里先执行了 basicConfig，导致 main.py 中的 FileHandler 配置被静默忽略，
@@ -92,6 +94,22 @@ def _push_account_snapshot(acc) -> None:
         del recent[:-100]
 
 
+def _record_stat_snapshot(db: Session, acc: Account) -> None:
+    """持久化统计快照（P0，v0.5.0）：账号信息抓取成功后追加一行。
+
+    与 _push_account_snapshot 的区别：后者是进程内实时状态（重启即失），
+    这里是落库的时间序列（涨粉趋势/直播历史的地基）。
+    简单优先：全量记录（每轮成功抓取即写一行），数值无变化不降噪；
+    写入随调用方随后的事务 commit 一起落盘。
+    """
+    AccountStatSnapshotRepo(db).add(
+        account_id=acc.id,
+        followers_count=acc.followers_count,
+        live_status=acc.live_status,
+        live_title=acc.live_title,
+    )
+
+
 def _set_account_progress(current: str | None, index: int, total: int) -> None:
     _status["account"]["current"] = current
     _status["account"]["index"] = index
@@ -110,6 +128,34 @@ def _set_post_target(target: str | None) -> None:
 def _reset_post_status() -> None:
     _set_post_target(None)
     _status["post"]["running"] = False
+
+
+# 任务完成序号：每轮任务开始时自增，前端凭 seq 区分「新的完成汇总」与旧结果
+_last_result_seq = 0
+
+
+def _next_result_seq() -> int:
+    global _last_result_seq
+    _last_result_seq += 1
+    return _last_result_seq
+
+
+def _set_account_last_result(seq: int, label: str, success: int, failed: int, skipped: int) -> None:
+    _status["account"]["last_result"] = {
+        "seq": seq, "label": label,
+        "success": success, "failed": failed, "skipped": skipped,
+    }
+
+
+def _set_post_last_result(seq: int, kind: str, label: str,
+                          videos: int, dynamics: int, stored: int, skipped: int,
+                          issues: list[dict], video_missing: int | None) -> None:
+    _status["post"]["last_result"] = {
+        "seq": seq, "kind": kind, "label": label,
+        "videos": videos, "dynamics": dynamics,
+        "stored": stored, "skipped": skipped,
+        "issues": issues, "video_missing": video_missing,
+    }
 
 
 def get_fetch_status() -> dict:
@@ -151,19 +197,26 @@ async def _download_avatar(url: str, uid: str, client: httpx.AsyncClient | None 
 
 
 async def _fetch_one_account(acc: Account, db: Session, client: httpx.AsyncClient | None = None) -> bool:
-    """抓取单个 Account 的数据，返回是否成功。client 复用连接池，避免每请求新建连接。"""
+    """抓取单个 Account 的数据（按平台分发到平台框架），返回是否成功。
+
+    client 复用连接池，避免每请求新建连接；风控由上层统一冷却退避。
+    """
     mid = acc.platform_uid
     if not mid:
         return False
 
+    pf = registry.get_fetcher(acc.platform)
+    if pf is None:
+        logger.warning(f"不支持的平台 '{acc.platform}'，跳过 account#{acc.id}")
+        return False
+
     is_update = False
 
-    # 用户信息
     try:
-        info = await fetch_bilibili_user_info(int(mid), client=client)
+        info = await pf.fetch_user_info(str(mid), client=client)
         if info:
-            acc.display_name = info.get("name", acc.display_name)
-            acc.sign = info.get("sign", acc.sign)
+            acc.display_name = info.get("name") or acc.display_name
+            acc.sign = info.get("sign") or acc.sign
 
             new_avatar = info.get("avatar")
             if new_avatar:
@@ -171,33 +224,29 @@ async def _fetch_one_account(acc: Account, db: Session, client: httpx.AsyncClien
                 file_exists = not _avatar_missing(acc)
                 if _needs_avatar_download(acc, new_avatar, file_exists):
                     acc.avatar_url = new_avatar
-                    acc.avatar_path = await _download_avatar(new_avatar, acc.platform_uid, client=client)
+                    # 头像文件按平台前缀命名，避免跨平台 uid 撞名
+                    acc.avatar_path = await _download_avatar(
+                        new_avatar, f"{acc.platform}_{acc.platform_uid}", client=client)
                     if not file_exists:
-                        logger.info(f"补下缺失头像 uid={acc.platform_uid} → {acc.avatar_path}")
+                        logger.info(f"补下缺失头像 {acc.platform}:{acc.platform_uid} → {acc.avatar_path}")
 
-            acc.live_status = info.get("live_status", 0)
-            acc.live_title = info.get("live_title", acc.live_title)
-            acc.live_url = info.get("live_url", acc.live_url)
-            if not acc.room_id and info.get("room_id"):
-                acc.room_id = str(info["room_id"])
+            if info.get("followers_count") is not None:
+                acc.followers_count = info["followers_count"]
+            acc.url = info.get("url") or acc.url
+
+            # 平台附加字段：直播状态（bilibili 提供）
+            if "live_status" in info:
+                acc.live_status = info.get("live_status", 0)
+                acc.live_title = info.get("live_title", acc.live_title)
+                acc.live_url = info.get("live_url", acc.live_url)
+                if not acc.room_id and info.get("room_id"):
+                    acc.room_id = str(info["room_id"])
             is_update = True
     except Exception as e:
-        logger.error(f"抓取 account#{acc.id} 用户信息异常: {type(e).__name__}: {e}")
+        logger.error(f"抓取 account#{acc.id} ({acc.platform}) 异常: {type(e).__name__}: {e}")
 
     if was_rate_limited():
         return False  # 触发风控，上层处理
-
-    # 统计数据
-    try:
-        stat = await fetch_bilibili_user_stat(int(mid), client=client)
-        if stat:
-            acc.followers_count = stat.get("follower", acc.followers_count)
-            is_update = True
-    except Exception as e:
-        logger.error(f"抓取 account#{acc.id} 统计数据异常: {type(e).__name__}: {e}")
-
-    if was_rate_limited():
-        return False
 
     if is_update:
         acc.last_fetched_at = datetime.now(timezone.utc)
@@ -205,7 +254,7 @@ async def _fetch_one_account(acc: Account, db: Session, client: httpx.AsyncClien
     return is_update
 
 
-async def async_fetch_and_update() -> FetchResult:
+async def async_fetch_and_update(check_yield: bool = True) -> FetchResult:
     global _fetch_running
 
     if not _fetch_lock.acquire(blocking=False):
@@ -216,6 +265,7 @@ async def async_fetch_and_update() -> FetchResult:
     _status["account"]["running"] = True
     _status["account"]["recent"] = []   # 每轮自包含：清空上一任务的快照
     result = FetchResult()
+    res_seq = _next_result_seq()
 
     # 风控状态为本任务上下文内的干净初值（ContextVar 隔离，见 fetcher.py）
     clear_rate_limit()
@@ -237,6 +287,12 @@ async def async_fetch_and_update() -> FetchResult:
         batch_count = 0
 
         while idx < len(accounts):
+            # 断点让位：定时任务请求让位时交还执行权，回来后重查账号列表从原 idx 续跑
+            refreshed = await _maybe_yield_account(db, check_yield=check_yield)
+            if refreshed is not None:
+                accounts = refreshed
+                logger.info(f"定时任务执行完毕，从第 {idx + 1} 个账号续跑...")
+                continue
             acc = accounts[idx]
             _set_account_progress(acc.display_name or str(acc.platform_uid), idx + 1, len(accounts))
 
@@ -263,6 +319,7 @@ async def async_fetch_and_update() -> FetchResult:
             )
 
             if ok:
+                _record_stat_snapshot(db, acc)
                 db.commit()
                 _push_account_snapshot(acc)
                 result.success += 1
@@ -289,15 +346,23 @@ async def async_fetch_and_update() -> FetchResult:
         _fetch_running = False
         _reset_account_status()
         _fetch_lock.release()
+        _set_account_last_result(res_seq, "全部账号", result.success, result.failed, result.skipped)
 
     return result
 
 
 def fetch_and_update_vtubers():
+    """定时任务（优先协议）：请求在跑任务让位 → 执行本任务 → 清除信号唤醒原任务续跑。"""
+    _yield_request.set()
     try:
-        asyncio.run(async_fetch_and_update())
+        while _fetch_running or _post_fetch_running:
+            time.sleep(0.2)
+        logger.info("定时任务接管：原抓取任务已让位，开始本轮账号抓取")
+        asyncio.run(async_fetch_and_update(check_yield=False))
     except Exception as e:
         logger.error(f"调度器执行失败: {e}")
+    finally:
+        _yield_request.clear()
 
 
 def is_fetch_running() -> bool:
@@ -317,6 +382,7 @@ async def async_fetch_vtuber(vtuber_id: int) -> FetchResult:
     _status["account"]["running"] = True
     _status["account"]["recent"] = []   # 每轮自包含：清空上一任务的快照
     result = FetchResult()
+    res_seq = _next_result_seq()
     clear_rate_limit()
     client = httpx.AsyncClient(timeout=15.0)
 
@@ -335,6 +401,12 @@ async def async_fetch_vtuber(vtuber_id: int) -> FetchResult:
 
         idx = 0
         while idx < len(accounts):
+            # 断点让位：定时任务请求让位时交还执行权，回来后按 vtuber_id 重查续跑
+            refreshed = await _maybe_yield_account(db, vtuber_id=vtuber_id, check_yield=True)
+            if refreshed is not None:
+                accounts = refreshed
+                logger.info(f"定时任务执行完毕，单V {vtuber_id} 从第 {idx + 1} 个账号续跑...")
+                continue
             acc = accounts[idx]
             _set_account_progress(acc.display_name or str(acc.platform_uid), idx + 1, len(accounts))
             ok = await _fetch_one_account(acc, db, client=client)
@@ -362,6 +434,7 @@ async def async_fetch_vtuber(vtuber_id: int) -> FetchResult:
             )
 
             if ok:
+                _record_stat_snapshot(db, acc)
                 db.commit()
                 _push_account_snapshot(acc)
                 result.success += 1
@@ -382,6 +455,7 @@ async def async_fetch_vtuber(vtuber_id: int) -> FetchResult:
         _fetch_running = False
         _reset_account_status()
         _fetch_lock.release()
+        _set_account_last_result(res_seq, f"VTuber#{vtuber_id}", result.success, result.failed, result.skipped)
 
     return result
 
@@ -406,11 +480,75 @@ def shutdown_scheduler(scheduler: BackgroundScheduler):
         logger.info("APScheduler 已安全关闭。")
 
 
-# ── 帖子抓取 (按指令触发，非常驻周期任务) ──────────────────────────────
+# ── 帖子抓取 / 定时任务优先让位协议（全局单飞） ────────────────────────────
 
 _post_fetch_lock = threading.Lock()
 _post_fetch_running = False
 
+# 定时任务触发时置位 _yield_request；运行中的手动任务在断点（账号间/页间）
+# 检测到后交还执行权并等待清除，定时任务完成后清除信号、原任务从断点续跑。
+_yield_request = threading.Event()
+
+
+def yield_requested() -> bool:
+    return _yield_request.is_set()
+
+
+def any_fetch_running() -> bool:
+    """全局单飞判定：账号/帖子任一在跑，或定时任务正请求让位（让位窗口也视为忙，
+    避免手动请求在真空期钻空并发执行）。"""
+    return _fetch_running or _post_fetch_running or _yield_request.is_set()
+
+
+async def _maybe_yield_account(db: Session, vtuber_id: int | None = None,
+                               check_yield: bool = True) -> list[Account] | None:
+    """账号抓取断点让位（循环顶部调用）：
+    定时任务请求让位时交还执行权并等待其完成，然后重查账号列表续跑。
+    返回重查后的账号列表；未发生让位返回 None（调用方沿用原列表）。"""
+    global _fetch_running
+    if not check_yield or not _yield_request.is_set():
+        return None
+    db.commit()
+    _fetch_running = False
+    _status["account"]["running"] = False
+    _fetch_lock.release()
+    try:
+        while _yield_request.is_set():
+            await asyncio.sleep(0.2)
+    finally:
+        _fetch_lock.acquire()
+        _fetch_running = True
+        _status["account"]["running"] = True
+    if vtuber_id is not None:
+        return db.query(Account).filter(
+            Account.vtuber_id == vtuber_id,
+            Account.platform_uid != None,
+            Account.platform_uid != "",
+        ).all()
+    return AccountRepo(db).all_for_fetch()
+
+
+async def _maybe_yield_post(db: Session) -> bool:
+    """帖子抓取断点让位（视频页/动态页/账号间调用）：
+    交还 _post_fetch_lock，等待定时任务完成后续跑。返回是否发生过让位。"""
+    global _post_fetch_running
+    if not _yield_request.is_set():
+        return False
+    db.commit()
+    _post_fetch_running = False
+    _status["post"]["running"] = False
+    _post_fetch_lock.release()
+    try:
+        while _yield_request.is_set():
+            await asyncio.sleep(0.2)
+    finally:
+        _post_fetch_lock.acquire()
+        _post_fetch_running = True
+        _status["post"]["running"] = True
+    return True
+
+
+# ── 帖子抓取 (按指令触发，非常驻周期任务) ──────────────────────────────
 
 @dataclass
 class PostFetchResult:
@@ -421,6 +559,12 @@ class PostFetchResult:
     rate_limited: bool = False
     archived_stop: bool = False      # 是否因归档边界提前停止（devlog/016）
     stopped_early: bool = False      # 增量模式：遇到已入库帖子即停（v0.4.7）
+    # 方案 1：中断原因归类（done/page_limit/rate_limited/network_error/
+    # archived_boundary/stopped_early/error），前端据此区分「预期停止」与「丢数据」
+    stop_reason: str = "done"
+    error: str | None = None        # 异常信息（stop_reason=error 时）
+    # 方案 2：B站视频参考总数（arc/search page.count），用于完整性比对
+    video_total: int | None = None
 
 
 def _safe_json_parse(s: str | None, fallback: dict | None = None) -> dict:
@@ -453,6 +597,9 @@ def _safe_store_post(post_repo: PostRepo, data: dict, commit: bool = True) -> bo
 # 批量入库：每攒满 N 条才 commit 一次，避免每条帖子一次 fsync
 # （SQLite 每次 commit 都会触发磁盘同步，全量 1 万帖时性能差异巨大）
 _POST_BATCH_SIZE = 50
+
+# 风控续抓：列表页（视频/动态）触发风控后冷却重试本页的次数上限（A）
+_PAGE_RETRIES = 2
 
 
 async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db: Session,
@@ -525,18 +672,43 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
         # ── 视频投稿 ──
         if include_videos:
             page = 1
+            rl_retries = 0   # 风控重试计数（每个账号列表页，见 _PAGE_RETRIES）
             while True:
-                if video_pages > 0 and page > video_pages:
+                # 断点让位：定时任务请求让位时先落盘，交还锁等待其完成后续跑
+                if _yield_request.is_set():
+                    _flush_pending()
+                    await _maybe_yield_post(db)
+                if video_pages == 0 or (video_pages > 0 and page > video_pages):
+                    if video_pages != 0:
+                        result.stop_reason = "page_limit"
                     break
-                videos = await fetch_bilibili_videos(mid, page=page, client=client)
+                vdata = await fetch_bilibili_videos(mid, page=page, client=client)
                 if was_rate_limited():
+                    # 风控断点续抓（A）：落盘 → 冷却 → 从同一页重试，耗尽次数才放弃
+                    _flush_pending()
+                    if rl_retries < _PAGE_RETRIES:
+                        rl_retries += 1
+                        logger.info(f"mid={mid} 视频第{page}页触发风控，冷却 "
+                                    f"{settings.RATE_LIMIT_COOLDOWN}s 后重试 ({rl_retries}/{_PAGE_RETRIES})...")
+                        clear_rate_limit()
+                        await asyncio.sleep(settings.RATE_LIMIT_COOLDOWN)
+                        continue
                     clear_rate_limit()
                     result.rate_limited = True
+                    result.stop_reason = "rate_limited"
                     break
+                if vdata is None:
+                    # 非风控失败（网络/接口异常）→ 方案 1：显式标记为中断
+                    result.stop_reason = "network_error"
+                    break
+                if result.video_total is None:
+                    result.video_total = vdata.get("total")
+                videos = vdata.get("items") or []
                 if not videos:
-                    break
+                    break   # 列表到底（无更多）
                 if all(v["platform_post_id"] in archived_ids for v in videos):
                     result.archived_stop = True
+                    result.stop_reason = "archived_boundary"
                     break
                 for v in videos:
                     result.videos += 1
@@ -553,22 +725,45 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
         # ── 动态 ──
         offset = ""
         dyn_page = 0
+        dyn_rl_retries = 0   # 风控重试计数（每账号动态列表页，见 _PAGE_RETRIES）
         stop_now = False
         while True:
-            if dynamics_pages > 0 and dyn_page >= dynamics_pages:
+            # 断点让位：定时任务请求让位时先落盘，交还锁等待其完成后续跑
+            if _yield_request.is_set():
+                _flush_pending()
+                await _maybe_yield_post(db)
+            if dynamics_pages == 0 or (dynamics_pages > 0 and dyn_page >= dynamics_pages):
+                if dynamics_pages != 0:
+                    result.stop_reason = "page_limit"
                 break
             data = await fetch_bilibili_dynamics(mid, offset=offset, client=client)
             if was_rate_limited():
+                # 风控断点续抓（A）：落盘 → 冷却 → 从同一 offset 重试，耗尽次数才放弃
+                _flush_pending()
+                if dyn_rl_retries < _PAGE_RETRIES:
+                    dyn_rl_retries += 1
+                    logger.info(f"mid={mid} 动态第{dyn_page + 1}页触发风控，冷却 "
+                                f"{settings.RATE_LIMIT_COOLDOWN}s 后重试 ({dyn_rl_retries}/{_PAGE_RETRIES})...")
+                    clear_rate_limit()
+                    await asyncio.sleep(settings.RATE_LIMIT_COOLDOWN)
+                    continue
                 clear_rate_limit()
                 result.rate_limited = True
+                result.stop_reason = "rate_limited"
                 break
-            if not data:
+            if data is None:
+                # 非风控失败（网络/接口异常）→ 方案 1：显式标记为中断
+                result.stop_reason = "network_error"
                 break
+            items = data.get("items") or []
+            if not items:
+                break   # 空页 → 视为到底（修复空页误判归档边界）
             # 归档边界：整页已归档 → 更早的页必然已归档，停止遍历
-            if all(d["platform_post_id"] in archived_ids for d in data.get("items", [])):
+            if all(d["platform_post_id"] in archived_ids for d in items):
                 result.archived_stop = True
+                result.stop_reason = "archived_boundary"
                 break
-            for idx, d in enumerate(data.get("items", [])):
+            for idx, d in enumerate(items):
                 # 双保险：直播开播动态（fetcher 已过滤，此处兜底，见 devlog/018）
                 if d["type"] == "live":
                     continue
@@ -579,6 +774,7 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
                     # 防置顶旧帖排在流首导致误停漏抓新帖，见 docstring）
                     if stop_on_existing and not (dyn_page == 0 and idx == 0):
                         result.stopped_early = True
+                        result.stop_reason = "stopped_early"
                         stop_now = True
                         break
                     continue
@@ -649,6 +845,10 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
                             )
                             await asyncio.sleep(random.uniform(0.5, 2.0))
 
+                # 详情风控标志仅用于列表页判定（C）：每条详情处理完立即清除，
+                # 避免 fetch_dynamic_detail 置位的标志污染下一页列表请求的判定
+                clear_rate_limit()
+
                 pending.append(d)
                 existing_ids.add(d["platform_post_id"])
                 if len(pending) >= _POST_BATCH_SIZE:
@@ -670,8 +870,154 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
             await client.aclose()
 
 
-async def async_fetch_posts(mid: int, video_pages: int, dynamics_pages: int) -> PostFetchResult:
-    """单个账号的帖子抓取（带锁，供 fetch-posts 端点调用）。"""
+async def _fetch_platform_posts(pf, uid: str, pages: int, db: Session,
+                                client: httpx.AsyncClient | None = None,
+                                stop_on_existing: bool = False) -> PostFetchResult:
+    """通用单流帖子抓取循环（爬虫框架：微博及后续单流平台复用）。
+
+    pages=-1 拉到底；pages=0 不抓；与 _fetch_posts_core 共用同一套基础设施：
+    批量落库/内存去重/归档边界/定时任务让位/风控断点续抓/stop_reason 归类。
+    计数口径：单流帖子记入 dynamics 桶（与 B 站动态流同一统计位）。
+    """
+    result = PostFetchResult()
+    clear_rate_limit()
+
+    own_client = client is None
+    if own_client:
+        client = httpx.AsyncClient(timeout=15.0)
+
+    try:
+        platform = pf.platform
+        post_repo = PostRepo(db)
+        existing_ids = {
+            r[0] for r in db.query(Post.platform_post_id).filter(
+                Post.platform == platform, Post.platform_uid == str(uid)
+            ).all()
+        }
+        archived_ids = {
+            r[0] for r in db.query(Post.platform_post_id).filter(
+                Post.platform == platform, Post.platform_uid == str(uid),
+                Post.is_archived == True,  # noqa: E712
+            ).all()
+        }
+
+        pending: list[dict] = []
+
+        def _flush_pending() -> None:
+            nonlocal pending
+            if not pending:
+                return
+            try:
+                for d in pending:
+                    db.add(Post(**d))
+                db.commit()
+                result.stored += len(pending)
+            except IntegrityError:
+                db.rollback()
+                saved = 0
+                for d in pending:
+                    if _safe_store_post(post_repo, d):
+                        saved += 1
+                    else:
+                        result.skipped += 1
+                result.stored += saved
+            pending = []
+
+        page = 1
+        rl_retries = 0
+        while True:
+            # 断点让位：定时任务请求让位时先落盘，交还锁等待其完成后续跑
+            if _yield_request.is_set():
+                _flush_pending()
+                await _maybe_yield_post(db)
+            if pages == 0 or (pages > 0 and page > pages):
+                if pages != 0:
+                    result.stop_reason = "page_limit"
+                break
+            data = await pf.fetch_post_page(str(uid), page, client=client)
+            if was_rate_limited():
+                # 风控断点续抓（A）：落盘 → 冷却 → 从同一页重试，耗尽次数才放弃
+                _flush_pending()
+                if rl_retries < _PAGE_RETRIES:
+                    rl_retries += 1
+                    logger.info(f"{platform}:{uid} 第{page}页触发风控，冷却 "
+                                f"{settings.RATE_LIMIT_COOLDOWN}s 后重试 ({rl_retries}/{_PAGE_RETRIES})...")
+                    clear_rate_limit()
+                    await asyncio.sleep(settings.RATE_LIMIT_COOLDOWN)
+                    continue
+                clear_rate_limit()
+                result.rate_limited = True
+                result.stop_reason = "rate_limited"
+                break
+            if data is None:
+                result.stop_reason = "network_error"
+                break
+            items = data.get("items") or []
+            if not items:
+                break   # 空页 → 视为到底
+            # 归档边界：整页已归档 → 更早的页必然已归档，停止遍历
+            if all(d["platform_post_id"] in archived_ids for d in items):
+                result.archived_stop = True
+                result.stop_reason = "archived_boundary"
+                break
+            for idx, d in enumerate(items):
+                result.dynamics += 1
+                if d["platform_post_id"] in existing_ids:
+                    result.skipped += 1
+                    # 增量模式：遇已入库即认为更早的都已入库（首页首条豁免防置顶误停）
+                    if stop_on_existing and not (page == 1 and idx == 0):
+                        result.stopped_early = True
+                        result.stop_reason = "stopped_early"
+                        _flush_pending()
+                        return result
+                    continue
+
+                # 详情补全（长文全文等）；风控标志仅用于列表页判定（C）
+                if await pf.enrich(d, client=client):
+                    await asyncio.sleep(random.uniform(0.5, 1.5))
+                clear_rate_limit()
+
+                pending.append(d)
+                existing_ids.add(d["platform_post_id"])
+                if len(pending) >= _POST_BATCH_SIZE:
+                    _flush_pending()
+            if not data.get("has_more"):
+                break
+            page += 1
+            await asyncio.sleep(20)
+
+        _flush_pending()
+        return result
+    finally:
+        if own_client:
+            await client.aclose()
+
+
+async def _fetch_posts_for_account(acc: Account, video_pages: int, dynamics_pages: int,
+                                   db: Session, client: httpx.AsyncClient | None = None,
+                                   include_videos: bool = True,
+                                   stop_on_existing: bool = False) -> PostFetchResult:
+    """按平台分发单个账号的帖子抓取：
+    - bilibili → 双流核心 _fetch_posts_core（视频+动态、归档边界、视频总数比对）
+    - weibo 等单流平台 → 通用循环 _fetch_platform_posts
+    """
+    pf = registry.get_fetcher(acc.platform)
+    if pf is None:
+        return PostFetchResult(stop_reason="error", error=f"不支持的平台 '{acc.platform}'")
+    if acc.platform == "bilibili":
+        try:
+            mid = int(acc.platform_uid)
+        except (TypeError, ValueError):
+            return PostFetchResult(stop_reason="error", error="非数字 UID")
+        return await _fetch_posts_core(mid, video_pages, dynamics_pages, db,
+                                       client=client, include_videos=include_videos,
+                                       stop_on_existing=stop_on_existing)
+    return await _fetch_platform_posts(pf, str(acc.platform_uid), dynamics_pages, db,
+                                       client=client, stop_on_existing=stop_on_existing)
+
+
+async def async_fetch_posts(platform: str, uid: str, video_pages: int, dynamics_pages: int) -> PostFetchResult:
+    """单个账号的帖子抓取（带锁，供 fetch-posts 端点调用）；按平台分发。"""
     global _post_fetch_running
 
     if not _post_fetch_lock.acquire(blocking=False):
@@ -680,25 +1026,49 @@ async def async_fetch_posts(mid: int, video_pages: int, dynamics_pages: int) -> 
 
     _post_fetch_running = True
     _status["post"]["running"] = True
-    _set_post_target(str(mid))
+    _set_post_target(str(uid))
+    res_seq = _next_result_seq()
     db: Session = SessionLocal()
     client = httpx.AsyncClient(timeout=15.0)
+    out: PostFetchResult | None = None
     try:
-        return await _fetch_posts_core(mid, video_pages, dynamics_pages, db, client=client)
+        pf = registry.get_fetcher(platform)
+        if pf is None:
+            out = PostFetchResult(stop_reason="error", error=f"不支持的平台 '{platform}'")
+            return out
+        if platform == "bilibili":
+            out = await _fetch_posts_core(int(uid), video_pages, dynamics_pages, db, client=client)
+        else:
+            out = await _fetch_platform_posts(pf, str(uid), dynamics_pages, db, client=client)
+        return out
     except Exception as e:
-        logger.error(f"帖子抓取异常 mid={mid}: {e}", exc_info=True)
+        logger.error(f"帖子抓取异常 {platform}:{uid}: {e}", exc_info=True)
         db.rollback()
-        return PostFetchResult()
+        out = PostFetchResult(stop_reason="error", error=str(e))
+        return out
     finally:
         db.close()
         await client.aclose()
         _post_fetch_running = False
         _reset_post_status()
         _post_fetch_lock.release()
+        if out is not None:
+            lossy = out.stop_reason in ("rate_limited", "network_error", "error")
+            video_missing = None
+            if out.video_total is not None and out.stop_reason in ("rate_limited", "network_error"):
+                video_missing = max(0, out.video_total - out.videos)
+            _set_post_last_result(
+                res_seq, "quick",
+                _status["post"]["target"] or str(uid),
+                out.videos, out.dynamics, out.stored, out.skipped,
+                ([{"label": f"{platform}:{uid}", "stop_reason": out.stop_reason,
+                   "error": out.error}] if lossy else []),
+                video_missing,
+            )
 
 
 async def async_fetch_all_posts() -> dict:
-    """对库中所有 bilibili 账号逐个全量抓取帖子（视频+动态）。"""
+    """对库中所有账号（bilibili+微博等）逐个全量抓取帖子（按平台分发）。"""
     global _post_fetch_running
 
     if not _post_fetch_lock.acquire(blocking=False):
@@ -707,36 +1077,165 @@ async def async_fetch_all_posts() -> dict:
 
     _post_fetch_running = True
     _status["post"]["running"] = True
+    res_seq = _next_result_seq()
     total = {"videos": 0, "dynamics": 0, "stored": 0, "skipped": 0}
     details = []
+    issues: list[dict] = []
+    video_missing = 0
+    out: dict = {}
     db: Session = SessionLocal()
     client = httpx.AsyncClient(timeout=15.0)
 
     try:
-        accounts = AccountRepo(db).all_for_fetch(platform="bilibili")
+        accounts = AccountRepo(db).all_for_fetch()
 
         if not accounts:
-            logger.warning("没有可抓取的 bilibili 账号")
-            return {"status": "done", "total": total, "details": details}
+            logger.warning("没有可抓取的账号")
+            out = {"status": "done", "total": total, "details": details}
+            return out
 
         for idx, acc in enumerate(accounts):
+            # 断点让位：定时任务请求让位时交还锁，等待其完成后续跑（同一账号列表序号）
+            if _yield_request.is_set():
+                await _maybe_yield_post(db)
             _set_post_target(acc.display_name or str(acc.platform_uid))
-            logger.info(f"[{idx+1}/{len(accounts)}] 全量抓取 {acc.display_name or acc.platform_uid} 的帖子...")
+            logger.info(f"[{idx+1}/{len(accounts)}] 全量抓取 {acc.platform}:{acc.platform_uid} "
+                        f"({acc.display_name or ''}) 的帖子...")
             try:
-                r = await _fetch_posts_core(int(acc.platform_uid), -1, -1, db, client=client)
+                r = await _fetch_posts_for_account(acc, -1, -1, db, client=client)
             except Exception as e:
-                logger.error(f"帖子抓取异常 uid={acc.platform_uid}: {e}", exc_info=True)
+                logger.error(f"帖子抓取异常 {acc.platform}:{acc.platform_uid}: {e}", exc_info=True)
                 db.rollback()
-                r = PostFetchResult()
+                r = PostFetchResult(stop_reason="error", error=str(e))
 
+            vm = None
+            if r.video_total is not None and r.stop_reason in ("rate_limited", "network_error"):
+                vm = max(0, r.video_total - r.videos)
+                video_missing += vm
             details.append({
+                "platform": acc.platform,
                 "platform_uid": acc.platform_uid,
                 "videos": r.videos, "dynamics": r.dynamics,
                 "stored": r.stored, "skipped": r.skipped,
                 "rate_limited": r.rate_limited,
+                "stop_reason": r.stop_reason, "error": r.error,
+                "video_missing": vm,
             })
             for k in ("videos", "dynamics", "stored", "skipped"):
                 total[k] += getattr(r, k)
+            if r.stop_reason in ("rate_limited", "network_error", "error"):
+                issues.append({"label": f"{acc.platform}:{acc.platform_uid}",
+                               "stop_reason": r.stop_reason, "error": r.error})
+
+            if r.rate_limited:
+                logger.warning(f"{acc.platform}:{acc.platform_uid} 触发风控，冷却 {settings.RATE_LIMIT_COOLDOWN}s...")
+                await asyncio.sleep(settings.RATE_LIMIT_COOLDOWN)
+            elif idx < len(accounts) - 1:
+                await asyncio.sleep(20)
+
+        out = {"status": "done", "total": total, "details": details}
+        return out
+
+    except Exception as e:
+        logger.error(f"全量帖子抓取任务出错: {e}", exc_info=True)
+        db.rollback()
+        out = {"status": "done", "total": total, "details": details, "error": str(e)}
+        return out
+    finally:
+        db.close()
+        await client.aclose()
+        _post_fetch_running = False
+        _reset_post_status()
+        _post_fetch_lock.release()
+        _set_post_last_result(res_seq, "full_all", "全部账号",
+                              total["videos"], total["dynamics"],
+                              total["stored"], total["skipped"],
+                              issues, video_missing or None)
+
+
+def _last_result_for_scope(res_seq: int, kind: str, label: str, total: dict,
+                           issues: list[dict], video_missing: int | None) -> None:
+    """外层帖子任务的 last_result 记录（供 async_fetch_vtuber_posts 等复用）。"""
+    _set_post_last_result(res_seq, kind, label,
+                          total.get("videos", 0), total.get("dynamics", 0),
+                          total.get("stored", 0), total.get("skipped", 0),
+                          issues, video_missing)
+
+
+async def async_fetch_vtuber_posts(name: str, platform: str = "bilibili") -> dict:
+    """按名字全量抓取某个（些）VTuber 的帖子（视频+动态，-1/-1 拉到底）。
+
+    后台任务用（/vtuber/fetch-posts?full=true 触发）：自带 Session 与锁，
+    风控冷却后继续下一个账号；进度经 /vtuber/fetch-status 的 post.target 可见。
+    """
+    global _post_fetch_running
+
+    if not _post_fetch_lock.acquire(blocking=False):
+        logger.warning("帖子抓取正在进行中，跳过本次触发")
+        return {"status": "skipped", "message": "帖子抓取任务正在进行中"}
+
+    _post_fetch_running = True
+    _status["post"]["running"] = True
+    res_seq = _next_result_seq()
+    total = {"videos": 0, "dynamics": 0, "stored": 0, "skipped": 0}
+    details = []
+    issues: list[dict] = []
+    video_missing = 0
+    out: dict = {}
+    db: Session = SessionLocal()
+    client = httpx.AsyncClient(timeout=15.0)
+
+    try:
+        vtubers = db.query(VTuber).filter(VTuber.name.contains(name)).all()
+        if not vtubers:
+            logger.warning(f"未找到名字包含 '{name}' 的 VTuber")
+            out = {"status": "done", "message": f"未找到名字包含 '{name}' 的 VTuber",
+                   "total": total, "details": details}
+            return out
+
+        accounts: list[Account] = []
+        for v in vtubers:
+            for a in db.query(Account).filter(Account.vtuber_id == v.id).all():
+                if a.platform == platform and a.platform_uid and a.platform_uid.isdigit():
+                    accounts.append(a)
+
+        if not accounts:
+            logger.warning(f"名字包含 '{name}' 的 VTuber 没有可抓取的账号")
+            out = {"status": "done", "total": total, "details": details}
+            return out
+
+        for idx, acc in enumerate(accounts):
+            # 断点让位：定时任务请求让位时交还锁，等待其完成后续跑（同一账号列表序号）
+            if _yield_request.is_set():
+                await _maybe_yield_post(db)
+            _set_post_target(acc.display_name or str(acc.platform_uid))
+            logger.info(f"[{idx+1}/{len(accounts)}] 全量抓取帖子 {acc.platform}:{acc.platform_uid} "
+                        f"({acc.display_name or ''}) ...")
+            try:
+                r = await _fetch_posts_for_account(acc, -1, -1, db, client=client)
+            except Exception as e:
+                logger.error(f"帖子抓取异常 {acc.platform}:{acc.platform_uid}: {e}", exc_info=True)
+                db.rollback()
+                r = PostFetchResult(stop_reason="error", error=str(e))
+
+            vm = None
+            if r.video_total is not None and r.stop_reason in ("rate_limited", "network_error"):
+                vm = max(0, r.video_total - r.videos)
+                video_missing += vm
+            details.append({
+                "platform": acc.platform,
+                "platform_uid": acc.platform_uid,
+                "videos": r.videos, "dynamics": r.dynamics,
+                "stored": r.stored, "skipped": r.skipped,
+                "rate_limited": r.rate_limited,
+                "stop_reason": r.stop_reason, "error": r.error,
+                "video_missing": vm,
+            })
+            for k in ("videos", "dynamics", "stored", "skipped"):
+                total[k] += getattr(r, k)
+            if r.stop_reason in ("rate_limited", "network_error", "error"):
+                issues.append({"label": f"{acc.platform}:{acc.platform_uid}",
+                               "stop_reason": r.stop_reason, "error": r.error})
 
             if r.rate_limited:
                 logger.warning(f"uid={acc.platform_uid} 触发风控，冷却 {settings.RATE_LIMIT_COOLDOWN}s...")
@@ -744,17 +1243,21 @@ async def async_fetch_all_posts() -> dict:
             elif idx < len(accounts) - 1:
                 await asyncio.sleep(20)
 
+        out = {"status": "done", "total": total, "details": details}
+        return out
+
     except Exception as e:
         logger.error(f"全量帖子抓取任务出错: {e}", exc_info=True)
         db.rollback()
+        out = {"status": "done", "total": total, "details": details, "error": str(e)}
+        return out
     finally:
         db.close()
         await client.aclose()
         _post_fetch_running = False
         _reset_post_status()
         _post_fetch_lock.release()
-
-    return {"status": "done", "total": total, "details": details}
+        _last_result_for_scope(res_seq, "full_vtuber", name, total, issues, video_missing or None)
 
 
 def is_post_fetch_running() -> bool:
@@ -791,53 +1294,69 @@ async def async_update_unarchived_posts(name: str | None = None) -> dict:
 
     _post_fetch_running = True
     _status["post"]["running"] = True
+    res_seq = _next_result_seq()
     db: Session = SessionLocal()
     client = httpx.AsyncClient(timeout=15.0)
     total = {"dynamics": 0, "stored": 0, "skipped": 0}
     details = []
+    issues: list[dict] = []
     archived = 0
+    rate_limited_any = False
+    out: dict = {}
 
     try:
         # 1. 归档规则
         archived = archive_old_posts(db=db)
         logger.info(f"归档规则执行完成: {archived} 条帖子已归档（早于 30 天前）")
 
-        # 2. 定位目标账号
-        q = AccountRepo(db).all_for_fetch(platform="bilibili")
+        # 2. 定位目标账号（全平台：bilibili 动态 + 微博流均支持增量）
+        q = AccountRepo(db).all_for_fetch()
         if name:
             vids = [v.id for v in db.query(VTuber).filter(VTuber.name.contains(name)).all()]
             if not vids:
-                return {"status": "done", "archived": archived,
-                        "message": f"未找到名字包含 '{name}' 的 VTuber",
-                        "total": total, "details": details}
+                out = {"status": "done", "archived": archived,
+                       "message": f"未找到名字包含 '{name}' 的 VTuber",
+                       "total": total, "details": details}
+                return out
             q = [a for a in q if a.vtuber_id in vids]
         accounts = q
 
         if not accounts:
             logger.warning("没有可抓取的 bilibili 账号")
-            return {"status": "done", "archived": archived,
-                    "total": total, "details": details}
+            out = {"status": "done", "archived": archived,
+                   "total": total, "details": details}
+            return out
 
         for idx, acc in enumerate(accounts):
+            # 断点让位：定时任务请求让位时交还锁，等待其完成后续跑（同一账号列表序号）
+            if _yield_request.is_set():
+                await _maybe_yield_post(db)
             _set_post_target(acc.display_name or str(acc.platform_uid))
-            logger.info(f"[{idx+1}/{len(accounts)}] 更新未归档动态 {acc.display_name or acc.platform_uid} ...")
+            logger.info(f"[{idx+1}/{len(accounts)}] 更新未归档 {acc.platform}:{acc.platform_uid} "
+                        f"({acc.display_name or ''}) ...")
             try:
-                r = await _fetch_posts_core(int(acc.platform_uid), -1, -1, db,
-                                            client=client, include_videos=False,
-                                            stop_on_existing=True)
+                r = await _fetch_posts_for_account(acc, -1, -1, db, client=client,
+                                                   include_videos=False,
+                                                   stop_on_existing=True)
             except Exception as e:
-                logger.error(f"更新动态异常 uid={acc.platform_uid}: {e}", exc_info=True)
+                logger.error(f"更新动态异常 {acc.platform}:{acc.platform_uid}: {e}", exc_info=True)
                 db.rollback()
-                r = PostFetchResult()
+                r = PostFetchResult(stop_reason="error", error=str(e))
 
+            rate_limited_any = rate_limited_any or r.rate_limited
             details.append({
+                "platform": acc.platform,
                 "platform_uid": acc.platform_uid,
                 "dynamics": r.dynamics, "stored": r.stored, "skipped": r.skipped,
                 "archived_stop": r.archived_stop,
                 "rate_limited": r.rate_limited,
+                "stop_reason": r.stop_reason, "error": r.error,
             })
             for k in ("dynamics", "stored", "skipped"):
                 total[k] += getattr(r, k)
+            if r.stop_reason in ("rate_limited", "network_error", "error"):
+                issues.append({"label": f"{acc.platform}:{acc.platform_uid}",
+                               "stop_reason": r.stop_reason, "error": r.error})
 
             if r.rate_limited:
                 logger.warning(f"uid={acc.platform_uid} 触发风控，冷却 {settings.RATE_LIMIT_COOLDOWN}s...")
@@ -845,14 +1364,21 @@ async def async_update_unarchived_posts(name: str | None = None) -> dict:
             elif idx < len(accounts) - 1:
                 await asyncio.sleep(20)
 
+        out = {"status": "done", "archived": archived, "total": total, "details": details,
+               "rate_limited": rate_limited_any}
+        return out
+
     except Exception as e:
         logger.error(f"更新未归档动态任务出错: {e}", exc_info=True)
         db.rollback()
+        out = {"status": "done", "archived": archived, "total": total, "details": details,
+               "rate_limited": rate_limited_any, "error": str(e)}
+        return out
     finally:
         db.close()
         await client.aclose()
         _post_fetch_running = False
         _reset_post_status()
         _post_fetch_lock.release()
-
-    return {"status": "done", "archived": archived, "total": total, "details": details}
+        _last_result_for_scope(res_seq, "update_unarchived", name or "全部",
+                               total, issues, None)

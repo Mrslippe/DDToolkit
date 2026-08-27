@@ -11,7 +11,7 @@ from sqlalchemy import inspect, text
 
 from app.core.config import settings
 from app.core.database import engine, Base
-from app.routers import vtuber, img_proxy
+from app.routers import vtuber, img_proxy, auth
 
 # --- 日志 ---
 os.makedirs(settings.DATA_DIR / "logs", exist_ok=True)
@@ -36,7 +36,7 @@ def _perf(step: str) -> None:
 # ── 统一 schema 管理（alembic 迁移链为准） ──────────────────────────────
 
 # 迁移链最新版本。新加迁移时必须同步更新（tests 会断言与 alembic head 一致）。
-MIGRATION_HEAD = "d001"
+MIGRATION_HEAD = "e001"
 
 
 def _alembic_config():
@@ -158,12 +158,14 @@ app.add_middleware(
 
 app.include_router(vtuber.router)
 app.include_router(img_proxy.router)
+app.include_router(auth.router)
 
 # 挂载静态文件目录，头像缓存可通过 /static/avatars/{uid}.jpg 访问
 # （目录随数据根 DATA_DIR 走，桌面端打包后位于数据目录）
 static_dir = settings.DATA_DIR / "static"
 static_dir.mkdir(exist_ok=True)
 (static_dir / "avatars").mkdir(exist_ok=True)
+(static_dir / "custom_bg").mkdir(exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
 

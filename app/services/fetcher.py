@@ -24,9 +24,12 @@ RATE_LIMIT_CODES = {-509, -412, -799, 412}
 
 
 def _detect_rate_limit(status_code: int, data: dict | None = None):
-    """检测响应是否为风控/限流（写入当前任务上下文）"""
-    if status_code == 412:
-        _rate_limit_ctx.set((True, "HTTP 412"))
+    """检测响应是否为风控/限流（写入当前任务上下文）。
+
+    覆盖 B 站（412/-509/-412/-799）与微博 m 站（HTTP 418/429；{"ok":0,"msg":"…频繁…"}）。
+    """
+    if status_code in (412, 418, 429):
+        _rate_limit_ctx.set((True, f"HTTP {status_code}"))
         return
     if data is None:
         return
@@ -36,6 +39,11 @@ def _detect_rate_limit(status_code: int, data: dict | None = None):
         _rate_limit_ctx.set((True, f"code={code}, msg={msg}"))
     elif "频繁" in msg or "请求过于" in msg:
         _rate_limit_ctx.set((True, f"msg={msg}"))
+    else:
+        # 微博 m 站响应无 code/message 字段：{"ok":0,"msg":"..."}
+        wmsg = str(data.get("msg", ""))
+        if "频繁" in wmsg or "请求过于" in wmsg:
+            _rate_limit_ctx.set((True, f"msg={wmsg}"))
 
 
 def was_rate_limited() -> bool:
@@ -200,8 +208,10 @@ DYNAMIC_LIST_URL = "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space
 
 
 async def fetch_bilibili_videos(mid: int, page: int = 1, page_size: int = 30,
-                                client: Optional[httpx.AsyncClient] = None) -> Optional[list[dict]]:
-    """获取某用户的视频投稿列表，返回 [{bvid, title, description, cover, url, created_ts, play, comment}, ...]"""
+                                client: Optional[httpx.AsyncClient] = None) -> Optional[dict]:
+    """获取某用户的视频投稿列表，返回 {"items": [{bvid, title, ...}, ...], "total": N}。
+    total 为 arc/search page.count（B站侧视频总数，方案 2 完整性比对用）；
+    失败返回 None（含风控，风控标志由调用方经 was_rate_limited() 判定）。"""
     base_params = {"mid": mid, "ps": page_size, "pn": page, "order": "pubdate"}
     signed_params = await wbi.sign_params(base_params)
     url = f"{VIDEO_LIST_URL}?{urllib.parse.urlencode(signed_params)}"
@@ -241,7 +251,10 @@ async def fetch_bilibili_videos(mid: int, page: int = 1, page_size: int = 30,
                     "published_at": _ts_to_datetime(v.get("created")),
                     "raw_json": _dump_json(v),
                 })
-            return result
+            return {
+                "items": result,
+                "total": (data.get("data", {}).get("page") or {}).get("count") or 0,
+            }
     except Exception as e:
         logger.error(f"获取视频列表异常: {e}, mid={mid}")
         return None

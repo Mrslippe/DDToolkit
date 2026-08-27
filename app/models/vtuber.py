@@ -24,6 +24,7 @@ class VTuber(Base):
     debut_date = Column(String, nullable=True)         # YYYY-MM-DD 或仅 YYYY
     setting = Column(Text, nullable=True)              # 角色设定
     avatar = Column(String, nullable=True)             # 默认头像 URL
+    background_path = Column(String, nullable=True)    # 卡片页自定义背景（static/ 相对路径）
     notes = Column(Text, nullable=True)
     created_at = Column(DateTime, default=_now)
     updated_at = Column(DateTime, default=_now, onupdate=_now)
@@ -56,6 +57,26 @@ class Account(Base):
     last_fetched_at = Column(DateTime, nullable=True)
 
     vtuber = relationship("VTuber", back_populates="accounts")
+
+
+class AccountStatSnapshot(Base):
+    """账号统计快照历史：每次账号信息抓取成功后追加一行（P0，v0.5.0）。
+
+    accounts.followers_count 只存最新值、每次抓取覆盖；此表记录时间序列，
+    供涨粉趋势/直播状态历史回溯。简单优先：全量记录，不做无变化降噪。
+    """
+    __tablename__ = "account_stat_snapshots"
+    __table_args__ = (
+        Index("ix_account_stat_snapshots_account_id", "account_id"),
+        Index("ix_account_stat_snapshots_captured_at", "captured_at"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
+    followers_count = Column(Integer, nullable=True)
+    live_status = Column(Integer, nullable=True)          # 顺手记录：0=离线 1=直播中
+    live_title = Column(String, nullable=True)            # 开播标题快照
+    captured_at = Column(DateTime, nullable=False, default=_now)
 
 
 class Post(Base):

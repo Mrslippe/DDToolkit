@@ -1,6 +1,6 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_serializer
 
 
 # ── Account ────────────────────────────────────────────────────────
@@ -44,6 +44,25 @@ class AccountUpdate(BaseModel):
     room_id: str | None = None
 
 
+# ── Account 统计快照（P0，v0.5.0） ─────────────────────────────────
+
+class AccountStatSnapshotOut(BaseModel):
+    """粉丝数/直播状态时间序列点；captured_at 与 PostOut 同样处理 naive UTC。"""
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    account_id: int
+    followers_count: int | None = None
+    live_status: int | None = None
+    live_title: str | None = None
+    captured_at: datetime
+
+    @field_serializer("captured_at")
+    def _ser_captured_at(self, v: datetime | None):
+        if v is not None and v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc)
+        return v
+
+
 # ── VTuber ─────────────────────────────────────────────────────────
 
 class VTuberOut(BaseModel):
@@ -55,6 +74,7 @@ class VTuberOut(BaseModel):
     debut_date: str | None = None
     setting: str | None = None
     avatar: str | None = None
+    background_path: str | None = None
     notes: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
@@ -100,6 +120,14 @@ class PostOut(BaseModel):
     raw_json: str | None = None
     is_archived: bool = False
     created_at: datetime | None = None
+
+    @field_serializer("published_at")
+    def _ser_published_at(self, v: datetime | None):
+        # 库内 published_at 为 naive UTC（SQLite 存储抹掉 tz）；补 +00:00
+        # 避免前端按本地时区解析导致时间偏移 8 小时
+        if v is not None and v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc)
+        return v
 
 
 class PostCreate(BaseModel):
@@ -151,3 +179,9 @@ class PostStats(BaseModel):
     by_type: dict[str, int]
     earliest: datetime | None = None
     latest: datetime | None = None
+
+    @field_serializer("earliest", "latest")
+    def _ser_dt(self, v: datetime | None):
+        if v is not None and v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc)
+        return v

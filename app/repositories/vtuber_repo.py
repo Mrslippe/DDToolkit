@@ -1,9 +1,9 @@
-﻿from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
-from app.models.vtuber import VTuber, Account, Post
+from app.models.vtuber import VTuber, Account, Post, AccountStatSnapshot
 
 
 # ── VTuber ─────────────────────────────────────────────────────────
@@ -30,8 +30,7 @@ class VTuberRepo:
         if not obj:
             return None
         for k, v in data.items():
-            if v is not None:
-                setattr(obj, k, v)
+            setattr(obj, k, v)
         self.db.commit()
         self.db.refresh(obj)
         return obj
@@ -69,8 +68,7 @@ class AccountRepo:
         if not obj:
             return None
         for k, v in data.items():
-            if v is not None:
-                setattr(obj, k, v)
+            setattr(obj, k, v)
         self.db.commit()
         self.db.refresh(obj)
         return obj
@@ -91,6 +89,42 @@ class AccountRepo:
         if platform:
             q = q.filter(Account.platform == platform)
         return q.all()
+
+
+# ── Account 统计快照（P0，v0.5.0） ─────────────────────────────────
+
+class AccountStatSnapshotRepo:
+    """账号统计快照历史：粉丝数/直播状态时间序列（涨粉趋势可视化地基）。
+
+    只负责采集与读取，本期不做可视化（TODO P0 范围）。
+    """
+
+    def __init__(self, db: Session):
+        self.db = db
+
+    def add(self, account_id: int, followers_count: int | None,
+            live_status: int | None = None, live_title: str | None = None,
+            captured_at: datetime | None = None) -> AccountStatSnapshot:
+        """追加一行快照（调用方随后 commit）。简单优先：全量记录，不降噪。"""
+        obj = AccountStatSnapshot(
+            account_id=account_id,
+            followers_count=followers_count,
+            live_status=live_status,
+            live_title=live_title,
+            captured_at=captured_at or datetime.now(timezone.utc),
+        )
+        self.db.add(obj)
+        return obj
+
+    def recent(self, account_id: int, limit: int = 100) -> list[AccountStatSnapshot]:
+        """按时间倒序取最近 limit 条快照（只读端点备用）。"""
+        return (
+            self.db.query(AccountStatSnapshot)
+            .filter(AccountStatSnapshot.account_id == account_id)
+            .order_by(AccountStatSnapshot.captured_at.desc())
+            .limit(limit)
+            .all()
+        )
 
 
 # ── Post ───────────────────────────────────────────────────────────
@@ -116,6 +150,7 @@ class PostRepo:
         """服务端分页 + 过滤（前端列表用；旧 by_uid 保持兼容）。返回 (total, items)
 
         q        标题/摘要模糊匹配（OR 语义）
+        post_type 逗号分隔多型（如 "video,video_dynamic"）；单值天然兼容
         date_from/date_to 发布时间范围：from 含当天零点起；to 为次日零点排他
                  （即包含结束日全天）；设范围时 published_at 为空的帖子被排除
         """
@@ -123,11 +158,14 @@ class PostRepo:
             Post.platform == platform, Post.platform_uid == platform_uid
         )
         if post_type:
-            query = query.filter(Post.type == post_type)
+            types = [t.strip() for t in post_type.split(',') if t.strip()]
+            if types:
+                query = query.filter(Post.type.in_(types))
         if is_archived is not None:
             query = query.filter(Post.is_archived == is_archived)
+        q = (q or "").strip()
         if q:
-            kw = f"%{q.strip()}%"
+            kw = f"%{q}%"
             query = query.filter(or_(
                 Post.title.ilike(kw),
                 Post.summary.ilike(kw),
@@ -196,8 +234,7 @@ class PostRepo:
         if not obj:
             return None
         for k, v in data.items():
-            if v is not None:
-                setattr(obj, k, v)
+            setattr(obj, k, v)
         self.db.commit()
         self.db.refresh(obj)
         return obj
@@ -218,7 +255,6 @@ class PostRepo:
         """
         if not platform_uids:
             return 0
-        from sqlalchemy import or_
         cond = or_(*[
             (Post.platform == p) & (Post.platform_uid == uid)
             for p, uid in platform_uids

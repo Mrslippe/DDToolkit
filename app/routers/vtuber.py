@@ -1,18 +1,24 @@
 import logging
 from datetime import date, datetime, timedelta, timezone
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from pathlib import Path
+
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.database import get_db
 from app.models.vtuber import VTuber, Post, Account
-from app.repositories.vtuber_repo import VTuberRepo, AccountRepo, PostRepo
+from app.repositories.vtuber_repo import (
+    VTuberRepo, AccountRepo, PostRepo, AccountStatSnapshotRepo,
+)
 from app.schemas.vtuber import (
     VTuberOut, VTuberCreate, VTuberUpdate,
     AccountOut, AccountCreate, AccountUpdate,
     PostOut, PostCreate, PostUpdate, PostPage, PostStats,
+    AccountStatSnapshotOut,
 )
 from app.services import pool
 
@@ -46,16 +52,25 @@ def is_fetch_running():
     return _sched().is_fetch_running()
 
 
-async def async_fetch_posts(mid: int, video_pages: int, dynamics_pages: int):
-    return await _sched().async_fetch_posts(mid, video_pages, dynamics_pages)
+async def async_fetch_posts(platform: str, uid: str, video_pages: int, dynamics_pages: int):
+    return await _sched().async_fetch_posts(platform, uid, video_pages, dynamics_pages)
 
 
 async def async_fetch_all_posts():
     return await _sched().async_fetch_all_posts()
 
 
+async def async_fetch_vtuber_posts(name: str, platform: str = "bilibili"):
+    return await _sched().async_fetch_vtuber_posts(name, platform)
+
+
 def is_post_fetch_running():
     return _sched().is_post_fetch_running()
+
+
+def any_fetch_running():
+    """全局单飞：账号/帖子任一在跑，或定时任务正请求让位 → 均视为忙。"""
+    return _sched().any_fetch_running()
 
 
 async def async_update_unarchived_posts(name: str | None = None):
@@ -108,6 +123,61 @@ def update_vtuber(vtuber_id: int, data: VTuberUpdate, db: Session = Depends(get_
     v = VTuberRepo(db).update(vtuber_id, data.model_dump(exclude_unset=True))
     if not v:
         raise HTTPException(404, f"VTuber id={vtuber_id} 不存在")
+    return VTuberOut.model_validate(v, from_attributes=True)
+
+
+CONTENT_TYPE_EXT = {
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+    "image/gif": "gif",
+}
+
+
+@router.post("/vtuber/{vtuber_id}/background", response_model=VTuberOut)
+async def set_vtuber_background(
+    vtuber_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    """上传卡片页自定义背景：时间戳后缀防 WebView 缓存，替换时删旧文件。"""
+    import time as _time
+
+    v = VTuberRepo(db).get(vtuber_id)
+    if not v:
+        raise HTTPException(404, f"VTuber id={vtuber_id} 不存在")
+    ext = CONTENT_TYPE_EXT.get(file.content_type or "")
+    if not ext:
+        raise HTTPException(415, "仅支持 jpeg / png / webp / gif 图片")
+    data = await file.read()
+    if len(data) > 10 * 1024 * 1024:
+        raise HTTPException(413, "图片超过 10MB 限制")
+    custom_dir = settings.DATA_DIR / "static" / "custom_bg"
+    custom_dir.mkdir(parents=True, exist_ok=True)
+    if v.background_path:
+        (custom_dir / Path(v.background_path).name).unlink(missing_ok=True)
+    name = f"{vtuber_id}_{int(_time.time() * 1000)}.{ext}"
+    (custom_dir / name).write_bytes(data)
+    v.background_path = f"static/custom_bg/{name}"
+    db.add(v)
+    db.commit()
+    db.refresh(v)
+    return VTuberOut.model_validate(v, from_attributes=True)
+
+
+@router.delete("/vtuber/{vtuber_id}/background", response_model=VTuberOut)
+def clear_vtuber_background(vtuber_id: int, db: Session = Depends(get_db)):
+    """清除自定义背景，回退到头像铺底。"""
+    v = VTuberRepo(db).get(vtuber_id)
+    if not v:
+        raise HTTPException(404, f"VTuber id={vtuber_id} 不存在")
+    if v.background_path:
+        custom_dir = settings.DATA_DIR / "static" / "custom_bg"
+        (custom_dir / Path(v.background_path).name).unlink(missing_ok=True)
+        v.background_path = None
+        db.add(v)
+        db.commit()
+        db.refresh(v)
     return VTuberOut.model_validate(v, from_attributes=True)
 
 
@@ -172,6 +242,21 @@ def delete_account(account_id: int, db: Session = Depends(get_db)):
         n_posts = PostRepo(db).delete_by_platform_uids([(acc.platform, acc.platform_uid)])
         logger.info(f"删除 Account#{account_id} ({acc.platform}:{acc.platform_uid})：连带清除帖子 {n_posts} 条")
     repo.delete(account_id)
+
+
+@router.get("/account/{account_id}/stat-snapshots", response_model=list[AccountStatSnapshotOut])
+def list_account_stat_snapshots(account_id: int, limit: int = Query(100, ge=1, le=1000),
+                                db: Session = Depends(get_db)):
+    """账号统计快照历史（P0，v0.5.0）：粉丝数/直播状态时间序列，时间倒序。
+
+    本期只读端点备用（不做可视化）；limit 上限 1000。
+    """
+    if not AccountRepo(db).get(account_id):
+        raise HTTPException(404, f"Account id={account_id} 不存在")
+    return [
+        AccountStatSnapshotOut.model_validate(s, from_attributes=True)
+        for s in AccountStatSnapshotRepo(db).recent(account_id, limit)
+    ]
 
 
 # ── Post CRUD ──────────────────────────────────────────────────────
@@ -250,8 +335,8 @@ def delete_post(post_id: int, db: Session = Depends(get_db)):
 
 @router.api_route("/vtuber/fetch", methods=["GET", "POST"])
 async def manual_fetch():
-    if is_fetch_running():
-        return {"status": "skipped", "message": "抓取任务正在进行中"}
+    if any_fetch_running():
+        return {"status": "skipped", "message": "已有抓取任务正在进行中，请稍后再试"}
     result = await async_fetch_and_update()
     return {
         "status": "done",
@@ -270,8 +355,8 @@ async def fetch_vtuber(vtuber_id: int, db: Session = Depends(get_db)):
     """抓取单个 VTuber 的账号信息（devlog/017）。与全局抓取互斥。"""
     if not VTuberRepo(db).get(vtuber_id):
         raise HTTPException(404, f"VTuber id={vtuber_id} 不存在")
-    if is_fetch_running():
-        return {"status": "skipped", "message": "抓取任务正在进行中"}
+    if any_fetch_running():
+        return {"status": "skipped", "message": "已有抓取任务正在进行中，请稍后再试"}
     result = await async_fetch_vtuber(vtuber_id)
     return {
         "status": "done",
@@ -288,18 +373,32 @@ async def fetch_vtuber(vtuber_id: int, db: Session = Depends(get_db)):
 # ── Fetch Posts ─────────────────────────────────────────────────────
 
 @router.post("/vtuber/fetch-posts")
-async def fetch_posts_by_name(name: str, platform: str = "bilibili",
+async def fetch_posts_by_name(name: str, background: BackgroundTasks,
+                              platform: str = "bilibili",
                               video_pages: int = 3, dynamics_pages: int = 5,
+                              full: bool = False,
                               db: Session = Depends(get_db)):
     """
     按 VTuber 名字抓取帖子。name 支持模糊匹配。
     video_pages=-1 全量拉取视频，dynamics_pages=-1 全量拉取动态。
+    full=true → 后台全量（视频+动态 -1/-1 拉到底，任务立即返回，
+              进度经 /vtuber/fetch-status 的 post.target 轮询可见）。
     抓取前先执行归档规则刷新 is_archived，使抓取循环的归档边界剪枝
     立即生效——已归档条目不再产生任何网络请求（v0.4.7）。
     示例: POST /vtuber/fetch-posts?name=明前奶绿&video_pages=-1&dynamics_pages=-1
+          POST /vtuber/fetch-posts?name=明前奶绿&full=true
     """
-    if is_post_fetch_running():
-        return {"status": "skipped", "message": "帖子抓取任务正在进行中"}
+    if full:
+        if any_fetch_running():
+            raise HTTPException(409, "已有抓取任务正在进行中，请稍后再试")
+        vtubers = db.query(VTuber).filter(VTuber.name.contains(name)).all()
+        if not vtubers:
+            raise HTTPException(404, f"未找到名字包含 '{name}' 的 VTuber")
+        background.add_task(async_fetch_vtuber_posts, name, platform)
+        return {"status": "started", "message": "全量帖子抓取已开始（后台执行，进度见顶栏）"}
+
+    if any_fetch_running():
+        return {"status": "skipped", "message": "已有抓取任务正在进行中，请稍后再试"}
 
     vtubers = db.query(VTuber).filter(VTuber.name.contains(name)).all()
     if not vtubers:
@@ -310,20 +409,31 @@ async def fetch_posts_by_name(name: str, platform: str = "bilibili",
 
     acc_repo = AccountRepo(db)
     total = {"videos": 0, "dynamics": 0, "stored": 0, "skipped": 0}
+    total_rl = False   # 任一账号触发风控提前结束 → 置位，前端提示（B）
+    total_vm = 0       # 视频缺失估计（方案 2：参考总数 - 本轮已覆盖）
     results = []
 
     for v in vtubers:
         for acc in acc_repo.by_vtuber(v.id):
-            if acc.platform == platform and acc.platform_uid:
-                r = await async_fetch_posts(int(acc.platform_uid), video_pages, dynamics_pages)
-                results.append({"vtuber": v.name, "account": acc.platform_uid,
+            if acc.platform == platform and acc.platform_uid and acc.platform_uid.isdigit():
+                r = await async_fetch_posts(acc.platform, acc.platform_uid, video_pages, dynamics_pages)
+                vm = None
+                if r.video_total is not None and r.stop_reason in ("rate_limited", "network_error"):
+                    vm = max(0, r.video_total - r.videos)
+                    total_vm += vm
+                results.append({"vtuber": v.name, "platform": acc.platform,
+                                "account": acc.platform_uid,
                                 "videos": r.videos, "dynamics": r.dynamics,
-                                "stored": r.stored, "skipped": r.skipped})
+                                "stored": r.stored, "skipped": r.skipped,
+                                "rate_limited": r.rate_limited,
+                                "stop_reason": r.stop_reason, "video_missing": vm})
+                total_rl = total_rl or r.rate_limited
                 for k in ("videos", "dynamics", "stored", "skipped"):
                     total[k] += getattr(r, k)
 
     return {"status": "done", "archived_first": archived_first,
-            "total": total, "details": results}
+            "total": total, "details": results,
+            "rate_limited": total_rl, "video_missing": total_vm or None}
 
 
 @router.post("/vtuber/fetch-all-posts")
@@ -332,8 +442,8 @@ async def fetch_all_posts():
     对库中所有 VTuber 的 bilibili 账号逐个全量抓取帖子（视频+动态）。
     示例: POST /vtuber/fetch-all-posts
     """
-    if is_post_fetch_running():
-        return {"status": "skipped", "message": "帖子抓取任务正在进行中"}
+    if any_fetch_running():
+        return {"status": "skipped", "message": "已有抓取任务正在进行中，请稍后再试"}
     return await async_fetch_all_posts()
 
 
@@ -366,8 +476,8 @@ async def update_unarchived_posts(name: str | None = None):
     name 省略 → 全部 bilibili 账号；name 支持模糊匹配。
     示例: POST /vtuber/update-posts?name=明前奶绿   |   POST /vtuber/update-posts
     """
-    if is_post_fetch_running():
-        return {"status": "skipped", "message": "帖子抓取任务正在进行中"}
+    if any_fetch_running():
+        return {"status": "skipped", "message": "已有抓取任务正在进行中，请稍后再试"}
     return await async_update_unarchived_posts(name)
 
 
@@ -428,7 +538,12 @@ def adopt_vtuber(data: AdoptRequest, background: BackgroundTasks, db: Session = 
         display_name=hit["name"],
     )
     db.add(acc)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # 并发收录竞态：exists 检查后另一请求先插入，撞唯一约束 → 409 而非 500
+        db.rollback()
+        raise HTTPException(409, f"该账号已入库（并发收录冲突）") from None
     db.refresh(vtuber)
 
     # 响应送达后由事件循环执行（BackgroundTasks 原生支持异步回调）
@@ -439,24 +554,24 @@ def adopt_vtuber(data: AdoptRequest, background: BackgroundTasks, db: Session = 
 @router.post("/vtuber/fetch-accounts")
 async def batch_fetch_accounts(background: BackgroundTasks):
     """批量任务：全量抓取所有 VTuber 的账号信息（后台执行，立即返回）。"""
-    if is_fetch_running():
-        raise HTTPException(409, "账号信息抓取任务正在进行中")
+    if any_fetch_running():
+        raise HTTPException(409, "已有抓取任务正在进行中，请稍后再试")
     background.add_task(async_fetch_and_update)
     return {"status": "started"}
 
 
 @router.post("/vtuber/batch/fetch-all-posts")
 async def batch_fetch_all_posts(background: BackgroundTasks):
-    if is_post_fetch_running():
-        raise HTTPException(409, "帖子抓取任务正在进行中")
+    if any_fetch_running():
+        raise HTTPException(409, "已有抓取任务正在进行中，请稍后再试")
     background.add_task(async_fetch_all_posts)
     return {"status": "started"}
 
 
 @router.post("/vtuber/batch/update-unarchived")
 async def batch_update_unarchived(background: BackgroundTasks):
-    if is_post_fetch_running():
-        raise HTTPException(409, "帖子抓取任务正在进行中")
+    if any_fetch_running():
+        raise HTTPException(409, "已有抓取任务正在进行中，请稍后再试")
     background.add_task(async_update_unarchived_posts)
     return {"status": "started"}
 
