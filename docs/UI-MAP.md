@@ -3,8 +3,14 @@
 > 修改前端界面时，按本文档名称精确指定目标区域/元素。
 > 结构约定：`组件文件 → CSS 类名 → 关键子元素`。设计令牌统一在 `src/styles/tokens.css`。
 >
-> 设计语言总纲：**方形极简 + 全平面零阴影**（shadcn `--radius:0rem`、`--shadow-card:none`）；
-> 例外仅两类视觉胶囊：列表工具行的「浮片」与帖子面板内的「药丸/光条」（保留圆角以贴合参考稿）。
+> 设计语言总纲：**方形极简 + 全平面零阴影**（shadcn `--radius:0rem`、`--shadow-card:none`）。
+> 圆角/阴影豁免收敛为三族（其余一律回方形总纲）：
+> ① 列表工具行「浮片」：斜切白卡（`--pill-radius:3px` + `--pill-skew:-10deg` + `--pill-shadow`）；
+> ② 帖子面板「药丸族」：`type-chip` / `.search-float input` / `post-card-type`/`post-card-duration` 角标 / `stat-badge` / `glow-bar`（均 999px 或渐变软光）；
+> ③ 功能性气泡：`live-tag`（8px）、粉丝 `stat-pill`（10px）、筛选/时间 popover 抽屉阴影（16px 浮置深度）。
+>
+> 对比度约定：顶栏「标题/状态/窗口图标」为**品牌装饰性白字**（保持设计稿原稿，logo 类豁免）；
+> 功能性文字与数字一律达标（`--c-text-sub:#5b6c7e` ≥4.5:1、粉丝徽章 `--pill-fill-*` 白字 ≥3:1 大号数字）。
 
 ---
 
@@ -21,7 +27,7 @@
 | 兜底显示 | lib.rs 8s 后台线程 `is_visible→show()` | 任何 JS 链路失败时窗口最迟 8s 出现（幂等，不重复） |
 | 引导 | `tauriBootstrap()`：`get_backend_port` → `healthz` 轮询 → `setApiBase` | 就绪后进入 `opening` |
 | 状态机 | `BootState: pending→opening→done/failed` | `ENVELOPE_MS=750` 信封动画播完卸载启动幕 |
-| 窗口本体 | 1440×800 / 无框 / 透明 / L3 自绘圆角 | `--radius-window:12px`；Rust 侧已关 DWM 阴影与系统圆角（仅前端一套弧线） |
+| 窗口本体 | 1440×800 / 无框 / 透明 / L3 自绘圆角 | `--radius-window:4px`（Rust 侧已禁 DWM 阴影与系统圆角，只前端一套弧线） |
 | 最大化 | `html.window-maximized` 类 | 壳层圆角归零（App.tsx `useMaximizedClass` 监听 `onResized`） |
 
 ---
@@ -30,17 +36,17 @@
 
 | 名称 | 组件 / 类名 | 说明 |
 |---|---|---|
-| 应用壳 | `.app-shell` | 顶栏 + body 左右布局；12px 自绘圆角（透明窗口裁剪）；光圈已注释 |
+| 应用壳 | `.app-shell` | 纵向 + body 横向布局，4px 自绘圆角（透明窗内部裁剪，白圈已注释） |
 | 主行 | `.app-body` | `flex:1; min-height:0` |
 | 内容区 | `.app-main` | `padding:0; overflow:hidden`，滚动权交付页面内部（posts.css） |
 
 ### A1. 顶栏 `<TopBar>`（components/TopBar.tsx）
 
-视觉严格按 `docs/react-topbar` 导出（Frame411）。整条 `data-tauri-drag-region` 拖拽区。
+视觉严格按 `docs/design/react-topbar` 导出（Frame411）。整条 `data-tauri-drag-region` 拖拽区。
 
 | 名称 | 类名 | 说明 |
 |---|---|---|
-| 顶栏容器 | `.topbar` | 粉色 `--c-primary`，高 `--topbar-height:69px` |
+| 顶部栏 | `.topbar` | 底色 `--c-primary`，高 `--topbar-height:40px` |
 | LOGO 占位区 | `.topbar-logo-zone` | **96×69** 横跨全高，flex 居中 |
 | LOGO 盒 | `.topbar-logo` | **44×44 纯白方形**，内部千图小兔体粉色粗体 D 26px（`--font-logo`） |
 | 标题 | `.topbar-title` | 定宽 **219×69**，垂直居中/水平左对齐；字小魂锐艺黑 24px、字距 8px（`--font-title`）；`user-select:none` |
@@ -57,11 +63,11 @@
 
 ### A2. 工具图标栏 `<IconRail>`（components/IconRail.tsx）
 
-视觉严格按 `docs/react-IconRail` 导出（Frame4172）。
+视觉严格按 `docs/design/react-IconRail` 导出（Frame4172）。
 
 | 名称 | 类名 | 说明 |
 |---|---|---|
-| 栏容器 | `.icon-rail` | 宽 `--rail-width:79px`，深蓝灰 `--c-rail:#4b5a6f` |
+| 图标栏 | `.icon-rail` | 宽 `--rail-width:50px`，底色 `--c-rail:#4b5a6f` |
 | 顶部组 | `.icon-rail-group`（首）÷ spacer | 功能入口 |
 | 底部组 | `.icon-rail-spacer` + `.icon-rail-group`（尾） | 贴栏底 |
 | 单元格 | `.icon-rail-btn` | **通栏 79×79** 贴合；未选中整钮 `opacity:.6`，hover `.85` |
@@ -72,7 +78,7 @@
 
 ### A3. VTuber 左栏 `<VtuberSidebar>`（components/VtuberSidebar.tsx）
 
-视觉按 `docs/react-VtuberSidebar`（Frame41109）与口播定案。
+视觉按 `docs/design/react-VtuberSidebar`（Frame41109）与口播定案。
 
 | 名称 | 类名 | 说明 |
 |---|---|---|
@@ -92,13 +98,13 @@
 **列表体**
 | 名称 | 类名 | 说明 |
 |---|---|---|
-| 条目 | `.vtuber-item(.active)` | **84px 通栏**（`flex-shrink:0`），gap 14，左 padding 26px；hover 浅粉 `--sel-bg-hover` |
+| 条目 | `.vtuber-item(.active)` | **76px 通栏**（`flex-shrink:0`），gap 12，左 padding 26px；hover 浅粉 `--sel-bg-hover` |
 | 选中条 | `.vtuber-item.active::before` | **左缘 3px 粉竖条 `--sel-bar` + 浅粉底 `--sel-bg`** |
-| 头像 | shadcn Avatar `size-[65px]` | 圆形，`resolveAsset(avatar_path) ?? avatar_url` |
-| 名字 | `.vtuber-name` | **20px 纯黑 500**，`user-select:none` |
+| 头像 | shadcn Avatar `size-[58px]` | 圆形，`resolveAsset(avatar_path) ?? avatar_url` |
+| 名字 | `.vtuber-name` | **18px 纯黑 500**，`user-select:none` |
 | 直播点/标签 | `.live-dot` / `.live-label` | 红 `--c-live`，仅直播中 |
-| 签名 | `.vtuber-sign` | **13px 灰**，`user-select:none` |
-| 阵营槽 | `.vtuber-emblem` | 右侧 **60px 全高**，紧贴右缘；暂空置（预留图片资源） |
+| 签名 | `.vtuber-sign` | **13px 灰（13px 行高盒）**，`user-select:none` |
+| 阵营槽 | `.vtuber-emblem` | 右侧 **54px 全高**，紧贴右缘；暂空置（预留图片资源） |
 | 提示态 | `.sidebar-tip` | 加载失败 / 空池 / 无匹配文案 |
 
 **自绘悬浮滚动条**
@@ -120,13 +126,13 @@
 | 标题/描述 | `.empty-state-title/.desc` | 「未选择 VTuber」灰字提示 |
 
 ### B1. 帖子面板 `<PostsPage>`（pages/PostsPage.tsx，styles/posts.css）
-路由 `/vtubers/:id`。**双视图状态机**：`view: 'cards'|'list'`（默认 `cards`），光条切换，数据共享不重取。视觉按 `docs/react-PostsPage`（Frame41301）。
+路由 `/vtubers/:id`。**双视图状态机**：`view: 'cards'|'list'`（默认 `cards`），光条切换，数据共享不重取。视觉按 `docs/design/react-PostsPage`（Frame41301）。
 
 | 名称 | 类名 | 说明 |
 |---|---|---|
 | 面板 | `.posts-panel` | `height:100%`，flex column，`overflow:hidden`（裁剪模糊边界） |
-| 背景层 | `.hero-backdrop` | **无条件常驻**：当前 V 头像 blur(13px) op.7 + ::after 45% 白纱；两视图恒定铺满右栏 |
-| 工具条 | `.view-toolbar` | 贴面板顶（`padding:0 16px`，**上方零缝隙**），仅视图光条 |
+| 背景层 | `.hero-backdrop(.custom)` | 常驻：**自定义背景优先**（`background_path` → `/static/custom_bg/...`，`.custom` 全图清晰 opacity 1），否则头像铺底（0.18+纱罩）；纱罩 ::after 保可读；`key=src` 换装淡入 |
+| 工具条 | `.view-toolbar` | 贴面板顶（`padding:0 16px`，**上方零缝隙**），仅视图光条；卡片页右上角挂 `.bg-tools`（ImagePlus 上传/更换浮片，**默认隐藏**，悬停工具行浮现、移出 900ms 渐隐；无清除钮） |
 
 **光条视图切换**
 | 名称 | 类名 | 说明 |
@@ -139,7 +145,7 @@
 |---|---|---|
 | 滚动层 | `.hero-scroll` | `overflow-y:auto`，padding `16px 70px 134px`，居中 |
 | Hero | `.hero` | column 居中，max-width 869px |
-| 头像 | shadcn Avatar `.hero-avatar` | **178×178**，`filter: drop-shadow(0 1px 8px rgba(0,0,0,.98))` |
+| 头像 | shadcn Avatar `.hero-avatar` | **178×178**，`filter: drop-shadow(0 1px 8px rgba(0,0,0,.98))`；取 `vtuber.avatar`（VTuber 本体，**稳定，不随账号切换变化**），回退所选账号头像 |
 | 直播徽标 | `.live-tag`（内 `i.live-dot` 6px） | 红边红底胶囊 + `live_title`（14px/字距3px） |
 | 名字 | `.hero-name` | **57px 黑 + 投影(0 2 4 黑25%)** |
 | 签名 | `.hero-sign` | **25px** `rgba(94,94,94,.76)` 600 字距3px |
@@ -153,18 +159,19 @@
 **list 视图（帖子列表页）**
 | 名称 | 类名 | 说明 |
 |---|---|---|
-| 滚动层 | `.list-scroll` | `overflow-y:auto`，padding `12px 16px 24px` |
+| 筛选条 | `.chips-bar`(+`.chips-bar-inner`) | **固定顶不随帖子流滚动**（提取自滚动区，天然分隔操作钮行与滚动区），`max-width:900px` 与列表同轴居中，padding `10px 16px 8px`；`.type-chips` 出血补丁保留 |
+| 滚动层 | `.list-scroll` | `flex:1;min-height:0;overflow-y:auto`（view-body 改 flex column 后精确占剩余空间），padding `8px 16px 24px`（顶部 8px 防卡片网格阴影被 overflow-y 在 padding 缘切断） |
 | 内容箍 | `.list-inner` | `max-width:900px` 居中，column gap14 |
-| 操作按钮组 | `.header-actions` | **置顶**：抓取账号(`Zap`)/抓取帖子/更新动态（主色）+ 解除订阅（红，开 AlertDialog，删除连带清帖） |
-| 筛选行 | `.type-chips-row` | chips 左、归档 ToggleGroup 右 |
-| 类型chips | `.type-chip(.active)` | 计数来自 `stats.by_type` |
-| 归档过滤 | ToggleGroup(single)：全部/未归档/已归档 | 映射 `is_archived` |
+| 操作按钮组 | `.header-actions` | **仅列表视图**渲染（卡片页纯展示无此行）：行首账号切换器（`margin-right:auto`）+ 右侧可收起浮片组——收起态 `[`.actions-toggle`][更新动态`.on`]`；展开态向左滑出 抓取账号/抓取帖子/添加账号/解除订阅（红），`actions-toggle` 被挤至最左、图标旋转 180° 变收起钮；`.actions-extra` 用 max-width 0→480px + opacity + translateX 动画（320ms cubic-bezier），`margin-left:-8px` 抵消父 gap |
+| 筛选行 | `.type-chips-row` | chips 左 + 搜索/时间浮片右；`nowrap`（工具区永不掉行） |
+| 类型chips | `.type-chip(.active)` | **分组**：投稿=video+video_dynamic、图文=image+text（key 逗号串直传后端 `in_` 过滤），转发/专栏/音乐/直播单型；计数 `stats.by_type` 求和、零组不显示；超宽时 `.type-chips` 行内横滚兜底 |
+| 搜索/时间 | `.chips-tools`(`flex-shrink:0`) | 搜索浮片 300ms 防抖 + 时间范围下拉（date_from/to，止=次日零点排他） |
 | 帖子流 | `.post-grid(.is-refetching)` | 重取时旧内容降透明禁点击，无整屏闪动 |
-| 卡片 | `<PostCard>` `article.post-card` | 白底、方形（`--radius-card:0`）；hover 上浮2px |
-| ├ 封面 | `.post-card-cover` 220×16:10；SmartImage 三态兜底 | 类型角标/时长角标浮于其上 |
+| 卡片 | `<PostCard>` `article.post-card` | **浮片化特例**：白底、2px 圆角 + `var(--pill-shadow)`、去发丝边；hover 上浮 2px + 阴影加深 + **标题变色 `--c-accent`** |
+| ├ 封面 | `.post-card-cover` 220×16:10；SmartImage 三态兜底 | 有封面=图；**无封面（纯文字）= `.post-card-cover-paper` 米白纸纹斜条底 + 居中大标题（`.paper-title` 4 行截断）**；类型角标/时长角标浮于其上 |
 | ├ 标题/摘要 | `.post-card-title/.summary` | 两行截断 |
 | └ 底行 | `.post-card-footer`：徽章 `.stat-badge`×n + 日期 | 播/赞/评/转 |
-| 分页 | `.posts-footer` > PaginationLite | 服务端 20/页 |
+| 无限滚动 | `.load-sentinel` + IntersectionObserver | **不分页懒加载**：哨兵 1px（root=`list-scroll`，rootMargin 600px 预载）命中且 `hasMore=posts.length<total` 时 `page+1` 追加；`page===1` 走替换（整表 + is-refetching 变暗 + grid key 按替换型指纹重挂动画），`page>1` 走追加（按 id 去重拼接、不动 key 不重挂旧卡片）；追加失败 `loadMoreError` 尾条手动重试；到底显示 `.load-end`「已经到底啦」|
 | 占位/错误 | `.posts-placeholder` / Alert(destructive) | 加载 Spin / 空列表 / 失败 |
 
 **联动刷新（跨组件事件）**
@@ -194,9 +201,69 @@ Sheet 右侧抽屉 `sm:max-w-[720px]`，标题 = 帖子类型名。结构未变�
 | `--sel-bar` / `--sel-bg` / `--sel-bg-hover` | #fb77a1 / #fff0f3 / #fff7f9 | 列表选中竖条/底/hover |
 | `--radius-card` / `--radius-sm` | 0 / 0 | 方形化 |
 | `--shadow-card` | none | 全平面 |
-| `--radius-window` | 12px | L3 窗口圆角 |
-| `--topbar-height` / `--rail-width` / `--sidebar-width` | 69px / 79px / 492px | 三段宽度 |
+| `--radius-window` | 4px | L3 窗口圆角 |
+| `--topbar-height` / `--rail-width` / `--sidebar-width` | 40px / 50px / 492px | 三段尺寸 |
 | shadcn `--radius` | 0rem | 全家桶方形化（Button/Select/Dialog/Sheet…） |
+
+## C2. 浮片系统（layout.css `.float-pill`，令牌见 tokens.css）
+
+自定义风格：**斜切圆角矩形白卡**（豁免方形规则的浮动元件家族）。
+
+| 令牌 | 值 | 用途 |
+|---|---|---|
+| `--pill-bg` | #ffffff | 白卡底 |
+| `--pill-radius` / `--pill-skew` | 8px / -10deg | 圆角 / 平行四边形斜切（::before 承载，内容直立） |
+| `--pill-h-sm` / `--pill-h-md` | 25px / 30px | 侧栏行 / 帖子页行 |
+| `--pill-shadow` / `--pill-shadow-hover` | 0 2px 6px rgba(15,23,42,.12) / 0 3px 8px .18 | 常态 / hover |
+| `--pill-fg-icon` | #3d4a5c | 图标与实心三角深蓝灰 |
+| `--pill-ring` | inset 0 0 0 1.5px 主粉 | focus-visible 环（作用于 ::before） |
+
+- 类 API：`.float-pill` 基型 + `--icon`（方形图标钮）/ `--text`（文字钮）+ `--md`（30px）+ `.on`（激活：primary-deep 底白字）
+- 交互态：hover 上浮1px+阴影加深、按压回落、focus-visible 环、disabled 半透明
+- 实心下拉三角 `.pill-caret`（border 法，-15° 微倾）替代描边 ChevronDown
+- 现役浮片：侧栏 ＋ / 拉取(Download) / 过滤触发器(89px「默认」+caret)、帖子页时间钮(md)
+- **禁用例**：搜索胶囊（侧栏 240×25、帖子页 190×30）为胶囊形遗留例外，不入体系；Hero `.stat-pill` 彩色统计胶囊属另一家族
+
+## C3. 独立筛选弹窗（layout.css `.filter-pop`）
+
+- 入口：侧栏过滤触发器（`.filter-wrap` 锚定，点外关闭，同 time-pop 模式）
+- 三组多选 chip（`.filter-chip`，方形、选中粉底）：状态（直播中/未直播）、平台（accounts 动态提取）、阵营（非空 faction 动态提取）
+- 组合逻辑：组内 OR、组间 AND，空组不生效，即时生效无应用钮，底部「重置」
+- 触发器反馈：任一筛选生效加 `.on`；展示文案暂占位「默认」待定
+
+## C4. 条目入场动效（layout.css `.anim-rise`）
+
+- 规格：`rise-in` 关键帧（opacity 0 + translateY 14px → 0），单项 320ms ease-out（cubic-bezier(0.22,1,0.36,1)），步进 45ms/项，CSS `min()` 封顶 400ms（第 10 项后不再追加），`fill-mode: both` 防闪现
+- 用法：条目根元素挂 `anim-rise` + 内联 `--rise-i` 序号；列表容器以**内容标识 key** 整体重挂载触发重播
+- 接入点：侧栏 VTuber 行（key=query+筛选+数据长度）、list 视图 `.post-grid`（key=账号+首末帖 id+数量——loading 期间 key 不变，保留旧内容降透明的无闪动重取）、Hero 平台药丸组（key=账号，切 V 重播）
+- `prefers-reduced-motion: reduce` 下全量禁用
+
+### 退场编排（退出 → 进入，预取门控 + 原子提交）
+
+- `.scene-exit`（fall-out）：整块 `translateY(10px)` 下滑渐隐，**0.18s** ease-in（比 `EXIT_MS=200` 短 20ms，动画必在类移除前结束防竞态帧），`pointer-events:none` 防误点；与 rise-in 镜像闭合
+- 机制：PostsPage 场景机 `scene{acc,view,exiting}` + **预取门控**——账号目标变化先并行预取三件套（getVtuber/第1页帖子/postStats），旧内容冻结可见；**数据就绪才退场**，EXIT_MS 后一次性应用预取数据（原子提交，页码归 1、筛选保留），**全程无「正在加载」占位帧**
+- 防重拉闪动：提交播种 `seededPostsKeyRef`（posts effect 消费一次跳过重拉）+ `vtuberLoadedRef`（跳过冗余 getVtuber）；refreshTick 变化仍正常重拉
+- 应用：切 V、cards/list 视图切换（视图切换无数据依赖立即退场；cards→list 首次帖子加载仍走正常 loading）；搜索/筛选/翻页仅重播入场不退场
+- 快速连点：中止旧预取、回退退场（旧内容回到可见冻结），新目标就绪后重来；加载占位仅存于首次进入/手动刷新/错误态；reduced-motion 动画禁用（200ms 延迟保留）
+- 抽屉动效（posts.css 末段）：详情抽屉对齐全局语言——进场 260ms 淡入+右移 48px 滑入、退场 200ms 淡出+右移 48px（fall-out 同款 ease-in），遮罩与面板时长严格同步；覆盖 `[data-slot=sheet-content/overlay]` 的 animation-name/duration，radix animationend 卸载机制不受影响；reduced-motion 下 0.01ms 瞌时关闭
+
+## C5. 三层组件契约（UI 几何统一基准）
+
+| 层 | 语义 | 形态契约 | 成员 |
+|---|---|---|---|
+| **交互层** float-pill | 一切可点击触发 | 斜切(-10°)白卡 + 3px 圆角 + 阴影（唯一带阴影）；hover 渐灰；`.on` 主色填充；`.float-pill--danger` 红字 | 侧栏工具行、时间钮、bg-tools、**header-actions 五钮**（更新动态 `.on` 主操作、解除订阅 danger） |
+| **信息层** flat-chip | 只读展示 | 平面 **3px、无阴影、不斜切**；色底（粉/珊瑚）或发丝边 | stat-pill（191×37 色底去白边）、faction-badge、type-chip、stat-badge、post-card-type、live-tag |
+| **表面层** surfaces | 卡片/面板/弹窗 | **0px 方形** + 发丝边 | post-card、posts-panel、弹窗/下拉卡 |
+
+**用户审美特例（覆盖统一基准，勿在后续回合误改回）**：
+- `.live-tag`（卡片页直播徽标）圆角 **8px**
+- `.type-chip`（列表帖子分类胶囊）**999px 全圆角 + `--pill-shadow` 浮片阴影**（无发丝边，hover 浮片灰底）
+- `.stat-pill`（平台药丸）**图像底**（`docs/design/pills` → `src/assets/pills/`，按平台映射，未知平台回退粉/珊瑚色底）+ **2px 圆角 + `1px 2px 4px rgba(15,23,42,.12)` 阴影**，**全圆 logo 盒已移除**，仅粉丝数**靠右对齐、数字 ≤4 位**（`formatCount` 收紧）+ **`text-shadow 0 1px 2px rgba(0,0,0,.35)` 保图像底可读**；`.faction-badge` 同族 2px+同款阴影
+- `.acc-switch-btn`（账号切换器）**浮片化**：白卡 + **2px 圆角 + `var(--pill-shadow)`、去发丝边**（不加斜切保文本可读）；`.on` 主色深填白字
+- `post-card`（帖子卡片）**浮片化特例**：**2px 圆角 + `var(--pill-shadow)`、去发丝边**；hover 上浮 2px + 阴影加深 + **标题变色 `--c-accent`**；`.post-card-cover` 无封面时 `.post-card-cover-paper` 米白纸纹斜条 + 居中大标题
+
+**豁免**：搜索胶囊（侧栏 `list-search`、帖子页 `.search-float`，用户指定原样）、滚动条圆头、头像与状态圆点（圆形）。
+**二期待办**：对话框内 shadcn 钮、time-pop 方钮、分页钮。
 
 ## D. 字体（tokens.css @font-face）
 
@@ -215,6 +282,7 @@ Sheet 右侧抽屉 `sm:max-w-[720px]`，标题 = 帖子类型名。结构未变�
 | BatchFetchDialog | 侧栏「拉取」 | 四项：全量账号 / 全量帖子 / 更新未归档 / 归档（前三项后台执行+409防重入，归档同步返回条数） |
 | PostDetailDrawer | 帖子卡片 | 见 B2 |
 | AlertDialog 解订阅 | list 视图红色钮 | 说明连带删帖，确认后跳首页 |
+| 筛选弹窗 `.filter-pop` | 侧栏过滤触发器 | 见 C3（状态/平台/阵营组合多选） |
 
 ---
 
@@ -223,4 +291,4 @@ Sheet 右侧抽屉 `sm:max-w-[720px]`，标题 = 帖子类型名。结构未变�
 - 设计稿代码为**参考规格**，落地以 tokens/layout 为准；「微调」直接口播，无需回设计工具
 - 浮动小元件（浮片/光条/药丸）豁免全局方形规则；交互态统一「无描边、背景填充」语言
 - 图标一律 lucide（视觉尺寸按设计稿实测覆盖 className），自定义图形进 `assets/icons/`
-- 窗口美学：DWM 系统圆角/阴影已关闭，只有前端 12px 一套弧线
+- 窗口美学：DWM 系统圆角/阴影已关闭，只有前端 4px 一套弧线

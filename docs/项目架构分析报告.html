@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>http-test（Better DD Toolkit）项目架构分析报告</title>
+<title>ddtoolkit（Better DD Toolkit）项目架构分析报告</title>
 <style>
   :root{
     --bg:#f4f6f9; --card:#ffffff; --ink:#1f2937; --sub:#5b6b7c; --line:#e2e8f0;
@@ -80,10 +80,10 @@
 <div class="wrap">
 
 <header class="cover">
-  <h1>http-test（Better DD Toolkit）项目架构分析报告</h1>
+  <h1>ddtoolkit（Better DD Toolkit）项目架构分析报告</h1>
   <div class="sub">B 站 VTuber 数据监控后端服务 —— 框架、数据模型、抓取管线、认证机制与演进历史全景分析</div>
   <div class="meta">
-    <span class="chip">分析对象：E:\work\Project\http-test</span>
+    <span class="chip">分析对象：E:\work\Project\ddtoolkit</span>
     <span class="chip">最新版本：v0.3.2（devlog 013）</span>
     <span class="chip">代码规模：约 2,900 行 Python</span>
     <span class="chip">数据库：SQLite（Alembic rev c002）</span>
@@ -119,7 +119,7 @@
 <!-- ================= 1 项目概览 ================= -->
 <section id="s1">
   <h2 class="sec"><span class="no">§1</span>项目概览</h2>
-  <p><strong>http-test</strong> 是名为 <strong>Better DD Toolkit</strong> 的 VTuber 数据监控与管理的<strong>后端服务</strong>。
+  <p><strong>ddtoolkit</strong> 是名为 <strong>Better DD Toolkit</strong> 的 VTuber 数据监控与管理的<strong>后端服务</strong>。
   它以 Bilibili 为数据源，自动抓取 VTuber 的昵称、签名、粉丝数、直播状态、视频投稿与动态（帖子），
   持久化到本地 SQLite，并通过 REST API 对外提供查询与抓取触发能力。</p>
 
@@ -171,7 +171,7 @@
 <!-- ================= 3 目录结构 ================= -->
 <section id="s3">
   <h2 class="sec"><span class="no">§3</span>目录结构详解</h2>
-  <pre><code>http-test/
+  <pre><code>ddtoolkit/
 ├── app/
 │   ├── main.py                    # FastAPI 入口：日志配置、lifespan、CORS、路由注册、/static 挂载（72 行）
 │   ├── core/
@@ -583,7 +583,7 @@ static/avatars/（718 个缓存文件）</code></pre>
   REST API 鉴权、SQLite → PostgreSQL、结构化日志与抓取指标。</div>
 </section>
 
-<footer>Better DD Toolkit（http-test）项目架构分析报告 · 基于 2026-08-17 静态代码审阅与数据库实测 · 8 张 SVG 架构图 · 修复记录见 §19（v0.3.2）· 生成工具 docs/gen_diagrams.py</footer>
+<footer>Better DD Toolkit（ddtoolkit）项目架构分析报告 · 基于 2026-08-17 静态代码审阅与数据库实测 · 8 张 SVG 架构图 · 修复记录见 §19（v0.3.2）· 生成工具 docs/gen_diagrams.py</footer>
 </div>
 </body>
 </html>

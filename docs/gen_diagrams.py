@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""为 http-test 项目分析报告生成 SVG 架构图。"""
+"""为 ddtoolkit 项目分析报告生成 SVG 架构图。"""
 import html
 from pathlib import Path
 

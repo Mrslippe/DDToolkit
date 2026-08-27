@@ -1,4 +1,4 @@
-# http-test 前端（Better DD Toolkit · VTuber 帖子查看）
+# DDtoolkit 前端（Better DD Toolkit · VTuber 帖子查看）
 
 Vite + React 18 + TypeScript + Ant Design 5 的轻量只读管理界面：
 **选 VTuber → 看账号 → 帖子列表（过滤/分页）→ 帖子详情抽屉**，并带抓取触发按钮与统计概览。
@@ -6,8 +6,8 @@ Vite + React 18 + TypeScript + Ant Design 5 的轻量只读管理界面：
 ## 快速开始
 
 ```bash
-# 1. 启动后端（另开终端，http-test 目录）
-cd ../http-test   # 即仓库根
+# 1. 启动后端（另开终端，ddtoolkit 目录）
+cd ../ddtoolkit   # 即仓库根
 uvicorn app.main:app --port 8000
 
 # 2. 安装依赖并启动前端
