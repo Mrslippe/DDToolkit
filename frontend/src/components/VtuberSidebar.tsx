@@ -511,8 +511,12 @@ const VtuberItem = memo(function VtuberItem({ vtuber, index, active, onSelect }:
       <div className="vtuber-info">
         <div className="vtuber-name-row">
           <span className="vtuber-name">{vtuber.name}</span>
-          {isLiveNow && <span className="live-dot" title="直播中">●</span>}
-          {isLiveNow && <span className="live-label">直播中</span>}
+          {isLiveNow && (
+            <span className="live-badge" title="直播中">
+              <i className="live-dot" />
+              <span className="live-label">直播中</span>
+            </span>
+          )}
         </div>
         {sign && <div className="vtuber-sign">{sign}</div>}
       </div>

@@ -908,10 +908,8 @@ color: #fff;
 
 .vtuber-name-row {
   display: flex;
-  /* 基线对齐（2026-09-04）：红点改为文本字符 ● 与文字共用基线——
-     基线在任意字体/渲染引擎下一致，彻底摆脱 CJK 字形中心偏离行盒中心
-     的像素补偿（此前 headless 与 WebView2 偏移方向相反，补偿法不可靠） */
-  align-items: baseline;
+  /* 徽标整体居中于名字行（方案 C，2026-09-04）：pill 内部对齐见 .live-badge */
+  align-items: center;
   gap: 8px;
 }
 
@@ -925,16 +923,33 @@ color: #fff;
   user-select: none;
 }
 
-/* 文本红点 ●：与「直播中」同字号同基线，字形随文本排布，天然垂直居中 */
-.live-dot {
-  font-size: 10px;
-  line-height: 1;
+/* 左栏「直播中」小徽标（方案 C：与右栏 hero live-tag 同款形态的紧凑版）
+   ——6px 圆点 + 10px 文字，固定高度居中；圆点不再依赖全局样式，
+      两处 .live-dot 规则已各自自包含（见 posts.css .live-tag .live-dot） */
+.live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 16px;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: rgba(225, 68, 68, 0.08);
+  border: 1px solid rgba(225, 68, 68, 0.5);
   color: var(--c-live);
   flex-shrink: 0;
 }
 
+.live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--c-live);
+  flex-shrink: 0;
+}
+
 .live-label {
-  font-size: 11px;
+  font-size: 10px;
+  line-height: 1;
   color: var(--c-live);
   flex-shrink: 0;
 }
