@@ -908,7 +908,10 @@ color: #fff;
 
 .vtuber-name-row {
   display: flex;
-  align-items: center;
+  /* 基线对齐（2026-09-04）：红点改为文本字符 ● 与文字共用基线——
+     基线在任意字体/渲染引擎下一致，彻底摆脱 CJK 字形中心偏离行盒中心
+     的像素补偿（此前 headless 与 WebView2 偏移方向相反，补偿法不可靠） */
+  align-items: baseline;
   gap: 8px;
 }
 
@@ -922,21 +925,16 @@ color: #fff;
   user-select: none;
 }
 
+/* 文本红点 ●：与「直播中」同字号同基线，字形随文本排布，天然垂直居中 */
 .live-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--c-live);
+  font-size: 10px;
+  line-height: 1;
+  color: var(--c-live);
   flex-shrink: 0;
 }
 
 .live-label {
   font-size: 11px;
-  /* 行高归一 + 1px 视觉修正：CJK 小字号字形中心高于行盒中心（实测 ~1.3px），
-     与红点（8px 块）中心对齐需要下移补偿；与 hero 直播标签的 padding-top 同源 */
-  line-height: 1;
-  position: relative;
-  top: 1.5px;
   color: var(--c-live);
   flex-shrink: 0;
 }
