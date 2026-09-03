@@ -932,6 +932,11 @@ color: #fff;
 
 .live-label {
   font-size: 11px;
+  /* 行高归一 + 1px 视觉修正：CJK 小字号字形中心高于行盒中心（实测 ~1.3px），
+     与红点（8px 块）中心对齐需要下移补偿；与 hero 直播标签的 padding-top 同源 */
+  line-height: 1;
+  position: relative;
+  top: 1.5px;
   color: var(--c-live);
   flex-shrink: 0;
 }
