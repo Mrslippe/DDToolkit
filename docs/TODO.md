@@ -52,7 +52,7 @@
 - **迁移链纪律**：新增 alembic 迁移后必须同步更新 `app/main.py` 的 `MIGRATION_HEAD`
   （tests 断言其与 alembic head 一致）
 - 冷启动快路径依赖版本号判断，勿漏 bump
-- 抓取链路改动后跑全量 `pytest`（当前基线 109 passed）
+- 抓取链路改动后跑全量 `pytest`（当前基线 114 passed）
 
 ---
 
