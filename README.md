@@ -66,6 +66,7 @@ frontend\node_modules\.bin\tsc.cmd -p frontend\tsconfig.json --noEmit
 
 - `docs/TODO.md` — 路线图与现状盘点
 - `docs/backend-repositories-and-routers.md` — 数据库结构 / repositories / routers 分层说明
+- `docs/backend-fetch-pipeline.md` — 抓取链路详解（频率 / API 清单 / 风控判定与原因 / 节流测算）
 - `docs/UI-MAP.md` — 前端界面与路由映射
 - `docs/platforms-extension-guide.md` — 平台接入扩展指南
 - `devlog/` — 每版本的变更记录（当前 v0.5.0）
