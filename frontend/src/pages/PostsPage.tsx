@@ -404,18 +404,6 @@ export default function PostsPage() {
     ? `${selectedAccount.platform}:${selectedAccount.platform_uid}`
     : null
 
-  // ── 筛选切换缓存（2026-09-04）─────────────────────────────────────
-  // 按「账号|筛选」指纹缓存第 1 页结果与滚动位置：
-  // 来回切换 chips/搜索/日期时命中即免网络回填并恢复滚动位置；
-  // 条目随 fetch-idle（refreshTick）失效；两表各 LRU 上限 6 组。
-  const FILTER_CACHE_MAX = 6
-  const filterPageCacheRef = useRef(new Map<string, { tick: number; posts: Post[]; total: number }>())
-  const filterScrollPosRef = useRef(new Map<string, number>())
-  const filterFpRef = useRef('')
-  const prevFilterFpRef = useRef('')
-  const filterFp = `${accountKey ?? ''}|${typeFilter ?? ''}|${searchKw}|${dateFrom}|${dateTo}`
-  filterFpRef.current = filterFp
-
   useEffect(() => {
     if (!selectedAccount || scene.view !== 'list') return
     let cancelled = false
@@ -442,26 +430,6 @@ export default function PostsPage() {
       setLoading(false)
       return
     }
-    // 本指纹是否为「用户切换筛选」引起（区别于 fetch-idle 重拉同指纹）：
-    // 仅切换时复位滚动位置；后台刷新完成后不打扰已有浏览位置
-    const fpChanged = prevFilterFpRef.current !== filterFp
-    prevFilterFpRef.current = filterFp
-    // 缓存命中（第 1 页、同 refreshTick）：免网络 + 恢复上次滚动位置
-    if (page === 1) {
-      const hit = filterPageCacheRef.current.get(filterFp)
-      if (hit && hit.tick === refreshTick) {
-        setPosts(hit.posts)
-        setTotal(hit.total)
-        setLoading(false)
-        setError(null)
-        const top = filterScrollPosRef.current.get(filterFp) ?? 0
-        requestAnimationFrame(() => {
-          const el = listScrollRef.current
-          if (el) el.scrollTop = top
-        })
-        return
-      }
-    }
     if (page === 1) setLoading(true)
     else setLoadingMore(true)
     setError(null)
@@ -487,24 +455,6 @@ export default function PostsPage() {
         setLoadMoreError(null)
         if (page === 1) {
           setPosts(p.items)
-          // 回填缓存：同指纹下次切换免网络；仅用户切换筛选时复位滚动，
-          // 避免旧深度滚动被短内容钳到底而连环翻页（观感「加载变慢」）
-          filterPageCacheRef.current.set(filterFp, {
-            tick: refreshTick,
-            posts: p.items,
-            total: p.total,
-          })
-          if (filterPageCacheRef.current.size > FILTER_CACHE_MAX) {
-            const k = filterPageCacheRef.current.keys().next().value
-            if (k !== undefined) filterPageCacheRef.current.delete(k)
-          }
-          if (fpChanged) {
-            filterScrollPosRef.current.set(filterFp, 0)
-            requestAnimationFrame(() => {
-              const el = listScrollRef.current
-              if (el) el.scrollTop = 0
-            })
-          }
         } else {
           // 追加去重：并发/重复触发时防止同帖重复渲染
           setPosts((prev) => {
@@ -1068,16 +1018,8 @@ return (
             </div>
 
             {/* 帖子无限滚动区：grid 不再按筛选指纹重挂（2026-09-04）——
-                筛选切换走 is-refetching 原位替换，入场动画只在新卡片挂载时播放；
-                onScroll 记录当前筛选的滚动位置，供切回时恢复 */}
-            <div
-              className="list-scroll"
-              ref={listScrollRef}
-              onScroll={() => {
-                const el = listScrollRef.current
-                if (el) filterScrollPosRef.current.set(filterFpRef.current, el.scrollTop)
-              }}
-            >
+                筛选切换走 is-refetching 原位替换，入场动画只在新卡片挂载时播放 */}
+            <div className="list-scroll" ref={listScrollRef}>
               <div className="list-inner">
                 {error ? (
                   <Alert variant="destructive">
