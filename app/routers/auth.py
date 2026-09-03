@@ -97,6 +97,8 @@ async def qr_check(platform: str, qr_id: str):
 
 @router.get("/{platform}/status")
 async def auth_status(platform: str):
+    """登录态查询。B 站走内存维护结果；微博做真实有效性探测（60s 缓存）——
+    Cookie 过期后不能仅凭存在性报已登录，否则前端不出现重新扫码入口（2026-09 修复）。"""
     if platform not in _PLATFORMS:
         raise HTTPException(404, "不支持的平台")
     if platform == "bilibili":
@@ -106,9 +108,10 @@ async def auth_status(platform: str):
             "uid": auth_manager.dede_user_id or None,
             "name": auth_manager.uname or None,
         }
+    valid = await weibo_auth_manager.check_valid()
     return {
-        "logged_in": weibo_auth_manager.is_logged_in,
-        "needs_login": False,
+        "logged_in": valid,
+        "needs_login": not valid,
         "uid": weibo_auth_manager.uid or None,
         "name": weibo_auth_manager.name or None,
     }

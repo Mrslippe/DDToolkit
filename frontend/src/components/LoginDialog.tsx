@@ -53,7 +53,13 @@ export default function LoginDialog({ open, onOpenChange }: Props) {
           setPhase('confirmed')
         }
       } catch {
-        /* 后端不可达时保持未知态 */
+        // 后端不可达：按未登录处理，让自动 start 把真实错误展示出来
+        if (!cancelled) {
+          setStatuses((prev) => ({
+            ...prev,
+            [p]: { logged_in: false, needs_login: true, uid: null, name: null },
+          }))
+        }
       }
     }
     void load('bilibili')
@@ -81,7 +87,9 @@ export default function LoginDialog({ open, onOpenChange }: Props) {
     }
   }
 
-  // 打开 / 切 Tab：未登录则自动生成二维码
+  // 打开 / 切 Tab：等该平台登录态加载完成；未登录才自动生成二维码。
+  // 依赖 statuses[platform]：避免状态未加载完就对已登录平台误发二维码请求
+  // （B 站 / 微博在刚打开对话框时都会白白 start 一次，日志表现为 qrcode 双请求）。
   useEffect(() => {
     if (!open) {
       setQr(null)
@@ -89,7 +97,8 @@ export default function LoginDialog({ open, onOpenChange }: Props) {
       return
     }
     const s = statuses[platform]
-    if (s?.logged_in && !s.needs_login) {
+    if (s === null) return // 登录态加载中，等 load() 完成后再决定
+    if (s.logged_in && !s.needs_login) {
       setQr(null)
       setPhase('confirmed')
       setDetail('')
@@ -97,7 +106,7 @@ export default function LoginDialog({ open, onOpenChange }: Props) {
     }
     void start(platform)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, platform])
+  }, [open, platform, statuses[platform]])
 
   // 轮询扫码状态
   useEffect(() => {
@@ -143,7 +152,10 @@ export default function LoginDialog({ open, onOpenChange }: Props) {
   }, [open, qr, platform])
 
   const cur = statuses[platform]
-  const showLoggedIn = phase === 'confirmed' || (cur?.logged_in && !cur.needs_login)
+  // 「已登录」面板只在明确 confirmed 时显示：statuses 缓存可能滞后
+  // （如微博 Cookie 过期但旧值仍在），若用 cur.logged_in 判定，点了「重新登录」
+  // 后二维码会被「已登录」分支挡住——后端 QR 已在生成，界面上却始终看不到码（2026-09 修复）。
+  const showLoggedIn = phase === 'confirmed'
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

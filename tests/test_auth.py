@@ -101,13 +101,92 @@ def test_auth_status_bilibili(client, monkeypatch):
     assert r["needs_login"] is True
 
 
-def test_auth_status_weibo(client, monkeypatch):
+def test_auth_status_weibo_valid_cookie(client, monkeypatch):
+    """Cookie 有效：探测通过 → logged_in=True。"""
     monkeypatch.setattr(arouter.weibo_auth_manager, "cookie", "SUB=abc")
     monkeypatch.setattr(arouter.weibo_auth_manager, "uid", "1")
     monkeypatch.setattr(arouter.weibo_auth_manager, "name", "测试")
+    monkeypatch.setattr(arouter.weibo_auth_manager, "check_valid", _async(True))
     r = client.get("/auth/weibo/status").json()
     assert r["logged_in"] is True
+    assert r["needs_login"] is False
     assert r["uid"] == "1"
+    assert r["name"] == "测试"
+
+
+def test_auth_status_weibo_stale_cookie(client, monkeypatch):
+    """Cookie 过期（存在但探测失效）：必须报未登录，前端才出现重新扫码入口。
+
+    修复（2026-09）：此前 logged_in 只看 cookie 存在性，8/22 的过期 Cookie
+    让 UI 永远显示「微博·已登录」，点重新登录也不出二维码。"""
+    monkeypatch.setattr(arouter.weibo_auth_manager, "cookie", "SUB=stale-expired")
+    monkeypatch.setattr(arouter.weibo_auth_manager, "uid", "1")
+    monkeypatch.setattr(arouter.weibo_auth_manager, "name", "测试")
+    monkeypatch.setattr(arouter.weibo_auth_manager, "check_valid", _async(False))
+    r = client.get("/auth/weibo/status").json()
+    assert r["logged_in"] is False
+    assert r["needs_login"] is True
+    assert r["uid"] == "1"
+
+
+def _async(value):
+    async def _f(*a, **k):
+        return value
+    return _f
+
+
+# ── 微博登录态探测（check_valid） ─────────────────────────────────────
+
+def test_weibo_check_valid_from_body():
+    assert wam.WeiboAuth._valid_from_body({"ok": 1}) is True
+    assert wam.WeiboAuth._valid_from_body({"ok": -100, "url": "https://weibo.com/login.php"}) is False
+    assert wam.WeiboAuth._valid_from_body(None) is False
+    assert wam.WeiboAuth._valid_from_body("garbage") is False
+
+
+def test_weibo_check_valid_caches(monkeypatch):
+    """探测结果缓存 60s：缓存期内不再发请求；失效后重探。"""
+    mgr = wam.WeiboAuth()
+    mgr.cookie = "SUB=abc"
+    calls = {"n": 0}
+
+    async def fake_probe():
+        calls["n"] += 1
+        return True
+
+    monkeypatch.setattr(mgr, "_probe_once", fake_probe)
+
+    async def run():
+        r1 = await mgr.check_valid()   # 首次：探测 1 次
+        r2 = await mgr.check_valid()   # 缓存命中
+        return r1, r2
+
+    r1, r2 = asyncio.run(run())
+    assert r1 is True and r2 is True
+    assert calls["n"] == 1
+
+
+def test_weibo_check_valid_no_cookie(monkeypatch):
+    mgr = wam.WeiboAuth()
+    mgr.cookie = ""
+
+    async def fake_probe():
+        raise AssertionError("无 cookie 不应探测")
+
+    monkeypatch.setattr(mgr, "_probe_once", fake_probe)
+    assert asyncio.run(mgr.check_valid()) is False
+
+
+def test_weibo_apply_cookie_resets_validity(monkeypatch):
+    """登录成功后直接置有效缓存，UI 无需再探测。"""
+    monkeypatch.setattr(wam, "save_env_keys", lambda values: None)  # 不落盘
+    mgr = wam.WeiboAuth()
+    mgr.cookie = ""
+    mgr._valid = False
+    mgr.apply_cookie("SUB=new", "2", "新号")
+    assert mgr.cookie == "SUB=new"
+    assert mgr._valid is True
+    assert mgr.needs_login is False
 
 
 # ── 微博扫码会话（httpx mock） ─────────────────────────────────────────

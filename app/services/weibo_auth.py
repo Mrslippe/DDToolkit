@@ -53,16 +53,75 @@ RC_EXPIRED = {50114004, "50114004"}    # 二维码失效
 
 
 class WeiboAuth:
-    """微博认证单例：持有 cookie 字符串与登录态展示信息。"""
+    """微博认证单例：持有 cookie 字符串与登录态展示信息。
+
+    登录态判定（修复 2026-09）：is_logged_in 只是 cookie 存在性（同步、无网络）；
+    真实有效性经 check_valid() 探测（异步、60s 缓存）——Cookie 过期后
+    /auth/weibo/status 才能如实返回 logged_in=False，否则 UI 永远显示
+    「已登录」且不出现重新扫码入口。
+    """
+
+    _VALIDITY_TTL = 60.0  # 探测结果缓存秒数（TopBar 每 60s 轮询 status）
 
     def __init__(self):
         self.cookie: str = settings.WEIBO_COOKIE
         self.uid: str = settings.WEIBO_UID
         self.name: str = settings.WEIBO_NAME
+        self._valid: bool | None = None    # None=尚未探测
+        self._checked_at: float = 0.0
 
     @property
     def is_logged_in(self) -> bool:
         return bool(self.cookie)
+
+    @property
+    def needs_login(self) -> bool:
+        """登录态是否不可用：无 cookie，或最近一次探测确认失效。"""
+        if not self.cookie:
+            return True
+        if self._valid is False:
+            return True
+        return False
+
+    @staticmethod
+    def _valid_from_body(data) -> bool:
+        """微博 m 站 ok 字段语义：ok=1 有效；ok=-100 未登录/失效（附 login.php url）。"""
+        if not isinstance(data, dict):
+            return False
+        return data.get("ok") == 1
+
+    async def _probe_once(self) -> bool:
+        """探测一次：请求与抓取路径一致的登录态接口（未登录返回 ok=-100）。"""
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                resp = await client.get(
+                    "https://weibo.com/ajax/profile/info",
+                    params={"uid": self.uid or "0"},
+                    headers=self.build_headers({"Referer": "https://weibo.com/"}),
+                )
+                if resp.status_code != 200:
+                    return False
+                try:
+                    body = resp.json()
+                except ValueError:
+                    return False
+                return self._valid_from_body(body)
+        except Exception as e:
+            logger.warning(f"微博登录态探测异常: {e}")
+            return False
+
+    async def check_valid(self) -> bool:
+        """cookie 是否仍有效（结果缓存 _VALIDITY_TTL 秒，防频繁探测）。"""
+        if not self.cookie:
+            self._valid = False
+            return False
+        now = time.monotonic()
+        if self._valid is not None and now - self._checked_at < self._VALIDITY_TTL:
+            return self._valid
+        self._valid = await self._probe_once()
+        self._checked_at = now
+        logger.info(f"微博登录态探测: {'有效' if self._valid else '失效/未登录'}")
+        return self._valid
 
     def build_headers(self, extra: Optional[dict] = None) -> dict:
         headers = dict(_BASE_HEADERS)
@@ -78,6 +137,9 @@ class WeiboAuth:
             self.uid = uid
         if name:
             self.name = name
+        # 刚登录成功即有效：直接置缓存，避免 UI 紧接着触发一次多余探测
+        self._valid = True
+        self._checked_at = time.monotonic()
         save_env_keys({
             "WEIBO_COOKIE": cookie,
             "WEIBO_UID": self.uid,

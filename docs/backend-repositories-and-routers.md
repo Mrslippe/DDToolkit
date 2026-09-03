@@ -227,7 +227,7 @@ create_all 旧库补列补索引后 stamp / 版本落后增量升级 / 已最新
 |---|---|
 | POST `/auth/{platform}/qr/start` | 生成二维码会话。bilibili 返回 `{qr_id, url}`；weibo 返回 `{qr_id, image}`（data URL）。同平台旧会话作废 |
 | GET `/auth/{platform}/qr/check?qr_id=` | 轮询状态机：`waiting / scanned / confirmed / expired / failed`；`confirmed` 时完成登录并持久化凭据（Cookie 写入 `.env`）；TTL 180s |
-| GET `/auth/{platform}/status` | `{logged_in, needs_login, uid, name}` 登录态展示 |
+| GET `/auth/{platform}/status` | `{logged_in, needs_login, uid, name}`。B 站走内存维护结果；**微博做真实有效性探测**（`weibo.com/ajax/profile/info`，结果缓存 60s）——Cookie 过期不能仅凭存在性报已登录，否则 UI 不出现重新扫码入口（2026-09 修复） |
 
 - 实现分发：bilibili → `app/services/auth.py`（SESSDATA/BILI_JCT 管理、失效续期），weibo → `app/services/weibo_auth.py`（Session v2 扫码）；
 - 凭据持久化经 `app/services/env_store.py`（读改写 `.env`，临时文件 + 原子替换）；
