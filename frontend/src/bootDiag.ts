@@ -62,12 +62,15 @@
   window.addEventListener('error', function (e) {
     log('[error] ' + (e.message || e.filename || 'unknown'))
   })
-  // 捕获阶段：资源加载失败（img/css/js 404 等）不冒泡，只有 capture 能收到
+  // 捕获阶段：资源加载失败（img/css/js 404 等）不冒泡，只有 capture 能收到；
+  // 仅记录仍在 DOM 中的目标——快速切换列表/筛选导致图片「加载中止」时，
+  // error 会派发到已卸载的 img 上（isConnected=false），这属于交互噪声而非
+  // 真实失败（真实 404 时元素仍挂载；2026-09-03 反馈：快速点类型 chips 误报）。
   window.addEventListener(
     'error',
     function (e) {
       const t = e.target as HTMLElement
-      if (t && t !== document.documentElement && t !== document.body) {
+      if (t && t !== document.documentElement && t !== document.body && t.isConnected) {
         const src = (t as HTMLImageElement).src || (t as HTMLLinkElement).href
         if (src) log('[resource] ' + src)
       }
