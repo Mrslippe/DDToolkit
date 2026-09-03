@@ -695,7 +695,12 @@ export default function PostsPage() {
       setBgUploading(false)
     }
   }
-  const isLive = (bili?.live_status ?? 0) === 1
+  // 直播徽标只读 B 站账号：直播状态仅存在于 bilibili，且属 VTuber 整体事实——
+  // 不跟随列表页所选账号。否则在列表里切到微博再回卡片页，徽标会从
+  // 「直播中」误变「未开播」（视图间状态联动，2026-09-03 反馈）。
+  const liveAcc =
+    vtuber?.accounts.find((a) => a.platform === 'bilibili' && a.platform_uid) ?? selectedAccount
+  const isLive = (liveAcc?.live_status ?? 0) === 1
   const accounts = vtuber ? vtuber.accounts.filter((a) => a.platform_uid) : []
 
   // 平台粉丝展示：徽章集按每集 3 枚切分（集内横排、集间纵向间隔 10）。
@@ -872,9 +877,9 @@ return (
               </Avatar>
 
               {/* 直播状态：始终显示（未开播=灰点+「未开播」） */}
-              <span className={`live-tag${isLive ? ' live' : ' off'}`} title={isLive ? (bili?.live_title ?? '直播中') : '未开播'}>
+              <span className={`live-tag${isLive ? ' live' : ' off'}`} title={isLive ? (liveAcc?.live_title ?? '直播中') : '未开播'}>
                 <i className="live-dot" />
-                <span className="truncate">{isLive ? (bili?.live_title ?? '直播中') : '未开播'}</span>
+                <span className="truncate">{isLive ? (liveAcc?.live_title ?? '直播中') : '未开播'}</span>
               </span>
 
               <div className="hero-name-block">
