@@ -1,0 +1,71 @@
+# Better DD Toolkit（DDtoolkit）
+
+个人向 **VTuber 帖子 / 账号证据归档工具**：定时抓取 B 站与微博的动态、账号统计并归档到本地 SQLite，桌面端浏览与管理。
+
+- 后端：Python 3.14 + FastAPI + SQLAlchemy 2.0 + SQLite（WAL）+ APScheduler + Alembic
+- 前端：Vite + React 18 + TypeScript + Tailwind CSS v4 + Radix/shadcn 风格组件
+- 桌面壳：Tauri v2（负责拉起后端、注入数据目录、进程看门狗）
+
+## 目录结构
+
+```
+├─ app/               后端源码（FastAPI 分层）
+│  ├─ routers/        HTTP 路由层（vtuber / auth / img-proxy）
+│  ├─ repositories/   SQL 访问层（按仓库类持会话，无 ORM 泄漏到路由）
+│  ├─ models/         SQLAlchemy ORM（vtubers / accounts / posts / account_stat_snapshots）
+│  ├─ schemas/        Pydantic 输入输出模型
+│  ├─ services/       抓取调度、平台接入（bilibili / weibo）、认证、WBI、图片代理
+│  └─ core/           配置（数据目录/环境变量）、数据库引擎
+├─ alembic/           数据库迁移链（a001 → e001，启动时自动升级）
+├─ tests/             pytest 测试（test_auth / test_services / test_vtuber_api / test_weibo）
+├─ scripts/           维护与构建脚本（repair_*、build_backend、collect_portable 等）
+├─ devlog/            版本开发日志（001–021，每版本一篇）
+├─ docs/              文档：后端分层、UI 映射、平台扩展指南、架构图、设计原型、TODO 路线图
+├─ frontend/          前端（Vite + React）+ Tauri 壳（src-tauri）
+├─ backend_main.py    桌面端后端入口（Tauri 以子进程拉起，含父进程看门狗）
+├─ alembic.ini        Alembic 配置
+├─ requirements.txt   Python 依赖
+└─ vtubers.csv        内置默认 VTuber 名单（首次启动引导到数据目录）
+```
+
+## 快速开始
+
+```powershell
+# 桌面开发（一键：后端 + 前端 + Rust 壳）
+cd frontend
+npm install
+npm run tauri:dev
+
+# 仅后端（pytest 之外的临时直跑；数据目录回退到项目根，见下）
+pip install -r requirements.txt
+python backend_main.py
+
+# 测试
+python -m pytest tests -q -p no:cacheprovider
+
+# 前端类型检查
+frontend\node_modules\.bin\tsc.cmd -p frontend\tsconfig.json --noEmit
+```
+
+> `-p no:cacheprovider`：历史遗留的 `frontend/pytest-cache-files-*` 与根 `.pytest_cache`
+> 目录存在权限锁时，pytest 的缓存读写会报错；这些目录属于可重建残留，可在管理员权限下删除。
+
+## 数据目录约定（重要）
+
+| 运行方式 | 数据目录 |
+|---|---|
+| 桌面端（dev 构建） | `%APPDATA%\com.ddtoolkit.app-dev` |
+| 桌面端（安装版） | `%APPDATA%\com.ddtoolkit.app` |
+| 未注入环境变量（裸 uvicorn / 脚本直跑） | 回退到**项目根目录** |
+
+- 启动器通过 `DDTOOLKIT_DATA_DIR` 环境变量注入数据目录（见 `frontend/src-tauri/src/lib.rs`）。
+- 数据库 `vtuber.db`、日志 `logs/`、凭据 `.env`、头像/图片缓存 `static/` 全部随数据目录走。
+- 项目根若出现这些目录，说明曾有「裸直跑」模式使用，均为运行时数据（已 gitignore），非源码。
+
+## 常用文档
+
+- `docs/TODO.md` — 路线图与现状盘点
+- `docs/backend-repositories-and-routers.md` — 数据库结构 / repositories / routers 分层说明
+- `docs/UI-MAP.md` — 前端界面与路由映射
+- `docs/platforms-extension-guide.md` — 平台接入扩展指南
+- `devlog/` — 每版本的变更记录（当前 v0.5.0）

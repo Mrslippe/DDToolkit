@@ -29,6 +29,11 @@ node_modules/
 
 # 本地缓存（图片代理磁盘缓存，可随时重建）
 static/img-cache/
+# 头像缓存（本地下载产物，不进仓库；2026-09-03 起出库）
+static/avatars/
+
+# pytest 临时残留目录（服务端迁移/异常时在 frontend 下生成的权限锁定目录）
+pytest-cache-files-*/
 
 # 桌面端构建产物（PyInstaller / Tauri）
 /dist/
