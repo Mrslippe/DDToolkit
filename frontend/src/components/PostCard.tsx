@@ -58,7 +58,7 @@ const PostCard = memo(function PostCard({ post, index, onOpen }: Props) {
     >
       <div className="post-card-cover">
         {coverSrc ? (
-          <SmartImage src={coverSrc} preview={false} className="post-card-cover-img" />
+          <SmartImage src={coverSrc} className="post-card-cover-img" />
         ) : (
           <div className="post-card-cover-paper">
             <span className="paper-title">{title}</span>

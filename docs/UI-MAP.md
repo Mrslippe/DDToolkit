@@ -195,6 +195,9 @@
 ### B2. 详情窗口 `<PostDetailDrawer>`（components/PostDetailDrawer.tsx）
 P6-2 起为**居中 Dialog**（原 Sheet 右侧抽屉）`sm:max-w-[720px]`，标题 = 帖子类型名。动效见「抽屉动效」段（dialog-content/overlay，scale 0.97 替代右移）。结构未变动：元信息行(类型/时间/平台ID/原文链接/墓碑flag) → 墓碑时间线(已删时) → 统计徽章行 → 预约卡 → 封面大图 → 正文三态(Delta/HTML/纯文本) → 转发原文卡 → 图片组 → 附加字段(bvid/cvid/description) → 原始JSON 折叠。
 
+### B2.1 图片查看器 `<ImageViewer>`（components/ImageViewer.tsx）
+P6-4：从详情窗口打开图片的**独立灯箱**——portal 到 body、`z-[200]` 高于详情窗，Esc 只关查看器（capture 阶段拦截，不连带关详情窗）。封面 / 图片组 / 转发原文缩略图均可点开。交互：上一张/下一张（圆环玻璃钮，左右键同效，单图隐藏）、**底部点状序号**（点击跳转，单图隐藏）、关闭钮重绘为圆环描边玻璃钮（10×10，右缘 20px）。主体**无外框背景**：图片直接浮于 `bg-black/85` 遮罩，无卡片/圆角/边框。入场动画见 posts.css `.image-viewer`（0.2s 微缩放+淡入，与详情窗同语言；reduced-motion 禁用）。图片加载同一混合策略（直连→代理→失败占位）。
+
 ---
 
 ## C. 设计令牌（styles/tokens.css 与 index.css 同步）

@@ -32,6 +32,7 @@ import {
   postDisplayTitle,
 } from '../utils/format'
 import DeltaRenderer from './DeltaRenderer'
+import ImageViewer, { type ViewerImage } from './ImageViewer'
 import SmartImage from './SmartImage'
 import StatBadge from './StatBadge'
 import TypeTag from './TypeTag'
@@ -78,7 +79,10 @@ function ReservationCard({ status, buttonText, desc1, desc2, reserveTotal }: {
 }
 
 /** 转发原文卡片（body_json.origin） */
-function OriginCard({ origin }: { origin: NonNullable<ReturnType<typeof parseBody>['origin']> }) {
+function OriginCard({ origin, onOpenImages }: {
+  origin: NonNullable<ReturnType<typeof parseBody>['origin']>
+  onOpenImages: (list: ViewerImage[], index: number) => void
+}) {
   return (
     <div className="rounded-lg border p-3">
       <div className="mb-2 flex items-center gap-2">
@@ -91,8 +95,11 @@ function OriginCard({ origin }: { origin: NonNullable<ReturnType<typeof parseBod
         {origin.images && origin.images.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
             {origin.images.slice(0, 9).map((img, i) => (
-              <SmartImage key={`${img.url}-${i}`} src={img.url} width={96} height={96}
-                style={{ objectFit: 'cover', borderRadius: 6 }} />
+              <button key={`${img.url}-${i}`} type="button" className="cursor-zoom-in"
+                onClick={() => onOpenImages(origin.images!, i)}>
+                <SmartImage src={img.url} width={96} height={96}
+                  style={{ objectFit: 'cover', borderRadius: 6 }} />
+              </button>
             ))}
           </div>
         )}
@@ -116,9 +123,12 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
   )
 }
 
-/** 帖子详情抽屉：标题/封面/正文（Delta/HTML/纯文本）/图片/统计/预约/转发原文/链接/JSON */
+/** 帖子详情窗口：标题/封面/正文（Delta/HTML/纯文本）/图片/统计/预约/转发原文/链接/JSON
+ * P6-4：图片查看由独立 ImageViewer 承担（上一张/下一张/点状序号/重绘关闭钮/无外框） */
 export default function PostDetailDrawer({ post, open, onClose }: Props) {
   const [rawOpen, setRawOpen] = useState(false)
+  // 图片查看器：独立于详情窗口（portal + 更高 z），关闭任一不影响另一
+  const [viewer, setViewer] = useState<{ list: ViewerImage[]; index: number } | null>(null)
   // 末帧保留：关闭只翻 open，组件仍挂载走 radix 退场动画——
   // 期间渲染最后一次的帖子内容（post 已随父级保留，此 ref 兜底防 null）
   const lastPostRef = useRef<Post | null>(post)
@@ -143,7 +153,8 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
   ].filter((s) => s.value !== undefined && s.value !== null)
 
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+    <>
+      <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       {/* P6-2：详情抽屉改为居中独立窗口（原 Sheet 侧栏）；动效见 posts.css
           抽屉动效段（dialog-content/overlay，scale 替代右移） */}
       <DialogContent className="max-h-[90vh] w-full overflow-y-auto p-5 sm:max-w-[720px]">
@@ -210,14 +221,17 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
             />
           )}
 
-          {/* 封面 */}
+          {/* 封面（点击可开查看器） */}
           {shown.cover_url && (
-            <SmartImage
-              src={shown.cover_url}
-              alt="封面"
-              className="w-full rounded-lg object-contain"
-              style={{ maxHeight: 320 }}
-            />
+            <button type="button" className="block w-full cursor-zoom-in"
+              onClick={() => setViewer({ list: [{ url: shown.cover_url! }], index: 0 })}>
+              <SmartImage
+                src={shown.cover_url}
+                alt="封面"
+                className="w-full rounded-lg object-contain"
+                style={{ maxHeight: 320 }}
+              />
+            </button>
           )}
 
           {/* 正文：Delta 富文本 → HTML 全文 → 纯文本（保留换行） */}
@@ -246,16 +260,22 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
           )}
 
           {/* 转发原文 */}
-          {body.origin && <OriginCard origin={body.origin} />}
+          {body.origin && (
+            <OriginCard origin={body.origin}
+              onOpenImages={(list, i) => setViewer({ list, index: i })} />
+          )}
 
-          {/* 图片组 */}
+          {/* 图片组（点击缩略图打开查看器，带前后切换/点状序号） */}
           {images.length > 0 && (
             <div>
               <SectionTitle>图片（{images.length}）</SectionTitle>
               <div className="mt-2 flex flex-wrap gap-2">
                 {images.map((img, i) => (
-                  <SmartImage key={`${img.url}-${i}`} src={img.url} width={120} height={120}
-                    style={{ objectFit: 'cover', borderRadius: 6 }} />
+                  <button key={`${img.url}-${i}`} type="button" className="cursor-zoom-in"
+                    onClick={() => setViewer({ list: images, index: i })}>
+                    <SmartImage src={img.url} width={120} height={120}
+                      style={{ objectFit: 'cover', borderRadius: 6 }} />
+                  </button>
                 ))}
               </div>
             </div>
@@ -292,6 +312,17 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
           )}
         </div>
       </DialogContent>
-    </Dialog>
+      </Dialog>
+
+      {/* 独立图片查看器：portal 到 body + z-[200]，与详情窗口互不干扰 */}
+      {viewer && (
+        <ImageViewer
+          images={viewer.list}
+          index={viewer.index}
+          onIndexChange={(i) => setViewer((v) => (v ? { ...v, index: i } : v))}
+          onClose={() => setViewer(null)}
+        />
+      )}
+    </>
   )
 }
