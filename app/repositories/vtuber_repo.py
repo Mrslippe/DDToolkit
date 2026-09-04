@@ -133,6 +133,75 @@ class AccountStatSnapshotRepo:
             .all()
         )
 
+    def fan_trend_points(self, account_id: int) -> list[dict]:
+        """粉丝趋势点序列（P5）：按天分桶，self 取每日最后一条、zeroroku 全量点。
+
+        返回按时间升序的 [{date, fans, source}]：
+        - self 5min 直采高频 → 天末一条（曲线不抖动、载荷可控）
+        - zeroroku 第三方回填本就日粒度（稀疏）→ 全量保留（补历史空洞）
+        """
+        rows = (
+            self.db.query(AccountStatSnapshot)
+            .filter(
+                AccountStatSnapshot.account_id == account_id,
+                AccountStatSnapshot.followers_count.isnot(None),
+            )
+            .order_by(AccountStatSnapshot.captured_at.asc(),
+                      AccountStatSnapshot.id.asc())
+            .all()
+        )
+        daily_self: dict[str, tuple[datetime, int]] = {}   # date -> (captured_at, fans)
+        points: list[dict] = []
+        for r in rows:
+            date_str = r.captured_at.strftime("%Y-%m-%d") if r.captured_at else ""
+            if not date_str:
+                continue
+            if r.source == "self":
+                cur = daily_self.get(date_str)
+                if cur is None or r.captured_at >= cur[0]:
+                    daily_self[date_str] = (r.captured_at, int(r.followers_count))
+            else:
+                points.append({"date": date_str, "fans": int(r.followers_count),
+                               "source": r.source})
+        for date_str, (_ts, fans) in daily_self.items():
+            points.append({"date": date_str, "fans": fans, "source": "self"})
+        points.sort(key=lambda p: (p["date"], p["source"]))
+        return points
+
+    def live_sessions(self, account_id: int) -> list[dict]:
+        """直播场次推导（P5）：self 快照 live_status 转移点 = 场次起止。
+
+        0→1 开场、1→0 收场；进行中的场次（无收场转移）end_at=None。
+        5min 粒度近似（数据源即本工具 5 分钟轮询快照，非平台精确起止）。
+        """
+        rows = (
+            self.db.query(AccountStatSnapshot.captured_at, AccountStatSnapshot.live_status)
+            .filter(
+                AccountStatSnapshot.account_id == account_id,
+                AccountStatSnapshot.source == "self",
+                AccountStatSnapshot.live_status.isnot(None),
+            )
+            .order_by(AccountStatSnapshot.captured_at.asc(),
+                      AccountStatSnapshot.id.asc())
+            .all()
+        )
+        sessions: list[dict] = []
+        cur_start: datetime | None = None
+        for captured_at, status in rows:
+            if status == 1 and cur_start is None:
+                cur_start = captured_at
+            elif status == 0 and cur_start is not None:
+                sessions.append({
+                    "start_at": cur_start,
+                    "end_at": captured_at,
+                    "duration_minutes": int((captured_at - cur_start).total_seconds() // 60),
+                })
+                cur_start = None
+        if cur_start is not None:
+            sessions.append({"start_at": cur_start, "end_at": None,
+                             "duration_minutes": None})
+        return sessions
+
 
 # ── Post ───────────────────────────────────────────────────────────
 

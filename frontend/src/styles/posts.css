@@ -849,6 +849,210 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* ── 档案视图（P5）：趋势 / 直播日历 / 档案卡 ── */
+
+.float-pill--sm {
+  font-size: 12px;
+  padding: 0 10px;
+  height: 24px;
+}
+
+.archive-view {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 20px 24px;
+  overflow-y: auto;
+  height: 100%;
+}
+
+.archive-section {
+  background: var(--c-bg-card);
+  border-radius: 4px;
+  padding: 12px 14px 14px;
+  box-shadow: var(--pill-shadow);
+}
+
+.archive-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.archive-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--c-text-main);
+}
+
+.archive-section-note {
+  font-size: 11.5px;
+  color: var(--c-text-sub);
+}
+
+.archive-empty,
+.archive-error {
+  font-size: 12.5px;
+  color: var(--c-text-sub);
+  padding: 14px 0;
+  text-align: center;
+}
+
+.archive-error {
+  color: var(--c-live);
+}
+
+/* 直播日历 */
+.live-calendar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.live-calendar-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.live-calendar-head button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--c-border);
+  background: transparent;
+  color: var(--c-text-sub);
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.live-calendar-head button:hover {
+  color: var(--c-accent);
+  border-color: var(--c-primary);
+}
+
+.live-calendar-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--c-text-main);
+  font-variant-numeric: tabular-nums;
+}
+
+.live-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 3px;
+}
+
+.live-calendar-weekday {
+  text-align: center;
+  font-size: 10.5px;
+  color: var(--c-text-sub);
+  padding: 2px 0;
+}
+
+.live-calendar-cell {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 30px;
+  border: 1px solid rgba(210, 216, 222, 0.35);
+  border-radius: 3px;
+  font-size: 11.5px;
+  color: var(--c-text-main);
+  font-variant-numeric: tabular-nums;
+}
+
+.live-calendar-cell.empty {
+  border: none;
+}
+
+.live-calendar-cell.gift {
+  background: rgba(251, 119, 161, 0.08);
+  border-color: rgba(251, 119, 161, 0.45);
+}
+
+.live-calendar-cell.live .live-calendar-day {
+  color: var(--c-accent);
+  font-weight: 600;
+}
+
+.live-calendar-mark {
+  position: absolute;
+  bottom: 3px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #3aa76d;
+}
+
+/* 档案卡 */
+.profile-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.profile-card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.profile-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--c-text-main);
+}
+
+.profile-card-sub {
+  font-size: 11.5px;
+  color: var(--c-text-sub);
+}
+
+.profile-card-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 26px;
+}
+
+.profile-card-label {
+  flex-shrink: 0;
+  width: 68px;
+  font-size: 12px;
+  color: var(--c-text-sub);
+}
+
+.profile-card-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--c-text-main);
+}
+
+.profile-card-value .muted {
+  color: var(--c-text-sub);
+}
+
+.profile-setting {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--c-text-main);
+  white-space: pre-wrap;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
 .post-card-body {
   display: flex;
   flex-direction: column;

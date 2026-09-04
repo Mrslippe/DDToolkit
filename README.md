@@ -73,7 +73,9 @@ frontend\node_modules\.bin\tsc.cmd -p frontend\tsconfig.json --noEmit
 | laplace.live | 无公开 API（留空壳，数据经 danmakus 透传获取） | — |
 
 开关：`EXTERNAL_ENABLED` / `EXTERNAL_ZEROROKU_ENABLED` / `EXTERNAL_DANMAKUS_ENABLED` / `EXTERNAL_RUN_HOUR`（settings）。
-读取端点：`GET /account/{id}/stat-snapshots?source=`、`GET /account/{id}/gift-days`、`GET /externals/vtubers?kw=`。
+读取端点：`GET /account/{id}/stat-snapshots?source=`、`GET /account/{id}/gift-days`、`GET /externals/vtubers?kw=`、`GET /externals/vtubers/by-uid?uid=`。
+
+档案视图（P5）端点：`GET /account/{id}/fan-trend`（按天分桶粉丝趋势）、`GET /account/{id}/live-sessions`（自采快照推导场次）。
 
 ## 常用文档
 

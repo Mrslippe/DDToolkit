@@ -97,10 +97,17 @@
 - ✅ 读取端点：`/account/{id}/stat-snapshots?source=`、`/account/{id}/gift-days`、
   `/externals/vtubers?kw=`（候选池增强，P5 视图直接用）
 
-### P5 新的信息展示视图
+### P5 新的信息展示视图 ✅（2026-09-05 落地 v0.6.0，见 devlog/025）
 
-- 和card、list视图同级
-- 展示粉丝变化曲线、所属公会（阵营、企划）、人物设定集、直播日历等等
+- 和card、list视图同级 → ✅ 第三视图「档案」（`view: 'archive'`，占用原日历占位钮）
+- ✅ 展示粉丝变化曲线：shadcn Chart（recharts；用户定引用库）+ 服务端按天
+  降采样端点 `/account/{id}/fan-trend`；双序列（self 直采实线 / zeroroku 回填虚线），
+  实测曲线回溯至 2019-07（七海 8453→111 万粉）
+- ✅ 所属公会（阵营、企划）：档案卡阵营 Select 编辑（建议=第三方索引 group_name +
+  一键采纳写 faction）；企划·公会只读展示（`/externals/vtubers/by-uid`）
+- ✅ 人物设定集：`vtuber.setting` 折叠展示
+- ✅ 直播日历：月网格（翻月）；绿点=当日直播证据（self 快照断言）、
+  满格=当日礼物日聚合（第三方）悬浮显示金额；`/account/{id}/live-sessions` 推导场次
 
 ### P6 界面外观和逻辑优化
 

@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import {
   AlignJustify,
+  BarChart3,
   Calendar,
   ImagePlus,
   LayoutGrid,
@@ -53,6 +54,7 @@ import type { Account, Post, PostStats, VTuber } from '../api/types'
 import { formatCount } from '../utils/format'
 import PostCard from '../components/PostCard'
 import PostDetailDrawer from '../components/PostDetailDrawer'
+import ArchiveView from '../components/ArchiveView'
 import './../styles/posts.css'
 
 const PAGE_SIZE = 20
@@ -137,7 +139,7 @@ export default function PostsPage() {
   const fetchBusy = useFetchBusy()
   const busyTip = '已有抓取任务进行中，请稍后再试'
   // 双视图：cards=展示页（默认）/ list=帖子列表页
-  const [view, setView] = useState<'cards' | 'list'>('cards')
+  const [view, setView] = useState<'cards' | 'list' | 'archive'>('cards')
   // 列表页右侧操作钮组：收起态只露 [展开钮][更新动态]，展开向左滑出全部四钮
   const [actionsOpen, setActionsOpen] = useState(false)
   const navigate = useNavigate()
@@ -214,7 +216,7 @@ export default function PostsPage() {
   // 快速连点：中止旧预取、回退退场（旧内容回到可见），新目标就绪后重来。
   const [scene, setScene] = useState<{
     acc: number
-    view: 'cards' | 'list'
+    view: 'cards' | 'list' | 'archive'
     exiting: boolean
   }>({ acc: vtuberId, view, exiting: false })
   const [prefetchTick, bumpPrefetchReady] = useState(0)
@@ -235,7 +237,7 @@ export default function PostsPage() {
   const filterRef = useRef({ refreshTick, typeFilter, archived, deletedOnly, searchKw, dateFrom, dateTo })
   filterRef.current = { refreshTick, typeFilter, archived, deletedOnly, searchKw, dateFrom, dateTo }
 
-  const startPrefetch = (acc: number, targetView: 'cards' | 'list') => {
+  const startPrefetch = (acc: number, targetView: 'cards' | 'list' | 'archive') => {
     const pf = prefetchRef.current
     if (pf && pf.acc === acc) return // 同目标：在途或已就绪，复用
     const controller = new AbortController()
@@ -748,8 +750,13 @@ return (
           </div>
         )}
         <div className="glow-bar">
-          <button type="button" className="view-btn off" title="日历视图 · 开发中">
-            <Calendar className="size-6" />
+          <button
+            type="button"
+            className={`view-btn ${view === 'archive' ? 'on' : 'off'}`}
+            title="档案（趋势 / 直播日历 / 企划设定）"
+            onClick={() => setView('archive')}
+          >
+            <BarChart3 className="size-6" />
           </button>
           <button
             type="button"
@@ -795,10 +802,10 @@ return (
           </Alert>
         )}
 
-        {/* 操作按钮行（仅列表视图；卡片页纯展示无此行）：行首账号切换器 + 右侧可收起
+        {/* 操作按钮行（列表/档案视图；卡片页纯展示无此行）：行首账号切换器 + 右侧可收起
             操作组——收起态 [展开钮][更新动态]，展开向左滑出 [抓取账号][抓取帖子][添加账号]
             [解除订阅]，展开钮被挤至最左并旋转为收起钮。 */}
-        {vtuber && scene.view === 'list' && (
+        {vtuber && (scene.view === 'list' || scene.view === 'archive') && (
           <div className="header-actions">
             <div className="account-switch">
               {accounts.map((a) => (
@@ -927,6 +934,10 @@ return (
               )}
             </div>
           </div>
+        )}
+
+        {vtuber && scene.view === 'archive' && (
+          <ArchiveView vtuber={vtuber} account={selectedAccount} refreshTick={refreshTick} />
         )}
 
         {scene.view === 'list' && (

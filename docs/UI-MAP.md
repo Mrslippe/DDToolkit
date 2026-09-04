@@ -1,4 +1,4 @@
-﻿# UI 设计映射文档（UI-MAP）
+# UI 设计映射文档（UI-MAP）
 
 > 修改前端界面时，按本文档名称精确指定目标区域/元素。
 > 结构约定：`组件文件 → CSS 类名 → 关键子元素`。设计令牌统一在 `src/styles/tokens.css`。
@@ -126,7 +126,7 @@
 | 标题/描述 | `.empty-state-title/.desc` | 「未选择 VTuber」灰字提示 |
 
 ### B1. 帖子面板 `<PostsPage>`（pages/PostsPage.tsx，styles/posts.css）
-路由 `/vtubers/:id`。**双视图状态机**：`view: 'cards'|'list'`（默认 `cards`），光条切换，数据共享不重取。视觉按 `docs/design/react-PostsPage`（Frame41301）。
+路由 `/vtubers/:id`。**三视图状态机**：`view: 'cards'|'list'|'archive'`（默认 `cards`），光条切换，数据共享不重取。视觉按 `docs/design/react-PostsPage`（Frame41301）。
 
 | 名称 | 类名 | 说明 |
 |---|---|---|
@@ -138,7 +138,7 @@
 | 名称 | 类名 | 说明 |
 |---|---|---|
 | 光条 | `.glow-bar` | 443px 白色渐变(`rgba(255,255,255,.68)` 中心)胶囊 |
-| 视图钮 | `.view-btn.on/.off` | 四枚：日历(`Calendar`)·占位 / **卡片(`LayoutGrid`)→`setView('cards')`** / **列表(`AlignJustify`)→`setView('list')`** / 邮件(`Mail`)·占位；on=.8 off=.4，激活跟随 `view` |
+| 视图钮 | `.view-btn.on/.off` | 四枚：**档案(`BarChart3`)→`setView('archive')`** / **卡片(`LayoutGrid`)→`setView('cards')`** / **列表(`AlignJustify`)→`setView('list')`** / 邮件(`Mail`)·占位；on=.8 off=.4，激活跟随 `view` |
 
 **cards 视图（展示页 / 默认）**
 | 名称 | 类名 | 说明 |
@@ -173,6 +173,15 @@
 | └ 底行 | `.post-card-footer`：徽章 `.stat-badge`×n + 日期 | 播/赞/评/转 |
 | 无限滚动 | `.load-sentinel` + IntersectionObserver | **不分页懒加载**：哨兵 1px（root=`list-scroll`，rootMargin 600px 预载）命中且 `hasMore=posts.length<total` 时 `page+1` 追加；`page===1` 走替换（整表 + is-refetching 变暗 + grid key 按替换型指纹重挂动画），`page>1` 走追加（按 id 去重拼接、不动 key 不重挂旧卡片）；追加失败 `loadMoreError` 尾条手动重试；到底显示 `.load-end`「已经到底啦」|
 | 占位/错误 | `.posts-placeholder` / Alert(destructive) | 加载 Spin / 空列表 / 失败 |
+
+**archive 视图（档案 / v0.6.0 P5）**
+| 名称 | 类名 | 说明 |
+|---|---|---|
+| 视图容器 | `.archive-view` | 三区块（趋势/日历/档案卡）纵排，`overflow-y:auto`，padding `16px 20px 24px` |
+| 趋势曲线 | `<FanTrendChart>`（shadcn Chart/recharts 2.x，`components/ui/chart.tsx`） | **双序列**：self 直采实线（`--chart-1` 主粉）/ zeroroku 回填虚线（`--chart-2` 灰蓝）；X=日期（月刻度 48px 间隔）、Y=`formatCount` 万缩写；Tooltip=日期+粉丝数+图例；数据 `GET /account/{id}/fan-trend`（服务端按天分桶） |
+| 直播日历 | `<LiveCalendar>` `.live-calendar*` | 月网格（周一开头，可翻月）；绿点=当日自采场次证据、满格=当日第三方礼物日聚合；悬浮显示 礼物/大航海/SC 原始字符串 |
+| 档案卡 | `<ProfileCard>` `.profile-card*` | 阵营（Select 编辑，选项自动建议第三方索引 `group_name`，一键「采纳」写 `faction`）、企划·公会（只读+来源注记）、生日/出道日/房间号、设定集（Collapsible 折叠）；数据 `GET /externals/vtubers/by-uid` |
+| 操作按钮组 | `.header-actions` | **列表/档案视图**共用（档案卡改阵营也走同一行） |
 
 **联动刷新（跨组件事件）**
 | 事件 | 触发方 | 消费方 |

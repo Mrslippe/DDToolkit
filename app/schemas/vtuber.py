@@ -239,3 +239,24 @@ class ThirdpartyVtuberOut(BaseModel):
         if v is not None and v.tzinfo is None:
             return v.replace(tzinfo=timezone.utc)
         return v
+
+
+class FanTrendPoint(BaseModel):
+    """粉丝趋势点（P5）：date 按天分桶；source 区分数据来源线条。"""
+    date: str
+    fans: int
+    source: str
+
+
+class LiveSessionOut(BaseModel):
+    """直播场次（P5：由 self 快照转移推导，5min 粒度近似）。"""
+    account_id: int
+    start_at: datetime
+    end_at: datetime | None = None
+    duration_minutes: int | None = None
+
+    @field_serializer("start_at", "end_at")
+    def _ser_session_dt(self, v: datetime | None):
+        if v is not None and v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc)
+        return v

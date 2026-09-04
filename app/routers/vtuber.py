@@ -20,6 +20,7 @@ from app.schemas.vtuber import (
     AccountOut, AccountCreate, AccountUpdate,
     PostOut, PostCreate, PostUpdate, PostPage, PostStats,
     AccountStatSnapshotOut, LiveGiftDayOut, ThirdpartyVtuberOut,
+    FanTrendPoint, LiveSessionOut,
 )
 from app.services import pool
 from app.services.post_text import extract_post_text
@@ -276,6 +277,42 @@ def list_live_gift_days(account_id: int, limit: int = Query(0, ge=0),
     return [
         LiveGiftDayOut.model_validate(g, from_attributes=True)
         for g in LiveGiftDayRepo(db).list_by_account(account_id, source, limit)
+    ]
+
+
+@router.get("/account/{account_id}/fan-trend", response_model=list[FanTrendPoint])
+def fan_trend(account_id: int, db: Session = Depends(get_db)):
+    """粉丝趋势点序列（P5）：按天分桶降采样，图表直用。
+
+    self 直采 5min 高频 → 天末一条；zeroroku 回填日粒度全量保留（补历史空洞）。
+    返回未排序语义 = 时间升序，前端按 source 分线绘制。
+    """
+    if not AccountRepo(db).get(account_id):
+        raise HTTPException(404, f"Account id={account_id} 不存在")
+    return [FanTrendPoint(**p) for p in AccountStatSnapshotRepo(db).fan_trend_points(account_id)]
+
+
+@router.get("/account/{account_id}/live-sessions", response_model=list[LiveSessionOut])
+def live_sessions(account_id: int, db: Session = Depends(get_db)):
+    """直播场次（P5）：由 self 快照 live_status 转移推导（5min 粒度近似）。
+
+    0→1 开场、1→0 收场；进行中场次 end_at=None。直播日程可据此展示。
+    """
+    if not AccountRepo(db).get(account_id):
+        raise HTTPException(404, f"Account id={account_id} 不存在")
+    return [
+        LiveSessionOut(account_id=account_id, **s)
+        for s in AccountStatSnapshotRepo(db).live_sessions(account_id)
+    ]
+
+
+@router.get("/externals/vtubers/by-uid", response_model=list[ThirdpartyVtuberOut])
+def externals_vtuber_by_uid(uid: str, source: str | None = Query(None),
+                            db: Session = Depends(get_db)):
+    """第三方 VTuber 索引精确查询（P5 档案卡：企划/公会/房间号）。"""
+    return [
+        ThirdpartyVtuberOut.model_validate(v, from_attributes=True)
+        for v in ThirdpartyVtuberRepo(db).by_uid(uid, source)
     ]
 
 

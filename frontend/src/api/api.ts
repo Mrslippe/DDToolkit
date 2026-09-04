@@ -1,4 +1,4 @@
-import type { Account, FetchPostsResult, FetchResult, FetchStatus, PoolItem, PostPage, PostStats, UpdatePostsResult, VTuber } from './types'
+import type { Account, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, GiftDay, LiveSession, PoolItem, PostPage, PostStats, ThirdpartyVtuber, UpdatePostsResult, VTuber } from './types'
 
 /**
  * API 基地址：
@@ -88,6 +88,32 @@ export const api = {
   /** 帖子统计概览（总数/类型分布/时间跨度） */
   postStats: (platform: string, uid: string) =>
     request<PostStats>(`/posts/${platform}/${uid}/stats`),
+
+  // ── P5 档案视图 ────────────────────────────────────────────────
+
+  /** 粉丝趋势点序列（服务端按天分桶降采样） */
+  fanTrend: (accountId: number) =>
+    request<FanTrendPoint[]>(`/account/${accountId}/fan-trend`),
+
+  /** 直播场次（由 self 快照转移推导） */
+  liveSessions: (accountId: number) =>
+    request<LiveSession[]>(`/account/${accountId}/live-sessions`),
+
+  /** 直播礼物日聚合（日期倒序；limit=0 全量） */
+  giftDays: (accountId: number, limit = 0) =>
+    request<GiftDay[]>(`/account/${accountId}/gift-days?limit=${limit}`),
+
+  /** 第三方 VTuber 索引精确查询（企划/公会/房间号） */
+  externalsVtuberByUid: (uid: string) =>
+    request<ThirdpartyVtuber[]>(`/externals/vtubers/by-uid?uid=${encodeURIComponent(uid)}`),
+
+  /** 更新 VTuber 元信息（档案卡阵营编辑等） */
+  updateVtuber: (id: number, data: { faction?: string | null; setting?: string | null; notes?: string | null }) =>
+    request<VTuber>(`/vtuber/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    }),
 
   /** 手动触发全量账号信息抓取（所有 VTuber） */
   triggerFetch: () =>

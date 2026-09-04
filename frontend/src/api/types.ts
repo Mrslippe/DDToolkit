@@ -81,6 +81,48 @@ export interface PostStats {
   latest: string | null
 }
 
+/** 粉丝趋势点（P5）：date 按天分桶；source=self 直采 / zeroroku 回填 */
+export interface FanTrendPoint {
+  date: string
+  fans: number
+  source: string
+}
+
+/** 直播场次（P5：由 self 快照转移推导，5min 粒度近似） */
+export interface LiveSession {
+  account_id: number
+  start_at: string
+  end_at: string | null
+  duration_minutes: number | null
+}
+
+/** 直播礼物日聚合（金额为原始字符串保精度） */
+export interface GiftDay {
+  id: number
+  account_id: number
+  source: string
+  gift_date: string
+  gift_amount: string | null
+  guard_amount: string | null
+  sc_amount: string | null
+  total_amount: string | null
+  room_id: string | null
+  created_at: string | null
+}
+
+/** 第三方 VTuber 索引条目（P5 档案卡：企划/公会/房间号） */
+export interface ThirdpartyVtuber {
+  id: number
+  platform: string
+  platform_uid: string
+  name: string
+  type: string | null
+  room_id: string | null
+  group_name: string | null
+  source: string
+  updated_at: string | null
+}
+
 export interface FetchResult {
   status: string
   message?: string
