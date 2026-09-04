@@ -197,15 +197,17 @@ P6-2 起为**居中 Dialog**（原 Sheet 右侧抽屉）`sm:max-w-[720px]`，标
 
 ### B2.1 图片查看器 `<ImageViewer>`（components/ImageViewer.tsx）
 P6-4：从详情窗口打开图片的**独立浮层**——portal 到 body、`z-[200]` 高于详情窗（z-50）。
-**交互自持**：根层 `onPointerDown` 阻断冒泡，radix `pointerdownOutside` 不会误关背后详情窗；
-Esc 用 capture 阶段拦截，只关查看器。**无黑色遮罩**：图片直接浮于详情窗口上方
-（不与详情窗背景叠加变暗）。封面 / 图片组 / 转发原文缩略图均可点开。交互：上一张/下一张
-（白玻璃圆钮：发丝边 + bg-white/85 + backdrop-blur，左右键同效，单图隐藏）、
-**底部点状序号**（点击跳转，单图隐藏，当前点 `bg-primary` 放大、其余 `bg-border`）、
-关闭钮为同构白玻璃圆钮（10×10，右缘 20px）。图片无外框/无底色，直浮于内容上；
-点击遮罩空白区 = 关查看器（不伤详情窗）。主体入场动画 posts.css `.image-viewer-img`
-（0.2s 微缩放+淡入，切图重播；reduced-motion 禁用）。图片加载同一混合策略
-（直连→代理→失败占位）。
+**交互自持（关键）**：根层显式 `pointer-events-auto`——详情窗（radix modal）会把
+`document.body` 置为 `pointer-events:none`，查看器属「窗外节点」会继承成点击穿透
+（点击落到其下 overlay 先关详情窗）；配合根层 `onPointerDown` 阻断冒泡屏蔽
+radix `pointerdownOutside`。Esc 用 capture 阶段拦截，只关查看器。**无黑色遮罩**：
+图片直接浮于详情窗口上方（不与详情窗背景叠加变暗）。封面 / 图片组 / 转发原文缩略图
+均可点开。交互：上一张/下一张（白玻璃圆钮：发丝边 + bg-white/85 + backdrop-blur，
+左右键同效，单图隐藏）、**底部点状序号**（点击跳转，单图隐藏，当前点 `bg-primary`
+放大、其余 `bg-border`）、关闭钮为同构白玻璃圆钮（10×10，右缘 20px）。图片无外框/
+无底色，直浮于内容上；点击遮罩空白区 = 关查看器（不伤详情窗）。主体入场动画
+posts.css `.image-viewer-img`（0.2s 微缩放+淡入，切图重播；reduced-motion 禁用）。
+图片加载同一混合策略（直连→代理→失败占位）。
 
 ---
 

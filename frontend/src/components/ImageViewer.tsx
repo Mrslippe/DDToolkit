@@ -53,7 +53,9 @@ function ViewerImg({ src, alt }: { src: string; alt?: string }) {
 /**
  * P6-4：帖子详情中的独立图片查看器。
  * - 浮于详情窗口之上（body portal + z-[200] > dialog z-50），交互完全自持：
- *   根层 onPointerDown 阻断冒泡，radix 的 pointerdownOutside 不会把详情窗关掉
+ *   根层显式 pointer-events-auto（详情窗 modal 会把 body 置为 pointer-events:none，
+ *   不恢复则点击穿透到其下 overlay 先关详情窗）+ onPointerDown 阻断冒泡
+ *   （屏蔽 radix pointerdownOutside）
  * - 无黑色遮罩：图片直接浮于详情窗口上方，不与详情窗背景叠加变黑
  * - 上一张 / 下一张（循环，左右键同效）；底部点状序号点击跳转
  * - 控件为白玻璃浮钮（发丝边），在亮/暗背景上均可读；关闭钮同构圆钮
@@ -90,8 +92,13 @@ export default function ImageViewer({ images, index, onIndexChange, onClose }: P
     'flex items-center justify-center rounded-full border border-border bg-white/85 text-muted-foreground backdrop-blur transition-colors hover:bg-white hover:text-foreground'
 
   return createPortal(
+    // pointer-events-auto：必填——背后的 radix 详情窗（modal）会把
+    // document.body 置为 pointer-events:none（disableOutsidePointerEvents），
+    // 查看器 portal 到 body、属于「窗外节点」，会连带继承 none 变成点击穿透：
+    // 命中落到其下 z-50 的详情窗 overlay（own dismissable surface）→ 先关详情窗。
+    // 显式 auto 恢复本层可点击，onPointerDown 再阻断冒泡屏蔽 pointerdownOutside。
     <div
-      className="fixed inset-0 z-[200] flex items-center justify-center p-4"
+      className="pointer-events-auto fixed inset-0 z-[200] flex items-center justify-center p-4"
       onPointerDown={(e) => e.stopPropagation()}
       onClick={onClose}
     >
