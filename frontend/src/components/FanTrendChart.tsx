@@ -1,4 +1,4 @@
-import { memo, useMemo } from 'react'
+import { memo, useMemo, type ReactNode } from 'react'
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from 'recharts'
 import {
   ChartContainer,
@@ -70,7 +70,7 @@ const FanTrendChart = memo(function FanTrendChart({ points }: Props) {
           cursor={false}
           content={
             <ChartTooltipContent
-              labelFormatter={(label: string) => String(label)}
+              labelFormatter={(label: ReactNode) => String(label)}
               formatter={(value, name) => [formatCount(Number(value)) + ' 粉', String(name)]}
             />
           }

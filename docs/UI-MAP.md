@@ -177,11 +177,11 @@
 **archive 视图（档案 / v0.6.0 P5）**
 | 名称 | 类名 | 说明 |
 |---|---|---|
-| 视图容器 | `.archive-view` | 三区块（趋势/日历/档案卡）纵排，`overflow-y:auto`，padding `16px 20px 24px` |
-| 趋势曲线 | `<FanTrendChart>`（shadcn Chart/recharts 2.x，`components/ui/chart.tsx`） | **双序列**：self 直采实线（`--chart-1` 主粉）/ zeroroku 回填虚线（`--chart-2` 灰蓝）；X=日期（月刻度 48px 间隔）、Y=`formatCount` 万缩写；Tooltip=日期+粉丝数+图例；数据 `GET /account/{id}/fan-trend`（服务端按天分桶） |
+| 视图容器 | `.archive-view` | 三区块（趋势/日历/档案卡）纵排，`overflow-y:auto`，padding `16px 20px 24px`；**卡片自治**：各卡内置账号切换器与数据拉取（不共用列表操作钮行） |
+| 账号切换器 | `<AccountPicker>` | 卡片内部紧凑 Select（平台·昵称），单账号不渲染；默认=B站账号或页面层当前账号，切 V 保留同 id 选中 |
+| 趋势曲线 | `<FanTrendChart>`（shadcn Chart/recharts 3.8，`components/ui/chart.tsx` 为 registry new-york-v4 版） | **双序列**：self 直采实线（`--chart-1` 主粉）/ zeroroku 回填虚线（`--chart-2` 灰蓝）；X=日期（月刻度 48px 间隔）、Y=`formatCount` 万缩写；Tooltip=日期+粉丝数+图例；数据 `GET /account/{id}/fan-trend`（服务端按天分桶） |
 | 直播日历 | `<LiveCalendar>` `.live-calendar*` | 月网格（周一开头，可翻月）；绿点=当日自采场次证据、满格=当日第三方礼物日聚合；悬浮显示 礼物/大航海/SC 原始字符串 |
-| 档案卡 | `<ProfileCard>` `.profile-card*` | 阵营（Select 编辑，选项自动建议第三方索引 `group_name`，一键「采纳」写 `faction`）、企划·公会（只读+来源注记）、生日/出道日/房间号、设定集（Collapsible 折叠）；数据 `GET /externals/vtubers/by-uid` |
-| 操作按钮组 | `.header-actions` | **列表/档案视图**共用（档案卡改阵营也走同一行） |
+| 档案卡 | `<ProfileCard>` `.profile-card*` | 阵营（Select 编辑，选项自动建议第三方索引 `group_name`，一键「采纳」写 `faction`）、企划·公会（只读+来源注记）、生日/出道日/房间号（跟随卡内所选账号）、设定集（Collapsible 折叠）；数据 `GET /externals/vtubers/by-uid` |
 
 **联动刷新（跨组件事件）**
 | 事件 | 触发方 | 消费方 |

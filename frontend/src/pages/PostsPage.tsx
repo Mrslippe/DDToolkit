@@ -802,10 +802,11 @@ return (
           </Alert>
         )}
 
-        {/* 操作按钮行（列表/档案视图；卡片页纯展示无此行）：行首账号切换器 + 右侧可收起
-            操作组——收起态 [展开钮][更新动态]，展开向左滑出 [抓取账号][抓取帖子][添加账号]
-            [解除订阅]，展开钮被挤至最左并旋转为收起钮。 */}
-        {vtuber && (scene.view === 'list' || scene.view === 'archive') && (
+        {/* 操作按钮行（仅列表视图；卡片/档案视图各自有内部账号切换与操作）：
+            行首账号切换器 + 右侧可收起操作组——收起态 [展开钮][更新动态]，
+            展开向左滑出 [抓取账号][抓取帖子][添加账号][解除订阅]，
+            展开钮被挤至最左并旋转为收起钮。 */}
+        {vtuber && scene.view === 'list' && (
           <div className="header-actions">
             <div className="account-switch">
               {accounts.map((a) => (
@@ -937,7 +938,7 @@ return (
         )}
 
         {vtuber && scene.view === 'archive' && (
-          <ArchiveView vtuber={vtuber} account={selectedAccount} refreshTick={refreshTick} />
+          <ArchiveView vtuber={vtuber} refreshTick={refreshTick} initialAccount={selectedAccount} />
         )}
 
         {scene.view === 'list' && (

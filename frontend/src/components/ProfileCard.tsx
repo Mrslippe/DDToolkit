@@ -76,11 +76,6 @@ const ProfileCard = memo(function ProfileCard({ vtuber, account, thirdparty }: P
 
   return (
     <div className="profile-card">
-      <div className="profile-card-head">
-        <span className="profile-card-title">档案</span>
-        <span className="profile-card-sub">阵营 / 企划 / 设定</span>
-      </div>
-
       <div className="profile-card-row">
         <span className="profile-card-label">阵营</span>
         <Select value={faction || '__none__'} onValueChange={handleFaction} disabled={savingFaction}>

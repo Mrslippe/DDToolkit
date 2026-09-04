@@ -892,6 +892,12 @@
   color: var(--c-text-sub);
 }
 
+.archive-section-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .archive-empty,
 .archive-error {
   font-size: 12.5px;
