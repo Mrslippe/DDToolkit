@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
-from app.models.vtuber import VTuber, Account, Post, AccountStatSnapshot
+from app.models.vtuber import VTuber, Account, Post, AccountStatSnapshot, LiveGiftDay, ThirdpartyVtuber
 
 
 # ── VTuber ─────────────────────────────────────────────────────────
@@ -116,12 +116,19 @@ class AccountStatSnapshotRepo:
         self.db.add(obj)
         return obj
 
-    def recent(self, account_id: int, limit: int = 100) -> list[AccountStatSnapshot]:
-        """按时间倒序取最近 limit 条快照（只读端点备用）。"""
+    def recent(self, account_id: int, limit: int = 100,
+               source: str | None = None) -> list[AccountStatSnapshot]:
+        """按时间倒序取最近 limit 条快照（只读端点备用）。
+
+        source（P4）：None=全部来源；'self'=本工具直采；'zeroroku'=第三方回填。
+        """
+        q = self.db.query(AccountStatSnapshot).filter(
+            AccountStatSnapshot.account_id == account_id
+        )
+        if source is not None:
+            q = q.filter(AccountStatSnapshot.source == source)
         return (
-            self.db.query(AccountStatSnapshot)
-            .filter(AccountStatSnapshot.account_id == account_id)
-            .order_by(AccountStatSnapshot.captured_at.desc())
+            q.order_by(AccountStatSnapshot.captured_at.desc())
             .limit(limit)
             .all()
         )
@@ -272,3 +279,50 @@ class PostRepo:
         ])
         n = self.db.query(Post).filter(cond).delete(synchronize_session=False)
         return n
+
+
+# ── 外部第三方数据（P4） ────────────────────────────────────────────
+
+class LiveGiftDayRepo:
+    """直播礼物日聚合读取（写入走 externals 源适配器）。"""
+
+    def __init__(self, db: Session):
+        self.db = db
+
+    def list_by_account(self, account_id: int, source: str | None = None,
+                        limit: int = 0) -> list[LiveGiftDay]:
+        """按日期倒序取某账号礼物聚合；limit=0 全量。"""
+        q = self.db.query(LiveGiftDay).filter(LiveGiftDay.account_id == account_id)
+        if source is not None:
+            q = q.filter(LiveGiftDay.source == source)
+        q = q.order_by(LiveGiftDay.gift_date.desc())
+        if limit > 0:
+            q = q.limit(limit)
+        return q.all()
+
+
+class ThirdpartyVtuberRepo:
+    """第三方 VTuber 索引读取（候选池搜索增强 / 企划·公会数据）。"""
+
+    def __init__(self, db: Session):
+        self.db = db
+
+    def search(self, kw: str, source: str | None = None, limit: int = 20) -> list[ThirdpartyVtuber]:
+        """名称关键词 / uid 前缀匹配（候选池检索用）。"""
+        kw = (kw or "").strip()
+        if not kw:
+            return []
+        q = self.db.query(ThirdpartyVtuber).filter(or_(
+            ThirdpartyVtuber.name.ilike(f"%{kw}%"),
+            ThirdpartyVtuber.platform_uid.like(f"{kw}%"),
+        ))
+        if source is not None:
+            q = q.filter(ThirdpartyVtuber.source == source)
+        return q.limit(limit).all()
+
+    def by_uid(self, platform_uid: str, source: str | None = None) -> list[ThirdpartyVtuber]:
+        q = self.db.query(ThirdpartyVtuber).filter(
+            ThirdpartyVtuber.platform_uid == platform_uid)
+        if source is not None:
+            q = q.filter(ThirdpartyVtuber.source == source)
+        return q.all()

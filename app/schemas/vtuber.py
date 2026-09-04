@@ -55,6 +55,7 @@ class AccountStatSnapshotOut(BaseModel):
     live_status: int | None = None
     live_title: str | None = None
     captured_at: datetime
+    source: str = "self"     # P4：self=直采 / zeroroku=第三方回填
 
     @field_serializer("captured_at")
     def _ser_captured_at(self, v: datetime | None):
@@ -192,6 +193,49 @@ class PostStats(BaseModel):
 
     @field_serializer("earliest", "latest")
     def _ser_dt(self, v: datetime | None):
+        if v is not None and v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc)
+        return v
+
+
+# ── 外部第三方数据（P4） ─────────────────────────────────────────────
+
+class LiveGiftDayOut(BaseModel):
+    """直播礼物日聚合（zeroroku 等，金额为原始字符串保精度）。"""
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    account_id: int
+    source: str
+    gift_date: str
+    gift_amount: str | None = None
+    guard_amount: str | None = None
+    sc_amount: str | None = None
+    total_amount: str | None = None
+    room_id: str | None = None
+    created_at: datetime | None = None
+
+    @field_serializer("created_at")
+    def _ser_created_at(self, v: datetime | None):
+        if v is not None and v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc)
+        return v
+
+
+class ThirdpartyVtuberOut(BaseModel):
+    """第三方 VTuber 索引条目（企划/公会/房间号，候选池增强用）。"""
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    platform: str
+    platform_uid: str
+    name: str
+    type: str | None = None
+    room_id: str | None = None
+    group_name: str | None = None
+    source: str
+    updated_at: datetime | None = None
+
+    @field_serializer("updated_at")
+    def _ser_updated_at(self, v: datetime | None):
         if v is not None and v.tzinfo is None:
             return v.replace(tzinfo=timezone.utc)
         return v

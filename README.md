@@ -62,6 +62,19 @@ frontend\node_modules\.bin\tsc.cmd -p frontend\tsconfig.json --noEmit
 - 数据库 `vtuber.db`、日志 `logs/`、凭据 `.env`、头像/图片缓存 `static/` 全部随数据目录走。
 - 项目根若出现这些目录，说明曾有「裸直跑」模式使用，均为运行时数据（已 gitignore），非源码。
 
+## 外部数据源（v0.6.0，P4）
+
+第三方「已固定化数据」采集，与平台实时抓取（`platforms/`）分离，见 `app/services/externals/`：
+
+| 源 | 数据 | 周期 |
+|---|---|---|
+| [zeroroku.com](https://zeroroku.com)（公开免鉴权） | 粉丝历史（补历史空洞）、直播礼物日聚合 | 每日 3:00 |
+| [danmakus.com](https://ukamnads.icu)（v2 spec，公开部分） | VTuber 索引（企划/公会/房间号，透传 laplace vup-slim） | 每周一 3:30 |
+| laplace.live | 无公开 API（留空壳，数据经 danmakus 透传获取） | — |
+
+开关：`EXTERNAL_ENABLED` / `EXTERNAL_ZEROROKU_ENABLED` / `EXTERNAL_DANMAKUS_ENABLED` / `EXTERNAL_RUN_HOUR`（settings）。
+读取端点：`GET /account/{id}/stat-snapshots?source=`、`GET /account/{id}/gift-days`、`GET /externals/vtubers?kw=`。
+
 ## 常用文档
 
 - `docs/TODO.md` — 路线图与现状盘点
@@ -69,4 +82,4 @@ frontend\node_modules\.bin\tsc.cmd -p frontend\tsconfig.json --noEmit
 - `docs/backend-fetch-pipeline.md` — 抓取链路详解（频率 / API 清单 / 风控判定与原因 / 节流测算）
 - `docs/UI-MAP.md` — 前端界面与路由映射
 - `docs/platforms-extension-guide.md` — 平台接入扩展指南
-- `devlog/` — 每版本的变更记录（当前 v0.5.0）
+- `devlog/` — 每版本的变更记录（当前 v0.6.0）

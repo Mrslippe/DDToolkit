@@ -13,12 +13,13 @@ from app.core.database import get_db
 from app.models.vtuber import VTuber, Post, Account
 from app.repositories.vtuber_repo import (
     VTuberRepo, AccountRepo, PostRepo, AccountStatSnapshotRepo,
+    LiveGiftDayRepo, ThirdpartyVtuberRepo,
 )
 from app.schemas.vtuber import (
     VTuberOut, VTuberCreate, VTuberUpdate,
     AccountOut, AccountCreate, AccountUpdate,
     PostOut, PostCreate, PostUpdate, PostPage, PostStats,
-    AccountStatSnapshotOut,
+    AccountStatSnapshotOut, LiveGiftDayOut, ThirdpartyVtuberOut,
 )
 from app.services import pool
 from app.services.post_text import extract_post_text
@@ -247,16 +248,47 @@ def delete_account(account_id: int, db: Session = Depends(get_db)):
 
 @router.get("/account/{account_id}/stat-snapshots", response_model=list[AccountStatSnapshotOut])
 def list_account_stat_snapshots(account_id: int, limit: int = Query(100, ge=1, le=1000),
+                                source: str | None = Query(None),
                                 db: Session = Depends(get_db)):
     """账号统计快照历史（P0，v0.5.0）：粉丝数/直播状态时间序列，时间倒序。
 
     本期只读端点备用（不做可视化）；limit 上限 1000。
+    source（P4）：None=全部；'self'=本工具直采；'zeroroku'=第三方回填。
     """
     if not AccountRepo(db).get(account_id):
         raise HTTPException(404, f"Account id={account_id} 不存在")
     return [
         AccountStatSnapshotOut.model_validate(s, from_attributes=True)
-        for s in AccountStatSnapshotRepo(db).recent(account_id, limit)
+        for s in AccountStatSnapshotRepo(db).recent(account_id, limit, source)
+    ]
+
+
+@router.get("/account/{account_id}/gift-days", response_model=list[LiveGiftDayOut])
+def list_live_gift_days(account_id: int, limit: int = Query(0, ge=0),
+                        source: str | None = Query(None),
+                        db: Session = Depends(get_db)):
+    """直播礼物日聚合（P4：zeroroku 等第三方固定化数据），日期倒序。
+
+    金额为原始字符串（站点返回小数串，保精度）；limit=0 全量。
+    """
+    if not AccountRepo(db).get(account_id):
+        raise HTTPException(404, f"Account id={account_id} 不存在")
+    return [
+        LiveGiftDayOut.model_validate(g, from_attributes=True)
+        for g in LiveGiftDayRepo(db).list_by_account(account_id, source, limit)
+    ]
+
+
+@router.get("/externals/vtubers", response_model=list[ThirdpartyVtuberOut])
+def search_externals_vtubers(kw: str, source: str | None = Query(None),
+                             db: Session = Depends(get_db)):
+    """第三方 VTuber 索引检索（P4：danmakus vup-list / laplace vup-slim）。
+
+    名称关键词 / uid 前缀匹配；企划（group_name）、房间号随条目返回。
+    """
+    return [
+        ThirdpartyVtuberOut.model_validate(v, from_attributes=True)
+        for v in ThirdpartyVtuberRepo(db).search(kw, source)
     ]
 
 

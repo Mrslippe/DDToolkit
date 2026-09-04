@@ -12,6 +12,7 @@ from pathlib import Path
 import httpx
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -28,7 +29,7 @@ from app.services.fetcher import (
 from app.services.platforms import registry
 from app.services.post_text import extract_post_text
 from app.services.tombstone import apply_tombstone_scan
-
+from app.services.externals.runner import run_external_interval
 # 注意：此处不调用 logging.basicConfig —— 根日志配置统一由 app/main.py 完成。
 # 历史上这里先执行了 basicConfig，导致 main.py 中的 FileHandler 配置被静默忽略，
 # logs/app.log 恒为空（修复记录见 devlog/013）。
@@ -471,9 +472,43 @@ def start_scheduler():
         replace_existing=True,
         max_instances=1,
     )
+    # 外部第三方数据源（P4）：日/周批次低频采集；抓取任务进行中则跳过本轮
+    if settings.EXTERNAL_ENABLED:
+        scheduler.add_job(
+            run_external_daily_jobs,
+            CronTrigger(hour=settings.EXTERNAL_RUN_HOUR, minute=0),
+            id="external_daily",
+            replace_existing=True,
+            max_instances=1,
+        )
+        scheduler.add_job(
+            run_external_weekly_jobs,
+            CronTrigger(day_of_week="mon", hour=settings.EXTERNAL_RUN_HOUR, minute=30),
+            id="external_weekly",
+            replace_existing=True,
+            max_instances=1,
+        )
     scheduler.start()
     logger.info(f"APScheduler 已启动，每 {settings.FETCH_INTERVAL_MINUTES} 分钟抓取一次。")
     return scheduler
+
+
+def run_external_daily_jobs():
+    """外部数据日任务（P4）：粉丝历史增量 + 直播礼物日聚合。"""
+    if any_fetch_running():
+        logger.info("外部数据日任务跳过：抓取任务正在进行")
+        return
+    results = asyncio.run(run_external_interval("daily"))
+    logger.info(f"外部数据日任务完成: {len(results)} 个任务")
+
+
+def run_external_weekly_jobs():
+    """外部数据周任务（P4）：VTuber 索引整表刷新（企划/公会）。"""
+    if any_fetch_running():
+        logger.info("外部数据周任务跳过：抓取任务正在进行")
+        return
+    results = asyncio.run(run_external_interval("weekly"))
+    logger.info(f"外部数据周任务完成: {len(results)} 个任务")
 
 
 def shutdown_scheduler(scheduler: BackgroundScheduler):

@@ -16,7 +16,8 @@
 | 账号统计快照历史 | ✅ 采集已上线（v0.5.0 P0：`account_stat_snapshots` 表 + 只读端点 `/account/{id}/stat-snapshots`）；可视化未做 |
 | 帖子正文全文搜索 | ✅ 已上线（v0.5.2：`body_text` 列 + LIKE 三路 OR 匹配，FTS5 暂缓） |
 | 删除检测 | ✅ 已上线（v0.5.1：两击判定 + 已验证窗口 + 前端已删筛选/角标/时间线） |
-| 数据导出 / 可移植格式 | ❌ 无 |
+| 外部固定化数据源 | ✅ 已上线（v0.6.0：zeroroku 粉丝历史/礼物日聚合 + danmakus 索引，`app/services/externals/`） |
+| 数据导出 / 可移植格式 | ❌ 无（P3 已搁置，待 P4 表结构稳定后重启） |
 
 ---
 
@@ -78,13 +79,23 @@
 - 独立价值：备份、迁移、跨设备；同时是未来 P2P 构想的 Phase 0 格式地基
 - CLI 脚本放 `scripts/export_archive.py`，暂不做前端入口
 
-### P4 添加数据源并分离抓取逻辑（当前主线 ⏳ 计划中，2026-09-05）
+### P4 添加数据源并分离抓取逻辑 ✅（2026-09-05 落地 v0.6.0，见 devlog/024）
 
 - 添加新的数据源例如danmakus.com、laplace.live、zeroroku.com，来获取一些已经被固定化的数据例如粉丝数变化趋势、直播场次、弹幕等等
-- danmakus.com：https://ukamnads.icu/swagger/index.html
-- laplace.live：暂时没有api，之后再补充
-- zeroroku.com：https://github.com/Jannchie/zeroroku，从这找吧
-- 先从变化频率角度考虑需要被展示的数据并且将在抓取频率的上限内进行计划尽可能实时的数据抓取
+  - ✅ zeroroku.com：粉丝历史（实测 2023 至今全量）+ 直播礼物日聚合，公开免鉴权
+  - ✅ danmakus.com：vup-list（VTuber 索引：企划/公会/房间号，**透传 laplace vup-slim**）；
+    直播场次/弹幕端点需登录（401），留 `DANMAKUS_TOKEN` 配置位后续启用
+  - ⏸ laplace.live：暂无 API（经 danmakus 透传获取），留空壳
+- ✅ **分离抓取逻辑**：新包 `app/services/externals/`（externals=第三方固定化数据只读拉取，
+  platforms=平台实时抓取），注册表/适配器/执行器分层，源级+账号级错误隔离
+- ✅ 先从变化频率角度考虑需要被展示的数据并且将在抓取频率的上限内进行计划尽可能实时的数据抓取
+  - 粉丝历史/礼物：每日 3:00（变化频率天级；首跑全量回填 7433+3010 行）
+  - VTuber 索引：每周一 3:30（低频索引，企划信息滞后 ≤1 周）
+  - 全部让位式错峰（抓取任务进行中跳过），不对第三方站点加压
+- ✅ 存储：粉丝历史并入 `account_stat_snapshots`（+source 列，P5 可视化单表复用）；
+  `live_gift_days`（日聚合金额保精度）；`thirdparty_vtubers`（企划/公会索引）
+- ✅ 读取端点：`/account/{id}/stat-snapshots?source=`、`/account/{id}/gift-days`、
+  `/externals/vtubers?kw=`（候选池增强，P5 视图直接用）
 
 ### P5 新的信息展示视图
 

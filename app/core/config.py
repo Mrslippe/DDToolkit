@@ -14,7 +14,7 @@ load_dotenv(DATA_DIR / ".env")
 
 class Settings:
     APP_NAME: str = "Better DD Toolkit"
-    VERSION: str = "0.5.2"   # 与 devlog 最新版本保持一致（v0.5.2：P2 全文搜索正文）
+    VERSION: str = "0.6.0"   # 与 devlog 最新版本保持一致（v0.6.0：P4 外部数据源）
 
     # 数据目录
     DATA_DIR: Path = DATA_DIR
@@ -43,6 +43,12 @@ class Settings:
     FETCH_BATCH_SIZE: int = 10          # 每处理 N 个用户休息一次
     FETCH_BATCH_COOLDOWN: int = 60      # 休息秒数
     RATE_LIMIT_COOLDOWN: int = 600      # 触发风控后冷却秒数（10 分钟）
+
+    # 外部第三方数据源（P4）：zeroroku/danmakus 等「已固定化数据」采集
+    EXTERNAL_ENABLED: bool = True
+    EXTERNAL_ZEROROKU_ENABLED: bool = True
+    EXTERNAL_DANMAKUS_ENABLED: bool = True
+    EXTERNAL_RUN_HOUR: int = 3          # 日任务执行时钟点（3AM，避开抓取高峰）
 
     # VTuber 列表文件
     VTUBER_LIST_FILE: str = str(DATA_DIR / "vtubers.csv")

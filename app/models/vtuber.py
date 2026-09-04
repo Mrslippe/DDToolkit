@@ -66,6 +66,7 @@ class AccountStatSnapshot(Base):
 
     accounts.followers_count 只存最新值、每次抓取覆盖；此表记录时间序列，
     供涨粉趋势/直播状态历史回溯。简单优先：全量记录，不做无变化降噪。
+    source 区分数据来源（P4）：self=本工具直采（默认）/ zeroroku=第三方回填。
     """
     __tablename__ = "account_stat_snapshots"
     __table_args__ = (
@@ -79,6 +80,54 @@ class AccountStatSnapshot(Base):
     live_status = Column(Integer, nullable=True)          # 顺手记录：0=离线 1=直播中
     live_title = Column(String, nullable=True)            # 开播标题快照
     captured_at = Column(DateTime, nullable=False, default=_now)
+    source = Column(String, nullable=False, default="self", server_default="self")
+
+
+class LiveGiftDay(Base):
+    """直播礼物日聚合（P4：第三方固定化数据）。
+
+    来源：zeroroku live-paid-aggregations（公开，日粒度 bucket：礼物/大航海/SC 金额）。
+    金额以原始字符串保存（站点返回 "1234.500" 这类小数字符串，保精度防浮点漂移）。
+    单场次起止（直播日程记录）不在本表范围，留给 P5 用 live_status 快照推导。
+    """
+    __tablename__ = "live_gift_days"
+    __table_args__ = (
+        UniqueConstraint("account_id", "source", "gift_date", name="uq_live_gift_day"),
+        Index("ix_live_gift_days_account_date", "account_id", "gift_date"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
+    source = Column(String, nullable=False, default="zeroroku")
+    gift_date = Column(String, nullable=False)            # "2026-09-04"（ISO 日期）
+    gift_amount = Column(String, nullable=True)
+    guard_amount = Column(String, nullable=True)
+    sc_amount = Column(String, nullable=True)
+    total_amount = Column(String, nullable=True)
+    room_id = Column(String, nullable=True)
+    created_at = Column(DateTime, default=_now)
+
+
+class ThirdpartyVtuber(Base):
+    """第三方 VTuber 索引（P4：danmakus vup-list，透传 laplace vup-slim.json）。
+
+    提供 name/type/room_id/group_name（企划·公会），供候选池搜索增强与
+    faction 自动打标候选；整表按 source 周级刷新。
+    """
+    __tablename__ = "thirdparty_vtubers"
+    __table_args__ = (
+        UniqueConstraint("source", "platform_uid", name="uq_thirdparty_vtuber"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    platform = Column(String, nullable=False, default="bilibili")
+    platform_uid = Column(String, nullable=False, index=True)
+    name = Column(String, nullable=False)
+    type = Column(String, nullable=True)                  # vtuber / group / fan / unknown
+    room_id = Column(String, nullable=True)
+    group_name = Column(String, nullable=True)            # 企划/公会名（可为空）
+    source = Column(String, nullable=False)
+    updated_at = Column(DateTime, default=_now, onupdate=_now)
 
 
 class Post(Base):
