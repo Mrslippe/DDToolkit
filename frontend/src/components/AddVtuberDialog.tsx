@@ -136,7 +136,7 @@ export default function AddVtuberDialog({ open, onOpenChange, onAdded }: Props) 
                   onClick={() => adopt(it)}
                   className="flex w-full items-center gap-3 px-3 py-2 text-left transition-colors hover:bg-[var(--sel-bg-hover)] disabled:opacity-60"
                 >
-                  <span className="shrink-0 rounded-xs bg-[var(--c-rail)] px-1.5 py-0.5 text-[10px] leading-none text-white">
+                  <span className="shrink-0 rounded-none bg-[var(--c-rail)] px-1.5 py-0.5 text-[10px] leading-none text-white">
                     {it.platform}
                   </span>
                   <span className="min-w-0 flex-1">

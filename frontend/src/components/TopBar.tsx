@@ -343,7 +343,7 @@ export default function TopBar() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           {doneReport && doneReport.issues.length > 0 && (
-            <div className="max-h-60 overflow-y-auto rounded border border-border p-3 text-left text-xs text-muted-foreground">
+            <div className="max-h-60 overflow-y-auto rounded-none border border-border p-3 text-left text-xs text-muted-foreground">
               <div className="mb-1.5 font-medium text-foreground">
                 中断账号（{doneReport.issues.length}）
               </div>

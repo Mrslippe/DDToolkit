@@ -761,7 +761,7 @@ color: #fff;
   padding: 12px;
   background: #fff;
   border: 1px solid var(--c-border);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.16);
+  /* 表面层契约（P6-3）：0 圆角 + 发丝边，去阴影（阴影为交互层 float-pill 专属） */
   display: flex;
   flex-direction: column;
   gap: 10px;

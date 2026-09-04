@@ -192,8 +192,8 @@
 | `ddtoolkit:kick-poll` | 各操作按钮 | TopBar 立即轮询一次（防单V抓取快速完成漏边沿） |
 | `ddtoolkit:pill-message` | 抓取/更新完成 | TopBar 状态胶囊覆盖显示 4s |
 
-### B2. 详情抽屉 `<PostDetailDrawer>`（components/PostDetailDrawer.tsx）
-Sheet 右侧抽屉 `sm:max-w-[720px]`，标题 = 帖子类型名。结构未变动：元信息行(类型/时间/平台ID/原文链接) → 统计徽章行 → 预约卡 → 封面大图 → 正文三态(Delta/HTML/纯文本) → 转发原文卡 → 图片组 → 附加字段(bvid/cvid/description) → 原始JSON 折叠。
+### B2. 详情窗口 `<PostDetailDrawer>`（components/PostDetailDrawer.tsx）
+P6-2 起为**居中 Dialog**（原 Sheet 右侧抽屉）`sm:max-w-[720px]`，标题 = 帖子类型名。动效见「抽屉动效」段（dialog-content/overlay，scale 0.97 替代右移）。结构未变动：元信息行(类型/时间/平台ID/原文链接/墓碑flag) → 墓碑时间线(已删时) → 统计徽章行 → 预约卡 → 封面大图 → 正文三态(Delta/HTML/纯文本) → 转发原文卡 → 图片组 → 附加字段(bvid/cvid/description) → 原始JSON 折叠。
 
 ---
 
@@ -252,9 +252,9 @@ Sheet 右侧抽屉 `sm:max-w-[720px]`，标题 = 帖子类型名。结构未变�
 - `.scene-exit`（fall-out）：整块 `translateY(10px)` 下滑渐隐，**0.18s** ease-in（比 `EXIT_MS=200` 短 20ms，动画必在类移除前结束防竞态帧），`pointer-events:none` 防误点；与 rise-in 镜像闭合
 - 机制：PostsPage 场景机 `scene{acc,view,exiting}` + **预取门控**——账号目标变化先并行预取三件套（getVtuber/第1页帖子/postStats），旧内容冻结可见；**数据就绪才退场**，EXIT_MS 后一次性应用预取数据（原子提交，页码归 1、筛选保留），**全程无「正在加载」占位帧**
 - 防重拉闪动：提交播种 `seededPostsKeyRef`（posts effect 消费一次跳过重拉）+ `vtuberLoadedRef`（跳过冗余 getVtuber）；refreshTick 变化仍正常重拉
-- 应用：切 V、cards/list 视图切换（视图切换无数据依赖立即退场；cards→list 首次帖子加载仍走正常 loading）；搜索/筛选/翻页仅重播入场不退场
+- 应用：切 V、cards/list 视图切换（视图切换无数据依赖立即退场；cards→list 首次帖子加载仍走正常 loading）；搜索/筛选/翻页仅重播入场不退场；**P6-1：筛选切换（type/搜索/时间/已删）立即滚回列表顶部**（触发即滚，不等重取；此前缓存恢复方案实测不达预期已 revert）
 - 快速连点：中止旧预取、回退退场（旧内容回到可见冻结），新目标就绪后重来；加载占位仅存于首次进入/手动刷新/错误态；reduced-motion 动画禁用（200ms 延迟保留）
-- 抽屉动效（posts.css 末段）：详情抽屉对齐全局语言——进场 260ms 淡入+右移 48px 滑入、退场 200ms 淡出+右移 48px（fall-out 同款 ease-in），遮罩与面板时长严格同步；覆盖 `[data-slot=sheet-content/overlay]` 的 animation-name/duration，radix animationend 卸载机制不受影响；reduced-motion 下 0.01ms 瞌时关闭
+- 详情窗口动效（posts.css 末段）：居中 Dialog（P6-2 起）对齐全局运动语言——进场 260ms 淡入+scale(0.97) 缩入、退场 200ms 淡出+scale(0.97)（fall-out 同款 ease-in），遮罩与面板时长严格同步；覆盖 `[data-slot=dialog-content/overlay]` 的 animation-name/duration，radix animationend 卸载机制不受影响；reduced-motion 下 0.01ms 瞌时关闭
 
 ## C5. 三层组件契约（UI 几何统一基准）
 
@@ -272,7 +272,7 @@ Sheet 右侧抽屉 `sm:max-w-[720px]`，标题 = 帖子类型名。结构未变�
 - `post-card`（帖子卡片）**浮片化特例**：**2px 圆角 + `var(--pill-shadow)`、去发丝边**；hover 上浮 2px + 阴影加深 + **标题变色 `--c-accent`**；`.post-card-cover` 无封面时 `.post-card-cover-paper` 米白纸纹斜条 + 居中大标题
 
 **豁免**：搜索胶囊（侧栏 `list-search`、帖子页 `.search-float`，用户指定原样）、滚动条圆头、头像与状态圆点（圆形）。
-**二期待办**：对话框内 shadcn 钮、time-pop 方钮、分页钮。
+**二期待办**：✅ P6-3 已清——对话框内残留圆角（AddVtuberDialog 平台标 rounded-xs → 0、TopBar 诊断框 rounded → 0）、dialog/sheet/alert-dialog `shadow-lg` → `shadow-none`（表面层契约：阴影为 float-pill 专属）、time-pop/filter-pop 去阴影（0 圆角+发丝边）；分页钮不存在（无限滚动，N/A）。
 
 ## D. 字体（tokens.css @font-face）
 

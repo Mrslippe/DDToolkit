@@ -12,11 +12,11 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
-  Sheet,
-  SheetContent,
-  SheetHeader,
-  SheetTitle,
-} from '@/components/ui/sheet'
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Separator } from '@/components/ui/separator'
 import {
   Collapsible,
@@ -143,16 +143,15 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
   ].filter((s) => s.value !== undefined && s.value !== null)
 
   return (
-    <Sheet open={open} onOpenChange={(o) => !o && onClose()}>
-      <SheetContent
-        side="right"
-        className="w-full overflow-y-auto p-5 sm:max-w-[720px]"
-      >
-        <SheetHeader className="p-0">
-          <SheetTitle className="pr-8 text-base leading-snug">
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      {/* P6-2：详情抽屉改为居中独立窗口（原 Sheet 侧栏）；动效见 posts.css
+          抽屉动效段（dialog-content/overlay，scale 替代右移） */}
+      <DialogContent className="max-h-[90vh] w-full overflow-y-auto p-5 sm:max-w-[720px]">
+        <DialogHeader className="p-0">
+          <DialogTitle className="pr-8 text-base leading-snug">
             {postDisplayTitle(shown)}
-          </SheetTitle>
-        </SheetHeader>
+          </DialogTitle>
+        </DialogHeader>
 
         <div className="mt-4 space-y-4">
           {/* 元信息 */}
@@ -292,7 +291,7 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
             </Collapsible>
           )}
         </div>
-      </SheetContent>
-    </Sheet>
+      </DialogContent>
+    </Dialog>
   )
 }

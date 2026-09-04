@@ -493,6 +493,13 @@ export default function PostsPage() {
   const listScrollRef = useRef<HTMLDivElement>(null)
   const sentinelRef = useRef<HTMLDivElement>(null)
   const hasMore = posts.length < total
+  // P6-1：筛选切换 = 用户意图重置 → 立即滚回列表顶部。
+  // （此前「按筛选指纹缓存+恢复滚动位置」实测不达预期已 revert——恢复位置
+  //   对不上新内容；标准列表 UX 为回顶，触发即滚，不等重取完成）
+  useEffect(() => {
+    if (scene.view !== 'list') return
+    listScrollRef.current?.scrollTo({ top: 0 })
+  }, [typeFilter, searchKw, dateFrom, dateTo, deletedOnly, scene.view])
   useEffect(() => {
     if (scene.view !== 'list' || !hasMore || loading || loadingMore || error || loadMoreError) return
     const root = listScrollRef.current

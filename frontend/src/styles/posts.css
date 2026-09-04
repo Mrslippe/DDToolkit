@@ -567,7 +567,7 @@
   padding: 12px;
   background: #fff;
   border: 1px solid var(--c-border);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.16);
+  /* 表面层契约（P6-3）：0 圆角 + 发丝边，去阴影（阴影为交互层 float-pill 专属） */
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -1292,16 +1292,16 @@
   }
 }
 
-/* ── 详情抽屉动效：对齐全局运动语言（微位移+淡出/淡入，遮罩与面板严格同步）──
-   unlayered CSS 压过 tw-animate-css 的 utilities layer；覆盖 animation-name 后
-   animationend 照常触发，radix 仍等动画结束再卸载 */
-[data-slot='sheet-content'] {
+/* ── 详情窗口动效（P6-2：居中 Dialog，对齐全局运动语言：微缩放+淡入/淡出，
+   遮罩与面板严格同步）。unlayered CSS 压过 tw-animate-css 的 utilities layer；
+   覆盖 animation-name 后 animationend 照常触发，radix 仍等动画结束再卸载 */
+[data-slot='dialog-content'] {
   animation-name: drawer-in;
   animation-duration: 260ms;
   animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-[data-slot='sheet-content'][data-state='closed'] {
+[data-slot='dialog-content'][data-state='closed'] {
   animation-name: drawer-out;
   animation-duration: 200ms;
   animation-timing-function: cubic-bezier(0.55, 0, 0.55, 0.2);
@@ -1309,32 +1309,32 @@
 
 /* 遮罩：完全自持动画（不依赖 tw-animate 的 exit/变量链——那条链运行时解析
    失败会导致瞬消），与面板同拍渐隐/渐入；fill both 防卸载前闪回 */
-[data-slot='sheet-overlay'][data-state='closed'] {
+[data-slot='dialog-overlay'][data-state='closed'] {
   animation-name: drawer-veil-out;
   animation-duration: 200ms;
   animation-timing-function: cubic-bezier(0.55, 0, 0.55, 0.2);
   animation-fill-mode: both;
 }
 
-[data-slot='sheet-overlay'][data-state='open'] {
+[data-slot='dialog-overlay'][data-state='open'] {
   animation-name: drawer-veil-in;
   animation-duration: 260ms;
   animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
   animation-fill-mode: both;
 }
 
-/* 单帧微位移：插值到元素自身终态（面板基态 transform:none / 遮罩基态 opacity 1） */
+/* 单帧微缩放：插值到元素自身终态（面板基态 transform:none / 遮罩基态 opacity 1） */
 @keyframes drawer-in {
   from {
     opacity: 0;
-    transform: translateX(48px);
+    transform: scale(0.97);
   }
 }
 
 @keyframes drawer-out {
   to {
     opacity: 0;
-    transform: translateX(48px);
+    transform: scale(0.97);
   }
 }
 
@@ -1351,8 +1351,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  [data-slot='sheet-content'],
-  [data-slot='sheet-overlay'] {
+  [data-slot='dialog-content'],
+  [data-slot='dialog-overlay'] {
     animation-duration: 0.01ms;
   }
 }
