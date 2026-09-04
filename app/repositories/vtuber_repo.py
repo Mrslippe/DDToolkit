@@ -146,13 +146,15 @@ class PostRepo:
                   is_archived: bool | None = None,
                   q: str | None = None,
                   date_from: datetime | None = None,
-                  date_to: datetime | None = None) -> tuple[int, list[Post]]:
+                  date_to: datetime | None = None,
+                  is_deleted: bool | None = None) -> tuple[int, list[Post]]:
         """服务端分页 + 过滤（前端列表用；旧 by_uid 保持兼容）。返回 (total, items)
 
         q        标题/摘要模糊匹配（OR 语义）
         post_type 逗号分隔多型（如 "video,video_dynamic"）；单值天然兼容
         date_from/date_to 发布时间范围：from 含当天零点起；to 为次日零点排他
                  （即包含结束日全天）；设范围时 published_at 为空的帖子被排除
+        is_deleted 墓碑筛选（v0.5.1）：True=仅已删除 False=仅未删除 None=全部
         """
         query = self.db.query(Post).filter(
             Post.platform == platform, Post.platform_uid == platform_uid
@@ -163,6 +165,11 @@ class PostRepo:
                 query = query.filter(Post.type.in_(types))
         if is_archived is not None:
             query = query.filter(Post.is_archived == is_archived)
+        if is_deleted is not None:
+            query = query.filter(
+                Post.deleted_detected_at.isnot(None)
+                if is_deleted else Post.deleted_detected_at.is_(None)
+            )
         q = (q or "").strip()
         if q:
             kw = f"%{q}%"
@@ -184,12 +191,13 @@ class PostRepo:
         return total, items
 
     def stats(self, platform: str, platform_uid: str) -> dict:
-        """某账号帖子的统计概览：总数/归档数/类型分布/时间跨度"""
+        """某账号帖子的统计概览：总数/归档数/删除数/类型分布/时间跨度"""
         q = self.db.query(Post).filter(
             Post.platform == platform, Post.platform_uid == platform_uid
         )
         total = q.count()
         archived = q.filter(Post.is_archived == True).count()  # noqa: E712
+        deleted = q.filter(Post.deleted_detected_at.isnot(None)).count()
         by_type = {
             t: n for t, n in q.with_entities(Post.type, func.count(Post.id))
             .group_by(Post.type).all()
@@ -202,6 +210,7 @@ class PostRepo:
             "platform_uid": platform_uid,
             "total": total,
             "archived": archived,
+            "deleted": deleted,
             "by_type": by_type,
             "earliest": earliest,
             "latest": latest,

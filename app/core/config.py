@@ -14,7 +14,7 @@ load_dotenv(DATA_DIR / ".env")
 
 class Settings:
     APP_NAME: str = "Better DD Toolkit"
-    VERSION: str = "0.5.0"   # 与 devlog 最新版本保持一致（v0.5.0：候选池/微博登录/P0 快照）
+    VERSION: str = "0.5.1"   # 与 devlog 最新版本保持一致（v0.5.1：删除检测/墓碑机制）
 
     # 数据目录
     DATA_DIR: Path = DATA_DIR

@@ -55,6 +55,10 @@ export interface Post {
   published_at: string | null
   raw_json: string | null
   is_archived: boolean
+  /** 最近一次确认仍在线的时间（v0.5.1 墓碑机制） */
+  last_seen_at: string | null
+  /** 墓碑：已被判定删除的时刻（v0.5.1） */
+  deleted_detected_at: string | null
   created_at: string | null
 }
 
@@ -70,6 +74,8 @@ export interface PostStats {
   platform_uid: string
   total: number
   archived: number
+  /** 墓碑数（v0.5.1） */
+  deleted: number
   by_type: Record<string, number>
   earliest: string | null
   latest: string | null

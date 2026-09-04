@@ -41,6 +41,7 @@ export interface PostListParams {
   page_size: number
   type?: string
   is_archived?: boolean
+  is_deleted?: boolean
   q?: string
   date_from?: string
   date_to?: string
@@ -77,6 +78,7 @@ export const api = {
     q.set('page_size', String(params.page_size))
     if (params.type) q.set('type', params.type)
     if (params.is_archived !== undefined) q.set('is_archived', String(params.is_archived))
+    if (params.is_deleted !== undefined) q.set('is_deleted', String(params.is_deleted))
     if (params.q) q.set('q', params.q)
     if (params.date_from) q.set('date_from', params.date_from)
     if (params.date_to) q.set('date_to', params.date_to)

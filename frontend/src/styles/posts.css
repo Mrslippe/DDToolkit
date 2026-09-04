@@ -778,6 +778,77 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* ── 墓碑（v0.5.1）：已删除帖卡片 ── */
+.post-card.is-deleted {
+  background: #f7f5f3;
+}
+
+.post-card.is-deleted .post-card-cover-img,
+.post-card.is-deleted .post-card-cover-paper {
+  filter: grayscale(0.75);
+  opacity: 0.85;
+}
+
+.post-card.is-deleted .post-card-title {
+  color: var(--c-text-sub);
+}
+
+.post-card-deleted-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 1px 8px;
+  border-radius: 3px;
+  background: rgba(122, 63, 63, 0.88);
+  color: #fff;
+  font-size: 12px;
+  backdrop-filter: blur(2px);
+}
+
+/* 已删筛选钮（chips-tools 内；激活态走 .float-pill.on 强调色） */
+.del-btn-label {
+  white-space: nowrap;
+}
+
+/* 抽屉：已删除 flag + 墓碑时间线 */
+.deleted-flag {
+  padding: 0 8px;
+  border-radius: 3px;
+  background: rgba(122, 63, 63, 0.12);
+  border: 1px solid rgba(122, 63, 63, 0.45);
+  color: #9a4a4a;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.tombstone-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid rgba(122, 63, 63, 0.25);
+  border-radius: 6px;
+  background: rgba(122, 63, 63, 0.05);
+}
+
+.tombstone-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 12.5px;
+}
+
+.tombstone-key {
+  flex-shrink: 0;
+  min-width: 60px;
+  color: var(--c-text-sub);
+}
+
+.tombstone-val {
+  color: var(--c-text-main);
+  font-variant-numeric: tabular-nums;
+}
+
 .post-card-body {
   display: flex;
   flex-direction: column;

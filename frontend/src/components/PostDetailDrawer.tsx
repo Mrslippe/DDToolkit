@@ -158,6 +158,11 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
           {/* 元信息 */}
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm text-muted-foreground">
             <TypeTag type={shown.type} />
+            {shown.deleted_detected_at && (
+              <span className="deleted-flag" title={`删除发现于 ${formatDateTime(shown.deleted_detected_at)}`}>
+                已删除
+              </span>
+            )}
             <span>发布于 {formatDateTime(shown.published_at)}</span>
             <span>ID: {shown.platform_post_id}</span>
             {shown.permalink && (
@@ -167,6 +172,24 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
               </a>
             )}
           </div>
+
+          {/* 墓碑时间线（v0.5.1）：发布时间 / 最后在线 / 删除发现 */}
+          {shown.deleted_detected_at && (
+            <div className="tombstone-timeline">
+              <div className="tombstone-row">
+                <span className="tombstone-key">发布时间</span>
+                <span className="tombstone-val">{formatDateTime(shown.published_at)}</span>
+              </div>
+              <div className="tombstone-row">
+                <span className="tombstone-key">最后在线</span>
+                <span className="tombstone-val">{formatDateTime(shown.last_seen_at)}</span>
+              </div>
+              <div className="tombstone-row">
+                <span className="tombstone-key">删除发现</span>
+                <span className="tombstone-val">{formatDateTime(shown.deleted_detected_at)}</span>
+              </div>
+            </div>
+          )}
 
           {/* 统计徽章行 */}
           {statItems.length > 0 && (

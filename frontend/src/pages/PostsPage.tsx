@@ -13,6 +13,7 @@ import {
   UserPlus,
   Zap,
   ChevronsLeft,
+  Ghost,
   Loader2,
 } from 'lucide-react'
 import {
@@ -115,6 +116,8 @@ export default function PostsPage() {
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null)
   const [typeFilter, setTypeFilter] = useState<string>()
   const [archived] = useState<ArchivedFilter>('all')
+  // 墓碑筛选（v0.5.1）：仅显示已删除帖子（独立 toggle，与归档/类型正交）
+  const [deletedOnly, setDeletedOnly] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [fetching, setFetching] = useState(false)
@@ -229,8 +232,8 @@ export default function PostsPage() {
   const seededPostsKeyRef = useRef<string | null>(null)
   const vtuberLoadedRef = useRef('')
   // 提交时取最新筛选值（定时器闭包可能过期）
-  const filterRef = useRef({ refreshTick, typeFilter, archived, searchKw, dateFrom, dateTo })
-  filterRef.current = { refreshTick, typeFilter, archived, searchKw, dateFrom, dateTo }
+  const filterRef = useRef({ refreshTick, typeFilter, archived, deletedOnly, searchKw, dateFrom, dateTo })
+  filterRef.current = { refreshTick, typeFilter, archived, deletedOnly, searchKw, dateFrom, dateTo }
 
   const startPrefetch = (acc: number, targetView: 'cards' | 'list') => {
     const pf = prefetchRef.current
@@ -269,6 +272,7 @@ export default function PostsPage() {
                   page_size: PAGE_SIZE,
                   type: f.typeFilter,
                   is_archived: f.archived === 'all' ? undefined : f.archived === 'archived',
+                  is_deleted: f.deletedOnly || undefined,
                   q: f.searchKw || undefined,
                   date_from: f.dateFrom || undefined,
                   date_to: f.dateTo || undefined,
@@ -336,7 +340,7 @@ export default function PostsPage() {
         if (view === 'list' && entry.account && entry.posts) {
           setPosts(entry.posts)
           setTotal(entry.total ?? 0)
-          seededPostsKeyRef.current = `${entry.account.platform}:${entry.account.platform_uid}:${f.refreshTick}:1:${f.typeFilter ?? ''}:${f.archived}:${f.searchKw}:${f.dateFrom}:${f.dateTo}`
+          seededPostsKeyRef.current = `${entry.account.platform}:${entry.account.platform_uid}:${f.refreshTick}:1:${f.typeFilter ?? ''}:${f.archived}:${f.deletedOnly ? 1 : 0}:${f.searchKw}:${f.dateFrom}:${f.dateTo}`
           setLoading(false)
         } else {
           // cards 目标不预取帖子；或 list 但帖子未就绪 → 交回 posts effect 正常加载
@@ -424,7 +428,7 @@ export default function PostsPage() {
   // 播种守卫：场景提交已用预取数据填充时消费一次跳过重拉（防 is-refetching 变暗闪动）
   useEffect(() => {
     if (!selectedAccount || scene.view !== 'list') return
-    const requestKey = `${accountKey}:${refreshTick}:${page}:${typeFilter ?? ''}:${archived}:${searchKw}:${dateFrom}:${dateTo}`
+    const requestKey = `${accountKey}:${refreshTick}:${page}:${typeFilter ?? ''}:${archived}:${deletedOnly ? 1 : 0}:${searchKw}:${dateFrom}:${dateTo}`
     if (seededPostsKeyRef.current === requestKey) {
       seededPostsKeyRef.current = null
       setLoading(false)
@@ -444,6 +448,7 @@ export default function PostsPage() {
           page_size: PAGE_SIZE,
           type: typeFilter,
           is_archived: archived === 'all' ? undefined : archived === 'archived',
+          is_deleted: deletedOnly || undefined,
           q: searchKw || undefined,
           date_from: dateFrom || undefined,
           date_to: dateTo || undefined,
@@ -479,7 +484,7 @@ export default function PostsPage() {
         }
       })
     return () => controller.abort()
-  }, [accountKey, page, typeFilter, archived, refreshTick, scene.view, searchKw, dateFrom, dateTo])
+  }, [accountKey, page, typeFilter, archived, deletedOnly, refreshTick, scene.view, searchKw, dateFrom, dateTo])
 
   // 无限滚动：哨兵进入视口（提前 600px 预载）且可加载 → 追加下一页。
   // 观察者在加载/筛选变化时重建；追加完成后自动续载（连续滚到底持续填充）
@@ -501,7 +506,7 @@ export default function PostsPage() {
     )
     io.observe(el)
     return () => io.disconnect()
-  }, [scene.view, hasMore, loading, loadingMore, error, loadMoreError, accountKey, typeFilter, archived, searchKw, dateFrom, dateTo])
+  }, [scene.view, hasMore, loading, loadingMore, error, loadMoreError, accountKey, typeFilter, archived, deletedOnly, searchKw, dateFrom, dateTo])
 
   const handleFetch = useCallback(async () => {
     if (!vtuber || fetching) return
@@ -946,6 +951,18 @@ return (
                     ))}
                   </div>
                   <div className="chips-tools">
+                    <button
+                      type="button"
+                      className={`float-pill float-pill--md del-btn${deletedOnly ? ' on' : ''}`}
+                      title="仅显示已删除的帖子（墓碑，v0.5.1）"
+                      onClick={() => {
+                        setDeletedOnly((d) => !d)
+                        setPage(1)
+                      }}
+                    >
+                      <Ghost className="size-4" />
+                      <span className="del-btn-label">已删 {stats?.deleted ?? 0}</span>
+                    </button>
                     <div className="search-float">
                       <Search className="search-float-icon" />
                       <input

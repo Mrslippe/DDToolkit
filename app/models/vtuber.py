@@ -55,6 +55,8 @@ class Account(Base):
     live_title = Column(String, nullable=True)
     live_url = Column(String, nullable=True)
     last_fetched_at = Column(DateTime, nullable=True)
+    # 墓碑机制（v0.5.1）：帖子扫描上一轮的完成时间，两次缺席判定的比较基准
+    posts_last_scan_at = Column(DateTime, nullable=True)
 
     vtuber = relationship("VTuber", back_populates="accounts")
 
@@ -88,6 +90,8 @@ class Post(Base):
         Index("ix_posts_platform_uid_published", "platform", "platform_uid", "published_at"),
         # 归档规则：is_archived=0 AND published_at < cutoff
         Index("ix_posts_published_at", "published_at"),
+        # 墓碑筛选（v0.5.1）：deleted_detected_at IS NOT NULL
+        Index("ix_posts_deleted_detected", "deleted_detected_at"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -105,4 +109,7 @@ class Post(Base):
     published_at = Column(DateTime, nullable=True)
     raw_json = Column(Text, nullable=True)
     is_archived = Column(Boolean, default=False, server_default="0")    # 是否归档
+    # 墓碑机制（v0.5.1）：最近一次确认仍在线的时间 / 连续两次缺席判定的删除时刻
+    last_seen_at = Column(DateTime, nullable=True)
+    deleted_detected_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=_now)

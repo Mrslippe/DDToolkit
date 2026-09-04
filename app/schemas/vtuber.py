@@ -119,12 +119,21 @@ class PostOut(BaseModel):
     published_at: datetime | None = None
     raw_json: str | None = None
     is_archived: bool = False
+    last_seen_at: datetime | None = None       # 最近一次确认仍在线（v0.5.1）
+    deleted_detected_at: datetime | None = None  # 墓碑：判定已删除的时刻（v0.5.1）
     created_at: datetime | None = None
 
     @field_serializer("published_at")
     def _ser_published_at(self, v: datetime | None):
         # 库内 published_at 为 naive UTC（SQLite 存储抹掉 tz）；补 +00:00
         # 避免前端按本地时区解析导致时间偏移 8 小时
+        if v is not None and v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc)
+        return v
+
+    @field_serializer("last_seen_at", "deleted_detected_at")
+    def _ser_tombstone_dt(self, v: datetime | None):
+        # 同上：墓碑时间同为 naive UTC，序列化补时区
         if v is not None and v.tzinfo is None:
             return v.replace(tzinfo=timezone.utc)
         return v
@@ -176,6 +185,7 @@ class PostStats(BaseModel):
     platform_uid: str
     total: int
     archived: int
+    deleted: int = 0       # 墓碑数（v0.5.1）：deleted_detected_at 非空
     by_type: dict[str, int]
     earliest: datetime | None = None
     latest: datetime | None = None

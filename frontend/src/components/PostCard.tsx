@@ -48,7 +48,7 @@ const PostCard = memo(function PostCard({ post, index, onOpen }: Props) {
 
   return (
     <article
-      className="post-card anim-rise"
+      className={`post-card anim-rise${post.deleted_detected_at ? ' is-deleted' : ''}`}
       style={{ '--rise-i': index } as React.CSSProperties}
       role="button"
       tabIndex={0}
@@ -66,6 +66,11 @@ const PostCard = memo(function PostCard({ post, index, onOpen }: Props) {
         )}
         <span className="post-card-type">{postTypeLabel(post.type)}</span>
         {duration && <span className="post-card-duration">{duration}</span>}
+        {post.deleted_detected_at && (
+          <span className="post-card-deleted-badge" title={`删除发现于 ${post.deleted_detected_at}`}>
+            已删
+          </span>
+        )}
       </div>
 
       <div className="post-card-body">

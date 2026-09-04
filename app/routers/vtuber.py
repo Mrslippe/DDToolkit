@@ -277,12 +277,13 @@ def list_posts_paginated(
     page_size: int = Query(50, ge=1, le=200),
     post_type: str | None = Query(None, alias="type"),
     is_archived: bool | None = None,
+    is_deleted: bool | None = None,
     q: str | None = Query(None, max_length=100),
     date_from: date | None = Query(None),
     date_to: date | None = Query(None),
     db: Session = Depends(get_db),
 ):
-    """服务端分页 + 过滤（type / is_archived / q 搜索 / 发布时间范围）。
+    """服务端分页 + 过滤（type / is_archived / is_deleted / q 搜索 / 发布时间范围）。
     date_to 为排他次日零点换算，包含结束日全天。"""
     repo = PostRepo(db)
     # 库内 published_at 为 naive UTC 字符串：比较参数须同为 naive
@@ -294,7 +295,7 @@ def list_posts_paginated(
     )
     total, items = repo.paginated(platform, platform_uid, page, page_size,
                                   post_type, is_archived, q,
-                                  date_from_dt, date_to_dt)
+                                  date_from_dt, date_to_dt, is_deleted)
     return PostPage(
         items=[PostOut.model_validate(p, from_attributes=True) for p in items],
         total=total, page=page, page_size=page_size,

@@ -26,6 +26,7 @@ from app.services.fetcher import (
     was_rate_limited, clear_rate_limit, rate_limit_info,
 )
 from app.services.platforms import registry
+from app.services.tombstone import apply_tombstone_scan
 
 # 注意：此处不调用 logging.basicConfig —— 根日志配置统一由 app/main.py 完成。
 # 历史上这里先执行了 basicConfig，导致 main.py 中的 FileHandler 配置被静默忽略，
@@ -565,6 +566,11 @@ class PostFetchResult:
     error: str | None = None        # 异常信息（stop_reason=error 时）
     # 方案 2：B站视频参考总数（arc/search page.count），用于完整性比对
     video_total: int | None = None
+    # 墓碑机制（v0.5.1）：本轮观察到的帖子 ID（新入库 + 已存在）、
+    # 增量停止帖 ID、是否自然走到流尾 —— 供删除检测判定窗口使用
+    seen_pids: list[str] = field(default_factory=list)
+    stop_existing_pid: str | None = None
+    natural_end: bool = False
 
 
 def _safe_json_parse(s: str | None, fallback: dict | None = None) -> dict:
@@ -620,6 +626,8 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
     立即停止遍历 —— 归档后的贴文不再参与抓取。
     """
     result = PostFetchResult()
+    video_natural = False   # 视频流是否自然走到尾（墓碑判定窗口用，见 tombstone.py）
+    dyn_natural = False     # 动态流是否自然走到尾
 
     # 风控状态为本任务上下文内的干净初值（ContextVar 隔离，见 fetcher.py）
     clear_rate_limit()
@@ -705,12 +713,16 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
                     result.video_total = vdata.get("total")
                 videos = vdata.get("items") or []
                 if not videos:
-                    break   # 列表到底（无更多）
+                    video_natural = True    # 列表到底（无更多）
+                    break
                 if all(v["platform_post_id"] in archived_ids for v in videos):
                     result.archived_stop = True
                     result.stop_reason = "archived_boundary"
+                    video_natural = True
+                    result.seen_pids.extend(v["platform_post_id"] for v in videos)
                     break
                 for v in videos:
+                    result.seen_pids.append(v["platform_post_id"])
                     result.videos += 1
                     if v["platform_post_id"] in existing_ids:
                         result.skipped += 1
@@ -757,13 +769,17 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
                 break
             items = data.get("items") or []
             if not items:
+                dyn_natural = True   # 空页 → 视为到底（修复空页误判归档边界）
                 break   # 空页 → 视为到底（修复空页误判归档边界）
             # 归档边界：整页已归档 → 更早的页必然已归档，停止遍历
             if all(d["platform_post_id"] in archived_ids for d in items):
                 result.archived_stop = True
                 result.stop_reason = "archived_boundary"
+                dyn_natural = True
+                result.seen_pids.extend(d["platform_post_id"] for d in items)
                 break
             for idx, d in enumerate(items):
+                result.seen_pids.append(d["platform_post_id"])
                 # 双保险：直播开播动态（fetcher 已过滤，此处兜底，见 devlog/018）
                 if d["type"] == "live":
                     continue
@@ -775,6 +791,7 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
                     if stop_on_existing and not (dyn_page == 0 and idx == 0):
                         result.stopped_early = True
                         result.stop_reason = "stopped_early"
+                        result.stop_existing_pid = d["platform_post_id"]
                         stop_now = True
                         break
                     continue
@@ -859,11 +876,16 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
                 _flush_pending()
                 return result
             if not data.get("has_more"):
+                dyn_natural = True
                 break
             offset = data.get("next_offset", "")
             await asyncio.sleep(20)
 
         _flush_pending()
+        # 墓碑窗口：所有被扫描流都自然走到尾才算可信（任一流中途停止则
+        # 未覆盖区域存在，交由 stop_existing_pid 路径判定，见 tombstone.py）
+        video_scanned = include_videos and video_pages != 0
+        result.natural_end = dyn_natural and (video_natural if video_scanned else True)
         return result
     finally:
         if own_client:
@@ -954,13 +976,17 @@ async def _fetch_platform_posts(pf, uid: str, pages: int, db: Session,
                 break
             items = data.get("items") or []
             if not items:
+                result.natural_end = True   # 空页 → 视为到底
                 break   # 空页 → 视为到底
             # 归档边界：整页已归档 → 更早的页必然已归档，停止遍历
             if all(d["platform_post_id"] in archived_ids for d in items):
                 result.archived_stop = True
                 result.stop_reason = "archived_boundary"
+                result.natural_end = True
+                result.seen_pids.extend(d["platform_post_id"] for d in items)
                 break
             for idx, d in enumerate(items):
+                result.seen_pids.append(d["platform_post_id"])
                 result.dynamics += 1
                 if d["platform_post_id"] in existing_ids:
                     result.skipped += 1
@@ -968,6 +994,7 @@ async def _fetch_platform_posts(pf, uid: str, pages: int, db: Session,
                     if stop_on_existing and not (page == 1 and idx == 0):
                         result.stopped_early = True
                         result.stop_reason = "stopped_early"
+                        result.stop_existing_pid = d["platform_post_id"]
                         _flush_pending()
                         return result
                     continue
@@ -982,6 +1009,7 @@ async def _fetch_platform_posts(pf, uid: str, pages: int, db: Session,
                 if len(pending) >= _POST_BATCH_SIZE:
                     _flush_pending()
             if not data.get("has_more"):
+                result.natural_end = True
                 break
             page += 1
             await asyncio.sleep(20)
@@ -1000,6 +1028,10 @@ async def _fetch_posts_for_account(acc: Account, video_pages: int, dynamics_page
     """按平台分发单个账号的帖子抓取：
     - bilibili → 双流核心 _fetch_posts_core（视频+动态、归档边界、视频总数比对）
     - weibo 等单流平台 → 通用循环 _fetch_platform_posts
+
+    抓取结束后统一执行墓碑判定（删除检测，v0.5.1）——本函数是各调用方
+    （增量更新/全量抓取/按名抓取）的共同必经点，判定结果写入 detail，
+    失败只记日志，不影响抓取结果。
     """
     pf = registry.get_fetcher(acc.platform)
     if pf is None:
@@ -1009,11 +1041,46 @@ async def _fetch_posts_for_account(acc: Account, video_pages: int, dynamics_page
             mid = int(acc.platform_uid)
         except (TypeError, ValueError):
             return PostFetchResult(stop_reason="error", error="非数字 UID")
-        return await _fetch_posts_core(mid, video_pages, dynamics_pages, db,
-                                       client=client, include_videos=include_videos,
-                                       stop_on_existing=stop_on_existing)
-    return await _fetch_platform_posts(pf, str(acc.platform_uid), dynamics_pages, db,
-                                       client=client, stop_on_existing=stop_on_existing)
+        result = await _fetch_posts_core(mid, video_pages, dynamics_pages, db,
+                                         client=client, include_videos=include_videos,
+                                         stop_on_existing=stop_on_existing)
+    else:
+        result = await _fetch_platform_posts(pf, str(acc.platform_uid), dynamics_pages, db,
+                                             client=client, stop_on_existing=stop_on_existing)
+    _run_tombstone_scan(db, acc, result, include_videos=include_videos)
+    return result
+
+
+def _run_tombstone_scan(db: Session, acc: Account, result: PostFetchResult,
+                        include_videos: bool) -> list[Post]:
+    """对单个账号的扫描结果执行墓碑判定（v0.5.1）。
+
+    本轮时间取扫描后的当前时刻（naive UTC，与库内约定一致）；
+    判定只在「窗口可信」时生效（见 tombstone.py），否则仅推进 last_seen
+    刷新与扫描标记，不影响任何抓取数据。
+    """
+    round_ts = datetime.now(timezone.utc).replace(tzinfo=None)
+    try:
+        tombstoned = apply_tombstone_scan(
+            db, acc,
+            seen_pids=result.seen_pids,
+            natural_end=result.natural_end,
+            stop_existing_pid=result.stop_existing_pid,
+            round_ts=round_ts,
+            exclude_types={"video"} if not include_videos else None,
+        )
+        if tombstoned:
+            logger.info(
+                f"墓碑机制: {acc.platform}:{acc.platform_uid} 判定 "
+                f"{len(tombstoned)} 条帖子已删除: "
+                + ", ".join(p.platform_post_id for p in tombstoned[:5])
+                + ("..." if len(tombstoned) > 5 else "")
+            )
+        return tombstoned
+    except Exception:
+        logger.error(f"墓碑判定异常 {acc.platform}:{acc.platform_uid}:", exc_info=True)
+        db.rollback()
+        return []
 
 
 async def async_fetch_posts(platform: str, uid: str, video_pages: int, dynamics_pages: int) -> PostFetchResult:
@@ -1032,14 +1099,14 @@ async def async_fetch_posts(platform: str, uid: str, video_pages: int, dynamics_
     client = httpx.AsyncClient(timeout=15.0)
     out: PostFetchResult | None = None
     try:
-        pf = registry.get_fetcher(platform)
-        if pf is None:
-            out = PostFetchResult(stop_reason="error", error=f"不支持的平台 '{platform}'")
+        acc = db.query(Account).filter(
+            Account.platform == platform, Account.platform_uid == str(uid)
+        ).first()
+        if acc is None:
+            out = PostFetchResult(stop_reason="error", error=f"账号 {platform}:{uid} 不存在")
             return out
-        if platform == "bilibili":
-            out = await _fetch_posts_core(int(uid), video_pages, dynamics_pages, db, client=client)
-        else:
-            out = await _fetch_platform_posts(pf, str(uid), dynamics_pages, db, client=client)
+        # 统一走按账号分发入口（含墓碑判定；参数默认全量）
+        out = await _fetch_posts_for_account(acc, video_pages, dynamics_pages, db, client=client)
         return out
     except Exception as e:
         logger.error(f"帖子抓取异常 {platform}:{uid}: {e}", exc_info=True)
