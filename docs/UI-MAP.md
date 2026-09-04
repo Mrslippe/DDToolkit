@@ -193,7 +193,9 @@
 | `ddtoolkit:pill-message` | 抓取/更新完成 | TopBar 状态胶囊覆盖显示 4s |
 
 ### B2. 详情窗口 `<PostDetailDrawer>`（components/PostDetailDrawer.tsx）
-P6-2 起为**居中 Dialog**（原 Sheet 右侧抽屉）`sm:max-w-[720px]`，标题 = 帖子类型名。动效见「抽屉动效」段（dialog-content/overlay，scale 0.97 替代右移）。**退场为类驱动（P6-4）**：radix Presence 对「换名动画」的判定基于挂载时缓存的 computed style，data-state 换名不会真播退场（面板/遮罩瞬消）——组件侧 `exiting` 态加 `is-exiting` 类播 200ms 再真正闭合，遮罩经 `[data-slot=dialog-overlay]:has(+ [data-slot=dialog-content].is-exiting)` 联动（open 态动画被覆盖为退场、卸载时已不可见）。结构未变动：元信息行(类型/时间/平台ID/原文链接/墓碑flag) → 墓碑时间线(已删时) → 统计徽章行 → 预约卡 → 封面大图 → 正文三态(Delta/HTML/纯文本) → 转发原文卡 → 图片组 → 附加字段(bvid/cvid/description) → 原始JSON 折叠。
+P6-2 起为**居中 Dialog**（原 Sheet 右侧抽屉）`sm:max-w-[720px]`（⚠️ 该类名必须与模板插值分离成纯字符串——Tailwind v4 提取器对「带方括号的类名紧邻 `${`」会丢弃候选
+（曾吞掉 `sm:max-w-[720px]` 致详情窗全宽），一律 `'…' + (cond ? ' x' : '')` 写法），
+标题 = 帖子类型名。动效见「抽屉动效」段（dialog-content/overlay，scale 0.97 替代右移）。**退场为类驱动（P6-4）**：radix Presence 对「换名动画」的判定基于挂载时缓存的 computed style，data-state 换名不会真播退场（面板/遮罩瞬消）——组件侧 `exiting` 态加 `is-exiting` 类播 200ms 再真正闭合，遮罩经 `[data-slot=dialog-overlay]:has(+ [data-slot=dialog-content].is-exiting)` 联动（open 态动画被覆盖为退场、卸载时已不可见）。结构未变动：元信息行(类型/时间/平台ID/原文链接/墓碑flag) → 墓碑时间线(已删时) → 统计徽章行 → 预约卡 → 封面大图 → 正文三态(Delta/HTML/纯文本) → 转发原文卡 → 图片组 → 附加字段(bvid/cvid/description) → 原始JSON 折叠。
 
 ### B2.1 图片查看器 `<ImageViewer>`（components/ImageViewer.tsx）
 P6-4：从详情窗口打开图片的**独立浮层**——portal 到 body、`z-[200]` 高于详情窗（z-50）。

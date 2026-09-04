@@ -134,7 +134,7 @@ export default function ImageViewer({ images, index, onIndexChange, onClose }: P
     // 命中落到其下 z-50 的详情窗 overlay（own dismissable surface）→ 先关详情窗。
     // 显式 auto 恢复本层可点击，onPointerDown 再阻断冒泡屏蔽 pointerdownOutside。
     <div
-      className={`pointer-events-auto fixed inset-0 z-[200] flex items-center justify-center p-4${closing ? ' image-viewer-closing' : ''}`}
+      className={'pointer-events-auto fixed inset-0 z-[200] flex items-center justify-center p-4' + (closing ? ' image-viewer-closing' : '')}
       onPointerDown={(e) => e.stopPropagation()}
       onClick={requestClose}
     >

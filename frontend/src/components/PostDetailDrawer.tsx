@@ -179,7 +179,10 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
       {/* P6-2：详情抽屉改为居中独立窗口（原 Sheet 侧栏）；动效见 posts.css
           抽屉动效段（dialog-content/overlay，scale 替代右移）
           P6-4：退场为类驱动 is-exiting（radix 换名动画不生效，见组件头注释） */}
-      <DialogContent className={`max-h-[90vh] w-full overflow-y-auto p-5 sm:max-w-[720px]${exiting ? ' is-exiting' : ''}`}>
+      {/* max-w 等类名必须与推导段分离（纯字符串 + 拼接）：Tailwind v4 提取器
+          对「带方括号的类名紧邻 ${ 插值」会丢弃该候选（sm:max-w-[720px] 曾被吞掉
+          → 详情窗全宽），静态段单独成串确保被扫描到 */}
+      <DialogContent className={'max-h-[90vh] w-full overflow-y-auto p-5 sm:max-w-[720px]' + (exiting ? ' is-exiting' : '')}>
         <DialogHeader className="p-0">
           <DialogTitle className="pr-8 text-base leading-snug">
             {postDisplayTitle(shown)}
