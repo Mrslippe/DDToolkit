@@ -68,13 +68,17 @@
 - 回填后新增帖子写入时同步提取（✅ 三处写入路径共用 `app/services/post_text.py`，
   `_safe_json_parse` 式容错、不引入 DOM 解析依赖）
 
-### P3 JSONL 归档包导出
+### P3 JSONL 归档包导出 ⏸ 已搁置（2026-09-05 用户定：P4 数据源先行）
+
+> 搁置理由：导出格式依赖表结构稳定；P4 会新增表/列，等数据源落地后再做格式定稿。
+> 格式设计仍有效（schema_version + vtuber/account/posts 三段、raw_json 保真层、
+> P2P 构想的 Phase 0 地基），恢复时按原计划执行。
 
 - 按 V 或全库导出：`schema_version` + vtuber/account/posts 三段，posts 保留 `raw_json` 保真层
 - 独立价值：备份、迁移、跨设备；同时是未来 P2P 构想的 Phase 0 格式地基
 - CLI 脚本放 `scripts/export_archive.py`，暂不做前端入口
 
-### P4 添加数据源并分离抓取逻辑
+### P4 添加数据源并分离抓取逻辑（当前主线 ⏳ 计划中，2026-09-05）
 
 - 添加新的数据源例如danmakus.com、laplace.live、zeroroku.com，来获取一些已经被固定化的数据例如粉丝数变化趋势、直播场次、弹幕等等
 - danmakus.com：https://ukamnads.icu/swagger/index.html
