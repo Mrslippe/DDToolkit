@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Calendar,
   ChevronDown,
@@ -124,11 +124,32 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 }
 
 /** 帖子详情窗口：标题/封面/正文（Delta/HTML/纯文本）/图片/统计/预约/转发原文/链接/JSON
- * P6-4：图片查看由独立 ImageViewer 承担（上一张/下一张/点状序号/重绘关闭钮/无外框） */
+ * P6-4：图片查看由独立 ImageViewer 承担（上一张/下一张/点状序号/黑色玻璃钮/无外框）
+ * 退场动画：radix Presence 对「换名动画」的卸载判定基于挂载时缓存的样式，
+ * data-state 换名不会真播退场（遮罩/面板会瞬消）——改为类驱动：
+ * 先加 is-exiting 播 200ms，到点再真正关闭（radix 侧卸载时已不可见） */
+const EXIT_MS = 200
+
 export default function PostDetailDrawer({ post, open, onClose }: Props) {
   const [rawOpen, setRawOpen] = useState(false)
   // 图片查看器：独立于详情窗口（portal + 更高 z），关闭任一不影响另一
   const [viewer, setViewer] = useState<{ list: ViewerImage[]; index: number } | null>(null)
+  // 退场阶段：点关闭先播动画，EXIT_MS 后才真正闭合
+  const [exiting, setExiting] = useState(false)
+  const exitTimerRef = useRef<number | undefined>(undefined)
+  const requestClose = () => {
+    if (exiting) return
+    setExiting(true)
+    exitTimerRef.current = window.setTimeout(() => {
+      setExiting(false)
+      onClose()
+    }, EXIT_MS)
+  }
+  // 重新打开时复位退场状态（含重开早于计时器到点的边界）
+  useEffect(() => {
+    if (open) setExiting(false)
+  }, [open])
+  useEffect(() => () => window.clearTimeout(exitTimerRef.current), [])
   // 末帧保留：关闭只翻 open，组件仍挂载走 radix 退场动画——
   // 期间渲染最后一次的帖子内容（post 已随父级保留，此 ref 兜底防 null）
   const lastPostRef = useRef<Post | null>(post)
@@ -154,10 +175,11 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
 
   return (
     <>
-      <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <Dialog open={open} onOpenChange={(o) => !o && requestClose()}>
       {/* P6-2：详情抽屉改为居中独立窗口（原 Sheet 侧栏）；动效见 posts.css
-          抽屉动效段（dialog-content/overlay，scale 替代右移） */}
-      <DialogContent className="max-h-[90vh] w-full overflow-y-auto p-5 sm:max-w-[720px]">
+          抽屉动效段（dialog-content/overlay，scale 替代右移）
+          P6-4：退场为类驱动 is-exiting（radix 换名动画不生效，见组件头注释） */}
+      <DialogContent className={`max-h-[90vh] w-full overflow-y-auto p-5 sm:max-w-[720px]${exiting ? ' is-exiting' : ''}`}>
         <DialogHeader className="p-0">
           <DialogTitle className="pr-8 text-base leading-snug">
             {postDisplayTitle(shown)}

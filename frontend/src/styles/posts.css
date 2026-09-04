@@ -1357,10 +1357,15 @@
   }
 }
 
-/* ── 图片查看器（P6-4）：独立灯箱浮于详情窗上方（无遮罩），
-   图片主体入场与详情窗口同语言（微缩放+淡入），每张重播 ── */
+/* ── 图片查看器（P6-4）：独立灯箱浮于详情窗上方。
+   入场：图片主体微缩放+淡入（每张重播）；遮罩（只盖详情窗）淡入 ── */
 .image-viewer-img {
   animation: viewer-in 0.2s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.image-viewer-veil {
+  animation: viewer-veil-in 0.2s cubic-bezier(0.22, 1, 0.36, 1) both;
+  transition: opacity 0.2s cubic-bezier(0.55, 0, 0.55, 0.2);
 }
 
 @keyframes viewer-in {
@@ -1370,8 +1375,54 @@
   }
 }
 
+@keyframes viewer-veil-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* 退场（类驱动，卸载由组件 EXIT_MS 延迟）：图片微缩淡出，遮罩同步渐隐 */
+.image-viewer-closing .image-viewer-img {
+  animation: viewer-out 0.2s cubic-bezier(0.55, 0, 0.55, 0.2) both;
+}
+
+.image-viewer-closing .image-viewer-veil {
+  opacity: 0;
+  animation: none;
+}
+
+@keyframes viewer-out {
+  to {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+}
+
+/* ── 详情窗退场（P6-4）：radix Presence 对换名动画的判定基于挂载时缓存的
+   computed style（可见 react-presence usePresence），data-state 换名不会真播
+   退场（面板/遮罩瞬消）——组件侧改为类驱动 is-exiting + EXIT_MS 延迟卸载；
+   此处覆盖运行中的 open 态动画，遮罩经 :has 选中同门 content 联动 ── */
+[data-slot='dialog-content'].is-exiting {
+  animation: drawer-out 0.2s cubic-bezier(0.55, 0, 0.55, 0.2) both;
+}
+
+[data-slot='dialog-overlay']:has(+ [data-slot='dialog-content'].is-exiting) {
+  animation: drawer-veil-out 0.2s cubic-bezier(0.55, 0, 0.55, 0.2) both;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .image-viewer-img {
+  .image-viewer-img,
+  .image-viewer-veil,
+  .image-viewer-closing .image-viewer-img {
     animation: none;
+  }
+
+  .image-viewer-veil {
+    transition: none;
+  }
+
+  [data-slot='dialog-content'].is-exiting,
+  [data-slot='dialog-overlay']:has(+ [data-slot='dialog-content'].is-exiting) {
+    animation-duration: 0.01ms;
   }
 }

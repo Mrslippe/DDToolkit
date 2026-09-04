@@ -193,21 +193,23 @@
 | `ddtoolkit:pill-message` | 抓取/更新完成 | TopBar 状态胶囊覆盖显示 4s |
 
 ### B2. 详情窗口 `<PostDetailDrawer>`（components/PostDetailDrawer.tsx）
-P6-2 起为**居中 Dialog**（原 Sheet 右侧抽屉）`sm:max-w-[720px]`，标题 = 帖子类型名。动效见「抽屉动效」段（dialog-content/overlay，scale 0.97 替代右移）。结构未变动：元信息行(类型/时间/平台ID/原文链接/墓碑flag) → 墓碑时间线(已删时) → 统计徽章行 → 预约卡 → 封面大图 → 正文三态(Delta/HTML/纯文本) → 转发原文卡 → 图片组 → 附加字段(bvid/cvid/description) → 原始JSON 折叠。
+P6-2 起为**居中 Dialog**（原 Sheet 右侧抽屉）`sm:max-w-[720px]`，标题 = 帖子类型名。动效见「抽屉动效」段（dialog-content/overlay，scale 0.97 替代右移）。**退场为类驱动（P6-4）**：radix Presence 对「换名动画」的判定基于挂载时缓存的 computed style，data-state 换名不会真播退场（面板/遮罩瞬消）——组件侧 `exiting` 态加 `is-exiting` 类播 200ms 再真正闭合，遮罩经 `[data-slot=dialog-overlay]:has(+ [data-slot=dialog-content].is-exiting)` 联动（open 态动画被覆盖为退场、卸载时已不可见）。结构未变动：元信息行(类型/时间/平台ID/原文链接/墓碑flag) → 墓碑时间线(已删时) → 统计徽章行 → 预约卡 → 封面大图 → 正文三态(Delta/HTML/纯文本) → 转发原文卡 → 图片组 → 附加字段(bvid/cvid/description) → 原始JSON 折叠。
 
 ### B2.1 图片查看器 `<ImageViewer>`（components/ImageViewer.tsx）
 P6-4：从详情窗口打开图片的**独立浮层**——portal 到 body、`z-[200]` 高于详情窗（z-50）。
 **交互自持（关键）**：根层显式 `pointer-events-auto`——详情窗（radix modal）会把
 `document.body` 置为 `pointer-events:none`，查看器属「窗外节点」会继承成点击穿透
 （点击落到其下 overlay 先关详情窗）；配合根层 `onPointerDown` 阻断冒泡屏蔽
-radix `pointerdownOutside`。Esc 用 capture 阶段拦截，只关查看器。**无黑色遮罩**：
-图片直接浮于详情窗口上方（不与详情窗背景叠加变暗）。封面 / 图片组 / 转发原文缩略图
-均可点开。交互：上一张/下一张（白玻璃圆钮：发丝边 + bg-white/85 + backdrop-blur，
-左右键同效，单图隐藏）、**底部点状序号**（点击跳转，单图隐藏，当前点 `bg-primary`
-放大、其余 `bg-border`）、关闭钮为同构白玻璃圆钮（10×10，右缘 20px）。图片无外框/
-无底色，直浮于内容上；点击遮罩空白区 = 关查看器（不伤详情窗）。主体入场动画
-posts.css `.image-viewer-img`（0.2s 微缩放+淡入，切图重播；reduced-motion 禁用）。
-图片加载同一混合策略（直连→代理→失败占位）。
+radix `pointerdownOutside`。Esc 用 capture 阶段拦截，只关查看器。**遮罩只盖详情窗口**
+（按 `[data-slot=dialog-content]` 实测矩形定位 `bg-black/40` 圆角随窗，不含整屏黑纱）。
+封面 / 图片组 / 转发原文缩略图均可点开。交互：上一张/下一张（**黑色玻璃圆钮**：
+border-white/25 + bg-black/60 + backdrop-blur，左右键同效，单图隐藏）、
+**底部点状序号**（点击跳转，单图隐藏，当前点白色放大、其余 white/40）、
+关闭钮为同构黑色玻璃圆钮（10×10，右缘 20px）。图片无外框/无底色，直浮于内容上；
+点击遮罩空白区 = 关查看器（不伤详情窗）。**开/关均有动画**（posts.css：出场
+`.image-viewer-img` 微缩放+淡入、`.image-viewer-veil` 淡入；关闭组件 `closing` 态 +
+`image-viewer-closing` 类驱动 200ms 微缩淡出+遮罩渐隐，到点才卸载；
+reduced-motion 禁用）。图片加载同一混合策略（直连→代理→失败占位）。
 
 ---
 

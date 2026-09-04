@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronLeft, ChevronRight, ImageOff, X } from 'lucide-react'
 import { imgProxyUrl } from '../api/api'
@@ -19,6 +19,9 @@ interface Props {
 }
 
 type Stage = 'direct' | 'proxy' | 'failed'
+
+/** 退场时长：与详情窗退场（200ms）同拍 */
+const EXIT_MS = 200
 
 /** 单张大图：直连 → 代理 → 失败占位（与 SmartImage 同策略，key=src 逐张重置状态） */
 function ViewerImg({ src, alt }: { src: string; alt?: string }) {
@@ -56,22 +59,39 @@ function ViewerImg({ src, alt }: { src: string; alt?: string }) {
  *   根层显式 pointer-events-auto（详情窗 modal 会把 body 置为 pointer-events:none，
  *   不恢复则点击穿透到其下 overlay 先关详情窗）+ onPointerDown 阻断冒泡
  *   （屏蔽 radix pointerdownOutside）
- * - 无黑色遮罩：图片直接浮于详情窗口上方，不与详情窗背景叠加变黑
+ * - 遮罩只盖详情窗口本身（按 [data-slot=dialog-content] 实测矩形定位），
+ *   不给整屏加黑纱
+ * - 关闭有退场动画（is-exiting 类驱动 200ms，再真正卸载）
  * - 上一张 / 下一张（循环，左右键同效）；底部点状序号点击跳转
- * - 控件为白玻璃浮钮（发丝边），在亮/暗背景上均可读；关闭钮同构圆钮
+ * - 控件为黑色玻璃浮钮；关闭钮同构圆钮
  */
 export default function ImageViewer({ images, index, onIndexChange, onClose }: Props) {
   const count = images.length
   const img = images[index]
-  const go = (d: number) => onIndexChange((index + d + count) % count)
+  const [closing, setClosing] = useState(false)
+  const closeTimerRef = useRef<number | undefined>(undefined)
+  const [veilRect, setVeilRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
+
+  const go = (d: number) => {
+    if (closing) return
+    onIndexChange((index + d + count) % count)
+  }
+  const requestClose = () => {
+    if (closing) return
+    setClosing(true)
+    closeTimerRef.current = window.setTimeout(onClose, EXIT_MS)
+  }
+
+  useEffect(() => () => window.clearTimeout(closeTimerRef.current), [])
 
   useEffect(() => {
     // capture 阶段拦截：Esc 只关查看器，不连带关掉背后的详情窗口
     const onKey = (e: KeyboardEvent) => {
+      if (closing) return
       if (e.key === 'Escape') {
         e.preventDefault()
         e.stopPropagation()
-        onClose()
+        requestClose()
       } else if (count > 1 && e.key === 'ArrowLeft') {
         e.preventDefault()
         e.stopPropagation()
@@ -84,12 +104,28 @@ export default function ImageViewer({ images, index, onIndexChange, onClose }: P
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [index, count, onClose, onIndexChange])
+  }, [index, count, closing, onClose, onIndexChange])
+
+  // 遮罩只盖详情窗口：按详情窗 content 的实测矩形定位（打开时量一次 + 窗口 resize 复测）
+  useLayoutEffect(() => {
+    const measure = () => {
+      const el = document.querySelector('[data-slot="dialog-content"]')
+      if (!el) {
+        setVeilRect(null)
+        return
+      }
+      const r = el.getBoundingClientRect()
+      setVeilRect({ left: r.left, top: r.top, width: r.width, height: r.height })
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [])
 
   if (!img) return null
 
   const glassBtn =
-    'flex items-center justify-center rounded-full border border-border bg-white/85 text-muted-foreground backdrop-blur transition-colors hover:bg-white hover:text-foreground'
+    'flex items-center justify-center rounded-full border border-white/25 bg-black/60 text-white backdrop-blur transition-colors hover:bg-black/85 hover:text-white'
 
   return createPortal(
     // pointer-events-auto：必填——背后的 radix 详情窗（modal）会把
@@ -98,16 +134,24 @@ export default function ImageViewer({ images, index, onIndexChange, onClose }: P
     // 命中落到其下 z-50 的详情窗 overlay（own dismissable surface）→ 先关详情窗。
     // 显式 auto 恢复本层可点击，onPointerDown 再阻断冒泡屏蔽 pointerdownOutside。
     <div
-      className="pointer-events-auto fixed inset-0 z-[200] flex items-center justify-center p-4"
+      className={`pointer-events-auto fixed inset-0 z-[200] flex items-center justify-center p-4${closing ? ' image-viewer-closing' : ''}`}
       onPointerDown={(e) => e.stopPropagation()}
-      onClick={onClose}
+      onClick={requestClose}
     >
-      {/* 关闭：白玻璃圆钮（与前后切换同构），不影响背后详情窗 */}
+      {/* 遮罩：只盖详情窗口（矩形实测，圆角随详情窗） */}
+      {veilRect && (
+        <div
+          className="image-viewer-veil absolute rounded-lg bg-black/40"
+          style={{ left: veilRect.left, top: veilRect.top, width: veilRect.width, height: veilRect.height }}
+        />
+      )}
+
+      {/* 关闭：黑色玻璃圆钮（与前后切换同构），不影响背后详情窗 */}
       <button
         aria-label="关闭图片查看"
         onClick={(e) => {
           e.stopPropagation()
-          onClose()
+          requestClose()
         }}
         className={`${glassBtn} absolute right-5 top-5 size-10`}
       >
@@ -140,7 +184,7 @@ export default function ImageViewer({ images, index, onIndexChange, onClose }: P
         </>
       )}
 
-      {/* 主体：无外框背景、无遮罩，图片直接浮于详情窗口上方 */}
+      {/* 主体：无外框背景，图片直接浮于详情窗口上方 */}
       <div
         key={`${img.url}-${index}`}
         className="image-viewer-img flex max-h-full max-w-full items-center justify-center"
@@ -158,10 +202,10 @@ export default function ImageViewer({ images, index, onIndexChange, onClose }: P
               aria-label={`第 ${i + 1} 张`}
               onClick={(e) => {
                 e.stopPropagation()
-                onIndexChange(i)
+                if (!closing) onIndexChange(i)
               }}
               className={`h-2 w-2 rounded-full transition-all duration-200 ${
-                i === index ? 'scale-125 bg-primary' : 'bg-border hover:bg-muted-foreground'
+                i === index ? 'scale-125 bg-white' : 'bg-white/40 hover:bg-white/75'
               }`}
             />
           ))}
