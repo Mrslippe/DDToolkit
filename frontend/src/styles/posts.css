@@ -1357,8 +1357,9 @@
   }
 }
 
-/* ── 图片查看器（P6-4）：独立灯箱，入场与详情窗口同语言（微缩放+淡入） ── */
-.image-viewer {
+/* ── 图片查看器（P6-4）：独立灯箱浮于详情窗上方（无遮罩），
+   图片主体入场与详情窗口同语言（微缩放+淡入），每张重播 ── */
+.image-viewer-img {
   animation: viewer-in 0.2s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
@@ -1370,7 +1371,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .image-viewer {
+  .image-viewer-img {
     animation: none;
   }
 }

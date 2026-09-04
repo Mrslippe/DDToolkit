@@ -31,7 +31,7 @@ function ViewerImg({ src, alt }: { src: string; alt?: string }) {
 
   if (stage === 'failed' || !current) {
     return (
-      <div className="flex flex-col items-center gap-2 px-6 text-white/50">
+      <div className="flex flex-col items-center gap-2 px-6 text-muted-foreground">
         <ImageOff className="size-10" />
         <span className="text-sm">图片加载失败</span>
       </div>
@@ -52,10 +52,11 @@ function ViewerImg({ src, alt }: { src: string; alt?: string }) {
 
 /**
  * P6-4：帖子详情中的独立图片查看器。
- * - 与详情窗口完全独立（portal 到 body，z 高于 dialog），叠加/关闭互不干扰
+ * - 浮于详情窗口之上（body portal + z-[200] > dialog z-50），交互完全自持：
+ *   根层 onPointerDown 阻断冒泡，radix 的 pointerdownOutside 不会把详情窗关掉
+ * - 无黑色遮罩：图片直接浮于详情窗口上方，不与详情窗背景叠加变黑
  * - 上一张 / 下一张（循环，左右键同效）；底部点状序号点击跳转
- * - 关闭钮重绘为圆环描边玻璃钮；主体无外框背景，图片直接浮于遮罩上
- * - 直接浮于遮罩，去掉外层卡片/圆角/边框等一切外框背景
+ * - 控件为白玻璃浮钮（发丝边），在亮/暗背景上均可读；关闭钮同构圆钮
  */
 export default function ImageViewer({ images, index, onIndexChange, onClose }: Props) {
   const count = images.length
@@ -85,22 +86,23 @@ export default function ImageViewer({ images, index, onIndexChange, onClose }: P
 
   if (!img) return null
 
-  const navBtn =
-    'flex size-11 items-center justify-center rounded-full border border-white/25 bg-white/10 text-white/90 backdrop-blur transition-colors hover:bg-white/25 hover:text-white'
+  const glassBtn =
+    'flex items-center justify-center rounded-full border border-border bg-white/85 text-muted-foreground backdrop-blur transition-colors hover:bg-white hover:text-foreground'
 
   return createPortal(
     <div
-      className="image-viewer fixed inset-0 z-[200] flex items-center justify-center bg-black/85"
+      className="fixed inset-0 z-[200] flex items-center justify-center p-4"
+      onPointerDown={(e) => e.stopPropagation()}
       onClick={onClose}
     >
-      {/* 关闭：重绘为圆环描边玻璃钮 */}
+      {/* 关闭：白玻璃圆钮（与前后切换同构），不影响背后详情窗 */}
       <button
         aria-label="关闭图片查看"
         onClick={(e) => {
           e.stopPropagation()
           onClose()
         }}
-        className="absolute right-5 top-5 flex size-10 items-center justify-center rounded-full border border-white/25 bg-white/10 text-white/90 backdrop-blur transition-colors hover:bg-white/25 hover:text-white"
+        className={`${glassBtn} absolute right-5 top-5 size-10`}
       >
         <X className="size-5" strokeWidth={2.25} />
       </button>
@@ -114,7 +116,7 @@ export default function ImageViewer({ images, index, onIndexChange, onClose }: P
               e.stopPropagation()
               go(-1)
             }}
-            className={`${navBtn} absolute left-4 top-1/2 -translate-y-1/2`}
+            className={`${glassBtn} absolute left-4 top-1/2 size-11 -translate-y-1/2`}
           >
             <ChevronLeft className="size-6" />
           </button>
@@ -124,19 +126,20 @@ export default function ImageViewer({ images, index, onIndexChange, onClose }: P
               e.stopPropagation()
               go(1)
             }}
-            className={`${navBtn} absolute right-4 top-1/2 -translate-y-1/2`}
+            className={`${glassBtn} absolute right-4 top-1/2 size-11 -translate-y-1/2`}
           >
             <ChevronRight className="size-6" />
           </button>
         </>
       )}
 
-      {/* 主体：无外框背景，图片直接浮于遮罩 */}
+      {/* 主体：无外框背景、无遮罩，图片直接浮于详情窗口上方 */}
       <div
-        className="flex max-h-full max-w-full items-center justify-center"
+        key={`${img.url}-${index}`}
+        className="image-viewer-img flex max-h-full max-w-full items-center justify-center"
         onClick={(e) => e.stopPropagation()}
       >
-        <ViewerImg key={`${img.url}-${index}`} src={img.url} alt={img.url} />
+        <ViewerImg src={img.url} alt={img.url} />
       </div>
 
       {/* 底部点状序号（单图隐藏） */}
@@ -151,7 +154,7 @@ export default function ImageViewer({ images, index, onIndexChange, onClose }: P
                 onIndexChange(i)
               }}
               className={`h-2 w-2 rounded-full transition-all duration-200 ${
-                i === index ? 'scale-125 bg-white' : 'bg-white/30 hover:bg-white/60'
+                i === index ? 'scale-125 bg-primary' : 'bg-border hover:bg-muted-foreground'
               }`}
             />
           ))}
