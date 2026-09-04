@@ -261,9 +261,11 @@ export default function PostsPage() {
           finish()
           return
         }
-        const f = filterRef.current
         const jobs: Promise<unknown>[] = []
         if (targetView === 'list') {
+          // 预取帖子恒以「重置态（默认筛选）」拉取：用户反馈 2026-09-05——
+          // 筛选状态按 VTuber/账号隔离（切换即重置），预取若沿用旧账号残留
+          // 筛选会与提交后重置态错配（种子误消费）。筛选字段不读 filterRef。
           jobs.push(
             api
               .listPosts(
@@ -272,12 +274,12 @@ export default function PostsPage() {
                 {
                   page: 1,
                   page_size: PAGE_SIZE,
-                  type: f.typeFilter,
-                  is_archived: f.archived === 'all' ? undefined : f.archived === 'archived',
-                  is_deleted: f.deletedOnly || undefined,
-                  q: f.searchKw || undefined,
-                  date_from: f.dateFrom || undefined,
-                  date_to: f.dateTo || undefined,
+                  type: undefined,
+                  is_archived: undefined,
+                  is_deleted: undefined,
+                  q: undefined,
+                  date_from: undefined,
+                  date_to: undefined,
                 },
                 controller.signal,
               )
@@ -409,6 +411,18 @@ export default function PostsPage() {
   const accountKey = selectedAccount
     ? `${selectedAccount.platform}:${selectedAccount.platform_uid}`
     : null
+
+  // 用户反馈（2026-09-05）：不同 VTuber/账号之间筛选状态不共享——切换后重置。
+  // 时序：本 effect 与 scene 提交同批 render 后运行，先于 EXIT_MS 提交完成，
+  // 提交时 filterRef 已是重置态 → 与预取默认参数一致（防种子错配）。
+  useEffect(() => {
+    setTypeFilter(undefined)
+    setSearchInput('')
+    setSearchKw('')
+    setDateFrom('')
+    setDateTo('')
+    setDeletedOnly(false)
+  }, [scene.acc, accountKey])
 
   useEffect(() => {
     if (!selectedAccount || scene.view !== 'list') return
