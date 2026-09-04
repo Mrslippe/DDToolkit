@@ -102,6 +102,7 @@ class Post(Base):
     type = Column(String, nullable=False, default="text")         # video / video_dynamic / image / article / text / repost / live / music
     title = Column(String, nullable=True)
     summary = Column(Text, nullable=True)                         # 前 200 字，列表展示用
+    body_text = Column(Text, nullable=True)                       # 正文纯文本（P2 全文搜索，提取逻辑见 post_text.py）
     cover_url = Column(String, nullable=True)
     permalink = Column(String, nullable=True)                     # 原始链接
     body_json = Column(Text, nullable=True)                       # 结构化类型差异数据

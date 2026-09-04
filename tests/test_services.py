@@ -90,7 +90,7 @@ def test_rate_limit_clear_resets_context():
 # ── P3：版本号 ────────────────────────────────────────────────────────
 
 def test_version_synced_with_devlog():
-    assert settings.VERSION == "0.5.1"
+    assert settings.VERSION == "0.5.2"
 
 
 # ── P4：动态类型映射 ──────────────────────────────────────────────────

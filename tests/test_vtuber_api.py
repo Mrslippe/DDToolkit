@@ -1,3 +1,4 @@
+import json
 import pytest
 from datetime import datetime, timezone
 from fastapi.testclient import TestClient
@@ -191,6 +192,39 @@ def test_posts_stats(client):
     assert r["archived"] == 0
     assert r["by_type"] == {"video": 5, "text": 5}
     assert r["platform"] == "bilibili" and r["platform_uid"] == "U1"
+
+
+def test_posts_paginated_search_matches_body_text(client):
+    # P2 全文搜索：q 命中正文正文（title/summary 均不含）——body_text 由后端
+    # 从 body_json 派生（create_post），检索逻辑扩展 OR 匹配
+    client.post("/posts", json={
+        "platform": "bilibili", "platform_uid": "U1",
+        "platform_post_id": "pbody", "type": "text",
+        "title": "第一个帖子", "summary": "第一段摘要",
+        "body_json": json.dumps({"text": "海马体在深海里开花了吗", "images": []}, ensure_ascii=False),
+    })
+    client.post("/posts", json={
+        "platform": "bilibili", "platform_uid": "U1",
+        "platform_post_id": "phead", "type": "text",
+        "title": "标题命中", "summary": "摘要也在",
+    })
+    r = client.get("/posts/bilibili/U1/paginated?q=海马体").json()
+    assert r["total"] == 1
+    assert r["items"][0]["platform_post_id"] == "pbody"
+    # 标题/摘要命中回归不变
+    r2 = client.get("/posts/bilibili/U1/paginated?q=标题命中").json()
+    assert r2["total"] == 1
+    assert r2["items"][0]["platform_post_id"] == "phead"
+    # 正文 HTML（content）剥离标签后亦可命中
+    client.post("/posts", json={
+        "platform": "bilibili", "platform_uid": "U1",
+        "platform_post_id": "phtml", "type": "article",
+        "title": "专栏", "summary": "专栏摘要",
+        "body_json": json.dumps({"content": "<p>深处埋着霓虹色的鲸歌</p>"}, ensure_ascii=False),
+    })
+    r3 = client.get("/posts/bilibili/U1/paginated?q=霓虹色").json()
+    assert r3["total"] == 1
+    assert r3["items"][0]["platform_post_id"] == "phtml"
 
 
 # ── 归档规则 + 未归档动态更新（devlog/016） ─────────────────────────────

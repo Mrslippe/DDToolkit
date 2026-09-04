@@ -21,6 +21,7 @@ from app.schemas.vtuber import (
     AccountStatSnapshotOut,
 )
 from app.services import pool
+from app.services.post_text import extract_post_text
 
 logger = logging.getLogger(__name__)
 
@@ -310,8 +311,11 @@ def post_stats(platform: str, platform_uid: str, db: Session = Depends(get_db)):
 
 @router.post("/posts", response_model=PostOut, status_code=status.HTTP_201_CREATED)
 def create_post(data: PostCreate, db: Session = Depends(get_db)):
+    # P2 全文搜索：body_text 永远由后端从 body_json 派生，不接受客户端传入
+    payload = data.model_dump()
+    payload["body_text"] = extract_post_text(payload.get("body_json"))
     try:
-        p = PostRepo(db).create(data.model_dump())
+        p = PostRepo(db).create(payload)
     except IntegrityError:
         db.rollback()
         raise HTTPException(409, "该 (platform, platform_uid, platform_post_id) 帖子已存在")

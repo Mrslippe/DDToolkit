@@ -26,6 +26,7 @@ from app.services.fetcher import (
     was_rate_limited, clear_rate_limit, rate_limit_info,
 )
 from app.services.platforms import registry
+from app.services.post_text import extract_post_text
 from app.services.tombstone import apply_tombstone_scan
 
 # 注意：此处不调用 logging.basicConfig —— 根日志配置统一由 app/main.py 完成。
@@ -663,6 +664,9 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
                 return
             try:
                 for d in pending:
+                    # P2 全文搜索：落库前派生正文纯文本（body_json 已定稿：
+                    # enrichment 完成于 pending.append 之前）
+                    d["body_text"] = extract_post_text(d.get("body_json"))
                     db.add(Post(**d))
                 db.commit()
                 result.stored += len(pending)
@@ -931,6 +935,8 @@ async def _fetch_platform_posts(pf, uid: str, pages: int, db: Session,
                 return
             try:
                 for d in pending:
+                    # P2 全文搜索：落库前派生正文纯文本（enrich 于 append 前完成）
+                    d["body_text"] = extract_post_text(d.get("body_json"))
                     db.add(Post(**d))
                 db.commit()
                 result.stored += len(pending)

@@ -971,7 +971,8 @@ return (
                           setSearchInput(e.target.value)
                           setPage(1)
                         }}
-                        placeholder="搜索标题/摘要"
+                        placeholder="搜索标题 / 摘要 / 正文"
+                        title="标题、摘要（前 200 字）与正文全文（P2）"
                       />
                     </div>
                     <div className="time-wrap" ref={timeWrapRef}>

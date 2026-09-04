@@ -173,9 +173,11 @@ class PostRepo:
         q = (q or "").strip()
         if q:
             kw = f"%{q}%"
+            # P2 全文搜索：正文纯文本列纳入 OR 匹配（NULL 列天然不匹配）
             query = query.filter(or_(
                 Post.title.ilike(kw),
                 Post.summary.ilike(kw),
+                Post.body_text.ilike(kw),
             ))
         if date_from is not None:
             query = query.filter(Post.published_at >= date_from)

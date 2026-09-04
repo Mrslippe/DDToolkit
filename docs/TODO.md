@@ -14,7 +14,7 @@
 | 候选池收录 / 解订阅连带清帖 / 批量任务 | ✅ 已上线（v0.5.0，`app/services/pool.py` + 批量端点） |
 | 微博扫码登录 | ✅ 已上线（v0.5.0，`/auth/weibo/qr/*` + 平台扩展框架） |
 | 账号统计快照历史 | ✅ 采集已上线（v0.5.0 P0：`account_stat_snapshots` 表 + 只读端点 `/account/{id}/stat-snapshots`）；可视化未做 |
-| 帖子正文全文搜索 | ❌ 仅覆盖前 200 字摘要 |
+| 帖子正文全文搜索 | ✅ 已上线（v0.5.2：`body_text` 列 + LIKE 三路 OR 匹配，FTS5 暂缓） |
 | 删除检测 | ✅ 已上线（v0.5.1：两击判定 + 已验证窗口 + 前端已删筛选/角标/时间线） |
 | 数据导出 / 可移植格式 | ❌ 无 |
 
@@ -53,18 +53,20 @@
 - **迁移链纪律**：新增 alembic 迁移后必须同步更新 `app/main.py` 的 `MIGRATION_HEAD`
   （tests 断言其与 alembic head 一致）
 - 冷启动快路径依赖版本号判断，勿漏 bump
-- 抓取链路改动后跑全量 `pytest`（当前基线 124 passed）
+- 抓取链路改动后跑全量 `pytest`（当前基线 136 passed）
 
 ---
 
 ## v0.5.x 后续小版本
 
-### P2 全文搜索深度升级
+### P2 全文搜索深度升级 ✅（2026-09-05 落地，见 devlog/023）
 
-- 从 `body_json` 提取纯文本入新列 `body_text`（迁移 + 一次性回填脚本，
-  参考既有 `scripts/backfill_post_published_at.py` 的模式）
-- `paginated` 的 `q` 扩展匹配 `body_text`；个人库量级（千条级）先 LIKE 即可，FTS5 暂缓
-- 回填后新增帖子写入时同步提取（与现有 `_safe_json_parse` 容错风格一致）
+- 从 `body_json` 提取纯文本入新列 `body_text`（迁移 `e003` + 一次性回填脚本
+  `scripts/backfill_post_body_text.py`，模式同 `backfill_post_published_at.py`；✅）
+- `paginated` 的 `q` 扩展匹配 `body_text`；个人库量级（千条级）先 LIKE 即可，
+  FTS5 暂缓（✅ 真实库 4354 帖实测毫秒级）
+- 回填后新增帖子写入时同步提取（✅ 三处写入路径共用 `app/services/post_text.py`，
+  `_safe_json_parse` 式容错、不引入 DOM 解析依赖）
 
 ### P3 JSONL 归档包导出
 
