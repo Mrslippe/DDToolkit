@@ -246,10 +246,13 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
             />
           )}
 
-          {/* 封面（点击可开查看器） */}
+          {/* 封面（点击可开查看器；有多图时封面入列首位，可直接下一张） */}
           {shown.cover_url && (
             <button type="button" className="block w-full cursor-zoom-in"
-              onClick={() => setViewer({ list: [{ url: shown.cover_url! }], index: 0 })}>
+              onClick={() => setViewer({
+                list: images.length > 0 ? [{ url: shown.cover_url! }, ...images] : [{ url: shown.cover_url! }],
+                index: 0,
+              })}>
               <SmartImage
                 src={shown.cover_url}
                 alt="封面"
