@@ -7,32 +7,12 @@ import BatchFetchDialog from './BatchFetchDialog'
 import { useLocation, useNavigate, matchPath } from 'react-router-dom'
 import { api, resolveAsset } from '../api/api'
 import type { AccountSnapshot, VTuber } from '../api/types'
+import { mergeVtuberSnapshots } from '../utils/accountSnapshots'
 import './../styles/layout.css'
 
 /** 把抓取完成的账号快照就地合并进侧栏数据（按 bilibili platform_uid 匹配） */
 function mergeSnapshots(list: VTuber[], updates: AccountSnapshot[]): VTuber[] {
-  const byUid = new Map(updates.map((u) => [u.platform_uid, u]))
-  return list.map((v) => {
-    const bili = v.accounts.find((a) => a.platform === 'bilibili')
-    const hit = bili ? byUid.get(bili.platform_uid) : undefined
-    if (!bili || !hit) return v
-    return {
-      ...v,
-      accounts: v.accounts.map((a) =>
-        a.platform === 'bilibili' && a.platform_uid === hit.platform_uid
-          ? {
-              ...a,
-              display_name: hit.display_name ?? a.display_name,
-              sign: hit.sign ?? a.sign,
-              followers_count: hit.followers_count ?? a.followers_count,
-              live_status: hit.live_status ?? a.live_status,
-              live_title: hit.live_title ?? a.live_title,
-              avatar_path: hit.avatar_path ?? a.avatar_path,
-            }
-          : a,
-      ),
-    }
-  })
+  return list.map((v) => mergeVtuberSnapshots(v, updates))
 }
 
 function biliAccount(v: VTuber) {

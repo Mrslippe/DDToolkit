@@ -146,7 +146,7 @@
 | 滚动层 | `.hero-scroll` | `overflow-y:auto`，padding `16px 70px 134px`，居中 |
 | Hero | `.hero` | column 居中，max-width 869px |
 | 头像 | shadcn Avatar `.hero-avatar` | **178×178**，`filter: drop-shadow(0 1px 8px rgba(0,0,0,.98))`；取 `vtuber.avatar`（VTuber 本体，**稳定，不随账号切换变化**），回退所选账号头像 |
-| 直播徽标 | `.live-tag`（内 `i.live-dot` 6px） | 红边红底胶囊 + `live_title`（14px/字距3px） |
+| 直播徽标 | `.live-tag`（内 `i.live-dot` 6px） | 红边红底胶囊 + `live_title`（14px/字距3px）；数据源=本页 `vtuber` 的 bilibili 账号（`account-progress` 增量合并，与左栏同源） |
 | 名字 | `.hero-name` | **57px 黑 + 投影(0 2 4 黑25%)** |
 | 签名 | `.hero-sign` | **25px** `rgba(94,94,94,.76)` 600 字距3px |
 | 平台药丸行 | `.stat-pills` | 数据驱动：每账号一枚 |
@@ -187,7 +187,7 @@
 | 事件 | 触发方 | 消费方 |
 |---|---|---|
 | `ddtoolkit:fetch-idle` | TopBar 轮询 running→idle 边沿 | VtuberSidebar 刷列表；PostsPage `refreshTick`（重拉 vtuber 本体+统计+帖子；`selectedAccount` 按 uid 取新引用）； |
-| `ddtoolkit:account-progress` | TopBar 快照增量 | VtuberSidebar `mergeSnapshots` 就地合并 |
+| `ddtoolkit:account-progress` | TopBar 快照增量 | VtuberSidebar `mergeSnapshots` 就地合并（`utils/accountSnapshots.ts` 共享实现） |
 | `ddtoolkit:data-changed` | 添加/解除订阅成功 | VtuberSidebar 刷列表 |
 | `ddtoolkit:kick-poll` | 各操作按钮 | TopBar 立即轮询一次（防单V抓取快速完成漏边沿） |
 | `ddtoolkit:pill-message` | 抓取/更新完成 | TopBar 状态胶囊覆盖显示 4s |

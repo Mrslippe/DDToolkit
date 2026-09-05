@@ -50,8 +50,9 @@ import pillBilibili from '../assets/pills/bilibili.png'
 import pillWeibo from '../assets/pills/weibo.png'
 import { api, resolveAsset } from '../api/api'
 import { useFetchBusy } from '../fetchBusy'
-import type { Account, Post, PostStats, VTuber } from '../api/types'
+import type { Account, AccountSnapshot, Post, PostStats, VTuber } from '../api/types'
 import { formatCount } from '../utils/format'
+import { mergeAccountSnapshots, mergeVtuberSnapshots } from '../utils/accountSnapshots'
 import PostCard from '../components/PostCard'
 import PostDetailDrawer from '../components/PostDetailDrawer'
 import ArchiveView from '../components/ArchiveView'
@@ -405,6 +406,23 @@ export default function PostsPage() {
       cancelled = true
     }
   }, [scene.acc, refreshTick])
+
+  // 直播/资料实时同步：与侧栏同源吃 account-progress 增量快照就地合并——
+  // 短任务（轮询未目睹运行 → 无 fetch-idle 边沿）后右栏徽标会停留在旧值，
+  // 与左栏「直播中/未开播」不一致（2026-09-05 反馈）；只更新命中账号，
+  // 未命中时引用不变，不影响依赖 accountKey 的请求去重
+  useEffect(() => {
+    const onProgress = (e: Event) => {
+      const updates = (e as CustomEvent<AccountSnapshot[]>).detail
+      if (!Array.isArray(updates) || updates.length === 0) return
+      setVtuber((prev) => (prev ? mergeVtuberSnapshots(prev, updates) : prev))
+      setSelectedAccount((prev) =>
+        prev ? (mergeAccountSnapshots(prev, updates) ?? prev) : prev,
+      )
+    }
+    window.addEventListener('ddtoolkit:account-progress', onProgress)
+    return () => window.removeEventListener('ddtoolkit:account-progress', onProgress)
+  }, [])
 
   // 统计概览（仅列表视图需要；依赖账号 key 而非对象引用——
   // fetch-idle 时 setSelectedAccount 换新对象但 key 不变，避免重复请求）
