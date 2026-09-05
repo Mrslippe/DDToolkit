@@ -11,12 +11,11 @@ interface Props {
   vtuber: VTuber
   /** fetch-idle 边沿：账号抓取完成后曲线/日历自动刷新 */
   refreshTick: number
-  /** 页面层当前账号（作为默认初始值；卡片各自可独立切换） */
-  initialAccount?: Account | null
 }
 
-/** 卡片内部独立账号选择（默认 B站账号优先），各卡片互不影响 */
-function useArchiveAccount(vtuber: VTuber, initial?: Account | null) {
+/** 卡片内部独立账号选择（默认 B站账号优先），各卡片互不影响；
+    2026-09-05 起**不再接收页面级账号**——list 视图切账号不联动档案视图 */
+function useArchiveAccount(vtuber: VTuber) {
   const accounts = useMemo(
     () => vtuber.accounts.filter((a) => a.platform_uid),
     [vtuber],
@@ -24,11 +23,7 @@ function useArchiveAccount(vtuber: VTuber, initial?: Account | null) {
   const defaultOf = (list: Account[]) =>
     list.find((a) => a.platform === 'bilibili' && a.platform_uid) ?? list[0] ?? null
 
-  const [selected, setSelected] = useState<Account | null>(() => {
-    // 页面层已有选中账号 → 用它；否则默认 B站
-    const same = initial && accounts.some((a) => a.id === initial.id)
-    return same ? initial : defaultOf(accounts)
-  })
+  const [selected, setSelected] = useState<Account | null>(() => defaultOf(accounts))
 
   // VTuber 切换时重定默认（保留用户在同账号上已选的 id）
   useEffect(() => {
@@ -43,8 +38,8 @@ function useArchiveAccount(vtuber: VTuber, initial?: Account | null) {
 }
 
 /** 粉丝趋势卡：内部账号切换 + 独立拉取 */
-function TrendCard({ vtuber, initial, refreshTick }: { vtuber: VTuber; initial?: Account | null; refreshTick: number }) {
-  const { accounts, selected, setSelected } = useArchiveAccount(vtuber, initial)
+function TrendCard({ vtuber, refreshTick }: { vtuber: VTuber; refreshTick: number }) {
+  const { accounts, selected, setSelected } = useArchiveAccount(vtuber)
   const [trend, setTrend] = useState<FanTrendPoint[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -88,8 +83,8 @@ function TrendCard({ vtuber, initial, refreshTick }: { vtuber: VTuber; initial?:
 }
 
 /** 直播日历卡：内部账号切换 + 独立拉取（场次 + 礼物日） */
-function CalendarCard({ vtuber, initial, refreshTick }: { vtuber: VTuber; initial?: Account | null; refreshTick: number }) {
-  const { accounts, selected, setSelected } = useArchiveAccount(vtuber, initial)
+function CalendarCard({ vtuber, refreshTick }: { vtuber: VTuber; refreshTick: number }) {
+  const { accounts, selected, setSelected } = useArchiveAccount(vtuber)
   const [sessions, setSessions] = useState<LiveSession[]>([])
   const [giftDays, setGiftDays] = useState<GiftDay[]>([])
   const [loading, setLoading] = useState(true)
@@ -136,8 +131,8 @@ function CalendarCard({ vtuber, initial, refreshTick }: { vtuber: VTuber; initia
 }
 
 /** 档案卡包装：内部账号切换（企划查询 + 房间号跟随所选账号） */
-function ProfileSection({ vtuber, initial, refreshTick }: { vtuber: VTuber; initial?: Account | null; refreshTick: number }) {
-  const { accounts, selected, setSelected } = useArchiveAccount(vtuber, initial)
+function ProfileSection({ vtuber, refreshTick }: { vtuber: VTuber; refreshTick: number }) {
+  const { accounts, selected, setSelected } = useArchiveAccount(vtuber)
   const [thirdparty, setThirdparty] = useState<ThirdpartyVtuber[]>([])
 
   useEffect(() => {
@@ -170,12 +165,12 @@ function ProfileSection({ vtuber, initial, refreshTick }: { vtuber: VTuber; init
  * 三张自治卡片（趋势曲线 / 直播日历 / 档案卡）——每张卡内部有独立的
  * 账号切换器与数据拉取（用户定案：不做视图级共用操作钮行）。
  */
-export default function ArchiveView({ vtuber, refreshTick, initialAccount }: Props) {
+export default function ArchiveView({ vtuber, refreshTick }: Props) {
   return (
     <div className="archive-view">
-      <TrendCard vtuber={vtuber} initial={initialAccount} refreshTick={refreshTick} />
-      <CalendarCard vtuber={vtuber} initial={initialAccount} refreshTick={refreshTick} />
-      <ProfileSection vtuber={vtuber} initial={initialAccount} refreshTick={refreshTick} />
+      <TrendCard vtuber={vtuber} refreshTick={refreshTick} />
+      <CalendarCard vtuber={vtuber} refreshTick={refreshTick} />
+      <ProfileSection vtuber={vtuber} refreshTick={refreshTick} />
     </div>
   )
 }

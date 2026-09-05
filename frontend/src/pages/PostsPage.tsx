@@ -715,7 +715,8 @@ export default function PostsPage() {
   // 不随切 V 卸载重挂——消除切换闪动
   const bili = selectedAccount
   // 头像 / 右栏背景以 VTuber 本体为准（稳定，不随账号切换变化）；
-  // 帖子流 / 直播 / 签名仍跟随所选账户
+  // 帖子流跟随所选账户；卡片页签名/直播走 VTuber 整体事实（B站优先）——
+  // list 切账号不联动 cards/archive（2026-09-05 反馈）
   // VTuber.avatar 未入库，从 accounts 派生稳定源（优先 bilibili，回退首个）
   const stableAvatar =
     resolveAsset(vtuber?.accounts.find((a) => a.platform === 'bilibili')?.avatar_path) ??
@@ -753,6 +754,12 @@ export default function PostsPage() {
   const liveAcc =
     vtuber?.accounts.find((a) => a.platform === 'bilibili' && a.platform_uid) ?? selectedAccount
   const isLive = (liveAcc?.live_status ?? 0) === 1
+  // 卡片页签名同样走「VTuber 整体事实」（B站优先，无 B站时首个账号）——
+  // 不跟随 list 视图所选账号（2026-09-05 反馈：list 切账号联动到 cards/archive）
+  const heroAcc =
+    vtuber?.accounts.find((a) => a.platform === 'bilibili' && a.platform_uid) ??
+    vtuber?.accounts.find((a) => a.platform_uid) ??
+    null
   const accounts = vtuber ? vtuber.accounts.filter((a) => a.platform_uid) : []
 
   // 平台粉丝展示：徽章集按每集 3 枚切分（集内横排、集间纵向间隔 10）。
@@ -942,11 +949,12 @@ return (
 
               <div className="hero-name-block">
                 <h2 className="hero-name">{vtuber.name}</h2>
-                {bili?.sign && <p className="hero-sign">{bili.sign}</p>}
+                {heroAcc?.sign && <p className="hero-sign">{heroAcc.sign}</p>}
               </div>
 
-              {/* 平台药丸：切 V 时依次滑入（key=accountKey 触发重播） */}
-              <div className="stat-sets" key={accountKey}>
+              {/* 平台药丸：切 V 时依次滑入（key=vtuber.id 触发重播；
+                 不再跟随 list 账号切换——2026-09-05 反馈去联动） */}
+              <div className="stat-sets" key={vtuber.id}>
                 {pillSets.map((set, si) => (
                   <div className="stat-set anim-rise" style={{ '--rise-i': si } as React.CSSProperties} key={si}>
                     {set.map((a, i) => {
@@ -983,7 +991,7 @@ return (
         )}
 
         {vtuber && scene.view === 'archive' && (
-          <ArchiveView vtuber={vtuber} refreshTick={refreshTick} initialAccount={selectedAccount} />
+          <ArchiveView vtuber={vtuber} refreshTick={refreshTick} />
         )}
 
         {scene.view === 'list' && (

@@ -148,7 +148,7 @@
 | 头像 | shadcn Avatar `.hero-avatar` | **178×178**，`filter: drop-shadow(0 1px 8px rgba(0,0,0,.98))`；取 `vtuber.avatar`（VTuber 本体，**稳定，不随账号切换变化**），回退所选账号头像 |
 | 直播徽标 | `.live-tag`（内 `i.live-dot` 6px） | 红边红底胶囊 + `live_title`（14px/字距3px）；数据源=本页 `vtuber` 的 bilibili 账号（`account-progress` 增量合并，与左栏同源） |
 | 名字 | `.hero-name` | **57px 黑 + 投影(0 2 4 黑25%)** |
-| 签名 | `.hero-sign` | **25px** `rgba(94,94,94,.76)` 600 字距3px |
+| 签名 | `.hero-sign` | **25px** `rgba(94,94,94,.76)` 600 字距3px；走 **VTuber 整体事实**（B站优先账号，无 B站取首个），不跟随 list 所选账号（2026-09-05 视图隔离） |
 | 平台药丸行 | `.stat-pills` | 数据驱动：每账号一枚 |
 | ├ 药丸 | `.stat-pill.pink/.coral`（奇偶交替 `#fb77a1/#fc7079`） | **191×37**，r10，白边94% |
 | ├ 平台LOGO占位 | `.pill-logo` | 28×28 半透明白块 + 平台首字母（后续换图） |
@@ -178,7 +178,7 @@
 | 名称 | 类名 | 说明 |
 |---|---|---|
 | 视图容器 | `.archive-view` | 三区块（趋势/日历/档案卡）纵排，`overflow-y:auto`，padding `16px 20px 24px`；**卡片自治**：各卡内置账号切换器与数据拉取（不共用列表操作钮行） |
-| 账号切换器 | `<AccountPicker>` | 卡片内部紧凑 Select（平台·昵称），单账号不渲染；默认=B站账号或页面层当前账号，切 V 保留同 id 选中 |
+| 账号切换器 | `<AccountPicker>` | 卡片内部紧凑 Select（平台·昵称），单账号不渲染；默认=B站账号，切 V 保留同 id 选中——**2026-09-05 视图账号隔离**：不再接收页面级 selectedAccount（list 切账号不联动 archive 三卡） |
 | 趋势曲线 | `<FanTrendChart>`（shadcn Chart/recharts 3.8，`components/ui/chart.tsx` 为 registry new-york-v4 版） | **双序列**：self 直采实线（`--chart-1` 主粉）/ zeroroku 回填虚线（`--chart-2` 灰蓝）；X=日期（月刻度 48px 间隔）、Y=`formatCount` 万缩写；Tooltip=日期+粉丝数+图例；数据 `GET /account/{id}/fan-trend`（服务端按天分桶） |
 | 直播日历 | `<LiveCalendar>` `.live-calendar*` | 月网格（周一开头，可翻月）；绿点=当日自采场次证据、满格=当日第三方礼物日聚合；悬浮显示 礼物/大航海/SC 原始字符串 |
 | 档案卡 | `<ProfileCard>` `.profile-card*` | **企划｜公会 两列**（2026-09-05 定稿：阵营=企划=公会——企划=Select 编辑，选项自动建议第三方索引 `group_name`，一键「采纳」写 `faction`，未来接侧栏企划槽；公会=只读占位「未收录」，先放着）+ 生日/出道日/房间号（跟随卡内所选账号）、设定集（Collapsible 折叠）；数据 `GET /externals/vtubers/by-uid` |
