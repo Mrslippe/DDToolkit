@@ -121,7 +121,9 @@ async def lifespan(app: FastAPI):
 
     # 延迟导入：apscheduler/tenacity/httpx/auth 不参与 app 构建期导入，
     # 让 uvicorn 尽可能早绑定端口（冷启动优化）
-    from app.services.scheduler import start_scheduler, shutdown_scheduler, start_startup_chain
+    from app.services.scheduler import (
+        start_scheduler, shutdown_scheduler, start_live_poller, start_tier_scheduler,
+    )
     from app.services.auth import auth_manager
 
     _run_migrations()
@@ -129,8 +131,10 @@ async def lifespan(app: FastAPI):
 
     scheduler = start_scheduler()
     auth_task = asyncio.create_task(auth_manager.run_maintenance())
-    # 启动链（v0.6.0）：直播状态 → 主要账号信息 → 最新动态（守护线程异步执行）
-    start_startup_chain()
+    # 时效分层调度（v0.6.1）：T0 直播状态独立线程（60s）+ T1/T2/T3a 分层轮询
+    # （启动链语义并入 T1→T2 首轮；手动任务优先，仅 T0 与之并行）
+    start_live_poller()
+    start_tier_scheduler()
     _perf("调度器+auth 就绪")
 
     yield

@@ -11,7 +11,6 @@ from pathlib import Path
 
 import httpx
 from apscheduler.schedulers.background import BackgroundScheduler
-from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -359,29 +358,6 @@ async def async_fetch_and_update(check_yield: bool = True) -> FetchResult:
     return result
 
 
-def fetch_and_update_vtubers():
-    """定时任务（优先协议）。
-
-    若已有**全量**账号信息抓取在跑（与定时任务内容完全一致）→ 本轮跳过，
-    不接管（用户反馈 2026-09-05：两任务内容一致时让位-接管纯属重复劳动，
-    还会打断手动任务的进度显示与快照基线）；其他情况（无任务/单 V 抓取/
-    帖子抓取）仍走让位协议：请求在跑任务让位 → 执行本任务 → 清除信号唤醒原任务续跑。
-    """
-    if _fetch_running and _fetch_scope == "full":
-        logger.info("定时任务跳过：全量账号抓取正在进行（内容一致，不接管）")
-        return
-    _yield_request.set()
-    try:
-        while _fetch_running or _post_fetch_running:
-            time.sleep(0.2)
-        logger.info("定时任务接管：原抓取任务已让位，开始本轮账号抓取")
-        asyncio.run(async_fetch_and_update(check_yield=False))
-    except Exception as e:
-        logger.error(f"调度器执行失败: {e}")
-    finally:
-        _yield_request.clear()
-
-
 def is_fetch_running() -> bool:
     return _fetch_running
 
@@ -481,13 +457,8 @@ async def async_fetch_vtuber(vtuber_id: int) -> FetchResult:
 
 def start_scheduler():
     scheduler = BackgroundScheduler()
-    scheduler.add_job(
-        fetch_and_update_vtubers,
-        IntervalTrigger(minutes=settings.FETCH_INTERVAL_MINUTES, jitter=settings.FETCH_JITTER_SECONDS),
-        id="fetch_vtubers",
-        replace_existing=True,
-        max_instances=1,
-    )
+    # v0.6.1：账号定时任务（5min 全量）已由「时效分层调度」T1（主账号 5min）
+    # + T3a（全量 6h）替代（start_tier_scheduler），此处只保留外部数据批次 cron。
     # 外部第三方数据源（P4）：日/周批次低频采集；抓取任务进行中则跳过本轮
     if settings.EXTERNAL_ENABLED:
         scheduler.add_job(
@@ -505,7 +476,7 @@ def start_scheduler():
             max_instances=1,
         )
     scheduler.start()
-    logger.info(f"APScheduler 已启动，每 {settings.FETCH_INTERVAL_MINUTES} 分钟抓取一次。")
+    logger.info("APScheduler 已启动（外部数据批次 cron）。")
     return scheduler
 
 
@@ -1532,7 +1503,7 @@ async def async_update_unarchived_posts(name: str | None = None) -> dict:
                                total, issues, None)
 
 
-# ── 启动链（v0.6.0）：直播状态 → 主要账号信息 → 最新动态 ──────────────────
+# ── 时效分层调度（v0.6.1）：T0 直播状态独立线程 + T1/T2/T3a 分层轮询 ──────
 
 def _primary_accounts(db: Session) -> list[tuple[VTuber, Account]]:
     """每个 VTuber 的主要活动平台账号（PRIMARY_PLATFORM_ORDER 优先级取首个）。
@@ -1555,30 +1526,19 @@ def _primary_accounts(db: Session) -> list[tuple[VTuber, Account]]:
     return out
 
 
-async def startup_live_sweep() -> FetchResult:
-    """启动链阶段 1：直播状态更新（最高优先级，最快完成）。
+async def live_sweep_core(db: Session, client: httpx.AsyncClient | None = None) -> FetchResult:
+    """T0 直播状态核：经 bilibili 批量接口（每 100 uid 1 请求）仅回写 live 字段。
 
-    经 bilibili 直播批量接口（每 100 个 uid 1 个请求）仅回写 live 字段，
-    不触碰签名/头像/粉丝；live 跳变时落一条统计快照（直播日历 edge 数据）。
-    共用 _fetch_lock / 状态通道与让位、风控协议；与定时任务内容一致的判定
-    见 fetch_and_update_vtubers（scope='live' 不属于 'full'，定时器会让位抢占，
-    但批量接口下本阶段数秒即完，实际冲突概率极低）。
+    - 不触碰签名/头像/粉丝；live 跳变时落统计快照（直播日历 edge 数据）；
+    - **不占 _fetch_lock、不进状态通道、不写 last_result**——由 T0 独立守护
+      线程调用，与任何抓取任务完全并行（并发写由 SQLite busy_timeout 排队）；
+    - 每账号回写后 `_push_account_snapshot` → 前端左右栏徽标天然实时同步。
     """
-    global _fetch_running
-
-    if not _fetch_lock.acquire(blocking=False):
-        logger.warning("启动·直播状态跳过：账号抓取正在进行")
-        return FetchResult(details=["账号抓取进行中，跳过"])
-
-    _fetch_running = True
-    _fetch_scope = "live"
-    _status["account"]["running"] = True
-    _status["account"]["recent"] = []   # 每轮自包含：清空上一任务的快照
     result = FetchResult()
-    res_seq = _next_result_seq()
     clear_rate_limit()
-    client = httpx.AsyncClient(timeout=15.0)
-    db: Session = SessionLocal()
+    own_client = client is None
+    if own_client:
+        client = httpx.AsyncClient(timeout=15.0)
 
     def _bili_accounts() -> list[Account]:
         return db.query(Account).filter(
@@ -1590,33 +1550,24 @@ async def startup_live_sweep() -> FetchResult:
     try:
         accounts = _bili_accounts()
         if not accounts:
-            logger.info("启动·直播状态：无 bilibili 账号")
+            logger.info("T0 直播状态：无 bilibili 账号")
             return result
 
         idx = 0
         while idx < len(accounts):
-            # 断点让位：定时任务请求让位时交还执行权，回来后重查列表继续
-            if _yield_request.is_set():
-                await _yield_account_wait(db)
-                accounts = _bili_accounts()
-                continue
             chunk = [a for a in accounts[idx:idx + 100] if str(a.platform_uid).isdigit()]
             if not chunk:
                 idx += 1
                 continue
-            _set_account_progress(
-                f"直播·{chunk[-1].display_name or chunk[-1].platform_uid}",
-                min(idx + len(chunk), len(accounts)), len(accounts),
-            )
             data = await fetch_bilibili_live_batch([int(a.platform_uid) for a in chunk], client=client)
             if data is None:
                 if was_rate_limited():
-                    logger.warning(f"启动·直播状态触发风控 ({rate_limit_info()})，"
+                    logger.warning(f"T0 直播状态触发风控 ({rate_limit_info()})，"
                                    f"冷却 {settings.RATE_LIMIT_COOLDOWN}s 后继续")
                     clear_rate_limit()
                     await asyncio.sleep(settings.RATE_LIMIT_COOLDOWN)
                     continue
-                # 非风控失败（网络/接口异常）：跳过本批，启动链路宽容处理
+                # 非风控失败（网络/接口异常）：跳过本批，轮询宽容处理
                 result.failed += len(chunk)
                 idx += len(chunk)
                 continue
@@ -1641,34 +1592,28 @@ async def startup_live_sweep() -> FetchResult:
             idx += len(chunk)
             await asyncio.sleep(random.uniform(settings.STARTUP_LIVE_INTERVAL_MIN,
                                                settings.STARTUP_LIVE_INTERVAL_MAX))
-
     except Exception as e:
-        logger.error(f"启动·直播状态异常: {e}", exc_info=True)
+        logger.error(f"T0 直播状态异常: {e}", exc_info=True)
         db.rollback()
         result.details.append(f"异常: {e}")
     finally:
-        db.close()
-        await client.aclose()
-        _fetch_running = False
-        _fetch_scope = None
-        _reset_account_status()
-        _fetch_lock.release()
-        _set_account_last_result(res_seq, "启动·直播状态", result.success, result.failed, result.skipped)
+        if own_client:
+            await client.aclose()
 
     return result
 
 
-async def startup_main_account_sweep() -> FetchResult:
-    """启动链阶段 2：主要账号信息获取（次级优先）。
+async def run_main_account_sweep() -> FetchResult:
+    """T1 主要账号信息（每 V 主账号，PRIMARY_PLATFORM_ORDER 优先，默认 bilibili）。
 
-    每个 VTuber 仅更新其主要活动账号（PRIMARY_PLATFORM_ORDER 优先，默认
-    bilibili）：_fetch_one_account 全字段（名/签名/头像/粉丝/直播），
-    不写统计快照（周期全量任务记录，避免启动链污染时间序列）。
+    - 手动任务优先：_fetch_lock 非阻塞获取失败即跳过（不打断用户手动抓取）；
+    - 仅主账号全字段（名/签名/头像/粉丝/直播），不写统计快照（周期记录）也不写
+      last_result（每 5 分钟弹完成胶囊会刷屏，前端只对手动任务显示汇总）。
     """
     global _fetch_running
 
     if not _fetch_lock.acquire(blocking=False):
-        logger.warning("启动·主要账号跳过：账号抓取正在进行")
+        logger.info("T1 主要账号跳过：账号抓取正在进行（手动优先）")
         return FetchResult(details=["账号抓取进行中，跳过"])
 
     _fetch_running = True
@@ -1676,22 +1621,16 @@ async def startup_main_account_sweep() -> FetchResult:
     _status["account"]["running"] = True
     _status["account"]["recent"] = []
     result = FetchResult()
-    res_seq = _next_result_seq()
     clear_rate_limit()
     client = httpx.AsyncClient(timeout=15.0)
     db: Session = SessionLocal()
     try:
         pairs = _primary_accounts(db)
         if not pairs:
-            logger.info("启动·主要账号：无可抓取账号")
+            logger.info("T1 主要账号：无可抓取账号")
             return result
         for i, (v, acc) in enumerate(pairs, 1):
-            # 断点让位：定时任务请求让位时交还执行权，回来后重查列表继续
-            if _yield_request.is_set():
-                await _yield_account_wait(db)
-                pairs = _primary_accounts(db)
-                continue
-            _set_account_progress(f"信息·{v.name}", i, len(pairs))
+            _set_account_progress(f"主要账号·{v.name}", i, len(pairs))
             try:
                 ok = await _fetch_one_account(acc, db, client=client)
                 if ok:
@@ -1701,13 +1640,13 @@ async def startup_main_account_sweep() -> FetchResult:
                 else:
                     result.failed += 1
             except Exception as e:
-                logger.error(f"启动·主要账号异常 {acc.platform}:{acc.platform_uid}: {e}", exc_info=True)
+                logger.error(f"T1 主要账号异常 {acc.platform}:{acc.platform_uid}: {e}", exc_info=True)
                 db.rollback()
                 result.failed += 1
                 result.details.append(f"{v.name}: {e}")
 
             if was_rate_limited():
-                logger.warning(f"启动·主要账号触发风控 ({rate_limit_info()})，"
+                logger.warning(f"T1 主要账号触发风控 ({rate_limit_info()})，"
                                f"冷却 {settings.RATE_LIMIT_COOLDOWN}s")
                 clear_rate_limit()
                 await asyncio.sleep(settings.RATE_LIMIT_COOLDOWN)
@@ -1716,7 +1655,7 @@ async def startup_main_account_sweep() -> FetchResult:
                                                    settings.STARTUP_MAIN_INTERVAL_MAX))
 
     except Exception as e:
-        logger.error(f"启动·主要账号异常: {e}", exc_info=True)
+        logger.error(f"T1 主要账号异常: {e}", exc_info=True)
         db.rollback()
         result.details.append(f"异常: {e}")
     finally:
@@ -1726,27 +1665,24 @@ async def startup_main_account_sweep() -> FetchResult:
         _fetch_scope = None
         _reset_account_status()
         _fetch_lock.release()
-        _set_account_last_result(res_seq, "启动·主要账号信息", result.success, result.failed, result.skipped)
 
     return result
 
 
-async def startup_latest_dynamics() -> dict:
-    """启动链阶段 3：最新动态更新（最低优先级）。
+async def run_latest_dynamics_sweep() -> dict:
+    """T2 最新动态（每 V 主账号 1 页 + 最多入库 STARTUP_DYNAMICS_LIMIT 条新帖）。
 
-    每个 VTuber 的主要账号仅拉第 1 页动态，且最多入库最新
-    STARTUP_DYNAMICS_LIMIT（默认 2）条新帖——库里各 V 帖子数差异不会导致
-    单个 V 拉取时长过长；未被本次处理的更早新帖留待下次渐进消化。
+    - 手动任务优先：_post_fetch_lock 非阻塞获取失败即跳过；
+    - 不写 last_result（周期任务静默，前端不弹完成胶囊）。
     """
     global _post_fetch_running
 
     if not _post_fetch_lock.acquire(blocking=False):
-        logger.warning("启动·最新动态跳过：帖子抓取正在进行")
+        logger.info("T2 最新动态跳过：帖子抓取正在进行（手动优先）")
         return {"status": "skipped", "message": "帖子抓取任务正在进行中"}
 
     _post_fetch_running = True
     _status["post"]["running"] = True
-    res_seq = _next_result_seq()
     db: Session = SessionLocal()
     client = httpx.AsyncClient(timeout=15.0)
     total = {"dynamics": 0, "stored": 0, "skipped": 0}
@@ -1755,15 +1691,12 @@ async def startup_latest_dynamics() -> dict:
     try:
         pairs = _primary_accounts(db)
         if not pairs:
-            logger.info("启动·最新动态：无可抓取账号")
+            logger.info("T2 最新动态：无可抓取账号")
             out = {"status": "done", "total": total, "details": []}
             return out
         for i, (v, acc) in enumerate(pairs, 1):
-            # 断点让位：定时任务请求让位时交还锁，等待其完成后续跑
-            if _yield_request.is_set():
-                await _maybe_yield_post(db)
             _set_post_target(f"{v.name}·最新动态")
-            logger.info(f"[{i}/{len(pairs)}] 启动·最新动态 {v.name} "
+            logger.info(f"[{i}/{len(pairs)}] T2 最新动态 {v.name} "
                         f"({acc.platform}:{acc.platform_uid}) ...")
             try:
                 r = await _fetch_posts_for_account(
@@ -1772,7 +1705,7 @@ async def startup_latest_dynamics() -> dict:
                     limit_latest=settings.STARTUP_DYNAMICS_LIMIT,
                 )
             except Exception as e:
-                logger.error(f"启动·最新动态异常 {acc.platform}:{acc.platform_uid}: {e}",
+                logger.error(f"T2 最新动态异常 {acc.platform}:{acc.platform_uid}: {e}",
                              exc_info=True)
                 db.rollback()
                 r = PostFetchResult(stop_reason="error", error=str(e))
@@ -1782,7 +1715,7 @@ async def startup_latest_dynamics() -> dict:
                 issues.append({"label": f"{v.name}({acc.platform}:{acc.platform_uid})",
                                "stop_reason": r.stop_reason, "error": r.error})
             if r.rate_limited:
-                logger.warning(f"启动·最新动态 {v.name} 触发风控，"
+                logger.warning(f"T2 最新动态 {v.name} 触发风控，"
                                f"冷却 {settings.RATE_LIMIT_COOLDOWN}s...")
                 await asyncio.sleep(settings.RATE_LIMIT_COOLDOWN)
             elif i < len(pairs):
@@ -1791,7 +1724,7 @@ async def startup_latest_dynamics() -> dict:
         out = {"status": "done", "total": total, "issues": issues}
         return out
     except Exception as e:
-        logger.error(f"启动·最新动态异常: {e}", exc_info=True)
+        logger.error(f"T2 最新动态异常: {e}", exc_info=True)
         db.rollback()
         out = {"status": "done", "total": total, "issues": issues, "error": str(e)}
         return out
@@ -1801,35 +1734,99 @@ async def startup_latest_dynamics() -> dict:
         _post_fetch_running = False
         _reset_post_status()
         _post_fetch_lock.release()
-        _set_post_last_result(res_seq, "startup", "全部账号·最新动态",
-                              0, total["dynamics"],
-                              total["stored"], total["skipped"], issues, None)
 
 
-def _run_startup_chain() -> None:
-    """启动链线程体：串行执行三阶段，各自容错（失败不影响后续阶段）。"""
+def _tier_delay(interval_seconds: float, jitter_seconds: float) -> float:
+    """带抖动的下轮间隔（抖动整段随机，含提前；interval<=0 视为禁用=无穷远）。"""
+    if interval_seconds <= 0:
+        return float("inf")
+    return max(0.0, interval_seconds + random.uniform(-jitter_seconds, jitter_seconds))
+
+
+def _live_poller_loop() -> None:
+    """T0 直播状态独立守护线程：首轮于 STARTUP_CHAIN_DELAY 后立即执行，
+    之后按 LIVE_POLL_SECONDS ± jitter 循环；不占锁/状态通道/结果汇总。"""
     try:
         time.sleep(settings.STARTUP_CHAIN_DELAY)
-        logger.info("启动链 · 阶段 1/3：直播状态更新")
-        asyncio.run(startup_live_sweep())
+        while settings.LIVE_POLL_SECONDS > 0:
+            try:
+                db = SessionLocal()
+                try:
+                    asyncio.run(live_sweep_core(db))
+                finally:
+                    db.close()
+            except Exception as e:
+                logger.error(f"T0 直播轮询异常: {e}", exc_info=True)
+            time.sleep(_tier_delay(settings.LIVE_POLL_SECONDS, settings.LIVE_POLL_JITTER_SECONDS))
+        logger.info("T0 直播轮询已关闭（LIVE_POLL_SECONDS<=0）")
     except Exception as e:
-        logger.error(f"启动链 阶段 1 异常: {e}", exc_info=True)
-    try:
-        logger.info("启动链 · 阶段 2/3：主要账号信息更新")
-        asyncio.run(startup_main_account_sweep())
-    except Exception as e:
-        logger.error(f"启动链 阶段 2 异常: {e}", exc_info=True)
-    try:
-        logger.info("启动链 · 阶段 3/3：最新动态更新")
-        asyncio.run(startup_latest_dynamics())
-    except Exception as e:
-        logger.error(f"启动链 阶段 3 异常: {e}", exc_info=True)
-    logger.info("启动链完成")
+        logger.error(f"T0 直播轮询线程退出: {e}", exc_info=True)
 
 
-def start_startup_chain() -> None:
-    """应用启动链入口（main.py lifespan 调用）：守护线程异步执行。"""
-    if not settings.STARTUP_CHAIN_ENABLED:
-        logger.info("启动链已禁用（STARTUP_CHAIN_ENABLED=false）")
-        return
-    threading.Thread(target=_run_startup_chain, name="startup-chain", daemon=True).start()
+def start_live_poller() -> None:
+    """T0 启动入口（main.py lifespan 调用）：独立守护线程，与一切任务并行。"""
+    threading.Thread(target=_live_poller_loop, name="t0-live-poller", daemon=True).start()
+
+
+def _tier_loop() -> None:
+    """T1/T2/T3a 分层调度守护线程。
+
+    - 启动后先按启动链语义立即执行 T1 → T2（STARTUP_CHAIN_ENABLED 控制）；
+    - 之后心跳轮询：任一**手动**抓取在跑（账号/帖子锁被占）→ 全部定时档
+      本轮跳过（手动优先，不抢断）；到期档位按 T1→T2→T3a 贪心串行执行；
+    - 各档周期带抖动；interval<=0 的档位禁用。
+    """
+    try:
+        time.sleep(settings.STARTUP_CHAIN_DELAY)
+        if settings.STARTUP_CHAIN_ENABLED:
+            logger.info("启动链 · T1 主要账号信息")
+            asyncio.run(run_main_account_sweep())
+            logger.info("启动链 · T2 最新动态")
+            asyncio.run(run_latest_dynamics_sweep())
+    except Exception as e:
+        logger.error(f"启动链异常: {e}", exc_info=True)
+
+    def _jittered(interval: float, jitter: float) -> float:
+        return time.monotonic() + _tier_delay(interval, jitter)
+
+    due_t1 = _jittered(settings.ACCOUNT_PRIMARY_INTERVAL_MINUTES * 60,
+                       settings.ACCOUNT_PRIMARY_JITTER_SECONDS)
+    due_t2 = _jittered(settings.DYNAMICS_LATEST_INTERVAL_MINUTES * 60,
+                       settings.DYNAMICS_LATEST_JITTER_SECONDS)
+    due_t3a = _jittered(settings.FULL_ACCOUNT_INTERVAL_HOURS * 3600,
+                        settings.FULL_ACCOUNT_JITTER_SECONDS)
+
+    while True:
+        time.sleep(max(1, settings.TIER_TICK_SECONDS))
+        if is_fetch_running() or is_post_fetch_running():
+            continue  # 手动任务在跑：定时档全部跳过本轮（手动优先）
+        now = time.monotonic()
+        if now >= due_t1:
+            try:
+                logger.info("T1 主要账号信息（周期）")
+                asyncio.run(run_main_account_sweep())
+            except Exception as e:
+                logger.error(f"T1 周期任务异常: {e}", exc_info=True)
+            due_t1 = _jittered(settings.ACCOUNT_PRIMARY_INTERVAL_MINUTES * 60,
+                               settings.ACCOUNT_PRIMARY_JITTER_SECONDS)
+        elif now >= due_t2:
+            try:
+                logger.info("T2 最新动态（周期）")
+                asyncio.run(run_latest_dynamics_sweep())
+            except Exception as e:
+                logger.error(f"T2 周期任务异常: {e}", exc_info=True)
+            due_t2 = _jittered(settings.DYNAMICS_LATEST_INTERVAL_MINUTES * 60,
+                               settings.DYNAMICS_LATEST_JITTER_SECONDS)
+        elif now >= due_t3a:
+            try:
+                logger.info("T3a 全量账号（慢周期）")
+                asyncio.run(async_fetch_and_update(check_yield=False))
+            except Exception as e:
+                logger.error(f"T3a 周期任务异常: {e}", exc_info=True)
+            due_t3a = _jittered(settings.FULL_ACCOUNT_INTERVAL_HOURS * 3600,
+                                settings.FULL_ACCOUNT_JITTER_SECONDS)
+
+
+def start_tier_scheduler() -> None:
+    """分层调度入口（main.py lifespan 调用）：守护线程；启动链语义并入首轮。"""
+    threading.Thread(target=_tier_loop, name="tier-scheduler", daemon=True).start()

@@ -90,7 +90,7 @@ def test_rate_limit_clear_resets_context():
 # ── P3：版本号 ────────────────────────────────────────────────────────
 
 def test_version_synced_with_devlog():
-    assert settings.VERSION == "0.6.0"
+    assert settings.VERSION == "0.6.1"
 
 
 # ── P4：动态类型映射 ──────────────────────────────────────────────────
@@ -1012,45 +1012,10 @@ def test_stat_snapshot_repo_recent_ordering():
     db.close()
 
 
-# ── 定时任务优先协议（v0.6.0 修订，2026-09-05 用户反馈） ─────────────
+# ── v0.6.1：时效分层调度（T0 独立线程 / T1·T2 手动优先跳过） ────────────
 
-def test_scheduled_fetch_skipped_when_full_account_fetch_running(monkeypatch):
-    """定时任务在全量账号信息抓取进行中时跳过（任务内容完全一致，不接管）：
-    不置位让位信号、不执行任务——手动任务进度与快照基线不受扰动。"""
-    import threading
-    monkeypatch.setattr(scheduler, "_fetch_running", True)
-    monkeypatch.setattr(scheduler, "_fetch_scope", "full")
-    monkeypatch.setattr(scheduler, "_yield_request", threading.Event())
-    scheduler.fetch_and_update_vtubers()
-    assert scheduler._yield_request.is_set() is False
-
-
-def test_scheduled_fetch_not_skipped_when_single_fetch_running(monkeypatch):
-    """单 V 账号抓取进行中 → 定时任务（全量）内容不同，仍走让位协议并执行。"""
-    import threading
-    ran = []
-    monkeypatch.setattr(scheduler, "_fetch_running", False)
-    monkeypatch.setattr(scheduler, "_post_fetch_running", False)
-    monkeypatch.setattr(scheduler, "_fetch_scope", "single")
-    monkeypatch.setattr(scheduler, "_yield_request", threading.Event())
-
-    def fake_run(coro):
-        ran.append(coro)
-        coro.close()
-
-    monkeypatch.setattr(scheduler.asyncio, "run", fake_run)
-    try:
-        scheduler.fetch_and_update_vtubers()
-    finally:
-        scheduler._yield_request.clear()
-    assert ran, "单 V 在跑时定时任务应执行（内容不同，不算接管）"
-    assert scheduler._yield_request.is_set() is False
-
-
-# ── v0.6.0：应用启动链（直播状态 → 主要账号信息 → 最新动态） ────────────
-
-def test_startup_live_sweep_applies_live_fields(monkeypatch):
-    """启动链阶段 1：批量直播接口回写 live 字段；跳变落统计快照（直播日历 edge）。"""
+def test_live_sweep_core_applies_live_fields(monkeypatch):
+    """T0 直播状态核（v0.6.1）：批量接口回写 live 字段；跳变落统计快照（直播日历 edge）。"""
     from app.services import scheduler as sch
 
     engine, Testing = _snapshot_test_db()
@@ -1064,9 +1029,7 @@ def test_startup_live_sweep_applies_live_fields(monkeypatch):
     db.add(acc)
     db.commit()
     db.refresh(acc)
-    db.close()
 
-    monkeypatch.setattr(sch, "SessionLocal", Testing)
     monkeypatch.setattr(sch.settings, "STARTUP_LIVE_INTERVAL_MIN", 0.0)
     monkeypatch.setattr(sch.settings, "STARTUP_LIVE_INTERVAL_MAX", 0.0)
 
@@ -1077,10 +1040,10 @@ def test_startup_live_sweep_applies_live_fields(monkeypatch):
 
     monkeypatch.setattr(sch, "fetch_bilibili_live_batch", fake_batch)
 
-    result = asyncio.run(sch.startup_live_sweep())
+    result = asyncio.run(sch.live_sweep_core(db))
     assert result.success == 1
 
-    db = Testing()
+    db.expire_all()
     acc2 = db.query(Account).first()
     assert acc2.live_status == 1
     assert acc2.live_title == "今晚开播"
@@ -1090,6 +1053,34 @@ def test_startup_live_sweep_applies_live_fields(monkeypatch):
     assert len(rows) == 1
     assert rows[0].live_status == 1
     db.close()
+
+
+def test_run_main_account_sweep_skips_when_account_busy(monkeypatch):
+    """T1 手动优先：账号锁被占（手动抓取在跑）→ 跳过本轮，不进状态通道。"""
+    from app.services import scheduler as sch
+
+    assert sch._fetch_lock.acquire(blocking=False)
+    try:
+        result = asyncio.run(sch.run_main_account_sweep())
+    finally:
+        sch._fetch_lock.release()
+    assert result.success == 0
+    assert sch.is_fetch_running() is False
+    assert sch._status["account"]["running"] is False
+
+
+def test_run_latest_dynamics_sweep_skips_when_post_busy(monkeypatch):
+    """T2 手动优先：帖子锁被占（手动抓取在跑）→ 跳过本轮。"""
+    from app.services import scheduler as sch
+
+    assert sch._post_fetch_lock.acquire(blocking=False)
+    try:
+        out = asyncio.run(sch.run_latest_dynamics_sweep())
+    finally:
+        sch._post_fetch_lock.release()
+    assert out["status"] == "skipped"
+    assert sch.is_post_fetch_running() is False
+    assert sch._status["post"]["running"] is False
 
 
 def test_fetch_posts_core_limit_latest(monkeypatch, db):

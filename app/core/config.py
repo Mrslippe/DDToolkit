@@ -14,7 +14,7 @@ load_dotenv(DATA_DIR / ".env")
 
 class Settings:
     APP_NAME: str = "Better DD Toolkit"
-    VERSION: str = "0.6.0"   # 与 devlog 最新版本保持一致（v0.6.0：P4 外部数据源）
+    VERSION: str = "0.6.1"   # 与 devlog 最新版本保持一致（v0.6.1：时效分层调度）
 
     # 数据目录
     DATA_DIR: Path = DATA_DIR
@@ -56,6 +56,17 @@ class Settings:
     STARTUP_DYNAMICS_INTERVAL_MAX: float = 5.0
     # 主要活动平台优先级（每 VTuber 仅更新优先级最高的账号）
     PRIMARY_PLATFORM_ORDER: list[str] = ["bilibili", "weibo"]
+
+    # 时效分层调度（v0.6.1）：T0 直播状态独立线程 + T1/T2/T3a 分层轮询
+    TIER_TICK_SECONDS: int = 10                  # 分层调度心跳（检查到期/让位）
+    LIVE_POLL_SECONDS: float = 60.0              # T0 直播状态轮询周期（0=禁用；独立线程，不占锁）
+    LIVE_POLL_JITTER_SECONDS: float = 15.0
+    ACCOUNT_PRIMARY_INTERVAL_MINUTES: int = 5    # T1 主要账号信息（每 V 主账号，≤0=禁用）
+    ACCOUNT_PRIMARY_JITTER_SECONDS: float = 30.0
+    DYNAMICS_LATEST_INTERVAL_MINUTES: int = 15   # T2 最新动态（每 V 主账号限 2 帖，≤0=禁用）
+    DYNAMICS_LATEST_JITTER_SECONDS: float = 120.0
+    FULL_ACCOUNT_INTERVAL_HOURS: float = 6.0     # T3a 全量账号慢周期（含非主账号，0=禁用）
+    FULL_ACCOUNT_JITTER_SECONDS: float = 1800.0
 
     # 外部第三方数据源（P4）：zeroroku/danmakus 等「已固定化数据」采集
     EXTERNAL_ENABLED: bool = True
