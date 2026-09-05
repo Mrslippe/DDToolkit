@@ -1010,3 +1010,38 @@ def test_stat_snapshot_repo_recent_ordering():
     assert rows[0].followers_count == 120
     assert rows[0].live_title == "标题"
     db.close()
+
+
+# ── 定时任务优先协议（v0.6.0 修订，2026-09-05 用户反馈） ─────────────
+
+def test_scheduled_fetch_skipped_when_full_account_fetch_running(monkeypatch):
+    """定时任务在全量账号信息抓取进行中时跳过（任务内容完全一致，不接管）：
+    不置位让位信号、不执行任务——手动任务进度与快照基线不受扰动。"""
+    import threading
+    monkeypatch.setattr(scheduler, "_fetch_running", True)
+    monkeypatch.setattr(scheduler, "_fetch_scope", "full")
+    monkeypatch.setattr(scheduler, "_yield_request", threading.Event())
+    scheduler.fetch_and_update_vtubers()
+    assert scheduler._yield_request.is_set() is False
+
+
+def test_scheduled_fetch_not_skipped_when_single_fetch_running(monkeypatch):
+    """单 V 账号抓取进行中 → 定时任务（全量）内容不同，仍走让位协议并执行。"""
+    import threading
+    ran = []
+    monkeypatch.setattr(scheduler, "_fetch_running", False)
+    monkeypatch.setattr(scheduler, "_post_fetch_running", False)
+    monkeypatch.setattr(scheduler, "_fetch_scope", "single")
+    monkeypatch.setattr(scheduler, "_yield_request", threading.Event())
+
+    def fake_run(coro):
+        ran.append(coro)
+        coro.close()
+
+    monkeypatch.setattr(scheduler.asyncio, "run", fake_run)
+    try:
+        scheduler.fetch_and_update_vtubers()
+    finally:
+        scheduler._yield_request.clear()
+    assert ran, "单 V 在跑时定时任务应执行（内容不同，不算接管）"
+    assert scheduler._yield_request.is_set() is False

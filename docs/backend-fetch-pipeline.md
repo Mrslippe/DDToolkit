@@ -68,6 +68,10 @@ APScheduler (5min, jitter30s)  _fetch_lock      async_fetch_and_update   → 逐
 
 - `_maybe_yield_account(db, vtuber_id)`：账号链路断点；
 - `_maybe_yield_post(db)`：帖子链路断点。
+- **v0.6.0 修订（2026-09-05 用户反馈）**：定时任务触发时若已有**全量账号抓取**
+  在跑（`_fetch_scope == "full"`，与定时任务内容完全一致）→ 本轮**跳过不接管**
+  （避免同一任务被让位-接管重复执行、打断手动任务的进度与快照基线）；
+  单 V / 帖子在跑时仍照常让位协议。被让位方在让位点保存并恢复 `_fetch_scope`。
 
 ### 3.3 进度状态 & 结果
 

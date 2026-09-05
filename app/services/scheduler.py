@@ -68,6 +68,9 @@ def _needs_avatar_download(acc: Account, new_avatar: str | None, file_exists: bo
 
 _fetch_lock = threading.Lock()
 _fetch_running = False
+# 当前账号抓取的范围：'full'=全量（与定时任务内容一致）/ 'single'=单 V /
+# None=无任务在跑。定时任务判断「内容一致 → 跳过不接管」的依据。
+_fetch_scope: str | None = None
 
 # ── 实时状态（供 /vtuber/fetch-status 轮询；仅简单赋值，GIL 下线程安全）──
 _status: dict = {
@@ -265,6 +268,7 @@ async def async_fetch_and_update(check_yield: bool = True) -> FetchResult:
         return FetchResult(details=["上一次抓取仍在进行中，已跳过"])
 
     _fetch_running = True
+    _fetch_scope = "full"
     _status["account"]["running"] = True
     _status["account"]["recent"] = []   # 每轮自包含：清空上一任务的快照
     result = FetchResult()
@@ -347,6 +351,7 @@ async def async_fetch_and_update(check_yield: bool = True) -> FetchResult:
         db.close()
         await client.aclose()
         _fetch_running = False
+        _fetch_scope = None
         _reset_account_status()
         _fetch_lock.release()
         _set_account_last_result(res_seq, "全部账号", result.success, result.failed, result.skipped)
@@ -355,7 +360,16 @@ async def async_fetch_and_update(check_yield: bool = True) -> FetchResult:
 
 
 def fetch_and_update_vtubers():
-    """定时任务（优先协议）：请求在跑任务让位 → 执行本任务 → 清除信号唤醒原任务续跑。"""
+    """定时任务（优先协议）。
+
+    若已有**全量**账号信息抓取在跑（与定时任务内容完全一致）→ 本轮跳过，
+    不接管（用户反馈 2026-09-05：两任务内容一致时让位-接管纯属重复劳动，
+    还会打断手动任务的进度显示与快照基线）；其他情况（无任务/单 V 抓取/
+    帖子抓取）仍走让位协议：请求在跑任务让位 → 执行本任务 → 清除信号唤醒原任务续跑。
+    """
+    if _fetch_running and _fetch_scope == "full":
+        logger.info("定时任务跳过：全量账号抓取正在进行（内容一致，不接管）")
+        return
     _yield_request.set()
     try:
         while _fetch_running or _post_fetch_running:
@@ -382,6 +396,7 @@ async def async_fetch_vtuber(vtuber_id: int) -> FetchResult:
         return FetchResult(details=["上一次抓取仍在进行中，已跳过"])
 
     _fetch_running = True
+    _fetch_scope = "single"
     _status["account"]["running"] = True
     _status["account"]["recent"] = []   # 每轮自包含：清空上一任务的快照
     result = FetchResult()
@@ -456,6 +471,7 @@ async def async_fetch_vtuber(vtuber_id: int) -> FetchResult:
         db.close()
         await client.aclose()
         _fetch_running = False
+        _fetch_scope = None
         _reset_account_status()
         _fetch_lock.release()
         _set_account_last_result(res_seq, f"VTuber#{vtuber_id}", result.success, result.failed, result.skipped)
@@ -545,6 +561,7 @@ async def _maybe_yield_account(db: Session, vtuber_id: int | None = None,
     global _fetch_running
     if not check_yield or not _yield_request.is_set():
         return None
+    saved_scope = _fetch_scope  # 定时任务结束会把 scope 清 None，让位返回时恢复本任务范围标记
     db.commit()
     _fetch_running = False
     _status["account"]["running"] = False
@@ -555,6 +572,7 @@ async def _maybe_yield_account(db: Session, vtuber_id: int | None = None,
     finally:
         _fetch_lock.acquire()
         _fetch_running = True
+        _fetch_scope = saved_scope
         _status["account"]["running"] = True
     if vtuber_id is not None:
         return db.query(Account).filter(
