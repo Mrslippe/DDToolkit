@@ -1773,7 +1773,9 @@ def _tier_loop() -> None:
 
     - 启动后先按启动链语义立即执行 T1 → T2（STARTUP_CHAIN_ENABLED 控制）；
     - 之后心跳轮询：任一**手动**抓取在跑（账号/帖子锁被占）→ 全部定时档
-      本轮跳过（手动优先，不抢断）；到期档位按 T1→T2→T3a 贪心串行执行；
+      本轮跳过（手动优先，不抢断）；
+    - T2 档期执行完最新动态后**紧接全量账号抓取**（T3a，与 T2 同频率，
+      FULL_ACCOUNT_AFTER_T2 控制）——用户定稿：全量账号与最新动态同周期；
     - 各档周期带抖动；interval<=0 的档位禁用。
     """
     try:
@@ -1783,6 +1785,9 @@ def _tier_loop() -> None:
             asyncio.run(run_main_account_sweep())
             logger.info("启动链 · T2 最新动态")
             asyncio.run(run_latest_dynamics_sweep())
+            if settings.FULL_ACCOUNT_AFTER_T2:
+                logger.info("启动链 · T3a 全量账号（随 T2）")
+                asyncio.run(async_fetch_and_update(check_yield=False))
     except Exception as e:
         logger.error(f"启动链异常: {e}", exc_info=True)
 
@@ -1793,8 +1798,6 @@ def _tier_loop() -> None:
                        settings.ACCOUNT_PRIMARY_JITTER_SECONDS)
     due_t2 = _jittered(settings.DYNAMICS_LATEST_INTERVAL_MINUTES * 60,
                        settings.DYNAMICS_LATEST_JITTER_SECONDS)
-    due_t3a = _jittered(settings.FULL_ACCOUNT_INTERVAL_HOURS * 3600,
-                        settings.FULL_ACCOUNT_JITTER_SECONDS)
 
     while True:
         time.sleep(max(1, settings.TIER_TICK_SECONDS))
@@ -1813,18 +1816,13 @@ def _tier_loop() -> None:
             try:
                 logger.info("T2 最新动态（周期）")
                 asyncio.run(run_latest_dynamics_sweep())
+                if settings.FULL_ACCOUNT_AFTER_T2:
+                    logger.info("T3a 全量账号（随 T2 之后，同频率）")
+                    asyncio.run(async_fetch_and_update(check_yield=False))
             except Exception as e:
                 logger.error(f"T2 周期任务异常: {e}", exc_info=True)
             due_t2 = _jittered(settings.DYNAMICS_LATEST_INTERVAL_MINUTES * 60,
                                settings.DYNAMICS_LATEST_JITTER_SECONDS)
-        elif now >= due_t3a:
-            try:
-                logger.info("T3a 全量账号（慢周期）")
-                asyncio.run(async_fetch_and_update(check_yield=False))
-            except Exception as e:
-                logger.error(f"T3a 周期任务异常: {e}", exc_info=True)
-            due_t3a = _jittered(settings.FULL_ACCOUNT_INTERVAL_HOURS * 3600,
-                                settings.FULL_ACCOUNT_JITTER_SECONDS)
 
 
 def start_tier_scheduler() -> None:

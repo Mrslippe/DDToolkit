@@ -65,8 +65,8 @@ class Settings:
     ACCOUNT_PRIMARY_JITTER_SECONDS: float = 30.0
     DYNAMICS_LATEST_INTERVAL_MINUTES: int = 15   # T2 最新动态（每 V 主账号限 2 帖，≤0=禁用）
     DYNAMICS_LATEST_JITTER_SECONDS: float = 120.0
-    FULL_ACCOUNT_INTERVAL_HOURS: float = 6.0     # T3a 全量账号慢周期（含非主账号，0=禁用）
-    FULL_ACCOUNT_JITTER_SECONDS: float = 1800.0
+    # T3a 全量账号（含非主账号）随 T2 周期执行（紧接 T2 之后，频率相同，2026-09-05 定稿）
+    FULL_ACCOUNT_AFTER_T2: bool = True
 
     # 外部第三方数据源（P4）：zeroroku/danmakus 等「已固定化数据」采集
     EXTERNAL_ENABLED: bool = True

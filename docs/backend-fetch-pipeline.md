@@ -126,7 +126,7 @@ for 每个账号:
 | **T0 直播状态** | 批量接口仅回写 live 字段（跳变落统计快照） | **独立守护线程**（不占锁/不进状态通道/不写 last_result） | 60s ± 15s | 与一切任务并行（SQLite busy_timeout=30s 排队兜底） |
 | **T1 主要账号信息** | 每 VTuber 主账号全字段（`PRIMARY_PLATFORM_ORDER` 优先） | 分层调度线程（账号锁） | 5min ± 30s | 手动任务在跑 → **跳过本轮**（手动优先，不抢断） |
 | **T2 最新动态** | 每主账号 1 页 + `limit_latest=2` | 分层调度线程（帖子锁） | 15min ± 2min | 同上 |
-| **T3a 全量账号** | 全部账号全字段（含非主账号，补足 T1 不覆盖的账号） | 分层调度线程（账号锁） | 6h ± 30min | 同上 |
+| **T3a 全量账号** | 全部账号全字段（含非主账号，补足 T1 不覆盖的账号） | **紧接 T2 之后串行执行（与 T2 同频率 15min）**，`FULL_ACCOUNT_AFTER_T2=false` 关闭 | 随 T2 | 同上 |
 | **T3 手动全量/补档** | 用户触发（全量账号/全量帖子/单 V/未归档批量端点） | — | 手动 | 永远优先于 T1/T2/T3a；仅被 T0 并行（互不打扰） |
 | **T4 外部数据** | zeroroku/danmakus | APScheduler cron | 3AM 日/周 | 保持现状 |
 
@@ -135,12 +135,14 @@ for 每个账号:
 - `start_live_poller()`：T0 线程；首轮于 `STARTUP_CHAIN_DELAY` 后立即执行
   （启动即最快刷新直播），之后循环轮询；`LIVE_POLL_SECONDS<=0` 关闭；
 - `start_tier_scheduler()`：T1/T2/T3a 调度线程；启动后先按启动链语义
-  立即跑 T1→T2（`STARTUP_CHAIN_ENABLED`），然后心跳（`TIER_TICK_SECONDS=10s`）
-  检查到期；任一手动抓取在跑 → 本轮全部定时档跳过；到期档位按
-  T1→T2→T3a 贪心串行（单线程任务，无档间并发）；
+  立即跑 T1→T2→T3a（`STARTUP_CHAIN_ENABLED`），然后心跳
+  （`TIER_TICK_SECONDS=10s`）检查到期；任一手动抓取在跑 → 本轮全部定时档
+  跳过；到期档位按 T1→T2 贪心串行（单线程任务，无档间并发），
+  **T2 执行完立即接 T3a 全量账号**（同一档期，与 T2 同频率）；
 - 每档周期带抖（`_tier_delay`）；interval<=0 的档位禁用；
 - T1/T2 不写 `last_result`（5~15 分钟弹一次完成胶囊会刷屏；前端完成汇总
-  只服务手动任务）；T3a 走 `async_fetch_and_update`（每 6h 一条汇总可接受）；
+  只服务手动任务）；T3a 走 `async_fetch_and_update`（与 T2 同频，汇总随
+  手动任务口径不弹——T2 档期以 T2 的任务名计）；
 - T0 的进度反馈 = `account-progress` 快照驱动的左右栏徽标（无进度条/无胶囊）；
 - 原「定时任务优先让位协议」的账号档语义被「手动优先」取代：
   `_yield_request` 机制保留（让位代码仍在），但不再有置位方；
@@ -148,7 +150,7 @@ for 每个账号:
 
 配置：`TIER_TICK_SECONDS`、`LIVE_POLL_SECONDS/JITTER`、
 `ACCOUNT_PRIMARY_INTERVAL_MINUTES/JITTER`、`DYNAMICS_LATEST_INTERVAL_MINUTES/JITTER`、
-`FULL_ACCOUNT_INTERVAL_HOURS/JITTER`（+ 启动链/限帖配置沿用）。
+`FULL_ACCOUNT_AFTER_T2`（+ 启动链/限帖配置沿用）。
 
 ---
 
