@@ -150,11 +150,11 @@
    （background-clip 只涂内容区），滑块整体距右缘 3px（用户反馈 2026-09-05；
    track margin 在 WebView2 下不生效，改滑块自身描边内收） */
 .list-scroll::-webkit-scrollbar {
-  width: 10px;
+  width: 16px;
 }
 
 .list-scroll::-webkit-scrollbar-thumb {
-  border: 3px solid transparent;
+  border: 5px solid transparent;
   background-clip: content-box;
 }
 
@@ -171,6 +171,40 @@
   flex-direction: column;
   gap: 14px;
   align-items: stretch;
+}
+
+/* ── 回顶浮钮（list 视图，用户反馈 2026-09-05）：右下角悬浮白卡圆钮，
+   滚动超过阈值浮现（.on），点击一键平滑回顶；交互层浮置语义（同 float-pill 阴影）── */
+.back-to-top {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  z-index: 5;
+  display: flex;
+  width: 44px;
+  height: 44px;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 999px;
+  background: var(--pill-bg);
+  color: var(--c-text-main);
+  box-shadow: var(--pill-shadow);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(4px);
+  transition: opacity 0.2s ease, transform 0.2s ease, color 0.15s ease;
+}
+
+.back-to-top.on {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.back-to-top:hover {
+  color: var(--c-primary);
 }
 
 .glow-bar {

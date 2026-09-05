@@ -14,6 +14,7 @@ import {
   UserPlus,
   Zap,
   ChevronsLeft,
+  ChevronUp,
   Ghost,
   Loader2,
 } from 'lucide-react'
@@ -525,6 +526,11 @@ export default function PostsPage() {
   const listScrollRef = useRef<HTMLDivElement>(null)
   const sentinelRef = useRef<HTMLDivElement>(null)
   const hasMore = posts.length < total
+  // 回顶浮钮（2026-09-05 用户反馈）：滚动超过 400px 浮现，一键平滑回顶
+  const [showTop, setShowTop] = useState(false)
+  useEffect(() => {
+    if (scene.view === 'list') setShowTop(false)
+  }, [scene.view])
   // P6-1：筛选切换 = 用户意图重置 → 立即滚回列表顶部。
   // （此前「按筛选指纹缓存+恢复滚动位置」实测不达预期已 revert——恢复位置
   //   对不上新内容；标准列表 UX 为回顶，触发即滚，不等重取完成）
@@ -1088,7 +1094,8 @@ return (
 
             {/* 帖子无限滚动区：grid 不再按筛选指纹重挂（2026-09-04）——
                 筛选切换走 is-refetching 原位替换，入场动画只在新卡片挂载时播放 */}
-            <div className="list-scroll" ref={listScrollRef}>
+            <div className="list-scroll" ref={listScrollRef}
+              onScroll={(e) => setShowTop(e.currentTarget.scrollTop > 400)}>
               <div className="list-inner">
                 {error ? (
                   <Alert variant="destructive">
@@ -1136,6 +1143,16 @@ return (
                 )}
               </div>
             </div>
+
+            {/* 回顶浮钮：滚动深处浮现，一键回顶（view-body 为定位锚点） */}
+            <button
+              type="button"
+              aria-label="回到顶部"
+              className={`back-to-top${showTop ? ' on' : ''}`}
+              onClick={() => listScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })}
+            >
+              <ChevronUp className="size-5" />
+            </button>
           </>
         )}
       </div>
