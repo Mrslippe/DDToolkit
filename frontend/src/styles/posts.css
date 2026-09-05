@@ -146,9 +146,22 @@
   padding: 8px 16px 24px;
 }
 
-/* 列表视图右侧滚动条：track 右缘收进 4px，滚动条整体左移（用户反馈 2026-09-05） */
-.list-scroll::-webkit-scrollbar-track {
-  margin-right: 4px;
+/* 列表视图右侧滚动条：滑块内收——槽宽 10px + 滑块左右 3px 透明描边
+   （background-clip 只涂内容区），滑块整体距右缘 3px（用户反馈 2026-09-05；
+   track margin 在 WebView2 下不生效，改滑块自身描边内收） */
+.list-scroll::-webkit-scrollbar {
+  width: 10px;
+}
+
+.list-scroll::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+.list-scroll::-webkit-scrollbar-thumb:hover {
+  /* 防全局 hover 的 background 简写重置 background-clip */
+  border: 3px solid transparent;
+  background-clip: content-box;
 }
 
 .list-scroll > .list-inner {
