@@ -927,7 +927,7 @@ return (
 
         {vtuber && scene.view === 'cards' && (
           <div className="hero-scroll">
-            {/* Hero：头像 / 直播徽标 / 名字 / 签名 / 平台药丸 / 分隔饰条 / 阵营徽标 */}
+            {/* Hero：头像 / 直播徽标 / 名字 / 签名 / 平台药丸 / 分隔饰条 / 企划徽标 */}
             <div className="hero">
               <Avatar className="hero-avatar">
                 <AvatarImage src={avatarSrc} referrerPolicy="no-referrer" />
@@ -972,7 +972,7 @@ return (
                 <div className="stat-sets">
                   <div className="stat-set">
                     <span className="faction-badge">
-                      <span className="pill-logo">阵</span>
+                      <span className="pill-logo">企</span>
                       {vtuber.faction}
                     </span>
                   </div>

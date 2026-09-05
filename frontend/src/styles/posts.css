@@ -1093,6 +1093,21 @@
   min-height: 26px;
 }
 
+/* 企划 | 公会 两列（用户 2026-09-05 定稿：阵营=企划=公会，精简为两列） */
+.profile-card-group-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 26px;
+}
+
+.profile-card-group-col {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
 .profile-card-label {
   flex-shrink: 0;
   width: 68px;

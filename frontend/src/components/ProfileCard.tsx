@@ -18,8 +18,9 @@ interface Props {
 }
 
 /**
- * 档案卡（P5）：阵营（可编辑，选项自动建议第三方索引企划名）/ 企划·公会 /
- * 生日 / 出道日 / 房间号 / 设定集（可折叠）。
+ * 档案卡（P5，2026-09-05 修订）：企划（可编辑，选项自动建议第三方索引企划名——
+ * 语义沿革：阵营=企划=公会）/ 公会（只读占位，先放着）/ 生日 / 出道日 /
+ * 房间号 / 设定集（可折叠）。
  */
 const ProfileCard = memo(function ProfileCard({ vtuber, account, thirdparty }: Props) {
   const [settingOpen, setSettingOpen] = useState(false)
@@ -43,20 +44,13 @@ const ProfileCard = memo(function ProfileCard({ vtuber, account, thirdparty }: P
       await api.updateVtuber(vtuber.id, { faction: next || null })
     } catch (e) {
       setFaction(faction) // 失败回退
-      toast.error(`阵营更新失败: ${(e as Error).message}`)
+      toast.error(`企划更新失败: ${(e as Error).message}`)
     } finally {
       setSavingFaction(false)
     }
   }
 
   const rows: { icon: React.ReactNode; label: string; value: React.ReactNode }[] = [
-    {
-      icon: <Landmark className="size-4" />,
-      label: '企划·公会',
-      value: groups.length > 0
-        ? groups.join(' / ')
-        : <span className="muted">第三方索引未收录</span>,
-    },
     {
       icon: <Cake className="size-4" />,
       label: '生日',
@@ -76,29 +70,40 @@ const ProfileCard = memo(function ProfileCard({ vtuber, account, thirdparty }: P
 
   return (
     <div className="profile-card">
-      <div className="profile-card-row">
-        <span className="profile-card-label">阵营</span>
-        <Select value={faction || '__none__'} onValueChange={handleFaction} disabled={savingFaction}>
-          <SelectTrigger className="h-7 w-[180px] text-xs">
-            <SelectValue placeholder="未设置" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="__none__">未设置</SelectItem>
-            {factionOptions.map((f) => (
-              <SelectItem key={f} value={f}>{f}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        {groups.length > 0 && groups[0] !== faction && (
-          <button
-            type="button"
-            className="float-pill float-pill--sm"
-            title="从第三方索引采纳企划名为阵营"
-            onClick={() => handleFaction(groups[0])}
-          >
-            采纳「{groups[0]}」
-          </button>
-        )}
+      {/* 企划 | 公会 两列（用户 2026-09-05 定稿：阵营=企划=公会，精简为两列——
+          企划=可编辑（原 faction，未来接侧栏阵营图标位）；公会=只读占位（先放着）） */}
+      <div className="profile-card-group-row">
+        <div className="profile-card-group-col">
+          <span className="profile-card-label">企划</span>
+          <Select value={faction || '__none__'} onValueChange={handleFaction} disabled={savingFaction}>
+            <SelectTrigger className="h-7 w-[180px] text-xs">
+              <SelectValue placeholder="未设置" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none__">未设置</SelectItem>
+              {factionOptions.map((f) => (
+                <SelectItem key={f} value={f}>{f}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {groups.length > 0 && groups[0] !== faction && (
+            <button
+              type="button"
+              className="float-pill float-pill--sm"
+              title="从第三方索引采纳企划名"
+              onClick={() => handleFaction(groups[0])}
+            >
+              采纳「{groups[0]}」
+            </button>
+          )}
+        </div>
+        <div className="profile-card-group-col">
+          <span className="profile-card-label">公会</span>
+          <span className="profile-card-value">
+            <Landmark className="size-4" />
+            <span className="muted">未收录</span>
+          </span>
+        </div>
       </div>
 
       {rows.map((r) => (

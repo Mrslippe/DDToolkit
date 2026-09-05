@@ -207,7 +207,7 @@ export default function VtuberSidebar() {
       list = list.filter((v) => v.accounts.some((a) => filters.platform.includes(a.platform)))
     }
     if (filters.faction.length > 0) {
-      // 阵营筛选激活时，无阵营条目被排除（已知边界）
+      // 企划筛选激活时，无企划条目被排除（已知边界）
       list = list.filter((v) => !!v.faction && filters.faction.includes(v.faction))
     }
     if (kw) {
@@ -227,7 +227,7 @@ export default function VtuberSidebar() {
     return list
   }, [vtubers, query, filters, sortKey])
 
-  // 筛选弹窗选项：平台 / 阵营从已载数据动态提取（阵营剔除空值）
+  // 筛选弹窗选项：平台 / 企划从已载数据动态提取（企划剔除空值）
   const platformOptions = useMemo(
     () => [...new Set(vtubers.flatMap((v) => v.accounts.map((a) => a.platform)))],
     [vtubers],
@@ -322,7 +322,7 @@ export default function VtuberSidebar() {
           <button
             type="button"
             className={`float-pill float-pill--text list-filter-btn${filterActive ? ' on' : ''}`}
-            title="组合筛选（状态 / 平台 / 阵营）"
+            title="组合筛选（状态 / 平台 / 企划）"
             onClick={() => setFilterOpen((o) => !o)}
           >
             默认
@@ -388,7 +388,7 @@ export default function VtuberSidebar() {
               )}
               {factionOptions.length > 0 && (
                 <div className="filter-pop-group">
-                  <span className="filter-pop-label">阵营</span>
+                  <span className="filter-pop-label">企划</span>
                   <div className="filter-pop-chips">
                     {factionOptions.map((f) => (
                       <button
@@ -500,7 +500,7 @@ const VtuberItem = memo(function VtuberItem({ vtuber, index, active, onSelect }:
         </div>
         {sign && <div className="vtuber-sign">{sign}</div>}
       </div>
-      {/* 阵营标识槽位：预留挂载图片资源 */}
+      {/* 企划标识槽位（原阵营位）：预留挂载图片资源，后续接档案卡企划值 */}
       <div className="vtuber-emblem" aria-hidden />
     </div>
   )

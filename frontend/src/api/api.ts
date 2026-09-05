@@ -107,7 +107,7 @@ export const api = {
   externalsVtuberByUid: (uid: string) =>
     request<ThirdpartyVtuber[]>(`/externals/vtubers/by-uid?uid=${encodeURIComponent(uid)}`),
 
-  /** 更新 VTuber 元信息（档案卡阵营编辑等） */
+  /** 更新 VTuber 元信息（档案卡企划编辑等） */
   updateVtuber: (id: number, data: { faction?: string | null; setting?: string | null; notes?: string | null }) =>
     request<VTuber>(`/vtuber/${id}`, {
       method: 'PUT',

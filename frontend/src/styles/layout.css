@@ -881,7 +881,7 @@ color: #fff;
 }
 
 /* VTuber 条目（Frame41109）：84px 通栏行、无分隔线；
-   交互态沿用左缘粉竖条 + 浅粉底；右侧 107px 阵营标识区空置 */
+   交互态沿用左缘粉竖条 + 浅粉底；右侧 107px 企划标识区空置 */
 .vtuber-item {
   position: relative;
   display: flex;
@@ -920,7 +920,7 @@ color: #fff;
   flex: 1;
 }
 
-/* 阵营标识槽位：每行最右侧 60px 区域，紧贴右缘，暂空置（后续挂载图片资源） */
+/* 企划标识槽位（原阵营位）：每行最右侧 60px 区域，紧贴右缘，暂空置（后续挂载图片资源） */
 .vtuber-emblem {
   width: 54px;
   height: 100%;

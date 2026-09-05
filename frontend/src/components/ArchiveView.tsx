@@ -156,7 +156,7 @@ function ProfileSection({ vtuber, initial, refreshTick }: { vtuber: VTuber; init
       <div className="archive-section-head">
         <span className="archive-section-title">档案</span>
         <div className="archive-section-right">
-          <span className="archive-section-note">阵营 / 企划 / 设定</span>
+          <span className="archive-section-note">企划 / 公会 / 设定</span>
           <AccountPicker accounts={accounts} value={selected} onChange={setSelected} />
         </div>
       </div>

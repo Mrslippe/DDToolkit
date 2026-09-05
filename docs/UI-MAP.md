@@ -104,7 +104,7 @@
 | 名字 | `.vtuber-name` | **18px 纯黑 500**，`user-select:none` |
 | 直播点/标签 | `.live-dot` / `.live-label` | 红 `--c-live`，仅直播中 |
 | 签名 | `.vtuber-sign` | **13px 灰（13px 行高盒）**，`user-select:none` |
-| 阵营槽 | `.vtuber-emblem` | 右侧 **54px 全高**，紧贴右缘；暂空置（预留图片资源） |
+| 企划槽 | `.vtuber-emblem` | 右侧 **54px 全高**，紧贴右缘；暂空置（2026-09-05：后续接线档案卡「企划」值） |
 | 提示态 | `.sidebar-tip` | 加载失败 / 空池 / 无匹配文案 |
 
 **自绘悬浮滚动条**
@@ -154,7 +154,7 @@
 | ├ 平台LOGO占位 | `.pill-logo` | 28×28 半透明白块 + 平台首字母（后续换图） |
 | └ 数值 | `.pill-value` | **26px 白 600**，`formatCount(followers_count)` |
 | 饰条 | `.hero-divider` | 394px 渐变细线 |
-| 阵营行 | `.faction-badge`（内 `.pill-logo`） | `vtuber.faction` 非空才渲染；外链徽标待数据模型 |
+| 企划行 | `.faction-badge`（内 `.pill-logo`「企」） | `vtuber.faction` 非空才渲染；外链徽标待数据模型 |
 
 **list 视图（帖子列表页）**
 | 名称 | 类名 | 说明 |
@@ -181,7 +181,7 @@
 | 账号切换器 | `<AccountPicker>` | 卡片内部紧凑 Select（平台·昵称），单账号不渲染；默认=B站账号或页面层当前账号，切 V 保留同 id 选中 |
 | 趋势曲线 | `<FanTrendChart>`（shadcn Chart/recharts 3.8，`components/ui/chart.tsx` 为 registry new-york-v4 版） | **双序列**：self 直采实线（`--chart-1` 主粉）/ zeroroku 回填虚线（`--chart-2` 灰蓝）；X=日期（月刻度 48px 间隔）、Y=`formatCount` 万缩写；Tooltip=日期+粉丝数+图例；数据 `GET /account/{id}/fan-trend`（服务端按天分桶） |
 | 直播日历 | `<LiveCalendar>` `.live-calendar*` | 月网格（周一开头，可翻月）；绿点=当日自采场次证据、满格=当日第三方礼物日聚合；悬浮显示 礼物/大航海/SC 原始字符串 |
-| 档案卡 | `<ProfileCard>` `.profile-card*` | 阵营（Select 编辑，选项自动建议第三方索引 `group_name`，一键「采纳」写 `faction`）、企划·公会（只读+来源注记）、生日/出道日/房间号（跟随卡内所选账号）、设定集（Collapsible 折叠）；数据 `GET /externals/vtubers/by-uid` |
+| 档案卡 | `<ProfileCard>` `.profile-card*` | **企划｜公会 两列**（2026-09-05 定稿：阵营=企划=公会——企划=Select 编辑，选项自动建议第三方索引 `group_name`，一键「采纳」写 `faction`，未来接侧栏企划槽；公会=只读占位「未收录」，先放着）+ 生日/出道日/房间号（跟随卡内所选账号）、设定集（Collapsible 折叠）；数据 `GET /externals/vtubers/by-uid` |
 
 **联动刷新（跨组件事件）**
 | 事件 | 触发方 | 消费方 |
@@ -255,7 +255,7 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 ## C3. 独立筛选弹窗（layout.css `.filter-pop`）
 
 - 入口：侧栏过滤触发器（`.filter-wrap` 锚定，点外关闭，同 time-pop 模式）
-- 三组多选 chip（`.filter-chip`，方形、选中粉底）：状态（直播中/未直播）、平台（accounts 动态提取）、阵营（非空 faction 动态提取）
+- 三组多选 chip（`.filter-chip`，描边圆角、选中粉底，2026-09-05 弹窗层风格）：状态（直播中/未直播）、平台（accounts 动态提取）、企划（非空 faction 动态提取；语义沿革：阵营=企划=公会）
 - 组合逻辑：组内 OR、组间 AND，空组不生效，即时生效无应用钮，底部「重置」
 - 触发器反馈：任一筛选生效加 `.on`；展示文案暂占位「默认」待定
 
@@ -280,7 +280,7 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 | 层 | 语义 | 形态契约 | 成员 |
 |---|---|---|---|
 | **交互层** float-pill | 一切可点击触发 | 斜切(-10°)白卡 + 3px 圆角 + 阴影（唯一带阴影）；hover 渐灰；`.on` 主色填充；`.float-pill--danger` 红字 | 侧栏工具行、时间钮、bg-tools、**header-actions 五钮**（更新动态 `.on` 主操作、解除订阅 danger） |
-| **信息层** flat-chip | 只读展示 | 平面 **3px、无阴影、不斜切**；色底（粉/珊瑚）或发丝边 | stat-pill（191×37 色底去白边）、faction-badge、type-chip、stat-badge、post-card-type、live-tag |
+| **信息层** flat-chip | 只读展示 | 平面 **3px、无阴影、不斜切**；色底（粉/珊瑚）或发丝边 | stat-pill（191×37 色底去白边）、faction-badge（企划徽标，类名沿用）、type-chip、stat-badge、post-card-type、live-tag |
 | **弹窗层** dialogs | 弹窗/浮层（二级界面） | **圆角卡片 12px + 柔和阴影 `--shadow-dialog` (0 4px 16px 10%) + 发丝边**；分区标题 600 加粗 + 上方发丝分隔；选择控件描边 8px 圆角、激活=粉底(`--c-primary-deep`)白字；底部主操作=粉底圆角、次要=描边圆角 | 注入 Dialog/AlertDialog/Select 包裹层 + time-pop/filter-pop 自定义浮层 |
 | **表面层** surfaces | 卡片/面板 | **0px 方形** + 发丝边 | post-card、posts-panel |
 
@@ -311,7 +311,7 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 | BatchFetchDialog | 侧栏「拉取」 | 四项：全量账号 / 全量帖子 / 更新未归档 / 归档（前三项后台执行+409防重入，归档同步返回条数） |
 | PostDetailDrawer | 帖子卡片 | 见 B2 |
 | AlertDialog 解订阅 | list 视图红色钮 | 说明连带删帖，确认后跳首页 |
-| 筛选弹窗 `.filter-pop` | 侧栏过滤触发器 | 见 C3（状态/平台/阵营组合多选） |
+| 筛选弹窗 `.filter-pop` | 侧栏过滤触发器 | 见 C3（状态/平台/企划组合多选） |
 
 ---
 
