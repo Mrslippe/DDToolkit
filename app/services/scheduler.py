@@ -22,7 +22,7 @@ from app.models.vtuber import Account, VTuber, Post
 from app.repositories.vtuber_repo import VTuberRepo, AccountRepo, PostRepo, AccountStatSnapshotRepo
 from app.services.fetcher import (
     fetch_bilibili_user_info, fetch_bilibili_user_stat,
-    fetch_bilibili_videos, fetch_bilibili_dynamics,
+    fetch_bilibili_videos, fetch_bilibili_dynamics, fetch_bilibili_live_batch,
     fetch_article_detail, fetch_video_detail, fetch_dynamic_detail,
     was_rate_limited, clear_rate_limit, rate_limit_info,
 )
@@ -553,15 +553,12 @@ def any_fetch_running() -> bool:
     return _fetch_running or _post_fetch_running or _yield_request.is_set()
 
 
-async def _maybe_yield_account(db: Session, vtuber_id: int | None = None,
-                               check_yield: bool = True) -> list[Account] | None:
-    """账号抓取断点让位（循环顶部调用）：
-    定时任务请求让位时交还执行权并等待其完成，然后重查账号列表续跑。
-    返回重查后的账号列表；未发生让位返回 None（调用方沿用原列表）。"""
+async def _yield_account_wait(db: Session) -> None:
+    """账号锁让位的公共锁舞蹈：交还 _fetch_lock 等待定时任务完成，再重新持有。
+    调用方负责恢复后的数据重查（返回时 _fetch_scope 恢复为本任务的范围标记）。
+    """
     global _fetch_running
-    if not check_yield or not _yield_request.is_set():
-        return None
-    saved_scope = _fetch_scope  # 定时任务结束会把 scope 清 None，让位返回时恢复本任务范围标记
+    saved_scope = _fetch_scope
     db.commit()
     _fetch_running = False
     _status["account"]["running"] = False
@@ -572,8 +569,18 @@ async def _maybe_yield_account(db: Session, vtuber_id: int | None = None,
     finally:
         _fetch_lock.acquire()
         _fetch_running = True
-        _fetch_scope = saved_scope
+        _fetch_scope = saved_scope  # 定时任务结束会把 scope 清 None，让位返回时恢复本任务范围标记
         _status["account"]["running"] = True
+
+
+async def _maybe_yield_account(db: Session, vtuber_id: int | None = None,
+                               check_yield: bool = True) -> list[Account] | None:
+    """账号抓取断点让位（循环顶部调用）：
+    定时任务请求让位时交还执行权并等待其完成，然后重查账号列表续跑。
+    返回重查后的账号列表；未发生让位返回 None（调用方沿用原列表）。"""
+    if not check_yield or not _yield_request.is_set():
+        return None
+    await _yield_account_wait(db)
     if vtuber_id is not None:
         return db.query(Account).filter(
             Account.vtuber_id == vtuber_id,
@@ -665,7 +672,8 @@ _PAGE_RETRIES = 2
 async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db: Session,
                             client: httpx.AsyncClient | None = None,
                             include_videos: bool = True,
-                            stop_on_existing: bool = False) -> PostFetchResult:
+                            stop_on_existing: bool = False,
+                            limit_latest: int | None = None) -> PostFetchResult:
     """单个账号的帖子抓取核心逻辑（不含锁与 session 管理）。
     video_pages=-1   → 全量拉取视频直到无更多结果。
     dynamics_pages=-1 → 全量拉取动态直到 has_more=false。
@@ -674,6 +682,9 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
     stop_on_existing=True → 增量模式：动态流按时间倒序翻页，遇到第一条
     库中已有的帖子即停止（更早的必然已入库），通常第 1 页即返回；
     首页首条豁免判定——B站常把置顶旧帖排在流首，避免误停漏抓新帖。
+    limit_latest=N → 「最新 N 条」模式（启动链阶段 3）：同一页内最多入库
+    N 条新帖即停（其余新帖留待下次启动链/增量任务渐进消化），
+    保证每 VTuber 的单次时长有上界、不等同于全量补档。
 
     归档边界（devlog/016）：动态/视频按时间倒序翻页，一旦某一整页的帖子
     全部已归档（is_archived=1，即早于归档截止日），更早的页必然也已归档，
@@ -796,6 +807,7 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
         dyn_page = 0
         dyn_rl_retries = 0   # 风控重试计数（每账号动态列表页，见 _PAGE_RETRIES）
         stop_now = False
+        latest_new = 0       # 「最新 N 条」模式计数（limit_latest）
         while True:
             # 断点让位：定时任务请求让位时先落盘，交还锁等待其完成后续跑
             if _yield_request.is_set():
@@ -927,6 +939,12 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
                 existing_ids.add(d["platform_post_id"])
                 if len(pending) >= _POST_BATCH_SIZE:
                     _flush_pending()
+                # 「最新 N 条」模式：入库满 N 条新帖即停（其余留待下次渐进消化）
+                if limit_latest is not None:
+                    latest_new += 1
+                    if latest_new >= limit_latest:
+                        stop_now = True
+                        break
             dyn_page += 1
             if stop_now:
                 # 增量边界已确认：更早的动态必然已在库中，立即收工
@@ -1083,10 +1101,13 @@ async def _fetch_platform_posts(pf, uid: str, pages: int, db: Session,
 async def _fetch_posts_for_account(acc: Account, video_pages: int, dynamics_pages: int,
                                    db: Session, client: httpx.AsyncClient | None = None,
                                    include_videos: bool = True,
-                                   stop_on_existing: bool = False) -> PostFetchResult:
+                                   stop_on_existing: bool = False,
+                                   limit_latest: int | None = None) -> PostFetchResult:
     """按平台分发单个账号的帖子抓取：
     - bilibili → 双流核心 _fetch_posts_core（视频+动态、归档边界、视频总数比对）
     - weibo 等单流平台 → 通用循环 _fetch_platform_posts
+
+    limit_latest 仅对 bilibili 双流核心生效（「最新 N 条」模式，见该函数 docstring）。
 
     抓取结束后统一执行墓碑判定（删除检测，v0.5.1）——本函数是各调用方
     （增量更新/全量抓取/按名抓取）的共同必经点，判定结果写入 detail，
@@ -1102,7 +1123,8 @@ async def _fetch_posts_for_account(acc: Account, video_pages: int, dynamics_page
             return PostFetchResult(stop_reason="error", error="非数字 UID")
         result = await _fetch_posts_core(mid, video_pages, dynamics_pages, db,
                                          client=client, include_videos=include_videos,
-                                         stop_on_existing=stop_on_existing)
+                                         stop_on_existing=stop_on_existing,
+                                         limit_latest=limit_latest)
     else:
         result = await _fetch_platform_posts(pf, str(acc.platform_uid), dynamics_pages, db,
                                              client=client, stop_on_existing=stop_on_existing)
@@ -1508,3 +1530,306 @@ async def async_update_unarchived_posts(name: str | None = None) -> dict:
         _post_fetch_lock.release()
         _last_result_for_scope(res_seq, "update_unarchived", name or "全部",
                                total, issues, None)
+
+
+# ── 启动链（v0.6.0）：直播状态 → 主要账号信息 → 最新动态 ──────────────────
+
+def _primary_accounts(db: Session) -> list[tuple[VTuber, Account]]:
+    """每个 VTuber 的主要活动平台账号（PRIMARY_PLATFORM_ORDER 优先级取首个）。
+
+    目前设计为 bilibili 优先（B 站是各 V 最主要活动平台），后续平台扩展
+    只需调配置顺序即可生效。
+    """
+    out: list[tuple[VTuber, Account]] = []
+    for v in db.query(VTuber).order_by(VTuber.id.asc()).all():
+        accs = sorted(
+            (a for a in v.accounts if a.platform_uid),
+            key=lambda a: (
+                settings.PRIMARY_PLATFORM_ORDER.index(a.platform)
+                if a.platform in settings.PRIMARY_PLATFORM_ORDER
+                else len(settings.PRIMARY_PLATFORM_ORDER)
+            ),
+        )
+        if accs:
+            out.append((v, accs[0]))
+    return out
+
+
+async def startup_live_sweep() -> FetchResult:
+    """启动链阶段 1：直播状态更新（最高优先级，最快完成）。
+
+    经 bilibili 直播批量接口（每 100 个 uid 1 个请求）仅回写 live 字段，
+    不触碰签名/头像/粉丝；live 跳变时落一条统计快照（直播日历 edge 数据）。
+    共用 _fetch_lock / 状态通道与让位、风控协议；与定时任务内容一致的判定
+    见 fetch_and_update_vtubers（scope='live' 不属于 'full'，定时器会让位抢占，
+    但批量接口下本阶段数秒即完，实际冲突概率极低）。
+    """
+    global _fetch_running
+
+    if not _fetch_lock.acquire(blocking=False):
+        logger.warning("启动·直播状态跳过：账号抓取正在进行")
+        return FetchResult(details=["账号抓取进行中，跳过"])
+
+    _fetch_running = True
+    _fetch_scope = "live"
+    _status["account"]["running"] = True
+    _status["account"]["recent"] = []   # 每轮自包含：清空上一任务的快照
+    result = FetchResult()
+    res_seq = _next_result_seq()
+    clear_rate_limit()
+    client = httpx.AsyncClient(timeout=15.0)
+    db: Session = SessionLocal()
+
+    def _bili_accounts() -> list[Account]:
+        return db.query(Account).filter(
+            Account.platform == "bilibili",
+            Account.platform_uid != None,  # noqa: E711
+            Account.platform_uid != "",
+        ).all()
+
+    try:
+        accounts = _bili_accounts()
+        if not accounts:
+            logger.info("启动·直播状态：无 bilibili 账号")
+            return result
+
+        idx = 0
+        while idx < len(accounts):
+            # 断点让位：定时任务请求让位时交还执行权，回来后重查列表继续
+            if _yield_request.is_set():
+                await _yield_account_wait(db)
+                accounts = _bili_accounts()
+                continue
+            chunk = [a for a in accounts[idx:idx + 100] if str(a.platform_uid).isdigit()]
+            if not chunk:
+                idx += 1
+                continue
+            _set_account_progress(
+                f"直播·{chunk[-1].display_name or chunk[-1].platform_uid}",
+                min(idx + len(chunk), len(accounts)), len(accounts),
+            )
+            data = await fetch_bilibili_live_batch([int(a.platform_uid) for a in chunk], client=client)
+            if data is None:
+                if was_rate_limited():
+                    logger.warning(f"启动·直播状态触发风控 ({rate_limit_info()})，"
+                                   f"冷却 {settings.RATE_LIMIT_COOLDOWN}s 后继续")
+                    clear_rate_limit()
+                    await asyncio.sleep(settings.RATE_LIMIT_COOLDOWN)
+                    continue
+                # 非风控失败（网络/接口异常）：跳过本批，启动链路宽容处理
+                result.failed += len(chunk)
+                idx += len(chunk)
+                continue
+            for acc in chunk:
+                hit = data.get(str(acc.platform_uid))
+                if not hit:
+                    result.failed += 1
+                    continue
+                prev_status = acc.live_status
+                acc.live_status = hit.get("live_status", 0)
+                acc.live_title = hit.get("live_title", acc.live_title)
+                acc.live_url = hit.get("live_url", acc.live_url)
+                if not acc.room_id and hit.get("room_id"):
+                    acc.room_id = str(hit["room_id"])
+                db.commit()
+                if acc.live_status != prev_status:
+                    # 直播边沿：落统计快照（直播日历场次推导的数据来源）
+                    _record_stat_snapshot(db, acc)
+                    db.commit()
+                _push_account_snapshot(acc)
+                result.success += 1
+            idx += len(chunk)
+            await asyncio.sleep(random.uniform(settings.STARTUP_LIVE_INTERVAL_MIN,
+                                               settings.STARTUP_LIVE_INTERVAL_MAX))
+
+    except Exception as e:
+        logger.error(f"启动·直播状态异常: {e}", exc_info=True)
+        db.rollback()
+        result.details.append(f"异常: {e}")
+    finally:
+        db.close()
+        await client.aclose()
+        _fetch_running = False
+        _fetch_scope = None
+        _reset_account_status()
+        _fetch_lock.release()
+        _set_account_last_result(res_seq, "启动·直播状态", result.success, result.failed, result.skipped)
+
+    return result
+
+
+async def startup_main_account_sweep() -> FetchResult:
+    """启动链阶段 2：主要账号信息获取（次级优先）。
+
+    每个 VTuber 仅更新其主要活动账号（PRIMARY_PLATFORM_ORDER 优先，默认
+    bilibili）：_fetch_one_account 全字段（名/签名/头像/粉丝/直播），
+    不写统计快照（周期全量任务记录，避免启动链污染时间序列）。
+    """
+    global _fetch_running
+
+    if not _fetch_lock.acquire(blocking=False):
+        logger.warning("启动·主要账号跳过：账号抓取正在进行")
+        return FetchResult(details=["账号抓取进行中，跳过"])
+
+    _fetch_running = True
+    _fetch_scope = "main"
+    _status["account"]["running"] = True
+    _status["account"]["recent"] = []
+    result = FetchResult()
+    res_seq = _next_result_seq()
+    clear_rate_limit()
+    client = httpx.AsyncClient(timeout=15.0)
+    db: Session = SessionLocal()
+    try:
+        pairs = _primary_accounts(db)
+        if not pairs:
+            logger.info("启动·主要账号：无可抓取账号")
+            return result
+        for i, (v, acc) in enumerate(pairs, 1):
+            # 断点让位：定时任务请求让位时交还执行权，回来后重查列表继续
+            if _yield_request.is_set():
+                await _yield_account_wait(db)
+                pairs = _primary_accounts(db)
+                continue
+            _set_account_progress(f"信息·{v.name}", i, len(pairs))
+            try:
+                ok = await _fetch_one_account(acc, db, client=client)
+                if ok:
+                    db.commit()
+                    _push_account_snapshot(acc)
+                    result.success += 1
+                else:
+                    result.failed += 1
+            except Exception as e:
+                logger.error(f"启动·主要账号异常 {acc.platform}:{acc.platform_uid}: {e}", exc_info=True)
+                db.rollback()
+                result.failed += 1
+                result.details.append(f"{v.name}: {e}")
+
+            if was_rate_limited():
+                logger.warning(f"启动·主要账号触发风控 ({rate_limit_info()})，"
+                               f"冷却 {settings.RATE_LIMIT_COOLDOWN}s")
+                clear_rate_limit()
+                await asyncio.sleep(settings.RATE_LIMIT_COOLDOWN)
+            elif i < len(pairs):
+                await asyncio.sleep(random.uniform(settings.STARTUP_MAIN_INTERVAL_MIN,
+                                                   settings.STARTUP_MAIN_INTERVAL_MAX))
+
+    except Exception as e:
+        logger.error(f"启动·主要账号异常: {e}", exc_info=True)
+        db.rollback()
+        result.details.append(f"异常: {e}")
+    finally:
+        db.close()
+        await client.aclose()
+        _fetch_running = False
+        _fetch_scope = None
+        _reset_account_status()
+        _fetch_lock.release()
+        _set_account_last_result(res_seq, "启动·主要账号信息", result.success, result.failed, result.skipped)
+
+    return result
+
+
+async def startup_latest_dynamics() -> dict:
+    """启动链阶段 3：最新动态更新（最低优先级）。
+
+    每个 VTuber 的主要账号仅拉第 1 页动态，且最多入库最新
+    STARTUP_DYNAMICS_LIMIT（默认 2）条新帖——库里各 V 帖子数差异不会导致
+    单个 V 拉取时长过长；未被本次处理的更早新帖留待下次渐进消化。
+    """
+    global _post_fetch_running
+
+    if not _post_fetch_lock.acquire(blocking=False):
+        logger.warning("启动·最新动态跳过：帖子抓取正在进行")
+        return {"status": "skipped", "message": "帖子抓取任务正在进行中"}
+
+    _post_fetch_running = True
+    _status["post"]["running"] = True
+    res_seq = _next_result_seq()
+    db: Session = SessionLocal()
+    client = httpx.AsyncClient(timeout=15.0)
+    total = {"dynamics": 0, "stored": 0, "skipped": 0}
+    issues: list[dict] = []
+    out: dict = {}
+    try:
+        pairs = _primary_accounts(db)
+        if not pairs:
+            logger.info("启动·最新动态：无可抓取账号")
+            out = {"status": "done", "total": total, "details": []}
+            return out
+        for i, (v, acc) in enumerate(pairs, 1):
+            # 断点让位：定时任务请求让位时交还锁，等待其完成后续跑
+            if _yield_request.is_set():
+                await _maybe_yield_post(db)
+            _set_post_target(f"{v.name}·最新动态")
+            logger.info(f"[{i}/{len(pairs)}] 启动·最新动态 {v.name} "
+                        f"({acc.platform}:{acc.platform_uid}) ...")
+            try:
+                r = await _fetch_posts_for_account(
+                    acc, 0, 1, db, client=client,
+                    include_videos=False, stop_on_existing=True,
+                    limit_latest=settings.STARTUP_DYNAMICS_LIMIT,
+                )
+            except Exception as e:
+                logger.error(f"启动·最新动态异常 {acc.platform}:{acc.platform_uid}: {e}",
+                             exc_info=True)
+                db.rollback()
+                r = PostFetchResult(stop_reason="error", error=str(e))
+            for k in ("dynamics", "stored", "skipped"):
+                total[k] += getattr(r, k)
+            if r.stop_reason in ("rate_limited", "network_error", "error"):
+                issues.append({"label": f"{v.name}({acc.platform}:{acc.platform_uid})",
+                               "stop_reason": r.stop_reason, "error": r.error})
+            if r.rate_limited:
+                logger.warning(f"启动·最新动态 {v.name} 触发风控，"
+                               f"冷却 {settings.RATE_LIMIT_COOLDOWN}s...")
+                await asyncio.sleep(settings.RATE_LIMIT_COOLDOWN)
+            elif i < len(pairs):
+                await asyncio.sleep(random.uniform(settings.STARTUP_DYNAMICS_INTERVAL_MIN,
+                                                   settings.STARTUP_DYNAMICS_INTERVAL_MAX))
+        out = {"status": "done", "total": total, "issues": issues}
+        return out
+    except Exception as e:
+        logger.error(f"启动·最新动态异常: {e}", exc_info=True)
+        db.rollback()
+        out = {"status": "done", "total": total, "issues": issues, "error": str(e)}
+        return out
+    finally:
+        db.close()
+        await client.aclose()
+        _post_fetch_running = False
+        _reset_post_status()
+        _post_fetch_lock.release()
+        _set_post_last_result(res_seq, "startup", "全部账号·最新动态",
+                              0, total["dynamics"],
+                              total["stored"], total["skipped"], issues, None)
+
+
+def _run_startup_chain() -> None:
+    """启动链线程体：串行执行三阶段，各自容错（失败不影响后续阶段）。"""
+    try:
+        time.sleep(settings.STARTUP_CHAIN_DELAY)
+        logger.info("启动链 · 阶段 1/3：直播状态更新")
+        asyncio.run(startup_live_sweep())
+    except Exception as e:
+        logger.error(f"启动链 阶段 1 异常: {e}", exc_info=True)
+    try:
+        logger.info("启动链 · 阶段 2/3：主要账号信息更新")
+        asyncio.run(startup_main_account_sweep())
+    except Exception as e:
+        logger.error(f"启动链 阶段 2 异常: {e}", exc_info=True)
+    try:
+        logger.info("启动链 · 阶段 3/3：最新动态更新")
+        asyncio.run(startup_latest_dynamics())
+    except Exception as e:
+        logger.error(f"启动链 阶段 3 异常: {e}", exc_info=True)
+    logger.info("启动链完成")
+
+
+def start_startup_chain() -> None:
+    """应用启动链入口（main.py lifespan 调用）：守护线程异步执行。"""
+    if not settings.STARTUP_CHAIN_ENABLED:
+        logger.info("启动链已禁用（STARTUP_CHAIN_ENABLED=false）")
+        return
+    threading.Thread(target=_run_startup_chain, name="startup-chain", daemon=True).start()

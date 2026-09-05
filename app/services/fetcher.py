@@ -140,8 +140,56 @@ async def fetch_bilibili_user_info(mid: int, client: Optional[httpx.AsyncClient]
 @retry(stop=stop_after_attempt(3),
        wait=wait_exponential(multiplier=1, min=2, max=10),
        retry=retry_if_result(is_none))
-async def fetch_bilibili_user_stat(mid: int, client: Optional[httpx.AsyncClient] = None) -> Optional[Dict[str, int]]:
+async def fetch_bilibili_live_batch(mids: list[int],
+                                    client: Optional[httpx.AsyncClient] = None) -> Optional[Dict[str, Any]]:
+    """批量直播状态（启动链阶段 1 专用）：get_status_info_by_uids 一次最多约 100 个 uid。
 
+    返回 {uid(str): {"live_status": int, "live_title": str|None,
+                     "room_id": str|None, "live_url": str|None}}；
+    风控/接口异常返回 None（调用方按自愈策略处理）。
+    相比逐账号 fetch_user_info（每账号 2 请求），全量 20+ 账号仅需 1 个请求。
+    """
+    if not mids:
+        return {}
+    url = "https://api.live.bilibili.com/room/v1/Room/get_status_info_by_uids"
+    params = [("uids[]", str(m)) for m in mids]
+    try:
+        async with _client_ctx(client) as http:
+            response = await http.get(url, params=params, headers=auth_manager.build_headers())
+            if response.status_code != 200:
+                _detect_rate_limit(response.status_code)
+                logger.warning(f"⚠️ 直播批量状态码 {response.status_code}, mids={mids[:5]}...")
+                return None
+            try:
+                data = response.json()
+            except (UnicodeDecodeError, ValueError) as e:
+                logger.warning(f"⚠️ 直播批量 JSON 解析失败: {e}")
+                return None
+            if data.get("code") != 0:
+                _detect_rate_limit(response.status_code, data)
+                logger.warning(f"❌ 直播批量错误码 {data.get('code')}, msg={data.get('message')}")
+                return None
+            payload = data.get("data") or {}
+            out: Dict[str, Any] = {}
+            for uid, d in payload.items():
+                if not isinstance(d, dict):
+                    continue
+                out[str(uid)] = {
+                    "live_status": d.get("live_status", 0),
+                    "live_title": d.get("title"),
+                    "room_id": str(d["room_id"]) if d.get("room_id") else None,
+                    "live_url": d.get("url"),
+                }
+            return out
+    except Exception as e:
+        logger.error(f"❌ 获取直播批量状态异常: {e}, mids={mids[:5]}...")
+        return None
+
+
+@retry(stop=stop_after_attempt(3),
+       wait=wait_exponential(multiplier=1, min=2, max=10),
+       retry=retry_if_result(is_none))
+async def fetch_bilibili_user_stat(mid: int, client: Optional[httpx.AsyncClient] = None) -> Optional[Dict[str, int]]:
     # base_params = {'vmid':mid}
     # signed_params = await wbi.sign_params(base_params)
 

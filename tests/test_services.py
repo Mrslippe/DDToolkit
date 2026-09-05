@@ -1045,3 +1045,77 @@ def test_scheduled_fetch_not_skipped_when_single_fetch_running(monkeypatch):
         scheduler._yield_request.clear()
     assert ran, "单 V 在跑时定时任务应执行（内容不同，不算接管）"
     assert scheduler._yield_request.is_set() is False
+
+
+# ── v0.6.0：应用启动链（直播状态 → 主要账号信息 → 最新动态） ────────────
+
+def test_startup_live_sweep_applies_live_fields(monkeypatch):
+    """启动链阶段 1：批量直播接口回写 live 字段；跳变落统计快照（直播日历 edge）。"""
+    from app.services import scheduler as sch
+
+    engine, Testing = _snapshot_test_db()
+    db = Testing()
+    v = VTuber(name="直播V")
+    db.add(v)
+    db.commit()
+    db.refresh(v)
+    acc = Account(vtuber_id=v.id, platform="bilibili", platform_uid="11073",
+                  display_name="直播V", followers_count=100, live_status=0)
+    db.add(acc)
+    db.commit()
+    db.refresh(acc)
+    db.close()
+
+    monkeypatch.setattr(sch, "SessionLocal", Testing)
+    monkeypatch.setattr(sch.settings, "STARTUP_LIVE_INTERVAL_MIN", 0.0)
+    monkeypatch.setattr(sch.settings, "STARTUP_LIVE_INTERVAL_MAX", 0.0)
+
+    async def fake_batch(mids, client=None):
+        assert mids == [11073]
+        return {"11073": {"live_status": 1, "live_title": "今晚开播",
+                          "room_id": "123", "live_url": "https://live.bilibili.com/123"}}
+
+    monkeypatch.setattr(sch, "fetch_bilibili_live_batch", fake_batch)
+
+    result = asyncio.run(sch.startup_live_sweep())
+    assert result.success == 1
+
+    db = Testing()
+    acc2 = db.query(Account).first()
+    assert acc2.live_status == 1
+    assert acc2.live_title == "今晚开播"
+    assert acc2.room_id == "123"
+    rows = db.query(AccountStatSnapshot).filter(
+        AccountStatSnapshot.account_id == acc.id).all()
+    assert len(rows) == 1
+    assert rows[0].live_status == 1
+    db.close()
+
+
+def test_fetch_posts_core_limit_latest(monkeypatch, db):
+    """启动链阶段 3：「最新 N 条」模式——同页最多入库 N 条新帖即停（不翻页）。"""
+    from app.services import scheduler as sch
+
+    items = [_post_item(pid) for pid in ("N1", "N2", "N3", "N4")]
+
+    async def fake_dynamics(mid, offset="", client=None):
+        return {"items": items, "has_more": True, "next_offset": "p2"}
+
+    async def fake_detail(_id, client=None):
+        return None
+
+    async def fake_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(sch, "fetch_bilibili_dynamics", fake_dynamics)
+    monkeypatch.setattr(sch, "fetch_dynamic_detail", fake_detail)
+    monkeypatch.setattr("asyncio.sleep", fake_sleep)
+
+    async def run():
+        return await sch._fetch_posts_core(123, 0, 3, db, include_videos=False,
+                                           stop_on_existing=True, limit_latest=2)
+
+    r = asyncio.run(run())
+    assert r.stored == 2
+    assert r.dynamics == 2                    # 仅处理 2 条即停
+    assert db.query(PostModel).count() == 2   # N3/N4 未入库，留待下次渐进消化

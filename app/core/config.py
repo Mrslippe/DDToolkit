@@ -44,6 +44,19 @@ class Settings:
     FETCH_BATCH_COOLDOWN: int = 60      # 休息秒数
     RATE_LIMIT_COOLDOWN: int = 600      # 触发风控后冷却秒数（10 分钟）
 
+    # 启动链（v0.6.0）：应用启动后依次执行 直播状态 → 主要账号信息 → 最新动态
+    STARTUP_CHAIN_ENABLED: bool = True
+    STARTUP_CHAIN_DELAY: float = 4.0    # 启动后延迟秒数（等后端/前端就绪）
+    STARTUP_LIVE_INTERVAL_MIN: float = 0.3   # 直播状态：批量接口（每 100 uid 1 请求），近连续
+    STARTUP_LIVE_INTERVAL_MAX: float = 0.6
+    STARTUP_MAIN_INTERVAL_MIN: float = 2.0   # 主要账号信息：每 V 1 账号（1~2 请求）
+    STARTUP_MAIN_INTERVAL_MAX: float = 3.5
+    STARTUP_DYNAMICS_LIMIT: int = 2          # 最新动态：每个主要账号仅入库最新 N 条新帖
+    STARTUP_DYNAMICS_INTERVAL_MIN: float = 3.0
+    STARTUP_DYNAMICS_INTERVAL_MAX: float = 5.0
+    # 主要活动平台优先级（每 VTuber 仅更新优先级最高的账号）
+    PRIMARY_PLATFORM_ORDER: list[str] = ["bilibili", "weibo"]
+
     # 外部第三方数据源（P4）：zeroroku/danmakus 等「已固定化数据」采集
     EXTERNAL_ENABLED: bool = True
     EXTERNAL_ZEROROKU_ENABLED: bool = True

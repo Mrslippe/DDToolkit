@@ -116,6 +116,21 @@ for 每个账号:
 
 结论：账号链路的**平均速率安全**，突发略高于 20/min 但空间接口阈值较宽。
 
+### 4.3 应用启动链（v0.6.0，devlog/027）
+
+应用启动（lifespan 后）由守护线程串行执行三阶段，各自容错、锁冲突即跳过：
+
+| 阶段 | 函数 | 内容 | 节奏 |
+|---|---|---|---|
+| 1 直播状态 | `startup_live_sweep` | B 站**批量**直播接口（`fetch_bilibili_live_batch`，100 uid/请求）仅回写 live 字段；跳变落统计快照；每批 push 实时快照 | 0.3~0.6s/批 |
+| 2 主要账号 | `startup_main_account_sweep` | 每 VTuber 仅主账号（`PRIMARY_PLATFORM_ORDER` 优先，默认 bilibili）全字段 | 2~3.5s |
+| 3 最新动态 | `startup_latest_dynamics` | 每主账号 1 页动态 + `_fetch_posts_core(limit_latest=2)`：最多入库最新 N 条新帖即停 | 3~5s |
+
+配置：`STARTUP_CHAIN_ENABLED/DELAY`、`STARTUP_LIVE/MAIN/DYNAMICS_INTERVAL_*`、
+`STARTUP_DYNAMICS_LIMIT`、`PRIMARY_PLATFORM_ORDER`。
+共用账号/帖子锁与状态通道（`_fetch_scope` = 'live'/'main'），定时任务内容一致跳过
+判定只认 'full'。
+
 ---
 
 ## 5. 帖子抓取（B 站双流核心 `_fetch_posts_core`）
