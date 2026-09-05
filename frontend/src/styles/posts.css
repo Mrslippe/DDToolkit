@@ -146,6 +146,11 @@
   padding: 8px 16px 24px;
 }
 
+/* 列表视图右侧滚动条：track 右缘收进 4px，滚动条整体左移（用户反馈 2026-09-05） */
+.list-scroll::-webkit-scrollbar-track {
+  margin-right: 4px;
+}
+
 .list-scroll > .list-inner {
   width: 100%;
   max-width: 900px;
