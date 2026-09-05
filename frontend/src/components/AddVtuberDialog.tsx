@@ -104,11 +104,11 @@ export default function AddVtuberDialog({ open, onOpenChange, onAdded }: Props) 
             value={kw}
             onChange={(e) => setKw(e.target.value)}
             placeholder="名字或 UID，如：塔菲 / 1265680561"
-            className="h-9 w-full border border-input bg-background pl-8 pr-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+            className="h-9 w-full rounded-lg border border-input bg-background pl-8 pr-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
           />
         </div>
 
-        <div className="max-h-72 min-h-24 overflow-y-auto border border-border">
+        <div className="max-h-72 min-h-24 overflow-y-auto rounded-lg border border-border">
           {searching && (
             <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
               <Loader2 className="size-4 animate-spin" /> 检索中…
@@ -136,7 +136,7 @@ export default function AddVtuberDialog({ open, onOpenChange, onAdded }: Props) 
                   onClick={() => adopt(it)}
                   className="flex w-full items-center gap-3 px-3 py-2 text-left transition-colors hover:bg-[var(--sel-bg-hover)] disabled:opacity-60"
                 >
-                  <span className="shrink-0 rounded-none bg-[var(--c-rail)] px-1.5 py-0.5 text-[10px] leading-none text-white">
+                  <span className="shrink-0 rounded-md bg-[var(--c-rail)] px-1.5 py-0.5 text-[10px] leading-none text-white">
                     {it.platform}
                   </span>
                   <span className="min-w-0 flex-1">

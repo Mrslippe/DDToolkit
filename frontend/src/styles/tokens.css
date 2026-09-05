@@ -66,10 +66,13 @@
   --c-text-sub: #5b6c7e;   /* 加深一档：浅粉底(--secondary)上也稳 ≥4.5:1 对比 */
   --c-text-on-primary: #ffffff;
 
-  /* 圆角 / 阴影：极简方形语言——卡片与选中框零圆角零阴影 */
+  /* 圆角 / 阴影：极简方形语言——卡片与选中框零圆角零阴影；
+     v0.6.1 弹窗层豁免（用户 2026-09-05 参考风格）：二级界面 = 圆角卡片 + 柔和阴影 */
   --radius-card: 0px;
   --radius-sm: 0px;
   --shadow-card: none;
+  --radius-dialog: 12px;
+  --shadow-dialog: 0 4px 16px rgba(15, 23, 42, 0.1);
   /* 选中态：左缘主色竖条 + 浅粉底 */
   --sel-bar: var(--c-primary-deep);
   --sel-bg: #fff0f3;

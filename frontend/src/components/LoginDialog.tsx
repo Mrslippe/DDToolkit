@@ -172,7 +172,7 @@ export default function LoginDialog({ open, onOpenChange }: Props) {
             <button
               key={p}
               type="button"
-              className={`flex-1 border py-1.5 text-sm transition-colors ${
+              className={`flex-1 rounded-lg border py-1.5 text-sm transition-colors ${
                 platform === p
                   ? 'border-primary bg-primary/10 font-medium text-primary'
                   : 'border-border text-muted-foreground hover:bg-[var(--sel-bg-hover)]'
@@ -220,7 +220,7 @@ export default function LoginDialog({ open, onOpenChange }: Props) {
               {(phase === 'expired' || phase === 'failed') && (
                 <button
                   type="button"
-                  className="flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-xs text-muted-foreground hover:bg-[var(--sel-bg-hover)]"
+                  className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground hover:bg-[var(--sel-bg-hover)]"
                   onClick={() => void start(platform)}
                 >
                   <RefreshCw className="size-3.5" /> 刷新二维码

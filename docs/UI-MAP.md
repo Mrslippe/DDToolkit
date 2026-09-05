@@ -281,7 +281,8 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 |---|---|---|---|
 | **交互层** float-pill | 一切可点击触发 | 斜切(-10°)白卡 + 3px 圆角 + 阴影（唯一带阴影）；hover 渐灰；`.on` 主色填充；`.float-pill--danger` 红字 | 侧栏工具行、时间钮、bg-tools、**header-actions 五钮**（更新动态 `.on` 主操作、解除订阅 danger） |
 | **信息层** flat-chip | 只读展示 | 平面 **3px、无阴影、不斜切**；色底（粉/珊瑚）或发丝边 | stat-pill（191×37 色底去白边）、faction-badge、type-chip、stat-badge、post-card-type、live-tag |
-| **表面层** surfaces | 卡片/面板/弹窗 | **0px 方形** + 发丝边 | post-card、posts-panel、弹窗/下拉卡 |
+| **弹窗层** dialogs | 弹窗/浮层（二级界面） | **圆角卡片 12px + 柔和阴影 `--shadow-dialog` (0 4px 16px 10%) + 发丝边**；分区标题 600 加粗 + 上方发丝分隔；选择控件描边 8px 圆角、激活=粉底(`--c-primary-deep`)白字；底部主操作=粉底圆角、次要=描边圆角 | 注入 Dialog/AlertDialog/Select 包裹层 + time-pop/filter-pop 自定义浮层 |
+| **表面层** surfaces | 卡片/面板 | **0px 方形** + 发丝边 | post-card、posts-panel |
 
 **用户审美特例（覆盖统一基准，勿在后续回合误改回）**：
 - `.live-tag`（卡片页直播徽标）圆角 **8px**
@@ -291,7 +292,7 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 - `post-card`（帖子卡片）**浮片化特例**：**2px 圆角 + `var(--pill-shadow)`、去发丝边**；hover 上浮 2px + 阴影加深 + **标题变色 `--c-accent`**；`.post-card-cover` 无封面时 `.post-card-cover-paper` 米白纸纹斜条 + 居中大标题
 
 **豁免**：搜索胶囊（侧栏 `list-search`、帖子页 `.search-float`，用户指定原样）、滚动条圆头、头像与状态圆点（圆形）。
-**二期待办**：✅ P6-3 已清——对话框内残留圆角（AddVtuberDialog 平台标 rounded-xs → 0、TopBar 诊断框 rounded → 0）、dialog/sheet/alert-dialog `shadow-lg` → `shadow-none`（表面层契约：阴影为 float-pill 专属）、time-pop/filter-pop 去阴影（0 圆角+发丝边）；分页钮不存在（无限滚动，N/A）。
+**二期待办**：✅ P6-3 曾清（弹窗方形去阴影）；**v0.6.1 用户参考风格修订**——弹窗层从表面层剥离（见上表）：dialog/sheet/alert-dialog 恢复 `rounded-xl` + `--shadow-dialog`，time-pop/filter-pop 恢复圆角+柔和阴影并加分区发丝分隔/描边圆角按钮（P6-3 条目以本条为准）；AddVtuberDialog/LoginDialog/BatchFetchDialog 内部控件圆角化（平台标/标签/按钮 → rounded-lg）；AlertDialog 底部按钮保持「主粉底+次描边」；分页钮不存在（无限滚动，N/A）。
 
 ## D. 字体（tokens.css @font-face）
 

@@ -744,7 +744,8 @@ color: #fff;
   }
 }
 
-/* 独立筛选弹窗：锚定触发器下方（与 time-pop 同交互模式：白底方卡+发丝边+点外关闭） */
+/* 独立筛选弹窗：锚定触发器下方（与 time-pop 同交互模式）——
+   弹窗层契约（v0.6.1 用户参考风格）：圆角卡片 12px + 柔和阴影 + 发丝边 */
 .filter-wrap {
   position: relative;
   /* 工具行唯一可收缩项会先被压掉（行内容 447px > 可用 428px），
@@ -761,7 +762,8 @@ color: #fff;
   padding: 12px;
   background: #fff;
   border: 1px solid var(--c-border);
-  /* 表面层契约（P6-3）：0 圆角 + 发丝边，去阴影（阴影为交互层 float-pill 专属） */
+  border-radius: var(--radius-dialog);
+  box-shadow: var(--shadow-dialog);
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -771,10 +773,19 @@ color: #fff;
   display: flex;
   flex-direction: column;
   gap: 6px;
+  /* 分区标题 + 发丝分隔线（参考风格：粗体分区 + 上方 hairline） */
+  border-top: 1px solid var(--c-border);
+  padding-top: 8px;
+}
+
+.filter-pop-group:first-child {
+  border-top: none;
+  padding-top: 0;
 }
 
 .filter-pop-label {
   font-size: 12px;
+  font-weight: 600;
   color: var(--c-text-sub);
 }
 
@@ -785,14 +796,20 @@ color: #fff;
 }
 
 .filter-chip {
-  height: 24px;
-  padding: 0 10px;
+  height: 26px;
+  padding: 0 12px;
   border: 1px solid var(--c-border);
+  border-radius: 8px;
   background: #fff;
   color: var(--c-text-main);
   font-family: inherit;
   font-size: 12px;
   cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.filter-chip:hover {
+  background: var(--pill-bg-hover);
 }
 
 .filter-chip.on {
@@ -804,17 +821,21 @@ color: #fff;
 .filter-pop-actions {
   display: flex;
   justify-content: flex-end;
+  border-top: 1px solid var(--c-border);
+  padding-top: 10px;
 }
 
 .filter-pop-actions button {
-  height: 24px;
-  padding: 0 10px;
+  height: 28px;
+  padding: 0 16px;
   border: 1px solid var(--c-border);
+  border-radius: 8px;
   background: #fff;
   color: var(--c-text-main);
   font-family: inherit;
   font-size: 12px;
   cursor: pointer;
+  transition: background-color 0.15s ease;
 }
 
 .filter-pop-actions button:hover {

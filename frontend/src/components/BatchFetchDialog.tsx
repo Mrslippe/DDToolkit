@@ -101,9 +101,9 @@ export default function BatchFetchDialog({ open, onOpenChange }: Props) {
               disabled={busyKey !== null || (fetchBusy && a.key !== 'archive')}
               title={fetchBusy && a.key !== 'archive' ? '已有抓取任务进行中，请稍后再试' : undefined}
               onClick={() => run(a)}
-              className="flex items-center gap-3 border border-border p-3 text-left transition-colors hover:bg-[var(--sel-bg-hover)] disabled:opacity-60"
+              className="flex items-center gap-3 rounded-lg border border-border p-3 text-left transition-colors hover:bg-[var(--sel-bg-hover)] disabled:opacity-60"
             >
-              <span className="flex size-9 shrink-0 items-center justify-center bg-secondary text-secondary-foreground">
+              <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-secondary text-secondary-foreground">
                 {a.icon}
               </span>
               <span className="min-w-0 flex-1">
