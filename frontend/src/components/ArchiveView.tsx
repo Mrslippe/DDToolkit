@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import { api } from '../api/api'
-import type { Account, FanTrendPoint, GiftDay, LiveSession, ThirdpartyVtuber, VTuber } from '../api/types'
+import type { Account, FanTrendPoint, GiftDay, LiveSession, VTuber } from '../api/types'
 import AccountPicker from './AccountPicker'
 import FanTrendChart from './FanTrendChart'
 import LiveCalendar from './LiveCalendar'
-import ProfileCard from './ProfileCard'
 import UpcomingEventsCard from './UpcomingEventsCard'
 
 interface Props {
@@ -84,8 +83,7 @@ function TrendCard({ vtuber, refreshTick }: { vtuber: VTuber; refreshTick: numbe
 }
 
 /** 直播日历卡：内部账号切换 + 独立拉取（场次 + 礼物日） */
-function CalendarCard({ vtuber, refreshTick }: { vtuber: VTuber; refreshTick: number }) {
-  const { accounts, selected, setSelected } = useArchiveAccount(vtuber)
+function CalendarCard({ vtuber, refreshTick }: { vtuber: VTuber; refreshTick: number }) {  const { accounts, selected, setSelected } = useArchiveAccount(vtuber)
   const [sessions, setSessions] = useState<LiveSession[]>([])
   const [giftDays, setGiftDays] = useState<GiftDay[]>([])
   const [loading, setLoading] = useState(true)
@@ -132,40 +130,13 @@ function CalendarCard({ vtuber, refreshTick }: { vtuber: VTuber; refreshTick: nu
 }
 
 /** 档案卡包装：内部账号切换（企划查询 + 房间号跟随所选账号） */
-function ProfileSection({ vtuber, refreshTick }: { vtuber: VTuber; refreshTick: number }) {
-  const { accounts, selected, setSelected } = useArchiveAccount(vtuber)
-  const [thirdparty, setThirdparty] = useState<ThirdpartyVtuber[]>([])
-
-  useEffect(() => {
-    if (!selected) return
-    let cancelled = false
-    api.externalsVtuberByUid(selected.platform_uid)
-      .then((tp) => !cancelled && setThirdparty(tp))
-      .catch(() => !cancelled && setThirdparty([]))
-    return () => {
-      cancelled = true
-    }
-  }, [selected?.platform_uid, refreshTick])
-
-  return (
-    <section className="archive-section">
-      <div className="archive-section-head">
-        <span className="archive-section-title">档案</span>
-        <div className="archive-section-right">
-          <span className="archive-section-note">企划 / 公会 / 设定</span>
-          <AccountPicker accounts={accounts} value={selected} onChange={setSelected} />
-        </div>
-      </div>
-      <ProfileCard vtuber={vtuber} account={selected} thirdparty={thirdparty} />
-    </section>
-  )
-}
-
 /**
  * 档案视图（P5→P7，2026-09-06 布局改版）：
  * 上行双列 = 重要日期（窄 · vtuber 级，无账号切换器）+ 直播日历（宽）；
- * 下行全宽 = 粉丝趋势 → 档案卡。
+ * 下行全宽 = 粉丝趋势。
  * P7 布局参考用户图（重要日期 + 直播日历并排，趋势全宽在下）。
+ * P7 追加：档案卡（企划/公会/设定）已移出到独立「档案」视图（ProfileView），
+ * 此处仅保留 重要日期 / 直播日历 / 趋势。
  */
 export default function ArchiveView({ vtuber, refreshTick }: Props) {
   return (
@@ -175,7 +146,6 @@ export default function ArchiveView({ vtuber, refreshTick }: Props) {
         <CalendarCard vtuber={vtuber} refreshTick={refreshTick} />
       </div>
       <TrendCard vtuber={vtuber} refreshTick={refreshTick} />
-      <ProfileSection vtuber={vtuber} refreshTick={refreshTick} />
     </div>
   )
 }

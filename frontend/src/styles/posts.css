@@ -1402,6 +1402,115 @@ button.live-calendar-cell:hover {
   min-width: 120px;
 }
 
+/* 粉丝趋势（P5→P7：模式切换 + Brush 时间轴缩放） */
+.fan-chart-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fan-chart-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.fan-chart-mode {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--c-bg-page);
+  border: 1px solid var(--c-border);
+  border-radius: 999px;
+  padding: 2px;
+}
+
+.fan-chart-mode-btn {
+  border: none;
+  background: transparent;
+  color: var(--c-text-sub);
+  font-size: 11.5px;
+  line-height: 20px;
+  padding: 0 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.fan-chart-mode-btn:hover {
+  color: var(--c-text-main);
+}
+
+.fan-chart-mode-btn.on {
+  color: var(--c-text-main);
+  font-weight: 600;
+  background: var(--c-bg-card);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+}
+
+.fan-chart-reset {
+  border: none;
+  background: transparent;
+  color: var(--c-text-sub);
+  font-size: 11.5px;
+  cursor: pointer;
+  font-family: inherit;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.fan-chart-reset:hover {
+  color: var(--c-accent);
+}
+
+/* 档案卡视图（P7 追加 ProfileView）：账号列表 */
+.profile-account-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.profile-account-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+  padding: 4px 2px;
+  border-bottom: 1px dashed rgba(210, 216, 222, 0.35);
+}
+
+.profile-account-row:last-child {
+  border-bottom: none;
+}
+
+.profile-account-name {
+  font-size: 12.5px;
+  color: var(--c-text-main);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+}
+
+.profile-account-meta {
+  font-size: 11px;
+  color: var(--c-text-sub);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.profile-account-live {
+  font-size: 10.5px;
+  color: var(--c-live);
+  border: 1px solid rgba(216, 103, 79, 0.45);
+  border-radius: 999px;
+  padding: 0 6px;
+  line-height: 16px;
+}
+
 /* 档案卡 */
 .profile-card {
   display: flex;

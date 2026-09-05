@@ -138,7 +138,7 @@
 | 名称 | 类名 | 说明 |
 |---|---|---|
 | 光条 | `.glow-bar` | 443px 白色渐变(`rgba(255,255,255,.68)` 中心)胶囊 |
-| 视图钮 | `.view-btn.on/.off` | 四枚：**档案(`BarChart3`)→`setView('archive')`** / **卡片(`LayoutGrid`)→`setView('cards')`** / **列表(`AlignJustify`)→`setView('list')`** / 邮件(`Mail`)·占位；on=.8 off=.4，激活跟随 `view` |
+| 视图钮 | `.view-btn.on/.off` | 五枚：**档案(`BarChart3`)→`setView('archive')`** / **卡片(`LayoutGrid`)→`setView('cards')`** / **列表(`AlignJustify`)→`setView('list')`** / **档案卡(`Fingerprint`)→`setView('profile')`**（P7 追加）/ 邮件(`Mail`)·占位；on=.8 off=.4，激活跟随 `view` |
 
 **cards 视图（展示页 / 默认）**
 | 名称 | 类名 | 说明 |
@@ -180,9 +180,10 @@
 | 视图容器 | `.archive-view` + `.archive-grid-top` | **v0.7.0 布局**：上行双列（重要日期窄 4fr + 直播日历宽 7fr，<900px 回落单列），下行全宽（趋势→档案卡）；`overflow-y:auto`，padding `16px 20px 24px`；**卡片自治**：各卡内置账号切换器与数据拉取（不共用列表操作钮行） |
 | 账号切换器 | `<AccountPicker>` | 卡片内部紧凑 Select（平台·昵称），单账号不渲染；默认=B站账号，切 V 保留同 id 选中——**2026-09-05 视图账号隔离**：不再接收页面级 selectedAccount（list 切账号不联动 archive 三卡）；重要日期卡为 vtuber 级**不挂**切换器 |
 | 重要日期卡 | `<UpcomingEventsCard>` `.event-*` | **P7 新增**：纪念日（生日 MM-DD / 出道日 YYYY-MM-DD 年循环，行内编辑 `PUT /vtuber/{id}`，出道显示「N 周年」）+ 手动活动（添加/删除 `POST/DELETE /vtuber/{id}/events`）+ 自动预约（`GET /vtuber/{id}/future-reservations`，reservation 帖解析，只读）；行格式=标题+日期+剩余天数胶囊（≤3 天警示色）；空态引导添加 |
-| 趋势曲线 | `<FanTrendChart>`（shadcn Chart/recharts 3.8，`components/ui/chart.tsx` 为 registry new-york-v4 版） | **双序列**：self 直采实线（`--chart-1` 主粉）/ zeroroku 回填虚线（`--chart-2` 灰蓝）；X=日期（月刻度 48px 间隔）、Y=`formatCount` 万缩写；Tooltip=日期+粉丝数+图例；数据 `GET /account/{id}/fan-trend`（服务端按天分桶） |
+| 趋势曲线 | `<FanTrendChart>`（shadcn Chart/recharts 3.8，`components/ui/chart.tsx` 为 registry new-york-v4 版） | **P7 增强**：① 模式分段切换（趋势/每日增减）；② 趋势模式=双序列（self 实线主粉 / zeroroku 虚线灰蓝）；③ 每日增减=按天 diff 柱状图（正增主粉/负增警示色，逐柱 Cell）；④ Brush 时间轴缩略图（可拖拽选区缩放 + 重置缩放钮，模式切换重置不残留）；X=日期（月刻度 48px 间隔）、Y=`formatCount` 万缩写；Tooltip=日期+数值+图例；数据 `GET /account/{id}/fan-trend`（服务端按天分桶） |
 | 直播日历 | `<LiveCalendar>` `.live-calendar*` | **P7 改造**：月网格（周一开头，可翻月）；格内=场次条目 `[类型徽章] HH:mm 标题截断`（最多 2 条，超出 `+N 场`），礼物日保留粉底+金额徽标；点击有数据的格子 → 弹窗层规格浮层 `.live-day-pop`（全量场次+起止时长+礼物聚合）；类型徽章 = `utils/liveType.ts` 标题关键词推断（庆典/歌回/电台/杂谈/游戏/直播） |
 | 档案卡 | `<ProfileCard>` `.profile-card*` | **企划｜公会 两列**（2026-09-05 定稿：阵营=企划=公会——企划=Select 编辑，选项自动建议第三方索引 `group_name`，一键「采纳」写 `faction`，未来接侧栏企划槽；公会=只读占位「未收录」，先放着）+ 生日/出道日/房间号（跟随卡内所选账号）、设定集（Collapsible 折叠）；数据 `GET /externals/vtubers/by-uid` |
+| **档案卡视图（P7 追加）** | `<ProfileView>` `.archive-view` | 独立 `profile` 视图（Fingerprint 钮），专门展示详细设定：档案卡（上方，同 `ProfileCard` 自治账号切换）+ **账号一览卡**（`.profile-account-*`：平台标/昵称/粉丝/房间号/直播中，全部账号） |
 
 **联动刷新（跨组件事件）**
 | 事件 | 触发方 | 消费方 |

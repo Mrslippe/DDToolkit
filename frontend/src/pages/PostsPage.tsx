@@ -5,6 +5,7 @@ import {
   AlignJustify,
   BarChart3,
   Calendar,
+  Fingerprint,
   ImagePlus,
   LayoutGrid,
   Mail,
@@ -57,6 +58,7 @@ import { mergeAccountSnapshots, mergeVtuberSnapshots } from '../utils/accountSna
 import PostCard from '../components/PostCard'
 import PostDetailDrawer from '../components/PostDetailDrawer'
 import ArchiveView from '../components/ArchiveView'
+import ProfileView from '../components/ProfileView'
 import './../styles/posts.css'
 
 const PAGE_SIZE = 20
@@ -69,6 +71,9 @@ const PILL_BG: Record<string, string> = {
 
 /** 场景退场时长（ms）：与 layout.css `.scene-exit` 的 0.2s 保持同步 */
 const EXIT_MS = 200
+
+/** 视图枚举（P7 追加 profile：档案卡详情视图） */
+type AppView = 'cards' | 'list' | 'archive' | 'profile'
 
 /** 筛选行分组 chip：key 为逗号合并类型（后端 type 参数支持逗号分隔多型 in 过滤）。
  *  高频型两两归组（投稿/图文）压缩 chips 宽度，保证不把右侧搜索栏挤到下一行；
@@ -140,8 +145,8 @@ export default function PostsPage() {
   const [addingAccount, setAddingAccount] = useState(false)
   const fetchBusy = useFetchBusy()
   const busyTip = '已有抓取任务进行中，请稍后再试'
-  // 双视图：cards=展示页（默认）/ list=帖子列表页
-  const [view, setView] = useState<'cards' | 'list' | 'archive'>('cards')
+  // 视图：cards=展示页（默认）/ list=帖子列表页 / archive=档案 / profile=档案卡（P7 移出）
+  const [view, setView] = useState<AppView>('cards')
   // 列表页右侧操作钮组：收起态只露 [展开钮][更新动态]，展开向左滑出全部四钮
   const [actionsOpen, setActionsOpen] = useState(false)
   const navigate = useNavigate()
@@ -218,7 +223,7 @@ export default function PostsPage() {
   // 快速连点：中止旧预取、回退退场（旧内容回到可见），新目标就绪后重来。
   const [scene, setScene] = useState<{
     acc: number
-    view: 'cards' | 'list' | 'archive'
+    view: AppView
     exiting: boolean
   }>({ acc: vtuberId, view, exiting: false })
   const [prefetchTick, bumpPrefetchReady] = useState(0)
@@ -239,7 +244,7 @@ export default function PostsPage() {
   const filterRef = useRef({ refreshTick, typeFilter, archived, deletedOnly, searchKw, dateFrom, dateTo })
   filterRef.current = { refreshTick, typeFilter, archived, deletedOnly, searchKw, dateFrom, dateTo }
 
-  const startPrefetch = (acc: number, targetView: 'cards' | 'list' | 'archive') => {
+  const startPrefetch = (acc: number, targetView: AppView) => {
     const pf = prefetchRef.current
     if (pf && pf.acc === acc) return // 同目标：在途或已就绪，复用
     const controller = new AbortController()
@@ -805,7 +810,7 @@ return (
           <button
             type="button"
             className={`view-btn ${view === 'archive' ? 'on' : 'off'}`}
-            title="档案（趋势 / 直播日历 / 企划设定）"
+            title="档案（重要日期 / 直播日历 / 粉丝趋势）"
             onClick={() => setView('archive')}
           >
             <BarChart3 className="size-6" />
@@ -825,6 +830,14 @@ return (
             onClick={() => setView('list')}
           >
             <AlignJustify className="size-6" />
+          </button>
+          <button
+            type="button"
+            className={`view-btn ${view === 'profile' ? 'on' : 'off'}`}
+            title="档案卡（企划 / 设定 / 账号）"
+            onClick={() => setView('profile')}
+          >
+            <Fingerprint className="size-6" />
           </button>
           <button type="button" className="view-btn off" title="动态视图 · 开发中">
             <Mail className="size-6" />
@@ -992,6 +1005,10 @@ return (
 
         {vtuber && scene.view === 'archive' && (
           <ArchiveView vtuber={vtuber} refreshTick={refreshTick} />
+        )}
+
+        {vtuber && scene.view === 'profile' && (
+          <ProfileView vtuber={vtuber} refreshTick={refreshTick} />
         )}
 
         {scene.view === 'list' && (
