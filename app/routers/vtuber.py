@@ -13,7 +13,7 @@ from app.core.database import get_db
 from app.models.vtuber import VTuber, Post, Account
 from app.repositories.vtuber_repo import (
     VTuberRepo, AccountRepo, PostRepo, AccountStatSnapshotRepo,
-    LiveGiftDayRepo, ThirdpartyVtuberRepo,
+    LiveGiftDayRepo, ThirdpartyVtuberRepo, VtuberEventRepo,
 )
 from app.schemas.vtuber import (
     VTuberOut, VTuberCreate, VTuberUpdate,
@@ -21,6 +21,7 @@ from app.schemas.vtuber import (
     PostOut, PostCreate, PostUpdate, PostPage, PostStats,
     AccountStatSnapshotOut, LiveGiftDayOut, ThirdpartyVtuberOut,
     FanTrendPoint, LiveSessionOut,
+    VtuberEventOut, VtuberEventCreate, FutureReservationOut,
 )
 from app.services import pool
 from app.services.post_text import extract_post_text
@@ -297,12 +298,61 @@ def live_sessions(account_id: int, db: Session = Depends(get_db)):
     """直播场次（P5）：由 self 快照 live_status 转移推导（5min 粒度近似）。
 
     0→1 开场、1→0 收场；进行中场次 end_at=None。直播日程可据此展示。
+    P7：场次附带 live_title（场次内最后一条非空标题快照）。
     """
     if not AccountRepo(db).get(account_id):
         raise HTTPException(404, f"Account id={account_id} 不存在")
     return [
         LiveSessionOut(account_id=account_id, **s)
         for s in AccountStatSnapshotRepo(db).live_sessions(account_id)
+    ]
+
+
+# ── 重要日期·大型活动（P7，v0.7.0） ────────────────────────────────
+
+@router.get("/vtuber/{vtuber_id}/events", response_model=list[VtuberEventOut])
+def list_vtuber_events(vtuber_id: int, db: Session = Depends(get_db)):
+    """手动维护的重要日期/活动条目（vtuber_events），按日期升序。"""
+    if not VTuberRepo(db).get(vtuber_id):
+        raise HTTPException(404, f"VTuber id={vtuber_id} 不存在")
+    return [
+        VtuberEventOut.model_validate(e, from_attributes=True)
+        for e in VtuberEventRepo(db).list_by_vtuber(vtuber_id)
+    ]
+
+
+@router.post("/vtuber/{vtuber_id}/events", response_model=VtuberEventOut,
+             status_code=status.HTTP_201_CREATED)
+def create_vtuber_event(vtuber_id: int, data: VtuberEventCreate,
+                        db: Session = Depends(get_db)):
+    """手动添加重要日期/活动条目（卡片内「添加活动」入口）。"""
+    if not VTuberRepo(db).get(vtuber_id):
+        raise HTTPException(404, f"VTuber id={vtuber_id} 不存在")
+    e = VtuberEventRepo(db).create(vtuber_id, data.title, data.event_date)
+    return VtuberEventOut.model_validate(e, from_attributes=True)
+
+
+@router.delete("/vtuber/event/{event_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_vtuber_event(event_id: int, db: Session = Depends(get_db)):
+    """删除手动条目。"""
+    if not VtuberEventRepo(db).delete(event_id):
+        raise HTTPException(404, f"Event id={event_id} 不存在")
+
+
+@router.get("/vtuber/{vtuber_id}/future-reservations",
+            response_model=list[FutureReservationOut])
+def future_reservations(vtuber_id: int, days: int = Query(90, ge=1, le=365),
+                        db: Session = Depends(get_db)):
+    """未来直播预约（自动化，来自 reservation 帖 desc1 文本解析）。
+
+    过滤：button_text=已结束 / 时刻已过 / 超出未来 days 天；按开始时间升序。
+    start_at 为服务端推断的北京 wall-clock（naive，无时区语义）。
+    """
+    if not VTuberRepo(db).get(vtuber_id):
+        raise HTTPException(404, f"VTuber id={vtuber_id} 不存在")
+    return [
+        FutureReservationOut(**r)
+        for r in VtuberEventRepo(db).future_reservations(vtuber_id, days=days)
     ]
 
 

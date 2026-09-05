@@ -912,7 +912,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* ── 档案视图（P5）：趋势 / 直播日历 / 档案卡 ── */
+/* ── 档案视图（P5→P7）：趋势 / 直播日历 / 档案卡 ── */
 
 .float-pill--sm {
   font-size: 12px;
@@ -927,6 +927,20 @@
   padding: 16px 20px 24px;
   overflow-y: auto;
   height: 100%;
+}
+
+/* P7：上行双列（重要日期窄 + 直播日历宽），窄屏回落单列 */
+.archive-grid-top {
+  display: grid;
+  grid-template-columns: minmax(240px, 4fr) minmax(0, 7fr);
+  gap: 14px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .archive-grid-top {
+    grid-template-columns: 1fr;
+  }
 }
 
 .archive-section {
@@ -973,7 +987,7 @@
   color: var(--c-live);
 }
 
-/* 直播日历 */
+/* 直播日历（P5→P7：格内场次条目 + 点击浮层） */
 .live-calendar {
   display: flex;
   flex-direction: column;
@@ -1011,6 +1025,12 @@
   font-variant-numeric: tabular-nums;
 }
 
+.live-calendar-note {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--c-text-sub);
+}
+
 .live-calendar-grid {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
@@ -1027,18 +1047,40 @@
 .live-calendar-cell {
   position: relative;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 30px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  min-height: 56px;
+  padding: 3px 4px;
   border: 1px solid rgba(210, 216, 222, 0.35);
-  border-radius: 3px;
+  border-radius: 4px;
   font-size: 11.5px;
   color: var(--c-text-main);
   font-variant-numeric: tabular-nums;
+  text-align: left;
+  background: transparent;
+  cursor: default;
+  overflow: hidden;
+}
+
+button.live-calendar-cell {
+  cursor: pointer;
+  font-family: inherit;
+}
+
+button.live-calendar-cell:hover {
+  border-color: var(--c-primary);
+}
+
+.live-calendar-cell.open {
+  border-color: var(--c-primary);
+  background: color-mix(in srgb, var(--c-primary) 6%, transparent);
 }
 
 .live-calendar-cell.empty {
   border: none;
+  background: transparent;
+  cursor: default;
 }
 
 .live-calendar-cell.gift {
@@ -1046,20 +1088,318 @@
   border-color: rgba(251, 119, 161, 0.45);
 }
 
+.live-calendar-day {
+  font-size: 11px;
+  line-height: 13px;
+  color: var(--c-text-sub);
+  align-self: flex-start;
+}
+
 .live-calendar-cell.live .live-calendar-day {
   color: var(--c-accent);
   font-weight: 600;
 }
 
-.live-calendar-mark {
-  position: absolute;
-  bottom: 3px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: #3aa76d;
+/* 格内场次条目（P7）：一行 = 徽章 + 时间 + 标题截断 */
+.live-calendar-entry {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  width: 100%;
+  min-width: 0;
+  line-height: 15px;
+}
+
+.live-calendar-entry-time {
+  font-size: 10px;
+  color: var(--c-text-sub);
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.live-calendar-entry-title {
+  font-size: 10px;
+  color: var(--c-text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.live-calendar-more {
+  font-size: 10px;
+  color: var(--c-text-sub);
+  padding-left: 2px;
+}
+
+.live-calendar-gift {
+  font-size: 10px;
+  color: var(--c-live);
+  padding-left: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* 直播类型徽章（P7：标题关键词推断，纯展示） */
+.live-type {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  font-size: 9.5px;
+  line-height: 13px;
+  padding: 0 4px;
+  border-radius: 3px;
+  color: #fff;
+}
+
+.live-type--game { background: #5b8def; }
+.live-type--chat { background: #8b6fd8; }
+.live-type--song { background: #e8845e; }
+.live-type--radio { background: #4aa8a0; }
+.live-type--anniv { background: #d8674f; }
+.live-type--live { background: #94a3b8; }
+
+/* 场次详情浮层（P7 点击格子弹出；弹窗层规格：12px 圆角 + 柔和阴影） */
+.live-day-pop {
+  margin-top: 4px;
+  border-radius: 12px;
+  background: var(--c-bg-card);
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.1);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.live-day-pop-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.live-day-pop-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-text-main);
+}
+
+.live-day-pop-head button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  color: var(--c-text-sub);
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.live-day-pop-head button:hover {
+  color: var(--c-accent);
+}
+
+.live-day-pop-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 11.5px;
+}
+
+.live-day-pop-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.live-day-pop-title-text {
+  color: var(--c-text-main);
+  line-height: 16px;
+  word-break: break-all;
+}
+
+.live-day-pop-meta {
+  font-size: 10.5px;
+  color: var(--c-text-sub);
+  font-variant-numeric: tabular-nums;
+}
+
+.live-day-pop-gift {
+  font-size: 11px;
+  color: var(--c-live);
+  border-top: 1px dashed rgba(210, 216, 222, 0.5);
+  padding-top: 4px;
+}
+
+/* 重要日期卡（P7：纪念日 / 手动活动 / 自动预约） */
+.event-add-form {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0 8px;
+}
+
+.event-input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--c-border);
+  border-radius: 4px;
+  background: var(--c-bg-page);
+  color: var(--c-text-main);
+  font-size: 12px;
+  font-family: inherit;
+}
+
+.event-input:focus {
+  outline: none;
+  border-color: var(--c-primary);
+}
+
+.event-input--date {
+  flex: none;
+  width: 128px;
+}
+
+.event-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.event-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 4px 2px;
+  border-bottom: 1px dashed rgba(210, 216, 222, 0.35);
+}
+
+.event-row:last-child {
+  border-bottom: none;
+}
+
+.event-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.event-row-title {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12.5px;
+  color: var(--c-text-main);
+  font-weight: 600;
+  line-height: 17px;
+}
+
+.event-row-title svg {
+  color: var(--c-accent);
+  flex: none;
+}
+
+.event-row-title2 {
+  font-size: 11px;
+  color: var(--c-text-sub);
+  line-height: 15px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.event-row-extra {
+  font-size: 10.5px;
+  color: var(--c-accent);
+}
+
+.event-row-days {
+  flex: none;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--c-text-sub);
+  background: var(--c-bg-page);
+  border: 1px solid var(--c-border);
+  border-radius: 999px;
+  padding: 1px 8px;
+  line-height: 17px;
+}
+
+.event-row-days.soon {
+  color: var(--c-live);
+  border-color: rgba(216, 103, 79, 0.45);
+  background: rgba(216, 103, 79, 0.06);
+}
+
+.event-row--reservation .event-row-title svg {
+  color: #4aa8a0;
+}
+
+.event-row-ops {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.event-row:hover .event-row-ops {
+  opacity: 1;
+}
+
+.event-op {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  color: var(--c-text-sub);
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.event-op:hover {
+  color: var(--c-accent);
+  background: rgba(91, 141, 239, 0.08);
+}
+
+.event-op--danger:hover {
+  color: var(--c-live);
+  background: rgba(216, 103, 79, 0.08);
+}
+
+.event-edit-panel {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 8px 0 2px;
+  flex-wrap: wrap;
+}
+
+.event-edit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 10.5px;
+  color: var(--c-text-sub);
+  flex: 1;
+  min-width: 120px;
 }
 
 /* 档案卡 */

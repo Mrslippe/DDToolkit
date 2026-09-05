@@ -657,7 +657,10 @@ def _extract_origin(item: dict) -> dict | None:
 
 def _extract_reservation(md: dict) -> dict | None:
     """直播预约卡片：module_dynamic.additional.reserve → 精简结构。
-    status: 0=未预约(可预约) 1=已结束 2=已预约"""
+    status: 0=未预约(可预约) 1=已结束 2=已预约
+    title（P7，v0.7.0）：活动名（如「直播预约|七夕转转转」，原始形如
+    "直播预约|xxx"）；rid=直播间号。旧帖 body_json 无此字段，读取端
+    需回退 raw_json（见 repositories.future_reservations）。"""
     additional = md.get("additional") or {}
     reserve = additional.get("reserve")
     if not isinstance(reserve, dict):
@@ -677,6 +680,8 @@ def _extract_reservation(md: dict) -> dict | None:
         "desc1": desc1.get("text", "") if isinstance(desc1, dict) else desc1,
         "desc2": desc2.get("text", "") if isinstance(desc2, dict) else desc2,
         "reserve_total": reserve.get("reserve_total", 0),
+        "title": reserve.get("title") or "",
+        "rid": reserve.get("rid"),
     }
 
 

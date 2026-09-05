@@ -1,9 +1,12 @@
-from datetime import datetime, timezone
+import json
+import re
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
-from app.models.vtuber import VTuber, Account, Post, AccountStatSnapshot, LiveGiftDay, ThirdpartyVtuber
+from app.models.vtuber import (VTuber, Account, Post, AccountStatSnapshot,
+                               LiveGiftDay, ThirdpartyVtuber, VtuberEvent)
 
 
 # ── VTuber ─────────────────────────────────────────────────────────
@@ -173,9 +176,12 @@ class AccountStatSnapshotRepo:
 
         0→1 开场、1→0 收场；进行中的场次（无收场转移）end_at=None。
         5min 粒度近似（数据源即本工具 5 分钟轮询快照，非平台精确起止）。
+        P7（v0.7.0）：场次标题 = 场次内最后一条非空 live_title 快照
+        （live_title 列本就随快照落库，无需迁移）。
         """
         rows = (
-            self.db.query(AccountStatSnapshot.captured_at, AccountStatSnapshot.live_status)
+            self.db.query(AccountStatSnapshot.captured_at, AccountStatSnapshot.live_status,
+                          AccountStatSnapshot.live_title)
             .filter(
                 AccountStatSnapshot.account_id == account_id,
                 AccountStatSnapshot.source == "self",
@@ -187,19 +193,26 @@ class AccountStatSnapshotRepo:
         )
         sessions: list[dict] = []
         cur_start: datetime | None = None
-        for captured_at, status in rows:
+        cur_title: str | None = None
+        for captured_at, status, title in rows:
             if status == 1 and cur_start is None:
                 cur_start = captured_at
+                cur_title = title
+            elif status == 1:
+                if title:
+                    cur_title = title
             elif status == 0 and cur_start is not None:
                 sessions.append({
                     "start_at": cur_start,
                     "end_at": captured_at,
                     "duration_minutes": int((captured_at - cur_start).total_seconds() // 60),
+                    "live_title": cur_title,
                 })
                 cur_start = None
+                cur_title = None
         if cur_start is not None:
             sessions.append({"start_at": cur_start, "end_at": None,
-                             "duration_minutes": None})
+                             "duration_minutes": None, "live_title": cur_title})
         return sessions
 
 
@@ -395,3 +408,194 @@ class ThirdpartyVtuberRepo:
         if source is not None:
             q = q.filter(ThirdpartyVtuber.source == source)
         return q.all()
+
+
+# ── 重要日期·大型活动（P7，v0.7.0） ──────────────────────────────────
+
+_RE_FULL_DT = re.compile(r"(\d{4})-(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{2})")
+_RE_MM_DT = re.compile(r"(?<!\d)(\d{1,2})-(\d{1,2})\s+(\d{1,2}):(\d{2})(?!\d)")
+_RE_TODAY = re.compile(r"今天\s+(\d{1,2}):(\d{2})")
+_RE_TOMORROW = re.compile(r"明天\s+(\d{1,2}):(\d{2})")
+
+
+def _parse_reservation_start(pub: datetime | None, desc1: str) -> datetime | None:
+    """从 desc1 文本解析预约开始时刻（北京 wall-clock，服务端统一推断年份）。
+
+    实测 desc1 格式：'MM-DD HH:mm 直播'（无年份）、'YYYY-MM-DD HH:mm 直播'、
+    '今天 HH:mm 直播'、'明天 HH:mm 直播'、'预约YYYY-MM-DD HH:mm场次'（旧数据）。
+    年份推断：无年份时按帖子发布年；若解析结果早于发布日 → 发布年+1 再试。
+    解析失败返回 None（safe 降级）。"""
+    if not desc1:
+        return None
+    m = _RE_FULL_DT.search(desc1)
+    if m:
+        y, mo, d, hh, mi = (int(g) for g in m.groups())
+        try:
+            return datetime(y, mo, d, hh, mi)
+        except ValueError:
+            return None
+    m = _RE_TODAY.search(desc1)
+    if m:
+        base = pub or datetime.now()
+        hh, mi = int(m.group(1)), int(m.group(2))
+        try:
+            return datetime(base.year, base.month, base.day, hh, mi)
+        except ValueError:
+            return None
+    m = _RE_TOMORROW.search(desc1)
+    if m:
+        base = pub or datetime.now()
+        hh, mi = int(m.group(1)), int(m.group(2))
+        try:
+            nd = base + timedelta(days=1)
+            return datetime(nd.year, nd.month, nd.day, hh, mi)
+        except ValueError:
+            return None
+    m = _RE_MM_DT.search(desc1)
+    if m:
+        mo, d, hh, mi = (int(g) for g in m.groups())
+        for year_off in (0, 1):
+            base_y = (pub or datetime.now()).year + year_off
+            try:
+                cand = datetime(base_y, mo, d, hh, mi)
+            except ValueError:
+                continue
+            if cand >= (pub or datetime.now()):
+                return cand
+        try:
+            return datetime((pub or datetime.now()).year + 1, mo, d, hh, mi)
+        except ValueError:
+            return None
+    return None
+
+
+def _reservation_title_reserve(pub: datetime | None, desc1: str,
+                               start: datetime | None) -> str:
+    """标题降级链：desc1（含日期原文，如 '08-21 20:00 直播'）→ '直播预约'。"""
+    return desc1 or ("直播预约" if start else "")
+
+
+def _normalize_reserve_title(title: str) -> str:
+    """预约标题归一化：'直播预约|xxx' → 'xxx'；仅前缀 → 原文去前缀。"""
+    title = (title or "").strip()
+    if not title:
+        return ""
+    if "|" in title:
+        return title.split("|", 1)[1].strip()
+    return title.replace("直播预约", "", 1).strip() if title.startswith("直播预约") else title
+
+
+class VtuberEventRepo:
+    """重要日期·活动手动条目（vtuber_events 表）+ 自动预约帖解析。"""
+
+    def __init__(self, db: Session):
+        self.db = db
+
+    # ── 手动条目 CRUD ──
+
+    def list_by_vtuber(self, vtuber_id: int) -> list[VtuberEvent]:
+        return (
+            self.db.query(VtuberEvent)
+            .filter(VtuberEvent.vtuber_id == vtuber_id)
+            .order_by(VtuberEvent.event_date.asc(), VtuberEvent.id.asc())
+            .all()
+        )
+
+    def create(self, vtuber_id: int, title: str, event_date: str) -> VtuberEvent:
+        obj = VtuberEvent(vtuber_id=vtuber_id, title=title, event_date=event_date)
+        self.db.add(obj)
+        self.db.commit()
+        self.db.refresh(obj)
+        return obj
+
+    def delete(self, event_id: int) -> bool:
+        obj = self.db.query(VtuberEvent).filter(VtuberEvent.id == event_id).first()
+        if not obj:
+            return False
+        self.db.delete(obj)
+        self.db.commit()
+        return True
+
+    # ── 自动预约帖解析（P7） ──
+
+    def future_reservations(self, vtuber_id: int, now: datetime | None = None,
+                            days: int = 90) -> list[dict]:
+        """该 V 所有账号的未来直播预约（自动化，来自 reservation 帖）。
+
+        - 源：posts.body_json.reservation（fetcher 已精简），旧帖缺 title →
+          回退 raw_json 的 reserve.title（'直播预约|xxx' 去前缀）；
+        - 过滤：button_text == '已结束' 剔除；解析时刻 < now 剔除；
+          未来超出 days 天剔除（防止陈年旧帖污染卡片）；
+        - 返回按 start_at 升序 [{post_id, title, start_at, reserve_total, rid}]。
+        """
+        now = now or datetime.now()
+        uids = [
+            a.platform_uid for a in self.db.query(Account).filter(
+                Account.vtuber_id == vtuber_id, Account.platform_uid != None,  # noqa: E711
+                Account.platform_uid != "",
+            ).all()
+        ]
+        if not uids:
+            return []
+        rows = (
+            self.db.query(Post.id, Post.platform_uid, Post.body_json, Post.raw_json,
+                          Post.published_at)
+            .filter(
+                Post.platform_uid.in_(uids),
+                Post.body_json.like("%reservation%"),
+            )
+            .all()
+        )
+        out: list[dict] = []
+        cut_off = now + timedelta(days=days)
+        for post_id, uid, body_json, raw_json, published_at in rows:
+            try:
+                r = json.loads(body_json).get("reservation") or {}
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(r, dict):
+                continue
+            if (r.get("button_text") or "").strip() == "已结束":
+                continue
+            pub = published_at if isinstance(published_at, datetime) else None
+            start = _parse_reservation_start(pub, str(r.get("desc1") or ""))
+            if start is None:
+                continue
+            if start < now or start > cut_off:
+                continue
+            title = _normalize_reserve_title(str(r.get("title") or ""))
+            if not title:
+                # 回退 raw_json（modules.module_dynamic.additional.reserve.title）
+                title = self._raw_reserve_title(raw_json)
+            if not title:
+                title = _reservation_title_reserve(pub, str(r.get("desc1") or ""), start)
+            out.append({
+                "post_id": post_id,
+                "title": title,
+                "start_at": start,
+                "reserve_total": int(r.get("reserve_total") or 0),
+                "rid": str(r["rid"]) if r.get("rid") else None,
+            })
+        out.sort(key=lambda x: x["start_at"])
+        return out
+
+    @staticmethod
+    def _raw_reserve_title(raw_json: str | None) -> str:
+        """raw_json（原始动态 JSON）→ reserve.title（'直播预约|xxx' → 去前缀）。"""
+        if not raw_json:
+            return ""
+        try:
+            d = json.loads(raw_json)
+        except (TypeError, ValueError):
+            return ""
+        try:
+            reserve = d["modules"]["module_dynamic"]["additional"]["reserve"]
+        except (KeyError, TypeError):
+            return ""
+        title = str(reserve.get("title") or "").strip()
+        if not title:
+            return ""
+        # '直播预约|七夕转转转' → '七夕转转转'; 仅前缀情况降级为整个
+        if "|" in title:
+            return title.split("|", 1)[1].strip()
+        return title.replace("直播预约", "", 1).strip()

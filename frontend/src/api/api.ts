@@ -1,4 +1,4 @@
-import type { Account, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, GiftDay, LiveSession, PoolItem, PostPage, PostStats, ThirdpartyVtuber, UpdatePostsResult, VTuber } from './types'
+import type { Account, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, FutureReservation, GiftDay, LiveSession, PoolItem, PostPage, PostStats, ThirdpartyVtuber, UpdatePostsResult, VTuber, VtuberEvent } from './types'
 
 /**
  * API 基地址：
@@ -107,8 +107,36 @@ export const api = {
   externalsVtuberByUid: (uid: string) =>
     request<ThirdpartyVtuber[]>(`/externals/vtubers/by-uid?uid=${encodeURIComponent(uid)}`),
 
+  // ── P7 重要日期·大型活动 ─────────────────────────────────────────
+
+  /** 手动事件列表（按日期升序） */
+  listVtuberEvents: (vtuberId: number) =>
+    request<VtuberEvent[]>(`/vtuber/${vtuberId}/events`),
+
+  /** 添加手动事件 */
+  createVtuberEvent: (vtuberId: number, data: { title: string; event_date: string }) =>
+    request<VtuberEvent>(`/vtuber/${vtuberId}/events`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    }),
+
+  /** 删除手动事件 */
+  deleteVtuberEvent: (eventId: number) =>
+    request<void>(`/vtuber/event/${eventId}`, { method: 'DELETE' }),
+
+  /** 未来直播预约（reservation 帖自动解析；days=90 默认窗口） */
+  futureReservations: (vtuberId: number, days = 90) =>
+    request<FutureReservation[]>(`/vtuber/${vtuberId}/future-reservations?days=${days}`),
+
   /** 更新 VTuber 元信息（档案卡企划编辑等） */
-  updateVtuber: (id: number, data: { faction?: string | null; setting?: string | null; notes?: string | null }) =>
+  updateVtuber: (id: number, data: {
+    faction?: string | null
+    setting?: string | null
+    notes?: string | null
+    birthday?: string | null
+    debut_date?: string | null
+  }) =>
     request<VTuber>(`/vtuber/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },

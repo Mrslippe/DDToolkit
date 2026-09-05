@@ -6,6 +6,7 @@ import AccountPicker from './AccountPicker'
 import FanTrendChart from './FanTrendChart'
 import LiveCalendar from './LiveCalendar'
 import ProfileCard from './ProfileCard'
+import UpcomingEventsCard from './UpcomingEventsCard'
 
 interface Props {
   vtuber: VTuber
@@ -161,15 +162,19 @@ function ProfileSection({ vtuber, refreshTick }: { vtuber: VTuber; refreshTick: 
 }
 
 /**
- * 档案视图（P5，与 cards/list 同级）：
- * 三张自治卡片（趋势曲线 / 直播日历 / 档案卡）——每张卡内部有独立的
- * 账号切换器与数据拉取（用户定案：不做视图级共用操作钮行）。
+ * 档案视图（P5→P7，2026-09-06 布局改版）：
+ * 上行双列 = 重要日期（窄 · vtuber 级，无账号切换器）+ 直播日历（宽）；
+ * 下行全宽 = 粉丝趋势 → 档案卡。
+ * P7 布局参考用户图（重要日期 + 直播日历并排，趋势全宽在下）。
  */
 export default function ArchiveView({ vtuber, refreshTick }: Props) {
   return (
     <div className="archive-view">
+      <div className="archive-grid-top">
+        <UpcomingEventsCard vtuber={vtuber} refreshTick={refreshTick} />
+        <CalendarCard vtuber={vtuber} refreshTick={refreshTick} />
+      </div>
       <TrendCard vtuber={vtuber} refreshTick={refreshTick} />
-      <CalendarCard vtuber={vtuber} refreshTick={refreshTick} />
       <ProfileSection vtuber={vtuber} refreshTick={refreshTick} />
     </div>
   )

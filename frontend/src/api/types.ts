@@ -94,6 +94,8 @@ export interface LiveSession {
   start_at: string
   end_at: string | null
   duration_minutes: number | null
+  /** 场次标题（P7：场次内最后一条非空快照标题；用于日历格内展示） */
+  live_title: string | null
 }
 
 /** 直播礼物日聚合（金额为原始字符串保精度） */
@@ -121,6 +123,26 @@ export interface ThirdpartyVtuber {
   group_name: string | null
   source: string
   updated_at: string | null
+}
+
+/** 重要日期·活动手动条目（P7：vtuber_events 表） */
+export interface VtuberEvent {
+  id: number
+  vtuber_id: number
+  title: string
+  /** "YYYY-MM-DD" */
+  event_date: string
+  created_at: string | null
+}
+
+/** 未来直播预约（P7：reservation 帖 desc1 文本自动解析） */
+export interface FutureReservation {
+  post_id: number
+  title: string
+  /** 北京 wall-clock naive 时间串（服务端已按发布日推断年份） */
+  start_at: string
+  reserve_total: number
+  rid: string | null
 }
 
 export interface FetchResult {

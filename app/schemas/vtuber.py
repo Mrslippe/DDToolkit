@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from pydantic import BaseModel, ConfigDict, field_serializer
+from pydantic import BaseModel, ConfigDict, field_serializer, field_validator
 
 
 # ── Account ────────────────────────────────────────────────────────
@@ -254,9 +254,60 @@ class LiveSessionOut(BaseModel):
     start_at: datetime
     end_at: datetime | None = None
     duration_minutes: int | None = None
+    live_title: str | None = None   # P7：场次标题（场次内最后一条非空快照标题）
 
     @field_serializer("start_at", "end_at")
     def _ser_session_dt(self, v: datetime | None):
         if v is not None and v.tzinfo is None:
             return v.replace(tzinfo=timezone.utc)
+        return v
+
+
+# ── 重要日期·大型活动（P7，v0.7.0） ────────────────────────────────
+
+class VtuberEventOut(BaseModel):
+    """手动维护的重要日期/活动条目（vtuber_events 表）。"""
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    vtuber_id: int
+    title: str
+    event_date: str        # "YYYY-MM-DD"
+    created_at: datetime | None = None
+
+    @field_serializer("created_at")
+    def _ser_created_at(self, v: datetime | None):
+        if v is not None and v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc)
+        return v
+
+
+class VtuberEventCreate(BaseModel):
+    title: str
+    event_date: str        # "YYYY-MM-DD"
+
+    @field_validator("event_date")
+    @classmethod
+    def _validate_date(cls, v: str) -> str:
+        try:
+            datetime.strptime(v, "%Y-%m-%d")
+        except ValueError:
+            raise ValueError("event_date 须为 YYYY-MM-DD")
+        return v
+
+
+class FutureReservationOut(BaseModel):
+    """自动解析的未来直播预约（P7：来自 reservation 帖 desc1 文本）。
+
+    start_at 为服务端按发布日推断的本地时刻（前端直接展示，勿再换算时区）。
+    """
+    post_id: int
+    title: str
+    start_at: datetime
+    reserve_total: int = 0
+    rid: str | None = None
+
+    @field_serializer("start_at")
+    def _ser_res_start(self, v: datetime | None):
+        # 预约时间为北京本地 wall-clock（无时区语义），序列化保持 naive——
+        # 不补 +00:00，前端 new Date("YYYY-MM-DDTHH:mm:ss") 按本地时区解析即正确
         return v

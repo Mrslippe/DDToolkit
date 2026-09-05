@@ -130,6 +130,25 @@ class ThirdpartyVtuber(Base):
     updated_at = Column(DateTime, default=_now, onupdate=_now)
 
 
+class VtuberEvent(Base):
+    """重要日期·大型活动（P7，v0.7.0）：手动维护的纪念日/活动条目。
+
+    与 birthday/debut_date（VTuber 字段，年循环纪念日）互补：
+    本表记录一次性日期事件（演唱会/周年庆/线下活动等），卡片可增删。
+    event_date 存 "YYYY-MM-DD"（ISO 日期字符串，与 posts.live日期口径一致）。
+    """
+    __tablename__ = "vtuber_events"
+    __table_args__ = (
+        Index("ix_vtuber_events_vtuber_date", "vtuber_id", "event_date"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    vtuber_id = Column(Integer, ForeignKey("vtubers.id"), nullable=False)
+    title = Column(String, nullable=False)                # 活动名（如「生日歌回」）
+    event_date = Column(String, nullable=False)           # "YYYY-MM-DD"
+    created_at = Column(DateTime, default=_now)
+
+
 class Post(Base):
     """动态 / 投稿 / 直播记录 — 独立于 account，按平台+UID+帖子ID去重（联合投稿会在每个V下各存一份）"""
     __tablename__ = "posts"

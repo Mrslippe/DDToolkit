@@ -14,7 +14,7 @@ load_dotenv(DATA_DIR / ".env")
 
 class Settings:
     APP_NAME: str = "Better DD Toolkit"
-    VERSION: str = "0.6.1"   # 与 devlog 最新版本保持一致（v0.6.1：时效分层调度）
+    VERSION: str = "0.7.0"   # 与 devlog 最新版本保持一致（v0.7.0：档案视图细化）
 
     # 数据目录
     DATA_DIR: Path = DATA_DIR
