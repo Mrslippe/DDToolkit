@@ -931,20 +931,25 @@
   align-items: center;
 }
 
-/* P7：上行两卡——定宽上限 + 可收缩 + 下限裁剪 */
+/* P7：上行两卡——定宽上限 + 同步收缩 + 下限裁剪；nowrap：无论窗口多窄始终同行，
+   不足时溢出由卡片/容器裁剪（用户要求：不管什么情况两卡都在同一行） */
 .archive-grid-top {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: center;
   gap: 14px;
   align-items: flex-start;
   width: 100%;
   max-width: 960px;
+  flex-shrink: 0;
+  overflow: hidden;
 }
 
 /* 通用定宽卡片契约：max-width=上限（拉伸封顶居中）、min-width=下限（到限不再缩）。
-   高度契约（P7 定高）：基类固定 height（内容变化高度不变），头部 flex:none，
-   内容区 .archive-section-scroll 滚动——三层滚动分工：
+   高度契约（P7 定高）：基类固定 height + flex-shrink:0——content 总高超视口时
+   【卡片恒高、溢出交给 .archive-view 滚动】，绝不被 column flex 压缩
+   （默认 flex-shrink:1 会压扁事件卡/把趋势卡压到 0——已踩坑修复）；
+   头部 flex:none，内容区 .archive-section-scroll 滚动——三层滚动分工：
    页面滚动（.archive-view）→ 卡片恒高 → 卡片内滚动（内容溢出才滚）。 */
 .archive-section {
   display: flex;
@@ -958,9 +963,11 @@
   min-width: 480px;
   overflow: hidden;
   height: 460px;            /* 固定最小高度限度：内容变化高度不变 */
+  flex-shrink: 0;           /* column 轴（高度）恒定，不参与压缩 */
 }
 
-/* 上行两卡等档高度（460px）；趋势卡略矮形成下段节奏 */
+/* 上行两卡等档高度（460px）；趋势卡略矮形成下段节奏。
+   flex: 0 1 Npx 覆盖基类 flex-shrink:0 → 仅【宽度】方向可收缩（grid-top 行内） */
 .archive-section--events {
   flex: 0 1 300px;
   max-width: 300px;
