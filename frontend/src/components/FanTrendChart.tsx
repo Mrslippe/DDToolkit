@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import { Area, AreaChart, Bar, Brush, CartesianGrid, Cell, ComposedChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { Area, AreaChart, Bar, Brush, CartesianGrid, ComposedChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { CalendarRange, Loader2 } from 'lucide-react'
 import type { FanTrendPoint } from '../api/types'
 import { api } from '../api/api'
@@ -16,6 +16,8 @@ interface DailyPoint {
   date: string
   fans: number | null
   delta: number | null
+  /** 涨=粉 / 掉=灰（BarShape 直接取自数据点，免 Cell 索引错位） */
+  barFill: string
 }
 
 const PINK = '#fb77a1'       // 主粉（--chart-1）：涨粉
@@ -54,6 +56,57 @@ function deltaDomain(values: (number | null)[]): [number, number] {
   return [-cap, cap]
 }
 
+/* ── 柱形自定义 shape：新进入窗口的柱子播"底部生长+淡入"出场动画 ──
+   每根柱以 payload.date 为身份；已出现在窗口内的柱渲染即静止，
+   新出现的柱先以 scaleY(0.001)/opacity(0) 挂载，下一帧过渡到 1——
+   CSS transition 由浏览器合成器处理，不阻塞拖动的主线程。 */
+
+/** 已出现柱子集合（模块级：跨渲染保持；组件卸载重挂也不重播） */
+const seenBarKeys = new Set<string>()
+
+interface BarShapeProps {
+  x?: number
+  y?: number
+  width?: number
+  height?: number
+  payload?: DailyPoint & { date: string }
+}
+
+const BarShape = memo(function BarShape({ x = 0, y = 0, width = 0, height = 0, payload }: BarShapeProps) {
+  const date = payload?.date
+  const [entered, setEntered] = useState(() => {
+    if (!date) return true // 无身份数据直接显示
+    const isNew = !seenBarKeys.has(date)
+    seenBarKeys.add(date)
+    return !isNew // 新柱：entered=false → 播动画；旧柱：直接显示
+  })
+
+  useEffect(() => {
+    // 新柱挂载后下一帧反转状态 → 触发 CSS 过渡
+    setEntered(true)
+  }, [])
+
+  return (
+    <g style={{ transformOrigin: `${x + width / 2}px ${y + height}px` }}>
+      <rect
+        x={x}
+        y={y}
+        width={width}
+        height={height}
+        fill={payload?.barFill ?? PINK}
+        rx={0}
+        style={{
+          transform: entered ? 'scaleY(1)' : 'scaleY(0.001)',
+          opacity: entered ? 1 : 0,
+          transition: 'transform 300ms cubic-bezier(0.22, 1, 0.36, 1), opacity 300ms ease-out',
+          transformOrigin: `${x + width / 2}px ${y + height}px`,
+          pointerEvents: 'none',
+        }}
+      />
+    </g>
+  )
+})
+
 /**
  * 粉丝趋势卡（v0.9.5 重建 + v0.9.6 修正，参考用户展示图 + 项目粉系浅底）：
  * - 双轴 ComposedChart：粉丝数 Area（主粉渐变色）+ 日增粉 Bar（涨=粉 / 掉=灰）；
@@ -72,12 +125,8 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
   const [preset, setPreset] = useState<PresetKey>('3m')
   /** 当前窗口 [startIndex, endIndex]（容量数据索引；null=未就绪） */
   const [range, setRange] = useState<[number, number] | null>(null)
-  /** Brush 拖动中：临时关动画保跟手（400ms 动画在拖拽时会产生拖影/滞后） */
+  /** Brush 拖动中：临时关 recharts 内置动画保跟手 */
   const [dragging, setDragging] = useState(false)
-  /** 拖动结束 reveal 标记：每次拖动停止时 +1 →
-      Area/Bar 以它为 key 重挂载，播放入场动画（bar 自底生长 / area 描线过渡）。
-      拖动中 isAnimationActive=false 不播；重挂瞬间恢复 true 必播一次。 */
-  const [revealTick, setRevealTick] = useState(0)
   const dragTimer = useRef<number>()
   // Brush onChange rAF 节流：target 暂存 + 帧内提交
   const brushRafRef = useRef(0)
@@ -89,10 +138,9 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
     },
     [],
   )
-  /** 拖动结束统一收尾：关动画标记 + 加 reveal（重挂播放入场动画） */
+  /** 拖动结束统一收尾：只关 recharts 内置动画标记（生长动画由 BarShape 自身负责） */
   const settleDrag = () => {
     setDragging(false)
-    setRevealTick((k) => k + 1)
   }
 
   useEffect(() => {
@@ -126,10 +174,12 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
     const out: DailyPoint[] = []
     let prev: number | null = null
     for (const d of sorted) {
+      const delta = prev != null ? d.fans - prev : null
       out.push({
         date: d.date,
         fans: d.fans,
-        delta: prev != null ? d.fans - prev : null,
+        delta,
+        barFill: (delta ?? 0) >= 0 ? PINK : GRAY,
       })
       prev = d.fans
     }
@@ -371,23 +421,14 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
                 }}
               />
               <Bar
-                key={`bar-${revealTick}`}
                 yAxisId="delta"
                 dataKey="delta"
                 name="日增粉"
-                isAnimationActive={!dragging}
-                animationDuration={400}
-                animationBegin={0}
+                isAnimationActive={false}
                 maxBarSize={14}
-              >
-                {/* Cell 与切片索引严格对应：Brush 激活时 displayedData=chartData.slice(start,end)，
-                    Cell 数组必须与窗口切片（view）同长同序，否则 index 错位 → 涨/掉粉颜色串色 */}
-                {view.map((d) => (
-                  <Cell key={d.date} fill={(d.delta ?? 0) >= 0 ? PINK : GRAY} />
-                ))}
-              </Bar>
+                shape={<BarShape />}
+              />
               <Area
-                key={`area-${revealTick}`}
                 yAxisId="fans"
                 type="monotone"
                 dataKey="fans"
