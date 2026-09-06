@@ -1062,7 +1062,8 @@
   color: var(--c-live);
 }
 
-/* 直播日历（P5→P7：格内场次条目 + 点击浮层） */
+/* 直播日历（v0.8.0 重设计：周行列表照参考图——最新周在上 + 统计行 + 9色类型标签；
+   卡片保持浅色（用户定案：只换标签配色），格子样式照参考图（日期/彩签+时间/标题/休息）） */
 .live-calendar {
   display: flex;
   flex-direction: column;
@@ -1079,8 +1080,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   border: 1px solid var(--c-border);
   background: transparent;
   color: var(--c-text-sub);
@@ -1088,16 +1089,21 @@
   border-radius: 3px;
 }
 
-.live-calendar-head button:hover {
+.live-calendar-head button:hover:not(:disabled) {
   color: var(--c-accent);
   border-color: var(--c-primary);
 }
 
-.live-calendar-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--c-text-main);
-  font-variant-numeric: tabular-nums;
+.live-calendar-head button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.live-calendar-today {
+  width: auto !important;
+  padding: 0 10px;
+  font-size: 12px;
+  font-family: inherit;
 }
 
 .live-calendar-note {
@@ -1106,41 +1112,81 @@
   color: var(--c-text-sub);
 }
 
-.live-calendar-grid {
+/* 统计行：共 N 场 + 类型彩色计数（照参考图） */
+.live-calendar-stats {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--c-text-main);
+  padding: 2px 0 4px;
+  border-bottom: 1px solid rgba(210, 216, 222, 0.35);
+}
+
+.live-calendar-stats-total {
+  font-weight: 600;
+}
+
+.live-calendar-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--c-text-sub);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 周行列表 */
+.live-calendar-weeks {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.live-calendar-weekdays,
+.live-calendar-week {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
-  gap: 3px;
+  gap: 4px;
 }
 
 .live-calendar-weekday {
   text-align: center;
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--c-text-sub);
   padding: 2px 0;
 }
 
+/* 当前周高亮（绿描边整体，参考图当前周样式） */
+.live-calendar-week.current .live-calendar-weekdays,
+.live-calendar-week.current {
+  border-radius: 6px;
+}
+
+/* 格子（参考图：日期+星期 / 彩签+时间 / 标题，无数据=休息） */
 .live-calendar-cell {
   position: relative;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 1px;
-  min-height: 60px;
-  padding: 3px 4px;
-  border: 1px solid rgba(210, 216, 222, 0.35);
-  border-radius: 4px;
+  gap: 2px;
+  min-height: 64px;
+  padding: 4px 6px;
+  border: 1px solid rgba(210, 216, 222, 0.4);
+  border-radius: 5px;
   font-size: 12.5px;
   color: var(--c-text-main);
   font-variant-numeric: tabular-nums;
   text-align: left;
-  background: transparent;
+  background: var(--c-bg-page);
   cursor: default;
   overflow: hidden;
+  font-family: inherit;
 }
 
 button.live-calendar-cell {
   cursor: pointer;
-  font-family: inherit;
 }
 
 button.live-calendar-cell:hover {
@@ -1152,10 +1198,14 @@ button.live-calendar-cell:hover {
   background: color-mix(in srgb, var(--c-primary) 6%, transparent);
 }
 
-.live-calendar-cell.empty {
-  border: none;
-  background: transparent;
-  cursor: default;
+/* 今天：绿描边（参考图当前日期高亮） */
+.live-calendar-cell.today {
+  border-color: #3aa76d;
+  box-shadow: 0 0 0 1px #3aa76d;
+}
+
+.live-calendar-cell.live {
+  background: var(--c-bg-card);
 }
 
 .live-calendar-cell.gift {
@@ -1164,22 +1214,38 @@ button.live-calendar-cell:hover {
 }
 
 .live-calendar-day {
-  font-size: 12px;
+  font-size: 11.5px;
   line-height: 14px;
   color: var(--c-text-sub);
   align-self: flex-start;
+  font-variant-numeric: tabular-nums;
+}
+
+.live-calendar-day em {
+  font-style: normal;
+  color: var(--c-text-sub);
+  opacity: 0.85;
 }
 
 .live-calendar-cell.live .live-calendar-day {
-  color: var(--c-accent);
+  color: var(--c-text-main);
   font-weight: 600;
 }
 
-/* 格内场次条目（P7）：一行 = 徽章 + 时间 + 标题截断 */
+/* 休息占位 */
+.live-calendar-rest {
+  font-size: 11px;
+  color: var(--c-text-sub);
+  opacity: 0.65;
+  align-self: center;
+  margin: auto 0;
+}
+
+/* 格内场次条目：一行 = 徽章 + 时间 + 标题截断 */
 .live-calendar-entry {
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 4px;
   width: 100%;
   min-width: 0;
   line-height: 17px;
@@ -1217,7 +1283,7 @@ button.live-calendar-cell:hover {
   max-width: 100%;
 }
 
-/* 直播类型徽章（P7：标题关键词推断，纯展示） */
+/* 直播类型徽章（9 色对齐参考图：杂谈橙/游戏绿/观影蓝/投稿紫红/歌回红/健身黄/电台紫/联动青/特殊描边红） */
 .live-type {
   flex: none;
   display: inline-flex;
@@ -1229,11 +1295,23 @@ button.live-calendar-cell:hover {
   color: #fff;
 }
 
-.live-type--game { background: #5b8def; }
-.live-type--chat { background: #8b6fd8; }
-.live-type--song { background: #e8845e; }
-.live-type--radio { background: #4aa8a0; }
-.live-type--anniv { background: #d8674f; }
+/* 9 色类型标签（2026-09-06 对齐参考图配色）：
+   杂谈橙 / 游戏绿 / 观影蓝 / 投稿紫红 / 歌回红 / 健身黄 / 电台紫 / 联动青 / 特殊红描边 */
+.live-type--chat    { background: #e8842e; }
+.live-type--game    { background: #3aa76d; }
+.live-type--watch   { background: #4a90e2; }
+.live-type--upload  { background: #b85fce; }
+.live-type--song    { background: #d8645e; }
+.live-type--fitness { background: #d8b13e; }
+.live-type--radio   { background: #8b6fd8; }
+.live-type--collab  { background: #2fa5ad; }
+/* 特殊：红描边 + 浅红底（参考图「特殊」样式） */
+.live-type--special {
+  background: transparent;
+  color: #d8645e;
+  border: 1px solid #d8645e;
+  padding: 0 4px;
+}
 .live-type--live { background: #94a3b8; }
 
 /* 场次详情浮层（P7 点击格子弹出；弹窗层规格：12px 圆角 + 柔和阴影） */
