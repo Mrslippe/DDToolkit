@@ -57,7 +57,6 @@ import { formatCount } from '../utils/format'
 import { mergeAccountSnapshots, mergeVtuberSnapshots } from '../utils/accountSnapshots'
 import PostCard from '../components/PostCard'
 import PostDetailDrawer from '../components/PostDetailDrawer'
-import ArchiveView from '../components/ArchiveView'
 import ProfileView from '../components/ProfileView'
 import './../styles/posts.css'
 
@@ -1004,7 +1003,10 @@ return (
         )}
 
         {vtuber && scene.view === 'archive' && (
-          <ArchiveView vtuber={vtuber} refreshTick={refreshTick} />
+          <div className="archive-placeholder">
+            {/* 2026-09-06：archive 视图整体推倒重建（用户主导逐步构建），此处为占位壳 */}
+            <div className="archive-empty">档案视图重构中…</div>
+          </div>
         )}
 
         {vtuber && scene.view === 'profile' && (
