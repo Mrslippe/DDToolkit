@@ -64,7 +64,24 @@
 
 @layer base {
   * {
-    @apply border-border outline-ring/50;
+    @apply border-border;
+  }
+  /* 桌面应用交互：点击不残留焦点框（recharts SVG/按钮获焦时被 outline 描粉）；
+     键盘可达性由按钮自有样式承担 */
+  :focus,
+  :focus-visible {
+    outline: none;
+  }
+  /* 默认禁止文本选中（防点击误框选）：输入区/可编辑区恢复 */
+  body {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  input,
+  textarea,
+  [contenteditable='true'] {
+    -webkit-user-select: text;
+    user-select: text;
   }
   /* L3 透明窗口方案：body 保持透明，由 .app-shell 自绘圆角与底色；
      浏览器模式下透明处显示浏览器默认白底，观感一致 */

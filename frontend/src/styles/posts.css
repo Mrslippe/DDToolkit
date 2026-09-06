@@ -2099,6 +2099,18 @@
   min-height: 0;
   margin: 0 -4px;
   padding: 0 4px;
+  /* 抓手：主图按住拖动平移时间窗口 */
+  cursor: grab;
+}
+
+.fan-chart-body.panning {
+  cursor: grabbing;
+}
+
+/* panning：隐藏 tooltip 光标与弹层（避免拖动时十字线/浮层闪烁干扰） */
+.fan-chart-body.panning .recharts-tooltip-wrapper,
+.fan-chart-body.panning .recharts-tooltip-cursor {
+  display: none;
 }
 
 /* Brush 迷你图轨道与窗口滑块（项目粉系覆写，保持浅底通透）

@@ -124,6 +124,54 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
     return Number.isFinite(days) ? daily.slice(-days) : daily
   }, [daily, preset])
 
+  /* ── 图表主区抓手平移（pan）：按住拖动 = 平移时间窗口（窗口宽度不变）── */
+  const bodyRef = useRef<HTMLDivElement>(null)
+  const panRef = useRef<{ startX: number; range0: number; range1: number } | null>(null)
+  const [panning, setPanning] = useState(false)
+
+  const onBodyMouseDown = (e: React.MouseEvent) => {
+    if (!range || capacity.length === 0) return
+    // Brush 缩略图/重置/档位区域不触发 pan（它们有自己的交互）
+    const t = e.target as Element
+    if (t.closest?.('.recharts-brush, .fan-chart-reset, .fan-presets')) return
+    panRef.current = { startX: e.clientX, range0: range[0], range1: range[1] }
+    setPanning(true)
+  }
+
+  useEffect(() => {
+    if (!panning) return
+    const onMove = (e: MouseEvent) => {
+      const pan = panRef.current
+      const el = bodyRef.current
+      if (!pan || !el) return
+      // 绘图区宽 = 容器宽 − 左右轴宽 − 边距；点宽 = 绘图区 / 窗口点数
+      const plotW = Math.max(el.clientWidth - 48 - 42 - 14, 1)
+      const winSize = pan.range1 - pan.range0
+      const itemW = plotW / (winSize + 1)
+      // 向左拖 = 时间向前（看更早窗口），右拖反向
+      const deltaIndex = Math.round((pan.startX - e.clientX) / itemW)
+      const maxStart = Math.max(capacity.length - 1 - winSize, 0)
+      const s = Math.min(Math.max(pan.range0 + deltaIndex, 0), maxStart)
+      if (s !== pan.range0) {
+        // 以 pan 起点为基准持续重算（不叠加误差），稳定跟手
+        setRange([s, Math.max(s + winSize, s)])
+        setDragging(true)
+        window.clearTimeout(dragTimer.current)
+        dragTimer.current = window.setTimeout(() => setDragging(false), 300)
+      }
+    }
+    const onUp = () => {
+      panRef.current = null
+      setPanning(false)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+  }, [panning, capacity.length])
+
   /** 数据/档位就绪：窗口重置为该容量尾部 DEFAULT_DAYS 天 */
   useEffect(() => {
     if (capacity.length === 0) return
@@ -202,8 +250,12 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
         </div>
       </div>
 
-      {/* 图区 */}
-      <div className="fan-chart-body">
+      {/* 图区：主区抓手=按住拖动平移窗口（panning 时禁 tooltip 选区与十字光标） */}
+      <div
+        className={`fan-chart-body${panning ? ' panning' : ''}`}
+        ref={bodyRef}
+        onMouseDown={onBodyMouseDown}
+      >
         {loading && (
           <div className="lc-state">
             <Loader2 className="lc-state-icon" />
