@@ -178,7 +178,15 @@ const BrushTraveller = memo(function BrushTraveller({
     取消旧动画、立即接管（effect 在 paint 前执行 → 无中间帧闪跳）；
     大跳变（高柱入窗→域缩放）与连续追帧同样精确；
     x/宽度即时更新（槽位步进不滞后于实时曲线）；元素按 date 键控稳定 */
-const BarsOverlay = memo(function BarsOverlay({ dates }: { dates: string[] }) {
+const BarsOverlay = memo(function BarsOverlay({
+  dates,
+  live,
+}: {
+  dates: string[]
+  /** 实时模式（Brush 拖动/窗口交互中）：柱体零动画直接终态——
+      不进入场注册、不做 morph；退出实时后几何未变则本就不动，几何变了走 morph 接管 */
+  live: boolean
+}) {
   const prevGeomRef = useRef<Map<string, BarGeom>>(new Map(curGeom)) // 挂载帧 = 当前几何（无动画起点）
   const elsRef = useRef(new Map<string, SVGRectElement>())
   const animsRef = useRef<{ d: string; from: string }[]>([])
@@ -189,6 +197,21 @@ const BarsOverlay = memo(function BarsOverlay({ dates }: { dates: string[] }) {
     const g = curGeom.get(d)
     if (!g) continue
     nextPrev.set(d, g)
+    if (!live) {
+      rects.push(
+        <rect
+          key={d}
+          className="ov-bar"
+          x={g.x}
+          y={g.y}
+          width={g.width}
+          height={g.height}
+          fill={g.fill}
+          style={{ transformOrigin: g.origin }}
+        />,
+      )
+      continue
+    }
     const until = enterUntil.get(d)
     if (until != null) {
       if (now < until) {
@@ -516,6 +539,10 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
   /* 常驻 BarsOverlay 的窗口日期（几何变化即动画，无事件分析） */
   const viewDates = view.map((d) => d.date)
 
+  /** 柱宽随横轴密度（窗口点数）：点少（密度低）→宽、点多（密度高）→细；
+      ≈0.55×槽宽（可用 835px ÷ 点数），clamp 6~26px；拖动窗口缩放时柱宽即时重算 */
+  const barWidth = Math.max(6, Math.min(26, Math.round((835 / Math.max(view.length, 1)) * 0.55)))
+
   return (
     <div className="fan-chart">
       {/* 卡片标题（与直播日历/归档卡同规格 16.5/600/--c-text-main） */}
@@ -657,7 +684,8 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
                 dataKey="delta"
                 name="日增粉"
                 isAnimationActive={false}
-                maxBarSize={14}
+                barSize={barWidth}
+                maxBarSize={barWidth}
                 shape={<BarShape />}
               />
               <Area
@@ -730,7 +758,7 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
              与 recharts svg 逐像素同框；pointer-events:none 不影响交互。
              注意：recharts 原生柱由 CSS 永久隐藏（.recharts-bar-rectangle），
              本层是柱的唯一可见绘制 → 无任何挂载/切换竞态 */}
-          <BarsOverlay dates={viewDates} />
+          <BarsOverlay dates={viewDates} live={!brushDrag} />
         </>)}
       </div>
     </div>
