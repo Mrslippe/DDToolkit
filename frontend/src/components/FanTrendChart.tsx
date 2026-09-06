@@ -344,6 +344,18 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
       拖动手柄的移动监听本身在 window 级，不受影响 */
   const [brushDrag, setBrushDrag] = useState(false)
   const brushDragTimerRef = useRef(0)
+  /** 域节流锚（user 2026-09-0x）：拖动期间 Y 轴域的数据源切片——
+      拖动开始 = 锚定拖动前窗口（零跳变），拖动中每 250ms 跟随一次，
+      松手（brushDrag 回落）清空 → 域恢复精确重算；
+      域不再因"新柱入窗"逐帧跳变，幅度稳定更贴手 */
+  const [domainAnchor, setDomainAnchor] = useState<DailyPoint[] | null>(null)
+  const dragActiveRef = useRef(false)
+  const domainLastRef = useRef(0)
+  useEffect(() => {
+    if (brushDrag) return
+    dragActiveRef.current = false
+    setDomainAnchor(null)
+  }, [brushDrag])
   /** range 渲染期镜像：rAF 回调里做死区比较（不触发渲染） */
   const rangeRef = useRef<[number, number] | null>(range)
   rangeRef.current = range
@@ -516,9 +528,11 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
     return capacity.slice(s, e + 1)
   }, [capacity, range])
 
-  /** 纵轴域随窗口动态：据切片数据计算（涨跌幅对窗口；粉丝数留 8% 余量） */
-  const fanDomainVal = useMemo(() => fanDomain(view.map((d) => d.fans)), [view])
-  const deltaDomainVal = useMemo(() => deltaDomain(view.map((d) => d.delta)), [view])
+  /** 纵轴域：常态每帧随窗口；Brush 拖动期间节流（250ms 跟一次，见 domainAnchor）——
+      域的变化不再被逐帧触发，幅度稳定、拖动更贴手；松手恢复实时精确 */
+  const domainSrc = brushDrag && domainAnchor ? domainAnchor : view
+  const fanDomainVal = useMemo(() => fanDomain(domainSrc.map((d) => d.fans)), [domainSrc])
+  const deltaDomainVal = useMemo(() => deltaDomain(domainSrc.map((d) => d.delta)), [domainSrc])
 
   /** 头部概览：容量末值 1d/7d/30d 涨粉 */
   const overview = useMemo(() => {
@@ -726,6 +740,19 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
                     () => setBrushDrag(false),
                     120,
                   )
+                  // 域节流：拖动开始锚定拖动前窗口（零跳变）；拖动中每 250ms 跟随一次
+                  if (!dragActiveRef.current) {
+                    dragActiveRef.current = true
+                    const cur = rangeRef.current
+                    domainLastRef.current = performance.now()
+                    setDomainAnchor(cur ? capacity.slice(cur[0], cur[1] + 1) : capacity)
+                  } else {
+                    const nowMs = performance.now()
+                    if (nowMs - domainLastRef.current >= 250) {
+                      domainLastRef.current = nowMs
+                      setDomainAnchor(capacity.slice(s, Math.max(s, en) + 1))
+                    }
+                  }
                   if (brushRafRef.current) return
                   // rAF 节流：一帧最多提交一次窗口（Brush 拖动 event 高频，直接 setRange 会每事件全量重渲染）
                   brushRafRef.current = window.requestAnimationFrame(() => {
