@@ -480,12 +480,6 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
   /* 常驻 BarsOverlay 的窗口日期（几何变化即动画，无事件分析） */
   const viewDates = view.map((d) => d.date)
 
-  /** 窗口水平把手中心（Brush 上方，纯标识）：窗口中点，两端 3% 收口防溢出；
-      首帧 range=null 视作全量窗口=50% */
-  const gripPct = range
-    ? Math.min(Math.max(((range[0] + range[1]) / 2 / Math.max(capacity.length - 1, 1)) * 100, 3), 97)
-    : 50
-
   return (
     <div className="fan-chart">
       {/* 卡片标题（与直播日历/归档卡同规格 16.5/600/--c-text-main） */}
@@ -650,10 +644,10 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
               <Brush
                 key={`brush-${preset}-${capacity.length}-${resetEpoch}`}
                 dataKey="fans"
-                height={56}
+                height={37}
                 stroke={PINK}
                 fill="rgba(251,119,161,0.05)"
-                travellerWidth={5}
+                travellerWidth={10}
                 startIndex={range?.[0]}
                 endIndex={range?.[1]}
                 onChange={(e: { startIndex?: number; endIndex?: number }) => {
@@ -690,14 +684,6 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
              注意：recharts 原生柱由 CSS 永久隐藏（.recharts-bar-rectangle），
              本层是柱的唯一可见绘制 → 无任何挂载/切换竞态 */}
           <BarsOverlay dates={viewDates} />
-
-          {/* 窗口水平把手（用户参考图：亮块顶边中央的白底浮片 + 三条短竖纹；
-              纯标识，pointer-events:none，不参与窗口拖拽） */}
-          <div className="panorama-grip-wrap" aria-hidden="true">
-            <div className="panorama-grip" style={{ left: `${gripPct}%` }}>
-              <i /><i /><i />
-            </div>
-          </div>
         </>)}
       </div>
     </div>
