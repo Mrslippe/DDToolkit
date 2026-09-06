@@ -2120,6 +2120,25 @@
   pointer-events: none;
 }
 
+/* 柱形入场动画：新柱（lc-bar-enter 类，挂载即播一次）
+   注意 SVG 元素 transform-origin 需 transform-box: fill-box（style 侧已设），
+   这里只定义关键帧；动画播完 by default 回到常态（无 fill 覆盖终态属性，
+   但 rect 的 transform 本来就是默认值，动画结束后自然消失） */
+@keyframes lc-bar-grow {
+  from {
+    opacity: 0.3;
+    transform: scaleY(0.8);
+  }
+  to {
+    opacity: 1;
+    transform: scaleY(1);
+  }
+}
+
+.lc-bar-enter {
+  animation: lc-bar-grow 260ms ease-out both;
+}
+
 /* Brush 迷你图轨道与窗口滑块（项目粉系覆写，保持浅底通透）
    窗口滑块 = 抓手工具：grab 光标提示可拖拽平移窗口 */
 .recharts-brush-slide {

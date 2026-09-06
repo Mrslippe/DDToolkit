@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { Area, AreaChart, Bar, Brush, CartesianGrid, ComposedChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { CalendarRange, Loader2 } from 'lucide-react'
 import type { FanTrendPoint } from '../api/types'
@@ -56,20 +56,19 @@ function deltaDomain(values: (number | null)[]): [number, number] {
   return [-cap, cap]
 }
 
-/* ── 柱形入场动画（事件驱动，重挂免疫）──
-   recharts 拖动时内部 key=rectangle-x-y-value-i，窗口移动导致 BarShape 每帧
-   销毁重建。此前"rAF 双通道插值"每帧都参与：拖快时存量柱跨图漂移 + 每帧
-   插值计算 = 低帧率。
-   本方案回到事件驱动：
-   · React 直接渲染 x/y/width/height 几何——存量柱永远显示在正确位置（零漂移）
-   · 入场动画：只在【新 date 首次进入】时挂一帧初始态 CSS transition 起步，
-     「已入场 Set」防重放；重挂实例直接显示（不闪不漂不拖帧）
-   · 拖动中零额外计算：无插值、无 rAF 循环、无每帧 setAttribute */
+/* ── 柱形入场动画（CSS @keyframes 挂载即播，无需 JS 状态机）──
+   教训：recharts 拖动时 BarShape 每帧销毁重建（key=rectangle-x-y-value-i）——
+   · transition 方案（entered state）：setEntered(true) 的 rAF 总被 cleanup
+     cancel，动画从未被绘制 → 柱动画"消失"的根因
+   · @keyframes 方案：动画随【元素挂载】自动播放一次（不依赖任何状态切换），
+     重挂的"已入场"柱不给 animation 属性 → 直接常态显示、不重播不闪
+   实现：barAnimated Set（模块级）标记已入场 date；
+   新柱挂载帧带 `animation: lc-bar-grow ... both`（from .3/0.8 → to 1/1）；
+   transform-box: fill-box + 原点 50% 100%（底部中心生长），
+   无需手工计算 transform-origin */
 
 /** 已播放入场动画的 date（模块级：重挂不重播） */
 const barAnimated = new Set<string>()
-
-const BAR_REVEAL_MS = 260
 
 interface BarShapeProps {
   x?: number
@@ -81,20 +80,8 @@ interface BarShapeProps {
 
 const BarShape = memo(function BarShape({ x = 0, y = 0, width = 0, height = 0, payload }: BarShapeProps) {
   const date = payload?.date
-
-  // 入场动画：仅首次出现时起步（CSS transition 一次性），重挂后 from 态不生效
-  // ——用 entered 三元 CSS 类表达：初始按"是否已入场"决定起点；挂载后立即切到常态
-  const wasAnimated = date ? barAnimated.has(date) : true
-  const [entered, setEntered] = useState(wasAnimated)
-
-  useLayoutEffect(() => {
-    if (date && wasAnimated) return // 已出现：直接常态
-    if (date) barAnimated.add(date)
-    // 下一帧切换 → CSS transition 从 from→to 播一次
-    const raf = window.requestAnimationFrame(() => setEntered(true))
-    return () => window.cancelAnimationFrame(raf)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [date])
+  const isNew = date ? !barAnimated.has(date) : false
+  if (date && isNew) barAnimated.add(date) // 幂等：渲染期间登记（StrictMode 双渲染无碍）
 
   return (
     <g>
@@ -105,13 +92,10 @@ const BarShape = memo(function BarShape({ x = 0, y = 0, width = 0, height = 0, p
         height={height}
         fill={payload?.barFill ?? PINK}
         rx={0}
+        className={isNew ? 'lc-bar-enter' : undefined}
         style={{
-          opacity: entered ? 1 : 0.3,
-          transform: entered ? 'scaleY(1)' : 'scaleY(0.8)',
-          transformOrigin: `${x + width / 2}px ${y + height}px`,
-          transition: entered
-            ? `opacity ${BAR_REVEAL_MS}ms ease-out, transform ${BAR_REVEAL_MS}ms ease-out`
-            : 'none',
+          transformBox: 'fill-box',
+          transformOrigin: '50% 100%',
           pointerEvents: 'none',
         }}
       />
