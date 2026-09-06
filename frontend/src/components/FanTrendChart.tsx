@@ -118,10 +118,12 @@ function buildOption(data: DailyPoint[]): EChartsCoreOption {
   const fDom = fanDomain(def.map((d) => d.fans))
   const dDom = deltaDomain(def.map((d) => d.delta))
   return {
-    // 渲染：首次入场 320ms，此后更新即时（dataZoom/域变化不追赶）
+    // 渲染：首次入场 320ms；更新 150ms 柔化（canvas 帧级插值，不占主线程——
+    // 拖拽中窗口平移/域节流切换有平滑过渡，不再是生硬跳变；跟手不受影响）
     animation: true,
     animationDuration: 320,
-    animationDurationUpdate: 0,
+    animationDurationUpdate: 150,
+    animationEasingUpdate: 'cubicOut',
     animationThreshold: 2000,
     // 布局：上 12 / 下 42（dataZoom slider 26 + 边距）
     grid: { left: 48, right: 46, top: 12, bottom: 42 },
