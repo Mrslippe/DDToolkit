@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Area, AreaChart, Bar, Brush, CartesianGrid, ComposedChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { CalendarRange, Loader2 } from 'lucide-react'
 import type { FanTrendPoint } from '../api/types'
@@ -56,20 +56,58 @@ function deltaDomain(values: (number | null)[]): [number, number] {
   return [-cap, cap]
 }
 
-/* ── 柱形自定义 shape：新进入窗口的柱子"柔和浮现"出场动画 ──
-   注意：recharts 拖动时内部 key=rectangle-x-y-value-i，窗口移动会导致每帧
-   重建 BarShape 实例（重挂）。一旦用组件级状态（entered），动画只播一帧
-   就被打断——"生硬出现"的根因。
-   对策：改为 CSS @keyframes + 负 animation-delay 续播——
-   · 首次出现：负 delay = 0，从起点播（opacity .35 → 1，scaleY .85 → 1）
-   · 后续重挂：负 delay = (now - 首次记录时间)，动画从已播进度继续，
-     跨实例视觉连续，无需组件状态参与；seenAt 模块级 Map 记录时间戳
-   · 已出现 >动画时长 的柱子：负 delay 截断 → 定格在完成态（fill both） */
+/* ── 柱形出场动画（JS rAF 驱动，重挂免疫）──
+   recharts 拖动时内部 key=rectangle-x-y-value-i，窗口移动导致 BarShape 每帧
+   销毁重建；CSS@keyframes/组件 state 都会被下一帧实例取代而"动画约等于没有"。
+   方案：动画进度存【模块级 Map】跨实例共享；活跃实例注册到元素表；
+   rAF 循环每帧取当前活跃元素直接写 style.opacity/style.transform——
+   · 重挂不影响：新实例挂载即读到共享进度，从当前值延续
+   · 零 React 重渲染：动画直接操作 DOM，不触发组件 re-render
+   · 必然可见：JS 驱动，不依赖 CSS/@keyframes/生命周期 */
 
-/** 已出现柱子时间戳（模块级：跨渲染/重挂保持） */
-const seenAt = new Map<string, number>()
+/** 每柱动画进度（0→1，模块级跨实例共享） */
+const barProgress = new Map<string, number>()
+/** 每柱当前活跃 <rect> 元素（重挂时替换，rAF 循环每次读最新） */
+const barEls = new Map<string, SVGRectElement | null>()
+/** 每柱 rAF 句柄（一次只跑一个循环） */
+const barRafs = new Map<string, number>()
 
-const BAR_REVEAL_MS = 150
+const BAR_REVEAL_MS = 220
+
+const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3)
+
+/** 启动（若未跑）/延续该 date 的出场动画循环 */
+function pumpBar(date: string, x: number, y: number, w: number, h: number) {
+  const key = date
+  if (barRafs.has(key)) return // 已在跑：进度延续
+  const state = { last: performance.now() }
+  const tick = (now: number) => {
+    const el = barEls.get(key)
+    const p = barProgress.get(key) ?? 0
+    if (!el) {
+      // 元素表被清空（拖动中实例频繁换，等到新实例再继续）
+      if (p < 1) {
+        barRafs.set(key, window.requestAnimationFrame(tick))
+      } else {
+        barRafs.delete(key)
+      }
+      return
+    }
+    const t = Math.min(1, p + (now - state.last) / BAR_REVEAL_MS)
+    state.last = now
+    barProgress.set(key, t)
+    const ease = easeOutCubic(t)
+    el.style.opacity = String(0.3 + 0.7 * ease)
+    el.style.transform = `scaleY(${0.8 + 0.2 * ease})`
+    el.style.transformOrigin = `${x + w / 2}px ${y + h}px`
+    if (t < 1) {
+      barRafs.set(key, window.requestAnimationFrame(tick))
+    } else {
+      barRafs.delete(key)
+    }
+  }
+  barRafs.set(key, window.requestAnimationFrame(tick))
+}
 
 interface BarShapeProps {
   x?: number
@@ -81,30 +119,40 @@ interface BarShapeProps {
 
 const BarShape = memo(function BarShape({ x = 0, y = 0, width = 0, height = 0, payload }: BarShapeProps) {
   const date = payload?.date
-  // 负 delay：以"首次出现时间基准"计算动画进度，重挂不打断（无 state）
-  const delay = useMemo(() => {
-    if (!date) return BAR_REVEAL_MS // 无身份：直接完成态
-    const now = performance.now()
-    const first = seenAt.get(date)
-    if (first == null) seenAt.set(date, now)
-    return Math.min(now - (first ?? now), BAR_REVEAL_MS)
+  const rectRef = useRef<SVGRectElement>(null)
+
+  useLayoutEffect(() => {
+    const el = rectRef.current
+    if (!el || !date) return
+    // 注册活跃元素（旧实例卸载后新实例接管，进度不归零）
+    barEls.set(date, el)
+    // 初始画到当前进度（重挂的柱子不会先闪 0.3，而是直接从进度处显示）
+    const t = barProgress.get(date) ?? 0
+    const ease = easeOutCubic(Math.min(1, t))
+    el.style.opacity = String(0.3 + 0.7 * ease)
+    el.style.transform = `scaleY(${0.8 + 0.2 * ease})`
+    el.style.transformOrigin = `${x + width / 2}px ${y + height}px`
+    // 启动/延续动画
+    pumpBar(date, x, y, width, height)
+    return () => {
+      // 仅当仍是自己的实例时注销（避免清掉新实例）
+      if (barEls.get(date) === el) barEls.set(date, null)
+    }
+    // 坐标变化不重启（进度在 pumpBar 里延续）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [date])
 
   return (
     <g>
       <rect
+        ref={rectRef}
         x={x}
         y={y}
         width={width}
         height={height}
         fill={payload?.barFill ?? PINK}
         rx={0}
-        style={{
-          animation: 'lc-bar-reveal 150ms ease-out both',
-          animationDelay: `-${delay.toFixed(1)}ms`,
-          transformOrigin: `${x + width / 2}px ${y + height}px`,
-          pointerEvents: 'none',
-        }}
+        style={{ pointerEvents: 'none' }}
       />
     </g>
   )
