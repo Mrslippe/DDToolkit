@@ -75,7 +75,16 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
   /** Brush 拖动中：临时关动画保跟手（400ms 动画在拖拽时会产生拖影/滞后） */
   const [dragging, setDragging] = useState(false)
   const dragTimer = useRef<number>()
-  useEffect(() => () => window.clearTimeout(dragTimer.current), [])
+  // Brush onChange rAF 节流：target 暂存 + 帧内提交
+  const brushRafRef = useRef(0)
+  const brushTargetRef = useRef<[number, number] | null>(null)
+  useEffect(
+    () => () => {
+      window.clearTimeout(dragTimer.current)
+      window.cancelAnimationFrame(brushRafRef.current)
+    },
+    [],
+  )
 
   useEffect(() => {
     if (accountId == null) return
@@ -124,9 +133,21 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
     return Number.isFinite(days) ? daily.slice(-days) : daily
   }, [daily, preset])
 
-  /* ── 图表主区抓手平移（pan）：按住拖动 = 平移时间窗口（窗口宽度不变）── */
+  /* ── 图表主区抓手平移（pan）：按住拖动 = 平移时间窗口（窗口宽度不变）
+     性能三件套：①mousedown 一次性缓存布局（不再每帧读 clientWidth）；
+     ②mousemove 只算目标索引存 ref，rAF 帧内才 setState（一帧最多一次重渲染）；
+     ③拖动期间 dragging=true 动画关（不翻转），pointer-events:none 旁路 recharts
+     的 mousemove/tooltip 链路（否则 tooltip state 更新叠加拖动重渲染 = 卡）── */
   const bodyRef = useRef<HTMLDivElement>(null)
-  const panRef = useRef<{ startX: number; range0: number; range1: number } | null>(null)
+  const panRef = useRef<{
+    startX: number
+    range0: number
+    winSize: number
+    itemW: number
+    maxStart: number
+    target: number
+    raf: number
+  } | null>(null)
   const [panning, setPanning] = useState(false)
 
   const onBodyMouseDown = (e: React.MouseEvent) => {
@@ -134,43 +155,60 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
     // Brush 缩略图/重置/档位区域不触发 pan（它们有自己的交互）
     const t = e.target as Element
     if (t.closest?.('.recharts-brush, .fan-chart-reset, .fan-presets')) return
-    panRef.current = { startX: e.clientX, range0: range[0], range1: range[1] }
+    const el = bodyRef.current
+    if (!el) return
+    const plotW = Math.max(el.clientWidth - 48 - 42 - 14, 1)
+    const winSize = range[1] - range[0]
+    panRef.current = {
+      startX: e.clientX,
+      range0: range[0],
+      winSize,
+      itemW: plotW / (winSize + 1),
+      maxStart: Math.max(capacity.length - 1 - winSize, 0),
+      target: range[0],
+      raf: 0,
+    }
     setPanning(true)
+    setDragging(true) // 一次性关动画，拖动期间不再翻转
   }
 
   useEffect(() => {
     if (!panning) return
     const onMove = (e: MouseEvent) => {
       const pan = panRef.current
-      const el = bodyRef.current
-      if (!pan || !el) return
-      // 绘图区宽 = 容器宽 − 左右轴宽 − 边距；点宽 = 绘图区 / 窗口点数
-      const plotW = Math.max(el.clientWidth - 48 - 42 - 14, 1)
-      const winSize = pan.range1 - pan.range0
-      const itemW = plotW / (winSize + 1)
-      // 向左拖 = 时间向前（看更早窗口），右拖反向
-      const deltaIndex = Math.round((pan.startX - e.clientX) / itemW)
-      const maxStart = Math.max(capacity.length - 1 - winSize, 0)
-      const s = Math.min(Math.max(pan.range0 + deltaIndex, 0), maxStart)
-      if (s !== pan.range0) {
-        // 以 pan 起点为基准持续重算（不叠加误差），稳定跟手
-        setRange([s, Math.max(s + winSize, s)])
-        setDragging(true)
-        window.clearTimeout(dragTimer.current)
-        dragTimer.current = window.setTimeout(() => setDragging(false), 300)
-      }
+      if (!pan) return
+      // 以 pan 起点为基准持续重算（不叠加误差），只存目标帧内提交
+      const deltaIndex = Math.round((pan.startX - e.clientX) / pan.itemW)
+      const s = Math.min(Math.max(pan.range0 + deltaIndex, 0), pan.maxStart)
+      pan.target = s
+      if (pan.raf) return
+      pan.raf = window.requestAnimationFrame(() => {
+        const p = panRef.current
+        pan.raf = 0
+        if (!p) return
+        const s2 = p.target
+        if (s2 !== p.range0) setRange([s2, s2 + p.winSize])
+      })
     }
     const onUp = () => {
+      const pan = panRef.current
+      if (pan?.raf) {
+        window.cancelAnimationFrame(pan.raf)
+        pan.raf = 0
+      }
       panRef.current = null
       setPanning(false)
+      setDragging(false) // 松手恢复动画（一次）
     }
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
     return () => {
       window.removeEventListener('mousemove', onMove)
       window.removeEventListener('mouseup', onUp)
+      const pan = panRef.current
+      if (pan?.raf) window.cancelAnimationFrame(pan.raf)
     }
-  }, [panning, capacity.length])
+  }, [panning])
 
   /** 数据/档位就绪：窗口重置为该容量尾部 DEFAULT_DAYS 天 */
   useEffect(() => {
@@ -368,11 +406,19 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
                 onChange={(e: { startIndex?: number; endIndex?: number }) => {
                   const s = e.startIndex ?? 0
                   const en = e.endIndex ?? capacity.length - 1
-                  setRange([s, Math.max(s, en)])
-                  // 跟手优化：拖动期间禁用动画，停顿 300ms 后恢复
-                  setDragging(true)
-                  window.clearTimeout(dragTimer.current)
-                  dragTimer.current = window.setTimeout(() => setDragging(false), 300)
+                  brushTargetRef.current = [s, Math.max(s, en)]
+                  if (brushRafRef.current) return
+                  // rAF 节流：一帧最多提交一次窗口（Brush 拖动 event 高频，直接 setRange 会每事件全量重渲染）
+                  brushRafRef.current = window.requestAnimationFrame(() => {
+                    brushRafRef.current = 0
+                    const t = brushTargetRef.current
+                    if (!t) return
+                    setRange(t)
+                    // 跟手优化：拖动期间禁用动画，停顿 250ms 后恢复
+                    setDragging(true)
+                    window.clearTimeout(dragTimer.current)
+                    dragTimer.current = window.setTimeout(() => setDragging(false), 250)
+                  })
                 }}
                 tickFormatter={() => ''}
               >

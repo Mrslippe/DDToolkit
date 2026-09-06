@@ -2107,10 +2107,17 @@
   cursor: grabbing;
 }
 
-/* panning：隐藏 tooltip 光标与弹层（避免拖动时十字线/浮层闪烁干扰） */
+/* panning：隐藏 tooltip 光标与浮层 + 旁路 recharts 表面事件——
+   recharts 内部 mousemove 仍会更新 tooltip state 并重渲染（视觉隐藏无效），
+   pointer-events:none 让窗口拖动期间图表零内部渲染开销；window 级监听不受影响 */
 .fan-chart-body.panning .recharts-tooltip-wrapper,
 .fan-chart-body.panning .recharts-tooltip-cursor {
   display: none;
+}
+
+.fan-chart-body.panning .recharts-wrapper,
+.fan-chart-body.panning .recharts-surface {
+  pointer-events: none;
 }
 
 /* Brush 迷你图轨道与窗口滑块（项目粉系覆写，保持浅底通透）
