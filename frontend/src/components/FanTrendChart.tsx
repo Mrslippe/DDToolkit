@@ -176,6 +176,19 @@ const BarShape = memo(function BarShape({ x = 0, y = 0, width = 0, height = 0, p
     barEls.set(date, el)
     // 注册/更新状态，启动循环（已跑则直接更新 target）
     pumpBar(date, { x, y, w: width, h: height }, isFresh)
+    // ★ 同步写入当前几何：消掉"重挂后 rect 空几何 → rAF 下一帧才写"的空窗闪动
+    const cur = barCur.get(date)
+    if (cur) {
+      el.setAttribute('x', String(cur.x))
+      el.setAttribute('y', String(cur.y))
+      el.setAttribute('width', String(cur.w))
+      el.setAttribute('height', String(cur.h))
+      const p = barProgress.get(date) ?? 1
+      const ease = easeOutCubic(Math.min(1, p))
+      el.style.opacity = String(0.3 + 0.7 * ease)
+      el.style.transform = `scaleY(${0.8 + 0.2 * ease})`
+      el.style.transformOrigin = `${cur.x + cur.w / 2}px ${cur.y + cur.h}px`
+    }
     return () => {
       if (barEls.get(date) === el) barEls.set(date, null)
     }
@@ -324,6 +337,7 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
 
   useEffect(() => {
     if (!panning) return
+    let frameCounter = 0
     const onMove = (e: MouseEvent) => {
       const pan = panRef.current
       if (!pan) return
@@ -336,8 +350,14 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
         const p = panRef.current
         pan.raf = 0
         if (!p) return
-        const s2 = p.target
-        if (s2 !== p.range0) setRange([s2, s2 + p.winSize])
+        // 隔帧提交：图表全量重渲染减半（拖动中 30~40fps 观感依旧跟手，
+        // 但 recharts 布局/坐标计算负担明显下降——当前仅柱几何由 rAF 驱动，
+        // 其他元素仍随 setRange 全量重算）
+        frameCounter += 1
+        if (frameCounter % 2 === 0) {
+          const s2 = p.target
+          if (s2 !== p.range0) setRange([s2, s2 + p.winSize])
+        }
       })
     }
     const onUp = () => {
