@@ -193,7 +193,7 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
         {first ? (
           <div className="lc-cell-body">
             <span className="lc-time">{fmtTime(new Date(first.start_at))}</span>
-            <span className="lc-title">{first.live_title || '场次'}</span>
+            <span className="lc-cell-title">{first.live_title || '场次'}</span>
           </div>
         ) : null}
       </div>
