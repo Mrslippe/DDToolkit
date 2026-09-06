@@ -2186,29 +2186,55 @@
   }
 }
 
-/* Brush 迷你图轨道与窗口滑块（项目粉系覆写，保持浅底通透）
-   窗口滑块 = 抓手工具：grab 光标提示可拖拽平移窗口 */
+/* ── Brush 迷你图轨道（v0.9.x 项目美学统一）──
+   轨道槽 = 次要素面：浅灰蓝底（与滚动条滑块同族）+ 发丝边 + 4px 圆角
+   （替代 Brush 默认 1px 满饱和粉框 + 直角）；
+   窗口滑片 = 浮片族：浅粉窗 + 发丝粉边 + 3px 圆角 + 轻浮影，hover 加深；
+   注意：recharts 内联 fillOpacity=0.2 会把 CSS 填色稀释到 ≈alpha0.02，
+   必须显式覆盖 fill-opacity: 1；
+   拖拽柄 = 强调粉圆角条（14px 宽），hover/按住加深 --pill-fill-pink 提供真实反馈，
+   键盘聚焦转 --c-accent（珊瑚红）标示可操作。 */
+.recharts-brush > rect:first-child {
+  fill: rgba(148, 163, 184, 0.1);
+  stroke: var(--c-border);
+  rx: 4px;
+}
+
 .recharts-brush-slide {
-  fill: rgba(251, 119, 161, 0.09);
+  fill: rgba(251, 119, 161, 0.1);
+  fill-opacity: 1;
+  stroke: rgba(251, 119, 161, 0.45);
+  rx: 3px;
   cursor: grab;
-  stroke: rgba(251, 119, 161, 0.35);
+  filter: drop-shadow(0 1px 2px rgba(15, 23, 42, 0.08));
+  transition: fill 0.15s ease;
+}
+
+.recharts-brush-slide:hover {
+  fill: rgba(251, 119, 161, 0.14);
 }
 
 .recharts-brush-slide:active {
   cursor: grabbing;
 }
 
+/* 拖拽柄（recharts DefaultTraveller = rect + 两条白纹） */
 .recharts-brush-traveller {
-  fill: rgba(251, 119, 161, 1);
   cursor: ew-resize;
 }
 
-.recharts-brush-traveller:hover {
+.recharts-brush-traveller rect {
   fill: var(--c-primary-deep);
+  rx: 2px;
+  transition: fill 0.15s ease;
 }
 
-.recharts-brush-traveller:active {
-  cursor: ew-resize;
-  fill: var(--c-primary-deep);
+.recharts-brush-traveller:hover rect,
+.recharts-brush-traveller:active rect {
+  fill: var(--pill-fill-pink);
+}
+
+.recharts-brush-traveller:focus-visible rect {
+  fill: var(--c-accent);
 }
 
