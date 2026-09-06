@@ -278,6 +278,14 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
       在受控更新下不可靠；重挂 = 同步 effect 必跑 = store 必写 = 主图必切；
       pan/Brush 拖动走 onChange 派发，不受 key 影响 */
   const [resetEpoch, setResetEpoch] = useState(0)
+  /** 重置后强制补渲染：recharts 主图只在【父渲染或 store 通知】时重算切片——
+      重置点击仅触发一次渲染，而 store 写入发生在其 effect（晚于该渲染）→
+      主图停在旧切片；resync 翻转 = 再触发一次渲染（useLayoutEffect 在 paint 前
+      完成 → 无全量闪帧），此时 store 已写入 → 切片生效 */
+  const [resync, setResync] = useState(false)
+  useLayoutEffect(() => {
+    if (resync) setResync(false)
+  }, [resync])
   // Brush onChange rAF 节流：target 暂存 + 帧内提交
   const brushRafRef = useRef(0)
   const brushTargetRef = useRef<[number, number] | null>(null)
@@ -340,9 +348,12 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
   /* 首次数据就绪：渲染期同步派生默认窗口（React "render-phase update" 模式）——
      保证图表与 Brush 从第一帧起就以【受控 startIndex/endIndex】挂载；
      range=null 以失控模式挂载 → recharts 3.8 受控 Brush 对"失控→受控"
-     切换不重切主图（主图永久全量 + 柱堆右侧，user 2026-09-06 截图复现） */
+     切换不重切主图（主图永久全量 + 柱堆右侧，user 2026-09-06 截图复现）；
+     resync 补渲染：store 写入发生在渲染 effect 阶段（晚于本渲染），
+     翻转 resync 保证其后还有一次渲染 → 首帧即正确切片（无全量闪帧） */
   if (range === null && capacity.length > 0) {
     setRange([Math.max(0, capacity.length - DEFAULT_DAYS), capacity.length - 1])
+    setResync(true)
   }
 
   /* ── 图表主区抓手平移（pan）：按住拖动 = 平移时间窗口（窗口宽度不变）
@@ -505,13 +516,15 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
               type="button"
               className="fan-chart-reset"
               /* 直接设默认窗口（不经 null——null 会走"失控"挂载路径）；
-                 同时 bump resetEpoch → Brush 重挂 → recharts 受控同步必执行 */
+                 bump resetEpoch → Brush 重挂 → recharts 受控同步必执行；
+                 bump resync → store 写入后再补一次渲染（paint 前）→ 主图必切 */
               onClick={() => {
                 setRange([
                   Math.max(0, capacity.length - DEFAULT_DAYS),
                   capacity.length - 1,
                 ])
                 setResetEpoch((e) => e + 1)
+                setResync(true)
               }}
             >
               <CalendarRange className="size-3.5" />
