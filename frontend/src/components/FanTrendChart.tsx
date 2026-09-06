@@ -83,13 +83,21 @@ const BarShape = memo(function BarShape({ x = 0, y = 0, width = 0, height = 0, p
   const isNew = date ? !barAnimated.has(date) : false
   if (date && isNew) barAnimated.add(date) // 幂等：渲染期间登记（StrictMode 双渲染无碍）
 
+  /* recharts 对【负值（掉粉）】传的是负 height（y 在柱底、height<0，向上长）——
+     内置默认形状用 path 绘制（负号即方向），自绘 <rect> 必须翻转，
+     否则 SVG 报 "attribute height: A negative value is not valid"（109k 刷屏的主因）：
+     顶边 = min(y, y+height)，高 = |height| */
+  const rectTop = Math.min(y, y + height)
+  const rectH = Math.abs(height)
+  if (width <= 0 || rectH <= 0) return null
+
   return (
     <g>
       <rect
         x={x}
-        y={y}
+        y={rectTop}
         width={width}
-        height={height}
+        height={rectH}
         fill={payload?.barFill ?? PINK}
         rx={0}
         className={isNew ? 'lc-bar-enter' : undefined}
@@ -111,7 +119,8 @@ const BarShape = memo(function BarShape({ x = 0, y = 0, width = 0, height = 0, p
  * - 底部 Brush 缩略图：dataKey=fans（数值键才能画出迷你图），拖拽滑块/拉伸两端
  *   调整展示窗口（startIndex/endIndex 受控，可一键回默认窗口）；
  * - 纵轴域随【当前可见窗口数据】动态计算（recharts auto domain 按可见数据重算）；
- * - 动画：入场/换窗 400ms 过渡。
+ * - 动画：仅【新柱入场】走 CSS @keyframes（recharts JS 动画全关：拖动/换窗期间
+ *   零插值重排，也杜绝动画管理链在重挂风暴下的 startTime 崩溃风险）。
  */
 const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }: Props) {
   const [points, setPoints] = useState<FanTrendPoint[]>([])
@@ -121,23 +130,15 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
   const [preset, setPreset] = useState<PresetKey>('3m')
   /** 当前窗口 [startIndex, endIndex]（容量数据索引；null=未就绪） */
   const [range, setRange] = useState<[number, number] | null>(null)
-  /** Brush 拖动中：临时关 recharts 内置动画保跟手 */
-  const [dragging, setDragging] = useState(false)
-  const dragTimer = useRef<number>()
   // Brush onChange rAF 节流：target 暂存 + 帧内提交
   const brushRafRef = useRef(0)
   const brushTargetRef = useRef<[number, number] | null>(null)
   useEffect(
     () => () => {
-      window.clearTimeout(dragTimer.current)
       window.cancelAnimationFrame(brushRafRef.current)
     },
     [],
   )
-  /** 拖动结束统一收尾：只关 recharts 内置动画标记（柱入场动画由 BarShape 自身负责） */
-  const settleDrag = () => {
-    setDragging(false)
-  }
 
   useEffect(() => {
     if (accountId == null) return
@@ -191,8 +192,9 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
   /* ── 图表主区抓手平移（pan）：按住拖动 = 平移时间窗口（窗口宽度不变）
      性能三件套：①mousedown 一次性缓存布局（不再每帧读 clientWidth）；
      ②mousemove 只算目标索引存 ref，rAF 帧内才 setState（一帧最多一次重渲染）；
-     ③拖动期间 dragging=true 动画关（不翻转），pointer-events:none 旁路 recharts
-     的 mousemove/tooltip 链路（否则 tooltip state 更新叠加拖动重渲染 = 卡）── */
+     ③panning 类 pointer-events:none 旁路 recharts 的 mousemove/tooltip 链路
+     （否则 tooltip state 更新叠加拖动重渲染 = 卡）；
+     曲线/柱均为 recharts 静态渲染（isAnimationActive=false），拖动期零动画开销 ── */
   const bodyRef = useRef<HTMLDivElement>(null)
   const panRef = useRef<{
     startX: number
@@ -224,7 +226,6 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
       raf: 0,
     }
     setPanning(true)
-    setDragging(true) // 一次性关 recharts 内置动画，拖动期间不再翻转
   }
 
   useEffect(() => {
@@ -260,7 +261,6 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
       }
       panRef.current = null
       setPanning(false)
-      settleDrag() // 松开 → 恢复 recharts 内置动画（曲线过渡；柱入场动画由自身负责）
     }
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
@@ -366,7 +366,14 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
           <div className="lc-state">暂无粉丝趋势数据</div>
         )}
         {!loading && !error && capacity.length > 0 && (
-          <ResponsiveContainer width="100%" height="100%">
+          /* initialDimension：卡身定宽 870（内容宽 838）、体高 372（460-17-10-21-24-8-8），
+             避免首帧 -1×-1 触发 recharts "should be greater than 0" 警告刷屏；
+             ResizeObserver 随后校正为实测值 */
+          <ResponsiveContainer
+            width="100%"
+            height="100%"
+            initialDimension={{ width: 838, height: 372 }}
+          >
             {/* accessibilityLayer 关闭：避免点击 SVG 后焦点落在 RootSurface(tabIndex=0)
                 被全局 outline-ring/50 描成粉色选中框（user 2026-09-06 反馈） */}
             <ComposedChart data={capacity} margin={{ top: 6, right: 8, bottom: 0, left: 0 }} accessibilityLayer={false}>
@@ -441,9 +448,7 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
                 fill="url(#fanFill)"
                 dot={false}
                 connectNulls
-                isAnimationActive={!dragging}
-                animationDuration={400}
-                animationBegin={0}
+                isAnimationActive={false}
               />
               {/* 时间轴缩略图（Panorama）：children 传入迷你图元素才渲染轨迹——
                   Brush 内部 Panorama 克隆 children 作为 compact 迷你图；
@@ -469,10 +474,6 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
                     const t = brushTargetRef.current
                     if (!t) return
                     setRange(t)
-                    // 跟手优化：拖动期间禁用 recharts 内置动画，停顿 250ms 后 settle
-                    setDragging(true)
-                    window.clearTimeout(dragTimer.current)
-                    dragTimer.current = window.setTimeout(settleDrag, 250)
                   })
                 }}
                 tickFormatter={() => ''}
