@@ -1963,12 +1963,14 @@
 }
 
 /* 格子内场次标题（注意：不得与卡片标题 .lc-title 同名——曾因同名同选择器
-   后声明覆盖，导致卡片标题被染成 14px 蓝色，user 2026-09-0x 截图发现） */
+   后声明覆盖，导致卡片标题被染成 14px 蓝色，user 2026-09-0x 截图发现）
+   颜色继承格子主色（9 类 tone：游戏蓝/杂谈黄/观影紫/投稿绿……，
+   user 2026-09-07：标题应跟随分类色系而非固定蓝） */
 .lc-cell-title {
   font-size: 14px;
   font-weight: 600;
   line-height: 16px;
-  color: rgba(0, 139, 194, 1);
+  color: inherit;
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;

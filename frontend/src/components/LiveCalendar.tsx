@@ -68,6 +68,8 @@ interface DayCell {
   sessions: LiveSession[]
   /** 当日礼物合计（zeroroku 日聚合，0=无礼物/无记录） */
   giftTotal: number
+  /** 无场次但有礼物的日子：是否被跨天场次覆盖（次日续播，礼物按自然日分桶） */
+  spanned: boolean
   isToday: boolean
   state: CellState
 }
@@ -89,10 +91,13 @@ interface PopState {
  * - 导航栏（项目浮片族 token：斜切白卡浮片三连——左双箭头+月份+右双箭头，中间点击弹月份选择浮窗）；
  * - 导航栏右侧 = 当月类型统计胶囊（frame 10_642：彩色胶囊 + 计数，服务端 category 口径，仅非零项）；
  * - M4 内容（数据管道 M1-M3 后端闭环后）：
- *   · 格内按最开始布局单场呈现：时间行（HH:MM 真实分钟）+ 右侧「N 场」当日场次计数 + 单行标题；
+ *   · 格内按最开始布局单场呈现：时间行（HH:MM 真实分钟）+ 右侧「N 场」当日场次计数 + 单行标题
+ *     （颜色跟随格类型色系：游戏蓝/杂谈黄/观影紫/投稿绿…，user 2026-09-07）；
  *   · hover 格子 → 浮层（当日全量：起止/时长/标题/类型/分区/收益/峰值在线/弹幕/数据源 + 当日礼物合计），
  *     鼠标滑向浮层有 120ms 宽限不闪关；Esc 关闭；
- *   · 无场次但有礼物日的格 = 「礼物」徽章 + 金额（2024 缺口期/未收录主播兜底）；
+ *   · 无场次的格子：今天以前 = 「休息」；今天及以后 = 「待定」（user 2026-09-07）；
+ *   · 有礼物无场次的格子 = 「礼物」徽章 + 金额；跨天续播日（前一场直播过零点、
+ *     礼物按自然日分桶）显示「跨天续播 · 礼物 ¥x」（user 2026-09-07 追问后定案）；
  *   · 类型徽章/统计用后端 category（标题分区双信号），服务端缺失时前端关键词兜底。
  */
 const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: Props) {
@@ -191,13 +196,28 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
       const giftTotal = giftByDay.get(key) ?? 0
       const inMonth = d.getMonth() === ym.m
       const isToday = key === todayKey
-      // 状态：有场次=live；无场次但有礼物日=gift（历史缺口/未收录兜底）；无=tbd
+      // 跨天检测：场次起于前一日、结束于本日之后（含进行中）→ 本日礼物是续播分桶
+      let spanned = false
+      if (list.length === 0) {
+        const dayStart = new Date(d.getFullYear(), d.getMonth(), d.getDate())
+        const dayEnd = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1)
+        for (const s of sessions) {
+          const st = new Date(s.start_at)
+          if (Number.isNaN(st.getTime())) continue
+          const en = s.end_at ? new Date(s.end_at) : null
+          if (st < dayEnd && (en == null || en >= dayStart)) {
+            spanned = true
+            break
+          }
+        }
+      }
+      // 状态：有场次=live；无场次但有礼物日=gift（跨天续播/历史缺口兜底）；无=tbd
       const state: CellState = list.length > 0 ? 'live' : giftTotal > 0 ? 'gift' : 'tbd'
-      out.push({ date: d, key, inMonth, sessions: list, giftTotal, isToday, state })
+      out.push({ date: d, key, inMonth, sessions: list, giftTotal, spanned, isToday, state })
     }
     return out
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ym, byDay, giftByDay])
+  }, [ym, byDay, giftByDay, sessions])
 
   /** 当月类型统计（导航栏右侧统计胶囊，服务端 category 口径，仅非零项） */
   const monthStats = useMemo(() => {
@@ -285,6 +305,8 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
     let badge = '待定'
     if (c.state === 'live' && toneKey) badge = liveTypeLabel(toneKey)
     else if (c.state === 'gift') badge = '礼物'
+    // user 2026-09-07：今天以前没直播 = 休息；今天及以后（尚未发生）= 待定
+    else if (c.key < todayKey) badge = '休息'
 
     return (
       <div
@@ -308,7 +330,10 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
         ) : null}
         {c.state === 'gift' ? (
           <div className="lc-cell-body">
-            <span className="lc-gift-amt">直播 · 礼物 {fmtMoney(c.giftTotal)}</span>
+            <span className="lc-gift-amt">
+              {c.spanned ? '跨天续播 · 礼物 ' : '直播 · 礼物 '}
+              {fmtMoney(c.giftTotal)}
+            </span>
           </div>
         ) : null}
       </div>
