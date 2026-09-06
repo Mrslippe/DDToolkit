@@ -245,112 +245,114 @@ const UpcomingEventsCard = memo(function UpcomingEventsCard({ vtuber, refreshTic
         </div>
       </div>
 
-      {loading ? (
-        <div className="archive-empty"><Loader2 className="mr-2 inline size-4 animate-spin align-[-2px] text-primary" />加载中…</div>
-      ) : error ? (
-        <div className="archive-error">{error}</div>
-      ) : (
-        <>
-          {adding && (
-            <div className="event-add-form">
-              <input
-                className="event-input"
-                placeholder="活动名称（如 生日歌回）"
-                value={newTitle}
-                maxLength={40}
-                onChange={(e) => setNewTitle(e.target.value)}
-              />
-              <input
-                type="date"
-                className="event-input event-input--date"
-                value={newDate}
-                onChange={(e) => setNewDate(e.target.value)}
-              />
-              <button type="button" className="float-pill float-pill--sm" disabled={saving || !newTitle.trim() || !newDate} onClick={addEvent}>
-                {saving ? '保存中…' : '保存'}
-              </button>
-            </div>
-          )}
-
-          {empty ? (
-            <div className="archive-empty">暂无重要日期：编辑纪念日或添加活动后出现</div>
-          ) : (
-            <ul className="event-list">
-              {rows.map((r) => (
-                <li key={r.id} className={`event-row event-row--${r.kind}`}>
-                  <div className="event-row-main">
-                    <span className="event-row-title">
-                      {r.kind === 'anniv' && r.anniv?.key === 'birthday' && <Cake className="size-3.5" />}
-                      {r.kind === 'anniv' && r.anniv?.key === 'debut' && <CalendarDays className="size-3.5" />}
-                      {r.kind === 'reservation' && <CalendarClock className="size-3.5" />}
-                      {r.title}
-                    </span>
-                    <span className="event-row-title2">
-                      {r.when}
-                      {r.extra && <span className="event-row-extra">{r.extra}</span>}
-                    </span>
-                  </div>
-                  <span className={`event-row-days${r.days <= 3 ? ' soon' : ''}`}>
-                    {daysLabel(r.days)}
-                  </span>
-                  {/* 行操作 */}
-                  <span className="event-row-ops">
-                    {r.kind === 'anniv' && (
-                      <button
-                        type="button"
-                        title="编辑纪念日"
-                        className="event-op"
-                        onClick={() => (editingKey === r.anniv?.key ? setEditingKey(null) : startEditing(r.anniv!.key))}
-                      >
-                        <Pencil className="size-3.5" />
-                      </button>
-                    )}
-                    {r.kind === 'event' && (
-                      <button
-                        type="button"
-                        title="删除活动"
-                        className="event-op event-op--danger"
-                        onClick={() => removeEvent(r.event!.id)}
-                      >
-                        <Trash2 className="size-3.5" />
-                      </button>
-                    )}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-
-          {/* 纪念日行内编辑面板 */}
-          {editingKey && (
-            <div className="event-edit-panel">
-              <label className="event-edit-field">
-                <span>生日（MM-DD）</span>
+      <div className="archive-section-scroll">
+        {loading ? (
+          <div className="archive-empty"><Loader2 className="mr-2 inline size-4 animate-spin align-[-2px] text-primary" />加载中…</div>
+        ) : error ? (
+          <div className="archive-error">{error}</div>
+        ) : (
+          <>
+            {adding && (
+              <div className="event-add-form">
                 <input
                   className="event-input"
-                  placeholder="如 06-21"
-                  value={editBirthday}
-                  maxLength={10}
-                  onChange={(e) => setEditBirthday(e.target.value)}
+                  placeholder="活动名称（如 生日歌回）"
+                  value={newTitle}
+                  maxLength={40}
+                  onChange={(e) => setNewTitle(e.target.value)}
                 />
-              </label>
-              <label className="event-edit-field">
-                <span>出道日（YYYY-MM-DD）</span>
                 <input
-                  className="event-input"
-                  placeholder="如 2022-09-27"
-                  value={editDebut}
-                  maxLength={10}
-                  onChange={(e) => setEditDebut(e.target.value)}
+                  type="date"
+                  className="event-input event-input--date"
+                  value={newDate}
+                  onChange={(e) => setNewDate(e.target.value)}
                 />
-              </label>
-              <button type="button" className="float-pill float-pill--sm" onClick={() => saveAnniversary(editingKey)}>
-                保存
-              </button>
-            </div>
-          )}
-        </>
-      )}
+                <button type="button" className="float-pill float-pill--sm" disabled={saving || !newTitle.trim() || !newDate} onClick={addEvent}>
+                  {saving ? '保存中…' : '保存'}
+                </button>
+              </div>
+            )}
+
+            {empty ? (
+              <div className="archive-empty">暂无重要日期：编辑纪念日或添加活动后出现</div>
+            ) : (
+              <ul className="event-list">
+                {rows.map((r) => (
+                  <li key={r.id} className={`event-row event-row--${r.kind}`}>
+                    <div className="event-row-main">
+                      <span className="event-row-title">
+                        {r.kind === 'anniv' && r.anniv?.key === 'birthday' && <Cake className="size-3.5" />}
+                        {r.kind === 'anniv' && r.anniv?.key === 'debut' && <CalendarDays className="size-3.5" />}
+                        {r.kind === 'reservation' && <CalendarClock className="size-3.5" />}
+                        {r.title}
+                      </span>
+                      <span className="event-row-title2">
+                        {r.when}
+                        {r.extra && <span className="event-row-extra">{r.extra}</span>}
+                      </span>
+                    </div>
+                    <span className={`event-row-days${r.days <= 3 ? ' soon' : ''}`}>
+                      {daysLabel(r.days)}
+                    </span>
+                    {/* 行操作 */}
+                    <span className="event-row-ops">
+                      {r.kind === 'anniv' && (
+                        <button
+                          type="button"
+                          title="编辑纪念日"
+                          className="event-op"
+                          onClick={() => (editingKey === r.anniv?.key ? setEditingKey(null) : startEditing(r.anniv!.key))}
+                        >
+                          <Pencil className="size-3.5" />
+                        </button>
+                      )}
+                      {r.kind === 'event' && (
+                        <button
+                          type="button"
+                          title="删除活动"
+                          className="event-op event-op--danger"
+                          onClick={() => removeEvent(r.event!.id)}
+                        >
+                          <Trash2 className="size-3.5" />
+                        </button>
+                      )}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {/* 纪念日行内编辑面板 */}
+            {editingKey && (
+              <div className="event-edit-panel">
+                <label className="event-edit-field">
+                  <span>生日（MM-DD）</span>
+                  <input
+                    className="event-input"
+                    placeholder="如 06-21"
+                    value={editBirthday}
+                    maxLength={10}
+                    onChange={(e) => setEditBirthday(e.target.value)}
+                  />
+                </label>
+                <label className="event-edit-field">
+                  <span>出道日（YYYY-MM-DD）</span>
+                  <input
+                    className="event-input"
+                    placeholder="如 2022-09-27"
+                    value={editDebut}
+                    maxLength={10}
+                    onChange={(e) => setEditDebut(e.target.value)}
+                  />
+                </label>
+                <button type="button" className="float-pill float-pill--sm" onClick={() => saveAnniversary(editingKey)}>
+                  保存
+                </button>
+              </div>
+            )}
+          </>
+        )}
+      </div>
     </section>
   )
 })

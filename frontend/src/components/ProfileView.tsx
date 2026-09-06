@@ -62,7 +62,9 @@ const ProfileView = memo(function ProfileView({ vtuber, refreshTick }: Props) {
             <AccountPicker accounts={accounts} value={selected} onChange={setSelected} />
           </div>
         </div>
-        <ProfileCard vtuber={vtuber} account={selected} thirdparty={thirdparty} />
+        <div className="archive-section-scroll">
+          <ProfileCard vtuber={vtuber} account={selected} thirdparty={thirdparty} />
+        </div>
       </section>
 
       {/* 账号抽屉：该 V 的全部平台账号一览（头像 / 昵称 / 粉丝 / 房间号） */}
@@ -73,26 +75,28 @@ const ProfileView = memo(function ProfileView({ vtuber, refreshTick }: Props) {
             <span className="archive-section-note">{vtuber.accounts.length} 个账号</span>
           </div>
         </div>
-        <ul className="profile-account-list">
-          {vtuber.accounts.map((a) => (
-            <li key={a.id} className="profile-account-row">
-              <span className={`acc-switch-platform${a.platform === 'bilibili' ? '' : ' weibo'}`}>
-                {a.platform === 'bilibili' ? 'B站' : a.platform === 'weibo' ? '微博' : a.platform}
-              </span>
-              <span className="profile-account-name">{a.display_name || a.platform_uid}</span>
-              <span className="profile-account-meta">
-                {a.followers_count > 0 ? `${a.followers_count.toLocaleString()} 粉` : ''}
-                {a.room_id ? ` · 房间 ${a.room_id}` : ''}
-              </span>
-              {a.live_status === 1 && (
-                <span className="profile-account-live">直播中</span>
-              )}
-            </li>
-          ))}
-          {vtuber.accounts.length === 0 && (
-            <li className="archive-empty">暂无账号</li>
-          )}
-        </ul>
+        <div className="archive-section-scroll">
+          <ul className="profile-account-list">
+            {vtuber.accounts.map((a) => (
+              <li key={a.id} className="profile-account-row">
+                <span className={`acc-switch-platform${a.platform === 'bilibili' ? '' : ' weibo'}`}>
+                  {a.platform === 'bilibili' ? 'B站' : a.platform === 'weibo' ? '微博' : a.platform}
+                </span>
+                <span className="profile-account-name">{a.display_name || a.platform_uid}</span>
+                <span className="profile-account-meta">
+                  {a.followers_count > 0 ? `${a.followers_count.toLocaleString()} 粉` : ''}
+                  {a.room_id ? ` · 房间 ${a.room_id}` : ''}
+                </span>
+                {a.live_status === 1 && (
+                  <span className="profile-account-live">直播中</span>
+                )}
+              </li>
+            ))}
+            {vtuber.accounts.length === 0 && (
+              <li className="archive-empty">暂无账号</li>
+            )}
+          </ul>
+        </div>
       </section>
     </div>
   )

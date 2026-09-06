@@ -59,7 +59,7 @@ function TrendCard({ vtuber, refreshTick }: { vtuber: VTuber; refreshTick: numbe
   }, [selected?.id, refreshTick])
 
   return (
-    <section className="archive-section">
+    <section className="archive-section archive-section--trend">
       <div className="archive-section-head">
         <span className="archive-section-title">粉丝趋势</span>
         <div className="archive-section-right">
@@ -69,15 +69,17 @@ function TrendCard({ vtuber, refreshTick }: { vtuber: VTuber; refreshTick: numbe
           <AccountPicker accounts={accounts} value={selected} onChange={setSelected} />
         </div>
       </div>
-      {loading ? (
-        <div className="archive-empty"><Loader2 className="mr-2 inline size-4 animate-spin align-[-2px] text-primary" />加载中…</div>
-      ) : error ? (
-        <div className="archive-error">{error}</div>
-      ) : trend.length === 0 ? (
-        <div className="archive-empty">暂无数据：等待账号抓取与第三方回填后出现</div>
-      ) : (
-        <FanTrendChart points={trend} />
-      )}
+      <div className="archive-section-scroll">
+        {loading ? (
+          <div className="archive-empty"><Loader2 className="mr-2 inline size-4 animate-spin align-[-2px] text-primary" />加载中…</div>
+        ) : error ? (
+          <div className="archive-error">{error}</div>
+        ) : trend.length === 0 ? (
+          <div className="archive-empty">暂无数据：等待账号抓取与第三方回填后出现</div>
+        ) : (
+          <FanTrendChart points={trend} />
+        )}
+      </div>
     </section>
   )
 }
@@ -116,15 +118,17 @@ function CalendarCard({ vtuber, refreshTick }: { vtuber: VTuber; refreshTick: nu
           <AccountPicker accounts={accounts} value={selected} onChange={setSelected} />
         </div>
       </div>
-      {loading ? (
-        <div className="archive-empty"><Loader2 className="mr-2 inline size-4 animate-spin align-[-2px] text-primary" />加载中…</div>
-      ) : error ? (
-        <div className="archive-error">{error}</div>
-      ) : sessions.length === 0 && giftDays.length === 0 ? (
-        <div className="archive-empty">暂无数据：等待账号抓取与第三方回填后出现</div>
-      ) : (
-        <LiveCalendar sessions={sessions} giftDays={giftDays} />
-      )}
+      <div className="archive-section-scroll">
+        {loading ? (
+          <div className="archive-empty"><Loader2 className="mr-2 inline size-4 animate-spin align-[-2px] text-primary" />加载中…</div>
+        ) : error ? (
+          <div className="archive-error">{error}</div>
+        ) : sessions.length === 0 && giftDays.length === 0 ? (
+          <div className="archive-empty">暂无数据：等待账号抓取与第三方回填后出现</div>
+        ) : (
+          <LiveCalendar sessions={sessions} giftDays={giftDays} />
+        )}
+      </div>
     </section>
   )
 }
