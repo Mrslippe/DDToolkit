@@ -146,7 +146,11 @@ function buildOption(data: DailyPoint[]): EChartsCoreOption {
         splitNumber: 4,
         axisLine: { show: false },
         axisTick: { show: false },
-        axisLabel: { color: MUTED, fontSize: 11, formatter: (v: number) => formatCount(v) },
+        axisLabel: {
+          color: MUTED,
+          fontSize: 11,
+          formatter: (v: number) => v.toLocaleString(),
+        },
         splitLine: { lineStyle: { color: GRID } },
       },
       {
@@ -352,20 +356,24 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
   }
 
   /** datazoom 事件：镜像窗口 + Y 轴域 250ms 节流、空闲 260ms 精确。
-      注意：事件常只带 start/end 百分比（startValue/endValue 依赖配置可能缺省），
-      兜底换算：category 索引 = percent% × (len-1)（四舍五入） */
+      统一数据源：不从事件参数推算（slider 与 inside 事件字段不同源会差 1~2 索引），
+      改读 chart.getOption() 的 dataZoom 当前状态（百分比），单一换算路径：
+      两种拖拽方式到达同一窗口 → 域严格一致（user 反馈跳变修复） */
   onDataZoomRef.current = (params) => {
     const data = capacityRef.current
     const len = data.length
-    if (len === 0 || !chartApiRef.current) return
-    const sRaw =
-      params.startValue ?? Math.round(((params.start ?? 0) / 100) * (len - 1))
-    const eRaw =
-      params.endValue ?? Math.round(((params.end ?? 100) / 100) * (len - 1))
-    const s = Math.min(Math.max(sRaw, 0), len - 1)
-    const e = Math.min(Math.max(eRaw, s), len - 1)
-    setRange([s, e])
     const chart = chartApiRef.current
+    if (len === 0 || !chart) return
+    const dz = (
+      chart.getOption().dataZoom as
+        | { start?: number; end?: number }[]
+        | undefined
+    )?.[0]
+    const pctS = dz?.start ?? params.start ?? 0
+    const pctE = dz?.end ?? params.end ?? 100
+    const s = Math.min(Math.max(Math.round((pctS / 100) * (len - 1)), 0), len - 1)
+    const e = Math.min(Math.max(Math.round((pctE / 100) * (len - 1)), s), len - 1)
+    setRange([s, e])
     const nowMs = performance.now()
     if (nowMs - domainLastRef.current >= DOMAIN_THROTTLE_MS) {
       domainLastRef.current = nowMs
