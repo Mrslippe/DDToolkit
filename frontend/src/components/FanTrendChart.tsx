@@ -1,9 +1,33 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from 'react'
-import { Area, AreaChart, Bar, Brush, CartesianGrid, ComposedChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import { CalendarRange, Loader2 } from 'lucide-react'
+import * as echarts from 'echarts/core'
+import type { EChartsCoreOption } from 'echarts/core'
+import { BarChart, LineChart } from 'echarts/charts'
+import {
+  AxisPointerComponent,
+  DataZoomComponent,
+  DataZoomInsideComponent,
+  DataZoomSliderComponent,
+  GridComponent,
+  TooltipComponent,
+} from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
 import type { FanTrendPoint } from '../api/types'
 import { api } from '../api/api'
 import { formatCount } from '../utils/format'
+
+/* ECharts 按需注册（v6.1）：canvas 渲染 + 线/柱 + 网格/提示/缩放/轴指针 */
+echarts.use([
+  LineChart,
+  BarChart,
+  GridComponent,
+  TooltipComponent,
+  AxisPointerComponent,
+  DataZoomComponent,
+  DataZoomInsideComponent,
+  DataZoomSliderComponent,
+  CanvasRenderer,
+])
 
 interface Props {
   /** 账号 id（null=无账号，显示空态）；切换账号自动重拉 */
@@ -16,16 +40,17 @@ interface DailyPoint {
   date: string
   fans: number | null
   delta: number | null
-  /** 涨=粉 / 掉=灰（BarShape 直接取自数据点，免 Cell 索引错位） */
+  /** 涨=粉 / 掉=灰（柱 itemStyle 直接取自数据点） */
   barFill: string
 }
 
-const PINK = '#fb77a1'       // 主粉（--chart-1）：涨粉
-const GRAY = '#a0aec0'       // 掉粉灰（浅灰蓝，浅底可见）
+const PINK = '#fb77a1' // 主粉（--chart-1）：涨粉
+const GRAY = '#a0aec0' // 掉粉灰（浅灰蓝，浅底可见）
 const GRID = 'rgba(210, 216, 222, 0.35)'
 const MUTED = '#5b6c7e'
+const TEXT_MAIN = '#4b5a6b'
 
-/** 数据容量档位（Brush 缩略图轨迹范围）：默认 3 个月，手动按钮切换 */
+/** 数据容量档位（时间轴轨迹范围）：默认 3 个月，手动按钮切换 */
 const PRESETS = [
   { key: '3m', label: '3个月', days: 90 },
   { key: '6m', label: '6个月', days: 180 },
@@ -37,8 +62,10 @@ type PresetKey = (typeof PRESETS)[number]['key']
 /** 窗口默认：当前容量档位内的最近 30 天 */
 const DEFAULT_DAYS = 30
 
-/** 粉丝轴域：窗口内 [min, max] 留 3% 余量并整 50（域更紧 → 曲线更细分见锯齿）；
-    delta 域：对称 ±max×1.1 */
+/** Y 轴域节流（拖动 dataZoom 期间 250ms 才跟随一次；空闲 260ms 后精确） */
+const DOMAIN_THROTTLE_MS = 250
+
+/** 粉丝轴域：[min,max] 留 3% 余量并整 50；delta 轴域：对称 ±max×1.1（零线居中） */
 function fanDomain(values: (number | null)[]): [number, number] {
   const nums = values.filter((v): v is number => v != null)
   if (nums.length === 0) return [0, 1]
@@ -56,275 +83,189 @@ function deltaDomain(values: (number | null)[]): [number, number] {
   return [-cap, cap]
 }
 
-/* ── 柱动画单一通道（v0.9.22 简化版）──
-   一切动画 = BarsOverlay 对【几何变化】的自然响应：无事件总线、无 settle spec、
-   无双通道、无切换——flash/重影类竞态从根上消除：
-   · BarsOverlay 常驻挂载（与图表同生命周期），永远绘制【全部窗口柱】；
-     recharts 原生柱永久隐藏（CSS 规则，从不切换）
-   · 驱动器 = 每帧几何 diff（BarShape 写入的 curGeom 快照）：
-     · 新日期（无上帧几何）→ 键帧生长（出现即播，340ms 后转 morph）
-     · 既有柱 → 高度 morph：旧→新几何的 scale 差作 transform，180ms 追帧
-       （浏览器补间）；稳定帧 transform 归 none（过渡取平 = 零动画）
-     · x/宽度即时更新（槽位步进不滞后于实时曲线）；锚点 = 柱的零线端
-   · 拖动/刷选/换档/加载/刷新全部自动覆盖——几何变化本身就是"事件"；
-   铁律：recharts 柱 key=rectangle-x-y-value-i 每帧重挂 → 动画全部寄生在
-   自持 Overlay（与 recharts svg 逐像素同框），曲线/轴/brush 保持 recharts 原生实时。 */
-
-/** 柱几何快照（可渲染 rect 值 + 填充色 + 生长锚点端）
-    delta 域对称 ±cap → 零线固定于绘图区中心：
-    正值柱 rect 底边 = 零线 → 锚点 bottom（50% 100%）；
-    负值柱 rect 顶边 = 零线 → 锚点 top（50% 0%） */
-interface BarGeom {
-  x: number
-  y: number
-  width: number
-  height: number
-  fill: string
-  origin: '50% 100%' | '50% 0%'
+/** 「+1,234 / −56」（tooltip 与概览共用） */
+function fmtDelta(v: number | null): string {
+  return v == null ? '—' : `${v >= 0 ? '+' : '−'}${Math.abs(v).toLocaleString()}`
 }
 
-/** 当前渲染帧的柱几何（BarShape 渲染期写入；Overlay 唯一目标源，幂等） */
-const curGeom = new Map<string, BarGeom>()
-
-/** 入场期截止（date → 到期时间）：键帧播完（260ms < 340ms 生命期）后转 morph */
-const enterUntil = new Map<string, number>()
-
-const ENTRY_MS = 260
-const ENTER_LIFE_MS = 340
-/** 高度 morph 时长：180→120ms——拖动期柱高度滞后感接近曲线（曲线原生实时） */
-const LIVE_MORPH_MS = 120
-
-/** 高度 morph：仅 scale（x/宽度即时更新，不参与转换）；
-    锚点 = 柱的零线端 → 缩放在零线静止，另一端平滑伸缩 */
-function fromHeight(b: BarGeom, t: BarGeom): string {
-  const ky = t.height > 0 ? b.height / t.height : 0
-  const f = (n: number) => String(Math.round(n * 100) / 100)
-  return `scale(1, ${f(ky)})`
-}
-
-/** 当前窗口槽宽（px）：相邻柱几何反推（精确，源自 BarShape 渲染期快照）；
-    无相邻柱对时兜底 805/(winSize-1)。route1 平移预览的像素换算用 */
-function mainSlotWidth(dates: string[], winSize: number): number {
-  for (let i = 1; i < dates.length; i++) {
-    const a = curGeom.get(dates[i - 1])
-    const b = curGeom.get(dates[i])
-    if (a && b && b.x > a.x) return b.x - a.x
+/** 工具提示：日期标题 + 粉丝数/日增粉两行（粉系样式随 tooltip 全局配置） */
+function tooltipFormatter(params: unknown): string {
+  const list =
+    (params as { seriesName?: string; value?: number | null; axisValue?: string | number }[]) ??
+    []
+  const p0 = list[0]
+  let html = `<div style="display:flex;flex-direction:column;gap:2px">`
+  if (p0 && p0.axisValue != null) {
+    html += `<div style="font-size:12px;color:#5b6c7e">${String(p0.axisValue)}</div>`
   }
-  return winSize > 1 ? 805 / (winSize - 1) : 0
+  for (const p of list) {
+    if (p.value == null) continue
+    if (p.seriesName === '粉丝数') {
+      html += `<div style="color:${TEXT_MAIN}">粉丝数 <b style="color:${PINK}">${formatCount(Number(p.value))} 粉</b></div>`
+    } else {
+      html += `<div style="color:${TEXT_MAIN}">日增粉 <b style="color:${Number(p.value) >= 0 ? PINK : GRAY}">${fmtDelta(Number(p.value))}</b></div>`
+    }
+  }
+  return html + `</div>`
 }
 
-interface BarShapeProps {
-  x?: number
-  y?: number
-  width?: number
-  height?: number
-  payload?: DailyPoint & { date: string }
+/** 全量 option：双轴（粉丝 Area + 日增 Bar）· dataZoom slider+inside · 粉系美学 */
+function buildOption(data: DailyPoint[]): EChartsCoreOption {
+  const len = data.length
+  const s0 = Math.max(0, len - DEFAULT_DAYS)
+  const e0 = len - 1
+  const def = data.slice(s0, e0 + 1)
+  const fDom = fanDomain(def.map((d) => d.fans))
+  const dDom = deltaDomain(def.map((d) => d.delta))
+  return {
+    // 渲染：首次入场 320ms，此后更新即时（dataZoom/域变化不追赶）
+    animation: true,
+    animationDuration: 320,
+    animationDurationUpdate: 0,
+    animationThreshold: 2000,
+    // 布局：上 12 / 下 42（dataZoom slider 26 + 边距）
+    grid: { left: 48, right: 46, top: 12, bottom: 42 },
+    xAxis: {
+      type: 'category',
+      boundaryGap: true,
+      data: data.map((d) => d.date),
+      axisLine: { lineStyle: { color: 'rgba(210, 216, 222, 0.55)' } },
+      axisTick: { show: false },
+      axisLabel: {
+        color: MUTED,
+        fontSize: 11,
+        hideOverlap: true,
+        formatter: (v: string) => v.slice(5),
+      },
+    },
+    yAxis: [
+      {
+        type: 'value',
+        min: fDom[0],
+        max: fDom[1],
+        splitNumber: 4,
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: { color: MUTED, fontSize: 11, formatter: (v: number) => formatCount(v) },
+        splitLine: { lineStyle: { color: GRID } },
+      },
+      {
+        type: 'value',
+        min: dDom[0],
+        max: dDom[1],
+        axisLine: { show: false },
+        axisTick: { show: false },
+        axisLabel: { color: MUTED, fontSize: 11 },
+        splitLine: { show: false },
+      },
+    ],
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: '#fff',
+      borderColor: 'rgba(15, 23, 42, 0.06)',
+      borderWidth: 1,
+      borderRadius: 12,
+      padding: [8, 12],
+      textStyle: { fontSize: 12.5, color: TEXT_MAIN },
+      extraCssText: 'box-shadow: 0 4px 16px rgba(15,23,42,0.1);',
+      axisPointer: {
+        type: 'line',
+        lineStyle: { color: 'rgba(148, 163, 184, 0.45)', type: 'dashed', width: 1 },
+      },
+      formatter: tooltipFormatter,
+    },
+    series: [
+      {
+        // 粉丝数：主粉光滑曲线 + 渐变面积（浅底通透）
+        yAxisIndex: 0,
+        name: '粉丝数',
+        type: 'line',
+        data: data.map((d) => d.fans),
+        smooth: true,
+        showSymbol: false,
+        connectNulls: true,
+        lineStyle: { color: PINK, width: 2 },
+        areaStyle: {
+          color: {
+            type: 'linear',
+            x: 0,
+            y: 0,
+            x2: 0,
+            y2: 1,
+            colorStops: [
+              { offset: 0, color: 'rgba(251, 119, 161, 0.28)' },
+              { offset: 1, color: 'rgba(251, 119, 161, 0.02)' },
+            ],
+          },
+        },
+      },
+      {
+        // 日增粉：正=粉 / 负=灰，柱宽 55% 随密度自适应
+        yAxisIndex: 1,
+        name: '日增粉',
+        type: 'bar',
+        data: data.map((d) => ({ value: d.delta, itemStyle: { color: d.barFill } })),
+        barWidth: '55%',
+        itemStyle: { borderRadius: [2, 2, 0, 0] },
+      },
+    ],
+    dataZoom: [
+      {
+        type: 'slider',
+        xAxisIndex: 0,
+        startValue: s0,
+        endValue: e0,
+        height: 26,
+        bottom: 6,
+        borderColor: 'rgba(210, 216, 222, 0.55)',
+        backgroundColor: 'rgba(148, 163, 184, 0.1)',
+        fillerColor: 'rgba(251, 119, 161, 0.16)',
+        dataBackground: {
+          lineStyle: { color: 'rgba(251, 119, 161, 0.6)', width: 1.5 },
+          areaStyle: { color: 'rgba(251, 119, 161, 0.12)' },
+        },
+        selectedDataBackground: {
+          lineStyle: { color: PINK, width: 1.5 },
+          areaStyle: { color: 'rgba(251, 119, 161, 0.2)' },
+        },
+        handleStyle: {
+          color: '#fff',
+          borderColor: 'rgba(251, 119, 161, 0.35)',
+          borderWidth: 1,
+          shadowBlur: 4,
+          shadowColor: 'rgba(15, 23, 42, 0.12)',
+          shadowOffsetY: 1,
+        },
+        moveHandleStyle: {
+          color: 'rgba(251, 119, 161, 0.4)',
+          shadowBlur: 4,
+          shadowColor: 'rgba(15, 23, 42, 0.12)',
+        },
+        textStyle: { color: MUTED, fontSize: 11 },
+        brushSelect: false,
+      },
+      {
+        // 图表区：滚轮缩放 + 按下拖动平移窗口（ECharts 原生增量渲染，跟手）
+        type: 'inside',
+        xAxisIndex: 0,
+        startValue: s0,
+        endValue: e0,
+        zoomOnMouseWheel: true,
+        moveOnMouseMove: true,
+        moveOnMouseWheel: false,
+      },
+    ],
+  }
 }
-
-const BarShape = memo(function BarShape({ x = 0, y = 0, width = 0, height = 0, payload }: BarShapeProps) {
-  const date = payload?.date
-  /* recharts 对【负值（掉粉）】传的是负 height（y 在柱底、height<0，向上长）——
-     内置默认形状用 path 绘制（负号即方向），自绘 <rect> 必须翻转，
-     否则 SVG 报 "attribute height: A negative value is not valid"：
-     顶边 = min(y, y+height)，高 = |height| */
-  const rectTop = Math.min(y, y + height)
-  const rectH = Math.abs(height)
-  if (date) {
-    // 渲染期几何快照（幂等；父组件渲染先于子组件，转场基准取其"变更前"值）
-    curGeom.set(date, {
-      x,
-      y: rectTop,
-      width,
-      height: rectH,
-      fill: payload?.barFill ?? PINK,
-      origin: (payload?.delta ?? 0) >= 0 ? '50% 100%' : '50% 0%',
-    })
-  }
-  if (width <= 0 || rectH <= 0) return null
-
-  return (
-    <g>
-      <rect
-        x={x}
-        y={rectTop}
-        width={width}
-        height={rectH}
-        fill={payload?.barFill ?? PINK}
-        rx={0}
-      />
-    </g>
-  )
-})
-
-/** Brush 两端把手（自定义 traveller：白浮片 + 三条浅灰 ≡ 纹理）——
-    rect 样式走 CSS（.recharts-brush-traveller rect：白底/圆角/浮影/hover 渐变），
-    三横线以中线为轴 ±3px 等距，模拟把手抓握纹理（user 2026-09-0x） */
-const BrushTraveller = memo(function BrushTraveller({
-  x = 0,
-  y = 0,
-  width = 0,
-  height = 0,
-}: {
-  x?: number
-  y?: number
-  width?: number
-  height?: number
-}) {
-  const cx = x + width / 2
-  const cy = y + height / 2
-  const half = Math.min(width / 2 - 1.5, 4) // 线半长：10px 宽浮片 → 7px 横线
-  return (
-    <>
-      <rect x={x} y={y} width={width} height={height} />
-      {[-3, 0, 3].map((dy) => (
-        <line key={dy} x1={cx - half} y1={cy + dy} x2={cx + half} y2={cy + dy} />
-      ))}
-    </>
-  )
-})
-
-/** BarsOverlay：常驻绘制【全部窗口柱】——
-    新日期 → CSS 键帧生长（出现即播，340ms 后转 morph）；
-    既有柱 → WAAPI 高度 morph：每提交帧 启动 animate(旧几何 → 当前几何)，
-    取消旧动画、立即接管（effect 在 paint 前执行 → 无中间帧闪跳）；
-    大跳变（高柱入窗→域缩放）与连续追帧同样精确；
-    x/宽度即时更新（槽位步进不滞后于实时曲线）；元素按 date 键控稳定 */
-const BarsOverlay = memo(function BarsOverlay({
-  dates,
-  live,
-}: {
-  dates: string[]
-  /** 实时模式（Brush 拖动/窗口交互中）：柱体零动画直接终态——
-      不进入场注册、不做 morph；退出实时后几何未变则本就不动，几何变了走 morph 接管 */
-  live: boolean
-}) {
-  const prevGeomRef = useRef<Map<string, BarGeom>>(new Map(curGeom)) // 挂载帧 = 当前几何（无动画起点）
-  const elsRef = useRef(new Map<string, SVGRectElement>())
-  const animsRef = useRef<{ d: string; from: string }[]>([])
-  const now = performance.now()
-  const nextPrev = new Map<string, BarGeom>()
-  const rects: ReactElement[] = []
-  for (const d of dates) {
-    const g = curGeom.get(d)
-    if (!g) continue
-    nextPrev.set(d, g)
-    if (!live) {
-      rects.push(
-        <rect
-          key={d}
-          className="ov-bar"
-          x={g.x}
-          y={g.y}
-          width={g.width}
-          height={g.height}
-          fill={g.fill}
-          style={{ transformOrigin: g.origin }}
-        />,
-      )
-      continue
-    }
-    const until = enterUntil.get(d)
-    if (until != null) {
-      if (now < until) {
-        // 入场期：键帧生长（元素持续存在，键帧不重播；几何随帧更新）
-        rects.push(
-          <rect
-            key={d}
-            className="ov-bar"
-            x={g.x}
-            y={g.y}
-            width={g.width}
-            height={g.height}
-            fill={g.fill}
-            style={{
-              animation: `lc-bar-grow ${ENTRY_MS}ms ease-out both`,
-              transformOrigin: g.origin,
-            }}
-          />,
-        )
-        continue
-      }
-      enterUntil.delete(d) // 入场期满 → morph 接管（填充态释放）
-    }
-    if (!prevGeomRef.current.has(d)) {
-      // 新入柱：键帧生长（即时生效，无交错——单柱入场/批量入场同样自然的 260ms）
-      enterUntil.set(d, now + ENTER_LIFE_MS)
-      rects.push(
-        <rect
-          key={d}
-          className="ov-bar"
-          x={g.x}
-          y={g.y}
-          width={g.width}
-          height={g.height}
-          fill={g.fill}
-          style={{
-            animation: `lc-bar-grow ${ENTRY_MS}ms ease-out both`,
-            transformOrigin: g.origin,
-          }}
-        />,
-      )
-      continue
-    }
-    // 既有柱：几何变化 → 登记 WAAPI 动画（旧几何 → 当前几何）
-    const p = prevGeomRef.current.get(d)
-    if (p && (p.y !== g.y || p.height !== g.height)) {
-      animsRef.current.push({ d, from: fromHeight(p, g) })
-    }
-    rects.push(
-      <rect
-        key={d}
-        ref={(el) => {
-          if (el) elsRef.current.set(d, el)
-          else elsRef.current.delete(d)
-        }}
-        className="ov-bar"
-        x={g.x}
-        y={g.y}
-        width={g.width}
-        height={g.height}
-        fill={g.fill}
-        style={{ transformOrigin: g.origin }}
-      />,
-    )
-  }
-  prevGeomRef.current = nextPrev
-  /* WAAPI morph：每提交帧 从旧几何插值到当前几何（180ms ease-out）；
-     取消在途动画再启动——同一 effect 内先 cancel 再 animate，
-     paint 前完成 → 无空帧、无闪烁；WAAPI 优先级高于 CSS 键帧，
-     入场期结束后 morph 可无缝接管（fill 态自动失效） */
-  useLayoutEffect(() => {
-    const anims = animsRef.current
-    animsRef.current = []
-    if (anims.length === 0) return
-    for (const a of anims) {
-      const el = elsRef.current.get(a.d)
-      if (!el) continue
-      el.getAnimations().forEach((an) => an.cancel())
-      el.animate([{ transform: a.from }, { transform: 'none' }], {
-        duration: LIVE_MORPH_MS,
-        easing: 'ease-out',
-      })
-    }
-  })
-  return (
-    <svg className="fan-transition-layer" aria-hidden>
-      {rects}
-    </svg>
-  )
-})
 
 /**
- * 粉丝趋势卡（v0.9.5 重建 + v0.9.6 修正，参考用户展示图 + 项目粉系浅底）：
- * - 双轴 ComposedChart：粉丝数 Area（主粉渐变色）+ 日增粉 Bar（涨=粉 / 掉=灰）；
- * - 数据容量档位按钮（3个月/6个月/1年/全部）：Brush 缩略图轨迹 = 当前档位数据，
- *   默认 3 个月（90 天点，渲染轻快不卡顿），档位切换自动重置窗口；
- * - 底部 Brush 缩略图：dataKey=fans（数值键才能画出迷你图），拖拽滑块/拉伸两端
- *   调整展示窗口（startIndex/endIndex 受控，可一键回默认窗口）；
- * - 纵轴域随【当前可见窗口数据】动态计算（recharts auto domain 按可见数据重算）；
- * - 柱动画：单一通道（v0.9.22）——BarsOverlay 常驻绘制全部窗口柱，几何变化
- *   即动画（新柱键帧生长 / 既有柱高度 morph 180ms / 稳定归零），无事件总线、
- *   无状态切换；曲线/轴/brush 保持 recharts 原生实时；recharts JS 动画全关。
+ * 粉丝趋势卡（v0.10 ECharts 架构：canvas 立即模式 + 增量渲染）：
+ * - 双轴：粉丝数（line+渐变面积，主粉）+ 日增粉（bar，涨=粉/掉=灰）；
+ * - dataZoom slider：底部全量迷你时间轴（窗口滑块/两端拉伸/中央移动把手）
+ *   + inside：图表区滚轮缩放、按住拖动平移窗口——原生增量渲染，拖动零 React 渲染；
+ * - 数据容量档位（3m/6m/1y/all）切换重建 option，默认窗口 = 尾部 30 天；
+ * - Y 轴域随当前窗口数据（dataZoom 事件 250ms 节流跟随，空闲 260ms 精确）；
+ * - 柱宽 55% 随横轴密度自适应（点少宽/点多细）；入场动画 320ms，更新零动画。
  */
 const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }: Props) {
   const [points, setPoints] = useState<FanTrendPoint[]>([])
@@ -332,68 +273,17 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
   const [error, setError] = useState<string | null>(null)
   /** 容量档位（默认 3 个月） */
   const [preset, setPreset] = useState<PresetKey>('3m')
-  /** 当前窗口 [startIndex, endIndex]（容量数据索引；null=未就绪） */
+  /** 窗口镜像 [startIndex, endIndex]（ECharts dataZoom 为唯真源；React 侧用于
+      域计算/默认窗口判断/重置按钮显隐；datazoom 事件更新） */
   const [range, setRange] = useState<[number, number] | null>(null)
-  /** 重置次数：重置时给 Brush 换 key 强制重挂——
-      recharts 3.8 受控 Brush 的 props→store 同步 effect（BrushInternal L803）
-      在受控更新下不可靠；重挂 = 同步 effect 必跑 = store 必写 = 主图必切；
-      pan/Brush 拖动走 onChange 派发，不受 key 影响 */
-  const [resetEpoch, setResetEpoch] = useState(0)
-  /** 重置后强制补渲染：recharts 主图只在【父渲染或 store 通知】时重算切片——
-      重置点击仅触发一次渲染，而 store 写入发生在其 effect（晚于该渲染）→
-      主图停在旧切片；resync 翻转 = 再触发一次渲染（useLayoutEffect 在 paint 前
-      完成 → 无全量闪帧），此时 store 已写入 → 切片生效 */
-  const [resync, setResync] = useState(false)
-  useLayoutEffect(() => {
-    if (resync) setResync(false)
-  }, [resync])
-  // Brush onChange rAF 节流：target 暂存 + 帧内提交
-  const brushRafRef = useRef(0)
-  const brushTargetRef = useRef<[number, number] | null>(null)
-  /** Brush 拖动活动态（onChange 置真，120ms 空闲回落）：拖动期间套用 panning 同款
-      旁路（surface pointer-events:none）——断掉 recharts mousemove/tooltip 重渲染链路；
-      拖动手柄的移动监听本身在 window 级，不受影响 */
-  const [brushDrag, setBrushDrag] = useState(false)
-  const brushDragTimerRef = useRef(0)
-  /** 域节流锚（user 2026-09-0x）：拖动期间 Y 轴域的数据源切片——
-      拖动开始 = 锚定拖动前窗口（零跳变），拖动中每 250ms 跟随一次，
-      松手（brushDrag 回落）清空 → 域恢复精确重算；
-      域不再因"新柱入窗"逐帧跳变，幅度稳定更贴手 */
-  const [domainAnchor, setDomainAnchor] = useState<DailyPoint[] | null>(null)
-  const dragActiveRef = useRef(false)
+
+  const chartRef = useRef<HTMLDivElement>(null)
+  const chartApiRef = useRef<ReturnType<typeof echarts.init> | null>(null)
+  /** 渲染期镜像（datazoom 事件经 ref 读最新数据，避免闭包过期） */
+  const capacityRef = useRef<DailyPoint[]>([])
+  const onDataZoomRef = useRef<(params: { startValue?: number; endValue?: number }) => void>(() => {})
   const domainLastRef = useRef(0)
-  /** 路线1 平移预览（user 2026-09-0x）：Brush 滑窗拖动窗口宽度不变时，
-      主图整体 translateX 直写（合成器路径，零 React 渲染/零重绘）——
-      --preview-shift 直写于 body；Brush 层反向补偿（手柄由受控 props 定位，
-      预览期间应停在轨道原位）；位移 >2 槽（快速拖动）或拉伸 → 精确路径 */
-  const previewShiftRef = useRef(0)
-  /** 最近精确窗口（渲染期与 range 同步；预览期间保持拖动前值） */
-  const lastExactRef = useRef<[number, number] | null>(range)
-  useEffect(() => {
-    if (brushDrag) return
-    dragActiveRef.current = false
-    setDomainAnchor(null)
-    // 终局补偿：预览期间（零渲染直写）未提交的目标窗口 → 松手一次性精确
-    const t = brushTargetRef.current
-    if (t) {
-      const cur = rangeRef.current
-      if (cur && (cur[0] !== t[0] || cur[1] !== t[1])) setRange(t)
-    }
-    // 清平移预览（回到 0；下帧渲染内容已精确）
-    previewShiftRef.current = 0
-    bodyRef.current?.style.removeProperty('--preview-shift')
-  }, [brushDrag])
-  /** range 渲染期镜像：rAF 回调里做死区比较（不触发渲染） */
-  const rangeRef = useRef<[number, number] | null>(range)
-  rangeRef.current = range
-  lastExactRef.current = range
-  useEffect(
-    () => () => {
-      window.cancelAnimationFrame(brushRafRef.current)
-      window.clearTimeout(brushDragTimerRef.current)
-    },
-    [],
-  )
+  const domainTidyRef = useRef(0)
 
   useEffect(() => {
     if (accountId == null) return
@@ -438,129 +328,80 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
     return out
   }, [points])
 
-  /** 当前容量档位数据（渲染源，数据量 = 档位天数） */
+  /** 当前容量档位数据（数据源，数据量 = 档位天数） */
   const capacity = useMemo<DailyPoint[]>(() => {
     const days = PRESETS.find((p) => p.key === preset)?.days ?? 90
     return Number.isFinite(days) ? daily.slice(-days) : daily
   }, [daily, preset])
 
-  /* 首次数据就绪：渲染期同步派生默认窗口（React "render-phase update" 模式）——
-     保证图表与 Brush 从第一帧起就以【受控 startIndex/endIndex】挂载；
-     range=null 以失控模式挂载 → recharts 3.8 受控 Brush 对"失控→受控"
-     切换不重切主图（主图永久全量 + 柱堆右侧，user 2026-09-06 截图复现）；
-     resync 补渲染：store 写入发生在渲染 effect 阶段（晚于本渲染），
-     翻转 resync 保证其后还有一次渲染 → 首帧即正确切片（无全量闪帧） */
-  if (range === null && capacity.length > 0) {
-    setRange([Math.max(0, capacity.length - DEFAULT_DAYS), capacity.length - 1])
-    setResync(true)
+  capacityRef.current = capacity
+
+  /** Y 轴域切到窗口 [s,e]（ECharts 增量 setOption，canvas 局部重绘） */
+  const applyDomain = (chart: ReturnType<typeof echarts.init>, data: DailyPoint[], s: number, e: number) => {
+    const slice = data.slice(s, e + 1)
+    const f = fanDomain(slice.map((d) => d.fans))
+    const dLoc = deltaDomain(slice.map((d) => d.delta))
+    chart.setOption({
+      yAxis: [
+        { min: f[0], max: f[1] },
+        { min: dLoc[0], max: dLoc[1] },
+      ],
+    })
   }
 
-  /* ── 图表主区抓手平移（pan）：按住拖动 = 平移时间窗口（窗口宽度不变）
-     性能三件套：①mousedown 一次性缓存布局（不再每帧读 clientWidth）；
-     ②mousemove 只算目标索引存 ref，rAF 帧内才 setState（一帧最多一次重渲染）；
-     ③panning 类 pointer-events:none 旁路 recharts 的 mousemove/tooltip 链路
-     （否则 tooltip state 更新叠加拖动重渲染 = 卡）；
-     曲线/柱均为 recharts 静态渲染（isAnimationActive=false），拖动期零动画开销 ── */
-  const bodyRef = useRef<HTMLDivElement>(null)
-  const panRef = useRef<{
-    startX: number
-    range0: number
-    winSize: number
-    itemW: number
-    maxStart: number
-    target: number
-    raf: number
-  } | null>(null)
-  const [panning, setPanning] = useState(false)
-
-  const onBodyMouseDown = (e: React.MouseEvent) => {
-    if (!range || capacity.length === 0) return
-    // Brush 缩略图/重置/档位区域不触发 pan（它们有自己的交互）
-    const t = e.target as Element
-    if (t.closest?.('.recharts-brush, .fan-chart-reset, .fan-presets')) return
-    const el = bodyRef.current
-    if (!el) return
-    const plotW = Math.max(el.clientWidth - 48 - 42 - 14, 1)
-    const winSize = range[1] - range[0]
-    panRef.current = {
-      startX: e.clientX,
-      range0: range[0],
-      winSize,
-      itemW: plotW / (winSize + 1),
-      maxStart: Math.max(capacity.length - 1 - winSize, 0),
-      target: range[0],
-      raf: 0,
+  /** datazoom 事件：镜像窗口 + Y 轴域 250ms 节流、空闲 260ms 精确 */
+  onDataZoomRef.current = (params) => {
+    const data = capacityRef.current
+    const len = data.length
+    if (len === 0 || !chartApiRef.current) return
+    const s = Math.min(Math.max(Math.round(params.startValue ?? 0), 0), len - 1)
+    const e = Math.min(Math.max(Math.round(params.endValue ?? len - 1), s), len - 1)
+    setRange([s, e])
+    const chart = chartApiRef.current
+    const nowMs = performance.now()
+    if (nowMs - domainLastRef.current >= DOMAIN_THROTTLE_MS) {
+      domainLastRef.current = nowMs
+      applyDomain(chart, data, s, e)
     }
-    setPanning(true)
+    window.clearTimeout(domainTidyRef.current)
+    domainTidyRef.current = window.setTimeout(() => {
+      const d = capacityRef.current
+      if (chartApiRef.current) applyDomain(chartApiRef.current, d, s, e)
+    }, DOMAIN_THROTTLE_MS + 20)
   }
 
+  /** 实例化（capacity/档位变化整体重建）：ECharts 自绘 canvas，React 不再进渲染链路 */
   useEffect(() => {
-    if (!panning) return
-    let frameCounter = 0
-    const onMove = (e: MouseEvent) => {
-      const pan = panRef.current
-      if (!pan) return
-      // 以 pan 起点为基准持续重算（不叠加误差），只存目标帧内提交
-      const deltaIndex = Math.round((pan.startX - e.clientX) / pan.itemW)
-      const s = Math.min(Math.max(pan.range0 + deltaIndex, 0), pan.maxStart)
-      pan.target = s
-      if (pan.raf) return
-      pan.raf = window.requestAnimationFrame(() => {
-        const p = panRef.current
-        pan.raf = 0
-        if (!p) return
-        // 隔帧提交：图表全量重渲染减半（拖动中 30~40fps 观感依旧跟手，
-        // 但 recharts 布局/坐标计算负担明显下降——当前仅柱几何由 rAF 驱动，
-        // 其他元素仍随 setRange 全量重算）
-        frameCounter += 1
-        if (frameCounter % 2 === 0) {
-          const s2 = p.target
-          if (s2 !== p.range0) setRange([s2, s2 + p.winSize])
-        }
-      })
+    const el = chartRef.current
+    if (!el || capacity.length === 0) return
+    const chart = echarts.init(el)
+    chartApiRef.current = chart
+    chart.setOption(buildOption(capacity))
+    const handler = (params: unknown) => {
+      const p = (params ?? {}) as { startValue?: number; endValue?: number }
+      onDataZoomRef.current(p)
     }
-    const onUp = () => {
-      const pan = panRef.current
-      if (pan?.raf) {
-        window.cancelAnimationFrame(pan.raf)
-        pan.raf = 0
-      }
-      panRef.current = null
-      setPanning(false)
-    }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
+    chart.on('datazoom', handler)
+    const ro = new ResizeObserver(() => chart.resize())
+    ro.observe(el)
+    /* 默认窗口镜像（视觉已由 option dataZoom 设定） */
+    setRange([Math.max(0, capacity.length - DEFAULT_DAYS), capacity.length - 1])
     return () => {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-      const pan = panRef.current
-      if (pan?.raf) window.cancelAnimationFrame(pan.raf)
+      ro.disconnect()
+      chart.off('datazoom', handler)
+      chart.dispose()
+      chartApiRef.current = null
+      window.clearTimeout(domainTidyRef.current)
     }
-  }, [panning])
-
-  /** 窗口重设（档位切换/数据刷新）：重置为该容量尾部 DEFAULT_DAYS 天 */
-  useEffect(() => {
-    if (capacity.length === 0) return
-    setRange([Math.max(0, capacity.length - DEFAULT_DAYS), capacity.length - 1])
   }, [capacity])
 
   const isDefaultWindow = useMemo(() => {
     if (!range) return true
-    return range[0] === Math.max(0, capacity.length - DEFAULT_DAYS) && range[1] === capacity.length - 1
+    return (
+      range[0] === Math.max(0, capacity.length - DEFAULT_DAYS) &&
+      range[1] === capacity.length - 1
+    )
   }, [range, capacity])
-
-  /** 窗口内数据切片（Y 轴域与概览的数据源） */
-  const view = useMemo(() => {
-    if (!range || capacity.length === 0) return capacity
-    const [s, e] = range
-    return capacity.slice(s, e + 1)
-  }, [capacity, range])
-
-  /** 纵轴域：常态每帧随窗口；Brush 拖动期间节流（250ms 跟一次，见 domainAnchor）——
-      域的变化不再被逐帧触发，幅度稳定、拖动更贴手；松手恢复实时精确 */
-  const domainSrc = brushDrag && domainAnchor ? domainAnchor : view
-  const fanDomainVal = useMemo(() => fanDomain(domainSrc.map((d) => d.fans)), [domainSrc])
-  const deltaDomainVal = useMemo(() => deltaDomain(domainSrc.map((d) => d.delta)), [domainSrc])
 
   /** 头部概览：容量末值 1d/7d/30d 涨粉 */
   const overview = useMemo(() => {
@@ -574,17 +415,6 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
     return { d1: diff(1), d7: diff(7), d30: diff(30) }
   }, [capacity])
 
-  const fmtDate = (d: string) => (d ? d.slice(5) : '') // MM-DD
-  const fmtDelta = (v: number | null) =>
-    v == null ? '—' : `${v >= 0 ? '+' : '−'}${Math.abs(v).toLocaleString()}`
-
-  /* 常驻 BarsOverlay 的窗口日期（几何变化即动画，无事件分析） */
-  const viewDates = view.map((d) => d.date)
-
-  /** 柱宽随横轴密度（窗口点数）：点少（密度低）→宽、点多（密度高）→细；
-      ≈0.55×槽宽（可用 835px ÷ 点数），clamp 6~26px；拖动窗口缩放时柱宽即时重算 */
-  const barWidth = Math.max(6, Math.min(26, Math.round((835 / Math.max(view.length, 1)) * 0.55)))
-
   return (
     <div className="fan-chart">
       {/* 卡片标题（与直播日历/归档卡同规格 16.5/600/--c-text-main） */}
@@ -595,9 +425,15 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
         <div className="fan-chart-summary">
           {overview ? (
             <>
-              <span className="fan-stat">1d <b>{fmtDelta(overview.d1)}</b></span>
-              <span className="fan-stat">7d <b>{fmtDelta(overview.d7)}</b></span>
-              <span className="fan-stat">30d <b>{fmtDelta(overview.d30)}</b></span>
+              <span className="fan-stat">
+                1d <b>{fmtDelta(overview.d1)}</b>
+              </span>
+              <span className="fan-stat">
+                7d <b>{fmtDelta(overview.d7)}</b>
+              </span>
+              <span className="fan-stat">
+                30d <b>{fmtDelta(overview.d30)}</b>
+              </span>
             </>
           ) : (
             <span className="fan-chart-empty-summary">—</span>
@@ -620,16 +456,16 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
             <button
               type="button"
               className="fan-chart-reset"
-              /* 直接设默认窗口（不经 null——null 会走"失控"挂载路径）；
-                 bump resetEpoch → Brush 重挂 → recharts 受控同步必执行；
-                 bump resync → store 写入后再补一次渲染（paint 前）→ 主图必切 */
               onClick={() => {
-                setRange([
-                  Math.max(0, capacity.length - DEFAULT_DAYS),
-                  capacity.length - 1,
-                ])
-                setResetEpoch((e) => e + 1)
-                setResync(true)
+                const len = capacity.length
+                const s = Math.max(0, len - DEFAULT_DAYS)
+                const e = len - 1
+                chartApiRef.current?.dispatchAction({
+                  type: 'dataZoom',
+                  startValue: s,
+                  endValue: e,
+                })
+                setRange([s, e])
               }}
             >
               <CalendarRange className="size-3.5" />
@@ -639,12 +475,8 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
         </div>
       </div>
 
-      {/* 图区：主区抓手=按住拖动平移窗口（panning 时禁 tooltip 选区与十字光标） */}
-      <div
-        className={`fan-chart-body${panning ? ' panning' : ''}${brushDrag ? ' brush-drag' : ''}`}
-        ref={bodyRef}
-        onMouseDown={onBodyMouseDown}
-      >
+      {/* 图区：ECharts canvas 自绘（slider 拖拽/图表区滚轮缩放+按住平移均由数据缩放组件接管） */}
+      <div className="fan-chart-body">
         {loading && (
           <div className="lc-state">
             <Loader2 className="lc-state-icon" />
@@ -652,194 +484,11 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
         )}
         {!loading && error && <div className="lc-state lc-error">{error}</div>}
         {!loading && !error && capacity.length === 0 && (
-          <div className="lc-state">暂无粉丝趋势数据</div>
+          <div className="lc-state">暂无趋势数据</div>
         )}
         {!loading && !error && capacity.length > 0 && (
-          <>
-          {/* initialDimension：卡身定宽 870（内容宽 838）、体高 372（460-17-10-21-24-8-8），
-             避免首帧 -1×-1 触发 recharts "should be greater than 0" 警告刷屏；
-             ResizeObserver 随后校正为实测值 */}
-          <ResponsiveContainer
-            width="100%"
-            height="100%"
-            initialDimension={{ width: 838, height: 372 }}
-          >
-            {/* accessibilityLayer 关闭：避免点击 SVG 后焦点落在 RootSurface(tabIndex=0)
-                被全局 outline-ring/50 描成粉色选中框（user 2026-09-06 反馈） */}
-            <ComposedChart data={capacity} margin={{ top: 6, right: 8, bottom: 0, left: 0 }} accessibilityLayer={false}>
-              <defs>
-                <linearGradient id="fanFill" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={PINK} stopOpacity={0.22} />
-                  <stop offset="100%" stopColor={PINK} stopOpacity={0.02} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid stroke={GRID} vertical={false} />
-              <XAxis
-                dataKey="date"
-                tickLine={false}
-                axisLine={false}
-                tickMargin={8}
-                minTickGap={42}
-                tickFormatter={fmtDate}
-                tick={{ fontSize: 11, fill: MUTED }}
-              />
-              {/* fans 轴：域随窗口切片数据动态；tickCount 提密 → 刻度细分 */}
-              <YAxis
-                yAxisId="fans"
-                domain={fanDomainVal}
-                tickCount={6}
-                tickLine={false}
-                axisLine={false}
-                width={48}
-                tickFormatter={(v: number) => formatCount(v)}
-                tick={{ fontSize: 11, fill: MUTED }}
-              />
-              {/* delta 轴：域随窗口切片数据动态（对称 ±max） */}
-              <YAxis
-                yAxisId="delta"
-                orientation="right"
-                domain={deltaDomainVal}
-                tickCount={5}
-                tickLine={false}
-                axisLine={false}
-                width={42}
-                tickFormatter={(v: number) => formatCount(v)}
-                tick={{ fontSize: 11, fill: MUTED }}
-              />
-              <Tooltip
-                cursor={{ stroke: 'rgba(148,163,184,0.4)', strokeDasharray: '4 3' }}
-                contentStyle={{
-                  borderRadius: 12,
-                  border: '1px solid rgba(15, 23, 42, 0.06)',
-                  boxShadow: '0 4px 16px rgba(15, 23, 42, 0.1)',
-                  fontSize: 12.5,
-                }}
-                labelFormatter={(label) => String(label)}
-                formatter={(value, name) => {
-                  /* 注意：recharts 传入的是系列 name 属性（'粉丝数'/'日增粉'），不是 dataKey */
-                  if (name === '粉丝数') return [`${formatCount(Number(value))} 粉`, '粉丝数']
-                  return [fmtDelta(value as number | null), '日增粉']
-                }}
-              />
-              <Bar
-                yAxisId="delta"
-                dataKey="delta"
-                name="日增粉"
-                isAnimationActive={false}
-                barSize={barWidth}
-                maxBarSize={barWidth}
-                shape={<BarShape />}
-              />
-              <Area
-                yAxisId="fans"
-                type="monotone"
-                dataKey="fans"
-                name="粉丝数"
-                className="fan-area-main"
-                stroke={PINK}
-                strokeWidth={2}
-                fill="url(#fanFill)"
-                dot={false}
-                connectNulls
-                isAnimationActive={false}
-              />
-              {/* 时间轴缩略图（Panorama）：children 传入迷你图元素才渲染轨迹——
-                  Brush 内部 Panorama 克隆 children 作为 compact 迷你图；
-                  dataKey 需为数值键（fans），字符串键画不出图；
-                  窗口 = 默认最近 30 天，可拖滑块/拉伸两端缩放 */}
-              <Brush
-                key={`brush-${preset}-${capacity.length}-${resetEpoch}`}
-                dataKey="fans"
-                height={37}
-                stroke={PINK}
-                fill="rgba(251,119,161,0.05)"
-                travellerWidth={10}
-                traveller={<BrushTraveller />}
-                startIndex={range?.[0]}
-                endIndex={range?.[1]}
-                onChange={(e: { startIndex?: number; endIndex?: number }) => {
-                  const s = e.startIndex ?? 0
-                  const en = e.endIndex ?? capacity.length - 1
-                  const t0 = s
-                  const t1 = Math.max(s, en)
-                  brushTargetRef.current = [t0, t1]
-                  // 拖动活动态：旁路 mousemove/tooltip（120ms 空闲回落）
-                  setBrushDrag(true)
-                  window.clearTimeout(brushDragTimerRef.current)
-                  brushDragTimerRef.current = window.setTimeout(
-                    () => setBrushDrag(false),
-                    120,
-                  )
-                  // 域节流：拖动开始锚定拖动前窗口（零跳变）；拖动中每 250ms 跟随一次
-                  if (!dragActiveRef.current) {
-                    dragActiveRef.current = true
-                    const cur = rangeRef.current
-                    domainLastRef.current = performance.now()
-                    setDomainAnchor(cur ? capacity.slice(cur[0], cur[1] + 1) : capacity)
-                  } else {
-                    const nowMs = performance.now()
-                    if (nowMs - domainLastRef.current >= 250) {
-                      domainLastRef.current = nowMs
-                      setDomainAnchor(capacity.slice(t0, t1 + 1))
-                    }
-                  }
-                  // 路线1 平移预览：窗口宽度不变且位移 ≤2 槽 → 整体 translateX 直写
-                  const exact = lastExactRef.current
-                  if (exact && t1 - t0 === exact[1] - exact[0]) {
-                    const shiftSlots = t0 - exact[0]
-                    if (Math.abs(shiftSlots) <= 2) {
-                      // 取消排队中的精确提交（预览接管，避免内容与 transform 错位）
-                      if (brushRafRef.current) {
-                        window.cancelAnimationFrame(brushRafRef.current)
-                        brushRafRef.current = 0
-                      }
-                      const slot = mainSlotWidth(viewDates, t1 - t0 + 1)
-                      const px = slot > 0 ? -shiftSlots * slot : 0 // 窗口前移→内容左移
-                      previewShiftRef.current = px
-                      bodyRef.current?.style.setProperty(
-                        '--preview-shift',
-                        `${px.toFixed(2)}px`,
-                      )
-                      return
-                    }
-                  }
-                  // 精确路径（拉伸 / 快速拖动）：清预览 + setRange（rAF 节流）
-                  previewShiftRef.current = 0
-                  bodyRef.current?.style.removeProperty('--preview-shift')
-                  lastExactRef.current = [t0, t1]
-                  if (brushRafRef.current) return
-                  brushRafRef.current = window.requestAnimationFrame(() => {
-                    brushRafRef.current = 0
-                    const t = brushTargetRef.current
-                    if (!t) return
-                    const cur = rangeRef.current
-                    if (cur && cur[0] === t[0] && cur[1] === t[1]) return
-                    lastExactRef.current = t
-                    setRange(t)
-                  })
-                }}
-                tickFormatter={() => ''}
-              >
-                <AreaChart data={capacity}>
-                  <Area
-                    dataKey="fans"
-                    type="monotone"
-                    stroke={PINK}
-                    strokeWidth={1.5}
-                    fill="rgba(251,119,161,0.18)"
-                    dot={false}
-                    isAnimationActive={false}
-                  />
-                </AreaChart>
-              </Brush>
-            </ComposedChart>
-          </ResponsiveContainer>
-          {/* 常驻柱动画层：几何变化即动画（新柱键帧生长/既有柱高度 morph），
-             与 recharts svg 逐像素同框；pointer-events:none 不影响交互。
-             注意：recharts 原生柱由 CSS 永久隐藏（.recharts-bar-rectangle），
-             本层是柱的唯一可见绘制 → 无任何挂载/切换竞态 */}
-          <BarsOverlay dates={viewDates} live={!brushDrag} />
-        </>)}
+          <div className="fan-chart-canvas" ref={chartRef} />
+        )}
       </div>
     </div>
   )

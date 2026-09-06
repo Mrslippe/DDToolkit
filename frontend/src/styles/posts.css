@@ -2113,157 +2113,18 @@
   background: var(--sel-bg-hover);
 }
 
-/* 图区（Brush 占用底部 56px，主图占余下高度） */
+/* ── 图区（v0.10 ECharts 架构：canvas 全程自绘）──
+   dataZoom slider / inside 缩放平移、tooltip、轴、渐变全部在 option 内配置；
+   React 只负责卡片壳与头部控制，不再进入图表渲染链路 */
 .fan-chart-body {
   position: relative;
   flex: 1;
   min-height: 0;
-  margin: 0 -4px;
-  padding: 0 4px;
-  /* 抓手：主图按住拖动平移时间窗口 */
-  cursor: grab;
+  overflow: hidden;
 }
 
-.fan-chart-body.panning {
-  cursor: grabbing;
-}
-
-/* panning / brush-drag：隐藏 tooltip 光标与浮层 + 旁路 recharts 表面事件——
-   recharts 内部 mousemove 仍会更新 tooltip state 并重渲染（视觉隐藏无效），
-   pointer-events:none 让拖动期间图表零内部渲染开销；window 级监听不受影响
-   （brush-drag = Brush 手柄/滑窗拖动，v0.9.x 跟手优化同 panning 旁路） */
-.fan-chart-body.panning .recharts-tooltip-wrapper,
-.fan-chart-body.panning .recharts-tooltip-cursor,
-.fan-chart-body.brush-drag .recharts-tooltip-wrapper,
-.fan-chart-body.brush-drag .recharts-tooltip-cursor {
-  display: none;
-}
-
-.fan-chart-body.panning .recharts-wrapper,
-.fan-chart-body.panning .recharts-surface,
-.fan-chart-body.brush-drag .recharts-wrapper,
-.fan-chart-body.brush-drag .recharts-surface {
-  pointer-events: none;
-}
-
-/* ── 柱动画单一通道（v0.9.22）：BarsOverlay 常驻绘制全部窗口柱 ──
-   recharts 原生柱永久隐藏（从不切换 → 无 flash/重影类竞态），
-   柱的唯一可见绘制 = Overlay；曲线/轴/brush 保持 recharts 原生实时 */
-.fan-chart-body .recharts-bar-rectangle {
-  visibility: hidden;
-}
-
-/* 柱动画层：与 recharts svg 逐像素同框（body 的 padding-box 偏移 4px）
-   pointer-events:none → 不干扰 tooltip/Brush/pan；
-   z-index:1 在图之上，但低于 tooltip 浮层（z-index:5，见下） */
-.fan-transition-layer {
+/* canvas 容器铺满图区（ECharts 按容器尺寸初始化与 resize） */
+.fan-chart-canvas {
   position: absolute;
-  left: 4px;
-  right: 4px;
-  top: 0;
-  bottom: 0;
-  pointer-events: none;
-  overflow: visible;
-  z-index: 1;
-}
-
-/* tooltip 浮层置于柱动画层之上（Overlay 为图表之后的兄弟节点，
-   默认层序会把柱画在浮层上——user 2026-09-06 反馈） */
-.recharts-tooltip-wrapper {
-  z-index: 5;
-}
-
-/* Overlay 柱：fill-box（transform 缩放/翻译的几何基准）；
-   transform-origin 按柱方向内联设置（正=50% 100%、负=50% 0% 锚定零线端） */
-.ov-bar {
-  transform-box: fill-box;
-}
-
-/* 入柱/出柱生长关键帧（挂载即播；矩形 transform 默认值 = 终态，播完自然归位） */
-@keyframes lc-bar-grow {
-  from {
-    opacity: 0.3;
-    transform: scaleY(0.8);
-  }
-  to {
-    opacity: 1;
-    transform: scaleY(1);
-  }
-}
-
-/* ── Brush 迷你图轨道（v0.9.x 项目美学统一 v2：参照用户参考图）──
-   轨道槽：去框化（参考图轨道无外框）——极淡灰蓝底 + 4px 圆角，曲线加粗渐变；
-   窗口亮块：去描边浅粉 0.16 + 3px 圆角 + 轻浮影（"点亮"对比，同参考图亮块）；
-   注意：recharts 内联 fillOpacity=0.2 会把 CSS 填色稀释，必须显式覆盖 fill-opacity: 1；
-   把手：细竖条 5px（参考图样式，深-浅对比）深粉 #e35d8b，hover/按压再深一档 #d14a78，
-   白纹隐藏；键盘聚焦转 --c-accent（珊瑚红）标示可操作；
-   水平把手（新增）：窗口顶边中央白底浮片 + 三条短竖纹（参考图"标识"），纯装饰不交互。 */
-.recharts-brush > rect:first-child {
-  fill: rgba(148, 163, 184, 0.06);
-  stroke: none;
-  rx: 4px;
-}
-
-.recharts-brush-slide {
-  fill: rgba(251, 119, 161, 0.16);
-  fill-opacity: 1;
-  stroke: none;
-  rx: 3px;
-  cursor: grab;
-  filter: drop-shadow(0 1px 2px rgba(15, 23, 42, 0.08));
-  transition: fill 0.15s ease;
-}
-
-.recharts-brush-slide:hover {
-  fill: rgba(251, 119, 161, 0.2);
-}
-
-.recharts-brush-slide:active {
-  cursor: grabbing;
-}
-
-/* 拖拽柄（自定义 traveller：BrushTraveller = rect + 三条 ≡ 横线）
-   rect 由下方规则上色；横线 = 浅灰纹理（同 scrollbar 滑块色系近似） */
-.recharts-brush-traveller {
-  cursor: ew-resize;
-}
-
-.recharts-brush-traveller line {
-  stroke: rgba(148, 163, 184, 0.6);
-  stroke-width: 1px;
-  stroke-linecap: round;
-}
-
-/* 两端把手 = 白浮片（无描边）：白底 + 3px 圆角 + 浮影（--pill-shadow 的 SVG 版），
-   hover/按压 --pill-bg-hover，键盘聚焦 --c-accent（与 float-pill 交互同语言）；
-   user 2026-09-0x：深粉细条 → 稍宽白色无描边浮片 */
-.recharts-brush-traveller rect {
-  fill: var(--c-bg-card);
-  stroke: none;
-  rx: 3px;
-  filter: drop-shadow(0 1px 3px rgba(15, 23, 42, 0.12));
-  transition: fill 0.15s ease;
-}
-
-.recharts-brush-traveller:hover rect,
-.recharts-brush-traveller:active rect {
-  fill: var(--pill-bg-hover);
-}
-
-.recharts-brush-traveller:focus-visible rect {
-  fill: var(--c-accent);
-}
-
-/* ── 路线1 拖动平移预览（user 2026-09-0x）：Brush 滑窗拖动（窗口宽度不变、
-   位移 2 槽内）期间由 JS 直写 --preview-shift——transform 合成器路径，
-   零 React 渲染/零重绘；svg 与柱动画层同步平移（轴/网格 2 槽内无感）；
-   Brush 层反向补偿：其手柄位置由受控 props 决定，预览期间停在轨道原位，
-   不随 svg 平移（否则按全量轨道比例错位）；transform 常驻 0px 零成本。 */
-.fan-chart-body .recharts-surface,
-.fan-chart-body .fan-transition-layer {
-  transform: translateX(var(--preview-shift, 0px));
-}
-
-.fan-chart-body .recharts-brush {
-  transform: translateX(calc(var(--preview-shift, 0px) * -1));
+  inset: 0;
 }
