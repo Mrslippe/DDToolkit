@@ -26,12 +26,10 @@ function fmtMonth(y: number, m: number): string {
   return `${y}年${String(m + 1).padStart(2, '0')}月`
 }
 
-/** 「8 PM」（设计稿时间格式） */
-function fmtTimeEn(d: Date): string {
+/** 「20:00」（24 小时制，与帖子时间格式统一；整点显示） */
+function fmtTime(d: Date): string {
   if (Number.isNaN(d.getTime())) return '--:--'
-  const h = d.getHours()
-  const h12 = h % 12 === 0 ? 12 : h % 12
-  return `${h12} ${h < 12 ? 'AM' : 'PM'}`
+  return `${String(d.getHours()).padStart(2, '0')}:00`
 }
 
 type CellState = 'live' | 'tbd'
@@ -50,17 +48,18 @@ interface DayCell {
  *  颜色定义见 posts.css .lc-stat-pill--{key} 规则 */
 
 /**
- * 直播日历（v0.9.2 重建，严格按 docs/design/react-LiveCalendar Frame10612 规格）：
- * - 卡片 870 定宽上限居中（用户参数）；网格 7 列 × 117.428574px + 2px 列/行距，
- *   6 行 42 格；
- * - 格子 70.833336px 高 / 6px 圆角；
- * - 今天 = 1px 灰描边 rgba(118,118,118,1)（设计稿唯一描边语义）；
+ * 直播日历（v0.9.2 重建，骨架严格按 docs/design/react-LiveCalendar Frame10612 规格）：
+ * - 卡片 870 定宽上限居中（用户参数）；网格 7 列 × 115.714286px + 4px 列/行距
+ *   （v0.9.x 审美对齐：2px→4px 密度，行高 70.83→69.17 按 566 卡高重算），6 行 42 格；
+ * - 格子 69.1667px 高 / 6px 圆角；
+ * - 今天 = 1px 粉描边 rgba(251,119,161,.8)（v0.9.x 审美对齐：设计稿灰描边 → 项目强调粉）；
  * - 透明度 = 月份指示（user）：非本月补位格整体 opacity 0.3，本月格一律实底——
  *   与是否有直播无关；
  * - 导航栏（frame 10_616）：三颗白胶囊连排（左双箭头+月份+右双箭头），
  *   中间点击弹月份选择浮窗（直接选年/月）；
  * - 导航栏右侧 = 直播类型统计胶囊（frame 10_642：彩色胶囊 50×19 + 19px 计数），
- *   统计当前显示月场次，按 LIVE_TYPE_ORDER 仅显示非零项。
+ *   统计当前显示月场次，按 LIVE_TYPE_ORDER 仅显示非零项；类型全满时横向滚动兜底；
+ * - 空月提示：当月 0 场次时标题右侧灰字（v0.9.x 新增）。
  */
 const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: Props) {
   const now = new Date()
@@ -193,7 +192,7 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
         </div>
         {first ? (
           <div className="lc-cell-body">
-            <span className="lc-time">{fmtTimeEn(new Date(first.start_at))}</span>
+            <span className="lc-time">{fmtTime(new Date(first.start_at))}</span>
             <span className="lc-title">{first.live_title || '场次'}</span>
           </div>
         ) : null}
@@ -203,8 +202,13 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
 
   return (
     <div className="live-calendar">
-      {/* 卡片标题（设计稿 613：16px #182E41） */}
-      <div className="lc-title">直播日历</div>
+      {/* 卡片标题（与归档卡标题同规格 16.5px/600）+ 空月提示（当月 0 场次） */}
+      <div className="lc-title">
+        直播日历
+        {!loading && !error && monthStats.length === 0 && (
+          <span className="lc-note">本月暂无直播记录</span>
+        )}
+      </div>
 
       {/* 导航行：左=月份胶囊（点击弹选月浮窗） · 右=当月类型统计胶囊（frame 10_642） */}
       <div className="lc-nav-row">
