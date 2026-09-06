@@ -281,7 +281,9 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
   const chartApiRef = useRef<ReturnType<typeof echarts.init> | null>(null)
   /** 渲染期镜像（datazoom 事件经 ref 读最新数据，避免闭包过期） */
   const capacityRef = useRef<DailyPoint[]>([])
-  const onDataZoomRef = useRef<(params: { startValue?: number; endValue?: number }) => void>(() => {})
+  const onDataZoomRef = useRef<
+    (params: { startValue?: number; endValue?: number; start?: number; end?: number }) => void
+  >(() => {})
   const domainLastRef = useRef(0)
   const domainTidyRef = useRef(0)
 
@@ -349,13 +351,19 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
     })
   }
 
-  /** datazoom 事件：镜像窗口 + Y 轴域 250ms 节流、空闲 260ms 精确 */
+  /** datazoom 事件：镜像窗口 + Y 轴域 250ms 节流、空闲 260ms 精确。
+      注意：事件常只带 start/end 百分比（startValue/endValue 依赖配置可能缺省），
+      兜底换算：category 索引 = percent% × (len-1)（四舍五入） */
   onDataZoomRef.current = (params) => {
     const data = capacityRef.current
     const len = data.length
     if (len === 0 || !chartApiRef.current) return
-    const s = Math.min(Math.max(Math.round(params.startValue ?? 0), 0), len - 1)
-    const e = Math.min(Math.max(Math.round(params.endValue ?? len - 1), s), len - 1)
+    const sRaw =
+      params.startValue ?? Math.round(((params.start ?? 0) / 100) * (len - 1))
+    const eRaw =
+      params.endValue ?? Math.round(((params.end ?? 100) / 100) * (len - 1))
+    const s = Math.min(Math.max(sRaw, 0), len - 1)
+    const e = Math.min(Math.max(eRaw, s), len - 1)
     setRange([s, e])
     const chart = chartApiRef.current
     const nowMs = performance.now()
