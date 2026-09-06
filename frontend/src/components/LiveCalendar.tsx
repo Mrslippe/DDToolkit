@@ -1,5 +1,5 @@
 import { memo, useMemo, useState } from 'react'
-import { CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react'
+import { CalendarDays, ChevronLeft, ChevronRight, X } from 'lucide-react'
 import type { GiftDay, LiveSession } from '../api/types'
 import { inferLiveType, LIVE_TYPE_ORDER } from '../utils/liveType'
 
@@ -74,6 +74,7 @@ interface DayCell {
 const LiveCalendar = memo(function LiveCalendar({ sessions, giftDays }: Props) {
   const now = new Date()
   const [ym, setYm] = useState<{ y: number; m: number }>({ y: now.getFullYear(), m: now.getMonth() })
+  const [hoverKey, setHoverKey] = useState<string | null>(null)
 
   const byDay = useMemo(() => {
     const m = new Map<string, LiveSession[]>()
@@ -147,11 +148,20 @@ const LiveCalendar = memo(function LiveCalendar({ sessions, giftDays }: Props) {
   }, [ym, byDay, giftByDay])
 
   const moveMonth = (delta: number) => {
+    setHoverKey(null)
     setYm(({ y, m }) => {
       const d = new Date(y, m + delta, 1)
       return { y: d.getFullYear(), m: d.getMonth() }
     })
   }
+
+  /** hover 浮层数据（容器底部统一渲染，无裁剪） */
+  const hoverCell = useMemo(() => {
+    for (const c of cells) {
+      if (c.key === hoverKey) return c
+    }
+    return null
+  }, [cells, hoverKey])
 
   /** 统计行（保留上一版：总场 + 类型计数） */
   const stats = useMemo(() => {
@@ -175,20 +185,16 @@ const LiveCalendar = memo(function LiveCalendar({ sessions, giftDays }: Props) {
     const remainCount = c.sessions.length
     const t = first ? inferLiveType(first.live_title) : null
 
-    // 补位格：上月=休息氛围 / 下月=待定氛围（设计稿：补位灰格，内容半透明灰）
+    // 补位格：上月/下月 = 设计稿灰格（休息/待定氛围）——日期 + 状态胶囊同列
     if (!c.inMonth) {
       return (
         <div key={c.key} className="live-calendar-cell pad">
-          <span className="live-calendar-day">{c.date.getDate()}</span>
-          {first && t ? (
-            <span className="live-calendar-cell-type">
-              <span className={`live-type ${t.className}`}>{t.label}</span>
-              <span className="live-calendar-cell-time">{fmtTimeEn(new Date(first.start_at))}</span>
-            </span>
-          ) : (
-            <span className="live-calendar-cell-type">
-              <span className="live-type live-type--rest">休息</span>
-            </span>
+          <div className="live-calendar-cell-head">
+            <span className="live-calendar-day">{c.date.getDate()}</span>
+            <span className="live-type live-type--rest">休息</span>
+          </div>
+          {first && t && (
+            <span className="live-calendar-cell-time">{fmtTimeEn(new Date(first.start_at))}</span>
           )}
         </div>
       )
@@ -209,72 +215,37 @@ const LiveCalendar = memo(function LiveCalendar({ sessions, giftDays }: Props) {
           (c.isToday ? ' today' : '') +
           ` ${stateCls}`
         }
+        onMouseEnter={() => { if (hasHover) setHoverKey(c.key) }}
+        onMouseLeave={() => setHoverKey((k) => (k === c.key ? null : k))}
+        title={hasHover ? '悬停查看当日全部场次' : undefined}
       >
-        <span className="live-calendar-day">{c.date.getDate()}</span>
+        <div className="live-calendar-cell-head">
+          <span className="live-calendar-day">{c.date.getDate()}</span>
+          {first ? (
+            <span className={`live-type ${t!.className}`}>{t!.label}</span>
+          ) : (
+            <span className={`live-type ${c.state === 'rest' ? 'live-type--rest' : 'live-type--tbd'}`}>
+              {c.state === 'rest' ? '休息' : '待定'}
+            </span>
+          )}
+        </div>
 
         {first ? (
           <>
-            <span className="live-calendar-cell-type">
-              <span className={`live-type ${t!.className}`}>{t!.label}</span>
-              <span className="live-calendar-cell-time">{fmtTimeEn(new Date(first.start_at))}</span>
-            </span>
+            <span className="live-calendar-cell-time">{fmtTimeEn(new Date(first.start_at))}</span>
             <span className="live-calendar-cell-title">{first.live_title || '场次'}</span>
             {remainCount > 1 && (
               <span className="live-calendar-more">+{remainCount - 1} 场</span>
             )}
           </>
-        ) : (
-          <span className="live-calendar-cell-type">
-            <span className={`live-type ${c.state === 'rest' ? 'live-type--rest' : 'live-type--tbd'}`}>
-              {c.state === 'rest' ? '休息' : '待定'}
-            </span>
-          </span>
-        )}
-
-        {/* hover 浮层：其余场次全量 + 礼物（内嵌格子，hover 显示；单场/无数据不弹） */}
-        {hasHover && (
-          <div className="live-day-pop" role="dialog">
-            <div className="live-day-pop-head">
-              <span className="live-day-pop-title">
-                {c.date.getFullYear()}-{String(c.date.getMonth() + 1).padStart(2, '0')}-{String(c.date.getDate()).padStart(2, '0')} · {WEEKDAYS_EN[(c.date.getDay() + 6) % 7]}
-              </span>
-            </div>
-            {c.sessions.length === 0 && !c.gift ? (
-              <div className="archive-empty">当日无场次记录</div>
-            ) : (
-              <>
-                {c.sessions.map((s) => {
-                  const st = inferLiveType(s.live_title)
-                  return (
-                    <div key={s.start_at} className="live-day-pop-row">
-                      <span className={`live-type ${st.className}`}>{st.label}</span>
-                      <div className="live-day-pop-body">
-                        <span className="live-day-pop-title-text">{s.live_title || '（无标题场次）'}</span>
-                        <span className="live-day-pop-meta">
-                          {fmtRange(s)}
-                          {s.duration_minutes != null && ` · ${fmtDuration(s.duration_minutes)}`}
-                        </span>
-                      </div>
-                    </div>
-                  )
-                })}
-                {c.gift && (
-                  <div className="live-day-pop-gift">
-                    {c.gift.gift_date} 礼物 {c.gift.gift_amount ?? '0'} /
-                    大航海 {c.gift.guard_amount ?? '0'} / SC {c.gift.sc_amount ?? '0'}
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-        )}
+        ) : null}
       </div>
     )
   }
 
   return (
     <div className="live-calendar">
-      {/* 月份胶囊导航（设计稿：白色胶囊左右箭头 + 中央月份胶囊） */}
+      {/* 月份导航行：左=胶囊导航 · 右=场次类型统计（用户 2026-09-06：统计并入同行靠右） */}
       <div className="live-calendar-nav">
         <button type="button" title="上个月" className="live-calendar-nav-btn" onClick={() => moveMonth(-1)}>
           <ChevronLeft className="size-4" />
@@ -286,23 +257,22 @@ const LiveCalendar = memo(function LiveCalendar({ sessions, giftDays }: Props) {
         <button type="button" title="下个月" className="live-calendar-nav-btn" onClick={() => moveMonth(1)}>
           <ChevronRight className="size-4" />
         </button>
-      </div>
 
-      {/* 统计行：共 N 场 + 类型彩色计数 */}
-      <div className="live-calendar-stats">
-        <span className="live-calendar-stats-total">共 {stats.total} 场。</span>
-        {statParts.map((t) => (
-          <span key={t.key} className="live-calendar-stat">
-            <span className={`live-type ${`live-type--${t.key}`}`}>{t.label}</span>
-            {t.n}
-          </span>
-        ))}
-        {liveN > 0 && (
-          <span className="live-calendar-stat">
-            <span className="live-type live-type--live">直播</span>
-            {liveN}
-          </span>
-        )}
+        <div className="live-calendar-stats">
+          <span className="live-calendar-stats-total">共 {stats.total} 场。</span>
+          {statParts.map((t) => (
+            <span key={t.key} className="live-calendar-stat">
+              <span className={`live-type ${`live-type--${t.key}`}`}>{t.label}</span>
+              {t.n}
+            </span>
+          ))}
+          {liveN > 0 && (
+            <span className="live-calendar-stat">
+              <span className="live-type live-type--live">直播</span>
+              {liveN}
+            </span>
+          )}
+        </div>
       </div>
 
       {/* 表头（Mon.~Sun.） */}
@@ -316,6 +286,47 @@ const LiveCalendar = memo(function LiveCalendar({ sessions, giftDays }: Props) {
       <div className="live-calendar-grid">
         {cells.map((c) => renderCell(c))}
       </div>
+
+      {/* hover 浮层：当日全量场次 + 礼物（容器底部渲染，不受格子宽度/裁剪限制） */}
+      {hoverCell && (
+        <div className="live-day-pop" role="dialog">
+          <div className="live-day-pop-head">
+            <span className="live-day-pop-title">
+              {hoverCell.date.getFullYear()}-{String(hoverCell.date.getMonth() + 1).padStart(2, '0')}-{String(hoverCell.date.getDate()).padStart(2, '0')} · {WEEKDAYS_EN[(hoverCell.date.getDay() + 6) % 7]}
+            </span>
+            <button type="button" title="关闭" onClick={() => setHoverKey(null)}>
+              <X className="size-4" />
+            </button>
+          </div>
+          {hoverCell.sessions.length === 0 && !hoverCell.gift ? (
+            <div className="archive-empty">当日无场次记录</div>
+          ) : (
+            <>
+              {hoverCell.sessions.map((s) => {
+                const st = inferLiveType(s.live_title)
+                return (
+                  <div key={s.start_at} className="live-day-pop-row">
+                    <span className={`live-type ${st.className}`}>{st.label}</span>
+                    <div className="live-day-pop-body">
+                      <span className="live-day-pop-title-text">{s.live_title || '（无标题场次）'}</span>
+                      <span className="live-day-pop-meta">
+                        {fmtRange(s)}
+                        {s.duration_minutes != null && ` · ${fmtDuration(s.duration_minutes)}`}
+                      </span>
+                    </div>
+                  </div>
+                )
+              })}
+              {hoverCell.gift && (
+                <div className="live-day-pop-gift">
+                  {hoverCell.gift.gift_date} 礼物 {hoverCell.gift.gift_amount ?? '0'} /
+                  大航海 {hoverCell.gift.guard_amount ?? '0'} / SC {hoverCell.gift.sc_amount ?? '0'}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
     </div>
   )
 })

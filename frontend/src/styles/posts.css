@@ -975,11 +975,14 @@
   height: 460px;
 }
 
+/* 直播日历卡（用户 2026-09-06：设计稿精确尺寸 595×489）：
+   定宽 595（覆盖基类 max 960/min 480 契约），收缩时遵循行内 flex:0 1 595px */
 .archive-section--calendar {
-  flex: 0 1 640px;
-  max-width: 640px;
-  min-width: 480px;
-  height: 460px;
+  flex: 0 1 595px;
+  max-width: 595px;
+  min-width: 0;
+  height: 489px;
+  padding: 10px 12px 12px;
 }
 
 .archive-section--trend {
@@ -1062,21 +1065,22 @@
   color: var(--c-live);
 }
 
-/* 直播日历（v0.9.0 重构，严格按 docs/design/react-LiveCalendar Frame101 设计稿）：
-   白卡4px圆角(继承archive-section)、月份胶囊导航、Mon.~Sun.英文表头、
-   七列月历(含上/下月补位)、格子58px高/6px圆角/类型色系(整格浅色底+同色系文字)、
-   今天红描边、仅首场+其余入hover浮层。 */
+/* 直播日历（v0.9.1，用户 2026-09-06 反馈按设计稿精确规格）：
+   卡片 595×489；格子 78×58 / 6px 圆角；日期+分类胶囊同列（日期左/胶囊右）；
+   第二行时间、第三行标题；导航行含统计靠右；默认放下所有日期块（6 行月历）。 */
 .live-calendar {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  height: 100%;
 }
 
-/* 月份胶囊导航（设计稿：中央白色胶囊 + 左右箭头） */
+/* 月份导航行：左胶囊导航 + 右侧统计（用户：统计并入同行靠右） */
 .live-calendar-nav {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex: none;
 }
 
 .live-calendar-nav-btn {
@@ -1116,16 +1120,17 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* 统计行：共 N 场 + 类型彩色计数 */
+/* 统计（并入导航行，靠右） */
 .live-calendar-stats {
+  margin-left: auto;
   display: flex;
   align-items: center;
   flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 8px;
-  font-size: 13px;
+  font-size: 12px;
   color: var(--c-text-main);
-  padding: 2px 0 4px;
-  border-bottom: 1px solid rgba(210, 216, 222, 0.35);
+  min-width: 0;
 }
 
 .live-calendar-stats-total {
@@ -1136,7 +1141,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 12px;
+  font-size: 11px;
   color: var(--c-text-sub);
   font-variant-numeric: tabular-nums;
 }
@@ -1144,36 +1149,44 @@
 /* 表头：Mon.~Sun. 英文（设计稿） */
 .live-calendar-weekdays {
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
-  gap: 10px;
+  grid-template-columns: repeat(7, 78px);
+  gap: 4px;
   padding: 2px 0;
+  flex: none;
 }
 
 .live-calendar-weekday {
   text-align: center;
-  font-size: 13.5px;
+  font-size: 12px;
   color: #727272;
 }
 
-/* 月历网格：7 列，列间距 10px（设计稿） */
+/* 月历网格：7 列 × 78px（设计稿），行距 4px；flex:1 撑满卡片剩余高度 */
 .live-calendar-grid {
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
-  gap: 10px;
+  grid-template-columns: repeat(7, 78px);
+  grid-auto-rows: 58px;
+  gap: 4px;
+  align-content: flex-start;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
-/* 格子基类：58px 高 / 6px 圆角 / 两行式（日期+类型行 → 时间/标题） */
+/* 格子：78×58 / 6px 圆角 / 类型色系整格浅底 */
 .live-calendar-cell {
   position: relative;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 1px;
-  min-height: 58px;
-  padding: 4px 6px 3px;
+  gap: 0;
+  width: 78px;
+  height: 58px;
+  padding: 3px 5px 0;
   border: 1px solid rgba(210, 216, 222, 0.4);
   border-radius: 6px;
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--c-text-main);
   font-variant-numeric: tabular-nums;
   text-align: left;
@@ -1181,6 +1194,7 @@
   cursor: default;
   overflow: hidden;
   font-family: inherit;
+  box-sizing: border-box;
 }
 
 .live-calendar-cell:hover {
@@ -1193,58 +1207,75 @@
   box-shadow: 0 0 0 1px #ffb8b8;
 }
 
-/* 类型色系（整格浅底 + 同色系文字，设计稿 Frame101 规格）：
-   游戏蓝 / 观影粉 / 投稿绿 / 杂谈黄 + 扩展 歌回红/电台紫/联动青/健身橙/特殊红边 */
+/* 日期 + 分类胶囊同一列（日期左 / 胶囊右 top-right） */
+.live-calendar-cell-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 4px;
+  min-height: 16px;
+}
+
+.live-calendar-day {
+  font-size: 12px;
+  line-height: 14px;
+  color: var(--c-text-main);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 类型色系（整格浅底 + 同色系文字，设计稿 Frame101 规格） */
 .live-calendar-cell.tone-game { background: #e7f8ff; border-color: rgba(0, 136, 190, 0.3); }
 .live-calendar-cell.tone-game .live-calendar-day,
+.live-calendar-cell.tone-game .live-calendar-cell-time,
 .live-calendar-cell.tone-game .live-calendar-cell-title { color: #0088be; }
-.live-calendar-cell.tone-game .live-calendar-cell-time { color: rgba(0, 136, 190, 0.5); }
 
 .live-calendar-cell.tone-watch { background: #ffe7fb; border-color: rgba(236, 87, 255, 0.3); }
 .live-calendar-cell.tone-watch .live-calendar-day,
+.live-calendar-cell.tone-watch .live-calendar-cell-time,
 .live-calendar-cell.tone-watch .live-calendar-cell-title { color: #ec57ff; }
-.live-calendar-cell.tone-watch .live-calendar-cell-time { color: rgba(236, 87, 255, 0.5); }
 
 .live-calendar-cell.tone-upload { background: #c2ffd0; border-color: rgba(0, 154, 36, 0.3); }
 .live-calendar-cell.tone-upload .live-calendar-day,
+.live-calendar-cell.tone-upload .live-calendar-cell-time,
 .live-calendar-cell.tone-upload .live-calendar-cell-title { color: #009a24; }
-.live-calendar-cell.tone-upload .live-calendar-cell-time { color: rgba(0, 154, 36, 0.5); }
 
 .live-calendar-cell.tone-chat { background: #fffadc; border-color: rgba(212, 184, 1, 0.3); }
 .live-calendar-cell.tone-chat .live-calendar-day,
+.live-calendar-cell.tone-chat .live-calendar-cell-time,
 .live-calendar-cell.tone-chat .live-calendar-cell-title { color: #d4b801; }
-.live-calendar-cell.tone-chat .live-calendar-cell-time { color: rgba(212, 184, 1, 0.5); }
 
 .live-calendar-cell.tone-song { background: #ffe9e9; border-color: rgba(216, 100, 94, 0.3); }
 .live-calendar-cell.tone-song .live-calendar-day,
+.live-calendar-cell.tone-song .live-calendar-cell-time,
 .live-calendar-cell.tone-song .live-calendar-cell-title { color: #d8645e; }
-.live-calendar-cell.tone-song .live-calendar-cell-time { color: rgba(216, 100, 94, 0.5); }
 
 .live-calendar-cell.tone-radio { background: #f1ecfb; border-color: rgba(139, 111, 216, 0.3); }
 .live-calendar-cell.tone-radio .live-calendar-day,
+.live-calendar-cell.tone-radio .live-calendar-cell-time,
 .live-calendar-cell.tone-radio .live-calendar-cell-title { color: #8b6fd8; }
-.live-calendar-cell.tone-radio .live-calendar-cell-time { color: rgba(139, 111, 216, 0.5); }
 
 .live-calendar-cell.tone-collab { background: #e2f5f6; border-color: rgba(47, 165, 173, 0.3); }
 .live-calendar-cell.tone-collab .live-calendar-day,
+.live-calendar-cell.tone-collab .live-calendar-cell-time,
 .live-calendar-cell.tone-collab .live-calendar-cell-title { color: #2fa5ad; }
-.live-calendar-cell.tone-collab .live-calendar-cell-time { color: rgba(47, 165, 173, 0.5); }
 
 .live-calendar-cell.tone-fitness { background: #fff0e0; border-color: rgba(224, 136, 74, 0.3); }
 .live-calendar-cell.tone-fitness .live-calendar-day,
+.live-calendar-cell.tone-fitness .live-calendar-cell-time,
 .live-calendar-cell.tone-fitness .live-calendar-cell-title { color: #e0804a; }
-.live-calendar-cell.tone-fitness .live-calendar-cell-time { color: rgba(224, 136, 74, 0.5); }
 
 /* 特殊：红描边 + 浅红底（设计稿特殊格样式） */
 .live-calendar-cell.tone-special { background: #fdecec; border-color: rgba(216, 100, 94, 0.5); }
 .live-calendar-cell.tone-special .live-calendar-day,
+.live-calendar-cell.tone-special .live-calendar-cell-time,
 .live-calendar-cell.tone-special .live-calendar-cell-title { color: #d8645e; }
-.live-calendar-cell.tone-special .live-calendar-cell-time { color: rgba(216, 100, 94, 0.5); }
 
 .live-calendar-cell.tone-live { background: #eef1f5; border-color: rgba(148, 163, 184, 0.3); }
 .live-calendar-cell.tone-live .live-calendar-day,
+.live-calendar-cell.tone-live .live-calendar-cell-time,
 .live-calendar-cell.tone-live .live-calendar-cell-title { color: #64748b; }
-.live-calendar-cell.tone-live .live-calendar-cell-time { color: rgba(100, 116, 139, 0.5); }
 
 /* 休息（过去无场次）：灰底半透明（设计稿 opacity 0.3） */
 .live-calendar-cell.rest {
@@ -1268,15 +1299,6 @@
   border-color: rgba(210, 216, 222, 0.4);
 }
 
-.live-calendar-day {
-  font-size: 12px;
-  line-height: 14px;
-  color: var(--c-text-main);
-  font-weight: 600;
-  align-self: flex-start;
-  font-variant-numeric: tabular-nums;
-}
-
 .live-calendar-cell.rest .live-calendar-day,
 .live-calendar-cell.tbd .live-calendar-day,
 .live-calendar-cell.pad .live-calendar-day {
@@ -1284,27 +1306,19 @@
   font-weight: 400;
 }
 
-/* 格内首场行：类型胶囊 + 时间 */
-.live-calendar-cell-type {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  width: 100%;
-  min-width: 0;
-  line-height: 16px;
-}
-
+/* 时间（第二行，同色系 50% 透明） */
 .live-calendar-cell-time {
-  font-size: 11px;
+  font-size: 10.5px;
+  line-height: 14px;
   color: var(--c-text-sub);
-  flex: none;
   font-variant-numeric: tabular-nums;
 }
 
+/* 标题（第三行，最多两行，同色系） */
 .live-calendar-cell-title {
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 500;
-  line-height: 14px;
+  line-height: 13px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1313,11 +1327,12 @@
 }
 
 .live-calendar-more {
-  font-size: 10.5px;
+  font-size: 10px;
   color: var(--c-text-sub);
+  line-height: 12px;
 }
 
-/* 直播类型胶囊（设计稿：28×11 圆角 74px 浅底 + 深色字，8px 字号整体放大一档） */
+/* 直播类型胶囊（设计稿：浅底深字圆角74px） */
 .live-type {
   flex: none;
   display: inline-flex;
@@ -1349,31 +1364,21 @@
 .live-type--tbd     { background: #d3d2d2; color: rgba(52, 52, 52, 1); }
 .live-type--live    { background: #94a3b8; color: #fff; }
 
-/* hover 浮层（其余场次 + 礼物；弹窗层规格：12px 圆角 + 柔和阴影）。
-   内嵌于格子、默认隐藏，hover 格子时显示——纯 CSS 触发，无状态竞态。
-   向下展开（格子下方）：避免被 archive-section-scroll 的 overflow-y 裁剪；
-   近底行的浮层会自然在滚动区内。 */
+/* hover 浮层（当日全量场次 + 礼物；弹窗层规格：12px 圆角 + 柔和阴影）。
+   渲染在 .live-calendar 容器底部（React 状态驱动），文档流内嵌、无裁剪，
+   悬停多场/礼物格子时出现；底部行不会溢出卡片。 */
 .live-day-pop {
-  display: none;
-  position: absolute;
-  left: 0;
-  top: calc(100% + 4px);
-  z-index: 30;
-  min-width: 260px;
-  max-width: 320px;
+  flex: none;
+  max-height: 220px;
+  overflow-y: auto;
   border-radius: 12px;
   background: var(--c-bg-card);
   border: 1px solid rgba(15, 23, 42, 0.06);
   box-shadow: var(--shadow-dialog);
-  padding: 10px 12px;
+  padding: 8px 10px;
+  display: flex;
   flex-direction: column;
   gap: 6px;
-  max-height: 260px;
-  overflow-y: auto;
-}
-
-.live-calendar-cell:hover .live-day-pop {
-  display: flex;
 }
 
 .live-day-pop-head {
@@ -1384,7 +1389,7 @@
 }
 
 .live-day-pop-title {
-  font-size: 15px;
+  font-size: 13.5px;
   font-weight: 600;
   color: var(--c-text-main);
 }
@@ -1410,7 +1415,7 @@
   display: flex;
   align-items: flex-start;
   gap: 6px;
-  font-size: 13px;
+  font-size: 12.5px;
 }
 
 .live-day-pop-body {
@@ -1422,18 +1427,18 @@
 
 .live-day-pop-title-text {
   color: var(--c-text-main);
-  line-height: 18px;
+  line-height: 17px;
   word-break: break-all;
 }
 
 .live-day-pop-meta {
-  font-size: 12px;
+  font-size: 11.5px;
   color: var(--c-text-sub);
   font-variant-numeric: tabular-nums;
 }
 
 .live-day-pop-gift {
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--c-live);
   border-top: 1px dashed rgba(210, 216, 222, 0.5);
   padding-top: 4px;

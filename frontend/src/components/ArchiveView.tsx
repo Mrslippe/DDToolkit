@@ -114,7 +114,6 @@ function CalendarCard({ vtuber, refreshTick }: { vtuber: VTuber; refreshTick: nu
       <div className="archive-section-head">
         <span className="archive-section-title">直播日历</span>
         <div className="archive-section-right">
-          <span className="archive-section-note">绿点=当日直播 · 满格=礼物记录</span>
           <AccountPicker accounts={accounts} value={selected} onChange={setSelected} />
         </div>
       </div>
