@@ -1,9 +1,9 @@
 <svg viewBox="0 0 32.7341 34" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="32.734131" height="34.000000" fill="none" customFrame="#000000">
 	<defs>
-		<g id="pixso_custom_effect_0">
+		<g id="pixso_custom_effect_3">
 			<effect x="-1.000000" y="1.000000" visibility="visible" fill="rgb(0,0,0)" fill-opacity="0.150000006" effectType="dropShadow" stdDeviation="5" radius="0" />
 		</g>
-		<filter id="filter_0" width="32.734131" height="34.000000" x="0.000000" y="0.000000" filterUnits="userSpaceOnUse" customEffect="url(#pixso_custom_effect_0)" color-interpolation-filters="sRGB">
+		<filter id="filter_3" width="32.734131" height="34.000000" x="0.000000" y="0.000000" filterUnits="userSpaceOnUse" customEffect="url(#pixso_custom_effect_3)" color-interpolation-filters="sRGB">
 			<feFlood flood-opacity="0" result="BackgroundImageFix" />
 			<feOffset dx="-1.000000" dy="1.000000" in="SourceAlpha" />
 			<feGaussianBlur stdDeviation="1.66666663" />
@@ -12,7 +12,7 @@
 			<feBlend result="shape" in="SourceGraphic" in2="effect_dropShadow_1" mode="normal" />
 		</filter>
 	</defs>
-	<g filter="url(#filter_0)">
-		<path id="矩形 2" d="M9.00254 4.00004L22.7617 4C24.056 4 25.2044 4.83013 25.6103 6.05916L28.5828 15.0592C28.7846 15.6702 28.7846 16.3298 28.5828 16.9408L25.6103 25.9408C25.2044 27.1699 24.056 28 22.7617 28L9.00256 28C6.94219 28 5.49504 25.9708 6.16618 24.0228L8.59358 16.9772C8.81174 16.344 8.81174 15.656 8.59358 15.0228L6.16617 7.97725C5.49503 6.02926 6.94218 4.00004 9.00254 4.00004Z" fill="rgb(255,255,255)" fill-rule="evenodd" />
+	<g filter="url(#filter_3)">
+		<path id="矩形 2" d="M9.00242 4.00004L22.7616 4C24.0559 4 25.2043 4.83013 25.6102 6.05916L28.5827 15.0592C28.7845 15.6702 28.7845 16.3298 28.5827 16.9408L25.6102 25.9408C25.2043 27.1699 24.0559 28 22.7616 28L9.00244 28C6.94207 28 5.49492 25.9708 6.16606 24.0228L8.59346 16.9772C8.81162 16.344 8.81162 15.656 8.59345 15.0228L6.16605 7.97725C5.4949 6.02926 6.94206 4.00004 9.00242 4.00004Z" fill="rgb(255,255,255)" fill-rule="evenodd" />
 	</g>
 </svg>

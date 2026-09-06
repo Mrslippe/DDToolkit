@@ -1,0 +1,875 @@
+
+.scroll-container {
+  height: 100%;
+  width: 100%;
+  overflow: auto;
+}
+
+.Pixso-frame-10_612,.frame-content-10_612 {
+  width: 100%;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.Pixso-frame-10_612 {
+  height: 566px;
+  overflow: hidden;
+  border-radius: 4px 4px 4px 4px;
+  box-shadow: 0px 3px 6px 0px rgba(0, 0, 0, 0.4) ;
+  background-color: rgba(255, 255, 255, 1);
+}
+
+.frame-content-10_612 {
+  gap: 10px;
+  padding: 17px 16px 10px 16px;
+  height: 100%;
+}
+
+.Pixso-frame-10_613 {
+  width: 100%;
+  height: 21px;
+}
+
+.Pixso-paragraph-10_614 {
+  font-size: 16px;
+  font-family: "Alimama FangYuanTi VF-Regular";
+  font-weight: 400;
+  text-align: left;
+  letter-spacing: 0px;
+  text-decoration: none;
+  color: rgba(24, 46, 65, 1);
+  width: 131px;
+  height: 19px;
+  position: absolute;
+  left: 0px;
+  top: 0px;
+}
+
+.Pixso-frame-10_615,.frame-content-10_615 {
+  width: 100%;
+  flex-direction: row;
+  align-items: center;
+}
+
+.Pixso-frame-10_615 {
+  height: 34px;
+}
+
+.frame-content-10_615 {
+  height: 100%;
+}
+
+.Pixso-frame-10_616 {
+  width: 147.369247px;
+  height: 25.000044px;
+}
+
+.Pixso-frame-10_617 {
+  width: 26.436131px;
+  height: 25.000044px;
+  position: absolute;
+  left: 0px;
+  top: 0px;
+  flex-direction: row;
+  isolation: isolate;
+  align-items: center;
+}
+
+.frame-content-10_617,.frame-content-10_625,.frame-content-10_634 {
+  flex-direction: row;
+  align-items: center;
+  padding: 0px 1.218065px 0px 1.218065px;
+  height: 100%;
+}
+
+.Pixso-vector-10_618 {
+  width: 32.6761474609375px;
+  height: 34px;
+  background-image: url(@/assets/images/Vector_10_618.svg);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  z-index: 1;
+}
+
+.Pixso-frame-10_619 {
+  width: 16px;
+  height: 16px;
+  position: absolute;
+  z-index: 2;
+  left: 4px;
+  top: 20.5px;
+  transform: rotateY(180deg) rotateX(180deg);
+}
+
+.Pixso-group-10_620,.Pixso-group-10_637 {
+  width: 16px;
+  height: 16px;
+  position: absolute;
+  left: 0px;
+  top: 0px;
+}
+
+.Pixso-vector-10_622 {
+  width: 64.84%;
+  height: 68.74%;
+  background-image: url(@/assets/images/Boolean_operation_10_622.svg);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  position: absolute;
+  left: 17.58%;
+  right: 17.58%;
+  top: 15.63%;
+  bottom: 15.63%;
+  transform: matrix(-1, 0, 0, -1, 0, 0);
+}
+
+.Pixso-frame-10_625 {
+  width: 94.399384px;
+  height: 25.000044px;
+  position: absolute;
+  left: 26.436157px;
+  top: 0px;
+  flex-direction: row;
+  isolation: isolate;
+  align-items: center;
+}
+
+.Pixso-vector-10_626 {
+  width: 101.652099609375px;
+  height: 34px;
+  background-image: url(@/assets/images/Vector_10_626.svg);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  z-index: 1;
+}
+
+.Pixso-paragraph-10_633 {
+  font-size: 14px;
+  font-family: "Alimama FangYuanTi VF-Regular";
+  font-weight: 400;
+  text-align: left;
+  letter-spacing: 0px;
+  text-decoration: none;
+  color: rgba(24, 46, 65, 1);
+  position: absolute;
+  z-index: 2;
+  left: 9.563843px;
+  top: 4.5px;
+  white-space: pre;
+  flex-grow: 0;
+}
+
+.Pixso-frame-10_634 {
+  width: 26.533798px;
+  height: 25.000044px;
+  position: absolute;
+  left: 120.835449px;
+  top: 0px;
+  flex-direction: row;
+  isolation: isolate;
+  align-items: center;
+}
+
+.Pixso-vector-10_635 {
+  width: 32.734130859375px;
+  height: 34px;
+  background-image: url(@/assets/images/Vector_10_635.svg);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  z-index: 1;
+}
+
+.Pixso-frame-10_636 {
+  width: 16px;
+  height: 16px;
+  position: absolute;
+  z-index: 2;
+  left: 6.164551px;
+  top: 4.5px;
+}
+
+.Pixso-vector-10_639 {
+  width: 64.85%;
+  height: 68.74%;
+  background-image: url(@/assets/images/Boolean_operation_10_639.svg);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  position: absolute;
+  left: 17.58%;
+  right: 17.57%;
+  top: 15.63%;
+  bottom: 15.63%;
+}
+
+.Pixso-frame-10_642,.frame-content-10_642 {
+  width: 100%;
+  flex-direction: row;
+  justify-content: flex-end;
+  align-items: center;
+  min-width: 0;
+}
+
+.Pixso-frame-10_642 {
+  height: 34px;
+  overflow: hidden;
+  flex-shrink: 1;
+  flex-grow: 1;
+  flex-basis: 0;
+  align-self: stretch;
+}
+
+.frame-content-10_642 {
+  padding: 2px 0px 2px 30px;
+  height: 100%;
+}
+
+.Pixso-frame-10_643,.Pixso-frame-10_647,.Pixso-frame-10_655 {
+  width: 76px;
+  height: 19px;
+}
+
+.Pixso-frame-10_644 {
+  width: 50px;
+  height: 19px;
+  overflow: hidden;
+  position: absolute;
+  left: 0px;
+  top: 0.5px;
+  border-radius: 88px 88px 88px 88px;
+  background-color: rgba(255, 200, 83, 1);
+}
+
+.Pixso-paragraph-10_645,.Pixso-paragraph-10_649,.Pixso-paragraph-10_646,.Pixso-paragraph-10_650,.Pixso-paragraph-10_654 {
+  font-family: "Alimama FangYuanTi VF-Regular";
+  font-weight: 400;
+  text-align: justify;
+  flex-direction: column;
+  justify-content: center;
+  letter-spacing: 0px;
+  line-height: 1px;
+  text-decoration: none;
+  color: rgba(0, 0, 0, 1);
+  position: absolute;
+}
+
+.Pixso-paragraph-10_645,.Pixso-paragraph-10_649 {
+  font-size: 14px;
+  font-feature-settings: "locl" 0;
+  width: 28px;
+  left: 11px;
+  top: 9.5px;
+  white-space: pre;
+}
+
+.Pixso-paragraph-10_646,.Pixso-paragraph-10_650,.Pixso-paragraph-10_654 {
+  font-size: 19px;
+  width: 24px;
+  height: 16px;
+  left: 54px;
+  top: 2.5px;
+}
+
+.Pixso-frame-10_648 {
+  width: 50px;
+  height: 19px;
+  overflow: hidden;
+  position: absolute;
+  left: 0px;
+  top: 0.5px;
+  border-radius: 88px 88px 88px 88px;
+  background-color: rgba(224, 181, 255, 1);
+}
+
+.Pixso-frame-10_651 {
+  width: 75px;
+  height: 19px;
+}
+
+.Pixso-frame-10_652 {
+  width: 50px;
+  height: 19px;
+  overflow: hidden;
+  position: absolute;
+  left: 0px;
+  top: 0.5px;
+  border-radius: 88px 88px 88px 88px;
+  background-color: rgba(150, 225, 254, 1);
+}
+
+.Pixso-paragraph-10_653,.Pixso-paragraph-10_657 {
+  font-size: 14px;
+  font-family: "Alimama FangYuanTi VF-Regular";
+  font-weight: 400;
+  text-align: justify;
+  flex-direction: column;
+  justify-content: center;
+  letter-spacing: 0px;
+  line-height: 1px;
+  text-decoration: none;
+  color: rgba(0, 0, 0, 1);
+  position: absolute;
+  left: 11px;
+  top: 9.5px;
+  white-space: pre;
+  flex-grow: 0;
+}
+
+.Pixso-frame-10_656 {
+  width: 50px;
+  height: 19px;
+  overflow: hidden;
+  position: absolute;
+  left: 0px;
+  top: 0.5px;
+  border-radius: 88px 88px 88px 88px;
+  background-color: rgba(132, 248, 159, 1);
+}
+
+.Pixso-paragraph-10_658 {
+  font-size: 19px;
+  font-family: "Alimama FangYuanTi VF-Regular";
+  font-weight: 400;
+  text-align: justify;
+  flex-direction: column;
+  justify-content: center;
+  letter-spacing: 0px;
+  line-height: 1px;
+  text-decoration: none;
+  color: rgba(0, 0, 0, 1);
+  width: 6px;
+  height: 16px;
+  position: absolute;
+  left: 54px;
+  top: 2.5px;
+}
+
+.Pixso-frame-10_659,.frame-content-10_659 {
+  width: 100%;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: center;
+}
+
+.Pixso-frame-10_659 {
+  flex-grow: 1;
+}
+
+.frame-content-10_659 {
+  gap: 5px;
+  height: 100%;
+}
+
+.Pixso-frame-10_660,.frame-content-10_660 {
+  width: 100%;
+  flex-direction: row;
+  justify-content: center;
+  align-items: center;
+}
+
+.Pixso-frame-10_660 {
+  height: 20px;
+  overflow: hidden;
+}
+
+.frame-content-10_660 {
+  padding: 1px 0px 1px 0px;
+  height: 100%;
+}
+
+.Pixso-paragraph-10_661,.Pixso-paragraph-10_662,.Pixso-paragraph-10_663,.Pixso-paragraph-10_664,.Pixso-paragraph-10_665,.Pixso-paragraph-10_666,.Pixso-paragraph-10_667 {
+  font-size: 14px;
+  font-family: "Alimama FangYuanTi VF-Regular";
+  font-weight: 400;
+  text-align: center;
+  flex-direction: column;
+  justify-content: center;
+  letter-spacing: 0px;
+  font-feature-settings: "locl" 0;
+  text-decoration: none;
+  color: rgba(114, 114, 114, 1);
+  width: 100%;
+  flex-shrink: 1;
+  min-width: 0;
+  flex-grow: 1;
+  flex-basis: 0;
+}
+
+.Pixso-frame-10_668,.frame-content-10_668 {
+  width: 100%;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.Pixso-frame-10_668 {
+  overflow: hidden;
+  flex-grow: 1;
+}
+
+.frame-content-10_668 {
+  padding: 2px 2px 2px 2px;
+  height: 100%;
+}
+
+.Pixso-frame-10_669 {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  flex-direction: column;
+  align-items: flex-start;
+  border-radius: 6px 6px 6px 6px;
+  z-index: 1;
+  background-color: rgba(233, 233, 233, 1);
+}
+
+.frame-content-10_669,.frame-content-10_719,.frame-content-10_724,.frame-content-10_729,.frame-content-10_734,.frame-content-10_739,.frame-content-10_744,.frame-content-10_749,.frame-content-10_754,.frame-content-10_759,.frame-content-10_764,.frame-content-10_769,.frame-content-10_774,.frame-content-10_779,.frame-content-10_784,.frame-content-10_789,.frame-content-10_794,.frame-content-10_799,.frame-content-10_804,.frame-content-10_809,.frame-content-10_814,.frame-content-10_819,.frame-content-10_824,.frame-content-10_829,.frame-content-10_834,.frame-content-10_839,.frame-content-10_844,.frame-content-10_849,.frame-content-10_854,.frame-content-10_859,.frame-content-10_864,.frame-content-10_869,.frame-content-10_874,.frame-content-10_879,.frame-content-10_884,.frame-content-10_889 {
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 6px 6px 2px 6px;
+  width: 100%;
+  height: 100%;
+}
+
+.stroke-wrapper-10_669 {
+  isolation: isolate;
+  width: 117.428574px;
+  height: 70.833336px;
+}
+
+.stroke-10_669 {
+  position: absolute;
+  inset: 0px;
+  border-radius: 6px 6px 6px 6px;
+  pointer-events: none;
+  z-index: 0;
+  border-width: 1px 1px 1px 1px;
+  border-style: solid;
+  box-sizing: border-box;
+  border-color: rgba(118, 118, 118, 1);
+}
+
+.Pixso-frame-10_670,.Pixso-frame-10_675,.Pixso-frame-10_683,.Pixso-frame-10_691,.Pixso-frame-10_699,.Pixso-frame-10_707,.Pixso-frame-10_715,.Pixso-frame-10_720,.Pixso-frame-10_725,.Pixso-frame-10_730,.Pixso-frame-10_735,.Pixso-frame-10_740,.Pixso-frame-10_745,.Pixso-frame-10_750,.Pixso-frame-10_755,.Pixso-frame-10_760,.Pixso-frame-10_765,.Pixso-frame-10_770,.Pixso-frame-10_775,.Pixso-frame-10_780,.Pixso-frame-10_785,.Pixso-frame-10_790,.Pixso-frame-10_795,.Pixso-frame-10_800,.Pixso-frame-10_805,.Pixso-frame-10_810,.Pixso-frame-10_815,.Pixso-frame-10_820,.Pixso-frame-10_825,.Pixso-frame-10_830,.Pixso-frame-10_835,.Pixso-frame-10_840,.Pixso-frame-10_845,.Pixso-frame-10_850,.Pixso-frame-10_855,.Pixso-frame-10_860,.Pixso-frame-10_865,.Pixso-frame-10_870,.Pixso-frame-10_875,.Pixso-frame-10_880,.Pixso-frame-10_885,.Pixso-frame-10_890 {
+  width: 100%;
+  height: 16px;
+  flex-direction: row;
+  align-items: flex-start;
+}
+
+.frame-content-10_670,.frame-content-10_675,.frame-content-10_683,.frame-content-10_691,.frame-content-10_699,.frame-content-10_707,.frame-content-10_715,.frame-content-10_720,.frame-content-10_725,.frame-content-10_730,.frame-content-10_735,.frame-content-10_740,.frame-content-10_745,.frame-content-10_750,.frame-content-10_755,.frame-content-10_760,.frame-content-10_765,.frame-content-10_770,.frame-content-10_775,.frame-content-10_780,.frame-content-10_785,.frame-content-10_790,.frame-content-10_795,.frame-content-10_800,.frame-content-10_805,.frame-content-10_810,.frame-content-10_815,.frame-content-10_820,.frame-content-10_825,.frame-content-10_830,.frame-content-10_835,.frame-content-10_840,.frame-content-10_845,.frame-content-10_850,.frame-content-10_855,.frame-content-10_860,.frame-content-10_865,.frame-content-10_870,.frame-content-10_875,.frame-content-10_880,.frame-content-10_885,.frame-content-10_890 {
+  flex-direction: row;
+  gap: 43px;
+  align-items: flex-start;
+  width: 100%;
+  height: 100%;
+}
+
+.Pixso-paragraph-10_671,.Pixso-paragraph-10_716,.Pixso-paragraph-10_721,.Pixso-paragraph-10_726,.Pixso-paragraph-10_731,.Pixso-paragraph-10_736,.Pixso-paragraph-10_741,.Pixso-paragraph-10_746,.Pixso-paragraph-10_751,.Pixso-paragraph-10_756,.Pixso-paragraph-10_761,.Pixso-paragraph-10_766,.Pixso-paragraph-10_771,.Pixso-paragraph-10_776,.Pixso-paragraph-10_781,.Pixso-paragraph-10_786,.Pixso-paragraph-10_791,.Pixso-paragraph-10_796,.Pixso-paragraph-10_801,.Pixso-paragraph-10_806,.Pixso-paragraph-10_811,.Pixso-paragraph-10_816,.Pixso-paragraph-10_821,.Pixso-paragraph-10_826,.Pixso-paragraph-10_831,.Pixso-paragraph-10_836,.Pixso-paragraph-10_841,.Pixso-paragraph-10_846,.Pixso-paragraph-10_851,.Pixso-paragraph-10_856,.Pixso-paragraph-10_861,.Pixso-paragraph-10_866,.Pixso-paragraph-10_871,.Pixso-paragraph-10_876,.Pixso-paragraph-10_881,.Pixso-paragraph-10_886,.Pixso-paragraph-10_891 {
+  font-size: 20px;
+  font-family: "Alimama FangYuanTi VF-Regular";
+  font-weight: 400;
+  text-align: justify;
+  flex-direction: column;
+  justify-content: center;
+  letter-spacing: 0px;
+  line-height: 1px;
+  text-decoration: none;
+  color: rgba(114, 114, 114, 1);
+  width: 28px;
+  height: 16px;
+}
+
+.Pixso-frame-10_672,.Pixso-frame-10_717,.Pixso-frame-10_722,.Pixso-frame-10_727,.Pixso-frame-10_732,.Pixso-frame-10_737,.Pixso-frame-10_742,.Pixso-frame-10_747,.Pixso-frame-10_752,.Pixso-frame-10_757,.Pixso-frame-10_762,.Pixso-frame-10_767,.Pixso-frame-10_772,.Pixso-frame-10_777,.Pixso-frame-10_782,.Pixso-frame-10_787,.Pixso-frame-10_792,.Pixso-frame-10_797,.Pixso-frame-10_802,.Pixso-frame-10_807,.Pixso-frame-10_812,.Pixso-frame-10_817,.Pixso-frame-10_822,.Pixso-frame-10_827,.Pixso-frame-10_832,.Pixso-frame-10_837,.Pixso-frame-10_842,.Pixso-frame-10_847,.Pixso-frame-10_852,.Pixso-frame-10_857,.Pixso-frame-10_862,.Pixso-frame-10_867,.Pixso-frame-10_872,.Pixso-frame-10_877,.Pixso-frame-10_882,.Pixso-frame-10_887,.Pixso-frame-10_892 {
+  width: 34px;
+  height: 16px;
+  overflow: hidden;
+  align-self: stretch;
+  border-radius: 106px 106px 106px 106px;
+  background-color: rgba(211, 210, 210, 1);
+}
+
+.Pixso-paragraph-10_673,.Pixso-paragraph-10_678,.Pixso-paragraph-10_686,.Pixso-paragraph-10_694,.Pixso-paragraph-10_702,.Pixso-paragraph-10_710,.Pixso-paragraph-10_718,.Pixso-paragraph-10_723,.Pixso-paragraph-10_728,.Pixso-paragraph-10_733,.Pixso-paragraph-10_738,.Pixso-paragraph-10_743,.Pixso-paragraph-10_748,.Pixso-paragraph-10_753,.Pixso-paragraph-10_758,.Pixso-paragraph-10_763,.Pixso-paragraph-10_768,.Pixso-paragraph-10_773,.Pixso-paragraph-10_778,.Pixso-paragraph-10_783,.Pixso-paragraph-10_788,.Pixso-paragraph-10_793,.Pixso-paragraph-10_798,.Pixso-paragraph-10_803,.Pixso-paragraph-10_808,.Pixso-paragraph-10_813,.Pixso-paragraph-10_818,.Pixso-paragraph-10_823,.Pixso-paragraph-10_828,.Pixso-paragraph-10_833,.Pixso-paragraph-10_838,.Pixso-paragraph-10_843,.Pixso-paragraph-10_848,.Pixso-paragraph-10_853,.Pixso-paragraph-10_858,.Pixso-paragraph-10_863,.Pixso-paragraph-10_868,.Pixso-paragraph-10_873,.Pixso-paragraph-10_878,.Pixso-paragraph-10_883,.Pixso-paragraph-10_888,.Pixso-paragraph-10_893 {
+  font-size: 9px;
+  font-family: "Alimama FangYuanTi VF-Regular";
+  font-weight: 400;
+  text-align: justify;
+  flex-direction: column;
+  justify-content: flex-end;
+  letter-spacing: 0px;
+  text-decoration: none;
+  color: rgba(52, 52, 52, 1);
+  width: 20px;
+  height: 11px;
+  position: absolute;
+  left: 8px;
+  top: 2px;
+}
+
+.Pixso-frame-10_674 {
+  width: 117.428589px;
+  height: 70.833336px;
+  overflow: hidden;
+  flex-direction: column;
+  align-items: flex-start;
+  border-radius: 6px 6px 6px 6px;
+  background-color: rgba(211, 255, 221, 1);
+}
+
+.frame-content-10_674,.frame-content-10_682 {
+  flex-direction: column;
+  gap: 2px;
+  align-items: flex-start;
+  padding: 5px 6px 2px 6px;
+  width: 100%;
+  height: 100%;
+}
+
+.Pixso-paragraph-10_676 {
+  font-size: 20px;
+  font-family: "Alimama FangYuanTi VF-Regular";
+  font-weight: 400;
+  text-align: justify;
+  flex-direction: column;
+  justify-content: center;
+  letter-spacing: 0px;
+  line-height: 1px;
+  text-decoration: none;
+  color: rgba(40, 191, 75, 1);
+  width: 28px;
+  height: 16px;
+}
+
+.Pixso-frame-10_677 {
+  width: 34px;
+  height: 16px;
+  overflow: hidden;
+  align-self: stretch;
+  border-radius: 106px 106px 106px 106px;
+  background-color: rgba(132, 248, 159, 1);
+}
+
+.Pixso-frame-10_679,.Pixso-frame-10_687,.Pixso-frame-10_695,.Pixso-frame-10_703,.Pixso-frame-10_711 {
+  width: 100%;
+  flex-direction: column;
+  align-items: flex-start;
+  flex-grow: 1;
+}
+
+.frame-content-10_679,.frame-content-10_687,.frame-content-10_695,.frame-content-10_703,.frame-content-10_711 {
+  flex-direction: column;
+  gap: 3px;
+  align-items: flex-start;
+  padding: 2px 0px 0px 1px;
+  width: 100%;
+  height: 100%;
+}
+
+.Pixso-paragraph-10_680 {
+  font-size: 12px;
+  font-family: "Alimama FangYuanTi VF-Regular";
+  font-weight: 400;
+  text-align: justify;
+  flex-direction: column;
+  justify-content: center;
+  letter-spacing: 0px;
+  line-height: 1px;
+  text-decoration: none;
+  color: rgba(157, 215, 171, 1);
+  width: 32px;
+  height: 8px;
+}
+
+.Pixso-paragraph-10_681 {
+  font-size: 14px;
+  font-family: "Alimama FangYuanTi VF-SemiBold";
+  font-weight: 600;
+  text-align: left;
+  letter-spacing: 0px;
+  line-height: 16px;
+  text-decoration: none;
+  color: rgba(40, 191, 75, 1);
+  width: 100%;
+  flex-grow: 1;
+}
+
+.Pixso-frame-10_682 {
+  width: 117.428589px;
+  height: 70.833336px;
+  overflow: hidden;
+  flex-direction: column;
+  align-items: flex-start;
+  border-radius: 6px 6px 6px 6px;
+  background-color: rgba(231, 248, 255, 1);
+}
+
+.Pixso-paragraph-10_684 {
+  font-size: 20px;
+  font-family: "Alimama FangYuanTi VF-Regular";
+  font-weight: 400;
+  text-align: justify;
+  flex-direction: column;
+  justify-content: center;
+  letter-spacing: 0px;
+  line-height: 1px;
+  text-decoration: none;
+  color: rgba(0, 139, 194, 1);
+  width: 28px;
+  height: 16px;
+}
+
+.Pixso-frame-10_685,.Pixso-frame-10_709 {
+  width: 34px;
+  height: 16px;
+  overflow: hidden;
+  align-self: stretch;
+  border-radius: 106px 106px 106px 106px;
+  background-color: rgba(150, 225, 254, 1);
+}
+
+.Pixso-paragraph-10_688,.Pixso-paragraph-10_712 {
+  font-size: 12px;
+  font-family: "Alimama FangYuanTi VF-Regular";
+  font-weight: 400;
+  text-align: justify;
+  flex-direction: column;
+  justify-content: center;
+  letter-spacing: 0px;
+  line-height: 1px;
+  text-decoration: none;
+  color: rgba(114, 194, 225, 1);
+  width: 32px;
+  height: 8px;
+}
+
+.Pixso-paragraph-10_689,.Pixso-paragraph-10_713 {
+  font-size: 14px;
+  font-family: "Alimama FangYuanTi VF-SemiBold";
+  font-weight: 600;
+  text-align: left;
+  letter-spacing: 0px;
+  line-height: 16px;
+  text-decoration: none;
+  color: rgba(0, 139, 194, 1);
+  width: 100%;
+  flex-grow: 1;
+}
+
+.Pixso-frame-10_690 {
+  width: 100%;
+  height: 70.833336px;
+  overflow: hidden;
+  flex-shrink: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+  flex-grow: 1;
+  flex-basis: 0;
+  align-self: stretch;
+  border-radius: 6px 6px 6px 6px;
+  background-color: rgba(246, 238, 255, 1);
+}
+
+.frame-content-10_690,.frame-content-10_698,.frame-content-10_706 {
+  flex-direction: column;
+  gap: 2px;
+  align-items: flex-start;
+  min-width: 0;
+  padding: 5px 6px 2px 6px;
+  width: 100%;
+  height: 100%;
+}
+
+.Pixso-paragraph-10_692 {
+  font-size: 20px;
+  font-family: "Alimama FangYuanTi VF-Regular";
+  font-weight: 400;
+  text-align: justify;
+  flex-direction: column;
+  justify-content: center;
+  letter-spacing: 0px;
+  line-height: 1px;
+  text-decoration: none;
+  color: rgba(209, 146, 255, 1);
+  width: 28px;
+  height: 16px;
+}
+
+.Pixso-frame-10_693 {
+  width: 34px;
+  height: 16px;
+  overflow: hidden;
+  align-self: stretch;
+  border-radius: 106px 106px 106px 106px;
+  background-color: rgba(224, 181, 255, 1);
+}
+
+.Pixso-paragraph-10_696 {
+  font-size: 12px;
+  font-family: "Alimama FangYuanTi VF-Regular";
+  font-weight: 400;
+  text-align: justify;
+  flex-direction: column;
+  justify-content: center;
+  letter-spacing: 0px;
+  line-height: 1px;
+  text-decoration: none;
+  color: rgba(250, 193, 249, 1);
+  width: 32px;
+  height: 8px;
+}
+
+.Pixso-paragraph-10_697 {
+  font-size: 14px;
+  font-family: "Alimama FangYuanTi VF-SemiBold";
+  font-weight: 600;
+  text-align: left;
+  letter-spacing: 0px;
+  line-height: 16px;
+  text-decoration: none;
+  color: rgba(209, 146, 255, 1);
+  width: 100%;
+  flex-grow: 1;
+}
+
+.Pixso-frame-10_698 {
+  width: 100%;
+  height: 70.833336px;
+  overflow: hidden;
+  flex-shrink: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+  flex-grow: 1;
+  flex-basis: 0;
+  align-self: stretch;
+  border-radius: 6px 6px 6px 6px;
+  background-color: rgba(255, 243, 218, 1);
+}
+
+.Pixso-paragraph-10_700 {
+  font-size: 20px;
+  font-family: "Alimama FangYuanTi VF-Regular";
+  font-weight: 400;
+  text-align: justify;
+  flex-direction: column;
+  justify-content: center;
+  letter-spacing: 0px;
+  line-height: 1px;
+  text-decoration: none;
+  color: rgba(250, 160, 49, 1);
+  width: 28px;
+  height: 16px;
+}
+
+.Pixso-frame-10_701 {
+  width: 34px;
+  height: 16px;
+  overflow: hidden;
+  align-self: stretch;
+  border-radius: 106px 106px 106px 106px;
+  background-color: rgba(255, 200, 83, 1);
+}
+
+.Pixso-paragraph-10_704 {
+  font-size: 12px;
+  font-family: "Alimama FangYuanTi VF-Regular";
+  font-weight: 400;
+  text-align: justify;
+  flex-direction: column;
+  justify-content: center;
+  letter-spacing: 0px;
+  line-height: 1px;
+  text-decoration: none;
+  color: rgba(255, 202, 88, 1);
+  width: 32px;
+  height: 8px;
+}
+
+.Pixso-paragraph-10_705 {
+  font-size: 14px;
+  font-family: "Alimama FangYuanTi VF-SemiBold";
+  font-weight: 600;
+  text-align: left;
+  letter-spacing: 0px;
+  line-height: 16px;
+  text-decoration: none;
+  color: rgba(250, 160, 49, 1);
+  width: 100%;
+  flex-grow: 1;
+}
+
+.Pixso-frame-10_706 {
+  width: 100%;
+  height: 70.833336px;
+  overflow: hidden;
+  flex-shrink: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+  flex-grow: 1;
+  flex-basis: 0;
+  align-self: stretch;
+  border-radius: 6px 6px 6px 6px;
+  background-color: rgba(231, 248, 255, 1);
+}
+
+.Pixso-paragraph-10_708 {
+  font-size: 20px;
+  font-family: "Alimama FangYuanTi VF-Regular";
+  font-weight: 400;
+  text-align: justify;
+  flex-direction: column;
+  justify-content: center;
+  letter-spacing: 0px;
+  line-height: 1px;
+  text-decoration: none;
+  color: rgba(0, 122, 171, 1);
+  width: 28px;
+  height: 16px;
+}
+
+.Pixso-frame-10_714,.frame-content-10_714 {
+  width: 100%;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.Pixso-frame-10_714 {
+  height: 70.833336px;
+  overflow: hidden;
+  flex-shrink: 1;
+  flex-grow: 1;
+  flex-basis: 0;
+  align-self: stretch;
+  border-radius: 6px 6px 6px 6px;
+  background-color: rgba(233, 233, 233, 1);
+  opacity: 0.3;
+}
+
+.frame-content-10_714 {
+  gap: 10px;
+  padding: 6px 6px 2px 6px;
+  height: 100%;
+}
+
+.Pixso-frame-10_719,.Pixso-frame-10_724,.Pixso-frame-10_729,.Pixso-frame-10_734,.Pixso-frame-10_739,.Pixso-frame-10_744,.Pixso-frame-10_749,.Pixso-frame-10_754,.Pixso-frame-10_759,.Pixso-frame-10_764,.Pixso-frame-10_769 {
+  width: 117.428574px;
+  height: 70.833336px;
+  overflow: hidden;
+  flex-direction: column;
+  align-items: flex-start;
+  border-radius: 6px 6px 6px 6px;
+  background-color: rgba(233, 233, 233, 1);
+  opacity: 0.3;
+}
+
+.Pixso-frame-10_774,.Pixso-frame-10_779,.Pixso-frame-10_784,.Pixso-frame-10_789,.Pixso-frame-10_794,.Pixso-frame-10_799,.Pixso-frame-10_804,.Pixso-frame-10_809,.Pixso-frame-10_814,.Pixso-frame-10_819,.Pixso-frame-10_824,.Pixso-frame-10_829,.Pixso-frame-10_834,.Pixso-frame-10_839,.Pixso-frame-10_844,.Pixso-frame-10_849,.Pixso-frame-10_854,.Pixso-frame-10_859,.Pixso-frame-10_864,.Pixso-frame-10_869,.Pixso-frame-10_874,.Pixso-frame-10_879,.Pixso-frame-10_884,.Pixso-frame-10_889 {
+  width: 117.428574px;
+  height: 70.833336px;
+  overflow: hidden;
+  flex-direction: column;
+  align-items: flex-start;
+  border-radius: 6px 6px 6px 6px;
+  background-color: rgba(233, 233, 233, 1);
+}

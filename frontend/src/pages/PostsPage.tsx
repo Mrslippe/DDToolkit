@@ -58,6 +58,7 @@ import { mergeAccountSnapshots, mergeVtuberSnapshots } from '../utils/accountSna
 import PostCard from '../components/PostCard'
 import PostDetailDrawer from '../components/PostDetailDrawer'
 import ProfileView from '../components/ProfileView'
+import LiveCalendar from '../components/LiveCalendar'
 import './../styles/posts.css'
 
 const PAGE_SIZE = 20
@@ -1003,9 +1004,12 @@ return (
         )}
 
         {vtuber && scene.view === 'archive' && (
-          <div className="archive-placeholder">
-            {/* 2026-09-06：archive 视图整体推倒重建（用户主导逐步构建），此处为占位壳 */}
-            <div className="archive-empty">档案视图重构中…</div>
+          <div className="archive-view">
+            {/* 2026-09-06：archive 逐步重建（用户主导），第一步 = 直播日历卡（Frame10612 规格） */}
+            <LiveCalendar
+              accountId={heroAcc?.id ?? null}
+              refreshTick={refreshTick}
+            />
           </div>
         )}
 

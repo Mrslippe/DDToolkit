@@ -1,9 +1,9 @@
-import Frame101 from "@/views/Frame101";
+import Frame10612 from "@/views/Frame10612";
 
 export const routes = [{
           path: "/",
-          component: Frame101,
-          guid: "10:1",
+          component: Frame10612,
+          guid: "10:612",
         }];
 
 
