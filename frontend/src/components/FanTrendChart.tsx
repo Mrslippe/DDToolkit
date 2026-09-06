@@ -82,6 +82,10 @@ interface BarGeom {
 /** 当前渲染帧的柱几何（BarShape 渲染期写入；转场目标/基准的唯一来源，幂等） */
 const curGeom = new Map<string, BarGeom>()
 
+/** 拖动/刷选中"正在生长"的新柱日期（live 入场）：
+    BarShape 据此隐藏原生矩形防重影，LiveEnterOverlay 据此渲染生长层 */
+const liveEntering = new Set<string>()
+
 const ENTRY_MS = 260
 const STAGGER_MS = 12
 const MORPH_MS = 300
@@ -138,7 +142,17 @@ const BarShape = memo(function BarShape({ x = 0, y = 0, width = 0, height = 0, p
 
   return (
     <g>
-      <rect x={x} y={rectTop} width={width} height={rectH} fill={payload?.barFill ?? PINK} rx={0} />
+      <rect
+        x={x}
+        y={rectTop}
+        width={width}
+        height={rectH}
+        fill={payload?.barFill ?? PINK}
+        rx={0}
+        /* live 入场中的柱由 Overlay 全权绘制（生长层），原生矩形隐藏防重影；
+           到期解除（spawnLive 的 setState 重渲染 → BarShape 重渲染 → 恢复可见） */
+        style={{ visibility: date && liveEntering.has(date) ? 'hidden' : undefined }}
+      />
     </g>
   )
 })
@@ -208,6 +222,31 @@ const TrendOverlay = memo(function TrendOverlay({ spec, onDone }: { spec: Transi
   )
 })
 
+/** 拖动中 live 入场层：仅渲染"正在生长"的新柱——
+    几何每帧自 curGeom 读取（父渲染时更新），键帧动画不受属性更新打断 */
+const LiveEnterOverlay = memo(function LiveEnterOverlay({ dates }: { dates: string[] }) {
+  return (
+    <svg className="fan-transition-layer" aria-hidden>
+      {dates.map((d) => {
+        const g = curGeom.get(d)
+        if (!g) return null
+        return (
+          <rect
+            key={d}
+            className="ov-bar"
+            x={g.x}
+            y={g.y}
+            width={g.width}
+            height={g.height}
+            fill={g.fill}
+            style={{ animation: `lc-bar-grow ${ENTRY_MS}ms ease-out both` }}
+          />
+        )
+      })}
+    </svg>
+  )
+})
+
 /**
  * 粉丝趋势卡（v0.9.5 重建 + v0.9.6 修正，参考用户展示图 + 项目粉系浅底）：
  * - 双轴 ComposedChart：粉丝数 Area（主粉渐变色）+ 日增粉 Bar（涨=粉 / 掉=灰）；
@@ -216,9 +255,10 @@ const TrendOverlay = memo(function TrendOverlay({ spec, onDone }: { spec: Transi
  * - 底部 Brush 缩略图：dataKey=fans（数值键才能画出迷你图），拖拽滑块/拉伸两端
  *   调整展示窗口（startIndex/endIndex 受控，可一键回默认窗口）；
  * - 纵轴域随【当前可见窗口数据】动态计算（recharts auto domain 按可见数据重算）；
- * - 动画：事件驱动转场（v0.9.19）——新柱进入窗口/数据变更的稳定瞬间，
- *   TrendOverlay 编排 入柱生长 + 留存柱 morph + 曲线 clip 扫过（全 CSS，
- *   拖动期间零动画）；recharts 自身 JS 动画保持全关。
+ * - 动画：事件驱动转场（v0.9.19+）——拖动/刷选中新柱【出现即生长】（live 入场：
+ *   逐提交帧 diff，键帧挂载即播、几何随帧更新、360ms 到期自清）；
+ *   稳定瞬间结算 留存柱 morph + 曲线 clip 扫过（全 CSS，无逐帧 JS）；
+ *   recharts 自身 JS 动画保持全关。
  */
 const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }: Props) {
   const [points, setPoints] = useState<FanTrendPoint[]>([])
@@ -256,6 +296,40 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
   const pendingBaseRef = useRef<Map<string, BarGeom> | null>(null)
   const transitionIdRef = useRef(0)
   const cancelTransition = useCallback(() => setTransition(null), [])
+
+  /* ── 拖动中"新柱出现即生长"（live 入场）── */
+  /** live 入场状态（date → 到期时间戳，驱动 LiveEnterOverlay 与到期清理） */
+  const [liveEnter, setLiveEnter] = useState<Map<string, number>>(new Map())
+  /** 拖动中逐提交帧窗口（帧级 diff → 新入柱）；稳定瞬间复位为当前窗口 */
+  const lastFrameRef = useRef<Set<string> | null>(null)
+  /** 本次拖动已做过 live 入场的日期（settle 时排除，防回播重播） */
+  const dragEnteredRef = useRef(new Set<string>())
+
+  /** 触发 live 入场：登记集合 + 每日期一个到期器（380ms 后解除隐藏/卸载生长层） */
+  const spawnLive = useCallback((dates: string[]) => {
+    if (dates.length === 0) return
+    const now = performance.now()
+    for (const d of dates) {
+      liveEntering.add(d)
+      dragEnteredRef.current.add(d)
+    }
+    setLiveEnter((prev) => {
+      const next = new Map(prev)
+      for (const d of dates) next.set(d, now + 360)
+      return next
+    })
+    for (const d of dates) {
+      window.setTimeout(() => {
+        liveEntering.delete(d)
+        setLiveEnter((prev) => {
+          if (!prev.has(d)) return prev
+          const next = new Map(prev)
+          next.delete(d)
+          return next
+        })
+      }, 380)
+    }
+  }, [])
 
   useEffect(() => {
     if (accountId == null) return
@@ -423,14 +497,32 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
     capRef.current = capacity
   }
 
-  /* ── 事件分析：非拖动（稳定瞬间）窗口变化 → 生成转场 spec ── */
+  /* ── 事件分析：窗口变化 → 转场/spec ──
+     拖动/刷选中：逐提交帧 diff（上一提交窗口 vs 当前）→ 新柱"出现即生长"
+     （live 入场：键帧挂载即播，几何随帧更新不打断动画，无 settle 等待）；
+     稳定瞬间：基线（拖动起点）对比 → 曲线扫过 + 柱 morph，
+     已 live 入场者排除（回播保护）。 */
   useEffect(() => {
     if (!range || capacity.length === 0) return
-    // 拖动/刷选进行中：冻结基线，交稳定瞬间统一结算
-    if (interacting) return
     const curDates = view.map((d) => d.date)
+
+    if (interacting) {
+      // 拖动中：帧级比对 → 新入柱即刻生长（不等待 settle）
+      const prevFrame = lastFrameRef.current
+      if (prevFrame) {
+        const newly = curDates.filter((d) => !prevFrame.has(d))
+        if (newly.length) spawnLive(newly)
+      }
+      lastFrameRef.current = new Set(curDates)
+      return
+    }
+
     const prev = prevSelRef.current
     const prevDates = prev ? new Set(prev.dates) : null
+    // 会话结算：无论本次是否播动画，复位拖动期基线/已入场集合
+    const dragEntered = dragEnteredRef.current
+    dragEnteredRef.current = new Set()
+    lastFrameRef.current = new Set(curDates)
     // 与上次稳定基线完全一致 → 惰性渲染，不播
     if (
       prev &&
@@ -461,6 +553,7 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
     for (const d of curDates) {
       const target = curGeom.get(d)
       if (!target) continue
+      if (dragEntered.has(d)) continue // 拖动中已 live 入场（动画播完且已到位）→ 不重复
       if (allEntered || !prevDates.has(d)) {
         spec.entered.push({ date: d, geom: target, delay: Math.min(step, 16) * STAGGER_MS })
         step += 1
@@ -483,7 +576,7 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
     prevSelRef.current = { dates: curDates, preset, capacity, range: [range[0], range[1]] }
     if (spec.entered.length === 0 && spec.kept.length === 0 && !spec.area) return
     setTransition(spec)
-  }, [range, preset, capacity, view, interacting])
+  }, [range, preset, capacity, view, interacting, spawnLive])
 
   /** 纵轴域随窗口动态：据切片数据计算（涨跌幅对窗口；粉丝数留 8% 余量） */
   const fanDomainVal = useMemo(() => fanDomain(view.map((d) => d.fans)), [view])
@@ -696,6 +789,9 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
         {/* 事件驱动转场层（仅在转场期间存在；pointer-events:none 不影响交互；
             key=spec.id 强制重挂：防 ready 状态残留导致下一场无 from 帧） */}
         {transition && <TrendOverlay key={transition.id} spec={transition} onDone={cancelTransition} />}
+        {/* 拖动中 live 入场层：新柱"出现即生长"（键帧挂载即播，到期自清；
+            与 settle 转场层可共存——live 柱播完自然退场） */}
+        {liveEnter.size > 0 && <LiveEnterOverlay dates={[...liveEnter.keys()]} />}
       </div>
     </div>
   )
