@@ -942,8 +942,10 @@
   max-width: 960px;
 }
 
-/* 通用定宽卡片契约：max-width=上限（拉伸封顶居中）、flex-shrink=1（同步收缩）、
-   min-width=下限（到限不再缩，内容裁剪）、overflow hidden（裁剪兜底） */
+/* 通用定宽卡片契约：max-width=上限（拉伸封顶居中）、min-width=下限（到限不再缩）。
+   注意：column flex 容器中 flex-shrink 会压缩【高度】（overflow:hidden 使
+   min-height:auto 失效——趋势卡被裁的根因），因此基类不设 flex-shrink；
+   宽度收缩仅由上行两卡（grid-top 行内）声明，全宽卡高度随内容自然增长。 */
 .archive-section {
   background: var(--c-bg-card);
   border-radius: 4px;
@@ -951,7 +953,6 @@
   box-shadow: var(--pill-shadow);
   width: 100%;
   max-width: 960px;
-  flex-shrink: 1;
   min-width: 480px;
   overflow: hidden;
 }
