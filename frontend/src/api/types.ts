@@ -88,14 +88,32 @@ export interface FanTrendPoint {
   source: string
 }
 
-/** 直播场次（P5：由 self 快照转移推导，5min 粒度近似） */
+/** 直播场次（v0.9.x 内容管道：danmakus 主源 + self 快照 ±90min 合并；
+ *  旧字段语义不变，M1+ 新增 source/category/分区/收益等） */
 export interface LiveSession {
   account_id: number
   start_at: string
   end_at: string | null
   duration_minutes: number | null
-  /** 场次标题（P7：场次内最后一条非空快照标题；用于日历格内展示） */
+  /** 场次标题（并集：danmakus/feed/快照标题，主数据优先） */
   live_title: string | null
+
+  /** 数据源组合（danmakus / feed / self / danmakus+feed+self …，主数据在前） */
+  source?: string
+  live_id?: string | null
+  room_id?: string | null
+  parent_area_name?: string | null
+  area_name?: string | null
+  /** 场次收益（danmakus totalIncome，元） */
+  total_income?: number | null
+  /** 峰值在线（danmakus maxOnlineCount） */
+  max_online_count?: number | null
+  /** 弹幕数（danmakus danmakusCount） */
+  danmakus_count?: number | null
+  /** 类型 key（服务端推断：game/chat/watch/upload/song/fitness/radio/collab/special/live） */
+  category?: string
+  /** 类型推断来源（title/area/date/fallback） */
+  category_from?: string
 }
 
 /** 直播礼物日聚合（金额为原始字符串保精度） */
