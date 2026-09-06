@@ -487,7 +487,19 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
             ))}
           </div>
           {!isDefaultWindow && (
-            <button type="button" className="fan-chart-reset" onClick={() => setRange(null)}>
+            <button
+              type="button"
+              className="fan-chart-reset"
+              /* 直接设默认窗口而非 setRange(null)：null 不会触发上面的
+                 [capacity] effect 重设 → range 永远为 null → 图表卡在
+                 全量数据且按钮消失（重置失效） */
+              onClick={() =>
+                setRange([
+                  Math.max(0, capacity.length - DEFAULT_DAYS),
+                  capacity.length - 1,
+                ])
+              }
+            >
               <CalendarRange className="size-3.5" />
               重置窗口
             </button>
