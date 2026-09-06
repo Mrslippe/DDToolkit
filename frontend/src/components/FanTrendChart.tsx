@@ -125,8 +125,8 @@ function buildOption(data: DailyPoint[]): EChartsCoreOption {
     animationDurationUpdate: 150,
     animationEasingUpdate: 'cubicOut',
     animationThreshold: 2000,
-    // 布局：上 12 / 下 42（dataZoom slider 26 + 边距）
-    grid: { left: 48, right: 46, top: 12, bottom: 42 },
+    // 布局：上 12 / 下 60（下区自下而上：间隙 6 + slider 24 + 间隙 12 + xAxis 标签 18）
+    grid: { left: 48, right: 46, top: 12, bottom: 60 },
     xAxis: {
       type: 'category',
       boundaryGap: true,
@@ -221,7 +221,7 @@ function buildOption(data: DailyPoint[]): EChartsCoreOption {
         xAxisIndex: 0,
         startValue: s0,
         endValue: e0,
-        height: 26,
+        height: 24,
         bottom: 6,
         borderColor: 'rgba(210, 216, 222, 0.55)',
         backgroundColor: 'rgba(148, 163, 184, 0.1)',
