@@ -56,57 +56,105 @@ function deltaDomain(values: (number | null)[]): [number, number] {
   return [-cap, cap]
 }
 
-/* ── 柱形出场动画（JS rAF 驱动，重挂免疫）──
+/* ── 柱形动画（JS rAF 驱动，重挂免疫）──
    recharts 拖动时内部 key=rectangle-x-y-value-i，窗口移动导致 BarShape 每帧
    销毁重建；CSS@keyframes/组件 state 都会被下一帧实例取代而"动画约等于没有"。
-   方案：动画进度存【模块级 Map】跨实例共享；活跃实例注册到元素表；
-   rAF 循环每帧取当前活跃元素直接写 style.opacity/style.transform——
-   · 重挂不影响：新实例挂载即读到共享进度，从当前值延续
-   · 零 React 重渲染：动画直接操作 DOM，不触发组件 re-render
-   · 必然可见：JS 驱动，不依赖 CSS/@keyframes/生命周期 */
+   双通道并行，共享每柱一条 rAF 循环：
+   ① 出场通道 barProgress：新柱 opacity .3→1 + scaleY .8→1（easeOutCubic 220ms）
+   ② 坐标通道 barCur→barTarget：Y 轴域随窗口重算 → y/height 跳变时平滑过渡
+      （新目标写入 barTarget，循环每帧把 rect 属性从 cur 插值到 target,
+        duration 280ms easeOutCubic）
+   · 模块级 Map 跨实例共享：重挂的新实例直接读到进度/当前坐标，从当前值延续
+   · 零 React 重渲染：动画直接操作 DOM（rect.setAttribute / style）
+   · 滚动/拖动期间 target 多帧变化：cur 始终从上次渲染值续走，不叠加不抖动 */
 
-/** 每柱动画进度（0→1，模块级跨实例共享） */
+const BAR_REVEAL_MS = 220
+const BAR_MOVE_MS = 280
+
+/** 每柱出场进度（0→1） */
 const barProgress = new Map<string, number>()
-/** 每柱当前活跃 <rect> 元素（重挂时替换，rAF 循环每次读最新） */
+/** 每柱动画当前实际坐标（显示值，跨实例共享） */
+const barCur = new Map<string, { x: number; y: number; w: number; h: number }>()
+/** 每柱最新目标坐标（props 每次更新写入） */
+const barTarget = new Map<string, { x: number; y: number; w: number; h: number }>()
+/** 每柱当前活跃 <rect> 元素（重挂时替换） */
 const barEls = new Map<string, SVGRectElement | null>()
 /** 每柱 rAF 句柄（一次只跑一个循环） */
 const barRafs = new Map<string, number>()
-
-const BAR_REVEAL_MS = 220
+/** 每柱上一 tick 时间戳（帧率无关推进用） */
+const barLastTick = new Map<string, number>()
 
 const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3)
 
-/** 启动（若未跑）/延续该 date 的出场动画循环 */
-function pumpBar(date: string, x: number, y: number, w: number, h: number) {
-  const key = date
-  if (barRafs.has(key)) return // 已在跑：进度延续
-  const state = { last: performance.now() }
-  const tick = (now: number) => {
-    const el = barEls.get(key)
-    const p = barProgress.get(key) ?? 0
-    if (!el) {
-      // 元素表被清空（拖动中实例频繁换，等到新实例再继续）
-      if (p < 1) {
-        barRafs.set(key, window.requestAnimationFrame(tick))
-      } else {
-        barRafs.delete(key)
-      }
-      return
-    }
-    const t = Math.min(1, p + (now - state.last) / BAR_REVEAL_MS)
-    state.last = now
-    barProgress.set(key, t)
-    const ease = easeOutCubic(t)
-    el.style.opacity = String(0.3 + 0.7 * ease)
-    el.style.transform = `scaleY(${0.8 + 0.2 * ease})`
-    el.style.transformOrigin = `${x + w / 2}px ${y + h}px`
-    if (t < 1) {
-      barRafs.set(key, window.requestAnimationFrame(tick))
-    } else {
-      barRafs.delete(key)
-    }
+type RectGeom = { x: number; y: number; w: number; h: number }
+
+/** 单柱 rAF tick：出场与坐标插值并行推进（帧率无关：按真实 Δt 推进） */
+function barTick(date: string, now: number) {
+  const el = barEls.get(date)
+  const cur = barCur.get(date)
+  const target = barTarget.get(date)
+  if (!el || !cur || !target) {
+    barRafs.set(date, window.requestAnimationFrame((t) => barTick(date, t)))
+    return
   }
-  barRafs.set(key, window.requestAnimationFrame(tick))
+  const last = barLastTick.get(date) ?? now
+  const dt = Math.min(Math.max(now - last, 0), 64) // clamp：切后台回来不瞬移
+  barLastTick.set(date, now)
+
+  // ① 出场进度（新柱 0 起步；已出现=1 不再动）
+  let p = barProgress.get(date) ?? 0
+  if (p < 1) {
+    p = Math.min(1, p + dt / BAR_REVEAL_MS)
+    barProgress.set(date, p)
+  }
+
+  // ② 坐标插值：剩余差值按 Δt/MOVE_MS 比例推进（指数收敛，帧率无关）
+  const k = Math.min(1, dt / BAR_MOVE_MS)
+  if (Math.abs(cur.x - target.x) > 0.5 || Math.abs(cur.y - target.y) > 0.5 || Math.abs(cur.w - target.w) > 0.5 || Math.abs(cur.h - target.h) > 0.5) {
+    cur.x += (target.x - cur.x) * k
+    cur.y += (target.y - cur.y) * k
+    cur.w += (target.w - cur.w) * k
+    cur.h += (target.h - cur.h) * k
+  } else {
+    cur.x = target.x
+    cur.y = target.y
+    cur.w = target.w
+    cur.h = target.h
+  }
+
+  el.setAttribute('x', String(cur.x))
+  el.setAttribute('y', String(cur.y))
+  el.setAttribute('width', String(cur.w))
+  el.setAttribute('height', String(cur.h))
+  const ease = easeOutCubic(p)
+  el.style.opacity = String(0.3 + 0.7 * ease)
+  el.style.transform = `scaleY(${0.8 + 0.2 * ease})`
+  el.style.transformOrigin = `${cur.x + cur.w / 2}px ${cur.y + cur.h}px`
+
+  const settled = p >= 1 && cur.x === target.x && cur.y === target.y && cur.w === target.w && cur.h === target.h
+  if (settled) {
+    barRafs.delete(date)
+    barLastTick.delete(date)
+  } else {
+    barRafs.set(date, window.requestAnimationFrame((t) => barTick(date, t)))
+  }
+}
+
+/** 注册/更新动画状态：props 每帧变化时调用（重挂/移窗总计通用） */
+function pumpBar(date: string, geom: RectGeom, fresh: boolean) {
+  if (fresh) {
+    barCur.set(date, { ...geom })
+    barTarget.set(date, { ...geom })
+    if (!barProgress.has(date)) barProgress.set(date, 0)
+  } else {
+    barTarget.set(date, { ...geom })
+    const cur = barCur.get(date)
+    if (!cur) barCur.set(date, { ...geom })
+  }
+  if (!barRafs.has(date)) {
+    barLastTick.delete(date)
+    barRafs.set(date, window.requestAnimationFrame((t) => barTick(date, t)))
+  }
 }
 
 interface BarShapeProps {
@@ -124,32 +172,24 @@ const BarShape = memo(function BarShape({ x = 0, y = 0, width = 0, height = 0, p
   useLayoutEffect(() => {
     const el = rectRef.current
     if (!el || !date) return
-    // 注册活跃元素（旧实例卸载后新实例接管，进度不归零）
+    const isFresh = !barProgress.has(date)
     barEls.set(date, el)
-    // 初始画到当前进度（重挂的柱子不会先闪 0.3，而是直接从进度处显示）
-    const t = barProgress.get(date) ?? 0
-    const ease = easeOutCubic(Math.min(1, t))
-    el.style.opacity = String(0.3 + 0.7 * ease)
-    el.style.transform = `scaleY(${0.8 + 0.2 * ease})`
-    el.style.transformOrigin = `${x + width / 2}px ${y + height}px`
-    // 启动/延续动画
-    pumpBar(date, x, y, width, height)
+    // 注册/更新状态，启动循环（已跑则直接更新 target）
+    pumpBar(date, { x, y, w: width, h: height }, isFresh)
     return () => {
-      // 仅当仍是自己的实例时注销（避免清掉新实例）
       if (barEls.get(date) === el) barEls.set(date, null)
     }
-    // 坐标变化不重启（进度在 pumpBar 里延续）
+    // 坐标变化不重启：仅在 target 系上更新（pumpBar 内条件启动）
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [date])
+  }, [date, x, y, width, height])
 
+  // 几何由 rAF 循环直接写 DOM（React 不设 x/y/width/height——
+  // 避免 React 的 attribute 写入与插值循环竞争；首帧循环启动前由
+  // useLayoutEffect 里的 pumpBar 立即把 cur 写上去，无空白帧）
   return (
     <g>
       <rect
         ref={rectRef}
-        x={x}
-        y={y}
-        width={width}
-        height={height}
         fill={payload?.barFill ?? PINK}
         rx={0}
         style={{ pointerEvents: 'none' }}
