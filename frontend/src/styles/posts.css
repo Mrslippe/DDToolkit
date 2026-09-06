@@ -2120,12 +2120,11 @@
   pointer-events: none;
 }
 
-/* ── 事件驱动转场（v0.9.19）：TrendOverlay 全权绘制期间的显隐 ──
-   .tran 期间：recharts 原生柱 + 主区曲线隐藏（Overlay 绘制替代，
-   避免 overlay 半透明态叠在终局态上出现重影）；
+/* ── 事件驱动转场（v0.9.19+）：Overlay 全权绘制期间的显隐 ──
+   .tran 期间：recharts 原生柱隐藏（Overlay 绘制替代，避免 overlay 半透明态
+   叠在终局态上出现重影）；主区曲线保持 recharts 原生实时（不隐藏、无扫过）；
    转场结束 .tran 移除 → 原生终局态与 overlay 终态逐像素一致，无缝交接 */
-.fan-chart-body.tran .recharts-bar-rectangle,
-.fan-chart-body.tran .fan-area-main {
+.fan-chart-body.tran .recharts-bar-rectangle {
   visibility: hidden;
 }
 
@@ -2141,10 +2140,10 @@
   overflow: visible;
 }
 
-/* Overlay 柱：fill-box + 底部中心原点（scale/translate 的几何基准） */
+/* Overlay 柱：fill-box（transform 缩放/翻译的几何基准）；
+   transform-origin 按柱方向内联设置（正=50% 100%、负=50% 0% 锚定零线端） */
 .ov-bar {
   transform-box: fill-box;
-  transform-origin: 50% 100%;
 }
 
 /* 入柱/出柱生长关键帧（挂载即播；矩形 transform 默认值 = 终态，播完自然归位） */

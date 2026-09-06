@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { Area, AreaChart, Bar, Brush, CartesianGrid, ComposedChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { CalendarRange, Loader2 } from 'lucide-react'
 import type { FanTrendPoint } from '../api/types'
@@ -56,40 +56,49 @@ function deltaDomain(values: (number | null)[]): [number, number] {
   return [-cap, cap]
 }
 
-/* ── 事件驱动转场动画（v0.9.19）──
-   触发：窗口稳定瞬间（拖动结束/刷选停顿后/档位切换/数据加载/重置）检测到
-   【新柱进入窗口】或【数据/档位变更】→ 编排一次转场（≤480ms）；
-   载体：TrendOverlay（自持 SVG，与 recharts svg 逐像素同框）——
-   · 新入柱：CSS @keyframes 挂载即播（lc-bar-grow，12ms 交错，底部生长）
-   · 留存柱：旧几何 → 新几何，CSS transform 过渡（translate+scale，浏览器补间，
-     零逐帧 JS；transform-box:fill-box + 原点 50% 100%）
-   · 曲线重绘：主区 Area 最终 path d 以 clip-path:inset() 从左扫过（320ms）
-   铁律：①recharts 柱 key=rectangle-x-y-value-i 每帧重挂 → 动画不能寄生在
-   recharts 元素上（transition/状态机都会被销毁 cancel）；
-   ②拖动期间零动画（跟手优先），动画只绑定"稳定瞬间"；
-   ③几何基准 = BarShape 渲染期写入的 curGeom（与 recharts 逐像素同源，
-   零手工 band 计算，杜绝跨图错位）。 */
+/* ── 事件驱动转场动画（v0.9.21）──
+   两条通路：
+   ① live 层（拖动/刷选中 + 收尾 LIVE_FLUSH_MS）：LiveOverlay 绘制【全部窗口柱】——
+      新入柱出现即键帧生长、既有柱高度 morph（纵轴密度随窗口变化时平滑伸缩，
+      CSS transform 过渡连续追帧，零逐帧 JS）；x/宽度即时（槽位步进不滞后于实时曲线）；
+      期间 BarShape 原生矩形全部隐藏（liveBarsHidden，防重影）；
+   ② settle 转场（档位切换/数据加载/稳定瞬间窗口跳变）：TrendOverlay 编排
+      入柱交错 + 留存柱 位移缩放 morph（旧几何→新几何，需真实 from 帧）。
+   铁律：recharts 柱 key=rectangle-x-y-value-i 每帧重挂 → 动画全部寄生在
+   自持 Overlay（与 recharts svg 逐像素同框），recharts 柱仅静态渲染；
+   曲线保持 recharts 原生实时（无 overlay 曲线层、无扫过动画——user 移除）。 */
 
-/** 柱几何快照（已经是翻转后的可渲染 rect 值 + 填充色） */
+/** 柱几何快照（翻转后的可渲染 rect 值 + 填充色 + 生长锚点端）
+    delta 域对称 ±cap → 零线固定于绘图区中心：
+    正值柱 rect 底边 = 零线 → 锚点 bottom（50% 100%）；
+    负值柱 rect 顶边 = 零线 → 锚点 top（50% 0%） */
 interface BarGeom {
   x: number
   y: number
   width: number
   height: number
   fill: string
+  origin: '50% 100%' | '50% 0%'
 }
 
-/** 当前渲染帧的柱几何（BarShape 渲染期写入；转场目标/基准的唯一来源，幂等） */
+/** 当前渲染帧的柱几何（BarShape 渲染期写入；Overlay 目标/起点唯一来源，幂等） */
 const curGeom = new Map<string, BarGeom>()
 
-/** 拖动/刷选中"正在生长"的新柱日期（live 入场）：
-    BarShape 据此隐藏原生矩形防重影，LiveEnterOverlay 据此渲染生长层 */
-const liveEntering = new Set<string>()
+/** live 层是否接管柱绘制（BarShape 据此隐藏原生矩形防重影） */
+let liveBarsHidden = false
+
+/** live 入场的入场期截止（date → 到期时间）：键帧播完（260ms < 340ms 生命期）后转 morph */
+const liveEnterUntil = new Map<string, number>()
+
+/** 拖动中已 live 入场过的日期（settle 排除，防回播重播） */
+const dragEntered = new Set<string>()
 
 const ENTRY_MS = 260
 const STAGGER_MS = 12
 const MORPH_MS = 300
-const SWEEP_MS = 320
+const LIVE_MORPH_MS = 180
+const LIVE_ENTER_LIFE_MS = 340
+const LIVE_FLUSH_MS = 280
 const OVERLAY_MS = 480
 
 interface TransitionSpec {
@@ -98,8 +107,6 @@ interface TransitionSpec {
   entered: { date: string; geom: BarGeom; delay: number }[]
   /** 留存柱：起始 transform（旧几何相对新几何的位移+缩放）→ CSS 过渡到 none */
   kept: { date: string; from: string; geom: BarGeom }[]
-  /** 曲线重绘：主区 Area 最终 path d（读不到则无此层） */
-  area?: { fillD: string; lineD?: string }
   duration: number
 }
 
@@ -107,15 +114,23 @@ function geomDiff(a: BarGeom, b: BarGeom) {
   return a.x !== b.x || a.y !== b.y || a.width !== b.width || a.height !== b.height
 }
 
-/** 旧几何 → 新几何 的起始 transform（rect 本体固定在新几何上，用 transform 表达"位移+缩放"；
-    原点 50% 100%（fill-box）→ 缩放从底部中心发生，translate 不参与缩放 */
+const f1 = (n: number) => String(Math.round(n * 100) / 100)
+
+/** 完整 morph（settle）：旧几何 → 新几何 的起始 transform；
+    锚点端按柱方向（零线静止 → 对应 dy=0），translate+scale 可精确还原旧几何 */
 function fromTransform(b: BarGeom, t: BarGeom): string {
   const dx = b.x - t.x
-  const dy = b.y + b.height - (t.y + t.height)
+  const dy = b.origin === '50% 0%' ? b.y - t.y : b.y + b.height - (t.y + t.height)
   const kx = t.width > 0 ? b.width / t.width : 1
   const ky = t.height > 0 ? b.height / t.height : 0
-  const f = (n: number) => String(Math.round(n * 100) / 100)
-  return `translate(${f(dx)}px, ${f(dy)}px) scale(${f(kx)}, ${f(ky)})`
+  return `translate(${f1(dx)}px, ${f1(dy)}px) scale(${f1(kx)}, ${f1(ky)})`
+}
+
+/** 高度 morph（live 逐帧）：仅 scale（x 槽位即时、宽度不变）；
+    锚点 = 柱的零线端 → 缩放在零线不动，另一端平滑伸缩 */
+function fromHeight(b: BarGeom, t: BarGeom): string {
+  const ky = t.height > 0 ? b.height / t.height : 0
+  return `scale(1, ${f1(ky)})`
 }
 
 interface BarShapeProps {
@@ -136,7 +151,14 @@ const BarShape = memo(function BarShape({ x = 0, y = 0, width = 0, height = 0, p
   const rectH = Math.abs(height)
   if (date) {
     // 渲染期几何快照（幂等；父组件渲染先于子组件，转场基准取其"变更前"值）
-    curGeom.set(date, { x, y: rectTop, width, height: rectH, fill: payload?.barFill ?? PINK })
+    curGeom.set(date, {
+      x,
+      y: rectTop,
+      width,
+      height: rectH,
+      fill: payload?.barFill ?? PINK,
+      origin: (payload?.delta ?? 0) >= 0 ? '50% 100%' : '50% 0%',
+    })
   }
   if (width <= 0 || rectH <= 0) return null
 
@@ -149,15 +171,15 @@ const BarShape = memo(function BarShape({ x = 0, y = 0, width = 0, height = 0, p
         height={rectH}
         fill={payload?.barFill ?? PINK}
         rx={0}
-        /* live 入场中的柱由 Overlay 全权绘制（生长层），原生矩形隐藏防重影；
-           到期解除（spawnLive 的 setState 重渲染 → BarShape 重渲染 → 恢复可见） */
-        style={{ visibility: date && liveEntering.has(date) ? 'hidden' : undefined }}
+        /* live 层接管期间原生矩形全隐藏（Overlay 全权绘制，防重影）；
+           解除由 liveShow 状态驱动的重渲染完成（Bar memo 白名单含 shape → 必重渲染） */
+        style={{ visibility: liveBarsHidden ? 'hidden' : undefined }}
       />
     </g>
   )
 })
 
-/** 转场 Overlay：仅在一次转场期间挂载（OVERLAY_MS 后自清）；
+/** settle 转场 Overlay：仅在一次转场期间挂载（OVERLAY_MS 后自清）；
     ready 帧 = "from" 态先落 DOM，下一 rAF 切 "to" + transition（CSS 才补间） */
 const TrendOverlay = memo(function TrendOverlay({ spec, onDone }: { spec: TransitionSpec; onDone: () => void }) {
   const [ready, setReady] = useState(false)
@@ -174,18 +196,6 @@ const TrendOverlay = memo(function TrendOverlay({ spec, onDone }: { spec: Transi
 
   return (
     <svg className="fan-transition-layer" aria-hidden>
-      {/* 曲线重绘：clip-path: inset() 可插值 → 从左扫过（主区曲线期间由本层全权绘制） */}
-      {spec.area && (
-        <g
-          style={{
-            clipPath: ready ? 'inset(0 0% 0 0)' : 'inset(0 100% 0 0)',
-            transition: ready ? `clip-path ${SWEEP_MS}ms ease-out` : undefined,
-          }}
-        >
-          {spec.area.fillD && <path d={spec.area.fillD} fill="url(#fanFill)" />}
-          {spec.area.lineD && <path d={spec.area.lineD} fill="none" stroke={PINK} strokeWidth={2} />}
-        </g>
-      )}
       {/* 新入柱：挂载即播（交错延迟） */}
       {spec.entered.map((e) => (
         <rect
@@ -199,6 +209,7 @@ const TrendOverlay = memo(function TrendOverlay({ spec, onDone }: { spec: Transi
           style={{
             animation: `lc-bar-grow ${ENTRY_MS}ms ease-out both`,
             animationDelay: `${e.delay}ms`,
+            transformOrigin: e.geom.origin,
           }}
         />
       ))}
@@ -215,6 +226,7 @@ const TrendOverlay = memo(function TrendOverlay({ spec, onDone }: { spec: Transi
           style={{
             transform: ready ? 'none' : k.from,
             transition: ready ? `transform ${MORPH_MS}ms ease-out` : undefined,
+            transformOrigin: k.geom.origin,
           }}
         />
       ))}
@@ -222,15 +234,25 @@ const TrendOverlay = memo(function TrendOverlay({ spec, onDone }: { spec: Transi
   )
 })
 
-/** 拖动中 live 入场层：仅渲染"正在生长"的新柱——
-    几何每帧自 curGeom 读取（父渲染时更新），键帧动画不受属性更新打断 */
-const LiveEnterOverlay = memo(function LiveEnterOverlay({ dates }: { dates: string[] }) {
-  return (
-    <svg className="fan-transition-layer" aria-hidden>
-      {dates.map((d) => {
-        const g = curGeom.get(d)
-        if (!g) return null
-        return (
+/** live 层：拖动/刷选中绘制【全部窗口柱】（与 settle 转场层可共存）——
+    · 新入柱（无上帧几何）：键帧生长（出现即播；liveEnterUntil 到期后转 morph）
+    · 既有柱：高度 morph——每帧 旧几何→新几何 的 scale 差作 transform，
+      CSS transition 连续追帧（180ms）；x/宽度即时（槽位步进不滞后于实时曲线）；
+    元素按 date 键控稳定 → 键帧/过渡不被打断；几何每帧自 curGeom 读取 */
+const LiveOverlay = memo(function LiveOverlay({ dates }: { dates: string[] }) {
+  const prevGeomRef = useRef<Map<string, BarGeom>>(new Map(curGeom)) // 挂载帧 = 当前几何（无动画起点）
+  const now = performance.now()
+  const nextPrev = new Map<string, BarGeom>()
+  const rects: ReactElement[] = []
+  for (const d of dates) {
+    const g = curGeom.get(d)
+    if (!g) continue
+    nextPrev.set(d, g)
+    const until = liveEnterUntil.get(d)
+    if (until != null) {
+      if (now < until) {
+        // 入场期：键帧生长（元素持续存在，键帧不重播；几何随帧更新）
+        rects.push(
           <rect
             key={d}
             className="ov-bar"
@@ -239,10 +261,60 @@ const LiveEnterOverlay = memo(function LiveEnterOverlay({ dates }: { dates: stri
             width={g.width}
             height={g.height}
             fill={g.fill}
-            style={{ animation: `lc-bar-grow ${ENTRY_MS}ms ease-out both` }}
-          />
+            style={{
+              animation: `lc-bar-grow ${ENTRY_MS}ms ease-out both`,
+              transformOrigin: g.origin,
+            }}
+          />,
         )
-      })}
+        continue
+      }
+      liveEnterUntil.delete(d) // 入场期满 → morph 接管（填充态释放）
+    }
+    if (!prevGeomRef.current.has(d)) {
+      // 新入柱：先键帧后 morph（登记入场期 + settle 回播排除）
+      dragEntered.add(d)
+      liveEnterUntil.set(d, now + LIVE_ENTER_LIFE_MS)
+      rects.push(
+        <rect
+          key={d}
+          className="ov-bar"
+          x={g.x}
+          y={g.y}
+          width={g.width}
+          height={g.height}
+          fill={g.fill}
+          style={{
+            animation: `lc-bar-grow ${ENTRY_MS}ms ease-out both`,
+            transformOrigin: g.origin,
+          }}
+        />,
+      )
+      continue
+    }
+    // 既有柱：高度 morph（几何差异 → scale 差；稳定帧 → none 过渡到尾段）
+    const p = prevGeomRef.current.get(d)
+    rects.push(
+      <rect
+        key={d}
+        className="ov-bar"
+        x={g.x}
+        y={g.y}
+        width={g.width}
+        height={g.height}
+        fill={g.fill}
+        style={{
+          transform: p && geomDiff(p, g) ? fromHeight(p, g) : 'none',
+          transition: `transform ${LIVE_MORPH_MS}ms ease-out`,
+          transformOrigin: g.origin,
+        }}
+      />,
+    )
+  }
+  prevGeomRef.current = nextPrev
+  return (
+    <svg className="fan-transition-layer" aria-hidden>
+      {rects}
     </svg>
   )
 })
@@ -297,39 +369,19 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
   const transitionIdRef = useRef(0)
   const cancelTransition = useCallback(() => setTransition(null), [])
 
-  /* ── 拖动中"新柱出现即生长"（live 入场）── */
-  /** live 入场状态（date → 到期时间戳，驱动 LiveEnterOverlay 与到期清理） */
-  const [liveEnter, setLiveEnter] = useState<Map<string, number>>(new Map())
-  /** 拖动中逐提交帧窗口（帧级 diff → 新入柱）；稳定瞬间复位为当前窗口 */
-  const lastFrameRef = useRef<Set<string> | null>(null)
-  /** 本次拖动已做过 live 入场的日期（settle 时排除，防回播重播） */
-  const dragEnteredRef = useRef(new Set<string>())
-
-  /** 触发 live 入场：登记集合 + 每日期一个到期器（380ms 后解除隐藏/卸载生长层） */
-  const spawnLive = useCallback((dates: string[]) => {
-    if (dates.length === 0) return
-    const now = performance.now()
-    for (const d of dates) {
-      liveEntering.add(d)
-      dragEnteredRef.current.add(d)
+  /* ── live 层（拖动中柱动画：新柱出现即生长 + 既有柱高度 morph）── */
+  /** liveShow：拖动/刷选中=true；稳定瞬间后保留 LIVE_FLUSH_MS 让 morph 尾段播完 */
+  const [liveShow, setLiveShow] = useState(false)
+  useEffect(() => {
+    if (interacting) {
+      setLiveShow(true)
+      return
     }
-    setLiveEnter((prev) => {
-      const next = new Map(prev)
-      for (const d of dates) next.set(d, now + 360)
-      return next
-    })
-    for (const d of dates) {
-      window.setTimeout(() => {
-        liveEntering.delete(d)
-        setLiveEnter((prev) => {
-          if (!prev.has(d)) return prev
-          const next = new Map(prev)
-          next.delete(d)
-          return next
-        })
-      }, 380)
-    }
-  }, [])
+    if (!liveShow) return
+    // 稳定瞬间：尾部补一帧（几何已稳定 → morph 归 none，过渡取平后无缝交还原生）
+    const timer = window.setTimeout(() => setLiveShow(false), LIVE_FLUSH_MS)
+    return () => window.clearTimeout(timer)
+  }, [interacting, liveShow])
 
   useEffect(() => {
     if (accountId == null) return
@@ -497,32 +549,22 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
     capRef.current = capacity
   }
 
-  /* ── 事件分析：窗口变化 → 转场/spec ──
-     拖动/刷选中：逐提交帧 diff（上一提交窗口 vs 当前）→ 新柱"出现即生长"
-     （live 入场：键帧挂载即播，几何随帧更新不打断动画，无 settle 等待）；
-     稳定瞬间：基线（拖动起点）对比 → 曲线扫过 + 柱 morph，
-     已 live 入场者排除（回播保护）。 */
+  /* ── 事件分析：稳定瞬间 → settle 转场 spec ──
+     拖动/刷选中不做任何编排（live 层自绘：新柱出现即生长 + 既有柱高度 morph），
+     只冻结基线（prevSelRef 不更新 → 松手后对比出"本次拖动新入柱"）； */
   useEffect(() => {
     if (!range || capacity.length === 0) return
     const curDates = view.map((d) => d.date)
 
-    if (interacting) {
-      // 拖动中：帧级比对 → 新入柱即刻生长（不等待 settle）
-      const prevFrame = lastFrameRef.current
-      if (prevFrame) {
-        const newly = curDates.filter((d) => !prevFrame.has(d))
-        if (newly.length) spawnLive(newly)
-      }
-      lastFrameRef.current = new Set(curDates)
-      return
-    }
+    if (interacting) return
 
     const prev = prevSelRef.current
     const prevDates = prev ? new Set(prev.dates) : null
-    // 会话结算：无论本次是否播动画，复位拖动期基线/已入场集合
-    const dragEntered = dragEnteredRef.current
-    dragEnteredRef.current = new Set()
-    lastFrameRef.current = new Set(curDates)
+    // 会话结算：拖动期 live 已处理新柱入场 → settle spec 排除（回播保护）；
+    // liveEnterUntil 生命周期已尽（键帧 260ms << LIVE_FLUSH_MS），整体清理防跨会话累积
+    const dragEnteredSnap = dragEntered
+    dragEntered.clear()
+    liveEnterUntil.clear()
     // 与上次稳定基线完全一致 → 惰性渲染，不播
     if (
       prev &&
@@ -553,7 +595,7 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
     for (const d of curDates) {
       const target = curGeom.get(d)
       if (!target) continue
-      if (dragEntered.has(d)) continue // 拖动中已 live 入场（动画播完且已到位）→ 不重复
+      if (dragEnteredSnap.has(d)) continue // 拖动中已 live 入场（播完且已到位）→ 不重复
       if (allEntered || !prevDates.has(d)) {
         spec.entered.push({ date: d, geom: target, delay: Math.min(step, 16) * STAGGER_MS })
         step += 1
@@ -564,19 +606,10 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
         }
       }
     }
-    // 曲线重绘：主区 Area 最终 path（稳定瞬间已上屏）
-    const areaEl = bodyRef.current?.querySelector('.fan-area-main .recharts-area-area')
-    if (areaEl) {
-      const lineEl = bodyRef.current?.querySelector('.fan-area-main .recharts-area-curve')
-      spec.area = {
-        fillD: areaEl.getAttribute('d') ?? '',
-        lineD: lineEl?.getAttribute('d') ?? undefined,
-      }
-    }
     prevSelRef.current = { dates: curDates, preset, capacity, range: [range[0], range[1]] }
-    if (spec.entered.length === 0 && spec.kept.length === 0 && !spec.area) return
+    if (spec.entered.length === 0 && spec.kept.length === 0) return
     setTransition(spec)
-  }, [range, preset, capacity, view, interacting, spawnLive])
+  }, [range, preset, capacity, view, interacting])
 
   /** 纵轴域随窗口动态：据切片数据计算（涨跌幅对窗口；粉丝数留 8% 余量） */
   const fanDomainVal = useMemo(() => fanDomain(view.map((d) => d.fans)), [view])
@@ -597,6 +630,10 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
   const fmtDate = (d: string) => (d ? d.slice(5) : '') // MM-DD
   const fmtDelta = (v: number | null) =>
     v == null ? '—' : `${v >= 0 ? '+' : '−'}${Math.abs(v).toLocaleString()}`
+
+  /* live 层接管标记：BarShape 渲染期读取 → 原生柱隐藏（Overlay 全权绘制防重影） */
+  liveBarsHidden = liveShow
+  const viewDates = view.map((d) => d.date)
 
   return (
     <div className="fan-chart">
@@ -789,9 +826,9 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
         {/* 事件驱动转场层（仅在转场期间存在；pointer-events:none 不影响交互；
             key=spec.id 强制重挂：防 ready 状态残留导致下一场无 from 帧） */}
         {transition && <TrendOverlay key={transition.id} spec={transition} onDone={cancelTransition} />}
-        {/* 拖动中 live 入场层：新柱"出现即生长"（键帧挂载即播，到期自清；
-            与 settle 转场层可共存——live 柱播完自然退场） */}
-        {liveEnter.size > 0 && <LiveEnterOverlay dates={[...liveEnter.keys()]} />}
+        {/* live 层：拖动中新柱出现即生长 + 既有柱高度 morph；
+            稳定瞬间后保留 LIVE_FLUSH_MS 播完尾段（morph 归 none 后与原生终态无缝交接） */}
+        {liveShow && !loading && capacity.length > 0 && <LiveOverlay dates={viewDates} />}
       </div>
     </div>
   )
