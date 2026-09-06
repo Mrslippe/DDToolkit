@@ -102,6 +102,17 @@ function fromHeight(b: BarGeom, t: BarGeom): string {
   return `scale(1, ${f(ky)})`
 }
 
+/** 当前窗口槽宽（px）：相邻柱几何反推（精确，源自 BarShape 渲染期快照）；
+    无相邻柱对时兜底 805/(winSize-1)。route1 平移预览的像素换算用 */
+function mainSlotWidth(dates: string[], winSize: number): number {
+  for (let i = 1; i < dates.length; i++) {
+    const a = curGeom.get(dates[i - 1])
+    const b = curGeom.get(dates[i])
+    if (a && b && b.x > a.x) return b.x - a.x
+  }
+  return winSize > 1 ? 805 / (winSize - 1) : 0
+}
+
 interface BarShapeProps {
   x?: number
   y?: number
@@ -351,14 +362,31 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
   const [domainAnchor, setDomainAnchor] = useState<DailyPoint[] | null>(null)
   const dragActiveRef = useRef(false)
   const domainLastRef = useRef(0)
+  /** 路线1 平移预览（user 2026-09-0x）：Brush 滑窗拖动窗口宽度不变时，
+      主图整体 translateX 直写（合成器路径，零 React 渲染/零重绘）——
+      --preview-shift 直写于 body；Brush 层反向补偿（手柄由受控 props 定位，
+      预览期间应停在轨道原位）；位移 >2 槽（快速拖动）或拉伸 → 精确路径 */
+  const previewShiftRef = useRef(0)
+  /** 最近精确窗口（渲染期与 range 同步；预览期间保持拖动前值） */
+  const lastExactRef = useRef<[number, number] | null>(range)
   useEffect(() => {
     if (brushDrag) return
     dragActiveRef.current = false
     setDomainAnchor(null)
+    // 终局补偿：预览期间（零渲染直写）未提交的目标窗口 → 松手一次性精确
+    const t = brushTargetRef.current
+    if (t) {
+      const cur = rangeRef.current
+      if (cur && (cur[0] !== t[0] || cur[1] !== t[1])) setRange(t)
+    }
+    // 清平移预览（回到 0；下帧渲染内容已精确）
+    previewShiftRef.current = 0
+    bodyRef.current?.style.removeProperty('--preview-shift')
   }, [brushDrag])
   /** range 渲染期镜像：rAF 回调里做死区比较（不触发渲染） */
   const rangeRef = useRef<[number, number] | null>(range)
   rangeRef.current = range
+  lastExactRef.current = range
   useEffect(
     () => () => {
       window.cancelAnimationFrame(brushRafRef.current)
@@ -732,7 +760,9 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
                 onChange={(e: { startIndex?: number; endIndex?: number }) => {
                   const s = e.startIndex ?? 0
                   const en = e.endIndex ?? capacity.length - 1
-                  brushTargetRef.current = [s, Math.max(s, en)]
+                  const t0 = s
+                  const t1 = Math.max(s, en)
+                  brushTargetRef.current = [t0, t1]
                   // 拖动活动态：旁路 mousemove/tooltip（120ms 空闲回落）
                   setBrushDrag(true)
                   window.clearTimeout(brushDragTimerRef.current)
@@ -750,18 +780,41 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
                     const nowMs = performance.now()
                     if (nowMs - domainLastRef.current >= 250) {
                       domainLastRef.current = nowMs
-                      setDomainAnchor(capacity.slice(s, Math.max(s, en) + 1))
+                      setDomainAnchor(capacity.slice(t0, t1 + 1))
                     }
                   }
+                  // 路线1 平移预览：窗口宽度不变且位移 ≤2 槽 → 整体 translateX 直写
+                  const exact = lastExactRef.current
+                  if (exact && t1 - t0 === exact[1] - exact[0]) {
+                    const shiftSlots = t0 - exact[0]
+                    if (Math.abs(shiftSlots) <= 2) {
+                      // 取消排队中的精确提交（预览接管，避免内容与 transform 错位）
+                      if (brushRafRef.current) {
+                        window.cancelAnimationFrame(brushRafRef.current)
+                        brushRafRef.current = 0
+                      }
+                      const slot = mainSlotWidth(viewDates, t1 - t0 + 1)
+                      const px = slot > 0 ? -shiftSlots * slot : 0 // 窗口前移→内容左移
+                      previewShiftRef.current = px
+                      bodyRef.current?.style.setProperty(
+                        '--preview-shift',
+                        `${px.toFixed(2)}px`,
+                      )
+                      return
+                    }
+                  }
+                  // 精确路径（拉伸 / 快速拖动）：清预览 + setRange（rAF 节流）
+                  previewShiftRef.current = 0
+                  bodyRef.current?.style.removeProperty('--preview-shift')
+                  lastExactRef.current = [t0, t1]
                   if (brushRafRef.current) return
-                  // rAF 节流：一帧最多提交一次窗口（Brush 拖动 event 高频，直接 setRange 会每事件全量重渲染）
                   brushRafRef.current = window.requestAnimationFrame(() => {
                     brushRafRef.current = 0
                     const t = brushTargetRef.current
                     if (!t) return
-                    // 死区跳过：目标与当前窗口一致时不提交（边界抖动帧零渲染）
                     const cur = rangeRef.current
                     if (cur && cur[0] === t[0] && cur[1] === t[1]) return
+                    lastExactRef.current = t
                     setRange(t)
                   })
                 }}

@@ -2253,3 +2253,17 @@
 .recharts-brush-traveller:focus-visible rect {
   fill: var(--c-accent);
 }
+
+/* ── 路线1 拖动平移预览（user 2026-09-0x）：Brush 滑窗拖动（窗口宽度不变、
+   位移 2 槽内）期间由 JS 直写 --preview-shift——transform 合成器路径，
+   零 React 渲染/零重绘；svg 与柱动画层同步平移（轴/网格 2 槽内无感）；
+   Brush 层反向补偿：其手柄位置由受控 props 决定，预览期间停在轨道原位，
+   不随 svg 平移（否则按全量轨道比例错位）；transform 常驻 0px 零成本。 */
+.fan-chart-body .recharts-surface,
+.fan-chart-body .fan-transition-layer {
+  transform: translateX(var(--preview-shift, 0px));
+}
+
+.fan-chart-body .recharts-brush {
+  transform: translateX(calc(var(--preview-shift, 0px) * -1));
+}
