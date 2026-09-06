@@ -1,0 +1,18 @@
+<svg viewBox="0 0 101.652 34" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="101.652100" height="34.000000" fill="none" customFrame="#000000">
+	<defs>
+		<g id="pixso_custom_effect_1">
+			<effect x="-1.000000" y="1.000000" visibility="visible" fill="rgb(0,0,0)" fill-opacity="0.150000006" effectType="dropShadow" stdDeviation="5" radius="0" />
+		</g>
+		<filter id="filter_1" width="101.652100" height="34.000000" x="0.000000" y="0.000000" filterUnits="userSpaceOnUse" customEffect="url(#pixso_custom_effect_1)" color-interpolation-filters="sRGB">
+			<feFlood flood-opacity="0" result="BackgroundImageFix" />
+			<feOffset dx="-1.000000" dy="1.000000" in="SourceAlpha" />
+			<feGaussianBlur stdDeviation="1.66666663" />
+			<feColorMatrix type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.15 0 " />
+			<feBlend result="effect_dropShadow_1" in2="BackgroundImageFix" mode="normal" />
+			<feBlend result="shape" in="SourceGraphic" in2="effect_dropShadow_1" mode="normal" />
+		</filter>
+	</defs>
+	<g filter="url(#filter_1)">
+		<path id="矩形 2" d="M11.8993 4.00004L91.6797 4C92.974 4 94.1224 4.83013 94.5284 6.05917L97.5008 15.0592C97.7026 15.6702 97.7026 16.3299 97.5008 16.9409L94.5284 25.9408C94.1224 27.1699 92.974 28 91.6797 28L11.8993 28C10.5969 28 9.44319 27.1596 9.04383 25.9199L6.14459 16.9199C5.95192 16.3218 5.95192 15.6783 6.14459 15.0802L9.04382 6.08018C9.44318 4.84045 10.5968 4.00004 11.8993 4.00004Z" fill="rgb(255,255,255)" fill-rule="evenodd" />
+	</g>
+</svg>

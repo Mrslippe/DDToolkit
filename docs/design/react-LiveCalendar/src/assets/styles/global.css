@@ -1,0 +1,134 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+ol,ul,menu {
+  padding-inline-start: 0;
+  list-style: none;
+}
+
+ol li::marker, ul li::before {
+  letter-spacing: 0;
+}
+
+.scroll-container > div {
+  width: 100%;
+}
+
+.container > div {
+  width: 100%;
+}
+
+.Pixso-canvas-0_1 > div {
+  width: 100%;
+}
+
+.pixso-transparent-flex-auto-size {
+  background-color: transparent;
+  display: flex;
+  width: auto;
+  height: auto;
+}
+
+.pixso-relative-flex-auto-size {
+  position: relative;
+  display: flex;
+  width: auto;
+  height: auto;
+}
+
+.pixso-transparent-flex-auto-height {
+  background-color: transparent;
+  display: flex;
+  height: auto;
+}
+
+.pixso-transparent-flex-auto-width {
+  background-color: transparent;
+  display: flex;
+  width: auto;
+}
+
+.pixso-flex-auto-size {
+  display: flex;
+  width: auto;
+  height: auto;
+}
+
+.pixso-transparent-auto-size {
+  background-color: transparent;
+  width: auto;
+  height: auto;
+}
+
+.pixso-relative-auto-size {
+  position: relative;
+  width: auto;
+  height: auto;
+}
+
+.pixso-auto-size {
+  width: auto;
+  height: auto;
+}
+
+.pixso-relative-no-shrink {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.pixso-relative-flex {
+  position: relative;
+  display: flex;
+}
+
+.pixso-transparent-auto-height {
+  background-color: transparent;
+  height: auto;
+}
+
+.pixso-flex-auto-height {
+  display: flex;
+  height: auto;
+}
+
+.pixso-flex-auto-width {
+  display: flex;
+  width: auto;
+}
+
+.pixso-transparent-flex {
+  background-color: transparent;
+  display: flex;
+}
+
+.pixso-transparent-auto-width {
+  background-color: transparent;
+  width: auto;
+}
+
+.pixso-position-relative {
+  position: relative;
+}
+
+.pixso-flex {
+  display: flex;
+}
+
+.pixso-flex-shrink-0 {
+  flex-shrink: 0;
+}
+
+.pixso-bg-transparent {
+  background-color: transparent;
+}
+
+.pixso-w-auto {
+  width: auto;
+}
+
+.pixso-h-auto {
+  height: auto;
+}
