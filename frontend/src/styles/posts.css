@@ -1981,3 +1981,102 @@
   color: #727272;
 }
 
+/* ── 粉丝趋势卡（v0.9.5 重建：参考用户展示图 + 项目粉系浅底）──
+   870 定宽与直播日历同契约（4px 圆角 / --pill-shadow / 16px 标题）；
+   双轴（粉丝数 Area 主粉渐变 + 日增粉 Bar 正粉负红）；
+   底部 Brush 缩略图全量时间轴（拖拽滑块/两端拉伸缩放窗口）；
+   纵轴域随窗口数据自动重算；1d/7d/30d 头部概览。 */
+
+.fan-chart {
+  display: flex;
+  flex-direction: column;
+  background: var(--c-bg-card);
+  border-radius: 4px;
+  box-shadow: var(--pill-shadow);
+  width: 870px;
+  height: 460px;
+  padding: 17px 16px 10px;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* 卡片标题（与直播日历 lc-title 同规格） */
+.fc-title {
+  font-size: 16px;
+  font-weight: 400;
+  color: #182e41;
+  line-height: 21px;
+  flex: none;
+}
+
+/* 头部概览行：1d/7d/30d 涨粉 + 回退按钮 */
+.fan-chart-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 24px;
+  flex: none;
+}
+
+.fan-chart-summary {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 12px;
+  color: var(--c-text-sub);
+}
+
+.fan-stat b {
+  font-weight: 600;
+  color: var(--c-primary-deep);
+  font-variant-numeric: tabular-nums;
+  margin-left: 3px;
+}
+
+.fan-chart-empty-summary {
+  color: var(--c-text-sub);
+}
+
+.fan-chart-reset {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 999px;
+  background: var(--sel-bg);
+  color: var(--c-primary-deep);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.fan-chart-reset:hover {
+  background: var(--sel-bg-hover);
+}
+
+/* 图区（Brush 占用底部 56px，主图占余下高度） */
+.fan-chart-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  margin: 0 -4px;
+  padding: 0 4px;
+}
+
+/* Brush 迷你图轨道与窗口滑块（项目粉系覆写，保持浅底通透） */
+.recharts-brush-slide {
+  fill: rgba(251, 119, 161, 0.05);
+}
+
+.recharts-brush-traveller {
+  fill: rgba(251, 119, 161, 0.25);
+  cursor: grab;
+}
+
+.recharts-brush-traveller:active {
+  cursor: grabbing;
+  fill: rgba(251, 119, 161, 0.45);
+}
+

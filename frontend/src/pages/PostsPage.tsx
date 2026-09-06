@@ -59,6 +59,7 @@ import PostCard from '../components/PostCard'
 import PostDetailDrawer from '../components/PostDetailDrawer'
 import ProfileView from '../components/ProfileView'
 import LiveCalendar from '../components/LiveCalendar'
+import FanTrendChart from '../components/FanTrendChart'
 import './../styles/posts.css'
 
 const PAGE_SIZE = 20
@@ -1007,6 +1008,11 @@ return (
           <div className="archive-view">
             {/* 2026-09-06：archive 逐步重建（用户主导），第一步 = 直播日历卡（Frame10612 规格） */}
             <LiveCalendar
+              accountId={heroAcc?.id ?? null}
+              refreshTick={refreshTick}
+            />
+            {/* 第二步 = 粉丝趋势卡（参考图 + 项目粉系；Brush 缩放 + 默认 30 天窗口） */}
+            <FanTrendChart
               accountId={heroAcc?.id ?? null}
               refreshTick={refreshTick}
             />
