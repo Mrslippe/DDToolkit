@@ -91,7 +91,8 @@ const enterUntil = new Map<string, number>()
 
 const ENTRY_MS = 260
 const ENTER_LIFE_MS = 340
-const LIVE_MORPH_MS = 180
+/** 高度 morph 时长：180→120ms——拖动期柱高度滞后感接近曲线（曲线原生实时） */
+const LIVE_MORPH_MS = 120
 
 /** 高度 morph：仅 scale（x/宽度即时更新，不参与转换）；
     锚点 = 柱的零线端 → 缩放在零线静止，另一端平滑伸缩 */
@@ -414,11 +415,15 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
     }
   }, [panning])
 
-  /** 数据/档位就绪：窗口重置为该容量尾部 DEFAULT_DAYS 天 */
+  /** 数据/档位就绪：窗口重置为该容量尾部 DEFAULT_DAYS 天；
+      range=null（初始/任何残留）时强制回默认 —— 兜底：不允许"全量数据 + 
+      Brush 停在旧位"的失控态长期存在（重置按钮已直接设默认窗口，此处双保险） */
   useEffect(() => {
     if (capacity.length === 0) return
-    setRange([Math.max(0, capacity.length - DEFAULT_DAYS), capacity.length - 1])
-  }, [capacity])
+    if (range === null) {
+      setRange([Math.max(0, capacity.length - DEFAULT_DAYS), capacity.length - 1])
+    }
+  }, [capacity, range])
 
   const isDefaultWindow = useMemo(() => {
     if (!range) return true

@@ -2128,7 +2128,8 @@
 }
 
 /* 柱动画层：与 recharts svg 逐像素同框（body 的 padding-box 偏移 4px）
-   pointer-events:none → 不干扰 tooltip/Brush/pan */
+   pointer-events:none → 不干扰 tooltip/Brush/pan；
+   z-index:1 在图之上，但低于 tooltip 浮层（z-index:5，见下） */
 .fan-transition-layer {
   position: absolute;
   left: 4px;
@@ -2137,6 +2138,13 @@
   bottom: 0;
   pointer-events: none;
   overflow: visible;
+  z-index: 1;
+}
+
+/* tooltip 浮层置于柱动画层之上（Overlay 为图表之后的兄弟节点，
+   默认层序会把柱画在浮层上——user 2026-09-06 反馈） */
+.recharts-tooltip-wrapper {
+  z-index: 5;
 }
 
 /* Overlay 柱：fill-box（transform 缩放/翻译的几何基准）；
