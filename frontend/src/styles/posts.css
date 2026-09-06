@@ -2120,6 +2120,18 @@
   pointer-events: none;
 }
 
+/* 柱形出场动画（BarShape 负 delay 续播：跨重挂连续，从温和起点浮现） */
+@keyframes lc-bar-reveal {
+  from {
+    opacity: 0.35;
+    transform: scaleY(0.85);
+  }
+  to {
+    opacity: 1;
+    transform: scaleY(1);
+  }
+}
+
 /* Brush 迷你图轨道与窗口滑块（项目粉系覆写，保持浅底通透）
    窗口滑块 = 抓手工具：grab 光标提示可拖拽平移窗口 */
 .recharts-brush-slide {

@@ -56,13 +56,20 @@ function deltaDomain(values: (number | null)[]): [number, number] {
   return [-cap, cap]
 }
 
-/* ── 柱形自定义 shape：新进入窗口的柱子播"底部生长+淡入"出场动画 ──
-   每根柱以 payload.date 为身份；已出现在窗口内的柱渲染即静止，
-   新出现的柱先以 scaleY(0.001)/opacity(0) 挂载，下一帧过渡到 1——
-   CSS transition 由浏览器合成器处理，不阻塞拖动的主线程。 */
+/* ── 柱形自定义 shape：新进入窗口的柱子"柔和浮现"出场动画 ──
+   注意：recharts 拖动时内部 key=rectangle-x-y-value-i，窗口移动会导致每帧
+   重建 BarShape 实例（重挂）。一旦用组件级状态（entered），动画只播一帧
+   就被打断——"生硬出现"的根因。
+   对策：改为 CSS @keyframes + 负 animation-delay 续播——
+   · 首次出现：负 delay = 0，从起点播（opacity .35 → 1，scaleY .85 → 1）
+   · 后续重挂：负 delay = (now - 首次记录时间)，动画从已播进度继续，
+     跨实例视觉连续，无需组件状态参与；seenAt 模块级 Map 记录时间戳
+   · 已出现 >动画时长 的柱子：负 delay 截断 → 定格在完成态（fill both） */
 
-/** 已出现柱子集合（模块级：跨渲染保持；组件卸载重挂也不重播） */
-const seenBarKeys = new Set<string>()
+/** 已出现柱子时间戳（模块级：跨渲染/重挂保持） */
+const seenAt = new Map<string, number>()
+
+const BAR_REVEAL_MS = 150
 
 interface BarShapeProps {
   x?: number
@@ -74,20 +81,17 @@ interface BarShapeProps {
 
 const BarShape = memo(function BarShape({ x = 0, y = 0, width = 0, height = 0, payload }: BarShapeProps) {
   const date = payload?.date
-  const [entered, setEntered] = useState(() => {
-    if (!date) return true // 无身份数据直接显示
-    const isNew = !seenBarKeys.has(date)
-    seenBarKeys.add(date)
-    return !isNew // 新柱：entered=false → 播动画；旧柱：直接显示
-  })
-
-  useEffect(() => {
-    // 新柱挂载后下一帧反转状态 → 触发 CSS 过渡
-    setEntered(true)
-  }, [])
+  // 负 delay：以"首次出现时间基准"计算动画进度，重挂不打断（无 state）
+  const delay = useMemo(() => {
+    if (!date) return BAR_REVEAL_MS // 无身份：直接完成态
+    const now = performance.now()
+    const first = seenAt.get(date)
+    if (first == null) seenAt.set(date, now)
+    return Math.min(now - (first ?? now), BAR_REVEAL_MS)
+  }, [date])
 
   return (
-    <g style={{ transformOrigin: `${x + width / 2}px ${y + height}px` }}>
+    <g>
       <rect
         x={x}
         y={y}
@@ -96,9 +100,8 @@ const BarShape = memo(function BarShape({ x = 0, y = 0, width = 0, height = 0, p
         fill={payload?.barFill ?? PINK}
         rx={0}
         style={{
-          transform: entered ? 'scaleY(1)' : 'scaleY(0.001)',
-          opacity: entered ? 1 : 0,
-          transition: 'transform 300ms cubic-bezier(0.22, 1, 0.36, 1), opacity 300ms ease-out',
+          animation: 'lc-bar-reveal 150ms ease-out both',
+          animationDelay: `-${delay.toFixed(1)}ms`,
           transformOrigin: `${x + width / 2}px ${y + height}px`,
           pointerEvents: 'none',
         }}
