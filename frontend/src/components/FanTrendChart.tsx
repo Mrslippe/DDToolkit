@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Area, AreaChart, Bar, Brush, CartesianGrid, ComposedChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { CalendarRange, Loader2 } from 'lucide-react'
 import type { FanTrendPoint } from '../api/types'
@@ -56,19 +56,63 @@ function deltaDomain(values: (number | null)[]): [number, number] {
   return [-cap, cap]
 }
 
-/* ── 柱形入场动画（CSS @keyframes 挂载即播，无需 JS 状态机）──
-   教训：recharts 拖动时 BarShape 每帧销毁重建（key=rectangle-x-y-value-i）——
-   · transition 方案（entered state）：setEntered(true) 的 rAF 总被 cleanup
-     cancel，动画从未被绘制 → 柱动画"消失"的根因
-   · @keyframes 方案：动画随【元素挂载】自动播放一次（不依赖任何状态切换），
-     重挂的"已入场"柱不给 animation 属性 → 直接常态显示、不重播不闪
-   实现：barAnimated Set（模块级）标记已入场 date；
-   新柱挂载帧带 `animation: lc-bar-grow ... both`（from .3/0.8 → to 1/1）；
-   transform-box: fill-box + 原点 50% 100%（底部中心生长），
-   无需手工计算 transform-origin */
+/* ── 事件驱动转场动画（v0.9.19）──
+   触发：窗口稳定瞬间（拖动结束/刷选停顿后/档位切换/数据加载/重置）检测到
+   【新柱进入窗口】或【数据/档位变更】→ 编排一次转场（≤480ms）；
+   载体：TrendOverlay（自持 SVG，与 recharts svg 逐像素同框）——
+   · 新入柱：CSS @keyframes 挂载即播（lc-bar-grow，12ms 交错，底部生长）
+   · 留存柱：旧几何 → 新几何，CSS transform 过渡（translate+scale，浏览器补间，
+     零逐帧 JS；transform-box:fill-box + 原点 50% 100%）
+   · 曲线重绘：主区 Area 最终 path d 以 clip-path:inset() 从左扫过（320ms）
+   铁律：①recharts 柱 key=rectangle-x-y-value-i 每帧重挂 → 动画不能寄生在
+   recharts 元素上（transition/状态机都会被销毁 cancel）；
+   ②拖动期间零动画（跟手优先），动画只绑定"稳定瞬间"；
+   ③几何基准 = BarShape 渲染期写入的 curGeom（与 recharts 逐像素同源，
+   零手工 band 计算，杜绝跨图错位）。 */
 
-/** 已播放入场动画的 date（模块级：重挂不重播） */
-const barAnimated = new Set<string>()
+/** 柱几何快照（已经是翻转后的可渲染 rect 值 + 填充色） */
+interface BarGeom {
+  x: number
+  y: number
+  width: number
+  height: number
+  fill: string
+}
+
+/** 当前渲染帧的柱几何（BarShape 渲染期写入；转场目标/基准的唯一来源，幂等） */
+const curGeom = new Map<string, BarGeom>()
+
+const ENTRY_MS = 260
+const STAGGER_MS = 12
+const MORPH_MS = 300
+const SWEEP_MS = 320
+const OVERLAY_MS = 480
+
+interface TransitionSpec {
+  id: number
+  /** 新入窗柱：目标几何 + 入场延迟（交错生长） */
+  entered: { date: string; geom: BarGeom; delay: number }[]
+  /** 留存柱：起始 transform（旧几何相对新几何的位移+缩放）→ CSS 过渡到 none */
+  kept: { date: string; from: string; geom: BarGeom }[]
+  /** 曲线重绘：主区 Area 最终 path d（读不到则无此层） */
+  area?: { fillD: string; lineD?: string }
+  duration: number
+}
+
+function geomDiff(a: BarGeom, b: BarGeom) {
+  return a.x !== b.x || a.y !== b.y || a.width !== b.width || a.height !== b.height
+}
+
+/** 旧几何 → 新几何 的起始 transform（rect 本体固定在新几何上，用 transform 表达"位移+缩放"；
+    原点 50% 100%（fill-box）→ 缩放从底部中心发生，translate 不参与缩放 */
+function fromTransform(b: BarGeom, t: BarGeom): string {
+  const dx = b.x - t.x
+  const dy = b.y + b.height - (t.y + t.height)
+  const kx = t.width > 0 ? b.width / t.width : 1
+  const ky = t.height > 0 ? b.height / t.height : 0
+  const f = (n: number) => String(Math.round(n * 100) / 100)
+  return `translate(${f(dx)}px, ${f(dy)}px) scale(${f(kx)}, ${f(ky)})`
+}
 
 interface BarShapeProps {
   x?: number
@@ -80,34 +124,87 @@ interface BarShapeProps {
 
 const BarShape = memo(function BarShape({ x = 0, y = 0, width = 0, height = 0, payload }: BarShapeProps) {
   const date = payload?.date
-  const isNew = date ? !barAnimated.has(date) : false
-  if (date && isNew) barAnimated.add(date) // 幂等：渲染期间登记（StrictMode 双渲染无碍）
-
   /* recharts 对【负值（掉粉）】传的是负 height（y 在柱底、height<0，向上长）——
      内置默认形状用 path 绘制（负号即方向），自绘 <rect> 必须翻转，
-     否则 SVG 报 "attribute height: A negative value is not valid"（109k 刷屏的主因）：
+     否则 SVG 报 "attribute height: A negative value is not valid"：
      顶边 = min(y, y+height)，高 = |height| */
   const rectTop = Math.min(y, y + height)
   const rectH = Math.abs(height)
+  if (date) {
+    // 渲染期几何快照（幂等；父组件渲染先于子组件，转场基准取其"变更前"值）
+    curGeom.set(date, { x, y: rectTop, width, height: rectH, fill: payload?.barFill ?? PINK })
+  }
   if (width <= 0 || rectH <= 0) return null
 
   return (
     <g>
-      <rect
-        x={x}
-        y={rectTop}
-        width={width}
-        height={rectH}
-        fill={payload?.barFill ?? PINK}
-        rx={0}
-        className={isNew ? 'lc-bar-enter' : undefined}
-        style={{
-          transformBox: 'fill-box',
-          transformOrigin: '50% 100%',
-          pointerEvents: 'none',
-        }}
-      />
+      <rect x={x} y={rectTop} width={width} height={rectH} fill={payload?.barFill ?? PINK} rx={0} />
     </g>
+  )
+})
+
+/** 转场 Overlay：仅在一次转场期间挂载（OVERLAY_MS 后自清）；
+    ready 帧 = "from" 态先落 DOM，下一 rAF 切 "to" + transition（CSS 才补间） */
+const TrendOverlay = memo(function TrendOverlay({ spec, onDone }: { spec: TransitionSpec; onDone: () => void }) {
+  const [ready, setReady] = useState(false)
+  const onDoneRef = useRef(onDone)
+  onDoneRef.current = onDone
+  useEffect(() => {
+    const raf = window.requestAnimationFrame(() => setReady(true))
+    const timer = window.setTimeout(() => onDoneRef.current(), spec.duration)
+    return () => {
+      window.cancelAnimationFrame(raf)
+      window.clearTimeout(timer)
+    }
+  }, [spec.duration])
+
+  return (
+    <svg className="fan-transition-layer" aria-hidden>
+      {/* 曲线重绘：clip-path: inset() 可插值 → 从左扫过（主区曲线期间由本层全权绘制） */}
+      {spec.area && (
+        <g
+          style={{
+            clipPath: ready ? 'inset(0 0% 0 0)' : 'inset(0 100% 0 0)',
+            transition: ready ? `clip-path ${SWEEP_MS}ms ease-out` : undefined,
+          }}
+        >
+          {spec.area.fillD && <path d={spec.area.fillD} fill="url(#fanFill)" />}
+          {spec.area.lineD && <path d={spec.area.lineD} fill="none" stroke={PINK} strokeWidth={2} />}
+        </g>
+      )}
+      {/* 新入柱：挂载即播（交错延迟） */}
+      {spec.entered.map((e) => (
+        <rect
+          key={e.date}
+          className="ov-bar"
+          x={e.geom.x}
+          y={e.geom.y}
+          width={e.geom.width}
+          height={e.geom.height}
+          fill={e.geom.fill}
+          style={{
+            animation: `lc-bar-grow ${ENTRY_MS}ms ease-out both`,
+            animationDelay: `${e.delay}ms`,
+          }}
+        />
+      ))}
+      {/* 留存柱：旧几何 → 新几何（ready 后切 none 触发过渡） */}
+      {spec.kept.map((k) => (
+        <rect
+          key={k.date}
+          className="ov-bar"
+          x={k.geom.x}
+          y={k.geom.y}
+          width={k.geom.width}
+          height={k.geom.height}
+          fill={k.geom.fill}
+          style={{
+            transform: ready ? 'none' : k.from,
+            transition: ready ? `transform ${MORPH_MS}ms ease-out` : undefined,
+          }}
+        />
+      ))}
+    </svg>
   )
 })
 
@@ -119,8 +216,9 @@ const BarShape = memo(function BarShape({ x = 0, y = 0, width = 0, height = 0, p
  * - 底部 Brush 缩略图：dataKey=fans（数值键才能画出迷你图），拖拽滑块/拉伸两端
  *   调整展示窗口（startIndex/endIndex 受控，可一键回默认窗口）；
  * - 纵轴域随【当前可见窗口数据】动态计算（recharts auto domain 按可见数据重算）；
- * - 动画：仅【新柱入场】走 CSS @keyframes（recharts JS 动画全关：拖动/换窗期间
- *   零插值重排，也杜绝动画管理链在重挂风暴下的 startTime 崩溃风险）。
+ * - 动画：事件驱动转场（v0.9.19）——新柱进入窗口/数据变更的稳定瞬间，
+ *   TrendOverlay 编排 入柱生长 + 留存柱 morph + 曲线 clip 扫过（全 CSS，
+ *   拖动期间零动画）；recharts 自身 JS 动画保持全关。
  */
 const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }: Props) {
   const [points, setPoints] = useState<FanTrendPoint[]>([])
@@ -133,12 +231,31 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
   // Brush onChange rAF 节流：target 暂存 + 帧内提交
   const brushRafRef = useRef(0)
   const brushTargetRef = useRef<[number, number] | null>(null)
+  /** 刷选停顿计时：250ms 无变化视为稳定瞬间 */
+  const brushIdleRef = useRef<number>()
   useEffect(
     () => () => {
       window.cancelAnimationFrame(brushRafRef.current)
+      window.clearTimeout(brushIdleRef.current)
     },
     [],
   )
+
+  /* ── 事件驱动转场状态 ── */
+  const [transition, setTransition] = useState<TransitionSpec | null>(null)
+  /** 拖动/刷选进行中：冻结窗口基线（prevSelRef 不更新），转场延迟到稳定瞬间结算 */
+  const [interacting, setInteracting] = useState(false)
+  /** 上一次稳定窗口基线（拖动中不更新 → 松手后对比出"新入柱"） */
+  const prevSelRef = useRef<{
+    dates: string[]
+    preset: PresetKey
+    capacity: DailyPoint[]
+    range: [number, number]
+  } | null>(null)
+  /** 窗口/档位/数据变更"那一帧"的几何基准（父组件渲染期捕获，子组件尚未覆写 curGeom） */
+  const pendingBaseRef = useRef<Map<string, BarGeom> | null>(null)
+  const transitionIdRef = useRef(0)
+  const cancelTransition = useCallback(() => setTransition(null), [])
 
   useEffect(() => {
     if (accountId == null) return
@@ -226,6 +343,8 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
       raf: 0,
     }
     setPanning(true)
+    setInteracting(true) // 冻结转场基线；如有进行中的转场立即打断（跟手优先）
+    setTransition(null)
   }
 
   useEffect(() => {
@@ -261,6 +380,7 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
       }
       panRef.current = null
       setPanning(false)
+      setInteracting(false) // 稳定瞬间 → 事件分析（新入柱→组合转场）
     }
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
@@ -289,6 +409,81 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
     const [s, e] = range
     return capacity.slice(s, e + 1)
   }, [capacity, range])
+
+  /* ── 渲染期捕获：窗口/档位/数据变更的提交帧，先冻结几何基准 ──
+     React 渲染顺序：父组件函数体先于子组件（BarShape）执行，
+     此刻 curGeom 仍是上一帧（变更前）的值 = 正确的 morph 起点 */
+  const rangeRef = useRef(range)
+  const presetRef = useRef(preset)
+  const capRef = useRef(capacity)
+  if (range !== rangeRef.current || preset !== presetRef.current || capacity !== capRef.current) {
+    pendingBaseRef.current = new Map(curGeom)
+    rangeRef.current = range
+    presetRef.current = preset
+    capRef.current = capacity
+  }
+
+  /* ── 事件分析：非拖动（稳定瞬间）窗口变化 → 生成转场 spec ── */
+  useEffect(() => {
+    if (!range || capacity.length === 0) return
+    // 拖动/刷选进行中：冻结基线，交稳定瞬间统一结算
+    if (interacting) return
+    const curDates = view.map((d) => d.date)
+    const prev = prevSelRef.current
+    const prevDates = prev ? new Set(prev.dates) : null
+    // 与上次稳定基线完全一致 → 惰性渲染，不播
+    if (
+      prev &&
+      prev.range[0] === range[0] &&
+      prev.range[1] === range[1] &&
+      prev.preset === preset &&
+      prev.capacity === capacity &&
+      prev.dates.length === curDates.length &&
+      prev.dates.every((d, i) => d === curDates[i])
+    ) {
+      return
+    }
+    const capChanged = !prev || prev.capacity !== capacity || prev.preset !== preset
+    const allEntered = prevDates == null
+    const enteredDates = allEntered ? curDates : curDates.filter((d) => !prevDates.has(d))
+    // 无新入柱且非数据/档位变更（如净零平移、纯出窗）→ 不播
+    if (!allEntered && enteredDates.length === 0 && !capChanged) return
+
+    const base = pendingBaseRef.current ?? new Map(curGeom)
+    pendingBaseRef.current = null
+    const spec: TransitionSpec = {
+      id: ++transitionIdRef.current,
+      entered: [],
+      kept: [],
+      duration: OVERLAY_MS,
+    }
+    let step = 0
+    for (const d of curDates) {
+      const target = curGeom.get(d)
+      if (!target) continue
+      if (allEntered || !prevDates.has(d)) {
+        spec.entered.push({ date: d, geom: target, delay: Math.min(step, 16) * STAGGER_MS })
+        step += 1
+      } else {
+        const b = base.get(d)
+        if (b && geomDiff(b, target)) {
+          spec.kept.push({ date: d, from: fromTransform(b, target), geom: target })
+        }
+      }
+    }
+    // 曲线重绘：主区 Area 最终 path（稳定瞬间已上屏）
+    const areaEl = bodyRef.current?.querySelector('.fan-area-main .recharts-area-area')
+    if (areaEl) {
+      const lineEl = bodyRef.current?.querySelector('.fan-area-main .recharts-area-curve')
+      spec.area = {
+        fillD: areaEl.getAttribute('d') ?? '',
+        lineD: lineEl?.getAttribute('d') ?? undefined,
+      }
+    }
+    prevSelRef.current = { dates: curDates, preset, capacity, range: [range[0], range[1]] }
+    if (spec.entered.length === 0 && spec.kept.length === 0 && !spec.area) return
+    setTransition(spec)
+  }, [range, preset, capacity, view, interacting])
 
   /** 纵轴域随窗口动态：据切片数据计算（涨跌幅对窗口；粉丝数留 8% 余量） */
   const fanDomainVal = useMemo(() => fanDomain(view.map((d) => d.fans)), [view])
@@ -352,7 +547,7 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
 
       {/* 图区：主区抓手=按住拖动平移窗口（panning 时禁 tooltip 选区与十字光标） */}
       <div
-        className={`fan-chart-body${panning ? ' panning' : ''}`}
+        className={`fan-chart-body${panning ? ' panning' : ''}${transition ? ' tran' : ''}`}
         ref={bodyRef}
         onMouseDown={onBodyMouseDown}
       >
@@ -443,6 +638,7 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
                 type="monotone"
                 dataKey="fans"
                 name="粉丝数"
+                className="fan-area-main"
                 stroke={PINK}
                 strokeWidth={2}
                 fill="url(#fanFill)"
@@ -474,6 +670,10 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
                     const t = brushTargetRef.current
                     if (!t) return
                     setRange(t)
+                    // 刷选期间冻结基线；停顿 250ms 视为稳定瞬间 → 事件分析
+                    setInteracting(true)
+                    window.clearTimeout(brushIdleRef.current)
+                    brushIdleRef.current = window.setTimeout(() => setInteracting(false), 250)
                   })
                 }}
                 tickFormatter={() => ''}
@@ -493,6 +693,9 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
             </ComposedChart>
           </ResponsiveContainer>
         )}
+        {/* 事件驱动转场层（仅在转场期间存在；pointer-events:none 不影响交互；
+            key=spec.id 强制重挂：防 ready 状态残留导致下一场无 from 帧） */}
+        {transition && <TrendOverlay key={transition.id} spec={transition} onDone={cancelTransition} />}
       </div>
     </div>
   )

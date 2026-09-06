@@ -2120,10 +2120,34 @@
   pointer-events: none;
 }
 
-/* 柱形入场动画：新柱（lc-bar-enter 类，挂载即播一次）
-   注意 SVG 元素 transform-origin 需 transform-box: fill-box（style 侧已设），
-   这里只定义关键帧；动画播完 by default 回到常态（无 fill 覆盖终态属性，
-   但 rect 的 transform 本来就是默认值，动画结束后自然消失） */
+/* ── 事件驱动转场（v0.9.19）：TrendOverlay 全权绘制期间的显隐 ──
+   .tran 期间：recharts 原生柱 + 主区曲线隐藏（Overlay 绘制替代，
+   避免 overlay 半透明态叠在终局态上出现重影）；
+   转场结束 .tran 移除 → 原生终局态与 overlay 终态逐像素一致，无缝交接 */
+.fan-chart-body.tran .recharts-bar-rectangle,
+.fan-chart-body.tran .fan-area-main {
+  visibility: hidden;
+}
+
+/* 转场 Overlay：与 recharts svg 逐像素同框（body 的 padding-box 偏移 4px）
+   pointer-events:none → 不干扰 tooltip/Brush/pan */
+.fan-transition-layer {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  top: 0;
+  bottom: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+
+/* Overlay 柱：fill-box + 底部中心原点（scale/translate 的几何基准） */
+.ov-bar {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+}
+
+/* 入柱/出柱生长关键帧（挂载即播；矩形 transform 默认值 = 终态，播完自然归位） */
 @keyframes lc-bar-grow {
   from {
     opacity: 0.3;
@@ -2133,10 +2157,6 @@
     opacity: 1;
     transform: scaleY(1);
   }
-}
-
-.lc-bar-enter {
-  animation: lc-bar-grow 260ms ease-out both;
 }
 
 /* Brush 迷你图轨道与窗口滑块（项目粉系覆写，保持浅底通透）
