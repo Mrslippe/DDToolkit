@@ -20,8 +20,8 @@ const WEEKDAYS_EN = ['Mon.', 'Tue.', 'Wed.', 'Thu.', 'Fri.', 'Sat.', 'Sun.']
 /** 月份浮窗：12 月中文名 */
 const MONTH_CN = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月']
 
-/** 格内可见场次数上限（>2 显示 +N，用户 P7 原案「最多 2 条」） */
-const CELL_SESSION_LIMIT = 2
+/** 浮层关闭宽限（ms）：鼠标从格子滑向浮层中途不闪关 */
+const POP_CLOSE_GRACE_MS = 120
 
 function dayKeyIso(d: Date): string {
   const p = (n: number) => String(n).padStart(2, '0')
@@ -89,8 +89,9 @@ interface PopState {
  * - 导航栏（项目浮片族 token：斜切白卡浮片三连——左双箭头+月份+右双箭头，中间点击弹月份选择浮窗）；
  * - 导航栏右侧 = 当月类型统计胶囊（frame 10_642：彩色胶囊 + 计数，服务端 category 口径，仅非零项）；
  * - M4 内容（数据管道 M1-M3 后端闭环后）：
- *   · 格内最多显示 2 场（每场 = HH:MM + 单行标题），多余显示 +N 场；
- *   · 点击格子 → 浮层（当日全量：起止/时长/标题/类型/分区/收益/峰值在线/弹幕/数据源 + 当日礼物合计）；
+ *   · 格内按最开始布局单场呈现：时间行（HH:MM 真实分钟）+ 右侧「N 场」当日场次计数 + 单行标题；
+ *   · hover 格子 → 浮层（当日全量：起止/时长/标题/类型/分区/收益/峰值在线/弹幕/数据源 + 当日礼物合计），
+ *     鼠标滑向浮层有 120ms 宽限不闪关；Esc 关闭；
  *   · 无场次但有礼物日的格 = 「礼物」徽章 + 金额（2024 缺口期/未收录主播兜底）；
  *   · 类型徽章/统计用后端 category（标题分区双信号），服务端缺失时前端关键词兜底。
  */
@@ -237,8 +238,17 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
   }
 
   const openCellPop = (c: DayCell, e: ReactMouseEvent<HTMLDivElement>) => {
-    if (c.state !== 'live') return
+    clearPopTimer()
+    if (c.state !== 'live') {
+      setPop(null)
+      return
+    }
     setPop({ key: c.key, rect: e.currentTarget.getBoundingClientRect(), sessions: c.sessions, giftTotal: c.giftTotal })
+  }
+
+  const closeCellPop = () => {
+    clearPopTimer()
+    popTimer.current = window.setTimeout(() => setPop(null), POP_CLOSE_GRACE_MS)
   }
 
   // Esc 关闭浮层
@@ -250,6 +260,15 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
   }, [pop])
+
+  /** hover 浮层计时器（离开格子 → 120ms 宽限关闭，允许滑到浮层） */
+  const popTimer = useRef<number | null>(null)
+  const clearPopTimer = () => {
+    if (popTimer.current != null) {
+      window.clearTimeout(popTimer.current)
+      popTimer.current = null
+    }
+  }
 
   const renderCell = (c: DayCell) => {
     const first = c.sessions[0]
@@ -271,8 +290,8 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
       <div
         key={c.key}
         className={'lc-cell' + toneCls}
-        title={c.state === 'live' ? '点击查看全部场次' : undefined}
-        onClick={(e) => openCellPop(c, e)}
+        onMouseEnter={(e) => openCellPop(c, e)}
+        onMouseLeave={closeCellPop}
       >
         <div className="lc-cell-head">
           <span className="lc-day">{c.date.getDate()}</span>
@@ -280,15 +299,11 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
         </div>
         {c.state === 'live' && first ? (
           <div className="lc-cell-body">
-            {c.sessions.slice(0, CELL_SESSION_LIMIT).map((s, i) => (
-              <div key={s.live_id ?? `${s.start_at}-${i}`} className="lc-item">
-                <span className="lc-item-time">{fmtTime(new Date(s.start_at))}</span>
-                <span className="lc-item-title">{s.live_title || '场次'}</span>
-              </div>
-            ))}
-            {c.sessions.length > CELL_SESSION_LIMIT && (
-              <span className="lc-item-more">+{c.sessions.length - CELL_SESSION_LIMIT} 场</span>
-            )}
+            <div className="lc-time-row">
+              <span className="lc-time">{fmtTime(new Date(first.start_at))}</span>
+              <span className="lc-count">{c.sessions.length} 场</span>
+            </div>
+            <span className="lc-cell-title">{first.live_title || '场次'}</span>
           </div>
         ) : null}
         {c.state === 'gift' ? (
@@ -316,14 +331,18 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
   const renderPop = () => {
     if (!pop || !popStyle) return null
     return createPortal(
-      <>
-        <div className="lc-pop-backdrop" onClick={() => setPop(null)} />
-        <div className="lc-pop" style={popStyle} role="dialog">
-          <div className="lc-pop-head">
-            <span className="lc-pop-date">{pop.key}</span>
-            <span className="lc-pop-count">{pop.sessions.length} 场</span>
-          </div>
-          <div className="lc-pop-list">
+      <div
+        className="lc-pop"
+        style={popStyle}
+        role="tooltip"
+        onMouseEnter={clearPopTimer}
+        onMouseLeave={closeCellPop}
+      >
+        <div className="lc-pop-head">
+          <span className="lc-pop-date">{pop.key}</span>
+          <span className="lc-pop-count">{pop.sessions.length} 场</span>
+        </div>
+        <div className="lc-pop-list">
             {pop.sessions.map((s, i) => {
               const d0 = new Date(s.start_at)
               const d1 = s.end_at ? new Date(s.end_at) : null
@@ -356,9 +375,8 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
                 </div>
               )
             })}
-          </div>
         </div>
-      </>,
+      </div>,
       document.body,
     )
   }

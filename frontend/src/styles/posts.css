@@ -1926,54 +1926,54 @@
   white-space: nowrap;
 }
 
-/* 格体（M4：场次行 = HH:MM + 单行标题，≤2 行 + 「+N 场」；礼物日单行金额） */
+/* 格体（时间行 + 标题，恢复最开始布局：单场呈现；时间行右端标注当日场次数） */
 .lc-cell-body {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 3px;
   padding: 2px 0 0 1px;
   flex: 1;
   min-height: 0;
-  overflow: hidden;
 }
 
-/* 单场次行：时间（34px 固定宽，次级色）+ 标题（弹性，单行省略） */
-.lc-item {
+/* 时间行：时间左 · 「N 场」右端（当日场次数，user 2026-09-07） */
+.lc-time-row {
   display: flex;
   align-items: baseline;
+  justify-content: space-between;
   gap: 4px;
-  height: 18px;
   min-width: 0;
 }
 
-.lc-item-time {
+.lc-time {
   flex: none;
-  width: 34px;
-  font-size: 10px;
-  line-height: 18px;
+  font-size: 12px;
+  line-height: 8px;
   color: var(--c-text-sub);
   font-variant-numeric: tabular-nums;
 }
 
-.lc-item-title {
-  flex: 1;
-  min-width: 0;
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 18px;
-  color: inherit;                      /* 随格子主色（9 类 tone） */
+.lc-count {
+  flex: none;
+  font-size: 10px;
+  line-height: 12px;
+  color: var(--c-text-sub);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
-/* 超出 2 场的计数提示（第 3 行小字） */
-.lc-item-more {
-  height: 13px;
-  font-size: 10.5px;
-  line-height: 13px;
-  color: var(--c-text-sub);
-  padding-left: 1px;
+/* 格子内场次标题（注意：不得与卡片标题 .lc-title 同名——曾因同名同选择器
+   后声明覆盖，导致卡片标题被染成 14px 蓝色，user 2026-09-0x 截图发现） */
+.lc-cell-title {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 16px;
+  color: rgba(0, 139, 194, 1);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  word-break: break-all;
 }
 
 /* 礼物日（无场次但当日有礼物聚合——历史缺口/未收录主播兜底）：金棕单行 */
@@ -1996,9 +1996,9 @@
   color: #8a6d1f;
 }
 
-/* 有场次的格子可点击（浮层锚点）：hover 淡粉描边提示 */
+/* 有场次的格子 hover 即弹浮层（M4）：淡粉描边提示可交互态 */
 .lc-cell.live {
-  cursor: pointer;
+  cursor: default;
   transition: box-shadow 0.15s ease;
 }
 
@@ -2054,16 +2054,9 @@
   color: var(--c-text-sub);
 }
 
-/* ── 场次浮层（M4：点击格子 → 当日全量，项目浮层族 token）──
-    fixed 定位（随格子 rect 快照，越界翻转），背板轻纱 + 白卡圆角 12px；
+/* ── 场次浮层（M4：hover 格子 → 当日全量，项目浮层族 token）──
+    fixed 定位（随格子 rect 快照，越界翻转）；关闭 = 离开宽限 120ms / Esc；
     badge 复用统计胶囊配色类（lc-stat-pill--{key}）+ 紧凑尺寸覆写。 */
-
-.lc-pop-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 55;
-  background: rgba(15, 23, 42, 0.12);
-}
 
 .lc-pop {
   position: fixed;
