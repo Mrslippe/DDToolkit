@@ -1,5 +1,5 @@
-import { memo, useEffect, useMemo, useState } from 'react'
-import { Area, Bar, Brush, CartesianGrid, Cell, ComposedChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { Area, AreaChart, Bar, Brush, CartesianGrid, Cell, ComposedChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { CalendarRange, Loader2 } from 'lucide-react'
 import type { FanTrendPoint } from '../api/types'
 import { api } from '../api/api'
@@ -35,14 +35,15 @@ type PresetKey = (typeof PRESETS)[number]['key']
 /** 窗口默认：当前容量档位内的最近 30 天 */
 const DEFAULT_DAYS = 30
 
-/** 粉丝轴域：窗口内 [min, max] 留 8% 余量并整 100；delta 域：对称 ±max×1.1 */
+/** 粉丝轴域：窗口内 [min, max] 留 3% 余量并整 50（域更紧 → 曲线更细分见锯齿）；
+    delta 域：对称 ±max×1.1 */
 function fanDomain(values: (number | null)[]): [number, number] {
   const nums = values.filter((v): v is number => v != null)
   if (nums.length === 0) return [0, 1]
   const min = Math.min(...nums)
   const max = Math.max(...nums)
-  const pad = Math.max((max - min) * 0.08, 10)
-  return [Math.floor((min - pad) / 100) * 100, Math.ceil((max + pad) / 100) * 100]
+  const pad = Math.max((max - min) * 0.03, 5)
+  return [Math.floor((min - pad) / 50) * 50, Math.ceil((max + pad) / 50) * 50]
 }
 
 function deltaDomain(values: (number | null)[]): [number, number] {
@@ -71,6 +72,10 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
   const [preset, setPreset] = useState<PresetKey>('3m')
   /** 当前窗口 [startIndex, endIndex]（容量数据索引；null=未就绪） */
   const [range, setRange] = useState<[number, number] | null>(null)
+  /** Brush 拖动中：临时关动画保跟手（400ms 动画在拖拽时会产生拖影/滞后） */
+  const [dragging, setDragging] = useState(false)
+  const dragTimer = useRef<number>()
+  useEffect(() => () => window.clearTimeout(dragTimer.current), [])
 
   useEffect(() => {
     if (accountId == null) return
@@ -210,7 +215,9 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
         )}
         {!loading && !error && capacity.length > 0 && (
           <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={capacity} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
+            {/* accessibilityLayer 关闭：避免点击 SVG 后焦点落在 RootSurface(tabIndex=0)
+                被全局 outline-ring/50 描成粉色选中框（user 2026-09-06 反馈） */}
+            <ComposedChart data={capacity} margin={{ top: 6, right: 8, bottom: 0, left: 0 }} accessibilityLayer={false}>
               <defs>
                 <linearGradient id="fanFill" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stopColor={PINK} stopOpacity={0.22} />
@@ -227,13 +234,14 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
                 tickFormatter={fmtDate}
                 tick={{ fontSize: 11, fill: MUTED }}
               />
-              {/* fans 轴：域随窗口切片数据动态（每次拖拽 Brush 重算） */}
+              {/* fans 轴：域随窗口切片数据动态；tickCount 提密 → 刻度细分 */}
               <YAxis
                 yAxisId="fans"
                 domain={fanDomainVal}
+                tickCount={6}
                 tickLine={false}
                 axisLine={false}
-                width={52}
+                width={48}
                 tickFormatter={(v: number) => formatCount(v)}
                 tick={{ fontSize: 11, fill: MUTED }}
               />
@@ -242,9 +250,10 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
                 yAxisId="delta"
                 orientation="right"
                 domain={deltaDomainVal}
+                tickCount={5}
                 tickLine={false}
                 axisLine={false}
-                width={44}
+                width={42}
                 tickFormatter={(v: number) => formatCount(v)}
                 tick={{ fontSize: 11, fill: MUTED }}
               />
@@ -266,12 +275,14 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
                 yAxisId="delta"
                 dataKey="delta"
                 name="日增粉"
-                isAnimationActive
+                isAnimationActive={!dragging}
                 animationDuration={400}
                 animationBegin={0}
                 maxBarSize={14}
               >
-                {capacity.map((d) => (
+                {/* Cell 与切片索引严格对应：Brush 激活时 displayedData=chartData.slice(start,end)，
+                    Cell 数组必须与窗口切片（view）同长同序，否则 index 错位 → 涨/掉粉颜色串色 */}
+                {view.map((d) => (
                   <Cell key={d.date} fill={(d.delta ?? 0) >= 0 ? PINK : GRAY} />
                 ))}
               </Bar>
@@ -285,11 +296,13 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
                 fill="url(#fanFill)"
                 dot={false}
                 connectNulls
-                isAnimationActive
+                isAnimationActive={!dragging}
                 animationDuration={400}
                 animationBegin={0}
               />
-              {/* 时间轴缩略图：迷你图取数值键 fans（字符串日期键画不出图）；
+              {/* 时间轴缩略图（Panorama）：children 传入迷你图元素才渲染轨迹——
+                  Brush 内部 Panorama 克隆 children 作为 compact 迷你图；
+                  dataKey 需为数值键（fans），字符串键画不出图；
                   窗口 = 默认最近 30 天，可拖滑块/拉伸两端缩放 */}
               <Brush
                 key={`brush-${preset}-${capacity.length}`}
@@ -297,16 +310,32 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
                 height={56}
                 stroke={PINK}
                 fill="rgba(251,119,161,0.05)"
-                travellerWidth={9}
+                travellerWidth={14}
                 startIndex={range?.[0]}
                 endIndex={range?.[1]}
                 onChange={(e: { startIndex?: number; endIndex?: number }) => {
                   const s = e.startIndex ?? 0
                   const en = e.endIndex ?? capacity.length - 1
                   setRange([s, Math.max(s, en)])
+                  // 跟手优化：拖动期间禁用动画，停顿 300ms 后恢复
+                  setDragging(true)
+                  window.clearTimeout(dragTimer.current)
+                  dragTimer.current = window.setTimeout(() => setDragging(false), 300)
                 }}
                 tickFormatter={() => ''}
-              />
+              >
+                <AreaChart data={capacity}>
+                  <Area
+                    dataKey="fans"
+                    type="monotone"
+                    stroke={PINK}
+                    strokeWidth={1}
+                    fill="rgba(251,119,161,0.12)"
+                    dot={false}
+                    isAnimationActive={false}
+                  />
+                </AreaChart>
+              </Brush>
             </ComposedChart>
           </ResponsiveContainer>
         )}

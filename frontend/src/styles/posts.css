@@ -2101,18 +2101,29 @@
   padding: 0 4px;
 }
 
-/* Brush 迷你图轨道与窗口滑块（项目粉系覆写，保持浅底通透） */
+/* Brush 迷你图轨道与窗口滑块（项目粉系覆写，保持浅底通透）
+   窗口滑块 = 抓手工具：grab 光标提示可拖拽平移窗口 */
 .recharts-brush-slide {
-  fill: rgba(251, 119, 161, 0.05);
+  fill: rgba(251, 119, 161, 0.09);
+  cursor: grab;
+  stroke: rgba(251, 119, 161, 0.35);
+}
+
+.recharts-brush-slide:active {
+  cursor: grabbing;
 }
 
 .recharts-brush-traveller {
-  fill: rgba(251, 119, 161, 0.25);
-  cursor: grab;
+  fill: rgba(251, 119, 161, 1);
+  cursor: ew-resize;
+}
+
+.recharts-brush-traveller:hover {
+  fill: var(--c-primary-deep);
 }
 
 .recharts-brush-traveller:active {
-  cursor: grabbing;
-  fill: rgba(251, 119, 161, 0.45);
+  cursor: ew-resize;
+  fill: var(--c-primary-deep);
 }
 
