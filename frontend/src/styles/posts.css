@@ -927,37 +927,45 @@
   padding: 16px 20px 24px;
   overflow-y: auto;
   height: 100%;
+  /* P7 定宽上限：卡片拉伸时保持居中（收缩仍跟随容器） */
+  align-items: center;
 }
 
-/* P7：上行两卡固定宽度（重要日期窄 + 直播日历宽），不填充容器；空间不足时 wrap */
+/* P7：上行两卡——定宽上限 + 可收缩 + 下限裁剪 */
 .archive-grid-top {
   display: flex;
   flex-wrap: wrap;
+  justify-content: center;
   gap: 14px;
   align-items: flex-start;
+  width: 100%;
+  max-width: 960px;
 }
 
-.archive-section--events {
-  width: 300px;
-  flex: none;
-}
-
-.archive-section--calendar {
-  width: 640px;
-  flex: none;
-}
-
-@media (max-width: 1000px) {
-  .archive-section--events {
-    width: 300px;
-  }
-}
-
+/* 通用定宽卡片契约：max-width=上限（拉伸封顶居中）、flex-shrink=1（同步收缩）、
+   min-width=下限（到限不再缩，内容裁剪）、overflow hidden（裁剪兜底） */
 .archive-section {
   background: var(--c-bg-card);
   border-radius: 4px;
   padding: 12px 14px 14px;
   box-shadow: var(--pill-shadow);
+  width: 100%;
+  max-width: 960px;
+  flex-shrink: 1;
+  min-width: 480px;
+  overflow: hidden;
+}
+
+.archive-section--events {
+  flex: 0 1 300px;
+  max-width: 300px;
+  min-width: 240px;
+}
+
+.archive-section--calendar {
+  flex: 0 1 640px;
+  max-width: 640px;
+  min-width: 480px;
 }
 
 .archive-section-head {
@@ -969,7 +977,7 @@
 }
 
 .archive-section-title {
-  font-size: 14.5px;
+  font-size: 16.5px;
   font-weight: 600;
   color: var(--c-text-main);
 }
@@ -1029,7 +1037,7 @@
 }
 
 .live-calendar-title {
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 600;
   color: var(--c-text-main);
   font-variant-numeric: tabular-nums;
@@ -1194,7 +1202,7 @@ button.live-calendar-cell:hover {
 }
 
 .live-day-pop-title {
-  font-size: 13.5px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--c-text-main);
 }
