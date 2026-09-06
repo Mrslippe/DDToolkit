@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Loader2 } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Loader2 } from 'lucide-react'
 import type { LiveSession } from '../api/types'
 import { api } from '../api/api'
 import { inferLiveType, LIVE_TYPE_ORDER } from '../utils/liveType'
@@ -209,14 +209,14 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
       {/* 导航行：左=月份胶囊（点击弹选月浮窗） · 右=当月类型统计胶囊（frame 10_642） */}
       <div className="lc-nav-row">
         <div className="lc-nav" ref={navRef}>
-          <button type="button" title="上个月" className="lc-nav-btn" onClick={() => moveMonth(-1)}>
-            <ChevronsLeft className="lc-nav-icon" />
+          <button type="button" title="上个月" className="lc-nav-btn lc-nav-btn--prev" onClick={() => moveMonth(-1)}>
+            <span className="lc-nav-icon" />
           </button>
           <button type="button" className="lc-nav-pill" title="选择月份" onClick={openMonthPop}>
             <span className="lc-nav-text">{fmtMonth(ym.y, ym.m)}</span>
           </button>
-          <button type="button" title="下个月" className="lc-nav-btn" onClick={() => moveMonth(1)}>
-            <ChevronsRight className="lc-nav-icon" />
+          <button type="button" title="下个月" className="lc-nav-btn lc-nav-btn--next" onClick={() => moveMonth(1)}>
+            <span className="lc-nav-icon" />
           </button>
 
           {/* 月份选择浮窗：年切换 + 12 月宫格 */}

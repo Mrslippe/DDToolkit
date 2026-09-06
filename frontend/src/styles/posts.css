@@ -1571,7 +1571,9 @@
   flex: none;
 }
 
-/* 月份导航组（frame 10_616：三颗白胶囊紧贴——左双箭头+月份+右双箭头） */
+/* 月份导航组（frame 10_616：徽章形白胶囊——左按钮左尖/月份两端尖/右按钮右尖，
+   素材 = 设计稿 SVG 直接作背景（自带 0.15 投影），按素材原始尺寸居中显示
+   使白色内容区正好落在 25px 高按钮内） */
 .lc-nav {
   position: relative;
   display: flex;
@@ -1584,43 +1586,64 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26.5px;
+  width: 26.44px;
   height: 25px;
   padding: 0;
   border: none;
-  border-radius: 999px;
-  background: #ffffff;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.14);
-  color: #182e41;
+  background-repeat: no-repeat;
+  background-position: center;
   cursor: pointer;
 }
 
+.lc-nav-btn--prev {
+  background-image: url('../assets/icons/lc-nav-left.svg');
+  background-size: 32.676px 34px;
+}
+
+.lc-nav-btn--next {
+  background-image: url('../assets/icons/lc-nav-right.svg');
+  background-size: 32.734px 34px;
+}
+
 .lc-nav-btn:hover {
-  color: var(--c-primary-deep);
+  filter: brightness(0.97);
 }
 
 .lc-nav-icon {
+  display: block;
   width: 16px;
   height: 16px;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 10.376px 11px;
+}
+
+.lc-nav-btn--prev .lc-nav-icon {
+  background-image: url('../assets/icons/lc-chevrons-left.svg');
+}
+
+.lc-nav-btn--next .lc-nav-icon {
+  background-image: url('../assets/icons/lc-chevrons-right.svg');
 }
 
 .lc-nav-pill {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  width: 94.4px;
   height: 25px;
-  padding: 0 12px;
+  padding: 0;
   border: none;
-  border-radius: 999px;
-  background: #ffffff;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.14);
-  flex: none;
+  background-image: url('../assets/icons/lc-nav-month.svg');
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 101.652px 34px;
   color: #182e41;
   cursor: pointer;
 }
 
 .lc-nav-pill:hover {
-  color: var(--c-primary-deep);
+  filter: brightness(0.97);
 }
 
 .lc-nav-text {
