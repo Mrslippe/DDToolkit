@@ -2128,16 +2128,21 @@
   cursor: grabbing;
 }
 
-/* panning：隐藏 tooltip 光标与浮层 + 旁路 recharts 表面事件——
+/* panning / brush-drag：隐藏 tooltip 光标与浮层 + 旁路 recharts 表面事件——
    recharts 内部 mousemove 仍会更新 tooltip state 并重渲染（视觉隐藏无效），
-   pointer-events:none 让窗口拖动期间图表零内部渲染开销；window 级监听不受影响 */
+   pointer-events:none 让拖动期间图表零内部渲染开销；window 级监听不受影响
+   （brush-drag = Brush 手柄/滑窗拖动，v0.9.x 跟手优化同 panning 旁路） */
 .fan-chart-body.panning .recharts-tooltip-wrapper,
-.fan-chart-body.panning .recharts-tooltip-cursor {
+.fan-chart-body.panning .recharts-tooltip-cursor,
+.fan-chart-body.brush-drag .recharts-tooltip-wrapper,
+.fan-chart-body.brush-drag .recharts-tooltip-cursor {
   display: none;
 }
 
 .fan-chart-body.panning .recharts-wrapper,
-.fan-chart-body.panning .recharts-surface {
+.fan-chart-body.panning .recharts-surface,
+.fan-chart-body.brush-drag .recharts-wrapper,
+.fan-chart-body.brush-drag .recharts-surface {
   pointer-events: none;
 }
 

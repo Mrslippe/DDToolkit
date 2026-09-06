@@ -316,9 +316,18 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
   // Brush onChange rAF 节流：target 暂存 + 帧内提交
   const brushRafRef = useRef(0)
   const brushTargetRef = useRef<[number, number] | null>(null)
+  /** Brush 拖动活动态（onChange 置真，120ms 空闲回落）：拖动期间套用 panning 同款
+      旁路（surface pointer-events:none）——断掉 recharts mousemove/tooltip 重渲染链路；
+      拖动手柄的移动监听本身在 window 级，不受影响 */
+  const [brushDrag, setBrushDrag] = useState(false)
+  const brushDragTimerRef = useRef(0)
+  /** range 渲染期镜像：rAF 回调里做死区比较（不触发渲染） */
+  const rangeRef = useRef<[number, number] | null>(range)
+  rangeRef.current = range
   useEffect(
     () => () => {
       window.cancelAnimationFrame(brushRafRef.current)
+      window.clearTimeout(brushDragTimerRef.current)
     },
     [],
   )
@@ -563,7 +572,7 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
 
       {/* 图区：主区抓手=按住拖动平移窗口（panning 时禁 tooltip 选区与十字光标） */}
       <div
-        className={`fan-chart-body${panning ? ' panning' : ''}`}
+        className={`fan-chart-body${panning ? ' panning' : ''}${brushDrag ? ' brush-drag' : ''}`}
         ref={bodyRef}
         onMouseDown={onBodyMouseDown}
       >
@@ -682,12 +691,22 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
                   const s = e.startIndex ?? 0
                   const en = e.endIndex ?? capacity.length - 1
                   brushTargetRef.current = [s, Math.max(s, en)]
+                  // 拖动活动态：旁路 mousemove/tooltip（120ms 空闲回落）
+                  setBrushDrag(true)
+                  window.clearTimeout(brushDragTimerRef.current)
+                  brushDragTimerRef.current = window.setTimeout(
+                    () => setBrushDrag(false),
+                    120,
+                  )
                   if (brushRafRef.current) return
                   // rAF 节流：一帧最多提交一次窗口（Brush 拖动 event 高频，直接 setRange 会每事件全量重渲染）
                   brushRafRef.current = window.requestAnimationFrame(() => {
                     brushRafRef.current = 0
                     const t = brushTargetRef.current
                     if (!t) return
+                    // 死区跳过：目标与当前窗口一致时不提交（边界抖动帧零渲染）
+                    const cur = rangeRef.current
+                    if (cur && cur[0] === t[0] && cur[1] === t[1]) return
                     setRange(t)
                   })
                 }}
