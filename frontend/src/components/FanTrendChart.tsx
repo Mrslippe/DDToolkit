@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { Area, AreaChart, Bar, Brush, CartesianGrid, ComposedChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { CalendarRange, Loader2 } from 'lucide-react'
 import type { FanTrendPoint } from '../api/types'
@@ -144,10 +144,16 @@ const BarShape = memo(function BarShape({ x = 0, y = 0, width = 0, height = 0, p
   )
 })
 
-/** BarsOverlay：常驻绘制【全部窗口柱】（几何变化即动画，见模块注释）——
-    元素按 date 键控稳定 → 键帧/过渡不被打断；几何每帧自 curGeom 读取 */
+/** BarsOverlay：常驻绘制【全部窗口柱】——
+    新日期 → CSS 键帧生长（出现即播，340ms 后转 morph）；
+    既有柱 → WAAPI 高度 morph：每提交帧 启动 animate(旧几何 → 当前几何)，
+    取消旧动画、立即接管（effect 在 paint 前执行 → 无中间帧闪跳）；
+    大跳变（高柱入窗→域缩放）与连续追帧同样精确；
+    x/宽度即时更新（槽位步进不滞后于实时曲线）；元素按 date 键控稳定 */
 const BarsOverlay = memo(function BarsOverlay({ dates }: { dates: string[] }) {
   const prevGeomRef = useRef<Map<string, BarGeom>>(new Map(curGeom)) // 挂载帧 = 当前几何（无动画起点）
+  const elsRef = useRef(new Map<string, SVGRectElement>())
+  const animsRef = useRef<{ d: string; from: string }[]>([])
   const now = performance.now()
   const nextPrev = new Map<string, BarGeom>()
   const rects: ReactElement[] = []
@@ -198,26 +204,47 @@ const BarsOverlay = memo(function BarsOverlay({ dates }: { dates: string[] }) {
       )
       continue
     }
-    // 既有柱：高度 morph（几何差异 → scale 差；稳定帧 → none 过渡取平）
+    // 既有柱：几何变化 → 登记 WAAPI 动画（旧几何 → 当前几何）
     const p = prevGeomRef.current.get(d)
+    if (p && (p.y !== g.y || p.height !== g.height)) {
+      animsRef.current.push({ d, from: fromHeight(p, g) })
+    }
     rects.push(
       <rect
         key={d}
+        ref={(el) => {
+          if (el) elsRef.current.set(d, el)
+          else elsRef.current.delete(d)
+        }}
         className="ov-bar"
         x={g.x}
         y={g.y}
         width={g.width}
         height={g.height}
         fill={g.fill}
-        style={{
-          transform: p && (p.y !== g.y || p.height !== g.height) ? fromHeight(p, g) : 'none',
-          transition: `transform ${LIVE_MORPH_MS}ms ease-out`,
-          transformOrigin: g.origin,
-        }}
+        style={{ transformOrigin: g.origin }}
       />,
     )
   }
   prevGeomRef.current = nextPrev
+  /* WAAPI morph：每提交帧 从旧几何插值到当前几何（180ms ease-out）；
+     取消在途动画再启动——同一 effect 内先 cancel 再 animate，
+     paint 前完成 → 无空帧、无闪烁；WAAPI 优先级高于 CSS 键帧，
+     入场期结束后 morph 可无缝接管（fill 态自动失效） */
+  useLayoutEffect(() => {
+    const anims = animsRef.current
+    animsRef.current = []
+    if (anims.length === 0) return
+    for (const a of anims) {
+      const el = elsRef.current.get(a.d)
+      if (!el) continue
+      el.getAnimations().forEach((an) => an.cancel())
+      el.animate([{ transform: a.from }, { transform: 'none' }], {
+        duration: LIVE_MORPH_MS,
+        easing: 'ease-out',
+      })
+    }
+  })
   return (
     <svg className="fan-transition-layer" aria-hidden>
       {rects}
