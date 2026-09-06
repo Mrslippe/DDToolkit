@@ -2038,6 +2038,42 @@
   color: var(--c-text-sub);
 }
 
+/* 头部右侧：容量档位按钮组 + 窗口回退 */
+.fan-chart-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fan-presets {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid rgba(210, 216, 222, 0.55);
+  border-radius: 999px;
+}
+
+.fan-preset {
+  height: 20px;
+  padding: 0 9px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--c-text-sub);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.fan-preset:hover {
+  background: var(--sel-bg-hover);
+}
+
+.fan-preset.on {
+  background: var(--c-primary);
+  color: #fff;
+}
+
 .fan-chart-reset {
   display: inline-flex;
   align-items: center;

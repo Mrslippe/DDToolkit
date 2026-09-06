@@ -18,29 +18,58 @@ interface DailyPoint {
   delta: number | null
 }
 
-const PINK = '#fb77a1'       // 主粉（--chart-1 / --c-primary-deep）
-const RED = '#e14444'        // 警示红（--destructive / --c-live）
+const PINK = '#fb77a1'       // 主粉（--chart-1）：涨粉
+const GRAY = '#a0aec0'       // 掉粉灰（浅灰蓝，浅底可见）
 const GRID = 'rgba(210, 216, 222, 0.35)'
 const MUTED = '#5b6c7e'
 
-/** 默认窗口：最近 30 天（参考图首屏） */
+/** 数据容量档位（Brush 缩略图轨迹范围）：默认 3 个月，手动按钮切换 */
+const PRESETS = [
+  { key: '3m', label: '3个月', days: 90 },
+  { key: '6m', label: '6个月', days: 180 },
+  { key: '1y', label: '1年', days: 365 },
+  { key: 'all', label: '全部', days: Infinity },
+] as const
+type PresetKey = (typeof PRESETS)[number]['key']
+
+/** 窗口默认：当前容量档位内的最近 30 天 */
 const DEFAULT_DAYS = 30
 
+/** 粉丝轴域：窗口内 [min, max] 留 8% 余量并整 100；delta 域：对称 ±max×1.1 */
+function fanDomain(values: (number | null)[]): [number, number] {
+  const nums = values.filter((v): v is number => v != null)
+  if (nums.length === 0) return [0, 1]
+  const min = Math.min(...nums)
+  const max = Math.max(...nums)
+  const pad = Math.max((max - min) * 0.08, 10)
+  return [Math.floor((min - pad) / 100) * 100, Math.ceil((max + pad) / 100) * 100]
+}
+
+function deltaDomain(values: (number | null)[]): [number, number] {
+  const nums = values.filter((v): v is number => v != null)
+  if (nums.length === 0) return [-1, 1]
+  const maxAbs = Math.max(...nums.map((v) => Math.abs(v)))
+  const cap = Math.ceil(maxAbs * 1.1)
+  return [-cap, cap]
+}
+
 /**
- * 粉丝趋势卡（v0.9.5 重建，参考用户展示图 + 项目粉系浅底）：
- * - 双轴 ComposedChart：粉丝数 Area（主粉渐变色）+ 日增粉 Bar（正=粉 / 负=红）；
- * - 时间窗：默认最近 30 天；底部 Brush 缩略图 = 全量时间轴，拖拽窗口滑块/拉伸两端
- *   调整展示区间（startIndex/endIndex 受控，可一键回默认）；
- * - 纵轴域随【当前可见窗口数据】动态计算：recharts Brush 缩放时按可见数据重算
- *   Y 轴 domain（轴刻度随窗口收紧/放宽）；
- * - 动画：入场/换窗 400ms 过渡（isAnimationActive + animationDuration），
- *   Brush 拖动即改受控窗口，图表平滑重绘。
+ * 粉丝趋势卡（v0.9.5 重建 + v0.9.6 修正，参考用户展示图 + 项目粉系浅底）：
+ * - 双轴 ComposedChart：粉丝数 Area（主粉渐变色）+ 日增粉 Bar（涨=粉 / 掉=灰）；
+ * - 数据容量档位按钮（3个月/6个月/1年/全部）：Brush 缩略图轨迹 = 当前档位数据，
+ *   默认 3 个月（90 天点，渲染轻快不卡顿），档位切换自动重置窗口；
+ * - 底部 Brush 缩略图：dataKey=fans（数值键才能画出迷你图），拖拽滑块/拉伸两端
+ *   调整展示窗口（startIndex/endIndex 受控，可一键回默认窗口）；
+ * - 纵轴域随【当前可见窗口数据】动态计算（recharts auto domain 按可见数据重算）；
+ * - 动画：入场/换窗 400ms 过渡。
  */
 const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }: Props) {
   const [points, setPoints] = useState<FanTrendPoint[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  /** 当前窗口 [startIndex, endIndex]（全量索引；null=未就绪） */
+  /** 容量档位（默认 3 个月） */
+  const [preset, setPreset] = useState<PresetKey>('3m')
+  /** 当前窗口 [startIndex, endIndex]（容量数据索引；null=未就绪） */
   const [range, setRange] = useState<[number, number] | null>(null)
 
   useEffect(() => {
@@ -84,25 +113,37 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
     return out
   }, [points])
 
-  /** 数据就绪：默认窗口 = 最近 30 天 */
+  /** 当前容量档位数据（渲染源，数据量 = 档位天数） */
+  const capacity = useMemo<DailyPoint[]>(() => {
+    const days = PRESETS.find((p) => p.key === preset)?.days ?? 90
+    return Number.isFinite(days) ? daily.slice(-days) : daily
+  }, [daily, preset])
+
+  /** 数据/档位就绪：窗口重置为该容量尾部 DEFAULT_DAYS 天 */
   useEffect(() => {
-    if (daily.length === 0) return
-    setRange([Math.max(0, daily.length - DEFAULT_DAYS), daily.length - 1])
-  }, [daily])
+    if (capacity.length === 0) return
+    setRange([Math.max(0, capacity.length - DEFAULT_DAYS), capacity.length - 1])
+  }, [capacity])
 
-  const isDefault = useMemo(() => {
+  const isDefaultWindow = useMemo(() => {
     if (!range) return true
-    return range[0] === Math.max(0, daily.length - DEFAULT_DAYS) && range[1] === daily.length - 1
-  }, [range, daily])
+    return range[0] === Math.max(0, capacity.length - DEFAULT_DAYS) && range[1] === capacity.length - 1
+  }, [range, capacity])
 
-  const resetZoom = () => {
-    // 强制 Brush 重挂到默认窗口（受控值变化 + key 重挂双保险）
-    setRange([Math.max(0, daily.length - DEFAULT_DAYS), daily.length - 1])
-  }
+  /** 窗口内数据切片（Y 轴域与概览的数据源） */
+  const view = useMemo(() => {
+    if (!range || capacity.length === 0) return capacity
+    const [s, e] = range
+    return capacity.slice(s, e + 1)
+  }, [capacity, range])
 
-  /** 头部概览：全量末值 1d/7d/30d 涨粉（参考图"涨跌粉: 1d 16 7d 249 30d 3,290"） */
+  /** 纵轴域随窗口动态：据切片数据计算（涨跌幅对窗口；粉丝数留 8% 余量） */
+  const fanDomainVal = useMemo(() => fanDomain(view.map((d) => d.fans)), [view])
+  const deltaDomainVal = useMemo(() => deltaDomain(view.map((d) => d.delta)), [view])
+
+  /** 头部概览：容量末值 1d/7d/30d 涨粉 */
   const overview = useMemo(() => {
-    const vals = daily.filter((d) => d.fans != null).map((d) => d.fans as number)
+    const vals = capacity.filter((d) => d.fans != null).map((d) => d.fans as number)
     const last = vals[vals.length - 1]
     if (last == null) return null
     const diff = (n: number) =>
@@ -110,7 +151,7 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
         ? last - vals[vals.length - 1 - n]
         : null
     return { d1: diff(1), d7: diff(7), d30: diff(30) }
-  }, [daily])
+  }, [capacity])
 
   const fmtDate = (d: string) => (d ? d.slice(5) : '') // MM-DD
   const fmtDelta = (v: number | null) =>
@@ -121,7 +162,7 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
       {/* 卡片标题（与直播日历同规格 16px #182e41） */}
       <div className="fc-title">粉丝趋势</div>
 
-      {/* 头部概览（1d/7d/30d 涨粉 + 窗口非默认时"整段"回退） */}
+      {/* 头部：左=1d/7d/30d 概览 · 右=容量档位按钮 + 窗口回退 */}
       <div className="fan-chart-head">
         <div className="fan-chart-summary">
           {overview ? (
@@ -134,12 +175,26 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
             <span className="fan-chart-empty-summary">—</span>
           )}
         </div>
-        {!isDefault && (
-          <button type="button" className="fan-chart-reset" onClick={resetZoom}>
-            <CalendarRange className="size-3.5" />
-            整段
-          </button>
-        )}
+        <div className="fan-chart-tools">
+          <div className="fan-presets">
+            {PRESETS.map((p) => (
+              <button
+                key={p.key}
+                type="button"
+                className={`fan-preset${preset === p.key ? ' on' : ''}`}
+                onClick={() => setPreset(p.key)}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          {!isDefaultWindow && (
+            <button type="button" className="fan-chart-reset" onClick={() => setRange(null)}>
+              <CalendarRange className="size-3.5" />
+              重置窗口
+            </button>
+          )}
+        </div>
       </div>
 
       {/* 图区 */}
@@ -150,12 +205,12 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
           </div>
         )}
         {!loading && error && <div className="lc-state lc-error">{error}</div>}
-        {!loading && !error && daily.length === 0 && (
+        {!loading && !error && capacity.length === 0 && (
           <div className="lc-state">暂无粉丝趋势数据</div>
         )}
-        {!loading && !error && daily.length > 0 && (
+        {!loading && !error && capacity.length > 0 && (
           <ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={daily} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
+            <ComposedChart data={capacity} margin={{ top: 6, right: 8, bottom: 0, left: 0 }}>
               <defs>
                 <linearGradient id="fanFill" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stopColor={PINK} stopOpacity={0.22} />
@@ -172,21 +227,21 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
                 tickFormatter={fmtDate}
                 tick={{ fontSize: 11, fill: MUTED }}
               />
-              {/* fans 轴：自动域（Brush 缩放后按可见数据重算） */}
+              {/* fans 轴：域随窗口切片数据动态（每次拖拽 Brush 重算） */}
               <YAxis
                 yAxisId="fans"
-                domain={['auto', 'auto']}
+                domain={fanDomainVal}
                 tickLine={false}
                 axisLine={false}
                 width={52}
                 tickFormatter={(v: number) => formatCount(v)}
                 tick={{ fontSize: 11, fill: MUTED }}
               />
-              {/* delta 轴：自动域（负向留 10% 余量，对称视觉） */}
+              {/* delta 轴：域随窗口切片数据动态（对称 ±max） */}
               <YAxis
                 yAxisId="delta"
                 orientation="right"
-                domain={[(dataMin: number) => Math.min(0, dataMin) * 1.1, (dataMax: number) => Math.max(0, dataMax) * 1.1]}
+                domain={deltaDomainVal}
                 tickLine={false}
                 axisLine={false}
                 width={44}
@@ -214,11 +269,10 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
                 isAnimationActive
                 animationDuration={400}
                 animationBegin={0}
-                radius={[2, 2, 0, 0]}
-                maxBarSize={7}
+                maxBarSize={14}
               >
-                {daily.map((d) => (
-                  <Cell key={d.date} fill={(d.delta ?? 0) >= 0 ? PINK : RED} />
+                {capacity.map((d) => (
+                  <Cell key={d.date} fill={(d.delta ?? 0) >= 0 ? PINK : GRAY} />
                 ))}
               </Bar>
               <Area
@@ -235,10 +289,11 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
                 animationDuration={400}
                 animationBegin={0}
               />
-              {/* 时间轴缩略图：全量迷你图 + 窗口滑块（拖拽平移/两端拉伸缩放） */}
+              {/* 时间轴缩略图：迷你图取数值键 fans（字符串日期键画不出图）；
+                  窗口 = 默认最近 30 天，可拖滑块/拉伸两端缩放 */}
               <Brush
-                key={`brush-${daily.length}`}
-                dataKey="date"
+                key={`brush-${preset}-${capacity.length}`}
+                dataKey="fans"
                 height={56}
                 stroke={PINK}
                 fill="rgba(251,119,161,0.05)"
@@ -247,10 +302,10 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
                 endIndex={range?.[1]}
                 onChange={(e: { startIndex?: number; endIndex?: number }) => {
                   const s = e.startIndex ?? 0
-                  const en = e.endIndex ?? daily.length - 1
+                  const en = e.endIndex ?? capacity.length - 1
                   setRange([s, Math.max(s, en)])
                 }}
-                tickFormatter={(date: string) => (date ? date.slice(0, 7) : '')}
+                tickFormatter={() => ''}
               />
             </ComposedChart>
           </ResponsiveContainer>
