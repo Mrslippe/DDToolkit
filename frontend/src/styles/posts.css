@@ -915,9 +915,9 @@
 /* ── 档案视图（P5→P7）：趋势 / 直播日历 / 档案卡 ── */
 
 .float-pill--sm {
-  font-size: 12px;
+  font-size: 13px;
   padding: 0 10px;
-  height: 24px;
+  height: 26px;
 }
 
 .archive-view {
@@ -929,17 +929,27 @@
   height: 100%;
 }
 
-/* P7：上行双列（重要日期窄 + 直播日历宽），窄屏回落单列 */
+/* P7：上行两卡固定宽度（重要日期窄 + 直播日历宽），不填充容器；空间不足时 wrap */
 .archive-grid-top {
-  display: grid;
-  grid-template-columns: minmax(240px, 4fr) minmax(0, 7fr);
+  display: flex;
+  flex-wrap: wrap;
   gap: 14px;
-  align-items: start;
+  align-items: flex-start;
 }
 
-@media (max-width: 900px) {
-  .archive-grid-top {
-    grid-template-columns: 1fr;
+.archive-section--events {
+  width: 300px;
+  flex: none;
+}
+
+.archive-section--calendar {
+  width: 640px;
+  flex: none;
+}
+
+@media (max-width: 1000px) {
+  .archive-section--events {
+    width: 300px;
   }
 }
 
@@ -959,13 +969,13 @@
 }
 
 .archive-section-title {
-  font-size: 13px;
+  font-size: 14.5px;
   font-weight: 600;
   color: var(--c-text-main);
 }
 
 .archive-section-note {
-  font-size: 11.5px;
+  font-size: 12.5px;
   color: var(--c-text-sub);
 }
 
@@ -977,7 +987,7 @@
 
 .archive-empty,
 .archive-error {
-  font-size: 12.5px;
+  font-size: 13.5px;
   color: var(--c-text-sub);
   padding: 14px 0;
   text-align: center;
@@ -1019,7 +1029,7 @@
 }
 
 .live-calendar-title {
-  font-size: 12.5px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--c-text-main);
   font-variant-numeric: tabular-nums;
@@ -1027,7 +1037,7 @@
 
 .live-calendar-note {
   margin-left: auto;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--c-text-sub);
 }
 
@@ -1039,7 +1049,7 @@
 
 .live-calendar-weekday {
   text-align: center;
-  font-size: 10.5px;
+  font-size: 11.5px;
   color: var(--c-text-sub);
   padding: 2px 0;
 }
@@ -1050,11 +1060,11 @@
   flex-direction: column;
   align-items: flex-start;
   gap: 1px;
-  min-height: 56px;
+  min-height: 60px;
   padding: 3px 4px;
   border: 1px solid rgba(210, 216, 222, 0.35);
   border-radius: 4px;
-  font-size: 11.5px;
+  font-size: 12.5px;
   color: var(--c-text-main);
   font-variant-numeric: tabular-nums;
   text-align: left;
@@ -1089,8 +1099,8 @@ button.live-calendar-cell:hover {
 }
 
 .live-calendar-day {
-  font-size: 11px;
-  line-height: 13px;
+  font-size: 12px;
+  line-height: 14px;
   color: var(--c-text-sub);
   align-self: flex-start;
 }
@@ -1107,18 +1117,18 @@ button.live-calendar-cell:hover {
   gap: 3px;
   width: 100%;
   min-width: 0;
-  line-height: 15px;
+  line-height: 17px;
 }
 
 .live-calendar-entry-time {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--c-text-sub);
   flex: none;
   font-variant-numeric: tabular-nums;
 }
 
 .live-calendar-entry-title {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--c-text-main);
   white-space: nowrap;
   overflow: hidden;
@@ -1127,13 +1137,13 @@ button.live-calendar-cell:hover {
 }
 
 .live-calendar-more {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--c-text-sub);
   padding-left: 2px;
 }
 
 .live-calendar-gift {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--c-live);
   padding-left: 2px;
   white-space: nowrap;
@@ -1147,9 +1157,9 @@ button.live-calendar-cell:hover {
   flex: none;
   display: inline-flex;
   align-items: center;
-  font-size: 9.5px;
-  line-height: 13px;
-  padding: 0 4px;
+  font-size: 10.5px;
+  line-height: 15px;
+  padding: 0 5px;
   border-radius: 3px;
   color: #fff;
 }
@@ -1184,7 +1194,7 @@ button.live-calendar-cell:hover {
 }
 
 .live-day-pop-title {
-  font-size: 12px;
+  font-size: 13.5px;
   font-weight: 600;
   color: var(--c-text-main);
 }
@@ -1210,7 +1220,7 @@ button.live-calendar-cell:hover {
   display: flex;
   align-items: flex-start;
   gap: 6px;
-  font-size: 11.5px;
+  font-size: 13px;
 }
 
 .live-day-pop-body {
@@ -1222,18 +1232,18 @@ button.live-calendar-cell:hover {
 
 .live-day-pop-title-text {
   color: var(--c-text-main);
-  line-height: 16px;
+  line-height: 18px;
   word-break: break-all;
 }
 
 .live-day-pop-meta {
-  font-size: 10.5px;
+  font-size: 12px;
   color: var(--c-text-sub);
   font-variant-numeric: tabular-nums;
 }
 
 .live-day-pop-gift {
-  font-size: 11px;
+  font-size: 12.5px;
   color: var(--c-live);
   border-top: 1px dashed rgba(210, 216, 222, 0.5);
   padding-top: 4px;
@@ -1250,13 +1260,13 @@ button.live-calendar-cell:hover {
 .event-input {
   flex: 1;
   min-width: 0;
-  height: 26px;
+  height: 28px;
   padding: 0 8px;
   border: 1px solid var(--c-border);
   border-radius: 4px;
   background: var(--c-bg-page);
   color: var(--c-text-main);
-  font-size: 12px;
+  font-size: 13px;
   font-family: inherit;
 }
 
@@ -1301,10 +1311,10 @@ button.live-calendar-cell:hover {
   display: flex;
   align-items: center;
   gap: 4px;
-  font-size: 12.5px;
+  font-size: 14px;
   color: var(--c-text-main);
   font-weight: 600;
-  line-height: 17px;
+  line-height: 19px;
 }
 
 .event-row-title svg {
@@ -1313,29 +1323,29 @@ button.live-calendar-cell:hover {
 }
 
 .event-row-title2 {
-  font-size: 11px;
+  font-size: 12.5px;
   color: var(--c-text-sub);
-  line-height: 15px;
+  line-height: 17px;
   display: flex;
   align-items: center;
   gap: 6px;
 }
 
 .event-row-extra {
-  font-size: 10.5px;
+  font-size: 12px;
   color: var(--c-accent);
 }
 
 .event-row-days {
   flex: none;
-  font-size: 11px;
+  font-size: 12.5px;
   font-weight: 600;
   color: var(--c-text-sub);
   background: var(--c-bg-page);
   border: 1px solid var(--c-border);
   border-radius: 999px;
-  padding: 1px 8px;
-  line-height: 17px;
+  padding: 1px 9px;
+  line-height: 19px;
 }
 
 .event-row-days.soon {
@@ -1396,7 +1406,7 @@ button.live-calendar-cell:hover {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  font-size: 10.5px;
+  font-size: 12px;
   color: var(--c-text-sub);
   flex: 1;
   min-width: 120px;
@@ -1430,8 +1440,8 @@ button.live-calendar-cell:hover {
   border: none;
   background: transparent;
   color: var(--c-text-sub);
-  font-size: 11.5px;
-  line-height: 20px;
+  font-size: 12.5px;
+  line-height: 22px;
   padding: 0 10px;
   border-radius: 999px;
   cursor: pointer;
@@ -1454,7 +1464,7 @@ button.live-calendar-cell:hover {
   border: none;
   background: transparent;
   color: var(--c-text-sub);
-  font-size: 11.5px;
+  font-size: 12.5px;
   cursor: pointer;
   font-family: inherit;
   padding: 2px 6px;
@@ -1486,7 +1496,7 @@ button.live-calendar-cell:hover {
 }
 
 .profile-account-name {
-  font-size: 12.5px;
+  font-size: 13.5px;
   color: var(--c-text-main);
   min-width: 0;
   white-space: nowrap;
@@ -1496,19 +1506,19 @@ button.live-calendar-cell:hover {
 }
 
 .profile-account-meta {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--c-text-sub);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
 .profile-account-live {
-  font-size: 10.5px;
+  font-size: 11.5px;
   color: var(--c-live);
   border: 1px solid rgba(216, 103, 79, 0.45);
   border-radius: 999px;
-  padding: 0 6px;
-  line-height: 16px;
+  padding: 0 7px;
+  line-height: 18px;
 }
 
 /* 档案卡 */

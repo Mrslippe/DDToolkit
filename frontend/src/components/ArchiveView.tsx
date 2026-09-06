@@ -108,7 +108,7 @@ function CalendarCard({ vtuber, refreshTick }: { vtuber: VTuber; refreshTick: nu
   }, [selected?.id, refreshTick])
 
   return (
-    <section className="archive-section">
+    <section className="archive-section archive-section--calendar">
       <div className="archive-section-head">
         <span className="archive-section-title">直播日历</span>
         <div className="archive-section-right">
