@@ -74,6 +74,10 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
   const [range, setRange] = useState<[number, number] | null>(null)
   /** Brush 拖动中：临时关动画保跟手（400ms 动画在拖拽时会产生拖影/滞后） */
   const [dragging, setDragging] = useState(false)
+  /** 拖动结束 reveal 标记：每次拖动停止时 +1 →
+      Area/Bar 以它为 key 重挂载，播放入场动画（bar 自底生长 / area 描线过渡）。
+      拖动中 isAnimationActive=false 不播；重挂瞬间恢复 true 必播一次。 */
+  const [revealTick, setRevealTick] = useState(0)
   const dragTimer = useRef<number>()
   // Brush onChange rAF 节流：target 暂存 + 帧内提交
   const brushRafRef = useRef(0)
@@ -85,6 +89,11 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
     },
     [],
   )
+  /** 拖动结束统一收尾：关动画标记 + 加 reveal（重挂播放入场动画） */
+  const settleDrag = () => {
+    setDragging(false)
+    setRevealTick((k) => k + 1)
+  }
 
   useEffect(() => {
     if (accountId == null) return
@@ -198,7 +207,7 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
       }
       panRef.current = null
       setPanning(false)
-      setDragging(false) // 松手恢复动画（一次）
+      settleDrag() // 松开 → 重挂播放入场动画（新进入窗口的曲线/柱呈现）
     }
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
@@ -362,6 +371,7 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
                 }}
               />
               <Bar
+                key={`bar-${revealTick}`}
                 yAxisId="delta"
                 dataKey="delta"
                 name="日增粉"
@@ -377,6 +387,7 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
                 ))}
               </Bar>
               <Area
+                key={`area-${revealTick}`}
                 yAxisId="fans"
                 type="monotone"
                 dataKey="fans"
@@ -414,10 +425,10 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
                     const t = brushTargetRef.current
                     if (!t) return
                     setRange(t)
-                    // 跟手优化：拖动期间禁用动画，停顿 250ms 后恢复
+                    // 跟手优化：拖动期间禁用动画，停顿 250ms 后 settle（恢复动画 + reveal 重挂）
                     setDragging(true)
                     window.clearTimeout(dragTimer.current)
-                    dragTimer.current = window.setTimeout(() => setDragging(false), 250)
+                    dragTimer.current = window.setTimeout(settleDrag, 250)
                   })
                 }}
                 tickFormatter={() => ''}
