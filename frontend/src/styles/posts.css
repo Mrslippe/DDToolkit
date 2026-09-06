@@ -2217,13 +2217,16 @@
   cursor: grabbing;
 }
 
-/* 拖拽柄（recharts DefaultTraveller = rect + 两条白纹；白色浮片版隐藏白纹） */
+/* 拖拽柄（自定义 traveller：BrushTraveller = rect + 三条 ≡ 横线）
+   rect 由下方规则上色；横线 = 浅灰纹理（同 scrollbar 滑块色系近似） */
 .recharts-brush-traveller {
   cursor: ew-resize;
 }
 
 .recharts-brush-traveller line {
-  display: none;
+  stroke: rgba(148, 163, 184, 0.6);
+  stroke-width: 1px;
+  stroke-linecap: round;
 }
 
 /* 两端把手 = 白浮片（无描边）：白底 + 3px 圆角 + 浮影（--pill-shadow 的 SVG 版），

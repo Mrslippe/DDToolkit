@@ -145,6 +145,33 @@ const BarShape = memo(function BarShape({ x = 0, y = 0, width = 0, height = 0, p
   )
 })
 
+/** Brush 两端把手（自定义 traveller：白浮片 + 三条浅灰 ≡ 纹理）——
+    rect 样式走 CSS（.recharts-brush-traveller rect：白底/圆角/浮影/hover 渐变），
+    三横线以中线为轴 ±3px 等距，模拟把手抓握纹理（user 2026-09-0x） */
+const BrushTraveller = memo(function BrushTraveller({
+  x = 0,
+  y = 0,
+  width = 0,
+  height = 0,
+}: {
+  x?: number
+  y?: number
+  width?: number
+  height?: number
+}) {
+  const cx = x + width / 2
+  const cy = y + height / 2
+  const half = Math.min(width / 2 - 1.5, 4) // 线半长：10px 宽浮片 → 7px 横线
+  return (
+    <>
+      <rect x={x} y={y} width={width} height={height} />
+      {[-3, 0, 3].map((dy) => (
+        <line key={dy} x1={cx - half} y1={cy + dy} x2={cx + half} y2={cy + dy} />
+      ))}
+    </>
+  )
+})
+
 /** BarsOverlay：常驻绘制【全部窗口柱】——
     新日期 → CSS 键帧生长（出现即播，340ms 后转 morph）；
     既有柱 → WAAPI 高度 morph：每提交帧 启动 animate(旧几何 → 当前几何)，
@@ -648,6 +675,7 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
                 stroke={PINK}
                 fill="rgba(251,119,161,0.05)"
                 travellerWidth={10}
+                traveller={<BrushTraveller />}
                 startIndex={range?.[0]}
                 endIndex={range?.[1]}
                 onChange={(e: { startIndex?: number; endIndex?: number }) => {
