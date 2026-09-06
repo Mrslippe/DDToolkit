@@ -332,6 +332,14 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
     return Number.isFinite(days) ? daily.slice(-days) : daily
   }, [daily, preset])
 
+  /* 首次数据就绪：渲染期同步派生默认窗口（React "render-phase update" 模式）——
+     保证图表与 Brush 从第一帧起就以【受控 startIndex/endIndex】挂载；
+     range=null 以失控模式挂载 → recharts 3.8 受控 Brush 对"失控→受控"
+     切换不重切主图（主图永久全量 + 柱堆右侧，user 2026-09-06 截图复现） */
+  if (range === null && capacity.length > 0) {
+    setRange([Math.max(0, capacity.length - DEFAULT_DAYS), capacity.length - 1])
+  }
+
   /* ── 图表主区抓手平移（pan）：按住拖动 = 平移时间窗口（窗口宽度不变）
      性能三件套：①mousedown 一次性缓存布局（不再每帧读 clientWidth）；
      ②mousemove 只算目标索引存 ref，rAF 帧内才 setState（一帧最多一次重渲染）；
@@ -415,15 +423,11 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
     }
   }, [panning])
 
-  /** 数据/档位就绪：窗口重置为该容量尾部 DEFAULT_DAYS 天；
-      range=null（初始/任何残留）时强制回默认 —— 兜底：不允许"全量数据 + 
-      Brush 停在旧位"的失控态长期存在（重置按钮已直接设默认窗口，此处双保险） */
+  /** 窗口重设（档位切换/数据刷新）：重置为该容量尾部 DEFAULT_DAYS 天 */
   useEffect(() => {
     if (capacity.length === 0) return
-    if (range === null) {
-      setRange([Math.max(0, capacity.length - DEFAULT_DAYS), capacity.length - 1])
-    }
-  }, [capacity, range])
+    setRange([Math.max(0, capacity.length - DEFAULT_DAYS), capacity.length - 1])
+  }, [capacity])
 
   const isDefaultWindow = useMemo(() => {
     if (!range) return true
