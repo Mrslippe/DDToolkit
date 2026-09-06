@@ -6,12 +6,13 @@
 - 注册表与 laplace 空壳默认禁用
 """
 import pytest
+from datetime import datetime
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.core.database import Base
 from app.models.vtuber import (Account, AccountStatSnapshot, LiveGiftDay,
-                               ThirdpartyVtuber, VTuber)
+                               LiveSession, ThirdpartyVtuber, VTuber)
 from app.services.externals.registry import (get_external_source,
                                              iter_external_sources)
 from app.services.externals.zeroroku import (parse_zeroroku_ts,
@@ -173,6 +174,59 @@ def test_vtuber_index_bad_response(db):
     import asyncio
     s = asyncio.run(src.run_job("vtuber_index", db, client))
     assert s.error is not None and s.stored == 0
+
+
+# ── danmakus live_sessions 每日同步（v0.9.x M2） ────────────────────
+
+def test_live_sessions_sync_idempotent(db):
+    v = VTuber(name="测试V")
+    db.add(v)
+    db.flush()
+    acc = Account(vtuber_id=v.id, platform="bilibili", platform_uid="434334701")
+    db.add(acc)
+    db.commit()
+
+    lives = [{
+        "liveId": "5ff53720-4f57-43b8-8890-23c5f1afe1a5",
+        "title": "周六来唱歌！",
+        "startDate": 1788609695000,
+        "stopDate": 1788628090562,
+        "parentArea": "虚拟主播", "area": "虚拟Singer",
+        "totalIncome": 10501.5, "maxOnlineCount": 989, "danmakusCount": 17931,
+    }]
+    payload = {"code": 200, "message": "成功",
+               "data": {"channel": {}, "lives": lives, "fansHistory": []}}
+    src = DanmakusSource()
+    client = FakeClient({"https://ukamnads.icu/api/v2/channel": payload})
+
+    import asyncio
+    s1 = asyncio.run(src.run_job("live_sessions", db, client))
+    assert s1.stored == 1
+    s2 = asyncio.run(src.run_job("live_sessions", db, client))
+    assert s2.stored == 0                                        # 幂等
+    row = db.query(LiveSession).one()
+    assert row.source == "danmakus"
+    assert row.title == "周六来唱歌！"
+    assert row.area_name == "虚拟Singer"
+    assert row.parent_area_name == "虚拟主播"
+    assert row.total_income == 10501.5
+    assert row.start_at == datetime(2026, 9, 5, 12, 1, 35)        # naive UTC
+    assert row.end_at == datetime(2026, 9, 5, 17, 8, 10, 562000)
+
+
+def test_live_sessions_sync_skips_bad_account(db):
+    v = VTuber(name="测试V")
+    db.add(v)
+    db.flush()
+    acc = Account(vtuber_id=v.id, platform="bilibili", platform_uid="434334701")
+    db.add(acc)
+    db.commit()
+
+    src = DanmakusSource()
+    client = FakeClient({"https://ukamnads.icu/api/v2/channel": {"code": 500, "data": None}})
+    import asyncio
+    s = asyncio.run(src.run_job("live_sessions", db, client))
+    assert s.stored == 0 and s.skipped == 1
 
 
 # ── 注册表与空壳 ────────────────────────────────────────────────────

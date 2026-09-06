@@ -18,7 +18,9 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.database import SessionLocal
 from app.models.vtuber import Account, VTuber, Post
-from app.repositories.vtuber_repo import VTuberRepo, AccountRepo, PostRepo, AccountStatSnapshotRepo
+from app.repositories.vtuber_repo import (
+    VTuberRepo, AccountRepo, PostRepo, AccountStatSnapshotRepo, LiveSessionRepo,
+)
 from app.services.fetcher import (
     fetch_bilibili_user_info, fetch_bilibili_user_stat,
     fetch_bilibili_videos, fetch_bilibili_dynamics, fetch_bilibili_live_batch,
@@ -636,6 +638,59 @@ def _safe_store_post(post_repo: PostRepo, data: dict, commit: bool = True) -> bo
 # （SQLite 每次 commit 都会触发磁盘同步，全量 1 万帖时性能差异巨大）
 _POST_BATCH_SIZE = 50
 
+# 直播场次路由：mid → account_id（live_sessions 需账号外键；账号表稳定，进程内缓存）
+_bili_account_id_cache: dict[str, int | None] = {}
+
+
+def _bili_account_id(db: Session, mid: int) -> int | None:
+    key = str(mid)
+    if key not in _bili_account_id_cache:
+        acc = (
+            db.query(Account)
+            .filter(Account.platform == "bilibili", Account.platform_uid == key)
+            .first()
+        )
+        _bili_account_id_cache[key] = acc.id if acc else None
+    return _bili_account_id_cache[key]
+
+
+def _route_live_item(db: Session, mid: int, d: dict) -> None:
+    """直播开播卡片（type='live'）→ live_sessions 表（v0.9.x M2）。
+
+    数据不进入 posts 档案；live_id（B站场次 key）幂等 upsert；
+    秒级开播时间来自 live_play_info.live_start_time；end_at 由
+    merged() 用 self 快照/次日 danmakus 同步补全。
+    """
+    body = _safe_json_parse(d.get("body_json") or "{}")
+    live_id = str(body.get("live_id") or "")
+    start_ts = body.get("live_start_time")
+    if not live_id:
+        logger.warning(f"直播场次无 live_id，跳过: dyn={d.get('platform_post_id')}")
+        return
+    if not start_ts:
+        logger.warning(f"直播场次无 live_start_time，跳过: live_id={live_id}")
+        return
+    try:
+        start_at = datetime.fromtimestamp(int(start_ts), tz=timezone.utc).replace(tzinfo=None)
+    except (TypeError, ValueError, OverflowError, OSError):
+        logger.warning(f"直播场次 start_ts 异常: {start_ts}, live_id={live_id}")
+        return
+    account_id = _bili_account_id(db, mid)
+    if account_id is None:
+        logger.warning(f"mid={mid} 无对应账号，直播场次未入库: live_id={live_id}")
+        return
+    added = LiveSessionRepo(db).upsert_feed(account_id, live_id, {
+        "title": (d.get("title") or "").strip() or None,
+        "room_id": str(body.get("room_id") or "") or None,
+        "parent_area_name": body.get("parent_area_name"),
+        "area_name": body.get("area_name"),
+        "cover_url": d.get("cover_url"),
+        "start_at": start_at,
+        "raw_json": d.get("raw_json"),
+    })
+    if added:
+        logger.info(f"mid={mid} 直播场次入库 feed: live_id={live_id} title={d.get('title')!r}")
+
 # 风控续抓：列表页（视频/动态）触发风控后冷却重试本页的次数上限（A）
 _PAGE_RETRIES = 2
 
@@ -819,10 +874,12 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
                 result.seen_pids.extend(d["platform_post_id"] for d in items)
                 break
             for idx, d in enumerate(items):
-                result.seen_pids.append(d["platform_post_id"])
-                # 双保险：直播开播动态（fetcher 已过滤，此处兜底，见 devlog/018）
+                # 直播开播场次卡（v0.9.x M2）：路由 live_sessions 表（不走 posts），
+                # 且计入 seen_pids 缺席判定——它不属于内容档案
                 if d["type"] == "live":
+                    _route_live_item(db, mid, d)
                     continue
+                result.seen_pids.append(d["platform_post_id"])
                 result.dynamics += 1
                 if d["platform_post_id"] in existing_ids:
                     result.skipped += 1

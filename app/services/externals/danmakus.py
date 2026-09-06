@@ -22,9 +22,11 @@ from datetime import datetime, timezone
 import httpx
 from sqlalchemy.orm import Session
 
-from app.models.vtuber import ThirdpartyVtuber
+from app.models.vtuber import Account, ThirdpartyVtuber
+from app.repositories.vtuber_repo import LiveSessionRepo
 from app.services.externals.base import (ExternalJob, ExternalJobSummary,
-                                         ExternalSource, INTERVAL_WEEKLY)
+                                         ExternalSource, INTERVAL_DAILY,
+                                         INTERVAL_WEEKLY)
 
 logger = logging.getLogger(__name__)
 
@@ -80,13 +82,53 @@ class DanmakusSource(ExternalSource):
     jobs = [
         ExternalJob("danmakus", "vtuber_index", "VTuber 索引整表刷新（企划/公会）",
                     INTERVAL_WEEKLY),
+        ExternalJob("danmakus", "live_sessions", "直播场次同步（标题/起止/分区/收益）",
+                    INTERVAL_DAILY),
     ]
 
     async def run_job(self, kind: str, db: Session,
                       client: httpx.AsyncClient) -> ExternalJobSummary:
         if kind == "vtuber_index":
             return await self._sync_vtuber_index(db, client)
+        if kind == "live_sessions":
+            return await self._sync_live_sessions(db, client)
         return ExternalJobSummary(self.name, kind, error=f"未知任务: {kind}")
+
+    def _bili_accounts(self, db: Session) -> list[Account]:
+        return (
+            db.query(Account)
+            .filter(Account.platform == "bilibili",
+                    Account.platform_uid != None,  # noqa: E711
+                    Account.platform_uid != "")
+            .all()
+        )
+
+    async def _sync_live_sessions(self, db: Session,
+                                  client: httpx.AsyncClient) -> ExternalJobSummary:
+        """直播场次每日同步（v0.9.x M2）：公开端点全量拉取 → 幂等 upsert。
+
+        场次含标题/起止/分区/收益/峰值在线/弹幕数；直播中场次 stopDate=0，
+        end_at 由 merged() 用 self 快照补齐（当日即准确）。
+        """
+        summary = ExternalJobSummary(self.name, "live_sessions")
+        accounts = self._bili_accounts(db)
+        for acc in accounts:
+            try:
+                payload = await fetch_channel(str(acc.platform_uid), client)
+            except Exception as e:
+                # 账号级隔离：网络异常只影响本账号，其余账号继续
+                logger.warning(f"danmakus lives 账号异常 {acc.platform_uid}: {e}")
+                summary.skipped += 1
+                continue
+            if not payload:
+                summary.skipped += 1
+                continue
+            lives = payload.get("lives") or []
+            res = LiveSessionRepo(db).upsert_danmakus(acc.id, lives)
+            summary.stored += res["added"]
+            logger.info(f"danmakus live_sessions: {acc.platform_uid} "
+                        f"新增 {res['added']} 刷新 {res['updated']}")
+        return summary
 
     async def _sync_vtuber_index(self, db: Session,
                                  client: httpx.AsyncClient) -> ExternalJobSummary:

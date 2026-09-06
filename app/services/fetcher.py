@@ -330,8 +330,11 @@ async def fetch_bilibili_dynamics(mid: int, offset: str = "",
             items = data.get("data", {}).get("items") or []
             mapped = []
             for item in items:
-                # 忽略直播开播动态（DYNAMIC_TYPE_LIVE_RCMD）——瞬态噪音，非真实内容
+                # 直播开播卡片（DYNAMIC_TYPE_LIVE_RCMD，v0.9.x M2）：不再忽略
+                # ——映射为 type='live' 场次记录，scheduler 路由 live_sessions 表
+                # （不进 posts 内容档案）
                 if _is_live_rcmd(item):
+                    mapped.append(_map_live_rcmd(item, mid))
                     continue
                 id_str = item.get("id_str", "")
                 modules = item.get("modules") or {}
@@ -625,13 +628,61 @@ def _parse_dynamic_pub_time(author: dict):
 
 def _is_live_rcmd(item: dict) -> bool:
     """直播开播动态判断：raw type 为 DYNAMIC_TYPE_LIVE_RCMD 或 major 含 LIVE_RCMD。
-    这类动态是 B 站自动生成的开播提醒（major.live_rcmd），瞬态无内容价值，直接忽略。"""
+
+    v0.9.x M2 起不再忽略：映射为 type='live' 场次记录（标题/开播秒级时间/
+    分区/房间号），由 scheduler 路由 live_sessions 表——直播场次是日历内容
+    的数据源之一，但仍是「记录卡」不是用户内容，不进 posts 档案。
+    """
     raw_type = str(item.get("type", ""))
     if "LIVE" in raw_type:
         return True
     md = (item.get("modules") or {}).get("module_dynamic") or {}
     major_type = str((md.get("major") or {}).get("type", ""))
     return "LIVE" in major_type
+
+
+def _map_live_rcmd(item: dict, mid: int) -> dict:
+    """直播开播卡片（major.live_rcmd）→ type='live' 场次记录。
+
+    live_rcmd.content 为 JSON 字符串（内嵌 live_play_info）：
+    title/room_id/area_name/parent_area_name/live_start_time(秒)/live_id/online；
+    published_at 优先 live_start_time（开播精确时刻），缺失回退动态 pub_ts。
+    """
+    md = (item.get("modules") or {}).get("module_dynamic") or {}
+    major = md.get("major") or {}
+    author = (item.get("modules") or {}).get("module_author") or {}
+    data = major.get("live_rcmd") or {}
+    inner = _safe_json_parse(data.get("content"), {})
+    info = inner.get("live_play_info") or {}
+    title = str(info.get("title") or "").strip()[:200] or str(data.get("title") or "").strip()[:200]
+    room_id = str(info.get("room_id") or "")
+    live_id = str(info.get("live_id") or "")
+    start_ts = info.get("live_start_time")
+    start_at = _ts_to_datetime(start_ts) if start_ts else None
+    body = {
+        "live_id": live_id,
+        "room_id": room_id,
+        "area_name": info.get("area_name"),
+        "parent_area_name": info.get("parent_area_name"),
+        "live_start_time": start_ts,
+        "live_status": info.get("live_status"),
+        "online": info.get("online"),
+        "link": info.get("link"),
+    }
+    return {
+        "platform": "bilibili",
+        "platform_uid": str(mid),
+        "platform_post_id": item.get("id_str", ""),
+        "type": "live",
+        "title": title,
+        "summary": title[:200],
+        "cover_url": info.get("cover"),
+        "permalink": f"https://live.bilibili.com/{room_id}" if room_id else "",
+        "body_json": _dump_json(body),
+        "stats_json": _dump_json({"online": info.get("online")}),
+        "published_at": start_at or _parse_dynamic_pub_time(author),
+        "raw_json": _dump_json(item),
+    }
 
 
 def _extract_origin(item: dict) -> dict | None:

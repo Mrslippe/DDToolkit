@@ -1,12 +1,14 @@
 # -*- coding: utf-8 -*-
-"""v0.9.x 直播日历内容管道 M1 后端测试：
+"""v0.9.x 直播日历内容管道 M1-M2 后端测试：
 - LiveSessionRepo.upsert_danmakus：幂等 upsert（live_id 唯一）、字段映射、无效跳过
 - LiveSessionRepo.merged：表内场次 ∪ self 快照（±90min 窗口合并、双源标记、
-  未匹配快照→self 虚拟场次）
-- LiveSessionRepo.upsert_feed：其他数据源接入接口（M3 预留）
+  未匹配快照→self 虚拟场次）；M2：danmakus/feed 同场去重（组内主数据优先）
+- LiveSessionRepo.upsert_feed：其他数据源接入接口（M2 live_rcmd 路由）
+- fetcher._map_live_rcmd：直播开播卡片 → type='live' 场次记录
 - live_type.infer_category：title/area/date 信号栈 + fallback
 """
-from datetime import datetime, timedelta
+import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import create_engine
@@ -16,6 +18,7 @@ from app.core.database import Base
 from app.models.vtuber import (Account, AccountStatSnapshot, LiveSession,
                                VTuber)
 from app.repositories.vtuber_repo import LiveSessionRepo
+from app.services.fetcher import _map_live_rcmd
 from app.services.live_type import infer_category
 
 T0 = datetime(2026, 9, 1, 12, 0, 0)
@@ -185,6 +188,129 @@ def test_merged_danmakus_end_wins(db):
     assert len(merged) == 1
     assert merged[0]["end_at"] == T0 + timedelta(hours=3)      # danmakus end 优先
     assert merged[0]["duration_minutes"] == 180
+
+
+# ── M2：danmakus/feed 同场去重（组内主数据优先） ─────────────────────
+
+def test_merged_danmakus_and_feed_dedupe(db):
+    """同一场直播 danmakus(uuid) 与 feed(live_id) 各一行 → 合并为一场。"""
+    acc = _mk_account(db)
+    repo = LiveSessionRepo(db)
+    repo.upsert_danmakus(acc.id, [
+        _dm_item("uuid-a", "周六来唱歌！", _ms(T0), _ms(T0 + timedelta(hours=2)),
+                 area="虚拟Singer", parent="虚拟主播", income=10501.5),
+    ])
+    repo.upsert_feed(acc.id, "736525563447432921", {
+        "title": "周六来唱歌！", "start_at": T0 + timedelta(minutes=2),
+        "parent_area_name": "虚拟主播", "area_name": "虚拟Singer",
+        "room_id": "21452505",
+    })
+    merged = repo.merged(acc.id)
+    assert len(merged) == 1
+    m = merged[0]
+    assert m["source"] == "danmakus+feed"
+    assert m["live_id"] == "uuid-a"                    # danmakus 主键优先
+    assert m["start_at"] == T0
+    assert m["end_at"] == T0 + timedelta(hours=2)
+    assert m["total_income"] == 10501.5
+
+
+def test_merged_feed_alone_and_with_snap(db):
+    acc = _mk_account(db)
+    repo = LiveSessionRepo(db)
+    repo.upsert_feed(acc.id, "feed-1", {
+        "title": "无限流游戏", "start_at": T0,
+        "parent_area_name": "单机游戏", "area_name": "主机游戏",
+    })
+    merged = repo.merged(acc.id)
+    assert len(merged) == 1
+    assert merged[0]["source"] == "feed"
+    assert merged[0]["live_id"] == "feed-1"
+    assert merged[0]["duration_minutes"] is None
+
+    # feed 场 + 快照（±90min）→ feed 主 + self 补 end
+    _snap(db, acc, T0 + timedelta(minutes=10), status=1)
+    _snap(db, acc, T0 + timedelta(minutes=40), status=0)
+    merged = repo.merged(acc.id)
+    assert len(merged) == 1
+    m = merged[0]
+    assert m["source"] == "feed+self"
+    assert m["end_at"] == T0 + timedelta(minutes=40)
+    assert m["duration_minutes"] == 40
+    assert m["live_title"] == "无限流游戏"
+
+
+def test_merged_feed_supplements_danmakus_gap(db):
+    """danmakus 缺标题（旧数据）→ feed 同场补标题；不同场次不误并。"""
+    acc = _mk_account(db)
+    repo = LiveSessionRepo(db)
+    repo.upsert_danmakus(acc.id, [
+        _dm_item("uuid-old", "", _ms(T0), _ms(T0 + timedelta(hours=1))),
+    ])
+    repo.upsert_feed(acc.id, "feed-old", {
+        "title": "补的标题", "start_at": T0 + timedelta(minutes=5),
+    })
+    merged = repo.merged(acc.id)
+    assert len(merged) == 1
+    assert merged[0]["live_title"] == "补的标题"
+    assert merged[0]["source"] == "danmakus+feed"
+
+
+def test_merged_two_days_sessions_not_merged(db):
+    acc = _mk_account(db)
+    repo = LiveSessionRepo(db)
+    repo.upsert_danmakus(acc.id, [
+        _dm_item("uuid-day1", "第一天", _ms(T0)),
+        _dm_item("uuid-day2", "第二天", _ms(T0 + timedelta(days=4))),
+    ])
+    merged = repo.merged(acc.id)
+    assert len(merged) == 2
+    assert [m["live_title"] for m in merged] == ["第一天", "第二天"]
+
+
+# ── M2：live_rcmd 卡片映射（fetcher） ──────────────────────────────
+
+def _live_rcmd_item():
+    inner = {
+        "type": 1,
+        "live_play_info": {
+            "room_id": 21452505, "uid": 434334701, "live_status": 1,
+            "title": "无穷无尽的魔兽但是前VRG",
+            "cover": "https://i0.hdslb.com/bfs/live/new_room_cover/x.jpg",
+            "online": 142512, "area_id": 236, "area_name": "主机游戏",
+            "parent_area_id": 6, "parent_area_name": "单机游戏",
+            "live_start_time": 1788699370, "live_id": 736525563447432921,
+            "link": "//live.bilibili.com/21452505?live_from=85002",
+        },
+    }
+    return {
+        "type": "DYNAMIC_TYPE_LIVE_RCMD",
+        "id_str": "1244945963532943364",
+        "modules": {
+            "module_author": {"pub_ts": 1788699970, "pub_time": ""},
+            "module_dynamic": {
+                "major": {"type": "MAJOR_TYPE_LIVE_RCMD",
+                          "live_rcmd": {"reserve_type": 0,
+                                        "content": json.dumps(inner)}},
+            },
+        },
+    }
+
+
+def test_map_live_rcmd_fields():
+    d = _map_live_rcmd(_live_rcmd_item(), mid=434334701)
+    assert d["type"] == "live"
+    assert d["platform_uid"] == "434334701"
+    assert d["platform_post_id"] == "1244945963532943364"
+    assert d["title"] == "无穷无尽的魔兽但是前VRG"
+    assert d["permalink"] == "https://live.bilibili.com/21452505"
+    assert d["published_at"] == datetime(2026, 9, 6, 12, 56, 10, tzinfo=timezone.utc)  # 开播秒级
+    body = json.loads(d["body_json"])
+    assert body["live_id"] == "736525563447432921"
+    assert body["room_id"] == "21452505"
+    assert body["area_name"] == "主机游戏"
+    assert body["parent_area_name"] == "单机游戏"
+    assert body["live_start_time"] == 1788699370
 
 
 # ── infer_category ────────────────────────────────────────────────

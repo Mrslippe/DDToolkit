@@ -235,6 +235,10 @@ def _num(v, cast):
         return None
 
 
+# 多源合并时主数据优先级（danmakus 字段最全 → feed 秒级开播 → self 观测兜底）
+_SOURCE_PRIORITY = {"danmakus": 3, "feed": 2, "self": 1}
+
+
 class LiveSessionRepo:
     """直播场次存取与多源合并。
 
@@ -333,38 +337,97 @@ class LiveSessionRepo:
     def merged(self, account_id: int) -> list[dict]:
         """多源合并视图（时间升序；字段集见 LiveSessionOut）。
 
-        - 表内场次为骨架（danmakus 标题/起止/分区/收益/峰值在线）；
-        - 快照推导场次（自观测，不落表）按 ±90min 窗口匹配补全；
-        - 未匹配快照 → source='self' 虚拟场次（self 观测到的 danmakus
-          未收录场次，如缺口期/未收录主播）。
+        合并规则（v0.9.x M2，分组式）：
+        - 表内场次（danmakus/feed）先分组：同一账号 start_at 相差 ≤90min 的
+          视为同一场次（danmakus 与 feed 互为去重/互补——B站 live_id 与
+          danmakus uuid 不同键，同一场直播会各有一行）；
+        - 分组主数据优先：danmakus > feed（标题/起止/分区/收益以主为准，
+          低优源仅补缺失字段）；
+        - self 快照推导场次（自观测，不落表）再按 ±90min 并入剩余分组：
+          补 end_at（若主缺）/ 标题兜底；未匹配快照 → source='self' 虚拟场次
+          （danmakus/feed 均未收录的场次，如 2024 缺口期/未收录主播）。
         """
         table_rows = self.list_by_account(account_id)
         snapshots = AccountStatSnapshotRepo(self.db).live_sessions(account_id)
         window = timedelta(minutes=self.MERGE_WINDOW_MINUTES)
 
-        out: list[dict] = []
-        used: set[int] = set()
+        groups: list[tuple[dict, set[str], str]] = []   # (out, sources, primary)
+        for row in table_rows:
+            grp = self._find_group(groups, row.start_at, window)
+            if grp is None:
+                groups.append(self._group_from_row(row))
+                continue
+            self._merge_row_into_group(grp, row)
         for snap in snapshots:
-            match_idx = None
-            best_gap = None
-            for i, row in enumerate(table_rows):
-                if i in used:
-                    continue
-                gap = abs((row.start_at - snap["start_at"]).total_seconds())
-                if gap > window.total_seconds():
-                    continue
-                if best_gap is None or gap < best_gap:
-                    best_gap, match_idx = gap, i
-            if match_idx is not None:
-                used.add(match_idx)
-                out.append(self._merge_row(table_rows[match_idx], snap))
-            else:
-                out.append(self._snap_dict(snap))
-        for i, row in enumerate(table_rows):
-            if i not in used:
-                out.append(self._row_dict(row))
+            grp = self._find_group(groups, snap["start_at"], window)
+            if grp is None:
+                groups.append(self._group_from_snap(snap))
+                continue
+            self._merge_snap_into_group(grp, snap)
+        out = [g for g, _srcs, _prim in groups]
         out.sort(key=lambda s: s["start_at"])
         return out
+
+    def _find_group(self, groups, start_at: datetime,
+                    window: timedelta) -> tuple[dict, set[str], str] | None:
+        """找最近（±window 内）分组；贪心按最小 gap。"""
+        best, best_gap = None, None
+        for grp in groups:
+            gap = abs((start_at - grp[0]["start_at"]).total_seconds())
+            if gap > window.total_seconds():
+                continue
+            if best_gap is None or gap < best_gap:
+                best, best_gap = grp, gap
+        return best
+
+    def _group_from_row(self, row: LiveSession) -> tuple[dict, set[str], str]:
+        return self._row_dict(row), {row.source}, row.source
+
+    def _group_from_snap(self, snap: dict) -> tuple[dict, set[str], str]:
+        return self._snap_dict(snap), {"self"}, "self"
+
+    def _merge_row_into_group(self, grp: tuple[dict, set[str], str], row: LiveSession) -> None:
+        """表内行并入分组：主数据优先（danmakus > feed），低优仅补缺失字段。"""
+        g, srcs, primary = grp
+        srcs.add(row.source)
+        if _SOURCE_PRIORITY.get(row.source, 0) > _SOURCE_PRIORITY.get(primary, 0):
+            grp[2] = row.source
+            g.update(self._row_dict(row))       # 高优主字段整体替换（含 start/end/标题/分区）
+        else:
+            if row.title and not g["live_title"]:
+                g["live_title"] = row.title
+            if row.area_name and not g["area_name"]:
+                g["area_name"] = row.area_name
+            if row.parent_area_name and not g["parent_area_name"]:
+                g["parent_area_name"] = row.parent_area_name
+            if row.room_id and not g["room_id"]:
+                g["room_id"] = row.room_id
+            if row.live_id and not g["live_id"]:
+                g["live_id"] = row.live_id
+            if row.end_at and not g["end_at"]:
+                g["end_at"] = row.end_at
+                self._apply_duration(g)
+        g["source"] = self._join_sources(srcs)
+
+    def _merge_snap_into_group(self, grp: tuple[dict, set[str], str], snap: dict) -> None:
+        """self 快照并入：补 end_at（若主缺）/ 标题兜底；不改主字段。"""
+        g, srcs, _primary = grp
+        srcs.add("self")
+        if snap["end_at"] is not None and g["end_at"] is None:
+            g["end_at"] = snap["end_at"]
+            self._apply_duration(g)
+        if snap["live_title"] and not g["live_title"]:
+            g["live_title"] = snap["live_title"]
+        g["source"] = self._join_sources(srcs)
+
+    @staticmethod
+    def _apply_duration(g: dict) -> None:
+        g["duration_minutes"] = int((g["end_at"] - g["start_at"]).total_seconds() // 60) \
+            if g["end_at"] else None
+
+    @staticmethod
+    def _join_sources(srcs: set[str]) -> str:
+        return "+".join(sorted(srcs, key=lambda s: -_SOURCE_PRIORITY.get(s, 0)))
 
     def _row_dict(self, row: LiveSession) -> dict:
         end_at = row.end_at if row.end_at else None
@@ -398,18 +461,6 @@ class LiveSessionRepo:
             "total_income": None,
             "max_online_count": None,
             "danmakus_count": None,
-        }
-
-    def _merge_row(self, row: LiveSession, snap: dict) -> dict:
-        """merged 骨架 = 表内场次；快照仅补 end_at（若表内缺失）/ 标题兜底。"""
-        end_at = row.end_at if row.end_at else snap["end_at"]
-        return {
-            **self._row_dict(row),
-            "source": f"{row.source}+self",
-            "end_at": end_at,
-            "duration_minutes": int((end_at - row.start_at).total_seconds() // 60)
-            if end_at else None,
-            "live_title": row.title or snap["live_title"],
         }
 
 
