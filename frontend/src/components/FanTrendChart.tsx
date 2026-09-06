@@ -65,22 +65,42 @@ const DEFAULT_DAYS = 30
 /** Y 轴域节流（拖动 dataZoom 期间 250ms 才跟随一次；空闲 260ms 后精确） */
 const DOMAIN_THROTTLE_MS = 250
 
-/** 粉丝轴域：[min,max] 留 3% 余量并整 50；delta 轴域：对称 ±max×1.1（零线居中） */
-function fanDomain(values: (number | null)[]): [number, number] {
+/** 粉丝轴域：[min,max] 留 3% 余量并整 50；再扩到 interval 的整数倍——
+    显式 interval 后轴刻度均匀、端点必在刻度上（修复 200/300 混排） */
+function fanDomain(values: (number | null)[]): {
+  min: number
+  max: number
+  interval: number
+} {
   const nums = values.filter((v): v is number => v != null)
-  if (nums.length === 0) return [0, 1]
+  if (nums.length === 0) return { min: 0, max: 1, interval: 1 }
   const min = Math.min(...nums)
   const max = Math.max(...nums)
   const pad = Math.max((max - min) * 0.03, 5)
-  return [Math.floor((min - pad) / 50) * 50, Math.ceil((max + pad) / 50) * 50]
+  const min0 = Math.floor((min - pad) / 50) * 50
+  const max0 = Math.ceil((max + pad) / 50) * 50
+  const span = max0 - min0
+  const interval = Math.max(50, Math.ceil(span / 5 / 50) * 50)
+  return {
+    min: Math.floor(min0 / interval) * interval,
+    max: Math.ceil(max0 / interval) * interval,
+    interval,
+  }
 }
 
-function deltaDomain(values: (number | null)[]): [number, number] {
+/** delta 轴域：对称 ±cap（零线居中）；interval ≈ maxAbs/2（约 4 段），
+    cap = interval×2 → 域与刻度整倍、刻度对称均匀（0,±i,±2i） */
+function deltaDomain(values: (number | null)[]): {
+  min: number
+  max: number
+  interval: number
+} {
   const nums = values.filter((v): v is number => v != null)
-  if (nums.length === 0) return [-1, 1]
+  if (nums.length === 0) return { min: -1, max: 1, interval: 1 }
   const maxAbs = Math.max(...nums.map((v) => Math.abs(v)))
-  const cap = Math.ceil(maxAbs * 1.1)
-  return [-cap, cap]
+  const interval = Math.max(20, Math.ceil((maxAbs * 1.1) / 2.2))
+  const cap = interval * 2
+  return { min: -cap, max: cap, interval }
 }
 
 /** 「+1,234 / −56」（tooltip 与概览共用） */
@@ -143,9 +163,9 @@ function buildOption(data: DailyPoint[]): EChartsCoreOption {
     yAxis: [
       {
         type: 'value',
-        min: fDom[0],
-        max: fDom[1],
-        splitNumber: 4,
+        min: fDom.min,
+        max: fDom.max,
+        interval: fDom.interval,
         axisLine: { show: false },
         axisTick: { show: false },
         axisLabel: {
@@ -157,8 +177,9 @@ function buildOption(data: DailyPoint[]): EChartsCoreOption {
       },
       {
         type: 'value',
-        min: dDom[0],
-        max: dDom[1],
+        min: dDom.min,
+        max: dDom.max,
+        interval: dDom.interval,
         axisLine: { show: false },
         axisTick: { show: false },
         axisLabel: { color: MUTED, fontSize: 11 },
@@ -351,8 +372,8 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
     const dLoc = deltaDomain(slice.map((d) => d.delta))
     chart.setOption({
       yAxis: [
-        { min: f[0], max: f[1] },
-        { min: dLoc[0], max: dLoc[1] },
+        { min: f.min, max: f.max, interval: f.interval },
+        { min: dLoc.min, max: dLoc.max, interval: dLoc.interval },
       ],
     })
   }
