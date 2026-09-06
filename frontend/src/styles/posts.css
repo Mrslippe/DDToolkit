@@ -1978,26 +1978,6 @@
   word-break: break-all;
 }
 
-/* 礼物日（无场次但当日有礼物聚合——历史缺口/未收录主播兜底）：金棕单行 */
-.lc-gift-amt {
-  font-size: 11px;
-  line-height: 18px;
-  color: #a8883a;
-  padding-left: 1px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.lc-cell.gift .lc-day {
-  color: var(--c-text-sub);
-}
-
-.lc-cell.gift .lc-badge {
-  background: #ead9b0;
-  color: #8a6d1f;
-}
-
 /* 有场次的格子 hover 即弹浮层（M4）：淡粉描边提示可交互态 */
 .lc-cell.live {
   cursor: default;
@@ -2058,7 +2038,8 @@
 
 /* ── 场次浮层（M4：hover 格子 → 当日全量，项目浮层族 token）──
     fixed 定位（随格子 rect 快照，越界翻转）；关闭 = 离开宽限 120ms / Esc；
-    badge 复用统计胶囊配色类（lc-stat-pill--{key}）+ 紧凑尺寸覆写。 */
+    badge 复用统计胶囊配色类（lc-stat-pill--{key}）+ 紧凑尺寸覆写。
+    （礼物行 lc-pop-gift 已于 2026-09-07 随礼物展示一并退役） */
 
 .lc-pop {
   position: fixed;
@@ -2146,14 +2127,6 @@
   font-size: 11px;
   color: var(--c-text-sub);
   line-height: 14px;
-}
-
-.lc-pop-gift {
-  margin-top: 4px;
-  padding-top: 6px;
-  border-top: 1px dashed rgba(210, 216, 222, 0.5);
-  font-size: 11px;
-  color: #a8883a;
 }
 
 .lc-pop-src {
