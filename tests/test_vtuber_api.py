@@ -11,7 +11,7 @@ TestingSession = sessionmaker(bind=test_engine, autoflush=False, autocommit=Fals
 
 from app.main import app
 from app.core.database import Base, get_db
-from app.models.vtuber import VTuber, Account, Post, AccountStatSnapshot
+from app.models.vtuber import VTuber, Account, Post, AccountStatSnapshot, LiveSession
 from app.repositories.vtuber_repo import AccountStatSnapshotRepo
 
 
@@ -31,7 +31,7 @@ def setup_db():
     Base.metadata.create_all(bind=test_engine)
     db = TestingSession()
     try:
-        for t in (Post, AccountStatSnapshot, Account, VTuber):
+        for t in (Post, AccountStatSnapshot, LiveSession, Account, VTuber):
             db.query(t).delete()
         db.commit()
     finally:
@@ -417,3 +417,43 @@ def test_stat_snapshots_limit_and_404(client):
     assert client.get(f"/account/{aid}/stat-snapshots?limit=99999").status_code == 422
     # 账号不存在 → 404
     assert client.get("/account/99999/stat-snapshots").status_code == 404
+
+
+# ── 直播场次端点（v0.9.x 内容管道 M1） ───────────────────────────────
+
+def test_live_sessions_endpoint_merged(client):
+    vid = client.post("/vtuber", json={"name": "测试", "birthday": "09-07"}).json()["id"]
+    aid = client.post(
+        f"/vtuber/{vid}/accounts",
+        json={"platform": "bilibili", "platform_uid": "123"},
+    ).json()["id"]
+
+    db = TestingSession()
+    repo = AccountStatSnapshotRepo(db)
+    repo.add(aid, 1000, 1, "杂谈回", captured_at=datetime(2026, 9, 7, 12, 0, tzinfo=timezone.utc))
+    repo.add(aid, 1000, 0, None, captured_at=datetime(2026, 9, 7, 13, 0, tzinfo=timezone.utc))
+    # danmakus 表内场次（同窗口，live_id 匹配）
+    db.add(LiveSession(account_id=aid, source="danmakus", live_id="uuid-a",
+                       title="深夜杂谈", start_at=datetime(2026, 9, 7, 12, 5),
+                       end_at=None, area_name="虚拟日常", parent_area_name="虚拟主播",
+                       total_income=88.5, max_online_count=777, danmakus_count=66))
+    db.commit()
+    db.close()
+
+    resp = client.get(f"/account/{aid}/live-sessions")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 1                                 # 合并为一场，不双份
+    s = data[0]
+    assert s["source"] == "danmakus+self"
+    assert s["start_at"].endswith(("Z", "+00:00"))
+    assert s["end_at"].endswith(("Z", "+00:00"))          # 快照补 end
+    assert s["duration_minutes"] == 55
+    assert s["live_title"] == "深夜杂谈"
+    assert s["area_name"] == "虚拟日常"
+    assert s["total_income"] == 88.5
+    assert s["max_online_count"] == 777
+    assert s["category"] == "chat"                        # 标题「深夜杂谈」→ 杂谈
+    assert s["category_from"] == "title"
+    # 账号不存在 → 404
+    assert client.get("/account/99999/live-sessions").status_code == 404

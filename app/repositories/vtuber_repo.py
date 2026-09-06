@@ -6,7 +6,8 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.vtuber import (VTuber, Account, Post, AccountStatSnapshot,
-                               LiveGiftDay, ThirdpartyVtuber, VtuberEvent)
+                               LiveGiftDay, ThirdpartyVtuber, VtuberEvent,
+                               LiveSession)
 
 
 # ── VTuber ─────────────────────────────────────────────────────────
@@ -214,6 +215,202 @@ class AccountStatSnapshotRepo:
             sessions.append({"start_at": cur_start, "end_at": None,
                              "duration_minutes": None, "live_title": cur_title})
         return sessions
+
+
+# ── 直播场次（v0.9.x 内容管道 M1） ─────────────────────────────────
+
+def _ms_to_utc(ms: int) -> datetime | None:
+    """毫秒 epoch → naive UTC datetime（库内时间约定，见 devlog/021）。"""
+    try:
+        return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).replace(tzinfo=None)
+    except (ValueError, TypeError, OverflowError, OSError):
+        return None
+
+
+def _num(v, cast):
+    """数值字段容错转换（第三方数据不保证类型）。"""
+    try:
+        return cast(v) if v is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+class LiveSessionRepo:
+    """直播场次存取与多源合并。
+
+    - 表内：danmakus（M1 回填/同步）/ feed（M3 增量）固定化场次；
+    - 读取：merged() = 表内场次 ∪ self 快照推导场次（虚拟，不落表），
+      快照场次按 start_at ±90min 窗口与表内场次合并（表内为主数据，
+      快照补 end_at/标题，双源并存记 source='xxx+self'）；
+    - upsert_danmakus / upsert_feed 是其他数据源的接入接口（回填脚本、
+      M3 fetcher 均走这里），用于验证或补充 danmakus 缺失（缺口期/未收录主播）。
+    """
+
+    MERGE_WINDOW_MINUTES = 90   # 用户决策（2026-09-07）：±90min 合并窗口
+
+    def __init__(self, db: Session):
+        self.db = db
+
+    # ── 写入（其他数据源接入接口） ──
+
+    def _upsert(self, account_id: int, live_id: str, source: str,
+                fields: dict) -> bool:
+        """按 (account_id, live_id) 幂等 upsert；返回是否新增。"""
+        row = (
+            self.db.query(LiveSession)
+            .filter(LiveSession.account_id == account_id,
+                    LiveSession.live_id == live_id)
+            .first()
+        )
+        if row is None:
+            self.db.add(LiveSession(account_id=account_id, live_id=live_id,
+                                    source=source, **fields))
+            return True
+        for k, v in fields.items():
+            if v is not None:
+                setattr(row, k, v)
+        return False
+
+    def upsert_danmakus(self, account_id: int, items: list[dict]) -> dict:
+        """danmakus 场次批量写入（/api/v2/channel lives 数组，毫秒时间戳）。
+
+        幂等（live_id 唯一）；重跑刷新可变字段（收益/峰值在线等）。
+        """
+        added = updated = skipped = 0
+        for it in items or []:
+            live_id = str(it.get("liveId") or "")
+            try:
+                start_ms = int(it.get("startDate") or 0)
+            except (TypeError, ValueError):
+                start_ms = 0
+            if not live_id or start_ms <= 0:
+                skipped += 1
+                continue
+            start_at = _ms_to_utc(start_ms)
+            if start_at is None:
+                skipped += 1
+                continue
+            end_ms = _num(it.get("stopDate"), int) or 0
+            fields = {
+                "platform": "bilibili",
+                "title": str(it.get("title") or "").strip() or None,
+                "room_id": str(it.get("roomId") or "") or None,
+                "start_at": start_at,
+                "end_at": _ms_to_utc(end_ms) if end_ms > 0 else None,
+                "parent_area_name": it.get("parentArea"),
+                "area_name": it.get("area"),
+                "cover_url": it.get("coverUrl"),
+                "total_income": _num(it.get("totalIncome"), float),
+                "max_online_count": _num(it.get("maxOnlineCount"), int),
+                "danmakus_count": _num(it.get("danmakusCount"), int),
+                "raw_json": json.dumps(it, ensure_ascii=False, default=str),
+            }
+            if self._upsert(account_id, live_id, "danmakus", fields):
+                added += 1
+            else:
+                updated += 1
+        self.db.commit()
+        return {"added": added, "updated": updated, "skipped": skipped}
+
+    def upsert_feed(self, account_id: int, live_id: str, fields: dict) -> bool:
+        """B站 live_rcmd 场次接入接口（M3；live_id=B站 live_id 数字串）。
+
+        fields 含 title/start_at/end_at/parent_area_name/area_name/room_id/
+        cover_url 等（增量更新用 upsert_feed 可刷新字段）。
+        """
+        return self._upsert(account_id, live_id, "feed", fields)
+
+    # ── 读取 ──
+
+    def list_by_account(self, account_id: int) -> list[LiveSession]:
+        return (
+            self.db.query(LiveSession)
+            .filter(LiveSession.account_id == account_id)
+            .order_by(LiveSession.start_at.asc())
+            .all()
+        )
+
+    def merged(self, account_id: int) -> list[dict]:
+        """多源合并视图（时间升序；字段集见 LiveSessionOut）。
+
+        - 表内场次为骨架（danmakus 标题/起止/分区/收益/峰值在线）；
+        - 快照推导场次（自观测，不落表）按 ±90min 窗口匹配补全；
+        - 未匹配快照 → source='self' 虚拟场次（self 观测到的 danmakus
+          未收录场次，如缺口期/未收录主播）。
+        """
+        table_rows = self.list_by_account(account_id)
+        snapshots = AccountStatSnapshotRepo(self.db).live_sessions(account_id)
+        window = timedelta(minutes=self.MERGE_WINDOW_MINUTES)
+
+        out: list[dict] = []
+        used: set[int] = set()
+        for snap in snapshots:
+            match_idx = None
+            best_gap = None
+            for i, row in enumerate(table_rows):
+                if i in used:
+                    continue
+                gap = abs((row.start_at - snap["start_at"]).total_seconds())
+                if gap > window.total_seconds():
+                    continue
+                if best_gap is None or gap < best_gap:
+                    best_gap, match_idx = gap, i
+            if match_idx is not None:
+                used.add(match_idx)
+                out.append(self._merge_row(table_rows[match_idx], snap))
+            else:
+                out.append(self._snap_dict(snap))
+        for i, row in enumerate(table_rows):
+            if i not in used:
+                out.append(self._row_dict(row))
+        out.sort(key=lambda s: s["start_at"])
+        return out
+
+    def _row_dict(self, row: LiveSession) -> dict:
+        end_at = row.end_at if row.end_at else None
+        return {
+            "source": row.source,
+            "live_id": row.live_id,
+            "room_id": row.room_id,
+            "start_at": row.start_at,
+            "end_at": end_at,
+            "duration_minutes": int((end_at - row.start_at).total_seconds() // 60)
+            if end_at else None,
+            "live_title": row.title,
+            "parent_area_name": row.parent_area_name,
+            "area_name": row.area_name,
+            "total_income": row.total_income,
+            "max_online_count": row.max_online_count,
+            "danmakus_count": row.danmakus_count,
+        }
+
+    def _snap_dict(self, snap: dict) -> dict:
+        return {
+            "source": "self",
+            "live_id": None,
+            "room_id": None,
+            "start_at": snap["start_at"],
+            "end_at": snap["end_at"],
+            "duration_minutes": snap["duration_minutes"],
+            "live_title": snap["live_title"],
+            "parent_area_name": None,
+            "area_name": None,
+            "total_income": None,
+            "max_online_count": None,
+            "danmakus_count": None,
+        }
+
+    def _merge_row(self, row: LiveSession, snap: dict) -> dict:
+        """merged 骨架 = 表内场次；快照仅补 end_at（若表内缺失）/ 标题兜底。"""
+        end_at = row.end_at if row.end_at else snap["end_at"]
+        return {
+            **self._row_dict(row),
+            "source": f"{row.source}+self",
+            "end_at": end_at,
+            "duration_minutes": int((end_at - row.start_at).total_seconds() // 60)
+            if end_at else None,
+            "live_title": row.title or snap["live_title"],
+        }
 
 
 # ── Post ───────────────────────────────────────────────────────────

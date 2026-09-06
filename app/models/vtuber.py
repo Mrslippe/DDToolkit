@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 from sqlalchemy import (
-    Column, Integer, String, Boolean, Text, DateTime,
+    Column, Integer, String, Boolean, Text, DateTime, Float,
     ForeignKey, UniqueConstraint, Index,
 )
 from sqlalchemy.orm import relationship
@@ -81,6 +81,41 @@ class AccountStatSnapshot(Base):
     live_title = Column(String, nullable=True)            # 开播标题快照
     captured_at = Column(DateTime, nullable=False, default=_now)
     source = Column(String, nullable=False, default="self", server_default="self")
+
+
+class LiveSession(Base):
+    """直播场次（v0.9.x 内容管道 M1：danmakus 固定化场次为主源）。
+
+    - source：danmakus（历史全量）/ feed（M3，B站 live_rcmd 场次）
+    - self 快照推导场次**不落本表**（读取时合并，见 LiveSessionRepo.merged）
+    - live_id：平台级场次唯一键（danmakus uuid / B站 live_id）
+    - total_income：danmakus totalIncome（元，含礼物/SC/上舰口径为站点定义）
+    - raw_json：原始场次数据保真（档案定位）
+    """
+    __tablename__ = "live_sessions"
+    __table_args__ = (
+        UniqueConstraint("account_id", "live_id", name="uq_live_sessions_account_live"),
+        Index("ix_live_sessions_account_start", "account_id", "start_at"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
+    platform = Column(String, nullable=False, default="bilibili")
+    source = Column(String, nullable=False, default="danmakus")
+    live_id = Column(String, nullable=True)
+    title = Column(String, nullable=True)
+    room_id = Column(String, nullable=True)
+    start_at = Column(DateTime, nullable=False)
+    end_at = Column(DateTime, nullable=True)
+    parent_area_name = Column(String, nullable=True)
+    area_name = Column(String, nullable=True)
+    cover_url = Column(String, nullable=True)
+    total_income = Column(Float, nullable=True)
+    max_online_count = Column(Integer, nullable=True)
+    danmakus_count = Column(Integer, nullable=True)
+    raw_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=_now)
+    updated_at = Column(DateTime, default=_now, onupdate=_now)
 
 
 class LiveGiftDay(Base):

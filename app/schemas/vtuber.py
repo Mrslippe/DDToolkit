@@ -249,12 +249,31 @@ class FanTrendPoint(BaseModel):
 
 
 class LiveSessionOut(BaseModel):
-    """直播场次（P5：由 self 快照转移推导，5min 粒度近似）。"""
+    """直播场次（v0.9.x 内容管道 M1：danmakus 主源 + self 快照合并）。
+
+    旧字段（start_at/end_at/duration_minutes/live_title）语义不变；
+    M1 新增：source（danmakus/feed/self/danmakus+self）、live_id/room_id、
+    分区（parent_area_name/area_name）、收益（total_income）、峰值在线
+    （max_online_count）、弹幕数（danmakus_count）、类型推断（category/
+    category_from，服务端读取时计算不落库）。
+    """
     account_id: int
     start_at: datetime
     end_at: datetime | None = None
     duration_minutes: int | None = None
     live_title: str | None = None   # P7：场次标题（场次内最后一条非空快照标题）
+
+    # ── M1 内容管道（v0.9.x） ──
+    source: str = "self"                        # danmakus / feed / self / danmakus+self
+    live_id: str | None = None                  # danmakus uuid 或 B站 live_id
+    room_id: str | None = None
+    parent_area_name: str | None = None
+    area_name: str | None = None
+    total_income: float | None = None           # danmakus totalIncome（元）
+    max_online_count: int | None = None
+    danmakus_count: int | None = None
+    category: str = "live"                      # game/chat/watch/upload/song/fitness/radio/collab/special/live
+    category_from: str = "fallback"             # title/area/date/fallback
 
     @field_serializer("start_at", "end_at")
     def _ser_session_dt(self, v: datetime | None):

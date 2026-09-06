@@ -3,10 +3,18 @@
 已实测（ukamnads.icu / v2 spec）：
 - GET /api/v2/vup-list 公开免鉴权 ✅：VTuber 索引（透传 laplace vup-slim.json）
   {code, data: {mid: {name, type, room, group_name}}} — 企划/公会数据即此而来
-- GET /api/v2/account/channel-lives 401 需登录 🔒：直播场次列表，
-  有登录 token 后可启用（DANMAKUS_TOKEN）；弹幕 v3 端点同属鉴权列（backlog 暂缓）
+- GET /api/v2/channel?uId=&includeLive=true 公开免鉴权 ✅（v0.9.x M1 实测）：
+  单场次全量列表 {channel, lives: [APILiveInfo], fansHistory} —
+  title/startDate/stopDate/parentArea/area/totalIncome/maxOnlineCount/
+  danmakusCount，2021-10 起（七海 1193 场实测）；liveId(uuid) 为场次唯一键
+- GET /api/v2/account/channel-lives 401/需登录 🔒：账号贡献维度（token 配置位
+  DANMAKUS_TOKEN 保留，M1 端点已实测免登录，暂不需要）；弹幕 v3 端点同属
+  鉴权列（backlog 暂缓）
 
-落库：thirdparty_vtubers（source='danmakus_vup'），整表刷新（周级）。
+落库：
+- vup-list → thirdparty_vtubers（source='danmakus_vup'），整表刷新（周级）
+- channel lives → live_sessions（source='danmakus'，LiveSessionRepo.upsert_danmakus，
+  幂等 by (account_id, live_id)）
 """
 import logging
 from datetime import datetime, timezone
@@ -22,13 +30,48 @@ logger = logging.getLogger(__name__)
 
 DANMAKUS_BASE = "https://ukamnads.icu"
 VUP_LIST_PATH = "/api/v2/vup-list"
+CHANNEL_PATH = "/api/v2/channel"
 
-# 鉴权端点（本周不启用）：有 token 时在请求头携带
+# 鉴权端点（当前未启用）：有 token 时在请求头携带（Token: <token>，实测有效）
 DANMAKUS_TOKEN_ENV = "DANMAKUS_TOKEN"
+
+# WAF 过滤（实测 2026-09-07）：缺 Origin/Referer 或非浏览器 UA 会被直接 RST
+BROWSER_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) "
+                   "Chrome/126.0.0.0 Safari/537.36"),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "Origin": "https://ukamnads.icu",
+    "Referer": "https://ukamnads.icu/",
+}
+
+
+async def fetch_channel(mid: str, client: httpx.AsyncClient) -> dict | None:
+    """公开端点：单主播全量场次（channel + lives + fansHistory）。
+
+    返回原始 data dict（{channel, lives, fansHistory}）或 None；
+    调用方经 LiveSessionRepo.upsert_danmakus 落库。
+    """
+    resp = await client.get(
+        f"{DANMAKUS_BASE}{CHANNEL_PATH}",
+        params={"uId": mid, "includeLive": "true"},
+        headers=BROWSER_HEADERS,
+    )
+    if resp.status_code != 200:
+        logger.warning(f"danmakus channel 失败 HTTP {resp.status_code} mid={mid}")
+        return None
+    data = resp.json()
+    if not isinstance(data, dict) or data.get("code") != 200:
+        logger.warning(f"danmakus channel 响应异常 mid={mid}: "
+                       f"code={data.get('code') if isinstance(data, dict) else '?'}")
+        return None
+    payload = data.get("data")
+    return payload if isinstance(payload, dict) else None
 
 
 def _auth_headers(token: str | None) -> dict:
-    return {"Authorization": f"Bearer {token}"} if token else {}
+    return {"Token": token} if token else {}
 
 
 class DanmakusSource(ExternalSource):

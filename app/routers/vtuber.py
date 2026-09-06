@@ -13,7 +13,7 @@ from app.core.database import get_db
 from app.models.vtuber import VTuber, Post, Account
 from app.repositories.vtuber_repo import (
     VTuberRepo, AccountRepo, PostRepo, AccountStatSnapshotRepo,
-    LiveGiftDayRepo, ThirdpartyVtuberRepo, VtuberEventRepo,
+    LiveGiftDayRepo, ThirdpartyVtuberRepo, VtuberEventRepo, LiveSessionRepo,
 )
 from app.schemas.vtuber import (
     VTuberOut, VTuberCreate, VTuberUpdate,
@@ -24,6 +24,7 @@ from app.schemas.vtuber import (
     VtuberEventOut, VtuberEventCreate, FutureReservationOut,
 )
 from app.services import pool
+from app.services.live_type import infer_category
 from app.services.post_text import extract_post_text
 
 logger = logging.getLogger(__name__)
@@ -295,17 +296,30 @@ def fan_trend(account_id: int, db: Session = Depends(get_db)):
 
 @router.get("/account/{account_id}/live-sessions", response_model=list[LiveSessionOut])
 def live_sessions(account_id: int, db: Session = Depends(get_db)):
-    """直播场次（P5）：由 self 快照 live_status 转移推导（5min 粒度近似）。
+    """直播场次（v0.9.x 内容管道 M1：danmakus 主源 + self 快照合并）。
 
-    0→1 开场、1→0 收场；进行中场次 end_at=None。直播日程可据此展示。
-    P7：场次附带 live_title（场次内最后一条非空标题快照）。
+    - 表内场次（danmakus 历史全量，M1 回填；feed M3 增量）
+    - self 快照推导场次（5min 粒度，自观测兜底，±90min 窗口合并）
+    - 每场附带类型推断（title/area/date 信号 + fallback，读取时计算）
     """
     if not AccountRepo(db).get(account_id):
         raise HTTPException(404, f"Account id={account_id} 不存在")
-    return [
-        LiveSessionOut(account_id=account_id, **s)
-        for s in AccountStatSnapshotRepo(db).live_sessions(account_id)
-    ]
+    account = AccountRepo(db).get(account_id)
+    vtuber = account.vtuber if account else None
+    events = VtuberEventRepo(db).list_by_vtuber(vtuber.id) if vtuber else []
+    event_dates = [e.event_date for e in events]
+    out = []
+    for s in LiveSessionRepo(db).merged(account_id):
+        category, category_from = infer_category(
+            s["live_title"], s.get("area_name"), s.get("parent_area_name"),
+            s["start_at"],
+            birthday=vtuber.birthday if vtuber else None,
+            debut_date=vtuber.debut_date if vtuber else None,
+            event_dates=event_dates,
+        )
+        out.append(LiveSessionOut(account_id=account_id, **s,
+                                  category=category, category_from=category_from))
+    return out
 
 
 # ── 重要日期·大型活动（P7，v0.7.0） ────────────────────────────────
