@@ -2120,15 +2120,14 @@
   pointer-events: none;
 }
 
-/* ── 事件驱动转场（v0.9.19+）：Overlay 全权绘制期间的显隐 ──
-   .tran 期间：recharts 原生柱隐藏（Overlay 绘制替代，避免 overlay 半透明态
-   叠在终局态上出现重影）；主区曲线保持 recharts 原生实时（不隐藏、无扫过）；
-   转场结束 .tran 移除 → 原生终局态与 overlay 终态逐像素一致，无缝交接 */
-.fan-chart-body.tran .recharts-bar-rectangle {
+/* ── 柱动画单一通道（v0.9.22）：BarsOverlay 常驻绘制全部窗口柱 ──
+   recharts 原生柱永久隐藏（从不切换 → 无 flash/重影类竞态），
+   柱的唯一可见绘制 = Overlay；曲线/轴/brush 保持 recharts 原生实时 */
+.fan-chart-body .recharts-bar-rectangle {
   visibility: hidden;
 }
 
-/* 转场 Overlay：与 recharts svg 逐像素同框（body 的 padding-box 偏移 4px）
+/* 柱动画层：与 recharts svg 逐像素同框（body 的 padding-box 偏移 4px）
    pointer-events:none → 不干扰 tooltip/Brush/pan */
 .fan-transition-layer {
   position: absolute;
