@@ -1534,8 +1534,10 @@
    卡片 870 定宽上限居中（user: 定宽上限870，窗口拉宽宽度不变，缩窄以后再说）；
    网格 7 列 × 117.428574px + 2px 列/行距；格子 70.833336px 高 · 6px 圆角；
    类型格 = 20px 日期 + 34×16 胶囊（圆角106px）+ 12px 时间 + 14px/600 标题（行高16px）；
-   今天 = 灰底实底 + 1px 灰描边 rgba(118,118,118,1)；休息/补位 = 灰 opacity .3；待定 = 灰实底。
-   统计胶囊行不渲染（user: 统计行不要，数据留在 utils/liveType.ts）。 */
+   今天 = 1px 灰描边 rgba(118,118,118,1)（设计稿唯一描边语义）；
+   透明度 = 月份指示（user 2026-09-06）：非本月补位格 opacity 0.3，本月格一律实底，
+   与是否有直播无关；
+   导航行右侧 = 当月类型统计胶囊（frame 10_642 样式，本月非零项）。 */
 
 .live-calendar {
   display: flex;
@@ -1558,14 +1560,24 @@
   flex: none;
 }
 
-/* 月份导航条（frame 10_615/10_616：34px 高 · 三颗白胶囊紧贴：左箭头+月份+右箭头） */
+/* ── 导航行（frame 10_615）：左=月份胶囊组 · 右=类型统计胶囊 ── */
+
+.lc-nav-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 34px;
+  flex: none;
+}
+
+/* 月份导航组（frame 10_616：三颗白胶囊紧贴——左双箭头+月份+右双箭头） */
 .lc-nav {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 0;
-  height: 34px;
   width: fit-content;
-  flex: none;
 }
 
 .lc-nav-btn {
@@ -1598,17 +1610,152 @@
   justify-content: center;
   height: 25px;
   padding: 0 12px;
+  border: none;
   border-radius: 999px;
   background: #ffffff;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.14);
   flex: none;
+  color: #182e41;
+  cursor: pointer;
+}
+
+.lc-nav-pill:hover {
+  color: var(--c-primary-deep);
 }
 
 .lc-nav-text {
   font-size: 14px;
-  color: #182e41;
   font-variant-numeric: tabular-nums;
   white-space: pre;
+}
+
+/* ── 类型统计胶囊（frame 10_642：彩色胶囊 50×19 圆角88px + 19px 计数）── */
+
+.lc-stats {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.lc-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+}
+
+.lc-stat-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 50px;
+  height: 19px;
+  padding: 0 10px;
+  border-radius: 88px;
+  background: #96e1fe;
+  color: rgba(0, 0, 0, 1);
+  font-size: 14px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.lc-stat-num {
+  font-size: 19px;
+  line-height: 1;
+  color: var(--c-text-main);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 统计胶囊配色 = 各类型亮色（与格子胶囊同源） */
+.lc-stat-pill--chat    { background: #ffc853; }
+.lc-stat-pill--watch   { background: #e0b5ff; }
+.lc-stat-pill--game    { background: #96e1fe; }
+.lc-stat-pill--upload  { background: #84f89f; }
+.lc-stat-pill--song    { background: #ffc9c4; }
+.lc-stat-pill--radio   { background: #dccff7; }
+.lc-stat-pill--collab  { background: #bee9ec; }
+.lc-stat-pill--fitness { background: #ffd5b8; }
+.lc-stat-pill--special {
+  background: transparent;
+  border: 1px solid #d8645e;
+  color: #d8645e;
+  padding: 0 9px;
+}
+.lc-stat-pill--live    { background: #94a3b8; color: #fff; }
+
+/* ── 月份选择浮窗（点击月份胶囊弹出：年切换 + 12 月宫格）── */
+
+.lc-month-pop {
+  position: absolute;
+  top: 32px;
+  left: 0;
+  z-index: 40;
+  width: 238px;
+  padding: 10px;
+  border-radius: 12px;
+  background: var(--c-bg-card);
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  box-shadow: var(--shadow-dialog);
+}
+
+.lc-month-pop-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.lc-month-pop-head button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--c-text-main);
+  cursor: pointer;
+}
+
+.lc-month-pop-head button:hover {
+  background: var(--sel-bg);
+  color: var(--c-primary-deep);
+}
+
+.lc-month-pop-year {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--c-text-main);
+  font-variant-numeric: tabular-nums;
+}
+
+.lc-month-pop-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+
+.lc-month-pop-btn {
+  height: 30px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--c-text-main);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.lc-month-pop-btn:hover {
+  background: var(--sel-bg-hover);
+}
+
+.lc-month-pop-btn.on {
+  background: var(--sel-bg);
+  color: var(--c-primary-deep);
+  font-weight: 600;
 }
 
 /* 月历区（frame 10_659：表头与网格 gap 5px） */
@@ -1684,18 +1831,17 @@
   border-radius: 6px;
   overflow: hidden;
   min-width: 0;
-  background: #e9e9e9;                 /* 格底：默认灰（待定/补位） */
+  background: #e9e9e9;                 /* 格底：默认灰（待定） */
 }
 
-/* 待定（本月未来无场次）：灰底实底 */
+/* 待定（无场次）：灰底实底 */
 .lc-cell.tbd {
   background: #e9e9e9;
 }
 
-/* 休息（过去无场次）/ 补位（上/下月）：灰底 opacity 0.3（设计稿 frame 10_719） */
-.lc-cell.rest,
+/* 月份指示（user 2026-09-06）：非本月补位格整体 opacity 0.3，仅透明度不换底色——
+   有无场次的底色/内容照常，仅整体淡化以示月份归属。 */
 .lc-cell.pad {
-  background: #e9e9e9;
   opacity: 0.3;
 }
 
@@ -1806,11 +1952,9 @@
 .lc-tone-special .lc-time { color: rgba(216, 100, 94, 0.5); }
 .lc-tone-live    .lc-time { color: rgba(100, 116, 139, 0.5); }
 
-/* 灰格内容色：#727272 日期 */
-.lc-cell.rest .lc-day,
+/* 灰格内容色：#727272 日期（仅无场次待定与补位格；类型格日期继承主色） */
 .lc-cell.tbd .lc-day,
-.lc-cell.pad .lc-day,
-.lc-cell.today .lc-day {
+.lc-cell.pad .lc-day {
   color: #727272;
 }
 

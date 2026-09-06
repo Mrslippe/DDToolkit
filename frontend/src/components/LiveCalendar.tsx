@@ -1,8 +1,8 @@
-import { memo, useEffect, useMemo, useState } from 'react'
-import { ChevronLeft, ChevronRight, Loader2 } from 'lucide-react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Loader2 } from 'lucide-react'
 import type { LiveSession } from '../api/types'
 import { api } from '../api/api'
-import { inferLiveType } from '../utils/liveType'
+import { inferLiveType, LIVE_TYPE_ORDER } from '../utils/liveType'
 
 interface Props {
   /** 账号 id（null=无账号，显示空态）；切换账号自动重拉 */
@@ -13,6 +13,8 @@ interface Props {
 
 /** 英文表头（设计稿 Frame10612 规格） */
 const WEEKDAYS_EN = ['Mon.', 'Tue.', 'Wed.', 'Thu.', 'Fri.', 'Sat.', 'Sun.']
+/** 月份浮窗：12 月中文名 */
+const MONTH_CN = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月']
 
 function dayKeyIso(d: Date): string {
   const p = (n: number) => String(n).padStart(2, '0')
@@ -32,28 +34,33 @@ function fmtTimeEn(d: Date): string {
   return `${h12} ${h < 12 ? 'AM' : 'PM'}`
 }
 
-type CellState = 'live' | 'rest' | 'tbd' | 'pad'
+type CellState = 'live' | 'tbd'
 
 interface DayCell {
   date: Date
   key: string
-  /** 属于当前月（false=上/下月补位） */
+  /** 属于当前月（false=上/下月补位）——透明度只由它决定（user 2026-09-06） */
   inMonth: boolean
   sessions: LiveSession[]
   isToday: boolean
   state: CellState
 }
 
+/** 统计胶囊亮色（设计稿 frame 10_643-658：杂谈黄FFC853/观影紫E0B5FF/游戏蓝96E1FE/投稿绿84F89F）
+ *  颜色定义见 posts.css .lc-stat-pill--{key} 规则 */
+
 /**
  * 直播日历（v0.9.2 重建，严格按 docs/design/react-LiveCalendar Frame10612 规格）：
  * - 卡片 870 定宽上限居中（用户参数）；网格 7 列 × 117.428574px + 2px 列/行距，
- *   6 行 42 格（4.5px 列间隙由 space-between 均分，实测 834px 内 7×117.43+6×2）；
+ *   6 行 42 格；
  * - 格子 70.833336px 高 / 6px 圆角；
- * - 类型格：左上 20px 日期（同色系主色）+ 右上 34×16 胶囊（圆角 106px 亮色系）
- *   两端对齐；下方 12px 时间（主色 50% 淡化）+ 14px/600 标题（行高 16px，两行）；
- * - 今天 = 灰底实底 + 1px 灰描边 rgba(118,118,118,1)（设计稿唯一描边语义）；
- * - 上月补位/过去无场次 = 灰底 opacity 0.3（休息），未来无场次 = 灰底实底（待定）；
- * - 统计胶囊行：UI 暂不渲染（user: 统计行不要，数据留在 utils/liveType.ts）。
+ * - 今天 = 1px 灰描边 rgba(118,118,118,1)（设计稿唯一描边语义）；
+ * - 透明度 = 月份指示（user）：非本月补位格整体 opacity 0.3，本月格一律实底——
+ *   与是否有直播无关；
+ * - 导航栏（frame 10_616）：三颗白胶囊连排（左双箭头+月份+右双箭头），
+ *   中间点击弹月份选择浮窗（直接选年/月）；
+ * - 导航栏右侧 = 直播类型统计胶囊（frame 10_642：彩色胶囊 50×19 + 19px 计数），
+ *   统计当前显示月场次，按 LIVE_TYPE_ORDER 仅显示非零项。
  */
 const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: Props) {
   const now = new Date()
@@ -61,6 +68,21 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
   const [sessions, setSessions] = useState<LiveSession[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // 月份选择浮窗：独立年份游标（打开时同步 ym 的年）
+  const [monthPopOpen, setMonthPopOpen] = useState(false)
+  const [popYear, setPopYear] = useState(now.getFullYear())
+  const navRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!monthPopOpen) return
+    const onDown = (e: MouseEvent) => {
+      if (navRef.current && !navRef.current.contains(e.target as Node)) {
+        setMonthPopOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [monthPopOpen])
 
   useEffect(() => {
     if (accountId == null) return
@@ -101,7 +123,7 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
 
   const todayKey = dayKeyIso(now)
 
-  /** 42 格固定 6 行（设计稿）：首行从当月 1 号所在周一周起，含上月补位 */
+  /** 42 格固定 6 行（设计稿）：首行从当月 1 号所在周一周起，含上/下月补位 */
   const cells = useMemo(() => {
     const first = new Date(ym.y, ym.m, 1)
     const startWeekday = (first.getDay() + 6) % 7 // 周一=0
@@ -113,19 +135,43 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
       const list = byDay.get(key) ?? []
       const inMonth = d.getMonth() === ym.m
       const isToday = key === todayKey
-      // 今天优先：无论有无场次都归 tbd/live（避免 now 含时分使当天 d<now 误判为休息）
-      const state: CellState = list.length > 0 ? 'live' : inMonth ? (isToday || d >= now ? 'tbd' : 'rest') : 'pad'
+      // 状态：有场次=live；无场次=tbd。月份指示（pad 透明度）在渲染层叠加。
+      const state: CellState = list.length > 0 ? 'live' : 'tbd'
       out.push({ date: d, key, inMonth, sessions: list, isToday, state })
     }
     return out
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ym, byDay])
 
+  /** 当月类型统计（导航栏右侧统计胶囊，仅非零项） */
+  const monthStats = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const c of cells) {
+      if (!c.inMonth) continue
+      for (const s of c.sessions) {
+        const t = inferLiveType(s.live_title)
+        counts.set(t.key, (counts.get(t.key) ?? 0) + 1)
+      }
+    }
+    return LIVE_TYPE_ORDER.map((t) => ({ ...t, n: counts.get(t.key) ?? 0 })).filter((t) => t.n > 0)
+  }, [cells])
+
   const moveMonth = (delta: number) => {
+    setMonthPopOpen(false)
     setYm(({ y, m }) => {
       const d = new Date(y, m + delta, 1)
       return { y: d.getFullYear(), m: d.getMonth() }
     })
+  }
+
+  const openMonthPop = () => {
+    setPopYear(ym.y)
+    setMonthPopOpen((o) => !o)
+  }
+
+  const pickMonth = (m: number) => {
+    setYm({ y: popYear, m })
+    setMonthPopOpen(false)
   }
 
   const renderCell = (c: DayCell) => {
@@ -134,20 +180,16 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
 
     let toneCls = ''
     if (c.state === 'live' && t) toneCls = ` lc-tone-${t.key}`
-    else if (c.state === 'rest') toneCls = ' rest'
-    else if (c.state === 'tbd') toneCls = ' tbd'
-    else toneCls = ' pad'
+    else toneCls = ' tbd'
+    // 月份指示（透明度）：非本月一律 pad 淡化，与场次状态无关
+    if (!c.inMonth) toneCls += ' pad'
     if (c.isToday) toneCls += ' today'
 
     return (
       <div key={c.key} className={'lc-cell' + toneCls}>
         <div className="lc-cell-head">
           <span className="lc-day">{c.date.getDate()}</span>
-          {t ? (
-            <span className="lc-badge">{t.label}</span>
-          ) : (
-            <span className="lc-badge">{c.state === 'live' ? '直播' : c.state === 'rest' ? '休息' : '待定'}</span>
-          )}
+          <span className="lc-badge">{t ? t.label : '待定'}</span>
         </div>
         {first ? (
           <div className="lc-cell-body">
@@ -164,22 +206,61 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
       {/* 卡片标题（设计稿 613：16px #182E41） */}
       <div className="lc-title">直播日历</div>
 
-      {/* 月份导航条（设计稿 frame 10_616：三颗白胶囊紧贴——左箭头+月份+右箭头） */}
-      <div className="lc-nav">
-        <button type="button" title="上个月" className="lc-nav-btn" onClick={() => moveMonth(-1)}>
-          <ChevronLeft className="lc-nav-icon" />
-        </button>
-        <div className="lc-nav-pill">
-          <span className="lc-nav-text">{fmtMonth(ym.y, ym.m)}</span>
+      {/* 导航行：左=月份胶囊（点击弹选月浮窗） · 右=当月类型统计胶囊（frame 10_642） */}
+      <div className="lc-nav-row">
+        <div className="lc-nav" ref={navRef}>
+          <button type="button" title="上个月" className="lc-nav-btn" onClick={() => moveMonth(-1)}>
+            <ChevronsLeft className="lc-nav-icon" />
+          </button>
+          <button type="button" className="lc-nav-pill" title="选择月份" onClick={openMonthPop}>
+            <span className="lc-nav-text">{fmtMonth(ym.y, ym.m)}</span>
+          </button>
+          <button type="button" title="下个月" className="lc-nav-btn" onClick={() => moveMonth(1)}>
+            <ChevronsRight className="lc-nav-icon" />
+          </button>
+
+          {/* 月份选择浮窗：年切换 + 12 月宫格 */}
+          {monthPopOpen && (
+            <div className="lc-month-pop">
+              <div className="lc-month-pop-head">
+                <button type="button" title="上一年" onClick={() => setPopYear((y) => y - 1)}>
+                  <ChevronLeft className="size-4" />
+                </button>
+                <span className="lc-month-pop-year">{popYear}年</span>
+                <button type="button" title="下一年" onClick={() => setPopYear((y) => y + 1)}>
+                  <ChevronRight className="size-4" />
+                </button>
+              </div>
+              <div className="lc-month-pop-grid">
+                {MONTH_CN.map((name, i) => (
+                  <button
+                    key={name}
+                    type="button"
+                    className={`lc-month-pop-btn${i === ym.m && popYear === ym.y ? ' on' : ''}`}
+                    onClick={() => pickMonth(i)}
+                  >
+                    {name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
-        <button type="button" title="下个月" className="lc-nav-btn" onClick={() => moveMonth(1)}>
-          <ChevronRight className="lc-nav-icon" />
-        </button>
+
+        {/* 当月类型统计胶囊（彩色胶囊 + 计数，设计稿 frame 10_642） */}
+        <div className="lc-stats">
+          {monthStats.map((t) => (
+            <div key={t.key} className="lc-stat">
+              <span className={`lc-stat-pill lc-stat-pill--${t.key}`}>{t.label}</span>
+              <span className="lc-stat-num">{t.n}</span>
+            </div>
+          ))}
+        </div>
       </div>
 
       {/* 月历区（设计稿 frame 10_659：表头与网格 gap 5px） */}
       <div className="lc-body">
-        {/* 星期表头（Mon.~Sun.，7 等分 14px #727272） */}
+        {/* 星期表头（Mon.~Sun.，14px #727272） */}
         <div className="lc-weekdays">
           {WEEKDAYS_EN.map((w) => (
             <div key={w} className="lc-weekday">{w}</div>
