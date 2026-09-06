@@ -88,6 +88,9 @@ const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3)
 
 type RectGeom = { x: number; y: number; w: number; h: number }
 
+/** 拖动中开关（BarShape 通过 pumpBar 注入，周知循环直接吸附） */
+const barDragging = { on: false }
+
 /** 单柱 rAF tick：出场与坐标插值并行推进（帧率无关：按真实 Δt 推进） */
 function barTick(date: string, now: number) {
   const el = barEls.get(date)
@@ -108,14 +111,22 @@ function barTick(date: string, now: number) {
     barProgress.set(date, p)
   }
 
-  // ② 坐标插值：剩余差值按 Δt/MOVE_MS 比例推进（指数收敛，帧率无关）
-  const k = Math.min(1, dt / BAR_MOVE_MS)
-  if (Math.abs(cur.x - target.x) > 0.5 || Math.abs(cur.y - target.y) > 0.5 || Math.abs(cur.w - target.w) > 0.5 || Math.abs(cur.h - target.h) > 0.5) {
-    cur.x += (target.x - cur.x) * k
-    cur.y += (target.y - cur.y) * k
-    cur.w += (target.w - cur.w) * k
-    cur.h += (target.h - cur.h) * k
+  if (!barDragging.on) {
+    // ② 坐标插值（非拖动态）：剩余差值按 Δt/MOVE_MS 比例推进（指数收敛）
+    const k = Math.min(1, dt / BAR_MOVE_MS)
+    if (Math.abs(cur.x - target.x) > 0.5 || Math.abs(cur.y - target.y) > 0.5 || Math.abs(cur.w - target.w) > 0.5 || Math.abs(cur.h - target.h) > 0.5) {
+      cur.x += (target.x - cur.x) * k
+      cur.y += (target.y - cur.y) * k
+      cur.w += (target.w - cur.w) * k
+      cur.h += (target.h - cur.h) * k
+    } else {
+      cur.x = target.x
+      cur.y = target.y
+      cur.w = target.w
+      cur.h = target.h
+    }
   } else {
+    // 拖动中：全量吸附（存量柱贴目标立即显示，不做跨图漂移——漂移=新柱误从下方长距离插值）
     cur.x = target.x
     cur.y = target.y
     cur.w = target.w
@@ -242,9 +253,10 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
     },
     [],
   )
-  /** 拖动结束统一收尾：只关 recharts 内置动画标记（生长动画由 BarShape 自身负责） */
+  /** 拖动结束统一收尾：只关 recharts 内置动画标记 + 柱恢复平滑收敛 */
   const settleDrag = () => {
     setDragging(false)
+    barDragging.on = false
   }
 
   useEffect(() => {
@@ -333,6 +345,7 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
     }
     setPanning(true)
     setDragging(true) // 一次性关动画，拖动期间不再翻转
+    barDragging.on = true // 柱动画吸附模式：拖动中存量柱贴目标，禁止跨图漂移
   }
 
   useEffect(() => {
@@ -368,6 +381,7 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
       }
       panRef.current = null
       setPanning(false)
+      barDragging.on = false // 恢复平滑收敛（存量柱高度向最终 target 缓动）
       settleDrag() // 松开 → 重挂播放入场动画（新进入窗口的曲线/柱呈现）
     }
     window.addEventListener('mousemove', onMove)
@@ -579,6 +593,7 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
                     setRange(t)
                     // 跟手优化：拖动期间禁用动画，停顿 250ms 后 settle（恢复动画 + reveal 重挂）
                     setDragging(true)
+                    barDragging.on = true // 柱吸附模式（Brush 拖拽中）
                     window.clearTimeout(dragTimer.current)
                     dragTimer.current = window.setTimeout(settleDrag, 250)
                   })
