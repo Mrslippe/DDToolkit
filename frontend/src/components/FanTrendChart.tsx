@@ -56,117 +56,20 @@ function deltaDomain(values: (number | null)[]): [number, number] {
   return [-cap, cap]
 }
 
-/* ── 柱形动画（JS rAF 驱动，重挂免疫）──
+/* ── 柱形入场动画（事件驱动，重挂免疫）──
    recharts 拖动时内部 key=rectangle-x-y-value-i，窗口移动导致 BarShape 每帧
-   销毁重建；CSS@keyframes/组件 state 都会被下一帧实例取代而"动画约等于没有"。
-   双通道并行，共享每柱一条 rAF 循环：
-   ① 出场通道 barProgress：新柱 opacity .3→1 + scaleY .8→1（easeOutCubic 220ms）
-   ② 坐标通道 barCur→barTarget：Y 轴域随窗口重算 → y/height 跳变时平滑过渡
-      （新目标写入 barTarget，循环每帧把 rect 属性从 cur 插值到 target,
-        duration 280ms easeOutCubic）
-   · 模块级 Map 跨实例共享：重挂的新实例直接读到进度/当前坐标，从当前值延续
-   · 零 React 重渲染：动画直接操作 DOM（rect.setAttribute / style）
-   · 滚动/拖动期间 target 多帧变化：cur 始终从上次渲染值续走，不叠加不抖动 */
+   销毁重建。此前"rAF 双通道插值"每帧都参与：拖快时存量柱跨图漂移 + 每帧
+   插值计算 = 低帧率。
+   本方案回到事件驱动：
+   · React 直接渲染 x/y/width/height 几何——存量柱永远显示在正确位置（零漂移）
+   · 入场动画：只在【新 date 首次进入】时挂一帧初始态 CSS transition 起步，
+     「已入场 Set」防重放；重挂实例直接显示（不闪不漂不拖帧）
+   · 拖动中零额外计算：无插值、无 rAF 循环、无每帧 setAttribute */
 
-const BAR_REVEAL_MS = 220
-const BAR_MOVE_MS = 280
+/** 已播放入场动画的 date（模块级：重挂不重播） */
+const barAnimated = new Set<string>()
 
-/** 每柱出场进度（0→1） */
-const barProgress = new Map<string, number>()
-/** 每柱动画当前实际坐标（显示值，跨实例共享） */
-const barCur = new Map<string, { x: number; y: number; w: number; h: number }>()
-/** 每柱最新目标坐标（props 每次更新写入） */
-const barTarget = new Map<string, { x: number; y: number; w: number; h: number }>()
-/** 每柱当前活跃 <rect> 元素（重挂时替换） */
-const barEls = new Map<string, SVGRectElement | null>()
-/** 每柱 rAF 句柄（一次只跑一个循环） */
-const barRafs = new Map<string, number>()
-/** 每柱上一 tick 时间戳（帧率无关推进用） */
-const barLastTick = new Map<string, number>()
-
-const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3)
-
-type RectGeom = { x: number; y: number; w: number; h: number }
-
-/** 拖动中开关（BarShape 通过 pumpBar 注入，周知循环直接吸附） */
-const barDragging = { on: false }
-
-/** 单柱 rAF tick：出场与坐标插值并行推进（帧率无关：按真实 Δt 推进） */
-function barTick(date: string, now: number) {
-  const el = barEls.get(date)
-  const cur = barCur.get(date)
-  const target = barTarget.get(date)
-  if (!el || !cur || !target) {
-    barRafs.set(date, window.requestAnimationFrame((t) => barTick(date, t)))
-    return
-  }
-  const last = barLastTick.get(date) ?? now
-  const dt = Math.min(Math.max(now - last, 0), 64) // clamp：切后台回来不瞬移
-  barLastTick.set(date, now)
-
-  // ① 出场进度（新柱 0 起步；已出现=1 不再动）
-  let p = barProgress.get(date) ?? 0
-  if (p < 1) {
-    p = Math.min(1, p + dt / BAR_REVEAL_MS)
-    barProgress.set(date, p)
-  }
-
-  if (!barDragging.on) {
-    // ② 坐标插值（非拖动态）：剩余差值按 Δt/MOVE_MS 比例推进（指数收敛）
-    const k = Math.min(1, dt / BAR_MOVE_MS)
-    if (Math.abs(cur.x - target.x) > 0.5 || Math.abs(cur.y - target.y) > 0.5 || Math.abs(cur.w - target.w) > 0.5 || Math.abs(cur.h - target.h) > 0.5) {
-      cur.x += (target.x - cur.x) * k
-      cur.y += (target.y - cur.y) * k
-      cur.w += (target.w - cur.w) * k
-      cur.h += (target.h - cur.h) * k
-    } else {
-      cur.x = target.x
-      cur.y = target.y
-      cur.w = target.w
-      cur.h = target.h
-    }
-  } else {
-    // 拖动中：全量吸附（存量柱贴目标立即显示，不做跨图漂移——漂移=新柱误从下方长距离插值）
-    cur.x = target.x
-    cur.y = target.y
-    cur.w = target.w
-    cur.h = target.h
-  }
-
-  el.setAttribute('x', String(cur.x))
-  el.setAttribute('y', String(cur.y))
-  el.setAttribute('width', String(cur.w))
-  el.setAttribute('height', String(cur.h))
-  const ease = easeOutCubic(p)
-  el.style.opacity = String(0.3 + 0.7 * ease)
-  el.style.transform = `scaleY(${0.8 + 0.2 * ease})`
-  el.style.transformOrigin = `${cur.x + cur.w / 2}px ${cur.y + cur.h}px`
-
-  const settled = p >= 1 && cur.x === target.x && cur.y === target.y && cur.w === target.w && cur.h === target.h
-  if (settled) {
-    barRafs.delete(date)
-    barLastTick.delete(date)
-  } else {
-    barRafs.set(date, window.requestAnimationFrame((t) => barTick(date, t)))
-  }
-}
-
-/** 注册/更新动画状态：props 每帧变化时调用（重挂/移窗总计通用） */
-function pumpBar(date: string, geom: RectGeom, fresh: boolean) {
-  if (fresh) {
-    barCur.set(date, { ...geom })
-    barTarget.set(date, { ...geom })
-    if (!barProgress.has(date)) barProgress.set(date, 0)
-  } else {
-    barTarget.set(date, { ...geom })
-    const cur = barCur.get(date)
-    if (!cur) barCur.set(date, { ...geom })
-  }
-  if (!barRafs.has(date)) {
-    barLastTick.delete(date)
-    barRafs.set(date, window.requestAnimationFrame((t) => barTick(date, t)))
-  }
-}
+const BAR_REVEAL_MS = 260
 
 interface BarShapeProps {
   x?: number
@@ -178,45 +81,39 @@ interface BarShapeProps {
 
 const BarShape = memo(function BarShape({ x = 0, y = 0, width = 0, height = 0, payload }: BarShapeProps) {
   const date = payload?.date
-  const rectRef = useRef<SVGRectElement>(null)
+
+  // 入场动画：仅首次出现时起步（CSS transition 一次性），重挂后 from 态不生效
+  // ——用 entered 三元 CSS 类表达：初始按"是否已入场"决定起点；挂载后立即切到常态
+  const wasAnimated = date ? barAnimated.has(date) : true
+  const [entered, setEntered] = useState(wasAnimated)
 
   useLayoutEffect(() => {
-    const el = rectRef.current
-    if (!el || !date) return
-    const isFresh = !barProgress.has(date)
-    barEls.set(date, el)
-    // 注册/更新状态，启动循环（已跑则直接更新 target）
-    pumpBar(date, { x, y, w: width, h: height }, isFresh)
-    // ★ 同步写入当前几何：消掉"重挂后 rect 空几何 → rAF 下一帧才写"的空窗闪动
-    const cur = barCur.get(date)
-    if (cur) {
-      el.setAttribute('x', String(cur.x))
-      el.setAttribute('y', String(cur.y))
-      el.setAttribute('width', String(cur.w))
-      el.setAttribute('height', String(cur.h))
-      const p = barProgress.get(date) ?? 1
-      const ease = easeOutCubic(Math.min(1, p))
-      el.style.opacity = String(0.3 + 0.7 * ease)
-      el.style.transform = `scaleY(${0.8 + 0.2 * ease})`
-      el.style.transformOrigin = `${cur.x + cur.w / 2}px ${cur.y + cur.h}px`
-    }
-    return () => {
-      if (barEls.get(date) === el) barEls.set(date, null)
-    }
-    // 坐标变化不重启：仅在 target 系上更新（pumpBar 内条件启动）
+    if (date && wasAnimated) return // 已出现：直接常态
+    if (date) barAnimated.add(date)
+    // 下一帧切换 → CSS transition 从 from→to 播一次
+    const raf = window.requestAnimationFrame(() => setEntered(true))
+    return () => window.cancelAnimationFrame(raf)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [date, x, y, width, height])
+  }, [date])
 
-  // 几何由 rAF 循环直接写 DOM（React 不设 x/y/width/height——
-  // 避免 React 的 attribute 写入与插值循环竞争；首帧循环启动前由
-  // useLayoutEffect 里的 pumpBar 立即把 cur 写上去，无空白帧）
   return (
     <g>
       <rect
-        ref={rectRef}
+        x={x}
+        y={y}
+        width={width}
+        height={height}
         fill={payload?.barFill ?? PINK}
         rx={0}
-        style={{ pointerEvents: 'none' }}
+        style={{
+          opacity: entered ? 1 : 0.3,
+          transform: entered ? 'scaleY(1)' : 'scaleY(0.8)',
+          transformOrigin: `${x + width / 2}px ${y + height}px`,
+          transition: entered
+            ? `opacity ${BAR_REVEAL_MS}ms ease-out, transform ${BAR_REVEAL_MS}ms ease-out`
+            : 'none',
+          pointerEvents: 'none',
+        }}
       />
     </g>
   )
@@ -253,10 +150,9 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
     },
     [],
   )
-  /** 拖动结束统一收尾：只关 recharts 内置动画标记 + 柱恢复平滑收敛 */
+  /** 拖动结束统一收尾：只关 recharts 内置动画标记（柱入场动画由 BarShape 自身负责） */
   const settleDrag = () => {
     setDragging(false)
-    barDragging.on = false
   }
 
   useEffect(() => {
@@ -344,8 +240,7 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
       raf: 0,
     }
     setPanning(true)
-    setDragging(true) // 一次性关动画，拖动期间不再翻转
-    barDragging.on = true // 柱动画吸附模式：拖动中存量柱贴目标，禁止跨图漂移
+    setDragging(true) // 一次性关 recharts 内置动画，拖动期间不再翻转
   }
 
   useEffect(() => {
@@ -381,8 +276,7 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
       }
       panRef.current = null
       setPanning(false)
-      barDragging.on = false // 恢复平滑收敛（存量柱高度向最终 target 缓动）
-      settleDrag() // 松开 → 重挂播放入场动画（新进入窗口的曲线/柱呈现）
+      settleDrag() // 松开 → 恢复 recharts 内置动画（曲线过渡；柱入场动画由自身负责）
     }
     window.addEventListener('mousemove', onMove)
     window.addEventListener('mouseup', onUp)
@@ -591,9 +485,8 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
                     const t = brushTargetRef.current
                     if (!t) return
                     setRange(t)
-                    // 跟手优化：拖动期间禁用动画，停顿 250ms 后 settle（恢复动画 + reveal 重挂）
+                    // 跟手优化：拖动期间禁用 recharts 内置动画，停顿 250ms 后 settle
                     setDragging(true)
-                    barDragging.on = true // 柱吸附模式（Brush 拖拽中）
                     window.clearTimeout(dragTimer.current)
                     dragTimer.current = window.setTimeout(settleDrag, 250)
                   })
