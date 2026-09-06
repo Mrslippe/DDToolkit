@@ -153,7 +153,7 @@ const BarsOverlay = memo(function BarsOverlay({ dates }: { dates: string[] }) {
   const rects: ReactElement[] = []
   for (const d of dates) {
     const g = curGeom.get(d)
-    if (!g) return
+    if (!g) continue
     nextPrev.set(d, g)
     const until = enterUntil.get(d)
     if (until != null) {
@@ -174,7 +174,7 @@ const BarsOverlay = memo(function BarsOverlay({ dates }: { dates: string[] }) {
             }}
           />,
         )
-        return
+        continue
       }
       enterUntil.delete(d) // 入场期满 → morph 接管（填充态释放）
     }
@@ -196,7 +196,7 @@ const BarsOverlay = memo(function BarsOverlay({ dates }: { dates: string[] }) {
           }}
         />,
       )
-      return
+      continue
     }
     // 既有柱：高度 morph（几何差异 → scale 差；稳定帧 → none 过渡取平）
     const p = prevGeomRef.current.get(d)
@@ -485,9 +485,9 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
         )}
         {!loading && !error && capacity.length > 0 && (
           <>
-          /* initialDimension：卡身定宽 870（内容宽 838）、体高 372（460-17-10-21-24-8-8），
+          {/* initialDimension：卡身定宽 870（内容宽 838）、体高 372（460-17-10-21-24-8-8），
              避免首帧 -1×-1 触发 recharts "should be greater than 0" 警告刷屏；
-             ResizeObserver 随后校正为实测值 */
+             ResizeObserver 随后校正为实测值 */}
           <ResponsiveContainer
             width="100%"
             height="100%"
@@ -545,7 +545,8 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
                 }}
                 labelFormatter={(label) => String(label)}
                 formatter={(value, name) => {
-                  if (name === 'fans') return [`${formatCount(Number(value))} 粉`, '粉丝数']
+                  /* 注意：recharts 传入的是系列 name 属性（'粉丝数'/'日增粉'），不是 dataKey */
+                  if (name === '粉丝数') return [`${formatCount(Number(value))} 粉`, '粉丝数']
                   return [fmtDelta(value as number | null), '日增粉']
                 }}
               />
