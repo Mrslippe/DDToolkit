@@ -273,6 +273,11 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
   const [preset, setPreset] = useState<PresetKey>('3m')
   /** 当前窗口 [startIndex, endIndex]（容量数据索引；null=未就绪） */
   const [range, setRange] = useState<[number, number] | null>(null)
+  /** 重置次数：重置时给 Brush 换 key 强制重挂——
+      recharts 3.8 受控 Brush 的 props→store 同步 effect（BrushInternal L803）
+      在受控更新下不可靠；重挂 = 同步 effect 必跑 = store 必写 = 主图必切；
+      pan/Brush 拖动走 onChange 派发，不受 key 影响 */
+  const [resetEpoch, setResetEpoch] = useState(0)
   // Brush onChange rAF 节流：target 暂存 + 帧内提交
   const brushRafRef = useRef(0)
   const brushTargetRef = useRef<[number, number] | null>(null)
@@ -499,15 +504,15 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
             <button
               type="button"
               className="fan-chart-reset"
-              /* 直接设默认窗口而非 setRange(null)：null 不会触发上面的
-                 [capacity] effect 重设 → range 永远为 null → 图表卡在
-                 全量数据且按钮消失（重置失效） */
-              onClick={() =>
+              /* 直接设默认窗口（不经 null——null 会走"失控"挂载路径）；
+                 同时 bump resetEpoch → Brush 重挂 → recharts 受控同步必执行 */
+              onClick={() => {
                 setRange([
                   Math.max(0, capacity.length - DEFAULT_DAYS),
                   capacity.length - 1,
                 ])
-              }
+                setResetEpoch((e) => e + 1)
+              }}
             >
               <CalendarRange className="size-3.5" />
               重置窗口
@@ -624,7 +629,7 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
                   dataKey 需为数值键（fans），字符串键画不出图；
                   窗口 = 默认最近 30 天，可拖滑块/拉伸两端缩放 */}
               <Brush
-                key={`brush-${preset}-${capacity.length}`}
+                key={`brush-${preset}-${capacity.length}-${resetEpoch}`}
                 dataKey="fans"
                 height={56}
                 stroke={PINK}
