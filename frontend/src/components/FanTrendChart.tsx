@@ -482,7 +482,7 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
 
   return (
     <div className="fan-chart">
-      {/* 卡片标题（与直播日历同规格 16px #182e41） */}
+      {/* 卡片标题（与直播日历/归档卡同规格 16.5/600/--c-text-main） */}
       <div className="fc-title">粉丝趋势</div>
 
       {/* 头部：左=1d/7d/30d 概览 · 右=容量档位按钮 + 窗口回退 */}
