@@ -1,5 +1,5 @@
 import { memo, useMemo, useState } from 'react'
-import { ChevronLeft, ChevronRight, X } from 'lucide-react'
+import { CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react'
 import type { GiftDay, LiveSession } from '../api/types'
 import { inferLiveType, LIVE_TYPE_ORDER } from '../utils/liveType'
 
@@ -8,27 +8,25 @@ interface Props {
   giftDays: GiftDay[]
 }
 
-/** 「2026-09-06」 */
-const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
-const MAX_CELL_ROWS = 2
+/** 英文表头（设计稿 Frame101 规格） */
+const WEEKDAYS_EN = ['Mon.', 'Tue.', 'Wed.', 'Thu.', 'Fri.', 'Sat.', 'Sun.']
 
-/** 「YYYY-MM-DD」 */
 function dayKeyIso(d: Date): string {
   const p = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
 
-/** 「26/09/06」 */
-function fmtDateShort(d: Date): string {
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${String(d.getFullYear()).slice(2)}/${p(d.getMonth() + 1)}/${p(d.getDate())}`
+/** 「2026年09月」（月份胶囊内文字） */
+function fmtMonth(y: number, m: number): string {
+  return `${y}年${String(m + 1).padStart(2, '0')}月`
 }
 
-/** 「8:00 PM」 */
+/** 「8 PM」（设计稿时间格式） */
 function fmtTimeEn(d: Date): string {
+  if (Number.isNaN(d.getTime())) return '--:--'
   const h = d.getHours()
   const h12 = h % 12 === 0 ? 12 : h % 12
-  return `${h12}:00 ${h < 12 ? 'AM' : 'PM'}`
+  return `${h12} ${h < 12 ? 'AM' : 'PM'}`
 }
 
 function fmtTime(iso: string): string {
@@ -50,33 +48,32 @@ function fmtDuration(min: number | null): string {
   return h > 0 ? `${h}小时${m ? `${m}分` : ''}` : `${m}分`
 }
 
+type CellState = 'live' | 'rest' | 'tbd' | 'pad'
+
 interface DayCell {
   date: Date
   key: string
+  /** 属于当前月（false=上/下月补位） */
+  inMonth: boolean
   sessions: LiveSession[]
   gift?: GiftDay
-}
-
-interface WeekRow {
-  weekKey: string          // 该周周一 key
-  days: DayCell[]
-  /** 周内是否含今天（当前周高亮） */
-  isCurrent: boolean
+  isToday: boolean
+  state: CellState
 }
 
 /**
- * 直播日历（v0.8.0 重设计，照参考图周行列表）：
- * - 每行一周 7 格（周一~周日），从当前周开始向下排列过去各周（最新在上）；
- * - 顶部统计行：共 N 场 + 各类型彩色计数（9 类标签对齐参考图）；
- * - 格子：左上「26/09/06 周六」/ 类型彩签+时间 / 单行标题（最多 2 条 +N）；
- *   无直播日显示「休息」；当前周绿描边；礼物日保留金额角标；
- * - 点击格子 → 浮层（全量场次/起止/时长/礼物）；
- * - 翻周钮 ◀ ▶ 锚定查看的周（默认当前周）。
+ * 直播日历（v0.9.0 重构，严格按 docs/design/react-LiveCalendar Frame101 规格）：
+ * - 月历：周一~周日 7 列；上月/下月补位格按设计稿——上月补位=灰半透明（休息），
+ *   下月补位=灰实底（待定）；
+ * - 格子 58px 高 / 6px 圆角 / 类型色系（整格浅色底 + 同色系日期/时间/标题 + 胶囊）：
+ *   设计稿 4 原色（游戏蓝/观影粉/投稿绿/杂谈黄）+ 同风格扩展 5 色；
+ * - 格内只显示【首场】（时间+标题单行），其余场次收进鼠标 hover 浮层；
+ * - 今天 = 红描边格（设计稿唯一描边语义）；过去无场次 = 休息；未来无场次 = 待定；
+ * - 月份胶囊导航（白色胶囊 + 左右箭头，CSS 复刻设计稿）。
  */
 const LiveCalendar = memo(function LiveCalendar({ sessions, giftDays }: Props) {
   const now = new Date()
-  const [anchor, setAnchor] = useState<number>(0)   // 相对当前周的偏移（0=当前周, 1=上一周…）
-  const [openDay, setOpenDay] = useState<string | null>(null)
+  const [ym, setYm] = useState<{ y: number; m: number }>({ y: now.getFullYear(), m: now.getMonth() })
 
   const byDay = useMemo(() => {
     const m = new Map<string, LiveSession[]>()
@@ -100,15 +97,63 @@ const LiveCalendar = memo(function LiveCalendar({ sessions, giftDays }: Props) {
     return m
   }, [giftDays])
 
-  /** 当前周的周一 */
-  const currentMonday = useMemo(() => {
-    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-    const wd = (d.getDay() + 6) % 7   // 周一=0
-    d.setDate(d.getDate() - wd)
-    return d
-  }, [now.getFullYear(), now.getMonth(), now.getDate()])
+  const todayKey = dayKeyIso(now)
 
-  /** 全量场次统计（9 类计数 + 总场） */
+  /** 月历格子（含补位）：首行含月初前的周日补位，末行含月末后的补位 */
+  const cells = useMemo(() => {
+    const first = new Date(ym.y, ym.m, 1)
+    const startWeekday = (first.getDay() + 6) % 7   // 周一=0
+    const daysInMonth = new Date(ym.y, ym.m + 1, 0).getDate()
+    const out: DayCell[] = []
+    // 月初补位：上月最后几天
+    for (let i = startWeekday - 1; i >= 0; i--) {
+      const d = new Date(ym.y, ym.m, -i)
+      const key = dayKeyIso(d)
+      out.push({
+        date: d, key, inMonth: false,
+        sessions: byDay.get(key) ?? [], gift: giftByDay.get(key),
+        isToday: key === todayKey,
+        state: 'pad',
+      })
+    }
+    for (let day = 1; day <= daysInMonth; day++) {
+      const d = new Date(ym.y, ym.m, day)
+      const key = dayKeyIso(d)
+      const list = byDay.get(key) ?? []
+      const isToday = key === todayKey
+      // 状态：有场次=live；已过去无场次=休息；今天无场次/未来=待定（今天红描边+待定，设计稿「7 待定」格）
+      const state: CellState = list.length > 0 ? 'live' : (d < now ? 'rest' : 'tbd')
+      out.push({
+        date: d, key, inMonth: true,
+        sessions: list, gift: giftByDay.get(key),
+        isToday, state,
+      })
+    }
+    // 月末补位：下月前几天（填满最后一行）
+    while (out.length % 7 !== 0) {
+      const last = out[out.length - 1].date
+      const d = new Date(last)
+      d.setDate(d.getDate() + 1)
+      const key = dayKeyIso(d)
+      out.push({
+        date: d, key, inMonth: false,
+        sessions: byDay.get(key) ?? [], gift: giftByDay.get(key),
+        isToday: key === todayKey,
+        state: 'pad',
+      })
+    }
+    return out
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ym, byDay, giftByDay])
+
+  const moveMonth = (delta: number) => {
+    setYm(({ y, m }) => {
+      const d = new Date(y, m + delta, 1)
+      return { y: d.getFullYear(), m: d.getMonth() }
+    })
+  }
+
+  /** 统计行（保留上一版：总场 + 类型计数） */
   const stats = useMemo(() => {
     const counts = new Map<string, number>()
     let total = 0
@@ -120,80 +165,130 @@ const LiveCalendar = memo(function LiveCalendar({ sessions, giftDays }: Props) {
     return { total, counts }
   }, [sessions])
 
-  /** 可见周行：锚定周 + 向后 5 周（含更早历史；空周也渲染以保持网格完整性） */
-  const weeks: WeekRow[] = useMemo(() => {
-    const out: WeekRow[] = []
-    // 找到数据最早日期与当前周之间的行数上限（防御：最多 12 周）
-    let earliest: Date | null = null
-    for (const sess of sessions) {
-      const d = new Date(sess.start_at)
-      if (Number.isNaN(d.getTime())) continue
-      if (!earliest || d < earliest) earliest = d
-    }
-    const maxWeeks = 12
-    for (let off = anchor; off < anchor + 6 && off < maxWeeks; off++) {
-      const monday = new Date(currentMonday)
-      monday.setDate(monday.getDate() - off * 7)
-      const days: DayCell[] = []
-      let hasAny = false
-      for (let i = 0; i < 7; i++) {
-        const d = new Date(monday)
-        d.setDate(d.getDate() + i)
-        const key = dayKeyIso(d)
-        const list = byDay.get(key) ?? []
-        if (list.length > 0) hasAny = true
-        days.push({ date: d, key, sessions: list, gift: giftByDay.get(key) })
-      }
-      if (off > 0 && !hasAny && earliest) {
-        const e = new Date(earliest)
-        e.setHours(0, 0, 0, 0)
-        if (e > monday) break   // 数据已全部在更早之前，不再往下渲染
-      }
-      out.push({ weekKey: keyOf(monday), days, isCurrent: off === 0 })
-    }
-    return out
-  }, [sessions, byDay, giftByDay, anchor, currentMonday])
-
-  const moveWeek = (delta: number) => {
-    setOpenDay(null)
-    setAnchor((a) => Math.max(0, Math.min(11, a + delta)))
-  }
-
-  const resetWeek = () => {
-    setOpenDay(null)
-    setAnchor(0)
-  }
-
-  const openCell = useMemo(() => {
-    for (const w of weeks) {
-      const hit = w.days.find((d) => d.key === openDay)
-      if (hit) return hit
-    }
-    return null
-  }, [weeks, openDay])
-
-  // 统计行：总场 + 各类型计数（按 LIVE_TYPE_ORDER，>0 才显示）
   const statParts = LIVE_TYPE_ORDER
     .map((t) => ({ ...t, n: stats.counts.get(t.key) ?? 0 }))
     .filter((t) => t.n > 0)
   const liveN = stats.counts.get('live') ?? 0
 
+  const renderCell = (c: DayCell) => {
+    const first = c.sessions[0]
+    const remainCount = c.sessions.length
+    const t = first ? inferLiveType(first.live_title) : null
+
+    // 补位格：上月=休息氛围 / 下月=待定氛围（设计稿：补位灰格，内容半透明灰）
+    if (!c.inMonth) {
+      return (
+        <div key={c.key} className="live-calendar-cell pad">
+          <span className="live-calendar-day">{c.date.getDate()}</span>
+          {first && t ? (
+            <span className="live-calendar-cell-type">
+              <span className={`live-type ${t.className}`}>{t.label}</span>
+              <span className="live-calendar-cell-time">{fmtTimeEn(new Date(first.start_at))}</span>
+            </span>
+          ) : (
+            <span className="live-calendar-cell-type">
+              <span className="live-type live-type--rest">休息</span>
+            </span>
+          )}
+        </div>
+      )
+    }
+
+    // 本月格子
+    const stateCls =
+      c.state === 'live' ? (t ? t.className.replace('live-type--', 'tone-') : 'tone-live')
+      : c.state === 'rest' ? 'rest'
+      : 'tbd'
+    const hasHover = (c.sessions.length > 0 || !!c.gift) && (remainCount > 1 || !!c.gift)
+
+    return (
+      <div
+        key={c.key}
+        className={
+          'live-calendar-cell' +
+          (c.isToday ? ' today' : '') +
+          ` ${stateCls}`
+        }
+      >
+        <span className="live-calendar-day">{c.date.getDate()}</span>
+
+        {first ? (
+          <>
+            <span className="live-calendar-cell-type">
+              <span className={`live-type ${t!.className}`}>{t!.label}</span>
+              <span className="live-calendar-cell-time">{fmtTimeEn(new Date(first.start_at))}</span>
+            </span>
+            <span className="live-calendar-cell-title">{first.live_title || '场次'}</span>
+            {remainCount > 1 && (
+              <span className="live-calendar-more">+{remainCount - 1} 场</span>
+            )}
+          </>
+        ) : (
+          <span className="live-calendar-cell-type">
+            <span className={`live-type ${c.state === 'rest' ? 'live-type--rest' : 'live-type--tbd'}`}>
+              {c.state === 'rest' ? '休息' : '待定'}
+            </span>
+          </span>
+        )}
+
+        {/* hover 浮层：其余场次全量 + 礼物（内嵌格子，hover 显示；单场/无数据不弹） */}
+        {hasHover && (
+          <div className="live-day-pop" role="dialog">
+            <div className="live-day-pop-head">
+              <span className="live-day-pop-title">
+                {c.date.getFullYear()}-{String(c.date.getMonth() + 1).padStart(2, '0')}-{String(c.date.getDate()).padStart(2, '0')} · {WEEKDAYS_EN[(c.date.getDay() + 6) % 7]}
+              </span>
+            </div>
+            {c.sessions.length === 0 && !c.gift ? (
+              <div className="archive-empty">当日无场次记录</div>
+            ) : (
+              <>
+                {c.sessions.map((s) => {
+                  const st = inferLiveType(s.live_title)
+                  return (
+                    <div key={s.start_at} className="live-day-pop-row">
+                      <span className={`live-type ${st.className}`}>{st.label}</span>
+                      <div className="live-day-pop-body">
+                        <span className="live-day-pop-title-text">{s.live_title || '（无标题场次）'}</span>
+                        <span className="live-day-pop-meta">
+                          {fmtRange(s)}
+                          {s.duration_minutes != null && ` · ${fmtDuration(s.duration_minutes)}`}
+                        </span>
+                      </div>
+                    </div>
+                  )
+                })}
+                {c.gift && (
+                  <div className="live-day-pop-gift">
+                    {c.gift.gift_date} 礼物 {c.gift.gift_amount ?? '0'} /
+                    大航海 {c.gift.guard_amount ?? '0'} / SC {c.gift.sc_amount ?? '0'}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div className="live-calendar">
-      {/* 头部：标题 + 翻周 + 统计行 */}
-      <div className="live-calendar-head">
-        <button type="button" title="更早一周" onClick={() => moveWeek(-1)} disabled={anchor === 0}>
+      {/* 月份胶囊导航（设计稿：白色胶囊左右箭头 + 中央月份胶囊） */}
+      <div className="live-calendar-nav">
+        <button type="button" title="上个月" className="live-calendar-nav-btn" onClick={() => moveMonth(-1)}>
           <ChevronLeft className="size-4" />
         </button>
-        <button type="button" className="live-calendar-today" onClick={resetWeek}>
-          最近周
-        </button>
-        <button type="button" title="更晚一周" onClick={() => moveWeek(1)} disabled={anchor === 11}>
+        <div className="live-calendar-nav-pill">
+          <CalendarDays className="size-3.5" />
+          <span className="live-calendar-nav-text">{fmtMonth(ym.y, ym.m)}</span>
+        </div>
+        <button type="button" title="下个月" className="live-calendar-nav-btn" onClick={() => moveMonth(1)}>
           <ChevronRight className="size-4" />
         </button>
-        <span className="live-calendar-note">点击有直播的日子查看场次详情</span>
       </div>
 
+      {/* 统计行：共 N 场 + 类型彩色计数 */}
       <div className="live-calendar-stats">
         <span className="live-calendar-stats-total">共 {stats.total} 场。</span>
         {statParts.map((t) => (
@@ -210,111 +305,19 @@ const LiveCalendar = memo(function LiveCalendar({ sessions, giftDays }: Props) {
         )}
       </div>
 
-      {/* 周行列表：周一~周日表头 + 周行（最新在上） */}
-      <div className="live-calendar-weeks">
-        <div className="live-calendar-weekdays">
-          {WEEKDAYS.map((w) => (
-            <div key={w} className="live-calendar-weekday">{w}</div>
-          ))}
-        </div>
-        {weeks.map((w) => (
-          <div key={w.weekKey} className={`live-calendar-week${w.isCurrent ? ' current' : ''}`}>
-            {w.days.map((c) => {
-              const hidden = Math.max(0, c.sessions.length - MAX_CELL_ROWS)
-              const hasData = c.sessions.length > 0 || !!c.gift
-              const isToday = c.key === dayKeyIso(now)
-              return (
-                <button
-                  type="button"
-                  key={c.key}
-                  className={
-                    'live-calendar-cell' +
-                    (c.gift ? ' gift' : '') +
-                    (c.sessions.length > 0 ? ' live' : '') +
-                    (c.key === openDay ? ' open' : '') +
-                    (isToday ? ' today' : '')
-                  }
-                  onClick={() => setOpenDay(openDay === c.key ? null : c.key)}
-                  disabled={!hasData}
-                  title={hasData ? (c.sessions[0]?.live_title ?? undefined) : undefined}
-                >
-                  <span className="live-calendar-day">
-                    {fmtDateShort(c.date)} <em>{WEEKDAYS[(c.date.getDay() + 6) % 7].slice(1)}</em>
-                  </span>
-                  {c.sessions.length === 0 && !c.gift ? (
-                    <span className="live-calendar-rest">休息</span>
-                  ) : (
-                    <>
-                      {c.sessions.slice(0, MAX_CELL_ROWS).map((s) => {
-                        const t = inferLiveType(s.live_title)
-                        return (
-                          <span key={s.start_at} className="live-calendar-entry">
-                            <span className={`live-type ${t.className}`}>{t.label}</span>
-                            <span className="live-calendar-entry-time">{fmtTimeEn(new Date(s.start_at))}</span>
-                            <span className="live-calendar-entry-title">{s.live_title || '场次'}</span>
-                          </span>
-                        )
-                      })}
-                      {hidden > 0 && <span className="live-calendar-more">+{hidden} 场</span>}
-                      {c.gift && (
-                        <span className="live-calendar-gift">礼 {c.gift.gift_amount ?? ''}</span>
-                      )}
-                    </>
-                  )}
-                </button>
-              )
-            })}
-          </div>
+      {/* 表头（Mon.~Sun.） */}
+      <div className="live-calendar-weekdays">
+        {WEEKDAYS_EN.map((w) => (
+          <div key={w} className="live-calendar-weekday">{w}</div>
         ))}
       </div>
 
-      {/* 场次详情浮层（点击格子弹出；弹窗层规格） */}
-      {openCell && (
-        <div className="live-day-pop" role="dialog">
-          <div className="live-day-pop-head">
-            <span className="live-day-pop-title">
-              {fmtDateShort(openCell.date)} · {WEEKDAYS[(openCell.date.getDay() + 6) % 7]}
-            </span>
-            <button type="button" title="关闭" onClick={() => setOpenDay(null)}>
-              <X className="size-4" />
-            </button>
-          </div>
-          {openCell.sessions.length === 0 && !openCell.gift ? (
-            <div className="archive-empty">当日无场次记录</div>
-          ) : (
-            <>
-              {openCell.sessions.map((s) => {
-                const t = inferLiveType(s.live_title)
-                return (
-                  <div key={s.start_at} className="live-day-pop-row">
-                    <span className={`live-type ${t.className}`}>{t.label}</span>
-                    <div className="live-day-pop-body">
-                      <span className="live-day-pop-title-text">{s.live_title || '（无标题场次）'}</span>
-                      <span className="live-day-pop-meta">
-                        {fmtRange(s)}
-                        {s.duration_minutes != null && ` · ${fmtDuration(s.duration_minutes)}`}
-                      </span>
-                    </div>
-                  </div>
-                )
-              })}
-              {openCell.gift && (
-                <div className="live-day-pop-gift">
-                  {openCell.gift.gift_date} 礼物 {openCell.gift.gift_amount ?? '0'} /
-                  大航海 {openCell.gift.guard_amount ?? '0'} / SC {openCell.gift.sc_amount ?? '0'}
-                </div>
-              )}
-            </>
-          )}
-        </div>
-      )}
+      {/* 月历网格：7 列，行尾补位 */}
+      <div className="live-calendar-grid">
+        {cells.map((c) => renderCell(c))}
+      </div>
     </div>
   )
 })
-
-function keyOf(d: Date): string {
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
-}
 
 export default LiveCalendar
