@@ -1585,85 +1585,78 @@
   flex: none;
 }
 
-/* 月份导航组（frame 10_616：徽章形白胶囊——左按钮左尖/月份两端尖/右按钮右尖，
-   素材 = 设计稿 SVG 直接作背景（自带 0.15 投影），按素材原始尺寸居中显示
-   使白色内容区正好落在 25px 高按钮内） */
+/* 月份导航组（v0.9.x：设计稿 SVG 白胶囊 → 项目浮片族按钮 token：
+   ::before 斜切白卡（--pill-radius 圆角 + --pill-skew 斜切 + --pill-shadow 浮片阴影），
+   hover 背景 --pill-bg-hover（同 .float-pill 交互）；图标 = lucide 双箭头（项目图标语言），
+   lc-nav-*.svg 素材同时退役） */
 .lc-nav {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 0;
+  gap: 4px;
   width: fit-content;
 }
 
+/* 两侧箭头浮片（25×25，同 float-pill--icon 几何） */
 .lc-nav-btn {
+  position: relative;
+  isolation: isolate;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26.44px;
+  width: 25px;
   height: 25px;
   padding: 0;
   border: none;
-  background-repeat: no-repeat;
-  background-position: center;
+  background: transparent;
+  color: var(--c-text-main);
   cursor: pointer;
 }
 
-.lc-nav-btn--prev {
-  background-image: url('../assets/icons/lc-nav-left.svg');
-  background-size: 32.676px 34px;
+.lc-nav-btn::before,
+.lc-nav-pill::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--pill-bg);
+  border-radius: var(--pill-radius);
+  transform: skewX(var(--pill-skew));
+  box-shadow: var(--pill-shadow);
+  transition: background-color 0.15s ease;
 }
 
-.lc-nav-btn--next {
-  background-image: url('../assets/icons/lc-nav-right.svg');
-  background-size: 32.734px 34px;
-}
-
-.lc-nav-btn:hover {
-  filter: brightness(0.97);
+.lc-nav-btn:hover::before,
+.lc-nav-pill:hover::before {
+  background: var(--pill-bg-hover);
 }
 
 .lc-nav-icon {
-  display: block;
-  width: 16px;
-  height: 16px;
-  background-repeat: no-repeat;
-  background-position: center;
-  background-size: 10.376px 11px;
+  width: 13px;
+  height: 13px;
 }
 
-.lc-nav-btn--prev .lc-nav-icon {
-  background-image: url('../assets/icons/lc-chevrons-left.svg');
-}
-
-.lc-nav-btn--next .lc-nav-icon {
-  background-image: url('../assets/icons/lc-chevrons-right.svg');
-}
-
+/* 中间月份浮片（text 尺寸，同 float-pill） */
 .lc-nav-pill {
+  position: relative;
+  isolation: isolate;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 94.4px;
   height: 25px;
-  padding: 0;
+  padding: 0 12px;
   border: none;
-  background-image: url('../assets/icons/lc-nav-month.svg');
-  background-repeat: no-repeat;
-  background-position: center;
-  background-size: 101.652px 34px;
-  color: #182e41;
+  background: transparent;
+  color: var(--c-text-main);
+  font-family: inherit;
   cursor: pointer;
 }
 
-.lc-nav-pill:hover {
-  filter: brightness(0.97);
-}
-
 .lc-nav-text {
-  font-size: 14px;
+  font-size: 12.5px;
   font-variant-numeric: tabular-nums;
   white-space: pre;
+  line-height: 1;
 }
 
 /* ── 类型统计胶囊（frame 10_642：彩色胶囊 50×19 圆角88px + 19px 计数）── */

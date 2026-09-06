@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronLeft, ChevronRight, Loader2 } from 'lucide-react'
+import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Loader2 } from 'lucide-react'
 import type { LiveSession } from '../api/types'
 import { api } from '../api/api'
 import { inferLiveType, LIVE_TYPE_ORDER } from '../utils/liveType'
@@ -55,8 +55,8 @@ interface DayCell {
  * - 今天 = 1px 粉描边 rgba(251,119,161,.8)（v0.9.x 审美对齐：设计稿灰描边 → 项目强调粉）；
  * - 透明度 = 月份指示（user）：非本月补位格整体 opacity 0.3，本月格一律实底——
  *   与是否有直播无关；
- * - 导航栏（frame 10_616）：三颗白胶囊连排（左双箭头+月份+右双箭头），
- *   中间点击弹月份选择浮窗（直接选年/月）；
+ * - 导航栏（v0.9.x 项目浮片族 token：斜切白卡浮片三连——左双箭头+月份+右双箭头，
+ *   lucide 图标；中间点击弹月份选择浮窗（直接选年/月）；
  * - 导航栏右侧 = 直播类型统计胶囊（frame 10_642：彩色胶囊 50×19 + 19px 计数），
  *   统计当前显示月场次，按 LIVE_TYPE_ORDER 仅显示非零项；类型全满时横向滚动兜底；
  * - 空月提示：当月 0 场次时标题右侧灰字（v0.9.x 新增）。
@@ -210,17 +210,17 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
         )}
       </div>
 
-      {/* 导航行：左=月份胶囊（点击弹选月浮窗） · 右=当月类型统计胶囊（frame 10_642） */}
+      {/* 导航行：左=月份浮片组（点击弹选月浮窗） · 右=当月类型统计胶囊（frame 10_642） */}
       <div className="lc-nav-row">
         <div className="lc-nav" ref={navRef}>
-          <button type="button" title="上个月" className="lc-nav-btn lc-nav-btn--prev" onClick={() => moveMonth(-1)}>
-            <span className="lc-nav-icon" />
+          <button type="button" title="上个月" className="lc-nav-btn" onClick={() => moveMonth(-1)}>
+            <ChevronsLeft className="lc-nav-icon" />
           </button>
           <button type="button" className="lc-nav-pill" title="选择月份" onClick={openMonthPop}>
             <span className="lc-nav-text">{fmtMonth(ym.y, ym.m)}</span>
           </button>
-          <button type="button" title="下个月" className="lc-nav-btn lc-nav-btn--next" onClick={() => moveMonth(1)}>
-            <span className="lc-nav-icon" />
+          <button type="button" title="下个月" className="lc-nav-btn" onClick={() => moveMonth(1)}>
+            <ChevronsRight className="lc-nav-icon" />
           </button>
 
           {/* 月份选择浮窗：年切换 + 12 月宫格 */}
