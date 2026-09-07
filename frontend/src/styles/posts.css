@@ -2440,15 +2440,9 @@
   transition: fill-opacity 0.12s ease;
 }
 
-/* 细胞定位层：CSS transform 承载平移 —— 破泡重排后靠 transition 平滑滑向新质心 */
+/* 细胞定位层：模拟每帧更新 transform（位置实时变化）；无 CSS 过渡（帧插值即动画） */
 .lc-dlg-cloud-cell {
   cursor: pointer;
-  transition: transform 0.28s cubic-bezier(0.22, 0.61, 0.36, 1);
-}
-
-/* 挤入形变期：位置/形状由 JS 逐帧插值（rAF），禁用 CSS 过渡避免双重动画 */
-.lc-dlg-cloud-cell.morphing {
-  transition: none;
 }
 
 /* 泡泡本体（承载破泡缩放）：transform-box 用自身包围盒居中 */
@@ -2681,12 +2675,8 @@
   .filter-pop,
   .time-pop,
   .lc-dlg-cloud-bubble.popping,
-  .lc-dlg-cloud-ring,
-  .lc-dlg-cloud-cell {
+  .lc-dlg-cloud-ring {
     animation: none;
-  }
-  .lc-dlg-cloud-cell {
-    transition: none;
   }
 }
 
