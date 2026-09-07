@@ -2,12 +2,13 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Loader2, X } from 'lucide-react'
-import WordCloud from 'react-wordcloud'
 import type { LiveSession, LiveSessionDetail } from '../api/types'
 import { api, imgProxyUrl } from '../api/api'
 import { normalizeImageUrl } from '../utils/format'
 import OverlayScroll from './OverlayScroll'
 import { LIVE_TYPE_ORDER, inferLiveType, liveTypeLabel } from '../utils/liveType'
+import { MosaicPacker } from '../utils/wordCloudLayout'
+import type { CloudCell, CloudWord } from '../utils/wordCloudLayout'
 
 interface Props {
   /** 账号 id（null=无账号，显示空态）；切换账号自动重拉。
@@ -120,6 +121,147 @@ function cloudWordColor(w: { text: string }): string {
   let h = 0
   for (const ch of w.text) h = (h * 31 + ch.charCodeAt(0)) % 997
   return CLOUD_COLORS[h % CLOUD_COLORS.length]
+}
+
+/**
+ * 增量摊铺拼贴词云（2026-09-07 user 定案参考图形态）：
+ * ① 面积 ∝ 词频：power diagram λ 驱动（力导向站点滑动 + λ 面积收敛，见 wordCloudLayout.ts）；
+ * ② 逐个入池：词按频次降序每 150ms 入场（放当前最大空腔），泡泡在缝隙中滑动、逐渐平衡；
+ * ③ 终端稳定：全部入场后 alpha 冷却 → 静止即停（无循环装饰）；reduced-motion 直接终态。
+ * hover 高亮 + 词频提示保留。
+ */
+function MosaicCloud({ data, box }: { data: CloudWord[]; box: [number, number] }) {
+  const [snap, setSnap] = useState<{ cells: CloudCell[] } | null>(null)
+  const [tip, setTip] = useState<{ x: number; y: number; text: string; count: number } | null>(null)
+  const [hover, setHover] = useState<string | null>(null)
+  const packerRef = useRef<MosaicPacker | null>(null)
+  const dataRef = useRef(data)
+  dataRef.current = data
+  const boxRef = useRef(box)
+  boxRef.current = box
+
+  // 入口：数据/尺寸变化 → 逐步入场 + rAF 摊铺
+  useEffect(() => {
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+    const words = dataRef.current
+    if (words.length === 0) {
+      packerRef.current = null
+      setSnap(null)
+      return
+    }
+    if (reduceMotion) {
+      // 直接最终稳态（插入全部词后再收尾，不播动画）
+      packerRef.current = new MosaicPacker(boxRef.current)
+      const p = packerRef.current
+      for (const w of words) p.addWord(w)
+      let alpha = 1
+      while (alpha > 0.01) {
+        alpha = Math.max(alpha * 0.985, 0.01)
+        p.step(alpha, alpha < 0.3 ? 8 : 2)
+      }
+      setSnap(p.state())
+      return () => { packerRef.current = null }
+    }
+    // 动画路径：每次调用重建（避免旧 rAF 引用 state 错乱）
+    const packer = new MosaicPacker(boxRef.current)
+    packerRef.current = packer
+    let raf = 0
+    let alive = true
+    let next = 0          // 下一次入场的时间点（words 序 = 频次降序）
+    const held = words.slice()
+    let entered = 0
+    let alpha = 1
+    const loop = (tNow: number) => {
+      if (!alive) return
+      // 入场调度（每词 150ms）
+      while (entered < held.length && next <= tNow) {
+        packer.addWord(held[entered])
+        entered++
+        next += 150
+      }
+      if (entered < held.length) {
+        alpha = 1                       // 入场期恒活跃
+      } else {
+        alpha = Math.max(alpha * 0.985, 0.01)   // 收尾冷却
+      }
+      packer.step(alpha, entered >= held.length ? (alpha < 0.3 ? 8 : 2) : 1)
+      setSnap(packer.state())
+      if (entered >= held.length && alpha <= 0.05) {
+        return                            // 静止即停
+      }
+      raf = requestAnimationFrame(loop)
+    }
+    raf = requestAnimationFrame(loop)
+    return () => {
+      alive = false
+      cancelAnimationFrame(raf)
+      if (packerRef.current === packer) packerRef.current = null
+    }
+  }, [data, box[0], box[1]])
+
+  return (
+    <div className="lc-dlg-cloud">
+      {snap && snap.cells.length > 0 && (
+        <svg width={box[0]} height={box[1]} className="lc-dlg-cloud-svg">
+          {snap.cells.map((c) => {
+            const { word, poly, cx, cy, r } = c
+            const d = poly.length
+              ? `M${poly.map(([x, y]) => `${x - cx},${y - cy}`).join('L')}Z`
+              : ''
+            const fs = Math.max(8.5, Math.min(26, r * 0.8, (r * 2.2) / Math.max(2, word.text.length)))
+            const showText = r > 9 && word.text.length <= 6 && fs >= 8.5
+            const hovered = hover === word.text
+            const dimmed = hover !== null && !hovered
+            return (
+              <g
+                key={word.text}
+                className="lc-dlg-cloud-cell"
+                style={{ transform: `translate(${cx}px, ${cy}px)` }}
+                onMouseEnter={(e) => {
+                  setHover(word.text)
+                  setTip({ x: e.clientX, y: e.clientY, text: word.text, count: word.count })
+                }}
+                onMouseMove={(e) =>
+                  setTip((t) => (t ? { ...t, x: e.clientX, y: e.clientY } : t))}
+                onMouseLeave={() => {
+                  setHover(null)
+                  setTip(null)
+                }}
+              >
+                <path
+                  d={d}
+                  fill={cloudWordColor(word)}
+                  fillOpacity={hovered ? 1 : dimmed ? 0.4 : 0.92}
+                  stroke="var(--c-bg-card)"
+                  strokeWidth={2}
+                />
+                {showText && (
+                  <text
+                    x={0}
+                    y={0}
+                    textAnchor="middle"
+                    dy="0.35em"
+                    fontSize={fs}
+                    fill={hovered ? 'var(--c-text-main)' : 'var(--c-text-sub)'}
+                    fontWeight={hovered ? 700 : 600}
+                    opacity={dimmed ? 0.25 : 1}
+                    pointerEvents="none"
+                  >
+                    {word.text}
+                  </text>
+                )}
+              </g>
+            )
+          })}
+        </svg>
+      )}
+      {tip && (
+        <span className="lc-dlg-cloud-tip" style={{ left: tip.x, top: tip.y }}>
+          {tip.text} · {tip.count.toLocaleString('zh-CN')} 次
+        </span>
+      )}
+    </div>
+  )
 }
 
 
@@ -524,13 +666,11 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
     )
   }
 
-  /** 词云数据（top40，value 按频次排序降权——react-wordcloud 布局/字号用） */
-  const cloudWords = useMemo(() => {
-    const kw = (detail?.data?.danmaku?.top_keywords ?? []).slice(0, 40)
-    return kw.map((text, i) => ({
-      text,
-      value: i < 20 ? 100 - i * 4 : Math.max(12, 40 - i),
-    }))
+  /** 词云数据（top40 带次数，按词频降序——增量摊铺：面积∝词频） */
+  const cloudBubbles = useMemo<CloudWord[]>(() => {
+    return [...(detail?.data?.danmaku?.top_words ?? [])]
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 40)
   }, [detail])
 
   /** 详情弹窗：直播信息 + 分类校正 + 弹幕词云/指标/直播间动态 */
@@ -713,29 +853,8 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
                     </div>
                   )}
                 </dl>
-                {cloudWords.length ? (
-                  <div className="lc-dlg-cloud">
-                    <WordCloud
-                      words={cloudWords}
-                      minSize={[300, 150]}
-                      callbacks={{
-                        getWordTooltip: (w: { text: string }) => w.text,
-                        getWordColor: cloudWordColor,
-                      }}
-                      options={{
-                        rotations: 0,
-                        rotationAngles: [0, 0],
-                        fontSizes: [13, 34],
-                        fontStyle: 'normal',
-                        fontWeight: '600',
-                        fontFamily: 'inherit',
-                        padding: 2,
-                        spiral: 'archimedean',
-                        scale: 'sqrt',
-                        deterministic: false,
-                      }}
-                    />
-                  </div>
+                {cloudBubbles.length ? (
+                  <MosaicCloud data={cloudBubbles} box={[560, 210]} />
                 ) : (
                   <div className="lc-dlg-ph">暂无热词数据</div>
                 )}

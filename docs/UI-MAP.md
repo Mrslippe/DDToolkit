@@ -243,10 +243,11 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 | 两栏主体 | `.lc-dlg-main` | grid `264px minmax(0,1fr)` gap 12 |
 | 左封面 | `.lc-dlg-cover` | **264px · aspect-ratio 4/3**（danmakus 封面 720×540=4:3 与 704×396=16:9 混存，4:3 容器 + `object-fit:contain` 双全）；r10 截角；`CoverImage` 三态：直连 CDN（normalizeImageUrl + `referrerPolicy=no-referrer`——裸 img 漏此曾 403）→ `/img-proxy` 后端代理 → 渐变底 + 首字大号占位（64px 粉 55% 透明）；左下状态徽章（已结束=黑玻璃 / 直播中=粉 `rgba(251,119,161,.92)`，r106） |
 | 右直播信息 | `.lc-dlg-sec` + `.lc-dlg-rows` | r10 `#faf7f8` 区卡；行式 label(58px 次级) 左 · value 右；字段：时间（HH:MM–HH:MM + 时长）/ 分区 / 收益 ¥ / 峰值在线 / 弹幕数 / **A 组指标**（观看/点赞/打赏人数/互动/在线排名，来自 danmakus v2 live）/ 段数（>1 显示「N 段合并（中断续播）」）/ 数据源（danmakus+self+feed 组合） |
-| 弹幕信息 | `.lc-dlg-sec--full` | 满宽区卡：弹幕总量（大数 600）+ 完整性提示（`metrics.is_full===false` 时「弹幕数据未全量（部分录制源）」）+ **react-wordcloud 词云**（第一版展示，2026-09-07 user：回到第一版后重新提需求）；无数据=「暂无弹幕数据（danmakus 未收录该场次或拉取失败）」 |
-| └ 词云 | `.lc-dlg-cloud` | 高 **150px** flex 居中；`react-wordcloud@1.2.7`（peer react^16 声明，需 `--legacy-peer-deps` 安装；零旋转 `rotations:0`，spiral archimedean，scale sqrt，fontSizes [13,34]，padding 2，`minSize=[300,150]`）；词字 600 深色 `fontFamily:inherit`；hover 自带 tooltip = 词文本（`getWordTooltip`） |
-| └ 词云配色 | `CLOUD_COLORS` | 10 色项目粉系 + 类型色相（#d8645e/#8b6fd8/#0088be/#d4b801/#009a24/#ec57ff/#2fa5ad/#c95c86/#e0872f/#5b7fd8），按词哈希（h=h*31+code % 997）取色稳定 |
-| └ 数据 | `detail.data.danmaku.top_keywords` | 后端 `LiveDanmakuInfo.top_keywords`（字符串数组 top40）；`slice(0,40)` 后 value = `i<20 ? 100-i*4 : max(12,40-i)` 降权（布局/字号用，非真实频次）；无词=「暂无热词数据」 |
+| 弹幕信息 | `.lc-dlg-sec--full` | 满宽区卡：弹幕总量（大数 600）+ 完整性提示（`metrics.is_full===false` 时「弹幕数据未全量（部分录制源）」）+ **增量摊铺拼贴词云**（`MosaicCloud`，参考图形态）；无数据=「暂无弹幕数据（danmakus 未收录该场次或拉取失败）」 |
+| └ 词云 | `.lc-dlg-cloud` + svg | 高 **210px**；**增量摊铺加权 Voronoi 拼贴**（2026-09-07 user 定案）：power diagram λ 权重（面积∝词频）+ **力导向站点摊铺**（collide 推挤 + 中心引力 + 矩形软墙，位置直推无速度积分→无极限环）+ **逐个入池**（频次降序每 150ms 一个，站点=当前最大空腔）+ λ 面积收敛；全部入场后 alpha 冷却 → 静止即停（无循环装饰） |
+| └ 面积比例 | `utils/wordCloudLayout.ts` | 目标面积 = count 比例 **保底 0.05%**（画布 0.05%，小词仍可见分级）→ 归一化；node 验证：单调性 100%、终态偏差 <0.7%、填满 100%、单帧 <1.5ms、滑动幅度 228px（小泡直径 25 倍） |
+| └ 词云配色 | `CLOUD_COLORS` | 10 色项目粉系 + 类型色相（#d8645e/#8b6fd8/#0088be/#d4b801/#009a24/#ec57ff/#2fa5ad/#c95c86/#e0872f/#5b7fd8），按词哈希取色稳定；白缝 `stroke=--c-bg-card` 2px；hover：当前格 1/其余 0.4；hover 提示 = 黑玻璃胶囊「词 · N 次」（`.lc-dlg-cloud-tip`） |
+| └ 数据 | `detail.data.danmaku.top_words` | 后端 `LiveDanmakuInfo.top_words`（top40 带次数）；前 40 按 count 降序；无词=「暂无热词数据」 |
 | 直播动态 | `.lc-dlg-evts` | 满宽区卡：**B 组事件**（type 7=直播中止·灰点 / 8=直播继续·粉点，`send_date` HH:MM）+ **A 组在线峰值高光**（`metrics.peaks` 前 3，「N 人在线」，金点）；空=「暂无动态数据」 |
 | 内容分析 | `.lc-dlg-sec--full` | 预留区块：`analysis.summary` 有值显示，否则「接口已预留（内容分析服务接入后展示）」——**接口字段已就位，服务未接入** |
 
@@ -466,4 +467,4 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 - 窗口美学：DWM 系统圆角/阴影已关闭，只有前端 4px 一套弧线
 - **滚动条**：见 F 节——新增滚动容器先问「是否主滚动容器、能否 OverlayScroll」，数值询问用户
 - **图表**：图表一律 ECharts 6.1 按需注册（canvas 自绘），Shadcn Chart/recharts 已退役（chart.tsx/`--chart-*` 已清）；**图表色值集中在 `utils/chartTheme.ts`**（tokens 同源注释），新图表从那里引色，禁止在组件里手写色值
-- **词云**：react-wordcloud@1.2.7（第一版展示；peer react^16 声明 → 安装需 `--legacy-peer-deps`）；Voronoi/圆形域拼贴/气泡簇等自绘方案已全部回退役
+- **词云**：增量摊铺加权 Voronoi 拼贴（`utils/wordCloudLayout.ts`：力导向站点滑动 + λ 面积精确）；react-wordcloud 已退役（其 d3 依赖已随移除）

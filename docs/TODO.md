@@ -19,7 +19,7 @@
 | 直播日历（月历按设计稿重构） | ✅ 已上线（v0.9.0，devlog/034） |
 | 直播场次内容管道（danmakus+self 合并、9 类类型 v2 多信号、校正 override） | ✅ 已上线（v0.9.x M1–M4，后端闭环） |
 | 场次日历可点详情弹窗（信息/分类校正/弹幕词云/动态/分析预留） | ✅ 弹窗+词云已上线（2026-09-07）；**内容分析服务未接入**（接口已预留） |
-| 弹幕词云 | ✅ 场次级 top40（danmakus v2 live 词云）＋react-wordcloud（第一版展示）；**原始弹幕明细库/全量分析暂缓** |
+| 弹幕词云 | ✅ 场次级 top40（danmakus v2 live 词云）＋增量摊铺拼贴（力导向+λ，面积∝词频）；**原始弹幕明细库/全量分析暂缓** |
 | 滚动条设计标准（不占宽 + 自动隐藏 + OverlayScroll 统一） | ✅ 定案并落地（2026-09-07，见 UI-MAP F 节；**侧栏旧自绘条已一并迁移**） |
 | 数据导出 / 可移植格式 | ❌ 无（P3 已搁置，待表结构稳定后重启） |
 
@@ -158,7 +158,7 @@
   - M2 类型推断 v2：多信号（校正 override > 系列 > 标题评分 > 词库 > 分区 > 纪念日），`LiveSession.category/category_from`
   - M3 场次级详情端点：`GET /account/{id}/live-sessions/{liveId}`（danmaku/metrics/events + analysis 预留）
   - M4 前端呈现：格内首场（时间+标题+N 场计数）、hover 浮层全量、**点击格子 → 详情弹窗**（直播信息 + 分类校正下拉 + 弹幕词云 + 直播动态 + 内容分析预留）、月份切换滑动动画
-- ✅ **弹幕词云**（2026-09-07）：danmakus v2 live 词云 top40 → **react-wordcloud@1.2.7**（第一版展示；随后历经加权 Voronoi/圆形域拼贴等多轮重做，user 定案 **回到第一版**、重提需求）
+- ✅ **弹幕词云**（2026-09-07）：danmakus v2 live 词云 top40 → **增量摊铺加权 Voronoi 拼贴**（参考图形态：力导向站点滑动 + λ 面积精确，逐个入池、静止即停；历经 react-wordcloud/圆形域拼贴/圆形气泡簇等版本后由 user 重定需求定案）
 - ✅ **趋势卡重写 ECharts 6.1**（2026-09-07）：canvas 自绘 + dataZoom slider/inside（滚轮缩放/拖动平移）+ 双轴（粉丝/日增）+ 1d/7d/30d 概览 + 容量档位（3m/6m/1y/all）—— **recharts 已退役**
 - ✅ **滚动条标准定案**（2026-09-07）：不占宽 + 自动隐藏 + OverlayScroll 组件统一（12px/4px 全局 webkit 样式作为非覆盖容器的兜底）；全应用滚动容器已全部接入/对齐（含侧栏迁移、type-chips/cat-pop 隐藏化）
 - ✅ **前端系统性审计整理**（2026-09-07）：UI-MAP 全文重写对齐代码；死 API 封装（events/future-reservations/giftDays）与类型删除；`@types/d3-hierarchy` 清理；`--pill-fg` 令牌名统一；图表色值集中 `utils/chartTheme.ts`；次级色统一 `--c-text-sub`

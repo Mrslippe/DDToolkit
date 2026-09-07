@@ -2374,7 +2374,8 @@
   line-height: 16px;
 }
 
-/* 弹幕信息区块（danmakus /api/v2/live 词云，2026-09-07 接入；词云 = react-wordcloud） */
+/* 弹幕信息区块（danmakus /api/v2/live 词云，2026-09-07 接入；词云 = 增量摊铺拼贴，
+   见 utils/wordCloudLayout.ts——力导向站点滑动 + λ 面积精确，参考图形态） */
 .lc-dlg-danmaku {
   display: flex;
   flex-direction: column;
@@ -2388,19 +2389,38 @@
 }
 
 .lc-dlg-cloud {
+  position: relative;
   width: 100%;
-  height: 150px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  height: 210px;
 }
 
-.lc-dlg-cloud svg {
+.lc-dlg-cloud-svg {
   display: block;
 }
 
-.lc-dlg-cloud text {
+.lc-dlg-cloud-svg path {
+  transition: fill-opacity 0.12s ease;
+}
+
+/* 泡泡定位层：rAF 每帧更新 translate（滑动/平衡实时可见） */
+.lc-dlg-cloud-cell {
   cursor: default;
+}
+
+/* 词频 hover 提示（跟随鼠标） */
+.lc-dlg-cloud-tip {
+  position: fixed;
+  z-index: 70;
+  transform: translate(10px, -14px);
+  padding: 3px 10px;
+  border-radius: 106px;
+  font-size: 11.5px;
+  line-height: 1;
+  color: #fff;
+  background: rgba(15, 23, 42, 0.78);
+  pointer-events: none;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 /* 直播动态（B 组事件 + A 组在线峰值高光） */
