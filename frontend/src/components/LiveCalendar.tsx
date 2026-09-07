@@ -127,170 +127,218 @@ interface BubbleWord {
   count: number
 }
 
+/** 可复现伪随机（种子固定：初始布局确定性，不闪动） */
+function mulberry32(seed: number) {
+  return () => {
+    seed |= 0
+    seed = (seed + 0x6d2b79f5) | 0
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
 /**
- * ── 圆形气泡簇（disk bubble cluster，2026-09-07 user 定案·从头开始）──
- * ① 半径恒定 ∝ √词频（面积 ∝ 词频，一以贯之：打开/破泡/恢复全程不变）；
- * ② 径向边界 R = √(Σr²)（团簇面积守恒圆半径），圆心 = 容器中心 →
- *    整簇天然圆形；允许 10% 挤压 → 贴合处呈现「被邻泡压出的弧」（交界不规则）；
- * ③ 破泡 = 去掉该词 + R 收缩 + 有限时长（24 帧）衰减洞吸力 →
- *    周围泡泡立即被拉向洞口闭合（接触链分配）；边界弹簧恒定场 → 单调收敛。
- * 参数经 node 原型调参：初始稳态重叠 ≤8.1%、面积比例严格 ∝ 词频、闭合后无 NaN。
+ * ── 圆形域 Voronoi 拼贴词云（2026-09-07 user 定案·框架重做）──
+ * 三个条件（一以贯之）：
+ * ① 面积 ∝ 词频：power diagram 的 λ（权重）驱动，站点固定只调权重 ——
+ *    破泡后幸存词面积按词频重新归一化（高频仍大、低频仍小，比例不变）；
+ * ② 整体形状倾向圆形：边界 = 64 边形近似圆（power 单元裁剪于圆盘而非矩形）
+ *    —— 拼贴外轮廓天然圆润；泡泡彼此贴合，交界由半平面交产生 → 天然不规则；
+ * ③ 破泡 = 立即闭合（零动画）：删词 → 幸存词目标面积归一化 → 固定站点 λ 收敛
+ *    （同步求解，一帧完成）——边界泡泡不动位置，形状鼓长闭住空缺。
+ * - hover 词频提示、「已破泡 N · 恢复」、reduced-motion（本就无动画）保持。
  */
 
-/** 泡泡模拟状态（位置/速度；半径恒定不变） */
-interface CircleWord {
-  word: BubbleWord
-  x: number
-  y: number
-  vx: number
-  vy: number
-  r: number
+/** 圆盘边界（64 边形近似；power 单元裁剪几何与矩形 box 完全同构） */
+function discPolygon(cx: number, cy: number, r: number, n = 64): [number, number][] {
+  const pts: [number, number][] = []
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2
+    pts.push([cx + r * Math.cos(a), cy + r * Math.sin(a)])
+  }
+  return pts
 }
 
-/** 破泡洞吸力（有限时长，随帧衰减） */
-interface HolePull {
-  x: number
-  y: number
-  r: number
-  strength: number
+/** 半平面裁剪（Sutherland–Hodgman）：保留 ax*x + ay*y ≤ b 部分 */
+function clipHalf(poly: [number, number][], ax: number, ay: number, b: number) {
+  const out: [number, number][] = []
+  for (let k = 0; k < poly.length; k++) {
+    const p = poly[k]
+    const q = poly[(k + 1) % poly.length]
+    const fp = ax * p[0] + ay * p[1] - b
+    const fq = ax * q[0] + ay * q[1] - b
+    if (fp <= 0) out.push(p)
+    if ((fp < 0 && fq > 0) || (fp > 0 && fq < 0)) {
+      const t = fp / (fp - fq)
+      out.push([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t])
+    }
+  }
+  return out
 }
 
-const CLUSTER_PACK = 0.72        // 团簇面积 / 容器面积（泡沫堆积密度）
-const CLUSTER_RATIO_R = 0.46     // 团簇半径上限：min(w,h)·0.46（直径 ≤ 0.92·高）
-const CLUSTER_OVERLAP = 0.10     // 允许挤入 10%（贴合压弧的视觉来源）
-const KR = 24                    // 重叠软弹簧（线性，px/s² per px）
-const KB = 10                    // 径向边界软弹簧
-const DAMP = 9                   // 阻尼 exp(−9·dt)
-const VMAX = 420                 // 速度上限 px/s
-const FILL_FRAMES = 24           // 洞吸力持续帧数（随帧线性衰减到 0）
-const FILL_STRENGTH = 140        // 洞吸力初始加速度 px/s²
-const SETTLE_DISP = 1.0          // 帧位移总和阈值（<1px ≈ 0.08px/盘，视为静止）
-const SETTLE_CAP = 90            // 模拟帧帽（渐近蠕动到不了阈值时的兜底）
-const INIT_SOLVE = 320           // 初始预求解帧数（打开即稳态，无开场动画）
-
-/** 半径：总盘面积 = 容器面积×密度；团簇直径受高度限制（圆形优先） */
-function computeRadii(words: BubbleWord[], w: number, h: number): number[] {
-  const maxC = Math.max(...words.map((x) => x.count)) || 1
-  const ratio = words.map((x) => x.count / maxC)
-  const areaSum = ratio.reduce((a, b) => a + b, 0)
-  let rBase = Math.sqrt((w * h * CLUSTER_PACK) / (Math.PI * areaSum))
-  rBase = Math.min(rBase, (Math.min(w, h) * CLUSTER_RATIO_R) / Math.sqrt(areaSum))
-  return ratio.map((r) => Math.max(5, rBase * Math.sqrt(r)))
-}
-
-/** 初始布局：螺旋（大词在内、黄金角）——确定性，无随机 */
-function buildClusterWords(words: BubbleWord[], w: number, h: number): CircleWord[] {
-  const rs = computeRadii(words, w, h)
-  const x0 = w / 2
-  const y0 = h / 2
-  let acc = 0
-  return rs.map((r, i) => {
-    if (i > 0) acc += Math.PI * rs[i - 1] * rs[i - 1]
-    const rad = Math.sqrt(acc) * 1.05
-    const ang = i * 2.399963 // 黄金角
-    return { word: words[i], x: x0 + rad * Math.cos(ang), y: y0 + rad * Math.sin(ang), vx: 0, vy: 0, r }
+/** 由 (站点, λ) 求所有单元（凸多胞；null = 空） */
+function diagramCells(
+  words: BubbleWord[],
+  sites: [number, number][],
+  lambda: number[],
+  boundary: [number, number][],
+): ([number, number][] | null)[] {
+  const n = words.length
+  return words.map((_w, i) => {
+    let poly = boundary
+    const [cx, cy] = sites[i]
+    const ci2 = cx * cx + cy * cy
+    for (let j = 0; j < n; j++) {
+      if (j === i) continue
+      const [jx, jy] = sites[j]
+      poly = clipHalf(poly, 2 * (jx - cx), 2 * (jy - cy),
+        jx * jx + jy * jy - ci2 - (lambda[j] - lambda[i]))
+      if (!poly.length) return null
+    }
+    return poly
   })
 }
 
-/** 团簇边界半径（面积守恒）：R = √(Σr²) */
-function clusterRadius(pts: CircleWord[]): number {
-  return Math.sqrt(pts.reduce((s, p) => s + p.r * p.r, 0))
+interface CloudCell {
+  word: BubbleWord
+  poly: [number, number][]
+  cx: number
+  cy: number
+  r: number   // 等效半径（面积∝词频的圆形折算，供字号）
+  hero: boolean
+}
+
+function cellsOf(words: BubbleWord[], polys: ([number, number][] | null)[]): CloudCell[] {
+  const areas = polys.map((pts) => {
+    if (!pts) return 0
+    let a = 0
+    for (let k = 0; k < pts.length; k++) {
+      const p1 = pts[k]
+      const p2 = pts[(k + 1) % pts.length]
+      a += p1[0] * p2[1] - p2[0] * p1[1]
+    }
+    return Math.abs(a / 2)
+  })
+  return words.map((word, i) => {
+    const pts = polys[i] ?? [[0, 0], [0, 0], [0, 0]]
+    const cx = pts.reduce((s, p) => s + p[0], 0) / pts.length
+    const cy = pts.reduce((s, p) => s + p[1], 0) / pts.length
+    return { word, poly: pts, cx, cy, r: Math.sqrt(areas[i] / Math.PI), hero: i === 0 }
+  })
+}
+
+function areaOf(pts: [number, number][] | null): number {
+  if (!pts) return 0
+  let a = 0
+  for (let k = 0; k < pts.length; k++) {
+    const p1 = pts[k]
+    const p2 = pts[(k + 1) % pts.length]
+    a += p1[0] * p2[1] - p2[0] * p1[1]
+  }
+  return Math.abs(a / 2)
+}
+
+/** 目标面积 ∝ 词频（归一化到圆盘面积） */
+function areaTargets(words: BubbleWord[], discArea: number): number[] {
+  const total = words.reduce((s, x) => s + x.count, 0)
+  return words.map((x) => (x.count / total) * discArea)
 }
 
 /**
- * 单帧演化（就地更新位置/速度，返回帧位移总和）：
- * 力 = 径向边界软弹簧（outside R 才推回）+ 重叠软弹簧（< 0.9·(ri+rj) 才推挤）
- *       + 可选洞吸力（有限时长衰减）→ 速度阻尼积分 + 容器 clamp。
+ * 初始布局：极坐标占位（hero=圆盘中心、大词靠内、黄金角）→ power-Lloyd 弛豫
+ * （站点移到单元质心 + λ 面积修正 β=0.5，≤300 轮，maxRel<0.08 早停）。
+ * 返回收敛后的站点/λ —— 之后破泡【站点不变】，只做 λ 修正（见 relaxAreas）。
  */
-function clusterStep(pts: CircleWord[], w: number, h: number, dt: number, pull?: HolePull | null): number {
-  const n = pts.length
-  if (n === 0) return 0
-  const cx = w / 2
-  const cy = h / 2
-  const R = clusterRadius(pts)
-  const ax = new Array(n).fill(0)
-  const ay = new Array(n).fill(0)
-  for (let i = 0; i < n; i++) {
-    const p = pts[i]
-    const dx = cx - p.x
-    const dy = cy - p.y
-    const d = Math.hypot(dx, dy) || 1e-6
-    const over = d + p.r - R
-    if (over > 0) {
-      ax[i] += (dx / d) * KB * over
-      ay[i] += (dy / d) * KB * over
-    }
-    if (pull) {
-      const pdx = pull.x - p.x
-      const pdy = pull.y - p.y
-      const pd = Math.hypot(pdx, pdy) || 1e-6
-      const wgt = Math.max(0, 1 - (pd - p.r - pull.r) / 110) // 越近受力越大
-      const a = pull.strength * wgt
-      ax[i] += (pdx / pd) * a
-      ay[i] += (pdy / pd) * a
-    }
-  }
-  for (let i = 0; i < n; i++) {
-    for (let j = i + 1; j < n; j++) {
-      const a = pts[i]
-      const b = pts[j]
-      const dx = b.x - a.x
-      const dy = b.y - a.y
-      const d = Math.hypot(dx, dy) || 1e-6
-      const delta = (a.r + b.r) * (1 - CLUSTER_OVERLAP) - d
-      if (delta > 0) {
-        const f = KR * delta
-        const wa = (b.r * b.r) / (a.r * a.r + b.r * b.r)
-        ax[i] -= (dx / d) * f * wa
-        ay[i] -= (dy / d) * f * wa
-        ax[j] += (dx / d) * f * (1 - wa)
-        ay[j] += (dy / d) * f * (1 - wa)
+function layoutInitial(
+  words: BubbleWord[],
+  discCx: number,
+  discCy: number,
+  discR: number,
+): { sites: [number, number][]; lambda: number[]; cells: CloudCell[] } {
+  const boundary = discPolygon(discCx, discCy, discR)
+  const discArea = Math.PI * discR * discR
+  const tgt = areaTargets(words, discArea)
+  const n = words.length
+  const BETA = 0.5
+  const rand = mulberry32(20260907)
+  let sites: [number, number][] = words.map((_w, i) => {
+    if (i === 0) return [discCx, discCy]
+    const rad = discR * Math.pow((i + 0.5) / n, 0.5) * 0.92
+    const ang = (i - 1) * 137.508 + (rand() - 0.5) * 0.4
+    return [discCx + rad * Math.cos(ang), discCy + rad * Math.sin(ang)]
+  })
+  let lambda = words.map((_w, i) => tgt[i] / n)
+  let polys = diagramCells(words, sites, lambda, boundary)
+  let areas = polys.map(areaOf)
+  for (let it = 0; it < 300; it++) {
+    let maxRel = 0
+    for (let i = 0; i < n; i++) {
+      const rel = areas[i] > 0 ? Math.abs(areas[i] - tgt[i]) / tgt[i] : 1
+      if (rel > maxRel) maxRel = rel
+      lambda[i] = Math.max(lambda[i] + BETA * (tgt[i] - areas[i]), 1)
+      const pts = polys[i]
+      if (pts && pts.length >= 3) {
+        let ac = 0
+        let mx = 0
+        let my = 0
+        for (let k = 0; k < pts.length; k++) {
+          const p1 = pts[k]
+          const p2 = pts[(k + 1) % pts.length]
+          const cr = p1[0] * p2[1] - p2[0] * p1[1]
+          ac += cr
+          mx += (p1[0] + p2[0]) * cr
+          my += (p1[1] + p2[1]) * cr
+        }
+        if (Math.abs(ac) > 1) sites[i] = [mx / (3 * ac), my / (3 * ac)]
       }
     }
+    polys = diagramCells(words, sites, lambda, boundary)
+    areas = polys.map(areaOf)
+    if (maxRel < 0.08) break
   }
-  let disp = 0
-  for (let i = 0; i < n; i++) {
-    const p = pts[i]
-    let vx = (p.vx + ax[i] * dt) * Math.exp(-DAMP * dt)
-    let vy = (p.vy + ay[i] * dt) * Math.exp(-DAMP * dt)
-    const sp = Math.hypot(vx, vy)
-    if (sp > VMAX) {
-      vx = (vx / sp) * VMAX
-      vy = (vy / sp) * VMAX
-    }
-    p.vx = vx
-    p.vy = vy
-    p.x += vx * dt
-    p.y += vy * dt
-    disp += Math.hypot(vx, vy) * dt
-    if (p.x < p.r) { p.x = p.r; if (p.vx < 0) p.vx = 0 }
-    if (p.x > w - p.r) { p.x = w - p.r; if (p.vx > 0) p.vx = 0 }
-    if (p.y < p.r) { p.y = p.r; if (p.vy < 0) p.vy = 0 }
-    if (p.y > h - p.r) { p.y = h - p.r; if (p.vy > 0) p.vy = 0 }
-  }
-  return disp
+  return { sites, lambda, cells: cellsOf(words, polys) }
 }
 
-/** 同步预求解：打开/恢复时跑到手近稳态（无开场动画） */
-function clusterSettle(pts: CircleWord[], w: number, h: number): void {
-  const dt = 1 / 60
-  for (let f = 0; f < INIT_SOLVE; f++) {
-    if (clusterStep(pts, w, h, dt) < SETTLE_DISP) break
-  }
-  for (const p of pts) {
-    p.vx = 0
-    p.vy = 0
-  }
-}
 /**
- * 圆形气泡簇词云（2026-09-07 user 定案「从头开始」；参考图形态：圆形泡沫团）。
- * - 半径恒定 ∝ √词频 → 面积 ∝ 词频（一以贯之：打开/破泡/恢复全程不变）；
- * - 整簇天然圆形（径向边界 R=√Σr²，圆心=容器中心），贴合处 10% 挤压呈现
- *   被邻泡压出的弧（交界不规则）；
- * - 破泡 = 去词 + 洞吸力（24 帧衰减）+ 边界收缩 → 周围泡泡立即闭合空洞；
- *   无需任何装饰动画（无鼓泡/环波/过冲，user：多余动画不需要）；
- * - hover 高亮 + 「词 · N 次」提示 + 「已破泡 N · 恢复」一键复原；
- * - 静止即停：帧位移总和 < 1px 或 90 帧帽 → 停帧。
+ * 破泡闭合（固定站点·只调 λ）：幸存词目标面积按词频归一化 →
+ * λ 迭代收敛（同步，≤400 轮 maxRel<0.08）→ 形状鼓长闭住空缺。
+ * 站点位置不变（无位移），尺寸比例严格恢复 ∝ 词频（一以贯之）。
+ */
+function relaxAreas(
+  words: BubbleWord[],
+  sites: [number, number][],
+  lambda: number[],
+  discCx: number,
+  discCy: number,
+  discR: number,
+): { cells: CloudCell[]; lambda: number[] } {
+  const boundary = discPolygon(discCx, discCy, discR)
+  const tgt = areaTargets(words, Math.PI * discR * discR)
+  const n = words.length
+  const BETA = 0.5
+  const lam = lambda.slice()
+  let polys = diagramCells(words, sites, lam, boundary)
+  let areas = polys.map(areaOf)
+  for (let it = 0; it < 400; it++) {
+    let maxRel = 0
+    for (let i = 0; i < n; i++) {
+      const rel = areas[i] > 0 ? Math.abs(areas[i] - tgt[i]) / tgt[i] : 1
+      if (rel > maxRel) maxRel = rel
+      lam[i] = Math.max(lam[i] + BETA * (tgt[i] - areas[i]), 1)
+    }
+    polys = diagramCells(words, sites, lam, boundary)
+    areas = polys.map(areaOf)
+    if (maxRel < 0.08) break
+  }
+  return { cells: cellsOf(words, polys), lambda: lam }
+}
+
+/**
+ * 圆形域 Voronoi 拼贴词云（2026-09-07 user 定案·框架重做）：
+ * - 面积 ∝ 词频：power λ 驱动（初始 Lloyd 弛豫 → 破泡只调 λ，站点固定）；
+ * - 整体圆形：单元裁剪于 64 边形圆盘；贴合交界 = 半平面交 → 天然不规则；
+ * - 破泡：删词 → 目标面积归一化 → 同步 λ 收敛（一帧闭合，零动画）；
+ * - hover 高亮 + 「词 · N 次」提示 + 「已破泡 N · 恢复」一键复原。
  */
 function VoronoiCloud({
   data,
@@ -306,65 +354,51 @@ function VoronoiCloud({
   const ref = useRef<HTMLDivElement>(null)
   const [size, setSize] = useState({ w: 0, h: 210 })
   const [tip, setTip] = useState<{ x: number; y: number; text: string; count: number } | null>(null)
-  // hover 以词 text 为键（破泡后索引会错位，text 稳定）
   const [hover, setHover] = useState<string | null>(null)
-  /** 破泡计数（供恢复胶囊；simRef 同步删词） */
-  const poppedN = useRef(0)
 
-  /** 气泡簇权威状态（静止时也持有）；rebuildTick 驱动重渲染（每帧模拟后自增） */
-  const simRef = useRef<CircleWord[]>([])
-  const pullRef = useRef<{ x: number; y: number; r: number; frame: number } | null>(null)
-  const loopRef = useRef<{ raf: number } | null>(null)
-  const [, setRebuildTick] = useState(0)
+  /** 布局基座：初始站点（破泡期间冻结）；λ 随破泡更新 */
+  const baseRef = useRef<{ sites: [number, number][]; lambda: number[] } | null>(null)
+  /** 破泡计数（供恢复胶囊） */
+  const poppedN = useRef(0)
+  /** 渲染细胞（每次破泡/恢复/尺寸变化同步重算，一帧完成） */
+  const [cells, setCells] = useState<CloudCell[]>([])
   const sizeRef = useRef(size)
   sizeRef.current = size
   const dataRef = useRef(data)
   dataRef.current = data
 
-  const stopLoop = useCallback(() => {
-    if (loopRef.current) {
-      window.cancelAnimationFrame(loopRef.current.raf)
-      loopRef.current = null
-    }
-  }, [])
+  const discR = Math.max(60, Math.min(size.w, size.h) / 2 - 6)
+  const discCx = size.w / 2
+  const discCy = size.h / 2
 
-  /** 重建簇（初始/切换/恢复/尺寸变化）：螺旋初值 + 同步预求解（打开即稳态） */
-  const rebuildCluster = useCallback(() => {
-    stopLoop()
-    pullRef.current = null
+  /** 初始布局（打开/切换/恢复/尺寸变化）：Lloyd 弛豫一次，站点/λ 冻结为基座 */
+  useEffect(() => {
     const d = dataRef.current
-    const w = sizeRef.current.w
-    const h = sizeRef.current.h
-    simRef.current = w >= 80 && d.length > 0
-      ? buildClusterWords(d, w, h)
-      : []
-    clusterSettle(simRef.current, w, h)
-    setRebuildTick((t) => t + 1)
-  }, [stopLoop])
-
-  // 数据/尺寸变化依赖重建（引用变化即触发；数据为空时清空）
-  useEffect(() => {
-    rebuildCluster()
-  }, [data, size.w, size.h, rebuildCluster])
-
-  // 场次切换 → 破泡计数清零（重开弹窗语义）
-  useEffect(() => {
+    if (size.w < 80 || d.length === 0) {
+      baseRef.current = null
+      setCells([])
+      return
+    }
+    const r = layoutInitial(d, discCx, discCy, discR)
+    baseRef.current = { sites: r.sites, lambda: r.lambda }
+    setCells(r.cells)
     poppedN.current = 0
-    setHover(null)
-    setTip(null)
-    onPoppedChange?.(0)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data])
+  }, [data, size.w, size.h])
 
-  // 外部恢复信号：重建全量簇（物理归位到初始稳态）
+  // 外部恢复信号：重建初始布局
   useEffect(() => {
     if (!restoreTick) return
+    const d = dataRef.current
+    if (size.w >= 80 && d.length > 0) {
+      const r = layoutInitial(d, discCx, discCy, discR)
+      baseRef.current = { sites: r.sites, lambda: r.lambda }
+      setCells(r.cells)
+    }
     poppedN.current = 0
-    setHover(null)
-    setTip(null)
-    rebuildCluster()
     onPoppedChange?.(0)
-  }, [restoreTick, rebuildCluster, onPoppedChange])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restoreTick])
 
   useEffect(() => {
     const el = ref.current
@@ -377,83 +411,43 @@ function VoronoiCloud({
     return () => ro.disconnect()
   }, [])
 
-  useEffect(() => () => stopLoop(), [stopLoop])
-
-  /** 模拟主循环：每帧 clusterStep（携带残余洞吸力），帧位移阈值或帧帽 → 停帧 */
-  const startLoop = useCallback(() => {
-    let last = performance.now()
-    let frame = 0
-    const step = (now: number) => {
-      const dt = Math.min((now - last) / 1000, 1 / 30)
-      last = now
-      const pts = simRef.current
-      frame += 1
-      const pull = pullRef.current
-      const activePull = pull && frame <= FILL_FRAMES
-        ? {
-            x: pull.x,
-            y: pull.y,
-            r: pull.r,
-            strength: FILL_STRENGTH * (1 - frame / FILL_FRAMES),
-          }
-        : null
-      if (frame > FILL_FRAMES) pullRef.current = null
-      if (pts.length === 0) {
-        loopRef.current = null
-        return
-      }
-      const disp = clusterStep(pts, sizeRef.current.w, sizeRef.current.h, dt, activePull)
-      setRebuildTick((t) => t + 1)
-      if (disp < SETTLE_DISP && frame > 8) {
-        loopRef.current = null // 静止即停：终态即当前簇
-        return
-      }
-      if (frame >= SETTLE_CAP) {
-        loopRef.current = null // 帧帽兜底（渐近蠕动不可见）
-        return
-      }
-      loopRef.current = { raf: requestAnimationFrame(step) }
-    }
-    loopRef.current = { raf: requestAnimationFrame(step) }
-  }, [])
-
-  /** 破泡：去词（立即消失，无动画）→ 洞吸力 + 边界收缩 → 启动闭合 */
+  /**
+   * 破泡：删词（立即消失，零动画）→ 幸存词目标面积按词频归一化 →
+   * 固定站点同步 λ 收敛（一帧闭合：形状鼓长闭住空缺，站点不动）。
+   */
   const popWord = (text: string) => {
-    const S = simRef.current
-    const pop = S.find((s) => s.word.text === text)
-    if (!pop) return
-    const x = pop.x
-    const y = pop.y
-    const r = pop.r
-    simRef.current = S.filter((s) => s.word.text !== text)
+    const base = baseRef.current
+    const d = dataRef.current
+    const survivors = d.filter((w) => w.text !== text)
+    if (!base || survivors.length === 0) return
+    // 站点/λ 与 data 同序 → 按幸存词取子集（站点随原词冻结不动）
+    const idxMap = new Map(d.map((w, i) => [w.text, i]))
+    const sSurv = survivors.map((w2) => base.sites[idxMap.get(w2.text)!])
+    const lSurv = survivors.map((w2) => base.lambda[idxMap.get(w2.text)!])
+    const r = relaxAreas(survivors, sSurv, lSurv, sizeRef.current.w / 2, sizeRef.current.h / 2, discR)
+    setCells(r.cells)
+    // 收敛 λ 回写（按词保留在基座中）
+    const lam = [...base.lambda]
+    survivors.forEach((w2, i) => {
+      lam[idxMap.get(w2.text)!] = r.lambda[i]
+    })
+    baseRef.current = { sites: base.sites, lambda: lam }
     poppedN.current += 1
     onPoppedChange?.(poppedN.current)
-    setHover(null)
-    setTip(null)
-    pullRef.current = { x, y, r, frame: 0 }
-    if (simRef.current.length === 0) {
-      setRebuildTick((t) => t + 1)
-      return
-    }
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      // 无障碍：同步结算到近稳态（瞬时闭合），不跑动画
-      clusterSettle(simRef.current, sizeRef.current.w, sizeRef.current.h)
-      setRebuildTick((t) => t + 1)
-      return
-    }
-    setRebuildTick((t) => t + 1)
-    startLoop()
   }
 
   return (
     <div ref={ref} className="lc-dlg-cloud">
-      {size.w > 0 && simRef.current.length > 0 && (
+      {size.w > 0 && cells.length > 0 && (
         <svg width={size.w} height={size.h} className="lc-dlg-cloud-svg">
-          {simRef.current.map((c) => {
-            const { word, x, y, r } = c
-            const hero = simRef.current[0].word.text === word.text
-            // 2026-09-07：字号随半径（面积∝词频）——下限 8.5px，长词自缩减
-            const fs = Math.max(8.5, Math.min(hero ? 34 : 26, r * 0.9, (r * 2.2) / Math.max(2, word.text.length)))
+          {cells.map((c) => {
+            const { word, poly, cx, cy, r, hero } = c
+            // 相对质心坐标：外层 g 定位（同步布局，无动画）
+            const d = `M${poly.map(([x, y]) => `${x - cx},${y - cy}`).join('L')}Z`
+            const fs = Math.max(
+              8.5,
+              Math.min(hero ? 34 : 26, r * 0.75, (r * 2.2) / Math.max(2, word.text.length)),
+            )
             const showText = r > 10.5 && word.text.length <= 6 && fs >= 8.5
             const hovered = hover === word.text
             const dimmed = hover !== null && !hovered
@@ -461,7 +455,7 @@ function VoronoiCloud({
               <g
                 key={word.text}
                 className="lc-dlg-cloud-cell"
-                style={{ transform: `translate(${x}px, ${y}px)` }}
+                style={{ transform: `translate(${cx}px, ${cy}px)` }}
                 onMouseEnter={(e) => {
                   setHover(word.text)
                   setTip({ x: e.clientX, y: e.clientY, text: word.text, count: word.count })
@@ -474,8 +468,8 @@ function VoronoiCloud({
                 }}
                 onClick={() => popWord(word.text)}
               >
-                <circle
-                  r={r}
+                <path
+                  d={d}
                   fill={cloudWordColor(word)}
                   fillOpacity={hovered ? 1 : dimmed ? 0.4 : 0.92}
                   stroke="var(--c-bg-card)"
@@ -501,9 +495,7 @@ function VoronoiCloud({
           })}
         </svg>
       )}
-      {size.w > 0 && simRef.current.length === 0 && (
-        <div className="lc-dlg-ph">已全部破泡（点击「恢复」还原）</div>
-      )}
+      {size.w > 0 && cells.length === 0 && <div className="lc-dlg-ph">已全部破泡（点击「恢复」还原）</div>}
       {tip && (
         <span className="lc-dlg-cloud-tip" style={{ left: tip.x, top: tip.y }}>
           {tip.text} · {tip.count.toLocaleString('zh-CN')} 次
@@ -512,6 +504,8 @@ function VoronoiCloud({
     </div>
   )
 }
+
+
 /**
  * 直播日历（v0.9.2 重建 → v0.9.x M4 内容管道）：
  * - 卡片 870 定宽上限居中（用户参数）；网格 7 列 × 115.714286px + 4px 列/行距
