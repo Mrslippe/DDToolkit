@@ -296,6 +296,8 @@ function VoronoiCloud({ data }: { data: BubbleWord[] }) {
               9,
               Math.min(hero ? 34 : 26, r * 0.72, (r * 1.9) / Math.max(2, word.text.length)),
             )
+            const hovered = hover === i
+            const dimmed = hover >= 0 && !hovered
             return (
               <g
                 key={word.text}
@@ -313,9 +315,9 @@ function VoronoiCloud({ data }: { data: BubbleWord[] }) {
                 <path
                   d={d}
                   fill={cloudWordColor(word)}
-                  fillOpacity={hover === i ? 1 : 0.92}
-                  stroke="var(--c-bg-card)"
-                  strokeWidth={2}
+                  fillOpacity={hovered ? 1 : dimmed ? 0.45 : 0.92}
+                  stroke={hovered ? 'var(--c-accent)' : 'var(--c-bg-card)'}
+                  strokeWidth={hovered ? 2.5 : 2}
                 />
                 {fs >= 10 && r > 14 && (
                   <text
@@ -324,8 +326,8 @@ function VoronoiCloud({ data }: { data: BubbleWord[] }) {
                     textAnchor="middle"
                     dy="0.35em"
                     fontSize={fs}
-                    fill="var(--c-text-main)"
-                    fontWeight={hero ? 700 : 600}
+                    fill={hovered ? 'var(--c-text-main)' : 'var(--c-text-sub)'}
+                    fontWeight={hovered || hero ? 700 : 600}
                     pointerEvents="none"
                   >
                     {word.text}
@@ -452,6 +454,16 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
   useEffect(() => {
     setDetail(null)
   }, [accountId])
+
+  // 弹窗打开期间锁页面滚动（2026-09-07：滚动条贴窗口右缘/越顶问题）
+  useEffect(() => {
+    if (!detail) return
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.body.style.overflow = prev
+    }
+  }, [detail])
 
   const byDay = useMemo(() => {
     const m = new Map<string, LiveSession[]>()

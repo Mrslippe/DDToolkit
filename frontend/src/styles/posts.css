@@ -2173,6 +2173,19 @@
   border: 1px solid rgba(15, 23, 42, 0.06);
   box-shadow: var(--shadow-dialog);
   animation: lc-dlg-pop 0.2s cubic-bezier(0.22, 0.61, 0.36, 1);
+  /* 2026-09-07：弹窗内置滚动条细化（配合 body 滚动锁，防止滚动条越界观感） */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(15, 23, 42, 0.2) transparent;
+  overscroll-behavior: contain;
+}
+
+.lc-dlg::-webkit-scrollbar {
+  width: 6px;
+}
+
+.lc-dlg::-webkit-scrollbar-thumb {
+  background: rgba(15, 23, 42, 0.18);
+  border-radius: 3px;
 }
 
 .lc-dlg-head {
