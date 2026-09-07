@@ -292,10 +292,13 @@ function VoronoiCloud({ data }: { data: BubbleWord[] }) {
           {cells.map((c, i) => {
             const { word, poly, cx, cy, r, hero } = c
             const d = `M${poly.map((p) => `${p[0]},${p[1]}`).join('L')}Z`
+            // 2026-09-07：放宽显示条件——字号下限 8.5px、r>10.5 即显示词字
+            //（此前 r>14 且 fs>=10 太紧，中等格子长词（如「哈哈哈哈」）被吞掉）
             const fs = Math.max(
-              9,
-              Math.min(hero ? 34 : 26, r * 0.72, (r * 1.9) / Math.max(2, word.text.length)),
+              8.5,
+              Math.min(hero ? 34 : 26, r * 0.75, (r * 2.2) / Math.max(2, word.text.length)),
             )
+            const showText = r > 10.5 && word.text.length <= 6 && fs >= 8.5
             const hovered = hover === i
             const dimmed = hover >= 0 && !hovered
             return (
@@ -319,7 +322,7 @@ function VoronoiCloud({ data }: { data: BubbleWord[] }) {
                   stroke="var(--c-bg-card)"
                   strokeWidth={2}
                 />
-                {fs >= 10 && r > 14 && (
+                {showText && (
                   <text
                     x={cx}
                     y={cy}
