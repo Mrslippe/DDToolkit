@@ -78,11 +78,15 @@ export default function OverlayScroll({
     sc.addEventListener('scroll', request, { passive: true })
     root.addEventListener('mouseenter', onEnter)
     root.addEventListener('mouseleave', onLeave)
+    // 内容异步加载/尺寸变化时重算（档案卡、弹窗数据加载完成等，2026-09-07）
+    const ro = new ResizeObserver(request)
+    ro.observe(sc)
     update()
     return () => {
       sc.removeEventListener('scroll', request)
       root.removeEventListener('mouseenter', onEnter)
       root.removeEventListener('mouseleave', onLeave)
+      ro.disconnect()
       cancelAnimationFrame(frame.current)
       if (hideTimer.current) window.clearTimeout(hideTimer.current)
     }
@@ -139,6 +143,7 @@ export default function OverlayScroll({
         onPointerMove={onThumbMove}
         onPointerUp={onThumbUp}
         onPointerCancel={onThumbUp}
+        onLostPointerCapture={onThumbUp}
       />
     </div>
   )

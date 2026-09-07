@@ -62,10 +62,16 @@ html.window-maximized body {
 .os-root {
   position: relative;
   overflow: hidden;
+  /* 经典 modal 滚动模式：flex column + 滚动体 flex:1;min-height:0 ——
+     max-height 容器（弹窗等 auto 高度根）也能正确产生内部滚动
+     （height:100% 在 auto 父级下失效，曾致弹窗加载后滚不动，2026-09-07） */
+  display: flex;
+  flex-direction: column;
 }
 
 .os-scroll {
-  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   scrollbar-width: none;        /* 标准属性配合 webkit display:none 双保险 */
   -ms-overflow-style: none;
