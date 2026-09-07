@@ -229,6 +229,24 @@ def test_live_sessions_sync_skips_bad_account(db):
     assert s.stored == 0 and s.skipped == 1
 
 
+# ── 单场弹幕摘要（/api/v2/live，2026-09-07 实测公开） ────────────────
+
+def test_parse_live_summary_wordcloud():
+    from app.services.externals.danmakus import _parse_live_summary
+    payload = {"total": 39316, "pageNum": 0, "pageSize": 1, "hasMore": True,
+               "data": {"live": {
+                   "liveId": "f2d49c20-e00b-4c18-aca0-91baf5832ab2",
+                   "danmakusCount": 17931,
+                   "extra": {"wordCloud": {"好耶": 3195, "MELODY": 210, "x": 0}}}}}
+    s = _parse_live_summary(payload)
+    assert s["total"] == 39316
+    assert s["danmakus_count"] == 17931
+    assert s["word_cloud"][:2] == [("好耶", 3195), ("MELODY", 210)]   # 降序且忽略了 0 次
+    # 异常形状 → 降级空摘要（不炸）
+    assert _parse_live_summary(None) is None
+    assert _parse_live_summary({"data": None})["word_cloud"] == []
+
+
 # ── 注册表与空壳 ────────────────────────────────────────────────────
 
 def test_registry_sources():

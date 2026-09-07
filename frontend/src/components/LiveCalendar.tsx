@@ -101,9 +101,10 @@ interface DetailState {
  *     鼠标滑向浮层有 120ms 宽限不闪关；Esc 关闭；保持纯信息展示（user 2026-09-07：
  *     分类校正移出浮层 → 点击日期格进详情弹窗）；
  *   · 点击日期格 → 独立详情弹窗（user 2026-09-07）：
- *     直播信息（起止/分区/收益/峰值/弹幕/数据源）+ 分类校正（点左上角胶囊 →
+ *     直播信息（起止/分区/收益/峰值/弹幕/数据源/中断段数）+ 分类校正（点左上角胶囊 →
  *     下拉栏全部彩色分类胶囊，点选取；override 源）+
- *     「弹幕信息」「直播内容分析」预留区块（danmaku/analysis 接口先留，内容之后再做）；
+ *     「弹幕信息」（danmakus /api/v2/live 词云与总量，2026-09-07 已接入）+
+ *     「直播内容分析」预留区块（analysis 接口先留，内容之后再做）；
  *   · 月份切换滑动动画（user 2026-09-07：前进/后退方向感，keyed 重放）；
  *   · 无场次的格子：今天以前 = 「休息」；今天及以后 = 「待定」（user 2026-09-07）；
  *   · 礼物数据暂不展示（user 2026-09-07：之后从 danmakus 取场次级详细数据；
@@ -438,6 +439,7 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
                 meta.push([s.parent_area_name, s.area_name].filter(Boolean).join(' / '))
               }
               meta.push(`${fmtDur(s.duration_minutes)}${d1 ? '' : ' 进行中'}`.trim())
+              if ((s.segment_count ?? 1) > 1) meta.push(`中断续播·${s.segment_count} 段合并`)
               const figures: string[] = []
               if ((s.total_income ?? 0) > 0) figures.push(`收益 ${fmtMoney(s.total_income)}`)
               if ((s.max_online_count ?? 0) > 0) figures.push(`峰值在线 ${s.max_online_count!.toLocaleString('zh-CN')}`)
@@ -567,6 +569,12 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
                   <dt>弹幕数</dt>
                   <dd>{s.danmakus_count ? s.danmakus_count.toLocaleString('zh-CN') : '—'}</dd>
                 </div>
+                {(s.segment_count ?? 1) > 1 && (
+                  <div className="lc-dlg-field">
+                    <dt>段数</dt>
+                    <dd>{s.segment_count} 段合并（中断续播）</dd>
+                  </div>
+                )}
                 <div className="lc-dlg-field"><dt>数据源</dt><dd>{srcs.join(' + ')}</dd></div>
               </dl>
             </section>
@@ -576,13 +584,24 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
               {detail.loading ? (
                 <div className="lc-dlg-ph">加载中…</div>
               ) : s.danmaku ? (
-                <div className="lc-dlg-ph">
-                  弹幕总量 {s.danmaku.total ?? '—'}
-                  {s.danmaku.top_keywords?.length
-                    ? `；热词 ${s.danmaku.top_keywords.join(' / ')}` : ''}
+                <div className="lc-dlg-danmaku">
+                  {s.danmaku.total != null && (
+                    <p className="lc-dlg-ph">
+                      弹幕总量 <b className="lc-dlg-num">{s.danmaku.total.toLocaleString('zh-CN')}</b>
+                    </p>
+                  )}
+                  {s.danmaku.top_keywords?.length ? (
+                    <div className="lc-dlg-tags">
+                      {s.danmaku.top_keywords.map((w) => (
+                        <span key={w} className="lc-dlg-tag">{w}</span>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="lc-dlg-ph">暂无热词数据</div>
+                  )}
                 </div>
               ) : (
-                <div className="lc-dlg-ph">接口已预留（danmakus 场次级详细数据接入后展示）</div>
+                <div className="lc-dlg-ph">暂无弹幕数据（danmakus 未收录该场次或拉取失败）</div>
               )}
             </section>
 

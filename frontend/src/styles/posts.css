@@ -1532,8 +1532,9 @@
 
 /* ── 直播日历卡（v0.9.2 重建：docs/design/react-LiveCalendar Frame10612 骨架）──
     卡片 870 定宽上限居中（user: 定宽上限870，窗口拉宽宽度不变，缩窄以后再说）；
-    网格 7 列 × 115.714286px + 4px 列/行距；格子 73.1667px 高（+4px 拉高，卡高 590）· 6px 圆角；
-    类型格 = 20px 日期 + 34×16 胶囊（圆角106px，10px 字）+ 12px 时间 + 14px/600 标题；
+    网格 7 列 × 115.714286px + 4px 列/行距；格子 80px 高（user 2026-09-07：
+    行高 73.1667→80，保证两行标题完整显示不被裁切，卡高 590→631）· 6px 圆角；
+    类型格 = 20px 日期 + 38×18 胶囊（圆角106px，11px 字）+ 12px 时间 + 14px/600 标题；
     今天 = 1px 粉描边 rgba(251,119,161,0.8)（v0.9.x 审美对齐：灰描边改项目强调粉）；
     透明度 = 月份指示（user 2026-09-06）：非本月补位格 opacity 0.3，本月格一律实底，
     与是否有直播无关；
@@ -1547,7 +1548,7 @@
   border-radius: 4px;
   box-shadow: var(--pill-shadow);
   width: 870px;            /* 定宽上限：拉宽不变（用户参数） */
-  height: 590px;           /* 设计稿 566 + 24（行高 +4px × 6 行，用户 2026-09-0x） */
+  height: 631px;           /* 590 + 41（行高 73.1667→80 × 6 行，user 2026-09-07） */
   padding: 17px 16px 10px;
   gap: 10px;
   flex-shrink: 0;          /* 恒高，不参与 column 压缩 */
@@ -1826,14 +1827,14 @@
 }
 
 /* 月历网格（7 列 × 115.714286px 精确宽，space-between，4px 间距——v0.9.x 审美对齐：
-   2px 设计稿密度 → 4px 项目呼吸感；列/行高按 870 定宽与 590 卡高重算：
-   列 7×115.714286 + 6×4 = 834 = 内容宽；行 6×73.1667 + 5×4 = 459 = 网格内容高
-   （行高较设计稿 +4px：user 反馈内容拥挤，卡高相应 566→590）） */
+   2px 设计稿密度 → 4px 项目呼吸感；列/行高按 870 定宽与 631 卡高重算：
+   列 7×115.714286 + 6×4 = 834 = 内容宽；行 6×80 + 5×4 = 500 = 网格内容高
+   （行高 73.1667→80：user 2026-09-07 两行标题完整显示，卡高 590→631）） */
 .lc-grid {
   position: relative;
   display: grid;
   grid-template-columns: repeat(7, 115.714286px);
-  grid-auto-rows: 73.1667px;
+  grid-auto-rows: 80px;
   gap: 4px;
   justify-content: space-between;
   padding: 2px;
@@ -1861,7 +1862,7 @@
   color: var(--c-live);
 }
 
-/* ── 格子（frame 10_669/674/682…：115.714286×73.1667 · 6px 圆角（设计稿规格，保留））── */
+/* ── 格子（frame 10_669/674/682…：115.714286×80（2026-09-07 73.1667→80）· 6px 圆角（设计稿规格，保留））── */
 
 .lc-cell {
   display: flex;
@@ -2282,6 +2283,36 @@
   font-size: 11.5px;
   color: var(--c-text-sub);
   line-height: 16px;
+}
+
+/* 弹幕信息区块（danmakus /api/v2/live 词云，2026-09-07 接入） */
+.lc-dlg-danmaku {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.lc-dlg-num {
+  font-weight: 600;
+  color: var(--c-text-main);
+  font-variant-numeric: tabular-nums;
+}
+
+.lc-dlg-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.lc-dlg-tag {
+  padding: 2px 9px;
+  border-radius: 106px;
+  font-size: 11px;
+  line-height: 15px;
+  color: var(--c-text-main);
+  background: #f6edf0;
+  border: 1px solid rgba(251, 119, 161, 0.18);
+  white-space: nowrap;
 }
 
 /* 弹窗左上角分类胶囊按钮 + 下拉栏（user 2026-09-07：点胶囊弹全部彩色分类胶囊，点选取） */

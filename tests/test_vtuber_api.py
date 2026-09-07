@@ -521,9 +521,9 @@ def test_live_category_override_flow(client):
     assert client.delete(f"/account/{aid}/live-sessions/uuid-a/category").status_code == 404
 
 
-# ── 单场次详情（v0.9.x：点击日期格 → 独立弹窗，danmaku/analysis 预留） ──
+# ── 单场次详情（点击日期格 → 独立弹窗；danmaku 已接入 / analysis 预留） ──
 
-def test_live_session_detail_endpoint(client):
+def test_live_session_detail_endpoint(client, monkeypatch):
     vid = client.post("/vtuber", json={"name": "测试"}).json()["id"]
     aid = client.post(
         f"/vtuber/{vid}/accounts",
@@ -536,8 +536,17 @@ def test_live_session_detail_endpoint(client):
                        end_at=datetime(2026, 9, 7, 13, 0),
                        area_name="虚拟日常", parent_area_name="虚拟主播",
                        total_income=88.5, max_online_count=777, danmakus_count=66))
+    # feed 场次（无弹幕数据源，详情不请求网络）
+    db.add(LiveSession(account_id=aid, source="feed", live_id="feed-1",
+                       title="无限流游戏", start_at=datetime(2026, 9, 8, 20, 0),
+                       end_at=None, area_name="主机游戏", parent_area_name="单机游戏"))
     db.commit()
     db.close()
+
+    async def fake_summary(live_id: str):
+        return {"total": 39316, "danmakus_count": 17931,
+                "word_cloud": [("好耶", 3195), ("MELODY", 210)]}
+    monkeypatch.setattr("app.routers.vtuber.fetch_live_summary", fake_summary)
 
     resp = client.get(f"/account/{aid}/live-sessions/uuid-a")
     assert resp.status_code == 200
@@ -547,9 +556,17 @@ def test_live_session_detail_endpoint(client):
     assert d["duration_minutes"] == 55
     assert d["category"] == "chat"
     assert d["category_from"] == "title"
-    # 预留接口：数据服务就位前恒为 None
-    assert d["danmaku"] is None
+    assert d["segment_count"] == 1
+    # 弹幕摘要已接入（词云 top 词按次数降序）
+    assert d["danmaku"] == {"total": 39316,
+                            "top_keywords": ["好耶", "MELODY"],
+                            "hot_segments": []}
+    # analysis 仍为预留（内容分析服务未接入）
     assert d["analysis"] is None
+
+    # feed 场次：无 danmakus 源 → danmaku 恒 None（不请求网络）
+    d2 = client.get(f"/account/{aid}/live-sessions/feed-1").json()
+    assert d2["danmaku"] is None and d2["source"] == "feed"
 
     # 未收录 live_id → 404；账号不存在 → 404
     assert client.get(f"/account/{aid}/live-sessions/nope").status_code == 404

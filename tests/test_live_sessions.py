@@ -52,11 +52,11 @@ def _snap(db, acc, ts, status=None, fans=1, source="self"):
 
 
 def _dm_item(live_id, title, start_ms, stop_ms=0, area="游戏",
-             parent="网络游戏", income=None):
+             parent="网络游戏", income=None, count=50):
     return {
         "liveId": live_id, "title": title, "startDate": start_ms,
         "stopDate": stop_ms, "parentArea": parent, "area": area,
-        "totalIncome": income, "maxOnlineCount": 100, "danmakusCount": 50,
+        "totalIncome": income, "maxOnlineCount": 100, "danmakusCount": count,
         "coverUrl": None,
     }
 
@@ -268,6 +268,103 @@ def test_merged_two_days_sessions_not_merged(db):
     merged = repo.merged(acc.id)
     assert len(merged) == 2
     assert [m["live_title"] for m in merged] == ["第一天", "第二天"]
+
+
+# ── merged v2（2026-09-07：复制重复 / 中断续播 / 真多场区分） ─────────
+
+def test_merged_dup_records_pick_richer(db):
+    """同场双记录（重叠同骨架，一实一稀疏）→ 并一场，主=富记录，收益不翻倍。"""
+    acc = _mk_account(db)
+    repo = LiveSessionRepo(db)
+    t1, t1e = T0, T0 + timedelta(hours=3)
+    t2, t2e = T0 + timedelta(minutes=10), T0 + timedelta(hours=3)
+    repo.upsert_danmakus(acc.id, [
+        _dm_item("uuid-a", "泽音一周年3D回", _ms(t1), _ms(t1e),
+                 area="虚拟日常", parent="虚拟主播", income=12.0, count=64),
+        _dm_item("uuid-b", "泽音一周年3D回", _ms(t2), _ms(t2e),
+                 area="虚拟日常", parent="虚拟主播", income=99.0, count=17937),
+    ])
+    merged = repo.merged(acc.id)
+    assert len(merged) == 1
+    m = merged[0]
+    assert m["live_id"] == "uuid-b"                        # 富记录为主键
+    assert m["start_at"] == t1                              # 时间并集
+    assert m["end_at"] == t1e
+    assert m["total_income"] == 99.0                        # 收益不翻倍
+    assert m["danmakus_count"] == 17937
+    assert m["segment_count"] == 1                          # 双记录≠两段
+    assert m["source"] == "danmakus"
+
+
+def test_merged_interruption_segments(db):
+    """中断续播（同骨架 gap 6min）→ 并为一场，段数 2，收益/弹幕求和。"""
+    acc = _mk_account(db)
+    repo = LiveSessionRepo(db)
+    a, ae = T0, T0 + timedelta(hours=2)
+    b, be = ae + timedelta(minutes=6), ae + timedelta(hours=2)
+    repo.upsert_danmakus(acc.id, [
+        _dm_item("uuid-a", "我想你 你想我吗?", _ms(a), _ms(ae),
+                 area="虚拟日常", parent="虚拟主播", income=100.0, count=453),
+        _dm_item("uuid-b", "我想你 你想我吗?", _ms(b), _ms(be),
+                 area="虚拟日常", parent="虚拟主播", income=50.0, count=271),
+    ])
+    merged = repo.merged(acc.id)
+    assert len(merged) == 1
+    m = merged[0]
+    assert m["segment_count"] == 2
+    assert m["start_at"] == a and m["end_at"] == be
+    assert m["total_income"] == 150.0
+    assert m["danmakus_count"] == 724
+    # 详情单场只显示一个 live_id（分段记录不暴露）
+    assert m["live_id"] in ("uuid-a", "uuid-b")
+
+
+def test_merged_restart_diff_title_short_gap(db):
+    """平台断播重开/快转场（不同标题 gap 3min）→ 并段（观感连续）。"""
+    acc = _mk_account(db)
+    repo = LiveSessionRepo(db)
+    a, ae = T0, T0 + timedelta(hours=1)
+    b, be = ae + timedelta(minutes=3), ae + timedelta(hours=2)
+    repo.upsert_danmakus(acc.id, [
+        _dm_item("uuid-a", "LSTAR狂暴鸿儒直", _ms(a), _ms(ae), count=13701),
+        _dm_item("uuid-b", "十月 绝对白兰", _ms(b), _ms(be), count=55051),
+    ])
+    merged = repo.merged(acc.id)
+    assert len(merged) == 1
+    assert merged[0]["segment_count"] == 2
+    assert merged[0]["danmakus_count"] == 13701 + 55051
+
+
+def test_merged_true_multi_session_stays(db):
+    """真多场（异标题 gap 90min）→ 保持两场（日历 N 场计数）。"""
+    acc = _mk_account(db)
+    repo = LiveSessionRepo(db)
+    a, ae = T0, T0 + timedelta(hours=1)
+    b, be = ae + timedelta(minutes=90), ae + timedelta(hours=2)
+    repo.upsert_danmakus(acc.id, [
+        _dm_item("uuid-a", "【鸣潮】2.8", _ms(a), _ms(ae),
+                 area="虚拟日常", parent="虚拟主播", count=18348),
+        _dm_item("uuid-b", "一起看看", _ms(b), _ms(be),
+                 area="虚拟日常", parent="虚拟主播", count=11608),
+    ])
+    merged = repo.merged(acc.id)
+    assert len(merged) == 2
+    assert [m["segment_count"] for m in merged] == [1, 1]
+
+
+def test_merged_cross_midnight_interruption_merges(db):
+    """跨午夜中断续播（前一晚 23:00 断 → 次日 00:20 续，同骨架）→ 一场。"""
+    acc = _mk_account(db)
+    repo = LiveSessionRepo(db)
+    a, ae = T0 + timedelta(hours=11), T0 + timedelta(hours=11, minutes=47)
+    b, be = T0 + timedelta(hours=12, minutes=20), T0 + timedelta(hours=13)
+    repo.upsert_danmakus(acc.id, [
+        _dm_item("uuid-a", "深夜电台", _ms(a), _ms(ae), area="虚拟日常"),
+        _dm_item("uuid-b", "深夜电台", _ms(b), _ms(be), area="虚拟日常"),
+    ])
+    merged = repo.merged(acc.id)
+    assert len(merged) == 1
+    assert merged[0]["segment_count"] == 2
 
 
 # ── M2：live_rcmd 卡片映射（fetcher） ──────────────────────────────

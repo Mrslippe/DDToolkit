@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.models.vtuber import (VTuber, Account, Post, AccountStatSnapshot,
                                LiveGiftDay, ThirdpartyVtuber, VtuberEvent,
                                LiveSession, LiveCategoryOverride)
+from app.services.live_type import normalize_title
 
 
 # ── VTuber ─────────────────────────────────────────────────────────
@@ -243,14 +244,17 @@ class LiveSessionRepo:
     """直播场次存取与多源合并。
 
     - 表内：danmakus（M1 回填/同步）/ feed（M3 增量）固定化场次；
-    - 读取：merged() = 表内场次 ∪ self 快照推导场次（虚拟，不落表），
-      快照场次按 start_at ±90min 窗口与表内场次合并（表内为主数据，
-      快照补 end_at/标题，双源并存记 source='xxx+self'）；
+    - 读取：merged() = 表内场次 ∪ self 快照推导场次（虚拟，不落表）；
+      v2 分组（data-calibrated，见 merged() 注释）：同场去重（room/dup）+
+      中断续播并段（interrupt/restart），其余为真正多场次；
     - upsert_danmakus / upsert_feed 是其他数据源的接入接口（回填脚本、
       M3 fetcher 均走这里），用于验证或补充 danmakus 缺失（缺口期/未收录主播）。
     """
 
-    MERGE_WINDOW_MINUTES = 90   # 用户决策（2026-09-07）：±90min 合并窗口
+    MERGE_WINDOW_MINUTES = 90           # self 快照并入窗口（同场观测）
+    SAME_SESSION_ROOM_MINUTES = 90      # 同 room_id 且 start 差 ≤ → 双源同场去重
+    INTERRUPT_SAME_TITLE_MINUTES = 60   # 顺序段 gap ≤ 且同标题骨架 → 中断续播并段
+    RESTART_GAP_MINUTES = 10            # 顺序段 gap ≤ → 平台重开/快转场（连续观感）
 
     def __init__(self, db: Session):
         self.db = db
@@ -337,27 +341,34 @@ class LiveSessionRepo:
     def merged(self, account_id: int) -> list[dict]:
         """多源合并视图（时间升序；字段集见 LiveSessionOut）。
 
-        合并规则（v0.9.x M2，分组式）：
-        - 表内场次（danmakus/feed）先分组：同一账号 start_at 相差 ≤90min 的
-          视为同一场次（danmakus 与 feed 互为去重/互补——B站 live_id 与
-          danmakus uuid 不同键，同一场直播会各有一行）；
-        - 分组主数据优先：danmakus > feed（标题/起止/分区/收益以主为准，
-          低优源仅补缺失字段）；
-        - self 快照推导场次（自观测，不落表）再按 ±90min 并入剩余分组：
-          补 end_at（若主缺）/ 标题兜底；未匹配快照 → source='self' 虚拟场次
-          （danmakus/feed 均未收录的场次，如 2024 缺口期/未收录主播）。
+        分组规则（v2，2026-09-07 按 dev 库 3311 场数据校准——同日相邻场次
+        形态实测：重叠复制 405 对 / 中断续播 87 对 / 真多场（gap>60 且异标题））：
+        - 表内场次线性扫描（时间升序），相邻场次按「同一场」判定合并：
+          1) room  同 room_id 且 start 差 ≤90min（danmakus/feed 双源同场去重）；
+          2) dup   时间重叠/包络且同标题骨架（danmakus 多录制源重复记录，
+                   一实一稀疏，如 mel=64 与 mel=17937 成对出现）→ 并一场
+                   取弹幕更丰富记录为主字段，时间并集，**收益不翻倍**；
+          3) interrupt  顺序段 gap ≤60min 且同标题骨架（直播中断续播）→
+                   并段 segment_count+1，收益/弹幕求和、峰值取最大；
+          4) restart  gap ≤10min（平台断播重开/快转场，观感连续）→ 并段；
+          - 其余情况视为真正多场次（日历「N 场」计数口径）。
+        - self 快照（自观测）按 ±90min 并入最近组（同场事件），未匹配 →
+          'self' 虚拟场次。
         """
         table_rows = self.list_by_account(account_id)
         snapshots = AccountStatSnapshotRepo(self.db).live_sessions(account_id)
-        window = timedelta(minutes=self.MERGE_WINDOW_MINUTES)
-
-        groups: list[tuple[dict, set[str], str]] = []   # (out, sources, primary)
+        groups: list[tuple[dict, set[str], str]] = []
         for row in table_rows:
-            grp = self._find_group(groups, row.start_at, window)
-            if grp is None:
+            hit = groups[-1] if groups else None
+            if hit is None:
                 groups.append(self._group_from_row(row))
                 continue
-            self._merge_row_into_group(grp, row)
+            how = self._merge_decision(hit[0], row)
+            if how is None:
+                groups.append(self._group_from_row(row))
+                continue
+            self._apply_group_merge(hit, row, how)
+        window = timedelta(minutes=self.MERGE_WINDOW_MINUTES)
         for snap in snapshots:
             grp = self._find_group(groups, snap["start_at"], window)
             if grp is None:
@@ -367,6 +378,83 @@ class LiveSessionRepo:
         out = [g for g, _srcs, _prim in groups]
         out.sort(key=lambda s: s["start_at"])
         return out
+
+    def _merge_decision(self, g: dict, row: LiveSession) -> str | None:
+        """相邻场次归类：room / dup / interrupt / restart；None = 真正多场次。"""
+        g_start, g_end = g["start_at"], g.get("end_at")
+        # 1) 双源同场：同 room 且 start 差小（B站 live_id 与 danmakus uuid 异键）
+        if row.room_id and g.get("room_id"):
+            if abs((row.start_at - g_start).total_seconds()) <= timedelta(
+                    minutes=self.SAME_SESSION_ROOM_MINUTES):
+                return "room"
+        ga, ra = normalize_title(g.get("live_title")), normalize_title(row.title)
+        # 2) 重复记录/双源互补：时间重叠且同标题骨架（多录制源，一实一稀疏；
+        #    标题可均为空——feed 补 danmakus 空标题即此场景）
+        if g_end and row.start_at < g_end and ga == ra:
+            return "dup"
+        # 3)/4) 顺序段间隙：前段结束 → 后段开始
+        ref_end = g_end if g_end else g_start
+        gap_min = (row.start_at - ref_end).total_seconds() / 60
+        if gap_min <= self.RESTART_GAP_MINUTES:
+            return "restart"
+        if gap_min <= self.INTERRUPT_SAME_TITLE_MINUTES and ga and ra and ga == ra:
+            return "interrupt"
+        return None
+
+    def _apply_group_merge(self, grp: tuple[dict, set[str], str], row: LiveSession,
+                           how: str) -> None:
+        """按归类应用合并（房间去重走旧主数据优先；dup/并段见 merged() 注释）。"""
+        g, srcs, _primary = grp
+        if how == "room":
+            self._merge_row_into_group(grp, row)
+            return
+        if how == "dup":
+            old_start = g["start_at"]
+            # 弹幕更丰富记录为主字段（标题/分区/收益/弹幕数/峰值）
+            if (row.danmakus_count or 0) > (g.get("danmakus_count") or 0):
+                g.update(self._row_dict(row))
+            # 主缺字段由另一记录补齐（feed 补 danmakus 空标题/分区等）
+            if row.title and not g["live_title"]:
+                g["live_title"] = row.title
+            if row.area_name and not g["area_name"]:
+                g["area_name"] = row.area_name
+            if row.parent_area_name and not g["parent_area_name"]:
+                g["parent_area_name"] = row.parent_area_name
+            if row.room_id and not g["room_id"]:
+                g["room_id"] = row.room_id
+            if row.live_id and not g["live_id"]:
+                g["live_id"] = row.live_id
+            g["start_at"] = min(g["start_at"], old_start)   # 时间取并集（不翻倍收益）
+            if row.end_at and (g.get("end_at") is None or row.end_at > g["end_at"]):
+                g["end_at"] = row.end_at
+                self._apply_duration(g)
+            srcs.add(row.source)
+            g["source"] = self._join_sources(srcs)
+            return
+        # interrupt / restart：顺序段缝合
+        g["segment_count"] = g.get("segment_count", 1) + 1
+        if row.title and not g["live_title"]:
+            g["live_title"] = row.title
+        if row.area_name and not g["area_name"]:
+            g["area_name"] = row.area_name
+        if row.parent_area_name and not g["parent_area_name"]:
+            g["parent_area_name"] = row.parent_area_name
+        if row.total_income is not None:
+            g["total_income"] = (g.get("total_income") or 0.0) + row.total_income
+        if row.danmakus_count is not None:
+            g["danmakus_count"] = (g.get("danmakus_count") or 0) + row.danmakus_count
+        if row.max_online_count is not None:
+            g["max_online_count"] = max(g.get("max_online_count") or 0,
+                                        row.max_online_count)
+        if row.end_at and (g.get("end_at") is None or row.end_at > g["end_at"]):
+            g["end_at"] = row.end_at
+            self._apply_duration(g)
+        if row.room_id and not g["room_id"]:
+            g["room_id"] = row.room_id
+        if row.live_id and not g["live_id"]:
+            g["live_id"] = row.live_id
+        srcs.add(row.source)
+        g["source"] = self._join_sources(srcs)
 
     def _find_group(self, groups, start_at: datetime,
                     window: timedelta) -> tuple[dict, set[str], str] | None:
@@ -445,6 +533,7 @@ class LiveSessionRepo:
             "total_income": row.total_income,
             "max_online_count": row.max_online_count,
             "danmakus_count": row.danmakus_count,
+            "segment_count": 1,
         }
 
     def _snap_dict(self, snap: dict) -> dict:
@@ -461,6 +550,7 @@ class LiveSessionRepo:
             "total_income": None,
             "max_online_count": None,
             "danmakus_count": None,
+            "segment_count": 1,
         }
 
 

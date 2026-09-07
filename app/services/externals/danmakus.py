@@ -7,9 +7,13 @@
   单场次全量列表 {channel, lives: [APILiveInfo], fansHistory} —
   title/startDate/stopDate/parentArea/area/totalIncome/maxOnlineCount/
   danmakusCount，2021-10 起（七海 1193 场实测）；liveId(uuid) 为场次唯一键
+- GET /api/v2/live?liveId=&includeExtra=true 公开免鉴权 ✅（2026-09-07 实测）：
+  单场直播数据（弹幕总数 + extra 词云 wordCloud {词: 次数}）；
+  type 过滤可含 7=直播中止 / 8=直播继续（中断判定信号，备用）
+- GET /api/v3/lives/{liveId}/danmakus 公开免鉴权 ✅：场次弹幕切片
+  （offset/limit 分页，records[].payload 含弹幕原文/礼物/上舰/SC 明细）
 - GET /api/v2/account/channel-lives 401/需登录 🔒：账号贡献维度（token 配置位
-  DANMAKUS_TOKEN 保留，M1 端点已实测免登录，暂不需要）；弹幕 v3 端点同属
-  鉴权列（backlog 暂缓）
+  DANMAKUS_TOKEN 保留，M1 端点已实测免登录，暂不需要）
 
 落库：
 - vup-list → thirdparty_vtubers（source='danmakus_vup'），整表刷新（周级）
@@ -33,6 +37,7 @@ logger = logging.getLogger(__name__)
 DANMAKUS_BASE = "https://ukamnads.icu"
 VUP_LIST_PATH = "/api/v2/vup-list"
 CHANNEL_PATH = "/api/v2/channel"
+LIVE_PATH = "/api/v2/live"
 
 # 鉴权端点（当前未启用）：有 token 时在请求头携带（Token: <token>，实测有效）
 DANMAKUS_TOKEN_ENV = "DANMAKUS_TOKEN"
@@ -74,6 +79,72 @@ async def fetch_channel(mid: str, client: httpx.AsyncClient) -> dict | None:
 
 def _auth_headers(token: str | None) -> dict:
     return {"Token": token} if token else {}
+
+
+def _parse_live_summary(payload: dict) -> dict | None:
+    """/api/v2/live 响应 → 摘要（弹幕总数 + 词云 top20）。形状判空后解析。"""
+    if not isinstance(payload, dict):
+        return None
+    total = payload.get("total")
+    try:
+        total = int(total) if total is not None else None
+    except (TypeError, ValueError):
+        total = None
+    inner = payload.get("data")
+    live = None
+    if isinstance(inner, dict):
+        live = inner.get("live")
+    elif isinstance(inner, list):
+        live = inner[0] if inner else None
+    if not isinstance(live, dict):
+        return {"total": total, "danmakus_count": None, "word_cloud": []}
+    extra = live.get("extra") or {}
+    wc = extra.get("wordCloud") or {}
+    top = []
+    if isinstance(wc, dict):
+        for k, v in wc.items():
+            try:
+                v = int(v)
+            except (TypeError, ValueError):
+                continue
+            if v > 0:
+                top.append((str(k), v))
+        top.sort(key=lambda kv: -kv[1])
+    return {
+        "total": total,
+        "danmakus_count": live.get("danmakusCount"),
+        "word_cloud": top[:20],
+    }
+
+
+async def fetch_live_summary(live_id: str) -> dict | None:
+    """公开端点（免鉴权，实测 2026-09-07）：单场直播弹幕摘要。
+
+    请求 /api/v2/live?liveId=&includeExtra=true（弹幕总量 + 词云）；
+    失败/异常一律返回 None（调用方降级为「暂无弹幕数据」）。
+    """
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            resp = await client.get(
+                f"{DANMAKUS_BASE}{LIVE_PATH}",
+                params={"liveId": live_id, "pageNum": 0, "pageSize": 1,
+                        "includeDanmakus": "true", "includeExtra": "true"},
+                headers=BROWSER_HEADERS,
+            )
+    except httpx.HTTPError:
+        return None
+    if resp.status_code != 200:
+        logger.warning(f"danmakus live 详情 HTTP {resp.status_code} liveId={live_id}")
+        return None
+    try:
+        data = resp.json()
+    except ValueError:
+        return None
+    if not isinstance(data, dict) or data.get("code") != 200:
+        logger.warning(f"danmakus live 详情响应异常 liveId={live_id}: "
+                       f"code={data.get('code') if isinstance(data, dict) else '?'}")
+        return None
+    return _parse_live_summary(data.get("data"))
 
 
 class DanmakusSource(ExternalSource):

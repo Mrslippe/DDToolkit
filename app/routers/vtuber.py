@@ -28,6 +28,8 @@ from app.services import pool
 from app.services.live_type import (
     infer_category, plan_series, build_learned, EDITABLE_CATEGORY_KEYS,
 )
+from app.services.externals.danmakus import fetch_live_summary
+from app.schemas.vtuber import LiveDanmakuInfo
 from app.services.post_text import extract_post_text
 
 logger = logging.getLogger(__name__)
@@ -340,11 +342,14 @@ def live_sessions(account_id: int, db: Session = Depends(get_db)):
 
 @router.get("/account/{account_id}/live-sessions/{live_id}",
             response_model=LiveSessionDetailOut)
-def live_session_detail(account_id: int, live_id: str, db: Session = Depends(get_db)):
+async def live_session_detail(account_id: int, live_id: str,
+                              db: Session = Depends(get_db)):
     """单场次详情（user 2026-09-07：点击日期格 → 独立详情弹窗）。
 
     与列表端同链路（merged + v2 信号栈）；附预留字段 danmaku（弹幕信息）/
-    analysis（内容分析）——接口先留、具体内容之后再做（数据服务就位前返回 None）。
+    analysis（内容分析）——弹幕数据已接入（danmakus 公开端点
+    /api/v2/live?liveId=&includeExtra=，免鉴权实测：弹幕总数 + 词云），
+    分析服务仍预留；网络失败降级为 None。
     """
     account, vtuber, event_dates, overrides = _live_infer_ctx(db, account_id)
     if not account:
@@ -364,8 +369,17 @@ def live_session_detail(account_id: int, live_id: str, db: Session = Depends(get
         live_id=live_id, overrides=overrides,
         series_categories=series_categories, learned=learned,
     )
+    danmaku = None
+    if "danmakus" in (s.get("source") or "").split("+"):
+        summary = await fetch_live_summary(live_id)
+        if summary:
+            danmaku = LiveDanmakuInfo(
+                total=summary.get("total"),
+                top_keywords=[w for w, _c in (summary.get("word_cloud") or [])][:12],
+            )
     return LiveSessionDetailOut(account_id=account_id, **s,
-                                category=category, category_from=category_from)
+                                category=category, category_from=category_from,
+                                danmaku=danmaku)
 
 
 class LiveCategoryUpdate(BaseModel):
