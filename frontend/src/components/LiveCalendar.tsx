@@ -174,8 +174,76 @@ function clipHalf(poly: [number, number][], ax: number, ay: number, b: number) {
  *   ② 权重修正：λ_i += β (目标面积 − 当前面积)（β=0.5 实测收敛，
  *   面积偏差 ≤8%，无空单元——词频越高面积越大由数学保证）。
  * - 初始站点极坐标占位（hero=中心、大词靠内、黄金角），布局确定性（种子）。
+ * - 返回 cells + 收敛后的 sites/lambda（作为「基座」——破泡后固定站点，
+ *   只删约束 → 邻居原位膨胀，站点不动：2026-09-07 user 反馈修正）。
  */
-function layoutPowerCloud(words: BubbleWord[], w: number, h: number): VoronoiCell[] {
+
+interface PowerLayout {
+  cells: VoronoiCell[]
+  sites: [number, number][]
+  lambda: number[]
+}
+
+/** 单次细胞计算（无弛豫）：给定 words/sites/lambda 求各凸单元（null=空） */
+function diagramCellsOf(
+  words: BubbleWord[],
+  sites: [number, number][],
+  lambda: number[],
+  box: [number, number][],
+): ([number, number][] | null)[] {
+  const n = words.length
+  return words.map((_w, i) => {
+    let poly = box
+    const [cx, cy] = sites[i]
+    const ci2 = cx * cx + cy * cy
+    for (let j = 0; j < n; j++) {
+      if (j === i) continue
+      const [jx, jy] = sites[j]
+      poly = clipHalf(poly, 2 * (jx - cx), 2 * (jy - cy),
+        jx * jx + jy * jy - ci2 - (lambda[j] - lambda[i]))
+      if (!poly.length) return null
+    }
+    return poly
+  })
+}
+
+/** 单元 → VoronoiCell[]（质心/等效半径/hero=首词） */
+function finishCells(words: BubbleWord[], polys: ([number, number][] | null)[]): VoronoiCell[] {
+  return words.map((word, i) => {
+    const pts = polys[i] ?? [[0, 0], [0, 0], [0, 0]]
+    const cx = pts.reduce((s, p) => s + p[0], 0) / pts.length
+    const cy = pts.reduce((s, p) => s + p[1], 0) / pts.length
+    let a = 0
+    for (let k = 0; k < pts.length; k++) {
+      const p1 = pts[k]
+      const p2 = pts[(k + 1) % pts.length]
+      a += p1[0] * p2[1] - p2[0] * p1[1]
+    }
+    return {
+      word, poly: pts, cx, cy,
+      r: Math.sqrt(Math.abs(a / 2) / Math.PI),
+      hero: i === 0,
+    }
+  })
+}
+
+/** 固定站点布局（破泡后的原位膨胀）：只删被破词的半平面约束，站点/权重不动 */
+function fixedCellsFor(
+  words: BubbleWord[],
+  base: { words: string[]; sites: [number, number][]; lambda: number[] },
+  w: number,
+  h: number,
+): VoronoiCell[] {
+  if (!words.length) return []
+  const idx = words.map((x) => base.words.indexOf(x.text))
+  if (idx.some((i) => i < 0)) return [] // 基座未就绪（保护）
+  const sites = idx.map((i) => base.sites[i])
+  const lambda = idx.map((i) => base.lambda[i])
+  const polys = diagramCellsOf(words, sites, lambda, [[0, 0], [w, 0], [w, h], [0, h]])
+  return finishCells(words, polys)
+}
+
+function layoutPowerCloud(words: BubbleWord[], w: number, h: number): PowerLayout {
   const BETA = 0.5
   const ITERS = 120
   const rand = mulberry32(20260907)
@@ -195,19 +263,6 @@ function layoutPowerCloud(words: BubbleWord[], w: number, h: number): VoronoiCel
   let lambda = words.map((_w, i) => tgt[i] / n)
   const box: [number, number][] = [[0, 0], [w, 0], [w, h], [0, h]]
 
-  const cellsOf = () => words.map((_w, i) => {
-    let poly = box
-    const [cx, cy] = sites[i]
-    const ci2 = cx * cx + cy * cy
-    for (let j = 0; j < n; j++) {
-      if (j === i) continue
-      const [jx, jy] = sites[j]
-      poly = clipHalf(poly, 2 * (jx - cx), 2 * (jy - cy),
-        jx * jx + jy * jy - ci2 - (lambda[j] - lambda[i]))
-      if (!poly.length) return null
-    }
-    return poly
-  })
   const areaOf = (polys: ([number, number][] | null)[]) => polys.map((pts) => {
     if (!pts) return 0
     let a = 0
@@ -220,7 +275,7 @@ function layoutPowerCloud(words: BubbleWord[], w: number, h: number): VoronoiCel
   })
 
   for (let it = 0; it < ITERS; it++) {
-    const polys = cellsOf()
+    const polys = diagramCellsOf(words, sites, lambda, box)
     const areas = areaOf(polys)
     let maxRel = 0
     for (let i = 0; i < n; i++) {
@@ -247,18 +302,12 @@ function layoutPowerCloud(words: BubbleWord[], w: number, h: number): VoronoiCel
     if (maxRel < 0.1) break
   }
 
-  const polys = cellsOf()
-  const areas = areaOf(polys)
-  return words.map((word, i) => {
-    const pts = polys[i] ?? [[0, 0], [0, 0], [0, 0]]
-    const cx = pts.reduce((s, p) => s + p[0], 0) / pts.length
-    const cy = pts.reduce((s, p) => s + p[1], 0) / pts.length
-    return {
-      word, poly: pts, cx, cy,
-      r: Math.sqrt(areas[i] / Math.PI),
-      hero: i === 0,
-    }
-  })
+  const polys = diagramCellsOf(words, sites, lambda, box)
+  return {
+    cells: finishCells(words, polys),
+    sites,
+    lambda,
+  }
 }
 
 /** 词云破泡动画时长（ms）：与 CSS lc-bubble-pop 0.42s 同步 */
@@ -325,9 +374,10 @@ function sampleRel(poly: [number, number][], cx: number, cy: number, n: number):
  * - 面积 ∝ 词频（power diagram 数学保证：词频越高面积越大）；
  * - 浅色填充 + 深色词字（贴合卡片整体风格）；hover 高亮 + 「词 · N 次」；
  * - 破泡（2026-09-07 user 定案）：点击单元 → 鼓泡缩灭（+质心环波）0.42s →
- *   移除该词 → **挤入形变**：其余细胞经 SAMPLE_N=28 点列插值真实变形
- *   （拉扯/压扁）+ 波次推挤（距离梯度延迟）+ 呼吸 + 3% 过冲回弹，滑向新质心；
- *   标题行右侧「已破泡 N · 恢复」一键复原。
+ *   移除该词 → **挤入形变**：目标布局 = 固定站点 power diagram（只删被破词
+ *   约束，站点不动 → 邻居原位膨胀、远处纹丝不动——泡沫物理）；其余细胞经
+ *   SAMPLE_N=28 点列插值真实变形（拉扯/压扁）+ 波次推挤（距离梯度延迟）+
+ *   呼吸 + 3% 过冲回弹；标题行右侧「已破泡 N · 恢复」一键复原。
  * - 渲染结构：外层 g 定位（style transform translate）+
  *   内层 .lc-dlg-cloud-bubble（transform-box:fill-box 承载破泡缩放）。
  */
@@ -411,14 +461,29 @@ function VoronoiCloud({
   visibleRef.current = visible
   sizeRef.current = size
 
+  /**
+   * 布局基座：初始/尺寸变化时全量弛豫一次；破泡后【固定站点】——
+   * 只删被破词的约束 → 邻居原位膨胀、远处纹丝不动（user 反馈修正：
+   * 此前全局重排导致大幅位移；泡沫物理 = 位置不变、大小/形状变化）。
+   */
+  const baseLayout = useMemo(() => {
+    if (!data.length || size.w < 80) return null
+    const r = layoutPowerCloud(data, size.w, size.h)
+    return { words: data.map((x) => x.text), sites: r.sites, lambda: r.lambda }
+  }, [data, size.w, size.h])
+  const baseRef = useRef(baseLayout)
+  baseRef.current = baseLayout
+
   const cells = useMemo(() => {
-    if (!visible.length || size.w < 80) return []
-    return layoutPowerCloud(visible, size.w, size.h)
-  }, [visible, size.w, size.h])
+    if (!visible.length || !baseLayout || size.w < 80) return []
+    return fixedCellsFor(visible, baseLayout, size.w, size.h)
+  }, [visible, baseLayout, size.w, size.h])
   cellsRef.current = cells
 
   /**
    * 挤入形变：把幸存细胞从「含被破词」的旧布局插值到「去掉后」的新布局。
+   * 目标布局 = **固定站点 power diagram**（baseRef 基座取幸存子集）——
+   * 只删被破词约束：邻居原位膨胀、远处不动（泡沫物理；非全局重排）。
    * 波次推挤：距破泡质心越近 → delay 越小、时长越短；呼吸 = 1+0.07·sin(π·e)；
    * easeOutBack(c1=0.9) ≈3% 过冲回弹；全部到达后落定静态（无跳变）。
    */
@@ -427,11 +492,12 @@ function VoronoiCloud({
     const from = cellsRef.current
     const fromPopped = from.find((c) => c.word.text === popText)
     const toWords = visibleRef.current.filter((w) => w.text !== popText)
-    if (!fromPopped || toWords.length === 0) return
+    const base = baseRef.current
+    if (!fromPopped || toWords.length === 0 || !base) return
     const w = sizeRef.current.w
     const h = sizeRef.current.h
     if (w < 80) return
-    const to = layoutPowerCloud(toWords, w, h)
+    const to = fixedCellsFor(toWords, base, w, h)
     const toByWord = new Map(to.map((c) => [c.word.text, c]))
     const survivors = from.filter((c) => c.word.text !== popText)
     if (survivors.length === 0) return
