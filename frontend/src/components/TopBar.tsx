@@ -15,7 +15,7 @@ import {
 import { useIsMaximized } from '../hooks/useIsMaximized'
 import { setFetchBusy } from '../fetchBusy'
 import { api } from '../api/api'
-import type { AuthStatus, FetchStatus, PostFetchStatus } from '../api/types'
+import type { AccountSnapshot, AuthStatus, FetchStatus, PostFetchStatus } from '../api/types'
 import './../styles/layout.css'
 
 /** 中断原因 → 可读文案（已完成对话框用） */
@@ -60,7 +60,15 @@ export default function TopBar() {
   // 全量抓取完成的常驻报告：需用户手动关闭（AlertDialog 默认不支持点外部/ESC 关闭）
   const [doneReport, setDoneReport] = useState<NonNullable<PostFetchStatus['last_result']> | null>(null)
   const prevRunning = useRef(false)
-  const seenRecent = useRef(0)
+  // 账号快照已派发基线：platform_uid → 快照摘要（内容 diff 用）。
+  // 2026-09-07 修复：原「recent.length 增量」判定在两种场景丢失事件——
+  // ① T0 直播轮询每 60s 推进 6+ 条、recent 环形上限 100，约 15 分钟后长度不再
+  //    增长，直播 1→0 的推送永远不再派发；
+  // ② T1 任务启动清空 recent 后在两次轮询间完成 → 长度回落触发基线重置，
+  //    整批快照被静默丢弃（右栏靠场景预取直读 DB 而新鲜，左栏停留旧值）。
+  // 改为内容 diff：只要某账号的快照内容变化（含 live_status 1→0）即派发，
+  // 对长度变化/环形上限/清空全部免疫，一个轮询周期内必然收敛。
+  const seenByUid = useRef<Record<string, string>>({})
   // 轮询并发保护：kick-poll 在请求 in-flight 期间再次触发时只打标记，
   // 请求结束后立即补一轮——否则会并行跑两条轮询链，频率翻倍且不收敛
   const inFlight = useRef(false)
@@ -90,16 +98,23 @@ export default function TopBar() {
         active = s.account.running || s.post.running
         setFetchBusy(s.account.running, s.post.running)
 
-        // 账号快照增量 → 派发事件，侧栏就地刷新（每完成一条触发一次）
+        // 账号快照变化 → 派发事件，侧栏/右栏就地刷新（内容 diff：见 seenByUid 注释）
         const recent = s.account.recent ?? []
-        if (recent.length > seenRecent.current) {
-          const fresh = recent.slice(seenRecent.current)
-          seenRecent.current = recent.length
+        const freshByUid = new Map<string, AccountSnapshot>()
+        for (const snap of recent) {
+          const uid = String(snap.platform_uid)
+          const digest = JSON.stringify(snap)
+          if (seenByUid.current[uid] !== digest) {
+            seenByUid.current[uid] = digest
+            freshByUid.set(uid, snap) // 同账号多条时保留最新一条（后端顺序即时间序）
+          }
+        }
+        if (freshByUid.size > 0) {
           window.dispatchEvent(
-            new CustomEvent('ddtoolkit:account-progress', { detail: fresh }),
+            new CustomEvent('ddtoolkit:account-progress', {
+              detail: [...freshByUid.values()],
+            }),
           )
-        } else if (recent.length < seenRecent.current) {
-          seenRecent.current = recent.length // 新一轮任务，基线重置
         }
 
         // 新任务启动时立即让位给实时状态显示
