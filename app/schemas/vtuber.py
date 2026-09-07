@@ -288,6 +288,34 @@ class LiveCategoryOut(BaseModel):
     category_from: str = "override"
 
 
+class LiveDanmakuInfo(BaseModel):
+    """弹幕信息（预留接口：待 danmakus 场次级详细数据接入后填充）。
+
+    字段为占位契约（场次级弹幕总量/热词/高光片段），数据服务就位前
+    LiveSessionDetailOut.danmaku 恒为 None，前端显示占位文案。
+    """
+    total: int | None = None
+    top_keywords: list[str] = []
+    hot_segments: list[dict] = []     # 预留：[{start, end, count}] 高浓度片段
+
+
+class LiveAnalysisInfo(BaseModel):
+    """直播内容分析（预留接口：后续内容分析服务接入后填充）。"""
+    summary: str | None = None
+    tags: list[str] = []
+    highlights: list[dict] = []       # 预留：高潮/名场面时间点
+
+
+class LiveSessionDetailOut(LiveSessionOut):
+    """单场次详情（user 2026-09-07：点击日期格 → 独立详情弹窗）。
+
+    与列表端同链路（merged + v2 信号栈，读取时计算）；新增预留字段：
+    danmaku（弹幕信息）/ analysis（内容分析）——接口先留，内容之后再做。
+    """
+    danmaku: LiveDanmakuInfo | None = None
+    analysis: LiveAnalysisInfo | None = None
+
+
 # ── 重要日期·大型活动（P7，v0.7.0） ────────────────────────────────
 
 class VtuberEventOut(BaseModel):

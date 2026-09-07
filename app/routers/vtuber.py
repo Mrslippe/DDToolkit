@@ -21,7 +21,7 @@ from app.schemas.vtuber import (
     AccountOut, AccountCreate, AccountUpdate,
     PostOut, PostCreate, PostUpdate, PostPage, PostStats,
     AccountStatSnapshotOut, LiveGiftDayOut, ThirdpartyVtuberOut,
-    FanTrendPoint, LiveSessionOut, LiveCategoryOut,
+    FanTrendPoint, LiveSessionOut, LiveCategoryOut, LiveSessionDetailOut,
     VtuberEventOut, VtuberEventCreate, FutureReservationOut,
 )
 from app.services import pool
@@ -297,6 +297,15 @@ def fan_trend(account_id: int, db: Session = Depends(get_db)):
     return [FanTrendPoint(**p) for p in AccountStatSnapshotRepo(db).fan_trend_points(account_id)]
 
 
+def _live_infer_ctx(db: Session, account_id: int):
+    """场次推断上下文（列表端/详情端共用）：账号/vtuber/事件/校正。"""
+    account = AccountRepo(db).get(account_id)
+    vtuber = account.vtuber if account else None
+    events = VtuberEventRepo(db).list_by_vtuber(vtuber.id) if vtuber else []
+    overrides = LiveCategoryOverrideRepo(db).map_by_account(account_id)
+    return account, vtuber, [e.event_date for e in events], overrides
+
+
 @router.get("/account/{account_id}/live-sessions", response_model=list[LiveSessionOut])
 def live_sessions(account_id: int, db: Session = Depends(get_db)):
     """直播场次（v0.9.x 内容管道 M1 主源 + v2 多信号类型推断）。
@@ -307,14 +316,10 @@ def live_sessions(account_id: int, db: Session = Depends(get_db)):
       override（用户校正）> series（系列聚类）> title（多词评分）>
       learned（校正反哺词库）> area（分区）> date（纪念日）> fallback
     """
-    if not AccountRepo(db).get(account_id):
+    account, vtuber, event_dates, overrides = _live_infer_ctx(db, account_id)
+    if not account:
         raise HTTPException(404, f"Account id={account_id} 不存在")
-    account = AccountRepo(db).get(account_id)
-    vtuber = account.vtuber if account else None
-    events = VtuberEventRepo(db).list_by_vtuber(vtuber.id) if vtuber else []
-    event_dates = [e.event_date for e in events]
     sessions = LiveSessionRepo(db).merged(account_id)
-    overrides = LiveCategoryOverrideRepo(db).map_by_account(account_id)
     series_categories = plan_series(sessions, overrides)
     learned = build_learned(overrides, sessions)
     out = []
@@ -331,6 +336,36 @@ def live_sessions(account_id: int, db: Session = Depends(get_db)):
         out.append(LiveSessionOut(account_id=account_id, **s,
                                   category=category, category_from=category_from))
     return out
+
+
+@router.get("/account/{account_id}/live-sessions/{live_id}",
+            response_model=LiveSessionDetailOut)
+def live_session_detail(account_id: int, live_id: str, db: Session = Depends(get_db)):
+    """单场次详情（user 2026-09-07：点击日期格 → 独立详情弹窗）。
+
+    与列表端同链路（merged + v2 信号栈）；附预留字段 danmaku（弹幕信息）/
+    analysis（内容分析）——接口先留、具体内容之后再做（数据服务就位前返回 None）。
+    """
+    account, vtuber, event_dates, overrides = _live_infer_ctx(db, account_id)
+    if not account:
+        raise HTTPException(404, f"Account id={account_id} 不存在")
+    sessions = LiveSessionRepo(db).merged(account_id)
+    s = next((x for x in sessions if x.get("live_id") == live_id), None)
+    if s is None:
+        raise HTTPException(404, f"LiveSession live_id={live_id} 不存在")
+    series_categories = plan_series(sessions, overrides)
+    learned = build_learned(overrides, sessions)
+    category, category_from = infer_category(
+        s["live_title"], s.get("area_name"), s.get("parent_area_name"),
+        s["start_at"],
+        birthday=vtuber.birthday if vtuber else None,
+        debut_date=vtuber.debut_date if vtuber else None,
+        event_dates=event_dates,
+        live_id=live_id, overrides=overrides,
+        series_categories=series_categories, learned=learned,
+    )
+    return LiveSessionDetailOut(account_id=account_id, **s,
+                                category=category, category_from=category_from)
 
 
 class LiveCategoryUpdate(BaseModel):

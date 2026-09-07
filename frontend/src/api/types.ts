@@ -116,6 +116,28 @@ export interface LiveSession {
   category_from?: string
 }
 
+/** 弹幕信息（预留接口：danmakus 场次级详细数据接入后填充，当前为 null） */
+export interface LiveDanmakuInfo {
+  total?: number | null
+  top_keywords?: string[]
+  /** 预留：[{ start, end, count }] 高浓度片段 */
+  hot_segments?: Record<string, unknown>[]
+}
+
+/** 直播内容分析（预留接口：内容分析服务接入后填充，当前为 null） */
+export interface LiveAnalysisInfo {
+  summary?: string | null
+  tags?: string[]
+  /** 预留：高潮/名场面时间点 */
+  highlights?: Record<string, unknown>[]
+}
+
+/** 单场次详情（点击日期格 → 详情弹窗；danmaku/analysis 为预留字段） */
+export interface LiveSessionDetail extends LiveSession {
+  danmaku?: LiveDanmakuInfo | null
+  analysis?: LiveAnalysisInfo | null
+}
+
 /** 直播礼物日聚合（金额为原始字符串保精度） */
 export interface GiftDay {
   id: number

@@ -1,4 +1,4 @@
-import type { Account, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, FutureReservation, GiftDay, LiveSession, PoolItem, PostPage, PostStats, ThirdpartyVtuber, UpdatePostsResult, VTuber, VtuberEvent } from './types'
+import type { Account, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, FutureReservation, GiftDay, LiveSession, LiveSessionDetail, PoolItem, PostPage, PostStats, ThirdpartyVtuber, UpdatePostsResult, VTuber, VtuberEvent } from './types'
 
 /**
  * API 基地址：
@@ -98,6 +98,12 @@ export const api = {
   /** 直播场次（由 self 快照转移推导） */
   liveSessions: (accountId: number) =>
     request<LiveSession[]>(`/account/${accountId}/live-sessions`),
+
+  /** 单场次详情（详情弹窗；danmaku/analysis 为预留接口字段） */
+  liveSessionDetail: (accountId: number, liveId: string) =>
+    request<LiveSessionDetail>(
+      `/account/${accountId}/live-sessions/${encodeURIComponent(liveId)}`,
+    ),
 
   /** 用户校正场次分类（v2 第⑦信号：override 最高优先，并反哺系列/词库） */
   setLiveSessionCategory: (accountId: number, liveId: string, category: string) =>

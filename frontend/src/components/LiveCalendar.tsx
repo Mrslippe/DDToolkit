@@ -1,8 +1,8 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Loader2 } from 'lucide-react'
-import type { LiveSession } from '../api/types'
+import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Loader2, X } from 'lucide-react'
+import type { LiveSession, LiveSessionDetail } from '../api/types'
 import { api } from '../api/api'
 import { LIVE_TYPE_ORDER, inferLiveType, liveTypeLabel } from '../utils/liveType'
 
@@ -76,6 +76,15 @@ interface PopState {
   sessions: LiveSession[]
 }
 
+/** 场次详情弹窗（点击日期格打开；data=详情端点（含预留 danmaku/analysis）） */
+interface DetailState {
+  key: string              // 日期 key（防异步回写错位）
+  sessions: LiveSession[]  // 当日场次（多场切换用）
+  idx: number              // 当前查看第 idx 场
+  data: LiveSessionDetail | null
+  loading: boolean
+}
+
 /**
  * 直播日历（v0.9.2 重建 → v0.9.x M4 内容管道）：
  * - 卡片 870 定宽上限居中（用户参数）；网格 7 列 × 115.714286px + 4px 列/行距
@@ -89,12 +98,17 @@ interface PopState {
  *   · 格内按最开始布局单场呈现：时间行（HH:MM 真实分钟）+ 右侧「N 场」当日场次计数 + 单行标题
  *     （颜色跟随格类型色系：游戏蓝/杂谈黄/观影紫/投稿绿…，user 2026-09-07）；
  *   · hover 格子 → 浮层（当日全量：起止/时长/标题/类型/分区/收益/峰值在线/弹幕/数据源），
- *     鼠标滑向浮层有 120ms 宽限不闪关；Esc 关闭；
+ *     鼠标滑向浮层有 120ms 宽限不闪关；Esc 关闭；保持纯信息展示（user 2026-09-07：
+ *     分类校正移出浮层 → 点击日期格进详情弹窗）；
+ *   · 点击日期格 → 独立详情弹窗（user 2026-09-07）：
+ *     直播信息（起止/分区/收益/峰值/弹幕/数据源）+ 分类校正下拉（override 源）+
+ *     「弹幕信息」「直播内容分析」预留区块（danmaku/analysis 接口先留，内容之后再做）；
+ *   · 月份切换滑动动画（user 2026-09-07：前进/后退方向感，keyed 重放）；
  *   · 无场次的格子：今天以前 = 「休息」；今天及以后 = 「待定」（user 2026-09-07）；
  *   · 礼物数据暂不展示（user 2026-09-07：之后从 danmakus 取场次级详细数据；
  *     浮层「收益」即 danmakus 场次级），格内礼物行/当日礼物合计已退役；
  *   · 类型徽章/统计用后端 category（v2 多信号：校正>系列>标题评分>词库>分区>纪念日），
- *     服务端缺失时前端关键词兜底；浮层内提供分类校正下拉（override 源）。
+ *     服务端缺失时前端关键词兜底。
  */
 const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: Props) {
   const now = new Date()
@@ -107,6 +121,11 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
 
   /** 校正请求进行中的 live_id（下拉禁用防连点） */
   const [savingCategory, setSavingCategory] = useState<string | null>(null)
+
+  /** 月份切换动画方向（1=前进/向右滑入，-1=后退/向左滑入）；keyed 重放 */
+  const [navDir, setNavDir] = useState<1 | -1>(1)
+
+  const [detail, setDetail] = useState<DetailState | null>(null)
 
   // 月份选择浮窗：独立年份游标（打开时同步 ym 的年）
   const [monthPopOpen, setMonthPopOpen] = useState(false)
@@ -151,6 +170,11 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
   useEffect(() => {
     setPop(null)
   }, [ym, accountId, sessions])
+
+  // 账号切换 → 关闭详情弹窗（数据归属变化）
+  useEffect(() => {
+    setDetail(null)
+  }, [accountId])
 
   const byDay = useMemo(() => {
     const m = new Map<string, LiveSession[]>()
@@ -207,6 +231,7 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
 
   const moveMonth = (delta: number) => {
     setMonthPopOpen(false)
+    setNavDir(delta > 0 ? 1 : -1)
     setYm(({ y, m }) => {
       const d = new Date(y, m + delta, 1)
       return { y: d.getFullYear(), m: d.getMonth() }
@@ -219,6 +244,7 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
   }
 
   const pickMonth = (m: number) => {
+    setNavDir(popYear * 12 + m >= ym.y * 12 + ym.m ? 1 : -1)
     setYm({ y: popYear, m })
     setMonthPopOpen(false)
   }
@@ -265,12 +291,55 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
       if (value === 'auto') await api.clearLiveSessionCategory(accountId, liveId)
       else await api.setLiveSessionCategory(accountId, liveId, value)
       load()
+      // 详情弹窗内校正 → 同步刷新详情（徽章/分类来源即时更新）
+      const d = await api.liveSessionDetail(accountId, liveId)
+      setDetail((prev) => (prev ? { ...prev, data: d } : prev))
     } catch (e) {
       setError((e as Error).message || '分类保存失败')
     } finally {
       setSavingCategory(null)
     }
   }
+
+  /** 打开场次详情弹窗（点击日期格；当日多场从第一场起，顶部可切换） */
+  const openDetail = (c: DayCell) => {
+    clearPopTimer()
+    setPop(null)
+    if (c.state !== 'live' || c.sessions.length === 0) return
+    const first = c.sessions[0]
+    setDetail({
+      key: c.key, sessions: c.sessions, idx: 0,
+      data: null, loading: !!(first.live_id && accountId),
+    })
+    if (first.live_id && accountId) {
+      api.liveSessionDetail(accountId, first.live_id)
+        .then((d) => setDetail((p) => (p && p.key === c.key ? { ...p, data: d, loading: false } : p)))
+        .catch(() => setDetail((p) => (p && p.key === c.key ? { ...p, loading: false } : p)))
+    }
+  }
+
+  /** 详情弹窗内切换当日第 idx 场 */
+  const switchDetailIdx = (idx: number) => {
+    if (!detail || idx === detail.idx) return
+    const s = detail.sessions[idx]
+    const key = detail.key
+    setDetail({ ...detail, idx, data: null, loading: !!(s.live_id && accountId) })
+    if (s.live_id && accountId) {
+      api.liveSessionDetail(accountId, s.live_id)
+        .then((d) => setDetail((p) => (p && p.key === key ? { ...p, data: d, loading: false } : p)))
+        .catch(() => setDetail((p) => (p && p.key === key ? { ...p, loading: false } : p)))
+    }
+  }
+
+  // Esc 关闭详情弹窗
+  useEffect(() => {
+    if (!detail) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setDetail(null)
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [detail])
 
   const renderCell = (c: DayCell) => {
     const first = c.sessions[0]
@@ -295,6 +364,7 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
         className={'lc-cell' + toneCls}
         onMouseEnter={(e) => openCellPop(c, e)}
         onMouseLeave={closeCellPop}
+        onClick={() => openDetail(c)}
       >
         <div className="lc-cell-head">
           <span className="lc-day">{c.date.getDate()}</span>
@@ -366,29 +436,126 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
                     {meta.length ? ` · ${meta.join(' · ')}` : ''}
                   </div>
                   {figures.length > 0 && <div className="lc-pop-meta">{figures.join(' · ')}</div>}
-                  {s.live_id ? (
-                    <div className="lc-pop-edit">
-                      <span className="lc-pop-edit-label">分类</span>
-                      <select
-                        className="lc-pop-select"
-                        value={s.category ?? 'live'}
-                        disabled={savingCategory === s.live_id}
-                        onChange={(e) => onPickCategory(s, e.target.value)}
-                      >
-                        <option value="auto">自动</option>
-                        {LIVE_TYPE_ORDER.map((t) => (
-                          <option key={t.key} value={t.key}>{t.label}</option>
-                        ))}
-                      </select>
-                      {s.category_from === 'override' && (
-                        <span className="lc-pop-corr">已校正</span>
-                      )}
-                    </div>
-                  ) : null}
                   <div className="lc-pop-src">数据源 {srcs.join(' + ')}</div>
                 </div>
               )
             })}
+        </div>
+      </div>,
+      document.body,
+    )
+  }
+
+  /** 详情弹窗：直播信息 + 分类校正 + 预留「弹幕信息 / 内容分析」区块 */
+  const renderDetail = () => {
+    if (!detail) return null
+    const s: LiveSessionDetail =
+      detail.data ?? { ...detail.sessions[detail.idx], danmaku: null, analysis: null }
+    const d0 = new Date(s.start_at)
+    const d1 = s.end_at ? new Date(s.end_at) : null
+    const t = keyOf(s)
+    const srcs = (s.source ?? 'self').split('+').filter(Boolean)
+    const area = [s.parent_area_name, s.area_name].filter(Boolean).join(' / ')
+    return createPortal(
+      <div
+        className="lc-dlg-backdrop"
+        onMouseDown={(e) => {
+          if (e.target === e.currentTarget) setDetail(null)
+        }}
+      >
+        <div className="lc-dlg" role="dialog" aria-modal="true">
+          <div className="lc-dlg-head">
+            <div className="lc-dlg-title">
+              <span className={`lc-pop-badge lc-stat-pill--${t}`}>{liveTypeLabel(t)}</span>
+              <span className="lc-dlg-name">{s.live_title || '场次详情'}</span>
+            </div>
+            <button type="button" className="lc-dlg-close" aria-label="关闭" onClick={() => setDetail(null)}>
+              <X className="size-4" />
+            </button>
+          </div>
+
+          {/* 当日多场切换（点格默认第一场） */}
+          {detail.sessions.length > 1 && (
+            <div className="lc-dlg-tabs">
+              {detail.sessions.map((x, i) => (
+                <button
+                  key={x.live_id ?? `${x.start_at}-${i}`}
+                  type="button"
+                  className={`lc-dlg-tab${i === detail.idx ? ' on' : ''}`}
+                  onClick={() => switchDetailIdx(i)}
+                >
+                  {fmtTime(new Date(x.start_at))}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div className="lc-dlg-body">
+            <section className="lc-dlg-sec">
+              <h4 className="lc-dlg-sec-title">直播信息</h4>
+              <dl className="lc-dlg-fields">
+                <div className="lc-dlg-field">
+                  <dt>时间</dt>
+                  <dd>{fmtTime(d0)} – {d1 ? fmtTime(d1) : '进行中'}
+                    {fmtDur(s.duration_minutes) ? `（${fmtDur(s.duration_minutes)}）` : ''}</dd>
+                </div>
+                <div className="lc-dlg-field"><dt>分区</dt><dd>{area || '—'}</dd></div>
+                <div className="lc-dlg-field"><dt>收益</dt><dd>{fmtMoney(s.total_income) || '—'}</dd></div>
+                <div className="lc-dlg-field">
+                  <dt>峰值在线</dt>
+                  <dd>{s.max_online_count ? s.max_online_count.toLocaleString('zh-CN') : '—'}</dd>
+                </div>
+                <div className="lc-dlg-field">
+                  <dt>弹幕数</dt>
+                  <dd>{s.danmakus_count ? s.danmakus_count.toLocaleString('zh-CN') : '—'}</dd>
+                </div>
+                <div className="lc-dlg-field"><dt>数据源</dt><dd>{srcs.join(' + ')}</dd></div>
+              </dl>
+              {s.live_id ? (
+                <div className="lc-dlg-edit">
+                  <span className="lc-pop-edit-label">分类</span>
+                  <select
+                    className="lc-pop-select"
+                    value={s.category ?? 'live'}
+                    disabled={savingCategory === s.live_id}
+                    onChange={(e) => onPickCategory(s, e.target.value)}
+                  >
+                    <option value="auto">自动</option>
+                    {LIVE_TYPE_ORDER.map((t2) => (
+                      <option key={t2.key} value={t2.key}>{t2.label}</option>
+                    ))}
+                  </select>
+                  {s.category_from === 'override' && (
+                    <span className="lc-pop-corr">已校正</span>
+                  )}
+                </div>
+              ) : null}
+            </section>
+
+            <section className="lc-dlg-sec">
+              <h4 className="lc-dlg-sec-title">弹幕信息</h4>
+              {detail.loading ? (
+                <div className="lc-dlg-ph">加载中…</div>
+              ) : s.danmaku ? (
+                <div className="lc-dlg-ph">
+                  弹幕总量 {s.danmaku.total ?? '—'}
+                  {s.danmaku.top_keywords?.length
+                    ? `；热词 ${s.danmaku.top_keywords.join(' / ')}` : ''}
+                </div>
+              ) : (
+                <div className="lc-dlg-ph">接口已预留（danmakus 场次级详细数据接入后展示）</div>
+              )}
+            </section>
+
+            <section className="lc-dlg-sec">
+              <h4 className="lc-dlg-sec-title">直播内容分析</h4>
+              {s.analysis ? (
+                <div className="lc-dlg-ph">{s.analysis.summary || '内容分析摘要待接入'}</div>
+              ) : (
+                <div className="lc-dlg-ph">接口已预留（内容分析服务接入后展示）</div>
+              )}
+            </section>
+          </div>
         </div>
       </div>,
       document.body,
@@ -466,19 +633,22 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
           ))}
         </div>
 
-        {/* 月历网格：7 列 × 6 行，列/行距 4px */}
-        <div className="lc-grid">
-          {loading && (
-            <div className="lc-state">
-              <Loader2 className="lc-state-icon" />
-            </div>
-          )}
-          {!loading && error && <div className="lc-state lc-error">{error}</div>}
-          {!loading && !error && cells.map((c) => renderCell(c))}
+        {/* 月历网格：7 列 × 6 行，列/行距 4px（keyed 重放月份切换滑动动画） */}
+        <div key={`${ym.y}-${ym.m}`} className={`lc-grid-anim${navDir === 1 ? '' : ' back'}`}>
+          <div className="lc-grid">
+            {loading && (
+              <div className="lc-state">
+                <Loader2 className="lc-state-icon" />
+              </div>
+            )}
+            {!loading && error && <div className="lc-state lc-error">{error}</div>}
+            {!loading && !error && cells.map((c) => renderCell(c))}
+          </div>
         </div>
       </div>
 
       {renderPop()}
+      {renderDetail()}
     </div>
   )
 })

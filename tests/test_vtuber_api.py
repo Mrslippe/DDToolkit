@@ -519,3 +519,38 @@ def test_live_category_override_flow(client):
     assert client.put("/account/99999/live-sessions/x/category",
                       json={"category": "game"}).status_code == 404
     assert client.delete(f"/account/{aid}/live-sessions/uuid-a/category").status_code == 404
+
+
+# ── 单场次详情（v0.9.x：点击日期格 → 独立弹窗，danmaku/analysis 预留） ──
+
+def test_live_session_detail_endpoint(client):
+    vid = client.post("/vtuber", json={"name": "测试"}).json()["id"]
+    aid = client.post(
+        f"/vtuber/{vid}/accounts",
+        json={"platform": "bilibili", "platform_uid": "123"},
+    ).json()["id"]
+
+    db = TestingSession()
+    db.add(LiveSession(account_id=aid, source="danmakus", live_id="uuid-a",
+                       title="深夜杂谈", start_at=datetime(2026, 9, 7, 12, 5),
+                       end_at=datetime(2026, 9, 7, 13, 0),
+                       area_name="虚拟日常", parent_area_name="虚拟主播",
+                       total_income=88.5, max_online_count=777, danmakus_count=66))
+    db.commit()
+    db.close()
+
+    resp = client.get(f"/account/{aid}/live-sessions/uuid-a")
+    assert resp.status_code == 200
+    d = resp.json()
+    assert d["live_id"] == "uuid-a"
+    assert d["live_title"] == "深夜杂谈"
+    assert d["duration_minutes"] == 55
+    assert d["category"] == "chat"
+    assert d["category_from"] == "title"
+    # 预留接口：数据服务就位前恒为 None
+    assert d["danmaku"] is None
+    assert d["analysis"] is None
+
+    # 未收录 live_id → 404；账号不存在 → 404
+    assert client.get(f"/account/{aid}/live-sessions/nope").status_code == 404
+    assert client.get("/account/99999/live-sessions/uuid-a").status_code == 404

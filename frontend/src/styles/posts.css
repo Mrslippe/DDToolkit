@@ -1978,9 +1978,9 @@
   word-break: break-all;
 }
 
-/* 有场次的格子 hover 即弹浮层（M4）：淡粉描边提示可交互态 */
+/* 有场次的格子：hover 弹信息浮层 + 点击开详情弹窗（user 2026-09-07） */
 .lc-cell.live {
-  cursor: default;
+  cursor: pointer;
   transition: box-shadow 0.15s ease;
 }
 
@@ -2135,7 +2135,8 @@
   opacity: 0.75;
 }
 
-/* 浮层内分类校正下拉（v0.9.x 类型引擎 v2 第⑦信号：用户校正 override 源） */
+/* 分类校正下拉（v0.9.x 类型引擎 v2 第⑦信号；2026-09-07 起位于**详情弹窗**内，
+   hover 浮层保持纯信息展示） */
 .lc-pop-edit {
   display: flex;
   align-items: center;
@@ -2171,6 +2172,191 @@
   flex: none;
   font-size: 10px;
   color: var(--c-accent);
+}
+
+/* ── 场次详情弹窗（user 2026-09-07：点击日期格 → 独立弹窗）──
+   直播信息 + 分类校正 + 预留「弹幕信息 / 内容分析」区块；
+   样式对齐项目浮片族（--c-bg-card / --shadow-dialog / 12px 圆角）。 */
+
+.lc-dlg-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.32);
+  animation: lc-dlg-fade 0.18s ease-out;
+}
+
+.lc-dlg {
+  width: 420px;
+  max-width: calc(100vw - 48px);
+  max-height: min(640px, calc(100vh - 64px));
+  overflow-y: auto;
+  padding: 16px 18px 18px;
+  border-radius: 14px;
+  background: var(--c-bg-card);
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  box-shadow: var(--shadow-dialog);
+  animation: lc-dlg-pop 0.2s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.lc-dlg-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.lc-dlg-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.lc-dlg-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--c-text-main);
+  line-height: 18px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lc-dlg-close {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  color: var(--c-text-sub);
+}
+
+.lc-dlg-close:hover {
+  background: rgba(15, 23, 42, 0.05);
+  color: var(--c-text-main);
+}
+
+/* 当日多场切换（点格默认第一场） */
+.lc-dlg-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.lc-dlg-tab {
+  padding: 3px 10px;
+  font-size: 11.5px;
+  border-radius: 106px;
+  color: var(--c-text-sub);
+  background: #f5f2f3;
+}
+
+.lc-dlg-tab.on {
+  color: #fff;
+  background: var(--c-accent);
+}
+
+.lc-dlg-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.lc-dlg-sec {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #faf7f8;
+}
+
+.lc-dlg-sec-title {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-text-main);
+}
+
+.lc-dlg-fields {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.lc-dlg-field {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.lc-dlg-field dt {
+  flex: none;
+  width: 56px;
+  color: var(--c-text-sub);
+}
+
+.lc-dlg-field dd {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  color: var(--c-text-main);
+}
+
+.lc-dlg-ph {
+  font-size: 11.5px;
+  color: var(--c-text-sub);
+  line-height: 16px;
+}
+
+.lc-dlg-edit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+@keyframes lc-dlg-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes lc-dlg-pop {
+  from { transform: translateY(8px) scale(0.98); opacity: 0; }
+  to { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+/* ── 月份切换滑动动画（user 2026-09-07）──
+   keyed 重放：方向由 navDir 决定（前进右滑入 / 后退左滑入） */
+.lc-grid-anim {
+  animation: lc-slide-in 0.26s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.lc-grid-anim.back {
+  animation-name: lc-slide-in-back;
+}
+
+@keyframes lc-slide-in {
+  from { transform: translateX(20px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes lc-slide-in-back {
+  from { transform: translateX(-20px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lc-grid-anim {
+    animation: none;
+  }
 }
 
 /* ── 粉丝趋势卡（v0.9.5 重建：参考用户展示图 + 项目粉系浅底）──
