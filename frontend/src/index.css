@@ -53,7 +53,10 @@
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+  /* 弹窗层圆角统一 12px（2026-09-07 二级界面审查 A1）：
+     rounded-xl 仅用于 Dialog/AlertDialog/SelectContent 面板 ——
+     与自绘浮层（--radius-dialog 12px）同档；按钮等仍走方形 lg=0 */
+  --radius-xl: calc(var(--radius) + 12px);
 }
 
 @layer base {

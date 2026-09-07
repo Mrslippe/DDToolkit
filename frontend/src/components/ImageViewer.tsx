@@ -141,7 +141,7 @@ export default function ImageViewer({ images, index, onIndexChange, onClose }: P
       {/* 遮罩：只盖详情窗口（矩形实测，圆角随详情窗） */}
       {veilRect && (
         <div
-          className="image-viewer-veil absolute rounded-lg bg-black/40"
+          className="image-viewer-veil absolute rounded-lg bg-[rgba(15,23,42,0.32)]"
           style={{ left: veilRect.left, top: veilRect.top, width: veilRect.width, height: veilRect.height }}
         />
       )}

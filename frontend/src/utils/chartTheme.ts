@@ -21,6 +21,3 @@ export const CHART_SHADOW = '0 4px 16px rgba(15, 23, 42, 0.1)'
 /** 粉系透明度派生（注意不带 #：rgba(r, g, b, a) 前缀） */
 export const PINK_RGB = '251, 119, 161'
 export const pinkA = (a: number) => `rgba(${PINK_RGB}, ${a})`
-/** --c-border 深色发丝边派生（弹窗边框 rgba(15,23,42,.06) 同族） */
-export const DARK_RGB = '15, 23, 42'
-export const darkA = (a: number) => `rgba(${DARK_RGB}, ${a})`

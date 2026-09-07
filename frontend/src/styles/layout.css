@@ -799,6 +799,8 @@ color: #fff;
   border: 1px solid var(--c-border);
   border-radius: var(--radius-dialog);
   box-shadow: var(--shadow-dialog);
+  /* 入场动画统一 lc-dlg-pop（2026-09-07 二级界面审查 B4；keyframes 在 posts.css） */
+  animation: lc-dlg-pop 0.16s cubic-bezier(0.22, 0.61, 0.36, 1);
   display: flex;
   flex-direction: column;
   gap: 10px;

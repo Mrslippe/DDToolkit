@@ -399,8 +399,15 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
         setCatPopOpen(false)
       }
     }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setCatPopOpen(false)
+    }
     document.addEventListener('mousedown', onDown)
-    return () => document.removeEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
   }, [catPopOpen])
 
   /** 月份切换动画方向（1=前进/向右滑入，-1=后退/向左滑入）；keyed 重放 */
@@ -423,8 +430,15 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
         setMonthPopOpen(false)
       }
     }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMonthPopOpen(false)
+    }
     document.addEventListener('mousedown', onDown)
-    return () => document.removeEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
   }, [monthPopOpen])
 
   // 场次拉取（字段 2026-09-07：只检索主账号直播信息；loadSeq 防账号切换回写）

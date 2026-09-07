@@ -210,7 +210,7 @@
 ### B2. 详情窗口 `<PostDetailDrawer>`（components/PostDetailDrawer.tsx）
 P6-2 起为**居中 Dialog**（原 Sheet 右侧抽屉）`sm:max-w-[720px]`（⚠️ 该类名必须与模板插值分离成纯字符串——Tailwind v4 提取器对「带方括号的类名紧邻 `${`」会丢弃候选
 （曾吞掉 `sm:max-w-[720px]` 致详情窗全宽），一律 `'…' + (cond ? ' x' : '')` 写法），
-标题 = 帖子类型名。动效见「抽屉动效」段（dialog-content/overlay，scale 0.97 替代右移）。**退场为类驱动（P6-4）**：radix Presence 对「换名动画」的判定基于挂载时缓存的 computed style，data-state 换名不会真播退场（面板/遮罩瞬消）——组件侧 `exiting` 态加 `is-exiting` 类播 200ms 再真正闭合，遮罩经 `[data-slot=dialog-overlay]:has(+ [data-slot=dialog-content].is-exiting)` 联动（open 态动画被覆盖为退场、卸载时已不可见）。结构未变动：元信息行(类型/时间/平台ID/原文链接/墓碑flag) → 墓碑时间线(已删时) → 统计徽章行 → 预约卡 → 封面大图 → 正文三态(Delta/HTML/纯文本) → 转发原文卡 → 图片组 → 附加字段(bvid/cvid/description) → 原始JSON 折叠。
+标题 = 帖子类型名。**2026-09-07（C11）：面板滚动改覆盖式 OverlayScroll**（`.post-detail-scroll`，根 max-h 90vh，滚动体 padding 20px）——原生条隐藏不占宽 + 自动隐藏（F 节标准）；动效见「抽屉动效」段（dialog-content/overlay，scale 0.97 替代右移）。**退场为类驱动（P6-4）**：radix Presence 对「换名动画」的判定基于挂载时缓存的 computed style，data-state 换名不会真播退场（面板/遮罩瞬消）——组件侧 `exiting` 态加 `is-exiting` 类播 200ms 再真正闭合，遮罩经 `[data-slot=dialog-overlay]:has(+ [data-slot=dialog-content].is-exiting)` 联动（open 态动画被覆盖为退场、卸载时已不可见）。结构未变动：元信息行(类型/时间/平台ID/原文链接/墓碑flag) → 墓碑时间线(已删时) → 统计徽章行 → 预约卡 → 封面大图 → 正文三态(Delta/HTML/纯文本) → 转发原文卡 → 图片组 → 附加字段(bvid/cvid/description) → 原始JSON 折叠。
 
 ### B2.1 图片查看器 `<ImageViewer>`（components/ImageViewer.tsx）
 P6-4：从详情窗口打开图片的**独立浮层**——portal 到 body、`z-[200]` 高于详情窗（z-50）。
@@ -236,7 +236,7 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 | 区域 | 类名 | 说明 |
 |---|---|---|
 | 遮罩 | `.lc-dlg-backdrop` | fixed inset 0、z-60、`rgba(15,23,42,.32)`、淡入 0.18s；点击空白（target===currentTarget）关闭；打开期间锁 body 滚动 |
-| 面板根 | `<OverlayScroll className="lc-dlg" role="dialog" aria-modal>` | **720px**（`max-width calc(100vw-48px)`）、`max-height min(680px, calc(100vh-64px))`、**14px 圆角**、白底 + 发丝边 `rgba(15,23,42,.06)` + `--shadow-dialog`；入场 pop 0.2s（translateY 8 + scale .98）；滚动体 `.lc-dlg .os-scroll`（column gap 12 / padding `16px 18px 18px` / overscroll-behavior contain） |
+| 面板根 | `<OverlayScroll className="lc-dlg" role="dialog" aria-modal>` | **720px**（`max-width calc(100vw-48px)`）、`max-height min(680px, calc(100vh-64px))`、**12px 圆角**、白底 + 发丝边 `--c-border` + `--shadow-dialog`；入场 pop 0.2s（translateY 8 + scale .98）；滚动体 `.lc-dlg .os-scroll`（column gap 12 / padding `16px 18px 18px` / overscroll-behavior contain） |
 | 头部 | `.lc-dlg-head` | 左=**分类胶囊按钮**（点击弹全部分类下拉）+ 标题（15px/600 单行截断）+ 副行 `日期 HH:MM`（11.5px 次级）+「已校正」红字标（`category_from==='override'`）；右=关闭钮 26×26 r8 |
 | 分类下拉 | `.lc-dlg-cat-pop` | 208px 宽、max-h 340、r12、`--shadow-dialog`；列表 = **自动（跟随推断）** 灰胶囊 + 9 类彩色胶囊（26px 高 r46，`.on` 内描边 2px 深灰）；选后 PUT/DELETE override 并重拉场次+详情；点外部关闭 |
 | 多场切换 | `.lc-dlg-tabs` | 当日多场时显示：HH:MM 胶囊（r106），激活 = `--c-accent` 底白字 |
@@ -289,7 +289,40 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 | `--pill-fill-pink` / `--pill-fill-coral` | #e35d8b / #e05261 | 粉丝徽章色底（加深版：白字 26px 对比 2.5:1 → 3.4:1，**替代早期 #fb77a1/#fc7079 直接填充**） |
 | `--radius-window` | 4px | L3 窗口圆角 |
 | `--topbar-height` / `--rail-width` / `--sidebar-width` | 40px / 50px / 492px | 三段尺寸 |
-| shadcn `--radius` | 0rem | 全家桶方形化（Button/Select/Dialog/Sheet…） |
+| shadcn `--radius` | 0rem | 全家桶方形化（Button/Select/Dialog/Sheet…）；**例外：`--radius-xl` = +12px**（2026-09-07 二级界面审查 A1）——`rounded-xl` 仅用于 Dialog/AlertDialog/SelectContent 面板，统一 12px 弹窗层 |
+
+## C6. 二级界面统一规格（2026-09-07 审查定稿）
+
+> 适用范围：一切 Dialog/AlertDialog/SelectContent（radix 注入面板）+ 自绘浮层（filter-pop/time-pop/lc-month-pop/lc-pop/lc-dlg/lc-dlg-cat-pop）+ 灯箱（ImageViewer 遮罩）。新写二级界面必须参照本节。
+
+| 维度 | 统一值 |
+|---|---|
+| 面板圆角 | **12px**（radix 家族经 `--radius-xl=+12px` 达成；lc-dlg 14→12；按钮类保持 0px 方形） |
+| 发丝边 | **`--c-border`**（rgba(210,216,222,.55)）——lc 家族旧 `rgba(15,23,42,.06)` 已废弃 |
+| 阴影 | `--shadow-dialog`（0 4px 16px 10%） |
+| 遮罩 | **`rgba(15,23,42,.32)`**（radix 旧 black/50、查看器旧 black/40 已统一；lc-dlg-backdrop 本就此值） |
+| 入场动画 | 轻 pop：`lc-dlg-pop`（translateY 8 + scale .98 + 淡入）；浮层 0.16s / hover 浮层 lc-pop 0.12s / 主弹窗 0.2s；reduced-motion 全部禁用 |
+| 关闭通道 | **点外关闭 + Esc 双通道**（所有浮层；radix 内建） |
+| 关闭钮 | **26×26 · r8 · `--c-text-sub` · hover 灰底 rgba(15,23,42,.05) + 主色文字**（radix 与 lc-dlg-close 同款；ImageViewer 黑玻璃圆钮为灯箱豁免） |
+| Tooltip | **黑玻璃胶囊**：`rgba(15,23,42,.78)` 底白字 r999（radix tooltip 与词云提示 `lc-dlg-cloud-tip` 同源） |
+| 选中态 | 两原则：① 分类色体系元件（类型胶囊/选项）用**本体色** + 600/内描边；② 其它选择件激活 = **`--c-primary-deep` 底白字 600**（month 旧浅粉底粉字、tab 旧 accent 底均已改）；hover 统一 `--sel-bg-hover` |
+| z-index 档位 | 30 锚定浮窗（filter/time）→ 40 日历月份浮窗 → 50 radix（Dialog/Alert/Select/Tooltip）→ 56 hover 场次浮层 → 60 主弹窗遮罩 → 62 弹窗内下拉 → 70 词云提示 → 200 灯箱 |
+
+### 现状清单（维度 × 面板）
+
+| 面板 | 圆角 | 发丝边 | 遮罩 | 入场动画 | Esc | 关闭钮 | tooltip/选中态 |
+|---|---|---|---|---|---|---|---|
+| Dialog（添加V/登录/批量/详情/添加账号） | 12 | --c-border | .32 | tw-in/out + 自绘 | ✓ | 26×26 r8 | — |
+| AlertDialog（关闭确认/解订阅） | 12 | --c-border | .32 | ✓ | ✓ | 无（按钮式） | — |
+| SelectContent（账号/企划/平台下拉） | 12 | --c-border | — | ✓ | ✓ | — | 勾选图标 + sel-bg-hover |
+| filter-pop / time-pop | 12 | --c-border | — | ✓(0.16s) | ✓ | — | 粉底白字/描边 |
+| lc-month-pop | 12 | --c-border | — | ✓(0.16s) | ✓ | — | deep 底白字 |
+| lc-pop（hover 浮层） | 12 | --c-border | — | ✓(0.12s) | ✓ | — | — |
+| lc-dlg（场次详情） | 12 | --c-border | .32 | ✓(0.2s) | ✓ | 26×26 r8 | 色体系本体 |
+| lc-dlg-cat-pop | 12 | --c-border | — | ✓(0.16s) | ✓ | — | 色体系+内描边 |
+| Tooltip（IconRail） | 999 | — | — | ✓ | — | — | 黑玻璃胶囊 |
+| 词云提示 lc-dlg-cloud-tip | 999 | — | — | — | — | — | 黑玻璃胶囊 |
+| ImageViewer 遮罩 | 随窗 | — | .32 | ✓ | — | 黑玻璃 40px | — |
 
 ## C2. 浮片系统（layout.css `.float-pill`，令牌见 tokens.css）
 
@@ -312,7 +345,7 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 
 ## C3. 独立筛选弹窗（layout.css `.filter-pop`）
 
-- 入口：侧栏过滤触发器（`.filter-wrap` 锚定，点外关闭，同 time-pop 模式）
+- 入口：侧栏过滤触发器（`.filter-wrap` 锚定，点外关闭 + **Esc 双通道**（2026-09-07 二级界面审查），同 time-pop 模式；入场动画 lc-dlg-pop 0.16s）
 - 三组多选 chip（`.filter-chip`，描边圆角、选中粉底，2026-09-05 弹窗层风格）：状态（直播中/未直播）、平台（accounts 动态提取）、企划（非空 faction 动态提取；语义沿革：阵营=企划=公会）
 - 组合逻辑：组内 OR、组间 AND，空组不生效，即时生效无应用钮，底部「重置」
 - 触发器反馈：任一筛选生效加 `.on`；展示文案暂占位「默认」待定
@@ -416,6 +449,7 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 | 档案卡/账号卡内 `.archive-section-scroll` | ✅ OverlayScroll | 负 margin 由滚动体承担（贴卡片缘） |
 | 详情弹窗 `.lc-dlg` | ✅ OverlayScroll | 弹窗滚动 |
 | 场次浮层 `.lc-pop` | ✅ OverlayScroll | 浮层滚动（max-height 430） |
+| 帖子详情窗口 `.post-detail-scroll` | ✅ OverlayScroll | **2026-09-07 补漏（二级界面审查 C11）**：根 max-h 90vh、滚动体 padding 20px |
 | 侧栏 `.sidebar-list` | ✅ OverlayScroll | **2026-09-07 迁移完成**（旧 `.sidebar-sb` 5px 蓝灰自绘条已删） |
 | `.type-chips`（横向溢出） | 🔶 原生隐藏 | `scrollbar-width:none` + webkit display:none（不占布局高度，纯滚轮横滚） |
 | `.lc-stats`（类型统计横向溢出） | 🔶 原生隐藏 | 同上（纯滚轮横滚无指示，知悉即可） |

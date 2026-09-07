@@ -606,9 +606,11 @@
   padding: 12px;
   background: #fff;
   border: 1px solid var(--c-border);
-  /* 弹窗层契约（v0.6.1 用户参考风格）：圆角卡片 12px + 柔和阴影 + 发丝边 */
+  /* 弹窗层契约（v0.6.1 用户参考风格）：圆角卡片 12px + 柔和阴影 + 发丝边；
+     入场动画统一 lc-dlg-pop（2026-09-07 二级界面审查 B4） */
   border-radius: var(--radius-dialog);
   box-shadow: var(--shadow-dialog);
+  animation: lc-dlg-pop 0.16s cubic-bezier(0.22, 0.61, 0.36, 1);
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -864,6 +866,13 @@
 /* 已删筛选钮（chips-tools 内；激活态走 .float-pill.on 强调色） */
 .del-btn-label {
   white-space: nowrap;
+}
+
+/* 详情窗口滚动体（2026-09-07 C11：覆盖式滚动条，F 节标准；
+   根由 OverlayScroll 承担 max-height，滚动体 padding 全局唯一的 20px 口腔 */
+.post-detail-scroll .os-scroll {
+  padding: 20px;
+  overscroll-behavior: contain;
 }
 
 /* 抽屉：已删除 flag + 墓碑时间线 */
@@ -1698,11 +1707,12 @@
   left: 0;
   z-index: 40;
   width: 238px;
-  padding: 10px;
+  padding: 12px;
   border-radius: 12px;
   background: var(--c-bg-card);
-  border: 1px solid rgba(15, 23, 42, 0.06);
+  border: 1px solid var(--c-border);
   box-shadow: var(--shadow-dialog);
+  animation: lc-dlg-pop 0.16s cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
 .lc-month-pop-head {
@@ -1758,8 +1768,8 @@
 }
 
 .lc-month-pop-btn.on {
-  background: var(--sel-bg);
-  color: var(--c-primary-deep);
+  background: var(--c-primary-deep);
+  color: #fff;
   font-weight: 600;
 }
 
@@ -2015,8 +2025,10 @@
   max-height: 430px;
   border-radius: 12px;
   background: var(--c-bg-card);
-  border: 1px solid rgba(15, 23, 42, 0.06);
+  border: 1px solid var(--c-border);
   box-shadow: var(--shadow-dialog);
+  /* hover 触发的浮层：入场更轻（2026-09-07 二级界面审查 B4） */
+  animation: lc-dlg-pop 0.12s cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
 /* 浮层滚动体：覆盖式滚动条（OverlayScroll），padding 移入滚动体 */
@@ -2132,9 +2144,9 @@
   width: 720px;
   max-width: calc(100vw - 48px);
   max-height: min(680px, calc(100vh - 64px));
-  border-radius: 14px;
+  border-radius: 12px;
   background: var(--c-bg-card);
-  border: 1px solid rgba(15, 23, 42, 0.06);
+  border: 1px solid var(--c-border);
   box-shadow: var(--shadow-dialog);
   animation: lc-dlg-pop 0.2s cubic-bezier(0.22, 0.61, 0.36, 1);
   /* 2026-09-07：滚动条 = 覆盖式（OverlayScroll）——原生条隐藏不占宽度，
@@ -2216,7 +2228,7 @@
 
 .lc-dlg-tab.on {
   color: #fff;
-  background: var(--c-accent);
+  background: var(--c-primary-deep);
 }
 
 /* 主体两栏：左封面（264px · 4:3 容器——danmakus 封面实测 720×540=4:3 与 704×396=16:9
@@ -2461,10 +2473,10 @@
   width: 208px;
   max-height: 340px;
   overflow-y: auto;
-  padding: 8px;
+  padding: 12px;
   border-radius: 12px;
   background: var(--c-bg-card);
-  border: 1px solid rgba(15, 23, 42, 0.06);
+  border: 1px solid var(--c-border);
   box-shadow: var(--shadow-dialog);
   animation: lc-dlg-pop 0.16s cubic-bezier(0.22, 0.61, 0.36, 1);
   /* 滚动条隐藏（UI-MAP F3）：下拉内容恒 ≤340px，溢出时纯滚轮滚动 */
@@ -2535,7 +2547,12 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .lc-grid-anim {
+  .lc-grid-anim,
+  .lc-pop,
+  .lc-month-pop,
+  .lc-dlg-cat-pop,
+  .filter-pop,
+  .time-pop {
     animation: none;
   }
 }

@@ -161,7 +161,7 @@ export default function VtuberSidebar() {
     })
   }, [])
 
-  // 筛选弹窗：点击面板外自动关闭（与帖子页 time-pop 同模式）
+  // 筛选弹窗：点击面板外自动关闭（与帖子页 time-pop 同模式）+ Esc 双通道
   useEffect(() => {
     if (!filterOpen) return
     const onDown = (e: MouseEvent) => {
@@ -169,8 +169,15 @@ export default function VtuberSidebar() {
         setFilterOpen(false)
       }
     }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setFilterOpen(false)
+    }
     document.addEventListener('mousedown', onDown)
-    return () => document.removeEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
   }, [filterOpen])
 
   const matched = matchPath('/vtubers/:id', location.pathname)

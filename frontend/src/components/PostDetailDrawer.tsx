@@ -33,6 +33,7 @@ import {
 } from '../utils/format'
 import DeltaRenderer from './DeltaRenderer'
 import ImageViewer, { type ViewerImage } from './ImageViewer'
+import OverlayScroll from './OverlayScroll'
 import SmartImage from './SmartImage'
 import StatBadge from './StatBadge'
 import TypeTag from './TypeTag'
@@ -181,8 +182,11 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
           P6-4：退场为类驱动 is-exiting（radix 换名动画不生效，见组件头注释） */}
       {/* max-w 等类名必须与推导段分离（纯字符串 + 拼接）：Tailwind v4 提取器
           对「带方括号的类名紧邻 ${ 插值」会丢弃该候选（sm:max-w-[720px] 曾被吞掉
-          → 详情窗全宽），静态段单独成串确保被扫描到 */}
-      <DialogContent className={'max-h-[90vh] w-full overflow-y-auto p-5 sm:max-w-[720px]' + (exiting ? ' is-exiting' : '')}>
+          → 详情窗全宽），静态段单独成串确保被扫描到
+          2026-09-07（二级界面审查 C11）：滚动改覆盖式 OverlayScroll——
+          原生条隐藏不占宽 + 自动隐藏（F 节标准）；面板本体滚动交给内部组件 */}
+      <DialogContent className={'w-full p-0 sm:max-w-[720px]' + (exiting ? ' is-exiting' : '')}>
+        <OverlayScroll className="post-detail-scroll" style={{ maxHeight: '90vh' }}>
         <DialogHeader className="p-0">
           <DialogTitle className="pr-8 text-base leading-snug">
             {postDisplayTitle(shown)}
@@ -339,6 +343,7 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
             </Collapsible>
           )}
         </div>
+        </OverlayScroll>
       </DialogContent>
       </Dialog>
 

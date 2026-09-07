@@ -183,7 +183,7 @@ export default function PostsPage() {
     scheduleBgHide()
   }
 
-  // 时间下拉：点击面板外自动关闭
+  // 时间下拉：点击面板外自动关闭 + Esc 双通道
   useEffect(() => {
     if (!timePopOpen) return
     const onDown = (e: MouseEvent) => {
@@ -191,8 +191,15 @@ export default function PostsPage() {
         setTimePopOpen(false)
       }
     }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setTimePopOpen(false)
+    }
     document.addEventListener('mousedown', onDown)
-    return () => document.removeEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
   }, [timePopOpen])
   useEffect(() => {
     window.clearTimeout(searchTimer.current)

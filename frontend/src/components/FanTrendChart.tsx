@@ -197,7 +197,7 @@ function buildOption(data: DailyPoint[]): EChartsCoreOption {
     tooltip: {
       trigger: 'axis',
       backgroundColor: '#fff',
-      borderColor: 'rgba(15, 23, 42, 0.06)',
+      borderColor: CHART_BORDER,
       borderWidth: 1,
       borderRadius: 12,
       padding: [8, 12],
