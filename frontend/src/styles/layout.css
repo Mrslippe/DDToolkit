@@ -90,19 +90,13 @@ html.window-maximized body {
   border-radius: 999px;
   background: var(--c-border);
   opacity: 0;
-  pointer-events: auto;
-  touch-action: none;
+  pointer-events: none;      /* 纯展示（无拖拽），显隐由调度驱动 */
   transition: opacity 0.25s ease, width 0.15s ease, background-color 0.15s ease;
   display: none;
 }
 
 .os-thumb.os-show {
   opacity: 1;
-}
-
-.os-thumb:hover {
-  background: var(--c-primary);
-  width: 6px;
 }
 
 /* ── 启动幕：主色铺底 + 中央 LOGO + 信封上下展开 ── */
