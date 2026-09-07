@@ -2340,42 +2340,6 @@
   color: var(--c-text-main);
 }
 
-/* 段头行（标题 + 右端动作胶囊；2026-09-07 词云破泡恢复入口） */
-.lc-dlg-sec-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  min-height: 18px;
-  margin-bottom: 9px;
-}
-
-.lc-dlg-sec-head .lc-dlg-sec-title {
-  margin: 0;
-}
-
-/* 「已破泡 N · 恢复」胶囊：同 .fan-chart-reset 语言（sel-bg 浅粉底 + 粉字） */
-.lc-dlg-cloud-restore {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 24px;
-  padding: 0 10px;
-  border: none;
-  border-radius: 999px;
-  background: var(--sel-bg);
-  color: var(--c-primary-deep);
-  font-size: 12px;
-  font-family: inherit;
-  cursor: pointer;
-  transition: background-color 0.15s ease;
-}
-
-.lc-dlg-cloud-restore:hover {
-  background: var(--sel-bg-hover);
-}
-
 /* 行式字段（label 左窄列 muted · value 右主色）：参考图直播信息/弹幕信息共用 */
 .lc-dlg-rows {
   margin: 0;
@@ -2410,8 +2374,7 @@
   line-height: 16px;
 }
 
-/* 弹幕信息区块（danmakus /api/v2/live 词云，2026-09-07 接入；词云 = 加权 Voronoi 自绘，
-   见 LiveCalendar.tsx layoutPowerCloud——react-wordcloud/d3-delaunay 均已退役） */
+/* 弹幕信息区块（danmakus /api/v2/live 词云，2026-09-07 接入；词云 = react-wordcloud） */
 .lc-dlg-danmaku {
   display: flex;
   flex-direction: column;
@@ -2424,42 +2387,20 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* 圆形气泡簇词云（2026-09-07 user 定案·从头开始；见 LiveCalendar.tsx buildClusterWords/clusterStep）：
-   破泡 = 去词 + 洞吸力闭合（无鼓泡/环波等装饰动画）；cell 位置随模拟逐帧更新 */
 .lc-dlg-cloud {
-  position: relative;
   width: 100%;
-  height: 210px;
+  height: 150px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.lc-dlg-cloud-svg {
+.lc-dlg-cloud svg {
   display: block;
 }
 
-.lc-dlg-cloud-svg path,
-.lc-dlg-cloud-svg circle {
-  transition: fill-opacity 0.12s ease;
-}
-
-/* 泡泡定位层：模拟每帧更新 translate（闭合实时变化）；无 CSS 过渡（帧插值即动画） */
-.lc-dlg-cloud-cell {
-  cursor: pointer;
-}
-
-/* 词频 hover 提示（跟随鼠标） */
-.lc-dlg-cloud-tip {
-  position: fixed;
-  z-index: 70;
-  transform: translate(10px, -14px);
-  padding: 3px 10px;
-  border-radius: 106px;
-  font-size: 11.5px;
-  line-height: 1;
-  color: #fff;
-  background: rgba(15, 23, 42, 0.78);
-  pointer-events: none;
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
+.lc-dlg-cloud text {
+  cursor: default;
 }
 
 /* 直播动态（B 组事件 + A 组在线峰值高光） */

@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Loader2, X } from 'lucide-react'
+import WordCloud from 'react-wordcloud'
 import type { LiveSession, LiveSessionDetail } from '../api/types'
 import { api, imgProxyUrl } from '../api/api'
 import { normalizeImageUrl } from '../utils/format'
@@ -111,398 +112,14 @@ function CoverImage({ src, fallbackChar }: { src?: string | null; fallbackChar: 
   )
 }
 
-/** 词云配色（浅色粉系——2026-09-07 用户：浅色更符合卡片整体风格；文字用深色） */
-const CLOUD_COLORS = ['#ffc9c4', '#a5e6ff', '#dccff7', '#bee9ec', '#ffd5b8',
-  '#fff2a0', '#fda5ff', '#b2f3c0', '#ffdfe8', '#d8e8ff']
+/** 词云配色（项目粉系 + 类型色相，按词哈希取色保持稳定） */
+const CLOUD_COLORS = ['#d8645e', '#8b6fd8', '#0088be', '#d4b801', '#009a24',
+  '#ec57ff', '#2fa5ad', '#c95c86', '#e0872f', '#5b7fd8']
 
-function cloudWordColor(w: { text?: string }): string {
-  const s = w.text ?? ''
+function cloudWordColor(w: { text: string }): string {
   let h = 0
-  for (const ch of s) h = (h * 31 + ch.charCodeAt(0)) % 997
+  for (const ch of w.text) h = (h * 31 + ch.charCodeAt(0)) % 997
   return CLOUD_COLORS[h % CLOUD_COLORS.length]
-}
-
-interface BubbleWord {
-  text: string
-  count: number
-}
-
-/** 可复现伪随机（种子固定：初始布局确定性，不闪动） */
-function mulberry32(seed: number) {
-  return () => {
-    seed |= 0
-    seed = (seed + 0x6d2b79f5) | 0
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-  }
-}
-/**
- * ── 圆形域 Voronoi 拼贴词云（2026-09-07 user 定案·框架重做）──
- * 三个条件（一以贯之）：
- * ① 面积 ∝ 词频：power diagram 的 λ（权重）驱动，站点固定只调权重 ——
- *    破泡后幸存词面积按词频重新归一化（高频仍大、低频仍小，比例不变）；
- * ② 整体形状倾向圆形：边界 = 64 边形近似圆（power 单元裁剪于圆盘而非矩形）
- *    —— 拼贴外轮廓天然圆润；泡泡彼此贴合，交界由半平面交产生 → 天然不规则；
- * ③ 破泡 = 立即闭合（零动画）：删词 → 幸存词目标面积归一化 → 固定站点 λ 收敛
- *    （同步求解，一帧完成）——边界泡泡不动位置，形状鼓长闭住空缺。
- * - hover 词频提示、「已破泡 N · 恢复」、reduced-motion（本就无动画）保持。
- */
-
-/** 圆盘边界（64 边形近似；power 单元裁剪几何与矩形 box 完全同构） */
-function discPolygon(cx: number, cy: number, r: number, n = 64): [number, number][] {
-  const pts: [number, number][] = []
-  for (let i = 0; i < n; i++) {
-    const a = (i / n) * Math.PI * 2
-    pts.push([cx + r * Math.cos(a), cy + r * Math.sin(a)])
-  }
-  return pts
-}
-
-/** 半平面裁剪（Sutherland–Hodgman）：保留 ax*x + ay*y ≤ b 部分 */
-function clipHalf(poly: [number, number][], ax: number, ay: number, b: number) {
-  const out: [number, number][] = []
-  for (let k = 0; k < poly.length; k++) {
-    const p = poly[k]
-    const q = poly[(k + 1) % poly.length]
-    const fp = ax * p[0] + ay * p[1] - b
-    const fq = ax * q[0] + ay * q[1] - b
-    if (fp <= 0) out.push(p)
-    if ((fp < 0 && fq > 0) || (fp > 0 && fq < 0)) {
-      const t = fp / (fp - fq)
-      out.push([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t])
-    }
-  }
-  return out
-}
-
-/** 由 (站点, λ) 求所有单元（凸多胞；null = 空） */
-function diagramCells(
-  words: BubbleWord[],
-  sites: [number, number][],
-  lambda: number[],
-  boundary: [number, number][],
-): ([number, number][] | null)[] {
-  const n = words.length
-  return words.map((_w, i) => {
-    let poly = boundary
-    const [cx, cy] = sites[i]
-    const ci2 = cx * cx + cy * cy
-    for (let j = 0; j < n; j++) {
-      if (j === i) continue
-      const [jx, jy] = sites[j]
-      poly = clipHalf(poly, 2 * (jx - cx), 2 * (jy - cy),
-        jx * jx + jy * jy - ci2 - (lambda[j] - lambda[i]))
-      if (!poly.length) return null
-    }
-    return poly
-  })
-}
-
-interface CloudCell {
-  word: BubbleWord
-  poly: [number, number][]
-  cx: number
-  cy: number
-  r: number   // 等效半径（面积∝词频的圆形折算，供字号）
-  hero: boolean
-}
-
-function cellsOf(words: BubbleWord[], polys: ([number, number][] | null)[]): CloudCell[] {
-  const areas = polys.map((pts) => {
-    if (!pts) return 0
-    let a = 0
-    for (let k = 0; k < pts.length; k++) {
-      const p1 = pts[k]
-      const p2 = pts[(k + 1) % pts.length]
-      a += p1[0] * p2[1] - p2[0] * p1[1]
-    }
-    return Math.abs(a / 2)
-  })
-  return words.map((word, i) => {
-    const pts = polys[i] ?? [[0, 0], [0, 0], [0, 0]]
-    const cx = pts.reduce((s, p) => s + p[0], 0) / pts.length
-    const cy = pts.reduce((s, p) => s + p[1], 0) / pts.length
-    return { word, poly: pts, cx, cy, r: Math.sqrt(areas[i] / Math.PI), hero: i === 0 }
-  })
-}
-
-function areaOf(pts: [number, number][] | null): number {
-  if (!pts) return 0
-  let a = 0
-  for (let k = 0; k < pts.length; k++) {
-    const p1 = pts[k]
-    const p2 = pts[(k + 1) % pts.length]
-    a += p1[0] * p2[1] - p2[0] * p1[1]
-  }
-  return Math.abs(a / 2)
-}
-
-/** 目标面积 ∝ 词频（归一化到圆盘面积） */
-function areaTargets(words: BubbleWord[], discArea: number): number[] {
-  const total = words.reduce((s, x) => s + x.count, 0)
-  return words.map((x) => (x.count / total) * discArea)
-}
-
-/**
- * 初始布局：极坐标占位（hero=圆盘中心、大词靠内、黄金角）→ power-Lloyd 弛豫
- * （站点移到单元质心 + λ 面积修正 β=0.5，≤300 轮，maxRel<0.08 早停）。
- * 返回收敛后的站点/λ —— 之后破泡【站点不变】，只做 λ 修正（见 relaxAreas）。
- */
-function layoutInitial(
-  words: BubbleWord[],
-  discCx: number,
-  discCy: number,
-  discR: number,
-): { sites: [number, number][]; lambda: number[]; cells: CloudCell[] } {
-  const boundary = discPolygon(discCx, discCy, discR)
-  const discArea = Math.PI * discR * discR
-  const tgt = areaTargets(words, discArea)
-  const n = words.length
-  const BETA = 0.5
-  const rand = mulberry32(20260907)
-  let sites: [number, number][] = words.map((_w, i) => {
-    if (i === 0) return [discCx, discCy]
-    const rad = discR * Math.pow((i + 0.5) / n, 0.5) * 0.92
-    const ang = (i - 1) * 137.508 + (rand() - 0.5) * 0.4
-    return [discCx + rad * Math.cos(ang), discCy + rad * Math.sin(ang)]
-  })
-  let lambda = words.map((_w, i) => tgt[i] / n)
-  let polys = diagramCells(words, sites, lambda, boundary)
-  let areas = polys.map(areaOf)
-  for (let it = 0; it < 300; it++) {
-    let maxRel = 0
-    for (let i = 0; i < n; i++) {
-      const rel = areas[i] > 0 ? Math.abs(areas[i] - tgt[i]) / tgt[i] : 1
-      if (rel > maxRel) maxRel = rel
-      lambda[i] = Math.max(lambda[i] + BETA * (tgt[i] - areas[i]), 1)
-      const pts = polys[i]
-      if (pts && pts.length >= 3) {
-        let ac = 0
-        let mx = 0
-        let my = 0
-        for (let k = 0; k < pts.length; k++) {
-          const p1 = pts[k]
-          const p2 = pts[(k + 1) % pts.length]
-          const cr = p1[0] * p2[1] - p2[0] * p1[1]
-          ac += cr
-          mx += (p1[0] + p2[0]) * cr
-          my += (p1[1] + p2[1]) * cr
-        }
-        if (Math.abs(ac) > 1) sites[i] = [mx / (3 * ac), my / (3 * ac)]
-      }
-    }
-    polys = diagramCells(words, sites, lambda, boundary)
-    areas = polys.map(areaOf)
-    if (maxRel < 0.08) break
-  }
-  return { sites, lambda, cells: cellsOf(words, polys) }
-}
-
-/**
- * 破泡闭合（固定站点·只调 λ）：幸存词目标面积按词频归一化 →
- * λ 迭代收敛（同步，≤400 轮 maxRel<0.08）→ 形状鼓长闭住空缺。
- * 站点位置不变（无位移），尺寸比例严格恢复 ∝ 词频（一以贯之）。
- */
-function relaxAreas(
-  words: BubbleWord[],
-  sites: [number, number][],
-  lambda: number[],
-  discCx: number,
-  discCy: number,
-  discR: number,
-): { cells: CloudCell[]; lambda: number[] } {
-  const boundary = discPolygon(discCx, discCy, discR)
-  const tgt = areaTargets(words, Math.PI * discR * discR)
-  const n = words.length
-  const BETA = 0.5
-  const lam = lambda.slice()
-  let polys = diagramCells(words, sites, lam, boundary)
-  let areas = polys.map(areaOf)
-  for (let it = 0; it < 400; it++) {
-    let maxRel = 0
-    for (let i = 0; i < n; i++) {
-      const rel = areas[i] > 0 ? Math.abs(areas[i] - tgt[i]) / tgt[i] : 1
-      if (rel > maxRel) maxRel = rel
-      lam[i] = Math.max(lam[i] + BETA * (tgt[i] - areas[i]), 1)
-    }
-    polys = diagramCells(words, sites, lam, boundary)
-    areas = polys.map(areaOf)
-    if (maxRel < 0.08) break
-  }
-  return { cells: cellsOf(words, polys), lambda: lam }
-}
-
-/**
- * 圆形域 Voronoi 拼贴词云（2026-09-07 user 定案·框架重做）：
- * - 面积 ∝ 词频：power λ 驱动（初始 Lloyd 弛豫 → 破泡只调 λ，站点固定）；
- * - 整体圆形：单元裁剪于 64 边形圆盘；贴合交界 = 半平面交 → 天然不规则；
- * - 破泡：删词 → 目标面积归一化 → 同步 λ 收敛（一帧闭合，零动画）；
- * - hover 高亮 + 「词 · N 次」提示 + 「已破泡 N · 恢复」一键复原。
- */
-function VoronoiCloud({
-  data,
-  restoreTick,
-  onPoppedChange,
-}: {
-  data: BubbleWord[]
-  /** 外部恢复信号（父级「已破泡 N · 恢复」按钮），>0 时执行一次复原 */
-  restoreTick?: number
-  /** 破泡数量变化回调（父级计数胶囊显示/更新） */
-  onPoppedChange?: (n: number) => void
-}) {
-  const ref = useRef<HTMLDivElement>(null)
-  const [size, setSize] = useState({ w: 0, h: 210 })
-  const [tip, setTip] = useState<{ x: number; y: number; text: string; count: number } | null>(null)
-  const [hover, setHover] = useState<string | null>(null)
-
-  /** 布局基座：初始站点（破泡期间冻结）；λ 随破泡更新 */
-  const baseRef = useRef<{ sites: [number, number][]; lambda: number[] } | null>(null)
-  /** 破泡计数（供恢复胶囊） */
-  const poppedN = useRef(0)
-  /** 渲染细胞（每次破泡/恢复/尺寸变化同步重算，一帧完成） */
-  const [cells, setCells] = useState<CloudCell[]>([])
-  const sizeRef = useRef(size)
-  sizeRef.current = size
-  const dataRef = useRef(data)
-  dataRef.current = data
-
-  const discR = Math.max(60, Math.min(size.w, size.h) / 2 - 6)
-  const discCx = size.w / 2
-  const discCy = size.h / 2
-
-  /** 初始布局（打开/切换/恢复/尺寸变化）：Lloyd 弛豫一次，站点/λ 冻结为基座 */
-  useEffect(() => {
-    const d = dataRef.current
-    if (size.w < 80 || d.length === 0) {
-      baseRef.current = null
-      setCells([])
-      return
-    }
-    const r = layoutInitial(d, discCx, discCy, discR)
-    baseRef.current = { sites: r.sites, lambda: r.lambda }
-    setCells(r.cells)
-    poppedN.current = 0
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, size.w, size.h])
-
-  // 外部恢复信号：重建初始布局
-  useEffect(() => {
-    if (!restoreTick) return
-    const d = dataRef.current
-    if (size.w >= 80 && d.length > 0) {
-      const r = layoutInitial(d, discCx, discCy, discR)
-      baseRef.current = { sites: r.sites, lambda: r.lambda }
-      setCells(r.cells)
-    }
-    poppedN.current = 0
-    onPoppedChange?.(0)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [restoreTick])
-
-  useEffect(() => {
-    const el = ref.current
-    if (!el) return
-    const ro = new ResizeObserver((es) => {
-      const w = Math.round(es[0]?.contentRect.width ?? 0)
-      if (w > 0) setSize((s) => ({ ...s, w }))
-    })
-    ro.observe(el)
-    return () => ro.disconnect()
-  }, [])
-
-  /**
-   * 破泡：删词（立即消失，零动画）→ 幸存词目标面积按词频归一化 →
-   * 固定站点同步 λ 收敛（一帧闭合：形状鼓长闭住空缺，站点不动）。
-   */
-  const popWord = (text: string) => {
-    const base = baseRef.current
-    const d = dataRef.current
-    const survivors = d.filter((w) => w.text !== text)
-    if (!base || survivors.length === 0) return
-    // 站点/λ 与 data 同序 → 按幸存词取子集（站点随原词冻结不动）
-    const idxMap = new Map(d.map((w, i) => [w.text, i]))
-    const sSurv = survivors.map((w2) => base.sites[idxMap.get(w2.text)!])
-    const lSurv = survivors.map((w2) => base.lambda[idxMap.get(w2.text)!])
-    const r = relaxAreas(survivors, sSurv, lSurv, sizeRef.current.w / 2, sizeRef.current.h / 2, discR)
-    setCells(r.cells)
-    // 收敛 λ 回写（按词保留在基座中）
-    const lam = [...base.lambda]
-    survivors.forEach((w2, i) => {
-      lam[idxMap.get(w2.text)!] = r.lambda[i]
-    })
-    baseRef.current = { sites: base.sites, lambda: lam }
-    poppedN.current += 1
-    onPoppedChange?.(poppedN.current)
-  }
-
-  return (
-    <div ref={ref} className="lc-dlg-cloud">
-      {size.w > 0 && cells.length > 0 && (
-        <svg width={size.w} height={size.h} className="lc-dlg-cloud-svg">
-          {cells.map((c) => {
-            const { word, poly, cx, cy, r, hero } = c
-            // 相对质心坐标：外层 g 定位（同步布局，无动画）
-            const d = `M${poly.map(([x, y]) => `${x - cx},${y - cy}`).join('L')}Z`
-            const fs = Math.max(
-              8.5,
-              Math.min(hero ? 34 : 26, r * 0.75, (r * 2.2) / Math.max(2, word.text.length)),
-            )
-            const showText = r > 10.5 && word.text.length <= 6 && fs >= 8.5
-            const hovered = hover === word.text
-            const dimmed = hover !== null && !hovered
-            return (
-              <g
-                key={word.text}
-                className="lc-dlg-cloud-cell"
-                style={{ transform: `translate(${cx}px, ${cy}px)` }}
-                onMouseEnter={(e) => {
-                  setHover(word.text)
-                  setTip({ x: e.clientX, y: e.clientY, text: word.text, count: word.count })
-                }}
-                onMouseMove={(e) =>
-                  setTip((t) => (t ? { ...t, x: e.clientX, y: e.clientY } : t))}
-                onMouseLeave={() => {
-                  setHover(null)
-                  setTip(null)
-                }}
-                onClick={() => popWord(word.text)}
-              >
-                <path
-                  d={d}
-                  fill={cloudWordColor(word)}
-                  fillOpacity={hovered ? 1 : dimmed ? 0.4 : 0.92}
-                  stroke="var(--c-bg-card)"
-                  strokeWidth={2}
-                />
-                {showText && (
-                  <text
-                    x={0}
-                    y={0}
-                    textAnchor="middle"
-                    dy="0.35em"
-                    fontSize={fs}
-                    fill={hovered ? 'var(--c-text-main)' : 'var(--c-text-sub)'}
-                    fontWeight={hovered || hero ? 700 : 600}
-                    opacity={dimmed ? 0.25 : 1}
-                    pointerEvents="none"
-                  >
-                    {word.text}
-                  </text>
-                )}
-              </g>
-            )
-          })}
-        </svg>
-      )}
-      {size.w > 0 && cells.length === 0 && <div className="lc-dlg-ph">已全部破泡（点击「恢复」还原）</div>}
-      {tip && (
-        <span className="lc-dlg-cloud-tip" style={{ left: tip.x, top: tip.y }}>
-          {tip.text} · {tip.count.toLocaleString('zh-CN')} 次
-        </span>
-      )}
-    </div>
-  )
 }
 
 
@@ -907,15 +524,14 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
     )
   }
 
-  /** 词云数据（top40 带次数；加权 Voronoi 拼贴：面积∝词频） */
-  const cloudBubbles = useMemo<BubbleWord[]>(() => {
-    return (detail?.data?.danmaku?.top_words ?? []).slice(0, 40)
+  /** 词云数据（top40，value 按频次排序降权——react-wordcloud 布局/字号用） */
+  const cloudWords = useMemo(() => {
+    const kw = (detail?.data?.danmaku?.top_keywords ?? []).slice(0, 40)
+    return kw.map((text, i) => ({
+      text,
+      value: i < 20 ? 100 - i * 4 : Math.max(12, 40 - i),
+    }))
   }, [detail])
-
-  /** 词云破泡计数 / 恢复信号（2026-09-07：标题行右侧「已破泡 N · 恢复」胶囊；
-      切换场次时 VoronoiCloud 经 onPoppedChange(0) 自动归零） */
-  const [cloudPopped, setCloudPopped] = useState(0)
-  const [cloudRestoreTick, setCloudRestoreTick] = useState(0)
 
   /** 详情弹窗：直播信息 + 分类校正 + 弹幕词云/指标/直播间动态 */
   const renderDetail = () => {
@@ -1078,19 +694,7 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
           </div>
 
           <section className="lc-dlg-sec lc-dlg-sec--full">
-            {/* 段头行：标题 + 破泡计数/恢复胶囊（破泡时出现） */}
-            <div className="lc-dlg-sec-head">
-              <h4 className="lc-dlg-sec-title">弹幕信息</h4>
-              {cloudPopped > 0 && cloudBubbles.length > 0 && (
-                <button
-                  type="button"
-                  className="lc-dlg-cloud-restore"
-                  onClick={() => setCloudRestoreTick((t) => t + 1)}
-                >
-                  已破泡 {cloudPopped} · 恢复
-                </button>
-              )}
-            </div>
+            <h4 className="lc-dlg-sec-title">弹幕信息</h4>
             {detail.loading ? (
               <div className="lc-dlg-ph">加载中…</div>
             ) : s.danmaku ? (
@@ -1109,12 +713,29 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
                     </div>
                   )}
                 </dl>
-                {cloudBubbles.length ? (
-                  <VoronoiCloud
-                    data={cloudBubbles}
-                    restoreTick={cloudRestoreTick}
-                    onPoppedChange={setCloudPopped}
-                  />
+                {cloudWords.length ? (
+                  <div className="lc-dlg-cloud">
+                    <WordCloud
+                      words={cloudWords}
+                      minSize={[300, 150]}
+                      callbacks={{
+                        getWordTooltip: (w: { text: string }) => w.text,
+                        getWordColor: cloudWordColor,
+                      }}
+                      options={{
+                        rotations: 0,
+                        rotationAngles: [0, 0],
+                        fontSizes: [13, 34],
+                        fontStyle: 'normal',
+                        fontWeight: '600',
+                        fontFamily: 'inherit',
+                        padding: 2,
+                        spiral: 'archimedean',
+                        scale: 'sqrt',
+                        deterministic: false,
+                      }}
+                    />
+                  </div>
                 ) : (
                   <div className="lc-dlg-ph">暂无热词数据</div>
                 )}
