@@ -272,6 +272,7 @@ class LiveSessionOut(BaseModel):
     total_income: float | None = None           # danmakus totalIncome（元）
     max_online_count: int | None = None
     danmakus_count: int | None = None
+    cover_url: str | None = None                # 场次封面（详情弹窗左列封面图）
     segment_count: int = 1                      # 中断续播并段数（v2 合并，1=单场）
     category: str = "live"                      # game/chat/watch/upload/song/fitness/radio/collab/special/live
     category_from: str = "fallback"             # override/series/title/learned/area/date/fallback

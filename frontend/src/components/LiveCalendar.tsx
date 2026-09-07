@@ -525,6 +525,7 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
                 <span className={`lc-pop-badge lc-stat-pill--${t}`}>{liveTypeLabel(t)}</span>
               )}
               <span className="lc-dlg-name">{s.live_title || '场次详情'}</span>
+              <span className="lc-dlg-sub">{detail.key} {fmtTime(d0)}</span>
               {s.category_from === 'override' && (
                 <span className="lc-pop-corr">已校正</span>
               )}
@@ -550,70 +551,88 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
             </div>
           )}
 
-          <div className="lc-dlg-body">
+          <div className="lc-dlg-main">
+            {/* 左列：场次封面（缺失 → 渐变占位，右下角直播状态徽章） */}
+            <div className="lc-dlg-cover">
+              {s.cover_url ? (
+                <img className="lc-dlg-cover-img" src={s.cover_url} alt="" />
+              ) : (
+                <span className="lc-dlg-cover-ph">
+                  {(s.live_title || liveTypeLabel(t)).trim().charAt(0) || '播'}
+                </span>
+              )}
+              <span className={`lc-dlg-status${d1 ? '' : ' live'}`}>
+                {d1 ? '已结束' : '直播中'}
+              </span>
+            </div>
+
+            {/* 右列：直播信息（行式 label 左 · value 右） */}
             <section className="lc-dlg-sec">
               <h4 className="lc-dlg-sec-title">直播信息</h4>
-              <dl className="lc-dlg-fields">
-                <div className="lc-dlg-field">
+              <dl className="lc-dlg-rows">
+                <div className="lc-dlg-row">
                   <dt>时间</dt>
                   <dd>{fmtTime(d0)} – {d1 ? fmtTime(d1) : '进行中'}
                     {fmtDur(s.duration_minutes) ? `（${fmtDur(s.duration_minutes)}）` : ''}</dd>
                 </div>
-                <div className="lc-dlg-field"><dt>分区</dt><dd>{area || '—'}</dd></div>
-                <div className="lc-dlg-field"><dt>收益</dt><dd>{fmtMoney(s.total_income) || '—'}</dd></div>
-                <div className="lc-dlg-field">
+                <div className="lc-dlg-row"><dt>分区</dt><dd>{area || '—'}</dd></div>
+                <div className="lc-dlg-row"><dt>收益</dt><dd>{fmtMoney(s.total_income) || '—'}</dd></div>
+                <div className="lc-dlg-row">
                   <dt>峰值在线</dt>
                   <dd>{s.max_online_count ? s.max_online_count.toLocaleString('zh-CN') : '—'}</dd>
                 </div>
-                <div className="lc-dlg-field">
+                <div className="lc-dlg-row">
                   <dt>弹幕数</dt>
                   <dd>{s.danmakus_count ? s.danmakus_count.toLocaleString('zh-CN') : '—'}</dd>
                 </div>
                 {(s.segment_count ?? 1) > 1 && (
-                  <div className="lc-dlg-field">
+                  <div className="lc-dlg-row">
                     <dt>段数</dt>
                     <dd>{s.segment_count} 段合并（中断续播）</dd>
                   </div>
                 )}
-                <div className="lc-dlg-field"><dt>数据源</dt><dd>{srcs.join(' + ')}</dd></div>
+                <div className="lc-dlg-row"><dt>数据源</dt><dd>{srcs.join(' + ')}</dd></div>
               </dl>
             </section>
-
-            <section className="lc-dlg-sec">
-              <h4 className="lc-dlg-sec-title">弹幕信息</h4>
-              {detail.loading ? (
-                <div className="lc-dlg-ph">加载中…</div>
-              ) : s.danmaku ? (
-                <div className="lc-dlg-danmaku">
-                  {s.danmaku.total != null && (
-                    <p className="lc-dlg-ph">
-                      弹幕总量 <b className="lc-dlg-num">{s.danmaku.total.toLocaleString('zh-CN')}</b>
-                    </p>
-                  )}
-                  {s.danmaku.top_keywords?.length ? (
-                    <div className="lc-dlg-tags">
-                      {s.danmaku.top_keywords.map((w) => (
-                        <span key={w} className="lc-dlg-tag">{w}</span>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="lc-dlg-ph">暂无热词数据</div>
-                  )}
-                </div>
-              ) : (
-                <div className="lc-dlg-ph">暂无弹幕数据（danmakus 未收录该场次或拉取失败）</div>
-              )}
-            </section>
-
-            <section className="lc-dlg-sec">
-              <h4 className="lc-dlg-sec-title">直播内容分析</h4>
-              {s.analysis ? (
-                <div className="lc-dlg-ph">{s.analysis.summary || '内容分析摘要待接入'}</div>
-              ) : (
-                <div className="lc-dlg-ph">接口已预留（内容分析服务接入后展示）</div>
-              )}
-            </section>
           </div>
+
+          <section className="lc-dlg-sec lc-dlg-sec--full">
+            <h4 className="lc-dlg-sec-title">弹幕信息</h4>
+            {detail.loading ? (
+              <div className="lc-dlg-ph">加载中…</div>
+            ) : s.danmaku ? (
+              <div className="lc-dlg-danmaku">
+                <dl className="lc-dlg-rows">
+                  {s.danmaku.total != null && (
+                    <div className="lc-dlg-row">
+                      <dt>弹幕总量</dt>
+                      <dd className="lc-dlg-num">{s.danmaku.total.toLocaleString('zh-CN')}</dd>
+                    </div>
+                  )}
+                </dl>
+                {s.danmaku.top_keywords?.length ? (
+                  <div className="lc-dlg-tags">
+                    {s.danmaku.top_keywords.map((w) => (
+                      <span key={w} className="lc-dlg-tag">{w}</span>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="lc-dlg-ph">暂无热词数据</div>
+                )}
+              </div>
+            ) : (
+              <div className="lc-dlg-ph">暂无弹幕数据（danmakus 未收录该场次或拉取失败）</div>
+            )}
+          </section>
+
+          <section className="lc-dlg-sec lc-dlg-sec--full">
+            <h4 className="lc-dlg-sec-title">直播内容分析</h4>
+            {s.analysis ? (
+              <div className="lc-dlg-ph">{s.analysis.summary || '内容分析摘要待接入'}</div>
+            ) : (
+              <div className="lc-dlg-ph">接口已预留（内容分析服务接入后展示）</div>
+            )}
+          </section>
         </div>
       </div>,
       document.body,

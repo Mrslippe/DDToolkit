@@ -2143,9 +2143,10 @@
   color: var(--c-accent);
 }
 
-/* ── 场次详情弹窗（user 2026-09-07：点击日期格 → 独立弹窗）──
-   直播信息 + 分类校正 + 预留「弹幕信息 / 内容分析」区块；
-   样式对齐项目浮片族（--c-bg-card / --shadow-dialog / 12px 圆角）。 */
+/* ── 场次详情弹窗（user 2026-09-07：点击日期格 → 独立弹窗；重构参考图布局）──
+   头部（胶囊+标题+日期副行+关闭）→ 两栏主体（左 200px 封面图+状态徽章 ｜
+   右直播信息行式卡片）→ 满宽「弹幕信息」「内容分析」卡片；
+   配色沿用项目浮片族（--c-bg-card / --shadow-dialog / #faf7f8 区卡片）。 */
 
 .lc-dlg-backdrop {
   position: fixed;
@@ -2159,9 +2160,12 @@
 }
 
 .lc-dlg {
-  width: 420px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 680px;
   max-width: calc(100vw - 48px);
-  max-height: min(640px, calc(100vh - 64px));
+  max-height: min(680px, calc(100vh - 64px));
   overflow-y: auto;
   padding: 16px 18px 18px;
   border-radius: 14px;
@@ -2176,7 +2180,6 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin-bottom: 10px;
 }
 
 .lc-dlg-title {
@@ -2187,12 +2190,21 @@
 }
 
 .lc-dlg-name {
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--c-text-main);
   line-height: 18px;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 标题旁副行：日期 + 开场时间（弱化，不挤标题） */
+.lc-dlg-sub {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--c-text-sub);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
@@ -2217,7 +2229,6 @@
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-bottom: 10px;
 }
 
 .lc-dlg-tab {
@@ -2233,46 +2244,100 @@
   background: var(--c-accent);
 }
 
-.lc-dlg-body {
-  display: flex;
-  flex-direction: column;
+/* 主体两栏：左封面（200px）· 右直播信息卡片（user 2026-09-07 重构，参考图布局） */
+.lc-dlg-main {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
   gap: 12px;
+  align-items: stretch;
+}
+
+.lc-dlg-cover {
+  position: relative;
+  min-height: 212px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: linear-gradient(160deg, #f6edf0 0%, #ece4e8 55%, #e3dae0 100%);
+}
+
+.lc-dlg-cover-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* 缺封面占位：渐变底 + 标题首字（user 2026-09-07 方案：渐变占位，不挂破图） */
+.lc-dlg-cover-ph {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 64px;
+  font-weight: 600;
+  color: rgba(251, 119, 161, 0.55);
+  user-select: none;
+}
+
+/* 封面右下角状态徽章：进行中=强调粉 / 已结束=中性灰 */
+.lc-dlg-status {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  padding: 3px 10px;
+  border-radius: 106px;
+  font-size: 11px;
+  line-height: 1;
+  color: #fff;
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(2px);
+}
+
+.lc-dlg-status.live {
+  background: rgba(251, 119, 161, 0.92);
 }
 
 .lc-dlg-sec {
-  padding: 10px 12px;
+  padding: 12px 14px;
   border-radius: 10px;
   background: #faf7f8;
 }
 
+.lc-dlg-sec--full {
+  align-self: stretch;
+}
+
 .lc-dlg-sec-title {
-  margin: 0 0 8px;
-  font-size: 12px;
+  margin: 0 0 9px;
+  font-size: 12.5px;
   font-weight: 600;
   color: var(--c-text-main);
 }
 
-.lc-dlg-fields {
+/* 行式字段（label 左窄列 muted · value 右主色）：参考图直播信息/弹幕信息共用 */
+.lc-dlg-rows {
   margin: 0;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 6px;
 }
 
-.lc-dlg-field {
+.lc-dlg-row {
   display: flex;
-  gap: 8px;
-  font-size: 12px;
-  line-height: 16px;
+  gap: 10px;
+  font-size: 12.5px;
+  line-height: 17px;
 }
 
-.lc-dlg-field dt {
+.lc-dlg-row dt {
   flex: none;
-  width: 56px;
+  width: 58px;
   color: var(--c-text-sub);
 }
 
-.lc-dlg-field dd {
+.lc-dlg-row dd {
   margin: 0;
   flex: 1;
   min-width: 0;

@@ -110,6 +110,8 @@ export interface LiveSession {
   max_online_count?: number | null
   /** 弹幕数（danmakus danmakusCount） */
   danmakus_count?: number | null
+  /** 场次封面（详情弹窗左列封面图） */
+  cover_url?: string | null
   /** 中断续播并段数（v2 合并，1=单场；>1 表示该场为多次断开续播） */
   segment_count?: number
   /** 类型 key（服务端推断：game/chat/watch/upload/song/fitness/radio/collab/special/live） */

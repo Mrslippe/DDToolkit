@@ -424,6 +424,8 @@ class LiveSessionRepo:
                 g["room_id"] = row.room_id
             if row.live_id and not g["live_id"]:
                 g["live_id"] = row.live_id
+            if row.cover_url and not g["cover_url"]:
+                g["cover_url"] = row.cover_url
             g["start_at"] = min(g["start_at"], old_start)   # 时间取并集（不翻倍收益）
             if row.end_at and (g.get("end_at") is None or row.end_at > g["end_at"]):
                 g["end_at"] = row.end_at
@@ -453,6 +455,8 @@ class LiveSessionRepo:
             g["room_id"] = row.room_id
         if row.live_id and not g["live_id"]:
             g["live_id"] = row.live_id
+        if row.cover_url and not g["cover_url"]:
+            g["cover_url"] = row.cover_url
         srcs.add(row.source)
         g["source"] = self._join_sources(srcs)
 
@@ -534,6 +538,7 @@ class LiveSessionRepo:
             "max_online_count": row.max_online_count,
             "danmakus_count": row.danmakus_count,
             "segment_count": 1,
+            "cover_url": row.cover_url,
         }
 
     def _snap_dict(self, snap: dict) -> dict:
@@ -551,6 +556,7 @@ class LiveSessionRepo:
             "max_online_count": None,
             "danmakus_count": None,
             "segment_count": 1,
+            "cover_url": None,
         }
 
 
