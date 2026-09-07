@@ -145,6 +145,8 @@ interface VoronoiCell {
   cy: number
   r: number          // 等效半径（面积∝词频的圆形折算，供字号缩放）
   hero: boolean
+  /** 挤入形变期的呼吸缩放（1 = 无；morph 引擎逐帧写入，渲染层乘在 translate 后） */
+  breath?: number
 }
 
 /** 半平面裁剪（Sutherland–Hodgman）：保留 ax*x + ay*y ≤ b 部分 */
@@ -263,13 +265,70 @@ function layoutPowerCloud(words: BubbleWord[], w: number, h: number): VoronoiCel
 const BUBBLE_POP_MS = 420
 
 /**
+ * ── 挤入形变引擎（2026-09-07 user 定案：更贴近真实物理的「挤过来填满」）──
+ * 凸多胞质心等角度重采样（SAMPLE_N=28 点）后，新旧布局变成同结构点列，
+ * 逐帧插值 = 连续形变（拉扯/压扁）+ 质心轨迹 lerp + 波次推挤（距离破泡点
+ * 越近延迟越短）+ 挤压呼吸（scale 1→1.07→1）+ easeOutBack 轻微过冲（≈3%）。
+ */
+
+/** 等角度采样点数（新旧布局同结构，形变插值的数学前提：Voronoi 单元是凸的） */
+const SAMPLE_N = 28
+/** 波次推挤：距破泡点更近的泡泡更早动（0–180ms 梯度） */
+const MORPH_STAGGER_MS = 180
+/** 基准/远端时长：近的 280ms，远的 +200ms 压后 */
+const MORPH_BASE_MS = 280
+const MORPH_EXTRA_MS = 200
+/** 挤压呼吸幅度（轻微档：1→1.07） */
+const MORPH_BREATH = 0.07
+/** easeOutBack 过冲系数（c1=0.9 → 峰值 ≈3% 落定回弹） */
+function easeOutBack(t: number): number {
+  const c1 = 0.9
+  const c3 = c1 + 1
+  const u = t - 1
+  return 1 + c3 * u * u * u + c1 * u * u
+}
+
+/** 射线与凸多边形交点距离（从质心向 dir 方向打到边界；凸性保证唯一正解） */
+function rayDist(px: number, py: number, dx: number, dy: number, poly: [number, number][]): number {
+  let best = Infinity
+  for (let k = 0; k < poly.length; k++) {
+    const ax = poly[k][0]
+    const ay = poly[k][1]
+    const bx = poly[(k + 1) % poly.length][0]
+    const by = poly[(k + 1) % poly.length][1]
+    const ex = bx - ax
+    const ey = by - ay
+    const den = dx * ey - dy * ex
+    if (Math.abs(den) < 1e-9) continue
+    const t = ((ax - px) * ey - (ay - py) * ex) / den
+    const u = ((ax - px) * dy - (ay - py) * dx) / den
+    if (u >= -1e-9 && u <= 1 + 1e-9 && t > 1e-9 && t < best) best = t
+  }
+  return best
+}
+
+/** 凸多胞 → 质心为原点的等角度采样（相对坐标点列） */
+function sampleRel(poly: [number, number][], cx: number, cy: number, n: number): [number, number][] {
+  const pts: [number, number][] = []
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2
+    const dx = Math.cos(a)
+    const dy = Math.sin(a)
+    const d = rayDist(cx, cy, dx, dy, poly)
+    pts.push([d * dx, d * dy])
+  }
+  return pts
+}
+
+/**
  * 加权 Voronoi 拼贴词云（A 方案；参考图形态：无缝多边形挤压 + 中央大块）。
  * - 面积 ∝ 词频（power diagram 数学保证：词频越高面积越大）；
  * - 浅色填充 + 深色词字（贴合卡片整体风格）；hover 高亮 + 「词 · N 次」；
  * - 破泡（2026-09-07 user 定案）：点击单元 → 鼓泡缩灭（+质心环波）0.42s →
- *   移除该词 → 其余细胞经 CSS transform transition 平滑滑向新质心；
- *   标题行右侧出现「已破泡 N · 恢复」一键复原。
- * - 渲染结构：外层 g 定位（style transform translate，可被 CSS 过渡）+
+ *   移除该词 → **挤入形变**：其余细胞经 SAMPLE_N=28 点列插值真实变形
+ *   （拉扯/压扁）+ 波次推挤（距离梯度延迟）+ 呼吸 + 3% 过冲回弹，滑向新质心；
+ *   标题行右侧「已破泡 N · 恢复」一键复原。
+ * - 渲染结构：外层 g 定位（style transform translate）+
  *   内层 .lc-dlg-cloud-bubble（transform-box:fill-box 承载破泡缩放）。
  */
 function VoronoiCloud({
@@ -293,15 +352,36 @@ function VoronoiCloud({
   const [popped, setPopped] = useState<Set<string>>(new Set())
   const popTimer = useRef<number | undefined>(undefined)
 
+  /** 挤入形变（morph）状态：animCells=非空表示正在形变（逐帧 setState 驱动） */
+  const [animCells, setAnimCells] = useState<VoronoiCell[] | null>(null)
+  const morphRef = useRef<{ raf: number; start: number } | null>(null)
+  /** 最新布局/词表/尺寸快照（morph 启动与帧循环读 ref，避免闭包过期） */
+  const cellsRef = useRef<VoronoiCell[]>([])
+  const visibleRef = useRef<BubbleWord[]>([])
+  const sizeRef = useRef(size)
+
+  /** 终止进行中的挤入动画：立即落定终态（新破泡/尺寸变化/切换场次/恢复时调用） */
+  const cancelMorph = useCallback(() => {
+    if (morphRef.current) {
+      cancelAnimationFrame(morphRef.current.raf)
+      morphRef.current = null
+    }
+    setAnimCells((cur) => (cur ? null : cur))
+  }, [])
+
   /** 场次/数据切换 → 全部重置（重开弹窗语义 = 破泡清零） */
   useEffect(() => {
     setPopped(new Set())
     setPopping(null)
     setHover(null)
     setTip(null)
+    cancelMorph()
     onPoppedChange?.(0)
-  }, [data, onPoppedChange])
-  useEffect(() => () => window.clearTimeout(popTimer.current), [])
+  }, [data, onPoppedChange, cancelMorph])
+  useEffect(() => () => {
+    window.clearTimeout(popTimer.current)
+    if (morphRef.current) window.cancelAnimationFrame(morphRef.current.raf)
+  }, [])
 
   // 外部恢复信号（restoreTick 变化）：一键复原全部
   useEffect(() => {
@@ -309,30 +389,117 @@ function VoronoiCloud({
     window.clearTimeout(popTimer.current)
     setPopped(new Set())
     setPopping(null)
+    cancelMorph()
     onPoppedChange?.(0)
-  }, [restoreTick, onPoppedChange])
+  }, [restoreTick, onPoppedChange, cancelMorph])
 
   useEffect(() => {
     const el = ref.current
     if (!el) return
     const ro = new ResizeObserver((es) => {
       const w = Math.round(es[0]?.contentRect.width ?? 0)
-      if (w > 0) setSize((s) => ({ ...s, w }))
+      if (w > 0) {
+        cancelMorph() // 尺寸变了 → 挤入线形失效，落定终态后按新尺寸重排
+        setSize((s) => ({ ...s, w }))
+      }
     })
     ro.observe(el)
     return () => ro.disconnect()
-  }, [])
+  }, [cancelMorph])
 
   const visible = useMemo(() => data.filter((w) => !popped.has(w.text)), [data, popped])
+  visibleRef.current = visible
+  sizeRef.current = size
 
   const cells = useMemo(() => {
     if (!visible.length || size.w < 80) return []
     return layoutPowerCloud(visible, size.w, size.h)
   }, [visible, size.w, size.h])
+  cellsRef.current = cells
 
-  /** 破泡：立即播动画，BUBBLE_POP_MS 后移除词 → 其余细胞平滑重排 */
+  /**
+   * 挤入形变：把幸存细胞从「含被破词」的旧布局插值到「去掉后」的新布局。
+   * 波次推挤：距破泡质心越近 → delay 越小、时长越短；呼吸 = 1+0.07·sin(π·e)；
+   * easeOutBack(c1=0.9) ≈3% 过冲回弹；全部到达后落定静态（无跳变）。
+   */
+  const startMorph = useCallback((popText: string) => {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
+    const from = cellsRef.current
+    const fromPopped = from.find((c) => c.word.text === popText)
+    const toWords = visibleRef.current.filter((w) => w.text !== popText)
+    if (!fromPopped || toWords.length === 0) return
+    const w = sizeRef.current.w
+    const h = sizeRef.current.h
+    if (w < 80) return
+    const to = layoutPowerCloud(toWords, w, h)
+    const toByWord = new Map(to.map((c) => [c.word.text, c]))
+    const survivors = from.filter((c) => c.word.text !== popText)
+    if (survivors.length === 0) return
+
+    // 旧/新同构采样（相对各自质心）+ 位移距离（波次梯度基准）
+    const fromSam = survivors.map((c) => sampleRel(c.poly, c.cx, c.cy, SAMPLE_N))
+    const toSam = survivors.map((c) => {
+      const nxt = toByWord.get(c.word.text)!
+      return sampleRel(nxt.poly, nxt.cx, nxt.cy, SAMPLE_N)
+    })
+    const dists = survivors.map((c) => Math.hypot(c.cx - fromPopped.cx, c.cy - fromPopped.cy))
+    const maxDist = Math.max(...dists, 1)
+
+    morphRef.current = { raf: 0, start: 0 }
+    const step = (now: number) => {
+      const m = morphRef.current
+      if (!m) return
+      if (m.start === 0) m.start = now
+      const elapsed = now - m.start
+      const cells: VoronoiCell[] = []
+      let allDone = true
+      for (let i = 0; i < survivors.length; i++) {
+        const f = survivors[i]
+        const nxt = toByWord.get(f.word.text)!
+        const dist = dists[i]
+        const ratio = dist / maxDist
+        const delay = ratio * MORPH_STAGGER_MS
+        const dur = MORPH_BASE_MS + ratio * MORPH_EXTRA_MS
+        const t = Math.min(Math.max((elapsed - delay) / dur, 0), 1)
+        if (t < 1) allDone = false
+        const e = easeOutBack(t)
+        const breath = 1 + MORPH_BREATH * Math.sin(Math.PI * e)
+        // 采样点列插值（绝对坐标：相对点 + 各自质心）
+        const s0 = fromSam[i]
+        const s1 = toSam[i]
+        const poly: [number, number][] = []
+        for (let k = 0; k < SAMPLE_N; k++) {
+          poly.push([
+            s0[k][0] + f.cx + (s1[k][0] + nxt.cx - s0[k][0] - f.cx) * e,
+            s0[k][1] + f.cy + (s1[k][1] + nxt.cy - s0[k][1] - f.cy) * e,
+          ])
+        }
+        cells.push({
+          word: f.word,
+          poly,
+          cx: f.cx + (nxt.cx - f.cx) * e,
+          cy: f.cy + (nxt.cy - f.cy) * e,
+          r: f.r + (nxt.r - f.r) * e,
+          hero: nxt.hero,
+          breath,
+        })
+      }
+      setAnimCells(cells)
+      if (allDone) {
+        window.cancelAnimationFrame(m.raf)
+        morphRef.current = null
+        setAnimCells(null) // 落定 = 静态 cells 布局（插值终态与之一致，无跳变）
+        return
+      }
+      m.raf = requestAnimationFrame(step)
+    }
+    morphRef.current.raf = requestAnimationFrame(step)
+  }, [])
+
+  /** 破泡：立即播动画，BUBBLE_POP_MS 后移除词 → 触发挤入形变 */
   const popWord = (text: string) => {
     if (popping) return
+    cancelMorph() // 形变中再破泡：先落定当前终态，新破泡重新编排
     setHover(null)
     setTip(null)
     setPopping(text)
@@ -345,15 +512,18 @@ function VoronoiCloud({
         return next
       })
       setPopping(null)
+      startMorph(text)
     }, BUBBLE_POP_MS)
   }
 
+  const displayCells = animCells ?? cells
+
   return (
     <div ref={ref} className="lc-dlg-cloud">
-      {size.w > 0 && cells.length > 0 && (
+      {size.w > 0 && displayCells.length > 0 && (
         <svg width={size.w} height={size.h} className="lc-dlg-cloud-svg">
           {/* 破泡单元排到最后渲染（鼓出时压住邻居不穿帮） */}
-          {[...cells]
+          {[...displayCells]
             .sort(
               (a, b) =>
                 (a.word.text === popping ? 1 : 0) - (b.word.text === popping ? 1 : 0),
@@ -377,8 +547,10 @@ function VoronoiCloud({
               return (
                 <g
                   key={word.text}
-                  className="lc-dlg-cloud-cell"
-                  style={{ transform: `translate(${cx}px, ${cy}px)` }}
+                  className={`lc-dlg-cloud-cell${animCells ? ' morphing' : ''}`}
+                  style={{
+                    transform: `translate(${cx}px, ${cy}px)${c.breath ? ` scale(${c.breath})` : ''}`,
+                  }}
                   onMouseEnter={(e) => {
                     setHover(word.text)
                     setTip({ x: e.clientX, y: e.clientY, text: word.text, count: word.count })
@@ -423,7 +595,7 @@ function VoronoiCloud({
             })}
         </svg>
       )}
-      {visible.length === 0 && <div className="lc-dlg-ph">已全部破泡（点击「恢复」还原）</div>}
+      {displayCells.length === 0 && <div className="lc-dlg-ph">已全部破泡（点击「恢复」还原）</div>}
       {tip && (
         <span className="lc-dlg-cloud-tip" style={{ left: tip.x, top: tip.y }}>
           {tip.text} · {tip.count.toLocaleString('zh-CN')} 次

@@ -2446,6 +2446,11 @@
   transition: transform 0.28s cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
+/* 挤入形变期：位置/形状由 JS 逐帧插值（rAF），禁用 CSS 过渡避免双重动画 */
+.lc-dlg-cloud-cell.morphing {
+  transition: none;
+}
+
 /* 泡泡本体（承载破泡缩放）：transform-box 用自身包围盒居中 */
 .lc-dlg-cloud-bubble {
   transform-box: fill-box;
