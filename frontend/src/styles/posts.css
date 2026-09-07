@@ -2365,15 +2365,19 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* 气泡词云（d3-hierarchy.pack，2026-09-07：圆面积∝词频 + 物理挤压排列） */
+/* 加权 Voronoi 拼贴词云（d3-delaunay，2026-09-07：无缝多边形挤压 + 中央大块） */
 .lc-dlg-cloud {
   position: relative;
   width: 100%;
-  height: 190px;
+  height: 210px;
 }
 
 .lc-dlg-cloud-svg {
   display: block;
+}
+
+.lc-dlg-cloud-svg path {
+  transition: fill-opacity 0.12s ease;
 }
 
 /* 词频 hover 提示（跟随鼠标） */

@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Loader2, X } from 'lucide-react'
-import { hierarchy, pack } from 'd3-hierarchy'
+import { Delaunay } from 'd3-delaunay'
 import type { LiveSession, LiveSessionDetail } from '../api/types'
 import { api, imgProxyUrl } from '../api/api'
 import { normalizeImageUrl } from '../utils/format'
@@ -127,17 +127,120 @@ interface BubbleWord {
   count: number
 }
 
+/** 可复现伪随机（固定种子：同数据同布局不闪动） */
+function mulberry32(seed: number) {
+  return () => {
+    seed |= 0
+    seed = (seed + 0x6d2b79f5) | 0
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+interface VoronoiCell {
+  word: BubbleWord
+  poly: [number, number][]
+  cx: number
+  cy: number
+  r: number          // 等效半径（面积∝词频的圆形折算，供字号缩放）
+  hero: boolean
+}
+
+/** 加权 Voronoi 拼贴布局（A 方案，2026-09-07）：
+ * - weighted-Lloyd（CVT 加权变体）= 成熟「power diagram」近似：
+ *   ① 初始中心极坐标占位（词频降序：hero 居中、越小的词越靠外、黄金角错开）；
+ *   ② 按词频概率采样（大词样本多 → 最终面积∝词频）；
+ *   ③ 迭代「最近中心聚簇 → 质心」16 轮（d3-delaunay 求 Voronoi 验证收敛）；
+ * - 最终：d3-delaunay.voronoi 输出无缝物理挤压多边形（2px 描边=拼贴缝隙）；
+ * - 布局完全确定性（种子 20260907），宽高变化才重排。 */
+function layoutVoronoiCloud(words: BubbleWord[], w: number, h: number): VoronoiCell[] {
+  const rand = mulberry32(20260907)
+  const total = words.reduce((s, x) => s + x.count, 0)
+  const n = words.length
+  const cw = w / 2
+  const ch = h / 2
+  const rMax = Math.min(cw, ch) * 0.94
+
+  // ① 初始中心
+  const centers: [number, number][] = words.map((_word, i) => {
+    if (i === 0) return [cw, ch]
+    const rad = rMax * Math.pow(i / n, 0.75)
+    const ang = (i - 1) * 137.508 + (rand() * 0.6 - 0.3)
+    return [cw + rad * Math.cos(ang), ch + rad * Math.sin(ang)]
+  })
+
+  // ② 加权采样（概率 ∝ 词频；圆盘均匀分布）
+  const samples: [number, number, number][] = []
+  const SAMPLE_N = 4200
+  for (let s = 0; s < SAMPLE_N; s++) {
+    let p = rand() * total
+    let wi = 0
+    for (let j = 0; j < n; j++) {
+      p -= words[j].count
+      if (p <= 0) {
+        wi = j
+        break
+      }
+    }
+    const ang = rand() * Math.PI * 2
+    const rad = rMax * Math.sqrt(rand())
+    samples.push([cw + rad * Math.cos(ang), ch + rad * Math.sin(ang), wi])
+  }
+
+  // ③ weighted-Lloyd 迭代
+  for (let it = 0; it < 16; it++) {
+    const sums = centers.map(() => ({ x: 0, y: 0, k: 0 }))
+    for (const [x, y] of samples) {
+      let best = 0
+      let bd = Infinity
+      for (let i = 0; i < n; i++) {
+        const dx = x - centers[i][0]
+        const dy = y - centers[i][1]
+        const d = dx * dx + dy * dy
+        if (d < bd) {
+          bd = d
+          best = i
+        }
+      }
+      const s = sums[best]
+      s.x += x
+      s.y += y
+      s.k++
+    }
+    for (let i = 0; i < n; i++) {
+      const s = sums[i]
+      if (s.k > 0) centers[i] = [s.x / s.k, s.y / s.k]
+    }
+  }
+
+  // ④ Voronoi 多边形 + 面积（鞋带公式）→ 等效半径
+  const voro = Delaunay.from(centers).voronoi([0, 0, w, h])
+  return words.map((word, i) => {
+    const pts = voro.cellPolygon(i) ?? [[0, 0], [0, 0], [0, 0]]
+    let a = 0
+    for (let k = 0; k < pts.length; k++) {
+      const p1 = pts[k]
+      const p2 = pts[(k + 1) % pts.length]
+      a += p1[0] * p2[1] - p2[0] * p1[1]
+    }
+    a = Math.abs(a / 2)
+    const cx = pts.reduce((s, p) => s + p[0], 0) / pts.length
+    const cy = pts.reduce((s, p) => s + p[1], 0) / pts.length
+    return { word, poly: pts, cx, cy, r: Math.sqrt(a / Math.PI), hero: i === 0 }
+  })
+}
+
 /**
- * 气泡词云（2026-09-07）：d3-hierarchy.pack = 成熟 circle-packing 方案
- * （圆面积∝词频，pack 无缝物理挤压排列；React 封装库 react-bubble-cloud
- * 已在 npm 下架 404，故用 d3 自绘）。
- * - 不同颜色/大小圆 = 不同词；圆内嵌词（小圆只留色块）
- * - hover 显示「词 · N 次」（悬停气泡圆）
+ * 加权 Voronoi 拼贴词云（A 方案；参考图形态：无缝多边形挤压 + 中央大块）。
+ * - 不同颜色/大小多边形 = 不同词（面积∝词频，真实物理挤压）；
+ * - hover 高亮 + 显示「词 · N 次」；布局确定性（同数据同形状）。
  */
-function BubbleCloud({ data }: { data: BubbleWord[] }) {
+function VoronoiCloud({ data }: { data: BubbleWord[] }) {
   const ref = useRef<HTMLDivElement>(null)
-  const [size, setSize] = useState({ w: 0, h: 190 })
+  const [size, setSize] = useState({ w: 0, h: 210 })
   const [tip, setTip] = useState<{ x: number; y: number; text: string; count: number } | null>(null)
+  const [hover, setHover] = useState<number>(-1)
 
   useEffect(() => {
     const el = ref.current
@@ -150,46 +253,55 @@ function BubbleCloud({ data }: { data: BubbleWord[] }) {
     return () => ro.disconnect()
   }, [])
 
-  const nodes = useMemo(() => {
+  const cells = useMemo(() => {
     if (!data.length || size.w < 80) return []
-    const root = hierarchy<unknown>({ children: data })
-      .sum((d) => {
-        const n = d as unknown as BubbleWord | null
-        return n && typeof n.count === 'number' && Number.isFinite(n.count) ? n.count : 0
-      })
-      .sort((a, b) => (b.value ?? 0) - (a.value ?? 0))
-    return pack<unknown>().size([size.w, size.h]).padding(2)(root).children ?? []
+    return layoutVoronoiCloud(data, size.w, size.h)
   }, [data, size.w, size.h])
 
   return (
     <div ref={ref} className="lc-dlg-cloud">
       {size.w > 0 && (
         <svg width={size.w} height={size.h} className="lc-dlg-cloud-svg">
-          {nodes.map((n) => {
-            const w = n.data as unknown as BubbleWord
-            const r = Math.max(n.r ?? 0, 2)
-            const fs = Math.max(8, Math.min(r * 0.72, (r * 1.7) / Math.max(2, w.text.length)))
+          {cells.map((c, i) => {
+            const { word, poly, cx, cy, r, hero } = c
+            const d = `M${poly.map((p) => `${p[0]},${p[1]}`).join('L')}Z`
+            const fs = Math.max(
+              9,
+              Math.min(hero ? 34 : 26, r * 0.72, (r * 1.9) / Math.max(2, word.text.length)),
+            )
             return (
               <g
-                key={w.text}
-                transform={`translate(${n.x ?? 0}, ${n.y ?? 0})`}
-                onMouseEnter={(e) =>
-                  setTip({ x: e.clientX, y: e.clientY, text: w.text, count: w.count })}
+                key={word.text}
+                onMouseEnter={(e) => {
+                  setHover(i)
+                  setTip({ x: e.clientX, y: e.clientY, text: word.text, count: word.count })
+                }}
                 onMouseMove={(e) =>
                   setTip((t) => (t ? { ...t, x: e.clientX, y: e.clientY } : t))}
-                onMouseLeave={() => setTip(null)}
+                onMouseLeave={() => {
+                  setHover(-1)
+                  setTip(null)
+                }}
               >
-                <circle r={r} fill={cloudWordColor(w)} fillOpacity={0.88} />
-                {r > 13.5 && (
+                <path
+                  d={d}
+                  fill={cloudWordColor(word)}
+                  fillOpacity={hover === i ? 1 : 0.88}
+                  stroke="var(--c-bg-card)"
+                  strokeWidth={2}
+                />
+                {fs >= 10 && r > 14 && (
                   <text
+                    x={cx}
+                    y={cy}
                     textAnchor="middle"
                     dy="0.35em"
                     fontSize={fs}
                     fill="#fff"
-                    fontWeight={600}
+                    fontWeight={hero ? 700 : 600}
                     pointerEvents="none"
                   >
-                    {w.text}
+                    {word.text}
                   </text>
                 )}
               </g>
@@ -587,7 +699,7 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
     )
   }
 
-  /** 气泡词云数据（top40 带次数；d3 pack 面积∝词频） */
+  /** 词云数据（top40 带次数；加权 Voronoi 拼贴：面积∝词频） */
   const cloudBubbles = useMemo<BubbleWord[]>(() => {
     return (detail?.data?.danmaku?.top_words ?? []).slice(0, 40)
   }, [detail])
@@ -767,7 +879,7 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
                   )}
                 </dl>
                 {cloudBubbles.length ? (
-                  <BubbleCloud data={cloudBubbles} />
+                  <VoronoiCloud data={cloudBubbles} />
                 ) : (
                   <div className="lc-dlg-ph">暂无热词数据</div>
                 )}
