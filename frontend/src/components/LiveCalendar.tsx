@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Loader2, X } from 'lucide-react'
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Loader2, X } from 'lucide-react'
 import type { LiveSession, LiveSessionDetail } from '../api/types'
 import { api } from '../api/api'
 import { LIVE_TYPE_ORDER, inferLiveType, liveTypeLabel } from '../utils/liveType'
@@ -101,7 +101,8 @@ interface DetailState {
  *     鼠标滑向浮层有 120ms 宽限不闪关；Esc 关闭；保持纯信息展示（user 2026-09-07：
  *     分类校正移出浮层 → 点击日期格进详情弹窗）；
  *   · 点击日期格 → 独立详情弹窗（user 2026-09-07）：
- *     直播信息（起止/分区/收益/峰值/弹幕/数据源）+ 分类校正下拉（override 源）+
+ *     直播信息（起止/分区/收益/峰值/弹幕/数据源）+ 分类校正（点左上角胶囊 →
+ *     下拉栏全部彩色分类胶囊，点选取；override 源）+
  *     「弹幕信息」「直播内容分析」预留区块（danmaku/analysis 接口先留，内容之后再做）；
  *   · 月份切换滑动动画（user 2026-09-07：前进/后退方向感，keyed 重放）；
  *   · 无场次的格子：今天以前 = 「休息」；今天及以后 = 「待定」（user 2026-09-07）；
@@ -119,13 +120,28 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
   /** 场次浮层：点击格子的锚点（rect 快照）与当日数据 */
   const [pop, setPop] = useState<PopState | null>(null)
 
-  /** 校正请求进行中的 live_id（下拉禁用防连点） */
-  const [savingCategory, setSavingCategory] = useState<string | null>(null)
+  /** 详情弹窗·分类下拉栏（点左上角胶囊展开：全部彩色分类胶囊，点选取） */
+  const [catPopOpen, setCatPopOpen] = useState(false)
+  const catPopRef = useRef<HTMLSpanElement>(null)
+  useEffect(() => {
+    if (!catPopOpen) return
+    const onDown = (e: MouseEvent) => {
+      if (catPopRef.current && !catPopRef.current.contains(e.target as Node)) {
+        setCatPopOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [catPopOpen])
 
   /** 月份切换动画方向（1=前进/向右滑入，-1=后退/向左滑入）；keyed 重放 */
   const [navDir, setNavDir] = useState<1 | -1>(1)
 
   const [detail, setDetail] = useState<DetailState | null>(null)
+  // 弹窗打开/切换场次/关闭 → 收起下拉栏
+  useEffect(() => {
+    setCatPopOpen(false)
+  }, [detail])
 
   // 月份选择浮窗：独立年份游标（打开时同步 ym 的年）
   const [monthPopOpen, setMonthPopOpen] = useState(false)
@@ -286,18 +302,20 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
   const onPickCategory = async (s: LiveSession, value: string) => {
     const liveId = s.live_id
     if (!liveId || !accountId) return
-    setSavingCategory(liveId)
     try {
-      if (value === 'auto') await api.clearLiveSessionCategory(accountId, liveId)
-      else await api.setLiveSessionCategory(accountId, liveId, value)
+      if (value === 'auto') {
+        if (s.category_from === 'override') {
+          await api.clearLiveSessionCategory(accountId, liveId)
+        }
+      } else {
+        await api.setLiveSessionCategory(accountId, liveId, value)
+      }
       load()
       // 详情弹窗内校正 → 同步刷新详情（徽章/分类来源即时更新）
       const d = await api.liveSessionDetail(accountId, liveId)
       setDetail((prev) => (prev ? { ...prev, data: d } : prev))
     } catch (e) {
       setError((e as Error).message || '分类保存失败')
-    } finally {
-      setSavingCategory(null)
     }
   }
 
@@ -466,8 +484,48 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
         <div className="lc-dlg" role="dialog" aria-modal="true">
           <div className="lc-dlg-head">
             <div className="lc-dlg-title">
-              <span className={`lc-pop-badge lc-stat-pill--${t}`}>{liveTypeLabel(t)}</span>
+              {s.live_id ? (
+                <span className="lc-dlg-badge-wrap" ref={catPopRef}>
+                  <button
+                    type="button"
+                    className="lc-dlg-badge-btn"
+                    title="选择分类"
+                    onClick={() => setCatPopOpen((o) => !o)}
+                  >
+                    <span className={`lc-pop-badge lc-stat-pill--${t}`}>{liveTypeLabel(t)}</span>
+                    <ChevronDown className="lc-dlg-badge-caret" />
+                  </button>
+                  {catPopOpen && (
+                    <span className="lc-dlg-cat-pop">
+                      <span className="lc-dlg-cat-list">
+                        <button
+                          type="button"
+                          className={`lc-dlg-cat-opt lc-dlg-cat-auto${s.category_from === 'override' ? '' : ' on'}`}
+                          onClick={() => { setCatPopOpen(false); onPickCategory(s, 'auto') }}
+                        >
+                          自动（跟随推断）
+                        </button>
+                        {LIVE_TYPE_ORDER.map((t2) => (
+                          <button
+                            key={t2.key}
+                            type="button"
+                            className={`lc-dlg-cat-opt lc-stat-pill--${t2.key}${t === t2.key ? ' on' : ''}`}
+                            onClick={() => { setCatPopOpen(false); onPickCategory(s, t2.key) }}
+                          >
+                            {t2.label}
+                          </button>
+                        ))}
+                      </span>
+                    </span>
+                  )}
+                </span>
+              ) : (
+                <span className={`lc-pop-badge lc-stat-pill--${t}`}>{liveTypeLabel(t)}</span>
+              )}
               <span className="lc-dlg-name">{s.live_title || '场次详情'}</span>
+              {s.category_from === 'override' && (
+                <span className="lc-pop-corr">已校正</span>
+              )}
             </div>
             <button type="button" className="lc-dlg-close" aria-label="关闭" onClick={() => setDetail(null)}>
               <X className="size-4" />
@@ -511,25 +569,6 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
                 </div>
                 <div className="lc-dlg-field"><dt>数据源</dt><dd>{srcs.join(' + ')}</dd></div>
               </dl>
-              {s.live_id ? (
-                <div className="lc-dlg-edit">
-                  <span className="lc-pop-edit-label">分类</span>
-                  <select
-                    className="lc-pop-select"
-                    value={s.category ?? 'live'}
-                    disabled={savingCategory === s.live_id}
-                    onChange={(e) => onPickCategory(s, e.target.value)}
-                  >
-                    <option value="auto">自动</option>
-                    {LIVE_TYPE_ORDER.map((t2) => (
-                      <option key={t2.key} value={t2.key}>{t2.label}</option>
-                    ))}
-                  </select>
-                  {s.category_from === 'override' && (
-                    <span className="lc-pop-corr">已校正</span>
-                  )}
-                </div>
-              ) : null}
             </section>
 
             <section className="lc-dlg-sec">

@@ -1909,19 +1909,19 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* 类型胶囊：34×16 · 圆角106px · 10px 深灰字（9px→10px 可读性，34px 宽内两字仍放得下） */
+/* 类型胶囊：38×18 · 圆角106px · 11px 深灰字（user 2026-09-07 微放大：34×16→38×18、10px→11px） */
 .lc-badge {
   flex: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 34px;
-  height: 16px;
-  padding: 0 4px;
+  min-width: 38px;
+  height: 18px;
+  padding: 0 5px;
   border-radius: 106px;
   background: #d3d2d2;
   color: rgba(52, 52, 52, 1);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1;
   white-space: nowrap;
 }
@@ -2096,17 +2096,17 @@
   min-width: 0;
 }
 
-/* 浮层内类型徽章：尺寸覆写（统计胶囊 50×19/14px → 34×16/10px），配色沿用 --{key} */
+/* 浮层/弹窗内类型徽章：尺寸覆写（统计胶囊 50×19/14px → 38×18/11px），配色沿用 --{key} */
 .lc-pop-badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: none;
-  min-width: 34px;
-  height: 16px;
-  padding: 0 4px;
+  min-width: 38px;
+  height: 18px;
+  padding: 0 5px;
   border-radius: 106px;
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1;
   white-space: nowrap;
 }
@@ -2135,39 +2135,7 @@
   opacity: 0.75;
 }
 
-/* 分类校正下拉（v0.9.x 类型引擎 v2 第⑦信号；2026-09-07 起位于**详情弹窗**内，
-   hover 浮层保持纯信息展示） */
-.lc-pop-edit {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 2px;
-}
-
-.lc-pop-edit-label {
-  flex: none;
-  font-size: 10.5px;
-  color: var(--c-text-sub);
-}
-
-.lc-pop-select {
-  flex: 1;
-  min-width: 0;
-  height: 22px;
-  padding: 0 6px;
-  font-size: 11.5px;
-  color: var(--c-text-main);
-  background: var(--c-bg-card);
-  border: 1px solid rgba(15, 23, 42, 0.12);
-  border-radius: 6px;
-  outline: none;
-  cursor: pointer;
-}
-
-.lc-pop-select:focus {
-  border-color: var(--c-accent);
-}
-
+/* 「已校正」标记（详情弹窗标题行，分类胶囊旁） */
 .lc-pop-corr {
   flex: none;
   font-size: 10px;
@@ -2316,11 +2284,76 @@
   line-height: 16px;
 }
 
-.lc-dlg-edit {
-  display: flex;
+/* 弹窗左上角分类胶囊按钮 + 下拉栏（user 2026-09-07：点胶囊弹全部彩色分类胶囊，点选取） */
+.lc-dlg-badge-wrap {
+  position: relative;
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
-  margin-top: 8px;
+  gap: 4px;
+  flex: none;
+}
+
+.lc-dlg-badge-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: 106px;
+  border: 1px solid transparent;
+}
+
+.lc-dlg-badge-btn:hover {
+  border-color: rgba(15, 23, 42, 0.18);
+}
+
+.lc-dlg-badge-caret {
+  width: 12px;
+  height: 12px;
+  color: var(--c-text-sub);
+}
+
+.lc-dlg-cat-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 62;
+  width: 208px;
+  max-height: 340px;
+  overflow-y: auto;
+  padding: 8px;
+  border-radius: 12px;
+  background: var(--c-bg-card);
+  border: 1px solid rgba(15, 23, 42, 0.06);
+  box-shadow: var(--shadow-dialog);
+  animation: lc-dlg-pop 0.16s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.lc-dlg-cat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lc-dlg-cat-opt {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 26px;
+  border-radius: 46px;
+  font-size: 12.5px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.lc-dlg-cat-opt.on {
+  box-shadow: inset 0 0 0 2px rgba(15, 23, 42, 0.55);
+  font-weight: 600;
+}
+
+/* 自动（跟随推断）选项：中性灰，置于列表顶部 */
+.lc-dlg-cat-auto {
+  background: #e8e5e6;
+  color: rgba(52, 52, 52, 1);
 }
 
 @keyframes lc-dlg-fade {
