@@ -776,75 +776,81 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
           if (e.target === e.currentTarget) setDetail(null)
         }}
       >
-        <OverlayScroll className="lc-dlg" role="dialog" aria-modal>
-          <div className="lc-dlg-head">
-            <div className="lc-dlg-title">
-              {s.live_id ? (
-                <span className="lc-dlg-badge-wrap" ref={catPopRef}>
-                  <button
-                    type="button"
-                    className="lc-dlg-badge-btn"
-                    title="选择分类"
-                    onClick={() => setCatPopOpen((o) => !o)}
-                  >
-                    <span className={`lc-pop-badge lc-stat-pill--${t}`}>{liveTypeLabel(t)}</span>
-                    <ChevronDown className="lc-dlg-badge-caret" />
-                  </button>
-                  {catPopOpen && (
-                    <span className="lc-dlg-cat-pop">
-                      <span className="lc-dlg-cat-list">
-                        <button
-                          type="button"
-                          className={`lc-dlg-cat-opt lc-dlg-cat-auto${s.category_from === 'override' ? '' : ' on'}`}
-                          onClick={() => { setCatPopOpen(false); onPickCategory(s, 'auto') }}
-                        >
-                          自动（跟随推断）
-                        </button>
-                        {LIVE_TYPE_ORDER.map((t2) => (
+        <div className="lc-dlg" role="dialog" aria-modal>
+          {/* 头部驻留区：不随内容滚动（2026-09-07 user 定案——「标题……X」恒驻留、
+              滚动条只在内容区悬浮不覆盖头部）；下缘发丝分隔 */}
+          <div className="lc-dlg-head-zone">
+            <div className="lc-dlg-head">
+              <div className="lc-dlg-title">
+                {s.live_id ? (
+                  <span className="lc-dlg-badge-wrap" ref={catPopRef}>
+                    <button
+                      type="button"
+                      className="lc-dlg-badge-btn"
+                      title="选择分类"
+                      onClick={() => setCatPopOpen((o) => !o)}
+                    >
+                      <span className={`lc-pop-badge lc-stat-pill--${t}`}>{liveTypeLabel(t)}</span>
+                      <ChevronDown className="lc-dlg-badge-caret" />
+                    </button>
+                    {catPopOpen && (
+                      <span className="lc-dlg-cat-pop">
+                        <span className="lc-dlg-cat-list">
                           <button
-                            key={t2.key}
                             type="button"
-                            className={`lc-dlg-cat-opt lc-stat-pill--${t2.key}${t === t2.key ? ' on' : ''}`}
-                            onClick={() => { setCatPopOpen(false); onPickCategory(s, t2.key) }}
+                            className={`lc-dlg-cat-opt lc-dlg-cat-auto${s.category_from === 'override' ? '' : ' on'}`}
+                            onClick={() => { setCatPopOpen(false); onPickCategory(s, 'auto') }}
                           >
-                            {t2.label}
+                            自动（跟随推断）
                           </button>
-                        ))}
+                          {LIVE_TYPE_ORDER.map((t2) => (
+                            <button
+                              key={t2.key}
+                              type="button"
+                              className={`lc-dlg-cat-opt lc-stat-pill--${t2.key}${t === t2.key ? ' on' : ''}`}
+                              onClick={() => { setCatPopOpen(false); onPickCategory(s, t2.key) }}
+                            >
+                              {t2.label}
+                            </button>
+                          ))}
+                        </span>
                       </span>
-                    </span>
-                  )}
-                </span>
-              ) : (
-                <span className={`lc-pop-badge lc-stat-pill--${t}`}>{liveTypeLabel(t)}</span>
-              )}
-              <span className="lc-dlg-name">{s.live_title || '场次详情'}</span>
-              <span className="lc-dlg-sub">{detail.key} {fmtTime(d0)}</span>
-              {s.category_from === 'override' && (
-                <span className="lc-pop-corr">已校正</span>
-              )}
+                    )}
+                  </span>
+                ) : (
+                  <span className={`lc-pop-badge lc-stat-pill--${t}`}>{liveTypeLabel(t)}</span>
+                )}
+                <span className="lc-dlg-name">{s.live_title || '场次详情'}</span>
+                <span className="lc-dlg-sub">{detail.key} {fmtTime(d0)}</span>
+                {s.category_from === 'override' && (
+                  <span className="lc-pop-corr">已校正</span>
+                )}
+              </div>
+              <button type="button" className="lc-dlg-close" aria-label="关闭" onClick={() => setDetail(null)}>
+                <X className="size-4" />
+              </button>
             </div>
-            <button type="button" className="lc-dlg-close" aria-label="关闭" onClick={() => setDetail(null)}>
-              <X className="size-4" />
-            </button>
+
+            {/* 当日多场切换（点格默认第一场）——随头部驻留 */}
+            {detail.sessions.length > 1 && (
+              <div className="lc-dlg-tabs">
+                {detail.sessions.map((x, i) => (
+                  <button
+                    key={x.live_id ?? `${x.start_at}-${i}`}
+                    type="button"
+                    className={`lc-dlg-tab${i === detail.idx ? ' on' : ''}`}
+                    onClick={() => switchDetailIdx(i)}
+                  >
+                    {fmtTime(new Date(x.start_at))}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
-          {/* 当日多场切换（点格默认第一场） */}
-          {detail.sessions.length > 1 && (
-            <div className="lc-dlg-tabs">
-              {detail.sessions.map((x, i) => (
-                <button
-                  key={x.live_id ?? `${x.start_at}-${i}`}
-                  type="button"
-                  className={`lc-dlg-tab${i === detail.idx ? ' on' : ''}`}
-                  onClick={() => switchDetailIdx(i)}
-                >
-                  {fmtTime(new Date(x.start_at))}
-                </button>
-              ))}
-            </div>
-          )}
-
-          <div className="lc-dlg-main">
+          {/* 内容区：独立滚动（覆盖式滚动条，只在此层悬浮） */}
+          <OverlayScroll className="lc-dlg-body">
+            <div className="lc-dlg-main">
             {/* 左列：场次封面（缺失/失败 → 渐变占位，右下角直播状态徽章） */}
             <div className="lc-dlg-cover">
               <CoverImage
@@ -991,7 +997,8 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
               <div className="lc-dlg-ph">接口已预留（内容分析服务接入后展示）</div>
             )}
           </section>
-        </OverlayScroll>
+          </OverlayScroll>
+        </div>
       </div>,
       document.body,
     )

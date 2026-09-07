@@ -183,17 +183,19 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
       {/* max-w 等类名必须与推导段分离（纯字符串 + 拼接）：Tailwind v4 提取器
           对「带方括号的类名紧邻 ${ 插值」会丢弃该候选（sm:max-w-[720px] 曾被吞掉
           → 详情窗全宽），静态段单独成串确保被扫描到
-          2026-09-07（二级界面审查 C11）：滚动改覆盖式 OverlayScroll——
-          原生条隐藏不占宽 + 自动隐藏（F 节标准）；面板本体滚动交给内部组件 */}
-      <DialogContent className={'w-full p-0 sm:max-w-[720px]' + (exiting ? ' is-exiting' : '')}>
-        <OverlayScroll className="post-detail-scroll" style={{ maxHeight: '90vh' }}>
-        <DialogHeader className="p-0">
-          <DialogTitle className="pr-8 text-base leading-snug">
-            {postDisplayTitle(shown)}
-          </DialogTitle>
-        </DialogHeader>
+          2026-09-07：① 面板滚动改覆盖式 OverlayScroll（F 节标准）② 头部驻留——
+          「标题……X」钉在面板顶部不随内容滚动，滚动条只在内容区悬浮（user 定案） */}
+      <DialogContent className={'flex max-h-[90vh] w-full flex-col overflow-hidden p-0 sm:max-w-[720px]' + (exiting ? ' is-exiting' : '')}>
+        <div className="pd-head">
+          <DialogHeader className="p-0">
+            <DialogTitle className="pr-8 text-base leading-snug">
+              {postDisplayTitle(shown)}
+            </DialogTitle>
+          </DialogHeader>
+        </div>
 
-        <div className="mt-4 space-y-4">
+        <OverlayScroll className="post-detail-scroll">
+        <div className="space-y-4">
           {/* 元信息 */}
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm text-muted-foreground">
             <TypeTag type={shown.type} />

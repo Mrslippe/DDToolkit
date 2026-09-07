@@ -210,7 +210,7 @@
 ### B2. 详情窗口 `<PostDetailDrawer>`（components/PostDetailDrawer.tsx）
 P6-2 起为**居中 Dialog**（原 Sheet 右侧抽屉）`sm:max-w-[720px]`（⚠️ 该类名必须与模板插值分离成纯字符串——Tailwind v4 提取器对「带方括号的类名紧邻 `${`」会丢弃候选
 （曾吞掉 `sm:max-w-[720px]` 致详情窗全宽），一律 `'…' + (cond ? ' x' : '')` 写法），
-标题 = 帖子类型名。**2026-09-07（C11）：面板滚动改覆盖式 OverlayScroll**（`.post-detail-scroll`，根 max-h 90vh，滚动体 padding 20px）——原生条隐藏不占宽 + 自动隐藏（F 节标准）；动效见「抽屉动效」段（dialog-content/overlay，scale 0.97 替代右移）。**退场为类驱动（P6-4）**：radix Presence 对「换名动画」的判定基于挂载时缓存的 computed style，data-state 换名不会真播退场（面板/遮罩瞬消）——组件侧 `exiting` 态加 `is-exiting` 类播 200ms 再真正闭合，遮罩经 `[data-slot=dialog-overlay]:has(+ [data-slot=dialog-content].is-exiting)` 联动（open 态动画被覆盖为退场、卸载时已不可见）。结构未变动：元信息行(类型/时间/平台ID/原文链接/墓碑flag) → 墓碑时间线(已删时) → 统计徽章行 → 预约卡 → 封面大图 → 正文三态(Delta/HTML/纯文本) → 转发原文卡 → 图片组 → 附加字段(bvid/cvid/description) → 原始JSON 折叠。
+标题 = 帖子类型名。**2026-09-07：① 面板滚动改覆盖式 OverlayScroll**（`.post-detail-scroll`，内容区精确占剩余空间，滚动体 padding 20px）**② 头部驻留区**（`.pd-head`：flex:none · padding `16px 20px 12px` · 下缘发丝分隔；radix 关闭钮 absolute top-4 right-4 落在本区右缘）——`「标题……X」` 钉在面板顶部不随内容滚动，滚动条只在内容区悬浮、不覆盖标题行；动效见「抽屉动效」段（dialog-content/overlay，scale 0.97 替代右移）。**退场为类驱动（P6-4）**：radix Presence 对「换名动画」的判定基于挂载时缓存的 computed style，data-state 换名不会真播退场（面板/遮罩瞬消）——组件侧 `exiting` 态加 `is-exiting` 类播 200ms 再真正闭合，遮罩经 `[data-slot=dialog-overlay]:has(+ [data-slot=dialog-content].is-exiting)` 联动（open 态动画被覆盖为退场、卸载时已不可见）。结构未变动：元信息行(类型/时间/平台ID/原文链接/墓碑flag) → 墓碑时间线(已删时) → 统计徽章行 → 预约卡 → 封面大图 → 正文三态(Delta/HTML/纯文本) → 转发原文卡 → 图片组 → 附加字段(bvid/cvid/description) → 原始JSON 折叠。
 
 ### B2.1 图片查看器 `<ImageViewer>`（components/ImageViewer.tsx）
 P6-4：从详情窗口打开图片的**独立浮层**——portal 到 body、`z-[200]` 高于详情窗（z-50）。
@@ -236,7 +236,7 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 | 区域 | 类名 | 说明 |
 |---|---|---|
 | 遮罩 | `.lc-dlg-backdrop` | fixed inset 0、z-60、`rgba(15,23,42,.32)`、淡入 0.18s；点击空白（target===currentTarget）关闭；打开期间锁 body 滚动 |
-| 面板根 | `<OverlayScroll className="lc-dlg" role="dialog" aria-modal>` | **720px**（`max-width calc(100vw-48px)`）、`max-height min(680px, calc(100vh-64px))`、**12px 圆角**、白底 + 发丝边 `--c-border` + `--shadow-dialog`；入场 pop 0.2s（translateY 8 + scale .98）；滚动体 `.lc-dlg .os-scroll`（column gap 12 / padding `16px 18px 18px` / overscroll-behavior contain） |
+| 面板根 | `<div className="lc-dlg" role="dialog" aria-modal>`（**面板=头部驻留区 + 内容滚动体**，2026-09-07 user 定案） | **720px**（`max-width calc(100vw-48px)`）、`max-height min(680px, calc(100vh-64px))`、**12px 圆角**、白底 + 发丝边 `--c-border` + `--shadow-dialog`；入场 pop 0.2s（translateY 8 + scale .98）；**头部驻留区** `.lc-dlg-head-zone`（flex:none · padding `16px 18px 12px` · 下缘发丝分隔）承担头部行+多场 tabs——不随内容滚动、滚动条不覆盖；**内容区** `<OverlayScroll className="lc-dlg-body">`（flex:1 min-height:0；滚动体 `.lc-dlg-body .os-scroll` column gap 12 / padding `12px 18px 18px` / overscroll-behavior contain） |
 | 头部 | `.lc-dlg-head` | 左=**分类胶囊按钮**（点击弹全部分类下拉）+ 标题（15px/600 单行截断）+ 副行 `日期 HH:MM`（11.5px 次级）+「已校正」红字标（`category_from==='override'`）；右=关闭钮 26×26 r8 |
 | 分类下拉 | `.lc-dlg-cat-pop` | 208px 宽、max-h 340、r12、`--shadow-dialog`；列表 = **自动（跟随推断）** 灰胶囊 + 9 类彩色胶囊（26px 高 r46，`.on` 内描边 2px 深灰）；选后 PUT/DELETE override 并重拉场次+详情；点外部关闭 |
 | 多场切换 | `.lc-dlg-tabs` | 当日多场时显示：HH:MM 胶囊（r106），激活 = `--c-accent` 底白字 |
@@ -304,6 +304,7 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 | 入场动画 | 轻 pop：`lc-dlg-pop`（translateY 8 + scale .98 + 淡入）；浮层 0.16s / hover 浮层 lc-pop 0.12s / 主弹窗 0.2s；reduced-motion 全部禁用 |
 | 关闭通道 | **点外关闭 + Esc 双通道**（所有浮层；radix 内建） |
 | 关闭钮 | **26×26 · r8 · `--c-text-sub` · hover 灰底 rgba(15,23,42,.05) + 主色文字**（radix 与 lc-dlg-close 同款；ImageViewer 黑玻璃圆钮为灯箱豁免） |
+| **头部驻留** | 详情类二级窗口 = **面板 = 头部驻留区（flex:none · 下缘发丝分隔）＋ 内容 OverlayScroll（flex:1）**——「标题……X」（含场次多场 tabs）钉顶不随内容滚动；滚动条只在内容区悬浮，**不覆盖标题与关闭钮**（2026-09-07 user 定案；已接入：帖子详情 `pd-head`、场次详情 `lc-dlg-head-zone`；短表单弹窗内容不溢出，不强制） |
 | Tooltip | **黑玻璃胶囊**：`rgba(15,23,42,.78)` 底白字 r999（radix tooltip 与词云提示 `lc-dlg-cloud-tip` 同源） |
 | 选中态 | 两原则：① 分类色体系元件（类型胶囊/选项）用**本体色** + 600/内描边；② 其它选择件激活 = **`--c-primary-deep` 底白字 600**（month 旧浅粉底粉字、tab 旧 accent 底均已改）；hover 统一 `--sel-bg-hover` |
 | z-index 档位 | 30 锚定浮窗（filter/time）→ 40 日历月份浮窗 → 50 radix（Dialog/Alert/Select/Tooltip）→ 56 hover 场次浮层 → 60 主弹窗遮罩 → 62 弹窗内下拉 → 70 词云提示 → 200 灯箱 |

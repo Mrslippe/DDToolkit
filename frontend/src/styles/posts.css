@@ -868,8 +868,23 @@
   white-space: nowrap;
 }
 
-/* 详情窗口滚动体（2026-09-07 C11：覆盖式滚动条，F 节标准；
-   根由 OverlayScroll 承担 max-height，滚动体 padding 全局唯一的 20px 口腔 */
+/* 详情窗口：头部驻留区（标题……X 钉在面板顶部，不随内容滚动，滚动条不覆盖；
+   2026-09-07 user 定案；X 为 radix 绝对定位（top-4 right-4），落在本区右缘） */
+.pd-head {
+  position: relative;
+  flex: none;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--c-border);
+  background: var(--c-bg-card);
+}
+
+/* 详情窗口滚动体（覆盖式滚动条，F 节标准）：content 区 flex:1 精确占剩余，
+   滚动体 padding 20px 口腔 */
+.post-detail-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 .post-detail-scroll .os-scroll {
   padding: 20px;
   overscroll-behavior: contain;
@@ -2149,16 +2164,36 @@
   border: 1px solid var(--c-border);
   box-shadow: var(--shadow-dialog);
   animation: lc-dlg-pop 0.2s cubic-bezier(0.22, 0.61, 0.36, 1);
-  /* 2026-09-07：滚动条 = 覆盖式（OverlayScroll）——原生条隐藏不占宽度，
-     拇指悬浮自动隐藏；布局/滚动体 .lc-dlg .os-scroll 承担 */
+  /* 2026-09-07：面板 = 头部驻留区 + 内容滚动区（flex column）——
+     头部不随内容滚动（user 定案「标题……X」恒驻留），滚动条只在内容区悬浮 */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
-/* 弹窗滚动体：原 .lc-dlg 的列布局与内边距移入；滚动条类由 os 体系接管 */
-.lc-dlg .os-scroll {
+/* 头部驻留区：flex:none + 下缘发丝分隔；空白区整体不参与滚动 */
+.lc-dlg-head-zone {
+  flex: none;
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid var(--c-border);
+  background: var(--c-bg-card);
+}
+
+.lc-dlg-head-zone .lc-dlg-tabs {
+  margin-top: 10px;
+}
+
+/* 内容滚动体：原面板整体滚动的列布局/内边距移入；覆盖式滚动条只悬浮于本层 */
+.lc-dlg-body {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.lc-dlg-body .os-scroll {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding: 16px 18px 18px;
+  padding: 12px 18px 18px;
   overscroll-behavior: contain;
 }
 
