@@ -71,6 +71,11 @@ export default function OverlayScroll({
     const onEnter = () => {
       tb.classList.add('os-show')
       if (hideTimer.current) window.clearTimeout(hideTimer.current)
+      // 2026-09-07：悬浮亮出后无动作 1.5s 也自动淡出（profile 视图常亮问题）——
+      // 鼠标悬停即常亮会造成「不滚动也不隐藏」的观感
+      hideTimer.current = window.setTimeout(() => {
+        if (!dragging.current) tb.classList.remove('os-show')
+      }, 1500)
     }
     const onLeave = () => {
       if (!dragging.current) tb.classList.remove('os-show')
