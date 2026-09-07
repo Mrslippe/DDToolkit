@@ -245,7 +245,7 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 | 右直播信息 | `.lc-dlg-sec` + `.lc-dlg-rows` | r10 `#faf7f8` 区卡；行式 label(58px 次级) 左 · value 右；字段：时间（HH:MM–HH:MM + 时长）/ 分区 / 收益 ¥ / 峰值在线 / 弹幕数 / **A 组指标**（观看/点赞/打赏人数/互动/在线排名，来自 danmakus v2 live）/ 段数（>1 显示「N 段合并（中断续播）」）/ 数据源（danmakus+self+feed 组合） |
 | 弹幕信息 | `.lc-dlg-sec--full` | 满宽区卡：弹幕总量（大数 600）+ 完整性提示（`metrics.is_full===false` 时「弹幕数据未全量（部分录制源）」）+ **增量摊铺拼贴词云**（`MosaicCloud`，参考图形态）；无数据=「暂无弹幕数据（danmakus 未收录该场次或拉取失败）」 |
 | └ 词云 | `.lc-dlg-cloud` + svg | 高 **210px**；**增量摊铺加权 Voronoi 拼贴**（2026-09-07 user 定案）：power diagram λ 权重（面积∝词频）+ **力导向站点摊铺**（collide 推挤 + 中心引力 + 矩形软墙，位置直推无速度积分→无极限环）+ **逐个入池**（频次降序每 150ms 一个，站点=当前最大空腔）+ λ 面积收敛；全部入场后 alpha 冷却 → 静止即停（无循环装饰） |
-| └ 面积比例 | `utils/wordCloudLayout.ts` | 目标面积 = count 比例 **保底 0.05%**（画布 0.05%，小词仍可见分级）→ 归一化；node 验证：单调性 100%、终态偏差 <0.7%、填满 100%、单帧 <1.5ms、滑动幅度 228px（小泡直径 25 倍） |
+| └ 面积比例 | `utils/wordCloudLayout.ts` | 目标面积 = count 比例 **保底 0.05%**（画布 0.05%，小词仍可见分级）→ 归一化；**松弛手感**（user 定案 2026-09-07）：β=0.1（λ 面积修正慢速蠕动）+ α=0.994 慢冷却 + 碰撞质量感 q=0.2（大泡稳、小泡让）——node 验证：单调性 100%、终态偏差 2.01%、填满 100%、有效帧 <20ms |
 | └ 词云配色 | `CLOUD_COLORS` | 10 色项目粉系 + 类型色相（#d8645e/#8b6fd8/#0088be/#d4b801/#009a24/#ec57ff/#2fa5ad/#c95c86/#e0872f/#5b7fd8），按词哈希取色稳定；白缝 `stroke=--c-bg-card` 2px；hover：当前格 1/其余 0.4；hover 提示 = 黑玻璃胶囊「词 · N 次」（`.lc-dlg-cloud-tip`） |
 | └ 数据 | `detail.data.danmaku.top_words` | 后端 `LiveDanmakuInfo.top_words`（top40 带次数）；前 40 按 count 降序；无词=「暂无热词数据」 |
 | 直播动态 | `.lc-dlg-evts` | 满宽区卡：**B 组事件**（type 7=直播中止·灰点 / 8=直播继续·粉点，`send_date` HH:MM）+ **A 组在线峰值高光**（`metrics.peaks` 前 3，「N 人在线」，金点）；空=「暂无动态数据」 |

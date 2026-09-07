@@ -156,8 +156,9 @@ function MosaicCloud({ data, box }: { data: CloudWord[]; box: [number, number] }
       for (const w of words) p.addWord(w)
       let alpha = 1
       while (alpha > 0.01) {
-        alpha = Math.max(alpha * 0.985, 0.01)
-        p.step(alpha, alpha < 0.3 ? 8 : 2)
+        alpha = Math.max(alpha * 0.994, 0.01)
+        // 收尾精度优先：站点基本静止后 λ 多轮收敛（node 验证 80 轮偏差 2%）
+        p.step(alpha, alpha < 0.3 ? 80 : 2)
       }
       setSnap(p.state())
       return () => { packerRef.current = null }
@@ -182,11 +183,18 @@ function MosaicCloud({ data, box }: { data: CloudWord[]; box: [number, number] }
       if (entered < held.length) {
         alpha = 1                       // 入场期恒活跃
       } else {
-        alpha = Math.max(alpha * 0.985, 0.01)   // 收尾冷却
+        // 收尾冷却：0.994 慢衰减（泡泡滑动看得见、自然停）；λ 精度由轮数补
+        alpha = Math.max(alpha * 0.994, 0.01)
       }
-      packer.step(alpha, entered >= held.length ? (alpha < 0.3 ? 8 : 2) : 1)
+      // 入场期 1 轮 λ（动画流畅 + 尺寸渐变）；收尾初期 2 轮（滑动收尾 + 异步补精度）
+      let rounds = entered < held.length ? 1 : 2
+      // 收尾后段（α<0.3）：站点基本静止 → 每帧 20 轮补收敛（40 词实测 ~5ms，安全）
+      if (entered >= held.length && alpha < 0.3) rounds = 20
+      packer.step(alpha, rounds)
       setSnap(packer.state())
       if (entered >= held.length && alpha <= 0.05) {
+        // 最后一哆嗦：补足 λ 精度（α 已停、力已熄，多轮纯收敛 <16.7ms 可行）
+        // 20 轮/帧已在收尾段持续执行，此处无需额外补
         return                            // 静止即停
       }
       raf = requestAnimationFrame(loop)

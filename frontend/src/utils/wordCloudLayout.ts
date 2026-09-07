@@ -35,11 +35,12 @@ export interface CloudState {
 }
 
 const MAX_TC = 1e5
-const BETA = 0.5
+const BETA = 0.1           // λ 面积修正步长（2026-09-07 手感调优：0.5 太"快准狠"→ 0.1 慢速蠕动）
 const WALL_PAD = 4
 const SEAM = 2          // 白缝
 const CAV_GRID_X = 25
 const CAV_GRID_Y = 13
+const MASS_Q = 0.2      // 质量感强度（碰撞推挤按面积反比混合，node 验证偏差 ~2%）
 
 /** 可复现伪随机（种子固定：入场确定性，不闪动） */
 function mulberry32(seed: number) {
@@ -152,8 +153,19 @@ function findCavity(sites: CloudSite[], box: [number, number]): [number, number]
   return [bx, by]
 }
 
-/** 力导向 tick（位置直推，无速度积分 → 无极限环）：collide + 中心引力 + 矩形软墙 */
-function tickForce(sites: CloudSite[], radii: number[], alpha: number, box: [number, number], kCenter = 0.0015) {
+/**
+ * 力导向 tick（位置直推，无速度积分 → 无极限环）：collide + 中心引力 + 矩形软墙。
+ * q = 质量感强度（0=均分推挤、1=全质量感）：大泡稳、小泡让的"泡沫手感"；
+ * node 实测 q=0.2 时偏差 2%（视觉无感）且单调性 100%——q 越大面积偏差越大。
+ */
+function tickForce(
+  sites: CloudSite[],
+  radii: number[],
+  alpha: number,
+  box: [number, number],
+  kCenter = 0.0015,
+  q = 0.2,
+) {
   const [W, H] = box
   const n = sites.length
   for (let i = 0; i < n; i++) {
@@ -166,11 +178,16 @@ function tickForce(sites: CloudSite[], radii: number[], alpha: number, box: [num
       const rr = radii[i] + radii[j] + SEAM
       if (d2 < rr * rr && d2 > 1e-9) {
         const d = Math.sqrt(d2)
-        const push = ((rr - d) / 2) * alpha
+        const overlap = rr - d
+        // 质量 ∝ 目标半径²（面积）；份额按质量反比混合（q 控制强度）
+        const mA = radii[i] * radii[i]
+        const mB = radii[j] * radii[j]
+        const shareB = 0.5 + (mA / (mA + mB) - 0.5) * q  // B 被推比例（A 重 → B 多让）
+        const shareA = 0.5 + (mB / (mA + mB) - 0.5) * q  // A 被推比例
         const ux = dx / d
         const uy = dy / d
-        a.x -= ux * push; a.y -= uy * push
-        b.x += ux * push; b.y += uy * push
+        a.x -= ux * overlap * shareA * alpha; a.y -= uy * overlap * shareA * alpha
+        b.x += ux * overlap * shareB * alpha; b.y += uy * overlap * shareB * alpha
       }
     }
   }
@@ -262,7 +279,7 @@ export class MosaicPacker {
   step(alpha: number, lamRounds: number) {
     const tgt = areaTargets(this.words, this.box, this.minRatio)
     const radii = tgt.map((a) => Math.sqrt(a / Math.PI))
-    tickForce(this.sites, radii, alpha, this.box)
+    tickForce(this.sites, radii, alpha, this.box, 0.0015, MASS_Q)
     relaxLambda(this.words, this.sites, tgt, this.boundary, lamRounds)
   }
 
@@ -285,8 +302,9 @@ export function packFinal(
   for (const w of words) packer.addWord(w)
   let alpha = 1
   while (alpha > 0.01) {
-    alpha = Math.max(alpha * 0.985, 0.01)
-    packer.step(alpha, alpha < 0.3 ? 8 : 2)
+    alpha = Math.max(alpha * 0.994, 0.01)
+    // 收尾精度优先：alpha<0.3 后站点基本静止，λ 多轮收敛（node 验证 80 轮偏差 2%）
+    packer.step(alpha, alpha < 0.3 ? 80 : 2)
   }
   return packer.state()
 }
