@@ -59,8 +59,8 @@ html.window-maximized body {
    滚动条不占布局宽度（原生条隐藏）+ 悬浮拇指自动隐藏；视觉与全局标准一致：
    透明轨 + 常态细灰 --c-border + hover 粉 --c-primary + 圆角胶囊。
    拇指贴边留白 4px、常态宽 4px；容器悬浮时变粉并加粗至 6px（中心对齐）。
-   （thumb 本身 pointer-events:none 纯展示——hover 态由 .os-root:hover 驱动，
-    与拖拽无关，2026-09-07 审计修正「注释承诺 hover 而实现缺失」） */
+   拖拽：显示态（.os-show）才启用 pointer-events（grab 光标），未显示不拦截
+   指针；拖拽结束四重兜底重排隐藏（见 OverlayScroll.tsx 注释）。 */
 .os-root {
   position: relative;
   overflow: hidden;
@@ -92,7 +92,8 @@ html.window-maximized body {
   border-radius: 999px;
   background: var(--c-border);
   opacity: 0;
-  pointer-events: none;      /* 纯展示（无拖拽），显隐由调度驱动 */
+  pointer-events: none;      /* 未显示不拦截指针（对内容零打扰） */
+  touch-action: none;
   transition: opacity 0.25s ease, width 0.15s ease, background-color 0.15s ease,
     right 0.15s ease;
   display: none;
@@ -100,6 +101,12 @@ html.window-maximized body {
 
 .os-thumb.os-show {
   opacity: 1;
+  pointer-events: auto;      /* 显示态可拖拽（grab 光标） */
+  cursor: grab;
+}
+
+.os-thumb.os-show:active {
+  cursor: grabbing;
 }
 
 /* 容器内悬浮：拇指变粉 + 加粗（视觉 6px，水平中心保持贴右 4px 中轴） */

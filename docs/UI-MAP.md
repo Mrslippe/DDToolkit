@@ -399,8 +399,9 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 
 - 根 `.os-root`：`position:relative;overflow:hidden;display:flex;flex-direction:column`（**经典 modal 滚动模式**：max-height 容器的 auto 高度根也能正确产生内部滚动——`height:100%` 在 auto 父级下失效，曾致详情弹窗滚不动）；
 - 滚动体 `.os-scroll`：`flex:1 1 auto;min-height:0;overflow-y:auto` + 原生条隐藏；**padding/gap/列布局一律由调用方写在 `.os-scroll` 上**（根不再承担排版）;
-- 拇指 `.os-thumb`：absolute right 4px、宽 4px、min-height 28px、r999、`--c-border`、`opacity 0`（`.os-show` 时 1）、`transition opacity .25s / width .15s / background .15s`，**`pointer-events:none`（纯展示，无拖拽——移除拖拽是为了杜绝显隐状态机被楔死）**；
+- 拇指 `.os-thumb`：absolute right 4px、宽 4px、min-height 28px、r999、`--c-border`、`opacity 0`（`.os-show` 时 1）、`transition opacity .25s / width .15s / background .15s`；**指针策略**：基态 `pointer-events:none`（未显示对内容零打扰），`.os-show` 后 `pointer-events:auto` + `cursor:grab`（拖动中 `grabbing`）+ `touch-action:none`；
 - **hover 增强**：`.os-root:hover .os-thumb` → 变粉 `--c-primary` + 加粗至 6px（right 同步收至 3px 保持中心对齐）——与全局 webkit 兜底的 hover 收缩内收增粗同语义（2026-09-07 审计后补实现，此前仅注释承诺）；显隐仍由 `.os-show` 调度（悬浮即 reveal 1.2s，故 hover 到容器即见粉拇指）；
+- **拇指拖拽（2026-09-07 robust 版）**：按下 = `setPointerCapture` + 记录 `grabY`（指针相对拇指顶偏移），移动 = **绝对反解** `scrollTop`（非增量累加，天然消除 clamp 累积误差）；结束 = **四重兜底**：`pointerup` / `pointercancel` / `lostpointercapture` / **window `blur`**（覆盖拖出窗口、alt-tab、弹层拦截、捕获丢失全部路径），结束**无条件** `reveal(700)` 重排隐藏；拖拽期间 onScroll 仅 sync 不 reveal（停顿也不隐藏，收尾交给 endDrag）——历史上「拖拽中被 pointer capture 丢失楔死 → 永不隐藏」的 bug 即由此根治，因此当前显隐是"无抑制位"的纯调度 + 拖拽只是幂等叠加；
 - 显隐调度（无任何可楔死的状态位）：滚动中亮出、停止 **700ms** 淡出；鼠标悬浮容器亮出、**1.2s** 无动作淡出；移出立即淡出；所有隐藏定时器无条件执行；
 - 状态同步 `sync()`（只改位置/尺寸/display，不碰显隐）：scroll（rAF）/ ResizeObserver（滚动体 + **首个子元素**——scrollHeight 增长不触发自身 RO）/ **400ms 轮询兜底**（异步内容长高）；
 - 布局要求：若用「根百分高度 + 滚动体内部滚动」，父级必须是 flex column 或明确高度，否则滚动失效（`.lc-dlg`/`.archive-view` 均按此约定）；

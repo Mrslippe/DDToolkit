@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useRef } from 'react'
-import type { CSSProperties, ReactNode, UIEvent } from 'react'
+import type {
+  CSSProperties,
+  PointerEvent as ReactPointerEvent,
+  ReactNode,
+  UIEvent,
+} from 'react'
 
 interface OverlayScrollProps {
   /** 根节点类（外层定位容器，overflow:hidden）；滚动内容放 .os-scroll 内 */
@@ -19,11 +24,17 @@ interface OverlayScrollProps {
 /**
  * 覆盖式滚动条（滚动条视觉标准 2026-09-07 user 定案）：
  * - 原生滚动条隐藏（display:none + scrollbar-width:none）→ 不占布局宽度；
- * - 拇指绝对定位悬浮：透明轨 + 常态 --c-border 细灰 + hover 粉 --c-primary，
- *   圆角胶囊；内容不溢出不渲染；
- * - 显隐纯调度（无任何可楔死的状态位，2026-09-07 二修）：
- *   滚动中亮出、停止 700ms 淡出；悬浮亮出、1.2s 无动作淡出；移出立即淡出；
- *   所有隐藏定时器无条件执行；
+ * - 拇指绝对定位悬浮：透明轨 + 常态 --c-border 细灰 + 容器悬浮变粉 --c-primary
+ *   （.os-root:hover 加粗 6px），圆角胶囊；内容不溢出不渲染；
+ * - 显隐纯调度：滚动中亮出、停止 700ms 淡出；悬浮亮出、1.2s 无动作淡出；
+ *   移出立即淡出；隐藏定时器无条件执行；
+ * - 拇指拖拽（2026-09-07 robust 版，非当初裸 pointer-capture）：
+ *   · 按下 = 指针捕获 + 记录 grabY（指针相对拇指顶部的偏移），移动时绝对反解
+ *     scrollTop（不依赖增量累加，天然消除 clamp 累积误差）；
+ *   · 结束 = 四重兜底：pointerup / pointercancel / lostpointercapture /
+ *     window blur（覆盖拖出窗口、alt-tab、弹层拦截、捕获丢失全部路径）——
+ *     结束【无条件】reveal(700) 重新调度隐藏，不再有"拖拽中永不隐藏"的抑制位；
+ *   · 拖拽期间 onScroll 仅 sync 不 reveal（停顿也保持显示，交由 endDrag 收尾）；
  * - 状态同步（sync）只改位置/尺寸/display：scroll（rAF）/ ResizeObserver
  *   （滚动体 + 首个子元素）/ 400ms 轮询兜底（内容异步长高）。
  */
@@ -36,6 +47,8 @@ export default function OverlayScroll({
   const thumbEl = useRef<HTMLDivElement | null>(null)
   const frame = useRef(0)
   const hideTimer = useRef<number | undefined>(undefined)
+  /** 拖拽会话（无 = 未拖拽）；grabY = 按下时指针相对拇指顶的偏移 */
+  const drag = useRef<{ pointerId: number; grabY: number } | null>(null)
 
   /** 仅同步位置/尺寸/display（不动显隐），可频繁调用 */
   const sync = useCallback(() => {
@@ -75,6 +88,54 @@ export default function OverlayScroll({
     if (hideTimer.current) window.clearTimeout(hideTimer.current)
   }, [])
 
+  /** 结束拖拽：无条件清会话 + 重新调度隐藏（700ms）——楔死免疫 */
+  const endDrag = useCallback(() => {
+    if (!drag.current) return
+    drag.current = null
+    reveal(700)
+  }, [reveal])
+
+  /** 拇指按下：指针捕获 + 记录 grabY；拖拽期间隐藏定时器不启动 */
+  const onThumbDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const sc = scrollEl.current
+    const root = rootRef.current
+    const tb = thumbEl.current
+    if (!sc || !root || !tb) return
+    if (sc.scrollHeight <= sc.clientHeight + 1) return   // 无溢出不可拖
+    if (e.pointerType === 'mouse' && e.button !== 0) return
+    e.preventDefault()
+    try {
+      tb.setPointerCapture(e.pointerId)
+    } catch {
+      /* 极个别环境捕获失败：仍记会话，靠 window pointerup/blur 兜底 */
+    }
+    drag.current = {
+      pointerId: e.pointerId,
+      grabY: e.clientY - root.getBoundingClientRect().top - tb.offsetTop,
+    }
+    tb.classList.add('os-show')
+    if (hideTimer.current) {
+      window.clearTimeout(hideTimer.current)
+      hideTimer.current = undefined
+    }
+  }
+
+  /** 拖动：绝对映射（不增量累加）——指针到拇指顶，由 grabY 反解 scrollTop */
+  const onThumbMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    const d = drag.current
+    const sc = scrollEl.current
+    const root = rootRef.current
+    if (!d || d.pointerId !== e.pointerId || !sc || !root) return
+    const H = sc.clientHeight
+    const S = sc.scrollHeight
+    if (H <= 0 || S <= H + 1) return
+    const th = Math.max(28, Math.round((H / S) * H))
+    const maxTop = Math.max(H - th - 8, 0)
+    const topPx = e.clientY - root.getBoundingClientRect().top - d.grabY
+    const ratio = Math.min(Math.max((topPx - 4) / Math.max(maxTop, 1), 0), 1)
+    sc.scrollTop = ratio * (S - H)
+  }
+
   useEffect(() => {
     const sc = scrollEl.current
     const root = rootRef.current
@@ -85,15 +146,21 @@ export default function OverlayScroll({
       cancelAnimationFrame(frame.current)
       frame.current = requestAnimationFrame(() => {
         sync()
-        reveal(700)
+        // 拖拽中只同步不调度隐藏（停顿也保持显示，收尾由 endDrag 负责）
+        if (!drag.current) reveal(700)
       })
     }
     const onEnter = () => reveal(1200)          // 悬浮亮出，1.2s 无动作自动淡出
     const onLeave = () => hideNow()
+    // 四重兜底之三/四：window 级 pointerup（捕获丢失/拖出）+ blur（alt-tab）
+    const onWinPointerUp = () => endDrag()
+    const onWinBlur = () => endDrag()
 
     sc.addEventListener('scroll', onScroll, { passive: true })
     root.addEventListener('mouseenter', onEnter)
     root.addEventListener('mouseleave', onLeave)
+    window.addEventListener('pointerup', onWinPointerUp)
+    window.addEventListener('blur', onWinBlur)
 
     // 内容尺寸变化：滚动体自身（视口缩放）+ 首个子元素（内容长高会改变其
     // 边框盒——scrollHeight 增长不会触发自身 RO）
@@ -113,12 +180,14 @@ export default function OverlayScroll({
       sc.removeEventListener('scroll', onScroll)
       root.removeEventListener('mouseenter', onEnter)
       root.removeEventListener('mouseleave', onLeave)
+      window.removeEventListener('pointerup', onWinPointerUp)
+      window.removeEventListener('blur', onWinBlur)
       ro.disconnect()
       window.clearInterval(poll)
       cancelAnimationFrame(frame.current)
       if (hideTimer.current) window.clearTimeout(hideTimer.current)
     }
-  }, [sync, reveal, hideNow])
+  }, [sync, reveal, hideNow, endDrag])
 
   return (
     <div
@@ -138,8 +207,18 @@ export default function OverlayScroll({
       >
         {children}
       </div>
-      {/* 拇指纯展示：不承接指针（无拖拽状态机，杜绝显示态被楔死） */}
-      <div ref={thumbEl} className="os-thumb" aria-hidden="true" />
+      {/* 拇指：显示时可拖拽（os-show 才启用 pointer-events，见 layout.css）；
+          显隐由调度驱动，拖拽结束无条件重排隐藏（四重兜底） */}
+      <div
+        ref={thumbEl}
+        className="os-thumb"
+        aria-hidden="true"
+        onPointerDown={onThumbDown}
+        onPointerMove={onThumbMove}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+        onLostPointerCapture={endDrag}
+      />
     </div>
   )
 }
