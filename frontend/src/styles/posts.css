@@ -975,7 +975,8 @@
   padding: 0 14px 6px;
 }
 
-/* 卡片内滚动条：与 list-scroll 同族（滑块描边内收），宽度窄一档适配小卡 */
+/* 卡片内滚动条：与 list-scroll 同族（滑块描边内收），宽度窄一档适配小卡；
+   颜色归一全局（常态 --c-border 细灰 → hover 顶栏粉 --c-primary，2026-09-07） */
 .archive-section-scroll::-webkit-scrollbar {
   width: 10px;
 }
@@ -986,14 +987,14 @@
 
 .archive-section-scroll::-webkit-scrollbar-thumb {
   border: 3px solid transparent;
-  background-color: rgba(148, 163, 184, 0.45);
+  background-color: var(--c-border);
   background-clip: content-box;
   border-radius: 999px;
 }
 
 .archive-section-scroll::-webkit-scrollbar-thumb:hover {
   border-width: 2px;
-  background-color: rgba(148, 163, 184, 0.65);
+  background-color: var(--c-primary);
 }
 
 /* 空态在固定高度内垂直居中（内容少也不缩卡） */
@@ -2173,28 +2174,32 @@
   border: 1px solid rgba(15, 23, 42, 0.06);
   box-shadow: var(--shadow-dialog);
   animation: lc-dlg-pop 0.2s cubic-bezier(0.22, 0.61, 0.36, 1);
-  /* 2026-09-07：弹窗内置滚动条——项目粉系风格（--c-accent 同源），配合 body 滚动锁 */
+  /* 2026-09-07：弹窗滚动条归一项目风格——透明轨 + 常态 --c-border 细灰 +
+     hover 顶栏粉 --c-primary（与 list/archive 同族：滑块描边内收）；
+     配合 body 滚动锁，防止滚动条越界观感 */
   scrollbar-width: thin;
-  scrollbar-color: rgba(251, 119, 161, 0.45) rgba(251, 119, 161, 0.07);
+  scrollbar-color: var(--c-border) transparent;
   overscroll-behavior: contain;
 }
 
 .lc-dlg::-webkit-scrollbar {
-  width: 8px;
+  width: 10px;
 }
 
 .lc-dlg::-webkit-scrollbar-track {
-  background: rgba(251, 119, 161, 0.07);
-  border-radius: 4px;
+  background: transparent;
 }
 
 .lc-dlg::-webkit-scrollbar-thumb {
-  background: rgba(251, 119, 161, 0.45);
-  border-radius: 4px;
+  border: 3px solid transparent;
+  background-color: var(--c-border);
+  background-clip: content-box;
+  border-radius: 999px;
 }
 
 .lc-dlg::-webkit-scrollbar-thumb:hover {
-  background: rgba(251, 119, 161, 0.65);
+  border-width: 2px;
+  background-color: var(--c-primary);
 }
 
 .lc-dlg-head {
