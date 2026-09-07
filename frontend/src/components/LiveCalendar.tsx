@@ -259,16 +259,58 @@ function layoutPowerCloud(words: BubbleWord[], w: number, h: number): VoronoiCel
   })
 }
 
+/** 词云破泡动画时长（ms）：与 CSS lc-bubble-pop 0.42s 同步 */
+const BUBBLE_POP_MS = 420
+
 /**
  * 加权 Voronoi 拼贴词云（A 方案；参考图形态：无缝多边形挤压 + 中央大块）。
  * - 面积 ∝ 词频（power diagram 数学保证：词频越高面积越大）；
- * - 浅色填充 + 深色词字（贴合卡片整体风格）；hover 高亮 + 「词 · N 次」。
+ * - 浅色填充 + 深色词字（贴合卡片整体风格）；hover 高亮 + 「词 · N 次」；
+ * - 破泡（2026-09-07 user 定案）：点击单元 → 鼓泡缩灭（+质心环波）0.42s →
+ *   移除该词 → 其余细胞经 CSS transform transition 平滑滑向新质心；
+ *   标题行右侧出现「已破泡 N · 恢复」一键复原。
+ * - 渲染结构：外层 g 定位（style transform translate，可被 CSS 过渡）+
+ *   内层 .lc-dlg-cloud-bubble（transform-box:fill-box 承载破泡缩放）。
  */
-function VoronoiCloud({ data }: { data: BubbleWord[] }) {
+function VoronoiCloud({
+  data,
+  restoreTick,
+  onPoppedChange,
+}: {
+  data: BubbleWord[]
+  /** 外部恢复信号（父级「已破泡 N · 恢复」按钮），>0 时执行一次复原 */
+  restoreTick?: number
+  /** 破泡数量变化回调（父级计数胶囊显示/更新） */
+  onPoppedChange?: (n: number) => void
+}) {
   const ref = useRef<HTMLDivElement>(null)
   const [size, setSize] = useState({ w: 0, h: 210 })
   const [tip, setTip] = useState<{ x: number; y: number; text: string; count: number } | null>(null)
-  const [hover, setHover] = useState<number>(-1)
+  // hover 以词 text 为键（破泡后索引会错位，text 稳定）
+  const [hover, setHover] = useState<string | null>(null)
+  /** popping=动画中的词（仍占布局，缩灭后移除）；popped=已破泡移除的词 */
+  const [popping, setPopping] = useState<string | null>(null)
+  const [popped, setPopped] = useState<Set<string>>(new Set())
+  const popTimer = useRef<number | undefined>(undefined)
+
+  /** 场次/数据切换 → 全部重置（重开弹窗语义 = 破泡清零） */
+  useEffect(() => {
+    setPopped(new Set())
+    setPopping(null)
+    setHover(null)
+    setTip(null)
+    onPoppedChange?.(0)
+  }, [data, onPoppedChange])
+  useEffect(() => () => window.clearTimeout(popTimer.current), [])
+
+  // 外部恢复信号（restoreTick 变化）：一键复原全部
+  useEffect(() => {
+    if (!restoreTick) return
+    window.clearTimeout(popTimer.current)
+    setPopped(new Set())
+    setPopping(null)
+    onPoppedChange?.(0)
+  }, [restoreTick, onPoppedChange])
 
   useEffect(() => {
     const el = ref.current
@@ -281,69 +323,107 @@ function VoronoiCloud({ data }: { data: BubbleWord[] }) {
     return () => ro.disconnect()
   }, [])
 
+  const visible = useMemo(() => data.filter((w) => !popped.has(w.text)), [data, popped])
+
   const cells = useMemo(() => {
-    if (!data.length || size.w < 80) return []
-    return layoutPowerCloud(data, size.w, size.h)
-  }, [data, size.w, size.h])
+    if (!visible.length || size.w < 80) return []
+    return layoutPowerCloud(visible, size.w, size.h)
+  }, [visible, size.w, size.h])
+
+  /** 破泡：立即播动画，BUBBLE_POP_MS 后移除词 → 其余细胞平滑重排 */
+  const popWord = (text: string) => {
+    if (popping) return
+    setHover(null)
+    setTip(null)
+    setPopping(text)
+    window.clearTimeout(popTimer.current)
+    popTimer.current = window.setTimeout(() => {
+      setPopped((prev) => {
+        const next = new Set(prev)
+        next.add(text)
+        onPoppedChange?.(next.size)
+        return next
+      })
+      setPopping(null)
+    }, BUBBLE_POP_MS)
+  }
 
   return (
     <div ref={ref} className="lc-dlg-cloud">
-      {size.w > 0 && (
+      {size.w > 0 && cells.length > 0 && (
         <svg width={size.w} height={size.h} className="lc-dlg-cloud-svg">
-          {cells.map((c, i) => {
-            const { word, poly, cx, cy, r, hero } = c
-            const d = `M${poly.map((p) => `${p[0]},${p[1]}`).join('L')}Z`
-            // 2026-09-07：放宽显示条件——字号下限 8.5px、r>10.5 即显示词字
-            //（此前 r>14 且 fs>=10 太紧，中等格子长词（如「哈哈哈哈」）被吞掉）
-            const fs = Math.max(
-              8.5,
-              Math.min(hero ? 34 : 26, r * 0.75, (r * 2.2) / Math.max(2, word.text.length)),
+          {/* 破泡单元排到最后渲染（鼓出时压住邻居不穿帮） */}
+          {[...cells]
+            .sort(
+              (a, b) =>
+                (a.word.text === popping ? 1 : 0) - (b.word.text === popping ? 1 : 0),
             )
-            const showText = r > 10.5 && word.text.length <= 6 && fs >= 8.5
-            const hovered = hover === i
-            const dimmed = hover >= 0 && !hovered
-            return (
-              <g
-                key={word.text}
-                onMouseEnter={(e) => {
-                  setHover(i)
-                  setTip({ x: e.clientX, y: e.clientY, text: word.text, count: word.count })
-                }}
-                onMouseMove={(e) =>
-                  setTip((t) => (t ? { ...t, x: e.clientX, y: e.clientY } : t))}
-                onMouseLeave={() => {
-                  setHover(-1)
-                  setTip(null)
-                }}
-              >
-                <path
-                  d={d}
-                  fill={cloudWordColor(word)}
-                  fillOpacity={hovered ? 1 : dimmed ? 0.4 : 0.92}
-                  stroke="var(--c-bg-card)"
-                  strokeWidth={2}
-                />
-                {showText && (
-                  <text
-                    x={cx}
-                    y={cy}
-                    textAnchor="middle"
-                    dy="0.35em"
-                    fontSize={fs}
-                    fill={hovered ? 'var(--c-text-main)' : 'var(--c-text-sub)'}
-                    fontWeight={hovered || hero ? 700 : 600}
-                    /* 2026-09-07：非选中单元的文字随色块一起变淡（否则观感无变化） */
-                    opacity={dimmed ? 0.25 : 1}
-                    pointerEvents="none"
-                  >
-                    {word.text}
-                  </text>
-                )}
-              </g>
-            )
-          })}
+            .map((c) => {
+              const { word, poly, cx, cy, r, hero } = c
+              // 相对质心坐标：外层 g 负责定位（style transform → 可被 CSS 过渡平滑重排）
+              const d = `M${poly
+                .map(([x, y]) => `${x - cx},${y - cy}`)
+                .join('L')}Z`
+              // 2026-09-07：放宽显示条件——字号下限 8.5px、r>10.5 即显示词字
+              //（此前 r>14 且 fs>=10 太紧，中等格子长词（如「哈哈哈哈」）被吞掉）
+              const fs = Math.max(
+                8.5,
+                Math.min(hero ? 34 : 26, r * 0.75, (r * 2.2) / Math.max(2, word.text.length)),
+              )
+              const showText = r > 10.5 && word.text.length <= 6 && fs >= 8.5
+              const hovered = hover === word.text
+              const dimmed = hover !== null && !hovered
+              const isPopping = popping === word.text
+              return (
+                <g
+                  key={word.text}
+                  className="lc-dlg-cloud-cell"
+                  style={{ transform: `translate(${cx}px, ${cy}px)` }}
+                  onMouseEnter={(e) => {
+                    setHover(word.text)
+                    setTip({ x: e.clientX, y: e.clientY, text: word.text, count: word.count })
+                  }}
+                  onMouseMove={(e) =>
+                    setTip((t) => (t ? { ...t, x: e.clientX, y: e.clientY } : t))}
+                  onMouseLeave={() => {
+                    setHover(null)
+                    setTip(null)
+                  }}
+                  onClick={() => popWord(word.text)}
+                >
+                  <g className={`lc-dlg-cloud-bubble${isPopping ? ' popping' : ''}`}>
+                    <path
+                      d={d}
+                      fill={cloudWordColor(word)}
+                      fillOpacity={hovered ? 1 : dimmed ? 0.4 : 0.92}
+                      stroke="var(--c-bg-card)"
+                      strokeWidth={2}
+                    />
+                    {showText && (
+                      <text
+                        x={0}
+                        y={0}
+                        textAnchor="middle"
+                        dy="0.35em"
+                        fontSize={fs}
+                        fill={hovered ? 'var(--c-text-main)' : 'var(--c-text-sub)'}
+                        fontWeight={hovered || hero ? 700 : 600}
+                        /* 2026-09-07：非选中单元的文字随色块一起变淡（否则观感无变化） */
+                        opacity={dimmed ? 0.25 : 1}
+                        pointerEvents="none"
+                      >
+                        {word.text}
+                      </text>
+                    )}
+                  </g>
+                  {/* 破泡环波：圆心=质心，r 6→44 淡出（CSS 属性 r 可动画） */}
+                  {isPopping && <circle className="lc-dlg-cloud-ring" />}
+                </g>
+              )
+            })}
         </svg>
       )}
+      {visible.length === 0 && <div className="lc-dlg-ph">已全部破泡（点击「恢复」还原）</div>}
       {tip && (
         <span className="lc-dlg-cloud-tip" style={{ left: tip.x, top: tip.y }}>
           {tip.text} · {tip.count.toLocaleString('zh-CN')} 次
@@ -759,6 +839,11 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
     return (detail?.data?.danmaku?.top_words ?? []).slice(0, 40)
   }, [detail])
 
+  /** 词云破泡计数 / 恢复信号（2026-09-07：标题行右侧「已破泡 N · 恢复」胶囊；
+      切换场次时 VoronoiCloud 经 onPoppedChange(0) 自动归零） */
+  const [cloudPopped, setCloudPopped] = useState(0)
+  const [cloudRestoreTick, setCloudRestoreTick] = useState(0)
+
   /** 详情弹窗：直播信息 + 分类校正 + 弹幕词云/指标/直播间动态 */
   const renderDetail = () => {
     if (!detail) return null
@@ -920,7 +1005,19 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
           </div>
 
           <section className="lc-dlg-sec lc-dlg-sec--full">
-            <h4 className="lc-dlg-sec-title">弹幕信息</h4>
+            {/* 段头行：标题 + 破泡计数/恢复胶囊（破泡时出现） */}
+            <div className="lc-dlg-sec-head">
+              <h4 className="lc-dlg-sec-title">弹幕信息</h4>
+              {cloudPopped > 0 && cloudBubbles.length > 0 && (
+                <button
+                  type="button"
+                  className="lc-dlg-cloud-restore"
+                  onClick={() => setCloudRestoreTick((t) => t + 1)}
+                >
+                  已破泡 {cloudPopped} · 恢复
+                </button>
+              )}
+            </div>
             {detail.loading ? (
               <div className="lc-dlg-ph">加载中…</div>
             ) : s.danmaku ? (
@@ -940,7 +1037,11 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
                   )}
                 </dl>
                 {cloudBubbles.length ? (
-                  <VoronoiCloud data={cloudBubbles} />
+                  <VoronoiCloud
+                    data={cloudBubbles}
+                    restoreTick={cloudRestoreTick}
+                    onPoppedChange={setCloudPopped}
+                  />
                 ) : (
                   <div className="lc-dlg-ph">暂无热词数据</div>
                 )}

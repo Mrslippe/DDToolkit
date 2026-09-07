@@ -2340,6 +2340,42 @@
   color: var(--c-text-main);
 }
 
+/* 段头行（标题 + 右端动作胶囊；2026-09-07 词云破泡恢复入口） */
+.lc-dlg-sec-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 18px;
+  margin-bottom: 9px;
+}
+
+.lc-dlg-sec-head .lc-dlg-sec-title {
+  margin: 0;
+}
+
+/* 「已破泡 N · 恢复」胶囊：同 .fan-chart-reset 语言（sel-bg 浅粉底 + 粉字） */
+.lc-dlg-cloud-restore {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 999px;
+  background: var(--sel-bg);
+  color: var(--c-primary-deep);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.lc-dlg-cloud-restore:hover {
+  background: var(--sel-bg-hover);
+}
+
 /* 行式字段（label 左窄列 muted · value 右主色）：参考图直播信息/弹幕信息共用 */
 .lc-dlg-rows {
   margin: 0;
@@ -2388,7 +2424,8 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* 加权 Voronoi 拼贴词云（Balzer 2005 power diagram，2026-09-07：无缝多边形挤压 + 中央大块） */
+/* 加权 Voronoi 拼贴词云（Balzer 2005 power diagram，2026-09-07：无缝多边形挤压 + 中央大块）
+   破泡（2026-09-07 user 定案）：点击单元 → 鼓泡缩灭 + 质心环波 → 其余细胞滑动补位 */
 .lc-dlg-cloud {
   position: relative;
   width: 100%;
@@ -2401,6 +2438,56 @@
 
 .lc-dlg-cloud-svg path {
   transition: fill-opacity 0.12s ease;
+}
+
+/* 细胞定位层：CSS transform 承载平移 —— 破泡重排后靠 transition 平滑滑向新质心 */
+.lc-dlg-cloud-cell {
+  cursor: pointer;
+  transition: transform 0.28s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+/* 泡泡本体（承载破泡缩放）：transform-box 用自身包围盒居中 */
+.lc-dlg-cloud-bubble {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+/* 破泡：鼓泡（30% 处 1.12）→ 缩灭（scale 0 + 淡出），时长与组件 BUBBLE_POP_MS=420 同步 */
+.lc-dlg-cloud-bubble.popping {
+  animation: lc-bubble-pop 0.42s cubic-bezier(0.3, 0, 0.4, 1) forwards;
+}
+
+@keyframes lc-bubble-pop {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  30% {
+    transform: scale(1.12);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(0);
+    opacity: 0;
+  }
+}
+
+/* 破泡环波：圆心=质心，半径 6→44 淡出（SVG r 为可动画 CSS 属性） */
+.lc-dlg-cloud-ring {
+  pointer-events: none;
+  fill: none;
+  stroke: rgba(251, 119, 161, 0.7);
+  stroke-width: 2px;
+  r: 6px;
+  opacity: 0.7;
+  animation: lc-ring-pop 0.35s ease-out forwards;
+}
+
+@keyframes lc-ring-pop {
+  to {
+    r: 44px;
+    opacity: 0;
+  }
 }
 
 /* 词频 hover 提示（跟随鼠标） */
@@ -2587,8 +2674,14 @@
   .lc-month-pop,
   .lc-dlg-cat-pop,
   .filter-pop,
-  .time-pop {
+  .time-pop,
+  .lc-dlg-cloud-bubble.popping,
+  .lc-dlg-cloud-ring,
+  .lc-dlg-cloud-cell {
     animation: none;
+  }
+  .lc-dlg-cloud-cell {
+    transition: none;
   }
 }
 
