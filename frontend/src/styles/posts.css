@@ -922,14 +922,19 @@
   height: 26px;
 }
 
+/* 视图级滚动容器（2026-09-07 覆盖式滚动条 OverlayScroll）：
+   原生条隐藏不占宽 + 拇指自动隐藏；滚动体接管布局（列布局/间距/内边距） */
 .archive-view {
+  /* os-root 自带 display:flex column + overflow:hidden；这里只需定高参与 flex */
+  flex: 1;
+  min-height: 0;
+}
+
+.archive-view .os-scroll {
   display: flex;
   flex-direction: column;
   gap: 14px;
   padding: 16px 20px 24px;
-  overflow-y: auto;
-  height: 100%;
-  /* P7 定宽上限：卡片拉伸时保持居中（收缩仍跟随容器） */
   align-items: center;
 }
 

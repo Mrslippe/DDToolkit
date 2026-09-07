@@ -52,7 +52,7 @@ const ProfileView = memo(function ProfileView({ vtuber, refreshTick }: Props) {
   }, [selected?.platform_uid, refreshTick])
 
   return (
-    <div className="archive-view">
+    <OverlayScroll className="archive-view">
       <section className="archive-section">
         <div className="archive-section-head">
           <span className="archive-section-title">档案</span>
@@ -99,7 +99,7 @@ const ProfileView = memo(function ProfileView({ vtuber, refreshTick }: Props) {
           </ul>
         </OverlayScroll>
       </section>
-    </div>
+    </OverlayScroll>
   )
 })
 

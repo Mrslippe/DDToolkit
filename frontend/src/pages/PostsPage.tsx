@@ -1006,7 +1006,7 @@ return (
         )}
 
         {vtuber && scene.view === 'archive' && (
-          <div className="archive-view">
+          <OverlayScroll className="archive-view">
             {/* 2026-09-06：archive 逐步重建（用户主导），第一步 = 直播日历卡（Frame10612 规格） */}
             <LiveCalendar
               accountId={heroAcc?.id ?? null}
@@ -1017,7 +1017,7 @@ return (
               accountId={heroAcc?.id ?? null}
               refreshTick={refreshTick}
             />
-          </div>
+          </OverlayScroll>
         )}
 
         {vtuber && scene.view === 'profile' && (
