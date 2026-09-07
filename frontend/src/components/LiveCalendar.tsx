@@ -315,9 +315,9 @@ function VoronoiCloud({ data }: { data: BubbleWord[] }) {
                 <path
                   d={d}
                   fill={cloudWordColor(word)}
-                  fillOpacity={hovered ? 1 : dimmed ? 0.45 : 0.92}
-                  stroke={hovered ? 'var(--c-accent)' : 'var(--c-bg-card)'}
-                  strokeWidth={hovered ? 2.5 : 2}
+                  fillOpacity={hovered ? 1 : dimmed ? 0.4 : 0.92}
+                  stroke="var(--c-bg-card)"
+                  strokeWidth={2}
                 />
                 {fs >= 10 && r > 14 && (
                   <text
@@ -328,6 +328,8 @@ function VoronoiCloud({ data }: { data: BubbleWord[] }) {
                     fontSize={fs}
                     fill={hovered ? 'var(--c-text-main)' : 'var(--c-text-sub)'}
                     fontWeight={hovered || hero ? 700 : 600}
+                    /* 2026-09-07：非选中单元的文字随色块一起变淡（否则观感无变化） */
+                    opacity={dimmed ? 0.25 : 1}
                     pointerEvents="none"
                   >
                     {word.text}
