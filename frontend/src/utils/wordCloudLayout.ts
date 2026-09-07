@@ -53,6 +53,31 @@ function mulberry32(seed: number) {
   }
 }
 
+/** 圆角矩形边界（每角 SEG 段圆弧采样；power 单元裁剪几何与矩形同构） */
+const CORNER_SEG = 8
+export function roundedRectPolygon(
+  w: number,
+  h: number,
+  r: number,
+  seg = CORNER_SEG,
+): [number, number][] {
+  const pts: [number, number][] = []
+  const corners: [number, number, number][] = [
+    // [cx, cy, startAngle] 四角逆时针：左上→右上→右下→左下
+    [w - r, r, -Math.PI / 2],
+    [w - r, h - r, 0],
+    [r, h - r, Math.PI / 2],
+    [r, r, Math.PI],
+  ]
+  for (const [cx, cy, a0] of corners) {
+    for (let k = 0; k < seg; k++) {
+      const a = a0 + ((k + 0.5) / seg) * (Math.PI / 2)
+      pts.push([cx + r * Math.cos(a), cy + r * Math.sin(a)])
+    }
+  }
+  return pts
+}
+
 /** 半平面裁剪（Sutherland–Hodgman）：保留 ax*x + ay*y ≤ b 部分 */
 function clipHalf(poly: [number, number][], ax: number, ay: number, b: number) {
   const out: [number, number][] = []
@@ -237,6 +262,8 @@ export interface LayoutConfig {
 /**
  * 增量摊铺器（状态机）：
  * - addWord(word)：按频次降序逐个调用；内部放入空腔 + 继承近邻 λ；
+ * - removeWord(text)：破泡——删词后目标面积按幸存词频自动重归一化，
+ *   再经 step() 力+λ 重新平衡（缝隙闭合）；
  * - step(alpha/lamRounds)：一帧推进（力导向 + λ 收敛）；
  * - state()：当前细胞快照（渲染用）。
  */
@@ -252,7 +279,8 @@ export class MosaicPacker {
     this.box = box
     this.minRatio = minRatio
     this.rng = mulberry32(seed)
-    this.boundary = [[0, 0], [box[0], 0], [box[0], box[1]], [0, box[1]]]
+    // 容器轮廓圆角（user 2026-09-07：外缘加一点圆角）——边界多边形同构裁剪
+    this.boundary = roundedRectPolygon(box[0], box[1], Math.min(16, Math.min(box[0], box[1]) * 0.08))
   }
 
   get size() { return this.words.length }
@@ -275,8 +303,24 @@ export class MosaicPacker {
     this.rng()
   }
 
+  /** 破泡：删词（站点/λ 一并移除）；之后需 rebuild() 重新摊铺 */
+  removeWord(text: string): boolean {
+    const idx = this.words.findIndex((w) => w.text === text)
+    if (idx < 0) return false
+    this.words.splice(idx, 1)
+    this.sites.splice(idx, 1)
+    return true
+  }
+
+  /** 从当前剩余词重建初始布局（= 入场路径，node 验证可靠） */
+  reset() {
+    this.words = []
+    this.sites = []
+  }
+
   /** 一帧推进：力导向（alpha）+ λ 收敛（rounds 轮） */
   step(alpha: number, lamRounds: number) {
+    if (this.words.length === 0) return
     const tgt = areaTargets(this.words, this.box, this.minRatio)
     const radii = tgt.map((a) => Math.sqrt(a / Math.PI))
     tickForce(this.sites, radii, alpha, this.box, 0.0015, MASS_Q)

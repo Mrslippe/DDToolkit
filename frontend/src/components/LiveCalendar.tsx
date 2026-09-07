@@ -113,104 +113,297 @@ function CoverImage({ src, fallbackChar }: { src?: string | null; fallbackChar: 
   )
 }
 
-/** 词云配色（项目粉系 + 类型色相，按词哈希取色保持稳定） */
-const CLOUD_COLORS = ['#d8645e', '#8b6fd8', '#0088be', '#d4b801', '#009a24',
-  '#ec57ff', '#2fa5ad', '#c95c86', '#e0872f', '#5b7fd8']
+/** 词云配色（浅色填充——user 2026-09-07：填充浅色、文字同色系深色；按词哈希取色稳定） */
+const CLOUD_COLORS = ['#ffc9c4', '#a5e6ff', '#dccff7', '#bee9ec', '#ffd5b8',
+  '#fff2a0', '#fda5ff', '#b2f3c0', '#ffdfe8', '#d8e8ff']
 
-function cloudWordColor(w: { text: string }): string {
+function hashOf(text: string): number {
   let h = 0
-  for (const ch of w.text) h = (h * 31 + ch.charCodeAt(0)) % 997
-  return CLOUD_COLORS[h % CLOUD_COLORS.length]
+  for (const ch of text) h = (h * 31 + ch.charCodeAt(0)) % 997
+  return h
+}
+
+/** 填充色（浅） */
+function cloudWordColor(w: { text: string }): string {
+  return CLOUD_COLORS[hashOf(w.text) % CLOUD_COLORS.length]
+}
+
+/** 同色系深色（文字用）：HSL 压暗同色相 */
+function cloudWordText(w: { text: string }): string {
+  const hex = cloudWordColor(w)
+  const n = parseInt(hex.slice(1), 16)
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255
+  const [h, s] = rgbToHsl(r, g, b)
+  return hslToHex(h, Math.min(s, 0.9), 0.28)
+}
+
+/** rgb(0-255) → [h(0-360), s(0-1)] */
+function rgbToHsl(r: number, g: number, b: number): [number, number] {
+  const rr = r / 255, gg = g / 255, bb = b / 255
+  const max = Math.max(rr, gg, bb), min = Math.min(rr, gg, bb)
+  const l = (max + min) / 2
+  if (max === min) return [0, 0]
+  const d = max - min
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min)
+  let h: number
+  if (max === rr) h = ((gg - bb) / d + (gg < bb ? 6 : 0))
+  else if (max === gg) h = ((bb - rr) / d + 2)
+  else h = ((rr - gg) / d + 4)
+  return [h * 60, s]
+}
+
+/** h(0-360), s(0-1), l(0-1) → hex */
+function hslToHex(h: number, s: number, l: number): string {
+  h = ((h % 360) + 360) % 360
+  const c = (1 - Math.abs(2 * l - 1)) * s
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1))
+  const m = l - c / 2
+  let rr = 0, gg = 0, bb = 0
+  if (h < 60) { rr = c; gg = x }
+  else if (h < 120) { rr = x; gg = c }
+  else if (h < 180) { gg = c; bb = x }
+  else if (h < 240) { gg = x; bb = c }
+  else if (h < 300) { rr = x; bb = c }
+  else { rr = c; bb = x }
+  const to2 = (v: number) => Math.round((v + m) * 255).toString(16).padStart(2, '0')
+  return `#${to2(rr)}${to2(gg)}${to2(bb)}`
 }
 
 /**
  * 增量摊铺拼贴词云（2026-09-07 user 定案参考图形态）：
  * ① 面积 ∝ 词频：power diagram λ 驱动（力导向站点滑动 + λ 面积收敛，见 wordCloudLayout.ts）；
  * ② 逐个入池：词按频次降序每 150ms 入场（放当前最大空腔），泡泡在缝隙中滑动、逐渐平衡；
- * ③ 终端稳定：全部入场后 alpha 冷却 → 静止即停（无循环装饰）；reduced-motion 直接终态。
- * hover 高亮 + 词频提示保留。
+ * ③ 终端稳定：全部入场后 alpha 冷却 → 静止即停（无循环装饰）；reduced-motion 直接终态；
+ * ④ 破泡：点击词 → 删词 → 幸存词面积按词频重归一化 → 力+λ 重新平衡闭合；
+ *    段头「已破泡 N · 恢复」胶囊由父级渲染（onPoppedChange/restoreTick 联动）。
+ * 容器宽度运行时测量（ResizeObserver），高度 210px。
  */
-function MosaicCloud({ data, box }: { data: CloudWord[]; box: [number, number] }) {
+function MosaicCloud({
+  data,
+  boxH,
+  restoreTick = 0,
+  onPoppedChange,
+}: {
+  data: CloudWord[]
+  boxH: number
+  restoreTick?: number
+  onPoppedChange?: (n: number) => void
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [size, setSize] = useState({ w: 560, h: boxH })
   const [snap, setSnap] = useState<{ cells: CloudCell[] } | null>(null)
   const [tip, setTip] = useState<{ x: number; y: number; text: string; count: number } | null>(null)
   const [hover, setHover] = useState<string | null>(null)
   const packerRef = useRef<MosaicPacker | null>(null)
+  /** 当前活跃 rAF id（入场/破泡共用一个槽；重建时取消旧的） */
+  const rafRef = useRef(0)
   const dataRef = useRef(data)
   dataRef.current = data
-  const boxRef = useRef(box)
-  boxRef.current = box
+  const poppedRef = useRef(0)
 
-  // 入口：数据/尺寸变化 → 逐步入场 + rAF 摊铺
+  // 宽度自适应：容器实际宽度（user 2026-09-07：池子宽度不对 → 实测）
   useEffect(() => {
-    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
-    const words = dataRef.current
+    const el = ref.current
+    if (!el) return
+    const ro = new ResizeObserver((es) => {
+      const w = Math.round(es[0]?.contentRect.width ?? 0)
+      if (w > 80) setSize((s) => (s.w === w ? s : { ...s, w }))
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  /** 重建并启动入场动画（data/尺寸/恢复信号变化时） */
+  const start = (words: CloudWord[], w: number, h: number) => {
+    cancelAnimationFrame(rafRef.current)
     if (words.length === 0) {
       packerRef.current = null
       setSnap(null)
+      poppedRef.current = 0
+      onPoppedChange?.(0)
       return
     }
-    if (reduceMotion) {
-      // 直接最终稳态（插入全部词后再收尾，不播动画）
-      packerRef.current = new MosaicPacker(boxRef.current)
-      const p = packerRef.current
-      for (const w of words) p.addWord(w)
-      let alpha = 1
-      while (alpha > 0.01) {
-        alpha = Math.max(alpha * 0.994, 0.01)
-        // 收尾精度优先：站点基本静止后 λ 多轮收敛（node 验证 80 轮偏差 2%）
-        p.step(alpha, alpha < 0.3 ? 80 : 2)
-      }
-      setSnap(p.state())
-      return () => { packerRef.current = null }
-    }
-    // 动画路径：每次调用重建（避免旧 rAF 引用 state 错乱）
-    const packer = new MosaicPacker(boxRef.current)
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+    const packer = new MosaicPacker([w, h])
     packerRef.current = packer
     let raf = 0
     let alive = true
-    let next = 0          // 下一次入场的时间点（words 序 = 频次降序）
+    let next = 0
     const held = words.slice()
     let entered = 0
     let alpha = 1
+    if (reduceMotion) {
+      // 直接最终稳态（插入全部词后长收尾，不播动画）
+      for (const wd of held) packer.addWord(wd)
+      while (alpha > 0.01) {
+        alpha = Math.max(alpha * 0.994, 0.01)
+        packer.step(alpha, alpha < 0.3 ? 80 : 2)
+      }
+      setSnap(packer.state())
+      poppedRef.current = 0
+      onPoppedChange?.(0)
+      return
+    }
     const loop = (tNow: number) => {
       if (!alive) return
-      // 入场调度（每词 150ms）
       while (entered < held.length && next <= tNow) {
         packer.addWord(held[entered])
         entered++
         next += 150
       }
       if (entered < held.length) {
-        alpha = 1                       // 入场期恒活跃
+        alpha = 1
       } else {
-        // 收尾冷却：0.994 慢衰减（泡泡滑动看得见、自然停）；λ 精度由轮数补
         alpha = Math.max(alpha * 0.994, 0.01)
       }
-      // 入场期 1 轮 λ（动画流畅 + 尺寸渐变）；收尾初期 2 轮（滑动收尾 + 异步补精度）
       let rounds = entered < held.length ? 1 : 2
-      // 收尾后段（α<0.3）：站点基本静止 → 每帧 20 轮补收敛（40 词实测 ~5ms，安全）
       if (entered >= held.length && alpha < 0.3) rounds = 20
       packer.step(alpha, rounds)
       setSnap(packer.state())
-      if (entered >= held.length && alpha <= 0.05) {
-        // 最后一哆嗦：补足 λ 精度（α 已停、力已熄，多轮纯收敛 <16.7ms 可行）
-        // 20 轮/帧已在收尾段持续执行，此处无需额外补
-        return                            // 静止即停
-      }
+      if (entered >= held.length && alpha <= 0.05) return   // 静止即停
       raf = requestAnimationFrame(loop)
+      rafRef.current = raf
     }
     raf = requestAnimationFrame(loop)
+    rafRef.current = raf
+    poppedRef.current = 0
+    onPoppedChange?.(0)
     return () => {
       alive = false
       cancelAnimationFrame(raf)
       if (packerRef.current === packer) packerRef.current = null
     }
-  }, [data, box[0], box[1]])
+  }
+
+  // 数据/尺寸变化 → 重排
+  useEffect(() => {
+    const words = dataRef.current
+    if (words.length === 0) {
+      setSnap(null)
+      packerRef.current = null
+      return
+    }
+    return start(words, size.w, size.h)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, size.w, size.h])
+
+  // 恢复信号（父级「已破泡 N · 恢复」按钮）→ 重建初始布局
+  useEffect(() => {
+    if (!restoreTick) return
+    const words = dataRef.current
+    if (words.length > 0) {
+      packerRef.current = null
+      const cleanup = start(words, size.w, size.h)
+      if (typeof cleanup === 'function') return cleanup
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [restoreTick])
+
+  /**
+   * 破泡：删词 → 用剩余词重建终态（入场路径，node 验证可靠）→ 插值过渡。
+   * 视觉：旧快照 → 新稳态做同构插值（凸多边形等角采样 + 逐点 lerp，rAF 400ms）——
+   * 被破词瞬间消失，邻泡从当前位置平滑滑向新位置闭合空隙（"立即闭合"观感）。
+   */
+  const popWord = (text: string) => {
+    const p = packerRef.current
+    if (!p || p.size === 0) return
+    if (!p.removeWord(text)) return
+    poppedRef.current += 1
+    onPoppedChange?.(poppedRef.current)
+    if (p.size === 0) {
+      setSnap({ cells: [] })
+      return
+    }
+    // 旧快照（插值起点；按词索引）
+    const fromSnap = snap
+    // 重建：reset + 剩余词逐个入场 + 同步收敛
+    const words = p.allWords.slice()
+    p.reset()
+    for (const wd of words) p.addWord(wd)
+    let alpha = 1
+    while (alpha > 0.01) {
+      alpha = Math.max(alpha * 0.994, 0.01)
+      p.step(alpha, alpha < 0.3 ? 80 : 2)
+    }
+    const toSnap = p.state()
+    // 插值播放（同构：等角采样 28 点凸包 → lerp）
+    if (!fromSnap || fromSnap.cells.length === 0) {
+      setSnap(toSnap)
+      return
+    }
+    cancelAnimationFrame(rafRef.current)
+    const fromMap = new Map(fromSnap.cells.map((c) => [c.word.text, c]))
+    // 交集词（未破的旧词）：插值位置/形状；其余直接用 toSnap
+    type Interp = { fromC: CloudCell; toC: CloudCell }
+    const interps: Interp[] = []
+    const direct: CloudCell[] = []
+    for (const c of toSnap.cells) {
+      const fromC = fromMap.get(c.word.text)
+      if (fromC) interps.push({ fromC, toC: c })
+      else direct.push(c)
+    }
+    const sample = (poly: [number, number][], n: number): [number, number][] => {
+      // 凸多边形等角采样：以质心为极点、角度均匀取射线交点（近似即可）
+      let cx = 0, cy = 0
+      for (const pnt of poly) { cx += pnt[0]; cy += pnt[1] }
+      cx /= poly.length; cy /= poly.length
+      const out: [number, number][] = []
+      for (let k = 0; k < n; k++) {
+        const a = (k / n) * Math.PI * 2
+        const ux = Math.cos(a), uy = Math.sin(a)
+        // 与多边求交（最近正向交点）
+        let tBest = Infinity
+        for (let i = 0; i < poly.length; i++) {
+          const p1 = poly[i], p2 = poly[(i + 1) % poly.length]
+          const ex = p2[0] - p1[0], ey = p2[1] - p1[1]
+          const den = ux * ey - uy * ex
+          if (Math.abs(den) < 1e-9) continue
+          const t = ((p1[0] - cx) * ey - (p1[1] - cy) * ex) / den
+          if (t > 0 && t < tBest) tBest = t
+        }
+        if (isFinite(tBest)) out.push([cx + ux * tBest, cy + uy * tBest])
+        else out.push([cx, cy])
+      }
+      return out
+    }
+    let start = performance.now()
+    let raf = 0
+    const DUR = 400
+    const loop = (tNow: number) => {
+      const t = Math.min(1, (tNow - start) / DUR)
+      const e = 1 - Math.pow(1 - t, 3)   // easeOutCubic
+      const cells: CloudCell[] = interps.map(({ fromC, toC }) => {
+        const A = sample(fromC.poly.length ? fromC.poly : [[fromC.cx, fromC.cy]], 28)
+        const B = sample(toC.poly.length ? toC.poly : [[toC.cx, toC.cy]], 28)
+        const poly: [number, number][] = A.map((pnt, i) => [
+          pnt[0] + (B[i][0] - pnt[0]) * e,
+          pnt[1] + (B[i][1] - pnt[1]) * e,
+        ])
+        let cx = 0, cy = 0
+        for (const pnt of poly) { cx += pnt[0]; cy += pnt[1] }
+        cx /= poly.length; cy /= poly.length
+        const r = Math.sqrt(Math.max(0, areaLerp(fromC, toC, e)) / Math.PI)
+        return { word: toC.word, poly, cx, cy, r }
+      }).concat(direct)
+      setSnap({ cells })
+      if (t < 1) raf = requestAnimationFrame(loop)
+      else rafRef.current = 0
+      rafRef.current = raf
+    }
+    raf = requestAnimationFrame(loop)
+    rafRef.current = raf
+  }
+
+  /** 面积插值（粗糙但足够视觉过渡用） */
+  const areaLerp = (a: CloudCell, b: CloudCell, t: number): number => {
+    const ar = a.r * a.r * Math.PI, br = b.r * b.r * Math.PI
+    return ar + (br - ar) * t
+  }
 
   return (
-    <div className="lc-dlg-cloud">
+    <div ref={ref} className="lc-dlg-cloud">
       {snap && snap.cells.length > 0 && (
-        <svg width={box[0]} height={box[1]} className="lc-dlg-cloud-svg">
+        <svg width={size.w} height={size.h} className="lc-dlg-cloud-svg">
           {snap.cells.map((c) => {
             const { word, poly, cx, cy, r } = c
             const d = poly.length
@@ -235,6 +428,7 @@ function MosaicCloud({ data, box }: { data: CloudWord[]; box: [number, number] }
                   setHover(null)
                   setTip(null)
                 }}
+                onClick={() => popWord(word.text)}
               >
                 <path
                   d={d}
@@ -250,7 +444,7 @@ function MosaicCloud({ data, box }: { data: CloudWord[]; box: [number, number] }
                     textAnchor="middle"
                     dy="0.35em"
                     fontSize={fs}
-                    fill={hovered ? 'var(--c-text-main)' : 'var(--c-text-sub)'}
+                    fill={cloudWordText(word)}
                     fontWeight={hovered ? 700 : 600}
                     opacity={dimmed ? 0.25 : 1}
                     pointerEvents="none"
@@ -262,6 +456,9 @@ function MosaicCloud({ data, box }: { data: CloudWord[]; box: [number, number] }
             )
           })}
         </svg>
+      )}
+      {snap && snap.cells.length === 0 && (
+        <div className="lc-dlg-ph">已全部破泡（点击「恢复」还原）</div>
       )}
       {tip && (
         <span className="lc-dlg-cloud-tip" style={{ left: tip.x, top: tip.y }}>
@@ -681,6 +878,10 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
       .slice(0, 40)
   }, [detail])
 
+  /** 词云破泡计数 / 恢复信号（段头右侧「已破泡 N · 恢复」，带破泡时出现） */
+  const [cloudPopped, setCloudPopped] = useState(0)
+  const [cloudRestoreTick, setCloudRestoreTick] = useState(0)
+
   /** 详情弹窗：直播信息 + 分类校正 + 弹幕词云/指标/直播间动态 */
   const renderDetail = () => {
     if (!detail) return null
@@ -842,7 +1043,19 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
           </div>
 
           <section className="lc-dlg-sec lc-dlg-sec--full">
-            <h4 className="lc-dlg-sec-title">弹幕信息</h4>
+            {/* 段头行：标题 + 破泡计数/恢复胶囊（破泡时出现） */}
+            <div className="lc-dlg-sec-head">
+              <h4 className="lc-dlg-sec-title">弹幕信息</h4>
+              {cloudPopped > 0 && cloudBubbles.length > 0 && (
+                <button
+                  type="button"
+                  className="lc-dlg-cloud-restore"
+                  onClick={() => setCloudRestoreTick((t) => t + 1)}
+                >
+                  已破泡 {cloudPopped} · 恢复
+                </button>
+              )}
+            </div>
             {detail.loading ? (
               <div className="lc-dlg-ph">加载中…</div>
             ) : s.danmaku ? (
@@ -862,7 +1075,12 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
                   )}
                 </dl>
                 {cloudBubbles.length ? (
-                  <MosaicCloud data={cloudBubbles} box={[560, 210]} />
+                  <MosaicCloud
+                    data={cloudBubbles}
+                    boxH={210}
+                    restoreTick={cloudRestoreTick}
+                    onPoppedChange={setCloudPopped}
+                  />
                 ) : (
                   <div className="lc-dlg-ph">暂无热词数据</div>
                 )}

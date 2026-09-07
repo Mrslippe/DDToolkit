@@ -2374,6 +2374,42 @@
   line-height: 16px;
 }
 
+/* 段头行（标题 + 右端动作胶囊；2026-09-07 词云破泡恢复入口） */
+.lc-dlg-sec-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 18px;
+  margin-bottom: 9px;
+}
+
+.lc-dlg-sec-head .lc-dlg-sec-title {
+  margin: 0;
+}
+
+/* 「已破泡 N · 恢复」胶囊：同 .fan-chart-reset 语言（sel-bg 浅粉底 + 粉字） */
+.lc-dlg-cloud-restore {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 999px;
+  background: var(--sel-bg);
+  color: var(--c-primary-deep);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.lc-dlg-cloud-restore:hover {
+  background: var(--sel-bg-hover);
+}
+
 /* 弹幕信息区块（danmakus /api/v2/live 词云，2026-09-07 接入；词云 = 增量摊铺拼贴，
    见 utils/wordCloudLayout.ts——力导向站点滑动 + λ 面积精确，参考图形态） */
 .lc-dlg-danmaku {
@@ -2388,6 +2424,7 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* 池子：宽度自适应内容区（MosaicCloud 内 ResizeObserver 实测），高度 210px */
 .lc-dlg-cloud {
   position: relative;
   width: 100%;
@@ -2402,9 +2439,9 @@
   transition: fill-opacity 0.12s ease;
 }
 
-/* 泡泡定位层：rAF 每帧更新 translate（滑动/平衡实时可见） */
+/* 泡泡定位层：rAF 每帧更新 translate（滑动/平衡实时可见）；点击破泡 */
 .lc-dlg-cloud-cell {
-  cursor: default;
+  cursor: pointer;
 }
 
 /* 词频 hover 提示（跟随鼠标） */
