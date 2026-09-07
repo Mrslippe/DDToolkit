@@ -5,6 +5,7 @@ import { ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Lo
 import type { LiveSession, LiveSessionDetail } from '../api/types'
 import { api, imgProxyUrl } from '../api/api'
 import { normalizeImageUrl } from '../utils/format'
+import OverlayScroll from './OverlayScroll'
 import { LIVE_TYPE_ORDER, inferLiveType, liveTypeLabel } from '../utils/liveType'
 
 interface Props {
@@ -695,18 +696,13 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
   const renderPop = () => {
     if (!pop || !popStyle) return null
     return createPortal(
-      <div
-        className="lc-pop"
-        style={popStyle}
-        role="tooltip"
-        onMouseEnter={clearPopTimer}
-        onMouseLeave={closeCellPop}
-      >
-        <div className="lc-pop-head">
-          <span className="lc-pop-date">{pop.key}</span>
-          <span className="lc-pop-count">{pop.sessions.length} 场</span>
-        </div>
-        <div className="lc-pop-list">
+      <OverlayScroll className="lc-pop" style={popStyle} role="tooltip">
+        <div onMouseEnter={clearPopTimer} onMouseLeave={closeCellPop}>
+          <div className="lc-pop-head">
+            <span className="lc-pop-date">{pop.key}</span>
+            <span className="lc-pop-count">{pop.sessions.length} 场</span>
+          </div>
+          <div className="lc-pop-list">
             {pop.sessions.map((s, i) => {
               const d0 = new Date(s.start_at)
               const d1 = s.end_at ? new Date(s.end_at) : null
@@ -737,8 +733,9 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
                 </div>
               )
             })}
+          </div>
         </div>
-      </div>,
+      </OverlayScroll>,
       document.body,
     )
   }
@@ -765,7 +762,7 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
           if (e.target === e.currentTarget) setDetail(null)
         }}
       >
-        <div className="lc-dlg" role="dialog" aria-modal="true">
+        <OverlayScroll className="lc-dlg" role="dialog" aria-modal>
           <div className="lc-dlg-head">
             <div className="lc-dlg-title">
               {s.live_id ? (
@@ -980,7 +977,7 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
               <div className="lc-dlg-ph">接口已预留（内容分析服务接入后展示）</div>
             )}
           </section>
-        </div>
+        </OverlayScroll>
       </div>,
       document.body,
     )

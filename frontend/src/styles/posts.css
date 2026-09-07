@@ -137,12 +137,15 @@
 .list-scroll {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
+}
+
+/* 滚动体：居中列布局 + 内边距（覆盖式滚动条，2026-09-07） */
+.list-scroll .os-scroll {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 14px;
-  /* padding-top 落在滚动区剪裁缘之内、内容之上——卡片网格顶部阴影不被 overflow-y 切断 */
+  /* padding-top 落在滚动区剪裁缘之内、内容之上——卡片网格顶部阴影不被裁切 */
   padding: 8px 16px 24px;
 }
 
@@ -949,13 +952,15 @@
   flex-shrink: 0;           /* column 轴（高度）恒定，不参与压缩 */
 }
 
-/* 卡片内滚动区：头部之下、内容溢出才滚；负 margin 让滚动区贴卡片缘 */
+/* 卡片内滚动区：头部之下、内容溢出才滚；覆盖式滚动条（OverlayScroll），
+   负 margin 由滚动体承担（贴卡片缘） */
 .archive-section-scroll {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
   margin: 0 -14px;
+}
+
+.archive-section-scroll .os-scroll {
   padding: 0 14px 6px;
 }
 
@@ -2012,12 +2017,15 @@
   z-index: 56;
   width: 300px;
   max-height: 430px;
-  overflow-y: auto;
-  padding: 12px 12px 10px;
   border-radius: 12px;
   background: var(--c-bg-card);
   border: 1px solid rgba(15, 23, 42, 0.06);
   box-shadow: var(--shadow-dialog);
+}
+
+/* 浮层滚动体：覆盖式滚动条（OverlayScroll），padding 移入滚动体 */
+.lc-pop .os-scroll {
+  padding: 12px 12px 10px;
 }
 
 .lc-pop-head {
@@ -2125,46 +2133,25 @@
 }
 
 .lc-dlg {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
   width: 720px;
   max-width: calc(100vw - 48px);
   max-height: min(680px, calc(100vh - 64px));
-  overflow-y: auto;
-  padding: 16px 18px 18px;
   border-radius: 14px;
   background: var(--c-bg-card);
   border: 1px solid rgba(15, 23, 42, 0.06);
   box-shadow: var(--shadow-dialog);
   animation: lc-dlg-pop 0.2s cubic-bezier(0.22, 0.61, 0.36, 1);
-  /* 2026-09-07：滚动条走全局标准（layout.css），此处显式复述防级联歧义——
-     注意禁用 scrollbar-width/scrollbar-color 标准属性（会使 webkit 样式失效，
-     回退系统默认带按钮的不透明滚动条） */
+  /* 2026-09-07：滚动条 = 覆盖式（OverlayScroll）——原生条隐藏不占宽度，
+     拇指悬浮自动隐藏；布局/滚动体 .lc-dlg .os-scroll 承担 */
+}
+
+/* 弹窗滚动体：原 .lc-dlg 的列布局与内边距移入；滚动条类由 os 体系接管 */
+.lc-dlg .os-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px 18px;
   overscroll-behavior: contain;
-}
-
-/* 弹窗滚动条：与全局标准完全同值（12px 槽 + 4px 内收 + 灰常态/粉 hover）；
-   显式声明兜底，任何情况下不回退系统默认样式 */
-.lc-dlg::-webkit-scrollbar {
-  width: 12px;
-}
-
-.lc-dlg::-webkit-scrollbar-thumb {
-  border: 4px solid transparent;
-  background-color: var(--c-border);
-  background-clip: content-box;
-  border-radius: 999px;
-}
-
-.lc-dlg::-webkit-scrollbar-thumb:hover {
-  border-width: 2px;
-  background-color: var(--c-primary);
-}
-
-.lc-dlg::-webkit-scrollbar-track,
-.lc-dlg::-webkit-scrollbar-corner {
-  background: transparent;
 }
 
 .lc-dlg-head {

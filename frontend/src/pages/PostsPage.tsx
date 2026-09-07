@@ -60,6 +60,7 @@ import PostDetailDrawer from '../components/PostDetailDrawer'
 import ProfileView from '../components/ProfileView'
 import LiveCalendar from '../components/LiveCalendar'
 import FanTrendChart from '../components/FanTrendChart'
+import OverlayScroll from '../components/OverlayScroll'
 import './../styles/posts.css'
 
 const PAGE_SIZE = 20
@@ -1130,9 +1131,13 @@ return (
             </div>
 
             {/* 帖子无限滚动区：grid 不再按筛选指纹重挂（2026-09-04）——
-                筛选切换走 is-refetching 原位替换，入场动画只在新卡片挂载时播放 */}
-            <div className="list-scroll" ref={listScrollRef}
-              onScroll={(e) => setShowTop(e.currentTarget.scrollTop > 400)}>
+                筛选切换走 is-refetching 原位替换，入场动画只在新卡片挂载时播放；
+                覆盖式滚动条（OverlayScroll，2026-09-07：不占宽 + 自动隐藏） */}
+            <OverlayScroll
+              className="list-scroll"
+              scrollRef={listScrollRef}
+              onScroll={(e) => setShowTop(e.currentTarget.scrollTop > 400)}
+            >
               <div className="list-inner">
                 {error ? (
                   <Alert variant="destructive">
@@ -1179,7 +1184,7 @@ return (
                   </>
                 )}
               </div>
-            </div>
+            </OverlayScroll>
 
             {/* 回顶浮钮：滚动深处浮现，一键回顶（view-body 为定位锚点） */}
             <button

@@ -3,6 +3,7 @@ import { api } from '../api/api'
 import type { Account, ThirdpartyVtuber, VTuber } from '../api/types'
 import AccountPicker from './AccountPicker'
 import ProfileCard from './ProfileCard'
+import OverlayScroll from './OverlayScroll'
 
 interface Props {
   vtuber: VTuber
@@ -62,9 +63,9 @@ const ProfileView = memo(function ProfileView({ vtuber, refreshTick }: Props) {
             <AccountPicker accounts={accounts} value={selected} onChange={setSelected} />
           </div>
         </div>
-        <div className="archive-section-scroll">
+        <OverlayScroll className="archive-section-scroll">
           <ProfileCard vtuber={vtuber} account={selected} thirdparty={thirdparty} />
-        </div>
+        </OverlayScroll>
       </section>
 
       {/* 账号抽屉：该 V 的全部平台账号一览（头像 / 昵称 / 粉丝 / 房间号） */}
@@ -75,7 +76,7 @@ const ProfileView = memo(function ProfileView({ vtuber, refreshTick }: Props) {
             <span className="archive-section-note">{vtuber.accounts.length} 个账号</span>
           </div>
         </div>
-        <div className="archive-section-scroll">
+        <OverlayScroll className="archive-section-scroll">
           <ul className="profile-account-list">
             {vtuber.accounts.map((a) => (
               <li key={a.id} className="profile-account-row">
@@ -96,7 +97,7 @@ const ProfileView = memo(function ProfileView({ vtuber, refreshTick }: Props) {
               <li className="archive-empty">暂无账号</li>
             )}
           </ul>
-        </div>
+        </OverlayScroll>
       </section>
     </div>
   )

@@ -55,6 +55,50 @@ html.window-maximized body {
   background: transparent;
 }
 
+/* ── 覆盖式滚动条（OverlayScroll 组件，2026-09-07 user 定案）──
+   滚动条不占布局宽度（原生条隐藏）+ 悬浮拇指自动隐藏；视觉与全局标准一致：
+   透明轨 + 常态细灰 --c-border + hover 粉 --c-primary + 圆角胶囊。
+   拇指贴边留白 4px、常态宽 4px、hover 加粗至 6px。 */
+.os-root {
+  position: relative;
+  overflow: hidden;
+}
+
+.os-scroll {
+  height: 100%;
+  overflow-y: auto;
+  scrollbar-width: none;        /* 标准属性配合 webkit display:none 双保险 */
+  -ms-overflow-style: none;
+}
+
+.os-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.os-thumb {
+  position: absolute;
+  right: 4px;
+  top: 0;
+  width: 4px;
+  min-height: 28px;
+  border-radius: 999px;
+  background: var(--c-border);
+  opacity: 0;
+  pointer-events: auto;
+  touch-action: none;
+  transition: opacity 0.25s ease, width 0.15s ease, background-color 0.15s ease;
+  display: none;
+}
+
+.os-thumb.os-show {
+  opacity: 1;
+}
+
+.os-thumb:hover {
+  background: var(--c-primary);
+  width: 6px;
+}
+
 /* ── 启动幕：主色铺底 + 中央 LOGO + 信封上下展开 ── */
 
 /* 揭幕后内容错峰淡入（很轻量，仅页面加载时播一次） */
