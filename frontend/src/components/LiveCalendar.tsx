@@ -3,7 +3,8 @@ import type { MouseEvent as ReactMouseEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Loader2, X } from 'lucide-react'
 import type { LiveSession, LiveSessionDetail } from '../api/types'
-import { api } from '../api/api'
+import { api, imgProxyUrl } from '../api/api'
+import { normalizeImageUrl } from '../utils/format'
 import { LIVE_TYPE_ORDER, inferLiveType, liveTypeLabel } from '../utils/liveType'
 
 interface Props {
@@ -83,6 +84,30 @@ interface DetailState {
   idx: number              // 当前查看第 idx 场
   data: LiveSessionDetail | null
   loading: boolean
+}
+
+/**
+ * 弹窗封面（全站图片方案同款，devlog/015）：
+ * 1. 直连 CDN（https 归一 + no-referrer 绕防盗链——裸 img 漏了 referrerPolicy
+ *    曾致 403，2026-09-07 用户反馈 bootDiag 右上角报错胶囊）
+ * 2. onError → 后端代理 /img-proxy（磁盘缓存）
+ * 3. 代理也失败 → 渐变占位（首字），不挂破图
+ */
+function CoverImage({ src, fallbackChar }: { src?: string | null; fallbackChar: string }) {
+  const [stage, setStage] = useState<'direct' | 'proxy' | 'failed'>('direct')
+  if (src == null || stage === 'failed') {
+    return <span className="lc-dlg-cover-ph">{fallbackChar}</span>
+  }
+  const direct = normalizeImageUrl(src)
+  return (
+    <img
+      className="lc-dlg-cover-img"
+      src={stage === 'direct' ? direct : imgProxyUrl(direct)}
+      alt=""
+      referrerPolicy="no-referrer"
+      onError={() => setStage((st) => (st === 'direct' ? 'proxy' : 'failed'))}
+    />
+  )
 }
 
 /**
@@ -552,15 +577,13 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
           )}
 
           <div className="lc-dlg-main">
-            {/* 左列：场次封面（缺失 → 渐变占位，右下角直播状态徽章） */}
+            {/* 左列：场次封面（缺失/失败 → 渐变占位，右下角直播状态徽章） */}
             <div className="lc-dlg-cover">
-              {s.cover_url ? (
-                <img className="lc-dlg-cover-img" src={s.cover_url} alt="" />
-              ) : (
-                <span className="lc-dlg-cover-ph">
-                  {(s.live_title || liveTypeLabel(t)).trim().charAt(0) || '播'}
-                </span>
-              )}
+              <CoverImage
+                key={s.cover_url ?? 'none'}
+                src={s.cover_url}
+                fallbackChar={(s.live_title || liveTypeLabel(t)).trim().charAt(0) || '播'}
+              />
               <span className={`lc-dlg-status${d1 ? '' : ' live'}`}>
                 {d1 ? '已结束' : '直播中'}
               </span>
