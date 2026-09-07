@@ -127,339 +127,170 @@ interface BubbleWord {
   count: number
 }
 
-/** 可复现伪随机（固定种子：同数据同布局不闪动） */
-function mulberry32(seed: number) {
-  return () => {
-    seed |= 0
-    seed = (seed + 0x6d2b79f5) | 0
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
-  }
-}
-
-interface VoronoiCell {
-  word: BubbleWord
-  poly: [number, number][]
-  cx: number
-  cy: number
-  r: number          // 等效半径（面积∝词频的圆形折算，供字号缩放）
-  hero: boolean
-}
-
-/** 半平面裁剪（Sutherland–Hodgman）：保留 ax*x + ay*y ≤ b 部分 */
-function clipHalf(poly: [number, number][], ax: number, ay: number, b: number) {
-  const out: [number, number][] = []
-  for (let k = 0; k < poly.length; k++) {
-    const p = poly[k]
-    const q = poly[(k + 1) % poly.length]
-    const fp = ax * p[0] + ay * p[1] - b
-    const fq = ax * q[0] + ay * q[1] - b
-    if (fp <= 0) out.push(p)
-    if ((fp < 0 && fq > 0) || (fp > 0 && fq < 0)) {
-      const t = fp / (fp - fq)
-      out.push([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t])
-    }
-  }
-  return out
-}
-
 /**
- * 加权 Voronoi（power diagram）拼贴布局 —— Balzer 2005 方案，2026-09-07：
- * - 线性半平面裁剪直接求 power 单元（cell_i = ∩{ x: d_i(x) ≤ d_j(x) }，
- *   d(x) = |x−c|² − λ，无需 3D 凸包）；
- * - 每轮 ① 站点弛豫：站点移到其 power 单元质心（power-Lloyd）；
- *   ② 权重修正：λ_i += β (目标面积 − 当前面积)（β=0.5 实测收敛，
- *   面积偏差 ≤8%，无空单元——词频越高面积越大由数学保证）。
- * - 初始站点极坐标占位（hero=中心、大词靠内、黄金角），布局确定性（种子）。
- * - 返回 cells + 收敛后的 sites/lambda（作为「基座」——破泡后固定站点，
- *   只删约束 → 邻居原位膨胀，站点不动：2026-09-07 user 反馈修正）。
+ * ── 圆形气泡簇（disk bubble cluster，2026-09-07 user 定案·从头开始）──
+ * ① 半径恒定 ∝ √词频（面积 ∝ 词频，一以贯之：打开/破泡/恢复全程不变）；
+ * ② 径向边界 R = √(Σr²)（团簇面积守恒圆半径），圆心 = 容器中心 →
+ *    整簇天然圆形；允许 10% 挤压 → 贴合处呈现「被邻泡压出的弧」（交界不规则）；
+ * ③ 破泡 = 去掉该词 + R 收缩 + 有限时长（24 帧）衰减洞吸力 →
+ *    周围泡泡立即被拉向洞口闭合（接触链分配）；边界弹簧恒定场 → 单调收敛。
+ * 参数经 node 原型调参：初始稳态重叠 ≤8.1%、面积比例严格 ∝ 词频、闭合后无 NaN。
  */
 
-interface PowerLayout {
-  cells: VoronoiCell[]
-  sites: [number, number][]
-  lambda: number[]
-}
-
-/** 单次细胞计算（无弛豫）：给定 words/sites/lambda 求各凸单元（null=空） */
-function diagramCellsOf(
-  words: BubbleWord[],
-  sites: [number, number][],
-  lambda: number[],
-  box: [number, number][],
-): ([number, number][] | null)[] {
-  const n = words.length
-  return words.map((_w, i) => {
-    let poly = box
-    const [cx, cy] = sites[i]
-    const ci2 = cx * cx + cy * cy
-    for (let j = 0; j < n; j++) {
-      if (j === i) continue
-      const [jx, jy] = sites[j]
-      poly = clipHalf(poly, 2 * (jx - cx), 2 * (jy - cy),
-        jx * jx + jy * jy - ci2 - (lambda[j] - lambda[i]))
-      if (!poly.length) return null
-    }
-    return poly
-  })
-}
-
-/** 单元 → VoronoiCell[]（质心/等效半径/hero=首词） */
-function finishCells(words: BubbleWord[], polys: ([number, number][] | null)[]): VoronoiCell[] {
-  return words.map((word, i) => {
-    const pts = polys[i] ?? [[0, 0], [0, 0], [0, 0]]
-    const cx = pts.reduce((s, p) => s + p[0], 0) / pts.length
-    const cy = pts.reduce((s, p) => s + p[1], 0) / pts.length
-    let a = 0
-    for (let k = 0; k < pts.length; k++) {
-      const p1 = pts[k]
-      const p2 = pts[(k + 1) % pts.length]
-      a += p1[0] * p2[1] - p2[0] * p1[1]
-    }
-    return {
-      word, poly: pts, cx, cy,
-      r: Math.sqrt(Math.abs(a / 2) / Math.PI),
-      hero: i === 0,
-    }
-  })
-}
-
-/** 固定站点布局（破泡后的原位膨胀）：只删被破词的半平面约束，站点/权重不动 */
-function layoutPowerCloud(words: BubbleWord[], w: number, h: number): PowerLayout {
-  const BETA = 0.5
-  const ITERS = 120
-  const rand = mulberry32(20260907)
-  const total = words.reduce((s, x) => s + x.count, 0)
-  const n = words.length
-  const cw = w / 2
-  const ch = h / 2
-  const rMax = Math.min(cw, ch) * 0.92
-  const tgt = words.map((x) => (x.count / total) * w * h)
-
-  let sites: [number, number][] = words.map((_w, i) => {
-    if (i === 0) return [cw, ch]
-    const rad = rMax * Math.pow((i + 0.5) / n, 0.5)
-    const ang = (i - 1) * 137.508 + (rand() - 0.5) * 0.4
-    return [cw + rad * Math.cos(ang), ch + rad * Math.sin(ang)]
-  })
-  let lambda = words.map((_w, i) => tgt[i] / n)
-  const box: [number, number][] = [[0, 0], [w, 0], [w, h], [0, h]]
-
-  const areaOf = (polys: ([number, number][] | null)[]) => polys.map((pts) => {
-    if (!pts) return 0
-    let a = 0
-    for (let k = 0; k < pts.length; k++) {
-      const p1 = pts[k]
-      const p2 = pts[(k + 1) % pts.length]
-      a += p1[0] * p2[1] - p2[0] * p1[1]
-    }
-    return Math.abs(a / 2)
-  })
-
-  for (let it = 0; it < ITERS; it++) {
-    const polys = diagramCellsOf(words, sites, lambda, box)
-    const areas = areaOf(polys)
-    let maxRel = 0
-    for (let i = 0; i < n; i++) {
-      const rel = Math.abs(areas[i] - tgt[i]) / tgt[i]
-      if (rel > maxRel) maxRel = rel
-      lambda[i] = Math.max(lambda[i] + BETA * (tgt[i] - areas[i]), 1)
-      // 站点弛豫：移到 power 单元质心
-      const pts = polys[i]
-      if (pts && pts.length >= 3) {
-        let ac = 0
-        let mx = 0
-        let my = 0
-        for (let k = 0; k < pts.length; k++) {
-          const p1 = pts[k]
-          const p2 = pts[(k + 1) % pts.length]
-          const cr = p1[0] * p2[1] - p2[0] * p1[1]
-          ac += cr
-          mx += (p1[0] + p2[0]) * cr
-          my += (p1[1] + p2[1]) * cr
-        }
-        if (Math.abs(ac) > 1) sites[i] = [mx / (3 * ac), my / (3 * ac)]
-      }
-    }
-    if (maxRel < 0.1) break
-  }
-
-  const polys = diagramCellsOf(words, sites, lambda, box)
-  return {
-    cells: finishCells(words, polys),
-    sites,
-    lambda,
-  }
-}
-
-/**
- * ── 泡沫压力模拟（2026-09-07 user 定案：位置/大小/形状遵循物理规律、实时变化）──
- * 模型：每个词 = 带压力的小室（power diagram 的物理原型——Voronoi 泡沫簇）。
- * 每帧：① 由 (站点, λ) 重算 power 单元（形状）② 压力 p=k·(A−A_tgt)/A_tgt
- * ③ 相邻泡对（共享边界长 L）：F=(p_i−p_j)·L·n̂（泡沫力学标准力式）
- * ④ 墙力 ⑤ F/m 积分 + 阻尼（exp(−DAMP·dt)）⑥ λ 面积调节
- * → 破泡 = 体积按邻边比例分给邻居 + 法向爆裂冲量 + 全簇 1/d 压力波；
- *   连续破泡从当前状态续算（位置/压力连续）；动能 < 阈值自动停帧（静止即停）。
- * 常数由 node 原型调参（0.97s 收敛 / 面积偏差 ≤1% / 邻居位移 10-17px、远处 0px）。
- */
-
-/** 词云破泡动画时长（ms）：与 CSS lc-bubble-pop 0.42s 同步 */
-const BUBBLE_POP_MS = 420
-
-/** 模拟常数（node 原型调参：改动须重跑仿真验证） */
-const SIM_KP = 12          // 压力力系数（面积偏差 → 压差的增益）
-const SIM_KWALL = 8        // 墙力（贴边 6px 起生效）
-const SIM_KLAM = 12        // λ 面积调节速率（/s → 收敛后面积偏差 ≤1%）
-const SIM_DAMP = 6         // 阻尼（exp(−6·dt)，柔和果冻）
-const SIM_VMAX = 420       // 速度上限 px/s
-const SIM_PCLAMP = 3       // 压力钳制（±3 单位）
-const SIM_WALL_M = 6       // 墙力生效边界距
-const SIM_SETTLE_EPS = 0.05 * 143640  // 动能阈值（相对盒面积 684×210）
-const SIM_SETTLE_FRAMES = 24          // 连续低于阈值帧数 → 停帧
-const BURST_IMPULSE = 240  // 爆裂冲量（邻居 ∝ 邻边比例）
-const WAVE_IMPULSE = 46    // 全簇压力波（∝ 1/d，轻微）
-
-/** 泡泡模拟状态（站点=位置；λ=内部压力参数；tgt=目标面积 ∝ 词频） */
-interface SimWord {
+/** 泡泡模拟状态（位置/速度；半径恒定不变） */
+interface CircleWord {
   word: BubbleWord
   x: number
   y: number
   vx: number
   vy: number
-  lam: number
-  tgt: number
+  r: number
 }
 
-/** 共享弦长：两凸单元公共边的长度（顶点按 0.1px 网格匹配，最长共点距=弦） */
-function sharedChord(a: [number, number][], b: [number, number][]): number {
-  const ka = new Map<string, [number, number]>()
-  for (const p of a) ka.set(`${Math.round(p[0] * 10)},${Math.round(p[1] * 10)}`, [p[0], p[1]])
-  const shared: [number, number][] = []
-  for (const p of b) {
-    const m = ka.get(`${Math.round(p[0] * 10)},${Math.round(p[1] * 10)}`)
-    if (m) shared.push(m)
-  }
-  if (shared.length < 2) return 0
-  let L = 0
-  for (let i = 0; i < shared.length; i++) {
-    for (let j = i + 1; j < shared.length; j++) {
-      const d = Math.hypot(shared[i][0] - shared[j][0], shared[i][1] - shared[j][1])
-      if (d > L) L = d
-    }
-  }
-  return L
+/** 破泡洞吸力（有限时长，随帧衰减） */
+interface HolePull {
+  x: number
+  y: number
+  r: number
+  strength: number
 }
 
-/** 由 (站点, λ) 求当前泡沫形状（纯计算：细胞 + 面积） */
-function foamShapes(S: SimWord[], w: number, h: number): { cells: VoronoiCell[]; areas: number[] } {
-  const words = S.map((s) => s.word)
-  const polys = diagramCellsOf(
-    words,
-    S.map((s) => [s.x, s.y]),
-    S.map((s) => s.lam),
-    [[0, 0], [w, 0], [w, h], [0, h]],
-  )
-  const areas = polys.map((pts) => {
-    if (!pts) return 0
-    let a = 0
-    for (let k = 0; k < pts.length; k++) {
-      const p1 = pts[k]
-      const p2 = pts[(k + 1) % pts.length]
-      a += p1[0] * p2[1] - p2[0] * p1[1]
-    }
-    return Math.abs(a / 2)
+const CLUSTER_PACK = 0.72        // 团簇面积 / 容器面积（泡沫堆积密度）
+const CLUSTER_RATIO_R = 0.46     // 团簇半径上限：min(w,h)·0.46（直径 ≤ 0.92·高）
+const CLUSTER_OVERLAP = 0.10     // 允许挤入 10%（贴合压弧的视觉来源）
+const KR = 24                    // 重叠软弹簧（线性，px/s² per px）
+const KB = 10                    // 径向边界软弹簧
+const DAMP = 9                   // 阻尼 exp(−9·dt)
+const VMAX = 420                 // 速度上限 px/s
+const FILL_FRAMES = 24           // 洞吸力持续帧数（随帧线性衰减到 0）
+const FILL_STRENGTH = 140        // 洞吸力初始加速度 px/s²
+const SETTLE_DISP = 1.0          // 帧位移总和阈值（<1px ≈ 0.08px/盘，视为静止）
+const SETTLE_CAP = 90            // 模拟帧帽（渐近蠕动到不了阈值时的兜底）
+const INIT_SOLVE = 320           // 初始预求解帧数（打开即稳态，无开场动画）
+
+/** 半径：总盘面积 = 容器面积×密度；团簇直径受高度限制（圆形优先） */
+function computeRadii(words: BubbleWord[], w: number, h: number): number[] {
+  const maxC = Math.max(...words.map((x) => x.count)) || 1
+  const ratio = words.map((x) => x.count / maxC)
+  const areaSum = ratio.reduce((a, b) => a + b, 0)
+  let rBase = Math.sqrt((w * h * CLUSTER_PACK) / (Math.PI * areaSum))
+  rBase = Math.min(rBase, (Math.min(w, h) * CLUSTER_RATIO_R) / Math.sqrt(areaSum))
+  return ratio.map((r) => Math.max(5, rBase * Math.sqrt(r)))
+}
+
+/** 初始布局：螺旋（大词在内、黄金角）——确定性，无随机 */
+function buildClusterWords(words: BubbleWord[], w: number, h: number): CircleWord[] {
+  const rs = computeRadii(words, w, h)
+  const x0 = w / 2
+  const y0 = h / 2
+  let acc = 0
+  return rs.map((r, i) => {
+    if (i > 0) acc += Math.PI * rs[i - 1] * rs[i - 1]
+    const rad = Math.sqrt(acc) * 1.05
+    const ang = i * 2.399963 // 黄金角
+    return { word: words[i], x: x0 + rad * Math.cos(ang), y: y0 + rad * Math.sin(ang), vx: 0, vy: 0, r }
   })
-  return { cells: finishCells(words, polys), areas }
 }
 
-/** 单帧模拟（就地更新 S 的速度/位置/λ；返回本帧形状） */
-function foamStep(S: SimWord[], w: number, h: number, dt: number): VoronoiCell[] {
-  const n = S.length
-  if (n === 0) return []
-  const { cells, areas } = foamShapes(S, w, h)
-  const sites = S.map((s) => [s.x, s.y])
-  const P = S.map((s, i) =>
-    Math.max(-SIM_PCLAMP, Math.min(SIM_PCLAMP, SIM_KP * ((areas[i] - s.tgt) / s.tgt))),
-  )
-  const Fx = new Array(n).fill(0)
-  const Fy = new Array(n).fill(0)
-  // 相邻泡对：压差 × 邻边长度（沿站点连线方向）
-  for (let i = 0; i < n; i++) {
-    for (let j = i + 1; j < n; j++) {
-      const L = sharedChord(cells[i].poly, cells[j].poly)
-      if (L < 1) continue
-      const dx = sites[j][0] - sites[i][0]
-      const dy = sites[j][1] - sites[i][1]
-      const d = Math.hypot(dx, dy) || 1
-      const F = (P[i] - P[j]) * L
-      Fx[i] += (F * dx) / d
-      Fy[i] += (F * dy) / d
-      Fx[j] -= (F * dx) / d
-      Fy[j] -= (F * dy) / d
-    }
-  }
-  // 墙力：贴边回推
-  for (let i = 0; i < n; i++) {
-    let mnx = Infinity, mxx = -Infinity, mny = Infinity, mxy = -Infinity
-    for (const p of cells[i].poly) {
-      mnx = Math.min(mnx, p[0]); mxx = Math.max(mxx, p[0])
-      mny = Math.min(mny, p[1]); mxy = Math.max(mxy, p[1])
-    }
-    if (mnx < SIM_WALL_M) Fx[i] += SIM_KWALL * (SIM_WALL_M - mnx)
-    if (mxx > w - SIM_WALL_M) Fx[i] -= SIM_KWALL * (mxx - (w - SIM_WALL_M))
-    if (mny < SIM_WALL_M) Fy[i] += SIM_KWALL * (SIM_WALL_M - mny)
-    if (mxy > h - SIM_WALL_M) Fy[i] -= SIM_KWALL * (mxy - (h - SIM_WALL_M))
-  }
-  // 积分（质量 ∝ 目标面积）+ 阻尼 + λ 面积调节
-  for (let i = 0; i < n; i++) {
-    const m = Math.max(S[i].tgt, 1)
-    let vx = (S[i].vx + (Fx[i] / m) * dt) * Math.exp(-SIM_DAMP * dt)
-    let vy = (S[i].vy + (Fy[i] / m) * dt) * Math.exp(-SIM_DAMP * dt)
-    const sp = Math.hypot(vx, vy)
-    if (sp > SIM_VMAX) {
-      vx = (vx / sp) * SIM_VMAX
-      vy = (vy / sp) * SIM_VMAX
-    }
-    S[i].vx = vx
-    S[i].vy = vy
-    S[i].x += vx * dt
-    S[i].y += vy * dt
-    S[i].lam = Math.max(1, S[i].lam + SIM_KLAM * (S[i].tgt - areas[i]) * dt)
-  }
-  return cells
-}
-
-/** 由基座（初始全量弛豫的 sites/λ）构建模拟状态 */
-function buildSimWords(
-  words: BubbleWord[],
-  base: { words: string[]; sites: [number, number][]; lambda: number[] } | null,
-  w: number,
-  h: number,
-): SimWord[] {
-  if (!words.length || w < 80 || !base) return []
-  const total = words.reduce((s, x) => s + x.count, 0)
-  return words.map((word) => {
-    const idx = base.words.indexOf(word.text)
-    const [x, y] = base.sites[idx] ?? [w / 2, h / 2]
-    return {
-      word, x, y, vx: 0, vy: 0,
-      lam: base.lambda[idx] ?? 1,
-      tgt: (word.count / total) * w * h,
-    }
-  })
+/** 团簇边界半径（面积守恒）：R = √(Σr²) */
+function clusterRadius(pts: CircleWord[]): number {
+  return Math.sqrt(pts.reduce((s, p) => s + p.r * p.r, 0))
 }
 
 /**
- * 加权 Voronoi 拼贴词云（A 方案；参考图形态：无缝多边形挤压 + 中央大块）。
- * - 面积 ∝ 词频（power diagram 数学保证：词频越高面积越大）；
- * - 浅色填充 + 深色词字（贴合卡片整体风格）；hover 高亮 + 「词 · N 次」；
- * - 破泡（2026-09-07 user 定案）：点击单元 → 鼓泡缩灭（+质心环波）0.42s →
- *   **泡沫压力模拟**接管（foamStep）：被破词的体积按邻边比例分给邻居 +
- *   法向爆裂冲量 + 全簇 1/d 压力波——位置/大小/形状全部由压差力学实时涌现，
- *   动能 < 阈值自动停帧（静止即停）；标题行右侧「已破泡 N · 恢复」一键复原。
- * - 渲染结构：外层 g 定位（style transform translate）+
- *   内层 .lc-dlg-cloud-bubble（transform-box:fill-box 承载破泡缩放）。
+ * 单帧演化（就地更新位置/速度，返回帧位移总和）：
+ * 力 = 径向边界软弹簧（outside R 才推回）+ 重叠软弹簧（< 0.9·(ri+rj) 才推挤）
+ *       + 可选洞吸力（有限时长衰减）→ 速度阻尼积分 + 容器 clamp。
+ */
+function clusterStep(pts: CircleWord[], w: number, h: number, dt: number, pull?: HolePull | null): number {
+  const n = pts.length
+  if (n === 0) return 0
+  const cx = w / 2
+  const cy = h / 2
+  const R = clusterRadius(pts)
+  const ax = new Array(n).fill(0)
+  const ay = new Array(n).fill(0)
+  for (let i = 0; i < n; i++) {
+    const p = pts[i]
+    const dx = cx - p.x
+    const dy = cy - p.y
+    const d = Math.hypot(dx, dy) || 1e-6
+    const over = d + p.r - R
+    if (over > 0) {
+      ax[i] += (dx / d) * KB * over
+      ay[i] += (dy / d) * KB * over
+    }
+    if (pull) {
+      const pdx = pull.x - p.x
+      const pdy = pull.y - p.y
+      const pd = Math.hypot(pdx, pdy) || 1e-6
+      const wgt = Math.max(0, 1 - (pd - p.r - pull.r) / 110) // 越近受力越大
+      const a = pull.strength * wgt
+      ax[i] += (pdx / pd) * a
+      ay[i] += (pdy / pd) * a
+    }
+  }
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      const a = pts[i]
+      const b = pts[j]
+      const dx = b.x - a.x
+      const dy = b.y - a.y
+      const d = Math.hypot(dx, dy) || 1e-6
+      const delta = (a.r + b.r) * (1 - CLUSTER_OVERLAP) - d
+      if (delta > 0) {
+        const f = KR * delta
+        const wa = (b.r * b.r) / (a.r * a.r + b.r * b.r)
+        ax[i] -= (dx / d) * f * wa
+        ay[i] -= (dy / d) * f * wa
+        ax[j] += (dx / d) * f * (1 - wa)
+        ay[j] += (dy / d) * f * (1 - wa)
+      }
+    }
+  }
+  let disp = 0
+  for (let i = 0; i < n; i++) {
+    const p = pts[i]
+    let vx = (p.vx + ax[i] * dt) * Math.exp(-DAMP * dt)
+    let vy = (p.vy + ay[i] * dt) * Math.exp(-DAMP * dt)
+    const sp = Math.hypot(vx, vy)
+    if (sp > VMAX) {
+      vx = (vx / sp) * VMAX
+      vy = (vy / sp) * VMAX
+    }
+    p.vx = vx
+    p.vy = vy
+    p.x += vx * dt
+    p.y += vy * dt
+    disp += Math.hypot(vx, vy) * dt
+    if (p.x < p.r) { p.x = p.r; if (p.vx < 0) p.vx = 0 }
+    if (p.x > w - p.r) { p.x = w - p.r; if (p.vx > 0) p.vx = 0 }
+    if (p.y < p.r) { p.y = p.r; if (p.vy < 0) p.vy = 0 }
+    if (p.y > h - p.r) { p.y = h - p.r; if (p.vy > 0) p.vy = 0 }
+  }
+  return disp
+}
+
+/** 同步预求解：打开/恢复时跑到手近稳态（无开场动画） */
+function clusterSettle(pts: CircleWord[], w: number, h: number): void {
+  const dt = 1 / 60
+  for (let f = 0; f < INIT_SOLVE; f++) {
+    if (clusterStep(pts, w, h, dt) < SETTLE_DISP) break
+  }
+  for (const p of pts) {
+    p.vx = 0
+    p.vy = 0
+  }
+}
+/**
+ * 圆形气泡簇词云（2026-09-07 user 定案「从头开始」；参考图形态：圆形泡沫团）。
+ * - 半径恒定 ∝ √词频 → 面积 ∝ 词频（一以贯之：打开/破泡/恢复全程不变）；
+ * - 整簇天然圆形（径向边界 R=√Σr²，圆心=容器中心），贴合处 10% 挤压呈现
+ *   被邻泡压出的弧（交界不规则）；
+ * - 破泡 = 去词 + 洞吸力（24 帧衰减）+ 边界收缩 → 周围泡泡立即闭合空洞；
+ *   无需任何装饰动画（无鼓泡/环波/过冲，user：多余动画不需要）；
+ * - hover 高亮 + 「词 · N 次」提示 + 「已破泡 N · 恢复」一键复原；
+ * - 静止即停：帧位移总和 < 1px 或 90 帧帽 → 停帧。
  */
 function VoronoiCloud({
   data,
@@ -477,15 +308,14 @@ function VoronoiCloud({
   const [tip, setTip] = useState<{ x: number; y: number; text: string; count: number } | null>(null)
   // hover 以词 text 为键（破泡后索引会错位，text 稳定）
   const [hover, setHover] = useState<string | null>(null)
-  /** popping=动画中的词（仍占泡沫，缩灭后提交）；poppedN=已破泡计数（供恢复胶囊） */
-  const [popping, setPopping] = useState<string | null>(null)
+  /** 破泡计数（供恢复胶囊；simRef 同步删词） */
   const poppedN = useRef(0)
-  const popTimer = useRef<number | undefined>(undefined)
 
-  /** 泡沫模拟：simRef=权威状态（静止时也持有）；frameCells=最近一帧快照 */
-  const simRef = useRef<SimWord[]>([])
-  const [frameCells, setFrameCells] = useState<VoronoiCell[] | null>(null)
-  const loopRef = useRef<{ raf: number; still: number } | null>(null)
+  /** 气泡簇权威状态（静止时也持有）；rebuildTick 驱动重渲染（每帧模拟后自增） */
+  const simRef = useRef<CircleWord[]>([])
+  const pullRef = useRef<{ x: number; y: number; r: number; frame: number } | null>(null)
+  const loopRef = useRef<{ raf: number } | null>(null)
+  const [, setRebuildTick] = useState(0)
   const sizeRef = useRef(size)
   sizeRef.current = size
   const dataRef = useRef(data)
@@ -498,53 +328,43 @@ function VoronoiCloud({
     }
   }, [])
 
-  /** 布局基座（初始/尺寸变化全量弛豫一次）：泡沫的出生状态 */
-  const baseLayout = useMemo(() => {
-    if (!data.length || size.w < 80) return null
-    const r = layoutPowerCloud(data, size.w, size.h)
-    return { words: data.map((x) => x.text), sites: r.sites, lambda: r.lambda }
-  }, [data, size.w, size.h])
-  const baseRef = useRef(baseLayout)
-  baseRef.current = baseLayout
-
-  // 基座变化（初始/切换场次/尺寸）→ 重建模拟（静止起点）。
-  // ⚠️ 必须同时写入首帧快照（setFrameCells(null) 是空更新不触发重渲染——
-  //    曾致打开弹窗时词云恒显「已全部破泡」，2026-09-07 用户截图反馈）
-  useEffect(() => {
+  /** 重建簇（初始/切换/恢复/尺寸变化）：螺旋初值 + 同步预求解（打开即稳态） */
+  const rebuildCluster = useCallback(() => {
     stopLoop()
-    simRef.current = buildSimWords(dataRef.current, baseRef.current, sizeRef.current.w, sizeRef.current.h)
-    const S = simRef.current
-    setFrameCells(
-      S.length > 0 && sizeRef.current.w >= 80
-        ? foamShapes(S, sizeRef.current.w, sizeRef.current.h).cells
-        : null,
-    )
-  }, [baseLayout, stopLoop])
+    pullRef.current = null
+    const d = dataRef.current
+    const w = sizeRef.current.w
+    const h = sizeRef.current.h
+    simRef.current = w >= 80 && d.length > 0
+      ? buildClusterWords(d, w, h)
+      : []
+    clusterSettle(simRef.current, w, h)
+    setRebuildTick((t) => t + 1)
+  }, [stopLoop])
 
-  // 场次/数据切换 → 破泡计数清零（重开弹窗语义）
+  // 数据/尺寸变化依赖重建（引用变化即触发；数据为空时清空）
+  useEffect(() => {
+    rebuildCluster()
+  }, [data, size.w, size.h, rebuildCluster])
+
+  // 场次切换 → 破泡计数清零（重开弹窗语义）
   useEffect(() => {
     poppedN.current = 0
-    setPopping(null)
     setHover(null)
     setTip(null)
     onPoppedChange?.(0)
-  }, [data, onPoppedChange])
-  useEffect(() => () => {
-    window.clearTimeout(popTimer.current)
-    stopLoop()
-  }, [stopLoop])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data])
 
-  // 外部恢复信号（restoreTick 变化）：重建全量泡沫（物理从基座起点归位）
+  // 外部恢复信号：重建全量簇（物理归位到初始稳态）
   useEffect(() => {
     if (!restoreTick) return
-    window.clearTimeout(popTimer.current)
     poppedN.current = 0
-    setPopping(null)
-    stopLoop()
-    simRef.current = buildSimWords(dataRef.current, baseRef.current, sizeRef.current.w, sizeRef.current.h)
-    setFrameCells(null)
+    setHover(null)
+    setTip(null)
+    rebuildCluster()
     onPoppedChange?.(0)
-  }, [restoreTick, onPoppedChange, stopLoop])
+  }, [restoreTick, rebuildCluster, onPoppedChange])
 
   useEffect(() => {
     const el = ref.current
@@ -557,187 +377,133 @@ function VoronoiCloud({
     return () => ro.disconnect()
   }, [])
 
-  /** 渲染快照：模拟帧优先；帧与 sim 词表匹配才复用（切换场次后旧帧作废） */
-  const displayCells = useMemo<VoronoiCell[]>(() => {
-    const S = simRef.current
-    if (S.length === 0 || size.w < 80) return []
-    if (frameCells) {
-      const words = S.map((s) => s.word.text)
-      if (
-        frameCells.length === words.length &&
-        frameCells.every((c, i) => c.word.text === words[i])
-      ) {
-        return frameCells
-      }
-    }
-    return foamShapes(S, size.w, size.h).cells
-  }, [frameCells, size.w, size.h, data])
+  useEffect(() => () => stopLoop(), [stopLoop])
 
-  /** 模拟主循环：泡沫每帧演化，动能 < 阈值连续 SIM_SETTLE_FRAMES 帧 → 停帧 */
-  const startSimLoop = useCallback(() => {
+  /** 模拟主循环：每帧 clusterStep（携带残余洞吸力），帧位移阈值或帧帽 → 停帧 */
+  const startLoop = useCallback(() => {
     let last = performance.now()
-    let still = 0
-    const frame = (now: number) => {
+    let frame = 0
+    const step = (now: number) => {
       const dt = Math.min((now - last) / 1000, 1 / 30)
       last = now
-      const S = simRef.current
-      if (S.length === 0) {
+      const pts = simRef.current
+      frame += 1
+      const pull = pullRef.current
+      const activePull = pull && frame <= FILL_FRAMES
+        ? {
+            x: pull.x,
+            y: pull.y,
+            r: pull.r,
+            strength: FILL_STRENGTH * (1 - frame / FILL_FRAMES),
+          }
+        : null
+      if (frame > FILL_FRAMES) pullRef.current = null
+      if (pts.length === 0) {
         loopRef.current = null
         return
       }
-      const cells = foamStep(S, sizeRef.current.w, sizeRef.current.h, dt)
-      setFrameCells(cells)
-      const energy = S.reduce((s, x) => s + x.tgt * (x.vx * x.vx + x.vy * x.vy), 0)
-      still = energy < SIM_SETTLE_EPS ? still + 1 : 0
-      if (still >= SIM_SETTLE_FRAMES) {
-        loopRef.current = null // 静止即停：frameCells 保留终态快照
+      const disp = clusterStep(pts, sizeRef.current.w, sizeRef.current.h, dt, activePull)
+      setRebuildTick((t) => t + 1)
+      if (disp < SETTLE_DISP && frame > 8) {
+        loopRef.current = null // 静止即停：终态即当前簇
         return
       }
-      loopRef.current = { raf: requestAnimationFrame(frame), still }
+      if (frame >= SETTLE_CAP) {
+        loopRef.current = null // 帧帽兜底（渐近蠕动不可见）
+        return
+      }
+      loopRef.current = { raf: requestAnimationFrame(step) }
     }
-    loopRef.current = { raf: requestAnimationFrame(frame), still: 0 }
+    loopRef.current = { raf: requestAnimationFrame(step) }
   }, [])
 
-  /**
-   * 破泡提交：被破词体积按邻边比例分给邻居（哪里开放哪里多拿）+
-   * 法向爆裂冲量 + 全簇 1/d 压力波 → 压力系统实时涌现（位置/大小/形状全物理）。
-   * 模拟进行中再破泡：从当前状态续算（连续性）。
-   */
-  const burstSim = useCallback((popText: string) => {
-    stopLoop()
-    const S = simRef.current
-    const w = sizeRef.current.w
-    const h = sizeRef.current.h
-    const pop = S.find((s) => s.word.text === popText)
-    if (!pop || w < 80) return
-    const before = foamShapes(S, w, h)
-    const popIdx = S.indexOf(pop)
-    const popCell = before.cells[popIdx]?.poly ?? []
-    // 邻居与其共享弦长 → 体积分配比例
-    const picks: { s: SimWord; share: number }[] = []
-    let lsum = 0
-    for (const s of S) {
-      if (s === pop) continue
-      const L = sharedChord(popCell, before.cells[S.indexOf(s)].poly)
-      if (L > 1) {
-        picks.push({ s, share: L })
-        lsum += L
-      }
-    }
-    if (lsum > 0) for (const p of picks) p.share /= lsum
-    const fallback = picks.length ? 0 : 1 / Math.max(S.length - 1, 1)
-    const survivors = S.filter((s) => s !== pop).map((s) => {
-      const p = picks.find((x) => x.s === s)
-      const share = p ? p.share : fallback
-      const dx = s.x - pop.x
-      const dy = s.y - pop.y
-      const d = Math.hypot(dx, dy) || 1
-      const impulse = share * BURST_IMPULSE + WAVE_IMPULSE / (1 + d / 60)
-      return {
-        ...s,
-        tgt: s.tgt + pop.tgt * share,
-        lam: Math.max(1, s.lam + pop.lam * share * 0.6 + 40 * share),
-        vx: s.vx + (dx / d) * impulse,
-        vy: s.vy + (dy / d) * impulse,
-      }
-    })
-    simRef.current = survivors
-    setFrameCells(foamShapes(survivors, w, h).cells) // 首帧快照（无闪变）
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
-    startSimLoop()
-  }, [startSimLoop, stopLoop])
-
-  /** 破泡：立即播动画，BUBBLE_POP_MS 后提交 → 泡沫模拟接管 */
+  /** 破泡：去词（立即消失，无动画）→ 洞吸力 + 边界收缩 → 启动闭合 */
   const popWord = (text: string) => {
-    if (popping) return
+    const S = simRef.current
+    const pop = S.find((s) => s.word.text === text)
+    if (!pop) return
+    const x = pop.x
+    const y = pop.y
+    const r = pop.r
+    simRef.current = S.filter((s) => s.word.text !== text)
+    poppedN.current += 1
+    onPoppedChange?.(poppedN.current)
     setHover(null)
     setTip(null)
-    setPopping(text)
-    window.clearTimeout(popTimer.current)
-    popTimer.current = window.setTimeout(() => {
-      poppedN.current += 1
-      onPoppedChange?.(poppedN.current)
-      setPopping(null)
-      burstSim(text)
-    }, BUBBLE_POP_MS)
+    pullRef.current = { x, y, r, frame: 0 }
+    if (simRef.current.length === 0) {
+      setRebuildTick((t) => t + 1)
+      return
+    }
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      // 无障碍：同步结算到近稳态（瞬时闭合），不跑动画
+      clusterSettle(simRef.current, sizeRef.current.w, sizeRef.current.h)
+      setRebuildTick((t) => t + 1)
+      return
+    }
+    setRebuildTick((t) => t + 1)
+    startLoop()
   }
 
   return (
     <div ref={ref} className="lc-dlg-cloud">
-      {size.w > 0 && displayCells.length > 0 && (
+      {size.w > 0 && simRef.current.length > 0 && (
         <svg width={size.w} height={size.h} className="lc-dlg-cloud-svg">
-          {/* 破泡单元排到最后渲染（鼓出时压住邻居不穿帮） */}
-          {[...displayCells]
-            .sort(
-              (a, b) =>
-                (a.word.text === popping ? 1 : 0) - (b.word.text === popping ? 1 : 0),
+          {simRef.current.map((c) => {
+            const { word, x, y, r } = c
+            const hero = simRef.current[0].word.text === word.text
+            // 2026-09-07：字号随半径（面积∝词频）——下限 8.5px，长词自缩减
+            const fs = Math.max(8.5, Math.min(hero ? 34 : 26, r * 0.9, (r * 2.2) / Math.max(2, word.text.length)))
+            const showText = r > 10.5 && word.text.length <= 6 && fs >= 8.5
+            const hovered = hover === word.text
+            const dimmed = hover !== null && !hovered
+            return (
+              <g
+                key={word.text}
+                className="lc-dlg-cloud-cell"
+                style={{ transform: `translate(${x}px, ${y}px)` }}
+                onMouseEnter={(e) => {
+                  setHover(word.text)
+                  setTip({ x: e.clientX, y: e.clientY, text: word.text, count: word.count })
+                }}
+                onMouseMove={(e) =>
+                  setTip((t) => (t ? { ...t, x: e.clientX, y: e.clientY } : t))}
+                onMouseLeave={() => {
+                  setHover(null)
+                  setTip(null)
+                }}
+                onClick={() => popWord(word.text)}
+              >
+                <circle
+                  r={r}
+                  fill={cloudWordColor(word)}
+                  fillOpacity={hovered ? 1 : dimmed ? 0.4 : 0.92}
+                  stroke="var(--c-bg-card)"
+                  strokeWidth={2}
+                />
+                {showText && (
+                  <text
+                    x={0}
+                    y={0}
+                    textAnchor="middle"
+                    dy="0.35em"
+                    fontSize={fs}
+                    fill={hovered ? 'var(--c-text-main)' : 'var(--c-text-sub)'}
+                    fontWeight={hovered || hero ? 700 : 600}
+                    opacity={dimmed ? 0.25 : 1}
+                    pointerEvents="none"
+                  >
+                    {word.text}
+                  </text>
+                )}
+              </g>
             )
-            .map((c) => {
-              const { word, poly, cx, cy, r, hero } = c
-              // 相对质心坐标：外层 g 负责定位（模拟每帧更新 cx/cy → 实时变化）
-              const d = `M${poly
-                .map(([x, y]) => `${x - cx},${y - cy}`)
-                .join('L')}Z`
-              // 2026-09-07：放宽显示条件——字号下限 8.5px、r>10.5 即显示词字
-              //（此前 r>14 且 fs>=10 太紧，中等格子长词（如「哈哈哈哈」）被吞掉）
-              const fs = Math.max(
-                8.5,
-                Math.min(hero ? 34 : 26, r * 0.75, (r * 2.2) / Math.max(2, word.text.length)),
-              )
-              const showText = r > 10.5 && word.text.length <= 6 && fs >= 8.5
-              const hovered = hover === word.text
-              const dimmed = hover !== null && !hovered
-              const isPopping = popping === word.text
-              return (
-                <g
-                  key={word.text}
-                  className="lc-dlg-cloud-cell"
-                  style={{ transform: `translate(${cx}px, ${cy}px)` }}
-                  onMouseEnter={(e) => {
-                    setHover(word.text)
-                    setTip({ x: e.clientX, y: e.clientY, text: word.text, count: word.count })
-                  }}
-                  onMouseMove={(e) =>
-                    setTip((t) => (t ? { ...t, x: e.clientX, y: e.clientY } : t))}
-                  onMouseLeave={() => {
-                    setHover(null)
-                    setTip(null)
-                  }}
-                  onClick={() => popWord(word.text)}
-                >
-                  <g className={`lc-dlg-cloud-bubble${isPopping ? ' popping' : ''}`}>
-                    <path
-                      d={d}
-                      fill={cloudWordColor(word)}
-                      fillOpacity={hovered ? 1 : dimmed ? 0.4 : 0.92}
-                      stroke="var(--c-bg-card)"
-                      strokeWidth={2}
-                    />
-                    {showText && (
-                      <text
-                        x={0}
-                        y={0}
-                        textAnchor="middle"
-                        dy="0.35em"
-                        fontSize={fs}
-                        fill={hovered ? 'var(--c-text-main)' : 'var(--c-text-sub)'}
-                        fontWeight={hovered || hero ? 700 : 600}
-                        /* 2026-09-07：非选中单元的文字随色块一起变淡（否则观感无变化） */
-                        opacity={dimmed ? 0.25 : 1}
-                        pointerEvents="none"
-                      >
-                        {word.text}
-                      </text>
-                    )}
-                  </g>
-                  {/* 破泡环波：圆心=质心，r 6→44 淡出（CSS 属性 r 可动画） */}
-                  {isPopping && <circle className="lc-dlg-cloud-ring" />}
-                </g>
-              )
-            })}
+          })}
         </svg>
       )}
-      {displayCells.length === 0 && <div className="lc-dlg-ph">已全部破泡（点击「恢复」还原）</div>}
+      {size.w > 0 && simRef.current.length === 0 && (
+        <div className="lc-dlg-ph">已全部破泡（点击「恢复」还原）</div>
+      )}
       {tip && (
         <span className="lc-dlg-cloud-tip" style={{ left: tip.x, top: tip.y }}>
           {tip.text} · {tip.count.toLocaleString('zh-CN')} 次
@@ -746,7 +512,6 @@ function VoronoiCloud({
     </div>
   )
 }
-
 /**
  * 直播日历（v0.9.2 重建 → v0.9.x M4 内容管道）：
  * - 卡片 870 定宽上限居中（用户参数）；网格 7 列 × 115.714286px + 4px 列/行距

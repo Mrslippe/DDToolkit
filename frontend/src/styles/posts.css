@@ -2424,8 +2424,8 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* 加权 Voronoi 拼贴词云（Balzer 2005 power diagram，2026-09-07：无缝多边形挤压 + 中央大块）
-   破泡（2026-09-07 user 定案）：点击单元 → 鼓泡缩灭 + 质心环波 → 其余细胞滑动补位 */
+/* 圆形气泡簇词云（2026-09-07 user 定案·从头开始；见 LiveCalendar.tsx buildClusterWords/clusterStep）：
+   破泡 = 去词 + 洞吸力闭合（无鼓泡/环波等装饰动画）；cell 位置随模拟逐帧更新 */
 .lc-dlg-cloud {
   position: relative;
   width: 100%;
@@ -2436,57 +2436,14 @@
   display: block;
 }
 
-.lc-dlg-cloud-svg path {
+.lc-dlg-cloud-svg path,
+.lc-dlg-cloud-svg circle {
   transition: fill-opacity 0.12s ease;
 }
 
-/* 细胞定位层：模拟每帧更新 transform（位置实时变化）；无 CSS 过渡（帧插值即动画） */
+/* 泡泡定位层：模拟每帧更新 translate（闭合实时变化）；无 CSS 过渡（帧插值即动画） */
 .lc-dlg-cloud-cell {
   cursor: pointer;
-}
-
-/* 泡泡本体（承载破泡缩放）：transform-box 用自身包围盒居中 */
-.lc-dlg-cloud-bubble {
-  transform-box: fill-box;
-  transform-origin: center;
-}
-
-/* 破泡：鼓泡（30% 处 1.12）→ 缩灭（scale 0 + 淡出），时长与组件 BUBBLE_POP_MS=420 同步 */
-.lc-dlg-cloud-bubble.popping {
-  animation: lc-bubble-pop 0.42s cubic-bezier(0.3, 0, 0.4, 1) forwards;
-}
-
-@keyframes lc-bubble-pop {
-  0% {
-    transform: scale(1);
-    opacity: 1;
-  }
-  30% {
-    transform: scale(1.12);
-    opacity: 1;
-  }
-  100% {
-    transform: scale(0);
-    opacity: 0;
-  }
-}
-
-/* 破泡环波：圆心=质心，半径 6→44 淡出（SVG r 为可动画 CSS 属性） */
-.lc-dlg-cloud-ring {
-  pointer-events: none;
-  fill: none;
-  stroke: rgba(251, 119, 161, 0.7);
-  stroke-width: 2px;
-  r: 6px;
-  opacity: 0.7;
-  animation: lc-ring-pop 0.35s ease-out forwards;
-}
-
-@keyframes lc-ring-pop {
-  to {
-    r: 44px;
-    opacity: 0;
-  }
 }
 
 /* 词频 hover 提示（跟随鼠标） */
@@ -2673,9 +2630,7 @@
   .lc-month-pop,
   .lc-dlg-cat-pop,
   .filter-pop,
-  .time-pop,
-  .lc-dlg-cloud-bubble.popping,
-  .lc-dlg-cloud-ring {
+  .time-pop {
     animation: none;
   }
 }
