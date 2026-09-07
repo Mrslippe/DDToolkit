@@ -18,12 +18,15 @@ interface OverlayScrollProps {
 
 /**
  * 覆盖式滚动条（滚动条视觉标准 2026-09-07 user 定案）：
- * - 原生滚动条隐藏（display:none + scrollbar-width:none）→ **不占布局宽度**，
- *   容器/弹窗不会因滚动条变宽；
- * - 拇指绝对定位悬浮于内容之上：透明轨道 + 常态 --c-border 细灰 +
- *   hover 顶栏粉 --c-primary（第 4-6px）；圆角胶囊，可拖拽；
- * - 显示策略：滚动 / 鼠标悬浮容器时出现，静止 700ms 或移出后自动隐藏；
- * - 内容不溢出时不渲染拇指。
+ * - 原生滚动条隐藏（display:none + scrollbar-width:none）→ **不占布局宽度**；
+ * - 拇指绝对定位悬浮：透明轨 + 常态 --c-border 细灰 + hover 粉 --c-primary，
+ *   圆角胶囊、可拖拽；内容不溢出不渲染；
+ * - 显示策略：滚动时亮出、停止 700ms 淡出；悬浮亮出、1.5s 无动作淡出；
+ *   移出立即淡出；
+ * - 状态同步（sync）与显隐调度（show/hide）分离：
+ *   · sync 由 scroll（rAF）/ ResizeObserver（滚动体 + 首个子元素：内容长高会
+ *     改变子元素边框盒）/ 400ms 低频轮询 触发——只改位置/尺寸/display；
+ *   · show/hide 只在交互事件中调度，绝不叠加，杜绝「陈旧拇指常亮」。
  */
 export default function OverlayScroll({
   className = '', style, role, children, scrollRef, onScroll,
@@ -36,27 +39,44 @@ export default function OverlayScroll({
   const hideTimer = useRef<number | undefined>(undefined)
   const dragging = useRef(false)
 
-  const update = useCallback(() => {
+  /** 仅同步位置/尺寸/display（不动显隐），可频繁调用 */
+  const sync = useCallback(() => {
     const sc = scrollEl.current
     const tb = thumbEl.current
     if (!sc || !tb) return
     const H = sc.clientHeight
     const S = sc.scrollHeight
+    if (H <= 0) return                 // 布局未定，交给轮询/RO 再试
     if (S <= H + 1) {
       tb.style.display = 'none'
+      tb.style.opacity = ''
       return
     }
     tb.style.display = 'block'
     const th = Math.max(28, Math.round((H / S) * H))
-    const maxTop = H - th - 8
+    const maxTop = Math.max(H - th - 8, 0)
     const top = S - H > 0 ? (sc.scrollTop / (S - H)) * maxTop : 0
     tb.style.height = `${th}px`
     tb.style.top = `${Math.max(4, top)}px`
+  }, [])
+
+  /** 同步 + 亮出 + 700ms 无交互自动淡出（滚动触发；悬浮用 onEnter 独立 1.5s） */
+  const update = useCallback(() => {
+    const tb = thumbEl.current
+    sync()
+    if (!tb) return
     tb.classList.add('os-show')
     if (hideTimer.current) window.clearTimeout(hideTimer.current)
     hideTimer.current = window.setTimeout(() => {
       if (!dragging.current) tb.classList.remove('os-show')
     }, 700)
+  }, [sync])
+
+  const hideNow = useCallback(() => {
+    const tb = thumbEl.current
+    if (!tb || dragging.current) return
+    tb.classList.remove('os-show')
+    if (hideTimer.current) window.clearTimeout(hideTimer.current)
   }, [])
 
   useEffect(() => {
@@ -64,6 +84,7 @@ export default function OverlayScroll({
     const root = rootRef.current
     const tb = thumbEl.current
     if (!sc || !root || !tb) return
+
     const request = () => {
       cancelAnimationFrame(frame.current)
       frame.current = requestAnimationFrame(update)
@@ -71,31 +92,41 @@ export default function OverlayScroll({
     const onEnter = () => {
       tb.classList.add('os-show')
       if (hideTimer.current) window.clearTimeout(hideTimer.current)
-      // 2026-09-07：悬浮亮出后无动作 1.5s 也自动淡出（profile 视图常亮问题）——
-      // 鼠标悬停即常亮会造成「不滚动也不隐藏」的观感
       hideTimer.current = window.setTimeout(() => {
         if (!dragging.current) tb.classList.remove('os-show')
       }, 1500)
     }
-    const onLeave = () => {
-      if (!dragging.current) tb.classList.remove('os-show')
-    }
+    const onLeave = () => hideNow()
+
     sc.addEventListener('scroll', request, { passive: true })
     root.addEventListener('mouseenter', onEnter)
     root.addEventListener('mouseleave', onLeave)
-    // 内容异步加载/尺寸变化时重算（档案卡、弹窗数据加载完成等，2026-09-07）
-    const ro = new ResizeObserver(request)
+
+    // 内容尺寸变化：滚动体自身（视口缩放）+ 首个子元素（内容长高会改变其
+    // 边框盒——ResizeObserver 只看边框盒，scrollHeight 增长不会触发自身）
+    const ro = new ResizeObserver(() => {
+      cancelAnimationFrame(frame.current)
+      frame.current = requestAnimationFrame(sync)
+    })
     ro.observe(sc)
-    update()
+    if (sc.firstElementChild) ro.observe(sc.firstElementChild)
+    // 轮询兜底（异步加载/占位切换等极端情形，400ms 极轻）
+    const poll = window.setInterval(() => {
+      cancelAnimationFrame(frame.current)
+      frame.current = requestAnimationFrame(sync)
+    }, 400)
+
+    sync()
     return () => {
       sc.removeEventListener('scroll', request)
       root.removeEventListener('mouseenter', onEnter)
       root.removeEventListener('mouseleave', onLeave)
       ro.disconnect()
+      window.clearInterval(poll)
       cancelAnimationFrame(frame.current)
       if (hideTimer.current) window.clearTimeout(hideTimer.current)
     }
-  }, [update])
+  }, [update, sync, hideNow])
 
   const onThumbDown = (e: React.PointerEvent) => {
     dragging.current = true
