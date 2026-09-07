@@ -178,20 +178,6 @@ export interface LiveSessionDetail extends LiveSession {
   analysis?: LiveAnalysisInfo | null
 }
 
-/** 直播礼物日聚合（金额为原始字符串保精度） */
-export interface GiftDay {
-  id: number
-  account_id: number
-  source: string
-  gift_date: string
-  gift_amount: string | null
-  guard_amount: string | null
-  sc_amount: string | null
-  total_amount: string | null
-  room_id: string | null
-  created_at: string | null
-}
-
 /** 第三方 VTuber 索引条目（P5 档案卡：企划/公会/房间号） */
 export interface ThirdpartyVtuber {
   id: number
@@ -203,26 +189,6 @@ export interface ThirdpartyVtuber {
   group_name: string | null
   source: string
   updated_at: string | null
-}
-
-/** 重要日期·活动手动条目（P7：vtuber_events 表） */
-export interface VtuberEvent {
-  id: number
-  vtuber_id: number
-  title: string
-  /** "YYYY-MM-DD" */
-  event_date: string
-  created_at: string | null
-}
-
-/** 未来直播预约（P7：reservation 帖 desc1 文本自动解析） */
-export interface FutureReservation {
-  post_id: number
-  title: string
-  /** 北京 wall-clock naive 时间串（服务端已按发布日推断年份） */
-  start_at: string
-  reserve_total: number
-  rid: string | null
 }
 
 export interface FetchResult {

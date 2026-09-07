@@ -4,6 +4,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Skeleton } from '@/components/ui/skeleton'
 import AddVtuberDialog from './AddVtuberDialog'
 import BatchFetchDialog from './BatchFetchDialog'
+import OverlayScroll from './OverlayScroll'
 import { useLocation, useNavigate, matchPath } from 'react-router-dom'
 import { api, resolveAsset } from '../api/api'
 import type { AccountSnapshot, VTuber } from '../api/types'
@@ -33,93 +34,6 @@ export const SORT_LABEL: Record<SortKey, string> = {
   name: '名称',
 }
 
-/** 悬浮滚动条轨道的上下留白（避开吸顶工具行 / 贴底） */
-const SB_TOP_PAD = 55
-const SB_BOTTOM_PAD = 4
-
-/**
- * 自绘悬浮滚动条状态：内容溢出时在滚动/拖拽期间浮现，静止 900ms 后渐隐。
- * 原生滚动行为不变，仅替换视觉。
- */
-function useOverlayScrollbar(
-  ref: React.RefObject<HTMLElement | null>,
-  contentKey: unknown,
-) {
-  const [bar, setBar] = useState({ active: false, h: 0, y: 0 })
-  const timer = useRef<number>()
-  const drag = useRef<{ startY: number; startTop: number } | null>(null)
-
-  const refresh = useCallback(() => {
-    const el = ref.current
-    if (!el) return
-    const over = el.scrollHeight - el.clientHeight
-    if (over <= 1) {
-      setBar((s) => (s.active ? { ...s, active: false } : s))
-      return
-    }
-    const track = el.clientHeight - SB_TOP_PAD - SB_BOTTOM_PAD
-    const th = Math.max(40, (el.clientHeight / el.scrollHeight) * track)
-    // 轨道容器自身已有 top:55 偏移，thumb 的 translateY 相对轨道计算，
-    // 不再叠加 SB_TOP_PAD——ratio=0 时精确贴顶、ratio=1 时精确贴底
-    const y = (el.scrollTop / over) * (track - th)
-    setBar({ active: true, h: th, y })
-    window.clearTimeout(timer.current)
-    // 拖拽期间不渐隐
-    if (!drag.current) {
-      timer.current = window.setTimeout(
-        () => setBar((s) => ({ ...s, active: false })),
-        900,
-      )
-    }
-  }, [ref])
-
-  useEffect(() => {
-    refresh()
-  }, [refresh, contentKey])
-
-  useEffect(() => {
-    const el = ref.current
-    if (!el) return
-    el.addEventListener('scroll', refresh, { passive: true })
-    const ro = new ResizeObserver(refresh)
-    ro.observe(el)
-    return () => {
-      el.removeEventListener('scroll', refresh)
-      ro.disconnect()
-      window.clearTimeout(timer.current)
-    }
-  }, [ref, refresh])
-
-  const thumbProps = {
-    onPointerDown: (e: React.PointerEvent<HTMLDivElement>) => {
-      const el = ref.current
-      if (!el) return
-      drag.current = { startY: e.clientY, startTop: el.scrollTop }
-      e.currentTarget.setPointerCapture(e.pointerId)
-      e.preventDefault()
-    },
-    onPointerMove: (e: React.PointerEvent<HTMLDivElement>) => {
-      const el = ref.current
-      const d = drag.current
-      if (!el || !d) return
-      const track = el.clientHeight - SB_TOP_PAD - SB_BOTTOM_PAD
-      const th = Math.max(40, (el.clientHeight / el.scrollHeight) * track)
-      el.scrollTop =
-        d.startTop +
-        ((e.clientY - d.startY) * (el.scrollHeight - el.clientHeight)) /
-          Math.max(track - th, 1)
-    },
-    onPointerUp: () => {
-      drag.current = null
-    },
-    onPointerCancel: () => {
-      drag.current = null
-    },
-  }
-
-  return { bar, thumbProps }
-}
-
 /**
  * 常驻左栏：工具行（搜索 / 直播过滤 / 排序）+ VTuber 通栏列表。
  * 视觉参照 MomoTalk：零圆角零描边，发丝分隔线，选中=左缘主色竖条+浅粉底。
@@ -145,7 +59,6 @@ export default function VtuberSidebar() {
   const navigate = useNavigate()
   const location = useLocation()
   const searchRef = useRef<HTMLInputElement>(null)
-  const sidebarRef = useRef<HTMLElement>(null)
 
   const load = useCallback(() => {
     api
@@ -261,7 +174,6 @@ export default function VtuberSidebar() {
   }, [filterOpen])
 
   const matched = matchPath('/vtubers/:id', location.pathname)
-  const { bar, thumbProps } = useOverlayScrollbar(sidebarRef, `${loading}|${filtered.length}`)
 
   // 稳定回调：memo 化的 VtuberItem 依赖它做浅比较，避免搜索/轮询每帧新建闭包
   const handleSelect = useCallback((id: number) => navigate(`/vtubers/${id}`), [navigate])
@@ -269,7 +181,7 @@ export default function VtuberSidebar() {
   if (loading) {
     return (
       <div className="sidebar-shell">
-        <aside className="sidebar" ref={sidebarRef}>
+        <OverlayScroll className="sidebar-list">
           {Array.from({ length: 6 }, (_, i) => (
             <div key={i} className="flex items-center gap-3 p-2.5">
               <Skeleton className="size-10 shrink-0 rounded-full" />
@@ -279,7 +191,7 @@ export default function VtuberSidebar() {
               </div>
             </div>
           ))}
-        </aside>
+        </OverlayScroll>
       </div>
     )
   }
@@ -287,17 +199,16 @@ export default function VtuberSidebar() {
   if (error) {
     return (
       <div className="sidebar-shell">
-        <aside className="sidebar">
+        <OverlayScroll className="sidebar-list">
           <div className="sidebar-tip">加载失败：{error}</div>
-        </aside>
+        </OverlayScroll>
       </div>
     )
   }
 
   return (
     <div className="sidebar-shell">
-      <aside className="sidebar" ref={sidebarRef}>
-        <div className="list-toolbar">
+      <div className="list-toolbar">
         <button
           type="button"
           className="float-pill float-pill--icon list-add-btn"
@@ -422,6 +333,8 @@ export default function VtuberSidebar() {
         </button>
       </div>
 
+      {/* 列表滚动区：覆盖式滚动条（不占宽 + 自动隐藏，UI-MAP F 节标准） */}
+      <OverlayScroll className="sidebar-list">
       {vtubers.length === 0 && (
         <div className="sidebar-tip">暂无 VTuber，请先在后端导入名单（vtubers.csv flag=1）</div>
       )}
@@ -447,16 +360,7 @@ export default function VtuberSidebar() {
         </div>
       )}
 
-      </aside>
-
-      {/* 自绘悬浮滚动条：位于外壳层（不随内容滚动），半透明覆盖在条目上方 */}
-      <div className="sidebar-sb" aria-hidden>
-        <div
-          className={`sidebar-sb-thumb${bar.active ? ' on' : ''}`}
-          style={{ height: bar.h, transform: `translateY(${bar.y}px)` }}
-          {...thumbProps}
-        />
-      </div>
+      </OverlayScroll>
 
       <AddVtuberDialog open={addOpen} onOpenChange={setAddOpen} onAdded={load} />
       <BatchFetchDialog open={batchOpen} onOpenChange={setBatchOpen} />

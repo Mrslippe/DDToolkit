@@ -15,6 +15,16 @@ import { CanvasRenderer } from 'echarts/renderers'
 import type { FanTrendPoint } from '../api/types'
 import { api } from '../api/api'
 import { formatCount } from '../utils/format'
+import {
+  CHART_BORDER,
+  CHART_GRID,
+  CHART_LOSS_GRAY,
+  CHART_MUTED,
+  CHART_PINK,
+  CHART_SHADOW,
+  CHART_TEXT,
+  pinkA,
+} from '../utils/chartTheme'
 
 /* ECharts 按需注册（v6.1）：canvas 渲染 + 线/柱 + 网格/提示/缩放/轴指针 */
 echarts.use([
@@ -44,11 +54,9 @@ interface DailyPoint {
   barFill: string
 }
 
-const PINK = '#fb77a1' // 主粉（--chart-1）：涨粉
-const GRAY = '#a0aec0' // 掉粉灰（浅灰蓝，浅底可见）
-const GRID = 'rgba(210, 216, 222, 0.35)'
-const MUTED = '#5b6c7e'
-const TEXT_MAIN = '#4b5a6b'
+/** 涨=粉 / 掉=灰（柱 itemStyle 直接取自数据点）；色值集中见 utils/chartTheme.ts（tokens 同源） */
+const PINK = CHART_PINK
+const LOSS_GRAY = CHART_LOSS_GRAY
 
 /** 数据容量档位（时间轴轨迹范围）：默认 3 个月，手动按钮切换 */
 const PRESETS = [
@@ -116,14 +124,14 @@ function tooltipFormatter(params: unknown): string {
   const p0 = list[0]
   let html = `<div style="display:flex;flex-direction:column;gap:2px">`
   if (p0 && p0.axisValue != null) {
-    html += `<div style="font-size:12px;color:#5b6c7e">${String(p0.axisValue)}</div>`
+    html += `<div style="font-size:12px;color:${CHART_MUTED}">${String(p0.axisValue)}</div>`
   }
   for (const p of list) {
     if (p.value == null) continue
     if (p.seriesName === '粉丝数') {
-      html += `<div style="color:${TEXT_MAIN}">粉丝数 <b style="color:${PINK}">${formatCount(Number(p.value))} 粉</b></div>`
+      html += `<div style="color:${CHART_TEXT}">粉丝数 <b style="color:${PINK}">${formatCount(Number(p.value))} 粉</b></div>`
     } else {
-      html += `<div style="color:${TEXT_MAIN}">日增粉 <b style="color:${Number(p.value) >= 0 ? PINK : GRAY}">${fmtDelta(Number(p.value))}</b></div>`
+      html += `<div style="color:${CHART_TEXT}">日增粉 <b style="color:${Number(p.value) >= 0 ? PINK : LOSS_GRAY}">${fmtDelta(Number(p.value))}</b></div>`
     }
   }
   return html + `</div>`
@@ -151,10 +159,10 @@ function buildOption(data: DailyPoint[]): EChartsCoreOption {
       type: 'category',
       boundaryGap: true,
       data: data.map((d) => d.date),
-      axisLine: { lineStyle: { color: 'rgba(210, 216, 222, 0.55)' } },
+      axisLine: { lineStyle: { color: CHART_BORDER } },
       axisTick: { show: false },
       axisLabel: {
-        color: MUTED,
+        color: CHART_MUTED,
         fontSize: 11,
         hideOverlap: true,
         formatter: (v: string) => v.slice(5),
@@ -169,11 +177,11 @@ function buildOption(data: DailyPoint[]): EChartsCoreOption {
         axisLine: { show: false },
         axisTick: { show: false },
         axisLabel: {
-          color: MUTED,
+          color: CHART_MUTED,
           fontSize: 11,
           formatter: (v: number) => v.toLocaleString(),
         },
-        splitLine: { lineStyle: { color: GRID } },
+        splitLine: { lineStyle: { color: CHART_GRID } },
       },
       {
         type: 'value',
@@ -182,7 +190,7 @@ function buildOption(data: DailyPoint[]): EChartsCoreOption {
         interval: dDom.interval,
         axisLine: { show: false },
         axisTick: { show: false },
-        axisLabel: { color: MUTED, fontSize: 11 },
+        axisLabel: { color: CHART_MUTED, fontSize: 11 },
         splitLine: { show: false },
       },
     ],
@@ -193,8 +201,8 @@ function buildOption(data: DailyPoint[]): EChartsCoreOption {
       borderWidth: 1,
       borderRadius: 12,
       padding: [8, 12],
-      textStyle: { fontSize: 12.5, color: TEXT_MAIN },
-      extraCssText: 'box-shadow: 0 4px 16px rgba(15,23,42,0.1);',
+      textStyle: { fontSize: 12.5, color: CHART_TEXT },
+      extraCssText: `box-shadow: ${CHART_SHADOW};`,
       axisPointer: {
         type: 'line',
         lineStyle: { color: 'rgba(148, 163, 184, 0.45)', type: 'dashed', width: 1 },
@@ -220,8 +228,8 @@ function buildOption(data: DailyPoint[]): EChartsCoreOption {
             x2: 0,
             y2: 1,
             colorStops: [
-              { offset: 0, color: 'rgba(251, 119, 161, 0.28)' },
-              { offset: 1, color: 'rgba(251, 119, 161, 0.02)' },
+              { offset: 0, color: pinkA(0.28) },
+              { offset: 1, color: pinkA(0.02) },
             ],
           },
         },
@@ -244,31 +252,31 @@ function buildOption(data: DailyPoint[]): EChartsCoreOption {
         endValue: e0,
         height: 24,
         bottom: 6,
-        borderColor: 'rgba(210, 216, 222, 0.55)',
+        borderColor: CHART_BORDER,
         backgroundColor: 'rgba(148, 163, 184, 0.1)',
-        fillerColor: 'rgba(251, 119, 161, 0.16)',
+        fillerColor: pinkA(0.16),
         dataBackground: {
-          lineStyle: { color: 'rgba(251, 119, 161, 0.6)', width: 1.5 },
-          areaStyle: { color: 'rgba(251, 119, 161, 0.12)' },
+          lineStyle: { color: pinkA(0.6), width: 1.5 },
+          areaStyle: { color: pinkA(0.12) },
         },
         selectedDataBackground: {
           lineStyle: { color: PINK, width: 1.5 },
-          areaStyle: { color: 'rgba(251, 119, 161, 0.2)' },
+          areaStyle: { color: pinkA(0.2) },
         },
         handleStyle: {
           color: '#fff',
-          borderColor: 'rgba(251, 119, 161, 0.35)',
+          borderColor: pinkA(0.35),
           borderWidth: 1,
           shadowBlur: 4,
           shadowColor: 'rgba(15, 23, 42, 0.12)',
           shadowOffsetY: 1,
         },
         moveHandleStyle: {
-          color: 'rgba(251, 119, 161, 0.4)',
+          color: pinkA(0.4),
           shadowBlur: 4,
           shadowColor: 'rgba(15, 23, 42, 0.12)',
         },
-        textStyle: { color: MUTED, fontSize: 11 },
+        textStyle: { color: CHART_MUTED, fontSize: 11 },
         brushSelect: false,
       },
       {
@@ -350,7 +358,7 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
         date: d.date,
         fans: d.fans,
         delta,
-        barFill: (delta ?? 0) >= 0 ? PINK : GRAY,
+        barFill: (delta ?? 0) >= 0 ? PINK : LOSS_GRAY,
       })
       prev = d.fans
     }

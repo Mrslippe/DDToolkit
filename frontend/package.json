@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Better DD Toolkit 前端 — VTuber 帖子查看界面（Vite + React + TS + Ant Design）",
+  "description": "Better DD Toolkit 前端 — VTuber 帖子查看界面（Vite + React + TS + shadcn/Radix）",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
@@ -33,7 +33,6 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",
-    "@types/d3-hierarchy": "^3.1.7",
     "@types/node": "^26.2.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",

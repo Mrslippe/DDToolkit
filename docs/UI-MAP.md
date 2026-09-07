@@ -1,16 +1,19 @@
 # UI 设计映射文档（UI-MAP）
 
 > 修改前端界面时，按本文档名称精确指定目标区域/元素。
-> 结构约定：`组件文件 → CSS 类名 → 关键子元素`。设计令牌统一在 `src/styles/tokens.css`。
+> 结构约定：`组件文件 → CSS 类名 → 关键子元素`。设计令牌统一在 `src/styles/tokens.css`（唯一真源，
+> 本文档数值以 tokens.css 与各 css 文件实际声明为准）。
 >
 > 设计语言总纲：**方形极简 + 全平面零阴影**（shadcn `--radius:0rem`、`--shadow-card:none`）。
 > 圆角/阴影豁免收敛为三族（其余一律回方形总纲）：
 > ① 列表工具行「浮片」：斜切白卡（`--pill-radius:3px` + `--pill-skew:-10deg` + `--pill-shadow`）；
 > ② 帖子面板「药丸族」：`type-chip` / `.search-float input` / `post-card-type`/`post-card-duration` 角标 / `stat-badge` / `glow-bar`（均 999px 或渐变软光）；
-> ③ 功能性气泡：`live-tag`（8px）、粉丝 `stat-pill`（10px）、筛选/时间 popover 抽屉阴影（16px 浮置深度）。
+> ③ 功能性气泡：`live-tag`（8px）、粉丝 `stat-pill`（2px 图像底）、筛选/时间 popover 抽屉阴影（16px 浮置深度）。
 >
 > 对比度约定：顶栏「标题/状态/窗口图标」为**品牌装饰性白字**（保持设计稿原稿，logo 类豁免）；
 > 功能性文字与数字一律达标（`--c-text-sub:#5b6c7e` ≥4.5:1、粉丝徽章 `--pill-fill-*` 白字 ≥3:1 大号数字）。
+>
+> **滚动条标准见 F 节**（2026-09-07 定案，全文所有滚动容器一律参照，新滚动容器必须查询该节）。
 
 ---
 
@@ -42,58 +45,65 @@
 
 ### A1. 顶栏 `<TopBar>`（components/TopBar.tsx）
 
-视觉严格按 `docs/design/react-topbar` 导出（Frame411）。整条 `data-tauri-drag-region` 拖拽区。
+> 2026-09 紧凑壳层（TopBar 40px / Rail 50px）定稿后按 CSS 实际值登记；
+> 原始设计稿（Frame411）尺寸已放大 1.725 倍后等比缩回，**以本表为准**。
+> 整条 `data-tauri-drag-region` 拖拽区。
 
 | 名称 | 类名 | 说明 |
 |---|---|---|
 | 顶部栏 | `.topbar` | 底色 `--c-primary`，高 `--topbar-height:40px` |
-| LOGO 占位区 | `.topbar-logo-zone` | **96×69** 横跨全高，flex 居中 |
-| LOGO 盒 | `.topbar-logo` | **44×44 纯白方形**，内部千图小兔体粉色粗体 D 26px（`--font-logo`） |
-| 标题 | `.topbar-title` | 定宽 **219×69**，垂直居中/水平左对齐；字小魂锐艺黑 24px、字距 8px（`--font-title`）；`user-select:none` |
-| 状态行 | `.topbar-status` | 绝对居中；**19px 白字**；`user-select:none` |
-| ├ 抓取中 | `.topbar-status-spinner`（`Frame_41_8.svg` 旋转） | 替换旧黄点脉冲 |
-| ├ 空闲 | i `.topbar-status-dot`（绿 `#52c41a`） | |
+| LOGO 占位区 | `.topbar-logo-zone` | **72×40** 横跨全高，flex 居中 |
+| LOGO 盒 | `.topbar-logo` | **28×28 纯白方形**，内部千图小兔体粉色粗体 D **17px/700**（`--font-logo`） |
+| 标题 | `.topbar-title` | 定宽 **150×40**，垂直居中/水平左对齐；字小魂锐艺黑 **15px、字距 5px**（`--font-title`）；`user-select:none` |
+| 状态行 | `.topbar-status` | 绝对居中；**19px/500 白字** + tabular-nums；`max-width:46%` |
+| ├ 抓取中 | `.topbar-status-spinner`（`Frame_41_8.svg` 16px 旋转） | 替换旧黄点脉冲 |
+| ├ 空闲 | i `.topbar-status-dot`（绿 `#52c41a` 7px） | |
 | └ 成功覆盖态 | `.topbar-status-dot.ok`（粉）| pill-message 覆盖窗，4s 还原 |
 | 弹性空隙 | `.topbar-spacer` | 推到右侧 |
-| 窗口控制组 | `.topbar-window-controls` | **三格 90×69 通栏贴合**，无间距无右缘留白 |
+| 窗口控制组 | `.topbar-window-controls` | **三格 46×40 通栏贴合**，无间距无右缘留白 |
 | ├ 最小化 | `.topbar-win-btn`（lucide `Minus` 30px） | 原生 `minimize()` |
 | ├ 最大化/还原 | `.topbar-win-btn`（`Square`/`Copy` 20px） | `toggleMaximize()`；`onResized→isMaximized` 同步图标；title 切换「最大化/还原」 |
 | └ 关闭 | `.topbar-win-btn.close`（`X` 30px） | busy 时 AlertDialog 二次确认；hover **酒红 `#8e2334`** |
 | 普通钮 hover | `.topbar-win-btn` | **浅粉 `#ffbccb`** |
+| 登录入口 | `.topbar-login-btn`（`LogIn` 16px） | 与窗口钮同规格 46×40；B站会话过期时右上角 8px 红点徽章（`.topbar-login-badge`）；打开 `<LoginDialog>` |
 
 ### A2. 工具图标栏 `<IconRail>`（components/IconRail.tsx）
 
-视觉严格按 `docs/design/react-IconRail` 导出（Frame4172）。
+> 视觉按 `docs/design/react-IconRail` 导出（Frame4172），**50px 紧凑栏**（原 79 栏 ×0.63 取整）。
 
 | 名称 | 类名 | 说明 |
 |---|---|---|
 | 图标栏 | `.icon-rail` | 宽 `--rail-width:50px`，底色 `--c-rail:#4b5a6f` |
 | 顶部组 | `.icon-rail-group`（首）÷ spacer | 功能入口 |
 | 底部组 | `.icon-rail-spacer` + `.icon-rail-group`（尾） | 贴栏底 |
-| 单元格 | `.icon-rail-btn` | **通栏 79×79** 贴合；未选中整钮 `opacity:.6`，hover `.85` |
+| 单元格 | `.icon-rail-btn` | **通栏 50×50** 贴合；未选中整钮 `opacity:.6`，hover `.85` |
 | 选中单元格 | `.icon-rail-btn.active` | **实底 `--c-rail-active-bg:#647489` + 全亮** |
-| 图标 | 顶部组按序：`FileText`(22×28)/`User`(29×31)/`CalendarDays`(31×31)；底部：`RotateCw`(30×30)/`Settings`(35×35) | 视觉尺寸对应设计稿实测 |
+| 图标 | 顶部组按序：`FileText`(14×18)/`User`(18×20)/`CalendarDays`(20×20)；底部：`RotateCw`(19×19)/`Settings`(22×22) | 视觉尺寸对应设计稿 ×0.63 取整 |
 
-接线语义：**仅「帖子」`FileText` 接线**（`navigate('/')`，路由高亮恒亮）；其余四枚占位（tooltip「· 开发中」、`opacity` 走统一未选中语言）。
+接线语义：**仅「帖子」`FileText` 接线**（`navigate('/')` + 路由高亮：`/` 或 `/vtubers/:id` 均点亮）；其余四枚占位（tooltip「· 开发中」、`opacity` 走统一未选中语言）。
 
 ### A3. VTuber 左栏 `<VtuberSidebar>`（components/VtuberSidebar.tsx）
 
 视觉按 `docs/design/react-VtuberSidebar`（Frame41109）与口播定案。
+**2026-09-07 滚动条迁移完成**：外壳改为 flex column（工具行吸顶 + OverlayScroll 列表滚动区），
+旧自绘 `.sidebar-sb` 滚动条退役（见 F3）。
 
 | 名称 | 类名 | 说明 |
 |---|---|---|
-| 外壳 | `.sidebar-shell` | 宽 `--sidebar-width:492px`，`position:relative`（承载悬浮滚动条） |
-| 滚动容器 | `.sidebar` | `overflow-y:auto` + **原生滚动条隐藏**（`scrollbar-width:none` + webkit `display:none`），底 `--c-bg-list:#fffbfb` |
+| 外壳 | `.sidebar-shell` | 宽 `--sidebar-width:492px`，**flex column**；承载 `--c-bg-list` 底 + 右缘发丝边 |
+| 工具行 | `.list-toolbar` | 吸顶行（高 51px，padding `10px 32px`，居中，`z-index:5`），**不随列表滚动** |
+| 列表滚动区 | `<OverlayScroll className="sidebar-list">` | **覆盖式滚动条**（F 节标准）；滚动体 `.sidebar-list .os-scroll` flex column |
+| 原生条隐藏 | — | `.sidebar`/`.sidebar-sb*` 规则已随迁移删除 |
 
 **工具行**
 | 名称 | 类名 | 说明 |
 |---|---|---|
-| 工具行 | `.list-toolbar` | 高 51px，padding `10px 32px`，`justify-content:center`，「+」在最左，四件同容器居中 |
-| 添加钮 | `.list-float .list-add-btn`（`Plus` 16px，25×25 浮片） | 打开 AddVtuberDialog |
+| 工具行 | `.list-toolbar` | 高 51px，padding `10px 32px`，`justify-content:center`，四件同容器居中 |
+| 添加钮 | `.list-add-btn`（`Plus` 16px，**50×25** 浮片） | 打开 AddVtuberDialog |
 | 搜索框 | `.list-search-wrap` 内 `.list-search` | **240×25 浮片**，放大镜 10×10 居左、placeholder 12px；`/` 键聚焦；focus 粉内描边 |
 
 | 直播过滤 | shadcn `SelectTrigger.input list-filter-btn [&>svg]:size-2.5` | **89×25 浮片**；选项 全部/直播中/未直播（在线实时过滤） |
-| 拉取键 | `.list-float .list-pull-btn`（`Download` 16px，44×25 浮片） | 打开 BatchFetchDialog |
+| 拉取键 | `.list-pull-btn`（`Download` 16px，**44×25** 浮片） | 打开 BatchFetchDialog |
 
 **列表体**
 | 名称 | 类名 | 说明 |
@@ -102,16 +112,10 @@
 | 选中条 | `.vtuber-item.active::before` | **左缘 3px 粉竖条 `--sel-bar` + 浅粉底 `--sel-bg`** |
 | 头像 | shadcn Avatar `size-[58px]` | 圆形，`resolveAsset(avatar_path) ?? avatar_url` |
 | 名字 | `.vtuber-name` | **18px 纯黑 500**，`user-select:none` |
-| 直播点/标签 | `.live-dot` / `.live-label` | 红 `--c-live`，仅直播中 |
+| 直播点/标签 | `.live-badge` / `.live-dot` / `.live-label` | 紧凑直播徽标（16px 高、6px 点 + 10px 字、红 `--c-live`），仅直播中 |
 | 签名 | `.vtuber-sign` | **13px 灰（13px 行高盒）**，`user-select:none` |
-| 企划槽 | `.vtuber-emblem` | 右侧 **54px 全高**，紧贴右缘；暂空置（2026-09-05：后续接线档案卡「企划」值） |
-| 提示态 | `.sidebar-tip` | 加载失败 / 空池 / 无匹配文案 |
-
-**自绘悬浮滚动条**
-| 名称 | 类名 | 说明 |
-|---|---|---|
-| 轨道 | `.sidebar-sb` | 位于外壳（不随内容滚动）；`top:55px/bottom:4px/right:2px`，宽 5px |
-| 拇指 | `.sidebar-sb-thumb(.on)` | 蓝灰半透明；滚动/拖拽浮现、**静止 900ms 渐隐**；可 pointer 拖拽；`flex-shrink` 无关——高度由 `useOverlayScrollbar` 计算（含内容比例、贴顶贴底校准） |
+| 企划槽 | `.vtuber-emblem` | 右侧 **54px 全高**，紧贴右缘；暂空置（后续接线档案卡「企划」值） |
+| 提示态 | `.sidebar-tip` | 加载失败 / 空池 / 无匹配文案（在滚动区内渲染） |
 
 ---
 
@@ -126,70 +130,79 @@
 | 标题/描述 | `.empty-state-title/.desc` | 「未选择 VTuber」灰字提示 |
 
 ### B1. 帖子面板 `<PostsPage>`（pages/PostsPage.tsx，styles/posts.css）
-路由 `/vtubers/:id`。**三视图状态机**：`view: 'cards'|'list'|'archive'`（默认 `cards`），光条切换，数据共享不重取。视觉按 `docs/design/react-PostsPage`（Frame41301）。
+路由 `/vtubers/:id`。**四视图状态机**：`view: 'cards'|'list'|'archive'|'profile'`（默认 `cards`），光条切换，数据共享不重取。视觉按 `docs/design/react-PostsPage`（Frame41301）。
 
 | 名称 | 类名 | 说明 |
 |---|---|---|
 | 面板 | `.posts-panel` | `height:100%`，flex column，`overflow:hidden`（裁剪模糊边界） |
 | 背景层 | `.hero-backdrop(.custom)` | 常驻：**自定义背景优先**（`background_path` → `/static/custom_bg/...`，`.custom` 全图清晰 opacity 1），否则头像铺底（0.18+纱罩）；纱罩 ::after 保可读；`key=src` 换装淡入 |
-| 工具条 | `.view-toolbar` | 贴面板顶（`padding:0 16px`，**上方零缝隙**），仅视图光条；卡片页右上角挂 `.bg-tools`（ImagePlus 上传/更换浮片，**默认隐藏**，悬停工具行浮现、移出 900ms 渐隐；无清除钮） |
+| 工具条 | `.view-toolbar` | **高 66px、`padding:0`、贴面板顶居中**，仅视图光条；卡片页右上角挂 `.bg-tools`（ImagePlus 上传/更换浮片，**默认隐藏**，悬停工具行浮现、移出 900ms 渐隐；无清除钮） |
 
 **光条视图切换**
 | 名称 | 类名 | 说明 |
 |---|---|---|
-| 光条 | `.glow-bar` | 443px 白色渐变(`rgba(255,255,255,.68)` 中心)胶囊 |
+| 光条 | `.glow-bar` | 443px 白色渐变(`rgba(255,255,255,.68)` 中心)矩形胶囊 |
 | 视图钮 | `.view-btn.on/.off` | 五枚：**档案(`BarChart3`)→`setView('archive')`** / **卡片(`LayoutGrid`)→`setView('cards')`** / **列表(`AlignJustify`)→`setView('list')`** / **档案卡(`Fingerprint`)→`setView('profile')`**（P7 追加）/ 邮件(`Mail`)·占位；on=.8 off=.4，激活跟随 `view` |
 
 **cards 视图（展示页 / 默认）**
 | 名称 | 类名 | 说明 |
 |---|---|---|
-| 滚动层 | `.hero-scroll` | `overflow-y:auto`，padding `16px 70px 134px`，居中 |
-| Hero | `.hero` | column 居中，max-width 869px |
-| 头像 | shadcn Avatar `.hero-avatar` | **178×178**，`filter: drop-shadow(0 1px 8px rgba(0,0,0,.98))`；取 `vtuber.avatar`（VTuber 本体，**稳定，不随账号切换变化**），回退所选账号头像 |
-| 直播徽标 | `.live-tag`（内 `i.live-dot` 6px） | 红边红底胶囊 + `live_title`（14px/字距3px）；数据源=本页 `vtuber` 的 bilibili 账号（`account-progress` 增量合并，与左栏同源） |
-| 名字 | `.hero-name` | **57px 黑 + 投影(0 2 4 黑25%)** |
-| 签名 | `.hero-sign` | **25px** `rgba(94,94,94,.76)` 600 字距3px；走 **VTuber 整体事实**（B站优先账号，无 B站取首个），不跟随 list 所选账号（2026-09-05 视图隔离） |
-| 平台药丸行 | `.stat-pills` | 数据驱动：每账号一枚 |
-| ├ 药丸 | `.stat-pill.pink/.coral`（奇偶交替 `#fb77a1/#fc7079`） | **191×37**，r10，白边94% |
-| ├ 平台LOGO占位 | `.pill-logo` | 28×28 半透明白块 + 平台首字母（后续换图） |
-| └ 数值 | `.pill-value` | **26px 白 600**，`formatCount(followers_count)` |
-| 饰条 | `.hero-divider` | 394px 渐变细线 |
-| 企划行 | `.faction-badge`（内 `.pill-logo`「企」） | `vtuber.faction` 非空才渲染；外链徽标待数据模型 |
+| 滚动层 | `.hero-scroll` | `flex:1;min-height:0;overflow-y:auto` + column 居中，gap 20，padding `0 0 134px`（底部留白 134px；设计稿 70px 侧距被无收缩子元素溢出抵消，故无左右 padding） |
+| Hero | `.hero` | column 居中，`width:100%`，padding `23px 15px 0`，gap 10 |
+| 头像 | shadcn Avatar `.hero-avatar` | **179×179**，`filter: drop-shadow(0 0 2px rgba(0,0,0,.98))`；取 `vtuber.avatar`（VTuber 本体，**稳定，不随账号切换变化**），回退所选账号头像 |
+| 直播徽标 | `.live-tag`（内 `i.live-dot` 6px） | **23px 高、8px 圆角**、红边红底胶囊（`live`）/灰边灰字（`off`）+ `live_title`（14px/字距3px）；数据源=本页 `vtuber` 的 bilibili 账号（`account-progress` 增量合并，与左栏同源） |
+| 名字 | `.hero-name` | **57px/500 黑 + 投影(0 2px 4px 黑25%)**；hero-name-block 高 110 |
+| 签名 | `.hero-sign` | **25px/600** `rgba(94,94,94,.76)` 字距3px（30px 行高盒）；走 **VTuber 整体事实**（B站优先账号，无 B站取首个），不跟随 list 所选账号（2026-09-05 视图隔离） |
+| 平台药丸行 | `.stat-sets`（key=vtuber.id 触发重播） | 集内 gap10、集间 gap10，每组至多 3 枚（`pillSets` 每 3 枚切分） |
+| ├ 药丸 | `.stat-pill.image/.pink/.coral` | **191×37**，**2px 圆角** + `1px 2px 4px rgba(15,23,42,.12)` 阴影；**图像底**（`docs/design/pills` → `src/assets/pills/`，bilibili/weibo 全不透明同规格，`100% 100%` 铺满），未知平台奇偶交替 `--pill-fill-pink #e35d8b` / `--pill-fill-coral #e05261`（白字 26px 对比 ≥3.4:1） |
+| ├ 平台LOGO占位 | `.pill-logo` | 28×28、**6px 圆角**、半透明白块 + 平台首字母（后续换图） |
+| └ 数值 | `.pill-value` | **26px/600 白**，**右对齐**（`.stat-pill justify-content:flex-end`，右 padding 12px），数字 ≤4 位（`formatCount` 收紧）+ **`text-shadow 0 1px 2px rgba(0,0,0,.35)`** 保图像底可读 |
+| 饰条 | `.hero-divider` | 394×24 设计稿 SVG |
+| 企划行 | `.faction-badge`（内 `.pill-logo`「企」） | 37px 高、2px 圆角、同款阴影、**#fc7079 实底** + 20px/600 白字；`vtuber.faction` 非空才渲染；外链徽标待数据模型 |
 
 **list 视图（帖子列表页）**
 | 名称 | 类名 | 说明 |
 |---|---|---|
 | 筛选条 | `.chips-bar`(+`.chips-bar-inner`) | **固定顶不随帖子流滚动**（提取自滚动区，天然分隔操作钮行与滚动区），`max-width:900px` 与列表同轴居中，padding `10px 16px 8px`；`.type-chips` 出血补丁保留 |
-| 滚动层 | `.list-scroll` | `flex:1;min-height:0;overflow-y:auto`（view-body 改 flex column 后精确占剩余空间），padding `8px 16px 24px`（顶部 8px 防卡片网格阴影被 overflow-y 在 padding 缘切断） |
+| 滚动层 | `<OverlayScroll className="list-scroll">` | **根** = `flex:1;min-height:0`（滚动体 `.list-scroll .os-scroll` 接管布局：列布局/居中/gap 14/padding `8px 16px 24px`——顶部 8px 防卡片网格阴影被裁切） |
 | 内容箍 | `.list-inner` | `max-width:900px` 居中，column gap14 |
 | 操作按钮组 | `.header-actions` | **仅列表视图**渲染（卡片页纯展示无此行）：行首账号切换器（`margin-right:auto`）+ 右侧可收起浮片组——收起态 `[`.actions-toggle`][更新动态`.on`]`；展开态向左滑出 抓取账号/抓取帖子/添加账号/解除订阅（红），`actions-toggle` 被挤至最左、图标旋转 180° 变收起钮；`.actions-extra` 用 max-width 0→480px + opacity + translateX 动画（320ms cubic-bezier），`margin-left:-8px` 抵消父 gap |
 | 筛选行 | `.type-chips-row` | chips 左 + 搜索/时间浮片右；`nowrap`（工具区永不掉行） |
-| 类型chips | `.type-chip(.active)` | **分组**：投稿=video+video_dynamic、图文=image+text（key 逗号串直传后端 `in_` 过滤），转发/专栏/音乐/直播单型；计数 `stats.by_type` 求和、零组不显示；超宽时 `.type-chips` 行内横滚兜底 |
-| 搜索/时间 | `.chips-tools`(`flex-shrink:0`) | 搜索浮片 300ms 防抖 + 时间范围下拉（date_from/to，止=次日零点排他） |
+| 类型chips | `.type-chip(.active)` | **分组**：投稿=video+video_dynamic、图文=image+text（key 逗号串直传后端 `in_` 过滤），转发/专栏/音乐/直播单型；计数 `stats.by_type` 求和、零组不显示；超宽时 `.type-chips` 行内横滚兜底（⚠️ 横向滚动条为全局 webkit 样式，见 F 节） |
+| 搜索/时间 | `.chips-tools`(`flex-shrink:0`) | 搜索浮片 **190×30**（300ms 防抖）+ 时间范围下拉（date_from/to，止=次日零点排他） |
+| 已删筛选 | `.del-btn`（Ghost + 计数） | 独立 toggle（与归档/类型正交），激活走 `.float-pill.on` 强调色 |
 | 帖子流 | `.post-grid(.is-refetching)` | 重取时旧内容降透明禁点击，无整屏闪动 |
 | 卡片 | `<PostCard>` `article.post-card` | **浮片化特例**：白底、2px 圆角 + `var(--pill-shadow)`、去发丝边；hover 上浮 2px + 阴影加深 + **标题变色 `--c-accent`** |
 | ├ 封面 | `.post-card-cover` 220×16:10；SmartImage 三态兜底 | 有封面=图；**无封面（纯文字）= `.post-card-cover-paper` 米白纸纹斜条底 + 居中大标题（`.paper-title` 4 行截断）**；类型角标/时长角标浮于其上 |
 | ├ 标题/摘要 | `.post-card-title/.summary` | 两行截断 |
 | └ 底行 | `.post-card-footer`：徽章 `.stat-badge`×n + 日期 | 播/赞/评/转 |
-| 无限滚动 | `.load-sentinel` + IntersectionObserver | **不分页懒加载**：哨兵 1px（root=`list-scroll`，rootMargin 600px 预载）命中且 `hasMore=posts.length<total` 时 `page+1` 追加；`page===1` 走替换（整表 + is-refetching 变暗 + grid key 按替换型指纹重挂动画），`page>1` 走追加（按 id 去重拼接、不动 key 不重挂旧卡片）；追加失败 `loadMoreError` 尾条手动重试；到底显示 `.load-end`「已经到底啦」|
+| 无限滚动 | `.load-sentinel` + IntersectionObserver | **不分页懒加载**：哨兵 1px（root=`list-scroll`，rootMargin 600px 预载）命中且 `hasMore=posts.length<total` 时 `page+1` 追加；`page===1` 走替换（整表 + is-refetching 变暗 + grid key 按替换型指纹重挂动画），`page>1` 走追加（按 id 去重拼接、不动 key 不重挂旧卡片）；追加失败 `loadMoreError` 尾条手动重试；到底显示 `.load-end`「已经到底啦」 |
+| 回顶浮钮 | `.back-to-top` | **44×44 圆形白卡**（right 18 / bottom 18，`--pill-shadow`），滚动 >400px 浮现（`.on`），点击平滑回顶；hover 图标变粉 |
 | 占位/错误 | `.posts-placeholder` / Alert(destructive) | 加载 Spin / 空列表 / 失败 |
 
-**archive 视图（档案 / v0.6.0 P5 → v0.7.0 P7 布局改版）**
+**archive 视图（档案 / v0.9.x 重建后形态：仅两张 870 定宽卡片纵向排列）**
+> 🔴 **2026-09-06 重建已删**：`.archive-grid-top` 双列布局、**重要日期卡**（UpcomingEventsCard / `.event-*`）与 profile 视图里的旧档案卡布局全部退役——当前 archive = 直播日历卡 + 粉丝趋势卡（均 870px 定宽、恒高、卡片自治，不共用列表操作钮行）。
+> 后端 `GET /vtuber/{id}/events`、`future-reservations` 端点仍在，前端 `api.listVtuberEvents/createVtuberEvent/deleteVtuberEvent/futureReservations` 为**未接线封装**（死代码，重做时可用）。
+
 | 名称 | 类名 | 说明 |
 |---|---|---|
-| 视图容器 | `.archive-view` + `.archive-grid-top` | **v0.7.0 布局**：上行双列（重要日期窄 4fr + 直播日历宽 7fr，<900px 回落单列），下行全宽（趋势→档案卡）；`overflow-y:auto`，padding `16px 20px 24px`；**卡片自治**：各卡内置账号切换器与数据拉取（不共用列表操作钮行） |
-| 账号切换器 | `<AccountPicker>` | 卡片内部紧凑 Select（平台·昵称），单账号不渲染；默认=B站账号，切 V 保留同 id 选中——**2026-09-05 视图账号隔离**：不再接收页面级 selectedAccount（list 切账号不联动 archive 三卡）；重要日期卡为 vtuber 级**不挂**切换器 |
-| 重要日期卡 | `<UpcomingEventsCard>` `.event-*` | **P7 新增**：纪念日（生日 MM-DD / 出道日 YYYY-MM-DD 年循环，行内编辑 `PUT /vtuber/{id}`，出道显示「N 周年」）+ 手动活动（添加/删除 `POST/DELETE /vtuber/{id}/events`）+ 自动预约（`GET /vtuber/{id}/future-reservations`，reservation 帖解析，只读）；行格式=标题+日期+剩余天数胶囊（≤3 天警示色）；空态引导添加 |
-| 趋势曲线 | `<FanTrendChart>`（shadcn Chart/recharts 3.8，`components/ui/chart.tsx` 为 registry new-york-v4 版） | **P7 增强**：① 模式分段切换（趋势/每日增减）；② 趋势模式=双序列（self 实线主粉 / zeroroku 虚线灰蓝）；③ 每日增减=按天 diff 柱状图（正增主粉/负增警示色，逐柱 Cell）；④ Brush 时间轴缩略图（可拖拽选区缩放 + 重置缩放钮，模式切换重置不残留）；X=日期（月刻度 48px 间隔）、Y=`formatCount` 万缩写；Tooltip=日期+数值+图例；数据 `GET /account/{id}/fan-trend`（服务端按天分桶） |
-| 直播日历 | `<LiveCalendar>` `.live-calendar*` | **v0.9.0 按设计稿（docs/design/react-LiveCalendar Frame101）重构**：月份胶囊导航（`2026年09月` + 左右箭头）+ 统计行（共 N 场 + 类型计数）+ Mon.~Sun. 英文表头 + 七列月历（含上/下月补位格）；格子 58px/6px 圆角，类型色系整格浅底+同色系文字（游戏蓝/观影粉/投稿绿/杂谈黄 + 扩展歌回红/电台紫/联动青/健身橙/特殊红边），过去无场次=灰半透明「休息」、今天/未来=灰「待定」、**今天红描边**；格内只显示首场（`8 PM` + 标题）+`+N 场` 角标，其余场次 hover 浮层（`.live-day-pop` 内嵌格子 CSS hover 触发，弹窗层规格）展示；类型推断 `utils/liveType.ts`（9 类关键词） |
-| 档案卡 | `<ProfileCard>` `.profile-card*` | **企划｜公会 两列**（2026-09-05 定稿：阵营=企划=公会——企划=Select 编辑，选项自动建议第三方索引 `group_name`，一键「采纳」写 `faction`，未来接侧栏企划槽；公会=只读占位「未收录」，先放着）+ 生日/出道日/房间号（跟随卡内所选账号）、设定集（Collapsible 折叠）；数据 `GET /externals/vtubers/by-uid` |
-| **档案卡视图（P7 追加）** | `<ProfileView>` `.archive-view` | 独立 `profile` 视图（Fingerprint 钮），专门展示详细设定：档案卡（上方，同 `ProfileCard` 自治账号切换）+ **账号一览卡**（`.profile-account-*`：平台标/昵称/粉丝/房间号/直播中，全部账号） |
+| 视图容器 | `<OverlayScroll className="archive-view">` | **根** = `flex:1;min-height:0`；滚动体 `.archive-view .os-scroll` = column 居中 gap 14 padding `16px 20px 24px` |
+| 直播日历 | `<LiveCalendar>` `.live-calendar` | **卡 870×631 · 4px 圆角 · `--pill-shadow`**（定宽上限 870：拉宽不变；恒高 631、不参与 column 压缩）。结构：标题行（`直播日历` 16.5/600 + 空月 note）→ 导航行（月 nav 浮片三连 + 当月类型统计胶囊）→ 星期表头 → 6 行 ×7 列月历。详见 B3 |
+| 粉丝趋势 | `<FanTrendChart>` `.fan-chart` | **卡 870×460 · 4px 圆角 · `--pill-shadow`**；标题 16.5/600 同 `lc-title` 规格。**ECharts 6.1 架构**（canvas 全程自绘，React 只负责卡片壳与头部控制）。详见 B4 |
+
+**profile 视图（P7 追加：档案卡详情视图）**
+| 名称 | 类名 | 说明 |
+|---|---|---|
+| 视图容器 | `<ProfileView>` `<OverlayScroll className="archive-view">` | 同一 `.archive-view` 覆盖式滚动容器（滚动体布局同上） |
+| 档案卡段 | `.archive-section`（含 `.archive-section-head`：标题 `档案` + note（第三方索引 N 项）+ `<AccountPicker>`） | 定宽契约：`max-width:960px;min-width:480px;height:460px;flex-shrink:0`，4px 圆角 + `--pill-shadow`；卡内滚动 = `<OverlayScroll className="archive-section-scroll">`（滚动体 padding `0 14px 6px`） |
+| 账号抽屉段 | 同上骨架（标题 `账号` + note N 个账号） | `.profile-account-list` 全部平台账号：平台标（B站/微博）/昵称/粉丝/房间号/直播中徽章（红描边胶囊） |
+| 内部档案卡 | `<ProfileCard>` `.profile-card*` | **企划｜公会 两列**（企划=Select 编辑，选项自动建议第三方索引 `group_name`，一键「采纳」写 `faction`；公会=只读占位「未收录」）+ 生日/出道日/房间号（跟随卡内所选账号，lucide 图标行）+ 设定集（Collapsible 折叠，`.profile-setting` 200px 内滚动） |
 
 **联动刷新（跨组件事件）**
 | 事件 | 触发方 | 消费方 |
 |---|---|---|
-| `ddtoolkit:fetch-idle` | TopBar 轮询 running→idle 边沿 | VtuberSidebar 刷列表；PostsPage `refreshTick`（重拉 vtuber 本体+统计+帖子；`selectedAccount` 按 uid 取新引用）； |
-| `ddtoolkit:account-progress` | TopBar 快照增量 | VtuberSidebar `mergeSnapshots` 就地合并（`utils/accountSnapshots.ts` 共享实现） |
+| `ddtoolkit:fetch-idle` | TopBar 轮询 running→idle 边沿 | VtuberSidebar 刷列表；PostsPage `refreshTick`（重拉 vtuber 本体+统计+帖子；`selectedAccount` 按 uid 取新引用） |
+| `ddtoolkit:account-progress` | TopBar 快照增量（**内容 diff 而非长度增量**，2026-09-07 修复环形上限/清空丢事件） | VtuberSidebar `mergeSnapshots` 就地合并（`utils/accountSnapshots.ts` 共享实现） |
 | `ddtoolkit:data-changed` | 添加/解除订阅成功 | VtuberSidebar 刷列表 |
 | `ddtoolkit:kick-poll` | 各操作按钮 | TopBar 立即轮询一次（防单V抓取快速完成漏边沿） |
 | `ddtoolkit:pill-message` | 抓取/更新完成 | TopBar 状态胶囊覆盖显示 4s |
@@ -216,6 +229,47 @@ border-white/25 + bg-black/60 + backdrop-blur，左右键同效，单图隐藏�
 `image-viewer-closing` 类驱动 200ms 微缩淡出+遮罩渐隐，到点才卸载；
 reduced-motion 禁用）。图片加载同一混合策略（直连→代理→失败占位）。
 
+### B3. 直播场次详情弹窗（`<LiveCalendar>` 内部，2026-09-07 用户定案）
+
+点击**日期格**打开（hover 浮层保持纯信息展示不动）——portal 到 body 的独立居中弹窗。
+
+| 区域 | 类名 | 说明 |
+|---|---|---|
+| 遮罩 | `.lc-dlg-backdrop` | fixed inset 0、z-60、`rgba(15,23,42,.32)`、淡入 0.18s；点击空白（target===currentTarget）关闭；打开期间锁 body 滚动 |
+| 面板根 | `<OverlayScroll className="lc-dlg" role="dialog" aria-modal>` | **720px**（`max-width calc(100vw-48px)`）、`max-height min(680px, calc(100vh-64px))`、**14px 圆角**、白底 + 发丝边 `rgba(15,23,42,.06)` + `--shadow-dialog`；入场 pop 0.2s（translateY 8 + scale .98）；滚动体 `.lc-dlg .os-scroll`（column gap 12 / padding `16px 18px 18px` / overscroll-behavior contain） |
+| 头部 | `.lc-dlg-head` | 左=**分类胶囊按钮**（点击弹全部分类下拉）+ 标题（15px/600 单行截断）+ 副行 `日期 HH:MM`（11.5px 次级）+「已校正」红字标（`category_from==='override'`）；右=关闭钮 26×26 r8 |
+| 分类下拉 | `.lc-dlg-cat-pop` | 208px 宽、max-h 340、r12、`--shadow-dialog`；列表 = **自动（跟随推断）** 灰胶囊 + 9 类彩色胶囊（26px 高 r46，`.on` 内描边 2px 深灰）；选后 PUT/DELETE override 并重拉场次+详情；点外部关闭 |
+| 多场切换 | `.lc-dlg-tabs` | 当日多场时显示：HH:MM 胶囊（r106），激活 = `--c-accent` 底白字 |
+| 两栏主体 | `.lc-dlg-main` | grid `264px minmax(0,1fr)` gap 12 |
+| 左封面 | `.lc-dlg-cover` | **264px · aspect-ratio 4/3**（danmakus 封面 720×540=4:3 与 704×396=16:9 混存，4:3 容器 + `object-fit:contain` 双全）；r10 截角；`CoverImage` 三态：直连 CDN（normalizeImageUrl + `referrerPolicy=no-referrer`——裸 img 漏此曾 403）→ `/img-proxy` 后端代理 → 渐变底 + 首字大号占位（64px 粉 55% 透明）；左下状态徽章（已结束=黑玻璃 / 直播中=粉 `rgba(251,119,161,.92)`，r106） |
+| 右直播信息 | `.lc-dlg-sec` + `.lc-dlg-rows` | r10 `#faf7f8` 区卡；行式 label(58px 次级) 左 · value 右；字段：时间（HH:MM–HH:MM + 时长）/ 分区 / 收益 ¥ / 峰值在线 / 弹幕数 / **A 组指标**（观看/点赞/打赏人数/互动/在线排名，来自 danmakus v2 live）/ 段数（>1 显示「N 段合并（中断续播）」）/ 数据源（danmakus+self+feed 组合） |
+| 弹幕信息 | `.lc-dlg-sec--full` | 满宽区卡：弹幕总量（大数 600）+ 完整性提示（`metrics.is_full===false` 时「弹幕数据未全量（部分录制源）」）+ **加权 Voronoi 拼贴词云**（下方 `VoronoiCloud`）；无数据=「暂无弹幕数据（danmakus 未收录该场次或拉取失败）」 |
+| └ 词云 | `.lc-dlg-cloud` + svg | 高 **210px**；`layoutPowerCloud(words, w, h)` = **Balzer 2005 加权 Voronoi（power diagram）**：线性半平面裁剪 + 站点弛豫至 power 单元质心 + λ += β(目标面积−当前面积)（β=0.5，120 轮上限，maxRel<0.1 早停）——**面积 ∝ 词频（数学保证），无边线（细胞共边）**；初始站点极坐标（hero=中心，黄金角），种子 mulberry32(20260907) 布局确定；**零外部依赖**（react-wordcloud/d3-delaunay 均已退役） |
+| └ 词云配色 | `LC_CLOUD_COLORS` | 10 色浅粉系（#ffc9c4/#a5e6ff/#dccff7/#bee9ec/#ffd5b8/#fff2a0/#fda5ff/#b2f3c0/#ffdfe8/#d8e8ff），词字深色（`--c-text-main`/`--c-text-sub`），`stroke=--c-bg-card` 2px 分隔；hover：当前格 fillOpacity 1 + 文字 700，其余格 0.4 + 文字 0.25；**hover 提示 = 固定定位黑玻璃胶囊「词 · N 次」**（跟随鼠标，`.lc-dlg-cloud-tip`） |
+| └ 词字显示 | — | `fs = max(8.5, min(hero?34:26, r*0.75, r*2.2/len))`；`r>10.5 && len<=6 && fs>=8.5` 才显示（放宽后「哈哈哈哈」不再被吞） |
+| └ 数据 | `detail.data.danmaku.top_words` | 后端 `LiveDanmakuInfo.top_words`（top40 带次数）；`slice(0,40)`；无词=「暂无热词数据」 |
+| 直播动态 | `.lc-dlg-evts` | 满宽区卡：**B 组事件**（type 7=直播中止·灰点 / 8=直播继续·粉点，`send_date` HH:MM）+ **A 组在线峰值高光**（`metrics.peaks` 前 3，「N 人在线」，金点）；空=「暂无动态数据」 |
+| 内容分析 | `.lc-dlg-sec--full` | 预留区块：`analysis.summary` 有值显示，否则「接口已预留（内容分析服务接入后展示）」——**接口字段已就位，服务未接入** |
+
+### B4. 粉丝趋势卡 `<FanTrendChart>`（components/FanTrendChart.tsx）
+
+| 名称 | 类名 | 说明 |
+|---|---|---|
+| 卡 | `.fan-chart` | 870×460 · 4px 圆角 · `--pill-shadow` · padding `17px 16px 10px` · gap 8；恒高不参与压缩 |
+| 标题 | `.fc-title` | 16.5/600（与 lc-title/archive-section-title 同规格） |
+| 概览行 | `.fan-chart-head` | 左=**1d/7d/30d 涨粉**（`fmtDelta`：+1,234 / −56，数值粉 `--c-primary-deep`）；右 = 容量档位 + 重置窗口按钮 |
+| 档位 | `.fan-presets` / `.fan-preset.on` | **3个月/6个月/1年/全部** 四档（`PRESETS`：90/180/365/∞ 天）；描边 999px 组 + 激活粉底白字；切换重建 option 并回默认窗口（30 天） |
+| 重置 | `.fan-chart-reset` | 非默认窗口才显示：`--sel-bg` 底 + 粉字 r999（CalendarRange 图标）；dispatch dataZoom 回尾部 30 天 |
+| 图区 | `.fan-chart-body` / `.fan-chart-canvas` | ECharts canvas 铺满；loading/error/empty 态复用 `.lc-state` |
+
+**图（全 ECharts option 内配置，React 不进渲染链路）**
+- 双轴：左=**粉丝数**（`smooth` line 主粉 `#fb77a1` 2px + 线性渐变面积 0.28→0.02；`connectNulls`）；右=**日增粉**（bar，正=粉/负=灰蓝 `#a0aec0`，柱宽 55%，2px 顶圆角；按日 diff，首日/断档 null）；
+- **dataZoom**：slider（底部 24px 全量迷你时间轴：粉系把手/选中区/数据区）+ inside（图表区滚轮缩放、按住拖动平移——ECharts 原生增量渲染，跟手零 React 渲染）；
+- **Y 轴域随窗口**：datazoom 事件 250ms 节流跟随 + 260ms 空闲精确；`fanDomain`（±3% 余量、50 整、interval 整倍）/ `deltaDomain`（对称 ±cap）——修复刻度 200/300 混排；
+- 入场动画 320ms / 更新 150ms（`animationThreshold:2000` 防大点卡顿）；tooltip = 白卡 r12 + 粉系文字（`box-shadow` 同 `--shadow-dialog`），xs: 日期 + 粉丝数/日增粉两行；
+- 数据：`GET /account/{id}/fan-trend`（服务端按天分桶）→ `daily`（Map 去重每日后值 + 逐日差分）→ 档位切片。
+> ⚠️ **recharts/shadcn Chart 已退役**（v0.6.0 用 recharts Brush → 2026-09-07 重写为 ECharts 6.1 按需注册：LineChart/BarChart/Grid/Tooltip/AxisPointer/DataZoom×2/CanvasRenderer）；`components/ui/chart.tsx` 与 `--chart-1..5` 令牌已随退役删除，**图表色值统一集中在 `utils/chartTheme.ts`**（PINK=`--c-primary-deep`、MUTED=`--c-text-sub`、GRID=`--c-border` 派生；改动配色同步 tokens.css / C 节）。
+
 ---
 
 ## C. 设计令牌（styles/tokens.css 与 index.css 同步）
@@ -227,10 +281,12 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 | `--c-bg-page` / `--c-bg-card` / `--c-bg-list` | #fffbfb / #ffffff / #fffbfb | 页面/卡片/列表底 |
 | `--c-rail` / `--c-rail-active-bg` | #4b5a6f / #647489 | 图标栏底 / 选中格实底 |
 | `--c-border` | rgba(210,216,222,.55) | 发丝描边 |
-| `--c-text-main` / `--c-text-sub` / `--c-text-on-primary` | #4b5a6b / #647489 / #ffffff | 正文/次级/主色上文字 |
+| `--c-text-main` / `--c-text-sub` / `--c-text-on-primary` | #4b5a6b / #5b6c7e / #ffffff | 正文/次级/主色上文字 |
 | `--sel-bar` / `--sel-bg` / `--sel-bg-hover` | #fb77a1 / #fff0f3 / #fff7f9 | 列表选中竖条/底/hover |
 | `--radius-card` / `--radius-sm` | 0 / 0 | 方形化 |
 | `--shadow-card` | none | 全平面 |
+| `--radius-dialog` / `--shadow-dialog` | 12px / 0 4px 16px rgba(15,23,42,.1) | **弹窗层**（二级界面：浮层/弹窗/查看器遮罩，v0.6.1 用户参考风格） |
+| `--pill-fill-pink` / `--pill-fill-coral` | #e35d8b / #e05261 | 粉丝徽章色底（加深版：白字 26px 对比 2.5:1 → 3.4:1，**替代早期 #fb77a1/#fc7079 直接填充**） |
 | `--radius-window` | 4px | L3 窗口圆角 |
 | `--topbar-height` / `--rail-width` / `--sidebar-width` | 40px / 50px / 492px | 三段尺寸 |
 | shadcn `--radius` | 0rem | 全家桶方形化（Button/Select/Dialog/Sheet…） |
@@ -241,18 +297,18 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 
 | 令牌 | 值 | 用途 |
 |---|---|---|
-| `--pill-bg` | #ffffff | 白卡底 |
-| `--pill-radius` / `--pill-skew` | 8px / -10deg | 圆角 / 平行四边形斜切（::before 承载，内容直立） |
+| `--pill-bg` / `--pill-bg-hover` | #ffffff / #eef1f5 | 白卡底 / hover 灰 |
+| `--pill-radius` / `--pill-skew` | 3px / -10deg | 圆角 / 平行四边形斜切（::before 承载，内容直立） |
 | `--pill-h-sm` / `--pill-h-md` | 25px / 30px | 侧栏行 / 帖子页行 |
-| `--pill-shadow` / `--pill-shadow-hover` | 0 2px 6px rgba(15,23,42,.12) / 0 3px 8px .18 | 常态 / hover |
-| `--pill-fg-icon` | #3d4a5c | 图标与实心三角深蓝灰 |
+| `--pill-shadow` / `--pill-shadow-hover` | 0 2px 6px rgba(15,23,42,.12) / 0 3px 8px .18 | 常态 / hover（hover 上浮 1px） |
+| `--pill-fg` | #3d4a5c | 图标与实心三角深蓝灰（⚠️ 原 tokens 误写 `--pill-fg` 与引用 `--pill-fg-icon` 不一致，2026-09-07 审计已统一为 `--pill-fg`） |
 | `--pill-ring` | inset 0 0 0 1.5px 主粉 | focus-visible 环（作用于 ::before） |
 
-- 类 API：`.float-pill` 基型 + `--icon`（方形图标钮）/ `--text`（文字钮）+ `--md`（30px）+ `.on`（激活：primary-deep 底白字）
+- 类 API：`.float-pill` 基型 + `--icon`（方形图标钮）/ `--text`（文字钮）+ `--md`（30px）+ `.on`（激活：primary-deep 底白字）+ `--danger`（红字红图标）
 - 交互态：hover 上浮1px+阴影加深、按压回落、focus-visible 环、disabled 半透明
 - 实心下拉三角 `.pill-caret`（border 法，-15° 微倾）替代描边 ChevronDown
-- 现役浮片：侧栏 ＋ / 拉取(Download) / 过滤触发器(89px「默认」+caret)、帖子页时间钮(md)
-- **禁用例**：搜索胶囊（侧栏 240×25、帖子页 190×30）为胶囊形遗留例外，不入体系；Hero `.stat-pill` 彩色统计胶囊属另一家族
+- 现役浮片：侧栏 ＋(50px)/拉取(44px)/过滤触发器(89px)、帖子页时间钮(md)、header-actions 五钮、背景工具组 `.bg-set`(32px)、**日历月份导航三件套**（`.lc-nav-btn`/`.lc-nav-pill` 复用 ::before 配方，见 posts.css）
+- **禁用例**：搜索胶囊（侧栏 240×25、帖子页 190×30）为胶囊形遗留例外，不入体系；Hero `.stat-pill` 彩色统计胶囊属另一家族（2px 圆角图像底）
 
 ## C3. 独立筛选弹窗（layout.css `.filter-pop`）
 
@@ -265,7 +321,7 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 
 - 规格：`rise-in` 关键帧（opacity 0 + translateY 14px → 0），单项 320ms ease-out（cubic-bezier(0.22,1,0.36,1)），步进 45ms/项，CSS `min()` 封顶 400ms（第 10 项后不再追加），`fill-mode: both` 防闪现
 - 用法：条目根元素挂 `anim-rise` + 内联 `--rise-i` 序号；列表容器以**内容标识 key** 整体重挂载触发重播
-- 接入点：侧栏 VTuber 行（key=query+筛选+数据长度）、list 视图 `.post-grid`（key=账号+首末帖 id+数量——loading 期间 key 不变，保留旧内容降透明的无闪动重取）、Hero 平台药丸组（key=账号，切 V 重播）
+- 接入点：侧栏 VTuber 行（key=query+筛选+数据长度）、list 视图 `.post-grid`（key=账号+首末帖 id+数量——loading 期间 key 不变，保留旧内容降透明的无闪动重取）、Hero 平台药丸组（key=vtuber.id，切 V 重播）
 - `prefers-reduced-motion: reduce` 下全量禁用
 
 ### 退场编排（退出 → 进入，预取门控 + 原子提交）
@@ -273,18 +329,19 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 - `.scene-exit`（fall-out）：整块 `translateY(10px)` 下滑渐隐，**0.18s** ease-in（比 `EXIT_MS=200` 短 20ms，动画必在类移除前结束防竞态帧），`pointer-events:none` 防误点；与 rise-in 镜像闭合
 - 机制：PostsPage 场景机 `scene{acc,view,exiting}` + **预取门控**——账号目标变化先并行预取三件套（getVtuber/第1页帖子/postStats），旧内容冻结可见；**数据就绪才退场**，EXIT_MS 后一次性应用预取数据（原子提交，页码归 1、**筛选按 VTuber/账号重置**——2026-09-05 用户反馈：筛选状态不跨 V/账号共享，提交时 filterRef 已是重置态与预取默认参数一致防种子错配），**全程无「正在加载」占位帧**
 - 防重拉闪动：提交播种 `seededPostsKeyRef`（posts effect 消费一次跳过重拉）+ `vtuberLoadedRef`（跳过冗余 getVtuber）；refreshTick 变化仍正常重拉
-- 应用：切 V、cards/list 视图切换（视图切换无数据依赖立即退场；cards→list 首次帖子加载仍走正常 loading）；搜索/筛选/翻页仅重播入场不退场；**P6-1：筛选切换（type/搜索/时间/已删）立即滚回列表顶部**（触发即滚，不等重取；此前缓存恢复方案实测不达预期已 revert）
+- 应用：切 V、视图切换（视图切换无数据依赖立即退场；cards→list 首次帖子加载仍走正常 loading）；搜索/筛选/翻页仅重播入场不退场；**P6-1：筛选切换（type/搜索/时间/已删）立即滚回列表顶部**（触发即滚，不等重取；此前缓存恢复方案实测不达预期已 revert）
 - 快速连点：中止旧预取、回退退场（旧内容回到可见冻结），新目标就绪后重来；加载占位仅存于首次进入/手动刷新/错误态；reduced-motion 动画禁用（200ms 延迟保留）
 - 详情窗口动效（posts.css 末段）：居中 Dialog（P6-2 起）对齐全局运动语言——进场 260ms 淡入+scale(0.97) 缩入、退场 200ms 淡出+scale(0.97)（fall-out 同款 ease-in），遮罩与面板时长严格同步；覆盖 `[data-slot=dialog-content/overlay]` 的 animation-name/duration，radix animationend 卸载机制不受影响；reduced-motion 下 0.01ms 瞌时关闭
+- **直播日历增补**（2026-09-07）：月份切换 = keyed 网格重放 `.lc-grid-anim`（前进右滑入 20px / 后退左滑入，0.26s cubic-bezier）；场次详情弹窗 = `.lc-dlg-pop`（translateY 8 + scale .98，0.2s）；月份浮窗 = 同款 pop；均带 reduced-motion 守卫
 
 ## C5. 三层组件契约（UI 几何统一基准）
 
 | 层 | 语义 | 形态契约 | 成员 |
 |---|---|---|---|
-| **交互层** float-pill | 一切可点击触发 | 斜切(-10°)白卡 + 3px 圆角 + 阴影（唯一带阴影）；hover 渐灰；`.on` 主色填充；`.float-pill--danger` 红字 | 侧栏工具行、时间钮、bg-tools、**header-actions 五钮**（更新动态 `.on` 主操作、解除订阅 danger） |
-| **信息层** flat-chip | 只读展示 | 平面 **3px、无阴影、不斜切**；色底（粉/珊瑚）或发丝边 | stat-pill（191×37 色底去白边）、faction-badge（企划徽标，类名沿用）、type-chip、stat-badge、post-card-type、live-tag |
-| **弹窗层** dialogs | 弹窗/浮层（二级界面） | **圆角卡片 12px + 柔和阴影 `--shadow-dialog` (0 4px 16px 10%) + 发丝边**；分区标题 600 加粗 + 上方发丝分隔；选择控件描边 8px 圆角、激活=粉底(`--c-primary-deep`)白字；底部主操作=粉底圆角、次要=描边圆角 | 注入 Dialog/AlertDialog/Select 包裹层 + time-pop/filter-pop 自定义浮层 |
-| **表面层** surfaces | 卡片/面板 | **0px 方形** + 发丝边 | post-card、posts-panel |
+| **交互层** float-pill | 一切可点击触发 | 斜切(-10°)白卡 + 3px 圆角 + 阴影（唯一带阴影）；hover 渐灰；`.on` 主色填充；`.float-pill--danger` 红字 | 侧栏工具行、时间钮、bg-tools、**header-actions 五钮**（更新动态 `.on` 主操作、解除订阅 danger）、**日历月份导航三件套** |
+| **信息层** flat-chip | 只读展示 | 平面 **3px、无阴影、不斜切**；色底（粉/珊瑚）或发丝边 | stat-pill（191×37 图像底/色底）、faction-badge（企划徽标，2px 圆角同族）、type-chip、stat-badge、post-card-type、live-tag（8px）、lc-stat-pill（类型统计胶囊 50×19 r88） |
+| **弹窗层** dialogs | 弹窗/浮层（二级界面） | **圆角卡片 12px + 柔和阴影 `--shadow-dialog` (0 4px 16px 10%) + 发丝边**；分区标题 600 加粗 + 上方发丝分隔；选择控件描边 8px 圆角、激活=粉底(`--c-primary-deep`)白字；底部主操作=粉底圆角、次要=描边圆角 | 注入 Dialog/AlertDialog/Select 包裹层 + time-pop/filter-pop 自定义浮层 + **lc-pop 场次浮层 / lc-month-pop 月份浮窗 / lc-dlg 详情弹窗（14px）/ lc-dlg-cat-pop 分类下拉** |
+| **表面层** surfaces | 卡片/面板 | **0px 方形** + 发丝边 | post-card（浮片化特例见下）、posts-panel、archive-section（4px 存档卡）、live-calendar/fan-chart（4px 定宽卡） |
 
 **用户审美特例（覆盖统一基准，勿在后续回合误改回）**：
 - `.live-tag`（卡片页直播徽标）圆角 **8px**
@@ -293,27 +350,76 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 - `.acc-switch-btn`（账号切换器）**浮片化**：白卡 + **2px 圆角 + `var(--pill-shadow)`、去发丝边**（不加斜切保文本可读）；`.on` 主色深填白字
 - `post-card`（帖子卡片）**浮片化特例**：**2px 圆角 + `var(--pill-shadow)`、去发丝边**；hover 上浮 2px + 阴影加深 + **标题变色 `--c-accent`**；`.post-card-cover` 无封面时 `.post-card-cover-paper` 米白纸纹斜条 + 居中大标题
 
-**豁免**：搜索胶囊（侧栏 `list-search`、帖子页 `.search-float`，用户指定原样）、滚动条圆头、头像与状态圆点（圆形）。
-**二期待办**：✅ P6-3 曾清（弹窗方形去阴影）；**v0.6.1 用户参考风格修订**——弹窗层从表面层剥离（见上表）：dialog/sheet/alert-dialog 恢复 `rounded-xl` + `--shadow-dialog`，time-pop/filter-pop 恢复圆角+柔和阴影并加分区发丝分隔/描边圆角按钮（P6-3 条目以本条为准）；AddVtuberDialog/LoginDialog/BatchFetchDialog 内部控件圆角化（平台标/标签/按钮 → rounded-lg）；AlertDialog 底部按钮保持「主粉底+次描边」；分页钮不存在（无限滚动，N/A）。
+**豁免**：搜索胶囊（侧栏 `list-search`、帖子页 `.search-float`，用户指定原样）、滚动条圆头、头像与状态圆点（圆形）、**直播日历格 6px 圆角（设计稿规格保留）**、**详情弹窗 14px / 封面 10px（参考图规格）**。
 
-## D. 字体（tokens.css @font-face）
+## D. 字体（tokens.css @font-face，均为 woff2 子集化资源）
 
 | family | 文件 | 用途 |
 |---|---|---|
-| `Alimama FangYuanTi VF`(100–900) | AlimamaFangYuanTiVF-VF.ttf | 全局默认 `--font-family` |
-| `QianTu XiaoTuTi` | QianTuXiaoTuTi.ttf | `--font-logo`（顶栏 LOGO D，26px） |
-| `ZiXiao HunRui YiHe` | ZiXiaoHunRuiYiHe.ttf | `--font-title`（顶栏标题，字距8px） |
+| `Alimama FangYuanTi VF`(100–900) | AlimamaFangYuanTiVF-VF.woff2 | 全局默认 `--font-family` |
+| `QianTu XiaoTuTi` | QianTuXiaoTuTi.woff2 | `--font-logo`（顶栏 LOGO D，17px；已子集化仅含 "D"，14.8MB→2.9MB） |
+| `ZiXiao HunRui YiHe` | ZiXiaoHunRuiYiHe.woff2 | `--font-title`（顶栏标题 15px 字距 5px；已子集化仅含 "DDtoolkit"） |
 
 ## E. 交互浮窗清单
 
 | 浮窗 | 入口 | 说明 |
 |---|---|---|
 | AlertDialog 关闭确认 | TopBar 关闭钮(busy) | 「抓取任务正在进行中」 |
+| LoginDialog | TopBar 登录钮（`.topbar-login-btn` + 过期红点徽章） | B站/微博扫码登录（`/auth/weibo/qr/*`） |
 | AddVtuberDialog | 侧栏「+」 | 输入防抖搜本地候选池 → 点选 adopt（建库+自动单V抓取）→ 踢poll + 侧栏刷新 + 右栏跳新V |
 | BatchFetchDialog | 侧栏「拉取」 | 四项：全量账号 / 全量帖子 / 更新未归档 / 归档（前三项后台执行+409防重入，归档同步返回条数） |
 | PostDetailDrawer | 帖子卡片 | 见 B2 |
+| ImageViewer | 详情窗内图片 | 见 B2.1 |
 | AlertDialog 解订阅 | list 视图红色钮 | 说明连带删帖，确认后跳首页 |
 | 筛选弹窗 `.filter-pop` | 侧栏过滤触发器 | 见 C3（状态/平台/企划组合多选） |
+| 时间范围浮窗 `.time-pop` | list 视图「时间」浮片 | 起/止 date 输入 + 清除/应用 |
+| 场次浮层 `.lc-pop` | 直播日历格子 hover | 当日全量场次（起止/时长/收益/峰值/弹幕/数据源/中断段数），**纯信息展示**；120ms 宽限关闭、Esc 关闭（详见 B3） |
+| 月份选择浮窗 `.lc-month-pop` | 月份胶囊点击 | 年切换 + 12 月宫格（当前月高亮），选后按方向滑动切换 |
+| 场次详情弹窗 `.lc-dlg` | 直播日历格子**点击** | 见 B3（含分类校正下拉、词云、动态、分析预留） |
+| 分类校正下拉 `.lc-dlg-cat-pop` | 详情弹窗左上角胶囊 | 见 B3；点外部关闭 |
+
+---
+
+## F. 滚动条标准（2026-09-07 用户定案——所有滚动容器一律参照）
+
+> 用户原话要点：所有地方统一成一个样式；**滚动条不要占布局宽度**；**不滚动或不 hover 时自动隐藏**；
+> 具体数值定案：**thumb 贴容器右缘 4px、宽 4px、常态 `--c-border` 细灰、hover 顶栏粉 `--c-primary`、圆角胶囊**；
+> 以后新增滚动容器必须查询本节。
+
+### F1. 两层实现
+
+| 层 | 实现 | 适用范围 |
+|---|---|---|
+| **全局原生兜底** | `::-webkit-scrollbar`（layout.css 顶部）：槽 **12px**、thumb `border:4px transparent` + `background-clip:content-box`（视觉 4px）、常态 `--c-border`、hover 收窄到 2px（视觉 8px）+ `--c-primary`、轨道/角透明 | 任何**未接入 OverlayScroll 的残留原生滚动**（如有则应视为待迁移项） |
+| **覆盖式滚动条（标准主形态）** | `<OverlayScroll>` 组件（components/OverlayScroll.tsx + layout.css `.os-*`） | 全部主滚动容器（见 F3 清单） |
+
+> ⚠️ **禁则**：`scrollbar-width` / `scrollbar-color` 标准属性会在 Chromium 里令 `::-webkit-scrollbar` 全部失效（回退系统默认带箭头滚动条）——全项目已无此属性（`.os-scroll` 与 `.sidebar`/`.lc-stats` 的 `scrollbar-width:none` 是**隐藏**用，配 webkit display:none 双保险，属有意为之）。
+
+### F2. OverlayScroll 组件规格
+
+- 根 `.os-root`：`position:relative;overflow:hidden;display:flex;flex-direction:column`（**经典 modal 滚动模式**：max-height 容器的 auto 高度根也能正确产生内部滚动——`height:100%` 在 auto 父级下失效，曾致详情弹窗滚不动）；
+- 滚动体 `.os-scroll`：`flex:1 1 auto;min-height:0;overflow-y:auto` + 原生条隐藏；**padding/gap/列布局一律由调用方写在 `.os-scroll` 上**（根不再承担排版）;
+- 拇指 `.os-thumb`：absolute right 4px、宽 4px、min-height 28px、r999、`--c-border`、`opacity 0`（`.os-show` 时 1）、`transition opacity .25s / width .15s / background .15s`，**`pointer-events:none`（纯展示，无拖拽——移除拖拽是为了杜绝显隐状态机被楔死）**；
+- **hover 增强**：`.os-root:hover .os-thumb` → 变粉 `--c-primary` + 加粗至 6px（right 同步收至 3px 保持中心对齐）——与全局 webkit 兜底的 hover 收缩内收增粗同语义（2026-09-07 审计后补实现，此前仅注释承诺）；显隐仍由 `.os-show` 调度（悬浮即 reveal 1.2s，故 hover 到容器即见粉拇指）；
+- 显隐调度（无任何可楔死的状态位）：滚动中亮出、停止 **700ms** 淡出；鼠标悬浮容器亮出、**1.2s** 无动作淡出；移出立即淡出；所有隐藏定时器无条件执行；
+- 状态同步 `sync()`（只改位置/尺寸/display，不碰显隐）：scroll（rAF）/ ResizeObserver（滚动体 + **首个子元素**——scrollHeight 增长不触发自身 RO）/ **400ms 轮询兜底**（异步内容长高）；
+- 布局要求：若用「根百分高度 + 滚动体内部滚动」，父级必须是 flex column 或明确高度，否则滚动失效（`.lc-dlg`/`.archive-view` 均按此约定）；
+- 调用面：`className`（根）/ `style` / `role` / `aria-modal` / `scrollRef`（内部滚动体 ref，**须为可写 `{current: HTMLDivElement|null}`**——React19 类型下 `useRef<HTMLDivElement>(null)` 的 RefObject 是只读 readonly）/ `onScroll`。
+
+### F3. 现役滚动容器清单
+
+| 容器 | 实现 | 备注 |
+|---|---|---|
+| list 视图帖子流 `.list-scroll` | ✅ OverlayScroll | 滚动体列布局/居中/padding 8px 16px 24px；`onScroll` 驱动回顶浮钮 |
+| archive 视图 `.archive-view` | ✅ OverlayScroll | profile 视图 + PostsPage archive 外包共用同一容器（2026-09-07 视图级修复） |
+| 档案卡/账号卡内 `.archive-section-scroll` | ✅ OverlayScroll | 负 margin 由滚动体承担（贴卡片缘） |
+| 详情弹窗 `.lc-dlg` | ✅ OverlayScroll | 弹窗滚动 |
+| 场次浮层 `.lc-pop` | ✅ OverlayScroll | 浮层滚动（max-height 430） |
+| 侧栏 `.sidebar-list` | ✅ OverlayScroll | **2026-09-07 迁移完成**（旧 `.sidebar-sb` 5px 蓝灰自绘条已删） |
+| `.type-chips`（横向溢出） | 🔶 原生隐藏 | `scrollbar-width:none` + webkit display:none（不占布局高度，纯滚轮横滚） |
+| `.lc-stats`（类型统计横向溢出） | 🔶 原生隐藏 | 同上（纯滚轮横滚无指示，知悉即可） |
+| `.lc-dlg-cat-pop`（分类下拉） | 🔶 原生隐藏 | 同 `.type-chips` 口径（内容恒 ≤340px，异常溢出仅滚轮） |
+| `.profile-setting`（设定集正文） | 🔶 全局 webkit | 200px 高局部滚动，全局样式兜底可接受 |
 
 ---
 
@@ -323,3 +429,6 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 - 浮动小元件（浮片/光条/药丸）豁免全局方形规则；交互态统一「无描边、背景填充」语言
 - 图标一律 lucide（视觉尺寸按设计稿实测覆盖 className），自定义图形进 `assets/icons/`
 - 窗口美学：DWM 系统圆角/阴影已关闭，只有前端 4px 一套弧线
+- **滚动条**：见 F 节——新增滚动容器先问「是否主滚动容器、能否 OverlayScroll」，数值询问用户
+- **图表**：图表一律 ECharts 6.1 按需注册（canvas 自绘），Shadcn Chart/recharts 已退役（chart.tsx/`--chart-*` 已清）；**图表色值集中在 `utils/chartTheme.ts`**（tokens 同源注释），新图表从那里引色，禁止在组件里手写色值
+- **词云**：加权 Voronoi（power diagram, Balzer 2005）自绘，零依赖；复现性靠 mulberry32(20260907) 种子

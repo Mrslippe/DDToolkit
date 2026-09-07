@@ -17,7 +17,8 @@
   --secondary: #fff0f3;
   --secondary-foreground: #fc7079;
   --muted: #fdf2f5;
-  --muted-foreground: #647489;
+  --muted-foreground: #5b6c7e;
+  /* 次级色统一走 tokens.css --c-text-sub（2026-09-07 审计：原 #647489 双源） */
   --accent: #ffeef2;
   --accent-foreground: #fc7079;
   --destructive: #e14444;
@@ -27,13 +28,6 @@
   --input: rgba(210, 216, 222, 0.55);
   --ring: #fb77a1;
   --radius: 0rem;
-  /* 图表配色（shadcn Chart）：映射粉系 token——
-     chart-1 本工具直采 / chart-2 zeroroku 回填 / chart-3 强调 / 4-5 备用 */
-  --chart-1: #fb77a1;
-  --chart-2: #647489;
-  --chart-3: #fc7079;
-  --chart-4: #ffd2e0;
-  --chart-5: #4b5a6b;
 }
 
 @theme inline {
@@ -66,7 +60,7 @@
   * {
     @apply border-border;
   }
-  /* 桌面应用交互：点击不残留焦点框（recharts SVG/按钮获焦时被 outline 描粉）；
+  /* 桌面应用交互：点击不残留焦点框（图表 SVG/按钮获焦时被 outline 描粉）；
      键盘可达性由按钮自有样式承担 */
   :focus,
   :focus-visible {

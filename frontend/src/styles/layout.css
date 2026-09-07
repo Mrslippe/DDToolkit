@@ -58,7 +58,9 @@ html.window-maximized body {
 /* ── 覆盖式滚动条（OverlayScroll 组件，2026-09-07 user 定案）──
    滚动条不占布局宽度（原生条隐藏）+ 悬浮拇指自动隐藏；视觉与全局标准一致：
    透明轨 + 常态细灰 --c-border + hover 粉 --c-primary + 圆角胶囊。
-   拇指贴边留白 4px、常态宽 4px、hover 加粗至 6px。 */
+   拇指贴边留白 4px、常态宽 4px；容器悬浮时变粉并加粗至 6px（中心对齐）。
+   （thumb 本身 pointer-events:none 纯展示——hover 态由 .os-root:hover 驱动，
+    与拖拽无关，2026-09-07 审计修正「注释承诺 hover 而实现缺失」） */
 .os-root {
   position: relative;
   overflow: hidden;
@@ -91,12 +93,20 @@ html.window-maximized body {
   background: var(--c-border);
   opacity: 0;
   pointer-events: none;      /* 纯展示（无拖拽），显隐由调度驱动 */
-  transition: opacity 0.25s ease, width 0.15s ease, background-color 0.15s ease;
+  transition: opacity 0.25s ease, width 0.15s ease, background-color 0.15s ease,
+    right 0.15s ease;
   display: none;
 }
 
 .os-thumb.os-show {
   opacity: 1;
+}
+
+/* 容器内悬浮：拇指变粉 + 加粗（视觉 6px，水平中心保持贴右 4px 中轴） */
+.os-root:hover .os-thumb {
+  right: 3px;
+  width: 6px;
+  background: var(--c-primary);
 }
 
 /* ── 启动幕：主色铺底 + 中央 LOGO + 信封上下展开 ── */
@@ -115,7 +125,7 @@ html.window-maximized body {
 
 .topbar,
 .icon-rail,
-.sidebar,
+.sidebar-shell,
 .app-main {
   animation: rise-in 0.35s ease backwards;
 }
@@ -125,7 +135,7 @@ html.window-maximized body {
 .icon-rail {
   animation-delay: 0.33s;
 }
-.sidebar {
+.sidebar-shell {
   animation-delay: 0.38s;
 }
 .app-main {
@@ -519,60 +529,26 @@ color: #fff;
 
 /* ── 左栏：VTuber 通栏列表（参考图 MomoTalk：零圆角零描边，发丝分隔线） ── */
 
-/* 外壳：承载宽度/定位；内部 aside 为纯滚动容器 */
+/* 外壳：承载宽度/定位；内部为 工具行（吸顶）+ OverlayScroll 列表滚动区 */
 .sidebar-shell {
   width: var(--sidebar-width);
   flex-shrink: 0;
   position: relative;
-}
-
-.sidebar {
-  width: 100%;
-  height: 100%;
-  overflow-y: auto;
-  border-right: 1px solid var(--c-border);
-  background: var(--c-bg-list);
   display: flex;
   flex-direction: column;
-  /* 原生滚动条隐藏，改用自绘悬浮滚动条（半透明覆盖在条目上） */
-  scrollbar-width: none;
+  background: var(--c-bg-list);
+  border-right: 1px solid var(--c-border);
 }
 
-.sidebar::-webkit-scrollbar {
-  display: none;
+/* 列表滚动区（OverlayScroll）：scroll 权交付滚动体，仅参与 flex 高度分配 */
+.sidebar-list {
+  flex: 1;
+  min-height: 0;
 }
 
-/* 自绘悬浮滚动条：位于外壳内（不随内容滚动），贴右缘，
-   滚动/拖拽时浮现、静止后渐隐 */
-.sidebar-sb {
-  position: absolute;
-  top: 55px; /* 避开吸顶工具行 */
-  bottom: 4px;
-  right: 2px;
-  width: 5px;
-  z-index: 20;
-  pointer-events: none;
-}
-
-.sidebar-sb-thumb {
-  position: absolute;
-  left: 0;
-  width: 100%;
-  border-radius: 999px;
-  background: rgba(75, 90, 111, 0.3);
-  opacity: 0;
-  pointer-events: auto;
-  cursor: pointer;
-  touch-action: none;
-  transition: opacity 0.25s ease, background-color 0.15s ease;
-}
-
-.sidebar-sb-thumb.on {
-  opacity: 1;
-}
-
-.sidebar-sb-thumb:hover {
-  background: rgba(75, 90, 111, 0.5);
+.sidebar-list .os-scroll {
+  display: flex;
+  flex-direction: column;
 }
 
 /* 列表工具行（Frame41109）：高 51px；三元件同容器居中排列、左右缘 32px */
@@ -630,7 +606,7 @@ color: #fff;
 .float-pill--icon {
   width: 25px;
   padding: 0;
-  color: var(--pill-fg-icon);
+  color: var(--pill-fg);
 }
 
 .float-pill--text {
@@ -730,7 +706,7 @@ color: #fff;
 @media (prefers-reduced-motion: reduce) {
   .topbar,
   .icon-rail,
-  .sidebar,
+  .sidebar-shell,
   .app-main {
     animation: none;
   }

@@ -684,9 +684,15 @@
   min-width: 0;
   overflow-x: auto;
   /* overflow-x:auto 会把 overflow-y 计算为 auto，裁掉胶囊顶部/端部阴影；
-     padding 四向出血 + 负 margin 抵消布局高度，阴影完整显示 */
+     padding 四向出血 + 负 margin 抵消布局高度，阴影完整显示；
+     滚动条隐藏（UI-MAP F3）：不占布局高度，横向溢出纯滚轮/触控滚动 */
   padding: 6px;
   margin: -6px 0;
+  scrollbar-width: none;
+}
+
+.type-chips::-webkit-scrollbar {
+  display: none;
 }
 
 .type-chip {
@@ -899,22 +905,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* ── 档案视图：通用卡片骨架（2026-09-06 archive 三块推倒重建，仅留骨架） ── */
-
-/* archive 视图重建占位壳 */
-.archive-placeholder {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  max-width: 960px;
-  min-height: 320px;
-  background: var(--c-bg-card);
-  border-radius: 4px;
-  box-shadow: var(--pill-shadow);
-  padding: 24px;
-}
+/* ── 档案视图：通用卡片骨架（2026-09-06 archive 三块推倒重建，仅留骨架；重要日期卡已退役） ── */
 
 .float-pill--sm {
   font-size: 13px;
@@ -2336,7 +2327,8 @@
   line-height: 16px;
 }
 
-/* 弹幕信息区块（danmakus /api/v2/live 词云，2026-09-07 接入；词云 = react-wordcloud） */
+/* 弹幕信息区块（danmakus /api/v2/live 词云，2026-09-07 接入；词云 = 加权 Voronoi 自绘，
+   见 LiveCalendar.tsx layoutPowerCloud——react-wordcloud/d3-delaunay 均已退役） */
 .lc-dlg-danmaku {
   display: flex;
   flex-direction: column;
@@ -2349,7 +2341,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* 加权 Voronoi 拼贴词云（d3-delaunay，2026-09-07：无缝多边形挤压 + 中央大块） */
+/* 加权 Voronoi 拼贴词云（Balzer 2005 power diagram，2026-09-07：无缝多边形挤压 + 中央大块） */
 .lc-dlg-cloud {
   position: relative;
   width: 100%;
@@ -2434,23 +2426,6 @@
   color: var(--c-text-sub);
 }
 
-.lc-dlg-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-}
-
-.lc-dlg-tag {
-  padding: 2px 9px;
-  border-radius: 106px;
-  font-size: 11px;
-  line-height: 15px;
-  color: var(--c-text-main);
-  background: #f6edf0;
-  border: 1px solid rgba(251, 119, 161, 0.18);
-  white-space: nowrap;
-}
-
 /* 弹窗左上角分类胶囊按钮 + 下拉栏（user 2026-09-07：点胶囊弹全部彩色分类胶囊，点选取） */
 .lc-dlg-badge-wrap {
   position: relative;
@@ -2492,6 +2467,12 @@
   border: 1px solid rgba(15, 23, 42, 0.06);
   box-shadow: var(--shadow-dialog);
   animation: lc-dlg-pop 0.16s cubic-bezier(0.22, 0.61, 0.36, 1);
+  /* 滚动条隐藏（UI-MAP F3）：下拉内容恒 ≤340px，溢出时纯滚轮滚动 */
+  scrollbar-width: none;
+}
+
+.lc-dlg-cat-pop::-webkit-scrollbar {
+  display: none;
 }
 
 .lc-dlg-cat-list {

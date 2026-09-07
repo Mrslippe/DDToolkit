@@ -3,7 +3,7 @@
 个人向 **VTuber 帖子 / 账号证据归档工具**：定时抓取 B 站与微博的动态、账号统计并归档到本地 SQLite，桌面端浏览与管理。
 
 - 后端：Python 3.14 + FastAPI + SQLAlchemy 2.0 + SQLite（WAL）+ APScheduler + Alembic
-- 前端：Vite + React 18 + TypeScript + Tailwind CSS v4 + Radix/shadcn 风格组件
+- 前端：Vite + React 18 + TypeScript + Tailwind CSS v4 + Radix/shadcn 风格组件 + ECharts 6（图表 canvas 自绘）
 - 桌面壳：Tauri v2（负责拉起后端、注入数据目录、进程看门狗）
 
 ## 目录结构
@@ -16,10 +16,10 @@
 │  ├─ schemas/        Pydantic 输入输出模型
 │  ├─ services/       抓取调度、平台接入（bilibili / weibo）、认证、WBI、图片代理
 │  └─ core/           配置（数据目录/环境变量）、数据库引擎
-├─ alembic/           数据库迁移链（a001 → e001，启动时自动升级）
+├─ alembic/           数据库迁移链（a001 → e007，启动时自动升级）
 ├─ tests/             pytest 测试（test_auth / test_services / test_vtuber_api / test_weibo）
 ├─ scripts/           维护与构建脚本（repair_*、build_backend、collect_portable 等）
-├─ devlog/            版本开发日志（001–021，每版本一篇）
+├─ devlog/            版本开发日志（001–034，每版本一篇）
 ├─ docs/              文档：后端分层、UI 映射、平台扩展指南、架构图、设计原型、TODO 路线图
 ├─ frontend/          前端（Vite + React）+ Tauri 壳（src-tauri）
 ├─ backend_main.py    桌面端后端入口（Tauri 以子进程拉起，含父进程看门狗）
@@ -69,13 +69,13 @@ frontend\node_modules\.bin\tsc.cmd -p frontend\tsconfig.json --noEmit
 | 源 | 数据 | 周期 |
 |---|---|---|
 | [zeroroku.com](https://zeroroku.com)（公开免鉴权） | 粉丝历史（补历史空洞）、直播礼物日聚合 | 每日 3:00 |
-| [danmakus.com](https://ukamnads.icu)（v2 spec，公开部分） | VTuber 索引（企划/公会/房间号，透传 laplace vup-slim） | 每周一 3:30 |
+| [danmakus.com](https://ukamnads.icu)（v2 spec，公开部分） | VTuber 索引（企划/公会/房间号，透传 laplace vup-slim）+ 直播场次/场次级弹幕与指标（v2 live，公开） | 每周一 3:30（索引）；场次级随查询实时拉取缓存 |
 | laplace.live | 无公开 API（留空壳，数据经 danmakus 透传获取） | — |
 
 开关：`EXTERNAL_ENABLED` / `EXTERNAL_ZEROROKU_ENABLED` / `EXTERNAL_DANMAKUS_ENABLED` / `EXTERNAL_RUN_HOUR`（settings）。
 读取端点：`GET /account/{id}/stat-snapshots?source=`、`GET /account/{id}/gift-days`、`GET /externals/vtubers?kw=`、`GET /externals/vtubers/by-uid?uid=`。
 
-档案视图（P5）端点：`GET /account/{id}/fan-trend`（按天分桶粉丝趋势）、`GET /account/{id}/live-sessions`（自采快照推导场次）。
+档案视图（P5→v0.9.x）端点：`GET /account/{id}/fan-trend`（按天分桶粉丝趋势）、`GET /account/{id}/live-sessions`（danmakus 主源 + self 快照合并的场次列表）、`GET /account/{id}/live-sessions/{liveId}`（场次级详情：弹幕词云/指标/直播事件，analysis 预留）。
 
 ## 常用文档
 
@@ -84,4 +84,4 @@ frontend\node_modules\.bin\tsc.cmd -p frontend\tsconfig.json --noEmit
 - `docs/backend-fetch-pipeline.md` — 抓取链路详解（频率 / API 清单 / 风控判定与原因 / 节流测算）
 - `docs/UI-MAP.md` — 前端界面与路由映射
 - `docs/platforms-extension-guide.md` — 平台接入扩展指南
-- `devlog/` — 每版本的变更记录（当前 v0.6.0）
+- `devlog/` — 每版本的变更记录（当前 v0.9.x）
