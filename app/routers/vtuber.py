@@ -14,17 +14,20 @@ from app.models.vtuber import VTuber, Post, Account
 from app.repositories.vtuber_repo import (
     VTuberRepo, AccountRepo, PostRepo, AccountStatSnapshotRepo,
     LiveGiftDayRepo, ThirdpartyVtuberRepo, VtuberEventRepo, LiveSessionRepo,
+    LiveCategoryOverrideRepo,
 )
 from app.schemas.vtuber import (
     VTuberOut, VTuberCreate, VTuberUpdate,
     AccountOut, AccountCreate, AccountUpdate,
     PostOut, PostCreate, PostUpdate, PostPage, PostStats,
     AccountStatSnapshotOut, LiveGiftDayOut, ThirdpartyVtuberOut,
-    FanTrendPoint, LiveSessionOut,
+    FanTrendPoint, LiveSessionOut, LiveCategoryOut,
     VtuberEventOut, VtuberEventCreate, FutureReservationOut,
 )
 from app.services import pool
-from app.services.live_type import infer_category
+from app.services.live_type import (
+    infer_category, plan_series, build_learned, EDITABLE_CATEGORY_KEYS,
+)
 from app.services.post_text import extract_post_text
 
 logger = logging.getLogger(__name__)
@@ -296,11 +299,13 @@ def fan_trend(account_id: int, db: Session = Depends(get_db)):
 
 @router.get("/account/{account_id}/live-sessions", response_model=list[LiveSessionOut])
 def live_sessions(account_id: int, db: Session = Depends(get_db)):
-    """直播场次（v0.9.x 内容管道 M1：danmakus 主源 + self 快照合并）。
+    """直播场次（v0.9.x 内容管道 M1 主源 + v2 多信号类型推断）。
 
     - 表内场次（danmakus 历史全量，M1 回填；feed M3 增量）
     - self 快照推导场次（5min 粒度，自观测兜底，±90min 窗口合并）
-    - 每场附带类型推断（title/area/date 信号 + fallback，读取时计算）
+    - 每场附带类型推断（v2 信号栈，读取时计算）：
+      override（用户校正）> series（系列聚类）> title（多词评分）>
+      learned（校正反哺词库）> area（分区）> date（纪念日）> fallback
     """
     if not AccountRepo(db).get(account_id):
         raise HTTPException(404, f"Account id={account_id} 不存在")
@@ -308,18 +313,57 @@ def live_sessions(account_id: int, db: Session = Depends(get_db)):
     vtuber = account.vtuber if account else None
     events = VtuberEventRepo(db).list_by_vtuber(vtuber.id) if vtuber else []
     event_dates = [e.event_date for e in events]
+    sessions = LiveSessionRepo(db).merged(account_id)
+    overrides = LiveCategoryOverrideRepo(db).map_by_account(account_id)
+    series_categories = plan_series(sessions, overrides)
+    learned = build_learned(overrides, sessions)
     out = []
-    for s in LiveSessionRepo(db).merged(account_id):
+    for s in sessions:
         category, category_from = infer_category(
             s["live_title"], s.get("area_name"), s.get("parent_area_name"),
             s["start_at"],
             birthday=vtuber.birthday if vtuber else None,
             debut_date=vtuber.debut_date if vtuber else None,
             event_dates=event_dates,
+            live_id=s.get("live_id"), overrides=overrides,
+            series_categories=series_categories, learned=learned,
         )
         out.append(LiveSessionOut(account_id=account_id, **s,
                                   category=category, category_from=category_from))
     return out
+
+
+class LiveCategoryUpdate(BaseModel):
+    category: str
+
+
+@router.put("/account/{account_id}/live-sessions/{live_id}/category",
+            response_model=LiveCategoryOut)
+def set_live_category(account_id: int, live_id: str, data: LiveCategoryUpdate,
+                      db: Session = Depends(get_db)):
+    """用户校正场次分类（v0.9.x 类型引擎 v2 第⑦信号）。
+
+    - 校正最高优先级（override 源）；同时反哺账号词库（learned）
+      与系列聚类投票（series 传播），下次 GET live-sessions 全链生效；
+    - 仅 9 类可校正（不含 live 兜底）；仅表内场次（self 虚拟场次无 live_id）。
+    """
+    if not AccountRepo(db).get(account_id):
+        raise HTTPException(404, f"Account id={account_id} 不存在")
+    if data.category not in EDITABLE_CATEGORY_KEYS:
+        raise HTTPException(422, detail=f"不支持的分类: {data.category}（可用: "
+                                       f"{', '.join(sorted(EDITABLE_CATEGORY_KEYS))}）")
+    LiveCategoryOverrideRepo(db).upsert(account_id, live_id, data.category)
+    return LiveCategoryOut(category=data.category, category_from="override")
+
+
+@router.delete("/account/{account_id}/live-sessions/{live_id}/category",
+               status_code=status.HTTP_204_NO_CONTENT)
+def clear_live_category(account_id: int, live_id: str, db: Session = Depends(get_db)):
+    """撤除场次分类校正，恢复自动推断。"""
+    if not AccountRepo(db).get(account_id):
+        raise HTTPException(404, f"Account id={account_id} 不存在")
+    if not LiveCategoryOverrideRepo(db).delete(account_id, live_id):
+        raise HTTPException(404, f"无校正记录: live_id={live_id}")
 
 
 # ── 重要日期·大型活动（P7，v0.7.0） ────────────────────────────────

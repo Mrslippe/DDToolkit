@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Loader2 } from 'lucide-react'
@@ -93,7 +93,8 @@ interface PopState {
  *   · 无场次的格子：今天以前 = 「休息」；今天及以后 = 「待定」（user 2026-09-07）；
  *   · 礼物数据暂不展示（user 2026-09-07：之后从 danmakus 取场次级详细数据；
  *     浮层「收益」即 danmakus 场次级），格内礼物行/当日礼物合计已退役；
- *   · 类型徽章/统计用后端 category（标题分区双信号），服务端缺失时前端关键词兜底。
+ *   · 类型徽章/统计用后端 category（v2 多信号：校正>系列>标题评分>词库>分区>纪念日），
+ *     服务端缺失时前端关键词兜底；浮层内提供分类校正下拉（override 源）。
  */
 const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: Props) {
   const now = new Date()
@@ -103,6 +104,9 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
   const [error, setError] = useState<string | null>(null)
   /** 场次浮层：点击格子的锚点（rect 快照）与当日数据 */
   const [pop, setPop] = useState<PopState | null>(null)
+
+  /** 校正请求进行中的 live_id（下拉禁用防连点） */
+  const [savingCategory, setSavingCategory] = useState<string | null>(null)
 
   // 月份选择浮窗：独立年份游标（打开时同步 ym 的年）
   const [monthPopOpen, setMonthPopOpen] = useState(false)
@@ -119,27 +123,29 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
     return () => document.removeEventListener('mousedown', onDown)
   }, [monthPopOpen])
 
-  // 场次拉取（字段 2026-09-07：只检索主账号直播信息）
-  useEffect(() => {
+  // 场次拉取（字段 2026-09-07：只检索主账号直播信息；loadSeq 防账号切换回写）
+  const loadSeq = useRef(0)
+  const load = useCallback(() => {
     if (accountId == null) return
-    let cancelled = false
+    const seq = ++loadSeq.current
     setLoading(true)
     setError(null)
     api
       .liveSessions(accountId)
       .then((s) => {
-        if (!cancelled) setSessions(s)
+        if (seq === loadSeq.current) setSessions(s)
       })
       .catch((e: Error) => {
-        if (!cancelled) setError(e.message || '场次加载失败')
+        if (seq === loadSeq.current) setError(e.message || '场次加载失败')
       })
       .finally(() => {
-        if (!cancelled) setLoading(false)
+        if (seq === loadSeq.current) setLoading(false)
       })
-    return () => {
-      cancelled = true
-    }
-  }, [accountId, refreshTick])
+  }, [accountId])
+
+  useEffect(() => {
+    load()
+  }, [load, refreshTick])
 
   // 数据刷新后浮层锚点已失效 → 关闭（月份/账号切换同理）
   useEffect(() => {
@@ -250,6 +256,22 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
     }
   }
 
+  /** 用户校正分类（v2 第⑦信号）：PUT/DELETE 后重拉（override/series/learned 后端全链重算） */
+  const onPickCategory = async (s: LiveSession, value: string) => {
+    const liveId = s.live_id
+    if (!liveId || !accountId) return
+    setSavingCategory(liveId)
+    try {
+      if (value === 'auto') await api.clearLiveSessionCategory(accountId, liveId)
+      else await api.setLiveSessionCategory(accountId, liveId, value)
+      load()
+    } catch (e) {
+      setError((e as Error).message || '分类保存失败')
+    } finally {
+      setSavingCategory(null)
+    }
+  }
+
   const renderCell = (c: DayCell) => {
     const first = c.sessions[0]
     const toneKey = first ? keyOf(first) : null
@@ -344,6 +366,25 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
                     {meta.length ? ` · ${meta.join(' · ')}` : ''}
                   </div>
                   {figures.length > 0 && <div className="lc-pop-meta">{figures.join(' · ')}</div>}
+                  {s.live_id ? (
+                    <div className="lc-pop-edit">
+                      <span className="lc-pop-edit-label">分类</span>
+                      <select
+                        className="lc-pop-select"
+                        value={s.category ?? 'live'}
+                        disabled={savingCategory === s.live_id}
+                        onChange={(e) => onPickCategory(s, e.target.value)}
+                      >
+                        <option value="auto">自动</option>
+                        {LIVE_TYPE_ORDER.map((t) => (
+                          <option key={t.key} value={t.key}>{t.label}</option>
+                        ))}
+                      </select>
+                      {s.category_from === 'override' && (
+                        <span className="lc-pop-corr">已校正</span>
+                      )}
+                    </div>
+                  ) : null}
                   <div className="lc-pop-src">数据源 {srcs.join(' + ')}</div>
                 </div>
               )

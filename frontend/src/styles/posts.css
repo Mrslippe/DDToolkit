@@ -2135,6 +2135,44 @@
   opacity: 0.75;
 }
 
+/* 浮层内分类校正下拉（v0.9.x 类型引擎 v2 第⑦信号：用户校正 override 源） */
+.lc-pop-edit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.lc-pop-edit-label {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--c-text-sub);
+}
+
+.lc-pop-select {
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  padding: 0 6px;
+  font-size: 11.5px;
+  color: var(--c-text-main);
+  background: var(--c-bg-card);
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 6px;
+  outline: none;
+  cursor: pointer;
+}
+
+.lc-pop-select:focus {
+  border-color: var(--c-accent);
+}
+
+.lc-pop-corr {
+  flex: none;
+  font-size: 10px;
+  color: var(--c-accent);
+}
+
 /* ── 粉丝趋势卡（v0.9.5 重建：参考用户展示图 + 项目粉系浅底）──
    870 定宽与直播日历同契约（4px 圆角 / --pill-shadow / 16px 标题）；
    双轴（粉丝数 Area 主粉渐变 + 日增粉 Bar 正粉负红）；

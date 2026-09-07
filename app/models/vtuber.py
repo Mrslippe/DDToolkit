@@ -118,6 +118,28 @@ class LiveSession(Base):
     updated_at = Column(DateTime, default=_now, onupdate=_now)
 
 
+class LiveCategoryOverride(Base):
+    """直播分类用户校正（v0.9.x 类型引擎 v2 第⑦信号）。
+
+    - (account_id, live_id) 唯一定死分类（infer_category 最高优先级 override 源）；
+    - 反哺：被校正场次标题的词条 → 该账号 learned 词库（其余场次同词条经
+      learned 源生效，见 app/services/live_type.py）；
+    - 仅表内场次可校正（self 快照推导虚拟场次无 live_id）。
+    """
+    __tablename__ = "live_category_overrides"
+    __table_args__ = (
+        UniqueConstraint("account_id", "live_id", name="uq_live_category_overrides_account_live"),
+        Index("ix_live_category_overrides_account", "account_id"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
+    live_id = Column(String, nullable=False)
+    category = Column(String, nullable=False)             # 9 类之一（不含 live 兜底）
+    created_at = Column(DateTime, default=_now)
+    updated_at = Column(DateTime, default=_now, onupdate=_now)
+
+
 class LiveGiftDay(Base):
     """直播礼物日聚合（P4：第三方固定化数据）。
 

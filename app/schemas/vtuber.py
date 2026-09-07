@@ -282,6 +282,12 @@ class LiveSessionOut(BaseModel):
         return v
 
 
+class LiveCategoryOut(BaseModel):
+    """直播分类校正结果（v0.9.x 类型引擎 v2：PUT/DELETE 响应用）。"""
+    category: str
+    category_from: str = "override"
+
+
 # ── 重要日期·大型活动（P7，v0.7.0） ────────────────────────────────
 
 class VtuberEventOut(BaseModel):

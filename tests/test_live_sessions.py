@@ -19,7 +19,9 @@ from app.models.vtuber import (Account, AccountStatSnapshot, LiveSession,
                                VTuber)
 from app.repositories.vtuber_repo import LiveSessionRepo
 from app.services.fetcher import _map_live_rcmd
-from app.services.live_type import infer_category
+from app.services.live_type import (
+    infer_category, score_title, normalize_title, plan_series, build_learned,
+)
 
 T0 = datetime(2026, 9, 1, 12, 0, 0)
 
@@ -345,3 +347,67 @@ def test_category_date_anchor(db):
     assert infer_category("", start_at=T0, event_dates=["2026-09-01"]) == ("special", "date")
     # 无信号 → fallback
     assert infer_category("", start_at=T0, birthday="05-05") == ("live", "fallback")
+
+
+# ── 类型引擎 v2（2026-09-07：多词评分 / 系列聚类 / 用户校正） ────────
+
+def test_score_title_nested_and_weights():
+    # 特殊 5.0 压过歌回 3.0（覆盖性事件优先，同 v1 语义）
+    s = score_title("百万粉纪念歌回")
+    assert s["special"] == 5.0 and s["song"] == 3.0
+    # 同分类嵌套只计最长（联动回 3.5，不叠加联动 3.0）
+    assert score_title("联动回")["collab"] == 3.5
+    # 跨分类嵌套双方保留（演唱会特辑 → special 5.0 / song 2.5）
+    s = score_title("演唱会特辑")
+    assert s["special"] == 5.0 and s["song"] == 2.5
+
+
+def test_category_title_v2_confidence(db):
+    # 强词单发即自信
+    assert infer_category("周六来唱歌！") == ("song", "title")
+    assert infer_category("原神深渊") == ("game", "title")
+    # 泛词/无词不自信 → 落到分区（不再先命中先得）
+    assert infer_category("随便玩玩", area_name="虚拟日常",
+                          parent_area_name="虚拟主播") == ("chat", "area")
+
+
+def test_normalize_title_skeleton():
+    assert normalize_title("【歌回】周一 20:00 第12期") == "歌回"
+    assert normalize_title("晚上好！") == "晚上好"
+    assert normalize_title("杂谈  回") == "杂谈回"      # 标点/空格剥离
+    assert normalize_title("") == ""
+
+
+def test_plan_series_and_series_source():
+    sessions = [
+        {"live_id": "a", "live_title": "【歌回】周一"},
+        {"live_id": "b", "live_title": "【歌回】周二"},
+    ]
+    sp = plan_series(sessions, {})
+    assert sp == {"歌回": "song"}
+    # 系列命中在标题评分之前（source=series）
+    assert infer_category("【歌回】周三", series_categories=sp) == ("song", "series")
+
+
+def test_series_override_propagates():
+    # 「晚上好」×3 无标题信号；修正一场 → 系列聚合投票 4.0 → 全系列改判
+    sessions = [
+        {"live_id": "a", "live_title": "晚上好"},
+        {"live_id": "b", "live_title": "晚上好"},
+        {"live_id": "c", "live_title": "晚上好"},
+    ]
+    sp = plan_series(sessions, {"a": "chat"})
+    assert sp == {"晚上好": "chat"}
+    # 被校正场次本身 = override；同系列其他场次 = series
+    assert infer_category("晚上好", live_id="a", overrides={"a": "chat"},
+                          series_categories=sp) == ("chat", "override")
+    assert infer_category("晚上好", live_id="b", overrides={"a": "chat"},
+                          series_categories=sp) == ("chat", "series")
+
+
+def test_learned_from_correction():
+    sessions = [{"live_id": "a", "live_title": "聊聊原神"}]
+    learned = build_learned({"a": "chat"}, sessions)
+    assert learned == {"chat": {"原神": 2.0}}
+    # 空标题不入词库
+    assert build_learned({"a": "chat"}, [{"live_id": "a", "live_title": None}]) == {}

@@ -112,7 +112,7 @@ export interface LiveSession {
   danmakus_count?: number | null
   /** 类型 key（服务端推断：game/chat/watch/upload/song/fitness/radio/collab/special/live） */
   category?: string
-  /** 类型推断来源（title/area/date/fallback） */
+  /** 类型推断来源（v2：override/series/title/learned/area/date/fallback） */
   category_from?: string
 }
 

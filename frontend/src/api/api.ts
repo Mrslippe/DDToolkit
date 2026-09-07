@@ -99,6 +99,24 @@ export const api = {
   liveSessions: (accountId: number) =>
     request<LiveSession[]>(`/account/${accountId}/live-sessions`),
 
+  /** 用户校正场次分类（v2 第⑦信号：override 最高优先，并反哺系列/词库） */
+  setLiveSessionCategory: (accountId: number, liveId: string, category: string) =>
+    request<{ category: string; category_from: string }>(
+      `/account/${accountId}/live-sessions/${encodeURIComponent(liveId)}/category`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ category }),
+      },
+    ),
+
+  /** 撤除场次分类校正，恢复自动推断 */
+  clearLiveSessionCategory: (accountId: number, liveId: string) =>
+    request<void>(
+      `/account/${accountId}/live-sessions/${encodeURIComponent(liveId)}/category`,
+      { method: 'DELETE' },
+    ),
+
   /** 直播礼物日聚合（日期倒序；limit=0 全量） */
   giftDays: (accountId: number, limit = 0) =>
     request<GiftDay[]>(`/account/${accountId}/gift-days?limit=${limit}`),

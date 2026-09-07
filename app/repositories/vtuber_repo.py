@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.models.vtuber import (VTuber, Account, Post, AccountStatSnapshot,
                                LiveGiftDay, ThirdpartyVtuber, VtuberEvent,
-                               LiveSession)
+                               LiveSession, LiveCategoryOverride)
 
 
 # ── VTuber ─────────────────────────────────────────────────────────
@@ -462,6 +462,56 @@ class LiveSessionRepo:
             "max_online_count": None,
             "danmakus_count": None,
         }
+
+
+class LiveCategoryOverrideRepo:
+    """直播分类用户校正（v0.9.x 类型引擎 v2 第⑦信号）。
+
+    correction：{live_id: category}，连同标题字典交给 live_type 的
+    plan_series/build_learned（系列传播 + 词库反哺）；推断时 override 最高优先。
+    """
+
+    def __init__(self, db: Session):
+        self.db = db
+
+    def map_by_account(self, account_id: int) -> dict[str, str]:
+        """账号全部校正 → {live_id: category}（live_sessions 端点每请求一次）。"""
+        rows = (
+            self.db.query(LiveCategoryOverride)
+            .filter(LiveCategoryOverride.account_id == account_id)
+            .all()
+        )
+        return {r.live_id: r.category for r in rows}
+
+    def upsert(self, account_id: int, live_id: str, category: str) -> LiveCategoryOverride:
+        row = (
+            self.db.query(LiveCategoryOverride)
+            .filter(LiveCategoryOverride.account_id == account_id,
+                    LiveCategoryOverride.live_id == live_id)
+            .first()
+        )
+        if row is None:
+            row = LiveCategoryOverride(account_id=account_id, live_id=live_id,
+                                       category=category)
+            self.db.add(row)
+        else:
+            row.category = category
+        self.db.commit()
+        self.db.refresh(row)
+        return row
+
+    def delete(self, account_id: int, live_id: str) -> bool:
+        row = (
+            self.db.query(LiveCategoryOverride)
+            .filter(LiveCategoryOverride.account_id == account_id,
+                    LiveCategoryOverride.live_id == live_id)
+            .first()
+        )
+        if not row:
+            return False
+        self.db.delete(row)
+        self.db.commit()
+        return True
 
 
 # ── Post ───────────────────────────────────────────────────────────

@@ -11,7 +11,8 @@ TestingSession = sessionmaker(bind=test_engine, autoflush=False, autocommit=Fals
 
 from app.main import app
 from app.core.database import Base, get_db
-from app.models.vtuber import VTuber, Account, Post, AccountStatSnapshot, LiveSession
+from app.models.vtuber import (VTuber, Account, Post, AccountStatSnapshot,
+                               LiveSession, LiveCategoryOverride)
 from app.repositories.vtuber_repo import AccountStatSnapshotRepo
 
 
@@ -31,7 +32,8 @@ def setup_db():
     Base.metadata.create_all(bind=test_engine)
     db = TestingSession()
     try:
-        for t in (Post, AccountStatSnapshot, LiveSession, Account, VTuber):
+        for t in (Post, AccountStatSnapshot, LiveSession, Account, VTuber,
+                  LiveCategoryOverride):
             db.query(t).delete()
         db.commit()
     finally:
@@ -457,3 +459,63 @@ def test_live_sessions_endpoint_merged(client):
     assert s["category_from"] == "title"
     # 账号不存在 → 404
     assert client.get("/account/99999/live-sessions").status_code == 404
+
+
+# ── 直播分类校正（v0.9.x 类型引擎 v2 第⑦信号） ─────────────────────
+
+def test_live_category_override_flow(client):
+    vid = client.post("/vtuber", json={"name": "测试"}).json()["id"]
+    aid = client.post(
+        f"/vtuber/{vid}/accounts",
+        json={"platform": "bilibili", "platform_uid": "123"},
+    ).json()["id"]
+
+    db = TestingSession()
+    db.add(LiveSession(account_id=aid, source="danmakus", live_id="uuid-a",
+                       title="深夜杂谈", start_at=datetime(2026, 9, 7, 12, 5),
+                       end_at=None, area_name="虚拟日常", parent_area_name="虚拟主播"))
+    # 系列传播：同骨架「晚上好」×2（无标题信号）
+    db.add(LiveSession(account_id=aid, source="danmakus", live_id="uuid-b",
+                       title="晚上好", start_at=datetime(2026, 9, 8, 20, 0),
+                       end_at=None, area_name="虚拟日常", parent_area_name="虚拟主播"))
+    db.add(LiveSession(account_id=aid, source="danmakus", live_id="uuid-c",
+                       title="晚上好", start_at=datetime(2026, 9, 9, 20, 0),
+                       end_at=None, area_name="虚拟日常", parent_area_name="虚拟主播"))
+    db.commit()
+    db.close()
+
+    # 校正 → override 源生效（并立即反哺系列投票）
+    resp = client.put(f"/account/{aid}/live-sessions/uuid-a/category",
+                      json={"category": "game"})
+    assert resp.status_code == 200
+    assert resp.json()["category_from"] == "override"
+    resp = client.put(f"/account/{aid}/live-sessions/uuid-b/category",
+                      json={"category": "watch"})
+    assert resp.status_code == 200
+
+    data = client.get(f"/account/{aid}/live-sessions").json()
+    by_live = {s["live_id"]: s for s in data}
+    assert by_live["uuid-a"]["category"] == "game"
+    assert by_live["uuid-a"]["category_from"] == "override"
+    # 同系列其他场次随校正传播（series 源）
+    assert by_live["uuid-b"]["category_from"] == "override"
+    assert by_live["uuid-c"]["category"] == "watch"
+    assert by_live["uuid-c"]["category_from"] == "series"
+
+    # 非法分类 → 422（不含 live 兜底）
+    assert client.put(f"/account/{aid}/live-sessions/uuid-a/category",
+                      json={"category": "nope"}).status_code == 422
+    assert client.put(f"/account/{aid}/live-sessions/uuid-a/category",
+                      json={"category": "live"}).status_code == 422
+
+    # 撤除 → 恢复自动推断
+    assert client.delete(f"/account/{aid}/live-sessions/uuid-a/category").status_code == 204
+    data = client.get(f"/account/{aid}/live-sessions").json()
+    by_live = {s["live_id"]: s for s in data}
+    assert by_live["uuid-a"]["category"] == "chat"        # 标题「深夜杂谈」→ 杂谈
+    assert by_live["uuid-a"]["category_from"] == "title"
+
+    # 账号不存在 → 404；撤除无记录 → 404
+    assert client.put("/account/99999/live-sessions/x/category",
+                      json={"category": "game"}).status_code == 404
+    assert client.delete(f"/account/{aid}/live-sessions/uuid-a/category").status_code == 404
