@@ -30,7 +30,8 @@ from app.services.live_type import (
     infer_category, plan_series, build_learned, EDITABLE_CATEGORY_KEYS,
 )
 from app.services.externals.danmakus import fetch_live_summary, fetch_live_events
-from app.schemas.vtuber import LiveDanmakuInfo, LiveMetricsOut, LiveEventOut
+from app.schemas.vtuber import (LiveDanmakuInfo, LiveMetricsOut, LiveEventOut,
+                                LiveWordOut)
 from app.services.post_text import extract_post_text
 
 logger = logging.getLogger(__name__)
@@ -380,6 +381,8 @@ async def live_session_detail(account_id: int, live_id: str,
             danmaku = LiveDanmakuInfo(
                 total=summary.get("total"),
                 top_keywords=[w for w, _c in (summary.get("word_cloud") or [])][:40],
+                top_words=[LiveWordOut(text=w, count=int(c))
+                           for w, c in (summary.get("word_cloud") or [])][:40],
             )
             metrics = LiveMetricsOut(
                 watch_count=summary.get("watch_count"),

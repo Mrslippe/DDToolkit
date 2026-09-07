@@ -290,11 +290,18 @@ class LiveCategoryOut(BaseModel):
     category_from: str = "override"
 
 
+class LiveWordOut(BaseModel):
+    """词云词条（词 + 出现次数，气泡词云用）。"""
+    text: str
+    count: int
+
+
 class LiveDanmakuInfo(BaseModel):
     """弹幕信息（danmakus /api/v2/live，2026-09-07 接入：总量 + 词云热词）。"""
     total: int | None = None
     top_keywords: list[str] = []
-    hot_segments: list[dict] = []     # 预留：[{start, end, count}] 高浓度片段
+    top_words: list[LiveWordOut] = []          # 带次数的词条（气泡词云 + hover 次数）
+    hot_segments: list[dict] = []              # 预留：[{start, end, count}] 高浓度片段
 
 
 class LiveAnalysisInfo(BaseModel):

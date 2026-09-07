@@ -2244,17 +2244,19 @@
   background: var(--c-accent);
 }
 
-/* 主体两栏：左封面（292px，contain 不裁切）· 右直播信息卡片（user 2026-09-07 重构，参考图布局） */
+/* 主体两栏：左封面（264px · 4:3 容器——danmakus 封面实测 720×540=4:3 与 704×396=16:9
+   混存，4:3 容器 + contain 可同时完整展示两种）· 右直播信息卡片 */
 .lc-dlg-main {
   display: grid;
-  grid-template-columns: 292px minmax(0, 1fr);
+  grid-template-columns: 264px minmax(0, 1fr);
   gap: 12px;
-  align-items: stretch;
+  align-items: start;
 }
 
 .lc-dlg-cover {
   position: relative;
-  min-height: 176px;
+  width: 264px;
+  aspect-ratio: 4 / 3;      /* 2026-09-07 用户指正：手机封面 720×540 = 4:3 */
   border-radius: 10px;
   overflow: hidden;
   background: linear-gradient(160deg, #f6edf0 0%, #ece4e8 55%, #e3dae0 100%);
@@ -2363,21 +2365,31 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* 词云容器：宽度随卡片自适应，高度固定；svg 全宽 */
+/* 气泡词云（d3-hierarchy.pack，2026-09-07：圆面积∝词频 + 物理挤压排列） */
 .lc-dlg-cloud {
+  position: relative;
   width: 100%;
-  height: 150px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  height: 190px;
 }
 
-.lc-dlg-cloud svg {
+.lc-dlg-cloud-svg {
   display: block;
 }
 
-.lc-dlg-cloud text {
-  cursor: default;
+/* 词频 hover 提示（跟随鼠标） */
+.lc-dlg-cloud-tip {
+  position: fixed;
+  z-index: 70;
+  transform: translate(10px, -14px);
+  padding: 3px 10px;
+  border-radius: 106px;
+  font-size: 11.5px;
+  line-height: 1;
+  color: #fff;
+  background: rgba(15, 23, 42, 0.78);
+  pointer-events: none;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 /* 直播动态（B 组事件 + A 组在线峰值高光） */

@@ -566,9 +566,11 @@ def test_live_session_detail_endpoint(client, monkeypatch):
     assert d["category"] == "chat"
     assert d["category_from"] == "title"
     assert d["segment_count"] == 1
-    # 弹幕摘要已接入（词云 top 词按次数降序；A 组指标 + B 组事件）
+    # 弹幕摘要已接入（词云 top 词按次数降序 + 带次数词条；A 组指标 + B 组事件）
     assert d["danmaku"] == {"total": 39316,
                             "top_keywords": ["好耶", "MELODY"],
+                            "top_words": [{"text": "好耶", "count": 3195},
+                                          {"text": "MELODY", "count": 210}],
                             "hot_segments": []}
     m = d["metrics"]
     assert m["watch_count"] == 16216 and m["like_count"] == 163579

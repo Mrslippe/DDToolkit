@@ -120,10 +120,18 @@ export interface LiveSession {
   category_from?: string
 }
 
+/** 词云词条（词 + 出现次数，气泡词云与 hover 次数用） */
+export interface LiveWord {
+  text: string
+  count: number
+}
+
 /** 弹幕信息（预留接口：danmakus 场次级详细数据接入后填充，当前为 null） */
 export interface LiveDanmakuInfo {
   total?: number | null
   top_keywords?: string[]
+  /** 带次数的词条（气泡词云） */
+  top_words?: LiveWord[]
   /** 预留：[{ start, end, count }] 高浓度片段 */
   hot_segments?: Record<string, unknown>[]
 }

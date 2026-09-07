@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Loader2, X } from 'lucide-react'
-import WordCloud from 'react-wordcloud'
+import { hierarchy, pack } from 'd3-hierarchy'
 import type { LiveSession, LiveSessionDetail } from '../api/types'
 import { api, imgProxyUrl } from '../api/api'
 import { normalizeImageUrl } from '../utils/format'
@@ -115,10 +115,95 @@ function CoverImage({ src, fallbackChar }: { src?: string | null; fallbackChar: 
 const CLOUD_COLORS = ['#d8645e', '#8b6fd8', '#0088be', '#d4b801', '#009a24',
   '#ec57ff', '#2fa5ad', '#c95c86', '#e0872f', '#5b7fd8']
 
-function cloudWordColor(w: { text: string }): string {
+function cloudWordColor(w: { text?: string }): string {
+  const s = w.text ?? ''
   let h = 0
-  for (const ch of w.text) h = (h * 31 + ch.charCodeAt(0)) % 997
+  for (const ch of s) h = (h * 31 + ch.charCodeAt(0)) % 997
   return CLOUD_COLORS[h % CLOUD_COLORS.length]
+}
+
+interface BubbleWord {
+  text: string
+  count: number
+}
+
+/**
+ * 气泡词云（2026-09-07）：d3-hierarchy.pack = 成熟 circle-packing 方案
+ * （圆面积∝词频，pack 无缝物理挤压排列；React 封装库 react-bubble-cloud
+ * 已在 npm 下架 404，故用 d3 自绘）。
+ * - 不同颜色/大小圆 = 不同词；圆内嵌词（小圆只留色块）
+ * - hover 显示「词 · N 次」（悬停气泡圆）
+ */
+function BubbleCloud({ data }: { data: BubbleWord[] }) {
+  const ref = useRef<HTMLDivElement>(null)
+  const [size, setSize] = useState({ w: 0, h: 190 })
+  const [tip, setTip] = useState<{ x: number; y: number; text: string; count: number } | null>(null)
+
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const ro = new ResizeObserver((es) => {
+      const w = Math.round(es[0]?.contentRect.width ?? 0)
+      if (w > 0) setSize((s) => ({ ...s, w }))
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+
+  const nodes = useMemo(() => {
+    if (!data.length || size.w < 80) return []
+    const root = hierarchy<unknown>({ children: data })
+      .sum((d) => {
+        const n = d as unknown as BubbleWord | null
+        return n && typeof n.count === 'number' && Number.isFinite(n.count) ? n.count : 0
+      })
+      .sort((a, b) => (b.value ?? 0) - (a.value ?? 0))
+    return pack<unknown>().size([size.w, size.h]).padding(2)(root).children ?? []
+  }, [data, size.w, size.h])
+
+  return (
+    <div ref={ref} className="lc-dlg-cloud">
+      {size.w > 0 && (
+        <svg width={size.w} height={size.h} className="lc-dlg-cloud-svg">
+          {nodes.map((n) => {
+            const w = n.data as unknown as BubbleWord
+            const r = Math.max(n.r ?? 0, 2)
+            const fs = Math.max(8, Math.min(r * 0.72, (r * 1.7) / Math.max(2, w.text.length)))
+            return (
+              <g
+                key={w.text}
+                transform={`translate(${n.x ?? 0}, ${n.y ?? 0})`}
+                onMouseEnter={(e) =>
+                  setTip({ x: e.clientX, y: e.clientY, text: w.text, count: w.count })}
+                onMouseMove={(e) =>
+                  setTip((t) => (t ? { ...t, x: e.clientX, y: e.clientY } : t))}
+                onMouseLeave={() => setTip(null)}
+              >
+                <circle r={r} fill={cloudWordColor(w)} fillOpacity={0.88} />
+                {r > 13.5 && (
+                  <text
+                    textAnchor="middle"
+                    dy="0.35em"
+                    fontSize={fs}
+                    fill="#fff"
+                    fontWeight={600}
+                    pointerEvents="none"
+                  >
+                    {w.text}
+                  </text>
+                )}
+              </g>
+            )
+          })}
+        </svg>
+      )}
+      {tip && (
+        <span className="lc-dlg-cloud-tip" style={{ left: tip.x, top: tip.y }}>
+          {tip.text} · {tip.count.toLocaleString('zh-CN')} 次
+        </span>
+      )}
+    </div>
+  )
 }
 
 /**
@@ -502,13 +587,9 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
     )
   }
 
-  /** 词云数据（top40，value 按频次排序降权——react-wordcloud 布局/字号用） */
-  const cloudWords = useMemo(() => {
-    const kw = (detail?.data?.danmaku?.top_keywords ?? []).slice(0, 40)
-    return kw.map((text, i) => ({
-      text,
-      value: i < 20 ? 100 - i * 4 : Math.max(12, 40 - i),
-    }))
+  /** 气泡词云数据（top40 带次数；d3 pack 面积∝词频） */
+  const cloudBubbles = useMemo<BubbleWord[]>(() => {
+    return (detail?.data?.danmaku?.top_words ?? []).slice(0, 40)
   }, [detail])
 
   /** 详情弹窗：直播信息 + 分类校正 + 弹幕词云/指标/直播间动态 */
@@ -685,29 +766,8 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
                     </div>
                   )}
                 </dl>
-                {cloudWords.length ? (
-                  <div className="lc-dlg-cloud">
-                    <WordCloud
-                      words={cloudWords}
-                      minSize={[300, 150]}
-                      callbacks={{
-                        getWordTooltip: (w: { text: string }) => w.text,
-                        getWordColor: cloudWordColor,
-                      }}
-                      options={{
-                        rotations: 0,
-                        rotationAngles: [0, 0],
-                        fontSizes: [13, 34],
-                        fontStyle: 'normal',
-                        fontWeight: '600',
-                        fontFamily: 'inherit',
-                        padding: 2,
-                        spiral: 'archimedean',
-                        scale: 'sqrt',
-                        deterministic: false,
-                      }}
-                    />
-                  </div>
+                {cloudBubbles.length ? (
+                  <BubbleCloud data={cloudBubbles} />
                 ) : (
                   <div className="lc-dlg-ph">暂无热词数据</div>
                 )}
