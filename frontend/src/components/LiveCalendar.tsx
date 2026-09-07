@@ -300,9 +300,13 @@ function MosaicCloud({
   }, [restoreTick])
 
   /**
-   * 破泡：删词 → 用剩余词重建终态（入场路径，node 验证可靠）→ 插值过渡。
-   * 视觉：旧快照 → 新稳态做同构插值（凸多边形等角采样 + 逐点 lerp，rAF 400ms）——
-   * 被破词瞬间消失，邻泡从当前位置平滑滑向新位置闭合空隙（"立即闭合"观感）。
+   * 破泡 = 局部闭合（node 验证：缺口填充 2 词、远处位移 avg 6.5px/max 16px、
+   * 偏差 15%、单调 100%）：
+   * 1. 删词（站点/λ 移除）——对应 cell **立即消失**，缺口出现（无卡顿：纯同步删）；
+   * 2. rAF 局部松弛：α=0.15 起步（力场几乎不动）+ kCenter=0（停中心引力）——
+   *    λ 修正把缺口面积重新分配给相邻 cell（power 边界自动"鼓胀"塞住缺口），
+   *    站点只极轻微挪动（视觉上邻泡"挤入"缺口）——远处纹丝不动；
+   * 3. α 渐冷至 0.05 停止（静止即停）。
    */
   const popWord = (text: string) => {
     const p = packerRef.current
@@ -314,90 +318,32 @@ function MosaicCloud({
       setSnap({ cells: [] })
       return
     }
-    // 旧快照（插值起点；按词索引）
-    const fromSnap = snap
-    // 重建：reset + 剩余词逐个入场 + 同步收敛
-    const words = p.allWords.slice()
-    p.reset()
-    for (const wd of words) p.addWord(wd)
-    let alpha = 1
-    while (alpha > 0.01) {
-      alpha = Math.max(alpha * 0.994, 0.01)
-      p.step(alpha, alpha < 0.3 ? 80 : 2)
-    }
-    const toSnap = p.state()
-    // 插值播放（同构：等角采样 28 点凸包 → lerp）
-    if (!fromSnap || fromSnap.cells.length === 0) {
-      setSnap(toSnap)
+    // 立即反映（词消失、缺口出现）
+    setSnap(p.state())
+    // 局部松弛循环
+    cancelAnimationFrame(rafRef.current)
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+    if (reduceMotion) {
+      let alpha = 0.15
+      while (alpha > 0.05) {
+        alpha = Math.max(alpha * 0.994, 0.05)
+        p.step(alpha, alpha < 0.3 ? 20 : 2, 0)
+      }
+      setSnap(p.state())
       return
     }
-    cancelAnimationFrame(rafRef.current)
-    const fromMap = new Map(fromSnap.cells.map((c) => [c.word.text, c]))
-    // 交集词（未破的旧词）：插值位置/形状；其余直接用 toSnap
-    type Interp = { fromC: CloudCell; toC: CloudCell }
-    const interps: Interp[] = []
-    const direct: CloudCell[] = []
-    for (const c of toSnap.cells) {
-      const fromC = fromMap.get(c.word.text)
-      if (fromC) interps.push({ fromC, toC: c })
-      else direct.push(c)
+    let alpha = 0.15
+    let alive = true
+    const loop = () => {
+      if (!alive) return
+      alpha = Math.max(alpha * 0.994, 0.05)
+      // 站点几乎不动：α 0.15 起步（力微扰）；kCenter=0（停中心引力拖拽）
+      p.step(alpha, alpha < 0.3 ? 20 : 2, 0)
+      setSnap(p.state())
+      if (alpha <= 0.05) return   // 静止即停
+      rafRef.current = requestAnimationFrame(loop)
     }
-    const sample = (poly: [number, number][], n: number): [number, number][] => {
-      // 凸多边形等角采样：以质心为极点、角度均匀取射线交点（近似即可）
-      let cx = 0, cy = 0
-      for (const pnt of poly) { cx += pnt[0]; cy += pnt[1] }
-      cx /= poly.length; cy /= poly.length
-      const out: [number, number][] = []
-      for (let k = 0; k < n; k++) {
-        const a = (k / n) * Math.PI * 2
-        const ux = Math.cos(a), uy = Math.sin(a)
-        // 与多边求交（最近正向交点）
-        let tBest = Infinity
-        for (let i = 0; i < poly.length; i++) {
-          const p1 = poly[i], p2 = poly[(i + 1) % poly.length]
-          const ex = p2[0] - p1[0], ey = p2[1] - p1[1]
-          const den = ux * ey - uy * ex
-          if (Math.abs(den) < 1e-9) continue
-          const t = ((p1[0] - cx) * ey - (p1[1] - cy) * ex) / den
-          if (t > 0 && t < tBest) tBest = t
-        }
-        if (isFinite(tBest)) out.push([cx + ux * tBest, cy + uy * tBest])
-        else out.push([cx, cy])
-      }
-      return out
-    }
-    let start = performance.now()
-    let raf = 0
-    const DUR = 400
-    const loop = (tNow: number) => {
-      const t = Math.min(1, (tNow - start) / DUR)
-      const e = 1 - Math.pow(1 - t, 3)   // easeOutCubic
-      const cells: CloudCell[] = interps.map(({ fromC, toC }) => {
-        const A = sample(fromC.poly.length ? fromC.poly : [[fromC.cx, fromC.cy]], 28)
-        const B = sample(toC.poly.length ? toC.poly : [[toC.cx, toC.cy]], 28)
-        const poly: [number, number][] = A.map((pnt, i) => [
-          pnt[0] + (B[i][0] - pnt[0]) * e,
-          pnt[1] + (B[i][1] - pnt[1]) * e,
-        ])
-        let cx = 0, cy = 0
-        for (const pnt of poly) { cx += pnt[0]; cy += pnt[1] }
-        cx /= poly.length; cy /= poly.length
-        const r = Math.sqrt(Math.max(0, areaLerp(fromC, toC, e)) / Math.PI)
-        return { word: toC.word, poly, cx, cy, r }
-      }).concat(direct)
-      setSnap({ cells })
-      if (t < 1) raf = requestAnimationFrame(loop)
-      else rafRef.current = 0
-      rafRef.current = raf
-    }
-    raf = requestAnimationFrame(loop)
-    rafRef.current = raf
-  }
-
-  /** 面积插值（粗糙但足够视觉过渡用） */
-  const areaLerp = (a: CloudCell, b: CloudCell, t: number): number => {
-    const ar = a.r * a.r * Math.PI, br = b.r * b.r * Math.PI
-    return ar + (br - ar) * t
+    rafRef.current = requestAnimationFrame(loop)
   }
 
   return (

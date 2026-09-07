@@ -318,12 +318,13 @@ export class MosaicPacker {
     this.sites = []
   }
 
-  /** 一帧推进：力导向（alpha）+ λ 收敛（rounds 轮） */
-  step(alpha: number, lamRounds: number) {
+  /** 一帧推进：力导向（alpha）+ λ 收敛（rounds 轮）。
+   *  kCenter：中心引力系数（破泡局部松弛时传 0——避免力场把泡泡拖离缺口） */
+  step(alpha: number, lamRounds: number, kCenter = 0.0015) {
     if (this.words.length === 0) return
     const tgt = areaTargets(this.words, this.box, this.minRatio)
     const radii = tgt.map((a) => Math.sqrt(a / Math.PI))
-    tickForce(this.sites, radii, alpha, this.box, 0.0015, MASS_Q)
+    tickForce(this.sites, radii, alpha, this.box, kCenter, MASS_Q)
     relaxLambda(this.words, this.sites, tgt, this.boundary, lamRounds)
   }
 
