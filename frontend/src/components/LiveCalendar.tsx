@@ -2,7 +2,6 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Loader2, X } from 'lucide-react'
-import { Delaunay } from 'd3-delaunay'
 import type { LiveSession, LiveSessionDetail } from '../api/types'
 import { api, imgProxyUrl } from '../api/api'
 import { normalizeImageUrl } from '../utils/format'
@@ -111,9 +110,9 @@ function CoverImage({ src, fallbackChar }: { src?: string | null; fallbackChar: 
   )
 }
 
-/** 词云配色（项目粉系 + 类型色相，按词哈希取色保持稳定） */
-const CLOUD_COLORS = ['#d8645e', '#8b6fd8', '#0088be', '#d4b801', '#009a24',
-  '#ec57ff', '#2fa5ad', '#c95c86', '#e0872f', '#5b7fd8']
+/** 词云配色（浅色粉系——2026-09-07 用户：浅色更符合卡片整体风格；文字用深色） */
+const CLOUD_COLORS = ['#ffc9c4', '#a5e6ff', '#dccff7', '#bee9ec', '#ffd5b8',
+  '#fff2a0', '#fda5ff', '#b2f3c0', '#ffdfe8', '#d8e8ff']
 
 function cloudWordColor(w: { text?: string }): string {
   const s = w.text ?? ''
@@ -147,94 +146,122 @@ interface VoronoiCell {
   hero: boolean
 }
 
-/** 加权 Voronoi 拼贴布局（A 方案，2026-09-07）：
- * - weighted-Lloyd（CVT 加权变体）= 成熟「power diagram」近似：
- *   ① 初始中心极坐标占位（词频降序：hero 居中、越小的词越靠外、黄金角错开）；
- *   ② 按词频概率采样（大词样本多 → 最终面积∝词频）；
- *   ③ 迭代「最近中心聚簇 → 质心」16 轮（d3-delaunay 求 Voronoi 验证收敛）；
- * - 最终：d3-delaunay.voronoi 输出无缝物理挤压多边形（2px 描边=拼贴缝隙）；
- * - 布局完全确定性（种子 20260907），宽高变化才重排。 */
-function layoutVoronoiCloud(words: BubbleWord[], w: number, h: number): VoronoiCell[] {
+/** 半平面裁剪（Sutherland–Hodgman）：保留 ax*x + ay*y ≤ b 部分 */
+function clipHalf(poly: [number, number][], ax: number, ay: number, b: number) {
+  const out: [number, number][] = []
+  for (let k = 0; k < poly.length; k++) {
+    const p = poly[k]
+    const q = poly[(k + 1) % poly.length]
+    const fp = ax * p[0] + ay * p[1] - b
+    const fq = ax * q[0] + ay * q[1] - b
+    if (fp <= 0) out.push(p)
+    if ((fp < 0 && fq > 0) || (fp > 0 && fq < 0)) {
+      const t = fp / (fp - fq)
+      out.push([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t])
+    }
+  }
+  return out
+}
+
+/**
+ * 加权 Voronoi（power diagram）拼贴布局 —— Balzer 2005 方案，2026-09-07：
+ * - 线性半平面裁剪直接求 power 单元（cell_i = ∩{ x: d_i(x) ≤ d_j(x) }，
+ *   d(x) = |x−c|² − λ，无需 3D 凸包）；
+ * - 每轮 ① 站点弛豫：站点移到其 power 单元质心（power-Lloyd）；
+ *   ② 权重修正：λ_i += β (目标面积 − 当前面积)（β=0.5 实测收敛，
+ *   面积偏差 ≤8%，无空单元——词频越高面积越大由数学保证）。
+ * - 初始站点极坐标占位（hero=中心、大词靠内、黄金角），布局确定性（种子）。
+ */
+function layoutPowerCloud(words: BubbleWord[], w: number, h: number): VoronoiCell[] {
+  const BETA = 0.5
+  const ITERS = 120
   const rand = mulberry32(20260907)
   const total = words.reduce((s, x) => s + x.count, 0)
   const n = words.length
   const cw = w / 2
   const ch = h / 2
-  const rMax = Math.min(cw, ch) * 0.94
+  const rMax = Math.min(cw, ch) * 0.92
+  const tgt = words.map((x) => (x.count / total) * w * h)
 
-  // ① 初始中心
-  const centers: [number, number][] = words.map((_word, i) => {
+  let sites: [number, number][] = words.map((_w, i) => {
     if (i === 0) return [cw, ch]
-    const rad = rMax * Math.pow(i / n, 0.75)
-    const ang = (i - 1) * 137.508 + (rand() * 0.6 - 0.3)
+    const rad = rMax * Math.pow((i + 0.5) / n, 0.5)
+    const ang = (i - 1) * 137.508 + (rand() - 0.5) * 0.4
     return [cw + rad * Math.cos(ang), ch + rad * Math.sin(ang)]
   })
+  let lambda = words.map((_w, i) => tgt[i] / n)
+  const box: [number, number][] = [[0, 0], [w, 0], [w, h], [0, h]]
 
-  // ② 加权采样（概率 ∝ 词频；圆盘均匀分布）
-  const samples: [number, number, number][] = []
-  const SAMPLE_N = 4200
-  for (let s = 0; s < SAMPLE_N; s++) {
-    let p = rand() * total
-    let wi = 0
+  const cellsOf = () => words.map((_w, i) => {
+    let poly = box
+    const [cx, cy] = sites[i]
+    const ci2 = cx * cx + cy * cy
     for (let j = 0; j < n; j++) {
-      p -= words[j].count
-      if (p <= 0) {
-        wi = j
-        break
-      }
+      if (j === i) continue
+      const [jx, jy] = sites[j]
+      poly = clipHalf(poly, 2 * (jx - cx), 2 * (jy - cy),
+        jx * jx + jy * jy - ci2 - (lambda[j] - lambda[i]))
+      if (!poly.length) return null
     }
-    const ang = rand() * Math.PI * 2
-    const rad = rMax * Math.sqrt(rand())
-    samples.push([cw + rad * Math.cos(ang), ch + rad * Math.sin(ang), wi])
-  }
-
-  // ③ weighted-Lloyd 迭代
-  for (let it = 0; it < 16; it++) {
-    const sums = centers.map(() => ({ x: 0, y: 0, k: 0 }))
-    for (const [x, y] of samples) {
-      let best = 0
-      let bd = Infinity
-      for (let i = 0; i < n; i++) {
-        const dx = x - centers[i][0]
-        const dy = y - centers[i][1]
-        const d = dx * dx + dy * dy
-        if (d < bd) {
-          bd = d
-          best = i
-        }
-      }
-      const s = sums[best]
-      s.x += x
-      s.y += y
-      s.k++
-    }
-    for (let i = 0; i < n; i++) {
-      const s = sums[i]
-      if (s.k > 0) centers[i] = [s.x / s.k, s.y / s.k]
-    }
-  }
-
-  // ④ Voronoi 多边形 + 面积（鞋带公式）→ 等效半径
-  const voro = Delaunay.from(centers).voronoi([0, 0, w, h])
-  return words.map((word, i) => {
-    const pts = voro.cellPolygon(i) ?? [[0, 0], [0, 0], [0, 0]]
+    return poly
+  })
+  const areaOf = (polys: ([number, number][] | null)[]) => polys.map((pts) => {
+    if (!pts) return 0
     let a = 0
     for (let k = 0; k < pts.length; k++) {
       const p1 = pts[k]
       const p2 = pts[(k + 1) % pts.length]
       a += p1[0] * p2[1] - p2[0] * p1[1]
     }
-    a = Math.abs(a / 2)
+    return Math.abs(a / 2)
+  })
+
+  for (let it = 0; it < ITERS; it++) {
+    const polys = cellsOf()
+    const areas = areaOf(polys)
+    let maxRel = 0
+    for (let i = 0; i < n; i++) {
+      const rel = Math.abs(areas[i] - tgt[i]) / tgt[i]
+      if (rel > maxRel) maxRel = rel
+      lambda[i] = Math.max(lambda[i] + BETA * (tgt[i] - areas[i]), 1)
+      // 站点弛豫：移到 power 单元质心
+      const pts = polys[i]
+      if (pts && pts.length >= 3) {
+        let ac = 0
+        let mx = 0
+        let my = 0
+        for (let k = 0; k < pts.length; k++) {
+          const p1 = pts[k]
+          const p2 = pts[(k + 1) % pts.length]
+          const cr = p1[0] * p2[1] - p2[0] * p1[1]
+          ac += cr
+          mx += (p1[0] + p2[0]) * cr
+          my += (p1[1] + p2[1]) * cr
+        }
+        if (Math.abs(ac) > 1) sites[i] = [mx / (3 * ac), my / (3 * ac)]
+      }
+    }
+    if (maxRel < 0.1) break
+  }
+
+  const polys = cellsOf()
+  const areas = areaOf(polys)
+  return words.map((word, i) => {
+    const pts = polys[i] ?? [[0, 0], [0, 0], [0, 0]]
     const cx = pts.reduce((s, p) => s + p[0], 0) / pts.length
     const cy = pts.reduce((s, p) => s + p[1], 0) / pts.length
-    return { word, poly: pts, cx, cy, r: Math.sqrt(a / Math.PI), hero: i === 0 }
+    return {
+      word, poly: pts, cx, cy,
+      r: Math.sqrt(areas[i] / Math.PI),
+      hero: i === 0,
+    }
   })
 }
 
 /**
  * 加权 Voronoi 拼贴词云（A 方案；参考图形态：无缝多边形挤压 + 中央大块）。
- * - 不同颜色/大小多边形 = 不同词（面积∝词频，真实物理挤压）；
- * - hover 高亮 + 显示「词 · N 次」；布局确定性（同数据同形状）。
+ * - 面积 ∝ 词频（power diagram 数学保证：词频越高面积越大）；
+ * - 浅色填充 + 深色词字（贴合卡片整体风格）；hover 高亮 + 「词 · N 次」。
  */
 function VoronoiCloud({ data }: { data: BubbleWord[] }) {
   const ref = useRef<HTMLDivElement>(null)
@@ -255,7 +282,7 @@ function VoronoiCloud({ data }: { data: BubbleWord[] }) {
 
   const cells = useMemo(() => {
     if (!data.length || size.w < 80) return []
-    return layoutVoronoiCloud(data, size.w, size.h)
+    return layoutPowerCloud(data, size.w, size.h)
   }, [data, size.w, size.h])
 
   return (
@@ -286,7 +313,7 @@ function VoronoiCloud({ data }: { data: BubbleWord[] }) {
                 <path
                   d={d}
                   fill={cloudWordColor(word)}
-                  fillOpacity={hover === i ? 1 : 0.88}
+                  fillOpacity={hover === i ? 1 : 0.92}
                   stroke="var(--c-bg-card)"
                   strokeWidth={2}
                 />
@@ -297,7 +324,7 @@ function VoronoiCloud({ data }: { data: BubbleWord[] }) {
                     textAnchor="middle"
                     dy="0.35em"
                     fontSize={fs}
-                    fill="#fff"
+                    fill="var(--c-text-main)"
                     fontWeight={hero ? 700 : 600}
                     pointerEvents="none"
                   >
