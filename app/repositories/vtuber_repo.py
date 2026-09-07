@@ -384,7 +384,7 @@ class LiveSessionRepo:
         g_start, g_end = g["start_at"], g.get("end_at")
         # 1) 双源同场：同 room 且 start 差小（B站 live_id 与 danmakus uuid 异键）
         if row.room_id and g.get("room_id"):
-            if abs((row.start_at - g_start).total_seconds()) <= timedelta(
+            if abs(row.start_at - g_start) <= timedelta(
                     minutes=self.SAME_SESSION_ROOM_MINUTES):
                 return "room"
         ga, ra = normalize_title(g.get("live_title")), normalize_title(row.title)

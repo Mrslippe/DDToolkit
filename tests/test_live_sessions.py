@@ -367,6 +367,23 @@ def test_merged_cross_midnight_interruption_merges(db):
     assert merged[0]["segment_count"] == 2
 
 
+def test_merged_room_dedupe_same_room_feed_rows(db):
+    """同 room 的 feed 行：同日紧邻 → room 去重并一场；隔天 → 不误并（回归：
+    timedelta 比较 bug 曾导致同 room 行直接抛 TypeError）。"""
+    acc = _mk_account(db)
+    repo = LiveSessionRepo(db)
+    repo.upsert_feed(acc.id, "feed-1", {
+        "title": "杂谈", "start_at": T0, "room_id": "21452505"})
+    repo.upsert_feed(acc.id, "feed-2", {
+        "title": "杂谈", "start_at": T0 + timedelta(minutes=20), "room_id": "21452505"})
+    repo.upsert_feed(acc.id, "feed-3", {
+        "title": "歌回", "start_at": T0 + timedelta(days=1), "room_id": "21452505"})
+    merged = repo.merged(acc.id)
+    assert len(merged) == 2                                  # 同日并一场 + 隔天一场
+    assert merged[0]["segment_count"] == 1
+    assert merged[1]["live_title"] == "歌回"
+
+
 # ── M2：live_rcmd 卡片映射（fetcher） ──────────────────────────────
 
 def _live_rcmd_item():
