@@ -507,11 +507,18 @@ function VoronoiCloud({
   const baseRef = useRef(baseLayout)
   baseRef.current = baseLayout
 
-  // 基座变化（初始/切换场次/尺寸）→ 重建模拟（静止起点）
+  // 基座变化（初始/切换场次/尺寸）→ 重建模拟（静止起点）。
+  // ⚠️ 必须同时写入首帧快照（setFrameCells(null) 是空更新不触发重渲染——
+  //    曾致打开弹窗时词云恒显「已全部破泡」，2026-09-07 用户截图反馈）
   useEffect(() => {
     stopLoop()
     simRef.current = buildSimWords(dataRef.current, baseRef.current, sizeRef.current.w, sizeRef.current.h)
-    setFrameCells(null)
+    const S = simRef.current
+    setFrameCells(
+      S.length > 0 && sizeRef.current.w >= 80
+        ? foamShapes(S, sizeRef.current.w, sizeRef.current.h).cells
+        : null,
+    )
   }, [baseLayout, stopLoop])
 
   // 场次/数据切换 → 破泡计数清零（重开弹窗语义）
