@@ -30,17 +30,25 @@ html.window-maximized body {
   border-radius: 0;
 }
 
-/* 全局细滚动条（WebView2 = Chromium 内核，webkit 私有属性全支持） */
+/* 全局滚动条统一标准（user 2026-09-07 定案，所有滚动条一律遵守）：
+   透明轨道 + 常态 --c-border 细灰 + hover 顶栏粉 --c-primary；
+   描边内收形态（滑块与容器边缘留白）：槽宽 12px、内收 4px（视觉滑块 4px），
+   hover 时收缩内收至 2px（视觉增粗至 8px）；圆角胶囊状。
+   WebView2 = Chromium，webkit 私有属性全支持；不要用 scrollbar-width/
+   scrollbar-color 标准属性——会令 ::-webkit-scrollbar 全部失效。 */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 12px;
+  height: 12px;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--c-border);
+  border: 4px solid transparent;
+  background-color: var(--c-border);
+  background-clip: content-box;
   border-radius: 999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--c-primary);
+  border-width: 2px;
+  background-color: var(--c-primary);
 }
 ::-webkit-scrollbar-track,
 ::-webkit-scrollbar-corner {
