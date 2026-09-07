@@ -2350,7 +2350,7 @@
   line-height: 16px;
 }
 
-/* 弹幕信息区块（danmakus /api/v2/live 词云，2026-09-07 接入） */
+/* 弹幕信息区块（danmakus /api/v2/live 词云，2026-09-07 接入；词云 = react-wordcloud） */
 .lc-dlg-danmaku {
   display: flex;
   flex-direction: column;
@@ -2361,6 +2361,77 @@
   font-weight: 600;
   color: var(--c-text-main);
   font-variant-numeric: tabular-nums;
+}
+
+/* 词云容器：宽度随卡片自适应，高度固定；svg 全宽 */
+.lc-dlg-cloud {
+  width: 100%;
+  height: 150px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.lc-dlg-cloud svg {
+  display: block;
+}
+
+.lc-dlg-cloud text {
+  cursor: default;
+}
+
+/* 直播动态（B 组事件 + A 组在线峰值高光） */
+.lc-dlg-evts {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.lc-dlg-evt-block {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-top: 2px;
+}
+
+.lc-dlg-evt-label {
+  font-size: 11.5px;
+  color: var(--c-text-sub);
+}
+
+.lc-dlg-evt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 15px;
+}
+
+.lc-dlg-evt-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--c-accent);
+}
+
+.lc-dlg-evt-dot.stop {
+  background: #94a3b8;
+}
+
+.lc-dlg-evt-dot.peak {
+  background: #d8b64a;
+}
+
+.lc-dlg-evt-time {
+  flex: none;
+  min-width: 42px;
+  color: var(--c-text-main);
+  font-variant-numeric: tabular-nums;
+}
+
+.lc-dlg-evt-text {
+  color: var(--c-text-sub);
 }
 
 .lc-dlg-tags {

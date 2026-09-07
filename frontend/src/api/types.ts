@@ -136,9 +136,37 @@ export interface LiveAnalysisInfo {
   highlights?: Record<string, unknown>[]
 }
 
-/** 单场次详情（点击日期格 → 详情弹窗；danmaku/analysis 为预留字段） */
+/** 场次级补充指标（A 组：danmakus /api/v2/live 同响应，2026-09-07 接入） */
+export interface LiveMetrics {
+  watch_count?: number | null
+  like_count?: number | null
+  pay_count?: number | null
+  interaction_count?: number | null
+  online_rank?: number | null
+  comment_count?: number | null
+  /** 弹幕是否全量录制 */
+  is_full?: boolean | null
+  /** 是否多录制源合并 */
+  is_merged?: boolean | null
+  /** 在线峰值 top5（高光时刻）[{ts: ms, count}] */
+  peaks?: Record<string, unknown>[]
+  /** 录制版本 [{user_name, is_official}] */
+  versions?: Record<string, unknown>[]
+  /** 频道累计：fans_count/total_danmakus_count/... */
+  channel?: Record<string, unknown>
+}
+
+/** 直播间事件（B 组：type 7=直播中止 8=直播继续） */
+export interface LiveEvent {
+  type: number
+  send_date?: string | null
+}
+
+/** 单场次详情（点击日期格 → 详情弹窗；danmaku/metrics/events 已接入，analysis 预留） */
 export interface LiveSessionDetail extends LiveSession {
   danmaku?: LiveDanmakuInfo | null
+  metrics?: LiveMetrics | null
+  events?: LiveEvent[] | null
   analysis?: LiveAnalysisInfo | null
 }
 

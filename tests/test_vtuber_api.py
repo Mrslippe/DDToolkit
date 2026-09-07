@@ -545,8 +545,17 @@ def test_live_session_detail_endpoint(client, monkeypatch):
 
     async def fake_summary(live_id: str):
         return {"total": 39316, "danmakus_count": 17931,
-                "word_cloud": [("好耶", 3195), ("MELODY", 210)]}
+                "word_cloud": [("好耶", 3195), ("MELODY", 210)],
+                "watch_count": 16216, "like_count": 163579, "pay_count": 542,
+                "interaction_count": 1127, "online_rank": 250, "comment_count": 0,
+                "is_full": True, "is_merged": True,
+                "peaks": [{"ts": 1788609992428, "count": 366}],
+                "versions": [{"user_name": "本站", "is_official": True}],
+                "channel": {"fans_count": 133596}}
+    async def fake_events(live_id: str):
+        return [{"type": 7, "send_date_ms": 1788628090562}]
     monkeypatch.setattr("app.routers.vtuber.fetch_live_summary", fake_summary)
+    monkeypatch.setattr("app.routers.vtuber.fetch_live_events", fake_events)
 
     resp = client.get(f"/account/{aid}/live-sessions/uuid-a")
     assert resp.status_code == 200
@@ -557,16 +566,23 @@ def test_live_session_detail_endpoint(client, monkeypatch):
     assert d["category"] == "chat"
     assert d["category_from"] == "title"
     assert d["segment_count"] == 1
-    # 弹幕摘要已接入（词云 top 词按次数降序）
+    # 弹幕摘要已接入（词云 top 词按次数降序；A 组指标 + B 组事件）
     assert d["danmaku"] == {"total": 39316,
                             "top_keywords": ["好耶", "MELODY"],
                             "hot_segments": []}
+    m = d["metrics"]
+    assert m["watch_count"] == 16216 and m["like_count"] == 163579
+    assert m["pay_count"] == 542 and m["interaction_count"] == 1127
+    assert m["peaks"] == [{"ts": 1788609992428, "count": 366}]
+    assert [e["type"] for e in d["events"]] == [7]
+    assert d["events"][0]["send_date"].startswith("2026-09-05T17:08:10")  # naive UTC
     # analysis 仍为预留（内容分析服务未接入）
     assert d["analysis"] is None
 
-    # feed 场次：无 danmakus 源 → danmaku 恒 None（不请求网络）
+    # feed 场次：无 danmakus 源 → danmaku/metrics None、events 空（不请求网络）
     d2 = client.get(f"/account/{aid}/live-sessions/feed-1").json()
-    assert d2["danmaku"] is None and d2["source"] == "feed"
+    assert d2["danmaku"] is None and d2["metrics"] is None and d2["events"] == []
+    assert d2["source"] == "feed"
 
     # 未收录 live_id → 404；账号不存在 → 404
     assert client.get(f"/account/{aid}/live-sessions/nope").status_code == 404

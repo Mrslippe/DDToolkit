@@ -234,17 +234,44 @@ def test_live_sessions_sync_skips_bad_account(db):
 def test_parse_live_summary_wordcloud():
     from app.services.externals.danmakus import _parse_live_summary
     payload = {"total": 39316, "pageNum": 0, "pageSize": 1, "hasMore": True,
-               "data": {"live": {
+               "data": {"channel": {"fansCount": 133596, "totalDanmakuCount": 6951279},
+                        "live": {
                    "liveId": "f2d49c20-e00b-4c18-aca0-91baf5832ab2",
-                   "danmakusCount": 17931,
-                   "extra": {"wordCloud": {"好耶": 3195, "MELODY": 210, "x": 0}}}}}
+                   "danmakusCount": 17931, "watchCount": 16216, "likeCount": 163579,
+                   "payCount": 542, "interactionCount": 1127, "onlineRank": 250,
+                   "commentCount": 0, "isFull": True, "isMerged": True,
+                   "versions": [{"userName": "本站", "isOfficial": True}],
+                   "extra": {"wordCloud": {"好耶": 3195, "MELODY": 210, "x": 0},
+                             "onlineRank": {"1788609741572": 135,
+                                            "1788609992428": 366,
+                                            "1788609729866": 118}}}}}
     s = _parse_live_summary(payload)
     assert s["total"] == 39316
     assert s["danmakus_count"] == 17931
-    assert s["word_cloud"][:2] == [("好耶", 3195), ("MELODY", 210)]   # 降序且忽略了 0 次
+    assert s["word_cloud"][:2] == [("好耶", 3195), ("MELODY", 210)]   # 降序且忽略 0 次
+    # A 组指标
+    assert s["watch_count"] == 16216 and s["like_count"] == 163579
+    assert s["pay_count"] == 542 and s["interaction_count"] == 1127
+    assert s["online_rank"] == 250 and s["is_full"] is True and s["is_merged"] is True
+    assert s["peaks"][0] == {"ts": 1788609992428, "count": 366}       # 峰值 top5 降序
+    assert s["versions"][0] == {"user_name": "本站", "is_official": True}
+    assert s["channel"]["fans_count"] == 133596
     # 异常形状 → 降级空摘要（不炸）
     assert _parse_live_summary(None) is None
     assert _parse_live_summary({"data": None})["word_cloud"] == []
+
+
+def test_parse_live_events():
+    from app.services.externals.danmakus import _parse_live_events
+    payload = {"data": {"danmakus": [
+        {"uId": -1, "uName": "", "type": 7, "sendDate": 1788628090562},
+        {"uId": -1, "uName": "", "type": 8, "sendDate": 1788628100000},
+        {"uId": 1, "uName": "x", "type": 1, "sendDate": 1788628000000},  # 礼物不采
+    ]}}
+    evts = _parse_live_events(payload)
+    assert [(e["type"], e["send_date_ms"]) for e in evts] == [
+        (7, 1788628090562), (8, 1788628100000)]
+    assert _parse_live_events(None) == []
 
 
 # ── 注册表与空壳 ────────────────────────────────────────────────────

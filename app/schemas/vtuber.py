@@ -291,11 +291,7 @@ class LiveCategoryOut(BaseModel):
 
 
 class LiveDanmakuInfo(BaseModel):
-    """弹幕信息（预留接口：待 danmakus 场次级详细数据接入后填充）。
-
-    字段为占位契约（场次级弹幕总量/热词/高光片段），数据服务就位前
-    LiveSessionDetailOut.danmaku 恒为 None，前端显示占位文案。
-    """
+    """弹幕信息（danmakus /api/v2/live，2026-09-07 接入：总量 + 词云热词）。"""
     total: int | None = None
     top_keywords: list[str] = []
     hot_segments: list[dict] = []     # 预留：[{start, end, count}] 高浓度片段
@@ -308,13 +304,48 @@ class LiveAnalysisInfo(BaseModel):
     highlights: list[dict] = []       # 预留：高潮/名场面时间点
 
 
+class LiveMetricsOut(BaseModel):
+    """场次级补充指标（A 组：/api/v2/live 同响应，2026-09-07 接入）。
+
+    观看/点赞/打赏人数/互动/在线排名 + 弹幕完整性标记 +
+    在线时间线峰值（高光时刻）+ 录制版本/频道累计。
+    """
+    watch_count: int | None = None
+    like_count: int | None = None
+    pay_count: int | None = None
+    interaction_count: int | None = None
+    online_rank: int | None = None
+    comment_count: int | None = None
+    is_full: bool | None = None              # 弹幕是否全量录制
+    is_merged: bool | None = None            # 是否多录制源合并
+    peaks: list[dict] = []                   # [{ts, count}] 在线峰值 top5（高光时刻）
+    versions: list[dict] = []                # [{user_name, is_official}] 录制版本
+    channel: dict = {}                       # 频道累计：fans_count/total_danmakus_count/...
+
+
+class LiveEventOut(BaseModel):
+    """直播间事件（B 组：type 7=直播中止 8=直播继续，2026-09-07 接入）。"""
+    type: int
+    send_date: datetime | None = None
+
+    @field_serializer("send_date")
+    def _ser_event_dt(self, v: datetime | None):
+        if v is not None and v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc)
+        return v
+
+
 class LiveSessionDetailOut(LiveSessionOut):
     """单场次详情（user 2026-09-07：点击日期格 → 独立详情弹窗）。
 
-    与列表端同链路（merged + v2 信号栈，读取时计算）；新增预留字段：
-    danmaku（弹幕信息）/ analysis（内容分析）——接口先留，内容之后再做。
+    与列表端同链路（merged + v2 信号栈）；附扩展字段：
+    danmaku（弹幕总量/词云）/ metrics（A 组场次级指标）/ events（B 组
+    直播间事件）——danmakus 公开端点免鉴权接入，失败降级为 None/[]；
+    analysis（内容分析）仍为预留。
     """
     danmaku: LiveDanmakuInfo | None = None
+    metrics: LiveMetricsOut | None = None
+    events: list[LiveEventOut] = []
     analysis: LiveAnalysisInfo | None = None
 
 

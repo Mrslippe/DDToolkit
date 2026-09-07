@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Loader2, X } from 'lucide-react'
+import WordCloud from 'react-wordcloud'
 import type { LiveSession, LiveSessionDetail } from '../api/types'
 import { api, imgProxyUrl } from '../api/api'
 import { normalizeImageUrl } from '../utils/format'
@@ -108,6 +109,16 @@ function CoverImage({ src, fallbackChar }: { src?: string | null; fallbackChar: 
       onError={() => setStage((st) => (st === 'direct' ? 'proxy' : 'failed'))}
     />
   )
+}
+
+/** 词云配色（项目粉系 + 类型色相，按词哈希取色保持稳定） */
+const CLOUD_COLORS = ['#d8645e', '#8b6fd8', '#0088be', '#d4b801', '#009a24',
+  '#ec57ff', '#2fa5ad', '#c95c86', '#e0872f', '#5b7fd8']
+
+function cloudWordColor(w: { text: string }): string {
+  let h = 0
+  for (const ch of w.text) h = (h * 31 + ch.charCodeAt(0)) % 997
+  return CLOUD_COLORS[h % CLOUD_COLORS.length]
 }
 
 /**
@@ -491,7 +502,16 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
     )
   }
 
-  /** 详情弹窗：直播信息 + 分类校正 + 预留「弹幕信息 / 内容分析」区块 */
+  /** 词云数据（top40，value 按频次排序降权——react-wordcloud 布局/字号用） */
+  const cloudWords = useMemo(() => {
+    const kw = (detail?.data?.danmaku?.top_keywords ?? []).slice(0, 40)
+    return kw.map((text, i) => ({
+      text,
+      value: i < 20 ? 100 - i * 4 : Math.max(12, 40 - i),
+    }))
+  }, [detail])
+
+  /** 详情弹窗：直播信息 + 分类校正 + 弹幕词云/指标/直播间动态 */
   const renderDetail = () => {
     if (!detail) return null
     const s: LiveSessionDetail =
@@ -608,6 +628,32 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
                   <dt>弹幕数</dt>
                   <dd>{s.danmakus_count ? s.danmakus_count.toLocaleString('zh-CN') : '—'}</dd>
                 </div>
+                {s.metrics && (
+                  <>
+                    <div className="lc-dlg-row">
+                      <dt>观看</dt>
+                      <dd>{s.metrics.watch_count != null ? s.metrics.watch_count.toLocaleString('zh-CN') : '—'}</dd>
+                    </div>
+                    <div className="lc-dlg-row">
+                      <dt>点赞</dt>
+                      <dd>{s.metrics.like_count != null ? s.metrics.like_count.toLocaleString('zh-CN') : '—'}</dd>
+                    </div>
+                    <div className="lc-dlg-row">
+                      <dt>打赏</dt>
+                      <dd>{s.metrics.pay_count != null ? `${s.metrics.pay_count.toLocaleString('zh-CN')} 人` : '—'}</dd>
+                    </div>
+                    <div className="lc-dlg-row">
+                      <dt>互动</dt>
+                      <dd>{s.metrics.interaction_count != null ? s.metrics.interaction_count.toLocaleString('zh-CN') : '—'}</dd>
+                    </div>
+                    {s.metrics.online_rank != null && (
+                      <div className="lc-dlg-row">
+                        <dt>在线排名</dt>
+                        <dd>#{s.metrics.online_rank.toLocaleString('zh-CN')}</dd>
+                      </div>
+                    )}
+                  </>
+                )}
                 {(s.segment_count ?? 1) > 1 && (
                   <div className="lc-dlg-row">
                     <dt>段数</dt>
@@ -632,12 +678,35 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
                       <dd className="lc-dlg-num">{s.danmaku.total.toLocaleString('zh-CN')}</dd>
                     </div>
                   )}
+                  {s.metrics?.is_full === false && (
+                    <div className="lc-dlg-row">
+                      <dt>完整性</dt>
+                      <dd>弹幕数据未全量（部分录制源）</dd>
+                    </div>
+                  )}
                 </dl>
-                {s.danmaku.top_keywords?.length ? (
-                  <div className="lc-dlg-tags">
-                    {s.danmaku.top_keywords.map((w) => (
-                      <span key={w} className="lc-dlg-tag">{w}</span>
-                    ))}
+                {cloudWords.length ? (
+                  <div className="lc-dlg-cloud">
+                    <WordCloud
+                      words={cloudWords}
+                      minSize={[300, 150]}
+                      callbacks={{
+                        getWordTooltip: (w: { text: string }) => w.text,
+                        getWordColor: cloudWordColor,
+                      }}
+                      options={{
+                        rotations: 0,
+                        rotationAngles: [0, 0],
+                        fontSizes: [13, 34],
+                        fontStyle: 'normal',
+                        fontWeight: '600',
+                        fontFamily: 'inherit',
+                        padding: 2,
+                        spiral: 'archimedean',
+                        scale: 'sqrt',
+                        deterministic: false,
+                      }}
+                    />
                   </div>
                 ) : (
                   <div className="lc-dlg-ph">暂无热词数据</div>
@@ -645,6 +714,45 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
               </div>
             ) : (
               <div className="lc-dlg-ph">暂无弹幕数据（danmakus 未收录该场次或拉取失败）</div>
+            )}
+          </section>
+
+          <section className="lc-dlg-sec lc-dlg-sec--full">
+            <h4 className="lc-dlg-sec-title">直播动态</h4>
+            {detail.loading ? (
+              <div className="lc-dlg-ph">加载中…</div>
+            ) : (s.events?.length || s.metrics?.peaks?.length) ? (
+              <div className="lc-dlg-evts">
+                {(s.events ?? []).map((ev, i) => (
+                  <div key={`ev-${i}`} className="lc-dlg-evt">
+                    <span className={`lc-dlg-evt-dot${ev.type === 7 ? ' stop' : ''}`} />
+                    <span className="lc-dlg-evt-time">
+                      {ev.send_date ? fmtTime(new Date(ev.send_date)) : '--:--'}
+                    </span>
+                    <span className="lc-dlg-evt-text">
+                      {ev.type === 7 ? '直播中止' : '直播继续'}
+                    </span>
+                  </div>
+                ))}
+                {(s.metrics?.peaks?.length ?? 0) > 0 && (
+                  <div className="lc-dlg-evt-block">
+                    <div className="lc-dlg-evt-label">最热时刻（在线峰值）</div>
+                    {(s.metrics!.peaks as { ts: number; count: number }[])
+                      .slice(0, 3)
+                      .map((p) => (
+                        <div key={`peak-${p.ts}`} className="lc-dlg-evt">
+                          <span className="lc-dlg-evt-dot peak" />
+                          <span className="lc-dlg-evt-time">{fmtTime(new Date(p.ts))}</span>
+                          <span className="lc-dlg-evt-text">
+                            {Number(p.count ?? 0).toLocaleString('zh-CN')} 人在线
+                          </span>
+                        </div>
+                      ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="lc-dlg-ph">暂无动态数据</div>
             )}
           </section>
 

@@ -82,7 +82,8 @@ def _auth_headers(token: str | None) -> dict:
 
 
 def _parse_live_summary(payload: dict) -> dict | None:
-    """/api/v2/live 响应 → 摘要（弹幕总数 + 词云 top20）。形状判空后解析。"""
+    """/api/v2/live 响应 → 摘要（A 组：弹幕总量/词云 top40 + 观看/点赞/打赏/互动等
+    场次级指标 + 在线时间线峰值 + 录制版本/频道累计）。形状判空后解析。"""
     if not isinstance(payload, dict):
         return None
     total = payload.get("total")
@@ -92,12 +93,20 @@ def _parse_live_summary(payload: dict) -> dict | None:
         total = None
     inner = payload.get("data")
     live = None
+    channel = None
     if isinstance(inner, dict):
         live = inner.get("live")
+        channel = inner.get("channel")
     elif isinstance(inner, list):
         live = inner[0] if inner else None
     if not isinstance(live, dict):
-        return {"total": total, "danmakus_count": None, "word_cloud": []}
+        return {
+            "total": total, "danmakus_count": None, "word_cloud": [],
+            "watch_count": None, "like_count": None, "pay_count": None,
+            "interaction_count": None, "online_rank": None, "comment_count": None,
+            "is_full": None, "is_merged": None, "peaks": [], "versions": [],
+            "channel": {},
+        }
     extra = live.get("extra") or {}
     wc = extra.get("wordCloud") or {}
     top = []
@@ -110,11 +119,68 @@ def _parse_live_summary(payload: dict) -> dict | None:
             if v > 0:
                 top.append((str(k), v))
         top.sort(key=lambda kv: -kv[1])
+    # 在线人数时间线（{ms: count}）→ 峰值 top5（高光时刻）
+    timeline = extra.get("onlineRank") or {}
+    peaks: list[dict] = []
+    if isinstance(timeline, dict):
+        pts = []
+        for k, v in timeline.items():
+            try:
+                pts.append((int(k), int(v)))
+            except (TypeError, ValueError):
+                continue
+        pts.sort(key=lambda kv: -kv[1])
+        peaks = [{"ts": ts, "count": n} for ts, n in pts[:5]]
+    versions = []
+    for v in live.get("versions") or []:
+        if isinstance(v, dict):
+            versions.append({
+                "user_name": v.get("userName"),
+                "is_official": bool(v.get("isOfficial")),
+            })
+    ch = channel if isinstance(channel, dict) else {}
     return {
         "total": total,
         "danmakus_count": live.get("danmakusCount"),
-        "word_cloud": top[:20],
+        "word_cloud": top[:40],
+        "watch_count": live.get("watchCount"),
+        "like_count": live.get("likeCount"),
+        "pay_count": live.get("payCount"),
+        "interaction_count": live.get("interactionCount"),
+        "online_rank": live.get("onlineRank"),
+        "comment_count": live.get("commentCount"),
+        "is_full": live.get("isFull"),
+        "is_merged": live.get("isMerged"),
+        "peaks": peaks,
+        "versions": versions,
+        "channel": {
+            "fans_count": ch.get("fansCount"),
+            "total_danmakus_count": ch.get("totalDanmakusCount"),
+            "total_income": ch.get("totalIncome"),
+            "total_live_count": ch.get("totalLiveCount"),
+        },
     }
+
+
+def _parse_live_events(payload: dict) -> list[dict]:
+    """/api/v2/live?type=7&8 → 直播间事件（{type, send_date_ms}）。
+
+    type 7=直播中止 8=直播继续（B 组；真实中断时间线，供弹窗展示）。
+    """
+    if not isinstance(payload, dict):
+        return []
+    inner = payload.get("data")
+    if not isinstance(inner, dict):
+        return []
+    out = []
+    for it in inner.get("danmakus") or []:
+        if not isinstance(it, dict):
+            continue
+        t = it.get("type")
+        if t not in (7, 8):
+            continue
+        out.append({"type": int(t), "send_date_ms": it.get("sendDate")})
+    return out
 
 
 async def fetch_live_summary(live_id: str) -> dict | None:
@@ -145,6 +211,34 @@ async def fetch_live_summary(live_id: str) -> dict | None:
                        f"code={data.get('code') if isinstance(data, dict) else '?'}")
         return None
     return _parse_live_summary(data.get("data"))
+
+
+async def fetch_live_events(live_id: str) -> list[dict]:
+    """公开端点：直播间事件（type 7=直播中止 / 8=直播继续，B 组）。
+
+    与现场日志时间线同请求（?type=7&type=8 重复参数）；失败返回 []。
+    """
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            resp = await client.get(
+                f"{DANMAKUS_BASE}{LIVE_PATH}",
+                params={"liveId": live_id, "type": ["7", "8"],
+                        "pageNum": 0, "pageSize": 50,
+                        "includeDanmakus": "true"},
+                headers=BROWSER_HEADERS,
+            )
+    except httpx.HTTPError:
+        return []
+    if resp.status_code != 200:
+        logger.warning(f"danmakus live 事件 HTTP {resp.status_code} liveId={live_id}")
+        return []
+    try:
+        data = resp.json()
+    except ValueError:
+        return []
+    if not isinstance(data, dict) or data.get("code") != 200:
+        return []
+    return _parse_live_events(data.get("data"))
 
 
 class DanmakusSource(ExternalSource):

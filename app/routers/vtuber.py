@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import date, datetime, timedelta, timezone
 
@@ -28,8 +29,8 @@ from app.services import pool
 from app.services.live_type import (
     infer_category, plan_series, build_learned, EDITABLE_CATEGORY_KEYS,
 )
-from app.services.externals.danmakus import fetch_live_summary
-from app.schemas.vtuber import LiveDanmakuInfo
+from app.services.externals.danmakus import fetch_live_summary, fetch_live_events
+from app.schemas.vtuber import LiveDanmakuInfo, LiveMetricsOut, LiveEventOut
 from app.services.post_text import extract_post_text
 
 logger = logging.getLogger(__name__)
@@ -370,16 +371,39 @@ async def live_session_detail(account_id: int, live_id: str,
         series_categories=series_categories, learned=learned,
     )
     danmaku = None
+    metrics = None
+    events: list[LiveEventOut] = []
     if "danmakus" in (s.get("source") or "").split("+"):
-        summary = await fetch_live_summary(live_id)
+        summary, evts = await asyncio.gather(
+            fetch_live_summary(live_id), fetch_live_events(live_id))
         if summary:
             danmaku = LiveDanmakuInfo(
                 total=summary.get("total"),
-                top_keywords=[w for w, _c in (summary.get("word_cloud") or [])][:12],
+                top_keywords=[w for w, _c in (summary.get("word_cloud") or [])][:40],
             )
+            metrics = LiveMetricsOut(
+                watch_count=summary.get("watch_count"),
+                like_count=summary.get("like_count"),
+                pay_count=summary.get("pay_count"),
+                interaction_count=summary.get("interaction_count"),
+                online_rank=summary.get("online_rank"),
+                comment_count=summary.get("comment_count"),
+                is_full=summary.get("is_full"),
+                is_merged=summary.get("is_merged"),
+                peaks=summary.get("peaks") or [],
+                versions=summary.get("versions") or [],
+                channel=summary.get("channel") or {},
+            )
+        for ev in evts or []:
+            sd = ev.get("send_date_ms")
+            events.append(LiveEventOut(
+                type=int(ev.get("type") or 0),
+                send_date=datetime.fromtimestamp(sd / 1000, tz=timezone.utc)
+                .replace(tzinfo=None) if sd else None,
+            ))
     return LiveSessionDetailOut(account_id=account_id, **s,
                                 category=category, category_from=category_from,
-                                danmaku=danmaku)
+                                danmaku=danmaku, metrics=metrics, events=events)
 
 
 class LiveCategoryUpdate(BaseModel):
