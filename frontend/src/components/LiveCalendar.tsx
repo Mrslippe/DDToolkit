@@ -307,6 +307,8 @@ function MosaicCloud({
    *    λ 修正把缺口面积重新分配给相邻 cell（power 边界自动"鼓胀"塞住缺口），
    *    站点只极轻微挪动（视觉上邻泡"挤入"缺口）——远处纹丝不动；
    * 3. α 渐冷至 0.05 停止（静止即停）。
+   * 节奏（user 2026-09-07 反馈"慢一点"）：λ 8 轮/帧（原 20，每帧鼓胀 40% 速度）、
+   *    α 0.997 冷却（原 0.994）——填充过程 ~3.5s 渐显，可看清邻泡缓缓鼓起封缺口。
    */
   const popWord = (text: string) => {
     const p = packerRef.current
@@ -326,8 +328,8 @@ function MosaicCloud({
     if (reduceMotion) {
       let alpha = 0.15
       while (alpha > 0.05) {
-        alpha = Math.max(alpha * 0.994, 0.05)
-        p.step(alpha, alpha < 0.3 ? 20 : 2, 0)
+        alpha = Math.max(alpha * 0.997, 0.05)
+        p.step(alpha, alpha < 0.3 ? 8 : 2, 0)
       }
       setSnap(p.state())
       return
@@ -336,9 +338,9 @@ function MosaicCloud({
     let alive = true
     const loop = () => {
       if (!alive) return
-      alpha = Math.max(alpha * 0.994, 0.05)
+      alpha = Math.max(alpha * 0.997, 0.05)
       // 站点几乎不动：α 0.15 起步（力微扰）；kCenter=0（停中心引力拖拽）
-      p.step(alpha, alpha < 0.3 ? 20 : 2, 0)
+      p.step(alpha, alpha < 0.3 ? 8 : 2, 0)
       setSnap(p.state())
       if (alpha <= 0.05) return   // 静止即停
       rafRef.current = requestAnimationFrame(loop)
