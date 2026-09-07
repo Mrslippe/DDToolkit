@@ -2138,10 +2138,33 @@
   border: 1px solid rgba(15, 23, 42, 0.06);
   box-shadow: var(--shadow-dialog);
   animation: lc-dlg-pop 0.2s cubic-bezier(0.22, 0.61, 0.36, 1);
-  /* 2026-09-07：滚动条走全局标准（layout.css），此处不再覆写——
+  /* 2026-09-07：滚动条走全局标准（layout.css），此处显式复述防级联歧义——
      注意禁用 scrollbar-width/scrollbar-color 标准属性（会使 webkit 样式失效，
      回退系统默认带按钮的不透明滚动条） */
   overscroll-behavior: contain;
+}
+
+/* 弹窗滚动条：与全局标准完全同值（12px 槽 + 4px 内收 + 灰常态/粉 hover）；
+   显式声明兜底，任何情况下不回退系统默认样式 */
+.lc-dlg::-webkit-scrollbar {
+  width: 12px;
+}
+
+.lc-dlg::-webkit-scrollbar-thumb {
+  border: 4px solid transparent;
+  background-color: var(--c-border);
+  background-clip: content-box;
+  border-radius: 999px;
+}
+
+.lc-dlg::-webkit-scrollbar-thumb:hover {
+  border-width: 2px;
+  background-color: var(--c-primary);
+}
+
+.lc-dlg::-webkit-scrollbar-track,
+.lc-dlg::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 .lc-dlg-head {
