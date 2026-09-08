@@ -46,6 +46,10 @@ def _alembic_config():
     cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
     cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
     cfg.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+    # 不让 alembic/env.py 的 fileConfig 重配应用日志：它会摘掉 app.log 的
+    # 文件 handler，导致「首次运行（要跑迁移）」的启动日志整段丢失——
+    # 恰恰是最需要日志的场景（2026-09-08 排查首启卡幕时踩到）。
+    cfg.attributes["configure_logger"] = False
     return cfg
 
 

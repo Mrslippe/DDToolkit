@@ -58,7 +58,15 @@ const ENVELOPE_MS = 750 // 信封展开动画时长（与 layout.css keyframes �
  * - opening: 上片上滑、下片下滑，LOGO 淡出，露出下方已挂载的 App
  * - failed : 保持闭合，中央换错误卡片 + 重试
  */
-function Splash({ state, onRetry }: { state: Exclude<BootState, 'done'>; onRetry: () => void }) {
+function Splash({
+  state,
+  waited,
+  onRetry,
+}: {
+  state: Exclude<BootState, 'done'>
+  waited: number
+  onRetry: () => void
+}) {
   const opening = state === 'opening'
   return (
     <div className={`splash${opening ? ' splash-open' : ''}`}>
@@ -78,7 +86,14 @@ function Splash({ state, onRetry }: { state: Exclude<BootState, 'done'>; onRetry
             </Button>
           </>
         ) : (
-          <div className={`splash-logo ${state === 'pending' ? 'splash-logo-pulse' : ''}`}>D</div>
+          <>
+            <div className={`splash-logo ${state === 'pending' ? 'splash-logo-pulse' : ''}`}>D</div>
+            {/* 冷启动可能十几秒（首次建库迁移 / 杀软首扫）：给出秒数，
+                让「等待」和「卡死」可区分（2026-09-08 首启卡幕反馈） */}
+            {state === 'pending' && waited >= 3 && (
+              <p className="mt-5 text-sm text-white/70">正在启动内置服务… {waited}s</p>
+            )}
+          </>
         )}
       </div>
     </div>
@@ -114,11 +129,26 @@ function Root() {
   useEffect(() => {
     if (!isTauri) return
     perfLog('tauriBootstrap 开始')
-    tauriBootstrap().then((ok) => {
-      perfLog(ok ? 'healthz OK → opening' : 'healthz 超时 → failed')
-      setState(ok ? 'opening' : 'failed')
-    })
+    tauriBootstrap()
+      .then((ok) => {
+        perfLog(ok ? 'healthz OK → opening' : 'healthz 超时 → failed')
+        setState(ok ? 'opening' : 'failed')
+      })
+      .catch((err) => {
+        // invoke（取 sidecar 端口）失败也必须落地到 failed——否则幕布永远停在
+        // 呼吸态、既无错误也无重试入口（2026-09-08 直装版首启卡幕反馈的兜底）
+        window.__bootLog?.('[bootstrap] ' + String(err))
+        setState('failed')
+      })
   }, [])
+
+  // 首启等待计时：让「正在启动」和「卡死」可区分
+  const [waited, setWaited] = useState(0)
+  useEffect(() => {
+    if (!isTauri || state !== 'pending') return
+    const timer = window.setInterval(() => setWaited((s) => s + 1), 1000)
+    return () => window.clearInterval(timer)
+  }, [state])
 
   // 揭幕开始：html 首绘底色切回透明，恢复 L3 圆角透出桌面
   useEffect(() => {
@@ -143,7 +173,7 @@ function Root() {
       {/* opening 阶段即挂载 App 在幕布之下，动画结束时无缝接管 */}
       {state !== 'pending' && state !== 'failed' && <Main />}
       {state !== 'done' && (
-        <Splash state={state} onRetry={() => window.location.reload()} />
+        <Splash state={state} waited={waited} onRetry={() => window.location.reload()} />
       )}
     </>
   )

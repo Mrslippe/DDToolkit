@@ -25,7 +25,10 @@ config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
-if config.config_file_name is not None:
+# 仅独立运行 alembic CLI 时接管日志；应用内迁移（app.main._alembic_config 置
+# configure_logger=False）不重配——否则 fileConfig 会摘掉 app.log 的文件 handler，
+# 让「首次运行」的启动日志整段消失（2026-09-08 排查首启卡幕时踩到）。
+if config.config_file_name is not None and config.attributes.get("configure_logger", True):
     # disable_existing_loggers=False：防止迁移时 fileConfig 关掉应用已有 logger
     fileConfig(config.config_file_name, disable_existing_loggers=False)
 

@@ -6,6 +6,7 @@
 
 首次运行时把随包分发的 vtubers.csv 引导复制到数据目录。
 """
+import asyncio
 import os
 import shutil
 import socket
@@ -123,10 +124,30 @@ def main() -> None:
     _perf("import app.main 完成")
 
     port = int(port_env or _free_port())
-    # 启动器/调试用：就绪标记行
-    print(f"DDTOOLKIT_READY http://127.0.0.1:{port}", flush=True)
-    _perf("uvicorn.run 调用前")
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+    _perf(f"准备监听 127.0.0.1:{port}")
+    # 用 Server API 而不是 uvicorn.run：只有在 bind + 启动完成后才打就绪标记，
+    # 避免「进程活着但端口没监听」的假就绪（首启卡幕排查需要真实信号）。
+    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
+    server = uvicorn.Server(config)
+
+    async def _serve() -> None:
+        task = asyncio.create_task(server.serve())
+        while not server.started and not task.done():
+            await asyncio.sleep(0.05)
+        if server.started:
+            print(f"DDTOOLKIT_READY http://127.0.0.1:{port}", flush=True)
+            _perf("uvicorn 已监听（就绪）")
+        await task
+
+    try:
+        asyncio.run(_serve())
+    except BaseException as e:  # noqa: BLE001
+        # 安装版是无控制台程序：uvicorn 自身的报错（最常见=端口被占 bind 失败）
+        # 只进 stderr 等于消失。落 sidecar.log，否则首启卡幕将无从诊断。
+        import traceback
+        _slog(f"FATAL uvicorn 退出: {type(e).__name__}: {e}")
+        _slog("traceback:\n" + traceback.format_exc())
+        raise
 
 
 if __name__ == "__main__":

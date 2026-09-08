@@ -7,6 +7,7 @@ import asyncio
 import logging
 import re
 from typing import Optional
+from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
 
@@ -14,9 +15,6 @@ from app.core.config import settings
 from app.services.env_store import save_env_keys
 
 logger = logging.getLogger(__name__)
-
-# 凭据文件随数据目录走（桌面端 = %APPDATA%/DDtoolkit/.env，开发 = 项目根 .env）
-ENV_PATH = settings.DATA_DIR / ".env"
 
 BASE_HEADERS = {
     "User-Agent": (
@@ -36,6 +34,25 @@ _ATTR_MAP = {
     "DedeUserID": "dede_user_id",
     "bvuid3": "buvid3",
 }
+
+
+def _cookies_from_url(url: str) -> dict[str, str]:
+    """从回调 URL 查询串提取凭据。
+
+    B 站扫码回调（passport.biligame.com/crossDomain）把 SESSDATA / bili_jct /
+    DedeUserID 直接写在查询串里跨域传递——即使 Set-Cookie 落在中间跳或第三域，
+    这里也能拿到，是最稳的凭据来源。
+    """
+    out: dict[str, str] = {}
+    try:
+        qs = parse_qs(urlparse(url).query)
+    except Exception:
+        return out
+    for key in _ATTR_MAP:
+        vals = qs.get(key)
+        if vals and vals[0]:
+            out[key] = unquote(vals[0])
+    return out
 
 # QR 轮询状态码
 QR_SUCCESS = {0, "0"}
@@ -82,9 +99,12 @@ class BilibiliAuth:
     # ── .env 持久化 ───────────────────────────────────────────────
 
     def _save_to_env(self):
-        if not ENV_PATH.exists():
-            logger.warning(f".env 文件不存在: {ENV_PATH}")
-            return
+        """凭据持久化到数据目录 .env。
+
+        2026-09-08 修复：旧逻辑在 `.env` 不存在时直接 warning 返回——而「首次扫码
+        登录」恰恰就是数据目录里还没有 .env 的场景（桌面端全新安装），凭据于是只
+        活在内存、重启即丢。save_env_keys 本身会创建父目录与文件，交给它即可。
+        """
         values = {
             "BILI_SESSDATA": self.sessdata,
             "BILI_BIJI_JCT": self.bili_jct,
@@ -100,7 +120,10 @@ class BilibiliAuth:
 
         # 方式 1: httpx.Cookies
         for name in ("SESSDATA", "bili_jct", "DedeUserID", "bvuid3"):
-            val = response.cookies.get(name)
+            try:
+                val = response.cookies.get(name)
+            except Exception:
+                val = None  # 极端情况下 response 未绑定 request，退化为只看原始头
             if val:
                 extracted[name] = val
 
@@ -116,8 +139,29 @@ class BilibiliAuth:
 
         return extracted
 
-    def _update_from_response(self, response: httpx.Response):
-        extracted = self._parse_set_cookie(response)
+    def _collect_cookies(
+        self, response: httpx.Response | None = None, jar: httpx.Cookies | None = None
+    ) -> dict[str, str]:
+        """汇总整条重定向链 + 客户端 cookie jar 里的凭据。
+
+        2026-09-08 修复：httpx 的 `response.cookies` 只含**最后一跳**的 Set-Cookie，
+        而扫码回调的 SESSDATA/bili_jct 往往发在中间 302（crossDomain → passport →
+        www）上；只看最终响应会一个也拿不到 → nav 校验必然 -101「账号未登录」。
+        """
+        merged: dict[str, str] = {}
+        if response is not None:
+            for resp in (response, *response.history):
+                for key, val in self._parse_set_cookie(resp).items():
+                    merged.setdefault(key, val)
+        if jar is not None:
+            for name in _ATTR_MAP:
+                val = jar.get(name)
+                if val and name not in merged:
+                    merged[name] = val
+        return merged
+
+    def _apply_cookies(self, extracted: dict[str, str]) -> bool:
+        """写入内存并落盘；返回是否有变化"""
         changed = False
         for key, val in extracted.items():
             attr = _ATTR_MAP.get(key)
@@ -127,8 +171,12 @@ class BilibiliAuth:
                 logger.info(f"Cookie 已更新: {key}={val[:20]}...")
         if changed:
             self._save_to_env()
-            return True
-        return False
+        return changed
+
+    def _update_from_response(
+        self, response: httpx.Response | None = None, jar: httpx.Cookies | None = None
+    ):
+        return self._apply_cookies(self._collect_cookies(response, jar))
 
     # ── 阶段 1：心跳 / 状态检查 ───────────────────────────────────
 
@@ -299,6 +347,8 @@ class BilibiliLoginSession:
         callback_url = poll_data.get("data", {}).get("url")
         poll_resp = None
         if callback_url:
+            # ① 先取回调 URL 查询串里的凭据（crossDomain 跨域传递，最稳的一路）
+            auth._apply_cookies(_cookies_from_url(callback_url))
             try:
                 poll_resp = await self.client.get(
                     callback_url,
@@ -308,8 +358,8 @@ class BilibiliLoginSession:
             except Exception as e:
                 logger.warning(f"访问回调 URL 失败: {e}")
 
-        if poll_resp is not None:
-            auth._update_from_response(poll_resp)
+        # ② 再从整条重定向链 + 客户端 cookie jar 补取（覆盖上面的兜底值）
+        auth._update_from_response(poll_resp, jar=self.client.cookies)
 
         rt = poll_data.get("data", {}).get("refresh_token")
         if rt:
