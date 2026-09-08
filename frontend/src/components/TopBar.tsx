@@ -30,6 +30,7 @@ const REASON_TEXT: Record<string, string> = {
 
 const POLL_ACTIVE_MS = 3000 // 有任务运行时的高频轮询
 const POLL_IDLE_MS = 10000 // 空闲时的低频轮询
+const POLL_RETRY_MS = 500 // 在途冲突时的重排间隔（轮询链自愈，见 poll 内注释）
 const PILL_MS = 4000 // 操作结果覆盖态的展示时长
 
 const isTauri = '__TAURI_INTERNALS__' in window
@@ -85,9 +86,28 @@ export default function TopBar() {
     let cancelled = false
     let timer: number | undefined
 
+    // 单链调度：任何时刻只保留一个在途定时器（先清旧的再排新的）。
+    // 否则「重试定时器」与「收尾定时器」并存时会各自续链，出现两条交替排程。
+    const schedule = (ms: number) => {
+      if (timer !== undefined) {
+        clearTimeout(timer)
+        timer = undefined
+      }
+      if (!cancelled) timer = window.setTimeout(poll, ms)
+    }
+
     const poll = async () => {
       if (inFlight.current) {
+        // 并发保护：不并行开第二条链，但必须把定时器续上。
+        // ★ 2026-09-08 修复（左栏直播徽标永不刷新）：StrictMode 双挂载下，
+        //   先挂载那份闭包的 cancelled 已被置真，它的 finally 不会排下一轮；
+        //   此处若直接 return，整条轮询链就彻底断掉——实测 dev 下
+        //   /vtuber/fetch-status 全程只请求 1 次，于是 account-progress /
+        //   fetch-idle 再也不派发：右栏点开 V 直读 DB 显示「直播中」，
+        //   左栏停留在旧值（顶栏也永远显示「数据服务运行中」）。
+        //   排一个短重试即可自愈：重试触发时在途请求已结束，正常续链。
         pendingKick.current = true
+        schedule(POLL_RETRY_MS)
         return
       }
       inFlight.current = true
@@ -184,9 +204,9 @@ export default function TopBar() {
         if (!cancelled) {
           if (pendingKick.current) {
             pendingKick.current = false
-            timer = window.setTimeout(poll, 0)
+            schedule(0)
           } else {
-            timer = window.setTimeout(poll, active ? POLL_ACTIVE_MS : POLL_IDLE_MS)
+            schedule(active ? POLL_ACTIVE_MS : POLL_IDLE_MS)
           }
         }
       }
