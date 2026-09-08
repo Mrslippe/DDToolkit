@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Image as ImageIcon } from 'lucide-react'
-import { imgProxyUrl } from '../api/api'
-import { normalizeImageUrl } from '../utils/format'
+import { imgProxyUrl } from '../../api/api'
+import { normalizeImageUrl } from '../../utils/format'
 
 type Stage = 'direct' | 'proxy' | 'failed'
 
@@ -20,20 +20,22 @@ interface Props {
   fallback?: React.ReactNode
   /** fallback 的类名（缺省沿用 className） */
   fallbackClassName?: string
+  /** 透传原生 draggable（灯箱大图置 false 防拖拽选中） */
+  draggable?: boolean
 }
 
 /**
- * 混合图片方案（devlog/015，shadcn 迁移版）：
+ * 混合图片方案（devlog/015，全站唯一图片元件）：
  * 1. 默认直连 CDN（https 化 + no-referrer）—— 性能最优；
  *    微博图床(sinaimg/wbcdn)防盗链对应用自身来源一律 403，直接起点走代理
  * 2. onError 自动重试后端代理 /img-proxy（带磁盘缓存）—— 兜底
  * 3. 代理也失败 → 渲染 fallback（默认占位块），不再出现破图
  * 大图查看统一由 ImageViewer（P6-4 独立灯箱）承担，此处不再内置预览。
  *
- * 2026-09 收敛：原 LiveCalendar 内部 CoverImage 已并入本组件（消除同状态机双实现，
+ * 2026-09 P0/P1 收敛：原 LiveCalendar 内部 CoverImage 已并入本组件（消除同状态机双实现，
  * 并补上其缺失的微博直连代理分支）；换图场景由调用方 key={src} 重置状态。
  */
-export default function SmartImage({
+export default function ProxyImage({
   src,
   alt,
   className,
@@ -42,6 +44,7 @@ export default function SmartImage({
   height,
   fallback,
   fallbackClassName,
+  draggable,
 }: Props) {
   const direct = src ? normalizeImageUrl(src) : undefined
   const proxy = direct ? imgProxyUrl(direct) : undefined
@@ -93,6 +96,7 @@ export default function SmartImage({
       }}
       referrerPolicy="no-referrer"
       loading="lazy"
+      draggable={draggable}
       onError={() => {
         if (stage === 'direct') setStage('proxy')
         else setStage('failed')

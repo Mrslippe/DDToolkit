@@ -1510,10 +1510,9 @@
   flex: none;
 }
 
-/* 月份导航组（v0.9.x：设计稿 SVG 白胶囊 → 项目浮片族按钮 token：
-   ::before 斜切白卡（--pill-radius 圆角 + --pill-skew 斜切 + --pill-shadow 浮片阴影），
-   hover 背景 --pill-bg-hover（同 .float-pill 交互）；图标 = lucide 双箭头（项目图标语言），
-   lc-nav-*.svg 素材同时退役） */
+/* 月份导航组（v0.9.x：设计稿 SVG 白胶囊 → 项目浮片族；
+   2026-09 P1：三件套改用 <FloatPill> 渲染，配方由 layout.css .float-pill 统一承担，
+   图标 = lucide 双箭头（项目图标语言），lc-nav-*.svg 素材已退役） */
 .lc-nav {
   position: relative;
   display: flex;
@@ -1522,59 +1521,21 @@
   width: fit-content;
 }
 
-/* 两侧箭头浮片（25×25，同 float-pill--icon 几何） */
-.lc-nav-btn {
-  position: relative;
-  isolation: isolate;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 25px;
-  height: 25px;
-  padding: 0;
-  border: none;
-  background: transparent;
+/* 两侧箭头 / 中间月份：直接复用浮片族（2026-09 P1 收敛）
+   —— 原 .lc-nav-btn/.lc-nav-pill 自绘配方（::before 斜切 + 阴影 + hover）已删除，
+   现由 layout.css .float-pill 承担；此处仅覆盖配色与中间胶囊内距。 */
+.lc-nav .float-pill {
   color: var(--c-text-main);
-  cursor: pointer;
 }
 
-.lc-nav-btn::before,
-.lc-nav-pill::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  background: var(--pill-bg);
-  border-radius: var(--pill-radius);
-  transform: skewX(var(--pill-skew));
-  box-shadow: var(--pill-shadow);
-  transition: background-color 0.15s ease;
-}
-
-.lc-nav-btn:hover::before,
-.lc-nav-pill:hover::before {
-  background: var(--pill-bg-hover);
+/* 中间月份胶囊：内距保持设计稿 12px（--text 变体默认 8px） */
+.lc-nav .float-pill--text {
+  padding: 0 12px;
 }
 
 .lc-nav-icon {
   width: 13px;
   height: 13px;
-}
-
-/* 中间月份浮片（text 尺寸，同 float-pill） */
-.lc-nav-pill {
-  position: relative;
-  isolation: isolate;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: 25px;
-  padding: 0 12px;
-  border: none;
-  background: transparent;
-  color: var(--c-text-main);
-  font-family: inherit;
-  cursor: pointer;
 }
 
 .lc-nav-text {

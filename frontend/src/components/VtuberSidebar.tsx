@@ -5,6 +5,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import AddVtuberDialog from './AddVtuberDialog'
 import BatchFetchDialog from './BatchFetchDialog'
 import OverlayScroll from './OverlayScroll'
+import FloatPill from './common/FloatPill'
 import { useLocation, useNavigate, matchPath } from 'react-router-dom'
 import { api, resolveAsset } from '../api/api'
 import type { AccountSnapshot, VTuber } from '../api/types'
@@ -216,14 +217,9 @@ export default function VtuberSidebar() {
   return (
     <div className="sidebar-shell">
       <div className="list-toolbar">
-        <button
-          type="button"
-          className="float-pill float-pill--icon list-add-btn"
-          title="添加 VTuber"
-          onClick={() => setAddOpen(true)}
-        >
+        <FloatPill shape="icon" className="list-add-btn" title="添加 VTuber" onClick={() => setAddOpen(true)}>
           <Plus className="size-4" />
-        </button>
+        </FloatPill>
 
         <div className="list-search-wrap">
           <Search className="list-search-icon size-2.5" />
@@ -237,9 +233,10 @@ export default function VtuberSidebar() {
         </div>
 
         <div className="filter-wrap" ref={filterWrapRef}>
-          <button
-            type="button"
-            className={`float-pill float-pill--text list-filter-btn${filterActive ? ' on' : ''}`}
+          <FloatPill
+            shape="text"
+            active={filterActive}
+            className="list-filter-btn"
             title="组合筛选（状态 / 平台 / 企划）"
             onClick={() => setFilterOpen((o) => !o)}
           >
@@ -265,7 +262,7 @@ export default function VtuberSidebar() {
                 strokeWidth="1"
               />
             </svg>
-          </button>
+          </FloatPill>
           {filterOpen && (
             <div className="filter-pop">
               <div className="filter-pop-group">
@@ -330,14 +327,14 @@ export default function VtuberSidebar() {
           )}
         </div>
 
-        <button
-          type="button"
-          className="float-pill float-pill--icon list-pull-btn"
+        <FloatPill
+          shape="icon"
+          className="list-pull-btn"
           title="批量任务（抓取 / 更新 / 归档）"
           onClick={() => setBatchOpen(true)}
         >
           <Download className="size-4" />
-        </button>
+        </FloatPill>
       </div>
 
       {/* 列表滚动区：覆盖式滚动条（不占宽 + 自动隐藏，UI-MAP F 节标准） */}

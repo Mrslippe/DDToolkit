@@ -34,7 +34,7 @@ import {
 import DeltaRenderer from './DeltaRenderer'
 import ImageViewer, { type ViewerImage } from './ImageViewer'
 import OverlayScroll from './OverlayScroll'
-import SmartImage from './SmartImage'
+import ProxyImage from './common/ProxyImage'
 import StatBadge from './StatBadge'
 import TypeTag from './TypeTag'
 
@@ -98,7 +98,7 @@ function OriginCard({ origin, onOpenImages }: {
             {origin.images.slice(0, 9).map((img, i) => (
               <button key={`${img.url}-${i}`} type="button" className="cursor-zoom-in"
                 onClick={() => onOpenImages(origin.images!, i)}>
-                <SmartImage src={img.url} width={96} height={96}
+                <ProxyImage src={img.url} width={96} height={96}
                   style={{ objectFit: 'cover', borderRadius: 6 }} />
               </button>
             ))}
@@ -259,7 +259,7 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
                 list: images.length > 0 ? [{ url: shown.cover_url! }, ...images] : [{ url: shown.cover_url! }],
                 index: 0,
               })}>
-              <SmartImage
+              <ProxyImage
                 src={shown.cover_url}
                 alt="封面"
                 className="w-full rounded-lg object-contain"
@@ -307,7 +307,7 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
                 {images.map((img, i) => (
                   <button key={`${img.url}-${i}`} type="button" className="cursor-zoom-in"
                     onClick={() => setViewer({ list: images, index: i })}>
-                    <SmartImage src={img.url} width={120} height={120}
+                    <ProxyImage src={img.url} width={120} height={120}
                       style={{ objectFit: 'cover', borderRadius: 6 }} />
                   </button>
                 ))}

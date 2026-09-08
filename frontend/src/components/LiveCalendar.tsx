@@ -1,11 +1,13 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Loader2, X } from 'lucide-react'
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, X } from 'lucide-react'
 import type { LiveSession, LiveSessionDetail } from '../api/types'
 import { api } from '../api/api'
 import OverlayScroll from './OverlayScroll'
-import SmartImage from './SmartImage'
+import FloatPill from './common/FloatPill'
+import ProxyImage from './common/ProxyImage'
+import StateBlock from './common/StateBlock'
 import { LIVE_TYPE_ORDER, inferLiveType, liveTypeLabel } from '../utils/liveType'
 import { MosaicPacker } from '../utils/wordCloudLayout'
 import type { CloudCell, CloudWord } from '../utils/wordCloudLayout'
@@ -900,7 +902,7 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
             <div className="lc-dlg-main">
             {/* 左列：场次封面（缺失/失败 → 渐变占位，右下角直播状态徽章） */}
             <div className="lc-dlg-cover">
-              <SmartImage
+              <ProxyImage
                 key={s.cover_url ?? 'none'}
                 src={s.cover_url}
                 className="lc-dlg-cover-img"
@@ -1083,15 +1085,15 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
       {/* 导航行：左=月份浮片组（点击弹选月浮窗） · 右=当月类型统计胶囊（frame 10_642） */}
       <div className="lc-nav-row">
         <div className="lc-nav" ref={navRef}>
-          <button type="button" title="上个月" className="lc-nav-btn" onClick={() => moveMonth(-1)}>
+          <FloatPill shape="icon" title="上个月" onClick={() => moveMonth(-1)}>
             <ChevronsLeft className="lc-nav-icon" />
-          </button>
-          <button type="button" className="lc-nav-pill" title="选择月份" onClick={openMonthPop}>
+          </FloatPill>
+          <FloatPill shape="text" title="选择月份" onClick={openMonthPop}>
             <span className="lc-nav-text">{fmtMonth(ym.y, ym.m)}</span>
-          </button>
-          <button type="button" title="下个月" className="lc-nav-btn" onClick={() => moveMonth(1)}>
+          </FloatPill>
+          <FloatPill shape="icon" title="下个月" onClick={() => moveMonth(1)}>
             <ChevronsRight className="lc-nav-icon" />
-          </button>
+          </FloatPill>
 
           {/* 月份选择浮窗：年切换 + 12 月宫格 */}
           {monthPopOpen && (
@@ -1144,12 +1146,8 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
         {/* 月历网格：7 列 × 6 行，列/行距 4px（keyed 重放月份切换滑动动画） */}
         <div key={`${ym.y}-${ym.m}`} className={`lc-grid-anim${navDir === 1 ? '' : ' back'}`}>
           <div className="lc-grid">
-            {loading && (
-              <div className="lc-state">
-                <Loader2 className="lc-state-icon" />
-              </div>
-            )}
-            {!loading && error && <div className="lc-state lc-error">{error}</div>}
+            {loading && <StateBlock kind="loading" />}
+            {!loading && error && <StateBlock kind="error" text={error} />}
             {!loading && !error && cells.map((c) => renderCell(c))}
           </div>
         </div>

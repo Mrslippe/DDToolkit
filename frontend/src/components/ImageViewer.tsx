@@ -1,8 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronLeft, ChevronRight, ImageOff, X } from 'lucide-react'
-import { imgProxyUrl } from '../api/api'
-import { normalizeImageUrl } from '../utils/format'
+import ProxyImage from './common/ProxyImage'
 
 export interface ViewerImage {
   url: string
@@ -18,37 +17,24 @@ interface Props {
   onClose: () => void
 }
 
-type Stage = 'direct' | 'proxy' | 'failed'
-
 /** 退场时长：与详情窗退场（200ms）同拍 */
 const EXIT_MS = 200
 
-/** 单张大图：直连 → 代理 → 失败占位（与 SmartImage 同策略，key=src 逐张重置状态） */
+/** 灯箱大图：状态机与占位统一走 ProxyImage（外层 key=url 逐张重置） */
 function ViewerImg({ src, alt }: { src: string; alt?: string }) {
-  const direct = normalizeImageUrl(src)
-  const proxy = direct ? imgProxyUrl(direct) : undefined
-  const [stage, setStage] = useState<Stage>(
-    direct && (direct.includes('sinaimg.cn') || direct.includes('wbcdn.cn')) ? 'proxy' : 'direct',
-  )
-  const current = stage === 'direct' ? direct : stage === 'proxy' ? proxy : undefined
-
-  if (stage === 'failed' || !current) {
-    return (
-      <div className="flex flex-col items-center gap-2 px-6 text-muted-foreground">
-        <ImageOff className="size-10" />
-        <span className="text-sm">图片加载失败</span>
-      </div>
-    )
-  }
-
   return (
-    <img
-      src={current}
+    <ProxyImage
+      src={src}
       alt={alt}
-      referrerPolicy="no-referrer"
       className="max-h-[84vh] max-w-[92vw] select-none object-contain"
+      fallbackClassName=""
       draggable={false}
-      onError={() => setStage(stage === 'direct' ? 'proxy' : 'failed')}
+      fallback={
+        <div className="flex flex-col items-center gap-2 px-6 text-muted-foreground">
+          <ImageOff className="size-10" />
+          <span className="text-sm">图片加载失败</span>
+        </div>
+      }
     />
   )
 }

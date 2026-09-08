@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { toast } from 'sonner'
 import { api } from '../api/api'
 import type { Account, ThirdpartyVtuber, VTuber } from '../api/types'
+import FloatPill from './common/FloatPill'
 
 interface Props {
   vtuber: VTuber
@@ -87,14 +88,9 @@ const ProfileCard = memo(function ProfileCard({ vtuber, account, thirdparty }: P
             </SelectContent>
           </Select>
           {groups.length > 0 && groups[0] !== faction && (
-            <button
-              type="button"
-              className="float-pill float-pill--sm"
-              title="从第三方索引采纳企划名"
-              onClick={() => handleFaction(groups[0])}
-            >
+            <FloatPill size="sm" title="从第三方索引采纳企划名" onClick={() => handleFaction(groups[0])}>
               采纳「{groups[0]}」
-            </button>
+            </FloatPill>
           )}
         </div>
         <div className="profile-card-group-col">

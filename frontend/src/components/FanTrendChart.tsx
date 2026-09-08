@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
-import { CalendarRange, Loader2 } from 'lucide-react'
+import { CalendarRange } from 'lucide-react'
 import * as echarts from 'echarts/core'
 import type { EChartsCoreOption } from 'echarts/core'
 import { BarChart, LineChart } from 'echarts/charts'
@@ -25,6 +25,7 @@ import {
   CHART_TEXT,
   pinkA,
 } from '../utils/chartTheme'
+import StateBlock from './common/StateBlock'
 
 /* ECharts 按需注册（v6.1）：canvas 渲染 + 线/柱 + 网格/提示/缩放/轴指针 */
 echarts.use([
@@ -524,14 +525,10 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
 
       {/* 图区：ECharts canvas 自绘（slider 拖拽/图表区滚轮缩放+按住平移均由数据缩放组件接管） */}
       <div className="fan-chart-body">
-        {loading && (
-          <div className="lc-state">
-            <Loader2 className="lc-state-icon" />
-          </div>
-        )}
-        {!loading && error && <div className="lc-state lc-error">{error}</div>}
+        {loading && <StateBlock kind="loading" />}
+        {!loading && error && <StateBlock kind="error" text={error} />}
         {!loading && !error && capacity.length === 0 && (
-          <div className="lc-state">暂无趋势数据</div>
+          <StateBlock kind="empty" text="暂无趋势数据" />
         )}
         {!loading && !error && capacity.length > 0 && (
           <div className="fan-chart-canvas" ref={chartRef} />

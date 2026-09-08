@@ -12,8 +12,8 @@
 |---|---|
 | 需要构建「专属组件库」吗？ | **不需要**——单消费方、已有 shadcn 等价层、缺验证基建 |
 | 需要动代码吗？ | **需要**——四层收敛 + 定点抽取（不是重写、不是换框架） |
-| 工作量 | P0 清理 **0.5 天 ✅ 已落地（净减 334 行）** · P1 共享件 **1 天** · P2 巨型文件拆分 **2–3 天** · P3 基建 **2 天（可选）** |
-| 拿 80% 收益 | **P0 + P1 ≈ 1.5 天**（净减约 400 行、消除 2 处双实现） |
+| 工作量 | P0 清理 **0.5 天 ✅ 已落地（净减 334 行）** · P1 共享件 **1 天 ✅ 已落地（+73 行，含 4 个新组件）** · P2 巨型文件拆分 **2–3 天** · P3 基建 **2 天（可选）** |
+| 拿 80% 收益 | **P0 + P1 ✅ 已完成**（P0 净减 334 行；P1 消除 3 处双实现并新建层2 `components/common/`） |
 
 ---
 
@@ -115,15 +115,20 @@
 | `CoverImage` → 合并进 `SmartImage`（新增 `fallback`/`fallbackClassName` 槽位，顺带补微博直连代理分支） | ±40 行 | 1h | 低（视觉需比对日历封面） | ✅ |
 | 补 `.gitattributes`（`* text=auto eol=lf`） | +29 行 | 0.1h | 无 | ✅ |
 
-### P1 · 共享复合件（1 天）
+### P1 · 共享复合件（1 天）—— ✅ 已落地
 
-| 任务 | 来源 | 规模 | 工时 | 风险 |
-|---|---|---|---|---|
-| `components/common/ProxyImage.tsx` | `SmartImage` 升级 | ~90 行 | 1h | 低 |
-| `components/common/FloatPill.tsx`（`size`/`icon`/`text`/`danger`/`on`，渲染原生 `<button class="float-pill …">` 保持 `::before` 契约） | `.float-pill` 34 处裸用（PostsPage 9 / VtuberSidebar 3 / ProfileCard 1 行 + 变体拼串） | ~70 行 | 2h | **中**（斜切/阴影/焦点环/禁用态） |
-| `components/common/StateBlock.tsx`（loading / empty / error 三态） | `posts-placeholder` / `.lc-state` / `<Alert>` 三套写法 | ~50 行 | 1.5h | 低 |
-| `components/common/StatPill.tsx`（平台药丸） | `PostsPage` 987–993 内联 | ~40 行 | 1h | 低 |
-| 用 `FloatPill` 统一 `.lc-nav-btn` / `.lc-nav-pill` | `posts.css` 1592–1651 | −60 行 CSS | 1.5h | **中**（日历导航视觉） |
+| 任务 | 来源 | 规模 | 工时 | 风险 | 状态 |
+|---|---|---|---|---|---|
+| `components/common/ProxyImage.tsx` | `SmartImage` 升级 → 改名 + 迁入 `common/`（补 `draggable`；顺带把 ImageViewer 内部第三份状态机 `ViewerImg` 也并入） | ~110 行 | 1h | 低 | ✅ |
+| `components/common/FloatPill.tsx`（`size`/`shape`/`danger`/`active` + 透传原生属性，渲染原生 `<button class="float-pill …">` 保持 `::before` 契约） | `.float-pill` 13 处裸用（PostsPage 7 / VtuberSidebar 3 / ProfileCard 1 / LiveCalendar 3） | ~60 行 | 2h | **中**（斜切/阴影/焦点环/禁用态） | ✅ |
+| `components/common/StateBlock.tsx`（loading / empty / error 三态，variant = overlay / inline / alert） | `posts-placeholder` / `.lc-state` / `<Alert>` 三套写法共 7 处 | ~70 行 | 1.5h | 低 | ✅ |
+| `components/common/StatPill.tsx`（平台药丸 + `PILL_BG` 映射随之下沉） | `PostsPage` 内联药丸 + 常量 | ~45 行 | 1h | 低 | ✅ |
+| 用 `FloatPill` 统一 `.lc-nav-btn` / `.lc-nav-pill` | `posts.css` 自绘配方 | **−49 行 CSS** | 1.5h | **中**（日历导航视觉） | ✅ |
+
+> P1 实测：16 文件 **+298 / −225（净 +73 行）**——新增 4 个共享件约 160 行（含注释与类型），
+> 同时删掉 `posts.css` 自绘配方 49 行、`PostsPage` 精简 22 行；CSS 103.04 → **102.32 kB**；
+> `tsc --noEmit` 与 `vite build` 通过；类名逐点比对等价（`.lc-nav .float-pill` 仅覆盖配色与内距，其余配方沿用 `layout.css`）。
+> 命名说明：按本表落地为 `ProxyImage`（组件实质 = 直连→代理→失败三态），原 `SmartImage` 名退役。
 
 ### P2 · 巨型文件拆分（2–3 天）
 

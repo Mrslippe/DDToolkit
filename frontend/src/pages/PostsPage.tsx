@@ -31,7 +31,6 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import {
   Dialog,
   DialogContent,
@@ -46,14 +45,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { CircleAlert } from 'lucide-react'
 import heroDivider from '../assets/icons/hero-divider.svg'
-import pillBilibili from '../assets/pills/bilibili.png'
-import pillWeibo from '../assets/pills/weibo.png'
 import { api, resolveAsset } from '../api/api'
 import { useFetchBusy } from '../fetchBusy'
 import type { Account, AccountSnapshot, Post, PostStats, VTuber } from '../api/types'
-import { formatCount } from '../utils/format'
 import { mergeAccountSnapshots, mergeVtuberSnapshots } from '../utils/accountSnapshots'
 import PostCard from '../components/PostCard'
 import PostDetailDrawer from '../components/PostDetailDrawer'
@@ -61,15 +56,12 @@ import ProfileView from '../components/ProfileView'
 import LiveCalendar from '../components/LiveCalendar'
 import FanTrendChart from '../components/FanTrendChart'
 import OverlayScroll from '../components/OverlayScroll'
+import FloatPill from '../components/common/FloatPill'
+import StateBlock from '../components/common/StateBlock'
+import StatPill from '../components/common/StatPill'
 import './../styles/posts.css'
 
 const PAGE_SIZE = 20
-
-/** 平台药丸图像底：按平台映射 docs/design/pills 资产；未知平台回退粉/珊瑚色底 */
-const PILL_BG: Record<string, string> = {
-  bilibili: pillBilibili,
-  weibo: pillWeibo,
-}
 
 /** 场景退场时长（ms）：与 layout.css `.scene-exit` 的 0.2s 保持同步 */
 const EXIT_MS = 200
@@ -804,15 +796,17 @@ return (
               className="hidden"
               onChange={handleBgFile}
             />
-            <button
-              type="button"
-              className={`float-pill float-pill--md float-pill--icon bg-set${customBg ? ' on' : ''}`}
+            <FloatPill
+              size="md"
+              shape="icon"
+              active={!!customBg}
+              className="bg-set"
               title={customBg ? '更换背景图' : '设置自定义背景'}
               disabled={bgUploading}
               onClick={() => bgFileRef.current?.click()}
             >
               <ImagePlus className="size-5" />
-            </button>
+            </FloatPill>
           </div>
         )}
         <div className="glow-bar">
@@ -863,17 +857,10 @@ return (
       >
 
         {!vtuber && !error && (
-          <div className="posts-placeholder">
-            <Loader2 className="mr-2 inline size-4 animate-spin align-[-2px] text-primary" />
-            正在加载 VTuber 信息…
-          </div>
+          <StateBlock kind="loading" variant="inline" text="正在加载 VTuber 信息…" />
         )}
         {!vtuber && error && (
-          <Alert variant="destructive">
-            <CircleAlert />
-            <AlertTitle>无法加载</AlertTitle>
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
+          <StateBlock kind="error" variant="alert" title="无法加载" text={error} />
         )}
 
         {/* 操作按钮行（仅列表视图；卡片/档案视图各自有内部账号切换与操作）：
@@ -899,58 +886,57 @@ return (
                 </button>
               ))}
             </div>
-            <button
-              type="button"
-              className={`float-pill float-pill--md float-pill--icon actions-toggle${actionsOpen ? ' open' : ''}`}
+            <FloatPill
+              size="md"
+              shape="icon"
+              className={`actions-toggle${actionsOpen ? ' open' : ''}`}
               title={actionsOpen ? '收起操作' : '展开操作'}
               aria-expanded={actionsOpen}
               onClick={() => setActionsOpen((v) => !v)}
             >
               <ChevronsLeft className="size-4" />
-            </button>
+            </FloatPill>
             <div className={`actions-extra${actionsOpen ? ' open' : ''}`}>
-              <button
-                type="button"
-                className="float-pill float-pill--md float-pill--text"
+              <FloatPill
+                size="md"
+                shape="text"
                 disabled={fetching || fetchBusy}
                 title={busyTip}
                 onClick={handleFetch}
               >
                 <Zap className="size-4" /> 抓取账号
-              </button>
-              <button
-                type="button"
-                className="float-pill float-pill--md float-pill--text"
+              </FloatPill>
+              <FloatPill
+                size="md"
+                shape="text"
                 disabled={fetching || fetchBusy}
                 title={busyTip}
                 onClick={() => setFetchChoice(true)}
               >
                 <RefreshCw className="size-4" /> 抓取帖子
-              </button>
-              <button
-                type="button"
-                className="float-pill float-pill--md float-pill--text"
-                onClick={() => setAddAccountOpen(true)}
-              >
+              </FloatPill>
+              <FloatPill size="md" shape="text" onClick={() => setAddAccountOpen(true)}>
                 <UserPlus className="size-4" /> 添加账号
-              </button>
-              <button
-                type="button"
-                className="float-pill float-pill--md float-pill--text float-pill--danger"
+              </FloatPill>
+              <FloatPill
+                size="md"
+                shape="text"
+                danger
                 onClick={() => setConfirmDel(true)}
               >
                 <Trash2 className="size-4" /> 解除订阅
-              </button>
+              </FloatPill>
             </div>
-            <button
-              type="button"
-              className="float-pill float-pill--md float-pill--text on"
+            <FloatPill
+              size="md"
+              shape="text"
+              active
               disabled={fetching || fetchBusy}
               title={busyTip}
               onClick={handleUpdatePosts}
             >
               <RefreshCw className="size-4" /> 更新动态
-            </button>
+            </FloatPill>
           </div>
         )}
 
@@ -979,19 +965,14 @@ return (
               <div className="stat-sets" key={vtuber.id}>
                 {pillSets.map((set, si) => (
                   <div className="stat-set anim-rise" style={{ '--rise-i': si } as React.CSSProperties} key={si}>
-                    {set.map((a, i) => {
-                      const gi = si * 3 + i
-                      return (
-                        <div
-                          key={a.id}
-                          className={`stat-pill${PILL_BG[a.platform] ? ' image' : gi % 2 === 0 ? ' pink' : ' coral'}`}
-                          style={PILL_BG[a.platform] ? { backgroundImage: `url(${PILL_BG[a.platform]})` } : undefined}
-                          title={`${a.platform} 粉丝数`}
-                        >
-                          <span className="pill-value">{formatCount(a.followers_count)}</span>
-                        </div>
-                      )
-                    })}
+                    {set.map((a, i) => (
+                      <StatPill
+                        key={a.id}
+                        platform={a.platform}
+                        value={a.followers_count}
+                        index={si * 3 + i}
+                      />
+                    ))}
                   </div>
                 ))}
               </div>
@@ -1053,9 +1034,10 @@ return (
                     ))}
                   </div>
                   <div className="chips-tools">
-                    <button
-                      type="button"
-                      className={`float-pill float-pill--md del-btn${deletedOnly ? ' on' : ''}`}
+                    <FloatPill
+                      size="md"
+                      active={deletedOnly}
+                      className="del-btn"
                       title="仅显示已删除的帖子（墓碑，v0.5.1）"
                       onClick={() => {
                         setDeletedOnly((d) => !d)
@@ -1064,7 +1046,7 @@ return (
                     >
                       <Ghost className="size-4" />
                       <span className="del-btn-label">已删 {stats?.deleted ?? 0}</span>
-                    </button>
+                    </FloatPill>
                     <div className="search-float">
                       <Search className="search-float-icon" />
                       <input
@@ -1078,16 +1060,17 @@ return (
                       />
                     </div>
                     <div className="time-wrap" ref={timeWrapRef}>
-                      <button
-                        type="button"
-                        className={`float-pill float-pill--md time-btn${dateFrom || dateTo ? ' on' : ''}`}
+                      <FloatPill
+                        size="md"
+                        active={!!(dateFrom || dateTo)}
+                        className="time-btn"
                         onClick={() => setTimePopOpen((o) => !o)}
                       >
                         <Calendar className="size-4" />
                         <span className="time-btn-label">
                           {dateFrom || dateTo ? `${dateFrom || '…'} ~ ${dateTo || '…'}` : '时间'}
                         </span>
-                      </button>
+                      </FloatPill>
                       {timePopOpen && (
                         <div className="time-pop" onMouseDown={(e) => e.stopPropagation()}>
                           <label>
@@ -1147,18 +1130,13 @@ return (
             >
               <div className="list-inner">
                 {error ? (
-                  <Alert variant="destructive">
-                    <CircleAlert />
-                    <AlertTitle>加载失败</AlertTitle>
-                    <AlertDescription>{error}</AlertDescription>
-                  </Alert>
+                  <StateBlock kind="error" variant="alert" text={error} />
                 ) : posts.length === 0 ? (
-                  <div className="posts-placeholder">
-                    {loading && (
-                      <Loader2 className="mr-2 inline size-4 animate-spin align-[-2px] text-primary" />
-                    )}
-                    {loading ? '正在加载帖子…' : '暂无帖子，点击上方「抓取帖子」或「更新动态」获取'}
-                  </div>
+                  <StateBlock
+                    kind={loading ? 'loading' : 'empty'}
+                    variant="inline"
+                    text={loading ? '正在加载帖子…' : '暂无帖子，点击上方「抓取帖子」或「更新动态」获取'}
+                  />
                 ) : (
                   <div className={`post-grid${loading ? ' is-refetching' : ''}`}>
                     {posts.map((p, i) => (

@@ -7,7 +7,7 @@ import {
 } from 'lucide-react'
 import type { Post } from '../api/types'
 import { formatDateTime, parseBody, parseStats, postDisplayTitle, postTypeLabel } from '../utils/format'
-import SmartImage from './SmartImage'
+import ProxyImage from './common/ProxyImage'
 import StatBadge from './StatBadge'
 import './../styles/posts.css'
 
@@ -58,7 +58,7 @@ const PostCard = memo(function PostCard({ post, index, onOpen }: Props) {
     >
       <div className="post-card-cover">
         {coverSrc ? (
-          <SmartImage src={coverSrc} className="post-card-cover-img" />
+          <ProxyImage src={coverSrc} className="post-card-cover-img" />
         ) : (
           <div className="post-card-cover-paper">
             <span className="paper-title">{title}</span>

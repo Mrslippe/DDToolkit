@@ -162,13 +162,15 @@
 - ✅ **趋势卡重写 ECharts 6.1**（2026-09-07）：canvas 自绘 + dataZoom slider/inside（滚轮缩放/拖动平移）+ 双轴（粉丝/日增）+ 1d/7d/30d 概览 + 容量档位（3m/6m/1y/all）—— **recharts 已退役**
 - ✅ **滚动条标准定案**（2026-09-07）：不占宽 + 自动隐藏 + OverlayScroll 组件统一（12px/4px 全局 webkit 样式作为非覆盖容器的兜底）；全应用滚动容器已全部接入/对齐（含侧栏迁移、type-chips/cat-pop 隐藏化）
 - ✅ **前端系统性审计整理**（2026-09-07）：UI-MAP 全文重写对齐代码；死 API 封装（events/future-reservations/giftDays）与类型删除；`@types/d3-hierarchy` 清理；`--pill-fg` 令牌名统一；图表色值集中 `utils/chartTheme.ts`；次级色统一 `--c-text-sub`
-- ✅ **前端架构体检 + P0 清理**（2026-09，见 `docs/FRONTEND-ARCH.md`）：判定**不需要**独立组件库（单消费方 + 已有 shadcn 层）；P0 落地——删 3 个零引用 ui 件（`sheet`/`toggle`/`toggle-group`，272 行）+ 骨架屏死 CSS 与 `.archive-error`/`.profile-card-head|title|sub`（68 行）；`LiveCalendar.CoverImage` 并入 `SmartImage`（新增 `fallback` 槽位，顺带补上微博图床直连代理分支）；新增 `.gitattributes` 统一 LF
+- ✅ **前端架构体检 + P0/P1 收敛**（2026-09，见 `docs/FRONTEND-ARCH.md`）：判定**不需要**独立组件库（单消费方 + 已有 shadcn 层）。
+  - P0：删 3 个零引用 ui 件（`sheet`/`toggle`/`toggle-group`，272 行）+ 骨架屏死 CSS 与 `.archive-error`/`.profile-card-head|title|sub`（68 行）；图片三态合并；新增 `.gitattributes` 统一 LF
+  - P1：新建 `components/common/` 四个共享件——`ProxyImage`（原 SmartImage + 灯箱第三份状态机并入，补微博直连代理分支）、`FloatPill`（13 处裸类名收口）、`StateBlock`（loading/empty/error 7 处收口）、`StatPill`（含 `PILL_BG` 下沉）；`.lc-nav-btn`/`.lc-nav-pill` 自绘副本删除（−54 行 CSS）
 
 ## Backlog（近期接口/体验，无明确排期）
 
 - 弹幕词云词字可点击 → 按词查看该场次弹幕明细（需先落弹幕明细存储）
 - 场次级「直播内容分析」服务接入（interface 已留）
-- 前端分层收敛 P1/P2（方案与工时见 `docs/FRONTEND-ARCH.md` §5）：P1 共享件 `FloatPill`/`ProxyImage`/`StateBlock`/`StatPill` + 统一 `.lc-nav-btn` 浮片；P2 拆分 `PostsPage`(1299) / `LiveCalendar`(1186) 与两个 hook
+- 前端分层收敛 P2（方案与工时见 `docs/FRONTEND-ARCH.md` §5）：拆分 `PostsPage`(1299) / `LiveCalendar`(1186) 与两个 hook（`useVtuberActions` / `useLiveSessions`）+ 词云独立成件（P1 共享件已落地：`common/ProxyImage|FloatPill|StateBlock|StatPill`）
 
 ## Backlog（远期，按价值排序）
 
