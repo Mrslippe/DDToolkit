@@ -155,7 +155,14 @@
 
 /* 滚动条：全局标准（layout.css：12px 槽 + 4px 内收 + 灰常态/粉 hover），视图不覆写 */
 
-.list-scroll > .list-inner {
+/* 列宽契约（列表页唯一权威）：900px 上限 + 铺满 + 卡片拉伸。
+   2026-09-08 修正：选择器曾是 `.list-scroll > .list-inner`（直系子），而 OverlayScroll
+   会在中间插一层 `.os-scroll`，于是整条规则失效 → 列表宽度退化成「内容宽度」：
+   · 内容比栏宽窄（如投稿页短标题）→ 整列缩窄居中（卡片 566px）；
+   · 某条帖子有超长不可断行内容（如连续「！！！」或长链接）→ 整列被撑到 1350px
+     并因居中而左右溢出，封面被左缘裁掉、日期被推出窗口。
+   改后代选择器（.list-scroll .list-inner）后，列宽恒定，与内容无关。 */
+.list-scroll .list-inner {
   width: 100%;
   max-width: 900px;
   display: flex;
@@ -824,6 +831,7 @@
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 4;
   overflow: hidden;
+  overflow-wrap: anywhere;
 }
 
 .post-card-type {
@@ -1000,8 +1008,10 @@
 
 /* 滚动条：全局标准（layout.css：12px 槽 + 4px 内收 + 灰常态/粉 hover），视图不覆写 */
 
-/* 空态在固定高度内垂直居中（内容少也不缩卡） */
-.archive-section-scroll > .archive-empty {
+/* 空态在固定高度内垂直居中（内容少也不缩卡）。
+   选择器同为 OverlayScroll 改造遗留：`.archive-section-scroll > .archive-empty`
+   中间多了 `.os-scroll` 一层，改后代选择器（2026-09-08 与列表列宽一并修）。 */
+.archive-section-scroll .archive-empty {
   min-height: 100%;
   display: flex;
   align-items: center;
@@ -1150,6 +1160,10 @@
   gap: 6px;
   padding: 10px 12px 12px;
   flex: 1;
+  /* min-width:0 解除 flex 项目的「自动最小尺寸 = min-content」下限：
+     否则标题里一段不可断行的长串（连续「！」/长链接）会把正文撑到上千像素，
+     挤掉右侧日期徽章（2026-09-08 与列宽修复同批） */
+  min-width: 0;
 }
 
 .post-card-title {
@@ -1162,6 +1176,9 @@
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
+  /* 长不可断行串（如「！！！！…」整串）允许任意处折行，再交给 2 行截断，
+     避免横向裁切掉半个字 */
+  overflow-wrap: anywhere;
 }
 
 .post-card-summary {
@@ -1173,6 +1190,7 @@
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
+  overflow-wrap: anywhere;
 }
 
 .post-card-footer {

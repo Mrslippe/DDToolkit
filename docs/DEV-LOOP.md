@@ -59,8 +59,8 @@ python scripts/ui_probe.py --first-run --width 1100 # 空数据目录：验首�
 ```
 
 它自动：复制开发数据目录 → 起后端 → 起 Vite → 无头浏览器加载
-`/vtubers/<id>?probe=1`（`frontend/src/dev/probe.ts` 会依次切四个视图并测量），
-断言四组不变量：
+`/vtubers/<id>?probe=1`（`frontend/src/dev/probe.ts` 会依次切四个视图、并在列表页
+额外点一次「投稿」筛选，共五段测量），断言五组不变量：
 
 | 不变量 | 含义 |
 |---|---|
@@ -68,6 +68,7 @@ python scripts/ui_probe.py --first-run --width 1100 # 空数据目录：验首�
 | 无可见出窗元素 | 没有元素越过窗口左右缘（被 `overflow:hidden` 裁掉的折叠组不算） |
 | 无容器横向溢出 | `overflow-x:auto/scroll` 容器不得 `scrollWidth > clientWidth`（白名单：`.type-chips` 有意横滚） |
 | 无原生滚动条 | 滚动容器统一 OverlayScroll，否则出现/消失会挤动布局 |
+| 列表卡片列宽契约 | 列表页 `.list-inner` ≤ 900px、卡片铺满该列且宽度一致、封面恒 220 且不被左缘裁切（2026-09-08 回归事故固化：OverlayScroll 插层让 `.list-scroll > .list-inner` 静默失效，列宽随内容在 566～1350px 之间乱跳） |
 
 `--first-run` 额外断言：空数据目录下 `?firstRun=1` 必须**自动弹出登录浮窗**，
 且浮窗内含「凭据仅保存在本机」说明。

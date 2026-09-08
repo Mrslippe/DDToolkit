@@ -135,6 +135,43 @@ def _assert(views: list[dict], width: int) -> list[str]:
                     f"@{width} {tag}: 容器横向溢出 {el} "
                     f"client={sc['client'][0]} scroll={sc['scroll'][0]}"
                 )
+        bad += _assert_cards(v, width)
+    return bad
+
+
+# 列表卡片列宽契约（2026-09-08 回归事故固化）：列宽恒为 min(900, 可用宽)、
+# 卡片铺满该列、封面 220 且不被裁。曾经 `.list-scroll > .list-inner` 因
+# OverlayScroll 插层失效 → 列宽随内容变（短标题缩到 566px，长串撑到 1350px 并裁封面）。
+CARD_COLUMN_MAX = 900
+CARD_COVER_W = 220
+
+
+def _assert_cards(v: dict, width: int) -> list[str]:
+    cards = v.get("cards")
+    if not cards or not cards.get("n"):
+        return []
+    tag = v.get("tag")
+    bad: list[str] = []
+    inner_w = cards.get("innerW")
+    # 契约是否生效（与页面内容无关的硬断言）：max-width 计算值必须是 px 上限，
+    # 一旦选择器踩空就退化成 none（列宽随内容变，正是 2026-09-08 那次回归）
+    max_w = cards.get("innerMaxW")
+    if max_w == "none" or (max_w and max_w.endswith("px") and float(max_w[:-2]) > 1000):
+        bad.append(f"@{width} {tag}: 列表列宽契约未生效（.list-inner max-width={max_w}）")
+    if inner_w is not None and inner_w > CARD_COLUMN_MAX + 1:
+        bad.append(f"@{width} {tag}: 列表列宽 {inner_w} > {CARD_COLUMN_MAX}（列宽随内容膨胀）")
+    if inner_w is not None and cards["widthMax"] - inner_w > 1:
+        bad.append(
+            f"@{width} {tag}: 卡片 {cards['widthMax']} 未铺满列表列 {inner_w}"
+        )
+    if cards["widthMax"] - cards["widthMin"] > 1:
+        bad.append(
+            f"@{width} {tag}: 卡片宽度不一致 min={cards['widthMin']} max={cards['widthMax']}"
+        )
+    if cards.get("coverW") is not None and cards["coverW"] != CARD_COVER_W:
+        bad.append(f"@{width} {tag}: 卡片封面宽 {cards['coverW']} ≠ {CARD_COVER_W}")
+    if cards.get("coverClipped"):
+        bad.append(f"@{width} {tag}: {cards['coverClipped']} 张卡片封面被左缘裁切")
     return bad
 
 

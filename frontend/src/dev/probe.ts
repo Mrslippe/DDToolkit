@@ -63,6 +63,34 @@ function measure(tag: string) {
     shell: shell
       ? { client: [shell.clientWidth, shell.clientHeight], scroll: [shell.scrollWidth, shell.scrollHeight] }
       : null,
+    /** 列表卡片几何（帖子列表视图专用）：
+        列宽契约 = .list-inner 恒为 min(900, 可用宽) 且卡片铺满该列、封面 220 不被裁。
+        2026-09-08 回归事故：OverlayScroll 插层让 `.list-scroll > .list-inner` 失效，
+        列宽退化成内容宽度（短标题 → 566px 缩窄居中；长「！！！」串 → 1350px 溢出裁封面）。 */
+    cards: (() => {
+      const cards = [...document.querySelectorAll('.post-card')]
+      if (!cards.length) return null
+      const inner = document.querySelector('.list-scroll .list-inner')
+      const sc = document.querySelector('.list-scroll .os-scroll')
+      const widths = cards.map((c) => Math.round(c.getBoundingClientRect().width))
+      const cover = cards[0].querySelector('.post-card-cover')
+      const contentLeft = sc
+        ? sc.getBoundingClientRect().left + (parseFloat(getComputedStyle(sc).paddingLeft) || 0)
+        : 0
+      return {
+        n: cards.length,
+        widthMin: Math.min(...widths),
+        widthMax: Math.max(...widths),
+        innerW: inner ? Math.round(inner.getBoundingClientRect().width) : null,
+        /** 列宽契约是否在生效：选择器踩空时计算值退化成 none（内容宽度驱动） */
+        innerMaxW: inner ? getComputedStyle(inner).maxWidth : null,
+        coverW: cover ? Math.round(cover.getBoundingClientRect().width) : null,
+        coverClipped: cards.filter((c) => {
+          const cov = c.querySelector('.post-card-cover')
+          return !!cov && cov.getBoundingClientRect().left < contentLeft - 1
+        }).length,
+      }
+    })(),
     /** 可见地越过窗口左右缘的元素 */
     overflowing: [...document.querySelectorAll('body *')]
       .filter((n) => {
@@ -111,6 +139,15 @@ export async function runUiProbe(): Promise<void> {
     return !!btn
   }
 
+  /** 类型筛选胶囊（「全部 98」「投稿 72」…，按标签前缀点） */
+  const clickChip = (label: string) => {
+    const btn = [...document.querySelectorAll<HTMLButtonElement>('.type-chip')].find((b) =>
+      (b.textContent || '').trim().startsWith(label),
+    )
+    btn?.click()
+    return !!btn
+  }
+
   if (!document.querySelector('.view-btn')) {
     out.push(measure('empty')) // 无选中 VTuber：只有空置界面
   } else {
@@ -118,6 +155,11 @@ export async function runUiProbe(): Promise<void> {
       clickView(v.title)
       await sleep(900) // 场景入场 0.22s + 数据到位
       out.push(measure(v.key))
+      if (v.key === 'list' && clickChip('投稿')) {
+        // 投稿页单独量一遍：这一页最容易被「标题/摘要里的长串」把列宽带偏
+        await sleep(900)
+        out.push(measure('list-video'))
+      }
     }
   }
 

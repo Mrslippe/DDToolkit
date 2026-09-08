@@ -165,7 +165,7 @@
 |---|---|---|
 | 筛选条 | `.chips-bar`(+`.chips-bar-inner`) | **固定顶不随帖子流滚动**（提取自滚动区，天然分隔操作钮行与滚动区），`max-width:900px` 与列表同轴居中，padding `10px 16px 8px`；`.type-chips` 出血补丁保留 |
 | 滚动层 | `<OverlayScroll className="list-scroll">` | **根** = `flex:1;min-height:0`（滚动体 `.list-scroll .os-scroll` 接管布局：列布局/居中/gap 14/padding `8px 16px 24px`——顶部 8px 防卡片网格阴影被裁切） |
-| 内容箍 | `.list-inner` | `max-width:900px` 居中，column gap14 |
+| 内容箍 | `.list-inner` | **列宽契约（列表页唯一权威）**：`width:100%; max-width:900px; align-items:stretch` 居中，column gap14。⚠️ 选择器必须是**后代** `.list-scroll .list-inner`——OverlayScroll 在中间插了一层 `.os-scroll`，写成直系子（`.list-scroll > .list-inner`）整条规则会静默失效，列宽退化成「内容宽度」：短标题页整列缩到 566px 居中、含长不可断行串的页整列被撑到 1350px 并左右溢出（封面被左缘裁切、日期推出窗口）。`scripts/ui_probe.py` 已固化该契约断言 |
 | 操作按钮组 | `.header-actions` | **仅列表视图**渲染（卡片页纯展示无此行）：行首账号切换器（`margin-right:auto`）+ 右侧可收起浮片组——收起态 `[`.actions-toggle`][更新动态`.on`]`；展开态向左滑出 抓取账号/抓取帖子/添加账号/解除订阅（红），`actions-toggle` 被挤至最左、图标旋转 180° 变收起钮；`.actions-extra` 用 max-width 0→480px + opacity + translateX 动画（320ms cubic-bezier），`margin-left:-8px` 抵消父 gap |
 | 筛选行 | `.type-chips-row` | chips 左 + 搜索/时间浮片右；`nowrap`（工具区永不掉行） |
 | 类型chips | `.type-chip(.active)` | **分组**：投稿=video+video_dynamic、图文=image+text（key 逗号串直传后端 `in_` 过滤），转发/专栏/音乐/直播单型；计数 `stats.by_type` 求和、零组不显示；超宽时 `.type-chips` 行内横滚兜底（⚠️ 横向滚动条为全局 webkit 样式，见 F 节） |
@@ -174,8 +174,8 @@
 | 帖子流 | `.post-grid(.is-refetching)` | 重取时旧内容降透明禁点击，无整屏闪动 |
 | 卡片 | `<PostCard>` `article.post-card` | **浮片化特例**：白底、2px 圆角 + `var(--pill-shadow)`、去发丝边；hover 上浮 2px + 阴影加深 + **标题变色 `--c-accent`** |
 | ├ 封面 | `.post-card-cover` 220×16:10；SmartImage 三态兜底 | 有封面=图；**无封面（纯文字）= `.post-card-cover-paper` 米白纸纹斜条底 + 居中大标题（`.paper-title` 4 行截断）**；类型角标/时长角标浮于其上 |
-| ├ 标题/摘要 | `.post-card-title/.summary` | 两行截断 |
-| └ 底行 | `.post-card-footer`：徽章 `.stat-badge`×n + 日期 | 播/赞/评/转 |
+| ├ 标题/摘要 | `.post-card-title/.summary` | 两行截断；`overflow-wrap:anywhere`——连续「！！！」或长链接这类不可断行串允许任意处折行后再截断，不横向裁掉半个字 |
+| └ 底行 | `.post-card-footer`：徽章 `.stat-badge`×n + 日期 | 播/赞/评/转；正文 `.post-card-body` 带 `min-width:0`（解除 flex 自动最小尺寸，长串不再把日期挤出卡片） |
 | 无限滚动 | `.load-sentinel` + IntersectionObserver | **不分页懒加载**：哨兵 1px（root=`list-scroll`，rootMargin 600px 预载）命中且 `hasMore=posts.length<total` 时 `page+1` 追加；`page===1` 走替换（整表 + is-refetching 变暗 + grid key 按替换型指纹重挂动画），`page>1` 走追加（按 id 去重拼接、不动 key 不重挂旧卡片）；追加失败 `loadMoreError` 尾条手动重试；到底显示 `.load-end`「已经到底啦」 |
 | 回顶浮钮 | `.back-to-top` | **44×44 圆形白卡**（right 18 / bottom 18，`--pill-shadow`），滚动 >400px 浮现（`.on`），点击平滑回顶；hover 图标变粉 |
 | 占位/错误 | `.posts-placeholder` / Alert(destructive) | 加载 Spin / 空列表 / 失败 |
