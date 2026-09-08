@@ -32,6 +32,7 @@
 | 状态机 | `BootState: pending→opening→done/failed` | `ENVELOPE_MS=750` 信封动画播完卸载启动幕 |
 | 窗口本体 | 1440×800 / 无框 / 透明 / L3 自绘圆角 | `--radius-window:4px`（Rust 侧已禁 DWM 阴影与系统圆角，只前端一套弧线） |
 | 最大化 | `html.window-maximized` 类 | 壳层圆角归零（App.tsx `useMaximizedClass` 监听 `onResized`） |
+| 应用图标 | `scripts/make_icons.py` → `frontend/src-tauri/icons/` | **2026-09-09 重做（任务栏图标模糊）**：矢量源 `docs/design/svg/LOGO.svg`；`icon.ico` **目录首项 = 48px 简化加粗版**（tauri-codegen 取 `entries()[0]` 当 `default_window_icon` → tao 设为 `ICON_SMALL` → Win11 任务栏就是它；旧文件首项是 16×16，被放大到 24/36px 才糊）；≥64px 按设计稿 stroke 7.5，≤48px 简化（仅头部轮廓 + 圆点眼）并按尺寸补偿描边；详见 `scripts/make_icons.py` 头注释 |
 
 ---
 
@@ -54,11 +55,11 @@
 | 顶部栏 | `.topbar` | 底色 `--c-primary`，高 `--topbar-height:40px` |
 | LOGO 占位区 | `.topbar-logo-zone` | **72×40** 横跨全高，flex 居中 |
 | LOGO | `.topbar-logo` | **用户设计猫脸**（`docs/design/svg/LOGO.svg`，内联矢量 `common/Logo.tsx`，`currentColor` 白描边）**31×24**（viewBox 167.087×131.01 → 1.2754:1） |
-| 标题 | `.topbar-title` | 定宽 **150×40**，垂直居中/水平左对齐；字小魂锐艺黑 **15px、字距 5px**（`--font-title`）；`user-select:none` |
-| 状态行 | `.topbar-status` | 绝对居中；**19px/500 白字** + tabular-nums；`max-width:46%` |
-| ├ 抓取中 | `.topbar-status-spinner`（`Frame_41_8.svg` 16px 旋转） | 替换旧黄点脉冲 |
+| 标题 | `.topbar-title` | 定宽 **150×40**，垂直居中/水平左对齐；**15px、字距 5px**（`--font-title` = `--font-family`，2026-09-09 用户要求换成阿里妈妈方圆体，原思源黑体子集已删）；`user-select:none` |
+| 状态行 | `.topbar-status` | 绝对居中；**浅粉底外发光玻璃胶囊**（2026-09-09 用户要求试做）：高 **26px** / r999 / padding `0 13px`、`linear-gradient(180deg, rgba(255,255,255,.74), rgba(255,255,255,.36))` + `border 1px rgba(255,255,255,.62)` + `backdrop-filter: blur(6px) saturate(1.15)`、阴影 = 内高光 + 主色浅投影 + 白晕圈；**13px/500 深玫色 `#a83a5e`**（对胶囊底 ≈4.6:1；原 19px 白字对粉底仅 1.9:1）+ tabular-nums；`max-width:46%` |
+| ├ 抓取中 | `.topbar-status-spinner`（lucide `Loader2` 14px 旋转） | 2026-09-09 换：原设计稿图标 `Frame_41_8.svg` 是白色填充，在浅粉胶囊上等于隐形；lucide 走 `currentColor` 继承深玫色，资源已删 |
 | ├ 空闲 | i `.topbar-status-dot`（绿 `#52c41a` 7px） | |
-| └ 成功覆盖态 | `.topbar-status-dot.ok`（粉）| pill-message 覆盖窗，4s 还原 |
+| └ 成功覆盖态 | `.topbar-status-dot.ok`（深玫 `#a83a5e`）| pill-message 覆盖窗，4s 还原；浅粉底上原粉点看不见 |
 | 弹性空隙 | `.topbar-spacer` | 推到右侧 |
 | 窗口控制组 | `.topbar-window-controls` | **三格 46×40 通栏贴合**，无间距无右缘留白 |
 | ├ 最小化 | `.topbar-win-btn`（lucide `Minus` 30px） | 原生 `minimize()` |
@@ -220,7 +221,11 @@ P6-4：从详情窗口打开图片的**独立浮层**——portal 到 body、`z-
 radix `pointerdownOutside`。Esc 用 capture 阶段拦截，只关查看器。**遮罩只盖详情窗口**
 （按 `[data-slot=dialog-content]` 实测矩形定位 `bg-black/40` 圆角随窗，不含整屏黑纱）。
 封面 / 图片组 / 转发原文缩略图均可点开；封面在帖子有多图时**入列首位**
-（`[封面, ...图片组]`，从第 0 张起可直点下一张，单图时仅封面）。交互：上一张/下一张（**黑色玻璃圆钮**：
+（`[封面, ...图片组]`）。**2026-09-09 去重（用户反馈「单图帖点封面显示两张」）**：
+微博抓取把 `images[0]` 同时写进 `cover_url`（`platforms/weibo.py`），旧逻辑
+`[封面, ...images]` 会把同一张排两遍——改为 `dedupeImages()` 按 URL 去重后再入列，
+单图帖只剩一张，前后切换/点状序号由 `count > 1` 自动隐藏；图片组与转发原文
+缩略图同样走该去重（`图片（N）` 计数同步）。交互：上一张/下一张（**黑色玻璃圆钮**：
 border-white/25 + bg-black/60 + backdrop-blur，左右键同效，单图隐藏）、
 **底部点状序号**（点击跳转，单图隐藏，当前点白色放大、其余 white/40）、
 关闭钮为同构黑色玻璃圆钮（10×10，右缘 20px）。图片无外框/无底色，直浮于内容上；
@@ -304,7 +309,7 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 | 遮罩 | **`rgba(15,23,42,.32)`**（radix 旧 black/50、查看器旧 black/40 已统一；lc-dlg-backdrop 本就此值） |
 | 入场动画 | 轻 pop：`lc-dlg-pop`（translateY 8 + scale .98 + 淡入）；浮层 0.16s / hover 浮层 lc-pop 0.12s / 主弹窗 0.2s；reduced-motion 全部禁用 |
 | 关闭通道 | **点外关闭 + Esc 双通道**（所有浮层；radix 内建） |
-| 关闭钮 | **26×26 · r8 · `--c-text-sub` · hover 灰底 rgba(15,23,42,.05) + 主色文字**（radix 与 lc-dlg-close 同款；ImageViewer 黑玻璃圆钮为灯箱豁免） |
+| 关闭钮 | **26×26 · r8 · `--c-text-sub` · hover 灰底 rgba(15,23,42,.05) + 主色文字**（radix 与 lc-dlg-close 同款；ImageViewer 黑玻璃圆钮为灯箱豁免）；**焦点环只在键盘态**——2026-09-09 用户反馈「点关闭会冒出粉色选中框」，radix 关闭钮由 `focus:` 改 `focus-visible:ring-*`（鼠标点击不再命中，Tab 仍有环） |
 | **头部驻留** | 详情类二级窗口 = **面板 = 头部驻留区（flex:none · 下缘发丝分隔）＋ 内容 OverlayScroll（flex:1）**——「标题……X」（含场次多场 tabs）钉顶不随内容滚动；滚动条只在内容区悬浮，**不覆盖标题与关闭钮**（2026-09-07 user 定案；已接入：帖子详情 `pd-head`、场次详情 `lc-dlg-head-zone`；短表单弹窗内容不溢出，不强制） |
 | Tooltip | **黑玻璃胶囊**：`rgba(15,23,42,.78)` 底白字 r999（radix tooltip 与词云提示 `lc-dlg-cloud-tip` 同源） |
 | 选中态 | 两原则：① 分类色体系元件（类型胶囊/选项）用**本体色** + 600/内描边；② 其它选择件激活 = **`--c-primary-deep` 底白字 600**（month 旧浅粉底粉字、tab 旧 accent 底均已改）；hover 统一 `--sel-bg-hover` |
@@ -391,8 +396,7 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 
 | family | 文件 | 用途 |
 |---|---|---|
-| `Noto Sans SC Title`（思源黑体子集） | NotoSansSC-Title.woff2 | `--font-title`（顶栏标题 15px 字距 5px；OFL 1.1；子集化仅含 "DDtoolkit"）。原 'D' 子集（NotoSansSC-Logo.woff2 / `--font-logo`）随 LOGO 换矢量后删除 |
-| `Alimama FangYuanTi VF`(100–900) | AlimamaFangYuanTiVF-VF.woff2 | 全局默认 `--font-family`（阿里妈妈官方许可：免费商用+嵌入式，见 LICENSE 声明） |
+| `Alimama FangYuanTi VF`(100–900) | AlimamaFangYuanTiVF-VF.woff2 | 全局默认 `--font-family`（阿里妈妈官方许可：免费商用+嵌入式，见 LICENSE 声明）；**2026-09-09 起 `--font-title` 也指向它**（顶栏标题 15px 字距 5px）——原 `Noto Sans SC Title`（NotoSansSC-Title.woff2，仅含 "DDtoolkit" 的子集）已删除，全站只剩一款字体 |
 
 ## E. 交互浮窗清单
 
@@ -414,17 +418,21 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 
 ---
 
-## F. 滚动条标准（2026-09-07 用户定案——所有滚动容器一律参照）
+## F. 滚动条标准（2026-09-07 用户定案，2026-09-09 修订——所有滚动容器一律参照）
 
 > 用户原话要点：所有地方统一成一个样式；**滚动条不要占布局宽度**；**不滚动或不 hover 时自动隐藏**；
-> 具体数值定案：**thumb 贴容器右缘 4px、宽 4px、常态 `--c-border` 细灰、hover 顶栏粉 `--c-primary`、圆角胶囊**；
+> 具体数值定案：**thumb 贴容器右缘 4px、宽 4px、常态 `--c-border` 细灰、圆角胶囊**；
+> **2026-09-09 修订**：粉只属于「指针」——**滚轮滚动时保持浅灰**，只有**指针压在拇指上（:hover）
+> 或拖拽中（`.os-drag`）**才变粉并加粗到 6px（原 `.os-root:hover` 在「指针必然在容器内」的滚动
+> 场景下也会变粉，与「滚动时浅灰」相悖）；同时新增**指针靠近右缘 18px 内亮出拇指**——
+> 否则滚完 700ms 就淡出，「hover 变粉」几乎够不着。
 > 以后新增滚动容器必须查询本节。
 
 ### F1. 两层实现
 
 | 层 | 实现 | 适用范围 |
 |---|---|---|
-| **全局原生兜底** | `::-webkit-scrollbar`（layout.css 顶部）：槽 **12px**、thumb `border:4px transparent` + `background-clip:content-box`（视觉 4px）、常态 `--c-border`、hover 收窄到 2px（视觉 8px）+ `--c-primary`、轨道/角透明 | 任何**未接入 OverlayScroll 的残留原生滚动**（如有则应视为待迁移项） |
+| **全局原生兜底** | `::-webkit-scrollbar`（layout.css 顶部）：槽 **12px**、thumb `border:4px transparent` + `background-clip:content-box`（视觉 4px）、常态 `--c-border`、**指针压在滑块上**收窄到 2px（视觉 8px）+ `--c-primary`、轨道/角透明 | 任何**未接入 OverlayScroll 的残留原生滚动**（如有则应视为待迁移项） |
 | **覆盖式滚动条（标准主形态）** | `<OverlayScroll>` 组件（components/OverlayScroll.tsx + layout.css `.os-*`） | 全部主滚动容器（见 F3 清单） |
 
 > ⚠️ **禁则**：`scrollbar-width` / `scrollbar-color` 标准属性会在 Chromium 里令 `::-webkit-scrollbar` 全部失效（回退系统默认带箭头滚动条）——全项目已无此属性（`.os-scroll` 与 `.sidebar`/`.lc-stats` 的 `scrollbar-width:none` 是**隐藏**用，配 webkit display:none 双保险，属有意为之）。
@@ -434,7 +442,7 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 - 根 `.os-root`：`position:relative;overflow:hidden;display:flex;flex-direction:column`（**经典 modal 滚动模式**：max-height 容器的 auto 高度根也能正确产生内部滚动——`height:100%` 在 auto 父级下失效，曾致详情弹窗滚不动）；
 - 滚动体 `.os-scroll`：`flex:1 1 auto;min-height:0;overflow-y:auto` + 原生条隐藏；**padding/gap/列布局一律由调用方写在 `.os-scroll` 上**（根不再承担排版）;
 - 拇指 `.os-thumb`：absolute right 4px、宽 4px、min-height 28px、r999、`--c-border`、`opacity 0`（`.os-show` 时 1）、`transition opacity .25s / width .15s / background .15s`；**指针策略**：基态 `pointer-events:none`（未显示对内容零打扰），`.os-show` 后 `pointer-events:auto` + `cursor:grab`（拖动中 `grabbing`）+ `touch-action:none`；
-- **hover 增强**：`.os-root:hover .os-thumb` → 变粉 `--c-primary` + 加粗至 6px（right 同步收至 3px 保持中心对齐）——与全局 webkit 兜底的 hover 收缩内收增粗同语义（2026-09-07 审计后补实现，此前仅注释承诺）；显隐仍由 `.os-show` 调度（悬浮即 reveal 1.2s，故 hover 到容器即见粉拇指）；
+- **变粉条件（2026-09-09 修订）**：`.os-thumb.os-show:hover, .os-thumb.os-show.os-drag` → 变粉 `--c-primary` + 加粗至 6px（right 同步收至 3px 保持中心对齐）——与全局 webkit 兜底的 hover 收缩内收增粗同语义。**滚轮滚动时保持浅灰**（`.os-root:hover` 不再触发）；`.os-drag` 由组件在 `onThumbDown` 加、`endDrag` 去，保证拖拽中即便指针滑出拇指也维持粉色。显隐仍由 `.os-show` 调度（滚动后 700ms / 悬浮 1.2s / **指针进入右缘 18px 槽区** 1.2s）；
 - **拇指拖拽（2026-09-07 robust 版）**：按下 = `setPointerCapture` + 记录 `grabY`（指针相对拇指顶偏移），移动 = **绝对反解** `scrollTop`（非增量累加，天然消除 clamp 累积误差）；结束 = **四重兜底**：`pointerup` / `pointercancel` / `lostpointercapture` / **window `blur`**（覆盖拖出窗口、alt-tab、弹层拦截、捕获丢失全部路径），结束**无条件** `reveal(700)` 重排隐藏；拖拽期间 onScroll 仅 sync 不 reveal（停顿也不隐藏，收尾交给 endDrag）——历史上「拖拽中被 pointer capture 丢失楔死 → 永不隐藏」的 bug 即由此根治，因此当前显隐是"无抑制位"的纯调度 + 拖拽只是幂等叠加；
 - 显隐调度（无任何可楔死的状态位）：滚动中亮出、停止 **700ms** 淡出；鼠标悬浮容器亮出、**1.2s** 无动作淡出；移出立即淡出；所有隐藏定时器无条件执行；
 - 状态同步 `sync()`（只改位置/尺寸/display，不碰显隐）：scroll（rAF）/ ResizeObserver（滚动体 + **首个子元素**——scrollHeight 增长不触发自身 RO）/ **400ms 轮询兜底**（异步内容长高）；
