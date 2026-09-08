@@ -99,6 +99,32 @@ def test_add_account(client):
     assert resp.json()["platform_uid"] == "123"
 
 
+def test_add_account_triggers_fetch_and_backfill(monkeypatch, client):
+    """「添加平台账号」立刻拉起账号抓取（v0.9.3 用户反馈：此前只建行不抓取，
+    前端 toast 说在抓实际要等下一轮定时档）。"""
+    import app.routers.vtuber as router_mod
+
+    fetched: list[int] = []
+    backfilled: list[int] = []
+
+    async def fake_fetch(vtuber_id: int) -> None:
+        fetched.append(vtuber_id)
+
+    async def fake_backfill(account_id: int) -> None:
+        backfilled.append(account_id)
+
+    monkeypatch.setattr(router_mod, "async_fetch_vtuber", fake_fetch)
+    monkeypatch.setattr(router_mod, "_backfill_adopted_history", fake_backfill)
+
+    vid = client.post("/vtuber", json={"name": "测试"}).json()["id"]
+    resp = client.post(f"/vtuber/{vid}/accounts",
+                       json={"platform": "bilibili", "platform_uid": "1234"})
+    assert resp.status_code == 201
+    aid = resp.json()["id"]
+    assert fetched == [vid]        # 响应后立刻拉起该 V 的账号抓取
+    assert backfilled == [aid]     # 并回填新账号的第三方历史
+
+
 def test_list_accounts(client):
     vid = client.post("/vtuber", json={"name": "测试"}).json()["id"]
     client.post(f"/vtuber/{vid}/accounts", json={"platform": "bilibili", "platform_uid": "111"})

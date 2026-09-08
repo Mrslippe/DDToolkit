@@ -193,7 +193,7 @@ create_all 旧库补列补索引后 stamp / 版本落后增量升级 / 已最新
 | DELETE `/vtuber/{vtuber_id}/background` | 清除背景回退头像铺底 |
 | DELETE `/vtuber/{vtuber_id}` | 解除订阅：按 `services/purge.py` 清 posts + 账号 4 张子表（快照/场次/礼物日/分类校正）+ V 活动条目，再级联删 V+accounts。**外键全开（`foreign_keys=ON`），漏清一张就整次回滚 500**（v0.9.3 修复） |
 | GET `/vtuber/{id}/accounts` | 某 V 的账号列表 |
-| POST `/vtuber/{id}/accounts` | 建账号；(platform, platform_uid) 重复 409 |
+| POST `/vtuber/{id}/accounts` | 建账号；(platform, platform_uid) 重复 409；**成功后立刻后台抓取该 V 账号信息 + 回填新账号第三方历史**（v0.9.3，与收录同款） |
 | PUT `/account/{account_id}` | 更新账号；唯一冲突 409 |
 | DELETE `/account/{account_id}` | 删账号并同步清理其帖子与 4 张子表（同上，v0.9.3） |
 | GET `/account/{account_id}/stat-snapshots?limit=` | **P0**：统计快照历史（默认 100，上限 1000，时间倒序，UTC 补时区） |

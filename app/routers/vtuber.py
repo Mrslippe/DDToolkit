@@ -236,7 +236,14 @@ def list_accounts(vtuber_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/vtuber/{vtuber_id}/accounts", response_model=AccountOut, status_code=status.HTTP_201_CREATED)
-def create_account(vtuber_id: int, data: AccountCreate, db: Session = Depends(get_db)):
+def create_account(vtuber_id: int, data: AccountCreate,
+                   background: BackgroundTasks, db: Session = Depends(get_db)):
+    """给某 V 添加平台账号；成功后立刻后台抓取账号信息。
+
+    2026-09-09 用户反馈：此前只建行不抓取，前端 toast「正在后台抓取账号信息」
+    与事实不符，新账号要等下一轮定时档才补上。这里与收录（adopt）同款：
+    响应后抓该 V 全部账号信息 + 回填新账号的第三方历史（粉丝历史/场次/礼物日）。
+    """
     if not VTuberRepo(db).get(vtuber_id):
         raise HTTPException(404, f"VTuber id={vtuber_id} 不存在")
     try:
@@ -244,6 +251,8 @@ def create_account(vtuber_id: int, data: AccountCreate, db: Session = Depends(ge
     except IntegrityError:
         db.rollback()
         raise HTTPException(409, f"该 (platform, platform_uid) 账号已存在")
+    background.add_task(_fetch_adopted, vtuber_id)
+    background.add_task(_backfill_adopted_history, acc.id)
     return AccountOut.model_validate(acc, from_attributes=True)
 
 
