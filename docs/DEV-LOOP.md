@@ -30,12 +30,22 @@ python scripts/dev_check.py --full      # = --frozen --portable
 
 它做三件事：
 
-1. `pytest tests/` —— 207 个用例的回归网（含 2026-09-08 新增的 B 站扫码回归用例）；
+1. `pytest tests/` —— 204 个用例的回归网（含 B 站扫码四态、同名 cookie 冲突、
+   账号白名单回填、首启标记等回归用例）；
 2. **空数据目录**起后端（源码或冻结 exe）→ 验 `/healthz` + 扫码状态机
    （`qr/start` → 连续 `qr/check` 必须停在 `waiting`，防「读错 code 字段」回归）；
 3. 需要时重打便携 zip。
 
 失败时会把现场数据目录打印出来（`console.log` / `logs/sidecar.log`）便于定位。
+
+### 桌面端图标（LOGO 变更后重生成）
+
+```powershell
+python scripts/make_icons.py     # 从 docs/design/png/NGNlogo无底.png 生成
+```
+
+品牌粉圆角底 + 白猫脸，输出 `frontend/src-tauri/icons/`（含多尺寸 `icon.ico`、
+`icon.png`、Windows 商店 `Square*Logo.png`、`icon.icns`）。改 LOGO 后跑一次即可。
 
 ## 二·五、布局类改动的机器验证（`scripts/ui_probe.py`）
 
@@ -45,6 +55,7 @@ python scripts/dev_check.py --full      # = --frozen --portable
 ```powershell
 python scripts/ui_probe.py                          # 1100 / 1280 / 1440 三档宽度
 python scripts/ui_probe.py --width 1100             # 指定宽度
+python scripts/ui_probe.py --first-run --width 1100 # 空数据目录：验首启登录浮窗
 ```
 
 它自动：复制开发数据目录 → 起后端 → 起 Vite → 无头浏览器加载
@@ -57,6 +68,9 @@ python scripts/ui_probe.py --width 1100             # 指定宽度
 | 无可见出窗元素 | 没有元素越过窗口左右缘（被 `overflow:hidden` 裁掉的折叠组不算） |
 | 无容器横向溢出 | `overflow-x:auto/scroll` 容器不得 `scrollWidth > clientWidth`（白名单：`.type-chips` 有意横滚） |
 | 无原生滚动条 | 滚动容器统一 OverlayScroll，否则出现/消失会挤动布局 |
+
+`--first-run` 额外断言：空数据目录下 `?firstRun=1` 必须**自动弹出登录浮窗**，
+且浮窗内含「凭据仅保存在本机」说明。
 
 ⚠️ 需要完整权限（Vite 的 esbuild 与无头浏览器在受限沙箱会失败）；失败时保留
 `_ui_probe_tmp/`（含 DOM dump 与截图用的 profile 目录）供定位。

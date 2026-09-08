@@ -22,7 +22,7 @@
 | 环节 | 实现 | 说明 |
 |---|---|---|
 | 首绘粉底 | `<head><style>html{background:#ffa2b4}` | HTML 解析即染粉，消除「白底窗口→透明轮廓」两个原生中间态 |
-| 静态启动幕 | `#boot-splash`（纯内联样式） | 粉底 + 白底圆角 LOGO「D」+ 呼吸动画，不依赖 bundle |
+| 静态启动幕 | `#boot-splash`（纯内联样式） | 粉底 + 用户设计 LOGO（白色猫脸矢量，内联 SVG）+ 呼吸动画，不依赖 bundle |
 | 启动诊断陷阱 | `#boot-diag`（`window.__bootLog` / `__bootFold`） | 捕获 `[error]/[resource]/[console.error]/[promise]` 四类，常驻右上角徽章，可展开/一键复制；React 就绪后自动折叠 |
 | 全局右键禁用 | `document.addEventListener('contextmenu', preventDefault, true)` | 捕获阶段，覆盖一切渲染时序 |
 | 窗口创建 | `visible:false`（tauri.conf） | 隐藏创建，杜绝原生空窗帧 |
@@ -53,7 +53,7 @@
 |---|---|---|
 | 顶部栏 | `.topbar` | 底色 `--c-primary`，高 `--topbar-height:40px` |
 | LOGO 占位区 | `.topbar-logo-zone` | **72×40** 横跨全高，flex 居中 |
-| LOGO 盒 | `.topbar-logo` | **28×28 纯白方形**，内部思源黑体（Noto Sans SC Logo 子集）粉色粗体 D **17px/700**（`--font-logo`） |
+| LOGO | `.topbar-logo` | **用户设计猫脸**（`docs/design/svg/LOGO.svg`，内联矢量 `common/Logo.tsx`，`currentColor` 白描边）**31×24**（viewBox 167.087×131.01 → 1.2754:1） |
 | 标题 | `.topbar-title` | 定宽 **150×40**，垂直居中/水平左对齐；字小魂锐艺黑 **15px、字距 5px**（`--font-title`）；`user-select:none` |
 | 状态行 | `.topbar-status` | 绝对居中；**19px/500 白字** + tabular-nums；`max-width:46%` |
 | ├ 抓取中 | `.topbar-status-spinner`（`Frame_41_8.svg` 16px 旋转） | 替换旧黄点脉冲 |
@@ -142,7 +142,7 @@
 | 名称 | 类名 | 说明 |
 |---|---|---|
 | 光条 | `.glow-bar` | 443px 白色渐变(`rgba(255,255,255,.68)` 中心)矩形胶囊 |
-| 视图钮 | `.view-btn.on/.off` | 四枚（**2026-09-08 用户：删除未接线的邮件占位钮**）：**档案(`BarChart3`)→`setView('archive')`** / **卡片(`LayoutGrid`)→`setView('cards')`** / **列表(`AlignJustify`)→`setView('list')`** / **档案卡(`Fingerprint`)→`setView('profile')`**（P7 追加）；on=.8 off=.4，激活跟随 `view` |
+| 视图钮 | `.view-btn.on/.off` | 四枚、**同级视图**（2026-09-08 用户定序 + 删除未接线的邮件占位钮）：**卡片(`LayoutGrid`)→`setView('cards')`** / **列表(`AlignJustify`)→`setView('list')`** / **档案(`BarChart3`)→`setView('archive')`** / **档案卡(`Fingerprint`)→`setView('profile')`**（P7 追加）；on=.8 off=.4，激活跟随 `view` |
 
 **cards 视图（展示页 / 默认）**
 | 名称 | 类名 | 说明 |
@@ -391,8 +391,7 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 
 | family | 文件 | 用途 |
 |---|---|---|
-| `Noto Sans SC Logo`（思源黑体子集） | NotoSansSC-Logo.woff2 | `--font-logo`（顶栏 LOGO D，17px；SIL OFL 1.1 开源可嵌入；子集化仅含 "D"） |
-| `Noto Sans SC Title`（思源黑体子集） | NotoSansSC-Title.woff2 | `--font-title`（顶栏标题 15px 字距 5px；OFL 1.1；子集化仅含 "DDtoolkit"） |
+| `Noto Sans SC Title`（思源黑体子集） | NotoSansSC-Title.woff2 | `--font-title`（顶栏标题 15px 字距 5px；OFL 1.1；子集化仅含 "DDtoolkit"）。原 'D' 子集（NotoSansSC-Logo.woff2 / `--font-logo`）随 LOGO 换矢量后删除 |
 | `Alimama FangYuanTi VF`(100–900) | AlimamaFangYuanTiVF-VF.woff2 | 全局默认 `--font-family`（阿里妈妈官方许可：免费商用+嵌入式，见 LICENSE 声明） |
 
 ## E. 交互浮窗清单

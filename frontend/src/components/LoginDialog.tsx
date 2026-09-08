@@ -163,9 +163,18 @@ export default function LoginDialog({ open, onOpenChange }: Props) {
         <DialogHeader>
           <DialogTitle>账号登录</DialogTitle>
           <DialogDescription>
-            扫码登录后用于平台数据抓取；凭据仅保存在本机（.env）。
+            扫码登录仅用于抓取平台公开数据，可以跳过。
           </DialogDescription>
         </DialogHeader>
+
+        {/* 本地存储说明（用户 2026-09-08）：把「凭据只在本机」讲清楚，
+            避免用户以为要交出账号密码或担心上传 */}
+        <p className="rounded-lg bg-[var(--sel-bg-hover)] px-3 py-2 text-xs leading-relaxed text-muted-foreground">
+          账号凭据（Cookie）<b className="font-medium text-foreground">仅保存在本机</b>
+          数据目录的 <code className="rounded bg-background/70 px-1">.env</code> 文件中，
+          不会上传到任何服务器；本应用也<b className="font-medium text-foreground">不接触账号密码</b>。
+          想退出登录时，删除该文件即可。
+        </p>
 
         <div className="flex gap-2">
           {(['bilibili', 'weibo'] as Platform[]).map((p) => (

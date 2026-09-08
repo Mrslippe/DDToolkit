@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Copy, LogIn, Minus, Square, X } from 'lucide-react'
 import spinnerSvg from '../assets/icons/Frame_41_8.svg'
+import Logo from './common/Logo'
 import LoginDialog from './LoginDialog'
 import {
   AlertDialog,
@@ -14,6 +15,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { useIsMaximized } from '../hooks/useIsMaximized'
 import { setFetchBusy } from '../fetchBusy'
+import { isFirstRun } from '../bootState'
 import { api } from '../api/api'
 import type { AccountSnapshot, AuthStatus, FetchStatus, PostFetchStatus } from '../api/types'
 import './../styles/layout.css'
@@ -251,6 +253,15 @@ export default function TopBar() {
     }
   }, [])
 
+  // 首次启动（后端 /healthz 的 first_run）自动弹出登录浮窗：
+  // 等 B 站登录态探测回来再决定——已登录（老数据目录/已配置 .env）就不打扰。
+  const firstRunHandled = useRef(false)
+  useEffect(() => {
+    if (firstRunHandled.current || !isFirstRun() || !auths.bili) return
+    firstRunHandled.current = true
+    if (auths.bili.needs_login) setLoginOpen(true)
+  }, [auths])
+
   // 成功类操作提示覆盖态：优先于常规状态文案，PILL_MS 后自动还原；
   // 新任务启动时由轮询立即清除让位
   const pillTimer = useRef<number | undefined>(undefined)
@@ -302,7 +313,8 @@ export default function TopBar() {
           空白子元素都不会拖窗（2026-09-08 用户反馈）。故所有非交互子元素各自标注，
           按钮（登录/窗口控制）保持不标、继续可点。 */}
       <div className="topbar-logo-zone" {...(isTauri ? { 'data-tauri-drag-region': true } : {})}>
-        <div className="topbar-logo" {...(isTauri ? { 'data-tauri-drag-region': true } : {})}>D</div>
+        {/* 用户设计 LOGO（猫脸）——白色描边落在主色底上（docs/design/svg/LOGO.svg） */}
+        <Logo className="topbar-logo" />
       </div>
       <h1 className="topbar-title" {...(isTauri ? { 'data-tauri-drag-region': true } : {})}>
         DDtoolkit

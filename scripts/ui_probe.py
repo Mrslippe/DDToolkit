@@ -62,10 +62,16 @@ def _find_edge() -> str | None:
     return None
 
 
-def _prepare_data() -> Path:
-    """开发数据目录副本（只拷库与名单，静态缓存不需要）。"""
+def _prepare_data(empty: bool = False) -> Path:
+    """开发数据目录副本（只拷库与名单，静态缓存不需要）。
+
+    empty=True 时给一个全新空目录——用来验证「首次启动」相关行为
+    （后端 first_run=true、前端自动弹登录浮窗）。
+    """
     data = WORK / "data"
     data.mkdir(parents=True, exist_ok=True)
+    if empty:
+        return data
     for f in ("vtuber.db", "vtuber.db-wal", "vtuber.db-shm", ".env", "vtubers.csv"):
         src = DEV_DATA / f
         if src.exists():
@@ -132,10 +138,26 @@ def _assert(views: list[dict], width: int) -> list[str]:
     return bad
 
 
+def _assert_first_run(dom_file: Path) -> list[str]:
+    """首启行为：登录浮窗自动出现，且带「凭据仅保存在本机」说明。"""
+    text = dom_file.read_text(encoding="utf-8", errors="replace")
+    bad: list[str] = []
+    if 'role="dialog"' not in text:
+        bad.append("首启登录浮窗未自动弹出（?firstRun=1 下应打开）")
+    if "仅保存在本机" not in text:
+        bad.append("登录浮窗缺少「凭据仅保存在本机」说明文本")
+    return bad
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--width", type=int, action="append", help="窗口宽度（可多次，默认 1100/1280/1440）")
     ap.add_argument("--height", type=int, default=760)
+    ap.add_argument(
+        "--first-run",
+        action="store_true",
+        help="用空数据目录起后端，验证「首次启动自动弹登录浮窗 + 本地存储说明」",
+    )
     args = ap.parse_args()
     widths = args.width or [1100, 1280, 1440]
 
@@ -143,12 +165,12 @@ def main() -> int:
     if not edge:
         print("[FAIL] 未找到 Edge/Chrome")
         return 1
-    if not (DEV_DATA / "vtuber.db").exists():
+    if not args.first_run and not (DEV_DATA / "vtuber.db").exists():
         print(f"[FAIL] 未找到开发数据目录 {DEV_DATA}（先跑一次 dev 应用）")
         return 1
 
     WORK.mkdir(parents=True, exist_ok=True)
-    data = _prepare_data()
+    data = _prepare_data(empty=args.first_run)
     be_port, vite_port = _free_port(), _free_port()
 
     be_env = {
@@ -182,17 +204,24 @@ def main() -> int:
             return 1
 
         vid = _first_vtuber(be_port)
-        route = f"/vtubers/{vid}" if vid else "/"
-        print(f"[probe] 目标路由 {route}（VTuber #{vid}）")
+        if args.first_run:
+            route, extra = "/", "?probe=1&firstRun=1"
+            print("[probe] 空数据目录模式：验证首启登录浮窗")
+        else:
+            route = f"/vtubers/{vid}" if vid else "/"
+            extra = "?probe=1"
+            print(f"[probe] 目标路由 {route}（VTuber #{vid}）")
 
         for w in widths:
-            url = f"http://localhost:{vite_port}{route}?probe=1"
+            url = f"http://localhost:{vite_port}{route}{extra}"
             print(f"[probe] 宽度 {w} → {url}")
             res = _run_probe(edge, url, w, args.height, WORK, "main")
             if not res:
                 failures.append(f"@{w}: 无探针输出")
                 continue
             bad = _assert(res["views"], w)
+            if args.first_run:
+                bad += _assert_first_run(res["dom"])
             failures.extend(bad)
             tags = [v.get("tag") for v in res["views"]]
             print(f"  views={tags}  问题={len(bad)}")
@@ -201,7 +230,7 @@ def main() -> int:
 
         print("\n=== 汇总 ===")
         if failures:
-            print(f"[FAIL] {len(failures)} 处布局不变量被破坏")
+            print(f"[FAIL] {len(failures)} 处不变量被破坏")
             return 1
         print("[ok] 全部宽度 × 视图通过（无窗口滚动条 / 无出窗元素 / 无原生滚动条）")
         return 0

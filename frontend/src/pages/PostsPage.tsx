@@ -808,15 +808,9 @@ return (
             </FloatPill>
           </div>
         )}
+        {/* 视图切换光条（2026-09-08 用户定序：卡片 → 列表 → 档案 → 档案卡，
+            四个视图同级、共享同一状态机与数据，切换不重取） */}
         <div className="glow-bar">
-          <button
-            type="button"
-            className={`view-btn ${view === 'archive' ? 'on' : 'off'}`}
-            title="档案（重要日期 / 直播日历 / 粉丝趋势）"
-            onClick={() => setView('archive')}
-          >
-            <BarChart3 className="size-6" />
-          </button>
           <button
             type="button"
             className={`view-btn ${view === 'cards' ? 'on' : 'off'}`}
@@ -832,6 +826,14 @@ return (
             onClick={() => setView('list')}
           >
             <AlignJustify className="size-6" />
+          </button>
+          <button
+            type="button"
+            className={`view-btn ${view === 'archive' ? 'on' : 'off'}`}
+            title="档案（直播日历 / 粉丝趋势）"
+            onClick={() => setView('archive')}
+          >
+            <BarChart3 className="size-6" />
           </button>
           <button
             type="button"

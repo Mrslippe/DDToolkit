@@ -9,7 +9,9 @@ import { Button } from '@/components/ui/button'
 import './index.css'
 import './styles/tokens.css'
 import App from './App'
+import Logo from './components/common/Logo'
 import { setApiBase } from './api/api'
+import { markFirstRun } from './bootState'
 
 const isTauri = '__TAURI_INTERNALS__' in window
 
@@ -38,6 +40,13 @@ async function tauriBootstrap(): Promise<boolean> {
       const r = await fetch(`${base}/healthz`, { cache: 'no-store' })
       if (r.ok) {
         setApiBase(base)
+        // 首次启动标记（后端只在第一次探活时给 true）→ TopBar 自动弹登录浮窗
+        try {
+          const boot = (await r.json()) as { first_run?: boolean }
+          if (boot?.first_run) markFirstRun()
+        } catch {
+          /* 响应非 JSON：忽略，不影响启动 */
+        }
         return true
       }
     } catch {
@@ -75,7 +84,7 @@ function Splash({
       <div className="splash-center">
         {state === 'failed' ? (
           <>
-            <div className="splash-logo splash-logo-static">D</div>
+            <Logo className="splash-logo splash-logo-static" />
             <div className="mt-5 text-lg font-semibold text-white">后端启动失败</div>
             <p className="mt-2 max-w-md text-center text-sm text-white/80">
               内置后端服务未能在时限内就绪。请关闭应用后重新打开；
@@ -87,7 +96,7 @@ function Splash({
           </>
         ) : (
           <>
-            <div className={`splash-logo ${state === 'pending' ? 'splash-logo-pulse' : ''}`}>D</div>
+            <Logo className={`splash-logo ${state === 'pending' ? 'splash-logo-pulse' : ''}`} />
             {/* 冷启动可能十几秒（首次建库迁移 / 杀软首扫）：给出秒数，
                 让「等待」和「卡死」可区分（2026-09-08 首启卡幕反馈） */}
             {state === 'pending' && waited >= 3 && (
@@ -189,4 +198,10 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
 // 与 scripts/ui_probe.py。生产构建里 import.meta.env.DEV 为 false → 整段被摇掉。
 if (import.meta.env.DEV && new URLSearchParams(window.location.search).has('probe')) {
   void import('./dev/probe').then((m) => m.runUiProbe())
+}
+
+// 开发态强制首启标记（?firstRun=1）：用来在浏览器里验证「首启自动弹登录浮窗」，
+// 免得为了看一次弹窗去清数据目录。
+if (import.meta.env.DEV && new URLSearchParams(window.location.search).has('firstRun')) {
+  markFirstRun()
 }

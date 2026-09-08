@@ -203,7 +203,9 @@
   align-items: center;
   justify-content: center;
   gap: 10px;
-  width: 443px;
+  /* 四枚 50px 视图钮 + 3×10 间距 = 230，两侧各留 ~62 让光带渐隐收口
+     （原五枚 443px，2026-09-08 删掉邮件占位钮后同步收窄） */
+  width: 354px;
   height: 59px;
   /* 设计稿软光带：矩形渐变、无圆角；图标条内居中 */
   background: linear-gradient(90deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.68) 29.4%, rgba(255, 255, 255, 0) 100%);

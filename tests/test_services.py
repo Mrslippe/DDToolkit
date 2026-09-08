@@ -111,6 +111,36 @@ def test_version_synced_with_devlog():
     )
 
 
+def test_healthz_first_run_flag(monkeypatch):
+    """首启标记：/healthz 第一次返回 first_run=true 并落盘，之后恒为 false。
+
+    前端据此自动弹出登录浮窗（用户 2026-09-08 需求）。
+    注：不用 pytest 的 tmp_path —— 受限沙箱下系统临时目录不可写，改用工作区内目录。
+    """
+    import shutil
+    from pathlib import Path
+
+    from app import main as app_main
+
+    tmp = Path(__file__).resolve().parent.parent / "_test_tmp"
+    shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir()
+    try:
+        marker = tmp / ".first-run-done"
+        monkeypatch.setattr(app_main, "FIRST_RUN_MARKER", marker)
+        client = TestClient(app_main.app)
+
+        first = client.get("/healthz").json()
+        assert first["ok"] is True
+        assert first["first_run"] is True
+        assert marker.exists(), "首次探活应写入标记文件"
+
+        second = client.get("/healthz").json()
+        assert second["first_run"] is False
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 # ── P4：动态类型映射 ──────────────────────────────────────────────────
 
 def test_map_dynamic_type_music():

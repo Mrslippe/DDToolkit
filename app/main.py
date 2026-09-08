@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import time
+from datetime import datetime, timezone
 
 from sqlalchemy import inspect, text
 
@@ -27,6 +28,10 @@ logger = logging.getLogger(__name__)
 
 # 启动计时：冷启动优化（devlog/021）——各阶段毫秒时间戳，对照方案 0 基线
 _t0 = time.monotonic()
+
+# 首次启动标记（数据目录内）：存在即表示「本机已经启动过一次」。
+# /healthz 首次返回 first_run=true 时写入，前端据此自动弹登录浮窗。
+FIRST_RUN_MARKER = settings.DATA_DIR / ".first-run-done"
 
 
 def _perf(step: str) -> None:
@@ -181,5 +186,18 @@ app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
 @app.get("/healthz")
 def healthz():
-    """探活端点：桌面端启动器/前端等待后端就绪用。"""
-    return {"ok": True, "version": settings.VERSION}
+    """探活端点：桌面端启动器/前端等待后端就绪用。
+
+    附带 `first_run`：本次是「数据目录里还没有首次启动标记」的那一次启动——
+    前端据此自动弹出登录浮窗（用户 2026-09-08 需求）。标记在首次返回后落盘，
+    同一进程内只会报告一次 true，之后启动恒为 false。
+    """
+    first_run = not FIRST_RUN_MARKER.exists()
+    if first_run:
+        try:
+            FIRST_RUN_MARKER.write_text(
+                datetime.now(timezone.utc).isoformat(), encoding="utf-8"
+            )
+        except OSError as e:
+            logger.warning(f"首次启动标记写入失败: {e}")
+    return {"ok": True, "version": settings.VERSION, "first_run": first_run}

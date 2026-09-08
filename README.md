@@ -111,7 +111,7 @@ npm run collect:release --prefix frontend
 
 | 字体 | 许可 | 用途 |
 |---|---|---|
-| [思源黑体 Noto Sans SC](https://fonts.google.com/noto/specimen/Noto+Sans+SC)（子集：'D' / 'DDtoolkit'） | [SIL OFL 1.1](https://openfontlicense.org)（开源，可嵌入分发） | 顶栏 LOGO / 标题（`--font-logo` / `--font-title`） |
+| [思源黑体 Noto Sans SC](https://fonts.google.com/noto/specimen/Noto+Sans+SC)（子集：'DDtoolkit'） | [SIL OFL 1.1](https://openfontlicense.org)（开源，可嵌入分发） | 顶栏标题（`--font-title`） |
 | [阿里妈妈方圆体](https://www.yuque.com/alimama_ai-font/vfse9w/fco5g1gifud8lls2?singleDoc)（可变字重） | 阿里妈妈官方许可：免费商用 + **嵌入式使用**（[声明第 3 条](https://www.yuque.com/alimama_ai-font/vfse9w/fco5g1gifud8lls2?singleDoc)；[FAQ2](https://www.yuque.com/alimama_ai-font/vfse9w/co47p8ge57qsanz2?singleDoc)：嵌入 app 不侵权，但不得就字体使用收费；不可二次创作/商标注册） | 全局默认字体（`--font-family`） |
 
 > 原顶栏字体（千图小兔体·iFonts 联名 / 字小魂锐艺黑·试用版）因许可限制（禁嵌入式/商用需授权）**不随仓库分发**——本地备份于 `frontend/src/assets/fonts/_nondistribute/` 与 `docs/design/react-topbar/src/assets/fonts/_nondistribute/`（已 gitignore）。

@@ -232,17 +232,11 @@ html.window-maximized body {
   align-items: center;
 }
 
+/* 用户设计 LOGO（猫脸）：白色描边落在主色底上；宽高比 167.087:131.01 */
 .splash-logo {
-  width: 88px;
-  height: 88px;
-  border-radius: 22px;
-  background: #fff;
-  color: var(--c-accent);
-  font-size: 52px;
-  font-weight: 800;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  width: 112px;
+  height: 87.8px;
+  color: #fff;
   user-select: none;
 }
 
@@ -255,7 +249,7 @@ html.window-maximized body {
   animation: splash-logo-out 0.55s ease 0.15s forwards;
 }
 
-/* 闭合等待态：LOGO 呼吸 */
+/* 闭合等待态：LOGO 呼吸（线稿无底色，改用缩放 + 透明度，不再画光圈方框） */
 .splash-logo-pulse {
   animation: splash-pulse 1.8s ease-in-out infinite;
 }
@@ -264,11 +258,11 @@ html.window-maximized body {
   0%,
   100% {
     transform: scale(1);
-    box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.35);
+    opacity: 0.86;
   }
   50% {
     transform: scale(1.06);
-    box-shadow: 0 0 0 18px rgba(255, 255, 255, 0);
+    opacity: 1;
   }
 }
 
@@ -296,8 +290,8 @@ html.window-maximized body {
   flex-shrink: 0;
 }
 
-/* LOGO 占位区：72×40 容器横跨顶栏全高，28×28 纯白矩形双向居中，
-   盒上思源黑体（Noto Sans SC Logo 子集）粉色粗体 D */
+/* LOGO 占位区：72×40 容器横跨顶栏全高，用户设计 LOGO（猫脸）双向居中，
+   白色描边落在主色底上（viewBox 167.087×131.01 → 24 高 ≈ 30.6 宽） */
 .topbar-logo-zone {
   width: 72px;
   height: var(--topbar-height);
@@ -308,17 +302,9 @@ html.window-maximized body {
 }
 
 .topbar-logo {
-  width: 28px;
-  height: 28px;
-  background: #fff;
-  color: var(--c-accent);
-  font-family: var(--font-logo);
-  font-size: 17px;
-  font-weight: 700;
-  line-height: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  width: 31px;
+  height: 24px;
+  color: #fff;
   user-select: none;
 }
 
