@@ -1,9 +1,13 @@
 # -*- coding: utf-8 -*-
-"""为 ddtoolkit 项目分析报告生成 SVG 架构图。"""
+"""为 ddtoolkit 生成 SVG 架构图（输出到 docs/diagrams/）。
+
+用法：python docs/tools/gen_diagrams.py
+只改对应 dN() 函数即可重绘单张图（其余图内容不变）。
+"""
 import html
 from pathlib import Path
 
-OUT = Path(__file__).parent / "diagrams"
+OUT = Path(__file__).resolve().parent.parent / "diagrams"
 OUT.mkdir(exist_ok=True)
 
 FONT = "'Segoe UI','Microsoft YaHei','PingFang SC',sans-serif"

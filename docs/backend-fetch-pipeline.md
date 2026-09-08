@@ -6,7 +6,8 @@
 > `app/services/platforms/{bilibili,weibo}.py`（平台适配）、
 > `app/routers/vtuber.py`（HTTP 入口）。
 > 本文档记录 **2026-09-09 当前实现**，与代码同步维护。
-> 总览/数据模型见 `docs/ARCHITECTURE.md`；表结构/仓储/接口见 `docs/backend-repositories-and-routers.md`。
+> 总览/数据模型见 `docs/ARCHITECTURE.md`；表结构/仓储/接口见 `docs/backend-repositories-and-routers.md`；
+> 名词与代码路径速查见 `docs/GLOSSARY.md`。
 
 ---
 

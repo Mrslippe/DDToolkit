@@ -21,8 +21,8 @@
 ├─ alembic/           数据库迁移链（a001 → e007，启动时自动升级）
 ├─ tests/             pytest 测试（test_auth / test_services / test_vtuber_api / test_weibo 等）
 ├─ scripts/           维护与构建脚本（dev_check、ui_probe、build_backend、collect_release 等）
-├─ devlog/            版本开发日志（001–041，每版本一篇）
-├─ docs/              文档：架构总览、后端分层、UI 映射、平台扩展指南、设计原型、TODO 路线图
+├─ devlog/            版本开发日志（001–042，每版本一篇）
+├─ docs/              文档：入口见 docs/README.md（术语表 / 架构 / 深度文档 / 指南 / 设计资产）
 ├─ frontend/          前端（Vite + React）+ Tauri 壳（src-tauri）
 ├─ backend_main.py    桌面端后端入口（Tauri 以子进程拉起，含父进程看门狗）
 ├─ alembic.ini        Alembic 配置
@@ -122,11 +122,15 @@ npm run collect:release --prefix frontend
 
 ## 常用文档
 
+> 完整索引见 **`docs/README.md`**（按「入口 / 深度文档 / 指南 / 资产归档」分组）。
+
+- `docs/GLOSSARY.md` — **术语表**：名词 → 含义 → 代码路径 → 依赖（改 bug/做需求先查这里）
 - `docs/ARCHITECTURE.md` — **架构总览**：运行时形态 / 数据模型（9 表 ER）/ 抓取分层与优先级 / 数据来源地图 / 不变量
 - `docs/backend-repositories-and-routers.md` — 表结构 · 9 个 Repository · 47 个 HTTP 端点
 - `docs/backend-fetch-pipeline.md` — 抓取链路详解（频率 / API 清单 / 风控判定与原因 / 节流测算）
 - `docs/UI-MAP.md` — 前端界面与路由映射
 - `docs/DEV-LOOP.md` — 本地开发与机器验证（dev_check / ui_probe）
+- `docs/RELEASE.md` — 打包与发布流程
 - `docs/platforms-extension-guide.md` — 平台接入扩展指南
 - `docs/TODO.md` — 路线图与现状盘点
 - `devlog/` — 每版本的变更记录（当前 v0.9.x）

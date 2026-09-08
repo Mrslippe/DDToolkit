@@ -102,8 +102,9 @@ def main() -> int:
             print(f"       git 报错: {r.stderr.strip().splitlines()[0]}")
         return 1
 
-    # 3. 创建 Release（描述优先读 notes 文件；两种命名都认）
+    # 3. 创建 Release（描述优先读 notes 文件；新路径 + 旧路径都认）
     notes_candidates = [
+        ROOT / "docs" / "releases" / f"v{version}.md",
         ROOT / "docs" / f"release-notes-v{version}.md",
         ROOT / "docs" / f"release-notes-{version}.md",
     ]

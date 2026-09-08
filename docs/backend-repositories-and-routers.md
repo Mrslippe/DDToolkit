@@ -2,7 +2,8 @@
 
 > 适用版本：`main`（2026-09-09，`MIGRATION_HEAD = e007`，迁移链 13 个版本、9 张表、47 个端点）。
 > 阅读路径：HTTP 入口（`app/routers`）→ SQL 封装（`app/repositories`）→ 表映射（`app/models`）→ 迁移（`alembic/versions`）。
-> 系统全貌见 `docs/ARCHITECTURE.md`；抓取链路细节见 `docs/backend-fetch-pipeline.md`。
+> 系统全貌见 `docs/ARCHITECTURE.md`；抓取链路细节见 `docs/backend-fetch-pipeline.md`；
+> 名词与代码路径速查见 `docs/GLOSSARY.md`；文档索引见 `docs/README.md`。
 > 会话注入：`Depends(get_db)`（`app/core/database.py`）用毕自动 close；每个 SQLite 连接统一 PRAGMA：
 > `journal_mode=WAL`（读写不互斥）、`busy_timeout=30000`（写锁等待而非抛错）、`synchronous=NORMAL`、**`foreign_keys=ON`**。
 
