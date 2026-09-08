@@ -32,7 +32,7 @@
 | 状态机 | `BootState: pending→opening→done/failed` | `ENVELOPE_MS=750` 信封动画播完卸载启动幕 |
 | 窗口本体 | 1440×800 / 无框 / 透明 / L3 自绘圆角 | `--radius-window:4px`（Rust 侧已禁 DWM 阴影与系统圆角，只前端一套弧线） |
 | 最大化 | `html.window-maximized` 类 | 壳层圆角归零（App.tsx `useMaximizedClass` 监听 `onResized`） |
-| 应用图标 | `scripts/make_icons.py` → `frontend/src-tauri/icons/` | **2026-09-09 重做（任务栏图标模糊）**：矢量源 `docs/design/svg/LOGO.svg`；`icon.ico` **目录首项 = 48px 简化加粗版**（tauri-codegen 取 `entries()[0]` 当 `default_window_icon` → tao 设为 `ICON_SMALL` → Win11 任务栏就是它；旧文件首项是 16×16，被放大到 24/36px 才糊）；≥64px 按设计稿 stroke 7.5，≤48px 简化（仅头部轮廓 + 圆点眼）并按尺寸补偿描边；详见 `scripts/make_icons.py` 头注释 |
+| 应用图标 | `scripts/make_icons.py` → `frontend/src-tauri/icons/` | **2026-09-09 重做（任务栏图标模糊）**：矢量源 `docs/design/svg/LOGO.svg`；`icon.ico` **目录首项 = 48px 任务栏专用层**（tauri-codegen 取 `entries()[0]` 当 `default_window_icon` → tao 设为 `ICON_SMALL` → Win11 任务栏就是它；旧文件首项是 16×16，被放大到 24/36px 才糊）；**≤48px 用小尺寸专用稿 `docs/design/svg/LOGO-small.svg`**（用户 2026-09-09 定稿：头部轮廓 + 大圆点眼 + 每侧 3 根短胡须，轮廓 stroke 16 / 眼径 26，24px 下胡须 3.0px 仍可见），≥64px 用主稿 stroke 7.5 全细节；详见 `scripts/make_icons.py` 头注释 |
 | 图标改动的构建依赖 | `src-tauri/build.rs` | **必读**：图标由 tauri-build 的构建脚本读取（生成 context 的 `default_window_icon` + winres 的 exe 资源），而 tauri-build 只对 config/resources/capabilities/frontendDist 声明 `rerun-if-changed`——**图标不在其中**，只改图标时 cargo 不重跑构建脚本、窗口图标与 exe 资源都保持旧值。故 `build.rs` 显式声明 `icons/icon.ico|icon.png|32x32.png|128x128.png` 四个依赖；改图标后仍建议 `cargo clean -p ddtoolkit` 一次以清掉旧缓存（Windows 图标缓存也需刷新） |
 
 ---
