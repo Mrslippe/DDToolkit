@@ -19,9 +19,24 @@ dist/
 venv/
 .venv/
 
-# 日志
+# 日志与本地临时产物（会话/调试现场，一律不入库）
 logs/
 *.log
+# SQLite WAL 边车文件（主库已被 *.db 覆盖，这两个不会自动跟随）
+*.db-wal
+*.db-shm
+
+# AI 编码工具目录（技能包 / 会话 / 依赖；与 .vscode / .idea 同类，不入库）
+# 注：opencode.json（LSP 配置）仍保留在仓库，属项目级开发环境配置
+.opencode/
+
+# 自检 / 调试临时目录（scripts/dev_check.py、ui_probe.py 的现场，通过即删）
+/_devcheck_tmp/
+/_ui_probe_tmp/
+# 单元测试用工作区临时目录（沙箱下系统 temp 不可写，见 test_services 首启标记用例）
+/_test_tmp/
+# 排查问题时的一次性脚本/现场目录（_tmp_xxx.py、_tmp_xxx/）
+/_tmp_*/
 
 # Node / 前端
 node_modules/
@@ -44,10 +59,6 @@ frontend/src-tauri/binaries/
 frontend/src-tauri/gen/
 /dist-portable/
 /dist-release/
-# 快速自检（scripts/dev_check.py）的现场目录：通过即删，失败时保留供排查
-/_devcheck_tmp/
-# 单元测试用工作区临时目录（沙箱下系统 temp 不可写，见 test_services 首启标记用例）
-/_test_tmp/
 # 非开源分发资产（商用/试用字体原始文件，替换为开源子集后仅本地备份）
 frontend/src/assets/fonts/_nondistribute/
 docs/design/**/_nondistribute/
