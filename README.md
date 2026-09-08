@@ -2,7 +2,7 @@
 
 个人向 **VTuber 帖子 / 账号证据归档工具**：定时抓取 B 站与微博的动态、账号统计并归档到本地 SQLite，桌面端浏览与管理。
 
-![Version](https://img.shields.io/badge/version-0.9.1-ffa2b4) ![License](https://img.shields.io/badge/license-MIT-green)
+![Version](https://img.shields.io/badge/version-0.9.2-ffa2b4) ![License](https://img.shields.io/badge/license-MIT-green)
 
 - 后端：Python 3.14 + FastAPI + SQLAlchemy 2.0 + SQLite（WAL）+ APScheduler + Alembic
 - 前端：Vite + React 18 + TypeScript + Tailwind CSS v4 + Radix/shadcn 风格组件 + ECharts 6（图表 canvas 自绘）

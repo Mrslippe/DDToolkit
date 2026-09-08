@@ -18,7 +18,7 @@ load_dotenv(DATA_DIR / ".env")
 
 class Settings:
     APP_NAME: str = "Better DD Toolkit"
-    VERSION: str = "0.9.1"   # 与 devlog 最新版本保持一致（v0.9.1：直播场次内容管道与详情弹窗·弹幕词云·滚动条标准·前端审计）
+    VERSION: str = "0.9.2"   # 与 devlog 最新版本保持一致（v0.9.2：扫码登录修复·直装版资源打包修复·布局滚动条·首启登录浮窗·用户 LOGO）
 
     # 数据目录
     DATA_DIR: Path = DATA_DIR
