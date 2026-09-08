@@ -55,10 +55,17 @@ def _cookies_from_url(url: str) -> dict[str, str]:
     return out
 
 # QR 轮询状态码
-QR_SUCCESS = {0, "0"}
-QR_EXPIRED = {86038, "86038"}
-QR_WAITING = {86090, "86090"}
-QR_SCANNED = {86101, "86101"}
+# QR 轮询状态码。★ 必须读响应里的 data.code，不是外层 code：
+# 外层 code=0 只表示「接口调用成功」，扫码状态在 data.code
+# （实测 2026-09-08：未扫码 → {"code":0,...,"data":{"code":86101,"message":"未扫码"}}；
+#  失效二维码 → {"code":0,...,"data":{"code":86038,"message":"二维码已失效"}}）。
+# 旧实现只读外层 code，于是**每一次轮询都被当成「已确认」**：立刻走 complete()，
+# 而 data.url 为空 → 取不到 cookie → nav 返回 -101「账号未登录」，
+# 表现为「刷新二维码后立刻提示失效 / 登录无反应」。
+QR_SUCCESS = {0, "0"}            # 手机端已确认
+QR_EXPIRED = {86038, "86038"}    # 二维码已失效
+QR_SCANNED = {86090, "86090"}    # 已扫码，等待手机端确认
+QR_WAITING = {86101, "86101"}    # 未扫码
 
 
 class BilibiliAuth:
@@ -326,7 +333,12 @@ class BilibiliLoginSession:
             self.POLL_URL, params={"qrcode_key": self.qrcode_key}, headers=BASE_HEADERS
         )
         poll_data = poll_resp.json()
-        code = poll_data.get("code")
+        # 扫码状态在 data.code（见文件头 QR_* 注释）；外层 code 只表示接口调用成功。
+        # 兼容处理：data 缺失时退回外层 code（老结构/异常响应）。
+        data = poll_data.get("data") or {}
+        code = data.get("code")
+        if code is None:
+            code = poll_data.get("code")
         if code in QR_SUCCESS:
             status = "confirmed"
         elif code in QR_EXPIRED:
@@ -346,17 +358,21 @@ class BilibiliLoginSession:
         # 才会通过 302 重定向链下发 Set-Cookie（SESSDATA / bili_jct 等）
         callback_url = poll_data.get("data", {}).get("url")
         poll_resp = None
-        if callback_url:
-            # ① 先取回调 URL 查询串里的凭据（crossDomain 跨域传递，最稳的一路）
-            auth._apply_cookies(_cookies_from_url(callback_url))
-            try:
-                poll_resp = await self.client.get(
-                    callback_url,
-                    headers={**BASE_HEADERS, "Referer": "https://passport.bilibili.com/"},
-                    follow_redirects=True,
-                )
-            except Exception as e:
-                logger.warning(f"访问回调 URL 失败: {e}")
+        if not callback_url:
+            # 走到这里只可能是「外层 code 被误判为确认」之类的异常响应：
+            # 没有回调地址就拿不到凭据，直接失败，别让 nav 去撞 -101。
+            logger.warning("扫码回调地址为空，无法获取登录凭据")
+            return False, "未能获取到登录凭据，请重新扫码"
+        # ① 先取回调 URL 查询串里的凭据（crossDomain 跨域传递，最稳的一路）
+        auth._apply_cookies(_cookies_from_url(callback_url))
+        try:
+            poll_resp = await self.client.get(
+                callback_url,
+                headers={**BASE_HEADERS, "Referer": "https://passport.bilibili.com/"},
+                follow_redirects=True,
+            )
+        except Exception as e:
+            logger.warning(f"访问回调 URL 失败: {e}")
 
         # ② 再从整条重定向链 + 客户端 cookie jar 补取（覆盖上面的兜底值）
         auth._update_from_response(poll_resp, jar=self.client.cookies)
