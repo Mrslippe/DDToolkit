@@ -1,7 +1,8 @@
 # DDToolkit 发布手册（Release Playbook）
 
 > 每次发布按本文档执行。所有命令均为**本机验证过**的参数组合（尤其网络部分，见 §6）。
-> 首次发布：v0.9.1（2026-09-08，[GitHub Release](https://github.com/Mrslippe/DDToolkit/releases/tag/v0.9.1)）。
+> 首次发布：v0.9.1（2026-09-08）；最近发布：**v0.9.3**（2026-09-09，
+> [GitHub Release](https://github.com/Mrslippe/DDToolkit/releases/tag/v0.9.3)）。
 
 ---
 
