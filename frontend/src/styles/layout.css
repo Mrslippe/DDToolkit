@@ -330,13 +330,15 @@ html.window-maximized body {
   user-select: none;
 }
 
-/* 状态行：浮片材质 + 全圆角胶囊（2026-09-09 用户四次定调）——
-   材质沿用浮片（`--pill-shadow` 阴影 + 全圆角 999px），配色改用用户指定值：
-   底 `#ffdae1`（浅粉）、字 `#ff7792`（玫红）。
-   ⚠ 对比度：`#ff7792` 对 `#ffdae1` 实测 ≈2.0:1（WCAG AA 正文需 4.5:1），
-   属「装饰性状态文字」的可接受区间；若哪天要读得更清楚，把字色压深到
-   ≈`#c2355f` 即可到 4.5:1。胶囊底对顶栏粉 `#ffa2b4` 仅 1.5:1，
-   所以识别度主要靠 `--pill-shadow` 的投影。 */
+/* 状态行：**容器只在「有事发生」时出现**（2026-09-09 用户定案，第五轮）
+   ── 空闲态：无容器，白字 + 绿点，与顶栏的 logo/标题/图标同级，是 chrome 的一部分；
+   ── 事件态（抓取中 / 操作结果）：亮出深玫瑰徽章 `#c9406f` + 白字，把注意力吸过来；
+      事件结束（抓取完成后覆盖文案 4s 自动消失）徽章随之隐去。
+   为什么是深玫瑰：项目已有「深粉底 + 白字」的徽章配方（粉丝徽章
+   `--pill-fill-pink #e35d8b`、`.float-pill.on`），这里同色相压深一档到 **#c9406f**
+   —— 白字对底 4.72:1（达 WCAG AA），徽章对顶栏粉 2.49:1（形状清楚）；
+   #e35d8b 只有 3.38:1，故未采用。
+   padding 常驻、只动背景色 → 徽章亮/灭时文案不跳位（0.18s 淡入淡出）。 */
 .topbar-status {
   position: absolute;
   left: 50%;
@@ -348,15 +350,20 @@ html.window-maximized body {
   height: var(--pill-h-sm);
   padding: 0 12px;
   border-radius: 999px;
-  background: #ffdae1;
-  box-shadow: var(--pill-shadow);
-  color: #ff7792;
+  background: transparent;
+  color: #fff;
   font-size: 12px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;  /* 进度 3/14 等数字对齐 */
   white-space: nowrap;
   overflow: hidden;
   user-select: none;
+  transition: background-color 0.18s ease;
+}
+
+/* 事件态：徽章亮起（TopBar 按 busy || 覆盖文案 挂类） */
+.topbar-status.on {
+  background: #c9406f;
 }
 
 .topbar-status-dot {
@@ -367,9 +374,9 @@ html.window-maximized body {
   flex-shrink: 0;
 }
 
-/* 操作成功覆盖态：与胶囊文字同色（用户指定的玫红） */
+/* 操作成功覆盖态：白点（此时徽章已亮起，白点在深玫瑰底上才看得见） */
 .topbar-status-dot.ok {
-  background: #ff7792;
+  background: #fff;
 }
 
 /* 胶囊文案变更时的渐隐渐显 + 超长文案省略号 */

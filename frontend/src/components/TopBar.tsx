@@ -319,7 +319,13 @@ export default function TopBar() {
         DDtoolkit
       </h1>
 
-      <span className="topbar-status" {...(isTauri ? { 'data-tauri-drag-region': true } : {})}>
+      {/* 状态行：容器只在「有事发生」时出现（busy 或操作结果覆盖态）——
+          空闲态是顶栏 chrome 的一部分（白字 + 绿点，无容器），
+          事件态亮出深玫瑰徽章把注意力吸过来（见 layout.css .topbar-status.on） */}
+      <span
+        className={'topbar-status' + (busy || showOverride ? ' on' : '')}
+        {...(isTauri ? { 'data-tauri-drag-region': true } : {})}
+      >
         {displayDot.includes('busy') ? (
           <Loader2 className="topbar-status-spinner" />
         ) : (
