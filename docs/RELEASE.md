@@ -69,6 +69,24 @@ Get-ChildItem dist-release | Select-Object Name, @{n='MB';e={[math]::Round($_.Le
 # 若出现旧版本安装包残留（如 0.1.0），删除之
 ```
 
+**验证「后端目录没被安装包打平」**（2026-09-08 事故，见 devlog/036）：
+
+```powershell
+# 安装脚本里的安装目标必须保留 _internal/ 层级
+Select-String frontend/src-tauri/target/release/nsis/x64/installer.nsi `
+  -Pattern '/oname=binaries\\backend\\_internal' | Measure-Object   # 期望 ≈851 行
+# 打平（oname 不含 _internal 但源在 _internal）的行数必须为 0
+(Select-String frontend/src-tauri/target/release/nsis/x64/installer.nsi `
+  -Pattern '/oname=binaries\\backend\\[^\\]+"\s+"[^"]*_internal' | Measure-Object).Count
+```
+
+> ⚠️ **资源打包契约（勿改回）**：`tauri.conf.json` 的 `bundle.resources` 必须用
+> **数组形式** `["binaries/backend/**/*"]`。改成 map + glob 形式
+> （`{"binaries/backend/**/*": "binaries/backend/"}`）会让 tauri-utils 按
+> `dest.join(file_name())` 处理——**只保留文件名**，把后端 onedir 的 `_internal/`
+> 摊平，装完 exe 起不来、启动幕永久卡住（便携 zip 直接打包构建产物，不受影响，
+> 所以只有直装版会坏）。
+
 > ⚠️ 构建环境注意：`npm run release` 需在**完整权限**下执行（PyInstaller/esbuild/cargo/makensis 子进程在受限沙箱会 EPERM）。
 
 ---
@@ -168,6 +186,9 @@ Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Setti
 
 - [ ] `https://github.com/Mrslippe/DDToolkit/releases/tag/v<版本>` 可访问
 - [ ] 两个资产可下载（大小与 dist-release 一致）
+- [ ] **装一次直装版**：安装目录 `binaries\backend\_internal\` 存在，
+      首启能越过启动幕（安装版首启坏了历史上就是这一步没验，见 devlog/036）
+- [ ] 便携版解压启动正常（含 B 站扫码登录能真正拿到凭据）
 - [ ] 吊销本次 PAT（如 token 经对话/日志暴露）
 - [ ] 本地 `git status` 干净（`dist-release/`、`scripts/backend-8000.bat`、`_nondistribute/` 均 gitignore，不应出现）
 - [ ] README 顶部的 Version 徽章已更新（README.md 头部 `version-x.y.z`）
