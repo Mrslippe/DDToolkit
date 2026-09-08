@@ -57,7 +57,7 @@
 | LOGO 占位区 | `.topbar-logo-zone` | **72×40** 横跨全高，flex 居中 |
 | LOGO | `.topbar-logo` | **用户设计猫脸**（`docs/design/svg/LOGO.svg`，内联矢量 `common/Logo.tsx`，`currentColor` 白描边）**31×24**（viewBox 167.087×131.01 → 1.2754:1） |
 | 标题 | `.topbar-title` | 定宽 **150×40**，垂直居中/水平左对齐；**15px、字距 5px**（`--font-title` = `--font-family`，2026-09-09 用户要求换成阿里妈妈方圆体，原思源黑体子集已删）；`user-select:none` |
-| 状态行 | `.topbar-status` | 绝对居中；**容器只在「有事发生」时出现**（2026-09-09 五轮定调后定稿）：基态 `background:transparent` + 白字 `#fff` + 12px/500 + r999 + padding `0 12px`（常驻，徽章亮灭时文案不跳位），与顶栏 logo/标题/图标同级；**事件态**（抓取中 / 操作结果覆盖）挂 `.on` → `background:#c9406f` 深玫瑰徽章 + 白字，`transition: background-color .18s` 淡入淡出。配色依据：复用项目「深粉底 + 白字」徽章配方（粉丝徽章 `--pill-fill-pink #e35d8b`、`.float-pill.on`）同色相压深一档——**白字对底 4.72:1（达 AA）**、徽章对顶栏粉 2.49:1（形状清楚）；`#e35d8b` 只有 3.38:1 故未用。`max-width:46%` + `overflow:hidden`，超长文案省略号落内层 `.pill-text-fade` |
+| 状态行 | `.topbar-status` | 绝对居中；**容器只在「有事发生」时出现**（2026-09-09 五轮定调后定稿）：基态 `background:transparent` + 白字 `#fff` + **13px**/500 + r999 + padding `0 12px`（常驻，徽章亮灭时文案不跳位），与顶栏 logo/标题/图标同级；**事件态**（抓取中 / 操作结果覆盖）挂 `.on` → `background:#c9406f` 深玫瑰徽章 + 白字，`transition: background-color .18s` 淡入淡出。配色依据：复用项目「深粉底 + 白字」徽章配方（粉丝徽章 `--pill-fill-pink #e35d8b`、`.float-pill.on`）同色相压深一档——**白字对底 4.72:1（达 AA）**、徽章对顶栏粉 2.49:1（形状清楚）；`#e35d8b` 只有 3.38:1 故未用。`max-width:46%` + `overflow:hidden`，超长文案省略号落内层 `.pill-text-fade` |
 | ├ 抓取中 | `.topbar-status-spinner`（lucide `Loader2` 14px 旋转，`currentColor`=白） | 2026-09-09 换：原设计稿图标 `Frame_41_8.svg` 是白色填充，在浅底上等于隐形；lucide 走 currentColor，资源已删 |
 | ├ 空闲 | i `.topbar-status-dot`（绿 `#52c41a` 7px） | 无容器，直接落在顶栏粉上 |
 | └ 成功覆盖态 | `.topbar-status-dot.ok`（**白点**，此时徽章已亮起）| pill-message 覆盖窗，4s 后文案消失 → `.on` 自动移除、徽章收回 |

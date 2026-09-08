@@ -352,7 +352,7 @@ html.window-maximized body {
   border-radius: 999px;
   background: transparent;
   color: #fff;
-  font-size: 12px;
+  font-size: 13px;   /* 2026-09-09 用户：比 12px 大一号（空闲态白字在粉条上更好读） */
   font-weight: 500;
   font-variant-numeric: tabular-nums;  /* 进度 3/14 等数字对齐 */
   white-space: nowrap;
