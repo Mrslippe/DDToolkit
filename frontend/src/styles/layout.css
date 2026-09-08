@@ -330,43 +330,31 @@ html.window-maximized body {
   user-select: none;
 }
 
-/* 状态行：浮片化（2026-09-09 用户二次定调）——
-   第一版是「浅粉底 + 外发光玻璃胶囊」，用户看后要求去掉玻璃质感与外发光，
-   改走**浮片 + 阴影**设计语言：斜切白卡画在 ::before（与工具行 `.float-pill`
-   同一套令牌：`--pill-bg` / `--pill-radius` / `--pill-skew` / `--pill-shadow`），
-   内容保持直立，字色取浮片前景色 `--pill-fg`（白底对比度 ≈8.6:1）。
-   高度沿用浮片 sm 档 `--pill-h-sm`(25px)、字号 12px（浮片基准）。
-   注：本体不能设 overflow（会裁掉 ::before 的斜切角），超长文案的省略号
-   交给内层 `.pill-text-fade`。 */
+/* 状态行：浮片材质 + 全圆角胶囊（2026-09-09 用户三次定调）——
+   材质沿用浮片（白底 `--pill-bg` + 浮片阴影 `--pill-shadow`、字色 `--pill-fg`），
+   形状回到**全圆角胶囊**（999px，去掉 -10° 斜切）。不再有斜切角，背景因此可以
+   直接画在元素上、不需要 ::before，`overflow: hidden` 也回来了（裁切超长文案，
+   内层 `.pill-text-fade` 负责出省略号）。 */
 .topbar-status {
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
-  isolation: isolate;
   display: flex;
   align-items: center;
   gap: 6px;
   max-width: 46%;
   height: var(--pill-h-sm);
   padding: 0 12px;
+  border-radius: 999px;
+  background: var(--pill-bg);
+  box-shadow: var(--pill-shadow);
   color: var(--pill-fg);
   font-size: 12px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;  /* 进度 3/14 等数字对齐 */
   white-space: nowrap;
+  overflow: hidden;
   user-select: none;
-}
-
-/* 斜切白底 + 浮片阴影（与 `.float-pill::before` 同配方，改一处两处同步） */
-.topbar-status::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  background: var(--pill-bg);
-  border-radius: var(--pill-radius);
-  transform: skewX(var(--pill-skew));
-  box-shadow: var(--pill-shadow);
 }
 
 .topbar-status-dot {
@@ -382,8 +370,7 @@ html.window-maximized body {
   background: #a83a5e;
 }
 
-/* 胶囊文案变更时的渐隐渐显。
-   省略号落在这里：`.topbar-status` 本体不能 overflow（会裁掉斜切白底）。 */
+/* 胶囊文案变更时的渐隐渐显 + 超长文案省略号 */
 .pill-text-fade {
   min-width: 0;
   overflow: hidden;
