@@ -1,3 +1,9 @@
+/* 设计稿字体（Pixso 导出原稿；2026-09-08 开源发布合规：
+   千图小兔体（iFonts 联名·禁嵌入式）与 字小魂锐艺黑（试用版·商用需授权）
+   已移入 _nondistribute/（本地备份，不随仓库分发，见 .gitignore）。
+   Alimama 方圆体官方许可可嵌入，但设计稿原文件也已备份；
+   前端实际使用以 frontend/src/assets/fonts/ 的开源子集为准。
+   如需复现设计稿视觉，请从官方渠道重新获取授权字体。 */
 @font-face {
                 font-family: "Alimama FangYuanTi VF-Medium"; font-style: normal; src: url('@/assets/fonts/AlimamaFangYuanTiVF-Thin_1.ttf')
             }

@@ -1,6 +1,6 @@
 [package]
 name = "ddtoolkit"
-version = "0.1.0"
+version = "0.9.1"
 description = "DDtoolkit 桌面端 - VTuber 帖子查看"
 authors = ["DDtoolkit"]
 edition = "2021"

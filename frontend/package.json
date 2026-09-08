@@ -1,7 +1,7 @@
 {
   "name": "ddtoolkit-frontend",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.9.1",
   "type": "module",
   "description": "Better DD Toolkit 前端 — VTuber 帖子查看界面（Vite + React + TS + shadcn/Radix）",
   "scripts": {

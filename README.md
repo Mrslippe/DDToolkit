@@ -2,6 +2,8 @@
 
 个人向 **VTuber 帖子 / 账号证据归档工具**：定时抓取 B 站与微博的动态、账号统计并归档到本地 SQLite，桌面端浏览与管理。
 
+![Version](https://img.shields.io/badge/version-0.9.1-ffa2b4) ![License](https://img.shields.io/badge/license-MIT-green)
+
 - 后端：Python 3.14 + FastAPI + SQLAlchemy 2.0 + SQLite（WAL）+ APScheduler + Alembic
 - 前端：Vite + React 18 + TypeScript + Tailwind CSS v4 + Radix/shadcn 风格组件 + ECharts 6（图表 canvas 自绘）
 - 桌面壳：Tauri v2（负责拉起后端、注入数据目录、进程看门狗）
@@ -100,6 +102,23 @@ npm run collect:release --prefix frontend
 - 安装版数据目录 `%APPDATA%\com.ddtoolkit.app`；便携版运行后可改 `DDTOOLKIT_DATA_DIR` 环境变量自定义。
 - 后端被打包进安装包 resources（`binaries/backend/`），主程序启动时自动拉起并注入空闲端口。
 - Rust 子进程经 [Job Object 看门狗](frontend/src-tauri/src/lib.rs) 管理：主程序退出即整棵终止。
+
+## 许可与第三方资产声明
+
+**项目自身代码**：[LICENSE](LICENSE)（MIT License）。你可在遵守条款的前提下自由使用、修改、分发。
+
+**嵌入字体**（随仓库/安装包分发，均有明确开源/免费商用许可）：
+
+| 字体 | 许可 | 用途 |
+|---|---|---|
+| [思源黑体 Noto Sans SC](https://fonts.google.com/noto/specimen/Noto+Sans+SC)（子集：'D' / 'DDtoolkit'） | [SIL OFL 1.1](https://openfontlicense.org)（开源，可嵌入分发） | 顶栏 LOGO / 标题（`--font-logo` / `--font-title`） |
+| [阿里妈妈方圆体](https://www.yuque.com/alimama_ai-font/vfse9w/fco5g1gifud8lls2?singleDoc)（可变字重） | 阿里妈妈官方许可：免费商用 + **嵌入式使用**（[声明第 3 条](https://www.yuque.com/alimama_ai-font/vfse9w/fco5g1gifud8lls2?singleDoc)；[FAQ2](https://www.yuque.com/alimama_ai-font/vfse9w/co47p8ge57qsanz2?singleDoc)：嵌入 app 不侵权，但不得就字体使用收费；不可二次创作/商标注册） | 全局默认字体（`--font-family`） |
+
+> 原顶栏字体（千图小兔体·iFonts 联名 / 字小魂锐艺黑·试用版）因许可限制（禁嵌入式/商用需授权）**不随仓库分发**——本地备份于 `frontend/src/assets/fonts/_nondistribute/` 与 `docs/design/react-topbar/src/assets/fonts/_nondistribute/`（已 gitignore）。
+
+**主要第三方库许可**（详见各包许可文件）：FastAPI/SQLAlchemy/Alembic（MIT）、Tauri v2（MIT/Apache-2.0）、React（MIT）、ECharts（Apache-2.0）、Radix UI（MIT）、Tailwind CSS（MIT）、Vite/TypeScript（MIT/Apache-2.0）。Windows 打包依赖 PyInstaller（GPLv2 + PyInstaller 例外）。
+
+**数据源与免责**：本项目为个人证据归档工具。数据来自公开平台接口（B 站/微博）与第三方固定化源（[zeroroku.com](https://zeroroku.com)、[danmakus.com](https://ukamnads.icu)，见上方「外部数据源」）。**仅作个人研究归档用途**，不提供商业数据服务；接口可用性、数据准确性、平台条款变化均不受本项目控制。请遵守目标平台服务条款与当地法律法规使用本工具。
 
 ## 常用文档
 

@@ -12,19 +12,22 @@
   font-display: swap;
 }
 
-/* 设计稿专用字体（源自 docs/design/react-* Pixso 导出）
-   已子集化：QianTu 仅含 LOGO 字母 "D"，ZiXiao 仅含标题 "DDtoolkit"（约 14.8MB → 2.9MB） */
+/* 设计稿专用字体 → 思源黑体（Noto Sans SC，SIL OFL 1.1 开源，可自由嵌入分发）
+   子集化：仅含 LOGO 字母 "D" / 标题 "DDtoolkit"（各 ~1-2KB）
+   2026-09-08 开源发布合规：替换原千图小兔体（iFonts 联名·禁嵌入式）
+   与 紫小混瑞艺和（字魂 154 试用版·商用需授权）——两款原始文件移至
+   frontend/src/assets/fonts/_nondistribute/ 仅作本地备份，不随仓库分发 */
 @font-face {
-  font-family: 'QianTu XiaoTuTi';
-  src: url('../assets/fonts/QianTuXiaoTuTi.woff2') format('woff2');
-  font-weight: 400;
+  font-family: 'Noto Sans SC Logo';
+  src: url('../assets/fonts/NotoSansSC-Logo.woff2') format('woff2');
+  font-weight: 100 900;
   font-display: swap;
 }
 
 @font-face {
-  font-family: 'ZiXiao HunRui YiHe';
-  src: url('../assets/fonts/ZiXiaoHunRuiYiHe.woff2') format('woff2');
-  font-weight: 400;
+  font-family: 'Noto Sans SC Title';
+  src: url('../assets/fonts/NotoSansSC-Title.woff2') format('woff2');
+  font-weight: 100 900;
   font-display: swap;
 }
 
@@ -81,8 +84,8 @@
   /* 字体 */
   --font-family: 'Alimama FangYuanTi VF', system-ui, -apple-system, 'Segoe UI',
     'PingFang SC', 'Microsoft YaHei', sans-serif;
-  --font-logo: 'QianTu XiaoTuTi', var(--font-family);
-  --font-title: 'ZiXiao HunRui YiHe', var(--font-family);
+  --font-logo: 'Noto Sans SC Logo', var(--font-family);
+  --font-title: 'Noto Sans SC Title', var(--font-family);
 
   /* 尺寸（紧凑壳层：顶栏 40 / 工具栏 50；侧栏 492 沿用档案页规格） */
   --topbar-height: 40px;

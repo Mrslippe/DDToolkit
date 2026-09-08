@@ -18,7 +18,7 @@ load_dotenv(DATA_DIR / ".env")
 
 class Settings:
     APP_NAME: str = "Better DD Toolkit"
-    VERSION: str = "0.8.0"   # 与 devlog 最新版本保持一致（v0.8.0：直播日历周行列表重设计）
+    VERSION: str = "0.9.1"   # 与 devlog 最新版本保持一致（v0.9.1：直播场次内容管道与详情弹窗·弹幕词云·滚动条标准·前端审计）
 
     # 数据目录
     DATA_DIR: Path = DATA_DIR

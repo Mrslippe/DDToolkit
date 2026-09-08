@@ -289,7 +289,7 @@ html.window-maximized body {
 }
 
 /* LOGO 占位区：72×40 容器横跨顶栏全高，28×28 纯白矩形双向居中，
-   盒上千图小兔体粉色粗体 D */
+   盒上思源黑体（Noto Sans SC Logo 子集）粉色粗体 D */
 .topbar-logo-zone {
   width: 72px;
   height: var(--topbar-height);

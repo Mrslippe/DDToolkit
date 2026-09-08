@@ -53,7 +53,7 @@
 |---|---|---|
 | 顶部栏 | `.topbar` | 底色 `--c-primary`，高 `--topbar-height:40px` |
 | LOGO 占位区 | `.topbar-logo-zone` | **72×40** 横跨全高，flex 居中 |
-| LOGO 盒 | `.topbar-logo` | **28×28 纯白方形**，内部千图小兔体粉色粗体 D **17px/700**（`--font-logo`） |
+| LOGO 盒 | `.topbar-logo` | **28×28 纯白方形**，内部思源黑体（Noto Sans SC Logo 子集）粉色粗体 D **17px/700**（`--font-logo`） |
 | 标题 | `.topbar-title` | 定宽 **150×40**，垂直居中/水平左对齐；字小魂锐艺黑 **15px、字距 5px**（`--font-title`）；`user-select:none` |
 | 状态行 | `.topbar-status` | 绝对居中；**19px/500 白字** + tabular-nums；`max-width:46%` |
 | ├ 抓取中 | `.topbar-status-spinner`（`Frame_41_8.svg` 16px 旋转） | 替换旧黄点脉冲 |
@@ -391,9 +391,9 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 
 | family | 文件 | 用途 |
 |---|---|---|
-| `Alimama FangYuanTi VF`(100–900) | AlimamaFangYuanTiVF-VF.woff2 | 全局默认 `--font-family` |
-| `QianTu XiaoTuTi` | QianTuXiaoTuTi.woff2 | `--font-logo`（顶栏 LOGO D，17px；已子集化仅含 "D"，14.8MB→2.9MB） |
-| `ZiXiao HunRui YiHe` | ZiXiaoHunRuiYiHe.woff2 | `--font-title`（顶栏标题 15px 字距 5px；已子集化仅含 "DDtoolkit"） |
+| `Noto Sans SC Logo`（思源黑体子集） | NotoSansSC-Logo.woff2 | `--font-logo`（顶栏 LOGO D，17px；SIL OFL 1.1 开源可嵌入；子集化仅含 "D"） |
+| `Noto Sans SC Title`（思源黑体子集） | NotoSansSC-Title.woff2 | `--font-title`（顶栏标题 15px 字距 5px；OFL 1.1；子集化仅含 "DDtoolkit"） |
+| `Alimama FangYuanTi VF`(100–900) | AlimamaFangYuanTiVF-VF.woff2 | 全局默认 `--font-family`（阿里妈妈官方许可：免费商用+嵌入式，见 LICENSE 声明） |
 
 ## E. 交互浮窗清单
 
