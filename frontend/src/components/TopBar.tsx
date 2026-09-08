@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Copy, LogIn, Minus, Square, X } from 'lucide-react'
-import spinnerSvg from '../assets/icons/Frame_41_8.svg'
+import { Copy, Loader2, LogIn, Minus, Square, X } from 'lucide-react'
 import Logo from './common/Logo'
 import LoginDialog from './LoginDialog'
 import {
@@ -322,7 +321,7 @@ export default function TopBar() {
 
       <span className="topbar-status" {...(isTauri ? { 'data-tauri-drag-region': true } : {})}>
         {displayDot.includes('busy') ? (
-          <img src={spinnerSvg} alt="" className="topbar-status-spinner" />
+          <Loader2 className="topbar-status-spinner" />
         ) : (
           <i className={displayDot} />
         )}

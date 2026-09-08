@@ -22,12 +22,14 @@ interface OverlayScrollProps {
 }
 
 /**
- * 覆盖式滚动条（滚动条视觉标准 2026-09-07 user 定案）：
+ * 覆盖式滚动条（滚动条视觉标准 2026-09-07 user 定案，2026-09-09 修订）：
  * - 原生滚动条隐藏（display:none + scrollbar-width:none）→ 不占布局宽度；
- * - 拇指绝对定位悬浮：透明轨 + 常态 --c-border 细灰 + 容器悬浮变粉 --c-primary
- *   （.os-root:hover 加粗 6px），圆角胶囊；内容不溢出不渲染；
+ * - 拇指绝对定位悬浮：透明轨 + 常态 --c-border 细灰；**指针压在拇指上或拖拽中**
+ *   才变粉加粗（.os-thumb.os-show:hover / .os-drag），滚轮滚动时保持浅灰；圆角
+ *   胶囊；内容不溢出不渲染；
  * - 显隐纯调度：滚动中亮出、停止 700ms 淡出；悬浮亮出、1.2s 无动作淡出；
- *   移出立即淡出；隐藏定时器无条件执行；
+ *   指针靠近右缘 18px 内亮出（否则「hover 拇指变粉」够不着）；移出立即淡出；
+ *   隐藏定时器无条件执行；
  * - 拇指拖拽（2026-09-07 robust 版，非当初裸 pointer-capture）：
  *   · 按下 = 指针捕获 + 记录 grabY（指针相对拇指顶部的偏移），移动时绝对反解
  *     scrollTop（不依赖增量累加，天然消除 clamp 累积误差）；
@@ -92,6 +94,7 @@ export default function OverlayScroll({
   const endDrag = useCallback(() => {
     if (!drag.current) return
     drag.current = null
+    thumbEl.current?.classList.remove('os-drag')
     reveal(700)
   }, [reveal])
 
@@ -113,7 +116,7 @@ export default function OverlayScroll({
       pointerId: e.pointerId,
       grabY: e.clientY - root.getBoundingClientRect().top - tb.offsetTop,
     }
-    tb.classList.add('os-show')
+    tb.classList.add('os-show', 'os-drag')   // os-drag → 拖拽期间保持粉色（layout.css）
     if (hideTimer.current) {
       window.clearTimeout(hideTimer.current)
       hideTimer.current = undefined
@@ -152,6 +155,12 @@ export default function OverlayScroll({
     }
     const onEnter = () => reveal(1200)          // 悬浮亮出，1.2s 无动作自动淡出
     const onLeave = () => hideNow()
+    // 指针靠近右缘（滚条槽区）→ 亮出：否则「hover 拇指变粉」几乎够不着
+    // （滚完 700ms 就淡出，指针移过去时已经没了）。2026-09-09 随「粉只属于指针」补。
+    const onMove = (e: MouseEvent) => {
+      const r = root.getBoundingClientRect()
+      if (r.right - e.clientX <= 18) reveal(1200)
+    }
     // 四重兜底之三/四：window 级 pointerup（捕获丢失/拖出）+ blur（alt-tab）
     const onWinPointerUp = () => endDrag()
     const onWinBlur = () => endDrag()
@@ -159,6 +168,7 @@ export default function OverlayScroll({
     sc.addEventListener('scroll', onScroll, { passive: true })
     root.addEventListener('mouseenter', onEnter)
     root.addEventListener('mouseleave', onLeave)
+    root.addEventListener('mousemove', onMove)
     window.addEventListener('pointerup', onWinPointerUp)
     window.addEventListener('blur', onWinBlur)
 
@@ -180,6 +190,7 @@ export default function OverlayScroll({
       sc.removeEventListener('scroll', onScroll)
       root.removeEventListener('mouseenter', onEnter)
       root.removeEventListener('mouseleave', onLeave)
+      root.removeEventListener('mousemove', onMove)
       window.removeEventListener('pointerup', onWinPointerUp)
       window.removeEventListener('blur', onWinBlur)
       ro.disconnect()

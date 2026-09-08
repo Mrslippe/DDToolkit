@@ -44,6 +44,17 @@ interface Props {
   onClose: () => void
 }
 
+/** 图片列表去重（同 URL 只留一张）。
+ *  2026-09-09 用户反馈：只有一张图的帖子，点封面进查看器会显示「两张」——
+ *  微博抓取把 images[0] 同时写进了 cover_url（见 platforms/weibo.py），
+ *  旧逻辑 `[封面, ...images]` 于是把同一张图排了两遍，还能按「下一张」翻回它。
+ *  封面与正文图合并时按 URL 去重，单图帖的查看器就只剩一张（前后切换/点状序号
+ *  由 ImageViewer 按 count>1 自行隐藏）。 */
+function dedupeImages(list: ViewerImage[]): ViewerImage[] {
+  const seen = new Set<string>()
+  return list.filter((im) => (seen.has(im.url) ? false : (seen.add(im.url), true)))
+}
+
 /** 直播预约卡片（body_json.reservation） */
 function ReservationCard({ status, buttonText, desc1, desc2, reserveTotal }: {
   status?: number
@@ -84,6 +95,7 @@ function OriginCard({ origin, onOpenImages }: {
   origin: NonNullable<ReturnType<typeof parseBody>['origin']>
   onOpenImages: (list: ViewerImage[], index: number) => void
 }) {
+  const imgs = dedupeImages(origin.images ?? [])
   return (
     <div className="rounded-lg border p-3">
       <div className="mb-2 flex items-center gap-2">
@@ -93,11 +105,11 @@ function OriginCard({ origin, onOpenImages }: {
       <div className="space-y-2">
         {origin.title && <div className="text-sm font-medium">{origin.title}</div>}
         {origin.text && <p className="whitespace-pre-wrap text-sm">{origin.text}</p>}
-        {origin.images && origin.images.length > 0 && (
+        {imgs.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
-            {origin.images.slice(0, 9).map((img, i) => (
+            {imgs.slice(0, 9).map((img, i) => (
               <button key={`${img.url}-${i}`} type="button" className="cursor-zoom-in"
-                onClick={() => onOpenImages(origin.images!, i)}>
+                onClick={() => onOpenImages(imgs, i)}>
                 <ProxyImage src={img.url} width={96} height={96}
                   style={{ objectFit: 'cover', borderRadius: 6 }} />
               </button>
@@ -160,7 +172,11 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
 
   const body = parseBody(shown.body_json)
   const stats = parseStats(shown.stats_json)
-  const images = body.images ?? []
+  const images = dedupeImages(body.images ?? [])
+  // 封面 + 正文图合并去重：单图帖封面与 images[0] 同源，去重后查看器只显示一张
+  const coverList = shown.cover_url
+    ? dedupeImages([{ url: shown.cover_url }, ...images])
+    : images
   const isHtml = typeof body.content === 'string' && /<[a-z][\s\S]*>/i.test(body.content)
 
   const statItems = [
@@ -252,13 +268,11 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
             />
           )}
 
-          {/* 封面（点击可开查看器；有多图时封面入列首位，可直接下一张） */}
+          {/* 封面（点击可开查看器；有多图时封面入列首位，可直接下一张。
+              单图帖封面即 images[0]，coverList 去重后只有一张 → 无前后切换） */}
           {shown.cover_url && (
             <button type="button" className="block w-full cursor-zoom-in"
-              onClick={() => setViewer({
-                list: images.length > 0 ? [{ url: shown.cover_url! }, ...images] : [{ url: shown.cover_url! }],
-                index: 0,
-              })}>
+              onClick={() => setViewer({ list: coverList, index: 0 })}>
               <ProxyImage
                 src={shown.cover_url}
                 alt="封面"
