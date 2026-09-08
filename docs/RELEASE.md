@@ -130,10 +130,15 @@ python scripts/upload_release_assets.py v0.9.2
 ```
 
 行为：
-1. 校验 `GITHUB_TOKEN` 与 tag（`git ls-remote` 确认已推送）
-2. `POST /releases` 创建 Release（从 `docs/release-notes-v0.9.2.md` 读描述，缺省用内置文本）
+1. 校验 `GITHUB_TOKEN` 与 tag（`git ls-remote` **带 §6 定案参数**：裸调用会撞
+   `schannel: SEC_E_NO_CREDENTIALS`，2026-09-08 实测）
+2. `POST /releases` 创建 Release（描述读 `docs/release-notes-v<版本>.md`，也兼容
+   不带 `v` 的命名；都缺省时用内置文本）
 3. 上传 `dist-release/DDtoolkit_<v>_x64-setup.exe` + `DDtoolkit-portable-win64.zip`
 4. 打印 Release URL
+
+> 若描述误用了内置默认文本（历史命名不一致时会发生），用 `PATCH /releases/{id}`
+> 以 notes 文件内容覆盖即可（v0.9.2 发布时即如此修正过一次）。
 
 输出示例：
 ```

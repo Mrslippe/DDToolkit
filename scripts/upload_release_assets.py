@@ -84,20 +84,32 @@ def main() -> int:
         print(f"[错误] token 无效: {e}")
         return 1
 
-    # 2. 确认 tag 已推送（用 git ls-remote，走本机代理参数由调用者/环境保证）
+    # 2. 确认 tag 已推送（git ls-remote；必须带 §6 定案参数——裸调用会撞
+    #    schannel: SEC_E_NO_CREDENTIALS，2026-09-08 实测）
     import subprocess
     tag = f"v{version}"
     r = subprocess.run(
-        ["git", "ls-remote", "--tags", "https://github.com/Mrslippe/DDToolkit.git", tag],
+        ["git",
+         "-c", "http.sslBackend=openssl",
+         "-c", "http.sslVerify=false",
+         "-c", f"http.proxy={PROXY}",
+         "ls-remote", "--tags", "https://github.com/Mrslippe/DDToolkit.git", tag],
         capture_output=True, text=True, timeout=60,
     )
     if not r.stdout.strip():
         print(f"[错误] tag {tag} 未推送——请先: git tag -a {tag} -m ... && git push origin {tag}")
+        if r.stderr.strip():
+            print(f"       git 报错: {r.stderr.strip().splitlines()[0]}")
         return 1
 
-    # 3. 创建 Release（描述优先读 notes 文件）
-    notes_path = ROOT / "docs" / f"release-notes-{version}.md"
-    body = notes_path.read_text(encoding="utf-8") if notes_path.exists() else DEFAULT_BODY
+    # 3. 创建 Release（描述优先读 notes 文件；两种命名都认）
+    notes_candidates = [
+        ROOT / "docs" / f"release-notes-v{version}.md",
+        ROOT / "docs" / f"release-notes-{version}.md",
+    ]
+    notes_path = next((p for p in notes_candidates if p.exists()), None)
+    body = notes_path.read_text(encoding="utf-8") if notes_path else DEFAULT_BODY
+    print(f"[2/4] 描述来源: {notes_path.name if notes_path else '内置默认文本'}")
     try:
         rel = api_post(token, API_BASE + "/releases", {
             "tag_name": tag, "name": tag, "body": body,
