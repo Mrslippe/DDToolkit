@@ -18,7 +18,7 @@
 │  └─ core/           配置（数据目录/环境变量）、数据库引擎
 ├─ alembic/           数据库迁移链（a001 → e007，启动时自动升级）
 ├─ tests/             pytest 测试（test_auth / test_services / test_vtuber_api / test_weibo）
-├─ scripts/           维护与构建脚本（repair_*、build_backend、collect_portable 等）
+├─ scripts/           维护与构建脚本（repair_*、build_backend、collect_release 等）
 ├─ devlog/            版本开发日志（001–034，每版本一篇）
 ├─ docs/              文档：后端分层、UI 映射、平台扩展指南、架构图、设计原型、TODO 路线图
 ├─ frontend/          前端（Vite + React）+ Tauri 壳（src-tauri）
@@ -77,20 +77,25 @@ frontend\node_modules\.bin\tsc.cmd -p frontend\tsconfig.json --noEmit
 
 档案视图（P5→v0.9.x）端点：`GET /account/{id}/fan-trend`（按天分桶粉丝趋势）、`GET /account/{id}/live-sessions`（danmakus 主源 + self 快照合并的场次列表）、`GET /account/{id}/live-sessions/{liveId}`（场次级详情：弹幕词云/指标/直播事件，analysis 预留）。
 
-## 打包发布（安装版 + 便携版）
+## 打包发布（一键 / 分步，产物统一在 `dist-release/`）
 
 ```powershell
+# 一键：后端 → 桌面应用 → 聚合（安装包 + 便携版）
+npm run release --prefix frontend
+
+# 分步（改其一后只跑对应步）：
 # ① 后端 → PyInstaller onedir（frontend/src-tauri/binaries/backend/）
 npm run build:backend --prefix frontend
-
 # ② 桌面应用（前端构建 + Rust release + NSIS 安装包）
 npm run tauri:build --prefix frontend
-# 产物：frontend/src-tauri/target/release/bundle/nsis/DDtoolkit_*_x64-setup.exe
-
-# ③ 便携版 zip（免安装：主程序 + 后端目录）
-npm run collect:portable --prefix frontend
-# 产物：dist-portable/DDtoolkit-portable-win64.zip
+# ③ 聚合全部产物到 dist-release/
+npm run collect:release --prefix frontend
 ```
+
+产物（均输出到 `dist-release/`）：
+- `DDtoolkit_<version>_x64-setup.exe` —— NSIS 安装包（用户级安装）
+- `DDtoolkit-portable-win64.zip` —— 便携版（解压即用：主程序 + 后端目录）
+- （可选 `--with-main` 复制裸主程序 `ddtoolkit.exe`）
 
 - 安装版数据目录 `%APPDATA%\com.ddtoolkit.app`；便携版运行后可改 `DDTOOLKIT_DATA_DIR` 环境变量自定义。
 - 后端被打包进安装包 resources（`binaries/backend/`），主程序启动时自动拉起并注入空闲端口。

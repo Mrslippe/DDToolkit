@@ -9,7 +9,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "build:backend": "python ../scripts/build_backend.py",
-    "collect:portable": "python ../scripts/collect_portable.py",
+    "collect:release": "python ../scripts/collect_release.py",
+    "release": "npm run build:backend && npm run tauri:build && npm run collect:release",
     "tauri": "tauri",
     "tauri:dev": "chcp 65001 && tauri dev",
     "tauri:build": "chcp 65001 && tauri build"
