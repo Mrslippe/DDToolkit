@@ -46,8 +46,8 @@ flowchart TB
 | HTTP API | FastAPI 事件循环 | 路由、手动抓取（同步端点在线程池） | 手动抢锁（可抢占自动档） |
 | BackgroundTasks | 事件循环（响应之后） | 收录 / 加账号后的抓取 + 第三方回填 | 同上 |
 | T0 直播状态 | 独立守护线程 | 每 60s ±15s 批量回写 `live_*` 字段 | **不占锁**（与一切任务并行） |
-| T1/T2/T3a | 分层调度线程 | 周期抓取（启动链语义并入首轮） | 两把锁 |
-| T4 外部数据 | APScheduler 线程 | zeroroku / danmakus cron | `any_fetch_running()` 为真则跳过 |
+| 综合档 | 调度线程 | 动态流（每 15min）+ 账号流（数据到期，约 24h）**同档并发** | 两把锁 |
+| T4 外部数据 | APScheduler 线程 | zeroroku / danmakus cron | 手动任务在跑则**排队等待**（v0.9.3，不再跳过） |
 | auth 维护 | 事件循环协程 | B 站 cookie 心跳/续期、微博登录态探测 | — |
 
 **冷启动优化**：`app/routers/vtuber.py` 不直接 import `scheduler`（依赖链重：apscheduler /
@@ -199,26 +199,31 @@ erDiagram
 
 ### 3.1 时效分层（谁在什么时候抓）
 
-| 层 | 内容 | 载体 | 默认周期 | 冲突策略 |
+v0.9.3 把原 T1（主账号 5min）+ T2（最新动态 15min）+ T3a（全量账号随 T2）**合并为一个综合档**：
+动态流每档跑，账号流按数据到期跑，两者同档并发。
+
+| 层 | 内容 | 载体 | 周期 | 冲突策略 |
 |---|---|---|---|---|
 | **T0** 直播状态 | 批量接口只回写 `live_*`（跳变落快照） | 独立线程 | 60s ±15s | 与一切并行（不占锁） |
-| **T1** 主要账号 | 每 V 主账号全字段（`PRIMARY_PLATFORM_ORDER`） | 分层线程（账号锁） | 5min ±30s | 起跑见手动任务→跳过；持锁见手动请求→**断点让位** |
-| **T2** 最新动态 | 每主账号 1 页 + 限 `STARTUP_DYNAMICS_LIMIT=2` 条新帖 | 分层线程（帖子锁） | 15min ±2min | 同上 |
-| **T3a** 全量账号 | 全部账号全字段（补 T1 不覆盖的非主账号） | 紧接 T2 串行（同频） | 随 T2 | 同上 |
-| **T3** 手动全量/补档 | 用户触发（全量账号 / 全量帖子 / 单 V / 更新动态 / 收录 / 加账号） | HTTP + BackgroundTasks | — | **永远优先于 T1/T2/T3a** |
-| **T4** 外部数据 | zeroroku / danmakus 第三方固定化数据 | APScheduler cron | 3AM 日 / 周 | `any_fetch_running()` 为真则跳过 |
+| **综合档·动态流** | 每 V 主账号 1 页 + 限 `STARTUP_DYNAMICS_LIMIT=2` 条新帖 | 调度线程（帖子锁） | 15min ±2min | 起跑见手动任务→跳过；持锁见手动请求→**轮次断点让位** |
+| **综合档·账号流** | 全部账号全字段（含主账号；原 T1+T3a 合并） | 调度线程（账号锁） | **数据驱动**：任一账号 `last_fetched_at` 超 `ACCOUNT_SWEEP_STALE_HOURS=24h`（或为空）即到期 | 同上 |
+| **T3** 手动全量/补档 | 用户触发（全量账号 / 全量帖子 / 单 V / 更新动态 / 收录 / 加账号） | HTTP + BackgroundTasks | — | **永远优先于综合档** |
+| **T4** 外部数据 | zeroroku / danmakus 第三方固定化数据 | APScheduler cron | 3AM 日 / 周 | 手动任务在跑则**排队等待**（最多 30min），不再直接跳过 |
 
-启动链（`STARTUP_CHAIN_ENABLED`，首轮 T1→T2→T3a，`STARTUP_CHAIN_DELAY=4s`）让应用
-打开就有数据；之后各档按周期 + 抖动循环。
+- 启动链（`STARTUP_CHAIN_ENABLED`，`STARTUP_CHAIN_DELAY=4s`）：动态流必跑一次；
+  **账号流按同一套数据到期判定**决定要不要跑（用户 2026-09-09 定稿：账号字段变化慢）；
+- 两条流在同一事件循环里 `asyncio.gather` 并发起跑，墙钟 ≈ max(两条流) 而不是相加；
+- **并发粒度 = 平台**（`_run_platform_rounds`）：每轮各就绪平台各抓一个账号，
+  平台之间并行、平台内部串行 —— 单平台请求速率不变，某平台风控只冷却该平台。
 
 ### 3.2 任务模型：两把锁 + 手动优先
 
 ```mermaid
 stateDiagram-v2
   [*] --> Idle
-  Idle --> AutoRunning: 定时档非阻塞拿到锁
+  Idle --> AutoRunning: 自动档非阻塞拿到锁
   Idle --> ManualRunning: 手动任务拿到锁
-  AutoRunning --> ManualRunning: 手动请求抢占，自动档断点交还锁
+  AutoRunning --> ManualRunning: 手动请求抢占，自动档轮次断点交还锁
   ManualRunning --> AutoRunning: 手动跑完释放锁，自动档从原序号续跑
   AutoRunning --> Idle: 本轮结束
   ManualRunning --> Idle: 任务结束
@@ -227,14 +232,16 @@ stateDiagram-v2
 （自动档**起跑**时若锁被手动任务占着 → 直接跳过本轮，不打断手动任务。）
 
 - 两把独立锁：`_fetch_lock`（账号信息）与 `_post_fetch_lock`（帖子），互不牵连；
+  **综合档两条流各持一把**，因此可以同档并发；
 - **自动让手动**：手动侧 `_acquire_manual_*()` 拿不到锁且占用者是自动档时，置位
-  `_preempt_account/_preempt_post` 并轮询等锁（上限 120s）；自动档在**账号之间**的断点
-  `_maybe_preempt_*()` 交还锁、等信号清除、重新拿锁、**从原序号续跑**；
+  `_preempt_account/_preempt_post` 并轮询等锁（上限 120s）；自动档在**轮次断点**
+  （每平台每账号之间）交还锁、等信号清除、重新拿锁、**从原序号续跑**；
 - **手动之间不互相打断**：占用者是另一个手动任务时直接返回 `skipped`；
 - 端点 409 判定用 `manual_task_running()`（自动档持锁不算忙），外部批次用
   `any_fetch_running()`（任一在跑或有人在等让位都算忙）；
 - 状态通道 `GET /vtuber/fetch-status` 暴露 `account.{running,current,index,total,recent}`、
-  `post.{running,target}` 与 `last_result`（完成胶囊）；前端 ~2s 轮询。
+  `post.{running,target}` 与 `last_result`（完成胶囊）；前端 ~2s 轮询；
+  并发时 `current/target` 显示当轮就绪的平台名（如「bilibili、weibo」）。
 
 ### 3.3 平台适配层（直采）
 
@@ -281,11 +288,12 @@ flowchart LR
 | 机制 | 实现 |
 |---|---|
 | 风控判定 | `RATE_LIMIT_CODES = {-509, -412, -799, 412}`（HTTP 码或业务码） |
-| 状态隔离 | 风控标志放 `ContextVar`（`fetcher.py`），账号/帖子任务互不污染 |
-| 冷却 | 触发后 `RATE_LIMIT_COOLDOWN=600s` 冷却，从**当前账号/页**续跑（不重头） |
-| 请求间隔 | `REQUEST_INTERVAL_MIN/MAX = 3~5s` 随机；每 10 个账号休息 60s |
+| 状态隔离 | 风控标志放 `ContextVar`（`fetcher.py`），每个并发流/轮次互不污染 |
+| 冷却（按平台） | 触发后 `RATE_LIMIT_COOLDOWN=600s`，**只冷却出问题的平台**，其它平台继续推进 |
+| 请求间隔 | `REQUEST_INTERVAL_MIN/MAX = 3~5s` 随机；每 10 个账号休息 60s（各平台各自计数） |
 | 页间间隔 | 视频页 1s、动态页 20s、账号间 20s（全量帖子） |
 | 频率测算 | 16 账号一轮 ≈ 32 req / 5min ≈ 7 req/min（平均安全，突发靠批次休息摊平） |
+| 并发影响 | 综合档两条流并发时，重叠窗口内同平台瞬时速率约 2×（仍低于经验阈值）；平台内并发不放大单平台速率 |
 | 风控续抓 | 列表页触发风控后同页重试上限 `_PAGE_RETRIES=2` |
 
 ### 3.6 删除检测（墓碑机制，v0.5.1）

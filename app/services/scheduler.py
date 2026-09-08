@@ -12,6 +12,7 @@ from pathlib import Path
 import httpx
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -72,6 +73,8 @@ _fetch_running = False
 # 当前账号抓取的范围：'full'=全量（与定时任务内容一致）/ 'single'=单 V /
 # None=无任务在跑。定时任务判断「内容一致 → 跳过不接管」的依据。
 _fetch_scope: str | None = None
+# T4 外部数据批次是否正在跑：综合档据此避开（外部任务等手动任务时不算忙）。
+_external_running = False
 
 # ── 实时状态（供 /vtuber/fetch-status 轮询；仅简单赋值，GIL 下线程安全）──
 _status: dict = {
@@ -261,17 +264,19 @@ async def _fetch_one_account(acc: Account, db: Session, client: httpx.AsyncClien
     return is_update
 
 
-async def async_fetch_and_update(check_yield: bool = True, auto: bool = False) -> FetchResult:
-    """全量账号抓取。
+async def async_fetch_and_update(auto: bool = False) -> FetchResult:
+    """账号流：全量账号信息抓取（原 T1 主账号 + T3a 全量合并，v0.9.3）。
 
-    auto=False（手动：抓取账号 / 批量抓取）：抢锁时若定时任务在跑则请求其让位。
-    auto=True（T3a 定时档）：锁被占即跳过；持锁期间在账号间断点给手动任务让路。
+    - 并发粒度 = 平台：每轮各平台各抓一个账号（平台间并行、平台内串行），
+      单平台请求速率与原来一致（用户 2026-09-09 定稿）；
+    - auto=False（手动：抓取账号 / 批量抓取）：抢锁时若定时档在跑则请求其让位；
+    - auto=True（综合档账号流）：锁被占即跳过；轮与轮之间给手动任务让位。
     """
     global _fetch_running, _fetch_scope
 
     if auto:
         if not _fetch_lock.acquire(blocking=False):
-            logger.info("T3a 全量账号跳过：账号抓取正在进行（手动优先）")
+            logger.info("综合档账号流跳过：账号抓取正在进行（手动优先）")
             return FetchResult(details=["账号抓取进行中，跳过"])
         _auto_account_active.set()
     elif not await _acquire_manual_account():
@@ -291,7 +296,8 @@ async def async_fetch_and_update(check_yield: bool = True, auto: bool = False) -
     # 复用连接池：一次抓取任务共用一个 AsyncClient（含重试与风控冷却期间）
     client = httpx.AsyncClient(timeout=15.0)
 
-    db: Session = SessionLocal()
+    db: Session = SessionLocal()          # 账号列表查询 + 让位提交；各平台另有会话
+    sessions: dict[str, Session] = {}
     try:
         logger.info("开始抓取数据...")
         accounts = AccountRepo(db).all_for_fetch()
@@ -301,62 +307,71 @@ async def async_fetch_and_update(check_yield: bool = True, auto: bool = False) -
             result.details.append("没有可抓取的账号")
             return result
 
-        idx = 0
-        batch_count = 0
+        groups: dict[str, list[Account]] = {}
+        for acc in accounts:
+            groups.setdefault(acc.platform, []).append(acc)
+        for pf in groups:
+            sessions[pf] = SessionLocal()
+        processed: dict[str, int] = {pf: 0 for pf in groups}
 
-        while idx < len(accounts):
-            # 自动档让位断点：手动任务请求优先时交还锁，回来重查账号列表续跑
-            if auto and await _maybe_preempt_account(db):
-                accounts = AccountRepo(db).all_for_fetch()
-                if idx >= len(accounts):
-                    break
-                continue
-            # 断点让位：定时任务请求让位时交还执行权，回来后重查账号列表从原 idx 续跑
-            refreshed = await _maybe_yield_account(db, check_yield=check_yield)
-            if refreshed is not None:
-                accounts = refreshed
-                logger.info(f"定时任务执行完毕，从第 {idx + 1} 个账号续跑...")
-                continue
-            acc = accounts[idx]
-            _set_account_progress(acc.display_name or str(acc.platform_uid), idx + 1, len(accounts))
+        def commit_all() -> None:
+            for s in sessions.values():
+                s.commit()
 
-            ok = await _fetch_one_account(acc, db, client=client)
+        async def worker(pf: str, acc: Account) -> _RoundOutcome:
+            s = sessions[pf]
+            # 账号对象必须属于本平台会话（否则 commit 落不到它身上）
+            local = s.get(Account, acc.id)
+            if local is None:
+                return _RoundOutcome(ok=False, error=f"账号 {acc.id} 已不存在")
+            logger.info(f"[{pf}] 账号 {local.display_name or local.platform_uid} ...")
+            try:
+                ok = await _fetch_one_account(local, s, client=client)
+                if ok:
+                    _record_stat_snapshot(s, local)
+                    s.commit()
+                    _push_account_snapshot(local)
+                else:
+                    s.rollback()
+                return _RoundOutcome(ok=ok, rate_limited=was_rate_limited(),
+                                     payload=local)
+            except Exception as e:
+                s.rollback()
+                logger.error(f"抓取 account#{acc.id} ({pf}) 异常: {type(e).__name__}: {e}")
+                return _RoundOutcome(ok=False, error=str(e),
+                                     rate_limited=was_rate_limited(), payload=local)
+            finally:
+                # 平台内节流 + 批次休息（每个平台各自计数）
+                processed[pf] += 1
+                if processed[pf] % settings.FETCH_BATCH_SIZE == 0:
+                    logger.info(f"平台 {pf} 已处理 {settings.FETCH_BATCH_SIZE} 个账号，"
+                                f"休息 {settings.FETCH_BATCH_COOLDOWN} 秒...")
+                    await asyncio.sleep(settings.FETCH_BATCH_COOLDOWN)
+                else:
+                    await asyncio.sleep(
+                        settings.REQUEST_INTERVAL_MIN
+                        + random.uniform(0, settings.REQUEST_INTERVAL_MAX
+                                         - settings.REQUEST_INTERVAL_MIN)
+                    )
 
-            # 风控 → 冷却后从当前位置继续
-            if was_rate_limited():
-                db.commit()
-                db.close()
-                logger.warning(
-                    f"触发风控 ({rate_limit_info()})，位置 {idx+1}/{len(accounts)}，"
-                    f"冷却 {settings.RATE_LIMIT_COOLDOWN}s..."
-                )
-                clear_rate_limit()
-                await asyncio.sleep(settings.RATE_LIMIT_COOLDOWN)
-                db = SessionLocal()
-                accounts = AccountRepo(db).all_for_fetch()
-                logger.info(f"冷却完毕，从第 {idx+1} 个继续...")
-                continue
+        def on_progress(done: int, total: int, ready: list[str]) -> None:
+            _set_account_progress("、".join(ready), done, total)
 
-            await asyncio.sleep(
-                settings.REQUEST_INTERVAL_MIN
-                + random.uniform(0, settings.REQUEST_INTERVAL_MAX - settings.REQUEST_INTERVAL_MIN)
-            )
-
-            if ok:
-                _record_stat_snapshot(db, acc)
-                db.commit()
-                _push_account_snapshot(acc)
+        rounds = await _run_platform_rounds(
+            groups, worker,
+            preempt=_preempt_account if auto else None,
+            on_preempt=(lambda: _auto_yield_account_with(commit_all)) if auto else None,
+            on_progress=on_progress,
+            cooldown_seconds=settings.RATE_LIMIT_COOLDOWN,
+        )
+        for pf, outcome in rounds:
+            if outcome.ok:
                 result.success += 1
             else:
                 result.failed += 1
-                result.details.append(f"{acc.display_name or acc.platform_uid} 更新失败")
-
-            idx += 1
-            batch_count += 1
-            if batch_count >= settings.FETCH_BATCH_SIZE:
-                logger.info(f"已处理 {batch_count} 个账号，休息 {settings.FETCH_BATCH_COOLDOWN} 秒...")
-                await asyncio.sleep(settings.FETCH_BATCH_COOLDOWN)
-                batch_count = 0
+                label = outcome.payload
+                name = (label.display_name or label.platform_uid) if label else pf
+                result.details.append(f"[{pf}] {name}: {outcome.error or '更新失败'}")
 
         logger.info(f"抓取完毕: {result.success} 成功, {result.failed} 失败, {result.skipped} 跳过")
 
@@ -365,6 +380,8 @@ async def async_fetch_and_update(check_yield: bool = True, auto: bool = False) -
         db.rollback()
         result.details.append(f"异常: {e}")
     finally:
+        for s in sessions.values():
+            s.close()
         db.close()
         await client.aclose()
         _fetch_running = False
@@ -417,12 +434,6 @@ async def async_fetch_vtuber(vtuber_id: int) -> FetchResult:
 
         idx = 0
         while idx < len(accounts):
-            # 断点让位：定时任务请求让位时交还执行权，回来后按 vtuber_id 重查续跑
-            refreshed = await _maybe_yield_account(db, vtuber_id=vtuber_id, check_yield=True)
-            if refreshed is not None:
-                accounts = refreshed
-                logger.info(f"定时任务执行完毕，单V {vtuber_id} 从第 {idx + 1} 个账号续跑...")
-                continue
             acc = accounts[idx]
             _set_account_progress(acc.display_name or str(acc.platform_uid), idx + 1, len(accounts))
             ok = await _fetch_one_account(acc, db, client=client)
@@ -502,22 +513,51 @@ def start_scheduler():
     return scheduler
 
 
+def _wait_for_manual_tasks(timeout_seconds: float = 1800.0,
+                           poll_seconds: float = 15.0) -> bool:
+    """外部数据批次被手动抓取挡下时**等待其结束**（v0.9.3）。
+
+    用户 2026-09-09 反馈：原来直接 return 跳过 → 当天这批数据就丢了。
+    现在改为排队等待（默认最多 30 分钟），手动任务一结束就继续执行。
+    返回 True=可以执行；False=超时放弃本轮（记日志）。
+    """
+    if not any_fetch_running():
+        return True
+    logger.info("外部数据任务等待手动抓取结束...")
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        time.sleep(poll_seconds)
+        if not any_fetch_running():
+            logger.info("手动抓取已结束，外部数据任务继续执行")
+            return True
+    logger.warning(f"外部数据任务等待手动抓取超时（{timeout_seconds:.0f}s），本轮放弃")
+    return False
+
+
 def run_external_daily_jobs():
     """外部数据日任务（P4）：粉丝历史增量 + 直播礼物日聚合。"""
-    if any_fetch_running():
-        logger.info("外部数据日任务跳过：抓取任务正在进行")
+    global _external_running
+    if not _wait_for_manual_tasks():
         return
-    results = asyncio.run(run_external_interval("daily"))
-    logger.info(f"外部数据日任务完成: {len(results)} 个任务")
+    _external_running = True
+    try:
+        results = asyncio.run(run_external_interval("daily"))
+        logger.info(f"外部数据日任务完成: {len(results)} 个任务")
+    finally:
+        _external_running = False
 
 
 def run_external_weekly_jobs():
     """外部数据周任务（P4）：VTuber 索引整表刷新（企划/公会）。"""
-    if any_fetch_running():
-        logger.info("外部数据周任务跳过：抓取任务正在进行")
+    global _external_running
+    if not _wait_for_manual_tasks():
         return
-    results = asyncio.run(run_external_interval("weekly"))
-    logger.info(f"外部数据周任务完成: {len(results)} 个任务")
+    _external_running = True
+    try:
+        results = asyncio.run(run_external_interval("weekly"))
+        logger.info(f"外部数据周任务完成: {len(results)} 个任务")
+    finally:
+        _external_running = False
 
 
 def shutdown_scheduler(scheduler: BackgroundScheduler):
@@ -526,31 +566,23 @@ def shutdown_scheduler(scheduler: BackgroundScheduler):
         logger.info("APScheduler 已安全关闭。")
 
 
-# ── 帖子抓取 / 定时任务优先让位协议（全局单飞） ────────────────────────────
+# ── 帖子抓取锁（全局单飞） ─────────────────────────────────────────────
 
 _post_fetch_lock = threading.Lock()
 _post_fetch_running = False
 
-# 定时任务触发时置位 _yield_request；运行中的手动任务在断点（账号间/页间）
-# 检测到后交还执行权并等待清除，定时任务完成后清除信号、原任务从断点续跑。
-_yield_request = threading.Event()
-
-
-def yield_requested() -> bool:
-    return _yield_request.is_set()
-
 
 def any_fetch_running() -> bool:
-    """全局单飞判定：账号/帖子任一在跑，或定时任务正请求让位（让位窗口也视为忙，
-    避免手动请求在真空期钻空并发执行），或已有手动任务在等自动任务让位。"""
-    return (_fetch_running or _post_fetch_running or _yield_request.is_set()
+    """全局单飞判定：账号/帖子任一在跑，或已有手动任务在等自动档让位
+    （让位窗口也视为忙，避免自动批次在真空期钻空并发执行）。"""
+    return (_fetch_running or _post_fetch_running
             or _preempt_account.is_set() or _preempt_post.is_set())
 
 
 def manual_task_running() -> bool:
     """是否有**手动**任务在跑（含已请求让位、正等锁的窗口）。
 
-    与 any_fetch_running 的区别：自动档（T1/T2/T3a）持锁时返回 False——用户手动
+    与 any_fetch_running 的区别：自动档（综合档两条流）持锁时返回 False——用户手动
     请求不该被定时档挡在门外，而是要抢占它（见本文件「手动任务优先」一节）。
     手动端点用它做 409 判定；外部数据批次等自动任务仍用 any_fetch_running。
     """
@@ -558,74 +590,16 @@ def manual_task_running() -> bool:
     manual_post = _post_fetch_running and not _auto_post_active.is_set()
     return (manual_account or manual_post
             or _preempt_account.is_set() or _preempt_post.is_set())
-
-
-async def _yield_account_wait(db: Session) -> None:
-    """账号锁让位的公共锁舞蹈：交还 _fetch_lock 等待定时任务完成，再重新持有。
-    调用方负责恢复后的数据重查（返回时 _fetch_scope 恢复为本任务的范围标记）。
-    """
-    global _fetch_running, _fetch_scope
-    saved_scope = _fetch_scope
-    db.commit()
-    _fetch_running = False
-    _status["account"]["running"] = False
-    _fetch_lock.release()
-    try:
-        while _yield_request.is_set():
-            await asyncio.sleep(0.2)
-    finally:
-        _fetch_lock.acquire()
-        _fetch_running = True
-        _fetch_scope = saved_scope  # 定时任务结束会把 scope 清 None，让位返回时恢复本任务范围标记
-        _status["account"]["running"] = True
-
-
-async def _maybe_yield_account(db: Session, vtuber_id: int | None = None,
-                               check_yield: bool = True) -> list[Account] | None:
-    """账号抓取断点让位（循环顶部调用）：
-    定时任务请求让位时交还执行权并等待其完成，然后重查账号列表续跑。
-    返回重查后的账号列表；未发生让位返回 None（调用方沿用原列表）。"""
-    if not check_yield or not _yield_request.is_set():
-        return None
-    await _yield_account_wait(db)
-    if vtuber_id is not None:
-        return db.query(Account).filter(
-            Account.vtuber_id == vtuber_id,
-            Account.platform_uid != None,
-            Account.platform_uid != "",
-        ).all()
-    return AccountRepo(db).all_for_fetch()
-
-
-async def _maybe_yield_post(db: Session) -> bool:
-    """帖子抓取断点让位（视频页/动态页/账号间调用）：
-    交还 _post_fetch_lock，等待定时任务完成后续跑。返回是否发生过让位。"""
-    global _post_fetch_running
-    if not _yield_request.is_set():
-        return False
-    db.commit()
-    _post_fetch_running = False
-    _status["post"]["running"] = False
-    _post_fetch_lock.release()
-    try:
-        while _yield_request.is_set():
-            await asyncio.sleep(0.2)
-    finally:
-        _post_fetch_lock.acquire()
-        _post_fetch_running = True
-        _status["post"]["running"] = True
     return True
 
 
 # ── 手动任务优先（v0.9.3）：自动任务给用户手动任务让路 ─────────────────────
 # 语义：用户手动触发的任务（收录新 V 拉起的单V抓取、点「抓取账号 / 抓取帖子 /
-# 更新动态」）优先级高于定时档 T1/T2/T3a。自动任务在断点（账号之间）看到抢占
-# 信号就交还锁并等待，手动任务跑完后再从断点续跑。
+# 更新动态」）优先级高于定时档。自动档在**轮次断点**（账号之间）看到抢占信号
+# 就交还锁并等待，手动任务跑完后再从断点续跑。
 #
-# 为什么需要：启动链 T1→T2→T3a 会连续占满两把锁几十秒到几分钟，这段时间里
-# 收录一个新 VTuber 拉起的抓取只能抢锁失败→"跳过"，账号信息一直空白
-# （用户 2026-09-08 反馈）。此前只有"手动让位给定时任务"的机制（_yield_request，
-# 现已无调用方），方向正好相反，这里补上真正需要的方向。
+# 为什么需要：启动链会连续占满两把锁几十秒到几分钟，这段时间里收录一个新
+# VTuber 拉起的抓取只能抢锁失败→"跳过"，账号信息一直空白（用户 2026-09-08 反馈）。
 _preempt_account = threading.Event()
 _preempt_post = threading.Event()
 # 自动任务是否正持锁：手动任务据此判断该不该请求让位（另一个手动任务在跑时不抢）
@@ -676,10 +650,16 @@ async def _acquire_manual_post(wait_seconds: float = MANUAL_PREEMPT_WAIT_SECONDS
 
 
 async def _auto_yield_account(db: Session) -> None:
-    """自动账号任务让位：交还 _fetch_lock，等手动任务跑完再拿回（断点续跑）。"""
+    """自动账号任务让位（单会话版）：交还 _fetch_lock，等手动任务跑完再拿回。"""
+    await _auto_yield_account_with(db.commit)
+
+
+async def _auto_yield_account_with(commit) -> None:
+    """自动账号任务让位：先落盘（commit 可以是多会话的提交函数）→ 交还 _fetch_lock
+    → 等手动任务跑完 → 重新拿回并恢复 _fetch_scope（断点续跑）。"""
     global _fetch_running, _fetch_scope
     saved_scope = _fetch_scope
-    db.commit()
+    commit()
     _fetch_running = False
     _auto_account_active.clear()
     _status["account"]["running"] = False
@@ -705,9 +685,14 @@ async def _maybe_preempt_account(db: Session) -> bool:
 
 
 async def _auto_yield_post(db: Session) -> None:
-    """自动帖子任务让位：交还 _post_fetch_lock，等手动任务跑完再拿回。"""
+    """自动帖子任务让位（单会话版）：交还 _post_fetch_lock，等手动任务跑完再拿回。"""
+    await _auto_yield_post_with(db.commit)
+
+
+async def _auto_yield_post_with(commit) -> None:
+    """自动帖子任务让位（多会话版，语义同账号侧）。"""
     global _post_fetch_running
-    db.commit()
+    commit()
     _post_fetch_running = False
     _auto_post_active.clear()
     _status["post"]["running"] = False
@@ -729,6 +714,88 @@ async def _maybe_preempt_post(db: Session) -> bool:
         return False
     await _auto_yield_post(db)
     return True
+
+
+# ── 按平台并发的轮次执行器（v0.9.3）─────────────────────────────────────
+# 用户 2026-09-09 定稿：T2 与 T3a 合并为「综合档」，并且不同平台的限速是分开的
+# —— 因此并发粒度取「平台」：每轮每个就绪平台各处理一个元素，平台之间并行、
+# 平台内部按轮次串行（单平台速率不变）。动态流与账号流共用本执行器。
+
+@dataclass
+class _RoundOutcome:
+    """单元素执行结果：worker 必须自己吞异常，用 ok/error 表达失败。"""
+    ok: bool = True
+    error: str | None = None
+    rate_limited: bool = False
+    payload: object = None
+
+
+async def _run_platform_rounds(
+    groups: dict[str, list],
+    worker,
+    *,
+    preempt: threading.Event | None = None,
+    on_preempt=None,
+    on_progress=None,
+    cooldown_seconds: float | None = None,
+) -> list[tuple[str, _RoundOutcome]]:
+    """按平台并发的轮次执行器。
+
+    - 每轮：所有「就绪平台」各取一个元素交给 `worker(platform, item)` 并发执行
+      （worker 内部自带该平台的节流 sleep）；
+    - 某平台风控（outcome.rate_limited）→ 该平台单独冷却 `cooldown_seconds`，
+      其它平台继续推进；全部冷却则一起等最早解冻的那个；
+    - 轮与轮之间是**手动让位断点**：`preempt` 置位时调用 `on_preempt()`
+      （交还对应锁、等手动任务跑完再恢复；调用方须持有该锁）；
+    - `on_progress(done, total, ready_platforms)` 每轮汇报一次进度。
+    """
+    queues = {pf: list(items) for pf, items in groups.items() if items}
+    total = sum(len(q) for q in queues.values())
+    out: list[tuple[str, _RoundOutcome]] = []
+    if not total:
+        return out
+    cooling: dict[str, float] = {}
+    done = 0
+    while any(queues.values()):
+        if preempt is not None and preempt.is_set() and on_preempt is not None:
+            await on_preempt()
+        now = time.monotonic()
+        ready = [pf for pf, q in queues.items() if q and cooling.get(pf, 0.0) <= now]
+        if not ready:
+            wait_until = min(cooling[pf] for pf, q in queues.items() if q)
+            await asyncio.sleep(max(0.5, wait_until - now))
+            continue
+        if on_progress:
+            on_progress(done, total, ready)
+        results = await asyncio.gather(*(worker(pf, queues[pf].pop(0)) for pf in ready))
+        for pf, res in zip(ready, results):
+            out.append((pf, res))
+            done += 1
+            if cooldown_seconds and getattr(res, "rate_limited", False):
+                cooling[pf] = time.monotonic() + cooldown_seconds
+                logger.warning(f"平台 {pf} 触发风控，冷却 {cooldown_seconds:.0f}s"
+                               f"（其它平台继续）")
+    return out
+
+
+def account_sweep_due(db: Session, *, now: datetime | None = None,
+                      stale_hours: float | None = None) -> bool:
+    """账号流是否到期（数据驱动，用户 2026-09-09 定稿）。
+
+    判据：存在可抓取账号满足「`last_fetched_at` 为空（新收录未抓到）」或
+    「早于 now - ACCOUNT_SWEEP_STALE_HOURS」。不依赖进程内计时器，重启/休眠后
+    行为一致；启动时也用它决定要不要立刻跑账号流。
+    """
+    from app.models.vtuber import Account as _Account  # 局部导入避免循环
+    now = now or datetime.now(timezone.utc).replace(tzinfo=None)
+    stale_hours = settings.ACCOUNT_SWEEP_STALE_HOURS if stale_hours is None else stale_hours
+    cutoff = now - timedelta(hours=stale_hours)
+    q = db.query(Account).filter(
+        Account.platform_uid.isnot(None), Account.platform_uid != "")
+    if db.query(q.filter(Account.last_fetched_at.is_(None)).exists()).scalar():
+        return True
+    oldest = q.with_entities(func.min(Account.last_fetched_at)).scalar()
+    return oldest is None or oldest < cutoff
 
 
 # ── 帖子抓取 (按指令触发，非常驻周期任务) ──────────────────────────────
@@ -924,10 +991,6 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
             page = 1
             rl_retries = 0   # 风控重试计数（每个账号列表页，见 _PAGE_RETRIES）
             while True:
-                # 断点让位：定时任务请求让位时先落盘，交还锁等待其完成后续跑
-                if _yield_request.is_set():
-                    _flush_pending()
-                    await _maybe_yield_post(db)
                 if video_pages == 0 or (video_pages > 0 and page > video_pages):
                     if video_pages != 0:
                         result.stop_reason = "page_limit"
@@ -983,10 +1046,6 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
         stop_now = False
         latest_new = 0       # 「最新 N 条」模式计数（limit_latest）
         while True:
-            # 断点让位：定时任务请求让位时先落盘，交还锁等待其完成后续跑
-            if _yield_request.is_set():
-                _flush_pending()
-                await _maybe_yield_post(db)
             if dynamics_pages == 0 or (dynamics_pages > 0 and dyn_page >= dynamics_pages):
                 if dynamics_pages != 0:
                     result.stop_reason = "page_limit"
@@ -1201,10 +1260,6 @@ async def _fetch_platform_posts(pf, uid: str, pages: int, db: Session,
         page = 1
         rl_retries = 0
         while True:
-            # 断点让位：定时任务请求让位时先落盘，交还锁等待其完成后续跑
-            if _yield_request.is_set():
-                _flush_pending()
-                await _maybe_yield_post(db)
             if pages == 0 or (pages > 0 and page > pages):
                 if pages != 0:
                     result.stop_reason = "page_limit"
@@ -1422,8 +1477,6 @@ async def async_fetch_all_posts() -> dict:
 
         for idx, acc in enumerate(accounts):
             # 断点让位：定时任务请求让位时交还锁，等待其完成后续跑（同一账号列表序号）
-            if _yield_request.is_set():
-                await _maybe_yield_post(db)
             _set_post_target(acc.display_name or str(acc.platform_uid))
             logger.info(f"[{idx+1}/{len(accounts)}] 全量抓取 {acc.platform}:{acc.platform_uid} "
                         f"({acc.display_name or ''}) 的帖子...")
@@ -1533,8 +1586,6 @@ async def async_fetch_vtuber_posts(name: str, platform: str = "bilibili") -> dic
 
         for idx, acc in enumerate(accounts):
             # 断点让位：定时任务请求让位时交还锁，等待其完成后续跑（同一账号列表序号）
-            if _yield_request.is_set():
-                await _maybe_yield_post(db)
             _set_post_target(acc.display_name or str(acc.platform_uid))
             logger.info(f"[{idx+1}/{len(accounts)}] 全量抓取帖子 {acc.platform}:{acc.platform_uid} "
                         f"({acc.display_name or ''}) ...")
@@ -1657,8 +1708,6 @@ async def async_update_unarchived_posts(name: str | None = None) -> dict:
 
         for idx, acc in enumerate(accounts):
             # 断点让位：定时任务请求让位时交还锁，等待其完成后续跑（同一账号列表序号）
-            if _yield_request.is_set():
-                await _maybe_yield_post(db)
             _set_post_target(acc.display_name or str(acc.platform_uid))
             logger.info(f"[{idx+1}/{len(accounts)}] 更新未归档 {acc.platform}:{acc.platform_uid} "
                         f"({acc.display_name or ''}) ...")
@@ -1812,85 +1861,17 @@ async def live_sweep_core(db: Session, client: httpx.AsyncClient | None = None) 
     return result
 
 
-async def run_main_account_sweep() -> FetchResult:
-    """T1 主要账号信息（每 V 主账号，PRIMARY_PLATFORM_ORDER 优先，默认 bilibili）。
-
-    - 手动任务优先：_fetch_lock 非阻塞获取失败即跳过（不打断用户手动抓取）；
-    - 仅主账号全字段（名/签名/头像/粉丝/直播），不写统计快照（周期记录）也不写
-      last_result（每 5 分钟弹完成胶囊会刷屏，前端只对手动任务显示汇总）。
-    """
-    global _fetch_running, _fetch_scope
-
-    if not _fetch_lock.acquire(blocking=False):
-        logger.info("T1 主要账号跳过：账号抓取正在进行（手动优先）")
-        return FetchResult(details=["账号抓取进行中，跳过"])
-
-    _auto_account_active.set()
-    _fetch_running = True
-    _fetch_scope = "main"
-    _status["account"]["running"] = True
-    _status["account"]["recent"] = []
-    result = FetchResult()
-    clear_rate_limit()
-    client = httpx.AsyncClient(timeout=15.0)
-    db: Session = SessionLocal()
-    try:
-        pairs = _primary_accounts(db)
-        if not pairs:
-            logger.info("T1 主要账号：无可抓取账号")
-            return result
-        for i, (v, acc) in enumerate(pairs, 1):
-            await _maybe_preempt_account(db)   # 手动任务请求优先 → 让位后续跑
-            _set_account_progress(f"主要账号·{v.name}", i, len(pairs))
-            try:
-                ok = await _fetch_one_account(acc, db, client=client)
-                if ok:
-                    db.commit()
-                    _push_account_snapshot(acc)
-                    result.success += 1
-                else:
-                    result.failed += 1
-            except Exception as e:
-                logger.error(f"T1 主要账号异常 {acc.platform}:{acc.platform_uid}: {e}", exc_info=True)
-                db.rollback()
-                result.failed += 1
-                result.details.append(f"{v.name}: {e}")
-
-            if was_rate_limited():
-                logger.warning(f"T1 主要账号触发风控 ({rate_limit_info()})，"
-                               f"冷却 {settings.RATE_LIMIT_COOLDOWN}s")
-                clear_rate_limit()
-                await asyncio.sleep(settings.RATE_LIMIT_COOLDOWN)
-            elif i < len(pairs):
-                await asyncio.sleep(random.uniform(settings.STARTUP_MAIN_INTERVAL_MIN,
-                                                   settings.STARTUP_MAIN_INTERVAL_MAX))
-
-    except Exception as e:
-        logger.error(f"T1 主要账号异常: {e}", exc_info=True)
-        db.rollback()
-        result.details.append(f"异常: {e}")
-    finally:
-        db.close()
-        await client.aclose()
-        _fetch_running = False
-        _fetch_scope = None
-        _auto_account_active.clear()
-        _reset_account_status()
-        _fetch_lock.release()
-
-    return result
-
-
 async def run_latest_dynamics_sweep() -> dict:
-    """T2 最新动态（每 V 主账号 1 页 + 最多入库 STARTUP_DYNAMICS_LIMIT 条新帖）。
+    """动态流（原 T2）：每 V 主账号 1 页 + 最多入库 STARTUP_DYNAMICS_LIMIT 条新帖。
 
-    - 手动任务优先：_post_fetch_lock 非阻塞获取失败即跳过；
+    - 并发粒度 = 平台：每轮各平台各一个主账号（平台间并行、平台内串行）；
+    - 手动任务优先：_post_fetch_lock 非阻塞获取失败即跳过；轮间让位；
     - 不写 last_result（周期任务静默，前端不弹完成胶囊）。
     """
     global _post_fetch_running
 
     if not _post_fetch_lock.acquire(blocking=False):
-        logger.info("T2 最新动态跳过：帖子抓取正在进行（手动优先）")
+        logger.info("动态流跳过：帖子抓取正在进行（手动优先）")
         return {"status": "skipped", "message": "帖子抓取任务正在进行中"}
 
     _auto_post_active.set()
@@ -1898,57 +1879,140 @@ async def run_latest_dynamics_sweep() -> dict:
     _status["post"]["running"] = True
     db: Session = SessionLocal()
     client = httpx.AsyncClient(timeout=15.0)
+    sessions: dict[str, Session] = {}
     total = {"dynamics": 0, "stored": 0, "skipped": 0}
     issues: list[dict] = []
     out: dict = {}
     try:
         pairs = _primary_accounts(db)
         if not pairs:
-            logger.info("T2 最新动态：无可抓取账号")
+            logger.info("动态流：无可抓取账号")
             out = {"status": "done", "total": total, "details": []}
             return out
-        for i, (v, acc) in enumerate(pairs, 1):
-            await _maybe_preempt_post(db)   # 手动任务请求优先 → 让位后续跑
-            _set_post_target(f"{v.name}·最新动态")
-            logger.info(f"[{i}/{len(pairs)}] T2 最新动态 {v.name} "
-                        f"({acc.platform}:{acc.platform_uid}) ...")
+        groups: dict[str, list[tuple[VTuber, Account]]] = {}
+        for v, acc in pairs:
+            groups.setdefault(acc.platform, []).append((v, acc))
+        for pf in groups:
+            sessions[pf] = SessionLocal()
+
+        def commit_all() -> None:
+            for s in sessions.values():
+                s.commit()
+
+        async def worker(pf: str, item: tuple[VTuber, Account]) -> _RoundOutcome:
+            v, acc = item
+            s = sessions[pf]
+            local = s.get(Account, acc.id)
+            if local is None:
+                return _RoundOutcome(ok=False, error="账号已不存在", payload=(v, acc))
+            logger.info(f"[{pf}] 动态 {v.name} ({acc.platform_uid}) ...")
             try:
                 r = await _fetch_posts_for_account(
-                    acc, 0, 1, db, client=client,
+                    local, 0, 1, s, client=client,
                     include_videos=False, stop_on_existing=True,
                     limit_latest=settings.STARTUP_DYNAMICS_LIMIT,
                 )
             except Exception as e:
-                logger.error(f"T2 最新动态异常 {acc.platform}:{acc.platform_uid}: {e}",
-                             exc_info=True)
-                db.rollback()
-                r = PostFetchResult(stop_reason="error", error=str(e))
+                logger.error(f"动态流异常 {pf}:{acc.platform_uid}: {e}", exc_info=True)
+                s.rollback()
+                return _RoundOutcome(ok=False, error=str(e), payload=(v, acc))
+            return _RoundOutcome(ok=True, rate_limited=r.rate_limited, payload=(v, r))
+            # 注：平台内节流在 finally 里
+
+        async def worker_with_pacing(pf: str, item) -> _RoundOutcome:
+            try:
+                return await worker(pf, item)
+            finally:
+                await asyncio.sleep(random.uniform(settings.STARTUP_DYNAMICS_INTERVAL_MIN,
+                                                   settings.STARTUP_DYNAMICS_INTERVAL_MAX))
+
+        def on_progress(done: int, total_n: int, ready: list[str]) -> None:
+            _set_post_target("、".join(ready))
+
+        rounds = await _run_platform_rounds(
+            groups, worker_with_pacing,
+            preempt=_preempt_post,
+            on_preempt=lambda: _auto_yield_post_with(commit_all),
+            on_progress=on_progress,
+            cooldown_seconds=settings.RATE_LIMIT_COOLDOWN,
+        )
+        for pf, outcome in rounds:
+            v, r = outcome.payload if outcome.payload else (None, None)
+            if r is None:
+                issues.append({"label": f"{pf}:{getattr(v, 'name', '')}",
+                               "stop_reason": "error", "error": outcome.error})
+                continue
             for k in ("dynamics", "stored", "skipped"):
                 total[k] += getattr(r, k)
             if r.stop_reason in ("rate_limited", "network_error", "error"):
-                issues.append({"label": f"{v.name}({acc.platform}:{acc.platform_uid})",
+                issues.append({"label": f"{v.name}({pf})",
                                "stop_reason": r.stop_reason, "error": r.error})
-            if r.rate_limited:
-                logger.warning(f"T2 最新动态 {v.name} 触发风控，"
-                               f"冷却 {settings.RATE_LIMIT_COOLDOWN}s...")
-                await asyncio.sleep(settings.RATE_LIMIT_COOLDOWN)
-            elif i < len(pairs):
-                await asyncio.sleep(random.uniform(settings.STARTUP_DYNAMICS_INTERVAL_MIN,
-                                                   settings.STARTUP_DYNAMICS_INTERVAL_MAX))
         out = {"status": "done", "total": total, "issues": issues}
         return out
     except Exception as e:
-        logger.error(f"T2 最新动态异常: {e}", exc_info=True)
+        logger.error(f"动态流异常: {e}", exc_info=True)
         db.rollback()
         out = {"status": "done", "total": total, "issues": issues, "error": str(e)}
         return out
     finally:
+        for s in sessions.values():
+            s.close()
         db.close()
         await client.aclose()
         _post_fetch_running = False
         _auto_post_active.clear()
         _reset_post_status()
         _post_fetch_lock.release()
+
+
+# ── 综合档（v0.9.3）：动态流 + 账号流同档并发 ────────────────────────────
+
+# 上次账号流启动时刻（单调钟）：与「数据到期」共同构成双闸门，防止
+# 抓取失败（last_fetched_at 没更新）导致每 10s 重试一次的风暴。
+_last_account_sweep_mono: float = 0.0
+
+
+def _account_sweep_due_now(db: Session) -> bool:
+    """账号流是否该跑：数据驱动到期（account_sweep_due）+ 进程内最小间隔。"""
+    if time.monotonic() - _last_account_sweep_mono < settings.ACCOUNT_SWEEP_MIN_GAP_SECONDS:
+        return False
+    return account_sweep_due(db)
+
+
+async def _run_combined_tier(*, dynamics: bool = True,
+                             account: bool | None = None) -> dict:
+    """综合档：动态流与账号流在同一个事件循环里并发执行（各自锁、各自会话）。
+
+    - `dynamics=True` → 跑动态流（每 V 主账号 1 页 + 限 N 帖）；
+    - `account=None` → 按数据到期判定是否跑账号流；True/False 强制；
+    - 两条流谁先拿到锁谁先跑，互不阻塞；都拿不到锁则本轮都跳过；
+    - 任一异常都被 gather 收拢，不影响另一条流。
+    """
+    global _last_account_sweep_mono
+    jobs: list[tuple[str, object]] = []
+    if account is None:
+        db = SessionLocal()
+        try:
+            account = _account_sweep_due_now(db)
+        finally:
+            db.close()
+    if dynamics:
+        jobs.append(("dynamics", run_latest_dynamics_sweep()))
+    if account:
+        _last_account_sweep_mono = time.monotonic()
+        jobs.append(("account", async_fetch_and_update(auto=True)))
+    if not jobs:
+        return {"status": "idle"}
+    results = await asyncio.gather(*(c for _, c in jobs), return_exceptions=True)
+    out: dict = {}
+    for (name, _), res in zip(jobs, results):
+        if isinstance(res, BaseException):
+            logger.error(f"综合档 {name} 异常: {type(res).__name__}: {res}",
+                         exc_info=res)
+            out[name] = {"status": "error", "error": str(res)}
+        else:
+            out[name] = res
+    return out
 
 
 def _tier_delay(interval_seconds: float, jitter_seconds: float) -> float:
@@ -1984,60 +2048,51 @@ def start_live_poller() -> None:
 
 
 def _tier_loop() -> None:
-    """T1/T2/T3a 分层调度守护线程。
+    """综合档守护线程（v0.9.3：原 T1/T2/T3a 合并为一个档）。
 
-    - 启动后先按启动链语义立即执行 T1 → T2（STARTUP_CHAIN_ENABLED 控制）；
-    - 之后心跳轮询：任一**手动**抓取在跑（账号/帖子锁被占）→ 全部定时档
-      本轮跳过（手动优先，不抢断）；
-    - T2 档期执行完最新动态后**紧接全量账号抓取**（T3a，与 T2 同频率，
-      FULL_ACCOUNT_AFTER_T2 控制）——用户定稿：全量账号与最新动态同周期；
-    - 各档周期带抖动；interval<=0 的档位禁用。
+    - 启动链：延迟 `STARTUP_CHAIN_DELAY` 后跑一次综合档——动态流必跑；账号流按
+      `accounts.last_fetched_at` 是否过期决定（用户 2026-09-09 定稿：账号字段变化慢，
+      改为数据驱动、约一天一次）；
+    - 心跳 `TIER_TICK_SECONDS`：手动抓取或外部批次在跑 → 本轮跳过（手动优先）；
+      动态流按 `DYNAMICS_LATEST_INTERVAL_MINUTES` 到期触发，账号流按数据到期触发，
+      两者在同一事件循环里**并发执行**（各自锁），墙钟 ≈ max(两条流)；
+    - 周期带抖动；interval<=0 的档位禁用。
     """
     try:
         time.sleep(settings.STARTUP_CHAIN_DELAY)
         if settings.STARTUP_CHAIN_ENABLED:
-            logger.info("启动链 · T1 主要账号信息")
-            asyncio.run(run_main_account_sweep())
-            logger.info("启动链 · T2 最新动态")
-            asyncio.run(run_latest_dynamics_sweep())
-            if settings.FULL_ACCOUNT_AFTER_T2:
-                logger.info("启动链 · T3a 全量账号（随 T2）")
-                asyncio.run(async_fetch_and_update(check_yield=False, auto=True))
+            logger.info("启动链 · 综合档（动态流 + 账号流按需）")
+            asyncio.run(_run_combined_tier(dynamics=True))
     except Exception as e:
         logger.error(f"启动链异常: {e}", exc_info=True)
 
     def _jittered(interval: float, jitter: float) -> float:
         return time.monotonic() + _tier_delay(interval, jitter)
 
-    due_t1 = _jittered(settings.ACCOUNT_PRIMARY_INTERVAL_MINUTES * 60,
-                       settings.ACCOUNT_PRIMARY_JITTER_SECONDS)
-    due_t2 = _jittered(settings.DYNAMICS_LATEST_INTERVAL_MINUTES * 60,
-                       settings.DYNAMICS_LATEST_JITTER_SECONDS)
+    due_dynamics = _jittered(settings.DYNAMICS_LATEST_INTERVAL_MINUTES * 60,
+                             settings.DYNAMICS_LATEST_JITTER_SECONDS)
 
     while True:
         time.sleep(max(1, settings.TIER_TICK_SECONDS))
-        if is_fetch_running() or is_post_fetch_running():
-            continue  # 手动任务在跑：定时档全部跳过本轮（手动优先）
+        if is_fetch_running() or is_post_fetch_running() or _external_running:
+            continue  # 手动任务 / 外部批次在跑：自动档全部跳过本轮
         now = time.monotonic()
-        if now >= due_t1:
-            try:
-                logger.info("T1 主要账号信息（周期）")
-                asyncio.run(run_main_account_sweep())
-            except Exception as e:
-                logger.error(f"T1 周期任务异常: {e}", exc_info=True)
-            due_t1 = _jittered(settings.ACCOUNT_PRIMARY_INTERVAL_MINUTES * 60,
-                               settings.ACCOUNT_PRIMARY_JITTER_SECONDS)
-        elif now >= due_t2:
-            try:
-                logger.info("T2 最新动态（周期）")
-                asyncio.run(run_latest_dynamics_sweep())
-                if settings.FULL_ACCOUNT_AFTER_T2:
-                    logger.info("T3a 全量账号（随 T2 之后，同频率）")
-                    asyncio.run(async_fetch_and_update(check_yield=False, auto=True))
-            except Exception as e:
-                logger.error(f"T2 周期任务异常: {e}", exc_info=True)
-            due_t2 = _jittered(settings.DYNAMICS_LATEST_INTERVAL_MINUTES * 60,
-                               settings.DYNAMICS_LATEST_JITTER_SECONDS)
+        run_dynamics = now >= due_dynamics
+        db = SessionLocal()
+        try:
+            run_account = _account_sweep_due_now(db)
+        finally:
+            db.close()
+        if not (run_dynamics or run_account):
+            continue
+        try:
+            logger.info(f"综合档（周期）：动态流={run_dynamics} 账号流={run_account}")
+            asyncio.run(_run_combined_tier(dynamics=run_dynamics, account=run_account))
+        except Exception as e:
+            logger.error(f"综合档周期异常: {e}", exc_info=True)
+        if run_dynamics:
+            due_dynamics = _jittered(settings.DYNAMICS_LATEST_INTERVAL_MINUTES * 60,
+                                     settings.DYNAMICS_LATEST_JITTER_SECONDS)
 
 
 def start_tier_scheduler() -> None:

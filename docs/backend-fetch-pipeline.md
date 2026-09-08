@@ -15,12 +15,12 @@
 ```
 触发源                                锁                循环框架
 ─────────────────────────────────────────────────────────────
-T1 主要账号（5min）/ T3a 全量（随 T2） _fetch_lock      run_main_account_sweep / async_fetch_and_update(auto=True)
+综合档·账号流（数据到期 ≈24h）         _fetch_lock      async_fetch_and_update(auto=True)
 /vtuber/fetch、/vtuber/{id}/fetch      _fetch_lock      async_fetch_and_update / async_fetch_vtuber
 /vtuber/adopt、POST /{id}/accounts     _fetch_lock      _fetch_adopted → async_fetch_vtuber（后台）
 /vtuber/fetch-accounts（批量面板）      _fetch_lock      async_fetch_and_update（后台）
 ─────────────────────────────────────────────────────────────
-T2 最新动态（15min）                   _post_fetch_lock  run_latest_dynamics_sweep（每主账号 1 页 + 限 2 帖）
+综合档·动态流（15min）                 _post_fetch_lock  run_latest_dynamics_sweep（每主账号 1 页 + 限 2 帖）
 /vtuber/fetch-posts（快速/全量）        _post_fetch_lock  _fetch_posts_core（B站双流）
 /vtuber/fetch-all-posts                _post_fetch_lock  async_fetch_all_posts → 逐账号
 /vtuber/update-posts                   _post_fetch_lock  async_update_unarchived_posts → 增量
@@ -31,7 +31,8 @@ T2 最新动态（15min）                   _post_fetch_lock  run_latest_dynami
   成功后写一行统计快照（`account_stat_snapshots`，P0）。
 - **帖子抓取**：按平台拉帖子列表（B 站 = 视频流 + 动态流；微博 = 单流），
   新帖逐个补详情，入库去重；模式：全量 / 快速 / 增量 / 最新 N 条 / 仅动态。
-- 两条链路**互斥运行**（各自独立锁）；**手动任务优先于定时档**（自动档断点让位，见 §3.2）。
+- 两条链路**互斥运行**（各自独立锁）；**手动任务优先于自动档**（自动档轮次断点让位，见 §3.2）；
+  综合档内**动态流与账号流并发**、每条流内**按平台并发**（v0.9.3）。
 
 ---
 
@@ -61,29 +62,26 @@ T2 最新动态（15min）                   _post_fetch_lock  run_latest_dynami
 ### 3.1 全局单飞
 
 - `_fetch_lock`（账号）与 `_post_fetch_lock`（帖子）：手动任务拿不到锁时先请求
-  自动任务让位（见 3.2），仍拿不到才返回 `skipped`。
-- `any_fetch_running()` = 账号在跑 ∨ 帖子在跑 ∨ 定时任务正请求让位 ∨
-  有手动任务在等让位（让位窗口也视为忙，防真空期钻空并发）——外部数据批次
-  （T4）等自动任务据此跳过。
+  自动档让位（见 3.2），仍拿不到才返回 `skipped`；两把锁独立，综合档两条流因此可并发。
+- `any_fetch_running()` = 账号在跑 ∨ 帖子在跑 ∨ 有手动任务在等让位（让位窗口也视为忙）
+  ——外部数据批次（T4）据此排队等待。
 - `manual_task_running()` = 是否有**手动**任务在跑（自动档持锁不算）——
-  手动端点用它做 409 判定，这样用户手动请求不会被定时档挡在门外（v0.9.3）。
+  手动端点用它做 409 判定，这样用户手动请求不会被自动档挡在门外（v0.9.3）。
 
-### 3.2 手动任务优先：自动任务让位（v0.9.3，devlog/040）
+### 3.2 手动任务优先：自动档让位（v0.9.3，devlog/040）
 
-用户手动任务（收录新 V 拉起的单V抓取、抓取账号/帖子/更新动态）优先级高于
-定时档 T1/T2/T3a：手动侧拿不到锁且**占用者是自动档**时置位抢占信号
-（`_preempt_account` / `_preempt_post`）并轮询等锁；自动档在**断点**（账号之间）
-看到信号后 `db.commit()` → 释放锁 → 等信号清除 → 重新拿锁 → 从原序号续跑。
+用户手动任务（收录新 V 拉起的单V抓取、抓取账号/帖子/更新动态）优先级高于自动档：
+手动侧拿不到锁且**占用者是自动档**时置位抢占信号（`_preempt_account` / `_preempt_post`）
+并轮询等锁；自动档在**轮次断点**（每平台每账号之间）看到信号后提交会话 → 释放锁
+→ 等信号清除 → 重新拿锁 → 从原序号续跑。
 
 - `_acquire_manual_account()/ _acquire_manual_post()`：手动侧抢锁（最多等
   `MANUAL_PREEMPT_WAIT_SECONDS=120s`，超时按原语义跳过）；占用者是**另一个
   手动任务**时不抢（手动之间不互相打断）。
-- `_maybe_preempt_account(db)` / `_maybe_preempt_post(db)`：自动侧断点检查；
-  让位辅助 `_auto_yield_account` / `_auto_yield_post` 保存并恢复 `_fetch_scope`。
+- `_auto_yield_account_with(commit)` / `_auto_yield_post_with(commit)`：多平台会话版
+  让位（先提交各平台会话再交锁）；单会话版 `_auto_yield_account/_post` 供旧路径/测试用。
 - 自动档自身起跑时仍是"锁被占就跳过"（不打断手动任务）——两条方向合起来才是
   "手动 > 自动"。
-- **旧机制**：`_yield_request`（定时任务置位、手动让位）自 v0.6.0 起已无置位方，
-  代码保留但不再参与；方向由本节取代。
 
 ### 3.3 进度状态 & 结果
 
@@ -105,14 +103,17 @@ T2 最新动态（15min）                   _post_fetch_lock  run_latest_dynami
 ### 4.1 循环节奏（`async_fetch_and_update`）
 
 ```
-for 每个账号:
-    让位检查 → fetch_user_info(1~N req) → 风控? 冷却 600s 续跑
-    → sleep(3~5s 随机)     # REQUEST_INTERVAL_MIN/MAX
-    → 成功: 写快照 + commit + push实时快照
-    每 10 个账号: sleep 60s   # FETCH_BATCH_SIZE / FETCH_BATCH_COOLDOWN
+账号流（按平台并发；每平台一条串行队列）:
+  for 每个平台（并行）:
+      for 该平台每个账号:
+          fetch_user_info(1~N req) → 风控? 该平台冷却 600s（其它平台继续）
+          → sleep(3~5s 随机)     # REQUEST_INTERVAL_MIN/MAX
+          → 成功: 写快照 + commit + push实时快照
+          每 10 个账号: sleep 60s   # FETCH_BATCH_SIZE / FETCH_BATCH_COOLDOWN（各平台各自计数）
+  轮与轮之间：手动任务请求优先 → 交还锁让位，恢复后从原序号续跑
 ```
 
-- 账号列表：`AccountRepo.all_for_fetch()`（有 platform_uid 的全部账号）。
+- 账号列表：`AccountRepo.all_for_fetch()`（有 platform_uid 的全部账号），按平台分组。
 - 单账号请求量：B 站 = `acc/info`(WBI) + `relation/stat` 共 **2 req**（+头像下载 1 req，仅 URL 变化或文件缺失时）；
   微博 = `profile/info` **1 req**（+头像下载）。
 - 直播状态来自 `acc/info` 的 `live_room.liveStatus/title/roomid`（B 站专属）。
@@ -128,42 +129,40 @@ for 每个账号:
 
 结论：账号链路的**平均速率安全**，突发略高于 20/min 但空间接口阈值较宽。
 
-### 4.3 时效分层调度（v0.6.1，devlog/028）
+### 4.3 综合档调度（v0.9.3：原 T1/T2/T3a 合并，devlog/042）
 
-按**时效敏感度**把周期抓取任务分层（原「APScheduler 5min 全量账号任务 + 启动链」
-合并为该模型）：
+按**时效敏感度**分层，v0.9.3 把三个账号/动态档合并为一个「综合档」：
+动态流每档跑，账号流按**数据到期**跑，两者同档并发。
 
-| 层 | 内容 | 形态 | 默认周期 | 冲突策略 |
+| 层 | 内容 | 形态 | 周期 | 冲突策略 |
 |---|---|---|---|---|
 | **T0 直播状态** | 批量接口仅回写 live 字段（跳变落统计快照） | **独立守护线程**（不占锁/不进状态通道/不写 last_result） | 60s ± 15s | 与一切任务并行（SQLite busy_timeout=30s 排队兜底） |
-| **T1 主要账号信息** | 每 VTuber 主账号全字段（`PRIMARY_PLATFORM_ORDER` 优先） | 分层调度线程（账号锁） | 5min ± 30s | 起跑时手动任务在跑 → **跳过本轮**；持锁期间手动请求 → **断点让位**（v0.9.3） |
-| **T2 最新动态** | 每主账号 1 页 + `limit_latest=2` | 分层调度线程（帖子锁） | 15min ± 2min | 同上 |
-| **T3a 全量账号** | 全部账号全字段（含非主账号，补足 T1 不覆盖的账号） | **紧接 T2 之后串行执行（与 T2 同频率 15min）**，`FULL_ACCOUNT_AFTER_T2=false` 关闭 | 随 T2 | 同上 |
-| **T3 手动全量/补档** | 用户触发（全量账号/全量帖子/单 V/未归档批量端点） | — | 手动 | 永远优先于 T1/T2/T3a（拿不到锁时请求自动档让位）；仅被 T0 并行（互不打扰） |
-| **T4 外部数据** | zeroroku/danmakus | APScheduler cron | 3AM 日/周 | 保持现状 |
+| **综合档·动态流** | 每 VTuber 主账号 1 页 + `limit_latest=2` | 调度线程（帖子锁） | 15min ± 2min | 起跑时手动任务在跑 → **跳过本轮**；持锁期间手动请求 → **轮次断点让位** |
+| **综合档·账号流** | 全部账号全字段（原 T1 主账号 + T3a 全量合并） | 调度线程（账号锁） | **数据驱动**：任一账号 `last_fetched_at` 超 `ACCOUNT_SWEEP_STALE_HOURS=24h`（或为空）即到期，另受 `ACCOUNT_SWEEP_MIN_GAP_SECONDS=600s` 硬下限保护 | 同上 |
+| **T3 手动全量/补档** | 用户触发（全量账号/全量帖子/单 V/未归档批量端点） | — | 手动 | 永远优先于综合档（拿不到锁时请求自动档让位）；仅被 T0 并行（互不打扰） |
+| **T4 外部数据** | zeroroku/danmakus | APScheduler cron | 3AM 日/周 | 手动任务在跑 → **排队等待**（最多 30min）后执行；运行期间自动档跳过本轮 |
 
 调度细节：
 
 - `start_live_poller()`：T0 线程；首轮于 `STARTUP_CHAIN_DELAY` 后立即执行
   （启动即最快刷新直播），之后循环轮询；`LIVE_POLL_SECONDS<=0` 关闭；
-- `start_tier_scheduler()`：T1/T2/T3a 调度线程；启动后先按启动链语义
-  立即跑 T1→T2→T3a（`STARTUP_CHAIN_ENABLED`），然后心跳
-  （`TIER_TICK_SECONDS=10s`）检查到期；任一手动抓取在跑 → 本轮全部定时档
-  跳过；到期档位按 T1→T2 贪心串行（单线程任务，无档间并发），
-  **T2 执行完立即接 T3a 全量账号**（同一档期，与 T2 同频率）；
+- `start_tier_scheduler()`：综合档线程；启动后跑一次综合档（动态流必跑，账号流按
+  到期判定），之后心跳（`TIER_TICK_SECONDS=10s`）检查：手动抓取 / 外部批次在跑 →
+  本轮跳过；动态流到期或账号流到期 → `asyncio.run(_run_combined_tier(...))`，
+  两条流 `asyncio.gather` 并发；
+- 并发粒度 = 平台（`_run_platform_rounds`）：每轮各就绪平台各抓一个账号，
+  平台之间并行、平台内部串行；某平台风控只冷却该平台；
 - 每档周期带抖（`_tier_delay`）；interval<=0 的档位禁用；
-- T1/T2 不写 `last_result`（5~15 分钟弹一次完成胶囊会刷屏；前端完成汇总
-  只服务手动任务）；T3a 走 `async_fetch_and_update`（与 T2 同频，汇总随
-  手动任务口径不弹——T2 档期以 T2 的任务名计）；
+- 两条流都不写 `last_result` 的完成胶囊？——动态流不写（15 分钟弹一次会刷屏），
+  账号流写（一天一次，作为「账号信息已更新」的汇总）；
 - T0 的进度反馈 = `account-progress` 快照驱动的左右栏徽标（无进度条/无胶囊）；
 - 冲突方向（v0.9.3 定稿）：**手动 > 自动**——自动档起跑时见手动任务即跳过，
-  持锁期间见手动请求则断点让位；旧「定时任务优先让位协议」（`_yield_request`）
-  已无置位方，代码保留但不参与调度；原 APScheduler 的 5min `fetch_vtubers`
+  持锁期间见手动请求则轮次断点让位；原 APScheduler 的 5min `fetch_vtubers`
   job 已移除，仅保留外部数据 cron。
 
-配置：`TIER_TICK_SECONDS`、`LIVE_POLL_SECONDS/JITTER`、
-`ACCOUNT_PRIMARY_INTERVAL_MINUTES/JITTER`、`DYNAMICS_LATEST_INTERVAL_MINUTES/JITTER`、
-`FULL_ACCOUNT_AFTER_T2`（+ 启动链/限帖配置沿用）。
+配置：`TIER_TICK_SECONDS`、`LIVE_POLL_SECONDS/JITTER`、`DYNAMICS_LATEST_INTERVAL_MINUTES/JITTER`、
+`ACCOUNT_SWEEP_STALE_HOURS`（账号流数据到期阈值）、`ACCOUNT_SWEEP_MIN_GAP_SECONDS`（失败重试下限）
+（+ 启动链/限帖配置沿用）。
 
 ---
 
@@ -319,18 +318,19 @@ def _detect_rate_limit(status_code, data=None):
 | `FETCH_BATCH_SIZE` | 10 账号 | config.py |
 | `FETCH_BATCH_COOLDOWN` | 60 s | config.py |
 | `RATE_LIMIT_COOLDOWN` | 600 s | config.py |
-| `TIER_TICK_SECONDS` | 10 s（分层调度心跳） | config.py |
+| `TIER_TICK_SECONDS` | 10 s（综合档心跳） | config.py |
 | `LIVE_POLL_SECONDS` / `_JITTER` | 60 ± 15 s（T0） | config.py |
-| `ACCOUNT_PRIMARY_INTERVAL_MINUTES` / `_JITTER` | 5 min ± 30 s（T1） | config.py |
-| `DYNAMICS_LATEST_INTERVAL_MINUTES` / `_JITTER` | 15 min ± 120 s（T2） | config.py |
-| `FULL_ACCOUNT_AFTER_T2` | True（T3a 随 T2） | config.py |
+| `DYNAMICS_LATEST_INTERVAL_MINUTES` / `_JITTER` | 15 min ± 120 s（动态流） | config.py |
+| `ACCOUNT_SWEEP_STALE_HOURS` | 24 h（账号流数据到期阈值） | config.py |
+| `ACCOUNT_SWEEP_MIN_GAP_SECONDS` | 600 s（账号流失败重试下限） | config.py |
 | `STARTUP_CHAIN_ENABLED` / `_DELAY` | True / 4 s | config.py |
-| `STARTUP_DYNAMICS_LIMIT` | 2 条/账号（T2「最新 N 条」） | config.py |
+| `STARTUP_DYNAMICS_LIMIT` | 2 条/账号（动态流「最新 N 条」） | config.py |
 | `PRIMARY_PLATFORM_ORDER` | `["bilibili", "weibo"]` | config.py |
 | `EXTERNAL_ENABLED` / `EXTERNAL_RUN_HOUR` | True / 3AM | config.py |
-| `MANUAL_PREEMPT_WAIT_SECONDS` | 120 s（手动等自动让位上限） | scheduler.py:635 |
-| `_PAGE_RETRIES` | 2 | scheduler.py:843 |
-| `_POST_BATCH_SIZE` | 50 条/commit | scheduler.py:787 |
+| `MANUAL_PREEMPT_WAIT_SECONDS` | 120 s（手动等自动让位上限） | scheduler.py |
+| `_EXTERNAL_WAIT_SECONDS` | 1800 s（外部批次等手动任务上限） | scheduler.py |
+| `_PAGE_RETRIES` | 2 | scheduler.py |
+| `_POST_BATCH_SIZE` | 50 条/commit | scheduler.py |
 | `RATE_LIMIT_CODES` | {-509, -412, -799, 412} | fetcher.py:23 |
 | WBI `CACHE_TTL` | 1800 s | wbi.py:23 |
 | B 站超时 | 15s（任务级 client） | scheduler.py |
@@ -345,8 +345,8 @@ def _detect_rate_limit(status_code, data=None):
 1. **详情链节流**：0.5~2s → 2~3s（均匀随机），或按最近风控事件做拥塞窗口自适应
    （风控后速率减半、10 分钟无风控恢复）；
 2. **视频翻页 1s → 3s**；
-3. ~~账号抓取分层频率~~ **已实施（v0.6.1）**：T0 只拉直播状态、T1 主账号 5min、
-   T2/T3a 15min——每轮请求量与实时性已按层分配；
+3. ~~账号抓取分层频率~~ **已实施并再收敛（v0.6.1 → v0.9.3）**：T0 只拉直播状态（60s）、
+   综合档动态流 15min、账号流数据驱动约 24h——账号字段变化慢，不再每 5/15 分钟刷；
 4. **帖子详情合并**：无批量 API，1 帖 1 请求为完整性必要成本，不可再压缩；
 5. 不改动建议：增量模式（stop_on_existing 第 1 页即停）已是当前最优；
    `x/web-interface/card` 合并接口拿不到直播状态且旧接口稳定性差，不采用。

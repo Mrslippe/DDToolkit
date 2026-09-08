@@ -12,6 +12,7 @@
 """
 import asyncio
 import hashlib
+import time
 import urllib.parse
 from datetime import datetime, timedelta, timezone
 
@@ -1018,7 +1019,7 @@ def test_account_fetch_writes_stat_snapshot(monkeypatch):
 
     monkeypatch.setattr(scheduler, "_fetch_one_account", fake_fetch)
 
-    result = asyncio.run(scheduler.async_fetch_and_update(check_yield=False))
+    result = asyncio.run(scheduler.async_fetch_and_update())
     assert result.success == 1
 
     db = Testing()
@@ -1103,13 +1104,13 @@ def test_live_sweep_core_applies_live_fields(monkeypatch):
     db.close()
 
 
-def test_run_main_account_sweep_skips_when_account_busy(monkeypatch):
-    """T1 手动优先：账号锁被占（手动抓取在跑）→ 跳过本轮，不进状态通道。"""
+def test_account_stream_skips_when_account_busy(monkeypatch):
+    """账号流手动优先：账号锁被占（手动抓取在跑）→ 跳过本轮，不进状态通道。"""
     from app.services import scheduler as sch
 
     assert sch._fetch_lock.acquire(blocking=False)
     try:
-        result = asyncio.run(sch.run_main_account_sweep())
+        result = asyncio.run(sch.async_fetch_and_update(auto=True))
     finally:
         sch._fetch_lock.release()
     assert result.success == 0
@@ -1273,12 +1274,148 @@ def test_auto_checkpoint_noop_without_request(db):
     assert asyncio.run(sch._maybe_preempt_account(db)) is False
 
 
+# ── 综合档（v0.9.3）：数据驱动账号流 + 按平台并发 + 外部批次等待 ──────────
+
+def test_account_sweep_due_data_driven(db):
+    """账号流到期判定：无 last_fetched_at（新收录）→ 到期；超过阈值 → 到期；
+    新鲜 → 不到期（用户 2026-09-09 定稿：按上次抓取时间判断）。"""
+    from app.services import scheduler as sch
+
+    now = datetime(2026, 9, 9, 12, 0)
+    v = VTuber(name="V")
+    db.add(v)
+    db.commit()
+    db.refresh(v)
+    acc = Account(vtuber_id=v.id, platform="bilibili", platform_uid="1")
+    db.add(acc)
+    db.commit()
+
+    assert sch.account_sweep_due(db, now=now) is True          # 从未抓过
+    acc.last_fetched_at = now - timedelta(hours=25)
+    db.commit()
+    assert sch.account_sweep_due(db, now=now) is True          # 超过 24h
+    acc.last_fetched_at = now - timedelta(hours=1)
+    db.commit()
+    assert sch.account_sweep_due(db, now=now) is False         # 新鲜
+    # 另一个账号过期 → 整体到期（任一账号过期即跑）
+    acc2 = Account(vtuber_id=v.id, platform="weibo", platform_uid="2")
+    db.add(acc2)
+    db.commit()
+    assert sch.account_sweep_due(db, now=now) is True
+
+
+def test_run_platform_rounds_concurrent_across_platforms_serial_within():
+    """按平台并发：不同平台同轮并行；同一平台内部串行且顺序不变。"""
+    from app.services import scheduler as sch
+
+    active = {"bilibili": 0, "weibo": 0}
+    max_active = {"bilibili": 0, "weibo": 0}
+    order: list[str] = []
+    overlapped = {"v": False}
+
+    async def worker(pf, item):
+        active[pf] += 1
+        max_active[pf] = max(max_active[pf], active[pf])
+        if any(active[p] > 0 for p in active if p != pf):
+            overlapped["v"] = True
+        order.append(f"{pf}:{item}")
+        await asyncio.sleep(0.05)
+        active[pf] -= 1
+        return sch._RoundOutcome(ok=True)
+
+    groups = {"bilibili": ["a", "b", "c"], "weibo": ["x"]}
+    out = asyncio.run(sch._run_platform_rounds(groups, worker))
+    assert len(out) == 4
+    assert max_active["bilibili"] == 1              # 平台内串行
+    assert overlapped["v"] is True                  # 平台之间并行过
+    assert [o for o in order if o.startswith("bilibili")] == [
+        "bilibili:a", "bilibili:b", "bilibili:c"]
+
+
+def test_run_platform_rounds_cools_down_single_platform():
+    """某平台风控 → 该平台单独冷却，其它平台继续推进。"""
+    from app.services import scheduler as sch
+
+    calls: list[str] = []
+
+    async def worker(pf, item):
+        calls.append(f"{pf}:{item}")
+        return sch._RoundOutcome(ok=True, rate_limited=(pf == "bilibili" and item == 1))
+
+    groups = {"bilibili": [1, 2], "weibo": [1, 2]}
+    asyncio.run(sch._run_platform_rounds(groups, worker, cooldown_seconds=0.3))
+    assert calls.count("bilibili:2") == 1 and calls.count("weibo:2") == 1
+    assert calls.index("weibo:2") < calls.index("bilibili:2")
+
+
+def test_combined_tier_runs_both_streams_concurrently(monkeypatch):
+    """综合档：动态流与账号流同时起跑（墙钟 ≈ max(两条流)，而不是串行相加）。"""
+    from app.services import scheduler as sch
+
+    started: list[str] = []
+
+    async def fake_dynamics():
+        started.append("dynamics")
+        await asyncio.sleep(0.2)
+        return {"status": "done"}
+
+    async def fake_account(auto=False):
+        started.append("account")
+        await asyncio.sleep(0.2)
+        return sch.FetchResult(success=1)
+
+    monkeypatch.setattr(sch, "run_latest_dynamics_sweep", fake_dynamics)
+    monkeypatch.setattr(sch, "async_fetch_and_update", fake_account)
+    monkeypatch.setattr(sch, "_account_sweep_due_now", lambda db: True)
+
+    t0 = time.monotonic()
+    out = asyncio.run(sch._run_combined_tier(dynamics=True, account=None))
+    elapsed = time.monotonic() - t0
+
+    assert set(started) == {"dynamics", "account"}
+    assert elapsed < 0.35, f"两条流没有并发（耗时 {elapsed:.2f}s）"
+    assert out["dynamics"]["status"] == "done"
+    assert out["account"].success == 1
+
+
+def test_wait_for_manual_tasks_waits_then_runs():
+    """T4 外部批次：手动任务在跑时排队等待，结束后继续执行（不再直接跳过）。"""
+    import threading
+
+    from app.services import scheduler as sch
+
+    sch._fetch_running = True
+
+    def clear_soon() -> None:
+        time.sleep(0.3)
+        sch._fetch_running = False
+
+    t = threading.Thread(target=clear_soon, daemon=True)
+    t.start()
+    try:
+        assert sch._wait_for_manual_tasks(timeout_seconds=5, poll_seconds=0.05) is True
+    finally:
+        t.join(timeout=2)
+        sch._fetch_running = False
+
+
+def test_wait_for_manual_tasks_times_out():
+    """等待超时 → 放弃本轮（不阻塞 APScheduler 线程池）。"""
+    from app.services import scheduler as sch
+
+    sch._fetch_running = True
+    try:
+        assert sch._wait_for_manual_tasks(timeout_seconds=0.3, poll_seconds=0.05) is False
+    finally:
+        sch._fetch_running = False
+
+
 def test_manual_single_v_fetch_preempts_running_auto_sweep(monkeypatch):
-    """用户场景（2026-09-08）：启动链自动档正在跑时收录新 V，
+    """用户场景（2026-09-08）：综合档账号流正在跑时收录新 V，
     单V抓取必须抢占自动档并真的抓到账号信息（修复前是直接"跳过"→ 账号空白）。
 
-    自动档用 T1 主账号扫描真路径，网络抓取换成带 sleep 的假实现；
-    手动侧走 async_fetch_vtuber 真路径。
+    自动侧走 `async_fetch_and_update(auto=True)` 真路径（v0.9.3 后的账号流），
+    网络抓取换成带 sleep 的假实现；手动侧走 async_fetch_vtuber 真路径。
     """
     import threading
 
@@ -1303,8 +1440,6 @@ def test_manual_single_v_fetch_preempts_running_auto_sweep(monkeypatch):
     monkeypatch.setattr(sch, "SessionLocal", Testing)
     monkeypatch.setattr(sch.settings, "REQUEST_INTERVAL_MIN", 0.0)
     monkeypatch.setattr(sch.settings, "REQUEST_INTERVAL_MAX", 0.0)
-    monkeypatch.setattr(sch.settings, "STARTUP_MAIN_INTERVAL_MIN", 0.0)
-    monkeypatch.setattr(sch.settings, "STARTUP_MAIN_INTERVAL_MAX", 0.0)
 
     fetched: list[str] = []
     auto_started = threading.Event()
@@ -1325,7 +1460,7 @@ def test_manual_single_v_fetch_preempts_running_auto_sweep(monkeypatch):
     auto_done: list[str] = []
 
     def auto_side() -> None:
-        asyncio.run(sch.run_main_account_sweep())
+        asyncio.run(sch.async_fetch_and_update(auto=True))
         auto_done.append("done")
 
     async def manual_side():
@@ -1363,8 +1498,10 @@ def test_manual_single_v_fetch_preempts_running_auto_sweep(monkeypatch):
     try:
         acc = db.query(Account).filter(Account.platform_uid == "200").one()
         assert acc.followers_count == 42           # 账号信息落库
+        # 两次成功抓取各落一条快照：手动单V 一次 + 自动账号流续跑时又一次
+        # （v0.9.3 起账号流与 T3a 同口径，成功即写快照；原 T1 是不写的）
         assert db.query(AccountStatSnapshot).filter(
-            AccountStatSnapshot.account_id == acc.id).count() == 1
+            AccountStatSnapshot.account_id == acc.id).count() == 2
     finally:
         db.close()
 
