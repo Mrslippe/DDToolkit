@@ -57,10 +57,10 @@
 | LOGO 占位区 | `.topbar-logo-zone` | **72×40** 横跨全高，flex 居中 |
 | LOGO | `.topbar-logo` | **用户设计猫脸**（`docs/design/svg/LOGO.svg`，内联矢量 `common/Logo.tsx`，`currentColor` 白描边）**31×24**（viewBox 167.087×131.01 → 1.2754:1） |
 | 标题 | `.topbar-title` | 定宽 **150×40**，垂直居中/水平左对齐；**15px、字距 5px**（`--font-title` = `--font-family`，2026-09-09 用户要求换成阿里妈妈方圆体，原思源黑体子集已删）；`user-select:none` |
-| 状态行 | `.topbar-status` | 绝对居中；**浮片材质 + 全圆角胶囊**（2026-09-09 用户三次定调：浅粉底玻璃胶囊 → 斜切浮片 → **全圆角胶囊**）：白底 `--pill-bg` + 浮片阴影 `--pill-shadow` + 全圆角 999px（无斜切、无玻璃、无外发光）；高 `--pill-h-sm`(25px) / padding `0 12px` / **12px `--pill-fg`**（白底 ≈8.6:1）+ tabular-nums；`max-width:46%` + `overflow:hidden`，超长文案省略号落在内层 `.pill-text-fade` |
-| ├ 抓取中 | `.topbar-status-spinner`（lucide `Loader2` 14px 旋转） | 2026-09-09 换：原设计稿图标 `Frame_41_8.svg` 是白色填充，在浅粉胶囊/白浮片上等于隐形；lucide 走 `currentColor` 继承 `--pill-fg`，资源已删 |
+| 状态行 | `.topbar-status` | 绝对居中；**全圆角胶囊 + 浮片阴影 + 用户指定配色**（2026-09-09 四轮定调：浅粉底玻璃胶囊 → 斜切浮片 → 白底胶囊 → **`#ffdae1` 底 / `#ff7792` 字**）：`border-radius:999px` + `background:#ffdae1` + `color:#ff7792` + `--pill-shadow`；高 `--pill-h-sm`(25px) / padding `0 12px` / 12px + tabular-nums；`max-width:46%` + `overflow:hidden`，超长文案省略号落在内层 `.pill-text-fade`。**对比度实测：字对底 1.97:1、底对顶栏粉 1.48:1**（均低于 WCAG AA 4.5:1；识别度靠浮片投影，若要读清把字色压深到 ≈`#c2355f`） |
+| ├ 抓取中 | `.topbar-status-spinner`（lucide `Loader2` 14px 旋转） | 2026-09-09 换：原设计稿图标 `Frame_41_8.svg` 是白色填充，在浅粉胶囊/白浮片上等于隐形；lucide 走 `currentColor` 继承胶囊文字色，资源已删 |
 | ├ 空闲 | i `.topbar-status-dot`（绿 `#52c41a` 7px） | |
-| └ 成功覆盖态 | `.topbar-status-dot.ok`（深玫 `#a83a5e`）| pill-message 覆盖窗，4s 还原 |
+| └ 成功覆盖态 | `.topbar-status-dot.ok`（`#ff7792`，与胶囊文字同色）| pill-message 覆盖窗，4s 还原 |
 | 弹性空隙 | `.topbar-spacer` | 推到右侧 |
 | 窗口控制组 | `.topbar-window-controls` | **三格 46×40 通栏贴合**，无间距无右缘留白 |
 | ├ 最小化 | `.topbar-win-btn`（lucide `Minus` 30px） | 原生 `minimize()` |

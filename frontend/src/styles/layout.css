@@ -330,11 +330,13 @@ html.window-maximized body {
   user-select: none;
 }
 
-/* 状态行：浮片材质 + 全圆角胶囊（2026-09-09 用户三次定调）——
-   材质沿用浮片（白底 `--pill-bg` + 浮片阴影 `--pill-shadow`、字色 `--pill-fg`），
-   形状回到**全圆角胶囊**（999px，去掉 -10° 斜切）。不再有斜切角，背景因此可以
-   直接画在元素上、不需要 ::before，`overflow: hidden` 也回来了（裁切超长文案，
-   内层 `.pill-text-fade` 负责出省略号）。 */
+/* 状态行：浮片材质 + 全圆角胶囊（2026-09-09 用户四次定调）——
+   材质沿用浮片（`--pill-shadow` 阴影 + 全圆角 999px），配色改用用户指定值：
+   底 `#ffdae1`（浅粉）、字 `#ff7792`（玫红）。
+   ⚠ 对比度：`#ff7792` 对 `#ffdae1` 实测 ≈2.0:1（WCAG AA 正文需 4.5:1），
+   属「装饰性状态文字」的可接受区间；若哪天要读得更清楚，把字色压深到
+   ≈`#c2355f` 即可到 4.5:1。胶囊底对顶栏粉 `#ffa2b4` 仅 1.5:1，
+   所以识别度主要靠 `--pill-shadow` 的投影。 */
 .topbar-status {
   position: absolute;
   left: 50%;
@@ -346,9 +348,9 @@ html.window-maximized body {
   height: var(--pill-h-sm);
   padding: 0 12px;
   border-radius: 999px;
-  background: var(--pill-bg);
+  background: #ffdae1;
   box-shadow: var(--pill-shadow);
-  color: var(--pill-fg);
+  color: #ff7792;
   font-size: 12px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;  /* 进度 3/14 等数字对齐 */
@@ -365,9 +367,9 @@ html.window-maximized body {
   flex-shrink: 0;
 }
 
-/* 操作成功覆盖态：深玫色点（浮片白底上的成功色，与粉底/浅粉底都不冲突） */
+/* 操作成功覆盖态：与胶囊文字同色（用户指定的玫红） */
 .topbar-status-dot.ok {
-  background: #a83a5e;
+  background: #ff7792;
 }
 
 /* 胶囊文案变更时的渐隐渐显 + 超长文案省略号 */
@@ -405,9 +407,9 @@ html.window-maximized body {
 }
 
 /* 抓取中：加载图标替代脉冲圆点。
-   2026-09-09：状态行改成白底浮片后，原设计稿图标 Frame_41_8.svg（白色填充）
-   在白底上等于隐形——换成 lucide Loader2（currentColor 继承 --pill-fg），
-   与顶栏其余图标（LogIn/Minus/Square/X）同族，SVG 资源随之删除。 */
+   2026-09-09：状态行改成浅粉底（#ffdae1）后，原设计稿图标 Frame_41_8.svg
+   （白色填充）在白底/浅粉底上等于隐形——换成 lucide Loader2
+   （currentColor 继承胶囊文字色 #ff7792），与顶栏其余图标同族，SVG 资源删除。 */
 .topbar-status-spinner {
   width: 14px;
   height: 14px;

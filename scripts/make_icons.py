@@ -28,7 +28,7 @@
 - 首项 48px 用**简化加粗版**（只留头部轮廓 + 两个圆点眼，描边 ≈2.9px）：
   Windows 把它缩到 24/36px 后描边仍有 1.4px，这才是任务栏不糊的关键；
 - ≥64px 完全按设计稿渲染（stroke 7.5，全细节），描边由矢量反解，不再栅格缩放；
-- ≤48px 按尺寸补偿描边（目标 ≈5.8% 边长，下限 1px），≤28px 天然不含胡须。
+- ≤48px 按尺寸补偿描边（目标 ≈5.8% 边长，下限 1px）。
 
 注：设计稿 `LOGO.svg` 的 stroke-width = 7.5（视觉高 5.7%）；旧图标是从
 `NGNlogo无底.png` 栅格导出后等比拉伸的，描边只有约 4.4%，比设计稿细两成。
@@ -45,13 +45,21 @@
 
 | 文件 | 说明 |
 |---|---|
-| `docs/design/svg/LOGO-small.svg`（优先） | 只描边；`stroke-width` **原样使用**（即「你在 48px 下想要的粗细」，脚本不再按尺寸补偿）；视觉外接框（含描边）等比缩放到图标高的 60% 居中；建议画在 48×48 网格上，只保留头部轮廓 + 耳朵 + 两个圆点眼 + 每侧 1–2 根短胡须；颜色无所谓（统一填白），只要路径形状 |
+| `docs/design/svg/LOGO-small.svg`（优先） | 矢量小稿：**每个 `<path>` 的 `stroke-width` / `fill` 原样使用**（不再按尺寸补偿）；视觉外接框（含描边）等比缩放到图标的 60% 高 × 78% 宽以内、居中；颜色可显式写（`#fff` 白、`#ffa2b4` 品牌粉=挖空、`none` 不画）；建议只保留「头部轮廓 + 耳朵 + 圆点眼 + 每侧 2–3 根短胡须」 |
 | `docs/design/png/LOGO-small.png` | 透明底白描边；按 alpha 包围盒裁剪后等比缩放到图标高 60%（不做描边补偿，请自行按 48px 观感绘制） |
 
 > 为什么推荐 SVG 而不是 PNG：脚本要按 16/20/24/28/32/40/48 逐个尺寸栅格化，
 > 矢量稿能给出每个尺寸的干净像素；PNG 只能再重采样一次，等于把「任务栏糊」
 > 的老问题换个地方复发。若你更想逐尺寸手工点像素（16px 单独描一遍），
 > 把 PNG 按尺寸命名（如 `LOGO-small-16.png`）告诉我，我再加多档覆盖。
+
+渲染规则（两条稿都适用）
+------------------------
+- 每个子路径（M 起新段）按 `<path>` 的 fill/stroke 绘制；描边用「圆头圆角」：
+  折线 + 每个顶点补圆点（PIL 的 line 只做斜接）；
+- 颜色：**纯黑 / 未指定 → 白色前景**（主稿的描边是黑色、在应用里走 currentColor，
+  图标里统一是白的）；其余颜色按字面用（如实心版挖空眼写 `#ffa2b4`）；
+- 坐标系统无关，脚本按视觉外接框缩放，只关心形状与相对比例。
 
 用法: python scripts/make_icons.py [--verify]
       --verify 额外打印 16/24/32/48 层的 ASCII 预览（无图形界面时自检用）
@@ -77,6 +85,7 @@ BG = (255, 162, 180, 255)      # 品牌粉 --c-primary #ffa2b4
 FG = (255, 255, 255, 255)
 RADIUS_RATIO = 0.22            # 圆角半径 / 边长（旧图标观感）
 LOGO_H_RATIO = 0.60            # LOGO 视觉外接框高 / 边长（旧图标观感）
+LOGO_W_RATIO = 0.78            # 视觉外接框宽上限 / 边长（胡须外扩时按宽收敛）
 DESIGN_STROKE = 7.5            # 主稿 stroke-width 兜底值（优先读 SVG 属性）
 SMALL_MAX = 48                 # ≤ 该尺寸可用小尺寸专用稿
 MAX_CANVAS = 2048              # 超采样画布上限（1024 图标用 2× 即可）
@@ -105,18 +114,6 @@ PNGS = {
 
 
 # ── 路径解析（矢量 → 折线，只认绝对坐标 M/L/C）────────────────────────
-def _load_d(path: Path) -> str:
-    m = re.search(r'\sd="([^"]+)"', path.read_text(encoding="utf-8"))
-    if not m:
-        raise SystemExit(f"未在 {path} 找到 path d 属性")
-    return m.group(1)
-
-
-def _load_stroke(path: Path) -> float:
-    m = re.search(r'stroke-width="([\d.]+)"', path.read_text(encoding="utf-8"))
-    return float(m.group(1)) if m else DESIGN_STROKE
-
-
 def _flatten(d: str, curve_steps: int = 24) -> tuple[tuple[tuple[float, float], ...], ...]:
     tokens = re.findall(r"[MLCmlcZz]|-?\d*\.?\d+(?:e-?\d+)?", d)
     subs: list[list[tuple[float, float]]] = []
@@ -158,23 +155,73 @@ def _flatten(d: str, curve_steps: int = 24) -> tuple[tuple[tuple[float, float], 
     return tuple(tuple(s) for s in subs)
 
 
+def _color(raw: str | None) -> tuple[int, int, int, int] | None:
+    """SVG 颜色 → RGBA；'none'/空 → None。纯黑按「白色前景」处理（见模块注释）。"""
+    if not raw or raw.strip() in ("none", "transparent"):
+        return None
+    s = raw.strip()
+    if s.startswith("#"):
+        h = s[1:]
+        if len(h) == 3:
+            h = "".join(c * 2 for c in h)
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    elif s.startswith("rgb"):
+        r, g, b = (int(v) for v in re.findall(r"\d+", s)[:3])
+    else:
+        return FG
+    return FG if (r, g, b) == (0, 0, 0) else (r, g, b, 255)
+
+
+@dataclass(frozen=True)
+class Shape:
+    """一条子路径 + 它的绘制参数。"""
+    pts: tuple
+    fill: tuple | None
+    stroke: tuple | None
+    stroke_w: float
+
+
 @dataclass(frozen=True)
 class Art:
-    """一份矢量稿（折线化后）的几何信息 + 渲染参数。"""
+    """一份矢量稿（折线化后）的几何信息。"""
     name: str
-    subs: tuple
-    stroke: float          # 该稿的 stroke-width（主稿按尺寸补偿，小稿原样用）
-    w: float
+    shapes: tuple
+    stroke: float          # 代表描边宽度（主稿按尺寸补偿用；小稿原样用）
+    w: float               # 路径外接框（不含描边）
     h: float
     cx: float
     cy: float
-    eyes: tuple = ()       # 简化版的圆点眼（仅主稿有意义）
+    eyes: tuple = ()       # 简化版的圆点眼（仅主稿布局有意义）
 
     @classmethod
     def load(cls, path: Path, name: str) -> "Art":
-        subs = _flatten(_load_d(path))
-        xs = [p[0] for s in subs for p in s]
-        ys = [p[1] for s in subs for p in s]
+        text = path.read_text(encoding="utf-8")
+        root_tag = re.search(r"<svg\b([^>]*)>", text, re.S)
+        root_attrs = root_tag.group(1) if root_tag else ""
+        root_fill = re.search(r'\bfill="([^"]*)"', root_attrs)
+        default_fill = _color(root_fill.group(1)) if root_fill else FG
+
+        shapes: list[Shape] = []
+        for attrs in re.findall(r"<path\b([^>]*?)/?>", text, re.S):
+            dm = re.search(r'\sd="([^"]+)"', attrs)
+            if not dm:
+                continue
+            fm = re.search(r'\bfill="([^"]*)"', attrs)
+            sm = re.search(r'\bstroke="([^"]*)"', attrs)
+            wm = re.search(r'\bstroke-width="([\d.]+)"', attrs)
+            fill = _color(fm.group(1)) if fm else default_fill
+            stroke = _color(sm.group(1)) if sm else None
+            stroke_w = float(wm.group(1)) if wm else 0.0
+            for pts in _flatten(dm.group(1)):
+                shapes.append(Shape(pts, fill, stroke, stroke_w))
+
+        if not shapes:
+            raise SystemExit(f"{path} 里没找到可渲染的 path")
+
+        xs = [p[0] for sh in shapes for p in sh.pts]
+        ys = [p[1] for sh in shapes for p in sh.pts]
+
+        subs = [sh.pts for sh in shapes]
         eyes: tuple = ()
         # 主稿布局：0=头部轮廓，1/2=右眼 X 两笔，6/7=左眼 X 两笔
         if len(subs) == 10:
@@ -182,8 +229,13 @@ class Art:
                   sum(p[1] for p in subs[i]) / len(subs[i])) for i in (1, 2, 6, 7)]
             eyes = (((c[0][0] + c[1][0]) / 2, (c[0][1] + c[1][1]) / 2),
                     ((c[2][0] + c[3][0]) / 2, (c[2][1] + c[3][1]) / 2))
+
+        strokes = [sh.stroke_w for sh in shapes if sh.stroke and sh.stroke_w > 0]
         return cls(
-            name=name, subs=subs, stroke=_load_stroke(path),
+            name=name, shapes=tuple(shapes),
+            # 代表描边 = 第一条描边路径的宽度（即轮廓线宽）：视觉外接框的
+            # 外扩量按它算——眼点等「内部」元素的粗描边不该撑大外接框
+            stroke=strokes[0] if strokes else DESIGN_STROKE,
             w=max(xs) - min(xs), h=max(ys) - min(ys),
             cx=(max(xs) + min(xs)) / 2, cy=(max(ys) + min(ys)) / 2,
             eyes=eyes,
@@ -198,7 +250,10 @@ SMALL_RASTER = SMALL_PNG if (SMALL_ART is None and SMALL_PNG.exists()) else None
 
 # ── 渲染 ──────────────────────────────────────────────────────────────
 def _stroke_for(size: int, target_px: float) -> float:
-    """主稿：反解 stroke-width，让渲染后的描边像素宽 ≈ target_px（下限取设计值）。"""
+    """主稿：反解 stroke-width，让渲染后的描边像素宽 ≈ target_px（下限取设计值）。
+
+    渲染描边 px = stroke * (0.6*size / (LOGO.h + stroke))，令其等于 target 解出上式。
+    """
     denom = LOGO_H_RATIO * size - target_px
     if denom <= 0:
         return LOGO.stroke
@@ -216,33 +271,52 @@ def _supersample(size: int) -> int:
     return max(1, min(8, MAX_CANVAS // size))
 
 
-def _vector_layer(size: int, art: Art, stroke_svg: float, simple: bool) -> Image.Image:
-    """按矢量稿栅格化白猫层（超采样后缩回）。simple=只画头部轮廓 + 圆点眼。"""
+def _fit_scale(art: Art, n: int, stroke: float) -> float:
+    """视觉外接框（路径外接框 + 描边）在 n×n 画布内的缩放比：高 ≤60%、宽 ≤78%。"""
+    return min(LOGO_H_RATIO * n / (art.h + stroke),
+               LOGO_W_RATIO * n / (art.w + stroke))
+
+
+def _vector_layer(size: int, art: Art, stroke_svg: float | None, simple: bool) -> Image.Image:
+    """按矢量稿栅格化白猫层（超采样后缩回）。
+
+    stroke_svg=None → 每个 `<path>` 用自己的 stroke-width（小稿约定）；
+    否则整份稿统一用给定描边宽（主稿按尺寸补偿）。
+    simple=True → 只画第一条子路径（头部轮廓）+ 圆点眼。
+    """
     ss = _supersample(size)
     n = size * ss
     img = Image.new("RGBA", (n, n), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    scale = LOGO_H_RATIO * n / (art.h + stroke_svg)
-    w_px = max(1, round(stroke_svg * scale))
-    r = stroke_svg * scale / 2
+    # 缩放比以「稿子自身的视觉外接框」为准，避免逐条路径各自缩放
+    ref_stroke = stroke_svg if stroke_svg is not None else art.stroke
+    scale = _fit_scale(art, n, ref_stroke)
     cx = cy = n / 2
 
     def tx(p: tuple[float, float]) -> tuple[float, float]:
         return (cx + (p[0] - art.cx) * scale, cy + (p[1] - art.cy) * scale)
 
-    for idx, sub in enumerate(art.subs):
-        if simple and idx != 0:          # 简化版只画头部轮廓
+    for idx, sh in enumerate(art.shapes):
+        if simple and idx != 0:
             continue
-        pts = [tx(p) for p in sub]
-        if len(pts) > 1:
-            draw.line(pts, fill=FG, width=w_px, joint="curve")
-        # 每个顶点补圆点：round join + round cap（PIL 的 line 只做斜接）
-        for px_, py_ in pts:
-            draw.ellipse([px_ - r, py_ - r, px_ + r, py_ + r], fill=FG)
+        pts = [tx(p) for p in sh.pts]
+        if sh.fill and len(pts) > 2:
+            draw.polygon(pts, fill=sh.fill)
+        if sh.stroke:
+            w_svg = sh.stroke_w if stroke_svg is None else stroke_svg
+            if w_svg <= 0:
+                continue
+            w_px = max(1, round(w_svg * scale))
+            r = w_svg * scale / 2
+            if len(pts) > 1:
+                draw.line(pts, fill=sh.stroke, width=w_px, joint="curve")
+            # 每个顶点补圆点：round join + round cap（PIL 的 line 只做斜接）
+            for px_, py_ in pts:
+                draw.ellipse([px_ - r, py_ - r, px_ + r, py_ + r], fill=sh.stroke)
 
     if simple and art.eyes:
-        eye_r = stroke_svg * 0.55 * scale
+        eye_r = stroke_svg * 0.55 * scale if stroke_svg else art.stroke * 0.55 * scale
         for ex, ey in art.eyes:
             px_, py_ = tx((ex, ey))
             draw.ellipse([px_ - eye_r, py_ - eye_r, px_ + eye_r, py_ + eye_r], fill=FG)
@@ -264,17 +338,18 @@ def _raster_layer(size: int) -> Image.Image:
     return layer
 
 
-def make_icon(size: int) -> Image.Image:
+def make_icon(size: int, small_art: Art | None = None, use_small: bool = True) -> Image.Image:
     """品牌粉圆角底 + 白 LOGO（≤48px 若备了小尺寸稿则用它）。"""
     base = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     ImageDraw.Draw(base).rounded_rectangle(
         (0, 0, size - 1, size - 1), radius=max(2, round(size * RADIUS_RATIO)), fill=BG
     )
 
+    small = small_art if small_art is not None else (SMALL_ART if use_small else None)
     if size <= SMALL_MAX:
-        if SMALL_ART is not None:
-            layer = _vector_layer(size, SMALL_ART, SMALL_ART.stroke, simple=False)
-        elif SMALL_RASTER is not None:
+        if small is not None:
+            layer = _vector_layer(size, small, None, simple=False)
+        elif use_small and SMALL_RASTER is not None:
             layer = _raster_layer(size)
         else:
             simple, stroke = layer_params(size)
