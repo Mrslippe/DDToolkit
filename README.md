@@ -77,6 +77,25 @@ frontend\node_modules\.bin\tsc.cmd -p frontend\tsconfig.json --noEmit
 
 档案视图（P5→v0.9.x）端点：`GET /account/{id}/fan-trend`（按天分桶粉丝趋势）、`GET /account/{id}/live-sessions`（danmakus 主源 + self 快照合并的场次列表）、`GET /account/{id}/live-sessions/{liveId}`（场次级详情：弹幕词云/指标/直播事件，analysis 预留）。
 
+## 打包发布（安装版 + 便携版）
+
+```powershell
+# ① 后端 → PyInstaller onedir（frontend/src-tauri/binaries/backend/）
+npm run build:backend --prefix frontend
+
+# ② 桌面应用（前端构建 + Rust release + NSIS 安装包）
+npm run tauri:build --prefix frontend
+# 产物：frontend/src-tauri/target/release/bundle/nsis/DDtoolkit_*_x64-setup.exe
+
+# ③ 便携版 zip（免安装：主程序 + 后端目录）
+npm run collect:portable --prefix frontend
+# 产物：dist-portable/DDtoolkit-portable-win64.zip
+```
+
+- 安装版数据目录 `%APPDATA%\com.ddtoolkit.app`；便携版运行后可改 `DDTOOLKIT_DATA_DIR` 环境变量自定义。
+- 后端被打包进安装包 resources（`binaries/backend/`），主程序启动时自动拉起并注入空闲端口。
+- Rust 子进程经 [Job Object 看门狗](frontend/src-tauri/src/lib.rs) 管理：主程序退出即整棵终止。
+
 ## 常用文档
 
 - `docs/TODO.md` — 路线图与现状盘点

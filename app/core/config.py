@@ -1,9 +1,13 @@
 import os
+import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
-# 项目根（源码所在位置）
-PROJECT_ROOT = Path(__file__).parent.parent.parent
+# 项目根（源码所在位置）；PyInstaller frozen 后指向打包目录（_MEIPASS）
+# —— alembic.ini / alembic/ 迁移脚本由 build_backend.py 的 --add-data 打入
+PROJECT_ROOT = Path(
+    getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent.parent)
+) if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent.parent
 
 # 数据根目录：桌面端打包后通过环境变量重定向（如 %APPDATA%/DDtoolkit）；
 # 缺省 = 项目根，开发行为不变。数据库/日志/缓存/凭据均落在此处。

@@ -42,7 +42,10 @@ def main() -> None:
            "--distpath", str(ROOT / "dist"),
            "--workpath", str(ROOT / "build"),
            "--specpath", str(ROOT / "scripts"),
-           "--add-data", f"{ROOT / 'vtubers.csv'};."]
+           "--add-data", f"{ROOT / 'vtubers.csv'};.",
+           # alembic 迁移脚本/配置：frozen 后 PROJECT_ROOT=_MEIPASS，运行期按此加载
+           "--add-data", f"{ROOT / 'alembic'};alembic",
+           "--add-data", f"{ROOT / 'alembic.ini'};."]
     for h in HIDDEN_IMPORTS:
         cmd += ["--hidden-import", h]
     cmd.append(str(ROOT / "backend_main.py"))
