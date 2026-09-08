@@ -191,19 +191,19 @@ create_all 旧库补列补索引后 stamp / 版本落后增量升级 / 已最新
 | PUT `/vtuber/{vtuber_id}` | 部分更新；404 |
 | POST `/vtuber/{vtuber_id}/background` | 上传自定义背景（jpeg/png/webp/gif，≤10MB，否则 415/413）；时间戳后缀防缓存，替换删旧文件 |
 | DELETE `/vtuber/{vtuber_id}/background` | 清除背景回退头像铺底 |
-| DELETE `/vtuber/{vtuber_id}` | 解除订阅：先按账号清 posts，再级联删 V+accounts（避免孤儿数据） |
+| DELETE `/vtuber/{vtuber_id}` | 解除订阅：按 `services/purge.py` 清 posts + 账号 4 张子表（快照/场次/礼物日/分类校正）+ V 活动条目，再级联删 V+accounts。**外键全开（`foreign_keys=ON`），漏清一张就整次回滚 500**（v0.9.3 修复） |
 | GET `/vtuber/{id}/accounts` | 某 V 的账号列表 |
 | POST `/vtuber/{id}/accounts` | 建账号；(platform, platform_uid) 重复 409 |
 | PUT `/account/{account_id}` | 更新账号；唯一冲突 409 |
-| DELETE `/account/{account_id}` | 删账号并同步清理其帖子 |
+| DELETE `/account/{account_id}` | 删账号并同步清理其帖子与 4 张子表（同上，v0.9.3） |
 | GET `/account/{account_id}/stat-snapshots?limit=` | **P0**：统计快照历史（默认 100，上限 1000，时间倒序，UTC 补时区） |
 | GET `/posts/{platform}/{platform_uid}` | 某账号全部帖子（旧接口） |
 | GET `/posts/{platform}/{platform_uid}/paginated` | 服务端分页；`type`/`is_archived`/`q`/`date_from`/`date_to`（`page_size` 1-200） |
 | GET `/posts/{platform}/{platform_uid}/stats` | 帖子统计概览 |
 | POST `/posts` | 建帖；三元组重复 409 |
 | PUT `/post/{post_id}` / DELETE `/post/{post_id}` | 更帖 / 删帖；404 |
-| GET/POST `/vtuber/fetch` | 手动全量抓取账号信息；跑动中返回 skipped |
-| GET/POST `/vtuber/{vtuber_id}/fetch` | 抓单个 V 账号信息；与全局互斥 |
+| GET/POST `/vtuber/fetch` | 手动全量抓取账号信息；**自动档在跑时抢占之**（v0.9.3），仅当另一个手动任务在跑才 skipped |
+| GET/POST `/vtuber/{vtuber_id}/fetch` | 抓单个 V 账号信息；与全局互斥，同样可抢占自动档 |
 | POST `/vtuber/fetch-posts?name=&platform=&video_pages=&dynamics_pages=&full=` | 按名字抓帖子（-1 全量；`full=true` 后台执行）；**抓前先跑归档规则** |
 | POST `/vtuber/fetch-all-posts` | 全部 bilibili 账号全量抓（视频+动态） |
 | POST `/posts/archive?days=30` | 归档规则：早于 days 天 → `is_archived=1`；幂等，返回 cutoff/unarchived_total |

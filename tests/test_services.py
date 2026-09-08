@@ -1131,6 +1131,244 @@ def test_run_latest_dynamics_sweep_skips_when_post_busy(monkeypatch):
     assert sch._status["post"]["running"] is False
 
 
+# ── 手动任务优先（v0.9.3）：自动档给手动任务让位 ────────────────────────
+
+class _FakeDb:
+    """让位辅助函数只用到 db.commit()，单测不需要真会话。"""
+
+    def commit(self) -> None:
+        pass
+
+
+def test_manual_task_running_excludes_auto_holder():
+    """自动档持锁不算「手动任务在跑」：手动端点据此放行（不再 409），
+    而真正的手动任务在跑时仍要挡住第二个手动请求。"""
+    from app.services import scheduler as sch
+
+    assert sch._fetch_lock.acquire(blocking=False)
+    try:
+        sch._auto_account_active.set()
+        sch._fetch_running = True
+        assert sch.any_fetch_running() is True
+        assert sch.manual_task_running() is False     # 自动档 → 手动可抢占
+        sch._auto_account_active.clear()
+        assert sch.manual_task_running() is True      # 手动档 → 拒绝并发手动
+    finally:
+        sch._fetch_running = False
+        sch._auto_account_active.clear()
+        sch._fetch_lock.release()
+    assert sch.manual_task_running() is False
+
+
+def test_manual_acquire_does_not_steal_from_manual_holder():
+    """手动之间不互相打断：锁被另一个手动任务持有时直接放弃，不置抢占信号。"""
+    from app.services import scheduler as sch
+
+    assert sch._fetch_lock.acquire(blocking=False)
+    try:
+        assert asyncio.run(sch._acquire_manual_account(wait_seconds=0.3)) is False
+        assert sch._preempt_account.is_set() is False
+    finally:
+        sch._fetch_lock.release()
+
+
+def test_auto_account_yields_to_manual_preempt():
+    """核心语义：自动档在断点交还锁 → 手动任务拿到并跑完 → 自动档从断点拿回。
+
+    自动侧跑在独立线程的独立事件循环里（与生产 tier-scheduler 线程一致），
+    否则自动侧阻塞式 acquire 会把同一循环里的手动任务一起卡死。
+    """
+    import threading
+
+    from app.services import scheduler as sch
+
+    order: list[str] = []
+    assert sch._fetch_lock.acquire(blocking=False)     # 模拟自动档已持锁在跑
+    sch._auto_account_active.set()
+    sch._fetch_running = True
+    sch._fetch_scope = "full"
+
+    def auto_side() -> None:
+        async def run() -> None:
+            await asyncio.sleep(0.3)
+            yielded = await sch._maybe_preempt_account(_FakeDb())
+            order.append(f"auto-resumed yielded={yielded} locked={sch._fetch_lock.locked()}")
+
+        asyncio.run(run())
+
+    async def manual_side() -> None:
+        got = await sch._acquire_manual_account(wait_seconds=5)
+        order.append(f"manual-acquired={got}")
+        sch._fetch_scope = "single"                    # 手动任务会改这个全局标记
+        await asyncio.sleep(0.3)                       # 手动任务干活
+        sch._fetch_running = False
+        sch._fetch_lock.release()
+
+    t = threading.Thread(target=auto_side, daemon=True)
+    t.start()
+    try:
+        asyncio.run(manual_side())
+        t.join(timeout=10)
+        assert not t.is_alive(), "自动档让位后没有恢复"
+    finally:
+        sch._fetch_running = False
+        sch._auto_account_active.clear()
+        sch._preempt_account.clear()
+        if sch._fetch_lock.locked():
+            sch._fetch_lock.release()
+
+    assert order == ["manual-acquired=True", "auto-resumed yielded=True locked=True"]
+    assert sch._fetch_scope == "full"                  # 让位返回后恢复本任务范围标记
+    assert sch._preempt_account.is_set() is False
+    sch._fetch_scope = None
+
+
+def test_auto_post_yields_to_manual_preempt():
+    """帖子侧同一套语义（T2 最新动态给「更新动态 / 抓取帖子」让位）。"""
+    import threading
+
+    from app.services import scheduler as sch
+
+    order: list[str] = []
+    assert sch._post_fetch_lock.acquire(blocking=False)
+    sch._auto_post_active.set()
+    sch._post_fetch_running = True
+
+    def auto_side() -> None:
+        async def run() -> None:
+            await asyncio.sleep(0.3)
+            yielded = await sch._maybe_preempt_post(_FakeDb())
+            order.append(f"auto-resumed yielded={yielded} locked={sch._post_fetch_lock.locked()}")
+
+        asyncio.run(run())
+
+    async def manual_side() -> None:
+        got = await sch._acquire_manual_post(wait_seconds=5)
+        order.append(f"manual-acquired={got}")
+        await asyncio.sleep(0.3)
+        sch._post_fetch_running = False
+        sch._post_fetch_lock.release()
+
+    t = threading.Thread(target=auto_side, daemon=True)
+    t.start()
+    try:
+        asyncio.run(manual_side())
+        t.join(timeout=10)
+        assert not t.is_alive(), "自动档让位后没有恢复"
+    finally:
+        sch._post_fetch_running = False
+        sch._auto_post_active.clear()
+        sch._preempt_post.clear()
+        if sch._post_fetch_lock.locked():
+            sch._post_fetch_lock.release()
+
+    assert order == ["manual-acquired=True", "auto-resumed yielded=True locked=True"]
+
+
+def test_auto_checkpoint_noop_without_request(db):
+    """没有手动请求时断点检查是空操作（自动档不该无故让位）。"""
+    from app.services import scheduler as sch
+
+    assert sch._preempt_account.is_set() is False
+    assert asyncio.run(sch._maybe_preempt_account(db)) is False
+
+
+def test_manual_single_v_fetch_preempts_running_auto_sweep(monkeypatch):
+    """用户场景（2026-09-08）：启动链自动档正在跑时收录新 V，
+    单V抓取必须抢占自动档并真的抓到账号信息（修复前是直接"跳过"→ 账号空白）。
+
+    自动档用 T1 主账号扫描真路径，网络抓取换成带 sleep 的假实现；
+    手动侧走 async_fetch_vtuber 真路径。
+    """
+    import threading
+
+    from app.services import scheduler as sch
+
+    engine, Testing = _snapshot_test_db()
+    db = Testing()
+    old_v = VTuber(name="老账号V")
+    new_v = VTuber(name="新收录V")
+    db.add_all([old_v, new_v])
+    db.commit()
+    db.refresh(old_v)
+    db.refresh(new_v)
+    db.add(Account(vtuber_id=old_v.id, platform="bilibili", platform_uid="100",
+                   display_name="老账号"))
+    db.add(Account(vtuber_id=new_v.id, platform="bilibili", platform_uid="200",
+                   display_name="新账号"))
+    db.commit()
+    new_v_id = new_v.id
+    db.close()
+
+    monkeypatch.setattr(sch, "SessionLocal", Testing)
+    monkeypatch.setattr(sch.settings, "REQUEST_INTERVAL_MIN", 0.0)
+    monkeypatch.setattr(sch.settings, "REQUEST_INTERVAL_MAX", 0.0)
+    monkeypatch.setattr(sch.settings, "STARTUP_MAIN_INTERVAL_MIN", 0.0)
+    monkeypatch.setattr(sch.settings, "STARTUP_MAIN_INTERVAL_MAX", 0.0)
+
+    fetched: list[str] = []
+    auto_started = threading.Event()
+
+    async def fake_fetch(acc, db, client=None):
+        uid = str(acc.platform_uid)
+        fetched.append(uid)
+        if uid == "100":                         # 自动档首个账号：慢，留出抢占窗口
+            auto_started.set()
+            await asyncio.sleep(0.5)
+        else:
+            await asyncio.sleep(0.05)
+        acc.followers_count = 42
+        return True
+
+    monkeypatch.setattr(sch, "_fetch_one_account", fake_fetch)
+
+    auto_done: list[str] = []
+
+    def auto_side() -> None:
+        asyncio.run(sch.run_main_account_sweep())
+        auto_done.append("done")
+
+    async def manual_side():
+        # 等自动档真的进了第一个账号（否则可能先拿到锁，测不到抢占）
+        for _ in range(250):
+            if auto_started.is_set():
+                break
+            await asyncio.sleep(0.02)
+        assert auto_started.is_set(), "自动档没有开始"
+        return await sch.async_fetch_vtuber(new_v_id)
+
+    t = threading.Thread(target=auto_side, daemon=True)
+    t.start()
+    try:
+        manual_result = asyncio.run(manual_side())
+        t.join(timeout=15)
+        assert not t.is_alive(), "自动档没有恢复（可能死锁）"
+    finally:
+        for lock in (sch._fetch_lock,):
+            if lock.locked():
+                lock.release()
+        sch._fetch_running = False
+        sch._auto_account_active.clear()
+        sch._preempt_account.clear()
+        sch._fetch_scope = None
+
+    # 手动任务确实跑到了（不是被"跳过"）
+    assert manual_result.success == 1
+    assert "跳过" not in " ".join(manual_result.details)
+    # 顺序：自动档先抓老账号 → 让位 → 手动抓新账号 → 自动档续跑（再遍历到新账号）
+    assert fetched == ["100", "200", "200"]
+    assert auto_done == ["done"]
+
+    db = Testing()
+    try:
+        acc = db.query(Account).filter(Account.platform_uid == "200").one()
+        assert acc.followers_count == 42           # 账号信息落库
+        assert db.query(AccountStatSnapshot).filter(
+            AccountStatSnapshot.account_id == acc.id).count() == 1
+    finally:
+        db.close()
+
+
 def test_fetch_posts_core_limit_latest(monkeypatch, db):
     """启动链阶段 3：「最新 N 条」模式——同页最多入库 N 条新帖即停（不翻页）。"""
     from app.services import scheduler as sch

@@ -26,6 +26,7 @@ from app.schemas.vtuber import (
     VtuberEventOut, VtuberEventCreate, FutureReservationOut,
 )
 from app.services import pool
+from app.services.purge import purge_account, purge_vtuber
 from app.services.live_type import (
     infer_category, plan_series, build_learned, EDITABLE_CATEGORY_KEYS,
 )
@@ -83,6 +84,12 @@ def is_post_fetch_running():
 def any_fetch_running():
     """全局单飞：账号/帖子任一在跑，或定时任务正请求让位 → 均视为忙。"""
     return _sched().any_fetch_running()
+
+
+def manual_task_running():
+    """是否有手动任务在跑（自动档持锁不算）——手动端点用它做 409 判定，
+    以便用户手动请求能抢占定时档（见 scheduler「手动任务优先」）。"""
+    return _sched().manual_task_running()
 
 
 async def async_update_unarchived_posts(name: str | None = None):
@@ -195,16 +202,25 @@ def clear_vtuber_background(vtuber_id: int, db: Session = Depends(get_db)):
 
 @router.delete("/vtuber/{vtuber_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_vtuber(vtuber_id: int, db: Session = Depends(get_db)):
-    """解除订阅：删除 VTuber（accounts 级联）+ 连带清除其全部帖子记录。
-    posts 表独立无外键，需按账号 uid 显式清理，避免孤儿数据。"""
+    """解除订阅：删除 VTuber（accounts 级联）+ 连带清除其全部帖子与账号从属数据。
+
+    2026-09-08 修复：此前只清 posts（posts 无外键），而 accounts 之下还有 4 张
+    子表挂着外键且 ORM 未配级联，`PRAGMA foreign_keys=ON` 下 `DELETE FROM accounts`
+    直接被挡 → 整次删除回滚、接口 500，用户侧表现为「解除订阅失败、V 删不掉」。
+    清理清单见 app/services/purge.py。
+    """
     v = VTuberRepo(db).get(vtuber_id)
     if not v:
         raise HTTPException(404, f"VTuber id={vtuber_id} 不存在")
 
-    uids = [(a.platform, a.platform_uid) for a in v.accounts if a.platform_uid]
-    n_posts = PostRepo(db).delete_by_platform_uids(uids)
-    logger.info(f"解除订阅 VTuber#{vtuber_id} ({v.name})：连带清除帖子 {n_posts} 条")
-    VTuberRepo(db).delete(vtuber_id)
+    try:
+        counts = purge_vtuber(db, v)
+        VTuberRepo(db).delete(vtuber_id)
+    except IntegrityError as e:
+        db.rollback()
+        logger.error(f"解除订阅 VTuber#{vtuber_id} ({v.name}) 被外键挡下: {e}")
+        raise HTTPException(409, "该 VTuber 仍有从属数据未清理干净，解除订阅未生效") from e
+    logger.info(f"解除订阅 VTuber#{vtuber_id} ({v.name})：清理 {counts}")
 
 
 # ── Account CRUD ───────────────────────────────────────────────────
@@ -245,15 +261,20 @@ def update_account(account_id: int, data: AccountUpdate, db: Session = Depends(g
 
 @router.delete("/account/{account_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_account(account_id: int, db: Session = Depends(get_db)):
-    """删除账号并同步清理其帖子（修复：原来只删 account，帖子成孤儿数据）。"""
+    """删除账号并同步清理其帖子与从属数据（修复：原来只删 account，帖子成孤儿；
+    2026-09-08 再修：直播场次/统计快照等子表未清，外键会让删除整体失败）。"""
     repo = AccountRepo(db)
     acc = repo.get(account_id)
     if not acc:
         raise HTTPException(404, f"Account id={account_id} 不存在")
-    if acc.platform_uid:
-        n_posts = PostRepo(db).delete_by_platform_uids([(acc.platform, acc.platform_uid)])
-        logger.info(f"删除 Account#{account_id} ({acc.platform}:{acc.platform_uid})：连带清除帖子 {n_posts} 条")
-    repo.delete(account_id)
+    try:
+        counts = purge_account(db, acc)
+        repo.delete(account_id)
+    except IntegrityError as e:
+        db.rollback()
+        logger.error(f"删除 Account#{account_id} 被外键挡下: {e}")
+        raise HTTPException(409, "该账号仍有从属数据未清理干净，删除未生效") from e
+    logger.info(f"删除 Account#{account_id} ({acc.platform}:{acc.platform_uid})：清理 {counts}")
 
 
 @router.get("/account/{account_id}/stat-snapshots", response_model=list[AccountStatSnapshotOut])
@@ -593,7 +614,7 @@ def delete_post(post_id: int, db: Session = Depends(get_db)):
 
 @router.api_route("/vtuber/fetch", methods=["GET", "POST"])
 async def manual_fetch():
-    if any_fetch_running():
+    if manual_task_running():
         return {"status": "skipped", "message": "已有抓取任务正在进行中，请稍后再试"}
     result = await async_fetch_and_update()
     return {
@@ -613,7 +634,7 @@ async def fetch_vtuber(vtuber_id: int, db: Session = Depends(get_db)):
     """抓取单个 VTuber 的账号信息（devlog/017）。与全局抓取互斥。"""
     if not VTuberRepo(db).get(vtuber_id):
         raise HTTPException(404, f"VTuber id={vtuber_id} 不存在")
-    if any_fetch_running():
+    if manual_task_running():
         return {"status": "skipped", "message": "已有抓取任务正在进行中，请稍后再试"}
     result = await async_fetch_vtuber(vtuber_id)
     return {
@@ -647,7 +668,7 @@ async def fetch_posts_by_name(name: str, background: BackgroundTasks,
           POST /vtuber/fetch-posts?name=明前奶绿&full=true
     """
     if full:
-        if any_fetch_running():
+        if manual_task_running():
             raise HTTPException(409, "已有抓取任务正在进行中，请稍后再试")
         vtubers = db.query(VTuber).filter(VTuber.name.contains(name)).all()
         if not vtubers:
@@ -655,7 +676,7 @@ async def fetch_posts_by_name(name: str, background: BackgroundTasks,
         background.add_task(async_fetch_vtuber_posts, name, platform)
         return {"status": "started", "message": "全量帖子抓取已开始（后台执行，进度见顶栏）"}
 
-    if any_fetch_running():
+    if manual_task_running():
         return {"status": "skipped", "message": "已有抓取任务正在进行中，请稍后再试"}
 
     vtubers = db.query(VTuber).filter(VTuber.name.contains(name)).all()
@@ -700,7 +721,7 @@ async def fetch_all_posts():
     对库中所有 VTuber 的 bilibili 账号逐个全量抓取帖子（视频+动态）。
     示例: POST /vtuber/fetch-all-posts
     """
-    if any_fetch_running():
+    if manual_task_running():
         return {"status": "skipped", "message": "已有抓取任务正在进行中，请稍后再试"}
     return await async_fetch_all_posts()
 
@@ -734,7 +755,7 @@ async def update_unarchived_posts(name: str | None = None):
     name 省略 → 全部 bilibili 账号；name 支持模糊匹配。
     示例: POST /vtuber/update-posts?name=明前奶绿   |   POST /vtuber/update-posts
     """
-    if any_fetch_running():
+    if manual_task_running():
         return {"status": "skipped", "message": "已有抓取任务正在进行中，请稍后再试"}
     return await async_update_unarchived_posts(name)
 
@@ -832,7 +853,7 @@ def adopt_vtuber(data: AdoptRequest, background: BackgroundTasks, db: Session = 
 @router.post("/vtuber/fetch-accounts")
 async def batch_fetch_accounts(background: BackgroundTasks):
     """批量任务：全量抓取所有 VTuber 的账号信息（后台执行，立即返回）。"""
-    if any_fetch_running():
+    if manual_task_running():
         raise HTTPException(409, "已有抓取任务正在进行中，请稍后再试")
     background.add_task(async_fetch_and_update)
     return {"status": "started"}
@@ -840,7 +861,7 @@ async def batch_fetch_accounts(background: BackgroundTasks):
 
 @router.post("/vtuber/batch/fetch-all-posts")
 async def batch_fetch_all_posts(background: BackgroundTasks):
-    if any_fetch_running():
+    if manual_task_running():
         raise HTTPException(409, "已有抓取任务正在进行中，请稍后再试")
     background.add_task(async_fetch_all_posts)
     return {"status": "started"}
@@ -848,7 +869,7 @@ async def batch_fetch_all_posts(background: BackgroundTasks):
 
 @router.post("/vtuber/batch/update-unarchived")
 async def batch_update_unarchived(background: BackgroundTasks):
-    if any_fetch_running():
+    if manual_task_running():
         raise HTTPException(409, "已有抓取任务正在进行中，请稍后再试")
     background.add_task(async_update_unarchived_posts)
     return {"status": "started"}

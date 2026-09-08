@@ -55,23 +55,30 @@ APScheduler (5min, jitter30s)  _fetch_lock      async_fetch_and_update   → 逐
 
 ### 3.1 全局单飞
 
-- `_fetch_lock`（账号）与 `_post_fetch_lock`（帖子）：`acquire(blocking=False)`，
-  拿不到直接返回 `skipped`（不会积压排队）。
-- `any_fetch_running()` = 账号在跑 ∨ 帖子在跑 ∨ 定时任务正请求让位
-  （让位窗口也视为忙，防真空期钻空并发）——路由层据此返回 409/skipped。
+- `_fetch_lock`（账号）与 `_post_fetch_lock`（帖子）：手动任务拿不到锁时先请求
+  自动任务让位（见 3.2），仍拿不到才返回 `skipped`。
+- `any_fetch_running()` = 账号在跑 ∨ 帖子在跑 ∨ 定时任务正请求让位 ∨
+  有手动任务在等让位（让位窗口也视为忙，防真空期钻空并发）——外部数据批次
+  （T4）等自动任务据此跳过。
+- `manual_task_running()` = 是否有**手动**任务在跑（自动档持锁不算）——
+  手动端点用它做 409 判定，这样用户手动请求不会被定时档挡在门外（v0.9.3）。
 
-### 3.2 定时任务优先让位协议（devlog/021）
+### 3.2 手动任务优先：自动任务让位（v0.9.3，devlog/040）
 
-定时任务触发时 `_yield_request.set()`；手下在跑的（手动账号/帖子）任务在
-**断点**（账号间、视频页间、动态页间）检测到请求：`db.commit()` → 释放锁 →
-等待信号清除 → 重查账号列表 → 从原序号续跑。定时任务完成后清信号。
+用户手动任务（收录新 V 拉起的单V抓取、抓取账号/帖子/更新动态）优先级高于
+定时档 T1/T2/T3a：手动侧拿不到锁且**占用者是自动档**时置位抢占信号
+（`_preempt_account` / `_preempt_post`）并轮询等锁；自动档在**断点**（账号之间）
+看到信号后 `db.commit()` → 释放锁 → 等信号清除 → 重新拿锁 → 从原序号续跑。
 
-- `_maybe_yield_account(db, vtuber_id)`：账号链路断点；
-- `_maybe_yield_post(db)`：帖子链路断点。
-- **v0.6.0 修订（2026-09-05 用户反馈）**：定时任务触发时若已有**全量账号抓取**
-  在跑（`_fetch_scope == "full"`，与定时任务内容完全一致）→ 本轮**跳过不接管**
-  （避免同一任务被让位-接管重复执行、打断手动任务的进度与快照基线）；
-  单 V / 帖子在跑时仍照常让位协议。被让位方在让位点保存并恢复 `_fetch_scope`。
+- `_acquire_manual_account()/ _acquire_manual_post()`：手动侧抢锁（最多等
+  `MANUAL_PREEMPT_WAIT_SECONDS=120s`，超时按原语义跳过）；占用者是**另一个
+  手动任务**时不抢（手动之间不互相打断）。
+- `_maybe_preempt_account(db)` / `_maybe_preempt_post(db)`：自动侧断点检查；
+  让位辅助 `_auto_yield_account` / `_auto_yield_post` 保存并恢复 `_fetch_scope`。
+- 自动档自身起跑时仍是"锁被占就跳过"（不打断手动任务）——两条方向合起来才是
+  "手动 > 自动"。
+- **旧机制**：`_yield_request`（定时任务置位、手动让位）自 v0.6.0 起已无置位方，
+  代码保留但不再参与；方向由本节取代。
 
 ### 3.3 进度状态 & 结果
 
@@ -124,10 +131,10 @@ for 每个账号:
 | 层 | 内容 | 形态 | 默认周期 | 冲突策略 |
 |---|---|---|---|---|
 | **T0 直播状态** | 批量接口仅回写 live 字段（跳变落统计快照） | **独立守护线程**（不占锁/不进状态通道/不写 last_result） | 60s ± 15s | 与一切任务并行（SQLite busy_timeout=30s 排队兜底） |
-| **T1 主要账号信息** | 每 VTuber 主账号全字段（`PRIMARY_PLATFORM_ORDER` 优先） | 分层调度线程（账号锁） | 5min ± 30s | 手动任务在跑 → **跳过本轮**（手动优先，不抢断） |
+| **T1 主要账号信息** | 每 VTuber 主账号全字段（`PRIMARY_PLATFORM_ORDER` 优先） | 分层调度线程（账号锁） | 5min ± 30s | 起跑时手动任务在跑 → **跳过本轮**；持锁期间手动请求 → **断点让位**（v0.9.3） |
 | **T2 最新动态** | 每主账号 1 页 + `limit_latest=2` | 分层调度线程（帖子锁） | 15min ± 2min | 同上 |
 | **T3a 全量账号** | 全部账号全字段（含非主账号，补足 T1 不覆盖的账号） | **紧接 T2 之后串行执行（与 T2 同频率 15min）**，`FULL_ACCOUNT_AFTER_T2=false` 关闭 | 随 T2 | 同上 |
-| **T3 手动全量/补档** | 用户触发（全量账号/全量帖子/单 V/未归档批量端点） | — | 手动 | 永远优先于 T1/T2/T3a；仅被 T0 并行（互不打扰） |
+| **T3 手动全量/补档** | 用户触发（全量账号/全量帖子/单 V/未归档批量端点） | — | 手动 | 永远优先于 T1/T2/T3a（拿不到锁时请求自动档让位）；仅被 T0 并行（互不打扰） |
 | **T4 外部数据** | zeroroku/danmakus | APScheduler cron | 3AM 日/周 | 保持现状 |
 
 调度细节：
@@ -144,9 +151,10 @@ for 每个账号:
   只服务手动任务）；T3a 走 `async_fetch_and_update`（与 T2 同频，汇总随
   手动任务口径不弹——T2 档期以 T2 的任务名计）；
 - T0 的进度反馈 = `account-progress` 快照驱动的左右栏徽标（无进度条/无胶囊）；
-- 原「定时任务优先让位协议」的账号档语义被「手动优先」取代：
-  `_yield_request` 机制保留（让位代码仍在），但不再有置位方；
-  原 APScheduler 的 5min `fetch_vtubers` job 已移除，仅保留外部数据 cron。
+- 冲突方向（v0.9.3 定稿）：**手动 > 自动**——自动档起跑时见手动任务即跳过，
+  持锁期间见手动请求则断点让位；旧「定时任务优先让位协议」（`_yield_request`）
+  已无置位方，代码保留但不参与调度；原 APScheduler 的 5min `fetch_vtubers`
+  job 已移除，仅保留外部数据 cron。
 
 配置：`TIER_TICK_SECONDS`、`LIVE_POLL_SECONDS/JITTER`、
 `ACCOUNT_PRIMARY_INTERVAL_MINUTES/JITTER`、`DYNAMICS_LATEST_INTERVAL_MINUTES/JITTER`、

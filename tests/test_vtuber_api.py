@@ -2,17 +2,29 @@ import json
 import pytest
 from datetime import datetime, timezone
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
 # 独立测试库，避免污染开发数据库
 test_engine = create_engine("sqlite:///./test_vtuber.db", connect_args={"check_same_thread": False})
+
+
+# 与生产同口径：SQLite 默认不校验外键，只有开 PRAGMA 才能测出
+# 「删账号时子表没清干净」这类整次回滚的问题（2026-09-08 解除订阅失败事故）。
+@event.listens_for(test_engine, "connect")
+def _fk_on(dbapi_connection, _record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.close()
+
+
 TestingSession = sessionmaker(bind=test_engine, autoflush=False, autocommit=False)
 
 from app.main import app
 from app.core.database import Base, get_db
 from app.models.vtuber import (VTuber, Account, Post, AccountStatSnapshot,
-                               LiveSession, LiveCategoryOverride)
+                               LiveSession, LiveCategoryOverride, LiveGiftDay,
+                               VtuberEvent)
 from app.repositories.vtuber_repo import AccountStatSnapshotRepo
 
 
@@ -32,8 +44,9 @@ def setup_db():
     Base.metadata.create_all(bind=test_engine)
     db = TestingSession()
     try:
-        for t in (Post, AccountStatSnapshot, LiveSession, Account, VTuber,
-                  LiveCategoryOverride):
+        # 顺序即外键依赖：子表先清（PRAGMA foreign_keys=ON 下反序会被挡）
+        for t in (Post, AccountStatSnapshot, LiveSession, LiveCategoryOverride,
+                  LiveGiftDay, VtuberEvent, Account, VTuber):
             db.query(t).delete()
         db.commit()
     finally:
@@ -325,6 +338,80 @@ def test_delete_vtuber_does_not_delete_other_platform_same_uid(client):
     assert client.delete(f"/vtuber/{vid1}").status_code == 204
     assert client.get("/posts/bilibili/123").json() == []
     assert len(client.get("/posts/youtube/123").json()) == 1  # youtube 帖保留
+
+
+def test_delete_vtuber_cleans_account_children(client):
+    """回归（2026-09-08 解除订阅失败）：账号之下还有 4 张挂外键的子表，
+    只清 posts 时 `DELETE FROM accounts` 会被 foreign_keys=ON 挡下 → 整次回滚 500。
+    这里每张子表都塞一行，删完必须一行不剩。"""
+    vid = client.post("/vtuber", json={"name": "待解订阅"}).json()["id"]
+    aid = client.post(f"/vtuber/{vid}/accounts",
+                      json={"platform": "bilibili", "platform_uid": "U9"}).json()["id"]
+    client.post("/posts", json={
+        "platform": "bilibili", "platform_uid": "U9", "platform_post_id": "p1", "type": "text",
+    })
+    db = TestingSession()
+    try:
+        db.add(AccountStatSnapshot(account_id=aid, followers_count=123))
+        db.add(LiveSession(account_id=aid, source="danmakus", live_id="uuid-1",
+                           title="深夜杂谈", start_at=datetime(2026, 9, 7, 12, 5)))
+        db.add(LiveGiftDay(account_id=aid, source="zeroroku", gift_date="2026-09-07",
+                           total_amount="12.5"))
+        db.add(LiveCategoryOverride(account_id=aid, live_id="uuid-1", category="chat"))
+        db.add(VtuberEvent(vtuber_id=vid, title="生日歌回", event_date="2026-09-09"))
+        db.commit()
+        # 先确认子表确实有行（否则下面的"一行不剩"是假绿）
+        assert db.query(AccountStatSnapshot).count() == 1
+        assert db.query(LiveSession).count() == 1
+        assert db.query(LiveGiftDay).count() == 1
+        assert db.query(LiveCategoryOverride).count() == 1
+        assert db.query(VtuberEvent).count() == 1
+    finally:
+        db.close()
+
+    assert client.delete(f"/vtuber/{vid}").status_code == 204
+    assert client.get(f"/vtuber/{vid}").status_code == 404
+
+    db = TestingSession()
+    try:
+        for model, cond in (
+            (AccountStatSnapshot, AccountStatSnapshot.account_id == aid),
+            (LiveSession, LiveSession.account_id == aid),
+            (LiveGiftDay, LiveGiftDay.account_id == aid),
+            (LiveCategoryOverride, LiveCategoryOverride.account_id == aid),
+            (VtuberEvent, VtuberEvent.vtuber_id == vid),
+            (Account, Account.id == aid),
+        ):
+            assert db.query(model).filter(cond).count() == 0, model.__name__
+    finally:
+        db.close()
+    assert client.get("/posts/bilibili/U9").json() == []
+
+
+def test_delete_account_cleans_children(client):
+    """删单个账号同样要清子表（否则外键挡下 + 孤儿数据）。"""
+    vid = client.post("/vtuber", json={"name": "测试"}).json()["id"]
+    aid = client.post(f"/vtuber/{vid}/accounts",
+                      json={"platform": "bilibili", "platform_uid": "U7"}).json()["id"]
+    db = TestingSession()
+    try:
+        db.add(AccountStatSnapshot(account_id=aid, followers_count=1))
+        db.add(LiveSession(account_id=aid, source="feed", live_id="feed-1",
+                           start_at=datetime(2026, 9, 7, 20, 0)))
+        db.commit()
+    finally:
+        db.close()
+
+    assert client.delete(f"/account/{aid}").status_code == 204
+    assert client.get(f"/vtuber/{vid}").status_code == 200   # V 本体保留
+
+    db = TestingSession()
+    try:
+        assert db.query(AccountStatSnapshot).filter(
+            AccountStatSnapshot.account_id == aid).count() == 0
+        assert db.query(LiveSession).filter(LiveSession.account_id == aid).count() == 0
+    finally:
+        db.close()
 
 
 # ── 自定义背景：上传 / 清除 ─────────────────────────────────────────────

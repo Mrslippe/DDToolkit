@@ -107,6 +107,14 @@ class AccountStatSnapshotRepo:
     def __init__(self, db: Session):
         self.db = db
 
+    def delete_by_account(self, account_id: int) -> int:
+        """删除该账号全部快照（级联清理用，不提交；见 app/services/purge.py）。"""
+        return (
+            self.db.query(AccountStatSnapshot)
+            .filter(AccountStatSnapshot.account_id == account_id)
+            .delete(synchronize_session=False)
+        )
+
     def add(self, account_id: int, followers_count: int | None,
             live_status: int | None = None, live_title: str | None = None,
             captured_at: datetime | None = None) -> AccountStatSnapshot:
@@ -258,6 +266,14 @@ class LiveSessionRepo:
 
     def __init__(self, db: Session):
         self.db = db
+
+    def delete_by_account(self, account_id: int) -> int:
+        """删除该账号全部直播场次（级联清理用，不提交；见 app/services/purge.py）。"""
+        return (
+            self.db.query(LiveSession)
+            .filter(LiveSession.account_id == account_id)
+            .delete(synchronize_session=False)
+        )
 
     # ── 写入（其他数据源接入接口） ──
 
@@ -609,6 +625,14 @@ class LiveCategoryOverrideRepo:
         self.db.commit()
         return True
 
+    def delete_by_account(self, account_id: int) -> int:
+        """删除该账号全部分类校正（级联清理用，不提交；见 app/services/purge.py）。"""
+        return (
+            self.db.query(LiveCategoryOverride)
+            .filter(LiveCategoryOverride.account_id == account_id)
+            .delete(synchronize_session=False)
+        )
+
 
 # ── Post ───────────────────────────────────────────────────────────
 
@@ -765,6 +789,14 @@ class LiveGiftDayRepo:
     def __init__(self, db: Session):
         self.db = db
 
+    def delete_by_account(self, account_id: int) -> int:
+        """删除该账号全部礼物日聚合（级联清理用，不提交；见 app/services/purge.py）。"""
+        return (
+            self.db.query(LiveGiftDay)
+            .filter(LiveGiftDay.account_id == account_id)
+            .delete(synchronize_session=False)
+        )
+
     def list_by_account(self, account_id: int, source: str | None = None,
                         limit: int = 0) -> list[LiveGiftDay]:
         """按日期倒序取某账号礼物聚合；limit=0 全量。"""
@@ -909,6 +941,14 @@ class VtuberEventRepo:
         self.db.delete(obj)
         self.db.commit()
         return True
+
+    def delete_by_vtuber(self, vtuber_id: int) -> int:
+        """删除该 V 全部手动活动条目（级联清理用，不提交；见 app/services/purge.py）。"""
+        return (
+            self.db.query(VtuberEvent)
+            .filter(VtuberEvent.vtuber_id == vtuber_id)
+            .delete(synchronize_session=False)
+        )
 
     # ── 自动预约帖解析（P7） ──
 
