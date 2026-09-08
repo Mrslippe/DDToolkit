@@ -330,43 +330,43 @@ html.window-maximized body {
   user-select: none;
 }
 
-/* 状态行：浅粉底 + 外发光玻璃胶囊（2026-09-09 用户要求试做，待验收）——
-   粉底顶栏上再叠一层半透明白粉渐变，内高光把上缘提亮成玻璃，
-   backdrop-filter 让底下的主色粉透上来；外发光用白色晕圈 + 主色浅投影
-   把胶囊从粉底上「托」起来。文字改深玫色（#a83a5e）——
-   原白字在 #ffa2b4 上对比度仅 1.9:1，浅粉底上更会糊成一片；
-   实测深玫色对胶囊底色约 4.6:1，达到正文对比度下限。
-   字号 19px → 13px：19px 文字加内边距后胶囊高度接近整条顶栏（40px），
-   撑不出「胶囊」比例。 */
+/* 状态行：浮片化（2026-09-09 用户二次定调）——
+   第一版是「浅粉底 + 外发光玻璃胶囊」，用户看后要求去掉玻璃质感与外发光，
+   改走**浮片 + 阴影**设计语言：斜切白卡画在 ::before（与工具行 `.float-pill`
+   同一套令牌：`--pill-bg` / `--pill-radius` / `--pill-skew` / `--pill-shadow`），
+   内容保持直立，字色取浮片前景色 `--pill-fg`（白底对比度 ≈8.6:1）。
+   高度沿用浮片 sm 档 `--pill-h-sm`(25px)、字号 12px（浮片基准）。
+   注：本体不能设 overflow（会裁掉 ::before 的斜切角），超长文案的省略号
+   交给内层 `.pill-text-fade`。 */
 .topbar-status {
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
+  isolation: isolate;
   display: flex;
   align-items: center;
   gap: 6px;
   max-width: 46%;
-  height: 26px;
-  padding: 0 13px;
-  border-radius: 999px;
-  background: linear-gradient(
-    180deg,
-    rgba(255, 255, 255, 0.74),
-    rgba(255, 255, 255, 0.36)
-  );
-  border: 1px solid rgba(255, 255, 255, 0.62);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.78),
-    0 2px 9px rgba(214, 90, 130, 0.24),
-    0 0 15px rgba(255, 255, 255, 0.5);
-  backdrop-filter: blur(6px) saturate(1.15);
-  color: #a83a5e;
-  font-size: 13px;
+  height: var(--pill-h-sm);
+  padding: 0 12px;
+  color: var(--pill-fg);
+  font-size: 12px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;  /* 进度 3/14 等数字对齐 */
   white-space: nowrap;
-  overflow: hidden;
   user-select: none;
+}
+
+/* 斜切白底 + 浮片阴影（与 `.float-pill::before` 同配方，改一处两处同步） */
+.topbar-status::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: var(--pill-bg);
+  border-radius: var(--pill-radius);
+  transform: skewX(var(--pill-skew));
+  box-shadow: var(--pill-shadow);
 }
 
 .topbar-status-dot {
@@ -377,13 +377,17 @@ html.window-maximized body {
   flex-shrink: 0;
 }
 
-/* 操作成功覆盖态：深玫色点（与胶囊文字同色；浅粉底上粉点看不见） */
+/* 操作成功覆盖态：深玫色点（浮片白底上的成功色，与粉底/浅粉底都不冲突） */
 .topbar-status-dot.ok {
   background: #a83a5e;
 }
 
-/* 胶囊文案变更时的渐隐渐显 */
+/* 胶囊文案变更时的渐隐渐显。
+   省略号落在这里：`.topbar-status` 本体不能 overflow（会裁掉斜切白底）。 */
 .pill-text-fade {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   animation: pill-fade-in 0.3s ease;
 }
 
@@ -414,8 +418,8 @@ html.window-maximized body {
 }
 
 /* 抓取中：加载图标替代脉冲圆点。
-   2026-09-09：状态行改浅粉底后，原设计稿图标 Frame_41_8.svg（白色填充）
-   在浅粉胶囊上等于隐形——换成 lucide Loader2（currentColor 继承深玫色），
+   2026-09-09：状态行改成白底浮片后，原设计稿图标 Frame_41_8.svg（白色填充）
+   在白底上等于隐形——换成 lucide Loader2（currentColor 继承 --pill-fg），
    与顶栏其余图标（LogIn/Minus/Square/X）同族，SVG 资源随之删除。 */
 .topbar-status-spinner {
   width: 14px;
