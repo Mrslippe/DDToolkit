@@ -134,7 +134,7 @@ export default function PostsPage() {
   const [fetching, setFetching] = useState(false)
 
   const [drawerPost, setDrawerPost] = useState<Post | null>(null)
-  // 开关分离：关闭只翻 flag 不清 post——Sheet 保持挂载走 radix 退场动画，
+  // 开关分离：关闭只翻 flag 不清 post——Dialog 保持挂载走 radix 退场动画，
   // 抽屉末帧仍渲染最后一次的帖子（PostDetailDrawer 内部 lastPostRef）
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [confirmDel, setConfirmDel] = useState(false)
