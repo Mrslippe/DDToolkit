@@ -241,7 +241,7 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 | 分类下拉 | `.lc-dlg-cat-pop` | 208px 宽、max-h 340、r12、`--shadow-dialog`；列表 = **自动（跟随推断）** 灰胶囊 + 9 类彩色胶囊（26px 高 r46，`.on` 内描边 2px 深灰）；选后 PUT/DELETE override 并重拉场次+详情；点外部关闭 |
 | 多场切换 | `.lc-dlg-tabs` | 当日多场时显示：HH:MM 胶囊（r106），激活 = `--c-accent` 底白字 |
 | 两栏主体 | `.lc-dlg-main` | grid `264px minmax(0,1fr)` gap 12 |
-| 左封面 | `.lc-dlg-cover` | **264px · aspect-ratio 4/3**（danmakus 封面 720×540=4:3 与 704×396=16:9 混存，4:3 容器 + `object-fit:contain` 双全）；r10 截角；`CoverImage` 三态：直连 CDN（normalizeImageUrl + `referrerPolicy=no-referrer`——裸 img 漏此曾 403）→ `/img-proxy` 后端代理 → 渐变底 + 首字大号占位（64px 粉 55% 透明）；左下状态徽章（已结束=黑玻璃 / 直播中=粉 `rgba(251,119,161,.92)`，r106） |
+| 左封面 | `.lc-dlg-cover` | **264px · aspect-ratio 4/3**（danmakus 封面 720×540=4:3 与 704×396=16:9 混存，4:3 容器 + `object-fit:contain` 双全）；r10 截角；`SmartImage`（`fallback` 槽位）三态：直连 CDN（normalizeImageUrl + `referrerPolicy=no-referrer`——裸 img 漏此曾 403；微博图床 sinaimg/wbcdn 起点即走代理）→ `/img-proxy` 后端代理 → `fallback` 渲染渐变底 + 首字大号占位（64px 粉 55% 透明）；左下状态徽章（已结束=黑玻璃 / 直播中=粉 `rgba(251,119,161,.92)`，r106） |
 | 右直播信息 | `.lc-dlg-sec` + `.lc-dlg-rows` | r10 `#faf7f8` 区卡；行式 label(58px 次级) 左 · value 右；字段：时间（HH:MM–HH:MM + 时长）/ 分区 / 收益 ¥ / 峰值在线 / 弹幕数 / **A 组指标**（观看/点赞/打赏人数/互动/在线排名，来自 danmakus v2 live）/ 段数（>1 显示「N 段合并（中断续播）」）/ 数据源（danmakus+self+feed 组合） |
 | 弹幕信息 | `.lc-dlg-sec--full` | 满宽区卡：弹幕总量（大数 600）+ 完整性提示（`metrics.is_full===false` 时「弹幕数据未全量（部分录制源）」）+ **增量摊铺拼贴词云**（`MosaicCloud`，参考图形态）；无数据=「暂无弹幕数据（danmakus 未收录该场次或拉取失败）」 |
 | └ 词云 | `.lc-dlg-cloud` + svg | 高 **210px·宽度自适应**（ResizeObserver 实测内容区宽，user 2026-09-07：池子宽度不对→实测）；**增量摊铺加权 Voronoi 拼贴**（2026-09-07 user 定案）：power diagram λ 权重（面积∝词频）+ **力导向站点摊铺**（质量感 collide q=0.2、中心引力、矩形软墙，位置直推无速度积分）+ **逐个入池**（频次降序每 150ms 一个，站点=当前最大空腔）；**容器轮廓圆角**（roundedRectPolygon 16px 圆角边界）；全部入场后 alpha 冷却 → 静止即停 |
@@ -290,7 +290,7 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 | `--pill-fill-pink` / `--pill-fill-coral` | #e35d8b / #e05261 | 粉丝徽章色底（加深版：白字 26px 对比 2.5:1 → 3.4:1，**替代早期 #fb77a1/#fc7079 直接填充**） |
 | `--radius-window` | 4px | L3 窗口圆角 |
 | `--topbar-height` / `--rail-width` / `--sidebar-width` | 40px / 50px / 492px | 三段尺寸 |
-| shadcn `--radius` | 0rem | 全家桶方形化（Button/Select/Dialog/Sheet…）；**例外：`--radius-xl` = +12px**（2026-09-07 二级界面审查 A1）——`rounded-xl` 仅用于 Dialog/AlertDialog/SelectContent 面板，统一 12px 弹窗层 |
+| shadcn `--radius` | 0rem | 全家桶方形化（Button/Select/Dialog…；`sheet`/`toggle`/`toggle-group` 已于 2026-09 P0 清理删除）；**例外：`--radius-xl` = +12px**（2026-09-07 二级界面审查 A1）——`rounded-xl` 仅用于 Dialog/AlertDialog/SelectContent 面板，统一 12px 弹窗层 |
 
 ## C6. 二级界面统一规格（2026-09-07 审查定稿）
 

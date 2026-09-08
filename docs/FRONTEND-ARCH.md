@@ -12,7 +12,7 @@
 |---|---|
 | 需要构建「专属组件库」吗？ | **不需要**——单消费方、已有 shadcn 等价层、缺验证基建 |
 | 需要动代码吗？ | **需要**——四层收敛 + 定点抽取（不是重写、不是换框架） |
-| 工作量 | P0 清理 **0.5 天** · P1 共享件 **1 天** · P2 巨型文件拆分 **2–3 天** · P3 基建 **2 天（可选）** |
+| 工作量 | P0 清理 **0.5 天 ✅ 已落地（净减 334 行）** · P1 共享件 **1 天** · P2 巨型文件拆分 **2–3 天** · P3 基建 **2 天（可选）** |
 | 拿 80% 收益 | **P0 + P1 ≈ 1.5 天**（净减约 400 行、消除 2 处双实现） |
 
 ---
@@ -103,14 +103,17 @@
 
 ## 5. 抽取清单与工时
 
-### P0 · 清理（0.5 天，零风险，纯删除/合并）
+### P0 · 清理（0.5 天，零风险，纯删除/合并）—— ✅ 已落地
 
-| 任务 | 规模 | 工时 | 风险 |
-|---|---|---|---|
-| 删除 `ui/sheet.tsx`、`ui/toggle.tsx`、`ui/toggle-group.tsx` | −272 行 | 0.2h | 无（零引用，`tsc` 验证） |
-| 删除 CSS 死块（`sk-*` / `profile-card-head/title/sub` / `archive-error` / `w40-90`） | −60 行 | 0.3h | 无 |
-| `CoverImage` → 合并进 `SmartImage`（新增 `shape`/`fallbackChar`/`className` 变体） | ±40 行 | 1h | 低（视觉需比对日历封面） |
-| 补 `.gitattributes`（`* text=auto eol=lf`） | +3 行 | 0.1h | 无 |
+> 落地提交：`a3a757c`（代码）· `dd908ea`（.gitattributes + 本文档）· `474c86a`（UI-MAP/TODO 同步）
+> 实测：净减 **334 行**（7 文件，+40/−374）；`tsc --noEmit` 与 `vite build` 均通过；全仓 0 残留引用。
+
+| 任务 | 规模 | 工时 | 风险 | 状态 |
+|---|---|---|---|---|
+| 删除 `ui/sheet.tsx`、`ui/toggle.tsx`、`ui/toggle-group.tsx` | −272 行 | 0.2h | 无（零引用，`tsc` 验证） | ✅ |
+| 删除 CSS 死块（`sk-*` / `profile-card-head/title/sub` / `archive-error` / `w40-90`） | −60 行 | 0.3h | 无 | ✅ |
+| `CoverImage` → 合并进 `SmartImage`（新增 `fallback`/`fallbackClassName` 槽位，顺带补微博直连代理分支） | ±40 行 | 1h | 低（视觉需比对日历封面） | ✅ |
+| 补 `.gitattributes`（`* text=auto eol=lf`） | +29 行 | 0.1h | 无 | ✅ |
 
 ### P1 · 共享复合件（1 天）
 
