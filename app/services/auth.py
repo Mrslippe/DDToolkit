@@ -36,6 +36,43 @@ _ATTR_MAP = {
 }
 
 
+def _pick_cookie(container, name: str) -> str | None:
+    """从 httpx cookie 容器（Cookies / CookieJar）取指定名的值，同名多域时不抛异常。
+
+    扫码回调会在 `.bilibili.com` 与 `passport.biligame.com` 等多处各写一份
+    SESSDATA/bili_jct；httpx 的 `Cookies.get(name)` 此时抛 CookieConflict
+    （"Multiple cookies exist with name=SESSDATA"，2026-09-08 用户实机报错），
+    必须按域优先级手挑——api.bilibili.com 认的是 `.bilibili.com` 那一份。
+    （微博侧同类问题见 weibo_auth 的同名 SUB 去重注释。）
+    """
+    try:
+        val = container.get(name)
+        if val:
+            return val
+    except Exception:
+        pass  # CookieConflict / response 未绑定 request 等，走下面的遍历
+    best: tuple[int, str] | None = None
+    try:
+        jar = getattr(container, "jar", container)
+        for c in jar:
+            if c.name != name or not c.value:
+                continue
+            dom = (c.domain or "").lstrip(".").lower()
+            if dom == "bilibili.com":
+                score = 3
+            elif dom.endswith("bilibili.com"):
+                score = 2
+            elif dom:
+                score = 1
+            else:
+                score = 0
+            if best is None or score > best[0]:
+                best = (score, c.value)
+    except Exception:
+        return None
+    return best[1] if best else None
+
+
 def _cookies_from_url(url: str) -> dict[str, str]:
     """从回调 URL 查询串提取凭据。
 
@@ -125,20 +162,17 @@ class BilibiliAuth:
         """从响应中提取 cookie：先试 httpx cookie jar，再试原始 Set-Cookie 头"""
         extracted: dict[str, str] = {}
 
-        # 方式 1: httpx.Cookies
-        for name in ("SESSDATA", "bili_jct", "DedeUserID", "bvuid3"):
-            try:
-                val = response.cookies.get(name)
-            except Exception:
-                val = None  # 极端情况下 response 未绑定 request，退化为只看原始头
+        # 方式 1: httpx.Cookies（同名多域时按域优先级挑，不抛 CookieConflict）
+        for name in _ATTR_MAP:
+            val = _pick_cookie(response.cookies, name)
             if val:
                 extracted[name] = val
 
-        # 方式 2: 原始 Set-Cookie 头（兜底，有些响应 httpx 解析不全）
-        set_cookie_header = response.headers.get("set-cookie", "")
-        if set_cookie_header:
-            for part in set_cookie_header.split(","):
-                for name in ("SESSDATA", "bili_jct", "DedeUserID", "bvuid3"):
+        # 方式 2: 原始 Set-Cookie 头（兜底，有些响应 httpx 解析不全；
+        #         多值需用 get_list，否则只看得到第一条）
+        for header in response.headers.get_list("set-cookie"):
+            for part in header.split(","):
+                for name in _ATTR_MAP:
                     if name not in extracted:
                         m = re.search(rf"{name}=([^;,]+)", part)
                         if m:
@@ -162,7 +196,7 @@ class BilibiliAuth:
                     merged.setdefault(key, val)
         if jar is not None:
             for name in _ATTR_MAP:
-                val = jar.get(name)
+                val = _pick_cookie(jar, name)
                 if val and name not in merged:
                     merged[name] = val
         return merged
@@ -363,8 +397,7 @@ class BilibiliLoginSession:
             # 没有回调地址就拿不到凭据，直接失败，别让 nav 去撞 -101。
             logger.warning("扫码回调地址为空，无法获取登录凭据")
             return False, "未能获取到登录凭据，请重新扫码"
-        # ① 先取回调 URL 查询串里的凭据（crossDomain 跨域传递，最稳的一路）
-        auth._apply_cookies(_cookies_from_url(callback_url))
+        # ① 访问回调 URL（重定向链会下发 Set-Cookie，同时种进客户端 jar）
         try:
             poll_resp = await self.client.get(
                 callback_url,
@@ -374,8 +407,11 @@ class BilibiliLoginSession:
         except Exception as e:
             logger.warning(f"访问回调 URL 失败: {e}")
 
-        # ② 再从整条重定向链 + 客户端 cookie jar 补取（覆盖上面的兜底值）
+        # ② 整条重定向链 + 客户端 cookie jar 补取（同名多域按域优先级挑）
         auth._update_from_response(poll_resp, jar=self.client.cookies)
+
+        # ③ 回调 URL 查询串里的凭据是 crossDomain 的权威值，最后覆盖（最稳的一路）
+        auth._apply_cookies(_cookies_from_url(callback_url))
 
         rt = poll_data.get("data", {}).get("refresh_token")
         if rt:

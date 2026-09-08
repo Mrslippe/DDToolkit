@@ -60,6 +60,12 @@ def _portable(work: Path) -> Path:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--with-main", action="store_true", help="同时复制裸主程序 ddtoolkit.exe 到输出目录")
+    ap.add_argument(
+        "--portable-only",
+        action="store_true",
+        help="只重建便携 zip（跳过安装包复制）——后端改动后的快速验证用，"
+             "安装包仍由 npm run tauri:build 产出",
+    )
     args = ap.parse_args()
 
     if OUT_DIR.exists():
@@ -75,14 +81,16 @@ def main() -> None:
 
     # NSIS 安装包（tauri build 产物）
     nsis_dir = RELEASE / "bundle" / "nsis"
-    setups = sorted(nsis_dir.glob("*.exe")) if nsis_dir.exists() else []
+    setups = sorted(nsis_dir.glob("*.exe")) if nsis_dir.exists() and not args.portable_only else []
     if setups:
         for s in setups:
             dst = OUT_DIR / s.name
             shutil.copy2(s, dst)
             print(f"[release] 安装包 -> {dst.name}  ({dst.stat().st_size / 1024 / 1024:.1f} MB)")
-    else:
+    elif not args.portable_only:
         print(f"[release] WARN: 未找到 NSIS 安装包（{nsis_dir}），跳过")
+    else:
+        print("[release] --portable-only：跳过安装包（旧安装包可能不含本次后端改动）")
 
     # 裸主程序（可选）
     if args.with_main:

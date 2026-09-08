@@ -90,7 +90,25 @@ def test_rate_limit_clear_resets_context():
 # ── P3：版本号 ────────────────────────────────────────────────────────
 
 def test_version_synced_with_devlog():
-    assert settings.VERSION == "0.8.0"
+    """版本号跨文件一致（docs/RELEASE.md §2 的同步点）。
+
+    历史教训：这里曾写死 "0.8.0"，0.9.1 发布时忘了改 → 测试长期红着没人跑。
+    改为比对真实文件，任何一处漏改都会在这里立刻炸。
+    """
+    import json
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    tauri = json.loads((root / "frontend/src-tauri/tauri.conf.json").read_text(encoding="utf-8"))
+    pkg = json.loads((root / "frontend/package.json").read_text(encoding="utf-8"))
+    cargo = (root / "frontend/src-tauri/Cargo.toml").read_text(encoding="utf-8")
+    m = re.search(r'^version\s*=\s*"([^"]+)"', cargo, re.M)
+    assert m, "Cargo.toml 未找到 version"
+    assert settings.VERSION == tauri["version"] == pkg["version"] == m.group(1), (
+        f"版本号不一致：config={settings.VERSION} tauri={tauri['version']} "
+        f"package={pkg['version']} cargo={m.group(1)}"
+    )
 
 
 # ── P4：动态类型映射 ──────────────────────────────────────────────────

@@ -406,3 +406,116 @@ def test_unwrap_jsonp():
     assert b is not None and b["retcode"] == 1
     assert wam._unwrap_jsonp("") is None
     assert wam._unwrap_jsonp("not json") is None
+
+
+# ── B 站扫码会话（真机响应结构回归，2026-09-08） ────────────────────────
+
+def _bili_handler(poll_payload, callback=None, nav=None):
+    def handler(request):
+        u = str(request.url)
+        if "/qrcode/generate" in u:
+            return httpx.Response(200, json={
+                "code": 0, "message": "OK",
+                "data": {"url": "https://account.bilibili.com/h5/scan-web?x=1",
+                         "qrcode_key": "K1"},
+            })
+        if "/qrcode/poll" in u:
+            return httpx.Response(200, json=poll_payload)
+        if "crossDomain" in u:
+            return callback or httpx.Response(200, text="ok")
+        if "/nav" in u:
+            return nav or httpx.Response(200, json={
+                "code": 0, "message": "0",
+                "data": {"isLogin": True, "mid": 1062902765, "uname": "测试号"},
+            })
+        return httpx.Response(404, text="not found")
+    return handler
+
+
+def _bili_session(handler):
+    from app.services.auth import BilibiliLoginSession, auth_manager
+    sess = BilibiliLoginSession(auth_manager)
+    sess.client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return sess
+
+
+def test_bili_poll_reads_inner_data_code():
+    """回归（2026-09-08 实机）：扫码状态在 data.code，外层 code 恒为 0。
+
+    旧实现读外层 code → 每次轮询都判成「已确认」→ complete() 拿到空 data.url
+    → 取不到凭据 → nav -101，用户看到「刷新二维码后立刻失效 / 确认了没反应」。
+    """
+    cases = [(86101, "waiting"), (86090, "scanned"), (0, "confirmed"), (86038, "expired")]
+    for inner, expect in cases:
+        sess = _bili_session(_bili_handler({
+            "code": 0, "message": "OK",
+            "data": {"url": "", "refresh_token": "", "timestamp": 0,
+                     "code": inner, "message": "x"},
+        }))
+        sess.qrcode_key = "K1"
+        status, _ = asyncio.run(sess.poll())
+        asyncio.run(sess.close())
+        assert status == expect, f"data.code={inner} 应判为 {expect}，实得 {status}"
+
+
+def test_bili_poll_falls_back_to_outer_code():
+    """异常/老结构（无 data）时退回外层 code。"""
+    sess = _bili_session(_bili_handler({"code": 86038, "message": "二维码已失效"}))
+    sess.qrcode_key = "K1"
+    status, _ = asyncio.run(sess.poll())
+    asyncio.run(sess.close())
+    assert status == "expired"
+
+
+def test_bili_pick_cookie_handles_duplicate_names():
+    """回归：回调会在多域各写一份 SESSDATA → httpx `Cookies.get` 抛 CookieConflict
+    （用户实机报错「Multiple cookies exist with name=SESSDATA」）。按域挑 .bilibili.com。"""
+    from app.services.auth import BilibiliAuth, _pick_cookie
+
+    jar = httpx.Cookies()
+    jar.set("SESSDATA", "BILIGAME", domain="passport.biligame.com", path="/")
+    jar.set("SESSDATA", "BILI", domain=".bilibili.com", path="/")
+    assert _pick_cookie(jar, "SESSDATA") == "BILI"
+
+    resp = httpx.Response(200, headers=[
+        ("set-cookie", "SESSDATA=BILIGAME; Domain=passport.biligame.com; Path=/"),
+        ("set-cookie", "SESSDATA=BILI; Domain=.bilibili.com; Path=/"),
+    ], request=httpx.Request("GET", "https://passport.bilibili.com/x"))
+    extracted = BilibiliAuth()._parse_set_cookie(resp)
+    assert extracted["SESSDATA"] == "BILI"
+
+
+def test_bili_complete_uses_callback_url_credentials(monkeypatch):
+    """确认后：回调 URL 查询串（crossDomain 权威值）→ nav 校验 → 落盘。"""
+    from app.services import auth as am
+    from app.services.auth import BilibiliAuth
+
+    saved: dict = {}
+    monkeypatch.setattr(am, "save_env_keys", lambda values: saved.update(values))
+
+    cb = ("https://passport.biligame.com/crossDomain?DedeUserID=1062902765"
+          "&SESSDATA=deadbeef%2C1789000000%2Cabc&bili_jct=JCT123"
+          "&gourl=https%3A%2F%2Fwww.bilibili.com")
+    sess = _bili_session(_bili_handler(None))
+    sess.auth = BilibiliAuth()
+    sess.auth.sessdata = sess.auth.bili_jct = sess.auth.dede_user_id = ""
+
+    ok, detail = asyncio.run(sess.complete({"data": {"url": cb, "refresh_token": "RT1"}}))
+    asyncio.run(sess.close())
+
+    assert ok is True and detail == "1062902765"
+    assert sess.auth.sessdata == "deadbeef,1789000000,abc"
+    assert sess.auth.bili_jct == "JCT123"
+    assert sess.auth.dede_user_id == "1062902765"
+    assert sess.auth.refresh_token == "RT1"
+    assert saved.get("BILI_SESSDATA") == "deadbeef,1789000000,abc"
+
+
+def test_bili_complete_rejects_empty_callback():
+    """空回调地址必须直接失败（旧行为会空跑 nav 撞 -101，报错还看不出原因）。"""
+    from app.services.auth import BilibiliAuth, BilibiliLoginSession
+
+    sess = BilibiliLoginSession(BilibiliAuth())
+    ok, detail = asyncio.run(sess.complete({"data": {"url": ""}}))
+    assert ok is False
+    assert "重新扫码" in detail

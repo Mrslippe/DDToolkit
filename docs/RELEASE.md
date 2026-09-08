@@ -50,6 +50,10 @@ foreach ($f in @(
 
 ## 3. 构建产物（三步，产物统一 `dist-release/`）
 
+> 💡 **大多数改动不用走这一步**：后端/登录/首启类改动用
+> `python scripts/dev_check.py`（约 20 秒）就能验完，详见 `docs/DEV-LOOP.md`。
+> 只有动到 Rust 壳 / `tauri.conf.json` / 需要确认安装包布局时才必须整包重建。
+
 ```powershell
 cd frontend
 npm run release
