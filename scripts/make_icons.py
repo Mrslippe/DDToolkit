@@ -1,8 +1,9 @@
 """从用户设计 LOGO 生成桌面端图标（窗口 / 任务栏 / 安装包 / 商店资源）。
 
 源（用户设计，`docs/design/`）：
-- `svg/LOGO.svg`  矢量源（唯一真源；前端顶栏/启动幕内联同一路径）
-- `png/NGNlogo无底.png` 早期栅格导出（白描边 + 透明底），保留备查，本脚本不再使用
+- `svg/LOGO.svg`  矢量主稿（唯一真源；前端顶栏/启动幕内联同一路径）
+- `svg/LOGO-small.svg` / `png/LOGO-small.png`  **可选的小尺寸专用稿**（见下）
+- `png/NGNlogo无底.png` 早期栅格导出，保留备查，本脚本不再使用
 
 输出：`frontend/src-tauri/icons/`
 - 品牌粉圆角底 + 白色猫脸；`icon.ico`（11 层）、`icon.png`(512)、32/64/128/128@2x、
@@ -33,6 +34,25 @@
 `NGNlogo无底.png` 栅格导出后等比拉伸的，描边只有约 4.4%，比设计稿细两成。
 本脚本统一按设计稿渲染 —— 应用图标与顶栏/启动幕里的 LOGO 因此同粗细。
 
+小尺寸专用稿（可选，用户自绘）
+------------------------------
+主稿是线稿，缩到 ≤32px 时「X 眼 + 5 根胡须」物理上撑不住（一根胡须在 24px 下
+只有 2.2px 长、1.1px 宽），程序化的按尺寸补偿只能把它们放大成点，**丢掉细节是
+几何限制、不是渲染方法问题**。想让小尺寸保住角色辨识度，正解是**单独画一版
+小尺寸稿**（各家平台图标规范都是这么要求的：大图追求细节、小图追求识别）。
+
+脚本的接入约定 —— 存在下面任一文件即自动启用，**≤48px 全部改用它**（≥64px 仍用主稿）：
+
+| 文件 | 说明 |
+|---|---|
+| `docs/design/svg/LOGO-small.svg`（优先） | 只描边；`stroke-width` **原样使用**（即「你在 48px 下想要的粗细」，脚本不再按尺寸补偿）；视觉外接框（含描边）等比缩放到图标高的 60% 居中；建议画在 48×48 网格上，只保留头部轮廓 + 耳朵 + 两个圆点眼 + 每侧 1–2 根短胡须；颜色无所谓（统一填白），只要路径形状 |
+| `docs/design/png/LOGO-small.png` | 透明底白描边；按 alpha 包围盒裁剪后等比缩放到图标高 60%（不做描边补偿，请自行按 48px 观感绘制） |
+
+> 为什么推荐 SVG 而不是 PNG：脚本要按 16/20/24/28/32/40/48 逐个尺寸栅格化，
+> 矢量稿能给出每个尺寸的干净像素；PNG 只能再重采样一次，等于把「任务栏糊」
+> 的老问题换个地方复发。若你更想逐尺寸手工点像素（16px 单独描一遍），
+> 把 PNG 按尺寸命名（如 `LOGO-small-16.png`）告诉我，我再加多档覆盖。
+
 用法: python scripts/make_icons.py [--verify]
       --verify 额外打印 16/24/32/48 层的 ASCII 预览（无图形界面时自检用）
 """
@@ -42,23 +62,24 @@ import io
 import re
 import struct
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).resolve().parent.parent
 SVG = ROOT / "docs" / "design" / "svg" / "LOGO.svg"
+SMALL_SVG = ROOT / "docs" / "design" / "svg" / "LOGO-small.svg"
+SMALL_PNG = ROOT / "docs" / "design" / "png" / "LOGO-small.png"
 OUT = ROOT / "frontend" / "src-tauri" / "icons"
 
 BG = (255, 162, 180, 255)      # 品牌粉 --c-primary #ffa2b4
 FG = (255, 255, 255, 255)
 RADIUS_RATIO = 0.22            # 圆角半径 / 边长（旧图标观感）
 LOGO_H_RATIO = 0.60            # LOGO 视觉外接框高 / 边长（旧图标观感）
-DESIGN_STROKE = 7.5            # 设计稿 stroke-width（viewBox 单位）
+DESIGN_STROKE = 7.5            # 主稿 stroke-width 兜底值（优先读 SVG 属性）
+SMALL_MAX = 48                 # ≤ 该尺寸可用小尺寸专用稿
 MAX_CANVAS = 2048              # 超采样画布上限（1024 图标用 2× 即可）
-
-# 子路径下标（见 LOGO.svg 的 d）：0=头部轮廓，1/2=右眼（X 两笔），
-# 3/4/5=右胡须，6/7=左眼，8/9=左胡须。简化版只保留 0 + 两个圆点眼。
 
 # ICO 层顺序：首项 = Tauri 的 default_window_icon → tao 设为 ICON_SMALL
 # → Win11 任务栏图标就是它。48px 简化加粗版缩到 24/36px 后描边仍 ≥1.4px。
@@ -84,14 +105,19 @@ PNGS = {
 
 
 # ── 路径解析（矢量 → 折线，只认绝对坐标 M/L/C）────────────────────────
-def _load_d() -> str:
-    m = re.search(r'\sd="([^"]+)"', SVG.read_text(encoding="utf-8"))
+def _load_d(path: Path) -> str:
+    m = re.search(r'\sd="([^"]+)"', path.read_text(encoding="utf-8"))
     if not m:
-        raise SystemExit(f"未在 {SVG} 找到 path d 属性")
+        raise SystemExit(f"未在 {path} 找到 path d 属性")
     return m.group(1)
 
 
-def _flatten(d: str, curve_steps: int = 24) -> list[list[tuple[float, float]]]:
+def _load_stroke(path: Path) -> float:
+    m = re.search(r'stroke-width="([\d.]+)"', path.read_text(encoding="utf-8"))
+    return float(m.group(1)) if m else DESIGN_STROKE
+
+
+def _flatten(d: str, curve_steps: int = 24) -> tuple[tuple[tuple[float, float], ...], ...]:
     tokens = re.findall(r"[MLCmlcZz]|-?\d*\.?\d+(?:e-?\d+)?", d)
     subs: list[list[tuple[float, float]]] = []
     cur: list[tuple[float, float]] = []
@@ -129,59 +155,83 @@ def _flatten(d: str, curve_steps: int = 24) -> list[list[tuple[float, float]]]:
             raise SystemExit(f"不支持的路径指令: {cmd}")
     if cur:
         subs.append(cur)
-    return subs
+    return tuple(tuple(s) for s in subs)
 
 
-SUBS = _flatten(_load_d())
-if len(SUBS) != 10:
-    raise SystemExit(f"LOGO.svg 子路径数变了（{len(SUBS)}），请复核简化版下标假设")
+@dataclass(frozen=True)
+class Art:
+    """一份矢量稿（折线化后）的几何信息 + 渲染参数。"""
+    name: str
+    subs: tuple
+    stroke: float          # 该稿的 stroke-width（主稿按尺寸补偿，小稿原样用）
+    w: float
+    h: float
+    cx: float
+    cy: float
+    eyes: tuple = ()       # 简化版的圆点眼（仅主稿有意义）
 
-_XS = [p[0] for sub in SUBS for p in sub]
-_YS = [p[1] for sub in SUBS for p in sub]
-PATH_W = max(_XS) - min(_XS)
-PATH_H = max(_YS) - min(_YS)
-PATH_CX = (max(_XS) + min(_XS)) / 2
-PATH_CY = (max(_YS) + min(_YS)) / 2
+    @classmethod
+    def load(cls, path: Path, name: str) -> "Art":
+        subs = _flatten(_load_d(path))
+        xs = [p[0] for s in subs for p in s]
+        ys = [p[1] for s in subs for p in s]
+        eyes: tuple = ()
+        # 主稿布局：0=头部轮廓，1/2=右眼 X 两笔，6/7=左眼 X 两笔
+        if len(subs) == 10:
+            c = [(sum(p[0] for p in subs[i]) / len(subs[i]),
+                  sum(p[1] for p in subs[i]) / len(subs[i])) for i in (1, 2, 6, 7)]
+            eyes = (((c[0][0] + c[1][0]) / 2, (c[0][1] + c[1][1]) / 2),
+                    ((c[2][0] + c[3][0]) / 2, (c[2][1] + c[3][1]) / 2))
+        return cls(
+            name=name, subs=subs, stroke=_load_stroke(path),
+            w=max(xs) - min(xs), h=max(ys) - min(ys),
+            cx=(max(xs) + min(xs)) / 2, cy=(max(ys) + min(ys)) / 2,
+            eyes=eyes,
+        )
 
-# 眼球中心（简化版的圆点眼）：左右眼各由两笔 X 组成，取四笔中点
-_EYE_PTS = [(sum(p[0] for p in SUBS[i]) / len(SUBS[i]),
-             sum(p[1] for p in SUBS[i]) / len(SUBS[i])) for i in (1, 2, 6, 7)]
-EYES = [((_EYE_PTS[0][0] + _EYE_PTS[1][0]) / 2, (_EYE_PTS[0][1] + _EYE_PTS[1][1]) / 2),
-        ((_EYE_PTS[2][0] + _EYE_PTS[3][0]) / 2, (_EYE_PTS[2][1] + _EYE_PTS[3][1]) / 2)]
+
+LOGO = Art.load(SVG, "LOGO.svg")
+# 小尺寸专用稿（可选）：SVG 优先，PNG 兜底；都没有则用主稿的简化版
+SMALL_ART = Art.load(SMALL_SVG, "LOGO-small.svg") if SMALL_SVG.exists() else None
+SMALL_RASTER = SMALL_PNG if (SMALL_ART is None and SMALL_PNG.exists()) else None
 
 
 # ── 渲染 ──────────────────────────────────────────────────────────────
 def _stroke_for(size: int, target_px: float) -> float:
-    """反解 stroke-width：让渲染后的描边像素宽 ≈ target_px（下限取设计值）。"""
+    """主稿：反解 stroke-width，让渲染后的描边像素宽 ≈ target_px（下限取设计值）。"""
     denom = LOGO_H_RATIO * size - target_px
     if denom <= 0:
-        return DESIGN_STROKE
-    return max(DESIGN_STROKE, target_px * (PATH_H + DESIGN_STROKE) / denom)
+        return LOGO.stroke
+    return max(LOGO.stroke, target_px * (LOGO.h + LOGO.stroke) / denom)
 
 
 def layer_params(size: int) -> tuple[bool, float]:
-    """(是否简化版, stroke-width)。≤48px 用简化加粗版，≥64px 按设计稿。"""
-    if size <= 48:
+    """(是否简化版, stroke-width)——仅描述主稿路径；小稿存在时另有分支。"""
+    if size <= SMALL_MAX:
         return True, _stroke_for(size, max(1.0, 0.058 * size))
-    return False, DESIGN_STROKE
+    return False, LOGO.stroke
 
 
-def _logo_layer(size: int, stroke_svg: float, simple: bool) -> Image.Image:
-    """白猫栅格层：视觉外接框高 = LOGO_H_RATIO*size，居中（超采样后缩回）。"""
-    ss = max(1, min(8, MAX_CANVAS // size))
+def _supersample(size: int) -> int:
+    return max(1, min(8, MAX_CANVAS // size))
+
+
+def _vector_layer(size: int, art: Art, stroke_svg: float, simple: bool) -> Image.Image:
+    """按矢量稿栅格化白猫层（超采样后缩回）。simple=只画头部轮廓 + 圆点眼。"""
+    ss = _supersample(size)
     n = size * ss
     img = Image.new("RGBA", (n, n), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
-    scale = LOGO_H_RATIO * n / (PATH_H + stroke_svg)
+    scale = LOGO_H_RATIO * n / (art.h + stroke_svg)
     w_px = max(1, round(stroke_svg * scale))
     r = stroke_svg * scale / 2
     cx = cy = n / 2
 
     def tx(p: tuple[float, float]) -> tuple[float, float]:
-        return (cx + (p[0] - PATH_CX) * scale, cy + (p[1] - PATH_CY) * scale)
+        return (cx + (p[0] - art.cx) * scale, cy + (p[1] - art.cy) * scale)
 
-    for idx, sub in enumerate(SUBS):
+    for idx, sub in enumerate(art.subs):
         if simple and idx != 0:          # 简化版只画头部轮廓
             continue
         pts = [tx(p) for p in sub]
@@ -191,23 +241,48 @@ def _logo_layer(size: int, stroke_svg: float, simple: bool) -> Image.Image:
         for px_, py_ in pts:
             draw.ellipse([px_ - r, py_ - r, px_ + r, py_ + r], fill=FG)
 
-    if simple:
+    if simple and art.eyes:
         eye_r = stroke_svg * 0.55 * scale
-        for ex, ey in EYES:
+        for ex, ey in art.eyes:
             px_, py_ = tx((ex, ey))
             draw.ellipse([px_ - eye_r, py_ - eye_r, px_ + eye_r, py_ + eye_r], fill=FG)
 
     return img.resize((size, size), Image.LANCZOS) if ss > 1 else img
 
 
+def _raster_layer(size: int) -> Image.Image:
+    """按 PNG 小稿栅格化（alpha 包围盒裁剪 → 等比缩放到图标高 60% → 居中）。"""
+    src = Image.open(SMALL_RASTER).convert("RGBA")
+    bb = src.getchannel("A").getbbox()
+    if bb:
+        src = src.crop(bb)
+    target_h = max(1, round(size * LOGO_H_RATIO))
+    target_w = max(1, round(target_h * src.width / src.height))
+    layer = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    logo = src.resize((target_w, target_h), Image.LANCZOS)
+    layer.paste(logo, ((size - target_w) // 2, (size - target_h) // 2), logo)
+    return layer
+
+
 def make_icon(size: int) -> Image.Image:
-    """品牌粉圆角底 + 白 LOGO（描边按尺寸补偿）。"""
-    simple, stroke = layer_params(size)
+    """品牌粉圆角底 + 白 LOGO（≤48px 若备了小尺寸稿则用它）。"""
     base = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     ImageDraw.Draw(base).rounded_rectangle(
         (0, 0, size - 1, size - 1), radius=max(2, round(size * RADIUS_RATIO)), fill=BG
     )
-    return Image.alpha_composite(base, _logo_layer(size, stroke, simple))
+
+    if size <= SMALL_MAX:
+        if SMALL_ART is not None:
+            layer = _vector_layer(size, SMALL_ART, SMALL_ART.stroke, simple=False)
+        elif SMALL_RASTER is not None:
+            layer = _raster_layer(size)
+        else:
+            simple, stroke = layer_params(size)
+            layer = _vector_layer(size, LOGO, stroke, simple)
+    else:
+        layer = _vector_layer(size, LOGO, LOGO.stroke, simple=False)
+
+    return Image.alpha_composite(base, layer)
 
 
 # ── 落盘 ──────────────────────────────────────────────────────────────
@@ -267,8 +342,15 @@ def _ascii(size: int) -> None:
 
 def main() -> None:
     if not SVG.exists():
-        raise SystemExit(f"未找到矢量源: {SVG}")
+        raise SystemExit(f"未找到矢量主稿: {SVG}")
     OUT.mkdir(parents=True, exist_ok=True)
+
+    if SMALL_ART is not None:
+        print(f"[icons] 小尺寸专用稿启用（≤{SMALL_MAX}px）: {SMALL_SVG}")
+    elif SMALL_RASTER is not None:
+        print(f"[icons] 小尺寸专用稿启用（≤{SMALL_MAX}px）: {SMALL_PNG}")
+    else:
+        print(f"[icons] 未提供小尺寸稿，≤{SMALL_MAX}px 用主稿简化加粗版")
 
     for name, size in PNGS.items():
         make_icon(size).save(OUT / name, format="PNG", optimize=True)
@@ -277,8 +359,11 @@ def main() -> None:
     _write_ico(OUT / "icon.ico", ICO_SIZES)
     print(f"[icons] icon.ico  目录顺序（首项 = Tauri 窗口图标 → 任务栏）: {ICO_SIZES}")
     for size in ICO_SIZES:
+        if size <= SMALL_MAX and (SMALL_ART is not None or SMALL_RASTER is not None):
+            print(f"         {size:3d}px  小尺寸专用稿")
+            continue
         simple, stroke = layer_params(size)
-        px = stroke * LOGO_H_RATIO * size / (PATH_H + stroke)
+        px = stroke * LOGO_H_RATIO * size / (LOGO.h + stroke)
         print(f"         {size:3d}px  {'简化' if simple else '完整'}  "
               f"stroke-width={stroke:5.2f}  ≈{px:4.2f}px")
 

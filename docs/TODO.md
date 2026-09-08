@@ -169,7 +169,8 @@
 - ✅ **前端架构体检 + P0/P1 收敛**（2026-09，见 `docs/FRONTEND-ARCH.md`）：判定**不需要**独立组件库（单消费方 + 已有 shadcn 层）。
   - P0：删 3 个零引用 ui 件（`sheet`/`toggle`/`toggle-group`，272 行）+ 骨架屏死 CSS 与 `.archive-error`/`.profile-card-head|title|sub`（68 行）；图片三态合并；新增 `.gitattributes` 统一 LF
   - P1：新建 `components/common/` 四个共享件——`ProxyImage`（原 SmartImage + 灯箱第三份状态机并入，补微博直连代理分支）、`FloatPill`（13 处裸类名收口）、`StateBlock`（loading/empty/error 7 处收口）、`StatPill`（含 `PILL_BG` 下沉）；`.lc-nav-btn`/`.lc-nav-pill` 自绘副本删除（−54 行 CSS）
-- ✅ **界面细节六项**（2026-09-09，devlog/043）：任务栏图标清晰度（ICO 首项/按尺寸补偿描边 + `build.rs` 补图标依赖，见上表）、顶栏标题字体统一阿里妈妈方圆体、滚动条「粉只属于指针」+ 指针近右缘亮出、二级弹窗关闭钮改 `focus-visible` 焦点环、单图帖封面与正文图按 URL 去重（查看器不再显示两张）、顶栏状态行**浮片化**（斜切白卡 + `--pill-shadow`，25px/12px/`--pill-fg`；用户复核后由「浅粉底玻璃胶囊」改定）
+- ✅ **界面细节六项**（2026-09-09，devlog/043）：任务栏图标清晰度（ICO 首项/按尺寸补偿描边 + `build.rs` 补图标依赖，见上表）、顶栏标题字体统一阿里妈妈方圆体、滚动条「粉只属于指针」+ 指针近右缘亮出、二级弹窗关闭钮改 `focus-visible` 焦点环、单图帖封面与正文图按 URL 去重（查看器不再显示两张）、顶栏状态行**浮片材质 + 全圆角胶囊**（白底 + `--pill-shadow` + 999px，25px/12px/`--pill-fg`；用户两轮复核后由「浅粉底玻璃胶囊」→「斜切浮片」→ 定稿）
+- ⏸ **小尺寸图标专用稿**（可选，用户自绘）：`docs/design/svg/LOGO-small.svg` 或 `png/LOGO-small.png` 放进去即自动接管 ≤48px 层（接口已就绪，规格见 `scripts/make_icons.py` 头注释）——主稿线稿缩到 ≤32px 时 X 眼/胡须物理上撑不住
 
 ## Backlog（近期接口/体验，无明确排期）
 
