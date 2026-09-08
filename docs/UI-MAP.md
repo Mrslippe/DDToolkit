@@ -33,6 +33,7 @@
 | 窗口本体 | 1440×800 / 无框 / 透明 / L3 自绘圆角 | `--radius-window:4px`（Rust 侧已禁 DWM 阴影与系统圆角，只前端一套弧线） |
 | 最大化 | `html.window-maximized` 类 | 壳层圆角归零（App.tsx `useMaximizedClass` 监听 `onResized`） |
 | 应用图标 | `scripts/make_icons.py` → `frontend/src-tauri/icons/` | **2026-09-09 重做（任务栏图标模糊）**：矢量源 `docs/design/svg/LOGO.svg`；`icon.ico` **目录首项 = 48px 简化加粗版**（tauri-codegen 取 `entries()[0]` 当 `default_window_icon` → tao 设为 `ICON_SMALL` → Win11 任务栏就是它；旧文件首项是 16×16，被放大到 24/36px 才糊）；≥64px 按设计稿 stroke 7.5，≤48px 简化（仅头部轮廓 + 圆点眼）并按尺寸补偿描边；详见 `scripts/make_icons.py` 头注释 |
+| 图标改动的构建依赖 | `src-tauri/build.rs` | **必读**：图标由 tauri-build 的构建脚本读取（生成 context 的 `default_window_icon` + winres 的 exe 资源），而 tauri-build 只对 config/resources/capabilities/frontendDist 声明 `rerun-if-changed`——**图标不在其中**，只改图标时 cargo 不重跑构建脚本、窗口图标与 exe 资源都保持旧值。故 `build.rs` 显式声明 `icons/icon.ico|icon.png|32x32.png|128x128.png` 四个依赖；改图标后仍建议 `cargo clean -p ddtoolkit` 一次以清掉旧缓存（Windows 图标缓存也需刷新） |
 
 ---
 
@@ -56,10 +57,10 @@
 | LOGO 占位区 | `.topbar-logo-zone` | **72×40** 横跨全高，flex 居中 |
 | LOGO | `.topbar-logo` | **用户设计猫脸**（`docs/design/svg/LOGO.svg`，内联矢量 `common/Logo.tsx`，`currentColor` 白描边）**31×24**（viewBox 167.087×131.01 → 1.2754:1） |
 | 标题 | `.topbar-title` | 定宽 **150×40**，垂直居中/水平左对齐；**15px、字距 5px**（`--font-title` = `--font-family`，2026-09-09 用户要求换成阿里妈妈方圆体，原思源黑体子集已删）；`user-select:none` |
-| 状态行 | `.topbar-status` | 绝对居中；**浅粉底外发光玻璃胶囊**（2026-09-09 用户要求试做）：高 **26px** / r999 / padding `0 13px`、`linear-gradient(180deg, rgba(255,255,255,.74), rgba(255,255,255,.36))` + `border 1px rgba(255,255,255,.62)` + `backdrop-filter: blur(6px) saturate(1.15)`、阴影 = 内高光 + 主色浅投影 + 白晕圈；**13px/500 深玫色 `#a83a5e`**（对胶囊底 ≈4.6:1；原 19px 白字对粉底仅 1.9:1）+ tabular-nums；`max-width:46%` |
-| ├ 抓取中 | `.topbar-status-spinner`（lucide `Loader2` 14px 旋转） | 2026-09-09 换：原设计稿图标 `Frame_41_8.svg` 是白色填充，在浅粉胶囊上等于隐形；lucide 走 `currentColor` 继承深玫色，资源已删 |
+| 状态行 | `.topbar-status` | 绝对居中；**浮片化**（2026-09-09 用户二次定调：第一版浅粉底玻璃胶囊 → 去掉玻璃质感与外发光，改走浮片 + 阴影语言）：本体透明无边框无阴影、`isolation:isolate`，斜切白卡画在 `::before`（`--pill-bg` / `--pill-radius`3px / `skewX(var(--pill-skew))` / `--pill-shadow`，与 `.float-pill::before` 同配方）；高 `--pill-h-sm`(25px) / padding `0 12px` / **12px `--pill-fg`**（白底 ≈8.6:1）+ tabular-nums；`max-width:46%`，**本体不能 overflow**（会裁掉斜切角），超长文案省略号落在内层 `.pill-text-fade` |
+| ├ 抓取中 | `.topbar-status-spinner`（lucide `Loader2` 14px 旋转） | 2026-09-09 换：原设计稿图标 `Frame_41_8.svg` 是白色填充，在浅粉胶囊/白浮片上等于隐形；lucide 走 `currentColor` 继承 `--pill-fg`，资源已删 |
 | ├ 空闲 | i `.topbar-status-dot`（绿 `#52c41a` 7px） | |
-| └ 成功覆盖态 | `.topbar-status-dot.ok`（深玫 `#a83a5e`）| pill-message 覆盖窗，4s 还原；浅粉底上原粉点看不见 |
+| └ 成功覆盖态 | `.topbar-status-dot.ok`（深玫 `#a83a5e`）| pill-message 覆盖窗，4s 还原 |
 | 弹性空隙 | `.topbar-spacer` | 推到右侧 |
 | 窗口控制组 | `.topbar-window-controls` | **三格 46×40 通栏贴合**，无间距无右缘留白 |
 | ├ 最小化 | `.topbar-win-btn`（lucide `Minus` 30px） | 原生 `minimize()` |
