@@ -125,6 +125,10 @@ def _smoke_backend(label: str, cmd: list[str], cwd: Path) -> bool:
         log.close()
         if ok:
             shutil.rmtree(data_dir, ignore_errors=True)   # 通过：不留痕
+            try:
+                data_dir.parent.rmdir()                   # 父目录空了也收掉
+            except OSError:
+                pass
         else:
             print(f"      现场保留：{data_dir}（console.log / logs/sidecar.log）")
 

@@ -44,6 +44,8 @@ frontend/src-tauri/binaries/
 frontend/src-tauri/gen/
 /dist-portable/
 /dist-release/
+# 快速自检（scripts/dev_check.py）的现场目录：通过即删，失败时保留供排查
+/_devcheck_tmp/
 # 非开源分发资产（商用/试用字体原始文件，替换为开源子集后仅本地备份）
 frontend/src/assets/fonts/_nondistribute/
 docs/design/**/_nondistribute/
