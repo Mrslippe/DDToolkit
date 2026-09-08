@@ -298,12 +298,17 @@ export default function TopBar() {
 
   return (
     <header className="topbar" {...(isTauri ? { 'data-tauri-drag-region': true } : {})}>
-      <div className="topbar-logo-zone">
-        <div className="topbar-logo">D</div>
+      {/* Tauri 的拖拽区按**命中元素**判定：只标在 <header> 上时，按到胶囊/标题/
+          空白子元素都不会拖窗（2026-09-08 用户反馈）。故所有非交互子元素各自标注，
+          按钮（登录/窗口控制）保持不标、继续可点。 */}
+      <div className="topbar-logo-zone" {...(isTauri ? { 'data-tauri-drag-region': true } : {})}>
+        <div className="topbar-logo" {...(isTauri ? { 'data-tauri-drag-region': true } : {})}>D</div>
       </div>
-      <h1 className="topbar-title">DDtoolkit</h1>
+      <h1 className="topbar-title" {...(isTauri ? { 'data-tauri-drag-region': true } : {})}>
+        DDtoolkit
+      </h1>
 
-      <span className="topbar-status">
+      <span className="topbar-status" {...(isTauri ? { 'data-tauri-drag-region': true } : {})}>
         {displayDot.includes('busy') ? (
           <img src={spinnerSvg} alt="" className="topbar-status-spinner" />
         ) : (
@@ -314,7 +319,7 @@ export default function TopBar() {
         </span>
       </span>
 
-      <div className="topbar-spacer" />
+      <div className="topbar-spacer" {...(isTauri ? { 'data-tauri-drag-region': true } : {})} />
 
       {/* 登录入口：B 站会话过期时红点徽章提示扫码 */}
       <div className="topbar-login">

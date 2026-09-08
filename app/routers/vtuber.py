@@ -752,6 +752,23 @@ async def _fetch_adopted(vtuber_id: int) -> None:
     await async_fetch_vtuber(vtuber_id)
 
 
+async def _backfill_adopted_history(account_id: int) -> None:
+    """收录后回填该账号的第三方历史（粉丝历史 / 直播场次 / 礼物日）。
+
+    2026-09-08（用户）：「历史直播场次与粉丝数来自第三方站点，应在首次添加时
+    同步获取」——此前只在每日定时任务里跑（全量口径），新收录的 V 当天看不到
+    历史数据。这里按 account_id 白名单只回填这一个账号，避免全量扫站。
+    """
+    try:
+        from app.services.externals.runner import run_external_interval
+
+        results = await run_external_interval("daily", account_ids=[account_id])
+        logger.info(f"收录回填 account#{account_id} 完成: "
+                    f"{[r['kind'] for r in results]}")
+    except Exception as e:  # 回填失败不影响收录本身
+        logger.warning(f"收录回填 account#{account_id} 失败: {e}")
+
+
 @router.get("/vtuber/pool/search")
 def search_pool(kw: str, db: Session = Depends(get_db)):
     """候选池检索：本地 csv 索引按 名称关键词/uid前缀 匹配，
@@ -806,6 +823,9 @@ def adopt_vtuber(data: AdoptRequest, background: BackgroundTasks, db: Session = 
 
     # 响应送达后由事件循环执行（BackgroundTasks 原生支持异步回调）
     background.add_task(_fetch_adopted, vtuber.id)
+    # 收录即回填第三方历史（粉丝历史 / 直播场次）——用户口径：历史数据来自
+    # 第三方站点，应在首次添加时同步获取，因此不需要额外的手动入口
+    background.add_task(_backfill_adopted_history, acc.id)
     return VTuberOut.model_validate(vtuber, from_attributes=True)
 
 

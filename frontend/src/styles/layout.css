@@ -6,6 +6,14 @@ body,
   height: 100%;
 }
 
+/* 文档层永不滚动（2026-09-08 用户：窗口右缘出现原生滚动条、宽度随之跳动）。
+   全站滚动一律发生在容器内（OverlayScroll / 原生容器），窗口级滚动条只会
+   带来「出现即挤窄内容 12px」的布局抖动，这里从根上禁掉。 */
+html,
+body {
+  overflow: hidden;
+}
+
 body {
   margin: 0;
   color: var(--c-text-main);

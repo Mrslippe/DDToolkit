@@ -252,31 +252,37 @@ class DanmakusSource(ExternalSource):
     ]
 
     async def run_job(self, kind: str, db: Session,
-                      client: httpx.AsyncClient) -> ExternalJobSummary:
+                      client: httpx.AsyncClient,
+                      account_ids: list[int] | None = None) -> ExternalJobSummary:
         if kind == "vtuber_index":
+            # 索引是整表任务，账号白名单不适用（收录回填只关心场次）
             return await self._sync_vtuber_index(db, client)
         if kind == "live_sessions":
-            return await self._sync_live_sessions(db, client)
+            return await self._sync_live_sessions(db, client, account_ids)
         return ExternalJobSummary(self.name, kind, error=f"未知任务: {kind}")
 
-    def _bili_accounts(self, db: Session) -> list[Account]:
-        return (
-            db.query(Account)
-            .filter(Account.platform == "bilibili",
-                    Account.platform_uid != None,  # noqa: E711
-                    Account.platform_uid != "")
-            .all()
+    def _bili_accounts(self, db: Session,
+                       account_ids: list[int] | None = None) -> list[Account]:
+        q = db.query(Account).filter(
+            Account.platform == "bilibili",
+            Account.platform_uid != None,  # noqa: E711
+            Account.platform_uid != "",
         )
+        if account_ids:
+            q = q.filter(Account.id.in_(account_ids))
+        return q.all()
 
     async def _sync_live_sessions(self, db: Session,
-                                  client: httpx.AsyncClient) -> ExternalJobSummary:
+                                  client: httpx.AsyncClient,
+                                  account_ids: list[int] | None = None) -> ExternalJobSummary:
         """直播场次每日同步（v0.9.x M2）：公开端点全量拉取 → 幂等 upsert。
 
         场次含标题/起止/分区/收益/峰值在线/弹幕数；直播中场次 stopDate=0，
         end_at 由 merged() 用 self 快照补齐（当日即准确）。
+        account_ids：收录新 V 时只回填该账号。
         """
         summary = ExternalJobSummary(self.name, "live_sessions")
-        accounts = self._bili_accounts(db)
+        accounts = self._bili_accounts(db, account_ids)
         for acc in accounts:
             try:
                 payload = await fetch_channel(str(acc.platform_uid), client)

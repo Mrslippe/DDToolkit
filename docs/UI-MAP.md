@@ -80,7 +80,7 @@
 | 选中单元格 | `.icon-rail-btn.active` | **实底 `--c-rail-active-bg:#647489` + 全亮** |
 | 图标 | 顶部组按序：`FileText`(14×18)/`User`(18×20)/`CalendarDays`(20×20)；底部：`RotateCw`(19×19)/`Settings`(22×22) | 视觉尺寸对应设计稿 ×0.63 取整 |
 
-接线语义：**仅「帖子」`FileText` 接线**（`navigate('/')` + 路由高亮：`/` 或 `/vtubers/:id` 均点亮）；其余四枚占位（tooltip「· 开发中」、`opacity` 走统一未选中语言）。
+接线语义：**仅「帖子」`FileText` 接线**（`navigate('/')` + 路由高亮：`/` 或 `/vtubers/:id` 均点亮）。**2026-09-08 用户：其余四枚未接线占位（用户 / 日历 / 刷新 / 设置）已删除**——避免点了没反应的假入口，功能落地时再加回。
 
 ### A3. VTuber 左栏 `<VtuberSidebar>`（components/VtuberSidebar.tsx）
 
@@ -142,12 +142,12 @@
 | 名称 | 类名 | 说明 |
 |---|---|---|
 | 光条 | `.glow-bar` | 443px 白色渐变(`rgba(255,255,255,.68)` 中心)矩形胶囊 |
-| 视图钮 | `.view-btn.on/.off` | 五枚：**档案(`BarChart3`)→`setView('archive')`** / **卡片(`LayoutGrid`)→`setView('cards')`** / **列表(`AlignJustify`)→`setView('list')`** / **档案卡(`Fingerprint`)→`setView('profile')`**（P7 追加）/ 邮件(`Mail`)·占位；on=.8 off=.4，激活跟随 `view` |
+| 视图钮 | `.view-btn.on/.off` | 四枚（**2026-09-08 用户：删除未接线的邮件占位钮**）：**档案(`BarChart3`)→`setView('archive')`** / **卡片(`LayoutGrid`)→`setView('cards')`** / **列表(`AlignJustify`)→`setView('list')`** / **档案卡(`Fingerprint`)→`setView('profile')`**（P7 追加）；on=.8 off=.4，激活跟随 `view` |
 
 **cards 视图（展示页 / 默认）**
 | 名称 | 类名 | 说明 |
 |---|---|---|
-| 滚动层 | `.hero-scroll` | `flex:1;min-height:0;overflow-y:auto` + column 居中，gap 20，padding `0 0 134px`（底部留白 134px；设计稿 70px 侧距被无收缩子元素溢出抵消，故无左右 padding） |
+| 滚动层 | `.hero-scroll` | **OverlayScroll**（2026-09-08 起，原 `overflow-y:auto` 原生条会导致窗口右缘出现滚动条 + 内容宽度跳 12px）：`flex:1;min-height:0`，内层 `.os-scroll` column 居中，gap 20，padding `0 0 134px`（底部留白 134px；设计稿 70px 侧距被无收缩子元素溢出抵消，故无左右 padding） |
 | Hero | `.hero` | column 居中，`width:100%`，padding `23px 15px 0`，gap 10 |
 | 头像 | shadcn Avatar `.hero-avatar` | **179×179**，`filter: drop-shadow(0 0 2px rgba(0,0,0,.98))`；取 `vtuber.avatar`（VTuber 本体，**稳定，不随账号切换变化**），回退所选账号头像 |
 | 直播徽标 | `.live-tag`（内 `i.live-dot` 6px） | **23px 高、8px 圆角**、红边红底胶囊（`live`）/灰边灰字（`off`）+ `live_title`（14px/字距3px）；数据源=本页 `vtuber` 的 bilibili 账号（`account-progress` 增量合并，与左栏同源） |

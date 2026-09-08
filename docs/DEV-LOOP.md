@@ -30,12 +30,36 @@ python scripts/dev_check.py --full      # = --frozen --portable
 
 它做三件事：
 
-1. `pytest tests/` —— 202 个用例的回归网（含 2026-09-08 新增的 B 站扫码回归用例）；
+1. `pytest tests/` —— 207 个用例的回归网（含 2026-09-08 新增的 B 站扫码回归用例）；
 2. **空数据目录**起后端（源码或冻结 exe）→ 验 `/healthz` + 扫码状态机
    （`qr/start` → 连续 `qr/check` 必须停在 `waiting`，防「读错 code 字段」回归）；
 3. 需要时重打便携 zip。
 
 失败时会把现场数据目录打印出来（`console.log` / `logs/sidecar.log`）便于定位。
+
+## 二·五、布局类改动的机器验证（`scripts/ui_probe.py`）
+
+布局问题（原生滚动条、内容出窗、出现滚动条导致宽度跳动）肉眼难复现、打包才暴露。
+2026-09-08 起固化为可复跑的探针：
+
+```powershell
+python scripts/ui_probe.py                          # 1100 / 1280 / 1440 三档宽度
+python scripts/ui_probe.py --width 1100             # 指定宽度
+```
+
+它自动：复制开发数据目录 → 起后端 → 起 Vite → 无头浏览器加载
+`/vtubers/<id>?probe=1`（`frontend/src/dev/probe.ts` 会依次切四个视图并测量），
+断言四组不变量：
+
+| 不变量 | 含义 |
+|---|---|
+| `scrollbarPx == [0,0]` | 文档层永不出现滚动条（窗口级滚动条 = 内容宽度跳 12px 的根源） |
+| 无可见出窗元素 | 没有元素越过窗口左右缘（被 `overflow:hidden` 裁掉的折叠组不算） |
+| 无容器横向溢出 | `overflow-x:auto/scroll` 容器不得 `scrollWidth > clientWidth`（白名单：`.type-chips` 有意横滚） |
+| 无原生滚动条 | 滚动容器统一 OverlayScroll，否则出现/消失会挤动布局 |
+
+⚠️ 需要完整权限（Vite 的 esbuild 与无头浏览器在受限沙箱会失败）；失败时保留
+`_ui_probe_tmp/`（含 DOM dump 与截图用的 profile 目录）供定位。
 
 ## 三、手动复现打包版状态（脚本没覆盖时）
 

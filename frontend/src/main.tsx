@@ -184,3 +184,9 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     <Root />
   </React.StrictMode>,
 )
+
+// 开发态 UI 探针（?probe=1）：布局回归的机器可验证入口，见 src/dev/probe.ts
+// 与 scripts/ui_probe.py。生产构建里 import.meta.env.DEV 为 false → 整段被摇掉。
+if (import.meta.env.DEV && new URLSearchParams(window.location.search).has('probe')) {
+  void import('./dev/probe').then((m) => m.runUiProbe())
+}

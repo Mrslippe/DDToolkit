@@ -1074,12 +1074,19 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
 
   return (
     <div className="live-calendar">
-      {/* 卡片标题（与归档卡标题同规格 16.5px/600）+ 空月提示 */}
+      {/* 卡片标题（与归档卡标题同规格 16.5px/600）+ 数据来源说明 / 空月提示。
+          2026-09-08（用户）：入口「不明确」其实是因为根本没有手动入口——
+          场次在收录该 V 时自动回填、之后每日同步，直播状态随账号抓取更新。 */}
       <div className="lc-title">
         直播日历
-        {!loading && !error && monthStats.length === 0 && (
-          <span className="lc-note">本月暂无直播记录</span>
-        )}
+        <span
+          className="card-src-note"
+          title="直播场次来自第三方索引：收录该 V 时自动回填历史，之后每日同步；直播状态随账号抓取实时更新（无需手动触发）"
+        >
+          {!loading && !error && monthStats.length === 0
+            ? '本月暂无直播记录 · 数据自动同步'
+            : '数据自动同步'}
+        </span>
       </div>
 
       {/* 导航行：左=月份浮片组（点击弹选月浮窗） · 右=当月类型统计胶囊（frame 10_642） */}

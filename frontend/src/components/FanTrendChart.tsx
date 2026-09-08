@@ -465,8 +465,17 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
 
   return (
     <div className="fan-chart">
-      {/* 卡片标题（与直播日历/归档卡同规格 16.5/600/--c-text-main） */}
-      <div className="fc-title">粉丝趋势</div>
+      {/* 卡片标题（与直播日历/归档卡同规格 16.5/600/--c-text-main）+
+          数据来源说明：粉丝数自动记录（账号抓取 + 收录时第三方回填），无手动入口 */}
+      <div className="fc-title">
+        粉丝趋势
+        <span
+          className="card-src-note"
+          title="粉丝数来自每次账号抓取（自动，约 5 分钟一轮）与第三方历史回填（收录该 V 时自动执行），无需手动触发"
+        >
+          数据自动同步
+        </span>
+      </div>
 
       {/* 头部：左=1d/7d/30d 概览 · 右=容量档位按钮 + 窗口回退 */}
       <div className="fan-chart-head">

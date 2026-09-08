@@ -27,8 +27,13 @@ def _source_enabled(source) -> bool:
     )
 
 
-async def run_external_interval(interval: str) -> list[dict]:
-    """执行指定周期（daily/weekly）的全部外部任务，返回每任务摘要。"""
+async def run_external_interval(interval: str,
+                                account_ids: list[int] | None = None) -> list[dict]:
+    """执行指定周期（daily/weekly）的全部外部任务，返回每任务摘要。
+
+    account_ids：可选账号白名单（收录新 V 时只回填该账号，避免为一条新记录
+    全量扫一遍第三方站点）；None = 全部账号（定时任务口径）。
+    """
     results: list[dict] = []
     headers = {"User-Agent": _USER_AGENT}
     async with httpx.AsyncClient(timeout=25.0, headers=headers) as client:
@@ -38,7 +43,7 @@ async def run_external_interval(interval: str) -> list[dict]:
             for job in [j for j in source.jobs if j.interval == interval]:
                 db = SessionLocal()
                 try:
-                    summ = await source.run_job(job.kind, db, client)
+                    summ = await source.run_job(job.kind, db, client, account_ids)
                     results.append({
                         "source": source.name, "kind": job.kind, "label": job.label,
                         "stored": summ.stored, "skipped": summ.skipped,

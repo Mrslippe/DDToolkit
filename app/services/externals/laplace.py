@@ -16,5 +16,6 @@ class LaplaceSource(ExternalSource):
     jobs = []
 
     async def run_job(self, kind: str, db: Session,
-                      client: httpx.AsyncClient) -> ExternalJobSummary:
+                      client: httpx.AsyncClient,
+                      account_ids: list[int] | None = None) -> ExternalJobSummary:
         return ExternalJobSummary(self.name, kind, error="laplace 暂无可用 API")

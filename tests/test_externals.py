@@ -63,6 +63,39 @@ def test_parse_zeroroku_ts():
 
 # ── zeroroku fan_history ────────────────────────────────────────────
 
+def test_fan_history_account_scoped_backfill(db):
+    """收录新 V 时的账号白名单回填：只跑指定账号，不扫全站（2026-09-08）。"""
+    import asyncio
+
+    v = VTuber(name="新收录V")
+    db.add(v)
+    db.flush()
+    new_acc = Account(vtuber_id=v.id, platform="bilibili", platform_uid="999")
+    other = Account(vtuber_id=v.id, platform="bilibili", platform_uid="888")
+    db.add_all([new_acc, other])
+    db.commit()
+
+    src = ZerorokuSource()
+    client = FakeClient({
+        "https://zeroroku.com/api/bilibili/author/999/history": {"items": [
+            {"id": "1", "mid": "999", "fans": 100,
+             "createdAt": "2026-09-04 14:28:37.73199+00"},
+        ]},
+        "https://zeroroku.com/api/bilibili/author/888/history": {"items": [
+            {"id": "2", "mid": "888", "fans": 200,
+             "createdAt": "2026-09-04 14:28:37.73199+00"},
+        ]},
+    })
+
+    async def run():
+        return await src.run_job("fan_history", db, client, account_ids=[new_acc.id])
+
+    s = asyncio.run(run())
+    assert s.stored == 1
+    rows = db.query(AccountStatSnapshot).all()
+    assert [r.account_id for r in rows] == [new_acc.id]   # 只写了白名单账号
+
+
 def test_fan_history_idempotent(db):
     v = VTuber(name="七海Nana7mi")
     db.add(v)

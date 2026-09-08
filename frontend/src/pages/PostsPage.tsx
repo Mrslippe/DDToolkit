@@ -8,7 +8,6 @@ import {
   Fingerprint,
   ImagePlus,
   LayoutGrid,
-  Mail,
   RefreshCw,
   Search,
   Trash2,
@@ -842,9 +841,7 @@ return (
           >
             <Fingerprint className="size-6" />
           </button>
-          <button type="button" className="view-btn off" title="动态视图 · 开发中">
-            <Mail className="size-6" />
-          </button>
+          {/* 2026-09-08（用户）：移除未接线的「动态视图」占位图标——避免点了没反应的假入口 */}
         </div>
       </div>
 
@@ -941,7 +938,7 @@ return (
         )}
 
         {vtuber && scene.view === 'cards' && (
-          <div className="hero-scroll">
+          <OverlayScroll className="hero-scroll">
             {/* Hero：头像 / 直播徽标 / 名字 / 签名 / 平台药丸 / 分隔饰条 / 企划徽标 */}
             <div className="hero">
               <Avatar className="hero-avatar">
@@ -990,7 +987,7 @@ return (
                 </div>
               )}
             </div>
-          </div>
+          </OverlayScroll>
         )}
 
         {vtuber && scene.view === 'archive' && (

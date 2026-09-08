@@ -47,6 +47,11 @@ class ExternalSource(ABC):
 
     @abstractmethod
     async def run_job(self, kind: str, db: Session,
-                      client: httpx.AsyncClient) -> ExternalJobSummary:
-        """执行任务。抛出异常由 runner 捕获（记日志、继续其他源）。"""
+                      client: httpx.AsyncClient,
+                      account_ids: list[int] | None = None) -> ExternalJobSummary:
+        """执行任务。抛出异常由 runner 捕获（记日志、继续其他源）。
+
+        account_ids：可选账号白名单（收录新 V 时只回填该账号，避免全量拉取
+        第三方站点）；None = 全部账号（定时任务口径）。
+        """
         raise NotImplementedError

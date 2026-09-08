@@ -71,26 +71,30 @@ class ZerorokuSource(ExternalSource):
     ]
 
     async def run_job(self, kind: str, db: Session,
-                      client: httpx.AsyncClient) -> ExternalJobSummary:
+                      client: httpx.AsyncClient,
+                      account_ids: list[int] | None = None) -> ExternalJobSummary:
         if kind == "fan_history":
-            return await self._sync_fan_history(db, client)
+            return await self._sync_fan_history(db, client, account_ids)
         if kind == "gift_days":
-            return await self._sync_gift_days(db, client)
+            return await self._sync_gift_days(db, client, account_ids)
         return ExternalJobSummary(self.name, kind, error=f"未知任务: {kind}")
 
-    def _bili_accounts(self, db: Session) -> list[Account]:
-        return (
-            db.query(Account)
-            .filter(Account.platform == "bilibili",
-                    Account.platform_uid != None,  # noqa: E711
-                    Account.platform_uid != "")
-            .all()
+    def _bili_accounts(self, db: Session,
+                       account_ids: list[int] | None = None) -> list[Account]:
+        q = db.query(Account).filter(
+            Account.platform == "bilibili",
+            Account.platform_uid != None,  # noqa: E711
+            Account.platform_uid != "",
         )
+        if account_ids:
+            q = q.filter(Account.id.in_(account_ids))
+        return q.all()
 
     async def _sync_fan_history(self, db: Session,
-                                client: httpx.AsyncClient) -> ExternalJobSummary:
+                                client: httpx.AsyncClient,
+                                account_ids: list[int] | None = None) -> ExternalJobSummary:
         summary = ExternalJobSummary(self.name, "fan_history")
-        accounts = self._bili_accounts(db)
+        accounts = self._bili_accounts(db, account_ids)
         for acc in accounts:
             try:
                 items = await fetch_fan_history(str(acc.platform_uid), client)
@@ -131,9 +135,10 @@ class ZerorokuSource(ExternalSource):
         return summary
 
     async def _sync_gift_days(self, db: Session,
-                              client: httpx.AsyncClient) -> ExternalJobSummary:
+                              client: httpx.AsyncClient,
+                              account_ids: list[int] | None = None) -> ExternalJobSummary:
         summary = ExternalJobSummary(self.name, "gift_days")
-        accounts = self._bili_accounts(db)
+        accounts = self._bili_accounts(db, account_ids)
         for acc in accounts:
             try:
                 payload = await fetch_gift_days(str(acc.platform_uid), client)

@@ -107,11 +107,15 @@
   }
 }
 
-/* 展示页滚动层：底部留白 134px；子元素全宽（设计稿 70px 侧距被无收缩子元素溢出抵消） */
+/* 展示页滚动层：底部留白 134px；子元素全宽（设计稿 70px 侧距被无收缩子元素溢出抵消）。
+   2026-09-08：改用 OverlayScroll（全站滚动条标准）——原 `overflow-y:auto` 是原生
+   滚动容器，窗口右缘会出现 12px 原生滚动条且出现/消失时内容宽度跳动。 */
 .hero-scroll {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
+}
+
+.hero-scroll .os-scroll {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -526,14 +530,22 @@
   font-weight: 600;
 }
 
-/* 类型筛选行：chips + 搜索/时间范围筛选 */
+/* 类型筛选行：chips + 搜索/时间范围筛选。
+   2026-09-08（用户）：窄窗口下右侧工具组（搜索 190 + 时间筛选 + 已删除）本身
+   比容器宽，`flex-wrap: nowrap` 会把整排按钮推出窗口右缘（实测溢出 268px）。
+   改为允许换行：工具组整体掉到第二行，仍然全部可点，不再出窗。 */
 .type-chips-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  /* 搜索栏永不掉行：超宽时由 .type-chips 行内横向滚动兜底 */
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
+  row-gap: 8px;
+}
+
+/* 换行时工具组右对齐（视觉上与 chips 行同轴） */
+.type-chips-row > .chips-tools {
+  margin-left: auto;
 }
 
 /* 筛选行右侧工具：搜索浮片 + 时间筛选（浮片语言，与侧栏工具行一致） */
@@ -1471,7 +1483,11 @@
   background: var(--c-bg-card);
   border-radius: 4px;
   box-shadow: var(--pill-shadow);
-  width: 870px;            /* 定宽上限：拉宽不变（用户参数） */
+  /* 定宽上限 870（用户参数「拉宽不变」）+ 窄窗口自适应：
+     原 `width: 870px` 在窄右栏里横向溢出（实测 534 宽容器 / 722 内容），
+     居中后左右两侧都出血、右侧被窗口切掉（2026-09-08 用户反馈）。
+     box-sizing 由 Tailwind preflight 全局 border-box，padding 已计入。 */
+  width: min(870px, 100%);
   height: 631px;           /* 590 + 41（行高 73.1667→80 × 6 行，user 2026-09-07） */
   padding: 17px 16px 10px;
   gap: 10px;
@@ -1491,13 +1507,7 @@
   flex: none;
 }
 
-/* 空月提示（当月 0 场次）：与归档卡 archive-section-note 同语言 */
-.lc-note {
-  font-size: 12.5px;
-  font-weight: 400;
-  color: var(--c-text-sub);
-  line-height: 1;
-}
+/* 空月提示 / 数据来源说明统一走 .card-src-note（见粉丝趋势卡段；.lc-note 已并入） */
 
 /* ── 导航行（frame 10_615）：左=月份胶囊组 · 右=类型统计胶囊 ── */
 
@@ -1693,10 +1703,13 @@
 }
 
 /* 星期表头（frame 10_660：20px 高，列模板与网格精确同步保证列对齐；
-   文字 = 项目次级色 token，非设计稿 #727272） */
+   文字 = 项目次级色 token，非设计稿 #727272）
+   2026-09-08：列宽由固定 115.714286px 改为 minmax(0,1fr) —— 870 定宽下
+   7×115.714 + 6×4 = 834 与原设计完全一致，窄窗口则随卡片等比收缩，
+   不再溢出窗口（用户反馈：日历右侧被切 / 出现滚动条）。 */
 .lc-weekdays {
   display: grid;
-  grid-template-columns: repeat(7, 115.714286px);
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 4px;
   justify-content: space-between;
   padding: 0 2px;
@@ -1712,14 +1725,15 @@
   color: var(--c-text-sub);
 }
 
-/* 月历网格（7 列 × 115.714286px 精确宽，space-between，4px 间距——v0.9.x 审美对齐：
-   2px 设计稿密度 → 4px 项目呼吸感；列/行高按 870 定宽与 631 卡高重算：
+/* 月历网格（7 列 × minmax(0,1fr)，space-between，4px 间距——v0.9.x 审美对齐：
+   2px 设计稿密度 → 4px 项目呼吸感；870 定宽下列/行与原设计一致：
    列 7×115.714286 + 6×4 = 834 = 内容宽；行 6×80 + 5×4 = 500 = 网格内容高
-   （行高 73.1667→80：user 2026-09-07 两行标题完整显示，卡高 590→631）） */
+   （行高 73.1667→80：user 2026-09-07 两行标题完整显示，卡高 590→631）；
+   2026-09-08：列宽改 minmax(0,1fr) 以支持窄窗口收缩） */
 .lc-grid {
   position: relative;
   display: grid;
-  grid-template-columns: repeat(7, 115.714286px);
+  grid-template-columns: repeat(7, minmax(0, 1fr));
   grid-auto-rows: 80px;
   gap: 4px;
   justify-content: space-between;
@@ -1779,12 +1793,14 @@
   box-shadow: inset 0 0 0 1px rgba(251, 119, 161, 0.8);
 }
 
-/* 格内首行：日期左 + 胶囊右（frame 10_670：row 两端，gap 43px） */
+/* 格内首行：日期左 + 胶囊右（frame 10_670：row 两端；43px 是 870 定宽下的
+   自然间距，窄窗口会把格子挤爆 → 改小最小间距，靠 space-between 撑开，
+   满宽视觉与 43px 等价） */
 .lc-cell-head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 43px;
+  gap: 6px;
   min-height: 16px;
 }
 
@@ -2540,7 +2556,8 @@
   background: var(--c-bg-card);
   border-radius: 4px;
   box-shadow: var(--pill-shadow);
-  width: 870px;
+  /* 同 .live-calendar：870 上限 + 窄窗口自适应（2026-09-08 用户） */
+  width: min(870px, 100%);
   height: 460px;
   padding: 17px 16px 10px;
   gap: 8px;
@@ -2549,11 +2566,28 @@
 
 /* 卡片标题（与直播日历 lc-title 同规格：16.5/600/--c-text-main） */
 .fc-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   font-size: 16.5px;
   font-weight: 600;
   color: var(--c-text-main);
   line-height: 21px;
   flex: none;
+}
+
+/* 卡片数据来源提示（2026-09-08 用户：直播日历 / 粉丝趋势的「抓取入口」不明确）。
+   事实是：两张卡的数据**全部自动获取**（收录该 V 时回填第三方历史 + 定时同步），
+   不需要手动入口——这里只把这件事说清楚，避免用户到处找按钮。 */
+.card-src-note {
+  font-size: 12.5px;
+  font-weight: 400;
+  color: var(--c-text-sub);
+  line-height: 1;
+  white-space: nowrap;
+  cursor: help;
+  border-bottom: 1px dotted var(--c-border);
 }
 
 /* 头部概览行：1d/7d/30d 涨粉 + 回退按钮 */
