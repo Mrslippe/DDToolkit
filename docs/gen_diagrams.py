@@ -167,46 +167,102 @@ def table_box(x, y, w, title, rows, fill, stroke, tcolor, unique_note=None):
 
 
 def d2():
-    body = [text(60, 52, "SQLite 三表数据模型（SQLAlchemy ORM · 平台无关设计）", size=18, fill="#1F3A5F", weight=700)]
-    body.append(text(60, 76, "posts 表刻意不带外键：以 (platform, platform_uid) 与 accounts 逻辑关联，联合投稿视频在每个 VTuber 下各存一份", size=12, fill="#5B6B7C"))
-    tb1, _ = table_box(60, 110, 330, "vtubers — 虚拟主播本体",
-                       ["id · INTEGER 主键 索引", "name · 名字（索引）", "birthday · 生日 MM-DD",
-                        "debut_date · 出道日", "setting · 角色设定 TEXT", "avatar · 默认头像 URL",
-                        "notes · 备注", "created_at · UTC", "updated_at · 自动更新"],
+    body = [text(60, 46, "SQLite 数据模型（9 表 · alembic a001→e007 · 2026-09-09）", size=18, fill="#1F3A5F", weight=700)]
+    body.append(text(60, 72, "posts 刻意不带外键：以 (platform, platform_uid) 与 accounts 逻辑关联，联合投稿视频在每个 VTuber 下各存一份", size=12, fill="#5B6B7C"))
+    body.append(text(60, 92, "accounts 之下的 4 张子表有外键但无 ORM 级联（foreign_keys=ON）——删 V/删账号必须经 app/services/purge.py 显式清理", size=12, fill="#B04747"))
+
+    tb1, _ = table_box(60, 120, 300, "vtubers — 主播本体",
+                       ["id · PK", "name · 名字（索引）", "faction · 阵营", "birthday / debut_date",
+                        "setting · 角色设定", "avatar · 默认头像", "background_path · 自定义背景"],
                        "#EAF2FB", "#2E86C1", "#1B4F8A")
     body.append(tb1)
-    tb2, y2 = table_box(560, 96, 360, "accounts — 各平台账号",
-                        ["id · INTEGER 主键", "vtuber_id · FK→vtubers.id（级联删除）", "platform · 平台名（bilibili…）",
-                         "platform_uid · 平台侧 UID", "display_name · 平台昵称", "avatar_url · CDN 头像",
-                         "avatar_path · 本地缓存路径", "sign · 签名", "url · 主页链接",
-                         "followers_count · 粉丝数", "room_id · 直播间 ID", "live_status · 0 离线 / 1 直播",
-                         "live_title · 直播标题", "live_url · 直播链接", "last_fetched_at · 上次抓取"],
-                        "#EAF7EF", "#27AE60", "#1E6B3C",
-                        unique_note="UNIQUE(platform, platform_uid)")
+    tb2, _ = table_box(60, 330, 300, "vtuber_events — 纪念日/活动",
+                       ["id · PK", "vtuber_id · FK→vtubers.id", "title · 活动名",
+                        "event_date · YYYY-MM-DD"],
+                       "#EAF2FB", "#2E86C1", "#1B4F8A")
     body.append(tb2)
-    tb3, _ = table_box(1050, 96, 300, "posts — 动态 / 投稿",
-                       ["id · INTEGER 主键", "platform · 平台（索引）", "platform_uid · UID（索引）",
-                        "platform_post_id · 帖子 ID", "type · video/image/article/…", "title · 标题",
-                        "summary · 前 200 字", "cover_url · 封面", "permalink · 原始链接",
-                        "body_json · 类型差异数据", "stats_json · 播放/赞/评论", "published_at · 发布时间",
-                        "raw_json · 原始兜底", "is_archived · 归档标记", "created_at · UTC"],
-                        "#F5EEF8", "#8E44AD", "#5B2C6F",
-                        unique_note="UNIQUE(platform, uid, pid)")
+    tb3, _ = table_box(60, 480, 300, "thirdparty_vtubers — 第三方索引",
+                       ["id · PK", "platform / platform_uid", "name / type / room_id",
+                        "group_name · 企划/公会", "source · 来源", "updated_at · 周级刷新"],
+                       "#F5F0FA", "#8E44AD", "#5B2C6F",
+                       unique_note="UNIQUE(source, platform_uid)")
     body.append(tb3)
-    body.append(line(390, 250, 558, 250, marker="arr", color="#2F6FAD", sw=2))
-    body.append(text(474, 240, "1 : N  accounts", size=12, anchor="middle", fill="#2F6FAD", weight=600))
-    body.append(text(474, 272, "cascade=\"all, delete-orphan\"", size=11, anchor="middle", fill="#5B6B7C"))
-    body.append(text(378, 265, "1", size=13, fill="#2F6FAD", weight=700))
-    body.append(text(568, 265, "N", size=13, fill="#2F6FAD", weight=700))
-    body.append(line(920, 270, 1048, 270, marker="arr", color="#8E44AD", sw=2, dash="6 4"))
-    body.append(text(984, 260, "逻辑关联（无 FK）", size=12, anchor="middle", fill="#8E44AD", weight=600))
-    body.append(text(984, 292, "platform + platform_uid 匹配", size=11, anchor="middle", fill="#5B6B7C"))
-    note_y = max(y2, 96 + 40 + 15 * 20 + 28) + 30
-    body.append(rect(60, note_y, 1290, 64, fill="#FDFAF3", stroke="#D0C9B0"))
-    body.append(text(80, note_y + 24, "去重策略：", size=12.5, fill="#7D6608", weight=700))
-    body.append(text(200, note_y + 24, "accounts 按 (platform, platform_uid) 唯一 —— 一个主播在同一平台只有一个账号；", size=12, fill="#4A4A4A"))
-    body.append(text(80, note_y + 46, "posts 按 (platform, platform_uid, platform_post_id) 唯一 —— 同一帖子在单个账号下只存一条；SQLite 改约束需重建表（迁移 c002）。", size=12, fill="#4A4A4A"))
-    save("02_er_diagram.svg", svg(1400, note_y + 90, "".join(body)))
+
+    tb4, _ = table_box(450, 120, 360, "accounts — 各平台账号",
+                       ["id · PK", "vtuber_id · FK→vtubers.id（级联删除）", "platform · bilibili / weibo",
+                        "platform_uid · 平台侧 UID", "display_name / sign / url", "avatar_url / avatar_path",
+                        "followers_count · 粉丝数（覆盖写）", "room_id / live_status / live_title",
+                        "last_fetched_at · 上次抓取", "posts_last_scan_at · 上轮扫描（墓碑）",
+                        "…（昵称/头像/签名/直播共 16 列）"],
+                       "#EAF7EF", "#27AE60", "#1E6B3C",
+                       unique_note="UNIQUE(platform, platform_uid)")
+    body.append(tb4)
+
+    tb5, _ = table_box(450, 560, 360, "posts — 动态 / 投稿 / 专栏 / 转发",
+                       ["id · PK", "platform / platform_uid / pid", "type · video/image/text/repost…",
+                        "title / summary / body_text", "cover_url / permalink", "body_json / stats_json",
+                        "published_at · 发布时间", "raw_json · 原始兜底", "is_archived · 归档",
+                        "last_seen_at · 最近在线", "deleted_detected_at · 墓碑", "created_at"],
+                       "#F5EEF8", "#8E44AD", "#5B2C6F",
+                       unique_note="UNIQUE(platform, uid, pid)")
+    body.append(tb5)
+
+    tb6, _ = table_box(900, 120, 340, "account_stat_snapshots — 统计快照",
+                       ["id · PK", "account_id · FK→accounts.id", "followers_count · 粉丝数",
+                        "live_status / live_title", "captured_at · 抓取时刻", "source · self / zeroroku"],
+                       "#FEF7E7", "#F0B429", "#8A5A0B")
+    body.append(tb6)
+    tb7, _ = table_box(900, 300, 340, "live_sessions — 直播场次",
+                       ["id · PK", "account_id · FK→accounts.id", "live_id · 平台场次 key",
+                        "source · danmakus / feed", "title / room_id / cover_url",
+                        "start_at / end_at · 起止", "total_income · 收益（danmakus）",
+                        "max_online_count / danmakus_count", "raw_json · 原始保真"],
+                       "#EAF7EF", "#27AE60", "#1E6B3C",
+                       unique_note="UNIQUE(account_id, live_id)")
+    body.append(tb7)
+    tb8, _ = table_box(900, 600, 340, "live_gift_days — 礼物日聚合",
+                       ["id · PK", "account_id · FK→accounts.id", "source · zeroroku",
+                        "gift_date · YYYY-MM-DD", "gift / guard / sc / total_amount", "room_id · 房间"],
+                       "#FEF7E7", "#F0B429", "#8A5A0B",
+                       unique_note="UNIQUE(account_id, source, gift_date)")
+    body.append(tb8)
+    tb9, _ = table_box(900, 830, 340, "live_category_overrides — 分类校正",
+                       ["id · PK", "account_id · FK→accounts.id", "live_id · 场次 key",
+                        "category · 9 类之一"],
+                       "#FEF7E7", "#F0B429", "#8A5A0B",
+                       unique_note="UNIQUE(account_id, live_id)")
+    body.append(tb9)
+
+    # vtubers → accounts（级联）
+    body.append(line(360, 210, 446, 210, marker="arr", color="#2F6FAD", sw=2))
+    body.append(text(403, 198, "1 : N", size=12, anchor="middle", fill="#2F6FAD", weight=700))
+    body.append(text(403, 232, "级联删除", size=11, anchor="middle", fill="#5B6B7C"))
+    # vtubers → vtuber_events
+    body.append(line(210, 300, 210, 326, marker="arr", color="#2F6FAD", sw=2))
+    body.append(text(220, 318, "1 : N 外键", size=11, fill="#2F6FAD"))
+    # thirdparty_vtubers ⇢ accounts（候选索引）
+    body.append(path("M 360 560 L 400 560 L 400 452", color="#8E44AD", sw=1.8, dash="6 4", marker="arrG"))
+    body.append(text(404, 512, "候选索引（无 FK）", size=11, fill="#8E44AD"))
+    # accounts → 4 张子表（垂直总线）
+    body.append(line(810, 430, 855, 430, color="#27AE60", sw=2))
+    body.append(line(855, 190, 855, 862, color="#27AE60", sw=2))
+    for yy in (190, 372, 662, 862):
+        body.append(line(855, yy, 896, yy, marker="arrG2", color="#27AE60", sw=2))
+    body.append(text(848, 112, "1 : N 外键（不级联）", size=11.5, anchor="end", fill="#1E6B3C", weight=600))
+    # accounts ⇢ posts（逻辑关联）
+    body.append(line(630, 448, 630, 556, marker="arr", color="#8E44AD", sw=2, dash="6 4"))
+    body.append(text(640, 500, "逻辑关联（无外键）", size=11.5, fill="#8E44AD", weight=600))
+    body.append(text(640, 518, "platform + platform_uid 匹配", size=11, fill="#5B6B7C"))
+
+    # 图例 + 去重策略
+    body.append(rect(60, 960, 1180, 96, fill="#FDFAF3", stroke="#D0C9B0"))
+    body.append(text(80, 986, "去重策略：", size=12.5, fill="#7D6608", weight=700))
+    body.append(text(170, 986, "accounts (platform, platform_uid) · posts (platform, uid, pid) · live_sessions (account_id, live_id)", size=12, fill="#4A4A4A"))
+    body.append(text(80, 1010, "外键语义：", size=12.5, fill="#7D6608", weight=700))
+    body.append(text(170, 1010, "只有 vtubers→accounts 有 ORM 级联；其余 5 条外键不级联（foreign_keys=ON）——删除必须走 app/services/purge.py", size=12, fill="#4A4A4A"))
+    body.append(text(80, 1034, "写入方：", size=12.5, fill="#7D6608", weight=700))
+    body.append(text(170, 1034, "T0/T1/T3a 账号抓取 → accounts + snapshots；帖子抓取 → posts；danmakus/feed → live_sessions；zeroroku → gift_days；前端 → overrides/events", size=12, fill="#4A4A4A"))
+    save("02_er_diagram.svg", svg(1300, 1080, "".join(body)))
 
 
 # ─────────────────────────────────────────────────────────────────────

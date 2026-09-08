@@ -1,34 +1,37 @@
-# 后端抓取链路详解（v0.5.0）
+# 后端抓取链路详解（v0.9.3）
 
 > 覆盖范围：账号信息抓取 + 帖子抓取两条链路的触发入口、任务模型、API 清单、
 > 节流/频率、风控判定与处理策略。代码位置：`app/services/scheduler.py`
 > （调度与循环）、`app/services/fetcher.py`（B 站请求）、
 > `app/services/platforms/{bilibili,weibo}.py`（平台适配）、
 > `app/routers/vtuber.py`（HTTP 入口）。
-> 本文档记录 **2026-09-04 当前实现**，与代码同步维护。
+> 本文档记录 **2026-09-09 当前实现**，与代码同步维护。
+> 总览/数据模型见 `docs/ARCHITECTURE.md`；表结构/仓储/接口见 `docs/backend-repositories-and-routers.md`。
 
 ---
 
 ## 1. 总览：两条链路
 
 ```
-触发源                         锁                循环框架
+触发源                                锁                循环框架
 ─────────────────────────────────────────────────────────────
-APScheduler (5min, jitter30s)  _fetch_lock      async_fetch_and_update   → 逐账号抓信息
-/vtuber/{id}/fetch (手动单V)     _fetch_lock      async_fetch_vtuber
-/vtuber/adopt (后台)             _fetch_lock      _fetch_adopted → async_fetch_vtuber
+T1 主要账号（5min）/ T3a 全量（随 T2） _fetch_lock      run_main_account_sweep / async_fetch_and_update(auto=True)
+/vtuber/fetch、/vtuber/{id}/fetch      _fetch_lock      async_fetch_and_update / async_fetch_vtuber
+/vtuber/adopt、POST /{id}/accounts     _fetch_lock      _fetch_adopted → async_fetch_vtuber（后台）
+/vtuber/fetch-accounts（批量面板）      _fetch_lock      async_fetch_and_update（后台）
 ─────────────────────────────────────────────────────────────
-/vtuber/fetch-posts (快速/全量)  _post_fetch_lock  _fetch_posts_core (B站双流)
-/vtuber/fetch-all-posts         _post_fetch_lock  async_fetch_all_posts → 逐账号
-/vtuber/update-posts            _post_fetch_lock  async_update_unarchived_posts → 增量
-/vtuber/batch/*                 _post_fetch_lock  (批量面板，同上框架)
+T2 最新动态（15min）                   _post_fetch_lock  run_latest_dynamics_sweep（每主账号 1 页 + 限 2 帖）
+/vtuber/fetch-posts（快速/全量）        _post_fetch_lock  _fetch_posts_core（B站双流）
+/vtuber/fetch-all-posts                _post_fetch_lock  async_fetch_all_posts → 逐账号
+/vtuber/update-posts                   _post_fetch_lock  async_update_unarchived_posts → 增量
+/vtuber/batch/*                        _post_fetch_lock  （批量面板，同上框架）
 ```
 
 - **账号信息抓取**：刷新账号资料（昵称/签名/头像）+ 粉丝数 + **直播状态**（B 站），
   成功后写一行统计快照（`account_stat_snapshots`，P0）。
 - **帖子抓取**：按平台拉帖子列表（B 站 = 视频流 + 动态流；微博 = 单流），
-  新帖逐个补详情，入库去重，全量/快速/增量三种模式。
-- 两条链路**互斥运行**（各自独立锁 + 让位协议，见 §3）。
+  新帖逐个补详情，入库去重；模式：全量 / 快速 / 增量 / 最新 N 条 / 仅动态。
+- 两条链路**互斥运行**（各自独立锁）；**手动任务优先于定时档**（自动档断点让位，见 §3.2）。
 
 ---
 
@@ -38,7 +41,8 @@ APScheduler (5min, jitter30s)  _fetch_lock      async_fetch_and_update   → 逐
 |---|---|---|
 | `POST /vtuber/{id}/fetch` | 手动抓取单个 VTuber 全部账号信息（账号抓取） | — |
 | `POST /vtuber/fetch-accounts` | 批量面板：全部账号信息 | — |
-| `POST /vtuber/adopt` | 候选池收录 → 后台自动抓一次账号信息 | — |
+| `POST /vtuber/adopt` | 候选池收录 → 后台自动抓一次账号信息 + 回填该账号第三方历史 | — |
+| `POST /vtuber/{id}/accounts` | 添加平台账号 → 后台抓该 V 账号信息 + 回填新账号第三方历史（v0.9.3） | — |
 | `POST /vtuber/fetch-posts?name=&full=` | 按名字抓帖子；`full=true` 后台全量（视频+动态拉到底） | 非 full：video 3 页 / dyn 5 页（前端快速抓取实际传 2/3） |
 | `POST /vtuber/fetch-all-posts` | 全部账号全量抓帖子（同步等待） | -1/-1 |
 | `POST /vtuber/update-posts?name=` | 更新未归档动态：先跑归档规则（30 天）再增量抓取，归档边界即停 | 不含视频；`stop_on_existing=true` |
@@ -46,8 +50,9 @@ APScheduler (5min, jitter30s)  _fetch_lock      async_fetch_and_update   → 逐
 | `POST /vtuber/batch/update-unarchived` | 批量面板：全部账号增量动态 | 同 update-posts |
 | `POST /posts/archive?days=30` | 归档规则（幂等）：published_at 早于 N 天前 → archived | 30 |
 
-定时任务：`APScheduler IntervalTrigger(minutes=5, jitter=30)`，`max_instances=1`
-（`scheduler.py:465-471`）。
+定时档（T1/T2/T3a）由 `_tier_loop` 驱动：启动链语义并入首轮，之后心跳
+（`TIER_TICK_SECONDS=10s`）检查到期；APScheduler 仅保留 T4 外部数据 cron（每日/每周），
+原 5min 的 `fetch_vtubers` IntervalTrigger 已由 T1/T3a 取代（见 §4.3）。
 
 ---
 
@@ -185,13 +190,15 @@ for 每个账号:
 批量入库：pending 攒 50 条 commit 一次（SQLite fsync 优化）
 ```
 
-### 5.2 三种调用模式
+### 5.2 五种调用模式
 
 | 模式 | 参数 | 特征 |
 |---|---|---|
 | 快速抓取（前端按钮） | `video_pages=2, dynamics_pages=3` | 小规模，同步等待（非 full 分支） |
 | 全量（`full=true`） | `-1/-1` 拉到底 | `BackgroundTasks` 后台跑，进度见顶栏 |
 | 更新未归档 | `include_videos=False, stop_on_existing=True` | 只抓动态第一页（通常），归档边界即停 |
+| 最新 N 条（T2） | `limit_latest=STARTUP_DYNAMICS_LIMIT(2)` | 同页最多入库 N 条新帖即停，单次时长有上界 |
+| 按名抓取 | `video_pages/dynamics_pages` 自定 | 对匹配名字的全部账号逐个调用 |
 
 ### 5.3 微博单流（`_fetch_platform_posts`）
 
@@ -308,30 +315,38 @@ def _detect_rate_limit(status_code, data=None):
 
 | 名称 | 值 | 位置 |
 |---|---|---|
-| `FETCH_INTERVAL_MINUTES` | 5 | config.py |
-| `FETCH_JITTER_SECONDS` | 30 | config.py |
 | `REQUEST_INTERVAL_MIN/MAX` | 3.0 / 5.0 s | config.py |
 | `FETCH_BATCH_SIZE` | 10 账号 | config.py |
 | `FETCH_BATCH_COOLDOWN` | 60 s | config.py |
 | `RATE_LIMIT_COOLDOWN` | 600 s | config.py |
-| `_PAGE_RETRIES` | 2 | scheduler.py:602 |
-| `_POST_BATCH_SIZE` | 50 条/commit | scheduler.py:599 |
+| `TIER_TICK_SECONDS` | 10 s（分层调度心跳） | config.py |
+| `LIVE_POLL_SECONDS` / `_JITTER` | 60 ± 15 s（T0） | config.py |
+| `ACCOUNT_PRIMARY_INTERVAL_MINUTES` / `_JITTER` | 5 min ± 30 s（T1） | config.py |
+| `DYNAMICS_LATEST_INTERVAL_MINUTES` / `_JITTER` | 15 min ± 120 s（T2） | config.py |
+| `FULL_ACCOUNT_AFTER_T2` | True（T3a 随 T2） | config.py |
+| `STARTUP_CHAIN_ENABLED` / `_DELAY` | True / 4 s | config.py |
+| `STARTUP_DYNAMICS_LIMIT` | 2 条/账号（T2「最新 N 条」） | config.py |
+| `PRIMARY_PLATFORM_ORDER` | `["bilibili", "weibo"]` | config.py |
+| `EXTERNAL_ENABLED` / `EXTERNAL_RUN_HOUR` | True / 3AM | config.py |
+| `MANUAL_PREEMPT_WAIT_SECONDS` | 120 s（手动等自动让位上限） | scheduler.py:635 |
+| `_PAGE_RETRIES` | 2 | scheduler.py:843 |
+| `_POST_BATCH_SIZE` | 50 条/commit | scheduler.py:787 |
 | `RATE_LIMIT_CODES` | {-509, -412, -799, 412} | fetcher.py:23 |
 | WBI `CACHE_TTL` | 1800 s | wbi.py:23 |
 | B 站超时 | 15s（任务级 client） | scheduler.py |
-| 详情间隔 | uniform(0.5, 2.0)s | scheduler.py:800/826/846 |
-| 视频页间 | 1s | scheduler.py:723 |
-| 动态/微博页间 | 20s | scheduler.py:864/987 |
+| 详情间隔 | uniform(0.5, 2.0)s | scheduler.py |
+| 视频页间 | 1s | scheduler.py |
+| 动态/微博页间 | 20s | scheduler.py |
 
 ---
 
-## 10. 已知优化方向（截至 2026-09-04 **未实施**）
+## 10. 已知优化方向（截至 2026-09-09）
 
 1. **详情链节流**：0.5~2s → 2~3s（均匀随机），或按最近风控事件做拥塞窗口自适应
    （风控后速率减半、10 分钟无风控恢复）；
 2. **视频翻页 1s → 3s**；
-3. **账号抓取分层频率**：每轮只拉 `acc/info`（直播状态实时性优先），`relation/stat`
-   粉丝数与统计快照改为每 30 分钟一次——每轮请求量减半且为直播检测腾出余量；
+3. ~~账号抓取分层频率~~ **已实施（v0.6.1）**：T0 只拉直播状态、T1 主账号 5min、
+   T2/T3a 15min——每轮请求量与实时性已按层分配；
 4. **帖子详情合并**：无批量 API，1 帖 1 请求为完整性必要成本，不可再压缩；
 5. 不改动建议：增量模式（stop_on_existing 第 1 页即停）已是当前最优；
    `x/web-interface/card` 合并接口拿不到直播状态且旧接口稳定性差，不采用。

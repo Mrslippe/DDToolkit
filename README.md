@@ -12,17 +12,17 @@
 
 ```
 ├─ app/               后端源码（FastAPI 分层）
-│  ├─ routers/        HTTP 路由层（vtuber / auth / img-proxy）
-│  ├─ repositories/   SQL 访问层（按仓库类持会话，无 ORM 泄漏到路由）
-│  ├─ models/         SQLAlchemy ORM（vtubers / accounts / posts / account_stat_snapshots）
+│  ├─ routers/        HTTP 路由层（vtuber / auth / img-proxy，47 端点）
+│  ├─ repositories/   SQL 访问层（9 个仓库类，无 ORM 泄漏到路由）
+│  ├─ models/         SQLAlchemy ORM（9 张表：vtubers / accounts / posts / 快照 / 场次 …）
 │  ├─ schemas/        Pydantic 输入输出模型
-│  ├─ services/       抓取调度、平台接入（bilibili / weibo）、认证、WBI、图片代理
-│  └─ core/           配置（数据目录/环境变量）、数据库引擎
+│  ├─ services/       抓取调度（T0–T4 分层）、平台接入、第三方源、认证、WBI、类型引擎、清理
+│  └─ core/           配置（数据目录/环境变量）、数据库引擎与 PRAGMA
 ├─ alembic/           数据库迁移链（a001 → e007，启动时自动升级）
-├─ tests/             pytest 测试（test_auth / test_services / test_vtuber_api / test_weibo）
-├─ scripts/           维护与构建脚本（repair_*、build_backend、collect_release 等）
-├─ devlog/            版本开发日志（001–034，每版本一篇）
-├─ docs/              文档：后端分层、UI 映射、平台扩展指南、架构图、设计原型、TODO 路线图
+├─ tests/             pytest 测试（test_auth / test_services / test_vtuber_api / test_weibo 等）
+├─ scripts/           维护与构建脚本（dev_check、ui_probe、build_backend、collect_release 等）
+├─ devlog/            版本开发日志（001–041，每版本一篇）
+├─ docs/              文档：架构总览、后端分层、UI 映射、平台扩展指南、设计原型、TODO 路线图
 ├─ frontend/          前端（Vite + React）+ Tauri 壳（src-tauri）
 ├─ backend_main.py    桌面端后端入口（Tauri 以子进程拉起，含父进程看门狗）
 ├─ alembic.ini        Alembic 配置
@@ -122,9 +122,11 @@ npm run collect:release --prefix frontend
 
 ## 常用文档
 
-- `docs/TODO.md` — 路线图与现状盘点
-- `docs/backend-repositories-and-routers.md` — 数据库结构 / repositories / routers 分层说明
+- `docs/ARCHITECTURE.md` — **架构总览**：运行时形态 / 数据模型（9 表 ER）/ 抓取分层与优先级 / 数据来源地图 / 不变量
+- `docs/backend-repositories-and-routers.md` — 表结构 · 9 个 Repository · 47 个 HTTP 端点
 - `docs/backend-fetch-pipeline.md` — 抓取链路详解（频率 / API 清单 / 风控判定与原因 / 节流测算）
 - `docs/UI-MAP.md` — 前端界面与路由映射
+- `docs/DEV-LOOP.md` — 本地开发与机器验证（dev_check / ui_probe）
 - `docs/platforms-extension-guide.md` — 平台接入扩展指南
+- `docs/TODO.md` — 路线图与现状盘点
 - `devlog/` — 每版本的变更记录（当前 v0.9.x）
