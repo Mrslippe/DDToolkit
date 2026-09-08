@@ -149,6 +149,30 @@ def _assert_first_run(dom_file: Path) -> list[str]:
     return bad
 
 
+def _kill_tree(proc: subprocess.Popen | None) -> None:
+    """收掉进程树。
+
+    Windows 上 Vite 是用 `shell=True` 起的（npx 是 .cmd），terminate 只杀得掉
+    外层 cmd、留下 node 子进程常驻监听（2026-09-08 实测：连跑几轮后攒了 10 个
+    残留 dev server 锁住日志文件）——必须 taskkill /T 连树一起杀。
+    """
+    if proc is None or proc.poll() is not None:
+        return
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                       capture_output=True)
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--width", type=int, action="append", help="窗口宽度（可多次，默认 1100/1280/1440）")
@@ -235,13 +259,8 @@ def main() -> int:
         print("[ok] 全部宽度 × 视图通过（无窗口滚动条 / 无出窗元素 / 无原生滚动条）")
         return 0
     finally:
-        for p in (vite, be):
-            if p and p.poll() is None:
-                p.terminate()
-                try:
-                    p.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    p.kill()
+        _kill_tree(vite)
+        _kill_tree(be)
         be_log.close()
         if not failures:
             shutil.rmtree(WORK, ignore_errors=True)
