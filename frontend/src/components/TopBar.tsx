@@ -43,8 +43,8 @@ async function tauriWindow() {
 
 /**
  * 顶栏（视觉严格按 docs/design/react-topbar Pixso 设计稿 Frame411）：
- * 思源黑体（Noto Sans SC 子集，OFL 开源）LOGO + 标题 + 居中状态文字 + 通栏窗口控制钮。
- * - 状态来自 GET /vtuber/fetch-status 轮询；抓取中显示设计稿加载图标；
+ * 猫脸 LOGO + 标题（阿里妈妈方圆体，2026-09-09 起与正文同源）+ 居中状态胶囊 + 通栏窗口控制钮。
+ * - 状态来自 GET /vtuber/fetch-status 轮询；抓取中显示加载图标（lucide Loader2）；
  *   任务结束沿触发 'ddtoolkit:fetch-idle' 事件，供 VtuberSidebar 等组件刷新数据。
  * - 账号快照增量派发 'ddtoolkit:account-progress'，侧栏就地合并零请求刷新。
  * - 桌面端：头部为拖拽区，最小化/关闭接原生窗口；有任务运行时关闭需二次确认。
