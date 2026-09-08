@@ -1,0 +1,29 @@
+# 换行符统一（2026-09 架构体检 P0）
+# 源码 / 文档 / 配置一律 LF；Windows 批处理保留 CRLF（cmd 对 LF 的 goto/标签处理不可靠）
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 二进制资产不做任何换行转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.bmp binary
+*.svg text
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.zip binary
+*.7z binary
+*.exe binary
+*.dll binary
+*.pyd binary
+*.so binary
+*.dylib binary
+*.db binary
+*.sqlite binary
+*.pdf binary
