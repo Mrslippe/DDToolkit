@@ -287,6 +287,38 @@ def test_weibo_fetch_post_page_msg_rate_limited():
     clear_rate_limit()
 
 
+# ── P9-2（v0.9.6）：平台自动发帖单列 type='system' ────────────────────
+
+def _sys_mblog(text: str, **extra) -> dict:
+    m = {"id": "1", "idstr": "1", "text": text,
+         "created_at": "Wed Sep 09 09:32:24 +0800 2026",
+         "user": {"screen_name": "V"},
+         "attitudes_count": 0, "comments_count": 0, "reposts_count": 0}
+    m.update(extra)
+    return m
+
+
+def test_weibo_system_autopost_type():
+    """微博有、B 站没有的一类内容（会员升级/签到/平台推广）单列 system；
+    规则保守——真人发言里出现「会员/签到」等词不能误判。"""
+    assert weibo._map_mblog(_sys_mblog("恭喜你升级为微博会员VIP7"), "1")["type"] == "system"
+    assert weibo._map_mblog(_sys_mblog("今天已连续签到 30 天"), "1")["type"] == "system"
+    assert weibo._map_mblog(_sys_mblog("我的2025年度报告出炉啦"), "1")["type"] == "system"
+    assert weibo._map_mblog(_sys_mblog("获得会员购好物，哔哩哔哩"), "1")["type"] == "system"
+    assert weibo._map_mblog(_sys_mblog("广告文案", isAd=True), "1")["type"] == "system"
+
+    assert weibo._map_mblog(_sys_mblog("今天直播签到送周边！"), "1")["type"] == "text"
+    assert weibo._map_mblog(_sys_mblog("谢谢大家的会员！"), "1")["type"] == "text"
+    assert weibo._map_mblog(_sys_mblog("晚点开播，先吃个饭"), "1")["type"] == "text"
+
+
+def test_weibo_system_wins_over_media():
+    """system 判定优先于媒体分类：平台自动帖即使带图也还是自动帖（不可混进「图文」）。"""
+    m = _sys_mblog("恭喜你升级为微博会员", pic_ids=["pid1"],
+                   pic_infos={"pid1": {"large": {"url": "https://wx1.sinaimg.cn/large/pid1.jpg"}}})
+    assert weibo._map_mblog(m, "1")["type"] == "system"
+
+
 # ── 通用单流循环（增量遇已入库即停） ─────────────────────────────────────
 
 def _post_item(pid: str) -> dict:

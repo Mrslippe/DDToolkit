@@ -12,6 +12,7 @@
 """
 import asyncio
 import hashlib
+import json as _json
 import time
 import urllib.parse
 from datetime import datetime, timedelta, timezone
@@ -458,13 +459,87 @@ def test_archive_before_rule(db):
     assert PostRepo(db).archive_before(cutoff) == 0
 
 
-def _post_item(pid: str) -> dict:
+def _post_item(pid: str, *, ptype: str = "text", body: dict | None = None) -> dict:
     return {
         "platform": "bilibili", "platform_uid": "123", "platform_post_id": pid,
-        "type": "text", "title": "", "summary": "", "cover_url": None,
-        "permalink": "", "body_json": "{}", "stats_json": "{}",
-        "published_at": None, "raw_json": "{}",
+        "type": ptype, "title": "", "summary": "", "cover_url": None,
+        "permalink": "", "body_json": _json.dumps(body or {}, ensure_ascii=False),
+        "stats_json": "{}", "published_at": None, "raw_json": "{}",
     }
+
+
+def test_fetch_posts_core_absorbs_video_dynamic(db, monkeypatch):
+    """P9-3（v0.9.6）：同 bvid 的「投稿动态」并入投稿帖——不重复入库，
+    动态附言写进 video.note（用户口径：只保留一条 + 附注字段）。"""
+    from app.services import scheduler as sch
+
+    db.add(PostModel(platform="bilibili", platform_uid="123", platform_post_id="BV1xx",
+                     type="video", title="投稿标题",
+                     body_json=_json.dumps({"bvid": "BV1xx"})))
+    db.commit()
+
+    pages = [{"items": [
+        _post_item("dyn-1", ptype="video_dynamic",
+                   body={"bvid": "BV1xx", "text": "1P是切片，2P是合唱"}),
+        _post_item("dyn-2", ptype="video_dynamic", body={"bvid": "BV1yy"}),  # 无同名投稿 → 正常入库
+    ], "has_more": False, "pinned_ids": []}]
+
+    async def fake_dynamics(mid, offset="", client=None):
+        return pages[0]
+
+    async def fake_videos(mid, page=1, page_size=30, client=None):
+        return {"items": [], "total": 0}
+
+    async def fake_sleep(_seconds):
+        return None
+
+    async def fake_video_detail(bvid, client=None):
+        return None
+
+    monkeypatch.setattr(sch, "fetch_bilibili_dynamics", fake_dynamics)
+    monkeypatch.setattr(sch, "fetch_bilibili_videos", fake_videos)
+    monkeypatch.setattr(sch, "fetch_video_detail", fake_video_detail)
+    monkeypatch.setattr("asyncio.sleep", fake_sleep)
+
+    async def run():
+        return await sch._fetch_posts_core(123, 0, 10, db, include_videos=True)
+
+    r = asyncio.run(run())
+    assert r.note_merged == 1                     # dyn-1 被吸收
+    assert db.query(PostModel).filter(
+        PostModel.platform_post_id == "dyn-1").count() == 0
+    assert db.query(PostModel).filter(
+        PostModel.platform_post_id == "dyn-2").count() == 1
+    video = db.query(PostModel).filter(PostModel.platform_post_id == "BV1xx").one()
+    assert video.note == "1P是切片，2P是合唱"
+
+
+def test_fetch_posts_core_keeps_note_when_video_has_one(db, monkeypatch):
+    """已有附言不被后来的动态覆盖（作者改过附言时先到先得，避免反复改写）。"""
+    from app.services import scheduler as sch
+
+    db.add(PostModel(platform="bilibili", platform_uid="123", platform_post_id="BV1zz",
+                     type="video", body_json=_json.dumps({"bvid": "BV1zz"}),
+                     note="原附言"))
+    db.commit()
+
+    async def fake_dynamics(mid, offset="", client=None):
+        return {"items": [_post_item("dyn-9", ptype="video_dynamic",
+                                     body={"bvid": "BV1zz", "text": "新附言"})],
+                "has_more": False, "pinned_ids": []}
+
+    async def fake_videos(mid, page=1, page_size=30, client=None):
+        return {"items": [], "total": 0}
+
+    async def fake_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(sch, "fetch_bilibili_dynamics", fake_dynamics)
+    monkeypatch.setattr(sch, "fetch_bilibili_videos", fake_videos)
+    monkeypatch.setattr("asyncio.sleep", fake_sleep)
+
+    asyncio.run(sch._fetch_posts_core(123, 0, 10, db, include_videos=True))
+    assert db.query(PostModel).filter(PostModel.platform_post_id == "BV1zz").one().note == "原附言"
 
 
 def test_fetch_posts_core_stops_at_archived_boundary(monkeypatch, db):

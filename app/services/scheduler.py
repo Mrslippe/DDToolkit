@@ -1068,6 +1068,9 @@ class PostFetchResult:
     seen_pids: list[str] = field(default_factory=list)
     stop_existing_pid: str | None = None
     natural_end: bool = False
+    # P9-3（v0.9.6）：并入已有投稿的「投稿动态」条数（附言已写进 video.note，
+    # 不再单独入库；计入 skipped，便于前端/日志说明"少的那条去哪了"）
+    note_merged: int = 0
 
 
 def _safe_json_parse(s: str | None, fallback: dict | None = None) -> dict:
@@ -1100,6 +1103,51 @@ def _safe_store_post(post_repo: PostRepo, data: dict, commit: bool = True) -> bo
 # 批量入库：每攒满 N 条才 commit 一次，避免每条帖子一次 fsync
 # （SQLite 每次 commit 都会触发磁盘同步，全量 1 万帖时性能差异巨大）
 _POST_BATCH_SIZE = 50
+
+
+def _video_bvid_index(db: Session, platform_uid: str) -> dict[str, str]:
+    """bvid → 已入库 `video` 帖的 platform_post_id（P9-3 合并用）。
+
+    只为「投稿动态」判断该 bvid 是否已有投稿记录；一账号几百条视频，解析
+    body_json 的成本可接受（比每次查库便宜）。
+    """
+    out: dict[str, str] = {}
+    rows = db.query(Post.platform_post_id, Post.body_json).filter(
+        Post.platform == "bilibili", Post.platform_uid == platform_uid,
+        Post.type == "video",
+    ).all()
+    for pid, body in rows:
+        bvid = (_safe_json_parse(body) or {}).get("bvid") or pid
+        if bvid:
+            out[str(bvid)] = str(pid)
+    return out
+
+
+def _absorb_video_dynamic(db: Session, platform_uid: str, item: dict,
+                          video_by_bvid: dict[str, str]) -> str | None:
+    """把「投稿动态」并入同 bvid 的投稿帖：附言写 note，返回被并入的 video pid。
+
+    返回 None 表示这不是「已有投稿的重复动态」（调用方按普通新帖入库）。
+    合并口径见 devlog/047：列表里一条视频只出现一次，动态附言以「UP 主附言」展示。
+    """
+    body = _safe_json_parse(item.get("body_json"))
+    bvid = str(body.get("bvid") or "")
+    pid = video_by_bvid.get(bvid) if bvid else None
+    if not pid:
+        return None
+    text = (body.get("text") or "").strip()
+    if text:
+        # 只补空缺的附言，不覆盖已有内容（贴文附言可能被作者改过，先到先得更稳）
+        row = db.query(Post.note).filter(
+            Post.platform == "bilibili", Post.platform_uid == platform_uid,
+            Post.platform_post_id == pid,
+        ).first()
+        if row is not None and not (row[0] or "").strip():
+            db.query(Post).filter(
+                Post.platform == "bilibili", Post.platform_uid == platform_uid,
+                Post.platform_post_id == pid,
+            ).update({Post.note: text}, synchronize_session=False)
+    return pid
 
 # 直播场次路由：mid → account_id（live_sessions 需账号外键；账号表稳定，进程内缓存）
 _bili_account_id_cache: dict[str, int | None] = {}
@@ -1207,6 +1255,10 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
                 Post.is_archived == True,  # noqa: E712
             ).all()
         }
+        # P9-3（v0.9.6）：bvid → 已入库的 video 帖 platform_post_id。
+        # 「投稿动态」与「投稿」是同一条视频的两个来源，合并后只留 video 一条，
+        # 动态附言写进 video.note（见 `_absorb_video_dynamic`）。
+        video_by_bvid = _video_bvid_index(db, platform_uid)
 
         # 批量入库：pending 攒满 _POST_BATCH_SIZE 才 commit；
         # 冲突（并发抓取竞态）时回滚整批并逐条重插定位重复项
@@ -1278,6 +1330,11 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
                 for v in videos:
                     result.seen_pids.append(v["platform_post_id"])
                     result.videos += 1
+                    # P9-3：本页新见到的投稿也登记进 bvid 索引——动态流紧随其后，
+                    # 同一条视频的「投稿动态」要能被认出并并入（不重复入库）
+                    _bv = (_safe_json_parse(v.get("body_json")) or {}).get("bvid")
+                    if _bv:
+                        video_by_bvid.setdefault(str(_bv), str(v["platform_post_id"]))
                     if v["platform_post_id"] in existing_ids:
                         result.skipped += 1
                         continue
@@ -1350,6 +1407,13 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
                             and d["platform_post_id"] not in pinned_ids):
                         known_hit = d["platform_post_id"]
                     continue
+
+                # P9-3：投稿动态并入同 bvid 的投稿帖（附言写 note），不再重复入库
+                if d["type"] == "video_dynamic":
+                    if _absorb_video_dynamic(db, platform_uid, d, video_by_bvid) is not None:
+                        result.skipped += 1
+                        result.note_merged += 1
+                        continue
 
                 # 图文 / 纯文字 → detail API 拿 OPUS 格式完整数据
                 if d["type"] in ("text", "image"):

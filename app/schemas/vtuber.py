@@ -119,6 +119,7 @@ class PostOut(BaseModel):
     stats_json: str | None = None
     published_at: datetime | None = None
     raw_json: str | None = None
+    note: str | None = None                    # P9-3：投稿动态的附言（并入 video 帖）
     is_archived: bool = False
     last_seen_at: datetime | None = None       # 最近一次确认仍在线（v0.5.1）
     deleted_detected_at: datetime | None = None  # 墓碑：判定已删除的时刻（v0.5.1）
@@ -153,6 +154,7 @@ class PostCreate(BaseModel):
     stats_json: str | None = None
     published_at: datetime | None = None
     raw_json: str | None = None
+    note: str | None = None                    # P9-3：投稿动态附言（并入 video 帖）
     is_archived: bool = False
 
 
@@ -167,6 +169,7 @@ class PostUpdate(BaseModel):
     stats_json: str | None = None
     published_at: datetime | None = None
     raw_json: str | None = None
+    note: str | None = None                    # P9-3：投稿动态附言
     is_archived: bool | None = None
 
 

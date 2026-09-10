@@ -232,6 +232,9 @@ class Post(Base):
     permalink = Column(String, nullable=True)                     # 原始链接
     body_json = Column(Text, nullable=True)                       # 结构化类型差异数据
     stats_json = Column(Text, nullable=True)                      # {"view":N,"like":N,"comment":N,"forward":N}
+    # P9-3（v0.9.6）：B 站「投稿」与「投稿动态」是同一条视频的两个来源，合并后只留
+    # video 一条，动态里的附言文本存这里（前端以「UP 主附言」标注）
+    note = Column(Text, nullable=True)
     published_at = Column(DateTime, nullable=True)
     raw_json = Column(Text, nullable=True)
     is_archived = Column(Boolean, default=False, server_default="0")    # 是否归档

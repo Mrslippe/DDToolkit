@@ -46,6 +46,32 @@ _PC_UA = (
 
 _TAG_RE = re.compile(r"<[^>]+>")
 
+# 平台自动发帖（P9-2，v0.9.6）：微博有、B 站没有的一类内容 —— 会员升级、签到、
+# 活动能量、平台推广等由平台生成的帖。它们不是 V 的真实表达，混进「图文」只会
+# 稀释档案；单列 type='system' 便于过滤（**不删除**，默认列表里仍可见可筛）。
+# 规则保守：只匹配平台腔调明显的句式，宁可漏判也不误伤真人发言。
+_SYSTEM_PATTERNS = (
+    re.compile(r"升级为.{0,6}(会员|VIP)", re.I),
+    re.compile(r"微博会员.{0,8}(开通|续费|升级)"),
+    re.compile(r"^恭喜.{0,12}(获得|升级|达成|解锁)"),
+    re.compile(r"微博等级.{0,6}(Lv|升级)", re.I),
+    re.compile(r"^获得会员购"),
+    re.compile(r"^(今天)?已连续签到"),
+    re.compile(r"^(我的)?活动能量"),
+    re.compile(r"^我的\d{4}年度(报告|总结|足迹)"),
+    re.compile(r"^发微博数?已?达成"),
+)
+
+
+def _is_system_mblog(m: dict, text: str) -> bool:
+    """是否为平台自动发帖（会员/签到/推广类）。"""
+    if m.get("isAd"):
+        return True                      # 平台插的广告位
+    t = (text or "").strip()
+    if not t:
+        return False
+    return any(p.search(t) for p in _SYSTEM_PATTERNS)
+
 
 def _headers(uid: str = "") -> dict:
     """PC ajax 请求头：Cookie 取自扫码登录保存的 WEIBO_COOKIE（PC 域有效）。"""
@@ -172,6 +198,8 @@ def _map_mblog(m: dict, uid: str) -> dict:
 
     if retweeted:
         typ = "repost"
+    elif _is_system_mblog(m, text):
+        typ = "system"          # P9-2：平台自动发帖（会员升级/签到/推广），B 站没有这一类
     elif has_video_media:
         typ = "video"
     elif ptype == "article":

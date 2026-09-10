@@ -45,9 +45,10 @@ def _mk_account(db, uid="10086") -> Account:
     return acc
 
 
-def _snap(db, acc, ts, status=None, fans=1, source="self"):
+def _snap(db, acc, ts, status=None, fans=1, source="self", title=None):
     db.add(AccountStatSnapshot(account_id=acc.id, followers_count=fans,
-                               live_status=status, captured_at=ts, source=source))
+                               live_status=status, captured_at=ts, source=source,
+                               live_title=title))
     db.commit()
 
 
@@ -148,16 +149,34 @@ def test_merged_snapshot_patches_danmakus_end(db):
     assert m["area_name"] == "虚拟Singer"
 
 
-def test_merged_outside_window_stays_two(db):
+def test_merged_finalized_row_stays_two_when_far(db):
+    """表内场次**已收播**（有 end）且 3h 外才有 self 观测 → 是另一场，不合并
+    （防「区间重叠优先」过度合并）。"""
     acc = _mk_account(db)
     repo = LiveSessionRepo(db)
-    repo.upsert_danmakus(acc.id, [_dm_item("live-a", "播了", _ms(T0))])
-    _snap(db, acc, T0 + timedelta(hours=3), status=1)
+    repo.upsert_danmakus(acc.id, [
+        _dm_item("live-a", "早场", _ms(T0), _ms(T0 + timedelta(hours=1))),
+    ])
+    _snap(db, acc, T0 + timedelta(hours=3), status=1, title="晚场")
     _snap(db, acc, T0 + timedelta(hours=4), status=0)
 
     merged = repo.merged(acc.id)
     assert len(merged) == 2
     assert [m["source"] for m in merged] == ["danmakus", "self"]
+
+
+def test_merged_open_ended_row_absorbs_later_snapshot(db):
+    """表内场次无 end（进行中/未定稿）→ 3h 后的 self 观测仍视为同一场
+    （旧规则只看 start 差 90min，会把同一场算成两条）。"""
+    acc = _mk_account(db)
+    repo = LiveSessionRepo(db)
+    repo.upsert_danmakus(acc.id, [_dm_item("live-a", "播了", _ms(T0))])   # stop 缺省=0
+    _snap(db, acc, T0 + timedelta(hours=3), status=1)
+    _snap(db, acc, T0 + timedelta(hours=4), status=0)
+
+    merged = repo.merged(acc.id)
+    assert len(merged) == 1
+    assert merged[0]["source"] == "danmakus+self"
 
 
 def test_merged_virtual_self_and_row_alone(db):
@@ -176,6 +195,82 @@ def test_merged_virtual_self_and_row_alone(db):
     merged = repo.merged(acc.id)
     assert len(merged) == 2
     assert merged[0]["source"] == "danmakus"
+
+
+# ── P9-1（v0.9.6）：self 快照并入改「区间重叠优先」 ────────────────────
+
+def test_merged_snapshot_overlap_beyond_start_window(db):
+    """回归（用户 2026-09-10 反馈「self 与 danmakus 同场被算两场」）：
+
+    self 快照的起点是「本工具看到开播」的时刻（5min 粒度，应用没运行就没有快照），
+    长直播里能比真实开场晚几小时。旧规则「start 差 ≤90min」于是不合并 →
+    同一次直播在日历里出现两条；新规则按区间重叠合并（取重叠最多者）。
+    实测对应数据：明前奶绿 2026-09-03 danmakus 11:59→17:12 + self 15:16→17:25。"""
+    acc = _mk_account(db)
+    repo = LiveSessionRepo(db)
+    repo.upsert_danmakus(acc.id, [
+        _dm_item("live-a", "楚什么楚！", _ms(T0), _ms(T0 + timedelta(hours=5, minutes=13))),
+    ])
+    # self 起点晚 3h16m（远超 90min 窗口），但区间落在 danmakus 场次内
+    _snap(db, acc, T0 + timedelta(hours=3, minutes=16), status=1, title="楚什么楚！")
+    _snap(db, acc, T0 + timedelta(hours=5, minutes=25), status=0)
+
+    merged = repo.merged(acc.id)
+    assert len(merged) == 1
+    assert merged[0]["source"] == "danmakus+self"
+    assert merged[0]["start_at"] == T0                        # 主数据（danmakus）起点保留
+    assert merged[0]["end_at"] == T0 + timedelta(hours=5, minutes=13)
+
+
+def test_merged_snapshot_spanning_rows_absorbs_into_best(db):
+    """跨多个表内场次的超长 self 伪场次（实测有 40h 的，多因漏掉一次下播跳变）
+    并入重叠最多的那一场，不留 self 虚拟场次。"""
+    acc = _mk_account(db)
+    repo = LiveSessionRepo(db)
+    repo.upsert_danmakus(acc.id, [
+        _dm_item("live-a", "第一场", _ms(T0), _ms(T0 + timedelta(hours=2))),
+        _dm_item("live-b", "第二场", _ms(T0 + timedelta(hours=20)),
+                 _ms(T0 + timedelta(hours=29))),
+    ])
+    _snap(db, acc, T0 + timedelta(hours=3), status=1, title="第二场")
+    _snap(db, acc, T0 + timedelta(hours=43), status=0)      # 40h 的伪区间
+
+    merged = repo.merged(acc.id)
+    assert len(merged) == 2                                 # 没有多出 self 虚拟场次
+    assert [m["source"] for m in merged] == ["danmakus", "danmakus+self"]
+    assert merged[1]["end_at"] == T0 + timedelta(hours=29)  # danmakus 的 end 未被伪区间覆盖
+
+
+def test_merged_both_live_same_title_merges(db):
+    """双方都「进行中」（都没有 end）：区间法失效，同标题 + 起播差 ≤6h 视为同场
+    （实测 七海 09-09 feed 11:57→ 与 self 15:25→ 同标题）。"""
+    acc = _mk_account(db)
+    repo = LiveSessionRepo(db)
+    repo.upsert_feed = None  # 仅作提示：本用例手动插表内行
+    db.add(LiveSession(account_id=acc.id, platform="bilibili", source="feed",
+                       live_id="feed-1", title="大米小米玉米杂粮米",
+                       start_at=T0, end_at=None))
+    db.commit()
+    _snap(db, acc, T0 + timedelta(hours=3, minutes=30), status=1,
+          title="大米小米玉米杂粮米")                        # 未收播 → end 缺失
+
+    merged = repo.merged(acc.id)
+    assert len(merged) == 1
+    assert merged[0]["source"] == "feed+self"
+
+
+def test_merged_both_live_diff_title_stays_two(db):
+    """同账号两条都进行中但标题不同 → 不合并（防把真·新场次并掉）。"""
+    acc = _mk_account(db)
+    repo = LiveSessionRepo(db)
+    db.add(LiveSession(account_id=acc.id, platform="bilibili", source="feed",
+                       live_id="feed-1", title="早场", start_at=T0, end_at=None))
+    db.commit()
+    _snap(db, acc, T0 + timedelta(hours=3), status=1, title="晚场")
+
+    merged = repo.merged(acc.id)
+    assert len(merged) == 2
+    assert [m["source"] for m in merged] == ["feed", "self"]
 
 
 def test_merged_danmakus_end_wins(db):

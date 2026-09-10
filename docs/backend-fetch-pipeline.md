@@ -257,6 +257,8 @@ POST /vtuber/adopt | POST /vtuber/{id}/accounts
     text/image   → web-dynamic/v1/detail (OPUS 全文/大图)      sleep 0.5~2s
     article      → x/article/view (专栏全文, 含 Quill Delta)    sleep 0.5~2s
     video_dynamic→ x/web-interface/view (简介/时长/分区/统计)   sleep 0.5~2s
+    ↑ v0.9.6（P9-3）：video_dynamic 若其 bvid 已作为 video 入库 → **不插库**，
+      动态附言写进该 video 的 `posts.note`（`_absorb_video_dynamic`）
 批量入库：pending 攒 50 条 commit 一次（SQLite fsync 优化）
 ```
 
@@ -296,6 +298,24 @@ mymblog?uid=&page=&feature=0         页间 sleep 20s
 旧实现「从第 2 条起遇到已入库就 break」会把同页靠后的新帖整段漏掉
 （用户 2026-09-09 反馈「更新动态后微博抓不到新帖」：277 条库里最新是置顶那条，
 9/9 的三条新帖一条没进；修复后同参数跑出 stored=29）。
+
+### 5.5 平台化帖子类型（v0.9.6，devlog/047）
+
+后端各平台各自映射，`posts.type` 取值不再强行统一：
+
+| 平台 | 类型 | 说明 |
+|---|---|---|
+| B 站 | `video` / `video_dynamic` / `image` / `text` / `repost` / `article` / `music` / `live` | 专栏、音乐为 B 站独占 |
+| 微博 | `image` / `text` / `repost` / `video` / **`system`** | 无专栏/音乐；`system` = 平台自动发帖 |
+
+- `system`（v0.9.6）：微博会员升级/签到/活动能量/会员购推广等由平台生成的帖，
+  由 `weibo._is_system_mblog()` 按**保守句式**匹配（含 `isAd`），**优先于媒体分类**
+  （自动帖带图也仍是自动帖）；真人发言里的「会员/签到」等词不误判（有测试锁）。
+  不删除、默认列表仍可见，只是单独成组便于过滤。
+- 前端 `TYPE_GROUPS` 拆成 B 站/微博两套（`typeGroupsFor(platform)`），
+  微博为：图文 / 视频 / 转发 / 系统；B 站为：投稿 / 图文 / 转发 / 专栏 / 音乐 / 直播。
+- 实测分布（本地库）：B 站 `image 2453 / video 423 / repost 385 / video_dynamic 369 /
+  text 352 / music 2 / article 2`；微博 `text 318 / image 227 / repost 18 / video 1`。
 
 ---
 

@@ -71,7 +71,7 @@ type AppView = 'cards' | 'list' | 'archive' | 'profile'
 /** 筛选行分组 chip：key 为逗号合并类型（后端 type 参数支持逗号分隔多型 in 过滤）。
  *  高频型两两归组（投稿/图文）压缩 chips 宽度，保证不把右侧搜索栏挤到下一行；
  *  低频型保持单型 chip。计数求和、零计数组不显示。 */
-const TYPE_GROUPS: { key: string; label: string; types: string[] }[] = [
+const TYPE_GROUPS_BILIBILI: { key: string; label: string; types: string[] }[] = [
   { key: 'video,video_dynamic', label: '投稿', types: ['video', 'video_dynamic'] },
   { key: 'image,text', label: '图文', types: ['image', 'text'] },
   { key: 'repost', label: '转发', types: ['repost'] },
@@ -79,6 +79,20 @@ const TYPE_GROUPS: { key: string; label: string; types: string[] }[] = [
   { key: 'music', label: '音乐', types: ['music'] },
   { key: 'live', label: '直播', types: ['live'] },
 ]
+
+/** 微博：没有专栏/音乐，多了平台自动发帖（会员升级/签到/推广）单列的「系统」。
+ *  P9-2（v0.9.6 用户）：不同平台的分类规则不再共用一套。 */
+const TYPE_GROUPS_WEIBO: { key: string; label: string; types: string[] }[] = [
+  { key: 'image,text', label: '图文', types: ['image', 'text'] },
+  { key: 'video', label: '视频', types: ['video'] },
+  { key: 'repost', label: '转发', types: ['repost'] },
+  { key: 'system', label: '系统', types: ['system'] },
+]
+
+/** 按当前账号平台取分类分组（零计数组仍不显示，见 chipItems） */
+function typeGroupsFor(platform: string | undefined) {
+  return platform === 'weibo' ? TYPE_GROUPS_WEIBO : TYPE_GROUPS_BILIBILI
+}
 
 /** 归档过滤：all=全部（含已归档） unarchived=仅未归档 archived=仅已归档 */
 type ArchivedFilter = 'all' | 'unarchived' | 'archived'
@@ -706,17 +720,22 @@ export default function PostsPage() {
 
   // 类型筛选 chips：全部 N / 投稿 N / 图文 N / 转发 N ...（计数来自统计概览，
   // 分组求和、零计数组不显示；key 为逗号合并类型直传后端）
+  // P9-2：分组随当前账号平台切换（微博没有专栏/音乐，多一个「系统」）
+  const chipGroups = useMemo(
+    () => typeGroupsFor(selectedAccount?.platform),
+    [selectedAccount?.platform],
+  )
   const chipItems = useMemo(() => {
     const counts = stats?.by_type ?? {}
     return [
       { key: 'all', label: '全部', count: stats?.total ?? total },
-      ...TYPE_GROUPS.map((g) => ({
+      ...chipGroups.map((g) => ({
         key: g.key,
         label: g.label,
         count: g.types.reduce((sum, t) => sum + (counts[t] ?? 0), 0),
       })).filter((g) => g.count > 0),
     ]
-  }, [stats, total])
+  }, [stats, total, chipGroups])
 
   // 无限滚动：hasMore 由累计长度与总数比较派生（第 1 页后 posts.length < total）
 

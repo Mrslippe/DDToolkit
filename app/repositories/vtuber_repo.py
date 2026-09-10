@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -9,6 +10,8 @@ from app.models.vtuber import (VTuber, Account, Post, AccountStatSnapshot,
                                LiveGiftDay, ThirdpartyVtuber, VtuberEvent,
                                LiveSession, LiveCategoryOverride)
 from app.services.live_type import normalize_title
+
+logger = logging.getLogger(__name__)
 
 
 # ── VTuber ─────────────────────────────────────────────────────────
@@ -260,6 +263,10 @@ class LiveSessionRepo:
     """
 
     MERGE_WINDOW_MINUTES = 90           # self 快照并入窗口（同场观测）
+    SNAP_ENDPOINT_TOLERANCE_MINUTES = 15  # self 并入的端点容差（5min 快照粒度 + T0 抖动）
+    SNAP_SAME_TITLE_HOURS = 6           # 双方都「进行中」时，同标题 + 起播差 ≤ → 同场
+    SNAP_OPEN_END_ASSUMED_HOURS = 12    # 缺 end（进行中/未定稿）时的假定时长上界
+    SNAP_MAX_BACKFILL_HOURS = 24        # self 快照回填 end_at 的合理上限（防跨天伪场次）
     SAME_SESSION_ROOM_MINUTES = 90      # 同 room_id 且 start 差 ≤ → 双源同场去重
     INTERRUPT_SAME_TITLE_MINUTES = 60   # 顺序段 gap ≤ 且同标题骨架 → 中断续播并段
     RESTART_GAP_MINUTES = 10            # 顺序段 gap ≤ → 平台重开/快转场（连续观感）
@@ -386,7 +393,7 @@ class LiveSessionRepo:
             self._apply_group_merge(hit, row, how)
         window = timedelta(minutes=self.MERGE_WINDOW_MINUTES)
         for snap in snapshots:
-            grp = self._find_group(groups, snap["start_at"], window)
+            grp = self._find_group(groups, snap, window)
             if grp is None:
                 groups.append(self._group_from_snap(snap))
                 continue
@@ -476,17 +483,64 @@ class LiveSessionRepo:
         srcs.add(row.source)
         g["source"] = self._join_sources(srcs)
 
-    def _find_group(self, groups, start_at: datetime,
+    def _find_group(self, groups, snap: dict,
                     window: timedelta) -> tuple[dict, set[str], str] | None:
-        """找最近（±window 内）分组；贪心按最小 gap。"""
-        best, best_gap = None, None
+        """给 self 快照找归属分组（P9-1，v0.9.6）。
+
+        旧实现只看 **start 相差 ≤90min**，而 self 快照的起点是「本工具第一次看到
+        开播」的时刻（5min 粒度、且应用没运行时根本没有快照）——长直播里它能比
+        真实开场晚几个小时，于是同一次直播被 danmakus 与 self 各算一场。
+        本地实测（4 个 B 站账号 / 20 条 self 场次）：4 条本应合并却算两场，
+        典型如 明前奶绿 2026-09-03 `danmakus 11:59→17:12` + `self 15:16→17:25`
+        同标题，以及七海那条跨 40 小时的 self 伪场次。
+
+        新规则：**区间重叠优先**（取重叠最多者），无重叠才退回 start 距离兜底
+        （兜住 end_at 缺失、两端都进行中等无法比较区间的情形）。
+        """
+        s_start, s_end = snap["start_at"], snap.get("end_at")
+        tol = self.SNAP_ENDPOINT_TOLERANCE_MINUTES * 60
+        s_title = normalize_title(snap.get("live_title"))
+        best, best_key = None, None
         for grp in groups:
-            gap = abs((start_at - grp[0]["start_at"]).total_seconds())
-            if gap > window.total_seconds():
-                continue
-            if best_gap is None or gap < best_gap:
-                best, best_gap = grp, gap
+            g = grp[0]
+            g_start, g_end = g["start_at"], g.get("end_at")
+            ov = 0.0 if (g_end is None and s_end is None) else self._overlap_seconds(
+                g_start, g_end, s_start, s_end, tol, self.SNAP_OPEN_END_ASSUMED_HOURS)
+            if ov <= 0 and g_end is None and s_end is None and s_title:
+                # 双方都「进行中」（都没有 end）：区间法失效，只能靠标题骨架 + 起播
+                # 时距判定同场（实测 七海 09-09、弥月 09-09：feed 与 self 各留一条
+                # 未收播的记录，同标题、起播相差 3.5h，本该是一场）
+                g_title = normalize_title(g.get("live_title"))
+                if g_title and g_title == s_title and \
+                        abs((s_start - g_start).total_seconds()) <= \
+                        self.SNAP_SAME_TITLE_HOURS * 3600:
+                    ov = 1.0
+            if ov > 0:
+                key = (2, ov)          # 重叠优先，重叠秒数越多越优
+            else:
+                gap = abs((s_start - g_start).total_seconds())
+                if gap > window.total_seconds():
+                    continue
+                key = (1, -gap)        # 距离兜底，越近越优
+            if best_key is None or key > best_key:
+                best, best_key = grp, key
         return best
+
+    @staticmethod
+    def _overlap_seconds(g_start: datetime, g_end: datetime | None,
+                         s_start: datetime, s_end: datetime | None,
+                         tol_seconds: float, open_hours: float) -> float:
+        """self 快照与表内分组的重叠秒数（含端点容差）；≤0 表示不重叠。
+
+        任一端缺失（仍在直播 / 未定稿）→ 按 `open_hours` 假定时长补一个上界：
+        既能让「应用中途才启动、self 起点晚于真实开场」判为同场（主修场景），
+        又不会让一条**很久以前**的开放式记录吞掉今天的 self 场次（假设上界之外不重叠）。
+        """
+        lo = max(g_start, s_start)
+        ge = g_end if g_end is not None else g_start + timedelta(hours=open_hours)
+        se = s_end if s_end is not None else s_start + timedelta(hours=open_hours)
+        hi = min(ge, se)
+        return (hi - lo).total_seconds() + 2 * tol_seconds
 
     def _group_from_row(self, row: LiveSession) -> tuple[dict, set[str], str]:
         return self._row_dict(row), {row.source}, row.source
@@ -518,12 +572,23 @@ class LiveSessionRepo:
         g["source"] = self._join_sources(srcs)
 
     def _merge_snap_into_group(self, grp: tuple[dict, set[str], str], snap: dict) -> None:
-        """self 快照并入：补 end_at（若主缺）/ 标题兜底；不改主字段。"""
+        """self 快照并入：补 end_at（若主缺）/ 标题兜底；不改主字段。
+
+        end_at 回填加合理性闸门（P9-1）：self 快照可能因漏掉一次「下播」跳变而
+        拉出跨天伪区间（实测有 40 小时的 self 场次），这种值不能写进真实场次。
+        """
         g, srcs, _primary = grp
         srcs.add("self")
-        if snap["end_at"] is not None and g["end_at"] is None:
-            g["end_at"] = snap["end_at"]
-            self._apply_duration(g)
+        snap_end = snap["end_at"]
+        if snap_end is not None and g["end_at"] is None:
+            span_h = (snap_end - g["start_at"]).total_seconds() / 3600
+            if 0 < span_h <= self.SNAP_MAX_BACKFILL_HOURS:
+                g["end_at"] = snap_end
+                self._apply_duration(g)
+            else:
+                logger.debug(
+                    f"self 快照 end_at 不合理，跳过回填：{g['start_at']} → {snap_end}"
+                    f"（{span_h:.1f}h，上限 {self.SNAP_MAX_BACKFILL_HOURS}h）")
         if snap["live_title"] and not g["live_title"]:
             g["live_title"] = snap["live_title"]
         g["source"] = self._join_sources(srcs)

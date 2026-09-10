@@ -56,7 +56,7 @@ async def _warm_wbi() -> None:
 # ── 统一 schema 管理（alembic 迁移链为准） ──────────────────────────────
 
 # 迁移链最新版本。新加迁移时必须同步更新（tests 会断言与 alembic head 一致）。
-MIGRATION_HEAD = "e007"
+MIGRATION_HEAD = "f001"
 
 
 def _alembic_config():

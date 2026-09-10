@@ -3,7 +3,7 @@
 > **用途**：改 bug / 做需求时快速定位「这个词在代码里叫什么、在哪个文件、牵动谁」。
 > **用法**：`Ctrl+F` 搜中文词或英文标识符；每行是「术语 · 含义 · 代码位置 · 关联」。
 > **与 `ARCHITECTURE.md` 的分工**：架构文档讲「为什么这样设计」，本文讲「这东西在哪、改它要动谁」。
-> 适用版本：`main`（2026-09-09，`MIGRATION_HEAD = e007`）。
+> 适用版本：`main`（2026-09-10，`MIGRATION_HEAD = f001`）。
 
 **目录**：§1 领域名词 · §2 数据模型与字段 · §3 抓取与调度 · §4 认证与凭据 ·
 §5 前端与界面 · §6 工程与流程 · §7 配置项速查 · §8 不变量与常见坑 · §9 需求 → 代码入口。
@@ -20,6 +20,10 @@
 | **帖子 / post** | 动态/投稿/专栏/转发/音乐的统称（证据档案的主体） | `models/vtuber.py::Post`；`PostRepo`；`components/PostCard.tsx` | 唯一键 `(platform, uid, pid)` |
 | **动态 / dynamic** | B 站 `feed/space` 流（`type=text/image/video_dynamic/…`） | `fetcher.fetch_bilibili_dynamics`；`scheduler._fetch_posts_core` | 微博单流等价物：`_fetch_platform_posts` |
 | **投稿 / video** | B 站 `arc/search` 视频流（`type=video`） | `fetcher.fetch_bilibili_videos` | 与 video_dynamic 同一条视频的两个来源 |
+| **投稿动态 / video_dynamic** | 动态流里的投稿卡片（`type=video_dynamic`，`body_json.bvid` 指向同一视频） | `_map_dynamic_type` | **抓取侧并入 video**（v0.9.6）：不重复入库，附言写 `posts.note` |
+| **UP 主附言 / note** | 投稿动态并入后保留的动态文本 | `scheduler._absorb_video_dynamic`；`posts.note` | 卡片/详情以「UP 主附言」标注 |
+| **系统帖 / system** | 微博平台自动发帖（会员升级/签到/推广），B 站没有这一类 | `weibo._is_system_mblog` → `type=system` | v0.9.6；前端微博 chips 有独立「系统」组 |
+| **场次并入 / self 快照合并** | self 快照推导场次并入表内场次的判定 | `LiveSessionRepo._find_group`（**区间重叠优先**）、`_overlap_seconds` | v0.9.6 由「start 差≤90min」改来 |
 | **图文 / image** | 图片动态（`type=image`，`body_json.images`） | `fetcher._extract_body_extras` | 前端 `ProxyImage` 渲染 |
 | **转发 / repost** | 转发的他人动态（`type=repost`，`body_json.origin`） | `fetcher._extract_origin` | `scripts/repair_repost_origin.py` |
 | **专栏 / article** | B 站 cv 长文（`type=article`，Quill Delta 富文本） | `fetcher.fetch_article_detail`；`_delta_to_plain_text` | `RichText` 渲染 |

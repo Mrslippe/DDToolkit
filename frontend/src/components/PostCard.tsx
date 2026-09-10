@@ -78,6 +78,14 @@ const PostCard = memo(function PostCard({ post, index, onOpen }: Props) {
           {title}
         </h4>
         {post.summary && <p className="post-card-summary">{post.summary}</p>}
+        {/* P9-3（v0.9.6）：投稿动态的附言并入同 bvid 的投稿帖后在这里标注出来
+            （一条视频只出现一次，附言不丢） */}
+        {post.note && (
+          <p className="post-card-note" title={post.note}>
+            <span className="post-card-note-tag">UP 主附言</span>
+            {post.note}
+          </p>
+        )}
         <div className="post-card-footer">
           <div className="post-card-badges">
             {stats.view !== undefined && <StatBadge icon={<CirclePlay />} value={stats.view} label="播放" />}

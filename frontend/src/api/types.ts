@@ -54,6 +54,8 @@ export interface Post {
   stats_json: string | null
   published_at: string | null
   raw_json: string | null
+  /** P9-3（v0.9.6）：投稿动态的附言（并入同 bvid 的投稿帖，卡片/详情以「UP 主附言」标注） */
+  note: string | null
   is_archived: boolean
   /** 最近一次确认仍在线的时间（v0.5.1 墓碑机制） */
   last_seen_at: string | null
