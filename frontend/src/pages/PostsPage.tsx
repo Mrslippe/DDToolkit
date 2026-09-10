@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import {
   AlignJustify,
+  Archive,
   BarChart3,
   Calendar,
   Fingerprint,
@@ -51,7 +52,6 @@ import type { Account, AccountSnapshot, Post, PostStats, VTuber } from '../api/t
 import { mergeAccountSnapshots, mergeVtuberSnapshots } from '../utils/accountSnapshots'
 import PostCard from '../components/PostCard'
 import PostDetailDrawer from '../components/PostDetailDrawer'
-import ProfileView from '../components/ProfileView'
 import LiveCalendar from '../components/LiveCalendar'
 import FanTrendChart from '../components/FanTrendChart'
 import OverlayScroll from '../components/OverlayScroll'
@@ -117,7 +117,7 @@ export default function PostsPage() {
   const [loadingMore, setLoadingMore] = useState(false)
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null)
   const [typeFilter, setTypeFilter] = useState<string>()
-  const [archived] = useState<ArchivedFilter>('all')
+  const [archived, setArchived] = useState<ArchivedFilter>('all')
   // 墓碑筛选（v0.5.1）：仅显示已删除帖子（独立 toggle，与归档/类型正交）
   const [deletedOnly, setDeletedOnly] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -539,10 +539,14 @@ export default function PostsPage() {
   // P6-1：筛选切换 = 用户意图重置 → 立即滚回列表顶部。
   // （此前「按筛选指纹缓存+恢复滚动位置」实测不达预期已 revert——恢复位置
   //   对不上新内容；标准列表 UX 为回顶，触发即滚，不等重取完成）
+  // P8-7（2026-09-10 用户）：修「切平台账号继承滚动深度」——切账号只改
+  //   selectedAccount，`key={scene.acc|view}` 不变 → 滚动容器不重挂，旧 scrollTop
+  //   原样保留。accountKey / archived 一并进依赖 = 同一条「用户意图重置」语义。
   useEffect(() => {
     if (scene.view !== 'list') return
     listScrollRef.current?.scrollTo({ top: 0 })
-  }, [typeFilter, searchKw, dateFrom, dateTo, deletedOnly, scene.view])
+    setShowTop(false)
+  }, [typeFilter, searchKw, dateFrom, dateTo, deletedOnly, archived, accountKey, scene.view])
   useEffect(() => {
     if (scene.view !== 'list' || !hasMore || loading || loadingMore || error || loadMoreError) return
     const root = listScrollRef.current
@@ -679,7 +683,7 @@ export default function PostsPage() {
         platform_uid: uid,
         ...(newAccName.trim() ? { display_name: newAccName.trim() } : {}),
       })
-      toast.success('账号已添加，正在后台抓取账号信息')
+      toast.success('账号已添加，正在抓取账号信息与最新动态…')
       kickPoll()
       // 立即刷新 V 本体 → 新账号药丸出现；选中新账号切换帖子目标
       const fresh = await api.getVtuber(vtuber.id)
@@ -688,8 +692,8 @@ export default function PostsPage() {
         (a) => a.platform === newAccPlatform && a.platform_uid === uid,
       )
       if (acc) setSelectedAccount(acc)
-      // 后台补抓该 V 账号信息（新平台走平台框架分发）；忙时跳过
-      api.fetchVtuber(vtuber.id).catch(() => {})
+      // 后端 create_account 已拉起该账号的账号信息 + 首屏抓取（v0.9.4），
+      // 前端不再重复调 fetchVtuber（那会与后台任务抢同一把锁 → 排队/浪费）
       setAddAccountOpen(false)
       setNewAccUid('')
       setNewAccName('')
@@ -977,17 +981,6 @@ return (
               </div>
 
               <img src={heroDivider} alt="" className="hero-divider" />
-
-              {vtuber.faction && (
-                <div className="stat-sets">
-                  <div className="stat-set">
-                    <span className="faction-badge">
-                      <span className="pill-logo">企</span>
-                      {vtuber.faction}
-                    </span>
-                  </div>
-                </div>
-              )}
             </div>
           </OverlayScroll>
         )}
@@ -1008,7 +1001,18 @@ return (
         )}
 
         {vtuber && scene.view === 'profile' && (
-          <ProfileView vtuber={vtuber} refreshTick={refreshTick} />
+          // P8-5（2026-09-10 用户）：档案卡改版中 → 先占位。
+          // 原 ProfileView（企划/设定/账号一览）在 P8-4 的「档案设置」窗口里重建，
+          // 组件文件暂时保留（别删），改版完成后再决定去留。
+          <div className="empty-state">
+            <div className="empty-state-card">
+              <div className="empty-state-logo">档</div>
+              <p className="empty-state-title">档案卡改版中</p>
+              <p className="empty-state-desc">
+                企划 / 设定 / 账号管理正在重做，将并入展示页的「档案设置」窗口
+              </p>
+            </div>
+          </div>
         )}
 
         {scene.view === 'list' && (
@@ -1045,6 +1049,21 @@ return (
                     >
                       <Ghost className="size-4" />
                       <span className="del-btn-label">已删 {stats?.deleted ?? 0}</span>
+                    </FloatPill>
+                    {/* P8-A 顺带：把后端早已支持、前端一直没暴露的归档过滤放出来
+                        （早于归档截止日 30 天的帖子默认混在列表里，此前无法只看它们） */}
+                    <FloatPill
+                      size="md"
+                      active={archived === 'archived'}
+                      className="arch-btn"
+                      title="仅显示已归档的帖子（早于归档截止日，不再参与追新）"
+                      onClick={() => {
+                        setArchived((a) => (a === 'archived' ? 'all' : 'archived'))
+                        setPage(1)
+                      }}
+                    >
+                      <Archive className="size-4" />
+                      <span className="arch-btn-label">已归档 {stats?.archived ?? 0}</span>
                     </FloatPill>
                     <div className="search-float">
                       <Search className="search-float-icon" />

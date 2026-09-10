@@ -77,7 +77,7 @@ export default function AddVtuberDialog({ open, onOpenChange, onAdded }: Props) 
       // 踢一脚 TopBar 立即轮询：捕获本次单V抓取进入 running 态，
       // 保证其完成时 running→idle 边沿必然派发 fetch-idle（防竞态漏刷新）
       window.dispatchEvent(new Event('ddtoolkit:kick-poll'))
-      toast.success(`已收录「${item.name}」，账号信息抓取中`)
+      toast.success(`已收录「${item.name}」，正在抓取账号信息与最新动态…`)
       onAdded()
       onOpenChange(false)
     } catch (e) {

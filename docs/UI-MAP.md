@@ -57,7 +57,7 @@
 | LOGO 占位区 | `.topbar-logo-zone` | **72×40** 横跨全高，flex 居中 |
 | LOGO | `.topbar-logo` | **用户设计猫脸**（`docs/design/svg/LOGO.svg`，内联矢量 `common/Logo.tsx`，`currentColor` 白描边）**31×24**（viewBox 167.087×131.01 → 1.2754:1） |
 | 标题 | `.topbar-title` | 定宽 **150×40**，垂直居中/水平左对齐；**15px、字距 5px**（`--font-title` = `--font-family`，2026-09-09 用户要求换成阿里妈妈方圆体，原思源黑体子集已删）；`user-select:none` |
-| 状态行 | `.topbar-status` | 绝对居中；**容器只在「有事发生」时出现**（2026-09-09 五轮定调后定稿）：基态 `background:transparent` + 白字 `#fff` + **13px**/500 + r999 + padding `0 12px`（常驻，徽章亮灭时文案不跳位），与顶栏 logo/标题/图标同级；**事件态**（抓取中 / 操作结果覆盖）挂 `.on` → `background:#c9406f` 深玫瑰徽章 + 白字，`transition: background-color .18s` 淡入淡出。配色依据：复用项目「深粉底 + 白字」徽章配方（粉丝徽章 `--pill-fill-pink #e35d8b`、`.float-pill.on`）同色相压深一档——**白字对底 4.72:1（达 AA）**、徽章对顶栏粉 2.49:1（形状清楚）；`#e35d8b` 只有 3.38:1 故未用。`max-width:46%` + `overflow:hidden`，超长文案省略号落内层 `.pill-text-fade` |
+| 状态行 | `.topbar-status` | 绝对居中；**容器只在「有事发生」时出现**（2026-09-09 五轮定调后定稿）：基态 `background:transparent` + 白字 `#fff` + **13px**/500 + r999 + padding `0 12px`（常驻，徽章亮灭时文案不跳位），与顶栏 logo/标题/图标同级；**事件态**（抓取中 / 操作结果覆盖）挂 `.on` → `background:#c9406f` 深玫瑰徽章 + 白字，`transition: background-color .18s` 淡入淡出。配色依据：复用项目「深粉底 + 白字」徽章配方（粉丝徽章 `--pill-fill-pink #e35d8b`、`.float-pill.on`）同色相压深一档——**白字对底 4.72:1（达 AA）**、徽章对顶栏粉 2.49:1（形状清楚）；`#e35d8b` 只有 3.38:1 故未用。`max-width:46%` + `overflow:hidden`，超长文案省略号落内层 `.pill-text-fade`。**文案格式（2026-09-10 P8-C）：`任务名 - V名 - i/N`**，例「动态更新中 - 明前奶绿 - 1/11」「账号信息抓取中 - 七海Nana7mi - 3/10」「正在同步{label}」（外部任务）；任务名映射见 `TopBar.tsx::TASK_TEXT`（account/dynamic/update/full/quick/adopt），V 名缺失时退回过程性文案（平台名/账号名），`total>0` 才显示 `i/N` |
 | ├ 抓取中 | `.topbar-status-spinner`（lucide `Loader2` 14px 旋转，`currentColor`=白） | 2026-09-09 换：原设计稿图标 `Frame_41_8.svg` 是白色填充，在浅底上等于隐形；lucide 走 currentColor，资源已删 |
 | ├ 空闲 | i `.topbar-status-dot`（绿 `#52c41a` 7px） | 无容器，直接落在顶栏粉上 |
 | └ 成功覆盖态 | `.topbar-status-dot.ok`（**白点**，此时徽章已亮起）| pill-message 覆盖窗，4s 后文案消失 → `.on` 自动移除、徽章收回 |
@@ -137,7 +137,7 @@
 | 名称 | 类名 | 说明 |
 |---|---|---|
 | 面板 | `.posts-panel` | `height:100%`，flex column，`overflow:hidden`（裁剪模糊边界） |
-| 背景层 | `.hero-backdrop(.custom)` | 常驻：**自定义背景优先**（`background_path` → `/static/custom_bg/...`，`.custom` 全图清晰 opacity 1），否则头像铺底（0.18+纱罩）；纱罩 ::after 保可读；`key=src` 换装淡入 |
+| 背景层 | `.hero-backdrop(.custom)` | 常驻：**自定义背景优先**（`background_path` → `/static/custom_bg/...`，`.custom` 全图清晰 opacity 1 + **P8-1 起纱罩 alpha 减半**，见 `.hero-backdrop.custom::after`），否则头像铺底（0.18+原纱罩）；`key=src` 换装淡入 |
 | 工具条 | `.view-toolbar` | **高 66px、`padding:0`、贴面板顶居中**，仅视图光条；卡片页右上角挂 `.bg-tools`（ImagePlus 上传/更换浮片，**默认隐藏**，悬停工具行浮现、移出 900ms 渐隐；无清除钮） |
 
 **光条视图切换**
@@ -156,11 +156,10 @@
 | 名字 | `.hero-name` | **57px/500 黑 + 投影(0 2px 4px 黑25%)**；hero-name-block 高 110 |
 | 签名 | `.hero-sign` | **25px/600** `rgba(94,94,94,.76)` 字距3px（30px 行高盒）；走 **VTuber 整体事实**（B站优先账号，无 B站取首个），不跟随 list 所选账号（2026-09-05 视图隔离） |
 | 平台药丸行 | `.stat-sets`（key=vtuber.id 触发重播） | 集内 gap10、集间 gap10，每组至多 3 枚（`pillSets` 每 3 枚切分） |
-| ├ 药丸 | `.stat-pill.image/.pink/.coral` | **191×37**，**2px 圆角** + `1px 2px 4px rgba(15,23,42,.12)` 阴影；**图像底**（`docs/design/pills` → `src/assets/pills/`，bilibili/weibo 全不透明同规格，`100% 100%` 铺满），未知平台奇偶交替 `--pill-fill-pink #e35d8b` / `--pill-fill-coral #e05261`（白字 26px 对比 ≥3.4:1） |
-| ├ 平台LOGO占位 | `.pill-logo` | 28×28、**6px 圆角**、半透明白块 + 平台首字母（后续换图） |
+| ├ 药丸 | `.stat-pill.image/.pink/.coral` | **191×37**，**2px 圆角** + `1px 2px 4px rgba(15,23,42,.12)` 阴影；**图像底**（`docs/design/pills` → `src/assets/pills/`，bilibili/weibo 全不透明同规格，`100% 100%` 铺满），未知平台奇偶交替 `--pill-fill-pink #e35d8b` / `--pill-fill-coral #e05261`（白字 26px 对比 ≥3.4:1）。**P8-B 待改**：点击开账号主页、hover 尾部「+」、长按拖动重排 |
 | └ 数值 | `.pill-value` | **26px/600 白**，**右对齐**（`.stat-pill justify-content:flex-end`，右 padding 12px），数字 ≤4 位（`formatCount` 收紧）+ **`text-shadow 0 1px 2px rgba(0,0,0,.35)`** 保图像底可读 |
 | 饰条 | `.hero-divider` | 394×24 设计稿 SVG |
-| 企划行 | `.faction-badge`（内 `.pill-logo`「企」） | 37px 高、2px 圆角、同款阴影、**#fc7079 实底** + 20px/600 白字；`vtuber.faction` 非空才渲染；外链徽标待数据模型 |
+| ~~企划行~~ | ~~`.faction-badge`（内 `.pill-logo`）~~ | **P8-2 已删除**（card 视图不再展示企划/公会；企划编辑迁往 P8-B 的「档案设置」窗口）。`.pill-logo` 随之删除 |
 
 **list 视图（帖子列表页）**
 | 名称 | 类名 | 说明 |
@@ -173,6 +172,7 @@
 | 类型chips | `.type-chip(.active)` | **分组**：投稿=video+video_dynamic、图文=image+text（key 逗号串直传后端 `in_` 过滤），转发/专栏/音乐/直播单型；计数 `stats.by_type` 求和、零组不显示；超宽时 `.type-chips` 行内横滚兜底（⚠️ 横向滚动条为全局 webkit 样式，见 F 节） |
 | 搜索/时间 | `.chips-tools`(`flex-shrink:0`) | 搜索浮片 **190×30**（300ms 防抖）+ 时间范围下拉（date_from/to，止=次日零点排他） |
 | 已删筛选 | `.del-btn`（Ghost + 计数） | 独立 toggle（与归档/类型正交），激活走 `.float-pill.on` 强调色 |
+| 已归档筛选 | `.arch-btn`（Archive + 计数） | **2026-09-10（P8-A）新增**：把后端早已支持的 `archived` 参数接线成 toggle（此前状态变量无 setter、UI 无入口）；与已删/类型正交，同样纳入「筛选变化即回顶」 |
 | 帖子流 | `.post-grid(.is-refetching)` | 重取时旧内容降透明禁点击，无整屏闪动 |
 | 卡片 | `<PostCard>` `article.post-card` | **浮片化特例**：白底、2px 圆角 + `var(--pill-shadow)`、去发丝边；hover 上浮 2px + 阴影加深 + **标题变色 `--c-accent`** |
 | ├ 封面 | `.post-card-cover` 220×16:10；SmartImage 三态兜底 | 有封面=图；**无封面（纯文字）= `.post-card-cover-paper` 米白纸纹斜条底 + 居中大标题（`.paper-title` 4 行截断）**；类型角标/时长角标浮于其上 |
@@ -193,9 +193,14 @@
 | 粉丝趋势 | `<FanTrendChart>` `.fan-chart` | **卡 870×460 · 4px 圆角 · `--pill-shadow`**；标题 16.5/600 同 `lc-title` 规格。**ECharts 6.1 架构**（canvas 全程自绘，React 只负责卡片壳与头部控制）。详见 B4 |
 
 **profile 视图（P7 追加：档案卡详情视图）**
+> 🔵 **2026-09-10（P8-5）：本视图当前是「档案卡改版中」占位页**（`.empty-state` 骨架）。
+> 下面三行描述的 `ProfileView` / `ProfileCard` / `AccountPicker` **文件保留不删**——
+> P8-B 的「档案设置」窗口要复用其企划 Select 与账号一览逻辑；改版完成后本节重写。
+
 | 名称 | 类名 | 说明 |
 |---|---|---|
-| 视图容器 | `<ProfileView>` `<OverlayScroll className="archive-view">` | 同一 `.archive-view` 覆盖式滚动容器（滚动体布局同上） |
+| 当前形态 | `.empty-state`（复用未选择 V 的空态骨架） | 标题「档案卡改版中」+ 说明「企划 / 设定 / 账号管理正在重做，将并入展示页的『档案设置』窗口」 |
+| ~~视图容器~~ | ~~`<ProfileView>` / `.archive-view`~~ | 保留待 P8-B 复用 |
 | 档案卡段 | `.archive-section`（含 `.archive-section-head`：标题 `档案` + note（第三方索引 N 项）+ `<AccountPicker>`） | 定宽契约：`max-width:960px;min-width:480px;height:460px;flex-shrink:0`，4px 圆角 + `--pill-shadow`；卡内滚动 = `<OverlayScroll className="archive-section-scroll">`（滚动体 padding `0 14px 6px`） |
 | 账号抽屉段 | 同上骨架（标题 `账号` + note N 个账号） | `.profile-account-list` 全部平台账号：平台标（B站/微博）/昵称/粉丝/房间号/直播中徽章（红描边胶囊） |
 | 内部档案卡 | `<ProfileCard>` `.profile-card*` | **企划｜公会 两列**（企划=Select 编辑，选项自动建议第三方索引 `group_name`，一键「采纳」写 `faction`；公会=只读占位「未收录」）+ 生日/出道日/房间号（跟随卡内所选账号，lucide 图标行）+ 设定集（Collapsible 折叠，`.profile-setting` 200px 内滚动） |

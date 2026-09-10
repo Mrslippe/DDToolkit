@@ -40,6 +40,15 @@
   opacity: 1;
 }
 
+/* P8-1（2026-09-10 用户）：自定义背景是用户自己选的图，再压一层厚纱罩就发白看不清。
+   只在 .custom 下把 ::after 的 alpha 降到约一半（头像铺底态保持原值，避免正文吃字）。
+   这组 alpha 是唯一旋钮——以后嫌白/嫌花直接调这四个值。 */
+.hero-backdrop.custom::after {
+  background:
+    linear-gradient(180deg, rgba(255, 251, 251, 0.28), rgba(255, 238, 242, 0.45)),
+    radial-gradient(120% 90% at 50% 0%, rgba(255, 251, 251, 0.55), rgba(255, 251, 251, 0.12));
+}
+
 /* 背景工具组：卡片页工具行右上角浮片（ImagePlus 换背景）；
    默认隐藏（opacity 0 + 禁点击），悬停工具行浮现，移出 900ms 后渐隐 */
 .bg-tools {
@@ -487,23 +496,6 @@
   background-color: rgba(255, 82, 136, 0.9);
 }
 
-/* 平台 LOGO 占位框（后续替换为图片资源） */
-.pill-logo {
-  width: 28px;
-  height: 28px;
-  flex-shrink: 0;
-  margin-left: 6px;
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.25);
-  color: #fff;
-  font-size: 14px;
-  font-weight: 600;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  user-select: none;
-}
-
 .pill-value {
   color: #fff;
   font-size: 26px;
@@ -524,20 +516,9 @@
   margin: 0;
 }
 
-/* 其他平台链接（1.2.6）：等效 1.2.4 徽章集结构，复用 .stat-sets/.stat-set */
-.faction-badge {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 37px;
-  border-radius: 2px;
-  box-shadow: 1px 2px 4px rgba(15, 23, 42, 0.12);
-  padding: 0 14px 0 6px;
-  background: rgba(252, 112, 121, 1);
-  color: #fff;
-  font-size: 20px;
-  font-weight: 600;
-}
+/* P8-2（2026-09-10 用户）：card 视图不再用徽章展示企划/公会——
+   `.faction-badge` / `.pill-logo` 随之删除（企划的展示与编辑迁往
+   「档案设置」窗口，见 docs/TODO.md P8-4）。 */
 
 /* 类型筛选行：chips + 搜索/时间范围筛选。
    2026-09-08（用户）：窄窗口下右侧工具组（搜索 190 + 时间筛选 + 已删除）本身
@@ -886,7 +867,8 @@
 }
 
 /* 已删筛选钮（chips-tools 内；激活态走 .float-pill.on 强调色） */
-.del-btn-label {
+.del-btn-label,
+.arch-btn-label {
   white-space: nowrap;
 }
 

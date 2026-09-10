@@ -4,17 +4,20 @@
 > 核心闭环（订阅 → 自动抓取 → 浏览 → 归档）已完整；当前主线是补全"档案完整性"，
 > 让存下来的数据可检索、可证明、可带走。
 
-## 现状盘点（2026-09-09，基于 v0.9.2 + 未发布的 09-08/09 修复批次）
+## 现状盘点（2026-09-10，基于 v0.9.3 + 未发布的 09-09/10 批次：devlog/044、045）
 
 | 能力 | 状态 |
 |------|------|
 | 关键词搜索（title/summary/正文 三路 LIKE） | ✅ 已上线（v0.5.2，FTS5 暂缓） |
 | 发布时间范围筛选 | ✅ 已上线（`date_from`/`date_to` + 前端时间浮片） |
-| 类型筛选 / 服务端分页 | ✅ 已上线（**归档过滤目前前端未暴露**：`archived` 常量 'all'，后端参数仍支持） |
+| 类型筛选 / 服务端分页 | ✅ 已上线（**归档过滤已于 2026-09-10 接线为「已归档 N」chip**，P8-A 顺带；后端参数本就支持） |
 | 候选池收录 / 解订阅连带清帖 / 批量任务 | ✅ 已上线（v0.5.0）；**解订阅外键回滚已修**（2026-09-09，devlog/040：子表经 `services/purge.py` 显式清理） |
 | 抓取任务优先级（手动 > 定时档） | ✅ 已上线（2026-09-09，devlog/040：自动档起跑让位 + 持锁断点让位） |
 | 抓取调度合并为综合档（账号流数据驱动 24h + 双粒度并发 + 外部批次排队） | ✅ 已上线（2026-09-09，devlog/042） |
 | 收录 / 添加账号后立即抓取账号信息 | ✅ 已上线（2026-09-09，devlog/041：加账号同收录口径，含第三方历史回填） |
+| 收录链路提速（账号信息 ∥ 首屏内容、头像延后、抢锁排队、共享 SSL 上下文） | ✅ 已上线（2026-09-09，devlog/044：账号信息可见 6.0s → 0.9s，首屏入库 0 → 33 条） |
+| 外部任务进度胶囊 + 完成后卡片自动刷新 | ✅ 已上线（2026-09-10，devlog/044 §C2：`external` 状态段 + `external.seq` → `fetch-idle`） |
+| 微博/B 站增量漏帖（置顶帖多条且打乱流序） | ✅ 已修复（2026-09-10，devlog/045：置顶豁免 + 整页扫完再停；微博一次补回 29 条） |
 | 微博扫码登录 | ✅ 已上线（v0.5.0，`/auth/weibo/qr/*`） |
 | 账号统计快照历史 | ✅ 采集+可视化（v0.6.0 P5 粉丝趋势，**v0.9.x 重写为 ECharts canvas**） |
 | 删除检测（墓碑） | ✅ 已上线（v0.5.1：两击判定 + 已删筛选/角标/时间线） |
@@ -62,7 +65,7 @@
 - **迁移链纪律**：新增 alembic 迁移后必须同步更新 `app/main.py` 的 `MIGRATION_HEAD`
   （tests 断言其与 alembic head 一致）
 - 冷启动快路径依赖版本号判断，勿漏 bump
-- 抓取链路改动后跑全量 `pytest`（当前基线 136 passed）
+- 抓取链路改动后跑全量 `pytest`（当前基线 236 passed）
 
 ---
 
@@ -148,6 +151,99 @@
   1. ✅ 时间轴缩略图，并且支持缩放 → recharts Brush（底部缩略图 + 拖拽选区缩放 + 重置缩放按钮）
   2. ✅ 每天粉丝增减量以柱状图的形式呈现 → 「每日增减」模式（按天 diff，正增主粉 / 负增警示色）
   3. ✅ 灵活的操作逻辑和美观的动画 → 趋势/每日增减分段切换（切换重置缩放不残留），折线/柱状入场动画 400ms
+
+#### P8 一些综合性的前端改动 —— 📋 已规划分三批（2026-09-10）
+
+> 下段是用户 2026-09-10 手写原始条目的**可执行化版本**（含代码定位 / 改法 / 验收）。
+> 原措辞可由 git 历史追溯；批内已落地的直接勾掉。
+
+**P8-A｜零风险快赢（→ v0.9.5）**
+
+- [x] **1 背景白色遮罩更淡**：`styles/posts.css` 新增 `.hero-backdrop.custom::after` 覆盖（alpha 减半；
+      头像铺底态保持原值），`.custom` 原本只改父 opacity、遮罩全量保留 → 这就是「自定义背景仍发白」的原因。
+      ✅ 已落地（视觉待实机确认）
+- [x] **2 card 视图去掉企划/公会徽章**：删 hero 内 `.faction-badge` 块 + 死 CSS `.faction-badge`/`.pill-logo`
+      （单点使用）。注：「公会」在 card 视图本就不存在，原本只有企划。✅ 已落地；
+      **企划的编辑入口迁往 P8-B 的档案设置窗口**（原入口在 ProfileCard，见下条）
+- [x] **5 档案视图（档案**卡** profile）改施工中占位**：`profile` 分支换 `.empty-state` 占位；
+      `ProfileView/ProfileCard/AccountPicker` 文件**保留不删**，P8-B 要复用其企划 Select 与账号一览。
+      ✅ 已落地（archive 视图＝直播日历/粉丝趋势，不受影响）
+- [x] **7 list 滚动深度跨平台账号继承**：根因＝切账号只改 `selectedAccount`、`scene.acc` 不变 →
+      `key={acc|view}` 不变 → `.os-scroll` 的 `scrollTop` 原样保留；P6-1 的回顶 effect 依赖数组
+      里没有 `accountKey`。补 `accountKey`（+ `archived`）依赖与 `setShowTop(false)`。✅ 已落地
+- [x] 顺带：把后端早已支持、前端一直没接线的**「已归档 N」chip** 放出来（与「已删」同款）✅ 已落地
+
+**P8-B｜card 视图改造（→ v0.9.7，1.5~2 天）**
+
+- [ ] **3 平台徽章交互**：`StatPill` 现为无交互 `<div>` → 点击开主页。
+      **B 站 `accounts.url` 实测 0/8 已填**（`fetch_bilibili_user_info` 不返回 url）→ 前端兜底拼
+      `space.bilibili.com/{platform_uid}`（微博库内已有 2/2）。
+      开外链：`shell:allow-open` capability 已就绪但缺 npm `@tauri-apps/plugin-shell`（Web 下回退 `window.open`）。
+      hover 尾部半透明「+」→ 复用**抽出的 `AddAccountDialog`**（先把 `PostsPage` 里那份抽成组件，避免两处重复表单）。
+      长按拖动重排：全仓无拖拽基建 → 原生 pointer 实现 + 新增 **`accounts.sort_order`（迁移 f001）** + `by_vtuber` 补 `order_by`。
+      风险：药丸 191px 定宽 + 「每 3 枚一组」是排版契约，尾部按钮会改变换行 → CSS 与 probe 断言一起调
+- [ ] **4 「更换图片」→ 独立「档案设置」弹窗** `VtuberSettingsDialog.tsx`（radix Dialog，按 UI-MAP §C6 规格）：
+      背景上传/清除（`POST|DELETE /vtuber/{id}/background` 已有，`api.clearBackground` 零调用可直接接）、
+      名称+企划（`PUT /vtuber/{id}`；**前端 `api.updateVtuber` 类型缺 `name`/`avatar`**）、
+      签名（**账号级**字段 → `PUT /account/{id}`，无前端封装）、头像（从账号候选写 `vtubers.avatar`，
+      只能写远端 URL——`vtuber.avatar` 不走 `resolveAsset`）、账号管理（`DELETE /account/{id}` 无封装 + 二次确认）。
+      **并承接 profile 下线后的企划编辑 / 设定 / 账号一览**
+- [ ] 已定决策：手动改的昵称/签名会被抓取覆盖（`_fetch_one_account` 的 `or acc.display_name`）→
+      **新增 `accounts.locked_fields`（与 sort_order 同批迁移 f001）**，抓取侧跳过锁定字段
+- [ ] 「独立窗口」按**独立弹窗**实现（真开 OS 新窗口需新 WebviewWindow + capability，当前只有 `main`，不建议）
+
+**P8-C｜顶栏抓取进度（→ v0.9.5）**
+
+- [x] **6 状态胶囊显示「任务 - V名 - i/N」**（例：`动态更新中 - 明前奶绿 - 1/11`）：
+      后端 `_status` 补 `task` / `vtuber_name` / `index` / `total`（账号流 + 帖子流的
+      五个写入点；`_set_post_progress` / `_set_account_vtuber` / `_vtuber_name_of` 三个原语），
+      `post.target` 语义三混的问题一并收敛（`target` 仍同步写入以兼容旧前端）；
+      前端 `TopBar` 加 `TASK_TEXT` 映射与 `statusParts()` 拼接，V 名缺失时退回过程性文案。
+      ✅ 已落地；真实路径实测（更新动态）：`task=update vtuber=明前奶绿 1/2 → 2/2`
+
+#### P9 一些综合性的后端改动 —— 📋 已规划分两批（2026-09-10）
+
+**P9-A｜数据正确性（→ v0.9.6，1~1.5 天，含 2 处迁移 + 修复脚本）**
+
+- [ ] **1 直播场次重复（self 与 danmakus 同场算两场）**：表内去重**是好的**（实测 泽音 2026-01-24
+      两条重叠 danmakus 记录已并成一场）；问题在 **self 快照并入** `_find_group(window=90min)`
+      **只比 start 差、不看区间重叠** → 实测 4 个 B 站账号 / 20 条 self 场次里 **4 条本应合并却算两场**
+      （明前奶绿 09-03「楚什么楚！」、七海 09-03→09-05 跨 40h 伪场次、弥月 09-09 等）。
+      改法：区间重叠优先（重叠 ≥ 较短区间 30% 取最大者）+ 回填 `end_at` 合理性闸门 + self-only 组要求无重叠才保留。
+      **无表结构改动**；验收＝上述 4 例各少一场、日历「N 场」计数下降、新增 `tests/test_live_merge.py`
+- [ ] **3 视频与投稿动态合并**：实测 **322 个 bvid 同时存在 `video` 与 `video_dynamic`**
+      （video 423 / video_dynamic 369，其中 **47 条动态带附言**，如「1P是切片，2P是大家的合唱…」）。
+      **已定：只保留 `video` 一条 + 新增字段存动态附注 `posts.note`（迁移 f002）**，卡片/抽屉以「UP 主附言」标注。
+      历史修复 `scripts/merge_video_dynamics.py`（幂等、先备份；注意墓碑 `seen_pids` 与 `posts_last_scan_at` 刷新）
+- [ ] **2 平台化帖子分类**：实测 B 站 `image 2453 / video 423 / repost 385 / video_dynamic 369 / text 352 /
+      music 2 / article 2`，微博 `text 318 / image 227 / repost 18 / video 1` → **专栏/音乐是 B 站独占**；
+      微博系统/推广自动帖实测仅 7/564（会员购、超话、活动能量）→ 单列 `system` 类型不混进「图文」。
+      前端 `TYPE_GROUPS`（一份共用常量）改为**按当前账号平台生成**；可选 `scripts/reclassify_posts.py` 回填历史
+
+**P9-B｜调度（→ v0.9.8，2 天）**
+
+- [ ] **4 启动时外部补抓（直播日历 / 粉丝趋势）**：新增 **`app_meta` 通用 KV 表（迁移 f003）** 存
+      `external.startup.last_run`；启动链在综合档之后跑一次「每 V 主账号」补抓，<24h 则跳过。
+      实测：zeroroku `/history` **一次返回全量**（197KB / 8.6~19s）、danmakus `/channel` **一次返回该账号全部场次**
+      （单账号一次写入 1349 场）→ **接口无 limit 参数，「只比对最新几条」只能靠账号级新鲜度跳过 + 写库幂等去重**。
+      规模：10 个账号 / 7 个 V → 串行 30~60s，可与启动链并行；进度复用已有的 `external` 状态胶囊
+- [ ] **5 动态流自适应节奏（已定预算 12 req·min⁻¹）**：加**按平台令牌桶**（`DYNAMICS_BUDGET_RPM=12`）+
+      轮间 `max(预算等待, DYNAMICS_MIN_GAP_SECONDS) + jitter(±30~60s)`，由既有 `_tier_loop` 10s 心跳驱动**连续轮次**；
+      保留手动任务轮间让位与「风控只冷却该平台」语义（预算器同步熔断）。
+      规模：每轮约 7~10 个请求（10 个可抓取账号 / 7 个 V）。验收＝连续实测速率 ≤ 预算、跑一天无 412/-509
+
+#### P8/P9 实施顺序（2026-09-10 定稿）
+
+| 版本 | 内容 | 工期 | 前置 |
+|---|---|---|---|
+| **v0.9.4** | 先落盘当前未提交批次（devlog/044 收录提速 + 045 微博漏帖修复 + 外部任务状态胶囊） | — | — |
+| **v0.9.5** | P8-A（4 条快赢 + 归档 chip）+ P8-C（顶栏进度） | 1.5 天 | v0.9.4 |
+| **v0.9.6** | P9-A（场次去重 / 视频合并 + `note` / 平台化类型；迁移 f002） | 1~1.5 天 | — |
+| **v0.9.7** | P8-B（card 改造 + 档案设置弹窗 + profile 内容迁移；迁移 f001） | 1.5~2 天 | v0.9.5 |
+| **v0.9.8** | P9-B（启动外部补抓 + 动态流 12/min 自适应；迁移 f003） | 2 天 | v0.9.6 |
+
+> 迁移编号按现有链（a001→e007）顺延为 **f001（accounts 排序+锁定）/ f002（posts.note）/ f003（app_meta）**，
+> 每次都必须同步 `app/main.py::MIGRATION_HEAD`（GLOSSARY §8.3 的不变量）。
 
 ---
 

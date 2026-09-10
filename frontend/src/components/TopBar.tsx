@@ -82,6 +82,10 @@ export default function TopBar() {
   const prevPostRunning = useRef(false)
   const sawAccRun = useRef(false)
   const sawPostRun = useRef(false)
+  // 外部第三方数据任务（收录回填 / 每日批次）：seq 变化即「刚完成一轮」，
+  // 用来发 fetch-idle —— 只看 running 边沿会漏掉「两次轮询之间就跑完」的短任务，
+  // 停在档案视图的用户就永远看不到粉丝趋势/直播日历（2026-09-09 用户反馈）
+  const seenExtSeq = useRef(-1)
 
   useEffect(() => {
     let cancelled = false
@@ -116,7 +120,8 @@ export default function TopBar() {
       try {
         const s = await api.getFetchStatus()
         if (cancelled) return
-        active = s.account.running || s.post.running
+        const ext = s.external
+        active = s.account.running || s.post.running || (ext?.running ?? false)
         setFetchBusy(s.account.running, s.post.running)
 
         // 账号快照变化 → 派发事件，侧栏/右栏就地刷新（内容 diff：见 seenByUid 注释）
@@ -136,6 +141,23 @@ export default function TopBar() {
               detail: [...freshByUid.values()],
             }),
           )
+        }
+
+        // 外部数据任务完成（seq 自增）→ 提示 + 让档案卡片重拉数据。
+        // 与下面的 running→idle 边沿分开：边沿可能整个错过（任务在两次轮询之间结束），
+        // seq 是后端记账，不会漏。
+        if (ext) {
+          if (seenExtSeq.current < 0) {
+            seenExtSeq.current = ext.seq          // 首次轮询仅记基线
+          } else if (ext.seq !== seenExtSeq.current) {
+            seenExtSeq.current = ext.seq
+            window.dispatchEvent(
+              new CustomEvent('ddtoolkit:pill-message', {
+                detail: { text: `${ext.last_label ?? '第三方数据'}同步完成` },
+              }),
+            )
+            window.dispatchEvent(new Event('ddtoolkit:fetch-idle'))
+          }
         }
 
         // 新任务启动时立即让位给实时状态显示
@@ -175,6 +197,15 @@ export default function TopBar() {
             if (postRes.kind === 'full_all' || postRes.kind === 'full_vtuber') {
               // 全量抓取完成 → 常驻对话框，需用户手动关闭（内容含全部中断账号）
               setDoneReport(postRes)
+            } else if (postRes.kind === 'adopt') {
+              // 收录首屏抓取（v0.9.4）：新 V 的投稿/动态第一屏，给一条简短反馈
+              let text = `新 V 首屏抓取完成 · 投稿 ${postRes.videos ?? 0} · 动态 ${postRes.dynamics ?? 0} · 入库 ${postRes.stored ?? 0}`
+              if (postRes.issues?.length) {
+                text += ` · ${postRes.issues[0].stop_reason}`
+              }
+              window.dispatchEvent(
+                new CustomEvent('ddtoolkit:pill-message', { detail: { text } }),
+              )
             } else {
               // 其余后台任务（如批量更新动态）仍走瞬时胶囊
               let text = `帖子抓取完成 · 存储 ${postRes.stored ?? 0} · 跳过 ${postRes.skipped ?? 0}`
@@ -191,8 +222,14 @@ export default function TopBar() {
         }
 
         setStatus((prev) => {
-          const wasRunning = prev ? prev.account.running || prev.post.running : prevRunning.current
-          if (wasRunning && !active) {
+          // 抓取任务的「运行→空闲」边沿：**不含**外部数据任务——它跑在后台且
+          // 不占两把锁，若把它算进来，账号/帖子抓取结束时的刷新会被拖到回填结束
+          // （新 V 的首屏内容要等 20s 才出现在右栏）。外部完成另有 seq 通道。
+          const wasRunning = prev
+            ? prev.account.running || prev.post.running
+            : prevRunning.current
+          const accountPostRunning = s.account.running || s.post.running
+          if (wasRunning && !accountPostRunning) {
             window.dispatchEvent(new Event('ddtoolkit:fetch-idle'))
           }
           prevRunning.current = active
@@ -276,17 +313,49 @@ export default function TopBar() {
     return () => window.removeEventListener('ddtoolkit:pill-message', onPill)
   }, [])
 
-  const busy = status ? status.account.running || status.post.running : false
+  const busy = status
+    ? status.account.running || status.post.running || (status.external?.running ?? false)
+    : false
+
+  // P8-C（2026-09-10 用户）：状态胶囊格式 = 任务名 - V名 - i/N
+  // （例：动态更新中 - 明前奶绿 - 1/11）
+  const TASK_TEXT: Record<string, string> = {
+    account: '账号信息抓取中',
+    dynamic: '动态轮询中',
+    update: '动态更新中',
+    full: '全量抓取中',
+    quick: '帖子抓取中',
+    adopt: '首屏抓取中',
+  }
+  /** 拼「任务名 - V名 - i/N」；V 名缺失时退回过程性文案（平台名 / 账号名） */
+  const statusParts = (
+    task: string | null | undefined,
+    fallbackTask: string,
+    vtuberName: string | null | undefined,
+    processText: string | null | undefined,
+    index?: number,
+    total?: number,
+  ): string => {
+    const parts = [TASK_TEXT[task ?? ''] ?? fallbackTask]
+    const who = vtuberName || processText
+    if (who) parts.push(String(who))
+    if (total && total > 0) parts.push(`${index ?? 0}/${total}`)
+    return parts.join(' - ')
+  }
 
   let statusText = '数据服务运行中'
   let dotClass = 'topbar-status-dot'
   if (status?.post.running) {
-    statusText = `${status.post.target ?? 'VTuber'} 帖子抓取中`
+    const p = status.post
+    statusText = statusParts(p.task, '帖子抓取中', p.vtuber_name, p.target, p.index, p.total)
     dotClass = 'topbar-status-dot busy'
   } else if (status?.account.running) {
     const a = status.account
-    const progress = a.total > 0 ? ` ${a.index}/${a.total}` : ''
-    statusText = `${a.current ?? '账号'} 信息抓取${progress}`
+    statusText = statusParts(a.task, '账号信息抓取中', a.vtuber_name, a.current, a.index, a.total)
+    dotClass = 'topbar-status-dot busy'
+  } else if (status?.external?.running) {
+    // 外部第三方数据（收录回填 / 每日批次）：与抓取任务并行，优先级最低
+    statusText = `正在同步${status.external.label ?? '第三方数据'}`
     dotClass = 'topbar-status-dot busy'
   }
 
