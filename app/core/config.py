@@ -48,6 +48,13 @@ class Settings:
     FETCH_BATCH_COOLDOWN: int = 60      # 休息秒数
     RATE_LIMIT_COOLDOWN: int = 600      # 触发风控后冷却秒数（10 分钟）
 
+    # 收录 / 加账号的快速链路（v0.9.4）：目标「3~6s 内看到账号信息 + 首屏内容」
+    MANUAL_FAST_INTERVAL_MIN: float = 0.5   # 单V/收录路径的账号间隔（只在账号之间生效）
+    MANUAL_FAST_INTERVAL_MAX: float = 1.0
+    FIRST_SCREEN_VIDEO_PAGES: int = 1       # 首屏：投稿 1 页（列表自带封面/时长/统计）
+    FIRST_SCREEN_DYNAMICS_PAGES: int = 1    # 首屏：动态 1 页
+    FIRST_SCREEN_DYNAMICS_LIMIT: int = 3    # 首屏：动态最多入库 N 条新帖（每条 1 次详情）
+
     # 启动链（v0.6.0）：应用启动后依次执行 直播状态 → 综合档（动态流 + 账号流）
     STARTUP_CHAIN_ENABLED: bool = True
     STARTUP_CHAIN_DELAY: float = 4.0    # 启动后延迟秒数（等后端/前端就绪）

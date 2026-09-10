@@ -61,6 +61,16 @@ async def async_fetch_vtuber(vtuber_id: int):
     return await _sched().async_fetch_vtuber(vtuber_id)
 
 
+async def async_fetch_accounts(account_ids: list[int], label: str = "指定账号"):
+    """按账号 id 精确抓取（收录 / 加账号走这条：只抓新增账号）。"""
+    return await _sched().async_fetch_accounts(account_ids, label=label, fast=True)
+
+
+async def async_fetch_first_screen(account_id: int):
+    """收录首屏抓取：投稿 1 页 + 动态 1 页限 N 条（见 scheduler 同名函数）。"""
+    return await _sched().async_fetch_first_screen(account_id)
+
+
 def is_fetch_running():
     return _sched().is_fetch_running()
 
@@ -238,11 +248,12 @@ def list_accounts(vtuber_id: int, db: Session = Depends(get_db)):
 @router.post("/vtuber/{vtuber_id}/accounts", response_model=AccountOut, status_code=status.HTTP_201_CREATED)
 def create_account(vtuber_id: int, data: AccountCreate,
                    background: BackgroundTasks, db: Session = Depends(get_db)):
-    """给某 V 添加平台账号；成功后立刻后台抓取账号信息。
+    """给某 V 添加平台账号；成功后立刻后台抓取**该账号**信息与首屏内容。
 
     2026-09-09 用户反馈：此前只建行不抓取，前端 toast「正在后台抓取账号信息」
-    与事实不符，新账号要等下一轮定时档才补上。这里与收录（adopt）同款：
-    响应后抓该 V 全部账号信息 + 回填新账号的第三方历史（粉丝历史/场次/礼物日）。
+    与事实不符，新账号要等下一轮定时档才补上。
+    2026-09-09 提速（v0.9.4）：改为与收录同款链路——只抓新增账号（不再重抓该 V
+    全部账号）+ 首屏内容并发 + 第三方历史后台补（见 `_adopt_background`）。
     """
     if not VTuberRepo(db).get(vtuber_id):
         raise HTTPException(404, f"VTuber id={vtuber_id} 不存在")
@@ -251,8 +262,8 @@ def create_account(vtuber_id: int, data: AccountCreate,
     except IntegrityError:
         db.rollback()
         raise HTTPException(409, f"该 (platform, platform_uid) 账号已存在")
-    background.add_task(_fetch_adopted, vtuber_id)
-    background.add_task(_backfill_adopted_history, acc.id)
+    background.add_task(_adopt_background, vtuber_id, acc.id,
+                        acc.display_name or data.platform_uid)
     return AccountOut.model_validate(acc, from_attributes=True)
 
 
@@ -777,18 +788,68 @@ class AdoptRequest(BaseModel):
     faction: str | None = None
 
 
-async def _fetch_adopted(vtuber_id: int) -> None:
-    """BackgroundTasks 回调：响应送达后在事件循环上执行单V账号抓取。"""
-    await async_fetch_vtuber(vtuber_id)
+# 后台任务强引用集合（v0.9.4）：
+# `asyncio.create_task()` 的返回值若无人引用，任务可能在执行中被 GC 回收
+# ——Python 文档明确警告（"Save a reference to the result of this function"）。
+# 收录回填是 fire-and-forget，一旦被回收就是「日志里根本没有外部任务」的静默丢失。
+_background_tasks: set[asyncio.Task] = set()
 
 
-async def _backfill_adopted_history(account_id: int) -> None:
+def _spawn_background(coro) -> asyncio.Task:
+    """起一个脱离关键路径的后台任务（保留强引用，完成后自动移除）。"""
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+
+
+async def _adopt_background(vtuber_id: int, account_id: int, label: str = "") -> None:
+    """收录 / 加账号后的后台链路（v0.9.4 提速，用户 2026-09-09 需求）。
+
+    旧实现：`_fetch_adopted`（该 V 全部账号信息）→ `_backfill_adopted_history`
+    **顺序**执行，且账号信息里还夹着 3~5s 空转与内联头像下载 → 用户要等 5~12s。
+
+    新实现：三条支路**同时起跑**
+    1. 账号信息（只抓新增账号，账号锁）；
+    2. 首屏内容（帖子锁）；
+    3. 第三方历史回填（粉丝趋势 / 直播场次 / 礼物日）——脱离关键路径，
+       打的是第三方站点、不占两把锁，因此与 1/2 并行不会拖慢首屏；
+       慢也不占 HTTP 后台槽位（否则响应后台链会挂几十秒）。
+
+    用户 2026-09-09 反馈「手动任务和外部任务没有连在一起」：回填原来排在
+    `gather` 之后才起跑，且首条日志要等第三方响应（本次实测 ~14s），中间还夹着
+    综合档续跑的日志 —— 现在回填在 `gather` **之前**起跑并打印「收录回填开始」，
+    日志链路一眼可见（devlog/044 §六）。
+    """
+    # 先起回填：与下面两条关键路径并行（顺序上先 spawn，日志即连在一起）
+    _spawn_background(_backfill_adopted_history(account_id, label))
+    await asyncio.gather(
+        async_fetch_accounts([account_id], label=f"VTuber#{vtuber_id}"),
+        async_fetch_first_screen(account_id),
+        return_exceptions=True,   # 两条路径内部各自兜异常，互不牵连
+    )
+
+
+async def _backfill_adopted_history(account_id: int, label: str = "") -> None:
     """收录后回填该账号的第三方历史（粉丝历史 / 直播场次 / 礼物日）。
 
     2026-09-08（用户）：「历史直播场次与粉丝数来自第三方站点，应在首次添加时
     同步获取」——此前只在每日定时任务里跑（全量口径），新收录的 V 当天看不到
     历史数据。这里按 account_id 白名单只回填这一个账号，避免全量扫站。
+
+    2026-09-09（用户）：回填期间要在顶栏状态胶囊里可见，完成后要发事件让档案卡片
+    刷新（否则停在档案视图不动的用户，粉丝趋势/直播日历会一直是空的）——
+    因此进入/退出时登记 `external_task_started/finished`，前端据 `external.seq`
+    变化发 `fetch-idle`（见 TopBar）。
+
+    `label`：给用户看的任务名（由端点从请求会话里取好传入，避免这里再开一次库）。
     """
+    sched = _sched()
+    token = f"adopt:{account_id}"
+    display = label or f"account#{account_id}"
+    label = f"{display} 的历史数据"
+    sched.external_task_started(token, label)
+    logger.info(f"收录回填开始 account#{account_id}（{label}：粉丝历史/直播场次/礼物日）")
     try:
         from app.services.externals.runner import run_external_interval
 
@@ -796,7 +857,10 @@ async def _backfill_adopted_history(account_id: int) -> None:
         logger.info(f"收录回填 account#{account_id} 完成: "
                     f"{[r['kind'] for r in results]}")
     except Exception as e:  # 回填失败不影响收录本身
-        logger.warning(f"收录回填 account#{account_id} 失败: {e}")
+        logger.warning(f"收录回填 account#{account_id} 失败: "
+                       f"{type(e).__name__}: {e}")
+    finally:
+        sched.external_task_finished(token)
 
 
 @router.get("/vtuber/pool/search")
@@ -816,12 +880,14 @@ def search_pool(kw: str, db: Session = Depends(get_db)):
 
 @router.post("/vtuber/adopt", response_model=VTuberOut, status_code=status.HTTP_201_CREATED)
 def adopt_vtuber(data: AdoptRequest, background: BackgroundTasks, db: Session = Depends(get_db)):
-    """从候选池收录 VTuber：建库后立即调度该 V 的账号信息抓取。
+    """从候选池收录 VTuber：建库后立即调度该 V 的账号信息 + 首屏内容抓取。
     仅接受池内存在的 (platform, platform_uid)，名称以池为准防伪造。
 
     注意：本端点为同步函数（线程池执行），抓取调度必须走 BackgroundTasks
     ——直接 asyncio.create_task 会因工作线程无事件循环抛 RuntimeError，
-    造成「数据已入库但响应 500、抓取未启动」的双重故障（v0.5 实测）。"""
+    造成「数据已入库但响应 500、抓取未启动」的双重故障（v0.5 实测）。
+    后台链路的内部并发（账号信息 ∥ 首屏内容）发生在 `_adopt_background` 里，
+    那时已在事件循环上，可以安全 create_task。"""
     hit = pool.find_in_pool(data.platform, data.platform_uid)
     if not hit:
         raise HTTPException(404, "候选池中不存在该 platform_uid，请先在添加浮窗中检索选择")
@@ -851,11 +917,9 @@ def adopt_vtuber(data: AdoptRequest, background: BackgroundTasks, db: Session = 
         raise HTTPException(409, f"该账号已入库（并发收录冲突）") from None
     db.refresh(vtuber)
 
-    # 响应送达后由事件循环执行（BackgroundTasks 原生支持异步回调）
-    background.add_task(_fetch_adopted, vtuber.id)
-    # 收录即回填第三方历史（粉丝历史 / 直播场次）——用户口径：历史数据来自
-    # 第三方站点，应在首次添加时同步获取，因此不需要额外的手动入口
-    background.add_task(_backfill_adopted_history, acc.id)
+    # 响应送达后由事件循环执行：账号信息 + 首屏内容并发，第三方历史后台补
+    background.add_task(_adopt_background, vtuber.id, acc.id,
+                        acc.display_name or acc.platform_uid)
     return VTuberOut.model_validate(vtuber, from_attributes=True)
 
 

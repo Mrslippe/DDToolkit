@@ -32,7 +32,8 @@
 | **墓碑 / tombstone** | 帖子从平台消失的删除检测（两击 + 已验证窗口） | `services/tombstone.py::apply_tombstone_scan`；`posts.deleted_detected_at` | 前端「已删」筛选/角标 |
 | **归档 / archive** | 早于 N 天的帖子不再参与抓取遍历 | `PostRepo.archive_before`；`scheduler.archive_old_posts` | `is_archived` |
 | **候选池 / pool** | 离线待选 VTuber 索引（`vtubers.csv`） | `services/pool.py`；`GET /vtuber/pool/search` | 收录（adopt）的唯一入口 |
-| **收录 / adopt** | 从候选池把 V+账号入库，并立刻抓账号信息 + 回填第三方历史 | `routers/vtuber.py::adopt_vtuber`；`_fetch_adopted`；`_backfill_adopted_history` | 添加账号走同款 |
+| **收录 / adopt** | 从候选池把 V+账号入库，并立刻抓账号信息 + **首屏内容** + 回填第三方历史 | `routers/vtuber.py::adopt_vtuber`、**`_adopt_background`** | 添加账号走同款（只抓新账号） |
+| **收录首屏 / first screen** | 新账号立刻抓到的第一屏内容（投稿 1 页 + 动态 1 页限 3 条） | `scheduler.async_fetch_first_screen` | v0.9.4，devlog/044 |
 | **解除订阅 / unsubscribe** | 删 V：清帖子 + 4 张子表 + 活动条目，再级联删账号 | `routers/vtuber.py::delete_vtuber`；**`services/purge.py`** | 外键全开，漏清即回滚 |
 | **回填 / backfill** | 用第三方数据补历史（粉丝/场次/正文/时间） | `externals/runner.run_external_interval(account_ids=…)`；`scripts/backfill_*.py` | 收录时按账号白名单回填 |
 | **重要日期 / 活动** | 手动维护的纪念日/活动条目 | `models/vtuber.py::VtuberEvent`；`VtuberEventRepo` | 前端 `vtuber_events` 增删 |
@@ -72,6 +73,10 @@
 | 术语 | 含义 | 代码位置 | 关联 |
 |---|---|---|---|
 | **综合档 / combined tier** | v0.9.3 后唯一的定时档：动态流 + 账号流同档并发 | `scheduler._run_combined_tier`、`_tier_loop` | 取代旧 T1/T2/T3a |
+| **快速账号抓取 / fast path** | 收录/加账号/单V：按 id 抓、无末尾空转、头像延后 | `scheduler.async_fetch_accounts(fast=True)` | v0.9.4；`_fetch_one_account(pending_avatar=…)` |
+| **头像延后 / deferred avatar** | 先落账号字段、后下载头像、再推一次快照 | `scheduler._deferred_avatar` | 只 UPDATE `avatar_path` 一列 |
+| **排队兜底 / pending queue** | 收录时抢锁失败 → 入队，由综合档心跳补抓 | `scheduler._pending_account_ids`、`_drain_pending_fetches` | 不静默丢任务 |
+| **共享 SSL 上下文** | 进程级缓存 SSLContext，客户端构造 ~1s → ~0.06s | `app/core/http.py::ssl_context/new_async_client` | 全仓客户端统一用它 |
 | **动态流 / dynamics stream** | 每 V 主账号 1 页 + 限 2 帖（15min ±2min） | `scheduler.run_latest_dynamics_sweep` | 帖子锁 |
 | **账号流 / account stream** | 全量账号信息，**数据驱动到期**（默认 24h） | `scheduler.async_fetch_and_update(auto=True)`、`account_sweep_due` | 账号锁 |
 | **T0 直播轮询** | 60s 批量回写 `live_*`（不占锁、不写 last_result） | `scheduler._live_poller_loop`、`live_sweep_core` | 跳变落快照 |
@@ -80,13 +85,17 @@
 | **手动优先 / 抢占** | 手动任务拿不到锁时请求自动档让位 | `_preempt_account/_preempt_post`、`_acquire_manual_*`、`_auto_yield_*_with` | 端点 409 判定 `manual_task_running()` |
 | **轮次执行器** | 按平台并发的调度原语：每轮各平台各处理一个元素 | `scheduler._run_platform_rounds` | 平台内串行、平台间并行、单平台风控单独冷却 |
 | **平台适配器** | `fetch_user_info` / `fetch_post_page` / `enrich` 三方法 | `services/platforms/base.py`、`registry.py`、`{bilibili,weibo}.py` | 接新平台只加一行注册 |
-| **抓取模式** | 全量 / 快速 / 增量 / 最新 N 条 / 仅动态 | `_fetch_posts_core(video_pages, dynamics_pages, include_videos, stop_on_existing, limit_latest)` | 见 `backend-fetch-pipeline.md` §5.2 |
+| **抓取模式** | 全量 / 快速 / 增量 / 最新 N 条 / 仅动态 / 收录首屏 | `_fetch_posts_core(video_pages, dynamics_pages, include_videos, stop_on_existing, limit_latest)` | 见 `backend-fetch-pipeline.md` §5.2 |
 | **停止原因** | `done/page_limit/rate_limited/network_error/archived_boundary/stopped_early/error` | `PostFetchResult.stop_reason` | 前端区分「预期停止」与「丢数据」 |
 | **归档边界剪枝** | 整页已归档 → 更早的页不再请求 | `_fetch_posts_core` | `archive_old_posts` 前置 |
+| **置顶帖豁免** | 置顶帖排在流首且时间乱序 → 不参与增量停止判定 | 微博 `isTop` / B 站 `module_tag.text=置顶` → 页面级 `pinned_ids` | v0.9.4，devlog/045 |
+| **增量停止（整页）** | **整页扫完**才停，边界取页内首条「已入库且非置顶」帖 | `_fetch_posts_core` / `_fetch_platform_posts` 的 `known_hit` | 旧「遇已入库即 break」会漏同页新帖 |
 | **风控 / rate limit** | 412/-412/-509/-799 判定 + 冷却 | `fetcher.RATE_LIMIT_CODES`、`was_rate_limited`、`clear_rate_limit` | ContextVar 任务隔离 |
 | **WBI 签名** | B 站接口签名（混钥，缓存 30min） | `services/wbi.py` | 所有 `x/space/wbi/*` 请求 |
-| **状态通道** | 前端轮询的抓取进度 | `scheduler._status`、`_push_account_snapshot`、`get_fetch_status`、`GET /vtuber/fetch-status` | 前端 ~2s 轮询 |
-| **进度事件** | 前端跨组件刷新信号 | `ddtoolkit:account-progress` / `:fetch-idle` / `:data-changed` | `TopBar` / `VtuberSidebar` / `PostsPage` |
+| **状态通道** | 前端轮询的抓取进度 | `scheduler._status`（account/post/**external**，含 `task`/`vtuber_name`/`index`/`total`）、`_push_account_snapshot`、`get_fetch_status`、`GET /vtuber/fetch-status` | 前端 ~2s 轮询；顶栏文案＝「任务 - V名 - i/N」（P8-C） |
+| **进度原语** | 写状态通道的辅助函数 | `_set_account_progress` / `_set_account_vtuber` / `_set_post_progress` / `_vtuber_name_of` | `vtuber_name=None` 表示「不改动」，重置须显式写 None |
+| **外部任务状态** | 第三方回填/批次的 running+label+seq（顶栏胶囊 + 卡片刷新信号） | `scheduler.external_task_started/finished` | v0.9.4；`external.seq` 变化 → `fetch-idle` |
+| **进度事件** | 前端跨组件刷新信号 | `ddtoolkit:account-progress` / `:fetch-idle` / `:data-changed` / `:pill-message` / `:kick-poll` | `TopBar` / `VtuberSidebar` / `PostsPage` / 档案卡 |
 
 ---
 
@@ -150,6 +159,8 @@
 | `DATABASE_URL` | `sqlite:///<DATA_DIR>/vtuber.db` | SQLite 连接串 |
 | `VERSION` | `0.9.2` | 版本号（与 5 处同步） |
 | `REQUEST_INTERVAL_MIN/MAX` | 3.0 / 5.0 s | 账号抓取每账号间隔 |
+| `MANUAL_FAST_INTERVAL_MIN/MAX` | 0.5 / 1.0 s | 收录/单V 的账号间隔（只在账号之间生效） |
+| `FIRST_SCREEN_VIDEO_PAGES` / `_DYNAMICS_PAGES` / `_DYNAMICS_LIMIT` | 1 / 1 / 3 | 收录首屏抓取规模 |
 | `FETCH_BATCH_SIZE` / `FETCH_BATCH_COOLDOWN` | 10 / 60 s | 每 N 个账号休息 |
 | `RATE_LIMIT_COOLDOWN` | 600 s | 风控冷却（按平台） |
 | `TIER_TICK_SECONDS` | 10 s | 综合档心跳 |
@@ -180,6 +191,9 @@
 8. **并发粒度是平台**：同平台内部串行，不要在一条平台流里再并发放大速率。
 9. **凭据只落本机** `DATA_DIR/.env`；`.env`、`*.db*`、`logs/`、`_tmp_*` 均已 gitignore。
 10. **`scripts/backend-8000.bat` 属个人脚本，不得提交**。
+11. **`asyncio.create_task` 必须留强引用**：收录回填是 fire-and-forget，返回值无人
+    引用时任务可能被 GC 回收（Python 文档明确警告）→ 表现为「回填静默不跑」。
+    统一走 `routers/vtuber.py::_spawn_background`（`_background_tasks` 集合 + done 回调）。
 
 ---
 
@@ -188,6 +202,8 @@
 | 想做的事 | 先看这里 |
 |---|---|
 | 加/改一个后端接口 | `app/routers/vtuber.py`（+ `app/schemas/vtuber.py`）；抓取类端点注意 `manual_task_running()` 判定 |
+| 改「添加 V / 添加账号」后的抓取 | `routers/vtuber.py::_adopt_background`；账号侧 `scheduler.async_fetch_accounts`、内容侧 `scheduler.async_fetch_first_screen`（devlog/044） |
+| 新代码要发 HTTP 请求 | 一律 `app/core/http.py::new_async_client(timeout)`（别直接 `httpx.AsyncClient`：每次构造 ~1s） |
 | 加一张表 / 加一列 | `alembic/versions/eNNN_*.py` → `MIGRATION_HEAD` → `app/models/vtuber.py` → `app/repositories/vtuber_repo.py` →（挂外键时）`app/services/purge.py` |
 | 改抓取频率 / 节流 | `app/core/config.py`；调度结构在 `app/services/scheduler.py`（`_tier_loop` / `_run_combined_tier` / `_run_platform_rounds`） |
 | 接入新平台 | `app/services/platforms/base.py` + `registry.py`；参考 `docs/platforms-extension-guide.md` |

@@ -22,6 +22,7 @@ from typing import Optional
 import httpx
 
 from app.core.config import settings
+from app.core.http import new_async_client
 from app.services.env_store import save_env_keys
 
 logger = logging.getLogger(__name__)
@@ -93,7 +94,7 @@ class WeiboAuth:
     async def _probe_once(self) -> bool:
         """探测一次：请求与抓取路径一致的登录态接口（未登录返回 ok=-100）。"""
         try:
-            async with httpx.AsyncClient(timeout=8.0) as client:
+            async with new_async_client(8.0) as client:
                 resp = await client.get(
                     "https://weibo.com/ajax/profile/info",
                     params={"uid": self.uid or "0"},
@@ -178,7 +179,7 @@ class WeiboLoginSession:
 
     def __init__(self, auth: WeiboAuth):
         self.auth = auth
-        self.client = httpx.AsyncClient(timeout=15.0)
+        self.client = new_async_client(15.0)
         self.qrid = ""
         self._fallback = False
 

@@ -208,7 +208,7 @@ v0.9.3 把原 T1（主账号 5min）+ T2（最新动态 15min）+ T3a（全量�
 | **T0** 直播状态 | 批量接口只回写 `live_*`（跳变落快照） | 独立线程 | 60s ±15s | 与一切并行（不占锁） |
 | **综合档·动态流** | 每 V 主账号 1 页 + 限 `STARTUP_DYNAMICS_LIMIT=2` 条新帖 | 调度线程（帖子锁） | 15min ±2min | 起跑见手动任务→跳过；持锁见手动请求→**轮次断点让位** |
 | **综合档·账号流** | 全部账号全字段（含主账号；原 T1+T3a 合并） | 调度线程（账号锁） | **数据驱动**：任一账号 `last_fetched_at` 超 `ACCOUNT_SWEEP_STALE_HOURS=24h`（或为空）即到期 | 同上 |
-| **T3** 手动全量/补档 | 用户触发（全量账号 / 全量帖子 / 单 V / 更新动态 / 收录 / 加账号） | HTTP + BackgroundTasks | — | **永远优先于综合档** |
+| **T3** 手动全量/补档 | 用户触发（全量账号 / 全量帖子 / 单 V / 更新动态 / 收录 / 加账号） | HTTP + BackgroundTasks | — | **永远优先于综合档**；收录/加账号抢锁失败会入队补抓（v0.9.4） |
 | **T4** 外部数据 | zeroroku / danmakus 第三方固定化数据 | APScheduler cron | 3AM 日 / 周 | 手动任务在跑则**排队等待**（最多 30min），不再直接跳过 |
 
 - 启动链（`STARTUP_CHAIN_ENABLED`，`STARTUP_CHAIN_DELAY=4s`）：动态流必跑一次；
@@ -238,11 +238,31 @@ stateDiagram-v2
   `_preempt_account/_preempt_post` 并轮询等锁（上限 120s）；自动档在**轮次断点**
   （每平台每账号之间）交还锁、等信号清除、重新拿锁、**从原序号续跑**；
 - **手动之间不互相打断**：占用者是另一个手动任务时直接返回 `skipped`；
+  **例外（v0.9.4）**：收录 / 加账号拉起的抓取失败时**入队**（`_pending_*`），
+  由综合档心跳 `_drain_pending_fetches()` 在锁空闲时补抓 —— 新 V 的信息不会丢；
 - 端点 409 判定用 `manual_task_running()`（自动档持锁不算忙），外部批次用
   `any_fetch_running()`（任一在跑或有人在等让位都算忙）；
 - 状态通道 `GET /vtuber/fetch-status` 暴露 `account.{running,current,index,total,recent}`、
-  `post.{running,target}` 与 `last_result`（完成胶囊）；前端 ~2s 轮询；
-  并发时 `current/target` 显示当轮就绪的平台名（如「bilibili、weibo」）。
+  `post.{running,target}`、`external.{running,label,last_label,seq}` 与 `last_result`
+  （完成胶囊）；前端 ~2s 轮询；并发时 `current/target` 显示当轮就绪的平台名
+  （如「bilibili、weibo」）。`external` 是外部第三方数据任务（收录回填 / 每日批次）
+  的进度，其 `seq` 每次结束自增 —— 前端据此发 `fetch-idle`，让停在档案视图的
+  粉丝趋势/直播日历卡片自动重拉（v0.9.4）。
+
+### 3.2.1 收录 / 加账号链路（v0.9.4，devlog/044）
+
+```mermaid
+flowchart LR
+  A["POST /vtuber/adopt<br/>POST /vtuber/{id}/accounts"] -->|201 立即返回| B["_adopt_background"]
+  B --> C["async_fetch_accounts([新账号], fast=True)<br/>账号锁 · 头像延后 · 无末尾空转"]
+  B --> D["async_fetch_first_screen(新账号)<br/>帖子锁 · 投稿1页+动态1页限3"]
+  B -.->|create_task| E["_backfill_adopted_history<br/>第三方历史（无锁、不占槽）"]
+  C --> F[("accounts / snapshots")]
+  D --> G[("posts")]
+```
+
+- 账号信息与首屏内容**并发**（两把锁独立，墙钟 ≈ max）；第三方历史脱离关键路径；
+- 实测（模拟时延）账号信息可见 **6.0s → 0.9s**，首屏入库 **0 → 33 条**（devlog/044）。
 
 ### 3.3 平台适配层（直采）
 
@@ -383,7 +403,7 @@ flowchart LR
 | `app/models/` | SQLAlchemy 2.0 ORM（单文件 9 表） | 唯一约束/索引与迁移链一致 |
 | `app/schemas/` | Pydantic 输入输出模型 | `Out` 用 `from_attributes` |
 | `app/services/` | 调度、抓取、平台适配、第三方源、认证、类型引擎、墓碑、清理 | 不碰 HTTP；重依赖延迟 import |
-| `app/core/` | 配置（数据目录/环境变量）、引擎与 PRAGMA、`get_db` | — |
+| `app/core/` | 配置（数据目录/环境变量）、引擎与 PRAGMA、`get_db`、共享 HTTP 客户端构造（`http.py`） | 新代码发请求一律 `new_async_client()` |
 
 ---
 
@@ -401,7 +421,12 @@ flowchart LR
 7. **手动任务优先于定时档**（自动档起跑让位 + 持锁断点让位，两个方向都要在）；
 8. **外部源幂等**，且只在每日/每周低频访问第三方站点；
 9. **冻结运行时路径**：`PROJECT_ROOT = sys._MEIPASS`（打包后 alembic.ini / 迁移脚本随包）；
-10. **凭据只落本机** `DATA_DIR/.env`（原子替换），不进仓库、不上传。
+10. **凭据只落本机** `DATA_DIR/.env`（原子替换），不进仓库、不上传；
+11. **HTTP 客户端统一走 `app/core/http.py::new_async_client()`**：直接 `httpx.AsyncClient()`
+    每次构造都要 `load_verify_locations`（~1s，同步阻塞事件循环）；SSLContext 与事件循环
+    无关，因此可在「每档 `asyncio.run()` 各起一循环」的模型下安全共享；
+12. **增量停止必须整页扫完 + 豁免置顶帖**：平台会在流首插乱序条目（微博 `isTop` 可多条、
+    B 站 `module_tag.text=置顶`），「遇已入库即 break」会漏掉同页靠后的新帖（devlog/045）。
 
 ---
 

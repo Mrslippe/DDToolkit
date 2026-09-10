@@ -100,7 +100,9 @@ class ZerorokuSource(ExternalSource):
                 items = await fetch_fan_history(str(acc.platform_uid), client)
             except Exception as e:
                 # 账号级隔离：网络异常只影响本账号，其余账号继续
-                logger.warning(f"zeroroku history 账号异常 {acc.platform_uid}: {e}")
+                # （带上异常类型：TimeoutException 的 str 为空，只打 {e} 看不出原因）
+                logger.warning(f"zeroroku history 账号异常 {acc.platform_uid}: "
+                               f"{type(e).__name__}: {e}")
                 summary.skipped += 1
                 continue
             if not items:
@@ -143,7 +145,8 @@ class ZerorokuSource(ExternalSource):
             try:
                 payload = await fetch_gift_days(str(acc.platform_uid), client)
             except Exception as e:
-                logger.warning(f"zeroroku gifts 账号异常 {acc.platform_uid}: {e}")
+                logger.warning(f"zeroroku gifts 账号异常 {acc.platform_uid}: "
+                               f"{type(e).__name__}: {e}")
                 summary.skipped += 1
                 continue
             if not payload:

@@ -10,6 +10,7 @@ import httpx
 
 from app.core.config import settings
 from app.core.database import SessionLocal
+from app.core.http import new_async_client
 from app.services.externals.base import INTERVAL_DAILY, INTERVAL_WEEKLY  # noqa: F401
 from app.services.externals.registry import iter_external_sources
 
@@ -36,7 +37,7 @@ async def run_external_interval(interval: str,
     """
     results: list[dict] = []
     headers = {"User-Agent": _USER_AGENT}
-    async with httpx.AsyncClient(timeout=25.0, headers=headers) as client:
+    async with new_async_client(25.0, headers=headers) as client:
         for source in iter_external_sources():
             if not _source_enabled(source):
                 continue

@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import SessionLocal
+from app.core.http import new_async_client
 from app.models.vtuber import Account, VTuber, Post
 from app.repositories.vtuber_repo import (
     VTuberRepo, AccountRepo, PostRepo, AccountStatSnapshotRepo, LiveSessionRepo,
@@ -77,11 +78,45 @@ _fetch_scope: str | None = None
 _external_running = False
 
 # ── 实时状态（供 /vtuber/fetch-status 轮询；仅简单赋值，GIL 下线程安全）──
+# P8-C（2026-09-10）：两个抓取流都带 `task`（任务名）+ `vtuber_name`（V 名）
+# + `index/total`（进度），顶栏据此拼「动态更新中 - 明前奶绿 - 1/11」。
 _status: dict = {
     "account": {"running": False, "current": None, "index": 0, "total": 0,
+                "task": None, "vtuber_name": None,
                 "recent": []},   # 最近完成的账号字段快照，供前端就地增量刷新侧栏
-    "post": {"running": False, "target": None},
+    "post": {"running": False, "target": None, "task": None, "vtuber_name": None,
+             "index": 0, "total": 0},
+    # 外部第三方数据任务（收录回填 / 每日批次）：running/label 供顶栏胶囊展示，
+    # seq 每次完成自增——前端据此发 fetch-idle 让档案卡片刷新（v0.9.4）
+    "external": {"running": False, "label": None, "last_label": None, "seq": 0},
 }
+
+# 外部任务登记表：token → 展示文案（并发时合并显示；全部结束才置 running=False）
+_external_labels: dict[str, str] = {}
+_external_done_seq = 0
+
+
+def external_task_started(token: str, label: str) -> None:
+    """外部数据任务进入运行态：顶栏状态胶囊展示进度。
+
+    token 用于并发去重（如 `adopt:22` / `daily` / `weekly`），label 是给用户看的文案。
+    """
+    _external_labels[token] = label
+    _status["external"]["running"] = True
+    _status["external"]["label"] = "、".join(dict.fromkeys(_external_labels.values()))
+
+
+def external_task_finished(token: str) -> None:
+    """外部数据任务结束：seq 自增（前端据变化发 fetch-idle 刷新档案卡片）。"""
+    global _external_done_seq
+    label = _external_labels.pop(token, None)
+    _external_done_seq += 1
+    _status["external"]["seq"] = _external_done_seq
+    if label:
+        _status["external"]["last_label"] = label
+    _status["external"]["running"] = bool(_external_labels)
+    _status["external"]["label"] = (
+        "、".join(dict.fromkeys(_external_labels.values())) or None)
 
 
 def _push_account_snapshot(acc) -> None:
@@ -120,14 +155,42 @@ def _record_stat_snapshot(db: Session, acc: Account) -> None:
     )
 
 
-def _set_account_progress(current: str | None, index: int, total: int) -> None:
-    _status["account"]["current"] = current
-    _status["account"]["index"] = index
-    _status["account"]["total"] = total
+def _vtuber_name_of(acc: Account) -> str | None:
+    """账号所属 VTuber 名（P8-C：顶栏「任务 - V名 - i/N」用）。
+
+    走 ORM 关系（`accounts.vtuber_id → vtubers.name`）；对象 detached / 关系未加载
+    时返回 None，绝不因此抛错（进度显示不能影响抓取）。
+    """
+    try:
+        return acc.vtuber.name if acc.vtuber else None
+    except Exception:
+        return None
+
+
+def _set_account_progress(current: str | None, index: int, total: int,
+                          *, vtuber_name: str | None = None) -> None:
+    """账号流进度（顶栏胶囊：任务 - V名 - i/N）。
+
+    `current` 是过程性文案（平台名/账号名），`vtuber_name` 是 P8-C 新增的结构化字段
+    ——顶栏优先显示 V 名，缺省才退回 current。
+    """
+    st = _status["account"]
+    st["current"] = current
+    st["index"] = index
+    st["total"] = total
+    if vtuber_name is not None:
+        st["vtuber_name"] = vtuber_name
+
+
+def _set_account_vtuber(name: str | None) -> None:
+    """单独更新账号流的 V 名（轮次式账号流：index/total 由轮次汇报，V 名由 worker 写）。"""
+    _status["account"]["vtuber_name"] = name
 
 
 def _reset_account_status() -> None:
     _set_account_progress(None, 0, 0)
+    _status["account"]["task"] = None
+    _status["account"]["vtuber_name"] = None
     _status["account"]["running"] = False
 
 
@@ -135,9 +198,28 @@ def _set_post_target(target: str | None) -> None:
     _status["post"]["target"] = target
 
 
+def _set_post_progress(task: str, vtuber_name: str | None, index: int, total: int) -> None:
+    """帖子流进度（P8-C）：任务名 + V 名 + i/N，供顶栏拼「动态更新中 - 明前奶绿 - 1/11」。
+
+    旧字段 `target` 语义混用（单V=uid / 按账号=昵称 / 动态流=平台名拼接），
+    这里统一成结构化三元组；`_set_post_target` 保留给无进度信息的路径。
+    """
+    st = _status["post"]
+    st["task"] = task
+    st["vtuber_name"] = vtuber_name
+    st["index"] = index
+    st["total"] = total
+    st["target"] = vtuber_name or st.get("target")
+
+
 def _reset_post_status() -> None:
     _set_post_target(None)
-    _status["post"]["running"] = False
+    st = _status["post"]
+    st["task"] = None
+    st["vtuber_name"] = None
+    st["index"] = 0
+    st["total"] = 0
+    st["running"] = False
 
 
 # 任务完成序号：每轮任务开始时自增，前端凭 seq 区分「新的完成汇总」与旧结果
@@ -169,10 +251,11 @@ def _set_post_last_result(seq: int, kind: str, label: str,
 
 
 def get_fetch_status() -> dict:
-    """返回账号信息 / 帖子两类抓取任务的实时状态快照。"""
+    """返回账号信息 / 帖子 / 外部数据三类任务的实时状态快照。"""
     return {
         "account": dict(_status["account"]),
         "post": dict(_status["post"]),
+        "external": dict(_status["external"]),
     }
 
 
@@ -190,7 +273,7 @@ async def _download_avatar(url: str, uid: str, client: httpx.AsyncClient | None 
     filepath = AVATAR_DIR / f"{uid}{ext}"
     try:
         if client is None:
-            client = httpx.AsyncClient(timeout=15.0)
+            client = new_async_client(15.0)
             own = True
         else:
             own = False
@@ -206,10 +289,17 @@ async def _download_avatar(url: str, uid: str, client: httpx.AsyncClient | None 
     return None
 
 
-async def _fetch_one_account(acc: Account, db: Session, client: httpx.AsyncClient | None = None) -> bool:
+async def _fetch_one_account(acc: Account, db: Session, client: httpx.AsyncClient | None = None,
+                             *, pending_avatar: list[str] | None = None) -> bool:
     """抓取单个 Account 的数据（按平台分发到平台框架），返回是否成功。
 
     client 复用连接池，避免每请求新建连接；风控由上层统一冷却退避。
+
+    `pending_avatar`（v0.9.4 收录提速）：传入列表时**头像下载不阻塞本函数**——
+    只写入 `avatar_url`，把待下载 URL 追加到该列表，由调用方在 commit + 推送
+    快照之后起独立任务下载（见 `_deferred_avatar`）。账号信息（昵称/签名/粉丝/
+    直播状态）因此提前 0.5~2s 可见；前端 avatar_url 直链兜底，本地文件到位后
+    再推一次快照就地替换。定时账号流不传该参数，行为不变。
     """
     mid = acc.platform_uid
     if not mid:
@@ -234,11 +324,15 @@ async def _fetch_one_account(acc: Account, db: Session, client: httpx.AsyncClien
                 file_exists = not _avatar_missing(acc)
                 if _needs_avatar_download(acc, new_avatar, file_exists):
                     acc.avatar_url = new_avatar
-                    # 头像文件按平台前缀命名，避免跨平台 uid 撞名
-                    acc.avatar_path = await _download_avatar(
-                        new_avatar, f"{acc.platform}_{acc.platform_uid}", client=client)
-                    if not file_exists:
-                        logger.info(f"补下缺失头像 {acc.platform}:{acc.platform_uid} → {acc.avatar_path}")
+                    if pending_avatar is not None:
+                        # 延后下载（收录/加账号的 fast 路径）：先让账号字段落库可见
+                        pending_avatar.append(new_avatar)
+                    else:
+                        # 头像文件按平台前缀命名，避免跨平台 uid 撞名
+                        acc.avatar_path = await _download_avatar(
+                            new_avatar, f"{acc.platform}_{acc.platform_uid}", client=client)
+                        if not file_exists:
+                            logger.info(f"补下缺失头像 {acc.platform}:{acc.platform_uid} → {acc.avatar_path}")
 
             if info.get("followers_count") is not None:
                 acc.followers_count = info["followers_count"]
@@ -264,6 +358,156 @@ async def _fetch_one_account(acc: Account, db: Session, client: httpx.AsyncClien
     return is_update
 
 
+async def _deferred_avatar(account_id: int, url: str) -> None:
+    """延后头像下载（v0.9.4 收录提速）：不阻塞账号信息首屏。
+
+    只 UPDATE `avatar_path` 一列（不碰其它字段，避免与并发抓取互相覆盖），
+    随后再推一次账号快照——前端 `account-progress` 内容 diff 会就地合并头像，
+    无需重新拉取列表。账号已被删除（UPDATE 影响 0 行）或下载失败仅记日志：
+    `_avatar_missing` 会在下次抓取时自动补下。
+    """
+    db: Session = SessionLocal()
+    try:
+        acc = db.get(Account, account_id)
+        if acc is None:
+            return
+        path = await _download_avatar(url, f"{acc.platform}_{acc.platform_uid}")
+        if not path:
+            logger.warning(f"头像延后下载未成功 account#{account_id}: {url}")
+            return
+        changed = db.query(Account).filter(Account.id == account_id).update(
+            {Account.avatar_path: path}, synchronize_session=False)
+        db.commit()
+        if not changed:
+            return  # 账号已在本任务期间被删除
+        db.expire_all()
+        fresh = db.get(Account, account_id)
+        if fresh is not None:
+            _push_account_snapshot(fresh)
+        logger.info(f"头像延后下载完成 account#{account_id} → {path}")
+    except Exception as e:
+        logger.warning(f"头像延后下载失败 account#{account_id}: {type(e).__name__}: {e}")
+    finally:
+        db.close()
+
+
+def _accounts_by_ids(db: Session, account_ids: list[int]) -> list[Account]:
+    """按 id 精确取账号（保持入参顺序，缺失的忽略）。
+
+    收录/加账号走这条路径：只抓新增的那一个账号，不再把该 V 的所有账号重抓一遍。
+    """
+    if not account_ids:
+        return []
+    rows = db.query(Account).filter(Account.id.in_(list(account_ids))).all()
+    by_id = {a.id: a for a in rows}
+    return [by_id[i] for i in account_ids if i in by_id]
+
+
+def _manual_interval(fast: bool) -> float:
+    """手动单V/收录路径的账号间隔：fast 只做轻微间隔（账号数少），否则沿用 3~5s。"""
+    if fast:
+        return random.uniform(settings.MANUAL_FAST_INTERVAL_MIN,
+                              settings.MANUAL_FAST_INTERVAL_MAX)
+    return random.uniform(settings.REQUEST_INTERVAL_MIN, settings.REQUEST_INTERVAL_MAX)
+
+
+async def async_fetch_accounts(account_ids: list[int], *, label: str = "指定账号",
+                               fast: bool = True) -> FetchResult:
+    """按账号 id 精确抓取账号信息（手动优先，v0.9.4）。
+
+    - `fast=True`（收录 / 加账号 / 单 V 抓取）：**每个账号抓完立即 commit + 推送
+      快照**，节流只在账号之间生效（0.5~1s），头像下载延后（见 `_fetch_one_account`）
+      —— 用户添加新 V 后 1~4s 就能看到昵称/签名/粉丝/直播状态（v0.9.3 之前要
+      5~12s：末尾还有一段 3~5s 空转 sleep，且头像阻塞在提交之前）；
+    - `fast=False`：沿用 3~5s 间隔（保留给需要更保守节奏的调用方）；
+    - 抢不到锁时**不静默丢弃**：入队 `_pending_account_fetch`，由综合档心跳在锁
+      空闲时优先消费（见 `_drain_pending_fetches`）。
+    """
+    global _fetch_running, _fetch_scope
+
+    if not account_ids:
+        return FetchResult(details=["没有可抓取的账号"])
+
+    if not await _acquire_manual_account():
+        for aid in account_ids:
+            _enqueue_pending_account(aid)
+        logger.warning(f"{label}: 账号抓取锁被占用，{len(account_ids)} 个账号已排队等待补抓")
+        return FetchResult(details=["账号抓取正在进行中，已排队等待"])
+
+    _fetch_running = True
+    _fetch_scope = "single"
+    _status["account"]["running"] = True
+    _status["account"]["task"] = "account"   # P8-C：顶栏文案「账号信息抓取中」
+    _status["account"]["recent"] = []   # 每轮自包含：清空上一任务的快照
+    result = FetchResult()
+    res_seq = _next_result_seq()
+    clear_rate_limit()
+    client = new_async_client(15.0)
+
+    db: Session = SessionLocal()
+    try:
+        accounts = _accounts_by_ids(db, account_ids)
+        if not accounts:
+            logger.warning(f"{label} 没有可抓取的账号")
+            result.details.append("没有可抓取的账号")
+            return result
+
+        idx = 0
+        while idx < len(accounts):
+            acc = accounts[idx]
+            _set_account_progress(acc.display_name or str(acc.platform_uid), idx + 1, len(accounts),
+                                  vtuber_name=_vtuber_name_of(acc))
+            pending_avatar: list[str] | None = [] if fast else None
+            ok = await _fetch_one_account(acc, db, client=client,
+                                          pending_avatar=pending_avatar)
+
+            if was_rate_limited():
+                db.commit()
+                db.close()
+                logger.warning(f"触发风控 ({rate_limit_info()})，冷却 {settings.RATE_LIMIT_COOLDOWN}s...")
+                clear_rate_limit()
+                await asyncio.sleep(settings.RATE_LIMIT_COOLDOWN)
+                db = SessionLocal()
+                # 修复：冷却后必须重查账号 —— 旧会话已关闭，原列表里的 acc 是
+                # detached 对象，继续赋值不会进入新会话，后续更新会静默丢失
+                accounts = _accounts_by_ids(db, account_ids)
+                continue
+
+            # 节流只在账号之间：最后一个账号抓完立即落库（去掉末尾空转）
+            if idx < len(accounts) - 1:
+                await asyncio.sleep(_manual_interval(fast))
+
+            if ok:
+                _record_stat_snapshot(db, acc)
+                db.commit()
+                _push_account_snapshot(acc)
+                if pending_avatar:
+                    # 首屏已可见，头像随后补齐（不阻塞本任务）
+                    asyncio.create_task(_deferred_avatar(acc.id, pending_avatar[0]))
+                result.success += 1
+            else:
+                result.failed += 1
+                result.details.append(f"{acc.display_name or acc.platform_uid} 更新失败")
+            idx += 1
+
+        logger.info(f"{label} 抓取完毕: {result.success} 成功, {result.failed} 失败")
+
+    except Exception as e:
+        logger.error(f"{label} 抓取出错: {e}", exc_info=True)
+        db.rollback()
+        result.details.append(f"异常: {e}")
+    finally:
+        db.close()
+        await client.aclose()
+        _fetch_running = False
+        _fetch_scope = None
+        _reset_account_status()
+        _fetch_lock.release()
+        _set_account_last_result(res_seq, label, result.success, result.failed, result.skipped)
+
+    return result
+
+
 async def async_fetch_and_update(auto: bool = False) -> FetchResult:
     """账号流：全量账号信息抓取（原 T1 主账号 + T3a 全量合并，v0.9.3）。
 
@@ -286,6 +530,7 @@ async def async_fetch_and_update(auto: bool = False) -> FetchResult:
     _fetch_running = True
     _fetch_scope = "full"
     _status["account"]["running"] = True
+    _status["account"]["task"] = "account"   # P8-C：顶栏文案「账号信息抓取中」
     _status["account"]["recent"] = []   # 每轮自包含：清空上一任务的快照
     result = FetchResult()
     res_seq = _next_result_seq()
@@ -294,7 +539,7 @@ async def async_fetch_and_update(auto: bool = False) -> FetchResult:
     clear_rate_limit()
 
     # 复用连接池：一次抓取任务共用一个 AsyncClient（含重试与风控冷却期间）
-    client = httpx.AsyncClient(timeout=15.0)
+    client = new_async_client(15.0)
 
     db: Session = SessionLocal()          # 账号列表查询 + 让位提交；各平台另有会话
     sessions: dict[str, Session] = {}
@@ -325,6 +570,8 @@ async def async_fetch_and_update(auto: bool = False) -> FetchResult:
             if local is None:
                 return _RoundOutcome(ok=False, error=f"账号 {acc.id} 已不存在")
             logger.info(f"[{pf}] 账号 {local.display_name or local.platform_uid} ...")
+            # P8-C：顶栏显示「账号信息抓取中 - {V名} - i/N」（index/total 由轮次汇报）
+            _set_account_vtuber(_vtuber_name_of(local))
             try:
                 ok = await _fetch_one_account(local, s, client=client)
                 if ok:
@@ -399,93 +646,27 @@ def is_fetch_running() -> bool:
 
 
 async def async_fetch_vtuber(vtuber_id: int) -> FetchResult:
-    """抓取单个 VTuber 的账号信息（devlog/017）。
+    """抓取单个 VTuber 的**全部**账号信息（devlog/017；v0.9.4 退化为薄壳）。
 
-    手动任务优先：锁被定时档占用时请求其让位（收录新 V 后立刻拿到账号信息，
-    不再被启动链的 T3a 全量抓取挤掉——用户 2026-09-08 反馈）。
-    与全局抓取共用 _fetch_lock 防重叠；风控冷却后从当前账号继续。"""
-    global _fetch_running, _fetch_scope
-
-    if not await _acquire_manual_account():
-        logger.warning("上一次抓取尚未完成，跳过本次触发")
-        return FetchResult(details=["上一次抓取仍在进行中，已跳过"])
-
-    _fetch_running = True
-    _fetch_scope = "single"
-    _status["account"]["running"] = True
-    _status["account"]["recent"] = []   # 每轮自包含：清空上一任务的快照
-    result = FetchResult()
-    res_seq = _next_result_seq()
-    clear_rate_limit()
-    client = httpx.AsyncClient(timeout=15.0)
-
+    前端「抓取账号」按钮语义 = 该 V 名下所有账号都刷一遍，因此这里先查 id 再交给
+    `async_fetch_accounts`（手动优先 + fast 节奏 + 头像延后 + 抢锁失败排队）。
+    收录 / 加账号不再走这里——它们只抓新增的那一个账号（见 routers/vtuber.py）。
+    """
     db: Session = SessionLocal()
     try:
-        accounts = db.query(Account).filter(
-            Account.vtuber_id == vtuber_id,
-            Account.platform_uid != None,
-            Account.platform_uid != "",
-        ).all()
-
-        if not accounts:
-            logger.warning(f"VTuber#{vtuber_id} 没有可抓取的账号")
-            result.details.append("该 VTuber 没有可抓取的账号")
-            return result
-
-        idx = 0
-        while idx < len(accounts):
-            acc = accounts[idx]
-            _set_account_progress(acc.display_name or str(acc.platform_uid), idx + 1, len(accounts))
-            ok = await _fetch_one_account(acc, db, client=client)
-
-            if was_rate_limited():
-                db.commit()
-                db.close()
-                logger.warning(f"触发风控 ({rate_limit_info()})，冷却 {settings.RATE_LIMIT_COOLDOWN}s...")
-                clear_rate_limit()
-                await asyncio.sleep(settings.RATE_LIMIT_COOLDOWN)
-                db = SessionLocal()
-                # 修复：冷却后必须按 vtuber_id 重查 accounts —— 旧会话已关闭，
-                # 原列表里的 acc 是 detached 对象，继续赋值不会进入新会话，
-                # 后续更新会静默丢失（async_fetch_and_update 有重查，此处遗漏）。
-                accounts = db.query(Account).filter(
-                    Account.vtuber_id == vtuber_id,
-                    Account.platform_uid != None,
-                    Account.platform_uid != "",
-                ).all()
-                continue
-
-            await asyncio.sleep(
-                settings.REQUEST_INTERVAL_MIN
-                + random.uniform(0, settings.REQUEST_INTERVAL_MAX - settings.REQUEST_INTERVAL_MIN)
-            )
-
-            if ok:
-                _record_stat_snapshot(db, acc)
-                db.commit()
-                _push_account_snapshot(acc)
-                result.success += 1
-            else:
-                result.failed += 1
-                result.details.append(f"{acc.display_name or acc.platform_uid} 更新失败")
-            idx += 1
-
-        logger.info(f"VTuber#{vtuber_id} 抓取完毕: {result.success} 成功, {result.failed} 失败")
-
-    except Exception as e:
-        logger.error(f"抓取 VTuber#{vtuber_id} 出错: {e}", exc_info=True)
-        db.rollback()
-        result.details.append(f"异常: {e}")
+        ids = [
+            r[0] for r in db.query(Account.id).filter(
+                Account.vtuber_id == vtuber_id,
+                Account.platform_uid != None,   # noqa: E711
+                Account.platform_uid != "",
+            ).all()
+        ]
     finally:
         db.close()
-        await client.aclose()
-        _fetch_running = False
-        _fetch_scope = None
-        _reset_account_status()
-        _fetch_lock.release()
-        _set_account_last_result(res_seq, f"VTuber#{vtuber_id}", result.success, result.failed, result.skipped)
-
-    return result
+    if not ids:
+        logger.warning(f"VTuber#{vtuber_id} 没有可抓取的账号")
+        return FetchResult(details=["该 VTuber 没有可抓取的账号"])
+    return await async_fetch_accounts(ids, label=f"VTuber#{vtuber_id}", fast=True)
 
 
 def start_scheduler():
@@ -540,11 +721,13 @@ def run_external_daily_jobs():
     if not _wait_for_manual_tasks():
         return
     _external_running = True
+    external_task_started("daily", "第三方数据日批次")
     try:
         results = asyncio.run(run_external_interval("daily"))
         logger.info(f"外部数据日任务完成: {len(results)} 个任务")
     finally:
         _external_running = False
+        external_task_finished("daily")
 
 
 def run_external_weekly_jobs():
@@ -553,11 +736,13 @@ def run_external_weekly_jobs():
     if not _wait_for_manual_tasks():
         return
     _external_running = True
+    external_task_started("weekly", "第三方数据周批次")
     try:
         results = asyncio.run(run_external_interval("weekly"))
         logger.info(f"外部数据周任务完成: {len(results)} 个任务")
     finally:
         _external_running = False
+        external_task_finished("weekly")
 
 
 def shutdown_scheduler(scheduler: BackgroundScheduler):
@@ -590,7 +775,6 @@ def manual_task_running() -> bool:
     manual_post = _post_fetch_running and not _auto_post_active.is_set()
     return (manual_account or manual_post
             or _preempt_account.is_set() or _preempt_post.is_set())
-    return True
 
 
 # ── 手动任务优先（v0.9.3）：自动任务给用户手动任务让路 ─────────────────────
@@ -607,6 +791,70 @@ _auto_account_active = threading.Event()
 _auto_post_active = threading.Event()
 # 手动任务等待自动任务让位的上限；超时按原语义跳过（不让 UI 无限等）
 MANUAL_PREEMPT_WAIT_SECONDS = 120.0
+
+
+# ── 抢锁失败排队兜底（v0.9.4）：新 V 的抓取绝不静默丢弃 ─────────────────────
+# 场景：用户点了「抓取账号」批量任务（手动持锁）后立刻收录一个新 V —— 手动之间
+# 不互相抢占，旧实现直接 return "已跳过"，新 V 的账号信息要等 24h 数据到期或重启。
+# 现在改为入队，由综合档心跳（TIER_TICK_SECONDS）在锁空闲时优先消费。
+_pending_lock = threading.Lock()
+_pending_account_ids: list[int] = []      # 待补抓的账号 id（账号信息）
+_pending_first_screen_ids: list[int] = []  # 待补抓的账号 id（收录首屏内容）
+
+
+def _enqueue_pending_account(account_id: int) -> None:
+    with _pending_lock:
+        if account_id not in _pending_account_ids:
+            _pending_account_ids.append(account_id)
+
+
+def _enqueue_pending_first_screen(account_id: int) -> None:
+    with _pending_lock:
+        if account_id not in _pending_first_screen_ids:
+            _pending_first_screen_ids.append(account_id)
+
+
+def _take_pending() -> tuple[list[int], list[int]]:
+    """取出并清空两个待补抓队列（原子，避免与心跳线程重复消费）。"""
+    global _pending_account_ids, _pending_first_screen_ids
+    with _pending_lock:
+        accounts, first = _pending_account_ids, _pending_first_screen_ids
+        _pending_account_ids, _pending_first_screen_ids = [], []
+        return accounts, first
+
+
+def has_pending_fetches() -> bool:
+    """是否有排队等待补抓的账号（供测试/诊断）。"""
+    with _pending_lock:
+        return bool(_pending_account_ids or _pending_first_screen_ids)
+
+
+def _drain_pending_fetches() -> None:
+    """综合档心跳调用：锁空闲时优先补抓排队的新账号（不丢任务）。
+
+    在调度线程里同步执行（内部 `asyncio.run`，与本线程其它档位一致）。
+    """
+    accounts, first = _take_pending()
+    if not accounts and not first:
+        return
+    if _fetch_running or _post_fetch_running:
+        # 又有任务在跑：放回队列，下个心跳再试
+        for aid in accounts:
+            _enqueue_pending_account(aid)
+        for aid in first:
+            _enqueue_pending_first_screen(aid)
+        return
+    logger.info(f"补抓排队账号：账号信息 {len(accounts)} 个，首屏内容 {len(first)} 个")
+    if accounts:
+        try:
+            asyncio.run(async_fetch_accounts(accounts, label="排队账号", fast=True))
+        except Exception as e:
+            logger.error(f"补抓排队账号失败: {e}", exc_info=True)
+    for aid in first:
+        try:
+            asyncio.run(async_fetch_first_screen(aid))
+        except Exception as e:
+            logger.error(f"补抓排队账号首屏失败: {e}", exc_info=True)
 
 
 async def _acquire_manual_account(wait_seconds: float = MANUAL_PREEMPT_WAIT_SECONDS) -> bool:
@@ -920,9 +1168,10 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
     dynamics_pages=-1 → 全量拉取动态直到 has_more=false。
     include_videos=False → 只抓动态（更新未归档动态用）。
     client 复用连接池；未传入时自建并在结束/异常时关闭。
-    stop_on_existing=True → 增量模式：动态流按时间倒序翻页，遇到第一条
-    库中已有的帖子即停止（更早的必然已入库），通常第 1 页即返回；
-    首页首条豁免判定——B站常把置顶旧帖排在流首，避免误停漏抓新帖。
+    stop_on_existing=True → 增量模式：动态流按时间倒序翻页，**整页扫完**后若页内
+    存在「已入库且非置顶」的帖子即停止（更早的必然已入库），通常第 1 页即返回；
+    置顶帖（`module_tag.text=置顶`，可多条且排在流首、顺序打乱）不参与停止判定
+    ——提前 break 会把同页里更新的新帖整段漏掉（devlog/045）。
     limit_latest=N → 「最新 N 条」模式（启动链阶段 3）：同一页内最多入库
     N 条新帖即停（其余新帖留待下次启动链/增量任务渐进消化），
     保证每 VTuber 的单次时长有上界、不等同于全量补档。
@@ -940,7 +1189,7 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
 
     own_client = client is None
     if own_client:
-        client = httpx.AsyncClient(timeout=15.0)
+        client = new_async_client(15.0)
 
     try:
         platform_uid = str(mid)
@@ -1080,6 +1329,9 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
                 dyn_natural = True
                 result.seen_pids.extend(d["platform_post_id"] for d in items)
                 break
+            # 置顶动态（module_tag.text=置顶）时间顺序被打乱，增量停止必须豁免
+            pinned_ids = set(data.get("pinned_ids") or [])
+            known_hit: str | None = None   # 本页第一条「已入库且非置顶」的帖子（停止边界）
             for idx, d in enumerate(items):
                 # 直播开播场次卡（v0.9.x M2）：路由 live_sessions 表（不走 posts），
                 # 且计入 seen_pids 缺席判定——它不属于内容档案
@@ -1090,14 +1342,13 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
                 result.dynamics += 1
                 if d["platform_post_id"] in existing_ids:
                     result.skipped += 1
-                    # 增量模式：遇到已入库即认为更早的都已入库（首页首条豁免，
-                    # 防置顶旧帖排在流首导致误停漏抓新帖，见 docstring）
-                    if stop_on_existing and not (dyn_page == 0 and idx == 0):
-                        result.stopped_early = True
-                        result.stop_reason = "stopped_early"
-                        result.stop_existing_pid = d["platform_post_id"]
-                        stop_now = True
-                        break
+                    # 增量模式：命中已入库即认为更早的都已入库——但**必须整页扫完
+                    # 再停**，且置顶帖不算（见下）。理由：置顶帖排在流首、可多条、
+                    # 顺序打乱，提前 break 会把同一页里更新的新帖整段漏掉
+                    # （2026-09-09 用户反馈「更新动态后微博抓不到新帖」，devlog/045）
+                    if (stop_on_existing and known_hit is None
+                            and d["platform_post_id"] not in pinned_ids):
+                        known_hit = d["platform_post_id"]
                     continue
 
                 # 图文 / 纯文字 → detail API 拿 OPUS 格式完整数据
@@ -1182,7 +1433,15 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
                         break
             dyn_page += 1
             if stop_now:
-                # 增量边界已确认：更早的动态必然已在库中，立即收工
+                # 「最新 N 条」模式命中上限：立即收工
+                _flush_pending()
+                return result
+            if known_hit is not None:
+                # 增量模式：整页扫完且页内存在「已入库且非置顶」的帖子
+                # → 更早的动态必然已在库中，收工（不再翻下一页）
+                result.stopped_early = True
+                result.stop_reason = "stopped_early"
+                result.stop_existing_pid = known_hit
                 _flush_pending()
                 return result
             if not data.get("has_more"):
@@ -1204,19 +1463,24 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
 
 async def _fetch_platform_posts(pf, uid: str, pages: int, db: Session,
                                 client: httpx.AsyncClient | None = None,
-                                stop_on_existing: bool = False) -> PostFetchResult:
+                                stop_on_existing: bool = False,
+                                limit_latest: int | None = None) -> PostFetchResult:
     """通用单流帖子抓取循环（爬虫框架：微博及后续单流平台复用）。
 
     pages=-1 拉到底；pages=0 不抓；与 _fetch_posts_core 共用同一套基础设施：
     批量落库/内存去重/归档边界/定时任务让位/风控断点续抓/stop_reason 归类。
     计数口径：单流帖子记入 dynamics 桶（与 B 站动态流同一统计位）。
+    limit_latest=N → 入库满 N 条新帖即停（收录首屏抓取用，与 B 站口径一致）。
+    stop_on_existing=True → **整页扫完**后若页内有「已入库且非置顶」的帖子即停；
+    置顶帖（平台返回的 pinned_ids）不参与停止判定（微博 mymblog 可有多条置顶，
+    时间顺序被打乱，见 devlog/045）。
     """
     result = PostFetchResult()
     clear_rate_limit()
 
     own_client = client is None
     if own_client:
-        client = httpx.AsyncClient(timeout=15.0)
+        client = new_async_client(15.0)
 
     try:
         platform = pf.platform
@@ -1259,6 +1523,7 @@ async def _fetch_platform_posts(pf, uid: str, pages: int, db: Session,
 
         page = 1
         rl_retries = 0
+        latest_new = 0      # 「最新 N 条」模式计数（limit_latest，收录首屏用）
         while True:
             if pages == 0 or (pages > 0 and page > pages):
                 if pages != 0:
@@ -1293,18 +1558,19 @@ async def _fetch_platform_posts(pf, uid: str, pages: int, db: Session,
                 result.natural_end = True
                 result.seen_pids.extend(d["platform_post_id"] for d in items)
                 break
+            # 置顶帖（pinned_ids）：不参与增量停止判定（可多条、时间顺序打乱）
+            pinned_ids = set(data.get("pinned_ids") or [])
+            known_hit: str | None = None   # 本页第一条「已入库且非置顶」的帖子
             for idx, d in enumerate(items):
                 result.seen_pids.append(d["platform_post_id"])
                 result.dynamics += 1
                 if d["platform_post_id"] in existing_ids:
                     result.skipped += 1
-                    # 增量模式：遇已入库即认为更早的都已入库（首页首条豁免防置顶误停）
-                    if stop_on_existing and not (page == 1 and idx == 0):
-                        result.stopped_early = True
-                        result.stop_reason = "stopped_early"
-                        result.stop_existing_pid = d["platform_post_id"]
-                        _flush_pending()
-                        return result
+                    # 增量模式：命中已入库**不当场停**，等整页扫完再停
+                    # （同页靠后的新帖可能比它更新，见 devlog/045）
+                    if (stop_on_existing and known_hit is None
+                            and d["platform_post_id"] not in pinned_ids):
+                        known_hit = d["platform_post_id"]
                     continue
 
                 # 详情补全（长文全文等）；风控标志仅用于列表页判定（C）
@@ -1316,6 +1582,18 @@ async def _fetch_platform_posts(pf, uid: str, pages: int, db: Session,
                 existing_ids.add(d["platform_post_id"])
                 if len(pending) >= _POST_BATCH_SIZE:
                     _flush_pending()
+                if limit_latest is not None:
+                    latest_new += 1
+                    if latest_new >= limit_latest:
+                        _flush_pending()
+                        return result
+            if known_hit is not None:
+                # 整页扫完且页内有「已入库且非置顶」的帖子 → 更早的必然已入库
+                result.stopped_early = True
+                result.stop_reason = "stopped_early"
+                result.stop_existing_pid = known_hit
+                _flush_pending()
+                return result
             if not data.get("has_more"):
                 result.natural_end = True
                 break
@@ -1338,7 +1616,8 @@ async def _fetch_posts_for_account(acc: Account, video_pages: int, dynamics_page
     - bilibili → 双流核心 _fetch_posts_core（视频+动态、归档边界、视频总数比对）
     - weibo 等单流平台 → 通用循环 _fetch_platform_posts
 
-    limit_latest 仅对 bilibili 双流核心生效（「最新 N 条」模式，见该函数 docstring）。
+    limit_latest 对两条实现均生效（B 站双流核心 = 动态桶计数；单流平台 = 全流计数），
+    收录首屏抓取即用该参数给单次时长设上界。
 
     抓取结束后统一执行墓碑判定（删除检测，v0.5.1）——本函数是各调用方
     （增量更新/全量抓取/按名抓取）的共同必经点，判定结果写入 detail，
@@ -1358,7 +1637,8 @@ async def _fetch_posts_for_account(acc: Account, video_pages: int, dynamics_page
                                          limit_latest=limit_latest)
     else:
         result = await _fetch_platform_posts(pf, str(acc.platform_uid), dynamics_pages, db,
-                                             client=client, stop_on_existing=stop_on_existing)
+                                             client=client, stop_on_existing=stop_on_existing,
+                                             limit_latest=limit_latest)
     _run_tombstone_scan(db, acc, result, include_videos=include_videos)
     return result
 
@@ -1406,10 +1686,11 @@ async def async_fetch_posts(platform: str, uid: str, video_pages: int, dynamics_
 
     _post_fetch_running = True
     _status["post"]["running"] = True
-    _set_post_target(str(uid))
+    # P8-C：单账号快速抓取（无 i/N 进度）
+    _set_post_progress("quick", None, 1, 1)
     res_seq = _next_result_seq()
     db: Session = SessionLocal()
-    client = httpx.AsyncClient(timeout=15.0)
+    client = new_async_client(15.0)
     out: PostFetchResult | None = None
     try:
         acc = db.query(Account).filter(
@@ -1447,6 +1728,74 @@ async def async_fetch_posts(platform: str, uid: str, video_pages: int, dynamics_
             )
 
 
+async def async_fetch_first_screen(account_id: int) -> PostFetchResult:
+    """收录首屏抓取（v0.9.4）：新账号立刻抓到第一屏内容。
+
+    用户诉求：「添加一个新 V 的时候信息抓取能够尽可能地快」。旧实现收录后只拉
+    账号信息，右栏「暂无帖子」要等 15 分钟的综合档动态流或手动点「抓取帖子」。
+    这里对该账号跑一次**有界**抓取：
+
+    - 投稿 1 页（≤30 条，`arc/search` 列表自带标题/封面/时长/统计，无逐条详情请求）；
+    - 动态 1 页 + 最多 `FIRST_SCREEN_DYNAMICS_LIMIT` 条新帖（每条 1 次详情）；
+    - 微博等单流平台：1 页 + 同样的条数上限（`_fetch_platform_posts`）；
+    - 走帖子锁 + 手动优先；抢不到锁时入队等心跳补抓（不静默丢弃）。
+    """
+    global _post_fetch_running
+
+    if not await _acquire_manual_post():
+        _enqueue_pending_first_screen(account_id)
+        logger.warning(f"account#{account_id} 首屏抓取锁被占用，已排队等待补抓")
+        return PostFetchResult(stop_reason="queued", error="帖子抓取正在进行中，已排队")
+
+    _post_fetch_running = True
+    _status["post"]["running"] = True
+    res_seq = _next_result_seq()
+    db: Session = SessionLocal()
+    client = new_async_client(15.0)
+    out: PostFetchResult | None = None
+    label = f"account#{account_id}"
+    try:
+        acc = db.get(Account, account_id)
+        if acc is None:
+            out = PostFetchResult(stop_reason="error", error=f"账号 {account_id} 不存在")
+            return out
+        label = acc.display_name or str(acc.platform_uid)
+        # P8-C：顶栏「首屏抓取中 - {V名}」（单账号，无 i/N）
+        _set_post_progress("adopt", _vtuber_name_of(acc), 1, 1)
+        logger.info(f"收录首屏抓取 {acc.platform}:{acc.platform_uid} "
+                    f"({acc.display_name or ''}) ...")
+        out = await _fetch_posts_for_account(
+            acc,
+            settings.FIRST_SCREEN_VIDEO_PAGES,
+            settings.FIRST_SCREEN_DYNAMICS_PAGES,
+            db, client=client,
+            include_videos=True,
+            stop_on_existing=True,
+            limit_latest=settings.FIRST_SCREEN_DYNAMICS_LIMIT,
+        )
+        return out
+    except Exception as e:
+        logger.error(f"收录首屏抓取异常 account#{account_id}: {e}", exc_info=True)
+        db.rollback()
+        out = PostFetchResult(stop_reason="error", error=str(e))
+        return out
+    finally:
+        db.close()
+        await client.aclose()
+        _post_fetch_running = False
+        _reset_post_status()
+        _post_fetch_lock.release()
+        if out is not None:
+            lossy = out.stop_reason in ("rate_limited", "network_error", "error")
+            _set_post_last_result(
+                res_seq, "adopt", label,
+                out.videos, out.dynamics, out.stored, out.skipped,
+                ([{"label": f"account#{account_id}", "stop_reason": out.stop_reason,
+                   "error": out.error}] if lossy else []),
+                None,
+            )
+
+
 async def async_fetch_all_posts() -> dict:
     """对库中所有账号（bilibili+微博等）逐个全量抓取帖子（按平台分发）。
     手动任务优先：锁被定时档占用时请求其让位。"""
@@ -1465,7 +1814,7 @@ async def async_fetch_all_posts() -> dict:
     video_missing = 0
     out: dict = {}
     db: Session = SessionLocal()
-    client = httpx.AsyncClient(timeout=15.0)
+    client = new_async_client(15.0)
 
     try:
         accounts = AccountRepo(db).all_for_fetch()
@@ -1477,7 +1826,8 @@ async def async_fetch_all_posts() -> dict:
 
         for idx, acc in enumerate(accounts):
             # 断点让位：定时任务请求让位时交还锁，等待其完成后续跑（同一账号列表序号）
-            _set_post_target(acc.display_name or str(acc.platform_uid))
+            # P8-C：顶栏「全量抓取中 - {V名} - i/N」
+            _set_post_progress("full", _vtuber_name_of(acc), idx + 1, len(accounts))
             logger.info(f"[{idx+1}/{len(accounts)}] 全量抓取 {acc.platform}:{acc.platform_uid} "
                         f"({acc.display_name or ''}) 的帖子...")
             try:
@@ -1563,7 +1913,7 @@ async def async_fetch_vtuber_posts(name: str, platform: str = "bilibili") -> dic
     video_missing = 0
     out: dict = {}
     db: Session = SessionLocal()
-    client = httpx.AsyncClient(timeout=15.0)
+    client = new_async_client(15.0)
 
     try:
         vtubers = db.query(VTuber).filter(VTuber.name.contains(name)).all()
@@ -1586,7 +1936,8 @@ async def async_fetch_vtuber_posts(name: str, platform: str = "bilibili") -> dic
 
         for idx, acc in enumerate(accounts):
             # 断点让位：定时任务请求让位时交还锁，等待其完成后续跑（同一账号列表序号）
-            _set_post_target(acc.display_name or str(acc.platform_uid))
+            # P8-C：顶栏「全量抓取中 - {V名} - i/N」（按名抓取同一口径）
+            _set_post_progress("full", _vtuber_name_of(acc), idx + 1, len(accounts))
             logger.info(f"[{idx+1}/{len(accounts)}] 全量抓取帖子 {acc.platform}:{acc.platform_uid} "
                         f"({acc.display_name or ''}) ...")
             try:
@@ -1675,7 +2026,7 @@ async def async_update_unarchived_posts(name: str | None = None) -> dict:
     _status["post"]["running"] = True
     res_seq = _next_result_seq()
     db: Session = SessionLocal()
-    client = httpx.AsyncClient(timeout=15.0)
+    client = new_async_client(15.0)
     total = {"dynamics": 0, "stored": 0, "skipped": 0}
     details = []
     issues: list[dict] = []
@@ -1708,7 +2059,8 @@ async def async_update_unarchived_posts(name: str | None = None) -> dict:
 
         for idx, acc in enumerate(accounts):
             # 断点让位：定时任务请求让位时交还锁，等待其完成后续跑（同一账号列表序号）
-            _set_post_target(acc.display_name or str(acc.platform_uid))
+            # P8-C：顶栏「动态更新中 - 明前奶绿 - 1/11」（用户举例即此路径）
+            _set_post_progress("update", _vtuber_name_of(acc), idx + 1, len(accounts))
             logger.info(f"[{idx+1}/{len(accounts)}] 更新未归档 {acc.platform}:{acc.platform_uid} "
                         f"({acc.display_name or ''}) ...")
             try:
@@ -1796,7 +2148,7 @@ async def live_sweep_core(db: Session, client: httpx.AsyncClient | None = None) 
     clear_rate_limit()
     own_client = client is None
     if own_client:
-        client = httpx.AsyncClient(timeout=15.0)
+        client = new_async_client(15.0)
 
     def _bili_accounts() -> list[Account]:
         return db.query(Account).filter(
@@ -1878,7 +2230,7 @@ async def run_latest_dynamics_sweep() -> dict:
     _post_fetch_running = True
     _status["post"]["running"] = True
     db: Session = SessionLocal()
-    client = httpx.AsyncClient(timeout=15.0)
+    client = new_async_client(15.0)
     sessions: dict[str, Session] = {}
     total = {"dynamics": 0, "stored": 0, "skipped": 0}
     issues: list[dict] = []
@@ -1899,6 +2251,9 @@ async def run_latest_dynamics_sweep() -> dict:
             for s in sessions.values():
                 s.commit()
 
+        # P8-C：轮次进度（on_progress 在 worker 之前调用，用它给顶栏提供 i/N）
+        progress = {"done": 0, "total": sum(len(q) for q in groups.values())}
+
         async def worker(pf: str, item: tuple[VTuber, Account]) -> _RoundOutcome:
             v, acc = item
             s = sessions[pf]
@@ -1906,6 +2261,8 @@ async def run_latest_dynamics_sweep() -> dict:
             if local is None:
                 return _RoundOutcome(ok=False, error="账号已不存在", payload=(v, acc))
             logger.info(f"[{pf}] 动态 {v.name} ({acc.platform_uid}) ...")
+            # P8-C：顶栏「动态轮询中 - {V名} - 已处理/总数」
+            _set_post_progress("dynamic", v.name, progress["done"], progress["total"])
             try:
                 r = await _fetch_posts_for_account(
                     local, 0, 1, s, client=client,
@@ -1927,7 +2284,11 @@ async def run_latest_dynamics_sweep() -> dict:
                                                    settings.STARTUP_DYNAMICS_INTERVAL_MAX))
 
         def on_progress(done: int, total_n: int, ready: list[str]) -> None:
-            _set_post_target("、".join(ready))
+            # P8-C：轮次开始前汇报「已处理/总数」；V 名由上面 worker 在真正开抓时写入
+            progress["done"], progress["total"] = done, total_n
+            _set_post_progress("dynamic",
+                               _status["post"].get("vtuber_name"),
+                               done, total_n)
 
         rounds = await _run_platform_rounds(
             groups, worker_with_pacing,
@@ -2074,6 +2435,9 @@ def _tier_loop() -> None:
 
     while True:
         time.sleep(max(1, settings.TIER_TICK_SECONDS))
+        # 排队兜底（v0.9.4）：收录/加账号时抢锁失败的任务在此优先补抓
+        if not (_fetch_running or _post_fetch_running or _external_running):
+            _drain_pending_fetches()
         if is_fetch_running() or is_post_fetch_running() or _external_running:
             continue  # 手动任务 / 外部批次在跑：自动档全部跳过本轮
         now = time.monotonic()

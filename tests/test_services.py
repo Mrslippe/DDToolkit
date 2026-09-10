@@ -600,9 +600,9 @@ def test_safe_json_parse_fallback():
 
 
 def test_fetch_posts_core_stops_on_existing(monkeypatch, db):
-    """v0.4.7 增量模式：动态流遇到库中已有帖子即停（首页首条豁免防置顶误停）。
-    场景：库中已有 OLD1；feed 第一页 = [OLD1(置顶位,豁免), NEW1(新), OLD1?不重复]
-    → NEW1 入库；第二页首条 OLD2 已存在 → 立即停止，不再请求第三页。"""
+    """v0.4.7 增量模式（v0.9.4 调整为「整页扫完再停」）：
+    库中已有 OLD1/OLD2；第一页 = [OLD1(已入库), NEW1(新)] → NEW1 入库，
+    整页扫完命中已入库 → 收工；NEW2 在下一页，不再请求。"""
     from app.services import scheduler as sch
 
     db.add_all([
@@ -638,28 +638,79 @@ def test_fetch_posts_core_stops_on_existing(monkeypatch, db):
         return r, calls["n"]
 
     r, n = asyncio.run(run())
-    assert r.stopped_early is True       # 第二页首条 OLD2 命中即停
-    assert n == 2                        # 第三页零请求
-    assert r.stored == 1                 # 仅第一页的 NEW1 入库（NEW2 未到达即停）
+    assert r.stopped_early is True       # 第一页含已入库帖 → 整页扫完即停
+    assert r.stop_existing_pid == "OLD1"
+    assert n == 1                        # 第二页零请求
+    assert r.stored == 1                 # NEW1 入库
     assert db.query(PostModel).filter(
         PostModel.platform_post_id == "NEW2").count() == 0
 
 
-def test_fetch_posts_core_stop_exempt_first_item(monkeypatch, db):
-    """首页首条豁免：置顶旧帖在流首不触发停止，其后的新帖正常入库。"""
+def test_fetch_posts_core_pinned_does_not_stop_and_scans_whole_page(monkeypatch, db):
+    """回归（2026-09-09 用户反馈「更新动态后抓不到新帖」）：置顶动态排在流首且
+    可多条、时间顺序被打乱 —— 已入库的置顶帖**不能**触发增量停止，同页靠后的
+    新帖必须照常入库；整页扫完仍无「已入库且非置顶」的帖子 → 继续下一页。"""
     from app.services import scheduler as sch
 
-    db.add(PostModel(platform="bilibili", platform_uid="123",
-                     platform_post_id="PIN", type="text"))
+    db.add_all([
+        PostModel(platform="bilibili", platform_uid="123", platform_post_id="PIN1",
+                  type="text"),
+        PostModel(platform="bilibili", platform_uid="123", platform_post_id="PIN2",
+                  type="text"),
+        PostModel(platform="bilibili", platform_uid="123", platform_post_id="OLD",
+                  type="text"),
+    ])
     db.commit()
 
     pages = [
-        {"items": [_post_item("PIN"), _post_item("FRESH")], "has_more": False},
+        {"items": [_post_item("PIN1"), _post_item("PIN2"), _post_item("FRESH")],
+         "has_more": True, "next_offset": "p2", "pinned_ids": ["PIN1", "PIN2"]},
+        {"items": [_post_item("OLD"), _post_item("NEW2")], "has_more": True,
+         "next_offset": "p3", "pinned_ids": []},
+        {"items": [_post_item("NEVER")], "has_more": False},
     ]
     calls = {"n": 0}
 
     async def fake_dynamics(mid, offset="", client=None):
         calls["n"] += 1
+        return pages[calls["n"] - 1] if calls["n"] <= 3 else None
+
+    async def fake_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(sch, "fetch_bilibili_dynamics", fake_dynamics)
+    monkeypatch.setattr("asyncio.sleep", fake_sleep)
+
+    async def run():
+        r = await sch._fetch_posts_core(123, 0, 10, db,
+                                        include_videos=False, stop_on_existing=True)
+        return r, calls["n"]
+
+    r, n = asyncio.run(run())
+    assert r.stored == 2                     # FRESH + NEW2 都入库（旧实现只存到 NEW1 为止）
+    assert n == 2                            # 第一页无「已入库非置顶」→ 翻到第二页才停
+    assert r.stopped_early is True
+    assert r.stop_existing_pid == "OLD"
+    assert db.query(PostModel).filter(
+        PostModel.platform_post_id == "FRESH").count() == 1
+    assert db.query(PostModel).filter(
+        PostModel.platform_post_id == "NEW2").count() == 1
+
+
+def test_fetch_posts_core_stop_after_full_page(monkeypatch, db):
+    """整页扫完再停：已入库帖之后的**同页**新帖也要入库（旧实现当场 break 会漏）。"""
+    from app.services import scheduler as sch
+
+    db.add(PostModel(platform="bilibili", platform_uid="123",
+                     platform_post_id="OLD", type="text"))
+    db.commit()
+
+    pages = [
+        {"items": [_post_item("OLD"), _post_item("FRESH_AFTER")],
+         "has_more": False, "pinned_ids": []},
+    ]
+
+    async def fake_dynamics(mid, offset="", client=None):
         return pages[0]
 
     async def fake_sleep(_seconds):
@@ -673,9 +724,44 @@ def test_fetch_posts_core_stop_exempt_first_item(monkeypatch, db):
                                            include_videos=False, stop_on_existing=True)
 
     r = asyncio.run(run())
-    assert r.stopped_early is False      # FRESH 是新帖，未误停
     assert r.stored == 1
-    assert calls["n"] == 1               # has_more=False 自然结束
+    assert db.query(PostModel).filter(
+        PostModel.platform_post_id == "FRESH_AFTER").count() == 1
+
+
+def test_fetch_posts_core_pinned_only_page_continues(monkeypatch, db):
+    """整页只有「已入库的置顶帖」→ 不停止，继续下一页（新帖可能都在后面）。"""
+    from app.services import scheduler as sch
+
+    db.add(PostModel(platform="bilibili", platform_uid="123",
+                     platform_post_id="PIN", type="text"))
+    db.commit()
+
+    pages = [
+        {"items": [_post_item("PIN")], "has_more": True, "next_offset": "p2",
+         "pinned_ids": ["PIN"]},
+        {"items": [_post_item("FRESH")], "has_more": False, "pinned_ids": []},
+    ]
+    calls = {"n": 0}
+
+    async def fake_dynamics(mid, offset="", client=None):
+        calls["n"] += 1
+        return pages[calls["n"] - 1]
+
+    async def fake_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(sch, "fetch_bilibili_dynamics", fake_dynamics)
+    monkeypatch.setattr("asyncio.sleep", fake_sleep)
+
+    async def run():
+        return await sch._fetch_posts_core(123, 0, 10, db,
+                                           include_videos=False, stop_on_existing=True)
+
+    r = asyncio.run(run())
+    assert calls["n"] == 2               # 置顶帖不触发停止 → 翻到第二页
+    assert r.stored == 1
+    assert r.natural_end is True         # 第二页 has_more=False 自然结束
 
 
 # ── 优化项：img_proxy SSRF 重定向加固 / 批量入库 / 跨平台删帖 ────────────
@@ -902,7 +988,7 @@ def test_async_fetch_vtuber_relinks_session_after_cooldown(monkeypatch):
 
     state = {"calls": 0}
 
-    async def fake_fetch(acc, _db, client=None):
+    async def fake_fetch(acc, _db, client=None, *, pending_avatar=None):
         state["calls"] += 1
         if state["calls"] == 1:
             _rate_limit_ctx.set((True, "code=-412"))
@@ -926,6 +1012,393 @@ def test_async_fetch_vtuber_relinks_session_after_cooldown(monkeypatch):
         assert acc.display_name == "新名"  # 冷却后重查的账号更新已落库
     finally:
         check.close()
+
+
+# ── 收录提速（v0.9.4）：按 id 精确抓取 + 无末尾空转 + 头像延后 ─────────────
+
+def _mk_vtuber_with_accounts(Maker, uids: list[str]) -> tuple[int, list[int]]:
+    """建 1 个 V + N 个账号，返回 (vtuber_id, account_ids)。"""
+    s = Maker()
+    try:
+        v = VTuber(name="提速V")
+        s.add(v)
+        s.commit()
+        ids = []
+        for uid in uids:
+            a = Account(vtuber_id=v.id, platform="bilibili", platform_uid=uid)
+            s.add(a)
+            s.commit()
+            ids.append(a.id)
+        return v.id, ids
+    finally:
+        s.close()
+
+
+def test_async_fetch_accounts_only_touches_given_ids(monkeypatch):
+    """按 id 精确抓取：加账号时不再把该 V 的其它账号重抓一遍。"""
+    from app.services import scheduler as sch
+
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine)
+    Maker = sessionmaker(bind=engine)
+    _, ids = _mk_vtuber_with_accounts(Maker, ["111", "222"])
+    monkeypatch.setattr(sch, "SessionLocal", Maker)
+
+    seen: list[str] = []
+
+    async def fake_fetch(acc, _db, client=None, *, pending_avatar=None):
+        seen.append(acc.platform_uid)
+        return True
+
+    monkeypatch.setattr(sch, "_fetch_one_account", fake_fetch)
+    r = asyncio.run(sch.async_fetch_accounts([ids[1]], label="加账号", fast=True))
+    assert seen == ["222"]          # 只抓指定账号
+    assert r.success == 1
+
+
+def test_async_fetch_accounts_fast_no_trailing_sleep(monkeypatch):
+    """fast 路径：单账号抓完立即落库推送，末尾不再空转 3~5s（旧实现必睡）。"""
+    from app.services import scheduler as sch
+
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine)
+    Maker = sessionmaker(bind=engine)
+    _, ids = _mk_vtuber_with_accounts(Maker, ["111"])
+    monkeypatch.setattr(sch, "SessionLocal", Maker)
+
+    sleeps: list[float] = []
+    pending_seen: list[list[str] | None] = []
+
+    async def fake_fetch(acc, _db, client=None, *, pending_avatar=None):
+        pending_seen.append(pending_avatar)
+        return True
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(sch, "_fetch_one_account", fake_fetch)
+    monkeypatch.setattr("asyncio.sleep", fake_sleep)
+
+    pushed: list[str] = []
+    monkeypatch.setattr(sch, "_push_account_snapshot", lambda acc: pushed.append(acc.platform_uid))
+
+    r = asyncio.run(sch.async_fetch_accounts(ids, label="收录", fast=True))
+    assert r.success == 1
+    assert sleeps == []                 # 唯一账号：一次节流 sleep 都不该有
+    assert pushed == ["111"]            # 抓完立即推送快照
+    assert pending_seen == [[]]         # fast 模式传入待下载头像列表（延后下载）
+    assert sch._status["account"]["last_result"]["label"] == "收录"
+
+
+def test_async_fetch_accounts_paces_between_accounts(monkeypatch):
+    """多账号：节流只发生在账号之间（最后一个不再睡），且 fast 间隔更短。"""
+    from app.services import scheduler as sch
+
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine)
+    Maker = sessionmaker(bind=engine)
+    _, ids = _mk_vtuber_with_accounts(Maker, ["111", "222", "333"])
+    monkeypatch.setattr(sch, "SessionLocal", Maker)
+
+    sleeps: list[float] = []
+
+    async def fake_fetch(acc, _db, client=None, *, pending_avatar=None):
+        return True
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(sch, "_fetch_one_account", fake_fetch)
+    monkeypatch.setattr("asyncio.sleep", fake_sleep)
+
+    r = asyncio.run(sch.async_fetch_accounts(ids, label="收录", fast=True))
+    assert r.success == 3
+    assert len(sleeps) == 2                                     # 3 个账号 → 2 次间隔
+    assert all(settings.MANUAL_FAST_INTERVAL_MIN <= s <= settings.MANUAL_FAST_INTERVAL_MAX
+               for s in sleeps)
+
+
+def test_fetch_one_account_defers_avatar(monkeypatch):
+    """传 pending_avatar 时只写 avatar_url，不下载；URL 交给调用方延后处理。"""
+    from app.services import scheduler as sch
+
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine)
+    Maker = sessionmaker(bind=engine)
+    s = Maker()
+    v = VTuber(name="V")
+    s.add(v)
+    s.commit()
+    acc = Account(vtuber_id=v.id, platform="bilibili", platform_uid="777")
+    s.add(acc)
+    s.commit()
+
+    class _Pf:
+        async def fetch_user_info(self, uid, client=None):
+            return {"name": "新名", "sign": "签名", "avatar": "https://i0.hdslb.com/a.jpg",
+                    "followers_count": 42, "live_status": 1, "live_title": "直播中"}
+
+    monkeypatch.setattr(sch.registry, "get_fetcher", lambda p: _Pf())
+    downloads: list[str] = []
+
+    async def fake_download(url, uid, client=None):
+        downloads.append(uid)
+        return "static/avatars/x.jpg"
+
+    monkeypatch.setattr(sch, "_download_avatar", fake_download)
+
+    pending: list[str] = []
+    ok = asyncio.run(sch._fetch_one_account(acc, s, pending_avatar=pending))
+    assert ok is True
+    assert downloads == []                                       # 没有同步下载
+    assert pending == ["https://i0.hdslb.com/a.jpg"]
+    assert acc.avatar_url == "https://i0.hdslb.com/a.jpg"
+    assert acc.avatar_path is None                               # 本地路径留待延后任务
+    assert acc.display_name == "新名" and acc.followers_count == 42
+    s.close()
+
+
+def test_deferred_avatar_updates_only_avatar_path(monkeypatch):
+    """延后下载：只 UPDATE avatar_path 一列并再推一次快照（不覆盖其它字段）。"""
+    from app.services import scheduler as sch
+
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine)
+    Maker = sessionmaker(bind=engine)
+    s = Maker()
+    v = VTuber(name="V")
+    s.add(v)
+    s.commit()
+    acc = Account(vtuber_id=v.id, platform="bilibili", platform_uid="888",
+                  display_name="原名", sign="原签名")
+    s.add(acc)
+    s.commit()
+    aid = acc.id
+    s.close()
+
+    monkeypatch.setattr(sch, "SessionLocal", Maker)
+
+    async def fake_download(url, uid, client=None):
+        assert uid == "bilibili_888"       # 平台前缀命名，避免跨平台撞名
+        return "static/avatars/bilibili_888.jpg"
+
+    monkeypatch.setattr(sch, "_download_avatar", fake_download)
+    pushed: list[tuple[int, str | None]] = []
+    monkeypatch.setattr(sch, "_push_account_snapshot",
+                        lambda a: pushed.append((a.id, a.avatar_path)))
+
+    asyncio.run(sch._deferred_avatar(aid, "https://i0.hdslb.com/a.jpg"))
+
+    check = Maker()
+    try:
+        fresh = check.get(Account, aid)
+        assert fresh.avatar_path == "static/avatars/bilibili_888.jpg"
+        assert fresh.display_name == "原名" and fresh.sign == "原签名"   # 其它字段未被触碰
+    finally:
+        check.close()
+    assert pushed == [(aid, "static/avatars/bilibili_888.jpg")]
+
+
+def test_deferred_avatar_skips_deleted_account(monkeypatch):
+    """账号在延后下载期间被删除：UPDATE 影响 0 行 → 不推送、不报错。"""
+    from app.services import scheduler as sch
+
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine)
+    Maker = sessionmaker(bind=engine)
+    monkeypatch.setattr(sch, "SessionLocal", Maker)
+
+    pushed: list[int] = []
+    monkeypatch.setattr(sch, "_push_account_snapshot", lambda a: pushed.append(a.id))
+    asyncio.run(sch._deferred_avatar(9999, "https://i0.hdslb.com/a.jpg"))
+    assert pushed == []
+
+
+def test_async_fetch_first_screen_bounded_params(monkeypatch):
+    """收录首屏：投稿 1 页 + 动态 1 页限 3 条，走帖子锁并写 kind=adopt 的完成汇总。"""
+    from app.services import scheduler as sch
+
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine)
+    Maker = sessionmaker(bind=engine)
+    _, ids = _mk_vtuber_with_accounts(Maker, ["123"])
+    monkeypatch.setattr(sch, "SessionLocal", Maker)
+
+    calls: list[dict] = []
+
+    async def fake_fetch_account(acc, video_pages, dynamics_pages, db, client=None, **kw):
+        calls.append({"uid": acc.platform_uid, "video": video_pages, "dyn": dynamics_pages, **kw})
+        return sch.PostFetchResult(videos=30, dynamics=2, stored=3)
+
+    monkeypatch.setattr(sch, "_fetch_posts_for_account", fake_fetch_account)
+    out = asyncio.run(sch.async_fetch_first_screen(ids[0]))
+    assert out.stored == 3
+    assert calls == [{
+        "uid": "123",
+        "video": settings.FIRST_SCREEN_VIDEO_PAGES,
+        "dyn": settings.FIRST_SCREEN_DYNAMICS_PAGES,
+        "include_videos": True,
+        "stop_on_existing": True,
+        "limit_latest": settings.FIRST_SCREEN_DYNAMICS_LIMIT,
+    }]
+    last = sch._status["post"]["last_result"]
+    assert last["kind"] == "adopt" and last["stored"] == 3
+    assert sch._post_fetch_lock.locked() is False
+
+
+def test_fetch_accounts_queues_when_manual_holder(monkeypatch):
+    """抢不到锁不再静默丢弃：入队等待心跳补抓（v0.9.4 排队兜底）。"""
+    from app.services import scheduler as sch
+
+    # 清掉可能残留的队列
+    sch._take_pending()
+
+    assert sch._fetch_lock.acquire(blocking=False)   # 模拟另一个**手动**任务持锁
+    try:
+        r = asyncio.run(sch.async_fetch_accounts([7], label="收录", fast=True))
+        assert "排队" in r.details[0]
+        assert sch.has_pending_fetches() is True
+    finally:
+        sch._fetch_lock.release()
+
+    # 锁空闲后心跳消费队列
+    fetched: list[list[int]] = []
+
+    async def fake_fetch_accounts(ids, *, label="指定账号", fast=True):
+        fetched.append(list(ids))
+        return sch.FetchResult(success=len(ids))
+
+    monkeypatch.setattr(sch, "async_fetch_accounts", fake_fetch_accounts)
+    sch._drain_pending_fetches()
+    assert fetched == [[7]]
+    assert sch.has_pending_fetches() is False
+
+
+def test_drain_pending_keeps_queue_while_busy(monkeypatch):
+    """消费时若又有任务在跑：放回队列，下个心跳再试（不丢也不抢）。"""
+    from app.services import scheduler as sch
+
+    sch._take_pending()
+    sch._enqueue_pending_account(11)
+    sch._fetch_running = True
+    try:
+        sch._drain_pending_fetches()
+        assert sch.has_pending_fetches() is True
+    finally:
+        sch._fetch_running = False
+        sch._take_pending()
+
+
+# ── 外部数据任务状态通道（v0.9.4）：顶栏胶囊 + 完成事件 ────────────────────
+
+def test_external_task_status_and_done_seq():
+    """外部任务状态：running/label 供顶栏展示；每次结束 seq 自增（前端据此刷新卡片）。
+
+    并发时标签用「、」合并、全部结束才置 running=False——收录回填与每日批次
+    可能同时跑（两者都不占两把锁）。
+    """
+    from app.services import scheduler as sch
+
+    assert sch._status["external"]["running"] is False
+    base_seq = sch._status["external"]["seq"]
+
+    sch.external_task_started("adopt:22", "永雏塔菲 的历史数据")
+    assert sch.get_fetch_status()["external"] == {
+        "running": True, "label": "永雏塔菲 的历史数据",
+        "last_label": None, "seq": base_seq,
+    }
+
+    sch.external_task_started("daily", "第三方数据日批次")
+    assert sch._status["external"]["label"] == "永雏塔菲 的历史数据、第三方数据日批次"
+
+    sch.external_task_finished("adopt:22")
+    assert sch._status["external"]["running"] is True      # 还有一个在跑
+    assert sch._status["external"]["label"] == "第三方数据日批次"
+    assert sch._status["external"]["seq"] == base_seq + 1
+    assert sch._status["external"]["last_label"] == "永雏塔菲 的历史数据"
+
+    sch.external_task_finished("daily")
+    assert sch._status["external"]["running"] is False
+    assert sch._status["external"]["label"] is None
+    assert sch._status["external"]["seq"] == base_seq + 2
+
+
+def test_external_status_not_in_any_fetch_running():
+    """外部任务不占两把锁：综合档/手动任务的忙判定不受它影响。"""
+    from app.services import scheduler as sch
+
+    sch.external_task_started("daily", "第三方数据日批次")
+    try:
+        assert sch.any_fetch_running() is False
+        assert sch.manual_task_running() is False
+        assert sch.is_fetch_running() is False
+    finally:
+        sch.external_task_finished("daily")
+
+
+# ── 顶栏进度（P8-C）：任务名 + V名 + i/N ────────────────────────────────
+
+def test_post_progress_exposes_task_vtuber_and_index():
+    """帖子流状态带 task/vtuber_name/index/total（顶栏「动态更新中 - 明前奶绿 - 1/11」）。"""
+    from app.services import scheduler as sch
+
+    try:
+        sch._set_post_progress("update", "明前奶绿", 1, 11)
+        st = sch.get_fetch_status()["post"]
+        assert st["task"] == "update"
+        assert st["vtuber_name"] == "明前奶绿"
+        assert (st["index"], st["total"]) == (1, 11)
+        assert st["target"] == "明前奶绿"     # 旧字段兼容（旧前端仍读 target）
+
+        sch._set_post_progress("dynamic", "七海Nana7mi", 3, 7)
+        st = sch.get_fetch_status()["post"]
+        assert (st["task"], st["vtuber_name"], st["index"], st["total"]) == \
+            ("dynamic", "七海Nana7mi", 3, 7)
+    finally:
+        sch._reset_post_status()
+    st = sch.get_fetch_status()["post"]
+    assert st["task"] is None and st["vtuber_name"] is None
+    assert (st["index"], st["total"]) == (0, 0)
+
+
+def test_account_progress_exposes_task_and_vtuber():
+    """账号流状态带 task 与 V 名；V 名缺省=None 表示「不改动」（轮次汇报不覆盖 worker 值）。"""
+    from app.services import scheduler as sch
+
+    try:
+        sch._status["account"]["task"] = "account"
+        sch._set_account_progress("bilibili", 3, 10, vtuber_name="泽音Melody")
+        st = sch.get_fetch_status()["account"]
+        assert st["task"] == "account" and st["vtuber_name"] == "泽音Melody"
+        assert (st["current"], st["index"], st["total"]) == ("bilibili", 3, 10)
+
+        sch._set_account_progress("bilibili、weibo", 4, 10)
+        assert sch.get_fetch_status()["account"]["vtuber_name"] == "泽音Melody"
+        sch._set_account_vtuber("七海Nana7mi")
+        assert sch.get_fetch_status()["account"]["vtuber_name"] == "七海Nana7mi"
+    finally:
+        sch._reset_account_status()
+    st = sch.get_fetch_status()["account"]
+    assert st["task"] is None and st["vtuber_name"] is None and st["running"] is False
+
+
+def test_vtuber_name_of_tolerates_detached_account():
+    """V 名取自 ORM 关系；关系不可用时返回 None——进度显示绝不影响抓取。"""
+    from app.services import scheduler as sch
+
+    class _Boom:
+        @property
+        def vtuber(self):
+            raise RuntimeError("detached")
+
+    class _Inner:
+        name = "弥月Mizuki"
+
+    class _Ok:
+        vtuber = _Inner()
+
+    assert sch._vtuber_name_of(_Boom()) is None
+    assert sch._vtuber_name_of(_Ok()) == "弥月Mizuki"
 
 
 def test_save_to_env_atomic_keeps_other_keys(monkeypatch):
@@ -1444,7 +1917,7 @@ def test_manual_single_v_fetch_preempts_running_auto_sweep(monkeypatch):
     fetched: list[str] = []
     auto_started = threading.Event()
 
-    async def fake_fetch(acc, db, client=None):
+    async def fake_fetch(acc, db, client=None, *, pending_avatar=None):
         uid = str(acc.platform_uid)
         fetched.append(uid)
         if uid == "100":                         # 自动档首个账号：慢，留出抢占窗口

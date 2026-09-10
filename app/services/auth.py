@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 import httpx
 
 from app.core.config import settings
+from app.core.http import new_async_client
 from app.services.env_store import save_env_keys
 
 logger = logging.getLogger(__name__)
@@ -223,7 +224,7 @@ class BilibiliAuth:
 
     async def check_session(self) -> bool:
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with new_async_client(10.0) as client:
                 resp = await client.get(
                     "https://api.bilibili.com/x/web-interface/nav",
                     headers=self.build_headers(),
@@ -251,7 +252,7 @@ class BilibiliAuth:
 
         try:
             logger.info("尝试使用 refresh_token 续期...")
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with new_async_client(10.0) as client:
                 resp = await client.post(
                     "https://passport.bilibili.com/x/passport-login/web/cookie/refresh",
                     data={
@@ -285,7 +286,7 @@ class BilibiliAuth:
 
     async def _fetch_refresh_token(self) -> Optional[str]:
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with new_async_client(10.0) as client:
                 resp = await client.get(
                     "https://passport.bilibili.com/x/passport-login/web/cookie/info",
                     headers=self.build_headers(),
@@ -350,7 +351,7 @@ class BilibiliLoginSession:
 
     def __init__(self, auth: "BilibiliAuth"):
         self.auth = auth
-        self.client = httpx.AsyncClient(timeout=10.0)
+        self.client = new_async_client(10.0)
         self.qrcode_key = ""
 
     async def start(self) -> dict | None:

@@ -38,6 +38,21 @@ def _perf(step: str) -> None:
     logger.info(f"[perf] {step} +{int((time.monotonic() - _t0) * 1000)}ms")
 
 
+async def _warm_wbi() -> None:
+    """WBI 密钥预热（v0.9.4 收录提速）：1 个请求，避免首次收录多付一次 nav 往返。
+
+    B 站 `acc/info`、`arc/search` 都要 WBI 签名，密钥缓存 30 分钟；进程冷启动后
+    第一次签名请求会先打一次 nav。启动时并行预热，用户点「添加 VTuber」时密钥已就绪。
+    失败只记日志——真到抓取时还会自行重试。
+    """
+    try:
+        from app.services.wbi import get_wbi_keys
+        await get_wbi_keys()
+        logger.info("WBI 密钥预热完成")
+    except Exception as e:  # 预热失败不影响启动与后续抓取
+        logger.warning(f"WBI 密钥预热失败（不影响启动）: {type(e).__name__}: {e}")
+
+
 # ── 统一 schema 管理（alembic 迁移链为准） ──────────────────────────────
 
 # 迁移链最新版本。新加迁移时必须同步更新（tests 会断言与 alembic head 一致）。
@@ -140,6 +155,8 @@ async def lifespan(app: FastAPI):
 
     scheduler = start_scheduler()
     auth_task = asyncio.create_task(auth_manager.run_maintenance())
+    # WBI 密钥预热（v0.9.4）：与 auth 心跳并行，让首次收录不必等一次 nav 往返
+    wbi_task = asyncio.create_task(_warm_wbi())
     # 时效分层调度（v0.6.1）：T0 直播状态独立线程（60s）+ T1/T2/T3a 分层轮询
     # （启动链语义并入 T1→T2 首轮；手动任务优先，仅 T0 与之并行）
     start_live_poller()
@@ -149,10 +166,12 @@ async def lifespan(app: FastAPI):
     yield
     logger.info("关闭中...")
     auth_task.cancel()
-    try:
-        await auth_task
-    except asyncio.CancelledError:
-        pass  # 正常取消，避免 CancelledError 噪音
+    wbi_task.cancel()
+    for task in (auth_task, wbi_task):
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass  # 正常取消，避免 CancelledError 噪音
     await img_proxy.close_client()
     shutdown_scheduler(scheduler)
 

@@ -100,29 +100,158 @@ def test_add_account(client):
 
 
 def test_add_account_triggers_fetch_and_backfill(monkeypatch, client):
-    """「添加平台账号」立刻拉起账号抓取（v0.9.3 用户反馈：此前只建行不抓取，
-    前端 toast 说在抓实际要等下一轮定时档）。"""
+    """「添加平台账号」立刻拉起该账号的抓取链路（v0.9.3 用户反馈：此前只建行不抓取；
+    v0.9.4 改为只抓新增账号 + 首屏内容并发，见 _adopt_background）。"""
     import app.routers.vtuber as router_mod
 
-    fetched: list[int] = []
-    backfilled: list[int] = []
+    queued: list[tuple[int, int, str]] = []
 
-    async def fake_fetch(vtuber_id: int) -> None:
-        fetched.append(vtuber_id)
+    async def fake_background(vtuber_id: int, account_id: int, label: str = "") -> None:
+        queued.append((vtuber_id, account_id, label))
 
-    async def fake_backfill(account_id: int) -> None:
-        backfilled.append(account_id)
-
-    monkeypatch.setattr(router_mod, "async_fetch_vtuber", fake_fetch)
-    monkeypatch.setattr(router_mod, "_backfill_adopted_history", fake_backfill)
+    monkeypatch.setattr(router_mod, "_adopt_background", fake_background)
 
     vid = client.post("/vtuber", json={"name": "测试"}).json()["id"]
     resp = client.post(f"/vtuber/{vid}/accounts",
-                       json={"platform": "bilibili", "platform_uid": "1234"})
+                       json={"platform": "bilibili", "platform_uid": "1234",
+                             "display_name": "昵称A"})
     assert resp.status_code == 201
     aid = resp.json()["id"]
-    assert fetched == [vid]        # 响应后立刻拉起该 V 的账号抓取
-    assert backfilled == [aid]     # 并回填新账号的第三方历史
+    assert queued == [(vid, aid, "昵称A")]   # 响应后立刻拉起该账号的抓取链路
+
+
+def test_adopt_background_runs_account_and_first_screen_concurrently(monkeypatch):
+    """收录后台链路：账号信息 ∥ 首屏内容（两把锁独立，墙钟 = max），
+    第三方历史回填脱离关键路径（create_task，不阻塞前两步）。"""
+    import asyncio
+
+    import app.routers.vtuber as router_mod
+
+    started: set[str] = set()
+    gate = asyncio.Event()
+    order: list[str] = []
+    spawned_before_gather: list[int] = []
+
+    async def fake_accounts(account_ids, label=""):
+        started.add("account")
+        # 回填必须在两条关键路径**跑起来之前**就已 spawn（否则日志里会断开）
+        spawned_before_gather.append(len(created))
+        if len(started) == 2:
+            gate.set()
+        await asyncio.wait_for(gate.wait(), timeout=2)   # 串行执行会超时
+        order.append("account-done")
+        return type("R", (), {"success": 1, "failed": 0, "skipped": 0, "details": []})()
+
+    async def fake_first_screen(account_id):
+        started.add("first")
+        spawned_before_gather.append(len(created))
+        if len(started) == 2:
+            gate.set()
+        await asyncio.wait_for(gate.wait(), timeout=2)
+        order.append("first-done")
+        return None
+
+    backfilled: list[int] = []
+
+    async def fake_backfill(account_id: int, label: str = "") -> None:
+        backfilled.append(account_id)
+
+    monkeypatch.setattr(router_mod, "async_fetch_accounts", fake_accounts)
+    monkeypatch.setattr(router_mod, "async_fetch_first_screen", fake_first_screen)
+    monkeypatch.setattr(router_mod, "_backfill_adopted_history", fake_backfill)
+
+    created: list = []
+
+    class _FakeTask:
+        def __init__(self, coro):
+            self.coro = coro
+            self.callbacks = []
+
+        def add_done_callback(self, cb):
+            self.callbacks.append(cb)
+
+    def fake_create_task(coro):
+        created.append(_FakeTask(coro))
+        return created[-1]
+
+    monkeypatch.setattr(router_mod.asyncio, "create_task", fake_create_task)
+    # 强引用集合也换成假的，避免污染模块级状态
+    monkeypatch.setattr(router_mod, "_background_tasks", set())
+
+    asyncio.run(router_mod._adopt_background(5, 42))
+    assert started == {"account", "first"}      # 两条路径都跑到了
+    assert sorted(order) == ["account-done", "first-done"]
+    assert len(created) == 1                     # 第三方回填以独立任务启动（未阻塞）
+    assert spawned_before_gather == [1, 1]       # 且是在两条关键路径起跑之前 spawn 的
+    assert len(created[0].callbacks) == 1        # 完成回调已挂（强引用集合自清理）
+
+    # 收尾：把未 await 的协程关掉，避免 RuntimeWarning
+    created[0].coro.close()
+
+
+def test_adopt_triggers_background_chain(monkeypatch, client):
+    """收录（添加新 V）：建库 + 后台链路（账号信息 ∥ 首屏 + 第三方历史）。"""
+    import app.routers.vtuber as router_mod
+
+    monkeypatch.setattr(
+        router_mod.pool, "find_in_pool",
+        lambda p, u: {"name": "池内名", "platform": p, "platform_uid": u})
+
+    queued: list[tuple[int, int, str]] = []
+
+    async def fake_background(vtuber_id: int, account_id: int, label: str = "") -> None:
+        queued.append((vtuber_id, account_id, label))
+
+    monkeypatch.setattr(router_mod, "_adopt_background", fake_background)
+
+    r = client.post("/vtuber/adopt",
+                    json={"platform": "bilibili", "platform_uid": "401315430"})
+    assert r.status_code == 201
+    vid = r.json()["id"]
+    assert r.json()["name"] == "池内名"     # 名称以池为准
+    aid = client.get(f"/vtuber/{vid}/accounts").json()[0]["id"]
+    assert queued == [(vid, aid, "池内名")]
+    # 池内不存在 → 404（不建库）
+    monkeypatch.setattr(router_mod.pool, "find_in_pool", lambda p, u: None)
+    assert client.post("/vtuber/adopt",
+                       json={"platform": "bilibili", "platform_uid": "999"}).status_code == 404
+
+
+def test_backfill_registers_external_status(monkeypatch, client):
+    """收录回填期间登记外部任务状态（顶栏胶囊），结束后注销并自增 seq。"""
+    import app.routers.vtuber as router_mod
+    from app.services import scheduler as sch
+
+    events: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(sch, "external_task_started",
+                        lambda token, label: events.append(("start", f"{token}|{label}")))
+    monkeypatch.setattr(sch, "external_task_finished",
+                        lambda token: events.append(("finish", token)))
+
+    # 建库阶段不跑真实后台链路（本用例只验证回填的状态登记）
+    async def noop_background(*_a, **_k) -> None:
+        return None
+
+    monkeypatch.setattr(router_mod, "_adopt_background", noop_background)
+
+    async def fake_interval(interval, account_ids=None):
+        return [{"kind": "fan_history"}, {"kind": "live_sessions"}]
+
+    import app.services.externals.runner as runner_mod
+    monkeypatch.setattr(runner_mod, "run_external_interval", fake_interval)
+
+    vid = client.post("/vtuber", json={"name": "回填V"}).json()["id"]
+    aid = client.post(f"/vtuber/{vid}/accounts",
+                      json={"platform": "bilibili", "platform_uid": "555",
+                            "display_name": "回填V"}).json()["id"]
+
+    import asyncio
+
+    asyncio.run(router_mod._backfill_adopted_history(aid, "回填V"))
+    assert events[0][0] == "start"
+    assert events[0][1] == f"adopt:{aid}|回填V 的历史数据"
+    assert events[-1] == ("finish", f"adopt:{aid}")
 
 
 def test_list_accounts(client):

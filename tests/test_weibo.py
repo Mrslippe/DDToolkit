@@ -312,18 +312,19 @@ class _FakePF:
 
 
 def test_platform_posts_incremental_stops_on_existing(monkeypatch, db):
-    """增量模式：第一页 [置顶旧帖(豁免), 新帖] → 新帖入库；
-    第二页首条已入库 → 立即停止，不再请求第三页。"""
+    """增量模式（v0.9.4 调整为「整页扫完再停」）：
+    第一页 = [OLD(已入库), NEW1(新)] → NEW1 入库，整页扫完命中已入库即收工，
+    不再请求第二页。"""
     from app.services import scheduler as sch
 
     db.add(PostModel(platform="weibo", platform_uid="123",
-                     platform_post_id="PIN", type="text"))
+                     platform_post_id="OLD", type="text"))
     db.add(PostModel(platform="weibo", platform_uid="123",
                      platform_post_id="OLD2", type="text"))
     db.commit()
 
     pages = [
-        {"items": [_post_item("PIN"), _post_item("NEW1")], "has_more": True},
+        {"items": [_post_item("OLD"), _post_item("NEW1")], "has_more": True},
         {"items": [_post_item("OLD2"), _post_item("NEW2")], "has_more": True},
         {"items": [_post_item("NEVER")], "has_more": False},
     ]
@@ -342,10 +343,59 @@ def test_platform_posts_incremental_stops_on_existing(monkeypatch, db):
         return await sch._fetch_platform_posts(pf, "123", 10, db, stop_on_existing=True)
 
     r = asyncio.run(run())
-    assert calls["n"] == 2                  # 第三页零请求
+    assert calls["n"] == 1                  # 第一页扫完即停，第二页零请求
     assert r.stopped_early is True
     assert r.stop_reason == "stopped_early"
+    assert r.stop_existing_pid == "OLD"
     assert r.stored == 1                    # 仅 NEW1 入库
+    assert db.query(PostModel).filter(
+        PostModel.platform_post_id == "NEW2").count() == 0
+
+
+def test_platform_posts_pinned_head_does_not_stop(monkeypatch, db):
+    """回归（2026-09-09 用户反馈「更新动态后微博抓不到新帖」）：
+
+    微博 mymblog 把**多条置顶帖**排到流首且时间顺序打乱（实测七海两条 isTop=1，
+    其后才是当天的新帖）。旧实现「遇到第二条已入库帖就 break」→ 整页新帖全漏。
+    现在置顶帖不参与停止判定、且整页扫完再停：新帖全部入库。"""
+    from app.services import scheduler as sch
+
+    db.add_all([
+        PostModel(platform="weibo", platform_uid="123",
+                  platform_post_id="PIN1", type="text"),
+        PostModel(platform="weibo", platform_uid="123",
+                  platform_post_id="PIN2", type="text"),
+        PostModel(platform="weibo", platform_uid="123",
+                  platform_post_id="OLD", type="text"),
+    ])
+    db.commit()
+
+    pages = [
+        {"items": [_post_item("PIN1"), _post_item("PIN2"),
+                   _post_item("FRESH1"), _post_item("FRESH2")],
+         "has_more": True, "pinned_ids": ["PIN1", "PIN2"]},
+        {"items": [_post_item("OLD")], "has_more": True, "pinned_ids": []},
+        {"items": [_post_item("NEVER")], "has_more": False},
+    ]
+    calls = {"n": 0}
+    pf = _FakePF(pages)
+    orig = pf.fetch_post_page
+
+    async def counting(uid, page, client=None):
+        calls["n"] += 1
+        return await orig(uid, page, client)
+
+    pf.fetch_post_page = counting
+    monkeypatch.setattr("asyncio.sleep", fake_sleep)
+
+    async def run():
+        return await sch._fetch_platform_posts(pf, "123", 10, db, stop_on_existing=True)
+
+    r = asyncio.run(run())
+    assert r.stored == 2                    # 两条新帖都入库（旧实现 0 条）
+    assert calls["n"] == 2                  # 第一页只有置顶帖 → 翻到第二页才停
+    assert r.stopped_early is True
+    assert r.stop_existing_pid == "OLD"
 
 
 def test_platform_posts_archived_boundary(monkeypatch, db):

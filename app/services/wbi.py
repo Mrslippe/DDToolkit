@@ -5,6 +5,7 @@ from typing import Tuple, Optional
 import httpx
 import logging
 
+from app.core.http import new_async_client
 from app.services.auth import auth_manager
 
 logger = logging.getLogger(__name__)
@@ -39,7 +40,7 @@ async def get_wbi_keys() -> Tuple[str, str]:
         return _cached_keys
 
     url = "https://api.bilibili.com/x/web-interface/nav"
-    async with httpx.AsyncClient() as client:
+    async with new_async_client() as client:
         resp = await client.get(url, headers=auth_manager.build_headers())
         data = resp.json()
 

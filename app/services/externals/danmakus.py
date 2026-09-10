@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 import httpx
 from sqlalchemy.orm import Session
 
+from app.core.http import new_async_client
 from app.models.vtuber import Account, ThirdpartyVtuber
 from app.repositories.vtuber_repo import LiveSessionRepo
 from app.services.externals.base import (ExternalJob, ExternalJobSummary,
@@ -190,7 +191,7 @@ async def fetch_live_summary(live_id: str) -> dict | None:
     失败/异常一律返回 None（调用方降级为「暂无弹幕数据」）。
     """
     try:
-        async with httpx.AsyncClient(timeout=12.0) as client:
+        async with new_async_client(12.0) as client:
             resp = await client.get(
                 f"{DANMAKUS_BASE}{LIVE_PATH}",
                 params={"liveId": live_id, "pageNum": 0, "pageSize": 1,
@@ -219,7 +220,7 @@ async def fetch_live_events(live_id: str) -> list[dict]:
     与现场日志时间线同请求（?type=7&type=8 重复参数）；失败返回 []。
     """
     try:
-        async with httpx.AsyncClient(timeout=12.0) as client:
+        async with new_async_client(12.0) as client:
             resp = await client.get(
                 f"{DANMAKUS_BASE}{LIVE_PATH}",
                 params={"liveId": live_id, "type": ["7", "8"],
@@ -288,7 +289,8 @@ class DanmakusSource(ExternalSource):
                 payload = await fetch_channel(str(acc.platform_uid), client)
             except Exception as e:
                 # 账号级隔离：网络异常只影响本账号，其余账号继续
-                logger.warning(f"danmakus lives 账号异常 {acc.platform_uid}: {e}")
+                logger.warning(f"danmakus lives 账号异常 {acc.platform_uid}: "
+                               f"{type(e).__name__}: {e}")
                 summary.skipped += 1
                 continue
             if not payload:

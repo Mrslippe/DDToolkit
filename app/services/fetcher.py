@@ -7,6 +7,7 @@ from contextvars import ContextVar
 from typing import Optional, Dict, Any
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_result, retry_if_exception
 
+from app.core.http import new_async_client
 from app.services import wbi
 from app.services.auth import auth_manager
 
@@ -64,7 +65,7 @@ async def _client_ctx(client: Optional[httpx.AsyncClient] = None, timeout: float
     if client is not None:
         yield client
     else:
-        async with httpx.AsyncClient(timeout=timeout) as tmp:
+        async with new_async_client(timeout) as tmp:
             yield tmp
 
 
@@ -310,7 +311,12 @@ async def fetch_bilibili_videos(mid: int, page: int = 1, page_size: int = 30,
 
 async def fetch_bilibili_dynamics(mid: int, offset: str = "",
                                   client: Optional[httpx.AsyncClient] = None) -> Optional[dict]:
-    """获取某用户动态，返回 {items: [...], has_more, next_offset}"""
+    """获取某用户动态，返回 {items: [...], has_more, next_offset, pinned_ids}。
+
+    pinned_ids：置顶动态（`modules.module_tag.text == "置顶"`）的 id 列表。
+    置顶动态被排在流首且时间顺序被打乱（实测 mid=1203217682 置顶 2025-08，
+    其后是 2026-09 的新帖）——上层增量停止必须豁免它们（devlog/045）。
+    """
     params = {"host_mid": mid}
     if offset:
         params["offset"] = offset
@@ -329,6 +335,7 @@ async def fetch_bilibili_dynamics(mid: int, offset: str = "",
 
             items = data.get("data", {}).get("items") or []
             mapped = []
+            pinned_ids: list[str] = []
             for item in items:
                 # 直播开播卡片（DYNAMIC_TYPE_LIVE_RCMD，v0.9.x M2）：不再忽略
                 # ——映射为 type='live' 场次记录，scheduler 路由 live_sessions 表
@@ -338,6 +345,9 @@ async def fetch_bilibili_dynamics(mid: int, offset: str = "",
                     continue
                 id_str = item.get("id_str", "")
                 modules = item.get("modules") or {}
+                tag = modules.get("module_tag") or {}
+                if id_str and isinstance(tag, dict) and tag.get("text") == "置顶":
+                    pinned_ids.append(id_str)
                 author = modules.get("module_author") or {}
                 md = modules.get("module_dynamic") or {}
                 major = md.get("major") or {}
@@ -404,6 +414,7 @@ async def fetch_bilibili_dynamics(mid: int, offset: str = "",
                 "items": mapped,
                 "has_more": data.get("data", {}).get("has_more", False),
                 "next_offset": data.get("data", {}).get("offset", ""),
+                "pinned_ids": pinned_ids,
             }
     except Exception as e:
         logger.error(f"获取动态列表异常: {e}, mid={mid}")

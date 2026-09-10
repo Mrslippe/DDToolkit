@@ -284,9 +284,14 @@ class WeiboPlatform(BasePlatform):
                         logger.warning(f"微博列表需登录（ok=-100）: uid={uid}")
                     return None
                 d = data.get("data") or {}
-                items = [_map_mblog(it, uid) for it in (d.get("list") or []) if it.get("id")]
+                raw_items = [it for it in (d.get("list") or []) if it.get("id")]
+                items = [_map_mblog(it, uid) for it in raw_items]
+                # 置顶帖标记（isTop=1）：mymblog 会把置顶帖排到流首且**可多条**，
+                # 时间顺序被打乱——上层增量停止必须豁免它们，否则「第二条已入库
+                # 的置顶帖」会让整页后面的新帖全部漏抓（2026-09-09 用户反馈）
+                pinned_ids = [str(it["id"]) for it in raw_items if it.get("isTop")]
                 has_more = bool(items) and bool(d.get("since_id"))
-                return {"items": items, "has_more": has_more}
+                return {"items": items, "has_more": has_more, "pinned_ids": pinned_ids}
         except Exception as e:
             logger.warning(f"微博列表抓取异常: uid={uid}, {type(e).__name__}: {e}")
             return None

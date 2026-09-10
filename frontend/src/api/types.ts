@@ -260,6 +260,10 @@ export interface AccountFetchStatus {
   current: string | null
   index: number
   total: number
+  /** 运行中的任务名（P8-C；账号流恒为 'account'，与帖子流共用一套文案映射） */
+  task?: string | null
+  /** 当前正在抓的 VTuber 名（顶栏「任务 - V名 - i/N」用） */
+  vtuber_name?: string | null
   /** 本轮任务内已完成的账号字段快照（按完成顺序追加），供侧栏就地增量刷新 */
   recent: AccountSnapshot[]
   /** 最近一次任务完成汇总（方案 1：TopBar 据此弹完成报告） */
@@ -276,6 +280,13 @@ export interface AccountFetchStatus {
 export interface PostFetchStatus {
   running: boolean
   target: string | null
+  /** 运行中的任务名（P8-C）：dynamic / update / full / quick / adopt */
+  task?: string | null
+  /** 当前正在抓的 VTuber 名 */
+  vtuber_name?: string | null
+  /** 进度（P8-C）：i/N；动态流按轮次汇报，全量/更新按账号序号汇报 */
+  index?: number
+  total?: number
   /** 最近一次任务完成汇总（方案 1+2：含中断账号与视频缺失估计） */
   last_result?: {
     seq: number
@@ -290,9 +301,21 @@ export interface PostFetchStatus {
   }
 }
 
+/** 外部第三方数据任务状态（收录回填 / 每日批次，v0.9.4） */
+export interface ExternalFetchStatus {
+  running: boolean
+  /** 运行中的任务文案（并发时用「、」合并） */
+  label: string | null
+  /** 最近一次结束的任务文案（完成胶囊用） */
+  last_label: string | null
+  /** 完成序号：每次结束自增，前端据变化发 fetch-idle 刷新档案卡片 */
+  seq: number
+}
+
 export interface FetchStatus {
   account: AccountFetchStatus
   post: PostFetchStatus
+  external?: ExternalFetchStatus
 }
 
 /** stats_json 解析后的统计字段（B 站口径） */export interface PostStatsJson {
