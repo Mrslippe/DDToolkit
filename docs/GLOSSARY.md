@@ -3,7 +3,7 @@
 > **用途**：改 bug / 做需求时快速定位「这个词在代码里叫什么、在哪个文件、牵动谁」。
 > **用法**：`Ctrl+F` 搜中文词或英文标识符；每行是「术语 · 含义 · 代码位置 · 关联」。
 > **与 `ARCHITECTURE.md` 的分工**：架构文档讲「为什么这样设计」，本文讲「这东西在哪、改它要动谁」。
-> 适用版本：`main`（2026-09-10，`MIGRATION_HEAD = f002`）。
+> 适用版本：`main`（2026-09-10，`MIGRATION_HEAD = f003`）。
 
 **目录**：§1 领域名词 · §2 数据模型与字段 · §3 抓取与调度 · §4 认证与凭据 ·
 §5 前端与界面 · §6 工程与流程 · §7 配置项速查 · §8 不变量与常见坑 · §9 需求 → 代码入口。
@@ -99,6 +99,9 @@
 | **增量停止（整页）** | **整页扫完**才停，边界取页内首条「已入库且非置顶」帖 | `_fetch_posts_core` / `_fetch_platform_posts` 的 `known_hit` | 旧「遇已入库即 break」会漏同页新帖 |
 | **风控 / rate limit** | 412/-412/-509/-799 判定 + 冷却 | `fetcher.RATE_LIMIT_CODES`、`was_rate_limited`、`clear_rate_limit` | ContextVar 任务隔离 |
 | **WBI 签名** | B 站接口签名（混钥，缓存 30min） | `services/wbi.py` | 所有 `x/space/wbi/*` 请求 |
+| **动态流预算 / dynamics budget** | 按平台的 60s 滑动窗口速率预算（12 req·min⁻¹），轮间自适应等待 | `scheduler._PlatformBudget`、`_dynamics_next_due` | v0.9.8；轮前估算记账 + 轮后补差 |
+| **启动外部补抓** | 启动时对每 V 主账号跑一次第三方数据（<24h 跳过） | `scheduler.start_external_catchup`、`run_startup_external_catchup` | v0.9.8，devlog/049 |
+| **app_meta** | 通用 KV（进程外需要记住的少量状态） | `models.AppMeta`、`AppMetaRepo`、迁移 f003 | 键 `external.startup.last_run` |
 | **状态通道** | 前端轮询的抓取进度 | `scheduler._status`（account/post/**external**，含 `task`/`vtuber_name`/`index`/`total`）、`_push_account_snapshot`、`get_fetch_status`、`GET /vtuber/fetch-status` | 前端 ~2s 轮询；顶栏文案＝「任务 - V名 - i/N」（P8-C） |
 | **进度原语** | 写状态通道的辅助函数 | `_set_account_progress` / `_set_account_vtuber` / `_set_post_progress` / `_vtuber_name_of` | `vtuber_name=None` 表示「不改动」，重置须显式写 None |
 | **外部任务状态** | 第三方回填/批次的 running+label+seq（顶栏胶囊 + 卡片刷新信号） | `scheduler.external_task_started/finished` | v0.9.4；`external.seq` 变化 → `fetch-idle` |

@@ -1523,7 +1523,166 @@ def test_vtuber_name_of_tolerates_detached_account():
     assert sch._vtuber_name_of(_Ok()) == "弥月Mizuki"
 
 
-def test_save_to_env_atomic_keeps_other_keys(monkeypatch):
+# ── v0.9.8（P9-B）：动态流速率预算 + 启动外部补抓 ──────────────────────
+
+def test_platform_budget_window_and_wait():
+    """按平台的滑动窗口预算：预算内继续跑，超预算才等窗口腾名额。"""
+    from app.services import scheduler as sch
+
+    b = sch._PlatformBudget(12, window_seconds=60.0)
+    t0 = 1000.0
+    assert b.wait_seconds({"bilibili": 8}, t0) == 0.0
+    b.charge({"bilibili": 8}, t0)
+    # 已用 8/12：再要 8 个 → 需等最早那批滑出窗口（满 60s）
+    assert b.wait_seconds({"bilibili": 8}, t0) == 60.0
+    # 只要 4 个 → 还有 4 个名额，立刻可跑
+    assert b.wait_seconds({"bilibili": 4}, t0) == 0.0
+    # 跨过窗口后全部释放
+    assert b.wait_seconds({"bilibili": 12}, t0 + 61) == 0.0
+    # 平台之间独立：weibo 未记账不受影响
+    assert b.wait_seconds({"weibo": 12}, t0) == 0.0
+    # 部分腾挪：用满 12 后 30s，要 6 个 → 等 30s（最早的 2 个在 t0+60 释放，仍不够，
+    # 第 6 个要等 t0+60 那批…这里只验证「等待时间 ≤ 窗口且 > 0」）
+    b2 = sch._PlatformBudget(12, window_seconds=60.0)
+    b2.charge({"weibo": 12}, t0)
+    w = b2.wait_seconds({"weibo": 6}, t0 + 30)
+    assert 0 < w <= 60
+
+
+def test_platform_budget_disabled():
+    """预算 <=0 → 不限速（退回固定周期由调用方处理）。"""
+    from app.services import scheduler as sch
+
+    b = sch._PlatformBudget(0)
+    b.charge({"bilibili": 100}, 0.0)
+    assert b.wait_seconds({"bilibili": 100}, 0.0) == 0.0
+
+
+def test_dynamics_next_due_adaptive(db, monkeypatch):
+    """自适应到期时刻：预算 >0 时约等于「最小间隔」，预算 <=0 时退回固定周期。"""
+    from app.services import scheduler as sch
+
+    v = VTuber(name="V")
+    db.add(v)
+    db.commit()
+    db.add(Account(vtuber_id=v.id, platform="bilibili", platform_uid="1"))
+    db.commit()
+    monkeypatch.setattr(sch, "SessionLocal", lambda: db)
+
+    monkeypatch.setattr(sch.settings, "DYNAMICS_BUDGET_RPM", 12)
+    monkeypatch.setattr(sch.settings, "DYNAMICS_MIN_GAP_SECONDS", 30.0)
+    monkeypatch.setattr(sch.settings, "DYNAMICS_JITTER_SECONDS", 0.0)
+    monkeypatch.setattr(sch, "_dynamics_budget", sch._PlatformBudget(12))
+    due = sch._dynamics_next_due(db)
+    delta = due - time.monotonic()
+    assert 29 <= delta <= 31          # 空预算 → 取最小间隔
+
+    monkeypatch.setattr(sch.settings, "DYNAMICS_BUDGET_RPM", 0)
+    monkeypatch.setattr(sch.settings, "DYNAMICS_LATEST_INTERVAL_MINUTES", 15)
+    monkeypatch.setattr(sch.settings, "DYNAMICS_LATEST_JITTER_SECONDS", 0.0)
+    delta = sch._dynamics_next_due(db) - time.monotonic()
+    assert 899 <= delta <= 901        # 退回固定 15 分钟
+
+
+def test_next_dynamics_cost_counts_primary_accounts(db):
+    """下一轮成本 = 每 V **主账号** 1 次 feed 页（按平台聚合；一个 V 只算一个平台）。"""
+    from app.services import scheduler as sch
+
+    v1, v2, v3 = VTuber(name="A"), VTuber(name="B"), VTuber(name="C")
+    db.add_all([v1, v2, v3])
+    db.commit()
+    db.add_all([
+        Account(vtuber_id=v1.id, platform="bilibili", platform_uid="1"),
+        Account(vtuber_id=v1.id, platform="weibo", platform_uid="2"),   # 副账号不计入
+        Account(vtuber_id=v2.id, platform="bilibili", platform_uid="3"),
+        Account(vtuber_id=v3.id, platform="weibo", platform_uid="4"),   # 只有微博 → 主账号是微博
+    ])
+    db.commit()
+    assert sch._next_dynamics_cost(db) == {"bilibili": 2, "weibo": 1}
+
+
+def test_startup_catchup_due_by_timestamp(db):
+    """启动外部补抓的到期判据：无记录 → 到期；24h 内 → 跳过；超过 → 到期。"""
+    from app.repositories.vtuber_repo import AppMetaRepo
+    from app.services import scheduler as sch
+
+    now = datetime(2026, 9, 10, 12, 0)
+    assert sch.startup_catchup_due(db, now=now) is True
+
+    repo = AppMetaRepo(db)
+    repo.set_dt(sch.EXTERNAL_STARTUP_KEY, now - timedelta(hours=2))
+    assert sch.startup_catchup_due(db, now=now) is False
+    assert repo.get_dt(sch.EXTERNAL_STARTUP_KEY) == now - timedelta(hours=2)
+
+    repo.set_dt(sch.EXTERNAL_STARTUP_KEY, now - timedelta(hours=25))
+    assert sch.startup_catchup_due(db, now=now) is True
+    # 坏值容错：解析失败视为到期
+    repo.set(sch.EXTERNAL_STARTUP_KEY, "not-a-date")
+    assert sch.startup_catchup_due(db, now=now) is True
+
+
+def test_run_startup_external_catchup_runs_then_skips(db, monkeypatch):
+    """启动补抓：首次跑每 V 主账号并写时间戳 + 进 external 状态通道；再调用则跳过。"""
+    from app.repositories.vtuber_repo import AppMetaRepo
+    from app.services import scheduler as sch
+
+    v = VTuber(name="V")
+    db.add(v)
+    db.commit()
+    db.add_all([
+        Account(vtuber_id=v.id, platform="weibo", platform_uid="9"),
+        Account(vtuber_id=v.id, platform="bilibili", platform_uid="8"),
+    ])
+    db.commit()
+    monkeypatch.setattr(sch, "SessionLocal", lambda: db)
+
+    calls: list[list[int]] = []
+
+    async def fake_interval(interval, account_ids=None):
+        calls.append(list(account_ids or []))
+        return [{"kind": "fan_history", "stored": 1, "skipped": 0, "error": None}]
+
+    import app.services.externals.runner as runner_mod
+    monkeypatch.setattr(runner_mod, "run_external_interval", fake_interval)
+
+    out = asyncio.run(sch.run_startup_external_catchup())
+    assert out["status"] == "done" and out["accounts"] == 1
+    # 只带主账号（bilibili 优先，即使插入顺序是 weibo 在前）
+    assert calls == [[db.query(Account).filter(Account.platform == "bilibili").one().id]]
+    assert AppMetaRepo(db).get_dt(sch.EXTERNAL_STARTUP_KEY) is not None
+    assert sch._status["external"]["running"] is False      # 状态通道已收尾
+    assert sch._status["external"]["last_label"] == "1 个主账号的第三方数据"
+    assert sch._external_running is False
+
+    out2 = asyncio.run(sch.run_startup_external_catchup())
+    assert out2["status"] == "skipped"
+    assert len(calls) == 1                                   # 24h 内不再请求第三方
+
+
+def test_run_startup_external_catchup_writes_timestamp_on_error(db, monkeypatch):
+    """单源报错也写时间戳：第三方抖动不该导致每次启动都重跑。"""
+    from app.repositories.vtuber_repo import AppMetaRepo
+    from app.services import scheduler as sch
+
+    v = VTuber(name="V")
+    db.add(v)
+    db.commit()
+    db.add(Account(vtuber_id=v.id, platform="bilibili", platform_uid="7"))
+    db.commit()
+    monkeypatch.setattr(sch, "SessionLocal", lambda: db)
+
+    async def boom(interval, account_ids=None):
+        raise RuntimeError("third party down")
+
+    import app.services.externals.runner as runner_mod
+    monkeypatch.setattr(runner_mod, "run_external_interval", boom)
+
+    out = asyncio.run(sch.run_startup_external_catchup())
+    assert out["status"] == "error"
+    assert AppMetaRepo(db).get_dt(sch.EXTERNAL_STARTUP_KEY) is not None
+    assert sch._status["external"]["running"] is False
+
+
     """env_store.save_env_keys：原子替换且不丢失其他配置行（含临时文件无残留）。"""
     import pathlib
     import shutil

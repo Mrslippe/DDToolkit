@@ -22,6 +22,7 @@ from app.core.http import new_async_client
 from app.models.vtuber import Account, VTuber, Post
 from app.repositories.vtuber_repo import (
     VTuberRepo, AccountRepo, PostRepo, AccountStatSnapshotRepo, LiveSessionRepo,
+    AppMetaRepo,
 )
 from app.services.fetcher import (
     fetch_bilibili_user_info, fetch_bilibili_user_stat,
@@ -2376,6 +2377,13 @@ async def run_latest_dynamics_sweep() -> dict:
             on_progress=on_progress,
             cooldown_seconds=settings.RATE_LIMIT_COOLDOWN,
         )
+        # P9-5：按平台统计本轮**实际请求数**（1 次 feed 页 + 每入库帖 1 次详情），
+        # 供速率预算器记账（stored 即详情请求数的上界估计）
+        requests: dict[str, int] = {}
+        for pf, outcome in rounds:
+            v, r = outcome.payload if outcome.payload else (None, None)
+            n = 1 + (getattr(r, "stored", 0) if r is not None else 0)
+            requests[pf] = requests.get(pf, 0) + n
         for pf, outcome in rounds:
             v, r = outcome.payload if outcome.payload else (None, None)
             if r is None:
@@ -2387,7 +2395,7 @@ async def run_latest_dynamics_sweep() -> dict:
             if r.stop_reason in ("rate_limited", "network_error", "error"):
                 issues.append({"label": f"{v.name}({pf})",
                                "stop_reason": r.stop_reason, "error": r.error})
-        out = {"status": "done", "total": total, "issues": issues}
+        out = {"status": "done", "total": total, "issues": issues, "requests": requests}
         return out
     except Exception as e:
         logger.error(f"动态流异常: {e}", exc_info=True)
@@ -2455,11 +2463,164 @@ async def _run_combined_tier(*, dynamics: bool = True,
     return out
 
 
+# ── 启动时外部补抓（v0.9.8，P9-4）───────────────────────────────────────
+# 用户口径：「应用启动的时候的定时任务管线添加全部在库的 V 的主要账号的外部任务，
+# 用来更新直播日历和粉丝趋势的数据……同时记录这次外部任务的时间戳，如果再次启动
+# 应用的时间戳与历史时间戳相差不到 24 小时，则跳过该次任务。」
+#
+# 说明：zeroroku /author/{mid}/history 与 danmakus /channel **一次返回全量**
+# （实测 197KB / 8.6~19s；单账号一次 1349 场），接口没有 limit/分页参数——
+# 所谓「只比对最新几条」只能靠：①账号级新鲜度跳过（<24h 不跑）；
+# ②源自身幂等落库（按唯一键去重，天然只新增变化）。
+
+EXTERNAL_STARTUP_KEY = "external.startup.last_run"
+
+
+def startup_catchup_due(db: Session, *, now: datetime | None = None,
+                        stale_hours: float | None = None) -> bool:
+    """启动外部补抓是否到期（距上次运行 ≥ EXTERNAL_STARTUP_STALE_HOURS）。"""
+    now = now or datetime.now(timezone.utc).replace(tzinfo=None)
+    stale_hours = (settings.EXTERNAL_STARTUP_STALE_HOURS
+                   if stale_hours is None else stale_hours)
+    last = AppMetaRepo(db).get_dt(EXTERNAL_STARTUP_KEY)
+    if last is None:
+        return True
+    return last < now - timedelta(hours=stale_hours)
+
+
+async def run_startup_external_catchup() -> dict:
+    """启动补抓：每 V 主账号的第三方数据（粉丝历史 / 直播场次 / 礼物日）。
+
+    - 白名单 = `_primary_accounts()`（每 V 取平台优先级最高的账号），不做全量扫站；
+    - 进度进 `external` 状态通道（顶栏胶囊 + 完成发 fetch-idle 刷新档案卡片）；
+    - 结束（无论单源是否报错）都写时间戳，避免第三方抖动导致每次启动都重跑。
+    """
+    global _external_running
+    if not settings.EXTERNAL_STARTUP_CATCHUP_ENABLED:
+        return {"status": "disabled"}
+
+    db = SessionLocal()
+    try:
+        if not startup_catchup_due(db):
+            last = AppMetaRepo(db).get_dt(EXTERNAL_STARTUP_KEY)
+            logger.info(f"启动外部补抓跳过：上次运行于 {last}（< "
+                        f"{settings.EXTERNAL_STARTUP_STALE_HOURS}h）")
+            return {"status": "skipped", "last_run": last.isoformat() if last else None}
+        ids = [acc.id for _v, acc in _primary_accounts(db)]
+        if not ids:
+            logger.info("启动外部补抓跳过：库内没有可抓取的主账号")
+            AppMetaRepo(db).set_dt(EXTERNAL_STARTUP_KEY)
+            return {"status": "skipped", "reason": "no accounts"}
+    finally:
+        db.close()
+
+    label = f"{len(ids)} 个主账号的第三方数据"
+    external_task_started("startup", label)
+    _external_running = True          # 与每日批次同语义：综合档本轮跳过
+    try:
+        from app.services.externals.runner import run_external_interval
+        results = await run_external_interval("daily", account_ids=ids)
+        failed = [r for r in results if r.get("error")]
+        logger.info(f"启动外部补抓完成：{len(ids)} 个主账号 / {len(results)} 个任务"
+                    f"{'，失败 ' + str(len(failed)) if failed else ''}")
+        return {"status": "done", "accounts": len(ids), "tasks": results}
+    except Exception as e:
+        logger.warning(f"启动外部补抓失败: {type(e).__name__}: {e}")
+        return {"status": "error", "error": str(e)}
+    finally:
+        _external_running = False
+        external_task_finished("startup")
+        db = SessionLocal()
+        try:
+            AppMetaRepo(db).set_dt(EXTERNAL_STARTUP_KEY)
+        finally:
+            db.close()
+
+
+def start_external_catchup() -> None:
+    """启动入口（main.py lifespan 调用）：独立守护线程，不拖住综合档心跳。
+
+    实测 10 个账号 × 3 源串行约 30~60s；跑在独立线程里，`_external_running`
+    期间综合档跳过本轮，但用户的其它操作完全不受影响。
+    """
+    def _run() -> None:
+        try:
+            asyncio.run(run_startup_external_catchup())
+        except Exception as e:
+            logger.error(f"启动外部补抓线程异常: {e}", exc_info=True)
+
+    threading.Thread(target=_run, name="startup-external", daemon=True).start()
+
+
 def _tier_delay(interval_seconds: float, jitter_seconds: float) -> float:
     """带抖动的下轮间隔（抖动整段随机，含提前；interval<=0 视为禁用=无穷远）。"""
     if interval_seconds <= 0:
         return float("inf")
     return max(0.0, interval_seconds + random.uniform(-jitter_seconds, jitter_seconds))
+
+
+# ── 动态流速率预算（v0.9.8，P9-5）────────────────────────────────────────
+# 用户口径：「一轮紧接着一轮来尽量达成高频获取动态，轮次之间穿插随机间隔保证请求
+# 频率不超过上限，同时抓取行为拟人」。做法＝**按平台的滑动窗口预算**：
+# 每轮结束按实际请求数记账（feed 页 1 次 + 新帖详情 stored 次），下一轮要等预算腾出
+# 名额；实际等待 = max(最小间隔, 预算等待) + 随机抖动。
+
+class _PlatformBudget:
+    """按平台的滑动窗口速率预算（requests / window）。
+
+    - `wait_seconds(cost)`：还要等多久才允许再花 `cost`（各平台取最大）；
+    - `charge(cost)`：记账（每轮结束后按实际请求数调用）；
+    - 预算 <=0 表示不启用（调用方退回固定周期）。
+    """
+
+    def __init__(self, rpm: int, window_seconds: float = 60.0):
+        self.rpm = rpm
+        self.window = window_seconds
+        self._hits: dict[str, list[float]] = {}
+
+    def _prune(self, pf: str, now: float) -> list[float]:
+        dq = self._hits.setdefault(pf, [])
+        cutoff = now - self.window
+        while dq and dq[0] <= cutoff:
+            dq.pop(0)
+        return dq
+
+    def wait_seconds(self, cost: dict[str, int], now: float | None = None) -> float:
+        if self.rpm <= 0:
+            return 0.0
+        now = time.monotonic() if now is None else now
+        waits = [0.0]
+        for pf, n in cost.items():
+            if n <= 0:
+                continue
+            dq = self._prune(pf, now)
+            room = self.rpm - len(dq)
+            if n <= room:
+                continue
+            need = n - room                      # 需要腾出的名额数
+            idx = min(need - 1, len(dq) - 1)
+            waits.append(max(0.0, self.window - (now - dq[idx])))
+        return max(waits)
+
+    def charge(self, cost: dict[str, int], now: float | None = None) -> None:
+        now = time.monotonic() if now is None else now
+        for pf, n in cost.items():
+            if n <= 0:
+                continue
+            dq = self._prune(pf, now)
+            dq.extend([now] * int(n))
+
+
+# 速率预算实例：进程内单例（动态流独用；账号流有自己 3~5s 的节流）
+_dynamics_budget = _PlatformBudget(settings.DYNAMICS_BUDGET_RPM)
+
+
+def _next_dynamics_cost(db: Session) -> dict[str, int]:
+    """下一轮动态流各平台预计请求数（每主账号 1 次 feed 页）。"""
+    cost: dict[str, int] = {}
+    for _v, acc in _primary_accounts(db):
+        cost[acc.platform] = cost.get(acc.platform, 0) + 1
+    return cost
 
 
 def _live_poller_loop() -> None:
@@ -2487,14 +2648,32 @@ def start_live_poller() -> None:
     threading.Thread(target=_live_poller_loop, name="t0-live-poller", daemon=True).start()
 
 
+def _dynamics_next_due(db: Session) -> float:
+    """下一轮动态流的到期时刻（monotonic）。
+
+    P9-5 自适应节奏（用户定：预算 12 req·min⁻¹、一轮接一轮、轮间随机间隔）：
+    - `DYNAMICS_BUDGET_RPM > 0` → **预算驱动**：等预算腾出下一轮所需名额，
+      实际间隔 = max(DYNAMICS_MIN_GAP_SECONDS, 预算等待) ± DYNAMICS_JITTER_SECONDS；
+      请求数为 0（库内没有主账号）时退回最小间隔，避免空转。
+    - 预算 <=0 → 退回固定周期 `DYNAMICS_LATEST_INTERVAL_MINUTES`（老行为）。
+    """
+    if settings.DYNAMICS_BUDGET_RPM <= 0:
+        return time.monotonic() + _tier_delay(settings.DYNAMICS_LATEST_INTERVAL_MINUTES * 60,
+                                              settings.DYNAMICS_LATEST_JITTER_SECONDS)
+    cost = _next_dynamics_cost(db)
+    wait = _dynamics_budget.wait_seconds(cost)
+    interval = max(settings.DYNAMICS_MIN_GAP_SECONDS, wait)
+    return time.monotonic() + _tier_delay(interval, settings.DYNAMICS_JITTER_SECONDS)
+
+
 def _tier_loop() -> None:
-    """综合档守护线程（v0.9.3：原 T1/T2/T3a 合并为一个档）。
+    """综合档守护线程（v0.9.3：原 T1/T2/T3a 合并为一个档；v0.9.8 自适应动态流）。
 
     - 启动链：延迟 `STARTUP_CHAIN_DELAY` 后跑一次综合档——动态流必跑；账号流按
       `accounts.last_fetched_at` 是否过期决定（用户 2026-09-09 定稿：账号字段变化慢，
       改为数据驱动、约一天一次）；
     - 心跳 `TIER_TICK_SECONDS`：手动抓取或外部批次在跑 → 本轮跳过（手动优先）；
-      动态流按 `DYNAMICS_LATEST_INTERVAL_MINUTES` 到期触发，账号流按数据到期触发，
+      动态流按 `_dynamics_next_due()` 到期触发（预算驱动，见上），账号流按数据到期触发，
       两者在同一事件循环里**并发执行**（各自锁），墙钟 ≈ max(两条流)；
     - 周期带抖动；interval<=0 的档位禁用。
     """
@@ -2506,11 +2685,11 @@ def _tier_loop() -> None:
     except Exception as e:
         logger.error(f"启动链异常: {e}", exc_info=True)
 
-    def _jittered(interval: float, jitter: float) -> float:
-        return time.monotonic() + _tier_delay(interval, jitter)
-
-    due_dynamics = _jittered(settings.DYNAMICS_LATEST_INTERVAL_MINUTES * 60,
-                             settings.DYNAMICS_LATEST_JITTER_SECONDS)
+    db0 = SessionLocal()
+    try:
+        due_dynamics = _dynamics_next_due(db0)
+    finally:
+        db0.close()
 
     while True:
         time.sleep(max(1, settings.TIER_TICK_SECONDS))
@@ -2524,18 +2703,31 @@ def _tier_loop() -> None:
         db = SessionLocal()
         try:
             run_account = _account_sweep_due_now(db)
+            next_cost = _next_dynamics_cost(db) if run_dynamics else {}
         finally:
             db.close()
         if not (run_dynamics or run_account):
             continue
+        result: dict = {}
         try:
             logger.info(f"综合档（周期）：动态流={run_dynamics} 账号流={run_account}")
-            asyncio.run(_run_combined_tier(dynamics=run_dynamics, account=run_account))
+            # P9-5：**轮前**按估算记账（每主账号 1 次 feed 页）——按轮末记账会把
+            # 整轮的请求都算在结束时刻，白等一整个轮次时长；轮后只补差额（新帖详情）。
+            if run_dynamics:
+                _dynamics_budget.charge(next_cost)
+            result = asyncio.run(_run_combined_tier(dynamics=run_dynamics,
+                                                    account=run_account))
         except Exception as e:
             logger.error(f"综合档周期异常: {e}", exc_info=True)
         if run_dynamics:
-            due_dynamics = _jittered(settings.DYNAMICS_LATEST_INTERVAL_MINUTES * 60,
-                                     settings.DYNAMICS_LATEST_JITTER_SECONDS)
+            actual = ((result or {}).get("dynamics") or {}).get("requests") or {}
+            extra = {pf: max(0, n - next_cost.get(pf, 0)) for pf, n in actual.items()}
+            _dynamics_budget.charge(extra)
+            db = SessionLocal()
+            try:
+                due_dynamics = _dynamics_next_due(db)
+            finally:
+                db.close()
 
 
 def start_tier_scheduler() -> None:

@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.models.vtuber import (VTuber, Account, Post, AccountStatSnapshot,
                                LiveGiftDay, ThirdpartyVtuber, VtuberEvent,
-                               LiveSession, LiveCategoryOverride)
+                               LiveSession, LiveCategoryOverride, AppMeta)
 from app.services.live_type import normalize_title
 
 logger = logging.getLogger(__name__)
@@ -50,6 +50,44 @@ class VTuberRepo:
         self.db.delete(obj)
         self.db.commit()
         return True
+
+
+# ── AppMeta（通用 KV，v0.9.8）────────────────────────────────────────
+
+class AppMetaRepo:
+    """通用键值读写（naive UTC 约定，与库内其它时间列一致）。"""
+
+    def __init__(self, db: Session):
+        self.db = db
+
+    def get(self, key: str, default: str | None = None) -> str | None:
+        row = self.db.query(AppMeta).filter(AppMeta.key == key).first()
+        return row.value if row and row.value is not None else default
+
+    def set(self, key: str, value: str) -> None:
+        """upsert（调用方负责 commit 时机；这里直接提交，调用点都是任务边界）。"""
+        row = self.db.query(AppMeta).filter(AppMeta.key == key).first()
+        if row is None:
+            self.db.add(AppMeta(key=key, value=value))
+        else:
+            row.value = value
+        self.db.commit()
+
+    def get_dt(self, key: str) -> datetime | None:
+        """读时间为 naive UTC 的 datetime（ISO 字符串；解析失败返回 None）。"""
+        raw = self.get(key)
+        if not raw:
+            return None
+        try:
+            dt = datetime.fromisoformat(raw)
+        except (TypeError, ValueError):
+            return None
+        return dt.astimezone(timezone.utc).replace(tzinfo=None) if dt.tzinfo else dt
+
+    def set_dt(self, key: str, when: datetime | None = None) -> datetime:
+        when = when or datetime.now(timezone.utc).replace(tzinfo=None)
+        self.set(key, when.isoformat())
+        return when
 
 
 # ── Account ────────────────────────────────────────────────────────

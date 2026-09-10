@@ -211,6 +211,20 @@ class VtuberEvent(Base):
     created_at = Column(DateTime, default=_now)
 
 
+class AppMeta(Base):
+    """通用键值表（v0.9.8，P9-4）：进程外需要记住的少量状态。
+
+    第一个用途是启动时外部补抓的「上次运行时间」（键 `external.startup.last_run`）——
+    这类信息在业务表里没有对应物（第三方源落库幂等，跑没跑看不出来），
+    与其为每个用途加一列，不如留一张极小的 KV。
+    """
+    __tablename__ = "app_meta"
+
+    key = Column(String, primary_key=True)
+    value = Column(Text, nullable=True)
+    updated_at = Column(DateTime, default=_now, onupdate=_now)
+
+
 class Post(Base):
     """动态 / 投稿 / 直播记录 — 独立于 account，按平台+UID+帖子ID去重（联合投稿会在每个V下各存一份）"""
     __tablename__ = "posts"

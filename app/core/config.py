@@ -73,6 +73,12 @@ class Settings:
     LIVE_POLL_JITTER_SECONDS: float = 15.0
     DYNAMICS_LATEST_INTERVAL_MINUTES: int = 15   # 动态流（每 V 主账号限 2 帖，≤0=禁用）
     DYNAMICS_LATEST_JITTER_SECONDS: float = 120.0
+    # 动态流自适应节奏（v0.9.8，P9-5 用户）：一轮接一轮跑，轮间随机间隔；
+    # 频率由**按平台的请求预算**兜底（DYNAMICS_BUDGET_RPM>0 时启用自适应，
+    # 否则退回上面的固定周期）
+    DYNAMICS_BUDGET_RPM: int = 12                # 单平台每分钟请求预算（用户定 12）
+    DYNAMICS_MIN_GAP_SECONDS: float = 30.0       # 轮间最小间隔（不贴着预算跑满，留拟人余量）
+    DYNAMICS_JITTER_SECONDS: float = 15.0        # 轮间随机抖动（±）
     # 账号流（原 T1 主账号 + T3a 全量合并）：账号字段变化慢，按「上次抓取时间」判断到期
     ACCOUNT_SWEEP_STALE_HOURS: float = 24.0      # 任一账号 last_fetched_at 超过该值（或为空）→ 到期
     ACCOUNT_SWEEP_MIN_GAP_SECONDS: int = 600     # 同进程两次账号流的硬下限（防失败重试风暴）
@@ -82,6 +88,10 @@ class Settings:
     EXTERNAL_ZEROROKU_ENABLED: bool = True
     EXTERNAL_DANMAKUS_ENABLED: bool = True
     EXTERNAL_RUN_HOUR: int = 3          # 日任务执行时钟点（3AM，避开抓取高峰）
+    # 启动时的外部补抓（v0.9.8，P9-4 用户）：只跑每 V 主账号（更新直播日历/粉丝趋势），
+    # 距上次运行不足 STALE_HOURS 则跳过；时间戳存 app_meta（迁移 f003）
+    EXTERNAL_STARTUP_CATCHUP_ENABLED: bool = True
+    EXTERNAL_STARTUP_STALE_HOURS: float = 24.0
 
     # VTuber 列表文件
     VTUBER_LIST_FILE: str = str(DATA_DIR / "vtubers.csv")

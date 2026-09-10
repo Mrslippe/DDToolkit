@@ -152,6 +152,7 @@
 | **综合档·账号流** | 全部账号全字段（原 T1 主账号 + T3a 全量合并） | 调度线程（账号锁） | **数据驱动**：任一账号 `last_fetched_at` 超 `ACCOUNT_SWEEP_STALE_HOURS=24h`（或为空）即到期，另受 `ACCOUNT_SWEEP_MIN_GAP_SECONDS=600s` 硬下限保护 | 同上 |
 | **T3 手动全量/补档** | 用户触发（全量账号/全量帖子/单 V/未归档批量端点） | — | 手动 | 永远优先于综合档（拿不到锁时请求自动档让位）；仅被 T0 并行（互不打扰） |
 | **T4 外部数据** | zeroroku/danmakus | APScheduler cron | 3AM 日/周 | 手动任务在跑 → **排队等待**（最多 30min）后执行；运行期间自动档跳过本轮 |
+| **启动补抓** | 每 V **主账号**的第三方数据（粉丝历史/场次/礼物日） | **独立守护线程**（`startup-external`） | 启动一次，<24h 跳过（`app_meta.external.startup.last_run`） | 与综合档互斥（`_external_running`），但不占两把锁、不挡手动任务 |
 
 调度细节：
 
@@ -171,9 +172,35 @@
   持锁期间见手动请求则轮次断点让位；原 APScheduler 的 5min `fetch_vtubers`
   job 已移除，仅保留外部数据 cron。
 
-配置：`TIER_TICK_SECONDS`、`LIVE_POLL_SECONDS/JITTER`、`DYNAMICS_LATEST_INTERVAL_MINUTES/JITTER`、
+配置：`TIER_TICK_SECONDS`、`LIVE_POLL_SECONDS/JITTER`、`DYNAMICS_BUDGET_RPM`（动态流预算）、
 `ACCOUNT_SWEEP_STALE_HOURS`（账号流数据到期阈值）、`ACCOUNT_SWEEP_MIN_GAP_SECONDS`（失败重试下限）
 （+ 启动链/限帖配置沿用）。
+
+### 4.3.1 动态流自适应节奏（v0.9.8，P9-5）
+
+用户口径「一轮接一轮尽量高频，轮间穿插随机间隔，保证频率不超上限且拟人」：
+
+- `_PlatformBudget`：**按平台的 60s 滑动窗口预算**（`DYNAMICS_BUDGET_RPM=12`），
+  平台间独立（某平台用满不影响另一个）；
+- 记账：**轮前**按估算记（每主账号 1 次 feed 页），**轮后**补差额（新帖详情 =
+  `stored`）——按轮末整笔记账会白等一个轮次时长；
+- 下一轮到期 = `time.monotonic() + max(DYNAMICS_MIN_GAP_SECONDS(30s), 预算等待)
+  ± DYNAMICS_JITTER_SECONDS(15s)`；`DYNAMICS_BUDGET_RPM<=0` 时退回固定
+  `DYNAMICS_LATEST_INTERVAL_MINUTES=15min`；
+- 动态流返回 `requests: {platform: n}` 便于观测；风控冷却（按平台 600s）语义不变。
+
+**实测**（8 个主账号）：一轮 8 请求 / 33s（下限由平台内 3~5s 节流决定），
+相邻两轮 **80s** ≈ 6 req·min⁻¹ 均值（轮内瞬时 ~14）——比 v0.9.3 的 15 分钟快约 11 倍，
+均值仍在 12 req·min⁻¹ 预算内。
+
+### 4.3.2 启动外部补抓（v0.9.8，P9-4）
+
+`start_external_catchup()`（独立守护线程）→ `run_startup_external_catchup()`：
+每 V **主账号**的 zeroroku 粉丝历史/礼物日 + danmakus 场次；<24h 跳过
+（时间戳存 `app_meta.external.startup.last_run`，迁移 f003）；进度走 `external`
+状态胶囊；跑期间置 `_external_running`（综合档跳过本轮），不占锁、不挡手动任务。
+zeroroku/danmakus 接口一次返回全量、无 limit 参数 —— 「只比对最新几条」由
+**账号级新鲜度跳过 + 源幂等落库**实现（实测一次补抓仅新增 12 行快照 / 19 场）。
 
 ### 4.4 收录 / 加账号的快速链路（v0.9.4，devlog/044）
 
@@ -431,7 +458,10 @@ def _detect_rate_limit(status_code, data=None):
 | `RATE_LIMIT_COOLDOWN` | 600 s | config.py |
 | `TIER_TICK_SECONDS` | 10 s（综合档心跳） | config.py |
 | `LIVE_POLL_SECONDS` / `_JITTER` | 60 ± 15 s（T0） | config.py |
-| `DYNAMICS_LATEST_INTERVAL_MINUTES` / `_JITTER` | 15 min ± 120 s（动态流） | config.py |
+| `DYNAMICS_LATEST_INTERVAL_MINUTES` / `_JITTER` | 15 min ± 120 s（动态流；仅预算关闭时生效） | config.py |
+| `DYNAMICS_BUDGET_RPM` | 12 req·min⁻¹（**动态流按平台预算**，v0.9.8；≤0=退回固定周期） | config.py |
+| `DYNAMICS_MIN_GAP_SECONDS` / `_JITTER_SECONDS` | 30 s / 15 s（自适应轮间间隔下限与抖动） | config.py |
+| `EXTERNAL_STARTUP_CATCHUP_ENABLED` / `_STALE_HOURS` | True / 24 h（启动时外部补抓，v0.9.8） | config.py |
 | `ACCOUNT_SWEEP_STALE_HOURS` | 24 h（账号流数据到期阈值） | config.py |
 | `ACCOUNT_SWEEP_MIN_GAP_SECONDS` | 600 s（账号流失败重试下限） | config.py |
 | `STARTUP_CHAIN_ENABLED` / `_DELAY` | True / 4 s | config.py |

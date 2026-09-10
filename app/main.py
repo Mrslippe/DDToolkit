@@ -56,7 +56,7 @@ async def _warm_wbi() -> None:
 # ── 统一 schema 管理（alembic 迁移链为准） ──────────────────────────────
 
 # 迁移链最新版本。新加迁移时必须同步更新（tests 会断言与 alembic head 一致）。
-MIGRATION_HEAD = "f002"
+MIGRATION_HEAD = "f003"
 
 
 def _alembic_config():
@@ -147,6 +147,7 @@ async def lifespan(app: FastAPI):
     # 让 uvicorn 尽可能早绑定端口（冷启动优化）
     from app.services.scheduler import (
         start_scheduler, shutdown_scheduler, start_live_poller, start_tier_scheduler,
+        start_external_catchup,
     )
     from app.services.auth import auth_manager
 
@@ -161,6 +162,9 @@ async def lifespan(app: FastAPI):
     # （启动链语义并入 T1→T2 首轮；手动任务优先，仅 T0 与之并行）
     start_live_poller()
     start_tier_scheduler()
+    # 启动外部补抓（v0.9.8，P9-4）：独立线程，每 V 主账号的第三方数据
+    # （直播日历 / 粉丝趋势），<24h 内已跑过则跳过（时间戳存 app_meta）
+    start_external_catchup()
     _perf("调度器+auth 就绪")
 
     yield
