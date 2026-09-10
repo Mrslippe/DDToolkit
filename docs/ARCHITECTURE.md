@@ -1,6 +1,6 @@
 # 后端架构总览：数据模型 + 抓取技术架构
 
-> 适用版本：`main`（2026-09-10，`MIGRATION_HEAD = f001`）。
+> 适用版本：`main`（2026-09-10，`MIGRATION_HEAD = f002`）。
 > 本文是**入口文档**：先看这里建立全貌，再按需进两份深度文档——
 > - `docs/GLOSSARY.md`：**查名词/代码路径**（改 bug 或做需求第一步）；
 > - `docs/backend-repositories-and-routers.md`：9 张表的列级定义、9 个仓储类、47 个 HTTP 端点；
@@ -441,7 +441,8 @@ flowchart LR
 |---|---|
 | 接入新平台（抖音/小红书…） | 继承 `platforms/base.py::BasePlatform` → `platforms/registry.py` 注册 → 前端平台常量；调度器自动接管 |
 | 接入新第三方源 | 实现 `externals/base.py::ExternalSource` → `externals/__init__.py` 注册（声明 `jobs` 与周期） |
-| 新增表/列 | 新建 `alembic/versions/{fNNN}_*.py`（编号按**实际实施顺序**顺延，当前 head `f001` = `posts.note`）→ 同步 `MIGRATION_HEAD` → 补 `models` 与 Repo → 若挂 `accounts/vtubers` 外键，**同步 `services/purge.py`** |
+| 新增表/列 | 新建 `alembic/versions/{fNNN}_*.py`（编号按**实际实施顺序**顺延，当前 head `f002` = accounts 排序+锁定）→ 同步 `MIGRATION_HEAD` → 补 `models` 与 Repo → 若挂 `accounts/vtubers` 外键，**同步 `services/purge.py`** |
+| 用户手改的字段被抓取覆盖 | 把字段名写进 `accounts.locked_fields`（`scheduler._field_locked()` 会跳过）；前端入口在「档案设置」窗口 |
 | 调整抓取频率/节流 | `app/core/config.py`（T0-T4 周期、请求间隔、批量休息、风控冷却） |
 | 新增前端视图 | `docs/UI-MAP.md`（右栏视图光条 + 场景状态机） |
 | 改抓取/布局后的验证 | `python scripts/dev_check.py`（测试 + 后端冒烟）、`python scripts/ui_probe.py`（布局不变量） |

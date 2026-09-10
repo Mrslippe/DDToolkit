@@ -16,6 +16,10 @@ export interface Account {
   live_title: string | null
   live_url: string | null
   last_fetched_at: string | null
+  /** P8-B：平台徽章展示顺序（升序） */
+  sort_order: number
+  /** P8-B：被用户锁定的字段（逗号分隔，如 "display_name,sign"）——抓取不覆盖 */
+  locked_fields: string | null
 }
 
 export interface VTuber {

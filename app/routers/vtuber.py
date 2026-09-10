@@ -269,6 +269,7 @@ def create_account(vtuber_id: int, data: AccountCreate,
 
 @router.put("/account/{account_id}", response_model=AccountOut)
 def update_account(account_id: int, data: AccountUpdate, db: Session = Depends(get_db)):
+    """部分更新账号。P8-B 起也可写 `locked_fields`（手动编辑的字段不被抓取覆盖）。"""
     try:
         acc = AccountRepo(db).update(account_id, data.model_dump(exclude_unset=True))
     except IntegrityError:
@@ -277,6 +278,21 @@ def update_account(account_id: int, data: AccountUpdate, db: Session = Depends(g
     if not acc:
         raise HTTPException(404, f"Account id={account_id} 不存在")
     return AccountOut.model_validate(acc, from_attributes=True)
+
+
+class AccountOrderRequest(BaseModel):
+    """平台徽章拖拽重排的提交体（按新顺序给出账号 id）。"""
+    account_ids: list[int]
+
+
+@router.put("/vtuber/{vtuber_id}/account-order", response_model=list[AccountOut])
+def set_account_order(vtuber_id: int, data: AccountOrderRequest,
+                      db: Session = Depends(get_db)):
+    """重排该 V 的平台账号展示顺序（P8-B 拖拽落库；未列出的账号排在其后）。"""
+    if not VTuberRepo(db).get(vtuber_id):
+        raise HTTPException(404, f"VTuber id={vtuber_id} 不存在")
+    accounts = AccountRepo(db).reorder(vtuber_id, data.account_ids)
+    return [AccountOut.model_validate(a, from_attributes=True) for a in accounts]
 
 
 @router.delete("/account/{account_id}", status_code=status.HTTP_204_NO_CONTENT)

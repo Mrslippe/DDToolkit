@@ -59,7 +59,24 @@ class AccountRepo:
         self.db = db
 
     def by_vtuber(self, vtuber_id: int) -> list[Account]:
-        return self.db.query(Account).filter(Account.vtuber_id == vtuber_id).all()
+        """该 V 的账号，按 P8-B 的展示顺序（sort_order 升序，同序号退回 id）。"""
+        return (
+            self.db.query(Account)
+            .filter(Account.vtuber_id == vtuber_id)
+            .order_by(Account.sort_order.asc(), Account.id.asc())
+            .all()
+        )
+
+    def reorder(self, vtuber_id: int, account_ids: list[int]) -> list[Account]:
+        """按传入 id 顺序重写 sort_order（P8-B 拖拽重排；未列出的账号排在其后）。"""
+        accounts = self.by_vtuber(vtuber_id)
+        by_id = {a.id: a for a in accounts}
+        ordered = [by_id[i] for i in account_ids if i in by_id]
+        ordered += [a for a in accounts if a.id not in set(account_ids)]
+        for idx, acc in enumerate(ordered):
+            acc.sort_order = idx
+        self.db.commit()
+        return ordered
 
     def get(self, id: int) -> Account | None:
         return self.db.query(Account).filter(Account.id == id).first()

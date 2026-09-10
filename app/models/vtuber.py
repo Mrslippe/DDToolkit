@@ -57,6 +57,11 @@ class Account(Base):
     last_fetched_at = Column(DateTime, nullable=True)
     # 墓碑机制（v0.5.1）：帖子扫描上一轮的完成时间，两次缺席判定的比较基准
     posts_last_scan_at = Column(DateTime, nullable=True)
+    # P8-B（v0.9.7）：card 视图平台徽章的展示顺序（升序；0 时退回 id 序）
+    sort_order = Column(Integer, default=0, server_default="0")
+    # P8-B（v0.9.7）：手动编辑的字段锁定（逗号分隔，如 "display_name,sign"）——
+    # 抓取时会跳过这些字段，避免用户的修改被平台值覆盖（见 scheduler._field_locked）
+    locked_fields = Column(String, nullable=True)
 
     vtuber = relationship("VTuber", back_populates="accounts")
 

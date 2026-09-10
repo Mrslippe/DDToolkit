@@ -1233,6 +1233,53 @@ def test_fetch_one_account_defers_avatar(monkeypatch):
     s.close()
 
 
+def test_fetch_one_account_respects_locked_fields(monkeypatch):
+    """P8-B（v0.9.7）：用户锁定的字段不被抓取覆盖（「档案设置」手改的昵称/签名）。
+
+    未锁字段照常更新——锁定是逐字段的，不是整账号跳过。"""
+    from app.services import scheduler as sch
+
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine)
+    Maker = sessionmaker(bind=engine)
+    s = Maker()
+    v = VTuber(name="V")
+    s.add(v)
+    s.commit()
+    acc = Account(vtuber_id=v.id, platform="bilibili", platform_uid="777",
+                  display_name="我改的名字", sign="平台旧签名",
+                  locked_fields="display_name")
+    s.add(acc)
+    s.commit()
+
+    class _Pf:
+        async def fetch_user_info(self, uid, client=None):
+            return {"name": "平台新名字", "sign": "平台新签名",
+                    "followers_count": 99, "live_status": 0}
+
+    monkeypatch.setattr(sch.registry, "get_fetcher", lambda p: _Pf())
+    ok = asyncio.run(sch._fetch_one_account(acc, s))
+    assert ok is True
+    assert acc.display_name == "我改的名字"     # 锁定 → 不被覆盖
+    assert acc.sign == "平台新签名"             # 未锁 → 正常更新
+    assert acc.followers_count == 99
+    s.close()
+
+
+def test_field_locked_parsing():
+    """locked_fields 逗号分隔解析：空值/带空格/未知字段都稳妥。"""
+    from app.services import scheduler as sch
+
+    class _A:
+        def __init__(self, raw):
+            self.locked_fields = raw
+
+    assert sch._field_locked(_A(None), "sign") is False
+    assert sch._field_locked(_A(""), "sign") is False
+    assert sch._field_locked(_A("sign, display_name "), "display_name") is True
+    assert sch._field_locked(_A("sign"), "display_name") is False
+
+
 def test_deferred_avatar_updates_only_avatar_path(monkeypatch):
     """延后下载：只 UPDATE avatar_path 一列并再推一次快照（不覆盖其它字段）。"""
     from app.services import scheduler as sch

@@ -173,24 +173,21 @@
       里没有 `accountKey`。补 `accountKey`（+ `archived`）依赖与 `setShowTop(false)`。✅ 已落地
 - [x] 顺带：把后端早已支持、前端一直没接线的**「已归档 N」chip** 放出来（与「已删」同款）✅ 已落地
 
-**P8-B｜card 视图改造（→ v0.9.7，1.5~2 天）**
+**P8-B｜card 视图改造（→ v0.9.7）**
 
-- [ ] **3 平台徽章交互**：`StatPill` 现为无交互 `<div>` → 点击开主页。
-      **B 站 `accounts.url` 实测 0/8 已填**（`fetch_bilibili_user_info` 不返回 url）→ 前端兜底拼
-      `space.bilibili.com/{platform_uid}`（微博库内已有 2/2）。
-      开外链：`shell:allow-open` capability 已就绪但缺 npm `@tauri-apps/plugin-shell`（Web 下回退 `window.open`）。
-      hover 尾部半透明「+」→ 复用**抽出的 `AddAccountDialog`**（先把 `PostsPage` 里那份抽成组件，避免两处重复表单）。
-      长按拖动重排：全仓无拖拽基建 → 原生 pointer 实现 + 新增 **`accounts.sort_order`（迁移 f001）** + `by_vtuber` 补 `order_by`。
-      风险：药丸 191px 定宽 + 「每 3 枚一组」是排版契约，尾部按钮会改变换行 → CSS 与 probe 断言一起调
-- [ ] **4 「更换图片」→ 独立「档案设置」弹窗** `VtuberSettingsDialog.tsx`（radix Dialog，按 UI-MAP §C6 规格）：
-      背景上传/清除（`POST|DELETE /vtuber/{id}/background` 已有，`api.clearBackground` 零调用可直接接）、
-      名称+企划（`PUT /vtuber/{id}`；**前端 `api.updateVtuber` 类型缺 `name`/`avatar`**）、
-      签名（**账号级**字段 → `PUT /account/{id}`，无前端封装）、头像（从账号候选写 `vtubers.avatar`，
-      只能写远端 URL——`vtuber.avatar` 不走 `resolveAsset`）、账号管理（`DELETE /account/{id}` 无封装 + 二次确认）。
-      **并承接 profile 下线后的企划编辑 / 设定 / 账号一览**
-- [ ] 已定决策：手动改的昵称/签名会被抓取覆盖（`_fetch_one_account` 的 `or acc.display_name`）→
-      **新增 `accounts.locked_fields`（与 sort_order 同批迁移 f001）**，抓取侧跳过锁定字段
-- [ ] 「独立窗口」按**独立弹窗**实现（真开 OS 新窗口需新 WebviewWindow + capability，当前只有 `main`，不建议）
+- [x] **3 平台徽章交互**：点击开账号主页（B 站 `accounts.url` 实测 0/8 → 前端兜底拼
+      `space.bilibili.com/{uid}`；桌面端直接 `invoke('plugin:shell|open')`，**不加 npm 依赖**）；
+      hover 尾部半透明「+」→ 复用抽出的 `AddAccountDialog`；
+      长按 350ms 拖动重排（`pointerdown` + `elementFromPoint` + `data-pill-index`，
+      零依赖）落库到新增的 `accounts.sort_order`（迁移 **f002**）+ `PUT /vtuber/{id}/account-order`。
+      ✅ 已落地（devlog/048）
+- [x] **4 「更换图片」→ 独立「档案设置」窗口** `VtuberSettingsDialog.tsx`：背景（上传/清除）、
+      名称/企划/生日/出道日/设定（`PUT /vtuber/{id}`，前端类型补 `name`/`avatar`）、
+      头像（账号候选 → 写远端 URL）、签名与**字段锁定**（`PUT /account/{id}`）、
+      账号管理（`DELETE /account/{id}` 新封装 + 二次确认）；草稿 + 保存。
+      ✅ 已落地；并承接 profile 下线后的企划编辑 / 设定 / 账号一览
+- [x] 已定决策落实：`accounts.locked_fields`（迁移 f002）+ `scheduler._field_locked()`，
+      抓取跳过锁定字段（昵称/签名/头像）—— 否则手改会被下次抓取覆盖
 
 **P8-C｜顶栏抓取进度（→ v0.9.5）**
 
@@ -241,7 +238,7 @@
 | **v0.9.4** | 先落盘当前未提交批次（devlog/044 收录提速 + 045 微博漏帖修复 + 外部任务状态胶囊） | — | — |
 | **v0.9.5** | P8-A（4 条快赢 + 归档 chip）+ P8-C（顶栏进度） | 1.5 天 | v0.9.4 |
 | **v0.9.6** | P9-A（场次去重 / 视频合并 + `note` / 平台化类型；迁移 f001） | 1~1.5 天 | — |
-| **v0.9.7** | P8-B（card 改造 + 档案设置弹窗 + profile 内容迁移；迁移 f002） | 1.5~2 天 | v0.9.5 |
+| **v0.9.7** | P8-B（card 改造 + 档案设置弹窗 + profile 内容迁移；迁移 f002） | ✅ 已落地 | v0.9.5 |
 | **v0.9.8** | P9-B（启动外部补抓 + 动态流 12/min 自适应；迁移 f003） | 2 天 | v0.9.6 |
 
 > 迁移编号按**实际实施顺序**：f001 = `posts.note`（v0.9.6 已落地）→ f002 = accounts

@@ -254,6 +254,56 @@ def test_backfill_registers_external_status(monkeypatch, client):
     assert events[-1] == ("finish", f"adopt:{aid}")
 
 
+def test_account_order_endpoint(client, monkeypatch):
+    """P8-B（v0.9.7）：平台账号展示顺序可重排（card 视图拖拽落库）。"""
+    import app.routers.vtuber as router_mod
+
+    async def noop_background(*_a, **_k) -> None:
+        return None
+
+    monkeypatch.setattr(router_mod, "_adopt_background", noop_background)
+
+    vid = client.post("/vtuber", json={"name": "排序V"}).json()["id"]
+    ids = [
+        client.post(f"/vtuber/{vid}/accounts",
+                    json={"platform": p, "platform_uid": u,
+                          "display_name": p}).json()["id"]
+        for p, u in (("bilibili", "111"), ("weibo", "222"), ("youtube", "333"))
+    ]
+    assert [a["id"] for a in client.get(f"/vtuber/{vid}/accounts").json()] == ids
+
+    r = client.put(f"/vtuber/{vid}/account-order",
+                   json={"account_ids": [ids[2], ids[0]]})   # 未列出的 ids[1] 排在其后
+    assert r.status_code == 200
+    assert [a["id"] for a in r.json()] == [ids[2], ids[0], ids[1]]
+    assert [a["sort_order"] for a in r.json()] == [0, 1, 2]
+    assert [a["id"] for a in client.get(f"/vtuber/{vid}/accounts").json()] == \
+        [ids[2], ids[0], ids[1]]
+    assert client.put("/vtuber/99999/account-order",
+                      json={"account_ids": []}).status_code == 404
+
+
+def test_account_locked_fields_roundtrip(client, monkeypatch):
+    """P8-B：locked_fields 可经 PUT /account/{id} 写入并回读（档案设置窗口用）。"""
+    import app.routers.vtuber as router_mod
+
+    async def noop_background(*_a, **_k) -> None:
+        return None
+
+    monkeypatch.setattr(router_mod, "_adopt_background", noop_background)
+
+    vid = client.post("/vtuber", json={"name": "锁定V"}).json()["id"]
+    aid = client.post(f"/vtuber/{vid}/accounts",
+                      json={"platform": "bilibili", "platform_uid": "555"}).json()["id"]
+    r = client.put(f"/account/{aid}", json={"locked_fields": "display_name,sign",
+                                            "display_name": "手改昵称"})
+    assert r.status_code == 200
+    assert r.json()["locked_fields"] == "display_name,sign"
+    assert r.json()["display_name"] == "手改昵称"
+    assert client.get(f"/vtuber/{vid}/accounts").json()[0]["locked_fields"] == \
+        "display_name,sign"
+
+
 def test_list_accounts(client):
     vid = client.post("/vtuber", json={"name": "测试"}).json()["id"]
     client.post(f"/vtuber/{vid}/accounts", json={"platform": "bilibili", "platform_uid": "111"})

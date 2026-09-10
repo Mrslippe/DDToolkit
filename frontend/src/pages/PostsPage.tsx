@@ -7,10 +7,11 @@ import {
   BarChart3,
   Calendar,
   Fingerprint,
-  ImagePlus,
   LayoutGrid,
+  Plus,
   RefreshCw,
   Search,
+  Settings2,
   Trash2,
   UserPlus,
   Zap,
@@ -30,21 +31,6 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
-import { Button } from '@/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import heroDivider from '../assets/icons/hero-divider.svg'
 import { api, resolveAsset } from '../api/api'
 import { useFetchBusy } from '../fetchBusy'
@@ -52,6 +38,8 @@ import type { Account, AccountSnapshot, Post, PostStats, VTuber } from '../api/t
 import { mergeAccountSnapshots, mergeVtuberSnapshots } from '../utils/accountSnapshots'
 import PostCard from '../components/PostCard'
 import PostDetailDrawer from '../components/PostDetailDrawer'
+import AddAccountDialog from '../components/AddAccountDialog'
+import VtuberSettingsDialog from '../components/VtuberSettingsDialog'
 import LiveCalendar from '../components/LiveCalendar'
 import FanTrendChart from '../components/FanTrendChart'
 import OverlayScroll from '../components/OverlayScroll'
@@ -144,12 +132,11 @@ export default function PostsPage() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [confirmDel, setConfirmDel] = useState(false)
   const [fetchChoice, setFetchChoice] = useState(false)
-  // 添加账号（多平台订阅：bilibili / weibo）
+  // 添加账号（多平台订阅：bilibili / weibo）—— P8-B 起表单抽成 <AddAccountDialog>，
+  // card 视图药丸尾部的 hover「+」与「档案设置」窗口共用同一个组件
   const [addAccountOpen, setAddAccountOpen] = useState(false)
-  const [newAccPlatform, setNewAccPlatform] = useState('bilibili')
-  const [newAccUid, setNewAccUid] = useState('')
-  const [newAccName, setNewAccName] = useState('')
-  const [addingAccount, setAddingAccount] = useState(false)
+  // 档案设置窗口（P8-B：背景/名称/企划/设定/头像/签名/账号管理）
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const fetchBusy = useFetchBusy()
   const busyTip = '已有抓取任务进行中，请稍后再试'
   // 视图：cards=展示页（默认）/ list=帖子列表页 / archive=档案 / profile=档案卡（P7 移出）
@@ -169,8 +156,6 @@ export default function PostsPage() {
   const lastAvatarRef = useRef<string | undefined>(undefined)
   const searchTimer = useRef<number>()
   /** 自定义背景上传：隐藏 file input + 上传中抑制 */
-  const bgFileRef = useRef<HTMLInputElement>(null)
-  const [bgUploading, setBgUploading] = useState(false)
   /** 背景工具浮片：悬停工具行显示，移出 900ms 后渐隐（与侧栏悬浮滚动条同拍） */
   const [bgToolsVisible, setBgToolsVisible] = useState(false)
   const bgHideTimer = useRef<number>()
@@ -183,10 +168,6 @@ export default function PostsPage() {
     bgHideTimer.current = window.setTimeout(() => setBgToolsVisible(false), 900)
   }
   useEffect(() => () => window.clearTimeout(bgHideTimer.current), [])
-  const revealBgTools = () => {
-    showBgTools()
-    scheduleBgHide()
-  }
 
   // 时间下拉：点击面板外自动关闭 + Esc 双通道
   useEffect(() => {
@@ -686,37 +667,22 @@ export default function PostsPage() {
     }
   }, [vtuber, scene.acc, navigate])
 
-  // 添加平台账号（多平台订阅：同一 V 可挂 bilibili / weibo 等多个账号）
-  const handleAddAccount = useCallback(async () => {
-    const uid = newAccUid.trim()
-    if (!vtuber || !uid || addingAccount) return
-    setAddingAccount(true)
-    try {
-      await api.addAccount(vtuber.id, {
-        platform: newAccPlatform,
-        platform_uid: uid,
-        ...(newAccName.trim() ? { display_name: newAccName.trim() } : {}),
-      })
-      toast.success('账号已添加，正在抓取账号信息与最新动态…')
+  // 添加账号成功（由 <AddAccountDialog> 回调）：刷新本体 → 药丸出现 + 选中新账号。
+  // 后端 create_account 已拉起该账号的账号信息 + 首屏抓取（v0.9.4），前端不再重复
+  // 调 fetchVtuber（那会与后台任务抢同一把锁 → 排队/浪费）。
+  const handleAccountAdded = useCallback(
+    async (_acc: Account, platform: string, uid: string) => {
+      if (!vtuber) return
       kickPoll()
-      // 立即刷新 V 本体 → 新账号药丸出现；选中新账号切换帖子目标
       const fresh = await api.getVtuber(vtuber.id)
       setVtuber(fresh)
-      const acc = fresh.accounts.find(
-        (a) => a.platform === newAccPlatform && a.platform_uid === uid,
+      const hit = fresh.accounts.find(
+        (a) => a.platform === platform && a.platform_uid === uid,
       )
-      if (acc) setSelectedAccount(acc)
-      // 后端 create_account 已拉起该账号的账号信息 + 首屏抓取（v0.9.4），
-      // 前端不再重复调 fetchVtuber（那会与后台任务抢同一把锁 → 排队/浪费）
-      setAddAccountOpen(false)
-      setNewAccUid('')
-      setNewAccName('')
-    } catch (e) {
-      toast.error(`添加账号失败：${(e as Error).message}`)
-    } finally {
-      setAddingAccount(false)
-    }
-  }, [vtuber, newAccPlatform, newAccUid, newAccName, addingAccount])
+      if (hit) setSelectedAccount(hit)
+    },
+    [vtuber],
+  )
 
   // 类型筛选 chips：全部 N / 投稿 N / 图文 N / 转发 N ...（计数来自统计概览，
   // 分组求和、零计数组不显示；key 为逗号合并类型直传后端）
@@ -759,23 +725,7 @@ export default function PostsPage() {
     : undefined
   const backdropSrc = customBg ?? avatarSrc ?? lastAvatarRef.current
 
-  // 背景上传/清除（走卡片页工具行浮片钮；成功后直接 setVtuber 即时生效）
-  const handleBgFile = async (ev: React.ChangeEvent<HTMLInputElement>) => {
-    const file = ev.target.files?.[0]
-    ev.target.value = ''
-    if (!file || !vtuber || bgUploading) return
-    setBgUploading(true)
-    try {
-      const updated = await api.uploadBackground(scene.acc, file)
-      setVtuber(updated)
-      pill('背景已更新')
-      revealBgTools() // 让 .on 态变化被看到，再延时隐藏
-    } catch (e) {
-      toast.error(`背景上传失败: ${(e as Error).message}`)
-    } finally {
-      setBgUploading(false)
-    }
-  }
+  // 背景的上传/清除已迁入「档案设置」窗口（P8-B）；此处只保留背景层渲染所需的取值
   // 直播徽标只读 B 站账号：直播状态仅存在于 bilibili，且属 VTuber 整体事实——
   // 不跟随列表页所选账号。否则在列表里切到微博再回卡片页，徽标会从
   // 「直播中」误变「未开播」（视图间状态联动，2026-09-03 反馈）。
@@ -790,10 +740,96 @@ export default function PostsPage() {
     null
   const accounts = vtuber ? vtuber.accounts.filter((a) => a.platform_uid) : []
 
+  // ── P8-B：平台药丸的点击开主页 + 长按拖动重排 ────────────────────────
+  // 顺序是服务端事实（accounts.sort_order，拖拽后 PUT 落库）；拖拽期间先用本地
+  // 临时顺序渲染，松手才提交。长按 350ms 才进入拖拽，避免误触发。
+  const [pillOrder, setPillOrder] = useState<number[] | null>(null)
+  const [dragIdx, setDragIdx] = useState<number | null>(null)
+  const pressTimer = useRef<number>()
+  const dragMoved = useRef(false)
+
+  const orderedAccounts = useMemo(() => {
+    if (!pillOrder) return accounts
+    const byId = new Map(accounts.map((a) => [a.id, a]))
+    const ordered = pillOrder.map((id) => byId.get(id)).filter(Boolean) as Account[]
+    for (const a of accounts) if (!pillOrder.includes(a.id)) ordered.push(a)
+    return ordered
+    // accounts 每次渲染都是新数组，用 id 串做依赖避免无限重算
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vtuber, pillOrder])
+
+  /** 账号主页：优先用后端抓到的 url，B 站兜底拼 space 主页 */
+  const accountHome = (a: Account): string | null =>
+    a.url || (a.platform === 'bilibili' && a.platform_uid
+      ? `https://space.bilibili.com/${a.platform_uid}`
+      : a.platform === 'weibo' && a.platform_uid
+        ? `https://weibo.com/u/${a.platform_uid}`
+        : null)
+
+  const openHome = (a: Account) => {
+    const url = accountHome(a)
+    if (!url) return
+    // 桌面端（Tauri）走 shell 插件的 open 命令（capability `shell:allow-open` 已就绪，
+    // 无需新增 npm 依赖 —— 直接 invoke 插件命令）；失败/Web 下退化为新标签页
+    if ('__TAURI_INTERNALS__' in window) {
+      void import('@tauri-apps/api/core')
+        .then((m) => m.invoke('plugin:shell|open', { path: url }))
+        .catch(() => window.open(url, '_blank', 'noopener'))
+    } else {
+      window.open(url, '_blank', 'noopener')
+    }
+  }
+
+  const onPillPointerDown = (idx: number) => (e: React.PointerEvent) => {
+    if (e.button !== 0) return
+    dragMoved.current = false
+    window.clearTimeout(pressTimer.current)
+    pressTimer.current = window.setTimeout(() => {
+      setDragIdx(idx)
+      setPillOrder(orderedAccounts.map((a) => a.id))
+    }, 350)
+  }
+
+  const onPillPointerMove = (e: React.PointerEvent) => {
+    if (dragIdx === null) return
+    const el = document.elementFromPoint(e.clientX, e.clientY)
+    const raw = el?.closest('[data-pill-index]')?.getAttribute('data-pill-index')
+    const target = raw === null || raw === undefined ? NaN : Number(raw)
+    if (Number.isNaN(target) || target === dragIdx) return
+    dragMoved.current = true
+    setPillOrder((prev) => {
+      const base = prev ?? orderedAccounts.map((a) => a.id)
+      const next = [...base]
+      const [moved] = next.splice(dragIdx, 1)
+      next.splice(target, 0, moved)
+      return next
+    })
+    setDragIdx(target)
+  }
+
+  const onPillPointerUp = () => {
+    window.clearTimeout(pressTimer.current)
+    if (dragIdx === null) return
+    const wasDrag = dragMoved.current
+    setDragIdx(null)
+    if (!wasDrag || !vtuber) return
+    const ids = pillOrder ?? orderedAccounts.map((a) => a.id)
+    void api
+      .reorderAccounts(vtuber.id, ids)
+      .then(() => {
+        pill('平台顺序已保存')
+      })
+      .catch((e: Error) => {
+        toast.error(`保存顺序失败：${e.message}`)
+        setPillOrder(null)          // 失败回退服务端顺序
+      })
+  }
+
   // 平台粉丝展示：徽章集按每集 3 枚切分（集内横排、集间纵向间隔 10）。
   // 纯计算，vtuber 为 null 的加载/错误态不渲染对应分支
   const pillSets: Account[][] = []
-  for (let i = 0; i < accounts.length; i += 3) pillSets.push(accounts.slice(i, i + 3))
+  for (let i = 0; i < orderedAccounts.length; i += 3)
+    pillSets.push(orderedAccounts.slice(i, i + 3))
 
 return (
     <div className="posts-panel">
@@ -811,23 +847,17 @@ return (
       <div className="view-toolbar" onMouseEnter={showBgTools} onMouseLeave={scheduleBgHide}>
         {scene.view === 'cards' && vtuber && (
           <div className={`bg-tools${bgToolsVisible ? ' on' : ''}`}>
-            <input
-              ref={bgFileRef}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={handleBgFile}
-            />
+            {/* P8-B：从「换背景图」扩展为「档案设置」窗口
+                （背景/名称/企划/设定/头像/签名/账号管理，承接原 profile 视图的内容） */}
             <FloatPill
               size="md"
               shape="icon"
               active={!!customBg}
               className="bg-set"
-              title={customBg ? '更换背景图' : '设置自定义背景'}
-              disabled={bgUploading}
-              onClick={() => bgFileRef.current?.click()}
+              title="档案设置（背景 / 名称 / 企划 / 头像 / 账号）"
+              onClick={() => setSettingsOpen(true)}
             >
-              <ImagePlus className="size-5" />
+              <Settings2 className="size-5" />
             </FloatPill>
           </div>
         )}
@@ -984,19 +1014,49 @@ return (
 
               {/* 平台药丸：切 V 时依次滑入（key=vtuber.id 触发重播；
                  不再跟随 list 账号切换——2026-09-05 反馈去联动） */}
-              <div className="stat-sets" key={vtuber.id}>
+              {/* P8-B：点击开主页 / 长按拖动重排 / 尾部「+」加账号 */}
+              <div
+                className="stat-sets"
+                key={vtuber.id}
+                onPointerMove={onPillPointerMove}
+                onPointerUp={onPillPointerUp}
+                onPointerLeave={onPillPointerUp}
+              >
                 {pillSets.map((set, si) => (
                   <div className="stat-set anim-rise" style={{ '--rise-i': si } as React.CSSProperties} key={si}>
-                    {set.map((a, i) => (
-                      <StatPill
-                        key={a.id}
-                        platform={a.platform}
-                        value={a.followers_count}
-                        index={si * 3 + i}
-                      />
-                    ))}
+                    {set.map((a, i) => {
+                      const idx = si * 3 + i
+                      return (
+                        <StatPill
+                          key={a.id}
+                          platform={a.platform}
+                          value={a.followers_count}
+                          index={idx}
+                          dataIndex={idx}
+                          dragging={dragIdx === idx}
+                          title={`${a.display_name ?? a.platform_uid} · 点击打开主页，长按拖动可重排`}
+                          onPointerDown={onPillPointerDown(idx)}
+                          onClick={() => {
+                            if (dragMoved.current) {
+                              dragMoved.current = false
+                              return
+                            }
+                            openHome(a)
+                          }}
+                        />
+                      )
+                    })}
                   </div>
                 ))}
+                <button
+                  type="button"
+                  className="pill-add"
+                  title="添加平台账号"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => setAddAccountOpen(true)}
+                >
+                  <Plus className="size-4" />
+                </button>
               </div>
 
               <img src={heroDivider} alt="" className="hero-divider" />
@@ -1221,47 +1281,26 @@ return (
         )}
       </div>
 
-      <Dialog open={addAccountOpen} onOpenChange={setAddAccountOpen}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle>添加平台账号</DialogTitle>
-            <DialogDescription>
-              给「{vtuber?.name}」添加 bilibili / 微博账号；添加后自动抓取账号信息。
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex flex-col gap-3">
-            <Select value={newAccPlatform} onValueChange={setNewAccPlatform}>
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder="选择平台" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="bilibili">bilibili（B站）</SelectItem>
-                <SelectItem value="weibo">weibo（微博）</SelectItem>
-              </SelectContent>
-            </Select>
-            <input
-              value={newAccUid}
-              onChange={(e) => setNewAccUid(e.target.value)}
-              placeholder={newAccPlatform === 'weibo' ? '微博 UID（数字，如 3669102477）' : 'B 站 UID（数字）'}
-              className="h-9 w-full border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-            />
-            <input
-              value={newAccName}
-              onChange={(e) => setNewAccName(e.target.value)}
-              placeholder="昵称（可选，留空由抓取回填）"
-              className="h-9 w-full border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-            />
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" size="sm" onClick={() => setAddAccountOpen(false)}>
-                取消
-              </Button>
-              <Button size="sm" disabled={addingAccount || !newAccUid.trim()} onClick={handleAddAccount}>
-                {addingAccount ? '添加中…' : '添加'}
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <AddAccountDialog
+        open={addAccountOpen}
+        onOpenChange={setAddAccountOpen}
+        vtuberId={vtuber?.id ?? null}
+        vtuberName={vtuber?.name}
+        onAdded={handleAccountAdded}
+      />
+
+      <VtuberSettingsDialog
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        vtuber={vtuber}
+        onSaved={(v) => {
+          setVtuber(v)
+          setSelectedAccount((prev) =>
+            prev ? (v.accounts.find((a) => a.id === prev.id) ?? v.accounts[0]) : prev,
+          )
+        }}
+        onPill={pill}
+      />
 
       <AlertDialog open={fetchChoice} onOpenChange={setFetchChoice}>
         <AlertDialogContent>

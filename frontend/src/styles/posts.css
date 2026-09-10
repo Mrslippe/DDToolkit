@@ -1203,6 +1203,296 @@
   white-space: nowrap;
 }
 
+/* P8-B（v0.9.7）：平台药丸交互 —— 点击开账号主页 / 长按拖动重排 / 尾部「+」加账号 */
+.stat-pill.is-link {
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+}
+
+.stat-pill.is-link:hover {
+  transform: translateY(-1px);
+  box-shadow: 1px 4px 10px rgba(15, 23, 42, 0.22);
+}
+
+.stat-pill.is-link:focus-visible {
+  outline: 2px solid var(--c-primary);
+  outline-offset: 2px;
+}
+
+/* 拖拽中：抬起 + 半透明，落点由 elementFromPoint 的 data-pill-index 决定 */
+.stat-pill.is-dragging {
+  opacity: 0.65;
+  transform: scale(1.04);
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.28);
+  cursor: grabbing;
+}
+
+/* 尾部「+」：默认隐形，鼠标压上药丸集时才半透明浮现（用户 2026-09-10 需求） */
+.pill-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 37px;
+  height: 37px;
+  border: 0;
+  border-radius: 2px;
+  background: rgba(252, 112, 121, 0.35);
+  color: #fff;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.18s ease, background-color 0.18s ease;
+}
+
+.stat-sets:hover .pill-add {
+  opacity: 0.75;
+}
+
+.pill-add:hover {
+  opacity: 1;
+  background: var(--c-primary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stat-pill.is-link,
+  .pill-add {
+    transition: none;
+  }
+}
+
+/* ── P8-B：「档案设置」窗口（VtuberSettingsDialog） ───────────────── */
+.vd-settings {
+  display: flex;
+  flex-direction: column;
+  max-height: 78vh;
+}
+
+.vd-settings-head {
+  flex: none;                       /* 头部驻留（UI-MAP §C6：标题不随内容滚动） */
+}
+
+.vd-settings-scroll {
+  flex: 1;
+  min-height: 0;
+}
+
+.vd-settings-scroll .os-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 4px 4px 8px;
+}
+
+.vd-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--c-border);
+}
+
+.vd-section:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.vd-section-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--c-text);
+}
+
+.vd-hint {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--c-text-sub);
+}
+
+.vd-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--c-text-sub);
+}
+
+.vd-field input,
+.vd-field textarea {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  background: var(--c-bg-card);
+  color: var(--c-text);
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+}
+
+.vd-field input:focus-visible,
+.vd-field textarea:focus-visible {
+  border-color: var(--c-primary);
+}
+
+.vd-field-row {
+  display: flex;
+  gap: 10px;
+}
+
+.vd-field-row .vd-field {
+  flex: 1;
+}
+
+.vd-bg-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.vd-bg-preview {
+  width: 132px;
+  height: 74px;
+  border-radius: 6px;
+  border: 1px solid var(--c-border);
+  background-color: var(--sel-bg-hover);
+  background-size: cover;
+  background-position: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--c-text-sub);
+  flex-shrink: 0;
+}
+
+.vd-bg-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.vd-avatar-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.vd-avatar-opt {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  overflow: hidden;
+  border: 2px solid transparent;
+  background: var(--sel-bg-hover);
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: var(--c-text-sub);
+}
+
+.vd-avatar-opt img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.vd-avatar-opt.on {
+  border-color: var(--c-primary);
+}
+
+.vd-lock {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  padding: 4px 8px;
+  border: 1px solid var(--c-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--c-text-sub);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.vd-lock.on {
+  border-color: var(--c-primary);
+  background: rgba(252, 112, 121, 0.08);
+  color: var(--c-primary-deep);
+  font-weight: 600;
+}
+
+.vd-acc-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.vd-acc {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  background: var(--c-bg-card);
+}
+
+.vd-acc-platform {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--c-rail, rgba(15, 23, 42, 0.75));
+  color: #fff;
+  font-size: 10px;
+  line-height: 1.6;
+}
+
+.vd-acc-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--c-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vd-acc-name em {
+  margin-left: 8px;
+  font-style: normal;
+  font-size: 11px;
+  color: var(--c-text-sub);
+}
+
+.vd-acc-del {
+  flex-shrink: 0;
+  border: 0;
+  background: transparent;
+  color: var(--c-text-sub);
+  cursor: pointer;
+  padding: 2px;
+}
+
+.vd-acc-del:hover {
+  color: #e05261;
+}
+
+.vd-settings-foot {
+  flex: none;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--c-border);
+}
+
 .post-card-footer {
   margin-top: auto;
   display: flex;

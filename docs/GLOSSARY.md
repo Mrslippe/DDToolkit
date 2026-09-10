@@ -3,7 +3,7 @@
 > **用途**：改 bug / 做需求时快速定位「这个词在代码里叫什么、在哪个文件、牵动谁」。
 > **用法**：`Ctrl+F` 搜中文词或英文标识符；每行是「术语 · 含义 · 代码位置 · 关联」。
 > **与 `ARCHITECTURE.md` 的分工**：架构文档讲「为什么这样设计」，本文讲「这东西在哪、改它要动谁」。
-> 适用版本：`main`（2026-09-10，`MIGRATION_HEAD = f001`）。
+> 适用版本：`main`（2026-09-10，`MIGRATION_HEAD = f002`）。
 
 **目录**：§1 领域名词 · §2 数据模型与字段 · §3 抓取与调度 · §4 认证与凭据 ·
 §5 前端与界面 · §6 工程与流程 · §7 配置项速查 · §8 不变量与常见坑 · §9 需求 → 代码入口。
@@ -88,6 +88,9 @@
 | **两把锁** | `_fetch_lock`（账号）/ `_post_fetch_lock`（帖子），互相独立 | `scheduler.py` 顶部 | 两条流因此可并发 |
 | **手动优先 / 抢占** | 手动任务拿不到锁时请求自动档让位 | `_preempt_account/_preempt_post`、`_acquire_manual_*`、`_auto_yield_*_with` | 端点 409 判定 `manual_task_running()` |
 | **轮次执行器** | 按平台并发的调度原语：每轮各平台各处理一个元素 | `scheduler._run_platform_rounds` | 平台内串行、平台间并行、单平台风控单独冷却 |
+| **字段锁定 / locked_fields** | 用户手改的账号字段抓取时不覆盖（逗号分隔） | `accounts.locked_fields`；`scheduler._field_locked()` | v0.9.7；改「档案设置」窗口用 |
+| **账号排序 / sort_order** | 平台徽章展示顺序（拖拽落库） | `accounts.sort_order`；`PUT /vtuber/{id}/account-order` | v0.9.7 |
+| **档案设置窗口** | 背景/名称/企划/设定/头像/签名/账号管理（承接原 profile 视图） | `components/VtuberSettingsDialog.tsx` | v0.9.7，devlog/048 |
 | **平台适配器** | `fetch_user_info` / `fetch_post_page` / `enrich` 三方法 | `services/platforms/base.py`、`registry.py`、`{bilibili,weibo}.py` | 接新平台只加一行注册 |
 | **抓取模式** | 全量 / 快速 / 增量 / 最新 N 条 / 仅动态 / 收录首屏 | `_fetch_posts_core(video_pages, dynamics_pages, include_videos, stop_on_existing, limit_latest)` | 见 `backend-fetch-pipeline.md` §5.2 |
 | **停止原因** | `done/page_limit/rate_limited/network_error/archived_boundary/stopped_early/error` | `PostFetchResult.stop_reason` | 前端区分「预期停止」与「丢数据」 |

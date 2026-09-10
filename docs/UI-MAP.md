@@ -156,10 +156,13 @@
 | 名字 | `.hero-name` | **57px/500 黑 + 投影(0 2px 4px 黑25%)**；hero-name-block 高 110 |
 | 签名 | `.hero-sign` | **25px/600** `rgba(94,94,94,.76)` 字距3px（30px 行高盒）；走 **VTuber 整体事实**（B站优先账号，无 B站取首个），不跟随 list 所选账号（2026-09-05 视图隔离） |
 | 平台药丸行 | `.stat-sets`（key=vtuber.id 触发重播） | 集内 gap10、集间 gap10，每组至多 3 枚（`pillSets` 每 3 枚切分） |
-| ├ 药丸 | `.stat-pill.image/.pink/.coral` | **191×37**，**2px 圆角** + `1px 2px 4px rgba(15,23,42,.12)` 阴影；**图像底**（`docs/design/pills` → `src/assets/pills/`，bilibili/weibo 全不透明同规格，`100% 100%` 铺满），未知平台奇偶交替 `--pill-fill-pink #e35d8b` / `--pill-fill-coral #e05261`（白字 26px 对比 ≥3.4:1）。**P8-B 待改**：点击开账号主页、hover 尾部「+」、长按拖动重排 |
+| ├ 药丸 | `.stat-pill.image/.pink/.coral` | **191×37**，**2px 圆角** + `1px 2px 4px rgba(15,23,42,.12)` 阴影；**图像底**（`docs/design/pills` → `src/assets/pills/`，bilibili/weibo 全不透明同规格，`100% 100%` 铺满），未知平台奇偶交替 `--pill-fill-pink #e35d8b` / `--pill-fill-coral #e05261`（白字 26px 对比 ≥3.4:1）。**P8-B 交互**：`.is-link` 可点（点击开账号主页，键盘可达 + focus-visible 主色描边）、`.is-dragging` 长按拖动重排（350ms 阈值，`pointerdown`+`elementFromPoint`+`data-pill-index`，零依赖） |
+| ├ 加账号钮 | `.pill-add` | **P8-B**：37×37 半透明粉方钮，默认 `opacity:0`，`.stat-sets:hover` 时 0.75 → hover 自身 1；点击打开 `<AddAccountDialog>`（`components/AddAccountDialog.tsx`，与 list 视图按钮、档案设置窗口共用） |
 | └ 数值 | `.pill-value` | **26px/600 白**，**右对齐**（`.stat-pill justify-content:flex-end`，右 padding 12px），数字 ≤4 位（`formatCount` 收紧）+ **`text-shadow 0 1px 2px rgba(0,0,0,.35)`** 保图像底可读 |
 | 饰条 | `.hero-divider` | 394×24 设计稿 SVG |
 | ~~企划行~~ | ~~`.faction-badge`（内 `.pill-logo`）~~ | **P8-2 已删除**（card 视图不再展示企划/公会；企划编辑迁往 P8-B 的「档案设置」窗口）。`.pill-logo` 随之删除 |
+| 背景工具钮 | `.bg-tools > .bg-set`（`Settings2`） | **P8-B 起语义变更**：不再是「换背景图」直传 file input，而是打开**档案设置窗口** `<VtuberSettingsDialog>`（背景/名称/企划/设定/头像/签名/账号管理）。工具行 hover 浮现、移出 900ms 渐隐的规则不变 |
+| 档案设置窗口 | `.vd-settings*` | **P8-B 新增**：radix Dialog（`max-w-lg` + `max-height:78vh`）＝ 头部驻留（`.vd-settings-head`）＋ `OverlayScroll`（`.vd-settings-scroll`）＋ 底部操作条（`.vd-settings-foot`）；分区 `.vd-section`（背景/基本资料/头像/签名/已订阅账号）、字段 `.vd-field`、锁定胶囊 `.vd-lock.on`、账号行 `.vd-acc`。规格遵循 UI-MAP §C6 |
 
 **list 视图（帖子列表页）**
 | 名称 | 类名 | 说明 |

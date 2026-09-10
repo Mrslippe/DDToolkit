@@ -22,6 +22,9 @@ class AccountOut(BaseModel):
     live_title: str | None = None
     live_url: str | None = None
     last_fetched_at: datetime | None = None
+    # P8-B（v0.9.7）：平台徽章顺序 + 手动编辑锁定字段（逗号分隔）
+    sort_order: int = 0
+    locked_fields: str | None = None
 
 
 class AccountCreate(BaseModel):
@@ -42,6 +45,9 @@ class AccountUpdate(BaseModel):
     sign: str | None = None
     url: str | None = None
     room_id: str | None = None
+    # P8-B（v0.9.7）：顺序与字段锁定（「档案设置」窗口用）
+    sort_order: int | None = None
+    locked_fields: str | None = None
 
 
 # ── Account 统计快照（P0，v0.5.0） ─────────────────────────────────

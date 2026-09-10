@@ -289,6 +289,18 @@ async def _download_avatar(url: str, uid: str, client: httpx.AsyncClient | None 
     return None
 
 
+def _field_locked(acc: Account, field: str) -> bool:
+    """该字段是否被用户手动锁定（P8-B：`accounts.locked_fields` 逗号分隔）。
+
+    锁定的字段抓取时**不覆盖** —— 用户在「档案设置」里改的昵称/签名/头像不该被
+    下一次平台抓取冲掉（`info.get("name") or acc.display_name` 这类赋值天然会覆盖）。
+    """
+    raw = (acc.locked_fields or "").strip()
+    if not raw:
+        return False
+    return field in {x.strip() for x in raw.split(",") if x.strip()}
+
+
 async def _fetch_one_account(acc: Account, db: Session, client: httpx.AsyncClient | None = None,
                              *, pending_avatar: list[str] | None = None) -> bool:
     """抓取单个 Account 的数据（按平台分发到平台框架），返回是否成功。
@@ -315,11 +327,14 @@ async def _fetch_one_account(acc: Account, db: Session, client: httpx.AsyncClien
     try:
         info = await pf.fetch_user_info(str(mid), client=client)
         if info:
-            acc.display_name = info.get("name") or acc.display_name
-            acc.sign = info.get("sign") or acc.sign
+            # P8-B：被用户锁定的字段不覆盖（「档案设置」里手改的昵称/签名/头像）
+            if not _field_locked(acc, "display_name"):
+                acc.display_name = info.get("name") or acc.display_name
+            if not _field_locked(acc, "sign"):
+                acc.sign = info.get("sign") or acc.sign
 
             new_avatar = info.get("avatar")
-            if new_avatar:
+            if new_avatar and not _field_locked(acc, "avatar"):
                 # 修复（devlog/019）：URL 变化 → 下载；URL 未变但本地文件缺失 → 补下
                 file_exists = not _avatar_missing(acc)
                 if _needs_avatar_download(acc, new_avatar, file_exists):

@@ -127,8 +127,10 @@ export const api = {
   externalsVtuberByUid: (uid: string) =>
     request<ThirdpartyVtuber[]>(`/externals/vtubers/by-uid?uid=${encodeURIComponent(uid)}`),
 
-  /** 更新 VTuber 元信息（档案卡企划编辑等） */
+  /** 更新 VTuber 元信息（P8-B：档案设置窗口 = 名称/头像/企划/生日/出道日/设定） */
   updateVtuber: (id: number, data: {
+    name?: string
+    avatar?: string | null
     faction?: string | null
     setting?: string | null
     notes?: string | null
@@ -139,6 +141,33 @@ export const api = {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
+    }),
+
+  /** P8-B：部分更新账号（签名 / 锁定字段 / 顺序等） */
+  updateAccount: (accountId: number, data: {
+    display_name?: string | null
+    sign?: string | null
+    avatar_url?: string | null
+    url?: string | null
+    sort_order?: number
+    locked_fields?: string | null
+  }) =>
+    request<Account>(`/account/${accountId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    }),
+
+  /** P8-B：删除账号（连带清理其帖子与从属数据） */
+  deleteAccount: (accountId: number) =>
+    request<void>(`/account/${accountId}`, { method: 'DELETE' }),
+
+  /** P8-B：重排平台账号展示顺序（card 视图拖拽落库） */
+  reorderAccounts: (vtuberId: number, accountIds: number[]) =>
+    request<Account[]>(`/vtuber/${vtuberId}/account-order`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ account_ids: accountIds }),
     }),
 
   /** 手动触发全量账号信息抓取（所有 VTuber） */
