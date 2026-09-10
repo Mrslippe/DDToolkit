@@ -6,14 +6,18 @@
 ;(function () {
   const lines: string[] = []
   let open = true
+  // 资源级失败计数（2026-09-10 用户反馈：单张图直连抖一下就把红色诊断面板弹出来）
+  let resourceErrors = 0
 
-  function log(msg: string) {
+  function log(msg: string, opts?: { quiet?: boolean }) {
     lines.push(
       '[' + new Date().toLocaleTimeString('zh-CN', { hour12: false }) + '] ' + msg,
     )
     // [perf] 启动计时行不弹面板（每次启动都弹很打扰）；面板由真实错误触发时
-    // 会连同 perf 时间线一起展示
-    if (!msg.startsWith('[perf]')) render()
+    // 会连同 perf 时间线一起展示。
+    // quiet（资源级失败）同样只入日志不弹面板——见下方 error 捕获处的说明。
+    if (opts?.quiet || msg.startsWith('[perf]')) return
+    render()
   }
 
   function render() {
@@ -66,13 +70,23 @@
   // 仅记录仍在 DOM 中的目标——快速切换列表/筛选导致图片「加载中止」时，
   // error 会派发到已卸载的 img 上（isConnected=false），这属于交互噪声而非
   // 真实失败（真实 404 时元素仍挂载；2026-09-03 反馈：快速点类型 chips 误报）。
+  //
+  // 2026-09-10 用户反馈：单张 B 站动态图（i0.hdslb.com，实测直连 200/1920×1080）
+  // 在 WebView 里偶发一次失败，就把「启动诊断」红色面板弹了出来 —— 但这类失败
+  // **已经被 ProxyImage 的三级兜底处理**（直连 → /img-proxy → 占位），属于可自愈的
+  // 瞬时抖动，不该打断用户。因此资源失败只入日志（copy 时仍能看到），
+  // 连续 ≥3 次才视为真实故障（系统性 404/断网）并弹面板。
   window.addEventListener(
     'error',
     function (e) {
       const t = e.target as HTMLElement
       if (t && t !== document.documentElement && t !== document.body && t.isConnected) {
         const src = (t as HTMLImageElement).src || (t as HTMLLinkElement).href
-        if (src) log('[resource] ' + src)
+        if (src) {
+          resourceErrors += 1
+          log('[resource] ' + src, { quiet: true })
+          if (resourceErrors >= 3) render()
+        }
       }
     },
     true,
