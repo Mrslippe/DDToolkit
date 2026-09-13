@@ -84,7 +84,7 @@
 | **头像延后 / deferred avatar** | 先落账号字段、后下载头像、再推一次快照 | `scheduler._deferred_avatar` | 只 UPDATE `avatar_path` 一列 |
 | **排队兜底 / pending queue** | 收录时抢锁失败 → 入队，由综合档心跳补抓 | `scheduler._pending_account_ids`、`_drain_pending_fetches` | 不静默丢任务 |
 | **共享 SSL 上下文** | 进程级缓存 SSLContext，客户端构造 ~1s → ~0.06s | `app/core/http.py::ssl_context/new_async_client` | 全仓客户端统一用它 |
-| **动态流 / dynamics stream** | 每 V 主账号 1 页 + 限 2 帖（15min ±2min） | `scheduler.run_latest_dynamics_sweep` | 帖子锁 |
+| **动态流 / dynamics stream** | 每 V 主账号 1 页 + 限 2 帖（**预算自适应**：12 req·min⁻¹/平台，轮间 max(30s, 预算等待) ±15s；仅预算关闭时退回 15min±2min） | `scheduler.run_latest_dynamics_sweep` | 帖子锁 |
 | **账号流 / account stream** | 全量账号信息，**数据驱动到期**（默认 24h） | `scheduler.async_fetch_and_update(auto=True)`、`account_sweep_due` | 账号锁 |
 | **T0 直播轮询** | 60s 批量回写 `live_*`（不占锁、不写 last_result） | `scheduler._live_poller_loop`、`live_sweep_core` | 跳变落快照 |
 | **T4 外部批次** | zeroroku/danmakus 的 3AM 日/周 cron | `scheduler.run_external_{daily,weekly}_jobs`、`_wait_for_manual_tasks` | 手动任务在跑则排队等 |
@@ -178,9 +178,14 @@
 | `RATE_LIMIT_COOLDOWN` | 600 s | 风控冷却（按平台） |
 | `TIER_TICK_SECONDS` | 10 s | 综合档心跳 |
 | `LIVE_POLL_SECONDS` / `_JITTER` | 60 / 15 s | T0 直播轮询 |
-| `DYNAMICS_LATEST_INTERVAL_MINUTES` / `_JITTER` | 15 min / 120 s | 动态流周期 |
+| `DYNAMICS_BUDGET_RPM` | 12 | 动态流单平台每分钟请求预算（>0 时启用自适应） |
+| `DYNAMICS_MIN_GAP_SECONDS` / `_JITTER` | 30 / 15 s | 动态流轮间最小间隔与抖动 |
+| `DYNAMICS_LATEST_INTERVAL_MINUTES` / `_JITTER` | 15 min / 120 s | 动态流固定周期（**仅 `DYNAMICS_BUDGET_RPM<=0` 时生效**） |
 | `ACCOUNT_SWEEP_STALE_HOURS` | 24 h | 账号流数据到期阈值 |
 | `ACCOUNT_SWEEP_MIN_GAP_SECONDS` | 600 s | 账号流失败重试下限 |
+| `MANUAL_FAST_INTERVAL_MIN` / `_MAX` | 0.5 / 1.0 s | 收录·单V 快速链路的账号间隔 |
+| `FIRST_SCREEN_VIDEO_PAGES` / `_DYNAMICS_PAGES` / `_DYNAMICS_LIMIT` | 1 / 1 / 3 | 收录首屏：投稿 1 页 + 动态 1 页限 3 条 |
+| `EXTERNAL_STARTUP_CATCHUP_ENABLED` / `_STALE_HOURS` | True / 24 h | 启动时外部补抓开关与新鲜度 |
 | `STARTUP_CHAIN_ENABLED` / `_DELAY` | True / 4 s | 启动链（动态流必跑、账号流按到期） |
 | `STARTUP_DYNAMICS_LIMIT` | 2 | 动态流每账号最多入库新帖数 |
 | `PRIMARY_PLATFORM_ORDER` | `["bilibili","weibo"]` | 主账号优先级 |

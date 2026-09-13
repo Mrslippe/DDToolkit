@@ -47,7 +47,7 @@ flowchart TB
 | HTTP API | FastAPI 事件循环 | 路由、手动抓取（同步端点在线程池） | 手动抢锁（可抢占自动档） |
 | BackgroundTasks | 事件循环（响应之后） | 收录 / 加账号后的抓取 + 第三方回填 | 同上 |
 | T0 直播状态 | 独立守护线程 | 每 60s ±15s 批量回写 `live_*` 字段 | **不占锁**（与一切任务并行） |
-| 综合档 | 调度线程 | 动态流（每 15min）+ 账号流（数据到期，约 24h）**同档并发** | 两把锁 |
+| 综合档 | 调度线程 | 动态流（预算自适应，见 §3.1）+ 账号流（数据到期，约 24h）**同档并发** | 两把锁 |
 | T4 外部数据 | APScheduler 线程 | zeroroku / danmakus cron | 手动任务在跑则**排队等待**（v0.9.3，不再跳过） |
 | auth 维护 | 事件循环协程 | B 站 cookie 心跳/续期、微博登录态探测 | — |
 
@@ -206,7 +206,7 @@ v0.9.3 把原 T1（主账号 5min）+ T2（最新动态 15min）+ T3a（全量�
 | 层 | 内容 | 载体 | 周期 | 冲突策略 |
 |---|---|---|---|---|
 | **T0** 直播状态 | 批量接口只回写 `live_*`（跳变落快照） | 独立线程 | 60s ±15s | 与一切并行（不占锁） |
-| **综合档·动态流** | 每 V 主账号 1 页 + 限 `STARTUP_DYNAMICS_LIMIT=2` 条新帖 | 调度线程（帖子锁） | 15min ±2min | 起跑见手动任务→跳过；持锁见手动请求→**轮次断点让位** |
+| **综合档·动态流** | 每 V 主账号 1 页 + 限 `STARTUP_DYNAMICS_LIMIT=2` 条新帖 | 调度线程（帖子锁） | **预算自适应**：12 req·min⁻¹/平台，轮间 `max(30s, 预算等待) ±15s`（v0.9.8；仅 `DYNAMICS_BUDGET_RPM<=0` 时退回 15min ±2min） | 起跑见手动任务→跳过；持锁见手动请求→**轮次断点让位** |
 | **综合档·账号流** | 全部账号全字段（含主账号；原 T1+T3a 合并） | 调度线程（账号锁） | **数据驱动**：任一账号 `last_fetched_at` 超 `ACCOUNT_SWEEP_STALE_HOURS=24h`（或为空）即到期 | 同上 |
 | **T3** 手动全量/补档 | 用户触发（全量账号 / 全量帖子 / 单 V / 更新动态 / 收录 / 加账号） | HTTP + BackgroundTasks | — | **永远优先于综合档**；收录/加账号抢锁失败会入队补抓（v0.9.4） |
 | **T4** 外部数据 | zeroroku / danmakus 第三方固定化数据 | APScheduler cron | 3AM 日 / 周 | 手动任务在跑则**排队等待**（最多 30min），不再直接跳过 |
@@ -292,8 +292,8 @@ flowchart LR
 |---|---|---|
 | 全量 | `video_pages=-1, dynamics_pages=-1` | 首次收录补档、手动全量 |
 | 快速 | `2/3` 页（前端）/ `3/5`（默认） | 手动「抓取帖子」 |
-| 增量 | `stop_on_existing=True` | 更新未归档动态：遇到第一条已入库帖即停（首页首条豁免，防置顶误停） |
-| 最新 N 条 | `limit_latest=2` | T2 每 15 分钟消化 2 条新帖，单次时长有上界 |
+| 增量 | `stop_on_existing=True` | 更新未归档动态：**整页扫完**才停（边界取页内首条「已入库且非置顶」帖）；置顶帖豁免——微博 `isTop` 可多条、B 站 `module_tag.text=置顶`，且会打乱流序，旧「遇已入库即 break」会漏掉同页靠后的新帖（devlog/045） |
+| 最新 N 条 | `limit_latest=2` | 综合档动态流每轮消化 2 条新帖，单次时长有上界 |
 | 仅动态 | `include_videos=False` | 更新未归档动态（不碰视频流） |
 
 - **归档边界剪枝**：整页帖子都已归档（`is_archived=1`）→ 更早的页必然也已归档，
@@ -365,7 +365,7 @@ T0 的进度反馈就是这条通道（无进度条、无胶囊）。
 
 | 来源 | 接口 | 鉴权 | 频率 | 落库 |
 |---|---|---|---|---|
-| **B 站直采** | `x/space/wbi/acc/info`、`x/relation/stat`、`live/room/v1/Room/get_status_info_by_uids`（批量 100/req）、`arc/search`、`polymer/web-dynamic/v1/feed/space`、`/detail`、`x/web-interface/view`、`x/article/view` | Cookie（SESSDATA 等，扫码登录 + refresh_token 续期）+ WBI 签名 | T0 60s / T1 5min / T2 15min / T3 手动 | accounts、snapshots、posts、live_sessions(feed) |
+| **B 站直采** | `x/space/wbi/acc/info`、`x/relation/stat`、`live/room/v1/Room/get_status_info_by_uids`（批量 100/req）、`arc/search`、`polymer/web-dynamic/v1/feed/space`、`/detail`、`x/web-interface/view`、`x/article/view` | Cookie（SESSDATA 等，扫码登录 + refresh_token 续期）+ WBI 签名 | T0 60s / 动态流 预算自适应（约 30s~）/ 账号流 约 24h / 手动 | accounts、snapshots、posts、live_sessions(feed) |
 | **微博直采** | `weibo.com/ajax/profile/info`、PC 时间线 ajax | Cookie（扫码登录保存） | 同上 | accounts、snapshots、posts |
 | **zeroroku**（第三方） | `/api/bilibili/author/{mid}/history`、`/live-paid-aggregations` | 无 | 每日 3AM | snapshots(source=zeroroku)、live_gift_days |
 | **danmakus**（第三方） | `vup-list`、直播场次接口 | 无 | 每周（索引）/ 每日（场次） | thirdparty_vtubers、live_sessions |

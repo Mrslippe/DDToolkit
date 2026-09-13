@@ -21,7 +21,7 @@
 /vtuber/adopt、POST /{id}/accounts     _fetch_lock      async_fetch_accounts（后台，只抓新账号）
 /vtuber/fetch-accounts（批量面板）      _fetch_lock      async_fetch_and_update（后台）
 ─────────────────────────────────────────────────────────────
-综合档·动态流（15min）                 _post_fetch_lock  run_latest_dynamics_sweep（每主账号 1 页 + 限 2 帖）
+综合档·动态流（预算自适应，约 30s 起一轮）   _post_fetch_lock  run_latest_dynamics_sweep（每主账号 1 页 + 限 2 帖）
 收录首屏（adopt / 加账号）              _post_fetch_lock  async_fetch_first_screen（1 页投稿 + 1 页动态限 3）
 /vtuber/fetch-posts（快速/全量）        _post_fetch_lock  _fetch_posts_core（B站双流）
 /vtuber/fetch-all-posts                _post_fetch_lock  async_fetch_all_posts → 逐账号
@@ -148,7 +148,7 @@
 | 层 | 内容 | 形态 | 周期 | 冲突策略 |
 |---|---|---|---|---|
 | **T0 直播状态** | 批量接口仅回写 live 字段（跳变落统计快照） | **独立守护线程**（不占锁/不进状态通道/不写 last_result） | 60s ± 15s | 与一切任务并行（SQLite busy_timeout=30s 排队兜底） |
-| **综合档·动态流** | 每 VTuber 主账号 1 页 + `limit_latest=2` | 调度线程（帖子锁） | 15min ± 2min | 起跑时手动任务在跑 → **跳过本轮**；持锁期间手动请求 → **轮次断点让位** |
+| **综合档·动态流** | 每 VTuber 主账号 1 页 + `limit_latest=2` | 调度线程（帖子锁） | **预算自适应**：12 req·min⁻¹/平台，轮间 `max(30s, 预算等待) ±15s`（v0.9.8，§4.3.1）；仅 `DYNAMICS_BUDGET_RPM<=0` 时退回 15min ± 2min | 起跑时手动任务在跑 → **跳过本轮**；持锁期间手动请求 → **轮次断点让位** |
 | **综合档·账号流** | 全部账号全字段（原 T1 主账号 + T3a 全量合并） | 调度线程（账号锁） | **数据驱动**：任一账号 `last_fetched_at` 超 `ACCOUNT_SWEEP_STALE_HOURS=24h`（或为空）即到期，另受 `ACCOUNT_SWEEP_MIN_GAP_SECONDS=600s` 硬下限保护 | 同上 |
 | **T3 手动全量/补档** | 用户触发（全量账号/全量帖子/单 V/未归档批量端点） | — | 手动 | 永远优先于综合档（拿不到锁时请求自动档让位）；仅被 T0 并行（互不打扰） |
 | **T4 外部数据** | zeroroku/danmakus | APScheduler cron | 3AM 日/周 | 手动任务在跑 → **排队等待**（最多 30min）后执行；运行期间自动档跳过本轮 |

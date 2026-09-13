@@ -1,6 +1,6 @@
 # 数据层与接口层文档（数据库 · Repositories · Routers）
 
-> 适用版本：`main`（2026-09-09，`MIGRATION_HEAD = e007`，迁移链 13 个版本、9 张表、47 个端点）。
+> 适用版本：`main`（2026-09-11，`MIGRATION_HEAD = f003`，迁移链 16 个版本、10 张表、51 个 HTTP 操作）。
 > 阅读路径：HTTP 入口（`app/routers`）→ SQL 封装（`app/repositories`）→ 表映射（`app/models`）→ 迁移（`alembic/versions`）。
 > 系统全貌见 `docs/ARCHITECTURE.md`；抓取链路细节见 `docs/backend-fetch-pipeline.md`；
 > 名词与代码路径速查见 `docs/GLOSSARY.md`；文档索引见 `docs/README.md`。
@@ -200,7 +200,7 @@
 | `source` | TEXT | 来源（danmakus） |
 | `updated_at` | DATETIME | 周级整表刷新 |
 
-### 1.3 迁移链（alembic，13 版本）
+### 1.3 迁移链（alembic，16 版本，head = `f003`）
 
 | 版本 | 内容 |
 |---|---|
@@ -211,17 +211,26 @@
 | `d001` columns_and_indexes | `vtubers.faction` + 三个热路径索引（分页 / 归档 / by_vtuber） |
 | `d002` vtuber_background | `vtubers.background_path` |
 | `e001` account_stat_snapshots | 建快照表 + 两索引 |
-| `e002` post_tombstone | `posts.last_seen_at / deleted_detected_at` + `accounts.posts_last_scan_at` + 墓碑索引 |
+| `e002` post_tombstone | `posts.last_seen_at / deleted_detected_at` + `accounts.posts_last_scan_at` + 墓碑索引（含一次性数据回填） |
 | `e003` post_body_text | `posts.body_text`（全文搜索） |
 | `e004` external_sources | 快照表加 `source` + 建 `live_gift_days` / `thirdparty_vtubers` |
 | `e005` vtuber_events | 建活动条目表 |
 | `e006` live_sessions | 建直播场次表 |
 | `e007` live_category_overrides | 建分类校正表 |
+| `f001` post_note | `posts.note`（投稿动态并入后的 UP 主附言，v0.9.6） |
+| `f002` account_order_and_locks | `accounts.sort_order` + `accounts.locked_fields`（v0.9.7） |
+| `f003` app_meta | 建通用 KV 表 `app_meta`（v0.9.8，键 `external.startup.last_run`） |
 
 **纪律**：新增迁移后必须同步 `app/main.py` 的 `MIGRATION_HEAD`（`tests/test_services.py`
 断言与 alembic head 一致），否则冷启动快路径会把旧库误判为已最新。启动迁移四形态：
 全新库 `upgrade head` / create_all 旧库补列补索引后 `stamp head` / 版本落后增量升级 /
 已最新零开销返回。
+
+> ⚠️ **桥接路径补不了唯一约束**（SQLite 无 `ADD CONSTRAINT`）：`_sync_legacy_schema`
+> 只补列与索引，因此 stamp 前会先过 `main._missing_unique_keys`，不一致即**拒绝启动**
+> 而不是写下一个「本库已等于 head」的假承诺（devlog/053）。
+> ORM 元数据与迁移链的结构等价性由
+> `tests/test_services.py::test_orm_metadata_matches_migration_chain` 看住。
 
 ### 1.4 存储约定
 
@@ -233,7 +242,7 @@
 
 ---
 
-## 2. Repositories（`app/repositories/vtuber_repo.py`，9 个类）
+## 2. Repositories（`app/repositories/vtuber_repo.py`，10 个类）
 
 构造注入会话：`Repo(db)`。CRUD 惯例：`create` 用 `model_dump()` 展开；`update` 逐个
 `setattr`；`get` 返回 `None` 表示不存在；写操作当场 `commit`（`PostRepo.create(commit=False)`
@@ -326,9 +335,13 @@
 
 ---
 
-## 3. Routers（47 个端点）
+## 3. Routers（48 个路由装饰器 = 51 个 HTTP 操作）
 
-### 3.1 `app/routers/vtuber.py` — 主业务路由（43）
+> 口径说明：48 个装饰器里有两个是 `api_route(methods=["GET","POST"])`
+> （`/vtuber/fetch`、`/vtuber/{id}/fetch`）→ 方法×路径共 50，再加 `app/main.py` 的
+> `GET /healthz` = **51**。下文的「N」按**装饰器**计。旧文档写的 47 已过时。
+
+### 3.1 `app/routers/vtuber.py` — 主业务路由（44）
 
 路径直接 `/vtuber/...`、`/account/...`、`/posts...`、`/post/...`、`/externals/...`；
 响应模型走 `app/schemas/vtuber.py`（`Out` 为 `from_attributes`）。
@@ -354,8 +367,9 @@
 | 方法 + 路径 | 说明 |
 |---|---|
 | GET `/vtuber/{id}/accounts` | 某 V 的账号列表 |
-| POST `/vtuber/{id}/accounts` | 建账号；(platform, platform_uid) 重复 409；成功后**后台抓该 V 账号信息 + 回填新账号第三方历史**（v0.9.3） |
-| PUT `/account/{account_id}` | 更新账号；唯一冲突 409 |
+| POST `/vtuber/{id}/accounts` | 建账号；(platform, platform_uid) 重复 409；成功后**只抓该新账号的账号信息 + 首屏内容**（v0.9.4：`async_fetch_accounts(fast=True)` + `async_fetch_first_screen`，不再重抓该 V 全部账号） |
+| PUT `/account/{account_id}` | 更新账号；唯一冲突 409；`locked_fields` 命中的字段后续抓取不覆盖 |
+| PUT `/vtuber/{id}/account-order` | 平台徽章拖拽重排：批量写 `accounts.sort_order`（v0.9.7） |
 | DELETE `/account/{account_id}` | 删账号 + `purge_account()` 清理帖子与 4 张子表 |
 | GET `/account/{id}/stat-snapshots?limit=` | 统计快照历史（默认 100，上限 1000，时间倒序，UTC 补时区） |
 | GET `/account/{id}/gift-days?limit=` | 礼物日聚合 |
