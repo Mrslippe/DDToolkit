@@ -2868,6 +2868,42 @@
   background: var(--sel-bg-hover);
 }
 
+/* 「用弹幕自建」/「重试」按钮（2026-09-13，devlog/061）：
+   上游 danmakus 停止返回词云字段后，本按钮让用户自己决定是否就地统计整场弹幕
+   ——**不自动回退**（拉整场弹幕是重请求，实测单场可达 5 万条）。
+   视觉沿用 .lc-dlg-cloud-restore 的浅粉底语言，尺寸略大一点以示"可点的主操作"。 */
+.lc-dlg-cloud-build {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  height: 24px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 999px;
+  background: var(--sel-bg);
+  color: var(--c-primary-deep);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.lc-dlg-cloud-build:hover:not(:disabled) {
+  background: var(--sel-bg-hover);
+}
+
+.lc-dlg-cloud-build:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* 说明性小字（例："· 上游未提供热词"）：比正文再弱一档，避免与数值抢注意力 */
+.lc-dlg-note {
+  color: var(--c-text-sub);
+  opacity: 0.85;
+}
+
 /* 弹幕信息区块（danmakus /api/v2/live 词云，2026-09-07 接入；词云 = 增量摊铺拼贴，
    见 utils/wordCloudLayout.ts——力导向站点滑动 + λ 面积精确，参考图形态） */
 .lc-dlg-danmaku {

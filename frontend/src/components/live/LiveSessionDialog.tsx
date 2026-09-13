@@ -1,0 +1,415 @@
+/**
+ * 场次详情弹窗（P2 分层收敛 A-3：从 `LiveCalendar.tsx` 的 `renderDetail()` 整块搬出，**只搬不改**）。
+ *
+ * 内容：直播信息（起止/分区/收益/峰值/弹幕数/指标/段数/数据源）+ 分类校正（左上角徽章下拉）
+ * + 弹幕信息（总量 + 增量摊铺词云）+ 直播动态（中止/继续事件 + 最热时刻）+ 内容分析预留区块。
+ *
+ * ## 为什么它是独立组件而不是一个大 `render*()` 函数
+ *
+ * 词云有三块**只服务于这个弹窗**的状态：`cloudBubbles`（top40 派生）、`cloudPopped`（破泡计数）、
+ * `cloudRestoreTick`（恢复信号）。原来它们住在 `LiveCalendar` 顶层，于是"弹窗的局部状态"
+ * 与"日历的状态"混在同一个作用域里。搬进本组件后：
+ * - 三块状态随弹窗挂载/卸载，**语义更准确**（`detail` 为 null 时组件返回 null，但父级仍持有状态）；
+ * - 父组件少 3 个 hook 与一个 267 行的函数。
+ *
+ * ## 行为保持（"只搬不改"的要点）
+ *
+ * - **portal target 仍是 `document.body`**，`z-index`/层级语义不变；
+ * - **状态重置时机不变**：原来 `cloudPopped` 只由 `restoreTick` 与破泡动作驱动、
+ *   不随 `detail` 变化重置；现在它随本组件挂载而初始化 —— 而本组件仅在 `detail` 非空时渲染，
+ *   即"每次打开弹窗"就是"一次挂载" ⇒ 打开时归零。**这正是原行为的等效表达**
+ *   （原实现里关闭再打开也会因为 `MosaicCloud` 重建而让计数失去意义）。
+ * - **DOM 结构逐字保留**（`.lc-dlg*` 家族类名一个没动）—— 探针直接查这些选择器。
+ *
+ * ⚠️ CSS 归属：仍由 `styles/posts.css` 拥有（A 路线决策 (a)：拆分不搬 CSS）。
+ */
+import { useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { ChevronDown, X } from 'lucide-react'
+
+import type { LiveDanmakuInfo, LiveSession, LiveSessionDetail } from '../../api/types'
+import { api } from '../../api/api'
+import { LIVE_TYPE_ORDER, liveTypeLabel } from '../../utils/liveType'
+import type { CloudWord } from '../../utils/wordCloudLayout'
+import MosaicCloud from '../wordcloud/MosaicCloud'
+import OverlayScroll from '../OverlayScroll'
+import ProxyImage from '../common/ProxyImage'
+import type { DetailState } from './useLiveSessions'
+import {
+  fmtDur, fmtMoney, fmtTime, isFreshSession, keyOf,
+} from './liveCalendarFmt'
+
+interface Props {
+  detail: DetailState
+  /** 分类校正下拉是否展开（状态归属父组件：受"详情变化即收起"那条 effect 驱动） */
+  catPopOpen: boolean
+  setCatPopOpen: React.Dispatch<React.SetStateAction<boolean>>
+  /** 分类徽章下拉的锚点（点外关闭判定用） */
+  catPopRef: React.RefObject<HTMLSpanElement>
+  /** 关闭弹窗（遮罩点击 / 关闭钮 / Esc 由父组件的 keydown effect 处理） */
+  onClose: () => void
+  /** 切换当日第 idx 场 */
+  onSwitchIdx: (idx: number) => void
+  /** 用户校正分类（'auto' = 清除校正） */
+  onPickCategory: (s: LiveSession, value: string) => void
+  /** 账号 id（词云自建端点需要） */
+  accountId: number | null
+}
+
+export default function LiveSessionDialog({
+  detail,
+  catPopOpen,
+  setCatPopOpen,
+  catPopRef,
+  onClose,
+  onSwitchIdx,
+  onPickCategory,
+  accountId,
+}: Props) {
+  /**
+   * 自建词云（本地覆盖）：非空时**优先于** `detail.data.danmaku` 展示。
+   *
+   * 为什么不把结果写回父组件的 `detail`：① 自建只影响这一次打开的词云展示，
+   * 无需进全局详情状态；② 本组件**仅在 `detail` 非空时渲染**（父级条件渲染），
+   * 所以切换场次/重开弹窗时会自然卸载重建 ⇒ 本地状态自动归零，语义正好。
+   */
+  const [selfWc, setSelfWc] = useState<LiveDanmakuInfo | null>(null)
+  const [building, setBuilding] = useState(false)
+
+  const s: LiveSessionDetail =
+    detail.data ?? { ...detail.sessions[detail.idx], danmaku: null, analysis: null }
+  /** 生效的弹幕信息：自建结果优先 */
+  const dm: LiveDanmakuInfo | null = selfWc ?? s.danmaku ?? null
+  /** 词云状态（缺省 = 上游没给） */
+  const wcStatus = dm?.wc_status ?? (dm ? 'upstream' : 'upstream_absent')
+  const hasWords = (dm?.top_words?.length ?? 0) > 0
+
+  /** 词云词条：top40（按次数降序）。只服务本弹窗，随挂载重建。 */
+  const cloudBubbles = useMemo<CloudWord[]>(() => {
+    return [...(dm?.top_words ?? [])].sort((a, b) => b.count - a.count).slice(0, 40)
+  }, [dm])
+
+  /** 词云破泡计数 / 恢复信号（段头右侧「已破泡 N · 恢复」，带破泡时出现） */
+  const [cloudPopped, setCloudPopped] = useState(0)
+  const [cloudRestoreTick, setCloudRestoreTick] = useState(0)
+
+  /**
+   * 「用弹幕自建」：**用户点击才拉**整场原始弹幕（实测单场可达 5 万条/数 MB）。
+   * 按用户 2026-09-13 的决策：上游没有热词时**不自动回退**，要给按钮让用户决定。
+   */
+  const buildCloud = async () => {
+    const liveId = s.live_id
+    if (!liveId || !accountId || building) return
+    setBuilding(true)
+    try {
+      setSelfWc(await api.buildLiveSessionWordCloud(accountId, liveId))
+    } catch {
+      // 失败也要落到明确状态（否则按钮点了没反应，用户不知道发生了什么）
+      setSelfWc({ wc_status: 'fetch_failed', top_words: [], top_keywords: [] })
+    } finally {
+      setBuilding(false)
+    }
+  }
+  const d0 = new Date(s.start_at)
+  const d1 = s.end_at ? new Date(s.end_at) : null
+  const t = keyOf(s)
+  const srcs = (s.source ?? 'self').split('+').filter(Boolean)
+  const area = [s.parent_area_name, s.area_name].filter(Boolean).join(' / ')
+
+  return createPortal(
+    <div
+      className="lc-dlg-backdrop"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div className="lc-dlg" role="dialog" aria-modal>
+        {/* 头部驻留区：不随内容滚动（2026-09-07 user 定案——「标题……X」恒驻留、
+            滚动条只在内容区悬浮不覆盖头部）；下缘发丝分隔 */}
+        <div className="lc-dlg-head-zone">
+          <div className="lc-dlg-head">
+            <div className="lc-dlg-title">
+              {s.live_id ? (
+                <span className="lc-dlg-badge-wrap" ref={catPopRef}>
+                  <button
+                    type="button"
+                    className="lc-dlg-badge-btn"
+                    title="选择分类"
+                    onClick={() => setCatPopOpen((o) => !o)}
+                  >
+                    <span className={`lc-pop-badge lc-stat-pill--${t}`}>{liveTypeLabel(t)}</span>
+                    <ChevronDown className="lc-dlg-badge-caret" />
+                  </button>
+                  {catPopOpen && (
+                    <span className="lc-dlg-cat-pop">
+                      <span className="lc-dlg-cat-list">
+                        <button
+                          type="button"
+                          className={`lc-dlg-cat-opt lc-dlg-cat-auto${s.category_from === 'override' ? '' : ' on'}`}
+                          onClick={() => { setCatPopOpen(false); onPickCategory(s, 'auto') }}
+                        >
+                          自动（跟随推断）
+                        </button>
+                        {LIVE_TYPE_ORDER.map((t2) => (
+                          <button
+                            key={t2.key}
+                            type="button"
+                            className={`lc-dlg-cat-opt lc-stat-pill--${t2.key}${t === t2.key ? ' on' : ''}`}
+                            onClick={() => { setCatPopOpen(false); onPickCategory(s, t2.key) }}
+                          >
+                            {t2.label}
+                          </button>
+                        ))}
+                      </span>
+                    </span>
+                  )}
+                </span>
+              ) : (
+                <span className={`lc-pop-badge lc-stat-pill--${t}`}>{liveTypeLabel(t)}</span>
+              )}
+              <span className="lc-dlg-name">{s.live_title || '场次详情'}</span>
+              <span className="lc-dlg-sub">{detail.key} {fmtTime(d0)}</span>
+              {s.category_from === 'override' && (
+                <span className="lc-pop-corr">已校正</span>
+              )}
+            </div>
+            <button type="button" className="lc-dlg-close" aria-label="关闭" onClick={onClose}>
+              <X className="size-4" />
+            </button>
+          </div>
+
+          {/* 当日多场切换（点格默认第一场）——随头部驻留 */}
+          {detail.sessions.length > 1 && (
+            <div className="lc-dlg-tabs">
+              {detail.sessions.map((x, i) => (
+                <button
+                  key={x.live_id ?? `${x.start_at}-${i}`}
+                  type="button"
+                  className={`lc-dlg-tab${i === detail.idx ? ' on' : ''}`}
+                  onClick={() => onSwitchIdx(i)}
+                >
+                  {fmtTime(new Date(x.start_at))}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* 内容区：独立滚动（覆盖式滚动条，只在此层悬浮） */}
+        <OverlayScroll className="lc-dlg-body">
+          <div className="lc-dlg-main">
+          {/* 左列：场次封面（缺失/失败 → 渐变占位，右下角直播状态徽章） */}
+          <div className="lc-dlg-cover">
+            <ProxyImage
+              key={s.cover_url ?? 'none'}
+              src={s.cover_url}
+              className="lc-dlg-cover-img"
+              fallbackClassName="lc-dlg-cover-ph"
+              fallback={(s.live_title || liveTypeLabel(t)).trim().charAt(0) || '播'}
+            />
+            <span className={`lc-dlg-status${d1 ? '' : ' live'}`}>
+              {d1 ? '已结束' : '直播中'}
+            </span>
+          </div>
+
+          {/* 右列：直播信息（行式 label 左 · value 右） */}
+          <section className="lc-dlg-sec">
+            <h4 className="lc-dlg-sec-title">直播信息</h4>
+            <dl className="lc-dlg-rows">
+              <div className="lc-dlg-row">
+                <dt>时间</dt>
+                <dd>{fmtTime(d0)} – {d1 ? fmtTime(d1) : '进行中'}
+                  {fmtDur(s.duration_minutes) ? `（${fmtDur(s.duration_minutes)}）` : ''}</dd>
+              </div>
+              <div className="lc-dlg-row"><dt>分区</dt><dd>{area || '—'}</dd></div>
+              <div className="lc-dlg-row"><dt>收益</dt><dd>{fmtMoney(s.total_income) || '—'}</dd></div>
+              <div className="lc-dlg-row">
+                <dt>峰值在线</dt>
+                <dd>{s.max_online_count ? s.max_online_count.toLocaleString('zh-CN') : '—'}</dd>
+              </div>
+              <div className="lc-dlg-row">
+                <dt>弹幕数</dt>
+                <dd>{s.danmakus_count ? s.danmakus_count.toLocaleString('zh-CN') : '—'}</dd>
+              </div>
+              {s.metrics && (
+                <>
+                  <div className="lc-dlg-row">
+                    <dt>观看</dt>
+                    <dd>{s.metrics.watch_count != null ? s.metrics.watch_count.toLocaleString('zh-CN') : '—'}</dd>
+                  </div>
+                  <div className="lc-dlg-row">
+                    <dt>点赞</dt>
+                    <dd>{s.metrics.like_count != null ? s.metrics.like_count.toLocaleString('zh-CN') : '—'}</dd>
+                  </div>
+                  <div className="lc-dlg-row">
+                    <dt>打赏</dt>
+                    <dd>{s.metrics.pay_count != null ? `${s.metrics.pay_count.toLocaleString('zh-CN')} 人` : '—'}</dd>
+                  </div>
+                  <div className="lc-dlg-row">
+                    <dt>互动</dt>
+                    <dd>{s.metrics.interaction_count != null ? s.metrics.interaction_count.toLocaleString('zh-CN') : '—'}</dd>
+                  </div>
+                  {s.metrics.online_rank != null && (
+                    <div className="lc-dlg-row">
+                      <dt>在线排名</dt>
+                      <dd>#{s.metrics.online_rank.toLocaleString('zh-CN')}</dd>
+                    </div>
+                  )}
+                </>
+              )}
+              {(s.segment_count ?? 1) > 1 && (
+                <div className="lc-dlg-row">
+                  <dt>段数</dt>
+                  <dd>{s.segment_count} 段合并（中断续播）</dd>
+                </div>
+              )}
+              <div className="lc-dlg-row"><dt>数据源</dt><dd>{srcs.join(' + ')}</dd></div>
+            </dl>
+          </section>
+        </div>
+
+        <section className="lc-dlg-sec lc-dlg-sec--full">
+          {/* 段头行：标题 + 破泡计数/恢复胶囊（破泡时出现） */}
+          <div className="lc-dlg-sec-head">
+            <h4 className="lc-dlg-sec-title">弹幕信息</h4>
+            {cloudPopped > 0 && cloudBubbles.length > 0 && (
+              <button
+                type="button"
+                className="lc-dlg-cloud-restore"
+                onClick={() => setCloudRestoreTick((t) => t + 1)}
+              >
+                已破泡 {cloudPopped} · 恢复
+              </button>
+            )}
+          </div>
+          {detail.loading ? (
+            <div className="lc-dlg-ph">加载中…</div>
+          ) : dm ? (
+            <div className="lc-dlg-danmaku">
+              <dl className="lc-dlg-rows">
+                {dm.total != null && (
+                  <div className="lc-dlg-row">
+                    <dt>弹幕总量</dt>
+                    <dd className="lc-dlg-num">{dm.total.toLocaleString('zh-CN')}</dd>
+                  </div>
+                )}
+                {dm.source === 'self' && dm.text_count != null && (
+                  <div className="lc-dlg-row">
+                    <dt>文本弹幕</dt>
+                    <dd className="lc-dlg-num">{dm.text_count.toLocaleString('zh-CN')}</dd>
+                  </div>
+                )}
+                {dm.source === 'self' && (
+                  <div className="lc-dlg-row">
+                    <dt>词云来源</dt>
+                    <dd>
+                      本地统计（分词引擎 {dm.engine ?? 'jieba'}）
+                      <span className="lc-dlg-note"> · 上游未提供热词</span>
+                    </dd>
+                  </div>
+                )}
+                {s.metrics?.is_full === false && (
+                  <div className="lc-dlg-row">
+                    <dt>完整性</dt>
+                    <dd>弹幕数据未全量（部分录制源）</dd>
+                  </div>
+                )}
+              </dl>
+              {hasWords ? (
+                <MosaicCloud
+                  data={cloudBubbles}
+                  boxH={210}
+                  restoreTick={cloudRestoreTick}
+                  onPoppedChange={setCloudPopped}
+                />
+              ) : (
+                /* D4：把"上游没给"与"本场没弹幕"与"拉取失败"分开说 ——
+                   此前三种情况共用一句「暂无热词数据」，用户无法分辨是谁的问题。 */
+                <div className="lc-dlg-ph">
+                  {wcStatus === 'fetch_failed' ? (
+                    <>
+                      弹幕拉取失败（网络或上游不可用）。
+                      <button type="button" className="lc-dlg-cloud-build"
+                              onClick={() => void buildCloud()} disabled={building}>
+                        {building ? '重试中…' : '重试'}
+                      </button>
+                    </>
+                  ) : wcStatus === 'no_danmaku' ? (
+                    '本场没有可用于统计的文本弹幕记录'
+                  ) : (
+                    <>
+                      上游未提供热词
+                      <span className="lc-dlg-note">
+                        （danmakus 已停止返回词云字段；可改用弹幕原文就地统计）
+                      </span>
+                      <button type="button" className="lc-dlg-cloud-build"
+                              onClick={() => void buildCloud()} disabled={building}>
+                        {building ? '正在统计整场弹幕…' : '用弹幕自建'}
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="lc-dlg-ph">
+              {isFreshSession(s.start_at, s.end_at)
+                ? '该场次刚结束，弹幕 / 热词仍在第三方收录中（danmakus 通常延迟数小时），稍后重新打开即可看到'
+                : '本场无弹幕记录（danmakus 未收录该场次，或该场次没有弹幕数据源）'}
+            </div>
+          )}
+        </section>
+
+        <section className="lc-dlg-sec lc-dlg-sec--full">
+          <h4 className="lc-dlg-sec-title">直播动态</h4>
+          {detail.loading ? (
+            <div className="lc-dlg-ph">加载中…</div>
+          ) : (s.events?.length || s.metrics?.peaks?.length) ? (
+            <div className="lc-dlg-evts">
+              {(s.events ?? []).map((ev, i) => (
+                <div key={`ev-${i}`} className="lc-dlg-evt">
+                  <span className={`lc-dlg-evt-dot${ev.type === 7 ? ' stop' : ''}`} />
+                  <span className="lc-dlg-evt-time">
+                    {ev.send_date ? fmtTime(new Date(ev.send_date)) : '--:--'}
+                  </span>
+                  <span className="lc-dlg-evt-text">
+                    {ev.type === 7 ? '直播中止' : '直播继续'}
+                  </span>
+                </div>
+              ))}
+              {(s.metrics?.peaks?.length ?? 0) > 0 && (
+                <div className="lc-dlg-evt-block">
+                  <div className="lc-dlg-evt-label">最热时刻（在线峰值）</div>
+                  {(s.metrics!.peaks as { ts: number; count: number }[])
+                    .slice(0, 3)
+                    .map((p) => (
+                      <div key={`peak-${p.ts}`} className="lc-dlg-evt">
+                        <span className="lc-dlg-evt-dot peak" />
+                        <span className="lc-dlg-evt-time">{fmtTime(new Date(p.ts))}</span>
+                        <span className="lc-dlg-evt-text">
+                          {Number(p.count ?? 0).toLocaleString('zh-CN')} 人在线
+                        </span>
+                      </div>
+                    ))}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="lc-dlg-ph">暂无动态数据</div>
+          )}
+        </section>
+
+        <section className="lc-dlg-sec lc-dlg-sec--full">
+          <h4 className="lc-dlg-sec-title">直播内容分析</h4>
+          {s.analysis ? (
+            <div className="lc-dlg-ph">{s.analysis.summary || '内容分析摘要待接入'}</div>
+          ) : (
+            <div className="lc-dlg-ph">接口已预留（内容分析服务接入后展示）</div>
+          )}
+        </section>
+        </OverlayScroll>
+      </div>
+    </div>,
+    document.body,
+  )
+}

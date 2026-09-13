@@ -33,6 +33,8 @@ import { api, resolveAsset } from '../api/api'
 import { useFetchBusy } from '../fetchBusy'
 import type { Account, AccountSnapshot, Post, PostStats, VTuber } from '../api/types'
 import { mergeAccountSnapshots, mergeVtuberSnapshots } from '../utils/accountSnapshots'
+import { PLATFORM_LABEL, accountHomeUrl, chunkBy, orderAccounts, typeGroupsFor } from '../utils/postTypes'
+import { useVtuberActions } from './useVtuberActions'
 import PostCard from '../components/PostCard'
 import PostDetailDrawer from '../components/PostDetailDrawer'
 import AddAccountDialog from '../components/AddAccountDialog'
@@ -55,46 +57,12 @@ const EXIT_MS = 200
 /** 视图枚举（P7 追加 profile：档案卡详情视图） */
 type AppView = 'cards' | 'list' | 'archive' | 'profile'
 
-/** 筛选行分组 chip：key 为逗号合并类型（后端 type 参数支持逗号分隔多型 in 过滤）。
- *  高频型两两归组（投稿/图文）压缩 chips 宽度，保证不把右侧搜索栏挤到下一行；
- *  低频型保持单型 chip。计数求和、零计数组不显示。 */
-const TYPE_GROUPS_BILIBILI: { key: string; label: string; types: string[] }[] = [
-  { key: 'video,video_dynamic', label: '投稿', types: ['video', 'video_dynamic'] },
-  { key: 'image,text', label: '图文', types: ['image', 'text'] },
-  { key: 'repost', label: '转发', types: ['repost'] },
-  { key: 'article', label: '专栏', types: ['article'] },
-  { key: 'music', label: '音乐', types: ['music'] },
-  { key: 'live', label: '直播', types: ['live'] },
-]
-
-/** 微博：没有专栏/音乐，多了平台自动发帖（会员升级/签到/推广）单列的「系统」。
- *  P9-2（v0.9.6 用户）：不同平台的分类规则不再共用一套。 */
-const TYPE_GROUPS_WEIBO: { key: string; label: string; types: string[] }[] = [
-  { key: 'image,text', label: '图文', types: ['image', 'text'] },
-  { key: 'video', label: '视频', types: ['video'] },
-  { key: 'repost', label: '转发', types: ['repost'] },
-  { key: 'system', label: '系统', types: ['system'] },
-]
-
-/** 按当前账号平台取分类分组（零计数组仍不显示，见 chipItems） */
-function typeGroupsFor(platform: string | undefined) {
-  return platform === 'weibo' ? TYPE_GROUPS_WEIBO : TYPE_GROUPS_BILIBILI
-}
-
 /** 归档过滤类型（all / unarchived / archived）随 P10-A 的筛选弹窗一起搬到
  *  `components/PostFilterPop.tsx`（弹窗是它的唯一编辑入口，类型与 UI 同处）。 */
-
-/** 平台显示名（账号切换器/添加账号用） */
-const PLATFORM_LABEL: Record<string, string> = { bilibili: 'B站', weibo: '微博' }
 
 /** 成功类提示走顶栏状态胶囊（渐隐渐显），错误仍用 toast */
 function pill(text: string) {
   window.dispatchEvent(new CustomEvent('ddtoolkit:pill-message', { detail: { text } }))
-}
-
-/** 通知 TopBar 立即轮询一次抓取状态（点击按钮/任务结束时即时反馈） */
-function kickPoll() {
-  window.dispatchEvent(new Event('ddtoolkit:kick-poll'))
 }
 
 /**
@@ -123,7 +91,7 @@ export default function PostsPage() {
   const [deletedOnly, setDeletedOnly] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [fetching, setFetching] = useState(false)
+  // `fetching` 随 6 个动作回调一起搬到 useVtuberActions（它只被那些动作写、被按钮读）
 
   const [drawerPost, setDrawerPost] = useState<Post | null>(null)
   // 开关分离：关闭只翻 flag 不清 post——Dialog 保持挂载走 radix 退场动画，
@@ -440,6 +408,10 @@ export default function PostsPage() {
     return () => {
       cancelled = true
     }
+    // `accountKey` 是 `selectedAccount` 的**稳定代理**（`id|platform|uid` 串）：
+    // 帖子流用对象引用做依赖会在每次 `getVtuber` 回填后重跑，而数据其实没变。
+    // 这是刻意保留的"窄依赖"（2026-09-13 eslint 基线确认）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accountKey, refreshTick, scene.view])
 
   // 帖子列表（无限懒加载 + 过滤）；AbortController：切换 VTuber/刷新筛选时
@@ -506,6 +478,8 @@ export default function PostsPage() {
         }
       })
     return () => controller.abort()
+    // 同上一处：`accountKey` 是 `selectedAccount` 的稳定代理（见上方说明）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accountKey, page, typeFilter, archived, deletedOnly, refreshTick, scene.view, searchKw, dateFrom, dateTo])
 
   // 无限滚动：哨兵进入视口（提前 600px 预载）且可加载 → 追加下一页。
@@ -546,130 +520,16 @@ export default function PostsPage() {
     return () => io.disconnect()
   }, [scene.view, hasMore, loading, loadingMore, error, loadMoreError, accountKey, typeFilter, archived, deletedOnly, searchKw, dateFrom, dateTo])
 
-  const handleFetch = useCallback(async () => {
-    if (!vtuber || fetching) return
-    setFetching(true)
-    kickPoll() // 立即刷新胶囊 → 显示「抓取中」
-    try {
-      const r = await api.fetchVtuber(scene.acc)
-      if (r.status === 'skipped') {
-        toast.warning(r.message ?? '抓取任务正在进行中')
-      } else {
-        const s = r.result
-        pill(`账号信息更新完成 · 成功 ${s?.success ?? 0} · 失败 ${s?.failed ?? 0}`)
-      }
-    } catch (e) {
-      toast.error(`抓取失败: ${(e as Error).message}`)
-    } finally {
-      setFetching(false)
-      kickPoll()
-    }
-  }, [vtuber, scene.acc, fetching])
-
-  const handleFetchPosts = useCallback(async () => {
-    if (!vtuber || fetching) return
-    setFetching(true)
-    kickPoll()
-    try {
-      const r = await api.fetchPostsByName(vtuber.name, 2, 3, false, bili?.platform ?? 'bilibili')
-      if (r.status === 'skipped') {
-        toast.warning(r.message ?? '帖子抓取正在进行中')
-      } else if (r.rate_limited) {
-        let tip = '部分内容未抓全'
-        if (r.video_missing) tip += `（视频可能缺 ${r.video_missing}）`
-        toast.warning(
-          `帖子抓取完成（触发风控，${tip}）· 存储 ${r.total?.stored ?? 0} · 跳过 ${r.total?.skipped ?? 0}`,
-        )
-      } else {
-        pill(
-          `帖子抓取完成 · 存储 ${r.total?.stored ?? 0} · 跳过 ${r.total?.skipped ?? 0}` +
-            ` · 预归档 ${r.archived_first ?? 0}`,
-        )
-      }
-    } catch (e) {
-      toast.error(`帖子抓取失败: ${(e as Error).message}`)
-    } finally {
-      setFetching(false)
-      kickPoll()
-    }
-  }, [vtuber, fetching])
-
-  const handleFetchAllPosts = useCallback(async () => {
-    if (!vtuber || fetching) return
-    setFetchChoice(false)
-    setFetching(true)
-    kickPoll()
-    try {
-      const r = await api.fetchPostsByName(vtuber.name, -1, -1, true, bili?.platform ?? 'bilibili')
-      if (r.status === 'skipped') {
-        toast.warning(r.message ?? '帖子抓取正在进行中')
-      } else {
-        toast.success('全量抓取已开始（后台执行，进度见顶栏）')
-      }
-    } catch (e) {
-      toast.error(`全量抓取失败: ${(e as Error).message}`)
-    } finally {
-      setFetching(false)
-      kickPoll()
-    }
-  }, [vtuber, fetching])
-
-  const handleUpdatePosts = useCallback(async () => {
-    if (!vtuber || fetching) return
-    setFetching(true)
-    kickPoll()
-    try {
-      const r = await api.updateUnarchivedPosts(vtuber.name)
-      if (r.status === 'skipped') {
-        toast.warning(r.message ?? '更新任务正在进行中')
-      } else if (r.rate_limited) {
-        toast.warning(
-          `动态更新完成（触发风控，部分内容未抓全）· 新增 ${r.total?.stored ?? 0} · 跳过 ${r.total?.skipped ?? 0}`,
-        )
-      } else {
-        const incremental = r.details?.some((d) => d.stopped_early) ? ' · 增量模式' : ''
-        pill(
-          `动态更新完成 · 新增 ${r.total?.stored ?? 0}` +
-            ` · 跳过 ${r.total?.skipped ?? 0}${incremental}`,
-        )
-      }
-    } catch (e) {
-      toast.error(`更新失败: ${(e as Error).message}`)
-    } finally {
-      setFetching(false)
-      kickPoll()
-    }
-  }, [vtuber, fetching])
-
-  const handleDeleteVtuber = useCallback(async () => {
-    if (!vtuber) return
-    try {
-      await api.deleteVtuber(scene.acc)
-      toast.success(`已解除订阅「${vtuber.name}」`)
-      window.dispatchEvent(new Event('ddtoolkit:data-changed'))
-      navigate('/')
-    } catch (e) {
-      toast.error(`解除订阅失败: ${(e as Error).message}`)
-      setConfirmDel(false)
-    }
-  }, [vtuber, scene.acc, navigate])
-
-  // 添加账号成功（由 <AddAccountDialog> 回调）：刷新本体 → 药丸出现 + 选中新账号。
-  // 后端 create_account 已拉起该账号的账号信息 + 首屏抓取（v0.9.4），前端不再重复
-  // 调 fetchVtuber（那会与后台任务抢同一把锁 → 排队/浪费）。
-  const handleAccountAdded = useCallback(
-    async (_acc: Account, platform: string, uid: string) => {
-      if (!vtuber) return
-      kickPoll()
-      const fresh = await api.getVtuber(vtuber.id)
-      setVtuber(fresh)
-      const hit = fresh.accounts.find(
-        (a) => a.platform === platform && a.platform_uid === uid,
-      )
-      if (hit) setSelectedAccount(hit)
-    },
-    [vtuber],
-  )
+  // 抓取/更新/解除订阅/加账号后刷新 —— 6 个动作回调已搬到 pages/useVtuberActions.ts
+  // （同一套骨架：守卫 → setFetching → kickPoll → api → 三种结果提示 → finally 复位）。
+  const {
+    fetching, handleFetch, handleFetchPosts, handleFetchAllPosts,
+    handleUpdatePosts, handleDeleteVtuber, handleAccountAdded,
+  } = useVtuberActions({
+    vtuber, selectedAccount, accountId: scene.acc, navigate,
+    setVtuber, setSelectedAccount,
+    onDeleteError: () => setConfirmDel(false),
+  })
 
   // 类型筛选 chips：全部 N / 投稿 N / 图文 N / 转发 N ...（计数来自统计概览，
   // 分组求和、零计数组不显示；key 为逗号合并类型直传后端）
@@ -694,7 +554,6 @@ export default function PostsPage() {
 
   // 壳层常驻：加载/错误态内联到 view-body（见渲染段），工具条与 glow-bar
   // 不随切 V 卸载重挂——消除切换闪动
-  const bili = selectedAccount
   // 头像 / 右栏背景以 VTuber 本体为准（稳定，不随账号切换变化）；
   // 帖子流跟随所选账户；卡片页签名/直播走 VTuber 整体事实（B站优先）——
   // list 切账号不联动 cards/archive（2026-09-05 反馈）
@@ -735,23 +594,15 @@ export default function PostsPage() {
   const pressTimer = useRef<number>()
   const dragMoved = useRef(false)
 
-  const orderedAccounts = useMemo(() => {
-    if (!pillOrder) return accounts
-    const byId = new Map(accounts.map((a) => [a.id, a]))
-    const ordered = pillOrder.map((id) => byId.get(id)).filter(Boolean) as Account[]
-    for (const a of accounts) if (!pillOrder.includes(a.id)) ordered.push(a)
-    return ordered
-    // accounts 每次渲染都是新数组，用 id 串做依赖避免无限重算
+  const orderedAccounts = useMemo(
+    () => orderAccounts(accounts, pillOrder),
+    // accounts 每次渲染都是新数组，用 vtuber 做依赖避免无限重算
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [vtuber, pillOrder])
+    [vtuber, pillOrder],
+  )
 
-  /** 账号主页：优先用后端抓到的 url，B 站兜底拼 space 主页 */
-  const accountHome = (a: Account): string | null =>
-    a.url || (a.platform === 'bilibili' && a.platform_uid
-      ? `https://space.bilibili.com/${a.platform_uid}`
-      : a.platform === 'weibo' && a.platform_uid
-        ? `https://weibo.com/u/${a.platform_uid}`
-        : null)
+  /** 账号主页：优先用后端抓到的 url，其余平台兜底拼（见 utils/postTypes.accountHomeUrl） */
+  const accountHome = accountHomeUrl
 
   const openHome = (a: Account) => {
     const url = accountHome(a)
@@ -814,9 +665,7 @@ export default function PostsPage() {
 
   // 平台粉丝展示：徽章集按每集 3 枚切分（集内横排、集间纵向间隔 10）。
   // 纯计算，vtuber 为 null 的加载/错误态不渲染对应分支
-  const pillSets: Account[][] = []
-  for (let i = 0; i < orderedAccounts.length; i += 3)
-    pillSets.push(orderedAccounts.slice(i, i + 3))
+  const pillSets = chunkBy(orderedAccounts, 3)
 
 return (
     <div className="posts-panel">

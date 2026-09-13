@@ -1,16 +1,22 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, X } from 'lucide-react'
-import type { LiveSession, LiveSessionDetail } from '../api/types'
+import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react'
+import type { LiveSession } from '../api/types'
 import { api } from '../api/api'
 import OverlayScroll from './OverlayScroll'
 import FloatPill from './common/FloatPill'
-import ProxyImage from './common/ProxyImage'
 import StateBlock from './common/StateBlock'
-import { LIVE_TYPE_ORDER, inferLiveType, liveTypeLabel } from '../utils/liveType'
-import { MosaicPacker } from '../utils/wordCloudLayout'
-import type { CloudCell, CloudWord } from '../utils/wordCloudLayout'
+import { LIVE_TYPE_ORDER, liveTypeLabel } from '../utils/liveType'
+// 纯展示格式化已搬到 components/live/（可 vitest 直测）；此处只保留渲染/交互常量
+import { dayKeyIso, fmtDur, fmtMoney, fmtMonth, fmtTime, keyOf } from './live/liveCalendarFmt'
+// 取数与状态机已搬到 components/live/useLiveSessions（见其文件顶部的顺序契约说明）
+import {
+  POP_CLOSE_GRACE_MS, useLiveSessions,
+} from './live/useLiveSessions'
+import type { PopState } from './live/useLiveSessions'
+// 场次详情弹窗（含词云与破泡状态）已搬到 components/live/LiveSessionDialog
+import LiveSessionDialog from './live/LiveSessionDialog'
 
 interface Props {
   /** 账号 id（null=无账号，显示空态）；切换账号自动重拉。
@@ -26,53 +32,6 @@ const WEEKDAYS_EN = ['Mon.', 'Tue.', 'Wed.', 'Thu.', 'Fri.', 'Sat.', 'Sun.']
 /** 月份浮窗：12 月中文名 */
 const MONTH_CN = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月']
 
-/** 浮层关闭宽限（ms）：鼠标从格子滑向浮层中途不闪关 */
-const POP_CLOSE_GRACE_MS = 120
-
-/** 场次是否「刚结束」（<24h，按结束时间；未结束按开始时间）。
- *  用途：第三方弹幕收录有数小时延迟（danmakus 侧 total 可能仍为 0），
- *  刚下播的场次「暂无弹幕」是常态而非异常——提示文案要区分这两种情形。 */
-function isFreshSession(startAt: string, endAt: string | null | undefined): boolean {
-  const ms = new Date(endAt || startAt).getTime()
-  if (!Number.isFinite(ms)) return false
-  return Date.now() - ms < 24 * 3600 * 1000
-}
-
-function dayKeyIso(d: Date): string {
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
-}
-
-/** 「2026年09月」（月份胶囊内文字） */
-function fmtMonth(y: number, m: number): string {
-  return `${y}年${String(m + 1).padStart(2, '0')}月`
-}
-
-/** 「20:31」（真实分钟——M4 起数据为秒级起止，不再取整点） */
-function fmtTime(d: Date): string {
-  if (Number.isNaN(d.getTime())) return '--:--'
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-}
-
-/** 「3小时12分」 */
-function fmtDur(min: number | null | undefined): string {
-  if (min == null || min < 1) return ''
-  const h = Math.floor(min / 60)
-  const m = min % 60
-  return h > 0 ? `${h}小时${m}分` : `${m}分`
-}
-
-/** 「¥10,501.5」 */
-function fmtMoney(v: number | null | undefined): string {
-  if (v == null) return ''
-  return `¥${v.toLocaleString('zh-CN')}`
-}
-
-/** 类型 key（服务端）→ 展示；缺失时按标题关键词兜底 */
-function keyOf(s: LiveSession): string {
-  return s.category ?? inferLiveType(s.live_title).key
-}
-
 type CellState = 'live' | 'tbd'
 
 interface DayCell {
@@ -85,326 +44,8 @@ interface DayCell {
   state: CellState
 }
 
-interface PopState {
-  key: string
-  rect: DOMRect
-  sessions: LiveSession[]
-}
-
-/** 场次详情弹窗（点击日期格打开；data=详情端点（含预留 danmaku/analysis）） */
-interface DetailState {
-  key: string              // 日期 key（防异步回写错位）
-  sessions: LiveSession[]  // 当日场次（多场切换用）
-  idx: number              // 当前查看第 idx 场
-  data: LiveSessionDetail | null
-  loading: boolean
-}
-
-/** 词云配色（浅色填充——user 2026-09-07：填充浅色、文字同色系深色；按词哈希取色稳定） */
-const CLOUD_COLORS = ['#ffc9c4', '#a5e6ff', '#dccff7', '#bee9ec', '#ffd5b8',
-  '#fff2a0', '#fda5ff', '#b2f3c0', '#ffdfe8', '#d8e8ff']
-
-function hashOf(text: string): number {
-  let h = 0
-  for (const ch of text) h = (h * 31 + ch.charCodeAt(0)) % 997
-  return h
-}
-
-/** 填充色（浅） */
-function cloudWordColor(w: { text: string }): string {
-  return CLOUD_COLORS[hashOf(w.text) % CLOUD_COLORS.length]
-}
-
-/** 同色系深色（文字用）：HSL 压暗同色相 */
-function cloudWordText(w: { text: string }): string {
-  const hex = cloudWordColor(w)
-  const n = parseInt(hex.slice(1), 16)
-  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255
-  const [h, s] = rgbToHsl(r, g, b)
-  return hslToHex(h, Math.min(s, 0.9), 0.28)
-}
-
-/** rgb(0-255) → [h(0-360), s(0-1)] */
-function rgbToHsl(r: number, g: number, b: number): [number, number] {
-  const rr = r / 255, gg = g / 255, bb = b / 255
-  const max = Math.max(rr, gg, bb), min = Math.min(rr, gg, bb)
-  const l = (max + min) / 2
-  if (max === min) return [0, 0]
-  const d = max - min
-  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min)
-  let h: number
-  if (max === rr) h = ((gg - bb) / d + (gg < bb ? 6 : 0))
-  else if (max === gg) h = ((bb - rr) / d + 2)
-  else h = ((rr - gg) / d + 4)
-  return [h * 60, s]
-}
-
-/** h(0-360), s(0-1), l(0-1) → hex */
-function hslToHex(h: number, s: number, l: number): string {
-  h = ((h % 360) + 360) % 360
-  const c = (1 - Math.abs(2 * l - 1)) * s
-  const x = c * (1 - Math.abs(((h / 60) % 2) - 1))
-  const m = l - c / 2
-  let rr = 0, gg = 0, bb = 0
-  if (h < 60) { rr = c; gg = x }
-  else if (h < 120) { rr = x; gg = c }
-  else if (h < 180) { gg = c; bb = x }
-  else if (h < 240) { gg = x; bb = c }
-  else if (h < 300) { rr = x; bb = c }
-  else { rr = c; bb = x }
-  const to2 = (v: number) => Math.round((v + m) * 255).toString(16).padStart(2, '0')
-  return `#${to2(rr)}${to2(gg)}${to2(bb)}`
-}
-
-/**
- * 增量摊铺拼贴词云（2026-09-07 user 定案参考图形态）：
- * ① 面积 ∝ 词频：power diagram λ 驱动（力导向站点滑动 + λ 面积收敛，见 wordCloudLayout.ts）；
- * ② 逐个入池：词按频次降序每 150ms 入场（放当前最大空腔），泡泡在缝隙中滑动、逐渐平衡；
- * ③ 终端稳定：全部入场后 alpha 冷却 → 静止即停（无循环装饰）；reduced-motion 直接终态；
- * ④ 破泡：点击词 → 删词 → 幸存词面积按词频重归一化 → 力+λ 重新平衡闭合；
- *    段头「已破泡 N · 恢复」胶囊由父级渲染（onPoppedChange/restoreTick 联动）。
- * 容器宽度运行时测量（ResizeObserver），高度 210px。
- */
-function MosaicCloud({
-  data,
-  boxH,
-  restoreTick = 0,
-  onPoppedChange,
-}: {
-  data: CloudWord[]
-  boxH: number
-  restoreTick?: number
-  onPoppedChange?: (n: number) => void
-}) {
-  const ref = useRef<HTMLDivElement>(null)
-  const [size, setSize] = useState({ w: 560, h: boxH })
-  const [snap, setSnap] = useState<{ cells: CloudCell[] } | null>(null)
-  const [tip, setTip] = useState<{ x: number; y: number; text: string; count: number } | null>(null)
-  const [hover, setHover] = useState<string | null>(null)
-  const packerRef = useRef<MosaicPacker | null>(null)
-  /** 当前活跃 rAF id（入场/破泡共用一个槽；重建时取消旧的） */
-  const rafRef = useRef(0)
-  const dataRef = useRef(data)
-  dataRef.current = data
-  const poppedRef = useRef(0)
-
-  // 宽度自适应：容器实际宽度（user 2026-09-07：池子宽度不对 → 实测）
-  useEffect(() => {
-    const el = ref.current
-    if (!el) return
-    const ro = new ResizeObserver((es) => {
-      const w = Math.round(es[0]?.contentRect.width ?? 0)
-      if (w > 80) setSize((s) => (s.w === w ? s : { ...s, w }))
-    })
-    ro.observe(el)
-    return () => ro.disconnect()
-  }, [])
-
-  /** 重建并启动入场动画（data/尺寸/恢复信号变化时） */
-  const start = (words: CloudWord[], w: number, h: number) => {
-    cancelAnimationFrame(rafRef.current)
-    if (words.length === 0) {
-      packerRef.current = null
-      setSnap(null)
-      poppedRef.current = 0
-      onPoppedChange?.(0)
-      return
-    }
-    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
-    const packer = new MosaicPacker([w, h])
-    packerRef.current = packer
-    let raf = 0
-    let alive = true
-    let next = 0
-    const held = words.slice()
-    let entered = 0
-    let alpha = 1
-    if (reduceMotion) {
-      // 直接最终稳态（插入全部词后长收尾，不播动画）
-      for (const wd of held) packer.addWord(wd)
-      while (alpha > 0.01) {
-        alpha = Math.max(alpha * 0.994, 0.01)
-        packer.step(alpha, alpha < 0.3 ? 80 : 2)
-      }
-      setSnap(packer.state())
-      poppedRef.current = 0
-      onPoppedChange?.(0)
-      return
-    }
-    const loop = (tNow: number) => {
-      if (!alive) return
-      while (entered < held.length && next <= tNow) {
-        packer.addWord(held[entered])
-        entered++
-        next += 150
-      }
-      if (entered < held.length) {
-        alpha = 1
-      } else {
-        alpha = Math.max(alpha * 0.994, 0.01)
-      }
-      let rounds = entered < held.length ? 1 : 2
-      if (entered >= held.length && alpha < 0.3) rounds = 20
-      packer.step(alpha, rounds)
-      setSnap(packer.state())
-      if (entered >= held.length && alpha <= 0.05) return   // 静止即停
-      raf = requestAnimationFrame(loop)
-      rafRef.current = raf
-    }
-    raf = requestAnimationFrame(loop)
-    rafRef.current = raf
-    poppedRef.current = 0
-    onPoppedChange?.(0)
-    return () => {
-      alive = false
-      cancelAnimationFrame(raf)
-      if (packerRef.current === packer) packerRef.current = null
-    }
-  }
-
-  // 数据/尺寸变化 → 重排
-  useEffect(() => {
-    const words = dataRef.current
-    if (words.length === 0) {
-      setSnap(null)
-      packerRef.current = null
-      return
-    }
-    return start(words, size.w, size.h)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data, size.w, size.h])
-
-  // 恢复信号（父级「已破泡 N · 恢复」按钮）→ 重建初始布局
-  useEffect(() => {
-    if (!restoreTick) return
-    const words = dataRef.current
-    if (words.length > 0) {
-      packerRef.current = null
-      const cleanup = start(words, size.w, size.h)
-      if (typeof cleanup === 'function') return cleanup
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [restoreTick])
-
-  /**
-   * 破泡 = 局部闭合（node 验证：缺口填充 2 词、远处位移 avg 6.5px/max 16px、
-   * 偏差 15%、单调 100%）：
-   * 1. 删词（站点/λ 移除）——对应 cell **立即消失**，缺口出现（无卡顿：纯同步删）；
-   * 2. rAF 局部松弛：α=0.15 起步（力场几乎不动）+ kCenter=0（停中心引力）——
-   *    λ 修正把缺口面积重新分配给相邻 cell（power 边界自动"鼓胀"塞住缺口），
-   *    站点只极轻微挪动（视觉上邻泡"挤入"缺口）——远处纹丝不动；
-   * 3. α 渐冷至 0.05 停止（静止即停）。
-   * 节奏（user 2026-09-07 反馈"慢一点"）：λ 8 轮/帧（原 20，每帧鼓胀 40% 速度）、
-   *    α 0.997 冷却（原 0.994）——填充过程 ~3.5s 渐显，可看清邻泡缓缓鼓起封缺口。
-   */
-  const popWord = (text: string) => {
-    const p = packerRef.current
-    if (!p || p.size === 0) return
-    if (!p.removeWord(text)) return
-    poppedRef.current += 1
-    onPoppedChange?.(poppedRef.current)
-    if (p.size === 0) {
-      setSnap({ cells: [] })
-      return
-    }
-    // 立即反映（词消失、缺口出现）
-    setSnap(p.state())
-    // 局部松弛循环
-    cancelAnimationFrame(rafRef.current)
-    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
-    if (reduceMotion) {
-      let alpha = 0.15
-      while (alpha > 0.05) {
-        alpha = Math.max(alpha * 0.997, 0.05)
-        p.step(alpha, alpha < 0.3 ? 8 : 2, 0)
-      }
-      setSnap(p.state())
-      return
-    }
-    let alpha = 0.15
-    let alive = true
-    const loop = () => {
-      if (!alive) return
-      alpha = Math.max(alpha * 0.997, 0.05)
-      // 站点几乎不动：α 0.15 起步（力微扰）；kCenter=0（停中心引力拖拽）
-      p.step(alpha, alpha < 0.3 ? 8 : 2, 0)
-      setSnap(p.state())
-      if (alpha <= 0.05) return   // 静止即停
-      rafRef.current = requestAnimationFrame(loop)
-    }
-    rafRef.current = requestAnimationFrame(loop)
-  }
-
-  return (
-    <div ref={ref} className="lc-dlg-cloud">
-      {snap && snap.cells.length > 0 && (
-        <svg width={size.w} height={size.h} className="lc-dlg-cloud-svg">
-          {snap.cells.map((c) => {
-            const { word, poly, cx, cy, r } = c
-            const d = poly.length
-              ? `M${poly.map(([x, y]) => `${x - cx},${y - cy}`).join('L')}Z`
-              : ''
-            const fs = Math.max(8.5, Math.min(26, r * 0.8, (r * 2.2) / Math.max(2, word.text.length)))
-            const showText = r > 9 && word.text.length <= 6 && fs >= 8.5
-            const hovered = hover === word.text
-            const dimmed = hover !== null && !hovered
-            return (
-              <g
-                key={word.text}
-                className="lc-dlg-cloud-cell"
-                style={{ transform: `translate(${cx}px, ${cy}px)` }}
-                onMouseEnter={(e) => {
-                  setHover(word.text)
-                  setTip({ x: e.clientX, y: e.clientY, text: word.text, count: word.count })
-                }}
-                onMouseMove={(e) =>
-                  setTip((t) => (t ? { ...t, x: e.clientX, y: e.clientY } : t))}
-                onMouseLeave={() => {
-                  setHover(null)
-                  setTip(null)
-                }}
-                onClick={() => popWord(word.text)}
-              >
-                <path
-                  d={d}
-                  fill={cloudWordColor(word)}
-                  fillOpacity={hovered ? 1 : dimmed ? 0.4 : 0.92}
-                  stroke="var(--c-bg-card)"
-                  strokeWidth={2}
-                />
-                {showText && (
-                  <text
-                    x={0}
-                    y={0}
-                    textAnchor="middle"
-                    dy="0.35em"
-                    fontSize={fs}
-                    fill={cloudWordText(word)}
-                    fontWeight={hovered ? 700 : 600}
-                    opacity={dimmed ? 0.25 : 1}
-                    pointerEvents="none"
-                  >
-                    {word.text}
-                  </text>
-                )}
-              </g>
-            )
-          })}
-        </svg>
-      )}
-      {snap && snap.cells.length === 0 && (
-        <div className="lc-dlg-ph">已全部破泡（点击「恢复」还原）</div>
-      )}
-      {tip && (
-        <span className="lc-dlg-cloud-tip" style={{ left: tip.x, top: tip.y }}>
-          {tip.text} · {tip.count.toLocaleString('zh-CN')} 次
-        </span>
-      )}
-    </div>
-  )
-}
-
-
+// `PopState` / `DetailState` / `POP_CLOSE_GRACE_MS` 随取数状态机一起搬到
+// `components/live/useLiveSessions.ts`，此处改为从那里 import（类型定义只有一处）。
 /**
  * 直播日历（v0.9.2 重建 → v0.9.x M4 内容管道）：
  * - 卡片 870 定宽上限居中（用户参数）；网格 7 列 × 115.714286px + 4px 列/行距
@@ -434,108 +75,16 @@ function MosaicCloud({
  */
 const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: Props) {
   const now = new Date()
-  const [ym, setYm] = useState<{ y: number; m: number }>({ y: now.getFullYear(), m: now.getMonth() })
-  const [sessions, setSessions] = useState<LiveSession[]>([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  /** 场次浮层：点击格子的锚点（rect 快照）与当日数据 */
+  /** 场次浮层：点击格子的锚点（rect 快照）与当日数据。
+   *  留在组件侧 —— 它承载 DOM rect，与渲染强耦合；hook 只通过 `onDataRefresh` 通知关闭。 */
   const [pop, setPop] = useState<PopState | null>(null)
-
-  /** 详情弹窗·分类下拉栏（点左上角胶囊展开：全部彩色分类胶囊，点选取） */
-  const [catPopOpen, setCatPopOpen] = useState(false)
-  const catPopRef = useRef<HTMLSpanElement>(null)
-  useEffect(() => {
-    if (!catPopOpen) return
-    const onDown = (e: MouseEvent) => {
-      if (catPopRef.current && !catPopRef.current.contains(e.target as Node)) {
-        setCatPopOpen(false)
-      }
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setCatPopOpen(false)
-    }
-    document.addEventListener('mousedown', onDown)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDown)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [catPopOpen])
-
-  /** 月份切换动画方向（1=前进/向右滑入，-1=后退/向左滑入）；keyed 重放 */
-  const [navDir, setNavDir] = useState<1 | -1>(1)
-
-  const [detail, setDetail] = useState<DetailState | null>(null)
-  // 弹窗打开/切换场次/关闭 → 收起下拉栏
-  useEffect(() => {
-    setCatPopOpen(false)
-  }, [detail])
-
-  // 月份选择浮窗：独立年份游标（打开时同步 ym 的年）
-  const [monthPopOpen, setMonthPopOpen] = useState(false)
-  const [popYear, setPopYear] = useState(now.getFullYear())
-  const navRef = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!monthPopOpen) return
-    const onDown = (e: MouseEvent) => {
-      if (navRef.current && !navRef.current.contains(e.target as Node)) {
-        setMonthPopOpen(false)
-      }
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setMonthPopOpen(false)
-    }
-    document.addEventListener('mousedown', onDown)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDown)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [monthPopOpen])
-
-  // 场次拉取（字段 2026-09-07：只检索主账号直播信息；loadSeq 防账号切换回写）
-  const loadSeq = useRef(0)
-  const load = useCallback(() => {
-    if (accountId == null) return
-    const seq = ++loadSeq.current
-    setLoading(true)
-    setError(null)
-    api
-      .liveSessions(accountId)
-      .then((s) => {
-        if (seq === loadSeq.current) setSessions(s)
-      })
-      .catch((e: Error) => {
-        if (seq === loadSeq.current) setError(e.message || '场次加载失败')
-      })
-      .finally(() => {
-        if (seq === loadSeq.current) setLoading(false)
-      })
-  }, [accountId])
-
-  useEffect(() => {
-    load()
-  }, [load, refreshTick])
-
-  // 数据刷新后浮层锚点已失效 → 关闭（月份/账号切换同理）
-  useEffect(() => {
-    setPop(null)
-  }, [ym, accountId, sessions])
-
-  // 账号切换 → 关闭详情弹窗（数据归属变化）
-  useEffect(() => {
-    setDetail(null)
-  }, [accountId])
-
-  // 弹窗打开期间锁页面滚动（2026-09-07：滚动条贴窗口右缘/越顶问题）
-  useEffect(() => {
-    if (!detail) return
-    const prev = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    return () => {
-      document.body.style.overflow = prev
-    }
-  }, [detail])
+  /** 取数与派生状态（月份/场次/详情/分类下拉/月份浮窗）——见 hooks 文件顶部的顺序契约说明。
+   *  `now` 每次渲染现取：保持"todayKey 随渲染更新"的既有语义。 */
+  const {
+    ym, setYm, sessions, loading, error, setError, navDir, setNavDir,
+    detail, setDetail, catPopOpen, setCatPopOpen, catPopRef,
+    monthPopOpen, setMonthPopOpen, popYear, setPopYear, navRef, reload, reloadDetail,
+  } = useLiveSessions(accountId, refreshTick, now, () => setPop(null))
 
   const byDay = useMemo(() => {
     const m = new Map<string, LiveSession[]>()
@@ -655,10 +204,9 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
       } else {
         await api.setLiveSessionCategory(accountId, liveId, value)
       }
-      load()
+      reload()
       // 详情弹窗内校正 → 同步刷新详情（徽章/分类来源即时更新）
-      const d = await api.liveSessionDetail(accountId, liveId)
-      setDetail((prev) => (prev ? { ...prev, data: d } : prev))
+      await reloadDetail(liveId)
     } catch (e) {
       setError((e as Error).message || '分类保存失败')
     }
@@ -702,6 +250,9 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
+    // `setDetail` 是 useState 的 setter（React 保证引用恒定，漏它不会导致陈旧闭包）；
+    // 这是 eslint 基线的已知提示，不是 bug（2026-09-13）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detail])
 
   const renderCell = (c: DayCell) => {
@@ -806,284 +357,9 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
     )
   }
 
-  /** 词云数据（top40 带次数，按词频降序——增量摊铺：面积∝词频） */
-  const cloudBubbles = useMemo<CloudWord[]>(() => {
-    return [...(detail?.data?.danmaku?.top_words ?? [])]
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 40)
-  }, [detail])
-
-  /** 词云破泡计数 / 恢复信号（段头右侧「已破泡 N · 恢复」，带破泡时出现） */
-  const [cloudPopped, setCloudPopped] = useState(0)
-  const [cloudRestoreTick, setCloudRestoreTick] = useState(0)
-
-  /** 详情弹窗：直播信息 + 分类校正 + 弹幕词云/指标/直播间动态 */
-  const renderDetail = () => {
-    if (!detail) return null
-    const s: LiveSessionDetail =
-      detail.data ?? { ...detail.sessions[detail.idx], danmaku: null, analysis: null }
-    const d0 = new Date(s.start_at)
-    const d1 = s.end_at ? new Date(s.end_at) : null
-    const t = keyOf(s)
-    const srcs = (s.source ?? 'self').split('+').filter(Boolean)
-    const area = [s.parent_area_name, s.area_name].filter(Boolean).join(' / ')
-    return createPortal(
-      <div
-        className="lc-dlg-backdrop"
-        onMouseDown={(e) => {
-          if (e.target === e.currentTarget) setDetail(null)
-        }}
-      >
-        <div className="lc-dlg" role="dialog" aria-modal>
-          {/* 头部驻留区：不随内容滚动（2026-09-07 user 定案——「标题……X」恒驻留、
-              滚动条只在内容区悬浮不覆盖头部）；下缘发丝分隔 */}
-          <div className="lc-dlg-head-zone">
-            <div className="lc-dlg-head">
-              <div className="lc-dlg-title">
-                {s.live_id ? (
-                  <span className="lc-dlg-badge-wrap" ref={catPopRef}>
-                    <button
-                      type="button"
-                      className="lc-dlg-badge-btn"
-                      title="选择分类"
-                      onClick={() => setCatPopOpen((o) => !o)}
-                    >
-                      <span className={`lc-pop-badge lc-stat-pill--${t}`}>{liveTypeLabel(t)}</span>
-                      <ChevronDown className="lc-dlg-badge-caret" />
-                    </button>
-                    {catPopOpen && (
-                      <span className="lc-dlg-cat-pop">
-                        <span className="lc-dlg-cat-list">
-                          <button
-                            type="button"
-                            className={`lc-dlg-cat-opt lc-dlg-cat-auto${s.category_from === 'override' ? '' : ' on'}`}
-                            onClick={() => { setCatPopOpen(false); onPickCategory(s, 'auto') }}
-                          >
-                            自动（跟随推断）
-                          </button>
-                          {LIVE_TYPE_ORDER.map((t2) => (
-                            <button
-                              key={t2.key}
-                              type="button"
-                              className={`lc-dlg-cat-opt lc-stat-pill--${t2.key}${t === t2.key ? ' on' : ''}`}
-                              onClick={() => { setCatPopOpen(false); onPickCategory(s, t2.key) }}
-                            >
-                              {t2.label}
-                            </button>
-                          ))}
-                        </span>
-                      </span>
-                    )}
-                  </span>
-                ) : (
-                  <span className={`lc-pop-badge lc-stat-pill--${t}`}>{liveTypeLabel(t)}</span>
-                )}
-                <span className="lc-dlg-name">{s.live_title || '场次详情'}</span>
-                <span className="lc-dlg-sub">{detail.key} {fmtTime(d0)}</span>
-                {s.category_from === 'override' && (
-                  <span className="lc-pop-corr">已校正</span>
-                )}
-              </div>
-              <button type="button" className="lc-dlg-close" aria-label="关闭" onClick={() => setDetail(null)}>
-                <X className="size-4" />
-              </button>
-            </div>
-
-            {/* 当日多场切换（点格默认第一场）——随头部驻留 */}
-            {detail.sessions.length > 1 && (
-              <div className="lc-dlg-tabs">
-                {detail.sessions.map((x, i) => (
-                  <button
-                    key={x.live_id ?? `${x.start_at}-${i}`}
-                    type="button"
-                    className={`lc-dlg-tab${i === detail.idx ? ' on' : ''}`}
-                    onClick={() => switchDetailIdx(i)}
-                  >
-                    {fmtTime(new Date(x.start_at))}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* 内容区：独立滚动（覆盖式滚动条，只在此层悬浮） */}
-          <OverlayScroll className="lc-dlg-body">
-            <div className="lc-dlg-main">
-            {/* 左列：场次封面（缺失/失败 → 渐变占位，右下角直播状态徽章） */}
-            <div className="lc-dlg-cover">
-              <ProxyImage
-                key={s.cover_url ?? 'none'}
-                src={s.cover_url}
-                className="lc-dlg-cover-img"
-                fallbackClassName="lc-dlg-cover-ph"
-                fallback={(s.live_title || liveTypeLabel(t)).trim().charAt(0) || '播'}
-              />
-              <span className={`lc-dlg-status${d1 ? '' : ' live'}`}>
-                {d1 ? '已结束' : '直播中'}
-              </span>
-            </div>
-
-            {/* 右列：直播信息（行式 label 左 · value 右） */}
-            <section className="lc-dlg-sec">
-              <h4 className="lc-dlg-sec-title">直播信息</h4>
-              <dl className="lc-dlg-rows">
-                <div className="lc-dlg-row">
-                  <dt>时间</dt>
-                  <dd>{fmtTime(d0)} – {d1 ? fmtTime(d1) : '进行中'}
-                    {fmtDur(s.duration_minutes) ? `（${fmtDur(s.duration_minutes)}）` : ''}</dd>
-                </div>
-                <div className="lc-dlg-row"><dt>分区</dt><dd>{area || '—'}</dd></div>
-                <div className="lc-dlg-row"><dt>收益</dt><dd>{fmtMoney(s.total_income) || '—'}</dd></div>
-                <div className="lc-dlg-row">
-                  <dt>峰值在线</dt>
-                  <dd>{s.max_online_count ? s.max_online_count.toLocaleString('zh-CN') : '—'}</dd>
-                </div>
-                <div className="lc-dlg-row">
-                  <dt>弹幕数</dt>
-                  <dd>{s.danmakus_count ? s.danmakus_count.toLocaleString('zh-CN') : '—'}</dd>
-                </div>
-                {s.metrics && (
-                  <>
-                    <div className="lc-dlg-row">
-                      <dt>观看</dt>
-                      <dd>{s.metrics.watch_count != null ? s.metrics.watch_count.toLocaleString('zh-CN') : '—'}</dd>
-                    </div>
-                    <div className="lc-dlg-row">
-                      <dt>点赞</dt>
-                      <dd>{s.metrics.like_count != null ? s.metrics.like_count.toLocaleString('zh-CN') : '—'}</dd>
-                    </div>
-                    <div className="lc-dlg-row">
-                      <dt>打赏</dt>
-                      <dd>{s.metrics.pay_count != null ? `${s.metrics.pay_count.toLocaleString('zh-CN')} 人` : '—'}</dd>
-                    </div>
-                    <div className="lc-dlg-row">
-                      <dt>互动</dt>
-                      <dd>{s.metrics.interaction_count != null ? s.metrics.interaction_count.toLocaleString('zh-CN') : '—'}</dd>
-                    </div>
-                    {s.metrics.online_rank != null && (
-                      <div className="lc-dlg-row">
-                        <dt>在线排名</dt>
-                        <dd>#{s.metrics.online_rank.toLocaleString('zh-CN')}</dd>
-                      </div>
-                    )}
-                  </>
-                )}
-                {(s.segment_count ?? 1) > 1 && (
-                  <div className="lc-dlg-row">
-                    <dt>段数</dt>
-                    <dd>{s.segment_count} 段合并（中断续播）</dd>
-                  </div>
-                )}
-                <div className="lc-dlg-row"><dt>数据源</dt><dd>{srcs.join(' + ')}</dd></div>
-              </dl>
-            </section>
-          </div>
-
-          <section className="lc-dlg-sec lc-dlg-sec--full">
-            {/* 段头行：标题 + 破泡计数/恢复胶囊（破泡时出现） */}
-            <div className="lc-dlg-sec-head">
-              <h4 className="lc-dlg-sec-title">弹幕信息</h4>
-              {cloudPopped > 0 && cloudBubbles.length > 0 && (
-                <button
-                  type="button"
-                  className="lc-dlg-cloud-restore"
-                  onClick={() => setCloudRestoreTick((t) => t + 1)}
-                >
-                  已破泡 {cloudPopped} · 恢复
-                </button>
-              )}
-            </div>
-            {detail.loading ? (
-              <div className="lc-dlg-ph">加载中…</div>
-            ) : s.danmaku ? (
-              <div className="lc-dlg-danmaku">
-                <dl className="lc-dlg-rows">
-                  {s.danmaku.total != null && (
-                    <div className="lc-dlg-row">
-                      <dt>弹幕总量</dt>
-                      <dd className="lc-dlg-num">{s.danmaku.total.toLocaleString('zh-CN')}</dd>
-                    </div>
-                  )}
-                  {s.metrics?.is_full === false && (
-                    <div className="lc-dlg-row">
-                      <dt>完整性</dt>
-                      <dd>弹幕数据未全量（部分录制源）</dd>
-                    </div>
-                  )}
-                </dl>
-                {cloudBubbles.length ? (
-                  <MosaicCloud
-                    data={cloudBubbles}
-                    boxH={210}
-                    restoreTick={cloudRestoreTick}
-                    onPoppedChange={setCloudPopped}
-                  />
-                ) : (
-                  <div className="lc-dlg-ph">暂无热词数据</div>
-                )}
-              </div>
-            ) : (
-              <div className="lc-dlg-ph">
-                {isFreshSession(s.start_at, s.end_at)
-                  ? '该场次刚结束，弹幕 / 热词仍在第三方收录中（danmakus 通常延迟数小时），稍后重新打开即可看到'
-                  : '暂无弹幕数据（danmakus 未收录该场次或拉取失败）'}
-              </div>
-            )}
-          </section>
-
-          <section className="lc-dlg-sec lc-dlg-sec--full">
-            <h4 className="lc-dlg-sec-title">直播动态</h4>
-            {detail.loading ? (
-              <div className="lc-dlg-ph">加载中…</div>
-            ) : (s.events?.length || s.metrics?.peaks?.length) ? (
-              <div className="lc-dlg-evts">
-                {(s.events ?? []).map((ev, i) => (
-                  <div key={`ev-${i}`} className="lc-dlg-evt">
-                    <span className={`lc-dlg-evt-dot${ev.type === 7 ? ' stop' : ''}`} />
-                    <span className="lc-dlg-evt-time">
-                      {ev.send_date ? fmtTime(new Date(ev.send_date)) : '--:--'}
-                    </span>
-                    <span className="lc-dlg-evt-text">
-                      {ev.type === 7 ? '直播中止' : '直播继续'}
-                    </span>
-                  </div>
-                ))}
-                {(s.metrics?.peaks?.length ?? 0) > 0 && (
-                  <div className="lc-dlg-evt-block">
-                    <div className="lc-dlg-evt-label">最热时刻（在线峰值）</div>
-                    {(s.metrics!.peaks as { ts: number; count: number }[])
-                      .slice(0, 3)
-                      .map((p) => (
-                        <div key={`peak-${p.ts}`} className="lc-dlg-evt">
-                          <span className="lc-dlg-evt-dot peak" />
-                          <span className="lc-dlg-evt-time">{fmtTime(new Date(p.ts))}</span>
-                          <span className="lc-dlg-evt-text">
-                            {Number(p.count ?? 0).toLocaleString('zh-CN')} 人在线
-                          </span>
-                        </div>
-                      ))}
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="lc-dlg-ph">暂无动态数据</div>
-            )}
-          </section>
-
-          <section className="lc-dlg-sec lc-dlg-sec--full">
-            <h4 className="lc-dlg-sec-title">直播内容分析</h4>
-            {s.analysis ? (
-              <div className="lc-dlg-ph">{s.analysis.summary || '内容分析摘要待接入'}</div>
-            ) : (
-              <div className="lc-dlg-ph">接口已预留（内容分析服务接入后展示）</div>
-            )}
-          </section>
-          </OverlayScroll>
-        </div>
-      </div>,
-      document.body,
-    )
-  }
+  /** 详情弹窗已搬到 `components/live/LiveSessionDialog`
+   *  （含词云 top40 派生、破泡计数/恢复信号等只服务弹窗的状态）。
+   *  这里只留「是否渲染」与三个受父级状态驱动的入参。 */
 
   return (
     <div className="live-calendar">
@@ -1174,7 +450,18 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
       </div>
 
       {renderPop()}
-      {renderDetail()}
+      {detail && (
+        <LiveSessionDialog
+          detail={detail}
+          catPopOpen={catPopOpen}
+          setCatPopOpen={setCatPopOpen}
+          catPopRef={catPopRef}
+          onClose={() => setDetail(null)}
+          onSwitchIdx={switchDetailIdx}
+          onPickCategory={onPickCategory}
+          accountId={accountId}
+        />
+      )}
     </div>
   )
 })

@@ -109,6 +109,35 @@ function measure(tag: string) {
         }).length,
       }
     })(),
+    /** 展示页（cards）hero 区量测 —— **与列表无关的常驻量测**。
+     *
+     *  为什么加它（2026-09-13，P2 分层收敛 A 批次）：这一批把 hero 的两段纯逻辑搬出了
+     *  `PostsPage`（`orderAccounts` 拖拽排序 → `chunkBy` 每 3 枚切集 → `accountHomeUrl` 主页兜底），
+     *  而它们**只在 cards 视图 + 药丸有内容时才渲染**。只断言「在不在框里」完全看不出
+     *  「药丸少了一排 / 顺序变了 / 切集错了」——正是"搬坏了但探针全绿"的形态。
+     *  这里把药丸的**数量、索引序、每枚的展示数值**抽成可比对的签名，
+     *  由 `scripts/ui_probe.py --hero-expect <hash>` 做位级回归。 */
+    hero: (() => {
+      const pills = [...document.querySelectorAll('.stat-pill[data-pill-index]')]
+      const sets = [...document.querySelectorAll('.stat-sets .stat-set')]
+      if (!pills.length && !sets.length) return null
+      const sig = pills.map((p) => {
+        const idx = p.getAttribute('data-pill-index')
+        const cls = String((p as HTMLElement).className)
+        const platform = /(^|\s)image(\s|$)/.test(cls) ? 'image' : /(^|\s)pink(\s|$)/.test(cls) ? 'pink' : 'coral'
+        const value = (p.querySelector('.pill-value')?.textContent || '').trim()
+        return `${idx}:${platform}:${value}`
+      })
+      return {
+        pillCount: pills.length,
+        setCount: sets.length,
+        /** 每集内药丸数（切集口径：恒 ≤3；总数 0 时为 []） */
+        setSizes: sets.map((s) => s.querySelectorAll('.stat-pill').length),
+        hasAddButton: !!document.querySelector('.pill-add'),
+        /** 逐枚签名：`索引:色系:展示数值` —— 顺序变化会直接反映在这里 */
+        signature: sig,
+      }
+    })(),
     /** 可见地越过窗口左右缘的元素 */
     overflowing: [...document.querySelectorAll('body *')]
       .filter((n) => {
@@ -276,6 +305,23 @@ export async function runUiProbe(): Promise<void> {
   // （不产出断言 JSON）；`?probe=archive` 停在档案视图并把**直播日历每格实渲染文本**
   // 落进探针 JSON（排查「最近几场没信息」这类渲染缺口用，比看截图精确）。
   const mode = new URLSearchParams(window.location.search).get('probe')
+
+  // 首启模式（`?probe=1&firstRun=1` + 路由 `/`）：空数据目录下没有选中任何 VTuber，
+  // 页面上**本来就没有视图光条**。若照常走四视图量测，只会量到一段 empty + degraded，
+  // 于是被 `_assert_probe_integrity` 判成三条失败 —— 而首启浮窗其实是好的
+  // （2026-09-11 加固引入的**必然假失败**：`ui_probe.py --first-run` 从此恒退出 1）。
+  //
+  // 首启要验的不是布局不变量，而是「登录浮窗自动弹出 + 带凭据说明」，由脚本在
+  // 落盘的 DOM 上断言（`_assert_first_run`）。所以这里显式声明 mode，不产 views。
+  if (mode === 'first-run') {
+    const pre = document.createElement('pre')
+    pre.id = 'ui-probe'
+    pre.textContent = JSON.stringify({ mode: 'first-run', views: [], degraded })
+    document.body.appendChild(pre)
+    document.title = 'UI_PROBE_DONE'
+    return
+  }
+
   if (mode === 'archive') {
     const clicked = clickView('档案')
     await sleep(2200)
@@ -288,9 +334,20 @@ export async function runUiProbe(): Promise<void> {
     }))
     // 端到端：点**最近一个**有场次的格子 → 等详情弹窗拉完数据 → 落弹窗实渲染文本。
     // 这一格正是「最近几场直播的信息展示不出来」的现场（详情弹窗弹幕/统计是否为空）。
-    const withBody = [...document.querySelectorAll<HTMLElement>('.lc-cell')].filter(
-      (c) => c.querySelector('.lc-cell-body'),
-    )
+    //
+    // `?probe=archive&day=<N>`：改点**指定日号**的格子。用途很具体 —— 最近一场常常
+    // 刚下播、danmakus 还没收录（`danmaku: null` ⇒ `cloudCells: 0`），于是探针
+    // **看起来通过但词云/弹幕那几段等于没验**。要验词云就得回到几天前有收录的场次
+    // （2026-09-13 抽 `LiveSessionDialog` 时踩到：最近一场 0 热词，整块弹幕区没被渲染）。
+    const wantDay = new URLSearchParams(window.location.search).get('day')
+    const allCells = [...document.querySelectorAll<HTMLElement>('.lc-cell')]
+    const withBody = wantDay
+      ? allCells.filter(
+          (c) =>
+            (c.querySelector('.lc-day')?.textContent || '').trim() === wantDay &&
+            c.querySelector('.lc-cell-body'),
+        )
+      : allCells.filter((c) => c.querySelector('.lc-cell-body'))
     let detail: Record<string, unknown> | null = null
     if (withBody.length) {
       withBody[withBody.length - 1].click()
@@ -321,6 +378,7 @@ export async function runUiProbe(): Promise<void> {
     const pre = document.createElement('pre')
     pre.id = 'ui-probe'
     pre.textContent = JSON.stringify({
+      mode: 'archive',
       views: [],
       degraded,
       calendar: {
@@ -379,7 +437,7 @@ export async function runUiProbe(): Promise<void> {
   const pre = document.createElement('pre')
   pre.id = 'ui-probe'
   const topbar = await sampleTopbar()
-  pre.textContent = JSON.stringify({ views: out, topbar, degraded })
+  pre.textContent = JSON.stringify({ mode: 'main', views: out, topbar, degraded })
   document.body.appendChild(pre)
   document.title = 'UI_PROBE_DONE'
 }
