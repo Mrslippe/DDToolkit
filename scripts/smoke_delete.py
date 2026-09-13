@@ -1,8 +1,54 @@
-import sys, json, sqlite3, urllib.request, urllib.error
+"""冒烟：解订阅（DELETE /vtuber/{id}）是否真的把帖子与子表清干净。
+
+用法（需要先有一个在跑的**开发态**后端）:
+
+    $env:DDTOOLKIT_DATA_DIR = "$env:APPDATA\\com.ddtoolkit.app-dev"   # 必须！见下
+    python backend_main.py            # 另开一个窗口，记下端口
+    python scripts/smoke_delete.py <port> [uid]
+
+它会：adopt 一个候选池账号 → 直接往库里插一条帖子 → DELETE 该 V →
+断言 vtubers / accounts / posts 三表都不再有它。
+
+⚠️ 这是**破坏性冒烟**（会对真实数据目录 adopt 再 delete）。因此：
+
+- 库路径**从 `settings` 推导**（跟随 `DDTOOLKIT_DATA_DIR`），不再硬编码某台机器的绝对路径
+  —— 2026-09-13 复查硬编码路径时发现旧写法写死了 `C:\\Users\\zx\\...`，
+  既绕过了数据目录约定，也在换机器 / 改用户名 / 改盘符后静默指向错误（或不存在的）库；
+- **必须显式设 `DDTOOLKIT_DATA_DIR`**：不设时 `settings` 会回退到**项目根**的库
+  （那是裸跑残留，不是真库），此时本脚本会拒绝运行；
+- 路径**必须含 `-dev`**（开发库）才肯继续，防止手滑对着安装版数据目录跑。
+  确需对别的库跑，设 `DDTOOLKIT_SMOKE_ALLOW_ANY_DB=1` 显式放行。
+"""
+import json
+import os
+import sqlite3
+import sys
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))   # 与其它 scripts/ 同款：允许直跑
+
+from app.core.config import settings  # noqa: E402
+
+if len(sys.argv) < 2:
+    raise SystemExit("用法: python scripts/smoke_delete.py <后端端口> [platform_uid]")
 
 port = sys.argv[1]
 uid = sys.argv[2] if len(sys.argv) > 2 else "282994"
-db = r"C:\Users\zx\AppData\Roaming\com.ddtoolkit.app-dev\vtuber.db"
+
+# 从 settings 推导（= DATABASE_URL 去掉 sqlite:/// 前缀），与全仓其它脚本口径一致
+_db_path = settings.DATABASE_URL.replace("sqlite:///", "")
+db = str(_db_path)
+
+if "-dev" not in db and os.getenv("DDTOOLKIT_SMOKE_ALLOW_ANY_DB") != "1":
+    raise SystemExit(
+        f"拒绝运行：目标库看起来不是开发库（{db}）。\n"
+        f"本脚本会对它 adopt 再 delete。开发库路径应含 '-dev'；\n"
+        f"若确实要对该库跑，请设 DDTOOLKIT_SMOKE_ALLOW_ANY_DB=1。"
+    )
+print(f"目标库: {db}")
+
 
 def req(method, path, body=None):
     url = f"http://127.0.0.1:{port}{path}"
@@ -14,7 +60,8 @@ def req(method, path, body=None):
             raw = resp.read()
             return resp.status, json.loads(raw) if raw else None
     except urllib.error.HTTPError as e:
-        return e.code, json.loads(e.read()) if e.headers.get("Content-Type","").startswith("application/json") else None
+        return e.code, json.loads(e.read()) if e.headers.get("Content-Type", "").startswith("application/json") else None
+
 
 st, adopt = req("POST", "/vtuber/adopt", {"platform": "bilibili", "platform_uid": uid})
 print("adopt:", st, adopt.get("name") if isinstance(adopt, dict) else adopt)
@@ -35,4 +82,4 @@ a = conn.execute("SELECT COUNT(*) FROM accounts WHERE vtuber_id=?", (vid,)).fetc
 p = conn.execute("SELECT COUNT(*) FROM posts WHERE platform_uid=?", (uid,)).fetchone()[0]
 conn.close()
 print("after delete -> vtubers:", v, "accounts:", a, "posts:", p)
-print("PASS" if (v==0 and a==0 and p==0 and st==201 and st2==204) else "FAIL")
+print("PASS" if (v == 0 and a == 0 and p == 0 and st == 201 and st2 == 204) else "FAIL")
