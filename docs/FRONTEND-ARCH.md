@@ -132,24 +132,64 @@
 
 ### P2 · 巨型文件拆分（2–3 天）
 
-| 任务 | 来源（行号） | 目标 | 工时 | 风险 |
-|---|---|---|---|---|
-| `components/wordcloud/MosaicCloud.tsx` + `utils/cloudPalette.ts` | `LiveCalendar.tsx` 181–447 | 词云组件独立 | 2h | **中**（rAF / ResizeObserver / 闭包引用多） |
-| `components/live/LiveSessionDialog.tsx` | `LiveCalendar.tsx` 场次详情（`lc-dlg` 家族） | 弹窗独立 | 3h | 中 |
-| `hooks/useLiveSessions.ts` | `LiveCalendar.tsx` 数据加载 / 月份 / 分类状态 | 逻辑外移 | 2h | 中 |
-| `components/posts/HeroCardsView.tsx` | `PostsPage.tsx` 957–1013 | 展示页视图 | 1.5h | 中 |
-| `components/posts/PostListView.tsx` | `PostsPage.tsx` 1034–1130 | 列表页视图 | 2h | 中 |
-| `hooks/useVtuberActions.ts` | `PostsPage.tsx` 572–713（6 个 `handle*`） | 25 → ~15 个 state | 2h | 中 |
+> ⚠️ 下表的**源行号区间是 2026-09-08 的**，之后两个巨件与 CSS 都长大了，动工前必须按当前文件
+> 重新定位。2026-09-13 实测（本批收口后）：`PostsPage` **1247**、`LiveCalendar` **465**、
+> `posts.css` **3237**、`layout.css` **1106**（文档原记 1299 / 1186 / 2761 / 1082，均已过时）。
+> `LiveCalendar` 已达成 P2 的预期目标区间（≤~450 量级）。
 
-**预期结果**：`PostsPage.tsx` 1,299 → ~700 行；`LiveCalendar.tsx` 1,186 → ~450 行。
+| 任务 | 来源（行号） | 目标 | 工时 | 风险 | 状态 |
+|---|---|---|---|---|---|
+| `components/wordcloud/MosaicCloud.tsx` + `cloudPalette.ts` | `LiveCalendar.tsx:103–405`（实际） | 词云组件独立 | 2h | 中（rAF / ResizeObserver / 闭包引用多） | ✅ **已落地**：`LiveCalendar` **1182 → 837**（含下一行的纯格式化外提）；另建 `scripts/check_wordcloud_layout.mjs`（sha256 位级基线）+ `cloudPalette.test.ts`（14 条） |
+| `components/live/liveCalendarFmt.ts`（本批新增的"能证明的那一半"） | `LiveCalendar.tsx` 的 7 个纯函数 | 纯展示格式化外移 | 1h | 低 | ✅ **已落地（2026-09-13）**：`isFreshSession`/`dayKeyIso`/`fmtMonth`/`fmtTime`/`fmtDur`/`fmtMoney`/`keyOf` + 19 条断言 |
+| `components/live/LiveSessionDialog.tsx` | `LiveCalendar.tsx` 场次详情（`lc-dlg` 家族） | 弹窗独立 | 3h | 中 | ✅ **已落地（2026-09-13）**：340 行；`LiveCalendar` **734 → 465**（含把 `cloudBubbles`/破泡状态一并搬入）。证据 = 日历签名 `fb75217e…` 一致 + 详情弹窗实渲染（`--archive-day`）非加载态、非空态 |
+| `hooks/useLiveSessions.ts` | `LiveCalendar.tsx` 数据加载 / 月份 / 分类状态 | 逻辑外移 | 2h | **高** | ✅ **已落地（2026-09-13）**：`components/live/useLiveSessions.ts`（230 行）；`LiveCalendar` **837 → 734**。证据 = 日历格 sha256 签名 `fb75217e…` 重构前后**完全一致**（`ui_probe.py --archive --calendar-expect`）+ hero 签名 + 探针三档全绿。**顺序是契约**（7 条 effect 的相对顺序与依赖数组不得改），已写进 hook 文件顶部注释 |
+| `components/posts/HeroCardsView.tsx` | `PostsPage.tsx` 展示页视图 | 展示页视图 | 1.5h | 中 | 🔶 **纯逻辑已提**（`utils/postTypes.ts`：`orderAccounts`/`chunkBy`/`accountHomeUrl`，27 条断言 + 探针 `--hero-expect` 位级护栏）；**视图 JSX 未拆** —— 见下方决策记录 |
+| `components/posts/PostListView.tsx` | `PostsPage.tsx` 列表页视图 | 列表页视图 | 2h | 中 | ⬜ 未做 —— 同上 |
+| `hooks/useVtuberActions.ts` | `PostsPage.tsx` 的 6 个 `handle*` | 25 → ~15 个 state | 2h | 中 | ✅ **已落地（2026-09-13）**：`pages/useVtuberActions.ts`（197 行）；`PostsPage` **1247 → 1128**；`fetching` 随动作一起搬走。证据 = hero 签名 `c1154858…` 与日历签名 `fb75217e…` 均一致 |
+
+> **决策记录（2026-09-13）：视图 JSX 不再拆成 `HeroCardsView` / `PostListView`。**
+>
+> 原因不是工时，而是**收益已经不成立**：
+> ① 这两个"视图组件"的体量在原估算里被高估了 —— 抽出类型分组常量与 6 个动作回调后，
+> cards 分支只剩 ~72 行、list 分支 ~30 行、archive/profile 各 ~15 行，且**彼此在 JSX 树里
+> 是并列的兄弟**而不是独立子树；
+> ② 它们与页面深度耦合（`scene`/`view`/`prefetch`/滚动哨兵/筛选态），要拆只能靠
+> **30+ 个 props 透传** —— 那是把"一个大函数"换成"一个大接口"，可读性未必更好；
+> ③ 项目没有组件测试运行器，拆完只能靠探针与肉眼，**而探针本来就覆盖这两个视图**
+> （八段契约含 cards/list/list-video），拆与不拆的回归风险不对称。
+>
+> 已完成的替代方案更划算：**把能测的抽出来测**（`postTypes.ts` 27 条断言）
+> + **把能位级比对的固化**（hero 签名）。这两件事都做了，而 JSX 保持现状。
+>
+> P2 对此文件的**实际结论**：`PostsPage` 1247 → 1128（−119，含本批 197 行新文件），
+> 而**可测试面从 0 变成 27 条断言 + 1 个位级护栏** —— 这才是 P2 想要的成果。
+
+> 已完成项的实际收益（避免"只减行数"的误判）：`PostsPage.tsx` **1285 → 1247**（−38）——
+> 行数减得少，但**三段此前零覆盖的规则变成了可断言的**（平台分组 key 必须等于后端
+> `type` 逗号写法、拖拽排序的两个边界、切集边界）。P2 的价值在可控性，不在行数。
+
+**预期结果**：`PostsPage.tsx` → ~700 行；`LiveCalendar.tsx` → ~450 行（当前 877，词云已出）。
+
+> **CSS 归属决策（2026-09-13 用户定，方案 a）**：拆分**不搬 CSS** —— `.lc-*` / `.drp` / `.vd-*`
+> 继续留在 `styles/posts.css`。理由是 CSS 是**探针断言的选择器世界**（`ui_probe.py` 直接查
+> `.lc-dlg-cloud-cell`、`.post-filter-pop`、`.list-inner` 等），与拆分同批搬动会让
+> 「组件搬坏了」和「选择器改了」两类失败混在一起、无法归因。代价是「组件在 `components/live/`、
+> 样式在 `posts.css`」的错位 —— 用 UI-MAP 记一句即可，不值得用一份回归风险去换整齐。
 
 ### P3 · 基建（2 天，可选）
 
-| 任务 | 工时 | 说明 |
-|---|---|---|
-| eslint + prettier + `npm run lint` | 0.5 天 | 巨型文件里未使用变量/依赖数组漏项靠人眼 |
-| vitest 冒烟：`format` / `wordCloudLayout` 纯函数 + 2 个渲染快照 | 1 天 | 词云几何算法（单调性/面积偏差）最值得测 |
-| storybook | — | **不建议**：单应用、无跨端复用，维护成本 > 收益 |
+| 任务 | 工时 | 说明 | 状态 |
+|---|---|---|---|
+| eslint + prettier + `npm run lint` | 0.5 天 | 巨型文件里未使用变量/依赖数组漏项靠人眼 | 🔶 **eslint 已落地（2026-09-13）**：`eslint@8` flat config，**只开行为类 6 条规则**（核心是 `react-hooks/exhaustive-deps`）；首跑 59 文件仅 **1 error + 5 warning**，已清到 **0 warning** 并设 `--max-warnings 0`；5 处故意窄依赖逐条加 disable + 理由。**prettier 未引入**（会一次性重排几乎每个文件、冲掉历史 blame，建议单独一批） |
+| vitest 冒烟：`format` / `wordCloudLayout` 纯函数 | 1 天 | 词云几何算法（单调性/面积偏差）最值得测 | ✅ **已落地（2026-09-13）**：`vitest@2.1.9`（受 Vite 5 peer 约束，非 5.x）+ `src/utils/{format,wordCloudLayout}.test.ts` 共 **29 条**断言；`npm run test`；已并入 `scripts/dev_check.py` 的 `frontend logic` 一项 |
+| 渲染快照（2 个） | — | 需要 jsdom/浏览器环境 | ⬜ 未做（当前只测纯逻辑，不引环境依赖） |
+| storybook | — | **不建议**：单应用、无跨端复用，维护成本 > 收益 | — |
+
+> **为什么先做 vitest 而不是 eslint**：纯函数断言能锁住**行为契约**（面积∝词频、
+> 进位边界、图床改写），而 lint 只锁风格；且 `utils/dateRange.ts` 已有「纯逻辑抽出来
+> 直接跑」的先例（`scripts/check_date_range.mjs`），vitest 是同一思路的正式化。
+> 首个用例即抓到一处真 bug：`POST_TYPE_LABEL` 漏了 v0.9.6 新增的 `system` 类型，
+> 微博「系统」帖在卡片与类型标签上显示原始英文 `system`。
 
 ---
 

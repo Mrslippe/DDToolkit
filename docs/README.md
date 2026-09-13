@@ -2,7 +2,7 @@
 
 > 本目录的**唯一入口**。找东西先看这里：查名词/代码路径 → `GLOSSARY.md`；
 > 看整体设计 → `ARCHITECTURE.md`；改具体模块 → 对应深度文档。
-> 适用版本：`main`（2026-09-09，`MIGRATION_HEAD = e007`）。
+> 适用版本：`main`（2026-09-13，`MIGRATION_HEAD = f003`）。
 
 ## 布局约定
 
@@ -25,7 +25,7 @@
 
 | 文档 | 覆盖 |
 |---|---|
-| `backend-repositories-and-routers.md` | 9 张表列级定义 · 9 个 Repository 方法表 · 47 个 HTTP 端点 · 迁移链 |
+| `backend-repositories-and-routers.md` | 10 张表列级定义 · 10 个 Repository 方法表 · 51 个 HTTP 操作 · 迁移链（17 版本） |
 | `backend-fetch-pipeline.md` | 抓取链路细节：触发入口、锁与让位、API 清单、风控判定、节流测算、停止原因 |
 | `FRONTEND-ARCH.md` | 前端分层（api/hooks/components/pages/styles）、数据流、状态管理 |
 | `UI-MAP.md` | 界面与路由映射：四视图、组件类名、设计令牌、动效与圆角规范 |
@@ -46,7 +46,7 @@
 | `design/` | 用户设计资产：`png/`（LOGO 栅格）、`svg/LOGO.svg`（矢量源）、`react-*/`（Pixso 导出设计稿）、`pills/`、`background/`、`screenshots/`（界面参考截图） |
 | `diagrams/` | 8 张 SVG 架构图（`01_system_architecture` … `08_evolution_timeline`）；由 `tools/gen_diagrams.py` 生成 |
 | `tools/gen_diagrams.py` | 架构图生成脚本（`python docs/tools/gen_diagrams.py`） |
-| `releases/` | `v0.9.1.md` / `v0.9.2.md` 发布说明（发布时被 `scripts/upload_release_assets.py` 读取） |
+| `releases/` | `v0.9.1.md` / `v0.9.2.md` / `v0.9.3.md` / `v0.9.9.md` 发布说明（发布时被 `scripts/upload_release_assets.py` 读取） |
 | `reference/danmakus-api-v2-swagger.json` | danmakus 第三方接口存档（只读参考） |
 
 ## 5. 维护约定

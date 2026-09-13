@@ -102,7 +102,8 @@
 
 ### 3.4 风控状态隔离（ContextVar）
 
-风控标志是**任务上下文**级而不是模块级（`fetcher.py:16-21`）：
+风控标志是**任务上下文**级而不是模块级（`app/services/fetcher.py:17-22`，
+`clear_rate_limit()` 在 `:58`）：
 账号抓取与帖子抓取可能先后运行于同一进程/不同线程，模块级全局变量会导致
 **跨任务污染**（帖子任务的风控被账号任务误读、错误进入冷却）。因此
 `_rate_limit_ctx: ContextVar` 默认 `(False, "")`，进入任务时 `clear_rate_limit()`。
@@ -165,8 +166,8 @@
 - 并发粒度 = 平台（`_run_platform_rounds`）：每轮各就绪平台各抓一个账号，
   平台之间并行、平台内部串行；某平台风控只冷却该平台；
 - 每档周期带抖（`_tier_delay`）；interval<=0 的档位禁用；
-- 两条流都不写 `last_result` 的完成胶囊？——动态流不写（15 分钟弹一次会刷屏），
-  账号流写（一天一次，作为「账号信息已更新」的汇总）；
+- 完成胶囊的写入策略：**动态流不写**（自适应节奏下一轮接一轮、轮间仅 30~80s，
+  每轮弹一次会把顶栏刷满），**账号流写**（约一天一次，作为「账号信息已更新」的汇总）。
 - T0 的进度反馈 = `account-progress` 快照驱动的左右栏徽标（无进度条/无胶囊）；
 - 冲突方向（v0.9.3 定稿）：**手动 > 自动**——自动档起跑时见手动任务即跳过，
   持锁期间见手动请求则轮次断点让位；原 APScheduler 的 5min `fetch_vtubers`
@@ -188,6 +189,12 @@
   ± DYNAMICS_JITTER_SECONDS(15s)`；`DYNAMICS_BUDGET_RPM<=0` 时退回固定
   `DYNAMICS_LATEST_INTERVAL_MINUTES=15min`；
 - 动态流返回 `requests: {platform: n}` 便于观测；风控冷却（按平台 600s）语义不变。
+- **预算按需自适应**（2026-09-13，devlog/055）：本平台生效预算 =
+  `max(DYNAMICS_BUDGET_RPM, 本轮该平台需求数)`，**平台间独立**。动机：固定 12 遇到
+  「单平台主账号数 > 12」时，每轮都装不进窗口 → 空等一个整窗口（13 个 B 站主账号
+  即触发，实测 `cost=12 → 等 0s`、`cost=13 → 等 60s`），把速率压到实际需求的一半以下，
+  而**这并非风控所需**（风控看稳态速率，不看一轮有几个账号）。取「一轮的需求量」为下限
+  只消除退化，稳态速率仍由 60s 滑窗决定；未超预算时行为与旧版完全一致。
 
 **实测**（8 个主账号）：一轮 8 请求 / 33s（下限由平台内 3~5s 节流决定），
 相邻两轮 **80s** ≈ 6 req·min⁻¹ 均值（轮内瞬时 ~14）——比 v0.9.3 的 15 分钟快约 11 倍，
@@ -384,7 +391,7 @@ mymblog?uid=&page=&feature=0         页间 sleep 20s
 
 ## 7. 风控体系
 
-### 7.1 判定代码（`fetcher.py:26-46`）
+### 7.1 判定代码（`app/services/fetcher.py:24-51`；常量在 `:24`，函数体 `:27` 起）
 
 ```python
 RATE_LIMIT_CODES = {-509, -412, -799, 412}
@@ -459,7 +466,7 @@ def _detect_rate_limit(status_code, data=None):
 | `TIER_TICK_SECONDS` | 10 s（综合档心跳） | config.py |
 | `LIVE_POLL_SECONDS` / `_JITTER` | 60 ± 15 s（T0） | config.py |
 | `DYNAMICS_LATEST_INTERVAL_MINUTES` / `_JITTER` | 15 min ± 120 s（动态流；仅预算关闭时生效） | config.py |
-| `DYNAMICS_BUDGET_RPM` | 12 req·min⁻¹（**动态流按平台预算**，v0.9.8；≤0=退回固定周期） | config.py |
+| `DYNAMICS_BUDGET_RPM` | 12 req·min⁻¹（**动态流按平台预算**，v0.9.8；≤0=退回固定周期；单平台需求超此值时该平台生效预算自动抬高，见 §4.3.1） | `app/core/config.py` |
 | `DYNAMICS_MIN_GAP_SECONDS` / `_JITTER_SECONDS` | 30 s / 15 s（自适应轮间间隔下限与抖动） | config.py |
 | `EXTERNAL_STARTUP_CATCHUP_ENABLED` / `_STALE_HOURS` | True / 24 h（启动时外部补抓，v0.9.8） | config.py |
 | `ACCOUNT_SWEEP_STALE_HOURS` | 24 h（账号流数据到期阈值） | config.py |
@@ -468,12 +475,12 @@ def _detect_rate_limit(status_code, data=None):
 | `STARTUP_DYNAMICS_LIMIT` | 2 条/账号（动态流「最新 N 条」） | config.py |
 | `PRIMARY_PLATFORM_ORDER` | `["bilibili", "weibo"]` | config.py |
 | `EXTERNAL_ENABLED` / `EXTERNAL_RUN_HOUR` | True / 3AM | config.py |
-| `MANUAL_PREEMPT_WAIT_SECONDS` | 120 s（手动等自动让位上限） | scheduler.py |
-| `_EXTERNAL_WAIT_SECONDS` | 1800 s（外部批次等手动任务上限） | scheduler.py |
-| `_PAGE_RETRIES` | 2 | scheduler.py |
-| `_POST_BATCH_SIZE` | 50 条/commit | scheduler.py |
-| `RATE_LIMIT_CODES` | {-509, -412, -799, 412} | fetcher.py:23 |
-| WBI `CACHE_TTL` | 1800 s | wbi.py:23 |
+| `MANUAL_PREEMPT_WAIT_SECONDS` | 120 s（手动等自动让位上限） | `scheduler.py:821` |
+| `_wait_for_manual_tasks(timeout_seconds=1800.0)` | 1800 s（外部批次等手动任务上限）——**是函数默认参数，不是模块级常量** | `scheduler.py:725` |
+| `_PAGE_RETRIES` | 2 | `scheduler.py:1234` |
+| `_POST_BATCH_SIZE` | 50 条/commit | `scheduler.py:1133` |
+| `RATE_LIMIT_CODES` | {-509, -412, -799, 412} | `app/services/fetcher.py:24` |
+| WBI `CACHE_TTL` | 1800 s | `app/services/wbi.py:24` |
 | B 站超时 | 15s（任务级 client） | scheduler.py |
 | 详情间隔 | uniform(0.5, 2.0)s | scheduler.py |
 | 视频页间 | 1s | scheduler.py |

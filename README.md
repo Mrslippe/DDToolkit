@@ -12,16 +12,16 @@
 
 ```
 ├─ app/               后端源码（FastAPI 分层）
-│  ├─ routers/        HTTP 路由层（vtuber / auth / img-proxy，47 端点）
-│  ├─ repositories/   SQL 访问层（9 个仓库类，无 ORM 泄漏到路由）
-│  ├─ models/         SQLAlchemy ORM（9 张表：vtubers / accounts / posts / 快照 / 场次 …）
+│  ├─ routers/        HTTP 路由层（vtuber / auth / img-proxy，48 个路由 / 51 个操作）
+│  ├─ repositories/   SQL 访问层（10 个仓库类，无 ORM 泄漏到路由）
+│  ├─ models/         SQLAlchemy ORM（10 张表：vtubers / accounts / posts / 快照 / 场次 / app_meta …）
 │  ├─ schemas/        Pydantic 输入输出模型
 │  ├─ services/       抓取调度（T0–T4 分层）、平台接入、第三方源、认证、WBI、类型引擎、清理
 │  └─ core/           配置（数据目录/环境变量）、数据库引擎与 PRAGMA
-├─ alembic/           数据库迁移链（a001 → e007，启动时自动升级）
+├─ alembic/           数据库迁移链（a001 → f003，启动时自动升级）
 ├─ tests/             pytest 测试（test_auth / test_services / test_vtuber_api / test_weibo 等）
 ├─ scripts/           维护与构建脚本（dev_check、ui_probe、build_backend、collect_release 等）
-├─ devlog/            版本开发日志（001–042，每版本一篇）
+├─ devlog/            版本开发日志（001–053，每批次一篇）
 ├─ docs/              文档：入口见 docs/README.md（术语表 / 架构 / 深度文档 / 指南 / 设计资产）
 ├─ frontend/          前端（Vite + React）+ Tauri 壳（src-tauri）
 ├─ backend_main.py    桌面端后端入口（Tauri 以子进程拉起，含父进程看门狗）
@@ -124,8 +124,8 @@ npm run collect:release --prefix frontend
 > 完整索引见 **`docs/README.md`**（按「入口 / 深度文档 / 指南 / 资产归档」分组）。
 
 - `docs/GLOSSARY.md` — **术语表**：名词 → 含义 → 代码路径 → 依赖（改 bug/做需求先查这里）
-- `docs/ARCHITECTURE.md` — **架构总览**：运行时形态 / 数据模型（9 表 ER）/ 抓取分层与优先级 / 数据来源地图 / 不变量
-- `docs/backend-repositories-and-routers.md` — 表结构 · 9 个 Repository · 47 个 HTTP 端点
+- `docs/ARCHITECTURE.md` — **架构总览**：运行时形态 / 数据模型（10 表 ER）/ 抓取分层与优先级 / 数据来源地图 / 不变量
+- `docs/backend-repositories-and-routers.md` — 表结构 · 10 个 Repository · 51 个 HTTP 操作
 - `docs/backend-fetch-pipeline.md` — 抓取链路详解（频率 / API 清单 / 风控判定与原因 / 节流测算）
 - `docs/UI-MAP.md` — 前端界面与路由映射
 - `docs/DEV-LOOP.md` — 本地开发与机器验证（dev_check / ui_probe）

@@ -67,7 +67,7 @@
 - **迁移链纪律**：新增 alembic 迁移后必须同步更新 `app/main.py` 的 `MIGRATION_HEAD`
   （tests 断言其与 alembic head 一致）
 - 冷启动快路径依赖版本号判断，勿漏 bump
-- 抓取链路改动后跑全量 `pytest`（当前基线 236 passed）
+- 抓取链路改动后跑全量 `pytest`（当前基线 **265 passed**；前端另有 `npm run test` 29 条纯逻辑断言）
 
 ---
 
@@ -302,20 +302,26 @@
       B1.1 cards / B1.2 list / B1.3 archive / B1.4 profile（各自子项）→ B1.5 跨视图联动」，
       四视图平级关系一眼可见。✅ 已落地
 
-#### 未完成项总览（2026-09-10 二次审计：P1–P10 已验收条目之外，余下仅 5 条）
+#### 未完成项总览（2026-09-13 三次审计：P1–P10 已验收条目之外，余下 4 条）
 
 | 未完成项 | 性质 | 阻塞/依赖 |
 |---|---|---|
-| P3 JSONL 归档包导出 | ⏸ 用户主动搁置（等表结构稳定） | P4+ 表结构变动已收敛，可重启 |
+| P3 JSONL 归档包导出 | ⏸ 用户主动搁置（等表结构稳定） | P4+ 表结构变动已收敛（head = `f003`），**可重启** |
 | 场次级「直播内容分析」服务 | 接口已预留、无实现 | 需先定分析口径（独立产品级） |
-| 原始弹幕明细库 / 全量分析 | 暂缓（词云已覆盖当前需求） | 明细存储选型 |
-| 前端分层收敛 P2（拆 `PostsPage`/`LiveCalendar` + 两 hook） | 技术债，无功能影响 | 方案见 `docs/FRONTEND-ARCH.md` §5 |
-| 目录改名 `http-test` → `ddtoolkit` | 纯人工（目录被占用时 Windows 拒绝改名） | 用户手动执行 |
+| 原始弹幕明细库 / 全量分析 | 暂缓（词云已覆盖当前需求） | **通道已实测可用**：`app/services/externals/danmakus.py:13` 记录 `/api/v3/lives/{liveId}/danmakus` 公开免鉴权 + `offset/limit` 分页（max 100000，含弹幕原文/礼物/上舰/SC），仅差落表与前端下钻。⚠️ 但**热词词云已断供**（见下条） |
+| ~~danmakus `extra.wordCloud` 断供~~ → **误判，已更正**（2026-09-13，devlog/061） | ✅ **不存在断供** | `/api/v2/live` 仍返回 **100 个热词**（12/12 场复核）。原结论来自探查脚本**读错嵌套层级**（该接口是双层信封：`data.data.live.extra`）。**已落地**：词云自建作为**兜底**（jieba 分词 + v3 原始弹幕，用户点按钮才拉、不落库）+ UI 五态区分（`upstream`/`upstream_absent`/`self_built`/`no_danmaku`/`fetch_failed`） |
+| P2 词云自建**扩展点**（未接线） | 可选增强 | `count_tokens(extra_words=…)` 与 `JiebaTokenizer.add_words()` 已就绪，但**没有自动灌词**：可按 V 名/企划名自动灌入自定义词典，避免"明前奶绿"被切碎（接线处留了 `ExtraWordsHook`） |
+| 前端分层收敛 P2（拆 `PostsPage`/`LiveCalendar` + 两 hook） | 技术债，无功能影响 | 🔶 **部分完成（2026-09-13）**：`LiveCalendar` 已完成（1182 → **465**，词云/格式化/hook/弹窗四块全部拆出）；**剩余 `PostsPage`**（1247 行，`HeroCardsView`/`PostListView`/`useVtuberActions`）。方案见 `docs/FRONTEND-ARCH.md` §5 |
 
-> 另有三项**用户侧动作**（非代码）：P8-B 交互手感实机验证（拖动阈值/悬浮「+」/弹窗高度/
-> 系统浏览器打开）、P10-A 视觉手感（双月历配色与日期格密度、窄窗表现）、P9-A 历史归并脚本
-> 在真实库执行（`scripts/merge_video_dynamics.py`，先 `--dry-run`）。
-> 发布构建（安装包）待用户决定版本号（当前 `settings.VERSION` 仍 0.9.3，v0.9.4→v0.9.9 六批均已入库未发布）。
+> ✅ **目录改名 `http-test` → `ddtoolkit` 已完成**（仓库现为 `E:\work\Project\DDToolkit`；
+> `4ede9cf` 落地一次性改名脚本 + 登录时计划任务，任务成功后自删）。本条已从待办移除。
+>
+> 另有**用户侧动作**：P8-B 交互手感实机验证（拖动阈值/悬浮「+」/弹窗高度/系统浏览器打开）、
+> P10-A 视觉手感（双月历配色与日期格密度、窄窗表现）、P9-A 历史归并脚本
+> 在真实库执行（`scripts/merge_video_dynamics.py`，先 `--dry-run`；**实测仍可归并 323 条**）。
+>
+> 发布构建：v0.9.9 **已发布**（2026-09-13，`settings.VERSION = 0.9.9`，安装包 + 便携版已在
+> `dist-release/`，GitHub tag `v0.9.9`）。
 
 ---
 
@@ -356,7 +362,7 @@
 | 弹幕分析 | 场次级词云已接入；原始弹幕明细库与全量分析（实质是独立产品）暂缓 | 明细存储 |
 | P2P 分布式交换 | Phase 1 文件交换（依赖 P3 格式+合并语义）→ Phase 2 目录服务 → Phase 3 DHT；需签名 provenance 与隐私 opt-in（贡献即暴露关注列表）；Phase 2+ 可为二创精选提供涌现质量信号 | P3 |
 | 关注流二创精选（作品被看见） | 匹配失败而非曝光不足；二创自带收件人地址（关于哪个 V，受众即该 V 的粉）。详见下方「远期构想」 | stats 历史（P0 积累）|
-| 品牌整理 | ✅ package 名/文档引用已对齐（v0.5.0）；目录改名 http-test → ddtoolkit 待人工执行（目录被占用时 Windows 拒绝改名） | — |
+| 品牌整理 | ✅ package 名/文档引用已对齐（v0.5.0）；**目录改名 http-test → ddtoolkit 已完成**（`4ede9cf`，仓库现为 `E:\work\Project\DDToolkit`） | — |
 
 ## 远期构想：让作品被看见（二创发现）
 

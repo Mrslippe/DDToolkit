@@ -30,8 +30,12 @@ python scripts/dev_check.py --full      # = --frozen --portable
 
 它做三件事：
 
-1. `pytest tests/` —— 204 个用例的回归网（含 B 站扫码四态、同名 cookie 冲突、
+1. `pytest tests/` —— 266 个用例的回归网（含 B 站扫码四态、同名 cookie 冲突、
    账号白名单回填、首启标记等回归用例）；
+   **另加前端三条**：`npm run lint`（eslint，`--max-warnings 0`）、
+   `npm run test`（vitest，纯函数单测）、`npm run check:dates`（日期区间 30 条断言）
+   —— 已并入 `dev_check.py` 的 `frontend logic` 一项；缺 `frontend/node_modules`
+   时显式打印 `[skip]` 而非静默通过；
 2. **空数据目录**起后端（源码或冻结 exe）→ 验 `/healthz` + 扫码状态机
    （`qr/start` → 连续 `qr/check` 必须停在 `waiting`，防「读错 code 字段」回归）；
 3. 需要时重打便携 zip。
@@ -58,7 +62,13 @@ python scripts/ui_probe.py --width 1100             # 指定宽度
 python scripts/ui_probe.py --height 680             # 矮窗（视口 ≈541）：验弹窗高度兜底路径
 python scripts/ui_probe.py --shot                    # 额外每档宽度存一张「筛选弹窗打开态」图
 python scripts/ui_probe.py --archive                 # 只跑一档：dump 直播日历每格实渲染 + 最近一场详情弹窗内容
-python scripts/ui_probe.py --first-run --width 1100 # 空数据目录：验首启登录浮窗
+python scripts/ui_probe.py --first-run --width 1100 # 空数据目录：验首启登录浮窗（走独立契约，不做布局断言）
+python scripts/ui_probe.py --vtuber 15 --width 1280  # 指定 V（默认取列表第一条）——用于命中多平台药丸等特定数据形态
+python scripts/ui_probe.py --hero-print --vtuber 15  # 只打印 cards 视图 hero 药丸签名与实测明细（建立基线用）
+python scripts/ui_probe.py --hero-expect <sha256>    # 位级回归：hero 药丸签名必须与基线一致，否则退出 1
+python scripts/ui_probe.py --archive --archive-print --vtuber 15      # 取「日历格内文本」基线（A-2 取数链路护栏）
+python scripts/ui_probe.py --archive --calendar-expect <sha256> --vtuber 15  # 重构后比对日历格签名
+python scripts/ui_probe.py --archive --archive-day 11 --vtuber 14    # 点指定日号的格子（最近一场常未收录弹幕/热词）
 ```
 
 它自动：复制开发数据目录 → 起后端 → 起 Vite → 无头浏览器加载
@@ -68,7 +78,7 @@ python scripts/ui_probe.py --first-run --width 1100 # 空数据目录：验首�
 
 | 不变量 | 含义 |
 |---|---|
-| **探针完整性**（2026-09-11 加固）| **「跑通了」必须等于「量到了」**：量测段数须等于契约序列（`EXPECTED_TAGS`，八段）、不得量到空置页（`empty`）、页面自报的 `degraded`（视图钮点不中 / 投稿 chip 缺失 / 无视图光条）一律判失败。此前 `_first_vtuber` 一失败路由就落到 `/`，探针只 emit 一段 `empty`、**所有卡片与筛选断言静默空转，脚本照旧打印 `[ok]` 退出 0**（静态审计 2026-09-11 点出的假通过路径） |
+| **探针完整性**（2026-09-11 两轮加固）| **「跑通了」必须等于「量到了」**：量测段数须等于契约序列（`EXPECTED_TAGS`，八段）、不得量到空置页（`empty`）、页面自报的 `degraded`（视图钮点不中 / 投稿 chip 缺失 / 无视图光条）一律判失败。此前 `_first_vtuber` 一失败路由就落到 `/`，探针只 emit 一段 `empty`、**所有卡片与筛选断言静默空转，脚本照旧打印 `[ok]` 退出 0**（静态审计 2026-09-11 点出的假通过路径）。<br>**第二轮（同日）补掉剩余 5 处空转**：顶栏未采到（`ok=false`）现按契约失败、`overflowing`/`scrollers` 缺键不再当空列表、`cards.innerMaxW` 为 `null` 判失败、卡片段无内容时报「未量到」 |
 | `scrollbarPx == [0,0]` | 文档层永不出现滚动条（窗口级滚动条 = 内容宽度跳 12px 的根源） |
 | 无可见出窗元素 | 没有元素越过窗口左右缘（被 `overflow:hidden` 裁掉的折叠组不算） |
 | 无容器横向溢出 | `overflow-x:auto/scroll` 容器不得 `scrollWidth > clientWidth`（白名单：`.type-chips` 有意横滚） |
@@ -89,9 +99,31 @@ python scripts/ui_probe.py --first-run --width 1100 # 空数据目录：验首�
 > **`--archive`（内容类排查）**：把直播日历每格的**实渲染文本**与「最近一场详情弹窗」
 > 的弹幕/词云/动态行数落进探针 JSON 并打印——内容缺失类问题（不是布局）靠它定位，
 > 2026-09-10 修「近期场次详情空白」（devlog/052）即用它做的端到端复验。
+>
+> ⚠️ `--archive` 固定点「**最近一场**」：若最近一场刚下播、danmakus 还没收录，会量到
+> `弹幕行 [] / 词云格 0` 并显示「第三方收录中」占位 —— 此时它**什么都没验证**却仍然退出 0。
+> 要确认词云/弹幕实渲染，先用 `--vtuber <id>` 选一个近期有收录的 V，或等收录后再跑。
+>
+> **`--hero-expect`（位级回归护栏）**：cards 视图的平台药丸（数量 / 每集切分 / 逐枚
+> `索引:色系:展示数值` 顺序）哈希后比对。加它的原因很具体：2026-09-13 的 P2 批次把
+> `orderAccounts`（拖拽排序）/ `chunkBy`（每 3 枚切集）/ `accountHomeUrl`（主页兜底）
+> 搬出了 `PostsPage`，而**布局不变量对「药丸少一排 / 顺序变了 / 切集错了」完全无感**
+> —— 那正是"搬坏了但探针全绿"的形态。改这三段逻辑前后各跑一次比对即可（见 devlog/056）。
+>
+> **`--calendar-expect`（位级回归护栏）**：日历 42 格 `day|badge|body` 的 sha256，
+> 覆盖「**取数 → 分类 → 渲染**」这条链路 —— 拆 `useLiveSessions`（A-2）时布局不变量
+> **完全覆盖不到**它（搬坏了表现为"某些天没内容了 / 月份错位"，不是元素出窗）。
+> 见 devlog/057。
+> ⚠️ 两个签名都**受真实数据变化影响**（粉丝数、新场次入库、danmakus 收录延迟、分类校正），
+> 只适合**「重构前后立刻各跑一次」的短窗口比对**，不要当长期稳定基线。
 
 `--first-run` 额外断言：空数据目录下 `?firstRun=1` 必须**自动弹出登录浮窗**，
 且浮窗内含「凭据仅保存在本机」说明。
+
+> ⚠️ `--first-run` 走**独立契约**（探针用 `?probe=first-run`，只断言浮窗，不做布局断言）：
+> 空数据目录下页面落在 `/`、**本来就没有视图光条**，若照常走四视图量测会被判「量到空置页 +
+> 缺八段」三条失败 —— 那是 2026-09-11 第一轮加固引入的**必然假失败**（该命令曾恒退出 1），
+> 第二轮修掉。
 
 ⚠️ 需要完整权限（Vite 的 esbuild 与无头浏览器在受限沙箱会失败）；失败时保留
 `_ui_probe_tmp/`（含 DOM dump 与截图用的 profile 目录）供定位。`--shot` 存图

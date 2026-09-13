@@ -1,9 +1,9 @@
 # 后端架构总览：数据模型 + 抓取技术架构
 
-> 适用版本：`main`（2026-09-10，`MIGRATION_HEAD = f003`）。
+> 适用版本：`main`（2026-09-11，`MIGRATION_HEAD = f003`）。
 > 本文是**入口文档**：先看这里建立全貌，再按需进两份深度文档——
 > - `docs/GLOSSARY.md`：**查名词/代码路径**（改 bug 或做需求第一步）；
-> - `docs/backend-repositories-and-routers.md`：9 张表的列级定义、9 个仓储类、47 个 HTTP 端点；
+> - `docs/backend-repositories-and-routers.md`：10 张表的列级定义、10 个仓储类、51 个 HTTP 操作；
 > - `docs/backend-fetch-pipeline.md`：抓取链路细节（API 清单、节流测算、风控判定、停止原因）。
 > 前端形态见 `docs/UI-MAP.md`；本地开发/验证见 `docs/DEV-LOOP.md`；全部文档索引见 `docs/README.md`。
 
@@ -30,14 +30,14 @@ flowchart TB
   subgraph S["Python sidecar（backend_main.py）"]
     BM["资源引导 vtubers.csv<br/>父进程看门狗<br/>uvicorn Server API（bind 后就绪）"]
     BM --> APP["FastAPI app（app/main.py）<br/>lifespan：迁移 → 调度器 → auth 维护"]
-    APP --> HTTP["HTTP API 事件循环<br/>47 端点 / 手动抓取 / BackgroundTasks"]
+    APP --> HTTP["HTTP API 事件循环<br/>48 个路由 / 51 个操作 / 手动抓取 / BackgroundTasks"]
     APP --> T0["T0 线程：直播轮询 60s<br/>批量接口，不占锁"]
-    APP --> TIER["分层调度线程：T1/T2/T3a<br/>asyncio.run 逐档执行"]
+    APP --> TIER["综合档调度线程：动态流 + 账号流<br/>asyncio.run 同档并发"]
     APP --> APS["APScheduler 线程：T4 外部数据<br/>每日 3AM / 每周"]
     APP --> AUTH["auth 维护协程<br/>B 站 cookie 续期"]
   end
 
-  S --> DB[("SQLite vtuber.db（WAL）<br/>9 张表 / alembic a001→e007")]
+  S --> DB[("SQLite vtuber.db（WAL）<br/>10 张表 / alembic a001→f003")]
   S --> FS["DATA_DIR/static：头像 / 自定义背景 / 图片代理缓存"]
   HTTP --> UI["前端 Vite + React（只读渲染 + 轮询 fetch-status）"]
 ```
@@ -61,7 +61,7 @@ tenacity / httpx / fetcher），经 `_sched()` 缓存包装首次调用才导入
 
 ---
 
-## 2. 数据模型（9 张表 · 迁移链 a001 → e007）
+## 2. 数据模型（10 张表 · 迁移链 a001 → f003）
 
 ### 2.1 ER 总览
 
@@ -146,6 +146,11 @@ erDiagram
     string group_name
     string source
   }
+  APP_META {
+    string key PK
+    text value
+    datetime updated_at
+  }
 ```
 
 ### 2.2 表职责
@@ -153,7 +158,7 @@ erDiagram
 | 表 | 定位 | 关键约束 / 索引 | 写入方 |
 |---|---|---|---|
 | `vtubers` | 主播本体（平台无关）：名字/阵营/生日/出道日/设定/默认头像/自定义背景 | `ix_vtubers_name` | 手动 CRUD、候选池收录 |
-| `accounts` | 各平台账号：昵称/头像/签名/粉丝数/直播字段/`last_fetched_at`/`posts_last_scan_at` | **UNIQUE(platform, platform_uid)**；`ix_accounts_vtuber_id` | 收录/加账号、T0/T1/T3a 抓取回写 |
+| `accounts` | 各平台账号：昵称/头像/签名/粉丝数/直播字段/`last_fetched_at`/`posts_last_scan_at` | **UNIQUE(platform, platform_uid)**；`ix_accounts_vtuber_id` | 收录/加账号、T0/综合档抓取回写 |
 | `posts` | 动态 / 投稿 / 专栏 / 转发 / 音乐 / 直播卡片（直播卡片转存后不入表） | **UNIQUE(platform, platform_uid, platform_post_id)**；复合索引 `(platform, platform_uid, published_at)`、`ix_posts_published_at`、`ix_posts_deleted_detected` | 帖子抓取（批量攒批 commit） |
 | `account_stat_snapshots` | 粉丝数 / 直播状态时间序列（涨粉趋势、直播日历的地基） | `ix_..._account_id`、`ix_..._captured_at`；`source` 区分自采/第三方 | 每次账号抓取成功后追加一行 |
 | `live_sessions` | 直播场次（标题/起止/分区/封面/收益/弹幕数） | **UNIQUE(account_id, live_id)**；`ix_live_sessions_account_start` | danmakus 回填、B 站 `feed` 直播卡片、读取时并入 self 快照 |
@@ -161,6 +166,7 @@ erDiagram
 | `live_category_overrides` | 用户对场次分类的手工校正（9 类引擎最高优先级信号） | **UNIQUE(account_id, live_id)** | 前端分类下拉 |
 | `vtuber_events` | 手动维护的纪念日 / 活动（一次性日期） | `ix_vtuber_events_vtuber_date` | 前端增删 |
 | `thirdparty_vtubers` | 第三方 VTuber 索引（企划 / 公会），供候选池搜索增强 | **UNIQUE(source, platform_uid)** | danmakus vup-list（周级整表刷新） |
+| `app_meta` | 通用 KV（进程外需要记住的少量状态，如 `external.startup.last_run`） | `key` 主键 | 启动外部补抓时间戳（f003） |
 
 ### 2.3 迁移链与启动迁移
 
@@ -172,12 +178,16 @@ erDiagram
 | `c002` | 唯一约束改为 (platform, uid, pid) | `e004` | 外部源：`thirdparty_vtubers` / `live_gift_days` + 快照 `source` |
 | `d001` | `vtubers.faction` + 3 个热路径索引 | `e005` | `vtuber_events` |
 | `d002` | `vtubers.background_path` | `e006` | `live_sessions` |
-| | | `e007` | `live_category_overrides` |
+| `f001` | `posts.note`（投稿动态并入后的 UP 主附言） | `e007` | `live_category_overrides` |
+| `f002` | `accounts.sort_order` + `accounts.locked_fields` | **`f003`** | **`app_meta`（KV 表）= 当前 head** |
+
+> 共 **17** 个版本（`alembic/versions/` 实际文件数）。f001–f003 由 v0.9.6–v0.9.8 批次引入。
 
 启动迁移四形态（`app/main.py::_run_migrations`，冷启动快路径）：
 
 1. **全新库**（无任何表）→ `alembic upgrade head`；
-2. **旧库**（有表无 `alembic_version`）→ 补列补索引后 `stamp head`；
+2. **旧库**（有表无 `alembic_version`）→ 补列补索引后 `stamp head`（⚠️ 补不了唯一约束，
+   故 `stamp` 前先过 `app/main.py::_missing_unique_keys`，不一致**拒绝启动**，见 devlog/053）；
 3. **落后版本** → `upgrade head` 增量升级；
 4. **版本 == `MIGRATION_HEAD`** → 直接返回，零 alembic 开销。
 
@@ -399,7 +409,7 @@ flowchart LR
 | 目录 | 职责 | 约定 |
 |---|---|---|
 | `app/routers/` | HTTP 契约、状态码语义（404/409/415/413）、`Depends(get_db)` | 不写 SQL；抓取类端点做忙判定 |
-| `app/repositories/` | 按仓库类持会话（9 个 Repo），批量删除/分页/统计等 SQL | 写操作当场 commit；`PostRepo.create(commit=False)` 供批量入库 |
+| `app/repositories/` | 按仓库类持会话（10 个 Repo），批量删除/分页/统计等 SQL | 写操作当场 commit；`PostRepo.create(commit=False)` 供批量入库 |
 | `app/models/` | SQLAlchemy 2.0 ORM（单文件 9 表） | 唯一约束/索引与迁移链一致 |
 | `app/schemas/` | Pydantic 输入输出模型 | `Out` 用 `from_attributes` |
 | `app/services/` | 调度、抓取、平台适配、第三方源、认证、类型引擎、墓碑、清理 | 不碰 HTTP；重依赖延迟 import |

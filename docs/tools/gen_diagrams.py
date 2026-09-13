@@ -171,7 +171,7 @@ def table_box(x, y, w, title, rows, fill, stroke, tcolor, unique_note=None):
 
 
 def d2():
-    body = [text(60, 46, "SQLite 数据模型（9 表 · alembic a001→e007 · 2026-09-09）", size=18, fill="#1F3A5F", weight=700)]
+    body = [text(60, 46, "SQLite 数据模型（10 表 · alembic a001→f003 · 2026-09-13）", size=18, fill="#1F3A5F", weight=700)]
     body.append(text(60, 72, "posts 刻意不带外键：以 (platform, platform_uid) 与 accounts 逻辑关联，联合投稿视频在每个 VTuber 下各存一份", size=12, fill="#5B6B7C"))
     body.append(text(60, 92, "accounts 之下的 4 张子表有外键但无 ORM 级联（foreign_keys=ON）——删 V/删账号必须经 app/services/purge.py 显式清理", size=12, fill="#B04747"))
 
@@ -236,6 +236,16 @@ def d2():
                        "#FEF7E7", "#F0B429", "#8A5A0B",
                        unique_note="UNIQUE(account_id, live_id)")
     body.append(tb9)
+
+    # app_meta（f003）：通用 KV，无外键，独立于业务表 —— 放在中列 posts 之下。
+    # 高度 = 40 + 3*20 = 100（812 → 912），legend 从 y=960 起，不重叠。
+    tb10, _ = table_box(450, 812, 360, "app_meta — 通用 KV",
+                        ["key · PK", "value · TEXT",
+                         "updated_at · 最近写入"],
+                        "#EEF7F1", "#27AE60", "#1E6B3C")
+    body.append(tb10)
+    body.append(text(630, 940, "无外键：存「进程外需要记住的少量状态」，如 external.startup.last_run",
+                     size=11, anchor="middle", fill="#1E6B3C"))
 
     # vtubers → accounts（级联）
     body.append(line(360, 210, 446, 210, marker="arr", color="#2F6FAD", sw=2))

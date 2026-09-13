@@ -52,8 +52,9 @@
 
 ## 2. 数据模型与字段
 
-**9 张表**：`vtubers` / `accounts` / `posts` / `account_stat_snapshots` / `live_sessions` /
-`live_gift_days` / `live_category_overrides` / `vtuber_events` / `thirdparty_vtubers`。
+**10 张表**：`vtubers` / `accounts` / `posts` / `account_stat_snapshots` / `live_sessions` /
+`live_gift_days` / `live_category_overrides` / `vtuber_events` / `thirdparty_vtubers` /
+`app_meta`（通用 KV，f003）。
 列级定义见 `docs/backend-repositories-and-routers.md` §1；ER 图见 `docs/ARCHITECTURE.md` §2。
 
 | 字段/术语 | 含义 | 写入方 | 关联 |
@@ -150,8 +151,9 @@
 
 | 术语 | 含义 | 代码位置 | 关联 |
 |---|---|---|---|
-| **迁移链 / MIGRATION_HEAD** | alembic `a001→e007`；`MIGRATION_HEAD` 必须同步 | `alembic/versions/`、`app/main.py::MIGRATION_HEAD` | 测试断言一致 |
+| **迁移链 / MIGRATION_HEAD** | alembic `a001→f003`（17 个版本）；`MIGRATION_HEAD` 必须同步 | `alembic/versions/`、`app/main.py::MIGRATION_HEAD` | 测试断言一致 |
 | **启动迁移四形态** | 全新库 upgrade / 旧库 stamp / 落后增量 / 已最新快路径 | `app/main.py::_run_migrations` | 冷启动优化 |
+| **旧库桥接守卫** | 桥接补不了唯一约束 → 不一致**拒绝启动**（不写假 head 承诺） | `app/main.py::_missing_unique_keys` | devlog/053 |
 | **冻结后端 / frozen** | PyInstaller onedir 打包的 sidecar（`_MEIPASS` 定位资源） | `scripts/build_backend.py`、`backend_main.py`、`app/core/config.py::PROJECT_ROOT` | 资源打平事故见 devlog/036 |
 | **sidecar 就绪信号** | `DDTOOLKIT_READY <url>` + `logs/sidecar.log` 性能打点 | `backend_main.py` | Tauri 启动器据此等就绪 |
 | **父进程看门狗** | 壳退出后后端自尽 | `backend_main.py::_watch_parent` | 防孤儿进程 |
@@ -170,7 +172,7 @@
 |---|---|---|
 | `DATA_DIR` | `DDTOOLKIT_DATA_DIR` 或项目根 | 数据库/日志/凭据/静态资源根目录 |
 | `DATABASE_URL` | `sqlite:///<DATA_DIR>/vtuber.db` | SQLite 连接串 |
-| `VERSION` | `0.9.2` | 版本号（与 5 处同步） |
+| `VERSION` | `0.9.9` | 版本号（与 5 处同步） |
 | `REQUEST_INTERVAL_MIN/MAX` | 3.0 / 5.0 s | 账号抓取每账号间隔 |
 | `MANUAL_FAST_INTERVAL_MIN/MAX` | 0.5 / 1.0 s | 收录/单V 的账号间隔（只在账号之间生效） |
 | `FIRST_SCREEN_VIDEO_PAGES` / `_DYNAMICS_PAGES` / `_DYNAMICS_LIMIT` | 1 / 1 / 3 | 收录首屏抓取规模 |

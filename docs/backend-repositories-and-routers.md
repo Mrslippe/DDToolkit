@@ -1,6 +1,6 @@
 # 数据层与接口层文档（数据库 · Repositories · Routers）
 
-> 适用版本：`main`（2026-09-11，`MIGRATION_HEAD = f003`，迁移链 16 个版本、10 张表、51 个 HTTP 操作）。
+> 适用版本：`main`（2026-09-11，`MIGRATION_HEAD = f003`，迁移链 17 个版本、10 张表、51 个 HTTP 操作）。
 > 阅读路径：HTTP 入口（`app/routers`）→ SQL 封装（`app/repositories`）→ 表映射（`app/models`）→ 迁移（`alembic/versions`）。
 > 系统全貌见 `docs/ARCHITECTURE.md`；抓取链路细节见 `docs/backend-fetch-pipeline.md`；
 > 名词与代码路径速查见 `docs/GLOSSARY.md`；文档索引见 `docs/README.md`。
