@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   AlignJustify,
@@ -21,9 +21,11 @@ import { api, resolveAsset } from '../api/api'
 import { useFetchBusy } from '../fetchBusy'
 import type { Account, AccountSnapshot, Post, PostStats, VTuber } from '../api/types'
 import { mergeAccountSnapshots, mergeVtuberSnapshots } from '../utils/accountSnapshots'
+import { affectsFanTrend, onFetchIdle } from '../utils/fetchIdle'
 import { typeGroupsFor } from '../utils/postTypes'
 import { pill } from '../utils/pill'
 import { useVtuberActions } from './useVtuberActions'
+import { useSceneTransition } from '../hooks/useSceneTransition'
 import PostDetailDrawer from '../components/PostDetailDrawer'
 import AddAccountDialog from '../components/AddAccountDialog'
 import VtuberSettingsDialog from '../components/VtuberSettingsDialog'
@@ -39,9 +41,6 @@ import type { ArchivedFilter } from '../components/PostFilterPop'
 import './../styles/posts.css'
 
 const PAGE_SIZE = 20
-
-/** 场景退场时长（ms）：与 layout.css `.scene-exit` 的 0.2s 保持同步 */
-const EXIT_MS = 200
 
 /** 视图枚举（P7 追加 profile：档案卡详情视图） */
 type AppView = 'cards' | 'list' | 'archive' | 'profile'
@@ -144,177 +143,122 @@ export default function PostsPage() {
   }, [])
 
   // 抓取/更新任务完成（fetch-idle 边沿）→ 重置回第一页（无限滚动选型 A）：
-  // setPage(1) 保证重拉走「替换」而非「追加」，新内容从顶部呈现
+  // setPage(1) 保证重拉走「替换」而非「追加」，新内容从顶部呈现。
+  //
+  // R2 第二步（devlog/080）：事件现在带 `kinds`（谁跑完了）。列表/卡片/日历对三类都敏感
+  // （动态流会落新帖、也可能落**直播卡片 → 场次**），所以照旧全刷；
+  // 只有**粉丝趋势**不吃 `posts` 类 —— 动态流每 60~80s 一轮，之前它每轮都被重取 + 重建
+  // ECharts（纯属白干）。这里给出独立的 `trendTick`，见下方渲染处的分工注释。
   const [refreshTick, setRefreshTick] = useState(0)
-  useEffect(() => {
-    const handler = () => {
-      setPage(1)
-      setRefreshTick((t) => t + 1)
-    }
-    window.addEventListener('ddtoolkit:fetch-idle', handler)
-    return () => window.removeEventListener('ddtoolkit:fetch-idle', handler)
-  }, [])
+  const [trendTick, setTrendTick] = useState(0)
+  useEffect(
+    () =>
+      onFetchIdle((kinds) => {
+        setPage(1)
+        setRefreshTick((t) => t + 1)
+        if (affectsFanTrend(kinds)) setTrendTick((t) => t + 1)
+      }),
+    [],
+  )
 
   // ── 场景切换：预取门控 + 原子提交（退出 → 进入，无缓冲占位相）──
-  // 账号目标变化：并行预取新 V 三件套（信息/第1页帖子/统计），旧内容冻结可见；
-  // 数据就绪才启动 fall-out，EXIT_MS 后一次性应用预取数据完成切换——
-  // 全程无「正在加载」闪帧。仅视图变化无数据依赖，立即退场。
-  // 快速连点：中止旧预取、回退退场（旧内容回到可见），新目标就绪后重来。
-  const [scene, setScene] = useState<{
-    acc: number
-    view: AppView
-    exiting: boolean
-  }>({ acc: vtuberId, view, exiting: false })
-  const [prefetchTick, bumpPrefetchReady] = useState(0)
-  const prefetchRef = useRef<{
-    acc: number
-    controller: AbortController
-    done: boolean
-    failed?: string
-    vtuber?: VTuber
-    account?: Account | null
-    posts?: Post[]
-    total?: number
-    stats?: PostStats | null
-  } | null>(null)
+  // 机器本体已抽到 `hooks/useSceneTransition`（devlog/080）；这里只保留两件"页面自己的事"：
+  //   ① `prefetchScene`：预取什么（新 V 本体 + list 目标时的第 1 页帖子与统计，恒以重置态拉取）；
+  //   ② `commitScene` / `failScene`：提交时一次性写哪些 state、失败怎么清空。
   const seededPostsKeyRef = useRef<string | null>(null)
   const vtuberLoadedRef = useRef('')
   // 提交时取最新筛选值（定时器闭包可能过期）
   const filterRef = useRef({ refreshTick, typeFilter, archived, deletedOnly, searchKw, dateFrom, dateTo })
   filterRef.current = { refreshTick, typeFilter, archived, deletedOnly, searchKw, dateFrom, dateTo }
 
-  const startPrefetch = (acc: number, targetView: AppView) => {
-    const pf = prefetchRef.current
-    if (pf && pf.acc === acc) return // 同目标：在途或已就绪，复用
-    const controller = new AbortController()
-    const entry: NonNullable<typeof prefetchRef.current> = { acc, controller, done: false }
-    prefetchRef.current = entry
-    const alive = () => prefetchRef.current === entry
-    const finish = () => {
-      if (!alive()) return
-      entry.done = true
-      bumpPrefetchReady((x) => x + 1)
-    }
-    api
-      .getVtuber(acc)
-      .then((v) => {
-        if (!alive()) return
-        entry.vtuber = v
-        const accounts = v.accounts.filter((a) => a.platform_uid)
-        entry.account = accounts[0] ?? null
-        const acc0 = entry.account
-        if (!acc0) {
-          finish()
-          return
-        }
-        const jobs: Promise<unknown>[] = []
-        if (targetView === 'list') {
-          // 预取帖子恒以「重置态（默认筛选）」拉取：用户反馈 2026-09-05——
-          // 筛选状态按 VTuber/账号隔离（切换即重置），预取若沿用旧账号残留
-          // 筛选会与提交后重置态错配（种子误消费）。筛选字段不读 filterRef。
-          jobs.push(
-            api
-              .listPosts(
-                acc0.platform,
-                acc0.platform_uid,
-                {
-                  page: 1,
-                  page_size: PAGE_SIZE,
-                  type: undefined,
-                  is_archived: undefined,
-                  is_deleted: undefined,
-                  q: undefined,
-                  date_from: undefined,
-                  date_to: undefined,
-                },
-                controller.signal,
-              )
-              .then((p) => {
-                if (alive()) {
-                  entry.posts = p.items
-                  entry.total = p.total
-                }
-              }),
-            api
-              .postStats(acc0.platform, acc0.platform_uid)
-              .then((s) => {
-                if (alive()) entry.stats = s
-              })
-              .catch(() => {}),
-          )
-        }
-        Promise.all(jobs).then(finish, finish)
-      })
-      .catch((e: Error) => {
-        if (!alive()) return
-        entry.failed = e.message || '加载失败'
-        finish()
-      })
+  /** 预取结果（场景提交时一次性应用） */
+  type SceneData = {
+    vtuber: VTuber
+    account: Account | null
+    posts?: Post[]
+    total?: number
+    stats?: PostStats | null
   }
 
-  useEffect(() => {
-    const accChanged = scene.acc !== vtuberId
-    const viewChanged = scene.view !== view
-    if (!accChanged && !viewChanged && !scene.exiting) return
+  const prefetchScene = async (
+    acc: number,
+    targetView: AppView,
+    signal: AbortSignal,
+  ): Promise<SceneData> => {
+    const v = await api.getVtuber(acc)
+    const accounts = v.accounts.filter((a) => a.platform_uid)
+    const account = accounts[0] ?? null
+    const data: SceneData = { vtuber: v, account, stats: null }
+    if (!account || targetView !== 'list') return data
+    // 预取帖子恒以「重置态（默认筛选）」拉取：用户反馈 2026-09-05——
+    // 筛选状态按 VTuber/账号隔离（切换即重置），预取若沿用旧账号残留
+    // 筛选会与提交后重置态错配（种子误消费）。筛选字段不读 filterRef。
+    const [page, stats] = await Promise.all([
+      api.listPosts(
+        account.platform,
+        account.platform_uid,
+        {
+          page: 1,
+          page_size: PAGE_SIZE,
+          type: undefined,
+          is_archived: undefined,
+          is_deleted: undefined,
+          q: undefined,
+          date_from: undefined,
+          date_to: undefined,
+        },
+        signal,
+      ),
+      api.postStats(account.platform, account.platform_uid).catch(() => null),
+    ])
+    data.posts = page.items
+    data.total = page.total
+    data.stats = stats
+    return data
+  }
 
-    // 仅视图变化：无数据依赖，立即退场 → 提交
-    if (!accChanged) {
-      setScene((s) => (s.exiting ? s : { ...s, exiting: true }))
-      const t = setTimeout(() => {
-        prefetchRef.current = null
-        setScene({ acc: vtuberId, view, exiting: false })
-      }, EXIT_MS)
-      return () => clearTimeout(t)
-    }
-
-    // 账号变化：预取门控
-    startPrefetch(vtuberId, view)
-    const pf = prefetchRef.current
-    const ready = !!pf && pf.acc === vtuberId && pf.done
-    if (!ready) {
-      // 未就绪：旧内容保持可见冻结（若在退场中先回退），等预取完成信号重入门控
-      setScene((s) => (s.exiting ? { ...s, exiting: false } : s))
-      return
-    }
-    setScene((s) => (s.exiting ? s : { ...s, exiting: true }))
-    const t = setTimeout(() => {
-      const entry = prefetchRef.current
+  const sceneTransition = useSceneTransition<SceneData, AppView>({
+    vtuberId,
+    view,
+    prefetch: prefetchScene,
+    onCommit: (d, ctx) => {
       const f = filterRef.current
-      if (entry && entry.acc === vtuberId && entry.vtuber && !entry.failed) {
-        // 原子提交：一次性应用预取数据，退出与进入之间无任何占位帧
-        setVtuber(entry.vtuber)
-        setSelectedAccount(entry.account ?? null)
-        setStats(entry.stats ?? null)
-        setError(null)
-        setPage(1)
-        if (view === 'list' && entry.account && entry.posts) {
-          setPosts(entry.posts)
-          setTotal(entry.total ?? 0)
-          seededPostsKeyRef.current = `${entry.account.platform}:${entry.account.platform_uid}:${f.refreshTick}:1:${f.typeFilter ?? ''}:${f.archived}:${f.deletedOnly ? 1 : 0}:${f.searchKw}:${f.dateFrom}:${f.dateTo}`
-          setLoading(false)
-        } else {
-          // cards 目标不预取帖子；或 list 但帖子未就绪 → 交回 posts effect 正常加载
-          setPosts([])
-          setTotal(0)
-          setLoading(view === 'list')
-        }
-        vtuberLoadedRef.current = `${vtuberId}:${f.refreshTick}`
+      // 原子提交：一次性应用预取数据，退出与进入之间无任何占位帧
+      setVtuber(d.vtuber)
+      setSelectedAccount(d.account)
+      setStats(d.stats ?? null)
+      setError(null)
+      setPage(1)
+      if (ctx.view === 'list' && d.account && d.posts) {
+        setPosts(d.posts)
+        setTotal(d.total ?? 0)
+        seededPostsKeyRef.current = `${d.account.platform}:${d.account.platform_uid}:${f.refreshTick}:1:${f.typeFilter ?? ''}:${f.archived}:${f.deletedOnly ? 1 : 0}:${f.searchKw}:${f.dateFrom}:${f.dateTo}`
+        setLoading(false)
       } else {
-        // 预取失败：清空走错误占位（body 内联显示）
-        setPage(1)
+        // cards 目标不预取帖子；或 list 但帖子未就绪 → 交回 posts effect 正常加载
         setPosts([])
         setTotal(0)
-        setStats(null)
-        setVtuber(null)
-        setSelectedAccount(null)
-        setError(entry?.failed ?? '加载失败')
-        setLoading(false)
+        setLoading(ctx.view === 'list')
       }
-      prefetchRef.current = null
-      setScene({ acc: vtuberId, view, exiting: false })
-    }, EXIT_MS)
-    return () => clearTimeout(t)
-  }, [vtuberId, view, scene.acc, scene.view, scene.exiting, prefetchTick])
+      vtuberLoadedRef.current = `${ctx.vtuberId}:${f.refreshTick}`
+    },
+    onFail: (message) => {
+      // 预取失败：清空走错误占位（body 内联显示）
+      setPage(1)
+      setPosts([])
+      setTotal(0)
+      setStats(null)
+      setVtuber(null)
+      setSelectedAccount(null)
+      setError(message ?? '加载失败')
+      setLoading(false)
+    },
+  })
+  const scene = {
+    acc: sceneTransition.sceneAcc,
+    view: sceneTransition.sceneView as AppView,
+    exiting: sceneTransition.exiting,
+  }
 
   // 加载 VTuber 与默认账号。
   // refreshTick（fetch-idle 边沿）时重拉本体，让抓取期间点开的 V 在完成
@@ -710,10 +654,13 @@ return (
               accountId={heroAcc?.id ?? null}
               refreshTick={refreshTick}
             />
-            {/* 第二步 = 粉丝趋势卡（参考图 + 项目粉系；Brush 缩放 + 默认 30 天窗口） */}
+            {/* 第二步 = 粉丝趋势卡（参考图 + 项目粉系；Brush 缩放 + 默认 30 天窗口）。
+                ⚠️ 用 `trendTick` 而不是 `refreshTick`（R2 第二步，devlog/080）：
+                趋势只由**账号快照**与**第三方粉丝历史**驱动，帖子/动态流写不到它 ——
+                而动态流每 60~80s 一轮，用 refreshTick 就是每轮白重取 + 白重建 ECharts。 */}
             <FanTrendChart
               accountId={heroAcc?.id ?? null}
-              refreshTick={refreshTick}
+              refreshTick={trendTick}
             />
           </OverlayScroll>
         )}

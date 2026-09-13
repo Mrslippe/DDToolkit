@@ -38,7 +38,7 @@
 |---|---|---|
 | 设计令牌 | `styles/tokens.css`（65 行） | ✅ 完整，全部 `var(--token)` 引用 |
 | 基础件（primitives） | `components/ui/*`（shadcn + Radix，12 件，`components.json` 已配置） | ✅ 全部在用 |
-| 共享工具 | `utils/format.ts`、`utils/chartTheme.ts`、`utils/signSource.ts`（签名解析）、`utils/signOptions.ts`（下拉候选）、`utils/fanTrend.ts`（趋势合并）、`utils/pill.ts`、`hooks/useFetchBusy`、`hooks/useIsMaximized` | ✅ 复用良好；纯函数都带 `.test.ts` |
+| 共享工具 | `utils/format.ts`、`utils/chartTheme.ts`、`utils/signSource.ts`（签名解析）、`utils/signOptions.ts`（下拉候选）、`utils/fanTrend.ts`（趋势合并）、`utils/fetchIdle.ts`（抓取完成事件的 kind 判定）、`utils/accountHistory.ts`（账号信息历史口径）、`utils/pill.ts`、`hooks/useFetchBusy`、`hooks/useIsMaximized`、`hooks/useSceneTransition`（场景切换机：预取门控 + 原子提交） | ✅ 复用良好；纯函数都带 `.test.ts` |
 | 业务组件 | `components/*`（33 件 tsx） | ⚠️ 多数只有 1 个引用者（属"功能"而非"基础件"） |
 | 设计契约文档 | `docs/UI-MAP.md`（471 行，§C5 三层组件契约） | ✅ 已把"交互层/信息层/弹窗层/表面层"写死 |
 

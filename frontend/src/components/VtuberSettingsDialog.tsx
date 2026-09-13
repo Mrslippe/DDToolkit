@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
-import { ImagePlus, Loader2, Trash2, UserPlus } from 'lucide-react'
+import { History, ImagePlus, Loader2, Trash2, UserPlus } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   Dialog,
@@ -26,6 +26,7 @@ import { PLATFORM_LABEL } from '../utils/postTypes'
 import { buildSignOptions, type SignOption as SignOptionData } from '../utils/signOptions'
 import { resolveSign } from '../utils/signSource'
 import AddAccountDialog from './AddAccountDialog'
+import AccountHistoryDialog from './AccountHistoryDialog'
 import OverlayScroll from './OverlayScroll'
 import ProxyImage from './common/ProxyImage'
 import './../styles/posts.css'
@@ -152,6 +153,8 @@ export default function VtuberSettingsDialog({
   const [uploading, setUploading] = useState(false)
   const [addOpen, setAddOpen] = useState(false)
   const [delTarget, setDelTarget] = useState<Account | null>(null)
+  /** 「账号信息历史」弹窗的目标账号（R9，devlog/080） */
+  const [histTarget, setHistTarget] = useState<Account | null>(null)
   /** 各平台签名下拉栏（2026-09-13 设计案，devlog/072）：展开态 / 键盘游标 / 定位 */
   const [signPopOpen, setSignPopOpen] = useState(false)
   const [signCursor, setSignCursor] = useState<number | null>(null)
@@ -686,6 +689,16 @@ export default function VtuberSettingsDialog({
                       {a.display_name ?? a.platform_uid}
                       <em>{a.followers_count.toLocaleString('zh-CN')} 粉</em>
                     </span>
+                    {/* R9（devlog/080）：曾用名/曾用签名归「账号信息历史」这一类，
+                        用**独立弹窗**看 —— 不再混在编辑区里（2026-09-13 用户否掉的正是那种形态） */}
+                    <button
+                      type="button"
+                      className="vd-acc-hist"
+                      title="该账号的信息历史（曾用名/曾用签名 + 抓取快照）"
+                      onClick={() => setHistTarget(a)}
+                    >
+                      <History className="size-4" />
+                    </button>
                     <button
                       type="button"
                       className="vd-acc-del"
@@ -748,6 +761,15 @@ export default function VtuberSettingsDialog({
           if (!vtuber) return
           onSaved(await api.getVtuber(vtuber.id))
         }}
+      />
+
+      {/* R9（devlog/080）：账号信息历史（曾用值 + 抓取快照）—— 独立弹窗，
+          与编辑区解耦；数据来自 `/vtuber/{id}/former-values` 与 `/account/{id}/stat-snapshots` */}
+      <AccountHistoryDialog
+        open={histTarget !== null}
+        onOpenChange={(o) => !o && setHistTarget(null)}
+        vtuberId={vtuber?.id ?? null}
+        account={histTarget}
       />
 
       <AlertDialog open={delTarget !== null} onOpenChange={(o) => !o && setDelTarget(null)}>

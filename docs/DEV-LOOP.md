@@ -71,7 +71,14 @@ python scripts/ui_probe.py --archive --calendar-expect <sha256> --vtuber 15  # �
 python scripts/ui_probe.py --archive --archive-day 11 --vtuber 14    # 点指定日号的格子（最近一场常未收录弹幕/热词）
 python scripts/ui_probe.py --settings --vtuber 15   # 档案设置弹窗：几何 + **可点性** + 点候选行换来源（两个带签名账号）
 python scripts/ui_probe.py --settings --vtuber 14   # 同上但只有一行且签名长：断言渐隐/可滚距离，切换断言打印 [跳过]
+python scripts/ui_probe.py --scene --vtuber 15      # 场景切换机（切 V）：预取→退场→提交是否走完 + fetch 全程
 ```
+
+> `--scene`（devlog/080）：真的点侧栏切 V，记录点击后**所有 fetch**（预取有没有回来）、
+> `.view-body` 的 class 变化序列、提交耗时与末态（hero/侧栏/路由是否一致）。
+> 它挡的是"进了退场态却没提交"——布局不变量对那种错法完全无感。
+> ⚠️ 采样必须**每次重新查 DOM**：devlog/071 记的"永久停在 scene-exit"就是拿了点击前的旧节点，
+> 实际机器 250ms 就提交完了（真相反转记在 devlog/080）。
 
 > `--settings`（2026-09-13 起，devlog/075）测 21 项，除了几何还有**可点性**：
 > `elementFromPoint` 命中测试（`panelHit`/`rowHit`）与"点一行会怎样"（`pickValueMatches`/

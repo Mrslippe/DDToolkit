@@ -15,6 +15,7 @@ import {
 import { useIsMaximized } from '../hooks/useIsMaximized'
 import { setFetchBusy } from '../fetchBusy'
 import { isFirstRun } from '../bootState'
+import { dispatchFetchIdle, type FetchIdleKind } from '../utils/fetchIdle'
 import { api } from '../api/api'
 import type { AccountSnapshot, AuthStatus, FetchStatus, PostFetchStatus } from '../api/types'
 import './../styles/layout.css'
@@ -174,10 +175,9 @@ export default function TopBar() {
                 detail: { text: `${ext.last_label ?? '第三方数据'}同步完成` },
               }),
             )
-            window.dispatchEvent(new Event('ddtoolkit:fetch-idle'))
+            dispatchFetchIdle(['external'])
           }
         }
-
         // 新任务启动时立即让位给实时状态显示
         if (active) setPillMsg(null)
 
@@ -243,12 +243,17 @@ export default function TopBar() {
           // 抓取任务的「运行→空闲」边沿：**不含**外部数据任务——它跑在后台且
           // 不占两把锁，若把它算进来，账号/帖子抓取结束时的刷新会被拖到回填结束
           // （新 V 的首屏内容要等 20s 才出现在右栏）。外部完成另有 seq 通道。
-          const wasRunning = prev
-            ? prev.account.running || prev.post.running
-            : prevRunning.current
-          const accountPostRunning = s.account.running || s.post.running
-          if (wasRunning && !accountPostRunning) {
-            window.dispatchEvent(new Event('ddtoolkit:fetch-idle'))
+          //
+          // R2 第二步（devlog/080）：边沿要**带上是谁跑完了** —— 动态流每 60~80s 一轮，
+          // 之前它也会让"粉丝趋势"整块重取 + 重建 ECharts（纯属白干：动态流不写快照）。
+          const kinds: FetchIdleKind[] = []
+          if (prev?.account.running && !s.account.running) kinds.push('account')
+          if (prev?.post.running && !s.post.running) kinds.push('posts')
+          if (prev) {
+            if (kinds.length) dispatchFetchIdle(kinds)
+          } else if (prevRunning.current && !(s.account.running || s.post.running)) {
+            // 首轮轮询没有 prev（拿不到分路信息）：按"全都算"发，宁可多刷一次也不漏
+            dispatchFetchIdle(['account', 'posts'])
           }
           prevRunning.current = active
           return s

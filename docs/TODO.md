@@ -11,7 +11,7 @@
 >    已落地需求清单、**版本 → devlog 索引**）。
 >
 > 整理记录：2026-09-13（把历史条目拆到 `docs/ROADMAP-DONE.md`，本文件只留"要干什么"）；
-> 同日二次整理：**已落地的需求 R1–R8/R10 与批次索引一并移入该文件**，§0 只剩未落地项。
+> 同日二次整理：**已落地的需求 R1–R10 与批次索引一并移入该文件**，§0 只剩未落地项。
 
 ---
 
@@ -26,12 +26,12 @@
 
 | # | 日期 | 一句话需求 | 期望效果（可选） | 优先级 | 状态 |
 |---|---|---|---|---|---|
-| R9 | 2026-09-13 | 曾用名/曾用签名应归入「账号信息历史快照」，**先不展示**；且要的是"V **在平台上**曾经用过的"值，不是本地手改入库的字符串 | 档案设置窗口里那两处展示撤掉 | 中 | ⏳ **已受理（撤出已落地）**：devlog/075 删掉 `.vd-former`/`.vd-acc-former` 两处展示与 `getFormerValues` 调用；`PUT /account` **不再记账**（手改 ≠ 平台侧历史），抓取覆盖前照常记账、端点保留。展示入口待"账号信息历史快照"落地后重新设计（数据一直在记，`account_stat_snapshots` 目前**不含**昵称/签名） |
+| — | — | （暂无未落地条目） | — | — | — |
 
-> **已落地的 R1–R8、R10**（含原始需求与落地结论）见 `docs/ROADMAP-DONE.md` →
+> **R1–R10 已全部落地**（含 R9 的展示入口，2026-09-13）→ 见 `docs/ROADMAP-DONE.md`
 > 「需求清单：R1–R10」；本表只留**还没完全落地**的条目。
 >
-> **下一条怎么写**（照这个格式加一行即可）：
+> **下一条怎么写**（照这个格式加一行，并把上面那行占位删掉）：
 > `| R11 | 2026-09-dd | 一句话说清现象或想要的效果 | 可选：期望的样子 | 中/低/高 | 待评估 |`
 
 ---
@@ -48,8 +48,8 @@
 | **词云自建扩展点接线**（可选增强） | 体验 | `count_tokens(extra_words=…)` / `JiebaTokenizer.add_words()` 已就绪但**没有自动灌词**：按 V 名/企划名自动灌自定义词典，避免"明前奶绿"被切碎（接线处留了 `ExtraWordsHook`）。devlog/061 §四 |
 | **自建词云首拉耗时**（可选优化） | 体验，可接受 | 实测 5 万条记录 ~12s 属正常，上游瞬时变慢时单场可达 **120s**（devlog/062 §四）。**刻意不加时间预算**：截断取靠前记录会系统性丢掉下播前的高频词（如「晚安」）。可选改法：分页大小调优 / 前端进度反馈 / 明确标注"基于部分弹幕"后再截断 |
 | **自建词云也支持取消**（照搬现成管道） | 体验小修 | 上游取数已可取消（devlog/064）；`/wordcloud` 走同一套（`api.buildLiveSessionWordCloud` 加 `signal` + 调用处 abort）。因它只在用户点按钮时发、120s 是可接受上限，优先级最低 |
-| **`PostsPage` 场景切换机抽 hook**（行为级重构） | 技术债，无功能影响 | 视图已拆完（1134 → **859**，devlog/065），剩下的主体是"预取门控 + 原子提交 + `EXIT_MS` 退场"（文件内 166–325 行）。**护栏尝试失败**（devlog/071）：探针的 `--virtual-time-budget` 下切 V 会停在 `scene-exit` 不提交（路由与侧栏都切了，6s 虚拟时间没落地；同一套定时器在"切视图"路径是好的），分不清是探针环境还是真 bug ⇒ 先给探针加**真实时间模式**再动，顺带复核那是不是真 bug |
-| **R2 可选第二步：`fetch-idle` 带 kind** | 体验优化 | 视觉闪动已修（devlog/066），这条只差省请求：让日历/趋势只在 `external`/`account` 类任务后刷新（动态流每轮不再触发无意义重取）。改法：TopBar 两处 `dispatchEvent` 换成 `CustomEvent` 带 `kind`，PostsPage 拆出 `dataTick` 传给两张卡 |
+| ~~`PostsPage` 场景切换机抽 hook~~ | ✅ **已落地**（devlog/080） | 护栏先成（`ui_probe --scene`，顺带**反转了 devlog/071 的"卡死"结论**：那是探针读了旧 DOM 节点）；机器抽到 `hooks/useSceneTransition.ts`，只搬不改；hero/日历位级签名保持一致 → 详见 `docs/ROADMAP-DONE.md` |
+| ~~R2 可选第二步：`fetch-idle` 带 kind~~ | ✅ **已落地**（devlog/080） | `utils/fetchIdle.ts` + `TopBar` 两种派发带 kind + 趋势图独立 `trendTick`；**日历三类都要**（动态流的直播卡片会落场次）→ 详见 `docs/ROADMAP-DONE.md` |
 
 ### 1.2 需要先定口径 / 拍板（不是写代码的问题）
 
@@ -64,7 +64,7 @@
 
 - **P8-B 交互手感实机验证**：平台徽章长按拖动阈值、hover 尾部「+」、档案设置弹窗高度、系统浏览器打开是否顺手（devlog/048）
 - **P10-A 视觉手感**：双月历配色与日期格密度、窄窗表现（devlog/050）
-- **发版**：v0.9.9 已发布；**devlog/060–079 这几批尚未发版**（要不要编 v0.10 或直接补一个 v0.9.10，你定，见 `docs/RELEASE.md`）
+- **发版**：v0.9.9 已发布；**devlog/060–080 这几批尚未发版**（要不要编 v0.10 或直接补一个 v0.9.10，你定，见 `docs/RELEASE.md`）
 - **R9 的展示形态**：等「账号信息历史快照」那条线开工时一起定（曾用名/曾用签名放哪、怎么呈现）
 
 > ✅ 已完成（2026-09-13 复核后从本清单移出）：**P9-A 历史归并脚本已在真实库跑完** ——
@@ -106,7 +106,7 @@
 | 微博 / B 站增量漏帖（置顶帖打乱流序） | ✅ 已修（devlog/045） |
 | 微博扫码登录 / B 站扫码登录 | ✅ 已上线（v0.5.0） |
 | 账号统计快照历史（粉丝趋势） | ✅ 采集 + 可视化（**v0.9.x 重写为 ECharts canvas**，recharts 已退役） |
-| 档案设置弹窗（背景 / 头像 / 签名 / 已订阅账号，全实时生效） | ✅ 已上线（devlog/066–075）：签名走**来源+覆盖**模型（A3，devlog/074）——平台签名只读、卡片签名 = 覆盖 → 来源账号 → 主账号 → 空；**字段锁定已退役**，旧值改由 `vtuber_field_history` 记账（**仅在平台侧覆盖前**，手改不入账；展示见 R9）。下拉栏为「内容体内绝对定位浮层」（devlog/075，替换 portal+fixed） |
+| 档案设置弹窗（背景 / 头像 / 签名 / 已订阅账号，全实时生效） | ✅ 已上线（devlog/066–080）：签名走**来源+覆盖**模型（A3，devlog/074）——平台签名只读、卡片签名 = 覆盖 → 来源账号 → 主账号 → 空；**字段锁定已退役**，旧值由 `vtuber_field_history` 记账（**仅在平台侧覆盖前**，手改不入账）。下拉栏为「内容体内绝对定位浮层」（devlog/075）。**账号信息历史**（曾用值 + 抓取快照）在账号行的历史钮里（R9，devlog/080） |
 | 删除检测（墓碑） | ✅ 已上线（v0.5.1：两击判定 + 已删筛选/角标/时间线） |
 | 外部固定化数据源 | ✅ 已上线（zeroroku 粉丝历史/礼物日 + danmakus 索引/直播场次/弹幕） |
 | 直播日历 + 场次内容管道（danmakus+self 合并、9 类类型 v2、校正 override） | ✅ 已上线（v0.9.0–v0.9.x M1–M4；对外 id 定权见 devlog/052） |
@@ -181,9 +181,9 @@
 | 后端 | `python -m pytest -q` | **312 passed**（+1 条真实网络冒烟在离线环境会 skip） |
 | 前端类型 | `npx tsc --noEmit`（`npm run build` 也会跑） | **0 错** |
 | 前端 lint | `npm --prefix frontend run lint` | **0 错**（`--max-warnings 0`） |
-| 前端单测 | `npm --prefix frontend run test` | **119 passed** |
+| 前端单测 | `npm --prefix frontend run test` | **131 passed** |
 | 词云布局 | `node scripts/check_wordcloud_layout.mjs` | sha256 `19ecc7e6…`（本轮实跑一致） |
-| 布局探针 | `python scripts/ui_probe.py --hero-expect c1154858… --vtuber 15`<br>`python scripts/ui_probe.py --archive --calendar-expect fb75217e… --vtuber 15`<br>`python scripts/ui_probe.py --settings --vtuber 15`（两个带签名账号）/ `--vtuber 14`（单账号长签名） | 三条都本轮实跑一致（8 段契约 0 问题 / 三档宽度 0 问题 / 档案设置几何与**可点性** **21 项**，含 `panelHit`/`rowHit` 命中测试、`panelPlacedByRect`、`pickKeepsDialog`；V14 因只有一行会打印 `[跳过] 候选行切换断言`） |
+| 布局探针 | `python scripts/ui_probe.py --hero-expect c1154858… --vtuber 15`<br>`python scripts/ui_probe.py --archive --calendar-expect fb75217e… --vtuber 15`<br>`python scripts/ui_probe.py --settings --vtuber 15`（两个带签名账号）/ `--vtuber 14`（单账号长签名）<br>`python scripts/ui_probe.py --scene --vtuber 15`（场景切换机） | 四条都本轮实跑一致（8 段契约 0 问题 / 三档宽度 0 问题 / 档案设置几何·可点性·历史弹窗 **29 项**，含 `panelHit`/`rowHit`、`panelPlacedByRect`、`pickKeepsDialog` 与 R9 四项；`--scene` 断言"预取→退场→提交走完 + 侧栏与内容一致"，实测提交 250ms。V14 因只有一行会打印 `[跳过] 候选行切换断言`） |
 | 一把梭 | `python scripts/dev_check.py` | 测试 + 后端冒烟（详见 `docs/DEV-LOOP.md`） |
 
 > ⚠️ 探针的 `--hero-expect` / `--calendar-expect` 签名**含实时数据**，只适合"改动前后短窗口对比"，

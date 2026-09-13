@@ -1,4 +1,4 @@
-import type { Account, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, PoolItem, PostPage, PostStats, ThirdpartyVtuber, UpdatePostsResult, VTuber } from './types'
+import type { Account, AccountStatSnapshot, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, PoolItem, PostPage, PostStats, ThirdpartyVtuber, UpdatePostsResult, VTuber, VTuberFormerValues } from './types'
 
 /**
  * API 基地址：
@@ -94,6 +94,15 @@ export const api = {
   /** 粉丝趋势点序列（服务端按天分桶降采样） */
   fanTrend: (accountId: number) =>
     request<FanTrendPoint[]>(`/account/${accountId}/fan-trend`),
+
+  /** 账号信息快照（粉丝数/直播状态时间序列，时间倒序）。R9：账号信息历史弹窗用 */
+  statSnapshots: (accountId: number, limit = 60) =>
+    request<AccountStatSnapshot[]>(`/account/${accountId}/stat-snapshots?limit=${limit}`),
+
+  /** 该 V 的曾用名 / 曾用签名（各最多 5 条，最近优先；只含**平台侧**旧值）。
+   *  R9（devlog/080）：接入账号信息历史弹窗 —— 按账号过滤后展示。 */
+  getFormerValues: (vtuberId: number) =>
+    request<VTuberFormerValues>(`/vtuber/${vtuberId}/former-values`),
 
   /** 直播场次（由 self 快照转移推导） */
   liveSessions: (accountId: number) =>

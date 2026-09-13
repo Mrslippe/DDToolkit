@@ -428,6 +428,113 @@ export async function runUiProbe(): Promise<void> {
     document.title = 'UI_PROBE_DONE'
     return
   }
+  if (mode === 'scene') {
+    // 场景切换机（`PostsPage` 的预取门控 + 原子提交）的**诊断 + 护栏**（devlog/080）。
+    //
+    // 背景：devlog/071 记过三次护栏尝试都失败 —— 点侧栏切 V 后路由与侧栏都切了、
+    // 场景机也进了 `scene-exit`，但那个 200ms 的提交定时器在虚拟时间里**始终没落地**。
+    // 当时分不清"探针环境"还是"真 bug"，于是把护栏整体撤了。
+    // 这里不再猜：**把 fetch 全程记下来**（预取到底有没有回来）+ 记录 `.view-body`
+    // 的 class 变化序列，一次跑完就能判定是哪一边的问题。
+    const result: Record<string, unknown> = {}
+    type Rec = { url: string; state: string; ok?: boolean; ms: number }
+    const fetches: Rec[] = []
+    const origFetch = window.fetch.bind(window)
+    window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input
+        : input instanceof URL ? input.href : (input as Request).url
+      const rec: Rec = { url, state: 'pending', ms: -1 }
+      fetches.push(rec)
+      const t0 = performance.now()
+      return origFetch(input as RequestInfo, init)
+        .then((r) => {
+          rec.state = 'done'; rec.ok = r.ok
+          rec.ms = Math.round(performance.now() - t0)
+          return r
+        })
+        .catch((e) => {
+          rec.state = 'error'; rec.ms = Math.round(performance.now() - t0)
+          throw e
+        })
+    }) as typeof window.fetch
+
+    const waitFor = async (fn: () => unknown, ms = 8000) => {
+      const t0 = performance.now()
+      while (performance.now() - t0 < ms) {
+        const v = fn()
+        if (v) return v
+        await sleep(50)
+      }
+      return null
+    }
+    const items = (await waitFor(() => {
+      const list = document.querySelectorAll<HTMLElement>('.vtuber-item')
+      return list.length >= 2 ? list : null
+    })) as NodeListOf<HTMLElement> | null
+    result.candidates = items ? items.length : 0
+    const heroName = () => (document.querySelector('.hero-name')?.textContent || '').trim()
+    /** 侧栏当前选中项的**V 名**（`.vtuber-name`，不是整条 item 的文本 ——
+     *  后者含"直播中"徽章与签名，与 hero 名直接比较会假失败，devlog/080 踩过） */
+    const activeName = () =>
+      (document.querySelector('.vtuber-item.active .vtuber-name')?.textContent || '').trim()
+    /** ⚠️ 每次都要**重新查询** `.view-body`：拿旧引用会被 React 换掉的节点骗到
+     *  （旧节点上留着 `scene-exit`，看着像"永久卡在退场态"，实际早提交完了）。 */
+    const bodyClass = () => document.querySelector('.view-body')?.className ?? ''
+    result.heroBefore = heroName()
+    result.heroLenBefore = heroName().length
+    if (!items || items.length < 2) {
+      result.reason = 'sidebar-too-small'
+    } else {
+      const cur = [...items].find((i) => i.classList.contains('active'))
+      const target = [...items].find((i) => i !== cur) as HTMLElement
+      const targetName = (target.querySelector('.vtuber-name')?.textContent || '').trim()
+      result.targetName = targetName
+      // class 变化序列：正常应是 ['view-body', 'view-body scene-exit', 'view-body']
+      const seq: string[] = []
+      const push = () => {
+        const c = bodyClass()
+        if (seq[seq.length - 1] !== c) seq.push(c)
+      }
+      push()
+      new MutationObserver(push).observe(document.body, {
+        attributes: true, attributeFilter: ['class'], subtree: true,
+      })
+      const t0 = performance.now()
+      fetches.length = 0                          // 只记点击之后的请求
+      target.click()
+      let committedIn = -1
+      for (let i = 0; i < 240; i++) {             // 上限 12s（虚拟时间下很快走完）
+        await sleep(50)
+        if (!bodyClass().includes('scene-exit') && heroName() &&
+            heroName() !== result.heroBefore) {
+          committedIn = Math.round(performance.now() - t0)
+          break
+        }
+      }
+      result.commitMs = committedIn
+      await sleep(0)                              // 让 MutationObserver 把最后一跳记完
+      result.bodySeq = seq
+      result.bodyClassAtEnd = bodyClass()
+      result.exitingAtEnd = bodyClass().includes('scene-exit')
+      result.heroAtEnd = heroName()
+      result.sidebarActiveAtEnd = activeName()
+      result.routeAtEnd = location.pathname
+      result.fetches = fetches.map((f) => {
+        const path = f.url.replace(/^https?:\/\/[^/]+/, '')
+        return `${f.state}${f.ok === false ? '(非2xx)' : ''} ${f.ms}ms ${path.slice(0, 70)}`
+      })
+      result.pendingFetches = fetches.filter((f) => f.state === 'pending').length
+      // TEMP：场景机埋点（devlog/080 排查用，定位后随埋点一起删）
+      result.sceneLog = (window as unknown as { __sceneLog?: unknown[] }).__sceneLog ?? []
+    }
+    const pre = document.createElement('pre')
+    pre.id = 'ui-probe'
+    pre.textContent = JSON.stringify({ mode: 'scene', views: [], degraded, scene: result })
+    document.body.appendChild(pre)
+    document.title = 'UI_PROBE_DONE'
+    return
+  }
+
   if (mode === 'filter-pop') {
     const want = new URLSearchParams(window.location.search).get('preset')
     clickView('帖子列表')
@@ -632,6 +739,25 @@ export async function runUiProbe(): Promise<void> {
           await waitFor(() => !document.querySelector('.vd-sign-panel'), 4000)
         }
         result.restoredSource = norm(input?.value) === text(restoreRow)
+      }
+
+      // 账号信息历史弹窗（R9，devlog/080）：点账号行的历史钮 → 弹窗要真的打开**且拿到数据**。
+      // 这一条挡的是"接了线但没数据/没渲染"这类问题（端点两个、异步两段，光看代码看不出）。
+      const histBtn = dialog.querySelector<HTMLElement>('.vd-acc-hist')
+      result.hasHistoryBtn = !!histBtn
+      if (histBtn) {
+        histBtn.click()
+        await waitFor(() => document.querySelector('.ah-dialog'), 3000)
+        const ah = document.querySelector<HTMLElement>('.ah-dialog')
+        result.historyOpened = !!ah
+        await waitFor(() => ah?.querySelector('.ah-snap, .ah-empty, .ah-note'), 4000)
+        result.historyFormerRows = ah?.querySelectorAll('.ah-former > li').length ?? -1
+        result.historySnapRows = ah?.querySelectorAll('.ah-snap').length ?? -1
+        result.historyEmpty = !!ah?.querySelector('.ah-empty')
+        result.settingsStillOpen = !!document.querySelector('.vd-settings')
+        ah?.querySelector<HTMLElement>('.ah-close')?.click()
+        await sleep(250)
+        result.historyClosed = !document.querySelector('.ah-dialog')
       }
     }
     const pre = document.createElement('pre')

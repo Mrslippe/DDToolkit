@@ -558,7 +558,10 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
       {/* 图区：ECharts canvas 自绘（slider 拖拽/图表区滚轮缩放+按住平移均由数据缩放组件接管）。
           R2①（2026-09-13）：**已有数据时不再切"加载中"** —— `fetch-idle` 每轮定时抓取都会
           让 refreshTick +1，此前会把 canvas 整块卸掉重建（既闪、又白扔一次 ECharts 初始化）；
-          现在只有"首次加载（还没有任何点）"才显示加载态，后台刷新静默替换。 */}
+          现在只有"首次加载（还没有任何点）"才显示加载态，后台刷新静默替换。
+          R2②（同日，devlog/080）：本卡只吃 `account`/`external` 两类刷新（调用方给的是
+          `trendTick`，见 `utils/fetchIdle.ts::affectsFanTrend`）—— 趋势只由账号快照与
+          第三方粉丝历史驱动，**动态流写不到它**，而动态流每 60~80s 一轮。 */}
       <div className="fan-chart-body">
         {loading && daily.length === 0 && <StateBlock kind="loading" />}
         {!loading && error && daily.length === 0 && <StateBlock kind="error" text={error} />}

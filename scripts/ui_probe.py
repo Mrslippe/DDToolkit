@@ -154,17 +154,22 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
             "topbar": data.get("topbar"),
             "calendar": data.get("calendar"),
             "settings": data.get("settings"),
+            "scene": data.get("scene"),
             "degraded": data.get("degraded") or [],
             "dom": dom_file,
         }
     return {"mode": None, "views": data, "topbar": None, "calendar": None,
-            "settings": None, "degraded": [], "dom": dom_file}
+            "settings": None, "scene": None, "degraded": [], "dom": dom_file}
 
 
 # ── 展示页 hero 药丸签名（P2 分层收敛 A 批次的位级回归护栏）─────────────
 # 动机：`orderAccounts`（拖拽排序）/ `chunkBy`（每 3 枚切集）/ `accountHomeUrl`（主页兜底）
 # 只在 cards 视图 + 药丸有内容时渲染，而布局不变量对「药丸少一排 / 顺序变了 / 切集错了」
 # 完全无感 —— 即"搬坏了但探针全绿"。这里把 `hero.signature` 规范化后哈希比对。
+
+# 场景切换护栏的等待上限提示（页面侧上限 12s 虚拟时间，见 probe.ts 的 `mode === 'scene'`）
+SCENE_WAIT_HINT = "12s（虚拟时间）"
+
 
 def _hero_signature(res: dict) -> str | None:
     """取 cards 段的 hero 签名并哈希；量不到返回 None（由调用方按契约判失败）。"""
@@ -591,6 +596,13 @@ def main() -> int:
         help="指定 VTuber id（默认取 /vtuber/list 的第一条）。"
              "用于命中特定形态的数据，例如平台药丸多枚的 V（切集/排序只在 >1 枚时才有意义）。",
     )
+    ap.add_argument(
+        "--scene",
+        action="store_true",
+        help="场景切换机（切 V 的预取门控 + 原子提交）诊断与护栏：打印点击后所有 fetch "
+             "（预取有没有回来）+ body class 变化序列 + 提交耗时；未提交即判失败（devlog/080）。"
+             "需要数据目录里至少有 2 个已订阅 V。",
+    )
     args = ap.parse_args()
     widths = args.width or [1100, 1280, 1440]
 
@@ -699,6 +711,51 @@ def main() -> int:
                 return 1
             return 0
 
+        if args.scene:
+            # 场景切换机（预取门控 + 原子提交）的诊断 + 护栏（devlog/080）。
+            # devlog/071 的三次尝试都卡在"进了 scene-exit 但 200ms 提交定时器没落地"，
+            # 当时分不清探针环境还是真 bug —— 所以这个模式**先把 fetch 全程打出来**：
+            # 预取请求有没有回来，一次就能定性。
+            w = widths[0]
+            url = f"http://localhost:{vite_port}{route}?probe=scene"
+            print(f"[probe] scene @{w} → {url}")
+            res = _run_probe(edge, url, w, args.height, WORK, "scene")
+            sc = ((res or {}).get("scene") or {})
+            if res and not sc:
+                print(f"  [!] 探针 mode={res.get('mode')!r} 键={sorted(res.keys())}"
+                      f"（新字段需要在 _run_probe 的白名单里登记）")
+            print(f"  候选 V={sc.get('candidates')} 目标={sc.get('targetName')!r} "
+                  f"点击前 hero={sc.get('heroBefore')!r}")
+            print(f"  提交耗时={sc.get('commitMs')}ms 末态 hero={sc.get('heroAtEnd')!r} "
+                  f"末态侧栏={sc.get('sidebarActiveAtEnd')!r} 路由={sc.get('routeAtEnd')!r}")
+            print(f"  末态仍在退场={sc.get('exitingAtEnd')} body 变化序列={sc.get('bodySeq')}")
+            print(f"  在途请求={sc.get('pendingFetches')}")
+            for line in (sc.get("fetches") or []):
+                print(f"    · {line}")
+            for ev in (sc.get("sceneLog") or []):
+                print(f"    # {ev}")
+            if sc.get("reason") == "sidebar-too-small":
+                failures.append(f"@{w} scene: 侧栏少于 2 个 V，量不到场景切换"
+                                f"（需要至少两个已订阅 V）")
+            elif not failures:
+                if (sc.get("commitMs") or -1) < 0:
+                    failures.append(f"@{w} scene: 切 V 后 {SCENE_WAIT_HINT} 仍未提交"
+                                    f"（hero={sc.get('heroAtEnd')!r}、"
+                                    f"仍在退场={sc.get('exitingAtEnd')}、"
+                                    f"在途请求={sc.get('pendingFetches')}）")
+                if sc.get("exitingAtEnd"):
+                    failures.append(f"@{w} scene: 结束时仍停在 scene-exit（退场态未复位）")
+                if sc.get("sidebarActiveAtEnd") and sc.get("heroAtEnd") and \
+                        sc.get("sidebarActiveAtEnd") != sc.get("heroAtEnd"):
+                    failures.append(f"@{w} scene: 侧栏选中与右栏内容不一致"
+                                    f"（侧栏={sc.get('sidebarActiveAtEnd')!r} "
+                                    f"hero={sc.get('heroAtEnd')!r}）")
+                if not failures:
+                    print("  [ok] 场景切换：预取→退场→提交全程落地，侧栏与内容一致")
+            for b in failures:
+                print("   -", b)
+            return 1 if failures else 0
+
         if args.settings:
             # 档案设置弹窗的几何与**可点性**不变量（devlog/072 起；可点性判据 devlog/075）。
             # 这个弹窗此前无探针覆盖，而它出过：滚动条压输入框、浮层被滚动体静默裁掉、
@@ -731,8 +788,10 @@ def main() -> int:
                   f"弹窗={st.get('dialogRect')} 面板 offsetParent=内容体="
                   f"{st.get('panelOffsetParentIsDialog')}")
             print(f"  视口={st.get('viewport')} 面板样式={st.get('panelStyleInline')}")
-            print(f"  布局宽: 输入条={st.get('inputLayoutWidth')} 面板={st.get('panelLayoutWidth')} "
-                  f"面板 computed={st.get('panelComputed')}")
+            print(f"  账号信息历史: 有入口={st.get('hasHistoryBtn')} 打开={st.get('historyOpened')} "
+                  f"曾用值行={st.get('historyFormerRows')} 快照行={st.get('historySnapRows')} "
+                  f"空态={st.get('historyEmpty')} 关闭={st.get('historyClosed')} "
+                  f"（档案设置仍开着={st.get('settingsStillOpen')}）")
             print(f"  点击候选行: 换到别的行={st.get('pickTargetIsOther')} "
                   f"值={'…' if st.get('pickedValue') is None else str(st.get('pickedValue'))[:18]} "
                   f"值匹配={st.get('pickValueMatches')} 真的变了={st.get('pickChanged')} "
@@ -818,6 +877,20 @@ def main() -> int:
                 if st.get("pickChanged") and not st.get("restoredSource"):
                     failures.append(f"@{w} settings: 探针没能把签名来源还原"
                                     f"（数据目录会残留「来源被换过」的副作用）")
+                # R9（devlog/080）：账号信息历史弹窗必须真的能打开、能拿到数据、能关掉
+                if not st.get("hasHistoryBtn"):
+                    failures.append(f"@{w} settings: 账号行上没有「账号信息历史」入口"
+                                    f"（R9 的展示入口）")
+                elif not st.get("historyOpened"):
+                    failures.append(f"@{w} settings: 点了历史钮但弹窗没出现")
+                elif (st.get("historySnapRows") or 0) <= 0 and not st.get("historyEmpty"):
+                    failures.append(f"@{w} settings: 历史弹窗既没有快照行也没有空态提示"
+                                    f"（数据没渲染出来？快照={st.get('historySnapRows')}）")
+                elif not st.get("settingsStillOpen"):
+                    failures.append(f"@{w} settings: 打开历史弹窗把**档案设置**关掉了"
+                                    f"（嵌套弹窗层级问题）")
+                elif not st.get("historyClosed"):
+                    failures.append(f"@{w} settings: 历史弹窗点「关闭」没关掉")
                 if not failures:
                     print("  [ok] 档设置弹窗几何与可点性不变量全部通过")
             for b in failures:

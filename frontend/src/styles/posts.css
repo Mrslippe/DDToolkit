@@ -1931,6 +1931,19 @@ img.hero-avatar {
   color: var(--c-text-sub);
 }
 
+.vd-acc-hist {
+  flex-shrink: 0;
+  border: 0;
+  background: transparent;
+  color: var(--c-text-sub);
+  cursor: pointer;
+  padding: 2px;
+}
+
+.vd-acc-hist:hover {
+  color: var(--c-primary-deep);
+}
+
 .vd-acc-del {
   flex-shrink: 0;
   border: 0;
@@ -1942,6 +1955,202 @@ img.hero-avatar {
 
 .vd-acc-del:hover {
   color: #e05261;
+}
+
+/* ── 账号信息历史弹窗（R9，devlog/080）───────────────────────────────
+   曾用值 + 抓取快照两块。刻意**独立成窗**：曾用值混在编辑区里正是 2026-09-13
+   用户否掉的那种形态（当时展示的还是手改入库的错值）。 */
+.ah-dialog {
+  max-width: 560px;
+}
+
+.ah-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ah-desc {
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.ah-scroll {
+  max-height: 52vh;
+}
+
+.ah-sec + .ah-sec {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--c-border);
+}
+
+.ah-sec-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--c-text-main);
+}
+
+.ah-hint {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--c-text-sub);
+}
+
+.ah-empty,
+.ah-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--c-text-sub);
+}
+
+.ah-note {
+  margin-top: 8px;
+}
+
+.ah-former {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ah-former > li {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.ah-former-key {
+  flex: none;
+  width: 60px;
+  font-size: 11.5px;
+  color: var(--c-text-sub);
+}
+
+.ah-former-vals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ah-former-val {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  max-width: 100%;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--sel-bg);
+  font-size: 12px;
+  color: var(--c-text-main);
+  overflow-wrap: anywhere;
+}
+
+.ah-former-val em {
+  flex: none;
+  font-style: normal;
+  font-size: 10.5px;
+  color: var(--c-text-sub);
+}
+
+.ah-snaps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.ah-snap {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--c-border);
+  font-size: 12px;
+}
+
+.ah-snap:last-child {
+  border-bottom: 0;
+}
+
+.ah-snap-time {
+  flex: none;
+  width: 116px;
+  color: var(--c-text-sub);
+  font-variant-numeric: tabular-nums;
+}
+
+.ah-snap-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.ah-snap-main b {
+  font-weight: 600;
+  color: var(--c-text-main);
+  font-variant-numeric: tabular-nums;
+}
+
+.ah-snap-main i {
+  flex: none;
+  font-style: normal;
+  font-size: 10.5px;
+  color: var(--c-text-sub);
+}
+
+.ah-snap-main i.on {
+  color: var(--c-primary-deep);
+}
+
+.ah-snap-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--c-text-sub);
+}
+
+.ah-snap-src {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--c-text-sub);
+}
+
+.ah-foot {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 10px;
+  border-top: 1px solid var(--c-border);
+}
+
+.ah-close {
+  padding: 5px 14px;
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  background: var(--c-bg-card);
+  color: var(--c-text-main);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.ah-close:hover {
+  border-color: var(--c-primary);
+  color: var(--c-primary-deep);
 }
 
 .vd-settings-foot {

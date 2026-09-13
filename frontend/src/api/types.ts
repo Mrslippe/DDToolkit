@@ -43,8 +43,8 @@ export interface VTuber {
 }
 
 /** 一条「曾用值」（曾用名 / 曾用签名）；platform 为 null = 账号已被删。
- *  2026-09-13（devlog/075）：后端 `GET /vtuber/{id}/former-values` 仍在（记录照常），
- *  但**前端暂不接入**——用户口径是归入「账号信息历史快照」后再展示，故这里不留包装。 */
+ *  2026-09-13（devlog/080）：已接入「账号信息历史」弹窗（`AccountHistoryDialog`）——
+ *  只展示**平台侧**被覆盖掉的旧值（抓取覆盖前记账），手改不入账。 */
 export interface FormerValueItem {
   value: string
   platform: string | null
@@ -52,10 +52,23 @@ export interface FormerValueItem {
   changed_at: string | null
 }
 
-/** `GET /vtuber/{id}/former-values`：各最多 5 条，最近优先（暂未展示） */
+/** `GET /vtuber/{id}/former-values`：各最多 5 条，最近优先 */
 export interface VTuberFormerValues {
   names: FormerValueItem[]
   signs: FormerValueItem[]
+}
+
+/** `GET /account/{id}/stat-snapshots`：账号信息快照（粉丝数/直播状态时间序列）。
+ *  source：self = 本工具直采，zeroroku = 第三方回填（R4 的合并口径就吃这个字段）。 */
+export interface AccountStatSnapshot {
+  id: number
+  account_id: number
+  followers_count: number | null
+  live_status: number | null
+  live_title: string | null
+  /** 采集时刻（UTC，带 +00:00） */
+  captured_at: string
+  source: string
 }
 
 /** 候选池条目（vtubers.csv 离线索引） */
