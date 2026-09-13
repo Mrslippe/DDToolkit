@@ -21,7 +21,7 @@
 /vtuber/adopt、POST /{id}/accounts     _fetch_lock      async_fetch_accounts（后台，只抓新账号）
 /vtuber/fetch-accounts（批量面板）      _fetch_lock      async_fetch_and_update（后台）
 ─────────────────────────────────────────────────────────────
-综合档·动态流（预算自适应，约 30s 起一轮）   _post_fetch_lock  run_latest_dynamics_sweep（每主账号 1 页 + 限 2 帖）
+综合档·动态流（预算 + 60s 周期下限，每平台并发 3）  _post_fetch_lock  run_latest_dynamics_sweep（每主账号 1 页 + 限 2 帖）
 收录首屏（adopt / 加账号）              _post_fetch_lock  async_fetch_first_screen（1 页投稿 + 1 页动态限 3）
 /vtuber/fetch-posts（快速/全量）        _post_fetch_lock  _fetch_posts_core（B站双流）
 /vtuber/fetch-all-posts                _post_fetch_lock  async_fetch_all_posts → 逐账号
@@ -149,7 +149,7 @@
 | 层 | 内容 | 形态 | 周期 | 冲突策略 |
 |---|---|---|---|---|
 | **T0 直播状态** | 批量接口仅回写 live 字段（跳变落统计快照） | **独立守护线程**（不占锁/不进状态通道/不写 last_result） | 60s ± 15s | 与一切任务并行（SQLite busy_timeout=30s 排队兜底） |
-| **综合档·动态流** | 每 VTuber 主账号 1 页 + `limit_latest=2` | 调度线程（帖子锁） | **预算自适应**：12 req·min⁻¹/平台，轮间 `max(30s, 预算等待) ±15s`（v0.9.8，§4.3.1）；仅 `DYNAMICS_BUDGET_RPM<=0` 时退回 15min ± 2min | 起跑时手动任务在跑 → **跳过本轮**；持锁期间手动请求 → **轮次断点让位** |
+| **综合档·动态流** | 每 VTuber 主账号 1 页 + `limit_latest=2`；**平台内并发** `DYNAMICS_CONCURRENCY=3`（R6，§4.3.1） | 调度线程（帖子锁） | **预算自适应**：12 req·min⁻¹/平台，轮间 `max(30s, 预算等待) ±15s`，再套**周期下限** `DYNAMICS_MIN_CYCLE_SECONDS=60`（按**轮开始**计时）；仅 `DYNAMICS_BUDGET_RPM<=0` 时退回 15min ± 2min | 起跑时手动任务在跑 → **跳过本轮**；持锁期间手动请求 → **轮次断点让位** |
 | **综合档·账号流** | 全部账号全字段（原 T1 主账号 + T3a 全量合并） | 调度线程（账号锁） | **数据驱动**：任一账号 `last_fetched_at` 超 `ACCOUNT_SWEEP_STALE_HOURS=24h`（或为空）即到期，另受 `ACCOUNT_SWEEP_MIN_GAP_SECONDS=600s` 硬下限保护 | 同上 |
 | **T3 手动全量/补档** | 用户触发（全量账号/全量帖子/单 V/未归档批量端点） | — | 手动 | 永远优先于综合档（拿不到锁时请求自动档让位）；仅被 T0 并行（互不打扰） |
 | **T4 外部数据** | zeroroku/danmakus | APScheduler cron | 3AM 日/周 | 手动任务在跑 → **排队等待**（最多 30min）后执行；运行期间自动档跳过本轮 |
@@ -163,10 +163,12 @@
   到期判定），之后心跳（`TIER_TICK_SECONDS=10s`）检查：手动抓取 / 外部批次在跑 →
   本轮跳过；动态流到期或账号流到期 → `asyncio.run(_run_combined_tier(...))`，
   两条流 `asyncio.gather` 并发；
-- 并发粒度 = 平台（`_run_platform_rounds`）：每轮各就绪平台各抓一个账号，
-  平台之间并行、平台内部串行；某平台风控只冷却该平台；
+- 并发粒度 = 平台（`_run_platform_rounds`）：每轮每个「就绪平台」各取 `per_platform`
+  个元素并发执行，平台之间并行；**动态流 `per_platform=DYNAMICS_CONCURRENCY=3`**（R6），
+  账号流 `per_platform=1`（平台内串行，与引入该参数前逐字节等价）；
+  某平台风控只冷却该平台（`RATE_LIMIT_COOLDOWN=600s`），其它平台继续推进；
 - 每档周期带抖（`_tier_delay`）；interval<=0 的档位禁用；
-- 完成胶囊的写入策略：**动态流不写**（自适应节奏下一轮接一轮、轮间仅 30~80s，
+- 完成胶囊的写入策略：**动态流不写**（自适应节奏下一轮接一轮、轮间约 60~80s，
   每轮弹一次会把顶栏刷满），**账号流写**（约一天一次，作为「账号信息已更新」的汇总）。
 - T0 的进度反馈 = `account-progress` 快照驱动的左右栏徽标（无进度条/无胶囊）；
 - 冲突方向（v0.9.3 定稿）：**手动 > 自动**——自动档起跑时见手动任务即跳过，
@@ -186,7 +188,8 @@
 - 记账：**轮前**按估算记（每主账号 1 次 feed 页），**轮后**补差额（新帖详情 =
   `stored`）——按轮末整笔记账会白等一个轮次时长；
 - 下一轮到期 = `time.monotonic() + max(DYNAMICS_MIN_GAP_SECONDS(30s), 预算等待)
-  ± DYNAMICS_JITTER_SECONDS(15s)`；`DYNAMICS_BUDGET_RPM<=0` 时退回固定
+  ± DYNAMICS_JITTER_SECONDS(15s)`，**再套周期下限**（R6：`max(该值, 轮开始 + 60s)`，
+  见 §4.3.1.1）；`DYNAMICS_BUDGET_RPM<=0` 时退回固定
   `DYNAMICS_LATEST_INTERVAL_MINUTES=15min`；
 - 动态流返回 `requests: {platform: n}` 便于观测；风控冷却（按平台 600s）语义不变。
 - **预算按需自适应**（2026-09-13，devlog/055）：本平台生效预算 =
@@ -196,9 +199,40 @@
   而**这并非风控所需**（风控看稳态速率，不看一轮有几个账号）。取「一轮的需求量」为下限
   只消除退化，稳态速率仍由 60s 滑窗决定；未超预算时行为与旧版完全一致。
 
-**实测**（8 个主账号）：一轮 8 请求 / 33s（下限由平台内 3~5s 节流决定），
-相邻两轮 **80s** ≈ 6 req·min⁻¹ 均值（轮内瞬时 ~14）——比 v0.9.3 的 15 分钟快约 11 倍，
-均值仍在 12 req·min⁻¹ 预算内。
+**实测**：v0.9.8 口径（8 个主账号）一轮 8 请求 / 33s、相邻两轮 **80s**（≈6 req·min⁻¹ 均值，
+比 v0.9.3 的 15 分钟快约 11 倍）；R6 之后（7 个主账号）一轮 7 请求 / **25.7s**、
+**周期稳定 60s** —— 请求数与旧版逐条相同，均值仍在 12 req·min⁻¹ 预算内。
+
+### 4.3.1.1 动态流的「分平台并发抓取」（R6，2026-09-13，devlog/070）
+
+用户口径：**"先按平台分类取抓取任务名单，然后并行根据名单抓；一轮 <1min 就休息到 1min，
+>1min 就按预算休息、不触上限"**。落地形态：
+
+1. **名单**：`_primary_accounts(db)` —— 每个 V 只取**主要活动平台**的账号
+   （`PRIMARY_PLATFORM_ORDER = [bilibili, weibo]` 取首个有 uid 的），再按 `platform`
+   分组 → `{bilibili: [...], weibo: [...]}`；
+2. **并发**：`_run_platform_rounds(groups, worker_with_pacing, per_platform=3)`：
+   每个就绪平台每轮取最多 3 个账号 `asyncio.gather` 并发；平台之间本来就并行；
+   结果按批次顺序回填（顺序稳定，便于逐平台统计请求数）；
+3. **起跑间隔**：`_PlatformPacer`（平台级闸门，`STARTUP_DYNAMICS_INTERVAL_MIN/MAX=3~5s`）
+   —— 并发下"每账号抓完再睡"不再能保证平台内请求间隔（3 个账号会同时发出去），
+   所以间隔上移到**平台级**：同平台两次请求**起跑**至少隔 3~5s，抓取耗时与这段间隔重叠，
+   一轮墙钟 ≈ 账号数 × 间隔（而不是 账号数 ×（间隔 + 耗时））；跨平台互不影响。
+   ⚠️ 该闸门**跨事件循环**复用（综合档每轮一个 `asyncio.run`），因此内部用
+   `threading.Lock` 占时隙 + 锁外 sleep，**不得改回 `asyncio.Lock`**（devlog/076 事故）；
+4. **每账号做什么**：`_fetch_posts_for_account(acc, 0, 1, ...)` = 0 页投稿 + 1 页动态，
+   `stop_on_existing=True` + `limit_latest=STARTUP_DYNAMICS_LIMIT(2)`；
+   新帖详情请求计入平台预算（`requests[pf] = 1 + stored`）；
+5. **周期**：`_dynamics_next_due(since=轮开始时刻)` —— 先按预算算
+   `max(30s, 预算等待) ± 15s`，再取 `max(该值, 轮开始 + 60s)`；
+6. **降级开关**：`DYNAMICS_CONCURRENCY=1` 回到旧行为（平台内串行 + 每账号抓完睡 3~5s），
+   账号流始终走这条；调参口见 devlog/070 §五；
+7. **失败隔离**：单账号异常 → 该会话 `rollback()` + 记进 `issues`（`stop_reason=error`），
+   其余账号照常跑完；整轮异常在最外层兜底成 `{status: done, error}`；
+   平台风控（`rate_limited`）→ 该平台冷却 `RATE_LIMIT_COOLDOWN=600s`，其它平台继续；
+8. **手动优先**：起跑时 `_post_fetch_lock` 非阻塞拿不到就整轮跳过；轮与轮之间的
+   `preempt` 断点处交还锁、等手动任务跑完再恢复；每轮 `on_progress` 汇报
+   「动态轮询中 · V名 · 已处理/总数」（顶栏胶囊），动态流本身**不写** `last_result`。
 
 ### 4.3.2 启动外部补抓（v0.9.8，P9-4）
 
@@ -234,7 +268,7 @@ POST /vtuber/adopt | POST /vtuber/{id}/accounts
 |---|---|---|
 | 抓取范围 | 该 V **全部**账号 | 只抓新增账号 |
 | 账号信息可见 | 5~12s（串行 2 请求 + 内联头像 + **末尾 3~5s 空转**） | **0.9~3s** |
-| 首屏内容 | 不抓（等 15min 动态流或手点） | 投稿 1 页 + 动态 1 页限 3 条，**与账号信息并发** |
+| 首屏内容 | 不抓（等下一轮动态流，约 60s，或手点） | 投稿 1 页 + 动态 1 页限 3 条，**与账号信息并发** |
 | 头像 | 阻塞在 commit 前 | 延后下载，只 UPDATE `avatar_path` 一列 + 二次推快照 |
 | 第三方历史 | 顺序 BackgroundTask，占 HTTP 后台槽位 | 独立任务，与关键路径同时起跑、不占槽 |
 | 抢锁失败 | 记一行「已跳过」（可能要等 24h） | 入队，综合档心跳 ≤10s 内补抓 |
@@ -468,6 +502,9 @@ def _detect_rate_limit(status_code, data=None):
 | `DYNAMICS_LATEST_INTERVAL_MINUTES` / `_JITTER` | 15 min ± 120 s（动态流；仅预算关闭时生效） | config.py |
 | `DYNAMICS_BUDGET_RPM` | 12 req·min⁻¹（**动态流按平台预算**，v0.9.8；≤0=退回固定周期；单平台需求超此值时该平台生效预算自动抬高，见 §4.3.1） | `app/core/config.py` |
 | `DYNAMICS_MIN_GAP_SECONDS` / `_JITTER_SECONDS` | 30 s / 15 s（自适应轮间间隔下限与抖动） | config.py |
+| `DYNAMICS_CONCURRENCY` | 3（**动态流平台内并发抓几个账号**；1 = 旧的逐个节流 + 抓完再睡 3~5s，账号流恒为 1） | config.py |
+| `DYNAMICS_MIN_CYCLE_SECONDS` | 60 s（动态流**周期下限**，按**轮开始**计时；见 §4.3.1.1） | config.py |
+| `STARTUP_DYNAMICS_INTERVAL_MIN` / `_MAX` | 3.0 / 5.0 s（平台内**起跑间隔**，并发下由 `_PlatformPacer` 保证） | config.py |
 | `EXTERNAL_STARTUP_CATCHUP_ENABLED` / `_STALE_HOURS` | True / 24 h（启动时外部补抓，v0.9.8） | config.py |
 | `ACCOUNT_SWEEP_STALE_HOURS` | 24 h（账号流数据到期阈值） | config.py |
 | `ACCOUNT_SWEEP_MIN_GAP_SECONDS` | 600 s（账号流失败重试下限） | config.py |
