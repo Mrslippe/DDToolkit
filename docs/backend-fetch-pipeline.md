@@ -149,7 +149,7 @@
 | 层 | 内容 | 形态 | 周期 | 冲突策略 |
 |---|---|---|---|---|
 | **T0 直播状态** | 批量接口仅回写 live 字段（跳变落统计快照） | **独立守护线程**（不占锁/不进状态通道/不写 last_result） | 60s ± 15s | 与一切任务并行（SQLite busy_timeout=30s 排队兜底） |
-| **综合档·动态流** | 每 VTuber 主账号 1 页 + `limit_latest=2`；**平台内并发** `DYNAMICS_CONCURRENCY=3`（R6，§4.3.1） | 调度线程（帖子锁） | **预算自适应**：12 req·min⁻¹/平台，轮间 `max(30s, 预算等待) ±15s`，再套**周期下限** `DYNAMICS_MIN_CYCLE_SECONDS=60`（按**轮开始**计时）；仅 `DYNAMICS_BUDGET_RPM<=0` 时退回 15min ± 2min | 起跑时手动任务在跑 → **跳过本轮**；持锁期间手动请求 → **轮次断点让位** |
+| **综合档·动态流** | **按平台名单**：全部账号各 1 页 + 每账号 `limit_latest=2`；名单间并行、名单内串行（R7，§4.3.1.1） | 调度线程（帖子锁） | **预算自适应**：12 req·min⁻¹/平台，轮间 `max(30s, 预算等待) ±15s`，再套**周期下限** `DYNAMICS_MIN_CYCLE_SECONDS=60`（按**轮开始**计时） | 起跑时手动任务在跑 → **跳过本轮**；持锁期间手动请求 → **轮次断点让位** |
 | **综合档·账号流** | 全部账号全字段（原 T1 主账号 + T3a 全量合并） | 调度线程（账号锁） | **数据驱动**：任一账号 `last_fetched_at` 超 `ACCOUNT_SWEEP_STALE_HOURS=24h`（或为空）即到期，另受 `ACCOUNT_SWEEP_MIN_GAP_SECONDS=600s` 硬下限保护 | 同上 |
 | **T3 手动全量/补档** | 用户触发（全量账号/全量帖子/单 V/未归档批量端点） | — | 手动 | 永远优先于综合档（拿不到锁时请求自动档让位）；仅被 T0 并行（互不打扰） |
 | **T4 外部数据** | zeroroku/danmakus | APScheduler cron | 3AM 日/周 | 手动任务在跑 → **排队等待**（最多 30min）后执行；运行期间自动档跳过本轮 |
@@ -203,36 +203,49 @@
 比 v0.9.3 的 15 分钟快约 11 倍）；R6 之后（7 个主账号）一轮 7 请求 / **25.7s**、
 **周期稳定 60s** —— 请求数与旧版逐条相同，均值仍在 12 req·min⁻¹ 预算内。
 
-### 4.3.1.1 动态流的「分平台并发抓取」（R6，2026-09-13，devlog/070）
+### 4.3.1.1 动态流的「按平台名单」（R7，2026-09-13，devlog/078）
 
-用户口径：**"先按平台分类取抓取任务名单，然后并行根据名单抓；一轮 <1min 就休息到 1min，
->1min 就按预算休息、不触上限"**。落地形态：
+用户口径（R6 的**修正版**，原话）：**"每个 V 可能都有多平台的账号 —— 把库里所有 V 的所有
+平台账号按照平台分类成几个名单，然后不同名单并行、名单内串行抓取；频率仍旧标定在一分钟。"**
+例：七海（B 站+微博）、明前奶绿（B 站+微博）、泽音（B 站）→ 两条名单并行，
+`bilibili: [七海, 明前奶绿, 泽音]`、`weibo: [七海, 明前奶绿]`。
 
-1. **名单**：`_primary_accounts(db)` —— 每个 V 只取**主要活动平台**的账号
-   （`PRIMARY_PLATFORM_ORDER = [bilibili, weibo]` 取首个有 uid 的），再按 `platform`
-   分组 → `{bilibili: [...], weibo: [...]}`；
-2. **并发**：`_run_platform_rounds(groups, worker_with_pacing, per_platform=3)`：
-   每个就绪平台每轮取最多 3 个账号 `asyncio.gather` 并发；平台之间本来就并行；
-   结果按批次顺序回填（顺序稳定，便于逐平台统计请求数）；
-3. **起跑间隔**：`_PlatformPacer`（平台级闸门，`STARTUP_DYNAMICS_INTERVAL_MIN/MAX=3~5s`）
-   —— 并发下"每账号抓完再睡"不再能保证平台内请求间隔（3 个账号会同时发出去），
-   所以间隔上移到**平台级**：同平台两次请求**起跑**至少隔 3~5s，抓取耗时与这段间隔重叠，
-   一轮墙钟 ≈ 账号数 × 间隔（而不是 账号数 ×（间隔 + 耗时））；跨平台互不影响。
-   ⚠️ 该闸门**跨事件循环**复用（综合档每轮一个 `asyncio.run`），因此内部用
-   `threading.Lock` 占时隙 + 锁外 sleep，**不得改回 `asyncio.Lock`**（devlog/076 事故）；
-4. **每账号做什么**：`_fetch_posts_for_account(acc, 0, 1, ...)` = 0 页投稿 + 1 页动态，
-   `stop_on_existing=True` + `limit_latest=STARTUP_DYNAMICS_LIMIT(2)`；
-   新帖详情请求计入平台预算（`requests[pf] = 1 + stored`）；
-5. **周期**：`_dynamics_next_due(since=轮开始时刻)` —— 先按预算算
-   `max(30s, 预算等待) ± 15s`，再取 `max(该值, 轮开始 + 60s)`；
-6. **降级开关**：`DYNAMICS_CONCURRENCY=1` 回到旧行为（平台内串行 + 每账号抓完睡 3~5s），
-   账号流始终走这条；调参口见 devlog/070 §五；
-7. **失败隔离**：单账号异常 → 该会话 `rollback()` + 记进 `issues`（`stop_reason=error`），
-   其余账号照常跑完；整轮异常在最外层兜底成 `{status: done, error}`；
-   平台风控（`rate_limited`）→ 该平台冷却 `RATE_LIMIT_COOLDOWN=600s`，其它平台继续；
-8. **手动优先**：起跑时 `_post_fetch_lock` 非阻塞拿不到就整轮跳过；轮与轮之间的
-   `preempt` 断点处交还锁、等手动任务跑完再恢复；每轮 `on_progress` 汇报
-   「动态轮询中 · V名 · 已处理/总数」（顶栏胶囊），动态流本身**不写** `last_result`。
+落地形态：
+
+1. **名单**：`_dynamics_lanes(db)` —— 全部账号（`platform_uid` 非空 + 平台有 fetcher）
+   按 `platform` 分组，名单内按 `(V.id, Account.id)` **稳定排序**。
+   ⚠️ 与 `_primary_accounts()`（每 V 只取主账号）不是一回事：后者现在**只用于第三方历史回填**
+   （`startup_external_catchup`）。R6 的旧口径只抓主账号 ⇒ 微博账号只有"该 V 没有 B 站号"时
+   才会被动态流抓到（实测：七海/明前奶绿的微博从未进过 60s 轮）。
+2. **并行/串行**：`_run_platform_rounds(groups, worker, per_platform=1)` —— 每条名单每轮取
+   1 个账号，名单之间 `asyncio.gather` 并行、名单内部串行；每条名单一个独立会话。
+   （`per_platform>1` 是 R6 留下的**紧急开关** `DYNAMICS_CONCURRENCY`，默认 1。）
+3. **名单内间隔（自适应摊平）**：`_lane_gap(n) = clamp((TARGET − n×FETCH_EST) / n, 2s, 5s)`
+   默认 `TARGET=50s`、`FETCH_EST=1.5s` ⇒ **短名单直接命中 5s 上限（最保守，与账号流同款），
+   长名单才逐档压紧**；压到 2s 还装不下（约 >17 账号/平台）时轮长自然超过 60s，
+   周期下限让位给"按预算休息"——不为凑一分钟去猛发请求。±10% 抖动（固定节拍太"机器"）。
+4. **周期**：`_dynamics_next_due(since=轮开始时刻)` = `max(轮开始 + 60s, now + 预算等待 ±15s)`。
+5. **每账号**：`_fetch_posts_for_account(acc, 0, 1, ...)`（0 页投稿 + 1 页动态，
+   `stop_on_existing=True`，`limit_latest=2`）；新帖详情计入平台预算。
+6. **名单级跳过**：`_lane_skip_reason()` —— **微博未登录/登录态失效时整条 weibo 名单不跑**
+   （每轮开抓前用 `check_valid()` 复探一次，重新扫码后自动恢复）。否则 Cookie 过期期间
+   会变成"每分钟 N 条 `ok=-100` 警告 + 白打请求"。
+7. **预算口径同改**：`_next_dynamics_cost()` = 每个账号 1 次 feed 页（按名单长度），
+   与抓取轮同口径；跳过的名单不计预算。
+8. **失败隔离 / 手动优先 / 进度**：单账号异常只回滚该会话并记 `issues`；平台风控只冷却该平台
+   （600s）；起跑抢不到帖子锁整轮跳过、轮间断点让位；进度写「V名·平台 · i/N」。
+
+**实测**（2026-09-13，开发库副本 + 真实上游，`scripts/measure_dynamics_round.py --rounds 2`）：
+
+```
+名单：bilibili 8 个账号（间隔 4.75s）· weibo 2 个账号（间隔 5.00s）
+第 1 轮 43.6s / 第 2 轮 40.2s   请求数 {bilibili: 8, weibo: 2}   0 风控
+周期：按 R7 口径（轮开始计）63~70s（= 60s 下限与预算等待 ±15s 抖动取大者）
+```
+
+对比 R6 口径（每 V 一个主账号）：一轮 7 请求 / 25.7s，但**微博完全没被覆盖**。
+R7 把覆盖面补齐，代价是 +3 请求/轮（你库里 10 个账号），名单间并行让"多一个平台"
+**不增加墙钟**（墙钟只由最长的那条名单决定）。
 
 ### 4.3.2 启动外部补抓（v0.9.8，P9-4）
 
@@ -502,9 +515,10 @@ def _detect_rate_limit(status_code, data=None):
 | `DYNAMICS_LATEST_INTERVAL_MINUTES` / `_JITTER` | 15 min ± 120 s（动态流；仅预算关闭时生效） | config.py |
 | `DYNAMICS_BUDGET_RPM` | 12 req·min⁻¹（**动态流按平台预算**，v0.9.8；≤0=退回固定周期；单平台需求超此值时该平台生效预算自动抬高，见 §4.3.1） | `app/core/config.py` |
 | `DYNAMICS_MIN_GAP_SECONDS` / `_JITTER_SECONDS` | 30 s / 15 s（自适应轮间间隔下限与抖动） | config.py |
-| `DYNAMICS_CONCURRENCY` | 3（**动态流平台内并发抓几个账号**；1 = 旧的逐个节流 + 抓完再睡 3~5s，账号流恒为 1） | config.py |
+| `DYNAMICS_CONCURRENCY` | 1（**动态流名单内串行** = R7 默认；>1 = R6 的"平台内并发 N + 起跑闸门"，紧急开关） | config.py |
 | `DYNAMICS_MIN_CYCLE_SECONDS` | 60 s（动态流**周期下限**，按**轮开始**计时；见 §4.3.1.1） | config.py |
-| `STARTUP_DYNAMICS_INTERVAL_MIN` / `_MAX` | 3.0 / 5.0 s（平台内**起跑间隔**，并发下由 `_PlatformPacer` 保证） | config.py |
+| `DYNAMICS_LANE_TARGET_SECONDS` / `_FETCH_ESTIMATE` / `_GAP_MIN` / `_GAP_MAX` | 50 s / 1.5 s / 2 s / 5 s（名单内间隔自适应摊平，见 §4.3.1.1） | config.py |
+| `STARTUP_DYNAMICS_INTERVAL_MIN` / `_MAX` | 3.0 / 5.0 s（仅 `DYNAMICS_CONCURRENCY>1` 的 R6 起跑闸门用到） | config.py |
 | `EXTERNAL_STARTUP_CATCHUP_ENABLED` / `_STALE_HOURS` | True / 24 h（启动时外部补抓，v0.9.8） | config.py |
 | `ACCOUNT_SWEEP_STALE_HOURS` | 24 h（账号流数据到期阈值） | config.py |
 | `ACCOUNT_SWEEP_MIN_GAP_SECONDS` | 600 s（账号流失败重试下限） | config.py |

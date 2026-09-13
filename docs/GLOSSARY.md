@@ -16,7 +16,8 @@
 |---|---|---|---|
 | **VTuber / 主播本体** | 平台无关的主播实体（名字/阵营/生日/出道日/设定/头像/自定义背景） | `app/models/vtuber.py::VTuber`；`VTuberRepo` | 一个 V 挂多个 `accounts` |
 | **账号 / account** | V 在某平台的账号（昵称/签名/头像/粉丝数/直播字段） | `models/vtuber.py::Account`；`AccountRepo`；`services/platforms/` | 唯一键 `(platform, platform_uid)` |
-| **主账号 / primary account** | 每个 V 按 `PRIMARY_PLATFORM_ORDER`（bilibili > weibo）取的首个账号 | `scheduler._primary_accounts()` | 动态流只跑主账号 |
+| **主账号 / primary account** | 每个 V 按 `PRIMARY_PLATFORM_ORDER`（bilibili > weibo）取的首个账号 | `scheduler._primary_accounts()` | **只用于第三方历史回填**（动态流已改为全部账号，见「动态名单」） |
+| **动态名单 / dynamics lane** | 动态流按平台分组的账号名单：**库里所有 V 的所有平台账号**各占一格；名单之间并行、**名单内部串行**，名单内间隔自适应摊平（R7，devlog/078） | `scheduler._dynamics_lanes()` / `_active_dynamics_lanes()` / `_lane_gap()` | 微博未登录时整条 weibo 名单跳过 |
 | **帖子 / post** | 动态/投稿/专栏/转发/音乐的统称（证据档案的主体） | `models/vtuber.py::Post`；`PostRepo`；`components/PostCard.tsx` | 唯一键 `(platform, uid, pid)` |
 | **动态 / dynamic** | B 站 `feed/space` 流（`type=text/image/video_dynamic/…`） | `fetcher.fetch_bilibili_dynamics`；`scheduler._fetch_posts_core` | 微博单流等价物：`_fetch_platform_posts` |
 | **投稿 / video** | B 站 `arc/search` 视频流（`type=video`） | `fetcher.fetch_bilibili_videos` | 与 video_dynamic 同一条视频的两个来源 |
@@ -85,7 +86,7 @@
 | **头像延后 / deferred avatar** | 先落账号字段、后下载头像、再推一次快照 | `scheduler._deferred_avatar` | 只 UPDATE `avatar_path` 一列 |
 | **排队兜底 / pending queue** | 收录时抢锁失败 → 入队，由综合档心跳补抓 | `scheduler._pending_account_ids`、`_drain_pending_fetches` | 不静默丢任务 |
 | **共享 SSL 上下文** | 进程级缓存 SSLContext，客户端构造 ~1s → ~0.06s | `app/core/http.py::ssl_context/new_async_client` | 全仓客户端统一用它 |
-| **动态流 / dynamics stream** | 每 V 主账号 1 页 + 限 2 帖（**预算自适应**：12 req·min⁻¹/平台，轮间 max(30s, 预算等待) ±15s；仅预算关闭时退回 15min±2min） | `scheduler.run_latest_dynamics_sweep` | 帖子锁 |
+| **动态流 / dynamics stream** | **按平台名单**跑（R7）：全部账号各 1 页 + 每账号限 2 帖；名单间并行、名单内串行；周期 = `max(轮开始+60s, 预算等待)`（预算：12 req·min⁻¹/平台、轮间 max(30s, 等待) ±15s；仅预算关闭时退回 15min±2min） | `scheduler.run_latest_dynamics_sweep` | 帖子锁；名单见「动态名单」 |
 | **账号流 / account stream** | 全量账号信息，**数据驱动到期**（默认 24h） | `scheduler.async_fetch_and_update(auto=True)`、`account_sweep_due` | 账号锁 |
 | **T0 直播轮询** | 60s 批量回写 `live_*`（不占锁、不写 last_result） | `scheduler._live_poller_loop`、`live_sweep_core` | 跳变落快照 |
 | **T4 外部批次** | zeroroku/danmakus 的 3AM 日/周 cron | `scheduler.run_external_{daily,weekly}_jobs`、`_wait_for_manual_tasks` | 手动任务在跑则排队等 |
@@ -186,6 +187,9 @@
 | `LIVE_POLL_SECONDS` / `_JITTER` | 60 / 15 s | T0 直播轮询 |
 | `DYNAMICS_BUDGET_RPM` | 12 | 动态流单平台每分钟请求预算（>0 时启用自适应） |
 | `DYNAMICS_MIN_GAP_SECONDS` / `_JITTER` | 30 / 15 s | 动态流轮间最小间隔与抖动 |
+| `DYNAMICS_CONCURRENCY` | 1 | **紧急开关**：1 = 名单内串行（R7 默认）；>1 = 回到 R6 的"平台内并发 N + 起跑闸门" |
+| `DYNAMICS_MIN_CYCLE_SECONDS` | 60 s | 动态流周期下限（按**轮开始**计时） |
+| `DYNAMICS_LANE_TARGET_SECONDS` / `_FETCH_ESTIMATE` / `_GAP_MIN` / `_GAP_MAX` | 50 / 1.5 / 2 / 5 | 名单内间隔自适应摊平：`gap = clamp((目标轮长 − N×抓取估计)/N, 2s, 5s)` |
 | `DYNAMICS_LATEST_INTERVAL_MINUTES` / `_JITTER` | 15 min / 120 s | 动态流固定周期（**仅 `DYNAMICS_BUDGET_RPM<=0` 时生效**） |
 | `ACCOUNT_SWEEP_STALE_HOURS` | 24 h | 账号流数据到期阈值 |
 | `ACCOUNT_SWEEP_MIN_GAP_SECONDS` | 600 s | 账号流失败重试下限 |

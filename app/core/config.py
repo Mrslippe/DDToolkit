@@ -85,10 +85,20 @@ class Settings:
     DYNAMICS_JITTER_SECONDS: float = 15.0        # 轮间随机抖动（±）
     # 需求 R6（2026-09-13 用户定，devlog/070）：「先按平台分类取任务名单，然后并行按名单抓；
     # 一轮 <1min 就休息到 1min，>1min 就按预算休息、不触上限」
-    DYNAMICS_CONCURRENCY: int = 3                # 每平台每轮**并发**抓几个账号（1 = 旧的逐个节流；
-                                                 # 平台内请求间隔仍由 _PlatformPacer 保证，不受并发影响）
+    # 需求 R7（同日二次口径，devlog/078）：名单 = **库里所有 V 的所有平台账号**按平台分组，
+    # 名单之间并行、**名单内部串行**；间隔按名单长度自适应摊平（见下面三个参数）。
+    DYNAMICS_CONCURRENCY: int = 1                # **紧急开关**：1 = 名单内串行（R7 默认）；
+                                                 # >1 = 回到 R6 的"平台内并发 N + 起跑闸门"，
+                                                 # 仅在需要压缩一轮墙钟时临时启用
     DYNAMICS_MIN_CYCLE_SECONDS: float = 60.0     # 一轮的**周期下限**（按轮**开始**计时，
                                                  # 而不是"轮结束后再睡这么久"）
+    # 名单内间隔（自适应摊平）：gap = clamp((目标时长 − 账号数 × 抓取耗时估计) / 账号数,
+    # 下限, 上限) —— 短名单直接命中上限（最保守），长名单才逐档压紧，压到下限还装不下就让
+    # 周期自然超过 1 分钟（不为凑时长去猛发请求）。
+    DYNAMICS_LANE_TARGET_SECONDS: float = 50.0  # 一条名单的目标轮长（给 60s 周期留余量）
+    DYNAMICS_LANE_FETCH_ESTIMATE: float = 1.5   # 单账号抓取耗时估计（用于扣减名额）
+    DYNAMICS_LANE_GAP_MIN: float = 2.0          # 名单内间隔下限（再快就谈不上拟人）
+    DYNAMICS_LANE_GAP_MAX: float = 5.0          # 名单内间隔上限（与账号流 3~5s 同款）
     # 账号流（原 T1 主账号 + T3a 全量合并）：账号字段变化慢，按「上次抓取时间」判断到期
     ACCOUNT_SWEEP_STALE_HOURS: float = 24.0      # 任一账号 last_fetched_at 超过该值（或为空）→ 到期
     ACCOUNT_SWEEP_MIN_GAP_SECONDS: int = 600     # 同进程两次账号流的硬下限（防失败重试风暴）

@@ -1952,21 +1952,107 @@ def test_platform_budget_adapts_to_per_platform_demand():
     assert b4.wait_seconds({"bilibili": 2}, 0.0, by_platform={"bilibili": 2}) > 59
 
 
-def test_next_dynamics_cost_counts_primary_accounts(db):
-    """下一轮成本 = 每 V **主账号** 1 次 feed 页（按平台聚合；一个 V 只算一个平台）。"""
+def test_dynamics_lanes_group_all_accounts_by_platform(db, monkeypatch):
+    """R7（2026-09-13 用户口径）：动态名单 = **库里所有 V 的所有平台账号**按平台分组。
+
+    与 `_primary_accounts`（每 V 只取主账号，第三方历史回填仍用它）的区别就在这里：
+    一个 V 有几个平台就在几条名单里各占一格；同一平台的多个账号也各占一格。
+    """
     from app.services import scheduler as sch
 
-    v1, v2, v3 = VTuber(name="A"), VTuber(name="B"), VTuber(name="C")
+    # 测试环境默认没有微博 cookie（`needs_login=True` → weibo 名单会被跳过），
+    # 这里先给个假登录态，让断言只聚焦"名单怎么分"
+    monkeypatch.setattr(sch.weibo_auth_manager, "cookie", "SUB=dummy")
+    monkeypatch.setattr(sch.weibo_auth_manager, "_valid", True)
+
+    v1, v2, v3 = VTuber(name="七海"), VTuber(name="明前奶绿"), VTuber(name="泽音")
     db.add_all([v1, v2, v3])
     db.commit()
     db.add_all([
-        Account(vtuber_id=v1.id, platform="bilibili", platform_uid="1"),
-        Account(vtuber_id=v1.id, platform="weibo", platform_uid="2"),   # 副账号不计入
-        Account(vtuber_id=v2.id, platform="bilibili", platform_uid="3"),
-        Account(vtuber_id=v3.id, platform="weibo", platform_uid="4"),   # 只有微博 → 主账号是微博
+        Account(vtuber_id=v1.id, platform="bilibili", platform_uid="11"),
+        Account(vtuber_id=v1.id, platform="weibo", platform_uid="12"),
+        Account(vtuber_id=v2.id, platform="bilibili", platform_uid="21"),
+        Account(vtuber_id=v2.id, platform="weibo", platform_uid="22"),
+        Account(vtuber_id=v3.id, platform="bilibili", platform_uid="31"),
+        # 同一平台的第二个账号（如分号）也要进名单
+        Account(vtuber_id=v3.id, platform="bilibili", platform_uid="32"),
+        # 两种该被跳过的账号
+        Account(vtuber_id=v3.id, platform="bilibili", platform_uid=""),
+        Account(vtuber_id=v3.id, platform="mastodon", platform_uid="99"),   # 无 fetcher
     ])
     db.commit()
-    assert sch._next_dynamics_cost(db) == {"bilibili": 2, "weibo": 1}
+
+    lanes = sch._dynamics_lanes(db)
+    assert {pf: len(q) for pf, q in lanes.items()} == {"bilibili": 4, "weibo": 2}
+    # 名单内顺序稳定：按 (V.id, Account.id)
+    assert [acc.platform_uid for _v, acc in lanes["bilibili"]] == ["11", "21", "31", "32"]
+    assert [acc.platform_uid for _v, acc in lanes["weibo"]] == ["12", "22"]
+    # 另一个 V 出现在两条名单里（这就是 R6 做不到的覆盖面）
+    names = {pf: [v.name for v, _a in q] for pf, q in lanes.items()}
+    assert names["bilibili"] == ["七海", "明前奶绿", "泽音", "泽音"]
+    assert names["weibo"] == ["七海", "明前奶绿"]
+
+    # 预算估算必须与抓取名单同口径（每账号 1 次 feed 页）
+    assert sch._next_dynamics_cost(db) == {"bilibili": 4, "weibo": 2}
+
+    # 主账号口径仍然是"每 V 一个"（第三方历史回填用），两者不是一回事
+    assert len(sch._primary_accounts(db)) == 3
+
+
+def test_dynamics_lane_skipped_when_weibo_not_logged_in(db, monkeypatch):
+    """微博登录态不可用 → **整条 weibo 名单不跑**（同步判据 + 预算估算一起生效）。
+
+    动机（2026-09-13 实测）：Cookie 过期时每个账号都会 ok=-100 失败 ——
+    放进 60s 轮就是"每分钟 N 条警告 + 白打请求"。
+    """
+    from app.services import scheduler as sch
+
+    v = VTuber(name="七海")
+    db.add(v)
+    db.commit()
+    db.add_all([
+        Account(vtuber_id=v.id, platform="bilibili", platform_uid="11"),
+        Account(vtuber_id=v.id, platform="weibo", platform_uid="12"),
+    ])
+    db.commit()
+
+    monkeypatch.setattr(sch.weibo_auth_manager, "cookie", "")      # 无 cookie = 未登录
+    lanes, skipped = sch._active_dynamics_lanes(db)
+    assert list(lanes) == ["bilibili"]
+    assert "weibo" in skipped and "登录" in skipped["weibo"]
+    assert sch._next_dynamics_cost(db) == {"bilibili": 1}      # 跳过的名单不计预算
+
+    monkeypatch.setattr(sch.weibo_auth_manager, "cookie", "SUB=dummy")   # 重新扫码后
+    monkeypatch.setattr(sch.weibo_auth_manager, "_valid", True)
+    lanes2, skipped2 = sch._active_dynamics_lanes(db)
+    assert sorted(lanes2) == ["bilibili", "weibo"] and not skipped2
+    assert sch._next_dynamics_cost(db) == {"bilibili": 1, "weibo": 1}
+
+
+def test_dynamics_lane_gap_adapts_to_list_length():
+    """名单内间隔自适应摊平（R7）：短名单最保守、长名单才压紧、压到底也不低于下限。
+
+    这张表就是"一分钟周期"的边界说明书：约 17 个账号/平台是 60s 还能容纳的上限，
+    再多就该让周期自然变长（而不是把间隔压到 2s 以下硬凑）。
+    """
+    from app.services import scheduler as sch
+
+    s = settings
+    assert sch._lane_gap(1) == s.DYNAMICS_LANE_GAP_MAX          # 单账号：无间隔可言 → 上限
+    assert sch._lane_gap(2) == s.DYNAMICS_LANE_GAP_MAX
+    assert sch._lane_gap(4) == s.DYNAMICS_LANE_GAP_MAX
+    # N=8（当前 B 站名单长度）→ 摊到目标时长，且不超上限
+    assert 4.5 < sch._lane_gap(8) < s.DYNAMICS_LANE_GAP_MAX
+    # 单调不增 + 不低于下限
+    gaps = [sch._lane_gap(n) for n in range(1, 41)]
+    assert all(b <= a + 1e-9 for a, b in zip(gaps, gaps[1:]))
+    assert min(gaps) >= s.DYNAMICS_LANE_GAP_MIN
+    # 轮长 ≈ 目标时长（未触底时）；触底后自然超出 60s 周期 → 由周期下限让位
+    for n in (8, 12):
+        assert abs((n * s.DYNAMICS_LANE_FETCH_ESTIMATE + n * sch._lane_gap(n))
+                   - s.DYNAMICS_LANE_TARGET_SECONDS) < 0.01
+    over = 20 * s.DYNAMICS_LANE_FETCH_ESTIMATE + 20 * sch._lane_gap(20)
+    assert over > s.DYNAMICS_MIN_CYCLE_SECONDS
 
 
 def test_startup_catchup_due_by_timestamp(db):

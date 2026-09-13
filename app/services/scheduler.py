@@ -36,6 +36,7 @@ from app.services.platforms import registry
 from app.services.post_text import extract_post_text
 from app.services.tombstone import apply_tombstone_scan
 from app.services.externals.runner import run_external_interval
+from app.services.weibo_auth import weibo_auth_manager
 # 注意：此处不调用 logging.basicConfig —— 根日志配置统一由
 # `app/core/logging_setup.py::setup_logging()`（在 app/main.py 里调用）完成。
 # 历史上这里先执行了 basicConfig，导致 main.py 里的文件 handler 配置被静默忽略，
@@ -2235,6 +2236,9 @@ def _primary_accounts(db: Session) -> list[tuple[VTuber, Account]]:
 
     目前设计为 bilibili 优先（B 站是各 V 最主要活动平台），后续平台扩展
     只需调配置顺序即可生效。
+
+    用途限定：**第三方历史回填**（`startup_external_catchup`，每 V 只回主账号是刻意的）。
+    动态流的抓取名单**不是**它 —— 见 `_dynamics_lanes`（要覆盖所有平台账号）。
     """
     out: list[tuple[VTuber, Account]] = []
     for v in db.query(VTuber).order_by(VTuber.id.asc()).all():
@@ -2249,6 +2253,76 @@ def _primary_accounts(db: Session) -> list[tuple[VTuber, Account]]:
         if accs:
             out.append((v, accs[0]))
     return out
+
+
+def _dynamics_lanes(db: Session) -> dict[str, list[tuple[VTuber, Account]]]:
+    """动态流的**按平台名单**（2026-09-13 需求 R7，用户口径）。
+
+    "把库里所有 V 的**所有平台账号**按平台分成几个名单，名单之间并行、名单内部串行"：
+
+    - 与 `_primary_accounts` 的区别：**不再每 V 只取一个主账号** —— 一个 V 在几个平台
+      就有几条名单里各占一格（例：七海 + 明前奶绿各有 B 站/微博 → B 站名单 3 个、微博名单 2 个）；
+      同一平台的多个账号（如某 V 有两个 B 站号）也各占一格；
+    - 名单内按 `(V.id, Account.id)` 排序：**顺序稳定**，便于观测与复现；
+    - 跳过 `platform_uid` 为空、以及平台没有 fetcher（`registry`）的账号。
+
+    返回 `{platform: [(VTuber, Account), ...]}`；空名单不出现在结果里。
+    """
+    lanes: dict[str, list[tuple[VTuber, Account]]] = {}
+    for v in db.query(VTuber).order_by(VTuber.id.asc()).all():
+        for acc in sorted(v.accounts, key=lambda a: a.id):
+            if not acc.platform_uid or not str(acc.platform_uid).strip():
+                continue
+            if registry.get_fetcher(acc.platform) is None:
+                logger.debug(f"动态名单跳过不支持的平台 {acc.platform}（V#{v.id}）")
+                continue
+            lanes.setdefault(acc.platform, []).append((v, acc))
+    return lanes
+
+
+def _lane_skip_reason(pf: str) -> str | None:
+    """名单级可用性判据（**同步**口径，预算估算与抓取轮共用）。
+
+    目前只有一条：**微博未登录/登录态失效**时整条 weibo 名单跳过 ——
+    否则会变成"每分钟 N 条 ok=-100 警告 + 白打请求"（2026-09-13 实测：Cookie 过期期间
+    抓取必失败）。登录态在每轮开抓前用 `check_valid()`（60s 缓存）复探一次，
+    用户重新扫码后**自动恢复**，不需要重启。
+    """
+    if pf == "weibo" and weibo_auth_manager.needs_login:
+        return "微博未登录/登录态失效"
+    return None
+
+
+def _active_dynamics_lanes(db: Session) -> tuple[dict[str, list[tuple[VTuber, Account]]],
+                                                 dict[str, str]]:
+    """按平台名单 + 去掉不可用名单；返回 `(可用名单, {平台: 跳过原因})`。"""
+    lanes = _dynamics_lanes(db)
+    skipped: dict[str, str] = {}
+    for pf in list(lanes):
+        why = _lane_skip_reason(pf)
+        if why:
+            skipped[pf] = why
+            lanes.pop(pf)
+    return lanes, skipped
+
+
+def _lane_gap(n: int) -> float:
+    """名单内两个账号之间的间隔（**自适应摊平**，R7 用户定）。
+
+    目标：一条名单在一轮里走完，且**轮长 ≈ `DYNAMICS_LANE_TARGET_SECONDS`**（默认 50s，
+    给 60s 周期留余量）—— 名额 = 目标时长减去抓取耗时估计，再按账号数摊平：
+
+        gap = clamp((target - n × fetch_est) / n, GAP_MIN, GAP_MAX)
+
+    于是：名单短 → 直接命中上限 5s（最保守，与账号流同款节流）；名单长 → 才逐档压紧，
+    但**不低于 2s**（再快就谈不上拟人）。压到底还装不下（约 >17 账号/平台）时，
+    轮长自然超过 60s，由周期下限让位给"按预算休息"（不会为了凑一分钟去猛发请求）。
+    """
+    n = max(1, int(n))
+    budget = settings.DYNAMICS_LANE_TARGET_SECONDS - n * settings.DYNAMICS_LANE_FETCH_ESTIMATE
+    return max(settings.DYNAMICS_LANE_GAP_MIN,
+               min(settings.DYNAMICS_LANE_GAP_MAX, budget / n))
+
 
 
 async def live_sweep_core(db: Session, client: httpx.AsyncClient | None = None) -> FetchResult:
@@ -2329,11 +2403,20 @@ async def live_sweep_core(db: Session, client: httpx.AsyncClient | None = None) 
 
 
 async def run_latest_dynamics_sweep() -> dict:
-    """动态流（原 T2）：每 V 主账号 1 页 + 最多入库 STARTUP_DYNAMICS_LIMIT 条新帖。
+    """动态流（原 T2）：**按平台分名单**并发跑，每条名单内部串行（2026-09-13 R7 用户口径）。
 
-    - 并发粒度 = 平台：每轮各平台各一个主账号（平台间并行、平台内串行）；
+    - **名单** = 库里所有 V 的所有平台账号，按平台分组（`_dynamics_lanes`），
+      例如 `{bilibili: [七海, 明前奶绿, 泽音, …], weibo: [七海, 明前奶绿]}`；
+    - **并行/串行**：名单之间 `asyncio.gather` 并行，名单内部逐个抓（`per_platform=1`），
+      每条名单一个独立会话（不同平台的字段回写互不干扰）；
+    - **名单内间隔**：自适应摊平（`_lane_gap`：短名单 5s 上限、长名单逐档压到 2s 下限），
+      使一轮 ≈ `DYNAMICS_LANE_TARGET_SECONDS`；
+    - 每账号 1 页动态（0 页投稿）+ 最多入库 `STARTUP_DYNAMICS_LIMIT` 条新帖；
     - 手动任务优先：_post_fetch_lock 非阻塞获取失败即跳过；轮间让位；
     - 不写 last_result（周期任务静默，前端不弹完成胶囊）。
+
+    名单级跳过：微博登录态不可用时**整条 weibo 名单不跑**（原因见 `_lane_skip_reason`），
+    登录态每轮复探一次，重新登录后自动恢复。
     """
     global _post_fetch_running
 
@@ -2351,16 +2434,28 @@ async def run_latest_dynamics_sweep() -> dict:
     issues: list[dict] = []
     out: dict = {}
     try:
-        pairs = _primary_accounts(db)
-        if not pairs:
+        groups, skipped_lanes = _active_dynamics_lanes(db)
+        # 登录态**复探一次**（60s 缓存）：Cookie 中途失效时立刻停掉 weibo 名单，
+        # 重新扫码后下一轮自动恢复 —— 不做这一步就会每分钟白打 2 个必失败请求 + 两条警告。
+        if "weibo" in groups and not await weibo_auth_manager.check_valid():
+            skipped_lanes["weibo"] = "微博登录态探测无效"
+            groups.pop("weibo")
+        if skipped_lanes:
+            logger.info("动态流：名单跳过 " + "、".join(
+                f"{pf}（{why}）" for pf, why in skipped_lanes.items()))
+        if not groups:
             logger.info("动态流：无可抓取账号")
-            out = {"status": "done", "total": total, "details": []}
+            out = {"status": "done", "total": total, "details": [],
+                   "skipped_lanes": skipped_lanes}
             return out
-        groups: dict[str, list[tuple[VTuber, Account]]] = {}
-        for v, acc in pairs:
-            groups.setdefault(acc.platform, []).append((v, acc))
         for pf in groups:
             sessions[pf] = SessionLocal()
+
+        # 名单内间隔：按名单长度自适应（一轮 ≈ 目标时长），逐轮重算
+        lane_gaps = {pf: _lane_gap(len(q)) for pf, q in groups.items()}
+        logger.info("动态流名单：" + "、".join(
+            f"{pf} {len(q)} 个账号（间隔 {lane_gaps[pf]:.1f}s）"
+            for pf, q in groups.items()))
 
         def commit_all() -> None:
             for s in sessions.values():
@@ -2376,8 +2471,10 @@ async def run_latest_dynamics_sweep() -> dict:
             if local is None:
                 return _RoundOutcome(ok=False, error="账号已不存在", payload=(v, acc))
             logger.info(f"[{pf}] 动态 {v.name} ({acc.platform_uid}) ...")
-            # P8-C：顶栏「动态轮询中 - {V名} - 已处理/总数」
-            _set_post_progress("dynamic", v.name, progress["done"], progress["total"])
+            # P8-C：顶栏「动态轮询中 - {V名}·{平台} - 已处理/总数」
+            # （多名单并行时只写 V 名看不出是哪条名单在跑）
+            _set_post_progress("dynamic", f"{v.name}·{pf}",
+                               progress["done"], progress["total"])
             try:
                 r = await _fetch_posts_for_account(
                     local, 0, 1, s, client=client,
@@ -2389,20 +2486,18 @@ async def run_latest_dynamics_sweep() -> dict:
                 s.rollback()
                 return _RoundOutcome(ok=False, error=str(e), payload=(v, acc))
             return _RoundOutcome(ok=True, rate_limited=r.rate_limited, payload=(v, r))
-            # 注：平台内节流在 finally 里
 
         async def worker_with_pacing(pf: str, item) -> _RoundOutcome:
-            try:
-                # 并发模式（R6）：平台级起跑闸门保证同平台请求间隔，抓取耗时与间隔重叠
-                if settings.DYNAMICS_CONCURRENCY > 1:
-                    await _dynamics_pacer.wait(pf)
-                return await worker(pf, item)
-            finally:
-                # 单并发保留旧行为（抓完再睡）；并发下这段 sleep 只会白等（3 个 worker
-                # 同时睡，既不省时间也不构成间隔），故跳过
-                if settings.DYNAMICS_CONCURRENCY <= 1:
-                    await asyncio.sleep(random.uniform(settings.STARTUP_DYNAMICS_INTERVAL_MIN,
-                                                       settings.STARTUP_DYNAMICS_INTERVAL_MAX))
+            # R7：名单内部串行（per_platform=1）时，由这里给出名单内间隔。
+            # 并发模式（DYNAMICS_CONCURRENCY>1，R6 留下的紧急开关）下由起跑闸门接管 ——
+            # 那时这行 sleep 只会让 N 个 worker 一起白等，故跳过。
+            if settings.DYNAMICS_CONCURRENCY <= 1:
+                gap = lane_gaps.get(pf, settings.DYNAMICS_LANE_GAP_MAX)
+                # ±10% 抖动：固定节拍太"机器"
+                await asyncio.sleep(gap * random.uniform(0.9, 1.1))
+            elif settings.DYNAMICS_CONCURRENCY > 1:
+                await _dynamics_pacer.wait(pf)
+            return await worker(pf, item)
 
         def on_progress(done: int, total_n: int, ready: list[str]) -> None:
             # P8-C：轮次开始前汇报「已处理/总数」；V 名由上面 worker 在真正开抓时写入
@@ -2417,7 +2512,7 @@ async def run_latest_dynamics_sweep() -> dict:
             on_preempt=lambda: _auto_yield_post_with(commit_all),
             on_progress=on_progress,
             cooldown_seconds=settings.RATE_LIMIT_COOLDOWN,
-            per_platform=settings.DYNAMICS_CONCURRENCY,   # R6：平台内并发（默认 3）
+            per_platform=settings.DYNAMICS_CONCURRENCY,   # 默认 1 = 名单内串行（R7）
         )
         # P9-5：按平台统计本轮**实际请求数**（1 次 feed 页 + 每入库帖 1 次详情），
         # 供速率预算器记账（stored 即详情请求数的上界估计）
@@ -2437,7 +2532,10 @@ async def run_latest_dynamics_sweep() -> dict:
             if r.stop_reason in ("rate_limited", "network_error", "error"):
                 issues.append({"label": f"{v.name}({pf})",
                                "stop_reason": r.stop_reason, "error": r.error})
-        out = {"status": "done", "total": total, "issues": issues, "requests": requests}
+        out = {"status": "done", "total": total, "issues": issues, "requests": requests,
+               "lanes": {pf: len(q) for pf, q in groups.items()},
+               "lane_gaps": {pf: round(g, 2) for pf, g in lane_gaps.items()},
+               "skipped_lanes": skipped_lanes}
         return out
     except Exception as e:
         logger.error(f"动态流异常: {e}", exc_info=True)
@@ -2745,11 +2843,15 @@ _dynamics_pacer = _PlatformPacer(settings.STARTUP_DYNAMICS_INTERVAL_MIN,
 
 
 def _next_dynamics_cost(db: Session) -> dict[str, int]:
-    """下一轮动态流各平台预计请求数（每主账号 1 次 feed 页）。"""
-    cost: dict[str, int] = {}
-    for _v, acc in _primary_accounts(db):
-        cost[acc.platform] = cost.get(acc.platform, 0) + 1
-    return cost
+    """下一轮动态流各平台预计请求数（**每账号 1 次 feed 页**，按名单长度算）。
+
+    ⚠️ 口径必须与 `run_latest_dynamics_sweep` 的名单一致（R7：全部账号，不是每 V 主账号），
+    否则轮前记账与实际请求数不符 → 预算等待算错（少算会顶到上限，多算会白等一轮）。
+    这里用**同步**的 `_lane_skip_reason` 预筛（与抓取轮同一判据）；抓取轮还会再复探一次
+    登录态，可能比这里多跳一条名单 —— 那只会让本轮实际请求少于记账，方向是安全的。
+    """
+    lanes, _skipped = _active_dynamics_lanes(db)
+    return {pf: len(q) for pf, q in lanes.items()}
 
 
 def _live_poller_loop() -> None:
