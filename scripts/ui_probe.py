@@ -104,15 +104,22 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
     if not m:
         print(f"  [FAIL] {tag} @{width}: 未拿到探针输出（页面未跑完？见 {dom_file}）")
         return None
-    data = json.loads(m.group(1))
+    try:
+        data = json.loads(m.group(1))
+    except json.JSONDecodeError as exc:
+        # 解析失败必须当作「没量到」，不能让异常穿透 finally 把现场一起删掉
+        # （审计 2026-09-11：原来 json.loads 未捕获，异常直接冒泡出 main）。
+        print(f"  [FAIL] {tag} @{width}: 探针 JSON 解析失败（{exc}）；见 {dom_file}")
+        return None
     if isinstance(data, dict):                     # 2026-09-10 起：{views, topbar, ...}
         return {
             "views": data.get("views") or [],
             "topbar": data.get("topbar"),
             "calendar": data.get("calendar"),
+            "degraded": data.get("degraded") or [],
             "dom": dom_file,
         }
-    return {"views": data, "topbar": None, "calendar": None, "dom": dom_file}   # 旧格式兼容
+    return {"views": data, "topbar": None, "calendar": None, "degraded": [], "dom": dom_file}
 
 
 def _run_shot(edge: str, url: str, width: int, height: int, out_png: Path) -> None:
@@ -225,7 +232,10 @@ def _assert_filter_pop(v: dict, width: int) -> list[str]:
         bad.append(f"@{width} {tag}: 可见月份面板 {fp.get('visibleMonthPanels')} ≠ 2（双月历并排）")
     if fp.get("presets") != 6:
         bad.append(f"@{width} {tag}: 预设钮 {fp.get('presets')} ≠ 6")
-    if fp.get("confirmDisabled"):
+    if fp.get("confirmDisabled") is None:
+        # 量不到 ≠ 通过（原来 `if fp.get("confirmDisabled")` 在 None 时静默放过）
+        bad.append(f"@{width} {tag}: 取不到「确认」钮状态（.drp-confirm 选择器踩空？）")
+    elif fp["confirmDisabled"]:
         bad.append(f"@{width} {tag}: 「确认」初始态被禁用（区间为空时应可用）")
     return bad
 
@@ -258,12 +268,65 @@ CARD_COLUMN_MAX = 900
 CARD_COVER_W = 220
 
 
+# 主模式（?probe=1）应量到的视图标签序列，由 frontend/src/dev/probe.ts 决定：
+# 四个视图 + 列表页的筛选弹窗全链路三帧 + 投稿筛选页。少一段就说明「没量到」，
+# 必须判失败 —— 否则断言会静默空转而脚本照旧打印 [ok]。
+# （2026-09-11 审计加固：`_first_vtuber` 失败 → 路由落到 `/` → 只 emit `empty`，
+#   所有卡片/筛选断言全部空过，退出码仍是 0。）
+EXPECTED_TAGS = [
+    "archive", "cards", "list",
+    "list-filter-pop", "list-filter-applied", "list-filter-reset",
+    "list-video", "profile",
+]
+
+
+def _assert_probe_integrity(res: dict, width: int, archive: bool = False) -> list[str]:
+    """探针自证「确实按契约量到了」——防的最是「跑通了但什么都没测」。
+
+    两类硬失败：
+    - 页面自己汇报的 `degraded`（视图钮点不中 / 投稿 chip 缺失 / 无视图光条）；
+    - 量到的段数与契约不符（少段 = 某段被跳过）。
+    `--archive` 模式不产 views，改为要求日历段存在。
+    """
+    tag = "archive" if archive else "main"
+    bad: list[str] = []
+    for reason in res.get("degraded") or []:
+        bad.append(f"@{width} {tag}: 探针退化（{reason}）—— 该段未被量到，断言不可信")
+    if archive:
+        if not res.get("calendar"):
+            bad.append(f"@{width} {tag}: 未拿到日历段（--archive 的实渲染 dump 落空）")
+        return bad
+    tags = [v.get("tag") for v in res.get("views") or []]
+    if tags == ["empty"]:
+        bad.append(
+            f"@{width} {tag}: 量到空置页（没有选中 VTuber）—— 布局断言全部空转。"
+            "检查开发数据目录里是否有 V、以及路由是否取到了 id"
+        )
+    missing = [t for t in EXPECTED_TAGS if t not in tags]
+    if missing:
+        bad.append(f"@{width} {tag}: 缺少量测段 {missing}（实得 {tags}）")
+    return bad
+
+
 def _assert_cards(v: dict, width: int) -> list[str]:
     cards = v.get("cards")
-    if not cards or not cards.get("n"):
-        return []
     tag = v.get("tag")
+    contract = v.get("contract")
     bad: list[str] = []
+    # 列宽契约：**与列表里有没有帖子无关**，优先用常驻量测（见 probe.ts listContract）
+    if contract is not None and "list" in str(tag):
+        max_w = contract.get("innerMaxW")
+        if not contract.get("hasScroller"):
+            bad.append(f"@{width} {tag}: 选择不到 .list-scroll .os-scroll（OverlayScroll 插层回归？）")
+        if max_w is None:
+            bad.append(f"@{width} {tag}: 选择不到 .list-inner（列宽契约无从校验）")
+        elif max_w == "none" or (max_w.endswith("px") and float(max_w[:-2]) > 1000):
+            bad.append(f"@{width} {tag}: 列表列宽契约未生效（.list-inner max-width={max_w}）")
+        iw = contract.get("innerW")
+        if iw is not None and iw > CARD_COLUMN_MAX + 1:
+            bad.append(f"@{width} {tag}: 列表列宽 {iw} > {CARD_COLUMN_MAX}（列宽随内容膨胀）")
+    if not cards or not cards.get("n"):
+        return bad
     inner_w = cards.get("innerW")
     # 契约是否生效（与页面内容无关的硬断言）：max-width 计算值必须是 px 上限，
     # 一旦选择器踩空就退化成 none（列宽随内容变，正是 2026-09-08 那次回归）
@@ -280,8 +343,12 @@ def _assert_cards(v: dict, width: int) -> list[str]:
         bad.append(
             f"@{width} {tag}: 卡片宽度不一致 min={cards['widthMin']} max={cards['widthMax']}"
         )
-    if cards.get("coverW") is not None and cards["coverW"] != CARD_COVER_W:
-        bad.append(f"@{width} {tag}: 卡片封面宽 {cards['coverW']} ≠ {CARD_COVER_W}")
+    cover_w = cards.get("coverW")
+    if cover_w is None:
+        # 有卡片却量不到封面 = 选择器踩空，静默放过正是 2026-09-08 那类回归
+        bad.append(f"@{width} {tag}: 有 {cards['n']} 张卡片却量不到 .post-card-cover")
+    elif cover_w != CARD_COVER_W:
+        bad.append(f"@{width} {tag}: 卡片封面宽 {cover_w} ≠ {CARD_COVER_W}")
     if cards.get("coverClipped"):
         bad.append(f"@{width} {tag}: {cards['coverClipped']} 张卡片封面被左缘裁切")
     return bad
@@ -418,6 +485,16 @@ def main() -> int:
                 print(f"  弹幕行: {d.get('danmakuRows')}")
                 print(f"  词云格: {d.get('cloudCells')} · 动态行: {d.get('eventRows')}")
                 print(f"  占位文案: {d.get('placeholders')}")
+            # 这是**排查工具**，但也要能区分「跑成功」与「没量到」：
+            # 原来无论拿到什么都 return 0（审计 2026-09-11），
+            # 于是「日历根本没渲染」与「日历渲染正常」在退出码上无法区分。
+            bad = _assert_probe_integrity(res or {}, w, archive=True)
+            for b in bad:
+                print("   -", b)
+            if bad:
+                print("[FAIL] archive 模式未按契约拿到日历段")
+                failures.extend(bad)
+                return 1
             return 0
 
         for w in widths:
@@ -427,7 +504,8 @@ def main() -> int:
             if not res:
                 failures.append(f"@{w}: 无探针输出")
                 continue
-            bad = _assert(res["views"], w)
+            bad = _assert_probe_integrity(res, w)
+            bad += _assert(res["views"], w)
             bad += _assert_topbar(res.get("topbar"), w)
             if args.first_run:
                 bad += _assert_first_run(res["dom"])
@@ -442,7 +520,7 @@ def main() -> int:
                 f"acc={tb.get('accountRunning')}/auto={tb.get('accountAuto')} "
                 f"manual={tb.get('manualRunning')}"
             )
-            for b in bad[:8]:
+            for b in bad:          # 全部打印：原来只印前 8 条，后面的问题被吞掉
                 print("   -", b)
             # 视觉存档：另起一次浏览器，只把筛选弹窗打开并停住后截图
             # （probe.ts 的 `?probe=filter-pop` 短模式；不参与断言）

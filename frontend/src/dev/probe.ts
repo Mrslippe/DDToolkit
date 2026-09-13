@@ -54,8 +54,26 @@ function clippedByAncestor(n: Element): boolean {
 function measure(tag: string) {
   const d = document.documentElement
   const shell = document.querySelector('.app-shell')
+  /** 列表列宽契约（与列表里有没有帖子无关）。
+   *
+   *  必须独立于 `cards`：`cards` 在**空列表时为 null**，而 2026-09-08 那次列宽回归
+   *  的守卫断言写在「cards 非空」分支里 —— 于是列表一空、断言就静默失效
+   *  （审计 2026-09-11 点出的假通过路径之一）。这里改成常驻量测。 */
+  const listContract = (() => {
+    const inner = document.querySelector('.list-scroll .list-inner')
+    const sc = document.querySelector('.list-scroll .os-scroll')
+    if (!inner && !sc) return null
+    return {
+      innerW: inner ? Math.round(inner.getBoundingClientRect().width) : null,
+      /** 选择器踩空时计算值退化成 `none`（= 列宽改由内容驱动，正是那次的症状） */
+      innerMaxW: inner ? getComputedStyle(inner).maxWidth : null,
+      /** 容器是否还能被选到（OverlayScroll 插层回归会让它静默失效） */
+      hasScroller: !!sc,
+    }
+  })()
   return {
     tag,
+    contract: listContract,
     win: [window.innerWidth, window.innerHeight],
     /** 文档层滚动条占用（>0 = 窗口出现滚动条，必须为 0） */
     scrollbarPx: [window.innerWidth - d.clientWidth, window.innerHeight - d.clientHeight],
@@ -226,6 +244,14 @@ async function sampleTopbar() {
 
 export async function runUiProbe(): Promise<void> {
   const out: unknown[] = []
+  /**
+   * 退化原因（2026-09-11 审计加固）：探针「跑成功」不等于「量到了」。
+   * 以往若 `_first_vtuber` 拿不到 id（路由落到 `/`）或视图钮点不中，
+   * 这里会静默少 emit 若干段，而 `scripts/ui_probe.py` 只看它拿到的段 ⇒
+   * **断言全部空转却仍打印 [ok]**。现在把「没能按契约量到的东西」显式记下来，
+   * 由脚本判失败（`_assert_probe_integrity`）。
+   */
+  const degraded: string[] = []
   await sleep(1600) // 首屏 + 预取稳定
 
   const clickView = (prefix: string) => {
@@ -251,8 +277,9 @@ export async function runUiProbe(): Promise<void> {
   // 落进探针 JSON（排查「最近几场没信息」这类渲染缺口用，比看截图精确）。
   const mode = new URLSearchParams(window.location.search).get('probe')
   if (mode === 'archive') {
-    clickView('档案')
+    const clicked = clickView('档案')
     await sleep(2200)
+    if (!clicked) degraded.push('view:档案')
     const cells = [...document.querySelectorAll('.lc-cell')].map((c) => ({
       day: (c.querySelector('.lc-day')?.textContent || '').trim(),
       badge: (c.querySelector('.lc-badge')?.textContent || '').trim(),
@@ -295,6 +322,7 @@ export async function runUiProbe(): Promise<void> {
     pre.id = 'ui-probe'
     pre.textContent = JSON.stringify({
       views: [],
+      degraded,
       calendar: {
         title: (document.querySelector('.lc-title')?.textContent || '').trim(),
         note: (document.querySelector('.lc-note')?.textContent || '').trim(),
@@ -324,10 +352,15 @@ export async function runUiProbe(): Promise<void> {
   }
 
   if (!document.querySelector('.view-btn')) {
-    out.push(measure('empty')) // 无选中 VTuber：只有空置界面
+    // 走到这里 = 页面上没有视图光条。两种可能，都不能当「量过了」：
+    //  ① 路由落在 `/`（没有选中 VTuber，通常是 `_first_vtuber` 失败）；
+    //  ② 选中了 VTuber 但视图钮没渲染出来（真 bug）。
+    // 显式标成 empty + degraded，由脚本判失败。
+    degraded.push('no-view-btn')
+    out.push(measure('empty'))
   } else {
     for (const v of VIEWS) {
-      clickView(v.title)
+      if (!clickView(v.title)) degraded.push(`view:${v.key}`)
       await sleep(900) // 场景入场 0.22s + 数据到位
       out.push(measure(v.key))
       if (v.key === 'list') {
@@ -336,6 +369,8 @@ export async function runUiProbe(): Promise<void> {
           // 投稿页单独量一遍：这一页最容易被「标题/摘要里的长串」把列宽带偏
           await sleep(900)
           out.push(measure('list-video'))
+        } else {
+          degraded.push('chip:投稿')
         }
       }
     }
@@ -344,7 +379,7 @@ export async function runUiProbe(): Promise<void> {
   const pre = document.createElement('pre')
   pre.id = 'ui-probe'
   const topbar = await sampleTopbar()
-  pre.textContent = JSON.stringify({ views: out, topbar })
+  pre.textContent = JSON.stringify({ views: out, topbar, degraded })
   document.body.appendChild(pre)
   document.title = 'UI_PROBE_DONE'
 }
