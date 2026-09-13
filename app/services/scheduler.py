@@ -2585,9 +2585,13 @@ class _PlatformBudget:
     - 预算 <=0 表示不启用（调用方退回固定周期）。
 
     退化输入（`cost > rpm`）不抛错、返回一个窗口 —— 该请求在任何时点都凑不出名额，
-    等待是唯一合理语义。现实含义：**单平台主账号数 > `DYNAMICS_BUDGET_RPM`（12）时，
-    动态流每轮都要空等一个窗口**，速率自然下降到该平台 ≤12 req/min（限速正确，
-    但如果哪天主账号数远超 rpm，应考虑把预算改成按账号数自适应）。
+    等待是唯一合理语义。
+
+    自适应（2026-09-13，devlog/055）：`wait_seconds(..., rpm=)` 可按**当轮实际需求量**
+    抬高本平台的预算上限（每平台独立，见 `wait_seconds` 的 `by_platform` 入参）。
+    动机：固定 rpm 遇到「主账号数 > rpm」时，动态流每轮都空等一个整窗口
+    （13 个 B 站主账号、rpm=12 → 有效速率被压到 ~6 req/min 的一半），
+    而这**不是风控所需**——风控阈值取决于「该平台稳态请求速率」，不是「一轮有几个账号」。
     """
 
     def __init__(self, rpm: int, window_seconds: float = 60.0):
@@ -2602,7 +2606,20 @@ class _PlatformBudget:
             dq.pop(0)
         return dq
 
-    def wait_seconds(self, cost: dict[str, int], now: float | None = None) -> float:
+    def _rpm_for(self, pf: str, by_platform: dict[str, int] | None) -> int:
+        """本平台本轮生效的预算上限 = max(配置 rpm, 本轮该平台需求数)。
+
+        取「需求数」为下限只解决**退化**（一轮装不进预算 → 永远等不出名额），
+        不会让稳态速率失控：稳态仍由 60s 滑窗（`self.rpm` 与记账记录）决定，
+        只是**至少允许一轮的量进入窗口**。需求超过 rpm 越多，稳态速率上浮越多 ——
+        这正是「账号数增长后不该被自己饿死」的语义。
+        """
+        if not by_platform or self.rpm <= 0:
+            return self.rpm
+        return max(self.rpm, int(by_platform.get(pf, 0)))
+
+    def wait_seconds(self, cost: dict[str, int], now: float | None = None,
+                     by_platform: dict[str, int] | None = None) -> float:
         if self.rpm <= 0:
             return 0.0
         now = time.monotonic() if now is None else now
@@ -2610,8 +2627,9 @@ class _PlatformBudget:
         for pf, n in cost.items():
             if n <= 0:
                 continue
+            rpm = self._rpm_for(pf, by_platform)
             dq = self._prune(pf, now)
-            room = self.rpm - len(dq)
+            room = rpm - len(dq)
             if n <= room:
                 continue
             need = n - room                      # 需要腾出的名额数
@@ -2619,10 +2637,11 @@ class _PlatformBudget:
             # （没有可以滑出的记录），只能空等一个窗口。**必须先判空**：此时
             # `len(dq) - 1 == -1`，`min(need - 1, -1)` 得 -1 → `dq[-1]` 抛 IndexError；
             # 而 `need == 1` 时夹取到 0 同样越界（`dq[0]` 不存在）——夹取救不了空表。
-            # 触发条件：单平台主账号数 > rpm（例：13 个 B 站主账号、rpm=12），且窗口
-            # 恰为空（进程刚起来或静默超过一个窗口）。调用点 `_tier_loop` 首轮
-            # `_dynamics_next_due()` 在 try 之外、心跳循环无兜底 → 抛出即整条综合档
-            # 线程死亡（动态流 + 账号流永久停摆，安装版无控制台时完全静默）。
+            # 触发条件：单平台主账号数 > 生效 rpm，且窗口恰为空（进程刚起来或静默超过
+            # 一个窗口）。调用点 `_tier_loop` 首轮 `_dynamics_next_due()` 在 try 之外、
+            # 心跳循环无兜底 → 抛出即整条综合档线程死亡（动态流 + 账号流永久停摆，
+            # 安装版无控制台时完全静默）。现由 `_rpm_for` 的下限 + 本判空 + 心跳兜底三
+            # 重保证：正常路径不再走到这里，即使走到也只是多等一个窗口而非抛错。
             if not dq:
                 waits.append(self.window)
                 continue
@@ -2689,9 +2708,28 @@ def _dynamics_next_due(db: Session) -> float:
         return time.monotonic() + _tier_delay(settings.DYNAMICS_LATEST_INTERVAL_MINUTES * 60,
                                               settings.DYNAMICS_LATEST_JITTER_SECONDS)
     cost = _next_dynamics_cost(db)
-    wait = _dynamics_budget.wait_seconds(cost)
+    # by_platform 传「本轮各平台需求数」= cost 本身：预算上限按平台抬到至少装得下一轮
+    # （账号数增长后不被自己饿死，见 _PlatformBudget._rpm_for）。
+    wait = _dynamics_budget.wait_seconds(cost, by_platform=cost)
     interval = max(settings.DYNAMICS_MIN_GAP_SECONDS, wait)
     return time.monotonic() + _tier_delay(interval, settings.DYNAMICS_JITTER_SECONDS)
+
+
+def _dynamics_due_or_retry(db: Session, *, why: str) -> float:
+    """算下一轮动态流到期时刻；失败退化为「一个最小间隔之后」（**绝不抛错**）。
+
+    这个不可抛的契约是综合档心跳兜底的一部分：`_dynamics_next_due()` 的失败
+    既可能发生在心跳首轮，也可能发生在每轮排期，两处都在调度线程里；
+    抛出去就是整条线程死亡（动态流 + 账号流永久停摆，且界面看不出异常）。
+
+    失败时必须返回一个**将来**的时刻：若返回过去（或沿用旧的过去值），
+    心跳会退化成每 tick 重试一次的忙循环。
+    """
+    try:
+        return _dynamics_next_due(db)
+    except Exception as e:
+        logger.error(f"{why}失败（退化为一个最小间隔后重试）: {e}", exc_info=True)
+        return time.monotonic() + settings.DYNAMICS_MIN_GAP_SECONDS
 
 
 def _tier_loop() -> None:
@@ -2713,47 +2751,62 @@ def _tier_loop() -> None:
     except Exception as e:
         logger.error(f"启动链异常: {e}", exc_info=True)
 
+    # 首轮到期计算单独兜底：它在旧代码里位于任何 try 之外，一旦 `_dynamics_next_due`
+    # 抛错（例如预算窗口退化输入）异常会直接穿出线程函数 —— 综合档线程**静默死亡**，
+    # 动态流与账号流永久停摆，而 T0 直播轮询是独立线程仍然活着，
+    # 界面看起来「部分正常」（devlog/053 只修掉了已知的那条越界，兜底本身没加）。
     db0 = SessionLocal()
     try:
-        due_dynamics = _dynamics_next_due(db0)
+        due_dynamics = _dynamics_due_or_retry(db0, why="动态流首轮到期计算")
     finally:
         db0.close()
 
+    # 心跳：**单轮整体包 try**。任何一轮里的未捕获异常此前都会杀掉整条调度线程
+    # （无兜底：跑综合档那一小段虽在 try 内，但轮末重算 due / 心跳里的
+    #  `_drain_pending_fetches()` / `_next_dynamics_cost()` / 备份恢复路径都在外面）。
+    # 调度线程死了不会自我重启，所以这里必须「记日志 + 重排下一轮 + 继续跑」。
     while True:
-        time.sleep(max(1, settings.TIER_TICK_SECONDS))
-        # 排队兜底（v0.9.4）：收录/加账号时抢锁失败的任务在此优先补抓
-        if not (_fetch_running or _post_fetch_running or _external_running):
-            _drain_pending_fetches()
-        if is_fetch_running() or is_post_fetch_running() or _external_running:
-            continue  # 手动任务 / 外部批次在跑：自动档全部跳过本轮
-        now = time.monotonic()
-        run_dynamics = now >= due_dynamics
-        db = SessionLocal()
         try:
-            run_account = _account_sweep_due_now(db)
-            next_cost = _next_dynamics_cost(db) if run_dynamics else {}
-        finally:
-            db.close()
-        if not (run_dynamics or run_account):
-            continue
-        result: dict = {}
-        try:
-            logger.info(f"综合档（周期）：动态流={run_dynamics} 账号流={run_account}")
+            time.sleep(max(1, settings.TIER_TICK_SECONDS))
+            # 排队兜底（v0.9.4）：收录/加账号时抢锁失败的任务在此优先补抓
+            if not (_fetch_running or _post_fetch_running or _external_running):
+                _drain_pending_fetches()
+            if is_fetch_running() or is_post_fetch_running() or _external_running:
+                continue  # 手动任务 / 外部批次在跑：自动档全部跳过本轮
+            now = time.monotonic()
+            run_dynamics = now >= due_dynamics
+            next_cost: dict = {}
+            db = SessionLocal()
+            try:
+                run_account = _account_sweep_due_now(db)
+                next_cost = _next_dynamics_cost(db) if run_dynamics else {}
+            finally:
+                db.close()
+            if not (run_dynamics or run_account):
+                continue
+            result: dict = {}
             # P9-5：**轮前**按估算记账（每主账号 1 次 feed 页）——按轮末记账会把
             # 整轮的请求都算在结束时刻，白等一整个轮次时长；轮后只补差额（新帖详情）。
             if run_dynamics:
                 _dynamics_budget.charge(next_cost)
+            logger.info(f"综合档（周期）：动态流={run_dynamics} 账号流={run_account}")
             result = asyncio.run(_run_combined_tier(dynamics=run_dynamics,
                                                     account=run_account))
+            if run_dynamics:
+                actual = ((result or {}).get("dynamics") or {}).get("requests") or {}
+                extra = {pf: max(0, n - next_cost.get(pf, 0)) for pf, n in actual.items()}
+                _dynamics_budget.charge(extra)
         except Exception as e:
-            logger.error(f"综合档周期异常: {e}", exc_info=True)
-        if run_dynamics:
-            actual = ((result or {}).get("dynamics") or {}).get("requests") or {}
-            extra = {pf: max(0, n - next_cost.get(pf, 0)) for pf, n in actual.items()}
-            _dynamics_budget.charge(extra)
+            logger.error(
+                f"综合档心跳异常（本轮放弃，{settings.TIER_TICK_SECONDS}s 后继续）: {e}",
+                exc_info=True,
+            )
+        # 排下一轮到期间隔：**一定执行**（异常路径也不例外），否则 due_dynamics
+        # 停在过去会让心跳退化成不停重试的忙循环。
+        if due_dynamics is not None and time.monotonic() >= due_dynamics:
             db = SessionLocal()
             try:
-                due_dynamics = _dynamics_next_due(db)
+                due_dynamics = _dynamics_due_or_retry(db, why="下一轮动态流到期计算")
             finally:
                 db.close()
 

@@ -76,7 +76,11 @@ class Settings:
     # 动态流自适应节奏（v0.9.8，P9-5 用户）：一轮接一轮跑，轮间随机间隔；
     # 频率由**按平台的请求预算**兜底（DYNAMICS_BUDGET_RPM>0 时启用自适应，
     # 否则退回上面的固定周期）
-    DYNAMICS_BUDGET_RPM: int = 12                # 单平台每分钟请求预算（用户定 12）
+    DYNAMICS_BUDGET_RPM: int = 12                # 单平台每分钟请求预算（用户定 12）；
+                                                 # **自适应**：单平台一轮需求 > 该值时，本平台生效预算
+                                                 # 抬到「至少装得下一轮」（平台间独立，见
+                                                 # _PlatformBudget._rpm_for）——避免账号数增长后
+                                                 # 动态流每轮空等一个整窗口（devlog/055）
     DYNAMICS_MIN_GAP_SECONDS: float = 30.0       # 轮间最小间隔（不贴着预算跑满，留拟人余量）
     DYNAMICS_JITTER_SECONDS: float = 15.0        # 轮间随机抖动（±）
     # 账号流（原 T1 主账号 + T3a 全量合并）：账号字段变化慢，按「上次抓取时间」判断到期
