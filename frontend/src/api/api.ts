@@ -1,4 +1,4 @@
-import type { Account, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, PoolItem, PostPage, PostStats, ThirdpartyVtuber, UpdatePostsResult, VTuber } from './types'
+import type { Account, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, PoolItem, PostPage, PostStats, ThirdpartyVtuber, UpdatePostsResult, VTuber } from './types'
 
 /**
  * API 基地址：
@@ -99,10 +99,22 @@ export const api = {
   liveSessions: (accountId: number) =>
     request<LiveSession[]>(`/account/${accountId}/live-sessions`),
 
-  /** 单场次详情（详情弹窗；danmaku/analysis 为预留接口字段） */
+  /** 单场次详情（详情弹窗）—— 只含本地库数据，不发起第三方请求（devlog/063） */
   liveSessionDetail: (accountId: number, liveId: string) =>
     request<LiveSessionDetail>(
       `/account/${accountId}/live-sessions/${encodeURIComponent(liveId)}`,
+    ),
+
+  /**
+   * 场次详情里「必须打第三方」的那两格：弹幕词云 + 场次指标 + 直播动态（devlog/063）。
+   *
+   * 与详情端点分开：上游会间歇性变慢（实测 1.1s ↔ 15.6s，最坏 3×30s 重试），
+   * 挂在详情里会让整个弹窗一起等。失败不抛错 —— 后端以降级字段如实回报
+   * （`danmaku.wc_status='fetch_failed'` / `'no_danmaku'`），前端据此显示"没拉到"。
+   */
+  liveSessionUpstream: (accountId: number, liveId: string) =>
+    request<LiveUpstream>(
+      `/account/${accountId}/live-sessions/${encodeURIComponent(liveId)}/upstream`,
     ),
 
   /**

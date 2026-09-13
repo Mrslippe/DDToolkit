@@ -141,7 +141,7 @@
 |---|---|---|---|---|---|
 | `components/wordcloud/MosaicCloud.tsx` + `cloudPalette.ts` | `LiveCalendar.tsx:103–405`（实际） | 词云组件独立 | 2h | 中（rAF / ResizeObserver / 闭包引用多） | ✅ **已落地**：`LiveCalendar` **1182 → 837**（含下一行的纯格式化外提）；另建 `scripts/check_wordcloud_layout.mjs`（sha256 位级基线）+ `cloudPalette.test.ts`（14 条） |
 | `components/live/liveCalendarFmt.ts`（本批新增的"能证明的那一半"） | `LiveCalendar.tsx` 的 7 个纯函数 | 纯展示格式化外移 | 1h | 低 | ✅ **已落地（2026-09-13）**：`isFreshSession`/`dayKeyIso`/`fmtMonth`/`fmtTime`/`fmtDur`/`fmtMoney`/`keyOf` + 19 条断言 |
-| `components/live/LiveSessionDialog.tsx` | `LiveCalendar.tsx` 场次详情（`lc-dlg` 家族） | 弹窗独立 | 3h | 中 | ✅ **已落地（2026-09-13）**：340 行；`LiveCalendar` **734 → 465**（含把 `cloudBubbles`/破泡状态一并搬入）。证据 = 日历签名 `fb75217e…` 一致 + 详情弹窗实渲染（`--archive-day`）非加载态、非空态 |
+| `components/live/LiveSessionDialog.tsx` | `LiveCalendar.tsx` 场次详情（`lc-dlg` 家族） | 弹窗独立 | 3h | 中 | ✅ **已落地（2026-09-13）**：340 行；`LiveCalendar` **734 → 465**（含把 `cloudBubbles`/破泡状态一并搬入）。证据 = 日历签名 `fb75217e…` 一致 + 详情弹窗实渲染（`--archive-day`）非加载态、非空态。**同日追加**：上游取数拆到 `components/live/useLiveUpstream.ts`（63 行）后本件 **441 行**（devlog/063） |
 | `hooks/useLiveSessions.ts` | `LiveCalendar.tsx` 数据加载 / 月份 / 分类状态 | 逻辑外移 | 2h | **高** | ✅ **已落地（2026-09-13）**：`components/live/useLiveSessions.ts`（230 行）；`LiveCalendar` **837 → 734**。证据 = 日历格 sha256 签名 `fb75217e…` 重构前后**完全一致**（`ui_probe.py --archive --calendar-expect`）+ hero 签名 + 探针三档全绿。**顺序是契约**（7 条 effect 的相对顺序与依赖数组不得改），已写进 hook 文件顶部注释 |
 | `components/posts/HeroCardsView.tsx` | `PostsPage.tsx` 展示页视图 | 展示页视图 | 1.5h | 中 | 🔶 **纯逻辑已提**（`utils/postTypes.ts`：`orderAccounts`/`chunkBy`/`accountHomeUrl`，27 条断言 + 探针 `--hero-expect` 位级护栏）；**视图 JSX 未拆** —— 见下方决策记录 |
 | `components/posts/PostListView.tsx` | `PostsPage.tsx` 列表页视图 | 列表页视图 | 2h | 中 | ⬜ 未做 —— 同上 |

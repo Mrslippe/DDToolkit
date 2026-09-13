@@ -813,41 +813,75 @@ def test_live_category_override_flow(client):
     assert client.delete(f"/account/{aid}/live-sessions/uuid-a/category").status_code == 404
 
 
-# ── 单场次详情（点击日期格 → 独立弹窗；danmaku 已接入 / analysis 预留） ──
+# ── 单场次详情（点击日期格 → 独立弹窗） ──
+#
+# 2026-09-13（devlog/063）：上游取数（弹幕词云 / 场次指标 / 直播动态）已从详情端点
+# 拆到 `…/upstream`。详情端点**不得**发起任何第三方请求 —— 否则上游慢会把整个弹窗
+# （含只依赖本地库的时间/分区/收益/分类）一起拖住，最坏 3×30s 重试 ≈ 93s 才出结果。
 
-def test_live_session_detail_endpoint(client, monkeypatch):
+_DETAIL_SUMMARY = {
+    "total": 39316, "danmakus_count": 17931,
+    "word_cloud": [("好耶", 3195), ("MELODY", 210)],
+    "watch_count": 16216, "like_count": 163579, "pay_count": 542,
+    "interaction_count": 1127, "online_rank": 250, "comment_count": 0,
+    "is_full": True, "is_merged": True,
+    "peaks": [{"ts": 1788609992428, "count": 366}],
+    "versions": [{"user_name": "本站", "is_official": True}],
+    "channel": {"fans_count": 133596},
+}
+_DETAIL_EVENTS = [{"type": 7, "send_date_ms": 1788628090562}]
+_UNSET = object()
+
+
+def _mk_detail_sessions(client) -> tuple[int, int]:
+    """一个 danmakus 场次 + 一个纯 feed 场次（后者不该触发任何上游请求）。"""
     vid = client.post("/vtuber", json={"name": "测试"}).json()["id"]
     aid = client.post(
         f"/vtuber/{vid}/accounts",
         json={"platform": "bilibili", "platform_uid": "123"},
     ).json()["id"]
-
     db = TestingSession()
     db.add(LiveSession(account_id=aid, source="danmakus", live_id="uuid-a",
                        title="深夜杂谈", start_at=datetime(2026, 9, 7, 12, 5),
                        end_at=datetime(2026, 9, 7, 13, 0),
                        area_name="虚拟日常", parent_area_name="虚拟主播",
                        total_income=88.5, max_online_count=777, danmakus_count=66))
-    # feed 场次（无弹幕数据源，详情不请求网络）
     db.add(LiveSession(account_id=aid, source="feed", live_id="feed-1",
                        title="无限流游戏", start_at=datetime(2026, 9, 8, 20, 0),
                        end_at=None, area_name="主机游戏", parent_area_name="单机游戏"))
     db.commit()
     db.close()
+    return vid, aid
+
+
+def _patch_upstream(monkeypatch, summary=_UNSET, events=_UNSET) -> list[tuple]:
+    """把 `/upstream` 背后的两个上游调用换成桩，返回调用记录（用于断言"打了几次"）。
+
+    ⚠️ 必须清 `live_upstream` 的进程内缓存：不清会把上一支用例的结果带进来。
+    """
+    from app.services import live_upstream
+    live_upstream.clear_cache()
+    calls: list[tuple] = []
+    sm = _DETAIL_SUMMARY if summary is _UNSET else summary
+    ev = _DETAIL_EVENTS if events is _UNSET else events
 
     async def fake_summary(live_id: str):
-        return {"total": 39316, "danmakus_count": 17931,
-                "word_cloud": [("好耶", 3195), ("MELODY", 210)],
-                "watch_count": 16216, "like_count": 163579, "pay_count": 542,
-                "interaction_count": 1127, "online_rank": 250, "comment_count": 0,
-                "is_full": True, "is_merged": True,
-                "peaks": [{"ts": 1788609992428, "count": 366}],
-                "versions": [{"user_name": "本站", "is_official": True}],
-                "channel": {"fans_count": 133596}}
+        calls.append(("summary", live_id))
+        return sm
+
     async def fake_events(live_id: str):
-        return [{"type": 7, "send_date_ms": 1788628090562}]
-    monkeypatch.setattr("app.routers.vtuber.fetch_live_summary", fake_summary)
-    monkeypatch.setattr("app.routers.vtuber.fetch_live_events", fake_events)
+        calls.append(("events", live_id))
+        return ev
+
+    monkeypatch.setattr(live_upstream, "fetch_live_summary", fake_summary)
+    monkeypatch.setattr(live_upstream, "fetch_live_events", fake_events)
+    return calls
+
+
+def test_live_session_detail_endpoint(client, monkeypatch):
+    """详情只回本地库能推导的内容（含分类推断），且**一次上游请求都不发**。"""
+    _vid, aid = _mk_detail_sessions(client)
+    calls = _patch_upstream(monkeypatch)
 
     resp = client.get(f"/account/{aid}/live-sessions/uuid-a")
     assert resp.status_code == 200
@@ -858,9 +892,25 @@ def test_live_session_detail_endpoint(client, monkeypatch):
     assert d["category"] == "chat"
     assert d["category_from"] == "title"
     assert d["segment_count"] == 1
-    # 弹幕摘要已接入（词云 top 词按次数降序 + 带次数词条；A 组指标 + B 组事件）
-    # 2026-09-13（devlog/061）：新增 source/wc_status 用于 UI 区分词云来源。
-    # ⚠️ 这里刻意**不给 stub 填 `status`** —— 端点的契约是"以实际拿到的词条为准"，
+    # analysis 仍为预留（内容分析服务未接入）
+    assert d["analysis"] is None
+    # 上游那三样已拆到 /upstream —— 若它们又出现在详情响应里，说明被挂回去了
+    assert "danmaku" not in d and "metrics" not in d and "events" not in d
+    assert calls == []                      # 详情端点不得打第三方
+
+    # 未收录 live_id → 404；账号不存在 → 404
+    assert client.get(f"/account/{aid}/live-sessions/nope").status_code == 404
+    assert client.get("/account/99999/live-sessions/uuid-a").status_code == 404
+
+
+def test_live_session_upstream_endpoint(client, monkeypatch):
+    """/upstream：弹幕词云 + 场次指标 + 直播动态；第二次走进程内缓存，不再打上游。"""
+    _vid, aid = _mk_detail_sessions(client)
+    calls = _patch_upstream(monkeypatch)
+
+    d = client.get(f"/account/{aid}/live-sessions/uuid-a/upstream").json()
+    # 词云：词云 top 词按次数降序 + 带次数词条。
+    # ⚠️ 这里刻意**不给桩填 `status`** —— 端点契约是"以实际拿到的词条为准"，
     # 所以有词云就必须报 upstream（曾经盲信 summary["status"] 而报出
     # `source='upstream'` + `wc_status='upstream_absent'` 的矛盾组合）。
     assert d["danmaku"] == {"total": 39316,
@@ -878,17 +928,44 @@ def test_live_session_detail_endpoint(client, monkeypatch):
     assert m["peaks"] == [{"ts": 1788609992428, "count": 366}]
     assert [e["type"] for e in d["events"]] == [7]
     assert d["events"][0]["send_date"].startswith("2026-09-05T17:08:10")  # naive UTC
-    # analysis 仍为预留（内容分析服务未接入）
-    assert d["analysis"] is None
+    assert sorted(c[0] for c in calls) == ["events", "summary"]
+    assert {c[1] for c in calls} == {"uuid-a"}      # 按对外 live_id 取数
 
-    # feed 场次：无 danmakus 源 → danmaku/metrics None、events 空（不请求网络）
-    d2 = client.get(f"/account/{aid}/live-sessions/feed-1").json()
-    assert d2["danmaku"] is None and d2["metrics"] is None and d2["events"] == []
-    assert d2["source"] == "feed"
+    d2 = client.get(f"/account/{aid}/live-sessions/uuid-a/upstream").json()
+    assert d2["danmaku"] == d["danmaku"] and d2["metrics"] == m
+    assert len(calls) == 2                          # 缓存命中：没有新增上游请求
 
-    # 未收录 live_id → 404；账号不存在 → 404
-    assert client.get(f"/account/{aid}/live-sessions/nope").status_code == 404
-    assert client.get("/account/99999/live-sessions/uuid-a").status_code == 404
+
+def test_live_session_upstream_reports_fetch_failed(client, monkeypatch):
+    """上游没拿到 → `fetch_failed`（"没拉到"），**不能**报成"本场没弹幕"；且失败不写缓存。"""
+    _vid, aid = _mk_detail_sessions(client)
+    calls = _patch_upstream(monkeypatch, summary=None, events=[])
+
+    d = client.get(f"/account/{aid}/live-sessions/uuid-a/upstream").json()
+    assert d["danmaku"]["wc_status"] == "fetch_failed"
+    assert d["danmaku"]["top_words"] == []
+    assert d["metrics"] is None and d["events"] == []
+
+    client.get(f"/account/{aid}/live-sessions/uuid-a/upstream")
+    assert len(calls) == 4                          # 失败不缓存：重试要真的重试
+
+
+def test_live_session_upstream_skips_non_danmakus(client, monkeypatch):
+    """纯 feed 场次：上游无从查起 → `no_danmaku`，且不打网络。"""
+    _vid, aid = _mk_detail_sessions(client)
+    calls = _patch_upstream(monkeypatch)
+
+    d = client.get(f"/account/{aid}/live-sessions/feed-1/upstream").json()
+    assert d["danmaku"]["wc_status"] == "no_danmaku"
+    assert d["danmaku"]["source"] is None
+    assert d["metrics"] is None and d["events"] == []
+    assert calls == []
+
+
+def test_live_session_upstream_404s(client):
+    _vid, aid = _mk_detail_sessions(client)
+    assert client.get(f"/account/{aid}/live-sessions/nope/upstream").status_code == 404
+    assert client.get("/account/99999/live-sessions/uuid-a/upstream").status_code == 404
 
 
 # ── 词云自建端点（2026-09-13，devlog/061：上游 extra.wordCloud 断供后的方案 a） ──

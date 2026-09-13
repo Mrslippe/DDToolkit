@@ -380,7 +380,9 @@
 | 方法 + 路径 | 说明 |
 |---|---|
 | GET `/account/{id}/live-sessions` | 合并场次列表（表内 ∪ 快照推导）+ 分类推断结果 |
-| GET `/account/{id}/live-sessions/{live_id}` | 场次详情（danmakus 摘要 + 事件 + 词云，外部拉取） |
+| GET `/account/{id}/live-sessions/{live_id}` | 场次详情：**只回本地库可推导的内容**（场次 + 分类推断 + analysis 预留），**不发起第三方请求**（2026-09-13，devlog/063） |
+| GET `/account/{id}/live-sessions/{live_id}/upstream` | 该场次的第三方取数：弹幕词云 + 场次指标 + 直播动态；进程内缓存 10 分钟，失败如实降级为 `fetch_failed`/`no_danmaku`（同 devlog/063） |
+| GET `/account/{id}/live-sessions/{live_id}/wordcloud` | 按需自建词云（v3 原始弹幕 + jieba 分词；**用户点按钮才调**，不落库，devlog/061） |
 | PUT `/account/{id}/live-sessions/{live_id}/category` | 手工校正分类（反哺词库） |
 | DELETE `/account/{id}/live-sessions/{live_id}/category` | 取消校正 |
 

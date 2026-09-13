@@ -371,15 +371,31 @@ class LiveEventOut(BaseModel):
 class LiveSessionDetailOut(LiveSessionOut):
     """单场次详情（user 2026-09-07：点击日期格 → 独立详情弹窗）。
 
-    与列表端同链路（merged + v2 信号栈）；附扩展字段：
-    danmaku（弹幕总量/词云）/ metrics（A 组场次级指标）/ events（B 组
-    直播间事件）——danmakus 公开端点免鉴权接入，失败降级为 None/[]；
-    analysis（内容分析）仍为预留。
+    与列表端同链路（merged + v2 信号栈），**只含本地库可推导的内容** ——
+    上游取数（弹幕 / 指标 / 动态）已拆到 `LiveUpstreamOut`（2026-09-13，devlog/063）：
+    原先它们挂在同一个响应里，上游慢时打开弹窗最坏要等 93s，且连不依赖上游的
+    时间/分区/收益/分类也一起转圈。
+
+    本响应保证**不发起任何第三方请求**（`analysis` 仍为预留字段）。
+    """
+    analysis: LiveAnalysisInfo | None = None
+
+
+class LiveUpstreamOut(BaseModel):
+    """场次详情里「必须打第三方」的那两格（2026-09-13，devlog/063）。
+
+    | 字段 | 内容 | 失败时 |
+    |---|---|---|
+    | `danmaku` | 弹幕总量 + 上游词云（`wc_status` 区分五种情况） | `wc_status='fetch_failed'` |
+    | `metrics` | 场次级指标（观看/点赞/打赏/互动/峰值/录制版本/频道累计） | `null` |
+    | `events` | 直播中断/继续时间线（type 7/8） | `[]` |
+
+    非 danmakus 来源的场次（纯 feed/self）**不请求网络**，直接回
+    `danmaku.wc_status='no_danmaku'`。
     """
     danmaku: LiveDanmakuInfo | None = None
     metrics: LiveMetricsOut | None = None
     events: list[LiveEventOut] = []
-    analysis: LiveAnalysisInfo | None = None
 
 
 # ── 重要日期·大型活动（P7，v0.7.0） ────────────────────────────────

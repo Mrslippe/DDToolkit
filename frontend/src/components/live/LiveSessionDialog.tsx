@@ -22,12 +22,19 @@
  * - **DOM 结构逐字保留**（`.lc-dlg*` 家族类名一个没动）—— 探针直接查这些选择器。
  *
  * ⚠️ CSS 归属：仍由 `styles/posts.css` 拥有（A 路线决策 (a)：拆分不搬 CSS）。
+ *
+ * ## 上游取数（2026-09-13，devlog/063）
+ *
+ * 弹幕词云 / 场次指标 / 直播动态三样来自第三方 danmakus，**不再由详情请求带回**：
+ * 它们由 `useLiveUpstream` 单独取（后端 `/live-sessions/{id}/upstream`，带 10 分钟缓存），
+ * 因此上游慢/挂了只让这两格转圈并显示"没拉到 + 重试"，其余内容（起止/分区/收益/分类）
+ * 打开即可读。
  */
 import { useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, X } from 'lucide-react'
 
-import type { LiveDanmakuInfo, LiveSession, LiveSessionDetail } from '../../api/types'
+import type { LiveDanmakuInfo, LiveEvent, LiveMetrics, LiveSession, LiveSessionDetail } from '../../api/types'
 import { api } from '../../api/api'
 import { LIVE_TYPE_ORDER, liveTypeLabel } from '../../utils/liveType'
 import type { CloudWord } from '../../utils/wordCloudLayout'
@@ -35,9 +42,13 @@ import MosaicCloud from '../wordcloud/MosaicCloud'
 import OverlayScroll from '../OverlayScroll'
 import ProxyImage from '../common/ProxyImage'
 import type { DetailState } from './useLiveSessions'
+import { useLiveUpstream } from './useLiveUpstream'
 import {
   fmtDur, fmtMoney, fmtTime, isFreshSession, keyOf,
 } from './liveCalendarFmt'
+
+/** 上游"较慢"的提示阈值（秒）：超过它就把文案从"正在取"换成"还在等 + 已等 Ns" */
+const SLOW_HINT_SECONDS = 8
 
 interface Props {
   detail: DetailState
@@ -82,14 +93,32 @@ export default function LiveSessionDialog({
   const [busyWc, setBusyWc] = useState<string | null>(null)
 
   const s: LiveSessionDetail =
-    detail.data ?? { ...detail.sessions[detail.idx], danmaku: null, analysis: null }
-  /** 本场次的生效弹幕信息：自建结果优先 */
-  const dm: LiveDanmakuInfo | null =
-    (selfWc && selfWc.liveId === s.live_id ? selfWc.data : null) ?? s.danmaku ?? null
+    detail.data ?? { ...detail.sessions[detail.idx], analysis: null }
+
+  /**
+   * 上游取数（弹幕词云 / 指标 / 直播动态）：独立请求 + 独立 loading（devlog/063）。
+   * 切场次页签时 `s.live_id` 变 → hook 自动重取（后端有 10 分钟缓存，重取很便宜）。
+   */
+  const up = useLiveUpstream(accountId, s.live_id)
+  const metrics: LiveMetrics | null = up.data?.metrics ?? null
+  const events: LiveEvent[] = up.data?.events ?? []
+  const selfDm = selfWc && selfWc.liveId === s.live_id ? selfWc.data : null
+  /** 本场次的生效弹幕信息：自建结果优先，其次上游 */
+  const dm: LiveDanmakuInfo | null = selfDm ?? up.data?.danmaku ?? null
   /** 词云状态（缺省 = 上游没给） */
   const wcStatus = dm?.wc_status ?? (dm ? 'upstream' : 'upstream_absent')
   const hasWords = (dm?.top_words?.length ?? 0) > 0
   const building = busyWc != null && busyWc === s.live_id
+  /** 上游这次到底拿没拿到（用于区分"没拉到"与"本场没有"） */
+  const upFailed = wcStatus === 'fetch_failed'
+  /** 已经等了一会儿 → 文案从"正在取"换成"还在等 + 已等 Ns"（上游会间歇性变慢） */
+  const slow = up.elapsed >= SLOW_HINT_SECONDS
+  const waitHint = slow ? `上游响应较慢，仍在重试…（已等 ${up.elapsed}s）` : ''
+  /** 弹幕段的「重试」：自建失败重取自建，上游失败重取上游 */
+  const retryDanmaku = () => {
+    if (selfDm) void buildCloud()
+    else up.reload()
+  }
 
   /** 词云词条：top40（按次数降序）。只服务本弹窗，随挂载重建。 */
   const cloudBubbles = useMemo<CloudWord[]>(() => {
@@ -238,31 +267,39 @@ export default function LiveSessionDialog({
                 <dt>弹幕数</dt>
                 <dd>{s.danmakus_count ? s.danmakus_count.toLocaleString('zh-CN') : '—'}</dd>
               </div>
-              {s.metrics && (
+              {metrics && (
                 <>
                   <div className="lc-dlg-row">
                     <dt>观看</dt>
-                    <dd>{s.metrics.watch_count != null ? s.metrics.watch_count.toLocaleString('zh-CN') : '—'}</dd>
+                    <dd>{metrics.watch_count != null ? metrics.watch_count.toLocaleString('zh-CN') : '—'}</dd>
                   </div>
                   <div className="lc-dlg-row">
                     <dt>点赞</dt>
-                    <dd>{s.metrics.like_count != null ? s.metrics.like_count.toLocaleString('zh-CN') : '—'}</dd>
+                    <dd>{metrics.like_count != null ? metrics.like_count.toLocaleString('zh-CN') : '—'}</dd>
                   </div>
                   <div className="lc-dlg-row">
                     <dt>打赏</dt>
-                    <dd>{s.metrics.pay_count != null ? `${s.metrics.pay_count.toLocaleString('zh-CN')} 人` : '—'}</dd>
+                    <dd>{metrics.pay_count != null ? `${metrics.pay_count.toLocaleString('zh-CN')} 人` : '—'}</dd>
                   </div>
                   <div className="lc-dlg-row">
                     <dt>互动</dt>
-                    <dd>{s.metrics.interaction_count != null ? s.metrics.interaction_count.toLocaleString('zh-CN') : '—'}</dd>
+                    <dd>{metrics.interaction_count != null ? metrics.interaction_count.toLocaleString('zh-CN') : '—'}</dd>
                   </div>
-                  {s.metrics.online_rank != null && (
+                  {metrics.online_rank != null && (
                     <div className="lc-dlg-row">
                       <dt>在线排名</dt>
-                      <dd>#{s.metrics.online_rank.toLocaleString('zh-CN')}</dd>
+                      <dd>#{metrics.online_rank.toLocaleString('zh-CN')}</dd>
                     </div>
                   )}
                 </>
+              )}
+              {/* 上游还没回来时，上面这组指标是"缺席"而不是"没有" —— 说明一句，
+                  免得被读成"这场没有观看/点赞数据"（devlog/063）。 */}
+              {up.loading && (
+                <div className="lc-dlg-row">
+                  <dt>上游指标</dt>
+                  <dd className="lc-dlg-note">{waitHint || '正在取…'}</dd>
+                </div>
               )}
               {(s.segment_count ?? 1) > 1 && (
                 <div className="lc-dlg-row">
@@ -315,7 +352,7 @@ export default function LiveSessionDialog({
                     </dd>
                   </div>
                 )}
-                {s.metrics?.is_full === false && (
+                {metrics?.is_full === false && (
                   <div className="lc-dlg-row">
                     <dt>完整性</dt>
                     <dd>弹幕数据未全量（部分录制源）</dd>
@@ -337,7 +374,7 @@ export default function LiveSessionDialog({
                     <>
                       弹幕拉取失败（网络或上游不可用）。
                       <button type="button" className="lc-dlg-cloud-build"
-                              onClick={() => void buildCloud()} disabled={building}>
+                              onClick={retryDanmaku} disabled={building}>
                         {building ? '重试中…' : '重试'}
                       </button>
                     </>
@@ -347,7 +384,7 @@ export default function LiveSessionDialog({
                     <>
                       上游未提供热词
                       <span className="lc-dlg-note">
-                        （danmakus 已停止返回词云字段；可改用弹幕原文就地统计）
+                        （danmakus 未返回词云字段；可改用弹幕原文就地统计）
                       </span>
                       <button type="button" className="lc-dlg-cloud-build"
                               onClick={() => void buildCloud()} disabled={building}>
@@ -358,6 +395,11 @@ export default function LiveSessionDialog({
                 </div>
               )}
             </div>
+          ) : up.loading ? (
+            /* 上游取数中：详情已可读，只有这两格在等 */
+            <div className="lc-dlg-ph">
+              {waitHint || '正在取上游弹幕…'}
+            </div>
           ) : (
             <div className="lc-dlg-ph">
               {isFreshSession(s.start_at, s.end_at) ? (
@@ -367,14 +409,17 @@ export default function LiveSessionDialog({
                   {/* ⚠️ 这里**不能**断言「本场无弹幕记录」：`danmaku` 为 null 也可能是
                       上游慢/超时导致的拉取失败，而这一场其实有上万条弹幕
                       （2026-09-13 实测：5 个最近场次全因此被误报成「没有弹幕数据」，
-                      见 devlog/062）。文案必须把「没拉到」与「确实没有」分开说。 */}
+                      见 devlog/062）。文案必须把「没拉到」与「确实没有」分开说。
+                      注：拆出 `/upstream` 端点后，上游自己的失败已由
+                      `wc_status='fetch_failed'` 表达，走到这里说明**这一次请求没通**
+                      （HTTP/网络），所以给的是"重试取数"而不是"用弹幕自建"。 */}
                   弹幕数据未取到
                   <span className="lc-dlg-note">
-                    （上游 danmakus 超时或未收录该场次；可稍后重试）
+                    （上游取数请求没通；可重试）
                   </span>
                   <button type="button" className="lc-dlg-cloud-build"
-                          onClick={() => void buildCloud()} disabled={building}>
-                    {building ? '正在取整场弹幕…' : '尝试拉取弹幕'}
+                          onClick={retryDanmaku} disabled={building}>
+                    重试
                   </button>
                 </>
               )}
@@ -384,11 +429,11 @@ export default function LiveSessionDialog({
 
         <section className="lc-dlg-sec lc-dlg-sec--full">
           <h4 className="lc-dlg-sec-title">直播动态</h4>
-          {detail.loading ? (
-            <div className="lc-dlg-ph">加载中…</div>
-          ) : (s.events?.length || s.metrics?.peaks?.length) ? (
+          {up.loading ? (
+            <div className="lc-dlg-ph">{waitHint || '加载中…'}</div>
+          ) : (events.length || metrics?.peaks?.length) ? (
             <div className="lc-dlg-evts">
-              {(s.events ?? []).map((ev, i) => (
+              {events.map((ev, i) => (
                 <div key={`ev-${i}`} className="lc-dlg-evt">
                   <span className={`lc-dlg-evt-dot${ev.type === 7 ? ' stop' : ''}`} />
                   <span className="lc-dlg-evt-time">
@@ -399,10 +444,10 @@ export default function LiveSessionDialog({
                   </span>
                 </div>
               ))}
-              {(s.metrics?.peaks?.length ?? 0) > 0 && (
+              {(metrics?.peaks?.length ?? 0) > 0 && (
                 <div className="lc-dlg-evt-block">
                   <div className="lc-dlg-evt-label">最热时刻（在线峰值）</div>
-                  {(s.metrics!.peaks as { ts: number; count: number }[])
+                  {(metrics!.peaks as { ts: number; count: number }[])
                     .slice(0, 3)
                     .map((p) => (
                       <div key={`peak-${p.ts}`} className="lc-dlg-evt">
@@ -415,6 +460,15 @@ export default function LiveSessionDialog({
                     ))}
                 </div>
               )}
+            </div>
+          ) : upFailed ? (
+            /* 上游这次没拿到：**别**写成"本场没有动态"（同弹幕段的教训，devlog/062/063） */
+            <div className="lc-dlg-ph">
+              未取到（上游超时或不可用）
+              <button type="button" className="lc-dlg-cloud-build"
+                      onClick={() => up.reload()}>
+                重试
+              </button>
             </div>
           ) : (
             <div className="lc-dlg-ph">暂无动态数据</div>

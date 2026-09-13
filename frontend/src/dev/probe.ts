@@ -27,6 +27,38 @@ const VIEWS: ProbeView[] = [
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+/** 上游取数还没落地时，弹窗里会出现的文案（见 `LiveSessionDialog` 的 waitHint） */
+const UPSTREAM_PENDING_RE = /正在取上游弹幕|上游响应较慢/
+
+/** 等详情弹窗"填满"（供 `?probe=archive` 的 DOM dump 用）：
+ *
+ *  ① 等上游取数那两格落地（拆出 `/upstream` 后是第二个异步跳）；
+ *  ② 等词云**拼贴入池稳定** —— `MosaicCloud` 是频次降序逐个入池（约 150ms/词，
+ *     40 词 ≈ 6s），抢在它之前取样只会量到 `cloudCells: 0`（看起来像"词云没渲染"）。
+ *
+ *  上限内没稳定也返回 —— 探针只负责"尽量量到稳定态"，判失败交给断言。 */
+async function waitDetailSettled(maxMs = 25000) {
+  const t0 = Date.now()
+  let lastCells = -1
+  let stable = 0
+  while (Date.now() - t0 < maxMs) {
+    const dlg = document.querySelector('.lc-dlg')
+    if (dlg) {
+      const pending = [...dlg.querySelectorAll('.lc-dlg-ph')].some((n) =>
+        UPSTREAM_PENDING_RE.test(n.textContent || ''),
+      )
+      if (!pending) {
+        if (!dlg.querySelector('.lc-dlg-cloud')) return   // 这一段没有词云可等
+        const cells = dlg.querySelectorAll('.lc-dlg-cloud-cell').length
+        stable = cells > 0 && cells === lastCells ? stable + 1 : 0
+        lastCells = cells
+        if (stable >= 2) return                          // 0.8s 没有新词入池
+      }
+    }
+    await sleep(400)
+  }
+}
+
 function box(n: Element) {
   const r = n.getBoundingClientRect()
   return `[${Math.round(r.left)},${Math.round(r.top)} → ${Math.round(r.right)},${Math.round(r.bottom)}]`
@@ -357,8 +389,12 @@ export async function runUiProbe(): Promise<void> {
       const tabs = [...document.querySelectorAll<HTMLButtonElement>('.lc-dlg-tabs button')]
       if (tabs.length > 1) {
         tabs[tabs.length - 1].click()
-        await sleep(3500)
       }
+      // 弹幕/直播动态两格是**第二个异步跳**（2026-09-13 devlog/063：上游取数从详情端点
+      // 拆成 `/live-sessions/{id}/upstream`），词云还要逐个入池。定长等待会在上游慢时
+      // 量到"正在取上游弹幕…"、或在词云铺完前量到 `cloudCells: 0` —— 这正是 058/061
+      // 记过的"看起来通过但弹幕那几段等于没验"。所以改成**等它落地并稳定**。
+      await waitDetailSettled()
       const dlg = document.querySelector('.lc-dlg')
       if (dlg) {
         detail = {

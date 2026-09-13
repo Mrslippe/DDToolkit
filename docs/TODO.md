@@ -335,7 +335,7 @@
 - ✅ **v0.9.x M1–M4 内容管道**（后端闭环，本次未开 devlog 的批次）：
   - M1 场次推导：danmakus 主源 + self 快照 ±90min 合并（`source` 组合标记，段数合并中断续播）
   - M2 类型推断 v2：多信号（校正 override > 系列 > 标题评分 > 词库 > 分区 > 纪念日），`LiveSession.category/category_from`
-  - M3 场次级详情端点：`GET /account/{id}/live-sessions/{liveId}`（danmaku/metrics/events + analysis 预留）
+  - M3 场次级详情端点：`GET /account/{id}/live-sessions/{liveId}`（场次 + 分类推断；**2026-09-13 拆出** `…/upstream` 承载第三方取数：弹幕词云 + 指标 + 动态，见 devlog/063）
   - M4 前端呈现：格内首场（时间+标题+N 场计数）、hover 浮层全量、**点击格子 → 详情弹窗**（直播信息 + 分类校正下拉 + 弹幕词云 + 直播动态 + 内容分析预留）、月份切换滑动动画
 - ✅ **弹幕词云**（2026-09-07）：danmakus v2 live 词云 top40 → **增量摊铺加权 Voronoi 拼贴**（参考图形态：力导向站点滑动 + λ 面积精确，逐个入池、静止即停；历经 react-wordcloud/圆形域拼贴/圆形气泡簇等版本后由 user 重定需求定案）
 - ✅ **趋势卡重写 ECharts 6.1**（2026-09-07）：canvas 自绘 + dataZoom slider/inside（滚轮缩放/拖动平移）+ 双轴（粉丝/日增）+ 1d/7d/30d 概览 + 容量档位（3m/6m/1y/all）—— **recharts 已退役**

@@ -30,10 +30,10 @@ from app.services.purge import purge_account, purge_vtuber
 from app.services.live_type import (
     infer_category, plan_series, build_learned, EDITABLE_CATEGORY_KEYS,
 )
-from app.services.externals.danmakus import fetch_live_summary, fetch_live_events
+from app.services.live_upstream import load_live_upstream
 from app.services.danmaku_cloud import build_word_cloud
 from app.schemas.vtuber import (LiveDanmakuInfo, LiveMetricsOut, LiveEventOut,
-                                LiveWordOut)
+                                LiveWordOut, LiveUpstreamOut)
 from app.services.post_text import extract_post_text
 
 logger = logging.getLogger(__name__)
@@ -400,24 +400,44 @@ def live_sessions(account_id: int, db: Session = Depends(get_db)):
     return out
 
 
+def _pick_live_session(db: Session, account_id: int, live_id: str,
+                       sessions: list[dict] | None = None) -> dict:
+    """定位单场次（未收录 → 404）；详情端点与上游取数端点共用。
+
+    `sessions` 可传入调用方已经算好的列表（`merged()` 不便宜，别为一个端点算两遍）。
+    """
+    if sessions is None:
+        sessions = LiveSessionRepo(db).merged(account_id)
+    s = next((x for x in sessions if x.get("live_id") == live_id), None)
+    if s is None:
+        raise HTTPException(404, f"LiveSession live_id={live_id} 不存在")
+    return s
+
+
+def _has_danmakus_source(s: dict) -> bool:
+    """该场次是否有 danmakus 来源（`source` 是 `+` 连接的组合标记）。"""
+    return "danmakus" in (s.get("source") or "").split("+")
+
+
 @router.get("/account/{account_id}/live-sessions/{live_id}",
             response_model=LiveSessionDetailOut)
-async def live_session_detail(account_id: int, live_id: str,
-                              db: Session = Depends(get_db)):
+def live_session_detail(account_id: int, live_id: str,
+                        db: Session = Depends(get_db)):
     """单场次详情（user 2026-09-07：点击日期格 → 独立详情弹窗）。
 
-    与列表端同链路（merged + v2 信号栈）；附预留字段 danmaku（弹幕信息）/
-    analysis（内容分析）——弹幕数据已接入（danmakus 公开端点
-    /api/v2/live?liveId=&includeExtra=，免鉴权实测：弹幕总数 + 词云），
-    分析服务仍预留；网络失败降级为 None。
+    与列表端同链路（merged + v2 信号栈），**只回本地库能推导的内容** ——
+    上游取数（弹幕词云 / 场次指标 / 中断继续事件）在
+    `GET …/live-sessions/{live_id}/upstream`（2026-09-13，devlog/063）。
+
+    为什么要拆：原先上游请求挂在本端点上，上游慢时**整个弹窗**（含只依赖本地库的
+    时间/分区/收益/分类）一起转圈，最坏 93s 才出结果。拆开后本端点必然**不发起任何
+    第三方请求**，弹窗秒开，慢与失败只影响弹幕/动态那两格。
     """
     account, vtuber, event_dates, overrides = _live_infer_ctx(db, account_id)
     if not account:
         raise HTTPException(404, f"Account id={account_id} 不存在")
     sessions = LiveSessionRepo(db).merged(account_id)
-    s = next((x for x in sessions if x.get("live_id") == live_id), None)
-    if s is None:
-        raise HTTPException(404, f"LiveSession live_id={live_id} 不存在")
+    s = _pick_live_session(db, account_id, live_id, sessions)
     series_categories = plan_series(sessions, overrides)
     learned = build_learned(overrides, sessions)
     category, category_from = infer_category(
@@ -429,55 +449,86 @@ async def live_session_detail(account_id: int, live_id: str,
         live_id=live_id, overrides=overrides,
         series_categories=series_categories, learned=learned,
     )
-    danmaku = None
-    metrics = None
-    events: list[LiveEventOut] = []
-    if "danmakus" in (s.get("source") or "").split("+"):
-        summary, evts = await asyncio.gather(
-            fetch_live_summary(live_id), fetch_live_events(live_id))
-        if summary:
-            wc = summary.get("word_cloud") or []
-            # D4（devlog/061）：把「上游给没给热词」如实报给前端 ——
-            # 上游断供时前端要显示「自建」按钮，而不是干巴巴一句「暂无热词数据」。
-            #
-            # ⚠️ `status` 以**实际拿到的词条**为准，不盲信 summary 里的字段：
-            # 曾经写成 `summary.get("status") or "upstream_absent"`，于是当 summary 没带
-            # status（旧调用口径/测试桩）时，会出现 `source='upstream'` 与
-            # `wc_status='upstream_absent'` **自相矛盾**的组合（被 test_live_session_detail
-            # 当场抓出）。派生量就地从同一份数据推导，别让它依赖上游是否恰好填了那个键。
-            status = summary.get("status")
-            if status not in ("upstream", "upstream_absent"):
-                status = "upstream" if wc else "upstream_absent"
-            danmaku = LiveDanmakuInfo(
-                total=summary.get("total"),
-                top_keywords=[w for w, _c in wc][:40],
-                top_words=[LiveWordOut(text=w, count=int(c)) for w, c in wc][:40],
-                source="upstream" if status == "upstream" else None,
-                wc_status=status,
-            )
-            metrics = LiveMetricsOut(
-                watch_count=summary.get("watch_count"),
-                like_count=summary.get("like_count"),
-                pay_count=summary.get("pay_count"),
-                interaction_count=summary.get("interaction_count"),
-                online_rank=summary.get("online_rank"),
-                comment_count=summary.get("comment_count"),
-                is_full=summary.get("is_full"),
-                is_merged=summary.get("is_merged"),
-                peaks=summary.get("peaks") or [],
-                versions=summary.get("versions") or [],
-                channel=summary.get("channel") or {},
-            )
-        for ev in evts or []:
-            sd = ev.get("send_date_ms")
-            events.append(LiveEventOut(
-                type=int(ev.get("type") or 0),
-                send_date=datetime.fromtimestamp(sd / 1000, tz=timezone.utc)
-                .replace(tzinfo=None) if sd else None,
-            ))
     return LiveSessionDetailOut(account_id=account_id, **s,
-                                category=category, category_from=category_from,
-                                danmaku=danmaku, metrics=metrics, events=events)
+                                category=category, category_from=category_from)
+
+
+@router.get("/account/{account_id}/live-sessions/{live_id}/upstream",
+            response_model=LiveUpstreamOut)
+async def live_session_upstream(account_id: int, live_id: str,
+                                db: Session = Depends(get_db)):
+    """场次详情里「必须打第三方」的那两格：弹幕词云 + 直播动态（devlog/063）。
+
+    与详情端点分离，因此：
+
+    - 弹窗不必等它 —— 上游慢/挂了只让这两格转圈，其余内容照常可读；
+    - 前端可就地重试（同一次请求同时服务"弹幕"与"直播动态"两段，与 `gather` 对应）。
+
+    降级口径（**不要把"没拉到"说成"没有"**）：
+
+    | 结果 | 返回 |
+    |---|---|
+    | 拿到上游摘要 | `danmaku.wc_status = upstream` / `upstream_absent` + `metrics` + `events` |
+    | 上游这次没拿到（超时/重试耗尽） | `danmaku.wc_status='fetch_failed'`，`metrics=null`、`events=[]` |
+    | 非 danmakus 来源（纯 feed/self） | `danmaku.wc_status='no_danmaku'`，**不请求网络** |
+
+    成功结果在进程内缓存 10 分钟（`live_upstream._CACHE_TTL`），重复开关弹窗不再打上游。
+    """
+    account, _vtuber, _event_dates, _overrides = _live_infer_ctx(db, account_id)
+    if not account:
+        raise HTTPException(404, f"Account id={account_id} 不存在")
+    s = _pick_live_session(db, account_id, live_id)
+    if not _has_danmakus_source(s):
+        # 没有 danmakus 收录 → 上游无从查起：如实报"本场没有可统计的弹幕"，
+        # 而不是报"拉取失败"（后者会让用户以为再点一次就能成功）
+        return LiveUpstreamOut(danmaku=LiveDanmakuInfo(wc_status="no_danmaku"))
+
+    summary, evts = await load_live_upstream(live_id)
+    if summary is None:
+        # ⚠️ 这里报 fetch_failed（"没拉到"），**不能**报成"本场没弹幕"
+        return LiveUpstreamOut(danmaku=LiveDanmakuInfo(wc_status="fetch_failed"))
+
+    wc = summary.get("word_cloud") or []
+    # D4（devlog/061）：把「上游给没给热词」如实报给前端 ——
+    # 上游没给时前端要显示「自建」按钮，而不是干巴巴一句「暂无热词数据」。
+    #
+    # ⚠️ `status` 以**实际拿到的词条**为准，不盲信 summary 里的字段：
+    # 曾经写成 `summary.get("status") or "upstream_absent"`，于是当 summary 没带
+    # status（旧调用口径/测试桩）时，会出现 `source='upstream'` 与
+    # `wc_status='upstream_absent'` **自相矛盾**的组合（被 test_live_session_detail
+    # 当场抓出）。派生量就地从同一份数据推导，别让它依赖上游是否恰好填了那个键。
+    status = summary.get("status")
+    if status not in ("upstream", "upstream_absent"):
+        status = "upstream" if wc else "upstream_absent"
+    danmaku = LiveDanmakuInfo(
+        total=summary.get("total"),
+        top_keywords=[w for w, _c in wc][:40],
+        top_words=[LiveWordOut(text=w, count=int(c)) for w, c in wc][:40],
+        source="upstream" if status == "upstream" else None,
+        wc_status=status,
+    )
+    metrics = LiveMetricsOut(
+        watch_count=summary.get("watch_count"),
+        like_count=summary.get("like_count"),
+        pay_count=summary.get("pay_count"),
+        interaction_count=summary.get("interaction_count"),
+        online_rank=summary.get("online_rank"),
+        comment_count=summary.get("comment_count"),
+        is_full=summary.get("is_full"),
+        is_merged=summary.get("is_merged"),
+        peaks=summary.get("peaks") or [],
+        versions=summary.get("versions") or [],
+        channel=summary.get("channel") or {},
+    )
+    events: list[LiveEventOut] = []
+    for ev in evts or []:
+        sd = ev.get("send_date_ms")
+        events.append(LiveEventOut(
+            type=int(ev.get("type") or 0),
+            send_date=datetime.fromtimestamp(sd / 1000, tz=timezone.utc)
+            .replace(tzinfo=None) if sd else None,
+        ))
+    return LiveUpstreamOut(danmaku=danmaku, metrics=metrics, events=events)
 
 
 class LiveCategoryUpdate(BaseModel):

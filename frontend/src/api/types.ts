@@ -201,12 +201,28 @@ export interface LiveEvent {
   send_date?: string | null
 }
 
-/** 单场次详情（点击日期格 → 详情弹窗；danmaku/metrics/events 已接入，analysis 预留） */
+/** 单场次详情（点击日期格 → 详情弹窗）—— **只含本地库可推导的内容**。
+ *
+ * 2026-09-13（devlog/063）：弹幕 / 指标 / 动态三样已拆到 `LiveUpstream`
+ * （独立端点 `/live-sessions/{id}/upstream`）——原先它们挂在详情响应里，
+ * 上游慢时整个弹窗一起转圈（最坏 93s）。本类型的端点不再发起任何第三方请求。
+ */
 export interface LiveSessionDetail extends LiveSession {
+  analysis?: LiveAnalysisInfo | null
+}
+
+/** 场次详情里「必须打第三方」的那两格：弹幕词云 + 直播动态（devlog/063）。
+ *
+ * | 字段 | 失败时 |
+ * |---|---|
+ * | `danmaku` | `wc_status='fetch_failed'`（"没拉到"，**不是**"本场没有"） |
+ * | `metrics` | `null` |
+ * | `events` | `[]` |
+ */
+export interface LiveUpstream {
   danmaku?: LiveDanmakuInfo | null
   metrics?: LiveMetrics | null
   events?: LiveEvent[] | null
-  analysis?: LiveAnalysisInfo | null
 }
 
 /** 第三方 VTuber 索引条目（P5 档案卡：企划/公会/房间号） */

@@ -295,6 +295,10 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 
 点击**日期格**打开（hover 浮层保持纯信息展示不动）——portal 到 body 的独立居中弹窗。
 
+> **两段式取数**（2026-09-13，devlog/063）：详情端点只回本地库数据（弹窗 ≤0.2s 可读），
+> 弹幕/指标/直播动态三样由 `…/upstream` 独立取（弹幕段与动态段各自 loading，可就地重试）。
+> 上游会间歇性变慢（实测 1.1s ↔ 15.6s），拆开前它能把整个弹窗拖到最坏 93s。
+
 | 区域 | 类名 | 说明 |
 |---|---|---|
 | 遮罩 | `.lc-dlg-backdrop` | fixed inset 0、z-60、`rgba(15,23,42,.32)`、淡入 0.18s；点击空白（target===currentTarget）关闭；打开期间锁 body 滚动 |
@@ -304,8 +308,9 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 | 多场切换 | `.lc-dlg-tabs` | 当日多场时显示：HH:MM 胶囊（r106），激活 = `--c-accent` 底白字 |
 | 两栏主体 | `.lc-dlg-main` | grid `264px minmax(0,1fr)` gap 12 |
 | 左封面 | `.lc-dlg-cover` | **264px · aspect-ratio 4/3**（danmakus 封面 720×540=4:3 与 704×396=16:9 混存，4:3 容器 + `object-fit:contain` 双全）；r10 截角；`ProxyImage`（`fallback` 槽位）三态：直连 CDN（normalizeImageUrl + `referrerPolicy=no-referrer`——裸 img 漏此曾 403；微博图床 sinaimg/wbcdn 起点即走代理）→ `/img-proxy` 后端代理 → `fallback` 渲染渐变底 + 首字大号占位（64px 粉 55% 透明）；左下状态徽章（已结束=黑玻璃 / 直播中=粉 `rgba(251,119,161,.92)`，r106） |
-| 右直播信息 | `.lc-dlg-sec` + `.lc-dlg-rows` | r10 `#faf7f8` 区卡；行式 label(58px 次级) 左 · value 右；字段：时间（HH:MM–HH:MM + 时长）/ 分区 / 收益 ¥ / 峰值在线 / 弹幕数 / **A 组指标**（观看/点赞/打赏人数/互动/在线排名，来自 danmakus v2 live）/ 段数（>1 显示「N 段合并（中断续播）」）/ 数据源（danmakus+self+feed 组合） |
-| 弹幕信息 | `.lc-dlg-sec--full` | 满宽区卡：弹幕总量（大数 600）+ 完整性提示（`metrics.is_full===false` 时「弹幕数据未全量（部分录制源）」）+ **增量摊铺拼贴词云**（`MosaicCloud`，参考图形态）；无数据=「暂无弹幕数据（danmakus 未收录该场次或拉取失败）」 |
+| 右直播信息 | `.lc-dlg-sec` + `.lc-dlg-rows` | r10 `#faf7f8` 区卡；行式 label(58px 次级) 左 · value 右；字段：时间（HH:MM–HH:MM + 时长）/ 分区 / 收益 ¥ / 峰值在线 / 弹幕数 / **A 组指标**（观看/点赞/打赏人数/互动/在线排名，来自 danmakus v2 live，**独立请求** `…/upstream`，未回来时该行显示「正在取…」/「上游响应较慢，仍在重试…（已等 Ns）」）/ 段数（>1 显示「N 段合并（中断续播）」）/ 数据源（danmakus+self+feed 组合） |
+| 弹幕信息 | `.lc-dlg-sec--full` | 满宽区卡：弹幕总量（大数 600）+ 完整性提示（`metrics.is_full===false` 时「弹幕数据未全量（部分录制源）」）+ **增量摊铺拼贴词云**（`MosaicCloud`，参考图形态）；取数中 =「正在取上游弹幕…」/「上游响应较慢，仍在重试…（已等 Ns）」；五态文案见下（**不说"暂无弹幕数据"** —— 那会把"没拉到"说成"没有"，devlog/062/063） |
+| └ 弹幕五态 | `wc_status` | `upstream` 展示词云 / `upstream_absent`「上游未提供热词」+「用弹幕自建」/ `self_built` 展示 + 标注本地统计 / `no_danmaku`「本场没有可用于统计的文本弹幕记录」/ `fetch_failed`「弹幕拉取失败（网络或上游不可用）。」+「重试」；取数请求本身没通（HTTP/网络）=「弹幕数据未取到（上游取数请求没通；可重试）」+「重试」 |
 | └ 词云 | `.lc-dlg-cloud` + svg | 高 **210px·宽度自适应**（ResizeObserver 实测内容区宽，user 2026-09-07：池子宽度不对→实测）；**增量摊铺加权 Voronoi 拼贴**（2026-09-07 user 定案）：power diagram λ 权重（面积∝词频）+ **力导向站点摊铺**（质量感 collide q=0.2、中心引力、矩形软墙，位置直推无速度积分）+ **逐个入池**（频次降序每 150ms 一个，站点=当前最大空腔）；**容器轮廓圆角**（roundedRectPolygon 16px 圆角边界）；全部入场后 alpha 冷却 → 静止即停 |
 | └ 破泡 | `removeWord` + 局部松弛 | 点击词 → cell **立即消失**（纯同步删，无卡顿）→ **局部闭合**（node 验证：缺口处 2 词挤入、远处位移 avg 6.5px/max 16px、偏差 15%、单调 100%）：α=0.15 起步 + kCenter=0（力场几乎不动、停中心引力）——**λ 修正把缺口面积重新分配给相邻 cell**（power 边界"鼓胀"塞住缺口，站点只微挪）；远处纹丝不动；段头「已破泡 N · 恢复」胶囊一键还原 |
 | └ 面积比例 | `utils/wordCloudLayout.ts` | 目标面积 = count 比例 **保底 0.05%**（画布 0.05%，小词仍可见分级）→ 归一化；**松弛手感**（user 定案 2026-09-07）：β=0.1（λ 面积修正慢速蠕动）+ α=0.994 慢冷却 + 碰撞质量感 q=0.2（大泡稳、小泡让）——node 验证：单调性 100%、终态偏差 2.01%、填满 100%、有效帧 <20ms |
