@@ -145,6 +145,9 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
         print(f"  [FAIL] {tag} @{width}: 探针 JSON 解析失败（{exc}）；见 {dom_file}")
         return None
     if isinstance(data, dict):                     # 2026-09-10 起：{views, topbar, ...}
+        # ⚠️ 这里是**白名单**：探针页面新产出的字段必须在这里登记，否则会被静默丢掉 ——
+        # 2026-09-13 加"场景切换"探针时踩到过：页面明明写了 `sceneSwitch`，
+        # 脚本侧只拿到一排 None（看起来像"探针没跑"，实际是被丢在这一层）。
         return {
             "mode": data.get("mode"),
             "views": data.get("views") or [],
