@@ -15,6 +15,7 @@ import { CanvasRenderer } from 'echarts/renderers'
 import type { FanTrendPoint } from '../api/types'
 import { api } from '../api/api'
 import { formatCount } from '../utils/format'
+import { mergeTrendDays, trendSourceLabel } from '../utils/fanTrend'
 import {
   CHART_BORDER,
   CHART_GRID,
@@ -53,11 +54,17 @@ interface DailyPoint {
   delta: number | null
   /** 涨=粉 / 掉=灰（柱 itemStyle 直接取自数据点） */
   barFill: string
+  /** 该点来源：`self` = 本地快照；其余 = 第三方回填（决定画实线还是虚线，R4） */
+  source: string
 }
 
 /** 涨=粉 / 掉=灰（柱 itemStyle 直接取自数据点）；色值集中见 utils/chartTheme.ts（tokens 同源） */
 const PINK = CHART_PINK
 const LOSS_GRAY = CHART_LOSS_GRAY
+
+/** 两条粉丝线的系列名（tooltip / 图例按它分支；R4：self 实线 + 第三方虚线只补空洞） */
+const SERIES_SELF = '粉丝数'
+const SERIES_THIRD = '第三方回填'
 
 /** 数据容量档位（时间轴轨迹范围）：默认 3 个月，手动按钮切换 */
 const PRESETS = [
@@ -117,7 +124,8 @@ function fmtDelta(v: number | null): string {
   return v == null ? '—' : `${v >= 0 ? '+' : '−'}${Math.abs(v).toLocaleString()}`
 }
 
-/** 工具提示：日期标题 + 粉丝数/日增粉两行（粉系样式随 tooltip 全局配置） */
+/** 工具提示：日期标题 + 粉丝数/日增粉两行（粉系样式随 tooltip 全局配置）。
+ *  R4 起"粉丝数"可能来自两条线（本地快照实线 / 第三方回填虚线），按 seriesName 标注来源。 */
 function tooltipFormatter(params: unknown): string {
   const list =
     (params as { seriesName?: string; value?: number | null; axisValue?: string | number }[]) ??
@@ -129,8 +137,12 @@ function tooltipFormatter(params: unknown): string {
   }
   for (const p of list) {
     if (p.value == null) continue
-    if (p.seriesName === '粉丝数') {
-      html += `<div style="color:${CHART_TEXT}">粉丝数 <b style="color:${PINK}">${formatCount(Number(p.value))} 粉</b></div>`
+    if (p.seriesName === SERIES_SELF) {
+      html += `<div style="color:${CHART_TEXT}">粉丝数 <b style="color:${PINK}">${formatCount(Number(p.value))} 粉</b>`
+        + `<span style="color:${CHART_MUTED};font-size:11px"> · 本地快照</span></div>`
+    } else if (p.seriesName === SERIES_THIRD) {
+      html += `<div style="color:${CHART_TEXT}">回填 <b style="color:${CHART_MUTED}">${formatCount(Number(p.value))} 粉</b>`
+        + `<span style="color:${CHART_MUTED};font-size:11px"> · 第三方（补历史空洞）</span></div>`
     } else {
       html += `<div style="color:${CHART_TEXT}">日增粉 <b style="color:${Number(p.value) >= 0 ? PINK : LOSS_GRAY}">${fmtDelta(Number(p.value))}</b></div>`
     }
@@ -212,11 +224,12 @@ function buildOption(data: DailyPoint[]): EChartsCoreOption {
     },
     series: [
       {
-        // 粉丝数：主粉光滑曲线 + 渐变面积（浅底通透）
+        // 粉丝数（本地快照 self）：主粉光滑曲线 + 渐变面积（浅底通透）。
+        // R4：只在 self 的日期出点 —— 历史段交给下一条虚线，二者同日不重复画。
         yAxisIndex: 0,
-        name: '粉丝数',
+        name: SERIES_SELF,
         type: 'line',
-        data: data.map((d) => d.fans),
+        data: data.map((d) => (d.source === 'self' ? d.fans : null)),
         smooth: true,
         showSymbol: false,
         connectNulls: true,
@@ -236,7 +249,20 @@ function buildOption(data: DailyPoint[]): EChartsCoreOption {
         },
       },
       {
-        // 日增粉：正=粉 / 负=灰，柱宽 55% 随密度自适应
+        // 第三方回填（zeroroku）：**只在 self 缺失的日期出点**（R4，「只补空洞」）。
+        // 灰色虚线 + 不填色 —— 与主粉实线区分；两段在交界处首尾相接。
+        yAxisIndex: 0,
+        name: SERIES_THIRD,
+        type: 'line',
+        data: data.map((d) => (d.source === 'self' ? null : d.fans)),
+        smooth: false,
+        showSymbol: false,
+        connectNulls: true,
+        lineStyle: { color: CHART_MUTED, width: 1.5, type: 'dashed' },
+        z: 2,
+      },
+      {
+        // 日增粉：正=粉 / 负=灰，柱宽 55% 随密度自适应（用合并后的序列，与上面的线同源）
         yAxisIndex: 1,
         name: '日增粉',
         type: 'bar',
@@ -344,26 +370,22 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
     }
   }, [accountId, refreshTick])
 
-  /** 按日聚合（每日取后端序列最后值）+ 逐日差分（首日/断档 null） */
+  /** 按日聚合 + 逐日差分。
+   *
+   *  2026-09-13（R4，用户定）：合并口径搬到 `utils/fanTrend.mergeTrendDays` ——
+   *  **同一天以 self 为准，第三方只补 self 缺失的日子**。
+   *  此前这里是 `map.set(p.date, …)`（后写覆盖），而后端按 `(date, source)` 升序给点、
+   *  `zeroroku` 排在 `self` 之后 ⇒ **第三方的当天旧值会盖掉自己记的快照**，
+   *  正好与"自抓取优先"相反（且不会报错，只在图上看着不对）。
+   *  口径本身是纯函数，已由 `fanTrend.test.ts` 8 条断言锁住。 */
   const daily = useMemo<DailyPoint[]>(() => {
-    const map = new Map<string, { date: string; fans: number }>()
-    for (const p of points) {
-      map.set(p.date, { date: p.date, fans: p.fans })
-    }
-    const sorted = [...map.values()].sort((a, b) => a.date.localeCompare(b.date))
-    const out: DailyPoint[] = []
-    let prev: number | null = null
-    for (const d of sorted) {
-      const delta = prev != null ? d.fans - prev : null
-      out.push({
-        date: d.date,
-        fans: d.fans,
-        delta,
-        barFill: (delta ?? 0) >= 0 ? PINK : LOSS_GRAY,
-      })
-      prev = d.fans
-    }
-    return out
+    return mergeTrendDays(points).map((d) => ({
+      date: d.date,
+      fans: d.fans,
+      delta: d.delta,
+      barFill: (d.delta ?? 0) >= 0 ? PINK : LOSS_GRAY,
+      source: d.source,
+    }))
   }, [points])
 
   /** 当前容量档位数据（数据源，数据量 = 档位天数） */
@@ -466,15 +488,22 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
   return (
     <div className="fan-chart">
       {/* 卡片标题（与直播日历/归档卡同规格 16.5/600/--c-text-main）+
-          数据来源说明：粉丝数自动记录（账号抓取 + 收录时第三方回填），无手动入口 */}
+          数据来源说明（R3：点名来源而不是含糊的"数据自动同步"） */}
       <div className="fc-title">
         粉丝趋势
         <span
           className="card-src-note"
-          title="粉丝数来自每次账号抓取（自动，约 5 分钟一轮）与第三方历史回填（收录该 V 时自动执行），无需手动触发"
+          title={
+            '实线 = 本地快照（每次账号抓取自动记录，约 5 分钟一条，当天以它为准）；'
+            + '虚线 = 第三方回填（zeroroku，收录该 V 时一次性拉取，只补本地快照缺失的日子）'
+          }
         >
-          数据自动同步
+          {trendSourceLabel(daily)}
         </span>
+        {/* 有旧数据时刷新失败：保留图表 + 如实说一句（不切成错误页，也不静默） */}
+        {error && daily.length > 0 && (
+          <span className="card-refresh-failed" title={error}>刷新失败，显示上次数据</span>
+        )}
       </div>
 
       {/* 头部：左=1d/7d/30d 概览 · 右=容量档位按钮 + 窗口回退 */}
@@ -532,14 +561,17 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
         </div>
       </div>
 
-      {/* 图区：ECharts canvas 自绘（slider 拖拽/图表区滚轮缩放+按住平移均由数据缩放组件接管） */}
+      {/* 图区：ECharts canvas 自绘（slider 拖拽/图表区滚轮缩放+按住平移均由数据缩放组件接管）。
+          R2①（2026-09-13）：**已有数据时不再切"加载中"** —— `fetch-idle` 每轮定时抓取都会
+          让 refreshTick +1，此前会把 canvas 整块卸掉重建（既闪、又白扔一次 ECharts 初始化）；
+          现在只有"首次加载（还没有任何点）"才显示加载态，后台刷新静默替换。 */}
       <div className="fan-chart-body">
-        {loading && <StateBlock kind="loading" />}
-        {!loading && error && <StateBlock kind="error" text={error} />}
-        {!loading && !error && capacity.length === 0 && (
+        {loading && daily.length === 0 && <StateBlock kind="loading" />}
+        {!loading && error && daily.length === 0 && <StateBlock kind="error" text={error} />}
+        {daily.length === 0 && !loading && !error && (
           <StateBlock kind="empty" text="暂无趋势数据" />
         )}
-        {!loading && !error && capacity.length > 0 && (
+        {capacity.length > 0 && (
           <div className="fan-chart-canvas" ref={chartRef} />
         )}
       </div>

@@ -9,7 +9,7 @@ import FloatPill from './common/FloatPill'
 import StateBlock from './common/StateBlock'
 import { LIVE_TYPE_ORDER, liveTypeLabel } from '../utils/liveType'
 // 纯展示格式化已搬到 components/live/（可 vitest 直测）；此处只保留渲染/交互常量
-import { dayKeyIso, fmtDur, fmtMoney, fmtMonth, fmtTime, keyOf } from './live/liveCalendarFmt'
+import { calendarSourceLabel, dayKeyIso, fmtDur, fmtMoney, fmtMonth, fmtTime, keyOf } from './live/liveCalendarFmt'
 // 取数与状态机已搬到 components/live/useLiveSessions（见其文件顶部的顺序契约说明）
 import {
   POP_CLOSE_GRACE_MS, useLiveSessions,
@@ -365,17 +365,26 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
     <div className="live-calendar">
       {/* 卡片标题（与归档卡标题同规格 16.5px/600）+ 数据来源说明 / 空月提示。
           2026-09-08（用户）：入口「不明确」其实是因为根本没有手动入口——
-          场次在收录该 V 时自动回填、之后每日同步，直播状态随账号抓取更新。 */}
+          场次在收录该 V 时自动回填、之后每日同步，直播状态随账号抓取更新。
+          R3（2026-09-13）：从含糊的「数据自动同步」改成**点名来源**，并按实际数据
+          判定是否含本地快照补段（场次 `source` 里的 `+self`）。 */}
       <div className="lc-title">
         直播日历
         <span
           className="card-src-note"
-          title="直播场次来自第三方索引：收录该 V 时自动回填历史，之后每日同步；直播状态随账号抓取实时更新（无需手动触发）"
+          title={
+            '场次来自 danmakus 第三方索引（收录该 V 时回填历史，之后每日同步）；'
+            + '本工具 5 分钟一轮的直播轮询快照用于补中断段与校正起止。'
+          }
         >
           {!loading && !error && monthStats.length === 0
             ? '本月暂无直播记录 · 数据自动同步'
-            : '数据自动同步'}
+            : calendarSourceLabel(sessions)}
         </span>
+        {/* 有旧数据时刷新失败：保留网格 + 如实说一句（R2①：不再整块切成"加载中"） */}
+        {error && sessions.length > 0 && (
+          <span className="card-refresh-failed" title={error}>刷新失败，显示上次数据</span>
+        )}
       </div>
 
       {/* 导航行：左=月份浮片组（点击弹选月浮窗） · 右=当月类型统计胶囊（frame 10_642） */}
@@ -439,12 +448,16 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
           ))}
         </div>
 
-        {/* 月历网格：7 列 × 6 行，列/行距 4px（keyed 重放月份切换滑动动画） */}
+        {/* 月历网格：7 列 × 6 行，列/行距 4px（keyed 重放月份切换滑动动画）。
+            R2①（2026-09-13）：`loading` 只在**首次加载（还没有任何场次）**时接管网格 ——
+            此前每次 `fetch-idle`（定时动态流每轮都会发，约 80s 一次）都会让 refreshTick +1 →
+            reload → loading=true → 42 格整块消失再重建，看起来就是"日历在闪"。
+            现在后台刷新静默替换数据，网格不卸载。 */}
         <div key={`${ym.y}-${ym.m}`} className={`lc-grid-anim${navDir === 1 ? '' : ' back'}`}>
           <div className="lc-grid">
-            {loading && <StateBlock kind="loading" />}
-            {!loading && error && <StateBlock kind="error" text={error} />}
-            {!loading && !error && cells.map((c) => renderCell(c))}
+            {loading && sessions.length === 0 && <StateBlock kind="loading" />}
+            {error && sessions.length === 0 && <StateBlock kind="error" text={error} />}
+            {sessions.length > 0 && cells.map((c) => renderCell(c))}
           </div>
         </div>
       </div>

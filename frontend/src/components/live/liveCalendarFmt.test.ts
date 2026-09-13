@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  calendarSourceLabel,
   dayKeyIso,
   fmtDur,
   fmtMoney,
@@ -147,3 +148,30 @@ describe('isFreshSession — 「刚结束」判据（文案分流）', () => {
     expect(isFreshSession('', '')).toBe(false)
   })
 })
+
+/**
+ * 数据来源标注（R3，2026-09-13 用户：卡片右上角要能看出"数据来自 danmakus"）。
+ * 锁的是**按实际 source 组合出文案**这件事：写死一句会在 feed/纯快照场次上说错来源。
+ */
+describe('calendarSourceLabel — 来源标注随实际场次走', () => {
+  it('单一来源各自成句', () => {
+    expect(calendarSourceLabel([{ source: 'danmakus' }])).toBe('数据来自 danmakus')
+    expect(calendarSourceLabel([{ source: 'feed' }])).toBe('数据来自 平台直播状态')
+    expect(calendarSourceLabel([{ source: 'self' }])).toBe('数据来自 本地快照')
+  })
+
+  it('组合标记 danmakus+self → 两者都写出来', () => {
+    expect(calendarSourceLabel([{ source: 'danmakus+self' }]))
+      .toBe('数据来自 danmakus + 本地快照')
+  })
+
+  it('同页混源 → 取并集（顺序固定：danmakus → 本地快照 → 平台直播状态）', () => {
+    expect(calendarSourceLabel([{ source: 'feed' }, { source: 'danmakus+self' }]))
+      .toBe('数据来自 danmakus + 本地快照 + 平台直播状态')
+  })
+
+  it('空 / 缺字段 → 退回通用文案（不崩、不瞎猜）', () => {
+    expect(calendarSourceLabel([])).toBe('数据自动同步')
+    expect(calendarSourceLabel([{ source: null }, { source: '' }])).toBe('数据自动同步')
+    expect(calendarSourceLabel([{ source: ' ++ ' }])).toBe('数据自动同步')
+  })})

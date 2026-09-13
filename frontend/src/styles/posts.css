@@ -365,6 +365,27 @@
   filter: drop-shadow(0 0px 2px rgba(0, 0, 0, 0.98));
 }
 
+/* R1（2026-09-13）：头像改由 `ProxyImage` 渲染（radix Avatar → 三态链：
+   直连 CDN → /img-proxy → 占位）。radix 时代靠 `.hero-avatar` 落在包裹 span 上、
+   内部 img 自适应；现在类名直接落在 `<img>` 上，补 object-fit 与圆角，
+   并给 fallback（名字首字）同尺寸同底的样式。 */
+img.hero-avatar {
+  object-fit: cover;
+  border-radius: 999px;
+}
+
+.hero-avatar-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--sel-bg);
+  color: var(--c-primary-deep);
+  font-size: 64px;
+  font-weight: 600;
+  user-select: none;
+}
+
 /* 直播状态：始终显示（1.2.2），基类排版；`.live` 直播中 / `.off` 未开播双态 */
 .live-tag {
   display: inline-flex;
@@ -404,6 +425,41 @@
 
 .live-tag.off .live-dot {
   background: #9aa6b5;
+}
+
+/* 可点进直播间（R7，2026-09-13）：徽标由纯展示变可点控件 —— 只在能拿到
+   直播间地址时挂 `.clickable`（B 站有 room_id 即可，未开播也允许进直播间页）。
+   hover：轻微抬起 + 描边加深；rAF/transition 走 transform，不重排。
+   `prefers-reduced-motion` 下只保留描边变化（不做位移）。 */
+.live-tag.clickable {
+  cursor: pointer;
+  transition: transform 0.14s ease, box-shadow 0.14s ease, border-color 0.14s ease;
+}
+
+.live-tag.clickable:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.12);
+}
+
+.live-tag.clickable.live:hover {
+  border-color: rgba(225, 68, 68, 0.95);
+}
+
+.live-tag.clickable.off:hover {
+  border-color: rgba(100, 116, 139, 0.6);
+}
+
+.live-tag.clickable:focus-visible {
+  outline: none;
+  box-shadow: var(--pill-ring);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-tag.clickable,
+  .live-tag.clickable:hover {
+    transform: none;
+    transition: border-color 0.14s ease;
+  }
 }
 
 /* 名字和签名块（1.2.3）：宽填充/高110/间距 0 */
@@ -593,10 +649,13 @@
   flex-shrink: 0;
 }
 
-/* 触发器：文案「筛选」/「筛选 · N」，右下留出 .pill-caret 的角位 */
+/* 触发器：文案「筛选」/「筛选 · N」。
+   2026-09-13（R5）：内距改**对称** —— 原先 `0 16px 0 10px` 是为了给右下角的 caret 让位，
+   但 `.pill-caret` 是绝对定位（layout.css，top/right 各 3px）**不占流**，
+   于是那 6px 差值把文字整体推左 3px，看上去"没居中"。 */
 .pfilter-btn {
   min-width: 68px;
-  padding: 0 16px 0 10px;
+  padding: 0 16px;
 }
 
 /* 宽度：两月历并排需要「右栏宽 ≥ 544」，故按窗口退让 `100vw − 574`
@@ -3173,6 +3232,19 @@
   border-bottom: 1px dotted var(--c-border);
 }
 
+/* 后台刷新失败但**仍有旧数据在显示**时的提示（R2，2026-09-13）。
+   两种情况必须分开：① 首屏失败 → 走 StateBlock error；
+   ② 已经有数据、只是这一轮刷新失败 → 不能把整块换成错误页（那正是"闪动"），
+   但也不能什么都不说（静默失效，见 devlog/054）—— 于是给一个红字小注。 */
+.card-refresh-failed {
+  font-size: 12.5px;
+  font-weight: 400;
+  color: #d14343;
+  line-height: 1;
+  white-space: nowrap;
+  margin-left: 8px;
+}
+
 /* 头部概览行：1d/7d/30d 涨粉 + 回退按钮 */
 .fan-chart-head {
   display: flex;
@@ -3209,13 +3281,19 @@
   gap: 8px;
 }
 
+/* 容量档位（3个月/6个月/1年/全部）—— 2026-09-13（R8）按设计令牌重构：
+   ① 容器描边原本写死 rgba(210,216,222,.55)，与 `--c-border` **同值**，改成引用令牌；
+   ② 容器补 `--sel-bg` 底（与其它选择控件同源；此前透明，浮在卡面上没有"控件感"）；
+   ③ 选中态由 `--c-primary`（顶栏粉）改 `--c-primary-deep`（本仓「激活=粉底白字」的既定口径）；
+   ④ 几何不动（20 + 2×2 padding + 2×1 border = 26px，与相邻控件同高）。 */
 .fan-presets {
   display: flex;
   align-items: center;
   gap: 2px;
   padding: 2px;
-  border: 1px solid rgba(210, 216, 222, 0.55);
+  border: 1px solid var(--c-border);
   border-radius: 999px;
+  background: var(--sel-bg);
 }
 
 .fan-preset {
@@ -3234,7 +3312,7 @@
 }
 
 .fan-preset.on {
-  background: var(--c-primary);
+  background: var(--c-primary-deep);
   color: #fff;
 }
 

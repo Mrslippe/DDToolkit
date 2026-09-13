@@ -17,28 +17,56 @@ import { useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Plus } from 'lucide-react'
 
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
-import heroDivider from '../../assets/icons/hero-divider.svg'
-import type { Account, VTuber } from '../../api/types'
 import { api } from '../../api/api'
+import type { Account, VTuber } from '../../api/types'
+import heroDivider from '../../assets/icons/hero-divider.svg'
 import { accountHomeUrl, chunkBy, orderAccounts } from '../../utils/postTypes'
 import { pill } from '../../utils/pill'
 import OverlayScroll from '../OverlayScroll'
+import ProxyImage from '../common/ProxyImage'
 import StatPill from '../common/StatPill'
 
 interface Props {
   vtuber: VTuber
   /** 有 platform_uid 的账号（顺序 = 服务端 sort_order，拖拽后本地临时覆盖） */
   accounts: Account[]
-  /** 头像（VTuber 本体优先，回退账号稳定源） */
+  /** 头像（VTuber 本体优先，回退账号稳定源）—— 走 ProxyImage 三态链 */
   avatarSrc?: string
-  /** 直播状态（只读 B 站账号；`liveAcc` 也用于拿直播标题） */
+  /** 直播状态（只读 B 站账号；`liveAcc` 也用于拿直播标题与直播间地址） */
   liveAcc: Account | null
   isLive: boolean
   /** 签名来源（VTuber 整体事实：B 站优先） */
   heroAcc: Account | null
   /** 打开「添加账号」弹窗 */
   onAddAccount: () => void
+}
+
+/** 打开外链：桌面端走 shell 插件（capability `shell:allow-open` 已就绪，无需新增依赖），
+ *  Web / 失败退化为新标签页。账号主页与直播间共用（R7）。 */
+function openExternal(url: string) {
+  if ('__TAURI_INTERNALS__' in window) {
+    void import('@tauri-apps/api/core')
+      .then((m) => m.invoke('plugin:shell|open', { path: url }))
+      .catch(() => window.open(url, '_blank', 'noopener'))
+  } else {
+    window.open(url, '_blank', 'noopener')
+  }
+}
+
+/**
+ * 直播间地址（R7）：优先用平台给的 `live_url`，没有就用 `room_id` 拼。
+ *
+ * `live_url` 只在"正在直播"时由平台返回（实测库里 10 个账号全为 null），
+ * 所以要能自己拼 —— 用户 2026-09-13 定：**未开播也允许点进直播间**，
+ * 因此只要求"有 room_id 且是 B 站账号"。
+ */
+export function liveRoomUrl(acc: Account | null | undefined): string | null {
+  if (!acc) return null
+  if (acc.live_url) return acc.live_url
+  if (acc.platform === 'bilibili' && acc.room_id) {
+    return `https://live.bilibili.com/${acc.room_id}`
+  }
+  return null
 }
 
 export default function HeroCardsView({
@@ -70,17 +98,11 @@ export default function HeroCardsView({
 
   const openHome = (a: Account) => {
     const url = accountHome(a)
-    if (!url) return
-    // 桌面端（Tauri）走 shell 插件的 open 命令（capability `shell:allow-open` 已就绪，
-    // 无需新增 npm 依赖 —— 直接 invoke 插件命令）；失败/Web 下退化为新标签页
-    if ('__TAURI_INTERNALS__' in window) {
-      void import('@tauri-apps/api/core')
-        .then((m) => m.invoke('plugin:shell|open', { path: url }))
-        .catch(() => window.open(url, '_blank', 'noopener'))
-    } else {
-      window.open(url, '_blank', 'noopener')
-    }
+    if (url) openExternal(url)
   }
+
+  /** 直播间（R7）：能拿到地址就可点（未开播也允许进直播间页） */
+  const roomUrl = liveRoomUrl(liveAcc)
 
   const onPillPointerDown = (idx: number) => (e: React.PointerEvent) => {
     if (e.button !== 0) return
@@ -134,16 +156,44 @@ export default function HeroCardsView({
     <OverlayScroll className="hero-scroll">
       {/* Hero：头像 / 直播徽标 / 名字 / 签名 / 平台药丸 / 分隔饰条 / 企划徽标 */}
       <div className="hero">
-        <Avatar className="hero-avatar">
-          <AvatarImage src={avatarSrc} referrerPolicy="no-referrer" />
-          <AvatarFallback>{vtuber.name.slice(0, 1)}</AvatarFallback>
-        </Avatar>
+        {/* 头像走 ProxyImage 三态链（R1，2026-09-13）：
+            档案设置里选的 `vtubers.avatar` 是**远端 URL**，此前是裸 `<img>`：
+            既没 https 归一化、也没有 `/img-proxy` 兜底 → 图床 403 就回落成
+            "无头像默认图"（实测 i0.hdslb.com 与 sinaimg 无 Referer 直连 403）。
+            fallback 仍与 Avatar 时代一致：名字首字。 */}
+        <ProxyImage
+          className="hero-avatar"
+          src={avatarSrc}
+          alt={vtuber.name}
+          fallbackClassName="hero-avatar hero-avatar-fallback"
+          fallback={<span>{vtuber.name.slice(0, 1)}</span>}
+        />
 
-        {/* 直播状态：始终显示（未开播=灰点+「未开播」） */}
-        <span className={`live-tag${isLive ? ' live' : ' off'}`} title={isLive ? (liveAcc?.live_title ?? '直播中') : '未开播'}>
-          <i className="live-dot" />
-          <span className="truncate">{isLive ? (liveAcc?.live_title ?? '直播中') : '未开播'}</span>
-        </span>
+        {/* 直播状态：始终显示（未开播=灰点+「未开播」）。
+            R7：能拿到直播间地址时是**按钮**（点击拉起浏览器进直播间），否则退回纯展示。 */}
+        {roomUrl ? (
+          <button
+            type="button"
+            className={`live-tag clickable${isLive ? ' live' : ' off'}`}
+            title={`${isLive ? (liveAcc?.live_title ?? '直播中') : '未开播'} · 点击进入直播间`}
+            onClick={() => openExternal(roomUrl)}
+          >
+            <i className="live-dot" />
+            <span className="truncate">
+              {isLive ? (liveAcc?.live_title ?? '直播中') : '未开播'}
+            </span>
+          </button>
+        ) : (
+          <span
+            className={`live-tag${isLive ? ' live' : ' off'}`}
+            title={isLive ? (liveAcc?.live_title ?? '直播中') : '未开播'}
+          >
+            <i className="live-dot" />
+            <span className="truncate">
+              {isLive ? (liveAcc?.live_title ?? '直播中') : '未开播'}
+            </span>
+          </span>
+        )}
 
         <div className="hero-name-block">
           <h2 className="hero-name">{vtuber.name}</h2>

@@ -23,6 +23,7 @@ import { api, resolveAsset } from '../api/api'
 import type { Account, VTuber } from '../api/types'
 import AddAccountDialog from './AddAccountDialog'
 import OverlayScroll from './OverlayScroll'
+import ProxyImage from './common/ProxyImage'
 import './../styles/posts.css'
 
 interface Props {
@@ -107,10 +108,54 @@ export default function VtuberSettingsDialog({
     if (!open) seedRef.current = ''
   }, [open])
 
-  const toggleLock = (field: string) => {
-    setLocked((prev) =>
-      prev.includes(field) ? prev.filter((f) => f !== field) : [...prev, field],
-    )
+  /**
+   * 头像**选中即写入**（R1，2026-09-13）。
+   *
+   * 为什么单独即时提交：弹窗整体是「草稿 + 保存」（防每击键打接口），但头像是一次点击的
+   * 单选 —— 用户看到"选中态"就以为已经生效，关窗没保存时改动静默丢失，
+   * 表现出来就是"选了头像但显示的还是默认图 / 锁了又变回去"（R1 反馈）。
+   * 只读一次接口的开关没必要等保存；签名这类文本输入仍走草稿。
+   */
+  const pickAvatar = async (url: string | null) => {
+    if (!vtuber || saving) return
+    const prevAvatar = avatar
+    setAvatar(url)                     // 乐观更新：立即回显选中态
+    setSaving(true)
+    try {
+      const updated = await api.updateVtuber(vtuber.id, { avatar: url })
+      onSaved(updated)
+      onPill?.(url ? '头像已更新' : '已改用平台头像')
+    } catch (e) {
+      setAvatar(prevAvatar)            // 失败回滚选中态，不让 UI 撒谎
+      toast.error(`头像保存失败：${(e as Error).message}`)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  /**
+   * 字段锁定**点击即写入**（R1，2026-09-13）：同上，锁是个开关，
+   * 让"锁了但没保存"变成不可能（此前它跟草稿一起提交，用户锁完直接关窗就丢了）。
+   */
+  const toggleLockNow = async (field: string) => {
+    if (!hero || saving) return
+    const prev = locked
+    const next = prev.includes(field) ? prev.filter((f) => f !== field) : [...prev, field]
+    setLocked(next)                    // 乐观更新
+    setSaving(true)
+    try {
+      await api.updateAccount(hero.id, { locked_fields: next.join(',') || null })
+      // ⚠️ 必须回灌父级：本组件的播种键是「V id + 主账号 id」，光写库不刷新的话，
+      // 关窗再打开会按**旧的** `hero.locked_fields` 重新播种 —— 于是刚锁上的又显示成未锁，
+      // 正是 R1 反馈里"逻辑反过来了"的观感来源。
+      onSaved(await api.getVtuber(vtuber!.id))
+      onPill?.(next.includes(field) ? '已锁定：抓取不再覆盖' : '已解锁：抓取可覆盖')
+    } catch (e) {
+      setLocked(prev)                  // 失败回滚
+      toast.error(`锁定状态保存失败：${(e as Error).message}`)
+    } finally {
+      setSaving(false)
+    }
   }
 
   const uploadBackground = async (file: File) => {
@@ -287,7 +332,10 @@ export default function VtuberSettingsDialog({
             </div>
 
             <div className="vd-section">
-              <h4 className="vd-section-title">头像</h4>
+              <h4 className="vd-section-title">
+                头像
+                <span className="vd-hint">选中即写入（无需等保存）</span>
+              </h4>
               <div className="vd-avatar-row">
                 {avatarOptions.map((a) => {
                   const src = resolveAsset(a.avatar_path) ?? a.avatar_url ?? undefined
@@ -298,13 +346,24 @@ export default function VtuberSettingsDialog({
                       type="button"
                       title={`用 ${a.platform} 的头像`}
                       className={`vd-avatar-opt${active ? ' on' : ''}`}
-                      onClick={() => setAvatar(a.avatar_url)}
+                      disabled={saving}
+                      onClick={() => void pickAvatar(a.avatar_url)}
                     >
-                      {src ? <img src={src} alt="" /> : <span>{a.platform}</span>}
+                      {/* R1（2026-09-13）：预览同样走 ProxyImage —— 裸 <img> 在
+                          图床 403 时是破图/空白（实测 i0.hdslb.com 与 sinaimg 直连 403），
+                          看上去就像"选中的是无头像默认图" */}
+                      {src
+                        ? <ProxyImage src={src} alt="" />
+                        : <span>{a.platform}</span>}
                     </button>
                   )
                 })}
-                <Button variant="outline" size="sm" onClick={() => setAvatar(null)}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={saving}
+                  onClick={() => void pickAvatar(null)}
+                >
                   用平台默认
                 </Button>
               </div>
@@ -328,7 +387,9 @@ export default function VtuberSettingsDialog({
               <button
                 type="button"
                 className={`vd-lock${locked.includes('sign') ? ' on' : ''}`}
-                onClick={() => toggleLock('sign')}
+                disabled={saving}
+                title="点击即写入（无需等保存）"
+                onClick={() => void toggleLockNow('sign')}
               >
                 {locked.includes('sign') ? <Lock className="size-3.5" /> : <LockOpen className="size-3.5" />}
                 {locked.includes('sign') ? '抓取时不覆盖签名' : '抓取会覆盖我改的签名'}
@@ -336,7 +397,9 @@ export default function VtuberSettingsDialog({
               <button
                 type="button"
                 className={`vd-lock${locked.includes('display_name') ? ' on' : ''}`}
-                onClick={() => toggleLock('display_name')}
+                disabled={saving}
+                title="点击即写入（无需等保存）"
+                onClick={() => void toggleLockNow('display_name')}
               >
                 {locked.includes('display_name') ? <Lock className="size-3.5" /> : <LockOpen className="size-3.5" />}
                 {locked.includes('display_name') ? '抓取时不覆盖账号昵称' : '抓取会覆盖账号昵称'}

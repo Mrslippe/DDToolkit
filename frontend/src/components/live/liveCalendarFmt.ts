@@ -59,3 +59,27 @@ export function fmtMoney(v: number | null | undefined): string {
 export function keyOf(s: LiveSession): string {
   return s.category ?? inferLiveType(s.live_title).key
 }
+
+/**
+ * 卡片右上角的**数据来源标注**（R3，2026-09-13 用户：要能看到"数据来自 danmakus"）。
+ *
+ * 按**实际场次的 `source` 组合标记**判定，而不是写死一句文案 —— 场次来源有三种：
+ * `danmakus`（第三方索引）/ `danmakus+self`（含本地快照补段校正）/
+ * `feed`（平台直播状态推导，无第三方收录）/ `self`（纯本地快照）。
+ * 这样"这页数据到底谁给的"永远与列表内容一致。
+ */
+export function calendarSourceLabel(sessions: { source?: string | null }[]): string {
+  const kinds = new Set<string>()
+  for (const s of sessions) {
+    for (const p of (s.source ?? '').split('+')) {
+      const k = p.trim()
+      if (k) kinds.add(k)
+    }
+  }
+  if (kinds.size === 0) return '数据自动同步'
+  const parts: string[] = []
+  if (kinds.has('danmakus')) parts.push('danmakus')
+  if (kinds.has('self')) parts.push('本地快照')
+  if (kinds.has('feed')) parts.push('平台直播状态')
+  return `数据来自 ${parts.join(' + ')}`
+}
