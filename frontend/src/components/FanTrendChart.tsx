@@ -62,9 +62,8 @@ interface DailyPoint {
 const PINK = CHART_PINK
 const LOSS_GRAY = CHART_LOSS_GRAY
 
-/** 两条粉丝线的系列名（tooltip / 图例按它分支；R4：self 实线 + 第三方虚线只补空洞） */
+/** 粉丝数系列名（tooltip 按它分支） */
 const SERIES_SELF = '粉丝数'
-const SERIES_THIRD = '第三方回填'
 
 /** 数据容量档位（时间轴轨迹范围）：默认 3 个月，手动按钮切换 */
 const PRESETS = [
@@ -125,11 +124,17 @@ function fmtDelta(v: number | null): string {
 }
 
 /** 工具提示：日期标题 + 粉丝数/日增粉两行（粉系样式随 tooltip 全局配置）。
- *  R4 起"粉丝数"可能来自两条线（本地快照实线 / 第三方回填虚线），按 seriesName 标注来源。 */
+ *
+ *  R4（用户 2026-09-13 补充）：**展示形式回到原来的一条线**，数据来源改在 hover 里说 ——
+ *  每个点携带 `src`（`self` = 本地快照，其余 = 第三方回填），tooltip 附一句来源。 */
 function tooltipFormatter(params: unknown): string {
   const list =
-    (params as { seriesName?: string; value?: number | null; axisValue?: string | number }[]) ??
-    []
+    (params as {
+      seriesName?: string
+      value?: number | null
+      axisValue?: string | number
+      data?: { src?: string } | number | null
+    }[]) ?? []
   const p0 = list[0]
   let html = `<div style="display:flex;flex-direction:column;gap:2px">`
   if (p0 && p0.axisValue != null) {
@@ -138,11 +143,11 @@ function tooltipFormatter(params: unknown): string {
   for (const p of list) {
     if (p.value == null) continue
     if (p.seriesName === SERIES_SELF) {
-      html += `<div style="color:${CHART_TEXT}">粉丝数 <b style="color:${PINK}">${formatCount(Number(p.value))} 粉</b>`
-        + `<span style="color:${CHART_MUTED};font-size:11px"> · 本地快照</span></div>`
-    } else if (p.seriesName === SERIES_THIRD) {
-      html += `<div style="color:${CHART_TEXT}">回填 <b style="color:${CHART_MUTED}">${formatCount(Number(p.value))} 粉</b>`
-        + `<span style="color:${CHART_MUTED};font-size:11px"> · 第三方（补历史空洞）</span></div>`
+      const src = (p.data && typeof p.data === 'object') ? p.data.src : undefined
+      const tag = src
+        ? `<span style="color:${CHART_MUTED};font-size:11px"> · ${src === 'self' ? '本地快照' : '第三方回填'}</span>`
+        : ''
+      html += `<div style="color:${CHART_TEXT}">粉丝数 <b style="color:${PINK}">${formatCount(Number(p.value))} 粉</b>${tag}</div>`
     } else {
       html += `<div style="color:${CHART_TEXT}">日增粉 <b style="color:${Number(p.value) >= 0 ? PINK : LOSS_GRAY}">${fmtDelta(Number(p.value))}</b></div>`
     }
@@ -224,12 +229,14 @@ function buildOption(data: DailyPoint[]): EChartsCoreOption {
     },
     series: [
       {
-        // 粉丝数（本地快照 self）：主粉光滑曲线 + 渐变面积（浅底通透）。
-        // R4：只在 self 的日期出点 —— 历史段交给下一条虚线，二者同日不重复画。
+        // 粉丝数：主粉光滑曲线 + 渐变面积（浅底通透）。
+        // R4（用户 2026-09-13 补充）：**回到单线展示** —— 合并口径（同日 self 优先、
+        // 第三方只补空洞）在 `mergeTrendDays` 里已经生效，来源只放在 hover 里说，
+        // 不再拆两条线。每点带 `src`，tooltip 据此标注来源。
         yAxisIndex: 0,
         name: SERIES_SELF,
         type: 'line',
-        data: data.map((d) => (d.source === 'self' ? d.fans : null)),
+        data: data.map((d) => ({ value: d.fans, src: d.source })),
         smooth: true,
         showSymbol: false,
         connectNulls: true,
@@ -247,19 +254,6 @@ function buildOption(data: DailyPoint[]): EChartsCoreOption {
             ],
           },
         },
-      },
-      {
-        // 第三方回填（zeroroku）：**只在 self 缺失的日期出点**（R4，「只补空洞」）。
-        // 灰色虚线 + 不填色 —— 与主粉实线区分；两段在交界处首尾相接。
-        yAxisIndex: 0,
-        name: SERIES_THIRD,
-        type: 'line',
-        data: data.map((d) => (d.source === 'self' ? null : d.fans)),
-        smooth: false,
-        showSymbol: false,
-        connectNulls: true,
-        lineStyle: { color: CHART_MUTED, width: 1.5, type: 'dashed' },
-        z: 2,
       },
       {
         // 日增粉：正=粉 / 负=灰，柱宽 55% 随密度自适应（用合并后的序列，与上面的线同源）

@@ -48,6 +48,16 @@ interface Props {
  *   写本地相对路径会拼错前缀）；
  * - profile 视图（档案卡）已下线，企划/设定/账号一览的内容在这里承接。
  */
+/**
+ * 回车 = 主动失焦（失焦即提交，见 `commitFields`）—— 让"打完字敲回车"也能落地。
+ */
+function blurOnEnter(e: React.KeyboardEvent<HTMLElement>) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault()
+    ;(e.target as HTMLElement).blur()
+  }
+}
+
 export default function VtuberSettingsDialog({
   open,
   onOpenChange,
@@ -84,17 +94,31 @@ export default function VtuberSettingsDialog({
    * 不该被任何后台刷新打断。故改成显式播种键（打开态 + V id + 主账号 id）。
    */
   const seedRef = useRef('')
+  /**
+   * 已保存值快照：**判断"这次失焦到底有没有改动"**（避免 tab 过一遍字段就打一堆 PUT），
+   * 同时给 name 的空值兜底用（留空 = 保持原名，而不是把名字写空）。
+   */
+  const savedRef = useRef({ name: '', faction: '', birthday: '', debut: '', setting: '', sign: '' })
   useEffect(() => {
     if (!open || !vtuber) return
     const key = `${vtuber.id}:${hero?.id ?? ''}`
     if (seedRef.current === key) return
     seedRef.current = key
-    setName(vtuber.name)
-    setFaction(vtuber.faction ?? '')
-    setBirthday(vtuber.birthday ?? '')
-    setDebut(vtuber.debut_date ?? '')
-    setSetting(vtuber.setting ?? '')
-    setSign(hero?.sign ?? '')
+    const seed = {
+      name: vtuber.name ?? '',
+      faction: vtuber.faction ?? '',
+      birthday: vtuber.birthday ?? '',
+      debut: vtuber.debut_date ?? '',
+      setting: vtuber.setting ?? '',
+      sign: hero?.sign ?? '',
+    }
+    savedRef.current = seed
+    setName(seed.name)
+    setFaction(seed.faction)
+    setBirthday(seed.birthday)
+    setDebut(seed.debut)
+    setSetting(seed.setting)
+    setSign(seed.sign)
     setAvatar(vtuber.avatar ?? null)
     setLocked(
       (hero?.locked_fields ?? '')
@@ -109,22 +133,19 @@ export default function VtuberSettingsDialog({
   }, [open])
 
   /**
-   * 头像**选中即写入**（R1，2026-09-13）。
+   * 头像**选中即写入**（R1，2026-09-13；用户补充：去掉「用平台默认」，点哪个是哪个）。
    *
-   * 为什么单独即时提交：弹窗整体是「草稿 + 保存」（防每击键打接口），但头像是一次点击的
-   * 单选 —— 用户看到"选中态"就以为已经生效，关窗没保存时改动静默丢失，
-   * 表现出来就是"选了头像但显示的还是默认图 / 锁了又变回去"（R1 反馈）。
-   * 只读一次接口的开关没必要等保存；签名这类文本输入仍走草稿。
+   * 不设"清空头像"这条路：没有显式选择时，卡片显示的就是**首个账号的头像**
+   * （`PostsPage` 的 stableAvatar 回退链），所以"默认头像"只在**一个账号都没加**时出现。
    */
-  const pickAvatar = async (url: string | null) => {
-    if (!vtuber || saving) return
+  const pickAvatar = async (url: string) => {
+    if (!vtuber || saving || url === (avatar ?? '')) return
     const prevAvatar = avatar
     setAvatar(url)                     // 乐观更新：立即回显选中态
     setSaving(true)
     try {
-      const updated = await api.updateVtuber(vtuber.id, { avatar: url })
-      onSaved(updated)
-      onPill?.(url ? '头像已更新' : '已改用平台头像')
+      onSaved(await api.updateVtuber(vtuber.id, { avatar: url }))
+      onPill?.('头像已更新')
     } catch (e) {
       setAvatar(prevAvatar)            // 失败回滚选中态，不让 UI 撒谎
       toast.error(`头像保存失败：${(e as Error).message}`)
@@ -182,36 +203,67 @@ export default function VtuberSettingsDialog({
     }
   }
 
-  const save = async () => {
+  /**
+   * 文本字段**失焦即提交**（R1 补充，2026-09-13 用户：「修改要么实时生效，要么全部都需要保存」）。
+   *
+   * 选的是"全部实时"这一侧：本弹窗里已有三处即时写入（头像 / 锁定 / 背景），
+   * 再留一个"保存"按钮就会长期存在"这条到底存没存"的歧义 —— 那正是 R1 反馈的来源。
+   * 于是：
+   * - 失焦（点别处 / Tab / 回车主动 blur）→ 提交**变化的**字段，一次账；
+   * - 没有任何变化 → 不发请求（tab 过一遍字段不会打一串 PUT）；
+   * - 提交后回灌父级（卡片/侧栏立即跟着变），失败则回滚输入框到已保存值并报错；
+   * - 关闭按钮只负责关窗（没有"取消"语义了 —— 改了就生效）。
+   *
+   * ⚠️ 关窗时若焦点还在输入框里（Esc 关窗就是这条路径），DOM blur 不保证触发 →
+   * 由卸载时的 flush 兜底（见下方 useEffect 与 `flushRef`）。
+   */
+  const commitFields = async (): Promise<void> => {
     if (!vtuber || saving) return
+    const s = savedRef.current
+    const next = {
+      name: name.trim() || s.name,
+      faction: faction.trim(),
+      birthday: birthday.trim(),
+      debut: debut.trim(),
+      setting: setting.trim(),
+      sign: sign.trim(),
+    }
+    const vtuberChanged =
+      next.name !== s.name || next.faction !== s.faction || next.birthday !== s.birthday ||
+      next.debut !== s.debut || next.setting !== s.setting
+    const signChanged = !!hero && next.sign !== s.sign
+    if (!vtuberChanged && !signChanged) return
     setSaving(true)
     try {
-      const lockedFields = locked.join(',') || null
-      await api.updateVtuber(vtuber.id, {
-        name: name.trim() || vtuber.name,
-        faction: faction.trim() || null,
-        birthday: birthday.trim() || null,
-        debut_date: debut.trim() || null,
-        setting: setting.trim() || null,
-        avatar,
-      })
-      // 签名与锁定都是账号级字段 → 写主账号
-      if (hero && (sign !== (hero.sign ?? '') || lockedFields !== hero.locked_fields)) {
-        await api.updateAccount(hero.id, {
-          sign: sign.trim() || null,
-          locked_fields: lockedFields,
-        })
+      if (vtuberChanged) {
+        onSaved(await api.updateVtuber(vtuber.id, {
+          name: next.name,
+          faction: next.faction || null,
+          birthday: next.birthday || null,
+          debut_date: next.debut || null,
+          setting: next.setting || null,
+          avatar,
+        }))
       }
-      const fresh = await api.getVtuber(vtuber.id)
-      onSaved(fresh)
-      onPill?.('档案设置已保存')
-      onOpenChange(false)
+      // 签名是账号级字段 → 写主账号
+      if (signChanged) await api.updateAccount(hero!.id, { sign: next.sign || null })
+      savedRef.current = next
+      if (signChanged || vtuberChanged) onSaved(await api.getVtuber(vtuber.id))
+      onPill?.('档案已更新')
     } catch (e) {
+      // 回滚输入框到"最后一次成功保存"的值，不让界面撒谎
+      setName(s.name); setFaction(s.faction); setBirthday(s.birthday)
+      setDebut(s.debut); setSetting(s.setting); setSign(s.sign)
       toast.error(`保存失败：${(e as Error).message}`)
     } finally {
       setSaving(false)
     }
   }
+
+  // 关窗兜底：Esc 关窗时输入框可能没触发 blur（焦点元素被卸载不派发 blur）
+  const flushRef = useRef(commitFields)
+  flushRef.current = commitFields
+  useEffect(() => () => { void flushRef.current() }, [])
 
   const removeAccount = async () => {
     if (!delTarget || !vtuber) return
@@ -289,16 +341,26 @@ export default function VtuberSettingsDialog({
             </div>
 
             <div className="vd-section">
-              <h4 className="vd-section-title">基本资料</h4>
+              <h4 className="vd-section-title">
+                基本资料
+                <span className="vd-hint">改完点别处即生效</span>
+              </h4>
               <label className="vd-field">
                 <span>名称</span>
-                <input value={name} onChange={(e) => setName(e.target.value)} />
+                <input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  onBlur={() => void commitFields()}
+                  onKeyDown={blurOnEnter}
+                />
               </label>
               <label className="vd-field">
                 <span>企划 / 公会</span>
                 <input
                   value={faction}
                   onChange={(e) => setFaction(e.target.value)}
+                  onBlur={() => void commitFields()}
+                  onKeyDown={blurOnEnter}
                   placeholder="如：VirtuaReal"
                 />
               </label>
@@ -308,6 +370,8 @@ export default function VtuberSettingsDialog({
                   <input
                     value={birthday}
                     onChange={(e) => setBirthday(e.target.value)}
+                    onBlur={() => void commitFields()}
+                    onKeyDown={blurOnEnter}
                     placeholder="MM-DD"
                   />
                 </label>
@@ -316,6 +380,8 @@ export default function VtuberSettingsDialog({
                   <input
                     value={debut}
                     onChange={(e) => setDebut(e.target.value)}
+                    onBlur={() => void commitFields()}
+                    onKeyDown={blurOnEnter}
                     placeholder="YYYY-MM-DD"
                   />
                 </label>
@@ -325,6 +391,7 @@ export default function VtuberSettingsDialog({
                 <textarea
                   value={setting}
                   onChange={(e) => setSetting(e.target.value)}
+                  onBlur={() => void commitFields()}
                   rows={4}
                   placeholder="自由文本，展示在档案卡"
                 />
@@ -334,12 +401,18 @@ export default function VtuberSettingsDialog({
             <div className="vd-section">
               <h4 className="vd-section-title">
                 头像
-                <span className="vd-hint">选中即写入（无需等保存）</span>
+                <span className="vd-hint">
+                  {avatarOptions.length > 0 ? '点哪个用哪个（点完即生效）' : '添加账号后可选'}
+                </span>
               </h4>
               <div className="vd-avatar-row">
-                {avatarOptions.map((a) => {
+                {avatarOptions.map((a, i) => {
                   const src = resolveAsset(a.avatar_path) ?? a.avatar_url ?? undefined
-                  const active = avatar === a.avatar_url
+                  // 未显式选过时，**首个账号即当前生效头像**（卡片回退链同口径）——
+                  // 此前 avatar 为 null 时一个都不高亮，看起来像"没头像"（R1 补充）。
+                  const active = avatar
+                    ? avatar === a.avatar_url
+                    : i === 0
                   return (
                     <button
                       key={a.id}
@@ -347,7 +420,7 @@ export default function VtuberSettingsDialog({
                       title={`用 ${a.platform} 的头像`}
                       className={`vd-avatar-opt${active ? ' on' : ''}`}
                       disabled={saving}
-                      onClick={() => void pickAvatar(a.avatar_url)}
+                      onClick={() => a.avatar_url && void pickAvatar(a.avatar_url)}
                     >
                       {/* R1（2026-09-13）：预览同样走 ProxyImage —— 裸 <img> 在
                           图床 403 时是破图/空白（实测 i0.hdslb.com 与 sinaimg 直连 403），
@@ -358,14 +431,10 @@ export default function VtuberSettingsDialog({
                     </button>
                   )
                 })}
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={saving}
-                  onClick={() => void pickAvatar(null)}
-                >
-                  用平台默认
-                </Button>
+                {avatarOptions.length === 0 && (
+                  // 只有**一个账号都没加**（或账号都没有头像）时才回到默认头像
+                  <span className="vd-hint">暂无账号头像，卡片显示名字首字占位</span>
+                )}
               </div>
             </div>
 
@@ -437,12 +506,11 @@ export default function VtuberSettingsDialog({
             </div>
           </OverlayScroll>
 
+          {/* 没有"保存/取消"了：改动**失焦即生效**（R1 补充，2026-09-13 用户：
+              "修改要么实时生效要么全部都需要保存"）。只留一个关窗钮。 */}
           <div className="vd-settings-foot">
-            <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
-              取消
-            </Button>
-            <Button size="sm" disabled={saving} onClick={save}>
-              {saving ? <Loader2 className="size-4 animate-spin" /> : '保存'}
+            <Button size="sm" onClick={() => onOpenChange(false)}>
+              关闭
             </Button>
           </div>
         </DialogContent>

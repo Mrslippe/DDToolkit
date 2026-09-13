@@ -1565,7 +1565,10 @@ img.hero-avatar {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  padding: 4px 4px 8px;
+  /* 左右对称 12px：覆盖式滚动条的拇指在 `right:3px/宽 6px`（hover 态），
+     原先只有 4px 右内距 → 滚动时拇指压在输入框右缘上（用户 2026-09-13 反馈"重叠"）。
+     12px ≥ 拇指占位 9px + 余量，且左右对称不破坏居中。 */
+  padding: 4px 12px 8px;
 }
 
 .vd-section {
