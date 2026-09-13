@@ -1870,6 +1870,91 @@ def test_migration_head_matches_alembic():
     assert MIGRATION_HEAD == head, f"MIGRATION_HEAD={MIGRATION_HEAD!r} != alembic head={head!r}"
 
 
+# 已知且**有意保留**的两处 ORM ↔ 迁移不对称（2026-09-11 审计发现，本用例显式固化）。
+# 两者都不影响运行时行为，但必须写下来，否则「新出现的漂移」与「早就知道的漂移」
+# 混在一起，等于没有守卫。任何一条要动，都得连注释一起改。
+_KNOWN_NULLABLE_DRIFT = {"accounts.sort_order"}
+_KNOWN_ORM_ONLY_INDEXES = {
+    f"{t}.ix_{t}_id"
+    for t in ("account_stat_snapshots", "live_category_overrides", "live_gift_days",
+              "live_sessions", "thirdparty_vtubers", "vtuber_events")
+}
+
+
+def test_orm_metadata_matches_migration_chain(tmp_path, monkeypatch):
+    """ORM 建库（create_all / 旧库桥接）与迁移链建库必须结构等价。
+
+    为什么需要：两条路径**都会**产出可用的库，但差异只会在很久以后以
+    「某台机器上数据莫名丢失/写入失败」的形态暴露。最贵的一次已经发生过 ——
+    `posts` 的唯一键若是 c002 之前的全局形态，联合投稿会被静默丢弃。
+
+    比的是「结构」：列集合与可空性、索引名、唯一键列元组。不比类型字符串
+    （SQLite 类型亲和性下 VARCHAR/TEXT 写法差异无意义）。
+    """
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy import inspect
+
+    from app.core.config import PROJECT_ROOT
+
+    # ① 迁移链建库（env.py 以 settings.DATABASE_URL 为准，故先把它指到临时库）
+    mig_db = (tmp_path / "mig.db").as_posix()
+    monkeypatch.setattr(settings, "DATABASE_URL", f"sqlite:///{mig_db}")
+    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
+    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
+    cfg.attributes["configure_logger"] = False
+    command.upgrade(cfg, "head")
+
+    e_mig = create_engine(f"sqlite:///{mig_db}")
+    e_orm = create_engine("sqlite://")
+    Base.metadata.create_all(e_orm)
+    i_mig, i_orm = inspect(e_mig), inspect(e_orm)
+
+    # ② 表集合一致
+    assert set(i_orm.get_table_names()) == set(i_mig.get_table_names()) - {"alembic_version"}
+
+    for table in sorted(Base.metadata.tables):
+        cols_orm = {c["name"]: c for c in i_orm.get_columns(table)}
+        cols_mig = {c["name"]: c for c in i_mig.get_columns(table)}
+        assert set(cols_orm) == set(cols_mig), f"{table}: 列集合不一致"
+
+        # ③ 可空性：以迁移链为准则（线上库都是迁移建的），只放行已知项
+        for name in sorted(cols_orm):
+            if cols_orm[name]["nullable"] != cols_mig[name]["nullable"]:
+                key = f"{table}.{name}"
+                assert key in _KNOWN_NULLABLE_DRIFT, (
+                    f"{key}: 可空性漂移 ORM={cols_orm[name]['nullable']} "
+                    f"迁移={cols_mig[name]['nullable']}（若是有意为之，加进 _KNOWN_NULLABLE_DRIFT）"
+                )
+
+        # ④ 索引名：ORM 多出来的只放行「主键上多余的 ix_*_id」
+        #    （SQLite 的 INTEGER PRIMARY KEY 本身就是 rowid，查询计划走它，
+        #      额外索引只是占空间；迁移链不建，create_all 会建）
+        only_orm = {
+            f"{table}.{i['name']}" for i in i_orm.get_indexes(table)
+        } - {f"{table}.{i['name']}" for i in i_mig.get_indexes(table)}
+        assert only_orm <= _KNOWN_ORM_ONLY_INDEXES, f"{table}: ORM 独有索引 {sorted(only_orm)}"
+        only_mig = {
+            f"{table}.{i['name']}" for i in i_mig.get_indexes(table)
+        } - {f"{table}.{i['name']}" for i in i_orm.get_indexes(table)}
+        assert not only_mig, f"{table}: 迁移独有索引 {sorted(only_mig)}（迁移建了 ORM 不知道的索引）"
+
+        # ⑤ 唯一键（按列元组，不看名字——名字不是不变量的载体）
+        def _uniques(insp):
+            found = set()
+            for uc in insp.get_unique_constraints(table):
+                if uc.get("column_names"):
+                    found.add(tuple(uc["column_names"]))
+            for ix in insp.get_indexes(table):
+                if ix.get("unique") and ix.get("column_names"):
+                    found.add(tuple(ix["column_names"]))
+            return found
+
+        assert _uniques(i_orm) == _uniques(i_mig), (
+            f"{table}: 唯一键不一致 ORM={sorted(_uniques(i_orm))} 迁移={sorted(_uniques(i_mig))}"
+        )
+
+
 # ── P0：账号统计快照（v0.5.0） ───────────────────────────────────────
 
 def _snapshot_test_db():

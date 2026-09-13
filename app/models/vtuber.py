@@ -119,7 +119,11 @@ class LiveSession(Base):
     max_online_count = Column(Integer, nullable=True)
     danmakus_count = Column(Integer, nullable=True)
     raw_json = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=_now)
+    # nullable=False 与迁移链对齐（e006/e007/e004/e005 均为 NOT NULL，且无 server_default）：
+    # 值由上面的 python default 提供。写成 nullable=True 会让 create_all 建库
+    # （单测内存库 / 旧库桥接）与迁移建库结构不一致 —— 由
+    # tests/test_services.py::test_orm_metadata_matches_migration_chain 看住。
+    created_at = Column(DateTime, nullable=False, default=_now)
     updated_at = Column(DateTime, default=_now, onupdate=_now)
 
 
@@ -141,7 +145,8 @@ class LiveCategoryOverride(Base):
     account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False)
     live_id = Column(String, nullable=False)
     category = Column(String, nullable=False)             # 9 类之一（不含 live 兜底）
-    created_at = Column(DateTime, default=_now)
+    # nullable=False 与 e007 对齐（见 LiveSession.created_at 的说明）
+    created_at = Column(DateTime, nullable=False, default=_now)
     updated_at = Column(DateTime, default=_now, onupdate=_now)
 
 
@@ -167,7 +172,8 @@ class LiveGiftDay(Base):
     sc_amount = Column(String, nullable=True)
     total_amount = Column(String, nullable=True)
     room_id = Column(String, nullable=True)
-    created_at = Column(DateTime, default=_now)
+    # nullable=False 与 e004 对齐（见 LiveSession.created_at 的说明）
+    created_at = Column(DateTime, nullable=False, default=_now)
 
 
 class ThirdpartyVtuber(Base):
@@ -189,7 +195,8 @@ class ThirdpartyVtuber(Base):
     room_id = Column(String, nullable=True)
     group_name = Column(String, nullable=True)            # 企划/公会名（可为空）
     source = Column(String, nullable=False)
-    updated_at = Column(DateTime, default=_now, onupdate=_now)
+    # nullable=False 与 e004 对齐（见 LiveSession.created_at 的说明）
+    updated_at = Column(DateTime, nullable=False, default=_now, onupdate=_now)
 
 
 class VtuberEvent(Base):
@@ -208,7 +215,8 @@ class VtuberEvent(Base):
     vtuber_id = Column(Integer, ForeignKey("vtubers.id"), nullable=False)
     title = Column(String, nullable=False)                # 活动名（如「生日歌回」）
     event_date = Column(String, nullable=False)           # "YYYY-MM-DD"
-    created_at = Column(DateTime, default=_now)
+    # nullable=False 与 e005 对齐（见 LiveSession.created_at 的说明）
+    created_at = Column(DateTime, nullable=False, default=_now)
 
 
 class AppMeta(Base):
