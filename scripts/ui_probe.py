@@ -700,8 +700,9 @@ def main() -> int:
             return 0
 
         if args.settings:
-            # 档案设置弹窗的几何不变量（devlog/072）。这个弹窗此前无探针覆盖，
-            # 而它出过"滚动条压输入框""浮层被滚动体静默裁掉"两类问题。
+            # 档案设置弹窗的几何与**可点性**不变量（devlog/072 起；可点性判据 devlog/075）。
+            # 这个弹窗此前无探针覆盖，而它出过：滚动条压输入框、浮层被滚动体静默裁掉、
+            # 以及"面板看得见却点不着"（portal 继承了 radix 给 body 的 pointer-events:none）。
             w = widths[0]
             url = f"http://localhost:{vite_port}{route}?probe=settings"
             print(f"[probe] settings @{w} → {url}")
@@ -719,11 +720,24 @@ def main() -> int:
                   f"面板出视口={st.get('panelClipped')} "
                   f"浮在内容上={st.get('panelOverContent')} "
                   f"position={st.get('panelPosition')} "
-                  f"portal到body={st.get('panelPortaled')} "
-                  f"在弹窗内部={st.get('panelInsideDialog')} "
+                  f"父级=弹窗内容体={st.get('panelParentIsDialog')} "
+                  f"在滚动体之外={st.get('panelOutsideScroller')} "
+                  f"按输入条定位={st.get('panelPlacedByRect')} "
                   f"收起态面板宽度={st.get('panelWidthWhenClosed')}")
             print(f"  再点收起={st.get('toggleClosedOk')} 再点重开={st.get('toggleReopenOk')} "
                   f"面板 DOM 数={st.get('openPanelCount')}")
+            print(f"  命中测试: 面板={st.get('panelHit')} 候选行={st.get('rowHit')}")
+            print(f"  矩形: 输入条={st.get('inputRect')} 面板={st.get('panelRect')} "
+                  f"弹窗={st.get('dialogRect')} 面板 offsetParent=内容体="
+                  f"{st.get('panelOffsetParentIsDialog')}")
+            print(f"  视口={st.get('viewport')} 面板样式={st.get('panelStyleInline')}")
+            print(f"  布局宽: 输入条={st.get('inputLayoutWidth')} 面板={st.get('panelLayoutWidth')} "
+                  f"面板 computed={st.get('panelComputed')}")
+            print(f"  点击候选行: 换到别的行={st.get('pickTargetIsOther')} "
+                  f"值={'…' if st.get('pickedValue') is None else str(st.get('pickedValue'))[:18]} "
+                  f"值匹配={st.get('pickValueMatches')} 真的变了={st.get('pickChanged')} "
+                  f"面板收起={st.get('pickClosedPanel')} 弹窗仍在={st.get('pickKeepsDialog')} "
+                  f"已还原来源={st.get('restoredSource')}")
             if st.get("reason") == "no-settings-dialog":
                 failures.append(f"@{w} settings: 没打开档案设置弹窗（.bg-set 没点上？）")
             elif st.get("reason") == "no-settings-trigger":
@@ -755,13 +769,23 @@ def main() -> int:
                 if not st.get("panelOverContent"):
                     failures.append(f"@{w} settings: 面板没有浮在弹窗内容之上"
                                     f"（用户 2026-09-13 口径：要浮层，不推挤下方内容）")
-                if st.get("panelPosition") != "fixed" or not st.get("panelPortaled"):
-                    failures.append(f"@{w} settings: 面板不是 portal+fixed 浮层"
+                # 结构 + 相对位置：面板挂在弹窗内容体下、在滚动体之外、位置按输入条算。
+                # ⚠️ 别再改回 portal+fixed：那样会继承 radix 给 body 的 pointer-events:none
+                #    （hover/点击全失灵），或落回"弹窗之外"（点行把弹窗关掉）。
+                if st.get("panelPosition") != "absolute" or not st.get("panelParentIsDialog"):
+                    failures.append(f"@{w} settings: 面板不是「弹窗内容体的绝对定位子元素」"
                                     f"（position={st.get('panelPosition')} "
-                                    f"portal={st.get('panelPortaled')}）—— "
-                                    f"内联面板会被滚动体静默裁掉")
-                if st.get("panelInsideDialog"):
-                    failures.append(f"@{w} settings: 面板仍在弹窗子树里（会被 overflow:hidden 裁）")
+                                    f"父级=内容体={st.get('panelParentIsDialog')}）")
+                if not st.get("panelOutsideScroller"):
+                    failures.append(f"@{w} settings: 面板落在滚动体里面（会被 overflow:hidden 裁）")
+                if not st.get("panelPlacedByRect"):
+                    failures.append(f"@{w} settings: 面板没有贴在输入条下方（相对包含块算错了？）")
+                # 可点性：命中测试是"看得见却点不着"的唯一机器判据
+                if not st.get("panelHit"):
+                    failures.append(f"@{w} settings: 面板命中测试失败 —— "
+                                    f"elementFromPoint 打不到面板（pointer-events 被祖先吃掉？）")
+                if not st.get("rowHit"):
+                    failures.append(f"@{w} settings: 候选行命中测试失败（行被挡住或不可点）")
                 if (st.get("rows") or 0) <= 0:
                     failures.append(f"@{w} settings: 候选面板一行都没有"
                                     f"（该 V 需要有 ≥1 个带签名的账号）")
@@ -775,8 +799,27 @@ def main() -> int:
                 if (st.get("openPanelCount") or 0) > 1:
                     failures.append(f"@{w} settings: 同时存在 {st.get('openPanelCount')} "
                                     f"个面板 DOM（重复渲染）")
+                # 真点一行：必须换到那一行的签名，且**不能把整个弹窗关掉**。
+                # 只有一个带签名账号的 V（如 V14）没有"另一行"，据此跳过切换断言。
+                if st.get("pickSkipped"):
+                    print(f"  [跳过] 候选行切换断言：{st.get('pickSkipped')}"
+                          f"（该 V 只有 {st.get('rows')} 行，无「另一行」可点）")
+                elif not st.get("pickTargetIsOther"):
+                    failures.append(f"@{w} settings: 找不到「另一行」可点"
+                                    f"（该 V 至少要有两个带签名的平台账号才测得到来源切换）")
+                if not st.get("pickValueMatches"):
+                    failures.append(f"@{w} settings: 点了候选行但输入框没有变成那行的签名"
+                                    f"（值={st.get('pickedValue')!r} 期望={st.get('pickTargetText')!r}）")
+                if not st.get("pickClosedPanel"):
+                    failures.append(f"@{w} settings: 选完候选行后面板没收起")
+                if not st.get("pickKeepsDialog"):
+                    failures.append(f"@{w} settings: 点候选行把**整个弹窗**关掉了"
+                                    f"（radix 把面板当成了「弹窗之外」）")
+                if st.get("pickChanged") and not st.get("restoredSource"):
+                    failures.append(f"@{w} settings: 探针没能把签名来源还原"
+                                    f"（数据目录会残留「来源被换过」的副作用）")
                 if not failures:
-                    print("  [ok] 档设置弹窗几何不变量全部通过")
+                    print("  [ok] 档设置弹窗几何与可点性不变量全部通过")
             for b in failures:
                 print("   -", b)
             return 1 if failures else 0

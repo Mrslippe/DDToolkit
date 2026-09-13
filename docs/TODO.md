@@ -32,6 +32,7 @@
 | R6 | 2026-09-13 | 综合档中动态抓取分账号并行，并调整抓取频率 | 即先按平台分类取抓取任务名单，然后并行根据名单进行抓取，一轮抓取时间如果小于一分钟则休息至一分钟，如果大于则休息时间保证不触及上限 | 高 | ✅ **已落地**（devlog/070）：①`per_platform=DYNAMICS_CONCURRENCY`（默认 3，平台内并发，默认 1 = 旧行为，账号流不受影响）；②新增 `DYNAMICS_MIN_CYCLE_SECONDS=60`，到期改为「轮**开始** + 60s」；③平台内请求间隔上移为**平台级起跑闸门**（并发下才成立，风控面不变）。真机两轮：旧 30.2s/轮·周期 47~75s → 新 25.7s/轮·**周期稳定 60s**，请求数同为 7/轮、0 风控。调参口见 devlog/070 §五 |
 | R7 | 2026-09-13 | card视图中的直播徽标可以点击直接拉起浏览器进入直播间 | hover有动画 | 低 | ✅ **已落地**（devlog/066）：`live_url` 优先、否则 B 站 `room_id` 拼；**未开播也可点**（你定）；hover 抬起+描边，`reduced-motion` 下只留描边 |
 | R8 | 2026-09-13 | 粉丝趋势卡片中右侧的档位按钮根据设计令牌重构 |  | 低 | ✅ **已落地**（devlog/066）：描边改 `var(--c-border)`（原写死值与之同值）、容器补 `--sel-bg`、选中改 `--c-primary-deep`（本仓“激活=粉底白字”口径）；几何不动 |
+| R9 | 2026-09-13 | 曾用名/曾用签名应归入「账号信息历史快照」，**先不展示**；且要的是"V **在平台上**曾经用过的"值，不是本地手改入库的字符串 | 档案设置窗口里那两处展示撤掉 | 中 | ⏳ **已受理（撤出已落地）**：devlog/075 删掉 `.vd-former`/`.vd-acc-former` 两处展示与 `getFormerValues` 调用；`PUT /account` **不再记账**（手改 ≠ 平台侧历史），抓取覆盖前照常记账、端点保留。展示入口待"账号信息历史快照"落地后重新设计（数据一直在记，`account_stat_snapshots` 目前**不含**昵称/签名） |
 
 > **示例**（写完可删）：
 > `| R0 | 2026-09-13 | 弹幕词云点某个词能看这个词在场的弹幕 | 想核对"某句话为什么火" | 中 | 待评估 |`
@@ -104,7 +105,7 @@
 | 微博 / B 站增量漏帖（置顶帖打乱流序） | ✅ 已修（devlog/045） |
 | 微博扫码登录 / B 站扫码登录 | ✅ 已上线（v0.5.0） |
 | 账号统计快照历史（粉丝趋势） | ✅ 采集 + 可视化（**v0.9.x 重写为 ECharts canvas**，recharts 已退役） |
-| 档案设置弹窗（背景 / 头像 / 签名 / 已订阅账号，全实时生效） | ✅ 已上线（devlog/066–074）：签名走**来源+覆盖**模型（A3，devlog/074）——平台签名只读、卡片签名 = 覆盖 → 来源账号 → 主账号 → 空；**字段锁定已退役**，旧值改由 `vtuber_field_history` 记账并展示为「曾用名/曾用签名」 |
+| 档案设置弹窗（背景 / 头像 / 签名 / 已订阅账号，全实时生效） | ✅ 已上线（devlog/066–075）：签名走**来源+覆盖**模型（A3，devlog/074）——平台签名只读、卡片签名 = 覆盖 → 来源账号 → 主账号 → 空；**字段锁定已退役**，旧值改由 `vtuber_field_history` 记账（**仅在平台侧覆盖前**，手改不入账；展示见 R9）。下拉栏为「内容体内绝对定位浮层」（devlog/075，替换 portal+fixed） |
 | 删除检测（墓碑） | ✅ 已上线（v0.5.1：两击判定 + 已删筛选/角标/时间线） |
 | 外部固定化数据源 | ✅ 已上线（zeroroku 粉丝历史/礼物日 + danmakus 索引/直播场次/弹幕） |
 | 直播日历 + 场次内容管道（danmakus+self 合并、9 类类型 v2、校正 override） | ✅ 已上线（v0.9.0–v0.9.x M1–M4；对外 id 定权见 devlog/052） |
@@ -210,6 +211,7 @@
 | 签名下拉栏改版（内嵌 chevron + 参与布局面板 + 渐隐横滚）+ `--settings` 探针 | 072 |
 | 签名下拉栏浮层化（portal + fixed）+ 再点收起 + 面板等宽 | 073 |
 | 签名来源与覆盖（**A3**）+ 字段锁定退役 + 曾用名/曾用签名（迁移 f004）+ 新表补进 purge | 074 |
+| 签名下拉栏"**点不动**"根因修复（radix `body{pointer-events:none}`）+ 面板挂回内容体 + 曾用值撤出展示 | 075 |
 
 ### 6.2 当前门禁基线（2026-09-13 实测 / 复核）
 
@@ -220,7 +222,7 @@
 | 前端 lint | `npm --prefix frontend run lint` | **0 错**（`--max-warnings 0`） |
 | 前端单测 | `npm --prefix frontend run test` | **119 passed** |
 | 词云布局 | `node scripts/check_wordcloud_layout.mjs` | sha256 `19ecc7e6…`（本轮实跑一致） |
-| 布局探针 | `python scripts/ui_probe.py --hero-expect c1154858… --vtuber 15`<br>`python scripts/ui_probe.py --archive --calendar-expect fb75217e… --vtuber 15`<br>`python scripts/ui_probe.py --settings --vtuber 15`（短签名）/ `--vtuber 14`（长签名） | 三条都本轮实跑一致（8 段契约 0 问题 / 三档宽度 0 问题 / 档案设置几何 **11 项**，含 `panelSameWidth`、`panelOverContent`、`panelPortaled`、再点收起） |
+| 布局探针 | `python scripts/ui_probe.py --hero-expect c1154858… --vtuber 15`<br>`python scripts/ui_probe.py --archive --calendar-expect fb75217e… --vtuber 15`<br>`python scripts/ui_probe.py --settings --vtuber 15`（两个带签名账号）/ `--vtuber 14`（单账号长签名） | 三条都本轮实跑一致（8 段契约 0 问题 / 三档宽度 0 问题 / 档案设置几何与**可点性** **21 项**，含 `panelHit`/`rowHit` 命中测试、`panelPlacedByRect`、`pickKeepsDialog`；V14 因只有一行会打印 `[跳过] 候选行切换断言`） |
 | 一把梭 | `python scripts/dev_check.py` | 测试 + 后端冒烟（详见 `docs/DEV-LOOP.md`） |
 
 > ⚠️ 探针的 `--hero-expect` / `--calendar-expect` 签名**含实时数据**，只适合"改动前后短窗口对比"，

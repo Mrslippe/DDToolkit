@@ -1550,6 +1550,12 @@ img.hero-avatar {
   display: flex;
   flex-direction: column;
   max-height: 78vh;
+  /* ⚠️ 这里**不要**写 `position: relative`（签名面板的包含块用不着它）：
+     本文件在 Tailwind 之后加载，`.vd-settings`（0,1,0）会盖掉弹窗内容体上的
+     `.fixed`（同为 0,1,0）→ 整个弹窗从"视口居中浮层"退化成"文档流里的相对定位"，
+     实测直接飘到视口下方 620px（探针量到 dialogRect.top=689 / 视口高 621），
+     于是面板既出视口又 elementFromPoint 打不到 —— 2026-09-13 踩过，别再加回来。
+     弹窗内容体本身就是 `position: fixed`（已定位），天然是面板的包含块。 */
 }
 
 .vd-settings-head {
@@ -1597,28 +1603,6 @@ img.hero-avatar {
 .vd-hint {
   font-size: 11px;
   font-weight: 400;
-  color: var(--c-text-sub);
-}
-
-/* 曾用值标注（曾用名/曾用签名，2026-09-13，devlog/074）：字段锁定退役后旧值的落点。
-   比正文再小一档、灰色；`em`（平台名）用更浅的灰，不抢主体。 */
-.vd-former {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px;
-  line-height: 1.5;
-}
-
-.vd-former em {
-  font-style: normal;
-  color: rgba(100, 116, 139, 0.75);
-}
-
-.vd-acc-former {
-  display: block;
-  margin-top: 2px;
-  font-style: normal;
-  font-size: 11px;
   color: var(--c-text-sub);
 }
 
@@ -1676,13 +1660,16 @@ img.hero-avatar {
   transform: rotate(180deg);
 }
 
-/* 候选面板：**浮层**（portal 到 body + `position:fixed`，坐标由 JS 按输入条矩形给）。
-   2026-09-13 用户二次口径：要"浮在下面内容之上"（不推挤「锁定/已订阅账号」）。
-   为什么必须 portal：祖先 `.vd-settings-scroll`（OverlayScroll 根 overflow:hidden）
-   会把任何内联浮层**静默裁掉**；portal 出去 + fixed 定位同时解决"被裁"与"推挤内容"。
-   宽度/横向位置由 inline style 给（= 输入条矩形），这里只管观感与纵向约束。 */
+/* 候选面板：**浮层**（弹窗内容体的绝对定位子元素，坐标由 JS 按输入条矩形给；
+   2026-09-13 第三次改版 devlog/075）。历史教训按顺序：
+   ① 参与布局（第一版）→ 把下面的内容顶下去，不符合"浮在其上"；
+   ② portal 到 body + `position:fixed`（第二版）→ 几何对了，但 radix 模态弹窗会给
+      `document.body` 打 `pointer-events:none`（只把自己的内容体改回 auto），面板继承
+      `none` ⇒ **hover 与点击全部失灵**，而且不报错（用户实测"鼠标无法 hover 也无法点击"）；
+   ③ 现在这样：挂在内容体下（滚动体之外）+ absolute ⇒ 三条都满足，且不再依赖事件补丁。
+   ⚠️ 别改回 portal：那会让 ① 的 hover/点击失灵与 ② 的"点行关弹窗"一起回来。 */
 .vd-sign-panel {
-  z-index: 60;                  /* 高于 radix 弹窗层（z-50），低于顶栏提示 */
+  z-index: 60;                  /* 高于弹窗内的后续分区，浮在「已订阅账号」之上 */
   max-height: 260px;
   padding: 6px;
   display: flex;

@@ -1,4 +1,4 @@
-import type { Account, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, PoolItem, PostPage, PostStats, ThirdpartyVtuber, UpdatePostsResult, VTuber, VTuberFormerValues } from './types'
+import type { Account, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, PoolItem, PostPage, PostStats, ThirdpartyVtuber, UpdatePostsResult, VTuber } from './types'
 
 /**
  * API 基地址：
@@ -179,8 +179,8 @@ export const api = {
     }),
 
   /** P8-B：部分更新账号（昵称 / 签名 / 顺序等）。
-   *  2026-09-13（devlog/074）：`locked_fields` 退役——改昵称/签名时后端会把旧值
-   *  记进 `vtuber_field_history`（曾用名/曾用签名），见 `getFormerValues`。 */
+   *  2026-09-13（devlog/075）：`locked_fields` 已退役，且**本路径不再记曾用值**
+   *  （手改不是"平台上曾经用过的"，见 `PUT /account` 的 docstring）。 */
   updateAccount: (accountId: number, data: {
     display_name?: string | null
     sign?: string | null
@@ -193,10 +193,6 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     }),
-
-  /** 该 V 的曾用名 / 曾用签名（各最多 5 条，最近优先）——只在档案设置窗口里用 */
-  getFormerValues: (vtuberId: number) =>
-    request<VTuberFormerValues>(`/vtuber/${vtuberId}/former-values`),
 
   /** P8-B：删除账号（连带清理其帖子与从属数据） */
   deleteAccount: (accountId: number) =>

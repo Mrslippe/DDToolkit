@@ -93,7 +93,7 @@
 | **手动优先 / 抢占** | 手动任务拿不到锁时请求自动档让位 | `_preempt_account/_preempt_post`、`_acquire_manual_*`、`_auto_yield_*_with` | 端点 409 判定 `manual_task_running()` |
 | **轮次执行器** | 按平台并发的调度原语：每轮各平台各处理一个元素 | `scheduler._run_platform_rounds` | 平台内串行、平台间并行、单平台风控单独冷却 |
 | **签名来源 / 覆盖（A3）** | 卡片签名 = `sign_override` → `sign_source_account_id` 账号 → 主账号 → 空；**平台签名只读**，选来源/打字都不改 `accounts.sign` | `vtubers.sign_override / sign_source_account_id`；前端 `utils/signSource.ts` | f004（devlog/074）；下拉选平台 = 改来源并清覆盖 |
-| **曾用值 / vtuber_field_history** | 昵称/签名被抓取覆盖前的旧值（按账号记账，前端标「曾用名/曾用签名」） | `vtuber_field_history`；`services/vtuber_history.py::record_field_change()` | f004；**取代字段锁定**（快照表不含昵称/签名，不记账即永久丢失） |
+| **曾用值 / vtuber_field_history** | V **在平台上曾经用过的**昵称/签名（按账号记账，抓取覆盖前入库；手改不入账） | `vtuber_field_history`；`services/vtuber_history.py::record_field_change()` | f004；**取代字段锁定**（快照表不含昵称/签名，不记账即永久丢失）；⚠️ 展示暂缓（devlog/075：归入「账号信息历史快照」） |
 | **字段锁定 / locked_fields** | ~~用户手改的账号字段抓取时不覆盖~~ **已退役**（f004 删除该列）：改为"允许覆盖 + 记曾用值" | `accounts.locked_fields`（已删）；`scheduler._field_locked()` 恒 False 垫片 | v0.9.7 引入、devlog/074 退役 |
 | **账号排序 / sort_order** | 平台徽章展示顺序（拖拽落库） | `accounts.sort_order`；`PUT /vtuber/{id}/account-order` | v0.9.7 |
 | **档案设置窗口** | 背景/名称/企划/设定/头像/签名/账号管理（承接原 profile 视图） | `components/VtuberSettingsDialog.tsx` | v0.9.7，devlog/048 |

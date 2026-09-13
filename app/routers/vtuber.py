@@ -34,8 +34,7 @@ from app.services.live_type import (
 from app.services.live_upstream import load_live_upstream
 from app.services.danmaku_cloud import build_word_cloud
 from app.services.danmaku_words import build_extra_words
-from app.services.vtuber_history import (FIELD_DISPLAY_NAME, FIELD_SIGN,
-                                         former_values, record_field_change)
+from app.services.vtuber_history import former_values
 from app.schemas.vtuber import (LiveDanmakuInfo, LiveMetricsOut, LiveEventOut,
                                 LiveWordOut, LiveUpstreamOut)
 from app.services.post_text import extract_post_text
@@ -276,22 +275,19 @@ def create_account(vtuber_id: int, data: AccountCreate,
 def update_account(account_id: int, data: AccountUpdate, db: Session = Depends(get_db)):
     """部分更新账号。
 
-    2026-09-13（devlog/074）：手动改昵称/签名时**先记旧值**（曾用名 / 曾用签名），
-    再落新值 —— 字段锁定退役后，历史是唯一的痕迹来源。
+    ⚠️ 2026-09-13（devlog/075，用户口径）：**这里不再记曾用值**。
+    曾用值的语义是"V 在平台上曾经用过的昵称/签名"，而这条路径写的是**本地手改** ——
+    把用户自己打错的字符串标成"曾用签名"正是实测反馈里的那个错误。
+    记录只发生在**抓取覆盖前**（`scheduler._fetch_one_account`）。
     """
     patch = data.model_dump(exclude_unset=True)
-    before = AccountRepo(db).get(account_id)
-    if not before:
-        raise HTTPException(404, f"Account id={account_id} 不存在")
-    for field, hist in (("display_name", FIELD_DISPLAY_NAME), ("sign", FIELD_SIGN)):
-        if field in patch and (patch[field] or "").strip() != (getattr(before, field) or "").strip():
-            record_field_change(db, vtuber_id=before.vtuber_id, account_id=account_id,
-                                field=hist, old_value=getattr(before, field))
     try:
         acc = AccountRepo(db).update(account_id, patch)
     except IntegrityError:
         db.rollback()
         raise HTTPException(409, "该 (platform, platform_uid) 账号已存在")
+    if acc is None:
+        raise HTTPException(404, f"Account id={account_id} 不存在")
     return AccountOut.model_validate(acc, from_attributes=True)
 
 
@@ -299,8 +295,9 @@ def update_account(account_id: int, data: AccountUpdate, db: Session = Depends(g
 def vtuber_former_values(vtuber_id: int, db: Session = Depends(get_db)):
     """该 V 的曾用名 / 曾用签名（各最多 5 条，最近优先）。
 
-    只给「档案设置」窗口用，所以单独一个端点 —— 塞进 `VTuberOut` 会让
-    `/vtuber/list`（返回全部 V）变成 N+1 查询。
+    **当前未接入 UI**（2026-09-13 用户口径，devlog/075）：曾用值归「账号信息历史快照」
+    这一类，先不展示；记录照常（抓取覆盖前记账），端点留作那条线的读取口。
+    这也是它不塞进 `VTuberOut` 的原因 —— `/vtuber/list` 返回全部 V，塞进去就是 N+1。
     """
     if not VTuberRepo(db).get(vtuber_id):
         raise HTTPException(404, f"VTuber id={vtuber_id} 不存在")

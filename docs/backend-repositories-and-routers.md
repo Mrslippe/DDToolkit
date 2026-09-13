@@ -210,8 +210,10 @@
 索引：`ix_vtuber_field_history_vtuber (vtuber_id, field)`。
 
 **写入策略**：值**真的变了**才追加一行（相同值不重记，A→B→A 只留 A、B）；
-两个写入点——抓取回写（`scheduler._fetch_one_account`）与 `PUT /account/{id}`；
-读取走 `GET /vtuber/{id}/former-values`（各字段最多 5 条、最近优先、按值去重）。
+**只有一个写入点**——抓取回写（`scheduler._fetch_one_account`，平台侧旧值）；
+`PUT /account/{id}` **不入账**（手改不是"平台上曾经用过的"，devlog/075）。
+读取走 `GET /vtuber/{id}/former-values`（各字段最多 5 条、最近优先、按值去重），
+**该端点当前未接入 UI**（展示归入「账号信息历史快照」，见 TODO R9）。
 **为什么必须记账**：`account_stat_snapshots` 只存粉丝数/直播状态/开播标题，
 **不含昵称与签名** —— 不记账就是永久丢失（devlog/074 纠正的前提）。
 
@@ -397,7 +399,7 @@
 | GET `/vtuber/{vtuber_id}` | 单 V；不存在 404 |
 | POST `/vtuber` | 建 V；唯一约束冲突 409 |
 | PUT `/vtuber/{vtuber_id}` | 部分更新；404。f004 起可写 `sign_override`（`null` = 撤销覆盖）与 `sign_source_account_id` |
-| GET `/vtuber/{vtuber_id}/former-values` | 曾用名 / 曾用签名（各最多 5 条、最近优先、按值去重，含平台标注；f004） |
+| GET `/vtuber/{vtuber_id}/former-values` | 曾用名 / 曾用签名（各最多 5 条、最近优先、按值去重，含平台标注；f004）。**当前未接入 UI**（devlog/075：归「账号信息历史快照」，先不展示） |
 | POST `/vtuber/{vtuber_id}/background` | 上传自定义背景（jpeg/png/webp/gif，≤10MB，否则 415/413）；时间戳后缀防缓存，替换删旧文件 |
 | DELETE `/vtuber/{vtuber_id}/background` | 清除背景回退头像铺底 |
 | DELETE `/vtuber/{vtuber_id}` | 解除订阅：`purge_vtuber()` 清 posts + 5 张子表 + 活动条目 + 曾用值，再级联删 V+accounts；外键挡下 → 409 |
@@ -408,7 +410,7 @@
 |---|---|
 | GET `/vtuber/{id}/accounts` | 某 V 的账号列表 |
 | POST `/vtuber/{id}/accounts` | 建账号；(platform, platform_uid) 重复 409；成功后**只抓该新账号的账号信息 + 首屏内容**（v0.9.4：`async_fetch_accounts(fast=True)` + `async_fetch_first_screen`，不再重抓该 V 全部账号） |
-| PUT `/account/{account_id}` | 更新账号；唯一冲突 409；若昵称/签名**真的变了**，先记旧值进 `vtuber_field_history` 再写新值（f004；字段锁定已退役） |
+| PUT `/account/{account_id}` | 更新账号；唯一冲突 409。**不记曾用值**（手改 ≠ 平台上曾经用过的，devlog/075）；字段锁定已退役（f004） |
 | PUT `/vtuber/{id}/account-order` | 平台徽章拖拽重排：批量写 `accounts.sort_order`（v0.9.7） |
 | DELETE `/account/{account_id}` | 删账号 + `purge_account()` 清理帖子与 5 张子表 |
 | GET `/account/{id}/stat-snapshots?limit=` | 统计快照历史（默认 100，上限 1000，时间倒序，UTC 补时区） |

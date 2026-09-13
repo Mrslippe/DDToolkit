@@ -284,9 +284,11 @@ def test_account_order_endpoint(client, monkeypatch):
 
 
 def test_former_values_roundtrip(client, monkeypatch):
-    """2026-09-13（devlog/074）：手改昵称/签名 → 旧值进「曾用名 / 曾用签名」端点。
+    """2026-09-13（devlog/075 改口径）：曾用值只由**抓取覆盖**产生，手改不入账。
 
-    字段锁定退役后，这个端点是旧值的**唯一**来源（快照表不含昵称与签名）。
+    用户实测反馈："展示的内容不对，那是我上次修改入库的错误签名，不是真的历史签名"——
+    所以 `PUT /account` 改成**不记**，端点只反映平台侧被覆盖掉的旧值
+    （写入路径见 `test_fetch_one_account_records_former_name_and_sign`）。
     """
     import app.routers.vtuber as router_mod
 
@@ -300,28 +302,43 @@ def test_former_values_roundtrip(client, monkeypatch):
                       json={"platform": "bilibili", "platform_uid": "556",
                             "display_name": "旧昵称", "sign": "旧签名"}).json()["id"]
 
-    # 空态：还没改过 → 两个列表都空
+    # 空态：还没被抓取覆盖过 → 两个列表都空
     empty = client.get(f"/vtuber/{vid}/former-values").json()
     assert empty == {"names": [], "signs": []}
 
-    r = client.put(f"/account/{aid}", json={"display_name": "新昵称", "sign": "新签名"})
+    r = client.put(f"/account/{aid}", json={"display_name": "手改昵称", "sign": "手改签名"})
     assert r.status_code == 200
     assert "locked_fields" not in r.json()          # 字段已退役，不再回传
+    assert r.json()["display_name"] == "手改昵称"    # 手改照常写入
 
+    # ⚠️ 核心口径：手改**不产生**曾用值（否则用户自己打错的字符串会被标成"曾用签名"）
+    assert client.get(f"/vtuber/{vid}/former-values").json() == {"names": [], "signs": []}
+
+    # 平台侧覆盖（模拟抓取回写）→ 旧值入库，且能读出平台标注
+    from app.services.vtuber_history import record_field_change
+    db = TestingSession()
+    try:
+        record_field_change(db, vtuber_id=vid, account_id=aid,
+                            field="display_name", old_value="旧昵称")
+        db.commit()
+    finally:
+        db.close()
     d = client.get(f"/vtuber/{vid}/former-values").json()
     assert [n["value"] for n in d["names"]] == ["旧昵称"]
-    assert [s["value"] for s in d["signs"]] == ["旧签名"]
     assert d["names"][0]["platform"] == "bilibili"  # 标注是哪个平台的曾用名
     assert d["names"][0]["changed_at"] is not None
 
-    # 值没变（显式传同样的值）→ 不记
-    client.put(f"/account/{aid}", json={"display_name": "新昵称"})
-    assert len(client.get(f"/vtuber/{vid}/former-values").json()["names"]) == 1
-
-    # 再改一次 → 最多保留 5 条，最近的在前
-    client.put(f"/account/{aid}", json={"display_name": "第三名"})
+    db = TestingSession()
+    try:
+        record_field_change(db, vtuber_id=vid, account_id=aid,
+                            field="display_name", old_value="旧昵称")   # 同一值重复 → 不记
+        record_field_change(db, vtuber_id=vid, account_id=aid,
+                            field="display_name", old_value="平台第二版")
+        db.commit()
+    finally:
+        db.close()
     d2 = client.get(f"/vtuber/{vid}/former-values").json()
-    assert [n["value"] for n in d2["names"]] == ["新昵称", "旧昵称"]
+    assert [n["value"] for n in d2["names"]] == ["平台第二版", "旧昵称"]
 
     assert client.get("/vtuber/99999/former-values").status_code == 404
 

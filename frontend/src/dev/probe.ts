@@ -445,15 +445,20 @@ export async function runUiProbe(): Promise<void> {
     return
   }
 
-  // 档案设置弹窗（`?probe=settings`，2026-09-13，devlog/072）：
+  // 档案设置弹窗（`?probe=settings`，2026-09-13，devlog/072；交互判据 devlog/075）：
   // 这个弹窗一直在探针覆盖面**之外**（devlog/067 记过"只能靠肉眼"），而它恰恰
-  // 出过两类问题：① 覆盖式滚动条压住输入框右缘；② 面板/浮层越界被滚动体**静默裁掉**
-  // （OverlayScroll 根是 overflow:hidden）。
+  // 出过三类问题：① 覆盖式滚动条压住输入框右缘；② 面板/浮层越界被滚动体**静默裁掉**
+  // （OverlayScroll 根是 overflow:hidden）；③ **面板看得见却点不着** —— portal 到 body
+  // 后继承了 radix 给 body 的 `pointer-events:none`，hover 与点击全部失灵且不报错。
   //
-  // 这里量的是**几何不变量**（不依赖网络与定时器，纯布局，跑得快也稳）：
+  // 所以这里除了几何，还要量**能不能真的点到**（`elementFromPoint` 命中测试 + 真派发一次
+  // 点击走完 handler），后者是 ③ 的唯一机器判据：几何断言在 ③ 面前全绿。
   //   `chevronInside`  —— 内嵌 chevron 是否完整落在输入框矩形内（位置类错误）
   //   `panelSameWidth` —— 面板宽度是否等于输入条宽度（参考图的结构关系）
-  //   `panelClipped`   —— 面板矩形是否越出弹窗矩形（越界＝会被静默裁掉）
+  //   `panelClipped`   —— 面板矩形是否越出视口（越界＝会被裁）
+  //   `panelPlacement` —— 面板左缘/上缘是否就在输入条下方（相对包含块算错会立刻错位）
+  //   `panelHit` / `rowHit` —— 面板与候选行的命中测试（pointer-events 是否被吃掉）
+  //   `pickKeepsDialog` / `pickValueMatches` —— 点一行是否真的选中且**没有把弹窗关掉**
   //   `rows` / `ovfRows` —— 候选行数 / 其中判定为"文字溢出"的行数
   //   `panelWidthWhenClosed` —— 收起态不该存在面板（-1 表示确实没有）
   if (mode === 'settings') {
@@ -468,7 +473,21 @@ export async function runUiProbe(): Promise<void> {
       }
       return null
     }
+    /** 命中测试：某点上的元素是否落在 el 之内（吃 pointer-events 时必然为 false） */
+    const hits = (el: HTMLElement | null, x: number, y: number) => {
+      if (!el) return false
+      const hit = document.elementFromPoint(x, y)
+      return !!hit && (hit === el || el.contains(hit))
+    }
     await waitFor(() => document.querySelector('.bg-set'))
+    // 关掉动画与过渡再量：弹窗入场是 `zoom-in-95`（transform 缩放），而探针跑在
+    // **虚拟时间**下 —— 预算用完时动画会被冻在中途（实测冻在 scale .97），于是
+    // "面板同宽/贴输入条下方"这类断言会间歇性失败（量到的是过渡中间态，不是稳态）。
+    // 这里量的是**布局关系**，不是动画本身，所以直接停掉最稳。
+    const killAnim = document.createElement('style')
+    killAnim.textContent =
+      '*, *::before, *::after { animation: none !important; transition: none !important; }'
+    document.head.appendChild(killAnim)
     const trigger = document.querySelector<HTMLElement>('.bg-set')
     result.hasTrigger = !!trigger
     trigger?.click()
@@ -477,12 +496,22 @@ export async function runUiProbe(): Promise<void> {
     if (!dialog) {
       result.reason = trigger ? 'dialog-not-opened' : 'no-settings-trigger'
     } else {
-      const input = dialog.querySelector<HTMLElement>('.vd-sign-field input')
+      const input = dialog.querySelector<HTMLInputElement>('.vd-sign-field input')
       const toggle = dialog.querySelector<HTMLElement>('.vd-sign-toggle')
       const closedPanel = dialog.querySelector<HTMLElement>('.vd-sign-panel')
       result.panelWidthWhenClosed = closedPanel ? closedPanel.getBoundingClientRect().width : -1
       toggle?.click()                       // 展开候选面板
       await waitFor(() => document.querySelector('.vd-sign-panel'), 2000)
+      // 面板有 `transition: all`（全局）+ 弹窗有入场动画 ⇒ 出现≠就位。
+      // 等两帧矩形一致再量，否则量到的是过渡中间态（实测：同宽断言偶发 False）。
+      let settled: DOMRect | null = null
+      for (let i = 0; i < 20; i++) {
+        const r = document.querySelector('.vd-sign-panel')?.getBoundingClientRect() ?? null
+        if (r && settled && Math.abs(r.width - settled.width) < 0.3 &&
+            Math.abs(r.top - settled.top) < 0.3 && Math.abs(r.left - settled.left) < 0.3) break
+        settled = r
+        await sleep(60)
+      }
       const panel = document.querySelector<HTMLElement>('.vd-sign-panel')
       const rect = (el: HTMLElement | null) => el?.getBoundingClientRect() ?? null
       const ri = rect(input); const rt = rect(toggle)
@@ -496,20 +525,53 @@ export async function runUiProbe(): Promise<void> {
       result.chevronInside = !!(ri && rt &&
         rt.left >= ri.left - 0.5 && rt.right <= ri.right + 0.5 &&
         rt.top >= ri.top - 0.5 && rt.bottom <= ri.bottom + 0.5)
-      result.panelSameWidth = !!(ri && rp && Math.abs(ri.width - rp.width) <= 2)
-      result.inputWidth = ri ? Math.round(ri.width * 10) / 10 : null
-      result.panelWidth = rp ? Math.round(rp.width * 10) / 10 : null
-      // 面板是 **portal + fixed 浮层**（2026-09-13 用户二次口径，devlog/073）：
-      // 越界判据改成"是否出**视口**"；"是浮层而不参与布局"用**结构**断言
-      // （portal 到 body + computed position:fixed）—— 比"高度开合前后不变"稳：
-      // 后者会被 radix 的入场动画（scale .98）干扰，实测在虚拟时间下量到 470→484 的假差值。
+      // 同宽看**布局宽**（offsetWidth）而不是视觉矩形：布局关系与 transform 无关，
+      // 缩放态下矩形会同比缩小，拿矩形比会把动画中间态误判成"不同宽"。
+      result.panelSameWidth = !!(input && panel &&
+        Math.abs(input.offsetWidth - panel.offsetWidth) <= 1)
+      result.inputWidth = input ? input.offsetWidth : null
+      result.panelWidth = panel ? panel.offsetWidth : null
+      // 三个矩形原样落进 JSON：定位类问题（算错包含块/越界/被顶飞）看这几对数最快
+      const round4 = (r: DOMRect | null) => (r ? {
+        left: Math.round(r.left * 10) / 10, top: Math.round(r.top * 10) / 10,
+        right: Math.round(r.right * 10) / 10, bottom: Math.round(r.bottom * 10) / 10,
+      } : null)
+      result.inputRect = round4(ri)
+      result.panelRect = round4(rp)
+      result.dialogRect = round4(rd)
+      result.panelOffsetParentIsDialog = !!panel && panel.offsetParent === dialog
+      result.viewport = {
+        w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio,
+      }
+      result.panelStyleInline = panel?.getAttribute('style') ?? null
+      // 布局尺寸 vs 视觉尺寸：两者不等 = 祖先（或自身）在缩放/动画中
+      result.panelLayoutWidth = panel?.offsetWidth ?? null
+      result.inputLayoutWidth = input?.offsetWidth ?? null
+      result.panelComputed = panel ? {
+        width: getComputedStyle(panel).width,
+        transform: getComputedStyle(panel).transform,
+        transition: getComputedStyle(panel).transitionProperty,
+        boxSizing: getComputedStyle(panel).boxSizing,
+      } : null
+      // 面板是 **弹窗内容体的绝对定位子元素**（在滚动体之外，2026-09-13 第三次改版）：
+      // 越界判据是"是否出**视口**"；"浮层而不参与布局"用**结构 + 相对位置**断言。
       result.panelClipped = !!(rp && (
         rp.left < -0.5 || rp.top < -0.5 ||
         rp.right > window.innerWidth + 0.5 || rp.bottom > window.innerHeight + 0.5))
       result.panelOverContent = !!(rp && rd && rp.top < rd.bottom - 0.5)
       result.panelPosition = panel ? getComputedStyle(panel).position : null
-      result.panelPortaled = !!panel && panel.parentElement === document.body
-      result.panelInsideDialog = !!panel && dialog.contains(panel)
+      result.panelParentIsDialog = !!panel && panel.parentElement === dialog
+      const scroller = dialog.querySelector<HTMLElement>('.vd-settings-scroll')
+      result.panelOutsideScroller = !!panel && !!scroller && !scroller.contains(panel)
+      // 相对包含块的位置：左缘/宽度跟输入条一致，上缘贴其下 6px（翻转时在上方）
+      result.panelPlacedByRect = !!(ri && rp &&
+        Math.abs(rp.left - ri.left) <= 1.5 &&
+        (Math.abs(rp.top - (ri.bottom + 6)) <= 1.5 || rp.bottom <= ri.top - 5 + 1.5))
+      // 命中测试：面板空白处与首行中心都必须真的能命中所属元素
+      result.panelHit = !!(rp && hits(panel, rp.left + 4, rp.top + 4))
+      const rows = panel ? Array.from(panel.querySelectorAll<HTMLElement>('.vd-sign-opt')) : []
+      const rr = rows[0] ? rows[0].getBoundingClientRect() : null
+      result.rowHit = !!(rr && hits(rows[0], rr.left + rr.width / 2, rr.top + rr.height / 2))
       result.inputRightPad = input ? getComputedStyle(input).paddingRight : null
       // 再点一次同一个按钮必须**收起**（2026-09-13 用户反馈：
       // 之前 mousedown 把它判成"外部"先关、click 又打开 ⇒ 看着闪一下没关）。
@@ -520,6 +582,57 @@ export async function runUiProbe(): Promise<void> {
       await sleep(120)
       result.toggleReopenOk = !!document.querySelector('.vd-sign-panel')
       result.openPanelCount = document.querySelectorAll('.vd-sign-panel').length
+
+      // 真点一行：模拟 pointerdown→mousedown→mouseup→click（radix 的"点了外面"判定
+      // 走的就是 pointerdown + 延后到 click，所以只派发 click 测不出 ②/③ 类回归）。
+      const opened = document.querySelector<HTMLElement>('.vd-sign-panel')
+      const liveRows = opened
+        ? Array.from(opened.querySelectorAll<HTMLElement>('.vd-sign-opt')) : []
+      const activeRow = liveRows.find((r) => r.classList.contains('on')) ?? null
+      // 签名里可能有换行/连续空白（平台签名常见两行）。比较前**去掉所有空白**：
+      // `<input>` 的取值算法会**吃掉换行**（不是换成空格），所以"折叠成空格"会比不上
+      // （实测：行文本 `Nana7mi 商务合作` vs 输入框 `Nana7mi商务合作`）。
+      const norm = (s: string | null | undefined) => (s ?? '').replace(/\s+/g, '')
+      const text = (r: HTMLElement | null) =>
+        norm(r?.querySelector('.vd-sign-text')?.textContent)
+      const before = input?.value ?? ''
+      const target = liveRows.find((r) => r !== activeRow) ?? activeRow
+      result.pickTargetIsOther = !!target && target !== activeRow
+      // 只有一个带签名的账号（如 V14）时没有"另一行"可点：此时**跳过**切换断言，
+      // 而不是判失败 —— 那是合法的数据形态。命中测试与收起行为仍然照常断言。
+      result.pickSkipped = liveRows.length < 2 ? 'single-row' : null
+      result.pickTargetText = text(target)
+      if (target) {
+        target.dispatchEvent(new PointerEvent('pointerdown',
+          { bubbles: true, cancelable: true, button: 0, pointerId: 1 }))
+        target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+        target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }))
+        target.click()
+        await waitFor(() => !document.querySelector('.vd-sign-panel'), 4000)
+      }
+      result.pickClosedPanel = !document.querySelector('.vd-sign-panel')
+      result.pickKeepsDialog = !!document.querySelector('.vd-settings')
+      result.pickedValue = input?.value ?? null
+      result.pickValueMatches = !!target && norm(input?.value) === text(target)
+      result.pickChanged = (input?.value ?? '') !== before
+      // 还原成"打开面板时生效的那一行"（探针不该在数据目录里留下"来源被换过"的副作用）。
+      // 注意：没有任何行是 `.on` 时，生效值来自主账号的默认回退 → 用它那行还原。
+      const heroRow = liveRows.find((r) => r.querySelector('.vd-sign-plat em')) ?? null
+      const restoreRow = activeRow ?? heroRow
+      result.restoreVia = activeRow ? 'active-row' : (heroRow ? 'hero-row' : 'none')
+      if (restoreRow && result.pickChanged) {
+        toggle?.click()
+        await waitFor(() => document.querySelector('.vd-sign-panel'), 2000)
+        const back = Array.from(document.querySelectorAll<HTMLElement>('.vd-sign-opt'))
+          .find((r) => text(r) === text(restoreRow))
+        if (back) {
+          back.dispatchEvent(new PointerEvent('pointerdown',
+            { bubbles: true, cancelable: true, button: 0, pointerId: 2 }))
+          back.click()
+          await waitFor(() => !document.querySelector('.vd-sign-panel'), 4000)
+        }
+        result.restoredSource = norm(input?.value) === text(restoreRow)
+      }
     }
     const pre = document.createElement('pre')
     pre.id = 'ui-probe'

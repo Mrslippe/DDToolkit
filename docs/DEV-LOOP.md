@@ -69,9 +69,16 @@ python scripts/ui_probe.py --hero-expect <sha256>    # 位级回归：hero 药�
 python scripts/ui_probe.py --archive --archive-print --vtuber 15      # 取「日历格内文本」基线（A-2 取数链路护栏）
 python scripts/ui_probe.py --archive --calendar-expect <sha256> --vtuber 15  # 重构后比对日历格签名
 python scripts/ui_probe.py --archive --archive-day 11 --vtuber 14    # 点指定日号的格子（最近一场常未收录弹幕/热词）
-python scripts/ui_probe.py --settings --vtuber 15   # 档案设置弹窗几何：签名下拉栏（短签名=不该挂渐隐）
-python scripts/ui_probe.py --settings --vtuber 14   # 同上但签名长：断言挂了渐隐、且文字真的有可滚距离
+python scripts/ui_probe.py --settings --vtuber 15   # 档案设置弹窗：几何 + **可点性** + 点候选行换来源（两个带签名账号）
+python scripts/ui_probe.py --settings --vtuber 14   # 同上但只有一行且签名长：断言渐隐/可滚距离，切换断言打印 [跳过]
 ```
+
+> `--settings`（2026-09-13 起，devlog/075）测 21 项，除了几何还有**可点性**：
+> `elementFromPoint` 命中测试（`panelHit`/`rowHit`）与"点一行会怎样"（`pickValueMatches`/
+> `pickKeepsDialog`/`pickClosedPanel`/`restoredSource`）。加它们的起因是几何全绿但用户
+> **点不动**（面板 portal 到 body 继承了 radix 给 body 的 `pointer-events:none`）。
+> 另外两点测量口径：① 探针跑在**虚拟时间**下，入场动画会被冻在中途 → 量之前先注入
+> `animation:none; transition:none`；② 同宽看 `offsetWidth`（布局宽），不看视觉矩形。
 
 它自动：复制开发数据目录 → 起后端 → 起 Vite → 无头浏览器加载
 `/vtubers/<id>?probe=1`（`frontend/src/dev/probe.ts` 会依次切四个视图、在列表页跑一遍

@@ -42,7 +42,9 @@ export interface VTuber {
   accounts: Account[]
 }
 
-/** 一条「曾用值」（曾用名 / 曾用签名）；platform 为 null = 账号已被删 */
+/** 一条「曾用值」（曾用名 / 曾用签名）；platform 为 null = 账号已被删。
+ *  2026-09-13（devlog/075）：后端 `GET /vtuber/{id}/former-values` 仍在（记录照常），
+ *  但**前端暂不接入**——用户口径是归入「账号信息历史快照」后再展示，故这里不留包装。 */
 export interface FormerValueItem {
   value: string
   platform: string | null
@@ -50,7 +52,7 @@ export interface FormerValueItem {
   changed_at: string | null
 }
 
-/** `GET /vtuber/{id}/former-values`：各最多 5 条，最近优先 */
+/** `GET /vtuber/{id}/former-values`：各最多 5 条，最近优先（暂未展示） */
 export interface VTuberFormerValues {
   names: FormerValueItem[]
   signs: FormerValueItem[]

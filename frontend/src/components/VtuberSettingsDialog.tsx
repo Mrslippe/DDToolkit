@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
-import { createPortal } from 'react-dom'
 import { ImagePlus, Loader2, Trash2, UserPlus } from 'lucide-react'
 import { toast } from 'sonner'
 import {
@@ -22,7 +21,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { api, resolveAsset } from '../api/api'
-import type { Account, VTuber, VTuberFormerValues } from '../api/types'
+import type { Account, VTuber } from '../api/types'
 import { PLATFORM_LABEL } from '../utils/postTypes'
 import { buildSignOptions, type SignOption as SignOptionData } from '../utils/signOptions'
 import { resolveSign } from '../utils/signSource'
@@ -51,8 +50,9 @@ interface Props {
  * - **签名来源与覆盖（A3，2026-09-13，devlog/074）**：卡片签名 =
  *   `vtubers.sign_override`（手改的覆盖）→ `sign_source_account_id` 指向的账号 → 主账号；
  *   **平台签名（`accounts.sign`）只读**，下拉选的是"用哪个平台的签名"，不复制不改写；
- * - **字段锁定已退役**：昵称/签名允许被抓取更新，旧值由 `vtuber_field_history` 记账
- *   （曾用名 / 曾用签名，见 `api.getFormerValues`）；
+ * - **字段锁定已退役**：昵称/签名允许被抓取更新；旧值由 `vtuber_field_history` 记账
+ *   （曾用名 / 曾用签名）。⚠️ 2026-09-13（devlog/075，用户口径）：那份记录归
+ *   「账号信息历史快照」一类，**暂不在本窗口展示**（手改也不入账，只记平台侧被覆盖的旧值）。
  * - 头像只能选账号的**远端 URL**（`vtubers.avatar` 不走 resolveAsset，
  *   写本地相对路径会拼错前缀）。
  */
@@ -159,31 +159,63 @@ export default function VtuberSettingsDialog({
   /** 输入条包装（含输入框与 chevron）——"点外部关闭"要把**它**也算内部，否则
    *  点 chevron 会先被 mousedown 判成"外部"关掉、再被 click 打开 ⇒ 看着像闪一下没关 */
   const signFieldRef = useRef<HTMLDivElement>(null)
-  /** 面板是 portal + fixed：位置按输入条矩形算（见 placePanel） */
+  /**
+   * 面板定位：**绝对定位在弹窗内容体里**（2026-09-13 用户实测"点不动"后的第三次改版，
+   * devlog/075）——为什么不再 portal 到 body + `position:fixed`：
+   *
+   * ① radix 模态弹窗会给 `document.body` 打 `pointer-events:none`（只有它自己的内容体
+   *    被内联改回 `auto`）。面板 portal 到 body ⇒ 继承 `none` ⇒ **hover 与点击全部失灵**
+   *    （用户报的就是这个：看得见、点不着，且没有任何报错）；
+   * ② 面板若 portal 到 body 再改成 `pointer-events:auto`，它又落回"弹窗之外"：
+   *    radix 会把行上的 pointerdown 当成"点了外面"→ 关掉整个弹窗；
+   * ③ 内容体本身带 `translate-x/y-[-50%]`（**是包含块**），所以就算 portal 进去，
+   *    `position:fixed` 也会退化"相对内容体"，坐标全错。
+   *
+   * 结论：**不做 portal**，直接把面板渲染成「弹窗内容体的直接子元素」（在滚动体之外）：
+   * 天然共享 `pointer-events:auto`、天然被 radix 视为内部、天然不被 `.vd-settings-scroll`
+   * 的 `overflow:hidden` 裁掉（它根本不在那个盒子里）；坐标按内容体算（见 placePanel）。
+   *
+   * ⚠️ 包含块元素用 `closest('.vd-settings')` 找，**不给 DialogContent 传 ref**：
+   * `components/ui/dialog.tsx` 的 `DialogContent` 是普通函数组件（React 18 下 ref 会被
+   * 静默丢弃，实测面板因此根本不渲染 —— placePanel 提前 return，探针量到 rows=-1）。
+   */
+  /** 面板位置：相对**弹窗内容体**（`position:absolute` 的包含块）的坐标 */
   const [panelStyle, setPanelStyle] = useState<CSSProperties | null>(null)
 
   /**
-   * 给浮层面板定位（2026-09-13 用户二次口径：**浮在下面内容之上**，不推挤它们）。
+   * 给面板定位（2026-09-13 用户二次口径：**浮在下面内容之上**，不推挤它们）。
    *
    * - 锚点 = 输入条矩形；宽度与它一致（参考图的结构关系）；
-   * - 下方放不下且上方更宽裕 → **向上翻转**（避免贴到视口底被裁）；
+   * - 坐标是**相对弹窗内容体的 padding box**（`position:absolute` 的起点），
+   *   所以要减掉内容体矩形与它的边框宽度 —— 见 dialogRef 注释里为什么不用 fixed；
+   * - 下方放不下且上方更宽裕 → **向上翻转**（拿视口剩余空间判，避免贴着窗口底）；
    * - 监听 `scroll`（**捕获阶段**：滚动不冒泡，捕获才能收到 OverlayScroll 内部滚动）
    *   与 resize 重新定位 —— 弹窗内容滚动时面板跟着输入条走。
    */
   const placePanel = useCallback(() => {
-    const anchor = signFieldRef.current?.querySelector<HTMLElement>('input')
-    if (!anchor) return
+    const field = signFieldRef.current
+    const anchor = field?.querySelector<HTMLElement>('input')
+    // 包含块 = 弹窗内容体（`.vd-settings` 上是 `position:relative`）；见上方注释为什么不用 ref
+    const box = field?.closest<HTMLElement>('.vd-settings')
+    if (!anchor || !box) return
     const r = anchor.getBoundingClientRect()
+    const br = box.getBoundingClientRect()
+    const cs = getComputedStyle(box)
+    const padLeft = (parseFloat(cs.borderLeftWidth) || 0)
+    const padTop = (parseFloat(cs.borderTopWidth) || 0)
     const h = Math.min(signPanelRef.current?.scrollHeight ?? SIGN_PANEL_MAX_H,
                        SIGN_PANEL_MAX_H)
     const below = window.innerHeight - r.bottom - 8
     const above = r.top - 8
     const openUp = below < h + 6 && above > below
+    const left = r.left - br.left - padLeft
+    const topBelow = r.bottom - br.top - padTop + 6
+    const topAbove = r.top - br.top - padTop - 6 - h
     setPanelStyle({
-      position: 'fixed',
-      left: r.left,
+      position: 'absolute',
+      left,
       width: r.width,
-      top: openUp ? Math.max(8, r.top - 6 - h) : r.bottom + 6,
+      top: openUp ? topAbove : topBelow,
     })
   }, [])
   const fileRef = useRef<HTMLInputElement>(null)
@@ -208,16 +240,6 @@ export default function VtuberSettingsDialog({
    * 存的是**输入框里那次播种的文本**（= 当时的生效签名），不是 `sign_override` —— 见 commitSign。
    */
   const savedRef = useRef({ sign: '' })
-  /** 曾用名 / 曾用签名（打开窗口时拉一次；改动后重新拉） */
-  const [former, setFormer] = useState<VTuberFormerValues | null>(null)
-
-  const reloadFormer = useCallback(async (id: number) => {
-    try {
-      setFormer(await api.getFormerValues(id))
-    } catch {
-      setFormer(null)          // 拉不到就不标（不阻塞其它编辑）
-    }
-  }, [])
 
   useEffect(() => {
     if (!open || !vtuber) return
@@ -229,8 +251,7 @@ export default function VtuberSettingsDialog({
     savedRef.current = seed
     setSign(seed.sign)
     setAvatar(vtuber.avatar ?? null)
-    void reloadFormer(vtuber.id)
-  }, [open, vtuber, hero, reloadFormer])
+  }, [open, vtuber, hero])
   // 关闭即作废播种键：下次打开（哪怕是同一个 V）重新以最新服务端值起稿
   useEffect(() => {
     if (!open) seedRef.current = ''
@@ -383,13 +404,16 @@ export default function VtuberSettingsDialog({
     }
   }, [signPopOpen])
 
-  // 展开：定位 → 面板真实高度出来后（下一帧）再校正一次（决定向下还是向上翻转）
-  // → 跟随滚动/resize/**锚点宽度变化**。收起时把位置清掉，避免下次用旧坐标闪一帧。
+  // 展开：定位 → 之后**持续跟随**（见下）。收起时把位置清掉，避免下次用旧坐标闪一帧。
   //
-  // ⚠️ ResizeObserver 不是可选项：弹窗入场动画是 `scale .98`，开面板那一刻量到的
-  //    输入条矩形是**缩小态**（宽度少 ~2%），动画结束后输入条变宽而面板还停在旧宽度 ——
-  //    "面板与输入条同宽"这条参考图关系就破了（被 `--settings` 探针的
-  //    `panelSameWidth` 断言抓到）。观察锚点尺寸变化 → 重新定位即可。
+  // ⚠️ 为什么不能只量一次（2026-09-13 实测，devlog/075）：
+  //    ① 弹窗入场有 `zoom-in-95`（**transform 缩放**），开面板那一刻量到的是缩小态 ——
+  //       而 **ResizeObserver 不会被 transform 触发**（它看的是布局盒，缩放不改布局），
+  //       于是面板宽度/位置停在 ~97% 那一版（探针量到 输入条 424.9 / 面板 412.1）；
+  //    ② 弹窗内容在开面板后还会长高（头像图加载、账号列表渲染）→ 输入条**位置**变了，
+  //       但它的**尺寸**没变 → 任何"只看尺寸"的观察者都不会醒。
+  //    所以：开面板后先跑一段 rAF（覆盖入场动画与首屏数据落位），期间只要锚点矩形变了
+  //    就重定位；之后交给 RO（锚点/内容体/内容包裹层）+ scroll/resize 兜底。
   useEffect(() => {
     if (!signPopOpen) {
       setSignCursor(null)
@@ -397,18 +421,40 @@ export default function VtuberSettingsDialog({
       return
     }
     placePanel()
-    const raf = requestAnimationFrame(placePanel)
     const anchor = signFieldRef.current?.querySelector<HTMLElement>('input')
-    const ro = anchor ? new ResizeObserver(() => placePanel()) : null
-    if (ro && anchor) ro.observe(anchor)
+    const box = signFieldRef.current?.closest<HTMLElement>('.vd-settings') ?? null
+    const inner = box?.querySelector<HTMLElement>('.os-scroll') ?? null
+    let last = anchor?.getBoundingClientRect() ?? null
+    let frames = 0
+    let raf = 0
+    const tick = () => {
+      const r = anchor?.getBoundingClientRect() ?? null
+      if (r && (!last || Math.abs(r.left - last.left) > 0.25 ||
+                Math.abs(r.top - last.top) > 0.25 ||
+                Math.abs(r.width - last.width) > 0.25)) {
+        last = r
+        placePanel()
+      }
+      if (++frames < 90) raf = requestAnimationFrame(tick)   // ~1.5s：入场动画 + 首屏落位
+    }
+    raf = requestAnimationFrame(tick)
+    const ro = new ResizeObserver(() => placePanel())
+    if (anchor) ro.observe(anchor)
+    if (box) ro.observe(box)
+    if (inner) ro.observe(inner)
     const onMove = () => placePanel()
     window.addEventListener('scroll', onMove, true)
     window.addEventListener('resize', onMove)
+    // 入场动画结束的那一刻再校正一次（transform 消失后矩形才是最终值）
+    box?.addEventListener('animationend', onMove)
+    box?.addEventListener('transitionend', onMove)
     return () => {
       cancelAnimationFrame(raf)
-      ro?.disconnect()
+      ro.disconnect()
       window.removeEventListener('scroll', onMove, true)
       window.removeEventListener('resize', onMove)
+      box?.removeEventListener('animationend', onMove)
+      box?.removeEventListener('transitionend', onMove)
     }
   }, [signPopOpen, placePanel])
 
@@ -488,7 +534,7 @@ export default function VtuberSettingsDialog({
           <DialogHeader className="vd-settings-head">
             <DialogTitle>档案设置</DialogTitle>
             <DialogDescription>
-              背景 / 头像 / 签名与已订阅账号；改动**点了就生效**（无需保存）。
+              背景 / 头像 / 签名与已订阅账号；改动点了就生效（无需保存）。
               签名可跟随任一平台，也可自定义覆盖 —— 平台自己的签名不会被改动。
             </DialogDescription>
           </DialogHeader>
@@ -591,9 +637,8 @@ export default function VtuberSettingsDialog({
               <div className="vd-field">
                 <span>签名</span>
                 {/* 输入框 + **内嵌右端 chevron**（2026-09-13 设计案，devlog/072）：
-                    点它展开候选面板；面板**浮在下方内容之上**（2026-09-13 用户二次口径，
-                    见 devlog/073）—— 用 portal + `position:fixed` 按输入条矩形定位，
-                    因此既不会被弹窗滚动体裁掉，也不推挤下面的「锁定/已订阅账号」。
+                    点它展开候选面板；面板渲染在**弹窗内容体的直接子级**（滚动体之外）
+                    且浮在下方内容之上 —— 定位与"为什么不做 portal"见 dialogRef 注释。
                     用途：卡片的签名只取主账号（B 站优先），想借微博那边的文案时不用手抄。 */}
                 <div className="vd-sign-field" ref={signFieldRef}>
                   <input
@@ -625,38 +670,7 @@ export default function VtuberSettingsDialog({
                     </svg>
                   </button>
                 </div>
-                {signPopOpen && panelStyle && createPortal(
-                  <div className="vd-sign-panel" id={SIGN_LIST_ID} role="listbox"
-                       aria-label="各平台签名" ref={signPanelRef} style={panelStyle}>
-                    {signOptions.length === 0 ? (
-                      <div className="vd-sign-empty">各账号都还没有签名</div>
-                    ) : (
-                      signOptions.map((o, i) => (
-                        <SignOption
-                          key={o.id}
-                          option={o}
-                          cursor={i === signCursor}
-                          onPick={() => void pickSource(o.id)}
-                        />
-                      ))
-                    )}
-                  </div>,
-                  document.body,
-                )}
               </div>
-              {/* 曾用签名（devlog/074）：字段锁定退役后，旧值的唯一痕迹来源。
-                  只在有记录时出现，格式「值（平台）· 值（平台）」。 */}
-              {former && former.signs.length > 0 && (
-                <div className="vd-hint vd-former">
-                  曾用签名：{former.signs.map((f, i) => (
-                    <span key={`fs-${i}`}>
-                      {i > 0 && ' · '}
-                      {f.value}
-                      <em>{f.platform ? `（${PLATFORM_LABEL[f.platform] ?? f.platform}）` : '（已移除账号）'}</em>
-                    </span>
-                  ))}
-                </div>
-              )}
             </div>
 
             <div className="vd-section">
@@ -665,33 +679,23 @@ export default function VtuberSettingsDialog({
                 <span className="vd-hint">{vtuber?.accounts.length ?? 0} 个</span>
               </h4>
               <div className="vd-acc-list">
-                {(vtuber?.accounts ?? []).map((a) => {
-                  const prevNames = (former?.names ?? []).filter((f) => f.account_id === a.id)
-                  return (
-                    <div className="vd-acc" key={a.id}>
-                      <span className="vd-acc-platform">{a.platform}</span>
-                      <span className="vd-acc-name">
-                        {a.display_name ?? a.platform_uid}
-                        <em>{a.followers_count.toLocaleString('zh-CN')} 粉</em>
-                        {/* 曾用名（devlog/074）：平台昵称现在允许被抓取更新，
-                            旧值记账在这里 —— 只在该账号确实改过名时出现 */}
-                        {prevNames.length > 0 && (
-                          <i className="vd-acc-former">
-                            曾用名：{prevNames.map((f) => f.value).join(' · ')}
-                          </i>
-                        )}
-                      </span>
-                      <button
-                        type="button"
-                        className="vd-acc-del"
-                        title="删除该账号（连带清理其帖子与从属数据）"
-                        onClick={() => setDelTarget(a)}
-                      >
-                        <Trash2 className="size-4" />
-                      </button>
-                    </div>
-                  )
-                })}
+                {(vtuber?.accounts ?? []).map((a) => (
+                  <div className="vd-acc" key={a.id}>
+                    <span className="vd-acc-platform">{a.platform}</span>
+                    <span className="vd-acc-name">
+                      {a.display_name ?? a.platform_uid}
+                      <em>{a.followers_count.toLocaleString('zh-CN')} 粉</em>
+                    </span>
+                    <button
+                      type="button"
+                      className="vd-acc-del"
+                      title="删除该账号（连带清理其帖子与从属数据）"
+                      onClick={() => setDelTarget(a)}
+                    >
+                      <Trash2 className="size-4" />
+                    </button>
+                  </div>
+                ))}
               </div>
               <Button variant="outline" size="sm" onClick={() => setAddOpen(true)}>
                 <UserPlus className="size-4" />
@@ -699,6 +703,31 @@ export default function VtuberSettingsDialog({
               </Button>
             </div>
           </OverlayScroll>
+
+          {/* 各平台签名候选面板（2026-09-13 第三次改版，devlog/075）：
+              **弹窗内容体的直接子元素**（在 `.vd-settings-scroll` 之外）+ `position:absolute`：
+              · 与内容体共享 radix 给的 `pointer-events:auto` ⇒ hover/点击可用（portal 到 body
+                会被 radix 的 `body{pointer-events:none}` 静默吃掉，这正是用户报的"点不动"）；
+              · 在内容体 DOM 内 ⇒ radix 不当它是"点了外面"，点行不会把整个弹窗关掉；
+              · 不在滚动体盒子里 ⇒ 不会被 `overflow:hidden` 裁掉，也不必跟 `fixed` 的包含块较劲。
+              坐标为内容体 padding box 相对值，由 placePanel 按输入条矩形算。 */}
+          {signPopOpen && panelStyle && (
+            <div className="vd-sign-panel" id={SIGN_LIST_ID} role="listbox"
+                 aria-label="各平台签名" ref={signPanelRef} style={panelStyle}>
+              {signOptions.length === 0 ? (
+                <div className="vd-sign-empty">各账号都还没有签名</div>
+              ) : (
+                signOptions.map((o, i) => (
+                  <SignOption
+                    key={o.id}
+                    option={o}
+                    cursor={i === signCursor}
+                    onPick={() => void pickSource(o.id)}
+                  />
+                ))
+              )}
+            </div>
+          )}
 
           {/* 没有"保存/取消"了：改动**失焦即生效**（R1 补充，2026-09-13 用户：
               "修改要么实时生效要么全部都需要保存"）。只留一个关窗钮。 */}
