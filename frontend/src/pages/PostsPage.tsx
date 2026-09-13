@@ -1,21 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { toast } from 'sonner'
 import {
   AlignJustify,
   BarChart3,
   Fingerprint,
   LayoutGrid,
-  Plus,
-  RefreshCw,
-  Search,
   Settings2,
-  Trash2,
-  UserPlus,
-  Zap,
-  ChevronsLeft,
-  ChevronUp,
-  Loader2,
 } from 'lucide-react'
 import {
   AlertDialog,
@@ -27,15 +17,13 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
-import heroDivider from '../assets/icons/hero-divider.svg'
 import { api, resolveAsset } from '../api/api'
 import { useFetchBusy } from '../fetchBusy'
 import type { Account, AccountSnapshot, Post, PostStats, VTuber } from '../api/types'
 import { mergeAccountSnapshots, mergeVtuberSnapshots } from '../utils/accountSnapshots'
-import { PLATFORM_LABEL, accountHomeUrl, chunkBy, orderAccounts, typeGroupsFor } from '../utils/postTypes'
+import { typeGroupsFor } from '../utils/postTypes'
+import { pill } from '../utils/pill'
 import { useVtuberActions } from './useVtuberActions'
-import PostCard from '../components/PostCard'
 import PostDetailDrawer from '../components/PostDetailDrawer'
 import AddAccountDialog from '../components/AddAccountDialog'
 import VtuberSettingsDialog from '../components/VtuberSettingsDialog'
@@ -44,8 +32,9 @@ import FanTrendChart from '../components/FanTrendChart'
 import OverlayScroll from '../components/OverlayScroll'
 import FloatPill from '../components/common/FloatPill'
 import StateBlock from '../components/common/StateBlock'
-import StatPill from '../components/common/StatPill'
-import PostFilterPop from '../components/PostFilterPop'
+import HeroCardsView from '../components/posts/HeroCardsView'
+import ListHeaderActions from '../components/posts/ListHeaderActions'
+import PostListView from '../components/posts/PostListView'
 import type { ArchivedFilter } from '../components/PostFilterPop'
 import './../styles/posts.css'
 
@@ -60,15 +49,18 @@ type AppView = 'cards' | 'list' | 'archive' | 'profile'
 /** 归档过滤类型（all / unarchived / archived）随 P10-A 的筛选弹窗一起搬到
  *  `components/PostFilterPop.tsx`（弹窗是它的唯一编辑入口，类型与 UI 同处）。 */
 
-/** 成功类提示走顶栏状态胶囊（渐隐渐显），错误仍用 toast */
-function pill(text: string) {
-  window.dispatchEvent(new CustomEvent('ddtoolkit:pill-message', { detail: { text } }))
-}
+/** 成功提示的 `pill()` 已下沉到 `utils/pill.ts`（2026-09-13，devlog/065：
+ *  `HeroCardsView` 的"平台顺序已保存"也要用同一套顶栏胶囊口径）。 */
 
 /**
  * 帖子面板（右栏 /vtubers/:id）：
  * VTuber 信息条 + 类型筛选 chips + 帖子卡片流（无限懒加载滚动）
  * + 详情抽屉 + 抓取操作。视觉参照设计稿 Frame1672。
+ *
+ * 2026-09-13（devlog/065，P2 分层收敛收尾）：四块视图已拆成组件 ——
+ * `components/posts/HeroCardsView`（cards + 平台药丸拖动）、
+ * `components/posts/ListHeaderActions`（列表工具条）、
+ * `components/posts/PostListView`（列表主体）。本文件只留**场景切换机 + 取数 + 壳层**。
  */
 export default function PostsPage() {
   const { id } = useParams()
@@ -586,86 +578,10 @@ export default function PostsPage() {
     null
   const accounts = vtuber ? vtuber.accounts.filter((a) => a.platform_uid) : []
 
-  // ── P8-B：平台药丸的点击开主页 + 长按拖动重排 ────────────────────────
-  // 顺序是服务端事实（accounts.sort_order，拖拽后 PUT 落库）；拖拽期间先用本地
-  // 临时顺序渲染，松手才提交。长按 350ms 才进入拖拽，避免误触发。
-  const [pillOrder, setPillOrder] = useState<number[] | null>(null)
-  const [dragIdx, setDragIdx] = useState<number | null>(null)
-  const pressTimer = useRef<number>()
-  const dragMoved = useRef(false)
-
-  const orderedAccounts = useMemo(
-    () => orderAccounts(accounts, pillOrder),
-    // accounts 每次渲染都是新数组，用 vtuber 做依赖避免无限重算
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [vtuber, pillOrder],
-  )
-
-  /** 账号主页：优先用后端抓到的 url，其余平台兜底拼（见 utils/postTypes.accountHomeUrl） */
-  const accountHome = accountHomeUrl
-
-  const openHome = (a: Account) => {
-    const url = accountHome(a)
-    if (!url) return
-    // 桌面端（Tauri）走 shell 插件的 open 命令（capability `shell:allow-open` 已就绪，
-    // 无需新增 npm 依赖 —— 直接 invoke 插件命令）；失败/Web 下退化为新标签页
-    if ('__TAURI_INTERNALS__' in window) {
-      void import('@tauri-apps/api/core')
-        .then((m) => m.invoke('plugin:shell|open', { path: url }))
-        .catch(() => window.open(url, '_blank', 'noopener'))
-    } else {
-      window.open(url, '_blank', 'noopener')
-    }
-  }
-
-  const onPillPointerDown = (idx: number) => (e: React.PointerEvent) => {
-    if (e.button !== 0) return
-    dragMoved.current = false
-    window.clearTimeout(pressTimer.current)
-    pressTimer.current = window.setTimeout(() => {
-      setDragIdx(idx)
-      setPillOrder(orderedAccounts.map((a) => a.id))
-    }, 350)
-  }
-
-  const onPillPointerMove = (e: React.PointerEvent) => {
-    if (dragIdx === null) return
-    const el = document.elementFromPoint(e.clientX, e.clientY)
-    const raw = el?.closest('[data-pill-index]')?.getAttribute('data-pill-index')
-    const target = raw === null || raw === undefined ? NaN : Number(raw)
-    if (Number.isNaN(target) || target === dragIdx) return
-    dragMoved.current = true
-    setPillOrder((prev) => {
-      const base = prev ?? orderedAccounts.map((a) => a.id)
-      const next = [...base]
-      const [moved] = next.splice(dragIdx, 1)
-      next.splice(target, 0, moved)
-      return next
-    })
-    setDragIdx(target)
-  }
-
-  const onPillPointerUp = () => {
-    window.clearTimeout(pressTimer.current)
-    if (dragIdx === null) return
-    const wasDrag = dragMoved.current
-    setDragIdx(null)
-    if (!wasDrag || !vtuber) return
-    const ids = pillOrder ?? orderedAccounts.map((a) => a.id)
-    void api
-      .reorderAccounts(vtuber.id, ids)
-      .then(() => {
-        pill('平台顺序已保存')
-      })
-      .catch((e: Error) => {
-        toast.error(`保存顺序失败：${e.message}`)
-        setPillOrder(null)          // 失败回退服务端顺序
-      })
-  }
-
-  // 平台粉丝展示：徽章集按每集 3 枚切分（集内横排、集间纵向间隔 10）。
-  // 纯计算，vtuber 为 null 的加载/错误态不渲染对应分支
-  const pillSets = chunkBy(orderedAccounts, 3)
+  // ── P8-B：平台药丸的点击开主页 + 长按拖动重排已随视图搬到
+  //    `components/posts/HeroCardsView.tsx`（2026-09-13，devlog/065）——
+  //    那 4 个 state / 4 个 handler / 2 个派生值只有卡片视图用，留在页面里只是噪声。
+  //    结果：本文件少 4 个 state（pillOrder/dragIdx/pressTimer/dragMoved）。
 
 return (
     <div className="posts-panel">
@@ -756,148 +672,36 @@ return (
             展开向左滑出 [抓取账号][抓取帖子][添加账号][解除订阅]，
             展开钮被挤至最左并旋转为收起钮。 */}
         {vtuber && scene.view === 'list' && (
-          <div className="header-actions">
-            <div className="account-switch">
-              {accounts.map((a) => (
-                <button
-                  key={a.id}
-                  type="button"
-                  className={`acc-switch-btn${selectedAccount?.id === a.id ? ' on' : ''}`}
-                  title={`${a.platform} ${a.platform_uid}`}
-                  onClick={() => {
-                    setSelectedAccount(a)
-                    setPage(1)
-                  }}
-                >
-                  <span className="acc-switch-platform">{PLATFORM_LABEL[a.platform] ?? a.platform}</span>
-                  <span className="acc-switch-name">{a.display_name || a.platform_uid}</span>
-                </button>
-              ))}
-            </div>
-            <FloatPill
-              size="md"
-              shape="icon"
-              className={`actions-toggle${actionsOpen ? ' open' : ''}`}
-              title={actionsOpen ? '收起操作' : '展开操作'}
-              aria-expanded={actionsOpen}
-              onClick={() => setActionsOpen((v) => !v)}
-            >
-              <ChevronsLeft className="size-4" />
-            </FloatPill>
-            <div className={`actions-extra${actionsOpen ? ' open' : ''}`}>
-              <FloatPill
-                size="md"
-                shape="text"
-                disabled={fetching || fetchBusy}
-                title={busyTip}
-                onClick={handleFetch}
-              >
-                <Zap className="size-4" /> 抓取账号
-              </FloatPill>
-              <FloatPill
-                size="md"
-                shape="text"
-                disabled={fetching || fetchBusy}
-                title={busyTip}
-                onClick={() => setFetchChoice(true)}
-              >
-                <RefreshCw className="size-4" /> 抓取帖子
-              </FloatPill>
-              <FloatPill size="md" shape="text" onClick={() => setAddAccountOpen(true)}>
-                <UserPlus className="size-4" /> 添加账号
-              </FloatPill>
-              <FloatPill
-                size="md"
-                shape="text"
-                danger
-                onClick={() => setConfirmDel(true)}
-              >
-                <Trash2 className="size-4" /> 解除订阅
-              </FloatPill>
-            </div>
-            <FloatPill
-              size="md"
-              shape="text"
-              active
-              disabled={fetching || fetchBusy}
-              title={busyTip}
-              onClick={handleUpdatePosts}
-            >
-              <RefreshCw className="size-4" /> 更新动态
-            </FloatPill>
-          </div>
+          <ListHeaderActions
+            accounts={accounts}
+            selectedAccountId={selectedAccount?.id ?? null}
+            onSelectAccount={(a) => {
+              setSelectedAccount(a)
+              setPage(1)
+            }}
+            actionsOpen={actionsOpen}
+            onToggleActions={() => setActionsOpen((v) => !v)}
+            fetching={fetching}
+            fetchBusy={fetchBusy}
+            busyTip={busyTip}
+            onFetchAccount={handleFetch}
+            onOpenFetchChoice={() => setFetchChoice(true)}
+            onAddAccount={() => setAddAccountOpen(true)}
+            onDelete={() => setConfirmDel(true)}
+            onUpdatePosts={handleUpdatePosts}
+          />
         )}
 
         {vtuber && scene.view === 'cards' && (
-          <OverlayScroll className="hero-scroll">
-            {/* Hero：头像 / 直播徽标 / 名字 / 签名 / 平台药丸 / 分隔饰条 / 企划徽标 */}
-            <div className="hero">
-              <Avatar className="hero-avatar">
-                <AvatarImage src={avatarSrc} referrerPolicy="no-referrer" />
-                <AvatarFallback>{vtuber.name.slice(0, 1)}</AvatarFallback>
-              </Avatar>
-
-              {/* 直播状态：始终显示（未开播=灰点+「未开播」） */}
-              <span className={`live-tag${isLive ? ' live' : ' off'}`} title={isLive ? (liveAcc?.live_title ?? '直播中') : '未开播'}>
-                <i className="live-dot" />
-                <span className="truncate">{isLive ? (liveAcc?.live_title ?? '直播中') : '未开播'}</span>
-              </span>
-
-              <div className="hero-name-block">
-                <h2 className="hero-name">{vtuber.name}</h2>
-                {heroAcc?.sign && <p className="hero-sign">{heroAcc.sign}</p>}
-              </div>
-
-              {/* 平台药丸：切 V 时依次滑入（key=vtuber.id 触发重播；
-                 不再跟随 list 账号切换——2026-09-05 反馈去联动） */}
-              {/* P8-B：点击开主页 / 长按拖动重排 / 尾部「+」加账号 */}
-              <div
-                className="stat-sets"
-                key={vtuber.id}
-                onPointerMove={onPillPointerMove}
-                onPointerUp={onPillPointerUp}
-                onPointerLeave={onPillPointerUp}
-              >
-                {pillSets.map((set, si) => (
-                  <div className="stat-set anim-rise" style={{ '--rise-i': si } as React.CSSProperties} key={si}>
-                    {set.map((a, i) => {
-                      const idx = si * 3 + i
-                      return (
-                        <StatPill
-                          key={a.id}
-                          platform={a.platform}
-                          value={a.followers_count}
-                          index={idx}
-                          dataIndex={idx}
-                          dragging={dragIdx === idx}
-                          title={`${a.display_name ?? a.platform_uid} · 点击打开主页，长按拖动可重排`}
-                          onPointerDown={onPillPointerDown(idx)}
-                          onClick={() => {
-                            if (dragMoved.current) {
-                              dragMoved.current = false
-                              return
-                            }
-                            openHome(a)
-                          }}
-                        />
-                      )
-                    })}
-                  </div>
-                ))}
-                <button
-                  type="button"
-                  className="pill-add"
-                  title="添加平台账号"
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onClick={() => setAddAccountOpen(true)}
-                >
-                  <Plus className="size-4" />
-                </button>
-              </div>
-
-              <img src={heroDivider} alt="" className="hero-divider" />
-            </div>
-          </OverlayScroll>
+          <HeroCardsView
+            vtuber={vtuber}
+            accounts={accounts}
+            avatarSrc={avatarSrc}
+            liveAcc={liveAcc ?? null}
+            isLive={isLive}
+            heroAcc={heroAcc}
+            onAddAccount={() => setAddAccountOpen(true)}
+          />
         )}
 
         {vtuber && scene.view === 'archive' && (
@@ -931,134 +735,55 @@ return (
         )}
 
         {scene.view === 'list' && (
-          <>
-            {/* 筛选条固定顶（提取出滚动区）：分类胶囊 + 搜索 / 时间筛选永不下滚。
-                不随 .list-scroll 滚动，天然充当操作钮行与帖子流之间的常驻分隔 */}
-            <div className="chips-bar">
-              <div className="chips-bar-inner">
-                <div className="type-chips-row">
-                  <div className="type-chips">
-                    {chipItems.map((c) => (
-                      <button
-                        key={c.key}
-                        className={`type-chip${(typeFilter ?? 'all') === c.key ? ' active' : ''}`}
-                        onClick={() => {
-                          setTypeFilter(c.key === 'all' ? undefined : c.key)
-                          setPage(1)
-                        }}
-                      >
-                        {c.label} {c.count}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="chips-tools">
-                    <div className="search-float">
-                      <Search className="search-float-icon" />
-                      <input
-                        value={searchInput}
-                        onChange={(e) => {
-                          setSearchInput(e.target.value)
-                          setPage(1)
-                        }}
-                        placeholder="搜索标题 / 摘要 / 正文"
-                        title="标题、摘要（前 200 字）与正文全文（P2）"
-                      />
-                    </div>
-                    {/* P10-A：已删 / 归档 / 时间范围三件筛选收敛进单个下拉弹窗
-                        （此前三钮并排越挤越长，类型 chips 被迫换行） */}
-                    <PostFilterPop
-                      deletedOnly={deletedOnly}
-                      onDeletedToggle={() => {
-                        setDeletedOnly((d) => !d)
-                        setPage(1)
-                      }}
-                      archived={archived}
-                      onArchivedChange={(v) => {
-                        setArchived(v)
-                        setPage(1)
-                      }}
-                      range={{ from: dateFrom, to: dateTo }}
-                      onRangeConfirm={(r) => {
-                        setDateFrom(r.from)
-                        setDateTo(r.to)
-                        setPage(1)
-                      }}
-                      onReset={() => {
-                        setDeletedOnly(false)
-                        setArchived('all')
-                        setDateFrom('')
-                        setDateTo('')
-                        setPage(1)
-                      }}
-                      deletedCount={stats?.deleted ?? 0}
-                      archivedCount={stats?.archived ?? 0}
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* 帖子无限滚动区：grid 不再按筛选指纹重挂（2026-09-04）——
-                筛选切换走 is-refetching 原位替换，入场动画只在新卡片挂载时播放；
-                覆盖式滚动条（OverlayScroll，2026-09-07：不占宽 + 自动隐藏） */}
-            <OverlayScroll
-              className="list-scroll"
-              scrollRef={listScrollRef}
-              onScroll={(e) => setShowTop(e.currentTarget.scrollTop > 400)}
-            >
-              <div className="list-inner">
-                {error ? (
-                  <StateBlock kind="error" variant="alert" text={error} />
-                ) : posts.length === 0 ? (
-                  <StateBlock
-                    kind={loading ? 'loading' : 'empty'}
-                    variant="inline"
-                    text={loading ? '正在加载帖子…' : '暂无帖子，点击上方「抓取帖子」或「更新动态」获取'}
-                  />
-                ) : (
-                  <div className={`post-grid${loading ? ' is-refetching' : ''}`}>
-                    {posts.map((p, i) => (
-                      <PostCard key={p.id} post={p} index={i} onOpen={openPost} />
-                    ))}
-                  </div>
-                )}
-
-                {/* 无限滚动尾巴：哨兵驱动 IO 预载下一页；加载中/到底标记 */}
-                {!error && posts.length > 0 && (
-                  <>
-                    <div ref={sentinelRef} className="load-sentinel" />
-                    {loadingMore && (
-                      <div className="load-more-tip">
-                        <Loader2 className="mr-2 inline size-4 animate-spin align-[-2px] text-primary" />{' '}
-                        加载中…
-                      </div>
-                    )}
-                    {loadMoreError && (
-                      <div className="load-more-tip load-more-error">
-                        <span>加载失败，</span>
-                        <button type="button" onClick={() => setLoadMoreError(null)}>
-                          重试
-                        </button>
-                      </div>
-                    )}
-                    {!loadingMore && !loadMoreError && !hasMore && (
-                      <div className="load-end">已经到底啦</div>
-                    )}
-                  </>
-                )}
-              </div>
-            </OverlayScroll>
-
-            {/* 回顶浮钮：滚动深处浮现，一键回顶（view-body 为定位锚点） */}
-            <button
-              type="button"
-              aria-label="回到顶部"
-              className={`back-to-top${showTop ? ' on' : ''}`}
-              onClick={() => listScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' })}
-            >
-              <ChevronUp className="size-5" />
-            </button>
-          </>
+          <PostListView
+            chipItems={chipItems}
+            typeFilter={typeFilter}
+            onPickType={(key) => {
+              setTypeFilter(key)
+              setPage(1)
+            }}
+            searchInput={searchInput}
+            onSearchInput={(v) => {
+              setSearchInput(v)
+              setPage(1)
+            }}
+            deletedOnly={deletedOnly}
+            onDeletedToggle={() => {
+              setDeletedOnly((d) => !d)
+              setPage(1)
+            }}
+            archived={archived}
+            onArchivedChange={(v) => {
+              setArchived(v)
+              setPage(1)
+            }}
+            range={{ from: dateFrom, to: dateTo }}
+            onRangeConfirm={(r) => {
+              setDateFrom(r.from)
+              setDateTo(r.to)
+              setPage(1)
+            }}
+            onFilterReset={() => {
+              setDeletedOnly(false)
+              setArchived('all')
+              setDateFrom('')
+              setDateTo('')
+              setPage(1)
+            }}
+            stats={stats}
+            posts={posts}
+            error={error}
+            loading={loading}
+            loadingMore={loadingMore}
+            loadMoreError={loadMoreError}
+            onRetryLoadMore={() => setLoadMoreError(null)}
+            hasMore={hasMore}
+            onOpenPost={openPost}
+            listScrollRef={listScrollRef}
+            sentinelRef={sentinelRef}
+            showTop={showTop}
+            onScroll={(top) => setShowTop(top > 400)}
+          />
         )}
       </div>
 

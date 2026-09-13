@@ -24,7 +24,7 @@
 
 | # | 日期 | 一句话需求 | 期望效果（可选） | 优先级 | 状态 |
 |---|---|---|---|---|---|
-| R1 |  |  |  |  | 待评估 |
+| R1 | 2026-09-13 |  |  |  | 待评估 |
 | R2 |  |  |  |  | 待评估 |
 
 > **示例**（写完可删）：
@@ -41,10 +41,10 @@
 
 | 项 | 性质 | 说明 / 下一步 |
 |---|---|---|
-| **上游请求取消（AbortController）** | 体验小修 | 切场次/关弹窗时旧请求仍在跑（`useLiveUpstream` 只用 `seq` 防回写）。后端有 10 分钟缓存兜底，风险低。改法：`api.liveSessionUpstream(accountId, liveId, signal?)` → `request()` **已经支持 `init.signal`**（无需改签名），hook 在 effect 清理里 abort。devlog/063 §四 |
-| **前端分层收敛 P2 · 剩余** | 技术债，无功能影响 | `LiveCalendar` 已拆完（1182 → 469 总行数）；`PostsPage` 只抽了纯逻辑（1285 → 1134，`utils/postTypes.ts` + `pages/useVtuberActions.ts`），**`HeroCardsView` / `PostListView` 两个视图件仍未拆**，它仍是全仓最大文件。方案与工时见 `docs/FRONTEND-ARCH.md` §5 |
 | **词云自建扩展点接线**（可选增强） | 体验 | `count_tokens(extra_words=…)` / `JiebaTokenizer.add_words()` 已就绪但**没有自动灌词**：按 V 名/企划名自动灌自定义词典，避免"明前奶绿"被切碎（接线处留了 `ExtraWordsHook`）。devlog/061 §四 |
 | **自建词云首拉耗时**（可选优化） | 体验，可接受 | 实测 5 万条记录 ~12s 属正常，上游瞬时变慢时单场可达 **120s**（devlog/062 §四）。**刻意不加时间预算**：截断取靠前记录会系统性丢掉下播前的高频词（如「晚安」）。可选改法：分页大小调优 / 前端进度反馈 / 明确标注"基于部分弹幕"后再截断 |
+| **自建词云也支持取消**（照搬现成管道） | 体验小修 | 上游取数已可取消（devlog/064）；`/wordcloud` 走同一套（`api.buildLiveSessionWordCloud` 加 `signal` + 调用处 abort）。因它只在用户点按钮时发、120s 是可接受上限，优先级最低 |
+| **`PostsPage` 场景切换机抽 hook**（行为级重构） | 技术债，无功能影响 | 视图已拆完（1134 → **859**，devlog/065），剩下的主体是"预取门控 + 原子提交 + `EXIT_MS` 退场"（文件内 166–325 行）。抽成 `useSceneTransition` 属**行为级**改动（时序即功能），需先补"切账号不闪帧"的探针断言再动 |
 
 ### 1.2 需要先定口径 / 拍板（不是写代码的问题）
 
@@ -104,7 +104,7 @@
 | 弹幕词云（上游 top40 + 本地自建兜底 + 五态文案） | ✅ 已上线（devlog/061/062）；**原始弹幕明细库暂缓** → §1.2 |
 | 滚动条标准（不占宽 + 自动隐藏 + OverlayScroll 统一） | ✅ 定案并落地（UI-MAP F 节） |
 | 桌面端图标清晰度（任务栏/资源管理器） | ✅ 已修（devlog/043） |
-| 验证基建（pytest / vitest / eslint / ui_probe / 位级签名） | ✅ 已上线（devlog/056/059 + 062/063；基线见 §6.2） |
+| 验证基建（pytest / vitest / eslint / ui_probe / 位级签名） | ✅ 已上线（devlog/056/059 + 062/063/064/065；基线见 §6.2） |
 | 数据导出 / 可移植格式 | ❌ 无 → §1.4（P3） |
 
 ---
@@ -191,6 +191,8 @@
 | 词云断供调查 → **更正为误判** | 060–061 |
 | 弹幕「抓不下来」= 12s 超时误报（30s + 3 次重试） | 062 |
 | 弹幕取数拆出详情端点（两段式加载 + 10 分钟缓存） | 063 |
+| 上游取数可取消（切场次/关弹窗即 abort） | 064 |
+| P2 分层收敛收尾：`PostsPage` 拆出三个视图件（1134 → 859） | 065 |
 
 ### 6.2 当前门禁基线（2026-09-13 整理时实测 / 复核）
 
@@ -199,9 +201,9 @@
 | 后端 | `python -m pytest -q` | **299 passed** |
 | 前端类型 | `npx tsc --noEmit`（`npm run build` 也会跑） | **0 错** |
 | 前端 lint | `npm --prefix frontend run lint` | **0 错**（`--max-warnings 0`） |
-| 前端单测 | `npm --prefix frontend run test` | **89 passed** |
+| 前端单测 | `npm --prefix frontend run test` | **93 passed** |
 | 词云布局 | `node scripts/check_wordcloud_layout.mjs` | sha256 `19ecc7e6…`（本轮实跑一致） |
-| 布局探针 | `python scripts/ui_probe.py --archive --calendar-expect fb75217e…` | 本轮实跑一致；**三档宽度 0 问题**为 devlog/059 记录值（本批未重跑） |
+| 布局探针 | `python scripts/ui_probe.py --hero-expect c1154858… --vtuber 15`<br>`python scripts/ui_probe.py --archive --calendar-expect fb75217e… --vtuber 15` | 本轮实跑一致（8 段契约 0 问题 / 三档宽度 0 问题） |
 | 一把梭 | `python scripts/dev_check.py` | 测试 + 后端冒烟（详见 `docs/DEV-LOOP.md`） |
 
 > ⚠️ 探针的 `--hero-expect` / `--calendar-expect` 签名**含实时数据**，只适合"改动前后短窗口对比"，

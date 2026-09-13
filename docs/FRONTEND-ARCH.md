@@ -143,26 +143,27 @@
 | `components/live/liveCalendarFmt.ts`（本批新增的"能证明的那一半"） | `LiveCalendar.tsx` 的 7 个纯函数 | 纯展示格式化外移 | 1h | 低 | ✅ **已落地（2026-09-13）**：`isFreshSession`/`dayKeyIso`/`fmtMonth`/`fmtTime`/`fmtDur`/`fmtMoney`/`keyOf` + 19 条断言 |
 | `components/live/LiveSessionDialog.tsx` | `LiveCalendar.tsx` 场次详情（`lc-dlg` 家族） | 弹窗独立 | 3h | 中 | ✅ **已落地（2026-09-13）**：340 行；`LiveCalendar` **734 → 465**（含把 `cloudBubbles`/破泡状态一并搬入）。证据 = 日历签名 `fb75217e…` 一致 + 详情弹窗实渲染（`--archive-day`）非加载态、非空态。**同日追加**：上游取数拆到 `components/live/useLiveUpstream.ts` 后本件 **457 行**（总行数，devlog/063） |
 | `hooks/useLiveSessions.ts` | `LiveCalendar.tsx` 数据加载 / 月份 / 分类状态 | 逻辑外移 | 2h | **高** | ✅ **已落地（2026-09-13）**：`components/live/useLiveSessions.ts`（230 行）；`LiveCalendar` **837 → 734**。证据 = 日历格 sha256 签名 `fb75217e…` 重构前后**完全一致**（`ui_probe.py --archive --calendar-expect`）+ hero 签名 + 探针三档全绿。**顺序是契约**（7 条 effect 的相对顺序与依赖数组不得改），已写进 hook 文件顶部注释 |
-| `components/posts/HeroCardsView.tsx` | `PostsPage.tsx` 展示页视图 | 展示页视图 | 1.5h | 中 | 🔶 **纯逻辑已提**（`utils/postTypes.ts`：`orderAccounts`/`chunkBy`/`accountHomeUrl`，27 条断言 + 探针 `--hero-expect` 位级护栏）；**视图 JSX 未拆** —— 见下方决策记录 |
-| `components/posts/PostListView.tsx` | `PostsPage.tsx` 列表页视图 | 列表页视图 | 2h | 中 | ⬜ 未做 —— 同上 |
+| `components/posts/HeroCardsView.tsx` | `PostsPage.tsx` 展示页视图 | 展示页视图 | 1.5h | 中 | ✅ **已落地（2026-09-13，devlog/065）**：192 行 —— cards 分支 + **平台药丸拖动重排逻辑一并搬入**（页面少 4 个 state）；hero 位级签名 `c1154858…` 前后一致 |
+| `components/posts/PostListView.tsx` | `PostsPage.tsx` 列表页视图 | 列表页视图 | 2h | 中 | ✅ **已落地（2026-09-13，devlog/065）**：193 行（筛选条 + 无限滚动区 + 回顶）；另拆出 `ListHeaderActions.tsx`（116 行，列表工具条）。取数/分页/观察者**留在页面**（时序是契约） |
 | `hooks/useVtuberActions.ts` | `PostsPage.tsx` 的 6 个 `handle*` | 25 → ~15 个 state | 2h | 中 | ✅ **已落地（2026-09-13）**：`pages/useVtuberActions.ts`（197 行）；`PostsPage` **1247 → 1128**；`fetching` 随动作一起搬走。证据 = hero 签名 `c1154858…` 与日历签名 `fb75217e…` 均一致 |
 
-> **决策记录（2026-09-13）：视图 JSX 不再拆成 `HeroCardsView` / `PostListView`。**
+> **决策记录（2026-09-13 上午 → 当日下午改判）：视图 JSX 先判"不再拆"，最终拆了。**
 >
-> 原因不是工时，而是**收益已经不成立**：
-> ① 这两个"视图组件"的体量在原估算里被高估了 —— 抽出类型分组常量与 6 个动作回调后，
-> cards 分支只剩 ~72 行、list 分支 ~30 行、archive/profile 各 ~15 行，且**彼此在 JSX 树里
-> 是并列的兄弟**而不是独立子树；
-> ② 它们与页面深度耦合（`scene`/`view`/`prefetch`/滚动哨兵/筛选态），要拆只能靠
-> **30+ 个 props 透传** —— 那是把"一个大函数"换成"一个大接口"，可读性未必更好；
-> ③ 项目没有组件测试运行器，拆完只能靠探针与肉眼，**而探针本来就覆盖这两个视图**
-> （八段契约含 cards/list/list-video），拆与不拆的回归风险不对称。
+> 上午的结论是"收益不成立"（三条理由：体量被高估、要 30+ props 透传、没有组件测试运行器）；
+> 下午复核时**实测推翻了第①条**（list 分支实际 **129 行**、旁边还挂着 72 行的工具条，
+> 不是当初估的 30 行），第②条改用"整块子树只收自己用的东西"化解（顺带**减少**了页面 state），
+> 第③条成立但护栏够用（hero/日历位级签名 + 8 段契约 + 三档宽度，纯搬动必须逐字节一致）。
 >
-> 已完成的替代方案更划算：**把能测的抽出来测**（`postTypes.ts` 27 条断言）
-> + **把能位级比对的固化**（hero 签名）。这两件事都做了，而 JSX 保持现状。
+> 落地结果：`PostsPage` 1134 → **859**（总行数），新增三个视图件 + `utils/pill.ts`；
+> 全部签名前后一致。原则仍是**只搬 JSX、不搬 effect**（时序是功能本身）。
 >
-> P2 对此文件的**实际结论**：`PostsPage` 1247 → 1128 → **1134（当前，总行数）**
-> —— 行数基本没降，但**可测试面从 0 变成 27 条断言 + 1 个位级护栏**，这才是 P2 想要的成果。
+> 仍未做的：把"场景切换机"（预取门控 + 原子提交 + `EXIT_MS` 退场）抽成 hook ——
+> 那是行为级重构，需要先为它建护栏。
+
+>
+> P2 对此文件的**实际结论**：`PostsPage` 1247 → 1128 → 1134 → **859（当前，总行数）**
+> —— 前两批把纯逻辑与视图拆走后行数才真正降下来，而**可测试面**（27 条断言 + 位级护栏）
+> 与**位级一致性**（签名前后逐字节相同）才是这次重构真正的产出。
 
 > ⚠️ **行数口径**（2026-09-13 整理 TODO 时发现并统一）：本表数字都是**总行数**
 > （含空行/注释，等价 `wc -l`）。2026-09-13 有几处新记录误用了"非空行数"（会少约 5%），
