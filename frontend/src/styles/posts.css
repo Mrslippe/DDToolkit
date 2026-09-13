@@ -1654,14 +1654,18 @@ img.hero-avatar {
   transform: rotate(180deg);
 }
 
-/* 候选面板：与输入条同宽、参与布局（不是浮层），内部超高时覆盖式纵向滚动 */
+/* 候选面板：**浮层**（portal 到 body + `position:fixed`，坐标由 JS 按输入条矩形给）。
+   2026-09-13 用户二次口径：要"浮在下面内容之上"（不推挤「锁定/已订阅账号」）。
+   为什么必须 portal：祖先 `.vd-settings-scroll`（OverlayScroll 根 overflow:hidden）
+   会把任何内联浮层**静默裁掉**；portal 出去 + fixed 定位同时解决"被裁"与"推挤内容"。
+   宽度/横向位置由 inline style 给（= 输入条矩形），这里只管观感与纵向约束。 */
 .vd-sign-panel {
-  margin-top: 6px;
+  z-index: 60;                  /* 高于 radix 弹窗层（z-50），低于顶栏提示 */
+  max-height: 260px;
   padding: 6px;
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-height: 260px;
   overflow-y: auto;
   overscroll-behavior: contain;
   background: #fff;

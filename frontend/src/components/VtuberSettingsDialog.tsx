@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { CSSProperties } from 'react'
+import { createPortal } from 'react-dom'
 import { ImagePlus, Loader2, Lock, LockOpen, Trash2, UserPlus } from 'lucide-react'
 import { toast } from 'sonner'
 import {
@@ -61,6 +63,8 @@ function blurOnEnter(e: React.KeyboardEvent<HTMLElement>) {
 }
 
 const SIGN_LIST_ID = 'vd-sign-list'
+/** 浮层面板最大高度（与 CSS `.vd-sign-panel` 的 max-height 保持一致；定位要用它估高） */
+const SIGN_PANEL_MAX_H = 260
 const signOptionId = (id: number | undefined) => (id == null ? undefined : `vd-sign-opt-${id}`)
 
 /**
@@ -144,10 +148,40 @@ export default function VtuberSettingsDialog({
   const [uploading, setUploading] = useState(false)
   const [addOpen, setAddOpen] = useState(false)
   const [delTarget, setDelTarget] = useState<Account | null>(null)
-  /** 各平台签名下拉栏（2026-09-13 设计案，devlog/072）：展开态 / 键盘游标 / 面板 ref */
+  /** 各平台签名下拉栏（2026-09-13 设计案，devlog/072）：展开态 / 键盘游标 / 定位 */
   const [signPopOpen, setSignPopOpen] = useState(false)
   const [signCursor, setSignCursor] = useState<number | null>(null)
   const signPanelRef = useRef<HTMLDivElement>(null)
+  /** 输入条包装（含输入框与 chevron）——"点外部关闭"要把**它**也算内部，否则
+   *  点 chevron 会先被 mousedown 判成"外部"关掉、再被 click 打开 ⇒ 看着像闪一下没关 */
+  const signFieldRef = useRef<HTMLDivElement>(null)
+  /** 面板是 portal + fixed：位置按输入条矩形算（见 placePanel） */
+  const [panelStyle, setPanelStyle] = useState<CSSProperties | null>(null)
+
+  /**
+   * 给浮层面板定位（2026-09-13 用户二次口径：**浮在下面内容之上**，不推挤它们）。
+   *
+   * - 锚点 = 输入条矩形；宽度与它一致（参考图的结构关系）；
+   * - 下方放不下且上方更宽裕 → **向上翻转**（避免贴到视口底被裁）；
+   * - 监听 `scroll`（**捕获阶段**：滚动不冒泡，捕获才能收到 OverlayScroll 内部滚动）
+   *   与 resize 重新定位 —— 弹窗内容滚动时面板跟着输入条走。
+   */
+  const placePanel = useCallback(() => {
+    const anchor = signFieldRef.current?.querySelector<HTMLElement>('input')
+    if (!anchor) return
+    const r = anchor.getBoundingClientRect()
+    const h = Math.min(signPanelRef.current?.scrollHeight ?? SIGN_PANEL_MAX_H,
+                       SIGN_PANEL_MAX_H)
+    const below = window.innerHeight - r.bottom - 8
+    const above = r.top - 8
+    const openUp = below < h + 6 && above > below
+    setPanelStyle({
+      position: 'fixed',
+      left: r.left,
+      width: r.width,
+      top: openUp ? Math.max(8, r.top - 6 - h) : r.bottom + 6,
+    })
+  }, [])
   const fileRef = useRef<HTMLInputElement>(null)
 
   const hero = useMemo(() => {
@@ -305,14 +339,17 @@ export default function VtuberSettingsDialog({
   flushRef.current = commitSign
   useEffect(() => () => { void flushRef.current() }, [])
 
-  // 签名下拉栏：点外部 / Esc 关闭（与弹窗内其它浮层同口径）。
-  // 面板是**参与布局**的（不是浮层），所以"点外部"用容器包含判定即可。
+  // 签名下拉栏：点外部 / Esc 关闭。
+  // ⚠️ "外部" = 既不在**输入条包装**里、也不在面板里。少了输入条那一半，
+  //    点 chevron 会被 mousedown 先判成"外部"关掉、再被 click 打开 ⇒ 看着像"闪一下没关"
+  //    （2026-09-13 用户实测反馈）；面板是 portal 出去的，所以要用它自己的 ref 单独判。
   useEffect(() => {
     if (!signPopOpen) return
     const onDown = (e: MouseEvent) => {
-      if (signPanelRef.current && !signPanelRef.current.contains(e.target as Node)) {
-        setSignPopOpen(false)
-      }
+      const t = e.target as Node
+      if (signFieldRef.current?.contains(t)) return
+      if (signPanelRef.current?.contains(t)) return
+      setSignPopOpen(false)
     }
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -328,12 +365,25 @@ export default function VtuberSettingsDialog({
     }
   }, [signPopOpen])
 
-  // 展开后把面板滚进视野（它在滚动体里，展开点靠近底部时否则"看不见"）
+  // 展开：定位 → 面板真实高度出来后（下一帧）再校正一次（决定向下还是向上翻转）
+  // → 跟随滚动/resize。收起时把位置清掉，避免下次用旧坐标闪一帧。
   useEffect(() => {
-    if (!signPopOpen) return
-    signPanelRef.current?.scrollIntoView({ block: 'nearest' })
-    setSignCursor(null)
-  }, [signPopOpen])
+    if (!signPopOpen) {
+      setSignCursor(null)
+      setPanelStyle(null)
+      return
+    }
+    placePanel()
+    const raf = requestAnimationFrame(placePanel)
+    const onMove = () => placePanel()
+    window.addEventListener('scroll', onMove, true)
+    window.addEventListener('resize', onMove)
+    return () => {
+      cancelAnimationFrame(raf)
+      window.removeEventListener('scroll', onMove, true)
+      window.removeEventListener('resize', onMove)
+    }
+  }, [signPopOpen, placePanel])
 
   const removeAccount = async () => {
     if (!delTarget || !vtuber) return
@@ -501,10 +551,11 @@ export default function VtuberSettingsDialog({
               <div className="vd-field">
                 <span>签名</span>
                 {/* 输入框 + **内嵌右端 chevron**（2026-09-13 设计案，devlog/072）：
-                    点它展开下方**参与布局**的候选面板（不是浮层 —— 弹窗滚动体
-                    `overflow:hidden`，浮层越界会被静默裁掉）。
+                    点它展开候选面板；面板**浮在下方内容之上**（2026-09-13 用户二次口径，
+                    见 devlog/073）—— 用 portal + `position:fixed` 按输入条矩形定位，
+                    因此既不会被弹窗滚动体裁掉，也不推挤下面的「锁定/已订阅账号」。
                     用途：卡片的签名只取主账号（B 站优先），想借微博那边的文案时不用手抄。 */}
-                <div className="vd-sign-field">
+                <div className="vd-sign-field" ref={signFieldRef}>
                   <input
                     value={sign}
                     onChange={(e) => setSign(e.target.value)}
@@ -534,9 +585,9 @@ export default function VtuberSettingsDialog({
                     </svg>
                   </button>
                 </div>
-                {signPopOpen && (
+                {signPopOpen && panelStyle && createPortal(
                   <div className="vd-sign-panel" id={SIGN_LIST_ID} role="listbox"
-                       aria-label="各平台签名" ref={signPanelRef}>
+                       aria-label="各平台签名" ref={signPanelRef} style={panelStyle}>
                     {signOptions.length === 0 ? (
                       <div className="vd-sign-empty">各账号都还没有签名</div>
                     ) : (
@@ -552,7 +603,8 @@ export default function VtuberSettingsDialog({
                         />
                       ))
                     )}
-                  </div>
+                  </div>,
+                  document.body,
                 )}
               </div>
               <button

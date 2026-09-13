@@ -715,8 +715,14 @@ def main() -> int:
                   f"输入框右内距={st.get('inputRightPad')}")
             print(f"  chevron 在框内={st.get('chevronInside')} "
                   f"面板同宽={st.get('panelSameWidth')} "
-                  f"面板越界={st.get('panelClipped')} "
+                  f"面板出视口={st.get('panelClipped')} "
+                  f"浮在内容上={st.get('panelOverContent')} "
+                  f"position={st.get('panelPosition')} "
+                  f"portal到body={st.get('panelPortaled')} "
+                  f"在弹窗内部={st.get('panelInsideDialog')} "
                   f"收起态面板宽度={st.get('panelWidthWhenClosed')}")
+            print(f"  再点收起={st.get('toggleClosedOk')} 再点重开={st.get('toggleReopenOk')} "
+                  f"面板 DOM 数={st.get('openPanelCount')}")
             if st.get("reason") == "no-settings-dialog":
                 failures.append(f"@{w} settings: 没打开档案设置弹窗（.bg-set 没点上？）")
             elif st.get("reason") == "no-settings-trigger":
@@ -744,12 +750,30 @@ def main() -> int:
                 if not st.get("panelSameWidth"):
                     failures.append(f"@{w} settings: 面板宽度与输入条不一致（参考图要求同宽）")
                 if st.get("panelClipped"):
-                    failures.append(f"@{w} settings: 面板越出弹窗矩形（会被滚动体静默裁掉）")
+                    failures.append(f"@{w} settings: 面板出了视口（浮层会被裁/看不全）")
+                if not st.get("panelOverContent"):
+                    failures.append(f"@{w} settings: 面板没有浮在弹窗内容之上"
+                                    f"（用户 2026-09-13 口径：要浮层，不推挤下方内容）")
+                if st.get("panelPosition") != "fixed" or not st.get("panelPortaled"):
+                    failures.append(f"@{w} settings: 面板不是 portal+fixed 浮层"
+                                    f"（position={st.get('panelPosition')} "
+                                    f"portal={st.get('panelPortaled')}）—— "
+                                    f"内联面板会被滚动体静默裁掉")
+                if st.get("panelInsideDialog"):
+                    failures.append(f"@{w} settings: 面板仍在弹窗子树里（会被 overflow:hidden 裁）")
                 if (st.get("rows") or 0) <= 0:
                     failures.append(f"@{w} settings: 候选面板一行都没有"
                                     f"（该 V 需要有 ≥1 个带签名的账号）")
                 if (st.get("firstTextScrollable") or 0) > 0 and not (st.get("ovfRows") or 0):
                     failures.append(f"@{w} settings: 首行文字可滚动却没挂渐隐（.ovf 判定失效）")
+                if not st.get("toggleClosedOk"):
+                    failures.append(f"@{w} settings: 面板打开时**再点一次按钮没收起**"
+                                    f"（mousedown 判成外部 + click 又打开 = 闪一下没关）")
+                if not st.get("toggleReopenOk"):
+                    failures.append(f"@{w} settings: 收起后再点按钮没能重新打开")
+                if (st.get("openPanelCount") or 0) > 1:
+                    failures.append(f"@{w} settings: 同时存在 {st.get('openPanelCount')} "
+                                    f"个面板 DOM（重复渲染）")
                 if not failures:
                     print("  [ok] 档设置弹窗几何不变量全部通过")
             for b in failures:

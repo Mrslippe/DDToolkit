@@ -482,8 +482,8 @@ export async function runUiProbe(): Promise<void> {
       const closedPanel = dialog.querySelector<HTMLElement>('.vd-sign-panel')
       result.panelWidthWhenClosed = closedPanel ? closedPanel.getBoundingClientRect().width : -1
       toggle?.click()                       // 展开候选面板
-      await waitFor(() => dialog.querySelector('.vd-sign-panel'), 2000)
-      const panel = dialog.querySelector<HTMLElement>('.vd-sign-panel')
+      await waitFor(() => document.querySelector('.vd-sign-panel'), 2000)
+      const panel = document.querySelector<HTMLElement>('.vd-sign-panel')
       const rect = (el: HTMLElement | null) => el?.getBoundingClientRect() ?? null
       const ri = rect(input); const rt = rect(toggle)
       const rp = rect(panel); const rd = rect(dialog)
@@ -497,10 +497,27 @@ export async function runUiProbe(): Promise<void> {
         rt.left >= ri.left - 0.5 && rt.right <= ri.right + 0.5 &&
         rt.top >= ri.top - 0.5 && rt.bottom <= ri.bottom + 0.5)
       result.panelSameWidth = !!(ri && rp && Math.abs(ri.width - rp.width) <= 2)
-      result.panelClipped = !!(rp && rd &&
-        (rp.left < rd.left - 0.5 || rp.right > rd.right + 0.5 ||
-         rp.top < rd.top - 0.5 || rp.bottom > rd.bottom + 0.5))
+      // 面板是 **portal + fixed 浮层**（2026-09-13 用户二次口径，devlog/073）：
+      // 越界判据改成"是否出**视口**"；"是浮层而不参与布局"用**结构**断言
+      // （portal 到 body + computed position:fixed）—— 比"高度开合前后不变"稳：
+      // 后者会被 radix 的入场动画（scale .98）干扰，实测在虚拟时间下量到 470→484 的假差值。
+      result.panelClipped = !!(rp && (
+        rp.left < -0.5 || rp.top < -0.5 ||
+        rp.right > window.innerWidth + 0.5 || rp.bottom > window.innerHeight + 0.5))
+      result.panelOverContent = !!(rp && rd && rp.top < rd.bottom - 0.5)
+      result.panelPosition = panel ? getComputedStyle(panel).position : null
+      result.panelPortaled = !!panel && panel.parentElement === document.body
+      result.panelInsideDialog = !!panel && dialog.contains(panel)
       result.inputRightPad = input ? getComputedStyle(input).paddingRight : null
+      // 再点一次同一个按钮必须**收起**（2026-09-13 用户反馈：
+      // 之前 mousedown 把它判成"外部"先关、click 又打开 ⇒ 看着闪一下没关）。
+      toggle?.click()
+      await sleep(120)
+      result.toggleClosedOk = !document.querySelector('.vd-sign-panel')
+      toggle?.click()
+      await sleep(120)
+      result.toggleReopenOk = !!document.querySelector('.vd-sign-panel')
+      result.openPanelCount = document.querySelectorAll('.vd-sign-panel').length
     }
     const pre = document.createElement('pre')
     pre.id = 'ui-probe'
