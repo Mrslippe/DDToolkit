@@ -163,6 +163,7 @@
 | **版本号同步点** | `settings.VERSION` / `package.json` / `tauri.conf.json` / `Cargo.toml` / README badge | 5 处 + devlog | 测试 `test_version_synced_with_devlog` |
 | **dev_check** | 一键本地验证（pytest + 后端冒烟） | `scripts/dev_check.py` | 可选 `--frozen` / `--portable` |
 | **UI 探针** | 布局不变量机器验证（三档窗口宽） | `scripts/ui_probe.py` | `--first-run` 验首启浮窗 |
+| **运行日志 / 日志轮转** | 双通道（轮转文件 + 控制台）：`logs/app.log` 按天切成 `app.log.YYYY-MM-DD`，保留 7 份 | `app/core/logging_setup.py::setup_logging/build_file_handler` | 排查先"按天切一刀"（devlog/076）；配置本身可测（devlog/077） |
 | **文档工具** | 架构图 SVG 生成 | `docs/tools/gen_diagrams.py` → `docs/diagrams/` | 只改 `dN()` 函数即可重绘 |
 | **术语表 / 本文** | 名词 → 路径 → 依赖速查 | `docs/GLOSSARY.md` | 新术语请随手补一行 |
 
@@ -174,6 +175,7 @@
 |---|---|---|
 | `DATA_DIR` | `DDTOOLKIT_DATA_DIR` 或项目根 | 数据库/日志/凭据/静态资源根目录 |
 | `DATABASE_URL` | `sqlite:///<DATA_DIR>/vtuber.db` | SQLite 连接串 |
+| `LOG_FILE` / `LOG_BACKUP_DAYS` | `logs/app.log` / `7`（`DDTOOLKIT_LOG_BACKUP_DAYS` 可覆盖） | 双通道日志的文件通道：**按天轮转**（`app.log.YYYY-MM-DD`）保留最近 N 份；配置在 `app/core/logging_setup.py`（devlog/077） |
 | `VERSION` | `0.9.9` | 版本号（与 5 处同步） |
 | `REQUEST_INTERVAL_MIN/MAX` | 3.0 / 5.0 s | 账号抓取每账号间隔 |
 | `MANUAL_FAST_INTERVAL_MIN/MAX` | 0.5 / 1.0 s | 收录/单V 的账号间隔（只在账号之间生效） |

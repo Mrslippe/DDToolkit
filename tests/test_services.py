@@ -1369,6 +1369,79 @@ def test_module_level_pacers_hold_no_event_loop_primitives():
                     assert not isinstance(v, loop_bound), f"{name}[{k}] 持有 loop-bound 原语"
 
 
+def test_log_file_handler_rotates_daily_and_prunes(tmp_path):
+    """日志按天轮转 + 保留 N 份（2026-09-13 用户定，devlog/077）。
+
+    背景：原先 `logging.FileHandler` 不轮转，实测长到 5.2MB / 33963 行、跨数月，
+    排查前得先"按天切一刀"（devlog/076 里两条八月旧记录差点被当成现行 bug）。
+
+    这里**真的写盘、真的翻三次页**，断言备份文件产生 / 超龄备份被删 / 内容真的搬过去了。
+
+    ⚠️ 踩坑记录（写在这里免得下次又"造数据造出假绿"）：stdlib 的 `doRollover()` 第一件事是
+    算目标文件名，然后 **`if os.path.exists(dfn): return`（"Already rolled over"）** ——
+    手工创建备份文件时如果**正好撞上本次的目标名**，整次轮转会被静默跳过（不改名、不裁剪）。
+    所以这里不预造备份，而是用"连着翻三次页"来制造多余备份。
+    """
+    import logging as _logging
+    from logging.handlers import TimedRotatingFileHandler
+
+    from app.core.logging_setup import build_file_handler
+
+    log_dir = tmp_path / "logs"
+    log_file = log_dir / "app.log"
+    handler = build_file_handler(log_file, backup_days=2)
+
+    # ① 类型与关键参数（缺 encoding 在 Windows 上按 GBK 写 → 中文乱码）
+    assert isinstance(handler, TimedRotatingFileHandler)
+    # `when="midnight"` 会被规范成"86400 秒 + suffix 用日期"（不是 1）
+    assert handler.when.upper() == "MIDNIGHT"
+    assert handler.interval == 24 * 60 * 60
+    assert handler.backupCount == 2
+    assert (handler.encoding or "").lower().replace("-", "") == "utf8"
+    assert log_dir.is_dir()                     # 目录不存在时会创建
+
+    logger = _logging.getLogger("ddtk.test.logrotate")
+    logger.setLevel(_logging.INFO)
+    logger.propagate = False
+    logger.addHandler(handler)
+    try:
+        def force_rollover(days_ago: int) -> None:
+            """把 rolloverAt 拨回过去并真的写一行 → 触发一次轮转（不依赖真实日期）。"""
+            handler.rolloverAt = handler.computeRollover(int(time.time()) - 86400 * days_ago)
+            logger.info(f"第 {days_ago} 次翻页前的收尾行")
+            handler.flush()
+
+        logger.info("第一天 中文行")
+        handler.flush()
+        assert log_file.exists()
+        assert "第一天 中文行" in log_file.read_text(encoding="utf-8")
+
+        backups = []
+        # ⚠️ 顺序必须**由远及近**（3→2→1 天前）：裁剪是按**文件名（=日期）排序**取最旧的，
+        #    若倒着翻页，刚生成的那份备份会立刻变成"最旧"并被自己这轮的裁剪删掉
+        #    （现象：连续两次翻页只在文件系统里留下 2 个文件、第三次"没有新备份"）。
+        for days_ago in (3, 2, 1):               # 连翻三次 → 正常应只剩最近 2 份
+            before = {p.name for p in log_dir.glob("app.log.*")}
+            force_rollover(days_ago)
+            after = {p.name for p in log_dir.glob("app.log.*")}
+            new = sorted(after - before)
+            assert new, f"第 {days_ago} 次翻页没有产生备份（existing={sorted(before)}）"
+            backups.extend(new)
+
+        remaining = sorted(p.name for p in log_dir.glob("app.log.*"))
+        assert len(remaining) == 2, f"备份没有被裁剪到 backupCount: {remaining}"
+        assert remaining[0] < remaining[1]                                 # 日期名有序
+        base_text = log_file.read_text(encoding="utf-8")
+        kept = "\n".join(p.read_text(encoding="utf-8") for p in log_dir.glob("app.log.*"))
+        assert "第一天 中文行" not in base_text                              # 旧内容已搬进备份
+        assert "第一天 中文行" not in kept, "最旧备份应被删除（backupCount=2）"
+        assert "第 3 次翻页前的收尾行" in kept                              # 中间那份仍在
+        assert "第 1 次翻页前的收尾行" in base_text                          # 当前文件是新起的
+    finally:
+        logger.removeHandler(handler)
+        handler.close()
+
+
 def test_deferred_avatar_updates_only_avatar_path(monkeypatch):
     """延后下载：只 UPDATE avatar_path 一列并再推一次快照（不覆盖其它字段）。"""
     from app.services import scheduler as sch

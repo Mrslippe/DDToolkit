@@ -154,6 +154,19 @@ python scripts/check_danmaku_fetch.py 10 --self  # 顺带跑自建路径（v3 �
 **只读**（sqlite `mode=ro`，不写库不删数据）；全绿退出 0、有失败退出 1，可当探针。
 库路径跟随 `DDTOOLKIT_DATA_DIR`（不硬编码机器路径），未设该变量时会告警指明用的是哪个库。
 
+### 看日志（2026-09-13 起按天轮转，devlog/077）
+
+```powershell
+$log = "$env:APPDATA\com.ddtoolkit.app-dev\logs"
+Get-ChildItem $log                                  # app.log（今天）+ app.log.YYYY-MM-DD（最近 7 天）
+Get-Content "$log\app.log" -Encoding UTF8 | Select-String -Pattern '\[(ERROR|CRITICAL)\]'
+```
+
+⚠️ 两份日志不要混：`app.log` 是**后端**（`app/core/logging_setup.py` 配置，双通道 + 按天轮转），
+`sidecar.log` 是**Tauri 启动器**（就绪信号 / 性能打点 / 父进程看门狗）。
+排查报障时**先按天切一刀**再读 —— 轮转前的老文件跨了几个月，八月的旧记录容易被当成现行问题
+（devlog/076 的教训）。`app.log` 里的 `httpx` 行占大头（每个请求一行），按 `[ERROR]` 过滤最省事。
+
 ## 三、手动复现打包版状态（脚本没覆盖时）
 
 ```powershell

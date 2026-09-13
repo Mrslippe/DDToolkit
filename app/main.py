@@ -4,26 +4,21 @@ from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 import asyncio
 import logging
-import os
 import time
 from datetime import datetime, timezone
 
 from sqlalchemy import inspect, text, PrimaryKeyConstraint, UniqueConstraint
 
 from app.core.config import settings
+from app.core.logging_setup import setup_logging
 from app.core.database import engine, Base
 from app.routers import vtuber, img_proxy, auth
 
 # --- 日志 ---
-os.makedirs(settings.DATA_DIR / "logs", exist_ok=True)
-logging.basicConfig(
-    level=getattr(logging, settings.LOG_LEVEL),
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[
-        logging.FileHandler(settings.LOG_FILE, encoding="utf-8"),
-        logging.StreamHandler(),
-    ],
-)
+# 双通道（轮转文件 + 控制台）配置在 `app/core/logging_setup.py`：
+# 搬出去是为了**可测**（basicConfig 在 pytest 下不生效，配置本身测不到），
+# 轮转策略与历史事故见该模块 docstring（devlog/077）。
+setup_logging(settings.LOG_LEVEL, settings.LOG_FILE, settings.LOG_BACKUP_DAYS)
 logger = logging.getLogger(__name__)
 
 # 启动计时：冷启动优化（devlog/021）——各阶段毫秒时间戳，对照方案 0 基线

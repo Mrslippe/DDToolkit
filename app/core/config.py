@@ -112,6 +112,9 @@ class Settings:
     # 日志
     LOG_LEVEL: str = "INFO"
     LOG_FILE: str = str(DATA_DIR / "logs" / "app.log")
+    # 日志轮转（2026-09-13，devlog/077）：按天切（`app.log.YYYY-MM-DD`）+ 保留 N 份。
+    # 原先单文件不轮转，实测长到 5.2MB / 33963 行、跨数月 —— 排查前必须先"按天切一刀"。
+    LOG_BACKUP_DAYS: int = int(os.getenv("DDTOOLKIT_LOG_BACKUP_DAYS", "7"))
 
     # 图片代理（/img-proxy 兜底链路）：B 站图床 + 微博图床
     IMG_PROXY_ALLOWED_HOSTS: str = os.getenv("IMG_PROXY_ALLOWED_HOSTS", "hdslb.com,sinaimg.cn,wbcdn.cn")

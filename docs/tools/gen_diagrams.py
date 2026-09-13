@@ -126,7 +126,7 @@ def d1():
     body.append(band_caption(60, 800, "⑥ 数据层 — 本地持久化", "#B7950B"))
     body.append(box(60, 815, 270, 100, "SQLite — vtuber.db", ["vtubers / accounts / posts\n+ 快照·场次·礼物日·曾用值\nalembic_version = f004"], fill="#FEF9E7", stroke="#B7950B", tcolor="#7D6608"))
     body.append(box(345, 815, 270, 100, "static/avatars/ — 头像缓存", ["718 张本地头像\n{uid}.jpg|png\n经 /static 对外服务"], fill="#FEF9E7", stroke="#B7950B", tcolor="#7D6608"))
-    body.append(box(630, 815, 270, 100, "logs/app.log — 运行日志", ["FileHandler + 控制台\n（v0.3.2 已修复：正常写入）"], fill="#FEF9E7", stroke="#B7950B", tcolor="#7D6608"))
+    body.append(box(630, 815, 270, 100, "logs/app.log — 运行日志", ["双通道 + 按天轮转\napp.log.YYYY-MM-DD ×7\n（core/logging_setup.py）"], fill="#FEF9E7", stroke="#B7950B", tcolor="#7D6608"))
     body.append(box(915, 815, 270, 100, "vtubers.csv — 名单源文件", ["9,482 行（4 个 flag=1）\n由发现脚本生成"], fill="#FEF9E7", stroke="#B7950B", tcolor="#7D6608"))
     # 箭头
     body.append(line(710, 106, 710, 148, marker="arr"))                       # A1 → API
@@ -316,7 +316,7 @@ def d3():
     ys = [70, 128, 186, 244, 302, 360, 418, 476]
     steps = [
         ("uvicorn 启动 · app.main:app", ["模块加载：路由 / CORS / 静态目录注册"], "#FDF2E9", "#E67E22", "#9C4A0B"),
-        ("logging.basicConfig — 双通道日志", ["FileHandler(logs/app.log) + StreamHandler"], "#FDF2E9", "#E67E22", "#9C4A0B"),
+        ("core/logging_setup.setup_logging() — 双通道日志", ["TimedRotating(app.log, 按天·留 7 份) + StreamHandler"], "#FDF2E9", "#E67E22", "#9C4A0B"),
         ("Base.metadata.create_all(engine)", ["按 ORM 模型自动建表（与 Alembic 双轨并存）"], "#EAF2FB", "#2E86C1", "#1B4F8A"),
         ("import_from_file() — CSV 导入", ["读 vtubers.csv · flag=1 行 · 按 (platform,uid) 去重"], "#EAF2FB", "#2E86C1", "#1B4F8A"),
         ("start_scheduler() — 定时任务", ["APScheduler BackgroundScheduler · 每 5 分钟 ±30s · max_instances=1"], "#EAF7EF", "#27AE60", "#1E6B3C"),

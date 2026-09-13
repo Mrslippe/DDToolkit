@@ -36,8 +36,9 @@ from app.services.platforms import registry
 from app.services.post_text import extract_post_text
 from app.services.tombstone import apply_tombstone_scan
 from app.services.externals.runner import run_external_interval
-# 注意：此处不调用 logging.basicConfig —— 根日志配置统一由 app/main.py 完成。
-# 历史上这里先执行了 basicConfig，导致 main.py 中的 FileHandler 配置被静默忽略，
+# 注意：此处不调用 logging.basicConfig —— 根日志配置统一由
+# `app/core/logging_setup.py::setup_logging()`（在 app/main.py 里调用）完成。
+# 历史上这里先执行了 basicConfig，导致 main.py 里的文件 handler 配置被静默忽略，
 # logs/app.log 恒为空（修复记录见 devlog/013）。
 logger = logging.getLogger(__name__)
 
