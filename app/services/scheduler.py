@@ -1014,22 +1014,29 @@ async def _run_platform_rounds(
     on_preempt=None,
     on_progress=None,
     cooldown_seconds: float | None = None,
+    per_platform: int = 1,
 ) -> list[tuple[str, _RoundOutcome]]:
     """按平台并发的轮次执行器。
 
-    - 每轮：所有「就绪平台」各取一个元素交给 `worker(platform, item)` 并发执行
-      （worker 内部自带该平台的节流 sleep）；
+    - 每轮：所有「就绪平台」各取 `per_platform` 个元素交给 `worker(platform, item)` 并发执行
+      （worker 内部自带该平台的节流 sleep）；`per_platform=1`（默认）= 平台内串行，
+      与引入该参数之前**逐字节等价** —— 账号流仍走这条；
     - 某平台风控（outcome.rate_limited）→ 该平台单独冷却 `cooldown_seconds`，
       其它平台继续推进；全部冷却则一起等最早解冻的那个；
     - 轮与轮之间是**手动让位断点**：`preempt` 置位时调用 `on_preempt()`
       （交还对应锁、等手动任务跑完再恢复；调用方须持有该锁）；
     - `on_progress(done, total, ready_platforms)` 每轮汇报一次进度。
+
+    `per_platform`（2026-09-13 需求 R6，devlog/070）：动态流用它把"平台内逐个抓"
+    换成"平台内并发抓" —— 一轮墙钟从"账号数 × 每账号耗时"降到"≈ 账号数 × 起跑间隔"
+    （起跑间隔由调用方的平台节流器保证，风控面不变）。
     """
     queues = {pf: list(items) for pf, items in groups.items() if items}
     total = sum(len(q) for q in queues.values())
     out: list[tuple[str, _RoundOutcome]] = []
     if not total:
         return out
+    batch_n = max(1, int(per_platform))
     cooling: dict[str, float] = {}
     done = 0
     while any(queues.values()):
@@ -1043,8 +1050,14 @@ async def _run_platform_rounds(
             continue
         if on_progress:
             on_progress(done, total, ready)
-        results = await asyncio.gather(*(worker(pf, queues[pf].pop(0)) for pf in ready))
-        for pf, res in zip(ready, results):
+        batch: list[tuple[str, object]] = []
+        for pf in ready:
+            for _ in range(batch_n):
+                if not queues[pf]:
+                    break
+                batch.append((pf, queues[pf].pop(0)))
+        results = await asyncio.gather(*(worker(pf, item) for pf, item in batch))
+        for (pf, _item), res in zip(batch, results):
             out.append((pf, res))
             done += 1
             if cooldown_seconds and getattr(res, "rate_limited", False):
@@ -2370,10 +2383,16 @@ async def run_latest_dynamics_sweep() -> dict:
 
         async def worker_with_pacing(pf: str, item) -> _RoundOutcome:
             try:
+                # 并发模式（R6）：平台级起跑闸门保证同平台请求间隔，抓取耗时与间隔重叠
+                if settings.DYNAMICS_CONCURRENCY > 1:
+                    await _dynamics_pacer.wait(pf)
                 return await worker(pf, item)
             finally:
-                await asyncio.sleep(random.uniform(settings.STARTUP_DYNAMICS_INTERVAL_MIN,
-                                                   settings.STARTUP_DYNAMICS_INTERVAL_MAX))
+                # 单并发保留旧行为（抓完再睡）；并发下这段 sleep 只会白等（3 个 worker
+                # 同时睡，既不省时间也不构成间隔），故跳过
+                if settings.DYNAMICS_CONCURRENCY <= 1:
+                    await asyncio.sleep(random.uniform(settings.STARTUP_DYNAMICS_INTERVAL_MIN,
+                                                       settings.STARTUP_DYNAMICS_INTERVAL_MAX))
 
         def on_progress(done: int, total_n: int, ready: list[str]) -> None:
             # P8-C：轮次开始前汇报「已处理/总数」；V 名由上面 worker 在真正开抓时写入
@@ -2388,6 +2407,7 @@ async def run_latest_dynamics_sweep() -> dict:
             on_preempt=lambda: _auto_yield_post_with(commit_all),
             on_progress=on_progress,
             cooldown_seconds=settings.RATE_LIMIT_COOLDOWN,
+            per_platform=settings.DYNAMICS_CONCURRENCY,   # R6：平台内并发（默认 3）
         )
         # P9-5：按平台统计本轮**实际请求数**（1 次 feed 页 + 每入库帖 1 次详情），
         # 供速率预算器记账（stored 即详情请求数的上界估计）
@@ -2662,6 +2682,47 @@ class _PlatformBudget:
 _dynamics_budget = _PlatformBudget(settings.DYNAMICS_BUDGET_RPM)
 
 
+class _PlatformPacer:
+    """平台级**请求起跑间隔**（并发抓取时用；每平台独立）。
+
+    为什么需要：并发抓 3 个账号时，"每账号抓完再睡 3~5s"不再能保证平台内的请求间隔 ——
+    3 个账号会在同一瞬间发出去（风控面直接变大）。改成平台级的起跑闸门：
+    同一平台两次请求**起跑**至少隔 `gap` 秒，不同平台互不影响；抓取本身的耗时
+    （通常 1~2s）与这段间隔重叠，所以一轮墙钟 ≈ 账号数 × 间隔，而不是
+    「账号数 ×（间隔 + 耗时）」。
+
+    `gap<=0` 时完全直通（禁用）。实现用每平台一把 `asyncio.Lock` +
+    上次起跑时刻；锁内 sleep，所以同一平台的后来者会排队而不是空转。
+    """
+
+    def __init__(self, gap_min: float, gap_max: float) -> None:
+        self.gap_min = gap_min
+        self.gap_max = gap_max
+        self._locks: dict[str, asyncio.Lock] = {}
+        self._last: dict[str, float] = {}
+
+    async def wait(self, pf: str) -> None:
+        if self.gap_max <= 0:
+            return
+        lock = self._locks.get(pf)
+        if lock is None:
+            lock = self._locks[pf] = asyncio.Lock()
+        async with lock:
+            last = self._last.get(pf)
+            now = time.monotonic()
+            if last is not None:
+                gap = random.uniform(self.gap_min, self.gap_max)
+                delta = gap - (now - last)
+                if delta > 0:
+                    await asyncio.sleep(delta)
+            self._last[pf] = time.monotonic()
+
+
+# 动态流起跑闸门：与「每账号抓完再睡」同参数，但改成平台级 —— 并发下才有意义
+_dynamics_pacer = _PlatformPacer(settings.STARTUP_DYNAMICS_INTERVAL_MIN,
+                                 settings.STARTUP_DYNAMICS_INTERVAL_MAX)
+
+
 def _next_dynamics_cost(db: Session) -> dict[str, int]:
     """下一轮动态流各平台预计请求数（每主账号 1 次 feed 页）。"""
     cost: dict[str, int] = {}
@@ -2695,7 +2756,7 @@ def start_live_poller() -> None:
     threading.Thread(target=_live_poller_loop, name="t0-live-poller", daemon=True).start()
 
 
-def _dynamics_next_due(db: Session) -> float:
+def _dynamics_next_due(db: Session, *, since: float | None = None) -> float:
     """下一轮动态流的到期时刻（monotonic）。
 
     P9-5 自适应节奏（用户定：预算 12 req·min⁻¹、一轮接一轮、轮间随机间隔）：
@@ -2703,19 +2764,32 @@ def _dynamics_next_due(db: Session) -> float:
       实际间隔 = max(DYNAMICS_MIN_GAP_SECONDS, 预算等待) ± DYNAMICS_JITTER_SECONDS；
       请求数为 0（库内没有主账号）时退回最小间隔，避免空转。
     - 预算 <=0 → 退回固定周期 `DYNAMICS_LATEST_INTERVAL_MINUTES`（老行为）。
+
+    `since`（需求 R6，2026-09-13 用户定）：本轮**开始**时刻。给了它就再套一层
+    **周期下限** `DYNAMICS_MIN_CYCLE_SECONDS`（默认 60s）：
+    "一轮抓取时间如果小于一分钟则休息至一分钟" —— 注意是**从轮开始算**，
+    而不是"轮结束后再睡 30s"（旧写法下 33s 的一轮 + 57s 预算等待 = 90s 周期，
+    用户看到的却是"间隔 57s"，与实际周期对不上）。
+    一轮超过 1min 时这条下限自然失效，回到预算等待 —— 也就是
+    "如果大于则休息时间保证不触及上限"。
     """
     if settings.DYNAMICS_BUDGET_RPM <= 0:
-        return time.monotonic() + _tier_delay(settings.DYNAMICS_LATEST_INTERVAL_MINUTES * 60,
-                                              settings.DYNAMICS_LATEST_JITTER_SECONDS)
+        due = time.monotonic() + _tier_delay(settings.DYNAMICS_LATEST_INTERVAL_MINUTES * 60,
+                                             settings.DYNAMICS_LATEST_JITTER_SECONDS)
+        return due if since is None else max(due, since + settings.DYNAMICS_MIN_CYCLE_SECONDS)
     cost = _next_dynamics_cost(db)
     # by_platform 传「本轮各平台需求数」= cost 本身：预算上限按平台抬到至少装得下一轮
     # （账号数增长后不被自己饿死，见 _PlatformBudget._rpm_for）。
     wait = _dynamics_budget.wait_seconds(cost, by_platform=cost)
     interval = max(settings.DYNAMICS_MIN_GAP_SECONDS, wait)
-    return time.monotonic() + _tier_delay(interval, settings.DYNAMICS_JITTER_SECONDS)
+    due = time.monotonic() + _tier_delay(interval, settings.DYNAMICS_JITTER_SECONDS)
+    if since is not None:
+        due = max(due, since + settings.DYNAMICS_MIN_CYCLE_SECONDS)
+    return due
 
 
-def _dynamics_due_or_retry(db: Session, *, why: str) -> float:
+def _dynamics_due_or_retry(db: Session, *, why: str,
+                           since: float | None = None) -> float:
     """算下一轮动态流到期时刻；失败退化为「一个最小间隔之后」（**绝不抛错**）。
 
     这个不可抛的契约是综合档心跳兜底的一部分：`_dynamics_next_due()` 的失败
@@ -2726,10 +2800,13 @@ def _dynamics_due_or_retry(db: Session, *, why: str) -> float:
     心跳会退化成每 tick 重试一次的忙循环。
     """
     try:
-        return _dynamics_next_due(db)
+        return _dynamics_next_due(db, since=since)
     except Exception as e:
         logger.error(f"{why}失败（退化为一个最小间隔后重试）: {e}", exc_info=True)
-        return time.monotonic() + settings.DYNAMICS_MIN_GAP_SECONDS
+        fallback = time.monotonic() + settings.DYNAMICS_MIN_GAP_SECONDS
+        if since is not None:
+            fallback = max(fallback, since + settings.DYNAMICS_MIN_CYCLE_SECONDS)
+        return fallback
 
 
 def _tier_loop() -> None:
@@ -2790,6 +2867,8 @@ def _tier_loop() -> None:
             if run_dynamics:
                 _dynamics_budget.charge(next_cost)
             logger.info(f"综合档（周期）：动态流={run_dynamics} 账号流={run_account}")
+            # R6：记下**轮开始**时刻 —— 下一轮到期要按"周期下限"从这一刻算（见 _dynamics_next_due）
+            round_start = time.monotonic() if run_dynamics else None
             result = asyncio.run(_run_combined_tier(dynamics=run_dynamics,
                                                     account=run_account))
             if run_dynamics:
@@ -2801,14 +2880,17 @@ def _tier_loop() -> None:
                 f"综合档心跳异常（本轮放弃，{settings.TIER_TICK_SECONDS}s 后继续）: {e}",
                 exc_info=True,
             )
+            round_start = None
         # 排下一轮到期间隔：**一定执行**（异常路径也不例外），否则 due_dynamics
         # 停在过去会让心跳退化成不停重试的忙循环。
         if due_dynamics is not None and time.monotonic() >= due_dynamics:
             db = SessionLocal()
             try:
-                due_dynamics = _dynamics_due_or_retry(db, why="下一轮动态流到期计算")
+                due_dynamics = _dynamics_due_or_retry(db, why="下一轮动态流到期计算",
+                                                      since=round_start)
             finally:
                 db.close()
+            round_start = None
 
 
 def start_tier_scheduler() -> None:

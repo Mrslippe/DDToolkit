@@ -83,6 +83,12 @@ class Settings:
                                                  # 动态流每轮空等一个整窗口（devlog/055）
     DYNAMICS_MIN_GAP_SECONDS: float = 30.0       # 轮间最小间隔（不贴着预算跑满，留拟人余量）
     DYNAMICS_JITTER_SECONDS: float = 15.0        # 轮间随机抖动（±）
+    # 需求 R6（2026-09-13 用户定，devlog/070）：「先按平台分类取任务名单，然后并行按名单抓；
+    # 一轮 <1min 就休息到 1min，>1min 就按预算休息、不触上限」
+    DYNAMICS_CONCURRENCY: int = 3                # 每平台每轮**并发**抓几个账号（1 = 旧的逐个节流；
+                                                 # 平台内请求间隔仍由 _PlatformPacer 保证，不受并发影响）
+    DYNAMICS_MIN_CYCLE_SECONDS: float = 60.0     # 一轮的**周期下限**（按轮**开始**计时，
+                                                 # 而不是"轮结束后再睡这么久"）
     # 账号流（原 T1 主账号 + T3a 全量合并）：账号字段变化慢，按「上次抓取时间」判断到期
     ACCOUNT_SWEEP_STALE_HOURS: float = 24.0      # 任一账号 last_fetched_at 超过该值（或为空）→ 到期
     ACCOUNT_SWEEP_MIN_GAP_SECONDS: int = 600     # 同进程两次账号流的硬下限（防失败重试风暴）

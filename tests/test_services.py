@@ -1752,8 +1752,9 @@ def test_dynamics_due_or_retry_never_raises_and_always_schedules_ahead(db, monke
     assert 29 <= due - before <= 31, "失败时退化到各一个「最小间隔」"
 
     # 正常路径：包装必须等价于直接调用（本用例只验证「不吞掉正常返回值」）
-    monkeypatch.setattr(sch, "_dynamics_next_due", lambda _db: 12345.0)
+    monkeypatch.setattr(sch, "_dynamics_next_due", lambda _db, since=None: 12345.0)
     assert sch._dynamics_due_or_retry(db, why="测试") == 12345.0
+    assert sch._dynamics_due_or_retry(db, why="测试", since=time.monotonic()) == 12345.0
 
 
 def test_platform_budget_adapts_to_per_platform_demand():
@@ -2374,6 +2375,91 @@ def test_run_platform_rounds_concurrent_across_platforms_serial_within():
     assert overlapped["v"] is True                  # 平台之间并行过
     assert [o for o in order if o.startswith("bilibili")] == [
         "bilibili:a", "bilibili:b", "bilibili:c"]
+
+
+def test_run_platform_rounds_per_platform_parallel():
+    """R6（2026-09-13）：`per_platform=N` → **同一平台内并发**抓 N 个，跨平台照旧并行。
+
+    这是"分账号并行"的落点：默认 1 = 旧行为（平台内串行），动态流传 3。
+    """
+    from app.services import scheduler as sch
+
+    active = {"bilibili": 0, "weibo": 0}
+    peak = {"bilibili": 0, "weibo": 0}
+    order: list[str] = []
+
+    async def worker(pf, item):
+        active[pf] += 1
+        peak[pf] = max(peak[pf], active[pf])
+        order.append(f"{pf}:{item}")
+        await asyncio.sleep(0.05)
+        active[pf] -= 1
+        return sch._RoundOutcome(ok=True)
+
+    groups = {"bilibili": ["a", "b", "c", "d"], "weibo": ["x", "y"]}
+    out = asyncio.run(sch._run_platform_rounds(groups, worker, per_platform=3))
+    assert len(out) == 6
+    assert peak["bilibili"] == 3          # 一批 3 个并发（第 4 个排下一批）
+    assert peak["weibo"] == 2             # 队列只有 2 个，就 2 个并发
+    # 队内顺序不变（结果顺序 = 入队顺序）
+    assert [o for o in order if o.startswith("bilibili")][:3] == [
+        "bilibili:a", "bilibili:b", "bilibili:c"]
+
+
+def test_platform_pacer_spaces_same_platform_but_not_across():
+    """R6 的**风控面不变**保证：并发下同平台请求起跑仍被间隔开，跨平台互不阻塞。"""
+    from app.services import scheduler as sch
+
+    pacer = sch._PlatformPacer(0.15, 0.15)
+
+    async def run():
+        starts: list[tuple[str, float]] = []
+
+        async def one(pf: str):
+            await pacer.wait(pf)
+            starts.append((pf, time.monotonic()))
+
+        # 两个平台**同时**起跑：B 站 3 发排队、微博 2 发另开一条通道
+        await asyncio.gather(one("bilibili"), one("weibo"), one("bilibili"),
+                             one("weibo"), one("bilibili"))
+        return starts
+
+    starts = asyncio.run(run())
+    bb = sorted(t for pf, t in starts if pf == "bilibili")
+    wb = sorted(t for pf, t in starts if pf == "weibo")
+    assert len(bb) == 3 and len(wb) == 2
+    # 同平台：相邻起跑被拉开（≥ gap）
+    assert bb[1] - bb[0] >= 0.10 and bb[2] - bb[1] >= 0.10
+    assert wb[1] - wb[0] >= 0.10
+    # 跨平台：两条通道互不排队 —— 两平台的首发几乎同时
+    assert abs(wb[0] - bb[0]) < 0.10
+
+
+def test_dynamics_next_due_honours_min_cycle_from_round_start(db, monkeypatch):
+    """R6（2026-09-13 用户定）：「一轮 <1min → 休息至 1min」且**从轮开始计时**。
+
+    旧写法是在轮**结束**后再等 `max(30, 预算等待) ± 抖动` —— 一轮 33s + 等 57s 的
+    实际周期是 90s，而排期日志看起来只有 57s。现在给 `since`（轮开始时刻），
+    到期时刻被抬到 `since + DYNAMICS_MIN_CYCLE_SECONDS`。
+    """
+    from app.services import scheduler as sch
+
+    # 去掉抖动、用**空预算**（等待=0）→ 到期时刻只由 MIN_GAP 与周期下限决定，可精确断言
+    monkeypatch.setattr(sch, "_tier_delay", lambda base, jitter=0.0: base)
+    monkeypatch.setattr(sch, "_dynamics_budget", sch._PlatformBudget(12))
+    monkeypatch.setattr(sch.settings, "DYNAMICS_MIN_CYCLE_SECONDS", 60.0)
+
+    t0 = time.monotonic()
+    due_without = sch._dynamics_next_due(db)
+    due_with = sch._dynamics_next_due(db, since=t0)
+    # 无 since：老行为 = now + max(MIN_GAP 30, 预算等待 0)
+    assert 29.0 <= due_without - time.monotonic() <= 31.0
+    # 有 since：被抬到「轮开始 + 60s」（下限赢过 30s）
+    assert due_with >= t0 + 60.0 and due_with - t0 <= 61.0
+
+    # 一轮本来就超过周期下限（since 在一小时前）→ 下限不再起作用，回到老行为
+    due_old = sch._dynamics_next_due(db, since=time.monotonic() - 3600)
+    assert 29.0 <= due_old - time.monotonic() <= 31.0
 
 
 def test_run_platform_rounds_cools_down_single_platform():
