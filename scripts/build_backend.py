@@ -33,6 +33,11 @@ HIDDEN_IMPORTS = [
     "uvicorn.protocols.websockets.websockets_impl",
     "uvicorn.lifespan",
     "uvicorn.lifespan.on",
+    # 词云分词（devlog/061）：jieba 是延迟导入的（不进冷启动关键路径），
+    # PyInstaller 的静态分析看不到它 → 必须显式声明，否则冻结版一用词云就 ImportError。
+    # 它的词典数据（dict.txt，约 5MB）由 PyInstaller 的 jieba hook 自动带上；
+    # 若某次打包后兜底成了 regex 引擎，先查这里（/v3 wordcloud 会照常工作，只是精度下降）。
+    "jieba",
 ]
 
 

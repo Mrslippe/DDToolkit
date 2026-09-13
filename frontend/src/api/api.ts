@@ -1,4 +1,4 @@
-import type { Account, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveSession, LiveSessionDetail, PoolItem, PostPage, PostStats, ThirdpartyVtuber, UpdatePostsResult, VTuber } from './types'
+import type { Account, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, PoolItem, PostPage, PostStats, ThirdpartyVtuber, UpdatePostsResult, VTuber } from './types'
 
 /**
  * API 基地址：
@@ -103,6 +103,17 @@ export const api = {
   liveSessionDetail: (accountId: number, liveId: string) =>
     request<LiveSessionDetail>(
       `/account/${accountId}/live-sessions/${encodeURIComponent(liveId)}`,
+    ),
+
+  /**
+   * **按需**用原始弹幕自建词云（2026-09-13，danmakus 上游 `extra.wordCloud` 断供后）。
+   *
+   * 刻意与详情端点分开：自建要拉整场原始弹幕（实测单场可达 5 万条 / 数 MB），
+   * 不能塞进"每次开弹窗"的请求里。用户点按钮才调（见 LiveSessionDialog）。
+   */
+  buildLiveSessionWordCloud: (accountId: number, liveId: string) =>
+    request<LiveDanmakuInfo>(
+      `/account/${accountId}/live-sessions/${encodeURIComponent(liveId)}/wordcloud`,
     ),
 
   /** 用户校正场次分类（v2 第⑦信号：override 最高优先，并反哺系列/词库） */

@@ -8,3 +8,6 @@ alembic>=1.13.0
 python-dotenv>=1.0.0
 pytest>=7.0.0
 qrcode>=7.0.0
+# 弹幕分词（词云自建，2026-09-13 devlog/061）：纯 Python、无编译依赖，
+# 自带词典数据文件；加载 ~0.7s、之后 ~0.1ms/条（启动期预热，见 main.py::_warm_tokenizer）
+jieba>=0.42.1

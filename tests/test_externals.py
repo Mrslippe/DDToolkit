@@ -294,6 +294,44 @@ def test_parse_live_summary_wordcloud():
     assert _parse_live_summary({"data": None})["word_cloud"] == []
 
 
+def test_parse_live_summary_reports_upstream_wordcloud_status():
+    """回归（2026-09-13，devlog/060 实测）：`extra` 字段**整个消失**时要报 upstream_absent。
+
+    背景：上游原本在 `data.live.extra.wordCloud` 里给预计算好的热词，2026-09-13 实测
+    该字段整个不存在（不是空对象）。前端需要据此显示「上游未提供 + 用弹幕自建」，
+    所以解析层必须把"有没有 extra"如实带出来，而不是只给一个空 `word_cloud`。
+    """
+    from app.services.externals.danmakus import _parse_live_summary
+
+    # ① 正常：有 wordCloud
+    ok = _parse_live_summary({"total": 100, "data": {"live": {
+        "danmakusCount": 100,
+        "extra": {"wordCloud": {"好耶": 5}, "onlineRank": {"1": 9}}}}})
+    assert ok["status"] == "upstream"
+    assert ok["has_extra"] is True
+    assert ok["word_cloud"] == [("好耶", 5)]
+
+    # ② 断供：extra 整个缺失 → upstream_absent + has_extra False
+    absent = _parse_live_summary({"total": 100, "data": {"live": {
+        "danmakusCount": 100}}})
+    assert absent["status"] == "upstream_absent"
+    assert absent["has_extra"] is False
+    assert absent["word_cloud"] == []
+
+    # ③ extra 在、但 wordCloud 空（或全是 0 次）→ 同样算"上游没给词云"
+    empty = _parse_live_summary({"total": 100, "data": {"live": {
+        "danmakusCount": 100,
+        "extra": {"wordCloud": {}, "onlineRank": {"1": 9}}}}})
+    assert empty["has_extra"] is True
+    assert empty["status"] == "upstream_absent"
+    zero = _parse_live_summary({"total": 1, "data": {"live": {
+        "extra": {"wordCloud": {"x": 0}}}}})
+    assert zero["status"] == "upstream_absent"
+
+    # ④ live 形状都不对时也不能抛错
+    assert _parse_live_summary({"data": {"live": None}})["status"] == "upstream_absent"
+
+
 def test_parse_live_events():
     from app.services.externals.danmakus import _parse_live_events
     payload = {"data": {"danmakus": [

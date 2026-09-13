@@ -84,7 +84,13 @@ def _auth_headers(token: str | None) -> dict:
 
 def _parse_live_summary(payload: dict) -> dict | None:
     """/api/v2/live 响应 → 摘要（A 组：弹幕总量/词云 top40 + 观看/点赞/打赏/互动等
-    场次级指标 + 在线时间线峰值 + 录制版本/频道累计）。形状判空后解析。"""
+    场次级指标 + 在线时间线峰值 + 录制版本/频道累计）。形状判空后解析。
+
+    `status` 字段（2026-09-13 新增，见 devlog/061）报告**上游是否还提供词云**：
+    - `upstream`：拿到了 `extra.wordCloud` 且非空 → 前端直接展示；
+    - `upstream_absent`：`extra` 整个缺失，或 `extra` 在内但 `wordCloud` 为空
+      → 前端显示「上游未提供热词」并给出「用弹幕自建」按钮（**不自动回退**）。
+    """
     if not isinstance(payload, dict):
         return None
     total = payload.get("total")
@@ -103,12 +109,17 @@ def _parse_live_summary(payload: dict) -> dict | None:
     if not isinstance(live, dict):
         return {
             "total": total, "danmakus_count": None, "word_cloud": [],
+            "has_extra": False, "status": "upstream_absent",
             "watch_count": None, "like_count": None, "pay_count": None,
             "interaction_count": None, "online_rank": None, "comment_count": None,
             "is_full": None, "is_merged": None, "peaks": [], "versions": [],
             "channel": {},
         }
-    extra = live.get("extra") or {}
+    # ⚠️ `extra` 缺失时**不能**当成"有 extra 但没词云"：2026-09-13 实测该字段是
+    # 整个消失（而非置空）——区分开才能让前端文案说清是"上游没给"还是"本场没弹幕"。
+    raw_extra = live.get("extra")
+    has_extra = isinstance(raw_extra, dict)
+    extra = raw_extra if has_extra else {}
     wc = extra.get("wordCloud") or {}
     top = []
     if isinstance(wc, dict):
@@ -120,6 +131,7 @@ def _parse_live_summary(payload: dict) -> dict | None:
             if v > 0:
                 top.append((str(k), v))
         top.sort(key=lambda kv: -kv[1])
+    status = "upstream" if top else "upstream_absent"
     # 在线人数时间线（{ms: count}）→ 峰值 top5（高光时刻）
     timeline = extra.get("onlineRank") or {}
     peaks: list[dict] = []
@@ -144,6 +156,8 @@ def _parse_live_summary(payload: dict) -> dict | None:
         "total": total,
         "danmakus_count": live.get("danmakusCount"),
         "word_cloud": top[:40],
+        "status": status,
+        "has_extra": has_extra,
         "watch_count": live.get("watchCount"),
         "like_count": live.get("likeCount"),
         "pay_count": live.get("payCount"),
@@ -212,6 +226,61 @@ async def fetch_live_summary(live_id: str) -> dict | None:
                        f"code={data.get('code') if isinstance(data, dict) else '?'}")
         return None
     return _parse_live_summary(data.get("data"))
+
+
+DANMAKUS_V3_BASE = "/api/v3/lives"
+# v3 弹幕切片：一次最多 100000 条（spec 声明上限）。单场实测 18764 条 ≈ 2MB 量级，
+# 因此这里取 20000 —— 覆盖绝大多数场次；超出部分按 offset 翻页（见 fetch_raw_danmakus）。
+_V3_DANMAKU_PAGE = 20000
+_V3_DANMAKU_MAX = 100000
+
+
+async def fetch_raw_danmakus(live_id: str, max_records: int = _V3_DANMAKU_MAX
+                             ) -> list[dict] | None:
+    """公开端点（免鉴权，2026-09-13 实测）：场次**原始弹幕记录**切片。
+
+    `GET /api/v3/lives/{liveId}/danmakus?offset=&limit=` → `data.frame.records`，
+    每条记录形如 `{"ts":…, "type":…, "payloadKind":…, "payload":{…}}`，
+    **payload 已被服务端解码成 JSON 对象**（无需 MessagePack 解析）。
+
+    这是词云自建路径的数据源：上游 `/api/v2/live` 的 `extra.wordCloud` 断供后
+    （devlog/060），改由本地分词统计（见 `app/services/danmaku_words.py`）。
+
+    返回 `None` 表示**失败**（网络/HTTP/形状异常），`[]` 表示**成功但没有记录**——
+    调用方据此区分"拉取失败"与"本场无弹幕"。
+    """
+    records: list[dict] = []
+    offset = 0
+    try:
+        async with new_async_client(30.0) as client:
+            while offset < max_records:
+                resp = await client.get(
+                    f"{DANMAKUS_BASE}{DANMAKUS_V3_BASE}/{live_id}/danmakus",
+                    params={"offset": offset, "limit": _V3_DANMAKU_PAGE},
+                    headers=BROWSER_HEADERS,
+                )
+                if resp.status_code != 200:
+                    logger.warning(f"danmakus v3 弹幕 HTTP {resp.status_code} "
+                                   f"liveId={live_id} offset={offset}")
+                    return None
+                data = resp.json()
+                if not isinstance(data, dict) or data.get("code") != 200:
+                    logger.warning(f"danmakus v3 弹幕响应异常 liveId={live_id}: "
+                                   f"code={data.get('code') if isinstance(data, dict) else '?'}")
+                    return None
+                inner = data.get("data") or {}
+                frame = inner.get("frame") or {}
+                page = frame.get("records") or []
+                if not isinstance(page, list):
+                    return None
+                records.extend(r for r in page if isinstance(r, dict))
+                if not page or not inner.get("hasMore"):
+                    break
+                offset += len(page)
+    except (httpx.HTTPError, ValueError) as e:
+        logger.warning(f"danmakus v3 弹幕失败 liveId={live_id}: {type(e).__name__}: {e}")
+        return None
+    return records
 
 
 async def fetch_live_events(live_id: str) -> list[dict]:

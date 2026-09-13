@@ -306,11 +306,28 @@ class LiveWordOut(BaseModel):
 
 
 class LiveDanmakuInfo(BaseModel):
-    """弹幕信息（danmakus /api/v2/live，2026-09-07 接入：总量 + 词云热词）。"""
+    """弹幕信息（danmakus：总量 + 词云热词）。
+
+    `source` / `wc_status` 是 2026-09-13 新增（devlog/061）—— 用于在 UI 上**区分**
+    三种此前混在「暂无热词数据」里的情况：
+
+    | wc_status | 含义 | UI |
+    |---|---|---|
+    | `upstream` | 上游 `/api/v2/live` 直接给了 `extra.wordCloud` | 正常展示词云 |
+    | `upstream_absent` | 上游**没给**热词（2026-09-13 实测 `extra` 字段整个消失） | 提示"上游未提供"+ 给「用弹幕自建」按钮 |
+    | `self_built` | 用户点击后由本地分词自建（原始弹幕来自 `/api/v3/.../danmakus`） | 展示词云 + 标注来源为本地统计 |
+    | `no_danmaku` | 本场确实没有弹幕记录（`total=0`） | 提示"本场无弹幕记录" |
+    | `fetch_failed` | 拉取失败（网络/HTTP） | 提示"拉取失败，可重试" |
+    """
     total: int | None = None
-    top_keywords: list[str] = []
+    top_keywords: list[str] = []               # 兼容字段：仅词（旧前端）
     top_words: list[LiveWordOut] = []          # 带次数的词条（气泡词云 + hover 次数）
     hot_segments: list[dict] = []              # 预留：[{start, end, count}] 高浓度片段
+    # 词云来源（D4 口径）
+    source: str | None = None                  # upstream | self（自建）
+    wc_status: str | None = None               # 见上表
+    text_count: int | None = None              # 自建时：参与统计的文本弹幕条数
+    engine: str | None = None                  # 自建时：分词引擎名（jieba / regex）
 
 
 class LiveAnalysisInfo(BaseModel):

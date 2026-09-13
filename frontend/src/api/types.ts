@@ -132,7 +132,24 @@ export interface LiveWord {
   count: number
 }
 
-/** 弹幕信息（预留接口：danmakus 场次级详细数据接入后填充，当前为 null） */
+/** 词云来源（2026-09-13，devlog/061）：上游给的、还是本地自建的 */
+export type WordCloudSource = 'upstream' | 'self'
+
+/**
+ * 词云状态 —— 用于在 UI 上**区分**此前混在「暂无热词数据」里的几种情况。
+ *
+ * | 值 | 含义 | UI |
+ * |---|---|---|
+ * | `upstream` | 上游 `/api/v2/live` 直接给了热词 | 正常展示 |
+ * | `upstream_absent` | 上游**没给**热词（2026-09-13 实测该字段整个消失） | 提示 + 「用弹幕自建」按钮 |
+ * | `self_built` | 用户点击后由本地分词自建 | 展示 + 标注来源 |
+ * | `no_danmaku` | 本场确实没有弹幕记录 | 提示「本场无弹幕记录」 |
+ * | `fetch_failed` | 拉取失败 | 提示「拉取失败，可重试」 |
+ */
+export type WordCloudStatus =
+  | 'upstream' | 'upstream_absent' | 'self_built' | 'no_danmaku' | 'fetch_failed'
+
+/** 弹幕信息（danmakus 场次级：总量 + 词云 + 来源标记） */
 export interface LiveDanmakuInfo {
   total?: number | null
   top_keywords?: string[]
@@ -140,6 +157,14 @@ export interface LiveDanmakuInfo {
   top_words?: LiveWord[]
   /** 预留：[{ start, end, count }] 高浓度片段 */
   hot_segments?: Record<string, unknown>[]
+  /** 词云来源：`upstream`=上游给的 / `self`=本地自建 */
+  source?: WordCloudSource | null
+  /** 词云状态（见 `WordCloudStatus`）——UI 据此决定展示词云还是给按钮 */
+  wc_status?: WordCloudStatus | null
+  /** 自建时：参与统计的文本弹幕条数 */
+  text_count?: number | null
+  /** 自建时：分词引擎名（jieba / regex） */
+  engine?: string | null
 }
 
 /** 直播内容分析（预留接口：内容分析服务接入后填充，当前为 null） */

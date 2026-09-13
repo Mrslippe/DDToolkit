@@ -53,6 +53,22 @@ async def _warm_wbi() -> None:
         logger.warning(f"WBI 密钥预热失败（不影响启动）: {type(e).__name__}: {e}")
 
 
+async def _warm_tokenizer() -> None:
+    """分词词典预热（2026-09-13，词云自建）：避免用户**首次点「用弹幕自建」时**卡 0.7s。
+
+    jieba 首次 `cut` 要构建前缀词典（本机实测 0.70s，之后 ~0.1ms/条）。
+    本函数是 async 但 jieba 是同步 CPU 活，因此丢到线程里跑，别堵事件循环 ——
+    与 `_warm_wbi` 并行，两者都在 lifespan 里 create_task，不拖慢就绪。
+    失败只记日志：真到用时 `get_tokenizer` 会退回 regex 引擎，功能在、精度降。
+    """
+    try:
+        from app.services.danmaku_words import get_tokenizer
+        await asyncio.to_thread(get_tokenizer().warmup)
+        logger.info("分词词典预热完成")
+    except Exception as e:  # 预热失败不影响启动
+        logger.warning(f"分词词典预热失败（词云将退回正则分词）: {type(e).__name__}: {e}")
+
+
 # ── 统一 schema 管理（alembic 迁移链为准） ──────────────────────────────
 
 # 迁移链最新版本。新加迁移时必须同步更新（tests 会断言与 alembic head 一致）。
@@ -220,6 +236,8 @@ async def lifespan(app: FastAPI):
     auth_task = asyncio.create_task(auth_manager.run_maintenance())
     # WBI 密钥预热（v0.9.4）：与 auth 心跳并行，让首次收录不必等一次 nav 往返
     wbi_task = asyncio.create_task(_warm_wbi())
+    # 分词词典预热（2026-09-13，词云自建）：让首次「用弹幕自建」不必等 0.7s 建词典
+    tok_task = asyncio.create_task(_warm_tokenizer())
     # 时效分层调度（v0.6.1）：T0 直播状态独立线程（60s）+ T1/T2/T3a 分层轮询
     # （启动链语义并入 T1→T2 首轮；手动任务优先，仅 T0 与之并行）
     start_live_poller()
@@ -233,7 +251,8 @@ async def lifespan(app: FastAPI):
     logger.info("关闭中...")
     auth_task.cancel()
     wbi_task.cancel()
-    for task in (auth_task, wbi_task):
+    tok_task.cancel()
+    for task in (auth_task, wbi_task, tok_task):
         try:
             await task
         except asyncio.CancelledError:

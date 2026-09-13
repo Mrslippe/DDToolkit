@@ -31,6 +31,7 @@ from app.services.live_type import (
     infer_category, plan_series, build_learned, EDITABLE_CATEGORY_KEYS,
 )
 from app.services.externals.danmakus import fetch_live_summary, fetch_live_events
+from app.services.danmaku_cloud import build_word_cloud
 from app.schemas.vtuber import (LiveDanmakuInfo, LiveMetricsOut, LiveEventOut,
                                 LiveWordOut)
 from app.services.post_text import extract_post_text
@@ -435,11 +436,24 @@ async def live_session_detail(account_id: int, live_id: str,
         summary, evts = await asyncio.gather(
             fetch_live_summary(live_id), fetch_live_events(live_id))
         if summary:
+            wc = summary.get("word_cloud") or []
+            # D4（devlog/061）：把「上游给没给热词」如实报给前端 ——
+            # 上游断供时前端要显示「自建」按钮，而不是干巴巴一句「暂无热词数据」。
+            #
+            # ⚠️ `status` 以**实际拿到的词条**为准，不盲信 summary 里的字段：
+            # 曾经写成 `summary.get("status") or "upstream_absent"`，于是当 summary 没带
+            # status（旧调用口径/测试桩）时，会出现 `source='upstream'` 与
+            # `wc_status='upstream_absent'` **自相矛盾**的组合（被 test_live_session_detail
+            # 当场抓出）。派生量就地从同一份数据推导，别让它依赖上游是否恰好填了那个键。
+            status = summary.get("status")
+            if status not in ("upstream", "upstream_absent"):
+                status = "upstream" if wc else "upstream_absent"
             danmaku = LiveDanmakuInfo(
                 total=summary.get("total"),
-                top_keywords=[w for w, _c in (summary.get("word_cloud") or [])][:40],
-                top_words=[LiveWordOut(text=w, count=int(c))
-                           for w, c in (summary.get("word_cloud") or [])][:40],
+                top_keywords=[w for w, _c in wc][:40],
+                top_words=[LiveWordOut(text=w, count=int(c)) for w, c in wc][:40],
+                source="upstream" if status == "upstream" else None,
+                wc_status=status,
             )
             metrics = LiveMetricsOut(
                 watch_count=summary.get("watch_count"),
@@ -468,6 +482,49 @@ async def live_session_detail(account_id: int, live_id: str,
 
 class LiveCategoryUpdate(BaseModel):
     category: str
+
+
+@router.get("/account/{account_id}/live-sessions/{live_id}/wordcloud",
+            response_model=LiveDanmakuInfo)
+async def live_session_wordcloud(account_id: int, live_id: str,
+                                 db: Session = Depends(get_db)):
+    """**按需**用原始弹幕自建词云（2026-09-13，danmakus 上游断供后的方案 a）。
+
+    为什么不直接并进详情端点（用户 2026-09-13 定，见 devlog/061）：
+    上游 `/api/v2/live` 的 `extra.wordCloud` 已断供，回退到自建要拉**整场原始弹幕**
+    （实测单场 18764 条、约 2MB），**不能悄悄塞进每次开弹窗的请求**里 ——
+    那会把"打开详情"从一次轻请求变成一次重请求，而多数场次用户并不看词云。
+
+    所以：详情端点只如实报告 `wc_status=upstream_absent`，由前端显示按钮，
+    **用户点击后**才调本端点。结果在进程内缓存（不落库，见 `danmaku_cloud._CACHE`）。
+
+    返回的 `wc_status` 区分三种结果：`self_built` / `no_danmaku` / `fetch_failed`。
+    """
+    account, vtuber, _event_dates, _overrides = _live_infer_ctx(db, account_id)
+    if not account:
+        raise HTTPException(404, f"Account id={account_id} 不存在")
+    sessions = LiveSessionRepo(db).merged(account_id)
+    s = next((x for x in sessions if x.get("live_id") == live_id), None)
+    if s is None:
+        raise HTTPException(404, f"LiveSession live_id={live_id} 不存在")
+    if "danmakus" not in (s.get("source") or "").split("+"):
+        # 非 danmakus 来源（例：纯 feed 场次，live_id 是 B 站数字 id）→ 没有可拉的弹幕
+        return LiveDanmakuInfo(wc_status="no_danmaku", source=None)
+
+    result = await build_word_cloud(live_id)
+    status = result.get("status")
+    wc_status = {"ok": "self_built", "no_danmaku": "no_danmaku",
+                 "fetch_failed": "fetch_failed"}.get(status, "fetch_failed")
+    words = result.get("words") or []
+    return LiveDanmakuInfo(
+        total=result.get("total"),
+        top_keywords=[w for w, _c in words],
+        top_words=[LiveWordOut(text=w, count=int(c)) for w, c in words],
+        source="self" if wc_status == "self_built" else None,
+        wc_status=wc_status,
+        text_count=result.get("text_count"),
+        engine=result.get("engine"),
+    )
 
 
 @router.put("/account/{account_id}/live-sessions/{live_id}/category",

@@ -859,11 +859,19 @@ def test_live_session_detail_endpoint(client, monkeypatch):
     assert d["category_from"] == "title"
     assert d["segment_count"] == 1
     # 弹幕摘要已接入（词云 top 词按次数降序 + 带次数词条；A 组指标 + B 组事件）
+    # 2026-09-13（devlog/061）：新增 source/wc_status 用于 UI 区分词云来源。
+    # ⚠️ 这里刻意**不给 stub 填 `status`** —— 端点的契约是"以实际拿到的词条为准"，
+    # 所以有词云就必须报 upstream（曾经盲信 summary["status"] 而报出
+    # `source='upstream'` + `wc_status='upstream_absent'` 的矛盾组合）。
     assert d["danmaku"] == {"total": 39316,
                             "top_keywords": ["好耶", "MELODY"],
                             "top_words": [{"text": "好耶", "count": 3195},
                                           {"text": "MELODY", "count": 210}],
-                            "hot_segments": []}
+                            "hot_segments": [],
+                            "source": "upstream",
+                            "wc_status": "upstream",
+                            "text_count": None,
+                            "engine": None}
     m = d["metrics"]
     assert m["watch_count"] == 16216 and m["like_count"] == 163579
     assert m["pay_count"] == 542 and m["interaction_count"] == 1127
@@ -881,3 +889,104 @@ def test_live_session_detail_endpoint(client, monkeypatch):
     # 未收录 live_id → 404；账号不存在 → 404
     assert client.get(f"/account/{aid}/live-sessions/nope").status_code == 404
     assert client.get("/account/99999/live-sessions/uuid-a").status_code == 404
+
+
+# ── 词云自建端点（2026-09-13，devlog/061：上游 extra.wordCloud 断供后的方案 a） ──
+
+def _mk_session_for_cloud(client) -> tuple[int, int]:
+    vid = client.post("/vtuber", json={"name": "词云"}).json()["id"]
+    aid = client.post(
+        f"/vtuber/{vid}/accounts",
+        json={"platform": "bilibili", "platform_uid": "555"},
+    ).json()["id"]
+    db = TestingSession()
+    db.add(LiveSession(account_id=aid, source="danmakus", live_id="uuid-wc",
+                       title="发布会", start_at=datetime(2026, 9, 9, 12, 0),
+                       end_at=datetime(2026, 9, 9, 14, 0)))
+    db.add(LiveSession(account_id=aid, source="feed", live_id="feed-wc",
+                       title="纯 feed 场次", start_at=datetime(2026, 9, 10, 12, 0)))
+    db.commit()
+    db.close()
+    return vid, aid
+
+
+def test_wordcloud_endpoint_self_builds(client, monkeypatch):
+    """点按钮才拉：端点返回自建词云，并如实标注来源与统计口径。"""
+    _vid, aid = _mk_session_for_cloud(client)
+
+    async def fake_records(live_id: str, max_records: int = 0):
+        assert live_id == "uuid-wc"           # 必须按对外 live_id 去拉
+        return [{"payload": {"rawText": "苹果 苹果"}},
+                {"payload": {"rawText": "苹果 华为"}},
+                {"payload": {"rawText": "华为 华为"}},
+                {"payload": None},             # 无文本记录
+                {"payload": {"roomEmojiId": 1}}]
+
+    monkeypatch.setattr("app.services.danmaku_cloud.fetch_raw_danmakus", fake_records)
+    from app.services.danmaku_cloud import clear_cache
+    clear_cache()
+
+    d = client.get(f"/account/{aid}/live-sessions/uuid-wc/wordcloud").json()
+    assert d["wc_status"] == "self_built"
+    assert d["source"] == "self"
+    assert d["total"] == 5                     # 原始记录条数（含无文本的）
+    assert d["text_count"] == 3                # 参与统计的文本弹幕数
+    assert d["engine"] == "jieba"
+    words = {w["text"]: w["count"] for w in d["top_words"]}
+    assert words["苹果"] == 3 and words["华为"] == 3
+    assert d["top_keywords"] and set(d["top_keywords"]) == set(words)
+
+
+def test_wordcloud_endpoint_reports_no_danmaku(client, monkeypatch):
+    """成功拉到记录但全是礼物/进场 → no_danmaku（与"拉取失败"区分）。"""
+    _vid, aid = _mk_session_for_cloud(client)
+
+    async def only_gifts(live_id: str, max_records: int = 0):
+        return [{"payload": None}, {"payload": {"name": "礼物", "count": 1}}]
+
+    monkeypatch.setattr("app.services.danmaku_cloud.fetch_raw_danmakus", only_gifts)
+    from app.services.danmaku_cloud import clear_cache
+    clear_cache()
+
+    d = client.get(f"/account/{aid}/live-sessions/uuid-wc/wordcloud").json()
+    assert d["wc_status"] == "no_danmaku"
+    assert d["top_words"] == [] and d["source"] is None
+
+
+def test_wordcloud_endpoint_reports_fetch_failed(client, monkeypatch):
+    """上游不可达 → fetch_failed（前端据此给「重试」而不是「自建」）。"""
+    _vid, aid = _mk_session_for_cloud(client)
+
+    async def boom(live_id: str, max_records: int = 0):
+        return None
+
+    monkeypatch.setattr("app.services.danmaku_cloud.fetch_raw_danmakus", boom)
+
+    d = client.get(f"/account/{aid}/live-sessions/uuid-wc/wordcloud").json()
+    assert d["wc_status"] == "fetch_failed"
+    assert d["top_words"] == []
+
+
+def test_wordcloud_endpoint_rejects_non_danmakus_session(client, monkeypatch):
+    """纯 feed 场次（live_id 是 B 站数字 id）没有可拉弹幕 → no_danmaku，且不打网络。"""
+    _vid, aid = _mk_session_for_cloud(client)
+
+    async def should_not_be_called(live_id: str, max_records: int = 0):
+        raise AssertionError("非 danmakus 来源不应发起弹幕请求")
+
+    monkeypatch.setattr("app.services.danmaku_cloud.fetch_raw_danmakus",
+                        should_not_be_called)
+
+    d = client.get(f"/account/{aid}/live-sessions/feed-wc/wordcloud").json()
+    assert d["wc_status"] == "no_danmaku"
+    assert d["source"] is None
+
+
+def test_wordcloud_endpoint_404s(client):
+    vid = client.post("/vtuber", json={"name": "404"}).json()["id"]
+    aid = client.post(
+        f"/vtuber/{vid}/accounts",
+        json={"platform": "bilibili", "platform_uid": "777"},
+    ).json()["id"]
+    assert client.get(f"/account/{aid}/live-sessions/nope/wordcloud").status_code == 404
+    assert client.get("/account/999999/live-sessions/x/wordcloud").status_code == 404
