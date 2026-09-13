@@ -64,3 +64,5 @@ frontend/src/assets/fonts/_nondistribute/
 docs/design/**/_nondistribute/
 # 本机专用启动脚本（内含个人数据目录路径，绝不入库）
 scripts/backend-8000.bat
+# 工具卸载残留备份（非本项目资产：DSH 安装器的 package.json / lock / 设置副本）
+_dsh_uninstall_backup/

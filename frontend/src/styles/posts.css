@@ -520,10 +520,11 @@
    `.faction-badge` / `.pill-logo` 随之删除（企划的展示与编辑迁往
    「档案设置」窗口，见 docs/TODO.md P8-4）。 */
 
-/* 类型筛选行：chips + 搜索/时间范围筛选。
-   2026-09-08（用户）：窄窗口下右侧工具组（搜索 190 + 时间筛选 + 已删除）本身
-   比容器宽，`flex-wrap: nowrap` 会把整排按钮推出窗口右缘（实测溢出 268px）。
-   改为允许换行：工具组整体掉到第二行，仍然全部可点，不再出窗。 */
+/* 类型筛选行：chips + 右侧工具（搜索浮片 + 筛选钮）。
+   2026-09-08（用户）：窄窗口下右侧工具组本身比容器宽，`flex-wrap: nowrap` 会把整排按钮
+   推出窗口右缘（实测溢出 268px）。改为允许换行：工具组整体掉到第二行，仍然全部可点。
+   2026-09-10（P10-A）：工具组由「搜索 + 时间 + 已删 + 已归档」四件收敛为「搜索 + 筛选」
+   两件，溢出压力随之消失（换行兜底保留）。 */
 .type-chips-row {
   display: flex;
   align-items: center;
@@ -538,7 +539,7 @@
   margin-left: auto;
 }
 
-/* 筛选行右侧工具：搜索浮片 + 时间筛选（浮片语言，与侧栏工具行一致） */
+/* 筛选行右侧工具：搜索浮片 + 筛选钮（浮片语言，与侧栏工具行一致） */
 .chips-tools {
   display: flex;
   align-items: center;
@@ -583,100 +584,332 @@
   box-shadow: inset 0 0 0 1.5px var(--c-primary), 0 1px 4px rgba(0, 0, 0, 0.18);
 }
 
-.time-wrap {
+/* ── 筛选钮 + 筛选弹窗（P10-A，2026-09-10 用户）──
+   此前右侧是「时间钮 + 已删钮 + 已归档钮」三件并排（越挤越长、类型 chips 被迫换行），
+   现收敛为单钮 + 单弹窗；分组语言复用 layout.css 的 .pop-group/.pop-label/.pop-chips/.pop-actions
+   （与侧栏筛选弹窗同源），面板规格走 §C6（12px 圆角 + 发丝边 + --shadow-dialog + lc-dlg-pop 0.16s）。 */
+.pfilter-wrap {
   position: relative;
+  flex-shrink: 0;
 }
 
-/* 时间筛选钮：配方走 .float-pill（斜切白卡）；overflow 会裁掉 ::before 阴影，
-   长区间文案的截断下沉到 .time-btn-label */
-.time-btn {
-  max-width: 240px;
+/* 触发器：文案「筛选」/「筛选 · N」，右下留出 .pill-caret 的角位 */
+.pfilter-btn {
+  min-width: 68px;
+  padding: 0 16px 0 10px;
 }
 
-.time-btn-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.time-pop {
+/* 宽度：两月历并排需要「右栏宽 ≥ 544」，故按窗口退让 `100vw − 574`
+   （574 = 导航栏 50 + 侧栏 492 + 筛选条左右内距 32），保证弹窗永不被
+   `.posts-panel` 的 overflow:hidden 裁掉左月历。
+   高度：弹窗顶端最坏落在 243px（顶栏 40 + hero/操作行 + 筛选条窄窗换行），
+   再留 9px 间距 → 可用高度 = 100vh − 252；**内容超限走内部覆盖式滚动**
+   （非原生滚动条），而不是被右栏裁掉底部「重置」。
+   两条不变量由 scripts/ui_probe.py 在真实浏览器里断言。 */
+.post-filter-pop {
   position: absolute;
   right: 0;
   top: calc(100% + 6px);
   z-index: 30;
-  width: 240px;
-  padding: 12px;
+  width: min(512px, calc(100vw - 574px));
+  max-height: calc(100vh - 252px);
+  overflow: hidden;
+  padding: 10px;
   background: #fff;
   border: 1px solid var(--c-border);
-  /* 弹窗层契约（v0.6.1 用户参考风格）：圆角卡片 12px + 柔和阴影 + 发丝边；
-     入场动画统一 lc-dlg-pop（2026-09-07 二级界面审查 B4） */
   border-radius: var(--radius-dialog);
   box-shadow: var(--shadow-dialog);
   animation: lc-dlg-pop 0.16s cubic-bezier(0.22, 0.61, 0.36, 1);
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 
-.time-pop label {
+/* 三分区滚动体（覆盖式滚动条，UI-MAP F 节标准）：与 .vd-settings-scroll 同款契约 */
+.pfilter-scroll {
+  flex: 1;
+  min-height: 0;
+}
+
+.pfilter-scroll .os-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* 带图标的 chip（已删）与文字 chip 同高对齐；高度比侧栏弹窗收 2px 省纵向空间 */
+.post-filter-pop .filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+}
+
+/* 分组标题行：左侧标题 + 右侧已应用条件回显（仅本弹窗；侧栏 .pop-label 不受影响） */
+.post-filter-pop .pop-label {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
-  font-size: 12.5px;
+}
+
+/* 底部「重置」驻留（不参与滚动体）：与 §C6 头部驻留同思路，短窗口下也够得着 */
+.post-filter-pop .pop-actions {
+  flex: none;
+}
+
+.pop-label-note {
+  font-style: normal;
+  font-weight: 500;
+  font-size: 11.5px;
   color: var(--c-text-sub);
-  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
-.time-pop input[type='date'] {
-  flex: 1;
-  height: 28px;
-  padding: 0 6px;
-  border: 1px solid var(--c-border);
-  border-radius: 8px;
-  outline: none;
-  font-family: inherit;
-  font-size: 12.5px;
-  color: var(--c-text-main);
-  min-width: 0;
-}
-
-.time-pop input[type='date']:focus {
-  border-color: var(--c-primary);
-}
-
-.time-pop-actions {
+/* ── 双月历区间选择器（common/DateRangePicker）──
+   参考图形态：左右两块月份面板各自独立翻月 + 星期表头一…日 + 恒 6 行 7 列 +
+   区间连续色带（两端 6px 圆角）+ 端点主色实底白字 + 今天「描边环 + 数字下圆点」+
+   底部预设六枚与主色「确认」。 */
+.drp {
   display: flex;
-  justify-content: flex-end;
+  flex-direction: column;
   gap: 8px;
-  border-top: 1px solid var(--c-border);
-  padding-top: 10px;
 }
 
-.time-pop-actions button {
-  height: 28px;
-  padding: 0 14px;
+.drp-panels {
+  display: flex;
+  gap: 12px;
+}
+
+.drp-panel {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.drp-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 18px;
+}
+
+.drp-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--c-text-main);
+  font-variant-numeric: tabular-nums;
+}
+
+.drp-nav {
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--c-text-sub);
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.drp-nav:hover {
+  background: var(--pill-bg-hover);
+  color: var(--c-text-main);
+}
+
+.drp-wd,
+.drp-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+}
+
+.drp-wd span {
+  height: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--c-text-sub);
+}
+
+.drp-day {
+  position: relative;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: none;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+/* 色带载体单独一层：端点圆角只切它，不影响数字与今天环 */
+.drp-day::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: transparent;
+}
+
+.drp-day.band::before {
+  background: var(--sel-bg);
+}
+
+.drp-day.edge-l::before {
+  border-top-left-radius: 6px;
+  border-bottom-left-radius: 6px;
+}
+
+.drp-day.edge-r::before {
+  border-top-right-radius: 6px;
+  border-bottom-right-radius: 6px;
+}
+
+.drp-day.sel::before {
+  background: var(--c-primary-deep);
+}
+
+/* 悬停预览的临时终点：浅底 + 主色描边，不冒充已落定端点 */
+.drp-day.preview::before {
+  background: var(--sel-bg);
+  box-shadow: inset 0 0 0 1.5px var(--c-primary-deep);
+}
+
+.drp-day:not(.band):not(.sel):not(.preview):hover::before {
+  background: var(--sel-bg-hover);
+}
+
+.drp-day-num {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 23px;
+  height: 20px;
+  border-radius: 7px;
+  font-size: 12px;
+  color: var(--c-text-main);
+  font-variant-numeric: tabular-nums;
+  transition: color 0.15s ease;
+}
+
+.drp-day:hover .drp-day-num {
+  color: var(--c-primary-deep);
+}
+
+/* 非本月补位格淡化：与 LiveCalendar 同口径 */
+.drp-day.pad .drp-day-num {
+  opacity: 0.3;
+}
+
+.drp-day.sel .drp-day-num {
+  color: #fff;
+  font-weight: 600;
+}
+
+.drp-day.preview .drp-day-num {
+  color: var(--c-primary-deep);
+  font-weight: 600;
+}
+
+/* 今天：描边环 + 数字下圆点（参考图里被圈住的 10 号格） */
+.drp-day.today .drp-day-num {
+  box-shadow: inset 0 0 0 1.5px var(--c-primary-deep);
+}
+
+.drp-day.today.sel .drp-day-num {
+  box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.92);
+}
+
+.drp-day.today::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 1px;
+  z-index: 1;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  transform: translateX(-50%);
+  background: var(--c-primary-deep);
+}
+
+.drp-day.today.sel::after {
+  background: #fff;
+}
+
+.drp-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-top: 1px solid var(--c-border);
+  padding-top: 8px;
+}
+
+.drp-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.drp-preset {
+  height: 24px;
+  padding: 0 10px;
   border: 1px solid var(--c-border);
   border-radius: 8px;
   background: #fff;
   color: var(--c-text-main);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.drp-preset:hover {
+  background: var(--pill-bg-hover);
+}
+
+/* 命中预设（或手动选出的区间恰好等于某预设）→ 与 .filter-chip.on 同款强调 */
+.drp-preset.on {
+  background: var(--c-primary-deep);
+  border-color: var(--c-primary-deep);
+  color: #fff;
+  font-weight: 600;
+}
+
+.drp-confirm {
+  flex-shrink: 0;
+  height: 26px;
+  padding: 0 16px;
+  border: 1px solid var(--c-primary-deep);
+  border-radius: 8px;
+  background: var(--c-primary-deep);
+  color: #fff;
   font-family: inherit;
   font-size: 12.5px;
   cursor: pointer;
   transition: background-color 0.15s ease;
 }
 
-.time-pop-actions button.primary {
-  background: var(--c-primary-deep);
-  border-color: var(--c-primary-deep);
-  color: #fff;
-}
-
-.time-pop-actions button.primary:hover {
+.drp-confirm:hover {
   background: var(--c-accent);
+  border-color: var(--c-accent);
 }
 
-.time-pop-actions button:hover {
-  background: var(--pill-bg-hover);
+.drp-confirm:disabled {
+  opacity: 0.45;
+  cursor: default;
+  pointer-events: none;
 }
 
 /* 类型筛选 chips（设计稿 "默认" 标签样式）：
@@ -864,12 +1097,6 @@
   color: #fff;
   font-size: 12px;
   backdrop-filter: blur(2px);
-}
-
-/* 已删筛选钮（chips-tools 内；激活态走 .float-pill.on 强调色） */
-.del-btn-label,
-.arch-btn-label {
-  white-space: nowrap;
 }
 
 /* 详情窗口：头部驻留区（标题……X 钉在面板顶部，不随内容滚动，滚动条不覆盖；
@@ -1302,7 +1529,7 @@
   margin: 0;
   font-size: 13px;
   font-weight: 600;
-  color: var(--c-text);
+  color: var(--c-text-main);
 }
 
 .vd-hint {
@@ -1326,7 +1553,7 @@
   border: 1px solid var(--c-border);
   border-radius: 6px;
   background: var(--c-bg-card);
-  color: var(--c-text);
+  color: var(--c-text-main);
   font-size: 13px;
   font-family: inherit;
   outline: none;
@@ -1458,7 +1685,7 @@
   flex: 1;
   min-width: 0;
   font-size: 13px;
-  color: var(--c-text);
+  color: var(--c-text-main);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2859,7 +3086,7 @@
   .lc-month-pop,
   .lc-dlg-cat-pop,
   .filter-pop,
-  .time-pop {
+  .post-filter-pop {
     animation: none;
   }
 }

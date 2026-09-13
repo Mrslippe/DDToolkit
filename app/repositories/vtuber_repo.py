@@ -304,6 +304,14 @@ def _num(v, cast):
 
 # 多源合并时主数据优先级（danmakus 字段最全 → feed 秒级开播 → self 观测兜底）
 _SOURCE_PRIORITY = {"danmakus": 3, "feed": 2, "self": 1}
+# 分组内「各源各自看到的 live_id」暂存键：合并收尾时按源优先级选定**唯一对外 id**，
+# 返回前弹出（不进 API 载荷）。
+# 为什么必须显式定权：danmakus 行的 id 是它自己的 uuid，feed 行是 B 站数字 live_id，
+# 两者是同一个 id 空间之外的东西——而**弹幕详情端点只认 danmakus 的 uuid**
+# （实测：uuid → total=31767/40 词；数字 id → HTTP 400）。此前按「谁先被扫到」定 id，
+# 近期场次（danmakus + feed 双行）常常暴露出数字 id → 详情弹窗弹幕/统计全空
+# （2026-09-10 用户反馈「最近几场直播的信息都展示不出来」）。
+_SRC_IDS_KEY = "_src_live_ids"
 
 
 class LiveSessionRepo:
@@ -453,6 +461,17 @@ class LiveSessionRepo:
                 groups.append(self._group_from_snap(snap))
                 continue
             self._merge_snap_into_group(grp, snap)
+        # 对外 id 定权：取**参与合并的最高优先级源**的 live_id（danmakus uuid > feed 数字 id）。
+        # 与行序无关——此前 id 取决于哪一行先被扫到，导致同一场次有时是 uuid、有时是数字 id。
+        for g, _srcs, _prim in groups:
+            ids = g.pop(_SRC_IDS_KEY, None) or {}
+            best = next(
+                (ids[s] for s in sorted(ids, key=lambda s: -_SOURCE_PRIORITY.get(s, 0))
+                 if ids.get(s)),
+                None,
+            )
+            if best:
+                g["live_id"] = best
         out = [g for g, _srcs, _prim in groups]
         out.sort(key=lambda s: s["start_at"])
         return out
@@ -470,6 +489,11 @@ class LiveSessionRepo:
         #    标题可均为空——feed 补 danmakus 空标题即此场景）
         if g_end and row.start_at < g_end and ga == ra:
             return "dup"
+        # 2b) 双源同场、但两端都没落定 end（刚下播 / 仍在播：danmakus 与 feed 各一行，
+        #     danmakus 侧 room_id 常为 None）→ 起点秒级相同 + 同标题骨架即同场。
+        #     否则会掉到 restart 被标成「中断续播·2 段合并」（实测近期场次全部如此）。
+        if row.start_at == g_start and ga == ra:
+            return "dup"
         # 3)/4) 顺序段间隙：前段结束 → 后段开始
         ref_end = g_end if g_end else g_start
         gap_min = (row.start_at - ref_end).total_seconds() / 60
@@ -483,6 +507,7 @@ class LiveSessionRepo:
                            how: str) -> None:
         """按归类应用合并（房间去重走旧主数据优先；dup/并段见 merged() 注释）。"""
         g, srcs, _primary = grp
+        g.setdefault(_SRC_IDS_KEY, {})[row.source] = row.live_id
         if how == "room":
             self._merge_row_into_group(grp, row)
             return
@@ -598,15 +623,20 @@ class LiveSessionRepo:
         return (hi - lo).total_seconds() + 2 * tol_seconds
 
     def _group_from_row(self, row: LiveSession) -> tuple[dict, set[str], str]:
-        return self._row_dict(row), {row.source}, row.source
+        d = self._row_dict(row)
+        d[_SRC_IDS_KEY] = {row.source: row.live_id}
+        return d, {row.source}, row.source
 
     def _group_from_snap(self, snap: dict) -> tuple[dict, set[str], str]:
-        return self._snap_dict(snap), {"self"}, "self"
+        d = self._snap_dict(snap)
+        d[_SRC_IDS_KEY] = {}          # self 无 id（虚拟场次）
+        return d, {"self"}, "self"
 
     def _merge_row_into_group(self, grp: tuple[dict, set[str], str], row: LiveSession) -> None:
         """表内行并入分组：主数据优先（danmakus > feed），低优仅补缺失字段。"""
         g, srcs, primary = grp
         srcs.add(row.source)
+        g.setdefault(_SRC_IDS_KEY, {})[row.source] = row.live_id
         if _SOURCE_PRIORITY.get(row.source, 0) > _SOURCE_PRIORITY.get(primary, 0):
             grp[2] = row.source
             g.update(self._row_dict(row))       # 高优主字段整体替换（含 start/end/标题/分区）

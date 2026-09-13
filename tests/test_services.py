@@ -1504,6 +1504,63 @@ def test_account_progress_exposes_task_and_vtuber():
     assert st["task"] is None and st["vtuber_name"] is None and st["running"] is False
 
 
+def test_fetch_status_marks_auto_runs_and_manual_busy():
+    """顶栏展示判据（2026-09-10 用户：频繁的动态轮询不必占顶栏）。
+
+    - 每类任务的 `auto` 标出「本次由定时档发起」→ 前端据此静默自动节拍；
+    - 顶层 `manual_running` 与手动端点 409 同源（`manual_task_running()`）：
+      自动档持锁时**为 False**，前端按钮不该被自动节拍禁用（后端会受理，手动优先会抢占）。
+    """
+    from app.services import scheduler as sch
+
+    keep = (sch._post_fetch_running, sch._auto_post_active.is_set(),
+            sch._preempt_post.is_set(), dict(sch._status["post"]))
+    try:
+        sch._status["post"]["running"] = True
+        sch._post_fetch_running = True
+
+        # ① 自动档持锁（动态流）：auto=True，且手动端点不会 409
+        sch._auto_post_active.set()
+        st = sch.get_fetch_status()
+        assert st["post"]["auto"] is True
+        assert st["manual_running"] is False
+
+        # ② 同一把锁转为手动任务 → auto 撤下、manual_running 立起
+        sch._auto_post_active.clear()
+        st = sch.get_fetch_status()
+        assert st["post"]["auto"] is False
+        assert st["manual_running"] is True
+
+        # ③ 手动任务请求让位（等自动档交还锁的窗口）也算忙——与 409 判据一致
+        sch._post_fetch_running = False
+        sch._preempt_post.set()
+        assert sch.get_fetch_status()["manual_running"] is True
+
+        # ④ 账号流同理（同一套判据，两个通道各自独立）
+        sch._auto_account_active.set()
+        try:
+            assert sch.get_fetch_status()["account"]["auto"] is True
+        finally:
+            sch._auto_account_active.clear()
+        assert sch.get_fetch_status()["account"]["auto"] is False
+    finally:
+        (sch._post_fetch_running, auto_on, preempt_on, post_status) = keep
+        if auto_on:
+            sch._auto_post_active.set()
+        else:
+            sch._auto_post_active.clear()
+        if preempt_on:
+            sch._preempt_post.set()
+        else:
+            sch._preempt_post.clear()
+        sch._status["post"].clear()
+        sch._status["post"].update(post_status)
+        sch._auto_account_active.clear()
+
+    st = sch.get_fetch_status()
+    assert st["post"]["auto"] is False and st["manual_running"] is False
+
+
 def test_vtuber_name_of_tolerates_detached_account():
     """V 名取自 ORM 关系；关系不可用时返回 None——进度显示绝不影响抓取。"""
     from app.services import scheduler as sch

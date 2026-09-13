@@ -312,6 +312,47 @@ def test_merged_danmakus_and_feed_dedupe(db):
     assert m["total_income"] == 10501.5
 
 
+def test_merged_recent_pair_exposes_danmakus_id(db):
+    """近期场次（danmakus + feed 双行、两端都没 end）对外 id 必须是 danmakus uuid。
+
+    2026-09-10 用户反馈「最近几场直播的信息都展示不出来」的根因回归：
+    弹幕详情端点只认 danmakus 的 uuid（实测数字 id → HTTP 400），而这里此前按
+    「哪一行先被扫到」定 id —— feed 行先入库时对外暴露数字 id，详情弹窗弹幕/统计全空。
+    本用例按真实库形态构造：feed 行先入库（真实库里正是它先被扫到）。
+    """
+    acc = _mk_account(db)
+    repo = LiveSessionRepo(db)
+    repo.upsert_feed(acc.id, "723878467234502758", {
+        "title": "一起看苹果发布会", "start_at": T0,
+        "parent_area_name": "虚拟主播", "area_name": "虚拟Singer",
+        "room_id": "1947277414",
+    })
+    repo.upsert_danmakus(acc.id, [
+        _dm_item("ee8f2f2b-8447-4eb5-99f2-1680a0923ef9", "一起看苹果发布会",
+                 _ms(T0), 0, count=0),      # 刚下播：danmakus 侧还没落 end/弹幕
+    ])
+    merged = repo.merged(acc.id)
+    assert len(merged) == 1, "同场双源必须并成一场"
+    m = merged[0]
+    assert m["source"] == "danmakus+feed"
+    assert m["live_id"] == "ee8f2f2b-8447-4eb5-99f2-1680a0923ef9", \
+        "对外 id 必须取最高优先级源（danmakus uuid），否则弹幕详情查不到"
+    assert m["segment_count"] == 1, "双源同场不该被标成「中断续播·2 段」"
+
+
+def test_merged_feed_only_keeps_feed_id(db):
+    """反向保证：没有 danmakus 行时对外 id 仍是 feed 的数字 id（不能被定权逻辑吃掉）。"""
+    acc = _mk_account(db)
+    repo = LiveSessionRepo(db)
+    repo.upsert_feed(acc.id, "723878467234502758", {
+        "title": "只有 feed", "start_at": T0, "room_id": "1947277414",
+    })
+    merged = repo.merged(acc.id)
+    assert len(merged) == 1
+    assert merged[0]["live_id"] == "723878467234502758"
+    assert merged[0]["source"] == "feed"
+
+
 def test_merged_feed_alone_and_with_snap(db):
     acc = _mk_account(db)
     repo = LiveSessionRepo(db)

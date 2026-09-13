@@ -263,6 +263,8 @@ export interface AccountSnapshot {
 
 export interface AccountFetchStatus {
   running: boolean
+  /** true = 本次由**定时档**发起（综合档账号流）。自动节拍不占顶栏，见 TopBar 静默判定 */
+  auto?: boolean
   current: string | null
   index: number
   total: number
@@ -285,6 +287,8 @@ export interface AccountFetchStatus {
 /** GET /vtuber/fetch-status：帖子抓取实时状态 */
 export interface PostFetchStatus {
   running: boolean
+  /** true = 本次由**定时档**发起（动态流常态节拍，一轮接一轮、没有终局） */
+  auto?: boolean
   target: string | null
   /** 运行中的任务名（P8-C）：dynamic / update / full / quick / adopt */
   task?: string | null
@@ -322,6 +326,14 @@ export interface FetchStatus {
   account: AccountFetchStatus
   post: PostFetchStatus
   external?: ExternalFetchStatus
+  /**
+   * 是否有**手动**任务在跑（含「已请求抢占、正等自动档让位」的窗口）——
+   * 与手动端点的 409 判据同源（`scheduler.manual_task_running()`）。
+   * 按钮禁用必须用它，不能用 `account.running || post.running`：后者把自动节拍
+   * （动态流每轮 ~80s）也算忙，用户在轮询期间会点不动任何手动按钮，而后端其实受理。
+   * 旧后端不返回该字段 → 前端退回旧判据（见 TopBar）。
+   */
+  manual_running?: boolean
 }
 
 /** stats_json 解析后的统计字段（B 站口径） */export interface PostStatsJson {

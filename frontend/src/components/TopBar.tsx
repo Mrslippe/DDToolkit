@@ -36,6 +36,17 @@ const PILL_MS = 4000 // 操作结果覆盖态的展示时长
 
 const isTauri = '__TAURI_INTERNALS__' in window
 
+/**
+ * 「静默任务」判定：定时档发起的**自动节拍**不占顶栏。
+ *
+ * 判据用后端给的事实（`auto`：本次是否由综合档发起），而不是任务名——同一个
+ * `update`/`full` 文案既能被手动触发也能被定时档调用，只有后端知道这次是谁发起的。
+ * 旧后端不返回 `auto` → 视为手动（照旧展示），不会因为字段缺失静默掉真任务。
+ */
+function isQuietTask(ch: { running: boolean; auto?: boolean } | undefined | null): boolean {
+  return !!ch?.running && ch.auto === true
+}
+
 async function tauriWindow() {
   const { getCurrentWindow } = await import('@tauri-apps/api/window')
   return getCurrentWindow()
@@ -121,8 +132,15 @@ export default function TopBar() {
         const s = await api.getFetchStatus()
         if (cancelled) return
         const ext = s.external
-        active = s.account.running || s.post.running || (ext?.running ?? false)
-        setFetchBusy(s.account.running, s.post.running)
+        // 「静默任务」判定（2026-09-10 用户：频繁的动态轮询不必占顶栏）：
+        // 定时档发起的自动节拍（动态流一轮接一轮、账号流按到期扫）没有终局、会一直重复，
+        // 一律不占顶栏文案/容器，也不参与「有任务在跑」的关窗确认与忙按钮；
+        // 但下方的 running→idle 边沿**照旧**派发 fetch-idle，卡片/侧栏仍会跟着刷新。
+        const postVisible = s.post.running && !isQuietTask(s.post)
+        const accVisible = s.account.running && !isQuietTask(s.account)
+        active = accVisible || postVisible || (ext?.running ?? false)
+        // 按钮禁用与手动端点的 409 同源；旧后端无该字段 → 退回旧判据
+        setFetchBusy(s.manual_running ?? (s.account.running || s.post.running))
 
         // 账号快照变化 → 派发事件，侧栏/右栏就地刷新（内容 diff：见 seenByUid 注释）
         const recent = s.account.recent ?? []
@@ -313,9 +331,12 @@ export default function TopBar() {
     return () => window.removeEventListener('ddtoolkit:pill-message', onPill)
   }, [])
 
-  const busy = status
-    ? status.account.running || status.post.running || (status.external?.running ?? false)
-    : false
+  // 「有事发生」= 可见任务（手动/收录/外部批次）或操作结果覆盖态。
+  // 自动节拍（动态轮询、自动账号流）按 2026-09-10 用户口径静默：不亮容器、不顶部文案，
+  // 也不拦关窗——它们没有终局，一直在跑；数据照旧通过事件流向各视图。
+  const postVisible = !!status?.post.running && !isQuietTask(status?.post)
+  const accVisible = !!status?.account.running && !isQuietTask(status?.account)
+  const busy = accVisible || postVisible || (status?.external?.running ?? false)
 
   // P8-C（2026-09-10 用户）：状态胶囊格式 = 任务名 - V名 - i/N
   // （例：动态更新中 - 明前奶绿 - 1/11）
@@ -345,12 +366,12 @@ export default function TopBar() {
 
   let statusText = '数据服务运行中'
   let dotClass = 'topbar-status-dot'
-  if (status?.post.running) {
-    const p = status.post
+  if (postVisible) {
+    const p = status!.post
     statusText = statusParts(p.task, '帖子抓取中', p.vtuber_name, p.target, p.index, p.total)
     dotClass = 'topbar-status-dot busy'
-  } else if (status?.account.running) {
-    const a = status.account
+  } else if (accVisible) {
+    const a = status!.account
     statusText = statusParts(a.task, '账号信息抓取中', a.vtuber_name, a.current, a.index, a.total)
     dotClass = 'topbar-status-dot busy'
   } else if (status?.external?.running) {
@@ -358,6 +379,8 @@ export default function TopBar() {
     statusText = `正在同步${status.external.label ?? '第三方数据'}`
     dotClass = 'topbar-status-dot busy'
   }
+  // 注：自动节拍（动态轮询 / 自动账号流）走到这里就是空态——顶栏保持「数据服务运行中」
+  // 白字 + 绿点、无容器（用户 2026-09-10：频繁轮询不必占顶栏）
 
   // 显示优先级：覆盖消息（且无任务运行）> 实时状态
   const showOverride = pillMsg !== null && !busy

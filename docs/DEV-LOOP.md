@@ -55,12 +55,16 @@ python scripts/make_icons.py     # 从 docs/design/png/NGNlogo无底.png 生成
 ```powershell
 python scripts/ui_probe.py                          # 1100 / 1280 / 1440 三档宽度
 python scripts/ui_probe.py --width 1100             # 指定宽度
+python scripts/ui_probe.py --height 680             # 矮窗（视口 ≈541）：验弹窗高度兜底路径
+python scripts/ui_probe.py --shot                    # 额外每档宽度存一张「筛选弹窗打开态」图
+python scripts/ui_probe.py --archive                 # 只跑一档：dump 直播日历每格实渲染 + 最近一场详情弹窗内容
 python scripts/ui_probe.py --first-run --width 1100 # 空数据目录：验首启登录浮窗
 ```
 
 它自动：复制开发数据目录 → 起后端 → 起 Vite → 无头浏览器加载
-`/vtubers/<id>?probe=1`（`frontend/src/dev/probe.ts` 会依次切四个视图、并在列表页
-额外点一次「投稿」筛选，共五段测量），断言五组不变量：
+`/vtubers/<id>?probe=1`（`frontend/src/dev/probe.ts` 会依次切四个视图、在列表页跑一遍
+**筛选弹窗全链路**（开 → 预设 → 确认 → 重置 → Esc）、再点一次「投稿」筛选，共八段测量），
+断言七组不变量：
 
 | 不变量 | 含义 |
 |---|---|
@@ -69,12 +73,25 @@ python scripts/ui_probe.py --first-run --width 1100 # 空数据目录：验首�
 | 无容器横向溢出 | `overflow-x:auto/scroll` 容器不得 `scrollWidth > clientWidth`（白名单：`.type-chips` 有意横滚） |
 | 无原生滚动条 | 滚动容器统一 OverlayScroll，否则出现/消失会挤动布局 |
 | 列表卡片列宽契约 | 列表页 `.list-inner` ≤ 900px、卡片铺满该列且宽度一致、封面恒 220 且不被左缘裁切（2026-09-08 回归事故固化：OverlayScroll 插层让 `.list-scroll > .list-inner` 静默失效，列宽随内容在 566～1350px 之间乱跳） |
+| 筛选弹窗不出右栏 | `.post-filter-pop` 完整落在 `.posts-panel` 可视区内（该容器 `overflow:hidden`，越界＝静默裁掉左月历/底部按钮）、可见月份面板 = 2 且各 42 格、预设 = 6、初始「确认」可用（2026-09-10 P10-A 固化：首跑即抓到弹窗超出可用高度 50px 与窄窗降级反而更高） |
+| 筛选弹窗交互链 | 草稿态不改触发器（`筛选`）→ 点预设高亮 → 点「确认」关窗且触发器变 `筛选 · 1` → `重置`+Esc 回 `筛选` 且关窗 |
+| 顶栏展示策略 | 采样当时若**只有自动节拍在跑**（`post.auto`/`account.auto` 且无手动任务）→ 顶栏必须是空闲态（不亮容器、文案不是任务进度）。2026-09-10 起探针每次运行会打印一帧「后端事实 vs 顶栏渲染」采样，用于核对 |
+
+> **纯逻辑（无浏览器）**：日期区间算术（预设量纲 / 月位移夹取 / 本地解析 / 6×7 网格）
+> 在 `frontend/src/utils/dateRange.ts`，可直接跑
+> `node scripts/check_date_range.mjs`（Node 24 类型擦除直读 `.ts`，30 条断言）。
+>
+> **`--archive`（内容类排查）**：把直播日历每格的**实渲染文本**与「最近一场详情弹窗」
+> 的弹幕/词云/动态行数落进探针 JSON 并打印——内容缺失类问题（不是布局）靠它定位，
+> 2026-09-10 修「近期场次详情空白」（devlog/052）即用它做的端到端复验。
 
 `--first-run` 额外断言：空数据目录下 `?firstRun=1` 必须**自动弹出登录浮窗**，
 且浮窗内含「凭据仅保存在本机」说明。
 
 ⚠️ 需要完整权限（Vite 的 esbuild 与无头浏览器在受限沙箱会失败）；失败时保留
-`_ui_probe_tmp/`（含 DOM dump 与截图用的 profile 目录）供定位。
+`_ui_probe_tmp/`（含 DOM dump 与截图用的 profile 目录）供定位。`--shot` 存图
+（`_ui_probe_tmp/shot-<宽>.png`，筛选弹窗打开态）时同样保留该目录——**不参与断言，
+纯视觉存档**：布局不变量只管「在不在框里」，配色/密度这类还得看图。
 
 ## 三、手动复现打包版状态（脚本没覆盖时）
 

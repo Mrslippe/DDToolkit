@@ -73,8 +73,21 @@ export default function VtuberSettingsDialog({
     return vtuber.accounts.find((a) => a.platform === 'bilibili') ?? vtuber.accounts[0]
   }, [vtuber])
 
+  /**
+   * 草稿播种键：**只在「打开窗口 / 换 V / 换主账号」时重播种**。
+   *
+   * 2026-09-10 用户反馈的 bug：动态轮询每完成一轮 → `fetch-idle` → 父级 `setVtuber(新对象)`
+   * （以及 `account-progress` 的合并快照）→ 本组件 effect 依赖里的 `vtuber`/`hero` 换了
+   * 引用 → 整个草稿被服务端值覆盖，用户改一项丢一项。
+   * 依赖数组治不了这个：对象引用每次刷新都是新的，而草稿是**用户正在编辑的状态**，
+   * 不该被任何后台刷新打断。故改成显式播种键（打开态 + V id + 主账号 id）。
+   */
+  const seedRef = useRef('')
   useEffect(() => {
     if (!open || !vtuber) return
+    const key = `${vtuber.id}:${hero?.id ?? ''}`
+    if (seedRef.current === key) return
+    seedRef.current = key
     setName(vtuber.name)
     setFaction(vtuber.faction ?? '')
     setBirthday(vtuber.birthday ?? '')
@@ -89,6 +102,10 @@ export default function VtuberSettingsDialog({
         .filter(Boolean),
     )
   }, [open, vtuber, hero])
+  // 关闭即作废播种键：下次打开（哪怕是同一个 V）重新以最新服务端值起稿
+  useEffect(() => {
+    if (!open) seedRef.current = ''
+  }, [open])
 
   const toggleLock = (field: string) => {
     setLocked((prev) =>

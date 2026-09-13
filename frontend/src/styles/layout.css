@@ -801,8 +801,10 @@ html.window-maximized body {
   }
 }
 
-/* 独立筛选弹窗：锚定触发器下方（与 time-pop 同交互模式）——
-   弹窗层契约（v0.6.1 用户参考风格）：圆角卡片 12px + 柔和阴影 + 发丝边 */
+/* 独立筛选弹窗：锚定触发器下方（与列表页「筛选」弹窗同交互模式）——
+   弹窗层契约（v0.6.1 用户参考风格）：圆角卡片 12px + 柔和阴影 + 发丝边。
+   分组语言 `.pop-group` / `.pop-label` / `.pop-chips` / `.pop-actions` 自 P10-A 起
+   与帖子页筛选弹窗（posts.css `.post-filter-pop`）同源共用。 */
 .filter-wrap {
   position: relative;
   /* 工具行唯一可收缩项会先被压掉（行内容 447px > 可用 428px），
@@ -828,7 +830,7 @@ html.window-maximized body {
   gap: 10px;
 }
 
-.filter-pop-group {
+.pop-group {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -837,18 +839,18 @@ html.window-maximized body {
   padding-top: 8px;
 }
 
-.filter-pop-group:first-child {
+.pop-group:first-child {
   border-top: none;
   padding-top: 0;
 }
 
-.filter-pop-label {
+.pop-label {
   font-size: 12px;
   font-weight: 600;
   color: var(--c-text-sub);
 }
 
-.filter-pop-chips {
+.pop-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
@@ -877,14 +879,14 @@ html.window-maximized body {
   color: #fff;
 }
 
-.filter-pop-actions {
+.pop-actions {
   display: flex;
   justify-content: flex-end;
   border-top: 1px solid var(--c-border);
   padding-top: 10px;
 }
 
-.filter-pop-actions button {
+.pop-actions button {
   height: 28px;
   padding: 0 16px;
   border: 1px solid var(--c-border);
@@ -897,7 +899,7 @@ html.window-maximized body {
   transition: background-color 0.15s ease;
 }
 
-.filter-pop-actions button:hover {
+.pop-actions button:hover {
   background: var(--pill-bg-hover);
 }
 

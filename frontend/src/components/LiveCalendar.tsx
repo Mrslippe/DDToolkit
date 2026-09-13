@@ -29,6 +29,15 @@ const MONTH_CN = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月'
 /** 浮层关闭宽限（ms）：鼠标从格子滑向浮层中途不闪关 */
 const POP_CLOSE_GRACE_MS = 120
 
+/** 场次是否「刚结束」（<24h，按结束时间；未结束按开始时间）。
+ *  用途：第三方弹幕收录有数小时延迟（danmakus 侧 total 可能仍为 0），
+ *  刚下播的场次「暂无弹幕」是常态而非异常——提示文案要区分这两种情形。 */
+function isFreshSession(startAt: string, endAt: string | null | undefined): boolean {
+  const ms = new Date(endAt || startAt).getTime()
+  if (!Number.isFinite(ms)) return false
+  return Date.now() - ms < 24 * 3600 * 1000
+}
+
 function dayKeyIso(d: Date): string {
   const p = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
@@ -1014,7 +1023,11 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
                 )}
               </div>
             ) : (
-              <div className="lc-dlg-ph">暂无弹幕数据（danmakus 未收录该场次或拉取失败）</div>
+              <div className="lc-dlg-ph">
+                {isFreshSession(s.start_at, s.end_at)
+                  ? '该场次刚结束，弹幕 / 热词仍在第三方收录中（danmakus 通常延迟数小时），稍后重新打开即可看到'
+                  : '暂无弹幕数据（danmakus 未收录该场次或拉取失败）'}
+              </div>
             )}
           </section>
 

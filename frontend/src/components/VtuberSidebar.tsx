@@ -265,9 +265,9 @@ export default function VtuberSidebar() {
           </FloatPill>
           {filterOpen && (
             <div className="filter-pop">
-              <div className="filter-pop-group">
-                <span className="filter-pop-label">状态</span>
-                <div className="filter-pop-chips">
+              <div className="pop-group">
+                <span className="pop-label">状态</span>
+                <div className="pop-chips">
                   <button
                     type="button"
                     className={`filter-chip${filters.live.includes('live') ? ' on' : ''}`}
@@ -285,9 +285,9 @@ export default function VtuberSidebar() {
                 </div>
               </div>
               {platformOptions.length > 0 && (
-                <div className="filter-pop-group">
-                  <span className="filter-pop-label">平台</span>
-                  <div className="filter-pop-chips">
+                <div className="pop-group">
+                  <span className="pop-label">平台</span>
+                  <div className="pop-chips">
                     {platformOptions.map((p) => (
                       <button
                         key={p}
@@ -302,9 +302,9 @@ export default function VtuberSidebar() {
                 </div>
               )}
               {factionOptions.length > 0 && (
-                <div className="filter-pop-group">
-                  <span className="filter-pop-label">企划</span>
-                  <div className="filter-pop-chips">
+                <div className="pop-group">
+                  <span className="pop-label">企划</span>
+                  <div className="pop-chips">
                     {factionOptions.map((f) => (
                       <button
                         key={f}
@@ -318,7 +318,7 @@ export default function VtuberSidebar() {
                   </div>
                 </div>
               )}
-              <div className="filter-pop-actions">
+              <div className="pop-actions">
                 <button type="button" onClick={() => setFilters(EMPTY_FILTERS)}>
                   重置
                 </button>

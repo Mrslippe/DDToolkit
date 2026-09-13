@@ -20,6 +20,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -103,7 +104,35 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
     if not m:
         print(f"  [FAIL] {tag} @{width}: 未拿到探针输出（页面未跑完？见 {dom_file}）")
         return None
-    return {"views": json.loads(m.group(1)), "dom": dom_file}
+    data = json.loads(m.group(1))
+    if isinstance(data, dict):                     # 2026-09-10 起：{views, topbar, ...}
+        return {
+            "views": data.get("views") or [],
+            "topbar": data.get("topbar"),
+            "calendar": data.get("calendar"),
+            "dom": dom_file,
+        }
+    return {"views": data, "topbar": None, "calendar": None, "dom": dom_file}   # 旧格式兼容
+
+
+def _run_shot(edge: str, url: str, width: int, height: int, out_png: Path) -> None:
+    """截一张「筛选弹窗打开态」的图（视觉存档；不参与不变量断言）。
+
+    与 `_run_probe` 同款：`--virtual-time-budget` 让页面跑完 `?probe=filter-pop`
+    的短序列（切到列表视图 → 点开筛选弹窗 → 可选点一个预设 → 停住），再落盘 PNG。
+    2× 设备像素比：弹窗只有 512 宽，1× 下看不清区间色带与端点态。
+    """
+    profile = out_png.with_suffix("")
+    cmd = [
+        edge, "--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run",
+        f"--window-size={width},{height}", f"--user-data-dir={profile}",
+        "--force-device-scale-factor=2",
+        "--virtual-time-budget=45000", f"--screenshot={out_png}", url,
+    ]
+    try:
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=180)
+    except Exception as exc:  # 截图失败不影响断言
+        print(f"  [warn] 截图失败：{exc}")
 
 
 # 设计上就要横向滚动的容器（白名单）：type-chips 胶囊行超宽时行内横滚
@@ -136,6 +165,89 @@ def _assert(views: list[dict], width: int) -> list[str]:
                     f"client={sc['client'][0]} scroll={sc['scroll'][0]}"
                 )
         bad += _assert_cards(v, width)
+        bad += _assert_filter_pop(v, width)
+        bad += _assert_filter_chain(v, width)
+    return bad
+
+
+def _assert_topbar(tb: dict | None, width: int) -> list[str]:
+    """顶栏展示策略（2026-09-10 用户：频繁的动态轮询不必占顶栏）。
+
+    只在**采样当时恰好只有自动节拍在跑**时才断言（其余情形空过，不制造假失败）：
+    此时顶栏必须保持空闲态——不亮容器、文案不是任务进度。
+    """
+    if not tb or not tb.get("ok"):
+        return []
+    running_visible = (tb.get("postRunning") and not tb.get("postAuto")) or (
+        tb.get("accountRunning") and not tb.get("accountAuto")
+    )
+    quiet = (tb.get("postRunning") and tb.get("postAuto")) or (
+        tb.get("accountRunning") and tb.get("accountAuto")
+    )
+    if not quiet or running_visible or tb.get("manualRunning") is True:
+        return []
+    bad: list[str] = []
+    text = tb.get("pillText") or ""
+    if tb.get("pillOn"):
+        bad.append(f"@{width} 顶栏：只有自动节拍在跑却亮起了事件容器（text={text!r}）")
+    if "轮询" in text or "账号信息抓取中" in text:
+        bad.append(f"@{width} 顶栏：自动节拍占了状态文案（{text!r}）")
+    return bad
+
+
+# ── 筛选弹窗（P10-A）──
+# `.posts-panel` 是 overflow:hidden：双月历弹窗（宽 520）一旦越出右栏就会被裁掉左月历。
+# 这条不变量只能靠真实浏览器量，固化为断言（1100 档是最紧的一档：面板 558 vs 弹窗 536）。
+FILTER_PILL_EXPECT = {
+    "list-filter-pop": "筛选",
+    "list-filter-applied": "筛选 · 1",
+    "list-filter-reset": "筛选",
+}
+
+
+def _assert_filter_pop(v: dict, width: int) -> list[str]:
+    fp = v.get("filterPop")
+    if fp is None:
+        return []
+    tag = v.get("tag")
+    if not fp.get("ok"):
+        return [f"@{width} {tag}: 筛选弹窗未出现（{fp.get('reason')}）"]
+    bad: list[str] = []
+    if not fp.get("insidePanel"):
+        bad.append(
+            f"@{width} {tag}: 筛选弹窗越出右栏可视区（会被 .posts-panel 裁掉）"
+            f" pop={fp.get('pop')} panel={fp.get('panel')}"
+        )
+    per = fp.get("perPanelDays") or []
+    if any(c != 42 for c in per):
+        bad.append(f"@{width} {tag}: 月历格数 {per} ≠ 42（恒 6 行 × 7 列）")
+    if fp.get("visibleMonthPanels") != 2:
+        bad.append(f"@{width} {tag}: 可见月份面板 {fp.get('visibleMonthPanels')} ≠ 2（双月历并排）")
+    if fp.get("presets") != 6:
+        bad.append(f"@{width} {tag}: 预设钮 {fp.get('presets')} ≠ 6")
+    if fp.get("confirmDisabled"):
+        bad.append(f"@{width} {tag}: 「确认」初始态被禁用（区间为空时应可用）")
+    return bad
+
+
+def _assert_filter_chain(v: dict, width: int) -> list[str]:
+    """筛选钮文案全链路：草稿不生效 → 确认后计数 1 → 重置/Esc 回默认。"""
+    tag = v.get("tag")
+    if tag not in FILTER_PILL_EXPECT:
+        return []
+    bad: list[str] = []
+    got = v.get("pill")
+    if got != FILTER_PILL_EXPECT[tag]:
+        bad.append(f"@{width} {tag}: 筛选钮文案 {got!r} ≠ {FILTER_PILL_EXPECT[tag]!r}")
+    if tag == "list-filter-applied":
+        if v.get("popOpen"):
+            bad.append(f"@{width} {tag}: 点「确认」后弹窗未关闭")
+        if v.get("draftPill") != "筛选":
+            bad.append(f"@{width} {tag}: 草稿态就改了触发器（{v.get('draftPill')!r}）—— 草稿制被破坏")
+        if not v.get("draftMarked"):
+            bad.append(f"@{width} {tag}: 点预设后未高亮该预设")
+    if tag == "list-filter-reset" and v.get("popOpen"):
+        bad.append(f"@{width} {tag}: Esc 未关闭筛选弹窗")
     return bad
 
 
@@ -219,6 +331,21 @@ def main() -> int:
         action="store_true",
         help="用空数据目录起后端，验证「首次启动自动弹登录浮窗 + 本地存储说明」",
     )
+    ap.add_argument(
+        "--shot",
+        action="store_true",
+        help="额外存图：每档宽度截一张「筛选弹窗打开态」（_ui_probe_tmp/shot-<宽>.png），供视觉比对",
+    )
+    ap.add_argument(
+        "--shot-preset",
+        default="",
+        help="存图时先点一个预设（如 近一月），用于看区间色带/端点态",
+    )
+    ap.add_argument(
+        "--archive",
+        action="store_true",
+        help="只跑一档宽度，打印直播日历每格的**实渲染文本**（排查「某些天不显示信息」）",
+    )
     args = ap.parse_args()
     widths = args.width or [1100, 1280, 1440]
 
@@ -273,6 +400,26 @@ def main() -> int:
             extra = "?probe=1"
             print(f"[probe] 目标路由 {route}（VTuber #{vid}）")
 
+        if args.archive:
+            w = widths[0]
+            res = _run_probe(edge, f"http://localhost:{vite_port}{route}?probe=archive",
+                             w, args.height, WORK, "archive")
+            cal = (res or {}).get("calendar") or {}
+            print(f"\n=== 直播日历实渲染（@{w}）{cal.get('title')!r} note={cal.get('note')!r} ===")
+            for c in cal.get("cells") or []:
+                mark = "●" if c.get("body") else "·"
+                print(f"  {mark} {c.get('day'):>3} [{c.get('badge')}] {c.get('body')}")
+            d = cal.get("detail")
+            print("\n=== 最近一场的详情弹窗实渲染 ===")
+            if not d:
+                print("  （未打开：当月没有带场次的格子）")
+            else:
+                print(f"  {d.get('name')!r} {d.get('sub')!r}")
+                print(f"  弹幕行: {d.get('danmakuRows')}")
+                print(f"  词云格: {d.get('cloudCells')} · 动态行: {d.get('eventRows')}")
+                print(f"  占位文案: {d.get('placeholders')}")
+            return 0
+
         for w in widths:
             url = f"http://localhost:{vite_port}{route}{extra}"
             print(f"[probe] 宽度 {w} → {url}")
@@ -281,13 +428,35 @@ def main() -> int:
                 failures.append(f"@{w}: 无探针输出")
                 continue
             bad = _assert(res["views"], w)
+            bad += _assert_topbar(res.get("topbar"), w)
             if args.first_run:
                 bad += _assert_first_run(res["dom"])
             failures.extend(bad)
             tags = [v.get("tag") for v in res["views"]]
             print(f"  views={tags}  问题={len(bad)}")
+            tb = res.get("topbar") or {}
+            print(
+                "  顶栏采样: "
+                f"ok={tb.get('ok')} text={tb.get('pillText')!r} on={tb.get('pillOn')} "
+                f"post={tb.get('postRunning')}/auto={tb.get('postAuto')} "
+                f"acc={tb.get('accountRunning')}/auto={tb.get('accountAuto')} "
+                f"manual={tb.get('manualRunning')}"
+            )
             for b in bad[:8]:
                 print("   -", b)
+            # 视觉存档：另起一次浏览器，只把筛选弹窗打开并停住后截图
+            # （probe.ts 的 `?probe=filter-pop` 短模式；不参与断言）
+            if args.shot and not args.first_run:
+                shot = WORK / f"shot-{w}.png"
+                preset = f"&preset={urllib.parse.quote(args.shot_preset)}" if args.shot_preset else ""
+                _run_shot(
+                    edge,
+                    f"http://localhost:{vite_port}{route}?probe=filter-pop{preset}",
+                    w,
+                    args.height,
+                    shot,
+                )
+                print(f"  截图 → {shot}")
 
         print("\n=== 汇总 ===")
         if failures:
@@ -299,7 +468,8 @@ def main() -> int:
         _kill_tree(vite)
         _kill_tree(be)
         be_log.close()
-        if not failures:
+        # 失败时保留现场；`--shot` 时保留截图（两者都在 _ui_probe_tmp/ 下）
+        if not failures and not args.shot:
             shutil.rmtree(WORK, ignore_errors=True)
 
 

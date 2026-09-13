@@ -252,11 +252,23 @@ def _set_post_last_result(seq: int, kind: str, label: str,
 
 
 def get_fetch_status() -> dict:
-    """返回账号信息 / 帖子 / 外部数据三类任务的实时状态快照。"""
+    """返回账号信息 / 帖子 / 外部数据三类任务的实时状态快照。
+
+    另带两个**给前端做展示与禁用决策**的判据（2026-09-10 用户反馈「频繁的动态轮询
+    不必占顶栏」——顶栏只该显示有起点有终点的任务，自动节拍会一直重复）：
+
+    - 每类的 `auto`：本次运行是否由**定时档**（综合档两条流）发起。动态流是常态节拍
+      （一轮 ~80s 接着下一轮，没有终局），自动账号流同理 → 前端据此把它们排除出顶栏
+      文案/容器与关窗确认；完成刷新事件（`fetch-idle` 边沿）照旧，卡片仍会跟着更新。
+    - 顶层 `manual_running`：与手动端点的 409 判据**同源**（`manual_task_running()`：
+      自动档持锁不算忙）。前端按钮禁用改用它——此前拿 `account.running or post.running`
+      当忙，用户会在自动节拍期间点不动任何手动按钮，而后端其实会受理（手动优先会抢占）。
+    """
     return {
-        "account": dict(_status["account"]),
-        "post": dict(_status["post"]),
+        "account": {**_status["account"], "auto": _auto_account_active.is_set()},
+        "post": {**_status["post"], "auto": _auto_post_active.is_set()},
         "external": dict(_status["external"]),
+        "manual_running": manual_task_running(),
     }
 
 
@@ -2571,6 +2583,11 @@ class _PlatformBudget:
     - `wait_seconds(cost)`：还要等多久才允许再花 `cost`（各平台取最大）；
     - `charge(cost)`：记账（每轮结束后按实际请求数调用）；
     - 预算 <=0 表示不启用（调用方退回固定周期）。
+
+    退化输入（`cost > rpm`）不抛错、返回一个窗口 —— 该请求在任何时点都凑不出名额，
+    等待是唯一合理语义。现实含义：**单平台主账号数 > `DYNAMICS_BUDGET_RPM`（12）时，
+    动态流每轮都要空等一个窗口**，速率自然下降到该平台 ≤12 req/min（限速正确，
+    但如果哪天主账号数远超 rpm，应考虑把预算改成按账号数自适应）。
     """
 
     def __init__(self, rpm: int, window_seconds: float = 60.0):
@@ -2598,6 +2615,17 @@ class _PlatformBudget:
             if n <= room:
                 continue
             need = n - room                      # 需要腾出的名额数
+            # 窗口为空却仍不够名额 = 该平台「一轮请求数 > rpm」，等待换不来名额
+            # （没有可以滑出的记录），只能空等一个窗口。**必须先判空**：此时
+            # `len(dq) - 1 == -1`，`min(need - 1, -1)` 得 -1 → `dq[-1]` 抛 IndexError；
+            # 而 `need == 1` 时夹取到 0 同样越界（`dq[0]` 不存在）——夹取救不了空表。
+            # 触发条件：单平台主账号数 > rpm（例：13 个 B 站主账号、rpm=12），且窗口
+            # 恰为空（进程刚起来或静默超过一个窗口）。调用点 `_tier_loop` 首轮
+            # `_dynamics_next_due()` 在 try 之外、心跳循环无兜底 → 抛出即整条综合档
+            # 线程死亡（动态流 + 账号流永久停摆，安装版无控制台时完全静默）。
+            if not dq:
+                waits.append(self.window)
+                continue
             idx = min(need - 1, len(dq) - 1)
             waits.append(max(0.0, self.window - (now - dq[idx])))
         return max(waits)

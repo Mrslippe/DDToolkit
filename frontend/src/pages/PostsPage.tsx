@@ -3,9 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import {
   AlignJustify,
-  Archive,
   BarChart3,
-  Calendar,
   Fingerprint,
   LayoutGrid,
   Plus,
@@ -17,7 +15,6 @@ import {
   Zap,
   ChevronsLeft,
   ChevronUp,
-  Ghost,
   Loader2,
 } from 'lucide-react'
 import {
@@ -46,6 +43,8 @@ import OverlayScroll from '../components/OverlayScroll'
 import FloatPill from '../components/common/FloatPill'
 import StateBlock from '../components/common/StateBlock'
 import StatPill from '../components/common/StatPill'
+import PostFilterPop from '../components/PostFilterPop'
+import type { ArchivedFilter } from '../components/PostFilterPop'
 import './../styles/posts.css'
 
 const PAGE_SIZE = 20
@@ -82,8 +81,8 @@ function typeGroupsFor(platform: string | undefined) {
   return platform === 'weibo' ? TYPE_GROUPS_WEIBO : TYPE_GROUPS_BILIBILI
 }
 
-/** 归档过滤：all=全部（含已归档） unarchived=仅未归档 archived=仅已归档 */
-type ArchivedFilter = 'all' | 'unarchived' | 'archived'
+/** 归档过滤类型（all / unarchived / archived）随 P10-A 的筛选弹窗一起搬到
+ *  `components/PostFilterPop.tsx`（弹窗是它的唯一编辑入口，类型与 UI 同处）。 */
 
 /** 平台显示名（账号切换器/添加账号用） */
 const PLATFORM_LABEL: Record<string, string> = { bilibili: 'B站', weibo: '微博' }
@@ -146,12 +145,12 @@ export default function PostsPage() {
   const navigate = useNavigate()
 
   // 列表页筛选：搜索关键词（防抖后生效）+ 发布时间范围
+  // （已删 / 归档 / 时间三件筛选自 P10-A 起统一收进右侧「筛选」弹窗，
+  //   但状态仍由本页持有——请求参数、预取种子、回顶依赖都不受影响）
   const [searchInput, setSearchInput] = useState('')
   const [searchKw, setSearchKw] = useState('')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
-  const [timePopOpen, setTimePopOpen] = useState(false)
-  const timeWrapRef = useRef<HTMLDivElement>(null)
   /** 最近一次非空头像：切 V 间隙背景纱罩沿用，不闪空 */
   const lastAvatarRef = useRef<string | undefined>(undefined)
   const searchTimer = useRef<number>()
@@ -169,24 +168,9 @@ export default function PostsPage() {
   }
   useEffect(() => () => window.clearTimeout(bgHideTimer.current), [])
 
-  // 时间下拉：点击面板外自动关闭 + Esc 双通道
-  useEffect(() => {
-    if (!timePopOpen) return
-    const onDown = (e: MouseEvent) => {
-      if (timeWrapRef.current && !timeWrapRef.current.contains(e.target as Node)) {
-        setTimePopOpen(false)
-      }
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setTimePopOpen(false)
-    }
-    document.addEventListener('mousedown', onDown)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDown)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [timePopOpen])
+  // 时间下拉的点外关闭 / Esc 双通道自 P10-A 起下沉到 `PostFilterPop`（同款实现，
+  // 一次管住整个筛选弹窗的开关）
+
   useEffect(() => {
     window.clearTimeout(searchTimer.current)
     searchTimer.current = window.setTimeout(() => setSearchKw(searchInput.trim()), 300)
@@ -441,6 +425,9 @@ export default function PostsPage() {
     setDateFrom('')
     setDateTo('')
     setDeletedOnly(false)
+    // `archived` 此前漏在这条重置之外（P8-A 加归档 chip 时未同步）：留在「仅已归档」切账号，
+    // 预取恒按默认参数拉、提交却带 archived 筛选 → 种子指纹错配（列表先错一帧再被重取纠正）。
+    setArchived('all')
   }, [scene.acc, accountKey])
 
   useEffect(() => {
@@ -1116,34 +1103,6 @@ return (
                     ))}
                   </div>
                   <div className="chips-tools">
-                    <FloatPill
-                      size="md"
-                      active={deletedOnly}
-                      className="del-btn"
-                      title="仅显示已删除的帖子（墓碑，v0.5.1）"
-                      onClick={() => {
-                        setDeletedOnly((d) => !d)
-                        setPage(1)
-                      }}
-                    >
-                      <Ghost className="size-4" />
-                      <span className="del-btn-label">已删 {stats?.deleted ?? 0}</span>
-                    </FloatPill>
-                    {/* P8-A 顺带：把后端早已支持、前端一直没暴露的归档过滤放出来
-                        （早于归档截止日 30 天的帖子默认混在列表里，此前无法只看它们） */}
-                    <FloatPill
-                      size="md"
-                      active={archived === 'archived'}
-                      className="arch-btn"
-                      title="仅显示已归档的帖子（早于归档截止日，不再参与追新）"
-                      onClick={() => {
-                        setArchived((a) => (a === 'archived' ? 'all' : 'archived'))
-                        setPage(1)
-                      }}
-                    >
-                      <Archive className="size-4" />
-                      <span className="arch-btn-label">已归档 {stats?.archived ?? 0}</span>
-                    </FloatPill>
                     <div className="search-float">
                       <Search className="search-float-icon" />
                       <input
@@ -1156,62 +1115,35 @@ return (
                         title="标题、摘要（前 200 字）与正文全文（P2）"
                       />
                     </div>
-                    <div className="time-wrap" ref={timeWrapRef}>
-                      <FloatPill
-                        size="md"
-                        active={!!(dateFrom || dateTo)}
-                        className="time-btn"
-                        onClick={() => setTimePopOpen((o) => !o)}
-                      >
-                        <Calendar className="size-4" />
-                        <span className="time-btn-label">
-                          {dateFrom || dateTo ? `${dateFrom || '…'} ~ ${dateTo || '…'}` : '时间'}
-                        </span>
-                      </FloatPill>
-                      {timePopOpen && (
-                        <div className="time-pop" onMouseDown={(e) => e.stopPropagation()}>
-                          <label>
-                            起
-                            <input
-                              type="date"
-                              value={dateFrom}
-                              max={dateTo || undefined}
-                              onChange={(e) => setDateFrom(e.target.value)}
-                            />
-                          </label>
-                          <label>
-                            止
-                            <input
-                              type="date"
-                              value={dateTo}
-                              min={dateFrom || undefined}
-                              onChange={(e) => setDateTo(e.target.value)}
-                            />
-                          </label>
-                          <div className="time-pop-actions">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setDateFrom('')
-                                setDateTo('')
-                              }}
-                            >
-                              清除
-                            </button>
-                            <button
-                              type="button"
-                              className="primary"
-                              onClick={() => {
-                                setPage(1)
-                                setTimePopOpen(false)
-                              }}
-                            >
-                              应用
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
+                    {/* P10-A：已删 / 归档 / 时间范围三件筛选收敛进单个下拉弹窗
+                        （此前三钮并排越挤越长，类型 chips 被迫换行） */}
+                    <PostFilterPop
+                      deletedOnly={deletedOnly}
+                      onDeletedToggle={() => {
+                        setDeletedOnly((d) => !d)
+                        setPage(1)
+                      }}
+                      archived={archived}
+                      onArchivedChange={(v) => {
+                        setArchived(v)
+                        setPage(1)
+                      }}
+                      range={{ from: dateFrom, to: dateTo }}
+                      onRangeConfirm={(r) => {
+                        setDateFrom(r.from)
+                        setDateTo(r.to)
+                        setPage(1)
+                      }}
+                      onReset={() => {
+                        setDeletedOnly(false)
+                        setArchived('all')
+                        setDateFrom('')
+                        setDateTo('')
+                        setPage(1)
+                      }}
+                      deletedCount={stats?.deleted ?? 0}
+                      archivedCount={stats?.archived ?? 0}
+                    />
                   </div>
                 </div>
               </div>
