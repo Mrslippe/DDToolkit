@@ -2700,31 +2700,42 @@ class _PlatformPacer:
     （通常 1~2s）与这段间隔重叠，所以一轮墙钟 ≈ 账号数 × 间隔，而不是
     「账号数 ×（间隔 + 耗时）」。
 
-    `gap<=0` 时完全直通（禁用）。实现用每平台一把 `asyncio.Lock` +
-    上次起跑时刻；锁内 sleep，所以同一平台的后来者会排队而不是空转。
+    `gap<=0` 时完全直通（禁用）。
+
+    ## ⚠️ 为什么要"占时隙"而不是"每平台一把 `asyncio.Lock`"（2026-09-13，devlog/076）
+
+    综合档是**每轮 `asyncio.run(...)` 一个新事件循环**（`_tier_loop`）。而 `asyncio.Lock`
+    在**第一次 await 时就绑死当时的事件循环**，于是模块级 pacer 里的锁在第二轮变成
+    "is bound to a different event loop" → **`_run_platform_rounds` 第一发就炸**，
+    整个动态流每轮直接放弃（日志里每 60s 一条 ERROR，实测从 20:15 起动态流全停）。
+
+    现在改成：用一把**线程锁**（与事件循环无关）在极短的临界区里"占一个起跑时隙"，
+    再在锁外 `await asyncio.sleep()`。语义与旧实现一致（相邻起跑间隔 ≥ gap），
+    但不再持有任何 loop-bound 原语 —— 换多少个事件循环都能用。
     """
 
     def __init__(self, gap_min: float, gap_max: float) -> None:
         self.gap_min = gap_min
         self.gap_max = gap_max
-        self._locks: dict[str, asyncio.Lock] = {}
         self._last: dict[str, float] = {}
+        self._guard = threading.Lock()
+
+    def _reserve(self, pf: str, now: float | None = None) -> float:
+        """占一个起跑时隙，返回"还要等多少秒"（同步、可在任何事件循环里调）。"""
+        now = time.monotonic() if now is None else now
+        with self._guard:
+            last = self._last.get(pf)
+            gap = random.uniform(self.gap_min, self.gap_max)
+            start = now if last is None else max(now, last + gap)
+            self._last[pf] = start
+            return max(0.0, start - now)
 
     async def wait(self, pf: str) -> None:
         if self.gap_max <= 0:
             return
-        lock = self._locks.get(pf)
-        if lock is None:
-            lock = self._locks[pf] = asyncio.Lock()
-        async with lock:
-            last = self._last.get(pf)
-            now = time.monotonic()
-            if last is not None:
-                gap = random.uniform(self.gap_min, self.gap_max)
-                delta = gap - (now - last)
-                if delta > 0:
-                    await asyncio.sleep(delta)
-            self._last[pf] = time.monotonic()
+        delay = self._reserve(pf)
+        if delay > 0:
+            await asyncio.sleep(delay)
 
 
 # 动态流起跑闸门：与「每账号抓完再睡」同参数，但改成平台级 —— 并发下才有意义

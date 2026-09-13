@@ -453,7 +453,14 @@ flowchart LR
     （动态流，同 bvid）只保留前者，动态附言进 `posts.note`（devlog/047）；
 14. **场次合并要防「开放式区间」**：`end_at` 缺失既可能是「正在直播」也可能是「数据未定稿」，
     当无穷大会让很久以前的记录吞掉今天的场次 —— 用假定时长上界 + 双缺 end 时只认同标题
-    （devlog/047）。
+    （devlog/047）；
+15. **模块级对象不得持有 asyncio 原语**（`Lock`/`Semaphore`/`Event`/`Queue`）：综合档是
+    「**每轮一个 `asyncio.run()`**」，`asyncio.Lock` 首次 await 就绑死当时那个循环，
+    第二轮必抛 `is bound to a different event loop` —— 2026-09-13 实际事故：
+    起跑闸门把动态流**每轮**打成异常（devlog/076）。要跨轮复用就存**同步**状态
+    （`threading.Lock` + 时刻表，锁外 `await`），或把原语按事件循环惰性创建。
+    护栏：`test_platform_pacer_survives_new_event_loops`
+    + `test_module_level_pacers_hold_no_event_loop_primitives`。
 
 ---
 

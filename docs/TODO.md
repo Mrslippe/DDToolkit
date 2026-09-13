@@ -212,12 +212,13 @@
 | 签名下拉栏浮层化（portal + fixed）+ 再点收起 + 面板等宽 | 073 |
 | 签名来源与覆盖（**A3**）+ 字段锁定退役 + 曾用名/曾用签名（迁移 f004）+ 新表补进 purge | 074 |
 | 签名下拉栏"**点不动**"根因修复（radix `body{pointer-events:none}`）+ 面板挂回内容体 + 曾用值撤出展示 | 075 |
+| 日志排查：动态流每轮 ERROR = 起跑闸门持有 loop-bound `asyncio.Lock`（R6 回归）+ 顺清同形态隐患 | 076 |
 
 ### 6.2 当前门禁基线（2026-09-13 实测 / 复核）
 
 | 门禁 | 命令 | 基线 |
 |---|---|---|
-| 后端 | `python -m pytest -q` | **307 passed** |
+| 后端 | `python -m pytest -q` | **309 passed** |
 | 前端类型 | `npx tsc --noEmit`（`npm run build` 也会跑） | **0 错** |
 | 前端 lint | `npm --prefix frontend run lint` | **0 错**（`--max-warnings 0`） |
 | 前端单测 | `npm --prefix frontend run test` | **119 passed** |

@@ -117,7 +117,6 @@ class BilibiliAuth:
         self.refresh_token: str = settings.BILI_REFRESH_TOKEN
         self.uname: str = ""            # 昵称（登录后 nav 回填，供登录态展示）
         self._needs_login: bool = not self.is_logged_in
-        self._lock = asyncio.Lock()
 
     def needs_login(self) -> bool:
         return self._needs_login

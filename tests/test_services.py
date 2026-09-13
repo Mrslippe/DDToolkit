@@ -1319,6 +1319,56 @@ def test_field_locked_shim_is_retired():
     assert sch._field_locked(_A(), "display_name") is False
 
 
+def test_platform_pacer_survives_new_event_loops(monkeypatch):
+    """起跑闸门必须能跨事件循环复用（2026-09-13 事故，devlog/076）。
+
+    综合档每轮 `asyncio.run(_run_combined_tier(...))` = 一个新事件循环，而
+    `asyncio.Lock` 在第一次 await 时会**绑死当时那个循环**：模块级 pacer 里的锁
+    到第二轮就抛 "is bound to a different event loop"，把 `_run_platform_rounds`
+    的第一发打成异常 → **整个动态流每轮直接放弃**（线上日志每 60s 一条 ERROR）。
+
+    ⚠️ 为什么上一版没测出来：`test_platform_pacer_spaces_same_platform_but_not_across`
+    只在一个 `asyncio.run` 里跑 —— **对"跨循环"这件事完全没有感知**（同 §四探针
+    只看几何、看不见 pointer-events 的教训）。这里显式用两个循环调**真实的模块级实例**。
+    """
+    import time as _time
+
+    from app.services import scheduler as sch
+
+    monkeypatch.setattr(sch._dynamics_pacer, "gap_min", 0.12)
+    monkeypatch.setattr(sch._dynamics_pacer, "gap_max", 0.12)
+    sch._dynamics_pacer._last.clear()
+
+    asyncio.run(sch._dynamics_pacer.wait("bilibili"))     # 第一个循环：占下时隙
+    t0 = _time.monotonic()
+    asyncio.run(sch._dynamics_pacer.wait("bilibili"))     # 第二个循环：旧实现必抛
+    assert _time.monotonic() - t0 >= 0.10                 # 且仍被间隔开
+    t1 = _time.monotonic()
+    asyncio.run(sch._dynamics_pacer.wait("weibo"))        # 跨平台互不影响
+    assert _time.monotonic() - t1 < 0.05
+
+
+def test_module_level_pacers_hold_no_event_loop_primitives():
+    """防复发（结构性判据）：pacer 里不允许挂着 loop-bound 原语。
+
+    ⚠️ 边界：只看**实例属性现值**，所以只能挡住"在 `__init__` 里急切建锁"这种写法；
+    惰性塞进字典的（上一版就是）要靠上面那条行为断言 —— 两条一起才是护栏。
+    """
+    import asyncio as _aio
+
+    from app.services import scheduler as sch
+
+    loop_bound = (_aio.Lock, _aio.Semaphore, _aio.Event, _aio.Queue, _aio.Condition)
+    for pacer in (sch._dynamics_pacer,):
+        for name, value in vars(pacer).items():
+            if isinstance(value, loop_bound):
+                raise AssertionError(f"{type(pacer).__name__}.{name} 持有 {type(value).__name__}，"
+                                     f"跨事件循环必炸（见 devlog/076）")
+            if isinstance(value, dict):
+                for k, v in value.items():
+                    assert not isinstance(v, loop_bound), f"{name}[{k}] 持有 loop-bound 原语"
+
+
 def test_deferred_avatar_updates_only_avatar_path(monkeypatch):
     """延后下载：只 UPDATE avatar_path 一列并再推一次快照（不覆盖其它字段）。"""
     from app.services import scheduler as sch
