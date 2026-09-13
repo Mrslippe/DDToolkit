@@ -2285,8 +2285,8 @@ def _lane_skip_reason(pf: str) -> str | None:
 
     目前只有一条：**微博未登录/登录态失效**时整条 weibo 名单跳过 ——
     否则会变成"每分钟 N 条 ok=-100 警告 + 白打请求"（2026-09-13 实测：Cookie 过期期间
-    抓取必失败）。登录态在每轮开抓前用 `check_valid()`（60s 缓存）复探一次，
-    用户重新扫码后**自动恢复**，不需要重启。
+    抓取必失败）。判据是**同步**的（无 cookie，或抓取路径已用 `mark_invalid()` 标记失效），
+    不额外发探测请求；用户重新扫码走 `apply_cookie()` → 下一轮自动恢复。
     """
     if pf == "weibo" and weibo_auth_manager.needs_login:
         return "微博未登录/登录态失效"
@@ -2415,8 +2415,9 @@ async def run_latest_dynamics_sweep() -> dict:
     - 手动任务优先：_post_fetch_lock 非阻塞获取失败即跳过；轮间让位；
     - 不写 last_result（周期任务静默，前端不弹完成胶囊）。
 
-    名单级跳过：微博登录态不可用时**整条 weibo 名单不跑**（原因见 `_lane_skip_reason`），
-    登录态每轮复探一次，重新登录后自动恢复。
+    名单级跳过：微博登录态不可用时**整条 weibo 名单不跑**（`_lane_skip_reason`）。
+    登录态**不额外探测**（探测本身就是一次请求）：失效由抓取自己发现并标记
+    （`weibo_auth_manager.mark_invalid()`），下一轮起跳过，重新扫码后自动恢复。
     """
     global _post_fetch_running
 
@@ -2435,11 +2436,11 @@ async def run_latest_dynamics_sweep() -> dict:
     out: dict = {}
     try:
         groups, skipped_lanes = _active_dynamics_lanes(db)
-        # 登录态**复探一次**（60s 缓存）：Cookie 中途失效时立刻停掉 weibo 名单，
-        # 重新扫码后下一轮自动恢复 —— 不做这一步就会每分钟白打 2 个必失败请求 + 两条警告。
-        if "weibo" in groups and not await weibo_auth_manager.check_valid():
-            skipped_lanes["weibo"] = "微博登录态探测无效"
-            groups.pop("weibo")
+        # ⚠️ 这里**不做**登录态探测（2026-09-13，devlog/079）：动态流每轮都跑，
+        #    探测本身就是一次上游请求 ⇒ 每分钟白打一个 `profile/info`。
+        #    改为由**抓取失败自己标记**（`weibo.fetch_post_page/ fetch_user_info` 见 ok=-100
+        #    就调 `weibo_auth_manager.mark_invalid()`）→ 本轮白打一次，下一轮起整条名单跳过；
+        #    重新扫码（`apply_cookie`）自动恢复。上面那次同步判据负责"已知失效就不开抓"。
         if skipped_lanes:
             logger.info("动态流：名单跳过 " + "、".join(
                 f"{pf}（{why}）" for pf, why in skipped_lanes.items()))

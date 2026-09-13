@@ -1,4 +1,4 @@
-"""微博平台适配（weibo.com PC ajax 接口）。
+﻿"""微博平台适配（weibo.com PC ajax 接口）。
 
 实测（2026-08）：扫码登录产出的 SUB cookie 仅对 PC 域（weibo.com）有效，
 m.weibo.cn getIndex 判登录还依赖 wapssowb 链路 cookie（ok:-100 需登录）。
@@ -270,6 +270,10 @@ class WeiboPlatform(BasePlatform):
                         f"微博用户信息 ok!=1: uid={uid}, msg={data.get('msg')}, "
                         f"body={str(data)[:200]}"
                     )
+                    if data.get("ok") == -100:
+                        # 需要登录：让认证单例记住（动态流下一轮整条 weibo 名单跳过，
+                        # 不再每分钟白打一遍；见 devlog/079）
+                        weibo_auth_manager.mark_invalid(f"profile ok=-100 uid={uid}")
                     return None
                 user = (data.get("data") or {}).get("user") or {}
                 if not user:
@@ -310,6 +314,8 @@ class WeiboPlatform(BasePlatform):
                     _detect_rate_limit(resp.status_code, data)
                     if data.get("ok") == -100:
                         logger.warning(f"微博列表需登录（ok=-100）: uid={uid}")
+                        # 同上：标记失效 → 动态流下一轮跳过整条 weibo 名单
+                        weibo_auth_manager.mark_invalid(f"mymblog ok=-100 uid={uid}")
                     return None
                 d = data.get("data") or {}
                 raw_items = [it for it in (d.get("list") or []) if it.get("id")]

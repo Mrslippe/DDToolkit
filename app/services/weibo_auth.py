@@ -119,10 +119,26 @@ class WeiboAuth:
         now = time.monotonic()
         if self._valid is not None and now - self._checked_at < self._VALIDITY_TTL:
             return self._valid
-        self._valid = await self._probe_once()
+        # 先记账再探测：并发调用者（TopBar 轮询 / 抓取路径）在本轮探测期间直接用旧结论，
+        # 不会跟着再打一次上游（实测出现过同一秒两次 profile/info）。
         self._checked_at = now
+        self._valid = await self._probe_once()
         logger.info(f"微博登录态探测: {'有效' if self._valid else '失效/未登录'}")
         return self._valid
+
+    def mark_invalid(self, reason: str) -> None:
+        """把登录态标为失效（**由抓取路径自己发现**，2026-09-13 devlog/079）。
+
+        为什么需要：动态流每轮都要抓 weibo，而 `check_valid()` 的探测**本身是一次请求** ——
+        与其每分钟探测一次，不如让"抓取返回 `ok=-100`"这个既成事实来标记失效：
+        标记后 `needs_login` 为真 → 动态流下一轮起**整条 weibo 名单跳过**（零额外请求）。
+        重新扫码走 `apply_cookie()`（置回有效），所以不会卡死。
+        """
+        if self._valid is False:
+            return                      # 已经是失效态，不重复刷日志
+        self._valid = False
+        self._checked_at = time.monotonic()
+        logger.warning(f"微博登录态标记为失效（{reason}）—— 重新扫码后自动恢复")
 
     def build_headers(self, extra: Optional[dict] = None) -> dict:
         headers = dict(_BASE_HEADERS)

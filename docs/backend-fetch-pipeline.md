@@ -227,9 +227,11 @@
 4. **周期**：`_dynamics_next_due(since=轮开始时刻)` = `max(轮开始 + 60s, now + 预算等待 ±15s)`。
 5. **每账号**：`_fetch_posts_for_account(acc, 0, 1, ...)`（0 页投稿 + 1 页动态，
    `stop_on_existing=True`，`limit_latest=2`）；新帖详情计入平台预算。
-6. **名单级跳过**：`_lane_skip_reason()` —— **微博未登录/登录态失效时整条 weibo 名单不跑**
-   （每轮开抓前用 `check_valid()` 复探一次，重新扫码后自动恢复）。否则 Cookie 过期期间
-   会变成"每分钟 N 条 `ok=-100` 警告 + 白打请求"。
+6. **名单级跳过**：`_lane_skip_reason()` —— **微博未登录/登录态失效时整条 weibo 名单不跑**。
+   判据是**同步**的（无 cookie，或已被标记失效），动态流**不做额外探测**：探测本身是一次
+   上游请求，每轮探一次等于每分钟白打一个 `profile/info`（devlog/079）。失效由**抓取自己发现**——
+   `fetch_post_page`/`fetch_user_info` 见 `ok=-100` 就 `weibo_auth_manager.mark_invalid()`，
+   下一轮起整条名单跳过（代价：本轮白打一次）；重新扫码走 `apply_cookie()` 自动恢复。
 7. **预算口径同改**：`_next_dynamics_cost()` = 每个账号 1 次 feed 页（按名单长度），
    与抓取轮同口径；跳过的名单不计预算。
 8. **失败隔离 / 手动优先 / 进度**：单账号异常只回滚该会话并记 `issues`；平台风控只冷却该平台

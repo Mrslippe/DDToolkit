@@ -206,6 +206,43 @@ def test_weibo_fetch_post_page():
     assert page["items"][0]["platform_post_id"] == "5099666961200194"
 
 
+def test_weibo_login_required_marks_auth_invalid(monkeypatch):
+    """`ok=-100`（需要登录）→ 抓取路径**自己**把登录态标失效（2026-09-13，devlog/079）。
+
+    这是动态流"整条 weibo 名单跳过"的信号来源：不靠每分钟探测上游（那本身是一次请求），
+    而是让既成的失败来标记；下一轮 `needs_login` 为真 → 名单跳过。
+    重新扫码走 `apply_cookie()` → 立刻恢复有效。
+    """
+    from app.services.weibo_auth import weibo_auth_manager
+
+    # ⚠️ 必须挡住落盘：`apply_cookie()` 会 `save_env_keys()` 写 DATA_DIR/.env，
+    #    而测试环境 DATA_DIR = 项目根 ⇒ 会把仓库根 .env 的 WEIBO 键写成假值
+    #    （2026-09-13 实际踩到，见 devlog/079）。既有测试都是这么挡的（test_auth.py:182）。
+    monkeypatch.setattr("app.services.weibo_auth.save_env_keys", lambda values: None)
+    monkeypatch.setattr(weibo_auth_manager, "cookie", "SUB=dummy")
+    weibo_auth_manager._valid = True                      # 假装此刻还是有效的
+    assert weibo_auth_manager.needs_login is False
+
+    login_required = {"ok": -100, "url": "https://weibo.com/login.php?url=..."}
+
+    def handler(request):
+        return httpx.Response(200, json=login_required)
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as c:
+            page = await weibo.fetcher.fetch_post_page("7198559139", 1, client=c)
+            info = await weibo.fetcher.fetch_user_info("7198559139", client=c)
+            return page, info
+
+    page, info = asyncio.run(run())
+    assert page is None and info is None                  # 两条路径都失败
+    assert weibo_auth_manager.needs_login is True         # 且都已标记失效
+
+    # 重新扫码 → apply_cookie 置回有效（不会再被跳过）
+    weibo_auth_manager.apply_cookie("SUB=new", uid="1", name="x")
+    assert weibo_auth_manager.needs_login is False
+
+
 def test_weibo_fetch_user_info_rate_limited():
     from app.services.fetcher import clear_rate_limit, was_rate_limited
 

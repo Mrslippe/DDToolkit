@@ -5,11 +5,14 @@
   python scripts/measure_dynamics_round.py            # R7 默认：名单内串行 + 自适应间隔
   python scripts/measure_dynamics_round.py --old      # 复现 R6 形态：平台内并发 3 + 起跑闸门
   python scripts/measure_dynamics_round.py --rounds 2 # 连跑两轮（看周期是否符合预期）
+  python scripts/measure_dynamics_round.py --verbose  # 打开 INFO 日志（能看清每个上游请求：
+                                                      # 用它可以确认"名单跳过时没有多余探测请求"）
 
 ⚠️ 会真的抓一轮动态（每个账号 1 次 feed 请求 + 新帖详情），与定时任务行为一致；
    数据落**开发库副本**（不碰真库）。
 """
 import asyncio
+import logging
 import os
 import shutil
 import sys
@@ -31,6 +34,11 @@ for name in ("vtuber.db", "vtuber.db-wal", "vtuber.db-shm", ".env"):
         shutil.copy2(src, TMP / name)
 os.environ["DDTOOLKIT_DATA_DIR"] = str(TMP)
 sys.path.insert(0, str(ROOT))
+
+if "--verbose" in sys.argv:
+    # 默认不开：httpx 每个请求一行，会把测量结果淹掉
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
 from app.core.config import settings  # noqa: E402
 from app.services import scheduler as sch  # noqa: E402
