@@ -67,22 +67,29 @@ export default function LiveSessionDialog({
   accountId,
 }: Props) {
   /**
-   * 自建词云（本地覆盖）：非空时**优先于** `detail.data.danmaku` 展示。
+   * 自建词云（本地覆盖）：非空、且**属于当前场次**时优先于 `detail.data.danmaku` 展示。
    *
    * 为什么不把结果写回父组件的 `detail`：① 自建只影响这一次打开的词云展示，
-   * 无需进全局详情状态；② 本组件**仅在 `detail` 非空时渲染**（父级条件渲染），
-   * 所以切换场次/重开弹窗时会自然卸载重建 ⇒ 本地状态自动归零，语义正好。
+   * 无需进全局详情状态；② 关掉弹窗时本组件会卸载 ⇒ 本地状态自然归零。
+   *
+   * ⚠️ **必须连同 `live_id` 一起记账**：弹窗里有一排场次页签（`onSwitchIdx`），
+   * 切换场次时本组件**不会卸载**（父级条件渲染的位置没变、也没给 `key`），
+   * 只存 `LiveDanmakuInfo` 的话 —— A 场自建的词云会**留在 B 场的界面上**，
+   * 是一份看不出错的静默错数据。记下它属于哪一场，切走即自动失效（切回来还在）。
    */
-  const [selfWc, setSelfWc] = useState<LiveDanmakuInfo | null>(null)
-  const [building, setBuilding] = useState(false)
+  const [selfWc, setSelfWc] = useState<{ liveId: string; data: LiveDanmakuInfo } | null>(null)
+  /** 正在拉取自建词云的**场次 id**（同 `selfWc` 的理由：别让 A 场的 loading 冻住 B 场的按钮） */
+  const [busyWc, setBusyWc] = useState<string | null>(null)
 
   const s: LiveSessionDetail =
     detail.data ?? { ...detail.sessions[detail.idx], danmaku: null, analysis: null }
-  /** 生效的弹幕信息：自建结果优先 */
-  const dm: LiveDanmakuInfo | null = selfWc ?? s.danmaku ?? null
+  /** 本场次的生效弹幕信息：自建结果优先 */
+  const dm: LiveDanmakuInfo | null =
+    (selfWc && selfWc.liveId === s.live_id ? selfWc.data : null) ?? s.danmaku ?? null
   /** 词云状态（缺省 = 上游没给） */
   const wcStatus = dm?.wc_status ?? (dm ? 'upstream' : 'upstream_absent')
   const hasWords = (dm?.top_words?.length ?? 0) > 0
+  const building = busyWc != null && busyWc === s.live_id
 
   /** 词云词条：top40（按次数降序）。只服务本弹窗，随挂载重建。 */
   const cloudBubbles = useMemo<CloudWord[]>(() => {
@@ -99,15 +106,15 @@ export default function LiveSessionDialog({
    */
   const buildCloud = async () => {
     const liveId = s.live_id
-    if (!liveId || !accountId || building) return
-    setBuilding(true)
+    if (!liveId || !accountId || busyWc) return
+    setBusyWc(liveId)
     try {
-      setSelfWc(await api.buildLiveSessionWordCloud(accountId, liveId))
+      setSelfWc({ liveId, data: await api.buildLiveSessionWordCloud(accountId, liveId) })
     } catch {
       // 失败也要落到明确状态（否则按钮点了没反应，用户不知道发生了什么）
-      setSelfWc({ wc_status: 'fetch_failed', top_words: [], top_keywords: [] })
+      setSelfWc({ liveId, data: { wc_status: 'fetch_failed', top_words: [], top_keywords: [] } })
     } finally {
-      setBuilding(false)
+      setBusyWc(null)
     }
   }
   const d0 = new Date(s.start_at)
@@ -353,9 +360,24 @@ export default function LiveSessionDialog({
             </div>
           ) : (
             <div className="lc-dlg-ph">
-              {isFreshSession(s.start_at, s.end_at)
-                ? '该场次刚结束，弹幕 / 热词仍在第三方收录中（danmakus 通常延迟数小时），稍后重新打开即可看到'
-                : '本场无弹幕记录（danmakus 未收录该场次，或该场次没有弹幕数据源）'}
+              {isFreshSession(s.start_at, s.end_at) ? (
+                '该场次刚结束，弹幕 / 热词仍在第三方收录中（danmakus 通常延迟数小时），稍后重新打开即可看到'
+              ) : (
+                <>
+                  {/* ⚠️ 这里**不能**断言「本场无弹幕记录」：`danmaku` 为 null 也可能是
+                      上游慢/超时导致的拉取失败，而这一场其实有上万条弹幕
+                      （2026-09-13 实测：5 个最近场次全因此被误报成「没有弹幕数据」，
+                      见 devlog/062）。文案必须把「没拉到」与「确实没有」分开说。 */}
+                  弹幕数据未取到
+                  <span className="lc-dlg-note">
+                    （上游 danmakus 超时或未收录该场次；可稍后重试）
+                  </span>
+                  <button type="button" className="lc-dlg-cloud-build"
+                          onClick={() => void buildCloud()} disabled={building}>
+                    {building ? '正在取整场弹幕…' : '尝试拉取弹幕'}
+                  </button>
+                </>
+              )}
             </div>
           )}
         </section>

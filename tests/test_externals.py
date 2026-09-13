@@ -295,7 +295,7 @@ def test_parse_live_summary_wordcloud():
 
 
 def test_parse_live_summary_reports_upstream_wordcloud_status():
-    """回归（2026-09-13，devlog/060 实测）：`extra` 字段**整个消失**时要报 upstream_absent。
+    """回归（2026-09-13，devlog/060 实测）：`extra` 缺失时状态要如实报出来。
 
     背景：上游原本在 `data.live.extra.wordCloud` 里给预计算好的热词，2026-09-13 实测
     该字段整个不存在（不是空对象）。前端需要据此显示「上游未提供 + 用弹幕自建」，
@@ -343,6 +343,82 @@ def test_parse_live_events():
     assert [(e["type"], e["send_date_ms"]) for e in evts] == [
         (7, 1788628090562), (8, 1788628100000)]
     assert _parse_live_events(None) == []
+
+
+# ── 重试契约（devlog/062）────────────────────────────────────────────
+
+def test_live_summary_retry_returns_none_not_raises(monkeypatch):
+    """上游连续慢/失败时 `fetch_live_summary` **必须返回 None**，不能抛 RetryError。
+
+    背景（devlog/062）：danmakus 上游会间歇性变慢，5 个最近场次全被单次 12s 超时
+    误判成「本场没有弹幕数据」。修法是放宽超时 + 3 次重试；但如果重试耗尽后抛
+    `tenacity.RetryError`，路由层会把「上游慢」变成 500 —— 所以这里锁死降级契约。
+    """
+    import asyncio
+    from app.services.externals import danmakus as dm
+
+    async def fake_sleep(_s):
+        pass
+
+    monkeypatch.setattr("asyncio.sleep", fake_sleep)
+
+    calls: list[str] = []
+
+    async def always_none(live_id):
+        calls.append(live_id)
+        return None
+
+    monkeypatch.setattr(dm, "_fetch_live_summary_once", always_none)
+    res = asyncio.run(dm.fetch_live_summary("L-fail"))
+    assert res is None                      # 不是 RetryError、不是异常
+    assert len(calls) == 3                  # 确实重试了 3 次
+
+    # 第 2 次成功 → 立刻返回，不再继续重试
+    ok = {"total": 1, "word_cloud": [("好耶", 5)], "status": "upstream"}
+    flaky: list[int] = []
+
+    async def flaky_once(live_id):
+        flaky.append(1)
+        return None if len(flaky) == 1 else ok
+
+    monkeypatch.setattr(dm, "_fetch_live_summary_once", flaky_once)
+    assert asyncio.run(dm.fetch_live_summary("L-flaky")) == ok
+    assert len(flaky) == 2
+
+
+def test_live_events_retry_returns_empty_not_raises(monkeypatch):
+    """事件请求同样：耗尽重试后返回 `[]`（同 `fetch_live_summary` 的降级契约）。"""
+    import asyncio
+    import httpx
+    from app.services.externals import danmakus as dm
+
+    async def fake_sleep(_s):
+        pass
+
+    monkeypatch.setattr("asyncio.sleep", fake_sleep)
+
+    calls: list[int] = []
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def get(self, *a, **kw):
+            calls.append(1)
+            raise httpx.ConnectTimeout("upstream too slow")
+
+    monkeypatch.setattr(dm, "new_async_client", lambda *a, **kw: FakeClient())
+    assert asyncio.run(dm.fetch_live_events("L-fail")) == []
+    assert len(calls) == 3
+
+
+def test_live_timeout_not_regressed_below_20s():
+    """`_LIVE_TIMEOUT` 不允许被调回 12s：那是「有弹幕却被判无数据」的直接成因。"""
+    from app.services.externals.danmakus import _LIVE_TIMEOUT
+    assert _LIVE_TIMEOUT >= 20.0
 
 
 # ── 注册表与空壳 ────────────────────────────────────────────────────

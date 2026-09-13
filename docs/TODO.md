@@ -308,10 +308,11 @@
 |---|---|---|
 | P3 JSONL 归档包导出 | ⏸ 用户主动搁置（等表结构稳定） | P4+ 表结构变动已收敛（head = `f003`），**可重启** |
 | 场次级「直播内容分析」服务 | 接口已预留、无实现 | 需先定分析口径（独立产品级） |
-| 原始弹幕明细库 / 全量分析 | 暂缓（词云已覆盖当前需求） | **通道已实测可用**：`app/services/externals/danmakus.py:13` 记录 `/api/v3/lives/{liveId}/danmakus` 公开免鉴权 + `offset/limit` 分页（max 100000，含弹幕原文/礼物/上舰/SC），仅差落表与前端下钻。⚠️ 但**热词词云已断供**（见下条） |
+| 原始弹幕明细库 / 全量分析 | 暂缓（词云已覆盖当前需求） | **通道已实测可用**：`app/services/externals/danmakus.py:13` 记录 `/api/v3/lives/{liveId}/danmakus` 公开免鉴权 + `offset/limit` 分页（max 100000，含弹幕原文/礼物/上舰/SC），仅差落表与前端下钻。✅ 该通道**已被词云自建真实使用**（见下条，不再只是"通道可用"） |
 | ~~danmakus `extra.wordCloud` 断供~~ → **误判，已更正**（2026-09-13，devlog/061） | ✅ **不存在断供** | `/api/v2/live` 仍返回 **100 个热词**（12/12 场复核）。原结论来自探查脚本**读错嵌套层级**（该接口是双层信封：`data.data.live.extra`）。**已落地**：词云自建作为**兜底**（jieba 分词 + v3 原始弹幕，用户点按钮才拉、不落库）+ UI 五态区分（`upstream`/`upstream_absent`/`self_built`/`no_danmaku`/`fetch_failed`） |
 | P2 词云自建**扩展点**（未接线） | 可选增强 | `count_tokens(extra_words=…)` 与 `JiebaTokenizer.add_words()` 已就绪，但**没有自动灌词**：可按 V 名/企划名自动灌入自定义词典，避免"明前奶绿"被切碎（接线处留了 `ExtraWordsHook`） |
-| 前端分层收敛 P2（拆 `PostsPage`/`LiveCalendar` + 两 hook） | 技术债，无功能影响 | 🔶 **部分完成（2026-09-13）**：`LiveCalendar` 已完成（1182 → **465**，词云/格式化/hook/弹窗四块全部拆出）；**剩余 `PostsPage`**（1247 行，`HeroCardsView`/`PostListView`/`useVtuberActions`）。方案见 `docs/FRONTEND-ARCH.md` §5 |
+| 前端分层收敛 P2（拆 `PostsPage`/`LiveCalendar` + 两 hook） | 技术债，无功能影响 | 🔶 **部分完成（2026-09-13，devlog/055–059）**：`LiveCalendar` 已完成（1182 → **434**，词云/格式化/hook/弹窗四块全部拆出）；`PostsPage` 只抽出纯逻辑（1247 → **1074**：`utils/postTypes.ts` + `pages/useVtuberActions.ts`），**`HeroCardsView`/`PostListView` 两个视图件仍未拆**——它仍是全仓最大文件。方案见 `docs/FRONTEND-ARCH.md` §5 |
+| 自建词云首拉耗时（详情端点已修，此路径未设上界） | 体验，可接受 | 实测 5 万条记录 ~12s 属正常，但上游瞬时变慢时单场可达 **120s**（devlog/062 §四）。**刻意不加时间预算**：截断取靠前记录会系统性丢掉下播前的高频词（如「晚安」）。可选改法：分页大小调优 / 前端进度反馈 / 明确标注"基于部分弹幕"后再截断 |
 
 > ✅ **目录改名 `http-test` → `ddtoolkit` 已完成**（仓库现为 `E:\work\Project\DDToolkit`；
 > `4ede9cf` 落地一次性改名脚本 + 登录时计划任务，任务成功后自删）。本条已从待办移除。

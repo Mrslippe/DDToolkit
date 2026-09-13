@@ -130,6 +130,21 @@ python scripts/ui_probe.py --archive --archive-day 11 --vtuber 14    # 点指定
 （`_ui_probe_tmp/shot-<宽>.png`，筛选弹窗打开态）时同样保留该目录——**不参与断言，
 纯视觉存档**：布局不变量只管「在不在框里」，配色/密度这类还得看图。
 
+## 二·六、第三方数据「抓不下来」的定性（`scripts/check_danmaku_fetch.py`）
+
+上游（danmakus）会**间歇性变慢**：同一场次同一份代码实测在 **1.1s ↔ 15.6s** 之间摆
+（2026-09-13，devlog/062）。所以「最近的数据都抓不到」这类报障，先分清是
+**超时 / 断供 / 真没弹幕**，不要直接当成数据问题：
+
+```powershell
+$env:DDTOOLKIT_DATA_DIR = "$env:APPDATA\com.ddtoolkit.app-dev"   # 必设：否则读项目根的裸跑残留库
+python scripts/check_danmaku_fetch.py          # 最近 6 个 danmakus 场次：词云状态 + 事件数 + 耗时
+python scripts/check_danmaku_fetch.py 10 --self  # 顺带跑自建路径（v3 原始弹幕 + 分词，很慢）
+```
+
+**只读**（sqlite `mode=ro`，不写库不删数据）；全绿退出 0、有失败退出 1，可当探针。
+库路径跟随 `DDTOOLKIT_DATA_DIR`（不硬编码机器路径），未设该变量时会告警指明用的是哪个库。
+
 ## 三、手动复现打包版状态（脚本没覆盖时）
 
 ```powershell

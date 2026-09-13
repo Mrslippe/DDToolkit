@@ -25,6 +25,8 @@ from datetime import datetime, timezone
 
 import httpx
 from sqlalchemy.orm import Session
+from tenacity import (retry, retry_if_result, stop_after_attempt,
+                      wait_exponential)
 
 from app.core.http import new_async_client
 from app.models.vtuber import Account, ThirdpartyVtuber
@@ -39,6 +41,11 @@ DANMAKUS_BASE = "https://ukamnads.icu"
 VUP_LIST_PATH = "/api/v2/vup-list"
 CHANNEL_PATH = "/api/v2/channel"
 LIVE_PATH = "/api/v2/live"
+
+# 单场详情/事件请求超时。**不要调回 12s**：该上游会间歇性变慢，而近期场次的
+# 响应体明显更大（实测 223KB vs 老场次 45KB），12s 会让「有弹幕的场次」被误判成
+# 「没有弹幕数据」（2026-09-13 实测 5 个最近场次全中，见 devlog/062）。
+_LIVE_TIMEOUT = 30.0
 
 # 鉴权端点（当前未启用）：有 token 时在请求头携带（Token: <token>，实测有效）
 DANMAKUS_TOKEN_ENV = "DANMAKUS_TOKEN"
@@ -198,21 +205,19 @@ def _parse_live_events(payload: dict) -> list[dict]:
     return out
 
 
-async def fetch_live_summary(live_id: str) -> dict | None:
-    """公开端点（免鉴权，实测 2026-09-07）：单场直播弹幕摘要。
-
-    请求 /api/v2/live?liveId=&includeExtra=true（弹幕总量 + 词云）；
-    失败/异常一律返回 None（调用方降级为「暂无弹幕数据」）。
-    """
+async def _fetch_live_summary_once(live_id: str) -> dict | None:
+    """单次请求（失败返回 None，不重试）；重试策略见 `fetch_live_summary`。"""
     try:
-        async with new_async_client(12.0) as client:
+        async with new_async_client(_LIVE_TIMEOUT) as client:
             resp = await client.get(
                 f"{DANMAKUS_BASE}{LIVE_PATH}",
                 params={"liveId": live_id, "pageNum": 0, "pageSize": 1,
                         "includeDanmakus": "true", "includeExtra": "true"},
                 headers=BROWSER_HEADERS,
             )
-    except httpx.HTTPError:
+    except httpx.HTTPError as e:
+        logger.warning(f"danmakus live 详情请求失败 liveId={live_id}: "
+                       f"{type(e).__name__}: {e}")
         return None
     if resp.status_code != 200:
         logger.warning(f"danmakus live 详情 HTTP {resp.status_code} liveId={live_id}")
@@ -226,6 +231,36 @@ async def fetch_live_summary(live_id: str) -> dict | None:
                        f"code={data.get('code') if isinstance(data, dict) else '?'}")
         return None
     return _parse_live_summary(data.get("data"))
+
+
+# 重试 3 次（指数退避、每次最多 `_LIVE_TIMEOUT`）。**耗尽后必须返回 None**，
+# 不能抛错：调用方（路由层）按「拿不到就降级」处理，抛错会把「上游慢」变成 500。
+# tenacity 8.x 耗尽重试后**默认抛 RetryError**，所以必须显式给 `retry_error_callback`
+# 让它返回降级值（`retry=` 参数只管"什么结果值得重试"，不负责收尾）。
+_retry_give_up_none = lambda _state: None      # noqa: E731
+_retry_give_up_empty = lambda _state: []       # noqa: E731
+
+
+@retry(stop=stop_after_attempt(3),
+       wait=wait_exponential(multiplier=1, min=1, max=6),
+       retry=retry_if_result(lambda r: r is None),
+       retry_error_callback=_retry_give_up_none)
+async def fetch_live_summary(live_id: str) -> dict | None:
+    """公开端点（免鉴权）：单场直播弹幕摘要（弹幕总量 + 词云 + 场次级指标）。
+
+    ## 为什么要重试（2026-09-13 实测，devlog/062）
+
+    这个上游**会间歇性变慢**：同一个 `liveId` 同一份代码，实测有一次 15.6s 才返回、
+    另一次 3.7s 就返回（老场次 1.7s）。而近期场次的响应体本身也大得多
+    （223KB vs 老场次 45KB）。于是原来的**单次 12s 超时**会在上游稍慢时直接放弃，
+    表现成「**这场直播明明有 13857 条弹幕，详情弹窗却说没有弹幕数据**」——
+    5 个最近场次全部落在这个坑里，而更早的场次都正常。
+
+    修法：把超时放宽到 `_LIVE_TIMEOUT`，并按本仓既有习惯
+    （`fetcher.py` 的 B 站请求同款：3 次 + 指数退避 + 结果为 None 即重试）重试。
+    失败仍返回 None（调用方降级），但重试大幅降低「偶发慢 → 误报无数据」的概率。
+    """
+    return await _fetch_live_summary_once(live_id)
 
 
 DANMAKUS_V3_BASE = "/api/v3/lives"
@@ -252,7 +287,7 @@ async def fetch_raw_danmakus(live_id: str, max_records: int = _V3_DANMAKU_MAX
     records: list[dict] = []
     offset = 0
     try:
-        async with new_async_client(30.0) as client:
+        async with new_async_client(_LIVE_TIMEOUT) as client:
             while offset < max_records:
                 resp = await client.get(
                     f"{DANMAKUS_BASE}{DANMAKUS_V3_BASE}/{live_id}/danmakus",
@@ -283,13 +318,20 @@ async def fetch_raw_danmakus(live_id: str, max_records: int = _V3_DANMAKU_MAX
     return records
 
 
+@retry(stop=stop_after_attempt(3),
+       wait=wait_exponential(multiplier=1, min=1, max=6),
+       retry=retry_if_result(lambda r: not r),
+       retry_error_callback=_retry_give_up_empty)
 async def fetch_live_events(live_id: str) -> list[dict]:
     """公开端点：直播间事件（type 7=直播中止 / 8=直播继续，B 组）。
 
-    与现场日志时间线同请求（?type=7&type=8 重复参数）；失败返回 []。
+    与详情同源但**必须单独请求**：2026-09-13 实测主请求（无 type 过滤）里
+    `danmakus` 只有 1 条 type=11，拿不到 7/8；带 `type=7&8` 才有。
+    同样加上 3 次重试（同 `fetch_live_summary`，慢上游不容忍单次失败）；
+    失败返回 []。
     """
     try:
-        async with new_async_client(12.0) as client:
+        async with new_async_client(_LIVE_TIMEOUT) as client:
             resp = await client.get(
                 f"{DANMAKUS_BASE}{LIVE_PATH}",
                 params={"liveId": live_id, "type": ["7", "8"],
@@ -297,7 +339,9 @@ async def fetch_live_events(live_id: str) -> list[dict]:
                         "includeDanmakus": "true"},
                 headers=BROWSER_HEADERS,
             )
-    except httpx.HTTPError:
+    except httpx.HTTPError as e:
+        logger.warning(f"danmakus live 事件请求失败 liveId={live_id}: "
+                       f"{type(e).__name__}: {e}")
         return []
     if resp.status_code != 200:
         logger.warning(f"danmakus live 事件 HTTP {resp.status_code} liveId={live_id}")
