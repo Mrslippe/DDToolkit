@@ -131,6 +131,6 @@ npm run collect:release --prefix frontend
 - `docs/DEV-LOOP.md` — 本地开发与机器验证（dev_check / ui_probe）
 - `docs/RELEASE.md` — 打包与发布流程
 - `docs/platforms-extension-guide.md` — 平台接入扩展指南
-- `docs/TODO.md` — 路线图：**待提需求收集区（§0）** + 未完成项（§1）+ 能力现状 + 版本→devlog 索引
-- `docs/ROADMAP-DONE.md` — 已完成条目详录（历史需求 / 验收 / 实现注意）
+- `docs/TODO.md` — 路线图：**待提需求收集区（§0）** + 未完成项（§1）+ 能力现状 + 门禁基线
+- `docs/ROADMAP-DONE.md` — 已完成：**已落地需求清单 + 版本→devlog 索引** + 历史需求 / 验收 / 实现注意
 - `devlog/` — 每版本的变更记录（当前 v0.9.x）
