@@ -35,20 +35,29 @@ export function useLiveUpstream(
   const [elapsed, setElapsed] = useState(0)
   /** 防回写：切场次后旧响应不得覆盖新场次的数据 */
   const seq = useRef(0)
+  /** 在途请求的取消器：切场次 / 关弹窗即 abort（上游最坏要等 90 多秒） */
+  const ctrl = useRef<AbortController | null>(null)
 
   const load = useCallback(() => {
     if (accountId == null || !liveId) return
+    /** 上一发还在路上就先掐掉：既省上游配额，也免得它回来把新场次的状态搅了 */
+    ctrl.current?.abort()
+    const ac = new AbortController()
+    ctrl.current = ac
     const my = ++seq.current
     setLoading(true)
     setFailed(false)
     setElapsed(0)
     setData(null)
     api
-      .liveSessionUpstream(accountId, liveId)
+      .liveSessionUpstream(accountId, liveId, ac.signal)
       .then((d) => {
         if (my === seq.current) setData(d)
       })
-      .catch(() => {
+      .catch((e: unknown) => {
+        // **主动取消不算失败**：不置 failed、不写"拉取失败"降级态，
+        // 否则切场次会在新场次界面上闪一下"弹幕拉取失败"。
+        if (ac.signal.aborted || (e as Error)?.name === 'AbortError') return
         if (my === seq.current) {
           setFailed(true)
           // 失败也要落到明确状态（否则弹幕段会停在"加载中"）
@@ -62,6 +71,8 @@ export function useLiveUpstream(
 
   useEffect(() => {
     load()
+    // 卸载（关弹窗）或依赖变化（切场次/切账号）→ 取消在途请求
+    return () => ctrl.current?.abort()
   }, [load])
 
   // 已等待秒数：只在 loading 期间走表，用于"上游较慢…"的文案

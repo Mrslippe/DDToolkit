@@ -111,10 +111,14 @@ export const api = {
    * 与详情端点分开：上游会间歇性变慢（实测 1.1s ↔ 15.6s，最坏 3×30s 重试），
    * 挂在详情里会让整个弹窗一起等。失败不抛错 —— 后端以降级字段如实回报
    * （`danmaku.wc_status='fetch_failed'` / `'no_danmaku'`），前端据此显示"没拉到"。
+   *
+   * `signal`：切场次/关弹窗时**取消在途请求**（上游最坏要等 90 多秒，
+   * 用户早就不看这一场了）。走 `request()` 既有的 `init.signal`，见 devlog/064。
    */
-  liveSessionUpstream: (accountId: number, liveId: string) =>
+  liveSessionUpstream: (accountId: number, liveId: string, signal?: AbortSignal) =>
     request<LiveUpstream>(
       `/account/${accountId}/live-sessions/${encodeURIComponent(liveId)}/upstream`,
+      signal ? { signal } : undefined,
     ),
 
   /**
