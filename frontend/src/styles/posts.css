@@ -1600,108 +1600,162 @@ img.hero-avatar {
   color: var(--c-text-sub);
 }
 
-/* 带操作钮的字段（当前只有「签名 + 平台签名下拉」）：输入框与钮同排、钮不参与拉伸 */
-.vd-field--action {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  grid-template-areas:
-    'label label'
-    'input action';
-  align-items: center;
-  column-gap: 8px;
-}
+/* ── 签名 + 各平台签名下拉（2026-09-13 设计案，devlog/072）────────────────
+   结构（参考图）：输入条（右端内嵌 chevron）→ 紧贴其下的**参与布局**候选面板。
+   刻意不做绝对定位浮层：弹窗滚动体是 OverlayScroll（根 overflow:hidden），
+   浮层越界会被**静默裁掉**（2026-09-10 筛选弹窗踩过同类坑）。 */
 
-.vd-field--action > span { grid-area: label; }
-.vd-field--action > input { grid-area: input; }
-
-/* 各平台签名下拉栏（2026-09-13 用户要求）：触发器 + 绝对定位浮层，样式随弹窗令牌 */
-.vd-sign-pick {
-  grid-area: action;
+/* 输入条：只负责给右端 chevron 定位 */
+.vd-sign-field {
   position: relative;
 }
 
-.vd-sign-btn {
-  height: 30px;                 /* 与同排输入框等高（6px 上下内距 + 13px 行高 + 边框） */
-  padding: 0 10px;
-  color: var(--c-primary-deep);
+/* 给内嵌图标让位（正常输入内距 8px → 右侧加到 30px）。
+   ⚠️ 必须写到 `.vd-field .vd-sign-field > input` 这一级：只写 `.vd-sign-field > input`
+   与上面 `.vd-field input` **同特异度**，而后者在文件里更靠后 → 会赢，
+   表现为"图标压在文字上"（2026-09-13 被 `--settings` 探针的 padding 断言抓到）。 */
+.vd-field .vd-sign-field > input {
+  padding-right: 30px;
 }
 
-.vd-sign-caret {
-  font-size: 10px;
-  line-height: 1;
-  opacity: 0.7;
-}
-
-.vd-sign-pop {
+.vd-sign-toggle {
   position: absolute;
-  right: 0;
-  top: calc(100% + 6px);
-  z-index: 20;
-  width: min(340px, 74vw);
-  max-height: 260px;
-  overflow-y: auto;
-  padding: 8px;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 22px;                  /* 热区够点；图标本体 14px */
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--c-text-sub);
+  cursor: pointer;
+}
+
+.vd-sign-toggle:hover {
+  color: var(--c-primary-deep);
+  background: var(--sel-bg-hover);
+}
+
+.vd-sign-toggle:focus-visible {
+  outline: none;
+  box-shadow: var(--pill-ring);
+}
+
+.vd-sign-chevron {
+  width: 14px;
+  height: 14px;
+  transition: transform 0.15s ease;
+}
+
+.vd-sign-chevron.on {
+  transform: rotate(180deg);
+}
+
+/* 候选面板：与输入条同宽、参与布局（不是浮层），内部超高时覆盖式纵向滚动 */
+.vd-sign-panel {
+  margin-top: 6px;
+  padding: 6px;
   display: flex;
   flex-direction: column;
   gap: 4px;
+  max-height: 260px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   background: #fff;
   border: 1px solid var(--c-border);
   border-radius: var(--radius-dialog);
   box-shadow: var(--shadow-dialog);
 }
 
-.vd-sign-pop-head,
-.vd-sign-pop-empty {
-  padding: 2px 4px 4px;
-  font-size: 11px;
+.vd-sign-empty {
+  padding: 6px 8px;
+  font-size: 11.5px;
   color: var(--c-text-sub);
 }
 
+/* 候选行：单行 = 签名文字（弹性）+ 右端固定平台名 */
 .vd-sign-opt {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 6px 8px;
-  border: 1px solid transparent;
+  align-items: center;
+  gap: 10px;
+  height: 40px;
+  padding: 0 10px;
   border-radius: 8px;
-  background: var(--sel-bg-hover);
-  text-align: left;
   cursor: pointer;
 }
 
-.vd-sign-opt:hover {
-  background: var(--sel-bg);
+.vd-sign-opt:hover,
+.vd-sign-opt.cur {
+  background: var(--sel-bg-hover);
+}
+
+/* 键盘游标：左侧 2px 主色竖条（悬停不需要，靠底色即可） */
+.vd-sign-opt.cur {
+  box-shadow: inset 2px 0 0 var(--c-primary-deep);
 }
 
 .vd-sign-opt.on {
-  border-color: var(--c-primary);
   background: var(--sel-bg);
 }
 
-.vd-sign-opt-plat {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--c-text-sub);
-}
-
-.vd-sign-opt-plat em {
-  font-style: normal;
-  font-weight: 400;
-  padding: 0 5px;
-  border-radius: 999px;
-  background: var(--c-primary-deep);
-  color: #fff;
-  font-size: 10px;
-  line-height: 14px;
-}
-
-.vd-sign-opt-text {
+/* 签名文字：横向可滚、滚动条隐藏；**只有真的溢出时**才挂渐隐遮罩（.ovf）。
+   `min-width:0` 是弹性子项必须的：漏了它 flex 会把文字撑破面板，
+   横向滚动与渐隐同时失效 —— 且不报错，只是"看着不对"。
+   用户 2026-09-13 定：交互只留 hover 自动滚一次（JS 平滑滚到结尾，移出回起点）。 */
+.vd-sign-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
   font-size: 12.5px;
   color: var(--c-text-main);
-  word-break: break-all;
+  scrollbar-width: none;
+  overscroll-behavior-x: contain;
+}
+
+.vd-sign-text::-webkit-scrollbar {
+  display: none;
+}
+
+/* 渐隐：用 mask 而不是覆盖式渐变 —— 行的底色有 hover/选中两态，
+   覆盖式渐变很难与底色对齐（会露出一条色差）。平台名在容器之外，不受遮罩影响。 */
+.vd-sign-text.ovf {
+  mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent);
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent);
+}
+
+/* 平台名：不参与滚动，长文从它"之下"渐隐穿过 */
+.vd-sign-plat {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--sel-bg);
+  color: var(--c-text-sub);
+  font-size: 10px;
+}
+
+.vd-sign-opt.on .vd-sign-plat {
+  background: var(--c-primary-deep);
+  color: #fff;
+}
+
+.vd-sign-plat em {
+  font-style: normal;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.06);
+  font-size: 9.5px;
+}
+
+.vd-sign-opt.on .vd-sign-plat em {
+  background: rgba(255, 255, 255, 0.24);
 }
 
 .vd-field {

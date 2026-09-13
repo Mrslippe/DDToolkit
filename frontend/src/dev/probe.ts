@@ -445,6 +445,71 @@ export async function runUiProbe(): Promise<void> {
     return
   }
 
+  // 档案设置弹窗（`?probe=settings`，2026-09-13，devlog/072）：
+  // 这个弹窗一直在探针覆盖面**之外**（devlog/067 记过"只能靠肉眼"），而它恰恰
+  // 出过两类问题：① 覆盖式滚动条压住输入框右缘；② 面板/浮层越界被滚动体**静默裁掉**
+  // （OverlayScroll 根是 overflow:hidden）。
+  //
+  // 这里量的是**几何不变量**（不依赖网络与定时器，纯布局，跑得快也稳）：
+  //   `chevronInside`  —— 内嵌 chevron 是否完整落在输入框矩形内（位置类错误）
+  //   `panelSameWidth` —— 面板宽度是否等于输入条宽度（参考图的结构关系）
+  //   `panelClipped`   —— 面板矩形是否越出弹窗矩形（越界＝会被静默裁掉）
+  //   `rows` / `ovfRows` —— 候选行数 / 其中判定为"文字溢出"的行数
+  //   `panelWidthWhenClosed` —— 收起态不该存在面板（-1 表示确实没有）
+  if (mode === 'settings') {
+    const result: Record<string, unknown> = {}
+    /** 轮询等到条件成立（布局/挂载类等待不要在虚拟时间下"睡固定时长"） */
+    const waitFor = async (fn: () => unknown, ms = 4000) => {
+      const t0 = performance.now()
+      while (performance.now() - t0 < ms) {
+        const v = fn()
+        if (v) return v
+        await sleep(100)
+      }
+      return null
+    }
+    await waitFor(() => document.querySelector('.bg-set'))
+    const trigger = document.querySelector<HTMLElement>('.bg-set')
+    result.hasTrigger = !!trigger
+    trigger?.click()
+    const dialog = (await waitFor(() => document.querySelector('.vd-settings'))) as HTMLElement | null
+    result.hasDialog = !!dialog
+    if (!dialog) {
+      result.reason = trigger ? 'dialog-not-opened' : 'no-settings-trigger'
+    } else {
+      const input = dialog.querySelector<HTMLElement>('.vd-sign-field input')
+      const toggle = dialog.querySelector<HTMLElement>('.vd-sign-toggle')
+      const closedPanel = dialog.querySelector<HTMLElement>('.vd-sign-panel')
+      result.panelWidthWhenClosed = closedPanel ? closedPanel.getBoundingClientRect().width : -1
+      toggle?.click()                       // 展开候选面板
+      await waitFor(() => dialog.querySelector('.vd-sign-panel'), 2000)
+      const panel = dialog.querySelector<HTMLElement>('.vd-sign-panel')
+      const rect = (el: HTMLElement | null) => el?.getBoundingClientRect() ?? null
+      const ri = rect(input); const rt = rect(toggle)
+      const rp = rect(panel); const rd = rect(dialog)
+      result.hasToggle = !!toggle
+      result.rows = panel ? panel.querySelectorAll('.vd-sign-opt').length : -1
+      result.ovfRows = panel ? panel.querySelectorAll('.vd-sign-text.ovf').length : -1
+      const firstText = panel?.querySelector<HTMLElement>('.vd-sign-text')
+      result.firstTextScrollable = firstText
+        ? firstText.scrollWidth - firstText.clientWidth : -1
+      result.chevronInside = !!(ri && rt &&
+        rt.left >= ri.left - 0.5 && rt.right <= ri.right + 0.5 &&
+        rt.top >= ri.top - 0.5 && rt.bottom <= ri.bottom + 0.5)
+      result.panelSameWidth = !!(ri && rp && Math.abs(ri.width - rp.width) <= 2)
+      result.panelClipped = !!(rp && rd &&
+        (rp.left < rd.left - 0.5 || rp.right > rd.right + 0.5 ||
+         rp.top < rd.top - 0.5 || rp.bottom > rd.bottom + 0.5))
+      result.inputRightPad = input ? getComputedStyle(input).paddingRight : null
+    }
+    const pre = document.createElement('pre')
+    pre.id = 'ui-probe'
+    pre.textContent = JSON.stringify({ mode: 'settings', views: [], degraded, settings: result })
+    document.body.appendChild(pre)
+    document.title = 'UI_PROBE_DONE'
+    return
+  }
+
   if (!document.querySelector('.view-btn')) {
     // 走到这里 = 页面上没有视图光条。两种可能，都不能当「量过了」：
     //  ① 路由落在 `/`（没有选中 VTuber，通常是 `_first_vtuber` 失败）；

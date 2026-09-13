@@ -206,6 +206,7 @@
 | 签名平台下拉栏 + §1.1 三项收尾（灌词接线 / 进度反馈 / 可取消） | 069 |
 | 需求 R6：动态流分账号并发 + 60s 周期下限 | 070 |
 | §1.1-d 场景机护栏尝试失败（为何仍未做 + 下次顺序） | 071 |
+| 签名下拉栏改版（内嵌 chevron + 参与布局面板 + 渐隐横滚）+ `--settings` 探针 | 072 |
 
 ### 6.2 当前门禁基线（2026-09-13 实测 / 复核）
 
@@ -214,9 +215,9 @@
 | 后端 | `python -m pytest -q` | **299 passed** |
 | 前端类型 | `npx tsc --noEmit`（`npm run build` 也会跑） | **0 错** |
 | 前端 lint | `npm --prefix frontend run lint` | **0 错**（`--max-warnings 0`） |
-| 前端单测 | `npm --prefix frontend run test` | **105 passed** |
+| 前端单测 | `npm --prefix frontend run test` | **112 passed** |
 | 词云布局 | `node scripts/check_wordcloud_layout.mjs` | sha256 `19ecc7e6…`（本轮实跑一致） |
-| 布局探针 | `python scripts/ui_probe.py --hero-expect c1154858… --vtuber 15`<br>`python scripts/ui_probe.py --archive --calendar-expect fb75217e… --vtuber 15` | 两条都本轮实跑一致（8 段契约 0 问题 / 三档宽度 0 问题） |
+| 布局探针 | `python scripts/ui_probe.py --hero-expect c1154858… --vtuber 15`<br>`python scripts/ui_probe.py --archive --calendar-expect fb75217e… --vtuber 15`<br>`python scripts/ui_probe.py --settings --vtuber 15`（短签名）/ `--vtuber 14`（长签名） | 三条都本轮实跑一致（8 段契约 0 问题 / 三档宽度 0 问题 / 档案设置几何 6 项） |
 | 一把梭 | `python scripts/dev_check.py` | 测试 + 后端冒烟（详见 `docs/DEV-LOOP.md`） |
 
 > ⚠️ 探针的 `--hero-expect` / `--calendar-expect` 签名**含实时数据**，只适合"改动前后短窗口对比"，

@@ -153,11 +153,12 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
             "views": data.get("views") or [],
             "topbar": data.get("topbar"),
             "calendar": data.get("calendar"),
+            "settings": data.get("settings"),
             "degraded": data.get("degraded") or [],
             "dom": dom_file,
         }
     return {"mode": None, "views": data, "topbar": None, "calendar": None,
-            "degraded": [], "dom": dom_file}
+            "settings": None, "degraded": [], "dom": dom_file}
 
 
 # ── 展示页 hero 药丸签名（P2 分层收敛 A 批次的位级回归护栏）─────────────
@@ -548,6 +549,13 @@ def main() -> int:
         help="只跑一档宽度，打印直播日历每格的**实渲染文本**（排查「某些天不显示信息」）",
     )
     ap.add_argument(
+        "--settings",
+        action="store_true",
+        help="只跑一档宽度：打开「档案设置」→ 展开签名候选面板 → 断言几何不变量"
+             "（chevron 完整落在输入框内、面板与输入条同宽、面板不被弹窗裁掉、"
+             "收起态不存在面板）",
+    )
+    ap.add_argument(
         "--hero-expect",
         default="",
         help="cards 视图 hero 药丸签名的期望 sha256（位级回归护栏）。"
@@ -690,6 +698,63 @@ def main() -> int:
                 failures.extend(bad)
                 return 1
             return 0
+
+        if args.settings:
+            # 档案设置弹窗的几何不变量（devlog/072）。这个弹窗此前无探针覆盖，
+            # 而它出过"滚动条压输入框""浮层被滚动体静默裁掉"两类问题。
+            w = widths[0]
+            url = f"http://localhost:{vite_port}{route}?probe=settings"
+            print(f"[probe] settings @{w} → {url}")
+            res = _run_probe(edge, url, w, args.height, WORK, "settings")
+            st = ((res or {}).get("settings") or {})
+            if res and not st:
+                print(f"  [!] 探针 mode={res.get('mode')!r} 键={sorted(res.keys())}"
+                      f"（新字段需要在 _run_probe 的白名单里登记）")
+            print(f"  行数={st.get('rows')} 溢出判定行={st.get('ovfRows')} "
+                  f"首行可滚距离={st.get('firstTextScrollable')} "
+                  f"输入框右内距={st.get('inputRightPad')}")
+            print(f"  chevron 在框内={st.get('chevronInside')} "
+                  f"面板同宽={st.get('panelSameWidth')} "
+                  f"面板越界={st.get('panelClipped')} "
+                  f"收起态面板宽度={st.get('panelWidthWhenClosed')}")
+            if st.get("reason") == "no-settings-dialog":
+                failures.append(f"@{w} settings: 没打开档案设置弹窗（.bg-set 没点上？）")
+            elif st.get("reason") == "no-settings-trigger":
+                failures.append(f"@{w} settings: 页面上找不到 .bg-set 触发钮"
+                                f"（卡片视图没渲染出来？）")
+            elif st.get("reason") == "dialog-not-opened":
+                failures.append(f"@{w} settings: 点了 .bg-set 但弹窗没出现")
+            else:
+                if st.get("panelWidthWhenClosed", 0) > 0:
+                    failures.append(f"@{w} settings: 收起态就已存在面板"
+                                    f"（宽 {st.get('panelWidthWhenClosed')}）")
+                if not st.get("chevronInside"):
+                    failures.append(f"@{w} settings: 内嵌 chevron 没有完整落在输入框内")
+                # 图标位置对 ≠ 文字没被压住：内距必须给图标留出空间
+                # （2026-09-13 实测踩到：`.vd-sign-field > input` 与 `.vd-field input`
+                #  同特异度、后者更靠后 → padding-right 被改回 8px，图标压字）
+                pad = st.get("inputRightPad") or "0px"
+                try:
+                    pad_px = float(str(pad).replace("px", ""))
+                except ValueError:
+                    pad_px = 0.0
+                if pad_px < 26:
+                    failures.append(f"@{w} settings: 输入框右内距只有 {pad}，"
+                                    f"没给 22px 的内嵌图标留位（文字会被压住）")
+                if not st.get("panelSameWidth"):
+                    failures.append(f"@{w} settings: 面板宽度与输入条不一致（参考图要求同宽）")
+                if st.get("panelClipped"):
+                    failures.append(f"@{w} settings: 面板越出弹窗矩形（会被滚动体静默裁掉）")
+                if (st.get("rows") or 0) <= 0:
+                    failures.append(f"@{w} settings: 候选面板一行都没有"
+                                    f"（该 V 需要有 ≥1 个带签名的账号）")
+                if (st.get("firstTextScrollable") or 0) > 0 and not (st.get("ovfRows") or 0):
+                    failures.append(f"@{w} settings: 首行文字可滚动却没挂渐隐（.ovf 判定失效）")
+                if not failures:
+                    print("  [ok] 档设置弹窗几何不变量全部通过")
+            for b in failures:
+                print("   -", b)
+            return 1 if failures else 0
 
         for w in widths:
             url = f"http://localhost:{vite_port}{route}{extra}"

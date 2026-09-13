@@ -205,7 +205,8 @@
 | 饰条 | `.hero-divider` | 394×24 设计稿 SVG |
 | ~~企划行~~ | ~~`.faction-badge`（内 `.pill-logo`）~~ | **P8-2 已删除**（card 视图不再展示企划/公会；企划编辑迁往 P8-B 的「档案设置」窗口）。`.pill-logo` 随之删除 |
 | 背景工具钮 | `.bg-tools > .bg-set`（`Settings2`） | **P8-B 起语义变更**：不再是「换背景图」直传 file input，而是打开**档案设置窗口** `<VtuberSettingsDialog>`（背景/名称/企划/设定/头像/签名/账号管理）。工具行 hover 浮现、移出 900ms 渐隐的规则不变 |
-| 档案设置窗口 | `.vd-settings*` | **P8-B 新增**：radix Dialog（`max-w-lg` + `max-height:78vh`）＝ 头部驻留（`.vd-settings-head`）＋ `OverlayScroll`（`.vd-settings-scroll`）＋ 底部操作条（`.vd-settings-foot`）；分区 `.vd-section`（背景/基本资料/头像/签名/已订阅账号）、字段 `.vd-field`、锁定胶囊 `.vd-lock.on`、账号行 `.vd-acc`。规格遵循 UI-MAP §C6 |
+| 档案设置窗口 | `.vd-settings*` | **P8-B 新增**：radix Dialog（`max-w-lg` + `max-height:78vh`）＝ 头部驻留（`.vd-settings-head`）＋ `OverlayScroll`（`.vd-settings-scroll`）＋ 底部操作条（`.vd-settings-foot`）；分区 `.vd-section`（背景/头像/签名/已订阅账号 —— 原「基本资料」2026-09-13 按用户口径整节删除，devlog/067 §四）、字段 `.vd-field`、锁定胶囊 `.vd-lock.on`、账号行 `.vd-acc`。规格遵循 UI-MAP §C6 |
+| └ 签名 + 平台签名下拉 | `.vd-sign-field` / `.vd-sign-toggle` / `.vd-sign-panel` | 2026-09-13 改版（devlog/072）：输入条右端**内嵌 chevron**（`.vd-sign-toggle`，22px 热区、右内距 30px、展开旋转 180°）→ 点开**参与布局**的候选面板（`.vd-sign-panel`，与输入条同宽、`--radius-dialog`+`--shadow-dialog`、max-h 260 内滚）。候选行 `.vd-sign-opt`：**单行** = 签名文字 `.vd-sign-text`（弹性、`min-width:0`、横向可滚、滚动条隐藏）+ 右端固定平台名 `.vd-sign-plat`（主账号挂 `<em>主账号</em>`、当前项粉底白字）。文字过长时在平台名之前**渐隐**（`.ovf` 才挂 `mask-image`；**只是溢出判定**，短签名不挂）。交互（用户定）：**只留 hover 自动滚一次**到结尾，移出回起点；`↑/↓/Enter/Esc` 键盘口径见组件注释。几何不变量由 `ui_probe.py --settings` 断言（6 项） |
 
 #### B1.2 list 视图（帖子列表页）
 | 名称 | 类名 | 说明 |

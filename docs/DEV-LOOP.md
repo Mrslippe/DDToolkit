@@ -69,6 +69,8 @@ python scripts/ui_probe.py --hero-expect <sha256>    # 位级回归：hero 药�
 python scripts/ui_probe.py --archive --archive-print --vtuber 15      # 取「日历格内文本」基线（A-2 取数链路护栏）
 python scripts/ui_probe.py --archive --calendar-expect <sha256> --vtuber 15  # 重构后比对日历格签名
 python scripts/ui_probe.py --archive --archive-day 11 --vtuber 14    # 点指定日号的格子（最近一场常未收录弹幕/热词）
+python scripts/ui_probe.py --settings --vtuber 15   # 档案设置弹窗几何：签名下拉栏（短签名=不该挂渐隐）
+python scripts/ui_probe.py --settings --vtuber 14   # 同上但签名长：断言挂了渐隐、且文字真的有可滚距离
 ```
 
 它自动：复制开发数据目录 → 起后端 → 起 Vite → 无头浏览器加载

@@ -21,11 +21,10 @@ import {
 import { Button } from '@/components/ui/button'
 import { api, resolveAsset } from '../api/api'
 import type { Account, VTuber } from '../api/types'
-import { PLATFORM_LABEL } from '../utils/postTypes'
+import { buildSignOptions, type SignOption as SignOptionData } from '../utils/signOptions'
 import AddAccountDialog from './AddAccountDialog'
 import OverlayScroll from './OverlayScroll'
 import ProxyImage from './common/ProxyImage'
-import FloatPill from './common/FloatPill'
 import './../styles/posts.css'
 
 interface Props {
@@ -51,13 +50,84 @@ interface Props {
  * - profile 视图（档案卡）已下线，企划/设定/账号一览的内容在这里承接。
  */
 /**
- * 回车 = 主动失焦（失焦即提交，见 `commitFields`）—— 让"打完字敲回车"也能落地。
+ * 回车 = 主动失焦（失焦即提交，见 `commitSign`）—— 让"打完字敲回车"也能落地。
+ * 下拉展开时由 `onSignKeyDown` 接管，不走这条。
  */
 function blurOnEnter(e: React.KeyboardEvent<HTMLElement>) {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault()
     ;(e.target as HTMLElement).blur()
   }
+}
+
+const SIGN_LIST_ID = 'vd-sign-list'
+const signOptionId = (id: number | undefined) => (id == null ? undefined : `vd-sign-opt-${id}`)
+
+/**
+ * 候选行（2026-09-13 设计案，devlog/072）：**单行** = 签名文字（弹性、可横向滚动）
+ * + 右端固定的平台名胶囊；文字过长时在平台名之前**渐隐**（`mask-image`）。
+ *
+ * ⚠️ 两个容易做错的地方（写在这里，免得下次当 bug 修）：
+ * 1. **渐隐只在真的溢出时才加**（`.ovf`）：无条件挂 mask 会把短签名的结尾也虚掉，
+ *    看起来像渲染坏了。溢出判定用 `scrollWidth > clientWidth`（布局完成后量）。
+ * 2. 弹性子项要 `min-width:0`（CSS 里已写死）：漏了它 flex 会把文字撑破面板，
+ *    横向滚动与渐隐同时失效 —— 而且**不报错**，只是看着不对。
+ *
+ * 交互（用户 2026-09-13 定：只留 hover 自动滚一次）：悬停平滑滚到结尾，
+ * 移出立刻回起点（下次悬停重播）；不做滚轮转横向、不做跑马灯循环。
+ */
+function SignOption({ option, cursor, onPick }: {
+  option: SignOptionData
+  cursor: boolean
+  onPick: () => void
+}) {
+  const textRef = useRef<HTMLSpanElement>(null)
+  const [overflow, setOverflow] = useState(false)
+
+  // 面板每次展开都是新挂载 → 挂载时量一次，内容变化时重量（续接 ResizeObserver）
+  useEffect(() => {
+    const el = textRef.current
+    if (!el) return
+    const check = () => setOverflow(el.scrollWidth - el.clientWidth > 1)
+    check()
+    const ro = new ResizeObserver(check)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [option.sign])
+
+  const reveal = () => {
+    const el = textRef.current
+    if (!el || el.scrollWidth <= el.clientWidth) return
+    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    el.scrollTo({ left: el.scrollWidth, behavior: reduce ? 'auto' : 'smooth' })
+  }
+  const reset = () => {
+    const el = textRef.current
+    if (el) el.scrollTo({ left: 0, behavior: 'auto' })
+  }
+
+  return (
+    <div
+      id={signOptionId(option.id)}
+      role="option"
+      aria-selected={option.active}
+      tabIndex={-1}
+      className={`vd-sign-opt${option.active ? ' on' : ''}${cursor ? ' cur' : ''}`}
+      onClick={onPick}
+      onMouseEnter={reveal}
+      onMouseLeave={reset}
+      onFocus={reveal}
+      onBlur={reset}
+    >
+      <span className={`vd-sign-text${overflow ? ' ovf' : ''}`} ref={textRef}>
+        {option.sign}
+      </span>
+      <span className="vd-sign-plat">
+        {option.label}
+        {option.isHero && <em>主账号</em>}
+      </span>
+    </div>
+  )
 }
 
 export default function VtuberSettingsDialog({
@@ -74,9 +144,10 @@ export default function VtuberSettingsDialog({
   const [uploading, setUploading] = useState(false)
   const [addOpen, setAddOpen] = useState(false)
   const [delTarget, setDelTarget] = useState<Account | null>(null)
-  /** 各平台签名下拉栏（2026-09-13 用户要求） */
+  /** 各平台签名下拉栏（2026-09-13 设计案，devlog/072）：展开态 / 键盘游标 / 面板 ref */
   const [signPopOpen, setSignPopOpen] = useState(false)
-  const signPopRef = useRef<HTMLDivElement>(null)
+  const [signCursor, setSignCursor] = useState<number | null>(null)
+  const signPanelRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
   const hero = useMemo(() => {
@@ -234,11 +305,12 @@ export default function VtuberSettingsDialog({
   flushRef.current = commitSign
   useEffect(() => () => { void flushRef.current() }, [])
 
-  // 签名下拉栏：点外部 / Esc 关闭（与弹窗内其它浮层同口径）
+  // 签名下拉栏：点外部 / Esc 关闭（与弹窗内其它浮层同口径）。
+  // 面板是**参与布局**的（不是浮层），所以"点外部"用容器包含判定即可。
   useEffect(() => {
     if (!signPopOpen) return
     const onDown = (e: MouseEvent) => {
-      if (signPopRef.current && !signPopRef.current.contains(e.target as Node)) {
+      if (signPanelRef.current && !signPanelRef.current.contains(e.target as Node)) {
         setSignPopOpen(false)
       }
     }
@@ -256,6 +328,13 @@ export default function VtuberSettingsDialog({
     }
   }, [signPopOpen])
 
+  // 展开后把面板滚进视野（它在滚动体里，展开点靠近底部时否则"看不见"）
+  useEffect(() => {
+    if (!signPopOpen) return
+    signPanelRef.current?.scrollIntoView({ block: 'nearest' })
+    setSignCursor(null)
+  }, [signPopOpen])
+
   const removeAccount = async () => {
     if (!delTarget || !vtuber) return
     try {
@@ -271,8 +350,47 @@ export default function VtuberSettingsDialog({
 
   const bg = resolveAsset(vtuber?.background_path ?? null)
   const avatarOptions = (vtuber?.accounts ?? []).filter((a) => a.avatar_url)
-  /** 签名下拉栏的数据源：**有签名的账号**（含平台标注；主账号会额外标出来） */
-  const signOptions = (vtuber?.accounts ?? []).filter((a) => a.sign)
+  /** 签名下拉栏的行数据（整形逻辑在 `utils/signOptions.ts`，有 6 条断言） */
+  const signOptions = buildSignOptions(vtuber?.accounts ?? [], hero?.id ?? null, sign)
+
+  /**
+   * 输入框键盘：面板展开时接管 ↑/↓/Enter/Esc（combobox 口径），
+   * 收起时保持老行为（Enter = 主动失焦 → 提交）。
+   */
+  const onSignKeyDown = (e: React.KeyboardEvent<HTMLElement>) => {
+    if (!signPopOpen) {
+      if (e.key === 'ArrowDown' && signOptions.length > 0) {
+        e.preventDefault()
+        setSignPopOpen(true)
+        return
+      }
+      blurOnEnter(e)
+      return
+    }
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      const n = signOptions.length
+      if (n === 0) return
+      const cur = signCursor ?? -1
+      const next = e.key === 'ArrowDown' ? (cur + 1) % n : (cur - 1 + n) % n
+      setSignCursor(next)
+      return
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      const picked = signCursor != null ? signOptions[signCursor] : null
+      if (picked) {
+        setSignPopOpen(false)
+        void commitSign(picked.sign)
+      }
+      return
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      e.stopPropagation()
+      setSignPopOpen(false)
+    }
+  }
 
   return (
     <>
@@ -380,58 +498,62 @@ export default function VtuberSettingsDialog({
                   {hero ? `来自 ${hero.platform} 账号 · 改完点别处即生效` : '暂无账号'}
                 </span>
               </h4>
-              <div className="vd-field vd-field--action">
+              <div className="vd-field">
                 <span>签名</span>
-                <input
-                  value={sign}
-                  onChange={(e) => setSign(e.target.value)}
-                  onBlur={() => void commitSign()}
-                  onKeyDown={blurOnEnter}
-                  placeholder="留空则由抓取回填"
-                />
-                {/* 各平台签名下拉栏（2026-09-13 用户要求）：列出每个账号当前的签名 +
-                    平台标注，点一条即把它用到上面这个输入框（= 主账号签名）。
+                {/* 输入框 + **内嵌右端 chevron**（2026-09-13 设计案，devlog/072）：
+                    点它展开下方**参与布局**的候选面板（不是浮层 —— 弹窗滚动体
+                    `overflow:hidden`，浮层越界会被静默裁掉）。
                     用途：卡片的签名只取主账号（B 站优先），想借微博那边的文案时不用手抄。 */}
-                <div className="vd-sign-pick" ref={signPopRef}>
-                  <FloatPill
-                    size="md"
-                    shape="text"
-                    active={signPopOpen}
-                    className="vd-sign-btn"
-                    title="查看各平台当前签名"
+                <div className="vd-sign-field">
+                  <input
+                    value={sign}
+                    onChange={(e) => setSign(e.target.value)}
+                    onBlur={() => void commitSign()}
+                    onKeyDown={onSignKeyDown}
+                    placeholder="留空则由抓取回填"
+                    role="combobox"
                     aria-expanded={signPopOpen}
+                    aria-controls={SIGN_LIST_ID}
+                    aria-activedescendant={signCursor != null
+                      ? signOptionId(signOptions[signCursor]?.id) : undefined}
+                  />
+                  <button
+                    type="button"
+                    className="vd-sign-toggle"
+                    title={signPopOpen ? '收起平台签名' : '选择其它平台的签名'}
+                    aria-label={signPopOpen ? '收起平台签名' : '选择其它平台的签名'}
+                    // 阻止默认：否则点它的瞬间输入框先失焦 → 触发一次"失焦即提交"
+                    // （先写手打值、再被选中值覆盖 = 两次写库）
+                    onMouseDown={(e) => e.preventDefault()}
                     onClick={() => setSignPopOpen((o) => !o)}
                   >
-                    平台签名
-                    <span className="vd-sign-caret" aria-hidden>▾</span>
-                  </FloatPill>
-                  {signPopOpen && (
-                    <div className="vd-sign-pop">
-                      <div className="vd-sign-pop-head">各平台当前签名（点一条即用作上方签名）</div>
-                      {signOptions.length === 0 ? (
-                        <div className="vd-sign-pop-empty">各账号都还没有签名</div>
-                      ) : (
-                        signOptions.map((a) => (
-                          <button
-                            key={a.id}
-                            type="button"
-                            className={`vd-sign-opt${a.sign === sign ? ' on' : ''}`}
-                            onClick={() => {
-                              setSignPopOpen(false)
-                              void commitSign(a.sign ?? '')
-                            }}
-                          >
-                            <span className="vd-sign-opt-plat">
-                              {PLATFORM_LABEL[a.platform] ?? a.platform}
-                              {a.id === hero?.id && <em>主账号</em>}
-                            </span>
-                            <span className="vd-sign-opt-text">{a.sign}</span>
-                          </button>
-                        ))
-                      )}
-                    </div>
-                  )}
+                    <svg className={`vd-sign-chevron${signPopOpen ? ' on' : ''}`}
+                         viewBox="0 0 16 16" aria-hidden>
+                      <path d="M4 6.5l4 4 4-4" fill="none" stroke="currentColor"
+                            strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </button>
                 </div>
+                {signPopOpen && (
+                  <div className="vd-sign-panel" id={SIGN_LIST_ID} role="listbox"
+                       aria-label="各平台签名" ref={signPanelRef}>
+                    {signOptions.length === 0 ? (
+                      <div className="vd-sign-empty">各账号都还没有签名</div>
+                    ) : (
+                      signOptions.map((o, i) => (
+                        <SignOption
+                          key={o.id}
+                          option={o}
+                          cursor={i === signCursor}
+                          onPick={() => {
+                            setSignPopOpen(false)
+                            void commitSign(o.sign)
+                          }}
+                        />
+                      ))
+                    )}
+                  </div>
+                )}
               </div>
               <button
                 type="button"
