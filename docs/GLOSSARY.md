@@ -24,6 +24,7 @@
 | **UP 主附言 / note** | 投稿动态并入后保留的动态文本 | `scheduler._absorb_video_dynamic`；`posts.note` | 卡片/详情以「UP 主附言」标注 |
 | **系统帖 / system** | 微博平台自动发帖（会员升级/签到/推广），B 站没有这一类 | `weibo._is_system_mblog` → `type=system` | v0.9.6；前端微博 chips 有独立「系统」组 |
 | **场次并入 / self 快照合并** | self 快照推导场次并入表内场次的判定 | `LiveSessionRepo._find_group`（**区间重叠优先**）、`_overlap_seconds` | v0.9.6 由「start 差≤90min」改来 |
+| **场次对外 id 定权** | 多源合并后 `live_id` 取**最高优先级源**的 id（danmakus uuid > feed 数字 id） | `LiveSessionRepo._SRC_IDS_KEY` + `merged()` 收尾 | v0.9.9/052：弹幕详情端点只认 danmakus uuid（数字 id → HTTP 400） |
 | **图文 / image** | 图片动态（`type=image`，`body_json.images`） | `fetcher._extract_body_extras` | 前端 `ProxyImage` 渲染 |
 | **转发 / repost** | 转发的他人动态（`type=repost`，`body_json.origin`） | `fetcher._extract_origin` | `scripts/repair_repost_origin.py` |
 | **专栏 / article** | B 站 cv 长文（`type=article`，Quill Delta 富文本） | `fetcher.fetch_article_detail`；`_delta_to_plain_text` | `RichText` 渲染 |
@@ -35,6 +36,8 @@
 | **9 类分类 / categories** | 杂谈/游戏/观影/投稿/歌回/健身/电台/联动/特殊 + live 兜底 | `services/live_type.py::CATEGORY_KEYS`；`infer_category()` | 前端 `utils/liveType.ts` 同步 |
 | **墓碑 / tombstone** | 帖子从平台消失的删除检测（两击 + 已验证窗口） | `services/tombstone.py::apply_tombstone_scan`；`posts.deleted_detected_at` | 前端「已删」筛选/角标 |
 | **归档 / archive** | 早于 N 天的帖子不再参与抓取遍历 | `PostRepo.archive_before`；`scheduler.archive_old_posts` | `is_archived` |
+| **归档三态 / archived filter** | 列表页归档筛选：全部 / 仅未归档（`is_archived=false`）/ 仅已归档 | `PostFilterPop`（v0.9.9 P10-A 接线 `unarchived`） | 后端参数本就支持，此前前端只接了「仅已归档」 |
+| **时间范围 / date range** | 帖子发布时间过滤（`date_from`/`date_to`，本地日期串，`to` = 次日零点排他即含当天） | `utils/dateRange.ts`；`common/DateRangePicker.tsx` | 双月历 + 预设（量纲**含今天**），草稿制确认后生效 |
 | **候选池 / pool** | 离线待选 VTuber 索引（`vtubers.csv`） | `services/pool.py`；`GET /vtuber/pool/search` | 收录（adopt）的唯一入口 |
 | **收录 / adopt** | 从候选池把 V+账号入库，并立刻抓账号信息 + **首屏内容** + 回填第三方历史 | `routers/vtuber.py::adopt_vtuber`、**`_adopt_background`** | 添加账号走同款（只抓新账号） |
 | **收录首屏 / first screen** | 新账号立刻抓到的第一屏内容（投稿 1 页 + 动态 1 页限 3 条） | `scheduler.async_fetch_first_screen` | v0.9.4，devlog/044 |
@@ -99,7 +102,7 @@
 | **增量停止（整页）** | **整页扫完**才停，边界取页内首条「已入库且非置顶」帖 | `_fetch_posts_core` / `_fetch_platform_posts` 的 `known_hit` | 旧「遇已入库即 break」会漏同页新帖 |
 | **风控 / rate limit** | 412/-412/-509/-799 判定 + 冷却 | `fetcher.RATE_LIMIT_CODES`、`was_rate_limited`、`clear_rate_limit` | ContextVar 任务隔离 |
 | **WBI 签名** | B 站接口签名（混钥，缓存 30min） | `services/wbi.py` | 所有 `x/space/wbi/*` 请求 |
-| **动态流预算 / dynamics budget** | 按平台的 60s 滑动窗口速率预算（12 req·min⁻¹），轮间自适应等待 | `scheduler._PlatformBudget`、`_dynamics_next_due` | v0.9.8；轮前估算记账 + 轮后补差 |
+| **动态流预算 / dynamics budget** | 按平台的 60s 滑动窗口速率预算（12 req·min⁻¹），轮间自适应等待；**单平台主账号数 > rpm 时退化为每轮空等一个窗口**（不抛错，见 devlog/053） | `scheduler._PlatformBudget`、`_dynamics_next_due` | v0.9.8；轮前估算记账 + 轮后补差 |
 | **启动外部补抓** | 启动时对每 V 主账号跑一次第三方数据（<24h 跳过） | `scheduler.start_external_catchup`、`run_startup_external_catchup` | v0.9.8，devlog/049 |
 | **app_meta** | 通用 KV（进程外需要记住的少量状态） | `models.AppMeta`、`AppMetaRepo`、迁移 f003 | 键 `external.startup.last_run` |
 | **状态通道** | 前端轮询的抓取进度 | `scheduler._status`（account/post/**external**，含 `task`/`vtuber_name`/`index`/`total`）、`_push_account_snapshot`、`get_fetch_status`、`GET /vtuber/fetch-status` | 前端 ~2s 轮询；顶栏文案＝「任务 - V名 - i/N」（P8-C） |
@@ -193,6 +196,9 @@
 2. **`posts` 无外键**，`accounts` 之下 5 条外键不级联且 `foreign_keys=ON` →
    删 V / 删账号**必须**走 `app/services/purge.py`，否则整次事务回滚（devlog/040）。
 3. **新增迁移必须同步 `MIGRATION_HEAD`**，否则冷启动快路径会把旧库误判为最新。
+   另：旧库桥接（`main._sync_legacy_schema`，补列/补索引）**补不了唯一约束**，
+   因此 stamp head 前必须过 `main._missing_unique_keys` —— 不一致就拒绝启动，
+   不许写「本库已等于 head」的假承诺（devlog/053）。
 4. **新增挂 `accounts`/`vtubers` 外键的表 → 同步 `purge.py`**。
 5. **OverlayScroll 会插一层 `.os-scroll`**：给被包容器写 CSS 一律用后代选择器
    （`.list-scroll .list-inner`），写成直系子会静默失效（devlog/039）。
@@ -215,6 +221,7 @@
 | 改「添加 V / 添加账号」后的抓取 | `routers/vtuber.py::_adopt_background`；账号侧 `scheduler.async_fetch_accounts`、内容侧 `scheduler.async_fetch_first_screen`（devlog/044） |
 | 新代码要发 HTTP 请求 | 一律 `app/core/http.py::new_async_client(timeout)`（别直接 `httpx.AsyncClient`：每次构造 ~1s） |
 | 加一张表 / 加一列 | `alembic/versions/eNNN_*.py` → `MIGRATION_HEAD` → `app/models/vtuber.py` → `app/repositories/vtuber_repo.py` →（挂外键时）`app/services/purge.py` |
+| 改唯一约束 / 怀疑旧库结构不对 | `alembic/versions/c002_*`（加宽 posts 唯一键的先例）、`app/main.py::_missing_unique_keys`（桥接守卫） |
 | 改抓取频率 / 节流 | `app/core/config.py`；调度结构在 `app/services/scheduler.py`（`_tier_loop` / `_run_combined_tier` / `_run_platform_rounds`） |
 | 接入新平台 | `app/services/platforms/base.py` + `registry.py`；参考 `docs/platforms-extension-guide.md` |
 | 接入新第三方数据源 | `app/services/externals/base.py` + `externals/__init__.py` 注册；`runner.py` 负责调度 |

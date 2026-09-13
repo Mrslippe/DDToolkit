@@ -8,7 +8,7 @@ import os
 import time
 from datetime import datetime, timezone
 
-from sqlalchemy import inspect, text
+from sqlalchemy import inspect, text, PrimaryKeyConstraint, UniqueConstraint
 
 from app.core.config import settings
 from app.core.database import engine, Base
@@ -73,13 +73,75 @@ def _alembic_config():
     return cfg
 
 
+def _live_unique_keys(inspector) -> dict[str, set[tuple[str, ...]]]:
+    """库内**实际存在**的唯一键：{表: {列元组, …}}。
+
+    SQLite 里唯一约束与唯一索引是同一套机制，但反射出来的形态因**建库方式**而异：
+    - `alembic` 建的表 → `UniqueConstraint(..., name="uq_…")`（`get_unique_constraints`）；
+    - `create_all` 建的表 → `Column(unique=True, index=True)` 生成的唯一**索引**
+      （`get_indexes`），且 `get_unique_constraints` 在旧版 SQLite 上可能不报告内联约束。
+    因此两边都收，并**按列元组而非约束名**比较 —— 名字从来不是不变量的载体，
+    「平台+UID 唯一」这件事才是（应用侧也只捕获 IntegrityError，不认名字）。
+    """
+    live: dict[str, set[tuple[str, ...]]] = {}
+    for table in inspector.get_table_names():
+        keys: set[tuple[str, ...]] = set()
+        for uc in inspector.get_unique_constraints(table):
+            cols = uc.get("column_names") or []
+            if cols:
+                keys.add(tuple(cols))
+        for idx in inspector.get_indexes(table):
+            cols = idx.get("column_names") or []
+            if idx.get("unique") and cols and all(c is not None for c in cols):
+                keys.add(tuple(cols))
+        live[table] = keys
+    return live
+
+
+def _missing_unique_keys(inspector) -> list[str]:
+    """返回「模型要求、但库内没有」的唯一键描述（空列表 = 一致）。
+
+    只比唯一键，不比索引名/默认值/NOT NULL：后者缺失只影响极端写入路径，
+    而唯一键缺失会让合法数据被**静默丢弃**（见 `_sync_legacy_schema` 的说明）。
+    """
+    live = _live_unique_keys(inspector)
+    missing: list[str] = []
+    for table in Base.metadata.sorted_tables:
+        have = live.get(table.name, set())
+        for uc in table.constraints:
+            # 注意：不要用 `uc.unique` 判据 —— `UniqueConstraint.unique` 是 None
+            # （不是 True），`getattr(uc, "unique", False)` 恒为假，会把所有唯一约束
+            # 静默跳过（本守卫自身的第一版就踩了这个坑）。按**类型**判，再排掉主键
+            # （PrimaryKeyConstraint 是 UniqueConstraint 的子类）。
+            if isinstance(uc, PrimaryKeyConstraint) or not isinstance(uc, UniqueConstraint):
+                continue
+            cols = tuple(c.name for c in uc.columns)
+            if cols and cols not in have:
+                missing.append(f"{table.name}({', '.join(cols)})")
+    return missing
+
+
 def _sync_legacy_schema() -> None:
     """把 create_all 时代生成的旧库同步到与 ORM 模型一致（补列/索引），再 stamp head。
 
     仅对「有表但无 alembic_version」的旧库生效；全新库直接 alembic upgrade head。
     幂等：缺列补列、缺索引建索引。彻底取代旧 _migrate() 的硬编码 ALTER。
+
+    **本函数补不了唯一约束**（SQLite 不支持 ADD CONSTRAINT，要改就得整表重建），
+    所以调用前必须过 `_missing_unique_keys`：库内唯一键与模型不一致时拒绝 stamp，
+    否则会把「唯一性比代码假设更严格」的库标成 `head`，后续每次迁移都会跳过它。
+    典型受害者是 `posts`：迁移 `c002` 之前是全局 `UNIQUE(platform, platform_post_id)`，
+    而联合投稿（同一 pid 出现在多个 UP 名下）正是要修的场景 —— 被拒后会被当作
+    「帖子已存在」静默跳过（scheduler `_safe_store_post`），数据就永久丢了。
     """
     inspector = inspect(engine)
+    missing = _missing_unique_keys(inspector)
+    if missing:
+        raise RuntimeError(
+            "旧库唯一键与当前模型不一致，拒绝 stamp head（补列/索引救不了唯一约束）："
+            + "、".join(missing)
+            + "。请用 alembic upgrade head 走完整迁移链，或从备份重建该库。"
+        )
     existing_tables = set(inspector.get_table_names())
     with engine.begin() as conn:
         for table in Base.metadata.sorted_tables:

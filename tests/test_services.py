@@ -1606,6 +1606,90 @@ def test_platform_budget_window_and_wait():
     assert 0 < w <= 60
 
 
+def test_platform_budget_cost_exceeding_rpm_never_raises():
+    """回归（2026-09-11 静态审计实跑复现）：单平台一轮成本 > rpm 时不得越界。
+
+    根因：`idx = min(need - 1, len(dq) - 1)` 在窗口为空时得 -1 → `dq[-1]` 抛
+    IndexError。触发条件是「单平台主账号数 > rpm」（13 个 B 站主账号 / rpm=12），
+    而首轮 `_dynamics_next_due()` 正落在 `_tier_loop` 的 try 之外 —— 抛出去就是
+    整条综合档线程死亡（动态流 + 账号流永久停摆），所以这里把边界钉死。
+    """
+    from app.services import scheduler as sch
+
+    # ① 空窗口 + 成本 > rpm（原来是 IndexError），等待恰为一个窗口
+    b = sch._PlatformBudget(12, window_seconds=60.0)
+    assert b.wait_seconds({"bilibili": 13}, 1000.0) == 60.0
+    assert b.wait_seconds({"bilibili": 99}, 1000.0) == 60.0
+
+    # ② 窗口被填满后，need 超过窗口内全部记录（夹取后取最早一条 → 一个窗口）
+    b.charge({"bilibili": 12}, 1000.0)
+    assert b.wait_seconds({"bilibili": 30}, 1000.0 + 10) == 50.0
+
+    # ③ 夹取同时修正了原来的**过度等待**：need 落在窗口内部时取第 need 早的那条，
+    #    而不是无脑取最早一条（旧的 min() 在第 ②③ 情形都会高估等待）
+    assert b.wait_seconds({"bilibili": 30}, 1000.0 + 30) == 30.0
+
+    # ④ 平台独立：**未记账**的平台照旧立刻可跑
+    assert b.wait_seconds({"weibo": 12}, 1000.0) == 0.0
+    #    而「成本 > rpm」在任何窗口下都凑不出名额（退化输入）→ 返回一个窗口而不是抛错
+    assert b.wait_seconds({"weibo": 99}, 1000.0) == 60.0
+
+
+def test_legacy_bridge_rejects_unique_key_mismatch():
+    """回归（2026-09-11 静态审计）：旧库桥接必须拒绝唯一键不一致的库。
+
+    桥接路径（`_sync_legacy_schema`）只补列和索引 —— SQLite 不支持 ADD CONSTRAINT，
+    唯一约束补不了。而迁移 `c002` 之前 `posts` 是全局
+    `UNIQUE(platform, platform_post_id)`（缺 platform_uid）。若照样 `stamp head`，
+    库会被永久标成最新、后续迁移全部跳过，而联合投稿（同一 pid 出现在多个 UP 名下）
+    会被唯一约束拒掉、被 `_safe_store_post` 当作「帖子已存在」静默丢弃 ——
+    正是 c002 要修的那个数据丢失场景。
+    """
+    from sqlalchemy import create_engine, inspect, text as _sql_text
+
+    from app import main as app_main
+
+    # ① 与模型一致的库（= alembic / create_all 建出来的）→ 全部唯一键都在，不报缺。
+    #    先钉住「反射确实看得见这些唯一键」，否则断言 ① 会因为两边都空而假通过
+    #    （本守卫的第一版就是这样：`UniqueConstraint.unique` 是 None，判据恒假）。
+    e_ok = create_engine("sqlite://", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(e_ok)
+    live_ok = app_main._live_unique_keys(inspect(e_ok))
+    assert ("platform", "platform_uid") in live_ok["accounts"]
+    assert ("platform", "platform_uid", "platform_post_id") in live_ok["posts"]
+    assert app_main._missing_unique_keys(inspect(e_ok)) == []
+
+    # ② 复刻 c002 之前的状态：其余表与模型一致，只有 posts 用旧的全局唯一键
+    #    （真实旧库就是这个形态 —— 缺的是「c002 那次加宽」，不是整库缺失）。
+    e_old = create_engine("sqlite://", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(e_old)
+    with e_old.begin() as conn:
+        conn.execute(_sql_text("DROP TABLE posts"))
+        conn.execute(_sql_text(
+            "CREATE TABLE posts ("
+            "  id INTEGER PRIMARY KEY,"
+            "  platform VARCHAR NOT NULL,"
+            "  platform_uid VARCHAR NOT NULL,"
+            "  platform_post_id VARCHAR NOT NULL,"
+            "  type VARCHAR NOT NULL,"
+            "  UNIQUE (platform, platform_post_id)"      # ← c002 之前的旧约束
+            ")"
+        ))
+    missing = app_main._missing_unique_keys(inspect(e_old))
+    assert missing == ["posts(platform, platform_uid, platform_post_id)"]
+
+    # ③ 真跑一次桥接：必须抛错，而不是补完列就 stamp
+    orig_engine = app_main.engine
+    app_main.engine = e_old
+    try:
+        with pytest.raises(RuntimeError) as ei:
+            app_main._sync_legacy_schema()
+        assert "platform_uid" in str(ei.value)
+        assert "拒绝 stamp head" in str(ei.value)
+    finally:
+        app_main.engine = orig_engine
+
+
 def test_platform_budget_disabled():
     """预算 <=0 → 不限速（退回固定周期由调用方处理）。"""
     from app.services import scheduler as sch
