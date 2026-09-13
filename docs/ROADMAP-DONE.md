@@ -1,0 +1,324 @@
+# DDtoolkit 路线图 · 已完成条目详录
+
+> **这份文件是 `docs/TODO.md` 拆出来的历史部分**（2026-09-13 整理，无内容删减）。
+>
+> 分工：
+> - `docs/TODO.md` —— **要干什么**（待提需求收集区 / 未完成项 / backlog / 远期构想 / 明确不做）；
+> - 本文件 —— **干过什么、当初为什么这么定**：已落地条目的原始需求、验收标准、实现注意。
+>   追溯设计决策的由来时看这里；**不要再往这里加新条目**。
+>
+> 版本 → devlog 的索引见 `docs/TODO.md` §6。
+>
+> 行数口径：本文件的行数按当时记录原样保留（历史上混用过总行数与非空行数，差约 5%）；
+> 2026-09-13 起新记录统一用**总行数**（等价 `wc -l`）。
+
+---
+
+## 能力现状（截至 2026-09-13）→ 已移到 `docs/TODO.md` §2（本文件不再重复）
+
+---
+
+## v0.5.1 「删除检测（墓碑机制）」——本项目的灵魂功能 ✅（2026-09-05 落地，见 devlog/022）
+
+**问题**：动态从平台消失后，库里只是"数据不再更新"，没有任何标记证明它被删了、何时发现被删。
+争议取证时无法区分"还在只是没翻到"和"已被删除"，证据链断在最关键一环。
+
+**需求**：
+- Post 新增字段：
+  - `last_seen_at` DateTime NULL（最近一次确认仍在线的时间）
+  - `deleted_detected_at` DateTime NULL（墓碑：判定已删除的时刻）
+- 判定逻辑（挂在 `POST /vtuber/update-posts` 更新未归档动态流程尾部）：
+  1. 本次成功抓取返回的 post_id 集合为 S；
+  2. 库中该账号未归档帖子 ∖ S = 缺席集合；
+  3. 缺席帖子的 `last_seen_at` 早于上一次成功抓取时间 → 视为连续第二次缺席，写 `deleted_detected_at`；
+     否则仅刷新失败计数/保持现状（**防单次分页边界或接口抖动误判**）
+- 已归档帖子不参与判定（归档语义即"不再追新"）
+- 墓碑一旦写入不可被后续抓取清除（除非人工干预）；若某"已删"帖子重新出现，保留墓碑并记录复活时间（可选字段，实现时定→**本次定案：保留墓碑不录复活时间，仅刷新 last_seen_at**）
+- 前端：
+  - 帖子卡片墓碑角标（灰化处理可选→**已做：封面灰度 + 「已删」角标**）
+  - 归档过滤旁增加「已删除」chip（映射 `deleted_detected_at IS NOT NULL`→**本次长在 chips-tools 的独立 toggle，含计数**）
+  - 详情抽屉显示时间线：发布时间 / 最后在线时间 / 删除发现时间（✅）
+
+**验收**：
+- [x] 模拟删除场景：库中造一条不在返回集合里的未归档帖 → 两轮更新后打上墓碑
+- [x] 单次缺席不打墓碑（防误判用例）
+- [x] 已归档帖缺席不受影响
+- [x] 前端筛选与角标生效
+- [x] 额外加固：增量窗口外缺席不判（停止帖边界）；page_limit/网络失败/风控中断不判；增量轮视频帖不判；无基线帖不判
+
+### 实现注意（墓碑特性通用）
+
+- **迁移链纪律**：新增 alembic 迁移后必须同步更新 `app/main.py` 的 `MIGRATION_HEAD`
+  （tests 断言其与 alembic head 一致）
+- 冷启动快路径依赖版本号判断，勿漏 bump
+- 抓取链路改动后跑全量 `pytest`（当时基线 **265 passed**；当前基线见 `docs/TODO.md` §6.2）
+
+---
+
+## v0.5.x 后续小版本
+
+### P2 全文搜索深度升级 ✅（2026-09-05 落地，见 devlog/023）
+
+- 从 `body_json` 提取纯文本入新列 `body_text`（迁移 `e003` + 一次性回填脚本
+  `scripts/backfill_post_body_text.py`，模式同 `backfill_post_published_at.py`；✅）
+- `paginated` 的 `q` 扩展匹配 `body_text`；个人库量级（千条级）先 LIKE 即可，
+  FTS5 暂缓（✅ 真实库 4354 帖实测毫秒级）
+- 回填后新增帖子写入时同步提取（✅ 三处写入路径共用 `app/services/post_text.py`，
+  `_safe_json_parse` 式容错、不引入 DOM 解析依赖）
+
+### P3 JSONL 归档包导出 ⏸ → **未完成，条目已移到 `docs/TODO.md` §1.4**（含格式设计原文）
+
+### P4 添加数据源并分离抓取逻辑 ✅（2026-09-05 落地 v0.6.0，见 devlog/024）
+
+- 添加新的数据源例如danmakus.com、laplace.live、zeroroku.com，来获取一些已经被固定化的数据例如粉丝数变化趋势、直播场次、弹幕等等
+  - ✅ zeroroku.com：粉丝历史（实测 2023 至今全量）+ 直播礼物日聚合，公开免鉴权
+  - ✅ danmakus.com：vup-list（VTuber 索引：企划/公会/房间号，**透传 laplace vup-slim**）；
+    直播场次/弹幕端点需登录（401），留 `DANMAKUS_TOKEN` 配置位后续启用
+  - ⏸ laplace.live：暂无 API（经 danmakus 透传获取），留空壳
+- ✅ **分离抓取逻辑**：新包 `app/services/externals/`（externals=第三方固定化数据只读拉取，
+  platforms=平台实时抓取），注册表/适配器/执行器分层，源级+账号级错误隔离
+- ✅ 先从变化频率角度考虑需要被展示的数据并且将在抓取频率的上限内进行计划尽可能实时的数据抓取
+  - 粉丝历史/礼物：每日 3:00（变化频率天级；首跑全量回填 7433+3010 行）
+  - VTuber 索引：每周一 3:30（低频索引，企划信息滞后 ≤1 周）
+  - 全部让位式错峰（抓取任务进行中跳过），不对第三方站点加压
+- ✅ 存储：粉丝历史并入 `account_stat_snapshots`（+source 列，P5 可视化单表复用）；
+  `live_gift_days`（日聚合金额保精度）；`thirdparty_vtubers`（企划/公会索引）
+- ✅ 读取端点：`/account/{id}/stat-snapshots?source=`、`/account/{id}/gift-days`、
+  `/externals/vtubers?kw=`（候选池增强，P5 视图直接用）
+
+### P5 新的信息展示视图 ✅（2026-09-05 落地 v0.6.0，见 devlog/025）
+
+- 和card、list视图同级 → ✅ 第三视图「档案」（`view: 'archive'`，占用原日历占位钮）
+- ✅ 展示粉丝变化曲线：shadcn Chart（recharts；用户定引用库）+ 服务端按天
+  降采样端点 `/account/{id}/fan-trend`；双序列（self 直采实线 / zeroroku 回填虚线），
+  实测曲线回溯至 2019-07（七海 8453→111 万粉）
+- ✅ 所属公会（阵营、企划）：档案卡阵营 Select 编辑（建议=第三方索引 group_name +
+  一键采纳写 faction）；企划·公会只读展示（`/externals/vtubers/by-uid`）
+- ✅ 人物设定集：`vtuber.setting` 折叠展示
+- ✅ 直播日历：月网格（翻月）；绿点=当日直播证据（self 快照断言）、
+  满格=当日礼物日聚合（第三方）悬浮显示金额；`/account/{id}/live-sessions` 推导场次
+
+### P6 界面外观和逻辑优化 ✅（2026-09-05 落地 v0.6.0，见 devlog/026）
+
+- ✅ list视图中通过chips切换类型的时候会继承滚动位置，当滚动到深内容的时候切换类型会导致直接滚动到底部
+  → 修复：筛选切换（type/搜索/时间/已删）= 用户意图重置，立即滚回顶部
+  （此前「指纹缓存+恢复」实测不达预期已 revert，标准列表 UX 定案回顶）
+- ✅ 帖子详情抽屉替换为中间对齐的独立窗口
+  → Sheet 侧栏 → 居中 Dialog（720px，动效 scale 0.97 迁移自原右移规格）
+- ✅ 所有二级窗口都一概依据设计token重绘
+  → 自绘浮层（time-pop/filter-pop）去阴影、Dialog/Sheet/AlertDialog 基类
+  shadow-lg→none、内部残留圆角清零（UI-MAP「二期待办」全部勾销；
+  分页钮 N/A——无限滚动）
+
+### P7 archive视图细化 ✅（2026-09-06 落地 v0.7.0，见 devlog/032）
+
+> 2026-09-06 用户追加两项需求，尚未做（见下方「P7 未完」）。
+
+- ✅ 我想再添加一个近期活动卡片，内容是vtuber的纪念日和近期的大型活动日期等等，需要显示：是什么、什么时候、还剩多少天
+  → 「重要日期」卡（`UpcomingEventsCard`）：纪念日（生日/出道日年循环，行内编辑）+ 手动活动（vtuber_events 表增删）+ 自动预约（reservation 帖解析 desc1）；行格式=标题+日期+剩余天数胶囊
+- ✅ 我想对直播日历卡片进行改造，需要在一个时间格内可以显示直播类型、直播标题、场次时间等
+  → 格内=类型徽章（标题关键词推断）+ HH:mm + 单行标题（最多 2 条）；点击出浮层看全量（起止/时长/礼物）
+- ✅ 布局修改参照这个docs/design/screenshots/Snipaste_2026-09-06_00-46-49.png，简单参考下，具体细节自己
+  → 上行双列（重要日期窄 + 直播日历宽），趋势/档案全宽在下
+
+#### P7 未完 → ✅（2026-09-06 追加项一并落地，见 devlog/032）
+
+- ✅ 把档案这个卡片移走到另外新建的视图，用来专门展示vtuber的详细设定相关信息
+  → 新 `profile` 视图（Fingerprint 图标，第五个视图钮）：档案卡（企划/公会/生日/出道/设定）+ 账号一览卡（头像/粉丝/房间/直播状态）；archive 视图只留 重要日期/直播日历/趋势
+- ✅ 粉丝趋势卡片增强：
+  1. ✅ 时间轴缩略图，并且支持缩放 → recharts Brush（底部缩略图 + 拖拽选区缩放 + 重置缩放按钮）
+  2. ✅ 每天粉丝增减量以柱状图的形式呈现 → 「每日增减」模式（按天 diff，正增主粉 / 负增警示色）
+  3. ✅ 灵活的操作逻辑和美观的动画 → 趋势/每日增减分段切换（切换重置缩放不残留），折线/柱状入场动画 400ms
+
+#### P8 一些综合性的前端改动 —— 📋 已规划分三批（2026-09-10）
+
+> 下段是用户 2026-09-10 手写原始条目的**可执行化版本**（含代码定位 / 改法 / 验收）。
+> 原措辞可由 git 历史追溯；批内已落地的直接勾掉。
+
+**P8-A｜零风险快赢（→ v0.9.5）**
+
+- [x] **1 背景白色遮罩更淡**：`styles/posts.css` 新增 `.hero-backdrop.custom::after` 覆盖（alpha 减半；
+      头像铺底态保持原值），`.custom` 原本只改父 opacity、遮罩全量保留 → 这就是「自定义背景仍发白」的原因。
+      ✅ 已落地（视觉待实机确认）
+- [x] **2 card 视图去掉企划/公会徽章**：删 hero 内 `.faction-badge` 块 + 死 CSS `.faction-badge`/`.pill-logo`
+      （单点使用）。注：「公会」在 card 视图本就不存在，原本只有企划。✅ 已落地；
+      **企划的编辑入口迁往 P8-B 的档案设置窗口**（原入口在 ProfileCard，见下条）
+- [x] **5 档案视图（档案**卡** profile）改施工中占位**：`profile` 分支换 `.empty-state` 占位；
+      `ProfileView/ProfileCard/AccountPicker` 文件**保留不删**，P8-B 要复用其企划 Select 与账号一览。
+      ✅ 已落地（archive 视图＝直播日历/粉丝趋势，不受影响）
+- [x] **7 list 滚动深度跨平台账号继承**：根因＝切账号只改 `selectedAccount`、`scene.acc` 不变 →
+      `key={acc|view}` 不变 → `.os-scroll` 的 `scrollTop` 原样保留；P6-1 的回顶 effect 依赖数组
+      里没有 `accountKey`。补 `accountKey`（+ `archived`）依赖与 `setShowTop(false)`。✅ 已落地
+- [x] 顺带：把后端早已支持、前端一直没接线的**「已归档 N」chip** 放出来（与「已删」同款）✅ 已落地
+
+**P8-B｜card 视图改造（→ v0.9.7）**
+
+- [x] **3 平台徽章交互**：点击开账号主页（B 站 `accounts.url` 实测 0/8 → 前端兜底拼
+      `space.bilibili.com/{uid}`；桌面端直接 `invoke('plugin:shell|open')`，**不加 npm 依赖**）；
+      hover 尾部半透明「+」→ 复用抽出的 `AddAccountDialog`；
+      长按 350ms 拖动重排（`pointerdown` + `elementFromPoint` + `data-pill-index`，
+      零依赖）落库到新增的 `accounts.sort_order`（迁移 **f002**）+ `PUT /vtuber/{id}/account-order`。
+      ✅ 已落地（devlog/048）
+- [x] **4 「更换图片」→ 独立「档案设置」窗口** `VtuberSettingsDialog.tsx`：背景（上传/清除）、
+      名称/企划/生日/出道日/设定（`PUT /vtuber/{id}`，前端类型补 `name`/`avatar`）、
+      头像（账号候选 → 写远端 URL）、签名与**字段锁定**（`PUT /account/{id}`）、
+      账号管理（`DELETE /account/{id}` 新封装 + 二次确认）；草稿 + 保存。
+      ✅ 已落地；并承接 profile 下线后的企划编辑 / 设定 / 账号一览
+- [x] 已定决策落实：`accounts.locked_fields`（迁移 f002）+ `scheduler._field_locked()`，
+      抓取跳过锁定字段（昵称/签名/头像）—— 否则手改会被下次抓取覆盖
+
+**P8-C｜顶栏抓取进度（→ v0.9.5）**
+
+- [x] **6 状态胶囊显示「任务 - V名 - i/N」**（例：`动态更新中 - 明前奶绿 - 1/11`）：
+      后端 `_status` 补 `task` / `vtuber_name` / `index` / `total`（账号流 + 帖子流的
+      五个写入点；`_set_post_progress` / `_set_account_vtuber` / `_vtuber_name_of` 三个原语），
+      `post.target` 语义三混的问题一并收敛（`target` 仍同步写入以兼容旧前端）；
+      前端 `TopBar` 加 `TASK_TEXT` 映射与 `statusParts()` 拼接，V 名缺失时退回过程性文案。
+      ✅ 已落地；真实路径实测（更新动态）：`task=update vtuber=明前奶绿 1/2 → 2/2`
+
+#### P9 一些综合性的后端改动 —— 📋 已规划分两批（2026-09-10）
+
+**P9-A｜数据正确性（→ v0.9.6）**
+
+- [x] **1 直播场次重复（self 与 danmakus 同场算两场）**：表内去重**是好的**（实测 泽音 2026-01-24
+      两条重叠 danmakus 记录已并成一场）；问题在 **self 快照并入** `_find_group(window=90min)`
+      **只比 start 差、不看区间重叠** → 实测 4 个 B 站账号 / 20 条 self 场次里 **4 条本应合并却算两场**
+      （明前奶绿 09-03「楚什么楚！」、七海 09-03→09-05 跨 40h 伪场次、弥月 09-09、泽音 09-09）。
+      改法：区间重叠优先（含 12h 开放式假定上界）+ 双方进行中时「同标题 + ≤6h」+
+      回填 `end_at` 的 24h 闸门。✅ 已落地；真实库副本复核 **self-only 4 → 0**（devlog/047）
+- [x] **3 视频与投稿动态合并**：实测 **322 个 bvid 同时存在 `video` 与 `video_dynamic`**
+      （video 423 / video_dynamic 369，其中 47 条动态带附言）。
+      按定案：**只保留 `video` 一条 + 新增字段 `posts.note`（迁移 f001）**，动态附言以「UP 主附言」标注；
+      抓取侧 `_absorb_video_dynamic` 命中 bvid 即不插动态（只补空缺附言），
+      历史由 `scripts/merge_video_dynamics.py` 一次性归并。✅ 已落地；
+      库副本实跑：删重复动态 **323** 条、写附言 **31** 条，复跑「可归并 0」= 幂等
+- [x] **2 平台化帖子分类**：实测 B 站 `image 2453 / video 423 / repost 385 / video_dynamic 369 /
+      text 352 / music 2 / article 2`，微博 `text 318 / image 227 / repost 18 / video 1` → **专栏/音乐是 B 站独占**；
+      微博平台自动发帖（会员升级/签到/推广）单列 **`system`**（保守句式 + isAd，优先于媒体分类）。
+      前端 `TYPE_GROUPS` 拆成 B 站/微博两套，按当前账号平台取用。✅ 已落地
+
+**P9-B｜调度（→ v0.9.8）**
+
+- [x] **4 启动时外部补抓（直播日历 / 粉丝趋势）**：新增 **`app_meta` 通用 KV 表（迁移 f003）**
+      存 `external.startup.last_run`；启动链跑一次「每 V 主账号」补抓（独立守护线程 +
+      `external` 状态胶囊），<24h 跳过、报错也写时间戳。
+      实测：zeroroku `/history` 与 danmakus `/channel` **一次返回全量**（197KB / 单账号
+      1349 场）→ **接口无 limit 参数**，「只比对最新几条」落在①账号级新鲜度跳过
+      ②源幂等落库（实测一次补抓 fan_history 新增 12 行、live_sessions 新增 19 场）。
+      ✅ 已落地（devlog/049）
+- [x] **5 动态流自适应节奏（已定预算 12 req·min⁻¹）**：新原语 `_PlatformBudget`
+      （按平台滑动窗口，平台间独立）；**轮前按估算记账、轮后补差额**（新帖详情）；
+      下一轮到期间隔 = `max(MIN_GAP 30s, 预算等待) ± jitter 15s`；预算 ≤0 退回固定 15 分钟。
+      实测 8 个主账号：一轮 8 请求 / 33s，相邻轮 **80s**（≈6 req·min⁻¹ 均值、轮内瞬时 ~14）。
+      ✅ 已落地
+
+#### P8/P9 实施顺序（2026-09-10 定稿）
+
+| 版本 | 内容 | 工期 | 前置 |
+|---|---|---|---|
+| **v0.9.4** | 先落盘当前未提交批次（devlog/044 收录提速 + 045 微博漏帖修复 + 外部任务状态胶囊） | — | — |
+| **v0.9.5** | P8-A（4 条快赢 + 归档 chip）+ P8-C（顶栏进度） | 1.5 天 | v0.9.4 |
+| **v0.9.6** | P9-A（场次去重 / 视频合并 + `note` / 平台化类型；迁移 f001） | 1~1.5 天 | — |
+| **v0.9.7** | P8-B（card 改造 + 档案设置弹窗 + profile 内容迁移；迁移 f002） | ✅ 已落地 | v0.9.5 |
+| **v0.9.8** | P9-B（启动外部补抓 + 动态流 12/min 自适应；迁移 f003） | ✅ 已落地 | v0.9.6 |
+
+> 迁移编号按**实际实施顺序**：f001 = `posts.note`（v0.9.6）→ f002 = accounts 排序 +
+> 字段锁定（v0.9.7）→ f003 = `app_meta`（v0.9.8）。每次都必须同步
+> `app/main.py::MIGRATION_HEAD`（GLOSSARY §8.3 的不变量）。
+>
+> **P8/P9 全部条目已落地**（2026-09-10）；后续版本号（v0.9.9 / v0.10）留给实机反馈与
+> 收尾：P8-B 的交互手感、P9-A 的历史归并脚本执行、以及发布构建。
+> **v0.9.9 已用掉**（P10-A 筛选行收纳 + 双月历，见下）→ 下一批可编 v0.10 或直接发版。
+
+#### P10 列表筛选行收纳 + 时间范围日历 ✅（2026-09-10 落地 v0.9.9，见 devlog/050）
+
+> 用户三选项已拍板：**草稿制**（确认后生效）/ **归档三态** / **月历常驻展开**。
+
+**P10-A｜右上工具收敛为单钮（→ v0.9.9）**
+
+- [x] **1 收纳**：`.chips-tools` 由「搜索 + 时间 + 已删 + 已归档」四件收敛为
+      **搜索浮片 + 单一「筛选 ▾」钮**（`.post-filter-pop`），三分区
+      **状态 / 归档 / 时间范围** + 底部 `重置`；即时生效项沿 §C3 侧栏弹窗口径，无「应用」钮。
+      触发器 `筛选` / `筛选 · N` + `.on`，`title` 回显明细。✅ 已落地
+- [x] **2 归档三态**：全部 / 仅未归档（接线 `is_archived=false`）/ 仅已归档+计数。✅ 已落地
+- [x] **3 时间范围换双月历**（参照用户参考图）：左右面板独立翻月 + 表头一…日 + 恒 6×7 +
+      区间色带（两端圆角）/ 端点粉底白字 / 今天环+点 + 预设六枚 + 粉底 `确认`。
+      预设量纲**含今天**（近一周 = 今天-6d~今天）、月末夹取；选点规则与面板联动按方案；
+      悬停预览未落定区间。✅ 已落地
+- [x] **4 组件与样式落点**（零新依赖）：新增 `components/common/DateRangePicker.tsx` +
+      `utils/dateRange.ts`（纯逻辑拆出，可脱离组件验证）+ `components/PostFilterPop.tsx`；
+      `PostsPage` 删 `timePopOpen`/`timeWrapRef` 与 `.del-btn`/`.arch-btn`/`.time-pop` 全部 CSS
+      （≈110 行）；四个筛选 state 与 `filterRef` 未动。
+      分组语言（`.pop-group/.pop-label/.pop-chips/.pop-actions`）提为与侧栏共享。✅ 已落地
+- [x] **5 验收**：`node scripts/check_date_range.mjs` 30 条断言全过（预设量纲 / 月末夹取 /
+      本地解析 / 6×7 网格）；`scripts/ui_probe.py` **三档宽度 0 问题** + 矮窗（`--height 680`）
+      0 问题；`tsc --noEmit` 0 错；`npm run build` 通过；`pytest` 258 基线不动。✅
+- [x] **顺带修掉**：`archived` 漏在「切账号即重置」名单外（P8-A 遗留）→ 预取种子指纹错配。✅
+
+> 落地要点（两处只有真机探针能抓到，已固化进探针断言）：`.posts-panel` 是 `overflow:hidden`，
+> 弹窗越界＝**静默裁掉**左月历/底部按钮 —— ①弹窗需 `max-height: calc(100vh − 252px)` +
+> 内部覆盖式滚动（矮窗兜底）；②按「窗口宽」推的窄窗降级会提前命中（`--window-size` 与
+> `innerWidth` 差一个边框量）→ 改为按视口退让 `min(512px, 100vw − 574px)`，不再有第二种布局。
+
+#### 顶栏展示策略 + 后台刷新不打断草稿 ✅（2026-09-10，devlog/051，无迁移）
+
+- [x] **自动节拍静默**：`GET /vtuber/fetch-status` 每类带 `auto`（定时档发起）+
+      顶层 `manual_running`（与手动端点 409 同源）；前端 `isQuietTask` 把
+      **动态流轮询 / 自动账号流**排除出顶栏文案·容器·关窗确认；
+      `fetch-idle` 边沿仍读原始 `running`（静默任务完成照样刷新卡片）。
+      策略表见 UI-MAP §A1.1。✅ 已落地（+ 测试 `test_fetch_status_marks_auto_runs_and_manual_busy`）
+- [x] **按钮禁用同源**：`fetchBusy` 改用 `manual_running`——此前动态流每轮把手动按钮
+      禁用掉，而后端其实受理（手动优先抢占自动档）。✅ 已落地
+- [x] **bug 修复：动态轮询期间改档案信息被重置**：`VtuberSettingsDialog` 的草稿播种
+      改为**显式播种键**（打开态 + V id + 主账号 id），后台刷新换 `vtuber` 引用不再冲掉
+      用户正在编辑的内容；关窗作废，下次打开取最新值。✅ 已落地
+      （排查同类：`AddAccountDialog` 只在关窗时重置、`BatchFetchDialog` 无播种 effect，
+      均安全）
+- [x] **UI-MAP 右栏结构重整**：§B1 拆成「B1.0 四视图并列总览 → B1.0.1 共用外壳 →
+      B1.1 cards / B1.2 list / B1.3 archive / B1.4 profile（各自子项）→ B1.5 跨视图联动」，
+      四视图平级关系一眼可见。✅ 已落地
+
+#### 未完成项总览 → **已移到 `docs/TODO.md` §1**（2026-09-13 重写为四组：可立刻动手 / 需先定口径 / 用户侧动作 / 已搁置）
+
+> ✅ **目录改名 `http-test` → `ddtoolkit` 已完成**（仓库现为 `E:\work\Project\DDToolkit`；
+> `4ede9cf` 落地一次性改名脚本 + 登录时计划任务，任务成功后自删）。
+>
+> 发布构建：v0.9.9 **已发布**（2026-09-13，`settings.VERSION = 0.9.9`，安装包 + 便携版已在
+> `dist-release/`，GitHub tag `v0.9.9`）。**之后的批次（devlog/060–063）尚未发版**。
+
+---
+
+## v0.8.0 – v0.9.x 已完成（直播日历重设计 → 内容管道期）
+
+> 独立于 P1–P7 的「直播/档案完善」主线，持续进行中。
+
+- ✅ **v0.8.0 直播日历重设计**（2026-09-06，devlog/033）：照参考图周行列表 → 9 类类型体系（`utils/liveType.ts` 前端兜底 + `app/services/live_type.py` 服务端主判）
+- ✅ **v0.9.0 按设计稿（Frame101）重构月历**（2026-09-06，devlog/034）：870 定宽·6 行 7 列·类型色系格·今天粉描边·hover 浮层
+- ✅ **v0.9.x M1–M4 内容管道**（后端闭环，本次未开 devlog 的批次）：
+  - M1 场次推导：danmakus 主源 + self 快照 ±90min 合并（`source` 组合标记，段数合并中断续播）
+  - M2 类型推断 v2：多信号（校正 override > 系列 > 标题评分 > 词库 > 分区 > 纪念日），`LiveSession.category/category_from`
+  - M3 场次级详情端点：`GET /account/{id}/live-sessions/{liveId}`（场次 + 分类推断；**2026-09-13 拆出** `…/upstream` 承载第三方取数：弹幕词云 + 指标 + 动态，见 devlog/063）
+  - M4 前端呈现：格内首场（时间+标题+N 场计数）、hover 浮层全量、**点击格子 → 详情弹窗**（直播信息 + 分类校正下拉 + 弹幕词云 + 直播动态 + 内容分析预留）、月份切换滑动动画
+- ✅ **弹幕词云**（2026-09-07）：danmakus v2 live 词云 top40 → **增量摊铺加权 Voronoi 拼贴**（参考图形态：力导向站点滑动 + λ 面积精确，逐个入池、静止即停；历经 react-wordcloud/圆形域拼贴/圆形气泡簇等版本后由 user 重定需求定案）
+- ✅ **趋势卡重写 ECharts 6.1**（2026-09-07）：canvas 自绘 + dataZoom slider/inside（滚轮缩放/拖动平移）+ 双轴（粉丝/日增）+ 1d/7d/30d 概览 + 容量档位（3m/6m/1y/all）—— **recharts 已退役**
+- ✅ **滚动条标准定案**（2026-09-07）：不占宽 + 自动隐藏 + OverlayScroll 组件统一（12px/4px 全局 webkit 样式作为非覆盖容器的兜底）；全应用滚动容器已全部接入/对齐（含侧栏迁移、type-chips/cat-pop 隐藏化）
+- ✅ **前端系统性审计整理**（2026-09-07）：UI-MAP 全文重写对齐代码；死 API 封装（events/future-reservations/giftDays）与类型删除；`@types/d3-hierarchy` 清理；`--pill-fg` 令牌名统一；图表色值集中 `utils/chartTheme.ts`；次级色统一 `--c-text-sub`
+- ✅ **前端架构体检 + P0/P1 收敛**（2026-09，见 `docs/FRONTEND-ARCH.md`）：判定**不需要**独立组件库（单消费方 + 已有 shadcn 层）。
+  - P0：删 3 个零引用 ui 件（`sheet`/`toggle`/`toggle-group`，272 行）+ 骨架屏死 CSS 与 `.archive-error`/`.profile-card-head|title|sub`（68 行）；图片三态合并；新增 `.gitattributes` 统一 LF
+  - P1：新建 `components/common/` 四个共享件——`ProxyImage`（原 SmartImage + 灯箱第三份状态机并入，补微博直连代理分支）、`FloatPill`（13 处裸类名收口）、`StateBlock`（loading/empty/error 7 处收口）、`StatPill`（含 `PILL_BG` 下沉）；`.lc-nav-btn`/`.lc-nav-pill` 自绘副本删除（−54 行 CSS）
+- ✅ **界面细节六项**（2026-09-09，devlog/043）：任务栏图标清晰度（ICO 首项/按尺寸补偿描边 + `build.rs` 补图标依赖，见上表）、顶栏标题字体统一阿里妈妈方圆体、滚动条「粉只属于指针」+ 指针近右缘亮出、二级弹窗关闭钮改 `focus-visible` 焦点环、单图帖封面与正文图按 URL 去重（查看器不再显示两张）、顶栏状态行**定稿：A2 深玫瑰徽章 + 容器只在有事时出现**（空闲=无容器白字+绿点，事件态=#c9406f 徽章+白字，白字对底 4.72:1 达 AA；六轮迭代，见 devlog §7.7）
+- ✅ **小尺寸图标专用稿定稿**（2026-09-09，devlog/043 §7.5–7.6）：用户选方案 B 并收细线条 → `docs/design/svg/LOGO-small.svg`（头部轮廓 + 大圆点眼 + 每侧 3 根短胡须，轮廓 stroke 16 / 眼径 26），≤48px 自动接管、≥64px 仍用主稿；24px 下胡须 3.0px、轮廓 1.61px
+- ✅ **弹幕取数两段式 + 10 分钟缓存**（2026-09-13，devlog/063）：详情端点只回本地库数据、上游取数走 `/upstream`（此前上游慢会把整个弹窗拖到最坏 93s）
+- ✅ **弹幕「没有数据」误报修复**（2026-09-13，devlog/062）：`_LIVE_TIMEOUT` 12s → 30s + 3 次重试（上游会间歇性变慢，实测 1.1s ↔ 15.6s；最近 5 个场次曾 100% 被判"没有弹幕"）
+
+> 更早的 P1–P10 详细条目见本文件上半部分；**Backlog / 远期构想 / 明确不做** 见 `docs/TODO.md` §3–§5。
+
+---
+
+# 以下章节已移至 `docs/TODO.md`（本文件保留占位，避免旧链接落空）
+
+- **Backlog（近期接口/体验，无明确排期）** → `docs/TODO.md` §1（未完成项，已并入四组）
+- **Backlog（远期，按价值排序）** → `docs/TODO.md` §3
+- **远期构想：让作品被看见（二创发现）** → `docs/TODO.md` §5
+- **明确不做（近期）** → `docs/TODO.md` §4
+

@@ -37,7 +37,8 @@
 | `DEV-LOOP.md` | 本地开发循环：后端直跑、前端 dev、`dev_check.py`、`ui_probe.py`、打包版复现 |
 | `RELEASE.md` | 发布流程：版本号同步 5 处、打包三步、资源契约、GitHub 上传、代理/证书参数 |
 | `platforms-extension-guide.md` | 接入新平台（继承 `BasePlatform` + 注册 + 前端常量） |
-| `TODO.md` | 路线图与现状盘点（已完成项 + backlog + 明确不做） |
+| `TODO.md` | 路线图：**待提需求收集区（§0）** + 未完成项（§1）+ 能力现状（§2）+ backlog/远期/不做 + 版本→devlog 索引与门禁基线 |
+| `ROADMAP-DONE.md` | 已完成条目详录（从 TODO.md 拆出的历史部分：原始需求 / 验收 / 实现注意，2026-09-13 整理） |
 
 ## 4. 资产与归档
 

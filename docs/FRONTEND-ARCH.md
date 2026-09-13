@@ -141,7 +141,7 @@
 |---|---|---|---|---|---|
 | `components/wordcloud/MosaicCloud.tsx` + `cloudPalette.ts` | `LiveCalendar.tsx:103–405`（实际） | 词云组件独立 | 2h | 中（rAF / ResizeObserver / 闭包引用多） | ✅ **已落地**：`LiveCalendar` **1182 → 837**（含下一行的纯格式化外提）；另建 `scripts/check_wordcloud_layout.mjs`（sha256 位级基线）+ `cloudPalette.test.ts`（14 条） |
 | `components/live/liveCalendarFmt.ts`（本批新增的"能证明的那一半"） | `LiveCalendar.tsx` 的 7 个纯函数 | 纯展示格式化外移 | 1h | 低 | ✅ **已落地（2026-09-13）**：`isFreshSession`/`dayKeyIso`/`fmtMonth`/`fmtTime`/`fmtDur`/`fmtMoney`/`keyOf` + 19 条断言 |
-| `components/live/LiveSessionDialog.tsx` | `LiveCalendar.tsx` 场次详情（`lc-dlg` 家族） | 弹窗独立 | 3h | 中 | ✅ **已落地（2026-09-13）**：340 行；`LiveCalendar` **734 → 465**（含把 `cloudBubbles`/破泡状态一并搬入）。证据 = 日历签名 `fb75217e…` 一致 + 详情弹窗实渲染（`--archive-day`）非加载态、非空态。**同日追加**：上游取数拆到 `components/live/useLiveUpstream.ts`（63 行）后本件 **441 行**（devlog/063） |
+| `components/live/LiveSessionDialog.tsx` | `LiveCalendar.tsx` 场次详情（`lc-dlg` 家族） | 弹窗独立 | 3h | 中 | ✅ **已落地（2026-09-13）**：340 行；`LiveCalendar` **734 → 465**（含把 `cloudBubbles`/破泡状态一并搬入）。证据 = 日历签名 `fb75217e…` 一致 + 详情弹窗实渲染（`--archive-day`）非加载态、非空态。**同日追加**：上游取数拆到 `components/live/useLiveUpstream.ts` 后本件 **457 行**（总行数，devlog/063） |
 | `hooks/useLiveSessions.ts` | `LiveCalendar.tsx` 数据加载 / 月份 / 分类状态 | 逻辑外移 | 2h | **高** | ✅ **已落地（2026-09-13）**：`components/live/useLiveSessions.ts`（230 行）；`LiveCalendar` **837 → 734**。证据 = 日历格 sha256 签名 `fb75217e…` 重构前后**完全一致**（`ui_probe.py --archive --calendar-expect`）+ hero 签名 + 探针三档全绿。**顺序是契约**（7 条 effect 的相对顺序与依赖数组不得改），已写进 hook 文件顶部注释 |
 | `components/posts/HeroCardsView.tsx` | `PostsPage.tsx` 展示页视图 | 展示页视图 | 1.5h | 中 | 🔶 **纯逻辑已提**（`utils/postTypes.ts`：`orderAccounts`/`chunkBy`/`accountHomeUrl`，27 条断言 + 探针 `--hero-expect` 位级护栏）；**视图 JSX 未拆** —— 见下方决策记录 |
 | `components/posts/PostListView.tsx` | `PostsPage.tsx` 列表页视图 | 列表页视图 | 2h | 中 | ⬜ 未做 —— 同上 |
@@ -161,8 +161,12 @@
 > 已完成的替代方案更划算：**把能测的抽出来测**（`postTypes.ts` 27 条断言）
 > + **把能位级比对的固化**（hero 签名）。这两件事都做了，而 JSX 保持现状。
 >
-> P2 对此文件的**实际结论**：`PostsPage` 1247 → 1128（−119，含本批 197 行新文件），
-> 而**可测试面从 0 变成 27 条断言 + 1 个位级护栏** —— 这才是 P2 想要的成果。
+> P2 对此文件的**实际结论**：`PostsPage` 1247 → 1128 → **1134（当前，总行数）**
+> —— 行数基本没降，但**可测试面从 0 变成 27 条断言 + 1 个位级护栏**，这才是 P2 想要的成果。
+
+> ⚠️ **行数口径**（2026-09-13 整理 TODO 时发现并统一）：本表数字都是**总行数**
+> （含空行/注释，等价 `wc -l`）。2026-09-13 有几处新记录误用了"非空行数"（会少约 5%），
+> 已更正为总行数；看到 ±10 行的出入优先怀疑口径而不是"代码变了"。
 
 > 已完成项的实际收益（避免"只减行数"的误判）：`PostsPage.tsx` **1285 → 1247**（−38）——
 > 行数减得少，但**三段此前零覆盖的规则变成了可断言的**（平台分组 key 必须等于后端
