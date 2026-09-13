@@ -65,11 +65,6 @@ export default function VtuberSettingsDialog({
   onSaved,
   onPill,
 }: Props) {
-  const [name, setName] = useState('')
-  const [faction, setFaction] = useState('')
-  const [birthday, setBirthday] = useState('')
-  const [debut, setDebut] = useState('')
-  const [setting, setSetting] = useState('')
   const [sign, setSign] = useState('')
   const [avatar, setAvatar] = useState<string | null>(null)
   const [locked, setLocked] = useState<string[]>([])
@@ -95,29 +90,16 @@ export default function VtuberSettingsDialog({
    */
   const seedRef = useRef('')
   /**
-   * 已保存值快照：**判断"这次失焦到底有没有改动"**（避免 tab 过一遍字段就打一堆 PUT），
-   * 同时给 name 的空值兜底用（留空 = 保持原名，而不是把名字写空）。
+   * 已保存值快照：**判断"这次失焦到底有没有改动"**（避免 tab 过一遍就打无意义的 PUT）。
    */
-  const savedRef = useRef({ name: '', faction: '', birthday: '', debut: '', setting: '', sign: '' })
+  const savedRef = useRef({ sign: '' })
   useEffect(() => {
     if (!open || !vtuber) return
     const key = `${vtuber.id}:${hero?.id ?? ''}`
     if (seedRef.current === key) return
     seedRef.current = key
-    const seed = {
-      name: vtuber.name ?? '',
-      faction: vtuber.faction ?? '',
-      birthday: vtuber.birthday ?? '',
-      debut: vtuber.debut_date ?? '',
-      setting: vtuber.setting ?? '',
-      sign: hero?.sign ?? '',
-    }
+    const seed = { sign: hero?.sign ?? '' }
     savedRef.current = seed
-    setName(seed.name)
-    setFaction(seed.faction)
-    setBirthday(seed.birthday)
-    setDebut(seed.debut)
-    setSetting(seed.setting)
     setSign(seed.sign)
     setAvatar(vtuber.avatar ?? null)
     setLocked(
@@ -204,56 +186,34 @@ export default function VtuberSettingsDialog({
   }
 
   /**
-   * 文本字段**失焦即提交**（R1 补充，2026-09-13 用户：「修改要么实时生效，要么全部都需要保存」）。
+   * 签名**失焦即提交**（R1 补充，2026-09-13 用户：「修改要么实时生效，要么全部都需要保存」）。
    *
-   * 选的是"全部实时"这一侧：本弹窗里已有三处即时写入（头像 / 锁定 / 背景），
+   * 选的是"全部实时"这一侧：本弹窗里已是即时写入（头像 / 锁定 / 背景），
    * 再留一个"保存"按钮就会长期存在"这条到底存没存"的歧义 —— 那正是 R1 反馈的来源。
    * 于是：
-   * - 失焦（点别处 / Tab / 回车主动 blur）→ 提交**变化的**字段，一次账；
-   * - 没有任何变化 → 不发请求（tab 过一遍字段不会打一串 PUT）；
+   * - 失焦（点别处 / Tab / 回车主动 blur）→ 有变化才提交；
    * - 提交后回灌父级（卡片/侧栏立即跟着变），失败则回滚输入框到已保存值并报错；
    * - 关闭按钮只负责关窗（没有"取消"语义了 —— 改了就生效）。
    *
    * ⚠️ 关窗时若焦点还在输入框里（Esc 关窗就是这条路径），DOM blur 不保证触发 →
    * 由卸载时的 flush 兜底（见下方 useEffect 与 `flushRef`）。
+   *
+   * 注：名称/企划/生日/出道日/角色设定那一节（原「基本资料」）已按用户
+   * 2026-09-13 的口径**整节移除**（devlog/068）—— 剩下的可编辑项只有签名（账号级）。
    */
-  const commitFields = async (): Promise<void> => {
-    if (!vtuber || saving) return
+  const commitSign = async (): Promise<void> => {
+    if (!vtuber || !hero || saving) return
     const s = savedRef.current
-    const next = {
-      name: name.trim() || s.name,
-      faction: faction.trim(),
-      birthday: birthday.trim(),
-      debut: debut.trim(),
-      setting: setting.trim(),
-      sign: sign.trim(),
-    }
-    const vtuberChanged =
-      next.name !== s.name || next.faction !== s.faction || next.birthday !== s.birthday ||
-      next.debut !== s.debut || next.setting !== s.setting
-    const signChanged = !!hero && next.sign !== s.sign
-    if (!vtuberChanged && !signChanged) return
+    const next = { sign: sign.trim() }
+    if (next.sign === s.sign) return
     setSaving(true)
     try {
-      if (vtuberChanged) {
-        onSaved(await api.updateVtuber(vtuber.id, {
-          name: next.name,
-          faction: next.faction || null,
-          birthday: next.birthday || null,
-          debut_date: next.debut || null,
-          setting: next.setting || null,
-          avatar,
-        }))
-      }
-      // 签名是账号级字段 → 写主账号
-      if (signChanged) await api.updateAccount(hero!.id, { sign: next.sign || null })
+      await api.updateAccount(hero.id, { sign: next.sign || null })
       savedRef.current = next
-      if (signChanged || vtuberChanged) onSaved(await api.getVtuber(vtuber.id))
-      onPill?.('档案已更新')
+      onSaved(await api.getVtuber(vtuber.id))
+      onPill?.('签名已更新')
     } catch (e) {
-      // 回滚输入框到"最后一次成功保存"的值，不让界面撒谎
-      setName(s.name); setFaction(s.faction); setBirthday(s.birthday)
-      setDebut(s.debut); setSetting(s.setting); setSign(s.sign)
+      setSign(s.sign)                  // 回滚到"最后一次成功保存"的值，不让界面撒谎
       toast.error(`保存失败：${(e as Error).message}`)
     } finally {
       setSaving(false)
@@ -261,8 +221,8 @@ export default function VtuberSettingsDialog({
   }
 
   // 关窗兜底：Esc 关窗时输入框可能没触发 blur（焦点元素被卸载不派发 blur）
-  const flushRef = useRef(commitFields)
-  flushRef.current = commitFields
+  const flushRef = useRef(commitSign)
+  flushRef.current = commitSign
   useEffect(() => () => { void flushRef.current() }, [])
 
   const removeAccount = async () => {
@@ -288,7 +248,7 @@ export default function VtuberSettingsDialog({
           <DialogHeader className="vd-settings-head">
             <DialogTitle>档案设置</DialogTitle>
             <DialogDescription>
-              背景 / 名称 / 企划 / 设定 / 头像 / 签名与已订阅账号；带锁的字段不会被抓取覆盖。
+              背景 / 头像 / 签名与已订阅账号；改动**点了就生效**（无需保存），带锁的字段不会被抓取覆盖。
             </DialogDescription>
           </DialogHeader>
 
@@ -342,64 +302,6 @@ export default function VtuberSettingsDialog({
 
             <div className="vd-section">
               <h4 className="vd-section-title">
-                基本资料
-                <span className="vd-hint">改完点别处即生效</span>
-              </h4>
-              <label className="vd-field">
-                <span>名称</span>
-                <input
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  onBlur={() => void commitFields()}
-                  onKeyDown={blurOnEnter}
-                />
-              </label>
-              <label className="vd-field">
-                <span>企划 / 公会</span>
-                <input
-                  value={faction}
-                  onChange={(e) => setFaction(e.target.value)}
-                  onBlur={() => void commitFields()}
-                  onKeyDown={blurOnEnter}
-                  placeholder="如：VirtuaReal"
-                />
-              </label>
-              <div className="vd-field-row">
-                <label className="vd-field">
-                  <span>生日</span>
-                  <input
-                    value={birthday}
-                    onChange={(e) => setBirthday(e.target.value)}
-                    onBlur={() => void commitFields()}
-                    onKeyDown={blurOnEnter}
-                    placeholder="MM-DD"
-                  />
-                </label>
-                <label className="vd-field">
-                  <span>出道日</span>
-                  <input
-                    value={debut}
-                    onChange={(e) => setDebut(e.target.value)}
-                    onBlur={() => void commitFields()}
-                    onKeyDown={blurOnEnter}
-                    placeholder="YYYY-MM-DD"
-                  />
-                </label>
-              </div>
-              <label className="vd-field">
-                <span>角色设定</span>
-                <textarea
-                  value={setting}
-                  onChange={(e) => setSetting(e.target.value)}
-                  onBlur={() => void commitFields()}
-                  rows={4}
-                  placeholder="自由文本，展示在档案卡"
-                />
-              </label>
-            </div>
-
-            <div className="vd-section">
-              <h4 className="vd-section-title">
                 头像
                 <span className="vd-hint">
                   {avatarOptions.length > 0 ? '点哪个用哪个（点完即生效）' : '添加账号后可选'}
@@ -442,7 +344,7 @@ export default function VtuberSettingsDialog({
               <h4 className="vd-section-title">
                 签名
                 <span className="vd-hint">
-                  {hero ? `来自 ${hero.platform} 账号` : '暂无账号'}
+                  {hero ? `来自 ${hero.platform} 账号 · 改完点别处即生效` : '暂无账号'}
                 </span>
               </h4>
               <label className="vd-field">
@@ -450,6 +352,8 @@ export default function VtuberSettingsDialog({
                 <input
                   value={sign}
                   onChange={(e) => setSign(e.target.value)}
+                  onBlur={() => void commitSign()}
+                  onKeyDown={blurOnEnter}
                   placeholder="留空则由抓取回填"
                 />
               </label>
