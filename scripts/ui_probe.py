@@ -12,6 +12,7 @@
 需要完整权限运行（Vite 的 esbuild 子进程与无头浏览器在受限沙箱会失败）。
 """
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -63,18 +64,39 @@ def _find_edge() -> str | None:
     return None
 
 
+# 探针用的数据目录源文件（静态图片缓存不需要）
+_SEED_FILES = ("vtuber.db", "vtuber.db-wal", "vtuber.db-shm", ".env", "vtubers.csv")
+
+
 def _prepare_data(empty: bool = False) -> Path:
     """开发数据目录副本（只拷库与名单，静态缓存不需要）。
 
-    empty=True 时给一个全新空目录——用来验证「首次启动」相关行为
+    empty=True 时给一个**真正的全新空目录**——用来验证「首次启动」相关行为
     （后端 first_run=true、前端自动弹登录浮窗）。
+
+    ⚠️ 两种模式都必须**每次重建** `data/`（审计 2026-09-11 记录的缺口，本次修）：
+    - 旧写法 `empty=True` 直接 `return data`，**从不清理上一次运行留下的内容** ——
+      一次普通探针之后紧接着跑 `--first-run`，那次「首启」其实是在**已初始化过的数据
+      目录**上跑的（`.first-run-done` 已存在 → `first_run=false` → 浮窗不弹），
+      却仍然报出「首启」结论；更糟的是目录里还留着 `vtuber.db` 与 **`.env`（真实凭据）**，
+      于是「空数据目录」这一前提整个不成立。
+    - 所以：源文件先归拢到 `seed/`，再把 `data/` 整棵删掉重建，两种模式都从干净状态起步。
     """
+    seed = WORK / "seed"
+    seed.mkdir(parents=True, exist_ok=True)
+    for f in _SEED_FILES:
+        src = DEV_DATA / f
+        if src.exists():
+            shutil.copy2(src, seed / f)
+
     data = WORK / "data"
+    if data.exists():                      # 上一次运行的残留：整棵清掉（含 .first-run-done）
+        shutil.rmtree(data, ignore_errors=True)
     data.mkdir(parents=True, exist_ok=True)
     if empty:
-        return data
-    for f in ("vtuber.db", "vtuber.db-wal", "vtuber.db-shm", ".env", "vtubers.csv"):
-        src = DEV_DATA / f
+        return data                        # 真的空：无库、无 .env、无首启标记
+    for f in _SEED_FILES:
+        src = seed / f
         if src.exists():
             shutil.copy2(src, data / f)
     return data
@@ -97,8 +119,19 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
         f"--window-size={width},{height}", f"--user-data-dir={profile}",
         "--virtual-time-budget=45000", "--dump-dom", url,
     ]
-    with open(dom_file, "wb") as fh:
-        subprocess.run(cmd, stdout=fh, stderr=subprocess.DEVNULL, timeout=180)
+    try:
+        with open(dom_file, "wb") as fh:
+            subprocess.run(cmd, stdout=fh, stderr=subprocess.DEVNULL, timeout=180)
+    except subprocess.TimeoutExpired:
+        # 超时必须自己接住：异常穿出 main 时 `failures` 还是空的，
+        # 而 finally 里会把 `_ui_probe_tmp/` 整目录删掉 —— 于是「失败保留现场」的承诺落空，
+        # 恰恰在最难复现的挂起场景下把证据丢了。也报告成 `_killed` 以便和「没起来」区分。
+        print(f"  [FAIL] {tag} @{width}: 浏览器超时（180s）未产出 DOM；"
+              f"该档视为未量到（现场已保留：{out_dir}）")
+        return None
+    except OSError as exc:
+        print(f"  [FAIL] {tag} @{width}: 无法启动浏览器（{exc}）")
+        return None
     text = dom_file.read_text(encoding="utf-8", errors="replace")
     m = re.search(r'<pre id="ui-probe">(.*?)</pre>', text, re.S)
     if not m:
@@ -113,13 +146,62 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
         return None
     if isinstance(data, dict):                     # 2026-09-10 起：{views, topbar, ...}
         return {
+            "mode": data.get("mode"),
             "views": data.get("views") or [],
             "topbar": data.get("topbar"),
             "calendar": data.get("calendar"),
             "degraded": data.get("degraded") or [],
             "dom": dom_file,
         }
-    return {"views": data, "topbar": None, "calendar": None, "degraded": [], "dom": dom_file}
+    return {"mode": None, "views": data, "topbar": None, "calendar": None,
+            "degraded": [], "dom": dom_file}
+
+
+# ── 展示页 hero 药丸签名（P2 分层收敛 A 批次的位级回归护栏）─────────────
+# 动机：`orderAccounts`（拖拽排序）/ `chunkBy`（每 3 枚切集）/ `accountHomeUrl`（主页兜底）
+# 只在 cards 视图 + 药丸有内容时渲染，而布局不变量对「药丸少一排 / 顺序变了 / 切集错了」
+# 完全无感 —— 即"搬坏了但探针全绿"。这里把 `hero.signature` 规范化后哈希比对。
+
+def _hero_signature(res: dict) -> str | None:
+    """取 cards 段的 hero 签名并哈希；量不到返回 None（由调用方按契约判失败）。"""
+    for v in res.get("views") or []:
+        if v.get("tag") != "cards":
+            continue
+        hero = v.get("hero")
+        if not hero:
+            return None
+        payload = json.dumps(
+            {
+                "pillCount": hero.get("pillCount"),
+                "setCount": hero.get("setCount"),
+                "setSizes": hero.get("setSizes"),
+                "hasAddButton": hero.get("hasAddButton"),
+                "signature": hero.get("signature"),
+            },
+            ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return None
+
+
+def _hero_expect_failures(res: dict, width: int, expect: str) -> list[str]:
+    """hero 签名比对（与 `--hero-expect` 配合）。量不到必须判失败，不能静默通过。"""
+    bad: list[str] = []
+    hero = None
+    for v in res.get("views") or []:
+        if v.get("tag") == "cards":
+            hero = v.get("hero")
+    if not hero:
+        return [f"@{width} cards: 未量到 hero 药丸段（--hero-expect 无从比对；"
+                f"该视图没渲染出 .stat-pill / .stat-set？）"]
+    got = _hero_signature(res)
+    if got != expect:
+        bad.append(
+            f"@{width} cards: hero 药丸签名与基线不一致（实现漂移）\n"
+            f"      期望 {expect}\n      实得 {got}\n"
+            f"      实测 {json.dumps(hero, ensure_ascii=False)}"
+        )
+    return bad
 
 
 def _run_shot(edge: str, url: str, width: int, height: int, out_png: Path) -> None:
@@ -153,24 +235,35 @@ def _assert(views: list[dict], width: int) -> list[str]:
         tag = v.get("tag")
         if v.get("scrollbarPx") != [0, 0]:
             bad.append(f"@{width} {tag}: 文档层出现滚动条 scrollbarPx={v['scrollbarPx']}")
-        for item in v.get("overflowing", []):
-            bad.append(f"@{width} {tag}: 元素可见出窗 {item}")
-        for sc in v.get("scrollers", []):
-            el = sc.get("el", "")
-            if sc.get("nativeBarW", 0) > 0 or sc.get("nativeBarH", 0) > 0:
-                bad.append(
-                    f"@{width} {tag}: 原生滚动条 {el} "
-                    f"nativeBar={sc['nativeBarW']}x{sc['nativeBarH']}"
-                )
-            if (
-                sc.get("hOverflow")
-                and sc.get("overflowX") in ("auto", "scroll")
-                and not any(a in el for a in H_SCROLL_ALLOWLIST)
-            ):
-                bad.append(
-                    f"@{width} {tag}: 容器横向溢出 {el} "
-                    f"client={sc['client'][0]} scroll={sc['scroll'][0]}"
-                )
+        # 三个列表型字段一律先要求「键存在且是 list」再逐条断言。
+        # 旧写法 `v.get(k, [])` 在**选择器踩空/探针少 emit** 时退化成空列表 → 静默空转
+        # （同一次加固里 scrollbarPx 用「缺键也判失败」，这三个却用「缺键当空」，口径不一致）。
+        for key, label in (("overflowing", "元素可见出窗"),
+                           ("scrollers", "滚动容器")):
+            items = v.get(key)
+            if not isinstance(items, list):
+                bad.append(f"@{width} {tag}: 探针未量到 `{key}`（{label}整段断言空转）")
+                continue
+            if key == "overflowing":
+                for item in items:
+                    bad.append(f"@{width} {tag}: 元素可见出窗 {item}")
+                continue
+            for sc in items:
+                el = sc.get("el", "")
+                if sc.get("nativeBarW", 0) > 0 or sc.get("nativeBarH", 0) > 0:
+                    bad.append(
+                        f"@{width} {tag}: 原生滚动条 {el} "
+                        f"nativeBar={sc['nativeBarW']}x{sc['nativeBarH']}"
+                    )
+                if (
+                    sc.get("hOverflow")
+                    and sc.get("overflowX") in ("auto", "scroll")
+                    and not any(a in el for a in H_SCROLL_ALLOWLIST)
+                ):
+                    bad.append(
+                        f"@{width} {tag}: 容器横向溢出 {el} "
+                        f"client={sc['client'][0]} scroll={sc['scroll'][0]}"
+                    )
         bad += _assert_cards(v, width)
         bad += _assert_filter_pop(v, width)
         bad += _assert_filter_chain(v, width)
@@ -182,6 +275,9 @@ def _assert_topbar(tb: dict | None, width: int) -> list[str]:
 
     只在**采样当时恰好只有自动节拍在跑**时才断言（其余情形空过，不制造假失败）：
     此时顶栏必须保持空闲态——不亮容器、文案不是任务进度。
+
+    ⚠️ 「采样本身失败」不在这里判（`ok=false`），否则整段会静默空转 ——
+    该情形由 `_assert_probe_integrity` 作为契约失败拦下（2026-09-11 二次加固）。
     """
     if not tb or not tb.get("ok"):
         return []
@@ -283,9 +379,12 @@ EXPECTED_TAGS = [
 def _assert_probe_integrity(res: dict, width: int, archive: bool = False) -> list[str]:
     """探针自证「确实按契约量到了」——防的最是「跑通了但什么都没测」。
 
-    两类硬失败：
+    三类硬失败：
     - 页面自己汇报的 `degraded`（视图钮点不中 / 投稿 chip 缺失 / 无视图光条）；
-    - 量到的段数与契约不符（少段 = 某段被跳过）。
+    - 量到的段数与契约不符（少段 = 某段被跳过）；
+    - **顶栏没采到**（`ok=false`，即 `/vtuber/fetch-status` 取不到）——
+      旧写法把这一情形交给 `_assert_topbar` 静默 `return []`，于是「顶栏策略」
+      这条不变量在网络/端点出错时整段空转却仍报通过。
     `--archive` 模式不产 views，改为要求日历段存在。
     """
     tag = "archive" if archive else "main"
@@ -296,6 +395,12 @@ def _assert_probe_integrity(res: dict, width: int, archive: bool = False) -> lis
         if not res.get("calendar"):
             bad.append(f"@{width} {tag}: 未拿到日历段（--archive 的实渲染 dump 落空）")
         return bad
+    tb = res.get("topbar")
+    if not tb or not tb.get("ok"):
+        bad.append(
+            f"@{width} {tag}: 未采到顶栏（/vtuber/fetch-status 无响应）—— "
+            "顶栏展示策略整段断言空转"
+        )
     tags = [v.get("tag") for v in res.get("views") or []]
     if tags == ["empty"]:
         bad.append(
@@ -329,9 +434,13 @@ def _assert_cards(v: dict, width: int) -> list[str]:
         return bad
     inner_w = cards.get("innerW")
     # 契约是否生效（与页面内容无关的硬断言）：max-width 计算值必须是 px 上限，
-    # 一旦选择器踩空就退化成 none（列宽随内容变，正是 2026-09-08 那次回归）
+    # 一旦选择器踩空就退化成 none（列宽随内容变，正是 2026-09-08 那次回归）。
+    # `None` 必须判失败 —— 旧写法 `max_w == "none" or (max_w and ...)` 在 None 时
+    # 两个分支都不成立 → 静默通过（与上面 contract 分支的口径不一致）。
     max_w = cards.get("innerMaxW")
-    if max_w == "none" or (max_w and max_w.endswith("px") and float(max_w[:-2]) > 1000):
+    if max_w is None:
+        bad.append(f"@{width} {tag}: 量不到 .list-inner 的 max-width（选择器踩空，契约无从校验）")
+    elif max_w == "none" or (max_w.endswith("px") and float(max_w[:-2]) > 1000):
         bad.append(f"@{width} {tag}: 列表列宽契约未生效（.list-inner max-width={max_w}）")
     if inner_w is not None and inner_w > CARD_COLUMN_MAX + 1:
         bad.append(f"@{width} {tag}: 列表列宽 {inner_w} > {CARD_COLUMN_MAX}（列宽随内容膨胀）")
@@ -352,6 +461,28 @@ def _assert_cards(v: dict, width: int) -> list[str]:
     if cards.get("coverClipped"):
         bad.append(f"@{width} {tag}: {cards['coverClipped']} 张卡片封面被左缘裁切")
     return bad
+
+
+def _calendar_signature(cal: dict | None) -> str | None:
+    """直播日历 42 格 `day|badge|body` 的 sha256（A-2 取数/月份/分类链路的位级护栏）。
+
+    为什么用「格内文本」而不是几何：A-2 要搬的是**取数与状态**（场次列表、月份、分类桶），
+    搬坏了的表现是「某些天没内容了 / 徽章类型变了 / 月份错位」，**不是**元素出窗 ——
+    布局不变量对此完全无感。格内文本正是这条链路的最终产物。
+
+    注意：它同时受**第三方数据变化**影响（新场次入库、分类被校正），所以只适合
+    「重构前后立刻各跑一次」的短窗口比对，不适合当长期基线（写进报告时要说清）。
+    """
+    if not cal:
+        return None
+    cells = cal.get("cells") or []
+    if not cells:
+        return None
+    payload = json.dumps(
+        [[c.get("day"), c.get("badge"), c.get("body")] for c in cells],
+        ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _assert_first_run(dom_file: Path) -> list[str]:
@@ -413,6 +544,42 @@ def main() -> int:
         action="store_true",
         help="只跑一档宽度，打印直播日历每格的**实渲染文本**（排查「某些天不显示信息」）",
     )
+    ap.add_argument(
+        "--hero-expect",
+        default="",
+        help="cards 视图 hero 药丸签名的期望 sha256（位级回归护栏）。"
+             "先跑一次不带该参数，从输出里抄签名；重构后再带上来比对。",
+    )
+    ap.add_argument(
+        "--hero-print",
+        action="store_true",
+        help="只打印 cards 视图 hero 药丸签名与实测明细，便于建立基线",
+    )
+    ap.add_argument(
+        "--archive-print",
+        action="store_true",
+        help="（配合 --archive）打印日历 42 格的 sha256 签名，便于建立重构前基线",
+    )
+    ap.add_argument(
+        "--archive-day",
+        default="",
+        help="（配合 --archive）点**指定日号**的格子而不是最近一格。"
+             "最近一场常常刚下播、danmakus 未收录 → 弹幕/词云段等于没验；"
+             "要验那两段就回到几天前有收录的场次（如 --archive-day 11）。",
+    )
+    ap.add_argument(
+        "--calendar-expect",
+        default="",
+        help="（配合 --archive）日历格内文本签名的期望 sha256；不一致判失败。"
+             "注意它同时受第三方数据变化影响，只适合重构前后短窗口比对。",
+    )
+    ap.add_argument(
+        "--vtuber",
+        type=int,
+        default=0,
+        help="指定 VTuber id（默认取 /vtuber/list 的第一条）。"
+             "用于命中特定形态的数据，例如平台药丸多枚的 V（切集/排序只在 >1 枚时才有意义）。",
+    )
     args = ap.parse_args()
     widths = args.width or [1100, 1280, 1440]
 
@@ -458,9 +625,13 @@ def main() -> int:
             print("[FAIL] Vite 未就绪，见", WORK / "vite.log")
             return 1
 
-        vid = _first_vtuber(be_port)
+        vid = args.vtuber or _first_vtuber(be_port)
         if args.first_run:
-            route, extra = "/", "?probe=1&firstRun=1"
+            # `probe=first-run`：空数据目录下页面落在 `/`，**本来就没有视图光条**，
+            # 走四视图量测只会量到 empty+degraded 并被判三条失败（2026-09-11 加固
+            # 引入的必然假失败）。首启要验的是登录浮窗，改由 `_assert_first_run`
+            # 在落盘 DOM 上断言；此处显式用独立 mode，两个契约互不污染。
+            route, extra = "/", "?probe=first-run&firstRun=1"
             print("[probe] 空数据目录模式：验证首启登录浮窗")
         else:
             route = f"/vtubers/{vid}" if vid else "/"
@@ -469,8 +640,11 @@ def main() -> int:
 
         if args.archive:
             w = widths[0]
-            res = _run_probe(edge, f"http://localhost:{vite_port}{route}?probe=archive",
-                             w, args.height, WORK, "archive")
+            arch_url = f"http://localhost:{vite_port}{route}?probe=archive"
+            if args.archive_day:
+                arch_url += f"&day={urllib.parse.quote(args.archive_day)}"
+                print(f"[probe] archive 指定日号 = {args.archive_day}")
+            res = _run_probe(edge, arch_url, w, args.height, WORK, "archive")
             cal = (res or {}).get("calendar") or {}
             print(f"\n=== 直播日历实渲染（@{w}）{cal.get('title')!r} note={cal.get('note')!r} ===")
             for c in cal.get("cells") or []:
@@ -489,6 +663,23 @@ def main() -> int:
             # 原来无论拿到什么都 return 0（审计 2026-09-11），
             # 于是「日历根本没渲染」与「日历渲染正常」在退出码上无法区分。
             bad = _assert_probe_integrity(res or {}, w, archive=True)
+
+            # ── 日历格内文本签名（位级回归护栏；与 hero 同源思路）──────────────
+            # A-2（拆 `useLiveSessions` 的取数/月份/分类状态）**没有**布局层面的护栏：
+            # 布局不变量看不出「场次没拉回来 / 月份错了 / 类型徽章变了」。
+            # 日历 42 格的 `day|badge|body` 正好是这条链路（取数 → 分类 → 渲染）的产物，
+            # 把它哈希后即可做位级比对。
+            cal_sig = _calendar_signature(cal)
+            if args.archive_print or args.calendar_expect:
+                print(f"\n  日历格签名 = {cal_sig}")
+            if args.calendar_expect and cal_sig != args.calendar_expect:
+                bad.append(
+                    "日历格内文本签名与基线不一致（取数/月份/分类链路漂移）\n"
+                    f"      期望 {args.calendar_expect}\n      实得 {cal_sig}"
+                )
+            elif args.calendar_expect:
+                print("  [ok] 日历格签名与基线一致")
+
             for b in bad:
                 print("   -", b)
             if bad:
@@ -504,11 +695,37 @@ def main() -> int:
             if not res:
                 failures.append(f"@{w}: 无探针输出")
                 continue
+            # hero 药丸签名（位级回归护栏；与布局不变量独立）
+            if args.hero_print or args.hero_expect:
+                sig = _hero_signature(res)
+                print(f"  hero 签名 = {sig}")
+                if args.hero_print:
+                    hero = next((v.get("hero") for v in res["views"]
+                                 if v.get("tag") == "cards"), None)
+                    print(f"  hero 明细 = {json.dumps(hero, ensure_ascii=False)}")
+            if args.hero_expect and res.get("mode") != "first-run":
+                hb = _hero_expect_failures(res, w, args.hero_expect)
+                failures.extend(hb)
+                for b in hb:
+                    print("   -", b)
+                if not hb:
+                    print("  [ok] hero 药丸签名与基线一致")
+            if args.hero_print:
+                continue
+            if res.get("mode") == "first-run":
+                # 首启契约：**只**断言登录浮窗（页面无视图光条，布局断言不适用）。
+                # 仍要求探针自证没退化，避免「浮窗没出现」被当成「没量到」放过。
+                for reason in res.get("degraded") or []:
+                    failures.append(f"@{w} first-run: 探针退化（{reason}）")
+                first_bad = _assert_first_run(res["dom"])
+                failures.extend(first_bad)
+                print(f"  首启浮窗：{'未通过' if first_bad else '已弹出且有凭据说明'}")
+                for b in first_bad:
+                    print("   -", b)
+                continue
             bad = _assert_probe_integrity(res, w)
             bad += _assert(res["views"], w)
             bad += _assert_topbar(res.get("topbar"), w)
-            if args.first_run:
-                bad += _assert_first_run(res["dom"])
             failures.extend(bad)
             tags = [v.get("tag") for v in res["views"]]
             print(f"  views={tags}  问题={len(bad)}")

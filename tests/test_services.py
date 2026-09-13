@@ -1725,6 +1725,70 @@ def test_dynamics_next_due_adaptive(db, monkeypatch):
     assert 899 <= delta <= 901        # 退回固定 15 分钟
 
 
+def test_dynamics_due_or_retry_never_raises_and_always_schedules_ahead(db, monkeypatch):
+    """回归（devlog/053 §六-1 未闭环项）：综合档心跳的到期计算**不可抛错**。
+
+    `_dynamics_next_due()` 的调用点有两个，都在调度线程里：心跳首轮（旧代码位于
+    任何 try 之外）与每轮排期。任一处抛错且无人接管 → 整条综合档线程死亡 →
+    动态流与账号流永久停摆，而 T0 直播轮询是独立线程仍活着，**界面看起来「部分
+   正常」**（安装版无控制台，只能翻 logs/sidecar.log）。053 只修掉了已知的那条
+    越界，兜底本身没加。
+
+    这里钉住两件事：
+    ① 底层抛错时 `_dynamics_due_or_retry` 返回**将来**的时刻（不是过去）——
+       否则心跳会退化成每 tick 重试一次的忙循环；
+    ② 底层正常时行为与直接调用 `_dynamics_next_due` 一致（包装不改变语义）。
+    """
+    from app.services import scheduler as sch
+
+    def _boom(_db):
+        raise IndexError("模拟 _dynamics_next_due 内部越界")
+
+    monkeypatch.setattr(sch, "_dynamics_next_due", _boom)
+    monkeypatch.setattr(sch.settings, "DYNAMICS_MIN_GAP_SECONDS", 30.0)
+    before = time.monotonic()
+    due = sch._dynamics_due_or_retry(db, why="测试")   # 不得抛错
+    assert due > before, "失败时必须排在将来，否则心跳忙循环"
+    assert 29 <= due - before <= 31, "失败时退化到各一个「最小间隔」"
+
+    # 正常路径：包装必须等价于直接调用（本用例只验证「不吞掉正常返回值」）
+    monkeypatch.setattr(sch, "_dynamics_next_due", lambda _db: 12345.0)
+    assert sch._dynamics_due_or_retry(db, why="测试") == 12345.0
+
+
+def test_platform_budget_adapts_to_per_platform_demand():
+    """回归（devlog/053 遗留项）：账号数超过 rpm 时**不该被自己饿死**。
+
+    旧行为：单平台需求 > rpm 且窗口为空 → 等一个整窗口（13 个 B 站主账号、rpm=12
+    → 每轮空等 60s，动态流速率被压到实际需求的一半以下），而这并非风控所需。
+    新行为：本平台生效预算抬到「至少装得下一轮」，等 0s；平台之间互不影响。
+    """
+    from app.services import scheduler as sch
+
+    b = sch._PlatformBudget(12, window_seconds=60.0)
+    # 13 > 12：自适应后不再空等
+    assert b.wait_seconds({"bilibili": 13}, 0.0, by_platform={"bilibili": 13}) == 0.0
+    # 需求远超 rpm 同样不退化
+    assert b.wait_seconds({"bilibili": 40}, 0.0, by_platform={"bilibili": 40}) == 0.0
+
+    # 平台独立：bilibili 抬到 40，weibo 仍按 12 记账 → weibo 满窗后仍要等
+    b2 = sch._PlatformBudget(12, window_seconds=60.0)
+    b2.charge({"weibo": 12}, 0.0)
+    assert b2.wait_seconds({"weibo": 1}, 0.0, by_platform={"bilibili": 40, "weibo": 1}) > 59
+
+    # 不传 by_platform（旧调用口径）时行为完全不变
+    b3 = sch._PlatformBudget(12, window_seconds=60.0)
+    assert b3.wait_seconds({"bilibili": 13}, 0.0) == 60.0
+
+    # 需求未超预算时不得抬高（稳态速率不受影响）
+    b4 = sch._PlatformBudget(12, window_seconds=60.0)
+    b4.charge({"bilibili": 11}, 0.0)
+    # 生效 rpm 仍是 12：窗口里已有 11 条，再来 1 条刚好占满 → 不用等
+    assert b4.wait_seconds({"bilibili": 1}, 0.0, by_platform={"bilibili": 1}) == 0.0
+    # 再来 2 条就超了 → 必须等最早那条滑出
+    assert b4.wait_seconds({"bilibili": 2}, 0.0, by_platform={"bilibili": 2}) > 59
+
+
 def test_next_dynamics_cost_counts_primary_accounts(db):
     """下一轮成本 = 每 V **主账号** 1 次 feed 页（按平台聚合；一个 V 只算一个平台）。"""
     from app.services import scheduler as sch

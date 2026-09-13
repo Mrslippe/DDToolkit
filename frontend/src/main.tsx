@@ -87,8 +87,11 @@ function Splash({
             <Logo className="splash-logo splash-logo-static" />
             <div className="mt-5 text-lg font-semibold text-white">后端启动失败</div>
             <p className="mt-2 max-w-md text-center text-sm text-white/80">
-              内置后端服务未能在时限内就绪。请关闭应用后重新打开；
-              若反复失败，可删除数据目录后重试。
+              内置后端服务未能在时限内就绪。请关闭应用后重新打开。
+              若反复失败，请查看数据目录下的 <code>logs/sidecar.log</code>（含完整堆栈）。
+            </p>
+            <p className="mt-2 max-w-md text-center text-xs text-white/60">
+              请勿删除数据目录 —— 那会连同已归档的证据一起删掉。
             </p>
             <Button variant="secondary" className="mt-4" onClick={onRetry}>
               <RotateCcw /> 重试
