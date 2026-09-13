@@ -69,6 +69,10 @@ export const POST_TYPE_LABEL: Record<string, string> = {
   article: '专栏',
   live: '直播',
   music: '音乐',
+  // v0.9.6（devlog/047）：微博平台自动发帖（会员升级/签到/推广）单列 system。
+  // 漏这一条会让「系统」帖在卡片与类型标签上显示原始英文 `system`
+  // （`typeGroupsFor('weibo')` 的筛选组里有「系统」，但展示侧走的是本表）。
+  system: '系统',
 }
 
 export function postTypeLabel(type: string): string {

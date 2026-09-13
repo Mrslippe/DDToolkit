@@ -8,6 +8,10 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src --max-warnings 0",
+    "check:dates": "node ../scripts/check_date_range.mjs",
     "build:backend": "python ../scripts/build_backend.py",
     "collect:release": "python ../scripts/collect_release.py",
     "release": "npm run build:backend && npm run tauri:build && npm run collect:release",
@@ -37,8 +41,13 @@
     "@types/node": "^26.2.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
+    "@typescript-eslint/eslint-plugin": "^8.70.0",
+    "@typescript-eslint/parser": "^8.70.0",
     "@vitejs/plugin-react": "^4.3.4",
+    "eslint": "^8.57.1",
+    "eslint-plugin-react-hooks": "^4.6.2",
     "typescript": "^5.6.3",
-    "vite": "^5.4.11"
+    "vite": "^5.4.11",
+    "vitest": "^2.1.9"
   }
 }

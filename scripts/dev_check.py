@@ -29,6 +29,7 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+FRONTEND = ROOT / "frontend"
 FROZEN_EXE = ROOT / "frontend" / "src-tauri" / "binaries" / "backend" / "ddtoolkit-backend.exe"
 
 OK = "[ok]"
@@ -55,6 +56,36 @@ def _run_pytest() -> bool:
     rc = subprocess.run([sys.executable, "-m", "pytest", "tests/", "-q"], cwd=ROOT).returncode
     print(f"{OK if rc == 0 else FAIL} pytest rc={rc}")
     return rc == 0
+
+
+def _run_frontend_check() -> bool:
+    """前端三条：eslint（`--max-warnings 0`）+ vitest（纯函数单测）+ 日期区间断言。
+
+    项目没有前端验证基建是长期缺口（`docs/FRONTEND-ARCH.md` §5 P3）；
+    2026-09-13 起补了 vitest 与 eslint，这里把它们接进一键自检 —— 否则
+    「加了检查但没人跑」等于没加（`test_version_synced_with_devlog` 曾长期红着
+    就是同一类教训）。缺 node_modules 时不算失败（前端不是每次都要验），
+    但要显式说明「没验」。
+    """
+    print(f"\n=== 前端静态与纯逻辑（eslint + vitest + 日期区间） ===")
+    if not (FRONTEND / "node_modules").exists():
+        print(f"{SKIP} frontend/node_modules 不存在：前端检查未运行（cd frontend && npm install）")
+        return True
+    npx = "npx.cmd" if os.name == "nt" else "npx"
+    ok = True
+    # eslint 用 `--max-warnings 0`：基线已清到 0 warning，新增即拦截
+    # （规则集刻意只留"行为类"少数几条 + 5 处带理由的 disable，见 frontend/eslint.config.js）
+    rc0 = subprocess.run([npx, "eslint", "src", "--max-warnings", "0"],
+                         cwd=FRONTEND, shell=(os.name == "nt")).returncode
+    print(f"{OK if rc0 == 0 else FAIL} eslint rc={rc0}")
+    ok = ok and rc0 == 0
+    rc = subprocess.run([npx, "vitest", "run"], cwd=FRONTEND, shell=(os.name == "nt")).returncode
+    print(f"{OK if rc == 0 else FAIL} vitest rc={rc}")
+    ok = ok and rc == 0
+    rc2 = subprocess.run(["node", "scripts/check_date_range.mjs"], cwd=ROOT,
+                         shell=(os.name == "nt")).returncode
+    print(f"{OK if rc2 == 0 else FAIL} check_date_range rc={rc2}")
+    return ok and rc2 == 0
 
 
 def _smoke_backend(label: str, cmd: list[str], cwd: Path) -> bool:
@@ -97,9 +128,13 @@ def _smoke_backend(label: str, cmd: list[str], cwd: Path) -> bool:
         try:
             _, start = _http("POST", f"{base}/auth/bilibili/qr/start", timeout=20)
         except (urllib.error.URLError, TimeoutError, OSError) as e:
+            # 离线时**不能**当成通过：扫码状态机回归守卫（2026-09-08「读错 code 字段」
+            # 事故的固化用例）恰恰是在这里验的，旧写法打印 [skip] 后 `ok = True`
+            # 退出 0 —— 最需要它的场景里它不验却报通过（审计 2026-09-11）。
             print(f"{SKIP} 扫码链路需要访问 B 站，当前网络不可达：{e}")
-            ok = True
-            return True
+            print(f"{SKIP} 本次**未验证** qr/start → qr/check 状态机，按失败计"
+                  f"（不是「通过」，也不是「无结论」）")
+            return False
         if not start or not start.get("qr_id"):
             print(f"{FAIL} qr/start 未返回 qr_id：{start}")
             return False
@@ -143,6 +178,7 @@ def main() -> int:
         args.frozen = args.portable = True
 
     results: list[tuple[str, bool]] = [("pytest", _run_pytest())]
+    results.append(("frontend logic", _run_frontend_check()))
 
     print("\n=== 2/3 开发态后端冒烟（源码，秒级） ===")
     results.append(("dev backend", _smoke_backend(

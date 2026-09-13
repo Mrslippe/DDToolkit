@@ -3,7 +3,7 @@
 // 修复：此逻辑原为 index.html 内联 <script>，被 Tauri 打包注入的 CSP
 // `script-src 'self'` 拦截而静默失效（生产包中诊断面板/右键禁用不生效）；
 // 改为外部模块，作为 main.tsx 的首个 import 最先执行。
-;(function () {
+(function () {
   const lines: string[] = []
   let open = true
   // 资源级失败计数（2026-09-10 用户反馈：单张图直连抖一下就把红色诊断面板弹出来）

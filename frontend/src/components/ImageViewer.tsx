@@ -90,6 +90,12 @@ export default function ImageViewer({ images, index, onIndexChange, onClose }: P
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
+    // ⚠️ 已知走查项（2026-09-13 eslint 基线）：`go`/`requestClose` 是父级传入的**行内箭头**，
+    // 每次渲染都是新引用 —— 加进依赖会让 keydown 监听每渲染重挂。当前靠
+    // `index/count/closing/onClose/onIndexChange` 这几个"真实变化量"兜住（灯箱是短命浮层，
+    // 打开期间父级很少重渲染）。**没有实测过陈旧闭包**，所以本批只登记、不改行为；
+    // 若要根治，正确做法是把父级这两个回调包 `useCallback`，而不是往依赖里塞裸函数。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [index, count, closing, onClose, onIndexChange])
 
   // 遮罩只盖详情窗口：按详情窗 content 的实测矩形定位（打开时量一次 + 窗口 resize 复测）

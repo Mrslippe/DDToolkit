@@ -49,6 +49,9 @@ const ProfileView = memo(function ProfileView({ vtuber, refreshTick }: Props) {
       .catch(() => !cancelled && setThirdparty([]))
       .finally(() => !cancelled && setLoadingTp(false))
     return () => { cancelled = true }
+    // `selected?.platform_uid` 是刻意选的窄依赖：`selected` 每次 `getVtuber` 回填都是
+    // 新对象引用，用它做依赖会在数据没变时重打第三方索引接口（2026-09-13 eslint 基线确认）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.platform_uid, refreshTick])
 
   return (
