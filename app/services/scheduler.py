@@ -20,6 +20,8 @@ from app.core.config import settings
 from app.core.database import SessionLocal
 from app.core.http import new_async_client
 from app.models.vtuber import Account, VTuber, Post
+from app.services.vtuber_history import (FIELD_DISPLAY_NAME, FIELD_SIGN,
+                                         record_field_change)
 from app.repositories.vtuber_repo import (
     VTuberRepo, AccountRepo, PostRepo, AccountStatSnapshotRepo, LiveSessionRepo,
     AppMetaRepo,
@@ -303,15 +305,14 @@ async def _download_avatar(url: str, uid: str, client: httpx.AsyncClient | None 
 
 
 def _field_locked(acc: Account, field: str) -> bool:
-    """该字段是否被用户手动锁定（P8-B：`accounts.locked_fields` 逗号分隔）。
+    """（已退役，2026-09-13，devlog/074）字段锁定查询。
 
-    锁定的字段抓取时**不覆盖** —— 用户在「档案设置」里改的昵称/签名/头像不该被
-    下一次平台抓取冲掉（`info.get("name") or acc.display_name` 这类赋值天然会覆盖）。
+    P8-B 起用 `accounts.locked_fields` 让"手改的昵称/签名/头像"不被抓取覆盖；
+    2026-09-13 用户改口径：**平台签名只读 + 手改进 override**，昵称/签名允许被抓取更新，
+    旧值改由 `vtuber_field_history` 记账（曾用名/曾用签名）。列与调用点都已删除，
+    这里保留一个恒为 False 的垫片只为外部脚本/旧测试不炸 —— **新代码不要用**。
     """
-    raw = (acc.locked_fields or "").strip()
-    if not raw:
-        return False
-    return field in {x.strip() for x in raw.split(",") if x.strip()}
+    return False
 
 
 async def _fetch_one_account(acc: Account, db: Session, client: httpx.AsyncClient | None = None,
@@ -340,14 +341,22 @@ async def _fetch_one_account(acc: Account, db: Session, client: httpx.AsyncClien
     try:
         info = await pf.fetch_user_info(str(mid), client=client)
         if info:
-            # P8-B：被用户锁定的字段不覆盖（「档案设置」里手改的昵称/签名/头像）
-            if not _field_locked(acc, "display_name"):
-                acc.display_name = info.get("name") or acc.display_name
-            if not _field_locked(acc, "sign"):
-                acc.sign = info.get("sign") or acc.sign
+            # 2026-09-13（devlog/074）：字段锁定退役 —— 平台昵称/签名**允许被覆盖**，
+            # 覆盖前先把旧值记进 vtuber_field_history（前端标「曾用名 / 曾用签名」）。
+            # ⚠️ 不能指望快照表兜底：account_stat_snapshots 不含昵称与签名。
+            new_name = info.get("name")
+            if new_name and new_name.strip() != (acc.display_name or "").strip():
+                record_field_change(db, vtuber_id=acc.vtuber_id, account_id=acc.id,
+                                    field=FIELD_DISPLAY_NAME, old_value=acc.display_name)
+                acc.display_name = new_name
+            new_sign = info.get("sign")
+            if new_sign and new_sign.strip() != (acc.sign or "").strip():
+                record_field_change(db, vtuber_id=acc.vtuber_id, account_id=acc.id,
+                                    field=FIELD_SIGN, old_value=acc.sign)
+                acc.sign = new_sign
 
             new_avatar = info.get("avatar")
-            if new_avatar and not _field_locked(acc, "avatar"):
+            if new_avatar:
                 # 修复（devlog/019）：URL 变化 → 下载；URL 未变但本地文件缺失 → 补下
                 file_exists = not _avatar_missing(acc)
                 if _needs_avatar_download(acc, new_avatar, file_exists):

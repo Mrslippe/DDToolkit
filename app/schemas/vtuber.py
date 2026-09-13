@@ -22,9 +22,8 @@ class AccountOut(BaseModel):
     live_title: str | None = None
     live_url: str | None = None
     last_fetched_at: datetime | None = None
-    # P8-B（v0.9.7）：平台徽章顺序 + 手动编辑锁定字段（逗号分隔）
+    # P8-B（v0.9.7）：平台徽章顺序
     sort_order: int = 0
-    locked_fields: str | None = None
 
 
 class AccountCreate(BaseModel):
@@ -45,9 +44,10 @@ class AccountUpdate(BaseModel):
     sign: str | None = None
     url: str | None = None
     room_id: str | None = None
-    # P8-B（v0.9.7）：顺序与字段锁定（「档案设置」窗口用）
+    # P8-B（v0.9.7）：顺序（「档案设置」窗口用）。
+    # 注：`locked_fields` 已于 2026-09-13 退役（devlog/074）—— 平台昵称/签名允许被抓取
+    # 覆盖，旧值改由 `vtuber_field_history` 记账（曾用名/曾用签名）。
     sort_order: int | None = None
-    locked_fields: str | None = None
 
 
 # ── Account 统计快照（P0，v0.5.0） ─────────────────────────────────
@@ -83,6 +83,9 @@ class VTuberOut(BaseModel):
     avatar: str | None = None
     background_path: str | None = None
     notes: str | None = None
+    # 签名来源与覆盖（2026-09-13，devlog/074）：卡片签名 = override → 来源账号 → 主账号
+    sign_override: str | None = None
+    sign_source_account_id: int | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
     accounts: list[AccountOut] = []
@@ -106,6 +109,27 @@ class VTuberUpdate(BaseModel):
     setting: str | None = None
     avatar: str | None = None
     notes: str | None = None
+    # 签名来源与覆盖（2026-09-13，devlog/074）——档案设置窗口写这两个
+    sign_override: str | None = None
+    sign_source_account_id: int | None = None
+
+
+class FormerValueOut(BaseModel):
+    """一条「曾用值」（曾用名 / 曾用签名）。"""
+    value: str
+    platform: str | None = None      # 账号被删时为 None
+    account_id: int | None = None
+    changed_at: datetime | None = None
+
+
+class VTuberFormerValuesOut(BaseModel):
+    """V 的曾用名 / 曾用签名（各最多 5 条，最近优先）。
+
+    单独一个端点而不是塞进 `VTuberOut`：`/vtuber/list` 会返回**全部** V，
+    每 V 再查一次历史就是 N+1；这个数据只在「档案设置」窗口里用。
+    """
+    names: list[FormerValueOut] = []
+    signs: list[FormerValueOut] = []
 
 
 # ── Post ───────────────────────────────────────────────────────────

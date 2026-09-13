@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.models.vtuber import (VTuber, Account, Post, AccountStatSnapshot,
                                LiveGiftDay, ThirdpartyVtuber, VtuberEvent,
-                               LiveSession, LiveCategoryOverride, AppMeta)
+                               LiveSession, LiveCategoryOverride, AppMeta,
+                               VtuberFieldHistory)
 from app.services.live_type import normalize_title
 
 logger = logging.getLogger(__name__)
@@ -1183,3 +1184,34 @@ class VtuberEventRepo:
         if "|" in title:
             return title.split("|", 1)[1].strip()
         return title.replace("直播预约", "", 1).strip()
+
+
+class VtuberFieldHistoryRepo:
+    """曾用值历史（`vtuber_field_history`，devlog/074）：只做删除与读取，写入在 service 层。
+
+    写入逻辑放 `services/vtuber_history.py`（要按"值没变就不记"的去重规则判断，
+    属于业务口径）；这里只提供级联清理（`app/services/purge.py` 调用）与读取。
+    """
+
+    def __init__(self, db: Session):
+        self.db = db
+
+    def delete_by_account(self, account_id: int) -> int:
+        """删除该账号的曾用值行（级联清理用，不提交；见 app/services/purge.py）。"""
+        return (
+            self.db.query(VtuberFieldHistory)
+            .filter(VtuberFieldHistory.account_id == account_id)
+            .delete(synchronize_session=False)
+        )
+
+    def delete_by_vtuber(self, vtuber_id: int) -> int:
+        """删除该 V 的曾用值行（级联清理用，不提交）。
+
+        与 `delete_by_account` 并存的原因：`account_id` 可为 NULL（账号已删的历史行），
+        只按 account 清会漏掉这些行，删 V 时同样被外键挡下。
+        """
+        return (
+            self.db.query(VtuberFieldHistory)
+            .filter(VtuberFieldHistory.vtuber_id == vtuber_id)
+            .delete(synchronize_session=False)
+        )

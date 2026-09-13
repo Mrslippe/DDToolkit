@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
-import { ImagePlus, Loader2, Lock, LockOpen, Trash2, UserPlus } from 'lucide-react'
+import { ImagePlus, Loader2, Trash2, UserPlus } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   Dialog,
@@ -22,8 +22,10 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { api, resolveAsset } from '../api/api'
-import type { Account, VTuber } from '../api/types'
+import type { Account, VTuber, VTuberFormerValues } from '../api/types'
+import { PLATFORM_LABEL } from '../utils/postTypes'
 import { buildSignOptions, type SignOption as SignOptionData } from '../utils/signOptions'
+import { resolveSign } from '../utils/signSource'
 import AddAccountDialog from './AddAccountDialog'
 import OverlayScroll from './OverlayScroll'
 import ProxyImage from './common/ProxyImage'
@@ -40,16 +42,19 @@ interface Props {
 }
 
 /**
- * 档案设置窗口（P8-B，2026-09-10 用户）：把原「更换图片」按钮扩展为一个窗口 ——
- * 背景 / 名称 / 企划 / 生日与出道日 / 设定 / 头像 / 签名 / 已订阅账号管理。
+ * 档案设置窗口（P8-B，2026-09-10 用户）：背景 / 头像 / 签名 / 已订阅账号管理
+ * （原「基本资料」一节 2026-09-13 按用户口径整节删除，见 devlog/067 §四）。
  *
  * 设计取舍：
- * - **草稿 + 保存**：改完点保存才提交（避免每次击键打接口）；
- * - 字段锁定（`accounts.locked_fields`）：昵称/签名/头像手动改过后可上锁，
- *   抓取时跳过锁定字段，不被平台值覆盖（见 scheduler._field_locked）；
+ * - **全部实时生效**：头像点击即写、签名失焦即提交、背景上传即写（没有"保存"按钮，
+ *   也就没有"这条到底存没存"的歧义 —— 见 devlog/067）；
+ * - **签名来源与覆盖（A3，2026-09-13，devlog/074）**：卡片签名 =
+ *   `vtubers.sign_override`（手改的覆盖）→ `sign_source_account_id` 指向的账号 → 主账号；
+ *   **平台签名（`accounts.sign`）只读**，下拉选的是"用哪个平台的签名"，不复制不改写；
+ * - **字段锁定已退役**：昵称/签名允许被抓取更新，旧值由 `vtuber_field_history` 记账
+ *   （曾用名 / 曾用签名，见 `api.getFormerValues`）；
  * - 头像只能选账号的**远端 URL**（`vtubers.avatar` 不走 resolveAsset，
- *   写本地相对路径会拼错前缀）；
- * - profile 视图（档案卡）已下线，企划/设定/账号一览的内容在这里承接。
+ *   写本地相对路径会拼错前缀）。
  */
 /**
  * 回车 = 主动失焦（失焦即提交，见 `commitSign`）—— 让"打完字敲回车"也能落地。
@@ -143,7 +148,6 @@ export default function VtuberSettingsDialog({
 }: Props) {
   const [sign, setSign] = useState('')
   const [avatar, setAvatar] = useState<string | null>(null)
-  const [locked, setLocked] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [addOpen, setAddOpen] = useState(false)
@@ -201,24 +205,32 @@ export default function VtuberSettingsDialog({
   const seedRef = useRef('')
   /**
    * 已保存值快照：**判断"这次失焦到底有没有改动"**（避免 tab 过一遍就打无意义的 PUT）。
+   * 存的是**输入框里那次播种的文本**（= 当时的生效签名），不是 `sign_override` —— 见 commitSign。
    */
   const savedRef = useRef({ sign: '' })
+  /** 曾用名 / 曾用签名（打开窗口时拉一次；改动后重新拉） */
+  const [former, setFormer] = useState<VTuberFormerValues | null>(null)
+
+  const reloadFormer = useCallback(async (id: number) => {
+    try {
+      setFormer(await api.getFormerValues(id))
+    } catch {
+      setFormer(null)          // 拉不到就不标（不阻塞其它编辑）
+    }
+  }, [])
+
   useEffect(() => {
     if (!open || !vtuber) return
     const key = `${vtuber.id}:${hero?.id ?? ''}`
     if (seedRef.current === key) return
     seedRef.current = key
-    const seed = { sign: hero?.sign ?? '' }
+    // 播种 = **当前生效的签名**（覆盖 ?? 来源账号 ?? 主账号），与卡片同口径
+    const seed = { sign: resolveSign(vtuber, vtuber.accounts).text }
     savedRef.current = seed
     setSign(seed.sign)
     setAvatar(vtuber.avatar ?? null)
-    setLocked(
-      (hero?.locked_fields ?? '')
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean),
-    )
-  }, [open, vtuber, hero])
+    void reloadFormer(vtuber.id)
+  }, [open, vtuber, hero, reloadFormer])
   // 关闭即作废播种键：下次打开（哪怕是同一个 V）重新以最新服务端值起稿
   useEffect(() => {
     if (!open) seedRef.current = ''
@@ -247,25 +259,70 @@ export default function VtuberSettingsDialog({
   }
 
   /**
-   * 字段锁定**点击即写入**（R1，2026-09-13）：同上，锁是个开关，
-   * 让"锁了但没保存"变成不可能（此前它跟草稿一起提交，用户锁完直接关窗就丢了）。
+   * 签名**失焦即提交**（R1 补充，2026-09-13：「修改要么实时生效，要么全部都需要保存」）。
+   *
+   * 2026-09-13 第三轮（devlog/074，用户选 A3）：提交的是 **`vtubers.sign_override`**
+   * （手改的覆盖），**不再写 `accounts.sign`** —— 平台签名是平台的事实，只读。
+   *
+   * 关键约定（不这么写就会"顺手造出覆盖"）：
+   * - 播种时 `savedRef.sign` = **当时输入框里的生效文本**（可能是来源账号的签名）；
+   * - 提交时只有**文本真的被改过**才写 override；
+   * - 清空输入框 → `sign_override = null`，回到"跟随来源账号"（这是撤销覆盖的入口）；
+   * - 覆盖与来源的关系：**选来源会清掉覆盖**（见 pickSource）——否则"选了没反应"。
+   *
+   * ⚠️ 关窗时若焦点还在输入框里（Esc 就是这条路径），DOM blur 不保证触发 →
+   * 卸载时 flush 兜底（见下方 `flushRef`）。
    */
-  const toggleLockNow = async (field: string) => {
-    if (!hero || saving) return
-    const prev = locked
-    const next = prev.includes(field) ? prev.filter((f) => f !== field) : [...prev, field]
-    setLocked(next)                    // 乐观更新
+  const commitSign = async (value?: string): Promise<void> => {
+    if (!vtuber || saving) return
+    const s = savedRef.current
+    const next = { sign: (value ?? sign).trim() }
+    setSign(next.sign)                 // 下拉栏路径：先回显再提交
+    if (next.sign === s.sign) return
     setSaving(true)
     try {
-      await api.updateAccount(hero.id, { locked_fields: next.join(',') || null })
-      // ⚠️ 必须回灌父级：本组件的播种键是「V id + 主账号 id」，光写库不刷新的话，
-      // 关窗再打开会按**旧的** `hero.locked_fields` 重新播种 —— 于是刚锁上的又显示成未锁，
-      // 正是 R1 反馈里"逻辑反过来了"的观感来源。
-      onSaved(await api.getVtuber(vtuber!.id))
-      onPill?.(next.includes(field) ? '已锁定：抓取不再覆盖' : '已解锁：抓取可覆盖')
+      onSaved(await api.updateVtuber(vtuber.id, { sign_override: next.sign || null }))
+      savedRef.current = next
+      onPill?.(next.sign ? '已设为自定义签名（平台签名不受影响）'
+                         : '已撤销自定义签名，跟随平台')
     } catch (e) {
-      setLocked(prev)                  // 失败回滚
-      toast.error(`锁定状态保存失败：${(e as Error).message}`)
+      setSign(s.sign)                  // 回滚到"最后一次成功保存"的值，不让界面撒谎
+      toast.error(`保存失败：${(e as Error).message}`)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  /**
+   * 选择"卡片签名跟随哪个平台"（A3 的核心动作）。
+   *
+   * 写 `sign_source_account_id` + **清掉 `sign_override`**：
+   * 有覆盖在时选来源不会有任何可见变化（覆盖优先），那才是真的"点了没反应"。
+   * **不写 `accounts.sign`**：平台签名只读，点一下不会改掉别的平台的签名
+   * （2026-09-13 用户实测反馈的那个 bug）。
+   */
+  const pickSource = async (accountId: number | null) => {
+    if (!vtuber || saving) return
+    setSignPopOpen(false)
+    setSaving(true)
+    const prevOverride = vtuber.sign_override
+    try {
+      const updated = await api.updateVtuber(vtuber.id, {
+        sign_source_account_id: accountId, sign_override: null,
+      })
+      onSaved(updated)
+      const text = resolveSign(updated, updated.accounts).text
+      savedRef.current = { sign: text }
+      setSign(text)                    // 输入框跟着显示新来源的签名
+      onPill?.('已切换签名来源（各平台签名均未被修改）')
+    } catch (e) {
+      // 回滚：把覆盖写回去，别让失败留下"覆盖被清掉"的副作用
+      if (prevOverride) {
+        try {
+          onSaved(await api.updateVtuber(vtuber.id, { sign_override: prevOverride }))
+        } catch { /* 回滚失败只能靠刷新，下面的 toast 已说明 */ }
+      }
+      toast.error(`切换来源失败：${(e as Error).message}`)
     } finally {
       setSaving(false)
     }
@@ -292,45 +349,6 @@ export default function VtuberSettingsDialog({
       onPill?.('已清除自定义背景')
     } catch (e) {
       toast.error(`清除背景失败：${(e as Error).message}`)
-    }
-  }
-
-  /**
-   * 签名**失焦即提交**（R1 补充，2026-09-13 用户：「修改要么实时生效，要么全部都需要保存」）。
-   *
-   * 选的是"全部实时"这一侧：本弹窗里已是即时写入（头像 / 锁定 / 背景），
-   * 再留一个"保存"按钮就会长期存在"这条到底存没存"的歧义 —— 那正是 R1 反馈的来源。
-   * 于是：
-   * - 失焦（点别处 / Tab / 回车主动 blur）→ 有变化才提交；
-   * - 提交后回灌父级（卡片/侧栏立即跟着变），失败则回滚输入框到已保存值并报错；
-   * - 关闭按钮只负责关窗（没有"取消"语义了 —— 改了就生效）。
-   *
-   * ⚠️ 关窗时若焦点还在输入框里（Esc 关窗就是这条路径），DOM blur 不保证触发 →
-   * 由卸载时的 flush 兜底（见下方 useEffect 与 `flushRef`）。
-   *
-   * 注：名称/企划/生日/出道日/角色设定那一节（原「基本资料」）已按用户
-   * 2026-09-13 的口径**整节移除**（devlog/067 §四）—— 剩下的可编辑项只有签名（账号级）。
-   *
-   * `value` 可选：签名下拉栏（2026-09-13 用户要求，devlog/069）选某平台签名时直接传入，
-   * 免得"先 setState 再提交"读到旧值。
-   */
-  const commitSign = async (value?: string): Promise<void> => {
-    if (!vtuber || !hero || saving) return
-    const s = savedRef.current
-    const next = { sign: (value ?? sign).trim() }
-    setSign(next.sign)                 // 下拉栏路径：先回显再提交
-    if (next.sign === s.sign) return
-    setSaving(true)
-    try {
-      await api.updateAccount(hero.id, { sign: next.sign || null })
-      savedRef.current = next
-      onSaved(await api.getVtuber(vtuber.id))
-      onPill?.(value !== undefined ? '已改用该平台的签名' : '签名已更新')
-    } catch (e) {
-      setSign(s.sign)                  // 回滚到"最后一次成功保存"的值，不让界面撒谎
-      toast.error(`保存失败：${(e as Error).message}`)
-    } finally {
-      setSaving(false)
     }
   }
 
@@ -366,7 +384,12 @@ export default function VtuberSettingsDialog({
   }, [signPopOpen])
 
   // 展开：定位 → 面板真实高度出来后（下一帧）再校正一次（决定向下还是向上翻转）
-  // → 跟随滚动/resize。收起时把位置清掉，避免下次用旧坐标闪一帧。
+  // → 跟随滚动/resize/**锚点宽度变化**。收起时把位置清掉，避免下次用旧坐标闪一帧。
+  //
+  // ⚠️ ResizeObserver 不是可选项：弹窗入场动画是 `scale .98`，开面板那一刻量到的
+  //    输入条矩形是**缩小态**（宽度少 ~2%），动画结束后输入条变宽而面板还停在旧宽度 ——
+  //    "面板与输入条同宽"这条参考图关系就破了（被 `--settings` 探针的
+  //    `panelSameWidth` 断言抓到）。观察锚点尺寸变化 → 重新定位即可。
   useEffect(() => {
     if (!signPopOpen) {
       setSignCursor(null)
@@ -375,11 +398,15 @@ export default function VtuberSettingsDialog({
     }
     placePanel()
     const raf = requestAnimationFrame(placePanel)
+    const anchor = signFieldRef.current?.querySelector<HTMLElement>('input')
+    const ro = anchor ? new ResizeObserver(() => placePanel()) : null
+    if (ro && anchor) ro.observe(anchor)
     const onMove = () => placePanel()
     window.addEventListener('scroll', onMove, true)
     window.addEventListener('resize', onMove)
     return () => {
       cancelAnimationFrame(raf)
+      ro?.disconnect()
       window.removeEventListener('scroll', onMove, true)
       window.removeEventListener('resize', onMove)
     }
@@ -400,8 +427,20 @@ export default function VtuberSettingsDialog({
 
   const bg = resolveAsset(vtuber?.background_path ?? null)
   const avatarOptions = (vtuber?.accounts ?? []).filter((a) => a.avatar_url)
+  /** 生效签名与来源（与卡片同口径：覆盖 → 来源账号 → 主账号） */
+  const resolved = resolveSign(vtuber, vtuber?.accounts ?? [])
   /** 签名下拉栏的行数据（整形逻辑在 `utils/signOptions.ts`，有 6 条断言） */
   const signOptions = buildSignOptions(vtuber?.accounts ?? [], hero?.id ?? null, sign)
+  /** 签名区 hint：说清"现在编辑的是什么、卡片跟随谁" */
+  const signHint = !hero
+    ? '暂无账号'
+    : resolved.from === 'override'
+      ? '正在编辑：自定义覆盖（平台签名不受影响）· 保存后点别处即生效'
+      : resolved.accountId != null
+        ? `跟随「${PLATFORM_LABEL[resolved.from === 'account'
+            ? (vtuber?.accounts.find((a) => a.id === resolved.accountId)?.platform ?? '')
+            : ''] ?? ''}」账号 · 输入即变为自定义覆盖`
+        : '暂无签名 · 输入即设为自定义覆盖'
 
   /**
    * 输入框键盘：面板展开时接管 ↑/↓/Enter/Esc（combobox 口径），
@@ -449,7 +488,8 @@ export default function VtuberSettingsDialog({
           <DialogHeader className="vd-settings-head">
             <DialogTitle>档案设置</DialogTitle>
             <DialogDescription>
-              背景 / 头像 / 签名与已订阅账号；改动**点了就生效**（无需保存），带锁的字段不会被抓取覆盖。
+              背景 / 头像 / 签名与已订阅账号；改动**点了就生效**（无需保存）。
+              签名可跟随任一平台，也可自定义覆盖 —— 平台自己的签名不会被改动。
             </DialogDescription>
           </DialogHeader>
 
@@ -545,7 +585,7 @@ export default function VtuberSettingsDialog({
               <h4 className="vd-section-title">
                 签名
                 <span className="vd-hint">
-                  {hero ? `来自 ${hero.platform} 账号 · 改完点别处即生效` : '暂无账号'}
+                  {signHint}
                 </span>
               </h4>
               <div className="vd-field">
@@ -596,10 +636,7 @@ export default function VtuberSettingsDialog({
                           key={o.id}
                           option={o}
                           cursor={i === signCursor}
-                          onPick={() => {
-                            setSignPopOpen(false)
-                            void commitSign(o.sign)
-                          }}
+                          onPick={() => void pickSource(o.id)}
                         />
                       ))
                     )}
@@ -607,26 +644,19 @@ export default function VtuberSettingsDialog({
                   document.body,
                 )}
               </div>
-              <button
-                type="button"
-                className={`vd-lock${locked.includes('sign') ? ' on' : ''}`}
-                disabled={saving}
-                title="点击即写入（无需等保存）"
-                onClick={() => void toggleLockNow('sign')}
-              >
-                {locked.includes('sign') ? <Lock className="size-3.5" /> : <LockOpen className="size-3.5" />}
-                {locked.includes('sign') ? '抓取时不覆盖签名' : '抓取会覆盖我改的签名'}
-              </button>
-              <button
-                type="button"
-                className={`vd-lock${locked.includes('display_name') ? ' on' : ''}`}
-                disabled={saving}
-                title="点击即写入（无需等保存）"
-                onClick={() => void toggleLockNow('display_name')}
-              >
-                {locked.includes('display_name') ? <Lock className="size-3.5" /> : <LockOpen className="size-3.5" />}
-                {locked.includes('display_name') ? '抓取时不覆盖账号昵称' : '抓取会覆盖账号昵称'}
-              </button>
+              {/* 曾用签名（devlog/074）：字段锁定退役后，旧值的唯一痕迹来源。
+                  只在有记录时出现，格式「值（平台）· 值（平台）」。 */}
+              {former && former.signs.length > 0 && (
+                <div className="vd-hint vd-former">
+                  曾用签名：{former.signs.map((f, i) => (
+                    <span key={`fs-${i}`}>
+                      {i > 0 && ' · '}
+                      {f.value}
+                      <em>{f.platform ? `（${PLATFORM_LABEL[f.platform] ?? f.platform}）` : '（已移除账号）'}</em>
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div className="vd-section">
@@ -635,23 +665,33 @@ export default function VtuberSettingsDialog({
                 <span className="vd-hint">{vtuber?.accounts.length ?? 0} 个</span>
               </h4>
               <div className="vd-acc-list">
-                {(vtuber?.accounts ?? []).map((a) => (
-                  <div className="vd-acc" key={a.id}>
-                    <span className="vd-acc-platform">{a.platform}</span>
-                    <span className="vd-acc-name">
-                      {a.display_name ?? a.platform_uid}
-                      <em>{a.followers_count.toLocaleString('zh-CN')} 粉</em>
-                    </span>
-                    <button
-                      type="button"
-                      className="vd-acc-del"
-                      title="删除该账号（连带清理其帖子与从属数据）"
-                      onClick={() => setDelTarget(a)}
-                    >
-                      <Trash2 className="size-4" />
-                    </button>
-                  </div>
-                ))}
+                {(vtuber?.accounts ?? []).map((a) => {
+                  const prevNames = (former?.names ?? []).filter((f) => f.account_id === a.id)
+                  return (
+                    <div className="vd-acc" key={a.id}>
+                      <span className="vd-acc-platform">{a.platform}</span>
+                      <span className="vd-acc-name">
+                        {a.display_name ?? a.platform_uid}
+                        <em>{a.followers_count.toLocaleString('zh-CN')} 粉</em>
+                        {/* 曾用名（devlog/074）：平台昵称现在允许被抓取更新，
+                            旧值记账在这里 —— 只在该账号确实改过名时出现 */}
+                        {prevNames.length > 0 && (
+                          <i className="vd-acc-former">
+                            曾用名：{prevNames.map((f) => f.value).join(' · ')}
+                          </i>
+                        )}
+                      </span>
+                      <button
+                        type="button"
+                        className="vd-acc-del"
+                        title="删除该账号（连带清理其帖子与从属数据）"
+                        onClick={() => setDelTarget(a)}
+                      >
+                        <Trash2 className="size-4" />
+                      </button>
+                    </div>
+                  )
+                })}
               </div>
               <Button variant="outline" size="sm" onClick={() => setAddOpen(true)}>
                 <UserPlus className="size-4" />

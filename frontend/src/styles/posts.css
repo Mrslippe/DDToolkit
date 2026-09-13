@@ -1600,6 +1600,28 @@ img.hero-avatar {
   color: var(--c-text-sub);
 }
 
+/* 曾用值标注（曾用名/曾用签名，2026-09-13，devlog/074）：字段锁定退役后旧值的落点。
+   比正文再小一档、灰色；`em`（平台名）用更浅的灰，不抢主体。 */
+.vd-former {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  line-height: 1.5;
+}
+
+.vd-former em {
+  font-style: normal;
+  color: rgba(100, 116, 139, 0.75);
+}
+
+.vd-acc-former {
+  display: block;
+  margin-top: 2px;
+  font-style: normal;
+  font-size: 11px;
+  color: var(--c-text-sub);
+}
+
 /* ── 签名 + 各平台签名下拉（2026-09-13 设计案，devlog/072）────────────────
    结构（参考图）：输入条（右端内嵌 chevron）→ 紧贴其下的**参与布局**候选面板。
    刻意不做绝对定位浮层：弹窗滚动体是 OverlayScroll（根 overflow:hidden），

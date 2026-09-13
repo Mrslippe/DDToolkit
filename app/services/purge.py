@@ -15,6 +15,7 @@
 | live_sessions | account_id | 直播场次（一次订阅动辄上千条） |
 | live_gift_days | account_id | 礼物日聚合 |
 | live_category_overrides | account_id | 分类校正 |
+| vtuber_field_history | account_id | 曾用名/曾用签名（f004 起；account_id 可空，删 V 时另按 vtuber_id 清） |
 | vtuber_events | vtuber_id | 手动活动条目 |
 
 **不提交**：由调用方在同一事务里 commit（失败可整体回滚，避免删一半）。
@@ -29,11 +30,12 @@ from app.repositories.vtuber_repo import (
     LiveSessionRepo,
     PostRepo,
     VtuberEventRepo,
+    VtuberFieldHistoryRepo,
 )
 
 
 def purge_account(db: Session, account: Account) -> dict[str, int]:
-    """清空单个账号的全部从属数据（帖子 + 4 张子表），不提交。"""
+    """清空单个账号的全部从属数据（帖子 + 5 张子表），不提交。"""
     counts: dict[str, int] = {}
     if account.platform_uid:
         counts["posts"] = PostRepo(db).delete_by_platform_uids(
@@ -43,6 +45,7 @@ def purge_account(db: Session, account: Account) -> dict[str, int]:
     counts["live_sessions"] = LiveSessionRepo(db).delete_by_account(account.id)
     counts["gift_days"] = LiveGiftDayRepo(db).delete_by_account(account.id)
     counts["category_overrides"] = LiveCategoryOverrideRepo(db).delete_by_account(account.id)
+    counts["field_history"] = VtuberFieldHistoryRepo(db).delete_by_account(account.id)
     return counts
 
 
@@ -53,6 +56,8 @@ def purge_vtuber(db: Session, vtuber: VTuber) -> dict[str, int]:
     """
     counts: dict[str, int] = {
         "events": VtuberEventRepo(db).delete_by_vtuber(vtuber.id),
+        # account_id 可为 NULL 的行不会被 purge_account 覆盖，必须按 vtuber 再清一遍
+        "field_history": VtuberFieldHistoryRepo(db).delete_by_vtuber(vtuber.id),
     }
     for acc in list(vtuber.accounts):
         for key, n in purge_account(db, acc).items():

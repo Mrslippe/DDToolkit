@@ -715,6 +715,7 @@ def main() -> int:
                   f"输入框右内距={st.get('inputRightPad')}")
             print(f"  chevron 在框内={st.get('chevronInside')} "
                   f"面板同宽={st.get('panelSameWidth')} "
+                  f"(输入条 {st.get('inputWidth')} / 面板 {st.get('panelWidth')}) "
                   f"面板出视口={st.get('panelClipped')} "
                   f"浮在内容上={st.get('panelOverContent')} "
                   f"position={st.get('panelPosition')} "

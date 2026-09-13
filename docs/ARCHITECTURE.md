@@ -1,9 +1,9 @@
 # 后端架构总览：数据模型 + 抓取技术架构
 
-> 适用版本：`main`（2026-09-11，`MIGRATION_HEAD = f003`）。
+> 适用版本：`main`（2026-09-13，`MIGRATION_HEAD = f004`）。
 > 本文是**入口文档**：先看这里建立全貌，再按需进两份深度文档——
 > - `docs/GLOSSARY.md`：**查名词/代码路径**（改 bug 或做需求第一步）；
-> - `docs/backend-repositories-and-routers.md`：10 张表的列级定义、10 个仓储类、51 个 HTTP 操作；
+> - `docs/backend-repositories-and-routers.md`：11 张表的列级定义、11 个仓储类、54 个 HTTP 操作；
 > - `docs/backend-fetch-pipeline.md`：抓取链路细节（API 清单、节流测算、风控判定、停止原因）。
 > 前端形态见 `docs/UI-MAP.md`；本地开发/验证见 `docs/DEV-LOOP.md`；全部文档索引见 `docs/README.md`。
 
@@ -30,14 +30,14 @@ flowchart TB
   subgraph S["Python sidecar（backend_main.py）"]
     BM["资源引导 vtubers.csv<br/>父进程看门狗<br/>uvicorn Server API（bind 后就绪）"]
     BM --> APP["FastAPI app（app/main.py）<br/>lifespan：迁移 → 调度器 → auth 维护"]
-    APP --> HTTP["HTTP API 事件循环<br/>48 个路由 / 51 个操作 / 手动抓取 / BackgroundTasks"]
+    APP --> HTTP["HTTP API 事件循环<br/>52 个路由 / 54 个操作 / 手动抓取 / BackgroundTasks"]
     APP --> T0["T0 线程：直播轮询 60s<br/>批量接口，不占锁"]
     APP --> TIER["综合档调度线程：动态流 + 账号流<br/>asyncio.run 同档并发"]
     APP --> APS["APScheduler 线程：T4 外部数据<br/>每日 3AM / 每周"]
     APP --> AUTH["auth 维护协程<br/>B 站 cookie 续期"]
   end
 
-  S --> DB[("SQLite vtuber.db（WAL）<br/>10 张表 / alembic a001→f003")]
+  S --> DB[("SQLite vtuber.db（WAL）<br/>11 张表 / alembic a001→f004")]
   S --> FS["DATA_DIR/static：头像 / 自定义背景 / 图片代理缓存"]
   HTTP --> UI["前端 Vite + React（只读渲染 + 轮询 fetch-status）"]
 ```
@@ -61,7 +61,7 @@ tenacity / httpx / fetcher），经 `_sched()` 缓存包装首次调用才导入
 
 ---
 
-## 2. 数据模型（10 张表 · 迁移链 a001 → f003）
+## 2. 数据模型（11 张表 · 迁移链 a001 → f004）
 
 ### 2.1 ER 总览
 
@@ -151,13 +151,21 @@ erDiagram
     text value
     datetime updated_at
   }
+  VTUBER_FIELD_HISTORY {
+    int id PK
+    int vtuber_id FK
+    int account_id FK
+    string field
+    string value
+    datetime changed_at
+  }
 ```
 
 ### 2.2 表职责
 
 | 表 | 定位 | 关键约束 / 索引 | 写入方 |
 |---|---|---|---|
-| `vtubers` | 主播本体（平台无关）：名字/阵营/生日/出道日/设定/默认头像/自定义背景 | `ix_vtubers_name` | 手动 CRUD、候选池收录 |
+| `vtubers` | 主播本体（平台无关）：名字/阵营/生日/出道日/设定/默认头像/自定义背景 + 签名**来源/覆盖**（`sign_override` / `sign_source_account_id`） | `ix_vtubers_name` | 手动 CRUD、候选池收录 |
 | `accounts` | 各平台账号：昵称/头像/签名/粉丝数/直播字段/`last_fetched_at`/`posts_last_scan_at` | **UNIQUE(platform, platform_uid)**；`ix_accounts_vtuber_id` | 收录/加账号、T0/综合档抓取回写 |
 | `posts` | 动态 / 投稿 / 专栏 / 转发 / 音乐 / 直播卡片（直播卡片转存后不入表） | **UNIQUE(platform, platform_uid, platform_post_id)**；复合索引 `(platform, platform_uid, published_at)`、`ix_posts_published_at`、`ix_posts_deleted_detected` | 帖子抓取（批量攒批 commit） |
 | `account_stat_snapshots` | 粉丝数 / 直播状态时间序列（涨粉趋势、直播日历的地基） | `ix_..._account_id`、`ix_..._captured_at`；`source` 区分自采/第三方 | 每次账号抓取成功后追加一行 |
@@ -167,6 +175,7 @@ erDiagram
 | `vtuber_events` | 手动维护的纪念日 / 活动（一次性日期） | `ix_vtuber_events_vtuber_date` | 前端增删 |
 | `thirdparty_vtubers` | 第三方 VTuber 索引（企划 / 公会），供候选池搜索增强 | **UNIQUE(source, platform_uid)** | danmakus vup-list（周级整表刷新） |
 | `app_meta` | 通用 KV（进程外需要记住的少量状态，如 `external.startup.last_run`） | `key` 主键 | 启动外部补抓时间戳（f003） |
+| `vtuber_field_history` | **曾用值**：昵称/签名被覆盖前的旧值（f004 起取代字段锁定） | `ix_vtuber_field_history_vtuber`（`vtuber_id`, `field`） | 抓取回写与 `PUT /account` 在手改前记账（`services/vtuber_history.py`） |
 
 ### 2.3 迁移链与启动迁移
 
@@ -179,9 +188,10 @@ erDiagram
 | `d001` | `vtubers.faction` + 3 个热路径索引 | `e005` | `vtuber_events` |
 | `d002` | `vtubers.background_path` | `e006` | `live_sessions` |
 | `f001` | `posts.note`（投稿动态并入后的 UP 主附言） | `e007` | `live_category_overrides` |
-| `f002` | `accounts.sort_order` + `accounts.locked_fields` | **`f003`** | **`app_meta`（KV 表）= 当前 head** |
+| `f002` | `accounts.sort_order` + `accounts.locked_fields`（后者 f004 已删） | `f003` | `app_meta`（KV 表） |
+| `f004` | `vtubers.sign_override / sign_source_account_id` + `vtuber_field_history`，**删除 `accounts.locked_fields`** = 当前 head（devlog/074） | | |
 
-> 共 **17** 个版本（`alembic/versions/` 实际文件数）。f001–f003 由 v0.9.6–v0.9.8 批次引入。
+> 共 **17** 个版本（`alembic/versions/` 实际文件数：`a001`–`f004`）。f001–f003 由 v0.9.6–v0.9.8 批次引入，f004 见 devlog/074。
 
 启动迁移四形态（`app/main.py::_run_migrations`，冷启动快路径）：
 
@@ -199,8 +209,9 @@ erDiagram
 - **时区**：库内 datetime 一律 **naive UTC**；路由层比较参数同为 naive；输出模型补 `+00:00`。
 - **SQLite PRAGMA**（`app/core/database.py`，每个连接）：`journal_mode=WAL`、
   `busy_timeout=30000`、`synchronous=NORMAL`、**`foreign_keys=ON`**。
-- **外键语义**：只有 `vtubers→accounts` 有 ORM 级联；其余 5 条外键（快照/场次/礼物日/
-  分类校正/活动条目）**不级联**——删除必须显式清理，见 `app/services/purge.py`（§6）。
+- **外键语义**：只有 `vtubers→accounts` 有 ORM 级联；其余 7 条外键（快照/场次/礼物日/
+  分类校正/曾用值 → `accounts`，活动条目 + 曾用值 → `vtubers`）**不级联**——删除必须显式清理，
+  见 `app/services/purge.py`（§6）。
 - **posts 无外键**：与账号靠 `(platform, platform_uid)` 逻辑关联（联合投稿会在每个 V
   下各存一份），删除时按平台+UID 显式清。
 
@@ -409,8 +420,8 @@ flowchart LR
 | 目录 | 职责 | 约定 |
 |---|---|---|
 | `app/routers/` | HTTP 契约、状态码语义（404/409/415/413）、`Depends(get_db)` | 不写 SQL；抓取类端点做忙判定 |
-| `app/repositories/` | 按仓库类持会话（10 个 Repo），批量删除/分页/统计等 SQL | 写操作当场 commit；`PostRepo.create(commit=False)` 供批量入库 |
-| `app/models/` | SQLAlchemy 2.0 ORM（单文件 9 表） | 唯一约束/索引与迁移链一致 |
+| `app/repositories/` | 按仓库类持会话（11 个 Repo），批量删除/分页/统计等 SQL | 写操作当场 commit；`PostRepo.create(commit=False)` 供批量入库 |
+| `app/models/` | SQLAlchemy 2.0 ORM（单文件 11 表） | 唯一约束/索引与迁移链一致 |
 | `app/schemas/` | Pydantic 输入输出模型 | `Out` 用 `from_attributes` |
 | `app/services/` | 调度、抓取、平台适配、第三方源、认证、类型引擎、墓碑、清理 | 不碰 HTTP；重依赖延迟 import |
 | `app/core/` | 配置（数据目录/环境变量）、引擎与 PRAGMA、`get_db`、共享 HTTP 客户端构造（`http.py`） | 新代码发请求一律 `new_async_client()` |
@@ -421,8 +432,9 @@ flowchart LR
 
 1. **库内时间一律 naive UTC**，输出补 `+00:00`；
 2. **posts 无外键**——删除 V / 账号必须走 `app/services/purge.py`（帖子按 platform+uid，
-   4 张子表按 account_id，活动条目按 vtuber_id），漏清一张就会被 `foreign_keys=ON`
-   整次回滚（v0.9.3 修复的事故）；
+   5 张子表按 account_id，活动条目与曾用值按 vtuber_id），漏清一张就会被 `foreign_keys=ON`
+   整次回滚（v0.9.3 修复的事故；f004 的 `vtuber_field_history` 两个外键都有，删 V 必须再按
+   `vtuber_id` 清一遍——`account_id=NULL` 的行按 account 清不到）；
 3. **新增迁移必须同步 `MIGRATION_HEAD`**（测试断言与 alembic head 一致）；
 4. **唯一约束去重**：账号 `(platform, platform_uid)`、帖子 `(platform, platform_uid,
    platform_post_id)`、场次 `(account_id, live_id)`、礼物日 `(account_id, source, gift_date)`；
@@ -451,8 +463,8 @@ flowchart LR
 |---|---|
 | 接入新平台（抖音/小红书…） | 继承 `platforms/base.py::BasePlatform` → `platforms/registry.py` 注册 → 前端平台常量；调度器自动接管 |
 | 接入新第三方源 | 实现 `externals/base.py::ExternalSource` → `externals/__init__.py` 注册（声明 `jobs` 与周期） |
-| 新增表/列 | 新建 `alembic/versions/{fNNN}_*.py`（编号按**实际实施顺序**顺延，当前 head `f003` = `app_meta`）→ 同步 `MIGRATION_HEAD` → 补 `models` 与 Repo → 若挂 `accounts/vtubers` 外键，**同步 `services/purge.py`** |
-| 用户手改的字段被抓取覆盖 | 把字段名写进 `accounts.locked_fields`（`scheduler._field_locked()` 会跳过）；前端入口在「档案设置」窗口 |
+| 新增表/列 | 新建 `alembic/versions/{fNNN}_*.py`（编号按**实际实施顺序**顺延，当前 head `f004` = 签名来源/覆盖 + `vtuber_field_history`）→ 同步 `MIGRATION_HEAD` → 补 `models` 与 Repo → 若挂 `accounts/vtubers` 外键，**同步 `services/purge.py`** |
+| 用户手改的字段被抓取覆盖 | **不再需要锁定**（`accounts.locked_fields` 已随 f004 删除）：抓取照常覆盖，覆盖前把旧值写进 `services/vtuber_history.py::record_field_change()`，前端在档案设置里显示「曾用名/曾用签名」 |
 | 调整抓取频率/节流 | `app/core/config.py`（T0-T4 周期、请求间隔、批量休息、风控冷却） |
 | 新增前端视图 | `docs/UI-MAP.md`（右栏视图光条 + 场景状态机） |
 | 改抓取/布局后的验证 | `python scripts/dev_check.py`（测试 + 后端冒烟）、`python scripts/ui_probe.py`（布局不变量） |

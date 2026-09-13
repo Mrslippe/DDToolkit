@@ -3,7 +3,7 @@
 > **用途**：改 bug / 做需求时快速定位「这个词在代码里叫什么、在哪个文件、牵动谁」。
 > **用法**：`Ctrl+F` 搜中文词或英文标识符；每行是「术语 · 含义 · 代码位置 · 关联」。
 > **与 `ARCHITECTURE.md` 的分工**：架构文档讲「为什么这样设计」，本文讲「这东西在哪、改它要动谁」。
-> 适用版本：`main`（2026-09-10，`MIGRATION_HEAD = f003`）。
+> 适用版本：`main`（2026-09-13，`MIGRATION_HEAD = f004`）。
 
 **目录**：§1 领域名词 · §2 数据模型与字段 · §3 抓取与调度 · §4 认证与凭据 ·
 §5 前端与界面 · §6 工程与流程 · §7 配置项速查 · §8 不变量与常见坑 · §9 需求 → 代码入口。
@@ -41,7 +41,7 @@
 | **候选池 / pool** | 离线待选 VTuber 索引（`vtubers.csv`） | `services/pool.py`；`GET /vtuber/pool/search` | 收录（adopt）的唯一入口 |
 | **收录 / adopt** | 从候选池把 V+账号入库，并立刻抓账号信息 + **首屏内容** + 回填第三方历史 | `routers/vtuber.py::adopt_vtuber`、**`_adopt_background`** | 添加账号走同款（只抓新账号） |
 | **收录首屏 / first screen** | 新账号立刻抓到的第一屏内容（投稿 1 页 + 动态 1 页限 3 条） | `scheduler.async_fetch_first_screen` | v0.9.4，devlog/044 |
-| **解除订阅 / unsubscribe** | 删 V：清帖子 + 4 张子表 + 活动条目，再级联删账号 | `routers/vtuber.py::delete_vtuber`；**`services/purge.py`** | 外键全开，漏清即回滚 |
+| **解除订阅 / unsubscribe** | 删 V：清帖子 + 5 张子表 + 活动条目，再级联删账号 | `routers/vtuber.py::delete_vtuber`；**`services/purge.py`** | 外键全开，漏清即回滚 |
 | **回填 / backfill** | 用第三方数据补历史（粉丝/场次/正文/时间） | `externals/runner.run_external_interval(account_ids=…)`；`scripts/backfill_*.py` | 收录时按账号白名单回填 |
 | **重要日期 / 活动** | 手动维护的纪念日/活动条目 | `models/vtuber.py::VtuberEvent`；`VtuberEventRepo` | 前端 `vtuber_events` 增删 |
 | **预约 / reservation** | 动态里的直播预约（未来场次） | `fetcher._extract_reservation`；`VtuberEventRepo.future_reservations` | `body_json.reservation` |
@@ -52,9 +52,9 @@
 
 ## 2. 数据模型与字段
 
-**10 张表**：`vtubers` / `accounts` / `posts` / `account_stat_snapshots` / `live_sessions` /
+**11 张表**：`vtubers` / `accounts` / `posts` / `account_stat_snapshots` / `live_sessions` /
 `live_gift_days` / `live_category_overrides` / `vtuber_events` / `thirdparty_vtubers` /
-`app_meta`（通用 KV，f003）。
+`app_meta`（通用 KV，f003）/ `vtuber_field_history`（曾用名·曾用签名，f004）。
 列级定义见 `docs/backend-repositories-and-routers.md` §1；ER 图见 `docs/ARCHITECTURE.md` §2。
 
 | 字段/术语 | 含义 | 写入方 | 关联 |
@@ -72,7 +72,7 @@
 | `accounts.platform_uid` | 平台侧 UID（B 站 mid / 微博 uid） | 收录/加账号 | 唯一键的一半 |
 | **naive UTC** | 库内 datetime 一律无时区；输出补 `+00:00` | — | 比较参数必须同为 naive |
 | **唯一约束** | 账号 `(platform, uid)`、帖子 `(platform, uid, pid)`、场次 `(account_id, live_id)` | — | 冲突统一 409 |
-| **外键/级联** | 只有 `vtubers→accounts` 有 ORM 级联；其余 5 条不级联 | `models/vtuber.py` | 删除必须过 `services/purge.py` |
+| **外键/级联** | 只有 `vtubers→accounts` 有 ORM 级联；其余 7 条不级联（5 条挂 `accounts`、2 条挂 `vtubers`：`vtuber_events`、`vtuber_field_history`） | `models/vtuber.py` | 删除必须过 `services/purge.py` |
 
 ---
 
@@ -92,7 +92,9 @@
 | **两把锁** | `_fetch_lock`（账号）/ `_post_fetch_lock`（帖子），互相独立 | `scheduler.py` 顶部 | 两条流因此可并发 |
 | **手动优先 / 抢占** | 手动任务拿不到锁时请求自动档让位 | `_preempt_account/_preempt_post`、`_acquire_manual_*`、`_auto_yield_*_with` | 端点 409 判定 `manual_task_running()` |
 | **轮次执行器** | 按平台并发的调度原语：每轮各平台各处理一个元素 | `scheduler._run_platform_rounds` | 平台内串行、平台间并行、单平台风控单独冷却 |
-| **字段锁定 / locked_fields** | 用户手改的账号字段抓取时不覆盖（逗号分隔） | `accounts.locked_fields`；`scheduler._field_locked()` | v0.9.7；改「档案设置」窗口用 |
+| **签名来源 / 覆盖（A3）** | 卡片签名 = `sign_override` → `sign_source_account_id` 账号 → 主账号 → 空；**平台签名只读**，选来源/打字都不改 `accounts.sign` | `vtubers.sign_override / sign_source_account_id`；前端 `utils/signSource.ts` | f004（devlog/074）；下拉选平台 = 改来源并清覆盖 |
+| **曾用值 / vtuber_field_history** | 昵称/签名被抓取覆盖前的旧值（按账号记账，前端标「曾用名/曾用签名」） | `vtuber_field_history`；`services/vtuber_history.py::record_field_change()` | f004；**取代字段锁定**（快照表不含昵称/签名，不记账即永久丢失） |
+| **字段锁定 / locked_fields** | ~~用户手改的账号字段抓取时不覆盖~~ **已退役**（f004 删除该列）：改为"允许覆盖 + 记曾用值" | `accounts.locked_fields`（已删）；`scheduler._field_locked()` 恒 False 垫片 | v0.9.7 引入、devlog/074 退役 |
 | **账号排序 / sort_order** | 平台徽章展示顺序（拖拽落库） | `accounts.sort_order`；`PUT /vtuber/{id}/account-order` | v0.9.7 |
 | **档案设置窗口** | 背景/名称/企划/设定/头像/签名/账号管理（承接原 profile 视图） | `components/VtuberSettingsDialog.tsx` | v0.9.7，devlog/048 |
 | **平台适配器** | `fetch_user_info` / `fetch_post_page` / `enrich` 三方法 | `services/platforms/base.py`、`registry.py`、`{bilibili,weibo}.py` | 接新平台只加一行注册 |
@@ -151,7 +153,7 @@
 
 | 术语 | 含义 | 代码位置 | 关联 |
 |---|---|---|---|
-| **迁移链 / MIGRATION_HEAD** | alembic `a001→f003`（17 个版本）；`MIGRATION_HEAD` 必须同步 | `alembic/versions/`、`app/main.py::MIGRATION_HEAD` | 测试断言一致 |
+| **迁移链 / MIGRATION_HEAD** | alembic `a001→f004`（17 个版本）；`MIGRATION_HEAD` 必须同步 | `alembic/versions/`、`app/main.py::MIGRATION_HEAD` | 测试断言一致 |
 | **启动迁移四形态** | 全新库 upgrade / 旧库 stamp / 落后增量 / 已最新快路径 | `app/main.py::_run_migrations` | 冷启动优化 |
 | **旧库桥接守卫** | 桥接补不了唯一约束 → 不一致**拒绝启动**（不写假 head 承诺） | `app/main.py::_missing_unique_keys` | devlog/053 |
 | **冻结后端 / frozen** | PyInstaller onedir 打包的 sidecar（`_MEIPASS` 定位资源） | `scripts/build_backend.py`、`backend_main.py`、`app/core/config.py::PROJECT_ROOT` | 资源打平事故见 devlog/036 |
@@ -202,6 +204,9 @@
 1. **库内时间一律 naive UTC**；比较参数必须同为 naive，输出模型补 `+00:00`。
 2. **`posts` 无外键**，`accounts` 之下 5 条外键不级联且 `foreign_keys=ON` →
    删 V / 删账号**必须**走 `app/services/purge.py`，否则整次事务回滚（devlog/040）。
+   `vtuber_field_history` **两个外键都有**（`vtuber_id` + 可空的 `account_id`）：
+   删账号按 account 清、删 V 还要按 vtuber 再清一遍，否则 `account_id=NULL` 的行会把 V 挡下
+   （f004 起，回归用例 `test_delete_vtuber_cleans_account_children` 看住）。
 3. **新增迁移必须同步 `MIGRATION_HEAD`**，否则冷启动快路径会把旧库误判为最新。
    另：旧库桥接（`main._sync_legacy_schema`，补列/补索引）**补不了唯一约束**，
    因此 stamp head 前必须过 `main._missing_unique_keys` —— 不一致就拒绝启动，

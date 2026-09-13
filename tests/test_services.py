@@ -1233,10 +1233,14 @@ def test_fetch_one_account_defers_avatar(monkeypatch):
     s.close()
 
 
-def test_fetch_one_account_respects_locked_fields(monkeypatch):
-    """P8-B（v0.9.7）：用户锁定的字段不被抓取覆盖（「档案设置」手改的昵称/签名）。
+def test_fetch_one_account_records_former_name_and_sign(monkeypatch):
+    """2026-09-13（devlog/074）：字段锁定退役 → 平台值**照常覆盖**，
+    但覆盖前把旧值记进 `vtuber_field_history`（曾用名 / 曾用签名）。
 
-    未锁字段照常更新——锁定是逐字段的，不是整账号跳过。"""
+    ⚠️ 这条是"退役锁定"能成立的前提：`account_stat_snapshots` **不含昵称与签名**，
+    不记账就等于旧值永久丢失。
+    """
+    from app.models.vtuber import VtuberFieldHistory
     from app.services import scheduler as sch
 
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
@@ -1247,37 +1251,72 @@ def test_fetch_one_account_respects_locked_fields(monkeypatch):
     s.add(v)
     s.commit()
     acc = Account(vtuber_id=v.id, platform="bilibili", platform_uid="777",
-                  display_name="我改的名字", sign="平台旧签名",
-                  locked_fields="display_name")
+                  display_name="曾用名甲", sign="曾用签名甲")
     s.add(acc)
     s.commit()
 
     class _Pf:
         async def fetch_user_info(self, uid, client=None):
-            return {"name": "平台新名字", "sign": "平台新签名",
+            return {"name": "新名", "sign": "新签名",
                     "followers_count": 99, "live_status": 0}
 
     monkeypatch.setattr(sch.registry, "get_fetcher", lambda p: _Pf())
     ok = asyncio.run(sch._fetch_one_account(acc, s))
     assert ok is True
-    assert acc.display_name == "我改的名字"     # 锁定 → 不被覆盖
-    assert acc.sign == "平台新签名"             # 未锁 → 正常更新
+    assert acc.display_name == "新名" and acc.sign == "新签名"      # 未锁定 → 照常覆盖
     assert acc.followers_count == 99
+
+    rows = (s.query(VtuberFieldHistory)
+            .filter(VtuberFieldHistory.account_id == acc.id)
+            .order_by(VtuberFieldHistory.id).all())
+    assert [(r.field, r.value) for r in rows] == [
+        ("display_name", "曾用名甲"), ("sign", "曾用签名甲")]
+
+    # 再抓一轮同名同签名 → **不重复记**（否则历史会被每轮抓取刷成噪声）
+    ok = asyncio.run(sch._fetch_one_account(acc, s))
+    assert ok is True
+    assert s.query(VtuberFieldHistory).count() == 2
+
+
+def test_record_field_change_dedupes_repeat_values():
+    """A→B→A：只留 A、B 两条（同一值重复出现不重复记账）。"""
+    from app.models.vtuber import VtuberFieldHistory
+    from app.services.vtuber_history import record_field_change
+
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine)
+    s = sessionmaker(bind=engine)()
+    v = VTuber(name="V")
+    s.add(v)
+    s.commit()
+
+    assert record_field_change(s, vtuber_id=v.id, account_id=None,
+                               field="sign", old_value="A") is True
+    s.commit()
+    assert record_field_change(s, vtuber_id=v.id, account_id=None,
+                               field="sign", old_value="A") is False   # 与最近一条相同
+    assert record_field_change(s, vtuber_id=v.id, account_id=None,
+                               field="sign", old_value="  ") is False  # 空白不记
+    assert record_field_change(s, vtuber_id=v.id, account_id=None,
+                               field="other", old_value="x") is False  # 未登记的字段不记
+    assert s.query(VtuberFieldHistory).count() == 1
+    s.close()
     s.close()
 
 
-def test_field_locked_parsing():
-    """locked_fields 逗号分隔解析：空值/带空格/未知字段都稳妥。"""
+def test_field_locked_shim_is_retired():
+    """锁定已退役（2026-09-13，devlog/074）：垫片恒 False，且**不再读**任何列。
+
+    保留垫片只为旧脚本不炸；这里顺带把"它不再依赖 locked_fields 列"钉住 ——
+    列已在 f004 里删除，如果哪天有人恢复成读列，这里会立刻炸。
+    """
     from app.services import scheduler as sch
 
     class _A:
-        def __init__(self, raw):
-            self.locked_fields = raw
+        pass          # 连 locked_fields 属性都没有 → 仍须安全返回 False
 
-    assert sch._field_locked(_A(None), "sign") is False
-    assert sch._field_locked(_A(""), "sign") is False
-    assert sch._field_locked(_A("sign, display_name "), "display_name") is True
-    assert sch._field_locked(_A("sign"), "display_name") is False
+    assert sch._field_locked(_A(), "sign") is False
+    assert sch._field_locked(_A(), "display_name") is False
 
 
 def test_deferred_avatar_updates_only_avatar_path(monkeypatch):

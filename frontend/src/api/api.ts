@@ -1,4 +1,4 @@
-import type { Account, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, PoolItem, PostPage, PostStats, ThirdpartyVtuber, UpdatePostsResult, VTuber } from './types'
+import type { Account, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, PoolItem, PostPage, PostStats, ThirdpartyVtuber, UpdatePostsResult, VTuber, VTuberFormerValues } from './types'
 
 /**
  * API 基地址：
@@ -167,6 +167,10 @@ export const api = {
     notes?: string | null
     birthday?: string | null
     debut_date?: string | null
+    /** 签名覆盖（null = 撤销覆盖，回落到"跟随来源账号"） */
+    sign_override?: string | null
+    /** 卡片签名跟随哪个账号（null = 主账号） */
+    sign_source_account_id?: number | null
   }) =>
     request<VTuber>(`/vtuber/${id}`, {
       method: 'PUT',
@@ -174,20 +178,25 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
-  /** P8-B：部分更新账号（签名 / 锁定字段 / 顺序等） */
+  /** P8-B：部分更新账号（昵称 / 签名 / 顺序等）。
+   *  2026-09-13（devlog/074）：`locked_fields` 退役——改昵称/签名时后端会把旧值
+   *  记进 `vtuber_field_history`（曾用名/曾用签名），见 `getFormerValues`。 */
   updateAccount: (accountId: number, data: {
     display_name?: string | null
     sign?: string | null
     avatar_url?: string | null
     url?: string | null
     sort_order?: number
-    locked_fields?: string | null
   }) =>
     request<Account>(`/account/${accountId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
     }),
+
+  /** 该 V 的曾用名 / 曾用签名（各最多 5 条，最近优先）——只在档案设置窗口里用 */
+  getFormerValues: (vtuberId: number) =>
+    request<VTuberFormerValues>(`/vtuber/${vtuberId}/former-values`),
 
   /** P8-B：删除账号（连带清理其帖子与从属数据） */
   deleteAccount: (accountId: number) =>

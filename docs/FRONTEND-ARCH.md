@@ -21,22 +21,25 @@
 
 ### 1.1 体量与分布
 
+> 数据口径：§1.1 的体量数字为 2026-09-13 复核值（原为 2026-09-10 审计值）；
+> §1.3 / §1.4 的复用度与卫生度仍是 2026-09-10 审计快照，未重算。**不含** `.test.ts(x)` 测试文件。
+
 | 维度 | 数据 |
 |---|---|
-| 代码文件 | 51 个（39 tsx + 12 ts），8,816 行 |
-| 样式文件 | 4 个，4,027 行（`posts.css` 2,761 / `layout.css` 1,082 / `tokens.css` 95 / `index.css` 89） |
-| 组件总数 | 35 个（`components/ui` 15 + `components/` 业务 20） |
-| 页面 | 2 个（`PostsPage` 1,299 行、`EmptyState` 13 行） |
-| 最大文件 | `pages/PostsPage.tsx` 1,299 行、`components/LiveCalendar.tsx` 1,186 行、`styles/posts.css` 2,761 行 |
+| 代码文件 | 74 个（49 tsx + 25 ts），10,874 行（含测试则 83 个 / 11,708 行） |
+| 样式文件 | 4 个，4,107 行（`posts.css` 3,016 / `layout.css` 943 / `index.css` 83 / `tokens.css` 65） |
+| 组件总数 | 45 个 tsx（`components/ui` 12 + 业务 33） |
+| 页面 | 2 个（`PostsPage` 812 行、`EmptyState` 13 行）+ `pages/useVtuberActions.ts` 170 行 |
+| 最大文件 | `styles/posts.css` 3,016 行、`pages/PostsPage.tsx` 812 行、`components/VtuberSettingsDialog.tsx` 641 行 |
 
 ### 1.2 现有分层（已经存在，不用新建）
 
 | 层 | 位置 | 状态 |
 |---|---|---|
-| 设计令牌 | `styles/tokens.css`（95 行） | ✅ 完整，全部 `var(--token)` 引用 |
-| 基础件（primitives） | `components/ui/*`（shadcn + Radix，15 件，`components.json` 已配置） | ✅ 在用 12 件，3 件死代码 |
-| 共享工具 | `utils/format.ts`（10 个引用者）、`utils/chartTheme.ts`、`hooks/useFetchBusy`、`hooks/useIsMaximized` | ✅ 复用良好 |
-| 业务组件 | `components/*`（20 件） | ⚠️ 17/20 只有 1 个引用者（属"功能"而非"基础件"） |
+| 设计令牌 | `styles/tokens.css`（65 行） | ✅ 完整，全部 `var(--token)` 引用 |
+| 基础件（primitives） | `components/ui/*`（shadcn + Radix，12 件，`components.json` 已配置） | ✅ 全部在用 |
+| 共享工具 | `utils/format.ts`、`utils/chartTheme.ts`、`utils/signSource.ts`（签名解析）、`utils/signOptions.ts`（下拉候选）、`utils/fanTrend.ts`（趋势合并）、`utils/pill.ts`、`hooks/useFetchBusy`、`hooks/useIsMaximized` | ✅ 复用良好；纯函数都带 `.test.ts` |
+| 业务组件 | `components/*`（33 件 tsx） | ⚠️ 多数只有 1 个引用者（属"功能"而非"基础件"） |
 | 设计契约文档 | `docs/UI-MAP.md`（471 行，§C5 三层组件契约） | ✅ 已把"交互层/信息层/弹窗层/表面层"写死 |
 
 ### 1.3 复用度（谁真的被复用）
@@ -55,7 +58,7 @@
 |---|---|
 | `!important` | **0 处** |
 | 硬编码颜色 | 极少，统一走 `var(--c-*)` / `var(--pill-*)` |
-| CSS 组织 | 351 个选择器按 feature 前缀分区（`lc-*` / `post-card-*` / `profile-*` / `fan-*` / `image-viewer-*`），带中文分区注释 |
+| CSS 组织 | 约 665 个选择器按 feature 前缀分区（`lc-*` / `post-card-*` / `profile-*` / `fan-*` / `vd-*` / `image-viewer-*`），带中文分区注释 |
 | 依赖使用 | 全部在用（`cva` 仅 shadcn 件使用，`react-qr-code` 仅登录二维码），无冗余依赖 |
 
 ---
@@ -91,9 +94,9 @@
 
 ```
 层0 设计令牌     styles/tokens.css                     ← 已存在
-层1 基础件       components/ui/*（shadcn 15 → 在用 12）  ← 已存在，删死件
+层1 基础件       components/ui/*（shadcn 12 件，全部在用）  ← 已存在
 层2 共享复合件   components/common/*                    ← 本次抽取目标（新建）
-层3 业务组件     components/{posts,live,chart}/*        ← 现有 20 件，按域归目录
+层3 业务组件     components/{posts,live,chart}/*        ← 现有 33 件，按域归目录
 层4 页面         pages/*                                ← 现有 2 个
 ```
 

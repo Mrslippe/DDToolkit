@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 展示页（cards 视图）：Hero 卡 + 平台药丸（P2 分层收敛剩余项，2026-09-13，devlog/065）。
  *
  * 从 `pages/PostsPage.tsx` 整块搬出，**只搬不改**：
@@ -22,6 +22,7 @@ import type { Account, VTuber } from '../../api/types'
 import heroDivider from '../../assets/icons/hero-divider.svg'
 import { accountHomeUrl, chunkBy, orderAccounts } from '../../utils/postTypes'
 import { pill } from '../../utils/pill'
+import { resolveSign } from '../../utils/signSource'
 import OverlayScroll from '../OverlayScroll'
 import ProxyImage from '../common/ProxyImage'
 import StatPill from '../common/StatPill'
@@ -35,8 +36,6 @@ interface Props {
   /** 直播状态（只读 B 站账号；`liveAcc` 也用于拿直播标题与直播间地址） */
   liveAcc: Account | null
   isLive: boolean
-  /** 签名来源（VTuber 整体事实：B 站优先） */
-  heroAcc: Account | null
   /** 打开「添加账号」弹窗 */
   onAddAccount: () => void
 }
@@ -75,7 +74,6 @@ export default function HeroCardsView({
   avatarSrc,
   liveAcc,
   isLive,
-  heroAcc,
   onAddAccount,
 }: Props) {
   // ── P8-B：平台药丸的点击开主页 + 长按拖动重排 ────────────────────────
@@ -103,6 +101,9 @@ export default function HeroCardsView({
 
   /** 直播间（R7）：能拿到地址就可点（未开播也允许进直播间页） */
   const roomUrl = liveRoomUrl(liveAcc)
+
+  /** 生效签名（覆盖 → 来源账号 → 主账号）；与档案设置窗口同一口径 */
+  const sign = resolveSign(vtuber, accounts)
 
   const onPillPointerDown = (idx: number) => (e: React.PointerEvent) => {
     if (e.button !== 0) return
@@ -197,7 +198,10 @@ export default function HeroCardsView({
 
         <div className="hero-name-block">
           <h2 className="hero-name">{vtuber.name}</h2>
-          {heroAcc?.sign && <p className="hero-sign">{heroAcc.sign}</p>}
+          {/* 签名（2026-09-13，devlog/074）：解析口径 = 自定义覆盖 → 选定的来源账号 →
+              主账号（`utils/signSource`）。此前直接读 `heroAcc.sign`，那个口径下
+              "用别的平台的签名"只能靠复制粘贴去改主账号，已废弃。 */}
+          {sign.text && <p className="hero-sign">{sign.text}</p>}
         </div>
 
         {/* 平台药丸：切 V 时依次滑入（key=vtuber.id 触发重播；

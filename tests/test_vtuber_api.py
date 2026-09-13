@@ -24,7 +24,7 @@ from app.main import app
 from app.core.database import Base, get_db
 from app.models.vtuber import (VTuber, Account, Post, AccountStatSnapshot,
                                LiveSession, LiveCategoryOverride, LiveGiftDay,
-                               VtuberEvent)
+                               VtuberEvent, VtuberFieldHistory)
 from app.repositories.vtuber_repo import AccountStatSnapshotRepo
 
 
@@ -283,8 +283,11 @@ def test_account_order_endpoint(client, monkeypatch):
                       json={"account_ids": []}).status_code == 404
 
 
-def test_account_locked_fields_roundtrip(client, monkeypatch):
-    """P8-B：locked_fields 可经 PUT /account/{id} 写入并回读（档案设置窗口用）。"""
+def test_former_values_roundtrip(client, monkeypatch):
+    """2026-09-13（devlog/074）：手改昵称/签名 → 旧值进「曾用名 / 曾用签名」端点。
+
+    字段锁定退役后，这个端点是旧值的**唯一**来源（快照表不含昵称与签名）。
+    """
     import app.routers.vtuber as router_mod
 
     async def noop_background(*_a, **_k) -> None:
@@ -292,16 +295,62 @@ def test_account_locked_fields_roundtrip(client, monkeypatch):
 
     monkeypatch.setattr(router_mod, "_adopt_background", noop_background)
 
-    vid = client.post("/vtuber", json={"name": "锁定V"}).json()["id"]
+    vid = client.post("/vtuber", json={"name": "曾用名V"}).json()["id"]
     aid = client.post(f"/vtuber/{vid}/accounts",
-                      json={"platform": "bilibili", "platform_uid": "555"}).json()["id"]
-    r = client.put(f"/account/{aid}", json={"locked_fields": "display_name,sign",
-                                            "display_name": "手改昵称"})
+                      json={"platform": "bilibili", "platform_uid": "556",
+                            "display_name": "旧昵称", "sign": "旧签名"}).json()["id"]
+
+    # 空态：还没改过 → 两个列表都空
+    empty = client.get(f"/vtuber/{vid}/former-values").json()
+    assert empty == {"names": [], "signs": []}
+
+    r = client.put(f"/account/{aid}", json={"display_name": "新昵称", "sign": "新签名"})
     assert r.status_code == 200
-    assert r.json()["locked_fields"] == "display_name,sign"
-    assert r.json()["display_name"] == "手改昵称"
-    assert client.get(f"/vtuber/{vid}/accounts").json()[0]["locked_fields"] == \
-        "display_name,sign"
+    assert "locked_fields" not in r.json()          # 字段已退役，不再回传
+
+    d = client.get(f"/vtuber/{vid}/former-values").json()
+    assert [n["value"] for n in d["names"]] == ["旧昵称"]
+    assert [s["value"] for s in d["signs"]] == ["旧签名"]
+    assert d["names"][0]["platform"] == "bilibili"  # 标注是哪个平台的曾用名
+    assert d["names"][0]["changed_at"] is not None
+
+    # 值没变（显式传同样的值）→ 不记
+    client.put(f"/account/{aid}", json={"display_name": "新昵称"})
+    assert len(client.get(f"/vtuber/{vid}/former-values").json()["names"]) == 1
+
+    # 再改一次 → 最多保留 5 条，最近的在前
+    client.put(f"/account/{aid}", json={"display_name": "第三名"})
+    d2 = client.get(f"/vtuber/{vid}/former-values").json()
+    assert [n["value"] for n in d2["names"]] == ["新昵称", "旧昵称"]
+
+    assert client.get("/vtuber/99999/former-values").status_code == 404
+
+
+def test_vtuber_sign_source_roundtrip(client, monkeypatch):
+    """签名来源与覆盖两个字段可经 PUT /vtuber/{id} 写入并回读（A3 口径）。"""
+    import app.routers.vtuber as router_mod
+
+    async def noop_background(*_a, **_k) -> None:
+        return None
+
+    monkeypatch.setattr(router_mod, "_adopt_background", noop_background)
+    vid = client.post("/vtuber", json={"name": "签名V"}).json()["id"]
+    aid = client.post(f"/vtuber/{vid}/accounts",
+                      json={"platform": "bilibili", "platform_uid": "557"}).json()["id"]
+
+    d = client.get(f"/vtuber/{vid}").json()
+    assert d["sign_override"] is None and d["sign_source_account_id"] is None
+
+    r = client.put(f"/vtuber/{vid}", json={"sign_override": "自定义签名",
+                                          "sign_source_account_id": aid})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["sign_override"] == "自定义签名"
+    assert body["sign_source_account_id"] == aid
+    # 清空覆盖（回落到"跟随来源账号"）
+    d2 = client.put(f"/vtuber/{vid}", json={"sign_override": None}).json()
+    assert d2["sign_override"] is None
+    assert d2["sign_source_account_id"] == aid
 
 
 def test_list_accounts(client):
@@ -546,9 +595,13 @@ def test_delete_vtuber_does_not_delete_other_platform_same_uid(client):
 
 
 def test_delete_vtuber_cleans_account_children(client):
-    """回归（2026-09-08 解除订阅失败）：账号之下还有 4 张挂外键的子表，
+    """回归（2026-09-08 解除订阅失败）：账号之下还有挂外键的子表，
     只清 posts 时 `DELETE FROM accounts` 会被 foreign_keys=ON 挡下 → 整次回滚 500。
-    这里每张子表都塞一行，删完必须一行不剩。"""
+    这里每张子表都塞一行，删完必须一行不剩。
+
+    f004（devlog/074）新增 `vtuber_field_history`，**必须**跟着进这张清单：
+    它同时挂 `vtubers.id` 与 `accounts.id` 两个外键，漏掉就是同一个事故重演。
+    """
     vid = client.post("/vtuber", json={"name": "待解订阅"}).json()["id"]
     aid = client.post(f"/vtuber/{vid}/accounts",
                       json={"platform": "bilibili", "platform_uid": "U9"}).json()["id"]
@@ -564,6 +617,11 @@ def test_delete_vtuber_cleans_account_children(client):
                            total_amount="12.5"))
         db.add(LiveCategoryOverride(account_id=aid, live_id="uuid-1", category="chat"))
         db.add(VtuberEvent(vtuber_id=vid, title="生日歌回", event_date="2026-09-09"))
+        db.add(VtuberFieldHistory(vtuber_id=vid, account_id=aid, field="display_name",
+                                  value="旧名字"))
+        # account_id 为空的历史行（来源账号已被删）只能靠按 vtuber_id 的那一遍清掉
+        db.add(VtuberFieldHistory(vtuber_id=vid, account_id=None, field="sign",
+                                  value="旧签名"))
         db.commit()
         # 先确认子表确实有行（否则下面的"一行不剩"是假绿）
         assert db.query(AccountStatSnapshot).count() == 1
@@ -571,6 +629,7 @@ def test_delete_vtuber_cleans_account_children(client):
         assert db.query(LiveGiftDay).count() == 1
         assert db.query(LiveCategoryOverride).count() == 1
         assert db.query(VtuberEvent).count() == 1
+        assert db.query(VtuberFieldHistory).count() == 2
     finally:
         db.close()
 
@@ -585,6 +644,7 @@ def test_delete_vtuber_cleans_account_children(client):
             (LiveGiftDay, LiveGiftDay.account_id == aid),
             (LiveCategoryOverride, LiveCategoryOverride.account_id == aid),
             (VtuberEvent, VtuberEvent.vtuber_id == vid),
+            (VtuberFieldHistory, VtuberFieldHistory.vtuber_id == vid),
             (Account, Account.id == aid),
         ):
             assert db.query(model).filter(cond).count() == 0, model.__name__
@@ -603,6 +663,7 @@ def test_delete_account_cleans_children(client):
         db.add(AccountStatSnapshot(account_id=aid, followers_count=1))
         db.add(LiveSession(account_id=aid, source="feed", live_id="feed-1",
                            start_at=datetime(2026, 9, 7, 20, 0)))
+        db.add(VtuberFieldHistory(vtuber_id=vid, account_id=aid, field="sign", value="旧签名"))
         db.commit()
     finally:
         db.close()
@@ -615,6 +676,8 @@ def test_delete_account_cleans_children(client):
         assert db.query(AccountStatSnapshot).filter(
             AccountStatSnapshot.account_id == aid).count() == 0
         assert db.query(LiveSession).filter(LiveSession.account_id == aid).count() == 0
+        assert db.query(VtuberFieldHistory).filter(
+            VtuberFieldHistory.account_id == aid).count() == 0
     finally:
         db.close()
 

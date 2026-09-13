@@ -24,6 +24,7 @@ from app.schemas.vtuber import (
     AccountStatSnapshotOut, LiveGiftDayOut, ThirdpartyVtuberOut,
     FanTrendPoint, LiveSessionOut, LiveCategoryOut, LiveSessionDetailOut,
     VtuberEventOut, VtuberEventCreate, FutureReservationOut,
+    FormerValueOut, VTuberFormerValuesOut,
 )
 from app.services import pool
 from app.services.purge import purge_account, purge_vtuber
@@ -33,6 +34,8 @@ from app.services.live_type import (
 from app.services.live_upstream import load_live_upstream
 from app.services.danmaku_cloud import build_word_cloud
 from app.services.danmaku_words import build_extra_words
+from app.services.vtuber_history import (FIELD_DISPLAY_NAME, FIELD_SIGN,
+                                         former_values, record_field_change)
 from app.schemas.vtuber import (LiveDanmakuInfo, LiveMetricsOut, LiveEventOut,
                                 LiveWordOut, LiveUpstreamOut)
 from app.services.post_text import extract_post_text
@@ -271,15 +274,41 @@ def create_account(vtuber_id: int, data: AccountCreate,
 
 @router.put("/account/{account_id}", response_model=AccountOut)
 def update_account(account_id: int, data: AccountUpdate, db: Session = Depends(get_db)):
-    """部分更新账号。P8-B 起也可写 `locked_fields`（手动编辑的字段不被抓取覆盖）。"""
+    """部分更新账号。
+
+    2026-09-13（devlog/074）：手动改昵称/签名时**先记旧值**（曾用名 / 曾用签名），
+    再落新值 —— 字段锁定退役后，历史是唯一的痕迹来源。
+    """
+    patch = data.model_dump(exclude_unset=True)
+    before = AccountRepo(db).get(account_id)
+    if not before:
+        raise HTTPException(404, f"Account id={account_id} 不存在")
+    for field, hist in (("display_name", FIELD_DISPLAY_NAME), ("sign", FIELD_SIGN)):
+        if field in patch and (patch[field] or "").strip() != (getattr(before, field) or "").strip():
+            record_field_change(db, vtuber_id=before.vtuber_id, account_id=account_id,
+                                field=hist, old_value=getattr(before, field))
     try:
-        acc = AccountRepo(db).update(account_id, data.model_dump(exclude_unset=True))
+        acc = AccountRepo(db).update(account_id, patch)
     except IntegrityError:
         db.rollback()
         raise HTTPException(409, "该 (platform, platform_uid) 账号已存在")
-    if not acc:
-        raise HTTPException(404, f"Account id={account_id} 不存在")
     return AccountOut.model_validate(acc, from_attributes=True)
+
+
+@router.get("/vtuber/{vtuber_id}/former-values", response_model=VTuberFormerValuesOut)
+def vtuber_former_values(vtuber_id: int, db: Session = Depends(get_db)):
+    """该 V 的曾用名 / 曾用签名（各最多 5 条，最近优先）。
+
+    只给「档案设置」窗口用，所以单独一个端点 —— 塞进 `VTuberOut` 会让
+    `/vtuber/list`（返回全部 V）变成 N+1 查询。
+    """
+    if not VTuberRepo(db).get(vtuber_id):
+        raise HTTPException(404, f"VTuber id={vtuber_id} 不存在")
+    data = former_values(db, vtuber_id)
+    return VTuberFormerValuesOut(
+        names=[FormerValueOut(**n) for n in data["names"]],
+        signs=[FormerValueOut(**s) for s in data["signs"]],
+    )
 
 
 class AccountOrderRequest(BaseModel):

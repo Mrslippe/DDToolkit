@@ -119,12 +119,12 @@ def d1():
     body.append(band_caption(60, 640, "⑤ 核心支撑层 — 配置 / ORM / 仓储", "#8E44AD"))
     body.append(box(60, 650, 212, 120, "core/config.py", ["Settings 类\n.env 凭证\n调度/限流参数"], fill="#F5EEF8", stroke="#8E44AD", tcolor="#5B2C6F"))
     body.append(box(282, 650, 212, 120, "core/database.py", ["create_engine\nSessionLocal\nBase · get_db"], fill="#F5EEF8", stroke="#8E44AD", tcolor="#5B2C6F"))
-    body.append(box(504, 650, 212, 120, "models/vtuber.py", ["VTuber\nAccount · Post\n三模型 + 约束"], fill="#F5EEF8", stroke="#8E44AD", tcolor="#5B2C6F"))
+    body.append(box(504, 650, 212, 120, "models/vtuber.py", ["11 个模型\nVTuber/Account/Post\n+ 唯一约束与索引"], fill="#F5EEF8", stroke="#8E44AD", tcolor="#5B2C6F"))
     body.append(box(726, 650, 212, 120, "schemas/vtuber.py", ["Pydantic v2\nOut/Create/Update\n响应序列化"], fill="#F5EEF8", stroke="#8E44AD", tcolor="#5B2C6F"))
-    body.append(box(948, 650, 212, 120, "repositories/", ["VTuberRepo\nAccountRepo\nPostRepo CRUD"], fill="#F5EEF8", stroke="#8E44AD", tcolor="#5B2C6F"))
+    body.append(box(948, 650, 212, 120, "repositories/", ["11 个 Repo 类\nVTuberRepo/AccountRepo\n/PostRepo + 删除·分页"], fill="#F5EEF8", stroke="#8E44AD", tcolor="#5B2C6F"))
     # ⑥ 数据层 y=810..940
     body.append(band_caption(60, 800, "⑥ 数据层 — 本地持久化", "#B7950B"))
-    body.append(box(60, 815, 270, 100, "SQLite — vtuber.db", ["vtubers(4) · accounts(4)\nposts(11,055)\nalembic_version=c002"], fill="#FEF9E7", stroke="#B7950B", tcolor="#7D6608"))
+    body.append(box(60, 815, 270, 100, "SQLite — vtuber.db", ["vtubers / accounts / posts\n+ 快照·场次·礼物日·曾用值\nalembic_version = f004"], fill="#FEF9E7", stroke="#B7950B", tcolor="#7D6608"))
     body.append(box(345, 815, 270, 100, "static/avatars/ — 头像缓存", ["718 张本地头像\n{uid}.jpg|png\n经 /static 对外服务"], fill="#FEF9E7", stroke="#B7950B", tcolor="#7D6608"))
     body.append(box(630, 815, 270, 100, "logs/app.log — 运行日志", ["FileHandler + 控制台\n（v0.3.2 已修复：正常写入）"], fill="#FEF9E7", stroke="#B7950B", tcolor="#7D6608"))
     body.append(box(915, 815, 270, 100, "vtubers.csv — 名单源文件", ["9,482 行（4 个 flag=1）\n由发现脚本生成"], fill="#FEF9E7", stroke="#B7950B", tcolor="#7D6608"))
@@ -171,33 +171,49 @@ def table_box(x, y, w, title, rows, fill, stroke, tcolor, unique_note=None):
 
 
 def d2():
-    body = [text(60, 46, "SQLite 数据模型（10 表 · alembic a001→f003 · 2026-09-13）", size=18, fill="#1F3A5F", weight=700)]
+    body = [text(60, 46, "SQLite 数据模型（11 表 · alembic a001→f004 · 2026-09-13）", size=18, fill="#1F3A5F", weight=700)]
     body.append(text(60, 72, "posts 刻意不带外键：以 (platform, platform_uid) 与 accounts 逻辑关联，联合投稿视频在每个 VTuber 下各存一份", size=12, fill="#5B6B7C"))
-    body.append(text(60, 92, "accounts 之下的 4 张子表有外键但无 ORM 级联（foreign_keys=ON）——删 V/删账号必须经 app/services/purge.py 显式清理", size=12, fill="#B04747"))
+    body.append(text(60, 92, "accounts 之下的 5 张子表有外键但无 ORM 级联（foreign_keys=ON）——删 V/删账号必须经 app/services/purge.py 显式清理；f004 已删 accounts.locked_fields（字段锁定退役）", size=12, fill="#B04747"))
 
+    # 左列（x=60..360）：vtubers 本体与其子表；盒高 = 40 + 行数*20（+ 28 有唯一约束角标）
     tb1, _ = table_box(60, 120, 300, "vtubers — 主播本体",
                        ["id · PK", "name · 名字（索引）", "faction · 阵营", "birthday / debut_date",
-                        "setting · 角色设定", "avatar · 默认头像", "background_path · 自定义背景"],
-                       "#EAF2FB", "#2E86C1", "#1B4F8A")
+                        "setting · 角色设定", "avatar · 默认头像", "background_path · 自定义背景",
+                        "sign_override · 手改签名（覆盖）",
+                        "sign_source_account_id · 来源账号（无 FK）"],
+                       "#EAF2FB", "#2E86C1", "#1B4F8A")   # 9 行 → 120..340
     body.append(tb1)
-    tb2, _ = table_box(60, 330, 300, "vtuber_events — 纪念日/活动",
+    tb2, _ = table_box(60, 360, 300, "vtuber_events — 纪念日/活动",
                        ["id · PK", "vtuber_id · FK→vtubers.id", "title · 活动名",
                         "event_date · YYYY-MM-DD"],
-                       "#EAF2FB", "#2E86C1", "#1B4F8A")
+                       "#EAF2FB", "#2E86C1", "#1B4F8A")   # 4 行 → 360..480
     body.append(tb2)
-    tb3, _ = table_box(60, 480, 300, "thirdparty_vtubers — 第三方索引",
+    tb3, _ = table_box(60, 500, 300, "thirdparty_vtubers — 第三方索引",
                        ["id · PK", "platform / platform_uid", "name / type / room_id",
                         "group_name · 企划/公会", "source · 来源", "updated_at · 周级刷新"],
                        "#F5F0FA", "#8E44AD", "#5B2C6F",
-                       unique_note="UNIQUE(source, platform_uid)")
+                       unique_note="UNIQUE(source, platform_uid)")   # 6 行+角标 → 500..688
     body.append(tb3)
+    # vtuber_field_history（f004 新表）：V 的「曾用名 / 曾用签名」记账，替代退役的字段锁定。
+    # 6 行 → 720..880；两条外键各挂一边（vtubers 必填、accounts 可空）。
+    tb11, _ = table_box(60, 720, 300, "vtuber_field_history — 曾用名/签名",
+                        ["id · PK", "vtuber_id · FK→vtubers.id",
+                         "account_id · FK→accounts.id（可空）",
+                         "field · display_name / sign", "value · 旧值（TEXT）",
+                         "changed_at · 变更时刻"],
+                        "#EAF2FB", "#2E86C1", "#1B4F8A")
+    body.append(tb11)
+    body.append(text(210, 904, "值真变才追加一行（相同值不重记 · A→B→A 只留 A、B）",
+                     size=11, anchor="middle", fill="#1B4F8A"))
+    body.append(text(210, 922, "索引 (vtuber_id, field) · 替代已退役的字段锁定（locked_fields）",
+                     size=11, anchor="middle", fill="#1B4F8A"))
 
     tb4, _ = table_box(450, 120, 360, "accounts — 各平台账号",
                        ["id · PK", "vtuber_id · FK→vtubers.id（级联删除）", "platform · bilibili / weibo",
                         "platform_uid · 平台侧 UID", "display_name / sign / url", "avatar_url / avatar_path",
                         "followers_count · 粉丝数（覆盖写）", "room_id / live_status / live_title",
                         "last_fetched_at · 上次抓取", "posts_last_scan_at · 上轮扫描（墓碑）",
-                        "…（昵称/头像/签名/直播共 16 列）"],
+                        "…（昵称/头像/签名/直播等，共 17 列）"],
                        "#EAF7EF", "#27AE60", "#1E6B3C",
                        unique_note="UNIQUE(platform, platform_uid)")
     body.append(tb4)
@@ -238,13 +254,14 @@ def d2():
     body.append(tb9)
 
     # app_meta（f003）：通用 KV，无外键，独立于业务表 —— 放在中列 posts 之下。
-    # 高度 = 40 + 3*20 = 100（812 → 912），legend 从 y=960 起，不重叠。
-    tb10, _ = table_box(450, 812, 360, "app_meta — 通用 KV",
+    # 高度 = 40 + 3*20 = 100（884 → 984）；posts 到 868 为止，两者留 16px 间隙不重叠，
+    # 下方注记 y=1010、图例 y=1030 起。
+    tb10, _ = table_box(450, 884, 360, "app_meta — 通用 KV",
                         ["key · PK", "value · TEXT",
                          "updated_at · 最近写入"],
                         "#EEF7F1", "#27AE60", "#1E6B3C")
     body.append(tb10)
-    body.append(text(630, 940, "无外键：存「进程外需要记住的少量状态」，如 external.startup.last_run",
+    body.append(text(630, 1010, "无外键：存「进程外需要记住的少量状态」，如 external.startup.last_run",
                      size=11, anchor="middle", fill="#1E6B3C"))
 
     # vtubers → accounts（级联）
@@ -252,12 +269,16 @@ def d2():
     body.append(text(403, 198, "1 : N", size=12, anchor="middle", fill="#2F6FAD", weight=700))
     body.append(text(403, 232, "级联删除", size=11, anchor="middle", fill="#5B6B7C"))
     # vtubers → vtuber_events
-    body.append(line(210, 300, 210, 326, marker="arr", color="#2F6FAD", sw=2))
-    body.append(text(220, 318, "1 : N 外键", size=11, fill="#2F6FAD"))
+    body.append(line(210, 340, 210, 356, marker="arr", color="#2F6FAD", sw=2))
+    body.append(text(220, 355, "1 : N 外键", size=11, fill="#2F6FAD"))
+    # vtubers → vtuber_field_history（左外侧垂直总线，与 accounts 右侧总线同一画法：
+    # 一条竖干线 + 每个子表一根水平箭头；x=34 走左侧留白，不跨任何盒子）
+    body.append(path("M 60 280 H 34 V 780 H 56", color="#2F6FAD", sw=2, marker="arr"))
+    body.append(text(44, 494, "1 : N 外键（不级联）", size=11.5, fill="#2F6FAD", weight=600))
     # thirdparty_vtubers ⇢ accounts（候选索引）
-    body.append(path("M 360 560 L 400 560 L 400 452", color="#8E44AD", sw=1.8, dash="6 4", marker="arrG"))
-    body.append(text(404, 512, "候选索引（无 FK）", size=11, fill="#8E44AD"))
-    # accounts → 4 张子表（垂直总线）
+    body.append(path("M 360 580 L 400 580 L 400 440", color="#8E44AD", sw=1.8, dash="6 4", marker="arrG"))
+    body.append(text(404, 505, "候选索引（无 FK）", size=11, fill="#8E44AD"))
+    # accounts → 右列子表（垂直总线；第 5 张子表 vtuber_field_history 挂在左列 vtubers 总线上）
     body.append(line(810, 430, 855, 430, color="#27AE60", sw=2))
     body.append(line(855, 190, 855, 862, color="#27AE60", sw=2))
     for yy in (190, 372, 662, 862):
@@ -268,15 +289,18 @@ def d2():
     body.append(text(640, 500, "逻辑关联（无外键）", size=11.5, fill="#8E44AD", weight=600))
     body.append(text(640, 518, "platform + platform_uid 匹配", size=11, fill="#5B6B7C"))
 
-    # 图例 + 去重策略
-    body.append(rect(60, 960, 1180, 96, fill="#FDFAF3", stroke="#D0C9B0"))
-    body.append(text(80, 986, "去重策略：", size=12.5, fill="#7D6608", weight=700))
-    body.append(text(170, 986, "accounts (platform, platform_uid) · posts (platform, uid, pid) · live_sessions (account_id, live_id)", size=12, fill="#4A4A4A"))
-    body.append(text(80, 1010, "外键语义：", size=12.5, fill="#7D6608", weight=700))
-    body.append(text(170, 1010, "只有 vtubers→accounts 有 ORM 级联；其余 5 条外键不级联（foreign_keys=ON）——删除必须走 app/services/purge.py", size=12, fill="#4A4A4A"))
-    body.append(text(80, 1034, "写入方：", size=12.5, fill="#7D6608", weight=700))
-    body.append(text(170, 1034, "T0/T1/T3a 账号抓取 → accounts + snapshots；帖子抓取 → posts；danmakus/feed → live_sessions；zeroroku → gift_days；前端 → overrides/events", size=12, fill="#4A4A4A"))
-    save("02_er_diagram.svg", svg(1300, 1080, "".join(body)))
+    # 图例 + 去重策略（6 行：1180x164，1030..1194；最后一行基线 1176，画布 1300x1210）
+    body.append(rect(60, 1030, 1180, 164, fill="#FDFAF3", stroke="#D0C9B0"))
+    body.append(text(80, 1056, "去重策略：", size=12.5, fill="#7D6608", weight=700))
+    body.append(text(170, 1056, "accounts (platform, platform_uid) · posts (platform, uid, pid) · live_sessions (account_id, live_id)", size=12, fill="#4A4A4A"))
+    body.append(text(80, 1080, "外键语义：", size=12.5, fill="#7D6608", weight=700))
+    body.append(text(170, 1080, "ORM 级联只有 1 条（vtubers→accounts · 级联删除）；其余 7 条外键一律不级联（foreign_keys=ON）——删除必须走 app/services/purge.py", size=12, fill="#4A4A4A"))
+    body.append(text(170, 1104, "7 条 = 指向 accounts 的 5 条（account_stat_snapshots · live_sessions · live_gift_days · live_category_overrides · vtuber_field_history）", size=12, fill="#4A4A4A"))
+    body.append(text(170, 1128, "+ 指向 vtubers 的 2 条（vtuber_events · vtuber_field_history）；vtuber_field_history 两条外键各挂一边，account_id 可空", size=12, fill="#4A4A4A"))
+    body.append(text(80, 1152, "写入方：", size=12.5, fill="#7D6608", weight=700))
+    body.append(text(170, 1152, "T0/T1/T3a 账号抓取 → accounts + snapshots；帖子抓取 → posts；danmakus/feed → live_sessions；", size=12, fill="#4A4A4A"))
+    body.append(text(170, 1176, "zeroroku → gift_days；前端/手改 → overrides、events、field_history", size=12, fill="#4A4A4A"))
+    save("02_er_diagram.svg", svg(1300, 1210, "".join(body)))
 
 
 # ─────────────────────────────────────────────────────────────────────

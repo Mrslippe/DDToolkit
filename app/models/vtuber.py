@@ -26,10 +26,41 @@ class VTuber(Base):
     avatar = Column(String, nullable=True)             # 默认头像 URL
     background_path = Column(String, nullable=True)    # 卡片页自定义背景（static/ 相对路径）
     notes = Column(Text, nullable=True)
+    # 签名来源与覆盖（2026-09-13，devlog/074）：卡片签名 = sign_override → 来源账号 → 主账号。
+    # 两个字段都**不动** `accounts.sign`：平台签名是平台的事实，只读；
+    # 手改的内容落在 `sign_override`（清空 = 撤销覆盖，回到跟随来源账号）。
+    sign_override = Column(Text, nullable=True)
+    sign_source_account_id = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=_now)
     updated_at = Column(DateTime, default=_now, onupdate=_now)
 
     accounts = relationship("Account", back_populates="vtuber", cascade="all, delete-orphan")
+
+
+class VtuberFieldHistory(Base):
+    """V 的字段「曾用值」历史（2026-09-13，devlog/074）。
+
+    背景：字段锁定（`accounts.locked_fields`）退役 —— 平台昵称/签名现在**允许被抓取覆盖**，
+    改动的痕迹改为**显式记账**：每次值真的变了就追加一行旧值，前端标成「曾用名 / 曾用签名」。
+
+    ⚠️ 为什么必须记账（不能指望快照表）：`account_stat_snapshots` 只存
+    粉丝数 / 直播状态 / 开播标题，**不含昵称与签名** —— 不记账就等于永久丢失旧值。
+
+    粒度 = 账号（`account_id`）：同一个 V 在不同平台的昵称/签名是各自的事实，
+    展示时要能标出"哪个平台的曾用名"。
+    """
+    __tablename__ = "vtuber_field_history"
+    __table_args__ = (
+        Index("ix_vtuber_field_history_vtuber", "vtuber_id", "field"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    vtuber_id = Column(Integer, ForeignKey("vtubers.id"), nullable=False)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=True)
+    # 'display_name' | 'sign'
+    field = Column(String, nullable=False)
+    value = Column(Text, nullable=False)
+    changed_at = Column(DateTime, nullable=False, default=_now)
 
 
 class Account(Base):
@@ -59,9 +90,6 @@ class Account(Base):
     posts_last_scan_at = Column(DateTime, nullable=True)
     # P8-B（v0.9.7）：card 视图平台徽章的展示顺序（升序；0 时退回 id 序）
     sort_order = Column(Integer, default=0, server_default="0")
-    # P8-B（v0.9.7）：手动编辑的字段锁定（逗号分隔，如 "display_name,sign"）——
-    # 抓取时会跳过这些字段，避免用户的修改被平台值覆盖（见 scheduler._field_locked）
-    locked_fields = Column(String, nullable=True)
 
     vtuber = relationship("VTuber", back_populates="accounts")
 

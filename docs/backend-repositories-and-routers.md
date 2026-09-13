@@ -1,6 +1,6 @@
 # 数据层与接口层文档（数据库 · Repositories · Routers）
 
-> 适用版本：`main`（2026-09-11，`MIGRATION_HEAD = f003`，迁移链 17 个版本、10 张表、51 个 HTTP 操作）。
+> 适用版本：`main`（2026-09-13，`MIGRATION_HEAD = f004`，迁移链 17 个版本、11 张表、54 个 HTTP 操作）。
 > 阅读路径：HTTP 入口（`app/routers`）→ SQL 封装（`app/repositories`）→ 表映射（`app/models`）→ 迁移（`alembic/versions`）。
 > 系统全貌见 `docs/ARCHITECTURE.md`；抓取链路细节见 `docs/backend-fetch-pipeline.md`；
 > 名词与代码路径速查见 `docs/GLOSSARY.md`；文档索引见 `docs/README.md`。
@@ -52,12 +52,14 @@
 | `accounts 1—N live_sessions` | FK，无 ORM 级联 | 同上（一个账号可上千条） |
 | `accounts 1—N live_gift_days` | FK，无 ORM 级联 | 同上 |
 | `accounts 1—N live_category_overrides` | FK，无 ORM 级联 | 同上 |
+| `accounts 1—N vtuber_field_history` | FK，无 ORM 级联（`account_id` **可空**） | 同上；可空意味着删 V 时还要**按 `vtuber_id` 再清一遍** |
 | `vtubers 1—N vtuber_events` | FK，无 ORM 级联 | 同上 |
+| `vtubers 1—N vtuber_field_history` | FK，无 ORM 级联 | 同上 |
 | `posts` ↔ `accounts` | **无外键**（`platform + platform_uid` 逻辑关联） | 需按平台+UID 显式清 |
 | `thirdparty_vtubers` | 无外键 | 独立，随源整表刷新 |
 
 > 因为 `foreign_keys=ON`，**删 V / 删账号必须走 `app/services/purge.py`**：
-> 帖子按 `(platform, platform_uid)`、4 张子表按 `account_id`、活动条目按 `vtuber_id`。
+> 帖子按 `(platform, platform_uid)`、5 张子表按 `account_id`、活动条目与曾用值按 `vtuber_id`。
 > 漏清任何一张 → `DELETE FROM accounts` 被外键挡下 → 整次事务回滚（v0.9.3 修复的
 > 「解除订阅失败」事故，见 devlog/040）。
 
@@ -76,6 +78,8 @@
 | `avatar` | TEXT | 默认头像 URL |
 | `background_path` | TEXT | 卡片页自定义背景，`static/custom_bg/` 相对路径（d002） |
 | `notes` | TEXT | 备注 |
+| `sign_override` | TEXT | 手改的签名（**覆盖**，f004）。不写 `accounts.sign`；清空 = 撤销覆盖 |
+| `sign_source_account_id` | INTEGER | 卡片签名跟随哪个账号（**无外键**，f004）；NULL = 主账号，指向不存在的 id 时回落主账号 |
 | `created_at` / `updated_at` | DATETIME | UTC now |
 
 #### `accounts` — 各平台账号
@@ -94,6 +98,11 @@
 | `live_title` / `live_url` | TEXT | 开播标题 / 直播间链接 |
 | `last_fetched_at` | DATETIME | 最近一次账号抓取成功时间 |
 | `posts_last_scan_at` | DATETIME | 帖子扫描上一轮完成时间（墓碑判定的比较基准，e002） |
+| `sort_order` | INTEGER | 默认 0：平台徽章展示顺序（f002） |
+| ~~`locked_fields`~~ | — | **f004 已删除**（字段锁定退役，改为"允许覆盖 + 记曾用值"） |
+
+> `display_name` / `sign` 被抓取覆盖**之前**，旧值会记进 `vtuber_field_history`
+> （`scheduler._fetch_one_account` 与 `PUT /account/{id}` 两个写入点）。
 
 #### `posts` — 动态 / 投稿 / 专栏 / 转发 / 音乐
 
@@ -187,6 +196,25 @@
 
 索引：`ix_vtuber_events_vtuber_date (vtuber_id, event_date)`。
 
+#### `vtuber_field_history` — 曾用名 / 曾用签名（f004）
+
+| 列 | 类型 | 约束/说明 |
+|---|---|---|
+| `id` | INTEGER | PK |
+| `vtuber_id` | INTEGER | NOT NULL，FK → vtubers.id |
+| `account_id` | INTEGER | **可空**，FK → accounts.id（账号已删的历史行留空） |
+| `field` | TEXT | NOT NULL：`display_name` / `sign`（登记表见 `services/vtuber_history.py::FIELDS`） |
+| `value` | TEXT | NOT NULL：被覆盖掉的旧值 |
+| `changed_at` | DATETIME | NOT NULL，写入时刻 |
+
+索引：`ix_vtuber_field_history_vtuber (vtuber_id, field)`。
+
+**写入策略**：值**真的变了**才追加一行（相同值不重记，A→B→A 只留 A、B）；
+两个写入点——抓取回写（`scheduler._fetch_one_account`）与 `PUT /account/{id}`；
+读取走 `GET /vtuber/{id}/former-values`（各字段最多 5 条、最近优先、按值去重）。
+**为什么必须记账**：`account_stat_snapshots` 只存粉丝数/直播状态/开播标题，
+**不含昵称与签名** —— 不记账就是永久丢失（devlog/074 纠正的前提）。
+
 #### `thirdparty_vtubers` — 第三方 VTuber 索引（e004）
 
 | 列 | 类型 | 约束/说明 |
@@ -200,7 +228,7 @@
 | `source` | TEXT | 来源（danmakus） |
 | `updated_at` | DATETIME | 周级整表刷新 |
 
-### 1.3 迁移链（alembic，16 版本，head = `f003`）
+### 1.3 迁移链（alembic，17 版本，head = `f004`）
 
 | 版本 | 内容 |
 |---|---|
@@ -220,6 +248,7 @@
 | `f001` post_note | `posts.note`（投稿动态并入后的 UP 主附言，v0.9.6） |
 | `f002` account_order_and_locks | `accounts.sort_order` + `accounts.locked_fields`（v0.9.7） |
 | `f003` app_meta | 建通用 KV 表 `app_meta`（v0.9.8，键 `external.startup.last_run`） |
+| `f004` sign_source_and_field_history | `vtubers.sign_override / sign_source_account_id` + 建 `vtuber_field_history` + **删 `accounts.locked_fields`**（devlog/074） |
 
 **纪律**：新增迁移后必须同步 `app/main.py` 的 `MIGRATION_HEAD`（`tests/test_services.py`
 断言与 alembic head 一致），否则冷启动快路径会把旧库误判为已最新。启动迁移四形态：
@@ -242,7 +271,7 @@
 
 ---
 
-## 2. Repositories（`app/repositories/vtuber_repo.py`，10 个类）
+## 2. Repositories（`app/repositories/vtuber_repo.py`，11 个类）
 
 构造注入会话：`Repo(db)`。CRUD 惯例：`create` 用 `model_dump()` 展开；`update` 逐个
 `setattr`；`get` 返回 `None` 表示不存在；写操作当场 `commit`（`PostRepo.create(commit=False)`
@@ -333,15 +362,25 @@
 | `future_reservations(vtuber_id, now=None, days=90)` | 从预约帖 `body_json.reservation` 解析未来直播预约（含年份推断） |
 | `delete_by_vtuber(vtuber_id)` | 批量删除（级联清理，不提交） |
 
+### 2.10 `VtuberFieldHistoryRepo`
+
+| 方法 | 语义 |
+|---|---|
+| `delete_by_account(account_id)` | 清该账号的曾用值行（级联清理，不提交） |
+| `delete_by_vtuber(vtuber_id)` | 清该 V 的曾用值行（`account_id` 可为 NULL，删 V 时必须走这条；不提交） |
+
+> 写入不在 Repo（要按"值没变就不记"的业务口径判断）：见
+> `services/vtuber_history.py::record_field_change()` 与 `former_values()`。
+
 ---
 
-## 3. Routers（48 个路由装饰器 = 51 个 HTTP 操作）
+## 3. Routers（52 个路由装饰器 = 54 个 HTTP 操作）
 
-> 口径说明：48 个装饰器里有两个是 `api_route(methods=["GET","POST"])`
-> （`/vtuber/fetch`、`/vtuber/{id}/fetch`）→ 方法×路径共 50，再加 `app/main.py` 的
-> `GET /healthz` = **51**。下文的「N」按**装饰器**计。旧文档写的 47 已过时。
+> 口径说明：52 个装饰器里有两个是 `api_route(methods=["GET","POST"])`
+> （`/vtuber/fetch`、`/vtuber/{id}/fetch`）→ 方法×路径共 54。
+> 下文的「N」按**装饰器**计。旧文档写的 48 已过时。
 
-### 3.1 `app/routers/vtuber.py` — 主业务路由（44）
+### 3.1 `app/routers/vtuber.py` — 主业务路由（47）
 
 路径直接 `/vtuber/...`、`/account/...`、`/posts...`、`/post/...`、`/externals/...`；
 响应模型走 `app/schemas/vtuber.py`（`Out` 为 `from_attributes`）。
@@ -357,10 +396,11 @@
 | GET `/vtuber/fetch-status` | 抓取实时状态（TopBar 轮询）：account 跑动/当前/总数 + recent 增量快照，post 跑动/目标 + last_result |
 | GET `/vtuber/{vtuber_id}` | 单 V；不存在 404 |
 | POST `/vtuber` | 建 V；唯一约束冲突 409 |
-| PUT `/vtuber/{vtuber_id}` | 部分更新；404 |
+| PUT `/vtuber/{vtuber_id}` | 部分更新；404。f004 起可写 `sign_override`（`null` = 撤销覆盖）与 `sign_source_account_id` |
+| GET `/vtuber/{vtuber_id}/former-values` | 曾用名 / 曾用签名（各最多 5 条、最近优先、按值去重，含平台标注；f004） |
 | POST `/vtuber/{vtuber_id}/background` | 上传自定义背景（jpeg/png/webp/gif，≤10MB，否则 415/413）；时间戳后缀防缓存，替换删旧文件 |
 | DELETE `/vtuber/{vtuber_id}/background` | 清除背景回退头像铺底 |
-| DELETE `/vtuber/{vtuber_id}` | 解除订阅：`purge_vtuber()` 清 posts + 4 张子表 + 活动条目，再级联删 V+accounts；外键挡下 → 409 |
+| DELETE `/vtuber/{vtuber_id}` | 解除订阅：`purge_vtuber()` 清 posts + 5 张子表 + 活动条目 + 曾用值，再级联删 V+accounts；外键挡下 → 409 |
 
 **Account**
 
@@ -368,9 +408,9 @@
 |---|---|
 | GET `/vtuber/{id}/accounts` | 某 V 的账号列表 |
 | POST `/vtuber/{id}/accounts` | 建账号；(platform, platform_uid) 重复 409；成功后**只抓该新账号的账号信息 + 首屏内容**（v0.9.4：`async_fetch_accounts(fast=True)` + `async_fetch_first_screen`，不再重抓该 V 全部账号） |
-| PUT `/account/{account_id}` | 更新账号；唯一冲突 409；`locked_fields` 命中的字段后续抓取不覆盖 |
+| PUT `/account/{account_id}` | 更新账号；唯一冲突 409；若昵称/签名**真的变了**，先记旧值进 `vtuber_field_history` 再写新值（f004；字段锁定已退役） |
 | PUT `/vtuber/{id}/account-order` | 平台徽章拖拽重排：批量写 `accounts.sort_order`（v0.9.7） |
-| DELETE `/account/{account_id}` | 删账号 + `purge_account()` 清理帖子与 4 张子表 |
+| DELETE `/account/{account_id}` | 删账号 + `purge_account()` 清理帖子与 5 张子表 |
 | GET `/account/{id}/stat-snapshots?limit=` | 统计快照历史（默认 100，上限 1000，时间倒序，UTC 补时区） |
 | GET `/account/{id}/gift-days?limit=` | 礼物日聚合 |
 | GET `/account/{id}/fan-trend` | 粉丝趋势点（按天分桶） |
@@ -460,7 +500,7 @@
 
 ## 4. 分层注意点
 
-- **删除必须过 purge**：posts 无外键 + 4 张子表有外键且不级联（§1.1）；两个删除端点都已接
+- **删除必须过 purge**：posts 无外键 + 5 张子表有外键且不级联（§1.1）；两个删除端点都已接
   `app/services/purge.py`，返回 409 而不是 500；
 - **409 语义**：唯一约束冲突（`IntegrityError`）统一 `rollback → 409`，覆盖 V/账号/帖子建改入口
   与并发收录竞态；

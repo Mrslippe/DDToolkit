@@ -76,7 +76,7 @@
 > 搁置理由：导出格式依赖表结构稳定；P4 会新增表/列，等数据源落地后再做格式定稿。
 > **格式设计仍有效**（schema_version + vtuber/account/posts 三段、raw_json 保真层、
 > P2P 构想的 Phase 0 地基），恢复时按原计划执行。
-> **阻塞已解除**：P4+ 的表结构变动已收敛（迁移 head = `f003`），用户点头即可重启。
+> **阻塞已解除**：P4+ 的表结构变动已收敛（迁移 head = `f004`），用户点头即可重启。
 
 - 按 V 或全库导出：`schema_version` + vtuber/account/posts 三段，posts 保留 `raw_json` 保真层
 - 独立价值：备份、迁移、跨设备；同时是未来 P2P 构想的 Phase 0 格式地基
@@ -104,6 +104,7 @@
 | 微博 / B 站增量漏帖（置顶帖打乱流序） | ✅ 已修（devlog/045） |
 | 微博扫码登录 / B 站扫码登录 | ✅ 已上线（v0.5.0） |
 | 账号统计快照历史（粉丝趋势） | ✅ 采集 + 可视化（**v0.9.x 重写为 ECharts canvas**，recharts 已退役） |
+| 档案设置弹窗（背景 / 头像 / 签名 / 已订阅账号，全实时生效） | ✅ 已上线（devlog/066–074）：签名走**来源+覆盖**模型（A3，devlog/074）——平台签名只读、卡片签名 = 覆盖 → 来源账号 → 主账号 → 空；**字段锁定已退役**，旧值改由 `vtuber_field_history` 记账并展示为「曾用名/曾用签名」 |
 | 删除检测（墓碑） | ✅ 已上线（v0.5.1：两击判定 + 已删筛选/角标/时间线） |
 | 外部固定化数据源 | ✅ 已上线（zeroroku 粉丝历史/礼物日 + danmakus 索引/直播场次/弹幕） |
 | 直播日历 + 场次内容管道（danmakus+self 合并、9 类类型 v2、校正 override） | ✅ 已上线（v0.9.0–v0.9.x M1–M4；对外 id 定权见 devlog/052） |
@@ -207,17 +208,19 @@
 | 需求 R6：动态流分账号并发 + 60s 周期下限 | 070 |
 | §1.1-d 场景机护栏尝试失败（为何仍未做 + 下次顺序） | 071 |
 | 签名下拉栏改版（内嵌 chevron + 参与布局面板 + 渐隐横滚）+ `--settings` 探针 | 072 |
+| 签名下拉栏浮层化（portal + fixed）+ 再点收起 + 面板等宽 | 073 |
+| 签名来源与覆盖（**A3**）+ 字段锁定退役 + 曾用名/曾用签名（迁移 f004）+ 新表补进 purge | 074 |
 
 ### 6.2 当前门禁基线（2026-09-13 实测 / 复核）
 
 | 门禁 | 命令 | 基线 |
 |---|---|---|
-| 后端 | `python -m pytest -q` | **299 passed** |
+| 后端 | `python -m pytest -q` | **307 passed** |
 | 前端类型 | `npx tsc --noEmit`（`npm run build` 也会跑） | **0 错** |
 | 前端 lint | `npm --prefix frontend run lint` | **0 错**（`--max-warnings 0`） |
-| 前端单测 | `npm --prefix frontend run test` | **112 passed** |
+| 前端单测 | `npm --prefix frontend run test` | **119 passed** |
 | 词云布局 | `node scripts/check_wordcloud_layout.mjs` | sha256 `19ecc7e6…`（本轮实跑一致） |
-| 布局探针 | `python scripts/ui_probe.py --hero-expect c1154858… --vtuber 15`<br>`python scripts/ui_probe.py --archive --calendar-expect fb75217e… --vtuber 15`<br>`python scripts/ui_probe.py --settings --vtuber 15`（短签名）/ `--vtuber 14`（长签名） | 三条都本轮实跑一致（8 段契约 0 问题 / 三档宽度 0 问题 / 档案设置几何 6 项） |
+| 布局探针 | `python scripts/ui_probe.py --hero-expect c1154858… --vtuber 15`<br>`python scripts/ui_probe.py --archive --calendar-expect fb75217e… --vtuber 15`<br>`python scripts/ui_probe.py --settings --vtuber 15`（短签名）/ `--vtuber 14`（长签名） | 三条都本轮实跑一致（8 段契约 0 问题 / 三档宽度 0 问题 / 档案设置几何 **11 项**，含 `panelSameWidth`、`panelOverContent`、`panelPortaled`、再点收起） |
 | 一把梭 | `python scripts/dev_check.py` | 测试 + 后端冒烟（详见 `docs/DEV-LOOP.md`） |
 
 > ⚠️ 探针的 `--hero-expect` / `--calendar-expect` 签名**含实时数据**，只适合"改动前后短窗口对比"，

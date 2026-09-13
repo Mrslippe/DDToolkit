@@ -2,7 +2,7 @@
 
 > 本目录的**唯一入口**。找东西先看这里：查名词/代码路径 → `GLOSSARY.md`；
 > 看整体设计 → `ARCHITECTURE.md`；改具体模块 → 对应深度文档。
-> 适用版本：`main`（2026-09-13，`MIGRATION_HEAD = f003`）。
+> 适用版本：`main`（2026-09-13，`MIGRATION_HEAD = f004`）。
 
 ## 布局约定
 
@@ -19,13 +19,13 @@
 | 文档 | 什么时候看 | 内容 |
 |---|---|---|
 | **`GLOSSARY.md`** | **改 bug / 做需求第一步**：某个名词在代码里叫什么、在哪、牵动谁 | 9 组术语表（领域/数据/抓取/认证/前端/工程/配置/坑/需求→入口） |
-| **`ARCHITECTURE.md`** | 想建立整体认知、或改动跨越多个层 | 运行时形态、9 表 ER、综合档调度、锁与优先级、数据来源地图、10 条不变量 |
+| **`ARCHITECTURE.md`** | 想建立整体认知、或改动跨越多个层 | 运行时形态、11 表 ER、综合档调度、锁与优先级、数据来源地图、10 条不变量 |
 
 ## 2. 深度文档（按模块）
 
 | 文档 | 覆盖 |
 |---|---|
-| `backend-repositories-and-routers.md` | 10 张表列级定义 · 10 个 Repository 方法表 · 51 个 HTTP 操作 · 迁移链（17 版本） |
+| `backend-repositories-and-routers.md` | 11 张表列级定义 · 11 个 Repository 方法表 · 54 个 HTTP 操作 · 迁移链（17 版本，head `f004`） |
 | `backend-fetch-pipeline.md` | 抓取链路细节：触发入口、锁与让位、API 清单、风控判定、节流测算、停止原因 |
 | `FRONTEND-ARCH.md` | 前端分层（api/hooks/components/pages/styles）、数据流、状态管理 |
 | `UI-MAP.md` | 界面与路由映射：四视图、组件类名、设计令牌、动效与圆角规范 |

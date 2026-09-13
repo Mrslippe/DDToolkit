@@ -497,6 +497,8 @@ export async function runUiProbe(): Promise<void> {
         rt.left >= ri.left - 0.5 && rt.right <= ri.right + 0.5 &&
         rt.top >= ri.top - 0.5 && rt.bottom <= ri.bottom + 0.5)
       result.panelSameWidth = !!(ri && rp && Math.abs(ri.width - rp.width) <= 2)
+      result.inputWidth = ri ? Math.round(ri.width * 10) / 10 : null
+      result.panelWidth = rp ? Math.round(rp.width * 10) / 10 : null
       // 面板是 **portal + fixed 浮层**（2026-09-13 用户二次口径，devlog/073）：
       // 越界判据改成"是否出**视口**"；"是浮层而不参与布局"用**结构**断言
       // （portal 到 body + computed position:fixed）—— 比"高度开合前后不变"稳：

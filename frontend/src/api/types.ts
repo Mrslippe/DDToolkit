@@ -18,8 +18,6 @@ export interface Account {
   last_fetched_at: string | null
   /** P8-B：平台徽章展示顺序（升序） */
   sort_order: number
-  /** P8-B：被用户锁定的字段（逗号分隔，如 "display_name,sign"）——抓取不覆盖 */
-  locked_fields: string | null
 }
 
 export interface VTuber {
@@ -32,9 +30,30 @@ export interface VTuber {
   avatar: string | null
   background_path: string | null
   notes: string | null
+  /**
+   * 签名来源与覆盖（2026-09-13，devlog/074）：卡片签名 =
+   * `sign_override`（手改的覆盖）→ `sign_source_account_id` 指向的账号 → 主账号。
+   * 两者都**不动** `accounts.sign`（平台签名只读）。
+   */
+  sign_override: string | null
+  sign_source_account_id: number | null
   created_at: string | null
   updated_at: string | null
   accounts: Account[]
+}
+
+/** 一条「曾用值」（曾用名 / 曾用签名）；platform 为 null = 账号已被删 */
+export interface FormerValueItem {
+  value: string
+  platform: string | null
+  account_id: number | null
+  changed_at: string | null
+}
+
+/** `GET /vtuber/{id}/former-values`：各最多 5 条，最近优先 */
+export interface VTuberFormerValues {
+  names: FormerValueItem[]
+  signs: FormerValueItem[]
 }
 
 /** 候选池条目（vtubers.csv 离线索引） */

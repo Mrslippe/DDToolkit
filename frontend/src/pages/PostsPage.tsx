@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   AlignJustify,
@@ -699,7 +699,6 @@ return (
             avatarSrc={avatarSrc}
             liveAcc={liveAcc ?? null}
             isLive={isLive}
-            heroAcc={heroAcc}
             onAddAccount={() => setAddAccountOpen(true)}
           />
         )}
