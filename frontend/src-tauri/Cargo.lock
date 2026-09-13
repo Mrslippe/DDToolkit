@@ -663,7 +663,7 @@ dependencies = [
 
 [[package]]
 name = "ddtoolkit"
-version = "0.9.3"
+version = "0.9.9"
 dependencies = [
  "serde",
  "serde_json",
