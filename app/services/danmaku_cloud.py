@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import time
+from typing import Iterable
 
 from app.services.danmaku_words import count_tokens, iter_texts_from_records
 from app.services.externals.danmakus import fetch_raw_danmakus
@@ -58,8 +59,13 @@ def clear_cache() -> None:
     _CACHE.clear()
 
 
-async def build_word_cloud(live_id: str, engine: str | None = None) -> dict:
+async def build_word_cloud(live_id: str, engine: str | None = None,
+                           extra_words: Iterable[str] | None = None) -> dict:
     """按需自建词云。
+
+    `extra_words`（2026-09-13 接线，扩展点 2）：调用方注入的自定义词典条目
+    （V 名 / 企划名 / 账号昵称，见 `danmaku_words.build_extra_words`）——
+    主播名被 jieba 切碎就等于词云里丢了最重要的那个词。
 
     返回 dict（**永不抛错**，失败也返回结构完整的结果，字段含义见
     `LiveDanmakuInfo.wc_status`）：
@@ -72,7 +78,12 @@ async def build_word_cloud(live_id: str, engine: str | None = None) -> dict:
      "engine": str}
     ```
     """
-    cached = _cache_get(live_id)
+    words = []
+    if extra_words:
+        # 只做一次去重排序：缓存键要稳定（同一场次同一批词 → 命中同一个缓存）
+        words = sorted({w for w in extra_words if w})
+    cache_key = f"{live_id}|{'/'.join(words)}" if words else live_id
+    cached = _cache_get(cache_key)
     if cached is not None:
         return cached
 
@@ -83,14 +94,14 @@ async def build_word_cloud(live_id: str, engine: str | None = None) -> dict:
                 "total": None, "engine": engine or "jieba"}
 
     texts = list(iter_texts_from_records(records))
-    words = count_tokens(texts, engine=engine) if texts else []
+    top = count_tokens(texts, engine=engine, extra_words=words) if texts else []
     result = {
-        "status": "ok" if words else "no_danmaku",
-        "words": words,
+        "status": "ok" if top else "no_danmaku",
+        "words": top,
         "text_count": len(texts),
         "total": len(records),
         "engine": (engine or "jieba"),
     }
-    if words:
-        _cache_put(live_id, result)
+    if top:
+        _cache_put(cache_key, result)
     return result

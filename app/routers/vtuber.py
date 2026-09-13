@@ -32,6 +32,7 @@ from app.services.live_type import (
 )
 from app.services.live_upstream import load_live_upstream
 from app.services.danmaku_cloud import build_word_cloud
+from app.services.danmaku_words import build_extra_words
 from app.schemas.vtuber import (LiveDanmakuInfo, LiveMetricsOut, LiveEventOut,
                                 LiveWordOut, LiveUpstreamOut)
 from app.services.post_text import extract_post_text
@@ -550,6 +551,9 @@ async def live_session_wordcloud(account_id: int, live_id: str,
     **用户点击后**才调本端点。结果在进程内缓存（不落库，见 `danmaku_cloud._CACHE`）。
 
     返回的 `wc_status` 区分三种结果：`self_built` / `no_danmaku` / `fetch_failed`。
+
+    分词自定义词典（2026-09-13 接线，扩展点 2）：把 **V 名 / 企划·公会 / 账号昵称**
+    灌进 jieba，避免主播名被切碎（实测"喵喵机长真棒"不加词会被切成 `机长`）。
     """
     account, vtuber, _event_dates, _overrides = _live_infer_ctx(db, account_id)
     if not account:
@@ -562,7 +566,13 @@ async def live_session_wordcloud(account_id: int, live_id: str,
         # 非 danmakus 来源（例：纯 feed 场次，live_id 是 B 站数字 id）→ 没有可拉的弹幕
         return LiveDanmakuInfo(wc_status="no_danmaku", source=None)
 
-    result = await build_word_cloud(live_id)
+    extra_words = build_extra_words([
+        vtuber.name if vtuber else None,
+        vtuber.faction if vtuber else None,
+        vtuber.setting if vtuber else None,      # 设定里常带艺名/梗词，一起灌没坏处
+        account.display_name,
+    ])
+    result = await build_word_cloud(live_id, extra_words=extra_words)
     status = result.get("status")
     wc_status = {"ok": "self_built", "no_danmaku": "no_danmaku",
                  "fetch_failed": "fetch_failed"}.get(status, "fetch_failed")

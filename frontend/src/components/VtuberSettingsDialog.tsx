@@ -21,9 +21,11 @@ import {
 import { Button } from '@/components/ui/button'
 import { api, resolveAsset } from '../api/api'
 import type { Account, VTuber } from '../api/types'
+import { PLATFORM_LABEL } from '../utils/postTypes'
 import AddAccountDialog from './AddAccountDialog'
 import OverlayScroll from './OverlayScroll'
 import ProxyImage from './common/ProxyImage'
+import FloatPill from './common/FloatPill'
 import './../styles/posts.css'
 
 interface Props {
@@ -72,6 +74,9 @@ export default function VtuberSettingsDialog({
   const [uploading, setUploading] = useState(false)
   const [addOpen, setAddOpen] = useState(false)
   const [delTarget, setDelTarget] = useState<Account | null>(null)
+  /** 各平台签名下拉栏（2026-09-13 用户要求） */
+  const [signPopOpen, setSignPopOpen] = useState(false)
+  const signPopRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
   const hero = useMemo(() => {
@@ -199,19 +204,23 @@ export default function VtuberSettingsDialog({
    * 由卸载时的 flush 兜底（见下方 useEffect 与 `flushRef`）。
    *
    * 注：名称/企划/生日/出道日/角色设定那一节（原「基本资料」）已按用户
-   * 2026-09-13 的口径**整节移除**（devlog/068）—— 剩下的可编辑项只有签名（账号级）。
+   * 2026-09-13 的口径**整节移除**（devlog/067 §四）—— 剩下的可编辑项只有签名（账号级）。
+   *
+   * `value` 可选：签名下拉栏（2026-09-13 用户要求，devlog/069）选某平台签名时直接传入，
+   * 免得"先 setState 再提交"读到旧值。
    */
-  const commitSign = async (): Promise<void> => {
+  const commitSign = async (value?: string): Promise<void> => {
     if (!vtuber || !hero || saving) return
     const s = savedRef.current
-    const next = { sign: sign.trim() }
+    const next = { sign: (value ?? sign).trim() }
+    setSign(next.sign)                 // 下拉栏路径：先回显再提交
     if (next.sign === s.sign) return
     setSaving(true)
     try {
       await api.updateAccount(hero.id, { sign: next.sign || null })
       savedRef.current = next
       onSaved(await api.getVtuber(vtuber.id))
-      onPill?.('签名已更新')
+      onPill?.(value !== undefined ? '已改用该平台的签名' : '签名已更新')
     } catch (e) {
       setSign(s.sign)                  // 回滚到"最后一次成功保存"的值，不让界面撒谎
       toast.error(`保存失败：${(e as Error).message}`)
@@ -224,6 +233,28 @@ export default function VtuberSettingsDialog({
   const flushRef = useRef(commitSign)
   flushRef.current = commitSign
   useEffect(() => () => { void flushRef.current() }, [])
+
+  // 签名下拉栏：点外部 / Esc 关闭（与弹窗内其它浮层同口径）
+  useEffect(() => {
+    if (!signPopOpen) return
+    const onDown = (e: MouseEvent) => {
+      if (signPopRef.current && !signPopRef.current.contains(e.target as Node)) {
+        setSignPopOpen(false)
+      }
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation()          // 只关下拉，不把整个弹窗一起关掉
+        setSignPopOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey, true)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey, true)
+    }
+  }, [signPopOpen])
 
   const removeAccount = async () => {
     if (!delTarget || !vtuber) return
@@ -240,6 +271,8 @@ export default function VtuberSettingsDialog({
 
   const bg = resolveAsset(vtuber?.background_path ?? null)
   const avatarOptions = (vtuber?.accounts ?? []).filter((a) => a.avatar_url)
+  /** 签名下拉栏的数据源：**有签名的账号**（含平台标注；主账号会额外标出来） */
+  const signOptions = (vtuber?.accounts ?? []).filter((a) => a.sign)
 
   return (
     <>
@@ -347,7 +380,7 @@ export default function VtuberSettingsDialog({
                   {hero ? `来自 ${hero.platform} 账号 · 改完点别处即生效` : '暂无账号'}
                 </span>
               </h4>
-              <label className="vd-field">
+              <div className="vd-field vd-field--action">
                 <span>签名</span>
                 <input
                   value={sign}
@@ -356,7 +389,50 @@ export default function VtuberSettingsDialog({
                   onKeyDown={blurOnEnter}
                   placeholder="留空则由抓取回填"
                 />
-              </label>
+                {/* 各平台签名下拉栏（2026-09-13 用户要求）：列出每个账号当前的签名 +
+                    平台标注，点一条即把它用到上面这个输入框（= 主账号签名）。
+                    用途：卡片的签名只取主账号（B 站优先），想借微博那边的文案时不用手抄。 */}
+                <div className="vd-sign-pick" ref={signPopRef}>
+                  <FloatPill
+                    size="md"
+                    shape="text"
+                    active={signPopOpen}
+                    className="vd-sign-btn"
+                    title="查看各平台当前签名"
+                    aria-expanded={signPopOpen}
+                    onClick={() => setSignPopOpen((o) => !o)}
+                  >
+                    平台签名
+                    <span className="vd-sign-caret" aria-hidden>▾</span>
+                  </FloatPill>
+                  {signPopOpen && (
+                    <div className="vd-sign-pop">
+                      <div className="vd-sign-pop-head">各平台当前签名（点一条即用作上方签名）</div>
+                      {signOptions.length === 0 ? (
+                        <div className="vd-sign-pop-empty">各账号都还没有签名</div>
+                      ) : (
+                        signOptions.map((a) => (
+                          <button
+                            key={a.id}
+                            type="button"
+                            className={`vd-sign-opt${a.sign === sign ? ' on' : ''}`}
+                            onClick={() => {
+                              setSignPopOpen(false)
+                              void commitSign(a.sign ?? '')
+                            }}
+                          >
+                            <span className="vd-sign-opt-plat">
+                              {PLATFORM_LABEL[a.platform] ?? a.platform}
+                              {a.id === hero?.id && <em>主账号</em>}
+                            </span>
+                            <span className="vd-sign-opt-text">{a.sign}</span>
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
               <button
                 type="button"
                 className={`vd-lock${locked.includes('sign') ? ' on' : ''}`}

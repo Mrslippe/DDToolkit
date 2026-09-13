@@ -126,10 +126,14 @@ export const api = {
    *
    * 刻意与详情端点分开：自建要拉整场原始弹幕（实测单场可达 5 万条 / 数 MB），
    * 不能塞进"每次开弹窗"的请求里。用户点按钮才调（见 LiveSessionDialog）。
+   *
+   * `signal`：关弹窗 / 切场次时取消 —— 这条路径实测最长 **120s**（devlog/062 §四），
+   * 用户早就不看它了，没必要让它在后台跑完（devlog/064 的同一套管道，devlog/069 补上）。
    */
-  buildLiveSessionWordCloud: (accountId: number, liveId: string) =>
+  buildLiveSessionWordCloud: (accountId: number, liveId: string, signal?: AbortSignal) =>
     request<LiveDanmakuInfo>(
       `/account/${accountId}/live-sessions/${encodeURIComponent(liveId)}/wordcloud`,
+      signal ? { signal } : undefined,
     ),
 
   /** 用户校正场次分类（v2 第⑦信号：override 最高优先，并反哺系列/词库） */

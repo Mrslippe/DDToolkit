@@ -30,7 +30,7 @@
  * 因此上游慢/挂了只让这两格转圈并显示"没拉到 + 重试"，其余内容（起止/分区/收益/分类）
  * 打开即可读。
  */
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, X } from 'lucide-react'
 
@@ -91,6 +91,10 @@ export default function LiveSessionDialog({
   const [selfWc, setSelfWc] = useState<{ liveId: string; data: LiveDanmakuInfo } | null>(null)
   /** 正在拉取自建词云的**场次 id**（同 `selfWc` 的理由：别让 A 场的 loading 冻住 B 场的按钮） */
   const [busyWc, setBusyWc] = useState<string | null>(null)
+  /** 自建词云的已等秒数（这条路径最长实测 120s，需要一个"还在跑"的证据） */
+  const [buildElapsed, setBuildElapsed] = useState(0)
+  /** 自建词云的在途请求取消器（关窗 / 切场次即 abort） */
+  const buildCtrl = useRef<AbortController | null>(null)
 
   const s: LiveSessionDetail =
     detail.data ?? { ...detail.sessions[detail.idx], analysis: null }
@@ -129,17 +133,42 @@ export default function LiveSessionDialog({
   const [cloudPopped, setCloudPopped] = useState(0)
   const [cloudRestoreTick, setCloudRestoreTick] = useState(0)
 
+  // 自建词云已等秒数：只在 building 期间走表（文案里给用户一个"还在跑"的证据）
+  useEffect(() => {
+    if (!building) return
+    const t0 = Date.now()
+    const id = window.setInterval(
+      () => setBuildElapsed(Math.round((Date.now() - t0) / 1000)), 1000)
+    return () => window.clearInterval(id)
+  }, [building])
+
+  // 关弹窗即取消在途的自建词云请求（长路径：实测最长 120s）
+  useEffect(() => () => buildCtrl.current?.abort(), [])
+
   /**
    * 「用弹幕自建」：**用户点击才拉**整场原始弹幕（实测单场可达 5 万条/数 MB）。
    * 按用户 2026-09-13 的决策：上游没有热词时**不自动回退**，要给按钮让用户决定。
+   *
+   * 2026-09-13 补充两项（devlog/069，TODO §1.1）：
+   * - **可取消**：关弹窗 / 切场次时 abort（这条路径最长实测 120s，用户早就不看它了）；
+   * - **进度反馈**：按钮文案带上已等秒数（`buildElapsed`），120s 的等待不再是"卡住了"。
    */
   const buildCloud = async () => {
     const liveId = s.live_id
     if (!liveId || !accountId || busyWc) return
+    buildCtrl.current?.abort()
+    const ac = new AbortController()
+    buildCtrl.current = ac
     setBusyWc(liveId)
+    setBuildElapsed(0)
     try {
-      setSelfWc({ liveId, data: await api.buildLiveSessionWordCloud(accountId, liveId) })
-    } catch {
+      setSelfWc({
+        liveId,
+        data: await api.buildLiveSessionWordCloud(accountId, liveId, ac.signal),
+      })
+    } catch (e) {
+      // 主动取消不算失败（关窗/切场次时不该在新场次上闪一下"拉取失败"）
+      if (ac.signal.aborted || (e as Error)?.name === 'AbortError') return
       // 失败也要落到明确状态（否则按钮点了没反应，用户不知道发生了什么）
       setSelfWc({ liveId, data: { wc_status: 'fetch_failed', top_words: [], top_keywords: [] } })
     } finally {
@@ -388,7 +417,9 @@ export default function LiveSessionDialog({
                       </span>
                       <button type="button" className="lc-dlg-cloud-build"
                               onClick={() => void buildCloud()} disabled={building}>
-                        {building ? '正在统计整场弹幕…' : '用弹幕自建'}
+                        {building
+                          ? `正在统计整场弹幕…${buildElapsed >= SLOW_HINT_SECONDS ? `（已等 ${buildElapsed}s）` : ''}`
+                          : '用弹幕自建'}
                       </button>
                     </>
                   )}

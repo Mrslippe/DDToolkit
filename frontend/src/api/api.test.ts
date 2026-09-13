@@ -78,4 +78,16 @@ describe('api.liveSessionUpstream 的取消管道', () => {
 
     await expect(p).rejects.toMatchObject({ name: 'AbortError' })
   })
+
+  it('自建词云同样透传 signal（这条路径最长 120s，取消同样靠它）', async () => {
+    const fetchMock = vi.fn(async () => okJson({ wc_status: 'self_built' }))
+    vi.stubGlobal('fetch', fetchMock)
+    const ctrl = new AbortController()
+
+    await api.buildLiveSessionWordCloud(7, 'uuid-a', ctrl.signal)
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toBe('/api/account/7/live-sessions/uuid-a/wordcloud')
+    expect(init?.signal).toBe(ctrl.signal)
+  })
 })

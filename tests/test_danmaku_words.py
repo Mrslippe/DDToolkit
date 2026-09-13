@@ -187,6 +187,41 @@ def test_extra_words_extension_point_keeps_name_intact():
     assert words.get("明前奶绿") == 3
 
 
+def test_build_extra_words_shapes():
+    """`build_extra_words`：把 V 名/企划/昵称整理成能进 jieba 词典的条目。
+
+    规则都刻意"宁少勿错"：带空格的名字要拆开（否则灌进去的是一条带空格的怪词）、
+    单字碎片丢掉（单字当词只会污染分词）、重复项只留一次。
+    """
+    from app.services.danmaku_words import build_extra_words
+
+    assert build_extra_words(["七海 Nana7mi"]) == ["七海", "Nana7mi"]
+    assert build_extra_words(["明前奶绿", "VirtuaReal"]) == ["明前奶绿", "VirtuaReal"]
+    # 去重（V 名与昵称常常一样）+ 顺序稳定
+    assert build_extra_words(["明前奶绿", "明前奶绿", "奶绿社"]) == ["明前奶绿", "奶绿社"]
+    # 空值 / None / 纯分隔符 / 单字 → 全部丢掉
+    assert build_extra_words([None, "", "   ", "·", "甲", "()", "乙乙"]) == ["乙乙"]
+    # 括号与顿号也当分隔符（企划名常写成「XX（中国）」这种）；
+    # 注意单字母同样会被 MIN_TOKEN_LEN 滤掉（这里用 AB/CD 才留得下）
+    assert build_extra_words(["XX（中国）", "AB、CD"]) == ["XX", "中国", "AB", "CD"]
+
+
+def test_build_extra_words_actually_prevents_splitting():
+    """接线后的**真实收益**：不加词"喵喵机长真棒"被切成 `机长`，加词后是 `喵喵机长`。
+
+    这条是 2026-09-13 实测出来的（`机长` 出现 3 次而 `喵喵` 消失）——
+    主播名被切碎就等于词云里丢了最重要的那个词。
+    """
+    from app.services.danmaku_words import build_extra_words, count_tokens
+
+    texts = ["喵喵机长真棒", "喵喵机长真棒", "喵喵机长加油"]
+    before = dict(count_tokens(texts, engine="jieba"))
+    after = dict(count_tokens(texts, engine="jieba",
+                             extra_words=build_extra_words(["喵喵机长"])))
+    assert "机长" in before and "喵喵机长" not in before
+    assert after.get("喵喵机长") == 3 and "机长" not in after
+
+
 # ── 服务层：三种结果 + 缓存 ────────────────────────────────────────────
 
 def test_build_word_cloud_fetch_failed(monkeypatch):

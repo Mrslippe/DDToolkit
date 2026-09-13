@@ -1600,6 +1600,110 @@ img.hero-avatar {
   color: var(--c-text-sub);
 }
 
+/* 带操作钮的字段（当前只有「签名 + 平台签名下拉」）：输入框与钮同排、钮不参与拉伸 */
+.vd-field--action {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+    'label label'
+    'input action';
+  align-items: center;
+  column-gap: 8px;
+}
+
+.vd-field--action > span { grid-area: label; }
+.vd-field--action > input { grid-area: input; }
+
+/* 各平台签名下拉栏（2026-09-13 用户要求）：触发器 + 绝对定位浮层，样式随弹窗令牌 */
+.vd-sign-pick {
+  grid-area: action;
+  position: relative;
+}
+
+.vd-sign-btn {
+  height: 30px;                 /* 与同排输入框等高（6px 上下内距 + 13px 行高 + 边框） */
+  padding: 0 10px;
+  color: var(--c-primary-deep);
+}
+
+.vd-sign-caret {
+  font-size: 10px;
+  line-height: 1;
+  opacity: 0.7;
+}
+
+.vd-sign-pop {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 20;
+  width: min(340px, 74vw);
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: #fff;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-dialog);
+  box-shadow: var(--shadow-dialog);
+}
+
+.vd-sign-pop-head,
+.vd-sign-pop-empty {
+  padding: 2px 4px 4px;
+  font-size: 11px;
+  color: var(--c-text-sub);
+}
+
+.vd-sign-opt {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: var(--sel-bg-hover);
+  text-align: left;
+  cursor: pointer;
+}
+
+.vd-sign-opt:hover {
+  background: var(--sel-bg);
+}
+
+.vd-sign-opt.on {
+  border-color: var(--c-primary);
+  background: var(--sel-bg);
+}
+
+.vd-sign-opt-plat {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--c-text-sub);
+}
+
+.vd-sign-opt-plat em {
+  font-style: normal;
+  font-weight: 400;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--c-primary-deep);
+  color: #fff;
+  font-size: 10px;
+  line-height: 14px;
+}
+
+.vd-sign-opt-text {
+  font-size: 12.5px;
+  color: var(--c-text-main);
+  word-break: break-all;
+}
+
 .vd-field {
   display: flex;
   flex-direction: column;

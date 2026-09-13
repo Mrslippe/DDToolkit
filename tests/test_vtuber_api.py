@@ -1014,6 +1014,46 @@ def test_wordcloud_endpoint_self_builds(client, monkeypatch):
     assert d["top_keywords"] and set(d["top_keywords"]) == set(words)
 
 
+def test_wordcloud_endpoint_passes_vtuber_words_to_tokenizer(client, monkeypatch):
+    """接线（2026-09-13）：端点要把 **V 名 / 企划 / 昵称** 作为自定义词典传给分词层。
+
+    这是"扩展点 2"真正被用上的那一环 —— 只实现 `build_extra_words` 而不接线，
+    主播名照样会被 jieba 切碎（实测"喵喵机长"→`机长`）。所以在这里断死 kwargs。
+    """
+    vid = client.post("/vtuber", json={"name": "喵喵机长", "faction": "VirtuaReal"}).json()["id"]
+    aid = client.post(
+        f"/vtuber/{vid}/accounts",
+        json={"platform": "bilibili", "platform_uid": "888"},
+    ).json()["id"]
+    db = TestingSession()
+    db.add(LiveSession(account_id=aid, source="danmakus", live_id="uuid-extra",
+                       title="测试场", start_at=datetime(2026, 9, 11, 12, 0)))
+    db.commit()
+    db.close()
+
+    seen: dict = {}
+
+    async def fake_records(live_id: str, max_records: int = 0):
+        return [{"payload": {"rawText": "喵喵机长真棒"}}]
+
+    def fake_count(texts, **kw):
+        seen["extra_words"] = kw.get("extra_words")
+        return [("喵喵机长", 3)]
+
+    monkeypatch.setattr("app.services.danmaku_cloud.fetch_raw_danmakus", fake_records)
+    monkeypatch.setattr("app.services.danmaku_cloud.count_tokens", fake_count)
+    from app.services.danmaku_cloud import clear_cache
+    clear_cache()
+
+    d = client.get(f"/account/{aid}/live-sessions/uuid-extra/wordcloud").json()
+    assert d["wc_status"] == "self_built"
+    assert set(seen["extra_words"]) == {"喵喵机长", "VirtuaReal"}
+    # 顺序被服务层规范化成"去重 + 排序"——**这是缓存键稳定性要求的**（同一批词必须
+    # 落到同一个缓存键，否则改一次昵称就换一份缓存）
+    assert seen["extra_words"] == sorted(seen["extra_words"])
+    assert d["top_words"] == [{"text": "喵喵机长", "count": 3}]
+
+
 def test_wordcloud_endpoint_reports_no_danmaku(client, monkeypatch):
     """成功拉到记录但全是礼物/进场 → no_danmaku（与"拉取失败"区分）。"""
     _vid, aid = _mk_session_for_cloud(client)

@@ -264,5 +264,35 @@ def summarize_word_cloud(
     return len(texts), count_tokens(texts, engine=engine, top_n=top_n)
 
 
+# 分隔符：空白、中点、斜杠、顿号逗号、中英文括号 —— 名字里这些都不该进词典
+_EXTRA_SPLIT = re.compile(r"[\s·・/|,，、（）()\[\]【】「」]+")
+
+
+def build_extra_words(values: Iterable[str | None]) -> list[str]:
+    """把 V 名 / 企划名 / 昵称整理成**自定义词典**条目（扩展点 2 的接线工具）。
+
+    实测量化过收益（2026-09-13）：弹幕里"喵喵机长真棒"不加词被切成 `机长`，
+    加词后是 `喵喵机长` —— 主播名/企划名/梗词是词云里最该出现的那几个词，
+    被切碎就等于丢掉了它们。
+
+    规则（都是"宁少勿错"）：
+    - 按空白/中点/斜杠/标点拆开（`七海 Nana7mi` → 两条，而不是灌一条带空格的怪词）；
+    - 丢掉长度 < `MIN_TOKEN_LEN` 的碎片（单字当词只会污染分词）；
+    - 去重并保持输入顺序。
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    for v in values:
+        if not v:
+            continue
+        for part in _EXTRA_SPLIT.split(str(v).strip()):
+            p = part.strip()
+            if len(p) < MIN_TOKEN_LEN or p in seen:
+                continue
+            seen.add(p)
+            out.append(p)
+    return out
+
+
 # 供调用方注入"某场次要用哪些自定义词"（扩展点 2 的接线处）
 ExtraWordsHook = Callable[[str], Iterable[str]]
