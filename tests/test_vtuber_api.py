@@ -1,6 +1,6 @@
 import json
 import pytest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
@@ -516,13 +516,23 @@ def test_posts_paginated_search_matches_body_text(client):
 # ── 归档规则 + 未归档动态更新（devlog/016） ─────────────────────────────
 
 def test_archive_posts_endpoint(client):
+    """归档端点：早于 cutoff 的归档、晚于的不动，且幂等。
+
+    ⚠️ 日期必须**相对 now 算**（2026-09-14，devlog/081）：原来"新帖"写死
+    `2026-08-15`，而断言是 `days=30` —— 那是个**日期炸弹**：日子一到
+    （08-15 + 30d = 09-14）"新帖"自己跨过截止线，用例毫无改动地变红
+    （实测 `archived: 1 → 2`）。写这类"多久算旧"的断言一律用相对时间。
+    """
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    old_at = (now - timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%S")
+    new_at = (now - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S")
     client.post("/posts", json={
         "platform": "bilibili", "platform_uid": "U1", "platform_post_id": "OLD",
-        "type": "text", "published_at": "2026-01-01T00:00:00",
+        "type": "text", "published_at": old_at,
     })
     client.post("/posts", json={
         "platform": "bilibili", "platform_uid": "U1", "platform_post_id": "NEW",
-        "type": "text", "published_at": "2026-08-15T00:00:00",
+        "type": "text", "published_at": new_at,
     })
     r = client.post("/posts/archive?days=30").json()
     assert r["status"] == "done"

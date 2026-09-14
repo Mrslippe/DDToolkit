@@ -1442,6 +1442,79 @@ def test_log_file_handler_rotates_daily_and_prunes(tmp_path):
         handler.close()
 
 
+def test_live_upstream_single_flight_shares_one_fetch():
+    """同 liveId 的**并发**取数只打一轮上游（单飞，2026-09-14，devlog/081）。
+
+    没有单飞时：缓存只在成功后才写 ⇒ 两个同时到达的调用都 miss、都各发
+    summary+events —— 用户点一次详情会看到 4 个上游请求（dev 下 StrictMode 双挂载调两次）。
+    这里断言"上游各被调用 1 次"，旧实现必然各 2 次。
+    """
+    from app.services import live_upstream
+
+    live_upstream.clear_cache()
+    calls = {"summary": 0, "events": 0}
+
+    async def fake_summary(live_id: str):
+        calls["summary"] += 1
+        await asyncio.sleep(0.05)                 # 模拟上游耗时，制造并发窗口
+        return {"word_cloud": [{"text": "晚安", "count": 3}]}
+
+    async def fake_events(live_id: str):
+        calls["events"] += 1
+        await asyncio.sleep(0.05)
+        return [{"type": 7, "send_date_ms": 1}]
+
+    live_upstream.fetch_live_summary = fake_summary
+    live_upstream.fetch_live_events = fake_events
+    try:
+        async def run():
+            return await asyncio.gather(
+                live_upstream.load_live_upstream("L-1"),
+                live_upstream.load_live_upstream("L-1"),
+                live_upstream.load_live_upstream("L-1"),
+            )
+
+        results = asyncio.run(run())
+        assert calls == {"summary": 1, "events": 1}, calls
+        assert all(r[0] is not None and r[1] for r in results)
+        # 三个调用者拿到的是同一份结果
+        assert results[0][0] is results[1][0] is results[2][0]
+        # 一轮结束后在途表清空（失败/成功都不留残留）
+        assert live_upstream.inflight_count() == 0
+
+        # 第二次调用走**缓存**（不再打上游）
+        asyncio.run(live_upstream.load_live_upstream("L-1"))
+        assert calls == {"summary": 1, "events": 1}, calls
+    finally:
+        live_upstream.clear_cache()
+
+
+def test_live_upstream_failure_not_shared_and_retried():
+    """失败**不**共享也不缓存：下一次调用会真的重试（用户点「重试」必须有效）。"""
+    from app.services import live_upstream
+
+    live_upstream.clear_cache()
+    calls = {"n": 0}
+
+    async def flaky_summary(live_id: str):
+        calls["n"] += 1
+        await asyncio.sleep(0.02)
+        return None if calls["n"] == 1 else {"word_cloud": []}
+
+    async def fake_events(live_id: str):
+        return []
+
+    live_upstream.fetch_live_summary = flaky_summary
+    live_upstream.fetch_live_events = fake_events
+    try:
+        assert asyncio.run(live_upstream.load_live_upstream("L-2"))[0] is None
+        assert live_upstream.inflight_count() == 0        # 失败不留残留在途表
+        ok = asyncio.run(live_upstream.load_live_upstream("L-2"))
+        assert ok[0] is not None and calls["n"] == 2
+    finally:
+        live_upstream.clear_cache()
+
+
 def test_deferred_avatar_updates_only_avatar_path(monkeypatch):
     """延后下载：只 UPDATE avatar_path 一列并再推一次快照（不覆盖其它字段）。"""
     from app.services import scheduler as sch

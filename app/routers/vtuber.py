@@ -510,6 +510,9 @@ async def live_session_upstream(account_id: int, live_id: str,
         # 而不是报"拉取失败"（后者会让用户以为再点一次就能成功）
         return LiveUpstreamOut(danmaku=LiveDanmakuInfo(wc_status="no_danmaku"))
 
+    # 观测用（2026-09-14，devlog/081）：用户问过"点一次详情为什么发了四个上游请求"——
+    # 有了这一行，日志里数一下就知道**我们这边被调了几次**（一次调用 = summary+events 两个上游请求）。
+    logger.info(f"场次上游取数 liveId={live_id}（account={account_id}）")
     summary, evts = await load_live_upstream(live_id)
     if summary is None:
         # ⚠️ 这里报 fetch_failed（"没拉到"），**不能**报成"本场没弹幕"

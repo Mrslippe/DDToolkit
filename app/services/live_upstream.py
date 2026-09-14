@@ -20,12 +20,23 @@
 - TTL `_CACHE_TTL`（10 分钟）：挡"同一场次反复开关弹窗"的重复请求；
 - 上限 `_CACHE_MAX` 条，超出按插入顺序淘汰（使用模式是"看几场"，不需要 LRU 精度）；
 - **只在拿到 summary 时写缓存**：失败不缓存 —— 用户点「重试」应当真的重试。
+
+## 单飞（single-flight，2026-09-14，devlog/081）
+
+缓存只在**成功之后**才写，所以两个**同时**到达的请求都会 miss、都会各打一轮上游
+（用户点一次详情看到 4 个上游请求）。`_INFLIGHT` 让同 liveId 的并发调用共享同一个取数任务：
+
+- 只在**同一个事件循环**内复用（`(loop, task)`）：后端跑在 uvicorn 的单循环里，
+  而脚本/测试可能各自 `asyncio.run` —— 跨循环 await 别人的 Task 是 devlog/076 那类事故；
+- `asyncio.shield` 包一层：某个调用者被取消（客户端断开）不会把共享任务一起掐掉；
+- **失败即清**（`finally` 里只清自己的那条）：失败不进缓存，下次调用会真的重试。
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 import time
+from typing import Any
 
 from app.services.externals.danmakus import fetch_live_events, fetch_live_summary
 
@@ -34,6 +45,8 @@ logger = logging.getLogger(__name__)
 _CACHE: dict[str, tuple[dict, list[dict], float]] = {}
 _CACHE_MAX = 64
 _CACHE_TTL = 600.0
+# live_id → (所属事件循环, 在途任务)：只在同一循环里复用（见模块 docstring）
+_INFLIGHT: dict[str, tuple[asyncio.AbstractEventLoop, "asyncio.Task[Any]"]] = {}
 
 
 def _cache_get(live_id: str) -> tuple[dict, list[dict]] | None:
@@ -64,13 +77,43 @@ async def load_live_upstream(live_id: str) -> tuple[dict | None, list[dict]]:
     两个请求都是最多 3 次重试、单次 30s 超时（见 `danmakus.fetch_live_summary`），
     **并发**发出，所以这一层的耗时是"较慢的那个"，不是两者相加。
     `summary is None` = 上游这次没拿到（调用方据此报 `fetch_failed`，而不是"本场没弹幕"）。
+
+    ## 单飞（single-flight，2026-09-14，devlog/081）
+
+    没有单飞时，**同一 liveId 的并发调用会各自打一轮上游**：缓存只在**成功返回后**才写入，
+    两个同时到达的请求都会 miss、都会发 summary+events —— 用户点一次详情看到 4 个上游请求
+    （dev 环境 StrictMode 双挂载会调两次），而上游对同一场次的重复请求纯属浪费。
+    现在同 liveId 的并发调用共享同一个取数任务；**失败不共享**（失败立即清掉在途表，
+    下次调用会重试）。
     """
     hit = _cache_get(live_id)
     if hit is not None:
         logger.debug(f"live upstream 缓存命中 liveId={live_id}")
         return hit
-    summary, events = await asyncio.gather(
-        fetch_live_summary(live_id), fetch_live_events(live_id))
-    if summary is not None:
-        _cache_put(live_id, summary, events)
-    return summary, events
+    loop = asyncio.get_running_loop()
+    task = _INFLIGHT.get(live_id)
+    if task is not None and task[0] is loop and not task[1].done():
+        logger.info(f"live upstream 单飞复用 liveId={live_id}（已有同场次在途请求）")
+        return await asyncio.shield(task[1])
+
+    async def _fetch() -> tuple[dict | None, list[dict]]:
+        summary, events = await asyncio.gather(
+            fetch_live_summary(live_id), fetch_live_events(live_id))
+        if summary is not None:
+            _cache_put(live_id, summary, events)
+        return summary, events
+
+    created = loop.create_task(_fetch())
+    _INFLIGHT[live_id] = (loop, created)
+    try:
+        return await asyncio.shield(created)
+    finally:
+        # 在途表里仍是自己时才清（并发的第二个调用者不会覆盖它）
+        cur = _INFLIGHT.get(live_id)
+        if cur is not None and cur[1] is created:
+            _INFLIGHT.pop(live_id, None)
+
+
+def inflight_count() -> int:
+    """在途取数条数（测试与排查用）。"""
+    return len(_INFLIGHT)

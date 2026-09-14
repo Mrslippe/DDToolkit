@@ -165,6 +165,7 @@
 | **dev_check** | 一键本地验证（pytest + 后端冒烟） | `scripts/dev_check.py` | 可选 `--frozen` / `--portable` |
 | **UI 探针** | 布局不变量机器验证（三档窗口宽） | `scripts/ui_probe.py` | `--first-run` 验首启浮窗 |
 | **运行日志 / 日志轮转** | 双通道（轮转文件 + 控制台）：`logs/app.log` 按天切成 `app.log.YYYY-MM-DD`，保留 7 份 | `app/core/logging_setup.py::setup_logging/build_file_handler` | 排查先"按天切一刀"（devlog/076）；配置本身可测（devlog/077） |
+| **场次上游取数 / live upstream** | 场次详情里"必须打第三方"的两格取数：一次调用 = **并发 2 个上游请求**（摘要 + 中断/继续事件）；成功进 10 分钟缓存，**同场次并发调用单飞共享一轮** | `services/live_upstream.py::load_live_upstream`；端点 `…/live-sessions/{id}/upstream` | 日志 `场次上游取数` ×2 + `单飞复用` ×1 是正常的（dev 下 StrictMode 会调两次，devlog/081） |
 | **文档工具** | 架构图 SVG 生成 | `docs/tools/gen_diagrams.py` → `docs/diagrams/` | 只改 `dN()` 函数即可重绘 |
 | **术语表 / 本文** | 名词 → 路径 → 依赖速查 | `docs/GLOSSARY.md` | 新术语请随手补一行 |
 
