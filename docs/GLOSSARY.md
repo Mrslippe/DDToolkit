@@ -178,7 +178,7 @@
 | `DATA_DIR` | `DDTOOLKIT_DATA_DIR` 或项目根 | 数据库/日志/凭据/静态资源根目录 |
 | `DATABASE_URL` | `sqlite:///<DATA_DIR>/vtuber.db` | SQLite 连接串 |
 | `LOG_FILE` / `LOG_BACKUP_DAYS` | `logs/app.log` / `7`（`DDTOOLKIT_LOG_BACKUP_DAYS` 可覆盖） | 双通道日志的文件通道：**按天轮转**（`app.log.YYYY-MM-DD`）保留最近 N 份；配置在 `app/core/logging_setup.py`（devlog/077） |
-| `VERSION` | `0.9.9` | 版本号（与 5 处同步） |
+| `VERSION` | `1.0.0` | 版本号（与 5 处同步：本文件 / `tauri.conf.json` / `Cargo.toml` / `Cargo.lock` / `package.json`，测试断言一致） |
 | `REQUEST_INTERVAL_MIN/MAX` | 3.0 / 5.0 s | 账号抓取每账号间隔 |
 | `MANUAL_FAST_INTERVAL_MIN/MAX` | 0.5 / 1.0 s | 收录/单V 的账号间隔（只在账号之间生效） |
 | `FIRST_SCREEN_VIDEO_PAGES` / `_DYNAMICS_PAGES` / `_DYNAMICS_LIMIT` | 1 / 1 / 3 | 收录首屏抓取规模 |

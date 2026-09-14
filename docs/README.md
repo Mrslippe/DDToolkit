@@ -47,7 +47,7 @@
 | `design/` | 用户设计资产：`png/`（LOGO 栅格）、`svg/LOGO.svg`（矢量源）、`react-*/`（Pixso 导出设计稿）、`pills/`、`background/`、`screenshots/`（界面参考截图） |
 | `diagrams/` | 8 张 SVG 架构图（`01_system_architecture` … `08_evolution_timeline`）；由 `tools/gen_diagrams.py` 生成 |
 | `tools/gen_diagrams.py` | 架构图生成脚本（`python docs/tools/gen_diagrams.py`） |
-| `releases/` | `v0.9.1.md` / `v0.9.2.md` / `v0.9.3.md` / `v0.9.9.md` 发布说明（发布时被 `scripts/upload_release_assets.py` 读取） |
+| `releases/` | `v0.9.1.md` / `v0.9.2.md` / `v0.9.3.md` / `v0.9.9.md` / **`v1.0.0.md`** 发布说明（发布时被 `scripts/upload_release_assets.py` 读取） |
 | `reference/danmakus-api-v2-swagger.json` | danmakus 第三方接口存档（只读参考） |
 
 ## 5. 维护约定

@@ -1,8 +1,8 @@
 # DDToolkit 发布手册（Release Playbook）
 
 > 每次发布按本文档执行。所有命令均为**本机验证过**的参数组合（尤其网络部分，见 §6）。
-> 首次发布：v0.9.1（2026-09-08）；最近发布：**v0.9.3**（2026-09-09，
-> [GitHub Release](https://github.com/Mrslippe/DDToolkit/releases/tag/v0.9.3)）。
+> 首次发布：v0.9.1（2026-09-08）；最近发布：**v1.0.0**（2026-09-14，
+> [GitHub Release](https://github.com/Mrslippe/DDToolkit/releases/tag/v1.0.0)，release id 388158299）。
 
 ---
 
@@ -60,18 +60,18 @@ cd frontend
 npm run release
 ```
 
-`release` = `build:backend`（PyInstaller onedir → `src-tauri/binaries/backend/`，约 89MB）
-→ `tauri:build`（前端构建 + Rust release + NSIS 安装包，约 3-5 分钟）
+`release` = `build:backend`（PyInstaller onedir → `src-tauri/binaries/backend/`，**2026-09-14 实测 118.8MB**）
+→ `tauri:build`（前端构建 + Rust release + NSIS 安装包，**实测 6m09s**）
 → `collect:release`（聚合到 `dist-release/`：安装包 + 便携 zip）。
 
 **验证产物**：
 
 ```powershell
 Get-ChildItem dist-release | Select-Object Name, @{n='MB';e={[math]::Round($_.Length/1MB)}}
-# 期望两个文件:
-#   DDtoolkit_<新版本>_x64-setup.exe   (~40 MB)
-#   DDtoolkit-portable-win64.zip      (~52 MB)
-# 若出现旧版本安装包残留（如 0.1.0），删除之
+# 期望两个文件（大小随依赖增长，v1.0.0 实测值如下）:
+#   DDtoolkit_<新版本>_x64-setup.exe   (~56 MB，v1.0.0 = 56.3)
+#   DDtoolkit-portable-win64.zip      (~70 MB，v1.0.0 = 70.3)
+# 若出现旧版本安装包残留（如 0.9.9），删除之
 ```
 
 **验证「后端目录没被安装包打平」**（2026-09-08 事故，见 devlog/036）：
@@ -79,7 +79,7 @@ Get-ChildItem dist-release | Select-Object Name, @{n='MB';e={[math]::Round($_.Le
 ```powershell
 # 安装脚本里的安装目标必须保留 _internal/ 层级
 Select-String frontend/src-tauri/target/release/nsis/x64/installer.nsi `
-  -Pattern '/oname=binaries\\backend\\_internal' | Measure-Object   # 期望 ≈851 行
+  -Pattern '/oname=binaries\\backend\\_internal' | Measure-Object   # 期望 ≈851 行（v1.0.0 实测 890）
 # 打平（oname 不含 _internal 但源在 _internal）的行数必须为 0
 (Select-String frontend/src-tauri/target/release/nsis/x64/installer.nsi `
   -Pattern '/oname=binaries\\backend\\[^\\]+"\s+"[^"]*_internal' | Measure-Object).Count

@@ -377,8 +377,8 @@
 > ✅ **目录改名 `http-test` → `ddtoolkit` 已完成**（仓库现为 `E:\work\Project\DDToolkit`；
 > `4ede9cf` 落地一次性改名脚本 + 登录时计划任务，任务成功后自删）。
 >
-> 发布构建：v0.9.9 **已发布**（2026-09-13，`settings.VERSION = 0.9.9`，安装包 + 便携版已在
-> `dist-release/`，GitHub tag `v0.9.9`）。**之后的批次（devlog/060–063）尚未发版**。
+> 发布构建：v0.9.9 已发布（2026-09-13）；**v1.0.0 已发布**（2026-09-14，覆盖 devlog 060–081，
+> [Release](https://github.com/Mrslippe/DDToolkit/releases/tag/v1.0.0)）。
 
 ---
 
