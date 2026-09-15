@@ -2984,3 +2984,28 @@ def test_fetch_posts_core_limit_latest(monkeypatch, db):
     assert r.stored == 2
     assert r.dynamics == 2                    # 仅处理 2 条即停
     assert db.query(PostModel).count() == 2   # N3/N4 未入库，留待下次渐进消化
+
+
+# ── 风控冷却的状态暴露（R12a，devlog/089）─────────────────────────────
+# 此前风控**只写日志**：界面上看不到"被限流了、正在冷却"，用户只感到任务变慢或没结果。
+# 顶栏状态岛要靠 `fetch_status.rate_limit` 显示这条告警，因此这里把契约钉住。
+
+def test_fetch_status_exposes_rate_limit_cooldown():
+    from app.services import scheduler as sch
+
+    sch._rate_limit_until = 0.0
+    sch._rate_limit_reason = ""
+    assert sch.get_fetch_status()["rate_limit"] == {
+        "active": False, "reason": "", "seconds_left": 0}
+
+    sch._note_rate_limit("code=-352, msg=风控校验失败", 600)
+    rl = sch.get_fetch_status()["rate_limit"]
+    assert rl["active"] is True
+    assert "-352" in rl["reason"]
+    assert 590 <= rl["seconds_left"] <= 600, rl
+
+    # 冷却窗口过去 → 自动回到 inactive（顶栏告警随之消失，不需要额外清理）
+    sch._rate_limit_until = time.time() - 1
+    assert sch.get_fetch_status()["rate_limit"]["active"] is False
+    sch._rate_limit_until = 0.0
+    sch._rate_limit_reason = ""

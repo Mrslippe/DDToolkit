@@ -78,6 +78,8 @@ python scripts/ui_probe.py --polish                 # R15 三处前端打磨（d
 python scripts/ui_probe.py --reservations           # R13 预约进日历（devlog/088）：脚本先往**数据副本**种一条
                                                     # 明天的预约 → 断言格子徽章/时刻/人数/标题 + hover 浮层条目
 python scripts/ui_probe.py --capabilities            # 未登录提示：该说的都说了 + 功能没被过度限制
+python scripts/ui_probe.py --status-island           # R12a 顶栏状态岛（devlog/089）：空闲无容器 /
+                                                     # 消息点亮 / 面板可命中且不挤动右栏 / Esc 收起 / ttl 过期自清
 ```
 
 > `--polish`（2026-09-15 起，devlog/087）：三条都是"差 2px 肉眼看不出"的占位/对齐问题，所以**全部量出来**：

@@ -437,6 +437,190 @@ html.window-maximized body {
   flex: 1;
 }
 
+/* ── 顶栏状态岛（R12a，devlog/089）────────────────────────────────────
+   复用 `.topbar-status` 的胶囊外观（浅粉底/胶囊/居中），新增的是：
+   条目计数、chevron、以及 portal 出来的面板。
+   四态：idle（无容器、绿点 + 「数据服务运行中」）· pill（一条主文案）·
+   expand（面板）· 空闲轮播（R12b）。 */
+.si-island {
+  cursor: default;
+}
+
+.si-island.on {
+  cursor: pointer;
+}
+
+.si-island:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+.si-island .si-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 计数：多于一条时才出现（让用户知道点开还有别的） */
+.si-count {
+  flex: none;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.28);
+  color: inherit;
+  font-size: 10px;
+  line-height: 15px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.si-chevron {
+  flex: none;
+  opacity: 0.85;
+}
+
+.si-island.open .si-chevron {
+  transform: rotate(180deg);
+}
+
+/* 告警点：红（风控冷却/登录失效）——与 busy 的琥珀、ok 的白区分开 */
+.topbar-status-dot.warn {
+  background: #ff4d4f;
+}
+
+/* 面板：portal 到 body + fixed（顶栏 overflow:hidden 会裁掉内联面板） */
+.si-panel {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  max-height: 60vh;
+  border: 1px solid var(--c-border);
+  border-radius: 10px;
+  background: var(--c-bg-card);
+  box-shadow: var(--shadow-dialog);
+  overflow: hidden;
+}
+
+.si-panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 12px 7px;
+  border-bottom: 1px solid var(--c-border);
+}
+
+.si-panel-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--c-text-main);
+}
+
+.si-panel-hint {
+  font-size: 10.5px;
+  color: var(--c-text-sub);
+}
+
+.si-panel-scroll {
+  max-height: calc(60vh - 74px);
+}
+
+.si-list {
+  margin: 0;
+  padding: 6px 0;
+  list-style: none;
+}
+
+.si-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 12px;
+}
+
+.si-item + .si-item {
+  border-top: 1px dashed var(--c-border);
+}
+
+.si-item-icon {
+  flex: none;
+  margin-top: 1px;
+  color: var(--c-text-sub);
+}
+
+.si-item-icon.k-alert {
+  color: #ff4d4f;
+}
+
+.si-item-icon.k-progress,
+.si-item-icon.k-report {
+  color: var(--c-primary-deep);
+}
+
+.si-item-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.si-item-text {
+  font-size: 12.5px;
+  color: var(--c-text-main);
+  overflow-wrap: anywhere;
+}
+
+.si-item-detail {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--c-text-sub);
+  overflow-wrap: anywhere;
+}
+
+.si-item-meta {
+  font-size: 10.5px;
+  color: var(--c-text-sub);
+}
+
+.si-item-action {
+  flex: none;
+  align-self: center;
+  padding: 3px 9px;
+  border: 1px solid var(--c-primary);
+  border-radius: 999px;
+  background: var(--c-bg-card);
+  color: var(--c-primary-deep);
+  font-family: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.si-item-action:hover {
+  background: var(--sel-bg);
+}
+
+.si-panel-foot {
+  padding: 6px 12px 8px;
+  border-top: 1px solid var(--c-border);
+}
+
+.si-panel-order {
+  font-size: 10.5px;
+  color: var(--c-text-sub);
+}
+
+/* 减少动效：面板不做位移动画（本组件当前只做旋转 chevron） */
+@media (prefers-reduced-motion: reduce) {
+  .si-island.open .si-chevron {
+    transform: none;
+  }
+}
+
 /* 窗口控制：三格 46×40 通栏贴合，无间距无右缘留白；
    hover——普通钮浅粉、关闭钮酒红 */
 .topbar-window-controls {

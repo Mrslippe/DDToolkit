@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
-import { Copy, Loader2, LogIn, Minus, Square, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Copy, LogIn, Minus, Square, X } from 'lucide-react'
 import Logo from './common/Logo'
 import LoginDialog from './LoginDialog'
 import CapabilityLimits from './CapabilityLimits'
+import StatusIsland from './StatusIsland'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -18,6 +19,10 @@ import { setFetchBusy } from '../fetchBusy'
 import { isFirstRun } from '../bootState'
 import { dispatchFetchIdle, type FetchIdleKind } from '../utils/fetchIdle'
 import { useCapabilities, refreshCapabilities } from '../hooks/useCapabilities'
+import type { Notice, NoticeActionKind } from '../utils/notificationHub'
+import {
+  composeTaskText, loginNotice, messageNotice, progressNotice, rateLimitNotice, reportNotice,
+} from '../utils/notificationHub'
 import { api } from '../api/api'
 import type { AccountSnapshot, AuthStatus, FetchStatus, PostFetchStatus } from '../api/types'
 import './../styles/layout.css'
@@ -77,6 +82,10 @@ export default function TopBar() {
   })
   // 全量抓取完成的常驻报告：需用户手动关闭（AlertDialog 默认不支持点外部/ESC 关闭）
   const [doneReport, setDoneReport] = useState<NonNullable<PostFetchStatus['last_result']> | null>(null)
+  /** 完成报告对话框的开关（R12a：默认**关**，由状态岛条目的「查看详情」打开） */
+  const [reportOpen, setReportOpen] = useState(false)
+  /** 每次渲染现取的"当前时间"：通知条目的过期判定（瞬时消息/风控冷却）靠它 */
+  const now = Date.now()
   const prevRunning = useRef(false)
   // 账号快照已派发基线：platform_uid → 快照摘要（内容 diff 用）。
   // 2026-09-07 修复：原「recent.length 增量」判定在两种场景丢失事件——
@@ -217,7 +226,8 @@ export default function TopBar() {
             seenPostSeq.current = postRes.seq
             sawPostRun.current = false
             if (postRes.kind === 'full_all' || postRes.kind === 'full_vtuber') {
-              // 全量抓取完成 → 常驻对话框，需用户手动关闭（内容含全部中断账号）
+              // 全量抓取完成（R12a）：进通知中心当**常驻条目**（不再自动弹窗），
+              // 用户点条目上的「查看详情」才开原来的对话框。
               setDoneReport(postRes)
             } else if (postRes.kind === 'adopt') {
               // 收录首屏抓取（v0.9.4）：新 V 的投稿/动态第一屏，给一条简短反馈
@@ -357,44 +367,69 @@ export default function TopBar() {
     quick: '帖子抓取中',
     adopt: '首屏抓取中',
   }
-  /** 拼「任务名 - V名 - i/N」；V 名缺失时退回过程性文案（平台名 / 账号名） */
-  const statusParts = (
-    task: string | null | undefined,
-    fallbackTask: string,
-    vtuberName: string | null | undefined,
-    processText: string | null | undefined,
-    index?: number,
-    total?: number,
-  ): string => {
-    const parts = [TASK_TEXT[task ?? ''] ?? fallbackTask]
-    const who = vtuberName || processText
-    if (who) parts.push(String(who))
-    if (total && total > 0) parts.push(`${index ?? 0}/${total}`)
-    return parts.join(' - ')
-  }
+  /** 拼「任务名 - V名 - i/N」的纯函数已搬到 `utils/notificationHub.composeTaskText`（有单测） */
 
   let statusText = '数据服务运行中'
-  let dotClass = 'topbar-status-dot'
   if (postVisible) {
     const p = status!.post
-    statusText = statusParts(p.task, '帖子抓取中', p.vtuber_name, p.target, p.index, p.total)
-    dotClass = 'topbar-status-dot busy'
+    statusText = composeTaskText(TASK_TEXT[p.task ?? ''] ?? '帖子抓取中', p.vtuber_name || p.target,
+                                 p.index, p.total)
   } else if (accVisible) {
     const a = status!.account
-    statusText = statusParts(a.task, '账号信息抓取中', a.vtuber_name, a.current, a.index, a.total)
-    dotClass = 'topbar-status-dot busy'
+    statusText = composeTaskText(TASK_TEXT[a.task ?? ''] ?? '账号信息抓取中',
+                                 a.vtuber_name || a.current, a.index, a.total)
   } else if (status?.external?.running) {
     // 外部第三方数据（收录回填 / 每日批次）：与抓取任务并行，优先级最低
     statusText = `正在同步${status.external.label ?? '第三方数据'}`
-    dotClass = 'topbar-status-dot busy'
   }
   // 注：自动节拍（动态轮询 / 自动账号流）走到这里就是空态——顶栏保持「数据服务运行中」
   // 白字 + 绿点、无容器（用户 2026-09-10：频繁轮询不必占顶栏）
 
-  // 显示优先级：覆盖消息（且无任务运行）> 实时状态
-  const showOverride = pillMsg !== null && !busy
-  const displayText = showOverride ? pillMsg! : statusText
-  const displayDot = showOverride ? 'topbar-status-dot ok' : dotClass
+  // ── 通知中心（R12a，devlog/089）────────────────────────────────────
+  // 六类信息源汇总成条目；优先级/过期/去重全在 `utils/notificationHub` 里（有单测）。
+  const notices = useMemo(() => {
+    const list: Notice[] = []
+    // ① 任务进度（**自动节拍不产生条目** —— progressNotice 内部判定）
+    const p = progressNotice({ id: 'progress-post', running: !!status?.post.running,
+                               auto: isQuietTask(status?.post), text: statusText })
+    if (p && postVisible) list.push(p)
+    const a = progressNotice({ id: 'progress-account', running: !!status?.account.running,
+                               auto: isQuietTask(status?.account), text: statusText })
+    if (a && accVisible) list.push(a)
+    if (status?.external?.running) {
+      list.push({ id: 'progress-external', kind: 'progress', source: '第三方同步',
+                  text: `正在同步${status.external.label ?? '第三方数据'}` })
+    }
+    // ② 风控冷却（此前只在日志里）
+    const rl = rateLimitNotice(status?.rate_limit, now)
+    if (rl) list.push(rl)
+    // ③ 登录失效
+    const lg = loginNotice(!!auths.bili?.needs_login)
+    if (lg) list.push(lg)
+    // ④ 完成报告（全部中断账号进 detail；点「查看详情」开原来的弹窗）
+    if (doneReport) {
+      const issues = doneReport.issues ?? []
+      list.push(reportNotice({
+        id: `report-${doneReport.seq}`,
+        text: `全量帖子抓取完成 · 存储 ${doneReport.stored ?? 0} · 跳过 ${doneReport.skipped ?? 0}`,
+        detail: doneReport.video_missing
+          ? `视频可能缺 ${doneReport.video_missing} 条`
+          : issues.length ? `${issues.length} 处中断（${issues[0].stop_reason}）` : undefined,
+      }))
+    }
+    // ⑤ 瞬时消息（操作结果，ttl 到期自动消失）
+    if (pillMsg) list.push(messageNotice(pillMsg, now, PILL_MS))
+    return list
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, auths, doneReport, pillMsg, now, statusText])
+
+  /** 面板动作 → 具体行为（渲染层不碰业务） */
+  const onIslandAction = (kind: NoticeActionKind) => {
+    if (kind === 'open-report') setReportOpen(true)
+    else if (kind === 'login') setLoginOpen(true)
+    // 'open-limits' 暂未接线：能力受限仍由顶栏那个**独立入口**承担
+    // （工具 vs 通知的分工，见 devlog/089）；类型里保留它是给后续批次用
+  }
 
   const handleMinimize = () => void tauriWindow().then((w) => w.minimize())
 
@@ -420,22 +455,11 @@ export default function TopBar() {
         DDtoolkit
       </h1>
 
-      {/* 状态行：容器只在「有事发生」时出现（busy 或操作结果覆盖态）——
-          空闲态是顶栏 chrome 的一部分（白字 + 绿点，无容器），
-          事件态亮出深玫瑰徽章把注意力吸过来（见 layout.css .topbar-status.on） */}
-      <span
-        className={'topbar-status' + (busy || showOverride ? ' on' : '')}
-        {...(isTauri ? { 'data-tauri-drag-region': true } : {})}
-      >
-        {displayDot.includes('busy') ? (
-          <Loader2 className="topbar-status-spinner" />
-        ) : (
-          <i className={displayDot} />
-        )}
-        <span key={displayText} className="pill-text-fade">
-          {displayText}
-        </span>
-      </span>
+      {/* 状态岛（R12a，devlog/089）：原来这里是三套并存的渲染（轮询胶囊 + 瞬时覆写 +
+          完成报告 AlertDialog），现在统一交给 `StatusIsland` + `utils/notificationHub`。
+          空闲态仍是顶栏 chrome 的一部分（白字 + 绿点、无容器）；「自动节拍不占顶栏」
+          这条口径已从"副作用"变成 notificationHub 里的具名规则（带反向用例）。 */}
+      <StatusIsland notices={notices} onAction={onIslandAction} now={now} />
 
       <div className="topbar-spacer" {...(isTauri ? { 'data-tauri-drag-region': true } : {})} />
 
@@ -495,11 +519,16 @@ export default function TopBar() {
         }}
       />
 
-      {/* 全量抓取完成报告：常驻对话框，仅「知道了」可关闭（AlertDialog 不响应外部点击/ESC） */}
+      {/* 全量抓取完成报告（R12a 起：**不再自动弹**，改为状态岛里一条常驻条目 +
+          「查看详情」打开这个对话框 —— 用户口径是"把顶栏信息收成一个控件"）。
+          对话框本身保持原样：仅「知道了」可关闭（AlertDialog 不响应外部点击/ESC）。 */}
       <AlertDialog
-        open={doneReport !== null}
+        open={reportOpen && doneReport !== null}
         onOpenChange={(o) => {
-          if (!o) setDoneReport(null)
+          if (!o) {
+            setReportOpen(false)
+            setDoneReport(null)
+          }
         }}
       >
         <AlertDialogContent>
@@ -524,7 +553,14 @@ export default function TopBar() {
             </div>
           )}
           <AlertDialogFooter>
-            <AlertDialogAction onClick={() => setDoneReport(null)}>知道了</AlertDialogAction>
+            <AlertDialogAction
+              onClick={() => {
+                setReportOpen(false)
+                setDoneReport(null)
+              }}
+            >
+              知道了
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

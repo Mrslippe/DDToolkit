@@ -256,6 +256,40 @@ def _set_post_last_result(seq: int, kind: str, label: str,
     }
 
 
+# ── 风控冷却窗口（R12a，devlog/089）────────────────────────────────────
+# 此前风控**只写日志**：用户在界面上完全看不到"被限流了、正在冷却"，只看到任务变慢/没结果。
+# 这里记"冷却到什么时候"，由 `get_fetch_status()` 暴露给顶栏（新的状态岛显示为告警条目）。
+_rate_limit_until: float = 0.0
+_rate_limit_reason: str = ""
+
+
+def _note_rate_limit(reason: str, seconds: float) -> None:
+    """进入风控冷却：记账（顶栏据此显示告警，冷却结束自动消失）。"""
+    global _rate_limit_until, _rate_limit_reason
+    _rate_limit_until = time.time() + max(0.0, seconds)
+    _rate_limit_reason = reason or "上游限流"
+
+
+def rate_limit_status() -> dict:
+    """风控快照：`{active, reason, seconds_left}`（冷却窗口过去即自动 active=False）。"""
+    left = _rate_limit_until - time.time()
+    if left <= 0:
+        return {"active": False, "reason": "", "seconds_left": 0}
+    return {"active": True, "reason": _rate_limit_reason, "seconds_left": int(left)}
+
+
+async def _cooldown_for_rate_limit(reason: str = "") -> None:
+    """进入风控冷却：**先记账**（顶栏状态岛据此显示告警，冷却结束自动消失）再睡够时间。
+
+    R12a（devlog/089）：此前 9 处冷却点各自 `await asyncio.sleep(RATE_LIMIT_COOLDOWN)`，
+    界面完全看不到"被限流了、正在冷却"——用户只感到任务变慢或没结果。
+    统一走这里，避免以后新增冷却点又漏记账。
+    """
+    _note_rate_limit(reason or rate_limit_info() or "上游限流",
+                     float(settings.RATE_LIMIT_COOLDOWN))
+    await asyncio.sleep(settings.RATE_LIMIT_COOLDOWN)
+
+
 def get_fetch_status() -> dict:
     """返回账号信息 / 帖子 / 外部数据三类任务的实时状态快照。
 
@@ -274,6 +308,8 @@ def get_fetch_status() -> dict:
         "post": {**_status["post"], "auto": _auto_post_active.is_set()},
         "external": dict(_status["external"]),
         "manual_running": manual_task_running(),
+        # R12a：风控冷却（此前只在日志里，界面看不到）
+        "rate_limit": rate_limit_status(),
     }
 
 
@@ -505,8 +541,8 @@ async def async_fetch_accounts(account_ids: list[int], *, label: str = "指定�
                 db.commit()
                 db.close()
                 logger.warning(f"触发风控 ({rate_limit_info()})，冷却 {settings.RATE_LIMIT_COOLDOWN}s...")
+                await _cooldown_for_rate_limit(rate_limit_info())
                 clear_rate_limit()
-                await asyncio.sleep(settings.RATE_LIMIT_COOLDOWN)
                 db = SessionLocal()
                 # 修复：冷却后必须重查账号 —— 旧会话已关闭，原列表里的 acc 是
                 # detached 对象，继续赋值不会进入新会话，后续更新会静默丢失
@@ -1358,7 +1394,7 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
                         logger.info(f"mid={mid} 视频第{page}页触发风控，冷却 "
                                     f"{settings.RATE_LIMIT_COOLDOWN}s 后重试 ({rl_retries}/{_PAGE_RETRIES})...")
                         clear_rate_limit()
-                        await asyncio.sleep(settings.RATE_LIMIT_COOLDOWN)
+                        await _cooldown_for_rate_limit()
                         continue
                     clear_rate_limit()
                     result.rate_limited = True
@@ -1418,7 +1454,7 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
                     logger.info(f"mid={mid} 动态第{dyn_page + 1}页触发风控，冷却 "
                                 f"{settings.RATE_LIMIT_COOLDOWN}s 后重试 ({dyn_rl_retries}/{_PAGE_RETRIES})...")
                     clear_rate_limit()
-                    await asyncio.sleep(settings.RATE_LIMIT_COOLDOWN)
+                    await _cooldown_for_rate_limit()
                     continue
                 clear_rate_limit()
                 result.rate_limited = True
@@ -1655,7 +1691,7 @@ async def _fetch_platform_posts(pf, uid: str, pages: int, db: Session,
                     logger.info(f"{platform}:{uid} 第{page}页触发风控，冷却 "
                                 f"{settings.RATE_LIMIT_COOLDOWN}s 后重试 ({rl_retries}/{_PAGE_RETRIES})...")
                     clear_rate_limit()
-                    await asyncio.sleep(settings.RATE_LIMIT_COOLDOWN)
+                    await _cooldown_for_rate_limit()
                     continue
                 clear_rate_limit()
                 result.rate_limited = True
@@ -1994,7 +2030,7 @@ async def async_fetch_all_posts() -> dict:
 
             if r.rate_limited:
                 logger.warning(f"{acc.platform}:{acc.platform_uid} 触发风控，冷却 {settings.RATE_LIMIT_COOLDOWN}s...")
-                await asyncio.sleep(settings.RATE_LIMIT_COOLDOWN)
+                await _cooldown_for_rate_limit()
             elif idx < len(accounts) - 1:
                 await asyncio.sleep(20)
 
@@ -2104,7 +2140,7 @@ async def async_fetch_vtuber_posts(name: str, platform: str = "bilibili") -> dic
 
             if r.rate_limited:
                 logger.warning(f"uid={acc.platform_uid} 触发风控，冷却 {settings.RATE_LIMIT_COOLDOWN}s...")
-                await asyncio.sleep(settings.RATE_LIMIT_COOLDOWN)
+                await _cooldown_for_rate_limit()
             elif idx < len(accounts) - 1:
                 await asyncio.sleep(20)
 
@@ -2225,7 +2261,7 @@ async def async_update_unarchived_posts(name: str | None = None) -> dict:
 
             if r.rate_limited:
                 logger.warning(f"uid={acc.platform_uid} 触发风控，冷却 {settings.RATE_LIMIT_COOLDOWN}s...")
-                await asyncio.sleep(settings.RATE_LIMIT_COOLDOWN)
+                await _cooldown_for_rate_limit()
             elif idx < len(accounts) - 1:
                 await asyncio.sleep(20)
 
@@ -2393,7 +2429,7 @@ async def live_sweep_core(db: Session, client: httpx.AsyncClient | None = None) 
                     logger.warning(f"T0 直播状态触发风控 ({rate_limit_info()})，"
                                    f"冷却 {settings.RATE_LIMIT_COOLDOWN}s 后继续")
                     clear_rate_limit()
-                    await asyncio.sleep(settings.RATE_LIMIT_COOLDOWN)
+                    await _cooldown_for_rate_limit()
                     continue
                 # 非风控失败（网络/接口异常）：跳过本批，轮询宽容处理
                 result.failed += len(chunk)

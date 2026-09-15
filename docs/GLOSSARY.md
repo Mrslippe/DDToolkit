@@ -154,6 +154,7 @@
 | **设计令牌** | 颜色/圆角/阴影/字体变量 | `styles/tokens.css` | UI-MAP §D 有全表 |
 | **UI 探针** | `?probe=1` 下的机器可判定布局自检 | `dev/probe.ts` + `scripts/ui_probe.py` | 7 组不变量（含 `--add-v`：本地/上游来源分流；`--capabilities`：未登录提示**存在**且功能**未过度限制**） |
 | **未登录提示 / 能力角标** | 顶栏「未登录 · N 项受限」入口 + 说明窗（先列"现在能做什么"再列受限项 + 去登录）；受限功能**照常可见**，只标不藏 | `hooks/useCapabilities.ts`、`utils/capabilities.ts`、`components/CapabilityLimits.tsx`；`.topbar-limits` / `.cap-limits-dialog` / `.cap-need-login` / `.cap-inline-hint` | 探针 `ui_probe.py --capabilities`（现场 = 数据副本删 `.env`） |
+| **顶栏状态岛 / 通知中心** | 顶栏唯一的信息控件：条目优先级 `alert>progress>report>message`、过期与常驻规则、六类信息源（进度/第三方/完成报告/登录失效/风控冷却/瞬时消息） | `utils/notificationHub.ts`（判定，12 单测）、`components/StatusIsland.tsx`（渲染）、`scheduler.rate_limit_status()`（风控字段） | 「自动节拍不占顶栏」是该模块的具名规则 + 反向用例；面板 portal+fixed，探针断言"展开不挤动右栏" |
 | **添加 V 浮窗** | 收录入口浮窗：本地候选（池 + 弹幕索引）与 B 站在线检索两个来源 | `components/AddVtuberDialog.tsx`；`.av-*`（`styles/posts.css`） | 探针 `--add-v`；纯逻辑在 `utils/addVtuberSearch.ts` |
 
 ---

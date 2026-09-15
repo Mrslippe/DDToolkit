@@ -446,6 +446,9 @@ export interface FetchStatus {
    * 旧后端不返回该字段 → 前端退回旧判据（见 TopBar）。
    */
   manual_running?: boolean
+  /** 风控冷却（R12a，devlog/089）：此前只在服务端日志里，顶栏据此显示告警。
+   *  冷却窗口过去后自动变回 `active:false`，前端无需清理。 */
+  rate_limit?: { active: boolean; reason: string; seconds_left: number }
 }
 
 /** stats_json 解析后的统计字段（B 站口径） */export interface PostStatsJson {

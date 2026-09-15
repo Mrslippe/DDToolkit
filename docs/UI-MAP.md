@@ -97,6 +97,35 @@
 → 动态流每轮把按钮禁用掉，而**后端其实会受理**（手动优先会抢占自动档，`manual_task_running()`
 在自动档持锁时为 false）。
 
+### A1-a. 顶栏状态岛 `<StatusIsland>`（components/StatusIsland.tsx，2026-09-15 R12a devlog/089）
+
+顶栏中部（`.topbar-status` 胶囊外观不变）。**改造前是"三套并存"**：轮询算出的任务胶囊 +
+`ddtoolkit:pill-message` 瞬时覆写 + 全量抓取完成的 AlertDialog；风控冷却**只在日志里**。
+现在统一成「一个控件 + 一份判定」：
+
+| 层 | 位置 | 职责 |
+|---|---|---|
+| 判定（纯逻辑，12 条单测） | `utils/notificationHub.ts` | 条目模型、**优先级 `alert>progress>report>message`**、过期（`expiresAt` / `sticky`）、命名规则 |
+| 渲染 | `components/StatusIsland.tsx` | 四态 `idle`（绿点 + 「数据服务运行中」，**无容器**）· `pill`（一条主文案 + 图标 + 计数）· `expand`（portal + fixed 面板）· 空闲轮播（R12b） |
+
+**六类信息源**：任务进度（`fetch-status`，**自动节拍不产生条目**）· 第三方同步 · 完成报告
+（改为**常驻条目** + 「查看详情」开原对话框，不再自动弹窗）· 登录失效（常驻 + 「去登录」）·
+**风控冷却**（`fetch-status.rate_limit` 新增字段：`{active, reason, seconds_left}`，到点自动消失）·
+瞬时消息（ttl 4s）。
+
+DOM 契约（探针 `ui_probe --status-island` 直接查）：`.si-island`（`.on` = 有事发生）· `.si-dot`
+（`.warn` = 红）· `.si-text` · `.si-count` · `.si-chevron` · `.si-panel` · `.si-item[data-kind]` ·
+`.si-item-meta`（含来源标注）· `.si-item-action`。
+
+> ⚠️ 三条**别改坏**的口径：
+> ① **「自动节拍不占顶栏」现在是 `notificationHub.progressNotice` 的具名规则 + 反向用例**
+>    （此前是 `TopBar` 里散落的 `isQuietTask` 判断；探针 `_assert_topbar` 照旧在真实后端上兜底）；
+> ② 面板必须 **portal + `position: fixed`**（顶栏容器 `overflow:hidden` 会裁掉内联面板），
+>    探针断言"展开**不挤动右栏**"（`.topbar-spacer` 宽度不变）；
+> ③ 能力受限**仍由顶栏那个独立入口**（`.topbar-limits`）承担 —— **工具 vs 通知**的分工：
+>    前者是"随时可点的入口"，后者是"有事发生才出现的信息"；`NoticeActionKind` 里保留
+>    `open-limits` 是给后续批次合并用的。
+
 ### A1-b. 未登录能力入口 `<CapabilityLimits>`（components/CapabilityLimits.tsx，2026-09-15 devlog/086）
 
 顶栏登录钮**左侧**；**只在有限制时渲染**（全可用时不多一个按钮）。DOM 契约（探针直接查）：
@@ -113,8 +142,7 @@
 **禁用 + 说明原因**；账号信息与归档**保持可用**（实测匿名可用，禁掉就是过度限制）。
 探针：`python scripts/ui_probe.py --capabilities`（现场 = 数据目录副本删 `.env`）。
 
-### A2. 工具图标栏 `<IconRail>`（components/IconRail.tsx）
-> 视觉按 `docs/design/react-IconRail` 导出（Frame4172），**50px 紧凑栏**（原 79 栏 ×0.63 取整）。
+### A2. 工具图标栏 `<IconRail>`（components/IconRail.tsx）> 视觉按 `docs/design/react-IconRail` 导出（Frame4172），**50px 紧凑栏**（原 79 栏 ×0.63 取整）。
 
 | 名称 | 类名 | 说明 |
 |---|---|---|

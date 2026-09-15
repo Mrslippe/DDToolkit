@@ -215,12 +215,14 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
             "capabilities": data.get("capabilities"),
             "polish": data.get("polish"),
             "reservations": data.get("reservations"),
+            "statusIsland": data.get("statusIsland"),
             "degraded": data.get("degraded") or [],
             "dom": dom_file,
         }
     return {"mode": None, "views": data, "topbar": None, "calendar": None,
             "settings": None, "scene": None, "addv": None, "capabilities": None,
-            "polish": None, "reservations": None, "degraded": [], "dom": dom_file}
+            "polish": None, "reservations": None, "statusIsland": None,
+            "degraded": [], "dom": dom_file}
 
 
 # ── 展示页 hero 药丸签名（P2 分层收敛 A 批次的位级回归护栏）─────────────
@@ -638,6 +640,12 @@ def main() -> int:
              "探针**不点结果行、不点「搜索 B 站」**（那是真收录与真上游调用）。",
     )
     ap.add_argument(
+        "--status-island",
+        action="store_true",
+        help="只跑一档宽度：顶栏状态岛（R12a，devlog/089）—— 空闲无容器 / 瞬时消息点亮 / "
+             "点开面板条目可命中且不挤动右栏 / Esc 收起 / ttl 到期自动回空闲",
+    )
+    ap.add_argument(
         "--reservations",
         action="store_true",
         help="只跑一档宽度：**种一条明天的预约**（写进数据目录副本）→ 档案视图断言"
@@ -857,6 +865,72 @@ def main() -> int:
                                     f"hero={sc.get('heroAtEnd')!r}）")
                 if not failures:
                     print("  [ok] 场景切换：预取→退场→提交全程落地，侧栏与内容一致")
+            for b in failures:
+                print("   -", b)
+            return 1 if failures else 0
+
+        if args.status_island:
+            # 顶栏状态岛（R12a，devlog/089）：把三套并存的信息渲染收成一个控件之后，
+            # 要钉的是**四态与两条不变量**（空闲无容器 / 展开不挤动右栏）。
+            w = widths[0]
+            url = f"http://localhost:{vite_port}{route}?probe=status-island"
+            print(f"[probe] status-island @{w} → {url}")
+            res = _run_probe(edge, url, w, args.height, WORK, "status-island")
+            si = ((res or {}).get("statusIsland") or {})
+            if res and not si:
+                print(f"  [!] 探针 mode={res.get('mode')!r} 键={sorted(res.keys())}"
+                      f"（新字段需要在 _run_probe 的白名单里登记）")
+            print(f"  空闲：文案={si.get('idleText')!r} 亮起={si.get('idleLit')} "
+                  f"计数={si.get('idleCount')} 右栏宽={si.get('spacerIdle')}")
+            print(f"  瞬时消息：文案={si.get('litText')!r} 亮起={si.get('litOn')} "
+                  f"chevron={si.get('litHasChevron')}")
+            print(f"  面板：打开={si.get('panelOpened')} 条目={si.get('panelItems')} "
+                  f"种类={si.get('panelKinds')} 文本={si.get('panelItemText')!r} "
+                  f"来源={si.get('panelMetaText')!r}")
+            print(f"  可命中：面板={si.get('panelHit')} 首条={si.get('panelItemHit')} "
+                  f"在视口内={si.get('panelInViewport')} ｜ 展开后右栏宽={si.get('spacerOpen')} "
+                  f"Esc 收起={si.get('panelClosedByEsc')}")
+            print(f"  ttl 到期后：文案={si.get('afterTtlText')!r} 亮起={si.get('afterTtlLit')}")
+            if not si:
+                failures.append(f"@{w} status-island: 没量到状态岛段（探针未跑完？）")
+            else:
+                if si.get("idleLit"):
+                    failures.append(f"@{w} status-island: 空闲态就亮着容器"
+                                    f"（文案={si.get('idleText')!r}）—— 用户 2026-09-10 口径："
+                                    f"频繁轮询不占顶栏，空闲只有绿点")
+                if "数据服务运行中" not in (si.get("idleText") or ""):
+                    failures.append(f"@{w} status-island: 空闲文案是 {si.get('idleText')!r}，"
+                                    f"应为「数据服务运行中」")
+                if not si.get("litOn"):
+                    failures.append(f"@{w} status-island: 派发 pill-message 后状态岛没亮起")
+                elif "探针消息" not in (si.get("litText") or ""):
+                    failures.append(f"@{w} status-island: 亮起后文案仍是 {si.get('litText')!r}，"
+                                    f"没换成瞬时消息")
+                if not si.get("panelOpened"):
+                    failures.append(f"@{w} status-island: 点状态岛没打开通知面板")
+                else:
+                    if (si.get("panelItems") or 0) < 1:
+                        failures.append(f"@{w} status-island: 面板里一条通知都没有")
+                    if not si.get("panelHit"):
+                        failures.append(f"@{w} status-island: 面板命中测试失败（点不着）")
+                    if not si.get("panelItemHit"):
+                        failures.append(f"@{w} status-island: 面板里的条目不可命中")
+                    if not si.get("panelInViewport"):
+                        failures.append(f"@{w} status-island: 面板越出视口（会被裁）")
+                    if " · " not in (si.get("panelMetaText") or ""):
+                        failures.append(f"@{w} status-island: 条目没有来源标注"
+                                        f"（实得 {si.get('panelMetaText')!r}）")
+                if si.get("spacerOpen") != si.get("spacerIdle"):
+                    failures.append(f"@{w} status-island: 展开面板挤动了右栏"
+                                    f"（右栏宽 {si.get('spacerIdle')} → {si.get('spacerOpen')}；"
+                                    f"面板应当 portal + fixed 悬浮）")
+                if not si.get("panelClosedByEsc"):
+                    failures.append(f"@{w} status-island: Esc 没收起面板")
+                if si.get("afterTtlLit"):
+                    failures.append(f"@{w} status-island: 瞬时消息过了 ttl 还亮着"
+                                    f"（文案={si.get('afterTtlText')!r}）—— 过期条目必须自己消失")
+                if not failures:
+                    print("  [ok] 状态岛：空闲无容器 / 消息点亮 / 面板可命中不挤动 / Esc 收起 / 过期自清")
             for b in failures:
                 print("   -", b)
             return 1 if failures else 0

@@ -858,6 +858,93 @@ export async function runUiProbe(): Promise<void> {
     return
   }
 
+  // 顶栏状态岛（`?probe=status-island`，devlog/089；配合 `ui_probe.py --status-island`）：
+  // 这一批把顶栏**三套并存**的信息渲染（轮询胶囊 / 瞬时覆写 / 完成报告弹窗）收成一个控件，
+  // 所以要钉住的是"收编之后还对不对"：
+  //   ① **空闲态**：只有绿点 + 「数据服务运行中」，**没有容器**（用户 2026-09-10 口径）；
+  //   ② **瞬时消息**（`ddtoolkit:pill-message`，真实事件源）：岛亮起、文案换成消息、出现计数；
+  //   ③ **点开面板**：条目可命中（`elementFromPoint`）、有来源标注、Esc 能收起；
+  //   ④ **过期**：消息 ttl（4s）过后条目自己消失、岛回空闲 —— 虚拟时间下等得起。
+  if (mode === 'status-island') {
+    const result: Record<string, unknown> = {}
+    const waitFor = async (fn: () => unknown, ms = 4000) => {
+      const t0 = performance.now()
+      while (performance.now() - t0 < ms) {
+        const v = fn()
+        if (v) return v
+        await sleep(100)
+      }
+      return null
+    }
+    const hits = (el: HTMLElement | null, x: number, y: number) => {
+      if (!el) return false
+      const hit = document.elementFromPoint(x, y)
+      return !!hit && (hit === el || el.contains(hit))
+    }
+    const island = () => document.querySelector<HTMLElement>('.si-island')
+    const spacerW = () => Math.round(
+      (document.querySelector('.topbar-spacer')?.getBoundingClientRect().width ?? 0) * 10) / 10
+
+    await waitFor(() => island(), 6000)
+    // ① 空闲态
+    await waitFor(() => !island()!.classList.contains('on'), 4000)
+    result.idleText = (island()?.querySelector('.si-text')?.textContent || '').trim()
+    result.idleLit = !!island()?.classList.contains('on')
+    result.idleCount = !!island()?.querySelector('.si-count')
+    result.spacerIdle = spacerW()
+
+    // ② 瞬时消息（走真实事件源，不直接改 React state）
+    window.dispatchEvent(new CustomEvent('ddtoolkit:pill-message', {
+      detail: { text: '探针消息：账号信息抓取完成 · 成功 3 · 失败 0' },
+    }))
+    await waitFor(() => island()?.classList.contains('on'), 3000)
+    const litText = (island()?.querySelector('.si-text')?.textContent || '').trim()
+    result.litText = litText
+    result.litOn = !!island()?.classList.contains('on')
+    result.litHasChevron = !!island()?.querySelector('.si-chevron')
+
+    // ③ 点开面板
+    island()?.click()
+    const panel = (await waitFor(() => document.querySelector('.si-panel'), 3000)) as HTMLElement | null
+    result.panelOpened = !!panel
+    result.panelItems = panel?.querySelectorAll('.si-item').length ?? -1
+    result.panelKinds = [...(panel?.querySelectorAll('.si-item') || [])]
+      .map((n) => n.getAttribute('data-kind'))
+    result.panelItemText = (panel?.querySelector('.si-item-text')?.textContent || '').trim()
+    result.panelMetaText = (panel?.querySelector('.si-item-meta')?.textContent || '').trim()
+    const pr = panel?.getBoundingClientRect()
+    result.panelHit = !!(pr && hits(panel, pr.left + 10, pr.top + 10))
+    const firstItem = panel?.querySelector<HTMLElement>('.si-item') ?? null
+    const ir = firstItem?.getBoundingClientRect()
+    result.panelItemHit = !!(ir && hits(firstItem, ir.left + ir.width / 2, ir.top + ir.height / 2))
+    result.panelInViewport = !!(pr && pr.left >= -0.5 && pr.right <= window.innerWidth + 0.5 &&
+      pr.top >= -0.5 && pr.bottom <= window.innerHeight + 0.5)
+    // 展开**不该挤动右栏**（面板是 portal + fixed）
+    result.spacerOpen = spacerW()
+
+    // Esc 收起
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await waitFor(() => !document.querySelector('.si-panel'), 3000)
+    result.panelClosedByEsc = !document.querySelector('.si-panel')
+
+    // ④ 过期：消息 ttl（TopBar 的 PILL_MS=4s）过后岛回空闲。
+    // ⚠️ 诚实标注：这一条量的是**端到端结果**（消息消失 + 岛回空闲），
+    //    背后有两个机制（TopBar 的清态定时器 + notificationHub 的 expiresAt 过滤）。
+    //    单靠探针分不清是哪一个在起作用 —— hub 的过期规则由单测钉住
+    //    （`notificationHub.test.ts` 的 isLive / rateLimitNotice 两条），两者互补。
+    await sleep(4600)
+    result.afterTtlText = (island()?.querySelector('.si-text')?.textContent || '').trim()
+    result.afterTtlLit = !!island()?.classList.contains('on')
+
+    const pre = document.createElement('pre')
+    pre.id = 'ui-probe'
+    pre.textContent = JSON.stringify({ mode: 'status-island', views: [], degraded,
+                                       statusIsland: result })
+    document.body.appendChild(pre)
+    document.title = 'UI_PROBE_DONE'
+    return
+  }
+
   // 直播预约进日历（`?probe=reservations`，devlog/088；配合 `ui_probe.py --reservations`）：
   // 现场由脚本侧**种一条明天的预约**进数据目录副本（开发库未必有未来预约，靠数据碰运气
   // 会让断言空转）。这里断言整条链路真的落到界面：
