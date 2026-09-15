@@ -208,6 +208,18 @@ def test_steps_and_version_files_are_wired():
         assert callable(getattr(R, f"step_{name}", None)), f"缺 step_{name}"
 
 
+def test_token_only_required_when_actually_publishing():
+    """`--no-remote-release`（只打版推送）**不该**要 token —— 2026-09-15 实测踩到：
+    该开关只在 `step_release` 里生效，preflight 却仍按"计划里有 release"要 token，
+    把"先打版推送、稍后拿 token 补 Release"这条正当用法整轮拦下。
+
+    判错的代价：没有 token 时**连构建都做不了**（而那一步根本不需要 token）。
+    """
+    assert R.needs_token(["release"], False) is True          # 真要建 Release → 要 token
+    assert R.needs_token(["release"], True) is False          # 只到推送为止 → 不要
+    assert R.needs_token(["push"], False) is False            # 计划里没有 release → 不要
+
+
 def test_select_steps_from_skip_and_only():
     class A:
         only = None

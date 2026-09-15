@@ -330,12 +330,19 @@ def step_preflight(ctx: Ctx) -> None:
         else:
             print(f"  {OK} GitHub 可达性: {detail}")
 
-    # ⑧ token：只有 release 步骤需要（推送优先走 GCM）
-    if "release" in plan and not os.environ.get("GITHUB_TOKEN"):
-        if ctx.args.dry_run:
-            ctx.warn("缺 GITHUB_TOKEN —— 真跑时 release 步骤会停（推送仍可走 GCM）")
-        else:
-            raise Fail("缺 GITHUB_TOKEN —— 建 Release/传资产必须用 API token（推送可走 GCM）")
+    # ⑧ token：只有**真要建 Release** 时才需要（推送优先走 GCM）
+    # ⚠️ `--no-remote-release` 的含义就是"只到推送为止"，所以那时**不该要 token** ——
+    #    原先它只在 step_release 里生效，preflight 仍按"计划里有 release"拦下来，
+    #    于是"先打版推送、等拿到 token 再补 Release"这条正当用法被挡住（2026-09-15 实测踩到）。
+    #    判据与 step_release 对齐（抽成 needs_token，有单测）。
+    if needs_token(plan, ctx.args.release_only_local):
+        if not os.environ.get("GITHUB_TOKEN"):
+            if ctx.args.dry_run:
+                ctx.warn("缺 GITHUB_TOKEN —— 真跑时 release 步骤会停（推送仍可走 GCM）")
+            else:
+                raise Fail("缺 GITHUB_TOKEN —— 建 Release/传资产必须用 API token（推送可走 GCM）")
+    elif "release" in plan:
+        ctx.warn("--no-remote-release：跳过 token 检查（只打版推送，不建 Release）")
 
 
 def step_version(ctx: Ctx) -> None:
@@ -564,6 +571,17 @@ def step_push(ctx: Ctx) -> None:
     head = git_out("rev-parse", "HEAD")
     if git("update-ref", f"refs/remotes/origin/{ctx.args.branch}", head).returncode == 0:
         print(f"  {OK} 本地 origin/{ctx.args.branch} 已对齐到 {head[:8]}")
+
+
+def needs_token(plan: list[str], release_only_local: bool) -> bool:
+    """这一轮要不要 GitHub API token。
+
+    只有**真要建 Release/传资产**时才需要（推送优先走 GCM）。
+    `--no-remote-release`（只到推送为止）时**不该要** —— 2026-09-15 实测踩到：
+    该开关只在 `step_release` 里生效，preflight 却仍按"计划里有 release"要 token，
+    于是"先打版推送、稍后拿 token 补 Release"这条正当用法被整轮拦下。
+    """
+    return "release" in plan and not release_only_local
 
 
 def step_release(ctx: Ctx) -> None:
