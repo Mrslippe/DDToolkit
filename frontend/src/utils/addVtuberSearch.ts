@@ -22,6 +22,10 @@ export interface AddCandidate {
   origin: 'pool' | 'index' | 'bilibili'
   /** 收录时要带给后端的 source（本地两类都是池内路径） */
   adoptSource: 'pool' | 'bilibili'
+  /** 能否收录（索引里的非 B 站条目走不了池外通道 → false，置灰并给原因） */
+  adoptable: boolean
+  /** 不能收录的原因（`adoptable=false` 时给 title 用） */
+  blockedReason?: string
   followers?: number
   verified?: string
   group?: string
@@ -42,7 +46,15 @@ function keyOf(platform: string, uid: string | number): string {
   return `${platform}:${uid}`
 }
 
-/** 本地两类来源 → 展示行（池优先去重） */
+/** 本地两类来源 → 展示行（池优先去重）
+ *
+ * ⚠️ **索引来源不能走池内路径**（2026-09-15 用户实测踩到）：`thirdparty_vtubers` 是
+ * danmakus 周级索引，覆盖"池快照之后新出现的 V"—— 实测抽样 200 条里有 3 条**不在
+ * `vtubers.csv` 里**，而这正是用户最想加的那类新 V。索引行若带 `source='pool'`，
+ * 后端 `find_in_pool` miss ⇒ 404「候选池中不存在该 platform_uid」，点一下就是一句红字。
+ * 所以：索引 + bilibili → 走**池外通道**（后端实查 `acc/info` 复核后建库）；
+ * 索引 + 其它平台 → 池外通道不支持（后端 400），行**置灰并说明原因**，别让用户白点。
+ */
 export function poolToCandidates(pool: PoolItem[]): AddCandidate[] {
   const seen = new Set<string>()
   const out: AddCandidate[] = []
@@ -50,13 +62,21 @@ export function poolToCandidates(pool: PoolItem[]): AddCandidate[] {
     const key = keyOf(it.platform, it.platform_uid)
     if (seen.has(key)) continue          // 同 uid 只留第一条（后端已让池优先）
     seen.add(key)
+    const origin = it.origin === 'index' ? 'index' : 'pool'
+    // 只有 csv 池里的条目才能走池内路径；索引条目在池外
+    const outsidePool = origin === 'index'
+    const adoptable = !outsidePool || it.platform === 'bilibili'
     out.push({
       key,
       platform: it.platform,
       platform_uid: String(it.platform_uid),
       name: it.name,
-      origin: it.origin === 'index' ? 'index' : 'pool',
-      adoptSource: 'pool',
+      origin,
+      adoptSource: outsidePool && it.platform === 'bilibili' ? 'bilibili' : 'pool',
+      adoptable,
+      blockedReason: adoptable
+        ? undefined
+        : `「${it.name}」来自本地索引、不在候选池快照里，目前只有 B 站支持池外收录`,
       group: it.group || undefined,
       inLibrary: false,
     })
@@ -73,6 +93,7 @@ export function biliToCandidates(items: BiliSearchItem[]): AddCandidate[] {
     name: it.name,
     origin: 'bilibili' as const,
     adoptSource: 'bilibili' as const,
+    adoptable: true,
     followers: it.followers,
     verified: it.verified || undefined,
     avatar: it.avatar || undefined,

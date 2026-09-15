@@ -659,6 +659,22 @@ export async function runUiProbe(): Promise<void> {
         const r0 = rows[0]?.getBoundingClientRect()
         result.rowHit = !!(r0 && hits(rows[0], r0.left + r0.width / 2, r0.top + r0.height / 2))
         result.rowHasUid = !!rows[0]?.getAttribute('data-uid')
+        // ④ **来源 → 收录路径**的分流（2026-09-15 用户实测踩到的 bug）：
+        //    索引来源（danmakus 周级索引）**不在 csv 池里** —— 带 source='pool' 时后端
+        //    find_in_pool miss ⇒ 点一下就是红字「候选池中不存在该 platform_uid」。
+        //    这类错法界面完全正常（行看着能点、能点也确实发了请求），只有这条断言拦得住。
+        const paths = rows.map((r) => ({
+          origin: r.getAttribute('data-origin'),
+          source: r.getAttribute('data-adopt-source'),
+          disabled: r.hasAttribute('disabled'),
+        }))
+        result.pathCounts = paths.reduce<Record<string, number>>((acc, p) => {
+          acc[`${p.origin}→${p.source}`] = (acc[`${p.origin}→${p.source}`] || 0) + 1
+          return acc
+        }, {})
+        result.indexRowsToPool = paths.filter(
+          (p) => p.origin === 'index' && p.source === 'pool' && !p.disabled).length
+        result.enabledWithoutSource = paths.filter((p) => !p.disabled && !p.source).length
       }
       // ③ UID 换档与清空：**不依赖关键词命中**（只跟输入框/按钮有关），所以放在
       //    "有没有候选"的判断之外 —— 否则本地池没命中时这两条也一起空转了。

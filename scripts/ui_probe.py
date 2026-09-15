@@ -799,6 +799,8 @@ def main() -> int:
             print(f"  关键词={av.get('keyword')!r} 结果行={av.get('rows')} "
                   f"置灰行={av.get('rowsDisabled')} 行可命中={av.get('rowHit')} "
                   f"行带 uid={av.get('rowHasUid')}")
+            print(f"  来源→收录路径={av.get('pathCounts')} "
+                  f"索引行误走池内={av.get('indexRowsToPool')}（必须 0）")
             print(f"  本地检索真的发生={av.get('localSearchHappened')} "
                   f"（pool 请求 {av.get('poolRequestsBeforeTyping')} → "
                   f"{av.get('poolRequestsAfterTyping')}）· "
@@ -843,6 +845,18 @@ def main() -> int:
                     if (av.get("rowsDisabled") or 0) > 0:
                         failures.append(f"@{w} add-v: 本地候选里有 {av.get('rowsDisabled')} 行被置灰"
                                         f"（后端已剔除已入库账号，本地行应当都能点）")
+                    # 来源 → 收录路径：索引来源被标成 pool 就是"点一下必 404"（实测过的 bug）
+                    if (av.get("indexRowsToPool") or 0) > 0:
+                        failures.append(f"@{w} add-v: {av.get('indexRowsToPool')} 条**索引来源**"
+                                        f"的行带着 `source=pool` 且可点 —— 后端 find_in_pool 会 miss，"
+                                        f"点了必然 404「候选池中不存在该 platform_uid」"
+                                        f"（实测分布：{av.get('pathCounts')}）")
+                    if (av.get("enabledWithoutSource") or 0) > 0:
+                        failures.append(f"@{w} add-v: 有 {av.get('enabledWithoutSource')} 条可点行"
+                                        f"没带 data-adopt-source（分流属性丢了）")
+                    if not any(str(k).startswith("index→") for k in (av.get("pathCounts") or {})):
+                        print("  [注] 本次没量到索引来源的行（关键词命中不到索引条目）"
+                              "—— 上面那条断言本轮空过")
                 # UID 换档 / 清空 / 关窗：**不依赖关键词命中**（只跟输入框与按钮有关），
                 # 所以放在行级断言之外 —— 否则本地池没命中时这几条会一起空转。
                 if not av.get("uidSwitchOk"):

@@ -524,7 +524,21 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 行内元素：`.av-ava`（30px 圆头像，无图 → `.av-ava-ph` 首字）、`.av-name-text`（省略号截断）、
 `.av-tag`（「按 UID 精确」）、`.av-origin`（来源徽标：`.o-pool` 候选池 / `.o-index` 索引 /
 `.o-bilibili` B 站）、`.av-verified`（认证说明）、`.av-num`（粉丝数 / UID）、`.av-live`（直播中）、
-`.av-state`（「已订阅」）。提示与错误走 `.av-hint-row`（上游失败加 `.err` 变红 + 原样展示后端 `hint`）。
+`.av-state`（「已订阅」/「不在候选池」）。提示与错误走 `.av-hint-row`（上游失败加 `.err` 变红 +
+原样展示后端 `hint`）。
+
+**来源 → 收录路径**（2026-09-15 修，devlog/083 §十一）—— 行上带 `data-origin` 与
+`data-adopt-source` 供探针断言：
+
+| 来源 | `adoptSource` | 能否点 |
+|---|---|---|
+| 候选池（`vtubers.csv`） | `pool` | ✅ 池内路径，名称以池为准 |
+| 索引（`thirdparty_vtubers`）+ bilibili | **`bilibili`** | ✅ 池外通道：后端实查 `acc/info` 复核后建库（索引覆盖"池快照之后的新 V"，这些 uid **不在 csv 里**） |
+| 索引 + 其它平台 | `pool` | ❌ 置灰「不在候选池」+ `title` 说明（只有 B 站能按 uid 池外复核） |
+
+> ⚠️ **索引来源绝不能标成 `pool`**：后端 `find_in_pool` 会 miss → 点一下就是红字
+> 「候选池中不存在该 platform_uid」。这类错法界面上完全正常，只能靠探针 `--add-v`
+> 的 `index + pool + 可点` 计数（必须 0）拦住。
 
 三条**不能改**的界面约定（探针 `--add-v` 逐条断言）：
 1. 纯数字 ≥5 位 = **UID 直查**，按钮文案换成「按 UID 添加」（B 站搜索接口搜不到 uid）；

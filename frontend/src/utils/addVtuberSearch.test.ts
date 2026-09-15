@@ -45,9 +45,29 @@ describe('本地两类来源', () => {
     expect(rows[0].origin).toBe('pool')
     expect(rows[1].origin).toBe('index')
     expect(rows[1].group).toBe('某企划')
-    // 本地两类都走池内收录路径（名称以服务端池为准）
-    expect(rows.every((r) => r.adoptSource === 'pool')).toBe(true)
-    expect(rows.every((r) => r.inLibrary === false)).toBe(true)   // 本地接口已剔除已入库
+    // 池内那条走池内路径（名称以服务端池为准）
+    expect(rows[0].adoptSource).toBe('pool')
+    expect(rows[0].adoptable).toBe(true)
+    // 本地接口已剔除已入库
+    expect(rows.every((r) => r.inLibrary === false)).toBe(true)
+  })
+
+  it('索引来源必须走**池外通道**：它不在 csv 池里，报 pool 必被后端 404', () => {
+    // 2026-09-15 用户实测：`thirdparty_vtubers` 是"池快照之后的新 V"，
+    // 实测抽样 200 条里有 3 条不在 vtubers.csv —— 这些行带 source='pool' 时，
+    // 后端 find_in_pool miss ⇒ 404「候选池中不存在该 platform_uid」
+    const rows = poolToCandidates([pool[1]])
+    expect(rows[0].adoptSource).toBe('bilibili')     // → 后端实查 acc/info 复核后建库
+    expect(rows[0].adoptable).toBe(true)
+  })
+
+  it('索引里的非 B 站条目不能收录（池外通道只支持 bilibili）→ 置灰 + 原因', () => {
+    const rows = poolToCandidates([
+      { name: '索引微博V', platform: 'weibo', platform_uid: '888', origin: 'index' },
+    ])
+    expect(rows[0].adoptable).toBe(false)
+    expect(rows[0].adoptSource).toBe('pool')         // 不带 bilibili，避免撞后端 400
+    expect(rows[0].blockedReason).toContain('不在候选池')
   })
 })
 

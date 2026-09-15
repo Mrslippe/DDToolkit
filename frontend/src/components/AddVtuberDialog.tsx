@@ -147,7 +147,7 @@ export default function AddVtuberDialog({ open, onOpenChange, onAdded }: Props) 
   }
 
   const adopt = async (row: AddCandidate) => {
-    if (row.inLibrary) return
+    if (row.inLibrary || !row.adoptable) return
     setAdoptingKey(row.key)
     try {
       await api.adoptVtuber(row.platform, row.platform_uid, undefined, row.adoptSource)
@@ -172,15 +172,24 @@ export default function AddVtuberDialog({ open, onOpenChange, onAdded }: Props) 
   const rowButton = (row: AddCandidate) => {
     const busyThis = adoptingKey === row.key
     const fans = followerLabel(row.followers)
+    const off = row.inLibrary || !row.adoptable
+    const title = row.inLibrary
+      ? '该账号已在库里'
+      : row.adoptable
+        ? `收录 ${row.name}（uid ${row.platform_uid}）`
+        : row.blockedReason
     return (
       <button
         key={row.key}
         type="button"
         data-uid={row.platform_uid}
-        disabled={busy || row.inLibrary}
-        title={row.inLibrary ? '该账号已在库里' : `收录 ${row.name}（uid ${row.platform_uid}）`}
+        /* 探针按这两个属性断言"来源 → 收录路径"的分流（索引行绝不能带 pool） */
+        data-origin={row.origin}
+        data-adopt-source={row.adoptSource}
+        disabled={busy || off}
+        title={title}
         onClick={() => void adopt(row)}
-        className={`av-row${row.inLibrary ? ' off' : ''}`}
+        className={`av-row${off ? ' off' : ''}`}
       >
         {row.avatar ? (
           <ProxyImage src={row.avatar} alt="" className="av-ava" width={30} height={30} />
@@ -203,6 +212,8 @@ export default function AddVtuberDialog({ open, onOpenChange, onAdded }: Props) 
         </span>
         {row.inLibrary ? (
           <span className="av-state">已订阅</span>
+        ) : !row.adoptable ? (
+          <span className="av-state">不在候选池</span>
         ) : busyThis ? (
           <Loader2 className="size-4 shrink-0 animate-spin text-primary" />
         ) : (
