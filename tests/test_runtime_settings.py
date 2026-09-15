@@ -313,3 +313,69 @@ def test_put_settings_400_with_reason(client):
     r = client.put("/settings", json={"values": {}})
     assert r.status_code == 400
     assert settings.FETCH_BATCH_SIZE == 10, "被拒绝的请求不许改动任何设置"
+
+
+# ── ⑥ 界面偏好：主题（R14b，devlog/092）──────────────────────────────
+
+def test_prefs_theme_roundtrip_and_persist(client, db):
+    assert client.get("/settings/prefs").json()["values"]["theme"] == "light"
+    r = client.put("/settings/prefs", json={"values": {"theme": "system"}})
+    assert r.status_code == 200, r.text
+    assert r.json()["values"]["theme"] == "system"
+    assert AppMetaRepo(db).get("prefs.theme") == "system"      # **真的落库了**
+    assert client.get("/settings/prefs").json()["values"]["theme"] == "system"
+    # 回默认（null = 删行）
+    assert client.put("/settings/prefs", json={"values": {"theme": None}}).status_code == 200
+    assert AppMetaRepo(db).all_with_prefix("prefs.") == {}
+    assert client.get("/settings/prefs").json()["values"]["theme"] == "light"
+
+
+def test_prefs_rejects_values_outside_the_whitelist(client, db):
+    """枚举白名单在后端：`dark` 还没实现，直接写进来必须是 400 而不是"存下但不生效"。"""
+    for body in ({"values": {"theme": "dark"}},
+                 {"values": {"theme": "DARK"}},
+                 {"values": {"nope": "light"}},
+                 {"values": {}}):
+        r = client.put("/settings/prefs", json=body)
+        assert r.status_code == 400, body
+    assert AppMetaRepo(db).all_with_prefix("prefs.") == {}
+
+
+def test_prefs_empty_string_is_reset_not_a_value(client, db):
+    """空串与 `null` 同义（回默认）—— 两个入口的语义必须一致，否则界面清空会存进空值。"""
+    client.put("/settings/prefs", json={"values": {"theme": "system"}})
+    r = client.put("/settings/prefs", json={"values": {"theme": ""}})
+    assert r.status_code == 200
+    assert r.json()["values"]["theme"] == "light"
+    assert AppMetaRepo(db).all_with_prefix("prefs.") == {}
+
+
+def test_prefs_corrupt_stored_value_falls_back_without_crashing(client, db):
+    """库里存了白名单外的值（旧版本写的/手改的）→ 用默认值，**不报错也不覆盖用户数据**。
+
+    判错代价：设置窗口因为一行脏偏好打不开，用户看到的是"设置没了"。
+    """
+    AppMetaRepo(db).set("prefs.theme", "neon")
+    r = client.get("/settings/prefs")
+    assert r.status_code == 200
+    assert r.json()["values"]["theme"] == "light"
+    assert AppMetaRepo(db).get("prefs.theme") == "neon"        # 原样留着，不静默改写
+
+
+def test_dark_theme_hook_flag_matches_what_the_ui_tells_users():
+    """**跨语言契约**：前端 `utils/theme.ts::DARK_IMPLEMENTED` 与后端下发的说明必须一致。
+
+    两边的坏法都很难看：钩子还是 false 却不说"尚未实现" → 用户以为「跟随系统」坏了；
+    深色已经能做却仍写着"尚未实现" → 用户根本不会去试。
+    所以这条把 TS 里的那个布尔与 `/settings/prefs` 的 note 绑在一起：改一边不改另一边就红。
+    """
+    import re
+    from pathlib import Path
+    from app.routers.settings import _theme_note
+    ts = Path(__file__).resolve().parent.parent / "frontend" / "src" / "utils" / "theme.ts"
+    m = re.search(r"DARK_IMPLEMENTED\s*=\s*(true|false)", ts.read_text(encoding="utf-8"))
+    assert m, "theme.ts 里找不到 DARK_IMPLEMENTED（钩子被删了？深色边界要重新声明）"
+    implemented = m.group(1) == "true"
+    note = _theme_note()
+    assert ("尚未实现" in note) != implemented, (
+        f"DARK_IMPLEMENTED={implemented} 与用户看到的说明 {note!r} 不一致")

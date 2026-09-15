@@ -958,11 +958,21 @@ export async function runUiProbe(): Promise<void> {
     result.motionReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
     // chevron：展开后必须**指着"可收起"**（翻转 180° ⇒ 计算值是矩阵，不是 `none`），
     // 而过渡时长按 reduce 分派。reduce 下丢掉翻转 = 状态指示消失（不是"减少动效"的本意）。
+    //
+    // ⚠️ 量法（2026-09-15 实测两次，一次 identity 一次翻转）：`transition: transform .2s`
+    //    在**虚拟时间**下会被冻在中途，直接读计算样式读到的是"过渡进度"而不是"规则有没有生效"。
+    //    所以先读过渡时长，再**注入 `transition:none`** 后读终值 —— 与 `--settings`
+    //    那条"量之前先注入 animation:none; transition:none"是同一招。
     const chev = island()?.querySelector<HTMLElement>('.si-chevron')
     if (chev) {
-      const ccs = getComputedStyle(chev)
-      result.chevronTransform = ccs.transform
-      result.chevronTransitionMs = Math.round(parseFloat(ccs.transitionDuration) * 1000)
+      result.chevronTransitionMs =
+        Math.round(parseFloat(getComputedStyle(chev).transitionDuration) * 1000)
+      const killTransition = document.createElement('style')
+      killTransition.textContent = '.si-chevron{transition:none !important}'
+      document.head.appendChild(killTransition)
+      void chev.getBoundingClientRect()      // 强制重排，让计算样式落到终值
+      result.chevronTransform = getComputedStyle(chev).transform
+      killTransition.remove()
     }
     // 展开**不该挤动右栏**（面板是 portal + fixed）
     result.spacerOpen = spacerW()
@@ -1476,6 +1486,40 @@ export async function runUiProbe(): Promise<void> {
       await sleep(400)
       result.resetValue = await serverValue(FIELD)
       result.badgeAfterReset = !!dlg.querySelector(`[data-setting="${FIELD}"] .aps-badge`)
+
+      // ⑥ 主题（R14b）：切到「跟随系统」→ **偏好真的落库**（再问一次后端）→
+      //    界面如实标注"深色未实现"（selected=跟随系统 但 html[data-theme] 仍是 light）
+      const sysDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+      const prefBefore = await fetch(`${getApiBase()}/settings/prefs`).then((r) => r.json())
+      result.themeServerBefore = prefBefore.values.theme
+      result.themeOptions = [...dlg.querySelectorAll('[data-theme-option]')]
+        .map((n) => n.getAttribute('data-theme-option'))
+      const optSystem = dlg.querySelector<HTMLElement>('[data-theme-option="system"]')
+      result.themeSystemHit = !!(optSystem && (() => {
+        const r = optSystem.getBoundingClientRect()
+        return hits(optSystem, r.left + r.width / 2, r.top + r.height / 2)
+      })())
+      optSystem?.click()
+      await waitFor(
+        () => dlg.querySelector('[data-theme-option="system"]')?.getAttribute('aria-checked') === 'true',
+        4000)
+      await sleep(400)
+      const prefAfter = await fetch(`${getApiBase()}/settings/prefs`).then((r) => r.json())
+      result.themeServerAfter = prefAfter.values.theme
+      result.themeSelected = dlg.querySelector('[data-theme-option="system"]')
+        ?.getAttribute('aria-checked')
+      result.themeRootAttr = document.documentElement.getAttribute('data-theme')
+      result.themeSystemDark = sysDark
+      // 系统是深色 + 深色未实现 → 必须给出那句说明（否则用户以为跟随坏了）
+      result.themeCaveat = text(dlg.querySelector('[data-theme-caveat]')) || null
+      // 还原成浅色（探针不留痕）
+      dlg.querySelector<HTMLElement>('[data-theme-option="light"]')?.click()
+      await waitFor(
+        () => dlg.querySelector('[data-theme-option="light"]')?.getAttribute('aria-checked') === 'true',
+        4000)
+      await sleep(300)
+      result.themeServerRestored = (await fetch(`${getApiBase()}/settings/prefs`)
+        .then((r) => r.json())).values.theme
 
       // 关闭（Esc 是 radix 的取消手势）。
       // ⚠️ 实测坑：齿轮的 tooltip 也是一个 dismissable layer，且它**在弹窗之后**注册

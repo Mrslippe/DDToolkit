@@ -647,3 +647,35 @@ export interface AppSettingsSaved {
   values: Record<string, number | boolean>
   overrides: Record<string, number | boolean>
 }
+
+// ── 界面偏好（GET/PUT /settings/prefs，R14b devlog/092）───────────────
+//
+// 与 `SettingSpec` 分开：settings 是"抓取参数"（有范围、下一轮生效），
+// prefs 是"界面长什么样"（枚举、立即生效）。
+
+export interface PrefsOption {
+  value: string
+  label: string
+}
+
+export interface PrefsSpec {
+  key: string
+  label: string
+  group: string
+  options: PrefsOption[]
+  /** 当前能力的事实说明（例如"深色主题尚未实现"）—— 由后端下发，界面照实显示 */
+  note: string
+}
+
+export interface Prefs {
+  values: Record<string, string>
+  defaults: Record<string, string>
+  specs: PrefsSpec[]
+  changed: string[]
+}
+
+export interface PrefsSaved {
+  ok: boolean
+  changed: string[]
+  values: Record<string, string>
+}

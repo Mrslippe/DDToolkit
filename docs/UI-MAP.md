@@ -192,6 +192,7 @@ DOM 契约（探针 `ui_probe --status-island` 直接查）：`.si-island`（`.o
 | 数值控件 | `.aps-input` + `.aps-unit` | `min/max/step` 来自后端 spec；`.aps-field-error` 是即时校验红字 |
 | 开关控件 | `.aps-switch`（`role="switch"` + `data-value`） | 布尔项（第三方数据三个开关） |
 | 只读信息 | `.aps-info`（版本/数据目录/库/端口/迁移 head/日志/PID）+ `.aps-readonly-item` | 只读项**逐条带理由**（`.aps-readonly-why`）——用户看到"不能改"必须同时看到为什么 |
+| 外观 | `.aps-radio-group` / `.aps-radio[data-theme-option]`（`role="radio"`） | 主题：浅色 / 跟随系统（R14b）。**立即生效**（无"下一轮"概念），由 `hooks/useThemePref` 落 `prefs.theme`；系统深色而深色未实现时挂 `.aps-range[data-theme-caveat]` 如实说明 |
 | 底部 | `.aps-foot-state` / `.aps-foot-actions` | 左边状态（"已改过 N 项 · 待保存 M 项"），右边「全部恢复默认」「保存」 |
 
 **三条口径**：① 范围/单位/生效时机**全部来自后端** `GET /settings`（界面不抄阈值，否则两边分叉）；
@@ -200,6 +201,24 @@ DOM 契约（探针 `ui_probe --status-island` 直接查）：`.si-island`（`.o
 
 ⚠️ 与 `.vd-settings` 同一个坑：**不要**给这两个类加 `position: relative`（会盖掉弹窗内容体的
 `.fixed`，整块飘出视口）。探针：`python scripts/ui_probe.py --app-settings`。
+
+### A2-b. 主题与深色钩子（utils/theme.ts + hooks/useThemePref.ts，2026-09-15 R14b devlog/092）
+
+| 层 | 位置 | 职责 |
+|---|---|---|
+| 解析（纯逻辑，10 单测） | `utils/theme.ts` | `resolveTheme(pref, systemDark)` · `applyTheme(root, resolved)` 写 `html[data-theme]` · `watchSystemTheme` 订阅 `prefers-color-scheme` · `themeCaveat` 生成"该说的那句实话" |
+| 取数与副作用 | `hooks/useThemePref.ts` | 读/存 `prefs.theme`（乐观应用，落库失败退回）· 系统主题变化时重解析 |
+| 令牌 | `styles/tokens.css` 末尾 `:root[data-theme='dark']` | **空块 = 显式标记"深色还没做"**；接上样式时只需填这个块 + `DARK_IMPLEMENTED = true` |
+
+**当前的诚实边界（不许含糊）**：深色主题**尚未实现** —— `DARK_IMPLEMENTED = false`，
+所以 `system` 在系统为深色时仍解析为浅色；界面在这时必须显示那句说明
+（`themeCaveat`），否则用户会以为「跟随系统」坏了。这条由
+`tests/test_runtime_settings.py` 的**跨语言契约**钉住：TS 里的布尔与 `/settings/prefs`
+下发的 note 必须一致（改一边不改另一边就红）。
+
+**为什么深色不在这批做**：三个 CSS 里硬编码色值 243 处（146 种）+ ECharts 主题 +
+内联样式 —— 只把 `:root` 变深会做出"半黑不黑"的界面，比不做更糟。下一批的路径写在
+`tokens.css` 那个空块上方（收敛令牌 → 填深色令牌 → 图表双主题 → 逐屏走查）。
 
 ### A3. VTuber 左栏 `<VtuberSidebar>`（components/VtuberSidebar.tsx）
 

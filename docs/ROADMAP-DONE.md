@@ -194,6 +194,7 @@
 | **R12a 顶栏状态岛**：`notificationHub`（优先级 alert>progress>report>message + 过期/常驻，12 单测）· `StatusIsland` 四态（面板 portal+fixed）· 六类信息源（含后端新增 `fetch-status.rate_limit`，9 处冷却点统一记账）· 完成报告改常驻条目不再自动弹窗 · 探针 `--status-island`（含"展开不挤动右栏"） | 089 |
 | **R12b 状态岛动效 + 空闲轮播**：面板入场 `si-panel-in` 220ms / chevron 翻转 / 计数徽章 pop（`prefers-reduced-motion` 只淡入、**但保留瞬时翻转**，实测 reduce 支 `si-panel-in-fade`）· `utils/idleQuotes.ts`（池第 0 格 = 状态文案 + `registerIdleProvider()` 扩展点，15 单测）· 轮播时钟**自带定时器只在空闲时开**（挂抓取轮询会随轮询间隔静默停住）· 探针连采三格 + 按 `matchMedia` 判动画分支（**反向验证过**） | 090 |
 | **R14a 应用设置**：IconRail 底端齿轮 → 独立设置弹窗（`.aps-*`）· `app/core/runtime_settings.py` 覆盖层（19 个可热更键 + 10 条只读理由）· `GET/PUT /settings` + `/settings/reset`（白名单/类型/闭区间/**跨字段**，越界一律 400）· `Settings.__getattribute__` 拦截（优先级 **实例属性 > 覆盖层 > 类属性**，保住 `monkeypatch.setattr(settings, …)` 这条老用法）· **零迁移**（复用 `app_meta`，前缀 `settings.`）· 探针 `--app-settings`（**保存后回问后端对账**；反向验证过） | 091 |
+| **R14b 主题 + 深色钩子**：「浅色 / 跟随系统」偏好（`prefs.theme`，后端枚举白名单）+ `GET/PUT /settings/prefs` · `utils/theme.ts`（解析/写 `html[data-theme]`/订阅系统主题/该说的说明，10 单测）· `:root[data-theme='dark']` **空块**标记深色未实现 · **跨语言契约**把 TS 的 `DARK_IMPLEMENTED` 与后端下发的说明绑在一起 · 探针扩主题段（深色分支用 `--force-dark-mode` 验过） | 092 |
 
 ---
 

@@ -1,4 +1,4 @@
-import type { Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, BiliSearchResult, Capabilities, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, PoolItem, PostPage, PostStats, ThirdpartyVtuber, UpcomingReservation, UpdatePostsResult, VTuber, VTuberFormerValues } from './types'
+import type { Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, BiliSearchResult, Capabilities, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, PoolItem, PostPage, PostStats, Prefs, PrefsSaved, ThirdpartyVtuber, UpcomingReservation, UpdatePostsResult, VTuber, VTuberFormerValues } from './types'
 
 /**
  * API 基地址：
@@ -335,6 +335,18 @@ export const api = {
 
   /** 全部恢复默认 */
   resetAppSettings: () => request<AppSettingsSaved>('/settings/reset', { method: 'POST' }),
+
+  // ── 界面偏好（R14b，devlog/092）：主题 ──────────────────────────────
+  /** 偏好值 + 允许取值 + 当前能力说明（说明由后端下发，界面不自己编） */
+  getPrefs: () => request<Prefs>('/settings/prefs'),
+
+  /** 保存偏好（枚举白名单在后端；不在集合内 → 400） */
+  savePrefs: (values: Record<string, string>) =>
+    request<PrefsSaved>('/settings/prefs', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ values }),
+    }),
 }
 
 /** 后端返回的相对资源路径（如 static/avatars/x.jpg）→ 可访问 URL */

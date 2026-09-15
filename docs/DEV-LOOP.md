@@ -115,8 +115,13 @@ python scripts/ui_probe.py --app-settings            # R14a 应用设置（devlo
 > 入场动画同理：量的是 `getComputedStyle(panel).animationName` 与 `getAnimations()`，
 > **CSS 文件里写了不算数**。reduce 支路用 `--force-prefers-reduced-motion` 跑一次即可验证
 > （实测 `si-panel-in-fade` / 180ms / `motionReduced=true`），探针本身按 `matchMedia` 自动分派；
-> chevron 也要断言"展开后翻转了"（计算值是矩阵）—— **reduce 下不许把状态指示一起减掉**，
+> chevron 也要断言"展开后翻转了"（计算值是**带 `-1` 的矩阵**）—— **reduce 下不许把状态指示一起减掉**，
 > 减的应该是位移与插值（实测 reduce 支 `transform=matrix(-1,0,0,-1,0,0)` / 过渡 0ms）。
+> ⚠️ 量 chevron 之前**必须先注入 `transition:none !important`**（读过渡时长要在注入之前）：
+> 虚拟时间会把 `transition: transform .2s` 冻在中途，直接读计算样式读到的是**过渡进度**
+> （可能是 identity 矩阵）而不是"规则有没有生效" —— 2026-09-15 因此得到过一条时绿时红的判据
+> （同一天两次跑，一次 `matrix(-1,…)`、一次 `matrix(1,…)`）。判据说到底只有两种：
+> **量"有没有生效"就掐掉动画/过渡，量"动画对不对"才让它开着**。
 > ⚠️ 与 `--settings` 的取舍不同：那边为了量几何先注入 `animation:none; transition:none`，
 > 这边**故意不冻结**（冻结了就没得量）；代价是几何可能停在动画中途，
 > 所以断言留了余量（位移 6px、缩放 1.5% 都不影响 `elementFromPoint` 与"不挤动右栏"）。
@@ -132,6 +137,10 @@ python scripts/ui_probe.py --app-settings            # R14a 应用设置（devlo
 > ② 保存后的对账**不看界面回显**，而是在页面里再打一次 `GET /settings` ——
 >    回显可以来自本地草稿，"存了没生效"照样能让回显正确。
 > ③ 越界值断言"保存钮禁用 + 红字"（前端那道）；后端的 400 由 `tests/test_runtime_settings.py` 钉。
+> ④ 主题（R14b）也在这一条里：切「跟随系统」→ **再问一次后端**确认偏好落库 → 断言
+>    `html[data-theme]`；系统是深色时还要求界面**给出那句"深色尚未实现"的说明**
+>    （否则用户以为跟随坏了）。本机默认是浅色系统，验深色那一支要额外跑一次：
+>    给 Edge 加 `--force-dark-mode`（实测 `themeSystemDark=True` + 说明非空 + 探针仍绿）。
 
 > `--add-v`（2026-09-15 起，devlog/083）：打开侧栏「+」浮窗 → 打关键词 → 断言三条：
 > ① 敲键只打本地 `/vtuber/pool/search`，`/vtuber/bili/search` **必须 0 次**

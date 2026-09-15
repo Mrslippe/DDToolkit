@@ -4418,6 +4418,34 @@ img.hero-avatar {
   transform: translateX(10px);
 }
 
+/* 主题单选（R14b）：两个胶囊按钮，选中的实底。
+   不用 <select>：只有两个选项，点一下就该生效（主题是"看得见"的偏好，
+   多一步确认反而奇怪）。 */
+.aps-radio-group {
+  gap: 4px;
+}
+
+.aps-radio {
+  padding: 4px 10px;
+  border: 1px solid var(--c-border);
+  border-radius: 999px;
+  background: var(--c-bg-card);
+  color: var(--c-text-sub);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.aps-radio:hover {
+  border-color: var(--c-primary);
+}
+
+.aps-radio.on {
+  background: var(--c-primary);
+  border-color: var(--c-primary);
+  color: #fff;
+}
+
 /* 范围提示与红字都占整行（在控件下面） */
 .aps-range,
 .aps-field-error {

@@ -79,3 +79,23 @@
   /* 窗口圆角度数（L3 自绘方案，随改随生效） */
   --radius-window: 4px;
 }
+
+/* ── 深色主题：**钩子已就位，样式未实现**（R14b，devlog/092）─────────────
+   现状：`html[data-theme]` 由 `utils/theme.ts::applyTheme` 挂上，`prefs.theme`
+   支持 `light | system`；但 `resolveTheme` 里的 `DARK_IMPLEMENTED=false`，
+   所以当前**永远不会**是 `dark` —— 这是有意的：深色样式还没写，挂上 dark
+   只会让用户看到"切了没反应"。
+
+   为什么深色不能在这一批里顺手做掉：三个 CSS 里**硬编码色值 243 处（146 种）**
+   （`layout.css` / `posts.css` 为主）+ ECharts 图表主题（`utils/chartTheme.ts`）
+   + 若干内联样式。只把 `:root` 换成深色会让这些硬编码色在深底上刺眼或不可读 ——
+   那是"半黑不黑"，比不做更糟。下一批的路径：
+     ① 243 处硬编码先收敛进本文件的令牌（先加令牌、再逐处替换，机械可查）；
+     ② 在本选择器里给出整套深色令牌；
+     ③ 图表按 `data-theme` 切双主题；
+     ④ 逐屏走查（对比度口径见 docs/UI-MAP）。
+   接上来的那一刻只需两处改动：本选择器 + `DARK_IMPLEMENTED = true`。 */
+:root[data-theme='dark'] {
+  /* 故意留空：见上面的说明。空块本身就是"这里还没做"的显式标记 ——
+     比在注释里写 TODO 更难被忽略，而且样式接上来时它就在该在的位置。 */
+}

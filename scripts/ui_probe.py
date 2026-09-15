@@ -804,7 +804,14 @@ def main() -> int:
             print(f"  保存：{aps.get('beforeValue')} → 服务端 {aps.get('afterValue')} "
                   f"（输入框 {aps.get('inputValueAfter')!r}「已改过」标记={aps.get('badgeShown')}）")
             print(f"  恢复默认：服务端 {aps.get('resetValue')} 仍有「已改过」标记="
-                  f"{aps.get('badgeAfterReset')} ｜ Esc 关闭={aps.get('closedByEsc')}"
+                  f"{aps.get('badgeAfterReset')}")
+            print(f"  主题：选项={aps.get('themeOptions')} 可命中={aps.get('themeSystemHit')} "
+                  f"｜ 服务端 {aps.get('themeServerBefore')} → {aps.get('themeServerAfter')} "
+                  f"→ 还原 {aps.get('themeServerRestored')}")
+            print(f"       选中={aps.get('themeSelected')} html[data-theme]="
+                  f"{aps.get('themeRootAttr')!r} 系统深色={aps.get('themeSystemDark')} "
+                  f"说明={aps.get('themeCaveat')!r}")
+            print(f"  Esc 关闭={aps.get('closedByEsc')}"
                   f"（关后 data-state={aps.get('dialogStateAfterEsc')!r}）")
             if not aps:
                 failures.append(f"@{w} app-settings: 没量到设置弹窗段（探针未跑完？）")
@@ -855,6 +862,29 @@ def main() -> int:
                                         f"{aps.get('resetValue')}，应回到 {aps.get('beforeValue')}")
                     if aps.get("badgeAfterReset"):
                         failures.append(f"@{w} app-settings: 恢复默认后「已改过」标记还在")
+                    # ── 主题（R14b）────────────────────────────────────
+                    if aps.get("themeOptions") != ["light", "system"]:
+                        failures.append(f"@{w} app-settings: 主题选项是 "
+                                        f"{aps.get('themeOptions')}，应为 ['light','system']")
+                    if not aps.get("themeSystemHit"):
+                        failures.append(f"@{w} app-settings: 「跟随系统」按钮点不着")
+                    if aps.get("themeServerAfter") != "system":
+                        failures.append(f"@{w} app-settings: 选「跟随系统」后**服务端**偏好是 "
+                                        f"{aps.get('themeServerAfter')!r}，应为 'system'")
+                    if aps.get("themeSelected") != "true":
+                        failures.append(f"@{w} app-settings: 选中的按钮没标记成选中"
+                                        f"（aria-checked={aps.get('themeSelected')!r}）")
+                    # 深色未实现 ⇒ root 必须是 light（挂上 dark 却没有样式 = "切了没反应"）
+                    if aps.get("themeRootAttr") != "light":
+                        failures.append(f"@{w} app-settings: html[data-theme]="
+                                        f"{aps.get('themeRootAttr')!r}，深色未实现时应为 'light'")
+                    if aps.get("themeSystemDark") and not aps.get("themeCaveat"):
+                        failures.append(f"@{w} app-settings: 系统是深色且深色未实现，但界面"
+                                        f"**没有说明** —— 用户会以为「跟随系统」坏了")
+                    if aps.get("themeServerRestored") != aps.get("themeServerBefore"):
+                        failures.append(f"@{w} app-settings: 主题没还原回 "
+                                        f"{aps.get('themeServerBefore')!r}"
+                                        f"（实得 {aps.get('themeServerRestored')!r}）")
                     if not aps.get("closedByEsc"):
                         failures.append(f"@{w} app-settings: Esc 没关掉设置弹窗")
             if not failures:
@@ -1073,11 +1103,14 @@ def main() -> int:
                     if (si.get("panelAnimCount") or 0) < 1:
                         failures.append(f"@{w} status-island: 面板上一条动画都没有挂上"
                                         f"（getAnimations()={si.get('panelAnimCount')}）")
-                    # chevron：展开后必须翻转（计算值是矩阵）；过渡时长按 reduce 分派 ——
+                    # chevron：展开后必须翻转（计算值是**带 -1 的矩阵**）；过渡时长按 reduce 分派 ——
                     # "减少动效"要去掉的是位移/插值，不是状态指示本身。
-                    if si.get("chevronTransform") in (None, "", "none"):
+                    # 注意判据要具体到 -1：过渡中途会量到 identity 矩阵 `matrix(1,0,0,1,0,0)`，
+                    # 只判 `!= none` 会把它当成"翻转了"（2026-09-15 实测漂过一次，已派页面等它到位）。
+                    chev_tf = si.get("chevronTransform")
+                    if not isinstance(chev_tf, str) or "-1" not in chev_tf:
                         failures.append(f"@{w} status-island: 展开后 chevron 没有翻转"
-                                        f"（transform={si.get('chevronTransform')!r}）—— "
+                                        f"（transform={chev_tf!r}）—— "
                                         f"它是「可收起」的唯一指示，reduce 下也不该丢")
                     want_ms = 0 if si.get("motionReduced") else 200
                     if si.get("chevronTransitionMs") != want_ms:

@@ -11,6 +11,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { api } from '../api/api'
 import type { AppSettings, SettingSpec } from '../api/types'
+import { useThemePref } from '../hooks/useThemePref'
 import {
   buildPayload, dirtyKeys as dirtyOf, fieldError, parseField, valueOf,
   type DraftVal,
@@ -44,6 +45,20 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
   const [error, setError] = useState<string | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [busy, setBusy] = useState<'save' | 'reset' | null>(null)
+  /** 主题（R14b）：偏好与「跟随系统」的解析都在 hook 里，这里只管交互与错误 */
+  const theme = useThemePref()
+  const [themeError, setThemeError] = useState<string | null>(null)
+
+  const pickTheme = async (next: string) => {
+    if (next !== 'light' && next !== 'system') return
+    setThemeError(null)
+    try {
+      await theme.setTheme(next)
+    } catch (e) {
+      // 落库失败：hook 已把界面退回旧值，这里如实说一句
+      setThemeError(e instanceof Error ? e.message : String(e))
+    }
+  }
 
   /** 重新拉规格表（打开时 / 保存后 / 恢复默认后） */
   const reload = async () => {
@@ -141,6 +156,46 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
         )}
 
         <OverlayScroll className="aps-settings-scroll">
+          {/* ── 外观（R14b）：主题。放在最前面 —— 用户找"设置"时最常想改的就是它 ── */}
+          <section className="aps-section" data-appearance="1">
+            <h3 className="aps-section-title">
+              外观
+              <span className="aps-hint">立即生效</span>
+            </h3>
+            {theme.spec ? (
+              <div className="aps-row" data-setting="theme">
+                <div className="aps-row-main">
+                  <span className="aps-label">{theme.spec.label}</span>
+                  <span className="aps-note">{theme.spec.note}</span>
+                </div>
+                <div className="aps-row-ctl aps-radio-group" role="radiogroup"
+                     aria-label={theme.spec.label}>
+                  {theme.spec.options.map((o) => (
+                    <button
+                      key={o.value}
+                      type="button"
+                      role="radio"
+                      aria-checked={theme.pref === o.value}
+                      data-theme-option={o.value}
+                      className={`aps-radio${theme.pref === o.value ? ' on' : ''}`}
+                      onClick={() => void pickTheme(o.value)}
+                    >
+                      {o.label}
+                    </button>
+                  ))}
+                </div>
+                {theme.caveat && (
+                  <span className="aps-range" data-theme-caveat="1">{theme.caveat}</span>
+                )}
+                {themeError && (
+                  <span className="aps-field-error">{themeError}</span>
+                )}
+              </div>
+            ) : (
+              <span className="aps-range">主题偏好读取中…</span>
+            )}
+          </section>
+
           {groups.map((g) => (
             <section className="aps-section" key={g.name}>
               <h3 className="aps-section-title">
