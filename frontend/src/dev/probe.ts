@@ -815,7 +815,10 @@ export async function runUiProbe(): Promise<void> {
     if (pf) {
       const pr = pf.getBoundingClientRect()
       const caret = pf.querySelector('.pill-caret')
-      const textNode = [...pf.childNodes].find(
+      // 文案节点：可能裸着（侧栏那枚），也可能套在 `.pf-label` 里（R16 起 list 那枚，
+      // 为的是给 caret 让出**对称**留白）—— 两种都要能量，否则换一次 DOM 结构探针就瞎了
+      const labelEl = pf.querySelector<HTMLElement>('.pf-label')
+      const textNode = [...(labelEl ?? pf).childNodes].find(
         (n) => n.nodeType === Node.TEXT_NODE && (n.textContent || '').trim()) ?? null
       const tr = textNode ? (() => {
         const range = document.createRange()
@@ -1541,6 +1544,139 @@ export async function runUiProbe(): Promise<void> {
     pre.id = 'ui-probe'
     pre.textContent = JSON.stringify({ mode: 'app-settings', views: [], degraded,
                                        appSettings: result })
+    document.body.appendChild(pre)
+    document.title = 'UI_PROBE_DONE'
+    return
+  }
+
+  // 两枚「筛选」浮片对比（`?probe=filter-pill`，配合 `ui_probe.py --filter-pill`）：
+  // 用户 2026-09-15：「list 视图中的筛选按钮的样式跟随左栏工具栏中的筛选按钮」。
+  // 这是一条**纯视觉**的要求（两张截图），所以先把两枚浮片的可量化样式逐项量出来 ——
+  // 否则"跟随"就只是"我觉得像了"：改完没人能证明它俩真的一样。
+  // 量的是：尺寸 / 字号 / 内距 / 圆角 / 颜色 / 斜切 / caret 的定位方式与相对位置 /
+  // **纯文字**的中心偏移（caret 若在流内会把文字挤偏 —— 这正是两枚看起来不同的根源之一）。
+  if (mode === 'filter-pill') {
+    // 量的是**静态几何与样式**，所以先把动画/过渡掐掉（虚拟时间会把它们冻在中途 ——
+    // 2026-09-15 在 chevron 上踩过：读到的是过渡进度而不是终值）
+    const killAnim = document.createElement('style')
+    killAnim.textContent =
+      '*, *::before, *::after { animation: none !important; transition: none !important; }'
+    document.head.appendChild(killAnim)
+    const waitFor = async (fn: () => unknown, ms = 6000) => {
+      const t0 = performance.now()
+      while (performance.now() - t0 < ms) {
+        if (fn()) return true
+        await sleep(100)
+      }
+      return false
+    }
+    // list 视图那枚只在「帖子列表」视图里存在 —— 先切过去（默认落在档案视图）
+    if (!document.querySelector('.pfilter-btn')) {
+      const btn = [...document.querySelectorAll<HTMLButtonElement>('.view-btn')]
+        .find((b) => (b.title || '').startsWith('帖子列表'))
+      btn?.click()
+      await waitFor(() => document.querySelector('.pfilter-btn'))
+      await sleep(400)     // 场景入场 + 数据到位
+    }
+    const describe = (el: HTMLElement | null) => {
+      if (!el) return null
+      const cs = getComputedStyle(el)
+      const r = el.getBoundingClientRect()
+      const before = getComputedStyle(el, '::before')
+      const caret = el.querySelector<HTMLElement>('.pill-caret')
+      const cr = caret?.getBoundingClientRect() ?? null
+      const ccs = caret ? getComputedStyle(caret) : null
+      // 纯文字矩形：用 Range 框住**文案节点**（把 caret 排除掉）——
+      // 只量元素矩形会把 caret 的宽度算进去，"文字到底居没居中"就量不出来了。
+      // 文案可能裸着（侧栏那枚）也可能套在 `.pf-label` 里（list 那枚，为了对称留白）——
+      // 两种都要能量，否则换一次 DOM 结构探针就瞎了。
+      const labelEl = el.querySelector<HTMLElement>('.pf-label')
+      const tn = [...(labelEl ?? el).childNodes].find(
+        (n) => n.nodeType === Node.TEXT_NODE && (n.textContent || '').trim())
+      let text: { left: number; right: number; center: number; width: number } | null = null
+      if (tn) {
+        const rg = document.createRange()
+        rg.selectNodeContents(tn)
+        const tr = rg.getBoundingClientRect()
+        text = { left: tr.left, right: tr.right, center: (tr.left + tr.right) / 2, width: tr.width }
+      }
+      const r1 = (x: number | null | undefined) =>
+        x === null || x === undefined ? null : Math.round(x * 10) / 10
+      return {
+        text: (el.textContent || '').trim(),
+        w: r1(r.width), h: r1(r.height),
+        fontSize: cs.fontSize, lineHeight: cs.lineHeight,
+        padding: `${cs.paddingTop} ${cs.paddingRight} ${cs.paddingBottom} ${cs.paddingLeft}`,
+        gap: cs.gap, radius: cs.borderRadius, color: cs.color,
+        bg: before.backgroundColor, skew: before.transform,
+        minWidth: cs.minWidth, width: cs.width,
+        caretPosition: ccs?.position ?? null,
+        caretInset: ccs ? `${ccs.top}/${ccs.right}` : null,
+        caretSize: cr ? `${r1(cr.width)}×${r1(cr.height)}` : null,
+        // caret 与文字右缘的间距：侧栏那种"钉在角上"的应当是两位数
+        caretGapToText: cr && text ? r1(cr.left - text.right) : null,
+        caretFromRight: cr ? r1(r.right - cr.right) : null,
+        // caret 的垂直中心相对浮片中心：>0 偏下。<0 偏上（侧栏是 top:3px 钉右上）
+        caretCenterOffset: cr ? r1((cr.top + cr.height / 2) - (r.top + r.height / 2)) : null,
+        // **文字**（不含 caret）的中心偏移：0 = 文字真的居中
+        textCenterOffset: text ? r1(text.center - (r.left + r.width / 2)) : null,
+        textInset: text ? [r1(text.left - r.left), r1(r.right - text.right)] : null,
+      }
+    }
+    const result: Record<string, unknown> = {
+      sidebar: describe(document.querySelector<HTMLElement>('.list-filter-btn')),
+      list: describe(document.querySelector<HTMLElement>('.pfilter-btn')),
+      viewport: { w: window.innerWidth, h: window.innerHeight },
+    }
+
+    // 边界：文案变长时（「筛选 · 3」）浮片要能长、且 caret 不许压到字上。
+    // 只量 2 字的静态态会把"宽度够不够"这件事漏掉 —— 而宽度正是 caret 出流之后
+    // 唯一还靠留白兜着的东西。
+    const pf = document.querySelector<HTMLElement>('.pfilter-btn')
+    if (pf) {
+      pf.click()                                   // 打开筛选弹窗
+      await waitFor(() => document.querySelector('.post-filter-pop'))
+      const chips = [...document.querySelectorAll<HTMLButtonElement>(
+        '.post-filter-pop .filter-chip')]
+      // 点两枚"会生效"的 chip（已删 / 仅未归档）→ 文案变「筛选 · 2」；再点时间不做，
+      // 日历草稿要确认才生效，这里不值得引入那一段交互
+      const on = chips.filter((c) => !c.classList.contains('on')).slice(0, 2)
+      for (const c of on) {
+        c.click()
+        await sleep(250)
+      }
+      const wide = describe(document.querySelector<HTMLElement>('.pfilter-btn'))
+      result.listWide = wide
+      // 合成一个**足够长**的文案再量一次：留白必须让浮片长出去，
+      // 而不是把文字挤到 caret 底下（真实文案最长是「筛选 · 3」，够不到这个边界）。
+      // 直接改文案节点量一帧即可 —— React 会在下次渲染时写回。
+      const pfLabel = pf.querySelector<HTMLElement>('.pf-label')
+      const tn = [...(pfLabel ?? pf).childNodes].find(
+        (n) => n.nodeType === Node.TEXT_NODE && (n.textContent || '').trim())
+      if (tn) {
+        const old = tn.textContent
+        tn.textContent = '筛选 · 12 项'
+        void pf.getBoundingClientRect()
+        result.listLongLabel = describe(pf)
+        tn.textContent = old
+        void pf.getBoundingClientRect()
+      }
+      // 复位（探针不留痕）：弹窗底部的「重置」
+      const reset = [...document.querySelectorAll<HTMLButtonElement>(
+        '.post-filter-pop .pop-actions button')]
+        .find((b) => /重置/.test(b.textContent || ''))
+      reset?.click()
+      await sleep(300)
+      // 关掉弹窗（Esc）
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      await sleep(200)
+      result.listAfterReset = describe(document.querySelector<HTMLElement>('.pfilter-btn'))
+    }
+
+    const pre = document.createElement('pre')
+    pre.id = 'ui-probe'
+    pre.textContent = JSON.stringify({ mode: 'filter-pill', views: [], degraded,
+                                       filterPill: result })
     document.body.appendChild(pre)
     document.title = 'UI_PROBE_DONE'
     return

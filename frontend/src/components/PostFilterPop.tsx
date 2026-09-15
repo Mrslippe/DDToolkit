@@ -95,14 +95,15 @@ export default function PostFilterPop({
   return (
     <div className="pfilter-wrap" ref={wrapRef}>
       <FloatPill
-        size="md"
         shape="text"
         active={on}
         className="pfilter-btn"
         title={on ? `筛选：${applied.join(' · ')}` : '筛选：已删 / 归档 / 时间范围'}
         onClick={() => setOpen((o) => !o)}
       >
-        {on ? `筛选 · ${applied.length}` : '筛选'}
+        {/* 文案套一层 `.pf-label`：**左右对称留白**（见 posts.css 的说明）——
+            文字因此落在浮片几何中心，同时把右上角 caret 的落脚区让出来 */}
+        <span className="pf-label">{on ? `筛选 · ${applied.length}` : '筛选'}</span>
         <svg
           className="pill-caret"
           viewBox="0 0 6.63232 6.63232"

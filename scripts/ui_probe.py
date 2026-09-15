@@ -217,13 +217,14 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
             "reservations": data.get("reservations"),
             "statusIsland": data.get("statusIsland"),
             "appSettings": data.get("appSettings"),
+            "filterPill": data.get("filterPill"),
             "degraded": data.get("degraded") or [],
             "dom": dom_file,
         }
     return {"mode": None, "views": data, "topbar": None, "calendar": None,
             "settings": None, "scene": None, "addv": None, "capabilities": None,
             "polish": None, "reservations": None, "statusIsland": None,
-            "appSettings": None, "degraded": [], "dom": dom_file}
+            "appSettings": None, "filterPill": None, "degraded": [], "dom": dom_file}
 
 
 # ── 展示页 hero 药丸签名（P2 分层收敛 A 批次的位级回归护栏）─────────────
@@ -674,6 +675,13 @@ def main() -> int:
              "越界时保存钮禁用+红字 → 恢复默认回默认值",
     )
     ap.add_argument(
+        "--filter-pill",
+        action="store_true",
+        help="只跑一档宽度：对比两枚「筛选」浮片（侧栏 .list-filter-btn vs list 视图 "
+             ".pfilter-btn）的逐项样式 —— 尺寸/字号/内距/斜切/caret 定位/文字中心偏移。"
+             "用户 2026-09-15：「list 视图中的筛选按钮的样式跟随左栏工具栏中的筛选按钮」。",
+    )
+    ap.add_argument(
         "--hero-expect",
         default="",
         help="cards 视图 hero 药丸签名的期望 sha256（位级回归护栏）。"
@@ -889,6 +897,85 @@ def main() -> int:
                         failures.append(f"@{w} app-settings: Esc 没关掉设置弹窗")
             if not failures:
                 print("  [ok] 应用设置：齿轮可点 → 弹窗可命中 → 越界被拦 → 保存到服务端 → 恢复默认")
+            for b in failures:
+                print("   -", b)
+            return 1 if failures else 0
+
+        if args.filter_pill:
+            # 两枚「筛选」浮片对比（2026-09-15 用户：list 视图那枚要跟随侧栏那枚的样式）。
+            # 先量、后改：把两张截图变成可比对的数字，改完再断言"逐项一致"。
+            w = widths[0]
+            url = f"http://localhost:{vite_port}{route}?probe=filter-pill"
+            print(f"[probe] filter-pill @{w} → {url}")
+            res = _run_probe(edge, url, w, args.height, WORK, "filter-pill")
+            fp = ((res or {}).get("filterPill") or {})
+            if res and not fp:
+                print(f"  [!] 探针 mode={res.get('mode')!r} 键={sorted(res.keys())}"
+                      f"（新字段需要在 _run_probe 的白名单里登记）")
+            side, lst = fp.get("sidebar") or {}, fp.get("list") or {}
+            wide = fp.get("listWide") or {}
+            if not side or not lst:
+                failures.append(f"@{w} filter-pill: 没量到两枚浮片（侧栏={bool(side)} "
+                                f"list={bool(lst)}）—— 侧栏工具行或 list 筛选条没渲染？")
+            else:
+                # 逐项对比：**除了 minWidth**（刻意不同：侧栏工具行是定宽 89 的格子，
+                # list 那枚用 `min-width: 89px`，好让「筛选 · N」能长出去）。
+                # 其余每一项都必须相等 —— 这正是"样式跟随"的可判定含义。
+                # `w` 单独处理：文案等长时应当相等，文案变长时只许变宽。
+                keys = [k for k in side if k not in ("text", "minWidth", "w")]
+                print(f"  {'字段':<18}{'侧栏（参照）':<28}list 视图")
+                for k in keys:
+                    mark = "" if side.get(k) == lst.get(k) else "   ← 不一致"
+                    print(f"  {k:<18}{str(side.get(k)):<28}{lst.get(k)}{mark}")
+                print(f"  {'minWidth':<18}{str(side.get('minWidth')):<28}{lst.get('minWidth')}"
+                      f"   ← 刻意不同（侧栏定宽 / list 用 min-width 以便文案变长）")
+                for k in keys:
+                    if side.get(k) != lst.get(k):
+                        failures.append(f"@{w} filter-pill: {k} 不一致 —— 侧栏="
+                                        f"{side.get(k)!r} / list={lst.get(k)!r}")
+                if (lst.get("w") or 0) < (side.get("w") or 0):
+                    failures.append(f"@{w} filter-pill: list 那枚 {lst.get('w')}px 比侧栏的 "
+                                    f"{side.get('w')}px 还窄（等长文案下应当一样宽）")
+                # 文字必须**真的居中**（这是用户从 R5 到 R16 反复说的事），
+                # 且 caret 要落进右侧留白、不压到字上 —— 宽度够不够就靠这两条兜着。
+                # 三态都量：静态「筛选」/ 真实最长「筛选 · N」/ 合成超长文案。
+                for tag, m in (("静态", lst), ("文案变长", wide or {}),
+                               ("超长文案", fp.get("listLongLabel") or {})):
+                    if not m:
+                        continue
+                    print(f"  {tag}：文案={m.get('text')!r} 宽={m.get('w')} "
+                          f"文字中心偏移={m.get('textCenterOffset')} "
+                          f"文字两侧={m.get('textInset')} caret 距文字={m.get('caretGapToText')}")
+                    off = m.get("textCenterOffset")
+                    if off is None or abs(off) > 1.0:
+                        failures.append(f"@{w} filter-pill: {tag}态文字中心偏移 {off}px"
+                                        f"（要求 |偏移| ≤ 1：文字必须落在浮片几何中心）")
+                    gap = m.get("caretGapToText")
+                    if gap is None or gap < 6:
+                        failures.append(f"@{w} filter-pill: {tag}态 caret 距文字只有 {gap}px"
+                                        f"（文案 {m.get('text')!r}，宽 {m.get('w')}px）"
+                                        f"—— caret 出流后靠留白让位，压到字上就是宽度不够")
+                    # 内距必须真的留出来（文字溢出浮片时这条会先红）
+                    ins = m.get("textInset") or []
+                    if len(ins) != 2 or min(ins) < 7.5:
+                        failures.append(f"@{w} filter-pill: {tag}态文字两侧留白 {ins}"
+                                        f"（内距 8px 被吃掉 = 文字贴边/溢出）")
+                    if m.get("caretPosition") != "absolute" or m.get("caretInset") != "3px/3px":
+                        failures.append(f"@{w} filter-pill: {tag}态 caret 不在右上角"
+                                        f"（position={m.get('caretPosition')!r} "
+                                        f"inset={m.get('caretInset')!r}）")
+                # 超长文案必须把浮片**撑宽**（min-width 是下限不是定宽）
+                long = fp.get("listLongLabel") or {}
+                if long and (long.get("w") or 0) <= (lst.get("w") or 0):
+                    failures.append(f"@{w} filter-pill: 超长文案 {long.get('text')!r} 没把浮片撑宽"
+                                    f"（{lst.get('w')} → {long.get('w')}）—— min-width 变成了定宽")
+                after = fp.get("listAfterReset") or {}
+                if after and after.get("text") != lst.get("text"):
+                    failures.append(f"@{w} filter-pill: 探针没把筛选复位"
+                                    f"（{lst.get('text')!r} → {after.get('text')!r}）")
+            if not failures:
+                print("  [ok] list 那枚与侧栏那枚逐项一致（尺寸/字号/内距/斜切/caret 角标/文字居中），"
+                      "文案变长时只变宽、caret 不压字")
             for b in failures:
                 print("   -", b)
             return 1 if failures else 0
@@ -1217,22 +1304,24 @@ def main() -> int:
                 if tw and bw and tw > bw - 4:
                     failures.append(f"@{w} polish: 标题文本 {tw}px 顶到容器 {bw}px"
                                     f"（粗体+字距撑破了定宽，右侧会贴/溢出）")
-                # ② 筛选钮：**「文字 + caret」这一组**必须居中（用户看的是这一组；
-                #    2026-09-15 实测：文字本身早已居中，偏的是被钉在最右角的 caret）
+                # ② 筛选钮：**文字本身**必须落在浮片几何中心（R15② 的原始诉求），
+                #    caret 则钉在右上角（不占流）—— 这是 R16（用户给了侧栏那枚的截图）
+                #    之后的形状：caret 一旦留在流内，文字就一定被挤偏（实测 −5.3px）。
+                #    R15 当时退让到"组居中、文字允许偏半个箭头宽"，R16 换成了侧栏那套
+                #    （caret 出流 + 足够宽度），于是文字就是**真正的**几何中心。
                 gdiff = po.get("filterGroupGapDiff")
                 if gdiff is None:
                     failures.append(f"@{w} polish: 量不到筛选钮内容间隙（.pfilter-btn 不在？）")
-                elif abs(gdiff) > 1.0:
-                    failures.append(f"@{w} polish: 筛选钮「文字+箭头」左右间隙差 {gdiff}px"
-                                    f"（左 {po.get('filterGroupPadLeft')} / "
-                                    f"右 {po.get('filterGroupPadRight')}）")
                 toff = po.get("filterTextCenterOffset")
-                if toff is not None and abs(toff) > 6.0:
+                if toff is None:
+                    failures.append(f"@{w} polish: 量不到筛选钮文字中心偏移")
+                elif abs(toff) > 1.0:
                     failures.append(f"@{w} polish: 筛选钮文字中心偏移 {toff}px"
-                                    f"（组居中后文字允许偏半个箭头宽，但不该超过 6px）")
-                if po.get("filterCaretPosition") not in (None, "static"):
-                    failures.append(f"@{w} polish: 筛选钮 caret 仍是 {po.get('filterCaretPosition')}"
-                                    f"定位（会脱离内容组、看起来不居中）")
+                                    f"（要求 |偏移| ≤ 1：文字必须是浮片的几何中心）")
+                if po.get("filterCaretPosition") != "absolute":
+                    failures.append(f"@{w} polish: 筛选钮 caret 是 "
+                                    f"{po.get('filterCaretPosition')!r} 定位（应为 absolute —— "
+                                    f"留在流内会把文字挤偏，R15 那版的 −5.3px 就是这么来的）")
                 # ③ 徽标「+」：空闲不占位且不可点；hover 展开可点；离开复位
                 # ⚠️ 高度 0 是**合法值**，不能用 `or -1` 兜底（0 是 falsy，第一版断言
                 #    因此把"已复位"误判成失败 —— 判据里的 falsy 陷阱）

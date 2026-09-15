@@ -238,7 +238,7 @@ DOM 契约（探针 `ui_probe --status-island` 直接查）：`.si-island`（`.o
 |---|---|---|
 | 工具行 | `.list-toolbar` | 高 51px，padding `10px 32px`，`justify-content:center`，四件同容器居中 |
 | 添加钮 | `.list-add-btn`（`Plus` 16px，**50×25** 浮片） | 打开 AddVtuberDialog |
-| 筛选钮 | `.pfilter-btn`（`.float-pill--text`，`min-width:68px`，内距 `0 12px`） | **R15②（2026-09-15）**：caret 由"绝对定位钉在最右角"改为**随内容居中**（`.pfilter-btn .pill-caret{position:static}`，`gap:4px` 由 `.float-pill` 提供）—— 实测文字本身早已居中（左右各 21.5px），偏的是"文字+箭头"这一组（组中心右偏 9.25px）。探针 `--polish` 断言**组**左右间隙差 ≤1px、文字中心偏移 ≤6px、caret `position: static`。⚠️ 侧栏那枚 `.pill-caret`（`VtuberSidebar`）保持原绝对定位，覆盖只作用于 `.pfilter-btn` |
+| 筛选钮 | `.pfilter-btn`（`.float-pill--text`，`min-width:89px`，内距 `0 8px`，字 13，`line-height:1`）+ 文案 `.pf-label` | **R16（2026-09-15 用户给了侧栏那枚的截图）：样式跟随侧栏 `.list-filter-btn`，逐项对齐** —— caret **回到绝对定位**右上角（`top/right:3px`，不占流）、高 25（`--pill-h-sm`）、宽 `min-width:89px`。文案外套 `.pf-label`（左右各 11px **对称**留白）：文字因此是浮片的几何中心（实测偏移 **0**），留白同时给 caret 让位（长文案下浮片自己长，caret 与文字恒留 ~9.4px）。<br>历史：R15② 曾把 caret 改成"随内容居中"（`position:static` + 组居中）—— 那版文字仍偏 **−5.3px**，因为 caret 在流内必然挤占文字位置；R16 换成侧栏那套（caret 出流 + 足够宽度），**R15② 的诉求（文字居中）由它更好地满足**。探针：`--filter-pill`（两枚逐项对账 + 三态宽度/caret 间距）+ `--polish`（文字中心偏移 ≤1px、caret 必须 `absolute`） |
 | 搜索框 | `.list-search-wrap` 内 `.list-search` | **240×25 浮片**，放大镜 10×10 居左、placeholder 12px；`/` 键聚焦；focus 粉内描边 |
 
 | 直播过滤 | shadcn `SelectTrigger.input list-filter-btn [&>svg]:size-2.5` | **89×25 浮片**；选项 全部/直播中/未直播（在线实时过滤） |

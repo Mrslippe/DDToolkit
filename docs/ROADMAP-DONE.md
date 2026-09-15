@@ -195,6 +195,7 @@
 | **R12b 状态岛动效 + 空闲轮播**：面板入场 `si-panel-in` 220ms / chevron 翻转 / 计数徽章 pop（`prefers-reduced-motion` 只淡入、**但保留瞬时翻转**，实测 reduce 支 `si-panel-in-fade`）· `utils/idleQuotes.ts`（池第 0 格 = 状态文案 + `registerIdleProvider()` 扩展点，15 单测）· 轮播时钟**自带定时器只在空闲时开**（挂抓取轮询会随轮询间隔静默停住）· 探针连采三格 + 按 `matchMedia` 判动画分支（**反向验证过**） | 090 |
 | **R14a 应用设置**：IconRail 底端齿轮 → 独立设置弹窗（`.aps-*`）· `app/core/runtime_settings.py` 覆盖层（19 个可热更键 + 10 条只读理由）· `GET/PUT /settings` + `/settings/reset`（白名单/类型/闭区间/**跨字段**，越界一律 400）· `Settings.__getattribute__` 拦截（优先级 **实例属性 > 覆盖层 > 类属性**，保住 `monkeypatch.setattr(settings, …)` 这条老用法）· **零迁移**（复用 `app_meta`，前缀 `settings.`）· 探针 `--app-settings`（**保存后回问后端对账**；反向验证过） | 091 |
 | **R14b 主题 + 深色钩子**：「浅色 / 跟随系统」偏好（`prefs.theme`，后端枚举白名单）+ `GET/PUT /settings/prefs` · `utils/theme.ts`（解析/写 `html[data-theme]`/订阅系统主题/该说的说明，10 单测）· `:root[data-theme='dark']` **空块**标记深色未实现 · **跨语言契约**把 TS 的 `DARK_IMPLEMENTED` 与后端下发的说明绑在一起 · 探针扩主题段（深色分支用 `--force-dark-mode` 验过） | 092 |
+| **R16 list 筛选钮跟随侧栏筛选钮**：新探针 `--filter-pill` 把两枚浮片**逐项量化对账**（改前差在尺寸/字号/内距/caret 定位/文字中心偏移 −5.3px）· `.pfilter-btn` 换成侧栏那套配方（caret **绝对定位右上角** + `min-width:89px` + 字 13 + 高 25）· 文案外套 `.pf-label`（**对称留白**：文字真居中 + 给 caret 让位，合成超长文案下 caret 与文字仍留 9.4px）· `--polish` 的 R15② 断言被取代（文字偏移 ≤1px、caret 必须 absolute）· 截图并排比对过 | 093 |
 
 ---
 
