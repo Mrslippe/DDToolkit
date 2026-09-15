@@ -288,6 +288,20 @@ def step_preflight(ctx: Ctx) -> None:
             raise Fail(msg + "（加 --align-version 可强制对齐到 config.py）")
         ctx.warn(msg + " → --align-version：将全部对齐到 config.py")
 
+    # ⑤-b 文档漂移（devlog 索引 / 发布说明与导航）：这类漂移不会让任何测试红，
+    #     却会让"这版改了什么"日后查不到（devlog/085 实测缺 082/084）
+    try:
+        import doc_check
+        doc_fails, doc_warns = doc_check.run(quiet=True)
+        for w in doc_warns:
+            ctx.warn(w)
+        if doc_fails:
+            raise Fail("文档索引漂移（scripts/doc_check.py）:\n    - "
+                       + "\n    - ".join(doc_fails))
+        print(f"  {OK} 文档索引一致（devlog 索引 / 发布说明 / 版本号）")
+    except ImportError:
+        ctx.warn("没找到 scripts/doc_check.py，跳过文档漂移检查")
+
     # ⑥ 工具链（只查计划里要用的步骤）
     plan = ctx.results.get("plan") or []
     if "build" in plan:
@@ -353,6 +367,7 @@ def step_gates(ctx: Ctx) -> None:
     a = ctx.args
     if a.skip_gates:
         ctx.warn("--skip-gates：门禁整段跳过（发布前请确认你自己跑过）")
+        ctx.results["gates_skipped"] = True      # 报告里要如实写"没跑"，不能留一个 None
         return
     gates: list[tuple[str, list[str], Path]] = [
         ("pytest", [sys.executable, "-m", "pytest", "-q"], ROOT),
@@ -542,6 +557,14 @@ def step_push(ctx: Ctx) -> None:
         raise Fail(f"远端仍看不到 tag {ctx.tag} —— 等一下或重跑 --from push")
     print(f"  {OK} 远端已确认 tag {ctx.tag}")
 
+    # 推送是**按 URL** 推的（`git push <url> <refs>`），git 不会更新本地的
+    # `refs/remotes/origin/<branch>` —— 于是 `git status -sb` 会一直显示"领先 N 个提交"，
+    # 让人以为没推上去（v1.0.1 实跑时就先被这个假象误导过一次）。这里按"刚推成功"把
+    # tracking ref 对齐到本地 HEAD：不联网、不改远端，只让本地状态不撒谎。
+    head = git_out("rev-parse", "HEAD")
+    if git("update-ref", f"refs/remotes/origin/{ctx.args.branch}", head).returncode == 0:
+        print(f"  {OK} 本地 origin/{ctx.args.branch} 已对齐到 {head[:8]}")
+
 
 def step_release(ctx: Ctx) -> None:
     if ctx.args.dry_run:
@@ -567,20 +590,25 @@ def step_release(ctx: Ctx) -> None:
 def step_report(ctx: Ctx) -> None:
     if ctx.args.dry_run:
         return
+    gates = ctx.results.get("gates")
+    gates_text = ("（**未跑**：本次带了 --skip-gates）" if ctx.results.get("gates_skipped")
+                  else (str(gates) if gates else "（未跑）"))
     lines = [
         f"# DDToolkit v{ctx.version} 发布报告",
         "",
         f"- 时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}",
         f"- 版本：{ctx.version}（六处已同步）",
+        f"- 本次计划步骤：{' → '.join(ctx.results.get('plan') or [])}",
         f"- 分支：{ctx.args.branch}　提交：{ctx.results.get('commit') or '（本次无新提交）'}",
         f"- tag：{ctx.tag} → {ctx.results.get('tag')}",
         f"- 推送：{ctx.results.get('push')}",
-        f"- 构建耗时：{ctx.results.get('build_seconds')}s" if ctx.results.get("build_seconds") else "",
+        f"- 构建耗时：{ctx.results.get('build_seconds')}s" if ctx.results.get("build_seconds")
+        else "- 构建耗时：（本次未跑 build 步骤）",
         f"- 资产：{ctx.results.get('asset_sizes_mb')}",
         f"- NSIS：{ctx.results.get('nsis')}（flattened 必须 0）",
         f"- 便携包：{ctx.results.get('portable')}",
         f"- 主程序 FileVersion：{ctx.results.get('exe_version')}",
-        f"- 门禁：{ctx.results.get('gates')}",
+        f"- 门禁：{gates_text}",
         f"- Release：{(ctx.results.get('release') or {}).get('html_url', '（未建）')}",
         "",
         "## 待人工确认（脚本不做）",

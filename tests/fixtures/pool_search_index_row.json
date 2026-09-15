@@ -1,0 +1,13 @@
+{
+  "captured_from": "GET /vtuber/pool/search + 池外收录实测（真上游复核）",
+  "captured_at": "2026-09-15",
+  "row": {
+    "name": "以太",
+    "platform": "bilibili",
+    "platform_uid": "88358",
+    "group": "",
+    "origin": "index",
+    "in_pool": false
+  },
+  "note": "origin='index' 的条目**不在 vtubers.csv 里**：前端必须送 source='bilibili'"
+}

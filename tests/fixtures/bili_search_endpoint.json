@@ -1,0 +1,90 @@
+{
+  "captured_from": "GET /vtuber/bili/search?kw=塔菲（真上游，经本服务映射）",
+  "captured_at": "2026-09-15",
+  "body": {
+    "items": [
+      {
+        "platform": "bilibili",
+        "platform_uid": "1265680561",
+        "name": "永雏塔菲",
+        "sign": "王牌级偶像and单机区主播！无公会、无MCN、无团队，只有商务：info@cherrynova.net （日常动态、直播通知在微博）",
+        "followers": 2753676,
+        "avatar": "https://i0.hdslb.com/bfs/face/67b10272c5451766b6097d1be8af0a2d93e5a122.jpg",
+        "verified": "bilibili 知名游戏UP主、直播高能主播",
+        "is_live": false,
+        "room_id": "22603245",
+        "videos": 463,
+        "level": 6,
+        "exact": false,
+        "in_library": true
+      },
+      {
+        "platform": "bilibili",
+        "platform_uid": "3493289141471786",
+        "name": "偶然相遇的绿色塔菲",
+        "sign": "",
+        "followers": 37059,
+        "avatar": "https://i0.hdslb.com/bfs/face/9a0484ae406155c740ce6616bc28834d66eeb0b4.jpg",
+        "verified": "",
+        "is_live": false,
+        "room_id": "1842351536",
+        "videos": 73,
+        "level": 6,
+        "exact": false,
+        "in_library": false
+      },
+      {
+        "platform": "bilibili",
+        "platform_uid": "195130353",
+        "name": "红温塔菲可爱喵",
+        "sign": "好似喵好似喵",
+        "followers": 30733,
+        "avatar": "https://i1.hdslb.com/bfs/face/2de1919359797a2b520098e8fa3e226209015b8b.jpg",
+        "verified": "",
+        "is_live": false,
+        "room_id": "32521273",
+        "videos": 76,
+        "level": 6,
+        "exact": false,
+        "in_library": false
+      },
+      {
+        "platform": "bilibili",
+        "platform_uid": "3706974730455217",
+        "name": "塔菲喵喵酱owo",
+        "sign": "",
+        "followers": 26366,
+        "avatar": "https://i2.hdslb.com/bfs/face/f4cc2a4944e5c0cc52f2ccfd3b77b2d0e25e8bed.jpg",
+        "verified": "",
+        "is_live": false,
+        "room_id": null,
+        "videos": 22,
+        "level": 3,
+        "exact": false,
+        "in_library": false
+      },
+      {
+        "platform": "bilibili",
+        "platform_uid": "433942038",
+        "name": "塔菲变声器",
+        "sign": "",
+        "followers": 19667,
+        "avatar": "https://i1.hdslb.com/bfs/face/0ca1ab5ceb969f10ac11bb9bcf1940d5458cef2c.jpg",
+        "verified": "",
+        "is_live": false,
+        "room_id": null,
+        "videos": 68,
+        "level": 6,
+        "exact": false,
+        "in_library": false
+      }
+    ],
+    "page": 1,
+    "total_pages": 50,
+    "has_more": true,
+    "error": null,
+    "hint": null,
+    "exact": false,
+    "cached": false
+  }
+}

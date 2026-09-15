@@ -20,6 +20,15 @@
 > **用法**：直接在表里加一行。**只写你想要的**（现象/期望效果），不用写实现方案；
 > 优先级拿不准就留空，我会在评估后回填。
 >
+> **报 bug 请给这四行**（2026-09-15 复盘定，devlog/085）：① 我在做什么（哪个界面 / 按钮 /
+> 输入了什么）② 期望什么 ③ **实际什么（截图或原文报错）** ④ 每次都发生吗。
+> 有截图 + 最短复现的那次（"加池外 V 报收录失败"）10 分钟就定位到根因；只给一句"好像不对"的那次
+> （"微博登录过期"，其实没过期）我按错误前提白查了一轮。
+>
+> **提功能需求请补一句"怎么算做完"**（验收标准，例：*"我在 B 站搜一个候选池里没有的新 V，
+> 能加进来、名字正确、并立刻看到抓取启动"*）。R11 当时若写了这句，"索引来源走哪条收录路径"
+> 在方案阶段就会被追问 —— 后来实测到的那个 bug 大概率不会发生。
+>
 > **状态取值**：`待评估`（刚写下，我还没看）→ `已受理`（已拆成可执行项并移进 §1）
 > → `已落地`（**移进 `docs/ROADMAP-DONE.md` 的「需求清单」章节**：原文照抄 + 落地结论 + devlog 指向）
 > ｜`不做`（附一句理由，同时落到 §4）。
@@ -181,7 +190,9 @@
 
 | 门禁 | 命令 | 基线 |
 |---|---|---|
-| 后端 | `python -m pytest -q` | **362 passed**（R11：`test_bili_search.py` 15 + API 4；发布脚本：`test_release_script.py` 28；含 1 条真实网络冒烟，离线环境会 skip） |
+| 后端 | `python -m pytest -q` | **376 passed**（R11：`test_bili_search.py` 15 + API 4；发布脚本：`test_release_script.py` 28；管线复盘：`test_real_fixtures.py` 7 + `test_doc_check.py` 8；含 1 条真实网络冒烟，离线环境会 skip） |
+| 文档漂移 | `python scripts/doc_check.py`（或 `dev_check.py --docs`） | **0 FAIL**（1 条历史警告：41 篇早期 devlog 按批次未逐篇进索引） |
+| 上游冒烟 | `python scripts/smoke_upstream.py [--cold]`（或 `dev_check.py --upstream`） | 真上游 **5 ok / 0 FAIL**；冷进程 **3 ok / 0 FAIL**（未登录三态） |
 | 前端类型 | `npx tsc --noEmit`（`npm run build` 也会跑） | **0 错** |
 | 前端 lint | `npm --prefix frontend run lint` | **0 错**（`--max-warnings 0`） |
 | 前端单测 | `npm --prefix frontend run test` | **138 passed**（新增 `utils/addVtuberSearch.test.ts` 7 项） |

@@ -6,10 +6,12 @@
 前端打包产物时才需要整包重建（见 docs/DEV-LOOP.md）。
 
 用法:
-    python scripts/dev_check.py            # 单测 + 开发态后端冒烟（秒级）
-    python scripts/dev_check.py --frozen   # 追加：冻结后端 exe 冒烟（先跑 build_backend.py）
-    python scripts/dev_check.py --portable # 追加：重打便携 zip（约 2 分钟，免 cargo/NSIS）
-    python scripts/dev_check.py --full     # = --frozen --portable
+    python scripts/dev_check.py             # 单测 + 开发态后端冒烟（秒级）
+    python scripts/dev_check.py --docs      # 追加文档漂移门禁（devlog 索引/版本号/发布说明，只读）
+    python scripts/dev_check.py --upstream  # 追加端到端上游冒烟（真打 B 站/danmakus，约 1 分钟）
+    python scripts/dev_check.py --frozen    # 追加：冻结后端 exe 冒烟（先跑 build_backend.py）
+    python scripts/dev_check.py --portable  # 追加：重打便携 zip（约 2 分钟，免 cargo/NSIS）
+    python scripts/dev_check.py --full      # = 上面全部
 
 冒烟内容（后端，空数据目录）：
     1) /healthz 就绪
@@ -168,17 +170,54 @@ def _smoke_backend(label: str, cmd: list[str], cwd: Path) -> bool:
             print(f"      现场保留：{data_dir}（console.log / logs/sidecar.log）")
 
 
+def _run_docs_check() -> bool:
+    """文档漂移门禁（`scripts/doc_check.py`）：devlog 索引 / 六处版本号 / 发布说明与导航。
+
+    加它的理由很具体：2026-09-15 实测「批次 → devlog 索引」缺了 082 与 084
+    （两次都是写完 devlog 忘了回填），`docs/README.md` 的 releases 列表也漏了新版本 ——
+    这些都不会让测试红，只会在几个月后想查"那版改了什么"时才发现查不到（devlog/085）。
+    """
+    print(f"\n=== 文档漂移（devlog 索引 / 版本号 / 发布说明） ===")
+    rc = subprocess.run([sys.executable, "scripts/doc_check.py"], cwd=ROOT).returncode
+    print(f"{OK if rc == 0 else FAIL} doc_check rc={rc}")
+    return rc == 0
+
+
+def _run_upstream_smoke() -> bool:
+    """端到端上游冒烟（`scripts/smoke_upstream.py`）：数据目录副本 + 真后端 + 真上游。
+
+    只在这里（显式 `--upstream`）跑：它会打真上游（B 站检索/复核、danmakus 场次），
+    属于"慢且依赖网络"的一类；跑完会打印每项的 ok/skip/FAIL 与原因。
+    `--cold` 模式另跑一次（空数据目录 + 清空凭据），断言未登录时的降级形态。
+    """
+    print(f"\n=== 端到端上游冒烟（真上游；慢，约 1 分钟） ===")
+    ok = True
+    for extra, label in (([], "真上游"), (["--cold"], "冷进程")):
+        rc = subprocess.run([sys.executable, "scripts/smoke_upstream.py", *extra],
+                            cwd=ROOT).returncode
+        print(f"{OK if rc == 0 else FAIL} smoke_upstream {label} rc={rc}")
+        ok = ok and rc == 0
+    return ok
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--frozen", action="store_true", help="追加冻结后端 exe 冒烟")
     ap.add_argument("--portable", action="store_true", help="追加重打便携 zip（免 cargo/NSIS）")
-    ap.add_argument("--full", action="store_true", help="= --frozen --portable")
+    ap.add_argument("--docs", action="store_true", help="追加文档漂移门禁（秒级，只读）")
+    ap.add_argument("--upstream", action="store_true",
+                    help="追加端到端上游冒烟（真打 B 站/danmakus，约 1 分钟，含冷进程模式）")
+    ap.add_argument("--full", action="store_true", help="= --frozen --portable --docs --upstream")
     args = ap.parse_args()
     if args.full:
-        args.frozen = args.portable = True
+        args.frozen = args.portable = args.docs = args.upstream = True
 
     results: list[tuple[str, bool]] = [("pytest", _run_pytest())]
     results.append(("frontend logic", _run_frontend_check()))
+    if args.docs:
+        results.append(("docs drift", _run_docs_check()))
+    if args.upstream:
+        results.append(("upstream smoke", _run_upstream_smoke()))
 
     print("\n=== 2/3 开发态后端冒烟（源码，秒级） ===")
     results.append(("dev backend", _smoke_backend(

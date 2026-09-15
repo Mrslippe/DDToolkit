@@ -187,6 +187,44 @@ Get-Content "$log\app.log" -Encoding UTF8 | Select-String -Pattern '\[(ERROR|CRI
 排查报障时**先按天切一刀**再读 —— 轮转前的老文件跨了几个月，八月的旧记录容易被当成现行问题
 （devlog/076 的教训）。`app.log` 里的 `httpx` 行占大头（每个请求一行），按 `[ERROR]` 过滤最省事。
 
+## 二·六、端到端上游冒烟（`scripts/smoke_upstream.py`，真打上游）
+
+有些链路**只在真环境里才暴露**：登录态、上游回包形态、池外收录（候选池与索引不一致）。
+这类问题过去靠"临时写个脚本 + 用户实测"发现（2026-09-15 那批写了 5 个一次性脚本，
+其中 3 个抓到真问题 —— 但都被删了）。现在固化成常驻护栏：
+
+```powershell
+python scripts/smoke_upstream.py              # 真上游（数据目录副本 + 真后端）：B 站检索 /
+                                              # uid 直查 / 候选池来源标注 / 池外收录 / 场次上游
+python scripts/smoke_upstream.py --cold       # 冷进程：空数据目录 + **清空凭据**，
+                                              # 断言未登录时的降级形态（不是"能不能用"）
+python scripts/smoke_upstream.py --only bili  # 只跑名字匹配的检查
+python scripts/smoke_upstream.py --capture    # 顺带把真实回包刷进 tests/fixtures/
+python scripts/dev_check.py --upstream        # 接进一把梭（真上游 + 冷进程各一次）
+```
+
+判定口径：`[ok]` 真验到了 · `[skip]` **环境不成立没验到**（未登录 / 上游不可用，必须打印原因）
+· `[FAIL]` 链路真坏了。⚠️ 池外收录检查会在**副本**里真建一个 V（副本每次重建，不碰真库）。
+
+> ⚠️ 两条实测澄清（都写进了 `GLOSSARY` §8）：
+> ① **「空数据目录」不等于「候选池为空」**：`backend_main.py` 首启会把随包的 `vtubers.csv`
+> 引导复制进数据目录 —— 所以池外收录检查必须挑一个**不在池里**的 uid；
+> ② **凭证要显式清空才算冷**：shell 里残留的 `BILI_SESSDATA` 会被子进程继承
+> （`config.py` 读 `os.getenv`），否则测出来的是"登录态"，结论会完全反过来。
+
+## 二·七、文档漂移门禁（`scripts/doc_check.py`）
+
+索引类文档最容易漏，而且**不会让任何测试红**：`docs/ROADMAP-DONE.md` 的
+「批次 → devlog 索引」（实测缺 082/084）、`docs/README.md` 的 releases 列表（漏了新版本）、
+六处版本号。跑：
+
+```powershell
+python scripts/doc_check.py            # 只读，有 FAIL 退出 1
+python scripts/dev_check.py --docs     # 接进一把梭
+```
+
+`scripts/release.py` 的预检也会调它 —— 发布前先拦，别让"这版改了什么"日后查不到。
+
 ## 三、手动复现打包版状态（脚本没覆盖时）
 
 ```powershell

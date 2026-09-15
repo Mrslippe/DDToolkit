@@ -160,7 +160,10 @@
 | 术语 | 含义 | 代码位置 | 关联 |
 |---|---|---|---|
 | **迁移链 / MIGRATION_HEAD** | alembic `a001→f004`（17 个版本）；`MIGRATION_HEAD` 必须同步 | `alembic/versions/`、`app/main.py::MIGRATION_HEAD` | 测试断言一致 |
-| **一键发布 / release.py** | 十步发布编排：预检→版本同步→门禁→打版→产物校验→提交/tag→推送→Release→报告 | `scripts/release.py`；手册 `docs/RELEASE.md`；上传 `scripts/upload_release_assets.py`（幂等） | 守卫：工作树脏/notes 缺失/版本不递增/NSIS 打平/ tag 冲突 → 停；`--dry-run`、`--from <步骤>` 续跑 |
+| **一键发布 / release.py** | 十步发布编排：预检→版本同步→门禁→打版→产物校验→提交/tag→推送→Release→报告 | `scripts/release.py`；手册 `docs/RELEASE.md`；上传 `scripts/upload_release_assets.py`（幂等） | 守卫：工作树脏/notes 缺失/版本不递增/NSIS 打平/**文档漂移**/tag 冲突 → 停；`--dry-run`、`--from <步骤>` 续跑；推完自动对齐本地 `origin/<分支>` tracking ref（按 URL 推送不会自动更新它） |
+| **端到端上游冒烟 / smoke_upstream** | 数据目录副本 + 真后端 + 真上游，跑"只有真环境才暴露"的链路（B 站检索 / uid 直查 / 池外收录 / 场次上游） | `scripts/smoke_upstream.py`（`--cold` = 空数据目录 + 清空凭据）；`dev_check.py --upstream` | `--capture` 顺带刷新真实 fixtures；skip 必须打印原因，不冒充通过 |
+| **真实 fixtures** | 真上游回包 / 真 `installer.nsi` 片段 / 真索引条目 —— 判据的"真形状"依据 | `tests/fixtures/`（`smoke_upstream.py --capture` 生成）；用例 `tests/test_real_fixtures.py` | 规矩：**新判据至少一条用例吃真实数据**（§8 第 13 条） |
+| **文档漂移门禁 / doc_check** | devlog 索引覆盖（最近 5 篇）、六处版本号一致、发布说明与 `docs/README.md` 导航 | `scripts/doc_check.py`；`dev_check.py --docs`；`release.py` 预检会调它 | 这类漂移不会让任何测试红，只会在几个月后查不到"那版改了什么" |
 | **启动迁移四形态** | 全新库 upgrade / 旧库 stamp / 落后增量 / 已最新快路径 | `app/main.py::_run_migrations` | 冷启动优化 |
 | **旧库桥接守卫** | 桥接补不了唯一约束 → 不一致**拒绝启动**（不写假 head 承诺） | `app/main.py::_missing_unique_keys` | devlog/053 |
 | **冻结后端 / frozen** | PyInstaller onedir 打包的 sidecar（`_MEIPASS` 定位资源） | `scripts/build_backend.py`、`backend_main.py`、`app/core/config.py::PROJECT_ROOT` | 资源打平事故见 devlog/036 |
@@ -235,6 +238,17 @@
 11. **`asyncio.create_task` 必须留强引用**：收录回填是 fire-and-forget，返回值无人
     引用时任务可能被 GC 回收（Python 文档明确警告）→ 表现为「回填静默不跑」。
     统一走 `routers/vtuber.py::_spawn_background`（`_background_tasks` 集合 + done 回调）。
+12. **上游结论必须在"冷进程 + 空数据目录"里复现一次**（2026-09-15 立，devlog/085）：
+    凡"某情况下也能/不能工作"的判断，都要在**空数据目录 + 全新进程 + 显式清空凭据**下再验一遍
+    —— R11 的"B 站检索不需要登录"就是在**WBI 密钥已缓存**的环境里得出的，结论完全反过来。
+    工具：`python scripts/smoke_upstream.py --cold`（断言未登录时的降级形态）。
+    ⚠️ 两个反直觉前提：① "空数据目录"**不等于**候选池为空（`backend_main.py` 首启会把
+    随包的 `vtubers.csv` 引导复制进数据目录）；② shell 里残留的 `BILI_SESSDATA` 会被子进程继承
+    （`config.py` 读 `os.getenv`），不清空就测成了"登录态"。
+13. **判据至少有一条用例吃真实数据**（同日立）：自造样本会让判据"看起来在工作"却永不命中
+    —— 同一批里出现过两次：NSIS「打平」正则的样本漏了目标路径的引号（永远返回 0 行），
+    "名字非空"的断言被 `... or str(mid)` 兜底喂成了 uid。真实数据放 `tests/fixtures/`
+    （由 `scripts/smoke_upstream.py --capture` 从真上游/真构建产物刷），新判据必须有一条吃它。
 
 ---
 
