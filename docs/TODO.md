@@ -28,11 +28,11 @@
 |---|---|---|---|---|---|
 | — | — | （暂无未落地条目） | — | — | — |
 
-> **R1–R10 已全部落地**（含 R9 的展示入口，2026-09-13）→ 见 `docs/ROADMAP-DONE.md`
-> 「需求清单：R1–R10」；本表只留**还没完全落地**的条目。
+> **R1–R11 已全部落地**（R9/R10 见 2026-09-13，R11「添加 V 支持 B 站直查」2026-09-15）→
+> 见 `docs/ROADMAP-DONE.md`「需求清单：R11」与「需求清单：R1–R10」；本表只留**还没完全落地**的条目。
 >
 > **下一条怎么写**（照这个格式加一行，并把上面那行占位删掉）：
-> `| R11 | 2026-09-dd | 一句话说清现象或想要的效果 | 可选：期望的样子 | 中/低/高 | 待评估 |`
+> `| R12 | 2026-09-dd | 一句话说清现象或想要的效果 | 可选：期望的样子 | 中/低/高 | 待评估 |`
 
 ---
 
@@ -174,17 +174,18 @@
 > 索引已移入 **`docs/ROADMAP-DONE.md` → 「批次 → devlog 索引」**（2026-09-13 整理：
 > 本文件只留"要干什么"与当前基线，历史索引与已完成条目同处一份文件更好查）。
 
-### 6.2 当前门禁基线（2026-09-13 实测 / 复核）
+### 6.2 当前门禁基线（2026-09-15 实测 / 复核，R11 批次）
 
 | 门禁 | 命令 | 基线 |
 |---|---|---|
-| 后端 | `python -m pytest -q` | **315 passed**（含 1 条真实网络冒烟，离线环境会 skip） |
+| 后端 | `python -m pytest -q` | **329 passed**（R11 新增 `test_bili_search.py` 11 项 + API 3 项；含 1 条真实网络冒烟，离线环境会 skip） |
 | 前端类型 | `npx tsc --noEmit`（`npm run build` 也会跑） | **0 错** |
 | 前端 lint | `npm --prefix frontend run lint` | **0 错**（`--max-warnings 0`） |
-| 前端单测 | `npm --prefix frontend run test` | **131 passed** |
-| 词云布局 | `node scripts/check_wordcloud_layout.mjs` | sha256 `19ecc7e6…`（本轮实跑一致） |
-| 布局探针 | `python scripts/ui_probe.py --hero-expect c1154858… --vtuber 15`<br>`python scripts/ui_probe.py --archive --calendar-expect fb75217e… --vtuber 15`<br>`python scripts/ui_probe.py --settings --vtuber 15`（两个带签名账号）/ `--vtuber 14`（单账号长签名）<br>`python scripts/ui_probe.py --scene --vtuber 15`（场景切换机） | 四条都本轮实跑一致（8 段契约 0 问题 / 三档宽度 0 问题 / 档案设置几何·可点性·历史弹窗 **29 项**，含 `panelHit`/`rowHit`、`panelPlacedByRect`、`pickKeepsDialog` 与 R9 四项；`--scene` 断言"预取→退场→提交走完 + 侧栏与内容一致"，实测提交 250ms。V14 因只有一行会打印 `[跳过] 候选行切换断言`） |
+| 前端单测 | `npm --prefix frontend run test` | **136 passed**（新增 `utils/addVtuberSearch.test.ts` 5 项） |
+| 词云布局 | `node scripts/check_wordcloud_layout.mjs` | sha256 `19ecc7e673b95c8a1fa7c8c219ada78e9b581a15764aa57b33a7de473fc63dac`（本轮实跑一致 ✓） |
+| 布局探针 | `python scripts/ui_probe.py --hero-expect c11548580e73d910ca667047b8120075a4ab121fa3fa098ff6654326ed183666 --vtuber 15`<br>`python scripts/ui_probe.py --archive --vtuber 15`（`--archive-print` 出签名）<br>`python scripts/ui_probe.py --settings --vtuber 15`（两个带签名账号）/ `--vtuber 14`（单账号长签名）<br>`python scripts/ui_probe.py --scene --vtuber 15`<br>`python scripts/ui_probe.py --add-v --vtuber 15`（**R11 新增**） | 本轮五条实跑通过：hero 签名 `c1154858…` **三档一致**、8 段视图契约 **0 问题**；档案设置几何·可点性·历史弹窗 **29 项**（含 `panelHit`/`rowHit`、`pickKeepsDialog` 与 R9 四项；V14 打印 `[跳过] 候选行切换断言`）；`--scene` 提交 **250ms**、侧栏与内容一致；`--add-v` 实测 关键词 `a` → **37 行**、置灰 0 行、行可命中、敲键打上游 **0 次**、`按 UID 添加` 换档与清空/关窗全通过。<br>⚠️ `--archive` 的日历签名**已因跨天而漂**：`fb75217e…`（9-13 基线）→ `48519bae…`（9-15 实测，同日两次一致）。原因是 `LiveCalendar.tsx` 对"无场次格子"按 `key < todayKey` 显示「休息」否则「待定」——**跨天必然变**，与代码无关（2026-09-15 定性） |
 | 一把梭 | `python scripts/dev_check.py` | 测试 + 后端冒烟（详见 `docs/DEV-LOOP.md`） |
 
 > ⚠️ 探针的 `--hero-expect` / `--calendar-expect` 签名**含实时数据**，只适合"改动前后短窗口对比"，
 > 不适合当跨天基线；数据一变签名就漂（文档里的哈希值只是当时的记录值）。
+> `--calendar-expect` 尤其注意：**日历格「待定/休息」按当天前后翻转**，跨天比对必然失败。

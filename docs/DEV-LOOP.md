@@ -72,7 +72,17 @@ python scripts/ui_probe.py --archive --archive-day 11 --vtuber 14    # 点指定
 python scripts/ui_probe.py --settings --vtuber 15   # 档案设置弹窗：几何 + **可点性** + 点候选行换来源（两个带签名账号）
 python scripts/ui_probe.py --settings --vtuber 14   # 同上但只有一行且签名长：断言渐隐/可滚距离，切换断言打印 [跳过]
 python scripts/ui_probe.py --scene --vtuber 15      # 场景切换机（切 V）：预取→退场→提交是否走完 + fetch 全程
+python scripts/ui_probe.py --add-v --vtuber 15      # 添加 V 浮窗：本地/上游**来源分流** + 行可命中 + UID 换档
 ```
+
+> `--add-v`（2026-09-15 起，devlog/083）：打开侧栏「+」浮窗 → 打关键词 → 断言三条：
+> ① 敲键只打本地 `/vtuber/pool/search`，`/vtuber/bili/search` **必须 0 次**
+> （"B 站检索只在显式触发时发生"这条决策的机器判据；被改回"输入即搜"时界面看不出异常，
+> 但风控预算会被无声烧掉）；② 结果行 `elementFromPoint` 命中测试 + 本地行不得置灰；
+> ③ 纯数字输入 → 按钮换「按 UID 添加」且可点。
+> ⚠️ 探针**不点结果行、不点「搜索 B 站」**：前者是真收录+真抓取，后者是真上游调用；
+> 关键词也不猜 —— 先问 `/vtuber/pool/search`，没命中就打印 `[跳过] 行级断言`。
+> 结果区必须是 `OverlayScroll`（`.av-list.os-root > .os-scroll`），原生滚动条会被判失败。
 
 > `--scene`（devlog/080）：真的点侧栏切 V，记录点击后**所有 fetch**（预取有没有回来）、
 > `.view-body` 的 class 变化序列、提交耗时与末态（hero/侧栏/路由是否一致）。
@@ -102,7 +112,7 @@ python scripts/ui_probe.py --scene --vtuber 15      # 场景切换机（切 V）
 | 列表卡片列宽契约 | 列表页 `.list-inner` ≤ 900px、卡片铺满该列且宽度一致、封面恒 220 且不被左缘裁切（2026-09-08 回归事故固化：OverlayScroll 插层让 `.list-scroll > .list-inner` 静默失效，列宽随内容在 566～1350px 之间乱跳）。**列宽契约量测已与「列表里有没有帖子」解耦**（`measure().contract` 常驻）——旧写法把守卫写在 `cards` 非空分支里，列表一空断言就失效 |
 | 筛选弹窗不出右栏 | `.post-filter-pop` 完整落在 `.posts-panel` 可视区内（该容器 `overflow:hidden`，越界＝静默裁掉左月历/底部按钮）、可见月份面板 = 2 且各 42 格、预设 = 6、初始「确认」可用（2026-09-10 P10-A 固化：首跑即抓到弹窗超出可用高度 50px 与窄窗降级反而更高） |
 | 筛选弹窗交互链 | 草稿态不改触发器（`筛选`）→ 点预设高亮 → 点「确认」关窗且触发器变 `筛选 · 1` → `重置`+Esc 回 `筛选` 且关窗 |
-| 顶栏展示策略 | 采样当时若**只有自动节拍在跑**（`post.auto`/`account.auto` 且无手动任务）→ 顶栏必须是空闲态（不亮容器、文案不是任务进度）。2026-09-10 起探针每次运行会打印一帧「后端事实 vs 顶栏渲染」采样，用于核对 |
+| 顶栏展示策略 | 采样当时若**只有自动节拍在跑**（`post.auto`/`account.auto` 且无手动任务）→ 顶栏必须是空闲态（不亮容器、文案不是任务进度）。2026-09-10 起探针每次运行会打印一帧「后端事实 vs 顶栏渲染」采样，用于核对。<br>⚠️ **外部第三方数据任务在跑时跳过**（2026-09-15 修，devlog/083）：顶栏按设计要显示 `正在同步…`（`busy = … || external.running`），而探针起后端后它往往正在跑 —— 旧口径只看 post/account，于是三档宽度一起报"只有自动节拍在跑却亮起了事件容器"（假失败）。采样已补 `externalRunning`/`externalLabel` 并打进打印行 |
 
 > **量不到 ≠ 通过**：`max-width`/`coverW`/`confirmDisabled` 等取值一旦为 `null`（选择器踩空）
 > 都直接判失败，不再静默放过——「断言被 null 中和」与「断言通过」在报告里必须区分得开。
@@ -132,6 +142,9 @@ python scripts/ui_probe.py --scene --vtuber 15      # 场景切换机（切 V）
 > 见 devlog/057。
 > ⚠️ 两个签名都**受真实数据变化影响**（粉丝数、新场次入库、danmakus 收录延迟、分类校正），
 > 只适合**「重构前后立刻各跑一次」的短窗口比对**，不要当长期稳定基线。
+> ⚠️ `--calendar-expect` **跨天必然失败**（2026-09-15 定性，devlog/083 §8.2）：无场次的格子
+> 按 `key < todayKey` 显示「休息」否则「待定」（`LiveCalendar.tsx`），每天都可能翻转。
+> 跨天只能先 `--archive-print` 取当天值再比对。
 
 `--first-run` 额外断言：空数据目录下 `?firstRun=1` 必须**自动弹出登录浮窗**，
 且浮窗内含「凭据仅保存在本机」说明。

@@ -1,4 +1,4 @@
-import type { Account, AccountStatSnapshot, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, PoolItem, PostPage, PostStats, ThirdpartyVtuber, UpdatePostsResult, VTuber, VTuberFormerValues } from './types'
+import type { Account, AccountStatSnapshot, BiliSearchResult, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, PoolItem, PostPage, PostStats, ThirdpartyVtuber, UpdatePostsResult, VTuber, VTuberFormerValues } from './types'
 
 /**
  * API 基地址：
@@ -251,16 +251,26 @@ export const api = {
 
   // ── 候选池 / 收录（v0.5） ──────────────────────────────────────
 
-  /** 候选池检索：名称关键词 / uid 前缀，已入库条目自动剔除；signal 用于防抖取消在途请求 */
+  /** 本地候选检索：csv 池 + danmakus 索引合并，已入库条目自动剔除；
+   *  signal 用于防抖取消在途请求（R11：返回项带 `origin` 标注来源） */
   searchPool: (kw: string, signal?: AbortSignal) =>
     request<PoolItem[]>(`/vtuber/pool/search?kw=${encodeURIComponent(kw)}`, { signal }),
 
-  /** 从候选池收录 VTuber（后端建库后自动调度单V账号抓取） */
-  adoptVtuber: (platform: string, platformUid: string, faction?: string) =>
+  /** 直接从 B 站检索（R11，devlog/083）：纯数字按 UID 精确查，其余按名称搜。
+   *  只在用户**显式触发**时调用（后端有 0.8s 串行 + 每分钟 20 次上限 + 5 分钟缓存）。 */
+  biliSearch: (kw: string, page = 1, signal?: AbortSignal) =>
+    request<BiliSearchResult>(
+      `/vtuber/bili/search?kw=${encodeURIComponent(kw)}&page=${page}`, { signal }),
+
+  /** 收录 VTuber（后端建库后自动调度单V账号抓取）。
+   *  `source='bilibili'` = B 站直搜来源：池外条目后端会**实查 acc/info 复核**后才建库 */
+  adoptVtuber: (platform: string, platformUid: string, faction?: string,
+                source?: 'pool' | 'bilibili') =>
     request<VTuber>('/vtuber/adopt', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ platform, platform_uid: platformUid, faction: faction || null }),
+      body: JSON.stringify({ platform, platform_uid: platformUid, faction: faction || null,
+                             source: source ?? null }),
     }),
 
   // ── 批量任务（拉取浮窗）────────────────────────────────────────

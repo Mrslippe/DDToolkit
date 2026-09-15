@@ -380,9 +380,14 @@
 
 > 口径说明：52 个装饰器里有两个是 `api_route(methods=["GET","POST"])`
 > （`/vtuber/fetch`、`/vtuber/{id}/fetch`）→ 方法×路径共 54。
-> 下文的「N」按**装饰器**计。旧文档写的 48 已过时。
+> 下文的「N」按**装饰器**计。
+>
+> 复核方式（R11，2026-09-15 实测）：`app.routes` 里共 **57** 个路由对象
+> = 3 个 router 的 **52** 个 + FastAPI 自带 4 个（`/openapi.json`、`/docs`、
+> `/docs/oauth2-redirect`、`/redoc`）+ `app/main.py` 的 `/healthz`；
+> 其中那两个 GET+POST 双方法路由让**操作数**变成 54。
 
-### 3.1 `app/routers/vtuber.py` — 主业务路由（47）
+### 3.1 `app/routers/vtuber.py` — 主业务路由（48）
 
 路径直接 `/vtuber/...`、`/account/...`、`/posts...`、`/post/...`、`/externals/...`；
 响应模型走 `app/schemas/vtuber.py`（`Out` 为 `from_attributes`）。
@@ -458,8 +463,9 @@
 | POST `/vtuber/fetch-all-posts` | 全部账号全量抓（视频+动态） |
 | POST `/posts/archive?days=30` | 归档规则；幂等，返回 cutoff/unarchived_total |
 | POST `/vtuber/update-posts?name=` | 更新未归档动态：先归档再抓动态，整页已归档即停 |
-| GET `/vtuber/pool/search?kw=` | 候选池检索（csv 离线索引），自动剔除已入库账号 |
-| POST `/vtuber/adopt` | 从候选池收录 V+账号（名称以池为准）；池内无 404、已入库/并发冲突 409；成功后后台抓该 V + 回填历史 |
+| GET `/vtuber/pool/search?kw=` | 本地候选检索（R11，devlog/083）：`vtubers.csv`（`origin='pool'`）+ `thirdparty_vtubers` 索引（`origin='index'`）两来源合并，按 `(platform, uid)` 去重（池优先）、剔除已入库 |
+| GET `/vtuber/bili/search?kw=&page=` | **直接从 B 站检索**（池外收录通道，R11）：纯数字 ≥5 位 → `acc/info` + `relation/stat` 精确查；否则 `wbi/search/type` 模糊搜；结果带 `in_library`。⚠️ **路径是两段**：`/vtuber/bili-search` 会被先注册的 `/vtuber/{vtuber_id}` 吃掉 → 422 `int_parsing`。上游失败如实回 `error`+`hint`（`rate_limited` / `page_limit` / `upstream_degraded` / `network_error` / `not_found`）；预算：0.8s 串行 + 20 次/分 + 5 分钟缓存 + 最多 3 页 |
+| POST `/vtuber/adopt` | 收录 V+账号。`source=None/'pool'` → 必须在候选池内，名称以池为准（池内无 404）；`source='bilibili'` → **池外通道**：platform 必须是 bilibili 且**服务端自己打一次 `acc/info` 校验**（失败 404 + 上游原因；**客户端给的名字永不被信任**）。已入库/并发冲突 409；成功后后台抓该 V + 回填历史 |
 | POST `/vtuber/fetch-accounts` | 批量：后台抓全部账号信息，立即返回；手动任务在跑 409 |
 | POST `/vtuber/batch/fetch-all-posts` | 批量：后台全量抓帖子 |
 | POST `/vtuber/batch/update-unarchived` | 批量：后台更新未归档 |
@@ -468,7 +474,11 @@
 **关键调用点**：
 - `/adopt` 与 `POST /{id}/accounts` 为同步端点（线程池执行），后台抓取必须走
   `BackgroundTasks`——直接 `asyncio.create_task` 会因工作线程无事件循环抛 `RuntimeError`；
+- `/adopt` 自 R11（devlog/083）起是 **`async def`**：池外通道要用
+  `await bili_search_svc.exact_user(uid)` 做服务端校验（客户端给的名字不算数）；
 - 路由顺序约束：`/vtuber/fetch-status` 必须注册在 `/vtuber/{vtuber_id}` **之前**；
+  **新增 `/vtuber/xxx/yyy` 之外的子资源端点时更要小心**：`/vtuber/bili-search`
+  会被 `/vtuber/{vtuber_id}` 匹配掉（422 `int_parsing`），所以是 `/vtuber/bili/search`；
 - 抓取类端点的忙判定用 `manual_task_running()`（自动档持锁不算忙，允许抢占），
   外部批次（T4）用 `any_fetch_running()`。
 

@@ -500,7 +500,7 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 |---|---|---|
 | AlertDialog 关闭确认 | TopBar 关闭钮(busy) | 「抓取任务正在进行中」 |
 | LoginDialog | TopBar 登录钮（`.topbar-login-btn` + 过期红点徽章） | B站/微博扫码登录（`/auth/weibo/qr/*`） |
-| AddVtuberDialog | 侧栏「+」 | 输入防抖搜本地候选池 → 点选 adopt（建库+自动单V抓取）→ 踢poll + 侧栏刷新 + 右栏跳新V |
+| AddVtuberDialog（`.av-dialog`） | 侧栏「+」（`.list-add-btn`） | **R11（2026-09-15，devlog/083）双来源**：① 本地候选（候选池 csv + `danmakus` 索引）输入防抖 250ms 即搜，**不打上游**；② 「B 站」只在**显式触发**（回车 / 点按钮 / 点「加载更多」）时检索（uid 直查或名称模糊搜）→ 点结果行 adopt（建库+自动单V抓取）→ 踢poll + 侧栏刷新 + 右栏跳新V。见 §E1 |
 | BatchFetchDialog | 侧栏「拉取」 | 四项：全量账号 / 全量帖子 / 更新未归档 / 归档（前三项后台执行+409防重入，归档同步返回条数） |
 | PostDetailDrawer | 帖子卡片 | 见 B2 |
 | ImageViewer | 详情窗内图片 | 见 B2.1 |
@@ -511,6 +511,28 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 | 月份选择浮窗 `.lc-month-pop` | 月份胶囊点击 | 年切换 + 12 月宫格（当前月高亮），选后按方向滑动切换 |
 | 场次详情弹窗 `.lc-dlg` | 直播日历格子**点击** | 见 B3（含分类校正下拉、词云、动态、分析预留） |
 | 分类校正下拉 `.lc-dlg-cat-pop` | 详情弹窗左上角胶囊 | 见 B3；点外部关闭 |
+
+### E1. 添加 V 浮窗 `.av-dialog`（R11，2026-09-15，devlog/083）
+
+侧栏「+」浮片打开。**两个来源、触发方式刻意不同**（决策①）：
+
+| 区域 | 类名 | 触发 | 打上游？ |
+|---|---|---|---|
+| 输入框（左内嵌放大镜 + 右清空钮 + 右侧触发钮） | `.av-search-row` / `.av-input-wrap` / `.av-input` / `.av-clear` / `.av-bili-btn` | 输入防抖 250ms 搜本地；**回车 / 点按钮**搜 B 站 | 本地：否 · B 站：是（预算 0.8s 串行 + 20 次/分 + 5 分钟缓存 + 最多 3 页） |
+| 结果区（`OverlayScroll`） | `.av-list`（= `.os-root`）/ `.av-row` | 点行 = 直接收录（决策②，不插预览卡） | 收录后后台抓该 V |
+
+行内元素：`.av-ava`（30px 圆头像，无图 → `.av-ava-ph` 首字）、`.av-name-text`（省略号截断）、
+`.av-tag`（「按 UID 精确」）、`.av-origin`（来源徽标：`.o-pool` 候选池 / `.o-index` 索引 /
+`.o-bilibili` B 站）、`.av-verified`（认证说明）、`.av-num`（粉丝数 / UID）、`.av-live`（直播中）、
+`.av-state`（「已订阅」）。提示与错误走 `.av-hint-row`（上游失败加 `.err` 变红 + 原样展示后端 `hint`）。
+
+三条**不能改**的界面约定（探针 `--add-v` 逐条断言）：
+1. 纯数字 ≥5 位 = **UID 直查**，按钮文案换成「按 UID 添加」（B 站搜索接口搜不到 uid）；
+2. `in_library=true` 的行**置灰 + `disabled`**（本地命中一律可点，后端已剔除已入库）；
+3. 敲键**只打本地** `/vtuber/pool/search`，`/vtuber/bili/search` 必须 0 次。
+
+> ⚠️ 结果区必须是 `OverlayScroll`（`.av-list.os-root > .os-scroll`）：全站约定不出现原生滚动条，
+> 旧版的 `overflow-y-auto` 正是被这一条取代的（探针会报「结果区不是覆盖式滚动条」）。
 
 ---
 

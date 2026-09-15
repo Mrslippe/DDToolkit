@@ -155,11 +155,13 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
             "calendar": data.get("calendar"),
             "settings": data.get("settings"),
             "scene": data.get("scene"),
+            "addv": data.get("addv"),
             "degraded": data.get("degraded") or [],
             "dom": dom_file,
         }
     return {"mode": None, "views": data, "topbar": None, "calendar": None,
-            "settings": None, "scene": None, "degraded": [], "dom": dom_file}
+            "settings": None, "scene": None, "addv": None, "degraded": [],
+            "dom": dom_file}
 
 
 # ── 展示页 hero 药丸签名（P2 分层收敛 A 批次的位级回归护栏）─────────────
@@ -287,8 +289,17 @@ def _assert_topbar(tb: dict | None, width: int) -> list[str]:
 
     ⚠️ 「采样本身失败」不在这里判（`ok=false`），否则整段会静默空转 ——
     该情形由 `_assert_probe_integrity` 作为契约失败拦下（2026-09-11 二次加固）。
+
+    ⚠️ **外部第三方数据任务不算"安静"**（2026-09-15 修，devlog/083）：顶栏按设计要显示
+    `正在同步<label>`（`TopBar.tsx`：`busy = accVisible || postVisible || external.running`）。
+    探针起后端后这个任务**往往正在跑**，而旧口径只看 post/account 两位 —— 于是三档宽度
+    一起报"只有自动节拍在跑却亮起了事件容器"（把外部同步误当成自动节拍占顶栏）。
+    采样已带 `externalRunning`，这里按"能否归因"跳过。
     """
     if not tb or not tb.get("ok"):
+        return []
+    # 外部任务在跑 ⇒ 亮灯有两种可能，归因不了就别断言（探针不该制造假失败）
+    if tb.get("externalRunning"):
         return []
     running_visible = (tb.get("postRunning") and not tb.get("postAuto")) or (
         tb.get("accountRunning") and not tb.get("accountAuto")
@@ -561,6 +572,13 @@ def main() -> int:
              "收起态不存在面板）",
     )
     ap.add_argument(
+        "--add-v",
+        action="store_true",
+        help="只跑一档宽度：打开「添加 VTuber」浮窗 → 打关键词 → 断言三条不变量"
+             "（敲键不打上游 / 结果行可命中 / 纯数字输入换成「按 UID 添加」）。"
+             "探针**不点结果行、不点「搜索 B 站」**（那是真收录与真上游调用）。",
+    )
+    ap.add_argument(
         "--hero-expect",
         default="",
         help="cards 视图 hero 药丸签名的期望 sha256（位级回归护栏）。"
@@ -756,6 +774,100 @@ def main() -> int:
                 print("   -", b)
             return 1 if failures else 0
 
+        if args.add_v:
+            # 「添加 V」浮窗（R11，devlog/083）：本地候选 + B 站在线检索两个来源。
+            # 这里断言的是**来源分流**，不是长相：
+            #   ① 敲键只打本地（`/vtuber/pool/search`），**一次都不打** `/vtuber/bili/search`
+            #      —— 决策①"B 站检索必须显式触发"的机器判据。少了它，日后有人把 B 站
+            #      检索接回"输入即搜"，探针仍会全绿，而风控预算会被无声烧掉。
+            #   ② 结果行命中测试：看得见必须点得着（这类浮窗出过 pointer-events 被吃掉）。
+            #   ③ 纯数字（UID）输入换档：按钮变「按 UID 添加」且可点（uid 不走搜索接口，
+            #      走 `acc/info` 精确通道，用户得能从按钮上看出来）。
+            w = widths[0]
+            url = f"http://localhost:{vite_port}{route}?probe=addv"
+            print(f"[probe] add-v @{w} → {url}")
+            res = _run_probe(edge, url, w, args.height, WORK, "addv")
+            av = ((res or {}).get("addv") or {})
+            if res and not av:
+                print(f"  [!] 探针 mode={res.get('mode')!r} 键={sorted(res.keys())}"
+                      f"（新字段需要在 _run_probe 的白名单里登记）")
+            print(f"  入口={av.get('hasTrigger')} 打开={av.get('opened')} "
+                  f"结果区=OverlayScroll {av.get('listIsOverlayScroll')} "
+                  f"输入左内距={av.get('inputLeftPad')}（给图标留位={av.get('inputIconRoom')}）")
+            print(f"  空态 B 站钮: 禁用={av.get('biliBtnDisabledWhenEmpty')} "
+                  f"文案={av.get('biliBtnText')!r}")
+            print(f"  关键词={av.get('keyword')!r} 结果行={av.get('rows')} "
+                  f"置灰行={av.get('rowsDisabled')} 行可命中={av.get('rowHit')} "
+                  f"行带 uid={av.get('rowHasUid')}")
+            print(f"  本地检索真的发生={av.get('localSearchHappened')} "
+                  f"（pool 请求 {av.get('poolRequestsBeforeTyping')} → "
+                  f"{av.get('poolRequestsAfterTyping')}）· "
+                  f"敲键打上游={av.get('biliRequests')} 次（必须 0）")
+            print(f"  UID 换档: 文案={av.get('uidBtnText')!r} 可点={av.get('uidBtnEnabled')} "
+                  f"清空={av.get('clearOk')} 清空后行数={av.get('afterClearRows')} "
+                  f"回提示={av.get('afterClearHint')} 关窗={av.get('closed')} "
+                  f"全程上游请求={av.get('biliRequestsTotal')} 次")
+            if av.get("reason") == "no-add-trigger":
+                failures.append(f"@{w} add-v: 侧栏找不到「添加 V」钮（.list-add-btn）")
+            elif av.get("reason") == "dialog-not-opened":
+                failures.append(f"@{w} add-v: 点了「添加 V」但浮窗（.av-dialog）没出现")
+            elif not av.get("opened"):
+                failures.append(f"@{w} add-v: 没打开「添加 V」浮窗（探针未量到 addv 段）")
+            else:
+                if not av.get("inputIconRoom"):
+                    failures.append(f"@{w} add-v: 输入框左内距只有 {av.get('inputLeftPad')}，"
+                                    f"没给 14px 的内嵌搜索图标留位（图标会压字）")
+                if not av.get("listIsOverlayScroll"):
+                    failures.append(f"@{w} add-v: 结果区不是覆盖式滚动条"
+                                    f"（要求 .av-list.os-root > .os-scroll：原生滚动条会挤动布局）")
+                if not av.get("biliBtnDisabledWhenEmpty"):
+                    failures.append(f"@{w} add-v: 空输入时「搜索 B 站」钮仍可点"
+                                    f"（没关键词就没什么可搜的）")
+                if av.get("rowsSkipped"):
+                    print(f"  [跳过] 行级断言：{av.get('rowsSkipped')}"
+                          f"（本地候选池没命中，数据形态问题而非回归）")
+                else:
+                    if not av.get("rows"):
+                        failures.append(f"@{w} add-v: 输入 {av.get('keyword')!r} 后一行候选都没有"
+                                        f"（本地检索链路断了？）")
+                    if not av.get("localSearchHappened"):
+                        failures.append(f"@{w} add-v: 敲键后没有发出本地检索请求"
+                                        f"（pool 请求数没有增长）")
+                    if av.get("biliRequests"):
+                        failures.append(f"@{w} add-v: **敲键就打了 B 站上游** "
+                                        f"{av.get('biliRequests')} 次 —— "
+                                        f"决策①是「显式触发才检索」（fuzzy 搜索必须回车/点按钮）")
+                    if not av.get("rowHit"):
+                        failures.append(f"@{w} add-v: 结果行命中测试失败"
+                                        f"（行被挡住或 pointer-events 被祖先吃掉）")
+                    if (av.get("rowsDisabled") or 0) > 0:
+                        failures.append(f"@{w} add-v: 本地候选里有 {av.get('rowsDisabled')} 行被置灰"
+                                        f"（后端已剔除已入库账号，本地行应当都能点）")
+                # UID 换档 / 清空 / 关窗：**不依赖关键词命中**（只跟输入框与按钮有关），
+                # 所以放在行级断言之外 —— 否则本地池没命中时这几条会一起空转。
+                if not av.get("uidSwitchOk"):
+                    failures.append(f"@{w} add-v: 输入纯数字 UID 后按钮文案是 "
+                                    f"{av.get('uidBtnText')!r}，不是「按 UID 添加」"
+                                    f"（uid 不走搜索接口，用户得看得出来）")
+                if not av.get("uidBtnEnabled"):
+                    failures.append(f"@{w} add-v: UID 输入态「按 UID 添加」钮不可点")
+                if not av.get("clearOk"):
+                    failures.append(f"@{w} add-v: 点清空钮后输入框没清空")
+                if (av.get("afterClearRows") or 0) > 0:
+                    failures.append(f"@{w} add-v: 清空后候选行仍留在界面上"
+                                    f"（{av.get('afterClearRows')} 行）")
+                if not av.get("closed"):
+                    failures.append(f"@{w} add-v: 点 X 没能关掉浮窗")
+                if av.get("biliRequestsTotal"):
+                    failures.append(f"@{w} add-v: 探针全程出现了 {av.get('biliRequestsTotal')} 次"
+                                    f" `/vtuber/bili/search` 请求 —— 本模式刻意不触发上游检索，"
+                                    f"出现即说明有非显式触发路径")
+                if not failures:
+                    print("  [ok] 添加 V 浮窗：本地/上游分流、行可点、UID 换档全部通过")
+            for b in failures:
+                print("   -", b)
+            return 1 if failures else 0
+
         if args.settings:
             # 档案设置弹窗的几何与**可点性**不变量（devlog/072 起；可点性判据 devlog/075）。
             # 这个弹窗此前无探针覆盖，而它出过：滚动条压输入框、浮层被滚动体静默裁掉、
@@ -944,6 +1056,7 @@ def main() -> int:
                 f"ok={tb.get('ok')} text={tb.get('pillText')!r} on={tb.get('pillOn')} "
                 f"post={tb.get('postRunning')}/auto={tb.get('postAuto')} "
                 f"acc={tb.get('accountRunning')}/auto={tb.get('accountAuto')} "
+                f"external={tb.get('externalRunning')}/{tb.get('externalLabel')!r} "
                 f"manual={tb.get('manualRunning')}"
             )
             for b in bad:          # 全部打印：原来只印前 8 条，后面的问题被吞掉

@@ -2153,6 +2153,287 @@ img.hero-avatar {
   color: var(--c-primary-deep);
 }
 
+/* ── 添加 V 浮窗（R11，devlog/083）──────────────────────────────────
+   两个来源：本地候选（候选池 + danmakus 索引）与 **B 站在线检索**。
+   在线检索只在显式触发（回车 / 按钮）时发生，所以"触发钮"与"加载更多"是这一窗
+   唯一需要视觉分量的控件；结果行沿用列表语汇（首字占位 / 来源徽标 / 已订阅置灰）。
+
+   ⚠️ 行是 `<button>`（整行可点），置灰用 `disabled` 属性本身 —— `.off` 只是配色。
+   探针按 `[data-uid]` 与 `disabled` 断言，别把置灰做成"看着灰但能点"。 */
+.av-dialog {
+  max-width: 620px;
+}
+
+.av-desc {
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.av-desc b {
+  font-weight: 600;
+  color: var(--c-primary-deep);
+}
+
+.av-search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.av-input-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+
+.av-input-icon {
+  position: absolute;
+  left: 9px;
+  width: 14px;
+  height: 14px;
+  color: var(--c-text-sub);
+  pointer-events: none;
+}
+
+/* 左右内距都给图标/清空钮留位：图标压字正是在档案设置里踩过的坑（devlog/075） */
+.av-input {
+  width: 100%;
+  height: 34px;
+  padding: 0 28px;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  background: var(--c-bg-card);
+  color: var(--c-text-main);
+  font-family: inherit;
+  font-size: 13px;
+  outline: none;
+}
+
+.av-input:focus-visible {
+  border-color: var(--c-primary);
+}
+
+.av-clear {
+  position: absolute;
+  right: 8px;
+  display: flex;
+  padding: 2px;
+  border: 0;
+  background: transparent;
+  color: var(--c-text-sub);
+  cursor: pointer;
+}
+
+.av-clear:hover {
+  color: var(--c-primary-deep);
+}
+
+.av-bili-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 34px;
+  padding: 0 13px;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  background: var(--c-bg-card);
+  color: var(--c-text-main);
+  font-family: inherit;
+  font-size: 12.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.av-bili-btn:hover:not(:disabled) {
+  border-color: var(--c-primary);
+  color: var(--c-primary-deep);
+}
+
+.av-bili-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* 结果区是 OverlayScroll 根（`.os-root` 已给 overflow:hidden + flex column）：
+   这里只给外框与高度上限 —— 高度上限 + 内部 `.os-scroll` 的 flex:1;min-height:0
+   才会真的产生内部滚动（`height:100%` 在 auto 高度的弹窗里失效，2026-09-07 踩过）。 */
+.av-list {
+  margin-top: 10px;
+  max-height: 320px;
+  min-height: 96px;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+}
+
+.av-hint-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 14px 12px;
+  font-size: 12px;
+  line-height: 1.7;
+  text-align: center;
+  color: var(--c-text-sub);
+}
+
+/* 上游失败（风控/降级/网络）显性化：这一行必须是"出错了"，不是"没有这个人" */
+.av-hint-row.err {
+  color: #e05261;
+}
+
+.av-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--c-primary-deep);
+  font-family: inherit;
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.av-link:disabled {
+  color: var(--c-text-sub);
+  text-decoration: none;
+  cursor: default;
+}
+
+.av-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 11px;
+  border: 0;
+  border-bottom: 1px solid var(--c-border);
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.av-row:last-of-type {
+  border-bottom: 0;
+}
+
+.av-row:hover:not(:disabled) {
+  background: var(--sel-bg-hover);
+}
+
+.av-row:disabled {
+  opacity: 0.62;
+  cursor: default;
+}
+
+.av-ava {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--sel-bg);
+}
+
+.av-ava-ph {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  color: var(--c-text-sub);
+}
+
+.av-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.av-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--c-text-main);
+}
+
+.av-name-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.av-tag {
+  flex: none;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: var(--sel-bg);
+  color: var(--c-primary-deep);
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.av-sub {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--c-text-sub);
+  white-space: nowrap;
+}
+
+.av-origin {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--c-rail);
+  color: var(--c-text-on-primary);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.av-origin.o-index {
+  background: var(--c-rail-active-bg);
+}
+
+.av-origin.o-bilibili {
+  background: var(--c-primary-deep);
+}
+
+.av-verified,
+.av-group {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.av-num {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.av-live {
+  flex: none;
+  color: var(--c-live);
+}
+
+.av-state {
+  flex: none;
+  font-size: 11px;
+  color: var(--c-text-sub);
+}
+
 .vd-settings-foot {
   flex: none;
   display: flex;

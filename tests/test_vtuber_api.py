@@ -1,4 +1,4 @@
-import json
+﻿import json
 import pytest
 from datetime import datetime, timedelta, timezone
 from fastapi.testclient import TestClient
@@ -215,6 +215,159 @@ def test_adopt_triggers_background_chain(monkeypatch, client):
     monkeypatch.setattr(router_mod.pool, "find_in_pool", lambda p, u: None)
     assert client.post("/vtuber/adopt",
                        json={"platform": "bilibili", "platform_uid": "999"}).status_code == 404
+
+
+def test_bili_search_endpoint_maps_items_and_flags_in_library(monkeypatch, client):
+    """`GET /vtuber/bili/search`（R11，devlog/083）：字段透传 + `in_library` 标注 + 错误文案。
+
+    `in_library` 是前端"已订阅置灰"的依据；标错的代价是"看着能加、点了 409"。
+    """
+    import app.routers.vtuber as router_mod
+    from app.services.bili_search import SearchResult
+
+    async def fake_search(kw: str, page: int = 1):
+        assert kw == "塔菲" and page == 2
+        return SearchResult(items=[
+            {"platform": "bilibili", "platform_uid": "1265680561", "name": "永雏塔菲",
+             "sign": "王牌级偶像", "followers": 2753531, "avatar": "https://x/a.jpg",
+             "verified": "bilibili 知名游戏UP主", "is_live": True, "room_id": "22603245",
+             "videos": 463, "level": 6, "exact": False},
+            {"platform": "bilibili", "platform_uid": "999", "name": "已订阅的人",
+             "sign": "", "followers": 1, "avatar": "", "verified": "",
+             "is_live": False, "room_id": None, "videos": 0, "level": 0, "exact": False},
+        ], page=2, total_pages=5, has_more=True, cached=True)
+
+    monkeypatch.setattr(router_mod.bili_search_svc, "search", fake_search)
+
+    # 先把 uid=999 入库，验证已订阅标注
+    vid = client.post("/vtuber", json={"name": "已订阅"}).json()["id"]
+    client.post(f"/vtuber/{vid}/accounts",
+                json={"platform": "bilibili", "platform_uid": "999"})
+
+    r = client.get("/vtuber/bili/search?kw=塔菲&page=2")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["page"] == 2 and body["has_more"] is True and body["cached"] is True
+    items = {it["platform_uid"]: it for it in body["items"]}
+    assert items["1265680561"]["name"] == "永雏塔菲"
+    assert items["1265680561"]["followers"] == 2753531
+    assert items["1265680561"]["verified"] == "bilibili 知名游戏UP主"
+    assert items["1265680561"]["in_library"] is False      # 没入库
+    assert items["999"]["in_library"] is True              # 已入库 → 前端置灰
+
+    # 错误路径：error + hint 必须原样透传（前端据此说人话，而不是"没有这个人"）
+    async def fake_degraded(kw: str, page: int = 1):
+        return SearchResult(error="upstream_degraded", hint="B 站对本次检索做了限制")
+
+    monkeypatch.setattr(router_mod.bili_search_svc, "search", fake_degraded)
+    body2 = client.get("/vtuber/bili/search?kw=塔菲").json()
+    assert body2["items"] == [] and body2["error"] == "upstream_degraded"
+    assert "限制" in body2["hint"]
+
+
+def test_adopt_from_bilibili_requires_server_side_verification(monkeypatch, client):
+    """池外收录（`source='bilibili'`）**必须服务端实查通过**才建库（R11，devlog/083）。
+
+    这条是安全边界：不实查就能随便填个 uid 建 V；名称也必须以实查结果为准
+    （前端传什么都不作数）。
+    """
+    import app.routers.vtuber as router_mod
+    from app.services.bili_search import SearchResult
+
+    monkeypatch.setattr(router_mod.pool, "find_in_pool", lambda p, u: None)   # 池外
+    called = {"n": 0}
+
+    async def fake_exact(uid: str, client=None):
+        called["n"] += 1
+        if uid == "1265680561":
+            return SearchResult(items=[{"platform_uid": uid, "name": "永雏塔菲",
+                                        "sign": "", "followers": 1, "avatar": "",
+                                        "verified": "", "is_live": False,
+                                        "room_id": None, "videos": 0, "level": 0,
+                                        "exact": True}], exact=True)
+        return SearchResult(error="not_found", hint="B 站没有这个 UID（或已注销）")
+
+    monkeypatch.setattr(router_mod.bili_search_svc, "exact_user", fake_exact)
+
+    async def noop_background(*_a, **_k) -> None:
+        return None
+    monkeypatch.setattr(router_mod, "_adopt_background", noop_background)
+
+    # ① 实查通过 → 建库，名称取实查结果
+    r = client.post("/vtuber/adopt",
+                    json={"platform": "bilibili", "platform_uid": "1265680561",
+                          "source": "bilibili"})
+    assert r.status_code == 201
+    assert r.json()["name"] == "永雏塔菲"
+    assert called["n"] == 1
+
+    # ② 实查失败 → 404，不建库（错误文案用上游给的 hint）
+    r2 = client.post("/vtuber/adopt",
+                     json={"platform": "bilibili", "platform_uid": "99999999",
+                           "source": "bilibili"})
+    assert r2.status_code == 404
+    assert "注销" in r2.json()["detail"]
+    assert client.get("/vtuber/list").json().__len__() == 1        # 只建了上面那一个
+
+    # ③ 池外但没声明 source → 仍 404（不给"顺手绕过池子"的口子）
+    r3 = client.post("/vtuber/adopt",
+                     json={"platform": "bilibili", "platform_uid": "88888888"})
+    assert r3.status_code == 404
+    assert called["n"] == 2                                        # ③ 没有触发实查
+
+    # ④ 池外 + 非 bilibili → 400（当前只支持 B 站直搜）
+    r4 = client.post("/vtuber/adopt",
+                     json={"platform": "weibo", "platform_uid": "88888888",
+                           "source": "bilibili"})
+    assert r4.status_code == 400
+
+    # ⑤ 池内条目**不**触发实查（原行为不变，省一次上游）
+    monkeypatch.setattr(router_mod.pool, "find_in_pool",
+                        lambda p, u: {"name": "池内名", "platform": p, "platform_uid": u})
+    r5 = client.post("/vtuber/adopt",
+                     json={"platform": "bilibili", "platform_uid": "401315430"})
+    assert r5.status_code == 201 and r5.json()["name"] == "池内名"
+    assert called["n"] == 2
+
+
+def test_pool_search_merges_csv_pool_and_thirdparty_index(monkeypatch, client):
+    """本地检索合并两个来源（R11）：csv 池优先 + danmakus 索引兜底，按 uid 去重、剔除已入库。"""
+    import app.routers.vtuber as router_mod
+    from app.models.vtuber import ThirdpartyVtuber
+
+    monkeypatch.setattr(router_mod.pool, "search_pool", lambda kw, limit=20: [
+        {"name": "永雏塔菲", "platform": "bilibili", "platform_uid": "1265680561"},
+    ])
+    db = TestingSession()
+    try:
+        db.add_all([
+            # 与池内同 uid（应被去重，池优先）
+            ThirdpartyVtuber(platform="bilibili", platform_uid="1265680561",
+                             name="索引里的塔菲", source="danmakus"),
+            # 只在索引里（新 V）→ 应作为 origin=index 出现
+            ThirdpartyVtuber(platform="bilibili", platform_uid="777777",
+                             name="索引新V", group_name="某企划", source="danmakus"),
+            # 已入库 → 不该出现
+            ThirdpartyVtuber(platform="bilibili", platform_uid="555555",
+                             name="已订阅的", source="danmakus"),
+        ])
+        db.commit()
+    finally:
+        db.close()
+    vid = client.post("/vtuber", json={"name": "已订阅"}).json()["id"]
+    client.post(f"/vtuber/{vid}/accounts",
+                json={"platform": "bilibili", "platform_uid": "555555"})
+
+    rows = client.get("/vtuber/pool/search?kw=塔菲").json()
+    by_uid = {r["platform_uid"]: r for r in rows}
+    assert by_uid["1265680561"]["name"] == "永雏塔菲"        # 池优先（名称更规范）
+    assert by_uid["1265680561"]["origin"] == "pool"
+    assert "555555" not in by_uid                            # 已入库剔除
+
+    rows2 = client.get("/vtuber/pool/search?kw=索引").json()
+    idx = {r["platform_uid"]: r for r in rows2}
+    assert idx["777777"]["origin"] == "index"
+    assert idx["777777"]["group"] == "某企划"
 
 
 def test_backfill_registers_external_status(monkeypatch, client):

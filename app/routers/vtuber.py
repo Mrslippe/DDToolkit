@@ -25,8 +25,10 @@ from app.schemas.vtuber import (
     FanTrendPoint, LiveSessionOut, LiveCategoryOut, LiveSessionDetailOut,
     VtuberEventOut, VtuberEventCreate, FutureReservationOut,
     FormerValueOut, VTuberFormerValuesOut,
+    BiliSearchOut, BiliSearchItemOut,
 )
 from app.services import pool
+from app.services import bili_search as bili_search_svc
 from app.services.purge import purge_account, purge_vtuber
 from app.services.live_type import (
     infer_category, plan_series, build_learned, EDITABLE_CATEGORY_KEYS,
@@ -949,6 +951,9 @@ class AdoptRequest(BaseModel):
     platform: str = "bilibili"
     platform_uid: str
     faction: str | None = None
+    # 来源（R11，devlog/083）：None/'pool' = 候选池（必须在池内）；
+    # 'bilibili' = B 站直搜，池外条目会**服务端实查 acc/info** 复核后才建库
+    source: str | None = None
 
 
 # 后台任务强引用集合（v0.9.4）：
@@ -1028,32 +1033,108 @@ async def _backfill_adopted_history(account_id: int, label: str = "") -> None:
 
 @router.get("/vtuber/pool/search")
 def search_pool(kw: str, db: Session = Depends(get_db)):
-    """候选池检索：本地 csv 索引按 名称关键词/uid前缀 匹配，
-    自动剔除已入库账号。示例: GET /vtuber/pool/search?kw=塔菲"""
+    """本地候选检索（**两个来源合并**，R11 devlog/083）：
+
+    1. `vtubers.csv` 离线候选池（`pool.search_pool`，带粉丝数，按粉丝降序）；
+    2. `thirdparty_vtubers`（danmakus 周级索引，本地表、零上游请求）—— 覆盖池快照之后
+       新出现的 V，`group_name` 还能给出企划/公会线索。
+
+    两条来源按 `(platform, platform_uid)` 去重（池优先，名称更规范），并剔除已入库账号。
+    返回项带 `origin`：`pool` / `index`，前端据此标注来源。
+    示例: GET /vtuber/pool/search?kw=塔菲
+    """
     kw = (kw or "").strip()
     if not kw:
         return []
-    hits = pool.search_pool(kw, limit=20)
     existing = {
-        (a.platform, a.platform_uid)
+        (a.platform, str(a.platform_uid))
         for a in db.query(Account.platform, Account.platform_uid).all()
     }
-    return [h for h in hits if (h["platform"], h["platform_uid"]) not in existing]
+
+    merged: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for h in pool.search_pool(kw, limit=20):                    # ① csv 池优先
+        key = (h["platform"], str(h["platform_uid"]))
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append({**h, "origin": "pool"})
+    for it in ThirdpartyVtuberRepo(db).search(kw, limit=20):    # ② 第三方索引兜底
+        key = (it.platform, str(it.platform_uid))
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append({"name": it.name, "platform": it.platform,
+                       "platform_uid": str(it.platform_uid),
+                       "group": it.group_name or "", "origin": "index"})
+    return [m for m in merged if (m["platform"], str(m["platform_uid"])) not in existing]
+
+
+@router.get("/vtuber/bili/search", response_model=BiliSearchOut)
+async def bili_search(kw: str = Query(""), page: int = Query(1, ge=1),
+                      db: Session = Depends(get_db)):
+    """**直接从 B 站检索**（R11，devlog/083）：候选池之外的新 V 也能加进来。
+
+    - 纯数字（≥5 位）→ 按 UID 精确查（`acc/info` + `relation/stat`）——B 站搜索接口
+      搜不到 uid（实测），所以数字必须直查；
+    - 其余 → 用户搜索（`wbi/search/type?search_type=bili_user`，20 条/页，最多 3 页）。
+
+    两条路径都带**搜索页请求头**（缺了会 `-1200 降级过滤` 或**静默 0 条**，见服务模块 docstring），
+    并受 `bili_search` 的 0.8s 串行 + 每分钟 20 次上限 + 5 分钟结果缓存约束。
+    `error` 非空表示"没取到"，`hint` 是给用户看的原因与建议（前端如实展示，不回退成"没有这个人"）。
+
+    ⚠️ 路径刻意是**两段**（`/vtuber/bili/search`，与 `/vtuber/pool/search` 同形）：
+    写成一段（`/vtuber/bili-search`）会被先注册的 `/vtuber/{vtuber_id}` 抢走匹配
+    → `int_parsing` 422（本批实测踩到）。新增 `/vtuber/xxx` 一段式路径时注意同一坑。
+    """
+    res = await bili_search_svc.search(kw, page=page)
+    existing = {
+        (a.platform, str(a.platform_uid))
+        for a in db.query(Account.platform, Account.platform_uid).all()
+    }
+    return BiliSearchOut(
+        items=[BiliSearchItemOut(**{**it,
+                                    "in_library": (it["platform"],
+                                                   str(it["platform_uid"])) in existing})
+               for it in res.items],
+        page=res.page, total_pages=res.total_pages, has_more=res.has_more,
+        error=res.error, hint=res.hint, exact=res.exact, cached=res.cached,
+    )
 
 
 @router.post("/vtuber/adopt", response_model=VTuberOut, status_code=status.HTTP_201_CREATED)
-def adopt_vtuber(data: AdoptRequest, background: BackgroundTasks, db: Session = Depends(get_db)):
-    """从候选池收录 VTuber：建库后立即调度该 V 的账号信息 + 首屏内容抓取。
-    仅接受池内存在的 (platform, platform_uid)，名称以池为准防伪造。
+async def adopt_vtuber(data: AdoptRequest, background: BackgroundTasks,
+                       db: Session = Depends(get_db)):
+    """收录 VTuber：建库后立即调度该 V 的账号信息 + 首屏内容抓取。
 
-    注意：本端点为同步函数（线程池执行），抓取调度必须走 BackgroundTasks
-    ——直接 asyncio.create_task 会因工作线程无事件循环抛 RuntimeError，
-    造成「数据已入库但响应 500、抓取未启动」的双重故障（v0.5 实测）。
-    后台链路的内部并发（账号信息 ∥ 首屏内容）发生在 `_adopt_background` 里，
-    那时已在事件循环上，可以安全 create_task。"""
+    两个来源（R11，devlog/083）：
+
+    | 来源 | 判定 | 名称取谁 |
+    |---|---|---|
+    | 候选池 | `(platform, uid)` 命中 `vtubers.csv` | 池内规范名（原行为） |
+    | B 站直搜 | `source='bilibili'` 且池内没有 | **服务端实查 `acc/info` 的结果**（不信任请求体） |
+
+    池外条目**必须**服务端复核通过才建库：既防伪造（随便填个 uid 就建 V），
+    也防脏名（前端传什么名字都不作数）。
+
+    ⚠️ 本端点是 async（要 await 上游复核）；抓取调度仍走 `BackgroundTasks` —— 响应送达后
+    才起跑账号信息 ∥ 首屏内容（`_adopt_background`），避免把收录响应拖到抓取结束。
+    """
     hit = pool.find_in_pool(data.platform, data.platform_uid)
-    if not hit:
-        raise HTTPException(404, "候选池中不存在该 platform_uid，请先在添加浮窗中检索选择")
+    if hit:
+        name = hit["name"]
+        source = "pool"
+    else:
+        if data.source != "bilibili":
+            raise HTTPException(404, "候选池中不存在该 platform_uid；"
+                                     "请用「搜索 B 站」收录（source='bilibili'）")
+        if data.platform != "bilibili":
+            raise HTTPException(400, "池外收录目前只支持 bilibili")
+        verified = await bili_search_svc.exact_user(str(data.platform_uid))
+        if not verified.items:
+            raise HTTPException(404, verified.hint or "该 UID 在 B 站查不到，未收录")
+        name = verified.items[0]["name"]
+        source = "bilibili"
 
     exists = db.query(Account).filter(
         Account.platform == data.platform,
@@ -1062,14 +1143,14 @@ def adopt_vtuber(data: AdoptRequest, background: BackgroundTasks, db: Session = 
     if exists:
         raise HTTPException(409, f"该账号已入库（VTuber#{exists.vtuber_id}）")
 
-    vtuber = VTuber(name=hit["name"], faction=data.faction)
+    vtuber = VTuber(name=name, faction=data.faction)
     db.add(vtuber)
     db.flush()
     acc = Account(
         vtuber_id=vtuber.id,
         platform=data.platform,
         platform_uid=data.platform_uid,
-        display_name=hit["name"],
+        display_name=name,
     )
     db.add(acc)
     try:
@@ -1079,6 +1160,8 @@ def adopt_vtuber(data: AdoptRequest, background: BackgroundTasks, db: Session = 
         db.rollback()
         raise HTTPException(409, f"该账号已入库（并发收录冲突）") from None
     db.refresh(vtuber)
+    logger.info(f"收录 VTuber#{vtuber.id} 「{name}」({data.platform}:{data.platform_uid}) "
+                f"来源={source}")
 
     # 响应送达后由事件循环执行：账号信息 + 首屏内容并发，第三方历史后台补
     background.add_task(_adopt_background, vtuber.id, acc.id,

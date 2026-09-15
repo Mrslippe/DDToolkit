@@ -71,11 +71,48 @@ export interface AccountStatSnapshot {
   source: string
 }
 
-/** 候选池条目（vtubers.csv 离线索引） */
+/** 本地候选检索条目（R11，devlog/083：两个来源合并）
+ *  - `origin='pool'`  = `vtubers.csv` 离线候选池（名称更规范，同 uid 时优先）
+ *  - `origin='index'` = `thirdparty_vtubers`（danmakus 周级索引，`group` 是企划/公会） */
 export interface PoolItem {
   name: string
   platform: string
   platform_uid: string
+  origin?: 'pool' | 'index'
+  /** 企划 / 公会（只有 index 来源有） */
+  group?: string
+}
+
+/** 一条 B 站检索结果（`GET /vtuber/bili/search`） */
+export interface BiliSearchItem {
+  platform: string
+  platform_uid: string
+  name: string
+  sign: string
+  followers: number
+  avatar: string
+  /** 认证说明（如"bilibili 知名游戏UP主"）；空串 = 无认证 */
+  verified: string
+  is_live: boolean
+  room_id: string | null
+  videos: number
+  level: number
+  /** true = 按 UID 精确查到的单条（不是搜索命中） */
+  exact: boolean
+  /** true = 该账号已在库里（前端置灰"已订阅"） */
+  in_library: boolean
+}
+
+/** `GET /vtuber/bili/search`：`error` 非空时 `items` 必为空，`hint` 是给用户看的原因 */
+export interface BiliSearchResult {
+  items: BiliSearchItem[]
+  page: number
+  total_pages: number
+  has_more: boolean
+  error: string | null
+  hint: string | null
+  exact: boolean
+  cached: boolean
 }
 
 export interface Post {

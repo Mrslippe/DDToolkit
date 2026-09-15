@@ -70,6 +70,37 @@ class AccountStatSnapshotOut(BaseModel):
         return v
 
 
+# ── B 站检索（R11，devlog/083）─────────────────────────────────────
+
+class BiliSearchItemOut(BaseModel):
+    """一条 B 站检索结果（`/vtuber/bili-search`）：搜索接口字段归一化后的形状。"""
+    platform: str = "bilibili"
+    platform_uid: str
+    name: str
+    sign: str = ""
+    followers: int = 0
+    avatar: str = ""
+    verified: str = ""          # 认证说明（如"bilibili 知名游戏UP主"）；空串=无认证
+    is_live: bool = False
+    room_id: str | None = None
+    videos: int = 0
+    level: int = 0
+    exact: bool = False         # true = 按 UID 精确查到的单条（不是搜索命中）
+    in_library: bool = False    # true = 该 (platform, uid) 已在库里
+
+
+class BiliSearchOut(BaseModel):
+    """检索响应：`error` 非空时 `items` 必为空，`hint` 是给用户看的人话说明。"""
+    items: list[BiliSearchItemOut] = []
+    page: int = 1
+    total_pages: int = 0
+    has_more: bool = False
+    error: str | None = None
+    hint: str | None = None
+    exact: bool = False
+    cached: bool = False
+
+
 # ── VTuber ─────────────────────────────────────────────────────────
 
 class VTuberOut(BaseModel):

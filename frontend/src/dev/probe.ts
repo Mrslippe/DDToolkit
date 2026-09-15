@@ -11,6 +11,7 @@
  *
  * 输出：`<pre id="ui-probe">` 内 JSON（每个视图一段），供脚本解析。
  */
+import { api } from '../api/api'
 
 interface ProbeView {
   key: string
@@ -280,6 +281,7 @@ async function sampleTopbar() {
   let st: {
     account?: { running?: boolean; auto?: boolean }
     post?: { running?: boolean; auto?: boolean }
+    external?: { running?: boolean; label?: string | null }
     manual_running?: boolean
   } | null = null
   try {
@@ -298,6 +300,12 @@ async function sampleTopbar() {
     accountAuto: st?.account?.auto === true,
     postRunning: !!st?.post?.running,
     postAuto: st?.post?.auto === true,
+    /** 外部第三方数据任务（收录回填 / 每日批次）——**探针起后端后它往往正在跑**，
+     *  而顶栏**按设计**要显示它（`TopBar.tsx`：`busy = … || external.running`）。
+     *  采样必须带上这一位，否则"自动节拍不得占顶栏"那条断言会把外部同步
+     *  误判成自动节拍占了顶栏（2026-09-15 实测到的假失败）。 */
+    externalRunning: !!st?.external?.running,
+    externalLabel: st?.external?.label ?? null,
     manualRunning: st?.manual_running,
     ok: !!st,
   }
@@ -548,6 +556,136 @@ export async function runUiProbe(): Promise<void> {
       p?.click()
       await sleep(600)
     }
+    document.title = 'UI_PROBE_DONE'
+    return
+  }
+
+  // 添加 V 浮窗（`?probe=addv`，2026-09-14，devlog/083）：
+  // 这个浮窗此前**没有探针覆盖**，而 R11 把它从"只有本地候选"扩成"本地 + B 站在线"——
+  // 新增的恰好是**会产生上游请求**的东西，所以这里要盯的不是"好不好看"，而是三条：
+  //   ① **敲键不打上游**（决策①：B 站检索只在显式触发时发生）——用 resource 计时条目
+  //      数 `/vtuber/bili/search` 的请求数，必须为 0；本地检索必须 >0（证明真的检索了）；
+  //   ② **看得见就要点得着**：结果行的 `elementFromPoint` 命中测试（命中被祖先吃掉
+  //      在这类浮窗里出过不止一次）；
+  //   ③ **UID 输入要换档**：纯数字 → 按钮文案变「按 UID 添加」（B 站搜索接口搜不到 uid，
+  //      走的是 `acc/info` 精确通道，用户得能从按钮上看出来）。
+  //
+  // ⚠️ 探针**绝不点结果行**：点一下就是真收录 + 真抓取（会打上游、会写库）。
+  //   也**绝不点「搜索 B 站」**：那是真实上游调用（风控预算）。
+  if (mode === 'addv') {
+    const result: Record<string, unknown> = {}
+    const waitFor = async (fn: () => unknown, ms = 4000) => {
+      const t0 = performance.now()
+      while (performance.now() - t0 < ms) {
+        const v = fn()
+        if (v) return v
+        await sleep(100)
+      }
+      return null
+    }
+    const hits = (el: HTMLElement | null, x: number, y: number) => {
+      if (!el) return false
+      const hit = document.elementFromPoint(x, y)
+      return !!hit && (hit === el || el.contains(hit))
+    }
+    /** 上游请求计数（resource timing）：按路径数，不看响应内容 */
+    const reqs = (frag: string) =>
+      performance.getEntriesByType('resource')
+        .filter((e) => e.name.includes(frag)).length
+    /** 受控 input：必须走**原型上的 value setter**再派发 input，
+     *  直接 `input.value = x` React 收不到（合成事件比对的是跟踪值） */
+    const setVal = (el: HTMLInputElement, v: string) => {
+      const desc = Object.getOwnPropertyDescriptor(
+        Object.getPrototypeOf(el) as object, 'value')
+      desc?.set?.call(el, v)
+      el.dispatchEvent(new Event('input', { bubbles: true }))
+    }
+
+    // 停掉动画/过渡：探针跑在虚拟时间下，入场 `zoom-in-95` 可能被冻在缩放中间态，
+    // 矩形类断言会量到过渡值（档案设置那次实测冻在 scale .97，2026-09-13）
+    const killAnim = document.createElement('style')
+    killAnim.textContent =
+      '*, *::before, *::after { animation: none !important; transition: none !important; }'
+    document.head.appendChild(killAnim)
+
+    await waitFor(() => document.querySelector('.list-add-btn'))
+    const trigger = document.querySelector<HTMLElement>('.list-add-btn')
+    result.hasTrigger = !!trigger
+    trigger?.click()
+    const dialog = (await waitFor(() => document.querySelector('.av-dialog'))) as HTMLElement | null
+    result.opened = !!dialog
+    if (!dialog) {
+      result.reason = trigger ? 'dialog-not-opened' : 'no-add-trigger'
+    } else {
+      const input = dialog.querySelector<HTMLInputElement>('.av-input')
+      const biliBtn = dialog.querySelector<HTMLElement>('.av-bili-btn')
+      // 图标压字：左内距必须给 14px 的内嵌搜索图标留位（同 devlog/075 的 26px 判据）
+      const padL = input ? parseFloat(getComputedStyle(input).paddingLeft) : 0
+      result.inputLeftPad = input ? getComputedStyle(input).paddingLeft : null
+      result.inputIconRoom = padL >= 20
+      // 结果区必须是**覆盖式滚动条**（全站约定：原生滚动条不占布局宽度，出现/消失会挤动）
+      result.listIsOverlayScroll = !!dialog.querySelector('.av-list.os-root > .os-scroll')
+      // 空输入态：B 站钮必须禁用（没有关键词就没什么可搜的）+ 文案是"搜索 B 站"
+      result.biliBtnDisabledWhenEmpty = !!biliBtn?.hasAttribute('disabled')
+      result.biliBtnText = (biliBtn?.textContent || '').trim()
+
+      // 找一个**本地确实有命中**的关键词（探针不猜数据：先问接口，问不到就跳过行断言）。
+      // ⚠️ 必须走 `api.searchPool`（= 弹窗自己那条传输）：API base 在 dev 探针下是
+      //    `VITE_API_BASE`（绝对地址），裸 `fetch('/vtuber/…')` 会打到 Vite 自己身上
+      //    —— 第一次跑就踩了：4 个候选关键词全部"没命中"，其实是拿到了 index.html。
+      let kw = ''
+      for (const cand of ['a', 'i', 'o', '小']) {
+        const r = await api.searchPool(cand).catch(() => [])
+        if (Array.isArray(r) && r.length > 0) { kw = cand; break }
+      }
+      result.keyword = kw || null
+      result.poolRequestsBeforeTyping = reqs('/vtuber/pool/search')
+      if (!kw) {
+        result.rowsSkipped = 'no-pool-hit'
+      } else if (input) {
+        setVal(input, kw)
+        await waitFor(() => dialog.querySelectorAll('.av-row').length, 5000)
+        const rows = [...dialog.querySelectorAll<HTMLElement>('.av-row')]
+        result.rows = rows.length
+        result.poolRequestsAfterTyping = reqs('/vtuber/pool/search')
+        // ① 本地检索真的发生了（防抖 250ms 后前端确实发了请求）
+        result.localSearchHappened =
+          (result.poolRequestsAfterTyping as number) > (result.poolRequestsBeforeTyping as number)
+        // ② 敲键**没有**打上游（决策①的机器判据）
+        result.biliRequests = reqs('/vtuber/bili/search')
+        result.noUpstreamOnTyping = result.biliRequests === 0
+        // 行：本地候选不该有"已订阅"（后端已剔除），因此必须都可点
+        result.rowsDisabled = rows.filter((r) => r.hasAttribute('disabled')).length
+        const r0 = rows[0]?.getBoundingClientRect()
+        result.rowHit = !!(r0 && hits(rows[0], r0.left + r0.width / 2, r0.top + r0.height / 2))
+        result.rowHasUid = !!rows[0]?.getAttribute('data-uid')
+      }
+      // ③ UID 换档与清空：**不依赖关键词命中**（只跟输入框/按钮有关），所以放在
+      //    "有没有候选"的判断之外 —— 否则本地池没命中时这两条也一起空转了。
+      if (input) {
+        setVal(input, '1265680561')
+        await waitFor(() => (biliBtn?.textContent || '').includes('按 UID'), 3000)
+        result.uidBtnText = (biliBtn?.textContent || '').trim()
+        result.uidBtnEnabled = !!biliBtn && !biliBtn.hasAttribute('disabled')
+        result.uidSwitchOk = result.uidBtnText === '按 UID 添加'
+        // 清空钮：点一下要回到"还没搜过"的空态（B 站区块也跟着清，否则残留上次结果）
+        dialog.querySelector<HTMLElement>('.av-clear')?.click()
+        await sleep(300)
+        result.clearOk = (input.value || '') === ''
+        result.afterClearRows = dialog.querySelectorAll('.av-row').length
+        result.afterClearHint = !!dialog.querySelector('.av-hint-row')
+      }
+      // 关窗：X 钮（`data-slot="dialog-close"`）
+      dialog.querySelector<HTMLElement>('[data-slot="dialog-close"]')?.click()
+      await waitFor(() => !document.querySelector('.av-dialog'), 3000)
+      result.closed = !document.querySelector('.av-dialog')
+      // 收尾再确认一次：整个探针全程一次上游都没打（点行/点按钮都被刻意避开了）
+      result.biliRequestsTotal = reqs('/vtuber/bili/search')
+    }
+    const pre = document.createElement('pre')
+    pre.id = 'ui-probe'
+    pre.textContent = JSON.stringify({ mode: 'addv', views: [], degraded, addv: result })
+    document.body.appendChild(pre)
     document.title = 'UI_PROBE_DONE'
     return
   }
