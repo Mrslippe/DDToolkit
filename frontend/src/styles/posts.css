@@ -4538,6 +4538,19 @@ img.hero-avatar {
   border-top-color: var(--c-border);
 }
 
+/* 变体：控件占整行、落在说明下方。
+   用在**选项胶囊**这类"横着排会超出右列"的行上（关闭窗口时 = 三个选项，
+   挤进 132px 的控件列会被压成竖排单字 —— 2026-09-15 用户截图反馈）。
+   同一行里的其它字段仍走默认两列栅格，不受影响。 */
+.aps-row-stack {
+  grid-template-columns: 1fr;
+}
+
+.aps-row-stack .aps-row-ctl {
+  justify-content: flex-start;
+  margin-top: 6px;
+}
+
 .aps-row-main {
   display: flex;
   flex-direction: column;
@@ -4654,11 +4667,12 @@ img.hero-avatar {
   transform: translateX(10px);
 }
 
-/* 主题单选（R14b）：两个胶囊按钮，选中的实底。
-   不用 <select>：只有两个选项，点一下就该生效（主题是"看得见"的偏好，
+/* 主题单选（R14b）：胶囊按钮，选中的实底。
+   不用 <select>：只有两三个选项，点一下就该生效（主题/关闭语义都是"看得见"的偏好，
    多一步确认反而奇怪）。 */
 .aps-radio-group {
   gap: 4px;
+  flex-wrap: wrap;
 }
 
 .aps-radio {
@@ -4668,6 +4682,8 @@ img.hero-avatar {
   background: var(--c-bg-card);
   color: var(--c-text-sub);
   font-size: 12px;
+  /* 不折行：窄列里"最小化到托盘"会被拆成竖排单字（2026-09-15 用户截图反馈） */
+  white-space: nowrap;
   cursor: pointer;
   transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }

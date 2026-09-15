@@ -382,6 +382,39 @@ def test_prefs_close_action_whitelist(client, db):
     assert AppMetaRepo(db).get("prefs.close_action") == "ask"   # 没被改脏
 
 
+def test_user_facing_copy_has_no_markdown_markers():
+    """后端下发的文案（label / unit / effect / note / why / option）是**纯文本**，
+    前端原样渲染。
+
+    判错的代价（2026-09-15 用户截图反馈）：`DYNAMICS_MIN_CYCLE_SECONDS` 的说明里写了
+    `按轮**开始**计时`、`close_action` 的说明里写了 `**后台抓取照常进行**`，
+    设置窗口就把星号一起显示出来了。这类错误在源码里很难肉眼发现（注释里到处是 `**`），
+    所以这里扫的是**数据字段**：SPECS / 只读表 / prefs 规格表。
+    """
+    from app.core import runtime_settings as rs
+    from app.routers.settings import prefs_specs
+    ticks = chr(96)                      # 反引号：同样会原样显示
+    offenders: list[str] = []
+
+    def check(where: str, value: object) -> None:
+        if isinstance(value, str) and (("**" in value) or (ticks in value)):
+            offenders.append(f"{where} = {value!r}")
+
+    for spec in rs.SPECS.values():
+        for field in ("label", "unit", "effect", "note"):
+            check(f"SPECS[{spec.key}].{field}", getattr(spec, field))
+    for row in rs.readonly_info():
+        for field in ("label", "why"):
+            check(f"READONLY[{row.get('key')}].{field}", row.get(field, ""))
+    for body in prefs_specs():
+        for field in ("label", "note"):
+            check(f"PREFS[{body.get('key')}].{field}", body.get(field, ""))
+        for opt in body.get("options", []):
+            check(f"PREFS[{body.get('key')}].option", opt.get("label", ""))
+    assert not offenders, ("用户可见文案里混进了 Markdown 标记（界面会原样显示）：\n  "
+                           + "\n  ".join(offenders))
+
+
 def test_dark_theme_hook_flag_matches_what_the_ui_tells_users():
     """**跨语言契约**：前端 `utils/theme.ts::DARK_IMPLEMENTED` 与后端下发的说明必须一致。
 

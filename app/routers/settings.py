@@ -156,6 +156,30 @@ def _load_prefs(db: Session) -> dict[str, str]:
     return out
 
 
+def prefs_specs() -> list[dict]:
+    """偏好项的规格表（界面文案 + 允许取值）。
+
+    抽成模块级函数而不是写在 `get_prefs` 里：`tests/test_runtime_settings.py` 要扫这些文案
+    （用户可见文案是**纯文本**，混进 Markdown 标记会原样显示 —— 2026-09-15 踩过），
+    直接在路由函数里拼就扫不到了。
+    """
+    return [
+        {"key": "theme", "label": "主题", "group": "外观",
+         "options": [{"value": "light", "label": "浅色"},
+                     {"value": "system", "label": "跟随系统"}],
+         "note": THEME_NOTE},
+        {"key": "close_action", "label": "关闭窗口时", "group": "外观",
+         "options": [{"value": "ask", "label": "每次询问"},
+                     {"value": "tray", "label": "最小化到托盘"},
+                     {"value": "quit", "label": "直接退出"}],
+         # ⚠️ 这里是**纯文本**（前端按原样渲染，不做 Markdown）—— 别写 `**粗体**`，
+         #    那会连星号一起显示出来（2026-09-15 用户截图反馈）。
+         "note": "最小化到托盘时后台抓取照常进行（界面不再刷新与轮询），"
+                 "点托盘图标或再次启动即可唤回；隐藏 10 分钟后会释放界面内存，"
+                 "唤回时自动恢复到你离开的位置"},
+    ]
+
+
 @router.get("/prefs")
 def get_prefs(db: Session = Depends(get_db)):
     from app.repositories.vtuber_repo import AppMetaRepo
@@ -164,19 +188,7 @@ def get_prefs(db: Session = Depends(get_db)):
         "values": _load_prefs(db),
         "defaults": {k: v[0] for k, v in PREFS.items()},
         # 每个键的允许取值 + 说明：界面文案同样由后端下发（与 specs 一个口径）
-        "specs": [
-            {"key": "theme", "label": "主题", "group": "外观",
-             "options": [{"value": "light", "label": "浅色"},
-                         {"value": "system", "label": "跟随系统"}],
-             "note": THEME_NOTE},
-            {"key": "close_action", "label": "关闭窗口时", "group": "外观",
-             "options": [{"value": "ask", "label": "每次询问"},
-                         {"value": "tray", "label": "最小化到托盘"},
-                         {"value": "quit", "label": "直接退出"}],
-             "note": "最小化到托盘时**后台抓取照常进行**（界面不再渲染与轮询），"
-                     "点托盘图标或再次启动即可唤回；隐藏 10 分钟后会释放界面内存，"
-                     "唤回时自动恢复到你离开的位置"},
-        ],
+        "specs": prefs_specs(),
         "changed": sorted(k for k in PREFS if k in stored),
     }
 

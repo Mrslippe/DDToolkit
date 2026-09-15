@@ -333,6 +333,28 @@ export default function TopBar() {
     if (!hidden) pollRef.current?.()
   }, [hidden])
 
+  // R18/R20：托盘菜单「退出」的**确认分支** —— Rust 只在"真有手动任务在跑"时才发这个事件
+  // （没在跑它就直接退了，不依赖前端）。收到就弹既有的忙碌确认框：
+  // 退出 = 真退出，最小化到托盘 = 让这一轮抓取跑完。
+  useEffect(() => {
+    let off: (() => void) | undefined
+    let disposed = false
+    void (async () => {
+      try {
+        const { listen } = await import('@tauri-apps/api/event')
+        const un = await listen('shell:quit-requested', () => setConfirmClose(true))
+        if (disposed) un()
+        else off = un
+      } catch {
+        /* 浏览器/探针环境没有 Tauri 事件：忽略 */
+      }
+    })()
+    return () => {
+      disposed = true
+      try { off?.() } catch { /* 忽略 */ }
+    }
+  }, [])
+
   // 登录态轮询：约 60s 一次，驱动入口徽章（B 站会话过期 → 红点提示扫码）。
   // R18：隐藏到托盘时整条停掉（隐藏 8 小时 = 960 次白请求）
   useEffect(() => {
@@ -486,6 +508,19 @@ export default function TopBar() {
       else await quitApp()
     })()
   }
+
+  // dev/探针专用：把"点 ✕"这条路径暴露出来（**同一个 handler**，不是复制一份逻辑）。
+  // 为什么需要：窗口控制钮在非 Tauri 环境是 `disabled`（浏览器里没有窗口可关），
+  // 而 `ui_probe --close-ask` 要断言"首次询问 → 记住选择 → 隐藏"整条链路 ——
+  // 与 `.stat-sets[data-hover]` 同一种"为可测性存在"的取舍。
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    const w = window as unknown as { __ddtoolkitCloseClick?: () => void }
+    w.__ddtoolkitCloseClick = handleClose
+    return () => {
+      delete w.__ddtoolkitCloseClick
+    }
+  })
 
   // 最大化状态跟踪：onResized 触发时重查 isMaximized，切换 还原/最大化 图标
   const isMax = useIsMaximized()

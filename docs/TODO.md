@@ -37,6 +37,7 @@
 |---|---|---|---|---|---|
 | **R18** | 2026-09-15 | 关闭前端界面时**隐藏到系统托盘**，后台抓取照常进行，**不用渲染前端** | 点 ✕ 窗口消失、托盘有图标；期间后台继续抓；点托盘图标恢复；托盘可直接退出 | 中 | ✅ **已落地**（devlog/095）→ 详见 `docs/ROADMAP-DONE.md`（含人工验收清单） |
 | **R19** | 2026-09-15 | 顶栏状态栏空置的时候轮播的语录集暂时下线，等之后库中真有了条目再上线 | 空闲时顶栏只说状态，不转占位语录 | 低 | ✅ **已落地**（devlog/096）→ 详见 `docs/ROADMAP-DONE.md` |
+| **R20** | 2026-09-15 | 修两处实测问题：① 选了「最小化到托盘」后**托盘右键退出也退不掉**；② 设置窗口的渲染问题（选项胶囊被压成竖排单字、`**粗体**` 标记原样显示） | 托盘退出必须真退出；设置窗口排版与文案干净 | 高 | ✅ **已落地**（devlog/097）→ 详见 `docs/ROADMAP-DONE.md` |
 
 > **R12–R19 已全部落地**（R18/R19 见上表；R12–R17 的原文与落地结论在 `docs/ROADMAP-DONE.md`
 > 的「需求清单：R12–R17」——本表按本文件规则只留**未落地**项）：
@@ -237,7 +238,7 @@
 > 索引已移入 **`docs/ROADMAP-DONE.md` → 「批次 → devlog 索引」**（2026-09-13 整理：
 > 本文件只留"要干什么"与当前基线，历史索引与已完成条目同处一份文件更好查）。
 
-### 6.2 当前门禁基线（2026-09-15 实测 / 复核，R19 批次）
+### 6.2 当前门禁基线（2026-09-15 实测 / 复核，R20 批次）
 
 | 门禁 | 命令 | 基线 |
 |---|---|---|
@@ -249,7 +250,7 @@
 | 前端 lint | `npm --prefix frontend run lint` | **0 错**（`--max-warnings 0`） |
 | 前端单测 | `npm --prefix frontend run test` | **241 passed**（`addVtuberSearch` 7 · `capabilities` 6 · `reservationDays` 9 · `notificationHub` 12 · `idleQuotes` 18 · `settingsDraft` 17 · `settingsNav` 11 · `theme` 13 · `shellState` 11 · `shellLifecycle` 6 · 其余既有） |
 | 词云布局 | `node scripts/check_wordcloud_layout.mjs` | sha256 `19ecc7e673b95c8a1fa7c8c219ada78e9b581a15764aa57b33a7de473fc63dac`（本轮实跑一致 ✓） |
-| 布局探针 | `python scripts/ui_probe.py --hero-expect c11548580e73d910ca667047b8120075a4ab121fa3fa098ff6654326ed183666 --vtuber 15`<br>`python scripts/ui_probe.py --archive --vtuber 15`（`--archive-print` 出签名）<br>`python scripts/ui_probe.py --settings --vtuber 15`（两个带签名账号）/ `--vtuber 14`（单账号长签名）<br>`python scripts/ui_probe.py --scene --vtuber 15`<br>`python scripts/ui_probe.py --add-v --vtuber 15`（R11）<br>`python scripts/ui_probe.py --capabilities`（未登录现场）<br>`python scripts/ui_probe.py --polish`（R15 三处打磨）<br>`python scripts/ui_probe.py --reservations`（R13：**探针自己种预约**进数据副本）<br>`python scripts/ui_probe.py --status-island`（R12a/R12b 顶栏状态岛）<br>`python scripts/ui_probe.py --app-settings`（R14a/R14b/R17 应用设置：**会写盘**，跑在数据副本上；`--shot` 出视觉存档）<br>`python scripts/ui_probe.py --filter-pill`（R16 两枚筛选浮片逐项对账 + 三态文字居中/caret 间距）<br>`python scripts/ui_probe.py --tray-suspend`（R18 托盘隐藏停表：可见基线 → 隐藏停表 → 唤回补一轮） | 十三条实跑通过（hero 三档签名一致 `c1154858…` / settings 29 项 / scene 提交 250ms / add-v 来源分流 / capabilities 未登录提示 / **polish：标题 700 文本宽 114.3/150、筛选钮文字左右各 31.5px·中心偏移 0·caret absolute、徽标「+」空闲高度 0·不可命中·徽标→分割线 10px、hover 37px 可命中** / **filter-pill：list 那枚与侧栏那枚配方一致（STYLE 逐项相等 / SIZE 各行其是），三态文字居中且 caret 不压字** / **reservations：预约格徽章「预约」+ 计数槽 `128 人预约` + 标题、hover 浮层条目** / **status-island（R19 后）：空闲无容器 + 空闲文案恒为「数据服务运行中」·`data-idle-carousel='off'`·池 8 格（扩展点还在）→ 消息点亮 → 面板可命中不挤动右栏 → Esc 收起 → 入场动画挂上 → ttl 过期自清** / **app-settings（R17 两栏）：导航 6 项与后端分组一致 → 两栏几何/命中 → 分页只渲染当前页 → 圆点标对页且切页不丢草稿 → 越界被拦 → 保存回问后端 10→7 → 关于页只读带理由且无可写控件 → 恢复默认回 10 → 主题三卡（深色只标不藏）→ Esc 关闭** / **tray-suspend：可见 1 次 → 隐藏 0 次（轮播也停）→ 唤回立刻补 1 次**）。记录值：`--archive` 日历签名 **`50b78ec0…`**（2026-09-15 20:5x 实测；17:00 那次 `48519bae…` 的差异来自当晚 V15 新落库两场直播 —— **数据漂移、非代码**） |
+| 布局探针 | `python scripts/ui_probe.py --hero-expect c11548580e73d910ca667047b8120075a4ab121fa3fa098ff6654326ed183666 --vtuber 15`<br>`python scripts/ui_probe.py --archive --vtuber 15`（`--archive-print` 出签名）<br>`python scripts/ui_probe.py --settings --vtuber 15`（两个带签名账号）/ `--vtuber 14`（单账号长签名）<br>`python scripts/ui_probe.py --scene --vtuber 15`<br>`python scripts/ui_probe.py --add-v --vtuber 15`（R11）<br>`python scripts/ui_probe.py --capabilities`（未登录现场）<br>`python scripts/ui_probe.py --polish`（R15 三处打磨）<br>`python scripts/ui_probe.py --reservations`（R13：**探针自己种预约**进数据副本）<br>`python scripts/ui_probe.py --status-island`（R12a/R12b 顶栏状态岛）<br>`python scripts/ui_probe.py --app-settings`（R14a/R14b/R17 应用设置：**会写盘**，跑在数据副本上；`--shot` 出视觉存档）<br>`python scripts/ui_probe.py --filter-pill`（R16 两枚筛选浮片逐项对账 + 三态文字居中/caret 间距）<br>`python scripts/ui_probe.py --tray-suspend`（R18 托盘隐藏停表：可见基线 → 隐藏停表 → 唤回补一轮）<br>`python scripts/ui_probe.py --close-ask`（R20 首次点 ✕ 的询问流程：ask 弹框 → 记住 → 隐藏 → 再点不再问） | 十四条实跑通过（hero 三档签名一致 `c1154858…` / settings 29 项 / scene 提交 250ms / add-v 来源分流 / capabilities 未登录提示 / **polish：标题 700 文本宽 114.3/150、筛选钮文字左右各 31.5px·中心偏移 0·caret absolute、徽标「+」空闲高度 0·不可命中·徽标→分割线 10px、hover 37px 可命中** / **filter-pill：list 那枚与侧栏那枚配方一致（STYLE 逐项相等 / SIZE 各行其是），三态文字居中且 caret 不压字** / **reservations：预约格徽章「预约」+ 计数槽 `128 人预约` + 标题、hover 浮层条目** / **status-island（R19 后）：空闲无容器 + 空闲文案恒为「数据服务运行中」·`data-idle-carousel='off'`·池 8 格（扩展点还在）→ 消息点亮 → 面板可命中不挤动右栏 → Esc 收起 → 入场动画挂上 → ttl 过期自清** / **app-settings（R17 两栏）：导航 6 项与后端分组一致 → 两栏几何/命中 → 分页只渲染当前页 → 圆点标对页且切页不丢草稿 → 越界被拦 → 保存回问后端 10→7 → 关于页只读带理由且无可写控件 → 恢复默认回 10 → 主题三卡（深色只标不藏）→ Esc 关闭** / **tray-suspend：可见 1 次 → 隐藏 0 次（轮播也停）→ 唤回立刻补 1 次** / **close-ask：ask 弹框（两选项+记住）→ 选托盘写偏好并隐藏 → 再点不再问**）。记录值：`--archive` 日历签名 **`50b78ec0…`**（2026-09-15 20:5x 实测；17:00 那次 `48519bae…` 的差异来自当晚 V15 新落库两场直播 —— **数据漂移、非代码**） |
 | 一把梭 | `python scripts/dev_check.py` | 测试 + 后端冒烟（详见 `docs/DEV-LOOP.md`） |
 
 > ⚠️ 探针的 `--hero-expect` / `--calendar-expect` 签名**含实时数据**，只适合"改动前后短窗口对比"，

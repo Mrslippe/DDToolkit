@@ -142,6 +142,53 @@ fn spawn_deep_sleep_watchdog(app: tauri::AppHandle) {
     });
 }
 
+/// 问后端"有没有**手动**任务在跑"（只用于决定托盘「退出」要不要先确认）。
+///
+/// 返回 `None` = 没问到（后端没起来/超时）—— 调用方按"没在跑"处理：
+/// **用户点的是退出，不该因为问不到就退不出去**（2026-09-15 实测的那个 bug 正是
+/// "点了退出没反应"：原先托盘退出只发事件给前端，而前端没人接、深休眠时更收不到）。
+///
+/// 判断故意做得**粗**：把响应里的空白去掉后找 `"manual_running":true` —— uvicorn 可能回
+/// chunked（正文会多出分块长度前缀），为这一处引入 HTTP 客户端或手写分块解码都不值当；
+/// 字段名是我们自己的（`fetch-status` 的 `manual_running`），够用且不会误判成 true。
+fn backend_manual_running(port: u16) -> Option<bool> {
+    use std::io::{Read, Write};
+    if port == 0 {
+        return None;
+    }
+    let addr: std::net::SocketAddr = format!("127.0.0.1:{port}").parse().ok()?;
+    let mut sock = std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(400)).ok()?;
+    sock.set_read_timeout(Some(Duration::from_millis(800))).ok()?;
+    sock.write_all(
+        b"GET /vtuber/fetch-status HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+    )
+    .ok()?;
+    let mut raw = String::new();
+    sock.read_to_string(&mut raw).ok()?;
+    if !raw.starts_with("HTTP/1.1 200") && !raw.starts_with("HTTP/1.0 200") {
+        return None;                       // 非 200：当作问不到，别猜
+    }
+    let compact: String = raw.chars().filter(|c| !c.is_whitespace()).collect();
+    Some(compact.contains("\"manual_running\":true"))
+}
+
+/// 托盘「退出」：没手动任务在跑就**直接退**（不依赖前端）；在跑才唤回窗口让用户确认。
+fn tray_quit_impl(app: &tauri::AppHandle) {
+    let port = *app.state::<BackendPort>().0.lock().unwrap();
+    match backend_manual_running(port) {
+        Some(true) => {
+            println!("[ddtoolkit] 托盘退出：有手动任务在跑 → 唤回窗口确认");
+            show_main_impl(app);
+            let _ = app.emit("shell:quit-requested", ());
+        }
+        other => {
+            println!("[ddtoolkit] 托盘退出：直接退出（手动任务在跑={other:?}）");
+            QUITTING.store(true, Ordering::SeqCst);
+            app.exit(0);
+        }
+    }
+}
+
 /// 建托盘：左键单击 = 显示主界面；菜单 = 显示主界面 / 后台运行中（禁用）/ 退出。
 fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     let show = MenuItemBuilder::with_id("show", "显示主界面").build(app)?;
@@ -163,12 +210,7 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
             "show" => show_main_impl(app),
-            "quit" => {
-                // 退出是**破坏性**动作：先唤回窗口让前端确认（有任务在跑时会写明后果）。
-                // 前端确认后 invoke `quit_app`，那边才真正置标志并退出。
-                show_main_impl(app);
-                let _ = app.emit("shell:quit-requested", ());
-            }
+            "quit" => tray_quit_impl(app),
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
@@ -582,4 +624,39 @@ pub fn run() {
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    /// 托盘退出那条判据的**解析部分**（`cargo test` 跑）。
+    ///
+    /// 判错的代价（2026-09-15 实测的 bug）：托盘「退出」点了没反应 —— 根因是它只发了一个
+    /// 事件给前端，而前端没人接、深休眠时更收不到。现在"没手动任务在跑就直接退"，
+    /// 于是"到底在不在跑"的判断必须可靠：**问不到（后端挂了/非 200/端口 0）要当成"没在跑"**
+    /// （用户点的是退出，不能因为问不到就退不出去），但不能把"在跑"误判成"没在跑"
+    /// （那会在用户毫不知情时掐掉一轮抓取）。
+    fn parse(body: &str) -> Option<bool> {
+        // 与 `backend_manual_running` 的正文判定同一套规则（去掉空白后找字段）
+        let compact: String = body.chars().filter(|c| !c.is_whitespace()).collect();
+        Some(compact.contains("\"manual_running\":true"))
+    }
+
+    #[test]
+    fn manual_running_field_is_recognised() {
+        assert_eq!(parse(r#"{"account":{"running":false},"manual_running":false}"#), Some(false));
+        assert_eq!(parse(r#"{"manual_running":true,"account":{}}"#), Some(true));
+        // uvicorn 的紧凑输出（无空格）与带空格两种写法都要认
+        assert_eq!(parse("{\"manual_running\": true}"), Some(true));
+        assert_eq!(parse("{\"manual_running\": false}"), Some(false));
+        // chunked 编码会给正文加上十六进制长度前缀 —— 字段文本本身不受影响
+        assert_eq!(parse("1a\r\n{\"manual_running\":true}\r\n0\r\n\r\n"), Some(true));
+    }
+
+    #[test]
+    fn missing_or_odd_field_counts_as_not_running() {
+        // 旧后端没有该字段 → 不算"在跑"（退出优先，不该被一个缺失字段挡住）
+        assert_eq!(parse(r#"{"account":{"running":true}}"#), Some(false));
+        // 相似字段名不该被误当成 manual_running
+        assert_eq!(parse(r#"{"auto_manual_running":true}"#), Some(false));
+    }
 }

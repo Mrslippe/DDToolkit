@@ -12,6 +12,7 @@
  * 输出：`<pre id="ui-probe">` 内 JSON（每个视图一段），供脚本解析。
  */
 import { api, getApiBase } from '../api/api'
+import { setShellHidden } from '../utils/shellLifecycle'
 
 interface ProbeView {
   key: string
@@ -1869,6 +1870,94 @@ export async function runUiProbe(): Promise<void> {
     pre.id = 'ui-probe'
     pre.textContent = JSON.stringify({ mode: 'tray-suspend', views: [], degraded,
                                        traySuspend: result })
+    document.body.appendChild(pre)
+    document.title = 'UI_PROBE_DONE'
+    return
+  }
+
+  // 首次点 ✕ 的询问流程（`?probe=close-ask`，R20 devlog/097）：
+  // 用户 2026-09-15 报的 bug 就在这条链路上（选了"最小化到托盘"之后，托盘「退出」退不出去）。
+  // 托盘菜单本身是 OS 级、无头浏览器点不到，但**前端这一半**全能断言：
+  //   ① 偏好是 `ask` 时点 ✕ → 弹出询问框（两个选项 + 记住我的选择）；
+  //   ② 选「最小化到托盘」→ 偏好写成 `tray`（再问一次后端）+ 前端进入挂起态；
+  //   ③ 之后点 ✕ **不再询问**（按记住的选择直接隐藏）。
+  if (mode === 'close-ask') {
+    const result: Record<string, unknown> = {}
+    const waitFor = async (fn: () => unknown, ms = 5000) => {
+      const t0 = performance.now()
+      while (performance.now() - t0 < ms) {
+        if (fn()) return true
+        await sleep(100)
+      }
+      return false
+    }
+    const text = (el: Element | null | undefined) => (el?.textContent || '').trim()
+    const shellHidden = () =>
+      (window as unknown as { __ddtoolkitShellHidden?: () => boolean })
+        .__ddtoolkitShellHidden?.() ?? null
+    const closeBtn = () => document.querySelector<HTMLElement>('.topbar-win-btn.close')
+    // ⚠️ 判"弹窗开着没有"看 `data-state`，**不看节点在不在**：radix 的 Presence 会把关闭后的
+    //    内容留着播退场动画，而虚拟时间下动画不跑完 ⇒ 节点一直在（R14a 踩过一次，
+    //    这里第二次踩到：探针报"询问框没关"，其实它早就关了）。
+    const askOpen = () =>
+      !!document.querySelector('[data-testid="close-ask-dialog"][data-state="open"]')
+    const askDialog = () =>
+      document.querySelector<HTMLElement>('[data-testid="close-ask-dialog"]')
+    /** 点 ✕：窗口控制钮在非 Tauri 环境是 disabled（浏览器里没有窗口可关），
+     *  所以走 TopBar 暴露的 dev 钩子 —— 它挂的是**同一个 handler**。 */
+    const clickClose = () => {
+      const hook = (window as unknown as { __ddtoolkitCloseClick?: () => void })
+        .__ddtoolkitCloseClick
+      if (typeof hook === 'function') {
+        hook()
+        return 'hook'
+      }
+      closeBtn()?.click()
+      return 'button'
+    }
+    const prefValue = async () =>
+      (await fetch(`${getApiBase()}/settings/prefs`).then((r) => r.json())).values.close_action
+    const setPref = async (v: string) => {
+      await fetch(`${getApiBase()}/settings/prefs`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ values: { close_action: v } }),
+      })
+    }
+
+    await setPref('ask')                       // 从干净状态开始
+    result.prefBefore = await prefValue()
+    result.closeHit = clickClose()
+    result.dialogOpened = await waitFor(askOpen)
+    const dlg = askDialog()
+    result.choices = [...(dlg?.querySelectorAll('[data-choice]') || [])]
+      .map((n) => n.getAttribute('data-choice'))
+    result.hasRemember = !!dlg?.querySelector('[data-testid="close-ask-remember"]')
+    result.optionNotes = [...(dlg?.querySelectorAll('.close-ask-note') || [])].map((n) => text(n))
+
+    // 选「最小化到托盘」（默认勾着"记住我的选择"）
+    dlg?.querySelector<HTMLElement>('[data-choice="tray"]')?.click()
+    result.dialogClosed = await waitFor(() => !askOpen(), 4000)
+    await sleep(600)
+    result.prefAfterTray = await prefValue()
+    result.shellHiddenAfterTray = shellHidden()
+
+    // 复位到可见，再点一次 ✕：应当**不再询问**，直接按记住的选择隐藏
+    setShellHidden(false)
+    await sleep(300)
+    clickClose()
+    await sleep(700)
+    result.askedAgain = askOpen()
+    result.shellHiddenSecond = shellHidden()
+    result.prefAfterSecond = await prefValue()
+
+    await setPref('ask')                       // 探针不留痕：恢复默认（每次询问）
+    result.restored = await prefValue()
+
+    const pre = document.createElement('pre')
+    pre.id = 'ui-probe'
+    pre.textContent = JSON.stringify({ mode: 'close-ask', views: [], degraded,
+                                       closeAsk: result })
     document.body.appendChild(pre)
     document.title = 'UI_PROBE_DONE'
     return

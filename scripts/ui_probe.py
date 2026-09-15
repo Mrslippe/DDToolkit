@@ -219,6 +219,7 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
             "appSettings": data.get("appSettings"),
             "filterPill": data.get("filterPill"),
             "traySuspend": data.get("traySuspend"),
+            "closeAsk": data.get("closeAsk"),
             "degraded": data.get("degraded") or [],
             "dom": dom_file,
         }
@@ -226,7 +227,7 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
             "settings": None, "scene": None, "addv": None, "capabilities": None,
             "polish": None, "reservations": None, "statusIsland": None,
             "appSettings": None, "filterPill": None, "traySuspend": None,
-            "degraded": [], "dom": dom_file}
+            "closeAsk": None, "degraded": [], "dom": dom_file}
 
 
 # ── 展示页 hero 药丸签名（P2 分层收敛 A 批次的位级回归护栏）─────────────
@@ -691,6 +692,13 @@ def main() -> int:
              "托盘本身是 OS 级能力（无头浏览器测不到），这里量的是「隐藏之后该发生什么」。",
     )
     ap.add_argument(
+        "--close-ask",
+        action="store_true",
+        help="只跑一档宽度：首次点 ✕ 的询问流程（R20，devlog/097）—— 偏好为 ask 时弹询问框"
+             "（两个选项 + 记住我的选择）→ 选「最小化到托盘」后偏好写成 tray 且前端进入挂起态"
+             "→ 再点 ✕ 不再询问、直接隐藏。托盘菜单本身是 OS 级，探针覆盖不到。",
+    )
+    ap.add_argument(
         "--hero-expect",
         default="",
         help="cards 视图 hero 药丸签名的期望 sha256（位级回归护栏）。"
@@ -1141,6 +1149,63 @@ def main() -> int:
                 print(f"  [ok] 隐藏停表：可见 {ts.get('visiblePolls')} 次 → 隐藏 "
                       f"{ts.get('hiddenPolls')} 次（轮播也停）→ 唤回立刻补 "
                       f"{ts.get('shownPolls')} 次")
+            for b in failures:
+                print("   -", b)
+            return 1 if failures else 0
+
+        if args.close_ask:
+            # 首次点 ✕ 的询问流程（R20，devlog/097）：用户报的"选了托盘就退不出去"就在这条链路上。
+            # 托盘菜单是 OS 级、无头浏览器点不到，但前端这一半（询问框 → 记住 → 隐藏）全能断言。
+            w = widths[0]
+            url = f"http://localhost:{vite_port}{route}?probe=close-ask"
+            print(f"[probe] close-ask @{w} → {url}")
+            res = _run_probe(edge, url, w, args.height, WORK, "close-ask")
+            ca = ((res or {}).get("closeAsk") or {})
+            if res and not ca:
+                print(f"  [!] 探针 mode={res.get('mode')!r} 键={sorted(res.keys())}"
+                      f"（新字段需要在 _run_probe 的白名单里登记）")
+            print(f"  偏好：{ca.get('prefBefore')!r} → 选托盘后 {ca.get('prefAfterTray')!r}"
+                  f" → 复位 {ca.get('restored')!r}")
+            print(f"  询问框：弹出={ca.get('dialogOpened')} 选项={ca.get('choices')} "
+                  f"记住勾选={ca.get('hasRemember')} 关闭={ca.get('dialogClosed')}")
+            print(f"  选项文案：{ca.get('optionNotes')}")
+            print(f"  隐藏：选托盘后={ca.get('shellHiddenAfterTray')} "
+                  f"｜ 再点 ✕ 又弹框={ca.get('askedAgain')} "
+                  f"隐藏={ca.get('shellHiddenSecond')}")
+            if not ca:
+                failures.append(f"@{w} close-ask: 没量到询问流程（探针未跑完？）")
+            else:
+                if ca.get("prefBefore") != "ask":
+                    failures.append(f"@{w} close-ask: 起始偏好不是 ask（{ca.get('prefBefore')!r}）"
+                                    f"—— 探针要先把它复位成「每次询问」")
+                if not ca.get("dialogOpened"):
+                    failures.append(f"@{w} close-ask: 偏好为 ask 时点 ✕ 没弹询问框")
+                if ca.get("choices") != ["tray", "quit"]:
+                    failures.append(f"@{w} close-ask: 询问框的选项是 {ca.get('choices')}，"
+                                    f"应为 ['tray','quit']")
+                if not ca.get("hasRemember"):
+                    failures.append(f"@{w} close-ask: 询问框没有「记住我的选择」"
+                                    f"（用户口径是「首次问一次、之后按选择记住」）")
+                notes = ca.get("optionNotes") or []
+                if len(notes) < 2 or any(len(n) < 8 for n in notes):
+                    failures.append(f"@{w} close-ask: 选项没写清后果（{notes}）—— "
+                                    f"用户得知道「托盘=后台继续抓」和「退出=中断本轮」")
+                if not ca.get("dialogClosed"):
+                    failures.append(f"@{w} close-ask: 选了「最小化到托盘」后询问框没关")
+                if ca.get("prefAfterTray") != "tray":
+                    failures.append(f"@{w} close-ask: 勾了「记住」但偏好没写成 tray"
+                                    f"（实得 {ca.get('prefAfterTray')!r}）")
+                if ca.get("shellHiddenAfterTray") is not True:
+                    failures.append(f"@{w} close-ask: 选了托盘之后前端没进入挂起态"
+                                    f"（__ddtoolkitShellHidden={ca.get('shellHiddenAfterTray')!r}）")
+                if ca.get("askedAgain"):
+                    failures.append(f"@{w} close-ask: 记住了选择后又弹了一次询问框")
+                if ca.get("shellHiddenSecond") is not True:
+                    failures.append(f"@{w} close-ask: 第二次点 ✕ 没有直接隐藏")
+                if ca.get("restored") != "ask":
+                    failures.append(f"@{w} close-ask: 探针没把偏好复位（{ca.get('restored')!r}）")
+            if not failures:
+                print("  [ok] 首次询问：ask 弹框（两选项+记住）→ 选托盘写偏好并隐藏 → 再点不再问")
             for b in failures:
                 print("   -", b)
             return 1 if failures else 0

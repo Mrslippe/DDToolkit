@@ -329,9 +329,12 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
                   )}
                   {themeError && <p className="aps-field-error">{themeError}</p>}
 
-                  {/* 关闭窗口的语义（R18）：与首次点 ✕ 的询问框写同一份偏好 */}
+                  {/* 关闭窗口的语义（R18）：与首次点 ✕ 的询问框写同一份偏好。
+                      ⚠️ 用 `.aps-row-stack`（说明在上、控件在下占整行）：
+                      三个选项塞进右侧 132px 的控件列会被挤成竖排单字
+                      （2026-09-15 用户截图反馈）。 */}
                   {prefs.specOf('close_action') && (
-                    <div className="aps-row" data-setting="close_action">
+                    <div className="aps-row aps-row-stack" data-setting="close_action">
                       <div className="aps-row-main">
                         <span className="aps-label">{prefs.specOf('close_action')!.label}</span>
                         <span className="aps-note">{prefs.specOf('close_action')!.note}</span>
