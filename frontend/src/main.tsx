@@ -12,6 +12,7 @@ import App from './App'
 import Logo from './components/common/Logo'
 import { setApiBase } from './api/api'
 import { markFirstRun } from './bootState'
+import { installShellLifecycle } from './utils/shellLifecycle'
 
 const isTauri = '__TAURI_INTERNALS__' in window
 
@@ -137,6 +138,11 @@ function Root() {
     document.getElementById('boot-splash')?.remove()
     window.__bootFold?.()
   }, [])
+
+  // 外壳可见性（R18，devlog/095）：接上 Tauri 的 `shell:hidden` / `shell:shown`
+  // （浏览器/探针退化为 visibilitychange + dev 钩子）。必须在最外层装一次 ——
+  // 顶栏轮询与状态岛轮播都靠它停表。
+  useEffect(() => installShellLifecycle(), [])
 
   useEffect(() => {
     if (!isTauri) return

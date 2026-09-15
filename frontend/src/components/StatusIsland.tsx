@@ -5,6 +5,8 @@ import OverlayScroll from './OverlayScroll'
 import type { Notice, NoticeActionKind } from '../utils/notificationHub'
 import { KIND_PRIORITY, pickPrimary } from '../utils/notificationHub'
 import { IDLE_TICK_MS, pickIdle } from '../utils/idleQuotes'
+import { isShellHidden } from '../utils/shellLifecycle'
+import { useShellHidden } from '../hooks/useShellHidden'
 
 interface Props {
   notices: Notice[]
@@ -54,16 +56,23 @@ export default function StatusIsland({ notices, onAction, now }: Props) {
   const [pos, setPos] = useState<{ left: number; top: number; width: number } | null>(null)
   const primary = pickPrimary(notices, now)
   const lit = !!primary
+  /** 隐藏到托盘（R18）：轮播停表 */
+  const hidden = useShellHidden()
 
   // 空闲轮播的时钟：**只在空闲时走**（有事发生时立刻停表，省掉一个无谓的定时器；
   // 也让"语录正在轮播"不可能和"有通知亮着"同时出现在屏幕上）。
+  // R18：隐藏到托盘时同样停表 —— 6s 一次的轮播在后台跑 8 小时是纯浪费（界面根本没人看）。
   const [idleTick, setIdleTick] = useState(() => Date.now())
   useEffect(() => {
-    if (lit) return
-    setIdleTick(Date.now())   // 从有事故态回到空闲时立刻取一次，别停在旧格上
-    const timer = window.setInterval(() => setIdleTick(Date.now()), IDLE_TICK_MS)
+    if (lit || hidden) return
+    setIdleTick(Date.now())   // 从有事故态/隐藏态回到空闲时立刻取一次，别停在旧格上
+    const timer = window.setInterval(() => {
+      // ⚠️ 判据读**同步源**：隐藏是同步置位的，而 React 状态要等下一次渲染 ——
+      // 定时器可能恰好落在那道缝里（与顶栏轮询同款竞态，见 TopBar 的 schedule 注释）
+      if (!isShellHidden()) setIdleTick(Date.now())
+    }, IDLE_TICK_MS)
     return () => window.clearInterval(timer)
-  }, [lit])
+  }, [lit, hidden])
 
   /** 面板位置：贴在状态岛下方，越界时收进视口 */
   const place = () => {

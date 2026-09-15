@@ -218,13 +218,15 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
             "statusIsland": data.get("statusIsland"),
             "appSettings": data.get("appSettings"),
             "filterPill": data.get("filterPill"),
+            "traySuspend": data.get("traySuspend"),
             "degraded": data.get("degraded") or [],
             "dom": dom_file,
         }
     return {"mode": None, "views": data, "topbar": None, "calendar": None,
             "settings": None, "scene": None, "addv": None, "capabilities": None,
             "polish": None, "reservations": None, "statusIsland": None,
-            "appSettings": None, "filterPill": None, "degraded": [], "dom": dom_file}
+            "appSettings": None, "filterPill": None, "traySuspend": None,
+            "degraded": [], "dom": dom_file}
 
 
 # ── 展示页 hero 药丸签名（P2 分层收敛 A 批次的位级回归护栏）─────────────
@@ -682,6 +684,13 @@ def main() -> int:
              "用户 2026-09-15：「list 视图中的筛选按钮的样式跟随左栏工具栏中的筛选按钮」。",
     )
     ap.add_argument(
+        "--tray-suspend",
+        action="store_true",
+        help="只跑一档宽度：托盘隐藏后的**停表**验证（R18，devlog/095）—— 可见时抓取轮询"
+             "必须在跑（基线）→ 隐藏后请求数停住、状态岛轮播停住 → 唤回后立刻补一轮。"
+             "托盘本身是 OS 级能力（无头浏览器测不到），这里量的是「隐藏之后该发生什么」。",
+    )
+    ap.add_argument(
         "--hero-expect",
         default="",
         help="cards 视图 hero 药丸签名的期望 sha256（位级回归护栏）。"
@@ -809,7 +818,8 @@ def main() -> int:
             print(f"  两栏：导航宽={aps.get('navWidth')} 内容宽={aps.get('paneWidth')} "
                   f"｜ 导航在弹窗内={aps.get('navInsideDialog')} 项吃满={aps.get('navItemFillsNav')} "
                   f"导航项可命中={aps.get('navItemHit')} 内容可命中={aps.get('paneHit')}")
-            print(f"  分页：外观页={aps.get('appearancePane')!r} 字段={aps.get('rowsOnAppearance')} "
+            print(f"  分页：外观页={aps.get('appearancePane')!r} "
+                  f"抓取参数={aps.get('fetchRowsOnAppearance')} "
                   f"｜ 切到抓取页={aps.get('paneAfterSwitch')!r} 字段={aps.get('rowsOnFetch')} "
                   f"别类字段在 DOM={aps.get('otherPaneRowsHidden')}")
             print(f"  弹窗：在视口内={aps.get('dialogInViewport')} 可命中={aps.get('dialogHit')}")
@@ -875,9 +885,10 @@ def main() -> int:
                     if aps.get("appearancePane") != "appearance":
                         failures.append(f"@{w} app-settings: 默认页不是外观"
                                         f"（实得 {aps.get('appearancePane')!r}）")
-                    if aps.get("rowsOnAppearance") != 0:
-                        failures.append(f"@{w} app-settings: 外观页里出现了 {aps.get('rowsOnAppearance')} "
-                                        f"个抓取参数字段（分页没生效，全塞一页了？）")
+                    if aps.get("fetchRowsOnAppearance"):
+                        failures.append(f"@{w} app-settings: 外观页里出现了 "
+                                        f"{aps.get('fetchRowsOnAppearance')} 个**抓取参数字段**"
+                                        f"（分页没生效，全塞一页了？）")
                     if aps.get("paneAfterSwitch") != "抓取节奏":
                         failures.append(f"@{w} app-settings: 点「抓取节奏」后面板是 "
                                         f"{aps.get('paneAfterSwitch')!r}")
@@ -1074,6 +1085,62 @@ def main() -> int:
             if not failures:
                 print("  [ok] list 那枚与侧栏那枚**配方一致**（字号/内距/斜切/caret 定位·尺寸·距右缘/"
                       "文字居中），尺寸各行其是（高 30 与本行搜索框齐平）；文案变长时只变宽、caret 不压字")
+            for b in failures:
+                print("   -", b)
+            return 1 if failures else 0
+
+        if args.tray_suspend:
+            # 托盘隐藏后的停表验证（R18，devlog/095）。判据的关键是**先证明可见时在跑** ——
+            # 否则"隐藏后没请求"这件事，一个彻底卡死的应用也能满足。
+            w = widths[0]
+            url = f"http://localhost:{vite_port}{route}?probe=tray-suspend"
+            print(f"[probe] tray-suspend @{w} → {url}")
+            res = _run_probe(edge, url, w, args.height, WORK, "tray-suspend")
+            ts = ((res or {}).get("traySuspend") or {})
+            if res and not ts:
+                print(f"  [!] 探针 mode={res.get('mode')!r} 键={sorted(res.keys())}"
+                      f"（新字段需要在 _run_probe 的白名单里登记）")
+            print(f"  dev 钩子：装上了={ts.get('hookInstalled')} 隐藏标志位 "
+                  f"{ts.get('hiddenFlag')}→{ts.get('shownFlag')}")
+            print(f"  ① 可见（基线）：一个空闲周期内轮询 {ts.get('visiblePolls')} 次"
+                  f"（在跑={ts.get('visiblePolling')}）")
+            print(f"  ② 隐藏：一个周期内轮询 {ts.get('hiddenPolls')} 次"
+                  f"（停住={ts.get('hiddenPollingStopped')}）· "
+                  f"轮播停住={ts.get('hiddenCarouselStopped')}")
+            print(f"  ③ 唤回：2.5s 内轮询 {ts.get('shownPolls')} 次"
+                  f"（立刻补一轮={ts.get('refreshedOnShow')}）")
+            print(f"  轮询时刻（ms，隐藏发生在 {ts.get('hideAt')}）：{ts.get('pollTimes')}")
+            if not ts:
+                failures.append(f"@{w} tray-suspend: 没量到停表段（探针未跑完？）")
+            else:
+                if not ts.get("hookInstalled"):
+                    failures.append(f"@{w} tray-suspend: dev 钩子没装上"
+                                    f"（`installShellLifecycle` 没在启动时装？）")
+                if not ts.get("visiblePolling"):
+                    failures.append(f"@{w} tray-suspend: **可见时也没在轮询**"
+                                    f"（一个空闲周期 0 次）—— 基线不成立，"
+                                    f"后面的「隐藏后停住」就没有意义了")
+                if not ts.get("hiddenPollingStopped"):
+                    failures.append(f"@{w} tray-suspend: 隐藏后仍在轮询"
+                                    f"（{ts.get('hiddenPolls')} 次）—— 用户要的是"
+                                    f"「后台抓取照常，但**不用渲染前端**」")
+                if not ts.get("hiddenCarouselStopped"):
+                    failures.append(f"@{w} tray-suspend: 隐藏后状态岛空闲轮播还在走"
+                                    f"（文案 = {ts.get('idleTextSeen')!r}）")
+                if ts.get("hiddenFlag") is not True:
+                    failures.append(f"@{w} tray-suspend: 隐藏后标志位是 "
+                                    f"{ts.get('hiddenFlag')!r}（应为 True）")
+                if not ts.get("refreshedOnShow"):
+                    failures.append(f"@{w} tray-suspend: 唤回后没有立刻补一轮"
+                                    f"（2.5s 内 0 次）—— 用户回来会看到旧状态，"
+                                    f"得等下一个 10s 周期")
+                if ts.get("shownFlag") is not False:
+                    failures.append(f"@{w} tray-suspend: 唤回后标志位是 "
+                                    f"{ts.get('shownFlag')!r}（应为 False）")
+            if not failures:
+                print(f"  [ok] 隐藏停表：可见 {ts.get('visiblePolls')} 次 → 隐藏 "
+                      f"{ts.get('hiddenPolls')} 次（轮播也停）→ 唤回立刻补 "
+                      f"{ts.get('shownPolls')} 次")
             for b in failures:
                 print("   -", b)
             return 1 if failures else 0

@@ -115,6 +115,19 @@
 
 ---
 
+## 需求清单：R18（2026-09-15 提报，同日落地）
+
+> 原文照抄：「我希望可以关闭前端界面隐藏到系统托盘，这个时候后台抓取照样进行，
+> 但不用渲染前端」。**用户当场拍板两条口径**：① 首次点 ✕ 问一次、之后按选择记住；
+> ② P1（隐藏 + 停表）与 P2（深休眠省内存）**一起做**。
+
+| # | 一句话需求 | 期望效果 | 优先级 | 落地结论 |
+|---|---|---|---|---|
+| R18 | 关闭前端界面 → **隐藏到系统托盘**，后台抓取照常进行，**不用渲染前端** | 点 ✕ 窗口消失、托盘有图标；期间后台继续抓；点托盘图标恢复；托盘可直接退出 | 中 | **改造前**：✕ = `close()` → 窗口销毁 → Tauri 无窗口即退出 → Job Object 连带杀 sidecar（`lib.rs` 只**打印** CloseRequested，不拦截）⇒ 关闭即全退。<br>**Rust**：`tauri/tray-icon` feature + 托盘（左键唤回 / 菜单「显示主界面·后台运行中·退出」）· 拦 `CloseRequested` → `prevent_close` + `hide` + `set_skip_taskbar(true)` + `emit(shell:hidden)` · `RunEvent::ExitRequested` 在非主动退出时 **`prevent_exit()`**（深休眠销毁 WebView 也会走到这里，这条是必须的）· 退出**唯一路径** = 托盘「退出」→ 唤回窗口 + `emit(shell:quit-requested)` → 前端确认（抓取中写明会中断本轮）→ `invoke(quit_app)` → 置 `QUITTING` 再 `app.exit(0)` → 走既有 `RunEvent::Exit` 清理 · **深休眠**：隐藏满 10 分钟销毁 WebView（`DDTOOLKIT_TRAY_SLEEP_SECONDS` 可覆盖，仅供测试），唤回**重建窗口** + 加载 `index.html?restored=1`（SPA 深链接在资源协议下会 404）· single-instance 回调改成 `show + unminimize + set_focus`（原来只 `set_focus`，隐藏时等于"点了没反应"）。<br>**前端**：`utils/shellLifecycle`（**同步**可见性源 + `shell:hidden/shown` 订阅 + 浏览器/探针退化 + dev 钩子）· `hooks/useShellHidden`（**停表**：顶栏抓取轮询与 60s 登录态轮询、状态岛 6s 空闲轮播；**恢复**：立刻补一轮再恢复定时器）· `utils/shellState`（关闭语义三态 `ask/tray/quit` + 深休眠现场持久化，**路径与视图都过校验**、12 小时过期）· `utils/shellBridge`（Tauri 命令 + 浏览器退化）· `components/CloseActionDialog`（首次询问：两个选项各自写清后果 + 记住选择）· 设置「外观」页可改（`prefs.close_action`）。<br>**护栏**：新探针 `--tray-suspend`（三段对照：可见基线在跑 → 隐藏后请求与轮播都停 → 唤回立刻补一轮；**第一段是灵魂**，否则卡死的应用也能"通过"）· vitest +17（`shellState` 11 / `shellLifecycle` 6）· `cargo build` 通过 · 人工验收清单见 devlog/095。<br>⚠️ **探针抓到两个真 bug**（都写进代码注释与 DEV-LOOP）：① 停表判据读了 React 状态 —— 状态有一帧延迟，定时器可能恰好落在那道缝里 → 改读同步源 `isShellHidden()`；② 只在"排程"时判不够 —— 那一发是**还可见时**排下的 10s 后定时器，隐藏后照样触发（实测漏网时刻 `22063`，隐藏发生在 `14349`）⇒ **"排程"与"触发"两处都要判** |
+
+---
+
+
 ## 需求清单：R1–R10（2026-09-13 提报，同日落地）
 
 > 用户当日一次性提了 10 条（§0 收集区的第一批），**现已全部落地**（R9 分两步：devlog/075
@@ -214,6 +227,7 @@
 | **R14b 主题 + 深色钩子**：「浅色 / 跟随系统」偏好（`prefs.theme`，后端枚举白名单）+ `GET/PUT /settings/prefs` · `utils/theme.ts`（解析/写 `html[data-theme]`/订阅系统主题/该说的说明，10 单测）· `:root[data-theme='dark']` **空块**标记深色未实现 · **跨语言契约**把 TS 的 `DARK_IMPLEMENTED` 与后端下发的说明绑在一起 · 探针扩主题段（深色分支用 `--force-dark-mode` 验过） | 092 |
 | **R16 list 筛选钮跟随侧栏筛选钮**：新探针 `--filter-pill` 把两枚浮片**逐项量化对账**（改前差在 caret 定位与**文字中心偏移 −5.3px**）· `.pfilter-btn` 换成侧栏那套**配方**（caret **绝对定位右上角** + 字 13 + 内距 8 + `line-height:1`），**宽高照旧 68×30**（用户口径「保持同一行中元素的和谐」→ 与同行搜索框齐平）· 文案外套 `.pf-label`（**对称留白**：文字真居中 + 给 caret 让位，合成超长文案下 caret 与文字仍留 9.4px）· 探针契约分 STYLE（逐项必须相等）/ SIZE（各行其是）两桶 · `--polish` 的 R15② 断言被取代（文字偏移 ≤1px、caret 必须 absolute）· 截图并排比对过 | 093 |
 | **R17 设置窗口两栏改版**：参照参考图做成**左侧分类 + 右侧内容**（760×min(600,100vh−72)，导航 168 近白底 + 内容纯白底，镜像外壳层次）· **导航数据驱动**（由 `specs[].group` 生成：外观首/关于尾，后端加一组界面自动多一项，探针与 API 逐项对账）· 选中态沿用「左缘 3px 竖条 + 浅粉底」· **切页不丢草稿** + 圆点标出哪页动过 · 跨字段冲突**同源预校验**落在出问题那一行 · 「恢复全部默认」补上主题（R14a 遗留不一致）· 外观改三张卡片（深色**只标不藏**：禁用 + "尚未实现"）· 字段控件零改动 · 单测 +20、探针扩到 13 步（**分页只渲染当前页**、两栏几何/命中）· 顺手记下两个旧坑新形态（分页导致的游离节点 / 探针文案匹配写死） | 094 |
+| **R18 关闭窗口 → 隐藏到系统托盘**：`tauri/tray-icon` 托盘（左键唤回 / 菜单退出）· 拦 `CloseRequested` → 隐藏 + 摘任务栏图标 · `ExitRequested` 非主动退出时 `prevent_exit` · 退出唯一路径 = 托盘→前端确认→`quit_app` · **深休眠**（隐藏 10 分钟销毁 WebView，唤回重建 + `?restored=1` 恢复位置）· 前端 `shellLifecycle`/`useShellHidden`/`shellState`/`CloseActionDialog`（停表 + 恢复立即补一轮 + 关闭语义三态）· 探针 `--tray-suspend`（可见基线 → 隐藏停表 → 唤回补一轮；**抓到两个真 bug**：React 状态延迟 + 触发时未判）· `cargo build` 通过 | 095 |
 
 ---
 

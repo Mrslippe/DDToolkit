@@ -87,6 +87,8 @@ python scripts/ui_probe.py --app-settings            # R14a 应用设置（devlo
 python scripts/ui_probe.py --filter-pill             # R16 两枚「筛选」浮片逐项对账（devlog/093）：侧栏那枚当基线，
                                                      # list 那枚每个样式字段都要相等（唯一例外 minWidth）+
                                                      # 三态（静态/真实最长/合成超长）的文字居中与 caret 间距
+python scripts/ui_probe.py --tray-suspend            # R18 托盘隐藏后的**停表**验证（devlog/095）：可见时轮询在跑
+                                                     # （基线）→ 隐藏后请求停住、空闲轮播停住 → 唤回立刻补一轮
 ```
 
 > `--polish`（2026-09-15 起，devlog/087）：三条都是"差 2px 肉眼看不出"的占位/对齐问题，所以**全部量出来**：
@@ -152,6 +154,24 @@ python scripts/ui_probe.py --filter-pill             # R16 两枚「筛选」浮
 >      并把按钮文案打进结果（`resetBtnLabel`），下次改名一眼能看出来。
 > ⑥ `--shot` 给这一条加了个开关：URL 上的 `&keepOpen=1` 让探针**跳过收尾的 Esc**，
 >    于是能截到"弹窗开着"的图做视觉存档（`ui_probe --app-settings --shot`）。
+
+> `--tray-suspend`（2026-09-15 起，R18 devlog/095）：**托盘是 OS 级能力，无头浏览器测不到**，
+> 但"隐藏之后该发生什么"完全可断言 —— 页面里有 dev 钩子
+> `window.__ddtoolkitSetShellHidden(true/false)`（`utils/shellLifecycle` 在启动时装的）。
+> 探针分三段，**第一段是灵魂**：可见时必须证明轮询在跑（基线）——否则"隐藏后没请求"这件事，
+> 一个彻底卡死的应用也能满足。量的是 `performance.getEntriesByType('resource')` 里
+> `/vtuber/fetch-status` 的条数，并把**每次请求的时刻**一起打出来（排查"漏网那一发"全靠它）。
+>
+> ⚠️ 这条探针抓到的两个真 bug（写代码时想当然就会踩）：
+> ① **停表判据要读同步源**：React 状态要等下一次渲染才落地，而定时器可能恰好落在那道缝里
+>    → 判据读 `isShellHidden()`（同步置位），不读 state/它同步过来的 ref；
+> ② **"排程时判"不够，触发时还要判一次**：定时器可能是**还可见时**排下的 10s 后那一轮，
+>    隐藏之后照样到点触发 —— 实测漏网时刻 `22063`（隐藏发生在 `14349`），
+>    而它是 `12053` 那次轮询结束时排的。⇒ **停表要在"排程"与"触发"两处都判。**
+>
+> 深休眠（P2）与托盘交互只能人工验：打包版点 ✕ → 窗口消失 + 托盘图标在 → 等 10 分钟
+> （调试可用 `DDTOOLKIT_TRAY_SLEEP_SECONDS=20`）→ 唤回后**位置与数据都要是新的** →
+> 托盘「退出」→ 任务管理器无 `ddtoolkit.exe` / backend 残留 → 再点 exe 应**唤回**而非开第二个实例。
 
 > `--filter-pill`（2026-09-15 起，R16 devlog/093）：用户给的是**两张截图**（"list 视图那枚
 > 要跟随侧栏那枚的样式"）—— 截图能看出"像不像"，但没法证明"一样不一样"，所以先把两枚浮片

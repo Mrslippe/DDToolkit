@@ -14,7 +14,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { api } from '../api/api'
 import type { AppSettings, SettingSpec } from '../api/types'
-import { useThemePref } from '../hooks/useThemePref'
+import { usePrefs } from '../hooks/usePrefs'
 import { themeCards, type ThemePref } from '../utils/theme'
 import {
   ABOUT_ID, APPEARANCE_ID, buildNav, groupDirty, resetDraftOfGroup, type NavIcon,
@@ -75,8 +75,12 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
   const [error, setError] = useState<string | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [busy, setBusy] = useState<'save' | 'reset' | null>(null)
-  /** 主题（R14b）：偏好与「跟随系统」的解析都在 hook 里，这里只管交互与错误 */
-  const theme = useThemePref()
+  /** 隐藏到托盘 / 主题等界面偏好（R14b 起；R18 起是一个 hook 管全部偏好） */
+  const prefs = usePrefs()
+  const theme = {
+    pref: prefs.pref, setTheme: prefs.setTheme, caveat: prefs.caveat,
+    spec: prefs.specOf('theme'), reload: prefs.reload, loaded: prefs.loaded,
+  }
   const [themeError, setThemeError] = useState<string | null>(null)
   const navRefs = useRef<Record<string, HTMLButtonElement | null>>({})
 
@@ -182,6 +186,16 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
       await theme.setTheme(next as ThemePref)
     } catch (e) {
       // 落库失败：hook 已把界面退回旧值，这里如实说一句
+      setThemeError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  /** 关闭语义（R18）：与首次点 ✕ 的询问框写**同一份**偏好 */
+  const pickCloseAction = async (next: string) => {
+    setThemeError(null)
+    try {
+      await prefs.setPref('close_action', next)
+    } catch (e) {
       setThemeError(e instanceof Error ? e.message : String(e))
     }
   }
@@ -314,6 +328,32 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
                     <p className="aps-range" data-theme-caveat="1">{theme.caveat}</p>
                   )}
                   {themeError && <p className="aps-field-error">{themeError}</p>}
+
+                  {/* 关闭窗口的语义（R18）：与首次点 ✕ 的询问框写同一份偏好 */}
+                  {prefs.specOf('close_action') && (
+                    <div className="aps-row" data-setting="close_action">
+                      <div className="aps-row-main">
+                        <span className="aps-label">{prefs.specOf('close_action')!.label}</span>
+                        <span className="aps-note">{prefs.specOf('close_action')!.note}</span>
+                      </div>
+                      <div className="aps-row-ctl aps-radio-group" role="radiogroup"
+                           aria-label={prefs.specOf('close_action')!.label}>
+                        {prefs.specOf('close_action')!.options.map((o) => (
+                          <button
+                            key={o.value}
+                            type="button"
+                            role="radio"
+                            aria-checked={prefs.closeAction === o.value}
+                            data-close-option={o.value}
+                            className={`aps-radio${prefs.closeAction === o.value ? ' on' : ''}`}
+                            onClick={() => void pickCloseAction(o.value)}
+                          >
+                            {o.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 

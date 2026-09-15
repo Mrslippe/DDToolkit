@@ -362,6 +362,26 @@ def test_prefs_corrupt_stored_value_falls_back_without_crashing(client, db):
     assert AppMetaRepo(db).get("prefs.theme") == "neon"        # 原样留着，不静默改写
 
 
+def test_prefs_close_action_whitelist(client, db):
+    """关闭语义（R18）：默认 `ask`（首次点 ✕ 问一次），只认三个取值。
+
+    判错代价：写进一个后端不认的值 → 前端读到默认值，用户"记住的选择"每次都白问；
+    或者更糟：值被存下来但没人解释，行为变成随机的。
+    """
+    body = client.get("/settings/prefs").json()
+    assert body["values"]["close_action"] == "ask"
+    spec = [s for s in body["specs"] if s["key"] == "close_action"]
+    assert spec and [o["value"] for o in spec[0]["options"]] == ["ask", "tray", "quit"]
+    for ok in ("tray", "quit", "ask"):
+        r = client.put("/settings/prefs", json={"values": {"close_action": ok}})
+        assert r.status_code == 200, r.text
+        assert r.json()["values"]["close_action"] == ok
+        assert AppMetaRepo(db).get("prefs.close_action") == ok
+    r = client.put("/settings/prefs", json={"values": {"close_action": "minimize"}})
+    assert r.status_code == 400
+    assert AppMetaRepo(db).get("prefs.close_action") == "ask"   # 没被改脏
+
+
 def test_dark_theme_hook_flag_matches_what_the_ui_tells_users():
     """**跨语言契约**：前端 `utils/theme.ts::DARK_IMPLEMENTED` 与后端下发的说明必须一致。
 

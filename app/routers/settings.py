@@ -53,6 +53,10 @@ def _theme_note() -> str:
 
 PREFS: dict[str, tuple] = {
     "theme": ("light", "light", "system"),
+    # 关闭窗口的语义（R18，devlog/095）：`ask` = 首次点 ✕ 时问一次（用户选定"首次问一次、
+    # 之后按选择记住"）；`tray` = 直接隐藏到托盘；`quit` = 直接退出。
+    # 存在后端而不是 localStorage：它是**用户偏好**，要和主题一样跨启动、跨清缓存活着。
+    "close_action": ("ask", "ask", "tray", "quit"),
 }
 
 
@@ -165,6 +169,13 @@ def get_prefs(db: Session = Depends(get_db)):
              "options": [{"value": "light", "label": "浅色"},
                          {"value": "system", "label": "跟随系统"}],
              "note": THEME_NOTE},
+            {"key": "close_action", "label": "关闭窗口时", "group": "外观",
+             "options": [{"value": "ask", "label": "每次询问"},
+                         {"value": "tray", "label": "最小化到托盘"},
+                         {"value": "quit", "label": "直接退出"}],
+             "note": "最小化到托盘时**后台抓取照常进行**（界面不再渲染与轮询），"
+                     "点托盘图标或再次启动即可唤回；隐藏 10 分钟后会释放界面内存，"
+                     "唤回时自动恢复到你离开的位置"},
         ],
         "changed": sorted(k for k in PREFS if k in stored),
     }

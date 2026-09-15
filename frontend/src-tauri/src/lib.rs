@@ -1,6 +1,10 @@
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::time::Duration;
 
-use tauri::{Manager, RunEvent, State};
+use tauri::menu::{MenuBuilder, MenuItemBuilder};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{Emitter, Manager, RunEvent, State, WindowEvent};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
@@ -22,6 +26,168 @@ struct BackendPort(Mutex<u16>);
 /// 非 Windows 平台恒为 0，不参与逻辑。
 struct BackendJob(Mutex<isize>);
 
+// ── 托盘 / 隐藏 / 深休眠（R18，devlog/095）──────────────────────────────
+//
+// 用户口径：「关闭前端界面隐藏到系统托盘，后台抓取照样进行，但不用渲染前端」，
+// 并且拍板了「首次点 ✕ 问一次、之后按选择记住」+「P1 与深休眠 P2 一起做」。
+//
+// 三个状态是这批的命门，写错任何一个都会变成"点了没反应"或"关不掉"：
+// 1. `QUITTING`：托盘「退出」/前端确认退出时置真 → `CloseRequested` **不再拦截**。
+//    忘了它 = 点了退出却只是隐藏。
+// 2. `HIDDEN_SINCE`：隐藏时刻（0 = 当前可见）。深休眠线程据此判断"隐藏够久了吗"。
+// 3. `DEEP_SLEPT`：WebView 已被销毁（省内存）。托盘点击据此决定"show 还是重建窗口"。
+static QUITTING: AtomicBool = AtomicBool::new(false);
+static HIDDEN_SINCE: AtomicU64 = AtomicU64::new(0);
+static DEEP_SLEPT: AtomicBool = AtomicBool::new(false);
+
+/// 深休眠阈值：隐藏满这么久就销毁 WebView 释放内存（用户口径 10 分钟）。
+/// 环境变量覆盖**只给测试用**（人工验收时用 20 秒就能验完整条链路）。
+fn deep_sleep_after() -> Duration {
+    let secs = std::env::var("DDTOOLKIT_TRAY_SLEEP_SECONDS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(600);
+    if secs == 0 {
+        Duration::from_secs(u64::MAX / 2) // 0 = 关闭深休眠
+    } else {
+        Duration::from_secs(secs)
+    }
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// 隐藏窗口到托盘：hide + 从任务栏摘掉 + 告诉前端"停表"（它靠这个停止轮询与渲染）。
+fn hide_to_tray_impl(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.hide();
+        let _ = w.set_skip_taskbar(true);
+    }
+    HIDDEN_SINCE.store(now_ms(), Ordering::SeqCst);
+    let _ = app.emit("shell:hidden", ());
+    println!("[ddtoolkit] 已隐藏到托盘（后台抓取继续）");
+}
+
+/// 显示主窗口（托盘点击 / 二次启动）。若已被深休眠销毁，则**重建窗口**。
+fn show_main_impl(app: &tauri::AppHandle) {
+    HIDDEN_SINCE.store(0, Ordering::SeqCst);
+    if DEEP_SLEPT.swap(false, Ordering::SeqCst) {
+        match rebuild_main_window(app) {
+            Ok(_) => println!("[ddtoolkit] 深休眠唤醒：已重建窗口"),
+            Err(e) => println!("[ddtoolkit] 重建窗口失败：{e}"),
+        }
+        return;
+    }
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.set_skip_taskbar(false);
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
+    let _ = app.emit("shell:shown", ());
+}
+
+/// 深休眠：销毁 WebView 释放内存（隐藏满 `deep_sleep_after()` 之后）。
+/// 之所以真销毁而不是"导航到 about:blank"：只有窗口销毁才会让 WebView2 的
+/// 渲染进程一起退出，内存才是真的还回去（导航到空白页只丢 DOM，进程还在）。
+fn deep_sleep_impl(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.destroy();
+    }
+    DEEP_SLEPT.store(true, Ordering::SeqCst);
+    println!("[ddtoolkit] 深休眠：已销毁界面释放内存（后台抓取不受影响）");
+}
+
+/// 重建主窗口。参数必须与 `tauri.conf.json` 里那份**等价**：
+/// 无边框 / 透明 / 最小尺寸 / 居中 / 先隐藏（等前端调用 present_window 再显示，
+/// 保持"白屏闪一下"那个既有修复）。
+/// 恢复现场靠 URL 上的 `?restored=1`：前端读到标记后把路由与视图还原回去
+/// （不能直接把深链接当 URL —— 资源协议下 SPA 深链接会 404）。
+fn rebuild_main_window(app: &tauri::AppHandle) -> tauri::Result<tauri::WebviewWindow> {
+    let w = tauri::WebviewWindowBuilder::new(
+        app,
+        "main",
+        tauri::WebviewUrl::App("index.html?restored=1".into()),
+    )
+    .title("DDtoolkit")
+    .inner_size(1440.0, 800.0)
+    .min_inner_size(960.0, 600.0)
+    .center()
+    .decorations(false)
+    .transparent(true)
+    .visible(false)
+    .skip_taskbar(false)
+    .build()?;
+    let _ = w.set_focus();
+    Ok(w)
+}
+
+/// 深休眠看门狗：每秒看一眼"隐藏够久了吗"。
+/// 独立线程而不是 timer 回调：逻辑简单、退出时无需注销（进程结束就没了）。
+fn spawn_deep_sleep_watchdog(app: tauri::AppHandle) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_secs(1));
+        let since = HIDDEN_SINCE.load(Ordering::SeqCst);
+        if since == 0 || QUITTING.load(Ordering::SeqCst) || DEEP_SLEPT.load(Ordering::SeqCst) {
+            continue;
+        }
+        let hidden_for = Duration::from_millis(now_ms().saturating_sub(since));
+        if hidden_for >= deep_sleep_after() {
+            deep_sleep_impl(&app);
+        }
+    });
+}
+
+/// 建托盘：左键单击 = 显示主界面；菜单 = 显示主界面 / 后台运行中（禁用）/ 退出。
+fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
+    let show = MenuItemBuilder::with_id("show", "显示主界面").build(app)?;
+    let status = MenuItemBuilder::with_id("status", "后台运行中")
+        .enabled(false)
+        .build(app)?;
+    let quit = MenuItemBuilder::with_id("quit", "退出").build(app)?;
+    let menu = MenuBuilder::new(app)
+        .item(&show)
+        .separator()
+        .item(&status)
+        .separator()
+        .item(&quit)
+        .build()?;
+
+    let mut builder = TrayIconBuilder::with_id("main-tray")
+        .tooltip("DDtoolkit · 后台运行中")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "show" => show_main_impl(app),
+            "quit" => {
+                // 退出是**破坏性**动作：先唤回窗口让前端确认（有任务在跑时会写明后果）。
+                // 前端确认后 invoke `quit_app`，那边才真正置标志并退出。
+                show_main_impl(app);
+                let _ = app.emit("shell:quit-requested", ());
+            }
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                show_main_impl(tray.app_handle());
+            }
+        });
+    if let Some(icon) = app.default_window_icon().cloned() {
+        builder = builder.icon(icon);
+    }
+    builder.build(app)?;
+    Ok(())
+}
+
 #[tauri::command]
 fn get_backend_port(port: State<'_, BackendPort>) -> u16 {
     *port.0.lock().unwrap()
@@ -33,6 +199,21 @@ fn get_backend_port(port: State<'_, BackendPort>) -> u16 {
 #[tauri::command]
 fn present_window(window: tauri::Window) {
     let _ = window.show();
+}
+
+/// 隐藏到托盘（前端点 ✕ 且偏好为「最小化到托盘」时调用）。
+#[tauri::command]
+fn hide_to_tray(app: tauri::AppHandle) {
+    hide_to_tray_impl(&app);
+}
+
+/// 真退出：先置标志（否则 `CloseRequested` 又把它拦成"隐藏"），再退出。
+/// 退出路径仍走 `RunEvent::Exit` —— 那里负责 kill 后端子进程。
+#[tauri::command]
+fn quit_app(app: tauri::AppHandle) {
+    QUITTING.store(true, Ordering::SeqCst);
+    println!("[ddtoolkit] 用户确认退出");
+    app.exit(0);
 }
 
 fn free_port() -> u16 {
@@ -205,10 +386,10 @@ fn spawn_backend(
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            // 二次启动：聚焦已有窗口
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.set_focus();
-            }
+            // 二次启动：**唤回**已有窗口。R18 起不能只 set_focus ——
+            // 窗口可能是隐藏的（在托盘里），甚至是深休眠被销毁过的，
+            // 那样"点了没反应"就变成用户眼里的 bug。
+            show_main_impl(app);
         }))
         .plugin(tauri_plugin_shell::init())
         .manage(BackendPort(Mutex::new(0)))
@@ -216,8 +397,22 @@ pub fn run() {
         .manage(BackendJob(Mutex::new(0)))
         .invoke_handler(tauri::generate_handler![
             get_backend_port,
-            present_window
+            present_window,
+            hide_to_tray,
+            quit_app
         ])
+        .on_window_event(|window, event| {
+            // ✕ 不再等于"退出"（R18，devlog/095）：关闭请求被拦下，改成隐藏到托盘，
+            // 后台抓取照常。真正的退出只有两条路：托盘「退出」→ 前端确认 → `quit_app`，
+            // 或系统注销/关机（那种情况下 `QUITTING` 不置真，但 `WindowEvent::Destroyed`
+            // 之后 Tauri 仍会走 ExitRequested → 退出）。
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                if !QUITTING.load(Ordering::SeqCst) {
+                    api.prevent_close();
+                    hide_to_tray_impl(window.app_handle());
+                }
+            }
+        })
         .setup(|app| {
             perf("setup 开始");
 
@@ -289,6 +484,16 @@ pub fn run() {
 
             // 窗口以 visible:true 创建（见 tauri.conf.json）：静态粉幕随 WebView
             // 首绘即显示，不再依赖 JS show() 链路，故原 8 秒兜底显示线程已删除。
+            //
+            // R18：托盘与深休眠看门狗（用户口径「关闭 = 隐藏到托盘，后台照抓」）
+            if let Err(e) = build_tray(app.handle()) {
+                // 托盘建不起来（极少数环境）不能让应用起不来：照旧可用，只是点 ✕
+                // 会走"隐藏但没法唤回"——所以这里必须留痕，别静默。
+                println!("[ddtoolkit] 托盘创建失败：{e}");
+            } else {
+                println!("[ddtoolkit] 托盘就绪（左键显示 / 菜单可退出）");
+            }
+            spawn_deep_sleep_watchdog(app.handle().clone());
             perf("setup 完成");
 
             Ok(())
@@ -302,8 +507,17 @@ pub fn run() {
                     println!("[ddtoolkit] RunEvent::Ready");
                     perf("RunEvent::Ready")
                 }
-                RunEvent::ExitRequested { code, .. } => {
-                    println!("[ddtoolkit] RunEvent::ExitRequested code={code:?}")
+                RunEvent::ExitRequested { code, api, .. } => {
+                    // R18（devlog/095）：**窗口全关 ≠ 退出应用**。托盘还在，后台抓取还要继续，
+                    // 所以非主动退出（没置 `QUITTING`）时把退出请求拦下来 ——
+                    // 否则"点 ✕ 隐藏"会连应用一起带走（那正是改造前的行为）。
+                    // ⚠️ 深休眠销毁 WebView 也会走到这里，所以这一条是**必须**的。
+                    if !QUITTING.load(Ordering::SeqCst) {
+                        println!("[ddtoolkit] RunEvent::ExitRequested code={code:?} → 拦下（托盘常驻）");
+                        api.prevent_exit();
+                    } else {
+                        println!("[ddtoolkit] RunEvent::ExitRequested code={code:?} → 放行（用户确认退出）");
+                    }
                 }
                 RunEvent::Exit => println!("[ddtoolkit] RunEvent::Exit"),
                 RunEvent::WindowEvent { label, event: ev, .. } => match ev {

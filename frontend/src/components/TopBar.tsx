@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import { Copy, LogIn, Minus, Square, X } from 'lucide-react'
 import Logo from './common/Logo'
 import LoginDialog from './LoginDialog'
 import CapabilityLimits from './CapabilityLimits'
 import StatusIsland from './StatusIsland'
+import CloseActionDialog from './CloseActionDialog'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -15,10 +17,14 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { useIsMaximized } from '../hooks/useIsMaximized'
+import { useShellHidden } from '../hooks/useShellHidden'
 import { setFetchBusy } from '../fetchBusy'
 import { isFirstRun } from '../bootState'
 import { dispatchFetchIdle, type FetchIdleKind } from '../utils/fetchIdle'
 import { useCapabilities, refreshCapabilities } from '../hooks/useCapabilities'
+import { hideToTray, quitApp } from '../utils/shellBridge'
+import { isShellHidden } from '../utils/shellLifecycle'
+import { closeIntent, parseCloseAction, type CloseAction } from '../utils/shellState'
 import type { Notice, NoticeActionKind } from '../utils/notificationHub'
 import {
   composeTaskText, loginNotice, messageNotice, progressNotice, rateLimitNotice, reportNotice,
@@ -71,7 +77,12 @@ async function tauriWindow() {
 export default function TopBar() {
   const [status, setStatus] = useState<FetchStatus | null>(null)
   const [confirmClose, setConfirmClose] = useState(false)
+  /** 首次点 ✕ 的询问框（R18：`prefs.close_action === 'ask'` 时才可能打开） */
+  const [askClose, setAskClose] = useState(false)
   const [pillMsg, setPillMsg] = useState<string | null>(null)
+  /** 隐藏到托盘（R18）：隐藏期间停掉两条轮询链，恢复时立刻补一轮 */
+  const hidden = useShellHidden()
+  const location = useLocation()
   // 登录：浮窗开关 + 两平台登录态（约 60s 轮询一次，供入口徽章提示）
   const [loginOpen, setLoginOpen] = useState(false)
   /** 能力矩阵（未登录时哪些受限）——顶栏入口 + 各浮窗提示共用（devlog/086） */
@@ -123,10 +134,22 @@ export default function TopBar() {
         clearTimeout(timer)
         timer = undefined
       }
-      if (!cancelled) timer = window.setTimeout(poll, ms)
+      // R18：隐藏到托盘期间**不续链** —— 用户要的是"后台抓取照常，但界面不渲染"，
+      // 而这条链正是界面里最吵的东西（空闲 10s / 忙 3s 一次）。
+      //
+      // ⚠️ 判据必须读**同步源** `isShellHidden()`，不能读 React 状态/它同步过来的 ref：
+      // 状态要等下一次渲染才落地，而这条链的定时器可能恰好在那之前触发 ——
+      // 于是"隐藏后还会多跑一轮"（探针 `--tray-suspend` 实测抓到 1 次，devlog/095）。
+      if (!cancelled && !isShellHidden()) timer = window.setTimeout(poll, ms)
     }
 
     const poll = async () => {
+      // R18：**触发时也要看一次**。只在 `schedule` 里判是不够的 ——
+      // 定时器可能是在"还可见"的时候排下的（比如隐藏前 2 秒刚排好 10s 后那一轮），
+      // 隐藏之后它照样到点触发。探针 `--tray-suspend` 的记录最能说明问题：
+      // 轮询时刻 [1499, 2033, 2043, 12053, **22063**]，而隐藏发生在 14349 ——
+      // 22063 那一发就是"排程时合法、触发时已经隐藏"的漏网之鱼。
+      if (isShellHidden()) return
       if (inFlight.current) {
         // 并发保护：不并行开第二条链，但必须把定时器续上。
         // ★ 2026-09-08 修复（左栏直播徽标永不刷新）：StrictMode 双挂载下，
@@ -304,8 +327,16 @@ export default function TopBar() {
     return () => window.removeEventListener('ddtoolkit:kick-poll', kick)
   }, [])
 
-  // 登录态轮询：约 60s 一次，驱动入口徽章（B 站会话过期 → 红点提示扫码）
+  // R18：恢复可见 → **立刻补一轮**（只恢复定时器的话，用户点开托盘看到的可能是
+  // 10s 前的旧状态）。隐藏方向的停表不靠这里 —— 那必须同步生效，见 `schedule`。
   useEffect(() => {
+    if (!hidden) pollRef.current?.()
+  }, [hidden])
+
+  // 登录态轮询：约 60s 一次，驱动入口徽章（B 站会话过期 → 红点提示扫码）。
+  // R18：隐藏到托盘时整条停掉（隐藏 8 小时 = 960 次白请求）
+  useEffect(() => {
+    if (hidden) return
     let cancelled = false
     const load = async () => {
       try {
@@ -324,7 +355,7 @@ export default function TopBar() {
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [])
+  }, [hidden])
 
   // 首次启动（后端 /healthz 的 first_run）自动弹出登录浮窗：
   // 等 B 站登录态探测回来再决定——已登录（老数据目录/已配置 .env）就不打扰。
@@ -433,8 +464,28 @@ export default function TopBar() {
 
   const handleMinimize = () => void tauriWindow().then((w) => w.minimize())
 
-  const closeApp = () => void tauriWindow().then((w) => w.close())
-  const handleClose = () => (busy ? setConfirmClose(true) : closeApp())
+  /**
+   * 点 ✕（R18，devlog/095）：三种语义，由 `prefs.close_action` 决定 ——
+   * `tray` 隐藏到托盘 / `quit` 直接退出 / `ask` 首次问一次。
+   *
+   * ⚠️ 偏好**每次现读**（一个很小的 GET），不在组件里缓存：设置窗口里刚改成
+   * "直接退出"，回到顶栏点 ✕ 就该按新的来 —— 缓存会让用户觉得"设置没生效"。
+   */
+  const handleClose = () => {
+    void (async () => {
+      let action: CloseAction = 'ask'
+      try {
+        action = parseCloseAction((await api.getPrefs()).values.close_action)
+      } catch {
+        /* 后端不可达：退化成"问一次"（不会擅自退出，也不会擅自隐藏） */
+      }
+      const intent = closeIntent(action)
+      if (intent === 'hide') await hideToTray(location.pathname)
+      else if (intent === 'ask') setAskClose(true)
+      else if (busy) setConfirmClose(true)
+      else await quitApp()
+    })()
+  }
 
   // 最大化状态跟踪：onResized 触发时重查 isMaximized，切换 还原/最大化 图标
   const isMax = useIsMaximized()
@@ -570,20 +621,50 @@ export default function TopBar() {
           <AlertDialogHeader>
             <AlertDialogTitle>抓取任务正在进行中</AlertDialogTitle>
             <AlertDialogDescription>
-              关闭窗口会中断后台抓取进程，确定退出吗？
+              退出会中断后台抓取进程。想让它继续跑，就选「最小化到托盘」——
+              界面停下，抓取照常。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogCancel
+              onClick={() => {
+                setConfirmClose(false)
+                void hideToTray(location.pathname)
+              }}
+            >
+              最小化到托盘
+            </AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-white hover:bg-destructive/90"
-              onClick={closeApp}
+              onClick={() => { setConfirmClose(false); void quitApp() }}
             >
               退出
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* 首次点 ✕ 的询问（R18，devlog/095）：用户口径「首次问一次、之后按选择记住」 */}
+      <CloseActionDialog
+        open={askClose}
+        onOpenChange={setAskClose}
+        busy={busy}
+        onChoose={(choice, remember) => {
+          setAskClose(false)
+          void (async () => {
+            if (remember) {
+              try {
+                await api.savePrefs({ close_action: choice })
+              } catch {
+                // 存偏好失败不影响这一次的动作，只是下次还会问
+              }
+            }
+            if (choice === 'tray') await hideToTray(location.pathname)
+            else if (busy) setConfirmClose(true)   // 退出且正在抓取 → 走上面那个二次确认
+            else await quitApp()
+          })()
+        }}
+      />
     </header>
   )
 }

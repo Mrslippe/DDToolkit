@@ -158,7 +158,8 @@
 | **空闲轮播 / 语录池** | 顶栏空闲时按 `IDLE_TICK_MS=6s` 轮转的文案（第 0 格固定是「数据服务运行中」，状态信息不被顶掉）；语录里**不许出现进度词** | `utils/idleQuotes.ts`（`idlePool` / `pickIdle` / `registerIdleProvider`）；DOM 见 `data-idle-pool` | 时钟是组件自己的定时器（不挂抓取轮询，否则调大轮询间隔就静默停住）；探针 `--status-island` 连采三格判 |
 | **添加 V 浮窗** | 收录入口浮窗：本地候选（池 + 弹幕索引）与 B 站在线检索两个来源 | `components/AddVtuberDialog.tsx`；`.av-*`（`styles/posts.css`） | 探针 `--add-v`；纯逻辑在 `utils/addVtuberSearch.ts` |
 | **应用设置 / 运行时覆盖层** | IconRail 底端齿轮 → **两栏设置弹窗**（左分类导航 + 右内容）：导航由 `specs[].group` **数据驱动**（外观首/关于尾），抓取参数**改完下一轮生效（不用重启）**，只读项逐条写理由 | `app/core/runtime_settings.py`（SPECS + 只读表）、`app/routers/settings.py`、`components/AppSettingsDialog.tsx`、`utils/settingsNav.ts`；`.aps-*` | 落库复用 `app_meta`（前缀 `settings.`）；`Settings.__getattribute__` 拦截热更键，优先级 **实例属性 > 覆盖层 > 类属性**；切页不丢草稿、圆点标未保存页；探针 `--app-settings` |
-| **主题 / 深色钩子** | 「浅色 / 跟随系统」偏好（立即生效，存 `prefs.theme`）；**深色样式尚未实现** —— 钩子 = 解析函数 + `html[data-theme]` + 空的深色令牌块 | `utils/theme.ts`（纯逻辑，10 单测）、`hooks/useThemePref.ts`、`styles/tokens.css` 的 `:root[data-theme='dark']` 空块 | `DARK_IMPLEMENTED=false` 时 `system` 解析为浅色，界面**必须**给出那句说明（`themeCaveat`）；跨语言契约把它与 `/settings/prefs` 的 note 绑在一起 |
+| **主题 / 深色钩子** | 「浅色 / 跟随系统」偏好（立即生效，存 `prefs.theme`）；**深色样式尚未实现** —— 钩子 = 解析函数 + `html[data-theme]` + 空的深色令牌块 | `utils/theme.ts`（纯逻辑，13 单测）、`hooks/usePrefs.ts`、`styles/tokens.css` 的 `:root[data-theme='dark']` 空块 | `DARK_IMPLEMENTED=false` 时 `system` 解析为浅色，界面**必须**给出那句说明（`themeCaveat`）；跨语言契约把它与 `/settings/prefs` 的 note 绑在一起 |
+| **托盘隐藏 / 深休眠** | 点 ✕ → 窗口隐藏到托盘（**后台抓取照常、前端停表**）；隐藏 10 分钟深休眠（销毁 WebView 省内存），唤回重建窗口并回到离开的位置 | `src-tauri/src/lib.rs`（托盘 / 拦 CloseRequested / prevent_exit / `hide_to_tray`·`quit_app` 命令）、`utils/shellLifecycle.ts`、`utils/shellState.ts`、`utils/shellBridge.ts`、`components/CloseActionDialog.tsx` | 关闭语义存 `prefs.close_action`（默认 `ask`）；**退出只有一条路**（托盘→前端确认→`quit_app`）；停表判据必须读同步源且在"排程 + 触发"两处都判（探针 `--tray-suspend` 抓到过两个真 bug） |
 
 ---
 

@@ -26,6 +26,7 @@ import { typeGroupsFor } from '../utils/postTypes'
 import { pill } from '../utils/pill'
 import { useVtuberActions } from './useVtuberActions'
 import { useSceneTransition } from '../hooks/useSceneTransition'
+import { noteCurrentView } from '../utils/shellState'
 import PostDetailDrawer from '../components/PostDetailDrawer'
 import AddAccountDialog from '../components/AddAccountDialog'
 import VtuberSettingsDialog from '../components/VtuberSettingsDialog'
@@ -98,7 +99,24 @@ export default function PostsPage() {
   const fetchBusy = useFetchBusy()
   const busyTip = '已有抓取任务进行中，请稍后再试'
   // 视图：cards=展示页（默认）/ list=帖子列表页 / archive=档案 / profile=档案卡（P7 移出）
-  const [view, setView] = useState<AppView>('cards')
+  // R18：深休眠唤醒后，`App` 把"上次离开时的视图"放在 sessionStorage 里传进来
+  // （深链接走不通，只能用这种方式把视图带回来；读过即删，正常启动不受影响）
+  const [view, setView] = useState<AppView>(() => {
+    try {
+      const want = window.sessionStorage.getItem('ddtoolkit.restore-view')
+      if (want) window.sessionStorage.removeItem('ddtoolkit.restore-view')
+      if (want === 'cards' || want === 'list' || want === 'archive' || want === 'profile') {
+        return want
+      }
+    } catch {
+      /* sessionStorage 不可用：按默认视图 */
+    }
+    return 'cards'
+  })
+  // R18：把当前视图发布给 `utils/shellState`（隐藏到托盘时存现场，深休眠唤醒后恢复）
+  useEffect(() => {
+    noteCurrentView(view)
+  }, [view])
   // 列表页右侧操作钮组：收起态只露 [展开钮][更新动态]，展开向左滑出全部四钮
   const [actionsOpen, setActionsOpen] = useState(false)
   const navigate = useNavigate()

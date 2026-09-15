@@ -1444,12 +1444,18 @@ export async function runUiProbe(): Promise<void> {
       // ① 导航项必须与后端 `specs[].group` **逐项对账**（数据驱动的机器判据）
       const navLabels = [...dlg.querySelectorAll<HTMLElement>('.aps-nav-item')]
         .map((n) => (n.querySelector('.aps-nav-label')?.textContent || '').trim())
-      const groupsFromApi = await fetch(`${getApiBase()}/settings`).then((r) => r.json())
-        .then((b: { specs: { group: string }[] }) => {
-          const out: string[] = []
-          for (const s of b.specs) if (!out.includes(s.group)) out.push(s.group)
-          return out
-        })
+      const settingsBody = await fetch(`${getApiBase()}/settings`).then((r) => r.json())
+        .then((b: { specs: { key: string; group: string }[] }) => b)
+      const groupsFromApi = (() => {
+        const out: string[] = []
+        for (const s of settingsBody.specs) if (!out.includes(s.group)) out.push(s.group)
+        return out
+      })()
+      /** 后端下发的**抓取参数**键（外观页出现任何一个 = 分页没生效） */
+      const specKeys = new Set(settingsBody.specs.map((s) => s.key))
+      const foreignRowsOnAppearance = () =>
+        [...dlg.querySelectorAll<HTMLElement>('.aps-row')]
+          .filter((r) => specKeys.has(r.getAttribute('data-setting') || '')).length
       result.navLabels = navLabels
       result.apiGroups = groupsFromApi
       result.navMatchesApi = JSON.stringify(navLabels)
@@ -1469,8 +1475,10 @@ export async function runUiProbe(): Promise<void> {
       result.appearanceCards = [...dlg.querySelectorAll('[data-theme-option]')]
         .map((n) => n.getAttribute('data-theme-option'))
 
-      // ③ 只有当前分类的字段在 DOM（分页而不是"全塞一起再隐藏"）
-      result.rowsOnAppearance = dlg.querySelectorAll('.aps-row').length
+      // ③ 只有当前分类的字段在 DOM（分页而不是"全塞一起再隐藏"）。
+      //    判据是"**抓取参数**一个都不在外观页"，不是"外观页里没有任何 .aps-row" ——
+      //    外观页自己也有行（主题、关闭窗口时，R18 起），那种计数写法会误报。
+      result.fetchRowsOnAppearance = foreignRowsOnAppearance()
       await clickNav('抓取节奏')
       result.paneAfterSwitch = paneOf()?.getAttribute('data-pane')
       result.rowsOnFetch = dlg.querySelectorAll('.aps-row').length
@@ -1773,6 +1781,92 @@ export async function runUiProbe(): Promise<void> {
     pre.id = 'ui-probe'
     pre.textContent = JSON.stringify({ mode: 'filter-pill', views: [], degraded,
                                        filterPill: result })
+    document.body.appendChild(pre)
+    document.title = 'UI_PROBE_DONE'
+    return
+  }
+
+  // 托盘隐藏后的"停表"验证（`?probe=tray-suspend`，R18 devlog/095）：
+  // 用户要的是「关闭 → 隐藏到托盘，后台抓取照常，但**不用渲染前端**」。
+  // 托盘本身是无头浏览器测不到的（OS 级），但"隐藏之后该发生什么"完全可断言 ——
+  // 页面里有 dev 钩子 `window.__ddtoolkitSetShellHidden()`（`utils/shellLifecycle` 装的）。
+  //
+  // 三段对照（缺了第一段这探针就是空转：一个彻底卡死的应用也能"通过"隐藏断言）：
+  //   ① 可见时：抓取轮询**必须在跑**（计数增长）—— 基线；
+  //   ② 隐藏后：计数**必须停住**，状态岛空闲轮播也必须停（文案不再变）；
+  //   ③ 唤回后：**立刻补一轮**（而不是等下一个 10s 周期）—— 用户回来看到的是新状态。
+  if (mode === 'tray-suspend') {
+    const result: Record<string, unknown> = {}
+    const waitFor = async (fn: () => unknown, ms = 6000) => {
+      const t0 = performance.now()
+      while (performance.now() - t0 < ms) {
+        if (fn()) return true
+        await sleep(100)
+      }
+      return false
+    }
+    /** 抓取状态轮询的请求数（探针只看这一条：它是界面里最频繁的请求） */
+    const pollCount = () => performance.getEntriesByType('resource')
+      .filter((e) => e.name.includes('/vtuber/fetch-status')).length
+    /** 每次轮询的发生时刻（相对导航开始），排查"隐藏后那一发"是从哪来的 */
+    const pollTimes = () => performance.getEntriesByType('resource')
+      .filter((e) => e.name.includes('/vtuber/fetch-status'))
+      .map((e) => Math.round(e.startTime))
+    const islandText = () =>
+      (document.querySelector('.si-text')?.textContent || '').trim()
+    const setHidden = (v: boolean) => {
+      const fn = (window as unknown as {
+        __ddtoolkitSetShellHidden?: (x: boolean) => void
+      }).__ddtoolkitSetShellHidden
+      fn?.(v)
+      return typeof fn === 'function'
+    }
+
+    result.hookInstalled = await waitFor(
+      () => typeof (window as unknown as { __ddtoolkitSetShellHidden?: unknown })
+        .__ddtoolkitSetShellHidden === 'function', 6000)
+    await waitFor(() => pollCount() > 0, 8000)   // 等第一次轮询落地
+
+    // ① 可见基线：等一个空闲周期（POLL_IDLE_MS = 10s），计数必须增长
+    const c0 = pollCount()
+    await sleep(11_000)
+    const c1 = pollCount()
+    result.visiblePolls = c1 - c0
+    result.visiblePolling = c1 > c0
+
+    // ② 隐藏：先让在途请求落地，再看一个完整周期里有没有新请求
+    await sleep(200)                              // 让 island 有机会进入空闲态
+    const idleBefore = islandText()
+    const hideAt = Math.round(performance.now())
+    setHidden(true)
+    await sleep(2_000)
+    const c2 = pollCount()
+    const hiddenText0 = islandText()
+    await sleep(12_000)                           // > 一个空闲轮询周期 + 两轮轮播周期
+    const c3 = pollCount()
+    const hiddenText1 = islandText()
+    result.hideAt = hideAt
+    result.pollTimes = pollTimes()
+    result.hiddenPolls = c3 - c2
+    result.hiddenPollingStopped = c3 === c2
+    result.hiddenCarouselStopped = hiddenText0 === hiddenText1
+    result.hiddenFlag = (window as unknown as { __ddtoolkitShellHidden?: () => boolean })
+      .__ddtoolkitShellHidden?.() ?? null
+    result.idleTextSeen = idleBefore
+
+    // ③ 唤回：必须立刻补一轮（3s 内，远小于 10s 周期）
+    setHidden(false)
+    await sleep(2_500)
+    const c4 = pollCount()
+    result.shownPolls = c4 - c3
+    result.refreshedOnShow = c4 > c3
+    result.shownFlag = (window as unknown as { __ddtoolkitShellHidden?: () => boolean })
+      .__ddtoolkitShellHidden?.() ?? null
+
+    const pre = document.createElement('pre')
+    pre.id = 'ui-probe'
+    pre.textContent = JSON.stringify({ mode: 'tray-suspend', views: [], degraded,
+                                       traySuspend: result })
     document.body.appendChild(pre)
     document.title = 'UI_PROBE_DONE'
     return
