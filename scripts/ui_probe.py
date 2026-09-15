@@ -216,13 +216,14 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
             "polish": data.get("polish"),
             "reservations": data.get("reservations"),
             "statusIsland": data.get("statusIsland"),
+            "appSettings": data.get("appSettings"),
             "degraded": data.get("degraded") or [],
             "dom": dom_file,
         }
     return {"mode": None, "views": data, "topbar": None, "calendar": None,
             "settings": None, "scene": None, "addv": None, "capabilities": None,
             "polish": None, "reservations": None, "statusIsland": None,
-            "degraded": [], "dom": dom_file}
+            "appSettings": None, "degraded": [], "dom": dom_file}
 
 
 # ── 展示页 hero 药丸签名（P2 分层收敛 A 批次的位级回归护栏）─────────────
@@ -666,6 +667,13 @@ def main() -> int:
              "并断言受限功能**没有被隐藏**（添加 V 仍能搜、批量浮窗里账号信息与归档仍可用）",
     )
     ap.add_argument(
+        "--app-settings",
+        action="store_true",
+        help="只跑一档宽度：应用设置（R14a，devlog/091）—— 齿轮可点 → 独立弹窗几何/命中 → "
+             "可写项与只读项都渲染（只读逐条带理由）→ 改值保存后**再问一次后端**对账 → "
+             "越界时保存钮禁用+红字 → 恢复默认回默认值",
+    )
+    ap.add_argument(
         "--hero-expect",
         default="",
         help="cards 视图 hero 药丸签名的期望 sha256（位级回归护栏）。"
@@ -773,6 +781,87 @@ def main() -> int:
             seeded_resv_title = _seed_reservation(data, vid)
             print(f"[probe] 已种预约：{seeded_resv_title!r}（副本 DB，非真库）")
             print(f"[probe] 目标路由 {route}（VTuber #{vid}）")
+
+        if args.app_settings:
+            # 应用设置（R14a，devlog/091）：这一条是**会写盘的探针** —— 它真的改设置、
+            # 真的恢复默认。跑在数据目录副本上（`_prepare_data()` 的 `_ui_probe_tmp/`），
+            # 与 `--reservations` 同一条纪律：**绝不碰开发库**。
+            w = widths[0]
+            url = f"http://localhost:{vite_port}{route}?probe=app-settings"
+            print(f"[probe] app-settings @{w} → {url}")
+            res = _run_probe(edge, url, w, args.height, WORK, "app-settings")
+            aps = ((res or {}).get("appSettings") or {})
+            if res and not aps:
+                print(f"  [!] 探针 mode={res.get('mode')!r} 键={sorted(res.keys())}"
+                      f"（新字段需要在 _run_probe 的白名单里登记）")
+            print(f"  齿轮：存在={aps.get('gearExists')} 可命中={aps.get('gearHit')} "
+                  f"贴栏底={aps.get('gearAtBottom')}")
+            print(f"  弹窗：打开={aps.get('dialogOpened')} 在视口内={aps.get('dialogInViewport')} "
+                  f"可命中={aps.get('dialogHit')} 可写项={aps.get('rows')} "
+                  f"只读项={aps.get('readonlyRows')}（带理由 {aps.get('readonlyReasons')}）")
+            print(f"  分区：{aps.get('groups')}")
+            print(f"  越界：保存钮禁用={aps.get('overSaveDisabled')} 红字={aps.get('overError')!r}")
+            print(f"  保存：{aps.get('beforeValue')} → 服务端 {aps.get('afterValue')} "
+                  f"（输入框 {aps.get('inputValueAfter')!r}「已改过」标记={aps.get('badgeShown')}）")
+            print(f"  恢复默认：服务端 {aps.get('resetValue')} 仍有「已改过」标记="
+                  f"{aps.get('badgeAfterReset')} ｜ Esc 关闭={aps.get('closedByEsc')}"
+                  f"（关后 data-state={aps.get('dialogStateAfterEsc')!r}）")
+            if not aps:
+                failures.append(f"@{w} app-settings: 没量到设置弹窗段（探针未跑完？）")
+            else:
+                if not aps.get("gearExists"):
+                    failures.append(f"@{w} app-settings: IconRail 底部没有齿轮"
+                                    f"（R14 的入口不存在）")
+                elif not aps.get("gearHit"):
+                    failures.append(f"@{w} app-settings: 齿轮命中测试失败（点不着）")
+                if not aps.get("gearAtBottom"):
+                    failures.append(f"@{w} app-settings: 齿轮没贴栏底"
+                                    f"（用户口径：最左侧工具栏**底端**给一个齿轮按钮）")
+                if not aps.get("dialogOpened"):
+                    failures.append(f"@{w} app-settings: 点齿轮没打开设置弹窗")
+                else:
+                    if not aps.get("dialogInViewport"):
+                        failures.append(f"@{w} app-settings: 弹窗越出视口（会被裁）")
+                    if not aps.get("dialogHit"):
+                        failures.append(f"@{w} app-settings: 弹窗命中测试失败（点不着）")
+                    if (aps.get("rows") or 0) < 10:
+                        failures.append(f"@{w} app-settings: 弹窗里只有 {aps.get('rows')} 个可写项"
+                                        f"（规格表没渲染全？）")
+                    if (aps.get("readonlyRows") or 0) < 5:
+                        failures.append(f"@{w} app-settings: 只读分区只有 {aps.get('readonlyRows')} 项"
+                                        f"—— 「哪些不能改」必须如实列出来")
+                    if aps.get("readonlyReasons") != aps.get("readonlyRows"):
+                        failures.append(f"@{w} app-settings: 只有 {aps.get('readonlyReasons')}/"
+                                        f"{aps.get('readonlyRows')} 个只读项写了原因 —— "
+                                        f"用户看到「不能改」时必须同时看到为什么")
+                    if (aps.get("effectHints") or 0) < 1:
+                        failures.append(f"@{w} app-settings: 分区标题上没有「生效时机」说明"
+                                        f"（改完到底什么时候生效是这一批的核心承诺）")
+                    if not aps.get("overSaveDisabled"):
+                        failures.append(f"@{w} app-settings: 填了越界值（999）保存钮还能点")
+                    if not aps.get("overError"):
+                        failures.append(f"@{w} app-settings: 越界值没有红字提示")
+                    if not aps.get("saveEnabled"):
+                        failures.append(f"@{w} app-settings: 合法值下保存钮是禁用的（存不了）")
+                    # ⚠️ 判据是**再问一次后端**：界面回显可以来自本地草稿，
+                    #    "存了没生效"那种坏法照样能让回显正确。
+                    if aps.get("afterValue") != 7:
+                        failures.append(f"@{w} app-settings: 保存后**服务端**的值是 "
+                                        f"{aps.get('afterValue')}，应为 7（界面回显={aps.get('inputValueAfter')!r}）")
+                    if not aps.get("badgeShown"):
+                        failures.append(f"@{w} app-settings: 改过的项没有「已改过」标记")
+                    if aps.get("resetValue") != aps.get("beforeValue"):
+                        failures.append(f"@{w} app-settings: 恢复默认后服务端的值是 "
+                                        f"{aps.get('resetValue')}，应回到 {aps.get('beforeValue')}")
+                    if aps.get("badgeAfterReset"):
+                        failures.append(f"@{w} app-settings: 恢复默认后「已改过」标记还在")
+                    if not aps.get("closedByEsc"):
+                        failures.append(f"@{w} app-settings: Esc 没关掉设置弹窗")
+            if not failures:
+                print("  [ok] 应用设置：齿轮可点 → 弹窗可命中 → 越界被拦 → 保存到服务端 → 恢复默认")
+            for b in failures:
+                print("   -", b)
+            return 1 if failures else 0
 
         if args.archive:
             w = widths[0]

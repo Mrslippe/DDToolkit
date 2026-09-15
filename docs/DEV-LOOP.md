@@ -81,6 +81,9 @@ python scripts/ui_probe.py --capabilities            # 未登录提示：该说�
 python scripts/ui_probe.py --status-island           # R12a/R12b 顶栏状态岛（devlog/089、090）：空闲无容器 +
                                                      # 空闲轮播在走且不出进度词 / 消息点亮 / 面板可命中且不挤动
                                                      # 右栏 / Esc 收起 / ttl 过期自清 / 入场动画真的挂上
+python scripts/ui_probe.py --app-settings            # R14a 应用设置（devlog/091）：齿轮可点 → 弹窗几何/命中 →
+                                                     # 可写+只读都渲染（只读逐条带理由）→ 越界被拦 →
+                                                     # 保存后**再问一次后端**对账 → 恢复默认回默认值
 ```
 
 > `--polish`（2026-09-15 起，devlog/087）：三条都是"差 2px 肉眼看不出"的占位/对齐问题，所以**全部量出来**：
@@ -117,6 +120,18 @@ python scripts/ui_probe.py --status-island           # R12a/R12b 顶栏状态岛
 > ⚠️ 与 `--settings` 的取舍不同：那边为了量几何先注入 `animation:none; transition:none`，
 > 这边**故意不冻结**（冻结了就没得量）；代价是几何可能停在动画中途，
 > 所以断言留了余量（位移 6px、缩放 1.5% 都不影响 `elementFromPoint` 与"不挤动右栏"）。
+
+> `--app-settings`（2026-09-15 起，R14a devlog/091）：本仓库第一条**会写盘的探针** ——
+> 它真的 `PUT` 一次设置、再恢复默认。所以纪律与 `--reservations` 相同：跑在**数据目录副本**上，
+> 绝不碰开发库。三条判据值得单独记：
+> ① **判"弹窗关没关"必须看 `data-state`，不能看节点在不在** —— radix 的 `Presence`
+>    会把关闭后的内容留着播退场动画，而虚拟时间下动画不跑完 ⇒ 节点永远在。
+>    2026-09-15 因此得出过一个**错误结论**（"radix 的 Esc 在本应用里不生效"，还照此自己挂了一条
+>    Esc 监听）；改成看 `data-state` 后复测：radix 那条一直是好的，自挂的那条是多余的，已删。
+>    教训：**先怀疑判据，再怀疑被测对象**（与 devlog/071→080 的"卡死"反转是同一类）。
+> ② 保存后的对账**不看界面回显**，而是在页面里再打一次 `GET /settings` ——
+>    回显可以来自本地草稿，"存了没生效"照样能让回显正确。
+> ③ 越界值断言"保存钮禁用 + 红字"（前端那道）；后端的 400 由 `tests/test_runtime_settings.py` 钉。
 
 > `--add-v`（2026-09-15 起，devlog/083）：打开侧栏「+」浮窗 → 打关键词 → 断言三条：
 > ① 敲键只打本地 `/vtuber/pool/search`，`/vtuber/bili/search` **必须 0 次**

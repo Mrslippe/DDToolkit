@@ -90,6 +90,23 @@ class AppMetaRepo:
         self.set(key, when.isoformat())
         return when
 
+    def all_with_prefix(self, prefix: str) -> dict[str, str]:
+        """按键前缀批量读（R14a 的运行时设置覆盖层用：一次扫完 `settings.*`）。
+
+        返回 {去掉前缀的键: 值}。`like` 的通配符按 SQL 语义转义，
+        免得将来有人把 `_`/`%` 放进前缀里（`settings.` 本身没有，但别留坑）。
+        """
+        esc = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        rows = (self.db.query(AppMeta)
+                .filter(AppMeta.key.like(f"{esc}%", escape="\\"))
+                .all())
+        return {r.key[len(prefix):]: (r.value or "") for r in rows}
+
+    def delete(self, key: str) -> None:
+        """删键（不存在即无操作；调用方负责 commit 时机 —— 与 `set` 不同，这里提交）。"""
+        self.db.query(AppMeta).filter(AppMeta.key == key).delete()
+        self.db.commit()
+
 
 # ── Account ────────────────────────────────────────────────────────
 

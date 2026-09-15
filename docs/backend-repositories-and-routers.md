@@ -376,16 +376,18 @@
 
 ---
 
-## 3. Routers（53 个路由装饰器 = 55 个 HTTP 操作）
+## 3. Routers（56 个路由装饰器 = 58 个 HTTP 操作）
 
-> 口径说明：53 个装饰器里有两个是 `api_route(methods=["GET","POST"])`
-> （`/vtuber/fetch`、`/vtuber/{id}/fetch`）→ 方法×路径共 55。
+> 口径说明：56 个装饰器里有两个是 `api_route(methods=["GET","POST"])`
+> （`/vtuber/fetch`、`/vtuber/{id}/fetch`）→ 方法×路径共 58。
 > 下文的「N」按**装饰器**计。
 >
-> 复核方式（2026-09-15 实测）：`app.routes` 里共 **58** 个路由对象
-> = 3 个 router 的 **53** 个 + FastAPI 自带 4 个（`/openapi.json`、`/docs`、
-> `/docs/oauth2-redirect`、`/redoc`）+ `app/main.py` 的 `/healthz`；
-> 其中那两个 GET+POST 双方法路由让**操作数**变成 55。
+> 复核方式（2026-09-15 实测）：`app.routes` 里共 **62** 个对象
+> = 4 个 router 的 56 个装饰器展开成 **61** 个路由对象（那两个双方法路由各占 2 个对象）
+> + FastAPI 自带 4 个（`/openapi.json`、`/docs`、`/docs/oauth2-redirect`、`/redoc`）
+> + `app/main.py` 的 `/healthz` + **1 个 `Mount`**（`/static`，不是路由）。
+> 这类数字会随批次漂：漂了就重新数一遍再改，别留着当装饰（`dev_check.py --docs` 只查
+> 版本号/索引/链接这类可机械判定的，数不出来 —— 所以口径要写清"怎么数的"）。
 
 ### 3.1 `app/routers/vtuber.py` — 主业务路由（49）
 
@@ -512,6 +514,23 @@
 
 **性能**：磁盘缓存 `static/img-cache/{md5}.bin + .json`（TTL 7 天，原子写入，过期 2×TTL 清理）；
 模块级共享 `httpx.AsyncClient`（lifespan 关闭时释放）。
+
+### 3.4 `app/routers/settings.py` — 应用设置（3，R14a devlog/091）
+
+| 方法 + 路径 | 说明 |
+|---|---|
+| GET `/settings` | 规格表（`specs`：默认/范围/单位/生效时机/当前值/是否改过）+ `readonly`（只读项**逐条带理由**）+ `info`（版本/数据目录/库/端口/迁移 head/日志/PID） |
+| PUT `/settings` | 部分更新：`{"values": {"KEY": 值}}`。白名单 + 类型 + 闭区间 + **跨字段**（上限 ≥ 下限）校验，任一不过 → **400**（detail 是中文原因，前端直接显示）；`null`/空串 = 删覆盖回默认。落库成功后才替换内存快照 |
+| POST `/settings/reset` | 全部恢复默认（删掉 `app_meta` 里所有 `settings.*` 行） |
+
+- **可热更 vs 只读的边界**由 `app/core/runtime_settings.py::SPECS` 定义（16+3=19 个键）；
+  只读项写在同文件 `READONLY_NOTES` 里，界面照实列出"为什么不给改"；
+- 读取路径：`config.Settings.__getattribute__` 对 SPECS 内的键先问覆盖层
+  （优先级 **实例属性 > 覆盖层 > 类属性默认值**）；调用点全在 `services/scheduler.py`，
+  都是"每轮/每账号读一次"，所以改完**下一轮生效、不重启**；
+- 落库复用 `app_meta`（前缀 `settings.`）而**不新建表**：与 `app_meta` 同构的新表只是
+  多一处漂移面 + 一次迁移 + 一次 `MIGRATION_HEAD` 变更，且要让 purge 知道它（应用级配置
+  本来就不该随某个 V 被清掉）。
 
 ---
 

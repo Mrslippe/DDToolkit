@@ -586,3 +586,64 @@ export interface UpcomingReservation {
   /** 预约卡片 id（可拼直播间/动态链接；可能为空） */
   rid: string | null
 }
+
+// ── 应用设置（GET/PUT /settings，R14a devlog/091）─────────────────────
+//
+// 后端把「范围 / 单位 / 生效时机 / 说明」一起下发（`runtime_settings.SPECS`），
+// 前端**不再抄一份**：界面上的 min/max、单位、"下一轮生效"全部来自这里 ——
+// 抄一份的下场是两边慢慢分叉，而用户看到的是界面允许、后端拒绝。
+
+export interface SettingSpec {
+  key: string
+  kind: 'int' | 'float' | 'bool'
+  default: number | boolean
+  /** 闭区间；bool 为 null */
+  min: number | null
+  max: number | null
+  label: string
+  unit: string
+  group: string
+  /** 生效时机（"下一轮生效（不用重启）"等） */
+  effect: string
+  /** 额外说明（例如 0 = 关闭） */
+  note: string
+  /** 当前生效值 */
+  value: number | boolean
+  /** 是否被改过（≠ 默认值） */
+  changed: boolean
+}
+
+/** 只读项：**不给改**，但要如实说明为什么（不是"忘了做"） */
+export interface SettingReadonlyNote {
+  key: string
+  label: string
+  why: string
+}
+
+export interface AppSettingsInfo {
+  app_name: string
+  version: string
+  data_dir: string
+  database: string
+  port: number | null
+  migration_head: string
+  log_file: string
+  cors_origins: string
+  env_file: string
+  pid: number
+}
+
+export interface AppSettings {
+  specs: SettingSpec[]
+  readonly: SettingReadonlyNote[]
+  info: AppSettingsInfo
+  /** 被改过的键 → 当前值（界面用来标"已改过"） */
+  overrides: Record<string, number | boolean>
+}
+
+export interface AppSettingsSaved {
+  ok: boolean
+  changed: string[]
+  values: Record<string, number | boolean>
+  overrides: Record<string, number | boolean>
+}

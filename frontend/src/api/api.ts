@@ -1,4 +1,4 @@
-import type { Account, AccountStatSnapshot, BiliSearchResult, Capabilities, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, PoolItem, PostPage, PostStats, ThirdpartyVtuber, UpcomingReservation, UpdatePostsResult, VTuber, VTuberFormerValues } from './types'
+import type { Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, BiliSearchResult, Capabilities, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, PoolItem, PostPage, PostStats, ThirdpartyVtuber, UpcomingReservation, UpdatePostsResult, VTuber, VTuberFormerValues } from './types'
 
 /**
  * API 基地址：
@@ -320,6 +320,21 @@ export const api = {
     request<{ logged_in: boolean; needs_login: boolean; uid: string | null; name: string | null }>(
       `/auth/${platform}/status`,
     ),
+
+  // ── 应用设置（R14a，devlog/091）─────────────────────────────────────
+  /** 设置规格表 + 当前生效值 + 只读信息 */
+  appSettings: () => request<AppSettings>('/settings'),
+
+  /** 保存一组改动（部分更新；`null` = 回默认值）。越界/未知键后端 400，detail 直接可显示 */
+  saveAppSettings: (values: Record<string, number | boolean | null>) =>
+    request<AppSettingsSaved>('/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ values }),
+    }),
+
+  /** 全部恢复默认 */
+  resetAppSettings: () => request<AppSettingsSaved>('/settings/reset', { method: 'POST' }),
 }
 
 /** 后端返回的相对资源路径（如 static/avatars/x.jpg）→ 可访问 URL */

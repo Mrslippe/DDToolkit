@@ -1,0 +1,315 @@
+"""R14a 运行时设置覆盖层（devlog/091）。
+
+判错的两个代价：
+① 界面显示"已保存"而调度器还在用旧值（覆盖层没接到读取点 / 调用点把值快照住了）——
+   用户改完抓取频率看不出任何变化，只能怀疑"这个开关是不是假的"；
+② 越界/类型错的值被静默吞掉 —— 界面绿着，实际行为跑飞（例如间隔上限 < 下限
+   会让 `sleep` 比下限还短，风控风险直接上升）。
+
+所以这一批的断言分三层：**契约**（config ↔ SPECS 双向）、**生效**（真实调用点读到新值）、
+**拒绝**（越界/未知键/跨字段一律报错，不许静默）。
+"""
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from app.core import runtime_settings as rs
+from app.core.config import Settings, settings
+from app.core.database import Base, get_db
+from app.main import app
+from app.repositories.vtuber_repo import AppMetaRepo
+
+
+@pytest.fixture(autouse=True)
+def _clean_overlay():
+    """每个用例前后都清空内存覆盖 —— 它是**进程级全局**，漏一条就会影响别的用例。"""
+    rs.clear()
+    yield
+    rs.clear()
+
+
+@pytest.fixture
+def db():
+    # ⚠️ 必须 StaticPool：内存 SQLite 的库是**每连接一份**，而 TestClient 把同步端点
+    # 丢到工作线程里跑 —— 默认池会给那个线程另一条连接，于是"表不存在"（本批实测踩到）。
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
+                           poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    yield session
+    session.close()
+
+
+@pytest.fixture
+def client(db):
+    """HTTP 层：把 `get_db` 指到内存库（**不要**碰开发库），用完恢复原覆盖。"""
+    prev = app.dependency_overrides.get(get_db)
+    app.dependency_overrides[get_db] = lambda: db
+    yield TestClient(app)
+    if prev is None:
+        app.dependency_overrides.pop(get_db, None)
+    else:
+        app.dependency_overrides[get_db] = prev
+
+
+# ── ① 契约：config 的类属性 ↔ SPECS（双向）──────────────────────────
+
+def test_hot_keys_bound_both_ways():
+    """`config._HOT`（会被 `__getattribute__` 拦截的键）与 `SPECS` 必须一一对应，
+    且每个键在 `Settings` 上都有一个**默认值类属性**。
+
+    少一边的坏法：只有 SPECS 没有类属性 → 没有默认值可退回；
+    只有类属性不在 SPECS → 界面看不见这个键（神秘的隐藏开关）；
+    两者默认值不一致 → 两份口径（一个说 3s 一个说 5s，谁生效看读法）。
+    """
+    import app.core.config as config
+    assert set(config._HOT) == set(rs.SPECS)
+    for key, spec in rs.SPECS.items():
+        assert key in vars(Settings), f"{key} 在 SPECS 里但 Settings 上没有类属性（默认值没地方放）"
+        assert getattr(Settings, key) == spec.default, f"{key} 类属性与 SPECS 默认值不一致"
+        assert rs.get(key) == spec.default, f"{key} 没有覆盖时读到的不是默认值"
+
+
+def test_instance_attribute_still_wins_over_the_overlay(db):
+    """**刻意保留的后门**：测试/脚本用 `settings.X = 0` 临时提速时，实例属性优先于覆盖层。
+
+    判错代价：这条通路被堵（例如改成 property）会让"把间隔调成 0 秒跑快一轮"这种
+    最常用的调试手段失效 —— 而那种值（0）本来就该被设置界面的范围挡在外面。
+    """
+    rs.apply({"REQUEST_INTERVAL_MIN": 2.0})
+    assert settings.REQUEST_INTERVAL_MIN == 2.0
+
+    settings.REQUEST_INTERVAL_MIN = 0.0
+    try:
+        assert settings.REQUEST_INTERVAL_MIN == 0.0         # 界面范围外的值照样能用
+    finally:
+        del settings.__dict__["REQUEST_INTERVAL_MIN"]
+    assert settings.REQUEST_INTERVAL_MIN == 2.0             # 删掉实例属性 → 覆盖层重新生效
+
+    rs.clear()
+    assert settings.REQUEST_INTERVAL_MIN == 3.0             # 再删覆盖 → 默认值
+
+
+def test_defaults_are_the_values_from_before_the_overlay():
+    """把类属性改成覆盖层 property 时**只搬不改**：默认值逐个对账（19 个）。
+
+    这条是"搬迁"批次的反向保险：谁顺手调了某个默认值，测试会指出是哪一个。
+    """
+    expect = {
+        "REQUEST_INTERVAL_MIN": 3.0, "REQUEST_INTERVAL_MAX": 5.0,
+        "FETCH_BATCH_SIZE": 10, "FETCH_BATCH_COOLDOWN": 60, "RATE_LIMIT_COOLDOWN": 600,
+        "MANUAL_FAST_INTERVAL_MIN": 0.5, "MANUAL_FAST_INTERVAL_MAX": 1.0,
+        "DYNAMICS_BUDGET_RPM": 12, "DYNAMICS_MIN_GAP_SECONDS": 30.0,
+        "DYNAMICS_MIN_CYCLE_SECONDS": 60.0, "LIVE_POLL_SECONDS": 60.0,
+        "ACCOUNT_SWEEP_STALE_HOURS": 24.0, "ACCOUNT_SWEEP_MIN_GAP_SECONDS": 600,
+        "FIRST_SCREEN_VIDEO_PAGES": 1, "FIRST_SCREEN_DYNAMICS_PAGES": 1,
+        "FIRST_SCREEN_DYNAMICS_LIMIT": 3,
+        "EXTERNAL_ENABLED": True, "EXTERNAL_ZEROROKU_ENABLED": True,
+        "EXTERNAL_DANMAKUS_ENABLED": True,
+    }
+    assert {k: s.default for k, s in rs.SPECS.items()} == expect
+    # 没覆盖时，property 读到的就是默认值（证明接线正确，而不是"恰好相等"）
+    for key, val in expect.items():
+        assert getattr(settings, key) == val, key
+
+
+def test_readonly_table_does_not_list_hot_keys():
+    """只读清单与可热更清单**不许重叠**：同一个键既在界面可改、又被写成"要重启"就是自相矛盾。"""
+    readonly = set()
+    for row in rs.readonly_info():
+        readonly |= {p.strip() for p in row["key"].split("/")}
+    assert not (readonly & set(rs.SPECS)), sorted(readonly & set(rs.SPECS))
+    assert all(row.get("why") for row in rs.readonly_info()), "每个只读项都要说明原因"
+
+
+# ── ② 生效：真实调用点读到新值（不是"内存里改了"就算数）───────────────
+
+def test_next_round_reads_the_new_value_at_the_real_call_site():
+    """**这一批的核心承诺**：改完下一轮生效、不用重启。
+
+    走的是真实调用点 `scheduler._manual_interval`（账号间隔的唯一出口）——
+    如果哪天有人把 `settings.X` 读进模块级常量（快照），这条会红。
+    """
+    from app.services import scheduler as sch
+
+    rs.apply({"REQUEST_INTERVAL_MIN": 1.5, "REQUEST_INTERVAL_MAX": 1.5})
+    assert [sch._manual_interval(fast=False) for _ in range(5)] == [1.5] * 5
+
+    rs.apply({"MANUAL_FAST_INTERVAL_MIN": 0.25, "MANUAL_FAST_INTERVAL_MAX": 0.25})
+    assert sch._manual_interval(fast=True) == 0.25
+
+
+def test_third_party_switches_take_effect_at_their_real_call_site():
+    """第三方源开关同理：`externals/runner._source_enabled` 每次运行都查一遍。"""
+    from app.services.externals.danmakus import DanmakusSource
+    from app.services.externals.runner import _source_enabled
+    from app.services.externals.zeroroku import ZerorokuSource
+
+    assert _source_enabled(ZerorokuSource) and _source_enabled(DanmakusSource)
+    rs.apply({"EXTERNAL_ENABLED": False})
+    assert not _source_enabled(ZerorokuSource) and not _source_enabled(DanmakusSource)
+    rs.apply({"EXTERNAL_ENABLED": None, "EXTERNAL_DANMAKUS_ENABLED": False})
+    assert _source_enabled(ZerorokuSource) and not _source_enabled(DanmakusSource)
+
+
+def test_apply_replaces_memory_only_after_db_write_succeeds(db):
+    """落库失败必须整体放弃：否则"界面显示改了、重启又变回去"（静默不一致）。"""
+    class Boom:
+        def set(self, *a, **k):
+            raise RuntimeError("磁盘满了")
+
+        def delete(self, *a, **k):
+            raise RuntimeError("磁盘满了")
+
+    import app.repositories.vtuber_repo as repo_mod
+    prev = repo_mod.AppMetaRepo
+    repo_mod.AppMetaRepo = lambda _db: Boom()
+    try:
+        with pytest.raises(RuntimeError):
+            rs.apply({"FETCH_BATCH_SIZE": 7}, db)
+    finally:
+        repo_mod.AppMetaRepo = prev
+    assert settings.FETCH_BATCH_SIZE == 10, "落库失败后内存里不该留下新值"
+
+
+# ── ③ 落库与载入 ─────────────────────────────────────────────────────
+
+def test_override_persists_to_app_meta_and_load_restores_it(db):
+    rs.apply({"FETCH_BATCH_SIZE": 4, "REQUEST_INTERVAL_MIN": 1.25}, db)
+    assert AppMetaRepo(db).get("settings.FETCH_BATCH_SIZE") == "4"
+    assert AppMetaRepo(db).get("settings.REQUEST_INTERVAL_MIN") == "1.25"
+
+    # 模拟"进程重启"：内存清空 → 属性和默认值一致
+    rs.clear()
+    assert settings.FETCH_BATCH_SIZE == 10
+    assert settings.REQUEST_INTERVAL_MIN == 3.0
+
+    rs.load(db)
+    assert settings.FETCH_BATCH_SIZE == 4
+    assert settings.REQUEST_INTERVAL_MIN == 1.25
+
+
+def test_reset_to_default_deletes_the_row(db):
+    rs.apply({"FETCH_BATCH_SIZE": 4}, db)
+    rs.apply({"FETCH_BATCH_SIZE": None}, db)
+    assert AppMetaRepo(db).all_with_prefix(rs.PREFIX) == {}
+    assert settings.FETCH_BATCH_SIZE == 10
+
+
+def test_load_skips_broken_rows_without_taking_the_process_down(db):
+    """**静默失败不许装成"没数据"**：坏值/未知键要跳过并留 warning，好值照常生效。
+
+    判错代价：一条脏数据（老版本写的键、手改过的值）让整个设置系统罢工，
+    用户看到的是"我设的值全没了"，而日志里什么都没有。
+    """
+    repo = AppMetaRepo(db)
+    repo.set(rs.PREFIX + "FETCH_BATCH_SIZE", "4")            # 好的
+    repo.set(rs.PREFIX + "REQUEST_INTERVAL_MIN", "不是数字")   # 坏值
+    repo.set(rs.PREFIX + "FETCH_BATCH_SIZE_FROM_FUTURE", "9")  # 未知键
+    repo.set(rs.PREFIX + "LIVE_POLL_SECONDS", "99999")        # 越界
+
+    rs.load(db)
+    assert settings.FETCH_BATCH_SIZE == 4            # 好的留下了
+    assert settings.REQUEST_INTERVAL_MIN == 3.0      # 坏值 → 默认
+    assert settings.LIVE_POLL_SECONDS == 60.0        # 越界 → 默认
+    assert "FETCH_BATCH_SIZE_FROM_FUTURE" not in rs.overrides()
+
+
+# ── ④ 拒绝：越界 / 类型 / 未知键 / 跨字段 ─────────────────────────────
+
+@pytest.mark.parametrize("key,raw", [
+    ("FETCH_BATCH_SIZE", 0),            # 小于下限
+    ("FETCH_BATCH_SIZE", 101),          # 大于上限
+    ("FETCH_BATCH_SIZE", "abc"),        # 类型错
+    ("FETCH_BATCH_SIZE", 2.5),          # int 键给小数
+    ("FETCH_BATCH_SIZE", None if False else True),   # 布尔冒充数字
+    ("REQUEST_INTERVAL_MIN", 0.1),
+    ("RATE_LIMIT_COOLDOWN", 3601),
+    ("LIVE_POLL_SECONDS", -1),
+])
+def test_out_of_range_or_wrong_type_is_rejected(key, raw):
+    with pytest.raises(ValueError):
+        rs.apply({key: raw})
+    assert getattr(settings, key) == rs.SPECS[key].default, "被拒绝的值不许留下任何痕迹"
+
+
+def test_unknown_key_is_rejected():
+    with pytest.raises(KeyError):
+        rs.apply({"NOT_A_SETTING": 1})
+
+
+def test_pair_constraint_rejects_max_below_min():
+    """跨字段：上限 < 下限不会被单字段范围拦住（两个值各自都合法）。
+
+    真后果不是崩溃而是**静默走样**：`scheduler` 里
+    `MIN + uniform(0, MAX - MIN)` 在 MAX<MIN 时是"减"，实际间隔比下限还短。
+    """
+    with pytest.raises(ValueError) as e:
+        rs.apply({"REQUEST_INTERVAL_MIN": 5.0, "REQUEST_INTERVAL_MAX": 2.0})
+    assert "下限" in str(e.value)
+    with pytest.raises(ValueError):
+        rs.apply({"MANUAL_FAST_INTERVAL_MIN": 3.0, "MANUAL_FAST_INTERVAL_MAX": 1.0})
+    # 只改一个也要跟**当前生效值**对账（不能只看本次提交的两个键）
+    rs.apply({"REQUEST_INTERVAL_MIN": 5.0})
+    with pytest.raises(ValueError):
+        rs.apply({"REQUEST_INTERVAL_MAX": 2.0})
+
+
+def test_bool_accepts_the_shapes_a_ui_actually_sends():
+    for raw in (True, "true", "1", "on", 1):
+        rs.apply({"EXTERNAL_ENABLED": raw})
+        assert settings.EXTERNAL_ENABLED is True, raw
+    for raw in (False, "false", "0", "off", 0):
+        rs.apply({"EXTERNAL_ENABLED": raw})
+        assert settings.EXTERNAL_ENABLED is False, raw
+
+
+# ── ⑤ HTTP 层 ────────────────────────────────────────────────────────
+
+def test_get_settings_exposes_specs_and_readonly_info(client):
+    body = client.get("/settings").json()
+    assert len(body["specs"]) == len(rs.SPECS)
+    first = body["specs"][0]
+    assert {"key", "kind", "default", "min", "max", "label", "unit",
+            "group", "effect", "value", "changed"} <= set(first)
+    # 只读分区：版本/数据目录/端口/迁移 head 都要如实给出来
+    info = body["info"]
+    assert info["version"] == settings.VERSION
+    assert info["migration_head"] == "f004"
+    assert info["data_dir"] and info["database"]
+    assert body["readonly"] and all(r.get("why") for r in body["readonly"])
+
+
+def test_put_settings_saves_then_reset_clears(client, db):
+    r = client.put("/settings", json={"values": {"FETCH_BATCH_SIZE": 3}})
+    assert r.status_code == 200, r.text
+    assert r.json()["values"] == {"FETCH_BATCH_SIZE": 3}
+    assert settings.FETCH_BATCH_SIZE == 3
+    assert client.get("/settings").json()["overrides"] == {"FETCH_BATCH_SIZE": 3}
+
+    r = client.post("/settings/reset")
+    assert r.status_code == 200
+    assert settings.FETCH_BATCH_SIZE == 10
+    assert AppMetaRepo(db).all_with_prefix(rs.PREFIX) == {}
+
+
+def test_put_settings_400_with_reason(client):
+    """越界/未知键必须 400 + 中文原因 —— 前端把 detail 直接显示给用户。"""
+    r = client.put("/settings", json={"values": {"FETCH_BATCH_SIZE": 999}})
+    assert r.status_code == 400
+    assert "不能大于" in r.json()["detail"]
+
+    r = client.put("/settings", json={"values": {"NOPE": 1}})
+    assert r.status_code == 400
+    assert "不认识" in r.json()["detail"]
+
+    r = client.put("/settings", json={"values": {"REQUEST_INTERVAL_MIN": 5.0,
+                                                 "REQUEST_INTERVAL_MAX": 1.0}})
+    assert r.status_code == 400
+    assert "下限" in r.json()["detail"]
+
+    r = client.put("/settings", json={"values": {}})
+    assert r.status_code == 400
+    assert settings.FETCH_BATCH_SIZE == 10, "被拒绝的请求不许改动任何设置"

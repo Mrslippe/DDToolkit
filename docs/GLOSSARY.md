@@ -157,6 +157,7 @@
 | **顶栏状态岛 / 通知中心** | 顶栏唯一的信息控件：条目优先级 `alert>progress>report>message`、过期与常驻规则、六类信息源（进度/第三方/完成报告/登录失效/风控冷却/瞬时消息）；空闲时**轮播**状态文案与语录 | `utils/notificationHub.ts`（判定，12 单测）、`utils/idleQuotes.ts`（空闲轮播池，15 单测）、`components/StatusIsland.tsx`（渲染）、`scheduler.rate_limit_status()`（风控字段） | 「自动节拍不占顶栏」是该模块的具名规则 + 反向用例；面板 portal+fixed，探针断言"展开不挤动右栏 + 入场动画挂上了 + 空闲轮播在走且不出进度词" |
 | **空闲轮播 / 语录池** | 顶栏空闲时按 `IDLE_TICK_MS=6s` 轮转的文案（第 0 格固定是「数据服务运行中」，状态信息不被顶掉）；语录里**不许出现进度词** | `utils/idleQuotes.ts`（`idlePool` / `pickIdle` / `registerIdleProvider`）；DOM 见 `data-idle-pool` | 时钟是组件自己的定时器（不挂抓取轮询，否则调大轮询间隔就静默停住）；探针 `--status-island` 连采三格判 |
 | **添加 V 浮窗** | 收录入口浮窗：本地候选（池 + 弹幕索引）与 B 站在线检索两个来源 | `components/AddVtuberDialog.tsx`；`.av-*`（`styles/posts.css`） | 探针 `--add-v`；纯逻辑在 `utils/addVtuberSearch.ts` |
+| **应用设置 / 运行时覆盖层** | IconRail 底端齿轮 → 独立设置弹窗：抓取节奏/动态流/收录首屏/第三方开关，**改完下一轮生效（不用重启）**；只读项逐条写理由 | `app/core/runtime_settings.py`（SPECS + 只读表）、`app/routers/settings.py`、`components/AppSettingsDialog.tsx`；`.aps-*` | 落库复用 `app_meta`（前缀 `settings.`）；`Settings.__getattribute__` 拦截热更键，优先级 **实例属性 > 覆盖层 > 类属性**；探针 `--app-settings` |
 
 ---
 

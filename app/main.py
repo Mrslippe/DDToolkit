@@ -10,9 +10,11 @@ from datetime import datetime, timezone
 from sqlalchemy import inspect, text, PrimaryKeyConstraint, UniqueConstraint
 
 from app.core.config import settings
+from app.core import runtime_settings
 from app.core.logging_setup import setup_logging
 from app.core.database import engine, Base
 from app.routers import vtuber, img_proxy, auth
+from app.routers import settings as settings_router
 
 # --- 日志 ---
 # 双通道（轮转文件 + 控制台）配置在 `app/core/logging_setup.py`：
@@ -231,6 +233,13 @@ async def lifespan(app: FastAPI):
     _run_migrations()
     _perf("迁移完成")
 
+    # 运行时设置覆盖层（R14a）：必须在调度器启动**之前**载入 ——
+    # 否则第一轮会按默认值跑（用户上次改的抓取节奏要等下一轮才生效）。
+    try:
+        runtime_settings.load()
+    except Exception as e:      # 载入失败不能挡住启动：退回默认值并留痕
+        logger.error(f"运行时设置载入失败（按默认值启动）: {type(e).__name__}: {e}")
+
     scheduler = start_scheduler()
     auth_task = asyncio.create_task(auth_manager.run_maintenance())
     # WBI 密钥预热（v0.9.4）：与 auth 心跳并行，让首次收录不必等一次 nav 往返
@@ -277,6 +286,7 @@ app.add_middleware(
 app.include_router(vtuber.router)
 app.include_router(img_proxy.router)
 app.include_router(auth.router)
+app.include_router(settings_router.router)
 
 # 挂载静态文件目录，头像缓存可通过 /static/avatars/{uid}.jpg 访问
 # （目录随数据根 DATA_DIR 走，桌面端打包后位于数据目录）

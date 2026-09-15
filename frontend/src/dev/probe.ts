@@ -11,7 +11,7 @@
  *
  * 输出：`<pre id="ui-probe">` 内 JSON（每个视图一段），供脚本解析。
  */
-import { api } from '../api/api'
+import { api, getApiBase } from '../api/api'
 
 interface ProbeView {
   key: string
@@ -1359,6 +1359,144 @@ export async function runUiProbe(): Promise<void> {
     const pre = document.createElement('pre')
     pre.id = 'ui-probe'
     pre.textContent = JSON.stringify({ mode: 'settings', views: [], degraded, settings: result })
+    document.body.appendChild(pre)
+    document.title = 'UI_PROBE_DONE'
+    return
+  }
+
+  // 应用设置（`?probe=app-settings`，R14a devlog/091；配合 `ui_probe.py --app-settings`）：
+  // 这一批新增「齿轮 → 独立弹窗 → 改值 → 下一轮生效」这条链路，要钉住的是：
+  //   ① 齿轮真的能点开弹窗（不是个装饰图标）；弹窗在视口内、可命中、不挤动布局；
+  //   ② 可写项与只读项**都渲染出来**，只读项逐条带理由（不能只显示"不能改"）；
+  //   ③ **改值 → 保存 → 服务端真的变了**（页面直接再打一次 `GET /settings` 对账，
+  //      不看界面自己的回显 —— 回显可以来自本地草稿，那样"存了没生效"照样绿）；
+  //   ④ 越界值：保存钮必须禁用 + 出现红字（前端先拦一道，后端那道由后端用例钉住）；
+  //   ⑤ 恢复默认：服务端回到默认值、弹窗里的"已改过"标记消失。
+  if (mode === 'app-settings') {
+    const result: Record<string, unknown> = {}
+    const waitFor = async (fn: () => unknown, ms = 4000) => {
+      const t0 = performance.now()
+      while (performance.now() - t0 < ms) {
+        if (fn()) return true
+        await sleep(100)
+      }
+      return false
+    }
+    const text = (el: Element | null | undefined) => (el?.textContent || '').trim()
+    const rectOf = (el: Element | null) => el?.getBoundingClientRect() ?? null
+    // ⚠️ 判"开着没有"必须看 `data-state`，不能看节点在不在：radix 的 Presence 会把
+    //    关闭后的内容留着播**退场动画**，而虚拟时间下动画不会跑完 → 节点一直在。
+    //    （2026-09-15 踩到：Esc 明明关了，探针却一直判"没关掉"。）
+    const dlgOpen = () =>
+      !!document.querySelector('[data-testid="app-settings-dialog"][data-state="open"]')
+    const hits = (el: HTMLElement | null, x: number, y: number) => {
+      if (!el) return false
+      const hit = document.elementFromPoint(x, y)
+      return !!hit && (hit === el || el.contains(hit))
+    }
+    /** 直接问后端要一次（**不看界面回显**） */
+    const serverValue = async (key: string): Promise<number | boolean | null> => {
+      const r = await fetch(`${getApiBase()}/settings`)
+      const body = await r.json()
+      const spec = (body.specs as { key: string; value: number | boolean }[])
+        .find((s) => s.key === key)
+      return spec ? spec.value : null
+    }
+    /** React 受控输入：必须走原生 setter + input 事件，直接改 .value 不会触发 onChange */
+    const typeInto = (input: HTMLInputElement, v: string) => {
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype, 'value')!.set!
+      setter.call(input, v)
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    }
+    const FIELD = 'FETCH_BATCH_SIZE'
+
+    const gear = document.querySelector<HTMLElement>('[data-testid="app-settings-gear"]')
+    result.gearExists = !!gear
+    const gr = rectOf(gear)
+    result.gearHit = !!(gear && gr &&
+      (document.elementFromPoint(gr.left + gr.width / 2, gr.top + gr.height / 2) === gear ||
+       gear.contains(document.elementFromPoint(gr.left + gr.width / 2, gr.top + gr.height / 2))))
+    result.gearAtBottom = !!gr && gr.bottom >= window.innerHeight - 4
+    gear?.click()
+    result.dialogOpened = await waitFor(dlgOpen, 4000)
+
+    const dlg = document.querySelector<HTMLElement>('[data-testid="app-settings-dialog"]')
+    if (dlg) {
+      // 等规格表落地（有行才算渲染完）
+      await waitFor(() => dlg.querySelector('.aps-row'), 4000)
+      const dr = rectOf(dlg)
+      result.dialogInViewport = !!dr && dr.left >= -0.5 && dr.top >= -0.5 &&
+        dr.right <= window.innerWidth + 0.5 && dr.bottom <= window.innerHeight + 0.5
+      result.dialogHit = !!(dr && hits(dlg, dr.left + 8, dr.top + 8))
+      result.groups = [...dlg.querySelectorAll('.aps-section-title')].map((n) => text(n))
+      result.rows = dlg.querySelectorAll('.aps-row').length
+      result.readonlyRows = dlg.querySelectorAll('.aps-readonly-item').length
+      // 只读项必须**逐条带理由**（用户看到"不能改"时必须同时看到为什么）
+      result.readonlyReasons = [...dlg.querySelectorAll('.aps-readonly-why')]
+        .filter((n) => text(n).length > 6).length
+      result.effectHints = [...dlg.querySelectorAll('.aps-hint')]
+        .filter((n) => /生效/.test(text(n))).length
+
+      const row = dlg.querySelector<HTMLElement>(`[data-setting="${FIELD}"]`)
+      const input = row?.querySelector<HTMLInputElement>('.aps-input') ?? null
+      const saveBtn = dlg.querySelector<HTMLButtonElement>('[data-testid="app-settings-save"]')
+      result.beforeValue = await serverValue(FIELD)
+      result.inputValueBefore = input?.value ?? null
+
+      // ④ 越界：保存钮禁用 + 红字（前端那道）
+      if (input) {
+        typeInto(input, '999')
+        await sleep(120)
+        result.overSaveDisabled = !!saveBtn?.disabled
+        result.overError = text(row?.querySelector('.aps-field-error')) || null
+      }
+
+      // ③ 合法值 → 保存 → **服务端**对账
+      if (input) {
+        typeInto(input, '7')
+        await sleep(120)
+        result.saveEnabled = !!saveBtn && !saveBtn.disabled
+        saveBtn?.click()
+        await waitFor(() => dlg.querySelector(`[data-setting="${FIELD}"] .aps-badge`), 5000)
+        await sleep(400)
+        result.afterValue = await serverValue(FIELD)
+        result.badgeShown = !!dlg.querySelector(`[data-setting="${FIELD}"] .aps-badge`)
+        result.inputValueAfter = dlg.querySelector<HTMLInputElement>(
+          `[data-setting="${FIELD}"] .aps-input`)?.value ?? null
+        result.footState = text(dlg.querySelector('.aps-foot-state'))
+      }
+
+      // ⑤ 恢复默认
+      const resetBtn = [...dlg.querySelectorAll<HTMLButtonElement>('.aps-foot-actions button')]
+        .find((b) => /恢复默认/.test(text(b)))
+      result.hasResetBtn = !!resetBtn
+      resetBtn?.click()
+      await waitFor(() => !dlg.querySelector(`[data-setting="${FIELD}"] .aps-badge`), 5000)
+      await sleep(400)
+      result.resetValue = await serverValue(FIELD)
+      result.badgeAfterReset = !!dlg.querySelector(`[data-setting="${FIELD}"] .aps-badge`)
+
+      // 关闭（Esc 是 radix 的取消手势）。
+      // ⚠️ 实测坑：齿轮的 tooltip 也是一个 dismissable layer，且它**在弹窗之后**注册
+      //    （点击让按钮获得焦点 → tooltip 打开），于是它是"最高层"、Esc 先被它吃掉。
+      //    所以先点一下弹窗标题区把焦点/tooltip 挪开，再派发 Esc —— 与真实用户
+      //    "看一眼弹窗内容再按 Esc"的时序一致。
+      // 关闭：Esc 走 radix Dialog 自带的取消手势（**组件不再自己挂一条**：
+      // 2026-09-15 一度以为它不生效、自己挂了一条，后来发现是探针判据错了 ——
+      // 见上面 `dlgOpen()` 的注释：关掉之后 Presence 会留着节点播退场动画）。
+      const escTarget = (document.activeElement as HTMLElement | null) ?? dlg
+      escTarget.dispatchEvent(new KeyboardEvent('keydown',
+        { key: 'Escape', bubbles: true, cancelable: true }))
+      result.closedByEsc = await waitFor(() => !dlgOpen(), 3000)
+      result.dialogStateAfterEsc = document
+        .querySelector('[data-testid="app-settings-dialog"]')?.getAttribute('data-state') ?? null
+    }
+
+    const pre = document.createElement('pre')
+    pre.id = 'ui-probe'
+    pre.textContent = JSON.stringify({ mode: 'app-settings', views: [], degraded,
+                                       appSettings: result })
     document.body.appendChild(pre)
     document.title = 'UI_PROBE_DONE'
     return

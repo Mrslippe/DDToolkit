@@ -755,6 +755,11 @@ html.window-maximized body {
   flex-direction: column;
 }
 
+/* 底端组贴栏底（R14a：齿轮） */
+.icon-rail-bottom {
+  margin-top: auto;
+}
+
 /* 底部组贴栏底 */
 .icon-rail-spacer {
   flex: 1;

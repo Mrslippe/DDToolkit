@@ -169,12 +169,37 @@ DOM 契约（探针 `ui_probe --status-island` 直接查）：`.si-island`（`.o
 |---|---|---|
 | 图标栏 | `.icon-rail` | 宽 `--rail-width:50px`，底色 `--c-rail:#4b5a6f` |
 | 顶部组 | `.icon-rail-group`（首）÷ spacer | 功能入口 |
-| 底部组 | `.icon-rail-spacer` + `.icon-rail-group`（尾） | 贴栏底 |
+| 底部组 | `.icon-rail-bottom`（`margin-top:auto`） | 贴栏底；**2026-09-15（R14a）起放齿轮** |
 | 单元格 | `.icon-rail-btn` | **通栏 50×50** 贴合；未选中整钮 `opacity:.6`，hover `.85` |
 | 选中单元格 | `.icon-rail-btn.active` | **实底 `--c-rail-active-bg:#647489` + 全亮** |
-| 图标 | 顶部组按序：`FileText`(14×18)/`User`(18×20)/`CalendarDays`(20×20)；底部：`RotateCw`(19×19)/`Settings`(22×22) | 视觉尺寸对应设计稿 ×0.63 取整 |
+| 图标 | 顶部组：`FileText`(14×18)；底部：`Settings`(18×18) | 视觉尺寸对应设计稿 ×0.63 取整 |
 
-接线语义：**仅「帖子」`FileText` 接线**（`navigate('/')` + 路由高亮：`/` 或 `/vtubers/:id` 均点亮）。**2026-09-08 用户：其余四枚未接线占位（用户 / 日历 / 刷新 / 设置）已删除**——避免点了没反应的假入口，功能落地时再加回。
+接线语义：**两枚都已接线** —— 「帖子」`FileText` → `navigate('/')`（路由高亮：`/` 或 `/vtubers/:id`）；
+底部「设置」`Settings` → 打开 `AppSettingsDialog`（`data-testid="app-settings-gear"`）。
+**2026-09-08 用户：未接线的占位图标（用户 / 日历 / 刷新）已删除**——避免点了没反应的假入口，
+功能落地时再加回；**2026-09-15（R14a，devlog/091）齿轮按这条口径加回**（设置界面真的能用 HTTP PUT 落库了）。
+
+### A2-a. 应用设置弹窗 `<AppSettingsDialog>`（components/AppSettingsDialog.tsx，2026-09-15 R14a devlog/091）
+
+齿轮打开的独立弹窗（Radix Dialog）。**与「档案设置」是两回事**：那个是单个 V 的资料
+（`.vd-*`），这个是应用级参数（`.aps-*`）。
+
+| 名称 | 类名 / 属性 | 说明 |
+|---|---|---|
+| 弹窗 | `.aps-settings`（`data-testid="app-settings-dialog"`） | 头部驻留 + OverlayScroll 内容区 + 底部操作条 |
+| 分区 | `.aps-section` / `.aps-section-title` + `.aps-hint` | 分区标题右侧带**生效时机**（"下一轮生效（不用重启）"，由后端下发） |
+| 可写项 | `.aps-row[data-setting="KEY"]` | 一行 = 说明（左）+ 控件（右）+ 范围提示；`changed` 时挂 `.aps-badge`（已改过） |
+| 数值控件 | `.aps-input` + `.aps-unit` | `min/max/step` 来自后端 spec；`.aps-field-error` 是即时校验红字 |
+| 开关控件 | `.aps-switch`（`role="switch"` + `data-value`） | 布尔项（第三方数据三个开关） |
+| 只读信息 | `.aps-info`（版本/数据目录/库/端口/迁移 head/日志/PID）+ `.aps-readonly-item` | 只读项**逐条带理由**（`.aps-readonly-why`）——用户看到"不能改"必须同时看到为什么 |
+| 底部 | `.aps-foot-state` / `.aps-foot-actions` | 左边状态（"已改过 N 项 · 待保存 M 项"），右边「全部恢复默认」「保存」 |
+
+**三条口径**：① 范围/单位/生效时机**全部来自后端** `GET /settings`（界面不抄阈值，否则两边分叉）；
+② 可热更与只读**摆在一起**讲清楚（只读区逐条写理由）；③ 写路径唯一 —— `PUT /settings`，
+前端只做"提前告诉你会被拒"的即时校验，真判定在后端（越界/上限小于下限一律 400）。
+
+⚠️ 与 `.vd-settings` 同一个坑：**不要**给这两个类加 `position: relative`（会盖掉弹窗内容体的
+`.fixed`，整块飘出视口）。探针：`python scripts/ui_probe.py --app-settings`。
 
 ### A3. VTuber 左栏 `<VtuberSidebar>`（components/VtuberSidebar.tsx）
 
