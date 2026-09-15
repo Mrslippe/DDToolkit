@@ -918,24 +918,39 @@ def main() -> int:
                 failures.append(f"@{w} filter-pill: 没量到两枚浮片（侧栏={bool(side)} "
                                 f"list={bool(lst)}）—— 侧栏工具行或 list 筛选条没渲染？")
             else:
-                # 逐项对比：**除了 minWidth**（刻意不同：侧栏工具行是定宽 89 的格子，
-                # list 那枚用 `min-width: 89px`，好让「筛选 · N」能长出去）。
-                # 其余每一项都必须相等 —— 这正是"样式跟随"的可判定含义。
-                # `w` 单独处理：文案等长时应当相等，文案变长时只许变宽。
-                keys = [k for k in side if k not in ("text", "minWidth", "w")]
+                # 契约分两桶（用户 2026-09-15 复述口径）：
+                #  · STYLE —— 「样式跟随」：字号/行高/内距/圆角/颜色/斜切/caret 的
+                #    定位方式·距右缘·尺寸/**文字是否居中**，两边必须逐项相等；
+                #  · SIZE  —— 「宽高还是原本的宽高，保持同一行中元素的和谐」：
+                #    高与宽度跟**本行其他控件**齐平（list 行是 30 高、搜索框 30），
+                #    所以与侧栏那枚（25 高、定宽 89）**刻意不同**，只如实列出、不判失败。
+                #    caret 的垂直偏移与"距文字"同理：它们是高度的函数，不是配方。
+                style_keys = [k for k in side
+                              if k not in ("text", "w", "h", "minWidth", "width",
+                                           "caretGapToText", "caretCenterOffset",
+                                           "textInset")]
+                size_keys = ["w", "h", "minWidth", "caretGapToText", "caretCenterOffset",
+                             "textInset"]
                 print(f"  {'字段':<18}{'侧栏（参照）':<28}list 视图")
-                for k in keys:
+                for k in style_keys:
                     mark = "" if side.get(k) == lst.get(k) else "   ← 不一致"
                     print(f"  {k:<18}{str(side.get(k)):<28}{lst.get(k)}{mark}")
-                print(f"  {'minWidth':<18}{str(side.get('minWidth')):<28}{lst.get('minWidth')}"
-                      f"   ← 刻意不同（侧栏定宽 / list 用 min-width 以便文案变长）")
-                for k in keys:
+                for k in size_keys:
+                    print(f"  {k:<18}{str(side.get(k)):<28}{lst.get(k)}"
+                          f"   ← 尺寸/随之量（刻意各行其是）")
+                for k in style_keys:
                     if side.get(k) != lst.get(k):
                         failures.append(f"@{w} filter-pill: {k} 不一致 —— 侧栏="
                                         f"{side.get(k)!r} / list={lst.get(k)!r}")
-                if (lst.get("w") or 0) < (side.get("w") or 0):
-                    failures.append(f"@{w} filter-pill: list 那枚 {lst.get('w')}px 比侧栏的 "
-                                    f"{side.get('w')}px 还窄（等长文案下应当一样宽）")
+                # 尺寸桶里仍然要守的两条硬约束：list 那枚必须**与同行控件齐平**
+                # （高 30 = 本行搜索框）且文字两侧留白**对称**（居中才成立）
+                if lst.get("h") != 30:
+                    failures.append(f"@{w} filter-pill: list 那枚高 {lst.get('h')}px，"
+                                    f"应为 30（与本行搜索框齐平 —— 用户 2026-09-15 口径）")
+                ins = lst.get("textInset") or []
+                if len(ins) != 2 or abs(ins[0] - ins[1]) > 0.5:
+                    failures.append(f"@{w} filter-pill: 文字两侧留白不对称 {ins}"
+                                    f"—— 对称才有「文字居中」这件事")
                 # 文字必须**真的居中**（这是用户从 R5 到 R16 反复说的事），
                 # 且 caret 要落进右侧留白、不压到字上 —— 宽度够不够就靠这两条兜着。
                 # 三态都量：静态「筛选」/ 真实最长「筛选 · N」/ 合成超长文案。
@@ -974,8 +989,8 @@ def main() -> int:
                     failures.append(f"@{w} filter-pill: 探针没把筛选复位"
                                     f"（{lst.get('text')!r} → {after.get('text')!r}）")
             if not failures:
-                print("  [ok] list 那枚与侧栏那枚逐项一致（尺寸/字号/内距/斜切/caret 角标/文字居中），"
-                      "文案变长时只变宽、caret 不压字")
+                print("  [ok] list 那枚与侧栏那枚**配方一致**（字号/内距/斜切/caret 定位·尺寸·距右缘/"
+                      "文字居中），尺寸各行其是（高 30 与本行搜索框齐平）；文案变长时只变宽、caret 不压字")
             for b in failures:
                 print("   -", b)
             return 1 if failures else 0

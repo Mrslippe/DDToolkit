@@ -95,6 +95,7 @@ export default function PostFilterPop({
   return (
     <div className="pfilter-wrap" ref={wrapRef}>
       <FloatPill
+        size="md"
         shape="text"
         active={on}
         className="pfilter-btn"
