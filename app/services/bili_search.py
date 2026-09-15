@@ -12,12 +12,19 @@
 | 纯数字（≥5 位） | `x/space/wbi/acc/info` 精确查 UID（+ `x/relation/stat` 取粉丝数） | 2 | B 站**搜索接口搜不到 uid**（实测 `keyword=1265680561` → 0 条），所以数字必须直查 |
 | 其余 | `wbi/search/type?search_type=bili_user` | 1/页 | 用户搜索；每页 20 条，最多翻 `MAX_PAGE` 页 |
 
-## 实测结论（2026-09-14，本机用仓库现有 WBI + Cookie）
+## 实测结论（2026-09-14 首测，2026-09-15 复核并**更正一处**）
 
 - **必须带"搜索页"请求头**（`Referer: https://search.bilibili.com/upuser?keyword=…` +
   `Origin` + `Accept`）：不带时首轮 `code=-1200 被降级过滤`；**极简头下更坑 —— `code=0` 但静默
-  0 条**（连"永雏塔菲"都搜不到）。带上之后 4/4 关键词命中、首位都是目标 V。
-- **不要求登录**：无 Cookie + 浏览器头同样命中 ⇒ 全新安装（没扫码）也能搜。
+  0 条**（连"永雏塔菲"都搜不到）。带上之后命中稳定，首位就是目标 V。
+- ⚠️ **需要 B 站登录态**（2026-09-15 更正）：搜索接口本身不校验 cookie，但**WBI 签名密钥要从
+  `x/web-interface/nav` 取，而该接口未登录直接回 -101「账号未登录」** ⇒ 没登录时
+  `wbi.sign_params()` 抛错，模糊搜与 uid 直查**都会失败**。
+  首次测量得出"不需要登录"是**测错了**：那次的进程里 WBI 密钥已缓存（`wbi._cached_keys`，
+  或数据目录里带着已登录的 `.env`）⇒ 复现口径必须用**空数据目录 + 全新进程**。
+  因此这里把签名失败显式映射成 `error='not_logged_in'` + `LOGIN_HINT`（而不是让异常冒到 500）。
+- 2026-09-15 复核（真打上游）：登录态下 `塔菲` → **20 条 / 50 页**、`uid=1265680561` →
+  1 条「永雏塔菲」；空数据目录 → `not_logged_in`。
 - 连打 5 次（0.6s 间隔）零风控；本模块仍按 `MIN_INTERVAL` 串行 + 每分钟上限收敛。
 
 ## 节流与缓存（都不持有 loop-bound 原语 —— devlog/076 的不变量）
@@ -56,6 +63,9 @@ MAX_PER_MINUTE = 20         # 每分钟上游调用上限
 CACHE_TTL = 300.0           # 结果缓存秒数
 CACHE_MAX = 64
 MAX_PAGE = 3                # 允许翻到第几页（第 1 页 + 加载更多 2 次）
+
+LOGIN_HINT = ("B 站检索需要登录态：WBI 签名密钥要从 nav 接口取，未登录时该接口回 -101 —— "
+              "请先在顶栏登录 B 站再试（uid 直查同样需要）")
 
 _TAG_RE = re.compile(r"<[^>]+>")
 
@@ -189,6 +199,20 @@ def clear_cache() -> None:
 
 # ── 两条路径 ──────────────────────────────────────────────────────────
 
+def _sign_failure(exc: Exception, what: str) -> dict:
+    """WBI 签名失败的归类（未登录 vs 其它）。
+
+    `nav` 未登录回 -101「账号未登录」，`wbi.get_wbi_keys` 把它包成 `Exception` 抛出 ——
+    靠消息判定不优雅，但比"整类都报未登录"准确：别的签名错误不该给出"去登录"的误导。
+    """
+    msg = str(exc)
+    if "未登录" in msg or "-101" in msg:
+        logger.info(f"B 站检索需要登录态（{what}）：{msg}")
+        return {"error": "not_logged_in", "hint": LOGIN_HINT}
+    logger.warning(f"B 站检索签名失败（{what}）：{type(exc).__name__}: {msg}")
+    return {"error": "upstream_error", "hint": f"取 WBI 签名失败：{msg}"}
+
+
 async def search_users(kw: str, page: int = 1,
                        client: httpx.AsyncClient | None = None) -> SearchResult:
     """按名称搜索 UP 主（第 `page` 页，1-based；超过 `MAX_PAGE` 不请求，直接说明）。"""
@@ -209,8 +233,13 @@ async def search_users(kw: str, page: int = 1,
         return SearchResult(page=page, error=limited,
                             hint="请求太频繁，稍后再试或改用候选池")
 
-    params = await wbi.sign_params({"search_type": "bili_user", "keyword": kw,
-                                    "page": page})
+    # WBI 签名（要 nav 取密钥 ⇒ **未登录会抛**）。这是"上游没被我们问到"，
+    # 必须变成一条能给用户看的原因，不能让异常冒到 500（2026-09-15 实测踩到）。
+    try:
+        params = await wbi.sign_params({"search_type": "bili_user", "keyword": kw,
+                                        "page": page})
+    except Exception as e:                                   # noqa: BLE001
+        return SearchResult(page=page, **_sign_failure(e, kw))
     url = f"{SEARCH_URL}?{urllib.parse.urlencode(params)}"
     own = client is None
     try:
@@ -266,10 +295,19 @@ async def exact_user(uid: str, client: httpx.AsyncClient | None = None) -> Searc
     if limited:
         return SearchResult(error=limited, hint="请求太频繁，稍后再试")
 
-    info = await fetch_bilibili_user_info(int(uid), client=client)
+    # `acc/info` / `relation/stat` 都是 WBI 签名接口 ⇒ 未登录同样会抛（与名称搜索同源）
+    try:
+        info = await fetch_bilibili_user_info(int(uid), client=client)
+    except Exception as e:                                   # noqa: BLE001
+        return SearchResult(page=1, exact=True, **_sign_failure(e, f"uid:{uid}"))
     if not info:
         return SearchResult(error="not_found", hint=f"B 站没有这个 UID（{uid}）或该用户已注销")
-    stat = await fetch_bilibili_user_stat(int(uid), client=client) or {}
+    try:
+        stat = await fetch_bilibili_user_stat(int(uid), client=client) or {}
+    except Exception as e:                                   # noqa: BLE001
+        # 粉丝数取不到不算失败：名字已经有了，收录/展示不依赖它
+        logger.info(f"B 站 uid={uid} 粉丝数取数失败：{type(e).__name__}: {e}")
+        stat = {}
     item = {
         "platform": "bilibili",
         "platform_uid": uid,

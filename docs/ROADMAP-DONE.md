@@ -23,7 +23,7 @@
 
 | # | 一句话需求 | 期望效果 | 优先级 | 落地结论 |
 |---|---|---|---|---|
-| R11 | 添加 V 除候选池外，**也要能直接从 B 站获取**（uid 精确 或 名称模糊搜索） | 新 V（池快照里没有的）也能加进来 | 高 | ✅ devlog/083：① 后端新增 `services/bili_search.py` + `GET /vtuber/bili/search`（uid→`acc/info` 精确；否则 `wbi/search/type` 模糊搜；预算 0.8s 串行 / 20 次每分 / 5 分钟缓存 / 最多 3 页）；② `POST /vtuber/adopt` 加 `source`：池外通道**必须服务端自己打一次 `acc/info` 校验**（客户端给的名字不算数，非 bilibili 平台 400）；③ `GET /vtuber/pool/search` 合并 `vtubers.csv` + `thirdparty_vtubers` 两个来源；④ 前端 `AddVtuberDialog` 双来源 —— 本地输入即防抖、**B 站只在显式触发时检索**（回车/按钮），uid 输入换「按 UID 添加」、已入库行置灰"已订阅"、上游失败原样展示 `hint`。⑤ 新增探针 `--add-v`（敲键不打上游 / 行可命中 / UID 换档） |
+| R11 | 添加 V 除候选池外，**也要能直接从 B 站获取**（uid 精确 或 名称模糊搜索） | 新 V（池快照里没有的）也能加进来 | 高 | ✅ devlog/083：① 后端新增 `services/bili_search.py` + `GET /vtuber/bili/search`（uid→`acc/info` 精确；否则 `wbi/search/type` 模糊搜；预算 0.8s 串行 / 20 次每分 / 5 分钟缓存 / 最多 3 页）；② `POST /vtuber/adopt` 加 `source`：池外通道**必须服务端自己打一次 `acc/info` 校验**（客户端给的名字不算数，非 bilibili 平台 400，"没问到"回 503 而不是 404）；③ `GET /vtuber/pool/search` 合并 `vtubers.csv` + `thirdparty_vtubers` 两个来源；④ 前端 `AddVtuberDialog` 双来源 —— 本地输入即防抖、**B 站只在显式触发时检索**（回车/按钮），uid 输入换「按 UID 添加」、已入库行置灰"已订阅"、上游失败原样展示 `hint`；⑤ 新增探针 `--add-v`（敲键不打上游 / 行可命中 / UID 换档）。<br>⚠️ 需要 **B 站登录态**（WBI 密钥要走 `nav`，未登录 -101）：真机复核时更正了"不需要登录"的错误结论，并把未登录从 500 修成 `not_logged_in` + 提示（devlog/083 §十） |
 
 > **用户确认的四个口径**（方案阶段拍板，实现严格照办）：
 > ① B 站检索 = **显式触发**（不做按键防抖直连上游）；② 点结果行 = **直接收录**（不插预览卡）；

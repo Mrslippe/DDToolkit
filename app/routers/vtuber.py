@@ -1083,6 +1083,10 @@ async def bili_search(kw: str = Query(""), page: int = Query(1, ge=1),
     并受 `bili_search` 的 0.8s 串行 + 每分钟 20 次上限 + 5 分钟结果缓存约束。
     `error` 非空表示"没取到"，`hint` 是给用户看的原因与建议（前端如实展示，不回退成"没有这个人"）。
 
+    ⚠️ **需要 B 站登录态**（2026-09-15 实测更正）：搜索接口不校验 cookie，但 WBI 签名密钥只能从
+    `nav` 取，而 `nav` 未登录回 -101 ⇒ 未登录时两条路径都失败，此时回 `error='not_logged_in'`
+    + 提示（**不是** 500，也**不是** `not_found`）。
+
     ⚠️ 路径刻意是**两段**（`/vtuber/bili/search`，与 `/vtuber/pool/search` 同形）：
     写成一段（`/vtuber/bili-search`）会被先注册的 `/vtuber/{vtuber_id}` 抢走匹配
     → `int_parsing` 422（本批实测踩到）。新增 `/vtuber/xxx` 一段式路径时注意同一坑。
@@ -1117,6 +1121,10 @@ async def adopt_vtuber(data: AdoptRequest, background: BackgroundTasks,
     池外条目**必须**服务端复核通过才建库：既防伪造（随便填个 uid 就建 V），
     也防脏名（前端传什么名字都不作数）。
 
+    状态码（R11 复核，2026-09-15）：池内无 + 未声明 source → **404**；池外非 bilibili → **400**；
+    复核得到"确实没这个人" → **404**；复核**没问到**（未登录 / 网络 / 风控）→ **503** + 原因
+    —— 把"你没登录"报成"B 站没这个 UID"是误导（本批实测：未登录时 WBI 取密钥失败）。
+
     ⚠️ 本端点是 async（要 await 上游复核）；抓取调度仍走 `BackgroundTasks` —— 响应送达后
     才起跑账号信息 ∥ 首屏内容（`_adopt_background`），避免把收录响应拖到抓取结束。
     """
@@ -1132,7 +1140,12 @@ async def adopt_vtuber(data: AdoptRequest, background: BackgroundTasks,
             raise HTTPException(400, "池外收录目前只支持 bilibili")
         verified = await bili_search_svc.exact_user(str(data.platform_uid))
         if not verified.items:
-            raise HTTPException(404, verified.hint or "该 UID 在 B 站查不到，未收录")
+            # ⚠️ 只有"上游确实说没有这个人"才是 404。未登录 / 网络 / 风控都是**我们没问到**，
+            # 报 404 会把"没登录"说成"B 站没有这个 UID"（2026-09-15 实测踩到：
+            # 未登录时 WBI 取密钥失败，原来会直接冒成 500）。
+            if verified.error in (None, "not_found", "bad_uid"):
+                raise HTTPException(404, verified.hint or "该 UID 在 B 站查不到，未收录")
+            raise HTTPException(503, verified.hint or f"B 站暂不可用（{verified.error}）")
         name = verified.items[0]["name"]
         source = "bilibili"
 

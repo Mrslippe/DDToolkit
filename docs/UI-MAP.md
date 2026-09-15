@@ -518,7 +518,7 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 
 | 区域 | 类名 | 触发 | 打上游？ |
 |---|---|---|---|
-| 输入框（左内嵌放大镜 + 右清空钮 + 右侧触发钮） | `.av-search-row` / `.av-input-wrap` / `.av-input` / `.av-clear` / `.av-bili-btn` | 输入防抖 250ms 搜本地；**回车 / 点按钮**搜 B 站 | 本地：否 · B 站：是（预算 0.8s 串行 + 20 次/分 + 5 分钟缓存 + 最多 3 页） |
+| 输入框（左内嵌放大镜 + 右清空钮 + 右侧触发钮） | `.av-search-row` / `.av-input-wrap` / `.av-input` / `.av-clear` / `.av-bili-btn` | 输入防抖 250ms 搜本地；**回车 / 点按钮**搜 B 站 | 本地：否 · B 站：是（预算 0.8s 串行 + 20 次/分 + 5 分钟缓存 + 最多 3 页；**需要 B 站登录态**，未登录回 `not_logged_in` + 提示） |
 | 结果区（`OverlayScroll`） | `.av-list`（= `.os-root`）/ `.av-row` | 点行 = 直接收录（决策②，不插预览卡） | 收录后后台抓该 V |
 
 行内元素：`.av-ava`（30px 圆头像，无图 → `.av-ava-ph` 首字）、`.av-name-text`（省略号截断）、

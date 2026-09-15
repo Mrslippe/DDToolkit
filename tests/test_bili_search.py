@@ -230,3 +230,66 @@ def test_search_dispatches_numeric_to_exact(monkeypatch):
     r2 = asyncio.run(bs.search("塔菲"))
     assert r1.exact is True and r2.exact is False
     assert called == {"search": 1, "exact": 1}
+
+
+# ── 未登录（WBI 取密钥失败）：必须是一条"能给用户看的原因"，不是异常 ────
+
+def test_search_users_maps_wbi_failure_to_not_logged_in(monkeypatch):
+    """**2026-09-15 实测更正**：搜索接口不校验 cookie，但 WBI 签名密钥要从 `nav` 取，
+    而 `nav` 未登录直接回 -101 ⇒ 没登录时模糊搜必然失败。
+
+    旧实现里 `await wbi.sign_params(...)` 在 try 之外 —— 异常一路冒到端点变 500，
+    用户看到的是栈而不是"请先登录"。这里锁死：**不抛异常**，返回 `not_logged_in` + 提示。
+    """
+    from app.services import bili_search as bs
+
+    async def boom(params):
+        raise Exception("获取WBI密钥失败: 账号未登录")
+
+    monkeypatch.setattr(bs.wbi, "sign_params", boom)
+    res = asyncio.run(bs.search_users("塔菲"))
+    assert res.error == "not_logged_in" and res.items == []
+    assert "登录" in (res.hint or "")
+
+
+def test_search_users_keeps_other_wbi_failures_as_upstream_error(monkeypatch):
+    """不是"未登录"的签名故障不能误导成"去登录"（归到 upstream_error）。"""
+    from app.services import bili_search as bs
+
+    async def boom(params):
+        raise Exception("socket closed")
+
+    monkeypatch.setattr(bs.wbi, "sign_params", boom)
+    res = asyncio.run(bs.search_users("塔菲"))
+    assert res.error == "upstream_error"
+    assert "登录" not in (res.hint or "")
+
+
+def test_exact_user_maps_wbi_failure_to_not_logged_in(monkeypatch):
+    """uid 直查走 `acc/info`，**同样是 WBI 签名接口** ⇒ 未登录也一样失败（统一口径）。"""
+    from app.services import bili_search as bs
+
+    async def boom(mid, client=None):
+        raise Exception("获取WBI密钥失败: 账号未登录")
+
+    monkeypatch.setattr(bs, "fetch_bilibili_user_info", boom)
+    res = asyncio.run(bs.exact_user("1265680561"))
+    assert res.error == "not_logged_in" and res.items == []
+    assert "登录" in (res.hint or "")
+
+
+def test_exact_user_survives_stat_failure(monkeypatch):
+    """粉丝数取不到不该让整次直查失败（名字才是收录/展示要用的）。"""
+    from app.services import bili_search as bs
+
+    async def fake_info(mid, client=None):
+        return {"name": "永雏塔菲", "sign": "", "avatar": "", "live_status": 0, "room_id": 0}
+
+    async def boom(mid, client=None):
+        raise Exception("relation/stat 500")
+
+    monkeypatch.setattr(bs, "fetch_bilibili_user_info", fake_info)
+    monkeypatch.setattr(bs, "fetch_bilibili_user_stat", boom)
+    res = asyncio.run(bs.exact_user("1265680561"))
+    assert res.error is None and res.items[0]["name"] == "永雏塔菲"
+    assert res.items[0]["followers"] == 0

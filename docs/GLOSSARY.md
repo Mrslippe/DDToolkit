@@ -40,9 +40,9 @@
 | **归档三态 / archived filter** | 列表页归档筛选：全部 / 仅未归档（`is_archived=false`）/ 仅已归档 | `PostFilterPop`（v0.9.9 P10-A 接线 `unarchived`） | 后端参数本就支持，此前前端只接了「仅已归档」 |
 | **时间范围 / date range** | 帖子发布时间过滤（`date_from`/`date_to`，本地日期串，`to` = 次日零点排他即含当天） | `utils/dateRange.ts`；`common/DateRangePicker.tsx` | 双月历 + 预设（量纲**含今天**），草稿制确认后生效 |
 | **候选池 / pool** | 离线待选 VTuber 索引（`vtubers.csv`，快照式名单） | `services/pool.py`；`GET /vtuber/pool/search` | 收录（adopt）的**池内**入口（R11 起不再是唯一入口） |
-| **B 站直查 / bili search** | 池外收录通道：按 uid 精确查（`acc/info`）或按名称模糊搜（`wbi/search/type`） | `services/bili_search.py`；`GET /vtuber/bili/search` | **只在显式触发时**打上游（devlog/083）；搜不到 uid，uid 走精确通道 |
+| **B 站直查 / bili search** | 池外收录通道：按 uid 精确查（`acc/info`）或按名称模糊搜（`wbi/search/type`） | `services/bili_search.py`；`GET /vtuber/bili/search` | **只在显式触发时**打上游（devlog/083）；搜不到 uid，uid 走精确通道；**需要 B 站登录态**（WBI 密钥要走 `nav`，未登录 -101 → `not_logged_in`） |
 | **在线检索（前端两个来源）** | 添加 V 浮窗里「本地候选」（输入即防抖）与「B 站」（回车/按钮才发）两种触发方式 | `components/AddVtuberDialog.tsx`；`utils/addVtuberSearch.ts` | 敲键**不打上游**由探针 `--add-v` 守着 |
-| **池外收录校验** | `source='bilibili'` 时服务端必须自己打一次 `acc/info` 校验，客户端给的名字不算数 | `routers/vtuber.py::adopt_vtuber` | 非 bilibili 平台走池外 → 400 |
+| **池外收录校验** | `source='bilibili'` 时服务端必须自己打一次 `acc/info` 校验，客户端给的名字不算数 | `routers/vtuber.py::adopt_vtuber` | 非 bilibili 平台走池外 → 400；"确实没这个人" → 404，"没问到"（未登录/网络/风控）→ **503** |
 | **收录 / adopt** | 把 V+账号入库，并立刻抓账号信息 + **首屏内容** + 回填第三方历史 | `routers/vtuber.py::adopt_vtuber`、**`_adopt_background`** | 添加账号走同款（只抓新账号） |
 | **收录首屏 / first screen** | 新账号立刻抓到的第一屏内容（投稿 1 页 + 动态 1 页限 3 条） | `scheduler.async_fetch_first_screen` | v0.9.4，devlog/044 |
 | **解除订阅 / unsubscribe** | 删 V：清帖子 + 5 张子表 + 活动条目，再级联删账号 | `routers/vtuber.py::delete_vtuber`；**`services/purge.py`** | 外键全开，漏清即回滚 |

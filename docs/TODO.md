@@ -178,7 +178,7 @@
 
 | 门禁 | 命令 | 基线 |
 |---|---|---|
-| 后端 | `python -m pytest -q` | **329 passed**（R11 新增 `test_bili_search.py` 11 项 + API 3 项；含 1 条真实网络冒烟，离线环境会 skip） |
+| 后端 | `python -m pytest -q` | **334 passed**（R11 新增 `test_bili_search.py` 15 项 + API 4 项；含 1 条真实网络冒烟，离线环境会 skip） |
 | 前端类型 | `npx tsc --noEmit`（`npm run build` 也会跑） | **0 错** |
 | 前端 lint | `npm --prefix frontend run lint` | **0 错**（`--max-warnings 0`） |
 | 前端单测 | `npm --prefix frontend run test` | **136 passed**（新增 `utils/addVtuberSearch.test.ts` 5 项） |

@@ -1,4 +1,4 @@
-﻿import json
+import json
 import pytest
 from datetime import datetime, timedelta, timezone
 from fastapi.testclient import TestClient
@@ -328,6 +328,47 @@ def test_adopt_from_bilibili_requires_server_side_verification(monkeypatch, clie
                      json={"platform": "bilibili", "platform_uid": "401315430"})
     assert r5.status_code == 201 and r5.json()["name"] == "池内名"
     assert called["n"] == 2
+
+
+def test_adopt_does_not_disguise_upstream_failure_as_not_found(monkeypatch, client):
+    """池外收录：**上游没问到 ≠ 没有这个人**（R11 复核，2026-09-15）。
+
+    实测踩到：未登录时 WBI 取密钥失败（`nav` 回 -101），当时异常直接冒成 500；
+    若图省事一律回 404"查不到"，用户会以为"B 站没这个 UID"，实际是**自己没登录**。
+    所以只有 `not_found`/`bad_uid` 是 404，其余（未登录/网络/风控）一律 503 + 原因。
+    """
+    import app.routers.vtuber as router_mod
+    from app.services.bili_search import SearchResult
+
+    monkeypatch.setattr(router_mod.pool, "find_in_pool", lambda p, u: None)
+    state = {"err": "not_logged_in", "hint": "请先登录 B 站"}
+
+    async def fake_exact(uid: str, client=None):
+        return SearchResult(error=state["err"], hint=state["hint"])
+
+    monkeypatch.setattr(router_mod.bili_search_svc, "exact_user", fake_exact)
+
+    async def noop_background(*_a, **_k) -> None:
+        return None
+    monkeypatch.setattr(router_mod, "_adopt_background", noop_background)
+
+    payload = {"platform": "bilibili", "platform_uid": "1265680561", "source": "bilibili"}
+    r = client.post("/vtuber/adopt", json=payload)
+    assert r.status_code == 503
+    assert "登录" in r.json()["detail"]
+
+    # 网络/风控同样是 503（"我们没问到"）
+    state.update(err="network_error", hint="网络异常，稍后重试")
+    assert client.post("/vtuber/adopt", json=payload).status_code == 503
+
+    # 只有上游确实说"没有这个人"才是 404
+    state.update(err="not_found", hint="B 站没有这个 UID 或该用户已注销")
+    r404 = client.post("/vtuber/adopt", json=payload)
+    assert r404.status_code == 404
+    assert "注销" in r404.json()["detail"]
+
+    # 全程没建库
+    assert client.get("/vtuber/list").json() == []
 
 
 def test_pool_search_merges_csv_pool_and_thirdparty_index(monkeypatch, client):

@@ -464,8 +464,8 @@
 | POST `/posts/archive?days=30` | 归档规则；幂等，返回 cutoff/unarchived_total |
 | POST `/vtuber/update-posts?name=` | 更新未归档动态：先归档再抓动态，整页已归档即停 |
 | GET `/vtuber/pool/search?kw=` | 本地候选检索（R11，devlog/083）：`vtubers.csv`（`origin='pool'`）+ `thirdparty_vtubers` 索引（`origin='index'`）两来源合并，按 `(platform, uid)` 去重（池优先）、剔除已入库 |
-| GET `/vtuber/bili/search?kw=&page=` | **直接从 B 站检索**（池外收录通道，R11）：纯数字 ≥5 位 → `acc/info` + `relation/stat` 精确查；否则 `wbi/search/type` 模糊搜；结果带 `in_library`。⚠️ **路径是两段**：`/vtuber/bili-search` 会被先注册的 `/vtuber/{vtuber_id}` 吃掉 → 422 `int_parsing`。上游失败如实回 `error`+`hint`（`rate_limited` / `page_limit` / `upstream_degraded` / `network_error` / `not_found`）；预算：0.8s 串行 + 20 次/分 + 5 分钟缓存 + 最多 3 页 |
-| POST `/vtuber/adopt` | 收录 V+账号。`source=None/'pool'` → 必须在候选池内，名称以池为准（池内无 404）；`source='bilibili'` → **池外通道**：platform 必须是 bilibili 且**服务端自己打一次 `acc/info` 校验**（失败 404 + 上游原因；**客户端给的名字永不被信任**）。已入库/并发冲突 409；成功后后台抓该 V + 回填历史 |
+| GET `/vtuber/bili/search?kw=&page=` | **直接从 B 站检索**（池外收录通道，R11）：纯数字 ≥5 位 → `acc/info` + `relation/stat` 精确查；否则 `wbi/search/type` 模糊搜；结果带 `in_library`。⚠️ **路径是两段**：`/vtuber/bili-search` 会被先注册的 `/vtuber/{vtuber_id}` 吃掉 → 422 `int_parsing`。⚠️ **需要 B 站登录态**（WBI 密钥要走 `nav`，未登录 -101 → `error='not_logged_in'` + 提示）。上游失败如实回 `error`+`hint`（`rate_limited` / `page_limit` / `upstream_degraded` / `network_error` / `not_found`）；预算：0.8s 串行 + 20 次/分 + 5 分钟缓存 + 最多 3 页 |
+| POST `/vtuber/adopt` | 收录 V+账号。`source=None/'pool'` → 必须在候选池内，名称以池为准（池内无 404）；`source='bilibili'` → **池外通道**：platform 必须是 bilibili（否则 400）且**服务端自己打一次 `acc/info` 校验**（**客户端给的名字永不被信任**）：确实没这个人 → 404，**没问到**（未登录/网络/风控）→ **503** + 原因。已入库/并发冲突 409；成功后后台抓该 V + 回填历史 |
 | POST `/vtuber/fetch-accounts` | 批量：后台抓全部账号信息，立即返回；手动任务在跑 409 |
 | POST `/vtuber/batch/fetch-all-posts` | 批量：后台全量抓帖子 |
 | POST `/vtuber/batch/update-unarchived` | 批量：后台更新未归档 |
