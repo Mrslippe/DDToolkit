@@ -97,8 +97,23 @@
 → 动态流每轮把按钮禁用掉，而**后端其实会受理**（手动优先会抢占自动档，`manual_task_running()`
 在自动档持锁时为 false）。
 
-### A2. 工具图标栏 `<IconRail>`（components/IconRail.tsx）
+### A1-b. 未登录能力入口 `<CapabilityLimits>`（components/CapabilityLimits.tsx，2026-09-15 devlog/086）
 
+顶栏登录钮**左侧**；**只在有限制时渲染**（全可用时不多一个按钮）。DOM 契约（探针直接查）：
+
+| 名称 | 类名 / 属性 | 说明 |
+|---|---|---|
+| 入口 | `.topbar-limits`（`data-capability-limits="N"`） | 文案 `未登录 · N 项受限`（`utils/capabilities.ts::limitsSummary`）；没有限制时组件返回 `null` |
+| 说明窗 | `.cap-limits-dialog` | 复用 radix Dialog（不引入新原语，将来"通知/灵动岛"控件可直接吸收） |
+| 能用项 / 受限项 | `.cap-limits-ok` / `.cap-limits-item[data-limit-id]` | **先列"现在能做什么"再列受限项**——只列不能做的等于劝退 |
+| 去登录 | `.cap-login-cta` | 复用顶栏已有 LoginDialog；关窗即 `refreshCapabilities()`（刚登录完不该还显示受限） |
+| 行内标注 | `.cap-need-login`（胶囊）/ `.cap-inline-hint`（块）/ `.av-limit-row` | 批量浮窗与添加 V 浮窗的"需要登录"标注 |
+
+**口径（不许违反）**：受限功能**照常可见**，只标注不隐藏；内容类动作（投稿/动态）在未登录时
+**禁用 + 说明原因**；账号信息与归档**保持可用**（实测匿名可用，禁掉就是过度限制）。
+探针：`python scripts/ui_probe.py --capabilities`（现场 = 数据目录副本删 `.env`）。
+
+### A2. 工具图标栏 `<IconRail>`（components/IconRail.tsx）
 > 视觉按 `docs/design/react-IconRail` 导出（Frame4172），**50px 紧凑栏**（原 79 栏 ×0.63 取整）。
 
 | 名称 | 类名 | 说明 |

@@ -2434,6 +2434,158 @@ img.hero-avatar {
   color: var(--c-text-sub);
 }
 
+/* ── 能力矩阵的界面（未登录提示，devlog/086）─────────────────────────
+   受限**不是错误**：统一用 `--sel-bg` 浅底说明，与"上游失败"的红色 `.err` 区分开。
+   顶栏入口只在有限制时渲染（`.topbar-limits`），说明窗先列"现在能做什么"再列受限项。 */
+.av-limit-row {
+  background: var(--sel-bg);
+  color: var(--c-text-main);
+}
+
+.cap-inline-hint {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--sel-bg);
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--c-text-main);
+}
+
+.cap-need-login {
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--c-primary-deep);
+  color: var(--c-text-on-primary);
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 400;
+  vertical-align: 1px;
+}
+
+.topbar-limits {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  margin-right: 6px;
+  padding: 0 8px;
+  border: 1px solid var(--c-border);
+  border-radius: 999px;
+  background: var(--sel-bg);
+  color: var(--c-text-main);
+  font-family: inherit;
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.topbar-limits:hover {
+  border-color: var(--c-primary);
+  color: var(--c-primary-deep);
+}
+
+.topbar-limits-count {
+  font-variant-numeric: tabular-nums;
+}
+
+.cap-limits-dialog {
+  max-width: 560px;
+}
+
+.cap-limits-sec + .cap-limits-sec {
+  margin-top: 12px;
+}
+
+.cap-limits-title {
+  margin: 0 0 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--c-text-main);
+}
+
+.cap-limits-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cap-limits-ok {
+  font-size: 12px;
+  color: var(--c-text-main);
+}
+
+.cap-limits-ok::before {
+  content: '✓';
+  margin-right: 6px;
+  color: var(--c-primary-deep);
+}
+
+.cap-limits-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--sel-bg);
+}
+
+.cap-limits-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--c-text-main);
+}
+
+.cap-limits-label em {
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--c-text-on-primary);
+}
+
+.cap-limits-label em.req {
+  background: var(--c-primary-deep);
+}
+
+.cap-limits-label em.deg {
+  background: var(--c-rail-active-bg);
+}
+
+.cap-limits-note {
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--c-text-sub);
+}
+
+.cap-limits-foot {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.cap-login-cta {
+  padding: 6px 14px;
+  border: 1px solid var(--c-primary);
+  border-radius: 8px;
+  background: var(--c-bg-card);
+  color: var(--c-primary-deep);
+  font-family: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.cap-login-cta:hover {
+  background: var(--sel-bg);
+}
+
 .vd-settings-foot {
   flex: none;
   display: flex;

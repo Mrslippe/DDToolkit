@@ -21,6 +21,8 @@ import {
 } from '../utils/addVtuberSearch'
 import OverlayScroll from './OverlayScroll'
 import ProxyImage from './common/ProxyImage'
+import { useCapabilities } from '../hooks/useCapabilities'
+import { FETCH_POSTS, isLoginRequired, limitText } from '../utils/capabilities'
 import './../styles/posts.css'
 
 interface Props {
@@ -62,6 +64,7 @@ function failResult(page: number, hint: string): BiliSearchResult {
  */
 export default function AddVtuberDialog({ open, onOpenChange, onAdded }: Props) {
   const [kw, setKw] = useState('')
+  const { caps } = useCapabilities()
   const [local, setLocal] = useState<AddCandidate[]>([])
   const [searchingLocal, setSearchingLocal] = useState(false)
   /** B 站检索结果：null = 还没搜过（与"搜了但 0 条"是两回事，文案不同） */
@@ -168,6 +171,8 @@ export default function AddVtuberDialog({ open, onOpenChange, onAdded }: Props) 
   const isUid = inputLooksLikeUid(kw)
   const busy = adoptingKey !== null
   const q = kw.trim()
+  /** 未登录时"收录后抓不到内容"的提示（搜/收录本身照常） */
+  const contentBlocked = isLoginRequired(caps, FETCH_POSTS)
 
   const rowButton = (row: AddCandidate) => {
     const busyThis = adoptingKey === row.key
@@ -288,6 +293,14 @@ export default function AddVtuberDialog({ open, onOpenChange, onAdded }: Props) 
             <div className="av-hint-row">
               输入关键词：本地候选即时匹配（候选池 + 弹幕索引）；
               要加名单外的新 V 就搜 B 站。
+            </div>
+          )}
+
+          {/* 未登录也能搜、能收录；但新 V 的投稿与动态要登录后才抓得到（devlog/086）。
+              说清"能做什么 / 登录后多什么"，而不是一句话把它禁掉 */}
+          {contentBlocked && (
+            <div className="av-hint-row av-limit-row" data-cap-limit-hint="1">
+              {limitText(caps, FETCH_POSTS) || '未登录：新 V 的投稿与动态要登录后才会抓取'}
             </div>
           )}
 

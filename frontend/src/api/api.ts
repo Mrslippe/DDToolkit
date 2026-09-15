@@ -1,4 +1,4 @@
-import type { Account, AccountStatSnapshot, BiliSearchResult, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, PoolItem, PostPage, PostStats, ThirdpartyVtuber, UpdatePostsResult, VTuber, VTuberFormerValues } from './types'
+import type { Account, AccountStatSnapshot, BiliSearchResult, Capabilities, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, PoolItem, PostPage, PostStats, ThirdpartyVtuber, UpdatePostsResult, VTuber, VTuberFormerValues } from './types'
 
 /**
  * API 基地址：
@@ -272,6 +272,9 @@ export const api = {
       body: JSON.stringify({ platform, platform_uid: platformUid, faction: faction || null,
                              source: source ?? null }),
     }),
+
+  /** 当前能力矩阵：未登录时哪些能用、哪些受限（devlog/086）。前端提示的单一事实来源。 */
+  capabilities: () => request<Capabilities>('/capabilities'),
 
   // ── 批量任务（拉取浮窗）────────────────────────────────────────
 

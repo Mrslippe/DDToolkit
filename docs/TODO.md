@@ -35,7 +35,11 @@
 
 | # | 日期 | 一句话需求 | 期望效果（可选） | 优先级 | 状态 |
 |---|---|---|---|---|---|
-| — | — | （暂无未落地条目） | — | — | — |
+| R1 | 2026-09-15 | 把顶栏状态胶囊改造成统一的消息通知控件和类似灵动岛的多功能控件 | 1. 各类关键信息的呈现，2. 优雅流畅的动画效果，3. 后续可能的自定义内容，例如空闲时轮播经典语录 | 中 | 待评估 |
+| R2 | 2026-09-15 | 动态中包括的直播预约记录到直播日历中 |  | 低 | 待评估 |
+| R3 | 2026-09-15 | 设置界面 | 最左侧工具栏底端给一个齿轮按钮，点开进入设置的独立弹窗，可以设置各种参数，例如主题、后端、抓取频率等等 | 中 | 待评估 |
+| R4 | 2026-09-15 | 一些前端改造 | 顶栏左侧标题改为粗体、list视图搜索栏右侧筛选按钮文字布局中、card视图的平台徽标添加按钮在鼠标不hover的时候自动隐藏并且也不占位，让徽章紧贴下方分割线 | 中/低/高 | 待评估 |
+
 
 > **R1–R11 已全部落地**（R9/R10 见 2026-09-13，R11「添加 V 支持 B 站直查」2026-09-15）→
 > 见 `docs/ROADMAP-DONE.md`「需求清单：R11」与「需求清单：R1–R10」；本表只留**还没完全落地**的条目。
@@ -85,24 +89,7 @@
 | **自建词云也支持取消**（照搬现成管道） | 体验小修 | 上游取数已可取消（devlog/064）；`/wordcloud` 走同一套（`api.buildLiveSessionWordCloud` 加 `signal` + 调用处 abort）。因它只在用户点按钮时发、120s 是可接受上限，优先级最低 |
 | ~~`PostsPage` 场景切换机抽 hook~~ | ✅ **已落地**（devlog/080） | 护栏先成（`ui_probe --scene`，顺带**反转了 devlog/071 的"卡死"结论**：那是探针读了旧 DOM 节点）；机器抽到 `hooks/useSceneTransition.ts`，只搬不改；hero/日历位级签名保持一致 → 详见 `docs/ROADMAP-DONE.md` |
 | ~~R2 可选第二步：`fetch-idle` 带 kind~~ | ✅ **已落地**（devlog/080） | `utils/fetchIdle.ts` + `TopBar` 两种派发带 kind + 趋势图独立 `trendTick`；**日历三类都要**（动态流的直播卡片会落场次）→ 详见 `docs/ROADMAP-DONE.md` |
-| **未登录也能加 V（B 站检索的匿名签名）** | 体验 + 口径修正 | **决策：做**（2026-09-15 用户授权我定；见下「已定方案」）。实测证据（devlog/085 §四）：匿名请求 `x/web-interface/nav` 返回 `code=-101 账号未登录`，但**同时带着 `data.wbi_img`**（WBI 密钥并不需要登录）；是 `app/services/wbi.py::get_wbi_keys()` 看到 `code != 0` 就 raise，才让"检索/uid 直查"在未登录时全废。⚠️ 我先后写过"不需要登录""两条路径都需要登录态"两个结论，**都不准确**，所以这条同时是文档修正项 |
-
-**「未登录也能加 V」已定方案**（避免把风险带进抓取路径）：
-
-1. 只给**检索路径**开匿名签名：`wbi.sign_params(..., allow_anonymous=True)`（或等价的
-   `sign_params_public()`）—— `nav` 的 `code != 0` 但 `data.wbi_img` 在时照常签名，
-   并记一行日志说明"匿名签名"；
-2. `bili_search.search_users` / `exact_user` 用它；**`fetcher` 一律不动** ——
-   抓取的"未登录"必须继续**快速且明确地失败**，否则会把"没登录"伪装成"没数据"
-   （本仓最忌讳的失败形态）；
-3. 文案改为准确说法：平台**不要求**登录；失败时提示"本机未登录且上游未下发 WBI 密钥，
-   请登录后重试"（不再说成"检索需要登录态"）；
-4. **验收标准**：① 冷进程（空数据目录 + 清空凭据）下 `smoke_upstream.py --cold` 的
-   `cold_bili_search` 从"断言 `not_logged_in`"改为"断言**能搜到结果**"（新断言要能反向验证：
-   把 `allow_anonymous` 去掉必须红）；② 已登录环境行为不变（真上游冒烟 5 项照旧全绿）；
-   ③ 抓取路径的未登录失败形态**逐字不变**（现有用例 `test_bili_search.py` 的
-   `not_logged_in` 两条保留）；④ 文档三处改口径（本文件、GLOSSARY §8、
-   `docs/releases/v1.0.1.md` 的升级说明——它现在还写着"添加 V 的 B 站直查需要 B 站登录态"）。
+| ~~未登录也能加 V（B 站检索的匿名签名）~~ | ✅ **已落地**（2026-09-15，devlog/086 的 P0–P3） | 实测：匿名 `nav` 也下发 `wbi_img` ⇒ 检索/账号信息/粉丝数/直播状态未登录可用；**内容抓取与微博须登录**（匿名被平台 `412 request was banned`，IP 级）。落地：`wbi.allow_anonymous`（只给检索路径）· `services/capabilities.py` 能力表（三态）+ `GET /capabilities` · **内容抓取闸门**（未登录不发请求、5 端点 403、`login_required`）· 前端未登录提示（顶栏入口 + 说明窗 + 各浮窗标注，**只标不藏**）· 两态实测矩阵 + 策略/实测双向契约用例 → 详见 `docs/ROADMAP-DONE.md`「未登录可用范围（guest mode）」 |
 
 ### 1.2 需要先定口径 / 拍板（不是写代码的问题）
 
@@ -236,14 +223,15 @@
 
 | 门禁 | 命令 | 基线 |
 |---|---|---|
-| 后端 | `python -m pytest -q` | **376 passed**（R11：`test_bili_search.py` 15 + API 4；发布脚本：`test_release_script.py` 28；管线复盘：`test_real_fixtures.py` 7 + `test_doc_check.py` 8；含 1 条真实网络冒烟，离线环境会 skip） |
+| 后端 | `python -m pytest -q` | **400 passed**（R11：`test_bili_search.py` 16 + API 4；发布脚本 28；管线复盘 15；**未登录能力 P0+P1：`test_capabilities.py` 9 + `test_wbi_anonymous.py` 6 + `test_content_gate.py` 5 + 端点/接线 4**；含 1 条真实网络冒烟，离线环境会 skip） |
+| 未登录能力矩阵 | `python scripts/capability_matrix.py [--include-content] --write` | 两态逐接口实测，fixture 落 `tests/fixtures/capability_matrix.json`；结论：匿名可用 = 检索 / 粉丝数 / 直播状态 / 第三方 / 本地，**内容接口 412 需登录**（devlog/086） |
 | 文档漂移 | `python scripts/doc_check.py`（或 `dev_check.py --docs`） | **0 FAIL**（1 条历史警告：41 篇早期 devlog 按批次未逐篇进索引） |
 | 上游冒烟 | `python scripts/smoke_upstream.py [--cold]`（或 `dev_check.py --upstream`） | 真上游 **5 ok / 0 FAIL**；冷进程 **3 ok / 0 FAIL**（未登录三态） |
 | 前端类型 | `npx tsc --noEmit`（`npm run build` 也会跑） | **0 错** |
 | 前端 lint | `npm --prefix frontend run lint` | **0 错**（`--max-warnings 0`） |
-| 前端单测 | `npm --prefix frontend run test` | **138 passed**（新增 `utils/addVtuberSearch.test.ts` 7 项） |
+| 前端单测 | `npm --prefix frontend run test` | **144 passed**（新增 `utils/addVtuberSearch.test.ts` 7 项、`utils/capabilities.test.ts` 6 项） |
 | 词云布局 | `node scripts/check_wordcloud_layout.mjs` | sha256 `19ecc7e673b95c8a1fa7c8c219ada78e9b581a15764aa57b33a7de473fc63dac`（本轮实跑一致 ✓） |
-| 布局探针 | `python scripts/ui_probe.py --hero-expect c11548580e73d910ca667047b8120075a4ab121fa3fa098ff6654326ed183666 --vtuber 15`<br>`python scripts/ui_probe.py --archive --vtuber 15`（`--archive-print` 出签名）<br>`python scripts/ui_probe.py --settings --vtuber 15`（两个带签名账号）/ `--vtuber 14`（单账号长签名）<br>`python scripts/ui_probe.py --scene --vtuber 15`<br>`python scripts/ui_probe.py --add-v --vtuber 15`（**R11 新增**） | 本轮五条实跑通过：hero 签名 `c1154858…` **三档一致**、8 段视图契约 **0 问题**；档案设置几何·可点性·历史弹窗 **29 项**（含 `panelHit`/`rowHit`、`pickKeepsDialog` 与 R9 四项；V14 打印 `[跳过] 候选行切换断言`）；`--scene` 提交 **250ms**、侧栏与内容一致；`--add-v` 实测 关键词 `a` → **37 行**、置灰 0 行、行可命中、敲键打上游 **0 次**、`按 UID 添加` 换档与清空/关窗全通过、**来源→收录路径 `{'pool→pool': 18, 'index→bilibili': 19}`（索引行误走池内必须 0）**。<br>⚠️ `--archive` 的日历签名**已因跨天而漂**：`fb75217e…`（9-13 基线）→ `48519bae…`（9-15 实测，同日两次一致）。原因是 `LiveCalendar.tsx` 对"无场次格子"按 `key < todayKey` 显示「休息」否则「待定」——**跨天必然变**，与代码无关（2026-09-15 定性） |
+| 布局探针 | `python scripts/ui_probe.py --hero-expect c11548580e73d910ca667047b8120075a4ab121fa3fa098ff6654326ed183666 --vtuber 15`<br>`python scripts/ui_probe.py --archive --vtuber 15`（`--archive-print` 出签名）<br>`python scripts/ui_probe.py --settings --vtuber 15`（两个带签名账号）/ `--vtuber 14`（单账号长签名）<br>`python scripts/ui_probe.py --scene --vtuber 15`<br>`python scripts/ui_probe.py --add-v --vtuber 15`（R11）<br>`python scripts/ui_probe.py --capabilities`（**未登录现场**：数据副本删 `.env`） | 六条实跑通过（hero 三档签名一致 / settings 29 项 / scene 提交 250ms / add-v 来源分流 / **capabilities：入口"未登录 · 2 项受限"、说明窗能用 6 项受限 2 项、"去登录"在；添加 V 仍能搜出 37 行且全可点；批量浮窗内容类禁用而归档与账号信息仍可用**）。记录值：`--archive` 日历签名 `48519bae…`（同日两次一致；跨天必漂，见下） |
 | 一把梭 | `python scripts/dev_check.py` | 测试 + 后端冒烟（详见 `docs/DEV-LOOP.md`） |
 
 > ⚠️ 探针的 `--hero-expect` / `--calendar-expect` 签名**含实时数据**，只适合"改动前后短窗口对比"，

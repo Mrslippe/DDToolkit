@@ -225,6 +225,28 @@ python scripts/dev_check.py --docs     # 接进一把梭
 
 `scripts/release.py` 的预检也会调它 —— 发布前先拦，别让"这版改了什么"日后查不到。
 
+## 二·八、未登录能力边界（`scripts/capability_matrix.py` + `ui_probe --capabilities`）
+
+用户口径：「未登录也尽可能用所有功能，并明确告知限制」。边界**必须实测**（devlog/086）：
+
+```powershell
+python scripts/capability_matrix.py                    # 两态 × 轻量接口，打印矩阵
+python scripts/capability_matrix.py --include-content   # 额外量投稿/动态（**会触发 IP 级 412**，别勤跑）
+python scripts/capability_matrix.py --write             # 刷新 tests/fixtures/capability_matrix.json
+python scripts/ui_probe.py --capabilities               # 未登录现场的界面提示（数据副本删 .env）
+```
+
+结论（2026-09-15 实测）：匿名可用 = 本地归档 / 第三方历史 / **检索（名称搜、uid 直查）** /
+粉丝数 / 直播状态；**内容抓取（投稿 + 动态）与微博必须登录**（匿名被 `412 request was banned`）。
+
+> ⚠️ 三条纪律（都是踩出来的）：
+> ① **一个进程只发一条请求** —— 前一条的失败会波及后面，混在一个进程里量出来的矩阵是错的；
+> ② 冷态要**显式清空凭据**（shell 里残留的 `BILI_SESSDATA` 会被子进程继承）；
+> ③ 匿名探测本身有代价（会脏 IP，且**不连累登录态**，已实测），所以默认不量内容接口。
+
+`ui_probe.py --capabilities` 断言的是**两条相反**的错法：该说的没说（顶栏/说明窗/去登录缺失）
+与**过度限制**（受限功能被隐藏、或归档/账号信息被一起禁掉）。
+
 ## 三、手动复现打包版状态（脚本没覆盖时）
 
 ```powershell

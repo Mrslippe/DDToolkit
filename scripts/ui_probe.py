@@ -102,6 +102,20 @@ def _prepare_data(empty: bool = False) -> Path:
     return data
 
 
+def _prepare_logged_out() -> Path:
+    """有数据但**未登录**的现场（devlog/086）：开发目录副本 + 删掉 `.env`。
+
+    为什么不能直接空目录：未登录提示要验的是"有内容可看时界面怎么标注"——
+    空库连侧栏与列表都没有，量不到"受限功能仍然可见/可用"。
+    删 `.env` 之后后端读不到凭据 ⇒ 真未登录（`config.py` 只认 DATA_DIR 下的 .env）。
+    """
+    data = _prepare_data()
+    env = data / ".env"
+    if env.exists():
+        env.unlink()
+    return data
+
+
 def _first_vtuber(port: int) -> int | None:
     try:
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/vtuber/list", timeout=10) as r:
@@ -156,12 +170,13 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
             "settings": data.get("settings"),
             "scene": data.get("scene"),
             "addv": data.get("addv"),
+            "capabilities": data.get("capabilities"),
             "degraded": data.get("degraded") or [],
             "dom": dom_file,
         }
     return {"mode": None, "views": data, "topbar": None, "calendar": None,
-            "settings": None, "scene": None, "addv": None, "degraded": [],
-            "dom": dom_file}
+            "settings": None, "scene": None, "addv": None, "capabilities": None,
+            "degraded": [], "dom": dom_file}
 
 
 # ── 展示页 hero 药丸签名（P2 分层收敛 A 批次的位级回归护栏）─────────────
@@ -579,6 +594,13 @@ def main() -> int:
              "探针**不点结果行、不点「搜索 B 站」**（那是真收录与真上游调用）。",
     )
     ap.add_argument(
+        "--capabilities",
+        action="store_true",
+        help="只跑一档宽度：**未登录**现场（数据目录副本 + 删 .env）验能力提示 ——"
+             "顶栏「未登录 · N 项受限」入口 + 说明窗（现在能做什么/受限项/去登录），"
+             "并断言受限功能**没有被隐藏**（添加 V 仍能搜、批量浮窗里账号信息与归档仍可用）",
+    )
+    ap.add_argument(
         "--hero-expect",
         default="",
         help="cards 视图 hero 药丸签名的期望 sha256（位级回归护栏）。"
@@ -633,7 +655,9 @@ def main() -> int:
         return 1
 
     WORK.mkdir(parents=True, exist_ok=True)
-    data = _prepare_data(empty=args.first_run)
+    # `--capabilities` 要的是"有数据但未登录"（删 .env），其余模式用开发目录副本；
+    # `--first-run` 用真正空目录（走独立契约）
+    data = _prepare_logged_out() if args.capabilities else _prepare_data(empty=args.first_run)
     be_port, vite_port = _free_port(), _free_port()
 
     be_env = {
@@ -770,6 +794,88 @@ def main() -> int:
                                     f"hero={sc.get('heroAtEnd')!r}）")
                 if not failures:
                     print("  [ok] 场景切换：预取→退场→提交全程落地，侧栏与内容一致")
+            for b in failures:
+                print("   -", b)
+            return 1 if failures else 0
+
+        if args.capabilities:
+            # 未登录能力提示（devlog/086，P2 的验收）：现场是"有数据但没登录"的数据目录副本。
+            # 断言两条相反方向的错法都不犯：
+            #   ① **该说的没说**：顶栏入口/说明窗/受限项/"去登录"缺哪个都算失败；
+            #   ② **过度限制**：受限功能被藏起来或整片禁掉 ——
+            #      用户要的是"未登录也能尽可能用"，所以添加 V 必须**仍能搜出结果**、
+            #      批量浮窗里「账号信息」「归档」必须**仍可点**（只有内容类被标需要登录）。
+            w = widths[0]
+            url = f"http://localhost:{vite_port}{route}?probe=capabilities"
+            print(f"[probe] capabilities @{w} → {url}")
+            res = _run_probe(edge, url, w, args.height, WORK, "capabilities")
+            cp = ((res or {}).get("capabilities") or {})
+            if res and not cp:
+                print(f"  [!] 探针 mode={res.get('mode')!r} 键={sorted(res.keys())}"
+                      f"（新字段需要在 _run_probe 的白名单里登记）")
+            print(f"  顶栏入口={cp.get('hasLimitsBtn')} 文案={cp.get('limitsText')!r} "
+                  f"受限数={cp.get('limitsCount')}")
+            print(f"  说明窗={cp.get('hasLimitsDialog')} 能用项={cp.get('canDoCount')} "
+                  f"受限项={cp.get('limitCount')} {cp.get('limitIds')} "
+                  f"去登录={cp.get('hasLoginCta')} {cp.get('loginCtaText')!r}")
+            print(f"  添加 V：浮窗={cp.get('addVDialogOpened')} 受限提示={cp.get('addVHasLimitHint')} "
+                  f"仍能搜出={cp.get('addVRows')} 行（可点 {cp.get('addVEnabledRows')}）")
+            print(f"  批量浮窗={cp.get('batchDialogOpened')} "
+                  f"全量帖子禁用={cp.get('batchAllPostsDisabled')}"
+                  f"(needs_login={cp.get('batchAllPostsNeedsLogin')}) "
+                  f"更新未归档禁用={cp.get('batchUpdateDisabled')} "
+                  f"归档可用={cp.get('batchArchiveEnabled')} 账号信息可用={cp.get('batchAccountsEnabled')}")
+            if not cp:
+                failures.append(f"@{w} capabilities: 没量到能力提示段（探针未跑完？）")
+            else:
+                if not cp.get("hasLimitsBtn"):
+                    failures.append(f"@{w} capabilities: 顶栏没有「未登录 · N 项受限」入口"
+                                    f"（未登录时用户无从得知限制）")
+                elif not (cp.get("limitsCount") or 0):
+                    failures.append(f"@{w} capabilities: 入口没有受限计数")
+                if not cp.get("hasLimitsDialog"):
+                    failures.append(f"@{w} capabilities: 点了入口没打开说明窗")
+                else:
+                    if (cp.get("canDoCount") or 0) <= 0:
+                        failures.append(f"@{w} capabilities: 说明窗**没列『现在能做什么』**"
+                                        f"（只列不能做的等于劝退）")
+                    if (cp.get("limitCount") or 0) < 2:
+                        failures.append(f"@{w} capabilities: 受限项只有 {cp.get('limitCount')} 条"
+                                        f"（未登录至少应有内容抓取 + 微博两项）")
+                    ids = cp.get("limitIds") or []
+                    if "fetch_posts" not in ids:
+                        failures.append(f"@{w} capabilities: 受限项里没有 fetch_posts：{ids}")
+                    if not cp.get("hasLoginCta"):
+                        failures.append(f"@{w} capabilities: 说明窗没有「去登录」入口")
+                # ② 过度限制的反面断言
+                if not cp.get("addVDialogOpened"):
+                    failures.append(f"@{w} capabilities: 未登录时「添加 V」浮窗打不开"
+                                    f"（功能被隐藏了？）")
+                elif not (cp.get("addVRows") or 0):
+                    failures.append(f"@{w} capabilities: 未登录时添加 V 搜不出任何候选"
+                                    f"（本地搜索与匿名检索都该可用）")
+                elif not (cp.get("addVEnabledRows") or 0):
+                    failures.append(f"@{w} capabilities: 添加 V 的结果行全被禁用"
+                                    f"（未登录仍应能收录：只有内容抓取受限）")
+                if not cp.get("addVHasLimitHint"):
+                    failures.append(f"@{w} capabilities: 添加 V 浮窗没说明"
+                                    f"「新 V 的投稿与动态要登录后才抓取」")
+                if not cp.get("batchDialogOpened"):
+                    failures.append(f"@{w} capabilities: 批量任务浮窗打不开")
+                else:
+                    if not cp.get("batchAllPostsDisabled") or cp.get("batchAllPostsNeedsLogin") != "1":
+                        failures.append(f"@{w} capabilities: 未登录时「全量抓取帖子」没标需要登录/没禁用"
+                                        f"（点了会被后端 403）")
+                    if not cp.get("batchUpdateDisabled"):
+                        failures.append(f"@{w} capabilities: 未登录时「更新未归档帖」没禁用")
+                    if not cp.get("batchArchiveEnabled"):
+                        failures.append(f"@{w} capabilities: 未登录时「归档旧帖」被禁用了"
+                                        f"（它不需要登录，属于过度限制）")
+                    if not cp.get("batchAccountsEnabled"):
+                        failures.append(f"@{w} capabilities: 未登录时「账号信息」被禁用了"
+                                        f"（实测匿名可用，属于过度限制）")
+                if not failures:
+                    print("  [ok] 未登录能力提示：该说的都说了，且功能没被过度限制")
             for b in failures:
                 print("   -", b)
             return 1 if failures else 0

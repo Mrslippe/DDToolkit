@@ -706,6 +706,101 @@ export async function runUiProbe(): Promise<void> {
     return
   }
 
+  // 未登录能力提示（`?probe=capabilities`，devlog/086；配合 `ui_probe.py --capabilities`）：
+  // 现场 = 开发数据目录副本 **删掉 .env**（有数据、没登录）—— 这样才有侧栏/列表可点。
+  //
+  // 要盯的是**两条相反**的错法：
+  //   ① 该说的没说：顶栏没有"未登录 · N 项受限"入口、说明窗列不出受限项与"去登录"；
+  //   ② **过度限制**：受限功能被藏起来或整个界面不可用 —— 未登录明明还能浏览/搜索/收录，
+  //      把它们禁掉就是把"未登录可用范围"缩水了（用户要的恰恰相反）。
+  if (mode === 'capabilities') {
+    const result: Record<string, unknown> = {}
+    const waitFor = async (fn: () => unknown, ms = 4000) => {
+      const t0 = performance.now()
+      while (performance.now() - t0 < ms) {
+        const v = fn()
+        if (v) return v
+        await sleep(100)
+      }
+      return null
+    }
+    const setVal = (el: HTMLInputElement, v: string) => {
+      const desc = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el) as object, 'value')
+      desc?.set?.call(el, v)
+      el.dispatchEvent(new Event('input', { bubbles: true }))
+    }
+    const killAnim = document.createElement('style')
+    killAnim.textContent =
+      '*, *::before, *::after { animation: none !important; transition: none !important; }'
+    document.head.appendChild(killAnim)
+
+    // ① 顶栏入口
+    const limitsBtn = (await waitFor(
+      () => document.querySelector('.topbar-limits'))) as HTMLElement | null
+    result.hasLimitsBtn = !!limitsBtn
+    result.limitsText = (limitsBtn?.textContent || '').trim()
+    result.limitsCount = limitsBtn?.getAttribute('data-capability-limits') ?? null
+
+    // ② 说明窗：先列"现在能做什么"，再列受限项，底部有"去登录"
+    if (limitsBtn) {
+      limitsBtn.click()
+      const dlg = (await waitFor(
+        () => document.querySelector('.cap-limits-dialog'))) as HTMLElement | null
+      result.hasLimitsDialog = !!dlg
+      result.canDoCount = dlg?.querySelectorAll('.cap-limits-ok').length ?? -1
+      result.limitCount = dlg?.querySelectorAll('.cap-limits-item').length ?? -1
+      result.limitIds = [...(dlg?.querySelectorAll('[data-limit-id]') || [])]
+        .map((n) => n.getAttribute('data-limit-id'))
+      result.hasLoginCta = !!dlg?.querySelector('.cap-login-cta')
+      result.loginCtaText = (dlg?.querySelector('.cap-login-cta')?.textContent || '').trim()
+      result.limitNoteSample = (dlg?.querySelector('.cap-limits-note')?.textContent || '').slice(0, 60)
+      dlg?.querySelector<HTMLElement>('[data-slot="dialog-close"]')?.click()
+      await waitFor(() => !document.querySelector('.cap-limits-dialog'), 3000)
+    }
+
+    // ③ 添加 V：**功能没被隐藏** —— 浮窗能开、有受限说明、而且**仍然能搜**
+    document.querySelector<HTMLElement>('.list-add-btn')?.click()
+    const av = (await waitFor(() => document.querySelector('.av-dialog'))) as HTMLElement | null
+    result.addVDialogOpened = !!av
+    result.addVHasLimitHint = !!av?.querySelector('[data-cap-limit-hint]')
+    result.addVHintText = (av?.querySelector('[data-cap-limit-hint]')?.textContent || '').slice(0, 50)
+    const input = av?.querySelector<HTMLInputElement>('.av-input')
+    if (input) {
+      setVal(input, 'a')
+      await waitFor(() => document.querySelectorAll('.av-row').length, 5000)
+      result.addVRows = document.querySelectorAll('.av-row').length
+      result.addVEnabledRows = [...document.querySelectorAll('.av-row')]
+        .filter((r) => !r.hasAttribute('disabled')).length
+    }
+    av?.querySelector<HTMLElement>('[data-slot="dialog-close"]')?.click()
+    await waitFor(() => !document.querySelector('.av-dialog'), 3000)
+
+    // ④ 批量任务：内容类**标注需要登录并禁用**，账号信息/归档**仍然可用**（不许一刀切）
+    document.querySelector<HTMLElement>('.list-pull-btn')?.click()
+    await waitFor(() => document.querySelector('[data-batch-action]'), 4000)
+    const act = (k: string) => document.querySelector<HTMLElement>(`[data-batch-action="${k}"]`)
+    result.batchDialogOpened = !!act('all-posts')
+    result.batchAllPostsDisabled = !!act('all-posts')?.hasAttribute('disabled')
+    result.batchAllPostsNeedsLogin = act('all-posts')?.getAttribute('data-needs-login')
+    result.batchUpdateDisabled = !!act('update-unarchived')?.hasAttribute('disabled')
+    result.batchArchiveEnabled = !!act('archive') && !act('archive')!.hasAttribute('disabled')
+    result.batchAccountsEnabled = !!act('accounts') && !act('accounts')!.hasAttribute('disabled')
+    result.batchHintText = (document.querySelector('.cap-inline-hint')?.textContent || '').slice(0, 60)
+    document.querySelector<HTMLElement>('.cap-limits-dialog [data-slot="dialog-close"]')
+    const batchClose = document.querySelector<HTMLElement>('[role="dialog"] [data-slot="dialog-close"]')
+    batchClose?.click()
+    await sleep(250)
+    result.batchClosed = !document.querySelector('[data-batch-action]')
+
+    const pre = document.createElement('pre')
+    pre.id = 'ui-probe'
+    pre.textContent = JSON.stringify({ mode: 'capabilities', views: [], degraded,
+                                       capabilities: result })
+    document.body.appendChild(pre)
+    document.title = 'UI_PROBE_DONE'
+    return
+  }
+
   // 档案设置弹窗（`?probe=settings`，2026-09-13，devlog/072；交互判据 devlog/075）：
   // 这个弹窗一直在探针覆盖面**之外**（devlog/067 记过"只能靠肉眼"），而它恰恰
   // 出过三类问题：① 覆盖式滚动条压住输入框右缘；② 面板/浮层越界被滚动体**静默裁掉**

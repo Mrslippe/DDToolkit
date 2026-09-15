@@ -337,6 +337,7 @@ flowchart LR
 | 频率测算 | 16 账号一轮 ≈ 32 req / 5min ≈ 7 req/min（平均安全，突发靠批次休息摊平） |
 | 并发影响 | 综合档两条流并发时，重叠窗口内同平台瞬时速率约 2×（仍低于经验阈值）；平台内并发不放大单平台速率 |
 | 风控续抓 | 列表页触发风控后同页重试上限 `_PAGE_RETRIES=2` |
+| **匿名调用被硬拒** | 未登录调空间内容接口（`arc/search`、动态 `feed/space`）→ `-352` 后转 **HTTP 412 `request was banned`**（IP 级、会持续）；**不连累登录态**。见 §3.9 |
 
 ### 3.6 删除检测（墓碑机制，v0.5.1）
 
@@ -381,6 +382,33 @@ flowchart LR
 T0 的进度反馈就是这条通道（无进度条、无胶囊）。
 
 ---
+
+### 3.9 未登录能力矩阵与内容抓取闸门（2026-09-15，devlog/086）
+
+用户要"未登录也能尽可能用所有功能，并明确告知限制"。事实边界由**实测**给出
+（`scripts/capability_matrix.py`，两态逐接口、一进程一请求）：
+
+| 能力 | 未登录 | 依据 |
+|---|---|---|
+| 本地浏览/搜索/筛选/归档、档案视图 | ✅ | 纯本地 |
+| 第三方历史（danmakus/zeroroku） | ✅ | 公开接口 |
+| 添加 V 的检索（名称模糊搜 / UID 直查） | ✅ | 匿名 `nav` 也下发 `wbi_img`；`search/type` 匿名 `code=0` |
+| 账号信息 / 粉丝数 / 直播状态 | ⚠️ 间歇 | `acc/info` 实测一次 `code=0`、一次 `-352`；`stat`/`live` 稳定 |
+| **抓投稿与动态内容** | ❌ **要登录** | 匿名 `arc/search` → `-352`；重复后 **412 封禁**；动态流**直接 412** |
+| 微博内容 | ❌ **要登录** | 匿名 `mymblog` → `302` 登录页 |
+
+三条实现纪律：
+
+1. **`wbi` 分层**：`get_wbi_keys(allow_anonymous=…)` —— 检索路径放行匿名签名，
+   **抓取路径保持严格默认**（未登录快速明确失败）；密钥来源记录在 `wbi_status()` 里。
+2. **闸门在入口**（`services/capabilities.content_fetch_allowed()`）：未登录时
+   `async_fetch_posts` / `async_fetch_first_screen` **一次请求都不发**（返回 `login_required`），
+   动态名单整条跳过（与微博名单同一套 `_lane_skip_reason`），5 个内容端点直接 **403 + 原因**。
+   理由不只是省配额：匿名硬撞会把 IP 弄脏，代价由用户承担。
+3. **能力是策略，不是断言**：`services/capabilities.py::FEATURES` 是**我们承诺什么**，
+   `tests/fixtures/capability_matrix.json` 是**平台当时给什么**；`tests/test_capabilities.py`
+   双向约束（实测可用 ⇒ 不得标 `requires_login`；被 412 硬拒 ⇒ 必须标）——
+   平台一变，用例先红，逼我们重测再改承诺。
 
 ## 4. 数据来源地图
 

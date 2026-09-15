@@ -524,3 +524,46 @@ export interface QrCheckResult {
   status: 'waiting' | 'scanned' | 'confirmed' | 'expired' | 'failed'
   detail?: string
 }
+
+// ── 能力矩阵（GET /capabilities，devlog/086）──────────────────────────
+//
+// 三态：`full` 完整可用 · `degraded` 能用但完整性/稳定性打折 · `requires_login` 平台限制。
+// 关键口径：**未登录不等于不可用** —— 本地浏览、检索、粉丝数、直播状态、第三方历史都能用；
+// 只有"抓投稿/动态"这类内容接口被平台按 IP 拦（匿名 412），所以那些点必须**标注**而不是隐藏。
+
+export type CapabilityState = 'full' | 'degraded' | 'requires_login'
+
+export interface CapabilityFeature {
+  id: string
+  label: string
+  /** 依赖哪个平台的登录态；null = 不需要登录 */
+  platform: string | null
+  /** 未登录时的固有状态（与 `state` 不同：`state` 是当前登录态下的实际状态） */
+  anon_state: CapabilityState
+  anon_note: string
+  login_note: string
+  /** 实测依据（含日期）—— 展示在详情里，别让"限制"变成没来由的一句话 */
+  evidence: string
+  /** 当前状态 */
+  state: CapabilityState
+  /** 给用户看的说明（当前状态下该说什么） */
+  note: string
+}
+
+export interface CapabilityLimit {
+  id: string
+  label: string
+  state: CapabilityState
+  note: string
+}
+
+export interface Capabilities {
+  bilibili_logged_in: boolean
+  weibo_logged_in: boolean
+  /** WBI 密钥状态；`anonymous=true` 表示密钥来自匿名 nav（未登录也能搜） */
+  wbi: { cached: boolean; anonymous: boolean | null }
+  features: CapabilityFeature[]
+  /** 非 full 的那些 —— 前端渲染提示只读它 */
+  limited: CapabilityLimit[]
+  measured_at: string
+}

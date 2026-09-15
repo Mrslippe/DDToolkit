@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Copy, Loader2, LogIn, Minus, Square, X } from 'lucide-react'
 import Logo from './common/Logo'
 import LoginDialog from './LoginDialog'
+import CapabilityLimits from './CapabilityLimits'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -16,6 +17,7 @@ import { useIsMaximized } from '../hooks/useIsMaximized'
 import { setFetchBusy } from '../fetchBusy'
 import { isFirstRun } from '../bootState'
 import { dispatchFetchIdle, type FetchIdleKind } from '../utils/fetchIdle'
+import { useCapabilities, refreshCapabilities } from '../hooks/useCapabilities'
 import { api } from '../api/api'
 import type { AccountSnapshot, AuthStatus, FetchStatus, PostFetchStatus } from '../api/types'
 import './../styles/layout.css'
@@ -67,6 +69,8 @@ export default function TopBar() {
   const [pillMsg, setPillMsg] = useState<string | null>(null)
   // 登录：浮窗开关 + 两平台登录态（约 60s 轮询一次，供入口徽章提示）
   const [loginOpen, setLoginOpen] = useState(false)
+  /** 能力矩阵（未登录时哪些受限）——顶栏入口 + 各浮窗提示共用（devlog/086） */
+  const { caps } = useCapabilities()
   const [auths, setAuths] = useState<{ bili: AuthStatus | null; weibo: AuthStatus | null }>({
     bili: null,
     weibo: null,
@@ -437,6 +441,8 @@ export default function TopBar() {
 
       {/* 登录入口：B 站会话过期时红点徽章提示扫码 */}
       <div className="topbar-login">
+        {/* 未登录/受限时的能力入口（devlog/086；全可用时不渲染） */}
+        <CapabilityLimits caps={caps} onLogin={() => setLoginOpen(true)} />
         <button
           className="topbar-login-btn"
           title={
@@ -479,7 +485,15 @@ export default function TopBar() {
         </button>
       </div>
 
-      <LoginDialog open={loginOpen} onOpenChange={setLoginOpen} />
+      {/* 关窗即刷新能力矩阵：刚扫码成功的用户不该还看到"未登录 · 受限"
+          （提示必须跟着登录态走，否则用户会以为登录没生效；devlog/086） */}
+      <LoginDialog
+        open={loginOpen}
+        onOpenChange={(o) => {
+          setLoginOpen(o)
+          if (!o) refreshCapabilities()
+        }}
+      />
 
       {/* 全量抓取完成报告：常驻对话框，仅「知道了」可关闭（AlertDialog 不响应外部点击/ESC） */}
       <AlertDialog

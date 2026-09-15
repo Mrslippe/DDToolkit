@@ -41,7 +41,9 @@
 | **时间范围 / date range** | 帖子发布时间过滤（`date_from`/`date_to`，本地日期串，`to` = 次日零点排他即含当天） | `utils/dateRange.ts`；`common/DateRangePicker.tsx` | 双月历 + 预设（量纲**含今天**），草稿制确认后生效 |
 | **候选池 / pool** | 离线待选 VTuber 索引（`vtubers.csv`，快照式名单） | `services/pool.py`；`GET /vtuber/pool/search` | 收录（adopt）的**池内**入口（R11 起不再是唯一入口）；**索引来源不在池里**，要走池外通道（见下） |
 | **索引来源 / index origin** | `thirdparty_vtubers`（danmakus 周级索引）命中、但 **`vtubers.csv` 里没有**的条目 —— 正是"池快照之后的新 V" | `GET /vtuber/pool/search` 返回项 `origin='index'` | 收录必须走池外通道（`source='bilibili'`）；标成 `pool` 会 404（devlog/083 §十一） |
-| **B 站直查 / bili search** | 池外收录通道：按 uid 精确查（`acc/info`）或按名称模糊搜（`wbi/search/type`） | `services/bili_search.py`；`GET /vtuber/bili/search` | **只在显式触发时**打上游（devlog/083）；搜不到 uid，uid 走精确通道；**需要 B 站登录态**（WBI 密钥要走 `nav`，未登录 -101 → `not_logged_in`） |
+| **B 站直查 / bili search** | 池外收录通道：按 uid 精确查（`acc/info`）或按名称模糊搜（`wbi/search/type`） | `services/bili_search.py`；`GET /vtuber/bili/search` | **只在显式触发时**打上游（devlog/083）；搜不到 uid，uid 走精确通道；**未登录也能用**（匿名 WBI 签名，devlog/086） |
+| **能力矩阵 / capabilities** | 本机"未登录/已登录"两态下各能用什么；三态 `full`/`degraded`/`requires_login` | `services/capabilities.py`；`GET /capabilities`；实测脚本 `scripts/capability_matrix.py` | 策略 vs 实测**双向契约**（`tests/test_capabilities.py`）：实测可用 ⇒ 不得标 requires_login；被 412 硬拒 ⇒ 必须标 |
+| **内容抓取闸门** | 未登录时**不发起**投稿/动态抓取（连 DB 与网络都不碰），端点直接 403 | `capabilities.content_fetch_allowed()`；`scheduler.async_fetch_posts` / `_lane_skip_reason` | 匿名硬撞会被平台 412 封 IP；账号信息/粉丝数/直播状态**不挡** |
 | **在线检索（前端两个来源）** | 添加 V 浮窗里「本地候选」（输入即防抖）与「B 站」（回车/按钮才发）两种触发方式 | `components/AddVtuberDialog.tsx`；`utils/addVtuberSearch.ts` | 敲键**不打上游**由探针 `--add-v` 守着 |
 | **池外收录校验** | `source='bilibili'` 时服务端必须自己打一次 `acc/info` 校验，客户端给的名字不算数 | `routers/vtuber.py::adopt_vtuber` | 非 bilibili 平台走池外 → 400；"确实没这个人" → 404，"没问到"（未登录/网络/风控）→ **503** |
 | **收录 / adopt** | 把 V+账号入库，并立刻抓账号信息 + **首屏内容** + 回填第三方历史 | `routers/vtuber.py::adopt_vtuber`、**`_adopt_background`** | 添加账号走同款（只抓新账号） |
@@ -150,7 +152,8 @@
 | **图片组件** | 直连 → 代理 → 占位三态 | `components/common/ProxyImage.tsx` | 微博图床直接走代理 |
 | **API 客户端** | 统一 `request()` + `setApiBase()` | `api/api.ts`；类型 `api/types.ts` | 桌面端注入 sidecar 端口 |
 | **设计令牌** | 颜色/圆角/阴影/字体变量 | `styles/tokens.css` | UI-MAP §D 有全表 |
-| **UI 探针** | `?probe=1` 下的机器可判定布局自检 | `dev/probe.ts` + `scripts/ui_probe.py` | 6 组不变量（含 `--add-v`：本地/上游来源分流） |
+| **UI 探针** | `?probe=1` 下的机器可判定布局自检 | `dev/probe.ts` + `scripts/ui_probe.py` | 7 组不变量（含 `--add-v`：本地/上游来源分流；`--capabilities`：未登录提示**存在**且功能**未过度限制**） |
+| **未登录提示 / 能力角标** | 顶栏「未登录 · N 项受限」入口 + 说明窗（先列"现在能做什么"再列受限项 + 去登录）；受限功能**照常可见**，只标不藏 | `hooks/useCapabilities.ts`、`utils/capabilities.ts`、`components/CapabilityLimits.tsx`；`.topbar-limits` / `.cap-limits-dialog` / `.cap-need-login` / `.cap-inline-hint` | 探针 `ui_probe.py --capabilities`（现场 = 数据副本删 `.env`） |
 | **添加 V 浮窗** | 收录入口浮窗：本地候选（池 + 弹幕索引）与 B 站在线检索两个来源 | `components/AddVtuberDialog.tsx`；`.av-*`（`styles/posts.css`） | 探针 `--add-v`；纯逻辑在 `utils/addVtuberSearch.ts` |
 
 ---
@@ -249,6 +252,15 @@
     —— 同一批里出现过两次：NSIS「打平」正则的样本漏了目标路径的引号（永远返回 0 行），
     "名字非空"的断言被 `... or str(mid)` 兜底喂成了 uid。真实数据放 `tests/fixtures/`
     （由 `scripts/smoke_upstream.py --capture` 从真上游/真构建产物刷），新判据必须有一条吃它。
+14. **未登录 ≠ 不可用，但内容抓取必须登录**（2026-09-15，devlog/086）：
+    匿名 `nav` **也下发 `wbi_img`**（WBI 密钥不随登录态变）⇒ 检索/账号信息/粉丝数/直播状态
+    未登录都能用；而**空间内容接口**（`arc/search`、动态 `feed/space`）匿名会被平台
+    `-352` 之后 **HTTP 412 `request was banned`**（IP 级、会持续，**不连累登录态**）。
+    因此：`wbi.sign_params(allow_anonymous=True)` **只给检索路径**；
+    内容抓取一律过 `services/capabilities.content_fetch_allowed()` 闸门 ——
+    未登录时**一次请求都不发**（`stop_reason="login_required"`，5 个内容端点 403），
+    而不是"试了失败"（那会白耗配额并弄脏 IP）。能力边界由
+    `scripts/capability_matrix.py` 两态实测，落 `tests/fixtures/capability_matrix.json`。
 
 ---
 
