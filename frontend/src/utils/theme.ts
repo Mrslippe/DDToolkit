@@ -75,3 +75,28 @@ export function watchSystemTheme(
     return () => {}
   }
 }
+
+/**
+ * 外观页的三张卡片（R17）：浅色 / 深色 / 跟随系统。
+ *
+ * 参考图里三张卡都能点，**但我们不能** —— 深色样式还没写（见 `DARK_IMPLEMENTED`）。
+ * 按项目一贯口径（受限功能**只标不藏**）：深色那张**照样显示**，但禁用 +
+ * 写明"尚未实现"，而不是把它藏起来假装这个选项不存在。深色落地时这里自动解除禁用
+ * （`disabled: !DARK_IMPLEMENTED`），前端其余部分不用改。
+ */
+export interface ThemeCard {
+  value: ThemePref | 'dark'
+  label: string
+  disabled: boolean
+  /** 卡片下方的小字说明（空 = 不显示） */
+  note: string
+}
+
+export function themeCards(): ThemeCard[] {
+  return [
+    { value: 'light', label: '浅色', disabled: false, note: '' },
+    { value: 'dark', label: '深色', disabled: !DARK_IMPLEMENTED,
+      note: DARK_IMPLEMENTED ? '' : '尚未实现' },
+    { value: 'system', label: '跟随系统', disabled: false, note: '' },
+  ]
+}

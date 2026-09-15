@@ -3,6 +3,7 @@ import {
   buildPayload,
   dirtyKeys,
   fieldError,
+  pairProblems,
   parseField,
   valueOf,
   type RangeSpec,
@@ -93,5 +94,54 @@ describe('草稿合并与提交体', () => {
     const draft = { C: false }
     expect(dirtyKeys(specs, draft)).toEqual(['C'])
     expect(buildPayload(['C'], draft)).toEqual({ C: false })
+  })
+})
+
+/**
+ * 跨字段约束（R17）：设置窗口分成多页之后，这个冲突必须能在**当前页**看出来 ——
+ * 否则用户改完上限翻到别的页点保存，只会拿到一个看不懂的底部报错。
+ * 真判定在后端（`runtime_settings.PAIRS` + 400），这里是同源的提前提示。
+ */
+describe('跨字段：上限不能小于下限', () => {
+  it('上限 < 下限 → 报在"上限"那一行，并带上两个数', () => {
+    const out = pairProblems({
+      REQUEST_INTERVAL_MIN: 5, REQUEST_INTERVAL_MAX: 2,
+    })
+    expect(out).toHaveLength(1)
+    expect(out[0].key).toBe('REQUEST_INTERVAL_MAX')
+    expect(out[0].message).toContain('不能小于下限')
+    expect(out[0].message).toContain('2')
+    expect(out[0].message).toContain('5')
+  })
+
+  it('相等是合法的（闭区间，"固定间隔"是一种用法）', () => {
+    expect(pairProblems({ REQUEST_INTERVAL_MIN: 3, REQUEST_INTERVAL_MAX: 3 })).toEqual([])
+  })
+
+  it('收录间隔那一对也管', () => {
+    const out = pairProblems({
+      MANUAL_FAST_INTERVAL_MIN: 3, MANUAL_FAST_INTERVAL_MAX: 1,
+    })
+    expect(out.map((p) => p.key)).toEqual(['MANUAL_FAST_INTERVAL_MAX'])
+  })
+
+  it('只给了一个键 / 清空 / 非法值 → 交给 fieldError，不在这里报（避免双份红字）', () => {
+    expect(pairProblems({ REQUEST_INTERVAL_MIN: 5 })).toEqual([])
+    expect(pairProblems({ REQUEST_INTERVAL_MIN: '', REQUEST_INTERVAL_MAX: 2 })).toEqual([])
+    expect(pairProblems({ REQUEST_INTERVAL_MIN: 5, REQUEST_INTERVAL_MAX: '' })).toEqual([])
+    expect(pairProblems({ REQUEST_INTERVAL_MIN: Number.NaN, REQUEST_INTERVAL_MAX: 2 })).toEqual([])
+  })
+
+  it('布尔键不会被当成数字比较', () => {
+    expect(pairProblems({ EXTERNAL_ENABLED: true })).toEqual([])
+  })
+
+  it('两对同时冲突 → 两条都报（不互相掩盖）', () => {
+    const out = pairProblems({
+      REQUEST_INTERVAL_MIN: 5, REQUEST_INTERVAL_MAX: 1,
+      MANUAL_FAST_INTERVAL_MIN: 4, MANUAL_FAST_INTERVAL_MAX: 2,
+    })
+    expect(out.map((p) => p.key).sort())
+      .toEqual(['MANUAL_FAST_INTERVAL_MAX', 'REQUEST_INTERVAL_MAX'])
   })
 })

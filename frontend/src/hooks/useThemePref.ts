@@ -47,25 +47,26 @@ export function useThemePref() {
   useEffect(() => watchSystemTheme(setSystemDark), [])
 
   // 读偏好（失败保持默认浅色，不阻塞界面）
+  const load = useCallback(async () => {
+    try {
+      const r = await api.getPrefs()
+      const t = r.values.theme
+      if (t === 'light' || t === 'system') setPref(t)
+      setSpec((r.specs ?? []).find((s) => s.key === 'theme') ?? null)
+    } catch {
+      /* 后端不可达：按浅色显示，设置窗口里会给出读取失败提示 */
+    } finally {
+      setLoaded(true)
+    }
+  }, [])
+
   useEffect(() => {
     let cancelled = false
-    void (async () => {
-      try {
-        const r = await api.getPrefs()
-        if (cancelled) return
-        const t = r.values.theme
-        if (t === 'light' || t === 'system') setPref(t)
-        setSpec((r.specs ?? []).find((s) => s.key === 'theme') ?? null)
-      } catch {
-        /* 后端不可达：按浅色显示，设置窗口里会给出读取失败提示 */
-      } finally {
-        if (!cancelled) setLoaded(true)
-      }
-    })()
+    void (async () => { if (!cancelled) await load() })()
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [load])
 
   /** 改主题：先乐观应用（界面立刻变），落库失败再退回并抛出（调用方提示） */
   const setTheme = useCallback(async (next: ThemePref) => {
@@ -79,5 +80,5 @@ export function useThemePref() {
     }
   }, [pref])
 
-  return { pref, setTheme, resolved, caveat, spec, loaded }
+  return { pref, setTheme, resolved, caveat, spec, loaded, reload: load }
 }

@@ -179,28 +179,42 @@ DOM 契约（探针 `ui_probe --status-island` 直接查）：`.si-island`（`.o
 **2026-09-08 用户：未接线的占位图标（用户 / 日历 / 刷新）已删除**——避免点了没反应的假入口，
 功能落地时再加回；**2026-09-15（R14a，devlog/091）齿轮按这条口径加回**（设置界面真的能用 HTTP PUT 落库了）。
 
-### A2-a. 应用设置弹窗 `<AppSettingsDialog>`（components/AppSettingsDialog.tsx，2026-09-15 R14a devlog/091）
+### A2-a. 应用设置弹窗 `<AppSettingsDialog>`（components/AppSettingsDialog.tsx，2026-09-15 R14a/R14b；**R17 改左右两栏** devlog/094）
 
 齿轮打开的独立弹窗（Radix Dialog）。**与「档案设置」是两回事**：那个是单个 V 的资料
 （`.vd-*`），这个是应用级参数（`.aps-*`）。
 
+```
+┌ 设置 ─────────────────────────────────────────────── ✕ ┐   ← 头部驻留（标题 + 说明）
+│ ┌ nav 168 ─┐┌ pane（flex:1）─────────────────────────┐ │
+│ │▍外观   1 ││ 外观  立即生效        [恢复本类默认]     │ │   ← 分类头（驻留）
+│ │ 抓取节奏7││ …当前分类的字段（OverlayScroll）…        │ │
+│ │ 关于  10 ││                                        │ │
+│ └──────────┘└────────────────────────────────────────┘ │
+│ 全部为默认值                    [恢复全部默认] [保存]     │   ← 底部操作条（整窗）
+└──────────────────────────────────────────────────────────┘
+```
+
 | 名称 | 类名 / 属性 | 说明 |
 |---|---|---|
-| 弹窗 | `.aps-settings`（`data-testid="app-settings-dialog"`） | 头部驻留 + OverlayScroll 内容区 + 底部操作条 |
-| 分区 | `.aps-section` / `.aps-section-title` + `.aps-hint` | 分区标题右侧带**生效时机**（"下一轮生效（不用重启）"，由后端下发） |
-| 可写项 | `.aps-row[data-setting="KEY"]` | 一行 = 说明（左）+ 控件（右）+ 范围提示；`changed` 时挂 `.aps-badge`（已改过） |
-| 数值控件 | `.aps-input` + `.aps-unit` | `min/max/step` 来自后端 spec；`.aps-field-error` 是即时校验红字 |
-| 开关控件 | `.aps-switch`（`role="switch"` + `data-value`） | 布尔项（第三方数据三个开关） |
-| 只读信息 | `.aps-info`（版本/数据目录/库/端口/迁移 head/日志/PID）+ `.aps-readonly-item` | 只读项**逐条带理由**（`.aps-readonly-why`）——用户看到"不能改"必须同时看到为什么 |
-| 外观 | `.aps-radio-group` / `.aps-radio[data-theme-option]`（`role="radio"`） | 主题：浅色 / 跟随系统（R14b）。**立即生效**（无"下一轮"概念），由 `hooks/useThemePref` 落 `prefs.theme`；系统深色而深色未实现时挂 `.aps-range[data-theme-caveat]` 如实说明 |
-| 底部 | `.aps-foot-state` / `.aps-foot-actions` | 左边状态（"已改过 N 项 · 待保存 M 项"），右边「全部恢复默认」「保存」 |
+| 弹窗 | `.aps-settings`（`data-testid="app-settings-dialog"`） | **760 × min(600, 100vh−72)**；`max-width: calc(100vw−48px)`；`padding: 0`（两栏自己撑满），头/脚驻留 —— 与 `.lc-dlg` 同构 |
+| 左栏 | `.aps-nav`（`data-testid="aps-nav"`，`role="tablist"` `aria-orientation="vertical"`） | 宽 **168**，底色 `--c-bg-list` + 右缘发丝线；↑↓/Home/End 移动（自动激活），roving `tabIndex` |
+| 导航项 | `.aps-nav-item`（`data-nav="<外观\|分组名\|关于>"`、`data-nav-active`、`data-nav-dirty`） | 高 34、图标 15px、右侧计数；**选中态 = 左缘 3px 主色竖条 + 浅粉底**（`.vtuber-item.active` 那套语言）；`data-nav-dirty="1"` 时挂 `.aps-nav-dot`（该分类有未保存改动） |
+| 右栏 | `.aps-pane`（`data-testid="aps-pane"`、`data-pane`，`role="tabpanel"`） | **只渲染当前分类**（分页，不是隐藏）；分类头 `.aps-pane-head` 带生效时机 + 「恢复本类默认」（`.aps-reset-one`，只填草稿不落库） |
+| 外观页 | `.aps-theme-cards` / `.aps-theme-card[data-theme-option][data-theme-disabled]` | 三张卡片：**浅色 / 深色 / 跟随系统**。深色卡片 `disabled` + `.aps-theme-note`（"尚未实现"）—— **只标不藏**；系统是深色时下方 `.aps-range[data-theme-caveat]` 说明 |
+| 字段行 | `.aps-row[data-setting="KEY"]` + `.aps-input` / `.aps-switch` / `.aps-badge` / `.aps-field-error` | **R14a 的控件一个都没改**，R17 只换外壳；跨字段冲突（上限<下限）报在"上限"那一行（`[data-pair="1"]`） |
+| 关于页 | `.aps-info` + `.aps-readonly-item` | 只读信息（版本/数据目录/库/端口/迁移 head/日志/PID）+ 10 条只读项**逐条带理由**（`.aps-readonly-why`）；**该页没有任何可写控件** |
 
-**三条口径**：① 范围/单位/生效时机**全部来自后端** `GET /settings`（界面不抄阈值，否则两边分叉）；
-② 可热更与只读**摆在一起**讲清楚（只读区逐条写理由）；③ 写路径唯一 —— `PUT /settings`，
-前端只做"提前告诉你会被拒"的即时校验，真判定在后端（越界/上限小于下限一律 400）。
+**四条口径**：① 范围/单位/生效时机**全部来自后端** `GET /settings`；② 可热更与只读分开摆、
+只读区逐条写理由；③ 写路径唯一 —— `PUT /settings`，前端只做提前提示；
+④ **导航是数据驱动的**：中间几项由 `specs[].group` 生成（外观固定首、关于固定尾），
+后端加一组参数界面自动多一项（`utils/settingsNav.ts` 有单测，探针拿导航标签与 API 分组对账）。
+
+**状态语义**：草稿**跨分类保留**（切页不丢，左栏圆点提示）；外观**立即生效**、
+抓取参数**下一轮生效**；底部「恢复全部默认」= 抓取参数 + 主题（前端打两个已有端点）。
 
 ⚠️ 与 `.vd-settings` 同一个坑：**不要**给这两个类加 `position: relative`（会盖掉弹窗内容体的
-`.fixed`，整块飘出视口）。探针：`python scripts/ui_probe.py --app-settings`。
+`.fixed`，整块飘出视口）。探针：`python scripts/ui_probe.py --app-settings`（`--shot` 可出视觉存档）。
 
 ### A2-b. 主题与深色钩子（utils/theme.ts + hooks/useThemePref.ts，2026-09-15 R14b devlog/092）
 

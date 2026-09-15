@@ -68,3 +68,46 @@ export function buildPayload(
   }
   return out
 }
+
+/**
+ * 跨字段约束（R17）：**与后端 `runtime_settings.PAIRS` 同一套**，前端这层只是
+ * "提前提示 + 拦住保存按钮"，**真判定仍在后端**（越界/跨字段一律 400，detail 是中文原因）。
+ *
+ * 为什么值得在前端也写一遍：R17 起设置窗口分成多页，跨字段冲突（上限 < 下限）
+ * 涉及的两个字段在**同一页**、但用户可能已经翻到别的页去点保存 —— 后端报错会落在
+ * 底部错误条上，而那一页看不见。有这一层，"上限不能小于下限"就会出现在出问题的那一行。
+ *
+ * `[被约束的键, 依赖的键, 说明]`：约束是"第一个键不能小于第二个键"。
+ */
+export const PAIRS: [string, string, string][] = [
+  ['REQUEST_INTERVAL_MAX', 'REQUEST_INTERVAL_MIN', '账号间隔上限不能小于下限'],
+  ['MANUAL_FAST_INTERVAL_MAX', 'MANUAL_FAST_INTERVAL_MIN', '收录间隔上限不能小于下限'],
+]
+
+export interface PairProblem {
+  /** 报在哪一行（＝第一个键，也就是"上限"那一行） */
+  key: string
+  message: string
+}
+
+/**
+ * 在**合并后的最终值**上查跨字段冲突。
+ * `values` 要给"当前显示值"（草稿优先），这样用户改到一半就能看到提示；
+ * 任一键拿不到合法数字（清空/非法中间态）时跳过 —— 那种情况已由 `fieldError` 报了。
+ */
+export function pairProblems(
+  values: Record<string, DraftVal>,
+): PairProblem[] {
+  const out: PairProblem[] = []
+  for (const [higher, lower, why] of PAIRS) {
+    const a = values[higher]
+    const b = values[lower]
+    if (a === '' || b === '' || a === undefined || b === undefined) continue
+    if (typeof a === 'boolean' || typeof b === 'boolean') continue
+    const na = Number(a)
+    const nb = Number(b)
+    if (Number.isNaN(na) || Number.isNaN(nb)) continue
+    if (na < nb) out.push({ key: higher, message: `${why}（${na} < ${nb}）` })
+  }
+  return out
+}

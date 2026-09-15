@@ -1436,72 +1436,163 @@ export async function runUiProbe(): Promise<void> {
 
     const dlg = document.querySelector<HTMLElement>('[data-testid="app-settings-dialog"]')
     if (dlg) {
-      // 等规格表落地（有行才算渲染完）
-      await waitFor(() => dlg.querySelector('.aps-row'), 4000)
+      // 等规格表落地（有行才算渲染完）。R17 起字段分页了：先确认导航在，再切到
+      // 目标字段所在的那一页 —— 探针不许假设"所有字段同屏"。
+      await waitFor(() => dlg.querySelector('.aps-nav-item'), 4000)
+      await waitFor(() => serverValue(FIELD) !== null, 4000)
+
+      // ① 导航项必须与后端 `specs[].group` **逐项对账**（数据驱动的机器判据）
+      const navLabels = [...dlg.querySelectorAll<HTMLElement>('.aps-nav-item')]
+        .map((n) => (n.querySelector('.aps-nav-label')?.textContent || '').trim())
+      const groupsFromApi = await fetch(`${getApiBase()}/settings`).then((r) => r.json())
+        .then((b: { specs: { group: string }[] }) => {
+          const out: string[] = []
+          for (const s of b.specs) if (!out.includes(s.group)) out.push(s.group)
+          return out
+        })
+      result.navLabels = navLabels
+      result.apiGroups = groupsFromApi
+      result.navMatchesApi = JSON.stringify(navLabels)
+        === JSON.stringify(['外观', ...groupsFromApi, '关于'])
+      result.navCount = navLabels.length
+
+      // ② 切到目标字段所在页（抓取节奏）：点导航 → 面板必须真的换
+      const navOf = (label: string) => [...dlg.querySelectorAll<HTMLElement>('.aps-nav-item')]
+        .find((n) => (n.querySelector('.aps-nav-label')?.textContent || '').trim() === label)
+      const paneOf = () => dlg.querySelector<HTMLElement>('[data-testid="aps-pane"]')
+      const clickNav = async (label: string) => {
+        navOf(label)?.click()
+        await sleep(150)
+      }
+      await clickNav('外观')
+      result.appearancePane = paneOf()?.getAttribute('data-pane')
+      result.appearanceCards = [...dlg.querySelectorAll('[data-theme-option]')]
+        .map((n) => n.getAttribute('data-theme-option'))
+
+      // ③ 只有当前分类的字段在 DOM（分页而不是"全塞一起再隐藏"）
+      result.rowsOnAppearance = dlg.querySelectorAll('.aps-row').length
+      await clickNav('抓取节奏')
+      result.paneAfterSwitch = paneOf()?.getAttribute('data-pane')
+      result.rowsOnFetch = dlg.querySelectorAll('.aps-row').length
+      result.otherPaneRowsHidden = dlg.querySelectorAll('[data-setting="EXTERNAL_ENABLED"]').length
+
+      // ⚠️ **每次交互前重新查节点**：R17 起字段是分页渲染的，切页 = 卸载重挂，
+      //    早先抓到的 `input` 会变成游离节点（写它不会触发 React onChange）——
+      //    与 devlog/071→080 那次"探针读了旧 DOM 节点"是同一类坑，这次由分页引入。
+      const rowNow = () => dlg.querySelector<HTMLElement>(`[data-setting="${FIELD}"]`)
+      const inputNow = () => rowNow()?.querySelector<HTMLInputElement>('.aps-input') ?? null
+      const saveBtn = dlg.querySelector<HTMLButtonElement>('[data-testid="app-settings-save"]')
+      result.beforeValue = await serverValue(FIELD)
+      result.inputValueBefore = inputNow()?.value ?? null
+
+      // ④ 几何与可命中：两栏都要在视口内、都点得着（分页布局最容易出的问题是
+      //    右栏被挤出去 / 导航点不着）；同时量一下两栏宽度（左边固定、右边吃满）
       const dr = rectOf(dlg)
       result.dialogInViewport = !!dr && dr.left >= -0.5 && dr.top >= -0.5 &&
         dr.right <= window.innerWidth + 0.5 && dr.bottom <= window.innerHeight + 0.5
       result.dialogHit = !!(dr && hits(dlg, dr.left + 8, dr.top + 8))
-      result.groups = [...dlg.querySelectorAll('.aps-section-title')].map((n) => text(n))
-      result.rows = dlg.querySelectorAll('.aps-row').length
-      result.readonlyRows = dlg.querySelectorAll('.aps-readonly-item').length
-      // 只读项必须**逐条带理由**（用户看到"不能改"时必须同时看到为什么）
-      result.readonlyReasons = [...dlg.querySelectorAll('.aps-readonly-why')]
-        .filter((n) => text(n).length > 6).length
-      result.effectHints = [...dlg.querySelectorAll('.aps-hint')]
-        .filter((n) => /生效/.test(text(n))).length
+      const navEl = dlg.querySelector<HTMLElement>('.aps-nav')
+      const paneEl = paneOf()
+      const nr = rectOf(navEl)
+      const pr2 = rectOf(paneEl)
+      result.navWidth = nr ? Math.round(nr.width * 10) / 10 : null
+      result.paneWidth = pr2 ? Math.round(pr2.width * 10) / 10 : null
+      result.navInsideDialog = !!(nr && dr && nr.left >= dr.left - 0.5 &&
+        nr.right <= dr.right + 0.5)
+      const firstNav = dlg.querySelector<HTMLElement>('.aps-nav-item')
+      const fnr = rectOf(firstNav)
+      result.navItemHit = !!(firstNav && fnr &&
+        hits(firstNav, fnr.left + fnr.width / 2, fnr.top + fnr.height / 2))
+      result.paneHit = !!pr2 && hits(paneEl, pr2.left + 20, pr2.top + 20)
+      // 导航项宽度必须**吃满左栏**（选中态的 3px 竖条要贴左缘才成立）
+      result.navItemFillsNav = !!(fnr && nr && Math.abs(fnr.width - nr.width) <= 1)
 
-      const row = dlg.querySelector<HTMLElement>(`[data-setting="${FIELD}"]`)
-      const input = row?.querySelector<HTMLInputElement>('.aps-input') ?? null
-      const saveBtn = dlg.querySelector<HTMLButtonElement>('[data-testid="app-settings-save"]')
-      result.beforeValue = await serverValue(FIELD)
-      result.inputValueBefore = input?.value ?? null
-
-      // ④ 越界：保存钮禁用 + 红字（前端那道）
-      if (input) {
-        typeInto(input, '999')
+      // ⑤ 越界：保存钮禁用 + 红字（前端那道）
+      if (inputNow()) {
+        typeInto(inputNow()!, '999')
         await sleep(120)
         result.overSaveDisabled = !!saveBtn?.disabled
-        result.overError = text(row?.querySelector('.aps-field-error')) || null
+        result.overError = text(rowNow()?.querySelector('.aps-field-error')) || null
       }
 
-      // ③ 合法值 → 保存 → **服务端**对账
-      if (input) {
-        typeInto(input, '7')
-        await sleep(120)
+      // ⑥ **切页不丢草稿** + 圆点只亮在改过的那一页（R17 两栏布局的核心口径）
+      if (inputNow()) {
+        typeInto(inputNow()!, '7')
+        await sleep(150)
+        const dirtyNav = [...dlg.querySelectorAll<HTMLElement>('.aps-nav-item')]
+          .filter((n) => n.getAttribute('data-nav-dirty') === '1')
+          .map((n) => (n.querySelector('.aps-nav-label')?.textContent || '').trim())
+        result.dirtyNavLabels = dirtyNav
+        await clickNav('第三方数据')
+        await clickNav('抓取节奏')
+        result.draftKeptAcrossPanes = inputNow()?.value ?? null
+      }
+
+      // ⑦ 「恢复本类默认」只填本类草稿（不落库，仍需保存）
+      const resetOne = dlg.querySelector<HTMLButtonElement>('[data-testid="aps-reset-category"]')
+      result.hasResetOne = !!resetOne
+      resetOne?.click()
+      await sleep(200)
+      result.afterResetOne = inputNow()?.value ?? null
+      result.resetOneTouchedOtherGroup = dlg.querySelectorAll(
+        '[data-setting="EXTERNAL_ENABLED"]').length      // 别类字段不该出现在本页
+      if (inputNow()) {                                    // 还原成待保存状态，继续后面的保存断言
+        typeInto(inputNow()!, '7')
+        await sleep(150)
+      }
+
+      // ⑧ 合法值 → 保存 → **服务端**对账
+      if (inputNow()) {
         result.saveEnabled = !!saveBtn && !saveBtn.disabled
         saveBtn?.click()
         await waitFor(() => dlg.querySelector(`[data-setting="${FIELD}"] .aps-badge`), 5000)
         await sleep(400)
         result.afterValue = await serverValue(FIELD)
         result.badgeShown = !!dlg.querySelector(`[data-setting="${FIELD}"] .aps-badge`)
-        result.inputValueAfter = dlg.querySelector<HTMLInputElement>(
-          `[data-setting="${FIELD}"] .aps-input`)?.value ?? null
+        result.inputValueAfter = inputNow()?.value ?? null
         result.footState = text(dlg.querySelector('.aps-foot-state'))
       }
 
-      // ⑤ 恢复默认
+      // ⑩ 恢复默认（全局：抓取参数 + 主题）
+      // 匹配用 `/恢复.*默认/`：按钮文案是「恢复全部默认」，写死「恢复默认」会匹配不到
+      // （2026-09-15 实测：改名后探针报"底部没有这个按钮"，其实是判据太死）
       const resetBtn = [...dlg.querySelectorAll<HTMLButtonElement>('.aps-foot-actions button')]
-        .find((b) => /恢复默认/.test(text(b)))
+        .find((b) => /恢复.*默认/.test(text(b)))
       result.hasResetBtn = !!resetBtn
+      result.resetBtnLabel = text(resetBtn) || null
+      // 等它真的可点：保存刚结束那一瞬 `busy` 还没回落，两个底部按钮都是 disabled，
+      // 此时 `.click()` 是**静默无效**的（2026-09-15 实测：服务端的值没回去）
+      for (let i = 0; i < 30 && resetBtn?.disabled; i++) await sleep(100)
+      result.resetBtnEnabled = !!resetBtn && !resetBtn.disabled
       resetBtn?.click()
       await waitFor(() => !dlg.querySelector(`[data-setting="${FIELD}"] .aps-badge`), 5000)
       await sleep(400)
       result.resetValue = await serverValue(FIELD)
       result.badgeAfterReset = !!dlg.querySelector(`[data-setting="${FIELD}"] .aps-badge`)
 
-      // ⑥ 主题（R14b）：切到「跟随系统」→ **偏好真的落库**（再问一次后端）→
-      //    界面如实标注"深色未实现"（selected=跟随系统 但 html[data-theme] 仍是 light）
+      // ⑪ 「关于」页：只读信息 + **逐条理由**（不给改的必须说明为什么）
+      await clickNav('关于')
+      result.aboutPane = paneOf()?.getAttribute('data-pane')
+      result.readonlyRows = dlg.querySelectorAll('.aps-readonly-item').length
+      result.readonlyReasons = [...dlg.querySelectorAll('.aps-readonly-why')]
+        .filter((n) => text(n).length > 6).length
+      result.aboutInfoRows = dlg.querySelectorAll('.aps-info dt').length
+      result.aboutHasWriteInputs = dlg.querySelectorAll('.aps-input, .aps-switch').length
+
+      // ⑫ 主题（R14b/R17）：三张卡片（浅色 / 深色 / 跟随系统），深色**只标不藏**
       const sysDark = window.matchMedia('(prefers-color-scheme: dark)').matches
       const prefBefore = await fetch(`${getApiBase()}/settings/prefs`).then((r) => r.json())
       result.themeServerBefore = prefBefore.values.theme
+      await clickNav('外观')
       result.themeOptions = [...dlg.querySelectorAll('[data-theme-option]')]
         .map((n) => n.getAttribute('data-theme-option'))
+      const darkCard = dlg.querySelector<HTMLButtonElement>('[data-theme-option="dark"]')
+      result.themeDarkDisabled = !!darkCard?.disabled
+      result.themeDarkNote = text(darkCard?.querySelector('.aps-theme-note')) || null
       const optSystem = dlg.querySelector<HTMLElement>('[data-theme-option="system"]')
-      result.themeSystemHit = !!(optSystem && (() => {
-        const r = optSystem.getBoundingClientRect()
-        return hits(optSystem, r.left + r.width / 2, r.top + r.height / 2)
-      })())
+      const orr = rectOf(optSystem)
+      result.themeSystemHit = !!(optSystem && orr &&
+        hits(optSystem, orr.left + orr.width / 2, orr.top + orr.height / 2))
       optSystem?.click()
       await waitFor(
         () => dlg.querySelector('[data-theme-option="system"]')?.getAttribute('aria-checked') === 'true',
@@ -1524,20 +1615,25 @@ export async function runUiProbe(): Promise<void> {
       result.themeServerRestored = (await fetch(`${getApiBase()}/settings/prefs`)
         .then((r) => r.json())).values.theme
 
-      // 关闭（Esc 是 radix 的取消手势）。
-      // ⚠️ 实测坑：齿轮的 tooltip 也是一个 dismissable layer，且它**在弹窗之后**注册
-      //    （点击让按钮获得焦点 → tooltip 打开），于是它是"最高层"、Esc 先被它吃掉。
-      //    所以先点一下弹窗标题区把焦点/tooltip 挪开，再派发 Esc —— 与真实用户
-      //    "看一眼弹窗内容再按 Esc"的时序一致。
-      // 关闭：Esc 走 radix Dialog 自带的取消手势（**组件不再自己挂一条**：
-      // 2026-09-15 一度以为它不生效、自己挂了一条，后来发现是探针判据错了 ——
-      // 见上面 `dlgOpen()` 的注释：关掉之后 Presence 会留着节点播退场动画）。
-      const escTarget = (document.activeElement as HTMLElement | null) ?? dlg
-      escTarget.dispatchEvent(new KeyboardEvent('keydown',
-        { key: 'Escape', bubbles: true, cancelable: true }))
-      result.closedByEsc = await waitFor(() => !dlgOpen(), 3000)
-      result.dialogStateAfterEsc = document
-        .querySelector('[data-testid="app-settings-dialog"]')?.getAttribute('data-state') ?? null
+      // ⑬ 关闭（Esc 是 radix 的取消手势）。
+      //    `&keepOpen=1` 时**跳过关闭**：视觉存档要用一张"弹窗开着"的图
+      //    （`ui_probe --app-settings --shot`）。断言仍然照跑，只是不收尾。
+      const keepOpen = new URLSearchParams(window.location.search).get('keepOpen') === '1'
+      if (!keepOpen) {
+        // ⚠️ 实测坑：齿轮的 tooltip 也是一个 dismissable layer，且它**在弹窗之后**注册
+        //    （点击让按钮获得焦点 → tooltip 打开），于是它是"最高层"、Esc 先被它吃掉。
+        //    所以先点一下弹窗标题区把焦点/tooltip 挪开，再派发 Esc —— 与真实用户
+        //    "看一眼弹窗内容再按 Esc"的时序一致。
+        // 关闭：Esc 走 radix Dialog 自带的取消手势（**组件不再自己挂一条**：
+        // 2026-09-15 一度以为它不生效、自己挂了一条，后来发现是探针判据错了 ——
+        // 见上面 `dlgOpen()` 的注释：关掉之后 Presence 会留着节点播退场动画）。
+        const escTarget = (document.activeElement as HTMLElement | null) ?? dlg
+        escTarget.dispatchEvent(new KeyboardEvent('keydown',
+          { key: 'Escape', bubbles: true, cancelable: true }))
+        result.closedByEsc = await waitFor(() => !dlgOpen(), 3000)
+        result.dialogStateAfterEsc = document
+          .querySelector('[data-testid="app-settings-dialog"]')?.getAttribute('data-state') ?? null
+      }
     }
 
     const pre = document.createElement('pre')

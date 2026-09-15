@@ -5,6 +5,7 @@ import {
   resolveTheme,
   systemPrefersDark,
   themeCaveat,
+  themeCards,
   watchSystemTheme,
 } from './theme'
 
@@ -91,5 +92,29 @@ describe('落地到根元素 / 监听系统', () => {
     const fn = vi.fn()
     expect(() => watchSystemTheme(fn, win)()).not.toThrow()
     expect(fn).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * 外观页的三张卡片（R17）。口径：受限/未实现的选项**只标不藏** ——
+ * 深色必须照样显示、但禁用 + 写明"尚未实现"（藏起来会让用户以为我们没有深色计划，
+ * 而 R14b 的钩子已经铺好了）。深色落地时这里自动解除禁用。
+ */
+describe('外观卡片（浅色 / 深色 / 跟随系统）', () => {
+  it('三张卡片，顺序固定', () => {
+    expect(themeCards().map((c) => c.value)).toEqual(['light', 'dark', 'system'])
+  })
+
+  it('深色：未实现时**禁用且写明**，实现后自动解除', () => {
+    const dark = themeCards().find((c) => c.value === 'dark')!
+    expect(dark.disabled).toBe(!DARK_IMPLEMENTED)
+    expect(Boolean(dark.note)).toBe(!DARK_IMPLEMENTED)
+    if (!DARK_IMPLEMENTED) expect(dark.note).toContain('尚未实现')
+  })
+
+  it('浅色与跟随系统始终可用（跟随系统的"系统是深色"另有 caveat 说明，不是禁用理由）', () => {
+    const cards = themeCards()
+    expect(cards.find((c) => c.value === 'light')!.disabled).toBe(false)
+    expect(cards.find((c) => c.value === 'system')!.disabled).toBe(false)
   })
 })

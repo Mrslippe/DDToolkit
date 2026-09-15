@@ -40,6 +40,7 @@
 | R14 | 2026-09-15 | 设置界面 | 最左侧工具栏底端给一个齿轮按钮，点开进入设置的独立弹窗，可以设置各种参数，例如主题、后端、抓取频率等等 | 中 | ✅ **R14a+R14b 已落地**（devlog/091、092）→ 详见 `docs/ROADMAP-DONE.md` |
 | ~~R1~~ **R15** | 2026-09-15 | 一些前端改造 | 顶栏左侧标题改为粗体、list视图搜索栏右侧筛选按钮文字布局中、card视图的平台徽标添加按钮在鼠标不hover的时候自动隐藏并且也不占位，让徽章紧贴下方分割线 | 中/低/高（依次） | ✅ **已落地**（devlog/087）→ 详见 `docs/ROADMAP-DONE.md` |
 | **R16** | 2026-09-15 | list 视图中的筛选按钮的样式跟随左栏工具栏中的筛选按钮（附两张截图：左栏「默认」= 参照，list「筛选」= 待改） | 两枚浮片看起来一样 | 中 | ✅ **已落地**（devlog/093）→ 详见 `docs/ROADMAP-DONE.md` |
+| **R17** | 2026-09-15 | 设置窗口参照参考图做成「左侧栏分类 + 右侧主要内容」的形式（只粗糙参考布局，细节按项目规范） | 左分类 + 右内容；本项目拍板：**不做右上动作行**、**导航 6 项照后端分组** | 中 | ✅ **已落地**（devlog/094）→ 详见 `docs/ROADMAP-DONE.md` |
 
 > **编号说明（2026-09-15）**：用户原写 R1–R4，与**已落地的 R1–R11** 重号 → **由我重编为 R12–R15**
 > （R1→R12 状态岛 · R2→R13 预约入历 · R3→R14 设置 · R4→R15 三处小改），用户已确认。
@@ -229,7 +230,7 @@
 > 索引已移入 **`docs/ROADMAP-DONE.md` → 「批次 → devlog 索引」**（2026-09-13 整理：
 > 本文件只留"要干什么"与当前基线，历史索引与已完成条目同处一份文件更好查）。
 
-### 6.2 当前门禁基线（2026-09-15 实测 / 复核，R16 批次）
+### 6.2 当前门禁基线（2026-09-15 实测 / 复核，R17 批次）
 
 | 门禁 | 命令 | 基线 |
 |---|---|---|
@@ -239,9 +240,9 @@
 | 上游冒烟 | `python scripts/smoke_upstream.py [--cold]`（或 `dev_check.py --upstream`） | 真上游 **5 ok / 0 FAIL**；冷进程 **3 ok / 0 FAIL**（未登录三态） |
 | 前端类型 | `npx tsc --noEmit`（`npm run build` 也会跑） | **0 错** |
 | 前端 lint | `npm --prefix frontend run lint` | **0 错**（`--max-warnings 0`） |
-| 前端单测 | `npm --prefix frontend run test` | **201 passed**（`addVtuberSearch` 7 · `capabilities` 6 · `reservationDays` 9 · `notificationHub` 12 · `idleQuotes` 15 · `settingsDraft` 11 · **`theme` 10** · 其余既有） |
+| 前端单测 | `npm --prefix frontend run test` | **221 passed**（`addVtuberSearch` 7 · `capabilities` 6 · `reservationDays` 9 · `notificationHub` 12 · `idleQuotes` 15 · `settingsDraft` 17 · `settingsNav` 11 · `theme` 13 · 其余既有） |
 | 词云布局 | `node scripts/check_wordcloud_layout.mjs` | sha256 `19ecc7e673b95c8a1fa7c8c219ada78e9b581a15764aa57b33a7de473fc63dac`（本轮实跑一致 ✓） |
-| 布局探针 | `python scripts/ui_probe.py --hero-expect c11548580e73d910ca667047b8120075a4ab121fa3fa098ff6654326ed183666 --vtuber 15`<br>`python scripts/ui_probe.py --archive --vtuber 15`（`--archive-print` 出签名）<br>`python scripts/ui_probe.py --settings --vtuber 15`（两个带签名账号）/ `--vtuber 14`（单账号长签名）<br>`python scripts/ui_probe.py --scene --vtuber 15`<br>`python scripts/ui_probe.py --add-v --vtuber 15`（R11）<br>`python scripts/ui_probe.py --capabilities`（未登录现场）<br>`python scripts/ui_probe.py --polish`（R15 三处打磨）<br>`python scripts/ui_probe.py --reservations`（R13：**探针自己种预约**进数据副本）<br>`python scripts/ui_probe.py --status-island`（R12a/R12b 顶栏状态岛）<br>`python scripts/ui_probe.py --app-settings`（R14a/R14b 应用设置：**会写盘**，跑在数据副本上）<br>`python scripts/ui_probe.py --filter-pill`（R16 两枚筛选浮片逐项对账 + 三态文字居中/caret 间距） | 十二条实跑通过（hero 三档签名一致 `c1154858…` / settings 29 项 / scene 提交 250ms / add-v 来源分流 / capabilities 未登录提示 / **polish：标题 700 文本宽 114.3/150、筛选钮文字左右各 31.5px·中心偏移 0·caret absolute（R16 起；R15 那版是 −5.3px/static）、徽标「+」空闲高度 0·不可命中·徽标→分割线 10px、hover 37px 可命中** / **filter-pill：list 那枚与侧栏那枚逐项一致（唯一豁免 minWidth），静态「筛选」文字两侧 [31.5,31.5]、「筛选 · 2」[21.3,21.3]·caret 距文字 11.6、合成超长「筛选 · 12 项」宽 89→106.6·caret 距文字 9.4** / **reservations：预约格徽章「预约」+ 计数槽 `128 人预约` + 标题、hover 浮层抬头 `0 场 · 1 预约` 与预约条目** / **status-island：空闲无容器 + 空闲轮播三格连采在走（含第 0 格「数据服务运行中」）→ 消息点亮 → 面板条目可命中·在视口内·不挤动右栏（670→670）→ Esc 收起 → 入场动画 `si-panel-in` 220ms 真挂上 → ttl 过期自清** / **app-settings：齿轮贴栏底可点 → 弹窗可命中（20 可写 + 10 只读带理由）→ 越界保存钮禁用+红字 → 保存后服务端 10→7 → 恢复默认回 10 → 主题服务端 light→system→还原 light（`html[data-theme]='light'`）→ Esc 关闭**；另跑一次 `--force-dark-mode` 验深色分支：`系统深色=True` + 那句"深色尚未实现"的说明非空）。记录值：`--archive` 日历签名 **`50b78ec0…`**（2026-09-15 20:5x 实测；17:00 那次 `48519bae…` 的差异来自当晚 V15 新落库两场直播 —— **数据漂移、非代码**，且跨天必漂，见下） |
+| 布局探针 | `python scripts/ui_probe.py --hero-expect c11548580e73d910ca667047b8120075a4ab121fa3fa098ff6654326ed183666 --vtuber 15`<br>`python scripts/ui_probe.py --archive --vtuber 15`（`--archive-print` 出签名）<br>`python scripts/ui_probe.py --settings --vtuber 15`（两个带签名账号）/ `--vtuber 14`（单账号长签名）<br>`python scripts/ui_probe.py --scene --vtuber 15`<br>`python scripts/ui_probe.py --add-v --vtuber 15`（R11）<br>`python scripts/ui_probe.py --capabilities`（未登录现场）<br>`python scripts/ui_probe.py --polish`（R15 三处打磨）<br>`python scripts/ui_probe.py --reservations`（R13：**探针自己种预约**进数据副本）<br>`python scripts/ui_probe.py --status-island`（R12a/R12b 顶栏状态岛）<br>`python scripts/ui_probe.py --app-settings`（R14a/R14b/R17 应用设置：**会写盘**，跑在数据副本上；`--shot` 出视觉存档）<br>`python scripts/ui_probe.py --filter-pill`（R16 两枚筛选浮片逐项对账 + 三态文字居中/caret 间距） | 十二条实跑通过（hero 三档签名一致 `c1154858…` / settings 29 项 / scene 提交 250ms / add-v 来源分流 / capabilities 未登录提示 / **polish：标题 700 文本宽 114.3/150、筛选钮文字左右各 31.5px·中心偏移 0·caret absolute（R16 起）、徽标「+」空闲高度 0·不可命中·徽标→分割线 10px、hover 37px 可命中** / **filter-pill：list 那枚与侧栏那枚配方一致（STYLE 逐项相等 / SIZE 各行其是），三态文字居中且 caret 不压字** / **reservations：预约格徽章「预约」+ 计数槽 `128 人预约` + 标题、hover 浮层条目** / **status-island：空闲无容器 + 空闲轮播三格连采在走 → 消息点亮 → 面板可命中不挤动右栏 → Esc 收起 → 入场动画挂上 → ttl 过期自清** / **app-settings（R17 两栏）：导航 6 项与后端分组一致 → 两栏几何/命中 → 分页只渲染当前页 → 圆点标对页且切页不丢草稿 → 越界被拦 → 保存回问后端 10→7 → 关于页只读带理由且无可写控件 → 恢复默认回 10 → 主题三卡（深色只标不藏）→ Esc 关闭**；另跑一次 `--force-dark-mode` 验深色分支）。记录值：`--archive` 日历签名 **`50b78ec0…`**（2026-09-15 20:5x 实测；17:00 那次 `48519bae…` 的差异来自当晚 V15 新落库两场直播 —— **数据漂移、非代码**） |
 | 一把梭 | `python scripts/dev_check.py` | 测试 + 后端冒烟（详见 `docs/DEV-LOOP.md`） |
 
 > ⚠️ 探针的 `--hero-expect` / `--calendar-expect` 签名**含实时数据**，只适合"改动前后短窗口对比"，

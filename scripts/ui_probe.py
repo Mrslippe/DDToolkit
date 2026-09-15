@@ -804,16 +804,28 @@ def main() -> int:
                       f"（新字段需要在 _run_probe 的白名单里登记）")
             print(f"  齿轮：存在={aps.get('gearExists')} 可命中={aps.get('gearHit')} "
                   f"贴栏底={aps.get('gearAtBottom')}")
-            print(f"  弹窗：打开={aps.get('dialogOpened')} 在视口内={aps.get('dialogInViewport')} "
-                  f"可命中={aps.get('dialogHit')} 可写项={aps.get('rows')} "
-                  f"只读项={aps.get('readonlyRows')}（带理由 {aps.get('readonlyReasons')}）")
-            print(f"  分区：{aps.get('groups')}")
+            print(f"  导航（{aps.get('navCount')} 项）：{aps.get('navLabels')} "
+                  f"｜ 与后端分组一致={aps.get('navMatchesApi')}（API={aps.get('apiGroups')}）")
+            print(f"  两栏：导航宽={aps.get('navWidth')} 内容宽={aps.get('paneWidth')} "
+                  f"｜ 导航在弹窗内={aps.get('navInsideDialog')} 项吃满={aps.get('navItemFillsNav')} "
+                  f"导航项可命中={aps.get('navItemHit')} 内容可命中={aps.get('paneHit')}")
+            print(f"  分页：外观页={aps.get('appearancePane')!r} 字段={aps.get('rowsOnAppearance')} "
+                  f"｜ 切到抓取页={aps.get('paneAfterSwitch')!r} 字段={aps.get('rowsOnFetch')} "
+                  f"别类字段在 DOM={aps.get('otherPaneRowsHidden')}")
+            print(f"  弹窗：在视口内={aps.get('dialogInViewport')} 可命中={aps.get('dialogHit')}")
+            print(f"  草稿：改过的页={aps.get('dirtyNavLabels')} 切页后仍在={aps.get('draftKeptAcrossPanes')!r}"
+                  f" ｜ 恢复本类默认→{aps.get('afterResetOne')!r}")
             print(f"  越界：保存钮禁用={aps.get('overSaveDisabled')} 红字={aps.get('overError')!r}")
             print(f"  保存：{aps.get('beforeValue')} → 服务端 {aps.get('afterValue')} "
                   f"（输入框 {aps.get('inputValueAfter')!r}「已改过」标记={aps.get('badgeShown')}）")
-            print(f"  恢复默认：服务端 {aps.get('resetValue')} 仍有「已改过」标记="
-                  f"{aps.get('badgeAfterReset')}")
-            print(f"  主题：选项={aps.get('themeOptions')} 可命中={aps.get('themeSystemHit')} "
+            print(f"  关于页：{aps.get('aboutPane')!r} 只读项={aps.get('readonlyRows')}"
+                  f"（带理由 {aps.get('readonlyReasons')}）信息行={aps.get('aboutInfoRows')} "
+                  f"可写控件={aps.get('aboutHasWriteInputs')}")
+            print(f"  恢复默认：按钮={aps.get('resetBtnLabel')!r} 服务端 {aps.get('resetValue')}"
+                  f"（可点={aps.get('resetBtnEnabled')}）"
+                  f" 仍有「已改过」标记={aps.get('badgeAfterReset')}")
+            print(f"  主题：选项={aps.get('themeOptions')} 深色禁用={aps.get('themeDarkDisabled')}"
+                  f"（{aps.get('themeDarkNote')!r}）可命中={aps.get('themeSystemHit')} "
                   f"｜ 服务端 {aps.get('themeServerBefore')} → {aps.get('themeServerAfter')} "
                   f"→ 还原 {aps.get('themeServerRestored')}")
             print(f"       选中={aps.get('themeSelected')} html[data-theme]="
@@ -839,9 +851,59 @@ def main() -> int:
                         failures.append(f"@{w} app-settings: 弹窗越出视口（会被裁）")
                     if not aps.get("dialogHit"):
                         failures.append(f"@{w} app-settings: 弹窗命中测试失败（点不着）")
-                    if (aps.get("rows") or 0) < 10:
-                        failures.append(f"@{w} app-settings: 弹窗里只有 {aps.get('rows')} 个可写项"
-                                        f"（规格表没渲染全？）")
+                    # ── 两栏布局（R17）──────────────────────────────────
+                    if not aps.get("navMatchesApi"):
+                        failures.append(f"@{w} app-settings: 左栏导航 {aps.get('navLabels')} 与后端"
+                                        f"分组 {aps.get('apiGroups')} 对不上 —— 导航必须由 "
+                                        f"specs[].group 生成（外观首、关于尾），否则后端加了参数组"
+                                        f"界面看不到")
+                    if (aps.get("navCount") or 0) < 3:
+                        failures.append(f"@{w} app-settings: 导航只有 {aps.get('navCount')} 项")
+                    if not aps.get("navInsideDialog"):
+                        failures.append(f"@{w} app-settings: 左栏越出弹窗")
+                    if not aps.get("navItemFillsNav"):
+                        failures.append(f"@{w} app-settings: 导航项没吃满左栏宽度"
+                                        f"（选中态的 3px 竖条贴不到左缘）")
+                    if not aps.get("navItemHit"):
+                        failures.append(f"@{w} app-settings: 导航项点不着")
+                    if not aps.get("paneHit"):
+                        failures.append(f"@{w} app-settings: 右栏内容区点不着")
+                    if (aps.get("navWidth") or 0) <= 0 or (aps.get("paneWidth") or 0) <= 0:
+                        failures.append(f"@{w} app-settings: 两栏宽度量不到"
+                                        f"（nav={aps.get('navWidth')} pane={aps.get('paneWidth')}）")
+                    # 分页：只有当前页的字段在 DOM
+                    if aps.get("appearancePane") != "appearance":
+                        failures.append(f"@{w} app-settings: 默认页不是外观"
+                                        f"（实得 {aps.get('appearancePane')!r}）")
+                    if aps.get("rowsOnAppearance") != 0:
+                        failures.append(f"@{w} app-settings: 外观页里出现了 {aps.get('rowsOnAppearance')} "
+                                        f"个抓取参数字段（分页没生效，全塞一页了？）")
+                    if aps.get("paneAfterSwitch") != "抓取节奏":
+                        failures.append(f"@{w} app-settings: 点「抓取节奏」后面板是 "
+                                        f"{aps.get('paneAfterSwitch')!r}")
+                    if not (aps.get("rowsOnFetch") or 0):
+                        failures.append(f"@{w} app-settings: 抓取节奏页一个字段都没有")
+                    if aps.get("otherPaneRowsHidden"):
+                        failures.append(f"@{w} app-settings: 别的分类的字段仍在 DOM 里"
+                                        f"（{aps.get('otherPaneRowsHidden')} 个）—— "
+                                        f"分页应当是「只渲染当前页」")
+                    # 草稿跨页保留 + 圆点标在改过的那一页
+                    if aps.get("dirtyNavLabels") != ["抓取节奏"]:
+                        failures.append(f"@{w} app-settings: 未保存圆点标在了 "
+                                        f"{aps.get('dirtyNavLabels')}，应只有「抓取节奏」")
+                    if aps.get("draftKeptAcrossPanes") != "7":
+                        failures.append(f"@{w} app-settings: 切页后草稿丢了"
+                                        f"（输入框变成 {aps.get('draftKeptAcrossPanes')!r}，应为 '7'）")
+                    if not aps.get("hasResetOne"):
+                        failures.append(f"@{w} app-settings: 抓取参数页没有「恢复本类默认」")
+                    elif aps.get("afterResetOne") != str(aps.get("beforeValue")):
+                        failures.append(f"@{w} app-settings: 恢复本类默认后输入框是 "
+                                        f"{aps.get('afterResetOne')!r}，应回到默认值 "
+                                        f"{aps.get('beforeValue')!r}")
+                    # ── 关于页：只读必须"看得见 + 有理由 + 改不了" ──────
+                    if aps.get("aboutPane") != "about":
+                        failures.append(f"@{w} app-settings: 点「关于」没切过去"
+                                        f"（{aps.get('aboutPane')!r}）")
                     if (aps.get("readonlyRows") or 0) < 5:
                         failures.append(f"@{w} app-settings: 只读分区只有 {aps.get('readonlyRows')} 项"
                                         f"—— 「哪些不能改」必须如实列出来")
@@ -849,9 +911,12 @@ def main() -> int:
                         failures.append(f"@{w} app-settings: 只有 {aps.get('readonlyReasons')}/"
                                         f"{aps.get('readonlyRows')} 个只读项写了原因 —— "
                                         f"用户看到「不能改」时必须同时看到为什么")
-                    if (aps.get("effectHints") or 0) < 1:
-                        failures.append(f"@{w} app-settings: 分区标题上没有「生效时机」说明"
-                                        f"（改完到底什么时候生效是这一批的核心承诺）")
+                    if (aps.get("aboutInfoRows") or 0) < 5:
+                        failures.append(f"@{w} app-settings: 关于页的只读信息只有 "
+                                        f"{aps.get('aboutInfoRows')} 行")
+                    if aps.get("aboutHasWriteInputs"):
+                        failures.append(f"@{w} app-settings: 关于页出现了可写控件"
+                                        f"（{aps.get('aboutHasWriteInputs')} 个）—— 只读页不该有输入框")
                     if not aps.get("overSaveDisabled"):
                         failures.append(f"@{w} app-settings: 填了越界值（999）保存钮还能点")
                     if not aps.get("overError"):
@@ -865,22 +930,33 @@ def main() -> int:
                                         f"{aps.get('afterValue')}，应为 7（界面回显={aps.get('inputValueAfter')!r}）")
                     if not aps.get("badgeShown"):
                         failures.append(f"@{w} app-settings: 改过的项没有「已改过」标记")
+                    if not aps.get("hasResetBtn"):
+                        failures.append(f"@{w} app-settings: 底部没有「恢复全部默认」")
+                    if not aps.get("resetBtnEnabled"):
+                        failures.append(f"@{w} app-settings: 「恢复全部默认」一直是禁用的"
+                                        f"（保存结束后 busy 没回落？）")
                     if aps.get("resetValue") != aps.get("beforeValue"):
                         failures.append(f"@{w} app-settings: 恢复默认后服务端的值是 "
                                         f"{aps.get('resetValue')}，应回到 {aps.get('beforeValue')}")
                     if aps.get("badgeAfterReset"):
                         failures.append(f"@{w} app-settings: 恢复默认后「已改过」标记还在")
-                    # ── 主题（R14b）────────────────────────────────────
-                    if aps.get("themeOptions") != ["light", "system"]:
-                        failures.append(f"@{w} app-settings: 主题选项是 "
-                                        f"{aps.get('themeOptions')}，应为 ['light','system']")
+                    # ── 主题（R14b/R17）────────────────────────────────
+                    if aps.get("themeOptions") != ["light", "dark", "system"]:
+                        failures.append(f"@{w} app-settings: 主题卡片是 "
+                                        f"{aps.get('themeOptions')}，应为 "
+                                        f"['light','dark','system']（深色**只标不藏**）")
+                    if not aps.get("themeDarkDisabled"):
+                        failures.append(f"@{w} app-settings: 「深色」卡片没有禁用 —— "
+                                        f"深色样式还没实现，能点就会变成「切了没反应」")
+                    if not aps.get("themeDarkNote"):
+                        failures.append(f"@{w} app-settings: 「深色」卡片上没写明为什么不能点")
                     if not aps.get("themeSystemHit"):
-                        failures.append(f"@{w} app-settings: 「跟随系统」按钮点不着")
+                        failures.append(f"@{w} app-settings: 「跟随系统」卡片点不着")
                     if aps.get("themeServerAfter") != "system":
                         failures.append(f"@{w} app-settings: 选「跟随系统」后**服务端**偏好是 "
                                         f"{aps.get('themeServerAfter')!r}，应为 'system'")
                     if aps.get("themeSelected") != "true":
-                        failures.append(f"@{w} app-settings: 选中的按钮没标记成选中"
+                        failures.append(f"@{w} app-settings: 选中的卡片没标记成选中"
                                         f"（aria-checked={aps.get('themeSelected')!r}）")
                     # 深色未实现 ⇒ root 必须是 light（挂上 dark 却没有样式 = "切了没反应"）
                     if aps.get("themeRootAttr") != "light":
@@ -896,7 +972,14 @@ def main() -> int:
                     if not aps.get("closedByEsc"):
                         failures.append(f"@{w} app-settings: Esc 没关掉设置弹窗")
             if not failures:
-                print("  [ok] 应用设置：齿轮可点 → 弹窗可命中 → 越界被拦 → 保存到服务端 → 恢复默认")
+                print(f"  [ok] 应用设置：齿轮可点 → 两栏（导航 {aps.get('navCount')} 项与后端分组一致）→ "
+                      f"分页只渲染当前页 → 圆点标对页且切页不丢草稿 → 越界被拦 → 保存到服务端 → "
+                      f"关于页只读带理由 → 恢复默认 → 主题三卡（深色只标不藏）")
+            # 视觉存档（`&keepOpen=1`：探针跳过收尾的 Esc，让弹窗留在屏幕上）
+            if args.shot:
+                shot = WORK / "shot-app-settings.png"
+                _run_shot(edge, f"{url}&keepOpen=1", w, args.height, shot)
+                print(f"  截图 → {shot}")
             for b in failures:
                 print("   -", b)
             return 1 if failures else 0
