@@ -1,0 +1,127 @@
+{
+  "captured_from": "python scripts/capability_matrix.py --write --include-content",
+  "captured_at": "2026-09-15",
+  "probes": {
+    "info": "账号信息 acc/info（签名）",
+    "stat": "粉丝数 relation/stat（未签名）",
+    "live": "直播状态 live batch",
+    "search": "名称模糊搜 wbi/search/type（签名）",
+    "topic": "投稿列表 arc/search（签名）",
+    "dynamics": "动态流 polymer feed/space（未签名）"
+  },
+  "matrix": {
+    "anon": {
+      "info": {
+        "probe": "info",
+        "logged_in": false,
+        "http": 200,
+        "code": 0,
+        "message": "OK",
+        "items": null,
+        "ms": 75
+      },
+      "stat": {
+        "probe": "stat",
+        "logged_in": false,
+        "http": 200,
+        "code": 0,
+        "message": "OK",
+        "items": null,
+        "ms": 72
+      },
+      "live": {
+        "probe": "live",
+        "logged_in": false,
+        "http": 200,
+        "code": 0,
+        "message": "success",
+        "items": null,
+        "ms": 90
+      },
+      "search": {
+        "probe": "search",
+        "logged_in": false,
+        "http": 200,
+        "code": 0,
+        "message": "OK",
+        "items": 20,
+        "ms": 172
+      },
+      "topic": {
+        "probe": "topic",
+        "logged_in": false,
+        "http": 412,
+        "code": -412,
+        "message": "request was banned",
+        "items": null,
+        "ms": 38
+      },
+      "dynamics": {
+        "probe": "dynamics",
+        "logged_in": false,
+        "http": 412,
+        "code": -412,
+        "message": "request was banned",
+        "items": null,
+        "ms": 47
+      }
+    },
+    "login": {
+      "info": {
+        "probe": "info",
+        "logged_in": true,
+        "http": 200,
+        "code": 0,
+        "message": "OK",
+        "items": null,
+        "ms": 96
+      },
+      "stat": {
+        "probe": "stat",
+        "logged_in": true,
+        "http": 200,
+        "code": 0,
+        "message": "OK",
+        "items": null,
+        "ms": 74
+      },
+      "live": {
+        "probe": "live",
+        "logged_in": true,
+        "http": 200,
+        "code": 0,
+        "message": "success",
+        "items": null,
+        "ms": 77
+      },
+      "search": {
+        "probe": "search",
+        "logged_in": true,
+        "http": 200,
+        "code": 0,
+        "message": "OK",
+        "items": 20,
+        "ms": 150
+      },
+      "topic": {
+        "probe": "topic",
+        "logged_in": true,
+        "http": 200,
+        "code": 0,
+        "message": "OK",
+        "items": 5,
+        "ms": 139
+      },
+      "dynamics": {
+        "probe": "dynamics",
+        "logged_in": true,
+        "http": 200,
+        "code": 0,
+        "message": "0",
+        "items": 12,
+        "ms": 197
+      }
+    }
+  },
+  "note": "两态各一条进程一条请求实测；✗ 多因平台风控（412/-352），不是我们实现的问题 —— 详见 app/services/capabilities.py 的表"
+}

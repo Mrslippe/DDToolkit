@@ -29,6 +29,7 @@ from app.schemas.vtuber import (
 )
 from app.services import pool
 from app.services import bili_search as bili_search_svc
+from app.services import capabilities
 from app.services.purge import purge_account, purge_vtuber
 from app.services.live_type import (
     infer_category, plan_series, build_learned, EDITABLE_CATEGORY_KEYS,
@@ -57,6 +58,30 @@ def _sched():
         from app.services import scheduler
         _sch_cache = scheduler
     return _sch_cache
+
+
+def _require_content_fetch() -> None:
+    """内容抓取（投稿/动态）需要登录 B 站 —— 未登录**在这里就挡掉**（403 + 原因）。
+
+    2026-09-15（devlog/086）实测：B 站对匿名调用空间接口回 `412 request was banned`，
+    且是 IP 级、会持续一段时间。让它"试了再失败"有两个坏处：白耗配额、脏 IP，
+    而用户看到的只是一句含糊的抓取失败。所以宁可**不发请求**、直接把原因说清楚。
+    ⚠️ 只挡内容：账号信息/粉丝数/直播状态匿名可用，不走这里（见 `services/capabilities.py`）。
+    """
+    allowed, why = capabilities.content_fetch_allowed()
+    if not allowed:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, why)
+
+
+@router.get("/capabilities")
+def get_capabilities():
+    """本机当前能力矩阵（登录态 × 实测限制）——前端据此标注"未登录 · 受限"。
+
+    `state` 三态：`full` / `degraded`（能用但少东西）/ `requires_login`（平台限制）。
+    每项带 `note`（给用户看的原因与补救）与 `evidence`（实测依据与日期）。
+    `limited` 是其中非 full 的那些，前端只用它就能渲染提示。
+    """
+    return capabilities.snapshot()
 
 
 async def async_fetch_and_update():
@@ -851,7 +876,10 @@ async def fetch_posts_by_name(name: str, background: BackgroundTasks,
     立即生效——已归档条目不再产生任何网络请求（v0.4.7）。
     示例: POST /vtuber/fetch-posts?name=明前奶绿&video_pages=-1&dynamics_pages=-1
           POST /vtuber/fetch-posts?name=明前奶绿&full=true
+
+    ⚠️ 未登录 B 站 → **403**（内容接口匿名会被平台 412 拦截，不发无谓请求；devlog/086）。
     """
+    _require_content_fetch()
     if full:
         if manual_task_running():
             raise HTTPException(409, "已有抓取任务正在进行中，请稍后再试")
@@ -905,7 +933,10 @@ async def fetch_all_posts():
     """
     对库中所有 VTuber 的 bilibili 账号逐个全量抓取帖子（视频+动态）。
     示例: POST /vtuber/fetch-all-posts
+
+    ⚠️ 未登录 B 站 → **403**（同 `/vtuber/fetch-posts`）。
     """
+    _require_content_fetch()
     if manual_task_running():
         return {"status": "skipped", "message": "已有抓取任务正在进行中，请稍后再试"}
     return await async_fetch_all_posts()
@@ -939,7 +970,10 @@ async def update_unarchived_posts(name: str | None = None):
     2. 抓取目标账号的动态（视频不抓），整页已归档即停止翻页。
     name 省略 → 全部 bilibili 账号；name 支持模糊匹配。
     示例: POST /vtuber/update-posts?name=明前奶绿   |   POST /vtuber/update-posts
+
+    ⚠️ 未登录 B 站 → **403**（动态也是内容接口；devlog/086）。
     """
+    _require_content_fetch()
     if manual_task_running():
         return {"status": "skipped", "message": "已有抓取任务正在进行中，请稍后再试"}
     return await async_update_unarchived_posts(name)
@@ -1193,6 +1227,7 @@ async def batch_fetch_accounts(background: BackgroundTasks):
 
 @router.post("/vtuber/batch/fetch-all-posts")
 async def batch_fetch_all_posts(background: BackgroundTasks):
+    _require_content_fetch()
     if manual_task_running():
         raise HTTPException(409, "已有抓取任务正在进行中，请稍后再试")
     background.add_task(async_fetch_all_posts)
@@ -1201,6 +1236,7 @@ async def batch_fetch_all_posts(background: BackgroundTasks):
 
 @router.post("/vtuber/batch/update-unarchived")
 async def batch_update_unarchived(background: BackgroundTasks):
+    _require_content_fetch()
     if manual_task_running():
         raise HTTPException(409, "已有抓取任务正在进行中，请稍后再试")
     background.add_task(async_update_unarchived_posts)

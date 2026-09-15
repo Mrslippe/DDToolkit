@@ -23,18 +23,37 @@ _cached_keys: Optional[Tuple[str, str]] = None
 _cached_at: float = 0
 CACHE_TTL = 1800  # 30 分钟
 
+# 密钥是从哪来的（给「能力矩阵」用）：None = 还没取过
+#   True = **匿名** nav 给的（未登录也能取，2026-09-15 实测）· False = 已登录 nav 给的
+_keys_were_anonymous: Optional[bool] = None
+
 
 def clear_wbi_cache():
     """清除 WBI 密钥缓存，强制下次 get_wbi_keys 重新请求"""
-    global _cached_keys, _cached_at
+    global _cached_keys, _cached_at, _keys_were_anonymous
     _cached_keys = None
     _cached_at = 0
+    _keys_were_anonymous = None
     logger.info("WBI 密钥缓存已清除")
 
 
-async def get_wbi_keys() -> Tuple[str, str]:
-    """从 B站导航接口获取最新的 img_key 和 sub_key"""
-    global _cached_keys, _cached_at
+def wbi_status() -> dict:
+    """密钥状态快照（能力矩阵/诊断用）：`{cached, anonymous}`。"""
+    cached = bool(_cached_keys) and (time.time() - _cached_at) < CACHE_TTL
+    return {"cached": cached, "anonymous": _keys_were_anonymous if cached else None}
+
+
+async def get_wbi_keys(allow_anonymous: bool = False) -> Tuple[str, str]:
+    """从 B站导航接口获取最新的 img_key 和 sub_key。
+
+    ⚠️ **`nav` 对未登录用户返回 `code=-101 账号未登录`，但同一个响应里照样带着
+    `data.wbi_img`**（WBI 密钥不随登录态变，2026-09-15 用原始回包实测）。
+    所以"未登录就用不了 WBI 签名"是**我们自己的**判据，不是平台限制：
+    `allow_anonymous=True` 时按匿名可用处理 —— 只给**检索类**路径用；
+    空间内容接口（投稿/动态）匿名会被平台 `412 request was banned`，
+    见 `services/capabilities.py` 的实测矩阵。
+    """
+    global _cached_keys, _cached_at, _keys_were_anonymous
 
     if _cached_keys and (time.time() - _cached_at) < CACHE_TTL:
         return _cached_keys
@@ -44,19 +63,23 @@ async def get_wbi_keys() -> Tuple[str, str]:
         resp = await client.get(url, headers=auth_manager.build_headers())
         data = resp.json()
 
-        if data.get("code") not in (0, "0"):
-            raise Exception(f"获取WBI密钥失败: {data.get('message')}")
+        wbi_img = (data.get("data") or {}).get("wbi_img") or {}
+        logged_in = data.get("code") in (0, "0")
+        if not logged_in:
+            if not (allow_anonymous and wbi_img.get("img_url")):
+                raise Exception(f"获取WBI密钥失败: {data.get('message')}")
+            logger.info("WBI 密钥来自**匿名** nav（未登录；平台照样下发 wbi_img）")
 
-        wbi_img = data["data"]["wbi_img"]
-        img_url = wbi_img["img_url"]
-        sub_url = wbi_img["sub_url"]
+        if not wbi_img.get("img_url"):
+            raise Exception("获取WBI密钥失败: nav 未返回 wbi_img")
 
-        img_key = img_url.split("/")[-1].split(".")[0]
-        sub_key = sub_url.split("/")[-1].split(".")[0]
+        img_key = wbi_img["img_url"].split("/")[-1].split(".")[0]
+        sub_key = wbi_img["sub_url"].split("/")[-1].split(".")[0]
 
         _cached_keys = (img_key, sub_key)
         _cached_at = time.time()
-        logger.info("WBI 密钥已更新")
+        _keys_were_anonymous = not logged_in
+        logger.info("WBI 密钥已更新" + ("（匿名）" if not logged_in else ""))
         return _cached_keys
 
 
@@ -72,8 +95,9 @@ def encrypt_wbi(params: dict, mixin_key: str) -> str:
     return hashlib.md5((query_str + mixin_key).encode("utf-8")).hexdigest()
 
 
-async def sign_params(params: dict) -> dict:
-    img_key, sub_key = await get_wbi_keys()
+async def sign_params(params: dict, allow_anonymous: bool = False) -> dict:
+    """签名 `params`。`allow_anonymous=True` 时未登录也能签（见 `get_wbi_keys`）。"""
+    img_key, sub_key = await get_wbi_keys(allow_anonymous=allow_anonymous)
     mixin_key = get_mixin_key(img_key, sub_key)
     w_rid = encrypt_wbi(params, mixin_key)
     return {**params, "w_rid": w_rid, "wts": int(time.time())}

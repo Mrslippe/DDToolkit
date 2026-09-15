@@ -265,56 +265,91 @@ def check_live_upstream(ctx: Ctx) -> None:
 
 
 def check_cold_degradation(ctx: Ctx) -> None:
-    """冷进程/空数据目录：**未登录时的降级形态**（R11 两个错结论的回归护栏）。
+    """冷进程/空数据目录：**未登录时的能力形态**（devlog/086 后的新口径）。
 
-    断言的是"设计形态"，不是"能不能用"：
-    1. B 站检索 → 200 + `error='not_logged_in'` + 有 hint（**不是 500**）；
-    2. 池外收录 → 503 + hint 提到登录（**不是 404「没有这个 UID」、不是 500**）；
-    3. 本地候选检索 → 200。
+    这里断言的是"未登录能做到什么、做不到什么"，四条：
 
-    ⚠️ 两个**实测澄清**（2026-09-15，都是本检查第一次跑出来的）：
+    1. **检索可用**：B 站名称模糊搜匿名也能出结果（P1 放开匿名 WBI 签名之前是 `not_logged_in`）；
+    2. **池外收录不明说成"没这个 UID"**：uid 直查匿名通常可用 → 201；被平台风控 → 503 + 原因；
+       **404 只允许出现在"上游确实说没有这个人"**（这里是随机 uid，不该是 404）；
+    3. **内容接口不发请求**：`/vtuber/fetch-posts` 未登录必须 **403** + 原因
+       （匿名打空间接口会被平台 412 封 IP，见 `capabilities.content_fetch_allowed`）；
+    4. 本地链路照常（候选池检索 200）。
+
+    ⚠️ 两个**实测澄清**（都写进 `GLOSSARY` §8）：
 
     - **"空数据目录"不等于"候选池为空"**：`backend_main.py` 首启会把随包分发的
-      `vtubers.csv` 引导复制进数据目录（"首次运行时把随包分发的 vtubers.csv 引导复制"）。
-      所以池内 uid 仍然命中、走**池内路径**（`来源=pool`）—— 池外收录检查必须挑一个
-      **不在池里**的 uid，否则它测的根本不是池外通道。
-    - 凭证要**显式清空**才算冷：本机 shell 里若残留 `BILI_SESSDATA` 等，子进程会继承
-      （`config.py` 读 `os.getenv`）→ 测出来的是"登录态"，不是"未登录态"。
+      `vtubers.csv` 引导复制进数据目录 —— 所以池外收录检查必须挑一个**不在池里**的 uid。
+    - 凭证要**显式清空**才算冷：shell 里残留的 `BILI_SESSDATA` 会被子进程继承
+      （`config.py` 读 `os.getenv`），否则测出来的是"登录态"。
     """
     status, body = ctx.get("/vtuber/bili/search?kw=" + urllib.parse.quote("塔菲"))
+    items = body.get("items") or []
     if status != 200:
-        ctx.record(FAIL, "cold_bili_search", f"期望 200 + not_logged_in，实得 HTTP {status}")
-    elif body.get("error") != "not_logged_in":
-        ctx.record(FAIL if not body.get("items") else SKIP, "cold_bili_search",
-                   f"空数据目录下 error={body.get('error')!r}（期望 not_logged_in）"
-                   if not body.get("items") else "居然搜到了（凭证没清干净？）")
-    else:
+        ctx.record(FAIL, "cold_bili_search", f"期望 200，实得 HTTP {status}")
+    elif items:
         ctx.record(OK, "cold_bili_search",
-                   f"200 + error='not_logged_in' + hint={(body.get('hint') or '')[:34]}…")
+                   f"**未登录也能搜**：{len(items)} 条 / 首位={items[0]['name']!r}")
+    elif body.get("error") in ("upstream_degraded", "network_error", "rate_limited"):
+        ctx.record(SKIP, "cold_bili_search",
+                   f"上游此刻拒绝匿名检索（{body['error']}）—— 环境问题，不是能力回归")
+    elif body.get("error") == "not_logged_in":
+        ctx.record(FAIL, "cold_bili_search",
+                   "匿名检索又要求登录了 —— P1 放开的匿名签名（wbi.allow_anonymous）丢了？")
+    else:
+        ctx.record(FAIL, "cold_bili_search", f"0 条且 error={body.get('error')!r}")
 
-    # 池外通道：uid 必须**不在候选池里**，否则走的是池内路径（见 docstring）
+    # 内容接口必须**在入口**就拒绝（我们不去撞会被 412 封的接口）
+    code, payload = ctx.post("/vtuber/fetch-posts?name=x", None)
+    if code == 403 and "登录" in str(payload.get("detail") or ""):
+        ctx.record(OK, "cold_content_gate",
+                   f"内容抓取未登录即拒：403 {str(payload['detail'])[:38]}…")
+    elif code == 404:
+        ctx.record(SKIP, "cold_content_gate", "库里没有名字含 x 的 V（换名字或先建库）")
+    else:
+        ctx.record(FAIL, "cold_content_gate",
+                   f"未登录调内容抓取期望 403，实得 {code} {str(payload)[:80]}")
+
     uid = _uid_not_in_pool(ctx)
     if uid is None:
         ctx.record(SKIP, "cold_pool_external_adopt", "找不到池外 uid（池检索异常）")
     else:
-        code, payload = ctx.post("/vtuber/adopt",
-                                 {"platform": "bilibili", "platform_uid": uid,
-                                  "source": "bilibili"})
-        if code == 503 and "登录" in str(payload.get("detail") or ""):
+        code2, payload2 = ctx.post("/vtuber/adopt",
+                                   {"platform": "bilibili", "platform_uid": uid,
+                                    "source": "bilibili"})
+        detail = str(payload2.get("detail") or "")
+        if code2 in (201, 409):
             ctx.record(OK, "cold_pool_external_adopt",
-                       f"uid {uid}（池外）→ 503 + 登录提示：{payload['detail'][:30]}…")
-        elif code == 404:
+                       f"uid {uid}（池外）匿名收录可用 → {code2}")
+        elif code2 == 503:
+            # 503 = "我们没问到"（匿名 uid 直查被平台风控 / 签名拿不到）—— 环境问题，
+            # 不是能力回归；**只要不是说成 404 就算合格**（那才是要避免的误导）。
+            ctx.record(SKIP, "cold_pool_external_adopt",
+                       f"匿名 uid 直查被上游拒绝（503，非 404 误导）：{detail[:46]}…")
+        elif code2 == 404:
             ctx.record(FAIL, "cold_pool_external_adopt",
                        "未登录被报成 404「没有这个 UID」—— 正是要避免的误导（devlog/083 §十）")
         else:
             ctx.record(FAIL, "cold_pool_external_adopt",
-                       f"期望 503，实得 {code} {str(payload)[:100]}")
+                       f"期望 201/409（或上游拒绝 503），实得 {code2} {str(payload2)[:90]}")
 
     status3, rows = ctx.get("/vtuber/pool/search?kw=a")
     ok3 = status3 == 200 and isinstance(rows, list)
     ctx.record(OK if ok3 else FAIL, "cold_pool_search",
                f"HTTP {status3}，{len(rows) if isinstance(rows, list) else '?'} 条"
                f"（纯本地链路，任何时候都该通；csv 由首启引导复制进来）")
+
+    # 能力矩阵接口：未登录态必须**如实**列出受限项
+    status4, cap = ctx.get("/capabilities")
+    if status4 == 200 and cap.get("bilibili_logged_in") is False:
+        limited = {x["id"] for x in cap.get("limited") or []}
+        if {"fetch_posts", "weibo_content"} <= limited:
+            ctx.record(OK, "cold_capabilities",
+                       f"受限项如实上报：{sorted(limited)}（本地浏览未被限制）")
+        else:
+            ctx.record(FAIL, "cold_capabilities", f"受限项不对：{sorted(limited)}")
+    else:
+        ctx.record(FAIL, "cold_capabilities", f"HTTP {status4} body={str(cap)[:80]}")
 
 
 def _uid_not_in_pool(ctx: Ctx) -> str | None:

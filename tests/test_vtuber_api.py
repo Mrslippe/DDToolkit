@@ -371,6 +371,70 @@ def test_adopt_does_not_disguise_upstream_failure_as_not_found(monkeypatch, clie
     assert client.get("/vtuber/list").json() == []
 
 
+def test_capabilities_endpoint_reports_limits(monkeypatch, client):
+    """`GET /capabilities`（devlog/086）：未登录态下如实报出受限项与原因。"""
+    import app.services.capabilities as cap
+    from app.services.auth import auth_manager
+
+    monkeypatch.setattr(auth_manager, "sessdata", "")
+    monkeypatch.setattr(auth_manager, "bili_jct", "")
+    r = client.get("/capabilities")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["bilibili_logged_in"] is False
+    assert body["measured_at"], "矩阵必须带实测日期（平台策略会变）"
+    limited = {x["id"]: x for x in body["limited"]}
+    assert "fetch_posts" in limited and limited["fetch_posts"]["state"] == cap.REQUIRES_LOGIN
+    assert "登录" in limited["fetch_posts"]["note"]
+    # 未登录**不该**限制本地浏览（那是零上游的）
+    assert "browse_local" not in limited
+    # 每项都带三态与说明，前端直接可用
+    for row in body["features"]:
+        assert row["state"] in cap.STATES and row["note"]
+
+
+def test_content_fetch_endpoints_refuse_without_login(monkeypatch, client):
+    """未登录时**内容类**端点一律 403 + 原因（不发无谓请求；devlog/086）。
+
+    实测依据：匿名打 B 站空间接口回 `412 request was banned`（IP 级、会持续），
+    "试了再失败"既白耗配额又让用户困惑，所以在入口就挡。
+    """
+    from app.services.auth import auth_manager
+
+    monkeypatch.setattr(auth_manager, "sessdata", "")
+    monkeypatch.setattr(auth_manager, "bili_jct", "")
+
+    calls = [
+        ("post", "/vtuber/fetch-posts?name=x", None),
+        ("post", "/vtuber/fetch-all-posts", None),
+        ("post", "/vtuber/update-posts", None),
+        ("post", "/vtuber/batch/fetch-all-posts", None),
+        ("post", "/vtuber/batch/update-unarchived", None),
+    ]
+    for method, url, payload in calls:
+        r = client.request(method, url, json=payload)
+        assert r.status_code == 403, f"{url} 未登录时应 403，实得 {r.status_code}"
+        detail = r.json()["detail"]
+        assert "登录" in detail and ("412" in detail or "风控" in detail), \
+            f"{url} 的拒绝原因要讲清楚，实得：{detail}"
+
+
+def test_account_info_endpoints_stay_available_without_login(monkeypatch, client):
+    """未登录**不该**挡账号信息类端点（实测匿名可用，只有内容接口被平台封）。"""
+    from app.services.auth import auth_manager
+
+    monkeypatch.setattr(auth_manager, "sessdata", "")
+    monkeypatch.setattr(auth_manager, "bili_jct", "")
+
+    vid = client.post("/vtuber", json={"name": "匿名可读V"}).json()["id"]
+    r = client.post(f"/vtuber/{vid}/accounts",
+                    json={"platform": "bilibili", "platform_uid": "123"})
+    assert r.status_code == 201, "建账号不该被登录态拦住"
+    # /vtuber/{id}/fetch 走账号信息（匿名可用）→ 不该 403
+    r2 = client.post(f"/vtuber/{vid}/fetch")
+    assert r2.status_code != 403, "账号信息抓取匿名可用，不该 403"
+
+
 def test_pool_search_merges_csv_pool_and_thirdparty_index(monkeypatch, client):
     """本地检索合并两个来源（R11）：csv 池优先 + danmakus 索引兜底，按 uid 去重、剔除已入库。"""
     import app.routers.vtuber as router_mod

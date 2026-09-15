@@ -204,13 +204,16 @@ def _sign_failure(exc: Exception, what: str) -> dict:
 
     `nav` 未登录回 -101「账号未登录」，`wbi.get_wbi_keys` 把它包成 `Exception` 抛出 ——
     靠消息判定不优雅，但比"整类都报未登录"准确：别的签名错误不该给出"去登录"的误导。
+
+    ⚠️ 2026-09-15 起**检索路径已放行匿名签名**（`allow_anonymous=True`），所以这里
+    通常只在"匿名也拿不到 wbi_img"或真正的签名故障时触发；文案保持短（异常原文进日志）。
     """
     msg = str(exc)
     if "未登录" in msg or "-101" in msg:
         logger.info(f"B 站检索需要登录态（{what}）：{msg}")
         return {"error": "not_logged_in", "hint": LOGIN_HINT}
     logger.warning(f"B 站检索签名失败（{what}）：{type(exc).__name__}: {msg}")
-    return {"error": "upstream_error", "hint": f"取 WBI 签名失败：{msg}"}
+    return {"error": "upstream_error", "hint": f"取 WBI 签名失败（{type(exc).__name__}），稍后重试"}
 
 
 async def search_users(kw: str, page: int = 1,
@@ -233,11 +236,12 @@ async def search_users(kw: str, page: int = 1,
         return SearchResult(page=page, error=limited,
                             hint="请求太频繁，稍后再试或改用候选池")
 
-    # WBI 签名（要 nav 取密钥 ⇒ **未登录会抛**）。这是"上游没被我们问到"，
-    # 必须变成一条能给用户看的原因，不能让异常冒到 500（2026-09-15 实测踩到）。
+    # WBI 签名（要 nav 取密钥 ⇒ **未登录会抛**，除非允许匿名）。
+    # `allow_anonymous=True`：2026-09-15 实测 nav 匿名也下发 wbi_img，检索类接口
+    # 匿名可用（`capabilities.py` 的矩阵）；空间内容接口不能用这条口子（平台 412）。
     try:
         params = await wbi.sign_params({"search_type": "bili_user", "keyword": kw,
-                                        "page": page})
+                                        "page": page}, allow_anonymous=True)
     except Exception as e:                                   # noqa: BLE001
         return SearchResult(page=page, **_sign_failure(e, kw))
     url = f"{SEARCH_URL}?{urllib.parse.urlencode(params)}"
@@ -295,10 +299,18 @@ async def exact_user(uid: str, client: httpx.AsyncClient | None = None) -> Searc
     if limited:
         return SearchResult(error=limited, hint="请求太频繁，稍后再试")
 
-    # `acc/info` / `relation/stat` 都是 WBI 签名接口 ⇒ 未登录同样会抛（与名称搜索同源）
+    # `acc/info` / `relation/stat`：`acc/info` 是 WBI 签名接口 ⇒ 未登录会抛，
+    # 因此这里显式放行匿名签名（与名称搜索同口径）。
+    # ⚠️ `fetch_bilibili_user_info` 外面套着 tenacity（`retry_if_result(is_none)`）：
+    # **上游拒绝**（风控 -352 / 412）会让它返回 None、重试耗尽后抛 `RetryError` ——
+    # 那是"平台拒绝了这次查询"，不是"签名坏了"，归类要分开（否则提示会误导用户去查密钥）。
     try:
-        info = await fetch_bilibili_user_info(int(uid), client=client)
+        info = await fetch_bilibili_user_info(int(uid), client=client, allow_anonymous=True)
     except Exception as e:                                   # noqa: BLE001
+        if "RetryError" in type(e).__name__ or "RetryError" in str(e):
+            logger.info(f"B 站 uid={uid} 匿名查询被上游拒绝（风控）：{type(e).__name__}")
+            return SearchResult(page=1, exact=True, error="upstream_degraded",
+                                hint="B 站拒绝了本次查询（风控/限流），稍后重试；登录后更稳定")
         return SearchResult(page=1, exact=True, **_sign_failure(e, f"uid:{uid}"))
     if not info:
         return SearchResult(error="not_found", hint=f"B 站没有这个 UID（{uid}）或该用户已注销")

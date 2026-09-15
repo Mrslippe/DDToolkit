@@ -179,7 +179,7 @@ def test_search_users_page_limit_and_min_interval():
 
 def test_exact_user_merges_info_and_stat(monkeypatch):
     """UID 直查：`acc/info`（名字/签名/头像）+ `relation/stat`（粉丝数）合并成一条 exact 结果。"""
-    async def fake_info(mid, client=None):
+    async def fake_info(mid, client=None, allow_anonymous=False):
         return {"name": "永雏塔菲", "sign": "王牌级偶像", "avatar": "https://x/a.jpg",
                 "live_status": 1, "room_id": 22603245}
 
@@ -201,7 +201,7 @@ def test_exact_user_not_found_and_bad_uid(monkeypatch):
     """查不到 / UID 不合法：都给明确 error，不让前端以为"搜到但没显示"。"""
     from app.services import bili_search as bs
 
-    async def fake_none(mid, client=None):
+    async def fake_none(mid, client=None, allow_anonymous=False):
         return None
     monkeypatch.setattr(bs, "fetch_bilibili_user_info", fake_none)
     res = asyncio.run(bs.exact_user("99999999"))
@@ -234,6 +234,47 @@ def test_search_dispatches_numeric_to_exact(monkeypatch):
 
 # ── 未登录（WBI 取密钥失败）：必须是一条"能给用户看的原因"，不是异常 ────
 
+def _search_handler(request) -> httpx.Response:
+    """搜索接口的 mock 处理器（放模块级，多个用例共用）。"""
+    return httpx.Response(200, json=_search_body([_raw(1, "x")]))
+
+
+def test_search_and_exact_pass_allow_anonymous(monkeypatch):
+    """两条检索路径都必须**显式放行匿名签名**（devlog/086）。
+
+    这是"未登录也能加 V"的接线点：`nav` 匿名也下发 `wbi_img`（实测），
+    所以检索不该被登录态挡住；内容抓取路径**保持严格默认**（另有闸门与用例）。
+    接线断了的话，未登录用户一点搜索就看到"需要登录" —— 正是要避免的。
+    """
+    from app.services import bili_search as bs
+
+    seen: dict[str, bool] = {}
+
+    async def fake_sign(params, allow_anonymous=False):
+        seen["sign"] = allow_anonymous
+        return {**params, "w_rid": "x" * 32, "wts": 0}
+
+    async def fake_info(mid, client=None, allow_anonymous=False):
+        seen["info"] = allow_anonymous
+        return {"name": "永雏塔菲", "sign": "", "avatar": "", "live_status": 0, "room_id": 0}
+
+    async def fake_stat(mid, client=None):
+        return {"follower": 1}
+
+    monkeypatch.setattr(bs.wbi, "sign_params", fake_sign)
+    monkeypatch.setattr(bs, "fetch_bilibili_user_info", fake_info)
+    monkeypatch.setattr(bs, "fetch_bilibili_user_stat", fake_stat)
+
+    async def run():
+        async with _client(_search_handler) as c:
+            await bs.search_users("塔菲", client=c)
+        await bs.exact_user("1265680561")
+
+    asyncio.run(run())
+    assert seen.get("sign") is True, "名称搜索没放行匿名签名"
+    assert seen.get("info") is True, "UID 直查没放行匿名签名"
+
+
 def test_search_users_maps_wbi_failure_to_not_logged_in(monkeypatch):
     """**2026-09-15 实测更正**：搜索接口不校验 cookie，但 WBI 签名密钥要从 `nav` 取，
     而 `nav` 未登录直接回 -101 ⇒ 没登录时模糊搜必然失败。
@@ -243,7 +284,7 @@ def test_search_users_maps_wbi_failure_to_not_logged_in(monkeypatch):
     """
     from app.services import bili_search as bs
 
-    async def boom(params):
+    async def boom(params, allow_anonymous=False):
         raise Exception("获取WBI密钥失败: 账号未登录")
 
     monkeypatch.setattr(bs.wbi, "sign_params", boom)
@@ -256,7 +297,7 @@ def test_search_users_keeps_other_wbi_failures_as_upstream_error(monkeypatch):
     """不是"未登录"的签名故障不能误导成"去登录"（归到 upstream_error）。"""
     from app.services import bili_search as bs
 
-    async def boom(params):
+    async def boom(params, allow_anonymous=False):
         raise Exception("socket closed")
 
     monkeypatch.setattr(bs.wbi, "sign_params", boom)
@@ -269,7 +310,7 @@ def test_exact_user_maps_wbi_failure_to_not_logged_in(monkeypatch):
     """uid 直查走 `acc/info`，**同样是 WBI 签名接口** ⇒ 未登录也一样失败（统一口径）。"""
     from app.services import bili_search as bs
 
-    async def boom(mid, client=None):
+    async def boom(mid, client=None, allow_anonymous=False):
         raise Exception("获取WBI密钥失败: 账号未登录")
 
     monkeypatch.setattr(bs, "fetch_bilibili_user_info", boom)
@@ -282,10 +323,10 @@ def test_exact_user_survives_stat_failure(monkeypatch):
     """粉丝数取不到不该让整次直查失败（名字才是收录/展示要用的）。"""
     from app.services import bili_search as bs
 
-    async def fake_info(mid, client=None):
+    async def fake_info(mid, client=None, allow_anonymous=False):
         return {"name": "永雏塔菲", "sign": "", "avatar": "", "live_status": 0, "room_id": 0}
 
-    async def boom(mid, client=None):
+    async def boom(mid, client=None, allow_anonymous=False):
         raise Exception("relation/stat 500")
 
     monkeypatch.setattr(bs, "fetch_bilibili_user_info", fake_info)

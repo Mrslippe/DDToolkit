@@ -77,10 +77,17 @@ def is_none(result):
 @retry(stop=stop_after_attempt(3),
        wait=wait_exponential(multiplier=1, min=2, max=10),
        retry=retry_if_result(is_none))
-async def fetch_bilibili_user_info(mid: int, client: Optional[httpx.AsyncClient] = None) -> Optional[Dict[str, Any]]:
+async def fetch_bilibili_user_info(mid: int, client: Optional[httpx.AsyncClient] = None,
+                                   allow_anonymous: bool = False) -> Optional[Dict[str, Any]]:
+    """账号信息（`space/wbi/acc/info`）。
+
+    `allow_anonymous=True`：未登录也签名（nav 匿名照样下发 wbi_img，2026-09-15 实测）——
+    只给**检索/查看类**路径用（`bili_search.exact_user`）；抓取路径保持严格默认，
+    让"未登录"继续**快速且明确**地失败（见 `services/capabilities.py`）。
+    """
 
     base_params = {'mid':mid}
-    signed_params = await wbi.sign_params(base_params)
+    signed_params = await wbi.sign_params(base_params, allow_anonymous=allow_anonymous)
 
     url = f"https://api.bilibili.com/x/space/wbi/acc/info?{urllib.parse.urlencode(signed_params)}"
     try:

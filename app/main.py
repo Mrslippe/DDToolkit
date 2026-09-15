@@ -39,11 +39,15 @@ async def _warm_wbi() -> None:
     B 站 `acc/info`、`arc/search` 都要 WBI 签名，密钥缓存 30 分钟；进程冷启动后
     第一次签名请求会先打一次 nav。启动时并行预热，用户点「添加 VTuber」时密钥已就绪。
     失败只记日志——真到抓取时还会自行重试。
+
+    2026-09-15（devlog/086）：改成**允许匿名** —— 未登录时 nav 也下发 `wbi_img`，
+    预热成功意味着"未登录也能搜 V"，而内容抓取另有登录闸门（`capabilities`）。
     """
     try:
-        from app.services.wbi import get_wbi_keys
-        await get_wbi_keys()
-        logger.info("WBI 密钥预热完成")
+        from app.services.wbi import get_wbi_keys, wbi_status
+        await get_wbi_keys(allow_anonymous=True)
+        st = wbi_status()
+        logger.info("WBI 密钥预热完成" + ("（匿名）" if st.get("anonymous") else ""))
     except Exception as e:  # 预热失败不影响启动与后续抓取
         logger.warning(f"WBI 密钥预热失败（不影响启动）: {type(e).__name__}: {e}")
 

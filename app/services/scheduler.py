@@ -37,6 +37,7 @@ from app.services.post_text import extract_post_text
 from app.services.tombstone import apply_tombstone_scan
 from app.services.externals.runner import run_external_interval
 from app.services.weibo_auth import weibo_auth_manager
+from app.services import capabilities
 # 注意：此处不调用 logging.basicConfig —— 根日志配置统一由
 # `app/core/logging_setup.py::setup_logging()`（在 app/main.py 里调用）完成。
 # 历史上这里先执行了 basicConfig，导致 main.py 里的文件 handler 配置被静默忽略，
@@ -1793,8 +1794,18 @@ def _run_tombstone_scan(db: Session, acc: Account, result: PostFetchResult,
 
 async def async_fetch_posts(platform: str, uid: str, video_pages: int, dynamics_pages: int) -> PostFetchResult:
     """单个账号的帖子抓取（带锁，供 fetch-posts 端点调用）；按平台分发。
-    手动任务优先：锁被定时档占用时请求其让位。"""
+    手动任务优先：锁被定时档占用时请求其让位。
+
+    ⚠️ **未登录直接不发起**（2026-09-15，devlog/086）：B 站对匿名调用空间接口
+    （`arc/search` / 动态流）回 `412 request was banned`，且是 IP 级、会持续一段时间 ——
+    硬试只会白耗配额、脏 IP，然后由用户承担"抓取失败"的困惑。所以这里在**入口**就挡掉。
+    """
     global _post_fetch_running
+
+    allowed, why = capabilities.content_fetch_allowed()
+    if not allowed:
+        logger.info(f"帖子抓取跳过（{platform}:{uid}）：{why}")
+        return PostFetchResult(stop_reason="login_required", error=why)
 
     if not await _acquire_manual_post():
         logger.warning("帖子抓取正在进行中，跳过本次触发")
@@ -1855,8 +1866,17 @@ async def async_fetch_first_screen(account_id: int) -> PostFetchResult:
     - 动态 1 页 + 最多 `FIRST_SCREEN_DYNAMICS_LIMIT` 条新帖（每条 1 次详情）；
     - 微博等单流平台：1 页 + 同样的条数上限（`_fetch_platform_posts`）；
     - 走帖子锁 + 手动优先；抢不到锁时入队等心跳补抓（不静默丢弃）。
+
+    ⚠️ **未登录不发起**（2026-09-15，devlog/086）：本函数全是内容抓取（投稿 + 动态），
+    匿名会被平台 412 封 —— 收录仍然照常完成（建库 + 账号信息 + 粉丝数 + 第三方历史），
+    只是拿不到首屏内容。
     """
     global _post_fetch_running
+
+    allowed, why = capabilities.content_fetch_allowed()
+    if not allowed:
+        logger.info(f"首屏抓取跳过（account#{account_id}）：{why}")
+        return PostFetchResult(stop_reason="login_required", error=why)
 
     if not await _acquire_manual_post():
         _enqueue_pending_first_screen(account_id)
@@ -2283,13 +2303,22 @@ def _dynamics_lanes(db: Session) -> dict[str, list[tuple[VTuber, Account]]]:
 def _lane_skip_reason(pf: str) -> str | None:
     """名单级可用性判据（**同步**口径，预算估算与抓取轮共用）。
 
-    目前只有一条：**微博未登录/登录态失效**时整条 weibo 名单跳过 ——
-    否则会变成"每分钟 N 条 ok=-100 警告 + 白打请求"（2026-09-13 实测：Cookie 过期期间
-    抓取必失败）。判据是**同步**的（无 cookie，或抓取路径已用 `mark_invalid()` 标记失效），
-    不额外发探测请求；用户重新扫码走 `apply_cookie()` → 下一轮自动恢复。
+    两条：
+
+    1. **微博未登录/登录态失效**时整条 weibo 名单跳过 —— 否则会变成"每分钟 N 条 ok=-100
+       警告 + 白打请求"（2026-09-13 实测：Cookie 过期期间抓取必失败）。判据是**同步**的
+       （无 cookie，或抓取路径已用 `mark_invalid()` 标记失效），不额外发探测请求；
+       用户重新扫码走 `apply_cookie()` → 下一轮自动恢复。
+    2. **B 站未登录**时整条 bilibili 名单跳过（2026-09-15，devlog/086）：动态流是内容接口，
+       匿名调用回 `412 request was banned`（IP 级、会持续），没登录就不该去撞。
+       注意**只挡内容轮**：账号信息 / 粉丝数 / 直播状态匿名可用，不走这条名单。
     """
     if pf == "weibo" and weibo_auth_manager.needs_login:
         return "微博未登录/登录态失效"
+    if pf == "bilibili":
+        allowed, why = capabilities.content_fetch_allowed()
+        if not allowed:
+            return why
     return None
 
 
