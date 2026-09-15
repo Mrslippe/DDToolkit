@@ -64,7 +64,10 @@
 
 - **P8-B 交互手感实机验证**：平台徽章长按拖动阈值、hover 尾部「+」、档案设置弹窗高度、系统浏览器打开是否顺手（devlog/048）
 - **P10-A 视觉手感**：双月历配色与日期格密度、窄窗表现（devlog/050）
-- **发版**：**v1.0.0 已发布**（2026-09-14，覆盖 devlog 060–081，[Release](https://github.com/Mrslippe/DDToolkit/releases/tag/v1.0.0)）；下一版起点 = 本文件 §1 的剩余条目（词云三条 + 分析口径待定项）
+- **发版**：**v1.0.0 已发布**（2026-09-14，覆盖 devlog 060–081，[Release](https://github.com/Mrslippe/DDToolkit/releases/tag/v1.0.0)）；下一版起点 = 本文件 §1 的剩余条目（词云三条 + 分析口径待定项）。
+  发布方式已收敛为一条命令：**`python scripts/release.py <版本>`**（devlog/084，手册 `docs/RELEASE.md`）——
+  脚本做版本同步/门禁/打版/产物校验/提交/tag/推送/Release，**只有两件事仍需你亲自做**：
+  装一次直装版确认 `binaries\backend\_internal\` 存在且首启能过、便携版解压可启动；以及 token 进过对话就吊销。
 - **R9 的展示形态**：等「账号信息历史快照」那条线开工时一起定（曾用名/曾用签名放哪、怎么呈现）
 
 > ✅ 已完成（2026-09-13 复核后从本清单移出）：**P9-A 历史归并脚本已在真实库跑完** ——
@@ -178,7 +181,7 @@
 
 | 门禁 | 命令 | 基线 |
 |---|---|---|
-| 后端 | `python -m pytest -q` | **334 passed**（R11 新增 `test_bili_search.py` 15 项 + API 4 项；含 1 条真实网络冒烟，离线环境会 skip） |
+| 后端 | `python -m pytest -q` | **362 passed**（R11：`test_bili_search.py` 15 + API 4；发布脚本：`test_release_script.py` 28；含 1 条真实网络冒烟，离线环境会 skip） |
 | 前端类型 | `npx tsc --noEmit`（`npm run build` 也会跑） | **0 错** |
 | 前端 lint | `npm --prefix frontend run lint` | **0 错**（`--max-warnings 0`） |
 | 前端单测 | `npm --prefix frontend run test` | **138 passed**（新增 `utils/addVtuberSearch.test.ts` 7 项） |

@@ -79,10 +79,14 @@ frontend\node_modules\.bin\tsc.cmd -p frontend\tsconfig.json --noEmit
 
 档案视图（P5→v0.9.x）端点：`GET /account/{id}/fan-trend`（按天分桶粉丝趋势）、`GET /account/{id}/live-sessions`（danmakus 主源 + self 快照合并的场次列表）、`GET /account/{id}/live-sessions/{liveId}`（场次级详情：弹幕词云/指标/直播事件，analysis 预留）。
 
-## 打包发布（一键 / 分步，产物统一在 `dist-release/`）
+## 打包发布（一键发布 / 一键打包 / 分步，产物统一在 `dist-release/`）
 
 ```powershell
-# 一键：后端 → 桌面应用 → 聚合（安装包 + 便携版）
+# 一键发布（维护者用：版本同步 → 门禁 → 打版 → 产物校验 → 提交/tag → 推送 → GitHub Release）
+python scripts/release.py 1.0.1          # --dry-run 先预演；--bump patch 自动算版本号
+                                         # 失败后续跑：--from <步骤>；详见 docs/RELEASE.md
+
+# 一键打包（后端 → 桌面应用 → 聚合：安装包 + 便携版）
 npm run release --prefix frontend
 
 # 分步（改其一后只跑对应步）：

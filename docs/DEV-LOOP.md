@@ -213,7 +213,9 @@ python scripts/collect_release.py --portable-only     # 重打 dist-release\DDto
 - `frontend/src-tauri/src/*.rs`（Rust 壳）、`tauri.conf.json`（窗口/资源/CSP）；
 - 需要确认**安装包布局**（如本次 `_internal` 事故）——只有 `npm run tauri:build`
   产出的 `installer.nsi` / setup.exe 能反映；
-- 发布前（`docs/RELEASE.md` §3 的三步 + §3 的产物校验）。
+- 发布前：**`python scripts/release.py <版本>`** 一条命令把"版本同步 → 门禁 → 整包重建 →
+  产物校验（含安装包布局）→ 提交/tag → 推送 → Release"全跑一遍（devlog/084；
+  只想预演用 `--dry-run`，手工分步与排查见 `docs/RELEASE.md`）。
 
 ## 五、新增回归用例的约定
 

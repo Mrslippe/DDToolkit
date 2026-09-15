@@ -1,8 +1,40 @@
 # DDToolkit 发布手册（Release Playbook）
 
-> 每次发布按本文档执行。所有命令均为**本机验证过**的参数组合（尤其网络部分，见 §6）。
+> **日常发布只需一条命令**（2026-09-15 起，devlog/084）：
+>
+> ```powershell
+> $env:GITHUB_TOKEN = "ghp_xxx"          # 只建 Release 需要；推代码走 GCM 可省
+> python scripts/release.py 1.0.1        # 版本同步 → 门禁 → 打版 → 校验 → 提交/tag → 推送 → Release
+> ```
+>
+> 不知道版本号时用 `--bump patch|minor|major`；只想看会做什么用 `--dry-run`；
+> 中途失败按提示 `--from <步骤>` 续跑。**本文档余下部分是那条命令背后的每一步**，
+> 用于排查、手工兜底与理解守卫（脚本失败时会指向对应小节）。
+>
 > 首次发布：v0.9.1（2026-09-08）；最近发布：**v1.0.0**（2026-09-14，
 > [GitHub Release](https://github.com/Mrslippe/DDToolkit/releases/tag/v1.0.0)，release id 388158299）。
+
+---
+
+## 0. 一键脚本 `scripts/release.py`（推荐入口）
+
+| 步骤 | 干什么 | 守卫（不满足即停，且**不写任何文件**） |
+|---|---|---|
+| `preflight` | 分支 / 工作树 / 工具链 / 发布说明 / 版本号一致性 / 网络可达 / token | 工作树脏、notes 缺失、新版本不大于旧版本、要发布但没 token → 停 |
+| `version` | 六处版本号**定点**同步（§2） | 逐文件锚点替换（Cargo.lock 只动 `ddtoolkit` 块），改完复核六处一致 |
+| `gates` | pytest / tsc / eslint / vitest（`--probes` 追加 UI 探针五模式） | 任一非 0 → 停 |
+| `build` | `npm run release`（§3） | 非 0 → 停；日志实时透传 |
+| `verify` | 两个资产 + 无旧版本残留 + **NSIS 未打平** + 便携包结构 + 主程序 FileVersion | devlog/036 的事故形态在这里被机器拦住 |
+| `commit` | `git add -A` + 提交（版本号 + 发布说明 + devlog） | 无改动则跳过（不造空提交） |
+| `tag` | `git tag -a v<版本>` | tag 已存在且不指向 HEAD → 停（不覆盖已发布的 tag） |
+| `push` | 推分支 + 推 tag（代理/直连自动切换 + 重试，§6） | 推完 `ls-remote` 复核；tag 没上去 → 停 |
+| `release` | `scripts/upload_release_assets.py`（幂等，§5） | 无 token / tag 未推 → 停 |
+| `report` | 写 `dist-release/release-report-<版本>.md`（gitignore 内）+ 打印待人工确认项 | —— |
+
+常用参数：`--dry-run`（只预检 + 打印计划）、`--from <步骤>`（续跑）、`--only` / `--skip`、
+`--skip-gates`、`--probes`（+8 分钟）、`--align-version`（版本号漂移时强制对齐）、
+`--allow-dirty`、`--message-file <文件>`（自定义提交信息）、`--no-remote-release`（只到推送为止）。
+另有 `python scripts/release.py --check-version`：只校验六处版本号一致（提交前/CI 可用）。
 
 ---
 
@@ -13,20 +45,28 @@
 - [ ] 代理软件已启动（本机 `7897` 或你的实际端口，见 §6）
 - [ ] GitHub token 有效（classic PAT，`repo` scope）或 GCM 已授权
 - [ ] `python -m PyInstaller --version`、`cargo --version` 可用（构建工具链）
+- [ ] 发布说明 `docs/releases/v<版本>.md` 已写（Release 描述来源，§4.3）
+
+> 以上六条**就是 `release.py preflight` 检查的东西**（缺哪条它会指名道姓地说）。
 
 ---
 
 ## 2. 版本号同步（先于构建，5 处必须一致）
 
 当前版本号分散在 5 个文件（历史上曾有 0.8.0/0.1.0 不一致——**必须全部改齐**）：
+另有 README 顶部徽章，共 **6 处**（`release.py` 的 `VERSION_FILES` 表就是这份清单）：
 
 | 文件 | 字段 | 说明 |
 |---|---|---|
 | `app/core/config.py` | `VERSION: str = "x.y.z"` | 后端版本（注释同步 devlog 版本） |
 | `frontend/src-tauri/tauri.conf.json` | `"version": "x.y.z"` | 桌面壳版本（决定安装包文件名） |
-| `frontend/src-tauri/Cargo.toml` | `version = "x.y.z"` | Rust crate 版本 |
-| `frontend/src-tauri/Cargo.lock` | `[[package]] name="ddtoolkit"` 下 `version = "x.y.z"` | lock 同步（`[[package]]` 块第一处即本项目） |
+| `frontend/src-tauri/Cargo.toml` | `version = "x.y.z"` | Rust crate 版本（**只改 `[package]` 那处**） |
+| `frontend/src-tauri/Cargo.lock` | `[[package]] name="ddtoolkit"` 下 `version = "x.y.z"` | lock 同步（**只动 ddtoolkit 块**：同文件里 serde 等依赖也常是 `1.0.0`） |
 | `frontend/package.json` | `"version": "x.y.z"` | 前端包版本 |
+| `README.md` | `version-x.y.z-ffa2b4` 徽章 | 仓库首页版本标识 |
+
+> ✅ **`python scripts/release.py <版本>` 会自动做这一步**（定点替换 + 改完复核六处一致），
+> 下面的手工写法只在脚本不可用时用。
 
 一次性替换示例（PowerShell，注意编码 UTF8）：
 
@@ -48,7 +88,6 @@ foreach ($f in @(
 > ⚠️ Cargo.lock 里 `name = "ddtoolkit"` 块的 `version` 必须同步——漏改会导致 tauri build 产物版本错乱。
 
 ---
-
 ## 3. 构建产物（三步，产物统一 `dist-release/`）
 
 > 💡 **大多数改动不用走这一步**：后端/登录/首启类改动用
@@ -85,6 +124,12 @@ Select-String frontend/src-tauri/target/release/nsis/x64/installer.nsi `
   -Pattern '/oname=binaries\\backend\\[^\\]+"\s+"[^"]*_internal' | Measure-Object).Count
 ```
 
+> ⚠️ 这两条判据**在真实文件上验过一次**才算数（`tests/test_release_script.py` 里有一条
+> 拿本机 `installer.nsi` 直接量的用例）。真实行形状是
+> `File /a "/oname=binaries\backend\_internal\MSVCP140.dll" "E:\…\_internal\MSVCP140.dll"`
+> —— 目标路径**带引号**；判据少写那个引号就会永不命中，"打平行 = 0" 变成一句空话。
+> `release.py verify` 现在自动跑这两条，并把行数打进报告。
+
 > ⚠️ **资源打包契约（勿改回）**：`tauri.conf.json` 的 `bundle.resources` 必须用
 > **数组形式** `["binaries/backend/**/*"]`。改成 map + glob 形式
 > （`{"binaries/backend/**/*": "binaries/backend/"}`）会让 tauri-utils 按
@@ -104,6 +149,10 @@ Select-String frontend/src-tauri/target/release/nsis/x64/installer.nsi `
 git tag -a v0.9.2 -m "DDtoolkit v0.9.2"
 git -c http.sslBackend=openssl -c http.sslVerify=false -c http.proxy=http://127.0.0.1:7897 push https://<TOKEN>@github.com/Mrslippe/DDToolkit.git v0.9.2
 ```
+
+> ✅ `release.py` 的 `commit` / `tag` / `push` 三步就是这段，并额外做两件事：
+> 推送**代理/直连自动切换 + 各重试 2 次**（`RELEASE.md` §6 的两种网络环境都走过），
+> 推完用 `ls-remote` **复核 tag 真在远端**才继续（Release 不许抢跑）。
 
 ### 4.2 创建 Release（API）
 
@@ -130,24 +179,28 @@ $env:GITHUB_TOKEN = "ghp_xxx"
 python scripts/upload_release_assets.py v0.9.2
 ```
 
-行为：
+行为（**幂等**，2026-09-15 起，devlog/084）：
 1. 校验 `GITHUB_TOKEN` 与 tag（`git ls-remote` **带 §6 定案参数**：裸调用会撞
-   `schannel: SEC_E_NO_CREDENTIALS`，2026-09-08 实测）
-2. `POST /releases` 创建 Release（描述读 `docs/releases/v<版本>.md`，兼容旧的
-   `docs/release-notes-v<版本>.md` 命名；都缺省时用内置文本）
-3. 上传 `dist-release/DDtoolkit_<v>_x64-setup.exe` + `DDtoolkit-portable-win64.zip`
-4. 打印 Release URL
+   `schannel: SEC_E_NO_CREDENTIALS`，2026-09-08 实测；代理不通会自动再试直连）
+2. Release **已存在则复用**（`GET /releases/tags/<tag>`）并用 notes 文件内容 `PATCH` 覆盖描述；
+   不存在才新建（描述读 `docs/releases/v<版本>.md`，兼容旧的 `docs/release-notes-v<版本>.md`）
+3. 上传 `dist-release/DDtoolkit_<v>_x64-setup.exe` + `DDtoolkit-portable-win64.zip`；
+   **同名资产已存在且大小一致 → 跳过**，大小不同 → 删旧重传（重打版后续跑的常态）
+4. 复核远端资产列表并打印 Release URL
 
-> 若描述误用了内置默认文本（历史命名不一致时会发生），用 `PATCH /releases/{id}`
-> 以 notes 文件内容覆盖即可（v0.9.2 发布时即如此修正过一次）。
+> 幂等的意义：发布中途失败（网络/TLS/资产没打完）时重跑不会撞 422 `already_exists`，
+> 也不会落下半份资产 —— `release.py --from release` 依赖这一点。
+> 若描述写错，直接重跑即可覆盖（v0.9.2 时是手工 `PATCH` 修的，现在自动）。
 
 输出示例：
 ```
-[1/4] tag v0.9.2 已推送, 开始发布
-[2/4] Release created  (id 384558707)
-[3/4] 上传 DDtoolkit_0.9.2_x64-setup.exe  ... OK (40.4 MB)
-[4/4] 上传 DDtoolkit-portable-win64.zip  ... OK (52.4 MB)
-URL: https://github.com/Mrslippe/DDToolkit/releases/tag/v0.9.2
+[1/5] token 有效 (login=…)
+[2/5] tag v1.0.1 已在远端（0acdbce…）
+[3/5] Release created  (id 388158299)，描述来源 v1.0.1.md
+[4/5] 上传 DDtoolkit_1.0.1_x64-setup.exe ... OK (56.3 MB)
+[4/5] DDtoolkit-portable-win64.zip 已存在且大小一致，跳过（70.3 MB）
+[5/5] 远端资产: ['DDtoolkit-portable-win64.zip', 'DDtoolkit_1.0.1_x64-setup.exe']
+      https://github.com/Mrslippe/DDToolkit/releases/tag/v1.0.1
 ```
 
 ---
@@ -203,13 +256,21 @@ Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Setti
 - [ ] 本地 `git status` 干净（`dist-release/`、`scripts/backend-8000.bat`、`_nondistribute/` 均 gitignore，不应出现）
 - [ ] README 顶部的 Version 徽章已更新（README.md 头部 `version-x.y.z`）
 
+> 前两条与最后一条 `release.py` 已自动做完并把实测值写进
+> `dist-release/release-report-<版本>.md`（含可直接粘进 devlog 的执行记录表）。
+> **装一次直装版 / 便携版这两条脚本做不了**（要人工点安装向导与扫码），
+> 每次发布都要你亲自过一遍。
+
 ---
 
-## 8. 语义约定（半自动流程）
+## 8. 语义约定（一键为主，分步兜底）
 
 | 动作 | 命令/方式 |
 |---|---|
+| **一键发布**（推荐） | `python scripts/release.py <版本>`（`--bump` / `--dry-run` / `--from` 见 §0） |
+| 只查版本号一致性 | `python scripts/release.py --check-version` |
+| 版本号同步 | 由 `release.py version` 自动做（§2 是它的清单与手工兜底） |
 | 构建 | `npm run release --prefix frontend`（完整权限） |
 | 推代码 | `git push`（GCM 授权后免 token） |
-| 推 tag + 建 Release + 传资产 | `scripts/upload_release_assets.py v<版本>`（token 走环境变量） |
+| 推 tag + 建 Release + 传资产 | `scripts/upload_release_assets.py v<版本>`（token 走环境变量，幂等） |
 | 浏览器兜底 | 手动 upload（§4.2） |
