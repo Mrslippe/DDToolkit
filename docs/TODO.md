@@ -125,10 +125,15 @@
 - **P10-A 视觉手感**：双月历配色与日期格密度、窄窗表现（devlog/050）
 - **发版**：**v1.0.1 已发布**（2026-09-15，覆盖 devlog 082–084，[Release](https://github.com/Mrslippe/DDToolkit/releases/tag/v1.0.1)，
   release id 389029336，安装包 56.3MB / 便携 70.3MB）；装机验证（直装版 `_internal` + 首启、便携版解压启动）
-  与 PAT 吊销**用户已确认完成**（2026-09-15）。下一版起点 = 本文件 §1 的剩余条目。
+  与 PAT 吊销**用户已确认完成**（2026-09-15）。
+  **v1.0.2**（覆盖 devlog 085–097）：tag 已推送到 `b596f13`（含发布前修掉的两个实测问题 —— 托盘退出 / 设置窗口渲染；
+  原先那次 tag 指向 `2360f9d`，按用户口径**移动到修复后的提交**）、`main` 已对齐、产物已重建并校验
+  （setup 56.4MB / 便携 70.5MB / FileVersion 1.0.2）；**GitHub Release 待建** —— 有 token 时一条命令：
+  `python scripts/release.py 1.0.2 --from release`（资产在 `dist-release/`，幂等）。
   发布方式已收敛为一条命令：**`python scripts/release.py <版本>`**（devlog/084，手册 `docs/RELEASE.md`）——
   脚本做版本同步/门禁/打版/产物校验/提交/tag/推送/Release，**只有两件事仍需你亲自做**：
-  装一次直装版确认 `binaries\backend\_internal\` 存在且首启能过、便携版解压可启动；以及 token 进过对话就吊销。
+  装一次直装版确认 `binaries\backend\_internal\` 存在且首启能过（v1.0.2 起**顺带验托盘**：✕ 隐藏 → 托盘退出能真退出）、
+  便携版解压可启动；以及 token 进过对话就吊销。
 - **R9 的展示形态**：等「账号信息历史快照」那条线开工时一起定（曾用名/曾用签名放哪、怎么呈现）
 
 > ✅ 已完成（2026-09-13 复核后从本清单移出）：**P9-A 历史归并脚本已在真实库跑完** ——
