@@ -1253,8 +1253,8 @@ def main() -> int:
                       f"（新字段需要在 _run_probe 的白名单里登记）")
             print(f"  空闲：文案={si.get('idleText')!r} 亮起={si.get('idleLit')} "
                   f"计数={si.get('idleCount')} 右栏宽={si.get('spacerIdle')}")
-            print(f"  空闲轮播：池={si.get('idleSize')} 三格={si.get('idleTexts')} "
-                  f"索引={si.get('idleIndexes')}")
+            print(f"  空闲轮播：开关={si.get('idleCarousel')!r} 池={si.get('idleSize')} "
+                  f"三格={si.get('idleTexts')} 索引={si.get('idleIndexes')}")
             print(f"  瞬时消息：文案={si.get('litText')!r} 亮起={si.get('litOn')} "
                   f"chevron={si.get('litHasChevron')}")
             print(f"  面板：打开={si.get('panelOpened')} 条目={si.get('panelItems')} "
@@ -1276,53 +1276,45 @@ def main() -> int:
                     failures.append(f"@{w} status-island: 空闲态就亮着容器"
                                     f"（文案={si.get('idleText')!r}）—— 用户 2026-09-10 口径："
                                     f"频繁轮询不占顶栏，空闲只有绿点")
-                # ── 空闲轮播（R12b）─────────────────────────────────────
-                # 语录是**长期驻留**的文案，一旦写成进度词（「…轮询中」），
-                # 「自动节拍不占顶栏」那条口径就被文案本身破坏了：顶栏看起来一直在报进度。
+                # ── 空闲轮播（R12b 起；**R19 起下线**）───────────────────
+                # 用户口径（R19，devlog/096）：「顶栏状态栏空置的时候轮播的语录集暂时下线，
+                # 等之后库中真有了条目再上线」。所以现在的判据与 R12b 那版**相反**：
+                # 空闲文案必须**恒为状态文案、不轮播**；池子与开关状态照旧量出来
+                # （池子还在 = 扩展点没被删；`data-idle-carousel` 是开关的单一事实来源，
+                # 上线时把它翻成 'on' 并恢复"必须轮播"的断言 —— 两处一起改，否则这条会红）。
+                # 语录忌词那条**继续保留**：将来接真实条目时同样不许长成进度文案。
                 size = si.get("idleSize") or 0
                 idxs = si.get("idleIndexes") or []
                 texts = si.get("idleTexts") or []
                 pool = si.get("idlePool") or []
                 if size < 2:
-                    failures.append(f"@{w} status-island: 空闲轮播池只有 {size} 格 —— "
-                                    f"除了状态文案还得有话可说（`data-idle-size`）")
+                    failures.append(f"@{w} status-island: 空闲池只有 {size} 格 —— "
+                                    f"轮播虽已下线，池子与扩展点要留着（`data-idle-size`）")
                 if len(pool) != size:
                     failures.append(f"@{w} status-island: 轮播池内容 {len(pool)} 条与池长 {size} 对不上"
                                     f"（`data-idle-pool` 的分隔编码会因此失真）")
                 if pool and pool[0] != "数据服务运行中":
                     failures.append(f"@{w} status-island: 轮播第 0 格是 {pool[0]!r}，"
-                                    f"应为「数据服务运行中」—— 状态文案不能被语录顶掉"
-                                    f"（它是顶栏的看家职责）")
+                                    f"应为「数据服务运行中」—— 状态文案不能被语录顶掉")
                 for t in pool:
                     for bad in ("轮询", "抓取中", "同步"):
                         if bad in (t or ""):
-                            failures.append(f"@{w} status-island: 语录 {t!r} 里出现进度词"
+                            failures.append(f"@{w} status-island: 池内文案 {t!r} 里出现进度词"
                                             f"「{bad}」—— 空闲文案不许长得像任务进度")
+                if si.get("idleCarousel") != "off":
+                    failures.append(f"@{w} status-island: 轮播开关是 {si.get('idleCarousel')!r}，"
+                                    f"R19 起应为 'off'（语录集暂时下线；要上线就改 "
+                                    f"`IDLE_CAROUSEL_ENABLED` 并同步这条断言）")
                 for i, t in enumerate(texts):
-                    if not (t or "").strip():
-                        failures.append(f"@{w} status-island: 空闲轮播第 {i} 次采样是空的")
-                        continue
-                    if pool and t not in pool:
-                        failures.append(f"@{w} status-island: 第 {i} 次采样文案 {t!r} 不在轮播池里")
-                        continue
-                    # 索引↔文案必须对得上（越界单独报，别在这里下标越界）
-                    ix = idxs[i] if i < len(idxs) else None
-                    if pool and ix is not None and 0 <= ix < len(pool) and t != pool[ix]:
-                        failures.append(f"@{w} status-island: 第 {i} 次采样文案 {t!r} 与索引 "
-                                        f"{ix} 那一格（{pool[ix]!r}）不符")
-                for i, ix in enumerate(idxs):
-                    if not (0 <= ix < size):
-                        failures.append(f"@{w} status-island: 第 {i} 次采样的轮播索引 {ix} "
-                                        f"越出池子（0..{size - 1}）")
-                if len(texts) == 3 and len(idxs) == 3:
-                    steps = [(idxs[i + 1] - idxs[i]) % size if size else 0 for i in range(2)]
-                    if any(s < 1 for s in steps):
-                        failures.append(f"@{w} status-island: 空闲轮播没在走"
-                                        f"（索引 {idxs}，间隔 7s 虚拟时间/档位 6s；"
-                                        f"文案 {texts}）—— 用户期望③：空闲时轮播内容")
-                    if texts[0] == texts[1] or texts[1] == texts[2]:
-                        failures.append(f"@{w} status-island: 空闲文案三轮里出现重复"
-                                        f"（{texts}）—— 索引动了但文案没换")
+                    if t != "数据服务运行中":
+                        failures.append(f"@{w} status-island: 第 {i} 次采样的空闲文案是 {t!r}，"
+                                        f"应为「数据服务运行中」—— 轮播下线后不该再轮换语录")
+                    if idxs[i] != 0:
+                        failures.append(f"@{w} status-island: 第 {i} 次采样的轮播索引是 "
+                                        f"{idxs[i]}，下线时应恒为 0")
+                if len(texts) == 3 and len(set(texts)) != 1:
+                    failures.append(f"@{w} status-island: 空闲文案在三次采样里变了（{texts}）"
+                                    f"—— 轮播已下线，应当恒定")
                 if not si.get("litOn"):
                     failures.append(f"@{w} status-island: 派发 pill-message 后状态岛没亮起")
                 elif "探针消息" not in (si.get("litText") or ""):

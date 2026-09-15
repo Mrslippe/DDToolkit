@@ -37,6 +37,23 @@ export const IDLE_QUOTES: readonly string[] = [
   '空闲中 · 下一场直播会自己进来',
 ]
 
+/**
+ * **空闲语录轮播：暂时下线**（R19，devlog/096）。
+ *
+ * 用户口径（2026-09-15）：「顶栏状态栏空置的时候轮播的语录集暂时下线，等之后库中真有了
+ * 条目再上线」。也就是说，现在那几句内置语录（"档案已就绪，随时可以翻"…）是**文案占位**，
+ * 而不是库里真有的东西 —— 与其让顶栏转着几句与数据无关的话，不如老实显示状态文案。
+ *
+ * 下线**不是删掉**：池子照建（`data-idle-pool` 照挂）、取模选格照实现（单测用 `enabled: true`
+ * 覆盖着测，逻辑不会烂），`registerIdleProvider` 扩展点也留着 —— 将来库中真有了条目
+ * （弹幕热词 / 名场面 / 直播倒计时）就走这个口子接进来，然后把这里翻成 `true`。
+ *
+ * ⚠️ 翻这个开关是**两处一起改**：本常量 + 探针 `ui_probe --status-island` 的
+ * "空闲文案不轮播 / 必须轮播"那组断言（探针读 DOM 上的 `data-idle-carousel`，
+ * 会对不上就红 —— 故意的：省得哪天悄悄开了或关了没人知道）。
+ */
+export const IDLE_CAROUSEL_ENABLED = false
+
 export type IdleProvider = () => string[]
 
 const providers: IdleProvider[] = []
@@ -88,25 +105,33 @@ export interface IdlePick {
   pool: string[]
 }
 
-/** `floor(now / tickMs) % pool.length`；`tickMs<=0` 时退回第 0 格（状态文案） */
+/**
+ * `floor(now / tickMs) % pool.length`；`tickMs<=0` 或轮播下线时退回第 0 格（状态文案）。
+ *
+ * `enabled` 显式可覆盖（默认取 `IDLE_CAROUSEL_ENABLED`）：运行时关着，
+ * 但单测仍能用 `enabled: true` 把轮播逻辑完整测一遍 —— 关掉的是**显示**，不是实现。
+ */
 export function pickIdle(
   now: number,
-  opts: { statusText?: string; tickMs?: number } = {},
+  opts: { statusText?: string; tickMs?: number; enabled?: boolean } = {},
 ): IdlePick {
   const pool = idlePool(opts.statusText)
   const tick = opts.tickMs ?? IDLE_TICK_MS
-  if (!(tick > 0) || pool.length <= 1) return { text: pool[0], index: 0, size: pool.length, pool }
+  const on = opts.enabled ?? IDLE_CAROUSEL_ENABLED
+  if (!on || !(tick > 0) || pool.length <= 1) {
+    return { text: pool[0], index: 0, size: pool.length, pool }
+  }
   const index = Math.floor(now / tick) % pool.length
   return { text: pool[index], index, size: pool.length, pool }
 }
 
 /**
  * 当前该显示哪一条：`pickIdle(...).text`。
- * `tickMs<=0` 时退回第 0 格（状态文案）—— 轮播被关掉也不该显示空。
+ * 轮播下线或 `tickMs<=0` 时退回第 0 格（状态文案）—— 关掉轮播也不该显示空。
  */
 export function pickIdleText(
   now: number,
-  opts: { statusText?: string; tickMs?: number } = {},
+  opts: { statusText?: string; tickMs?: number; enabled?: boolean } = {},
 ): string {
   return pickIdle(now, opts).text
 }

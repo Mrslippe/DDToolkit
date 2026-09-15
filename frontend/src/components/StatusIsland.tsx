@@ -4,7 +4,7 @@ import { AlertTriangle, CheckCircle2, ChevronDown, Loader2 } from 'lucide-react'
 import OverlayScroll from './OverlayScroll'
 import type { Notice, NoticeActionKind } from '../utils/notificationHub'
 import { KIND_PRIORITY, pickPrimary } from '../utils/notificationHub'
-import { IDLE_TICK_MS, pickIdle } from '../utils/idleQuotes'
+import { IDLE_CAROUSEL_ENABLED, IDLE_TICK_MS, pickIdle } from '../utils/idleQuotes'
 import { isShellHidden } from '../utils/shellLifecycle'
 import { useShellHidden } from '../hooks/useShellHidden'
 
@@ -62,9 +62,10 @@ export default function StatusIsland({ notices, onAction, now }: Props) {
   // 空闲轮播的时钟：**只在空闲时走**（有事发生时立刻停表，省掉一个无谓的定时器；
   // 也让"语录正在轮播"不可能和"有通知亮着"同时出现在屏幕上）。
   // R18：隐藏到托盘时同样停表 —— 6s 一次的轮播在后台跑 8 小时是纯浪费（界面根本没人看）。
+  // R19：轮播**下线**时连定时器都不开 —— 文案恒为状态文案，每 6s 重渲染一次纯属白干。
   const [idleTick, setIdleTick] = useState(() => Date.now())
   useEffect(() => {
-    if (lit || hidden) return
+    if (lit || hidden || !IDLE_CAROUSEL_ENABLED) return
     setIdleTick(Date.now())   // 从有事故态/隐藏态回到空闲时立刻取一次，别停在旧格上
     const timer = window.setInterval(() => {
       // ⚠️ 判据读**同步源**：隐藏是同步置位的，而 React 状态要等下一次渲染 ——
@@ -120,6 +121,9 @@ export default function StatusIsland({ notices, onAction, now }: Props) {
         data-idle-index={lit ? undefined : idle.index}
         data-idle-size={lit ? undefined : idle.size}
         data-idle-pool={lit ? undefined : idle.pool.join('|')}
+        /* R19：轮播开关的**当前状态**（探针据此断言"现在到底是开着还是关着" ——
+           开关与断言分处两地，改一处不改另一处就会红，省得悄悄开了/关了没人知道） */
+        data-idle-carousel={lit ? undefined : (IDLE_CAROUSEL_ENABLED ? 'on' : 'off')}
         title={lit ? `${text}（点击查看全部通知）` : text}
         onClick={() => lit && setOpen((o) => !o)}
         onKeyDown={(e) => {

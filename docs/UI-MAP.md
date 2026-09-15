@@ -119,17 +119,22 @@ DOM 契约（探针 `ui_probe --status-island` 直接查）：`.si-island`（`.o
 （`.warn` = 红）· `.si-text` · `.si-count` · `.si-chevron` · `.si-panel` · `.si-item[data-kind]` ·
 `.si-item-meta`（含来源标注）· `.si-item-action`。
 
-**空闲轮播（R12a 期望③，2026-09-15 R12b devlog/090）**：没事发生时文案在
-「状态文案 + 语录」之间轮转（`IDLE_TICK_MS = 6s`，一轮 8 格 48s），**只有绿点、仍无容器**。
+**空闲轮播（R12a 期望③，2026-09-15 R12b 上线；⚠️ R19 起暂时下线，devlog/096）**：
+**当前空闲文案恒为「数据服务运行中」，不轮播** —— 用户口径「顶栏状态栏空置的时候轮播的语录集
+暂时下线，等之后库中真有了条目再上线」（那些内置语录是占位文案，与库中内容无关）。
+下线**不是删掉**：池子照建、`registerIdleProvider` 扩展点留着，将来接弹幕热词/名场面时
+把 `IDLE_CAROUSEL_ENABLED` 翻成 `true` 即可（**同时要改探针那组"必须轮播"的断言**）。
 
 | 名称 | 属性 / 类名 | 说明 |
 |---|---|---|
-| 轮播位置 | `.si-island[data-idle-index]` | 当前第几格（空闲态才有）；`data-idle-size` = 池长 |
-| 轮播内容 | `.si-island[data-idle-pool]` | 池子全文，`\|` 分隔 —— 探针据此断言"取到的词出自池子、就是 index 那一格" |
-| 扩展点 | `idleQuotes.registerIdleProvider(fn)` | 返回注销函数；将来接弹幕热词/名场面不用改顶栏组件 |
+| 轮播位置 | `.si-island[data-idle-index]` | 当前第几格（空闲态才有；下线时恒为 0）；`data-idle-size` = 池长 |
+| 轮播内容 | `.si-island[data-idle-pool]` | 池子全文，`\|` 分隔 —— 探针据此断言"池子还在、第 0 格是状态文案、池内无进度词" |
+| 轮播开关 | `.si-island[data-idle-carousel]`（`on` / `off`） | **开关状态的单一事实来源**：探针断言它与 `IDLE_CAROUSEL_ENABLED` 一致，改一处不改另一处会红 |
+| 扩展点 | `idleQuotes.registerIdleProvider(fn)` | 返回注销函数；接真实条目时不用改顶栏组件 |
 
-> 为什么时钟是**组件自己的定时器**（只在空闲时开）：挂在 `TopBar` 的抓取轮询上，
+> 为什么时钟是**组件自己的定时器**（只在空闲且轮播开着时开）：挂在 `TopBar` 的抓取轮询上，
 > 轮播的可见性会随之漂移 —— 谁把 `POLL_IDLE_MS` 从 10s 调大，轮播就静默变慢甚至停住。
+> 下线后连这个定时器都不开（文案恒定，每 6s 重渲染纯属白干）。
 
 **动效（R12a 期望②「优雅流畅」，2026-09-15 R12b）**：面板入场 `si-panel-in` 220ms
 （`translateY(-6px) scale(.985)` → 原位，`transform-origin: top`）· chevron 翻转 `transition .2s` ·

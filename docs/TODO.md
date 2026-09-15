@@ -36,9 +36,10 @@
 | # | 日期 | 一句话需求 | 期望效果（可选） | 优先级 | 状态 |
 |---|---|---|---|---|---|
 | **R18** | 2026-09-15 | 关闭前端界面时**隐藏到系统托盘**，后台抓取照常进行，**不用渲染前端** | 点 ✕ 窗口消失、托盘有图标；期间后台继续抓；点托盘图标恢复；托盘可直接退出 | 中 | ✅ **已落地**（devlog/095）→ 详见 `docs/ROADMAP-DONE.md`（含人工验收清单） |
+| **R19** | 2026-09-15 | 顶栏状态栏空置的时候轮播的语录集暂时下线，等之后库中真有了条目再上线 | 空闲时顶栏只说状态，不转占位语录 | 低 | ✅ **已落地**（devlog/096）→ 详见 `docs/ROADMAP-DONE.md` |
 
-> **R12–R17 已全部落地**，原文与落地结论已移入 `docs/ROADMAP-DONE.md` 的
-> 「需求清单：R12–R17」（本表按本文件规则只留**未落地**项）：
+> **R12–R19 已全部落地**（R18/R19 见上表；R12–R17 的原文与落地结论在 `docs/ROADMAP-DONE.md`
+> 的「需求清单：R12–R17」——本表按本文件规则只留**未落地**项）：
 > R12 状态岛/灵动岛（devlog/089、090）· R13 预约进日历（088）· R14 设置界面（091、092）·
 > R15 前端三处打磨（087）· R16 list 筛选钮跟随侧栏（093）· R17 设置窗口两栏改版（094）。
 
@@ -104,7 +105,9 @@
 
 | **R18 关闭窗口 → 隐藏到系统托盘** | ✅ **已落地**（2026-09-15，devlog/095） | 用户口径：首次点 ✕ 问一次并记住选择；P1（隐藏+停表）与 P2（深休眠）一起做。<br>**Rust**：`tray-icon` feature + 托盘（左键唤回 / 菜单退出）· 拦 `CloseRequested` → `prevent_close` + `hide` + `set_skip_taskbar` · `ExitRequested` 非主动退出时 `prevent_exit`（**深休眠销毁 WebView 也会走到这里，这条是必须的**）· 退出唯一路径 = 托盘 → 前端确认 → `quit_app`（置 `QUITTING` 再 `exit`）· 深休眠 10 分钟销毁 WebView，唤回重建窗口 + `?restored=1` · single-instance 回调改成唤回（原来只 `set_focus`，隐藏时等于点了没反应）。<br>**前端**：`utils/shellLifecycle`（同步可见性源 + dev 钩子）+ `hooks/useShellHidden`（停表：顶栏两条轮询 / 状态岛轮播；恢复：**立刻补一轮**）+ `utils/shellState`（关闭语义三态 + 深休眠现场持久化，路径/视图**都过校验**）+ `CloseActionDialog`（首次询问，两个选项各自写清后果）+ 设置「外观」页可改。<br>**护栏**：新探针 `--tray-suspend`（可见基线 → 隐藏停表 → 唤回补一轮）· vitest +17 · `cargo build` 通过 · 人工验收清单在 devlog/095 与 DEV-LOOP。<br>⚠️ **探针抓到两个真 bug**：① 停表判据读了 React 状态（有一帧延迟）→ 改读同步源；② 只在"排程"时判不够 —— 定时器可能是**还可见时**排下的 10s 后那一轮，隐藏后照样触发（实测漏网时刻 22063 / 隐藏发生在 14349）⇒ **"排程"与"触发"两处都要判** |
 
-| **待排期（可选，不做也不影响）** | 无阻塞，等你挑 | ① **深色主题**：R14b 的钩子已就位（填 `:root[data-theme='dark']` + 翻 `DARK_IMPLEMENTED`），但真正做要先把 **243 处硬编码色值**收敛成令牌 + ECharts 双主题 + 逐屏走查 —— 单列一批；② **能力受限入口并进状态岛面板**（`NoticeActionKind.open-limits` 已预留）；③ **空闲轮播接真实内容源**（`registerIdleProvider` 扩展点已留：弹幕热词 / 名场面 / 直播倒计时）；④ 参考图右上的动作行（复制诊断信息 / 打开数据目录）——R17 按用户口径没做 |
+| **待排期（可选，不做也不影响）** | 无阻塞，等你挑 | ① **空闲轮播上线**（R19 下线了；等库中真有条目 —— 接 `registerIdleProvider` + 翻 `IDLE_CAROUSEL_ENABLED`，同步改探针断言）；② **深色主题**：R14b 的钩子已就位（填 `:root[data-theme='dark']` + 翻 `DARK_IMPLEMENTED`），但真正做要先把 **243 处硬编码色值**收敛成令牌 + ECharts 双主题 + 逐屏走查 —— 单列一批；③ **能力受限入口并进状态岛面板**（`NoticeActionKind.open-limits` 已预留）；④ 参考图右上的动作行（复制诊断信息 / 打开数据目录）——R17 按用户口径没做 |
+
+| **R19 空闲语录轮播下线** | ✅ **已落地**（2026-09-15，devlog/096） | 用户口径：「顶栏状态栏空置的时候轮播的语录集暂时下线，等之后库中真有了条目再上线」。做法：`IDLE_CAROUSEL_ENABLED = false`（R12b 那 7 句内置语录是**占位文案**，与库中内容无关）+ 关掉时**连 6s 定时器都不开**；**下线不是删掉** —— 池子照建、取模选格逻辑单测用 `enabled: true` 覆盖着测（逻辑不会烂）、`registerIdleProvider` 扩展点留着。<br>**护栏整体反向**（这条比改动本身重要）：探针 `--status-island` 从"必须轮播/索引前进/文案不重复"改成"**恒为状态文案 / 索引恒 0 / `data-idle-carousel === 'off'`**"，而池长、第 0 格是状态文案、池内无进度词那几条**照旧断言**（将来接真实条目时同样成立）。`data-idle-carousel` 由常量驱动 ⇒ **改常量不改断言（或反之）就红**，省得悄悄开了/关了没人知道。上线步骤写在常量注释里（翻常量 + 恢复那组断言 + 接 provider） |
 
 ### 1.2 需要先定口径 / 拍板（不是写代码的问题）
 
@@ -234,7 +237,7 @@
 > 索引已移入 **`docs/ROADMAP-DONE.md` → 「批次 → devlog 索引」**（2026-09-13 整理：
 > 本文件只留"要干什么"与当前基线，历史索引与已完成条目同处一份文件更好查）。
 
-### 6.2 当前门禁基线（2026-09-15 实测 / 复核，R18 批次）
+### 6.2 当前门禁基线（2026-09-15 实测 / 复核，R19 批次）
 
 | 门禁 | 命令 | 基线 |
 |---|---|---|
@@ -244,9 +247,9 @@
 | 上游冒烟 | `python scripts/smoke_upstream.py [--cold]`（或 `dev_check.py --upstream`） | 真上游 **5 ok / 0 FAIL**；冷进程 **3 ok / 0 FAIL**（未登录三态） |
 | 前端类型 | `npx tsc --noEmit`（`npm run build` 也会跑） | **0 错** |
 | 前端 lint | `npm --prefix frontend run lint` | **0 错**（`--max-warnings 0`） |
-| 前端单测 | `npm --prefix frontend run test` | **238 passed**（`addVtuberSearch` 7 · `capabilities` 6 · `reservationDays` 9 · `notificationHub` 12 · `idleQuotes` 15 · `settingsDraft` 17 · `settingsNav` 11 · `theme` 13 · **`shellState` 11** · **`shellLifecycle` 6** · 其余既有） |
+| 前端单测 | `npm --prefix frontend run test` | **241 passed**（`addVtuberSearch` 7 · `capabilities` 6 · `reservationDays` 9 · `notificationHub` 12 · `idleQuotes` 18 · `settingsDraft` 17 · `settingsNav` 11 · `theme` 13 · `shellState` 11 · `shellLifecycle` 6 · 其余既有） |
 | 词云布局 | `node scripts/check_wordcloud_layout.mjs` | sha256 `19ecc7e673b95c8a1fa7c8c219ada78e9b581a15764aa57b33a7de473fc63dac`（本轮实跑一致 ✓） |
-| 布局探针 | `python scripts/ui_probe.py --hero-expect c11548580e73d910ca667047b8120075a4ab121fa3fa098ff6654326ed183666 --vtuber 15`<br>`python scripts/ui_probe.py --archive --vtuber 15`（`--archive-print` 出签名）<br>`python scripts/ui_probe.py --settings --vtuber 15`（两个带签名账号）/ `--vtuber 14`（单账号长签名）<br>`python scripts/ui_probe.py --scene --vtuber 15`<br>`python scripts/ui_probe.py --add-v --vtuber 15`（R11）<br>`python scripts/ui_probe.py --capabilities`（未登录现场）<br>`python scripts/ui_probe.py --polish`（R15 三处打磨）<br>`python scripts/ui_probe.py --reservations`（R13：**探针自己种预约**进数据副本）<br>`python scripts/ui_probe.py --status-island`（R12a/R12b 顶栏状态岛）<br>`python scripts/ui_probe.py --app-settings`（R14a/R14b/R17 应用设置：**会写盘**，跑在数据副本上；`--shot` 出视觉存档）<br>`python scripts/ui_probe.py --filter-pill`（R16 两枚筛选浮片逐项对账 + 三态文字居中/caret 间距）<br>`python scripts/ui_probe.py --tray-suspend`（R18 托盘隐藏停表：可见基线 → 隐藏停表 → 唤回补一轮） | 十三条实跑通过（hero 三档签名一致 `c1154858…` / settings 29 项 / scene 提交 250ms / add-v 来源分流 / capabilities 未登录提示 / **polish：标题 700 文本宽 114.3/150、筛选钮文字左右各 31.5px·中心偏移 0·caret absolute、徽标「+」空闲高度 0·不可命中·徽标→分割线 10px、hover 37px 可命中** / **filter-pill：list 那枚与侧栏那枚配方一致（STYLE 逐项相等 / SIZE 各行其是），三态文字居中且 caret 不压字** / **reservations：预约格徽章「预约」+ 计数槽 `128 人预约` + 标题、hover 浮层条目** / **status-island：空闲无容器 + 空闲轮播三格连采在走 → 消息点亮 → 面板可命中不挤动右栏 → Esc 收起 → 入场动画挂上 → ttl 过期自清** / **app-settings（R17 两栏）：导航 6 项与后端分组一致 → 两栏几何/命中 → 分页只渲染当前页 → 圆点标对页且切页不丢草稿 → 越界被拦 → 保存回问后端 10→7 → 关于页只读带理由且无可写控件 → 恢复默认回 10 → 主题三卡（深色只标不藏）→ Esc 关闭** / **tray-suspend：可见 1 次 → 隐藏 0 次（轮播也停）→ 唤回立刻补 1 次**）。记录值：`--archive` 日历签名 **`50b78ec0…`**（2026-09-15 20:5x 实测；17:00 那次 `48519bae…` 的差异来自当晚 V15 新落库两场直播 —— **数据漂移、非代码**） |
+| 布局探针 | `python scripts/ui_probe.py --hero-expect c11548580e73d910ca667047b8120075a4ab121fa3fa098ff6654326ed183666 --vtuber 15`<br>`python scripts/ui_probe.py --archive --vtuber 15`（`--archive-print` 出签名）<br>`python scripts/ui_probe.py --settings --vtuber 15`（两个带签名账号）/ `--vtuber 14`（单账号长签名）<br>`python scripts/ui_probe.py --scene --vtuber 15`<br>`python scripts/ui_probe.py --add-v --vtuber 15`（R11）<br>`python scripts/ui_probe.py --capabilities`（未登录现场）<br>`python scripts/ui_probe.py --polish`（R15 三处打磨）<br>`python scripts/ui_probe.py --reservations`（R13：**探针自己种预约**进数据副本）<br>`python scripts/ui_probe.py --status-island`（R12a/R12b 顶栏状态岛）<br>`python scripts/ui_probe.py --app-settings`（R14a/R14b/R17 应用设置：**会写盘**，跑在数据副本上；`--shot` 出视觉存档）<br>`python scripts/ui_probe.py --filter-pill`（R16 两枚筛选浮片逐项对账 + 三态文字居中/caret 间距）<br>`python scripts/ui_probe.py --tray-suspend`（R18 托盘隐藏停表：可见基线 → 隐藏停表 → 唤回补一轮） | 十三条实跑通过（hero 三档签名一致 `c1154858…` / settings 29 项 / scene 提交 250ms / add-v 来源分流 / capabilities 未登录提示 / **polish：标题 700 文本宽 114.3/150、筛选钮文字左右各 31.5px·中心偏移 0·caret absolute、徽标「+」空闲高度 0·不可命中·徽标→分割线 10px、hover 37px 可命中** / **filter-pill：list 那枚与侧栏那枚配方一致（STYLE 逐项相等 / SIZE 各行其是），三态文字居中且 caret 不压字** / **reservations：预约格徽章「预约」+ 计数槽 `128 人预约` + 标题、hover 浮层条目** / **status-island（R19 后）：空闲无容器 + 空闲文案恒为「数据服务运行中」·`data-idle-carousel='off'`·池 8 格（扩展点还在）→ 消息点亮 → 面板可命中不挤动右栏 → Esc 收起 → 入场动画挂上 → ttl 过期自清** / **app-settings（R17 两栏）：导航 6 项与后端分组一致 → 两栏几何/命中 → 分页只渲染当前页 → 圆点标对页且切页不丢草稿 → 越界被拦 → 保存回问后端 10→7 → 关于页只读带理由且无可写控件 → 恢复默认回 10 → 主题三卡（深色只标不藏）→ Esc 关闭** / **tray-suspend：可见 1 次 → 隐藏 0 次（轮播也停）→ 唤回立刻补 1 次**）。记录值：`--archive` 日历签名 **`50b78ec0…`**（2026-09-15 20:5x 实测；17:00 那次 `48519bae…` 的差异来自当晚 V15 新落库两场直播 —— **数据漂移、非代码**） |
 | 一把梭 | `python scripts/dev_check.py` | 测试 + 后端冒烟（详见 `docs/DEV-LOOP.md`） |
 
 > ⚠️ 探针的 `--hero-expect` / `--calendar-expect` 签名**含实时数据**，只适合"改动前后短窗口对比"，

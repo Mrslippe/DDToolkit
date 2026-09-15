@@ -905,6 +905,7 @@ export async function runUiProbe(): Promise<void> {
         index: Number(el?.getAttribute('data-idle-index')),
         size: Number(el?.getAttribute('data-idle-size')),
         pool: (el?.getAttribute('data-idle-pool') || '').split('|'),
+        carousel: el?.getAttribute('data-idle-carousel') ?? null,
       }
     }
     const samples = [idleSample()]
@@ -917,6 +918,7 @@ export async function runUiProbe(): Promise<void> {
     result.idleIndexes = samples.map((s) => s.index)
     result.idleSize = samples[0].size
     result.idlePool = samples[0].pool
+    result.idleCarousel = samples[0].carousel
 
     // ① 空闲态
     result.idleText = samples[0].text
