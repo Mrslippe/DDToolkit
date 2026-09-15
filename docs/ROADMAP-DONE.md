@@ -192,7 +192,7 @@
 | **R15 前端三处打磨**：顶栏标题粗体（文本宽 114.3/150 实测）· 筛选钮「文字+箭头」组居中（真因是 caret 钉在最右角，不是文字）· 药丸「+」未 hover 净占位 0（徽标→分割线 57→10px）且不可命中；新增探针 `ui_probe --polish`（反向验证过） | 087 |
 | **R13 直播预约进日历**：后端零改动（per-V 端点已存在，聚合是多余的）· `useReservations`（V 级）· `utils/reservationDays.ts`（徽章优先级 场次>预约>休息·待定，9 单测）· 格子 `.lc-resv`（不动九类色系 / 计数槽放预约人数 / 有场次时压成小字）· 浮层预约块；探针 `--reservations` **自己种预约**（反向验证过） | 088 |
 | **R12a 顶栏状态岛**：`notificationHub`（优先级 alert>progress>report>message + 过期/常驻，12 单测）· `StatusIsland` 四态（面板 portal+fixed）· 六类信息源（含后端新增 `fetch-status.rate_limit`，9 处冷却点统一记账）· 完成报告改常驻条目不再自动弹窗 · 探针 `--status-island`（含"展开不挤动右栏"） | 089 |
-| 场次上游取数**单飞**（修"点一次详情发四个请求"）+ 观测日志 + 修一条日期炸弹用例 | 081 |
+| **R12b 状态岛动效 + 空闲轮播**：面板入场 `si-panel-in` 220ms / chevron 翻转 / 计数徽章 pop（`prefers-reduced-motion` 只淡入、**但保留瞬时翻转**，实测 reduce 支 `si-panel-in-fade`）· `utils/idleQuotes.ts`（池第 0 格 = 状态文案 + `registerIdleProvider()` 扩展点，15 单测）· 轮播时钟**自带定时器只在空闲时开**（挂抓取轮询会随轮询间隔静默停住）· 探针连采三格 + 按 `matchMedia` 判动画分支（**反向验证过**） | 090 |
 
 ---
 

@@ -861,9 +861,12 @@ export async function runUiProbe(): Promise<void> {
   // 顶栏状态岛（`?probe=status-island`，devlog/089；配合 `ui_probe.py --status-island`）：
   // 这一批把顶栏**三套并存**的信息渲染（轮询胶囊 / 瞬时覆写 / 完成报告弹窗）收成一个控件，
   // 所以要钉住的是"收编之后还对不对"：
-  //   ① **空闲态**：只有绿点 + 「数据服务运行中」，**没有容器**（用户 2026-09-10 口径）；
+  //   ⓪ **空闲轮播**（R12b）：空闲时文案按间隔在「状态文案 + 语录」之间轮转，
+  //      且语录不许长成进度文案（否则与"自动节拍不占顶栏"那条口径混淆）；
+  //   ① **空闲态**：只有绿点 + 轮播文案，**没有容器**（用户 2026-09-10 口径）；
   //   ② **瞬时消息**（`ddtoolkit:pill-message`，真实事件源）：岛亮起、文案换成消息、出现计数；
-  //   ③ **点开面板**：条目可命中（`elementFromPoint`）、有来源标注、Esc 能收起；
+  //   ③ **点开面板**：条目可命中（`elementFromPoint`）、有来源标注、Esc 能收起、
+  //      **入场动画真的挂上了**（220ms；reduce 分支则只淡入）；
   //   ④ **过期**：消息 ttl（4s）过后条目自己消失、岛回空闲 —— 虚拟时间下等得起。
   if (mode === 'status-island') {
     const result: Record<string, unknown> = {}
@@ -886,9 +889,34 @@ export async function runUiProbe(): Promise<void> {
       (document.querySelector('.topbar-spacer')?.getBoundingClientRect().width ?? 0) * 10) / 10
 
     await waitFor(() => island(), 6000)
-    // ① 空闲态
     await waitFor(() => !island()!.classList.contains('on'), 4000)
-    result.idleText = (island()?.querySelector('.si-text')?.textContent || '').trim()
+
+    // ⓪ 空闲轮播：连采三次（间隔 > 轮播档 IDLE_TICK_MS=6s）。
+    //    池子从 `data-idle-pool` 读（页面侧把 `pickIdle` 的结果原样挂上去），
+    //    这样断言能落到"取到的词确实出自池子、且就是 index 那一格"，
+    //    而不是"看起来像句话"这种空转判据。
+    const idleSample = () => {
+      const el = island()
+      return {
+        text: (el?.querySelector('.si-text')?.textContent || '').trim(),
+        index: Number(el?.getAttribute('data-idle-index')),
+        size: Number(el?.getAttribute('data-idle-size')),
+        pool: (el?.getAttribute('data-idle-pool') || '').split('|'),
+      }
+    }
+    const samples = [idleSample()]
+    for (let i = 0; i < 2; i++) {
+      await sleep(7000)
+      samples.push(idleSample())
+    }
+    result.idleSamples = samples
+    result.idleTexts = samples.map((s) => s.text)
+    result.idleIndexes = samples.map((s) => s.index)
+    result.idleSize = samples[0].size
+    result.idlePool = samples[0].pool
+
+    // ① 空闲态
+    result.idleText = samples[0].text
     result.idleLit = !!island()?.classList.contains('on')
     result.idleCount = !!island()?.querySelector('.si-count')
     result.spacerIdle = spacerW()
@@ -919,6 +947,23 @@ export async function runUiProbe(): Promise<void> {
     result.panelItemHit = !!(ir && hits(firstItem, ir.left + ir.width / 2, ir.top + ir.height / 2))
     result.panelInViewport = !!(pr && pr.left >= -0.5 && pr.right <= window.innerWidth + 0.5 &&
       pr.top >= -0.5 && pr.bottom <= window.innerHeight + 0.5)
+    // 入场动画（R12b 用户期望②）：量**计算后的样式**而不是查 CSS 文件 ——
+    // 只有真挂到元素上才算数。reduce 分支下应当只剩淡入（脚本侧按 motionReduced 判）。
+    if (panel) {
+      const cs = getComputedStyle(panel)
+      result.panelAnimName = cs.animationName
+      result.panelAnimMs = Math.round(parseFloat(cs.animationDuration) * 1000)
+      result.panelAnimCount = panel.getAnimations().length
+    }
+    result.motionReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    // chevron：展开后必须**指着"可收起"**（翻转 180° ⇒ 计算值是矩阵，不是 `none`），
+    // 而过渡时长按 reduce 分派。reduce 下丢掉翻转 = 状态指示消失（不是"减少动效"的本意）。
+    const chev = island()?.querySelector<HTMLElement>('.si-chevron')
+    if (chev) {
+      const ccs = getComputedStyle(chev)
+      result.chevronTransform = ccs.transform
+      result.chevronTransitionMs = Math.round(parseFloat(ccs.transitionDuration) * 1000)
+    }
     // 展开**不该挤动右栏**（面板是 portal + fixed）
     result.spacerOpen = spacerW()
 

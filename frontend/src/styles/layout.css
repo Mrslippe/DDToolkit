@@ -475,11 +475,24 @@ html.window-maximized body {
   line-height: 15px;
   text-align: center;
   font-variant-numeric: tabular-nums;
+  animation: si-pop-in 0.18s ease both;   /* 徽章出现/计数变化时不硬切（React 侧用 key 触发重放） */
+}
+
+@keyframes si-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .si-chevron {
   flex: none;
   opacity: 0.85;
+  transition: transform 0.2s ease;   /* 展开时翻转而不是瞬移 */
 }
 
 .si-island.open .si-chevron {
@@ -503,6 +516,21 @@ html.window-maximized body {
   background: var(--c-bg-card);
   box-shadow: var(--shadow-dialog);
   overflow: hidden;
+  /* 入场（R12b 用户期望②「优雅流畅」）：从状态岛下方 6px 处浮现 + 一点点放大，
+     220ms 用 ease-out 曲线；`both` 保证首帧就处于 from 态（否则会先闪一帧原位） */
+  transform-origin: top center;
+  animation: si-panel-in 0.22s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+
+@keyframes si-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .si-panel-head {
@@ -614,10 +642,29 @@ html.window-maximized body {
   color: var(--c-text-sub);
 }
 
-/* 减少动效：面板不做位移动画（本组件当前只做旋转 chevron） */
+/* 减少动效（R12b）：位移动画一律去掉，但**淡入保留** ——
+   面板从无到有若完全不淡，反而更像闪帧；chevron 的翻转是状态指示，保留角度、去掉过渡。
+   探针 `--status-island` 用 `matchMedia` 判断走的是哪一支，所以两条支路都必须存在且可断言。 */
 @media (prefers-reduced-motion: reduce) {
-  .si-island.open .si-chevron {
-    transform: none;
+  .si-chevron {
+    transition: none;
+  }
+
+  .si-count {
+    animation: none;
+  }
+
+  .si-panel {
+    animation: si-panel-in-fade 0.18s ease both;
+  }
+}
+
+@keyframes si-panel-in-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
   }
 }
 

@@ -106,7 +106,8 @@
 | 层 | 位置 | 职责 |
 |---|---|---|
 | 判定（纯逻辑，12 条单测） | `utils/notificationHub.ts` | 条目模型、**优先级 `alert>progress>report>message`**、过期（`expiresAt` / `sticky`）、命名规则 |
-| 渲染 | `components/StatusIsland.tsx` | 四态 `idle`（绿点 + 「数据服务运行中」，**无容器**）· `pill`（一条主文案 + 图标 + 计数）· `expand`（portal + fixed 面板）· 空闲轮播（R12b） |
+| 空闲内容（纯逻辑，15 条单测） | `utils/idleQuotes.ts` | 空闲轮播池（第 0 格 = 状态文案，后接语录）、取模选格、`registerIdleProvider` 扩展点 |
+| 渲染 | `components/StatusIsland.tsx` | 四态 `idle`（绿点 + 空闲轮播文案，**无容器**）· `pill`（一条主文案 + 图标 + 计数）· `expand`（portal + fixed 面板）· 空闲轮播（R12b） |
 
 **六类信息源**：任务进度（`fetch-status`，**自动节拍不产生条目**）· 第三方同步 · 完成报告
 （改为**常驻条目** + 「查看详情」开原对话框，不再自动弹窗）· 登录失效（常驻 + 「去登录」）·
@@ -116,6 +117,26 @@
 DOM 契约（探针 `ui_probe --status-island` 直接查）：`.si-island`（`.on` = 有事发生）· `.si-dot`
 （`.warn` = 红）· `.si-text` · `.si-count` · `.si-chevron` · `.si-panel` · `.si-item[data-kind]` ·
 `.si-item-meta`（含来源标注）· `.si-item-action`。
+
+**空闲轮播（R12a 期望③，2026-09-15 R12b devlog/090）**：没事发生时文案在
+「状态文案 + 语录」之间轮转（`IDLE_TICK_MS = 6s`，一轮 8 格 48s），**只有绿点、仍无容器**。
+
+| 名称 | 属性 / 类名 | 说明 |
+|---|---|---|
+| 轮播位置 | `.si-island[data-idle-index]` | 当前第几格（空闲态才有）；`data-idle-size` = 池长 |
+| 轮播内容 | `.si-island[data-idle-pool]` | 池子全文，`\|` 分隔 —— 探针据此断言"取到的词出自池子、就是 index 那一格" |
+| 扩展点 | `idleQuotes.registerIdleProvider(fn)` | 返回注销函数；将来接弹幕热词/名场面不用改顶栏组件 |
+
+> 为什么时钟是**组件自己的定时器**（只在空闲时开）：挂在 `TopBar` 的抓取轮询上，
+> 轮播的可见性会随之漂移 —— 谁把 `POLL_IDLE_MS` 从 10s 调大，轮播就静默变慢甚至停住。
+
+**动效（R12a 期望②「优雅流畅」，2026-09-15 R12b）**：面板入场 `si-panel-in` 220ms
+（`translateY(-6px) scale(.985)` → 原位，`transform-origin: top`）· chevron 翻转 `transition .2s` ·
+计数徽章 `si-pop-in` 180ms（React 侧 `key={notices.length}`，计数变化时重放）· 文案沿用
+`.pill-text-fade` 淡入。`prefers-reduced-motion: reduce` 下**保留淡入、去掉位移/缩放/过渡**
+（`si-panel-in-fade` 180ms）——完全不淡反而像闪帧；**但 chevron 的翻转保留（瞬时、无过渡）**：
+状态指示不该被"减少动效"减掉。探针按 `matchMedia` 判分支，两条支路都断言
+（`--force-prefers-reduced-motion` 可验 reduce 支）。
 
 > ⚠️ 三条**别改坏**的口径：
 > ① **「自动节拍不占顶栏」现在是 `notificationHub.progressNotice` 的具名规则 + 反向用例**

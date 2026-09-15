@@ -882,6 +882,8 @@ def main() -> int:
                       f"（新字段需要在 _run_probe 的白名单里登记）")
             print(f"  空闲：文案={si.get('idleText')!r} 亮起={si.get('idleLit')} "
                   f"计数={si.get('idleCount')} 右栏宽={si.get('spacerIdle')}")
+            print(f"  空闲轮播：池={si.get('idleSize')} 三格={si.get('idleTexts')} "
+                  f"索引={si.get('idleIndexes')}")
             print(f"  瞬时消息：文案={si.get('litText')!r} 亮起={si.get('litOn')} "
                   f"chevron={si.get('litHasChevron')}")
             print(f"  面板：打开={si.get('panelOpened')} 条目={si.get('panelItems')} "
@@ -890,6 +892,11 @@ def main() -> int:
             print(f"  可命中：面板={si.get('panelHit')} 首条={si.get('panelItemHit')} "
                   f"在视口内={si.get('panelInViewport')} ｜ 展开后右栏宽={si.get('spacerOpen')} "
                   f"Esc 收起={si.get('panelClosedByEsc')}")
+            print(f"  入场动画：name={si.get('panelAnimName')!r} "
+                  f"{si.get('panelAnimMs')}ms 条数={si.get('panelAnimCount')} "
+                  f"｜ reduce={si.get('motionReduced')}")
+            print(f"  chevron：transform={si.get('chevronTransform')!r} "
+                  f"过渡={si.get('chevronTransitionMs')}ms")
             print(f"  ttl 到期后：文案={si.get('afterTtlText')!r} 亮起={si.get('afterTtlLit')}")
             if not si:
                 failures.append(f"@{w} status-island: 没量到状态岛段（探针未跑完？）")
@@ -898,9 +905,53 @@ def main() -> int:
                     failures.append(f"@{w} status-island: 空闲态就亮着容器"
                                     f"（文案={si.get('idleText')!r}）—— 用户 2026-09-10 口径："
                                     f"频繁轮询不占顶栏，空闲只有绿点")
-                if "数据服务运行中" not in (si.get("idleText") or ""):
-                    failures.append(f"@{w} status-island: 空闲文案是 {si.get('idleText')!r}，"
-                                    f"应为「数据服务运行中」")
+                # ── 空闲轮播（R12b）─────────────────────────────────────
+                # 语录是**长期驻留**的文案，一旦写成进度词（「…轮询中」），
+                # 「自动节拍不占顶栏」那条口径就被文案本身破坏了：顶栏看起来一直在报进度。
+                size = si.get("idleSize") or 0
+                idxs = si.get("idleIndexes") or []
+                texts = si.get("idleTexts") or []
+                pool = si.get("idlePool") or []
+                if size < 2:
+                    failures.append(f"@{w} status-island: 空闲轮播池只有 {size} 格 —— "
+                                    f"除了状态文案还得有话可说（`data-idle-size`）")
+                if len(pool) != size:
+                    failures.append(f"@{w} status-island: 轮播池内容 {len(pool)} 条与池长 {size} 对不上"
+                                    f"（`data-idle-pool` 的分隔编码会因此失真）")
+                if pool and pool[0] != "数据服务运行中":
+                    failures.append(f"@{w} status-island: 轮播第 0 格是 {pool[0]!r}，"
+                                    f"应为「数据服务运行中」—— 状态文案不能被语录顶掉"
+                                    f"（它是顶栏的看家职责）")
+                for t in pool:
+                    for bad in ("轮询", "抓取中", "同步"):
+                        if bad in (t or ""):
+                            failures.append(f"@{w} status-island: 语录 {t!r} 里出现进度词"
+                                            f"「{bad}」—— 空闲文案不许长得像任务进度")
+                for i, t in enumerate(texts):
+                    if not (t or "").strip():
+                        failures.append(f"@{w} status-island: 空闲轮播第 {i} 次采样是空的")
+                        continue
+                    if pool and t not in pool:
+                        failures.append(f"@{w} status-island: 第 {i} 次采样文案 {t!r} 不在轮播池里")
+                        continue
+                    # 索引↔文案必须对得上（越界单独报，别在这里下标越界）
+                    ix = idxs[i] if i < len(idxs) else None
+                    if pool and ix is not None and 0 <= ix < len(pool) and t != pool[ix]:
+                        failures.append(f"@{w} status-island: 第 {i} 次采样文案 {t!r} 与索引 "
+                                        f"{ix} 那一格（{pool[ix]!r}）不符")
+                for i, ix in enumerate(idxs):
+                    if not (0 <= ix < size):
+                        failures.append(f"@{w} status-island: 第 {i} 次采样的轮播索引 {ix} "
+                                        f"越出池子（0..{size - 1}）")
+                if len(texts) == 3 and len(idxs) == 3:
+                    steps = [(idxs[i + 1] - idxs[i]) % size if size else 0 for i in range(2)]
+                    if any(s < 1 for s in steps):
+                        failures.append(f"@{w} status-island: 空闲轮播没在走"
+                                        f"（索引 {idxs}，间隔 7s 虚拟时间/档位 6s；"
+                                        f"文案 {texts}）—— 用户期望③：空闲时轮播内容")
+                    if texts[0] == texts[1] or texts[1] == texts[2]:
+                        failures.append(f"@{w} status-island: 空闲文案三轮里出现重复"
+                                        f"（{texts}）—— 索引动了但文案没换")
                 if not si.get("litOn"):
                     failures.append(f"@{w} status-island: 派发 pill-message 后状态岛没亮起")
                 elif "探针消息" not in (si.get("litText") or ""):
@@ -920,6 +971,30 @@ def main() -> int:
                     if " · " not in (si.get("panelMetaText") or ""):
                         failures.append(f"@{w} status-island: 条目没有来源标注"
                                         f"（实得 {si.get('panelMetaText')!r}）")
+                    # 入场动画（R12b 用户期望②）：按 `prefers-reduced-motion` 判分支。
+                    # 探针只认**计算后样式**（CSS 文件里写了不算数，得真挂到面板上）。
+                    want = "si-panel-in-fade" if si.get("motionReduced") else "si-panel-in"
+                    got = si.get("panelAnimName")
+                    if got != want:
+                        failures.append(f"@{w} status-island: 面板入场动画是 {got!r}，"
+                                        f"应为 {want!r}（reduce={si.get('motionReduced')}）")
+                    if (si.get("panelAnimMs") or 0) <= 0:
+                        failures.append(f"@{w} status-island: 面板入场动画时长为 "
+                                        f"{si.get('panelAnimMs')}ms —— 没有动画等于硬切")
+                    if (si.get("panelAnimCount") or 0) < 1:
+                        failures.append(f"@{w} status-island: 面板上一条动画都没有挂上"
+                                        f"（getAnimations()={si.get('panelAnimCount')}）")
+                    # chevron：展开后必须翻转（计算值是矩阵）；过渡时长按 reduce 分派 ——
+                    # "减少动效"要去掉的是位移/插值，不是状态指示本身。
+                    if si.get("chevronTransform") in (None, "", "none"):
+                        failures.append(f"@{w} status-island: 展开后 chevron 没有翻转"
+                                        f"（transform={si.get('chevronTransform')!r}）—— "
+                                        f"它是「可收起」的唯一指示，reduce 下也不该丢")
+                    want_ms = 0 if si.get("motionReduced") else 200
+                    if si.get("chevronTransitionMs") != want_ms:
+                        failures.append(f"@{w} status-island: chevron 过渡时长是 "
+                                        f"{si.get('chevronTransitionMs')}ms，应为 {want_ms}ms"
+                                        f"（reduce={si.get('motionReduced')}）")
                 if si.get("spacerOpen") != si.get("spacerIdle"):
                     failures.append(f"@{w} status-island: 展开面板挤动了右栏"
                                     f"（右栏宽 {si.get('spacerIdle')} → {si.get('spacerOpen')}；"

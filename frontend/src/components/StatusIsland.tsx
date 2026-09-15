@@ -4,6 +4,7 @@ import { AlertTriangle, CheckCircle2, ChevronDown, Loader2 } from 'lucide-react'
 import OverlayScroll from './OverlayScroll'
 import type { Notice, NoticeActionKind } from '../utils/notificationHub'
 import { KIND_PRIORITY, pickPrimary } from '../utils/notificationHub'
+import { IDLE_TICK_MS, pickIdle } from '../utils/idleQuotes'
 
 interface Props {
   notices: Notice[]
@@ -30,13 +31,20 @@ const KIND_LABEL: Record<string, string> = {
 /**
  * 顶栏「状态岛」（R12a，devlog/089）：把原来三套并存的顶栏信息收成**一个控件**。
  *
- * 四态：`idle`（只有绿点 + 「数据服务运行中」）· `pill`（一条主文案 + 图标）·
+ * 四态：`idle`（只有绿点 + 空闲轮播文案）· `pill`（一条主文案 + 图标）·
  * `expand`（面板：全部条目 + 动作）· 空闲时**没有容器**（用户 2026-09-10：
  * 频繁轮询不必占顶栏 —— 那条规则的判定在 `utils/notificationHub.ts` 里，有反向用例）。
+ *
+ * 空闲轮播（R12b，用户期望③）：没事发生时文案按 `IDLE_TICK_MS` 在
+ * 「状态文案 + 语录」之间轮转。**自己的定时器**，只在空闲（无条目）时开：
+ * 挂到抓取轮询上会让轮播的可见性随轮询间隔漂移（甚至停住）。
  *
  * ⚠️ DOM 契约（探针 `ui_probe --status-island` 直接查）：
  *   `.si-island`（`.on` = 有事发生）· `.si-dot` · `.si-text` · `.si-count`
  *   `.si-panel` / `.si-item[data-kind]` / `.si-item-action` / `.si-empty`
+ *   空闲态的 `data-idle-index` / `data-idle-size` / `data-idle-pool`：轮播当前第几格 /
+ *   池子多大 / 池子内容（`|` 分隔）。探针只能看 DOM，靠这三个属性断言"取到的词出自池子、
+ *   索引在池内、并且真的在往前走"；语录里不含 `|` 由单测钉住（否则分隔编码会被打乱）。
  * 面板用 **portal + fixed 定位**（顶栏容器 overflow:hidden 会裁掉内联面板）；
  * 位置在打开时按 island 的矩形算一次，滚动/缩放时重算。
  */
@@ -46,6 +54,16 @@ export default function StatusIsland({ notices, onAction, now }: Props) {
   const [pos, setPos] = useState<{ left: number; top: number; width: number } | null>(null)
   const primary = pickPrimary(notices, now)
   const lit = !!primary
+
+  // 空闲轮播的时钟：**只在空闲时走**（有事发生时立刻停表，省掉一个无谓的定时器；
+  // 也让"语录正在轮播"不可能和"有通知亮着"同时出现在屏幕上）。
+  const [idleTick, setIdleTick] = useState(() => Date.now())
+  useEffect(() => {
+    if (lit) return
+    setIdleTick(Date.now())   // 从有事故态回到空闲时立刻取一次，别停在旧格上
+    const timer = window.setInterval(() => setIdleTick(Date.now()), IDLE_TICK_MS)
+    return () => window.clearInterval(timer)
+  }, [lit])
 
   /** 面板位置：贴在状态岛下方，越界时收进视口 */
   const place = () => {
@@ -77,7 +95,9 @@ export default function StatusIsland({ notices, onAction, now }: Props) {
     if (open && !primary) setOpen(false)
   }, [open, primary])
 
-  const text = primary?.text ?? '数据服务运行中'
+  /** 空闲轮播取词（有事故态时用主条目文案；`lit` 时不参与渲染） */
+  const idle = pickIdle(idleTick)
+  const text = primary?.text ?? idle.text
   const href = primary?.source ?? ''
 
   return (
@@ -88,6 +108,9 @@ export default function StatusIsland({ notices, onAction, now }: Props) {
         role="button"
         tabIndex={0}
         aria-expanded={open}
+        data-idle-index={lit ? undefined : idle.index}
+        data-idle-size={lit ? undefined : idle.size}
+        data-idle-pool={lit ? undefined : idle.pool.join('|')}
         title={lit ? `${text}（点击查看全部通知）` : text}
         onClick={() => lit && setOpen((o) => !o)}
         onKeyDown={(e) => {
@@ -100,7 +123,8 @@ export default function StatusIsland({ notices, onAction, now }: Props) {
         <i className={`si-dot topbar-status-dot${primary?.kind === 'progress' ? ' busy'
           : primary?.kind === 'alert' ? ' warn' : lit ? ' ok' : ''}`} />
         <span key={text} className="si-text pill-text-fade">{text}</span>
-        {lit && notices.length > 1 && <span className="si-count">{notices.length}</span>}
+        {lit && notices.length > 1 &&
+          <span key={notices.length} className="si-count">{notices.length}</span>}
         {lit && <ChevronDown className="si-chevron size-[12px]" />}
       </span>
 

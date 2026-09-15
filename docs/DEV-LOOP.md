@@ -78,8 +78,9 @@ python scripts/ui_probe.py --polish                 # R15 三处前端打磨（d
 python scripts/ui_probe.py --reservations           # R13 预约进日历（devlog/088）：脚本先往**数据副本**种一条
                                                     # 明天的预约 → 断言格子徽章/时刻/人数/标题 + hover 浮层条目
 python scripts/ui_probe.py --capabilities            # 未登录提示：该说的都说了 + 功能没被过度限制
-python scripts/ui_probe.py --status-island           # R12a 顶栏状态岛（devlog/089）：空闲无容器 /
-                                                     # 消息点亮 / 面板可命中且不挤动右栏 / Esc 收起 / ttl 过期自清
+python scripts/ui_probe.py --status-island           # R12a/R12b 顶栏状态岛（devlog/089、090）：空闲无容器 +
+                                                     # 空闲轮播在走且不出进度词 / 消息点亮 / 面板可命中且不挤动
+                                                     # 右栏 / Esc 收起 / ttl 过期自清 / 入场动画真的挂上
 ```
 
 > `--polish`（2026-09-15 起，devlog/087）：三条都是"差 2px 肉眼看不出"的占位/对齐问题，所以**全部量出来**：
@@ -100,6 +101,22 @@ python scripts/ui_probe.py --status-island           # R12a 顶栏状态岛（de
 > 与本批代码无关的漂移也可能发生（2026-09-15 当晚 V15 新落库两场直播，
 > 签名从 `48519bae…` 变成 `50b78ec0…`）。判断方法：先问仓库层"这个 V 有没有未来预约"
 > （`VtuberEventRepo.future_reservations`），排除自己的改动，再重取基线。
+
+> `--status-island` 里的**空闲轮播**（2026-09-15 起，R12b devlog/090）：轮播是"随时间自己变"的界面，
+> 静态 `--dump-dom` 一眼看不出它在不在走，所以探针**连采三次**（每次间隔 7s 虚拟时间 > 轮播档位 6s），
+> 把三格的 `data-idle-index` 与 `.si-text` 文案一起交给脚本判。三条判据：
+> ① 采到的词必须**出自 `data-idle-pool`**（页面把 `pickIdle` 的结果原样挂上去），且就是 index 那一格 ——
+> 否则"索引在往前走"可以靠一个假索引骗过去；② 池子第 0 格必须是「数据服务运行中」
+> （状态文案不能被语录顶掉）；③ 池子里**不许出现 `轮询`/`抓取中`/`同步`** —— 语录是长期驻留文案，
+> 写成进度词就等于把「自动节拍不占顶栏」这条口径从文案层面破坏掉（那条护栏查的正是顶栏文案）。
+> 入场动画同理：量的是 `getComputedStyle(panel).animationName` 与 `getAnimations()`，
+> **CSS 文件里写了不算数**。reduce 支路用 `--force-prefers-reduced-motion` 跑一次即可验证
+> （实测 `si-panel-in-fade` / 180ms / `motionReduced=true`），探针本身按 `matchMedia` 自动分派；
+> chevron 也要断言"展开后翻转了"（计算值是矩阵）—— **reduce 下不许把状态指示一起减掉**，
+> 减的应该是位移与插值（实测 reduce 支 `transform=matrix(-1,0,0,-1,0,0)` / 过渡 0ms）。
+> ⚠️ 与 `--settings` 的取舍不同：那边为了量几何先注入 `animation:none; transition:none`，
+> 这边**故意不冻结**（冻结了就没得量）；代价是几何可能停在动画中途，
+> 所以断言留了余量（位移 6px、缩放 1.5% 都不影响 `elementFromPoint` 与"不挤动右栏"）。
 
 > `--add-v`（2026-09-15 起，devlog/083）：打开侧栏「+」浮窗 → 打关键词 → 断言三条：
 > ① 敲键只打本地 `/vtuber/pool/search`，`/vtuber/bili/search` **必须 0 次**
