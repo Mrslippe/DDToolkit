@@ -18,7 +18,7 @@ load_dotenv(DATA_DIR / ".env")
 
 class Settings:
     APP_NAME: str = "Better DD Toolkit"
-    VERSION: str = "1.0.0"   # 与 devlog 最新版本保持一致（v1.0.0：档案完整性收口 —— 迁移 f004、动态按平台名单、签名来源/覆盖、账号信息历史、日志轮转；覆盖 devlog 060→081）
+    VERSION: str = "1.0.1"   # 与 devlog 最新版本保持一致（v1.0.0：档案完整性收口 —— 迁移 f004、动态按平台名单、签名来源/覆盖、账号信息历史、日志轮转；覆盖 devlog 060→081）
 
     # 数据目录
     DATA_DIR: Path = DATA_DIR
