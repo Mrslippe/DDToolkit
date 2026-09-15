@@ -652,10 +652,19 @@ img.hero-avatar {
 /* 触发器：文案「筛选」/「筛选 · N」。
    2026-09-13（R5）：内距改**对称** —— 原先 `0 16px 0 10px` 是为了给右下角的 caret 让位，
    但 `.pill-caret` 是绝对定位（layout.css，top/right 各 3px）**不占流**，
-   于是那 6px 差值把文字整体推左 3px，看上去"没居中"。 */
+   于是那 6px 差值把文字整体推左 3px，看上去"没居中"。
+   2026-09-15（R15②）：用户仍反馈"文字没居中" —— 探针量出**文字本身左右各 21.5px（差 0）**，
+   真正偏的是**"文字 + 下拉箭头"这一组**：caret 钉在最右角（距右缘 3px），组中心右偏 9.25px。
+   所以把 caret 改成**随内容居中**（下面覆盖 `position: static`，`gap: 4px` 由 `.float-pill` 提供），
+   内距同步收到 12px：整体宽度仍由 `min-width: 68px` 兜住，工具行几何不变。 */
 .pfilter-btn {
   min-width: 68px;
-  padding: 0 16px;
+  padding: 0 12px;
+}
+
+.pfilter-btn .pill-caret {
+  position: static;      /* 覆盖 layout.css 的绝对定位（那套留给侧栏那枚） */
+  flex: none;
 }
 
 /* 宽度：两月历并排需要「右栏宽 ≥ 544」，故按窗口退让 `100vw − 574`
@@ -1514,23 +1523,36 @@ img.hero-avatar {
 }
 
 /* 尾部「+」：默认隐形，鼠标压上药丸集时才半透明浮现（用户 2026-09-10 需求） */
+/* 尾部「+」（R15③，2026-09-15）：**未 hover 时不占位**（高度 0 + 抵消列 gap 的负边距），
+   于是平台徽标紧贴下方 `.hero-divider`；hover 时展开回 37px（这部分占位是用户明确要的）。
+   ⚠️ 两个状态都必须机器可判：`.stat-sets` 上的 `data-hover` 由 React 维护，
+   探针派发 pointerover/pointerout 就能量到（CSS `:hover` 无法模拟，两条都写）。 */
 .pill-add {
   display: flex;
   align-items: center;
   justify-content: center;
   width: 37px;
-  height: 37px;
+  height: 0;
+  margin-top: -10px;        /* 抵消 .stat-sets 的 gap:10px，空闲时净占位 = 0 */
+  padding: 0;
   border: 0;
   border-radius: 2px;
   background: rgba(252, 112, 121, 0.35);
   color: #fff;
   cursor: pointer;
   opacity: 0;
-  transition: opacity 0.18s ease, background-color 0.18s ease;
+  overflow: hidden;
+  pointer-events: none;     /* 看不见就不该能点 */
+  transition: height 0.18s ease, margin-top 0.18s ease, opacity 0.18s ease,
+    background-color 0.18s ease;
 }
 
-.stat-sets:hover .pill-add {
+.stat-sets:hover .pill-add,
+.stat-sets[data-hover='1'] .pill-add {
+  height: 37px;
+  margin-top: 0;
   opacity: 0.75;
+  pointer-events: auto;
 }
 
 .pill-add:hover {

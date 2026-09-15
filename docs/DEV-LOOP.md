@@ -73,7 +73,18 @@ python scripts/ui_probe.py --settings --vtuber 15   # 档案设置弹窗：几�
 python scripts/ui_probe.py --settings --vtuber 14   # 同上但只有一行且签名长：断言渐隐/可滚距离，切换断言打印 [跳过]
 python scripts/ui_probe.py --scene --vtuber 15      # 场景切换机（切 V）：预取→退场→提交是否走完 + fetch 全程
 python scripts/ui_probe.py --add-v --vtuber 15      # 添加 V 浮窗：本地/上游**来源分流** + 行可命中 + UID 换档
+python scripts/ui_probe.py --polish                 # R15 三处前端打磨（devlog/087）：标题粗体不撑破 /
+                                                    # 筛选钮「文字+箭头」组居中 / 药丸「+」未 hover 不占位且 hover 可点
+python scripts/ui_probe.py --capabilities            # 未登录提示：该说的都说了 + 功能没被过度限制
 ```
+
+> `--polish`（2026-09-15 起，devlog/087）：三条都是"差 2px 肉眼看不出"的占位/对齐问题，所以**全部量出来**：
+> ① 顶栏标题的字重与**文本实际宽**（粗体更宽，断言不撑破 150px 容器）；
+> ② 筛选钮**「文字 + caret」这一组**的左右间隙（实测文字本身早已居中，偏的是被钉在最右角的 caret ——
+> 这条判据的第一版量错了对象：`selectNodeContents` 把绝对定位的 caret 也算进去了）；
+> ③ 药丸「+」的**两个状态**：空闲高度 0 / 不可命中 / 徽标→分割线 = 10px，hover 后 37px / 可命中 / 离开复位。
+> ⚠️ CSS `:hover` 在 `--dump-dom` 里无法模拟，所以 `.stat-sets` 上挂了 React 维护的 `data-hover`，
+> 探针派发 `pointerover/pointerout` 翻转它 —— **这个属性就是为可测性存在的**，别当冗余删掉。
 
 > `--add-v`（2026-09-15 起，devlog/083）：打开侧栏「+」浮窗 → 打关键词 → 断言三条：
 > ① 敲键只打本地 `/vtuber/pool/search`，`/vtuber/bili/search` **必须 0 次**

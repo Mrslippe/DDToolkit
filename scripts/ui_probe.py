@@ -171,12 +171,13 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
             "scene": data.get("scene"),
             "addv": data.get("addv"),
             "capabilities": data.get("capabilities"),
+            "polish": data.get("polish"),
             "degraded": data.get("degraded") or [],
             "dom": dom_file,
         }
     return {"mode": None, "views": data, "topbar": None, "calendar": None,
             "settings": None, "scene": None, "addv": None, "capabilities": None,
-            "degraded": [], "dom": dom_file}
+            "polish": None, "degraded": [], "dom": dom_file}
 
 
 # ── 展示页 hero 药丸签名（P2 分层收敛 A 批次的位级回归护栏）─────────────
@@ -594,6 +595,13 @@ def main() -> int:
              "探针**不点结果行、不点「搜索 B 站」**（那是真收录与真上游调用）。",
     )
     ap.add_argument(
+        "--polish",
+        action="store_true",
+        help="只跑一档宽度：量 R15 三处前端打磨 —— 顶栏标题粗体（字重 + 文本实际宽）、"
+             "筛选钮文字左右间隙（斜切 pill 的视觉中心）、药丸尾部「+」未 hover 不占位 / "
+             "hover 展开且可命中（探针派发 pointerover/pointerout，CSS :hover 无法模拟）",
+    )
+    ap.add_argument(
         "--capabilities",
         action="store_true",
         help="只跑一档宽度：**未登录**现场（数据目录副本 + 删 .env）验能力提示 ——"
@@ -794,6 +802,86 @@ def main() -> int:
                                     f"hero={sc.get('heroAtEnd')!r}）")
                 if not failures:
                     print("  [ok] 场景切换：预取→退场→提交全程落地，侧栏与内容一致")
+            for b in failures:
+                print("   -", b)
+            return 1 if failures else 0
+
+        if args.polish:
+            # R15 三处前端打磨（devlog/087）：三条都是"差 2px 看不出来"的占位/对齐问题，
+            # 所以**全部量出来**再断言（②的期望值就是靠这一跑定下来的）。
+            w = widths[0]
+            url = f"http://localhost:{vite_port}{route}?probe=polish"
+            print(f"[probe] polish @{w} → {url}")
+            res = _run_probe(edge, url, w, args.height, WORK, "polish")
+            po = ((res or {}).get("polish") or {})
+            if res and not po:
+                print(f"  [!] 探针 mode={res.get('mode')!r} 键={sorted(res.keys())}"
+                      f"（新字段需要在 _run_probe 的白名单里登记）")
+            print(f"  顶栏标题：字重={po.get('titleFontWeight')} 字距={po.get('titleLetterSpacing')} "
+                  f"文本宽={po.get('titleTextWidth')}px（容器 {po.get('titleBoxWidth')}px）")
+            print(f"  筛选钮：文字左/右={po.get('filterPadLeft')}/{po.get('filterPadRight')} "
+                  f"差={po.get('filterGapDiff')} 文字中心偏移={po.get('filterTextCenterOffset')} "
+                  f"｜组左/右={po.get('filterGroupPadLeft')}/{po.get('filterGroupPadRight')} "
+                  f"组差={po.get('filterGroupGapDiff')} caret position={po.get('filterCaretPosition')}")
+            print(f"  徽标「+」空闲：高度={po.get('pillAddIdleHeight')} 透明度={po.get('pillAddIdleOpacity')} "
+                  f"pointer-events={po.get('pillAddIdlePointerEvents')} 可命中={po.get('pillAddIdleHit')} "
+                  f"徽标→分割线={po.get('badgeToDividerIdle')}px data-hover={po.get('hoverAttrIdle')}")
+            print(f"  徽标「+」hover：data-hover={po.get('hoverAttrAfterEnter')} "
+                  f"高度={po.get('pillAddHoverHeight')} 透明度={po.get('pillAddHoverOpacity')} "
+                  f"可命中={po.get('pillAddHoverHit')} 徽标→分割线={po.get('badgeToDividerHover')}px "
+                  f"离开后 data-hover={po.get('hoverAttrAfterLeave')} 高度={po.get('pillAddAfterLeaveHeight')}")
+            if not po:
+                failures.append(f"@{w} polish: 没量到打磨段（探针未跑完？）")
+            else:
+                # ① 顶栏标题：必须真的粗体，且文本不撑破容器
+                if str(po.get("titleFontWeight")) not in ("700", "bold"):
+                    failures.append(f"@{w} polish: 顶栏标题字重是 {po.get('titleFontWeight')}，不是粗体")
+                tw, bw = po.get("titleTextWidth"), po.get("titleBoxWidth")
+                if tw and bw and tw > bw - 4:
+                    failures.append(f"@{w} polish: 标题文本 {tw}px 顶到容器 {bw}px"
+                                    f"（粗体+字距撑破了定宽，右侧会贴/溢出）")
+                # ② 筛选钮：**「文字 + caret」这一组**必须居中（用户看的是这一组；
+                #    2026-09-15 实测：文字本身早已居中，偏的是被钉在最右角的 caret）
+                gdiff = po.get("filterGroupGapDiff")
+                if gdiff is None:
+                    failures.append(f"@{w} polish: 量不到筛选钮内容间隙（.pfilter-btn 不在？）")
+                elif abs(gdiff) > 1.0:
+                    failures.append(f"@{w} polish: 筛选钮「文字+箭头」左右间隙差 {gdiff}px"
+                                    f"（左 {po.get('filterGroupPadLeft')} / "
+                                    f"右 {po.get('filterGroupPadRight')}）")
+                toff = po.get("filterTextCenterOffset")
+                if toff is not None and abs(toff) > 6.0:
+                    failures.append(f"@{w} polish: 筛选钮文字中心偏移 {toff}px"
+                                    f"（组居中后文字允许偏半个箭头宽，但不该超过 6px）")
+                if po.get("filterCaretPosition") not in (None, "static"):
+                    failures.append(f"@{w} polish: 筛选钮 caret 仍是 {po.get('filterCaretPosition')}"
+                                    f"定位（会脱离内容组、看起来不居中）")
+                # ③ 徽标「+」：空闲不占位且不可点；hover 展开可点；离开复位
+                # ⚠️ 高度 0 是**合法值**，不能用 `or -1` 兜底（0 是 falsy，第一版断言
+                #    因此把"已复位"误判成失败 —— 判据里的 falsy 陷阱）
+                idle_h = po.get("pillAddIdleHeight")
+                if po.get("pillAddPresent") and idle_h is not None and idle_h != 0:
+                    failures.append(f"@{w} polish: 「+」空闲时高度 {idle_h}px"
+                                    f"（要求不占位 = 0；徽章因此贴不到分割线）")
+                if po.get("pillAddIdleHit"):
+                    failures.append(f"@{w} polish: 「+」不可见却能命中（看不见的可点区域）")
+                if po.get("hoverAttrIdle") != "0":
+                    failures.append(f"@{w} polish: `.stat-sets` 初始 data-hover="
+                                    f"{po.get('hoverAttrIdle')!r}（期望 '0'）")
+                if po.get("hoverAttrAfterEnter") != "1":
+                    failures.append(f"@{w} polish: 派发 pointerover 后 data-hover 没变成 1"
+                                    f"（探针量不到 hover 态，R15③ 就无法验证）")
+                elif (po.get("pillAddHoverHeight") or 0) < 36:
+                    failures.append(f"@{w} polish: hover 后「+」高度 {po.get('pillAddHoverHeight')}px"
+                                    f"（应展开回 37px）")
+                elif not po.get("pillAddHoverHit"):
+                    failures.append(f"@{w} polish: hover 后「+」仍不可命中（点不着）")
+                leave_attr, leave_h = po.get("hoverAttrAfterLeave"), po.get("pillAddAfterLeaveHeight")
+                if leave_attr != "0" or leave_h is None or leave_h != 0:
+                    failures.append(f"@{w} polish: 指针离开后没复位"
+                                    f"（data-hover={leave_attr} 高度={leave_h}）")
+                if not failures:
+                    print("  [ok] 前端打磨三处：标题粗体不撑破 / 筛选钮文字居中 / 「+」不占位且 hover 可点")
             for b in failures:
                 print("   -", b)
             return 1 if failures else 0

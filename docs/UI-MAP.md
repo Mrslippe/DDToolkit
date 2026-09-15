@@ -145,6 +145,7 @@
 |---|---|---|
 | 工具行 | `.list-toolbar` | 高 51px，padding `10px 32px`，`justify-content:center`，四件同容器居中 |
 | 添加钮 | `.list-add-btn`（`Plus` 16px，**50×25** 浮片） | 打开 AddVtuberDialog |
+| 筛选钮 | `.pfilter-btn`（`.float-pill--text`，`min-width:68px`，内距 `0 12px`） | **R15②（2026-09-15）**：caret 由"绝对定位钉在最右角"改为**随内容居中**（`.pfilter-btn .pill-caret{position:static}`，`gap:4px` 由 `.float-pill` 提供）—— 实测文字本身早已居中（左右各 21.5px），偏的是"文字+箭头"这一组（组中心右偏 9.25px）。探针 `--polish` 断言**组**左右间隙差 ≤1px、文字中心偏移 ≤6px、caret `position: static`。⚠️ 侧栏那枚 `.pill-caret`（`VtuberSidebar`）保持原绝对定位，覆盖只作用于 `.pfilter-btn` |
 | 搜索框 | `.list-search-wrap` 内 `.list-search` | **240×25 浮片**，放大镜 10×10 居左、placeholder 12px；`/` 键聚焦；focus 粉内描边 |
 
 | 直播过滤 | shadcn `SelectTrigger.input list-filter-btn [&>svg]:size-2.5` | **89×25 浮片**；选项 全部/直播中/未直播（在线实时过滤） |
@@ -215,7 +216,7 @@
 | 签名 | `.hero-sign` | **25px/600** `rgba(94,94,94,.76)` 字距3px（30px 行高盒）；走 **VTuber 整体事实**（B站优先账号，无 B站取首个），不跟随 list 所选账号（2026-09-05 视图隔离） |
 | 平台药丸行 | `.stat-sets`（key=vtuber.id 触发重播） | 集内 gap10、集间 gap10，每组至多 3 枚（`pillSets` 每 3 枚切分） |
 | ├ 药丸 | `.stat-pill.image/.pink/.coral` | **191×37**，**2px 圆角** + `1px 2px 4px rgba(15,23,42,.12)` 阴影；**图像底**（`docs/design/pills` → `src/assets/pills/`，bilibili/weibo 全不透明同规格，`100% 100%` 铺满），未知平台奇偶交替 `--pill-fill-pink #e35d8b` / `--pill-fill-coral #e05261`（白字 26px 对比 ≥3.4:1）。**P8-B 交互**：`.is-link` 可点（点击开账号主页，键盘可达 + focus-visible 主色描边）、`.is-dragging` 长按拖动重排（350ms 阈值，`pointerdown`+`elementFromPoint`+`data-pill-index`，零依赖） |
-| ├ 加账号钮 | `.pill-add` | **P8-B**：37×37 半透明粉方钮，默认 `opacity:0`，`.stat-sets:hover` 时 0.75 → hover 自身 1；点击打开 `<AddAccountDialog>`（`components/AddAccountDialog.tsx`，与 list 视图按钮、档案设置窗口共用） |
+| ├ 加账号钮 | `.pill-add` | **P8-B** + **R15③（2026-09-15）**：37×37 半透明粉方钮，**未 hover 时高度 0 + 负边距抵消列 gap ⇒ 净占位 0**（`.stat-set` 与 `.hero-divider` 的距离因此是 10px，而不是原来的 57px —— 用户要的"徽章紧贴分割线"），此时 `opacity:0` 且 `pointer-events:none`（看不见就不该能点）；hover（`:hover` 或 `.stat-sets[data-hover='1']`）展开回 37px / `opacity:.75` → 自身 hover 时 1；点击打开 `<AddAccountDialog>`。⚠️ `data-hover` 由 React 维护，**存在的唯一理由是探针**：CSS `:hover` 在 `--dump-dom` 里无法模拟，没有它"hover 后可点"这条就无从断言（`--polish` 派发 `pointerover/pointerout` 量两种状态） |
 | └ 数值 | `.pill-value` | **26px/600 白**，**右对齐**（`.stat-pill justify-content:flex-end`，右 padding 12px），数字 ≤4 位（`formatCount` 收紧）+ **`text-shadow 0 1px 2px rgba(0,0,0,.35)`** 保图像底可读 |
 | 饰条 | `.hero-divider` | 394×24 设计稿 SVG |
 | ~~企划行~~ | ~~`.faction-badge`（内 `.pill-logo`）~~ | **P8-2 已删除**（card 视图不再展示企划/公会；企划编辑迁往 P8-B 的「档案设置」窗口）。`.pill-logo` 随之删除 |

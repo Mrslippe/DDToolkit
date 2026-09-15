@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 展示页（cards 视图）：Hero 卡 + 平台药丸（P2 分层收敛剩余项，2026-09-13，devlog/065）。
  *
  * 从 `pages/PostsPage.tsx` 整块搬出，**只搬不改**：
@@ -105,6 +105,17 @@ export default function HeroCardsView({
   /** 生效签名（覆盖 → 来源账号 → 主账号）；与档案设置窗口同一口径 */
   const sign = resolveSign(vtuber, accounts)
 
+  /**
+   * 药丸行 hover（R15③，2026-09-15）：尾部「+」在**未 hover 时不占位**，
+   * 让平台徽标紧贴下方分割线；hover 时才展开（展开后占位是用户明确要的）。
+   *
+   * ⚠️ 为什么要用 React state 而不只靠 CSS `:hover`：CSS 伪类**探针无法模拟**
+   * （`--dump-dom` 没有真实指针），于是"hover 后能看见、能点"这条就没法机器断言。
+   * 挂 `data-hover` 之后，探针派发 `pointerover/pointerout` 即可量到两种状态
+   * （样式里 `:hover` 与 `[data-hover="1"]` 两条都写，真人与探针各走一条）。
+   */
+  const [pillHover, setPillHover] = useState(false)
+
   const onPillPointerDown = (idx: number) => (e: React.PointerEvent) => {
     if (e.button !== 0) return
     dragMoved.current = false
@@ -210,9 +221,14 @@ export default function HeroCardsView({
         <div
           className="stat-sets"
           key={vtuber.id}
+          data-hover={pillHover ? '1' : '0'}
+          onPointerEnter={() => setPillHover(true)}
           onPointerMove={onPillPointerMove}
           onPointerUp={onPillPointerUp}
-          onPointerLeave={onPillPointerUp}
+          onPointerLeave={() => {
+            setPillHover(false)
+            onPillPointerUp()
+          }}
         >
           {pillSets.map((set, si) => (
             <div className="stat-set anim-rise" style={{ '--rise-i': si } as React.CSSProperties} key={si}>

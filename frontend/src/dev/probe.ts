@@ -706,6 +706,158 @@ export async function runUiProbe(): Promise<void> {
     return
   }
 
+  // 前端打磨三处（`?probe=polish`，devlog/087；配合 `ui_probe.py --polish`）：
+  // R15 的三条都是"视觉/占位"问题，肉眼看不出差 2px，所以全部**量**出来：
+  //   ① 顶栏标题粗体：字重 + 文本实际宽度（粗体更宽，别撑破 150px 容器）
+  //   ② 筛选钮文字居中：文字节点相对按钮的左右间隙（斜切 pill 的视觉中心 ≠ 几何中心）
+  //   ③ 药丸尾部「+」：未 hover 时**不占位**（高度 0、不可命中）且徽标紧贴分割线；
+  //      hover 后展开、可见、可命中 —— 两个状态都要量（探针派发 pointerover/pointerout，
+  //      因为 CSS `:hover` 在 `--dump-dom` 里无法模拟）
+  if (mode === 'polish') {
+    const result: Record<string, unknown> = {}
+    const waitFor = async (fn: () => unknown, ms = 5000) => {
+      const t0 = performance.now()
+      while (performance.now() - t0 < ms) {
+        const v = fn()
+        if (v) return v
+        await sleep(100)
+      }
+      return null
+    }
+    const killAnim = document.createElement('style')
+    killAnim.textContent =
+      '*, *::before, *::after { animation: none !important; transition: none !important; }'
+    document.head.appendChild(killAnim)
+    const rect = (el: Element | null) => (el ? el.getBoundingClientRect() : null)
+    const r4 = (r: DOMRect | null) => (r ? {
+      left: Math.round(r.left * 10) / 10, top: Math.round(r.top * 10) / 10,
+      right: Math.round(r.right * 10) / 10, bottom: Math.round(r.bottom * 10) / 10,
+      w: Math.round(r.width * 10) / 10, h: Math.round(r.height * 10) / 10,
+    } : null)
+
+    // ① 顶栏标题
+    const title = document.querySelector<HTMLElement>('.topbar-title')
+    if (title) {
+      const cs = getComputedStyle(title)
+      // 文本实际宽度：把内容塞进一个 inline span 量（容器是定宽 flex，量 rect 得到的是 150）
+      const probe = document.createElement('span')
+      probe.textContent = title.textContent || ''
+      probe.style.cssText = `position:absolute;visibility:hidden;white-space:nowrap;` +
+        `font-family:${cs.fontFamily};font-size:${cs.fontSize};font-weight:${cs.fontWeight};` +
+        `letter-spacing:${cs.letterSpacing}`
+      document.body.appendChild(probe)
+      result.titleFontWeight = cs.fontWeight
+      result.titleLetterSpacing = cs.letterSpacing
+      result.titleTextWidth = Math.round(probe.getBoundingClientRect().width * 10) / 10
+      result.titleBoxWidth = title.offsetWidth
+      probe.remove()
+    }
+
+    // ② 药丸尾部「+」：空闲不占位 / hover 展开
+    // ⚠️ **必须先量这条**：它在展示页（默认视图）；先切列表视图会让它整个不在 DOM 里
+    //    （第一版顺序反了，量到一片 None）
+    const sets = document.querySelector<HTMLElement>('.stat-sets')
+    const add = document.querySelector<HTMLElement>('.pill-add')
+    const divider = document.querySelector<HTMLElement>('.hero-divider')
+    const lastPill = document.querySelector<HTMLElement>('.stat-set [data-pill-index]')
+      ? [...document.querySelectorAll<HTMLElement>('.stat-set')].pop() ?? null
+      : null
+    const gapToDivider = () => {
+      const s = rect(lastPill)
+      const d = rect(divider)
+      return s && d ? Math.round((d.top - s.bottom) * 10) / 10 : null
+    }
+    result.pillAddPresent = !!add
+    result.pillAddIdleHeight = add ? add.offsetHeight : -1
+    result.pillAddIdleOpacity = add ? getComputedStyle(add).opacity : null
+    result.pillAddIdlePointerEvents = add ? getComputedStyle(add).pointerEvents : null
+    result.pillAddIdleHit = (() => {
+      const el = add
+      const r = rect(el)
+      if (!el || !r) return null
+      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+      return !!hit && (hit === el || el.contains(hit))
+    })()
+    result.badgeToDividerIdle = gapToDivider()
+    result.hoverAttrIdle = sets?.getAttribute('data-hover') ?? null
+
+    if (sets && add) {
+      sets.dispatchEvent(new PointerEvent('pointerover', { bubbles: true }))
+      sets.dispatchEvent(new PointerEvent('pointerenter', { bubbles: false }))
+      await waitFor(() => sets.getAttribute('data-hover') === '1', 2000)
+      await sleep(120)
+      result.hoverAttrAfterEnter = sets.getAttribute('data-hover')
+      result.pillAddHoverHeight = add.offsetHeight
+      result.pillAddHoverOpacity = getComputedStyle(add).opacity
+      result.badgeToDividerHover = gapToDivider()
+      const r = rect(add)
+      result.pillAddHoverHit = r
+        ? (() => {
+            const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+            return !!hit && (hit === add || add.contains(hit))
+          })()
+        : null
+      sets.dispatchEvent(new PointerEvent('pointerout', { bubbles: true }))
+      sets.dispatchEvent(new PointerEvent('pointerleave', { bubbles: false }))
+      await waitFor(() => sets.getAttribute('data-hover') === '0', 2000)
+      result.hoverAttrAfterLeave = sets.getAttribute('data-hover')
+      await sleep(120)
+      result.pillAddAfterLeaveHeight = add.offsetHeight
+    }
+
+    // ③ 筛选钮：文字相对按钮的左右间隙。
+    // ⚠️ 量**纯文本节点**（不是 `selectNodeContents`）—— 后者把绝对定位的 caret 也算进
+    //    range 里，于是"右间隙"量到的是 caret 到右缘的 3px，看起来像文字偏了 18px（第一版踩了）。
+    // ⚠️ 它只在**列表视图**的工具行里，所以这条放最后（切走展示页就量不到 ②）。
+    clickView('帖子列表')
+    await sleep(900)
+    const pf = document.querySelector<HTMLElement>('.pfilter-btn')
+    if (pf) {
+      const pr = pf.getBoundingClientRect()
+      const caret = pf.querySelector('.pill-caret')
+      const textNode = [...pf.childNodes].find(
+        (n) => n.nodeType === Node.TEXT_NODE && (n.textContent || '').trim()) ?? null
+      const tr = textNode ? (() => {
+        const range = document.createRange()
+        range.selectNodeContents(textNode)
+        return range.getBoundingClientRect()
+      })() : null
+      const contentRect = (() => {
+        const range = document.createRange()
+        range.selectNodeContents(pf)
+        return range.getBoundingClientRect()
+      })()
+      result.filterRect = r4(pr)
+      result.filterTextRect = r4(tr)
+      result.filterContentRect = r4(contentRect)
+      if (tr) {
+        result.filterPadLeft = Math.round((tr.left - pr.left) * 10) / 10
+        result.filterPadRight = Math.round((pr.right - tr.right) * 10) / 10
+        result.filterGapDiff = Math.round(((tr.left - pr.left) - (pr.right - tr.right)) * 10) / 10
+        result.filterTextCenterOffset =
+          Math.round(((tr.left + tr.right) / 2 - (pr.left + pr.right) / 2) * 10) / 10
+      }
+      // 「文字 + caret」作为一组是否居中（R15② 的判据：用户看的是这一组）
+      result.filterGroupPadLeft = Math.round((contentRect.left - pr.left) * 10) / 10
+      result.filterGroupPadRight = Math.round((pr.right - contentRect.right) * 10) / 10
+      result.filterGroupGapDiff =
+        Math.round(((contentRect.left - pr.left) - (pr.right - contentRect.right)) * 10) / 10
+      result.filterCaretRect = r4(rect(caret))
+      result.filterTransform = getComputedStyle(pf).transform
+      result.filterPadding = getComputedStyle(pf).padding
+      result.filterCaretPosition = caret ? getComputedStyle(caret as Element).position : null
+    } else {
+      result.filterMissing = true
+    }
+
+    const pre = document.createElement('pre')
+    pre.id = 'ui-probe'
+    pre.textContent = JSON.stringify({ mode: 'polish', views: [], degraded, polish: result })
+    document.body.appendChild(pre)
+    document.title = 'UI_PROBE_DONE'
+    return
+  }
+
   // 未登录能力提示（`?probe=capabilities`，devlog/086；配合 `ui_probe.py --capabilities`）：
   // 现场 = 开发数据目录副本 **删掉 .env**（有数据、没登录）—— 这样才有侧栏/列表可点。
   //

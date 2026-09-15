@@ -323,7 +323,10 @@ html.window-maximized body {
   color: var(--c-text-on-primary);
   font-family: var(--font-title);
   font-size: 15px;
-  font-weight: 400;
+  /* R15①（2026-09-15）：按要求**只改字重**（400 → 700），字距沿用原设计的 5px。
+     实测（`ui_probe --polish`）：粗体 + 5px 下文本宽 ~114px，容器 150px，余量充足
+     —— 该探针断言"文本宽 ≤ 容器 − 4px"，防止日后字重/字距再调时撑破。 */
+  font-weight: 700;
   letter-spacing: 5px;
   margin: 0;
   white-space: nowrap;
