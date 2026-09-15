@@ -567,3 +567,19 @@ export interface Capabilities {
   limited: CapabilityLimit[]
   measured_at: string
 }
+
+/** `GET /vtuber/{id}/future-reservations`（R13）：服务端解析好的未来直播预约。
+ *
+ * ⚠️ 与 `ReservationInfo` 不是一回事：那个是动态 `body_json.reservation` 的**原始形状**，
+ * 这个已经把 desc1 文本解析成时刻、过滤掉已结束/已过期、按时间升序。
+ * `start_at` 是**北京 wall-clock（naive）** —— 直接 `new Date("YYYY-MM-DDTHH:mm:ss")`
+ * 按本地时区解析即正确，别再自己加时区。 */
+export interface UpcomingReservation {
+  post_id: number
+  title: string
+  start_at: string
+  /** 预约人数（danmakus/平台侧给的总数；0=未知） */
+  reserve_total: number
+  /** 预约卡片 id（可拼直播间/动态链接；可能为空） */
+  rid: string | null
+}

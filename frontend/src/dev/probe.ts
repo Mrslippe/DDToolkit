@@ -858,6 +858,69 @@ export async function runUiProbe(): Promise<void> {
     return
   }
 
+  // 直播预约进日历（`?probe=reservations`，devlog/088；配合 `ui_probe.py --reservations`）：
+  // 现场由脚本侧**种一条明天的预约**进数据目录副本（开发库未必有未来预约，靠数据碰运气
+  // 会让断言空转）。这里断言整条链路真的落到界面：
+  //   ① 有预约的格子带 `data-resv-count`，徽章是「预约」（**不是**待定/休息）、
+  //      格内出现预约时刻与标题；
+  //   ② hover 该格 → 浮层（`.lc-pop`）里列出预约条目（只有预约、没有场次的日子也要能看）。
+  if (mode === 'reservations') {
+    const result: Record<string, unknown> = {}
+    const waitFor = async (fn: () => unknown, ms = 6000) => {
+      const t0 = performance.now()
+      while (performance.now() - t0 < ms) {
+        const v = fn()
+        if (v) return v
+        await sleep(100)
+      }
+      return null
+    }
+    const killAnim = document.createElement('style')
+    killAnim.textContent =
+      '*, *::before, *::after { animation: none !important; transition: none !important; }'
+    document.head.appendChild(killAnim)
+
+    // 档案视图（日历所在）
+    clickView('档案')
+    await sleep(1500)
+    await waitFor(() => document.querySelector('.lc-cell'), 8000)
+
+    const cells = [...document.querySelectorAll<HTMLElement>('.lc-cell')]
+    const resvCell = cells.find((c) => c.hasAttribute('data-resv-count')) ?? null
+    const todayCell = cells.find((c) => c.classList.contains('today')) ?? null
+    result.cellCount = cells.length
+    result.hasResvCell = !!resvCell
+    result.resvBadge = (resvCell?.querySelector('.lc-badge')?.textContent || '').trim()
+    result.resvCellText = (resvCell?.textContent || '').replace(/\s+/g, ' ').trim()
+    result.resvCount = resvCell?.getAttribute('data-resv-count') ?? null
+    result.resvTime = (resvCell?.querySelector('.lc-resv-time')?.textContent || '').trim()
+    result.resvCountText = (resvCell?.querySelector('.lc-count')?.textContent || '').trim()
+    result.resvHasMini = !!resvCell?.querySelector('.lc-resv-mini')
+    result.plainCellCount = cells.filter((c) => !c.hasAttribute('data-resv-count')).length
+    result.todayBadge = (todayCell?.querySelector('.lc-badge')?.textContent || '').trim()
+
+    // hover 预约格 → 浮层（React onMouseEnter：派发 bubbling mouseover 即可触发）
+    if (resvCell) {
+      resvCell.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+      resvCell.dispatchEvent(new PointerEvent('pointerover', { bubbles: true }))
+      const pop = (await waitFor(() => document.querySelector('.lc-pop'), 4000)) as HTMLElement | null
+      result.popOpened = !!pop
+      result.popHasResvBadge = !!pop?.querySelector('.lc-resv-badge')
+      result.popResvText = (pop?.querySelector('.lc-resv-item')?.textContent || '')
+        .replace(/\s+/g, ' ').trim()
+      result.popHeadText = (pop?.querySelector('.lc-pop-head')?.textContent || '')
+        .replace(/\s+/g, ' ').trim()
+    }
+
+    const pre = document.createElement('pre')
+    pre.id = 'ui-probe'
+    pre.textContent = JSON.stringify({ mode: 'reservations', views: [], degraded,
+                                       reservations: result })
+    document.body.appendChild(pre)
+    document.title = 'UI_PROBE_DONE'
+    return
+  }
+
   // 未登录能力提示（`?probe=capabilities`，devlog/086；配合 `ui_probe.py --capabilities`）：
   // 现场 = 开发数据目录副本 **删掉 .env**（有数据、没登录）—— 这样才有侧栏/列表可点。
   //

@@ -3237,6 +3237,49 @@ img.hero-avatar {
   box-shadow: inset 0 0 0 1px rgba(251, 119, 161, 0.8);
 }
 
+/* ── 未来预约（R13，devlog/088）──────────────────────────────────────
+   预约**不改九类色系**：只在格子左缘加一道虚线强调条 + 文案用强调粉，
+   与"有场次"的类型色区分开（类型色是"已经播过什么"，预约是"将要播什么"）。
+   格子同时有场次时预约压成一行小字（`.lc-resv-mini`），不与场次争主位。 */
+.lc-cell.has-resv {
+  box-shadow: inset 3px 0 0 -1px var(--c-primary-deep);
+}
+
+.lc-cell.has-resv.today {
+  box-shadow: inset 3px 0 0 -1px var(--c-primary-deep),
+    inset 0 0 0 1px rgba(251, 119, 161, 0.8);
+}
+
+.lc-resv-time,
+.lc-resv-title {
+  color: var(--c-primary-deep);
+}
+
+.lc-resv-title {
+  font-style: italic;
+}
+
+.lc-resv-mini {
+  font-size: 10px;
+  line-height: 1.3;
+  color: var(--c-primary-deep);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 浮层里的预约块：与场次条目同结构，徽章换成"预约" */
+.lc-pop-resv-list {
+  border-bottom: 1px dashed var(--c-border);
+  margin-bottom: 6px;
+  padding-bottom: 6px;
+}
+
+.lc-resv-badge {
+  background: var(--c-primary-deep);
+  color: var(--c-text-on-primary);
+}
+
 /* 格内首行：日期左 + 胶囊右（frame 10_670：row 两端；43px 是 870 定宽下的
    自然间距，窄窗口会把格子挤爆 → 改小最小间距，靠 space-between 撑开，
    满宽视觉与 43px 等价） */

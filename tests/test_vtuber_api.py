@@ -435,6 +435,48 @@ def test_account_info_endpoints_stay_available_without_login(monkeypatch, client
     assert r2.status_code != 403, "账号信息抓取匿名可用，不该 403"
 
 
+def test_future_reservations_endpoint_contract(client):
+    """`GET /vtuber/{id}/future-reservations`（R13 起前端日历依赖它）。
+
+    仓库层已有 6 条解析用例（`test_vtuber_events.py`），但**路由契约**没有——
+    前端要的是：标题已去掉「直播预约|」前缀、时刻已解析成 naive wall-clock、
+    预约人数可空、未知 V 给 404（前端据此不渲染预约块）。
+    """
+    import json as _json
+    from datetime import datetime, timedelta
+
+    vid = client.post("/vtuber", json={"name": "预约契约V"}).json()["id"]
+    client.post(f"/vtuber/{vid}/accounts",
+                json={"platform": "bilibili", "platform_uid": "778899"})
+    start = datetime.now() + timedelta(days=1)
+    db = TestingSession()
+    try:
+        db.add(Post(
+            platform="bilibili", platform_uid="778899", platform_post_id="RESV-1",
+            type="text", published_at=datetime.now(),
+            body_json=_json.dumps({"reservation": {
+                "button_text": "预约", "title": "直播预约|明晚歌回",
+                "desc1": start.strftime("%Y-%m-%d %H:%M 直播"),
+                "reserve_total": 42, "rid": "21452505",
+            }}),
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+    rows = client.get(f"/vtuber/{vid}/future-reservations").json()
+    assert len(rows) == 1, f"应解析出 1 条未来预约，实得 {rows}"
+    row = rows[0]
+    assert row["title"] == "明晚歌回", "「直播预约|」前缀应被规范掉"
+    assert row["reserve_total"] == 42
+    assert row["rid"] == "21452505"
+    # 时刻：naive wall-clock，日期与造的数据一致（**不补时区** —— 前端按本地解析）
+    assert row["start_at"].startswith(start.strftime("%Y-%m-%d")), row["start_at"]
+    assert "+00:00" not in row["start_at"] and "Z" not in row["start_at"]
+
+    assert client.get("/vtuber/999999/future-reservations").status_code == 404
+
+
 def test_pool_search_merges_csv_pool_and_thirdparty_index(monkeypatch, client):
     """本地检索合并两个来源（R11）：csv 池优先 + danmakus 索引兜底，按 uid 去重、剔除已入库。"""
     import app.routers.vtuber as router_mod

@@ -49,6 +49,8 @@ export interface PopState {
   key: string
   rect: { left: number; top: number; bottom: number }
   sessions: LiveSession[]
+  /** 当日未来预约（R13）：只有预约没有场次的日子也要能 hover 看到内容 */
+  reservations?: import('../../api/types').UpcomingReservation[]
 }
 
 export interface UseLiveSessions {

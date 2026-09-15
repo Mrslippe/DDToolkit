@@ -2,12 +2,13 @@ import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react'
-import type { LiveSession } from '../api/types'
+import type { LiveSession, UpcomingReservation } from '../api/types'
 import { api } from '../api/api'
 import OverlayScroll from './OverlayScroll'
 import FloatPill from './common/FloatPill'
 import StateBlock from './common/StateBlock'
 import { LIVE_TYPE_ORDER, liveTypeLabel } from '../utils/liveType'
+import { cellBadge, groupReservationsByDay, reservationLine } from '../utils/reservationDays'
 // 纯展示格式化已搬到 components/live/（可 vitest 直测）；此处只保留渲染/交互常量
 import { calendarSourceLabel, dayKeyIso, fmtDur, fmtMoney, fmtMonth, fmtTime, keyOf } from './live/liveCalendarFmt'
 // 取数与状态机已搬到 components/live/useLiveSessions（见其文件顶部的顺序契约说明）
@@ -15,6 +16,7 @@ import {
   POP_CLOSE_GRACE_MS, useLiveSessions,
 } from './live/useLiveSessions'
 import type { PopState } from './live/useLiveSessions'
+import { useReservations } from './live/useReservations'
 // 场次详情弹窗（含词云与破泡状态）已搬到 components/live/LiveSessionDialog
 import LiveSessionDialog from './live/LiveSessionDialog'
 
@@ -23,6 +25,9 @@ interface Props {
    *  user 2026-09-07：默认只检索「主账号」直播信息（调用方传 heroAcc=
    *  bilibili 优先账号，见 PostsPage）；其他账号作为可选项，入口待以后做。 */
   accountId: number | null
+  /** 该账号所属 V 的 id（R13）：未来预约是 **V 级**的（同一 V 多账号共用），
+   *  所以按 V 取数而不是按账号；null = 取不到预约（日历照常渲染） */
+  vtuberId?: number | null
   /** 刷新信号（fetch-idle 边沿后重拉场次） */
   refreshTick?: number
 }
@@ -40,6 +45,8 @@ interface DayCell {
   /** 属于当前月（false=上/下月补位）——透明度只由它决定（user 2026-09-06） */
   inMonth: boolean
   sessions: LiveSession[]
+  /** 当日未来预约（R13；服务端已过滤已结束/已过期，按时刻升序） */
+  reservations: UpcomingReservation[]
   isToday: boolean
   state: CellState
 }
@@ -73,7 +80,9 @@ interface DayCell {
  *   · 类型徽章/统计用后端 category（v2 多信号：校正>系列>标题评分>词库>分区>纪念日），
  *     服务端缺失时前端关键词兜底。
  */
-const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: Props) {
+const LiveCalendar = memo(function LiveCalendar(
+  { accountId, vtuberId = null, refreshTick = 0 }: Props,
+) {
   const now = new Date()
   /** 场次浮层：点击格子的锚点（rect 快照）与当日数据。
    *  留在组件侧 —— 它承载 DOM rect，与渲染强耦合；hook 只通过 `onDataRefresh` 通知关闭。 */
@@ -85,6 +94,11 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
     detail, setDetail, catPopOpen, setCatPopOpen, catPopRef,
     monthPopOpen, setMonthPopOpen, popYear, setPopYear, navRef, reload, reloadDetail,
   } = useLiveSessions(accountId, refreshTick, now, () => setPop(null))
+
+  /** 未来预约（R13）：V 级数据，独立于场次取数（见 useReservations 顶部说明） */
+  const reservations = useReservations(vtuberId, refreshTick)
+
+  const resvByDay = useMemo(() => groupReservationsByDay(reservations), [reservations])
 
   const byDay = useMemo(() => {
     const m = new Map<string, LiveSession[]>()
@@ -119,11 +133,12 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
       const isToday = key === todayKey
       // 状态：有场次=live；无场次=tbd（休息/待定在渲染层按今天前后区分）
       const state: CellState = list.length > 0 ? 'live' : 'tbd'
-      out.push({ date: d, key, inMonth, sessions: list, isToday, state })
+      out.push({ date: d, key, inMonth, sessions: list, reservations: resvByDay.get(key) ?? [],
+                 isToday, state })
     }
     return out
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ym, byDay])
+  }, [ym, byDay, resvByDay])
 
   /** 当月类型统计（导航栏右侧统计胶囊，服务端 category 口径，仅非零项） */
   const monthStats = useMemo(() => {
@@ -161,11 +176,17 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
 
   const openCellPop = (c: DayCell, e: ReactMouseEvent<HTMLDivElement>) => {
     clearPopTimer()
-    if (c.state !== 'live') {
+    // R13：**只有预约没有场次**的日子也要能 hover 看详情（否则"预约"徽章点不出任何东西）
+    if (c.state !== 'live' && c.reservations.length === 0) {
       setPop(null)
       return
     }
-    setPop({ key: c.key, rect: e.currentTarget.getBoundingClientRect(), sessions: c.sessions })
+    setPop({
+      key: c.key,
+      rect: e.currentTarget.getBoundingClientRect(),
+      sessions: c.sessions,
+      reservations: c.reservations,
+    })
   }
 
   const closeCellPop = () => {
@@ -258,24 +279,31 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
   const renderCell = (c: DayCell) => {
     const first = c.sessions[0]
     const toneKey = first ? keyOf(first) : null
+    const resv = reservationLine(c.reservations)
+    const hasSession = c.state === 'live' && !!first
 
     let toneCls = ''
-    if (c.state === 'live' && toneKey) toneCls = ` lc-tone-${toneKey}`
+    if (hasSession && toneKey) toneCls = ` lc-tone-${toneKey}`
     else toneCls = ' tbd'
     // 月份指示（透明度）：非本月一律 pad 淡化，与场次状态无关
     if (!c.inMonth) toneCls += ' pad'
     if (c.isToday) toneCls += ' today'
+    // R13：有预约的格子加一枚可辨识的标记（不改九类色系，只加虚线左缘）
+    if (resv) toneCls += ' has-resv'
 
-    let badge = '待定'
-    if (c.state === 'live' && toneKey) badge = liveTypeLabel(toneKey)
-    // user 2026-09-07：当天没有直播（含礼物日，礼物展示已退役）一律显示休息；
-    // 今天及以后（尚未发生）= 待定
-    else if (c.key < todayKey) badge = '休息'
+    // 徽章优先级：场次类型 > 预约 > 休息/待定（见 utils/reservationDays.cellBadge）
+    const badge = cellBadge({
+      hasSession,
+      typeLabel: toneKey ? liveTypeLabel(toneKey) : '',
+      hasReservation: !!resv,
+      isPast: c.key < todayKey,
+    })
 
     return (
       <div
         key={c.key}
         className={'lc-cell' + toneCls}
+        data-resv-count={c.reservations.length || undefined}
         onMouseEnter={(e) => openCellPop(c, e)}
         onMouseLeave={closeCellPop}
         onClick={() => openDetail(c)}
@@ -284,13 +312,29 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
           <span className="lc-day">{c.date.getDate()}</span>
           <span className="lc-badge">{badge}</span>
         </div>
-        {c.state === 'live' && first ? (
+        {hasSession && first ? (
           <div className="lc-cell-body">
             <div className="lc-time-row">
               <span className="lc-time">{fmtTime(new Date(first.start_at))}</span>
               <span className="lc-count">{c.sessions.length} 场</span>
             </div>
             <span className="lc-cell-title">{first.live_title || '场次'}</span>
+            {/* 已有场次的日子：预约压缩成一行小字（不与场次争主位） */}
+            {resv && (
+              <span className="lc-resv-mini">
+                预约 {resv.time}
+                {resv.more && ` · ${resv.more}`}
+              </span>
+            )}
+          </div>
+        ) : resv ? (
+          /* 没有场次但有预约：**主位给预约** —— 报「待定」等于把已知信息藏起来（R13 要解决的正是这个） */
+          <div className="lc-cell-body lc-resv-body">
+            <div className="lc-time-row">
+              <span className="lc-time lc-resv-time">{resv.time}</span>
+              {resv.totalLabel && <span className="lc-count">{resv.totalLabel}</span>}
+            </div>
+            <span className="lc-cell-title lc-resv-title">{resv.title}</span>
           </div>
         ) : null}
       </div>
@@ -317,8 +361,28 @@ const LiveCalendar = memo(function LiveCalendar({ accountId, refreshTick = 0 }: 
         <div onMouseEnter={clearPopTimer} onMouseLeave={closeCellPop}>
           <div className="lc-pop-head">
             <span className="lc-pop-date">{pop.key}</span>
-            <span className="lc-pop-count">{pop.sessions.length} 场</span>
+            <span className="lc-pop-count">
+              {pop.sessions.length} 场
+              {(pop.reservations?.length ?? 0) > 0 && ` · ${pop.reservations!.length} 预约`}
+            </span>
           </div>
+          {/* R13：预约块排在场次之前 —— 预约是"将要发生"，用户 hover 通常就是想知道这个 */}
+          {(pop.reservations?.length ?? 0) > 0 && (
+            <div className="lc-pop-list lc-pop-resv-list">
+              {pop.reservations!.map((r) => (
+                <div key={`resv-${r.post_id}`} className="lc-pop-item lc-resv-item">
+                  <div className="lc-pop-item-row">
+                    <span className="lc-pop-badge lc-resv-badge">预约</span>
+                    <span className="lc-pop-title">{r.title || '直播预约'}</span>
+                  </div>
+                  <div className="lc-pop-meta">
+                    {fmtTime(new Date(r.start_at))}
+                    {r.reserve_total > 0 && ` · 已有 ${r.reserve_total.toLocaleString('zh-CN')} 人预约`}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
           <div className="lc-pop-list">
             {pop.sessions.map((s, i) => {
               const d0 = new Date(s.start_at)

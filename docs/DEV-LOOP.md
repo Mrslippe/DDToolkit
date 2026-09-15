@@ -75,6 +75,8 @@ python scripts/ui_probe.py --scene --vtuber 15      # 场景切换机（切 V）
 python scripts/ui_probe.py --add-v --vtuber 15      # 添加 V 浮窗：本地/上游**来源分流** + 行可命中 + UID 换档
 python scripts/ui_probe.py --polish                 # R15 三处前端打磨（devlog/087）：标题粗体不撑破 /
                                                     # 筛选钮「文字+箭头」组居中 / 药丸「+」未 hover 不占位且 hover 可点
+python scripts/ui_probe.py --reservations           # R13 预约进日历（devlog/088）：脚本先往**数据副本**种一条
+                                                    # 明天的预约 → 断言格子徽章/时刻/人数/标题 + hover 浮层条目
 python scripts/ui_probe.py --capabilities            # 未登录提示：该说的都说了 + 功能没被过度限制
 ```
 
@@ -85,6 +87,17 @@ python scripts/ui_probe.py --capabilities            # 未登录提示：该说�
 > ③ 药丸「+」的**两个状态**：空闲高度 0 / 不可命中 / 徽标→分割线 = 10px，hover 后 37px / 可命中 / 离开复位。
 > ⚠️ CSS `:hover` 在 `--dump-dom` 里无法模拟，所以 `.stat-sets` 上挂了 React 维护的 `data-hover`，
 > 探针派发 `pointerover/pointerout` 翻转它 —— **这个属性就是为可测性存在的**，别当冗余删掉。
+
+> `--reservations`（2026-09-15 起，devlog/088）：**探针自己造现场** ——
+> 开发库里未必有未来的预约（实测 V14/V15 都是 0 条），靠数据碰运气会让断言空转。
+> 脚本在起后端**之前**往数据目录副本的 `posts` 里插一条明天的预约帖
+> （`desc1` 用完整日期而不是"明天 HH:mm"：后者按帖子发布日推断，与运行时刻耦合），
+> 然后断言"格子上真的出现了预约"。断言链覆盖 `posts.body_json` → 服务端解析 → API → 格子/浮层。
+>
+> ⚠️ 顺带一条实测教训：**日历签名（`--calendar-expect`）会因数据变化而漂**，
+> 与本批代码无关的漂移也可能发生（2026-09-15 当晚 V15 新落库两场直播，
+> 签名从 `48519bae…` 变成 `50b78ec0…`）。判断方法：先问仓库层"这个 V 有没有未来预约"
+> （`VtuberEventRepo.future_reservations`），排除自己的改动，再重取基线。
 
 > `--add-v`（2026-09-15 起，devlog/083）：打开侧栏「+」浮窗 → 打关键词 → 断言三条：
 > ① 敲键只打本地 `/vtuber/pool/search`，`/vtuber/bili/search` **必须 0 次**

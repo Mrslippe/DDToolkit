@@ -102,6 +102,48 @@ def _prepare_data(empty: bool = False) -> Path:
     return data
 
 
+def _seed_reservation(data: Path, vtuber_id: int) -> str:
+    """往**副本**里种一条明天的预约（R13 探针的确定性现场）。
+
+    为什么要种：开发库里未必有未来的预约帖，而"有预约的格子长什么样"是这条需求的
+    全部内容 —— 靠数据碰运气会让断言空转（本仓反复踩过的坑）。
+    描述用**完整日期**（`YYYY-MM-DD HH:mm`）而不是"今天/明天"：后者按帖子发布日推断，
+    与探针运行时刻耦合；日期取**本地明天**，保证 `start > now`（服务端会过滤过期预约）。
+    返回：种下的标题（供断言比对）。
+    """
+    import sqlite3
+    from datetime import datetime, timedelta
+
+    title = "探针预约占位"
+    start = datetime.now() + timedelta(days=1)
+    start = start.replace(hour=21, minute=0, second=0, microsecond=0)
+    con = sqlite3.connect(data / "vtuber.db")
+    try:
+        row = con.execute(
+            "SELECT platform_uid FROM accounts WHERE vtuber_id=? AND platform='bilibili' "
+            "ORDER BY sort_order, id LIMIT 1", (vtuber_id,)).fetchone()
+        if not row:
+            raise SystemExit(f"[probe] VTuber#{vtuber_id} 没有 bilibili 账号，种不了预约")
+        uid = row[0]
+        con.execute("DELETE FROM posts WHERE platform_post_id LIKE 'PROBE-RESV%'")
+        now_str = datetime.utcnow().isoformat(sep=" ")
+        con.execute(
+            "INSERT INTO posts (platform, platform_uid, platform_post_id, type, title, "
+            "body_json, published_at, is_archived, last_seen_at, created_at) "
+            "VALUES (?,?,?,?,?,?,?,0,?,?)",
+            ("bilibili", uid, "PROBE-RESV-1", "text", title,
+             json.dumps({"reservation": {
+                 "button_text": "预约", "title": f"直播预约|{title}",
+                 "desc1": start.strftime("%Y-%m-%d %H:%M 直播"),
+                 "reserve_total": 128, "rid": "21452505",
+             }}, ensure_ascii=False),
+             now_str, now_str, now_str))
+        con.commit()
+    finally:
+        con.close()
+    return title
+
+
 def _prepare_logged_out() -> Path:
     """有数据但**未登录**的现场（devlog/086）：开发目录副本 + 删掉 `.env`。
 
@@ -172,12 +214,13 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
             "addv": data.get("addv"),
             "capabilities": data.get("capabilities"),
             "polish": data.get("polish"),
+            "reservations": data.get("reservations"),
             "degraded": data.get("degraded") or [],
             "dom": dom_file,
         }
     return {"mode": None, "views": data, "topbar": None, "calendar": None,
             "settings": None, "scene": None, "addv": None, "capabilities": None,
-            "polish": None, "degraded": [], "dom": dom_file}
+            "polish": None, "reservations": None, "degraded": [], "dom": dom_file}
 
 
 # ── 展示页 hero 药丸签名（P2 分层收敛 A 批次的位级回归护栏）─────────────
@@ -595,6 +638,12 @@ def main() -> int:
              "探针**不点结果行、不点「搜索 B 站」**（那是真收录与真上游调用）。",
     )
     ap.add_argument(
+        "--reservations",
+        action="store_true",
+        help="只跑一档宽度：**种一条明天的预约**（写进数据目录副本）→ 档案视图断言"
+             "「预约」徽章/时刻/标题渲染 + hover 浮层列出预约（R13 的端到端护栏）",
+    )
+    ap.add_argument(
         "--polish",
         action="store_true",
         help="只跑一档宽度：量 R15 三处前端打磨 —— 顶栏标题粗体（字重 + 文本实际宽）、"
@@ -709,6 +758,12 @@ def main() -> int:
         else:
             route = f"/vtubers/{vid}" if vid else "/"
             extra = "?probe=1"
+
+        # R13：预约探针要在**后端起来之前**把预约种进副本（否则首屏拿不到）
+        seeded_resv_title = ""
+        if args.reservations and vid:
+            seeded_resv_title = _seed_reservation(data, vid)
+            print(f"[probe] 已种预约：{seeded_resv_title!r}（副本 DB，非真库）")
             print(f"[probe] 目标路由 {route}（VTuber #{vid}）")
 
         if args.archive:
@@ -802,6 +857,57 @@ def main() -> int:
                                     f"hero={sc.get('heroAtEnd')!r}）")
                 if not failures:
                     print("  [ok] 场景切换：预取→退场→提交全程落地，侧栏与内容一致")
+            for b in failures:
+                print("   -", b)
+            return 1 if failures else 0
+
+        if args.reservations:
+            # R13 端到端：种好的预约必须**渲染到日历格**并能在 hover 浮层里看到。
+            # 断言的是"从 posts.body_json → 服务端解析 → API → 格子/浮层"整条链路，
+            # 不是"函数返回了个对象"。
+            w = widths[0]
+            url = f"http://localhost:{vite_port}{route}?probe=reservations"
+            print(f"[probe] reservations @{w} → {url}")
+            res = _run_probe(edge, url, w, args.height, WORK, "reservations")
+            rv = ((res or {}).get("reservations") or {})
+            if res and not rv:
+                print(f"  [!] 探针 mode={res.get('mode')!r} 键={sorted(res.keys())}"
+                      f"（新字段需要在 _run_probe 的白名单里登记）")
+            print(f"  日历格：找到预约格={rv.get('hasResvCell')} 徽章={rv.get('resvBadge')!r} "
+                  f"格内文本={rv.get('resvCellText')!r} 计数槽={rv.get('resvCountText')!r}")
+            print(f"  hover 浮层：打开={rv.get('popOpened')} 含预约徽章={rv.get('popHasResvBadge')} "
+                  f"抬头={rv.get('popHeadText')!r} 预约行={rv.get('popResvText')!r}")
+            print(f"  对照：无预约格数={rv.get('plainCellCount')} "
+                  f"今天格徽章={rv.get('todayBadge')!r}")
+            if not rv:
+                failures.append(f"@{w} reservations: 没量到预约段（探针未跑完？）")
+            else:
+                if not rv.get("hasResvCell"):
+                    failures.append(f"@{w} reservations: 日历里找不到带 `data-resv-count` 的格子"
+                                    f"（预约没进日历：种的数据没被解析？接口没通？）")
+                else:
+                    if rv.get("resvBadge") != "预约":
+                        failures.append(f"@{w} reservations: 预约格徽章是 {rv.get('resvBadge')!r}，"
+                                        f"不是「预约」（无场次但有预约的日子不该报待定/休息）")
+                    if "人预约" not in (rv.get("resvCountText") or ""):
+                        failures.append(f"@{w} reservations: 计数槽没显示预约人数"
+                                        f"（实得 {rv.get('resvCountText')!r}）")
+                    if seeded_resv_title and seeded_resv_title not in (rv.get("resvCellText") or ""):
+                        failures.append(f"@{w} reservations: 格内文本没出现预约标题"
+                                        f"（期望含 {seeded_resv_title!r}，实得 {rv.get('resvCellText')!r}）")
+                    if not rv.get("popOpened"):
+                        failures.append(f"@{w} reservations: hover 预约格没弹出浮层"
+                                        f"（只有预约的日子也该能看详情）")
+                    elif not rv.get("popHasResvBadge"):
+                        failures.append(f"@{w} reservations: 浮层里没有预约条目")
+                    elif "1 预约" not in (rv.get("popHeadText") or ""):
+                        failures.append(f"@{w} reservations: 浮层抬头没写「1 预约」"
+                                        f"（实得 {rv.get('popHeadText')!r}）")
+                    elif seeded_resv_title and seeded_resv_title not in (rv.get("popResvText") or ""):
+                        failures.append(f"@{w} reservations: 浮层预约行没出现标题"
+                                        f"（实得 {rv.get('popResvText')!r}）")
+                if not failures:
+                    print("  [ok] 预约进日历：格子徽章/时刻/标题 + hover 浮层条目全部渲染")
             for b in failures:
                 print("   -", b)
             return 1 if failures else 0

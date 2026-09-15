@@ -1,4 +1,4 @@
-import type { Account, AccountStatSnapshot, BiliSearchResult, Capabilities, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, PoolItem, PostPage, PostStats, ThirdpartyVtuber, UpdatePostsResult, VTuber, VTuberFormerValues } from './types'
+import type { Account, AccountStatSnapshot, BiliSearchResult, Capabilities, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, PoolItem, PostPage, PostStats, ThirdpartyVtuber, UpcomingReservation, UpdatePostsResult, VTuber, VTuberFormerValues } from './types'
 
 /**
  * API 基地址：
@@ -275,6 +275,11 @@ export const api = {
 
   /** 当前能力矩阵：未登录时哪些能用、哪些受限（devlog/086）。前端提示的单一事实来源。 */
   capabilities: () => request<Capabilities>('/capabilities'),
+
+  /** 某 V 的未来直播预约（R13；来自动态 reservation 帖的服务端解析）。
+   *  `start_at` 是北京 wall-clock（naive），前端按本地时区解析即可。 */
+  futureReservations: (vtuberId: number, days = 90) =>
+    request<UpcomingReservation[]>(`/vtuber/${vtuberId}/future-reservations?days=${days}`),
 
   // ── 批量任务（拉取浮窗）────────────────────────────────────────
 
