@@ -122,6 +122,24 @@ def _specs() -> list[Spec]:
              "两轮之间至少间隔", "秒", g, hot,
              "不贴着预算跑满，留一点拟人余量（调小会更密）",
              section="定期动态轮询", advanced=True),
+        # ── 静默时段（R30，devlog/130）：用户自己指定"我睡了"的时段 ──
+        Spec("QUIET_HOURS_ENABLED", "bool", False, None, None,
+             "静默时段", "", g, hot,
+             "在下面指定的时段里把动态更新降到最慢（睡觉时没人看，少发请求）；默认关闭",
+             section="定期动态轮询"),
+        Spec("QUIET_HOURS_START", "int", 3, 0, 23,
+             "静默开始", "点", g, hot,
+             "本地时间的整点（0-23）；结束时刻小于等于开始时刻时按跨午夜算（例如 23 点 到 7 点）",
+             section="定期动态轮询"),
+        Spec("QUIET_HOURS_END", "int", 9, 0, 23,
+             "静默结束", "点", g, hot,
+             "与开始时刻相同 = 该功能不生效（避免误设成整天静默）",
+             section="定期动态轮询"),
+        Spec("QUIET_HOURS_DYNAMICS_MIN_SECONDS", "int", 900, 60, 7200,
+             "静默期的动态间隔下限", "秒", g, hot,
+             "静默时段内动态更新最快也要等这么久（默认 15 分钟）；开播状态刷新不受影响，"
+             "所以直播日历的场次时间照旧",
+             section="定期动态轮询", advanced=True),
 
         # ══ 抓取设置 · 每日定时任务 ════════════════════════════════════
         Spec("ACCOUNT_SWEEP_STALE_HOURS", "float", 24.0, 1.0, 720.0,

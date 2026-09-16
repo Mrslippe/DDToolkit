@@ -93,7 +93,7 @@ def test_instance_attribute_still_wins_over_the_overlay(db):
 
 
 def test_defaults_are_the_values_from_before_the_overlay():
-    """把类属性改成覆盖层 property 时**只搬不改**：默认值逐个对账（19 个）。
+    """把类属性改成覆盖层 property 时**只搬不改**：默认值逐个对账（23 个）。
 
     这条是"搬迁"批次的反向保险：谁顺手调了某个默认值，测试会指出是哪一个。
     """
@@ -103,6 +103,9 @@ def test_defaults_are_the_values_from_before_the_overlay():
         "MANUAL_FAST_INTERVAL_MIN": 0.5, "MANUAL_FAST_INTERVAL_MAX": 1.0,
         "DYNAMICS_BUDGET_RPM": 12, "DYNAMICS_MIN_GAP_SECONDS": 30.0,
         "DYNAMICS_MIN_CYCLE_SECONDS": 60.0, "LIVE_POLL_SECONDS": 60.0,
+        # R30 静默时段：默认**关闭**（不改变既有行为，由用户显式开启）
+        "QUIET_HOURS_ENABLED": False, "QUIET_HOURS_START": 3, "QUIET_HOURS_END": 9,
+        "QUIET_HOURS_DYNAMICS_MIN_SECONDS": 900,
         "ACCOUNT_SWEEP_STALE_HOURS": 24.0, "ACCOUNT_SWEEP_MIN_GAP_SECONDS": 600,
         "FIRST_SCREEN_VIDEO_PAGES": 1, "FIRST_SCREEN_DYNAMICS_PAGES": 1,
         "FIRST_SCREEN_DYNAMICS_LIMIT": 3,
@@ -302,7 +305,7 @@ def test_nav_is_appearance_plus_two_categories_plus_about():
 
 
 def test_vital_settings_are_visible_and_tuning_knobs_are_advanced():
-    """**白名单**：普通用户该看到的 8 项 vs 收进「高级」的 8 项。
+    """**白名单**：普通用户该看到的 11 项 vs 收进「高级」的 9 项。
 
     为什么用白名单而不是数量：数量对了不代表对的项在里面 ——
     有人把「被风控后冷却」挪进高级、又放出一个「请求预算」，数量一样、体验两样。
@@ -311,9 +314,11 @@ def test_vital_settings_are_visible_and_tuning_knobs_are_advanced():
     visible = {k for k, s in rs.SPECS.items() if not s.advanced}
     advanced = {k for k, s in rs.SPECS.items() if s.advanced}
     assert visible == {
-        # 抓取设置（8 项：风控与节流 3 + 开播 1 + 动态 1 + 每日 1 + 收录首屏 2）
+        # 抓取设置（11 项：风控与节流 3 + 开播 1 + 动态 1 + 静默时段 3 + 每日 1 + 收录首屏 2）
         "REQUEST_INTERVAL_MIN", "REQUEST_INTERVAL_MAX", "RATE_LIMIT_COOLDOWN",
         "LIVE_POLL_SECONDS", "DYNAMICS_MIN_CYCLE_SECONDS",
+        # R30：静默时段是"用户自己决定睡觉时不打扰"，属于用户该看到的决策（默认关闭）
+        "QUIET_HOURS_ENABLED", "QUIET_HOURS_START", "QUIET_HOURS_END",
         "ACCOUNT_SWEEP_STALE_HOURS", "FIRST_SCREEN_VIDEO_PAGES",
         "FIRST_SCREEN_DYNAMICS_LIMIT",
         # 数据源（3 个开关：总闸 + 两个上游）——它们是"要不要用这个源"的决策，不该藏
@@ -322,6 +327,7 @@ def test_vital_settings_are_visible_and_tuning_knobs_are_advanced():
     assert advanced == {
         "FETCH_BATCH_SIZE", "FETCH_BATCH_COOLDOWN",
         "DYNAMICS_BUDGET_RPM", "DYNAMICS_MIN_GAP_SECONDS",
+        "QUIET_HOURS_DYNAMICS_MIN_SECONDS",       # R30：静默期"降到多慢"属于调优
         "ACCOUNT_SWEEP_MIN_GAP_SECONDS", "FIRST_SCREEN_DYNAMICS_PAGES",
         "MANUAL_FAST_INTERVAL_MIN", "MANUAL_FAST_INTERVAL_MAX",
     }

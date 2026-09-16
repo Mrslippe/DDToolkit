@@ -410,6 +410,8 @@ def get_fetch_status() -> dict:
         "manual_running": manual_task_running(),
         # R12a：风控冷却（此前只在日志里，界面看不到）
         "rate_limit": rate_limit_status(),
+        # R30：静默时段快照（用户自己设的"我睡了"时段；界面/诊断据此解释"现在为什么变慢"）
+        "quiet_hours": quiet_hours_status(),
     }
 
 
@@ -3142,6 +3144,70 @@ def _dynamics_round_budget_seconds(cost: dict[str, int], rpm: int,
     return max((n / rpm) * window for n in over)
 
 
+# ── 静默时段（R30，devlog/130）────────────────────────────────────────
+# 用户口径（2026-09-16）：「夜间降频可以改为定时时段降频，因为即使 vtuber 全天都会开播，
+# 但用户不会全天醒着」。三条纪律（用户当场定的两条 + 一条实现口径）：
+#   · **默认关闭**，由用户在设置里显式开启并指定时刻（绝不悄悄改变行为）；
+#   · **只降动态流**：T0 直播轮询保持 60s —— 日历场次起止时间由 live 跳变推导，降它就会变粗；
+#   · 与 R24b 不冲突：那条否掉的是"隐藏到托盘就降频"（拖慢推送时效），本项是"用户声明我睡了"。
+_quiet_logged_active: bool = False
+
+
+def quiet_hours_active(now_local: datetime, *, enabled: bool, start: int, end: int) -> bool:
+    """本地时间是否落在静默时段内（纯函数，便于单测）。
+
+    - `enabled=False` → False；**`start == end` → False**（避免误设成"整天静默"）；
+    - `start > end` → 按**跨午夜**算（例：23 → 7 表示 23:00 到次日 06:59）；
+    - 区间口径 `[start, end)`：含开始、不含结束（与人的直觉一致）。
+    """
+    if not enabled or start == end:
+        return False
+    hour = now_local.hour
+    if start < end:
+        return start <= hour < end
+    return hour >= start or hour < end
+
+
+def quiet_dynamics_floor(now_local: datetime | None = None) -> float:
+    """静默时段内动态流的**间隔下限**（秒）；不在时段内返回 0.0（不干预）。"""
+    now_local = now_local or datetime.now()
+    if not quiet_hours_active(now_local,
+                              enabled=bool(settings.QUIET_HOURS_ENABLED),
+                              start=int(settings.QUIET_HOURS_START),
+                              end=int(settings.QUIET_HOURS_END)):
+        return 0.0
+    return max(0.0, float(settings.QUIET_HOURS_DYNAMICS_MIN_SECONDS))
+
+
+def quiet_hours_status() -> dict:
+    """静默时段快照（`fetch-status.quiet_hours`）：界面/诊断据此说明"现在为什么变慢了"。"""
+    enabled = bool(settings.QUIET_HOURS_ENABLED)
+    start, end = int(settings.QUIET_HOURS_START), int(settings.QUIET_HOURS_END)
+    active = quiet_hours_active(datetime.now(), enabled=enabled, start=start, end=end)
+    return {
+        "enabled": enabled,
+        "active": active,
+        "start": start,
+        "end": end,
+        "dynamics_min_seconds": int(settings.QUIET_HOURS_DYNAMICS_MIN_SECONDS) if active else 0,
+    }
+
+
+def _note_quiet_transition(active: bool) -> None:
+    """时段进出各记一条日志（只在状态真的翻转时）—— 事后能对账"为什么这几小时变慢了"。"""
+    global _quiet_logged_active
+    if active == _quiet_logged_active:
+        return
+    _quiet_logged_active = active
+    if active:
+        logger.info(f"进入静默时段（{int(settings.QUIET_HOURS_START):02d}:00-"
+                    f"{int(settings.QUIET_HOURS_END):02d}:00）：动态流间隔下限抬到 "
+                    f"{quiet_dynamics_floor() / 60:.0f} 分钟"
+                    f"（开播轮询与直播日历不受影响）")
+    else:
+        logger.info("静默时段结束：动态流恢复正常节奏")
+
+
 def _dynamics_next_due(db: Session, *, since: float | None = None) -> float:
     """下一轮动态流的到期时刻（monotonic）。
 
@@ -3171,7 +3237,10 @@ def _dynamics_next_due(db: Session, *, since: float | None = None) -> float:
     # R28①：预算当**真上限**（逃逸口只保证"这一轮跑得动"，稳态仍由 rpm 决定）
     interval = max(interval, _dynamics_round_budget_seconds(cost, settings.DYNAMICS_BUDGET_RPM))
     # R28②：闲着就慢下来 —— 连续无新帖的档位给一个**间隔下限**（有活动立即清零）
-    idle_floor = dynamics_idle_floor(_dynamics_idle_streak)
+    # R30：静默时段同样给下限，两者取更保守的那个
+    quiet_floor = quiet_dynamics_floor()
+    _note_quiet_transition(quiet_floor > 0)
+    idle_floor = max(dynamics_idle_floor(_dynamics_idle_streak), quiet_floor)
     # R27 恢复期：刚被风控解禁的 10 分钟内把轮间隔拉开（≈ 半预算）——避免一解禁就满速。
     # 放在**间隔**上而不是改预算上限：预算是共享状态，动它会连带影响手动档的排期。
     ramp = rl.ramp_scale(_rl_states.values(), rl.now(), platforms=cost.keys())
