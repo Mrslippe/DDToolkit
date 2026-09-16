@@ -99,24 +99,68 @@ foreach ($f in @(
 > `python scripts/dev_check.py`（约 20 秒）就能验完，详见 `docs/DEV-LOOP.md`。
 > 只有动到 Rust 壳 / `tauri.conf.json` / 需要确认安装包布局时才必须整包重建。
 
+**应用内更新（R23 起）**：`tauri:build` 会额外产出更新载体与其签名，**必须先提供签名私钥**，
+否则这一步直接失败（密钥从哪来、怎么保管见 §3.1）：
+
 ```powershell
 cd frontend
+$env:TAURI_SIGNING_PRIVATE_KEY          = (Get-Content -Raw 'E:\work\Project\ddtoolkit-updater.key')
+$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = (Get-Content -Raw 'E:\work\Project\ddtoolkit-updater.password.txt')
 npm run release
 ```
 
-`release` = `build:backend`（PyInstaller onedir → `src-tauri/binaries/backend/`，**2026-09-14 实测 118.8MB**）
+`release` = `build:backend`（PyInstaller onedir → `src-tauri/binaries/backend/`，**v1.0.0 实测 118.8MB**）
 → `tauri:build`（前端构建 + Rust release + NSIS 安装包，**实测 6m09s**）
-→ `collect:release`（聚合到 `dist-release/`：安装包 + 便携 zip）。
+→ `collect:release`（聚合到 `dist-release/`：安装包 + 便携 zip + **`latest.json`**）。
 
 **验证产物**：
 
 ```powershell
+python scripts/release.py 1.0.2 --only verify        # 含更新清单校验，见下
 Get-ChildItem dist-release | Select-Object Name, @{n='MB';e={[math]::Round($_.Length/1MB)}}
-# 期望两个文件（大小随依赖增长，v1.0.0 实测值如下）:
-#   DDtoolkit_<新版本>_x64-setup.exe   (~56 MB，v1.0.0 = 56.3)
-#   DDtoolkit-portable-win64.zip      (~70 MB，v1.0.0 = 70.3)
-# 若出现旧版本安装包残留（如 0.9.9），删除之
+# 期望三个文件（大小随依赖增长，v1.0.2 实测值如下）:
+#   DDtoolkit_<新版本>_x64-setup.exe   (57.5 MB)  ← 也是应用内更新的**载体**（见 §3.1）
+#   DDtoolkit-portable-win64.zip      (71.9 MB)
+#   latest.json                       (更新清单：版本 / 说明 / url + 签名)
+# 若出现旧版本安装包残留（如 1.0.1），删除之
 ```
+
+### 3.1 应用内更新：签名密钥与更新产物（R23，**下次发版必读**）
+
+**更新载体就是安装包本身**。Tauri 的 Windows/NSIS 更新流程是"下载安装包 → 静默运行它"，
+所以 `tauri:build` 产出的是：
+
+| 文件（在 `frontend/src-tauri/target/release/bundle/nsis/`） | 是什么 |
+|---|---|
+| `DDtoolkit_<版本>_x64-setup.exe` | 安装包，**同时是更新载体** |
+| `DDtoolkit_<版本>_x64-setup.exe.sig` | 它的 minisign 签名（`bundle.createUpdaterArtifacts: true` 才有） |
+
+⚠️ **没有 `*.nsis.zip`**（2026-09-16 真机构建实测确认）。最初按 zip 写，症状是
+**`latest.json` 一直生成不出来**（脚本在找一个不存在的文件）——排错时先看这一条。
+
+`collect:release` 会把签名**嵌进** `dist-release/latest.json`（`platforms.windows-x86_64.signature`），
+`url` 指向 `releases/download/v<版本>/DDtoolkit_<版本>_x64-setup.exe` —— 注意是**版本化的地址**，
+不是 `latest/download`（后者会让旧版本客户端下到新包却配旧签名，且只在下次发版才暴露）。
+
+**密钥（仓库外，务必与代码分开备份）**：
+
+```
+E:\work\Project\ddtoolkit-updater.key            私钥（构建时用；丢了就再也发不了更新）
+E:\work\Project\ddtoolkit-updater.password.txt   密码（32 位随机；丢了同样发不了）
+E:\work\Project\ddtoolkit-updater.key.pub        公钥 → 已写进 tauri.conf.json 的 plugins.updater.pubkey
+```
+
+- 生成（**在仓库外**，`--password=` 的空值在非交互下走不通，见下）：
+  `npx tauri signer generate -w <仓库外路径> --password=<密码> --force`
+- 构建时给的是**私钥内容**（`TAURI_SIGNING_PRIVATE_KEY`）而不是路径 —— CLI 这版不认 `_PATH`；
+- ⚠️ **密码不能为空**：空密码时 CLI 会**直接从终端读密码**（绕过 stdin），在脚本/CI 里表现为
+  **无输出地挂住**（实测 180 秒无返回）。PowerShell 里 `$env:X = ''` 其实是**删除**变量，
+  同样会被当成"没提供密码"。所以：私钥必须有密码，且构建时用 `Get-Content -Raw` 喂进去。
+- **公钥必须与签名私钥成对**：换了密钥就要同步改 `tauri.conf.json` 的 `pubkey`
+  （否则客户端校验失败、更新装不上），并重打产物。
+
+**校验**（`release.py --only verify` 已内置）：版本一致 · 签名非空 · `url` 以安装包名结尾 ·
+该安装包在产物目录里；另外旧的 `latest.json`/旧版本安装包残留都会被拦下。
 
 **验证「后端目录没被安装包打平」**（2026-09-08 事故，见 devlog/036）：
 
