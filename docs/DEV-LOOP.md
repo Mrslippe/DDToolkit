@@ -25,12 +25,12 @@
 python scripts/dev_check.py             # 单测 + 开发态后端冒烟（约 20 秒）
 python scripts/dev_check.py --frozen    # 追加：冻结后端 exe 冒烟（需先 build_backend，约 1 分钟）
 python scripts/dev_check.py --portable  # 追加：重打便携 zip（免 cargo/NSIS，约 2 分钟）
-python scripts/dev_check.py --full      # = --frozen --portable
+python scripts/dev_check.py --full      # = --frozen --portable --docs --upstream
 ```
 
 它做三件事：
 
-1. `pytest tests/` —— 266 个用例的回归网（含 B 站扫码四态、同名 cookie 冲突、
+1. `pytest tests/` —— 回归网（**基线数字只在 `docs/TODO.md` §6.2 维护**，别处一律不复述；含 B 站扫码四态、同名 cookie 冲突、
    账号白名单回填、首启标记等回归用例）；
    **另加前端三条**：`npm run lint`（eslint，`--max-warnings 0`）、
    `npm run test`（vitest，纯函数单测）、`npm run check:dates`（日期区间 30 条断言）
@@ -89,6 +89,8 @@ python scripts/ui_probe.py --filter-pill             # R16 两枚「筛选」浮
                                                      # 三态（静态/真实最长/合成超长）的文字居中与 caret 间距
 python scripts/ui_probe.py --tray-suspend            # R18 托盘隐藏后的**停表**验证（devlog/095）：可见时轮询在跑
                                                      # （基线）→ 隐藏后请求停住、空闲轮播停住 → 唤回立刻补一轮
+python scripts/ui_probe.py --close-ask               # R20 首次点 ✕ 的询问流程（devlog/097）：ask 弹框（两选项 +
+                                                     # 记住）→ 选托盘则写偏好并隐藏 → 再点不再问
 ```
 
 > `--polish`（2026-09-15 起，devlog/087）：三条都是"差 2px 肉眼看不出"的占位/对齐问题，所以**全部量出来**：
@@ -159,7 +161,8 @@ python scripts/ui_probe.py --tray-suspend            # R18 托盘隐藏后的**�
 
 > `--tray-suspend`（2026-09-15 起，R18 devlog/095）：**托盘是 OS 级能力，无头浏览器测不到**，
 > 但"隐藏之后该发生什么"完全可断言 —— 页面里有 dev 钩子
-> `window.__ddtoolkitSetShellHidden(true/false)`（`utils/shellLifecycle` 在启动时装的）。
+> `window.__ddtoolkitSetShellHidden(true/false)`（`utils/shellLifecycle` 在启动时装的；R20 另有
+> `window.__ddtoolkitCloseClick()`，见下方 `--close-ask`）。
 > 探针分三段，**第一段是灵魂**：可见时必须证明轮询在跑（基线）——否则"隐藏后没请求"这件事，
 > 一个彻底卡死的应用也能满足。量的是 `performance.getEntriesByType('resource')` 里
 > `/vtuber/fetch-status` 的条数，并把**每次请求的时刻**一起打出来（排查"漏网那一发"全靠它）。
@@ -174,6 +177,16 @@ python scripts/ui_probe.py --tray-suspend            # R18 托盘隐藏后的**�
 > 深休眠（P2）与托盘交互只能人工验：打包版点 ✕ → 窗口消失 + 托盘图标在 → 等 10 分钟
 > （调试可用 `DDTOOLKIT_TRAY_SLEEP_SECONDS=20`）→ 唤回后**位置与数据都要是新的** →
 > 托盘「退出」→ 任务管理器无 `ddtoolkit.exe` / backend 残留 → 再点 exe 应**唤回**而非开第二个实例。
+>
+> ⚠️ **R20 起「托盘退出」的失败方向变了**，人工验收要**两种现场各验一次**：
+> ① **没任务在跑** → 点托盘「退出」应当**直接退出**（不必等窗口出现；任务管理器无 `ddtoolkit.exe` 与 backend）；
+> ② **有任务在跑** → 应**唤回窗口 + 弹确认框**，确认后才退。原先托盘退出只发事件等前端确认，
+> 而深休眠/未加载时没人接事件 ⇒ 选过"最小化到托盘"后**根本退不出去**（R20 用户实测报的 bug）。
+
+> `--close-ask`（2026-09-15 起，R20 devlog/097）：窗口 ✕ 是非 Tauri 环境下的 `disabled` 按钮，
+> 探针点不到 —— 所以开发构建里挂了 `window.__ddtoolkitCloseClick()`（与 `__ddtoolkitSetShellHidden`
+> 同一族 dev 钩子，`import.meta.env.DEV` 下才有）。判开合**读 `data-state`**（理由同上：`Presence`）。
+> 三段：ask 弹框（两选项 + 「记住」）→ 选托盘则写 `prefs.close_action=tray` 并隐藏 → 再点 ✕ **不再问**。
 
 > `--filter-pill`（2026-09-15 起，R16 devlog/093）：用户给的是**两张截图**（"list 视图那枚
 > 要跟随侧栏那枚的样式"）—— 截图能看出"像不像"，但没法证明"一样不一样"，所以先把两枚浮片

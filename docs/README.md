@@ -19,13 +19,13 @@
 | 文档 | 什么时候看 | 内容 |
 |---|---|---|
 | **`GLOSSARY.md`** | **改 bug / 做需求第一步**：某个名词在代码里叫什么、在哪、牵动谁 | 9 组术语表（领域/数据/抓取/认证/前端/工程/配置/坑/需求→入口） |
-| **`ARCHITECTURE.md`** | 想建立整体认知、或改动跨越多个层 | 运行时形态、11 表 ER、综合档调度、锁与优先级、数据来源地图、10 条不变量 |
+| **`ARCHITECTURE.md`** | 想建立整体认知、或改动跨越多个层 | 运行时形态、11 表 ER、综合档调度、锁与优先级、数据来源地图、15 条不变量 |
 
 ## 2. 深度文档（按模块）
 
 | 文档 | 覆盖 |
 |---|---|
-| `backend-repositories-and-routers.md` | 11 张表列级定义 · 11 个 Repository 方法表 · 54 个 HTTP 操作 · 迁移链（17 版本，head `f004`） |
+| `backend-repositories-and-routers.md` | 11 张表列级定义 · 11 个 Repository 方法表 · HTTP 操作（路由计数口径见其 §3）· 迁移链（17 版本，head `f004`） |
 | `backend-fetch-pipeline.md` | 抓取链路细节：触发入口、锁与让位、API 清单、风控判定、节流测算、停止原因 |
 | `FRONTEND-ARCH.md` | 前端分层（api/hooks/components/pages/styles）、数据流、状态管理 |
 | `UI-MAP.md` | 界面与路由映射：四视图、组件类名、设计令牌、动效与圆角规范 |
@@ -35,7 +35,7 @@
 | 文档 | 用途 |
 |---|---|
 | `DEV-LOOP.md` | 本地开发循环：后端直跑、前端 dev、`dev_check.py`（`--docs` / `--upstream` / `--frozen` / `--portable`）、`ui_probe.py`、`smoke_upstream.py`、打包版复现 |
-| `RELEASE.md` | 发布流程：版本号同步 5 处、打包三步、资源契约、GitHub 上传、代理/证书参数 |
+| `RELEASE.md` | 发布流程：版本号同步 **6 处**、打包三步、资源契约、GitHub 上传、代理/证书参数 |
 | `platforms-extension-guide.md` | 接入新平台（继承 `BasePlatform` + 注册 + 前端常量） |
 | `TODO.md` | 路线图：**待提需求收集区（§0）** + 未完成项（§1）+ 能力现状（§2）+ backlog/远期/不做 + 门禁基线（§6.2） |
 | `ROADMAP-DONE.md` | 已完成条目详录：**已落地需求清单（R1–R10）+ 版本→devlog 索引** + 历史条目的原始需求 / 验收 / 实现注意（2026-09-13 从 TODO.md 拆出） |

@@ -30,7 +30,7 @@ flowchart TB
   subgraph S["Python sidecar（backend_main.py）"]
     BM["资源引导 vtubers.csv<br/>父进程看门狗<br/>uvicorn Server API（bind 后就绪）"]
     BM --> APP["FastAPI app（app/main.py）<br/>lifespan：迁移 → 调度器 → auth 维护"]
-    APP --> HTTP["HTTP API 事件循环<br/>52 个路由 / 54 个操作 / 手动抓取 / BackgroundTasks"]
+    APP --> HTTP["HTTP API 事件循环<br/>vtuber / auth / img-proxy / 手动抓取 / BackgroundTasks"]
     APP --> T0["T0 线程：直播轮询 60s<br/>批量接口，不占锁"]
     APP --> TIER["综合档调度线程：动态流 + 账号流<br/>asyncio.run 同档并发"]
     APP --> APS["APScheduler 线程：T4 外部数据<br/>每日 3AM / 每周"]
@@ -409,6 +409,27 @@ T0 的进度反馈就是这条通道（无进度条、无胶囊）。
    `tests/fixtures/capability_matrix.json` 是**平台当时给什么**；`tests/test_capabilities.py`
    双向约束（实测可用 ⇒ 不得标 `requires_login`；被 412 硬拒 ⇒ 必须标）——
    平台一变，用例先红，逼我们重测再改承诺。
+
+### 3.10 桌面壳生命周期：隐藏 / 深休眠 / 退出（2026-09-15，R18 devlog/095 + R20 devlog/097）
+
+壳（Tauri）与后端是**两个进程**，`✕`、托盘、深休眠各自触发不同的事件。三条规则：
+
+1. **关闭 ≠ 退出**：`CloseRequested` 被拦成 `hide()` + `set_skip_taskbar(true)` + `emit(shell:hidden)`
+   （后台抓取照常、前端**停表**）；`RunEvent::ExitRequested` 在非主动退出时 `prevent_exit()`
+   —— 深休眠销毁 WebView 也会走到这里，少这一句整个应用会被"休眠"带走。关闭语义由
+   `prefs.close_action` 决定（`ask` 默认 / `tray` / `quit`，首次问一次并记住）。
+2. **隐藏 ≠ 停止**：隐藏期间前端停掉顶栏两条轮询与状态岛轮播，**恢复时立刻补一轮**。判据必须读
+   **同步源** `isShellHidden()`，且"排程"与"触发"两处都要判 —— 只判一处会漏掉隐藏前排下的那一发
+   （实测漏网时刻 `22063`，隐藏发生在 `14349`）。
+3. **退出路径不依赖前端**（R20 用户实测事故的结论）：原先托盘「退出」只 `emit(shell:quit-requested)`
+   等前端确认，而深休眠/未加载时**没人接这个事件** ⇒ 选过"最小化到托盘"后根本退不出去。现在 Rust
+   先问后端**单一事实来源**（`GET /vtuber/fetch-status` 的 `manual_running`）：**没任务在跑就 `exit(0)`**，
+   有任务才唤回窗口 + 发事件让前端确认（`quit_app` 置 `QUITTING` 再 `exit(0)`）。通用纪律：
+   **"必须成功"的动作不能建立在可被销毁的一侧**；判据由 `cargo test` 2 条守着。
+
+**深休眠（P2）**：隐藏满 10 分钟销毁 WebView 省内存（`DDTOOLKIT_TRAY_SLEEP_SECONDS` 仅供测试覆盖），
+唤回时**重建窗口**并加载 `index.html?restored=1`（SPA 深链接在资源协议下会 404）；位置与视图从
+`localStorage` 的 `ddtoolkit.shell-state` 恢复，`?restored=1` 是**唯一的恢复开关**（普通启动不恢复）。
 
 ## 4. 数据来源地图
 

@@ -152,14 +152,14 @@
 | **图片组件** | 直连 → 代理 → 占位三态 | `components/common/ProxyImage.tsx` | 微博图床直接走代理 |
 | **API 客户端** | 统一 `request()` + `setApiBase()` | `api/api.ts`；类型 `api/types.ts` | 桌面端注入 sidecar 端口 |
 | **设计令牌** | 颜色/圆角/阴影/字体变量 | `styles/tokens.css` | UI-MAP §D 有全表 |
-| **UI 探针** | `?probe=1` 下的机器可判定布局自检 | `dev/probe.ts` + `scripts/ui_probe.py` | 7 组不变量（含 `--add-v`：本地/上游来源分流；`--capabilities`：未登录提示**存在**且功能**未过度限制**） |
+| **UI 探针** | `?probe=1` 下的机器可判定布局自检 | `dev/probe.ts` + `scripts/ui_probe.py` | 八组不变量（含 `--add-v`：本地/上游来源分流；`--capabilities`：未登录提示**存在**且功能**未过度限制**） |
 | **未登录提示 / 能力角标** | 顶栏「未登录 · N 项受限」入口 + 说明窗（先列"现在能做什么"再列受限项 + 去登录）；受限功能**照常可见**，只标不藏 | `hooks/useCapabilities.ts`、`utils/capabilities.ts`、`components/CapabilityLimits.tsx`；`.topbar-limits` / `.cap-limits-dialog` / `.cap-need-login` / `.cap-inline-hint` | 探针 `ui_probe.py --capabilities`（现场 = 数据副本删 `.env`） |
 | **顶栏状态岛 / 通知中心** | 顶栏唯一的信息控件：条目优先级 `alert>progress>report>message`、过期与常驻规则、六类信息源（进度/第三方/完成报告/登录失效/风控冷却/瞬时消息）；空闲时**轮播**状态文案与语录 | `utils/notificationHub.ts`（判定，12 单测）、`utils/idleQuotes.ts`（空闲轮播池，15 单测）、`components/StatusIsland.tsx`（渲染）、`scheduler.rate_limit_status()`（风控字段） | 「自动节拍不占顶栏」是该模块的具名规则 + 反向用例；面板 portal+fixed，探针断言"展开不挤动右栏 + 入场动画挂上了 + 空闲轮播在走且不出进度词" |
 | **空闲轮播 / 语录池** | 顶栏空闲时的文案轮播（第 0 格固定是「数据服务运行中」，状态信息不被顶掉）；语录里**不许出现进度词**。⚠️ **R19 起暂时下线**：空闲恒为状态文案，池子与扩展点保留 | `utils/idleQuotes.ts`（`IDLE_CAROUSEL_ENABLED` / `idlePool` / `pickIdle` / `registerIdleProvider`）；DOM 见 `data-idle-pool` 与 `data-idle-carousel` | 时钟是组件自己的定时器（不挂抓取轮询，否则调大轮询间隔就静默停住）；上下线要**两处一起改**（常量 + 探针断言） |
 | **添加 V 浮窗** | 收录入口浮窗：本地候选（池 + 弹幕索引）与 B 站在线检索两个来源 | `components/AddVtuberDialog.tsx`；`.av-*`（`styles/posts.css`） | 探针 `--add-v`；纯逻辑在 `utils/addVtuberSearch.ts` |
 | **应用设置 / 运行时覆盖层** | IconRail 底端齿轮 → **两栏设置弹窗**（左分类导航 + 右内容）：导航由 `specs[].group` **数据驱动**（外观首/关于尾），抓取参数**改完下一轮生效（不用重启）**，只读项逐条写理由 | `app/core/runtime_settings.py`（SPECS + 只读表）、`app/routers/settings.py`、`components/AppSettingsDialog.tsx`、`utils/settingsNav.ts`；`.aps-*` | 落库复用 `app_meta`（前缀 `settings.`）；`Settings.__getattribute__` 拦截热更键，优先级 **实例属性 > 覆盖层 > 类属性**；切页不丢草稿、圆点标未保存页；探针 `--app-settings` |
 | **主题 / 深色钩子** | 「浅色 / 跟随系统」偏好（立即生效，存 `prefs.theme`）；**深色样式尚未实现** —— 钩子 = 解析函数 + `html[data-theme]` + 空的深色令牌块 | `utils/theme.ts`（纯逻辑，13 单测）、`hooks/usePrefs.ts`、`styles/tokens.css` 的 `:root[data-theme='dark']` 空块 | `DARK_IMPLEMENTED=false` 时 `system` 解析为浅色，界面**必须**给出那句说明（`themeCaveat`）；跨语言契约把它与 `/settings/prefs` 的 note 绑在一起 |
-| **托盘隐藏 / 深休眠** | 点 ✕ → 窗口隐藏到托盘（**后台抓取照常、前端停表**）；隐藏 10 分钟深休眠（销毁 WebView 省内存），唤回重建窗口并回到离开的位置 | `src-tauri/src/lib.rs`（托盘 / 拦 CloseRequested / prevent_exit / `hide_to_tray`·`quit_app` 命令）、`utils/shellLifecycle.ts`、`utils/shellState.ts`、`utils/shellBridge.ts`、`components/CloseActionDialog.tsx` | 关闭语义存 `prefs.close_action`（默认 `ask`）；**退出只有一条路**（托盘→前端确认→`quit_app`）；停表判据必须读同步源且在"排程 + 触发"两处都判（探针 `--tray-suspend` 抓到过两个真 bug） |
+| **托盘隐藏 / 深休眠** | 点 ✕ → 窗口隐藏到托盘（**后台抓取照常、前端停表**）；隐藏 10 分钟深休眠（销毁 WebView 省内存），唤回重建窗口并回到离开的位置 | `src-tauri/src/lib.rs`（托盘 / 拦 CloseRequested / prevent_exit / `hide_to_tray`·`quit_app` 命令）、`utils/shellLifecycle.ts`、`utils/shellState.ts`、`utils/shellBridge.ts`、`components/CloseActionDialog.tsx` | 关闭语义存 `prefs.close_action`（默认 `ask`）；**R20 起退出不依赖前端**：托盘「退出」由 Rust 先问 `GET /vtuber/fetch-status` 的 `manual_running`，**没任务在跑就 `exit(0)`**，在跑才唤回窗口发 `shell:quit-requested` 走确认 → `quit_app`（判据有 `cargo test` 2 条：字段识别 / 缺失与异常一律当"没在跑"）；停表判据必须读同步源且在"排程 + 触发"两处都判（探针 `--tray-suspend` 抓到过两个真 bug） |
 
 ---
 
@@ -178,7 +178,7 @@
 | **sidecar 就绪信号** | `DDTOOLKIT_READY <url>` + `logs/sidecar.log` 性能打点 | `backend_main.py` | Tauri 启动器据此等就绪 |
 | **父进程看门狗** | 壳退出后后端自尽 | `backend_main.py::_watch_parent` | 防孤儿进程 |
 | **发布链** | 后端 → 桌面应用 → 聚合产物 | `npm run release`；`scripts/{build_backend,collect_release,upload_release_assets}.py` | 说明 `docs/RELEASE.md` |
-| **版本号同步点** | `settings.VERSION` / `package.json` / `tauri.conf.json` / `Cargo.toml` / README badge | 5 处 + devlog | 测试 `test_version_synced_with_devlog` |
+| **版本号同步点** | `settings.VERSION` / `package.json` / `tauri.conf.json` / `Cargo.toml` / `Cargo.lock` / README badge | 6 处 + devlog | 测试 `test_version_synced_with_devlog` |
 | **dev_check** | 一键本地验证（pytest + 后端冒烟） | `scripts/dev_check.py` | 可选 `--frozen` / `--portable` |
 | **UI 探针** | 布局不变量机器验证（三档窗口宽） | `scripts/ui_probe.py` | `--first-run` 验首启浮窗 |
 | **运行日志 / 日志轮转** | 双通道（轮转文件 + 控制台）：`logs/app.log` 按天切成 `app.log.YYYY-MM-DD`，保留 7 份 | `app/core/logging_setup.py::setup_logging/build_file_handler` | 排查先"按天切一刀"（devlog/076）；配置本身可测（devlog/077） |
@@ -195,7 +195,7 @@
 | `DATA_DIR` | `DDTOOLKIT_DATA_DIR` 或项目根 | 数据库/日志/凭据/静态资源根目录 |
 | `DATABASE_URL` | `sqlite:///<DATA_DIR>/vtuber.db` | SQLite 连接串 |
 | `LOG_FILE` / `LOG_BACKUP_DAYS` | `logs/app.log` / `7`（`DDTOOLKIT_LOG_BACKUP_DAYS` 可覆盖） | 双通道日志的文件通道：**按天轮转**（`app.log.YYYY-MM-DD`）保留最近 N 份；配置在 `app/core/logging_setup.py`（devlog/077） |
-| `VERSION` | `1.0.0` | 版本号（与 5 处同步：本文件 / `tauri.conf.json` / `Cargo.toml` / `Cargo.lock` / `package.json`，测试断言一致） |
+| `VERSION` | `1.0.2` | 版本号（与 6 处同步：本文件 / `tauri.conf.json` / `Cargo.toml` / `Cargo.lock` / `package.json` / README 徽章，测试断言一致） |
 | `REQUEST_INTERVAL_MIN/MAX` | 3.0 / 5.0 s | 账号抓取每账号间隔 |
 | `MANUAL_FAST_INTERVAL_MIN/MAX` | 0.5 / 1.0 s | 收录/单V 的账号间隔（只在账号之间生效） |
 | `FIRST_SCREEN_VIDEO_PAGES` / `_DYNAMICS_PAGES` / `_DYNAMICS_LIMIT` | 1 / 1 / 3 | 收录首屏抓取规模 |

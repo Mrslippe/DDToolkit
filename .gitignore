@@ -29,6 +29,8 @@ logs/
 # AI 编码工具目录（技能包 / 会话 / 依赖；与 .vscode / .idea 同类，不入库）
 # 注：opencode.json（LSP 配置）仍保留在仓库，属项目级开发环境配置
 .opencode/
+# DSH（DeepSeek Harness）技能包与会话数据；.dsh/skills 下的项目专属技能同样不入库（devlog/098）
+.dsh/
 
 # 自检 / 调试临时目录（scripts/dev_check.py、ui_probe.py 的现场，通过即删）
 /_devcheck_tmp/

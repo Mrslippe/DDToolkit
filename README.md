@@ -12,7 +12,7 @@
 
 ```
 ├─ app/               后端源码（FastAPI 分层）
-│  ├─ routers/        HTTP 路由层（vtuber / auth / img-proxy，52 个路由 / 54 个操作）
+│  ├─ routers/        HTTP 路由层（vtuber / auth / img-proxy；路由计数口径见 docs/backend-repositories-and-routers.md §3）
 │  ├─ repositories/   SQL 访问层（11 个仓库类，无 ORM 泄漏到路由）
 │  ├─ models/         SQLAlchemy ORM（11 张表：vtubers / accounts / posts / 快照 / 场次 / app_meta / 曾用值 …）
 │  ├─ schemas/        Pydantic 输入输出模型

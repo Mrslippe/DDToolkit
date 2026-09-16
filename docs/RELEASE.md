@@ -11,8 +11,13 @@
 > 中途失败按提示 `--from <步骤>` 续跑。**本文档余下部分是那条命令背后的每一步**，
 > 用于排查、手工兜底与理解守卫（脚本失败时会指向对应小节）。
 >
-> 首次发布：v0.9.1（2026-09-08）；最近发布：**v1.0.0**（2026-09-14，
-> [GitHub Release](https://github.com/Mrslippe/DDToolkit/releases/tag/v1.0.0)，release id 388158299）。
+> 首次发布：v0.9.1（2026-09-08）；最近发布：**v1.0.1**（2026-09-15，
+> [GitHub Release](https://github.com/Mrslippe/DDToolkit/releases/tag/v1.0.1)，release id 389029336）。
+>
+> **v1.0.2 已打 tag 并推送（2026-09-16）**：tag 按用户口径指向**修复后的提交**（R20 的两个实测问题修完
+> 才定版），产物用修复后的代码重建（56.4MB / 70.5MB）。**GitHub Release 尚未创建**（本机无 PAT）——
+> 补建只需一条命令，资产已在 `dist-release/`：
+> `$env:GITHUB_TOKEN="ghp_xxx"; python scripts/release.py 1.0.2 --from release`。
 
 ---
 
@@ -51,7 +56,7 @@
 
 ---
 
-## 2. 版本号同步（先于构建，5 处必须一致）
+## 2. 版本号同步（先于构建，6 处必须一致）
 
 当前版本号分散在 5 个文件（历史上曾有 0.8.0/0.1.0 不一致——**必须全部改齐**）：
 另有 README 顶部徽章，共 **6 处**（`release.py` 的 `VERSION_FILES` 表就是这份清单）：
@@ -196,7 +201,7 @@ python scripts/upload_release_assets.py v0.9.2
 ```
 [1/5] token 有效 (login=…)
 [2/5] tag v1.0.1 已在远端（0acdbce…）
-[3/5] Release created  (id 388158299)，描述来源 v1.0.1.md
+[3/5] Release created  (id 389029336)，描述来源 v1.0.1.md
 [4/5] 上传 DDtoolkit_1.0.1_x64-setup.exe ... OK (56.3 MB)
 [4/5] DDtoolkit-portable-win64.zip 已存在且大小一致，跳过（70.3 MB）
 [5/5] 远端资产: ['DDtoolkit-portable-win64.zip', 'DDtoolkit_1.0.1_x64-setup.exe']
