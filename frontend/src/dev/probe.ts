@@ -1448,7 +1448,7 @@ export async function runUiProbe(): Promise<void> {
       const navLabels = [...dlg.querySelectorAll<HTMLElement>('.aps-nav-item')]
         .map((n) => (n.querySelector('.aps-nav-label')?.textContent || '').trim())
       const settingsBody = await fetch(`${getApiBase()}/settings`).then((r) => r.json())
-        .then((b: { specs: { key: string; group: string }[] }) => b)
+        .then((b: { specs: { key: string; group: string; section: string; advanced: boolean }[] }) => b)
       const groupsFromApi = (() => {
         const out: string[] = []
         for (const s of settingsBody.specs) if (!out.includes(s.group)) out.push(s.group)
@@ -1465,13 +1465,21 @@ export async function runUiProbe(): Promise<void> {
         === JSON.stringify(['外观', ...groupsFromApi, '关于'])
       result.navCount = navLabels.length
 
-      // ② 切到目标字段所在页（抓取节奏）：点导航 → 面板必须真的换
+      // ② 切到目标字段所在页（抓取设置）：点导航 → 面板必须真的换
       const navOf = (label: string) => [...dlg.querySelectorAll<HTMLElement>('.aps-nav-item')]
         .find((n) => (n.querySelector('.aps-nav-label')?.textContent || '').trim() === label)
       const paneOf = () => dlg.querySelector<HTMLElement>('[data-testid="aps-pane"]')
       const clickNav = async (label: string) => {
         navOf(label)?.click()
         await sleep(150)
+      }
+      /** 「高级（默认收起）」在每页默认是收起的 —— 要用里面的字段（探针改的就是高级项）
+          就得先展开；换页后 React 会把它收回，所以每次切完页都要重新调一次。 */
+      const openAdvanced = async () => {
+        if (dlg.querySelector('.aps-fold[data-aps-advanced="closed"]')) {
+          dlg.querySelector<HTMLButtonElement>('[data-testid="aps-advanced-toggle"]')?.click()
+          await sleep(180)
+        }
       }
       await clickNav('外观')
       result.appearancePane = paneOf()?.getAttribute('data-pane')
@@ -1482,10 +1490,34 @@ export async function runUiProbe(): Promise<void> {
       //    判据是"**抓取参数**一个都不在外观页"，不是"外观页里没有任何 .aps-row" ——
       //    外观页自己也有行（主题、关闭窗口时，R18 起），那种计数写法会误报。
       result.fetchRowsOnAppearance = foreignRowsOnAppearance()
-      await clickNav('抓取节奏')
+      await clickNav('抓取设置')
       result.paneAfterSwitch = paneOf()?.getAttribute('data-pane')
       result.rowsOnFetch = dlg.querySelectorAll('.aps-row').length
       result.otherPaneRowsHidden = dlg.querySelectorAll('[data-setting="EXTERNAL_ENABLED"]').length
+
+      // ③b 页内小组 + 「高级」折叠（R21，devlog/100）：
+      //     小组标题**只来自后端** `specs[].section`，折叠项的判据只有 `advanced`。
+      //     探针量三件事：① 小组顺序 ② 默认收起的**可见字段全集**（必须等于后端非高级集）
+      //     ③ 展开后出现的键（必须等于后端高级集）—— 界面不许自己多塞或少塞。
+      result.sectionsOnFetch = [...dlg.querySelectorAll<HTMLElement>('.aps-section')]
+        .map((n) => n.getAttribute('data-aps-section'))
+      result.visibleKeys = [...dlg.querySelectorAll<HTMLElement>('[data-testid="aps-pane"] [data-setting]')]
+        .map((n) => n.getAttribute('data-setting'))
+      const foldState = () =>
+        dlg.querySelector<HTMLElement>('.aps-fold')?.getAttribute('data-aps-advanced') ?? null
+      result.advancedStateClosed = foldState()
+      result.advancedRowsWhenClosed =
+        dlg.querySelectorAll('[data-aps-advanced-body] [data-setting]').length
+      // ⚠️ 比的是**这一页**的集合：非高级键在别的页（数据源）也有，拿全局集合比会假红
+      const paneGroup = '抓取设置'
+      result.visibleFromApi = settingsBody.specs
+        .filter((s) => !s.advanced && s.group === paneGroup).map((s) => s.key)
+      result.advancedFromApi = settingsBody.specs
+        .filter((s) => s.advanced && s.group === paneGroup).map((s) => s.key)
+      await openAdvanced()
+      result.advancedStateOpen = foldState()
+      result.advancedKeys = [...dlg.querySelectorAll<HTMLElement>(
+        '[data-aps-advanced-body] [data-setting]')].map((n) => n.getAttribute('data-setting'))
 
       // ⚠️ **每次交互前重新查节点**：R17 起字段是分页渲染的，切页 = 卸载重挂，
       //    早先抓到的 `input` 会变成游离节点（写它不会触发 React onChange）——
@@ -1527,6 +1559,8 @@ export async function runUiProbe(): Promise<void> {
       }
 
       // ⑥ **切页不丢草稿** + 圆点只亮在改过的那一页（R17 两栏布局的核心口径）
+      //    ⚠️ R21 起 FIELD 属于「高级」：换页会把折叠收回（每页默认收起），
+      //    所以切回来之后必须重新展开 —— 否则 `inputNow()` 拿到 null，这条断言会假红。
       if (inputNow()) {
         typeInto(inputNow()!, '7')
         await sleep(150)
@@ -1534,8 +1568,12 @@ export async function runUiProbe(): Promise<void> {
           .filter((n) => n.getAttribute('data-nav-dirty') === '1')
           .map((n) => (n.querySelector('.aps-nav-label')?.textContent || '').trim())
         result.dirtyNavLabels = dirtyNav
-        await clickNav('第三方数据')
-        await clickNav('抓取节奏')
+        await clickNav('数据源')
+        await clickNav('抓取设置')
+        // 回到本页时**还没展开**：读一次状态，证明"换页把折叠收回去了"（每页各自的默认态）。
+        // ⚠️ 不能在「数据源」页读 —— 那页没有高级项，`.aps-fold` 根本不存在（会读到 null）。
+        result.advancedCollapsedAfterSwitch = foldState()
+        await openAdvanced()
         result.draftKeptAcrossPanes = inputNow()?.value ?? null
       }
 

@@ -3,6 +3,7 @@ import {
   ABOUT_ID,
   APPEARANCE_ID,
   buildNav,
+  buildSections,
   categoryOfKey,
   groupDirty,
   keysOfGroup,
@@ -91,5 +92,52 @@ describe('未保存圆点', () => {
 
   it('清空输入（`\'\'`）也算改动 —— 它会被校验拦住，但"这页动过"要如实显示', () => {
     expect(groupDirty(specs, { FETCH_BATCH_SIZE: '' }, '抓取节奏')).toBe(true)
+  })
+})
+
+/**
+ * 页内布局（R21，devlog/100）：用户口径「可选项太多、设置很杂，没有专业背景的人
+ * 不知道每一项意味着什么」⇒ 字段按**用途**分成小组，非关键项收进「高级（默认收起）」。
+ *
+ * 判错的代价：① 普通用户又被一堆参数糊脸（分组没生效）；
+ * ② 关键项被误判成高级项 → 用户找不到它（**成对的上下限被拆开**是最坏的一种）。
+ */
+describe('页内小组与高级折叠', () => {
+  const ROWS = [
+    { key: 'A', group: '抓取设置', section: '风控与节流', advanced: false },
+    { key: 'B', group: '抓取设置', section: '风控与节流', advanced: false },
+    { key: 'C', group: '抓取设置', section: '开播信息抓取', advanced: false },
+    { key: 'D', group: '抓取设置', section: '风控与节流', advanced: true },
+    { key: 'E', group: '数据源', section: '', advanced: false },
+  ]
+
+  it('小组按声明序、组内也按声明序', () => {
+    const p = buildSections(ROWS, '抓取设置')
+    expect(p.sections.map((s) => s.name)).toEqual(['风控与节流', '开播信息抓取'])
+    expect(p.sections[0].keys).toEqual(['A', 'B'])
+    expect(p.sections[1].keys).toEqual(['C'])
+  })
+
+  it('多于一组才渲染小组标题（单组是噪音：页标题已经说明白了）', () => {
+    expect(buildSections(ROWS, '抓取设置').showHeadings).toBe(true)
+    expect(buildSections(ROWS, '数据源').showHeadings).toBe(false)
+  })
+
+  it('section 为空串 → 归到页名那一组（后端不必为单页写重复的 section）', () => {
+    expect(buildSections(ROWS, '数据源').sections).toEqual([
+      { name: '数据源', keys: ['E'] },
+    ])
+  })
+
+  it('高级项从小组里抽走，且不进任何标题', () => {
+    const p = buildSections(ROWS, '抓取设置')
+    expect(p.advanced).toEqual(['D'])
+    expect(p.sections.flatMap((s) => s.keys)).not.toContain('D')
+  })
+
+  it('不存在的分类 → 空布局（不抛错：切页时序不该让界面炸）', () => {
+    expect(buildSections(ROWS, '没有这个分类')).toEqual({
+      sections: [], showHeadings: false, advanced: [],
+    })
   })
 })

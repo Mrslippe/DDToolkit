@@ -602,7 +602,12 @@ export interface SettingSpec {
   max: number | null
   label: string
   unit: string
+  /** 左栏导航分类（大类：抓取设置 / 数据源）——导航由它生成，界面不写死清单 */
   group: string
+  /** 页内小组标题（按用途分，例如「开播信息抓取」）；空串 = 该页不分组 */
+  section: string
+  /** 非关键项 → 收进页尾「高级（默认收起）」 */
+  advanced: boolean
   /** 生效时机（"下一轮生效（不用重启）"等） */
   effect: string
   /** 额外说明（例如 0 = 关闭） */

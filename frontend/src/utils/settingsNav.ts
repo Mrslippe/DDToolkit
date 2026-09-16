@@ -22,6 +22,9 @@ export type NavIcon = 'palette' | 'timer' | 'activity' | 'sparkles' | 'cloud' | 
 
 /** group 名 → 图标键。**未知分组给一个默认图标**（后端加组时界面不至于没图标） */
 const GROUP_ICONS: Record<string, NavIcon> = {
+  抓取设置: 'timer',
+  数据源: 'cloud',
+  // 历史分组名（R21 合并前）：留着不占地方，万一回滚也不用改这里
   抓取节奏: 'timer',
   动态流与轮询: 'activity',
   收录首屏: 'sparkles',
@@ -118,4 +121,58 @@ export function resetDraftOfGroup(
  */
 export function categoryOfKey(specs: (GroupedSpec & { value: number | boolean })[], key: string): string | null {
   return specs.find((s) => s.key === key)?.group ?? null
+}
+
+// ── 页内布局（R21，devlog/100）────────────────────────────────────────
+
+/** 页内布局只需要这几个字段（结构上兼容 `SettingSpec`） */
+export interface SectionedSpec {
+  key: string
+  group: string
+  section: string
+  advanced: boolean
+}
+
+export interface PaneLayout {
+  /** 页内小组（顺序照后端声明序；每组的 key 同样照声明序） */
+  sections: { name: string; keys: string[] }[]
+  /**
+   * 要不要渲染小组标题。
+   * **只有一组时不渲染** —— 页标题（例如「数据源」）已经说明白了，
+   * 再加一个同名小标题纯属噪音。
+   */
+  showHeadings: boolean
+  /** 「高级（默认收起）」里的键（顺序照声明序） */
+  advanced: string[]
+}
+
+/**
+ * 把一个分类（导航项）的字段排成"页内小组 + 高级折叠"。
+ *
+ * 关键约定：
+ * - `section` 为空串的字段归到**页名那一组**（后端不必为单页写重复的 section）；
+ * - `advanced` 的字段**一律不参与小组标题**（它们统一进页尾的折叠区），
+ *   但仍保留自己的 `section` 作为元数据（将来若不折叠，直接按它分组即可）；
+ * - 分组顺序 = 声明顺序（后端 `_specs()` 的顺序就是界面顺序，界面不再排一遍）。
+ */
+export function buildSections(specs: SectionedSpec[], group: string): PaneLayout {
+  const rows = specs.filter((s) => s.group === group)
+  const nameOf = (s: SectionedSpec) => s.section || group
+  const visible = rows.filter((s) => !s.advanced)
+
+  const names: string[] = []
+  for (const s of visible) {
+    const n = nameOf(s)
+    if (!names.includes(n)) names.push(n)
+  }
+  const sections = names.map((name) => ({
+    name,
+    keys: visible.filter((s) => nameOf(s) === name).map((s) => s.key),
+  }))
+
+  return {
+    sections,
+    showHeadings: sections.length > 1,
+    advanced: rows.filter((s) => s.advanced).map((s) => s.key),
+  }
 }

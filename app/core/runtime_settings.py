@@ -37,9 +37,25 @@ logger = logging.getLogger(__name__)
 PREFIX = "settings."
 
 
+# 左栏导航的两个大类（R21，devlog/100）：原先 4 个中间分类（抓取节奏 / 动态流与轮询 /
+# 收录首屏 / 第三方数据）**按"用户想干什么"合并**成 2 个 —— 用户口径（2026-09-16）：
+# 「可选项太多、设置很杂，没有专业背景的用户不知道每一项意味着什么」。
+# 界面**不写死**这两个名字：导航仍由 `spec_table()` 里 group 出现的顺序生成。
+NAV_FETCH = "抓取设置"
+NAV_SOURCES = "数据源"
+
+
 @dataclass(frozen=True)
 class Spec:
-    """一个可热更的键。`label/unit/effect` 是给界面用的（后端下发，界面不再抄一份）。"""
+    """一个可热更的键。`label/unit/effect` 是给界面用的（后端下发，界面不再抄一份）。
+
+    **两级分组**（R21 起）：
+    - `group`：左栏导航分类（只看"大类"：抓取设置 / 数据源）；
+    - `section`：页内小组标题（例如「开播信息抓取」）——按**用途**分，而不是按代码里的模块分；
+       一个页只有一组时不渲染标题（页标题已经说明白了）。
+    - `advanced`：非关键项 → 收进页尾「高级（默认收起）」。判据是"普通用户需不需要动它"，
+      不是"实现上重不重要"；**成对的上下限必须同进同出**（不然"上限<下限"的校验会消失）。
+    """
 
     key: str
     kind: str                      # "int" | "float" | "bool"
@@ -51,79 +67,110 @@ class Spec:
     group: str = ""
     effect: str = "下一轮生效（不用重启）"
     note: str = ""                 # 额外说明（例如 0 = 关闭）
+    section: str = ""              # 页内小组标题；"" = 不分组
+    advanced: bool = False         # 收进「高级（默认收起）」
 
 
 def _specs() -> list[Spec]:
     hot = "下一轮生效（不用重启）"
     idle = "下一个空闲轮次生效（不会打断正在跑的任务）"
+    g, s = NAV_FETCH, "风控与节流"
     return [
-        # ── 抓取节奏（账号流）────────────────────────────────────────
+        # ══ 抓取设置 · 风控与节流 ══════════════════════════════════════
+        # 这三项是"普通用户唯一真正需要调的"：抓多快、被风控了歇多久。
         Spec("REQUEST_INTERVAL_MIN", "float", 3.0, 0.5, 10.0,
-             "账号间隔下限", "秒", "抓取节奏", hot,
-             "每个账号抓完后随机 sleep 的下限（只有账号之间会等，单 V 收录走下面的快速链路）"),
+             "每个账号的间隔（最小）", "秒", g, hot,
+             "抓完一个账号随机等一会儿再抓下一个，这是下限；调小会更快，但更容易被风控",
+             section=s),
         Spec("REQUEST_INTERVAL_MAX", "float", 5.0, 0.5, 30.0,
-             "账号间隔上限", "秒", "抓取节奏", hot,
-             "必须 ≥ 下限；上下限相等即固定间隔"),
-        Spec("FETCH_BATCH_SIZE", "int", 10, 1, 100,
-             "批次大小", "个账号", "抓取节奏", hot,
-             "每处理 N 个账号休息一次"),
-        Spec("FETCH_BATCH_COOLDOWN", "int", 60, 0, 600,
-             "批次休息", "秒", "抓取节奏", hot,
-             "每满一个批次后的休息时长；0 = 不休息（只留账号间隔）"),
+             "每个账号的间隔（最大）", "秒", g, hot,
+             "间隔在这个区间里随机取；与下限相等就是固定间隔",
+             section=s),
         Spec("RATE_LIMIT_COOLDOWN", "int", 600, 60, 3600,
-             "风控冷却", "秒", "抓取节奏", idle,
-             "被 B 站风控（-412/-509 等）后的冷却时长；顶栏状态岛会显示剩余时间"),
-        Spec("MANUAL_FAST_INTERVAL_MIN", "float", 0.5, 0.1, 5.0,
-             "收录间隔下限", "秒", "抓取节奏", hot,
-             "手动单 V / 收录新 V 的账号间隔下限（追求 3~6s 出结果）"),
-        Spec("MANUAL_FAST_INTERVAL_MAX", "float", 1.0, 0.1, 10.0,
-             "收录间隔上限", "秒", "抓取节奏", hot,
-             "必须 ≥ 下限"),
-        # ── 动态流与轮询 ────────────────────────────────────────────
-        Spec("DYNAMICS_BUDGET_RPM", "int", 12, 0, 60,
-             "每分钟请求预算", "次/分钟", "动态流与轮询", hot,
-             "单平台的动态流请求预算（自适应节奏的兜底）；0 = 关闭自适应、退回固定周期"),
-        Spec("DYNAMICS_MIN_GAP_SECONDS", "float", 30.0, 0.0, 600.0,
-             "动态流轮间最小间隔", "秒", "动态流与轮询", hot,
-             "两轮之间至少等这么久（不贴着预算跑满，留拟人余量）"),
+             "被风控后冷却", "秒", g, idle,
+             "被 B 站限流（-412/-509 等）后暂停抓取的时长；顶栏状态岛会显示剩余时间",
+             section=s),
+        # ── 高级：批次节流（参数本身有用，但属于"调优"，普通用户不必看）──
+        Spec("FETCH_BATCH_SIZE", "int", 10, 1, 100,
+             "每批账号数", "个账号", g, hot,
+             "每处理 N 个账号算一批，批与批之间休息一次",
+             section=s, advanced=True),
+        Spec("FETCH_BATCH_COOLDOWN", "int", 60, 0, 600,
+             "每批之间的休息", "秒", g, hot,
+             "一批抓完后的休息时长；0 = 不休息（只留账号间隔）",
+             section=s, advanced=True),
+
+        # ══ 抓取设置 · 开播信息抓取 ════════════════════════════════════
+        Spec("LIVE_POLL_SECONDS", "float", 60.0, 0.0, 3600.0,
+             "开播状态刷新间隔", "秒", g, hot,
+             "多久查一次谁在直播（左栏的直播徽标）；0 = 不自动刷新",
+             section="开播信息抓取"),
+
+        # ══ 抓取设置 · 定期动态轮询 ════════════════════════════════════
         Spec("DYNAMICS_MIN_CYCLE_SECONDS", "float", 60.0, 10.0, 900.0,
-             "动态流周期下限", "秒", "动态流与轮询", hot,
-             # ⚠️ 界面按**纯文本**渲染这些字段（label/unit/effect/note）——
+             "动态更新最快间隔", "秒", g, hot,
+             # ⚠️ 界面按**纯文本**渲染这些字段（label/unit/effect/note/section）——
              #    别写 `**粗体**` 或反引号，那会把标记本身显示给用户
              #    （2026-09-15 用户截图反馈）。有一条用例专门扫这件事。
-             "一轮的周期下限（按轮开始计时）：一轮很快跑完也不会更密"),
-        Spec("LIVE_POLL_SECONDS", "float", 60.0, 0.0, 3600.0,
-             "直播状态轮询", "秒", "动态流与轮询", hot,
-             "T0 直播状态独立轮询周期；0 = 关闭（左栏直播徽标不再自动刷新）"),
+             "即便一轮很快就跑完，也要等满这么久再开始下一轮（这是最密的情况）",
+             section="定期动态轮询"),
+        Spec("DYNAMICS_BUDGET_RPM", "int", 12, 0, 60,
+             "动态请求预算", "次/分钟", g, hot,
+             "自动节奏的兜底上限；0 = 关掉自动节奏、退回固定周期",
+             section="定期动态轮询", advanced=True),
+        Spec("DYNAMICS_MIN_GAP_SECONDS", "float", 30.0, 0.0, 600.0,
+             "两轮之间至少间隔", "秒", g, hot,
+             "不贴着预算跑满，留一点拟人余量（调小会更密）",
+             section="定期动态轮询", advanced=True),
+
+        # ══ 抓取设置 · 每日定时任务 ════════════════════════════════════
         Spec("ACCOUNT_SWEEP_STALE_HOURS", "float", 24.0, 1.0, 720.0,
-             "账号信息过期阈值", "小时", "动态流与轮询", hot,
-             "任一账号距上次抓取超过该值 → 账号流到期"),
+             "账号信息刷新周期", "小时", g, hot,
+             "粉丝数、头像、签名这些信息多久重抓一次（超过这个时长就排队刷新）",
+             section="每日定时任务"),
         Spec("ACCOUNT_SWEEP_MIN_GAP_SECONDS", "int", 600, 60, 86400,
-             "账号流硬间隔", "秒", "动态流与轮询", hot,
-             "同进程两次账号流的硬下限（防止失败重试风暴）"),
-        # ── 收录首屏 ────────────────────────────────────────────────
+             "两次刷新的硬性间隔", "秒", g, hot,
+             "同一进程里两次账号信息刷新之间至少隔这么久（防止失败重试风暴）",
+             section="每日定时任务", advanced=True),
+
+        # ══ 抓取设置 · 收录首屏 ════════════════════════════════════════
         Spec("FIRST_SCREEN_VIDEO_PAGES", "int", 1, 1, 5,
-             "首屏投稿页数", "页", "收录首屏", hot,
-             "收录新 V 时先抓的投稿页数（每页约 30 条，含封面/时长/统计）"),
-        Spec("FIRST_SCREEN_DYNAMICS_PAGES", "int", 1, 1, 5,
-             "首屏动态页数", "页", "收录首屏", hot,
-             "收录新 V 时先抓的动态页数"),
+             "收录时抓取的投稿页数", "页", g, hot,
+             "添加一个新 V 时先抓几页投稿（每页约 30 条，含封面/时长/统计）",
+             section="收录首屏"),
         Spec("FIRST_SCREEN_DYNAMICS_LIMIT", "int", 3, 1, 20,
-             "首屏动态入库条数", "条", "收录首屏", hot,
-             "首屏最多入库 N 条新动态（每条多 1 次详情请求）"),
-        # ── 第三方数据（P4：zeroroku / danmakus 已固定化数据）───────────
+             "收录时入库的动态条数", "条", g, hot,
+             "首屏最多入库几条新动态（每条会多一次详情请求）",
+             section="收录首屏"),
+        Spec("FIRST_SCREEN_DYNAMICS_PAGES", "int", 1, 1, 5,
+             "收录时抓取的动态页数", "页", g, hot,
+             "添加一个新 V 时先抓几页动态",
+             section="收录首屏", advanced=True),
+        Spec("MANUAL_FAST_INTERVAL_MIN", "float", 0.5, 0.1, 5.0,
+             "收录时的账号间隔（最小）", "秒", g, hot,
+             "手动收录走更快的链路（为了几秒内出结果），这是它的下限",
+             section="收录首屏", advanced=True),
+        Spec("MANUAL_FAST_INTERVAL_MAX", "float", 1.0, 0.1, 10.0,
+             "收录时的账号间隔（最大）", "秒", g, hot,
+             "同上，必须是这个区间的上限；与下限相等就是固定间隔",
+             section="收录首屏", advanced=True),
+
+        # ══ 数据源 ════════════════════════════════════════════════════
         # 这三个是**真热更**：`externals/runner.py::_source_enabled` 每次运行都查一遍，
         # 所以关掉之后连"已经注册好的 cron 空跑"都不会有副作用（`EXTERNAL_RUN_HOUR`
         # 那个 cron 时刻则不同 —— 它只在启动时注册，归只读）。
         Spec("EXTERNAL_ENABLED", "bool", True, None, None,
-             "第三方数据同步", "", "第三方数据", hot,
-             "关闭后第三方采集一律跳过（zeroroku 日历 / danmakus 弹幕索引 / 粉丝历史）"),
+             "第三方数据同步", "", NAV_SOURCES, hot,
+             "关闭后第三方采集一律跳过（zeroroku 日历 / danmakus 弹幕索引 / 粉丝历史）",
+             section=NAV_SOURCES),
         Spec("EXTERNAL_ZEROROKU_ENABLED", "bool", True, None, None,
-             "启用 zeroroku", "", "第三方数据", hot,
-             "直播日历与粉丝趋势的上游之一"),
+             "启用 zeroroku", "", NAV_SOURCES, hot,
+             "直播日历与粉丝趋势的上游之一",
+             section=NAV_SOURCES),
         Spec("EXTERNAL_DANMAKUS_ENABLED", "bool", True, None, None,
-             "启用 danmakus", "", "第三方数据", hot,
-             "弹幕索引上游（收录检索与词云自建会用到）"),
+             "启用 danmakus", "", NAV_SOURCES, hot,
+             "弹幕索引上游（收录检索与词云自建会用到）",
+             section=NAV_SOURCES),
     ]
 
 
@@ -328,13 +375,18 @@ def clear() -> None:
 
 
 def spec_table() -> list[dict[str, Any]]:
-    """给界面用的规格表（分组顺序稳定：按 `_specs()` 的声明顺序）。"""
+    """给界面用的规格表（分组顺序稳定：按 `_specs()` 的声明顺序）。
+
+    `section` / `advanced` 一并下发（R21）：界面据此渲染页内小组标题与「高级（默认收起）」。
+    界面**不再自己维护一份分组表** —— 后端加一个键、给上 section，界面自动出现在该组下。
+    """
     out: list[dict[str, Any]] = []
     for s in _specs():
         out.append({
             "key": s.key, "kind": s.kind, "default": s.default,
             "min": s.lo, "max": s.hi,
             "label": s.label, "unit": s.unit, "group": s.group,
+            "section": s.section, "advanced": s.advanced,
             "effect": s.effect, "note": s.note,
             "value": get(s.key),
             "changed": s.key in _overrides,

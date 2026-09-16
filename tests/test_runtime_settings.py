@@ -273,13 +273,76 @@ def test_get_settings_exposes_specs_and_readonly_info(client):
     assert len(body["specs"]) == len(rs.SPECS)
     first = body["specs"][0]
     assert {"key", "kind", "default", "min", "max", "label", "unit",
-            "group", "effect", "value", "changed"} <= set(first)
+            "group", "section", "advanced", "effect", "value", "changed"} <= set(first)
     # 只读分区：版本/数据目录/端口/迁移 head 都要如实给出来
     info = body["info"]
     assert info["version"] == settings.VERSION
     assert info["migration_head"] == "f004"
     assert info["data_dir"] and info["database"]
     assert body["readonly"] and all(r.get("why") for r in body["readonly"])
+
+
+# ── ⑥ 设置的"信息架构"（R21，devlog/100）─────────────────────────────
+# 用户口径（2026-09-16）：「可选项太多、设置很杂，没有专业背景的用户可能不知道每一项
+# 意味着什么」⇒ 导航精简到 4 项、字段按用途分小组、调优类收进「高级（默认收起）」。
+# 这一组用例钉的是**判断本身**（哪些算关键项），不是排版 —— 排版由探针 `--app-settings` 量。
+
+def test_nav_is_appearance_plus_two_categories_plus_about():
+    """左栏 = 外观 + 后端大类（顺序即声明序）+ 关于。
+
+    判错的代价：分组一多，用户又回到"六项不知道该点哪个"的老问题。
+    所以这里钉死**只有两个大类**，且「抓取设置」在前（它是主战场）。
+    """
+    groups: list[str] = []
+    for s in rs.SPECS.values():
+        if s.group not in groups:
+            groups.append(s.group)
+    assert groups == [rs.NAV_FETCH, rs.NAV_SOURCES]
+    assert len(groups) + 2 == 4          # + 外观（prefs）+ 关于（只读）
+
+
+def test_vital_settings_are_visible_and_tuning_knobs_are_advanced():
+    """**白名单**：普通用户该看到的 8 项 vs 收进「高级」的 8 项。
+
+    为什么用白名单而不是数量：数量对了不代表对的项在里面 ——
+    有人把「被风控后冷却」挪进高级、又放出一个「请求预算」，数量一样、体验两样。
+    改这张表**必须是有意识的决定**（改完记得同步探针与 UI-MAP）。
+    """
+    visible = {k for k, s in rs.SPECS.items() if not s.advanced}
+    advanced = {k for k, s in rs.SPECS.items() if s.advanced}
+    assert visible == {
+        # 抓取设置（8 项：风控与节流 3 + 开播 1 + 动态 1 + 每日 1 + 收录首屏 2）
+        "REQUEST_INTERVAL_MIN", "REQUEST_INTERVAL_MAX", "RATE_LIMIT_COOLDOWN",
+        "LIVE_POLL_SECONDS", "DYNAMICS_MIN_CYCLE_SECONDS",
+        "ACCOUNT_SWEEP_STALE_HOURS", "FIRST_SCREEN_VIDEO_PAGES",
+        "FIRST_SCREEN_DYNAMICS_LIMIT",
+        # 数据源（3 个开关：总闸 + 两个上游）——它们是"要不要用这个源"的决策，不该藏
+        "EXTERNAL_ENABLED", "EXTERNAL_ZEROROKU_ENABLED", "EXTERNAL_DANMAKUS_ENABLED",
+    }
+    assert advanced == {
+        "FETCH_BATCH_SIZE", "FETCH_BATCH_COOLDOWN",
+        "DYNAMICS_BUDGET_RPM", "DYNAMICS_MIN_GAP_SECONDS",
+        "ACCOUNT_SWEEP_MIN_GAP_SECONDS", "FIRST_SCREEN_DYNAMICS_PAGES",
+        "MANUAL_FAST_INTERVAL_MIN", "MANUAL_FAST_INTERVAL_MAX",
+    }
+    assert visible | advanced == set(rs.SPECS)      # 没有第三个去处
+
+
+def test_every_spec_has_a_section_and_pairs_are_never_split():
+    """① 每个键都得有小组标题（否则它会掉进"无标题区"，用户不知道它属于什么）；
+    ② **成对的上下限必须同组、同折叠态** —— 拆开就会出这种事：
+       「上限」被收进高级、用户改了「下限」却看不到上限，而后端的"上限 < 下限"校验
+       只会在点保存时以 400 出现，界面事前那个红字提示（同源预校验）就没了。
+    """
+    for s in rs.SPECS.values():
+        assert s.section, f"{s.key} 没有 section —— 它会掉进无标题区"
+
+    by_key = rs.SPECS
+    for constrained, depends_on, why in rs.PAIRS:
+        a, b = by_key[constrained], by_key[depends_on]
+        assert (a.section, a.advanced) == (b.section, b.advanced), (
+            f"{why}：{constrained} 与 {depends_on} 必须同组同折叠态"
+            f"（现在 {a.section}/{a.advanced} vs {b.section}/{b.advanced}）")
 
 
 def test_put_settings_saves_then_reset_clears(client, db):
@@ -401,7 +464,7 @@ def test_user_facing_copy_has_no_markdown_markers():
             offenders.append(f"{where} = {value!r}")
 
     for spec in rs.SPECS.values():
-        for field in ("label", "unit", "effect", "note"):
+        for field in ("label", "unit", "effect", "note", "section"):
             check(f"SPECS[{spec.key}].{field}", getattr(spec, field))
     for row in rs.readonly_info():
         for field in ("label", "why"):

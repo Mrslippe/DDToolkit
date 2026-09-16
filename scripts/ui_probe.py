@@ -830,6 +830,14 @@ def main() -> int:
                   f"抓取参数={aps.get('fetchRowsOnAppearance')} "
                   f"｜ 切到抓取页={aps.get('paneAfterSwitch')!r} 字段={aps.get('rowsOnFetch')} "
                   f"别类字段在 DOM={aps.get('otherPaneRowsHidden')}")
+            print(f"  分组（R21）：小组={aps.get('sectionsOnFetch')} "
+                  f"｜ 可见字段 {len(aps.get('visibleKeys') or [])} 个 "
+                  f"（后端非高级 {len(aps.get('visibleFromApi') or [])} 个）")
+            print(f"  高级折叠：{aps.get('advancedStateClosed')!r} → "
+                  f"{aps.get('advancedStateOpen')!r} "
+                  f"（收起时 DOM 里 {aps.get('advancedRowsWhenClosed')} 行）"
+                  f"｜ 展开后 {aps.get('advancedKeys')}"
+                  f"（后端高级 {aps.get('advancedFromApi')}）")
             print(f"  弹窗：在视口内={aps.get('dialogInViewport')} 可命中={aps.get('dialogHit')}")
             print(f"  草稿：改过的页={aps.get('dirtyNavLabels')} 切页后仍在={aps.get('draftKeptAcrossPanes')!r}"
                   f" ｜ 恢复本类默认→{aps.get('afterResetOne')!r}")
@@ -897,24 +905,63 @@ def main() -> int:
                         failures.append(f"@{w} app-settings: 外观页里出现了 "
                                         f"{aps.get('fetchRowsOnAppearance')} 个**抓取参数字段**"
                                         f"（分页没生效，全塞一页了？）")
-                    if aps.get("paneAfterSwitch") != "抓取节奏":
-                        failures.append(f"@{w} app-settings: 点「抓取节奏」后面板是 "
+                    if aps.get("paneAfterSwitch") != "抓取设置":
+                        failures.append(f"@{w} app-settings: 点「抓取设置」后面板是 "
                                         f"{aps.get('paneAfterSwitch')!r}")
                     if not (aps.get("rowsOnFetch") or 0):
-                        failures.append(f"@{w} app-settings: 抓取节奏页一个字段都没有")
+                        failures.append(f"@{w} app-settings: 抓取设置页一个字段都没有")
                     if aps.get("otherPaneRowsHidden"):
                         failures.append(f"@{w} app-settings: 别的分类的字段仍在 DOM 里"
                                         f"（{aps.get('otherPaneRowsHidden')} 个）—— "
                                         f"分页应当是「只渲染当前页」")
+                    if aps.get("navCount") != 4:
+                        failures.append(f"@{w} app-settings: 导航是 {aps.get('navCount')} 项，"
+                                        f"应为 4 项（外观 / 抓取设置 / 数据源 / 关于）——"
+                                        f"R21 的用户口径是「可选项太多、设置很杂」")
+                    # ── 页内小组 + 「高级（默认收起）」（R21，devlog/100）──────
+                    # 判据分三层：① 小组标题的顺序（结构契约）
+                    #             ② 可见字段必须**恰好**等于后端非高级集（界面不自作主张）
+                    #             ③ 折叠默认收起（DOM 里一行都没有）→ 展开后恰好是后端高级集
+                    want_sections = ["风控与节流", "开播信息抓取", "定期动态轮询",
+                                     "每日定时任务", "收录首屏"]
+                    if aps.get("sectionsOnFetch") != want_sections:
+                        failures.append(f"@{w} app-settings: 页内小组是 "
+                                        f"{aps.get('sectionsOnFetch')}，应为 {want_sections}"
+                                        f"（顺序也照后端声明序）")
+                    if sorted(aps.get("visibleKeys") or []) != sorted(aps.get("visibleFromApi") or []):
+                        failures.append(f"@{w} app-settings: 可见字段与后端不一致 —— "
+                                        f"界面 {sorted(aps.get('visibleKeys') or [])} vs "
+                                        f"后端非高级 {sorted(aps.get('visibleFromApi') or [])}")
+                    if aps.get("advancedStateClosed") != "closed":
+                        failures.append(f"@{w} app-settings: 「高级」默认不是收起的"
+                                        f"（实得 {aps.get('advancedStateClosed')!r}）——"
+                                        f"这一版的全部意义就是默认别糊用户一脸")
+                    if aps.get("advancedRowsWhenClosed"):
+                        failures.append(f"@{w} app-settings: 收起状态下 DOM 里还有 "
+                                        f"{aps.get('advancedRowsWhenClosed')} 个高级字段"
+                                        f"（应当不渲染，而不是隐藏）")
+                    if aps.get("advancedStateOpen") != "open":
+                        failures.append(f"@{w} app-settings: 点「高级设置」没展开"
+                                        f"（{aps.get('advancedStateOpen')!r}）")
+                    if sorted(aps.get("advancedKeys") or []) != sorted(aps.get("advancedFromApi") or []):
+                        failures.append(f"@{w} app-settings: 展开后的高级字段与后端不一致 —— "
+                                        f"界面 {sorted(aps.get('advancedKeys') or [])} vs "
+                                        f"后端 {sorted(aps.get('advancedFromApi') or [])}")
+                    if not (aps.get("advancedKeys") or []):
+                        failures.append(f"@{w} app-settings: 一个高级字段都没有 —— "
+                                        f"要么后端全标成关键项了，要么折叠区是空的")
+                    if aps.get("advancedCollapsedAfterSwitch") != "closed":
+                        failures.append(f"@{w} app-settings: 换页回来后「高级」没回到收起"
+                                        f"（{aps.get('advancedCollapsedAfterSwitch')!r}）")
                     # 草稿跨页保留 + 圆点标在改过的那一页
-                    if aps.get("dirtyNavLabels") != ["抓取节奏"]:
+                    if aps.get("dirtyNavLabels") != ["抓取设置"]:
                         failures.append(f"@{w} app-settings: 未保存圆点标在了 "
-                                        f"{aps.get('dirtyNavLabels')}，应只有「抓取节奏」")
+                                        f"{aps.get('dirtyNavLabels')}，应只有「抓取设置」")
                     if aps.get("draftKeptAcrossPanes") != "7":
                         failures.append(f"@{w} app-settings: 切页后草稿丢了"
                                         f"（输入框变成 {aps.get('draftKeptAcrossPanes')!r}，应为 '7'）")
                     if not aps.get("hasResetOne"):
-                        failures.append(f"@{w} app-settings: 抓取参数页没有「恢复本类默认」")
+                        failures.append(f"@{w} app-settings: 抓取设置页没有「恢复本类默认」")
                     elif aps.get("afterResetOne") != str(aps.get("beforeValue")):
                         failures.append(f"@{w} app-settings: 恢复本类默认后输入框是 "
                                         f"{aps.get('afterResetOne')!r}，应回到默认值 "

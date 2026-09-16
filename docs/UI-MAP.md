@@ -185,7 +185,7 @@ DOM 契约（探针 `ui_probe --status-island` 直接查）：`.si-island`（`.o
 **2026-09-08 用户：未接线的占位图标（用户 / 日历 / 刷新）已删除**——避免点了没反应的假入口，
 功能落地时再加回；**2026-09-15（R14a，devlog/091）齿轮按这条口径加回**（设置界面真的能用 HTTP PUT 落库了）。
 
-### A2-a. 应用设置弹窗 `<AppSettingsDialog>`（components/AppSettingsDialog.tsx，2026-09-15 R14a/R14b；**R17 改左右两栏** devlog/094）
+### A2-a. 应用设置弹窗 `<AppSettingsDialog>`（components/AppSettingsDialog.tsx，2026-09-15 R14a/R14b；**R17 改左右两栏** devlog/094；**R21 精简信息架构** devlog/100）
 
 齿轮打开的独立弹窗（Radix Dialog）。**与「档案设置」是两回事**：那个是单个 V 的资料
 （`.vd-*`），这个是应用级参数（`.aps-*`）。
@@ -193,10 +193,12 @@ DOM 契约（探针 `ui_probe --status-island` 直接查）：`.si-island`（`.o
 ```
 ┌ 设置 ─────────────────────────────────────────────── ✕ ┐   ← 头部驻留（标题 + 说明）
 │ ┌ nav 168 ─┐┌ pane（flex:1）─────────────────────────┐ │
-│ │▍外观   1 ││ 外观  立即生效        [恢复本类默认]     │ │   ← 分类头（驻留）
-│ │ 抓取节奏7││ …当前分类的字段（OverlayScroll）…        │ │
-│ │ 关于  10 ││                                        │ │
-│ └──────────┘└────────────────────────────────────────┘ │
+│ │▍外观   2 ││ 抓取设置  下一轮生效      [恢复本类默认] │ │   ← 分类头（驻留）
+│ │ 抓取设置8││ ── 风控与节流 ────────────────            │ │   ← 页内小组（只来自后端）
+│ │ 数据源 3 ││ 每个账号的间隔（最小）        [  3 ] 秒   │ │
+│ │ 关于  10 ││ ── 开播信息抓取 ──────────────            │ │
+│ └──────────┘│ …                                    │ │
+│             │ ▾ 高级设置（8 项）微调节奏用，一般不用改   │ │   ← 默认收起
 │ 全部为默认值                    [恢复全部默认] [保存]     │   ← 底部操作条（整窗）
 └──────────────────────────────────────────────────────────┘
 ```
@@ -209,12 +211,19 @@ DOM 契约（探针 `ui_probe --status-island` 直接查）：`.si-island`（`.o
 | 右栏 | `.aps-pane`（`data-testid="aps-pane"`、`data-pane`，`role="tabpanel"`） | **只渲染当前分类**（分页，不是隐藏）；分类头 `.aps-pane-head` 带生效时机 + 「恢复本类默认」（`.aps-reset-one`，只填草稿不落库） |
 | 外观页 | `.aps-theme-cards` / `.aps-theme-card[data-theme-option][data-theme-disabled]` | 三张卡片：**浅色 / 深色 / 跟随系统**。深色卡片 `disabled` + `.aps-theme-note`（"尚未实现"）—— **只标不藏**；系统是深色时下方 `.aps-range[data-theme-caveat]` 说明 |
 | 字段行 | `.aps-row[data-setting="KEY"]` + `.aps-input` / `.aps-switch` / `.aps-badge` / `.aps-field-error` | **R14a 的控件一个都没改**，R17 只换外壳；跨字段冲突（上限<下限）报在"上限"那一行（`[data-pair="1"]`）；**R20**："说明一行 + 控件整行"的字段（关闭语义的胶囊单选等）改用 `.aps-row-stack`（`grid-template-columns:1fr`，控件另起一行），否则控件会被 132px 的 `.aps-row-ctl` 列压成竖排单字；`.aps-radio` 加 `white-space:nowrap` 防选项文字折行 |
+| 页内小组 | `.aps-section[data-aps-section="<小组名>"]` + `.aps-section-head` | **R21**：字段按**用途**分小组（风控与节流 / 开播信息抓取 / 定期动态轮询 / 每日定时任务 / 收录首屏），顺序 = 后端声明序。**只有一组时不渲染标题**（页标题已经说明白了）。分组与折叠的内容**全部来自后端** `specs[].section` / `.advanced`，界面不写死 —— 见 §A2-a 口径 ⑤ |
+| 高级折叠 | `.aps-fold[data-aps-advanced="closed\|open"]` + `.aps-fold-head`（`data-testid="aps-advanced-toggle"`）+ `.aps-fold-body` | **R21**：调优类字段收进页尾「高级设置（N 项）」，**默认收起 = 不渲染**（不是渲染后隐藏 —— 收起时 DOM 里一行都没有，探针据此判）；展开后与正文用**同一套** `renderRow`；**换页自动收回**（每页各自的默认态） |
 | 关于页 | `.aps-info` + `.aps-readonly-item` | 只读信息（版本/数据目录/库/端口/迁移 head/日志/PID）+ 10 条只读项**逐条带理由**（`.aps-readonly-why`）；**该页没有任何可写控件** |
 
-**四条口径**：① 范围/单位/生效时机**全部来自后端** `GET /settings`；② 可热更与只读分开摆、
+**五条口径**：① 范围/单位/生效时机**全部来自后端** `GET /settings`；② 可热更与只读分开摆、
 只读区逐条写理由；③ 写路径唯一 —— `PUT /settings`，前端只做提前提示；
 ④ **导航是数据驱动的**：中间几项由 `specs[].group` 生成（外观固定首、关于固定尾），
-后端加一组参数界面自动多一项（`utils/settingsNav.ts` 有单测，探针拿导航标签与 API 分组对账）。
+后端加一组参数界面自动多一项（`utils/settingsNav.ts` 有单测，探针拿导航标签与 API 分组对账）；
+⑤ **分组与折叠也是数据驱动的**（R21）：页内小组取 `specs[].section`、折叠取 `specs[].advanced`，
+前端只排版。**导航只有 4 项**（外观 / 抓取设置 / 数据源 / 关于）—— 用户 2026-09-16 口径
+「可选项太多、设置很杂，没有专业背景的用户可能不知道每一项意味着什么」；「哪些算关键项」
+由后端白名单钉住（`tests/test_runtime_settings.py::test_vital_settings_are_visible_and_tuning_knobs_are_advanced`），
+**成对的上下限必须同组同折叠态**（拆开会让界面的"上限<下限"预校验消失）。
 
 **状态语义**：草稿**跨分类保留**（切页不丢，左栏圆点提示）；外观**立即生效**、
 抓取参数**下一轮生效**；底部「恢复全部默认」= 抓取参数 + 主题（前端打两个已有端点）。

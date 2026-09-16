@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Activity, Check, Cloud, Info, Loader2, Palette, RotateCcw, Save, Sparkles,
-  Timer, TriangleAlert,
+  Activity, Check, ChevronDown, Cloud, Info, Loader2, Palette, RotateCcw, Save,
+  Sparkles, Timer, TriangleAlert,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
@@ -17,7 +17,8 @@ import type { AppSettings, SettingSpec } from '../api/types'
 import { usePrefs } from '../hooks/usePrefs'
 import { themeCards, type ThemePref } from '../utils/theme'
 import {
-  ABOUT_ID, APPEARANCE_ID, buildNav, groupDirty, resetDraftOfGroup, type NavIcon,
+  ABOUT_ID, APPEARANCE_ID, buildNav, buildSections, groupDirty, resetDraftOfGroup,
+  type NavIcon,
 } from '../utils/settingsNav'
 import {
   buildPayload, dirtyKeys as dirtyOf, fieldError, pairProblems, parseField, valueOf,
@@ -123,6 +124,25 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
     [specs, active, activeItem],
   )
 
+  /** 页内布局：小组标题 + 页尾「高级（默认收起）」（R21，devlog/100）。
+      分组**内容**全部来自后端（`specs[].section` / `.advanced`），界面只负责排版 ——
+      后端加一个键、给上 section，它就出现在对应小组里，不必改前端。 */
+  const paneLayout = useMemo(
+    () => (activeItem?.resettable
+      ? buildSections(specs, active)
+      : { sections: [], showHeadings: false, advanced: [] }),
+    [specs, active, activeItem],
+  )
+  const specByKey = useMemo(() => {
+    const m: Record<string, SettingSpec> = {}
+    for (const s of specs) m[s.key] = s
+    return m
+  }, [specs])
+
+  /** 「高级」是每页各自的默认态：换页就收起（否则"默认收起"只在首屏成立） */
+  const [advOpen, setAdvOpen] = useState(false)
+  useEffect(() => { setAdvOpen(false) }, [active])
+
   const valueOfKey = (s: SettingSpec): DraftVal => valueOf(s, draft, s.key)
 
   /** 跨字段冲突（报在"上限"那一行；真判定在后端，这里是同源的提前提示） */
@@ -218,6 +238,69 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
   }
 
   const themeState = themeCards()
+
+  /** 一行 = 说明（左）+ 控件（右）。
+      抽成函数是为了让「页内小组」与「高级折叠」复用**同一套**渲染 ——
+      折叠区里的字段与正文里的是同一种东西，只有"默认看不看得见"的区别。 */
+  const renderRow = (s: SettingSpec) => {
+    const err = fieldError(s, valueOfKey(s))
+    const pair = pairOf(s.key)
+    const val = valueOfKey(s)
+    return (
+      <div className="aps-row" key={s.key} data-setting={s.key}>
+        <div className="aps-row-main">
+          <label className="aps-label" htmlFor={`aps-${s.key}`}>
+            {s.label}
+            {s.changed && <span className="aps-badge">已改过</span>}
+          </label>
+          <span className="aps-note">{s.note}</span>
+        </div>
+        <div className="aps-row-ctl">
+          {s.kind === 'bool' ? (
+            <button
+              type="button"
+              id={`aps-${s.key}`}
+              className={`aps-switch${val ? ' on' : ''}`}
+              data-value={val ? '1' : '0'}
+              role="switch"
+              aria-checked={!!val}
+              onClick={() => setDraft((d) => ({ ...d, [s.key]: !val }))}
+            >
+              <i />
+              {val ? '开' : '关'}
+            </button>
+          ) : (
+            <span className="aps-input-wrap">
+              <input
+                id={`aps-${s.key}`}
+                className="aps-input"
+                type="number"
+                inputMode="decimal"
+                min={s.min ?? undefined}
+                max={s.max ?? undefined}
+                step={s.kind === 'int' ? 1 : 0.1}
+                value={String(val)}
+                onChange={(e) => {
+                  const raw = e.target.value
+                  setDraft((d) => ({ ...d, [s.key]: parseField(raw, s.kind) }))
+                }}
+              />
+              <em className="aps-unit">{s.unit}</em>
+            </span>
+          )}
+        </div>
+        <span className="aps-range">
+          {s.kind === 'bool'
+            ? (s.default ? '默认：开' : '默认：关')
+            : `范围 ${s.min ?? '-'} ~ ${s.max ?? '-'}${s.unit} · 默认 ${s.default}${s.unit}`}
+        </span>
+        {err && <span className="aps-field-error">{err}</span>}
+        {!err && pair && (
+          <span className="aps-field-error" data-pair="1">{pair.message}</span>
+        )}
+      </div>
+    )
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -360,66 +443,42 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
                 </div>
               )}
 
-              {/* ── 抓取参数分组 ─────────────────────────────────────── */}
-              {activeItem?.resettable && groupKeys.map((s) => {
-                const err = fieldError(s, valueOfKey(s))
-                const pair = pairOf(s.key)
-                const val = valueOfKey(s)
-                return (
-                  <div className="aps-row" key={s.key} data-setting={s.key}>
-                    <div className="aps-row-main">
-                      <label className="aps-label" htmlFor={`aps-${s.key}`}>
-                        {s.label}
-                        {s.changed && <span className="aps-badge">已改过</span>}
-                      </label>
-                      <span className="aps-note">{s.note}</span>
+              {/* ── 抓取参数：页内按用途分组 + 页尾「高级（默认收起）」─────
+                  R21（devlog/100）：用户口径「可选项太多、设置很杂，没有专业背景的
+                  用户可能不知道每一项意味着什么」⇒ 字段按**用途**分小组，调优类的
+                  收进折叠区。分组与折叠的判据全在后端（`Spec.section` / `.advanced`），
+                  界面不写死清单 —— 后端加键给 section，界面自动出现。 */}
+              {activeItem?.resettable && paneLayout.sections.map((sec) => (
+                <section className="aps-section" key={sec.name} data-aps-section={sec.name}>
+                  {paneLayout.showHeadings && (
+                    <h4 className="aps-section-head">{sec.name}</h4>
+                  )}
+                  {sec.keys.map((k) => specByKey[k]).filter(Boolean).map(renderRow)}
+                </section>
+              ))}
+
+              {activeItem?.resettable && paneLayout.advanced.length > 0 && (
+                <div className="aps-fold" data-aps-advanced={advOpen ? 'open' : 'closed'}>
+                  <button
+                    type="button"
+                    className="aps-fold-head"
+                    data-testid="aps-advanced-toggle"
+                    aria-expanded={advOpen}
+                    aria-controls="aps-advanced-body"
+                    onClick={() => setAdvOpen((v) => !v)}
+                  >
+                    <ChevronDown className={`aps-fold-caret${advOpen ? ' on' : ''}`} />
+                    高级设置（{paneLayout.advanced.length} 项）
+                    <span className="aps-fold-hint">微调节奏用，一般不用改</span>
+                  </button>
+                  {advOpen && (
+                    <div className="aps-fold-body" id="aps-advanced-body"
+                         data-aps-advanced-body="1">
+                      {paneLayout.advanced.map((k) => specByKey[k]).filter(Boolean).map(renderRow)}
                     </div>
-                    <div className="aps-row-ctl">
-                      {s.kind === 'bool' ? (
-                        <button
-                          type="button"
-                          id={`aps-${s.key}`}
-                          className={`aps-switch${val ? ' on' : ''}`}
-                          data-value={val ? '1' : '0'}
-                          role="switch"
-                          aria-checked={!!val}
-                          onClick={() => setDraft((d) => ({ ...d, [s.key]: !val }))}
-                        >
-                          <i />
-                          {val ? '开' : '关'}
-                        </button>
-                      ) : (
-                        <span className="aps-input-wrap">
-                          <input
-                            id={`aps-${s.key}`}
-                            className="aps-input"
-                            type="number"
-                            inputMode="decimal"
-                            min={s.min ?? undefined}
-                            max={s.max ?? undefined}
-                            step={s.kind === 'int' ? 1 : 0.1}
-                            value={String(val)}
-                            onChange={(e) => {
-                              const raw = e.target.value
-                              setDraft((d) => ({ ...d, [s.key]: parseField(raw, s.kind) }))
-                            }}
-                          />
-                          <em className="aps-unit">{s.unit}</em>
-                        </span>
-                      )}
-                    </div>
-                    <span className="aps-range">
-                      {s.kind === 'bool'
-                        ? (s.default ? '默认：开' : '默认：关')
-                        : `范围 ${s.min ?? '-'} ~ ${s.max ?? '-'}${s.unit} · 默认 ${s.default}${s.unit}`}
-                    </span>
-                    {err && <span className="aps-field-error">{err}</span>}
-                    {!err && pair && (
-                      <span className="aps-field-error" data-pair="1">{pair.message}</span>
-                    )}
-                  </div>
-                )
-              })}
+                  )}
+                </div>
+              )}
 
               {/* ── 关于（只读：信息 + 逐条理由）──────────────────────── */}
               {active === ABOUT_ID && data && (

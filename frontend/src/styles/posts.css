@@ -4551,6 +4551,67 @@ img.hero-avatar {
   margin-top: 6px;
 }
 
+/* 页内小组（R21，devlog/100）：字段按**用途**分组（开播信息抓取 / 定期动态轮询 /
+   每日定时任务 / 收录首屏…）。标题只做分隔，不当视觉主角 —— "更醒目"的排版层级
+   是这一版第二批的事，这里先把结构立起来。
+   注意：`.aps-section` 把行包进新容器后，`.aps-row + .aps-row` 的分隔线只在组内生效，
+   组与组之间由标题断开（这正是我们要的层次）。 */
+.aps-section + .aps-section {
+  margin-top: 14px;
+}
+
+.aps-section-head {
+  margin: 0;
+  padding: 6px 0 2px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--c-text-sub);
+}
+
+/* 页尾「高级（默认收起）」：调优类字段的折叠区，默认不占视觉重量 */
+.aps-fold {
+  margin-top: 14px;
+  border-top: 1px dashed var(--c-border);
+}
+
+.aps-fold-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 10px 0 2px;
+  border: 0;
+  background: none;
+  color: var(--c-text-sub);
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.aps-fold-head:hover {
+  color: var(--c-text-main);
+}
+
+.aps-fold-caret {
+  width: 13px;
+  height: 13px;
+  transition: transform 0.15s ease;
+}
+
+.aps-fold-caret.on {
+  transform: rotate(180deg);
+}
+
+.aps-fold-hint {
+  color: var(--c-text-sub);
+  opacity: 0.8;
+}
+
+.aps-fold-body {
+  padding-top: 6px;
+}
+
 .aps-row-main {
   display: flex;
   flex-direction: column;
