@@ -838,6 +838,16 @@ def main() -> int:
                   f"（收起时 DOM 里 {aps.get('advancedRowsWhenClosed')} 行）"
                   f"｜ 展开后 {aps.get('advancedKeys')}"
                   f"（后端高级 {aps.get('advancedFromApi')}）")
+            print(f"  排版（R21 批 2）：字段名={aps.get('typeLabel')} 说明={aps.get('typeNote')} "
+                  f"行内距={aps.get('typeRowPadding')}px 小组标题={aps.get('typeSectionHead')}")
+            print(f"  步进条：几何={aps.get('stepGeometry')} 箭头={aps.get('stepArrows')} "
+                  f"可命中={aps.get('stepArrowHit')} 内框={aps.get('stepInnerBorder')!r} "
+                  f"｜ 点+→{aps.get('stepUpValue')!r} 点-→{aps.get('stepDownValue')!r} "
+                  f"上界时：+禁用={aps.get('stepUpDisabledAtMax')} -仍可用={aps.get('stepDownEnabledAtMax')}")
+            print(f"  开关：滑块={aps.get('switchTrack')} 圆点={aps.get('switchKnob')} "
+                  f"外壳描边={aps.get('switchShell')} "
+                  f"投影={bool(aps.get('switchShadow'))} 文案={aps.get('switchLabel')!r} "
+                  f"可命中={aps.get('switchHit')}")
             print(f"  弹窗：在视口内={aps.get('dialogInViewport')} 可命中={aps.get('dialogHit')}")
             print(f"  草稿：改过的页={aps.get('dirtyNavLabels')} 切页后仍在={aps.get('draftKeptAcrossPanes')!r}"
                   f" ｜ 恢复本类默认→{aps.get('afterResetOne')!r}")
@@ -953,6 +963,62 @@ def main() -> int:
                     if aps.get("advancedCollapsedAfterSwitch") != "closed":
                         failures.append(f"@{w} app-settings: 换页回来后「高级」没回到收起"
                                         f"（{aps.get('advancedCollapsedAfterSwitch')!r}）")
+                    # ── 排版层级（R21 批 2「文字排版更醒目一点」）────────
+                    # 「醒目」必须落成数字：字号 / 字重 / 行内距。否则下次谁调一版 CSS，
+                    # 层级平了也没人发现（这正是这一批要修的原始问题）。
+                    tl = aps.get("typeLabel") or {}
+                    tn = aps.get("typeNote") or {}
+                    th = aps.get("typeSectionHead") or {}
+                    if not (tl.get("size") or 0) >= 14 or tl.get("weight") not in ("600", "700"):
+                        failures.append(f"@{w} app-settings: 字段名不够醒目 {tl}"
+                                        f"（应 ≥14px 且 600/700）")
+                    if not (tn.get("size") or 0) >= 12:
+                        failures.append(f"@{w} app-settings: 说明文字仍偏小 {tn}（应 ≥12px）")
+                    if (aps.get("typeRowPadding") or 0) < 8:
+                        failures.append(f"@{w} app-settings: 行内距只有 "
+                                        f"{aps.get('typeRowPadding')}px（应 ≥8px，否则 19 行挤成一片）")
+                    if not (th.get("size") or 0) >= 13:
+                        failures.append(f"@{w} app-settings: 小组标题只有 {th}（应 ≥13px）")
+                    # ── 数字框 = 整行步进条（R21 批 2，参考图二）──────────
+                    if not aps.get("stepGeometry"):
+                        failures.append(f"@{w} app-settings: 数字字段没有步进条")
+                    elif aps["stepGeometry"].get("h") != 30:
+                        failures.append(f"@{w} app-settings: 步进条高 "
+                                        f"{aps['stepGeometry'].get('h')}，应为 30")
+                    if not aps.get("stepArrowHit"):
+                        failures.append(f"@{w} app-settings: 步进箭头点不着")
+                    if aps.get("stepInnerBorder") not in ("0px", 0):
+                        failures.append(f"@{w} app-settings: 步进条里的输入框还留着自己的边框"
+                                        f"（{aps.get('stepInnerBorder')}）—— 会出双框")
+                    if aps.get("stepUpValue") != "8" or aps.get("stepDownValue") != "7":
+                        failures.append(f"@{w} app-settings: 步进不对 —— 点「+」得 "
+                                        f"{aps.get('stepUpValue')!r}（应 '8'）、再点「-」得 "
+                                        f"{aps.get('stepDownValue')!r}（应 '7'）")
+                    if aps.get("stepUpDisabledAtMax") is not True:
+                        failures.append(f"@{w} app-settings: 顶到上界后「+」没置灰")
+                    if not aps.get("stepDownEnabledAtMax"):
+                        failures.append(f"@{w} app-settings: 上界时「-」也被禁用了（应当还能降）")
+                    # ── 开关（用户口径：不要外框 + 浮片质感）──────────────
+                    st = aps.get("switchTrack") or {}
+                    shell = aps.get("switchShell") or {}
+                    if not st:
+                        failures.append(f"@{w} app-settings: 没量到开关滑块")
+                    elif (st.get("w"), st.get("h")) != (32, 18):
+                        failures.append(f"@{w} app-settings: 滑块是 {st}，应为 32×18"
+                                        f"（口径是「稍大一点的药丸内嵌滑块」）")
+                    if (shell.get("border") not in ("0px", 0)
+                            or shell.get("padding") not in ("0px", 0)
+                            or shell.get("bg") not in ("rgba(0, 0, 0, 0)", "transparent")):
+                        failures.append(f"@{w} app-settings: 开关还套着外层胶囊壳（{shell}）——"
+                                        f"用户口径是「不要外框背景」")
+                    if not aps.get("switchShadow") or aps.get("switchShadow") == "none":
+                        failures.append(f"@{w} app-settings: 开关没有浮片投影"
+                                        f"（口径是「添加一点浮片视觉」）")
+                    if aps.get("switchLabel") not in ("开", "关"):
+                        failures.append(f"@{w} app-settings: 开关的状态文字是 "
+                                        f"{aps.get('switchLabel')!r}（应只有「开」或「关」）")
+                    if not aps.get("switchHit"):
+                        failures.append(f"@{w} app-settings: 开关点不着")
                     # 草稿跨页保留 + 圆点标在改过的那一页
                     if aps.get("dirtyNavLabels") != ["抓取设置"]:
                         failures.append(f"@{w} app-settings: 未保存圆点标在了 "
@@ -1575,7 +1641,7 @@ def main() -> int:
                                     f"（粗体+字距撑破了定宽，右侧会贴/溢出）")
                 # ② 筛选钮：**文字本身**必须落在浮片几何中心（R15② 的原始诉求），
                 #    caret 则钉在右上角（不占流）—— 这是 R16（用户给了侧栏那枚的截图）
-                #    之后的形状：caret 一旦留在流内，文字就一定被挤偏（实测 −5.3px）。
+                #    之后的形状：caret 一旦留在流内，文字就一定被挤偏（实测 -5.3px）。
                 #    R15 当时退让到"组居中、文字允许偏半个箭头宽"，R16 换成了侧栏那套
                 #    （caret 出流 + 足够宽度），于是文字就是**真正的**几何中心。
                 gdiff = po.get("filterGroupGapDiff")
@@ -1590,7 +1656,7 @@ def main() -> int:
                 if po.get("filterCaretPosition") != "absolute":
                     failures.append(f"@{w} polish: 筛选钮 caret 是 "
                                     f"{po.get('filterCaretPosition')!r} 定位（应为 absolute —— "
-                                    f"留在流内会把文字挤偏，R15 那版的 −5.3px 就是这么来的）")
+                                    f"留在流内会把文字挤偏，R15 那版的 -5.3px 就是这么来的）")
                 # ③ 徽标「+」：空闲不占位且不可点；hover 展开可点；离开复位
                 # ⚠️ 高度 0 是**合法值**，不能用 `or -1` 兜底（0 是 falsy，第一版断言
                 #    因此把"已复位"误判成失败 —— 判据里的 falsy 陷阱）

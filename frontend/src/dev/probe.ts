@@ -1519,6 +1519,48 @@ export async function runUiProbe(): Promise<void> {
       result.advancedKeys = [...dlg.querySelectorAll<HTMLElement>(
         '[data-aps-advanced-body] [data-setting]')].map((n) => n.getAttribute('data-setting'))
 
+      // ③c 排版层级（R21 批 2）：量出来才算数 —— "更醒目"这件事必须落成字号/字重/行距的数字，
+      //     否则下次谁调一下 CSS 都没人知道层级已经平了。
+      const paneFirstRow = dlg.querySelector<HTMLElement>('.aps-section .aps-row')
+      const paneLabel = paneFirstRow?.querySelector<HTMLElement>('.aps-label')
+      const paneNote = paneFirstRow?.querySelector<HTMLElement>('.aps-note')
+      const paneHead = dlg.querySelector<HTMLElement>('.aps-section-head')
+      const px = (v: string) => Math.round(parseFloat(v) * 10) / 10
+      if (paneLabel && paneNote) {
+        const ls = getComputedStyle(paneLabel)
+        const ns = getComputedStyle(paneNote)
+        const rowCs = getComputedStyle(paneFirstRow!)
+        result.typeLabel = { size: px(ls.fontSize), weight: ls.fontWeight }
+        result.typeNote = { size: px(ns.fontSize), lineHeight: px(ns.lineHeight) }
+        result.typeRowPadding = px(rowCs.paddingTop)
+      }
+      if (paneHead) {
+        const hs = getComputedStyle(paneHead)
+        result.typeSectionHead = { size: px(hs.fontSize), weight: hs.fontWeight }
+      }
+
+      // ③d 数字框 = 整行步进条（R21 批 2）：几何 + 两个箭头可命中 + 藏掉了原生箭头
+      //     ⚠️ 先把它滚进视野再量：FIELD 是「高级」里的行，展开后在长面板的底部，
+      //     `getBoundingClientRect` 照样给坐标、但那个位置已经被 `.aps-pane-scroll` 裁掉了 ——
+      //     `elementFromPoint` 命中不到，会假报"箭头点不着"。
+      dlg.querySelector<HTMLElement>(`[data-setting="${FIELD}"]`)
+        ?.scrollIntoView({ block: 'center' })
+      await sleep(220)
+      const stepRow = dlg.querySelector<HTMLElement>(`[data-setting="${FIELD}"]`)
+      const stepBar = stepRow?.querySelector<HTMLElement>('.aps-step')
+      const stepUp = stepRow?.querySelector<HTMLButtonElement>('.aps-step-btn[data-step="1"]')
+      const stepDown = stepRow?.querySelector<HTMLButtonElement>('.aps-step-btn[data-step="-1"]')
+      if (stepBar && stepUp && stepDown) {
+        const sr = rectOf(stepBar)
+        const ur = rectOf(stepUp)
+        result.stepGeometry = sr ? { h: Math.round(sr.height) } : null
+        result.stepArrows = { up: !!ur, down: !!rectOf(stepDown) }
+        result.stepArrowHit = !!(ur && hits(stepUp, ur.left + ur.width / 2, ur.top + ur.height / 2))
+        // 输入框在步进条里不该再有自己的边框（外壳由 .aps-step 提供）
+        const inner = stepBar.querySelector<HTMLInputElement>('.aps-input')
+        result.stepInnerBorder = inner ? getComputedStyle(inner).borderTopWidth : null
+      }
+
       // ⚠️ **每次交互前重新查节点**：R17 起字段是分页渲染的，切页 = 卸载重挂，
       //    早先抓到的 `input` 会变成游离节点（写它不会触发 React onChange）——
       //    与 devlog/071→080 那次"探针读了旧 DOM 节点"是同一类坑，这次由分页引入。
@@ -1569,6 +1611,23 @@ export async function runUiProbe(): Promise<void> {
           .map((n) => (n.querySelector('.aps-nav-label')?.textContent || '').trim())
         result.dirtyNavLabels = dirtyNav
         await clickNav('数据源')
+        // ⑥-b 开关（R21 批 2 用户口径）：滑块放大到 32×18、**外层那圈描边+底色去掉**、
+        //      并带上浮片投影（与 .float-pill 同族）。在「数据源」页量 —— 那页才有开关。
+        const sw = dlg.querySelector<HTMLElement>('[data-setting="EXTERNAL_ENABLED"] .aps-switch')
+        const swTrack = sw?.querySelector<HTMLElement>('i')
+        if (sw && swTrack) {
+          const swr = rectOf(swTrack)
+          const swCs = getComputedStyle(sw)
+          const knobCs = getComputedStyle(swTrack, '::after')
+          result.switchTrack = swr ? { w: Math.round(swr.width), h: Math.round(swr.height) } : null
+          result.switchKnob = { w: px(knobCs.width), h: px(knobCs.height) }
+          result.switchShell = {
+            border: swCs.borderTopWidth, padding: swCs.paddingTop, bg: swCs.backgroundColor,
+          }
+          result.switchShadow = getComputedStyle(swTrack).boxShadow
+          result.switchLabel = (sw.textContent || '').trim()
+          result.switchHit = !!(swr && hits(sw, swr.left + swr.width / 2, swr.top + swr.height / 2))
+        }
         await clickNav('抓取设置')
         // 回到本页时**还没展开**：读一次状态，证明"换页把折叠收回去了"（每页各自的默认态）。
         // ⚠️ 不能在「数据源」页读 —— 那页没有高级项，`.aps-fold` 根本不存在（会读到 null）。
@@ -1587,6 +1646,28 @@ export async function runUiProbe(): Promise<void> {
         '[data-setting="EXTERNAL_ENABLED"]').length      // 别类字段不该出现在本页
       if (inputNow()) {                                    // 还原成待保存状态，继续后面的保存断言
         typeInto(inputNow()!, '7')
+        await sleep(150)
+      }
+
+      // ⑦-b 步进条的行为（R21 批 2）：右箭头 +1、左箭头 −1、到上界置灰、键盘仍能直接敲。
+      //      ⚠️ 箭头节点**每次重新查**：切页会把整个面板卸载重挂，早先抓到的按钮已经是游离节点
+      //     （点它不会触发 React 事件）—— 与 R17 分页那次是同一个坑。
+      const upNow = () => dlg.querySelector<HTMLButtonElement>(
+        `[data-setting="${FIELD}"] .aps-step-btn[data-step="1"]`)
+      const downNow = () => dlg.querySelector<HTMLButtonElement>(
+        `[data-setting="${FIELD}"] .aps-step-btn[data-step="-1"]`)
+      if (inputNow() && upNow() && downNow()) {
+        upNow()!.click()
+        await sleep(150)
+        result.stepUpValue = inputNow()?.value ?? null
+        downNow()!.click()
+        await sleep(150)
+        result.stepDownValue = inputNow()?.value ?? null
+        typeInto(inputNow()!, '100')                       // 顶到上界
+        await sleep(150)
+        result.stepUpDisabledAtMax = upNow()?.disabled ?? null
+        result.stepDownEnabledAtMax = downNow()?.disabled === false
+        typeInto(inputNow()!, '7')                         // 回到待保存的合法值
         await sleep(150)
       }
 

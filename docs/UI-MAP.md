@@ -185,7 +185,7 @@ DOM 契约（探针 `ui_probe --status-island` 直接查）：`.si-island`（`.o
 **2026-09-08 用户：未接线的占位图标（用户 / 日历 / 刷新）已删除**——避免点了没反应的假入口，
 功能落地时再加回；**2026-09-15（R14a，devlog/091）齿轮按这条口径加回**（设置界面真的能用 HTTP PUT 落库了）。
 
-### A2-a. 应用设置弹窗 `<AppSettingsDialog>`（components/AppSettingsDialog.tsx，2026-09-15 R14a/R14b；**R17 改左右两栏** devlog/094；**R21 精简信息架构** devlog/100）
+### A2-a. 应用设置弹窗 `<AppSettingsDialog>`（components/AppSettingsDialog.tsx，2026-09-15 R14a/R14b；**R17 改左右两栏** devlog/094；**R21 精简信息架构** devlog/100；**R21 批 2 排版与控件** devlog/101）
 
 齿轮打开的独立弹窗（Radix Dialog）。**与「档案设置」是两回事**：那个是单个 V 的资料
 （`.vd-*`），这个是应用级参数（`.aps-*`）。
@@ -210,7 +210,9 @@ DOM 契约（探针 `ui_probe --status-island` 直接查）：`.si-island`（`.o
 | 导航项 | `.aps-nav-item`（`data-nav="<外观\|分组名\|关于>"`、`data-nav-active`、`data-nav-dirty`） | 高 34、图标 15px、右侧计数；**选中态 = 左缘 3px 主色竖条 + 浅粉底**（`.vtuber-item.active` 那套语言）；`data-nav-dirty="1"` 时挂 `.aps-nav-dot`（该分类有未保存改动） |
 | 右栏 | `.aps-pane`（`data-testid="aps-pane"`、`data-pane`，`role="tabpanel"`） | **只渲染当前分类**（分页，不是隐藏）；分类头 `.aps-pane-head` 带生效时机 + 「恢复本类默认」（`.aps-reset-one`，只填草稿不落库） |
 | 外观页 | `.aps-theme-cards` / `.aps-theme-card[data-theme-option][data-theme-disabled]` | 三张卡片：**浅色 / 深色 / 跟随系统**。深色卡片 `disabled` + `.aps-theme-note`（"尚未实现"）—— **只标不藏**；系统是深色时下方 `.aps-range[data-theme-caveat]` 说明 |
-| 字段行 | `.aps-row[data-setting="KEY"]` + `.aps-input` / `.aps-switch` / `.aps-badge` / `.aps-field-error` | **R14a 的控件一个都没改**，R17 只换外壳；跨字段冲突（上限<下限）报在"上限"那一行（`[data-pair="1"]`）；**R20**："说明一行 + 控件整行"的字段（关闭语义的胶囊单选等）改用 `.aps-row-stack`（`grid-template-columns:1fr`，控件另起一行），否则控件会被 132px 的 `.aps-row-ctl` 列压成竖排单字；`.aps-radio` 加 `white-space:nowrap` 防选项文字折行 |
+| 字段行 | `.aps-row[data-setting="KEY"]` + `.aps-input` / `.aps-switch` / `.aps-badge` / `.aps-field-error` | **R14a 的控件一个都没改**，R17 只换外壳；跨字段冲突（上限<下限）报在"上限"那一行（`[data-pair="1"]`）；**R20**："说明一行 + 控件整行"的字段（关闭语义的胶囊单选等）改用 `.aps-row-stack`（`grid-template-columns:1fr`，控件另起一行），否则控件会被控件列压成竖排单字；`.aps-radio` 加 `white-space:nowrap` 防选项文字折行。**R21 批 2 的排版层级**（"文字排版更醒目一点"落成数字）：字段名 **14px / 600**、说明 **12px / 行高 1.5**、行内距 **9px**（原 5px）、控件列 132 → **150px**、范围与错误提示 11px；`--range` 行跨整行（`grid-column: 1/-1`） |
+| 数字步进条 | `.aps-step` + `.aps-step-btn[data-step="-1\|1"]` + 内层 `.aps-input` | **R21 批 2（参考图二）**：数字框不再是裸输入框，而是**整行条**——左「减」/ 中数值 / 右「加」，高 **30**、圆角 8、外壳带 `:focus-within` 主色边。**中间仍是真 `<input>`**（键盘可直接敲；原生数字箭头已 `-webkit-appearance:none` 藏掉，避免两套箭头打架），内层输入框 `border:0` 且数值居中加粗 13.5px。步进粒度与边界判据全在 `utils/settingsDraft.ts`（`stepOf` / `atBound` / `bump`，5 条单测）：整数步 1、小数按跨度 0.5 或 1，到界箭头 `disabled`，点击是夹在 `[min,max]` 内的值 |
+| 开关 | `.aps-switch`（`data-value` / `role="switch"`）> `i`（滑块）+ 状态文字 | **R21 批 2 用户口径**："稍大一点的药丸内嵌滑块，但是**不要外框背景**，同时添加一点浮片视觉" ⇒ 去掉原来那层"描边 + 灰底的胶囊壳"（`padding` / `border` 全 0），滑块本体 22×12 → **32×18**（圆点 14，行程 14px），底色 `--c-bg-card` + `inset` 发丝线 + **`--pill-shadow`**（与 `.float-pill` 同族的浮片质感），`.on` 时底色换主色；状态文字「开 / 关」留在滑块右侧 |
 | 页内小组 | `.aps-section[data-aps-section="<小组名>"]` + `.aps-section-head` | **R21**：字段按**用途**分小组（风控与节流 / 开播信息抓取 / 定期动态轮询 / 每日定时任务 / 收录首屏），顺序 = 后端声明序。**只有一组时不渲染标题**（页标题已经说明白了）。分组与折叠的内容**全部来自后端** `specs[].section` / `.advanced`，界面不写死 —— 见 §A2-a 口径 ⑤ |
 | 高级折叠 | `.aps-fold[data-aps-advanced="closed\|open"]` + `.aps-fold-head`（`data-testid="aps-advanced-toggle"`）+ `.aps-fold-body` | **R21**：调优类字段收进页尾「高级设置（N 项）」，**默认收起 = 不渲染**（不是渲染后隐藏 —— 收起时 DOM 里一行都没有，探针据此判）；展开后与正文用**同一套** `renderRow`；**换页自动收回**（每页各自的默认态） |
 | 关于页 | `.aps-info` + `.aps-readonly-item` | 只读信息（版本/数据目录/库/端口/迁移 head/日志/PID）+ 10 条只读项**逐条带理由**（`.aps-readonly-why`）；**该页没有任何可写控件** |

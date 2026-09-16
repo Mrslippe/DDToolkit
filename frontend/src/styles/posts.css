@@ -4524,13 +4524,15 @@ img.hero-avatar {
   color: var(--c-text-sub);
 }
 
-/* 一行 = 说明（左，可换行）+ 控件（右，固定宽） */
+/* 一行 = 说明（左，可换行）+ 控件（右，固定宽）。
+   R21 批 2：控件列 132 → **150px**（数字框换成"整行步进条"后，两个箭头 + 数值需要更多横向空间；
+   标签区仍有 ~400px，最长的那条标签也放得下），行内距 5 → **9px**（原来 19 行挤在一起没有呼吸感）。 */
 .aps-row {
   display: grid;
-  grid-template-columns: 1fr 132px;
+  grid-template-columns: 1fr 150px;
   align-items: center;
-  gap: 2px 10px;
-  padding: 5px 0;
+  gap: 3px 10px;
+  padding: 9px 0;
   border-top: 1px dashed transparent;
 }
 
@@ -4557,13 +4559,13 @@ img.hero-avatar {
    注意：`.aps-section` 把行包进新容器后，`.aps-row + .aps-row` 的分隔线只在组内生效，
    组与组之间由标题断开（这正是我们要的层次）。 */
 .aps-section + .aps-section {
-  margin-top: 14px;
+  margin-top: 18px;
 }
 
 .aps-section-head {
   margin: 0;
-  padding: 6px 0 2px;
-  font-size: 12px;
+  padding: 8px 0 2px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--c-text-sub);
 }
@@ -4619,11 +4621,15 @@ img.hero-avatar {
   min-width: 0;
 }
 
+/* R21 批 2「文字排版更醒目」：字段名 12.5 → **14px / 600**，说明 11 → **12px**（行高 1.5）。
+   原来标签与说明只差 1.5px 且都不加粗，19 行读下来是一片灰 —— 层级靠"字号 + 字重"拉开，
+   而不是靠颜色深浅。 */
 .aps-label {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 12.5px;
+  font-size: 14px;
+  font-weight: 600;
   color: var(--c-text-main);
 }
 
@@ -4637,8 +4643,8 @@ img.hero-avatar {
 }
 
 .aps-note {
-  font-size: 11px;
-  line-height: 1.45;
+  font-size: 12px;
+  line-height: 1.5;
   color: var(--c-text-sub);
 }
 
@@ -4650,8 +4656,49 @@ img.hero-avatar {
 .aps-input-wrap {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   width: 100%;
+}
+
+/* 数字框 = 整行步进条（R21 批 2，参考图二）：左「减」、中数值、右「加」。
+   ⚠️ 中间**仍然是真 `<input>`**，键盘可以直接输入 —— 步进只是给"微调"用的，
+   把 60 秒改成 600 秒不该按 540 次。边界处按钮置灰（判据在 `utils/settingsDraft.ts`，有单测）。 */
+.aps-step {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 30px;
+  padding: 0 2px;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  background: var(--c-bg-card);
+}
+
+.aps-step:focus-within {
+  border-color: var(--c-primary);
+}
+
+.aps-step-btn {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--c-text-sub);
+  cursor: pointer;
+}
+
+.aps-step-btn:hover:not(:disabled) {
+  background: var(--sel-bg-hover);
+  color: var(--c-text-main);
+}
+
+.aps-step-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
 }
 
 .aps-input {
@@ -4673,59 +4720,87 @@ img.hero-avatar {
   border-color: var(--c-primary);
 }
 
+/* 步进条里的输入框脱掉自己的边框与底色（外壳由 `.aps-step` 提供），数值居中、加粗一档 */
+.aps-step .aps-input {
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  text-align: center;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.aps-step .aps-input:focus-visible {
+  border: 0;
+}
+
+/* 藏掉 Chromium 的原生数字箭头：已经有自己的"左减右加"了，两套箭头并排会打架 */
+.aps-step .aps-input::-webkit-outer-spin-button,
+.aps-step .aps-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
 .aps-unit {
   flex: none;
   width: 34px;
-  font-size: 11px;
+  font-size: 11.5px;
   font-style: normal;
   color: var(--c-text-sub);
 }
 
+/* 开关（R21 批 2，用户 2026-09-16 口径）：
+   "稍大一点的药丸内嵌滑块，但是**不要外框背景**，同时添加一点浮片视觉，类似其他浮片按钮那样"。
+   ⇒ 原来那层"描边 + 灰底的胶囊壳"（padding 4px 10px + border + background）整个去掉，
+   只留滑块本体，并把它做成一颗**浮片**：白面 + 剂发丝内边 + `--pill-shadow`（与 .float-pill 同族）。
+   滑块本体 22×12 → **32×18**（knob 10 → 14），命中区随按钮撑到 32×18 以上。 */
 .aps-switch {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border: 1px solid var(--c-border);
-  border-radius: 999px;
-  background: var(--sel-bg-hover);
+  gap: 8px;
+  padding: 0;
+  border: 0;
+  background: none;
   color: var(--c-text-sub);
-  font-size: 12px;
+  font-size: 12.5px;
+  font-family: inherit;
   cursor: pointer;
 }
 
 .aps-switch i {
-  width: 22px;
-  height: 12px;
-  border-radius: 999px;
-  background: #c9ced6;
   position: relative;
-  transition: background-color 0.15s ease;
+  width: 32px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--c-bg-card);
+  box-shadow: inset 0 0 0 1px var(--c-border), var(--pill-shadow);
+  transition: background-color 0.16s ease, box-shadow 0.16s ease;
 }
 
 .aps-switch i::after {
   content: '';
   position: absolute;
-  top: 1px;
-  left: 1px;
-  width: 10px;
-  height: 10px;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
   border-radius: 50%;
   background: #fff;
-  transition: transform 0.15s ease;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.22);
+  transition: transform 0.16s ease;
 }
 
 .aps-switch.on {
   color: var(--c-text-main);
-  border-color: var(--c-primary);
 }
 
 .aps-switch.on i {
   background: var(--c-primary);
+  box-shadow: inset 0 0 0 1px var(--c-primary), var(--pill-shadow);
 }
 
 .aps-switch.on i::after {
-  transform: translateX(10px);
+  transform: translateX(14px);
 }
 
 /* 主题单选（R14b）：胶囊按钮，选中的实底。
@@ -4763,7 +4838,7 @@ img.hero-avatar {
 .aps-range,
 .aps-field-error {
   grid-column: 1 / -1;
-  font-size: 10.5px;
+  font-size: 11px;
 }
 
 .aps-range {

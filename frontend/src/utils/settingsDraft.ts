@@ -47,6 +47,48 @@ export function valueOf(spec: RangeSpec, draft: Record<string, DraftVal>, key: s
   return draft[key] !== undefined ? draft[key] : spec.value
 }
 
+// ── 数字步进（R21 批 2，devlog/101）────────────────────────────────────
+// 数字框改成"左减右加"的整行步进条。这三条判定同样"错了界面上看不出来"：
+// 步子太大 → 3 秒想调到 3.5 秒调不到；不夹范围 → 一路按到 999 再等后端 400；
+// 空值/布尔也给箭头 → 点一下把 `''` 变成 NaN，输入框自己清空（另一个经典坑）。
+
+/**
+ * 一步走多少。
+ *
+ * 整数按 1；小数**按跨度分档**：跨度 < 30 的按 0.5（0.5~10 秒的账号间隔，用户就是想调半秒），
+ * 跨度大的按 1（0~3600 秒的直播轮询，0.5 秒的步子等于没步）。
+ */
+export function stepOf(spec: RangeSpec): number {
+  if (spec.kind === 'int') return 1
+  const lo = spec.min ?? 0
+  const hi = spec.max ?? 0
+  return hi - lo < 30 ? 0.5 : 1
+}
+
+/** 箭头该不该置灰：到界了、当前值不是数字（空串 / 中间态）、或者这是布尔项 */
+export function atBound(spec: RangeSpec, current: DraftVal, dir: 1 | -1): boolean {
+  if (spec.kind === 'bool' || current === '' || typeof current === 'boolean') return true
+  const v = Number(current)
+  if (!Number.isFinite(v)) return true
+  return dir > 0 ? (spec.max !== null && v >= spec.max) : (spec.min !== null && v <= spec.min)
+}
+
+/**
+ * 点一次箭头后的新值（夹在 `[min,max]` 内，并按 0.1 消除浮点噪声 ——
+ * 否则 3.0 + 0.5 会写出 3.5 但 0.1+0.2 那一类会变成 0.30000000000000004，
+ * 输入框里就会显示一长串）。
+ * 当前值不可用时返回 null（调用方忽略这次点击；按钮此时本来就是置灰的）。
+ */
+export function bump(spec: RangeSpec, current: DraftVal, dir: 1 | -1): number | null {
+  if (spec.kind === 'bool' || current === '' || typeof current === 'boolean') return null
+  const v = Number(current)
+  if (!Number.isFinite(v)) return null
+  const next = Math.round((v + dir * stepOf(spec)) * 10) / 10
+  const lo = spec.min ?? -Infinity
+  const hi = spec.max ?? Infinity
+  return Math.min(hi, Math.max(lo, next))
+}
+
 /** 与"当前生效值"不同的键（只有这些会被提交；空串也算改过，由校验拦住不让存） */
 export function dirtyKeys(
   specs: { key: string }[],

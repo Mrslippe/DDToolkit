@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
+  atBound,
   buildPayload,
+  bump,
   dirtyKeys,
   fieldError,
   pairProblems,
   parseField,
+  stepOf,
   valueOf,
   type RangeSpec,
 } from './settingsDraft'
@@ -143,5 +146,43 @@ describe('跨字段：上限不能小于下限', () => {
     })
     expect(out.map((p) => p.key).sort())
       .toEqual(['MANUAL_FAST_INTERVAL_MAX', 'REQUEST_INTERVAL_MAX'])
+  })
+})
+
+/**
+ * 数字步进（R21 批 2，devlog/101）：数字框改成"左减右加"的整行步进条。
+ * 判错的代价同样在界面上看不出来：步子太大（3 秒调不到 3.5 秒）、
+ * 不夹范围（一路按到 999，等后端 400）、空值也给箭头（点一下把 `''` 变成 NaN → 输入框自己清空）。
+ */
+describe('数字步进', () => {
+  it('整数一步 1；小数按跨度分档：窄的 0.5、宽的 1', () => {
+    expect(stepOf(int(1, 100))).toBe(1)
+    expect(stepOf(float(0.5, 10))).toBe(0.5)        // 账号间隔：用户就是想调半秒
+    expect(stepOf(float(0, 3600))).toBe(1)          // 直播轮询：0.5 秒的步子等于没步
+  })
+
+  it('加减与夹范围：点 + 到顶就不再涨，点 − 到底就不再降', () => {
+    expect(bump(int(1, 100, 3), 3, 1)).toBe(4)
+    expect(bump(int(1, 100, 3), 3, -1)).toBe(2)
+    expect(bump(int(1, 5, 5), 5, 1)).toBe(5)        // 已经在上界
+    expect(bump(int(1, 5, 1), 1, -1)).toBe(1)
+  })
+
+  it('小数步进不产生浮点噪声（3.0 + 0.5 = 3.5，不是 3.5000000000000004）', () => {
+    expect(bump(float(0.5, 10, 3), 3, 1)).toBe(3.5)
+    expect(bump(float(0.1, 5, 0.1), 0.1, 1)).toBe(0.6)
+  })
+
+  it('到界了箭头置灰（判据不只"值等于边界"，还包括空值与布尔）', () => {
+    expect(atBound(int(1, 5, 5), 5, 1)).toBe(true)
+    expect(atBound(int(1, 5, 1), 1, -1)).toBe(true)
+    expect(atBound(int(1, 5, 3), 3, 1)).toBe(false)
+    expect(atBound(int(1, 5), '', 1)).toBe(true)     // 输入框被清空
+    expect(atBound(bool(), true, 1)).toBe(true)      // 开关没有步进
+  })
+
+  it('当前值不可用时点击是 no-op（返回 null），不会写出 NaN', () => {
+    expect(bump(int(1, 5), '', 1)).toBeNull()
+    expect(bump(bool(), true, 1)).toBeNull()
   })
 })

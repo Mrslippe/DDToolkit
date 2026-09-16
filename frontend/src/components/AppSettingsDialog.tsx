@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Activity, Check, ChevronDown, Cloud, Info, Loader2, Palette, RotateCcw, Save,
-  Sparkles, Timer, TriangleAlert,
+  Activity, Check, ChevronDown, ChevronLeft, ChevronRight, Cloud, Info, Loader2,
+  Palette, RotateCcw, Save, Sparkles, Timer, TriangleAlert,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
@@ -21,8 +21,8 @@ import {
   type NavIcon,
 } from '../utils/settingsNav'
 import {
-  buildPayload, dirtyKeys as dirtyOf, fieldError, pairProblems, parseField, valueOf,
-  type DraftVal,
+  atBound, buildPayload, bump, dirtyKeys as dirtyOf, fieldError, pairProblems,
+  parseField, stepOf, valueOf, type DraftVal,
 } from '../utils/settingsDraft'
 import OverlayScroll from './OverlayScroll'
 import './../styles/posts.css'
@@ -271,20 +271,53 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
             </button>
           ) : (
             <span className="aps-input-wrap">
-              <input
-                id={`aps-${s.key}`}
-                className="aps-input"
-                type="number"
-                inputMode="decimal"
-                min={s.min ?? undefined}
-                max={s.max ?? undefined}
-                step={s.kind === 'int' ? 1 : 0.1}
-                value={String(val)}
-                onChange={(e) => {
-                  const raw = e.target.value
-                  setDraft((d) => ({ ...d, [s.key]: parseField(raw, s.kind) }))
-                }}
-              />
+              {/* 数字框 = 整行步进条（R21 批 2）：左减、中数值、右加。
+                  中间仍是真 `<input>`（键盘能直接敲），箭头只是微调 —— 60 秒改 600 秒
+                  不该按 540 次。到界置灰的判据在 `settingsDraft.atBound`（有单测）。 */}
+              <span className="aps-step">
+                <button
+                  type="button"
+                  className="aps-step-btn"
+                  data-step="-1"
+                  title="减小"
+                  aria-label={`减小${s.label}`}
+                  disabled={atBound(s, val, -1)}
+                  onClick={() => {
+                    const next = bump(s, val, -1)
+                    if (next !== null) setDraft((d) => ({ ...d, [s.key]: next }))
+                  }}
+                >
+                  <ChevronLeft className="size-[13px]" />
+                </button>
+                <input
+                  id={`aps-${s.key}`}
+                  className="aps-input"
+                  type="number"
+                  inputMode="decimal"
+                  min={s.min ?? undefined}
+                  max={s.max ?? undefined}
+                  step={stepOf(s)}
+                  value={String(val)}
+                  onChange={(e) => {
+                    const raw = e.target.value
+                    setDraft((d) => ({ ...d, [s.key]: parseField(raw, s.kind) }))
+                  }}
+                />
+                <button
+                  type="button"
+                  className="aps-step-btn"
+                  data-step="1"
+                  title="增大"
+                  aria-label={`增大${s.label}`}
+                  disabled={atBound(s, val, 1)}
+                  onClick={() => {
+                    const next = bump(s, val, 1)
+                    if (next !== null) setDraft((d) => ({ ...d, [s.key]: next }))
+                  }}
+                >
+                  <ChevronRight className="size-[13px]" />
+                </button>
+              </span>
               <em className="aps-unit">{s.unit}</em>
             </span>
           )}
