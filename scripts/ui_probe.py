@@ -228,6 +228,7 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
             "filterPill": data.get("filterPill"),
             "traySuspend": data.get("traySuspend"),
             "closeAsk": data.get("closeAsk"),
+            "switchPerf": data.get("switchPerf"),
             "degraded": data.get("degraded") or [],
             "dom": dom_file,
         }
@@ -235,7 +236,7 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
             "settings": None, "scene": None, "addv": None, "capabilities": None,
             "polish": None, "reservations": None, "statusIsland": None,
             "appSettings": None, "filterPill": None, "traySuspend": None,
-            "closeAsk": None, "degraded": [], "dom": dom_file}
+            "closeAsk": None, "switchPerf": None, "degraded": [], "dom": dom_file}
 
 
 # ── 展示页 hero 药丸签名（P2 分层收敛 A 批次的位级回归护栏）─────────────
@@ -590,6 +591,22 @@ def _assert_first_run(dom_file: Path) -> list[str]:
     return bad
 
 
+def _fmt_ms_stats(vals: list) -> str:
+    """毫秒样本 → 一行分布（给 `--switch-perf` 用）。
+
+    为什么不用 `statistics.mean`：性能样本一只长尾就能把均值带偏（一次 GC 或一次
+    React 冷挂载），中位与 P90 更能说明"用户平时感受到多少"。
+    """
+    nums = sorted(int(v) for v in vals if isinstance(v, (int, float)))
+    if not nums:
+        return "（没有样本）"
+    mid = len(nums) // 2
+    med = nums[mid] if len(nums) % 2 else (nums[mid - 1] + nums[mid]) // 2
+    p90 = nums[min(len(nums) - 1, int(len(nums) * 0.9))]
+    return (f"最快 {nums[0]}ms · 中位 {med}ms · P90 {p90}ms · 最慢 {nums[-1]}ms"
+            f"（n={len(nums)}）")
+
+
 def _kill_tree(proc: subprocess.Popen | None) -> None:
     """收掉进程树。
 
@@ -751,6 +768,15 @@ def main() -> int:
         help="场景切换机（切 V 的预取门控 + 原子提交）诊断与护栏：打印点击后所有 fetch "
              "（预取有没有回来）+ body class 变化序列 + 提交耗时；未提交即判失败（devlog/080）。"
              "需要数据目录里至少有 2 个已订阅 V。",
+    )
+    ap.add_argument(
+        "--switch-perf",
+        action="store_true",
+        help="切换性能**测量**（不是不变量门禁）：视图切换 / V 切换各自"
+             "「点击 → 目标可见」的耗时分布、连点（60ms 间隔）总耗时、主线程长任务数。"
+             "已知单次下限 = 200ms 的刻意退场（`useSceneTransition.EXIT_MS`）；"
+             "本模式跑在 Vite dev + React 开发模式，绝对值只作**开发态基线**，"
+             "只在「没切成」时判失败。需要至少 2 个已订阅 V。",
     )
     args = ap.parse_args()
     widths = args.width or [1100, 1280, 1440]
@@ -1455,6 +1481,59 @@ def main() -> int:
                                     f"hero={sc.get('heroAtEnd')!r}）")
                 if not failures:
                     print("  [ok] 场景切换：预取→退场→提交全程落地，侧栏与内容一致")
+            for b in failures:
+                print("   -", b)
+            return 1 if failures else 0
+
+        if args.switch_perf:
+            # 切换性能**测量**（2026-09-16，devlog/132）：用户报"不同视图 / 不同 V 之间
+            # 快速切换有明显卡顿"。这不是不变量门禁，而是**基线工具** ——
+            # 单次下限本来就是 200ms 的刻意退场（`useSceneTransition.EXIT_MS`），
+            # 所以这里只在"没切成 / 探针没跑完"时判失败，耗时只打印（含开发态说明）。
+            w = widths[0]
+            url = f"http://localhost:{vite_port}{route}?probe=switch-perf"
+            print(f"[probe] switch-perf @{w} → {url}")
+            res = _run_probe(edge, url, w, args.height, WORK, "switch-perf")
+            sp = ((res or {}).get("switchPerf") or {})
+            if res and not sp:
+                print(f"  [!] 探针 mode={res.get('mode')!r} 键={sorted(res.keys())}"
+                      f"（新字段需要在 _run_probe 的白名单里登记）")
+            if sp.get("reason") == "sidebar-too-small":
+                failures.append(f"@{w} switch-perf: 侧栏少于 2 个 V，量不到 V 切换"
+                                f"（需要至少两个已订阅 V）")
+            else:
+                print(f"  视图切换（点击 → 目标可见）：")
+                for item in (sp.get("views") or []):
+                    print(f"    · {item.get('target')}: {item.get('ms')}ms")
+                print(f"    {_fmt_ms_stats([i.get('ms') for i in (sp.get('views') or [])])}")
+                print(f"  V 切换（候选 {sp.get('candidates')} 个）：")
+                for item in (sp.get("vs") or []):
+                    print(f"    · {item.get('target')!r}: {item.get('ms')}ms")
+                print(f"    {_fmt_ms_stats([i.get('ms') for i in (sp.get('vs') or [])])}")
+                burst = sp.get("burst") or []
+                single = [i.get("ms") for i in (sp.get("views") or []) if isinstance(i.get("ms"), int)]
+                print(f"  连点（60ms 间隔点两次视图）：{burst} ms")
+                if burst and single:
+                    med1 = sorted(single)[len(single) // 2]
+                    extra = min(burst) - med1 - 60      # 减去两次点击之间那 60ms
+                    verdict = ("没有明显积压（≈ 单次 + 60ms 间隔）" if extra < 120
+                               else f"比「单次 + 60ms」多 {extra}ms ⇒ 旧预取/退场在积压")
+                    print(f"    → 单次中位 {med1}ms，连点最快 {min(burst)}ms：{verdict}")
+                lts = sp.get("longTasks") or []
+                if sp.get("longTaskSupported"):
+                    print(f"  主线程长任务（>50ms 阻塞）：{len(lts)} 条"
+                          f"{'，最长 ' + str(max(lts)) + 'ms' if lts else ''}")
+                else:
+                    print(f"  主线程长任务：该浏览器不支持 longtask 观测（如实标注，不当成 0）")
+                if sp.get("noViewButton"):
+                    print(f"  [!] 没找到 {sp.get('noViewButton')!r} 对应的光条按钮（少测一项）")
+                for key, label in (("viewNotLanded", "视图"), ("vNotLanded", "V")):
+                    if sp.get(key):
+                        failures.append(f"@{w} switch-perf: 切到{label} {sp.get(key)!r} "
+                                        f"后超时仍未可见（切换没落地）")
+                if not failures:
+                    print(f"  [ok] 切换全部落地（耗时见上；这是 **dev 构建**的基线，"
+                          f"打包版会更快）")
             for b in failures:
                 print("   -", b)
             return 1 if failures else 0

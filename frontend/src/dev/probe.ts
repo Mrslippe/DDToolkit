@@ -2023,6 +2023,128 @@ export async function runUiProbe(): Promise<void> {
     return
   }
 
+  // 切换性能**测量**（`?probe=switch-perf`，2026-09-16）：
+  // 用户报"不同视图 / 不同 V 之间快速切换有明显卡顿"。已知**下限是设计定的** ——
+  // `useSceneTransition` 的 `EXIT_MS = 200` 刻意退场（为了全程不出现"正在加载"闪帧），
+  // 所以这里量的不是"有没有 200ms"，而是三件事：
+  //   ① 视图切换 / V 切换各自的"点击 → 目标可见"耗时分布；
+  //   ② **连点**（60ms 间隔点两次）的总耗时 —— 明显超过单次就说明旧预取在积压（不能中断）；
+  //   ③ 主线程**长任务**（>50ms 阻塞）的条数与最长时间 —— 用来区分"在等动画"与"渲染卡住"。
+  //
+  // ⚠️ 跑在 Vite dev + React 开发模式（StrictMode 双挂载、未压缩）⇒ 绝对值只当**开发态基线**，
+  //    打包版会更快；它的价值是相对信号（哪种切换更贵、贵在动画还是挂载）。
+  if (mode === 'switch-perf') {
+    const result: Record<string, unknown> = {}
+    const longTasks: number[] = []
+    let longTaskSupported = false
+    try {
+      const po = new PerformanceObserver((list) => {
+        for (const e of list.getEntries()) longTasks.push(Math.round(e.duration))
+      })
+      po.observe({ entryTypes: ['longtask'] })
+      longTaskSupported = true
+    } catch {
+      longTaskSupported = false        // 不支持就如实说，别假装"没有长任务"
+    }
+
+    const isExiting = () => !!document.querySelector('.view-body.scene-exit')
+    /** 光条按钮**按索引取**（2026-09-08 用户定序：卡片 → 列表 → 档案 → 档案卡）。
+     *  ⚠️ 不按 title 文本匹配：实测 title 是「档案（直播日历 / 粉丝趋势）」这种长文案，
+     *  精确匹配查不到 ⇒ 第一版直接 break，后面的测量全废。 */
+    const viewBtns = () => Array.from(document.querySelectorAll<HTMLElement>('.view-btn'))
+    const viewBtn = (idx: number) => viewBtns()[idx] || null
+    const settle = async (fn: () => boolean, ms = 4000) => {
+      const t0 = performance.now()
+      while (performance.now() - t0 < ms) {
+        if (fn()) return true
+        await sleep(15)
+      }
+      return false
+    }
+
+    // ① 视图切换：默认停在「展示页」，所以从「帖子列表」开始循环一圈（最后回到展示页）
+    const VIEW_TARGETS: Array<{ idx: number; name: string; sel: string }> = [
+      { idx: 1, name: '帖子列表', sel: '.post-grid, .posts-placeholder' },
+      { idx: 2, name: '档案', sel: '.live-calendar' },
+      { idx: 3, name: '档案卡', sel: '.empty-state' },
+      { idx: 0, name: '展示页', sel: '.hero' },
+    ]
+    const views: Array<{ target: string; ms: number }> = []
+    const notLandedViews: string[] = []
+    for (const t of VIEW_TARGETS) {
+      const btn = viewBtn(t.idx)
+      if (!btn) { result.noViewButton = t.name; continue }
+      await sleep(250)                        // 让上一次切换彻底落地，测量才干净
+      const t0 = performance.now()
+      btn.click()
+      const landed = await settle(() => !!document.querySelector(t.sel) && !isExiting())
+      views.push({ target: t.name, ms: Math.round(performance.now() - t0) })
+      if (!landed) notLandedViews.push(t.name)
+    }
+    result.views = views
+    if (notLandedViews.length) result.viewNotLanded = notLandedViews.join(',')
+
+    // ② V 切换：交替点两个 V（此刻在「展示页」，`.hero-name` 可读）
+    const vItems = () => Array.from(document.querySelectorAll<HTMLElement>('.vtuber-item'))
+    /** 侧栏当前选中项的 V 名 —— 与场景探针同一判据（只比 `.vtuber-name`：整条 item 的文本
+     *  含"直播中"徽章与签名，直接比较会假失败，devlog/080 踩过）。 */
+    const activeName = () =>
+      (document.querySelector('.vtuber-item.active .vtuber-name')?.textContent || '').trim()
+    const vs: Array<{ target: string; ms: number }> = []
+    const notLandedVs: string[] = []
+    result.candidates = vItems().length
+    // 先确保停在「展示页」：让每次 V 切换的起点一致（也避免"上一步没落地"污染这组测量）
+    const cardsBtn = viewBtn(0)
+    if (cardsBtn && (!document.querySelector('.hero') || isExiting())) {
+      cardsBtn.click()
+      await settle(() => !!document.querySelector('.hero') && !isExiting())
+    }
+    if (vItems().length < 2) {
+      result.reason = 'sidebar-too-small'
+    } else {
+      for (let i = 0; i < 4; i++) {
+        const el = vItems()[i % 2 === 0 ? 1 : 0]
+        if (!el) break
+        const target = (el.querySelector('.vtuber-name')?.textContent || '').trim()
+        if (!target || activeName() === target) continue
+        await sleep(250)
+        const t0 = performance.now()
+        el.click()
+        const landed = await settle(() => activeName() === target && !isExiting())
+        vs.push({ target, ms: Math.round(performance.now() - t0) })
+        if (!landed) notLandedVs.push(target)
+      }
+    }
+    result.vs = vs
+    if (notLandedVs.length) result.vNotLanded = notLandedVs.join(',')
+
+    // ③ 连点：60ms 间隔切两次视图，量"第一次点击 → 最终目标可见"的总耗时
+    const burst: number[] = []
+    for (let round = 0; round < 2; round++) {
+      const a = viewBtn(1)      // 帖子列表
+      const b = viewBtn(0)      // 展示页
+      if (!a || !b) break
+      const t0 = performance.now()
+      a.click()
+      await sleep(60)
+      b.click()
+      await settle(() => !!document.querySelector('.hero') && !isExiting())
+      burst.push(Math.round(performance.now() - t0))
+      await sleep(300)
+    }
+    result.burst = burst
+
+    result.longTaskSupported = longTaskSupported
+    result.longTasks = longTasks
+    const pre = document.createElement('pre')
+    pre.id = 'ui-probe'
+    pre.textContent = JSON.stringify({ mode: 'switch-perf', views: [], degraded,
+                                       switchPerf: result })
+    document.body.appendChild(pre)
+    document.title = 'UI_PROBE_DONE'
+    return
+  }
+
   // 首次点 ✕ 的询问流程（`?probe=close-ask`，R20 devlog/097）：
   // 用户 2026-09-15 报的 bug 就在这条链路上（选了"最小化到托盘"之后，托盘「退出」退不出去）。
   // 托盘菜单本身是 OS 级、无头浏览器点不到，但**前端这一半**全能断言：
