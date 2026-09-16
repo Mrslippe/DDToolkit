@@ -259,8 +259,10 @@ async def lifespan(app: FastAPI):
     auth_task = asyncio.create_task(auth_manager.run_maintenance())
     # WBI 密钥预热（v0.9.4）：与 auth 心跳并行，让首次收录不必等一次 nav 往返
     wbi_task = asyncio.create_task(_warm_wbi())
-    # 分词词典预热（2026-09-13，词云自建）：让首次「用弹幕自建」不必等 0.7s 建词典
-    tok_task = asyncio.create_task(_warm_tokenizer())
+    # 分词词典**不再启动预热**（R24/T2，devlog/117）：jieba 前缀词典常驻约 **56MB**
+    # （本机分段实测：加载它 +56.4MB），而它换来的只是"首次点词云少等 0.7s"。
+    # 内存吃紧的机器上这笔账不划算 ⇒ 改成首次真正要用时再建（一次 0.7s）。
+    # 想要老行为的话，在调用点恢复 `asyncio.create_task(_warm_tokenizer())` 即可。
     # 时效分层调度（v0.6.1）：T0 直播状态独立线程（60s）+ T1/T2/T3a 分层轮询
     # （启动链语义并入 T1→T2 首轮；手动任务优先，仅 T0 与之并行）
     start_live_poller()
@@ -274,8 +276,7 @@ async def lifespan(app: FastAPI):
     logger.info("关闭中...")
     auth_task.cancel()
     wbi_task.cancel()
-    tok_task.cancel()
-    for task in (auth_task, wbi_task, tok_task):
+    for task in (auth_task, wbi_task):
         try:
             await task
         except asyncio.CancelledError:

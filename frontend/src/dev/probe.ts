@@ -1730,6 +1730,13 @@ export async function runUiProbe(): Promise<void> {
         .filter((n) => text(n).length > 6).length
       result.aboutInfoRows = dlg.querySelectorAll('.aps-info dt').length
       result.aboutHasWriteInputs = dlg.querySelectorAll('.aps-input, .aps-switch').length
+      // 应用更新面板（R23b/R24）：**浏览器里没有更新这回事** ⇒ 面板要在（说明当前版本），
+      // 但**不许出现「检查更新」按钮**（会点出一个必然失败的请求）。这条判据挡的是
+      // "忘记做环境判断、把桌面端按钮渲染到浏览器里"。
+      const upPanel = dlg.querySelector<HTMLElement>('[data-testid="aps-update"]')
+      result.updatePanel = !!upPanel
+      result.updatePanelText = text(upPanel)
+      result.updateCheckBtn = !!dlg.querySelector('[data-testid="aps-update-check"]')
 
       // ⑫ 主题（R14b/R17）：三张卡片（浅色 / 深色 / 跟随系统），深色**只标不藏**
       const sysDark = window.matchMedia('(prefers-color-scheme: dark)').matches

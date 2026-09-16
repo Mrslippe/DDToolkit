@@ -1071,6 +1071,16 @@ def main() -> int:
                     if aps.get("aboutHasWriteInputs"):
                         failures.append(f"@{w} app-settings: 关于页出现了可写控件"
                                         f"（{aps.get('aboutHasWriteInputs')} 个）—— 只读页不该有输入框")
+                    # 应用更新面板（R23b/R24）：面板要在（显示当前版本），但**浏览器里不许
+                    # 出现「检查更新」按钮** —— 那会点出一个必然失败的请求（探针跑在无头浏览器）
+                    if not aps.get("updatePanel"):
+                        failures.append(f"@{w} app-settings: 关于页没有应用更新面板")
+                    elif aps.get("updateCheckBtn"):
+                        failures.append(f"@{w} app-settings: 浏览器环境下出现了「检查更新」按钮"
+                                        f"（应当只显示'更新只在桌面端可用'）")
+                    elif "更新只在桌面端可用" not in (aps.get("updatePanelText") or ""):
+                        failures.append(f"@{w} app-settings: 更新面板没写清环境限制"
+                                        f"（文案={aps.get('updatePanelText')!r}）")
                     if not aps.get("overSaveDisabled"):
                         failures.append(f"@{w} app-settings: 填了越界值（999）保存钮还能点")
                     if not aps.get("overError"):

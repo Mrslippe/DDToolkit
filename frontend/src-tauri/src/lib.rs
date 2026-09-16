@@ -556,9 +556,33 @@ fn rebuild_main_window(app: &tauri::AppHandle) -> tauri::Result<tauri::WebviewWi
 
 /// 深休眠看门狗：每秒看一眼"隐藏够久了吗"。
 /// 独立线程而不是 timer 回调：逻辑简单、退出时无需注销（进程结束就没了）。
+/// 深休眠看门狗**下一次睡多久**（R24/T1，devlog/117）。
+///
+/// 原来是一个死循环里 `sleep(1s)`：**隐藏期间每秒醒一次**，笔记本上会一直把系统从低功耗
+/// 状态拽起来（而这段时间本来什么都不用做）。现在按"离阈值还有多远"决定：
+/// - 没在隐藏（`hidden_ms = 0`）：5 秒一次足够（隐藏动作本身会立刻置位，最多晚 5 秒发现）；
+/// - 离阈值还远（> 60s）：30 秒一次；
+/// - 快到点了（≤ 60s）：1 秒一次，保证"隐藏满 10 分钟"这一刻的精度。
+///
+/// 抽成纯函数是为了能直接量它（休眠节奏这种东西，出问题只表现为"费电"，界面上看不出来）。
+fn watchdog_nap(hidden_ms: u64, threshold: Duration) -> Duration {
+    if hidden_ms == 0 {
+        return Duration::from_secs(5);
+    }
+    let remaining = threshold.saturating_sub(Duration::from_millis(hidden_ms));
+    if remaining > Duration::from_secs(60) {
+        Duration::from_secs(30)
+    } else {
+        Duration::from_secs(1)
+    }
+}
+
 fn spawn_deep_sleep_watchdog(app: tauri::AppHandle) {
     std::thread::spawn(move || loop {
-        std::thread::sleep(Duration::from_secs(1));
+        let since = HIDDEN_SINCE.load(Ordering::SeqCst);
+        let hidden_ms = if since == 0 { 0 } else { now_ms().saturating_sub(since) };
+        // 先睡再判：睡多久由"当前状态"决定（见 watchdog_nap 的说明）
+        std::thread::sleep(watchdog_nap(hidden_ms, deep_sleep_after()));
         let since = HIDDEN_SINCE.load(Ordering::SeqCst);
         if since == 0 || QUITTING.load(Ordering::SeqCst) || DEEP_SLEPT.load(Ordering::SeqCst) {
             continue;
@@ -1106,6 +1130,19 @@ mod tests {
         );
         // 一个**几乎不可能有人监听**的端口：探不到就是 None（不能瞎猜成"有代理"）
         assert_eq!(probe_ports(&[9], Duration::from_millis(50)), None);
+    }
+
+    /// **深休眠看门狗的休眠节奏**（R24/T1）：原来每秒醒一次（隐藏期间也醒），
+    /// 笔记本上会一直把系统从低功耗状态拽起来。判据：没隐藏 5s · 离阈值 >60s 用 30s ·
+    /// 快到点（≤60s）才 1s（这一段要保证"隐藏满 10 分钟"的精度）。
+    #[test]
+    fn watchdog_nap_backs_off_when_nothing_to_do() {
+        let th = Duration::from_secs(600);
+        assert_eq!(watchdog_nap(0, th), Duration::from_secs(5), "没隐藏：5 秒足够");
+        assert_eq!(watchdog_nap(60_000, th), Duration::from_secs(30), "还早：30 秒一次");
+        assert_eq!(watchdog_nap(590_000, th), Duration::from_secs(1), "快到了：1 秒一次");
+        // 已经超过阈值也要返回 1 秒（下一轮就该动手，别睡太久）
+        assert_eq!(watchdog_nap(900_000, th), Duration::from_secs(1));
     }
 
     /// 托盘退出那条判据的**解析部分**（`cargo test` 跑）。
