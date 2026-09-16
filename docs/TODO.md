@@ -249,7 +249,7 @@
 
 | 门禁 | 命令 | 基线 |
 |---|---|---|
-| 后端 | `python -m pytest -q` | **448 passed**（R11 检索 16 + API 5；发布脚本 28；管线复盘 15；未登录能力 24；R13 路由契约 +1；R12a 风控字段 +1；R14a 运行时设置 +24；R14b 偏好 +5；**R18 关闭语义偏好 +1**；**R20 文案扫描（禁 `**` 与反引号）+1 / prefs 白名单 +1**；**R21 导航只有两大类 / 关键项白名单 / 成对不拆散 +3**；**R22 数据目录体检 6 / 图片缓存上限 5**；含 1 条真实网络冒烟，离线环境会 skip） |
+| 后端 | `python -m pytest -q` | **449 passed**（R11 检索 16 + API 5；发布脚本 28；管线复盘 15；未登录能力 24；R13 路由契约 +1；R12a 风控字段 +1；R14a 运行时设置 +24；R14b 偏好 +5；**R18 关闭语义偏好 +1**；**R20 文案扫描（禁 `**` 与反引号）+1 / prefs 白名单 +1**；**R21 导航只有两大类 / 关键项白名单 / 成对不拆散 +3**；**R22 数据目录体检与库维护 7 / 图片缓存上限 5**；含 1 条真实网络冒烟，离线环境会 skip） |
 | 桌面壳 | `cargo test`（工作目录 `frontend/src-tauri`） | **2 passed**（托盘退出的判据：`manual_running` 字段识别 / 字段缺失或异常一律当"没在跑"） |
 | 未登录能力矩阵 | `python scripts/capability_matrix.py [--include-content] --write` | 两态逐接口实测，fixture 落 `tests/fixtures/capability_matrix.json`；结论：匿名可用 = 检索 / 粉丝数 / 直播状态 / 第三方 / 本地，**内容接口 412 需登录**（devlog/086） |
 | 文档漂移 | `python scripts/doc_check.py`（或 `dev_check.py --docs`） | **0 FAIL**（1 条历史警告：41 篇早期 devlog 按批次未逐篇进索引） |

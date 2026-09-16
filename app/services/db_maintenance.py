@@ -178,9 +178,47 @@ def ensure_incremental_autovacuum(
             cur.execute("PRAGMA auto_vacuum=INCREMENTAL")
             cur.execute("VACUUM")
             cur.execute("PRAGMA incremental_vacuum")   # 立刻把已有的空闲页还掉
+            # ⚠️ 真库实测（2026-09-16）：WAL 模式下 `VACUUM` 会把**整库重写进 WAL** ——
+            # 不 checkpoint 的话磁盘上会多出约等于库大小的一份 WAL（54.3MB 的库变成
+            # "库 50.9MB + WAL 54MB"），而我们做这件事的初衷正是省地方。
+            cur.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             return "converted"
         finally:
             cur.close()
+    finally:
+        raw.close()
+
+
+def checkpoint_wal(engine: Engine | None = None) -> dict[str, int]:
+    """把 WAL 并回主库并**截断 WAL 文件**，返回 `{"before": b, "after": b}` 字节数。
+
+    为什么必须有这一步（真库实测，2026-09-16）：WAL 模式下 `VACUUM` 会把**整库重写进 WAL** ——
+    54.3MB 的库在切换 auto_vacuum 之后留下 **54MB 的 WAL**，`dir_stats()` 一眼看出
+    "库怎么突然变 105MB"。它还不会自己消失：只有**最后一个连接关闭**时 SQLite 才会
+    checkpoint，而应用自己就握着一池连接。
+
+    启动时（几乎没有并发）做一次最划算；已经切换过的库也走这条路 ——
+    否则上一次留下的胖 WAL 会一直躺在磁盘上。
+    """
+    eng = engine or default_engine
+    raw = eng.raw_connection()
+    try:
+        dbapi = getattr(raw, "driver_connection", raw)
+        dbapi.isolation_level = None
+        cur = dbapi.cursor()
+        try:
+            before = _file_bytes(Path(str(_database_path()) + "-wal"))
+            cur.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            after = _file_bytes(Path(str(_database_path()) + "-wal"))
+            if before:
+                logger.info(
+                    f"WAL 已回收：{before / 1048576:.1f}MB → {after / 1048576:.1f}MB")
+            return {"before": before, "after": after}
+        finally:
+            cur.close()
+    except Exception as e:  # noqa: BLE001 - 收不回来也不该影响启动
+        logger.warning(f"WAL 回收失败（不影响启动）: {e}")
+        return {"before": 0, "after": 0}
     finally:
         raw.close()
 

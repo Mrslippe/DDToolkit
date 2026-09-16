@@ -72,6 +72,10 @@ def test_ensure_incremental_autovacuum_converts_once(tmp_path):
     assert m.ensure_incremental_autovacuum(eng) == "converted"
     assert m.sqlite_stats(eng)["auto_vacuum"] == 2       # INCREMENTAL，且持久在库头里
     assert m.ensure_incremental_autovacuum(eng) == "already"
+    # WAL 必须被 checkpoint 掉：真库实测里 VACUUM 会把整库重写进 WAL，
+    # 不截断的话磁盘上会多留一份≈库大小的 WAL —— 那就白干这件事了
+    wal = Path(str(tmp_path / "a.db") + "-wal")
+    assert (not wal.exists()) or wal.stat().st_size == 0
 
 
 def test_ensure_skips_big_databases(tmp_path):
@@ -104,3 +108,33 @@ def test_incremental_vacuum_is_a_noop_without_freelist(tmp_path):
     with eng.begin() as c:
         c.execute(text("create table t(id integer primary key)"))
     assert m.incremental_vacuum(eng) == 0
+
+
+def test_checkpoint_wal_truncates_a_bloated_wal(tmp_path, monkeypatch):
+    """WAL 会胖到 ≈ 库大小（`VACUUM` 会把整库写进 WAL），而且**只有最后一个连接关闭**时
+    SQLite 才自动 checkpoint —— 应用握着连接池，所以必须显式截断一次。
+
+    这里用 `wal_autocheckpoint=0` 造一个胖 WAL（否则 SQLite 自己就 checkpoint 了，
+    用例会变成"什么都没测"）。
+    """
+    db = tmp_path / "w.db"
+    monkeypatch.setattr(settings, "DATABASE_URL", f"sqlite:///{db}")
+    eng = create_engine(f"sqlite:///{db}")
+    with eng.begin() as c:
+        c.execute(text("PRAGMA journal_mode=WAL"))
+        c.execute(text("PRAGMA wal_autocheckpoint=0"))
+        c.execute(text("create table t(id integer primary key, v text)"))
+    # 占住一条连接不放，模拟"应用一直握着连接池"
+    keep = eng.connect()
+    keep.execute(text("PRAGMA wal_autocheckpoint=0"))
+    for _ in range(500):
+        keep.execute(text("insert into t(v) values (:v)"), {"v": "y" * 400})
+    keep.commit()
+    wal = Path(str(db) + "-wal")
+    assert wal.exists() and wal.stat().st_size > 0
+
+    got = m.checkpoint_wal(eng)
+    assert got["before"] > 0
+    assert got["after"] == 0                 # TRUNCATE：文件被截到 0
+    keep.close()
+    eng.dispose()

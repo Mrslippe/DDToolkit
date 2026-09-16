@@ -237,10 +237,14 @@ async def lifespan(app: FastAPI):
     # （SQLite 默认只把删掉的行丢进 freelist，文件永不缩小）。
     # 带体积门槛、失败只留日志 —— 这条是"体验优化"，绝不能挡住启动。
     try:
-        from app.services.db_maintenance import ensure_incremental_autovacuum
+        from app.services.db_maintenance import checkpoint_wal, ensure_incremental_autovacuum
         _av = ensure_incremental_autovacuum()
         if _av != "already":
             logger.info(f"数据库维护：auto_vacuum 切换结果 = {_av}")
+        # WAL 回收（R22）：VACUUM 会把整库重写进 WAL（真库实测留下 54MB），
+        # 而且只有"最后一个连接关闭"时 SQLite 才 checkpoint —— 应用自己握着连接池，
+        # 所以启动时（几乎无并发）显式截断一次。
+        checkpoint_wal()
     except Exception as e:
         logger.warning(f"数据库维护跳过（不影响启动）: {type(e).__name__}: {e}")
 
