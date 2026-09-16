@@ -1,14 +1,20 @@
-"""聚合发布产物到统一目录 dist-release/（安装包 + 便携版 + 主程序）。
+"""聚合发布产物到统一目录 dist-release/（安装包 + 便携版 + 主程序 + 应用内更新产物）。
 
 用法: python scripts/collect_release.py [--with-main]
 产物: dist-release/
-  DDtoolkit-portable-win64.zip       便携版（免安装：主程序 + 后端目录）
-  DDtoolkit_<version>_x64-setup.exe  NSIS 安装包（如已 tauri build）
-  ddtoolkit.exe                      裸主程序（仅 --with-main）
+  DDtoolkit-portable-win64.zip            便携版（免安装：主程序 + 后端目录）
+  DDtoolkit_<version>_x64-setup.exe       NSIS 安装包（如已 tauri build）
+  DDtoolkit_<version>_x64-setup.nsis.zip  **应用内更新的载体**（R23；updater 下载这个）
+  latest.json                             **更新清单**（版本/说明/平台资产 url + 签名）
+  ddtoolkit.exe                           裸主程序（仅 --with-main）
 
 前置: npm run build:backend 与 npm run tauri:build 已执行。
+注意: `latest.json` 里的 `url` 指向 GitHub Release 的资产地址，所以**必须先有 tag**（`v<version>`）；
+      签名取自 tauri 产出的 `.sig`（`bundle.createUpdaterArtifacts = true` 才会有）。
 """
 import argparse
+import datetime as _dt
+import json
 import shutil
 import zipfile
 from pathlib import Path
@@ -20,6 +26,9 @@ BACKEND_SRC = FRONTEND / "src-tauri" / "binaries" / "backend"
 
 OUT_DIR = ROOT / "dist-release"
 ZIP_NAME = "DDtoolkit-portable-win64.zip"
+REPO = "Mrslippe/DDToolkit"
+# `latest.json` 的说明字段：发布说明动辄几千字，更新器弹窗里只要开头一段
+NOTES_LIMIT = 1200
 
 
 def _find_app_exe() -> Path | None:
@@ -28,6 +37,70 @@ def _find_app_exe() -> Path | None:
         if p.exists():
             return p
     return None
+
+
+def _version() -> str:
+    """版本号真源 = `frontend/package.json`（与 tauri.conf.json 六处同步，见 RELEASE.md §2）。"""
+    data = json.loads((FRONTEND / "package.json").read_text(encoding="utf-8"))
+    return str(data["version"])
+
+
+def latest_json(version: str, notes: str, signature: str, zip_name: str,
+                pub_date: str | None = None, repo: str = REPO) -> dict:
+    """生成 updater 的清单（纯函数，便于用例覆盖 —— 它的字段名写错更新就会静默失效）。
+
+    契约（Tauri v2 updater）：`version` 必须**大于**当前版本才会提示；`platforms` 的键是
+    `windows-x86_64`；每项要 `signature`（`.sig` 全文）与 `url`（可直接下载的资产地址）。
+    URL 走 `releases/download/v<版本>/<资产名>`（**不是** `latest/download`）——
+    否则用户会拿到"最新版"的资产却配上旧版本的签名，校验必失败。
+    """
+    if not signature.strip():
+        raise ValueError("签名为空：更新包没签名就等于没更新（updater 会拒绝）")
+    body = notes.strip()
+    if len(body) > NOTES_LIMIT:
+        body = body[:NOTES_LIMIT].rstrip() + "\n\n……（完整说明见发布页）"
+    return {
+        "version": version,
+        "notes": body,
+        "pub_date": pub_date or _dt.datetime.now(_dt.timezone.utc)
+        .replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "platforms": {
+            "windows-x86_64": {
+                "signature": signature.strip(),
+                "url": f"https://github.com/{repo}/releases/download/v{version}/{zip_name}",
+            }
+        },
+    }
+
+
+def _collect_updater(version: str) -> Path | None:
+    """把 `bundle/nsis/*.nsis.zip` + `.sig` 收进输出目录，并写 `latest.json`。"""
+    nsis_dir = RELEASE / "bundle" / "nsis"
+    if not nsis_dir.exists():
+        print(f"[release] WARN: 没有 {nsis_dir}（更新产物缺失：bundle.createUpdaterArtifacts 没开？）")
+        return None
+    zips = sorted(nsis_dir.glob("*.nsis.zip"))
+    if not zips:
+        print("[release] WARN: 没找到 *.nsis.zip —— 应用内更新会拿不到包（旧版本仍可手工下载安装）")
+        return None
+    src = zips[-1]
+    sig = src.with_name(src.name + ".sig")
+    if not sig.exists():
+        print(f"[release] WARN: 缺少签名 {sig.name} —— 更新包无法被校验，跳过 latest.json")
+        return None
+
+    dst_zip = OUT_DIR / src.name
+    shutil.copy2(src, dst_zip)
+    print(f"[release] 更新包 -> {dst_zip.name}  ({dst_zip.stat().st_size / 1024 / 1024:.1f} MB)")
+
+    notes_path = ROOT / "docs" / "releases" / f"v{version}.md"
+    notes = notes_path.read_text(encoding="utf-8") if notes_path.exists() else f"DDtoolkit v{version}"
+    payload = latest_json(version, notes, sig.read_text(encoding="utf-8"), src.name)
+    out = OUT_DIR / "latest.json"
+    out.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print(f"[release] 更新清单 -> latest.json  (version={payload['version']} · "
+          f"签名 {len(payload['platforms']['windows-x86_64']['signature'])} 字符)")
+    return out
 
 
 def _portable(work: Path) -> Path:

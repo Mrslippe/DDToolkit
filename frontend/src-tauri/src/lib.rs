@@ -763,6 +763,10 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
+        // 应用内更新（R23）：updater 负责"检查 + 下载 + 签名校验 + 安装"，
+        // process 只用来在装完后重启自己（`relaunch()`）。
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(BackendPort(Mutex::new(0)))
         .manage(BackendChild(Mutex::new(None)))
         .manage(BackendJob(Mutex::new(0)))

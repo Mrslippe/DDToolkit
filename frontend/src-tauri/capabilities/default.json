@@ -13,6 +13,8 @@
     "core:event:allow-listen",
     "core:event:allow-emit",
     "shell:allow-open",
-    "dialog:allow-open"
+    "dialog:allow-open",
+    "updater:default",
+    "process:allow-restart"
   ]
 }

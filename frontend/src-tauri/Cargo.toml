@@ -19,6 +19,9 @@ tauri-plugin-shell = "2"
 tauri-plugin-single-instance = "2"
 # 文件夹选择框（R22-B2d 数据目录迁移）：用户口径是"系统文件夹选择框"
 tauri-plugin-dialog = "2"
+# 应用内更新（R23，devlog/113）：官方 updater（签名校验 + latest.json）+ 装完重启
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

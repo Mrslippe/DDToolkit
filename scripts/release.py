@@ -189,6 +189,9 @@ def asset_expectations(version: str) -> list[tuple[str, float, float]]:
     return [
         (f"DDtoolkit_{version}_x64-setup.exe", 20.0, 300.0),
         ("DDtoolkit-portable-win64.zip", 25.0, 400.0),
+        # 应用内更新（R23）：updater 下载的就是这个 zip（NSIS 安装包的压缩包），
+        # 版本号必须在文件名里 —— `latest.json` 的 url 按它拼
+        (f"DDtoolkit_{version}_x64-setup.nsis.zip", 20.0, 400.0),
     ]
 
 
@@ -441,9 +444,39 @@ def step_verify(ctx: Ctx) -> None:
             problems.append(f"{name} 大小异常（{mb:.1f} MB 不在 {lo}~{hi} MB）")
 
     # 旧版本残留：装的时候会让人拿错包（RELEASE.md §3 明确要求删）
-    for f in DIST.glob("DDtoolkit_*_x64-setup.exe"):
+    for f in list(DIST.glob("DDtoolkit_*_x64-setup.exe")) + list(DIST.glob("*.nsis.zip")):
         if f.name not in dict((n, 1) for n, _, _ in asset_expectations(ctx.version)):
-            problems.append(f"旧版本安装包残留: {f.name} —— 删除后重跑本步")
+            problems.append(f"旧版本产物残留: {f.name} —— 删除后重跑本步")
+
+    # 应用内更新清单（R23）：字段写错/签名缺失都会让更新**静默失效**
+    # （用户只会看到"检查更新失败"或根本收不到新版本），所以逐项验。
+    latest = DIST / "latest.json"
+    if not latest.exists():
+        problems.append("缺 latest.json —— 应用内更新拿不到清单（检查 collect_release 的更新产物步骤）")
+    else:
+        import json as _json
+        try:
+            body = _json.loads(latest.read_text(encoding="utf-8"))
+        except _json.JSONDecodeError as e:
+            problems.append(f"latest.json 不是合法 JSON：{e}")
+            body = {}
+        if body:
+            plat = (body.get("platforms") or {}).get("windows-x86_64") or {}
+            sig = (plat.get("signature") or "").strip()
+            url = (plat.get("url") or "").strip()
+            want_zip = f"DDtoolkit_{ctx.version}_x64-setup.nsis.zip"
+            if body.get("version") != ctx.version:
+                problems.append(f"latest.json 版本是 {body.get('version')!r}，应为 {ctx.version!r}")
+            if not sig:
+                problems.append("latest.json 缺签名（signature 为空）—— updater 会拒绝安装")
+            if not url.endswith("/" + want_zip):
+                problems.append(f"latest.json 的 url 应以 /{want_zip} 结尾，实得 {url!r}")
+            if not (DIST / want_zip).exists():
+                problems.append(f"latest.json 指向 {want_zip}，但产物目录里没有它")
+            ctx.results["updater"] = {"version": body.get("version"),
+                                      "sig_len": len(sig), "url": url}
+            print(f"  {OK if not problems else FAIL} 更新清单: version={body.get('version')} · "
+                  f"签名 {len(sig)} 字符 · 资产 {want_zip}")
 
     # NSIS：后端目录被"打平"过（devlog/036），装了起不来
     nsi = TAURI / "target" / "release" / "nsis" / "x64" / "installer.nsi"
