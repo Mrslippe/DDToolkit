@@ -185,27 +185,32 @@ pub fn plan_migration(source: &Path, target_root: &Path) -> Result<Plan, String>
     if !target_root.is_dir() {
         return Err(format!("目标目录不存在：{}", target_root.display()));
     }
-    // 规范化后再比包含关系（`..`/大小写/短路径名都可能骗过字符串比较）
-    let src = canonical(source)?;
-    let dst_root = canonical(target_root)?;
-    if dst_root == src {
+    // ⚠️ **规范路径只用于"包含关系"校验**（消除 `..`、大小写、8.3 短名），
+    //    但对外**一律用用户看到的原始路径**：`canonicalize()` 在 Windows 上会加 `\\?\`
+    //    verbatim 前缀，而那个前缀一旦进了 `DDTOOLKIT_DATA_DIR`（进而进 `sqlite:///`），
+    //    Python/SQLAlchemy 就**打不开库** —— 真机实测（devlog/111）：
+    //    `sqlalchemy.exc.OperationalError: unable to open database file`，
+    //    后端直接退出，迁移被误判成"新目录启动失败"。
+    let src_c = canonical(source)?;
+    let dst_c = canonical(target_root)?;
+    if dst_c == src_c {
         return Err("目标目录与当前数据目录是同一个".to_string());
     }
-    if dst_root.starts_with(&src) {
+    if dst_c.starts_with(&src_c) {
         return Err("目标目录在当前数据目录里面（复制会自我递归）".to_string());
     }
-    if src.starts_with(&dst_root) {
+    if src_c.starts_with(&dst_c) {
         return Err("当前数据目录在目标目录里面".to_string());
     }
 
-    let (files, skipped) = collect(&src)?;
+    let (files, skipped) = collect(&src_c)?;
     let bytes: u64 = files.values().sum();
     // 目标子目录要**干净**：已存在且非空就换一个带时间戳的（见 `pick_data_dir` 的说明）
-    let data_dir = pick_data_dir(&dst_root)?;
-    if data_dir.starts_with(&src) {
+    let data_dir = pick_data_dir(target_root)?;
+    if data_dir.starts_with(source) {
         return Err("新数据目录会在当前数据目录里面".to_string());
     }
-    if let Some(free) = free_space(&dst_root) {
+    if let Some(free) = free_space(target_root) {
         let need = (bytes as f64 * SPACE_MARGIN) as u64;
         if free < need {
             return Err(format!(
@@ -216,8 +221,8 @@ pub fn plan_migration(source: &Path, target_root: &Path) -> Result<Plan, String>
         }
     }
     Ok(Plan {
-        source: src,
-        target_root: dst_root,
+        source: source.to_path_buf(),
+        target_root: target_root.to_path_buf(),
         data_dir,
         files: files.len(),
         bytes,
@@ -438,12 +443,16 @@ mod tests {
         std::fs::write(occupied.join("logs").join("app.log"), b"old-log").unwrap();
 
         let plan = plan_migration(&src, &target).unwrap();
-        // ⚠️ `plan_migration` 里的路径是 `canonicalize` 过的（Windows 上会带 `\\?\` 前缀），
-        //    所以比较也要用规范路径 —— 否则断言必失败（第一版就栽在这）
-        let occupied_canon = std::fs::canonicalize(&occupied).unwrap();
-        let target_canon = std::fs::canonicalize(&target).unwrap();
-        assert_ne!(plan.data_dir, occupied_canon, "不能复用已有内容的目录");
-        assert_eq!(plan.data_dir.parent().unwrap(), target_canon);
+        // ⚠️ **回归断言（真机失败复现，devlog/111）**：对外路径**绝不能带 `\\?\` verbatim 前缀** ——
+        //    它进了 `DDTOOLKIT_DATA_DIR` / `sqlite:///` 会让 Python 打不开库，
+        //    表现为"新目录启动失败"（后端日志只有两行 + stderr 里 OperationalError）。
+        assert!(
+            !plan.data_dir.to_string_lossy().starts_with(r"\\?\"),
+            "数据目录不能带 verbatim 前缀：{}",
+            plan.data_dir.display()
+        );
+        assert_ne!(plan.data_dir, occupied, "不能复用已有内容的目录");
+        assert_eq!(plan.data_dir.parent().unwrap(), target);
         // 关键：这一次尝试**能成功**（旧内容一个字节都不动）
         copy_tree(&plan).unwrap();
         verify_copy(&plan).unwrap();
@@ -463,7 +472,7 @@ mod tests {
         std::fs::create_dir_all(target.join(DATA_SUBDIR)).unwrap();
 
         let plan = plan_migration(&src, &target).unwrap();
-        assert_eq!(plan.data_dir, std::fs::canonicalize(target.join(DATA_SUBDIR)).unwrap());
+        assert_eq!(plan.data_dir, target.join(DATA_SUBDIR));   // 对外是原始路径，不带 verbatim 前缀
         copy_tree(&plan).unwrap();
         verify_copy(&plan).unwrap();
     }
