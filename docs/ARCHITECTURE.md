@@ -3,7 +3,7 @@
 > 适用版本：`main`（2026-09-13，`MIGRATION_HEAD = f004`）。
 > 本文是**入口文档**：先看这里建立全貌，再按需进两份深度文档——
 > - `docs/GLOSSARY.md`：**查名词/代码路径**（改 bug 或做需求第一步）；
-> - `docs/backend-repositories-and-routers.md`：11 张表的列级定义、11 个仓储类、54 个 HTTP 操作；
+> - `docs/backend-repositories-and-routers.md`：11 张表的列级定义、11 个仓储类、HTTP 路由计数（三种数法见该文 §3）；
 > - `docs/backend-fetch-pipeline.md`：抓取链路细节（API 清单、节流测算、风控判定、停止原因）。
 > 前端形态见 `docs/UI-MAP.md`；本地开发/验证见 `docs/DEV-LOOP.md`；全部文档索引见 `docs/README.md`。
 
