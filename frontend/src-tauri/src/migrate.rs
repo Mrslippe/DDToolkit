@@ -49,6 +49,44 @@ pub struct CopyReport {
 /// 目标目录下的固定子目录名（用户口径：**自动建子目录**，不把库直接扔在所选目录里）
 const DATA_SUBDIR: &str = "DDToolkit-data";
 
+/// 挑一个**干净**的目标子目录（R22-B2d 修复，devlog/109）。
+///
+/// ⚠️ 真机实测（2026-09-16）第一次迁移就撞在这上面：用户选的 `E:\test` 下面**早就有**
+/// 一份完整的数据目录 `DDToolkit-data\`，我的代码直接往里复制 ⇒ 嵌出一层同名目录、
+/// 逐文件校验自然失败；**而且失败留下的半成品会让之后每一次重试都必然失败**（死胡同）。
+///
+/// 现在的规则：
+/// 1. `DDToolkit-data` 不存在或**是空目录** ⇒ 用它（最常见、最干净）；
+/// 2. 已存在且非空 ⇒ 改用 `DDToolkit-data-<epoch 秒>`，**绝不动用户已有的东西**，
+///    而且这一次尝试一定有一个空的目标（重试永远有机会成功）。
+fn pick_data_dir(root: &Path) -> Result<PathBuf, String> {
+    let preferred = root.join(DATA_SUBDIR);
+    if !preferred.exists() {
+        return Ok(preferred);
+    }
+    if preferred.is_dir() && is_empty_dir(&preferred)? {
+        return Ok(preferred);
+    }
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let alt = root.join(format!("{DATA_SUBDIR}-{stamp}"));
+    if alt.exists() {
+        return Err(format!(
+            "目标目录下 {} 与 {} 都已存在，请换一个目录",
+            preferred.display(),
+            alt.display()
+        ));
+    }
+    Ok(alt)
+}
+
+fn is_empty_dir(p: &Path) -> Result<bool, String> {
+    let mut entries = std::fs::read_dir(p).map_err(|e| format!("读目录失败 {}：{e}", p.display()))?;
+    Ok(entries.next().is_none())
+}
+
 /// 递归收集要复制的文件：`(相对路径, 字节数)`。跳过 `SKIP_DIRS` 与符号链接。
 pub fn collect(source: &Path) -> Result<(BTreeMap<PathBuf, u64>, Vec<String>), String> {
     let mut out = BTreeMap::new();
@@ -148,7 +186,8 @@ pub fn plan_migration(source: &Path, target_root: &Path) -> Result<Plan, String>
 
     let (files, skipped) = collect(&src)?;
     let bytes: u64 = files.values().sum();
-    let data_dir = dst_root.join(DATA_SUBDIR);
+    // 目标子目录要**干净**：已存在且非空就换一个带时间戳的（见 `pick_data_dir` 的说明）
+    let data_dir = pick_data_dir(&dst_root)?;
     if data_dir.starts_with(&src) {
         return Err("新数据目录会在当前数据目录里面".to_string());
     }
@@ -358,6 +397,53 @@ mod tests {
         let src = fake_data_dir(&root);
         assert!(plan_migration(&src, &root.join("不存在")).is_err());
         assert!(plan_migration(&src, Path::new("相对路径")).is_err());
+    }
+
+    /// **回归用例（真机失败复现，devlog/109）**：目标目录下**已有一份非空的
+    /// `DDToolkit-data`** 时（用户之前实验留下的），迁移必须自动改用带时间戳的子目录，
+    /// 而不是往旧目录里嵌一层 —— 后者会让逐文件校验永远失败，重试也永远失败。
+    #[test]
+    fn dirty_target_dir_falls_back_to_a_fresh_subdir_and_then_succeeds() {
+        let root = temp_root("dirty");
+        let src = fake_data_dir(&root);
+        let target = root.join("目标盘");
+        std::fs::create_dir_all(&target).unwrap();
+
+        // 先造出"目标里已有一份完整数据目录"的现场（正是真机上发生的事）
+        let occupied = target.join(DATA_SUBDIR);
+        std::fs::create_dir_all(occupied.join("logs")).unwrap();
+        std::fs::write(occupied.join("vtuber.db"), b"old-db").unwrap();
+        std::fs::write(occupied.join("logs").join("app.log"), b"old-log").unwrap();
+
+        let plan = plan_migration(&src, &target).unwrap();
+        // ⚠️ `plan_migration` 里的路径是 `canonicalize` 过的（Windows 上会带 `\\?\` 前缀），
+        //    所以比较也要用规范路径 —— 否则断言必失败（第一版就栽在这）
+        let occupied_canon = std::fs::canonicalize(&occupied).unwrap();
+        let target_canon = std::fs::canonicalize(&target).unwrap();
+        assert_ne!(plan.data_dir, occupied_canon, "不能复用已有内容的目录");
+        assert_eq!(plan.data_dir.parent().unwrap(), target_canon);
+        // 关键：这一次尝试**能成功**（旧内容一个字节都不动）
+        copy_tree(&plan).unwrap();
+        verify_copy(&plan).unwrap();
+        assert_eq!(std::fs::read(occupied.join("vtuber.db")).unwrap(), b"old-db");
+        assert_eq!(
+            std::fs::read(occupied.join("logs").join("app.log")).unwrap(),
+            b"old-log"
+        );
+    }
+
+    /// 空的 `DDToolkit-data` 可以复用（重试时会留下这样的空壳，不该逼用户换目录）
+    #[test]
+    fn empty_target_subdir_is_reused() {
+        let root = temp_root("empty-sub");
+        let src = fake_data_dir(&root);
+        let target = root.join("目标盘");
+        std::fs::create_dir_all(target.join(DATA_SUBDIR)).unwrap();
+
+        let plan = plan_migration(&src, &target).unwrap();
+        assert_eq!(plan.data_dir, std::fs::canonicalize(target.join(DATA_SUBDIR)).unwrap());
+        copy_tree(&plan).unwrap();
+        verify_copy(&plan).unwrap();
     }
 
     #[test]
