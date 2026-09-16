@@ -164,7 +164,7 @@ Windows 桌面应用，数据全部在本地 SQLite 里，不经过任何服务�
 │  ├─ services/       抓取调度（T0–T4 分层）、平台接入、第三方源、认证、WBI、类型引擎、数据库维护
 │  └─ core/           配置（数据目录 / 环境变量）、数据库引擎与 PRAGMA
 ├─ alembic/           数据库迁移链（a001 → f004，17 个版本，启动时自动升级）
-├─ tests/             pytest 测试（461 条）
+├─ tests/             pytest 测试（用例基线见 docs/TODO.md §6.2）
 ├─ scripts/           维护与构建脚本（dev_check / ui_probe / doc_check / build_backend / collect_release 等）
 ├─ devlog/            开发日志（按批次一篇，当前 001–118）
 ├─ docs/              文档：入口见 docs/README.md（术语表 / 架构 / 深度文档 / 指南 / 设计资产）
@@ -186,7 +186,7 @@ pip install -r requirements.txt
 python backend_main.py
 
 # 测试与检查
-python -m pytest tests -q -p no:cacheprovider          # 后端 461 条
+python -m pytest tests -q -p no:cacheprovider          # 后端（用例基线见 docs/TODO.md §6.2）
 python scripts/dev_check.py --docs                      # 开发态自检（后端链路）+ 文档漂移门禁
 python scripts/ui_probe.py                              # 界面布局不变量（真实浏览器三档宽度）
 frontend\node_modules\.bin\tsc.cmd -p frontend\tsconfig.json --noEmit

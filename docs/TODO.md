@@ -131,10 +131,12 @@
 - **发版**：**v1.0.1 已发布**（2026-09-15，覆盖 devlog 082–084，[Release](https://github.com/Mrslippe/DDToolkit/releases/tag/v1.0.1)，
   release id 389029336，安装包 56.3MB / 便携 70.3MB）；装机验证（直装版 `_internal` + 首启、便携版解压启动）
   与 PAT 吊销**用户已确认完成**（2026-09-15）。
-  **v1.0.2**（覆盖 devlog 085–097）：tag 已推送到 `b596f13`（含发布前修掉的两个实测问题 —— 托盘退出 / 设置窗口渲染；
-  原先那次 tag 指向 `2360f9d`，按用户口径**移动到修复后的提交**）、`main` 已对齐、产物已重建并校验
-  （setup 56.4MB / 便携 70.5MB / FileVersion 1.0.2）；**GitHub Release 待建** —— 有 token 时一条命令：
-  `python scripts/release.py 1.0.2 --from release`（资产在 `dist-release/`，幂等）。
+  **v1.0.2**（覆盖 devlog 085–118）：tag `v1.0.2` = **`36a7ba1`** 已在远端（发布前把 R20–R24 的实测问题都修完
+  才定版，期间按用户口径**移动过三次**）、`main` 已对齐、产物按该提交重建并校验
+  （setup **57.5MB** / 便携 **71.9MB** / 更新清单签名 420 字符 / FileVersion 1.0.2）；
+  **GitHub Release 待建** —— 有 token 时一条命令：
+  `python scripts/release.py 1.0.2 --from release`（资产在 `dist-release/`，幂等；
+  续跑是否保留 release 由**远端 tag 是否存在**判定，见 devlog/120）。
   发布方式已收敛为一条命令：**`python scripts/release.py <版本>`**（devlog/084，手册 `docs/RELEASE.md`）——
   脚本做版本同步/门禁/打版/产物校验/提交/tag/推送/Release，**只有两件事仍需你亲自做**：
   装一次直装版确认 `binaries\backend\_internal\` 存在且首启能过（v1.0.2 起**顺带验托盘**：✕ 隐藏 → 托盘退出能真退出）、
@@ -248,18 +250,18 @@
 > 索引已移入 **`docs/ROADMAP-DONE.md` → 「批次 → devlog 索引」**（2026-09-13 整理：
 > 本文件只留"要干什么"与当前基线，历史索引与已完成条目同处一份文件更好查）。
 
-### 6.2 当前门禁基线（2026-09-15 实测 / 复核，R20 批次）
+### 6.2 当前门禁基线（2026-09-16 实测 / 复核，R24 批次）
 
 | 门禁 | 命令 | 基线 |
 |---|---|---|
-| 后端 | `python -m pytest -q` | **455 passed**（R11 检索 16 + API 5；发布脚本 28；管线复盘 15；未登录能力 24；R13 路由契约 +1；R12a 风控字段 +1；R14a 运行时设置 +24；R14b 偏好 +5；**R18 关闭语义偏好 +1**；**R20 文案扫描（禁 `**` 与反引号）+1 / prefs 白名单 +1**；**R21 导航只有两大类 / 关键项白名单 / 成对不拆散 +3**；**R22 数据目录体检与库维护 7 / 图片缓存上限 5 / 存储接口与缓存全清 6**；含 1 条真实网络冒烟，离线环境会 skip） |
-| 桌面壳 | `cargo test`（工作目录 `frontend/src-tauri`） | **2 passed**（托盘退出的判据：`manual_running` 字段识别 / 字段缺失或异常一律当"没在跑"） |
+| 后端 | `python -m pytest -q` | **462 passed**（2026-09-16 实测；上次记录 455 —— 期间 R22 周边 / R23 更新链 / R24 / 发布脚本续跑判据共 +7。分项：R11 检索 16 + API 5；发布脚本 30；管线复盘 15；未登录能力 24；R13 路由契约 +1；R12a 风控字段 +1；R14a 运行时设置 +24；R14b 偏好 +5；**R18 关闭语义偏好 +1**；**R20 文案扫描（禁 `**` 与反引号）+1 / prefs 白名单 +1**；**R21 导航只有两大类 / 关键项白名单 / 成对不拆散 +3**；**R22 数据目录体检与库维护 7 / 图片缓存上限 5 / 存储接口与缓存全清 6**；含 1 条真实网络冒烟，离线环境会 skip） |
+| 桌面壳 | `cargo test`（工作目录 `frontend/src-tauri`） | **27 passed**（2026-09-16 实测；上次记录的 2 只涵盖 R18 那两条 —— 期间 R22 目录指针/迁移判定、R24a 看门狗退避等陆续补齐。托盘退出判据仍在：`manual_running` 字段识别 / 字段缺失或异常一律当"没在跑"） |
 | 未登录能力矩阵 | `python scripts/capability_matrix.py [--include-content] --write` | 两态逐接口实测，fixture 落 `tests/fixtures/capability_matrix.json`；结论：匿名可用 = 检索 / 粉丝数 / 直播状态 / 第三方 / 本地，**内容接口 412 需登录**（devlog/086） |
 | 文档漂移 | `python scripts/doc_check.py`（或 `dev_check.py --docs`） | **0 FAIL**（1 条历史警告：41 篇早期 devlog 按批次未逐篇进索引） |
 | 上游冒烟 | `python scripts/smoke_upstream.py [--cold]`（或 `dev_check.py --upstream`） | 真上游 **5 ok / 0 FAIL**；冷进程 **3 ok / 0 FAIL**（未登录三态） |
 | 前端类型 | `npx tsc --noEmit`（`npm run build` 也会跑） | **0 错** |
 | 前端 lint | `npm --prefix frontend run lint` | **0 错**（`--max-warnings 0`） |
-| 前端单测 | `npm --prefix frontend run test` | **256 passed**（`addVtuberSearch` 7 · `capabilities` 6 · `dialogFoot` 3 · `format` 21 · `reservationDays` 9 · `notificationHub` 12 · `idleQuotes` 18 · `settingsDraft` 22 · `settingsNav` 16 · `theme` 13 · `shellState` 11 · `shellLifecycle` 6 · 其余既有） |
+| 前端单测 | `npm --prefix frontend run test` | **260 passed**（23 个文件；2026-09-16 实测，较上次记录 256 +4 —— R23d 更新错误分类。分项：`addVtuberSearch` 7 · `capabilities` 6 · `dialogFoot` 3 · `format` 21 · `reservationDays` 9 · `notificationHub` 12 · `idleQuotes` 18 · `settingsDraft` 22 · `settingsNav` 16 · `theme` 13 · `shellState` 11 · `shellLifecycle` 6 · 其余既有） |
 | 词云布局 | `node scripts/check_wordcloud_layout.mjs` | sha256 `19ecc7e673b95c8a1fa7c8c219ada78e9b581a15764aa57b33a7de473fc63dac`（本轮实跑一致 ✓） |
 | 布局探针 | `python scripts/ui_probe.py --hero-expect c11548580e73d910ca667047b8120075a4ab121fa3fa098ff6654326ed183666 --vtuber 15`<br>`python scripts/ui_probe.py --archive --vtuber 15`（`--archive-print` 出签名）<br>`python scripts/ui_probe.py --settings --vtuber 15`（两个带签名账号）/ `--vtuber 14`（单账号长签名）<br>`python scripts/ui_probe.py --scene --vtuber 15`<br>`python scripts/ui_probe.py --add-v --vtuber 15`（R11）<br>`python scripts/ui_probe.py --capabilities`（未登录现场）<br>`python scripts/ui_probe.py --polish`（R15 三处打磨）<br>`python scripts/ui_probe.py --reservations`（R13：**探针自己种预约**进数据副本）<br>`python scripts/ui_probe.py --status-island`（R12a/R12b 顶栏状态岛）<br>`python scripts/ui_probe.py --app-settings`（R14a/R14b/R17 应用设置：**会写盘**，跑在数据副本上；`--shot` 出视觉存档）<br>`python scripts/ui_probe.py --filter-pill`（R16 两枚筛选浮片逐项对账 + 三态文字居中/caret 间距）<br>`python scripts/ui_probe.py --tray-suspend`（R18 托盘隐藏停表：可见基线 → 隐藏停表 → 唤回补一轮）<br>`python scripts/ui_probe.py --close-ask`（R20 首次点 ✕ 的询问流程：ask 弹框 → 记住 → 隐藏 → 再点不再问） | 十四条实跑通过（hero 三档签名一致 `c1154858…` / settings 29 项 / scene 提交 250ms / add-v 来源分流 / capabilities 未登录提示 / **polish：标题 700 文本宽 114.3/150、筛选钮文字左右各 31.5px·中心偏移 0·caret absolute、徽标「+」空闲高度 0·不可命中·徽标→分割线 10px、hover 37px 可命中** / **filter-pill：list 那枚与侧栏那枚配方一致（STYLE 逐项相等 / SIZE 各行其是），三态文字居中且 caret 不压字** / **reservations：预约格徽章「预约」+ 计数槽 `128 人预约` + 标题、hover 浮层条目** / **status-island（R19 后）：空闲无容器 + 空闲文案恒为「数据服务运行中」·`data-idle-carousel='off'`·池 8 格（扩展点还在）→ 消息点亮 → 面板可命中不挤动右栏 → Esc 收起 → 入场动画挂上 → ttl 过期自清** / **app-settings（R17 两栏 / R21 分组、折叠、排版与控件）：导航 4 项与后端分组一致（外观 / 抓取设置 / 数据源 / 关于）→ 页内小组 5 个（顺序 = 后端声明序）→ 可见字段**恰好**等于后端非高级集 → 「高级」**默认收起**（收起时 DOM 里 0 行，不是渲染后隐藏）→ 展开后恰好等于后端高级集 8 项 → 换页自动收回 → 两栏几何/命中 → 分页只渲染当前页 → 圆点标对页且切页不丢草稿 → 越界被拦 → 保存回问后端 10→7 → 关于页只读带理由且无可写控件 → 恢复默认回 10 → 主题三卡（深色只标不藏）→ Esc 关闭** ｜ **R21 批 2 量化：排版字段名 14px/600 · 说明 12px · 行内距 9px · 小组标题 13px；步进条高 30 / 内框 0px / 点「+」得 8、点「-」回 7 / 上界「+」置灰而「-」仍可用；开关滑块 32×18 · 圆点 14 · 外壳 border·padding 0 且底色透明 · 有 `--pill-shadow` 投影 · 文案只有「开/关」** ｜ **R21 批 3：二级弹窗页脚 = `.float-pill` + 主操作带 `.on` + 可命中（`--app-settings` 2 钮 / `--capabilities` 去登录 / `--close-ask` 取消 / `--settings` 账号历史各断言自己那个弹窗）** / **tray-suspend：可见 1 次 → 隐藏 0 次（轮播也停）→ 唤回立刻补 1 次** / **close-ask：ask 弹框（两选项+记住）→ 选托盘写偏好并隐藏 → 再点不再问**）。记录值：`--archive` 日历签名 **`50b78ec0…`**（2026-09-15 20:5x 实测；17:00 那次 `48519bae…` 的差异来自当晚 V15 新落库两场直播 —— **数据漂移、非代码**） |
 | 一把梭 | `python scripts/dev_check.py` | 测试 + 后端冒烟（详见 `docs/DEV-LOOP.md`） |

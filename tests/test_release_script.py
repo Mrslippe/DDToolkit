@@ -238,17 +238,50 @@ def test_select_steps_from_skip_and_only():
     assert R.select_steps(a) == ["verify"]
 
 
-def test_release_step_is_dropped_without_push():
-    """tag 不在远端就建 Release 必失败 —— 计划里没 push 时自动摘掉 release。"""
+def test_release_step_is_dropped_only_when_the_remote_lacks_the_tag():
+    """Release 依赖"tag 已在远端"，但判据必须是**远端事实**，不能拿"计划里有没有 push"推断。
+
+    2026-09-16 用户实测踩到：tag 早已推上去，只是这次用 `--from release` 续跑（计划里没有 push），
+    旧的推断把 release 静默摘掉 —— 命令打印"全部完成（0.0 分钟）"却只跑了 report。
+    """
     class A:
+        version = "1.0.2"
         only = "release,report"      # 没有 push
         from_step = None
         skip = None
-    sel = R.select_steps(A())
+
+    # 远端查得到该 tag（续跑的正常情形）→ 保留，并确认查的就是 `v<版本>`
+    seen: list[str] = []
+    assert "release" in R.select_steps(A(), remote_tag_check=lambda tag: seen.append(tag) or True)
+    assert seen == ["v1.0.2"]
+
+    # 远端确实没有 → 摘掉（否则建 Release 必失败）
+    assert "release" not in R.select_steps(A(), remote_tag_check=lambda tag: False)
+
+    # 查询失败（网络/代理）⇒ 未知，保守摘掉，但 report 照跑
+    sel = R.select_steps(A(), remote_tag_check=lambda tag: None)
     assert "release" not in sel and "report" in sel
 
     class B:
-        only = "push,release,report"  # 有 push → 保留
+        version = "1.0.2"
+        only = "push,release,report"  # 计划里有 push：tag 马上就推了，不必问远端
         from_step = None
         skip = None
-    assert "release" in R.select_steps(B())
+    asked: list[str] = []
+    sel = R.select_steps(B(), remote_tag_check=lambda tag: asked.append(tag) or False)
+    assert "release" in sel and asked == [], "计划里已有 push 时不该再查远端"
+
+
+def test_remote_has_tag_distinguishes_absent_from_unknown(monkeypatch):
+    """`ls-remote` 失败 ≠ "远端没有这个 tag"：判错会把人引去重推一个已经在的 tag。"""
+    class R0:
+        def __init__(self, code: int, out: str = ""):
+            self.returncode, self.stdout = code, out
+
+    monkeypatch.setattr(R, "git", lambda *a, **k: R0(0, "abc123\trefs/tags/v1.0.2\n"))
+    assert R.remote_has_tag("v1.0.2") is True
+    monkeypatch.setattr(R, "git", lambda *a, **k: R0(0, ""))
+    assert R.remote_has_tag("v1.0.2") is False
+    monkeypatch.setattr(R, "git", lambda *a, **k: R0(128, ""))
+    assert R.remote_has_tag("v1.0.2") is None
+    assert R.remote_has_tag("") is None      # 没版本号时别去问网络

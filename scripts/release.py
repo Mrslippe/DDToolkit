@@ -780,7 +780,21 @@ def commit_message(ctx: Ctx, files: list[str]) -> str:
     )
 
 
-def select_steps(args: argparse.Namespace) -> list[str]:
+def remote_has_tag(tag: str) -> bool | None:
+    """远端有没有这个 tag：`True` / `False`，**查询失败给 `None`**。
+
+    查询失败绝不能当成"没有"—— 那会把一次网络抖动说成"tag 不在远端"，把人引去重推。
+    `select_steps` 的 `remote_tag_check` 参数就是给用例注入这个判定的（用例不许联网）。
+    """
+    if not tag:
+        return None
+    r = git("ls-remote", "--tags", REPO_URL, tag)
+    if r.returncode != 0:
+        return None
+    return bool((r.stdout or "").strip())
+
+
+def select_steps(args: argparse.Namespace, remote_tag_check=None) -> list[str]:
     steps = list(STEPS)
     if args.only:
         wanted = [s.strip() for s in args.only.split(",") if s.strip()]
@@ -798,10 +812,20 @@ def select_steps(args: argparse.Namespace) -> list[str]:
         if bad:
             raise Fail(f"未知步骤 {sorted(bad)}；可选: {', '.join(STEPS)}")
         steps = [s for s in steps if s not in dropped]
-    # 依赖：Release 需要 tag 已在远端；没有 push 就别假装能建
+    # 依赖：Release 需要 tag 已在远端。判据必须是**远端事实**，不能拿"计划里有没有 push"推断 ——
+    # 2026-09-16 用户实测踩到：tag 早已推上去，只是这次用 `--from release` 续跑（计划里没有 push），
+    # 于是 release 被静默摘掉，命令打印"全部完成（0.0 分钟）"却只跑了 report。
     if "release" in steps and "push" not in steps:
-        steps = [s for s in steps if s != "release"]
-        print(f"  {WARN} 计划里没有 push → 自动去掉 release（tag 不在远端建 Release 必失败）")
+        check = remote_tag_check or remote_has_tag
+        tag = f"v{args.version}" if getattr(args, "version", None) else ""
+        has = check(tag)
+        if has is True:
+            print(f"  {OK} 远端已有 tag {tag} → 保留 release（计划里没有 push 也不影响）")
+        else:
+            steps = [s for s in steps if s != "release"]
+            why = "远端看不到该 tag" if has is False else "远端查询失败（网络/代理）"
+            print(f"  {WARN} {why} → 自动去掉 release（tag 不在远端建 Release 必失败）；"
+                  f"先 `--from push` 推 tag，再 `--from release` 补建")
     return steps
 
 

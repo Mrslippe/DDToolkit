@@ -14,10 +14,13 @@
 > 首次发布：v0.9.1（2026-09-08）；最近发布：**v1.0.1**（2026-09-15，
 > [GitHub Release](https://github.com/Mrslippe/DDToolkit/releases/tag/v1.0.1)，release id 389029336）。
 >
-> **v1.0.2 已打 tag 并推送（2026-09-16）**：tag 按用户口径指向**修复后的提交**（R20 的两个实测问题修完
-> 才定版），产物用修复后的代码重建（56.4MB / 70.5MB）。**GitHub Release 尚未创建**（本机无 PAT）——
+> **v1.0.2 已打 tag 并推送（2026-09-16）**：tag `v1.0.2` = **`36a7ba1`**（发布前把 R20–R24 的实测问题都修完
+> 才定版，期间按用户口径**移动过三次**），产物按该提交重建并已校验：setup **57.5MB** / 便携 **71.9MB** /
+> `latest.json`（签名 420 字符，载体 = 安装包）。**GitHub Release 尚未创建**（本机无 PAT）——
 > 补建只需一条命令，资产已在 `dist-release/`：
-> `$env:GITHUB_TOKEN="ghp_xxx"; python scripts/release.py 1.0.2 --from release`。
+> `$env:GITHUB_TOKEN="ghp_xxx"; python scripts/release.py 1.0.2 --from release`
+> （续跑会先打印一行 `远端已有 tag v1.0.2 → 保留 release` —— 这一步**问的是远端事实**，
+> 不再按"计划里有没有 push"推断，见 devlog/120）。
 
 ---
 
