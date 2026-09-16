@@ -352,6 +352,60 @@ fn open_release_page() -> Result<(), String> {
     }
 }
 
+/// 探测"本地有没有代理在监听"（R23c，devlog/115）。
+///
+/// 为什么需要：`reqwest` 编译时带了 `system-proxy`，所以**系统代理模式**下更新器本来就走代理；
+/// 但代理只配在浏览器/git 里、或系统代理开关关着时，应用会直连失败 —— 而用户明明有个能用的代理。
+/// 这里按常见端口探一遍（TCP connect 即可，不打扰任何进程），失败路径上再重试一次。
+fn probe_ports(ports: &[u16], timeout: Duration) -> Option<u16> {
+    use std::net::{TcpStream, ToSocketAddrs};
+    for port in ports {
+        let addr = format!("127.0.0.1:{port}");
+        let Ok(mut addrs) = addr.to_socket_addrs() else { continue };
+        if let Some(sa) = addrs.next() {
+            if TcpStream::connect_timeout(&sa, timeout).is_ok() {
+                return Some(*port);
+            }
+        }
+    }
+    None
+}
+
+/// 常见本地代理端口（Clash 7890/7891/7897、v2rayN 10809、通用 1080/2080/8889）
+const PROXY_PORTS: [u16; 7] = [7890, 7891, 7897, 10809, 1080, 2080, 8889];
+
+/// 探测本地代理，返回 `http://127.0.0.1:<port>`（没探测到 = `None`）。
+#[tauri::command]
+fn probe_local_proxy() -> Option<String> {
+    let found = probe_ports(&PROXY_PORTS, Duration::from_millis(150));
+    match found {
+        Some(port) => {
+            println!("[ddtoolkit] 检测到本地代理 127.0.0.1:{port}");
+            Some(format!("http://127.0.0.1:{port}"))
+        }
+        None => {
+            println!("[ddtoolkit] 未检测到本地代理（常见端口都没有监听）");
+            None
+        }
+    }
+}
+
+/// 把代理写进**本进程**的 `HTTPS_PROXY`/`HTTP_PROXY`，让 reqwest 之后的请求走它（R23c）。
+///
+/// ⚠️ `set_var` 不是线程安全的：这里只在"直连失败后重试一次"这一条窄路径上调用，
+/// 且只影响**新构造**的 HTTP 客户端（reqwest 在建 client 时读环境变量）。
+/// 不写注册表、不改系统设置 —— 对用户环境零副作用。
+#[tauri::command]
+fn set_process_proxy(url: String) -> Result<(), String> {
+    if !url.starts_with("http://127.0.0.1:") {
+        return Err(format!("只接受本机 http 代理地址，实得 {url}"));
+    }
+    std::env::set_var("HTTPS_PROXY", &url);
+    std::env::set_var("HTTP_PROXY", &url);
+    println!("[ddtoolkit] 已为本进程设置代理 {url}（仅影响应用内请求）");
+    Ok(())
+}
+
 fn dir_size(path: &std::path::Path) -> u64 {
     let mut total = 0;
     let Ok(entries) = std::fs::read_dir(path) else { return 0 };
@@ -825,7 +879,9 @@ pub fn run() {
             storage_info,
             migrate_data_dir,
             delete_old_data_dir,
-            open_release_page
+            open_release_page,
+            probe_local_proxy,
+            set_process_proxy
         ])
         .on_window_event(|window, event| {
             // ✕ 不再等于"退出"（R18，devlog/095）：关闭请求被拦下，改成隐藏到托盘，
@@ -1032,6 +1088,26 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// **代理探测**（R23c）：起一个真的本地监听，确认能探到、且探不到时返回 None。
+    /// 判错的代价：把「没有代理」当成有 ⇒ 更新检查被导向一个死地址；反之则错过能用的代理。
+    #[test]
+    fn probe_ports_finds_a_listening_port_and_misses_the_others() {
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").expect("起本地监听");
+        let port = listener.local_addr().unwrap().port();
+        // 探到在监听的那个（顺序在后面的也要能探到）
+        assert_eq!(probe_ports(&[port], Duration::from_millis(150)), Some(port));
+        assert_eq!(
+            probe_ports(&[port], Duration::from_millis(150)),
+            Some(port),
+            "同一个端口重复探测结果应当稳定"
+        );
+        // 一个**几乎不可能有人监听**的端口：探不到就是 None（不能瞎猜成"有代理"）
+        assert_eq!(probe_ports(&[9], Duration::from_millis(50)), None);
+    }
+
     /// 托盘退出那条判据的**解析部分**（`cargo test` 跑）。
     ///
     /// 判错的代价（2026-09-15 实测的 bug）：托盘「退出」点了没反应 —— 根因是它只发了一个

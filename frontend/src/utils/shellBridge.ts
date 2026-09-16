@@ -151,32 +151,68 @@ export function pendingUpdateInfo(): UpdateInfo | null {
   return pendingInfo
 }
 
+/** 最近一次检查是不是**借助本地代理**成功的（界面据此说明，也便于排查） */
+let usedProxy: string | null = null
+
+export function lastCheckProxy(): string | null {
+  return usedProxy
+}
+
+const errText = (e: unknown) => (typeof e === 'string' ? e : String(e))
+
+async function pluginCheck(): Promise<UpdateInfo | null> {
+  const { check } = await import('@tauri-apps/plugin-updater')
+  const update = await check()
+  if (!update) {
+    pendingUpdate = null
+    pendingInfo = null
+    return null
+  }
+  pendingUpdate = update
+  pendingInfo = {
+    version: update.version,
+    notes: update.body ?? null,
+    date: update.date ?? null,
+  }
+  return pendingInfo
+}
+
 /**
  * 检查更新。三种"没有更新"要分清（都返回 `null`，但含义不同）：
  * - 浏览器/探针环境：**根本没有这回事**（不该显示按钮）；
  * - 已是最新：正常结果；
- * - 检查失败：**抛错**，调用方必须把原因显示出来（连不上 github 是最常见的失败）。
+ * - 检查失败：**抛错**，调用方必须把原因显示出来。
+ *
+ * **代理兜底（R23c，devlog/115）**：`reqwest` 编译时带了 `system-proxy`，所以系统代理模式
+ * （Clash/v2rayN 的"系统代理"开关）下本来就走代理。但代理只配在浏览器/git 里、或系统代理
+ * 开关关着时，应用会直连失败 —— 而用户明明有个能用的代理在跑。所以失败后：
+ * 探一遍常见本地代理端口 → 探到就把 `HTTPS_PROXY` 设进**本进程**（不动系统设置）→ 重试一次。
  */
 export async function checkForUpdate(): Promise<UpdateInfo | null> {
   if (!isTauri) return null
+  usedProxy = null
   try {
-    // 动态 import：插件包只在这条路径上加载 —— 探针跑在无头浏览器里，不该被它们影响
-    const { check } = await import('@tauri-apps/plugin-updater')
-    const update = await check()
-    if (!update) {
-      pendingUpdate = null
-      pendingInfo = null
-      return null
+    return await pluginCheck()
+  } catch (first) {
+    let proxy: string | null = null
+    try {
+      proxy = await invoke<string | null>('probe_local_proxy')
+    } catch {
+      proxy = null
     }
-    pendingUpdate = update
-    pendingInfo = {
-      version: update.version,
-      notes: update.body ?? null,
-      date: update.date ?? null,
+    if (!proxy) {
+      throw new Error(`${errText(first)}（也没检测到本地代理在监听）`)
     }
-    return pendingInfo
-  } catch (e) {
-    throw new Error(typeof e === 'string' ? e : String(e))
+    try {
+      await invoke('set_process_proxy', { url: proxy })
+      const info = await pluginCheck()
+      usedProxy = proxy
+      return info
+    } catch (second) {
+      throw new Error(
+        `${errText(first)}；改用本地代理 ${proxy} 后仍失败：${errText(second)}`,
+      )
+    }
   }
 }
 
