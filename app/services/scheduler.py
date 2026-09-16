@@ -38,6 +38,7 @@ from app.services.tombstone import apply_tombstone_scan
 from app.services.externals.runner import run_external_interval
 from app.services.weibo_auth import weibo_auth_manager
 from app.services import capabilities
+from app.services import rate_limit as rl
 # 注意：此处不调用 logging.basicConfig —— 根日志配置统一由
 # `app/core/logging_setup.py::setup_logging()`（在 app/main.py 里调用）完成。
 # 历史上这里先执行了 basicConfig，导致 main.py 里的文件 handler 配置被静默忽略，
@@ -256,38 +257,137 @@ def _set_post_last_result(seq: int, kind: str, label: str,
     }
 
 
-# ── 风控冷却窗口（R12a，devlog/089）────────────────────────────────────
-# 此前风控**只写日志**：用户在界面上完全看不到"被限流了、正在冷却"，只看到任务变慢/没结果。
-# 这里记"冷却到什么时候"，由 `get_fetch_status()` 暴露给顶栏（新的状态岛显示为告警条目）。
-_rate_limit_until: float = 0.0
-_rate_limit_reason: str = ""
+# ── 风控冷却窗口（R12a devlog/089；**R27 devlog/125 改造**）──────────────
+# R12a 解决的是"界面上看不见风控"；R27 解决另外三个问题（2026-09-16 盘点，devlog/124）：
+#   ① 原先只有两个模块级变量 ⇒ **重启（含应用内更新后的自动重启）即遗忘、立刻满速**；
+#   ② 固定 `RATE_LIMIT_COOLDOWN`、**不升级**；③ 解禁后**没有恢复期**。
+# 现在状态在 `app.services.rate_limit`（纯逻辑 + `app_meta` 落库），本文件只做接线：
+#   · **按平台**存（B 站被限流不该连带停微博）；
+#   · 升级 1→base / 2→2×base / ≥3→4×base（封顶 60 分钟），连续 6h 无命中归零；
+#   · 解禁后 10 分钟恢复期（动态流轮间隔 ×2，见 `_dynamics_next_due`）；
+#   · **启动时读回**（`_load_rate_limit_state()`）：冷却没过就等完，不"重启继续敲"。
+_rl_states: dict[str, rl.State] = {}
+_rl_loaded: bool = False
 
 
-def _note_rate_limit(reason: str, seconds: float) -> None:
-    """进入风控冷却：记账（顶栏据此显示告警，冷却结束自动消失）。"""
-    global _rate_limit_until, _rate_limit_reason
-    _rate_limit_until = time.time() + max(0.0, seconds)
-    _rate_limit_reason = reason or "上游限流"
+def _rl_persist(state: rl.State) -> None:
+    """落库（独立短会话；写失败只记日志 —— 见 `rate_limit.save`）。"""
+    try:
+        db = SessionLocal()
+    except Exception as e:                      # 连会话都建不出来：不该把抓取任务带崩
+        logger.warning(f"风控状态落库失败（建会话）: {type(e).__name__}: {e}")
+        return
+    try:
+        rl.save(db, state)
+    finally:
+        db.close()
+
+
+def _load_rate_limit_state() -> None:
+    """启动时把落库的冷却窗口读回来（**R27 的核心：重启不遗忘**）。
+
+    读回之后：① 顶栏状态岛照常显示剩余时间；② 自动档在 `_active_dynamics_lanes` /
+    账号流过滤里把冷却中的平台跳过 —— 也就是"等完剩余时间"；③ **手动抓取不受影响**
+    （用户显式意图优先），界面会显示冷却仍在。
+    """
+    global _rl_loaded
+    db = SessionLocal()
+    try:
+        _rl_states.update(rl.load_all(db))
+    finally:
+        db.close()
+    _rl_loaded = True
+    _now = rl.now()
+    for pf, st in sorted(_rl_states.items()):
+        if st.active(_now):
+            logger.warning(
+                f"风控冷却未结束：平台 {pf} 剩余 {st.seconds_left(_now)}s、"
+                f"连续第 {st.hits} 次命中（状态来自上次运行，**重启不清零**）")
+
+
+def _note_rate_limit(reason: str = "", seconds: float | None = None,
+                     platform: str = "") -> float:
+    """记一次风控命中：**升级 + 落库**，返回本次冷却秒数。
+
+    `seconds` 只当**基准时长**（默认取 `settings.RATE_LIMIT_COOLDOWN`）——实际睡多久由
+    命中次数决定：第 2 次翻倍、第 3 次起 4 倍、封顶 60 分钟。
+    """
+    _now = rl.now()
+    base = float(settings.RATE_LIMIT_COOLDOWN if seconds is None else seconds)
+    before = _rl_states.get(platform) or rl.State(platform=platform)
+    st = rl.register_hit(before, reason or rate_limit_info() or "上游限流", _now, base)
+    _rl_states[platform] = st
+    _rl_persist(st)
+    dur = max(0.0, st.until - _now)
+    if st.hits > 1:
+        logger.warning(f"风控连续第 {st.hits} 次命中（{platform or '未知平台'}）"
+                       f"⇒ 冷却升级为 {dur / 60:.0f} 分钟")
+    return dur
 
 
 def rate_limit_status() -> dict:
-    """风控快照：`{active, reason, seconds_left}`（冷却窗口过去即自动 active=False）。"""
-    left = _rate_limit_until - time.time()
-    if left <= 0:
-        return {"active": False, "reason": "", "seconds_left": 0}
-    return {"active": True, "reason": _rate_limit_reason, "seconds_left": int(left)}
+    """风控快照（**取剩余时间最长的那个平台**）。
+
+    返回 `{active, reason, seconds_left, platform, hits}`：前三个是 R12a 的既有契约
+    （顶栏状态岛在用），后两个是 R27 新增（哪个平台、连续第几次）。
+    冷却窗口过去即自动 `active=False`，不需要额外清理。
+    """
+    _now = rl.now()
+    live = [(pf, st) for pf, st in _rl_states.items() if st.active(_now)]
+    if not live:
+        return {"active": False, "reason": "", "seconds_left": 0, "platform": "", "hits": 0}
+    pf, st = max(live, key=lambda kv: kv[1].until)
+    return {"active": True, "reason": st.reason, "seconds_left": st.seconds_left(_now),
+            "platform": pf, "hits": st.hits}
 
 
-async def _cooldown_for_rate_limit(reason: str = "") -> None:
-    """进入风控冷却：**先记账**（顶栏状态岛据此显示告警，冷却结束自动消失）再睡够时间。
+def is_platform_cooling(platform: str) -> bool:
+    """该平台是否在冷却窗口内（**自动档**据此跳过；手动档刻意不用它）。"""
+    st = _rl_states.get(platform)
+    return bool(st and st.active(rl.now()))
+
+
+def platform_cooling_note(platform: str) -> str | None:
+    """给日志/名单跳过用的说明；不在冷却返回 None。"""
+    st = _rl_states.get(platform)
+    if not st or not st.active(rl.now()):
+        return None
+    left = st.seconds_left(rl.now())
+    return f"风控冷却中（剩余 {max(1, left // 60)} 分钟，连续第 {st.hits} 次）"
+
+
+def _filter_cooling_accounts(accounts: list, *, auto: bool) -> tuple[list, list[str]]:
+    """**自动档**跳过风控冷却中的平台（R27）；手动档一律原样返回。
+
+    返回 `(保留的账号, 被跳过的平台名)`。"手动不受影响"是本条需求的用户口径
+    （显式意图优先，界面上的状态岛会显示冷却仍在），所以单独抽出来给用例钉住 ——
+    写在 `async_fetch_and_update` 里面就测不到这条分支了。
+    """
+    if not auto or not accounts:
+        return accounts, []
+    cooling = sorted({a.platform for a in accounts if is_platform_cooling(a.platform)})
+    if not cooling:
+        return accounts, []
+    return [a for a in accounts if not is_platform_cooling(a.platform)], cooling
+
+
+async def _cooldown_for_rate_limit(reason: str = "", platform: str = "") -> None:
+    """进入风控冷却：**先记账再睡够**（时长由命中次数升级而来），醒来记恢复期起点。
 
     R12a（devlog/089）：此前 9 处冷却点各自 `await asyncio.sleep(RATE_LIMIT_COOLDOWN)`，
     界面完全看不到"被限流了、正在冷却"——用户只感到任务变慢或没结果。
     统一走这里，避免以后新增冷却点又漏记账。
+    R27：`platform` 由调用点传入（都知道自己在抓哪个平台），冷却按平台独立记账与持久化。
     """
-    _note_rate_limit(reason or rate_limit_info() or "上游限流",
-                     float(settings.RATE_LIMIT_COOLDOWN))
-    await asyncio.sleep(settings.RATE_LIMIT_COOLDOWN)
+    dur = _note_rate_limit(reason or rate_limit_info() or "上游限流", None, platform)
+    await asyncio.sleep(dur)
+    st = _rl_states.get(platform)
+    if st is not None:
+        st = rl.mark_ended(st, rl.now())
+        _rl_states[platform] = st
+        _rl_persist(st)
+        logger.info(f"{platform or '未知平台'} 风控冷却结束，进入 "
+                    f"{rl.RAMP_SECONDS / 60:.0f} 分钟恢复期（动态流轮间隔 ×2）")
 
 
 def get_fetch_status() -> dict:
@@ -538,10 +638,15 @@ async def async_fetch_accounts(account_ids: list[int], *, label: str = "指定�
                                           pending_avatar=pending_avatar)
 
             if was_rate_limited():
+                # ⚠️ 平台名要在 `db.close()` **之前**取出来：commit 会让实例过期、
+                # close 之后就是 detached，再读任何属性都会 DetachedInstanceError
+                # （R27 实测被 `test_async_fetch_vtuber_relinks_session_after_cooldown` 抓到）
+                rate_limited_pf = acc.platform
                 db.commit()
                 db.close()
-                logger.warning(f"触发风控 ({rate_limit_info()})，冷却 {settings.RATE_LIMIT_COOLDOWN}s...")
-                await _cooldown_for_rate_limit(rate_limit_info())
+                logger.warning(f"触发风控 ({rate_limit_info()})，"
+                               f"冷却 {settings.RATE_LIMIT_COOLDOWN}s 起（连续命中会升级）...")
+                await _cooldown_for_rate_limit(rate_limit_info(), rate_limited_pf)
                 clear_rate_limit()
                 db = SessionLocal()
                 # 修复：冷却后必须重查账号 —— 旧会话已关闭，原列表里的 acc 是
@@ -622,9 +727,16 @@ async def async_fetch_and_update(auto: bool = False) -> FetchResult:
     try:
         logger.info("开始抓取数据...")
         accounts = AccountRepo(db).all_for_fetch()
+        # R27：**自动档**跳过风控冷却中的平台（手动档不跳 —— 用户显式意图优先，
+        # 界面上的状态岛会显示冷却仍在，用户知道为什么慢）
+        accounts, cooling_pf = _filter_cooling_accounts(accounts, auto=auto)
+        if cooling_pf:
+            logger.info("账号流：跳过风控冷却中的平台 " + "、".join(
+                f"{pf}（{platform_cooling_note(pf)}）" for pf in cooling_pf))
 
         if not accounts:
-            logger.warning("没有可抓取的账号。")
+            logger.warning("没有可抓取的账号。"
+                           + (f"（{'、'.join(cooling_pf)} 在风控冷却中，已跳过）" if cooling_pf else ""))
             result.details.append("没有可抓取的账号")
             return result
 
@@ -746,6 +858,12 @@ async def async_fetch_vtuber(vtuber_id: int) -> FetchResult:
 
 
 def start_scheduler():
+    # R27：先把上次运行留下的风控冷却读回来（**重启不遗忘**）。放在最前 ——
+    # 这样紧接着启动的自动档第一次排期就已经看得见冷却，不会先满速打一轮。
+    try:
+        _load_rate_limit_state()
+    except Exception as e:                      # 读不回来只是少一层保护，不该拦启动
+        logger.warning(f"风控冷却状态读取失败（按无冷却启动）: {type(e).__name__}: {e}")
     scheduler = BackgroundScheduler()
     # v0.6.1：账号定时任务（5min 全量）已由「时效分层调度」T1（主账号 5min）
     # + T3a（全量 6h）替代（start_tier_scheduler），此处只保留外部数据批次 cron。
@@ -1392,9 +1510,10 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
                     if rl_retries < _PAGE_RETRIES:
                         rl_retries += 1
                         logger.info(f"mid={mid} 视频第{page}页触发风控，冷却 "
-                                    f"{settings.RATE_LIMIT_COOLDOWN}s 后重试 ({rl_retries}/{_PAGE_RETRIES})...")
+                                    f"{settings.RATE_LIMIT_COOLDOWN}s 起（连续命中会升级）"
+                                    f"后重试 ({rl_retries}/{_PAGE_RETRIES})...")
                         clear_rate_limit()
-                        await _cooldown_for_rate_limit()
+                        await _cooldown_for_rate_limit("", "bilibili")
                         continue
                     clear_rate_limit()
                     result.rate_limited = True
@@ -1452,9 +1571,10 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
                 if dyn_rl_retries < _PAGE_RETRIES:
                     dyn_rl_retries += 1
                     logger.info(f"mid={mid} 动态第{dyn_page + 1}页触发风控，冷却 "
-                                f"{settings.RATE_LIMIT_COOLDOWN}s 后重试 ({dyn_rl_retries}/{_PAGE_RETRIES})...")
+                                f"{settings.RATE_LIMIT_COOLDOWN}s 起（连续命中会升级）"
+                                f"后重试 ({dyn_rl_retries}/{_PAGE_RETRIES})...")
                     clear_rate_limit()
-                    await _cooldown_for_rate_limit()
+                    await _cooldown_for_rate_limit("", "bilibili")
                     continue
                 clear_rate_limit()
                 result.rate_limited = True
@@ -1689,9 +1809,10 @@ async def _fetch_platform_posts(pf, uid: str, pages: int, db: Session,
                 if rl_retries < _PAGE_RETRIES:
                     rl_retries += 1
                     logger.info(f"{platform}:{uid} 第{page}页触发风控，冷却 "
-                                f"{settings.RATE_LIMIT_COOLDOWN}s 后重试 ({rl_retries}/{_PAGE_RETRIES})...")
+                                f"{settings.RATE_LIMIT_COOLDOWN}s 起（连续命中会升级）"
+                                f"后重试 ({rl_retries}/{_PAGE_RETRIES})...")
                     clear_rate_limit()
-                    await _cooldown_for_rate_limit()
+                    await _cooldown_for_rate_limit("", platform)
                     continue
                 clear_rate_limit()
                 result.rate_limited = True
@@ -2029,8 +2150,9 @@ async def async_fetch_all_posts() -> dict:
                                "stop_reason": r.stop_reason, "error": r.error})
 
             if r.rate_limited:
-                logger.warning(f"{acc.platform}:{acc.platform_uid} 触发风控，冷却 {settings.RATE_LIMIT_COOLDOWN}s...")
-                await _cooldown_for_rate_limit()
+                logger.warning(f"{acc.platform}:{acc.platform_uid} 触发风控，"
+                               f"冷却 {settings.RATE_LIMIT_COOLDOWN}s 起（连续命中会升级）...")
+                await _cooldown_for_rate_limit("", acc.platform)
             elif idx < len(accounts) - 1:
                 await asyncio.sleep(20)
 
@@ -2139,8 +2261,9 @@ async def async_fetch_vtuber_posts(name: str, platform: str = "bilibili") -> dic
                                "stop_reason": r.stop_reason, "error": r.error})
 
             if r.rate_limited:
-                logger.warning(f"uid={acc.platform_uid} 触发风控，冷却 {settings.RATE_LIMIT_COOLDOWN}s...")
-                await _cooldown_for_rate_limit()
+                logger.warning(f"uid={acc.platform_uid} 触发风控，"
+                               f"冷却 {settings.RATE_LIMIT_COOLDOWN}s 起（连续命中会升级）...")
+                await _cooldown_for_rate_limit("", acc.platform)
             elif idx < len(accounts) - 1:
                 await asyncio.sleep(20)
 
@@ -2260,8 +2383,9 @@ async def async_update_unarchived_posts(name: str | None = None) -> dict:
                                "stop_reason": r.stop_reason, "error": r.error})
 
             if r.rate_limited:
-                logger.warning(f"uid={acc.platform_uid} 触发风控，冷却 {settings.RATE_LIMIT_COOLDOWN}s...")
-                await _cooldown_for_rate_limit()
+                logger.warning(f"uid={acc.platform_uid} 触发风控，"
+                               f"冷却 {settings.RATE_LIMIT_COOLDOWN}s 起（连续命中会升级）...")
+                await _cooldown_for_rate_limit("", acc.platform)
             elif idx < len(accounts) - 1:
                 await asyncio.sleep(20)
 
@@ -2364,7 +2488,9 @@ def _active_dynamics_lanes(db: Session) -> tuple[dict[str, list[tuple[VTuber, Ac
     lanes = _dynamics_lanes(db)
     skipped: dict[str, str] = {}
     for pf in list(lanes):
-        why = _lane_skip_reason(pf)
+        # R27：风控冷却中的平台整条名单跳过（与"微博未登录"同一种处理）——
+        # 这就是"重启后等完剩余冷却"的落地方式：不睡线程，只不排它的活
+        why = _lane_skip_reason(pf) or platform_cooling_note(pf)
         if why:
             skipped[pf] = why
             lanes.pop(pf)
@@ -2427,9 +2553,9 @@ async def live_sweep_core(db: Session, client: httpx.AsyncClient | None = None) 
             if data is None:
                 if was_rate_limited():
                     logger.warning(f"T0 直播状态触发风控 ({rate_limit_info()})，"
-                                   f"冷却 {settings.RATE_LIMIT_COOLDOWN}s 后继续")
+                                   f"冷却 {settings.RATE_LIMIT_COOLDOWN}s 起（连续命中会升级）后继续")
                     clear_rate_limit()
-                    await _cooldown_for_rate_limit()
+                    await _cooldown_for_rate_limit("", "bilibili")
                     continue
                 # 非风控失败（网络/接口异常）：跳过本批，轮询宽容处理
                 result.failed += len(chunk)
@@ -2971,6 +3097,11 @@ def _dynamics_next_due(db: Session, *, since: float | None = None) -> float:
     # （账号数增长后不被自己饿死，见 _PlatformBudget._rpm_for）。
     wait = _dynamics_budget.wait_seconds(cost, by_platform=cost)
     interval = max(settings.DYNAMICS_MIN_GAP_SECONDS, wait)
+    # R27 恢复期：刚被风控解禁的 10 分钟内把轮间隔拉开（≈ 半预算）——避免一解禁就满速。
+    # 放在**间隔**上而不是改预算上限：预算是共享状态，动它会连带影响手动档的排期。
+    ramp = rl.ramp_scale(_rl_states.values(), rl.now(), platforms=cost.keys())
+    if ramp < 1.0:
+        interval = interval / max(ramp, 0.05)
     due = time.monotonic() + _tier_delay(interval, settings.DYNAMICS_JITTER_SECONDS)
     if since is not None:
         due = max(due, since + settings.DYNAMICS_MIN_CYCLE_SECONDS)
@@ -3009,6 +3140,13 @@ def _tier_loop() -> None:
       两者在同一事件循环里**并发执行**（各自锁），墙钟 ≈ max(两条流)；
     - 周期带抖动；interval<=0 的档位禁用。
     """
+    # R27 兜底：正常情况下 `start_scheduler()`（lifespan 里先于本线程启动）已经把风控冷却
+    # 读回来了；这里再兜一次 —— 顺序若有变（或测试里直接起线程），也不会"先满速打一轮"。
+    if not _rl_loaded:
+        try:
+            _load_rate_limit_state()
+        except Exception as e:
+            logger.warning(f"风控冷却状态读取失败（按无冷却启动）: {type(e).__name__}: {e}")
     try:
         time.sleep(settings.STARTUP_CHAIN_DELAY)
         if settings.STARTUP_CHAIN_ENABLED:

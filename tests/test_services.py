@@ -2990,22 +2990,23 @@ def test_fetch_posts_core_limit_latest(monkeypatch, db):
 # 此前风控**只写日志**：界面上看不到"被限流了、正在冷却"，用户只感到任务变慢或没结果。
 # 顶栏状态岛要靠 `fetch_status.rate_limit` 显示这条告警，因此这里把契约钉住。
 
-def test_fetch_status_exposes_rate_limit_cooldown():
+def test_fetch_status_exposes_rate_limit_cooldown(monkeypatch):
     from app.services import scheduler as sch
 
-    sch._rate_limit_until = 0.0
-    sch._rate_limit_reason = ""
+    # R27：状态改成**按平台**存在 `_rl_states` 里、并落 app_meta。
+    # 本用例只管**显示契约**（落库/重启读回见 tests/test_rate_limit.py），所以落库打成空操作。
+    monkeypatch.setattr(sch, "_rl_states", {})
+    monkeypatch.setattr(sch, "_rl_persist", lambda state: None)
     assert sch.get_fetch_status()["rate_limit"] == {
-        "active": False, "reason": "", "seconds_left": 0}
+        "active": False, "reason": "", "seconds_left": 0, "platform": "", "hits": 0}
 
-    sch._note_rate_limit("code=-352, msg=风控校验失败", 600)
+    sch._note_rate_limit("code=-352, msg=风控校验失败", 600, "bilibili")
     rl = sch.get_fetch_status()["rate_limit"]
     assert rl["active"] is True
     assert "-352" in rl["reason"]
     assert 590 <= rl["seconds_left"] <= 600, rl
+    assert rl["platform"] == "bilibili" and rl["hits"] == 1     # R27 新增的两个字段
 
     # 冷却窗口过去 → 自动回到 inactive（顶栏告警随之消失，不需要额外清理）
-    sch._rate_limit_until = time.time() - 1
+    sch._rl_states["bilibili"] = sch.rl.State(platform="bilibili", until=time.time() - 1, hits=1)
     assert sch.get_fetch_status()["rate_limit"]["active"] is False
-    sch._rate_limit_until = 0.0
-    sch._rate_limit_reason = ""

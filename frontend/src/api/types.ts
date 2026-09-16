@@ -447,8 +447,18 @@ export interface FetchStatus {
    */
   manual_running?: boolean
   /** 风控冷却（R12a，devlog/089）：此前只在服务端日志里，顶栏据此显示告警。
-   *  冷却窗口过去后自动变回 `active:false`，前端无需清理。 */
-  rate_limit?: { active: boolean; reason: string; seconds_left: number }
+   *  冷却窗口过去后自动变回 `active:false`，前端无需清理。
+   *
+   *  R27（devlog/125）新增 `platform` / `hits`：冷却**按平台**记账、连续命中会升级
+   *  （1→base / 2→2×base / ≥3→4×base，封顶 60 分钟）。两个字段目前只有后端与用例在用，
+   *  界面没吃（"让托盘用户看见哪个平台在冷却"归 R29）。 */
+  rate_limit?: {
+    active: boolean
+    reason: string
+    seconds_left: number
+    platform?: string
+    hits?: number
+  }
 }
 
 /** stats_json 解析后的统计字段（B 站口径） */export interface PostStatsJson {
