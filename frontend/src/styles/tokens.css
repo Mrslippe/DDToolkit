@@ -76,8 +76,11 @@
   /* 尺寸（紧凑壳层：顶栏 40 / 工具栏 50；侧栏 492 沿用档案页规格） */
   --topbar-height: 40px;
   --sidebar-width: 492px;
-  /* 窗口圆角度数（L3 自绘方案，随改随生效） */
-  --radius-window: 4px;
+  /* 窗口圆角度数（L3 自绘方案，随改随生效）
+     ⚠️ 这只是 **Win10 / 浏览器 / 探针的兜底值**：Win11 上圆角由 DWM 画，
+     `html.dwm-corners` 会把它覆盖成 0（见 layout.css 与 utils/windowCorners.ts，devlog/136）。
+     4px 在照片底上会被抗锯齿糊成一团（用户报"角有点虚"），8px 与系统窗口同量级 ⇒ 取 8。 */
+  --radius-window: 8px;
 }
 
 /* ── 深色主题：**钩子已就位，样式未实现**（R14b，devlog/092）─────────────

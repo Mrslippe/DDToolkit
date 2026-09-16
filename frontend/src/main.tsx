@@ -13,6 +13,7 @@ import Logo from './components/common/Logo'
 import { setApiBase } from './api/api'
 import { markFirstRun } from './bootState'
 import { installShellLifecycle } from './utils/shellLifecycle'
+import { applyCornersMode } from './utils/windowCorners'
 
 const isTauri = '__TAURI_INTERNALS__' in window
 
@@ -181,6 +182,25 @@ function Root() {
       document.documentElement.classList.add('shell-settled')
     }
   }, [state])
+
+  // 圆角归谁画（R34，devlog/136）：问壳"这扇窗口的圆角是系统（DWM）画的吗" ——
+  // Win11 ⇒ true：CSS 半径归零（`html.dwm-corners`），圆角/吸附方角全交给系统；
+  // Win10 探测失败 ⇒ false：保留 CSS 半径兜底（8px），不会变成裸方角。
+  // 浏览器/探针里没有 Tauri ⇒ 保持 false（= 走 CSS 那条路，正好也能被探针断言到）。
+  // dev 钩子 `__ddtoolkitCorners` 让探针能模拟壳的答复（与 `__ddtoolkitShellHidden` 同路数）。
+  useEffect(() => {
+    const devHook = window as unknown as { __ddtoolkitCorners?: (v: boolean) => void }
+    devHook.__ddtoolkitCorners = applyCornersMode
+    if (!isTauri) return
+    let disposed = false
+    void import('@tauri-apps/api/core')
+      .then(({ invoke }) => invoke<boolean>('window_corners_mode'))
+      .then((ok) => {
+        if (!disposed) applyCornersMode(ok)
+      })
+      .catch(() => { /* 问不到就按 CSS 圆角走，不打扰任何人 */ })
+    return () => { disposed = true }
+  }, [])
 
   // 信封展开动画播完后卸载启动幕，同时折叠诊断面板
   useEffect(() => {

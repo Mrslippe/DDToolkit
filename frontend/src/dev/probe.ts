@@ -2342,6 +2342,18 @@ export async function runUiProbe(): Promise<void> {
   const shell = {
     settled: document.documentElement.classList.contains('shell-settled'),
     bg: shellEl ? getComputedStyle(shellEl).backgroundColor : null,
+    // 圆角归谁画（R34，devlog/136）：探针跑在浏览器里（无 Tauri）⇒ 走 CSS 兜底那条路，
+    // 半径应当是 8px 而不是 0；再用 dev 钩子模拟"壳说 DWM 可用"，核对是否真的归零。
+    radius: shellEl ? getComputedStyle(shellEl).borderTopLeftRadius : null,
+    radiusWhenDwm: (() => {
+      const hook = (window as unknown as { __ddtoolkitCorners?: (v: boolean) => void })
+        .__ddtoolkitCorners
+      if (typeof hook !== 'function' || !shellEl) return null
+      hook(true)
+      const r = getComputedStyle(shellEl).borderTopLeftRadius
+      hook(false)                        // 还原，别影响后面的测量
+      return r
+    })(),
   }
   pre.textContent = JSON.stringify({ mode: 'main', views: out, topbar, shell, degraded })
   document.body.appendChild(pre)

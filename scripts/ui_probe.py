@@ -2329,7 +2329,20 @@ def main() -> int:
                 if (sh.get("bg") or "").replace(" ", "") not in ("rgba(0,0,0,0)", "transparent"):
                     bad.append(f"@{w} shell: `.app-shell` 背景是 {sh.get('bg')!r}，不是透明"
                                f"（有底色 ⇒ 圆角抗锯齿会跟它混出白边）")
-                print(f"  壳层底: settled={sh.get('settled')} background={sh.get('bg')}")
+                # 圆角归属（R34，devlog/136）：探针没有 Tauri ⇒ 壳侧探测恒 false ⇒
+                # 走 CSS 兜底（半径 = 8px）；用 dev 钩子模拟"壳说 DWM 可用"时必须归零。
+                # 这两条钉的是**接线**：谁画圆角、以及 CSS 兜底值是否还在。
+                if (sh.get("radius") or "") != "8px":
+                    bad.append(f"@{w} shell: CSS 兜底半径是 {sh.get('radius')!r}，应为 8px"
+                               f"（Win10/浏览器走这条路；见 tokens.css 的 --radius-window）")
+                r_dwm = sh.get("radiusWhenDwm")
+                if r_dwm is None:
+                    bad.append(f"@{w} shell: 探针没报 `radiusWhenDwm`（dev 钩子没挂上？）")
+                elif r_dwm not in ("0px", "0"):
+                    bad.append(f"@{w} shell: 壳说 DWM 可用时 `.app-shell` 半径是 {r_dwm!r}，不是 0"
+                               f"（`html.dwm-corners` 那条 CSS 没接上）")
+                print(f"  壳层底: settled={sh.get('settled')} background={sh.get('bg')} "
+                      f"半径={sh.get('radius')}（DWM 模式下={r_dwm}）")
             failures.extend(bad)
             tags = [v.get("tag") for v in res["views"]]
             print(f"  views={tags}  问题={len(bad)}")

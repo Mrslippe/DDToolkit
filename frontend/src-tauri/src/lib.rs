@@ -477,6 +477,95 @@ struct BackendJob(Mutex<isize>);
 // 3. `DEEP_SLEPT`：WebView 已被销毁（省内存）。托盘点击据此决定"show 还是重建窗口"。
 static QUITTING: AtomicBool = AtomicBool::new(false);
 static HIDDEN_SINCE: AtomicU64 = AtomicU64::new(0);
+/// 这扇窗口的圆角是**系统（DWM）画的**吗（R34，devlog/136）。
+/// 前端据此决定用不用 CSS 圆角（`html.dwm-corners`）；Win10 上探测会失败 ⇒ 保持 false。
+static DWM_CORNERS: AtomicBool = AtomicBool::new(false);
+
+/// 「用不用系统圆角」的判据（**纯函数**，便于单测）：只看**圆角**那次调用的 HRESULT。
+///
+/// 为什么不看描边色那次：`DWMWA_BORDER_COLOR` 是"顺手去掉系统那 1px 描边"，
+/// 它在较早的 Win11 build 上可能不支持（返回失败）—— 那不该连累圆角。
+fn dwm_corners_ok(corner_hr: i32, border_hr: i32) -> bool {
+    let _ = border_hr;
+    corner_hr == 0
+}
+
+/// 让 **Windows 自己**画窗口圆角（R34，devlog/136）。
+///
+/// 为什么不再自己画：透明窗口 + CSS 圆角必然在弧上留下 1~3px 的抗锯齿混色
+/// （用户报的"白边"与"角有点虚"都是它），而且"最大化/吸附时该不该方角"得我们自己判。
+/// 交给 DWM 之后（2026-09-17 实测，devlog/136）：
+/// - 浮动 ⇒ 系统圆角（~8px，平滑、无混色）；
+/// - **吸附**（Win+← 等，实测窗口变成 (0,30)-(960,1080)）⇒ 四角**全方**、完全填满，
+///   连屏幕中间那两个角也是方的 ⇒ 是整窗状态判定，我们一行都不用写；
+/// - 最大化 ⇒ 方、填满。
+/// 返回是否探测成功（= Win11 且 API 可用）；Win10 没有这个属性 ⇒ 返回 false，
+/// 前端保留 CSS 圆角（`--radius-window` 的兜底值），不会变成"裸方角"。
+#[cfg(target_os = "windows")]
+fn apply_dwm_corners(window: &tauri::WebviewWindow) -> bool {
+    use std::ffi::c_void;
+    const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
+    const DWMWA_BORDER_COLOR: u32 = 34;
+    const DWMWCP_ROUND: i32 = 2; // 1=不圆 / 2=圆 / 3=小圆
+    const DWMWA_COLOR_NONE: u32 = 0xFFFF_FFFE;
+
+    #[link(name = "dwmapi")]
+    extern "system" {
+        fn DwmSetWindowAttribute(
+            hwnd: isize,
+            attr: u32,
+            value: *const c_void,
+            size: u32,
+        ) -> i32;
+    }
+
+    let Ok(handle) = window.hwnd() else {
+        return false;
+    };
+    let hwnd = handle.0 as isize;
+    let corner = DWMWCP_ROUND;
+    let border = DWMWA_COLOR_NONE;
+    let (hr_corner, hr_border) = unsafe {
+        (
+            DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE,
+                                  &corner as *const i32 as *const c_void, 4),
+            DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR,
+                                  &border as *const u32 as *const c_void, 4),
+        )
+    };
+    let ok = dwm_corners_ok(hr_corner, hr_border);
+    if ok {
+        // 窗口形状变了：让 DWM 重算一次非客户区（不加这句有时不立即生效）
+        const SWP_NOMOVE: u32 = 0x2;
+        const SWP_NOSIZE: u32 = 0x1;
+        const SWP_NOZORDER: u32 = 0x4;
+        const SWP_FRAMECHANGED: u32 = 0x20;
+        #[link(name = "user32")]
+        extern "system" {
+            fn SetWindowPos(hwnd: isize, after: isize, x: i32, y: i32,
+                            cx: i32, cy: i32, flags: u32) -> i32;
+        }
+        unsafe {
+            SetWindowPos(hwnd, 0, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+        }
+    }
+    DWM_CORNERS.store(ok, Ordering::SeqCst);
+    ok
+}
+
+#[cfg(not(target_os = "windows"))]
+fn apply_dwm_corners(_window: &tauri::WebviewWindow) -> bool {
+    DWM_CORNERS.store(false, Ordering::SeqCst);
+    false
+}
+
+/// 前端问"这扇窗口的圆角是系统画的吗"（R34）：true ⇒ 用系统圆角，CSS 半径归零。
+#[tauri::command]
+fn window_corners_mode() -> bool {
+    DWM_CORNERS.load(Ordering::SeqCst)
+}
+
 static DEEP_SLEPT: AtomicBool = AtomicBool::new(false);
 
 /// 深休眠阈值：隐藏满这么久就销毁 WebView 释放内存（用户口径 10 分钟）。
@@ -564,6 +653,9 @@ fn rebuild_main_window(app: &tauri::AppHandle) -> tauri::Result<tauri::WebviewWi
     .visible(false)
     .skip_taskbar(false)
     .build()?;
+    // 重建的窗口同样要按系统圆角（R34）：与 `setup()` 那条路径保持一致，
+    // 否则深休眠唤醒之后圆角会变回"CSS 自绘"（用户会看到观感跳一下）
+    apply_dwm_corners(&w);
     let _ = w.set_focus();
     Ok(w)
 }
@@ -754,9 +846,17 @@ fn get_backend_port(port: State<'_, BackendPort>) -> u16 {
 /// 显示主窗口。窗口默认 visible:false（见 tauri.conf.json），页面绘制完成后
 /// 由前端 invoke 显示，避免 WebView2 首绘前的白屏（白色闪屏修复，见 devlog/021）。
 /// show() 幂等：重复调用无副作用。
+///
+/// **系统圆角在这里设**（R34，devlog/136）：实测在 `setup()`（窗口还 `visible:false`）
+/// 里设 `DWMWA_WINDOW_CORNER_PREFERENCE` **会被随后的显示流程冲掉**（角是方的），
+/// 而窗口可见之后再设就生效 —— 所以挂在"显示"这个动作上，天然同时覆盖
+/// 首次显示与深休眠唤醒后的重建（重建窗口也是加载完页面后走这里）。
 #[tauri::command]
 fn present_window(window: tauri::Window) {
     let _ = window.show();
+    if let Some(w) = window.app_handle().get_webview_window("main") {
+        apply_dwm_corners(&w);
+    }
 }
 
 /// 隐藏到托盘（前端点 ✕ 且偏好为「最小化到托盘」时调用）。
@@ -971,7 +1071,8 @@ pub fn run() {
             set_tray_status,
             open_release_page,
             probe_local_proxy,
-            set_process_proxy
+            set_process_proxy,
+            window_corners_mode
         ])
         .on_window_event(|window, event| {
             // ✕ 不再等于"退出"（R18，devlog/095）：关闭请求被拦下，改成隐藏到托盘，
@@ -996,6 +1097,8 @@ pub fn run() {
             // 这一步在窗口 show 之前跑（`visible: false`，等前端 present_window），看不到闪烁。
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.set_background_color(Some(tauri::window::Color(0, 0, 0, 0)));
+                // ⚠️ 系统圆角**不在这里设**：窗口还是 visible:false，实测设了会被
+                // 随后的显示流程冲掉（角变回方的）。改在 `present_window`（显示之后）设。
             }
 
             let port = free_port();
@@ -1030,6 +1133,10 @@ pub fn run() {
             }
             println!("[ddtoolkit] data dir = {}（来源 {}）",
                      startup.dir.display(), startup.source.as_str());
+            // 圆角走系统还是 CSS 是"用户看得见但只在真机上才暴露"的差异，
+            // 打包版没有 stdout ⇒ 落一行壳日志（排查时一眼能看出这台机器走的是哪条路）
+            shelllog::log(&startup.dir, &format!(
+                "DWM 系统圆角 = {}", DWM_CORNERS.load(Ordering::SeqCst)));
             shelllog::log(&startup.dir, &format!(
                 "启动：数据目录 = {}（来源 {}）· 便携={} · 指针问题={:?}",
                 startup.dir.display(), startup.source.as_str(),
@@ -1197,6 +1304,23 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **系统圆角的能力探测判据**（R34，devlog/136）：只看圆角那次调用的 HRESULT。
+    /// 判错的代价很直观 —— 把"不支持"当"支持"⇒ Win10 用户拿到一扇**裸方角**窗口
+    /// （CSS 半径被归零、系统又不画）；把"支持"当"不支持"⇒ 只是没吃到系统圆角，无害。
+    #[test]
+    fn dwm_corners_ok_is_decided_by_the_corner_hresult_only() {
+        assert!(dwm_corners_ok(0, 0), "两次都成功 ⇒ 用系统圆角");
+        assert!(
+            dwm_corners_ok(0, -2147024809),
+            "描边色不支持（较早的 Win11 build）不该连累圆角 —— 圆角那次成功就算成功"
+        );
+        assert!(
+            !dwm_corners_ok(-2147024809, 0),
+            "圆角那次失败（Win10 没有这个属性）⇒ 必须回退 CSS 圆角"
+        );
+        assert!(!dwm_corners_ok(-2147024809, -2147024809), "两次都失败 ⇒ 回退");
+    }
 
     /// **代理探测**（R23c）：起一个真的本地监听，确认能探到、且探不到时返回 None。
     /// 判错的代价：把「没有代理」当成有 ⇒ 更新检查被导向一个死地址；反之则错过能用的代理。

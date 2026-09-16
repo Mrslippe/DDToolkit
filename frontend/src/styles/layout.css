@@ -46,6 +46,15 @@ html.shell-settled .app-shell {
   background: transparent;
 }
 
+/* ── 圆角归 Windows 画（R34，devlog/136）──────────────────────────────
+   壳侧探测成功（Win11）时挂 `html.dwm-corners`：**CSS 半径归零**，圆角、吸附/最大化时
+   的方角全交给 DWM —— 实测吸附后四角自动填满，我们一行判定都不用写。
+   探测失败（Win10 / 浏览器 / 探针）⇒ 不加类，用 `--radius-window` 的兜底值自己画，
+   此时"壳层透明 + shell-settled"那套（上面两条规则）继续负责压掉自绘圆角的白边。 */
+html.dwm-corners {
+  --radius-window: 0px;
+}
+
 /* 最大化时去掉圆角，避免四角留空 */
 html.window-maximized .app-shell,
 html.window-maximized body {
