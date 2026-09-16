@@ -1959,6 +1959,9 @@ async def async_fetch_posts(platform: str, uid: str, video_pages: int, dynamics_
     """
     global _post_fetch_running
 
+    # R28②：手动抓一次 = "有事发生" ⇒ 把动态流的空闲退避清零（否则用户点了抓取，
+    # 自动档还按"库很安静"的 10 分钟档位在跑）
+    note_dynamics_activity("手动抓取帖子")
     allowed, why = capabilities.content_fetch_allowed()
     if not allowed:
         logger.info(f"帖子抓取跳过（{platform}:{uid}）：{why}")
@@ -2313,6 +2316,7 @@ async def async_update_unarchived_posts(name: str | None = None) -> dict:
     """
     global _post_fetch_running
 
+    note_dynamics_activity("手动更新未归档帖子")      # R28②：手动动作恢复满速
     if not await _acquire_manual_post():
         logger.warning("帖子抓取正在进行中，跳过本次触发")
         return {"status": "skipped", "message": "帖子抓取任务正在进行中"}
@@ -2577,6 +2581,9 @@ async def live_sweep_core(db: Session, client: httpx.AsyncClient | None = None) 
                     # 直播边沿：落统计快照（直播日历场次推导的数据来源）
                     _record_stat_snapshot(db, acc)
                     db.commit()
+                    # R28②：开播意味着"内容马上会来" ⇒ 立刻把动态流恢复满速
+                    if acc.live_status and not prev_status:
+                        note_dynamics_activity(f"检测到开播（{acc.display_name or acc.platform_uid}）")
                 _push_account_snapshot(acc)
                 result.success += 1
             idx += len(chunk)
@@ -2728,6 +2735,8 @@ async def run_latest_dynamics_sweep() -> dict:
                "lanes": {pf: len(q) for pf, q in groups.items()},
                "lane_gaps": {pf: round(g, 2) for pf, g in lane_gaps.items()},
                "skipped_lanes": skipped_lanes}
+        # R28②：正常跑完的轮才计入空闲计数（跳过/异常不算 —— 那不代表"库很安静"）
+        _note_dynamics_round(total["stored"])
         return out
     except Exception as e:
         logger.error(f"动态流异常: {e}", exc_info=True)
@@ -3071,6 +3080,68 @@ def start_live_poller() -> None:
     threading.Thread(target=_live_poller_loop, name="t0-live-poller", daemon=True).start()
 
 
+# ── 动态流空闲退避（R28，devlog/127）────────────────────────────────────
+# 现况（2026-09-16 盘点，devlog/124）：动态流占日请求量约 90%，而且**无论有没有新帖**都按
+# 预算允许多快跑多快 —— 一个"三天没动静"的库照样每天一万多条请求。
+# 用户 2026-09-16 定：连续 N 轮没抓到新帖就往下让档；**恢复条件三个**（抓到新帖 / 手动抓一次 /
+# T0 检测到开播）。⚠️ 开播检测走 T0（1 请求/分钟，不受这条影响）⇒ 与 R25 的推送时效不冲突。
+DYNAMICS_IDLE_LADDER: tuple[tuple[int, float], ...] = ((12, 600.0), (6, 300.0), (3, 120.0))
+
+_dynamics_idle_streak: int = 0
+
+
+def dynamics_idle_floor(streak: int,
+                        ladder: tuple[tuple[int, float], ...] = DYNAMICS_IDLE_LADDER) -> float:
+    """连续 `streak` 轮没有新帖时，下一轮的**间隔下限**（秒）；未达第一档 → 0.0。
+
+    纯函数：档位表按"要求轮数"降序写，取第一个满足的（= 最保守的那档）。
+    """
+    for need, floor in ladder:
+        if streak >= need:
+            return floor
+    return 0.0
+
+
+def note_dynamics_activity(why: str = "") -> None:
+    """把空闲计数清零：**抓到新帖 / 手动抓取 / 检测到开播**都算"有事发生"（立即恢复满速）。"""
+    global _dynamics_idle_streak
+    if _dynamics_idle_streak:
+        logger.info(f"动态流恢复正常节奏（{why or '有活动'}）")
+    _dynamics_idle_streak = 0
+
+
+def _note_dynamics_round(stored: int) -> None:
+    """一轮动态流结束后更新空闲计数（只在**正常跑完**的轮里调）。"""
+    global _dynamics_idle_streak
+    if stored > 0:
+        note_dynamics_activity(f"本轮抓到 {stored} 条新帖")
+        return
+    before = dynamics_idle_floor(_dynamics_idle_streak)
+    _dynamics_idle_streak += 1
+    after = dynamics_idle_floor(_dynamics_idle_streak)
+    if after > before:
+        logger.info(f"动态流连续 {_dynamics_idle_streak} 轮无新帖 ⇒ 轮间隔下限抬到 "
+                    f"{after / 60:.0f} 分钟（抓到新帖 / 手动抓取 / 开播都会立即恢复）")
+
+
+def _dynamics_round_budget_seconds(cost: dict[str, int], rpm: int,
+                                   window: float = 60.0) -> float:
+    """一轮装不下预算时，**下一轮至少要等多久**才能让稳态速率回到 `rpm`（R28）。
+
+    背景：`_PlatformBudget._rpm_for()` 会把该平台的上限抬到"至少装得下一轮"
+    （本意是别让账号多的用户被自己饿死，见 devlog/R10 的注释）。那一轮该跑，
+    但**稳态速率不该跟着账号数无限上抬** —— 所以这里把"这一轮消耗的预算时长"
+    算出来当下限：`一轮 n 个请求 / rpm × 60s`。于是真实稳态 = rpm 次/分钟
+    （想更快就在设置里调高 `DYNAMICS_BUDGET_RPM`）。
+    """
+    if rpm <= 0 or not cost:
+        return 0.0
+    over = [n for n in cost.values() if n > rpm]
+    if not over:
+        return 0.0
+    return max((n / rpm) * window for n in over)
+
+
 def _dynamics_next_due(db: Session, *, since: float | None = None) -> float:
     """下一轮动态流的到期时刻（monotonic）。
 
@@ -3097,6 +3168,10 @@ def _dynamics_next_due(db: Session, *, since: float | None = None) -> float:
     # （账号数增长后不被自己饿死，见 _PlatformBudget._rpm_for）。
     wait = _dynamics_budget.wait_seconds(cost, by_platform=cost)
     interval = max(settings.DYNAMICS_MIN_GAP_SECONDS, wait)
+    # R28①：预算当**真上限**（逃逸口只保证"这一轮跑得动"，稳态仍由 rpm 决定）
+    interval = max(interval, _dynamics_round_budget_seconds(cost, settings.DYNAMICS_BUDGET_RPM))
+    # R28②：闲着就慢下来 —— 连续无新帖的档位给一个**间隔下限**（有活动立即清零）
+    idle_floor = dynamics_idle_floor(_dynamics_idle_streak)
     # R27 恢复期：刚被风控解禁的 10 分钟内把轮间隔拉开（≈ 半预算）——避免一解禁就满速。
     # 放在**间隔**上而不是改预算上限：预算是共享状态，动它会连带影响手动档的排期。
     ramp = rl.ramp_scale(_rl_states.values(), rl.now(), platforms=cost.keys())
@@ -3105,6 +3180,9 @@ def _dynamics_next_due(db: Session, *, since: float | None = None) -> float:
     due = time.monotonic() + _tier_delay(interval, settings.DYNAMICS_JITTER_SECONDS)
     if since is not None:
         due = max(due, since + settings.DYNAMICS_MIN_CYCLE_SECONDS)
+    if idle_floor:
+        base = since if since is not None else time.monotonic()
+        due = max(due, base + idle_floor)
     return due
 
 

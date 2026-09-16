@@ -17,14 +17,22 @@ from app.services import scheduler as sch
 
 @pytest.fixture(autouse=True)
 def _isolate_rate_limit_state():
-    """每个用例前后都把风控冷却状态清空/还原（含 `_rl_loaded` 标记）。"""
+    """每个用例前后都把风控冷却状态与动态流空闲计数清空/还原。
+
+    R27 起冷却状态会被调度逻辑读到（恢复期拉开轮间隔）；R28 起动态流还有"连续无新帖就
+    退避"的计数 —— 两者都是模块级状态，不隔离就会跨用例串台（实测：`test_dynamics_next_due_adaptive`
+    的 30s 期望曾被恢复期变成 59.99s）。
+    """
     saved_states = dict(sch._rl_states)
     saved_loaded = sch._rl_loaded
+    saved_streak = sch._dynamics_idle_streak
     sch._rl_states.clear()
+    sch._dynamics_idle_streak = 0
     yield
     sch._rl_states.clear()
     sch._rl_states.update(saved_states)
     sch._rl_loaded = saved_loaded
+    sch._dynamics_idle_streak = saved_streak
 
 
 @pytest.fixture(autouse=True)
