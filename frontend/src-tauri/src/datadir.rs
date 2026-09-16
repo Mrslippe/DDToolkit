@@ -210,12 +210,9 @@ pub fn resolve_startup(
 mod tests {
     use super::*;
 
-    /// 每个用例一个独立临时目录（用完删掉），避免相互干扰。
-    fn temp_root(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("ddtk-ptr-{}-{tag}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).unwrap();
-        d
+    /// 每个用例一个独立临时目录（**用完自删**，`TempRoot` 的 `Drop`，devlog/134），避免相互干扰。
+    fn temp_root(tag: &str) -> crate::testtmp::TempRoot {
+        crate::testtmp::TempRoot::new("ddtk-ptr", tag)
     }
 
     #[test]

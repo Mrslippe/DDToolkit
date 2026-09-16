@@ -64,11 +64,10 @@ pub fn log(data_dir: &Path, msg: &str) {
 mod tests {
     use super::*;
 
-    fn temp_root(tag: &str) -> std::path::PathBuf {
-        let d = std::env::temp_dir().join(format!("ddtk-shelllog-{}-{tag}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).unwrap();
-        d
+    /// 临时数据目录；**用完自删**（`TempRoot` 的 `Drop`，devlog/134）。
+    /// 注意 `write_failure_is_silent` 会把 `root` 本身写成文件 —— `Drop` 两条路都收拾。
+    fn temp_root(tag: &str) -> crate::testtmp::TempRoot {
+        crate::testtmp::TempRoot::new("ddtk-shelllog", tag)
     }
 
     #[test]

@@ -97,6 +97,9 @@ python scripts/ui_probe.py --close-ask               # R20 首次点 ✕ 的询�
                                                      # 记住）→ 选托盘则写偏好并隐藏 → 再点不再问
 python scripts/ui_probe.py --switch-perf --vtuber 15 # **切换性能测量**（devlog/132、133）：视图与 V 切换的
                                                      # 「点击 → 目标可见」耗时分布 + 连点 + 主线程长任务
+python scripts/perf_report.py --affinity-proxy      # **整机体检**（devlog/134）：整棵进程树的内存/线程/句柄 +
+                                                     # 冷热启动 + 空闲 CPU + 托盘深休眠 + 单核亲和代理（约 4 分钟，
+                                                     # 自动解压便携版、跑完自清；--keep 留现场、--json 落基线）
 ```
 
 > `--switch-perf`（2026-09-16 起，devlog/132；R31 起带一条硬判据，devlog/133）：耗时**只打印**

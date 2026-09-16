@@ -335,11 +335,9 @@ pub fn verify_copy(plan: &Plan) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    fn temp_root(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("ddtk-mig-{}-{tag}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).unwrap();
-        d
+    /// 每个用例一个独立临时目录；**用完自删**（`TempRoot` 的 `Drop`，devlog/134）
+    fn temp_root(tag: &str) -> crate::testtmp::TempRoot {
+        crate::testtmp::TempRoot::new("ddtk-mig", tag)
     }
 
     /// 造一份"像真的"数据目录：库 + 凭据 + 静态资源 + 要被跳过的两个大块
@@ -449,8 +447,9 @@ mod tests {
         let inside = src.join("sub");
         std::fs::create_dir_all(&inside).unwrap();
         assert!(plan_migration(&src, &inside).is_err());
-        // 源在目标里面
-        let outer = root.clone();
+        // 源在目标里面（目标 = root 本身）
+        // ⚠️ 用 `to_path_buf()` 而不是 `clone()`：`TempRoot` 是"自删守卫"，克隆它会双重删除
+        let outer = root.to_path_buf();
         assert!(plan_migration(&src, &outer).is_err(), "当前目录在所选目录里也要拦下");
     }
 

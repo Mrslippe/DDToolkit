@@ -28,6 +28,11 @@ mod migrate;
 /// 打包版里 `println!` 等于没有输出 —— 迁移连着三次真机失败，每次都得靠后端日志反推壳走到了哪一步。
 mod shelllog;
 
+/// 测试临时目录的公共载体（devlog/134）：三处用例此前**只建不删**，
+/// `%TEMP%` 里堆了 215 个残留目录 / 504MB。`TempRoot` 在 `Drop` 时自删。
+#[cfg(test)]
+mod testtmp;
+
 // 启动计时基线（冷启动优化，见 devlog/021）：各阶段毫秒时间戳输出到终端
 static T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
 
