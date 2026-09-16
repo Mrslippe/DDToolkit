@@ -772,11 +772,12 @@ def main() -> int:
     ap.add_argument(
         "--switch-perf",
         action="store_true",
-        help="切换性能**测量**（不是不变量门禁）：视图切换 / V 切换各自"
+        help="切换性能测量（耗时只打印）：视图切换 / V 切换各自"
              "「点击 → 目标可见」的耗时分布、连点（60ms 间隔）总耗时、主线程长任务数。"
-             "已知单次下限 = 200ms 的刻意退场（`useSceneTransition.EXIT_MS`）；"
-             "本模式跑在 Vite dev + React 开发模式，绝对值只作**开发态基线**，"
-             "只在「没切成」时判失败。需要至少 2 个已订阅 V。",
+             "已知单次下限 = 150ms 的刻意退场（`useSceneTransition.EXIT_MS`）；"
+             "本模式跑在 Vite dev + React 开发模式，绝对值只作开发态基线。"
+             "判失败的两条：切换没落地 / 连点重播了退场（连点该比单次快）。"
+             "需要至少 2 个已订阅 V。",
     )
     args = ap.parse_args()
     widths = args.width or [1100, 1280, 1440]
@@ -1486,10 +1487,11 @@ def main() -> int:
             return 1 if failures else 0
 
         if args.switch_perf:
-            # 切换性能**测量**（2026-09-16，devlog/132）：用户报"不同视图 / 不同 V 之间
-            # 快速切换有明显卡顿"。这不是不变量门禁，而是**基线工具** ——
-            # 单次下限本来就是 200ms 的刻意退场（`useSceneTransition.EXIT_MS`），
-            # 所以这里只在"没切成 / 探针没跑完"时判失败，耗时只打印（含开发态说明）。
+            # 切换性能**测量**（2026-09-16，devlog/132；R31 起带一条硬判据，devlog/133）：
+            # 用户报"不同视图 / 不同 V 之间快速切换有明显卡顿"。单次下限本来就是**刻意退场**
+            # （`useSceneTransition.EXIT_MS`，为了全程不出现「正在加载」闪帧），
+            # 所以耗时只打印（含开发态说明）；但**「连点重播退场」判失败** ——
+            # 那是真 bug：用户连点时要的是"快去那边"，不该再白等一整轮动画。
             w = widths[0]
             url = f"http://localhost:{vite_port}{route}?probe=switch-perf"
             print(f"[probe] switch-perf @{w} → {url}")
@@ -1514,11 +1516,21 @@ def main() -> int:
                 single = [i.get("ms") for i in (sp.get("views") or []) if isinstance(i.get("ms"), int)]
                 print(f"  连点（60ms 间隔点两次视图）：{burst} ms")
                 if burst and single:
-                    med1 = sorted(single)[len(single) // 2]
+                    med1 = sp.get("singleMedian")
+                    if not isinstance(med1, int):
+                        med1 = sorted(single)[len(single) // 2]
                     extra = min(burst) - med1 - 60      # 减去两次点击之间那 60ms
                     verdict = ("没有明显积压（≈ 单次 + 60ms 间隔）" if extra < 120
                                else f"比「单次 + 60ms」多 {extra}ms ⇒ 旧预取/退场在积压")
                     print(f"    → 单次中位 {med1}ms，连点最快 {min(burst)}ms：{verdict}")
+                    # R31 硬判据：退场**只该播一次** —— 连点若慢于/持平单次，
+                    # 说明第二次点击又等了一整轮退场（`planSceneStep` 该走 `commit`）。
+                    if sp.get("exitReplayed"):
+                        failures.append(
+                            f"@{w} switch-perf: 连点 {min(burst)}ms ≥ 单次中位 {med1}ms "
+                            f"⇒ 第二次点击重播了退场（应直接提交，devlog/133）")
+                    else:
+                        print(f"    → 比单次快 {med1 - min(burst)}ms ⇒ 没重播退场（退场只播一次）")
                 lts = sp.get("longTasks") or []
                 if sp.get("longTaskSupported"):
                     print(f"  主线程长任务（>50ms 阻塞）：{len(lts)} 条"

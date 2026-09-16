@@ -147,7 +147,8 @@
 | **光条 / glow-bar** | 右栏顶部视图切换条（四枚 `.view-btn`） | `PostsPage.tsx`；`styles/posts.css::.glow-bar` | 顺序：卡片→列表→档案→档案卡 |
 | **浮片 / float pill** | 斜切圆角白卡按钮/胶囊（全站按钮语言） | `components/common/FloatPill.tsx`；`.float-pill` | `.stat-pill` 为图像底特例 |
 | **覆盖式滚动条** | 不占宽、自动隐藏、可拖拽的滚动条 | `components/OverlayScroll.tsx`；`.os-root/.os-scroll/.os-thumb` | 全站唯一滚动容器 |
-| **场景动画** | 视图切换的入场/退场（`scene-in`/`scene-exit`/`anim-rise`） | `styles/layout.css`、`posts.css` | `--rise-i` 序号驱动错峰 |
+| **场景动画** | 视图切换的入场/退场（`scene-in`/`scene-exit`/`anim-rise`） | `styles/layout.css`、`posts.css` | `--rise-i` 序号驱动错峰；退场时长 `useSceneTransition.EXIT_MS` 必须**长于** `.scene-exit` 动画（单测钉住） |
+| **场景机 / sceneStep** | 切 V / 切视图的一步决策：退场 → 提交（`idle`/`commit`/`wait-prefetch`/`exit`） | `utils/sceneStep.ts`（纯函数）+ `hooks/useSceneTransition.ts`（执行） | 退场**只播一次**：退场中再来新目标直接 `commit`（连点不重播，R31/devlog133） |
 | **帖子卡片** | 列表页卡片（封面 220 + 正文 + 徽章） | `components/PostCard.tsx`；`.post-card*` | 宽度契约见 `.list-inner` |
 | **列宽契约** | 列表列恒为 `min(900, 可用宽)`，卡片铺满 | `styles/posts.css::.list-scroll .list-inner` | 探针断言项（devlog/039） |
 | **详情抽屉** | 帖子详情弹窗（正文/统计/墓碑时间线） | `components/PostDetailDrawer.tsx` | `body_json` 解析 |

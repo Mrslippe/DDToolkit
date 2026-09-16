@@ -609,11 +609,11 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 
 ### 退场编排（退出 → 进入，预取门控 + 原子提交）
 
-- `.scene-exit`（fall-out）：整块 `translateY(10px)` 下滑渐隐，**0.18s** ease-in（比 `EXIT_MS=200` 短 20ms，动画必在类移除前结束防竞态帧），`pointer-events:none` 防误点；与 rise-in 镜像闭合
+- `.scene-exit`（fall-out）：整块 `translateY(10px)` 下滑渐隐，**0.13s** ease-in（比 `EXIT_MS=150` 短 20ms，动画必在类移除前结束防竞态帧；这条同步关系由 `utils/sceneStep.test.ts` 断言），`pointer-events:none` 防误点；与 rise-in 镜像闭合
 - 机制：PostsPage 场景机 `scene{acc,view,exiting}` + **预取门控**——账号目标变化先并行预取三件套（getVtuber/第1页帖子/postStats），旧内容冻结可见；**数据就绪才退场**，EXIT_MS 后一次性应用预取数据（原子提交，页码归 1、**筛选按 VTuber/账号重置**——2026-09-05 用户反馈：筛选状态不跨 V/账号共享，提交时 filterRef 已是重置态与预取默认参数一致防种子错配），**全程无「正在加载」占位帧**
 - 防重拉闪动：提交播种 `seededPostsKeyRef`（posts effect 消费一次跳过重拉）+ `vtuberLoadedRef`（跳过冗余 getVtuber）；refreshTick 变化仍正常重拉
 - 应用：切 V、视图切换（视图切换无数据依赖立即退场；cards→list 首次帖子加载仍走正常 loading）；搜索/筛选/翻页仅重播入场不退场；**P6-1：筛选切换（type/搜索/时间/已删）立即滚回列表顶部**（触发即滚，不等重取；此前缓存恢复方案实测不达预期已 revert）
-- 快速连点：中止旧预取、回退退场（旧内容回到可见冻结），新目标就绪后重来；加载占位仅存于首次进入/手动刷新/错误态；reduced-motion 动画禁用（200ms 延迟保留）
+- 快速连点（**R31 改版**）：新目标替换预取、旧内容回退到可见冻结；但**退场只播一次** —— 第二次点击若落在退场窗口内，数据就绪即**立刻提交**（`utils/sceneStep.ts::planSceneStep` 的 `commit`），不再重播一轮淡出（唯一例外：换 V 而数据没预取好，仍要等，不能提交空场景）。规则与护栏（单测 + `--switch-perf` 的「连点该比单次快」判据）见 devlog/133；加载占位仅存于首次进入/手动刷新/错误态；reduced-motion 动画禁用（150ms 延迟保留）
 - 详情窗口动效（posts.css 末段）：居中 Dialog（P6-2 起）对齐全局运动语言——进场 260ms 淡入+scale(0.97) 缩入、退场 200ms 淡出+scale(0.97)（fall-out 同款 ease-in），遮罩与面板时长严格同步；覆盖 `[data-slot=dialog-content/overlay]` 的 animation-name/duration，radix animationend 卸载机制不受影响；reduced-motion 下 0.01ms 瞌时关闭
 - **直播日历增补**（2026-09-07）：月份切换 = keyed 网格重放 `.lc-grid-anim`（前进右滑入 20px / 后退左滑入，0.26s cubic-bezier）；场次详情弹窗 = `.lc-dlg-pop`（translateY 8 + scale .98，0.2s）；月份浮窗 = 同款 pop；均带 reduced-motion 守卫
 

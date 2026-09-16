@@ -9,14 +9,18 @@
  *          → EXIT_MS 后一次性提交（写入预取数据 + exiting=false）→ 新内容入场
  * ```
  *
- * ## 契约（只搬不改，语义与抽出前逐行一致）
+ * ## 契约
  *
  * - **只负责状态与定时器**：取什么数据（`prefetch`）、提交时写哪些 state（`onCommit`）、
  *   失败怎么收尾（`onFail`）都由调用方注入 —— 这个 hook 不 import `api`，
  *   也就保住"纯机器"的可测与可读；
+ * - **判断与执行分开**：下一步做什么由 `utils/sceneStep.ts::planSceneStep`（纯函数）决定，
+ *   本文件只把它执行成 setState / 定时器；分开的理由见那个文件（node 环境测不了 hook）；
  * - **同目标复用**：`prefetch` 只对"目标账号"发起一次；在途/已就绪都直接复用；
  * - **快速连点**：新目标会替换 `prefetchRef`，旧请求的晚到结果由 `alive()` 丢弃
  *   （**注意：旧请求不会 abort** —— 与抽出前一致；要省配额可在 `prefetch` 里自行 abort）；
+ *   并且**退场只播一次**（R31，devlog/133）—— 退场窗口内又来了新目标时，
+ *   数据就绪即提交，不再重播一轮淡出（用户连点要的是"快去那边"，不是再看一遍动画）；
  * - **失败兜底**：预取失败也进 `done`，提交时走 `onFail`（不留"永远转圈"）；
  * - **仅视图变化**：无数据依赖，直接退场 → `EXIT_MS` 后提交。
  *
@@ -28,9 +32,11 @@
  * （071 三次"卡死"其实是探针在看点击前抓到的旧节点，见 devlog/080。）
  */
 import { useEffect, useRef, useState } from 'react'
+import { planSceneStep } from '../utils/sceneStep'
 
-/** 场景退场时长（ms）：与 `styles/layout.css` 的 `.scene-exit` 0.2s 保持同步 */
-export const EXIT_MS = 200
+/** 场景退场时长（ms）：与 `styles/layout.css` 的 `.scene-exit` 保持同步
+ *  （动画必须**短于**它，由 `utils/sceneStep.test.ts` 断言） */
+export const EXIT_MS = 150
 
 export interface PrefetchEntry<T> {
   acc: number
@@ -68,6 +74,9 @@ export function useSceneTransition<T, V extends string>({
   const [scene, setScene] = useState({ acc: vtuberId, view, exiting: false })
   const [readyTick, bumpReady] = useState(0)
   const entryRef = useRef<PrefetchEntry<T> | null>(null)
+  /** 这轮退场是**为哪个目标**播的（R31）：用来把"连点换了目标"与"退场态自身的变化"分开 ——
+   *  不区分的话，`setScene(exiting:true)` 引发的 effect 自跑会被判成连点，退场直接被跳过。 */
+  const exitForRef = useRef<{ acc: number; view: V } | null>(null)
   // 提交回调放进 ref：定时器闭包可能过期，而 effect 依赖里不该带回调（会每帧重跑）
   const cbRef = useRef({ prefetch, onCommit, onFail })
   cbRef.current = { prefetch, onCommit, onFail }
@@ -102,40 +111,60 @@ export function useSceneTransition<T, V extends string>({
   useEffect(() => {
     const accChanged = scene.acc !== vtuberId
     const viewChanged = scene.view !== view
-    if (!accChanged && !viewChanged && !scene.exiting) return
 
-    // 仅视图变化：无数据依赖，立即退场 → 提交
-    if (!accChanged) {
-      setScene((s) => (s.exiting ? s : { ...s, exiting: true }))
-      const t = setTimeout(() => {
-        entryRef.current = null
-        setScene({ acc: vtuberId, view, exiting: false })
-      }, exitMs)
-      return () => clearTimeout(t)
+    // 账号变化才需要预取；"就绪"也只在账号变化时有意义
+    let ready = false
+    if (accChanged) {
+      startPrefetch(vtuberId, view)
+      const pf = entryRef.current
+      ready = !!pf && pf.acc === vtuberId && pf.done
     }
 
-    // 账号变化：预取门控
-    startPrefetch(vtuberId, view)
-    const pf = entryRef.current
-    const ready = !!pf && pf.acc === vtuberId && pf.done
-    if (!ready) {
-      // 未就绪：旧内容保持可见冻结（若在退场中先回退），等预取完成信号重入门控
-      setScene((s) => (s.exiting ? { ...s, exiting: false } : s))
-      return
-    }
-    setScene((s) => (s.exiting ? s : { ...s, exiting: true }))
-    const t = setTimeout(() => {
-      const entry = entryRef.current
-      const ctx = { vtuberId, view }
-      if (entry && entry.acc === vtuberId && entry.data !== undefined && !entry.failed) {
-        cbRef.current.onCommit(entry.data, ctx)
-      } else {
-        cbRef.current.onFail(entry?.failed, ctx)
+    /** 提交：一次性写入预取数据（账号变化时）+ 落地目标视图 + 清退场态 */
+    const commit = () => {
+      if (accChanged) {
+        const entry = entryRef.current
+        const ctx = { vtuberId, view }
+        if (entry && entry.acc === vtuberId && entry.data !== undefined && !entry.failed) {
+          cbRef.current.onCommit(entry.data, ctx)
+        } else {
+          cbRef.current.onFail(entry?.failed, ctx)
+        }
       }
       entryRef.current = null
+      exitForRef.current = null
       setScene({ acc: vtuberId, view, exiting: false })
-    }, exitMs)
-    return () => clearTimeout(t)
+    }
+
+    const exitFor = exitForRef.current
+    const step = planSceneStep({
+      accChanged,
+      viewChanged,
+      exiting: scene.exiting,
+      // 为别的目标播的退场才算"已经播过"（连点可跳）；为自己播的要继续等定时器
+      exitingIsForTarget: !!exitFor && exitFor.acc === vtuberId && exitFor.view === view,
+      ready,
+      exitMs,
+    })
+    switch (step.kind) {
+      case 'idle':
+        return
+      case 'wait-prefetch':
+        // 未就绪：旧内容保持可见冻结（若在退场中先回退），等预取完成信号重入门控
+        exitForRef.current = null
+        setScene((s) => (s.exiting ? { ...s, exiting: false } : s))
+        return
+      case 'commit':
+        // 退场已经为别的目标播过：新目标直接落地，不再等第二轮
+        commit()
+        return
+      case 'exit': {
+        exitForRef.current = { acc: vtuberId, view }
+        setScene((s) => (s.exiting ? s : { ...s, exiting: true }))
+        const t = setTimeout(commit, step.waitMs)
+        return () => clearTimeout(t)
+      }
+    }
     // startPrefetch 是每次渲染新建的闭包：不进依赖（它只读 ref 与 props），
     // 依赖里放它会让 effect 每帧重跑、把提交定时器反复清掉。
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -441,7 +441,7 @@ export async function runUiProbe(): Promise<void> {
     // 场景切换机（`PostsPage` 的预取门控 + 原子提交）的**诊断 + 护栏**（devlog/080）。
     //
     // 背景：devlog/071 记过三次护栏尝试都失败 —— 点侧栏切 V 后路由与侧栏都切了、
-    // 场景机也进了 `scene-exit`，但那个 200ms 的提交定时器在虚拟时间里**始终没落地**。
+    // 场景机也进了 `scene-exit`，但那个退场提交定时器在虚拟时间里**始终没落地**。
     // 当时分不清"探针环境"还是"真 bug"，于是把护栏整体撤了。
     // 这里不再猜：**把 fetch 全程记下来**（预取到底有没有回来）+ 记录 `.view-body`
     // 的 class 变化序列，一次跑完就能判定是哪一边的问题。
@@ -2025,11 +2025,12 @@ export async function runUiProbe(): Promise<void> {
 
   // 切换性能**测量**（`?probe=switch-perf`，2026-09-16）：
   // 用户报"不同视图 / 不同 V 之间快速切换有明显卡顿"。已知**下限是设计定的** ——
-  // `useSceneTransition` 的 `EXIT_MS = 200` 刻意退场（为了全程不出现"正在加载"闪帧），
-  // 所以这里量的不是"有没有 200ms"，而是三件事：
+  // `useSceneTransition` 的 `EXIT_MS = 150` 刻意退场（为了全程不出现"正在加载"闪帧），
+  // 所以这里量的不是"有没有 150ms"，而是四件事：
   //   ① 视图切换 / V 切换各自的"点击 → 目标可见"耗时分布；
   //   ② **连点**（60ms 间隔点两次）的总耗时 —— 明显超过单次就说明旧预取在积压（不能中断）；
-  //   ③ 主线程**长任务**（>50ms 阻塞）的条数与最长时间 —— 用来区分"在等动画"与"渲染卡住"。
+  //   ③ 主线程**长任务**（>50ms 阻塞）的条数与最长时间 —— 用来区分"在等动画"与"渲染卡住"；
+  //   ④ **连点有没有重播退场**（R31 起是硬判据）：退场只该播一次，连点应当比单次更快。
   //
   // ⚠️ 跑在 Vite dev + React 开发模式（StrictMode 双挂载、未压缩）⇒ 绝对值只当**开发态基线**，
   //    打包版会更快；它的价值是相对信号（哪种切换更贵、贵在动画还是挂载）。
@@ -2133,6 +2134,20 @@ export async function runUiProbe(): Promise<void> {
       await sleep(300)
     }
     result.burst = burst
+
+    // ④ **连点是否重播了退场**（R31 护栏，devlog/133）：退场只该播一次 ——
+    //    第二次点击落在退场窗口内时应当**立刻提交**（`planSceneStep` 的 `commit`），
+    //    所以「连点总耗时」必须**明显短于**「单次切换」（单次含同一段退场）。
+    //    判据用 `>=` 而不是"接近"：单次中位本身有噪声，宁可放过也不要假红 ——
+    //    真重播的代价是整整一轮退场（>100ms），离中位足够远。
+    if (burst.length && views.length) {
+      const sorted = views.map((v) => v.ms).slice().sort((a, b) => a - b)
+      const med = sorted[Math.floor(sorted.length / 2)]
+      const burstMin = Math.min(...burst)
+      result.singleMedian = med
+      result.burstMin = burstMin
+      result.exitReplayed = burstMin >= med
+    }
 
     result.longTaskSupported = longTaskSupported
     result.longTasks = longTasks

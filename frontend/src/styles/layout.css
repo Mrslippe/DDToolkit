@@ -1003,7 +1003,8 @@ html.window-maximized body {
 }
 
 /* 场景退场：整块下滑渐隐（与 rise-in 镜像闭合）。
-   0.18s 比 PostsPage.EXIT_MS=200 短 20ms：动画必在类移除前结束，杜绝竞态闪帧 */
+   0.13s 比 useSceneTransition.EXIT_MS=150 短 20ms：动画必在类移除前结束，杜绝竞态闪帧
+   （这条同步关系由 src/utils/sceneStep.test.ts 断言，别只改一边） */
 @keyframes fall-out {
   to {
     opacity: 0;
@@ -1012,7 +1013,7 @@ html.window-maximized body {
 }
 
 .scene-exit {
-  animation: fall-out 0.18s cubic-bezier(0.55, 0, 0.55, 0.2) both;
+  animation: fall-out 0.13s cubic-bezier(0.55, 0, 0.55, 0.2) both;
   pointer-events: none;
 }
 
