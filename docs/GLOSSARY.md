@@ -178,6 +178,7 @@
 | **sidecar 就绪信号** | `DDTOOLKIT_READY <url>` + `logs/sidecar.log` 性能打点 | `backend_main.py` | Tauri 启动器据此等就绪 |
 | **父进程看门狗** | 壳退出后后端自尽 | `backend_main.py::_watch_parent` | 防孤儿进程 |
 | **发布链** | 后端 → 桌面应用 → 聚合产物 | `npm run release`；`scripts/{build_backend,collect_release,upload_release_assets}.py` | 说明 `docs/RELEASE.md` |
+| **数据目录体检 / 库维护** | 数据目录里谁在长（库 / 图片缓存 / 日志 / 遗留备份 + 磁盘剩余）；删数据后**真的还盘** | `app/services/db_maintenance.py`（`dir_stats` / `sqlite_stats` / `ensure_incremental_autovacuum` / `incremental_vacuum`）、`app/routers/img_proxy.py::prune_cache`、`config.IMG_CACHE_MAX_MB`（默认 300，`DDTOOLKIT_IMG_CACHE_MAX_MB` 可覆盖） | 图片缓存**按 mtime 淘汰 = 近似 LRU**（命中刷新 mtime，热图不会被误删）；库切 `auto_vacuum=INCREMENTAL` **带 512MB 门槛**（全库 VACUUM 的临时空间≈库大小，不在升级路径上冒险）；两条 PRAGMA **不能在事务里**跑（走 DBAPI autocommit）；实测 8 个 V ⇒ 库 54MB（原文 JSON 占 46%）+ 缓存 101MB —— 涨得最快的是缓存 |
 | **版本号同步点** | `settings.VERSION` / `package.json` / `tauri.conf.json` / `Cargo.toml` / `Cargo.lock` / README badge | 6 处 + devlog | 测试 `test_version_synced_with_devlog` |
 | **dev_check** | 一键本地验证（pytest + 后端冒烟） | `scripts/dev_check.py` | 可选 `--frozen` / `--portable` |
 | **UI 探针** | 布局不变量机器验证（三档窗口宽） | `scripts/ui_probe.py` | `--first-run` 验首启浮窗 |

@@ -44,6 +44,9 @@ _ALLOWED_CTYPES = {
 }
 _CACHE_TTL = 7 * 24 * 3600      # 缓存有效期（与 Cache-Control 一致）
 _CLEANUP_INTERVAL = 3600        # 过期文件清理的最短间隔
+# 容量上限（R22，2026-09-16）：原来只管时间不管体积。解析规则与 `config.IMG_CACHE_MAX_MB` 一致，
+# 但**放在模块级**是为了让测试能直接改小它（与 CACHE_DIR 一样的处理）。
+_CACHE_MAX_BYTES = max(0, int(getattr(settings, "IMG_CACHE_MAX_MB", 300))) * 1024 * 1024
 
 _UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -167,25 +170,94 @@ def _atomic_write(path: Path, data: bytes | str) -> None:
     os.replace(tmp, path)
 
 
+def _cache_entries() -> list[tuple[Path, float, int]]:
+    """当前缓存条目：`(bin 路径, mtime, 字节数)`。
+
+    mtime 就是"最后使用时间" —— 命中缓存时会刷新它（见 `img_proxy`），所以它能当 LRU 判据。
+    """
+    out: list[tuple[Path, float, int]] = []
+    try:
+        for p in CACHE_DIR.glob("*.bin"):
+            try:
+                st = p.stat()
+                out.append((p, st.st_mtime, st.st_size))
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return out
+
+
+def cache_stats() -> dict[str, int]:
+    """缓存现状（给日志与「关于」页的占用显示用）。"""
+    entries = _cache_entries()
+    return {
+        "files": len(entries),
+        "bytes": sum(e[2] for e in entries),
+        "max_bytes": _CACHE_MAX_BYTES,
+    }
+
+
+def prune_cache(now: float | None = None) -> dict[str, int]:
+    """清缓存：① 过期 ② 仍超容量上限时按**最久未用**淘汰。
+
+    ① 的判据是 `st_mtime > _CACHE_TTL * 2` —— 注意"过期"与"判命中失效"不是一回事：
+       命中判定用的是 `.json` 里的 `fetched_at`（7 天），这里再留一个 7 天的窗口才动手删，
+       免得刚过期的图片立刻消失、下次看又要回源。
+    ② 按 mtime 最旧优先删到上限以下。**为什么不是"抓取时间最旧"**：命中会刷新 mtime，
+       于是它近似 LRU —— 左栏头像、常看的封面这类热图不会因为"抓得早"被误删。
+
+    返回 `{"expired": n, "evicted": n, "bytes": b}`；定时清理与手动清理共用这一份。
+    """
+    now = time.time() if now is None else now
+    expired = evicted = freed = 0
+
+    alive: list[tuple[Path, float, int]] = []
+    for p, mtime, size in _cache_entries():
+        if now - mtime > _CACHE_TTL * 2:
+            try:
+                p.unlink(missing_ok=True)
+                p.with_suffix(".json").unlink(missing_ok=True)
+                expired += 1
+                freed += size
+                continue
+            except OSError:
+                pass
+        alive.append((p, mtime, size))
+
+    total = sum(e[2] for e in alive)
+    if _CACHE_MAX_BYTES and total > _CACHE_MAX_BYTES:
+        for p, _mtime, size in sorted(alive, key=lambda e: e[1]):
+            if total <= _CACHE_MAX_BYTES:
+                break
+            try:
+                p.unlink(missing_ok=True)
+                p.with_suffix(".json").unlink(missing_ok=True)
+                total -= size
+                evicted += 1
+                freed += size
+            except OSError:
+                continue
+
+    if expired or evicted:
+        logger.info(
+            f"图片缓存清理：过期 {expired} 个 / 超限淘汰 {evicted} 个，释放 "
+            f"{freed / 1048576:.1f}MB（现存 {total / 1048576:.1f}MB，"
+            f"上限 {_CACHE_MAX_BYTES / 1048576:.0f}MB）")
+    return {"expired": expired, "evicted": evicted, "bytes": freed}
+
+
 def _maybe_cleanup_cache() -> None:
-    """过期缓存文件清理（按 _CLEANUP_INTERVAL 节流，避免每次请求都扫描）。"""
+    """按 `_CLEANUP_INTERVAL` 节流地调 `prune_cache()`（避免每次请求都扫目录）。"""
     global _last_cleanup
     now = time.time()
     if now - _last_cleanup < _CLEANUP_INTERVAL:
         return
     _last_cleanup = now
     try:
-        if not CACHE_DIR.exists():
-            return
-        for p in CACHE_DIR.glob("*.bin"):
-            try:
-                if now - p.stat().st_mtime > _CACHE_TTL * 2:
-                    p.unlink(missing_ok=True)
-                    p.with_suffix(".json").unlink(missing_ok=True)
-            except OSError:
-                pass
-    except OSError:
-        pass
+        prune_cache(now)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"图片缓存清理失败（不影响本次响应）: {e}")
 
 
 @router.get("/img-proxy")
@@ -200,6 +272,12 @@ async def img_proxy(url: str = Query(...)):
         try:
             meta = _json.loads(meta_path.read_text(encoding="utf-8"))
             if time.time() - meta.get("fetched_at", 0) <= _CACHE_TTL:
+                # 刷新"最后使用时间"：容量上限的淘汰判据是 mtime（近似 LRU），
+                # 不刷新的话热图会按"抓取时间"排队被删 —— 那正是我们不想要的。
+                try:
+                    os.utime(body_path, None)
+                except OSError:
+                    pass
                 return Response(
                     content=body_path.read_bytes(),
                     media_type=meta.get("type", "application/octet-stream"),

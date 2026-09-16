@@ -233,6 +233,17 @@ async def lifespan(app: FastAPI):
     _run_migrations()
     _perf("迁移完成")
 
+    # 库维护（R22）：把库切成增量 auto-vacuum，之后删数据才会真的还盘
+    # （SQLite 默认只把删掉的行丢进 freelist，文件永不缩小）。
+    # 带体积门槛、失败只留日志 —— 这条是"体验优化"，绝不能挡住启动。
+    try:
+        from app.services.db_maintenance import ensure_incremental_autovacuum
+        _av = ensure_incremental_autovacuum()
+        if _av != "already":
+            logger.info(f"数据库维护：auto_vacuum 切换结果 = {_av}")
+    except Exception as e:
+        logger.warning(f"数据库维护跳过（不影响启动）: {type(e).__name__}: {e}")
+
     # 运行时设置覆盖层（R14a）：必须在调度器启动**之前**载入 ——
     # 否则第一轮会按默认值跑（用户上次改的抓取节奏要等下一轮才生效）。
     try:

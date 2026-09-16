@@ -151,6 +151,12 @@ class Settings:
     # 图片代理（/img-proxy 兜底链路）：B 站图床 + 微博图床
     IMG_PROXY_ALLOWED_HOSTS: str = os.getenv("IMG_PROXY_ALLOWED_HOSTS", "hdslb.com,sinaimg.cn,wbcdn.cn")
     IMG_CACHE_DIR: str = str(DATA_DIR / "static" / "img-cache")
+    # 图片磁盘缓存的**容量上限**（R22，2026-09-16）：原来只管时间（TTL 7 天）不管体积，
+    # 实测开发档就到 101.7MB / 271 文件，而它是数据目录里涨得最快的一块。
+    # 超限后按"最久未用"淘汰（命中会刷新 mtime）——缓存是纯可再生数据，删了只是重下。
+    # **不做成界面设置项**：这是个"多大算大"的运维参数，放环境变量 + 让「关于」页显示占用即可，
+    # 免得设置窗口又多一行没人看得懂的旋钮。
+    IMG_CACHE_MAX_MB: int = int(os.getenv("DDTOOLKIT_IMG_CACHE_MAX_MB", "300"))
 
     # ── 覆盖层（R14a，devlog/091）──────────────────────────────────────
     def __getattribute__(self, name: str):

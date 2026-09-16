@@ -431,6 +431,21 @@ T0 的进度反馈就是这条通道（无进度条、无胶囊）。
 唤回时**重建窗口**并加载 `index.html?restored=1`（SPA 深链接在资源协议下会 404）；位置与视图从
 `localStorage` 的 `ddtoolkit.shell-state` 恢复，`?restored=1` 是**唯一的恢复开关**（普通启动不恢复）。
 
+### 3.11 数据目录与磁盘占用（2026-09-16，R22 devlog/103）
+
+数据目录默认在 `%APPDATA%\com.ddtoolkit.app`（便携版可用 `DDTOOLKIT_DATA_DIR` 指定）。
+实测开发档（8 个 V / 11 账号）：**库 54.3MB**（其中 `posts.raw_json` 占 **46%**，5.9KB/帖）、
+**图片缓存 101.7MB**、日志 5.7MB ⇒ 涨得最快的是**图片缓存**，其次是库里的原文 JSON。
+
+| 机制 | 规则 | 为什么 |
+|---|---|---|
+| 图片缓存 | TTL 7 天；**容量上限 `IMG_CACHE_MAX_MB`（默认 300）**，超限按 **mtime 最旧优先**淘汰 | 缓存是纯可再生数据。**命中会刷新 mtime** ⇒ 淘汰近似 LRU，热图（头像/常看封面）不会因"抓得早"被误删 |
+| 库回收 | 启动时把库切成 `auto_vacuum=INCREMENTAL`（**超 512MB 跳过**）；解除订阅/删账号之后调 `incremental_vacuum()` | SQLite 默认 `NONE`：删掉的行只进 freelist，**文件永不缩小**；而全库 VACUUM 的临时空间≈库大小，不适合在升级路径上做 |
+| 体检 | `app/services/db_maintenance.py::dir_stats()`：库（含 `-wal`/`-shm`）/ 缓存 / 日志 / 其余 + 磁盘剩余 + **遗留备份清单** | "哪块在长"必须能被回答；`vtuber.db.bak-*` 这类手工备份不会自己消失 |
+
+> ⚠️ 两条 PRAGMA（`auto_vacuum` / `VACUUM`）**不能在事务里执行** —— 维护代码走 DBAPI 的
+> autocommit 连接，不套 SQLAlchemy 的隐式事务（`tests/test_db_maintenance.py` 用真库钉住）。
+
 ## 4. 数据来源地图
 
 | 来源 | 接口 | 鉴权 | 频率 | 落库 |

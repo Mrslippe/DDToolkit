@@ -262,6 +262,10 @@ def delete_vtuber(vtuber_id: int, db: Session = Depends(get_db)):
         logger.error(f"解除订阅 VTuber#{vtuber_id} ({v.name}) 被外键挡下: {e}")
         raise HTTPException(409, "该 VTuber 仍有从属数据未清理干净，解除订阅未生效") from e
     logger.info(f"解除订阅 VTuber#{vtuber_id} ({v.name})：清理 {counts}")
+    # 破坏性清理之后回收空闲页（R22，devlog/103）：只有这种操作才会一次产生大量 freelist，
+    # 而 SQLite 默认不会把空闲页还给系统（文件不缩小）。失败不影响业务结果。
+    from app.services.db_maintenance import incremental_vacuum
+    incremental_vacuum()
 
 
 # ── Account CRUD ───────────────────────────────────────────────────
@@ -366,6 +370,9 @@ def delete_account(account_id: int, db: Session = Depends(get_db)):
         logger.error(f"删除 Account#{account_id} 被外键挡下: {e}")
         raise HTTPException(409, "该账号仍有从属数据未清理干净，删除未生效") from e
     logger.info(f"删除 Account#{account_id} ({acc.platform}:{acc.platform_uid})：清理 {counts}")
+    # 同上：删账号也是破坏性清理，删完把空闲页还盘（R22）
+    from app.services.db_maintenance import incremental_vacuum
+    incremental_vacuum()
 
 
 @router.get("/account/{account_id}/stat-snapshots", response_model=list[AccountStatSnapshotOut])
