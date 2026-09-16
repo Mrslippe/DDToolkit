@@ -306,6 +306,52 @@ async fn migrate_data_dir(app: tauri::AppHandle) -> Result<MigrateReport, String
     })
 }
 
+/// 打开发布页（R23b）：连不上 GitHub 时的兜底出口。
+///
+/// 为什么直接调 Windows API 而不是插件：前端没装 `@tauri-apps/plugin-shell` 的 JS 包；
+/// `tauri-plugin-shell` 的 Rust `open()` 已标记废弃（官方让换 `tauri-plugin-opener`），
+/// 而为了"打开一个固定网址"再引一个插件不值得 —— `ShellExecuteW` 就够，且 URL 是常量
+/// （比"前端随便传 URL"安全）。
+#[tauri::command]
+fn open_release_page() -> Result<(), String> {
+    const URL: &str = "https://github.com/Mrslippe/DDToolkit/releases/latest";
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::UI::Shell::ShellExecuteW;
+        use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+        let wide: Vec<u16> = std::ffi::OsStr::new(URL)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let op: Vec<u16> = std::ffi::OsStr::new("open")
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        // SAFETY: 三个参数都是以 NUL 结尾的宽字符串（或用 null）
+        let rc = unsafe {
+            ShellExecuteW(
+                std::ptr::null_mut(),
+                op.as_ptr(),
+                wide.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                SW_SHOWNORMAL,
+            )
+        };
+        // ShellExecuteW 的返回值 >32 才算成功（≤32 是错误码，见 Win32 文档）
+        if rc as isize <= 32 {
+            return Err(format!("打开发布页失败（ShellExecuteW rc={}）", rc as isize));
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("只有 Windows 端支持打开发布页".to_string())
+    }
+}
+
 fn dir_size(path: &std::path::Path) -> u64 {
     let mut total = 0;
     let Ok(entries) = std::fs::read_dir(path) else { return 0 };
@@ -778,7 +824,8 @@ pub fn run() {
             quit_app,
             storage_info,
             migrate_data_dir,
-            delete_old_data_dir
+            delete_old_data_dir,
+            open_release_page
         ])
         .on_window_event(|window, event| {
             // ✕ 不再等于"退出"（R18，devlog/095）：关闭请求被拦下，改成隐藏到托盘，

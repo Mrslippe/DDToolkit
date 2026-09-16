@@ -19,6 +19,7 @@ import {
 import { useIsMaximized } from '../hooks/useIsMaximized'
 import { useShellHidden } from '../hooks/useShellHidden'
 import { useLowSpaceNotice } from '../hooks/useLowSpaceNotice'
+import { useUpdateCheck } from '../hooks/useUpdateCheck'
 import { setFetchBusy } from '../fetchBusy'
 import { isFirstRun } from '../bootState'
 import { dispatchFetchIdle, type FetchIdleKind } from '../utils/fetchIdle'
@@ -86,6 +87,8 @@ export default function TopBar() {
   // 磁盘快满时提醒一次（R22-B）：等第一轮 fetch-status 回来再查 ——
   // 既保证后端就绪，也保证下面那个 `pill-message` 监听已经挂上（不然消息会丢）。
   useLowSpaceNotice(status !== null)
+  // 启动后静默查一次更新（R23b）：同样等后端就绪，发现新版本时发一条状态岛消息
+  useUpdateCheck(status !== null)
   const location = useLocation()
   // 登录：浮窗开关 + 两平台登录态（约 60s 轮询一次，供入口徽章提示）
   const [loginOpen, setLoginOpen] = useState(false)

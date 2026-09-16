@@ -17,7 +17,9 @@ import type { AppSettings, SettingSpec, StorageInfo } from '../api/types'
 import { usePrefs } from '../hooks/usePrefs'
 import { formatBytes } from '../utils/format'
 import {
-  deleteOldDataDir, migrateDataDir, storageInfo, type ShellDataDirInfo,
+  checkForUpdate, deleteOldDataDir, hasPendingUpdate, installUpdate, isDesktopShell,
+  migrateDataDir, openReleasePage, pendingUpdateInfo, storageInfo,
+  type ShellDataDirInfo, type UpdateInfo,
 } from '../utils/shellBridge'
 
 /** 数据目录来源 → 给用户看的话（Rust 侧给的是 env / migrated / default） */
@@ -203,6 +205,60 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
       toast.success(`旧目录已删除，释放 ${formatBytes(freed)}`)
     } catch (e) {
       toast.error(`删除旧目录失败：${(e as Error).message}`)
+    }
+  }
+
+  /** 应用内更新（R23b）：状态机在本组件，桥接层只管"查 / 装 / 打开发布页" */
+  const [update, setUpdate] = useState<UpdateInfo | null>(null)
+  const [updateState, setUpdateState] =
+    useState<'idle' | 'checking' | 'latest' | 'available' | 'error'>('idle')
+  const [updateError, setUpdateError] = useState<string | null>(null)
+  /** 下载/安装中：**独立标记**而不是塞进 `updateState` —— 否则切到 installing 时
+      "发现新版本"那个分支就不再渲染，按钮与进度条会当场消失（tsc 的类型收窄先发现的） */
+  const [installing, setInstalling] = useState(false)
+  const [updatePct, setUpdatePct] = useState<number | null>(null)
+  const isShell = isDesktopShell()
+  const portable = shellDir?.portable ?? false
+
+  // 启动时的静默检查若已发现新版本，打开关于页就直接显示（不重复发请求）
+  useEffect(() => {
+    if (!open || active !== ABOUT_ID || !hasPendingUpdate()) return
+    const info = pendingUpdateInfo()
+    if (info) {
+      setUpdate(info)
+      setUpdateState('available')
+    }
+  }, [open, active])
+
+  const doCheckUpdate = async () => {
+    setUpdateState('checking')
+    setUpdateError(null)
+    try {
+      const info = await checkForUpdate()
+      if (info) {
+        setUpdate(info)
+        setUpdateState('available')
+      } else {
+        setUpdate(null)
+        setUpdateState('latest')
+      }
+    } catch (e) {
+      setUpdateError((e as Error).message)
+      setUpdateState('error')
+    }
+  }
+
+  const doInstallUpdate = async () => {
+    setInstalling(true)
+    setUpdatePct(null)
+    setUpdateError(null)
+    try {
+      await installUpdate(setUpdatePct)   // 成功的话进程会自己重启，这里不会继续往下走
+    } catch (e) {
+      setUpdateError((e as Error).message)
+      setUpdateState('error')
+    } finally {
+      setInstalling(false)
     }
   }
 
@@ -706,6 +762,72 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
                       </>
                     ) : (
                       <p className="aps-note">读取中…</p>
+                    )}
+                  </section>
+
+                  {/* 应用更新（R23b）：桌面端才给「检查更新」；**便携版不自我更新**
+                      （解压即用的目录不该被安装器覆盖，只提示去发布页下新版压缩包）。 */}
+                  <section className="aps-update" data-testid="aps-update">
+                    <h4 className="aps-section-head">应用更新</h4>
+                    <p className="aps-note">
+                      当前版本 <b>{data.info.version}</b>
+                      {!isShell && ' · 更新只在桌面端可用'}
+                    </p>
+                    {isShell && (
+                      <>
+                        {updateState === 'available' && update ? (
+                          <>
+                            <p className="aps-note" data-update="available">
+                              发现新版本 <b>v{update.version}</b>
+                              {update.date ? `（${update.date.slice(0, 10)}）` : ''}
+                            </p>
+                            {update.notes && (
+                              <p className="aps-note aps-update-notes">{update.notes}</p>
+                            )}
+                            <div className="aps-storage-actions">
+                              <FloatPill
+                                size="md" shape="text" active
+                                data-testid="aps-update-install"
+                                disabled={installing}
+                                onClick={() => void (portable ? openReleasePage() : doInstallUpdate())}
+                              >
+                                {portable ? '打开发布页下载'
+                                  : installing
+                                    ? `下载中 ${updatePct === null ? '…' : `${updatePct}%`}`
+                                    : '下载并重启安装'}
+                              </FloatPill>
+                            </div>
+                            {portable && (
+                              <p className="aps-note">
+                                便携版不自动覆盖：请到发布页下载新版压缩包，解压后替换整个目录。
+                              </p>
+                            )}
+                          </>
+                        ) : (
+                          <div className="aps-storage-actions">
+                            <FloatPill
+                              size="md" shape="text"
+                              data-testid="aps-update-check"
+                              disabled={updateState === 'checking'}
+                              onClick={() => void doCheckUpdate()}
+                            >
+                              {updateState === 'checking' ? '检查中…' : '检查更新'}
+                            </FloatPill>
+                            <FloatPill size="md" shape="text"
+                                       onClick={() => void openReleasePage()}>
+                              打开发布页
+                            </FloatPill>
+                          </div>
+                        )}
+                        {updateState === 'latest' && (
+                          <p className="aps-note" data-update="latest">已是最新版本</p>
+                        )}
+                        {updateState === 'error' && (
+                          <p className="aps-field-error" data-update="error">
+                            检查更新失败：{updateError}（连不上 github.com 时可以直接去发布页下载）
+                          </p>
+                        )}
+                      </>
                     )}
                   </section>
                   <ul className="aps-readonly-list">

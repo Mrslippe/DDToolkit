@@ -4579,6 +4579,24 @@ img.hero-avatar {
   margin-top: 10px;
 }
 
+/* 应用更新（R23b）：说明可能很长（发布说明的开头一段），限高可滚，别把关于页撑爆 */
+.aps-update {
+  margin-top: 4px;
+}
+
+.aps-update .aps-storage-actions {
+  margin-top: 8px;
+}
+
+.aps-update-notes {
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--c-bg-list);
+}
+
 /* 页尾「高级（默认收起）」：调优类字段的折叠区，默认不占视觉重量 */
 .aps-fold {
   margin-top: 14px;

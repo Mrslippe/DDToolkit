@@ -123,3 +123,105 @@ export async function deleteOldDataDir(dir: string): Promise<number> {
     throw new Error(typeof e === 'string' ? e : String(e))
   }
 }
+
+// ── 应用内更新（R23b，devlog/114）─────────────────────────────────────
+
+export interface UpdateInfo {
+  version: string
+  /** 更新说明（取自 `latest.json` 的 notes，是发布说明的开头一段） */
+  notes: string | null
+  date: string | null
+}
+
+/**
+ * 待安装的更新。**留在模块作用域**：启动时的静默检查发现新版本后，
+ * 用户过一会儿才点"更新并重启"，那时不该再查一次（也避免两次检查结果不一致）。
+ */
+let pendingUpdate: unknown = null
+/** 与 `pendingUpdate` 配套的信息（给界面直接显示，不必为了"发现了什么版本"再查一次网络） */
+let pendingInfo: UpdateInfo | null = null
+
+/** 有没有已发现、待安装的更新（关于页据此直接显示，不必重查） */
+export function hasPendingUpdate(): boolean {
+  return pendingUpdate !== null
+}
+
+/** 已发现的更新信息（没有就返回 `null`）——**不发网络请求** */
+export function pendingUpdateInfo(): UpdateInfo | null {
+  return pendingInfo
+}
+
+/**
+ * 检查更新。三种"没有更新"要分清（都返回 `null`，但含义不同）：
+ * - 浏览器/探针环境：**根本没有这回事**（不该显示按钮）；
+ * - 已是最新：正常结果；
+ * - 检查失败：**抛错**，调用方必须把原因显示出来（连不上 github 是最常见的失败）。
+ */
+export async function checkForUpdate(): Promise<UpdateInfo | null> {
+  if (!isTauri) return null
+  try {
+    // 动态 import：插件包只在这条路径上加载 —— 探针跑在无头浏览器里，不该被它们影响
+    const { check } = await import('@tauri-apps/plugin-updater')
+    const update = await check()
+    if (!update) {
+      pendingUpdate = null
+      pendingInfo = null
+      return null
+    }
+    pendingUpdate = update
+    pendingInfo = {
+      version: update.version,
+      notes: update.body ?? null,
+      date: update.date ?? null,
+    }
+    return pendingInfo
+  } catch (e) {
+    throw new Error(typeof e === 'string' ? e : String(e))
+  }
+}
+
+/**
+ * 下载并安装（装完自动重启自己）。`onProgress` 拿到 0–100；`null` = 总大小未知。
+ *
+ * 便携版**不调这个**（解压即用的目录不该被安装器覆盖）——由调用方按 `storageInfo().portable` 决定。
+ */
+export async function installUpdate(onProgress?: (pct: number | null) => void): Promise<void> {
+  if (!isTauri) throw new Error('只有桌面端才能安装更新')
+  if (!pendingUpdate) throw new Error('没有待安装的更新（先点一次「检查更新」）')
+  let total = 0
+  let done = 0
+  try {
+    const update = pendingUpdate as {
+      downloadAndInstall: (cb: (e: {
+        event: string
+        data?: { contentLength?: number; chunkLength?: number }
+      }) => void) => Promise<void>
+    }
+    await update.downloadAndInstall((e) => {
+      if (e.event === 'Started') {
+        total = e.data?.contentLength ?? 0
+        onProgress?.(total ? 0 : null)
+      } else if (e.event === 'Progress') {
+        done += e.data?.chunkLength ?? 0
+        onProgress?.(total ? Math.min(100, Math.round((done / total) * 100)) : null)
+      } else if (e.event === 'Finished') {
+        onProgress?.(100)
+      }
+    })
+    const { relaunch } = await import('@tauri-apps/plugin-process')
+    await relaunch()
+  } catch (e) {
+    throw new Error(typeof e === 'string' ? e : String(e))
+  }
+}
+
+/** 打开发布页（连不上 GitHub 时的兜底：让用户手动下载安装包）。 */
+export async function openReleasePage(): Promise<boolean> {
+  if (!isTauri) return false
+  try {
+    await invoke('open_release_page')
+    return true
+  } catch {
+    return false
+  }
+}
