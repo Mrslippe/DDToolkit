@@ -198,6 +198,34 @@ def cache_stats() -> dict[str, int]:
     }
 
 
+def clear_cache() -> dict[str, int]:
+    """**清空**缓存（用户在「关于」页主动点的那个按钮；口径 = 全清）。
+
+    缓存是可再生数据：删掉只是下次看图时重新拉一遍。顺手清掉"只有元数据没有图"的
+    孤立 `.json`（那次写入被打断留下的），否则它们会一直躺在体检数字里。
+    """
+    files = 0
+    freed = 0
+    for p, _mtime, size in _cache_entries():
+        try:
+            p.unlink(missing_ok=True)
+            p.with_suffix(".json").unlink(missing_ok=True)
+            files += 1
+            freed += size
+        except OSError:
+            continue
+    try:
+        for j in CACHE_DIR.glob("*.json"):
+            if not j.with_suffix(".bin").exists():
+                j.unlink(missing_ok=True)
+                files += 1
+    except OSError:
+        pass
+    if files:
+        logger.info(f"图片缓存已清空：{files} 个文件 / {freed / 1048576:.1f}MB")
+    return {"files": files, "bytes": freed}
+
+
 def prune_cache(now: float | None = None) -> dict[str, int]:
     """清缓存：① 过期 ② 仍超容量上限时按**最久未用**淘汰。
 

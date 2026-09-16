@@ -25,6 +25,25 @@ export function formatCount(n: number | null | undefined): string {
   return String(n)
 }
 
+/**
+ * 字节数 → 人话（「关于」页的存储占用用；二进制单位，最多一位小数）。
+ *
+ * 取值口径：<1KB 显示整数字节；≥100 的值不再带小数（"1180.3 MB" 这种精度没有意义，
+ * 反而更难扫读）；非法输入当 0（与 `formatCount` 同样不抛错，界面不该因为一个 null 崩掉）。
+ */
+export function formatBytes(n: number | null | undefined): string {
+  const v = typeof n === 'number' && Number.isFinite(n) ? n : 0
+  if (v < 1024) return `${Math.round(v)} B`
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let x = v / 1024
+  let i = 0
+  while (x >= 1024 && i < units.length - 1) {
+    x /= 1024
+    i += 1
+  }
+  return `${x >= 100 ? Math.round(x) : x.toFixed(1)} ${units[i]}`
+}
+
 /** 帖子显示标题：title → 摘要前 20 字 → 平台帖子 ID（问题 3） */
 export function postDisplayTitle(post: Pick<Post, 'title' | 'summary' | 'platform_post_id'>): string {
   const title = post.title?.trim()

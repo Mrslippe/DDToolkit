@@ -495,3 +495,46 @@ def test_dark_theme_hook_flag_matches_what_the_ui_tells_users():
     note = _theme_note()
     assert ("尚未实现" in note) != implemented, (
         f"DARK_IMPLEMENTED={implemented} 与用户看到的说明 {note!r} 不一致")
+
+
+# ── ⑦ 存储占用与维护（R22-B，devlog/104）──────────────────────────────
+
+def test_storage_endpoint_reports_each_group_and_disk(client):
+    """「关于」页要能回答"谁在占地方"：四组占用 + 缓存上限 + 磁盘余量 + 遗留备份。"""
+    body = client.get("/settings/storage").json()
+    assert set(body["groups"]) == {"database", "img_cache", "logs", "other"}
+    for name, g in body["groups"].items():
+        assert g["bytes"] >= 0 and g["files"] >= 0, name
+    assert body["total_bytes"] >= 0
+    assert body["disk"]["total"] > 0               # 真问了一次磁盘
+    assert body["img_cache"]["max_bytes"] > 0      # 上限要显示出来，否则"占用大不大"没有参照
+    assert isinstance(body["stale_backups"], list)
+    assert isinstance(body["low_space"], bool)
+    assert body["low_space_threshold_bytes"] == 5 * 1024 ** 3
+    assert body["data_dir"] and body["database"]
+
+
+def test_storage_prune_cache_clears_and_reports(client, tmp_path, monkeypatch):
+    """清缓存按钮：口径是**全清**，且要如实告诉用户释放了多少。"""
+    from app.routers import img_proxy
+
+    cache = tmp_path / "img-cache"
+    cache.mkdir()
+    (cache / "a.bin").write_bytes(b"x" * 400)
+    (cache / "a.json").write_text('{"fetched_at": 1}', encoding="utf-8")
+    monkeypatch.setattr(img_proxy, "CACHE_DIR", cache)
+
+    body = client.post("/settings/storage/prune-cache").json()
+    assert body["files"] == 1 and body["bytes"] == 400
+    assert list(cache.glob("*")) == []
+    # 顺手把最新占用带回来 —— 免得界面为了刷新数字再打一次接口
+    assert "storage" in body
+
+
+def test_storage_maintenance_reclaims(client):
+    """整理库：回收 WAL + 还盘，返回值要能让界面说清"省了多少"。"""
+    body = client.post("/settings/storage/maintenance").json()
+    assert body["wal_after"] <= body["wal_before"]
+    assert body["freed_pages"] >= 0
+    assert "storage" in body
+    assert body["storage"]["img_cache"]["files"] >= 0

@@ -215,7 +215,7 @@ DOM 契约（探针 `ui_probe --status-island` 直接查）：`.si-island`（`.o
 | 开关 | `.aps-switch`（`data-value` / `role="switch"`）> `i`（滑块）+ 状态文字 | **R21 批 2 用户口径**："稍大一点的药丸内嵌滑块，但是**不要外框背景**，同时添加一点浮片视觉" ⇒ 去掉原来那层"描边 + 灰底的胶囊壳"（`padding` / `border` 全 0），滑块本体 22×12 → **32×18**（圆点 14，行程 14px），底色 `--c-bg-card` + `inset` 发丝线 + **`--pill-shadow`**（与 `.float-pill` 同族的浮片质感），`.on` 时底色换主色；状态文字「开 / 关」留在滑块右侧 |
 | 页内小组 | `.aps-section[data-aps-section="<小组名>"]` + `.aps-section-head` | **R21**：字段按**用途**分小组（风控与节流 / 开播信息抓取 / 定期动态轮询 / 每日定时任务 / 收录首屏），顺序 = 后端声明序。**只有一组时不渲染标题**（页标题已经说明白了）。分组与折叠的内容**全部来自后端** `specs[].section` / `.advanced`，界面不写死 —— 见 §A2-a 口径 ⑤ |
 | 高级折叠 | `.aps-fold[data-aps-advanced="closed\|open"]` + `.aps-fold-head`（`data-testid="aps-advanced-toggle"`）+ `.aps-fold-body` | **R21**：调优类字段收进页尾「高级设置（N 项）」，**默认收起 = 不渲染**（不是渲染后隐藏 —— 收起时 DOM 里一行都没有，探针据此判）；展开后与正文用**同一套** `renderRow`；**换页自动收回**（每页各自的默认态） |
-| 关于页 | `.aps-info` + `.aps-readonly-item` | 只读信息（版本/数据目录/库/端口/迁移 head/日志/PID）+ 10 条只读项**逐条带理由**（`.aps-readonly-why`）；**该页没有任何可写控件** |
+| 关于页 | `.aps-info` + `.aps-readonly-item` + **`.aps-storage`（R22-B）** | 只读信息（版本/数据目录/库/端口/迁移 head/日志/PID）+ 10 条只读项**逐条带理由**（`.aps-readonly-why`）；**存储占用面板**：数据库 / 图片缓存（带上限）/ 日志 / 合计 / 磁盘剩余（`data-storage="…"`、偏低时挂 `.aps-storage-warn`「空间偏紧」）+ 手工备份提示 + 两个浮片动作「清理图片缓存」「整理数据库」（`.aps-storage-actions`）；**该页依然没有可写输入控件**（动作是按钮，不是参数） |
 
 **五条口径**：① 范围/单位/生效时机**全部来自后端** `GET /settings`；② 可热更与只读分开摆、
 只读区逐条写理由；③ 写路径唯一 —— `PUT /settings`，前端只做提前提示；

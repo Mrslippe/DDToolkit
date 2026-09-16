@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { useIsMaximized } from '../hooks/useIsMaximized'
 import { useShellHidden } from '../hooks/useShellHidden'
+import { useLowSpaceNotice } from '../hooks/useLowSpaceNotice'
 import { setFetchBusy } from '../fetchBusy'
 import { isFirstRun } from '../bootState'
 import { dispatchFetchIdle, type FetchIdleKind } from '../utils/fetchIdle'
@@ -82,6 +83,9 @@ export default function TopBar() {
   const [pillMsg, setPillMsg] = useState<string | null>(null)
   /** 隐藏到托盘（R18）：隐藏期间停掉两条轮询链，恢复时立刻补一轮 */
   const hidden = useShellHidden()
+  // 磁盘快满时提醒一次（R22-B）：等第一轮 fetch-status 回来再查 ——
+  // 既保证后端就绪，也保证下面那个 `pill-message` 监听已经挂上（不然消息会丢）。
+  useLowSpaceNotice(status !== null)
   const location = useLocation()
   // 登录：浮窗开关 + 两平台登录态（约 60s 轮询一次，供入口徽章提示）
   const [loginOpen, setLoginOpen] = useState(false)

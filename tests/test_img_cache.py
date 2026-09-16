@@ -90,3 +90,25 @@ def test_cache_stats_reports_usage_and_cap(cache):
     _put(cache, "b", 200)
     st = img_proxy.cache_stats()
     assert st == {"files": 2, "bytes": 500, "max_bytes": 1000}
+
+
+def test_clear_cache_removes_everything(cache):
+    """用户主动点的「清理图片缓存」= **全清**（口径 2026-09-16）。"""
+    _put(cache, "a", 300)
+    _put(cache, "b", 200)
+    got = img_proxy.clear_cache()
+    assert got == {"files": 2, "bytes": 500}
+    assert list(cache.glob("*")) == []
+
+
+def test_clear_cache_also_sweeps_orphan_meta(cache):
+    """只有元数据、没有图（写入被打断留下的）也要清 —— 否则它会一直算进占用里。"""
+    (cache / "orphan.json").write_text('{"type": "image/png"}', encoding="utf-8")
+    _put(cache, "keep", 100)
+    got = img_proxy.clear_cache()
+    assert got["files"] == 2
+    assert list(cache.glob("*")) == []
+
+
+def test_clear_cache_on_empty_dir_is_safe(cache):
+    assert img_proxy.clear_cache() == {"files": 0, "bytes": 0}

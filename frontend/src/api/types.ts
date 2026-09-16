@@ -625,6 +625,44 @@ export interface SettingReadonlyNote {
   why: string
 }
 
+// ── 存储占用（R22-B，devlog/104）──────────────────────────────────────
+
+/** 一组占用的字节数与文件数 */
+export interface StorageGroup {
+  bytes: number
+  files: number
+}
+
+/** `GET /settings/storage`：谁在占地方 + 缓存上限 + 磁盘余量 */
+export interface StorageInfo {
+  data_dir: string
+  database: string
+  groups: {
+    database: StorageGroup
+    img_cache: StorageGroup
+    logs: StorageGroup
+    other: StorageGroup
+  }
+  total_bytes: number
+  /** 手工留下的 `vtuber.db.bak-*`（不是程序生成的，但确实占地方） */
+  stale_backups: { name: string; bytes: number }[]
+  disk: { free: number; total: number }
+  img_cache_max_bytes: number
+  /** 可用空间低于阈值（后端算好，界面不抄一份阈值） */
+  low_space: boolean
+  low_space_threshold_bytes: number
+}
+
+/** 两个存储动作的返回：做了什么 + **最新的占用**（免得界面再打一次接口） */
+export interface StorageActionResult {
+  files?: number
+  bytes?: number
+  wal_before?: number
+  wal_after?: number
+  freed_pages?: number
+  storage: StorageInfo
+}
+
 export interface AppSettingsInfo {
   app_name: string
   version: string

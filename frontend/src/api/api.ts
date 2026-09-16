@@ -1,4 +1,4 @@
-import type { Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, BiliSearchResult, Capabilities, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, PoolItem, PostPage, PostStats, Prefs, PrefsSaved, ThirdpartyVtuber, UpcomingReservation, UpdatePostsResult, VTuber, VTuberFormerValues } from './types'
+import type { Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, BiliSearchResult, Capabilities, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, PoolItem, PostPage, PostStats, Prefs, PrefsSaved, StorageActionResult, StorageInfo, ThirdpartyVtuber, UpcomingReservation, UpdatePostsResult, VTuber, VTuberFormerValues } from './types'
 
 /**
  * API 基地址：
@@ -335,6 +335,19 @@ export const api = {
 
   /** 全部恢复默认 */
   resetAppSettings: () => request<AppSettingsSaved>('/settings/reset', { method: 'POST' }),
+
+  // ── 存储占用与维护（R22-B，devlog/104）──────────────────────────────
+  /** 占用体检：库 / 图片缓存 / 日志 / 其余 + 磁盘剩余 + 遗留备份。
+      后端要**真扫目录**，所以只在「关于」页打开时取一次，别拿它轮询。 */
+  getStorage: () => request<StorageInfo>('/settings/storage'),
+
+  /** 清空图片缓存（用户主动点；口径是全清，缓存可再生） */
+  pruneImgCache: () => request<StorageActionResult>('/settings/storage/prune-cache',
+    { method: 'POST' }),
+
+  /** 整理数据库：回收 WAL + 把空闲页还盘 */
+  runStorageMaintenance: () => request<StorageActionResult>('/settings/storage/maintenance',
+    { method: 'POST' }),
 
   // ── 界面偏好（R14b，devlog/092）：主题 ──────────────────────────────
   /** 偏好值 + 允许取值 + 当前能力说明（说明由后端下发，界面不自己编） */

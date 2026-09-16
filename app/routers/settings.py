@@ -213,3 +213,60 @@ def update_prefs(payload: PrefsUpdate, db: Session = Depends(get_db)):
                 400, f"{key} 只能取 {'/'.join(allowed)}，实得 {raw!r}")
         repo.set(PREFS_PREFIX + key, raw)
     return {"ok": True, "changed": sorted(payload.values), "values": _load_prefs(db)}
+
+
+# ── 存储占用与维护（R22-B，devlog/104）────────────────────────────────
+# 起因（用户 2026-09-16）："数据库放置在 C 盘中会不会导致数据量很大了之后挤占太多 C 盘空间？"
+# A/D 两批已经把"涨得最快的缓存"管住、并让删数据真的还盘；这里把**占用显示出来**、
+# 给两个能立刻动手的按钮，并在磁盘快满时提醒一次。
+#
+# ⚠️ 这些端点都**真扫目录**（`dir_stats` 递归统计），所以只给「关于」页打开时取一次，
+#    不要拿去做轮询。
+
+# 低空间提醒阈值（用户口径 2026-09-16：状态岛提醒一次 + 关于页显示；阈值不做成设置项）
+LOW_SPACE_THRESHOLD_BYTES = 5 * 1024 ** 3      # 5GB
+
+
+def _storage_payload() -> dict:
+    """「关于」页存储面板的数据：谁在占地方 + 缓存上限 + 磁盘余量 + 是否该提醒。"""
+    from app.routers import img_proxy
+    from app.services import db_maintenance
+
+    st = db_maintenance.dir_stats()
+    st["img_cache"] = img_proxy.cache_stats()
+    st["low_space_threshold_bytes"] = LOW_SPACE_THRESHOLD_BYTES
+    st["low_space"] = bool(st["disk"]["total"]) and st["disk"]["free"] < LOW_SPACE_THRESHOLD_BYTES
+    return st
+
+
+@router.get("/storage")
+def get_storage():
+    """存储占用体检（库 / 图片缓存 / 日志 / 其余 + 磁盘剩余 + 遗留备份）。"""
+    return _storage_payload()
+
+
+@router.post("/storage/prune-cache")
+def prune_img_cache():
+    """清空图片缓存 —— 用户主动点的按钮，口径是**全清**（缓存可再生，删了下次重下）。"""
+    from app.routers import img_proxy
+
+    got = img_proxy.clear_cache()
+    logger.info(f"手动清理图片缓存：{got['files']} 个文件 / {got['bytes']} 字节")
+    return {**got, "storage": _storage_payload()}
+
+
+@router.post("/storage/maintenance")
+def run_storage_maintenance():
+    """整理数据库：回收 WAL + 把空闲页还盘（与启动时的自动维护用同一套函数）。
+
+    为什么值得有按钮：删数据本身**不会**让文件变小（SQLite 默认把空闲页留在 freelist），
+    而"删完发现没腾出地方"是最容易让人怀疑软件坏了的一件事。
+    """
+    from app.services import db_maintenance
+
+    wal = db_maintenance.checkpoint_wal()
+    freed_pages = db_maintenance.incremental_vacuum()
+    logger.info(f"手动整理数据库：WAL {wal['before']} → {wal['after']} 字节，"
+                f"还盘 {freed_pages} 页")
+    return {"wal_before": wal["before"], "wal_after": wal["after"],
+            "freed_pages": freed_pages, "storage": _storage_payload()}

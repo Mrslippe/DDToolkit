@@ -13,8 +13,9 @@ import {
 } from '@/components/ui/dialog'
 import FloatPill from './common/FloatPill'
 import { api } from '../api/api'
-import type { AppSettings, SettingSpec } from '../api/types'
+import type { AppSettings, SettingSpec, StorageInfo } from '../api/types'
 import { usePrefs } from '../hooks/usePrefs'
+import { formatBytes } from '../utils/format'
 import { themeCards, type ThemePref } from '../utils/theme'
 import {
   ABOUT_ID, APPEARANCE_ID, buildNav, buildSections, groupDirty, resetDraftOfGroup,
@@ -142,6 +143,38 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
   /** 「高级」是每页各自的默认态：换页就收起（否则"默认收起"只在首屏成立） */
   const [advOpen, setAdvOpen] = useState(false)
   useEffect(() => { setAdvOpen(false) }, [active])
+
+  /** 存储占用（R22-B，devlog/104）：只在打开「关于」页时取一次 —— 后端要**真扫目录**，
+      拿它做轮询是浪费。取不到就只显示上面的只读信息，不打扰用户。 */
+  const [storage, setStorage] = useState<StorageInfo | null>(null)
+  const [storageBusy, setStorageBusy] = useState<string | null>(null)
+  useEffect(() => {
+    if (!open || active !== ABOUT_ID || storage) return
+    let alive = true
+    void api.getStorage().then((st) => { if (alive) setStorage(st) }).catch(() => undefined)
+    return () => { alive = false }
+  }, [open, active, storage])
+
+  const runStorageAction = async (kind: 'cache' | 'db') => {
+    setStorageBusy(kind)
+    try {
+      const got = kind === 'cache'
+        ? await api.pruneImgCache()
+        : await api.runStorageMaintenance()
+      setStorage(got.storage)          // 返回里带着最新占用，省一次请求
+      if (kind === 'cache') {
+        toast.success(`图片缓存已清空，释放 ${formatBytes(got.bytes ?? 0)}`)
+      } else {
+        toast.success(`数据库已整理：WAL ${formatBytes(got.wal_before ?? 0)} → `
+          + `${formatBytes(got.wal_after ?? 0)}，还盘 ${got.freed_pages ?? 0} 页`)
+      }
+    } catch (e) {
+      toast.error(`${kind === 'cache' ? '清理图片缓存' : '整理数据库'}失败：`
+        + `${(e as Error).message}`)
+    } finally {
+      setStorageBusy(null)
+    }
+  }
 
   const valueOfKey = (s: SettingSpec): DraftVal => valueOf(s, draft, s.key)
 
@@ -528,6 +561,65 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
                     <dd className="aps-mono" title={data.info.log_file}>{data.info.log_file}</dd>
                     <dt>进程</dt><dd>PID {data.info.pid}</dd>
                   </dl>
+
+                  {/* 存储占用（R22-B）：谁在占地方 + 两个能立刻动手的按钮。
+                      起因（用户 2026-09-16）："数据放 C 盘会不会挤爆" ——
+                      光显示一个路径不够，得让人**看见数字**、并且能当场清理。 */}
+                  <section className="aps-storage" data-testid="aps-storage">
+                    <h4 className="aps-section-head">存储占用</h4>
+                    {storage ? (
+                      <>
+                        <dl className="aps-info" data-storage-rows="1">
+                          <dt>数据库</dt>
+                          <dd data-storage="database">{formatBytes(storage.groups.database.bytes)}</dd>
+                          <dt>图片缓存</dt>
+                          <dd data-storage="img_cache">
+                            {formatBytes(storage.groups.img_cache.bytes)}
+                            <span className="aps-storage-cap">
+                              （上限 {formatBytes(storage.img_cache_max_bytes)}）
+                            </span>
+                          </dd>
+                          <dt>日志</dt>
+                          <dd data-storage="logs">{formatBytes(storage.groups.logs.bytes)}</dd>
+                          <dt>合计</dt>
+                          <dd data-storage="total">{formatBytes(storage.total_bytes)}</dd>
+                          <dt>磁盘剩余</dt>
+                          <dd data-storage="free" data-low-space={storage.low_space ? '1' : '0'}>
+                            {formatBytes(storage.disk.free)}
+                            {storage.low_space && (
+                              <em className="aps-storage-warn">空间偏紧</em>
+                            )}
+                          </dd>
+                        </dl>
+                        {storage.stale_backups.length > 0 && (
+                          <p className="aps-note" data-storage="stale">
+                            另有手工备份 {storage.stale_backups.map((b) => b.name).join('、')}
+                            （{formatBytes(storage.stale_backups.reduce((n, b) => n + b.bytes, 0))}）——
+                            它不是程序生成的，确认没用可以自己删掉。
+                          </p>
+                        )}
+                        <div className="aps-storage-actions">
+                          <FloatPill
+                            size="md" shape="text"
+                            disabled={storageBusy !== null
+                              || storage.groups.img_cache.files === 0}
+                            onClick={() => void runStorageAction('cache')}
+                          >
+                            {storageBusy === 'cache' ? '清理中…' : '清理图片缓存'}
+                          </FloatPill>
+                          <FloatPill
+                            size="md" shape="text"
+                            disabled={storageBusy !== null}
+                            onClick={() => void runStorageAction('db')}
+                          >
+                            {storageBusy === 'db' ? '整理中…' : '整理数据库'}
+                          </FloatPill>
+                        </div>
+                      </>
+                    ) : (
+                      <p className="aps-note">读取中…</p>
+                    )}
+                  </section>
                   <ul className="aps-readonly-list">
                     {data.readonly.map((r) => (
                       <li key={r.key} className="aps-readonly-item">

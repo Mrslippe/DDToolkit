@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   POST_TYPE_LABEL,
+  formatBytes,
   formatCount,
   formatDateTime,
   normalizeImageUrl,
@@ -137,5 +138,27 @@ describe('formatDateTime — UTC ISO → 本地 yyyy-MM-dd HH:mm', () => {
       `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ` +
       `${p(d.getHours())}:${p(d.getMinutes())}`
     expect(formatDateTime(iso)).toBe(expectLocal)
+  })
+})
+
+/**
+ * 字节格式化（R22-B，devlog/104）：「关于」页的存储占用要显示"库 54.3 MB"这种人话。
+ * 判错的代价：数字难扫读（"1180.3 MB"）、或者一个 null 把整页搞崩。
+ */
+describe('formatBytes — 存储占用显示', () => {
+  it('按二进制单位换算；超过 100 就不带小数', () => {
+    expect(formatBytes(0)).toBe('0 B')
+    expect(formatBytes(999)).toBe('999 B')
+    expect(formatBytes(1024)).toBe('1.0 KB')
+    expect(formatBytes(1536)).toBe('1.5 KB')
+    expect(formatBytes(54.3 * 1048576)).toBe('54.3 MB')
+    expect(formatBytes(101.7 * 1048576)).toBe('102 MB')
+    expect(formatBytes(5 * 1073741824)).toBe('5.0 GB')
+  })
+
+  it('拿不到值时当 0', () => {
+    expect(formatBytes(null)).toBe('0 B')
+    expect(formatBytes(undefined)).toBe('0 B')
+    expect(formatBytes(Number.NaN)).toBe('0 B')
   })
 })

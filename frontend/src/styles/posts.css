@@ -4544,6 +4544,41 @@ img.hero-avatar {
   color: var(--c-text-sub);
 }
 
+/* ── 存储占用面板（R22-B，devlog/104）─────────────────────────────────
+   「关于」页底部：数据库 / 图片缓存 / 日志 / 合计 / 磁盘剩余 + 两个动作按钮。
+   复用 `.aps-info` 的 dt/dd 栅格（与上面的只读信息同一套排版），只补几个局部样式。 */
+.aps-storage {
+  margin-top: 4px;
+}
+
+.aps-storage .aps-info {
+  margin-top: 2px;
+}
+
+.aps-storage-cap {
+  margin-left: 4px;
+  color: var(--c-text-sub);
+}
+
+/* 「空间偏紧」：磁盘余量低于阈值时的红色提醒（阈值由后端下发，界面不自己判断） */
+.aps-storage-warn {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--c-primary);
+  color: #fff;
+  font-size: 10.5px;
+  font-style: normal;
+  line-height: 16px;
+}
+
+.aps-storage-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+
 /* 页尾「高级（默认收起）」：调优类字段的折叠区，默认不占视觉重量 */
 .aps-fold {
   margin-top: 14px;
