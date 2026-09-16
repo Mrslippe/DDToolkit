@@ -128,6 +128,84 @@ pub fn resolve_data_dir(default: PathBuf, allow_pointer: bool) -> Resolved {
     resolve_with(read_pointer(), default)
 }
 
+// ── 启动优先级（R22-B2b，devlog/106）────────────────────────────────
+
+/// 这份数据目录是从哪来的（界面要如实显示 —— "我的数据到底在哪"必须能被回答）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DirSource {
+    /// 用户显式设了 `DDTOOLKIT_DATA_DIR`（= 便携/自定义安装；**不给迁移入口**：
+    /// 便携版本来就该整个文件夹一起搬，把数据分出去反而容易丢）
+    Env,
+    /// 应用内迁移过（指针文件生效）
+    Migrated,
+    /// 默认位置（`%APPDATA%\com.ddtoolkit.app`）
+    Default,
+}
+
+impl DirSource {
+    /// 给界面/日志用的短标识
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DirSource::Env => "env",
+            DirSource::Migrated => "migrated",
+            DirSource::Default => "default",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Startup {
+    pub dir: PathBuf,
+    pub source: DirSource,
+    /// 便携/自定义安装（用户用环境变量指定了目录）⇒ 界面不给迁移入口
+    pub portable: bool,
+    /// 有迁移记录但用不了（已回退）—— 界面要提醒，不能静默
+    pub pointer_unusable: Option<String>,
+}
+
+/// 启动时的数据目录优先级：**环境变量 > 迁移指针 > 默认目录**。
+///
+/// 为什么环境变量优先：它是"这次启动、这个快捷方式"的显式意图（便携 U 盘、多套数据），
+/// 比应用内留下的迁移记录更"当下"。两者同时存在时用环境变量，并**在日志里说清**，
+/// 免得用户以为迁移没生效。
+///
+/// ⚠️ 指针坏了仍然**回退默认目录并把原因带出去**（绝不在坏路径上新建空库）。
+pub fn resolve_startup(
+    env_dir: Option<PathBuf>,
+    pointer: Result<Option<PathBuf>, String>,
+    default: PathBuf,
+) -> Startup {
+    if let Some(dir) = env_dir {
+        return Startup {
+            dir,
+            source: DirSource::Env,
+            portable: true,
+            // 环境变量优先时不去读指针的"坏"（读了也不用），避免打扰
+            pointer_unusable: None,
+        };
+    }
+    match pointer {
+        Ok(Some(dir)) => Startup {
+            dir,
+            source: DirSource::Migrated,
+            portable: false,
+            pointer_unusable: None,
+        },
+        Ok(None) => Startup {
+            dir: default,
+            source: DirSource::Default,
+            portable: false,
+            pointer_unusable: None,
+        },
+        Err(why) => Startup {
+            dir: default,
+            source: DirSource::Default,
+            portable: false,
+            pointer_unusable: Some(why),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,5 +293,46 @@ mod tests {
         assert_eq!(got.dir, default);
         assert!(!got.custom);
         assert!(got.pointer_unusable.is_none());
+    }
+
+    // ── 启动优先级（R22-B2b）：环境变量 > 迁移指针 > 默认目录 ──────────
+
+    #[test]
+    fn env_var_wins_over_pointer_and_marks_portable() {
+        let env_dir = PathBuf::from("E:\\usb\\ddtk-data");
+        let pointer_dir = PathBuf::from("D:\\DDToolkit-data");
+        let got = resolve_startup(
+            Some(env_dir.clone()), Ok(Some(pointer_dir)), PathBuf::from("C:\\default"));
+        assert_eq!(got.dir, env_dir, "环境变量是「这次启动」的显式意图，优先");
+        assert_eq!(got.source, DirSource::Env);
+        assert!(got.portable, "用环境变量指定目录 = 便携/自定义安装");
+        assert!(got.pointer_unusable.is_none(), "既然没用指针，就不该拿它的毛病打扰用户");
+    }
+
+    #[test]
+    fn pointer_used_when_no_env_var() {
+        let pointer_dir = PathBuf::from("D:\\DDToolkit-data");
+        let got = resolve_startup(None, Ok(Some(pointer_dir.clone())), PathBuf::from("C:\\d"));
+        assert_eq!(got.dir, pointer_dir);
+        assert_eq!(got.source, DirSource::Migrated);
+        assert!(!got.portable, "迁移过的安装版仍然给迁移入口（可以再搬一次）");
+    }
+
+    #[test]
+    fn default_when_neither_env_nor_pointer() {
+        let got = resolve_startup(None, Ok(None), PathBuf::from("C:\\default"));
+        assert_eq!(got.dir, PathBuf::from("C:\\default"));
+        assert_eq!(got.source, DirSource::Default);
+        assert!(!got.portable);
+        assert!(got.pointer_unusable.is_none());
+    }
+
+    #[test]
+    fn broken_pointer_falls_back_to_default_and_tells_the_ui() {
+        let got = resolve_startup(
+            None, Err("指针指向的目录不存在：Z:\\gone".into()), PathBuf::from("C:\\default"));
+        assert_eq!(got.dir, PathBuf::from("C:\\default"));
+        assert_eq!(got.source, DirSource::Default);
+        assert!(got.pointer_unusable.is_some(), "回退过就必须能告诉界面");
     }
 }

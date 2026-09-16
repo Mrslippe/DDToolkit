@@ -193,7 +193,7 @@
 
 | 名称 | 默认 | 作用 |
 |---|---|---|
-| `DATA_DIR` | `DDTOOLKIT_DATA_DIR` 或项目根 | 数据库/日志/凭据/静态资源根目录。⚠️ **桌面端由壳决定**：`lib.rs::setup()` 用 `app_data_dir()`（`%APPDATA%\com.ddtoolkit.app`）算出来再注入，**会覆盖**用户手设的同名环境变量（2026-09-16 实测，devlog/105）；R22-B2 起改用"指针文件 + 可迁移" |
+| `DATA_DIR` | `DDTOOLKIT_DATA_DIR` 或项目根 | 数据库/日志/凭据/静态资源根目录。桌面端启动优先级（`datadir::resolve_startup`，有单测）：**环境变量 > 应用内迁移指针 > 默认目录**（`%APPDATA%\com.ddtoolkit.app`）。设了环境变量即视为**便携/自定义安装**（界面不给迁移入口）；指针坏了回退默认目录并把原因显示给用户 |
 | `DATABASE_URL` | `sqlite:///<DATA_DIR>/vtuber.db` | SQLite 连接串 |
 | `LOG_FILE` / `LOG_BACKUP_DAYS` | `logs/app.log` / `7`（`DDTOOLKIT_LOG_BACKUP_DAYS` 可覆盖） | 双通道日志的文件通道：**按天轮转**（`app.log.YYYY-MM-DD`）保留最近 N 份；配置在 `app/core/logging_setup.py`（devlog/077） |
 | `VERSION` | `1.0.2` | 版本号（与 6 处同步：本文件 / `tauri.conf.json` / `Cargo.toml` / `Cargo.lock` / `package.json` / README 徽章，测试断言一致） |

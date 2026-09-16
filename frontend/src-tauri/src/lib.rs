@@ -30,6 +30,42 @@ struct BackendChild(Mutex<Option<CommandChild>>);
 /// 后端监听端口，供前端经 get_backend_port 查询
 struct BackendPort(Mutex<u16>);
 
+/// 这次启动实际用的数据目录 + 来源（R22-B2b，devlog/106）。
+/// 界面要能回答"我的数据到底在哪、为什么在那儿" —— 尤其是**回退过**的情况。
+#[derive(Default)]
+struct DataDirState(Mutex<Option<datadir::Startup>>);
+
+/// 给界面的数据目录信息（`storage_info` 命令）
+#[derive(serde::Serialize)]
+struct DataDirInfo {
+    dir: String,
+    /// `env`（用户显式指定 = 便携/自定义）· `migrated`（应用内迁移过）· `default`
+    source: String,
+    /// 便携/自定义安装：界面**不给迁移入口**（整个文件夹一起搬才是便携的本意）
+    portable: bool,
+    /// 有迁移记录但用不了（已回退默认目录）：界面要提醒，不能静默
+    pointer_unusable: Option<String>,
+}
+
+#[tauri::command]
+fn storage_info(state: State<'_, DataDirState>) -> DataDirInfo {
+    let guard = state.0.lock().unwrap();
+    match guard.as_ref() {
+        Some(s) => DataDirInfo {
+            dir: s.dir.to_string_lossy().to_string(),
+            source: s.source.as_str().to_string(),
+            portable: s.portable,
+            pointer_unusable: s.pointer_unusable.clone(),
+        },
+        None => DataDirInfo {
+            dir: String::new(),
+            source: "unknown".to_string(),
+            portable: false,
+            pointer_unusable: None,
+        },
+    }
+}
+
 /// Job Object 句柄（KILL_ON_JOB_CLOSE），壳退出时内核杀光整个后端进程树。
 /// 非 Windows 平台恒为 0，不参与逻辑。
 struct BackendJob(Mutex<isize>);
@@ -445,11 +481,13 @@ pub fn run() {
         .manage(BackendPort(Mutex::new(0)))
         .manage(BackendChild(Mutex::new(None)))
         .manage(BackendJob(Mutex::new(0)))
+        .manage(DataDirState(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             get_backend_port,
             present_window,
             hide_to_tray,
-            quit_app
+            quit_app,
+            storage_info
         ])
         .on_window_event(|window, event| {
             // ✕ 不再等于"退出"（R18，devlog/095）：关闭请求被拦下，改成隐藏到托盘，
@@ -467,22 +505,31 @@ pub fn run() {
             perf("setup 开始");
 
             let port = free_port();
-            let default_dir = app.path().app_data_dir()?;
-            // 数据目录指针（R22-B2a）：**这一版传 false = 指针停用**，行为与之前完全一致；
-            // 迁移动作与"便携版识别"是 B2b 的事（见 `mod datadir` 上的说明）。
-            let resolved = datadir::resolve_data_dir(default_dir, false);
-            if let Some(why) = resolved.pointer_unusable.as_deref() {
-                println!("[ddtoolkit] WARN: 数据目录指针不可用，已回退默认目录：{why}");
-            }
-            let mut data_dir = resolved.dir;
-            // dev 构建使用独立数据目录，避免调试抓取/登录写进「生产」数据
+            // ── 数据目录的**启动优先级**（R22-B2b，devlog/106）────────────────
+            // 环境变量 > 迁移指针 > 默认目录（判定本身在 `datadir::resolve_startup`，有单测）。
+            // 之前这里是无条件用 `app_data_dir()` 覆盖 `DDTOOLKIT_DATA_DIR`，
+            // 于是 README 里"便携版可改这个变量自定义"是假的（实测见 devlog/105）。
+            let mut default_dir = app.path().app_data_dir()?;
+            // dev 构建使用独立数据目录，避免调试抓取/登录写进「生产」数据。
+            // ⚠️ 只改**默认**目录：用户显式指定的（环境变量/迁移指针）不该被加后缀。
             #[cfg(debug_assertions)]
             {
-                data_dir = data_dir.with_file_name(format!(
+                default_dir = default_dir.with_file_name(format!(
                     "{}-dev",
-                    data_dir.file_name().unwrap_or_default().to_string_lossy()
+                    default_dir.file_name().unwrap_or_default().to_string_lossy()
                 ));
             }
+            let env_dir = std::env::var_os("DDTOOLKIT_DATA_DIR")
+                .map(std::path::PathBuf::from)
+                .filter(|p| p.is_absolute());
+            let startup = datadir::resolve_startup(env_dir, datadir::read_pointer(), default_dir);
+            if let Some(why) = startup.pointer_unusable.as_deref() {
+                println!("[ddtoolkit] WARN: 数据目录指针不可用，已回退默认目录：{why}");
+            }
+            println!("[ddtoolkit] data dir = {}（来源 {}）",
+                     startup.dir.display(), startup.source.as_str());
+            *app.state::<DataDirState>().0.lock().unwrap() = Some(startup.clone());
+            let data_dir = startup.dir;
             std::fs::create_dir_all(&data_dir)?;
             println!("[ddtoolkit] data dir = {}", data_dir.display());
             println!("[ddtoolkit] backend port = {}", port);
