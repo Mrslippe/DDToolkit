@@ -180,7 +180,9 @@ export default function AccountHistoryDialog({ open, onOpenChange, vtuberId, acc
         </OverlayScroll>
 
         <div className="ah-foot">
-          <button type="button" className="ah-close" onClick={() => onOpenChange(false)}>
+          {/* R21 批 3：页脚统一浮片（原 `.ah-close` 自绘副本已删） */}
+          <button type="button" className="float-pill float-pill--md float-pill--text"
+                  onClick={() => onOpenChange(false)}>
             关闭
           </button>
         </div>

@@ -187,6 +187,11 @@ python scripts/ui_probe.py --close-ask               # R20 首次点 ✕ 的询�
 > 探针点不到 —— 所以开发构建里挂了 `window.__ddtoolkitCloseClick()`（与 `__ddtoolkitSetShellHidden`
 > 同一族 dev 钩子，`import.meta.env.DEV` 下才有）。判开合**读 `data-state`**（理由同上：`Presence`）。
 > 三段：ask 弹框（两选项 + 「记住」）→ 选托盘则写 `prefs.close_action=tray` 并隐藏 → 再点 ✕ **不再问**。
+>
+> ⚠️ **探针的打印里有排版字符**（`✕` U+2715、`−` U+2212 等）**不在 GBK 码表里** ——
+> Windows 控制台是 cp936 时，一句 `print` 就抛 `UnicodeEncodeError` 把整条探针从中间打断
+> （症状很误导：**退出码 1 但一条失败行都没有**）。`ui_probe.py` 启动时把 stdout 的编码错误
+> 降级成 `?`（2026-09-16 实测踩到后加的护栏）；脚本里新增文案尽量用 ASCII 的 `-` 而不是 `−`。
 
 > `--filter-pill`（2026-09-15 起，R16 devlog/093）：用户给的是**两张截图**（"list 视图那枚
 > 要跟随侧栏那枚的样式"）—— 截图能看出"像不像"，但没法证明"一样不一样"，所以先把两枚浮片

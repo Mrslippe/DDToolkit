@@ -27,6 +27,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "frontend"
+
+# Windows 控制台常常是 GBK（cp936），而探针的打印里有排版字符（✕ U+2715、− U+2212 等）
+# **不在 GBK 码表里** —— 一句 print 就会抛 UnicodeEncodeError，把整条探针从中间打断
+# （2026-09-16 实测：`--close-ask` 明明跑完了却"退出码 1 且没有失败行"）。
+# 这里把"编码失败"降级成 '?'：打不出来是小事，跑不下去是大事。
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(errors="replace")
+
 DEV_DATA = Path(os.environ.get("APPDATA", "")) / "com.ddtoolkit.app-dev"
 WORK = ROOT / "_ui_probe_tmp"
 EDGE_CANDIDATES = [
@@ -1019,6 +1027,20 @@ def main() -> int:
                                         f"{aps.get('switchLabel')!r}（应只有「开」或「关」）")
                     if not aps.get("switchHit"):
                         failures.append(f"@{w} app-settings: 开关点不着")
+                    # ── 页脚统一浮片（R21 批 3）────────────────────────
+                    # 判据：两个按钮都是 `.float-pill`、**主操作（保存）带 `.on`**
+                    # （页脚不能两个按钮一样重）、都能命中。
+                    fp = aps.get("footPills") or []
+                    if len(fp) != 2:
+                        failures.append(f"@{w} app-settings: 页脚按钮有 {len(fp)} 个，"
+                                        f"应为 2（恢复全部默认 + 保存）")
+                    if any("float-pill" not in (c or "") for c in fp):
+                        failures.append(f"@{w} app-settings: 页脚还有非浮片按钮 —— {fp}")
+                    if aps.get("footPillActiveIdx") != 1:
+                        failures.append(f"@{w} app-settings: 主操作（保存）没带 `.on`"
+                                        f"（带 on 的下标 = {aps.get('footPillActiveIdx')}，应为 1）")
+                    if not aps.get("footPillHit"):
+                        failures.append(f"@{w} app-settings: 页脚浮片点不着")
                     # 草稿跨页保留 + 圆点标在改过的那一页
                     if aps.get("dirtyNavLabels") != ["抓取设置"]:
                         failures.append(f"@{w} app-settings: 未保存圆点标在了 "
@@ -1317,6 +1339,12 @@ def main() -> int:
                     failures.append(f"@{w} close-ask: 第二次点 ✕ 没有直接隐藏")
                 if ca.get("restored") != "ask":
                     failures.append(f"@{w} close-ask: 探针没把偏好复位（{ca.get('restored')!r}）")
+                # R21 批 3：询问框页脚的「取消」也统一成浮片
+                if "float-pill" not in (ca.get("footPill") or ""):
+                    failures.append(f"@{w} close-ask: 询问框页脚的「取消」不是浮片 —— "
+                                    f"{ca.get('footPill')!r}")
+                if not ca.get("footPillHit"):
+                    failures.append(f"@{w} close-ask: 询问框页脚浮片点不着")
             if not failures:
                 print("  [ok] 首次询问：ask 弹框（两选项+记住）→ 选托盘写偏好并隐藏 → 再点不再问")
             for b in failures:
@@ -1736,6 +1764,14 @@ def main() -> int:
                         failures.append(f"@{w} capabilities: 受限项里没有 fetch_posts：{ids}")
                     if not cp.get("hasLoginCta"):
                         failures.append(f"@{w} capabilities: 说明窗没有「去登录」入口")
+                    # R21 批 3：页脚统一浮片（主操作「去登录」还要带 `.on`）
+                    if "float-pill" not in (cp.get("footPill") or ""):
+                        failures.append(f"@{w} capabilities: 说明窗页脚不是浮片 —— "
+                                        f"{cp.get('footPill')!r}")
+                    if not cp.get("footPillActive"):
+                        failures.append(f"@{w} capabilities: 「去登录」没带 `.on`（主操作）")
+                    if not cp.get("footPillHit"):
+                        failures.append(f"@{w} capabilities: 说明窗页脚浮片点不着")
                 # ② 过度限制的反面断言
                 if not cp.get("addVDialogOpened"):
                     failures.append(f"@{w} capabilities: 未登录时「添加 V」浮窗打不开"
@@ -2012,6 +2048,10 @@ def main() -> int:
                                     f"（嵌套弹窗层级问题）")
                 elif not st.get("historyClosed"):
                     failures.append(f"@{w} settings: 历史弹窗点「关闭」没关掉")
+                # R21 批 3：历史弹窗页脚也必须是浮片（上面那条"点得着"顺带证明了它可命中）
+                if "float-pill" not in (st.get("ahFootPill") or ""):
+                    failures.append(f"@{w} settings: 历史弹窗页脚不是浮片 —— "
+                                    f"{st.get('ahFootPill')!r}")
                 if not failures:
                     print("  [ok] 档设置弹窗几何与可点性不变量全部通过")
             for b in failures:

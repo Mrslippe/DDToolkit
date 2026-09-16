@@ -557,7 +557,7 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 - 类 API：`.float-pill` 基型 + `--icon`（方形图标钮）/ `--text`（文字钮）+ `--md`（30px）+ `.on`（激活：primary-deep 底白字）+ `--danger`（红字红图标）
 - 交互态：hover 上浮1px+阴影加深、按压回落、focus-visible 环、disabled 半透明
 - 实心下拉三角 `.pill-caret`（border 法，-15° 微倾）替代描边 ChevronDown
-- 现役浮片：侧栏 ＋(50px)/拉取(44px)/过滤触发器(89px)、帖子页时间钮(md)/已删钮/背景工具组 `.bg-set`、header-actions 五钮、**日历月份导航三件套**——**2026-09 P1 起全部由 `<components/common/FloatPill.tsx>` 渲染**（原生 `<button class="float-pill …">`，配方仍在本节 layout.css；原 `.lc-nav-btn`/`.lc-nav-pill` 自绘副本已删）
+- 现役浮片：侧栏 ＋(50px)/拉取(44px)/过滤触发器(89px)、帖子页时间钮(md)/已删钮/背景工具组 `.bg-set`、header-actions 五钮、**日历月份导航三件套**、**二级弹窗页脚动作**（R21 批 3：设置的「恢复全部默认 / 保存」、添加账号的「取消 / 添加」、档案设置的「关闭」、能力说明的「去登录」、关闭询问的「取消」、账号历史的「关闭」）——**2026-09 P1 起全部由 `<components/common/FloatPill.tsx>` 渲染**（原生 `<button class="float-pill …">`，配方仍在本节 layout.css；原 `.lc-nav-btn`/`.lc-nav-pill` 自绘副本已删，R21 批 3 又删掉了 `.ah-close` / `.cap-login-cta` 两个副本）
 - **禁用例**：搜索胶囊（侧栏 240×25、帖子页 190×30）为胶囊形遗留例外，不入体系；Hero `.stat-pill` 彩色统计胶囊属另一家族（2px 圆角图像底）
 
 ## C3. 独立筛选弹窗（layout.css `.filter-pop` / `.post-filter-pop`）

@@ -1114,8 +1114,18 @@ export async function runUiProbe(): Promise<void> {
       result.limitCount = dlg?.querySelectorAll('.cap-limits-item').length ?? -1
       result.limitIds = [...(dlg?.querySelectorAll('[data-limit-id]') || [])]
         .map((n) => n.getAttribute('data-limit-id'))
-      result.hasLoginCta = !!dlg?.querySelector('.cap-login-cta')
-      result.loginCtaText = (dlg?.querySelector('.cap-login-cta')?.textContent || '').trim()
+      result.hasLoginCta = !!dlg?.querySelector('.cap-limits-foot .float-pill')
+      result.loginCtaText = (dlg?.querySelector('.cap-limits-foot .float-pill')?.textContent || '').trim()
+      // R21 批 3：页脚按钮必须是浮片（斜切白卡那套），且主操作带 `.on`。
+      // 命中就地量（本模式的 `hits/rectOf` 不在这个作用域里）
+      const capCta = dlg?.querySelector<HTMLElement>('.cap-limits-foot button')
+      result.footPill = capCta ? capCta.className : null
+      result.footPillActive = !!capCta?.classList.contains('on')
+      if (capCta) {
+        const r = capCta.getBoundingClientRect()
+        const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+        result.footPillHit = !!at && (at === capCta || capCta.contains(at))
+      }
       result.limitNoteSample = (dlg?.querySelector('.cap-limits-note')?.textContent || '').slice(0, 60)
       dlg?.querySelector<HTMLElement>('[data-slot="dialog-close"]')?.click()
       await waitFor(() => !document.querySelector('.cap-limits-dialog'), 3000)
@@ -1367,7 +1377,9 @@ export async function runUiProbe(): Promise<void> {
         result.historySnapRows = ah?.querySelectorAll('.ah-snap').length ?? -1
         result.historyEmpty = !!ah?.querySelector('.ah-empty')
         result.settingsStillOpen = !!document.querySelector('.vd-settings')
-        ah?.querySelector<HTMLElement>('.ah-close')?.click()
+        const ahFoot = ah?.querySelector<HTMLElement>('.ah-foot .float-pill')
+        result.ahFootPill = ahFoot ? ahFoot.className : null
+        ahFoot?.click()
         await sleep(250)
         result.historyClosed = !document.querySelector('.ah-dialog')
       }
@@ -1670,6 +1682,16 @@ export async function runUiProbe(): Promise<void> {
         typeInto(inputNow()!, '7')                         // 回到待保存的合法值
         await sleep(150)
       }
+
+      // ⑦-c 弹窗页脚统一浮片（R21 批 3）：两个按钮都必须是 `.float-pill`，
+      //      且「保存」这个主操作带 `.on`（主色深填白字）—— 顺手量一下可命中。
+      const footPills = [...dlg.querySelectorAll<HTMLElement>('.aps-foot-actions button')]
+      result.footPills = footPills.map((b) => b.className)
+      result.footPillActiveIdx = footPills.findIndex((b) => b.classList.contains('on'))
+      result.footPillHit = footPills.every((b) => {
+        const r = rectOf(b)
+        return !!r && hits(b, r.left + r.width / 2, r.top + r.height / 2)
+      })
 
       // ⑧ 合法值 → 保存 → **服务端**对账
       if (inputNow()) {
@@ -2053,6 +2075,15 @@ export async function runUiProbe(): Promise<void> {
       .map((n) => n.getAttribute('data-choice'))
     result.hasRemember = !!dlg?.querySelector('[data-testid="close-ask-remember"]')
     result.optionNotes = [...(dlg?.querySelectorAll('.close-ask-note') || [])].map((n) => text(n))
+    // R21 批 3：询问框页脚的「取消」也统一成浮片（两个选项本身是竖排大按钮，不属于页脚）。
+    // 命中就地量（本模式的 `hits/rectOf` 不在这个作用域里）
+    const askFoot = dlg?.querySelector<HTMLElement>('.close-ask-foot button')
+    result.footPill = askFoot ? askFoot.className : null
+    if (askFoot) {
+      const r = askFoot.getBoundingClientRect()
+      const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+      result.footPillHit = !!at && (at === askFoot || askFoot.contains(at))
+    }
 
     // 选「最小化到托盘」（默认勾着"记住我的选择"）
     dlg?.querySelector<HTMLElement>('[data-choice="tray"]')?.click()

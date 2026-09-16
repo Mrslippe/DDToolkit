@@ -15,7 +15,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Button } from '@/components/ui/button'
+import FloatPill from './common/FloatPill'
 import { api } from '../api/api'
 import type { Account } from '../api/types'
 
@@ -105,12 +105,14 @@ export default function AddAccountDialog({
             className="h-9 w-full border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
           />
           <div className="flex justify-end gap-2">
-            <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
+            {/* R21 批 3：页脚按钮统一浮片（见 UI-MAP §C2） */}
+            <FloatPill size="md" shape="text" onClick={() => onOpenChange(false)}>
               取消
-            </Button>
-            <Button size="sm" disabled={adding || !uid.trim()} onClick={submit}>
+            </FloatPill>
+            <FloatPill size="md" shape="text" active
+                       disabled={adding || !uid.trim()} onClick={submit}>
               {adding ? <Loader2 className="size-4 animate-spin" /> : '添加'}
-            </Button>
+            </FloatPill>
           </div>
         </div>
       </DialogContent>

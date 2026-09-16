@@ -7,7 +7,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Button } from '@/components/ui/button'
+import FloatPill from './common/FloatPill'
 
 export type CloseChoice = 'tray' | 'quit'
 
@@ -92,9 +92,10 @@ export default function CloseActionDialog({ open, onOpenChange, onChoose, busy }
         </label>
 
         <div className="close-ask-foot">
-          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
+          {/* R21 批 3：页脚统一浮片（两个选项各自是大按钮，见 §A2-c；这里只有"取消"） */}
+          <FloatPill size="md" shape="text" onClick={() => onOpenChange(false)}>
             取消
-          </Button>
+          </FloatPill>
         </div>
       </DialogContent>
     </Dialog>

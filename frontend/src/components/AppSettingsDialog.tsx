@@ -11,7 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Button } from '@/components/ui/button'
+import FloatPill from './common/FloatPill'
 import { api } from '../api/api'
 import type { AppSettings, SettingSpec } from '../api/types'
 import { usePrefs } from '../hooks/usePrefs'
@@ -563,20 +563,22 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
             {dirtyKeys.length > 0 && ` · 待保存 ${dirtyKeys.length} 项`}
           </span>
           <div className="aps-foot-actions">
-            <Button variant="outline" size="sm" onClick={() => void resetAll()}
-                    disabled={busy !== null}>
+            {/* R21 批 3：弹窗页脚统一成**浮片**（`FloatPill` = 全站唯一的交互层元件，
+                斜切白卡 + 阴影，契约见 UI-MAP §C2/§C5）。主操作给 `.on`（主色深填白字）。 */}
+            <FloatPill size="md" shape="text" onClick={() => void resetAll()}
+                       disabled={busy !== null}>
               {busy === 'reset' ? <Loader2 className="size-[13px] animate-spin" />
                 : <RotateCcw className="size-[13px]" />}
               恢复全部默认
-            </Button>
-            <Button size="sm" onClick={() => void save()}
-                    disabled={busy !== null || dirtyKeys.length === 0 || problemCount > 0}
-                    data-testid="app-settings-save">
+            </FloatPill>
+            <FloatPill size="md" shape="text" active onClick={() => void save()}
+                       disabled={busy !== null || dirtyKeys.length === 0 || problemCount > 0}
+                       data-testid="app-settings-save">
               {busy === 'save' ? <Loader2 className="size-[13px] animate-spin" />
                 : dirtyKeys.length > 0 ? <Save className="size-[13px]" />
                   : <Check className="size-[13px]" />}
               保存
-            </Button>
+            </FloatPill>
           </div>
         </div>
       </DialogContent>

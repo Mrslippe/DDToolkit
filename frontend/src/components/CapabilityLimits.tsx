@@ -87,9 +87,10 @@ export default function CapabilityLimits({ caps, onLogin }: Props) {
           </section>
 
           <div className="cap-limits-foot">
+            {/* R21 批 3：页脚统一浮片（原来那个 `.cap-login-cta` 自绘副本已删） */}
             <button
               type="button"
-              className="cap-login-cta"
+              className="float-pill float-pill--md float-pill--text on"
               onClick={() => {
                 setOpen(false)
                 onLogin()

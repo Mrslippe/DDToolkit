@@ -20,6 +20,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
+import FloatPill from './common/FloatPill'
 import { api, resolveAsset } from '../api/api'
 import type { Account, VTuber } from '../api/types'
 import { PLATFORM_LABEL } from '../utils/postTypes'
@@ -745,9 +746,11 @@ export default function VtuberSettingsDialog({
           {/* 没有"保存/取消"了：改动**失焦即生效**（R1 补充，2026-09-13 用户：
               "修改要么实时生效要么全部都需要保存"）。只留一个关窗钮。 */}
           <div className="vd-settings-foot">
-            <Button size="sm" onClick={() => onOpenChange(false)}>
+            {/* R21 批 3：页脚统一浮片（正文里那对「更换背景图 / 清除」是**行内动作**、
+                不是页脚，按用户口径「右下角按钮」不动它们） */}
+            <FloatPill size="md" shape="text" onClick={() => onOpenChange(false)}>
               关闭
-            </Button>
+            </FloatPill>
           </div>
         </DialogContent>
       </Dialog>

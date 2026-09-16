@@ -2180,20 +2180,7 @@ img.hero-avatar {
   border-top: 1px solid var(--c-border);
 }
 
-.ah-close {
-  padding: 5px 14px;
-  border: 1px solid var(--c-border);
-  border-radius: 6px;
-  background: var(--c-bg-card);
-  color: var(--c-text-main);
-  font-size: 12.5px;
-  cursor: pointer;
-}
-
-.ah-close:hover {
-  border-color: var(--c-primary);
-  color: var(--c-primary-deep);
-}
+/* 页脚的「关闭」按钮（R21 批 3）：自绘的 `.ah-close` 已删 —— 改用浮片（`float-pill--text`） */
 
 /* ── 添加 V 浮窗（R11，devlog/083）──────────────────────────────────
    两个来源：本地候选（候选池 + danmakus 索引）与 **B 站在线检索**。
@@ -2613,20 +2600,7 @@ img.hero-avatar {
   justify-content: flex-end;
 }
 
-.cap-login-cta {
-  padding: 6px 14px;
-  border: 1px solid var(--c-primary);
-  border-radius: 8px;
-  background: var(--c-bg-card);
-  color: var(--c-primary-deep);
-  font-family: inherit;
-  font-size: 12.5px;
-  cursor: pointer;
-}
-
-.cap-login-cta:hover {
-  background: var(--sel-bg);
-}
+/* 能力说明窗的「去登录」（R21 批 3）：自绘的 `.cap-login-cta` 已删 —— 改用浮片 `.float-pill.on` */
 
 .vd-settings-foot {
   flex: none;
