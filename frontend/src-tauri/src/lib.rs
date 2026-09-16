@@ -24,6 +24,10 @@ mod datadir;
 #[allow(dead_code)]
 mod migrate;
 
+/// 壳侧文件日志（R22-B2e，devlog/112）：`<数据目录>\logs\shell.log`。
+/// 打包版里 `println!` 等于没有输出 —— 迁移连着三次真机失败，每次都得靠后端日志反推壳走到了哪一步。
+mod shelllog;
+
 // 启动计时基线（冷启动优化，见 devlog/021）：各阶段毫秒时间戳输出到终端
 static T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
 
@@ -113,11 +117,50 @@ fn backend_healthy(port: u16) -> bool {
     raw.starts_with("HTTP/1.1 200") || raw.starts_with("HTTP/1.0 200")
 }
 
-/// 停掉后端并等它真的让出端口，返回它原来的端口（重启时尽量复用，前端就不必重新引导）。
+/// 进程是否还活着（Windows：OpenProcess + GetExitCodeProcess）。
+fn process_alive(pid: u32) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::System::Threading::{
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        const STILL_ACTIVE: u32 = 259;
+        unsafe {
+            let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if h.is_null() {
+                return false;
+            }
+            let mut code: u32 = 0;
+            let ok = GetExitCodeProcess(h, &mut code);
+            let _ = windows_sys::Win32::Foundation::CloseHandle(h);
+            ok != 0 && code == STILL_ACTIVE
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = pid;
+        false
+    }
+}
+
+/// 停掉后端并等它**真的退出**、端口也让出来；返回它原来的端口（重启时尽量复用，前端不必重新引导）。
+///
+/// ⚠️ 两步缺一不可（R22-B2e，devlog/112）：
+/// ① **等进程消失**：端口不再响应 ≠ 文件句柄已释放 —— 复制 `vtuber.db`/`-wal` 时
+///    会撞上 Windows 的"另一个程序正在使用此文件"（`migrate::copy_tree` 现在也会重试兜底）；
+/// ② **等端口让出来**：新进程要 bind 同一个端口。
 fn stop_backend(app: &tauri::AppHandle) -> u16 {
     let port = *app.state::<BackendPort>().0.lock().unwrap();
+    let mut pid = 0u32;
     if let Some(child) = app.state::<BackendChild>().0.lock().unwrap().take() {
+        pid = child.pid();
         let _ = child.kill();
+    }
+    for _ in 0..50 {
+        if pid == 0 || !process_alive(pid) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
     }
     for _ in 0..25 {
         if !backend_healthy(port) {
@@ -199,23 +242,32 @@ async fn migrate_data_dir(app: tauri::AppHandle) -> Result<MigrateReport, String
     }
 
     let plan = migrate::plan_migration(&current, &target)?;
+    shelllog::log(&current, &format!(
+        "迁移计划：源 {} → 目标 {}（{} 个文件 / {} 字节，跳过 {:?}）",
+        plan.source.display(), plan.data_dir.display(), plan.files, plan.bytes, plan.skipped));
 
     let port = stop_backend(&app);
+    shelllog::log(&current, &format!("已停后端（端口 {port}），开始复制"));
     let report = match migrate::copy_tree(&plan)
         .and_then(|r| migrate::verify_copy(&plan).map(|_| r))
     {
         Ok(r) => r,
         Err(why) => {
             // 复制/校验失败时**指针还没动**：把后端用旧目录拉回来就恢复原状
+            shelllog::log(&current, &format!("复制/校验失败：{why} —— 回滚（指针未动）"));
             let _ = start_backend_and_wait(&app, port, &current);
             return Err(format!("{why}（已放弃迁移，数据目录没有改变）"));
         }
     };
+    shelllog::log(&current, &format!(
+        "复制并校验通过：{} 个文件 / {} 字节", report.files, report.bytes));
 
     let prev_pointer = datadir::read_pointer().ok().flatten();
     datadir::write_pointer(&plan.data_dir)?;
+    shelllog::log(&current, &format!("已写指针 → {}，用新目录拉起后端", plan.data_dir.display()));
     if let Err(why) = start_backend_and_wait(&app, port, &plan.data_dir) {
         // 探活失败 ⇒ 回滚指针并用旧目录重启（旧目录里的数据一直没动过）
+        shelllog::log(&current, &format!("新目录启动失败：{why} —— 回滚指针并用旧目录重启"));
         match &prev_pointer {
             Some(p) => {
                 let _ = datadir::write_pointer(p);
@@ -227,6 +279,9 @@ async fn migrate_data_dir(app: tauri::AppHandle) -> Result<MigrateReport, String
         let _ = start_backend_and_wait(&app, port, &current);
         return Err(format!("新目录启动失败：{why}（已回退到原目录）"));
     }
+    shelllog::log(&current, &format!(
+        "迁移完成：数据目录 = {}（旧目录仍保留在 {}，等用户确认后再删）",
+        plan.data_dir.display(), current.display()));
     *app.state::<DataDirState>().0.lock().unwrap() = Some(datadir::Startup {
         dir: plan.data_dir.clone(),
         source: datadir::DirSource::Migrated,
@@ -760,6 +815,10 @@ pub fn run() {
             }
             println!("[ddtoolkit] data dir = {}（来源 {}）",
                      startup.dir.display(), startup.source.as_str());
+            shelllog::log(&startup.dir, &format!(
+                "启动：数据目录 = {}（来源 {}）· 便携={} · 指针问题={:?}",
+                startup.dir.display(), startup.source.as_str(),
+                startup.portable, startup.pointer_unusable));
             *app.state::<DataDirState>().0.lock().unwrap() = Some(startup.clone());
             let data_dir = startup.dir;
             std::fs::create_dir_all(&data_dir)?;

@@ -234,6 +234,43 @@ fn canonical(p: &Path) -> Result<PathBuf, String> {
     std::fs::canonicalize(p).map_err(|e| format!("路径解析失败 {}：{e}", p.display()))
 }
 
+/// 复制一个文件，**遇到"文件被占用"类错误重试**（R22-B2e，devlog/112）。
+///
+/// 为什么需要：`stop_backend()` 杀掉后端后，端口可能先于**文件句柄**释放 ——
+/// Windows 上这时复制 `vtuber.db` / `-wal` 会直接 `拒绝访问`/`另一个程序正在使用`。
+/// 这台机器上没撞到（复制时机刚好），但它是真实存在的竞态，不该赌。
+fn copy_with_retry(from: &Path, to: &Path, rel: &Path) -> Result<(), String> {
+    const ATTEMPTS: u32 = 4;
+    let mut last: Option<std::io::Error> = None;
+    for i in 0..ATTEMPTS {
+        match std::fs::copy(from, to) {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                let busy = is_busy(&e);
+                last = Some(e);
+                if !busy {
+                    break; // 不是占用类问题：重试也没用
+                }
+                if i + 1 < ATTEMPTS {
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                }
+            }
+        }
+    }
+    Err(format!(
+        "复制失败 {} → {}：{}",
+        rel.display(),
+        to.display(),
+        last.map(|e| e.to_string()).unwrap_or_default()
+    ))
+}
+
+/// 是不是"文件被占用"类错误（值得重试）：
+/// 5 = ERROR_ACCESS_DENIED、32 = ERROR_SHARING_VIOLATION、33 = ERROR_LOCK_VIOLATION。
+fn is_busy(e: &std::io::Error) -> bool {
+    matches!(e.raw_os_error(), Some(5) | Some(32) | Some(33))
+}
+
 /// 按计划复制（**跳过项不复制**）。返回实际复制的文件数与字节数。
 pub fn copy_tree(plan: &Plan) -> Result<CopyReport, String> {
     let (files, _) = collect(&plan.source)?;
@@ -246,8 +283,7 @@ pub fn copy_tree(plan: &Plan) -> Result<CopyReport, String> {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("建目录失败 {}：{e}", parent.display()))?;
         }
-        std::fs::copy(plan.source.join(rel), &to)
-            .map_err(|e| format!("复制失败 {} → {}：{e}", rel.display(), to.display()))?;
+        copy_with_retry(&plan.source.join(rel), &to, rel)?;
         report.files += 1;
         report.bytes += size;
     }
@@ -475,6 +511,19 @@ mod tests {
         assert_eq!(plan.data_dir, target.join(DATA_SUBDIR));   // 对外是原始路径，不带 verbatim 前缀
         copy_tree(&plan).unwrap();
         verify_copy(&plan).unwrap();
+    }
+
+    #[test]
+    fn busy_errors_are_recognised_for_retry() {
+        // 占用类错误值得重试；其它（比如路径不存在）重试也没用
+        for code in [5, 32, 33] {
+            let e = std::io::Error::from_raw_os_error(code);
+            assert!(is_busy(&e), "code {code} 应当算占用类");
+        }
+        let other = std::io::Error::from_raw_os_error(2);   // ERROR_FILE_NOT_FOUND
+        assert!(!is_busy(&other));
+        let generic = std::io::Error::new(std::io::ErrorKind::Other, "x");
+        assert!(!is_busy(&generic));
     }
 
     #[test]

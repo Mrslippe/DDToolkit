@@ -28,6 +28,7 @@ windows-sys = { version = "0.59", features = [
   "Win32_Graphics_Dwm",
   "Win32_Storage_FileSystem",
   "Win32_System_JobObjects",
+  "Win32_System_SystemInformation",
   "Win32_System_Threading",
 ] }
 
