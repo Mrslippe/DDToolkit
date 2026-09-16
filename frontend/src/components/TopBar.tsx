@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { useIsMaximized } from '../hooks/useIsMaximized'
 import { useShellHidden } from '../hooks/useShellHidden'
+import { useTrayStatus } from '../hooks/useTrayStatus'
 import { useLowSpaceNotice } from '../hooks/useLowSpaceNotice'
 import { useUpdateCheck } from '../hooks/useUpdateCheck'
 import { setFetchBusy } from '../fetchBusy'
@@ -482,6 +483,10 @@ export default function TopBar() {
     return list
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, auths, doneReport, pillMsg, now, statusText])
+
+  // ⑥ R29：把风控冷却同步到**托盘**（收进托盘后没人看界面，状态岛也就看不见了）。
+  // 可见时吃上面这条 2s 轮询；隐藏时 hook 内自带 60s 心跳（详见 useTrayStatus 注释）。
+  useTrayStatus(status?.rate_limit)
 
   /** 面板动作 → 具体行为（渲染层不碰业务） */
   const onIslandAction = (kind: NoticeActionKind) => {

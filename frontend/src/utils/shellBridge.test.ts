@@ -1,5 +1,18 @@
 import { describe, expect, it } from 'vitest'
-import { classifyUpdateError, UpdateCheckError } from '../utils/shellBridge'
+import { classifyUpdateError, setTrayStatus, UpdateCheckError } from '../utils/shellBridge'
+
+/**
+ * 托盘状态行桥接（R29，devlog/129）：浏览器/探针环境下必须**静默返回**。
+ *
+ * 判错的代价：探针（真实浏览器里跑）会因为这条调用抛错而红，或者更糟 ——
+ * 让"托盘提示"变成一个会打断界面逻辑的东西。托盘文案是提示，失败就该无声。
+ */
+describe('托盘状态桥接', () => {
+  it('非 Tauri 环境：静默返回，不抛错', async () => {
+    await expect(setTrayStatus('风控冷却中 · 剩余 3 分钟')).resolves.toBeUndefined()
+    await expect(setTrayStatus(null)).resolves.toBeUndefined()
+  })
+})
 
 /**
  * 检查更新的**错误分类**（R23d，devlog/116）。

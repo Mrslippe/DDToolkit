@@ -47,6 +47,12 @@ struct BackendPort(Mutex<u16>);
 #[derive(Default)]
 struct DataDirState(Mutex<Option<datadir::Startup>>);
 
+/// 托盘里那行「状态」菜单项的句柄（R29）：运行时改文案用它。
+///
+/// 为什么存句柄而不是每次去拿：`TrayIcon` **没有** `menu()` getter（只有 `set_menu`），
+/// 所以"改一行字"这件事只能靠建菜单时留个引用。
+struct TrayStatusItem(Mutex<Option<tauri::menu::MenuItem<tauri::Wry>>>);
+
 /// 给界面的数据目录信息（`storage_info` 命令）
 #[derive(serde::Serialize)]
 struct DataDirInfo {
@@ -642,11 +648,61 @@ fn tray_quit_impl(app: &tauri::AppHandle) {
 }
 
 /// 建托盘：左键单击 = 显示主界面；菜单 = 显示主界面 / 后台运行中（禁用）/ 退出。
+/// 托盘状态行的两行文案（菜单项 / tooltip）——纯函数，便于 `cargo test`。
+///
+/// `None` / 空串 / 全空白 = 恢复默认「后台运行中」（R29：风控冷却结束后前端传 None 复位）。
+fn tray_status_texts(status: Option<&str>) -> (String, String) {
+    let line = status
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("后台运行中");
+    (line.to_string(), format!("DDtoolkit · {line}"))
+}
+
+/// 更新托盘的那行状态（R29，devlog/129）。
+///
+/// 为什么走托盘：后端把「风控冷却」做进了顶栏状态岛，但**收进托盘后没人看界面** ——
+/// 用户既不知道被限流、也不知道该等多久。壳这边本来就有现成的落点（菜单项 `status`
+/// 与 tray tooltip），改它**不需要任何新插件/依赖**。
+///
+/// 失败只写壳日志（`logs/shell.log`）：托盘文案是提示，不该影响任何功能。
+#[tauri::command]
+fn set_tray_status(app: tauri::AppHandle, state: State<'_, DataDirState>,
+                   item: State<'_, TrayStatusItem>, text: Option<String>) {
+    let (line, tooltip) = tray_status_texts(text.as_deref());
+    let dir = state.0.lock().unwrap().as_ref().map(|s| s.dir.clone());
+    let log = |msg: String| {
+        if let Some(d) = dir.as_deref() {
+            shelllog::log(d, &msg);
+        }
+    };
+    match app.tray_by_id("main-tray") {
+        Some(tray) => {
+            if let Err(e) = tray.set_tooltip(Some(tooltip.as_str())) {
+                log(format!("set_tray_status: 设置 tooltip 失败 {e}"));
+            }
+        }
+        None => log("set_tray_status: 找不到托盘（已忽略）".to_string()),
+    }
+    match item.0.lock().unwrap().as_ref() {
+        Some(mi) => {
+            if let Err(e) = mi.set_text(line.as_str()) {
+                log(format!("set_tray_status: 设置菜单项失败 {e}"));
+            }
+        }
+        None => log("set_tray_status: 菜单项句柄还没就绪（已忽略）".to_string()),
+    }
+}
+
 fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     let show = MenuItemBuilder::with_id("show", "显示主界面").build(app)?;
     let status = MenuItemBuilder::with_id("status", "后台运行中")
         .enabled(false)
         .build(app)?;
+    // R29：把这一项的句柄存起来 —— 运行时改文案（`TrayIcon` 没有 menu() getter）
+    if let Some(state) = app.try_state::<TrayStatusItem>() {
+        *state.0.lock().unwrap() = Some(status.clone());
+    }
     let quit = MenuItemBuilder::with_id("quit", "退出").build(app)?;
     let menu = MenuBuilder::new(app)
         .item(&show)
@@ -895,6 +951,7 @@ pub fn run() {
         .manage(BackendChild(Mutex::new(None)))
         .manage(BackendJob(Mutex::new(0)))
         .manage(DataDirState(Mutex::new(None)))
+        .manage(TrayStatusItem(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             get_backend_port,
             present_window,
@@ -903,6 +960,7 @@ pub fn run() {
             storage_info,
             migrate_data_dir,
             delete_old_data_dir,
+            set_tray_status,
             open_release_page,
             probe_local_proxy,
             set_process_proxy
@@ -1138,6 +1196,21 @@ mod tests {
         );
         // 一个**几乎不可能有人监听**的端口：探不到就是 None（不能瞎猜成"有代理"）
         assert_eq!(probe_ports(&[9], Duration::from_millis(50)), None);
+    }
+
+    /// **托盘状态行文案**（R29）：冷却中显示冷却文案，其余情况一律回到默认。
+    /// 判错的代价是"冷却早结束了、托盘还挂着限流提示"（用户以为一直没恢复）。
+    #[test]
+    fn tray_status_texts_defaults_and_overrides() {
+        assert_eq!(
+            tray_status_texts(None),
+            ("后台运行中".to_string(), "DDtoolkit · 后台运行中".to_string())
+        );
+        // 空串 / 全空白都当"没有状态"（前端复位时可能传空串）
+        assert_eq!(tray_status_texts(Some("   ")).0, "后台运行中");
+        let (line, tooltip) = tray_status_texts(Some(" 风控冷却中 · 剩余 8 分钟 "));
+        assert_eq!(line, "风控冷却中 · 剩余 8 分钟"); // 两端空白裁掉
+        assert_eq!(tooltip, "DDtoolkit · 风控冷却中 · 剩余 8 分钟");
     }
 
     /// **深休眠看门狗的休眠节奏**（R24/T1）：原来每秒醒一次（隐藏期间也醒），

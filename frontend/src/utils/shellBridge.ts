@@ -312,3 +312,20 @@ export async function openReleasePage(): Promise<boolean> {
     return false
   }
 }
+
+/**
+ * 更新托盘那行状态（R29，devlog/129）：传 `null` 复位成「后台运行中」。
+ *
+ * 用途：窗口收进托盘后没人看界面，风控冷却就"看不见"了 —— 壳把它显示在托盘 tooltip
+ * 与菜单项 `status` 上，悬停托盘图标即可见。
+ * **失败静默**（浏览器/探针环境下 `isTauri` 为假，直接返回；壳侧写不进也只记日志）：
+ * 托盘文案是提示，不该影响任何功能。
+ */
+export async function setTrayStatus(text: string | null): Promise<void> {
+  if (!isTauri) return
+  try {
+    await invoke('set_tray_status', { text })
+  } catch {
+    /* 忽略：见上 */
+  }
+}
