@@ -17,6 +17,18 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+/// 迁移时要跳过的**顶层文件**（R22-B2d 修复二，devlog/110）。
+///
+/// `vtuber.db-shm` 是 SQLite WAL 的**共享内存索引**：它记录锁状态与 WAL 索引，
+/// **必须由每个进程自己重建**，拷贝它是不安全操作（官方明确要求不要复制 `-shm`）。
+/// 真机实测（2026-09-16 dev 模式重试）：带着源进程留下的锁状态，新后端在
+/// `_run_migrations()` 里**等锁**，而 `busy_timeout` 恰好 30000ms、探活超时也恰好 30s
+/// ⇒ 必然判"后端 30 秒内没有就绪"，其实它再等一会儿就能自己恢复。
+///
+/// `-wal` **要复制**：里面可能还有最近几小时尚未 checkpoint 的写入，丢了就是丢数据。
+/// 新进程会用 `-wal` 做恢复并自建 `-shm`，那是 SQLite 支持的路径。
+pub const SKIP_FILES: [&str; 1] = ["vtuber.db-shm"];
+
 /// 迁移时要跳过的顶层相对路径（用户口径）
 pub const SKIP_DIRS: [&str; 2] = ["logs", "static/img-cache"];
 
@@ -112,8 +124,10 @@ fn walk(
         let entry = entry.map_err(|e| format!("遍历 {} 失败：{e}", dir.display()))?;
         let path = entry.path();
         let rel = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
-        // 跳过项：按**顶层相对路径**匹配（`logs`、`static/img-cache`）
-        if SKIP_DIRS.iter().any(|s| rel == Path::new(s)) {
+        // 跳过项：按**顶层相对路径**匹配（目录 `logs` / `static/img-cache`，文件 `vtuber.db-shm`）
+        if SKIP_DIRS.iter().any(|s| rel == Path::new(s))
+            || SKIP_FILES.iter().any(|s| rel == Path::new(s))
+        {
             continue;
         }
         let meta = std::fs::symlink_metadata(&path)
@@ -294,6 +308,8 @@ mod tests {
         std::fs::create_dir_all(d.join("static").join("img-cache")).unwrap();
         std::fs::write(d.join("vtuber.db"), vec![b'x'; 4096]).unwrap();
         std::fs::write(d.join("vtuber.db-wal"), vec![b'w'; 512]).unwrap();
+        // `-shm` 是 SQLite 的共享内存索引：**必须被跳过**（带过去会让新进程等锁，devlog/110）
+        std::fs::write(d.join("vtuber.db-shm"), vec![b's'; 128]).unwrap();
         std::fs::write(d.join(".env"), b"TOKEN=secret\n").unwrap();
         std::fs::write(d.join("vtubers.csv"), b"name,uid\n").unwrap();
         std::fs::write(d.join("logs").join("app.log"), vec![b'l'; 9999]).unwrap();
@@ -338,8 +354,14 @@ mod tests {
         // 跳过项**没有**被复制（日志与图片缓存的体积不该出现在新目录）
         assert!(!plan.data_dir.join("logs").exists());
         assert!(!plan.data_dir.join("static").join("img-cache").exists());
+        // 关键：`-shm` 必须**没有**被复制（它是 SQLite 的共享内存索引，带过去会让新进程等锁
+        // —— 真机 dev 模式重试正是死在这里：日志停在 lifespan 开始、卡满 busy_timeout 30s）
+        assert!(!plan.data_dir.join("vtuber.db-shm").exists(), "-shm 不该被复制");
+        // `-wal` 必须复制（里面可能还有没 checkpoint 的写入，丢了就是丢数据）
+        assert_eq!(std::fs::read(plan.data_dir.join("vtuber.db-wal")).unwrap().len(), 512);
         // 源目录**一个文件都没少**（纪律：全程不动旧目录）
         assert!(src.join("logs").join("app.log").is_file());
+        assert!(src.join("vtuber.db-shm").is_file(), "源目录的 -shm 也不该被动");
         assert!(src.join("vtuber.db").is_file());
     }
 

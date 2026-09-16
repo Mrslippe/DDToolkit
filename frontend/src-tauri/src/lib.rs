@@ -144,13 +144,19 @@ fn start_backend_and_wait(
             winjob::assign_process(job, pid);
         }
     }
-    for _ in 0..60 {
+    // 探活窗口：**不能贴着 `busy_timeout`（30s）** —— 真机实测（devlog/110）里新后端
+    // 因为复制来的 `-shm` 等锁卡满 30s，而这里也恰好 30s，差几毫秒就判成失败。
+    // 现在给到 60s，并在超时后**杀掉这个没起来的子进程**（否则它会继续占着库与端口）。
+    for _ in 0..120 {
         if backend_healthy(port) {
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(500));
     }
-    Err("后端 30 秒内没有就绪".to_string())
+    if let Some(child) = app.state::<BackendChild>().0.lock().unwrap().take() {
+        let _ = child.kill();
+    }
+    Err("后端 60 秒内没有就绪".to_string())
 }
 
 /// 迁移结果（给界面显示"搬了什么、旧目录在哪"）
