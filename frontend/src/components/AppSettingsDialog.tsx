@@ -213,6 +213,8 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
   const [updateState, setUpdateState] =
     useState<'idle' | 'checking' | 'latest' | 'available' | 'error'>('idle')
   const [updateError, setUpdateError] = useState<string | null>(null)
+  /** 失败类别：`remote`（远端没有 latest.json，通常=还没发版）与 `network` 的提示不一样 */
+  const [updateErrorKind, setUpdateErrorKind] = useState<'network' | 'remote' | 'other'>('other')
   /** 下载/安装中：**独立标记**而不是塞进 `updateState` —— 否则切到 installing 时
       "发现新版本"那个分支就不再渲染，按钮与进度条会当场消失（tsc 的类型收窄先发现的） */
   const [installing, setInstalling] = useState(false)
@@ -243,7 +245,9 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
         setUpdateState('latest')
       }
     } catch (e) {
-      setUpdateError((e as Error).message)
+      const err = e as { message?: string; kind?: 'network' | 'remote' | 'other' }
+      setUpdateError(err.message ?? String(e))
+      setUpdateErrorKind(err.kind ?? 'other')
       setUpdateState('error')
     }
   }
@@ -824,7 +828,12 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
                         )}
                         {updateState === 'error' && (
                           <p className="aps-field-error" data-update="error">
-                            检查更新失败：{updateError}（连不上 github.com 时可以直接去发布页下载）
+                            检查更新失败：{updateError}
+                            {updateErrorKind === 'network'
+                              ? '（可以检查代理是否正常，或直接去发布页下载）'
+                              : updateErrorKind === 'remote'
+                                ? '（等新版本发布后再试；也可以直接去发布页看看）'
+                                : ''}
                           </p>
                         )}
                       </>

@@ -160,6 +160,45 @@ export function lastCheckProxy(): string | null {
 
 const errText = (e: unknown) => (typeof e === 'string' ? e : String(e))
 
+/** 检查更新失败的**类别**：决定"要不要试代理"和"给用户什么提示" */
+export type UpdateErrorKind = 'network' | 'remote' | 'other'
+
+export class UpdateCheckError extends Error {
+  kind: UpdateErrorKind
+
+  constructor(kind: UpdateErrorKind, message: string) {
+    super(message)
+    this.name = 'UpdateCheckError'
+    this.kind = kind
+  }
+}
+
+/**
+ * 把更新器/插件的原始报错翻译成**能行动**的话（R23d，devlog/116）。
+ *
+ * ⚠️ 真机实测（2026-09-16）踩到的坑：远端**还没有发布任何 Release** 时，插件报的是
+ * `Could not fetch a valid release JSON from the remote` —— 它看起来像"网络不通"，
+ * 于是我那条代理兜底白试了一次，界面上还出现"改用代理后仍失败"的误导性文案。
+ * 这两类是**完全不同**的问题：前者再换多少代理都没用（远端没有 `latest.json`）。
+ */
+export function classifyUpdateError(raw: string): { kind: UpdateErrorKind; text: string } {
+  const s = raw.toLowerCase()
+  const looksRemote =
+    s.includes('valid release json') || s.includes('404') || s.includes('not found')
+  if (looksRemote) {
+    return {
+      kind: 'remote',
+      text: '远端没有可用的更新信息（通常是还没发布过版本，或发布资产里缺 latest.json）',
+    }
+  }
+  const looksNetwork = ['connect', 'dns', 'timed out', 'timeout', 'sending request',
+    'network', 'unreachable', 'tls', 'certificate'].some((k) => s.includes(k))
+  if (looksNetwork) {
+    return { kind: 'network', text: raw }
+  }
+  return { kind: 'other', text: raw }
+}
+
 async function pluginCheck(): Promise<UpdateInfo | null> {
   const { check } = await import('@tauri-apps/plugin-updater')
   const update = await check()
@@ -194,6 +233,12 @@ export async function checkForUpdate(): Promise<UpdateInfo | null> {
   try {
     return await pluginCheck()
   } catch (first) {
+    const cls = classifyUpdateError(errText(first))
+    // ⚠️ **只有网络类错误才试代理**：远端没有 latest.json（还没发版）时换代理也是 404，
+    //    白试一次还会在界面上写出"改用代理后仍失败"这种误导性文案（真机实测过）
+    if (cls.kind !== 'network') {
+      throw new UpdateCheckError(cls.kind, cls.text)
+    }
     let proxy: string | null = null
     try {
       proxy = await invoke<string | null>('probe_local_proxy')
@@ -201,7 +246,7 @@ export async function checkForUpdate(): Promise<UpdateInfo | null> {
       proxy = null
     }
     if (!proxy) {
-      throw new Error(`${errText(first)}（也没检测到本地代理在监听）`)
+      throw new UpdateCheckError('network', `${cls.text}（也没检测到本地代理在监听）`)
     }
     try {
       await invoke('set_process_proxy', { url: proxy })
@@ -209,8 +254,14 @@ export async function checkForUpdate(): Promise<UpdateInfo | null> {
       usedProxy = proxy
       return info
     } catch (second) {
-      throw new Error(
-        `${errText(first)}；改用本地代理 ${proxy} 后仍失败：${errText(second)}`,
+      const cls2 = classifyUpdateError(errText(second))
+      if (cls2.kind !== 'network') {
+        // 代理连上了但远端内容不对：如实说内容问题，别赖代理
+        throw new UpdateCheckError(cls2.kind, cls2.text)
+      }
+      throw new UpdateCheckError(
+        'network',
+        `${cls.text}；改用本地代理 ${proxy} 后仍失败：${cls2.text}`,
       )
     }
   }
