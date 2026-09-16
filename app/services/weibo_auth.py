@@ -23,15 +23,13 @@ import httpx
 
 from app.core.config import settings
 from app.core.http import new_async_client
+from app.core.useragent import UA_IPHONE
 from app.services.env_store import save_env_keys
 
 logger = logging.getLogger(__name__)
 
 _BASE_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) "
-        "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
-    ),
+    "User-Agent": UA_IPHONE,      # R26③：UA 全仓单一来源（core/http）
     "Referer": "https://passport.weibo.com/",
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",

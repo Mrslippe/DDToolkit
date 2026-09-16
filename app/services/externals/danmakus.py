@@ -29,6 +29,7 @@ from tenacity import (retry, retry_if_result, stop_after_attempt,
                       wait_exponential)
 
 from app.core.http import new_async_client
+from app.core.useragent import UA_CHROME
 from app.models.vtuber import Account, ThirdpartyVtuber
 from app.repositories.vtuber_repo import LiveSessionRepo
 from app.services.externals.base import (ExternalJob, ExternalJobSummary,
@@ -52,9 +53,7 @@ DANMAKUS_TOKEN_ENV = "DANMAKUS_TOKEN"
 
 # WAF 过滤（实测 2026-09-07）：缺 Origin/Referer 或非浏览器 UA 会被直接 RST
 BROWSER_HEADERS = {
-    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                   "AppleWebKit/537.36 (KHTML, like Gecko) "
-                   "Chrome/126.0.0.0 Safari/537.36"),
+    "User-Agent": UA_CHROME,      # R26③：UA 全仓单一来源（core/useragent）
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
     "Origin": "https://ukamnads.icu",

@@ -16,7 +16,8 @@ from app.services.externals.registry import iter_external_sources
 
 logger = logging.getLogger(__name__)
 
-_USER_AGENT = "DDtoolkit-archive/0.5.2 (+personal evidence archive; low-frequency pull)"
+_USER_AGENT = (f"DDtoolkit-archive/{settings.VERSION} "
+               "(+personal evidence archive; low-frequency pull)")
 
 
 def _source_enabled(source) -> bool:

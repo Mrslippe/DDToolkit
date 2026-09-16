@@ -191,6 +191,7 @@
 | **场次上游取数 / live upstream** | 场次详情里"必须打第三方"的两格取数：一次调用 = **并发 2 个上游请求**（摘要 + 中断/继续事件）；成功进 10 分钟缓存，**同场次并发调用单飞共享一轮** | `services/live_upstream.py::load_live_upstream`；端点 `…/live-sessions/{id}/upstream` | 日志 `场次上游取数` ×2 + `单飞复用` ×1 是正常的（dev 下 StrictMode 会调两次，devlog/081） |
 | **文档工具** | 架构图 SVG 生成 | `docs/tools/gen_diagrams.py` → `docs/diagrams/` | 只改 `dN()` 函数即可重绘 |
 | **后端常驻内存 / frozen 占用** | 打包版空闲 **128.7MB**（任务管理器口径）；**业务代码只占 ~8MB**，其余是解释器 + FastAPI/SQLAlchemy 等框架地板；打包比 dev 多 ~19MB | 归因表与复测方法：`docs/ARCHITECTURE.md` §3.12；`scripts/check_danmaku_fetch.py`（词云上游现况） | 唯一已知涨点 = **开过一次词云后 jieba 词典常驻 ~55MB**（178 → 128MB 就是 R24a 删预热省下的）；`_internal` 里的 numpy 25.9MB + PIL 12.7MB **在盘不在内存**（`app/` 无人 import，Pillow 的 `fromarray` 把 numpy 带进依赖图）；优化候选见 `docs/TODO.md` §1.4 |
+| **浏览器 UA / 请求头纪律** | UA 集中在一个**零依赖**模块（`UA_MAJOR`，**发版时刷新这一处**；零依赖是为了不把 httpx 拽进图片代理的冷启动路径）；口径三条：**不发 client hints**（GREASE 串只能靠猜）· **不开 HTTP/2**（要加 `h2` 依赖）· **不发 `Connection: keep-alive`**（浏览器在 h1.1 下不显式发它） | `app/core/useragent.py`；消费方 = `auth.BASE_HEADERS` / `bili_search` / `img_proxy` / `platforms/weibo` / `weibo_auth` / `danmakus`；护栏 `tests/test_user_agent.py`（结构化扫描：`app/` 下只有它能写 UA 字面量） | **R26②③，devlog/128**：盘点时全仓有 **4 个不同的大版本**（131/150/126/150）；`runner.py` 的自报家门 UA 改从 `settings.VERSION` 取（原来写死 0.5.2） |
 | **术语表 / 本文** | 名词 → 路径 → 依赖速查 | `docs/GLOSSARY.md` | 新术语请随手补一行 |
 
 ---

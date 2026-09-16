@@ -121,6 +121,9 @@ def test_next_due_grows_with_account_count_over_rpm(db, monkeypatch):
     """账号数超过 rpm 时，轮间隔按下限拉长（预算成了真上限）。"""
     monkeypatch.setattr(sch, "_dynamics_idle_streak", 0)
     monkeypatch.setattr(sch.settings, "DYNAMICS_BUDGET_RPM", 2)
+    # ⚠️ 把轮间抖动钉成 0：否则 ±15s 的随机量会让"≥150s"这种断言时红时绿
+    # （第一版就因为 −13.6s 的抖动红过一次）
+    monkeypatch.setattr(sch.settings, "DYNAMICS_JITTER_SECONDS", 0.0)
     # 5 个账号 → 一轮 5 个请求 / rpm 2 ⇒ 下限 150s
     for uid in ("12", "13", "14", "15"):
         db.add(Account(vtuber_id=db.query(VTuber).first().id,

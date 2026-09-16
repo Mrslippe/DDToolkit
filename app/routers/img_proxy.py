@@ -25,6 +25,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
 
 from app.core.config import settings
+from app.core.useragent import UA_EDGE
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -48,10 +49,7 @@ _CLEANUP_INTERVAL = 3600        # 过期文件清理的最短间隔
 # 但**放在模块级**是为了让测试能直接改小它（与 CACHE_DIR 一样的处理）。
 _CACHE_MAX_BYTES = max(0, int(getattr(settings, "IMG_CACHE_MAX_MB", 300))) * 1024 * 1024
 
-_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36 Edg/150.0.0.0"
-)
+_UA = UA_EDGE       # R26③：UA 全仓单一来源（core/useragent；那边零依赖，不会把 httpx 拽进冷启动）
 
 # httpx 延迟加载（冷启动优化：本模块路由注册不触发 httpx 导入）
 _httpx_mod = None

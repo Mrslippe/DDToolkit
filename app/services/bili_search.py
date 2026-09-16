@@ -47,6 +47,7 @@ from dataclasses import dataclass, field
 import httpx
 
 from app.core.http import new_async_client
+from app.core.useragent import UA_EDGE
 from app.services.auth import auth_manager
 from app.services.fetcher import fetch_bilibili_user_info, fetch_bilibili_user_stat
 from app.services import wbi
@@ -55,8 +56,7 @@ logger = logging.getLogger(__name__)
 
 SEARCH_URL = "https://api.bilibili.com/x/web-interface/wbi/search/type"
 SEARCH_REFERER = "https://search.bilibili.com/upuser?keyword="
-UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-      "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+UA = UA_EDGE        # R26③：UA 全仓单一来源（core/http），发版时刷新那一处大版本号
 
 MIN_INTERVAL = 0.8          # 两次上游调用最小间隔（秒）
 MAX_PER_MINUTE = 20         # 每分钟上游调用上限

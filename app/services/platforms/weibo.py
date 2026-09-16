@@ -1,4 +1,4 @@
-﻿"""微博平台适配（weibo.com PC ajax 接口）。
+"""微博平台适配（weibo.com PC ajax 接口）。
 
 实测（2026-08）：扫码登录产出的 SUB cookie 仅对 PC 域（weibo.com）有效，
 m.weibo.cn getIndex 判登录还依赖 wapssowb 链路 cookie（ok:-100 需登录）。
@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
+from app.core.useragent import UA_CHROME, UA_IPHONE
 from app.services.fetcher import _client_ctx, _detect_rate_limit
 from app.services.platforms.base import BasePlatform
 from app.services.weibo_auth import weibo_auth_manager
@@ -34,15 +35,9 @@ _PC_SHOW_URL = "https://weibo.com/ajax/statuses/show"
 
 # 长文全文：m 站 extend（PC statuses/show 截断；extend 不判 wap 登录态）
 _EXTEND_URL = "https://m.weibo.cn/statuses/extend"
-_MOBILE_UA = (
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) "
-    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
-)
+_MOBILE_UA = UA_IPHONE      # R26③：UA 全仓单一来源（core/http）
 
-_PC_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
-)
+_PC_UA = UA_CHROME          # 微博 PC 走 Chrome（不带 Edg 后缀），大版本与全仓一致
 
 _TAG_RE = re.compile(r"<[^>]+>")
 

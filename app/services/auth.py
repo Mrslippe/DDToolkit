@@ -12,21 +12,22 @@ from urllib.parse import parse_qs, unquote, urlparse
 import httpx
 
 from app.core.config import settings
+from app.core.useragent import UA_EDGE
 from app.core.http import new_async_client
 from app.services.env_store import save_env_keys
 
 logger = logging.getLogger(__name__)
 
 BASE_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36 Edg/150.0.0.0"
-    ),
+    # UA 从 `core/http` 取（R26③：全仓单一来源，发版时刷新 `UA_MAJOR`）
+    "User-Agent": UA_EDGE,
     "Referer": "https://www.bilibili.com/",
     "Origin": "https://www.bilibili.com",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-    "Connection": "keep-alive",
+    # ⚠️ 这里**故意不发** `Connection: keep-alive`（R26②，devlog/128）：
+    # 浏览器在 HTTP/1.1 下不显式发它（h2 更不会有），我们却一边声称 Edge 一边发它 ——
+    # 那是个比"少一个头"更明显的脚本痕迹。httpx 自己会管理连接复用，不需要这个头。
 }
 
 _ATTR_MAP = {
