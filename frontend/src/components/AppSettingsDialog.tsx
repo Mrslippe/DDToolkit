@@ -16,6 +16,16 @@ import { api } from '../api/api'
 import type { AppSettings, SettingSpec, StorageInfo } from '../api/types'
 import { usePrefs } from '../hooks/usePrefs'
 import { formatBytes } from '../utils/format'
+import {
+  deleteOldDataDir, migrateDataDir, storageInfo, type ShellDataDirInfo,
+} from '../utils/shellBridge'
+
+/** 数据目录来源 → 给用户看的话（Rust 侧给的是 env / migrated / default） */
+const DIR_SOURCE_LABEL: Record<string, string> = {
+  default: '默认位置（%APPDATA%）',
+  migrated: '已迁移到其他盘',
+  env: '由环境变量 DDTOOLKIT_DATA_DIR 指定',
+}
 import { themeCards, type ThemePref } from '../utils/theme'
 import {
   ABOUT_ID, APPEARANCE_ID, buildNav, buildSections, groupDirty, resetDraftOfGroup,
@@ -148,12 +158,53 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
       拿它做轮询是浪费。取不到就只显示上面的只读信息，不打扰用户。 */
   const [storage, setStorage] = useState<StorageInfo | null>(null)
   const [storageBusy, setStorageBusy] = useState<string | null>(null)
+  /** 桌面端才知道的信息：数据目录**来源**与是否便携（浏览器/探针环境恒为 null） */
+  const [shellDir, setShellDir] = useState<ShellDataDirInfo | null>(null)
+  const [migrateBusy, setMigrateBusy] = useState(false)
+  /** 迁移成功后保留的旧目录（用户确认后再删） */
+  const [oldDir, setOldDir] = useState<string | null>(null)
+  useEffect(() => {
+    if (!open || active !== ABOUT_ID) return
+    let alive = true
+    void storageInfo().then((info) => { if (alive) setShellDir(info) }).catch(() => undefined)
+    return () => { alive = false }
+  }, [open, active])
   useEffect(() => {
     if (!open || active !== ABOUT_ID || storage) return
     let alive = true
     void api.getStorage().then((st) => { if (alive) setStorage(st) }).catch(() => undefined)
     return () => { alive = false }
   }, [open, active, storage])
+
+  /** 迁移数据目录（R22-B2d）：Rust 侧会选目录 → 复制 → 校验 → 切指针 → 重启后端 → 探活；
+      失败一律回滚到原目录。这里只负责把结果/错误如实呈现，并留一个"删旧目录"的确认入口。 */
+  const doMigrate = async () => {
+    setMigrateBusy(true)
+    try {
+      const got = await migrateDataDir()
+      setOldDir(got.oldDir)
+      setShellDir(await storageInfo())
+      setStorage(await api.getStorage())
+      toast.success(`数据已迁移到 ${got.dataDir}（${got.files} 个文件）。`
+        + '旧目录仍保留，确认一切正常后可以删掉。')
+    } catch (e) {
+      toast.error(`迁移未完成：${(e as Error).message}`)
+    } finally {
+      setMigrateBusy(false)
+    }
+  }
+
+  const doDeleteOld = async () => {
+    if (!oldDir) return
+    try {
+      const freed = await deleteOldDataDir(oldDir)
+      setOldDir(null)
+      setStorage(await api.getStorage())
+      toast.success(`旧目录已删除，释放 ${formatBytes(freed)}`)
+    } catch (e) {
+      toast.error(`删除旧目录失败：${(e as Error).message}`)
+    }
+  }
 
   const runStorageAction = async (kind: 'cache' | 'db') => {
     setStorageBusy(kind)
@@ -614,7 +665,44 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
                           >
                             {storageBusy === 'db' ? '整理中…' : '整理数据库'}
                           </FloatPill>
+                          {/* 迁移入口只在桌面端、且**不是便携/自定义安装**时出现
+                              （用户口径：便携版该整个文件夹一起搬，把数据分出去反而容易丢） */}
+                          {shellDir && !shellDir.portable && (
+                            <FloatPill
+                              size="md" shape="text"
+                              data-testid="aps-migrate"
+                              disabled={storageBusy !== null || migrateBusy}
+                              onClick={() => void doMigrate()}
+                            >
+                              {migrateBusy ? '迁移中…' : '迁移到其他盘…'}
+                            </FloatPill>
+                          )}
                         </div>
+                        {shellDir && (
+                          <p className="aps-note" data-dir-source={shellDir.source}>
+                            数据目录来源：
+                            {DIR_SOURCE_LABEL[shellDir.source] ?? shellDir.source}
+                            {shellDir.portable
+                              && '（便携/自定义安装：把整个文件夹搬走即可，应用内不迁移）'}
+                          </p>
+                        )}
+                        {shellDir?.pointerUnusable && (
+                          <p className="aps-field-error" data-dir-fallback="1">
+                            迁移记录不可用，当前已回退默认目录：{shellDir.pointerUnusable}
+                          </p>
+                        )}
+                        {oldDir && (
+                          <p className="aps-note" data-old-dir={oldDir}>
+                            旧目录仍保留：<span className="aps-mono">{oldDir}</span>{' '}
+                            <FloatPill size="sm" shape="text"
+                                       onClick={() => void doDeleteOld()}>
+                              删除旧目录
+                            </FloatPill>
+                            <span className="aps-storage-cap">
+                              （确认新目录一切正常后再删）
+                            </span>
+                          </p>
+                        )}
                       </>
                     ) : (
                       <p className="aps-note">读取中…</p>

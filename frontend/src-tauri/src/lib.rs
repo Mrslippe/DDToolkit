@@ -74,6 +74,221 @@ fn storage_info(state: State<'_, DataDirState>) -> DataDirInfo {
     }
 }
 
+// ── 数据目录迁移（R22-B2d，devlog/108）───────────────────────────────
+//
+// 这是 R22 里唯一"会动用户数据"的动作，所以流程写死成一条**可回滚**的线：
+//
+//   选目录 → 规划校验（migrate::plan_migration，有 7 条用例）
+//        → 停后端 → 复制 → 逐文件校验
+//        → 写指针 → 用新目录拉起后端 → **探活**
+//        → 探活失败：回滚指针 + 用旧目录重启（**旧目录从头到尾没动过**）
+//
+// 三条不变式：① 旧目录全程不动（删除是事后单独一步、要用户确认）；
+// ② 指针没写之前任何失败 = 什么都没发生；③ 探活成功才叫成功。
+
+/// 后端是否已经能应答（迁移后**必须**探活成功才算成功）。
+fn backend_healthy(port: u16) -> bool {
+    use std::io::{Read, Write};
+    if port == 0 {
+        return false;
+    }
+    let Ok(addr) = format!("127.0.0.1:{port}").parse::<std::net::SocketAddr>() else {
+        return false;
+    };
+    let Ok(mut sock) = std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(400))
+    else {
+        return false;
+    };
+    let _ = sock.set_read_timeout(Some(Duration::from_millis(800)));
+    if sock
+        .write_all(b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+        .is_err()
+    {
+        return false;
+    }
+    let mut raw = String::new();
+    if sock.read_to_string(&mut raw).is_err() {
+        return false;
+    }
+    raw.starts_with("HTTP/1.1 200") || raw.starts_with("HTTP/1.0 200")
+}
+
+/// 停掉后端并等它真的让出端口，返回它原来的端口（重启时尽量复用，前端就不必重新引导）。
+fn stop_backend(app: &tauri::AppHandle) -> u16 {
+    let port = *app.state::<BackendPort>().0.lock().unwrap();
+    if let Some(child) = app.state::<BackendChild>().0.lock().unwrap().take() {
+        let _ = child.kill();
+    }
+    for _ in 0..25 {
+        if !backend_healthy(port) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    port
+}
+
+/// 用指定数据目录拉起后端并等它就绪（最多 30s）。
+fn start_backend_and_wait(
+    app: &tauri::AppHandle,
+    port: u16,
+    dir: &std::path::Path,
+) -> Result<(), String> {
+    let child = spawn_backend(app, port, dir).map_err(|e| format!("拉起后端失败：{e}"))?;
+    let pid = child.pid();
+    *app.state::<BackendChild>().0.lock().unwrap() = Some(child);
+    #[cfg(target_os = "windows")]
+    {
+        let job = *app.state::<BackendJob>().0.lock().unwrap();
+        if job != 0 {
+            winjob::assign_process(job, pid);
+        }
+    }
+    for _ in 0..60 {
+        if backend_healthy(port) {
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    Err("后端 30 秒内没有就绪".to_string())
+}
+
+/// 迁移结果（给界面显示"搬了什么、旧目录在哪"）
+#[derive(serde::Serialize)]
+struct MigrateReport {
+    data_dir: String,
+    old_dir: String,
+    files: usize,
+    bytes: u64,
+    skipped: Vec<String>,
+    port: u16,
+}
+
+/// 选一个目录并把数据迁过去（系统文件夹选择框，用户口径 2026-09-16）。
+#[tauri::command]
+async fn migrate_data_dir(app: tauri::AppHandle) -> Result<MigrateReport, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let Some(picked) = app.dialog().file().blocking_pick_folder() else {
+        return Err("已取消选择目录".to_string());
+    };
+    let target = picked
+        .into_path()
+        .map_err(|e| format!("路径解析失败：{e}"))?;
+
+    let (current, portable) = {
+        // ⚠️ `app.state::<…>()` 是**临时值**：必须先用 let 绑定，否则借用在语句结束就被释放
+        let state = app.state::<DataDirState>();
+        let g = state.0.lock().unwrap();
+        match g.as_ref() {
+            Some(s) => (s.dir.clone(), s.portable),
+            None => return Err("数据目录状态未知（壳还没完成启动？）".to_string()),
+        }
+    };
+    // 便携/自定义安装（用环境变量指定目录）**不给迁移入口**，这里再兜一次底
+    if portable {
+        return Err("当前数据目录由 DDTOOLKIT_DATA_DIR 指定（便携/自定义安装），\
+                    应用内不迁移 —— 直接把整个文件夹搬走即可"
+            .to_string());
+    }
+
+    let plan = migrate::plan_migration(&current, &target)?;
+
+    let port = stop_backend(&app);
+    let report = match migrate::copy_tree(&plan)
+        .and_then(|r| migrate::verify_copy(&plan).map(|_| r))
+    {
+        Ok(r) => r,
+        Err(why) => {
+            // 复制/校验失败时**指针还没动**：把后端用旧目录拉回来就恢复原状
+            let _ = start_backend_and_wait(&app, port, &current);
+            return Err(format!("{why}（已放弃迁移，数据目录没有改变）"));
+        }
+    };
+
+    let prev_pointer = datadir::read_pointer().ok().flatten();
+    datadir::write_pointer(&plan.data_dir)?;
+    if let Err(why) = start_backend_and_wait(&app, port, &plan.data_dir) {
+        // 探活失败 ⇒ 回滚指针并用旧目录重启（旧目录里的数据一直没动过）
+        match &prev_pointer {
+            Some(p) => {
+                let _ = datadir::write_pointer(p);
+            }
+            None => {
+                let _ = datadir::clear_pointer();
+            }
+        }
+        let _ = start_backend_and_wait(&app, port, &current);
+        return Err(format!("新目录启动失败：{why}（已回退到原目录）"));
+    }
+    *app.state::<DataDirState>().0.lock().unwrap() = Some(datadir::Startup {
+        dir: plan.data_dir.clone(),
+        source: datadir::DirSource::Migrated,
+        portable: false,
+        pointer_unusable: None,
+    });
+    println!(
+        "[ddtoolkit] 数据目录已迁移：{} → {}（{} 个文件 / {} 字节，跳过 {:?}）",
+        current.display(),
+        plan.data_dir.display(),
+        report.files,
+        report.bytes,
+        plan.skipped
+    );
+    Ok(MigrateReport {
+        data_dir: plan.data_dir.to_string_lossy().to_string(),
+        old_dir: current.to_string_lossy().to_string(),
+        files: report.files,
+        bytes: report.bytes,
+        skipped: plan.skipped,
+        port,
+    })
+}
+
+fn dir_size(path: &std::path::Path) -> u64 {
+    let mut total = 0;
+    let Ok(entries) = std::fs::read_dir(path) else { return 0 };
+    for entry in entries.flatten() {
+        let p = entry.path();
+        match std::fs::symlink_metadata(&p) {
+            Ok(meta) if meta.is_dir() => total += dir_size(&p),
+            Ok(meta) if meta.is_file() => total += meta.len(),
+            _ => {}
+        }
+    }
+    total
+}
+
+/// 删掉迁移前的旧数据目录（用户口径：**迁移成功后问一次**，不自动删）。
+#[tauri::command]
+fn delete_old_data_dir(app: tauri::AppHandle, dir: String) -> Result<u64, String> {
+    let path = std::path::PathBuf::from(&dir);
+    if let Some(cur) = app
+        .state::<DataDirState>()
+        .0
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|s| s.dir.clone())
+    {
+        if path == cur {
+            return Err("这是当前正在使用的数据目录，不能删".to_string());
+        }
+    }
+    if !path.is_dir() {
+        return Err(format!("目录不存在：{dir}"));
+    }
+    // 只删"看起来就是数据目录"的：防止界面传进来一个无关路径（或用户手改过）
+    if !path.join("vtuber.db").exists() && !path.join(".env").exists() {
+        return Err("这个目录里没有 ddtoolkit 数据（vtuber.db 与 .env 都不在），拒绝删除"
+            .to_string());
+    }
+    let freed = dir_size(&path);
+    std::fs::remove_dir_all(&path).map_err(|e| format!("删除失败：{e}"))?;
+    println!("[ddtoolkit] 已删除旧数据目录 {}（释放 {} 字节）", path.display(), freed);
+    Ok(freed)
+}
+
 /// Job Object 句柄（KILL_ON_JOB_CLOSE），壳退出时内核杀光整个后端进程树。
 /// 非 Windows 平台恒为 0，不参与逻辑。
 struct BackendJob(Mutex<isize>);
@@ -486,6 +701,7 @@ pub fn run() {
             show_main_impl(app);
         }))
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(BackendPort(Mutex::new(0)))
         .manage(BackendChild(Mutex::new(None)))
         .manage(BackendJob(Mutex::new(0)))
@@ -495,7 +711,9 @@ pub fn run() {
             present_window,
             hide_to_tray,
             quit_app,
-            storage_info
+            storage_info,
+            migrate_data_dir,
+            delete_old_data_dir
         ])
         .on_window_event(|window, event| {
             // ✕ 不再等于"退出"（R18，devlog/095）：关闭请求被拦下，改成隐藏到托盘，
