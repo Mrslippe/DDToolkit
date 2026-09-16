@@ -2160,6 +2160,56 @@ export async function runUiProbe(): Promise<void> {
     return
   }
 
+  // 左栏是否跟着「档案设置」走（R33，devlog/135）：
+  // 用户报"在卡片页右上角的设置窗里改过签名和头像之后，左栏应该也对应这个签名和头像"。
+  // 这里**只读实际渲染结果**（侧栏那一行的文本与 img src），不重算口径 ——
+  // 口径已经由 `utils/avatarSource` / `utils/signSource` 的单测钉住，探针要钉的是"接线接上了没有"。
+  // 种数据在 CLI 侧（`_seed_profile` 往副本 DB 写 sign_override / avatar），断言也在 CLI 侧
+  // （对照组必须**没变**，防"永远显示自定义值"的假绿）。
+  if (mode === 'profile-sync') {
+    const result: Record<string, unknown> = {}
+    const text = (el: Element | null | undefined) => (el?.textContent || '').trim()
+    const rows = () => Array.from(document.querySelectorAll<HTMLElement>('.vtuber-item'))
+    const activeRow = () => document.querySelector<HTMLElement>('.vtuber-item.active')
+    const waitFor = async (fn: () => unknown, ms = 8000) => {
+      const t0 = performance.now()
+      while (performance.now() - t0 < ms) {
+        const v = fn()
+        if (v) return v
+        await sleep(100)
+      }
+      return null
+    }
+    const nameOf = (r: HTMLElement | null | undefined) => text(r?.querySelector('.vtuber-name'))
+    await waitFor(() => rows().length > 0 && nameOf(activeRow()).length > 0)
+    // 卡片签名要等 hero 真正落在展示页（切 V 有 150ms 退场 + 预取）
+    await waitFor(() => document.querySelector('.hero-sign'))
+    result.activeName = nameOf(activeRow())
+    result.sidebarSign = text(activeRow()?.querySelector('.vtuber-sign'))
+    // 左栏头像：Radix `AvatarImage` 只在图片**加载完成**后才挂 `<img>`，而探针跑在虚拟时间下，
+    // 加载永远不会完成 ⇒ 只能读我们为可测性挂上的 `data-src`（devlog/135）。
+    // 卡片那侧走 `ProxyImage`（不 gate 加载），所以直接读 `img.hero-avatar[src]`。
+    result.sidebarAvatar = activeRow()?.querySelector('[data-src]')?.getAttribute('data-src') ?? null
+    result.sidebarImg = activeRow()?.querySelector('img')?.getAttribute('src') ?? null
+    result.heroName = text(document.querySelector('.hero-name'))
+    result.heroSign = text(document.querySelector('.hero-sign'))
+    // 卡片头像读 `.hero[data-avatar-src]`：`ProxyImage` 在虚拟时间下可能已回落成占位，
+    // 直接读 `<img>` 会量成 None（见 HeroCardsView 里的注释）
+    result.heroAvatar = document.querySelector('.hero')?.getAttribute('data-avatar-src') ?? null
+    result.rows = rows().map((r) => ({
+      name: nameOf(r),
+      sign: text(r.querySelector('.vtuber-sign')),
+      avatar: r.querySelector('[data-src]')?.getAttribute('data-src') ?? null,
+    }))
+    const pre = document.createElement('pre')
+    pre.id = 'ui-probe'
+    pre.textContent = JSON.stringify({ mode: 'profile-sync', views: [], degraded,
+                                       profileSync: result })
+    document.body.appendChild(pre)
+    document.title = 'UI_PROBE_DONE'
+    return
+  }
+
   // 首次点 ✕ 的询问流程（`?probe=close-ask`，R20 devlog/097）：
   // 用户 2026-09-15 报的 bug 就在这条链路上（选了"最小化到托盘"之后，托盘「退出」退不出去）。
   // 托盘菜单本身是 OS 级、无头浏览器点不到，但**前端这一半**全能断言：

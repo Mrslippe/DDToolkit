@@ -7,9 +7,11 @@ import BatchFetchDialog from './BatchFetchDialog'
 import OverlayScroll from './OverlayScroll'
 import FloatPill from './common/FloatPill'
 import { useLocation, useNavigate, matchPath } from 'react-router-dom'
-import { api, resolveAsset } from '../api/api'
+import { api } from '../api/api'
 import type { AccountSnapshot, VTuber } from '../api/types'
 import { mergeVtuberSnapshots } from '../utils/accountSnapshots'
+import { resolveAvatar } from '../utils/avatarSource'
+import { resolveSign } from '../utils/signSource'
 import './../styles/layout.css'
 
 /** 把抓取完成的账号快照就地合并进侧栏数据（按 bilibili platform_uid 匹配） */
@@ -382,8 +384,10 @@ interface VtuberItemProps {
 
 const VtuberItem = memo(function VtuberItem({ vtuber, index, active, onSelect }: VtuberItemProps) {
   const bili = biliAccount(vtuber)
-  const avatarSrc = resolveAsset(bili?.avatar_path) ?? bili?.avatar_url ?? undefined
-  const sign = bili?.sign ?? null
+  // 头像/签名与卡片**同一条链**（devlog/135）：用户在档案设置里换过的头像与签名，
+  // 左栏必须跟着变 —— 此前左栏各写了一份"只看平台字段"的取值，于是设置看着像没生效。
+  const avatarSrc = resolveAvatar(vtuber, vtuber.accounts)
+  const sign = resolveSign(vtuber, vtuber.accounts).text || null
   const isLiveNow = (bili?.live_status ?? 0) === 1
 
   return (
@@ -392,7 +396,10 @@ const VtuberItem = memo(function VtuberItem({ vtuber, index, active, onSelect }:
       style={{ '--rise-i': index } as React.CSSProperties}
       onClick={() => onSelect(vtuber.id)}
     >
-      <Avatar className="size-[58px] shrink-0">
+      {/* `data-src` 是**为可测性存在**的（devlog/135，同 `.stat-sets[data-hover]` 的先例）：
+          探针跑在虚拟时间下，图片加载不会完成 ⇒ Radix 的 AvatarImage 不挂 `<img>` ⇒
+          "左栏头像跟没跟档案设置"就量不到。这里把**解析出来的 src** 直接挂在节点上。 */}
+      <Avatar className="size-[58px] shrink-0" data-src={avatarSrc ?? ''}>
         <AvatarImage src={avatarSrc} referrerPolicy="no-referrer" />
         <AvatarFallback>{vtuber.name.slice(0, 1)}</AvatarFallback>
       </Avatar>

@@ -21,6 +21,7 @@ import { api, resolveAsset } from '../api/api'
 import { useFetchBusy } from '../fetchBusy'
 import type { Account, AccountSnapshot, Post, PostStats, VTuber } from '../api/types'
 import { mergeAccountSnapshots, mergeVtuberSnapshots } from '../utils/accountSnapshots'
+import { resolveAvatar } from '../utils/avatarSource'
 import { affectsFanTrend, onFetchIdle } from '../utils/fetchIdle'
 import { typeGroupsFor } from '../utils/postTypes'
 import { pill } from '../utils/pill'
@@ -511,13 +512,9 @@ export default function PostsPage() {
   // 头像 / 右栏背景以 VTuber 本体为准（稳定，不随账号切换变化）；
   // 帖子流跟随所选账户；卡片页签名/直播走 VTuber 整体事实（B站优先）——
   // list 切账号不联动 cards/archive（2026-09-05 反馈）
-  // VTuber.avatar 未入库，从 accounts 派生稳定源（优先 bilibili，回退首个）
-  const stableAvatar =
-    resolveAsset(vtuber?.accounts.find((a) => a.platform === 'bilibili')?.avatar_path) ??
-    resolveAsset(vtuber?.accounts[0]?.avatar_path) ??
-    vtuber?.accounts.find((a) => a.platform === 'bilibili')?.avatar_url ??
-    vtuber?.accounts[0]?.avatar_url
-  const avatarSrc = vtuber?.avatar ?? stableAvatar ?? undefined
+  // 头像解析口径已抽到 `utils/avatarSource`（devlog/135）：左栏与卡片必须同源，
+  // 否则"在档案设置里换过头像，卡片变了、左栏没变"。
+  const avatarSrc = resolveAvatar(vtuber, vtuber?.accounts ?? [])
   if (avatarSrc) lastAvatarRef.current = avatarSrc
   // 自定义背景优先（全图清晰显示），否则头像铺底回退链
   const customBg = vtuber?.background_path

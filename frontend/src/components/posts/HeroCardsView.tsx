@@ -167,7 +167,10 @@ export default function HeroCardsView({
   return (
     <OverlayScroll className="hero-scroll">
       {/* Hero：头像 / 直播徽标 / 名字 / 签名 / 平台药丸 / 分隔饰条 / 企划徽标 */}
-      <div className="hero">
+      {/* `data-avatar-src` = 解析出来的头像 URL，**为可测性存在**（devlog/135，同 `.stat-sets[data-hover]`）：
+          探针跑在虚拟时间下，`ProxyImage` 的 `<img>` 可能已经回落到 fallback 占位，
+          直接读 img 会量成 None；挂在 `.hero` 上既不影响布局，也能直接断言"卡片用的是哪张图"。 */}
+      <div className="hero" data-avatar-src={avatarSrc ?? ''}>
         {/* 头像走 ProxyImage 三态链（R1，2026-09-13）：
             档案设置里选的 `vtubers.avatar` 是**远端 URL**，此前是裸 `<img>`：
             既没 https 归一化、也没有 `/img-proxy` 兜底 → 图床 403 就回落成

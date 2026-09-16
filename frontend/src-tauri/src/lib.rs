@@ -558,6 +558,9 @@ fn rebuild_main_window(app: &tauri::AppHandle) -> tauri::Result<tauri::WebviewWi
     .center()
     .decorations(false)
     .transparent(true)
+    // 与 tauri.conf.json 那份**等价**（含四角白边的修复）：WebView 背景必须透明，
+    // 否则 CSS 圆角的抗锯齿像素会跟白底混出白边（devlog/135）
+    .background_color(tauri::window::Color(0, 0, 0, 0))
     .visible(false)
     .skip_taskbar(false)
     .build()?;
@@ -984,6 +987,16 @@ pub fn run() {
         })
         .setup(|app| {
             perf("setup 开始");
+
+            // 四角白边（2026-09-17，devlog/135）：`transparent(true)` 只让**窗口**透明，
+            // WebView 自己的背景仍是**白色** —— CSS 那 4px 圆角的抗锯齿像素会跟它混出 1~2px 白边
+            // （实测量到的正是"底色往白混"：rail `#4B5A6F` → 边缘 `#727B8A`；
+            //   先把 DWM 的圆角/描边关掉复测，数值一字不变 ⇒ 与 DWM 无关）。
+            // `set_background_color` 会**同时**设窗口与 WebView 两层（Tauri 2.11），
+            // 这一步在窗口 show 之前跑（`visible: false`，等前端 present_window），看不到闪烁。
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.set_background_color(Some(tauri::window::Color(0, 0, 0, 0)));
+            }
 
             let port = free_port();
             // ── 数据目录的**启动优先级**（R22-B2b，devlog/106）────────────────

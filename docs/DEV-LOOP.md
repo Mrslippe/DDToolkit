@@ -100,7 +100,19 @@ python scripts/ui_probe.py --switch-perf --vtuber 15 # **切换性能测量**（
 python scripts/perf_report.py --affinity-proxy      # **整机体检**（devlog/134）：整棵进程树的内存/线程/句柄 +
                                                      # 冷热启动 + 空闲 CPU + 托盘深休眠 + 单核亲和代理（约 4 分钟，
                                                      # 自动解压便携版、跑完自清；--keep 留现场、--json 落基线）
+python scripts/ui_probe.py --profile-sync --vtuber 15 # R33（devlog/135）：左栏是否跟着「档案设置」的签名/头像
+                                                     # —— 探针往副本 DB 种 override，再断言左栏实际渲染值 + 对照组
 ```
+
+> `--profile-sync`（2026-09-17 起，devlog/135）：**我看不到界面时它就是眼睛**（DSH 自己的窗口压在上面）。
+> 两个坑写在这里免得再踩：① 探针跑在**虚拟时间**下，图片加载**永远完不成**，Radix 的 `AvatarImage`
+> 因此不挂 `<img>` ⇒ 头像要读**为可测性挂上的** `data-src` / `.hero[data-avatar-src]`（别当冗余删掉）；
+> ② 种进 `vtubers.avatar` 的头像**必须挑非 B 站账号**那一枚，否则旧代码"恰好"取到同一个 URL ⇒ 断言假绿。
+>
+> 「四角白边」这类**窗口层**的问题探针看不见（不是 DOM），当时的取证办法（一次性脚本，未进仓库）：
+> 把窗口挪到**第二块显示器**（第一块被 DSH 窗口压着，截到的是别人的窗口）→ `SetWindowPos(TOPMOST)` →
+> `GetWindowRect` + `CopyFromScreen` → 沿四角**对角线逐像素**读 RGB。
+> 判据：角上像素若比底色**更亮且偏冷**，就是"底色压在白底上"；若与桌面同温，说明只是正常抗锯齿。
 
 > `--switch-perf`（2026-09-16 起，devlog/132；R31 起带一条硬判据，devlog/133）：耗时**只打印**
 > （单次下限本来就是刻意退场 `useSceneTransition.EXIT_MS`，为了全程不出现「正在加载」闪帧），

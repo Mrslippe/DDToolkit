@@ -110,6 +110,55 @@ def _prepare_data(empty: bool = False) -> Path:
     return data
 
 
+def _seed_profile(data: Path, vtuber_id: int, base_url: str) -> dict:
+    """往**副本**里种「这个 V 在档案设置里换过签名与头像」（R33 探针的确定性现场）。
+
+    为什么要种：用户报的是"改过之后左栏没跟着变"，而开发库里未必有 override ——
+    靠数据碰运气会让断言空转（本仓反复踩过的坑）。所以显式写
+    `vtubers.sign_override`（手改签名）与 `vtubers.avatar`（点选的那个账号头像）。
+    ⚠️ 字段语义与「档案设置」窗口写进去的完全一致（R33 devlog/135）：avatar 存的是
+    **账号头像的 URL 原文**，不是本地路径。
+
+    ⚠️ 种进 `avatar` 的 URL 用**后端自己**的 `{base_url}/static/...`（而不是 CDN 原文）：
+    Radix 的 `AvatarImage` 只在图片**真的加载成功**之后才把 `<img>` 挂进 DOM，
+    用 CDN 地址在无头探针里会因网络/CSP 拿不到 ⇒ `img` 不存在 ⇒ 断言量到 `None`，
+    看着像"没接线"，其实是尺子没加载出图（第一次跑就是这么假红了一次）。
+    本地 URL 走同一条渲染路径，且必然加载成功。
+
+    另外挑一个**没有 override** 的 V 当**对照组**：它必须照旧显示平台签名 ——
+    没有对照组的话，"左栏永远渲染成自定义文本"这种错法也能骗过断言。
+    返回：期望值字典（供断言比对）。
+    """
+    import sqlite3
+
+    sign = "探针自定义签名·左栏应同步"
+    con = sqlite3.connect(data / "vtuber.db")
+    try:
+        # ⚠️ 头像要挑**不是 bilibili 账号**那一枚：旧左栏的取值链是
+        # `bili.avatar_path ?? bili.avatar_url`，若种的是 B 站自己的缓存，
+        # 坏代码也会"恰好"显示同一个 URL ⇒ 头像这半条断言就没牙了（实测踩到）。
+        row = con.execute(
+            "SELECT avatar_path, avatar_url FROM accounts WHERE vtuber_id=? "
+            "AND (avatar_path IS NOT NULL OR avatar_url IS NOT NULL) "
+            "ORDER BY (platform='bilibili'), sort_order, id LIMIT 1", (vtuber_id,)).fetchone()
+        if not row:
+            raise SystemExit(f"[probe] VTuber#{vtuber_id} 没有任何账号带头像，种不了自定义头像")
+        path, url = row
+        avatar = f"{base_url}/{str(path).lstrip('/')}" if path else url
+        con.execute("UPDATE vtubers SET sign_override=?, avatar=? WHERE id=?",
+                    (sign, avatar, vtuber_id))
+        ctl = con.execute(
+            "SELECT v.name, a.sign FROM vtubers v JOIN accounts a ON a.vtuber_id = v.id "
+            "WHERE v.id != ? AND a.platform='bilibili' AND a.sign IS NOT NULL AND a.sign != '' "
+            "AND v.sign_override IS NULL ORDER BY v.id LIMIT 1", (vtuber_id,)).fetchone()
+        con.commit()
+    finally:
+        con.close()
+    return {"sign": sign, "avatar": avatar, "avatarLocal": bool(path),
+            "controlName": ctl[0] if ctl else None,
+            "controlSign": (ctl[1] or "").strip() if ctl else None}
+
+
 def _seed_reservation(data: Path, vtuber_id: int) -> str:
     """往**副本**里种一条明天的预约（R13 探针的确定性现场）。
 
@@ -229,6 +278,7 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
             "traySuspend": data.get("traySuspend"),
             "closeAsk": data.get("closeAsk"),
             "switchPerf": data.get("switchPerf"),
+            "profileSync": data.get("profileSync"),
             "degraded": data.get("degraded") or [],
             "dom": dom_file,
         }
@@ -236,7 +286,8 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
             "settings": None, "scene": None, "addv": None, "capabilities": None,
             "polish": None, "reservations": None, "statusIsland": None,
             "appSettings": None, "filterPill": None, "traySuspend": None,
-            "closeAsk": None, "switchPerf": None, "degraded": [], "dom": dom_file}
+            "closeAsk": None, "switchPerf": None, "profileSync": None,
+            "degraded": [], "dom": dom_file}
 
 
 # ── 展示页 hero 药丸签名（P2 分层收敛 A 批次的位级回归护栏）─────────────
@@ -779,6 +830,14 @@ def main() -> int:
              "判失败的两条：切换没落地 / 连点重播了退场（连点该比单次快）。"
              "需要至少 2 个已订阅 V。",
     )
+    ap.add_argument(
+        "--profile-sync",
+        action="store_true",
+        help="左栏是否跟着「档案设置」走（R33，devlog/135）：探针先往**副本 DB** 种"
+             "`sign_override` + `avatar`，再断言左栏那一行的签名/头像与卡片一致；"
+             "另设一个无 override 的 V 作对照（防「永远显示自定义值」的假绿）。"
+             "需要那个 V 至少有一个带 avatar_url 的账号。",
+    )
     args = ap.parse_args()
     widths = args.width or [1100, 1280, 1440]
 
@@ -844,6 +903,17 @@ def main() -> int:
             seeded_resv_title = _seed_reservation(data, vid)
             print(f"[probe] 已种预约：{seeded_resv_title!r}（副本 DB，非真库）")
             print(f"[probe] 目标路由 {route}（VTuber #{vid}）")
+
+        # R33：左栏跟随档案设置 —— 同样要在后端起来之前写进副本
+        seeded_profile: dict = {}
+        if args.profile_sync and vid:
+            seeded_profile = _seed_profile(data, vid, f"http://127.0.0.1:{be_port}")
+            print(f"[probe] 已种自定义签名/头像：{seeded_profile['sign']!r} / "
+                  f"avatar={seeded_profile['avatar']!r}"
+                  f"（{'本地 static 兜底' if seeded_profile['avatarLocal'] else 'CDN 原文'}）"
+                  f"（副本 DB，非真库）")
+            print(f"[probe] 目标路由 {route}（VTuber #{vid}）"
+                  f"；对照组 = {seeded_profile.get('controlName')!r}")
 
         if args.app_settings:
             # 应用设置（R14a，devlog/091）：这一条是**会写盘的探针** —— 它真的改设置、
@@ -1733,6 +1803,52 @@ def main() -> int:
                                         f"（实得 {rv.get('popResvText')!r}）")
                 if not failures:
                     print("  [ok] 预约进日历：格子徽章/时刻/标题 + hover 浮层条目全部渲染")
+            for b in failures:
+                print("   -", b)
+            return 1 if failures else 0
+
+        if args.profile_sync:
+            # R33（devlog/135）：用户报"在卡片页的设置窗里改过签名和头像，左栏应该也对应"。
+            # 这条断的是**接线**：左栏那一行渲染出来的文本与 img src 是否就是卡片那套口径。
+            w = widths[0]
+            url = f"http://localhost:{vite_port}{route}?probe=profile-sync"
+            print(f"[probe] profile-sync @{w} → {url}")
+            res = _run_probe(edge, url, w, args.height, WORK, "profile-sync")
+            ps = ((res or {}).get("profileSync") or {})
+            if res and not ps:
+                print(f"  [!] 探针 mode={res.get('mode')!r} 键={sorted(res.keys())}"
+                      f"（新字段需要在 _run_probe 的白名单里登记）")
+            if not seeded_profile:
+                failures.append(f"@{w} profile-sync: 没种上数据（需要 --vtuber 指向一个有账号的 V）")
+            else:
+                want_sign = seeded_profile["sign"]
+                want_avatar = seeded_profile["avatar"]
+                print(f"  当前 V：{ps.get('activeName')!r}")
+                print(f"    左栏签名={ps.get('sidebarSign')!r} 头像={ps.get('sidebarAvatar')!r}")
+                print(f"    卡片签名={ps.get('heroSign')!r} 头像={ps.get('heroAvatar')!r}")
+                if ps.get("sidebarSign") != want_sign:
+                    failures.append(f"@{w} profile-sync: 左栏签名是 {ps.get('sidebarSign')!r}，"
+                                    f"不是种下的自定义签名 {want_sign!r}（左栏没跟随档案设置）")
+                if ps.get("sidebarAvatar") != want_avatar:
+                    failures.append(f"@{w} profile-sync: 左栏头像是 {ps.get('sidebarAvatar')!r}，"
+                                    f"不是自定义头像 {want_avatar!r}")
+                if ps.get("heroSign") != want_sign:
+                    failures.append(f"@{w} profile-sync: 卡片签名是 {ps.get('heroSign')!r}"
+                                    f"（卡片自己都没跟随？口径被改坏了）")
+                ctl_name, ctl_sign = seeded_profile.get("controlName"), seeded_profile.get("controlSign")
+                if ctl_name:
+                    row = next((r for r in (ps.get("rows") or [])
+                                if (r.get("name") or "").strip() == ctl_name.strip()), None)
+                    if not row:
+                        failures.append(f"@{w} profile-sync: 对照组 {ctl_name!r} 没在左栏找到")
+                    elif (row.get("sign") or "").strip() != (ctl_sign or "").strip():
+                        failures.append(f"@{w} profile-sync: 对照组 {ctl_name!r} 的签名变成 "
+                                        f"{row.get('sign')!r}（应为平台签名 {ctl_sign!r}）"
+                                        f"—— 自定义值串到别的 V 上了？")
+                    else:
+                        print(f"  对照：{ctl_name!r} 仍显示平台签名 ✓")
+                if not failures:
+                    print("  [ok] 左栏与卡片同源：自定义签名/头像都到位，对照组未被污染")
             for b in failures:
                 print("   -", b)
             return 1 if failures else 0
