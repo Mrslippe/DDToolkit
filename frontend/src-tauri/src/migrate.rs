@@ -1,0 +1,373 @@
+//! 数据目录迁移的**核心**：规划、复制、校验（R22-B2c，devlog/107）。
+//!
+//! 这一步改的是"数据在哪"，是整个 R22 里唯一可能**弄丢用户数据**的地方。所以把它单独成模块、
+//! 只依赖 `std`（+ Windows 的磁盘余量 API），把三条判定写成可测的纯逻辑：
+//!
+//! 1. **能迁到哪**（`plan_migration`）：目标必须是存在的绝对路径目录、不能等于/包含/被包含于
+//!    当前目录（否则复制会自我递归）、目标盘可用空间要 ≥ 待复制体积 × 1.15（留余量）；
+//! 2. **复制什么**（`copy_tree`）：**跳过 `logs/` 与 `static/img-cache/`** —— 用户口径
+//!    （2026-09-16）：日志是诊断用的、图片缓存可再生，两者都是"大而无所谓"的部分；
+//!    遇到符号链接一律跳过（不跟随：跟随可能复制出循环，也可能把链接指向的外部数据抄进来）；
+//! 3. **复制对不对**（`verify_copy`）：逐文件比对相对路径与字节数，**任何一处不一致都算失败** ——
+//!    复制完就切指针、之后才发现少文件，用户是没有任何补救机会的。
+//!
+//! 纪律：**旧目录在整套流程里从头到尾不动**（删除是事后单独一步、且要用户确认）。
+//! 所以"复制失败/校验失败"最坏的结果只是"新目录里有半份数据被丢掉"，用户的原始数据始终在。
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+/// 迁移时要跳过的顶层相对路径（用户口径）
+pub const SKIP_DIRS: [&str; 2] = ["logs", "static/img-cache"];
+
+/// 目标盘空间余量系数：待复制体积 × 1.15（元数据/簇对齐留一点，别卡在 100% 上）
+const SPACE_MARGIN: f64 = 1.15;
+
+/// 迁移计划（全部通过校验才会产出）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Plan {
+    /// 当前数据目录（复制源；**全程不动**）
+    pub source: PathBuf,
+    /// 用户在对话框里选的目录（真正的数据落在它下面的 `DDToolkit-data`）
+    pub target_root: PathBuf,
+    /// 新的数据目录 = `target_root/DDToolkit-data`
+    pub data_dir: PathBuf,
+    /// 待复制文件数与字节数（已扣除跳过项）
+    pub files: usize,
+    pub bytes: u64,
+    /// 实际跳过的相对路径（会被写进日志与界面提示）
+    pub skipped: Vec<String>,
+}
+
+/// 复制/校验的报告
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CopyReport {
+    pub files: usize,
+    pub bytes: u64,
+}
+
+/// 目标目录下的固定子目录名（用户口径：**自动建子目录**，不把库直接扔在所选目录里）
+const DATA_SUBDIR: &str = "DDToolkit-data";
+
+/// 递归收集要复制的文件：`(相对路径, 字节数)`。跳过 `SKIP_DIRS` 与符号链接。
+pub fn collect(source: &Path) -> Result<(BTreeMap<PathBuf, u64>, Vec<String>), String> {
+    let mut out = BTreeMap::new();
+    let mut skipped = Vec::new();
+    walk(source, source, &mut out, &mut skipped)?;
+    for s in &SKIP_DIRS {
+        if source.join(s).exists() {
+            skipped.push((*s).to_string());
+        }
+    }
+    Ok((out, skipped))
+}
+
+fn walk(
+    root: &Path,
+    dir: &Path,
+    out: &mut BTreeMap<PathBuf, u64>,
+    _skipped: &mut Vec<String>,
+) -> Result<(), String> {
+    let entries = std::fs::read_dir(dir)
+        .map_err(|e| format!("读目录失败 {}：{e}", dir.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("遍历 {} 失败：{e}", dir.display()))?;
+        let path = entry.path();
+        let rel = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
+        // 跳过项：按**顶层相对路径**匹配（`logs`、`static/img-cache`）
+        if SKIP_DIRS.iter().any(|s| rel == Path::new(s)) {
+            continue;
+        }
+        let meta = std::fs::symlink_metadata(&path)
+            .map_err(|e| format!("读属性失败 {}：{e}", path.display()))?;
+        if meta.file_type().is_symlink() {
+            continue; // 不跟随：可能成环，也可能把外部数据抄进来
+        }
+        if meta.is_dir() {
+            walk(root, &path, out, _skipped)?;
+        } else if meta.is_file() {
+            out.insert(rel, meta.len());
+        }
+    }
+    Ok(())
+}
+
+/// 指定路径所在盘的可用字节数（Windows；拿不到时 `None` ⇒ 调用方**不该**据此拒绝迁移）。
+#[cfg(target_os = "windows")]
+pub fn free_space(path: &Path) -> Option<u64> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+
+    let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    wide.push(0);
+    let mut free: u64 = 0;
+    // SAFETY: 传的是以 NUL 结尾的宽字符串与三个可写指针
+    let ok = unsafe {
+        GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut free,
+        )
+    };
+    if ok == 0 {
+        None
+    } else {
+        Some(free)
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn free_space(_path: &Path) -> Option<u64> {
+    None
+}
+
+/// 规划并校验一次迁移。任何一条不满足都返回 `Err(给用户看的中文原因)`。
+pub fn plan_migration(source: &Path, target_root: &Path) -> Result<Plan, String> {
+    if !source.is_dir() {
+        return Err(format!("当前数据目录不存在：{}", source.display()));
+    }
+    if !target_root.is_absolute() {
+        return Err(format!("目标目录必须是绝对路径：{}", target_root.display()));
+    }
+    if !target_root.is_dir() {
+        return Err(format!("目标目录不存在：{}", target_root.display()));
+    }
+    // 规范化后再比包含关系（`..`/大小写/短路径名都可能骗过字符串比较）
+    let src = canonical(source)?;
+    let dst_root = canonical(target_root)?;
+    if dst_root == src {
+        return Err("目标目录与当前数据目录是同一个".to_string());
+    }
+    if dst_root.starts_with(&src) {
+        return Err("目标目录在当前数据目录里面（复制会自我递归）".to_string());
+    }
+    if src.starts_with(&dst_root) {
+        return Err("当前数据目录在目标目录里面".to_string());
+    }
+
+    let (files, skipped) = collect(&src)?;
+    let bytes: u64 = files.values().sum();
+    let data_dir = dst_root.join(DATA_SUBDIR);
+    if data_dir.starts_with(&src) {
+        return Err("新数据目录会在当前数据目录里面".to_string());
+    }
+    if let Some(free) = free_space(&dst_root) {
+        let need = (bytes as f64 * SPACE_MARGIN) as u64;
+        if free < need {
+            return Err(format!(
+                "目标盘空间不足：需要约 {} MB，可用 {} MB",
+                need / 1048576,
+                free / 1048576
+            ));
+        }
+    }
+    Ok(Plan {
+        source: src,
+        target_root: dst_root,
+        data_dir,
+        files: files.len(),
+        bytes,
+        skipped,
+    })
+}
+
+fn canonical(p: &Path) -> Result<PathBuf, String> {
+    std::fs::canonicalize(p).map_err(|e| format!("路径解析失败 {}：{e}", p.display()))
+}
+
+/// 按计划复制（**跳过项不复制**）。返回实际复制的文件数与字节数。
+pub fn copy_tree(plan: &Plan) -> Result<CopyReport, String> {
+    let (files, _) = collect(&plan.source)?;
+    std::fs::create_dir_all(&plan.data_dir)
+        .map_err(|e| format!("建新数据目录失败 {}：{e}", plan.data_dir.display()))?;
+    let mut report = CopyReport::default();
+    for (rel, size) in &files {
+        let to = plan.data_dir.join(rel);
+        if let Some(parent) = to.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("建目录失败 {}：{e}", parent.display()))?;
+        }
+        std::fs::copy(plan.source.join(rel), &to)
+            .map_err(|e| format!("复制失败 {} → {}：{e}", rel.display(), to.display()))?;
+        report.files += 1;
+        report.bytes += size;
+    }
+    Ok(report)
+}
+
+/// 校验复制结果：**逐文件比对相对路径与字节数**，不一致就返回明细（最多列 5 条）。
+pub fn verify_copy(plan: &Plan) -> Result<(), String> {
+    let (want, _) = collect(&plan.source)?;
+    let (got, _) = collect(&plan.data_dir)?;
+
+    let mut problems: Vec<String> = Vec::new();
+    for (rel, size) in &want {
+        match got.get(rel) {
+            None => problems.push(format!("缺文件 {}", rel.display())),
+            Some(actual) if actual != size => problems.push(format!(
+                "大小不符 {}：应 {size} 字节，实 {actual}",
+                rel.display()
+            )),
+            Some(_) => {}
+        }
+        if problems.len() >= 5 {
+            break;
+        }
+    }
+    if problems.is_empty() {
+        for rel in got.keys() {
+            if !want.contains_key(rel) {
+                problems.push(format!("多出文件 {}", rel.display()));
+                if problems.len() >= 5 {
+                    break;
+                }
+            }
+        }
+    }
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "复制校验失败（源 {} 个文件 / 目标 {} 个文件）：{}",
+            want.len(),
+            got.len(),
+            problems.join("；")
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_root(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("ddtk-mig-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// 造一份"像真的"数据目录：库 + 凭据 + 静态资源 + 要被跳过的两个大块
+    fn fake_data_dir(root: &Path) -> PathBuf {
+        let d = root.join("当前数据");
+        std::fs::create_dir_all(d.join("logs")).unwrap();
+        std::fs::create_dir_all(d.join("static").join("img-cache")).unwrap();
+        std::fs::write(d.join("vtuber.db"), vec![b'x'; 4096]).unwrap();
+        std::fs::write(d.join("vtuber.db-wal"), vec![b'w'; 512]).unwrap();
+        std::fs::write(d.join(".env"), b"TOKEN=secret\n").unwrap();
+        std::fs::write(d.join("vtubers.csv"), b"name,uid\n").unwrap();
+        std::fs::write(d.join("logs").join("app.log"), vec![b'l'; 9999]).unwrap();
+        std::fs::write(d.join("static").join("img-cache").join("a.bin"), vec![b'c'; 7777]).unwrap();
+        std::fs::write(d.join("static").join("logo.png"), vec![b'p'; 64]).unwrap();
+        d
+    }
+
+    #[test]
+    fn plan_skips_logs_and_image_cache() {
+        let root = temp_root("skip");
+        let src = fake_data_dir(&root);
+        let target = root.join("目标盘");
+        std::fs::create_dir_all(&target).unwrap();
+
+        let plan = plan_migration(&src, &target).unwrap();
+        assert!(plan.skipped.contains(&"logs".to_string()));
+        assert!(plan.skipped.contains(&"static/img-cache".to_string()));
+        // 只算"真要搬的"：库 4096 + wal 512 + .env + csv + logo 64
+        assert_eq!(plan.bytes, 4096 + 512 + "TOKEN=secret\n".len() as u64
+            + "name,uid\n".len() as u64 + 64);
+        assert_eq!(plan.files, 5);
+        assert!(plan.data_dir.ends_with("DDToolkit-data"));
+    }
+
+    #[test]
+    fn copy_then_verify_is_clean_and_skips_stay_behind() {
+        let root = temp_root("copy");
+        let src = fake_data_dir(&root);
+        let target = root.join("目标盘");
+        std::fs::create_dir_all(&target).unwrap();
+
+        let plan = plan_migration(&src, &target).unwrap();
+        let report = copy_tree(&plan).unwrap();
+        assert_eq!(report.files, plan.files);
+        assert_eq!(report.bytes, plan.bytes);
+        verify_copy(&plan).unwrap();
+
+        // 关键内容真的过去了
+        assert_eq!(std::fs::read(plan.data_dir.join(".env")).unwrap(), b"TOKEN=secret\n");
+        assert!(plan.data_dir.join("vtuber.db").is_file());
+        // 跳过项**没有**被复制（日志与图片缓存的体积不该出现在新目录）
+        assert!(!plan.data_dir.join("logs").exists());
+        assert!(!plan.data_dir.join("static").join("img-cache").exists());
+        // 源目录**一个文件都没少**（纪律：全程不动旧目录）
+        assert!(src.join("logs").join("app.log").is_file());
+        assert!(src.join("vtuber.db").is_file());
+    }
+
+    #[test]
+    fn verify_catches_a_missing_file() {
+        let root = temp_root("missing");
+        let src = fake_data_dir(&root);
+        let target = root.join("目标盘");
+        std::fs::create_dir_all(&target).unwrap();
+        let plan = plan_migration(&src, &target).unwrap();
+        copy_tree(&plan).unwrap();
+        std::fs::remove_file(plan.data_dir.join(".env")).unwrap();     // 模拟复制丢文件
+
+        let err = verify_copy(&plan).unwrap_err();
+        assert!(err.contains("缺文件"), "要说清是缺文件：{err}");
+        assert!(err.contains(".env"));
+    }
+
+    #[test]
+    fn verify_catches_a_size_mismatch() {
+        let root = temp_root("size");
+        let src = fake_data_dir(&root);
+        let target = root.join("目标盘");
+        std::fs::create_dir_all(&target).unwrap();
+        let plan = plan_migration(&src, &target).unwrap();
+        copy_tree(&plan).unwrap();
+        // ⚠️ 覆盖内容必须**长度不同**：第一版写成 "truncated"（9 字节），
+        //    而原文件 "name,uid\n" 也是 9 字节 ⇒ 大小校验当然通过，
+        //    用例变成"什么都没测"（是这条用例自己抓出来的）
+        std::fs::write(plan.data_dir.join("vtubers.csv"), b"x").unwrap();
+
+        let err = verify_copy(&plan).unwrap_err();
+        assert!(err.contains("大小不符"), "{err}");
+    }
+
+    #[test]
+    fn rejects_same_nested_and_containing_targets() {
+        let root = temp_root("nested");
+        let src = fake_data_dir(&root);
+
+        // 同一个目录
+        assert!(plan_migration(&src, &src).is_err());
+        // 目标在源里面
+        let inside = src.join("sub");
+        std::fs::create_dir_all(&inside).unwrap();
+        assert!(plan_migration(&src, &inside).is_err());
+        // 源在目标里面
+        let outer = root.clone();
+        assert!(plan_migration(&src, &outer).is_err(), "当前目录在所选目录里也要拦下");
+    }
+
+    #[test]
+    fn rejects_missing_or_relative_target() {
+        let root = temp_root("badtarget");
+        let src = fake_data_dir(&root);
+        assert!(plan_migration(&src, &root.join("不存在")).is_err());
+        assert!(plan_migration(&src, Path::new("相对路径")).is_err());
+    }
+
+    #[test]
+    fn free_space_is_reported_for_an_existing_dir() {
+        let root = temp_root("space");
+        // Windows 上应当拿得到数字（拿不到就返回 None，调用方不该据此拒绝迁移）
+        if cfg!(target_os = "windows") {
+            let f = free_space(&root);
+            assert!(f.is_some(), "Windows 上应当能问到磁盘余量");
+            assert!(f.unwrap() > 0);
+        }
+    }
+}

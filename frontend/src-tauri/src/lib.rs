@@ -16,6 +16,14 @@ use tauri_plugin_shell::ShellExt;
 #[allow(dead_code)]
 mod datadir;
 
+/// 数据目录迁移的**核心逻辑**（R22-B2c，devlog/107）：规划 / 复制 / 逐文件校验。
+///
+/// ⚠️ 目前**尚未接线**（还没有"选目录 → 复制 → 切换指针 → 重启后端"这条命令）：
+/// 这一版先把最容易弄丢数据的那部分（复制与校验）落地并用例钉住。
+/// 接线与界面是下一步（要动 sidecar 启停，只能在真机上验收）。
+#[allow(dead_code)]
+mod migrate;
+
 // 启动计时基线（冷启动优化，见 devlog/021）：各阶段毫秒时间戳输出到终端
 static T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
 
