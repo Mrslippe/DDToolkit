@@ -31,6 +31,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))   # 与其它 scripts/ 同款：允许直跑
 
+# 中文控制台是 GBK：下面那句告警里的 `⚠️` 会直接抛 UnicodeEncodeError 把脚本打断
+# （2026-09-16 实测，devlog/121）—— 不换编码，只把打不出的字符替换掉，同 ui_probe.py
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(errors="replace")
+
 from app.core.config import settings                                    # noqa: E402
 from app.services.externals.danmakus import (fetch_live_events,         # noqa: E402
                                              fetch_live_summary)

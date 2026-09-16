@@ -452,6 +452,55 @@ T0 的进度反馈就是这条通道（无进度条、无胶囊）。
 > ⚠️ 两条 PRAGMA（`auto_vacuum` / `VACUUM`）**不能在事务里执行** —— 维护代码走 DBAPI 的
 > autocommit 连接，不套 SQLAlchemy 的隐式事务（`tests/test_db_maintenance.py` 用真库钉住）。
 
+### 3.12 后端常驻内存与打包体积（2026-09-16 实测，devlog/121）
+
+> 起因：用户看任务管理器问"后端还是占 128MB"。结论先摆：**这是框架地板的量级，不是缺陷** ——
+> 我们自己的业务代码只占其中约 **8MB（6%）**，其余是 Python 运行时与框架依赖。
+
+**打包版空闲**（`binaries/backend/ddtoolkit-backend.exe`，空数据目录，就绪后静置 8s）
+
+| 指标 | 值 |
+|---|---|
+| **私有工作集（任务管理器"内存"列）** | **128.7 MB** |
+| 总工作集 / 提交 | 117.1 MB / 97.8 MB |
+| 线程 / 句柄 / 冷启动到就绪 | 12 / 219 / 2.0 s |
+
+**分段归因**（dev 同版本解释器，按组 import 后读工作集；跨口径有 ±10MB 模糊，比例可靠）
+
+| 段 | 累计 | 本段增量 |
+|---|---|---|
+| 裸 CPython 3.14 → +标准库 | 20.5 MB | 17.3 + 3.2 |
+| + FastAPI/Starlette（连带 Pydantic / anyio） | 43.1 MB | **+22.6** |
+| + uvicorn | 49.4 MB | +6.3 |
+| + SQLAlchemy / Alembic | 77.5 MB | **+28.1**（最大单块） |
+| + APScheduler / httpx | 82.7 MB | +5.2 |
+| + `app.core`（配置 + 数据库引擎 / PRAGMA） | 89.9 MB | +7.2 |
+| + `app.main`（**全部业务代码**：路由与服务） | 98.1 MB | **+8.2** |
+| + `import jieba`（只导模块） | 100.8 MB | +2.7 |
+| + `jieba.initialize()`（前缀词典常驻） | 155.6 MB | **+54.8** |
+
+打包版比 dev 多 ~19MB（自带一份 `python314.dll`、`base_library.zip`、冻结导入器与额外 MSVC/UCRT DLL）。
+**jieba 词典只在真开过一次词云之后才常驻**（R24a 起不再启动预热）：这既是 178MB → 128MB 的来源，
+也是"托盘常驻久了内存会不会涨"目前**唯一已知的涨点**。
+
+**打包目录里"在盘不在内存"的东西**（`_internal/` 共 100.6MB，空闲都不驻留）
+
+| 条目 | 体积 | 说明 |
+|---|---|---|
+| `jieba/` 词典数据 | 29.6 MB | 一开词云就变成内存里那 ~55MB，且不回收 |
+| `numpy` + `numpy.libs` | 25.9 MB | **`app/` 里无人 import** —— Pillow `Image.fromarray()` 里那句函数级 `import numpy` 被静态分析跟进来的 |
+| `PIL` | 12.7 MB | 同上（由依赖链的钩子带进图） |
+| `win32/` `pywin32_system32/` | 1.1 MB | **在 PyInstaller 依赖图里根本不存在** → 历史构建残留（构建产物没被彻底清干净） |
+
+> **复测方法**（本次用的两把尺子）：① 打包版空闲占用 —— 以 `DDTOOLKIT_DATA_DIR` 指空目录起 exe，
+> 等 `DDTOOLKIT_READY` 后读性能计数器 `\Process(ddtoolkit-backend)\Working Set - Private`（= 任务管理器口径）；
+> ② 分段归因 —— 按上表顺序逐组 `import`，每次读 `GetProcessMemoryInfo().WorkingSetSize`
+> （⚠️ ctypes **必须声明 argtypes**：`GetCurrentProcess()` 的伪句柄是 -1，不声明会按 32 位传、读到恒 0）。
+> 诊断脚本 `scripts/check_danmaku_fetch.py` 可验词云上游现况（中文控制台需要 `PYTHONIOENCODING=utf-8`）。
+>
+> **优化候选（都评估过、当前都不做**，用户 2026-09-16 口径"只记账不删"）：词云词典空闲卸载 **−55MB** /
+> 打包瘦身（排除 numpy+PIL）**−38.6MB 磁盘、内存无变化** / Alembic 懒加载（几 MB）。详见 `docs/TODO.md` §1.4。
+
 ## 4. 数据来源地图
 
 | 来源 | 接口 | 鉴权 | 频率 | 落库 |

@@ -119,6 +119,7 @@
 | **进度原语** | 写状态通道的辅助函数 | `_set_account_progress` / `_set_account_vtuber` / `_set_post_progress` / `_vtuber_name_of` | `vtuber_name=None` 表示「不改动」，重置须显式写 None |
 | **外部任务状态** | 第三方回填/批次的 running+label+seq（顶栏胶囊 + 卡片刷新信号） | `scheduler.external_task_started/finished` | v0.9.4；`external.seq` 变化 → `fetch-idle` |
 | **进度事件** | 前端跨组件刷新信号 | `ddtoolkit:account-progress` / `:fetch-idle` / `:data-changed` / `:pill-message` / `:kick-poll` | `TopBar` / `VtuberSidebar` / `PostsPage` / 档案卡 |
+| **弹幕词云来源 / wc_status** | 场次详情里词云的两条来源与五种状态：`upstream`（danmakus `/api/v2/live` 的 `extra.wordCloud`）/ `upstream_absent` / `self_built`（用户点「用弹幕自建」）/ `no_danmaku` / `fetch_failed` | `app/services/{externals/danmakus,danmaku_words,danmaku_cloud}.py`、`GET …/live-sessions/{id}/wordcloud`、`components/live/LiveSessionDialog.tsx` | **上游字段断供过一次**（2026-09-13，devlog/060 → 才有 devlog/061 的自建路径）；**2026-09-16 实测已恢复**（最近 6 场各 40 词条、失败 0/6）⇒ 自建目前只是**断供兜底**。自建 = 按需现拉 v3 原始弹幕 + jieba 分词（**不落库**，与 TODO §1.2「原始弹幕明细库」是两件事），实测单场 32s / 18226 记录；**jieba 只在真点自建时才加载**（R24a 起不预热），一加载就常驻 ~55MB |
 
 ---
 
@@ -186,6 +187,7 @@
 | **运行日志 / 日志轮转** | 双通道（轮转文件 + 控制台）：`logs/app.log` 按天切成 `app.log.YYYY-MM-DD`，保留 7 份 | `app/core/logging_setup.py::setup_logging/build_file_handler` | 排查先"按天切一刀"（devlog/076）；配置本身可测（devlog/077） |
 | **场次上游取数 / live upstream** | 场次详情里"必须打第三方"的两格取数：一次调用 = **并发 2 个上游请求**（摘要 + 中断/继续事件）；成功进 10 分钟缓存，**同场次并发调用单飞共享一轮** | `services/live_upstream.py::load_live_upstream`；端点 `…/live-sessions/{id}/upstream` | 日志 `场次上游取数` ×2 + `单飞复用` ×1 是正常的（dev 下 StrictMode 会调两次，devlog/081） |
 | **文档工具** | 架构图 SVG 生成 | `docs/tools/gen_diagrams.py` → `docs/diagrams/` | 只改 `dN()` 函数即可重绘 |
+| **后端常驻内存 / frozen 占用** | 打包版空闲 **128.7MB**（任务管理器口径）；**业务代码只占 ~8MB**，其余是解释器 + FastAPI/SQLAlchemy 等框架地板；打包比 dev 多 ~19MB | 归因表与复测方法：`docs/ARCHITECTURE.md` §3.12；`scripts/check_danmaku_fetch.py`（词云上游现况） | 唯一已知涨点 = **开过一次词云后 jieba 词典常驻 ~55MB**（178 → 128MB 就是 R24a 删预热省下的）；`_internal` 里的 numpy 25.9MB + PIL 12.7MB **在盘不在内存**（`app/` 无人 import，Pillow 的 `fromarray` 把 numpy 带进依赖图）；优化候选见 `docs/TODO.md` §1.4 |
 | **术语表 / 本文** | 名词 → 路径 → 依赖速查 | `docs/GLOSSARY.md` | 新术语请随手补一行 |
 
 ---
