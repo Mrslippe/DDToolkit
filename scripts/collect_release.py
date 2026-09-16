@@ -74,32 +74,31 @@ def latest_json(version: str, notes: str, signature: str, zip_name: str,
 
 
 def _collect_updater(version: str) -> Path | None:
-    """把 `bundle/nsis/*.nsis.zip` + `.sig` 收进输出目录，并写 `latest.json`。"""
-    nsis_dir = RELEASE / "bundle" / "nsis"
-    if not nsis_dir.exists():
-        print(f"[release] WARN: 没有 {nsis_dir}（更新产物缺失：bundle.createUpdaterArtifacts 没开？）")
-        return None
-    zips = sorted(nsis_dir.glob("*.nsis.zip"))
-    if not zips:
-        print("[release] WARN: 没找到 *.nsis.zip —— 应用内更新会拿不到包（旧版本仍可手工下载安装）")
-        return None
-    src = zips[-1]
-    sig = src.with_name(src.name + ".sig")
-    if not sig.exists():
-        print(f"[release] WARN: 缺少签名 {sig.name} —— 更新包无法被校验，跳过 latest.json")
-        return None
+    """写 `latest.json`。
 
-    dst_zip = OUT_DIR / src.name
-    shutil.copy2(src, dst_zip)
-    print(f"[release] 更新包 -> {dst_zip.name}  ({dst_zip.stat().st_size / 1024 / 1024:.1f} MB)")
+    ⚠️ **NSIS 的更新产物就是安装包 exe 本身 + `.exe.sig`**（真机构建实测确认）——
+    Tauri 的 Windows/NSIS 更新流程是"下载安装包 → 静默运行它"，
+    **不存在 `*.nsis.zip`**（我最初按 zip 写，结果清单一直生成不出来：找不到那个文件）。
+    签名文件是 minisign 文本，直接嵌进清单的 `signature` 字段（无需作为单独资产上传）。
+    """
+    nsis_dir = RELEASE / "bundle" / "nsis"
+    setup = nsis_dir / f"DDtoolkit_{version}_x64-setup.exe"
+    sig = Path(str(setup) + ".sig")
+    if not setup.exists():
+        print(f"[release] WARN: 没找到更新载体 {setup.name} —— 先跑 npm run tauri:build")
+        return None
+    if not sig.exists():
+        print(f"[release] WARN: 缺少签名 {sig.name} —— 更新包无法校验，跳过 latest.json"
+              f"（构建时是否设了 TAURI_SIGNING_PRIVATE_KEY / _PASSWORD？）")
+        return None
 
     notes_path = ROOT / "docs" / "releases" / f"v{version}.md"
     notes = notes_path.read_text(encoding="utf-8") if notes_path.exists() else f"DDtoolkit v{version}"
-    payload = latest_json(version, notes, sig.read_text(encoding="utf-8"), src.name)
+    payload = latest_json(version, notes, sig.read_text(encoding="utf-8"), setup.name)
     out = OUT_DIR / "latest.json"
     out.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"[release] 更新清单 -> latest.json  (version={payload['version']} · "
-          f"签名 {len(payload['platforms']['windows-x86_64']['signature'])} 字符)")
+          f"载体 {setup.name} · 签名 {len(payload['platforms']['windows-x86_64']['signature'])} 字符)")
     return out
 
 
@@ -164,6 +163,11 @@ def main() -> None:
         print(f"[release] WARN: 未找到 NSIS 安装包（{nsis_dir}），跳过")
     else:
         print("[release] --portable-only：跳过安装包（旧安装包可能不含本次后端改动）")
+
+    # 应用内更新清单（R23）：需要安装包 + 它的 `.exe.sig`，所以必须放在安装包之后；
+    # ⚠️ 这一步只有"真机构建 + 设了签名私钥"才会有产物，纯便携打包时会打印 WARN 跳过。
+    if not args.portable_only:
+        _collect_updater(_version())
 
     # 裸主程序（可选）
     if args.with_main:

@@ -168,10 +168,9 @@ def main() -> int:
     assets = [
         (ROOT / "dist-release" / f"DDtoolkit_{version}_x64-setup.exe", "application/octet-stream"),
         (ROOT / "dist-release" / "DDtoolkit-portable-win64.zip", "application/zip"),
-        # 应用内更新（R23）：updater 先取 latest.json，再按里面的 url 下这个 zip。
-        # ⚠️ 两者**必须一起传**：只传 zip 则没人知道有新版本；只传 json 则下载 404。
-        # 签名不单独传 —— 它就写在 latest.json 的 `signature` 字段里。
-        (ROOT / "dist-release" / f"DDtoolkit_{version}_x64-setup.nsis.zip", "application/zip"),
+        # 应用内更新（R23）：updater 先取 latest.json，再按里面的 url 下**安装包 exe**
+        # （NSIS 的更新流程就是"下载安装包 + 静默运行"，没有单独的 zip 载体）。
+        # 签名不单独传 —— 它写在 latest.json 的 `signature` 字段里。
         (ROOT / "dist-release" / "latest.json", "application/json"),
     ]
     for path, ctype in assets:

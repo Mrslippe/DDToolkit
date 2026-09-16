@@ -927,16 +927,24 @@ pub fn run() {
             // 环境变量 > 迁移指针 > 默认目录（判定本身在 `datadir::resolve_startup`，有单测）。
             // 之前这里是无条件用 `app_data_dir()` 覆盖 `DDTOOLKIT_DATA_DIR`，
             // 于是 README 里"便携版可改这个变量自定义"是假的（实测见 devlog/105）。
-            let mut default_dir = app.path().app_data_dir()?;
+            let base_dir = app.path().app_data_dir()?;
             // dev 构建使用独立数据目录，避免调试抓取/登录写进「生产」数据。
             // ⚠️ 只改**默认**目录：用户显式指定的（环境变量/迁移指针）不该被加后缀。
-            #[cfg(debug_assertions)]
-            {
-                default_dir = default_dir.with_file_name(format!(
-                    "{}-dev",
-                    default_dir.file_name().unwrap_or_default().to_string_lossy()
-                ));
-            }
+            // ⚠️ 用 `cfg` 分支表达式而不是 `let mut` + 赋值：release 构建里那段不参与编译，
+            //    `mut` 会变成"不需要的可变"警告（2026-09-16 出正式包时实测到）。
+            let default_dir = {
+                #[cfg(debug_assertions)]
+                {
+                    base_dir.with_file_name(format!(
+                        "{}-dev",
+                        base_dir.file_name().unwrap_or_default().to_string_lossy()
+                    ))
+                }
+                #[cfg(not(debug_assertions))]
+                {
+                    base_dir
+                }
+            };
             let env_dir = std::env::var_os("DDTOOLKIT_DATA_DIR")
                 .map(std::path::PathBuf::from)
                 .filter(|p| p.is_absolute());

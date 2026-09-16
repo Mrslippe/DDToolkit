@@ -189,9 +189,9 @@ def asset_expectations(version: str) -> list[tuple[str, float, float]]:
     return [
         (f"DDtoolkit_{version}_x64-setup.exe", 20.0, 300.0),
         ("DDtoolkit-portable-win64.zip", 25.0, 400.0),
-        # 应用内更新（R23）：updater 下载的就是这个 zip（NSIS 安装包的压缩包），
-        # 版本号必须在文件名里 —— `latest.json` 的 url 按它拼
-        (f"DDtoolkit_{version}_x64-setup.nsis.zip", 20.0, 400.0),
+        # 应用内更新（R23）**没有单独的载体文件**：NSIS 的更新流程就是"下载上面那个安装包 +
+        # 静默运行它"，签名在同目录的 `DDtoolkit_<版本>_x64-setup.exe.sig`（真机构建实测确认；
+        # 最初按 `*.nsis.zip` 写，结果清单一直生成不出来）。签名会被嵌进 `latest.json`。
     ]
 
 
@@ -444,7 +444,7 @@ def step_verify(ctx: Ctx) -> None:
             problems.append(f"{name} 大小异常（{mb:.1f} MB 不在 {lo}~{hi} MB）")
 
     # 旧版本残留：装的时候会让人拿错包（RELEASE.md §3 明确要求删）
-    for f in list(DIST.glob("DDtoolkit_*_x64-setup.exe")) + list(DIST.glob("*.nsis.zip")):
+    for f in DIST.glob("DDtoolkit_*_x64-setup.exe"):
         if f.name not in dict((n, 1) for n, _, _ in asset_expectations(ctx.version)):
             problems.append(f"旧版本产物残留: {f.name} —— 删除后重跑本步")
 
@@ -464,19 +464,19 @@ def step_verify(ctx: Ctx) -> None:
             plat = (body.get("platforms") or {}).get("windows-x86_64") or {}
             sig = (plat.get("signature") or "").strip()
             url = (plat.get("url") or "").strip()
-            want_zip = f"DDtoolkit_{ctx.version}_x64-setup.nsis.zip"
+            want_payload = f"DDtoolkit_{ctx.version}_x64-setup.exe"
             if body.get("version") != ctx.version:
                 problems.append(f"latest.json 版本是 {body.get('version')!r}，应为 {ctx.version!r}")
             if not sig:
                 problems.append("latest.json 缺签名（signature 为空）—— updater 会拒绝安装")
-            if not url.endswith("/" + want_zip):
-                problems.append(f"latest.json 的 url 应以 /{want_zip} 结尾，实得 {url!r}")
-            if not (DIST / want_zip).exists():
-                problems.append(f"latest.json 指向 {want_zip}，但产物目录里没有它")
+            if not url.endswith("/" + want_payload):
+                problems.append(f"latest.json 的 url 应以 /{want_payload} 结尾，实得 {url!r}")
+            if not (DIST / want_payload).exists():
+                problems.append(f"latest.json 指向 {want_payload}，但产物目录里没有它")
             ctx.results["updater"] = {"version": body.get("version"),
                                       "sig_len": len(sig), "url": url}
             print(f"  {OK if not problems else FAIL} 更新清单: version={body.get('version')} · "
-                  f"签名 {len(sig)} 字符 · 资产 {want_zip}")
+                  f"签名 {len(sig)} 字符 · 载体 {want_payload}")
 
     # NSIS：后端目录被"打平"过（devlog/036），装了起不来
     nsi = TAURI / "target" / "release" / "nsis" / "x64" / "installer.nsi"
