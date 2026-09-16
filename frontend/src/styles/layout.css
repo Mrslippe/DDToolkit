@@ -27,9 +27,23 @@ body {
   overflow: hidden;
   /* L3 自绘窗口圆角：度数随改随生效（透明窗口 + 壳层裁剪） */
   border-radius: var(--radius-window, 12px);
+  /* ⚠️ 这里**故意不是 `--c-bg-page`**（2026-09-17，devlog/135 补）：
+     子层（顶栏粉 / rail 灰）被 `overflow:hidden` 按这个圆角裁切时，边缘那 1~2px 是
+     「子层色 × 覆盖度 + **壳底色** × (1−覆盖度)」—— 壳底是近白 `#fffbfb` 时，
+     角上就浮出一圈白边（实测量到 rail `#777F8B`、粉 `#FEB4C2`，正是 78~80% 压近白底）。
+     壳层最终必须**透明**，角上混的才是桌面 ⇒ 白边消失。
+     但不能一开始就透明：揭幕期间各区域还在 `rise-in` 渐显，窗口会**闪桌面**
+     （实测揭幕时窗口中心是暗的）——所以启动期先用近白兜底，
+     等 `main.tsx` 揭幕完成挂上 `html.shell-settled` 再撤（见该文件同名注释）。 */
   background: var(--c-bg-page);
   /* 白边排查①：光圈注释——若四角白边仍在，则为 DWM 系统圆角与 CSS 圆角的夹缝 */
   /* box-shadow: 0 0 0 1px rgba(210, 216, 222, 0.35); */
+}
+
+/* 揭幕完成（`main.tsx` 的 state=done）⇒ 壳层转透明：四角不再混近白底。
+   代价：各区域必须自己画底 —— 顶栏 / rail / 侧栏 / `.app-main` 都有（后者见其规则）。 */
+html.shell-settled .app-shell {
+  background: transparent;
 }
 
 /* 最大化时去掉圆角，避免四角留空 */
@@ -1302,6 +1316,9 @@ html.window-maximized body {
   min-width: 0;
   overflow: hidden;
   padding: 0;
+  /* 页面底。原本挂在 `.app-shell` 上，但壳层必须透明才能修掉四角白边（见那里的注释）——
+     所以由本区域自己画；否则右栏会透出桌面。 */
+  background: var(--c-bg-page);
 }
 
 /* 空置界面：极简居中灰字（参考图「请选择学生」式） */

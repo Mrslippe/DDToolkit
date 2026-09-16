@@ -279,6 +279,7 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
             "closeAsk": data.get("closeAsk"),
             "switchPerf": data.get("switchPerf"),
             "profileSync": data.get("profileSync"),
+            "shell": data.get("shell"),
             "degraded": data.get("degraded") or [],
             "dom": dom_file,
         }
@@ -2316,6 +2317,19 @@ def main() -> int:
             bad = _assert_probe_integrity(res, w)
             bad += _assert(res["views"], w)
             bad += _assert_topbar(res.get("topbar"), w)
+            # R33（devlog/135）：UI 就位后 `.app-shell` 必须透明 —— 它有底色时，
+            # 子层被 4px 圆角裁切的那 1~2px 会混出白边（顶栏粉/rail 灰的角上肉眼可见）。
+            sh = res.get("shell") or {}
+            if not sh:
+                bad.append(f"@{w} shell: 探针没报壳层底（新字段要在 probe.ts 的 main 里带上）")
+            else:
+                if not sh.get("settled"):
+                    bad.append(f"@{w} shell: 揭幕完成标记 `html.shell-settled` 没挂上"
+                               f"（壳层会一直带着近白兜底 ⇒ 四角白边回来）")
+                if (sh.get("bg") or "").replace(" ", "") not in ("rgba(0,0,0,0)", "transparent"):
+                    bad.append(f"@{w} shell: `.app-shell` 背景是 {sh.get('bg')!r}，不是透明"
+                               f"（有底色 ⇒ 圆角抗锯齿会跟它混出白边）")
+                print(f"  壳层底: settled={sh.get('settled')} background={sh.get('bg')}")
             failures.extend(bad)
             tags = [v.get("tag") for v in res["views"]]
             print(f"  views={tags}  问题={len(bad)}")

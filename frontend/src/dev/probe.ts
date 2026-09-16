@@ -2335,7 +2335,15 @@ export async function runUiProbe(): Promise<void> {
   const pre = document.createElement('pre')
   pre.id = 'ui-probe'
   const topbar = await sampleTopbar()
-  pre.textContent = JSON.stringify({ mode: 'main', views: out, topbar, degraded })
+  // 壳层底（R33 补，devlog/135）：UI 就位后 `.app-shell` 必须是**透明**的 ——
+  // 它有底色时，子层被圆角裁切的那 1~2px 会混出"白边"（顶栏粉 / rail 灰的角上最明显）。
+  // 这条量的是计算样式（不依赖截图），探针跑三档宽度 ⇒ 三档都钉住。
+  const shellEl = document.querySelector('.app-shell')
+  const shell = {
+    settled: document.documentElement.classList.contains('shell-settled'),
+    bg: shellEl ? getComputedStyle(shellEl).backgroundColor : null,
+  }
+  pre.textContent = JSON.stringify({ mode: 'main', views: out, topbar, shell, degraded })
   document.body.appendChild(pre)
   document.title = 'UI_PROBE_DONE'
 }

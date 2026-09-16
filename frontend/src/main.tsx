@@ -169,9 +169,16 @@ function Root() {
   }, [state])
 
   // 揭幕开始：html 首绘底色切回透明，恢复 L3 圆角透出桌面
+  // 揭幕完成（done）：再给 `<html>` 挂 `shell-settled` —— 壳层那层近白兜底可以撤了。
+  // 为什么必须等这一刻（devlog/135 补）：撤早了会闪桌面 —— 实测揭幕期间
+  // 各区域还在跑 `rise-in` 渐显（最晚 0.45s 延迟 + 0.35s 时长），那时窗口中心是**透的**；
+  // 而撤晚了四角就一直是"区域色压在近白底上"的白边。`done` = 幕收完、壳已完全画出。
   useEffect(() => {
     if (state === 'opening' || state === 'done') {
       document.documentElement.style.background = 'transparent'
+    }
+    if (state === 'done') {
+      document.documentElement.classList.add('shell-settled')
     }
   }, [state])
 
