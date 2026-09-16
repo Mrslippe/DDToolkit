@@ -25,3 +25,28 @@ def _isolate_rate_limit_state():
     sch._rl_states.clear()
     sch._rl_states.update(saved_states)
     sch._rl_loaded = saved_loaded
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_login(monkeypatch):
+    """把"登录态"钉成**确定的未登录**（= 全新安装的姿态）。
+
+    为什么必须钉死：内容闸门（`capabilities.content_fetch_allowed()`）读的是**进程级**
+    `auth_manager`，而它的初值来自 `settings.*` ← 环境变量 / 数据目录 `.env`。
+    于是"开发机上恰好登录着"会**悄悄改变测试行为**：2026-09-16 实测，仓库根那份
+    裸跑残留的 `.env` 被清空后，**4 条与本批无关的用例立刻变红**
+    （`test_dynamics_lanes_group_all_accounts_by_platform` / `test_dynamics_lane_skipped_
+    when_weibo_not_logged_in` / `test_update_posts_endpoint` / `test_async_fetch_first_screen_
+    bounded_params`）—— 它们其实一直在考"这台机器有没有凭据"。
+
+    需要放行的用例请**显式声明**：`monkeypatch.setattr(capabilities, "content_fetch_allowed",
+    lambda: (True, ""))`，或照 `test_content_gate.py` 那样直接给 `auth_manager` 赋凭据。
+    函数级 `monkeypatch` 在本夹具之后执行，所以那些写法会正常覆盖这里。
+    """
+    from app.services.auth import auth_manager
+    from app.services.weibo_auth import weibo_auth_manager
+
+    monkeypatch.setattr(auth_manager, "sessdata", "")
+    monkeypatch.setattr(auth_manager, "bili_jct", "")
+    monkeypatch.setattr(weibo_auth_manager, "cookie", "")
+    monkeypatch.setattr(weibo_auth_manager, "_valid", False)

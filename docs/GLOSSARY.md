@@ -134,6 +134,7 @@
 | **凭据持久化** | 写 `DATA_DIR/.env`（临时文件 + 原子替换） | `services/env_store.py::save_env_keys` | 只落本机，不进仓库 |
 | **登录态端点** | `{logged_in, needs_login, uid, name}` | `GET /auth/{platform}/status` | 前端 `LoginDialog` |
 | **图片代理** | 绕过图床防盗链（白名单 + 磁盘缓存 + 逐跳校验） | `routers/img_proxy.py` | `IMG_PROXY_ALLOWED_HOSTS` |
+| **设备指纹 / buvid3·buvid4** | B 站的设备号 cookie，**每个安装自己有**一份（首次运行从 `x/frontend/finger/spi` 领 `b_3`/`b_4`，落 `.env` 的 `BILI_BUVID_3`/`_4`） | `services/auth.py::ensure_device_ids` / `cookie_str` / `_ATTR_MAP`、`config.BILI_BUVID_3/4`、`SPI_URL` | **R26①，devlog/126**：web API 只认 **`buvid3`**（登录响应给的老名字是 `bvuid3`，服务端不认）；⚠️ **绝不写死一份**（全网共享设备身份比没有更糟）；抓取时**只补缺的那个**，不覆盖已有 buvid3（保住账号↔设备关联） |
 
 ---
 

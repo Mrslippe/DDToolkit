@@ -499,6 +499,9 @@ def test_bili_complete_uses_callback_url_credentials(monkeypatch):
     sess = _bili_session(_bili_handler(None))
     sess.auth = BilibiliAuth()
     sess.auth.sessdata = sess.auth.bili_jct = sess.auth.dede_user_id = ""
+    # R26：`complete()` 末尾会补一次 `ensure_device_ids()`（没有就领一份设备号）。
+    # 本用例只管回调凭据，所以直接标成"已就位" —— 免得测试去联网（就位时它不发请求）。
+    sess.auth.buvid3 = sess.auth.buvid4 = "already-there"
 
     ok, detail = asyncio.run(sess.complete({"data": {"url": cb, "refresh_token": "RT1"}}))
     asyncio.run(sess.close())
@@ -519,3 +522,150 @@ def test_bili_complete_rejects_empty_callback():
     ok, detail = asyncio.run(sess.complete({"data": {"url": ""}}))
     assert ok is False
     assert "重新扫码" in detail
+
+
+# ── R26：设备指纹（buvid3 / buvid4）──────────────────────────────────────
+# 起因（devlog/126 真机 A/B）：web API 认的是 `buvid3`，而本仓库把登录响应里的 `bvuid3`
+# 当 `bvuid3=` 发回去 —— 服务端每次都当"没有设备号的新访客"，还会铸一枚新 `buvid3` 塞回来
+# （实测：带 `bvuid3=` 时仍会铸，带 `buvid3=` 时才不铸）。
+
+def _auth_blank(**kw):
+    """造一个凭据全空的 auth 实例（避免读到开发机 .env 里的真值）。"""
+    from app.services.auth import BilibiliAuth
+
+    a = BilibiliAuth()
+    a.sessdata = a.bili_jct = a.dede_user_id = a.buvid3 = a.buvid4 = a.refresh_token = ""
+    for key, val in kw.items():
+        setattr(a, key, val)
+    return a
+
+
+def test_cookie_header_uses_canonical_buvid3_name():
+    """**本批的核心一行**：设备号必须叫 `buvid3`，不能再是 `bvuid3`。"""
+    a = _auth_blank(sessdata="S", bili_jct="J", dede_user_id="9",
+                    buvid3="B" * 46, buvid4="C" * 76)
+    ck = a.cookie_str
+    assert "buvid3=" + "B" * 46 in ck
+    assert "buvid4=" + "C" * 76 in ck
+    assert "bvuid3=" not in ck                      # 老名字不许再出现
+
+
+def test_cookie_header_omits_empty_device_ids():
+    """值为空的那条不发（发 `buvid3=` 空值比不发更可疑）。"""
+    a = _auth_blank(sessdata="S", bili_jct="J", dede_user_id="9")
+    assert a.cookie_str == "SESSDATA=S; bili_jct=J; DedeUserID=9"
+    b = _auth_blank(sessdata="S", bili_jct="J", dede_user_id="9", buvid3="B" * 46)
+    assert b.cookie_str == "SESSDATA=S; bili_jct=J; DedeUserID=9; buvid3=" + "B" * 46
+    assert "buvid4" not in b.cookie_str
+
+
+def test_device_id_captured_from_both_legacy_and_canonical_names(monkeypatch):
+    """登录响应给 `bvuid3`、主站给 `buvid3` —— 两个名字都要认，同时出现时以规范名为准。
+
+    `_parse_set_cookie` 返回的是**原始 cookie 名**（映射到属性发生在 `_apply_cookies`），
+    所以两段分开断言：先看能不能抓到，再看冲突时谁赢。
+    """
+    from app.services import auth as am
+
+    # ⚠️ `_apply_cookies` 成功后会 `_save_to_env()` —— 本用例只管抓取与优先级，
+    # 必须把落盘打桩（2026-09-16 实测踩到：不桩就会写掉开发机上的 .env）
+    monkeypatch.setattr(am, "save_env_keys", lambda values: None)
+
+    a = _auth_blank()
+    legacy = httpx.Response(200, headers=[("set-cookie", "bvuid3=LEGACY; Path=/")],
+                            request=httpx.Request("GET", "https://passport.bilibili.com/x"))
+    assert a._parse_set_cookie(legacy)["bvuid3"] == "LEGACY"
+
+    canonical = httpx.Response(200, headers=[("set-cookie", "buvid3=CANON; Path=/")],
+                               request=httpx.Request("GET", "https://www.bilibili.com/"))
+    assert a._parse_set_cookie(canonical)["buvid3"] == "CANON"
+
+    # 冲突时规范名赢 —— 两种先后顺序都要一样（不能依赖 Set-Cookie 的顺序）
+    a._apply_cookies({"bvuid3": "LEGACY", "buvid3": "CANON"})
+    assert a.buvid3 == "CANON"
+    b = _auth_blank()
+    b._apply_cookies({"buvid3": "CANON", "bvuid3": "LEGACY"})
+    assert b.buvid3 == "CANON"
+
+    # 只有老名字时照样要认（登录响应那一路就是它）
+    c = _auth_blank()
+    c._apply_cookies({"bvuid3": "LEGACY"})
+    assert c.buvid3 == "LEGACY"
+
+
+class _FakeSpiClient:
+    """假的 httpx 客户端：只回答设备指纹端点。"""
+
+    def __init__(self, payload=None, boom=False):
+        self.payload = payload or {"code": 0, "data": {"b_3": "B" * 46, "b_4": "C" * 76}}
+        self.boom = boom
+        self.calls = 0
+
+    async def __aenter__(self):
+        if self.boom:
+            raise RuntimeError("network down")
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def get(self, url, headers=None):
+        self.calls += 1
+        assert "finger/spi" in url
+        return httpx.Response(200, json=self.payload)
+
+
+def test_ensure_device_ids_mints_once_and_persists(monkeypatch):
+    """没有设备号 → 领一份（公开端点）→ 落盘；第二次数不再发请求。"""
+    from app.services import auth as am
+
+    fake = _FakeSpiClient()
+    monkeypatch.setattr(am, "new_async_client", lambda *a, **k: fake)
+    saved: dict = {}
+    monkeypatch.setattr(am, "save_env_keys", lambda values: saved.update(values))
+
+    a = _auth_blank()
+    assert asyncio.run(a.ensure_device_ids()) is True
+    assert a.buvid3 == "B" * 46 and a.buvid4 == "C" * 76
+    assert saved["BILI_BUVID_3"] == "B" * 46 and saved["BILI_BUVID_4"] == "C" * 76
+    assert "buvid3=" + "B" * 46 in a.cookie_str
+    assert fake.calls == 1
+
+    assert asyncio.run(a.ensure_device_ids()) is False       # 已就位：不发请求
+    assert fake.calls == 1
+
+
+def test_ensure_device_ids_failure_is_silent(monkeypatch):
+    """领号失败只记日志：少一层指纹不影响任何抓取功能。"""
+    from app.services import auth as am
+
+    monkeypatch.setattr(am, "new_async_client", lambda *a, **k: _FakeSpiClient(boom=True))
+    monkeypatch.setattr(am, "save_env_keys", lambda values: pytest.fail("不该落盘"))
+    a = _auth_blank()
+    assert asyncio.run(a.ensure_device_ids()) is False
+    assert a.buvid3 == "" and a.buvid4 == ""
+
+
+def test_bili_complete_calls_ensure_device_ids(monkeypatch):
+    """扫码确认后要补一次"没有设备号就领一份"。"""
+    from app.services import auth as am
+    from app.services.auth import BilibiliAuth
+
+    calls: list[int] = []
+
+    async def _spy(self):
+        calls.append(1)
+        return False
+
+    monkeypatch.setattr(am.BilibiliAuth, "ensure_device_ids", _spy)
+    monkeypatch.setattr(am, "save_env_keys", lambda values: None)
+
+    cb = ("https://passport.biligame.com/crossDomain?DedeUserID=1062902765"
+          "&SESSDATA=deadbeef%2C1789000000%2Cabc&bili_jct=JCT123")
+    sess = _bili_session(_bili_handler(None))
+    sess.auth = BilibiliAuth()
+    sess.auth.sessdata = sess.auth.bili_jct = sess.auth.dede_user_id = ""
+
+    ok, _ = asyncio.run(sess.complete({"data": {"url": cb}}))
+    asyncio.run(sess.close())
+    assert ok is True and calls == [1]

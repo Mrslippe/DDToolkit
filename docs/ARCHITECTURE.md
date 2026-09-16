@@ -347,10 +347,11 @@ flowchart LR
 > `platforms/weibo.py`、`danmakus.py::BROWSER_HEADERS`、`bili_search.py`、`img_proxy._UA`）。
 > **共用 UA 本身不是风险**（同版本浏览器本就同 UA，平台按 Cookie/账号 + IP + 设备号归因），
 > 但有三处真实的"工具签名"：① 完全没有 `sec-ch-ua` / `Sec-Fetch-*`，且多发一个浏览器不会显式发的
-> `Connection: keep-alive`、未开 HTTP/2；② **设备号 cookie 名写错** —— 代码发 `bvuid3=`，
-> 而 B 站 web API 读的是 `buvid3`（匿名实测 `x/frontend/finger/spi` 下发 `b_3`(46 字符)/`b_4`，
-> 与本机 `.env` 里 `BILI_BUVID_3` 的值同形）⇒ 疑似等于没带设备指纹；③ UA 永久冻结在 Edge 150。
-> 收口方案见 `docs/TODO.md` §0 的 **R26**（⚠️ 设备号**必须按安装生成**，写死一份 = 全网共享设备身份）。
+> `Connection: keep-alive`、未开 HTTP/2（**待修，R26②**）；② ~~设备号 cookie 名写错~~ ——
+> **已修**（R26①，devlog/126）：真机 A/B 证实服务端**不认** `bvuid3`（带它时仍会铸一枚新 `buvid3`
+> 回来，带 `buvid3` 时才不铸），现在发的是 `buvid3`/`buvid4`，且**每个安装自己领一份**
+> （首次运行调 `x/frontend/finger/spi` 落 `.env`，**绝不写死**）；③ UA 永久冻结在 Edge 150
+> （**待修，R26③**）。收口方案见 `docs/TODO.md` §0 的 **R26** 剩余两条。
 
 ### 3.6 删除检测（墓碑机制，v0.5.1）
 

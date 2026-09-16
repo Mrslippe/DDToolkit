@@ -1575,6 +1575,10 @@ def test_async_fetch_first_screen_bounded_params(monkeypatch):
     """收录首屏：投稿 1 页 + 动态 1 页限 3 条，走帖子锁并写 kind=adopt 的完成汇总。"""
     from app.services import scheduler as sch
 
+    # 首屏要过登录闸门（未登录直接 `login_required` 返回、一次网络都不发，见 devlog/086）；
+    # 本用例只管参数口径，所以显式声明放行 —— 别依赖开发机上恰好有凭据。
+    monkeypatch.setattr(sch.capabilities, "content_fetch_allowed", lambda: (True, ""))
+
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
     Base.metadata.create_all(engine)
     Maker = sessionmaker(bind=engine)
@@ -2037,6 +2041,9 @@ def test_dynamics_lanes_group_all_accounts_by_platform(db, monkeypatch):
     # 这里先给个假登录态，让断言只聚焦"名单怎么分"
     monkeypatch.setattr(sch.weibo_auth_manager, "cookie", "SUB=dummy")
     monkeypatch.setattr(sch.weibo_auth_manager, "_valid", True)
+    # 本用例只关心"名单怎么分"，显式声明 B 站内容闸门放行 —— 否则会依赖开发机上恰好有凭据
+    # （2026-09-16 实测踩到：开发机 .env 被清空后 `_next_dynamics_cost` 少了 bilibili）
+    monkeypatch.setattr(sch.capabilities, "content_fetch_allowed", lambda: (True, ""))
 
     v1, v2, v3 = VTuber(name="七海"), VTuber(name="明前奶绿"), VTuber(name="泽音")
     db.add_all([v1, v2, v3])
@@ -2057,6 +2064,10 @@ def test_dynamics_lanes_group_all_accounts_by_platform(db, monkeypatch):
 
     lanes = sch._dynamics_lanes(db)
     assert {pf: len(q) for pf, q in lanes.items()} == {"bilibili": 4, "weibo": 2}
+    # ⚠️ 下面 `_next_dynamics_cost` 走的是 `_active_dynamics_lanes`，会过**内容闸门**
+    # （未登录 B 站时整条 bilibili 名单被跳过，见 devlog/086）。本用例只关心"名单怎么分"，
+    # 所以显式声明"已登录"—— 2026-09-16 实测踩到：不声明就会**依赖开发机上恰好有凭据**，
+    # 一旦开发机的 .env 被清空，这条断言就红了（那次是被另一个用例写坏 .env 才暴露的）。
     # 名单内顺序稳定：按 (V.id, Account.id)
     assert [acc.platform_uid for _v, acc in lanes["bilibili"]] == ["11", "21", "31", "32"]
     assert [acc.platform_uid for _v, acc in lanes["weibo"]] == ["12", "22"]
@@ -2090,6 +2101,9 @@ def test_dynamics_lane_skipped_when_weibo_not_logged_in(db, monkeypatch):
     db.commit()
 
     monkeypatch.setattr(sch.weibo_auth_manager, "cookie", "")      # 无 cookie = 未登录
+    # B 站这侧要**显式放行**，否则（开发机没登录时）bilibili 也会被内容闸门跳过，
+    # 这条断言就变成在考"开发机有没有凭据"了 —— 2026-09-16 实测踩到
+    monkeypatch.setattr(sch.capabilities, "content_fetch_allowed", lambda: (True, ""))
     lanes, skipped = sch._active_dynamics_lanes(db)
     assert list(lanes) == ["bilibili"]
     assert "weibo" in skipped and "登录" in skipped["weibo"]

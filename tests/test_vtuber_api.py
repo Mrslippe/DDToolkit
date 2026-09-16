@@ -845,6 +845,10 @@ def test_archive_posts_endpoint(client):
 def test_update_posts_endpoint(client, monkeypatch):
     from app.routers import vtuber as vrouter
 
+    # 内容抓取要过登录闸门（未登录 → 403，见 devlog/086）。本用例只管端点契约，
+    # 所以显式声明"已登录" —— 别依赖开发机上恰好有凭据（2026-09-16 实测踩到）。
+    monkeypatch.setattr(vrouter.capabilities, "content_fetch_allowed", lambda: (True, ""))
+
     async def fake_update(name=None):
         return {"status": "done", "archived": 5,
                 "total": {"dynamics": 3, "stored": 1, "skipped": 2},

@@ -42,6 +42,7 @@ class Settings:
     BILI_BIJI_JCT: str = os.getenv("BILI_BIJI_JCT", "")
     BILI_DEDE_USER_ID: str = os.getenv("BILI_DEDE_USER_ID", "")
     BILI_BUVID_3: str = os.getenv("BILI_BUVID_3", "")
+    BILI_BUVID_4: str = os.getenv("BILI_BUVID_4", "")
     BILI_REFRESH_TOKEN: str = os.getenv("BILI_REFRESH_TOKEN", "")
 
     # 微博 API（扫码登录后写入：SUB/SUBP/SSOLoginState/M_WEIBOCN_PARAMS 组合串；

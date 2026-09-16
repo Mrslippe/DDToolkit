@@ -33,8 +33,19 @@ _ATTR_MAP = {
     "SESSDATA": "sessdata",
     "bili_jct": "bili_jct",
     "DedeUserID": "dede_user_id",
+    # ⚠️ 设备号有**两个名字**，两个都要认（R26，devlog/126 真机实测）：
+    #   · `bvuid3` = B 站**登录/SSO 响应**里用的名字（本仓库原先只认它，值也确实抓到了）；
+    #   · `buvid3` = **web API 认的名字**（首次访问主站时由服务端 `Set-Cookie: buvid3=…` 下发）。
+    #   只认前者、并把它当 `bvuid3=` 发回去 ⇒ 服务端每次都当"没有设备号的新访客"：
+    #   实测带 `bvuid3=` 时它仍会铸一枚新 `buvid3`，带 `buvid3=` 时才不铸。
+    # 顺序有意为之：字典后写的规范名覆盖前者（两个同时出现时以 `buvid3` 为准）。
     "bvuid3": "buvid3",
+    "buvid3": "buvid3",
+    "buvid4": "buvid4",
 }
+
+# 设备指纹下发端点（公开免鉴权；浏览器首次访问主站时也走它，与登录态无关）
+SPI_URL = "https://api.bilibili.com/x/frontend/finger/spi"
 
 
 def _pick_cookie(container, name: str) -> str | None:
@@ -114,6 +125,7 @@ class BilibiliAuth:
         self.bili_jct: str = settings.BILI_BIJI_JCT
         self.dede_user_id: str = settings.BILI_DEDE_USER_ID
         self.buvid3: str = settings.BILI_BUVID_3
+        self.buvid4: str = settings.BILI_BUVID_4
         self.refresh_token: str = settings.BILI_REFRESH_TOKEN
         self.uname: str = ""            # 昵称（登录后 nav 回填，供登录态展示）
         self._needs_login: bool = not self.is_logged_in
@@ -125,16 +137,59 @@ class BilibiliAuth:
 
     @property
     def cookie_str(self) -> str:
+        """发给 B 站的 Cookie 头。
+
+        ⚠️ 设备号必须叫 **`buvid3`**（R26，devlog/126）：这里原先写的是 `bvuid3` ——
+        那是登录响应里的名字，web API 不认，等于**每次都没带设备指纹**。
+        值为空的那条会被下面过滤掉（发 `buvid3=` 空值比不发更可疑）。
+        """
         parts = [
             f"SESSDATA={self.sessdata}",
             f"bili_jct={self.bili_jct}",
             f"DedeUserID={self.dede_user_id}",
-            f"bvuid3={self.buvid3}",
+            f"buvid3={self.buvid3}",
+            f"buvid4={self.buvid4}",
         ]
         return "; ".join(p for p in parts if "=" in p and not p.endswith("="))
 
     def build_headers(self) -> dict:
         return {**BASE_HEADERS, "Cookie": self.cookie_str}
+
+    async def ensure_device_ids(self) -> bool:
+        """确保手上有设备指纹（`buvid3` / `buvid4`）——没有就照浏览器那样领一份并落盘。
+
+        为什么要这一步（R26，devlog/126 真机实测）：B 站 web API 读的是 **`buvid3`**，
+        而本仓库原先只把登录响应里的 `bvuid3` 当 `bvuid3=` 发回去 ⇒ 服务端每次都把我们当
+        "没有设备号的新访客"，还会在响应里塞一枚新 `buvid3`（而我们丢掉不存）。
+        修法两条：**名字发对**（见 `cookie_str`）+ **每个安装自己有设备号**。
+
+        ⚠️ **绝不写死一份值**：所有安装共用同一份设备号 = 全网共享一个设备身份，
+        比"没有设备号"更糟（这一条是 R26 的硬约束）。
+        领号走公开免鉴权端点（`SPI_URL`），与登录态无关；失败只记日志 ——
+        少一层指纹不影响任何抓取功能。
+
+        返回 True = 这次领到了新号并已落盘。
+        """
+        if self.buvid3 and self.buvid4:
+            return False
+        try:
+            async with new_async_client(15.0) as client:
+                resp = await client.get(SPI_URL, headers=BASE_HEADERS)
+                data = (resp.json() or {}).get("data") or {}
+        except Exception as e:              # 网络/解析失败：不拦任何主流程
+            logger.warning(f"领取设备指纹失败（照常抓取，只是少一层指纹）: {type(e).__name__}: {e}")
+            return False
+        changed = False
+        for key, attr in (("b_3", "buvid3"), ("b_4", "buvid4")):
+            val = str(data.get(key) or "").strip()
+            if val and not getattr(self, attr, ""):
+                setattr(self, attr, val)
+                changed = True
+        if changed:
+            self._save_to_env()
+            logger.info(f"设备指纹已就位并落盘：buvid3 {len(self.buvid3)} 字符 / "
+                        f"buvid4 {len(self.buvid4)} 字符")
+        return changed
 
     @property
     def is_logged_in(self) -> bool:
@@ -154,6 +209,7 @@ class BilibiliAuth:
             "BILI_BIJI_JCT": self.bili_jct,
             "BILI_DEDE_USER_ID": self.dede_user_id,
             "BILI_BUVID_3": self.buvid3,
+            "BILI_BUVID_4": self.buvid4,
             "BILI_REFRESH_TOKEN": self.refresh_token,
         }
         save_env_keys(values)
@@ -202,9 +258,15 @@ class BilibiliAuth:
         return merged
 
     def _apply_cookies(self, extracted: dict[str, str]) -> bool:
-        """写入内存并落盘；返回是否有变化"""
+        """写入内存并落盘；返回是否有变化。
+
+        R26：设备号有两个来源名（`bvuid3` = 登录响应的老名字 / `buvid3` = web API 的规范名），
+        两者映射到**同一个属性**。这里**先应用老名字、后应用规范名**，让"同时出现时规范名赢"
+        成为确定行为 —— 否则结果取决于 Set-Cookie 的先后顺序（实测过这种脆弱点）。
+        """
         changed = False
-        for key, val in extracted.items():
+        order = {"bvuid3": 0}          # 老名字排在前面
+        for key, val in sorted(extracted.items(), key=lambda kv: order.get(kv[0], 1)):
             attr = _ATTR_MAP.get(key)
             if attr and val and val != getattr(self, attr, ""):
                 setattr(self, attr, val)
@@ -320,6 +382,9 @@ class BilibiliAuth:
 
         while True:
             try:
+                # R26：设备指纹是**每安装一份**的（首次运行领一次，之后从 .env 读回）。
+                # 放在维护循环最前面：即便本轮会话检查失败，指纹也已经就位。
+                await self.ensure_device_ids()
                 if await self.check_session():
                     self._needs_login = False
                     await self._fetch_refresh_token()
@@ -412,6 +477,10 @@ class BilibiliLoginSession:
 
         # ③ 回调 URL 查询串里的凭据是 crossDomain 的权威值，最后覆盖（最稳的一路）
         auth._apply_cookies(_cookies_from_url(callback_url))
+
+        # ④ R26：登录响应给的设备号名字是 `bvuid3`，而 web API 认 `buvid3` ——
+        #    这里补一次"没有就领一份"（有就直接返回，不发请求）。
+        await auth.ensure_device_ids()
 
         rt = poll_data.get("data", {}).get("refresh_token")
         if rt:
