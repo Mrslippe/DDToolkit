@@ -22,7 +22,7 @@
 ## 二、一条命令的快速自检
 
 ```powershell
-python scripts/dev_check.py             # 单测 + 开发态后端冒烟（约 20 秒）
+python scripts/dev_check.py             # 语法扫描 + 单测 + 开发态后端冒烟（约 20 秒）
 python scripts/dev_check.py --frozen    # 追加：冻结后端 exe 冒烟（需先 build_backend，约 1 分钟）
 python scripts/dev_check.py --portable  # 追加：重打便携 zip（免 cargo/NSIS，约 2 分钟）
 python scripts/dev_check.py --full      # = --frozen --portable --docs --upstream
@@ -30,6 +30,10 @@ python scripts/dev_check.py --full      # = --frozen --portable --docs --upstrea
 
 它做三件事：
 
+0. **全仓 Python 语法扫描**（`ast.parse`，105 个文件约 0.2 秒）—— 没有任何其它门禁会编译
+   `scripts/`，所以工具脚本的语法错误会**静默绕过全部红灯**：
+   2026-09-16 实测在 `ui_probe.py` 的一句 help 文案里写了直引号 ⇒ 探针整体不可用，
+   而 pytest / tsc / eslint / doc_check 全绿（devlog/131）。这一步就是为它加的。
 1. `pytest tests/` —— 回归网（**基线数字只在 `docs/TODO.md` §6.2 维护**，别处一律不复述；含 B 站扫码四态、同名 cookie 冲突、
    账号白名单回填、首启标记等回归用例）；
    **另加前端三条**：`npm run lint`（eslint，`--max-warnings 0`）、

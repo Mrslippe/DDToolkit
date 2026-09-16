@@ -20,6 +20,7 @@
        —— 防「读外层 code 把未扫码误判为已确认」回归（2026-09-08 事故）
 """
 import argparse
+import ast
 import os
 import shutil
 import socket
@@ -170,6 +171,34 @@ def _smoke_backend(label: str, cmd: list[str], cwd: Path) -> bool:
             print(f"      现场保留：{data_dir}（console.log / logs/sidecar.log）")
 
 
+def _run_syntax_check() -> bool:
+    """全仓 Python 语法扫描（秒级，**默认就跑**）。
+
+    为什么需要它（2026-09-16 实测踩到）：改 `scripts/ui_probe.py` 的一句 help 文案时，
+    我在**双引号字符串里写了直引号**（`"隐藏后零请求"`）⇒ 那个脚本变成语法错误 ——
+    而 pytest / tsc / eslint / doc_check **没有一个会编译 scripts/**，
+    于是"探针脚本坏了"这件事在任何门禁里都不红，直到下次真要跑探针才发现。
+    这类"工具坏了但没人报"正是仓库最忌讳的静默失败，所以用一次 ast.parse 全仓扫一遍。
+    """
+    print(f"\n=== 全仓 Python 语法（scripts / app / tests / 根） ===")
+    root = Path(__file__).resolve().parent.parent
+    bad: list[str] = []
+    files: list[Path] = []
+    for pat in ("scripts/*.py", "app/**/*.py", "tests/*.py", "*.py"):
+        files += sorted(root.glob(pat))
+    for p in files:
+        try:
+            ast.parse(p.read_text(encoding="utf-8"), filename=str(p))
+        except SyntaxError as e:
+            bad.append(f"{p.relative_to(root)}:{e.lineno}: {e.msg}")
+    if bad:
+        for line in bad:
+            print(f"{FAIL} {line}")
+        return False
+    print(f"{OK} {len(files)} 个文件语法通过")
+    return True
+
+
 def _run_docs_check() -> bool:
     """文档漂移门禁（`scripts/doc_check.py`）：devlog 索引 / 六处版本号 / 发布说明与导航。
 
@@ -212,7 +241,8 @@ def main() -> int:
     if args.full:
         args.frozen = args.portable = args.docs = args.upstream = True
 
-    results: list[tuple[str, bool]] = [("pytest", _run_pytest())]
+    results: list[tuple[str, bool]] = [("syntax", _run_syntax_check())]
+    results.append(("pytest", _run_pytest()))
     results.append(("frontend logic", _run_frontend_check()))
     if args.docs:
         results.append(("docs drift", _run_docs_check()))
