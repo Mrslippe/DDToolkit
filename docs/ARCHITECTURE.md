@@ -449,6 +449,20 @@ T0 的进度反馈就是这条通道（无进度条、无胶囊）。
 | 库回收 | 启动时把库切成 `auto_vacuum=INCREMENTAL`（**超 512MB 跳过**）；解除订阅/删账号之后调 `incremental_vacuum()` | SQLite 默认 `NONE`：删掉的行只进 freelist，**文件永不缩小**；而全库 VACUUM 的临时空间≈库大小，不适合在升级路径上做 |
 | 体检 | `app/services/db_maintenance.py::dir_stats()`：库（含 `-wal`/`-shm`）/ 缓存 / 日志 / 其余 + 磁盘剩余 + **遗留备份清单** | "哪块在长"必须能被回答；`vtuber.db.bak-*` 这类手工备份不会自己消失 |
 
+> **数据目录怎么定**（`frontend/src-tauri/src/datadir.rs`，devlog/105–112）：优先级 =
+> **环境变量 `DDTOOLKIT_DATA_DIR` > 应用内迁移记录（指针） > 默认目录**。默认目录有两份：
+> 安装版 `%APPDATA%\com.ddtoolkit.app`、**dev 构建加 `-dev` 后缀**（`lib.rs` 的
+> `cfg(debug_assertions)` 分支 —— 免得调试抓取/登录写进生产数据）；**后缀只加在默认目录上**，
+> 因为环境变量与迁移指针都是"用户显式指定"，不该被改。指针文件 =
+> `%APPDATA%\DDToolkit\data-dir.txt`（**刻意与数据目录平级**：放数据目录里会被"删除旧目录"一起删掉），
+> 一行绝对路径、原子写（临时文件 + rename）。目标目录不存在 / 不是绝对路径 / 读失败 ⇒
+> **回退默认目录并把原因带给界面（关于页红字），绝不在坏路径上新建空库**。
+>
+> ⚠️ **指针文件不带构建标识 ⇒ dev 构建与安装版共用同一份迁移记录**（2026-09-16 实测踩到：
+> 用户装完构建产物后发现两边用同一个库 —— 在 dev 里迁到 `E:\test\DDToolkit-data`，安装版读到
+> 同一条记录就跟了过去）。对**普通用户无影响**（只装一份安装版）；另外**卸载时 NSIS 不会删这个指针**。
+> 收口方案（指针按构建分家 + 加"清除迁移记录"入口）记在 `docs/TODO.md` §1.4。
+
 > ⚠️ 两条 PRAGMA（`auto_vacuum` / `VACUUM`）**不能在事务里执行** —— 维护代码走 DBAPI 的
 > autocommit 连接，不套 SQLAlchemy 的隐式事务（`tests/test_db_maintenance.py` 用真库钉住）。
 
