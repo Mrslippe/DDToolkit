@@ -103,7 +103,7 @@ npm run collect:release --prefix frontend
 - `DDtoolkit-portable-win64.zip` —— 便携版（解压即用：主程序 + 后端目录）
 - （可选 `--with-main` 复制裸主程序 `ddtoolkit.exe`）
 
-- 安装版数据目录 `%APPDATA%\com.ddtoolkit.app`；便携版运行后可改 `DDTOOLKIT_DATA_DIR` 环境变量自定义。
+- 安装版数据目录 `%APPDATA%\com.ddtoolkit.app`；便携版**同样**用它 —— ⚠️ 2026-09-16 实测：壳会**无条件**用自己算出的目录覆盖 `DDTOOLKIT_DATA_DIR`，所以手动设这个环境变量目前**不生效**（devlog/105；R22-B2 正在把它改成"应用内可迁移/可指定"）。
 - 后端被打包进安装包 resources（`binaries/backend/`），主程序启动时自动拉起并注入空闲端口。
 - Rust 子进程经 [Job Object 看门狗](frontend/src-tauri/src/lib.rs) 管理：主程序退出即整棵终止。
 

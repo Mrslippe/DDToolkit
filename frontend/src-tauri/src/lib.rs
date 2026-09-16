@@ -8,6 +8,14 @@ use tauri::{Emitter, Manager, RunEvent, State, WindowEvent};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
+/// 数据目录指针（R22-B2a，devlog/105）：`%APPDATA%\DDToolkit\data-dir.txt` 决定实际数据目录。
+///
+/// ⚠️ 目前**指针停用**（`resolve_data_dir(..., false)`）：迁移动作、以及"便携版怎么识别"
+/// 都还没定（实测发现壳会无条件覆盖 `DDTOOLKIT_DATA_DIR`，所以现在没有"便携版"这个可判定的状态）。
+/// 这一步先把"指针坏了必须回退默认目录、并且要把原因告诉界面"这套判定落地，并用用例钉住。
+#[allow(dead_code)]
+mod datadir;
+
 // 启动计时基线（冷启动优化，见 devlog/021）：各阶段毫秒时间戳输出到终端
 static T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
 
@@ -459,7 +467,14 @@ pub fn run() {
             perf("setup 开始");
 
             let port = free_port();
-            let mut data_dir = app.path().app_data_dir()?;
+            let default_dir = app.path().app_data_dir()?;
+            // 数据目录指针（R22-B2a）：**这一版传 false = 指针停用**，行为与之前完全一致；
+            // 迁移动作与"便携版识别"是 B2b 的事（见 `mod datadir` 上的说明）。
+            let resolved = datadir::resolve_data_dir(default_dir, false);
+            if let Some(why) = resolved.pointer_unusable.as_deref() {
+                println!("[ddtoolkit] WARN: 数据目录指针不可用，已回退默认目录：{why}");
+            }
+            let mut data_dir = resolved.dir;
             // dev 构建使用独立数据目录，避免调试抓取/登录写进「生产」数据
             #[cfg(debug_assertions)]
             {
