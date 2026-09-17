@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  DRAG_SLOP_PX, LONG_PRESS_MS, SETTLE_MS, type CardPhase,
+  DRAG_SLOP_PX, LONG_PRESS_MS, SETTLE_MS, type CardPhase, contentDelta,
   isDrag, isLongPress, liftOffset, motionPlan, nextPhase, phaseTransform,
 } from './motion'
 
@@ -83,6 +83,42 @@ describe('liftOffset — 跟手算式', () => {
 
   it('格子往下跳一行（84 + 12）时同理', () => {
     expect(liftOffset(0, 200, 0, 96)).toEqual({ x: 0, y: 104 })
+  })
+
+  /**
+   * R37-P4d：自动滚动时 `scrollD` 非 0 —— 内容滚上去多少，补偿就要加回多少，
+   * 否则卡片会滞后**恰好一个滚动量**（用户报的"错位"）。
+   */
+  it('滚动量进补偿：内容滚了 100px ⇒ 补偿 +100（卡片仍钉在手指下）', () => {
+    // 指针没动、格子没动、滚动 100 ⇒ 卡片要往下补 100 才还在原处
+    expect(liftOffset(0, 0, 0, 0, 0, 100)).toEqual({ x: 0, y: 100 })
+    expect(liftOffset(30, 30, 0, 0, 0, -40)).toEqual({ x: 30, y: -10 })
+  })
+})
+
+describe('contentDelta — 内容坐标位移（D = P + S）', () => {
+  it('没滚动时就是指针位移', () => {
+    expect(contentDelta(12, -8)).toEqual({ x: 12, y: -8 })
+  })
+
+  it('指针没动、滚动 100 ⇒ 内容位移 +100（模型因此下探）', () => {
+    expect(contentDelta(0, 0, 0, 100)).toEqual({ x: 0, y: 100 })
+  })
+
+  it('指针与滚动一起走时相加（两者都是"内容坐标"的分量）', () => {
+    expect(contentDelta(30, 30, 0, 70)).toEqual({ x: 30, y: 100 })
+  })
+
+  it('与 liftOffset 自洽：补偿 = 内容位移 − 格子位移 ⇒ 视口位置恒等于指针', () => {
+    // 任意一组输入下，把"模型格位"与"补偿"都从 D 推出来，视口位移必须回到 P
+    const P = { x: 25, y: 140 }
+    const S = { x: 0, y: 96 }
+    const D = contentDelta(P.x, P.y, S.x, S.y)
+    const cellDelta = { x: 0, y: 96 }                 // 模型刚好吸附到下一行
+    const off = liftOffset(P.x, P.y, cellDelta.x, cellDelta.y, S.x, S.y)
+    // 视口位移 = 格子位移 − 滚动 + 补偿
+    expect(cellDelta.y - S.y + off.y).toBe(P.y)
+    expect(D.y - cellDelta.y).toBe(off.y)
   })
 })
 

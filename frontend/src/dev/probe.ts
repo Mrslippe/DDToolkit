@@ -2568,6 +2568,8 @@ export async function runUiProbe(): Promise<void> {
     ])
     const boardEl = () => document.querySelector<HTMLElement>('[data-board]')
     const cardEls = () => [...document.querySelectorAll<HTMLElement>('.pcard')]
+    /** 滚动体（R37-P4d 起：缩放那一步要用"内容坐标位移"判，需要读 scrollTop） */
+    const scroller = () => document.querySelector<HTMLElement>('.board-view .os-scroll')
     const phaseOf = (el: Element | null) => el?.getAttribute('data-card-phase') ?? null
     /** 卡片**视觉**中心（含 transform）：跟手判定必须看它，不能看格位 */
     const centerOf = (el: Element | null) => {
@@ -2823,12 +2825,20 @@ export async function runUiProbe(): Promise<void> {
         handle.dispatchEvent(new PointerEvent('pointerdown', at(h0.x, h0.y)))
         await sleep(60)
         // 半格：不足一次吸附 ⇒ 只该看到像素尺寸变化
+        // ⚠️ 判据要用**内容坐标位移**（指针位移 + 滚动量）：手柄若正好落在底部触发区里，
+        // 自动滚动会让内容多走一截、模型因此吸附 —— 那是 P4d 的正常行为，不是"提前吸附"。
         const halfX = Math.round((colW + gap) * 0.45)
         const halfY = Math.round(96 * 0.45)
+        const sBefore = Math.round(scroller()?.scrollTop ?? 0)
         grid.dispatchEvent(new PointerEvent('pointermove', at(h0.x + halfX, h0.y + halfY)))
         await sleep(120)
         await frame()
-        result.resizeHalf = { modelW: modelW(), modelH: modelH(), ...pxSize(), dx: halfX, dy: halfY }
+        const sAfter = Math.round(scroller()?.scrollTop ?? 0)
+        result.resizeHalf = {
+          modelW: modelW(), modelH: modelH(), ...pxSize(), dx: halfX, dy: halfY,
+          scrollFrom: sBefore, scrollTo: sAfter,
+          contentDx: halfX, contentDy: halfY + (sAfter - sBefore),
+        }
         // 再过一格：模型才该 +1 列 / +1 行
         grid.dispatchEvent(new PointerEvent(
           'pointermove', at(h0.x + Math.round(colW + gap) + 6, h0.y + 100)))
@@ -2869,6 +2879,207 @@ export async function runUiProbe(): Promise<void> {
   //   · 误差 ≈ ±格距        ⇒ 跟手位移没跟上/被 FLIP 又补了一次
   //   · DOM 顺序在变        ⇒ React 重排节点，正在跑的过渡会被浏览器取消（看着就是闪）
   //   · 动画实例数在涨不落   ⇒ 过渡被反复重启
+  // 拖到边缘**自动滚动**（R37-P4d，规格 §5.7）：端到端走一遍
+  // 「把卡片拖到底部触发区停住 → 画布自己滚 / 卡片仍在手指下 / 模型行号与网格高度跟着涨 →
+  //   回到顶部区 → 反向滚 → 抬手停表 → 缩放手柄同样适用」。
+  //
+  // 判据里最要紧的是**同步性**：全程 `|卡片中心 − (起点 + 指针位移)| ≤ 2px`。
+  // 自动滚动最容易出的错就是"漏掉滚动量"⇒ 卡片滞后/超前恰好一个滚动量（看着就是错位）。
+  if (mode === 'motion-scroll') {
+    const result: Record<string, unknown> = {}
+    const waitFor = async (fn: () => unknown, ms = 8000) => {
+      const t0 = performance.now()
+      while (performance.now() - t0 < ms) {
+        const v = fn()
+        if (v) return v
+        await sleep(60)
+      }
+      return null
+    }
+    const frame = (ms = 200) => Promise.race([
+      new Promise<void>((r) => requestAnimationFrame(() => r())),
+      sleep(ms),
+    ])
+    const boardEl = () => document.querySelector<HTMLElement>('[data-board]')
+    const scroller = () => document.querySelector<HTMLElement>('.board-view .os-scroll')
+    const cardEl = (key: string | null) =>
+      (key ? document.querySelector<HTMLElement>(`[data-card-key="${key}"]`)
+           : document.querySelector<HTMLElement>('.pcard'))
+    const centerOf = (el: Element | null) => {
+      if (!el) return null
+      const r = el.getBoundingClientRect()
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+    }
+    const modelY = (el: Element | null) => Number(el?.getAttribute('data-card-y') ?? -1)
+    const gridH = () => Math.round(boardEl()?.getBoundingClientRect().height ?? 0)
+    const scrollTop = () => Math.round(scroller()?.scrollTop ?? -1)
+
+    ;[...document.querySelectorAll<HTMLButtonElement>('.view-btn')]
+      .find((b) => (b.title || '').startsWith('档案视图'))?.click()
+    await waitFor(() => boardEl())
+    await sleep(300)
+    ;[...document.querySelectorAll<HTMLButtonElement>('.board-btn')]
+      .find((b) => (b.textContent || '').includes('编辑布局'))?.click()
+    await sleep(250)
+    result.editing = boardEl()?.getAttribute('data-board-editing')
+
+    const sc = scroller()
+    const box = sc?.getBoundingClientRect()
+    result.zone = box
+      ? { top: Math.round(box.top), bottom: Math.round(box.bottom), h: Math.round(box.height) }
+      : null
+    result.scrollRange = sc ? Math.round(sc.scrollHeight - sc.clientHeight) : -1
+    /** 诊断：虚拟时间下 rAF 到底被服务几次（自动滚动的驱动方式选择就靠它） */
+    result.rafTicks = await new Promise<number>((resolve) => {
+      let n = 0
+      const t0 = performance.now()
+      const step = () => {
+        n += 1
+        if (performance.now() - t0 < 400) requestAnimationFrame(step)
+        else resolve(n)
+      }
+      requestAnimationFrame(step)
+      window.setTimeout(() => resolve(n), 900)      // 兜底：rAF 不产帧时别把探针挂住
+    })
+
+    /** 一次「按住 → （可选）先移到中途 → 停住 → 采样」。
+     *
+     *  返回同步误差、滚动量、模型与网格的变化。
+     *  ⚠️ `downTarget` 必须是**卡头**（`.pcard-head`）：拖动手势的 pointerdown 挂在卡头上，
+     *  派发到卡片本身不会向下冒泡（第一版就这么假红的）。
+     *  ⚠️ `via` 是给"顶部那一趟"用的：先把手柄挪到容器中部（让卡片有往上的余量），
+     *  再从那里开始量 —— 否则卡片一路被顶到第 0 行（clamp）就测不出同步性了。 */
+    const dwell = async (
+      el: HTMLElement, downTarget: HTMLElement,
+      from: { x: number; y: number }, to: { x: number; y: number },
+      samples = 8, gap = 110, via?: { x: number; y: number },
+    ) => {
+      const at = (x: number, y: number, buttons = 1) => ({
+        bubbles: true, cancelable: true, pointerId: 21, pointerType: 'mouse',
+        isPrimary: true, button: 0, buttons, clientX: Math.round(x), clientY: Math.round(y),
+      })
+      const target = boardEl() ?? scroller() ?? document.body
+      downTarget.dispatchEvent(new PointerEvent('pointerdown', at(from.x, from.y)))
+      await sleep(60)
+      if (via) {
+        target.dispatchEvent(new PointerEvent('pointermove', at(via.x, via.y)))
+        await sleep(160)
+        await frame()
+      }
+      // 基准在（可选的）中途点之后才取 —— 期望值 = 基准 + 这一段自己的指针位移
+      const start = centerOf(el)
+      const s0 = scrollTop()
+      const y0 = modelY(el)
+      const h0 = gridH()
+      const base = via ?? from
+      // ⚠️ pointermove/up 必须派发在**网格**上（组件把监听挂在 `.board-grid`）——
+      // 派发到它的祖先（滚动体）不会向下冒泡，事件根本到不了 handler（第一版就这么假红的）
+      target.dispatchEvent(new PointerEvent('pointermove', at(to.x, to.y)))
+      await sleep(80)
+      await frame()
+      let driftMax = 0
+      let driftMaxFree = 0        // 只在"卡片没被顶到第 0 行"的样本里取
+      const trace: Record<string, unknown>[] = []
+      for (let i = 0; i < samples; i += 1) {
+        await sleep(gap)
+        await frame()
+        const now = centerOf(el)
+        // 期望：卡片中心 = 基准 + 指针位移（跟手恒等式，与滚了多少无关）
+        const want = start
+          ? { x: start.x + (to.x - base.x), y: start.y + (to.y - base.y) }
+          : null
+        const drift = now && want
+          ? Math.max(Math.abs(now.x - want.x), Math.abs(now.y - want.y)) : 0
+        driftMax = Math.max(driftMax, drift)
+        const y = modelY(el)
+        if (y > 0) driftMaxFree = Math.max(driftMaxFree, drift)
+        trace.push({ i, scrollTop: scrollTop(), y, h: gridH(),
+                     phase: el.getAttribute('data-card-phase'),
+                     drift: Math.round(drift * 10) / 10 })
+      }
+      const out = {
+        scrollFrom: s0, scrollTo: scrollTop(), scrolled: scrollTop() - s0,
+        modelYFrom: y0, modelYTo: modelY(el),
+        gridHFrom: h0, gridHTo: gridH(),
+        driftMax: Math.round(driftMax * 10) / 10,
+        driftMaxFree: Math.round(driftMaxFree * 10) / 10,
+        trace,
+      }
+      target.dispatchEvent(new PointerEvent('pointerup', at(to.x, to.y, 0)))
+      // ⚠️ 等**保存落地**再返回：`busy` 期间 `beginDrag` 会直接返回（不接新手势），
+      // 于是下一段"按住"根本按不下去 —— 相位会是 idle，看着像"跟手失效"
+      await sleep(800)
+      return out
+    }
+
+    const key = cardEl(null)?.getAttribute('data-card-key') ?? null
+    result.cardKey = key
+    const card = cardEl(key)
+    const head = card?.querySelector<HTMLElement>('.pcard-head')
+    if (sc && box && card && head) {
+      const r = head.getBoundingClientRect()
+      const from = { x: Math.round(r.left + 24), y: Math.round(r.top + 10) }
+      // 底部触发区：容器下缘往上 20px（区深 64px）
+      result.bottomDwell = await dwell(card, head, from,
+                                       { x: from.x, y: Math.round(box.bottom - 20) })
+      // 顶部触发区：容器上缘往下 20px。先经停容器中部（让卡片有往上的余量，
+      // 否则一路顶到第 0 行会被 clamp，同步性就测不出来了）
+      const card2 = cardEl(key)
+      const head2 = card2?.querySelector<HTMLElement>('.pcard-head')
+      if (card2 && head2) {
+        const r2 = head2.getBoundingClientRect()
+        const f2 = { x: Math.round(r2.left + 24), y: Math.round(r2.top + 10) }
+        const mid = { x: f2.x, y: Math.round(box.top + box.height / 2) }
+        result.topDwell = await dwell(card2, head2, f2,
+                                      { x: f2.x, y: Math.round(box.top + 20) }, 6, 110, mid)
+      }
+      // 抬手后**必须停表**
+      const s1 = scrollTop()
+      await sleep(500)
+      result.afterRelease = { from: s1, to: scrollTop(), stopped: scrollTop() === s1 }
+      // 缩放手柄同样适用：按住手柄停在下区 ⇒ 一样滚、且卡片变高
+      const card3 = cardEl(key)
+      const handle = card3?.querySelector<HTMLElement>('.pcard-resize')
+      result.resizeHandle = !!handle
+      if (card3 && handle) {
+        const hr = handle.getBoundingClientRect()
+        const hf = { x: Math.round(hr.left + 9), y: Math.round(hr.top + 9) }
+        const s2 = scrollTop()
+        const hh0 = Number(card3.getAttribute('data-card-h') ?? 0)
+        handle.dispatchEvent(new PointerEvent('pointerdown', {
+          bubbles: true, cancelable: true, pointerId: 22, pointerType: 'mouse',
+          isPrimary: true, button: 0, buttons: 1, clientX: hf.x, clientY: hf.y,
+        }))
+        await sleep(60)
+        ;(boardEl() ?? scroller() ?? document.body).dispatchEvent(new PointerEvent('pointermove', {
+          bubbles: true, cancelable: true, pointerId: 22, pointerType: 'mouse',
+          isPrimary: true, button: 0, buttons: 1,
+          clientX: hf.x, clientY: Math.round(box.bottom - 20),
+        }))
+        await sleep(700)
+        await frame()
+        result.resize = {
+          scrolled: scrollTop() - s2,
+          hFrom: hh0, hTo: Number(cardEl(key)?.getAttribute('data-card-h') ?? 0),
+        }
+        ;(boardEl() ?? scroller() ?? document.body).dispatchEvent(new PointerEvent('pointerup', {
+          bubbles: true, cancelable: true, pointerId: 22, pointerType: 'mouse',
+          isPrimary: true, button: 0, buttons: 0,
+          clientX: hf.x, clientY: Math.round(box.bottom - 20),
+        }))
+        await sleep(400)
+      }
+    }
+    result.scrollTopEnd = scrollTop()
+
+    const pre = document.createElement('pre')
+    pre.id = 'ui-probe'
+    pre.textContent = JSON.stringify({ mode: 'motion-scroll', views: [], degraded, motion: result })
+    document.body.appendChild(pre)
+    document.title = 'UI_PROBE_DONE'
+    return
+  }
+
   if (mode === 'motion-trace') {
     const result: Record<string, unknown> = {}
     const rows: Record<string, unknown>[] = []

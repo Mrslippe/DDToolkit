@@ -17,6 +17,16 @@
   overscroll-behavior: contain;
 }
 
+/* 滚动跑道（R37-P4d，规格 §5.7）：**编辑态**在画布底部留一段余量。
+   为什么必须有：内容短时 `scrollHeight == clientHeight` ⇒ 滚不动 ⇒ 自动滚动的
+   "滚动量"不涨 ⇒ 模型不往下走 ⇒ 网格不长 ⇒ 永远动不了（鸡生蛋）。
+   240px ≈ 2.5 行：网格按整行跳、瞬时最多吃掉一行（96px），平均消耗为 0 ⇒ 永远够用。
+   ⚠️ 它是滚动体的 padding（在网格**之后**）⇒ 不影响网格上缘，
+   "进编辑态不推动画布"那条不变量继续成立。 */
+.board-view.editing .os-scroll {
+  padding-bottom: var(--board-runway, 240px);
+}
+
 .board-head {
   display: flex;
   align-items: baseline;

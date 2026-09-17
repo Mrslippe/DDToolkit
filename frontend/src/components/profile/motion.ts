@@ -60,16 +60,37 @@ export function isDrag(dxPx: number, dyPx: number): boolean {
 }
 
 /**
- * 跟手位移（规格 §5.1 的核心算式）：**卡片视觉位置 = 指针位移 − 卡片所在格子的位移**。
+ * **内容坐标位移**（R37-P4d，规格 §5.7）：`D = P + S`
+ * —— 指针位移（视口坐标）+ 滚动量。模型目标格位与跟手补偿**都只喂 D**。
+ *
+ * 为什么：卡片的视口位置 = 内容位置 − scrollTop + transform。把 `D` 同时喂给
+ * "模型格位"与"补偿"两处，`S` 在代入时正好抵消 ⇒ **卡片视口位置 ≡ 起点 + 指针位移**，
+ * 与滚了多少无关 ⇒ 滚动过程中不可能漂、不可能跳（"不错位"是数学结论，不是调参结果）。
+ * 漏掉 `S` 就会滞后/超前**恰好一个滚动量**。
+ */
+export function contentDelta(
+  pointerDx: number, pointerDy: number, scrollDx = 0, scrollDy = 0,
+): { x: number; y: number } {
+  return { x: pointerDx + scrollDx, y: pointerDy + scrollDy }
+}
+
+/**
+ * 跟手位移（规格 §5.1 的核心算式）：**卡片视觉位置 = 内容坐标位移 − 卡片所在格子的位移**。
  *
  * 拖动期间卡片仍住在自己的格子里（渲染结构不动），而格子会一格一格地换位；
  * 减去格子自身的位移，屏幕上就正好是"跟着手走"。取整到整像素是为了**文字不糊**：
  * 分数像素的 transform 会被合成器重采样，拖起来整张卡的字都是虚的。
+ *
+ * `scrollDx/scrollDy` 是 R37-P4d 加的（自动滚动时非 0）—— 见 `contentDelta` 的说明。
  */
 export function liftOffset(
   pointerDx: number, pointerDy: number, cellDx: number, cellDy: number,
+  scrollDx = 0, scrollDy = 0,
 ): { x: number; y: number } {
-  return { x: Math.round(pointerDx - cellDx), y: Math.round(pointerDy - cellDy) }
+  return {
+    x: Math.round(pointerDx + scrollDx - cellDx),
+    y: Math.round(pointerDy + scrollDy - cellDy),
+  }
 }
 
 export interface MotionPlan {

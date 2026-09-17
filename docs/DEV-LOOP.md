@@ -123,6 +123,10 @@ python scripts/ui_probe.py --motion-trace             # **手感报障先跑这�
                                                      # 误差在 0 与 ±一格之间来回跳 = 跟手补偿取错了格位
 python scripts/ui_probe.py --motion-cards --reduced   # 同上，但给浏览器加 `--force-prefers-reduced-motion`：
                                                      # 断言缩放归零、落位不过渡，而**跟手仍 1:1**（那是输入反馈）
+python scripts/ui_probe.py --motion-scroll            # R37-P4d（devlog/151）：**拖到边缘自动滚动** —— 把卡片拖到
+                                                     # 底部触发区停住 ⇒ 画布自己滚（≥200px）/ **卡片钉在手指下
+                                                     # （同步误差 ≤2px）** / 模型行号与网格高度跟着涨；回到顶部区
+                                                     # 反向滚；抬手停表；缩放手柄同样适用
 python scripts/ui_probe.py --motion-lab               # R37-P4b：动效调测页（`?motion=cards`）—— 面板是**动态载入**的，
                                                      # 载入失败只会「什么都没有」⇒ 断言面板挂上 + 「按下」真能驱动手势
 ```
@@ -137,6 +141,12 @@ python scripts/ui_probe.py --motion-lab               # R37-P4b：动效调测�
 > 并逐步量误差 —— 抽两点采样会**假绿**（第一版 `--motion-cards` 只量"同格 +30"和"跨一格"，
 > 恰好一个不跨格、一个跨格，两点都对，而真实输入的每一步都在错，误差 212.5px）。
 > 手感类断言一律**按真实输入节奏连续采样 + 把误差写成数字**。
+>
+> `--motion-scroll`（2026-09-19 起，devlog/151）：**虚拟时间下 rAF 几乎不被服务** —— 实测 400ms 里只被叫
+> **0–1 次**（`--motion-scroll` 的打印行里有这个计数）。所以自动滚动的循环是 **rAF + 定时器双驱动**
+> （真机靠 rAF 跟帧率、探针靠定时器可观测，两者共用一个 8ms 闸门防止滚两倍速）。
+> 另外两条探针侧的坑：合成 `pointermove` 必须派发在**网格**上（监听挂在 `.board-grid`，
+> 派发到祖先不会向下冒泡）；两段手势之间要**等保存落地**（`busy` 期间 `beginDrag` 不接新手势）。
 
 
 > `--profile-sync`（2026-09-17 起，devlog/135）：**我看不到界面时它就是眼睛**（DSH 自己的窗口压在上面）。

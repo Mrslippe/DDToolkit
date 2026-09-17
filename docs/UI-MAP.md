@@ -426,7 +426,8 @@ DOM 契约（探针 `ui_probe --status-island` 直接查）：`.si-island`（`.o
 | 动效（R37-P4b 已落地） | `components/profile/motion.ts` + `data-card-phase` | **手势相位机**（纯函数，**18 条单测**）：`idle / pressing / lifted / settling`；口径 **阅读态长按 350ms 拿起并进编辑态 / 编辑态按下即拖**，拿起缩放 ≤1.055（`--ease-pop` 一次性过冲），跟手位移 = `指针位移 − 格子位移`（**视觉位移 ≡ 指针位移**），落位 220ms `--ease-emphasized` 无回弹。令牌 `--motion-*` / `--ease-*` 在 `tokens.css`（与状态胶囊规格同一组值，含慢放变量 `--motion-scale`）。reduced-motion：**缩放归零、落位不滑行，跟手保留 1:1**（跟手是输入反馈不是动画）。**退避 FLIP 留 P4c** |
 | 动效调测页 | `.mlab`（`data-motion-lab`，`?motion=cards`） | `components/dev/MotionLab.tsx`（**dev 构建动态载入**）：单步触发（按下/跟手/跨格/落位/连播）+ 慢放 1×·0.5×·0.25×（改 `--motion-scale`）+ 跟手误差读数。它派发**真实的合成 PointerEvent**，不是另画一套假动画。护栏 `ui_probe.py --motion-lab` |
 | 增删卡片（R37-P3b） | `.board-add` / `.board-add-pop` / `.board-add-item`（`data-kind`）/ `.pcard-remove` | 编辑态头部一枚「添加卡片」：菜单只列**已注册但不在板上**的 kind（每项带该卡自己的贴纸角标 + 默认尺寸 `w×h`），全在板上时**禁用并写明原因**。每张卡头部一枚 `×`（**仅编辑态**，放在头部行内而不是绝对定位 —— 绝对定位会压住标题）；`×` 上 `pointerdown` 要 `stopPropagation`，否则会顺带触发卡头拖拽。落点 `firstFreeSlot`、尺寸取注册表默认、**不弹删除确认**（内容都在库里） |
-| 已知边界 | — | 位置 / 大小 / 增删卡片都已支持；**自定义内容**（文本 / 外链卡 + `config_json`）尚未做（R37-P3b 按拍板只做内置卡增删） |
+| 自动滚动（R37-P4d） | `.board-view.editing .os-scroll`（跑道）+ `components/profile/autoScroll.ts` | 拖到容器上下 **64px** 触发区 ⇒ 自动滚动（最大 900px/s，按深度 ramp；拖出容器按满速）。口径：**内容坐标位移 `D = 指针位移 + 滚动量`**，模型格位与跟手补偿都只喂 `D` ⇒ 卡片视口位置恒等于手指位置（滚动中不漂）。**编辑态**在滚动体底部留 **240px 跑道**（`--board-runway`）保证"永远还能往下滚"；驱动是 **rAF + 定时器双驱动**（虚拟时间下 rAF 几乎不被服务，实测 400ms 0–1 次）。护栏 `ui_probe.py --motion-scroll` |
+| 已知边界 | — | 位置 / 大小 / 增删卡片 / 边缘自动滚动都已支持；**自定义内容**（文本 / 外链卡 + `config_json`）尚未做（R37-P3b 按拍板只做内置卡增删） |
 
 #### B1.5 共用层：跨视图联动刷新（事件总线）
 | 事件 | 触发方 | 消费方 |

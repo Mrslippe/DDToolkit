@@ -1014,6 +1014,13 @@ def main() -> int:
         help="给无头浏览器加 `--force-prefers-reduced-motion`（只对 `--motion-cards` 有意义）",
     )
     ap.add_argument(
+        "--motion-scroll",
+        action="store_true",
+        help="只跑一档宽度（1440）：**拖到边缘自动滚动**（R37-P4d，规格 §5.7）—— 把卡片拖到底部触发区"
+             "停住 ⇒ 画布自己滚 / **卡片仍在手指下（同步误差 ≤2px）** / 模型行号与网格高度跟着涨；"
+             "回到顶部区反向滚；抬手停表；缩放手柄同样适用",
+    )
+    ap.add_argument(
         "--motion-trace",
         action="store_true",
         help="只跑一档宽度（1440）：**拖动轨迹诊断**（R37-P4b 手感排查）—— 小步连续移动 26 次"
@@ -2327,6 +2334,78 @@ def main() -> int:
                 print("   -", b)
             return 1 if failures else 0
 
+        if args.motion_scroll:
+            # R37-P4d：拖到边缘自动滚动（规格 §5.7 的七条判据）。
+            w = max(widths[0], 1440)
+            url = f"http://localhost:{vite_port}{route}?probe=motion-scroll"
+            print(f"[probe] motion-scroll @{w} → {url}")
+            res = _run_probe(edge, url, w, args.height, WORK, "motion-scroll")
+            ms = ((res or {}).get("motionCards") or {})
+            if not ms:
+                failures.append(f"@{w} motion-scroll: 没量到滚动段（探针未跑完？）")
+            else:
+                zone = ms.get("zone") or {}
+                print(f"  容器 {zone.get('top')}–{zone.get('bottom')}（高 {zone.get('h')}）· "
+                      f"可滚范围 {ms.get('scrollRange')}px · 400ms 内 rAF 被服务 "
+                      f"{ms.get('rafTicks')} 次")
+                bd = ms.get("bottomDwell") or {}
+                td = ms.get("topDwell") or {}
+                ar = ms.get("afterRelease") or {}
+                rz = ms.get("resize") or {}
+                print(f"  底部停住：scrollTop {bd.get('scrollFrom')} → {bd.get('scrollTo')}"
+                      f"（{bd.get('scrolled')}px）· 模型行 {bd.get('modelYFrom')} → {bd.get('modelYTo')}"
+                      f"· 网格高 {bd.get('gridHFrom')} → {bd.get('gridHTo')}"
+                      f"· **同步误差 {bd.get('driftMax')}px**")
+                print(f"  顶部停住：scrollTop {td.get('scrollFrom')} → {td.get('scrollTo')}"
+                      f"（{td.get('scrolled')}px）· 同步误差 {td.get('driftMax')}px"
+                      f"（未被 clamp 的样本里 {td.get('driftMaxFree')}px）")
+                print(f"  抬手后：{ar.get('from')} → {ar.get('to')}（停表={ar.get('stopped')}）"
+                      f"· 缩放手柄：滚 {rz.get('scrolled')}px、高 {rz.get('hFrom')} → {rz.get('hTo')}")
+                # ① 底部触发区必须真的滚起来
+                if (bd.get("scrolled") or 0) < 200:
+                    failures.append(f"@{w} motion-scroll: 底部停住只滚了 {bd.get('scrolled')}px"
+                                    f"（应 ≥200px）—— 触发区没生效，或跑道没给够")
+                # ② **同步性**：滚动全程卡片必须钉在手指下（这是"不错位"的判据）
+                if (bd.get("driftMax") or 0) > 2:
+                    failures.append(f"@{w} motion-scroll: 自动滚动时卡片与手指偏离 "
+                                    f"{bd.get('driftMax')}px（应 ≤2px）—— 跟手补偿漏了滚动量")
+                # ③ 下探：模型行号要跟着涨
+                if (bd.get("modelYTo") or 0) <= (bd.get("modelYFrom") or 0):
+                    failures.append(f"@{w} motion-scroll: 滚动后模型行号没涨"
+                                    f"（{bd.get('modelYFrom')} → {bd.get('modelYTo')}）"
+                                    f"—— 只滚了视图，卡片没往下走")
+                # ④ 拓展：网格实高要跟着涨
+                if (bd.get("gridHTo") or 0) <= (bd.get("gridHFrom") or 0):
+                    failures.append(f"@{w} motion-scroll: 网格没有向下拓展"
+                                    f"（{bd.get('gridHFrom')} → {bd.get('gridHTo')}）")
+                # ⑤ 顶部对称
+                if (td.get("scrolled") or 0) > -50:
+                    failures.append(f"@{w} motion-scroll: 指针回到顶部区后没有向上滚"
+                                    f"（{td.get('scrolled')}px，应为负且量级可观）")
+                if (td.get("driftMaxFree") or 0) > 2:
+                    failures.append(f"@{w} motion-scroll: 向上滚时同步误差 {td.get('driftMaxFree')}px"
+                                    f"（应 ≤2px，只算未被第 0 行 clamp 的样本）")
+                # ⑥ 抬手停表
+                if not ar.get("stopped"):
+                    failures.append(f"@{w} motion-scroll: 抬手后画布仍在滚"
+                                    f"（{ar.get('from')} → {ar.get('to')}）")
+                # ⑦ 缩放手柄同样适用
+                if not ms.get("resizeHandle"):
+                    failures.append(f"@{w} motion-scroll: 没找到缩放手柄（`.pcard-resize`）")
+                else:
+                    if (rz.get("scrolled") or 0) < 100:
+                        failures.append(f"@{w} motion-scroll: 拖缩放手柄停在下区只滚了 "
+                                        f"{rz.get('scrolled')}px（应 ≥100px）")
+                    if (rz.get("hTo") or 0) <= (rz.get("hFrom") or 0):
+                        failures.append(f"@{w} motion-scroll: 拖缩放手柄时卡片没变高"
+                                        f"（{rz.get('hFrom')} → {rz.get('hTo')}）")
+            if not failures:
+                print("  [ok] 自动滚动：底部滚起来 + 卡片钉在手指下 + 模型下探 + 网格拓展 + 顶部对称 "
+                      "+ 抬手停表 + 缩放手柄同样适用")
+            for b in failures:
+                print("   -", b)
+            return 1 if failures else 0
+
         if args.motion_trace:
             # 拖动轨迹诊断（**测量模式**，不是不变量门禁）：只为把"闪动"这件事变成数字。
             w = max(widths[0], 1440)
@@ -2661,11 +2740,22 @@ def main() -> int:
                 if mc.get("resizeHandle"):
                     b, half, full = mc.get("resizeBefore") or {}, mc.get("resizeHalf") or {}, mc.get("resizeFull") or {}
                     after = mc.get("resizeAfter") or {}
-                    if half.get("modelW") != b.get("modelW") or half.get("modelH") != b.get("modelH"):
-                        failures.append(f"@{w} {tag}: 拖不到半格时模型尺寸就变了"
-                                        f"（{b.get('modelW')}×{b.get('modelH')} → "
-                                        f"{half.get('modelW')}×{half.get('modelH')}）"
+                    # 宽度：横向没有自动滚动 ⇒ 严格判"45% 的格距不许跨格"
+                    if half.get("modelW") != b.get("modelW"):
+                        failures.append(f"@{w} {tag}: 拖不到半格时模型宽度就变了"
+                                        f"（{b.get('modelW')} → {half.get('modelW')}）"
                                         f"—— 应当是「连续像素跟手、跨格才吸附」")
+                    # 高度：用**内容坐标位移**判 —— 手柄落在底部触发区里时，自动滚动会让内容
+                    # 多走一截、模型因此吸附，那是 P4d 的正常行为（不是"提前吸附"）
+                    cdy = half.get("contentDy")
+                    if cdy is None:
+                        failures.append(f"@{w} {tag}: 缩放的半格那一步没量到内容坐标位移")
+                    elif abs(cdy) < 48 and half.get("modelH") != b.get("modelH"):
+                        failures.append(f"@{w} {tag}: 内容只走了 {cdy}px（不到半行 48px）"
+                                        f"模型高却变了（{b.get('modelH')} → {half.get('modelH')}）")
+                    elif abs(cdy) >= 48 and (half.get("modelH") or 0) <= (b.get("modelH") or 0):
+                        failures.append(f"@{w} {tag}: 内容走了 {cdy}px（≥ 半行）模型高却没吸附"
+                                        f"（{b.get('modelH')} → {half.get('modelH')}）")
                     grew_w = (half.get("w") or 0) - (b.get("w") or 0)
                     if grew_w < (half.get("dx") or 0) * 0.6:
                         failures.append(f"@{w} {tag}: 拖了 {half.get('dx')}px，实渲染宽只长了 {grew_w}px"
