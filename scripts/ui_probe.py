@@ -2358,7 +2358,11 @@ def main() -> int:
                       f"· **同步误差 {bd.get('driftMax')}px**")
                 print(f"  顶部停住：scrollTop {td.get('scrollFrom')} → {td.get('scrollTo')}"
                       f"（{td.get('scrolled')}px）· 同步误差 {td.get('driftMax')}px"
-                      f"（未被 clamp 的样本里 {td.get('driftMaxFree')}px）")
+                      f"（未被 clamp 的样本里 {td.get('driftMaxFree')}px）"
+                      f"· **单跳最大回掉 {td.get('maxScrollDrop')}px**"
+                      f"（{td.get('maxDropRate')}px/ms，上限 0.9）"
+                      f"· 网格高 {td.get('gridHFrom')} → {td.get('gridHTo')}"
+                      f"（最低 {td.get('gridHMin')}）")
                 print(f"  抬手后：{ar.get('from')} → {ar.get('to')}（停表={ar.get('stopped')}）"
                       f"· 缩放手柄：滚 {rz.get('scrolled')}px、高 {rz.get('hFrom')} → {rz.get('hTo')}")
                 # ① 底部触发区必须真的滚起来
@@ -2385,6 +2389,23 @@ def main() -> int:
                 if (td.get("driftMaxFree") or 0) > 2:
                     failures.append(f"@{w} motion-scroll: 向上滚时同步误差 {td.get('driftMaxFree')}px"
                                     f"（应 ≤2px，只算未被第 0 行 clamp 的样本）")
+                # ⑤b **向上不许塌陷**（用户 2026-09-19 报障："从下面往上滚会先瞬间回到顶部 + 闪动"）：
+                #     往上拖 ⇒ 被拖的卡（往往就是最高的那块内容）行号变小 ⇒ 网格变矮 ⇒ 内容变短
+                #     ⇒ scrollTop 被浏览器夹回 ⇒ S 掉 ⇒ D 掉 ⇒ 卡片又被带着往上走 ⇒ 再夹 —— 正反馈。
+                #     判据是**因果**的那一条：这一趟里网格高度不许缩。
+                if td.get("gridHMin") is not None and td.get("gridHFrom") is not None:
+                    if (td.get("gridHMin") or 0) < (td.get("gridHFrom") or 0) - 1:
+                        failures.append(f"@{w} motion-scroll: 向上拖时网格高度塌陷了"
+                                        f"（{td.get('gridHFrom')} → 最低 {td.get('gridHMin')}）"
+                                        f"—— 内容变矮会让 scrollTop 被夹，卡片跟着跳")
+                drop = td.get("maxScrollDrop") or 0
+                rate = td.get("maxDropRate") or 0
+                # 判**速率**而不是绝对量：虚拟时间下采样间隔会跳（30ms 的 sleep 可能推进更多虚拟时间），
+                # 绝对量没有可比性。上限速度 900px/s = 0.9px/ms，留 33% 余量。
+                if rate > 1.2:
+                    failures.append(f"@{w} motion-scroll: 向上拖时 scrollTop 回掉速率 "
+                                    f"{rate}px/ms（上限速度 900px/s ⇒ 0.9px/ms）"
+                                    f"—— 单跳 {drop}px，这是被夹出来的跳，不是滚出来的")
                 # ⑥ 抬手停表
                 if not ar.get("stopped"):
                     failures.append(f"@{w} motion-scroll: 抬手后画布仍在滚"

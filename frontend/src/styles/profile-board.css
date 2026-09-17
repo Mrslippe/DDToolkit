@@ -227,9 +227,16 @@
 }
 
 /* 网格：12 列 + 定高行 + 卡片跨格。窄窗（.narrow）由布局模型改成单列，
-   这里只把列数换掉（卡片的内联 grid-column 在单列布局里已是 1 / span 12）。 */
+   这里只把列数换掉（卡片的内联 grid-column 在单列布局里已是 1 / span 12）。
+
+   ⚠️ `flex: none` 是必需的（R37-P4d 踩到）：网格是滚动体（flex column）的子项，
+   默认 `flex: 0 1 auto` 靠 `min-height: auto` 保护"不被压扁"。而**一旦我们给网格写了
+   显式 `min-height`**（编辑态的高度下限），`min-height: auto` 就被覆盖 ⇒ 网格会被压到
+   视口高、卡片从盒子里溢出来（视觉上"网格没跟着长高"）。写死 `flex: none` 把这件事
+   变成显式的：画布只按内容（与高度下限）决定尺寸，永不参与压缩。 */
 .board-grid {
   display: grid;
+  flex: none;
   grid-template-columns: repeat(12, minmax(0, 1fr));
   grid-auto-rows: var(--board-row, 84px);
   gap: var(--board-gap, 12px);

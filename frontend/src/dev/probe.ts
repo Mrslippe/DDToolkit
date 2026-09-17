@@ -2979,9 +2979,15 @@ export async function runUiProbe(): Promise<void> {
       await frame()
       let driftMax = 0
       let driftMaxFree = 0        // 只在"卡片没被顶到第 0 行"的样本里取
+      let maxScrollDrop = 0       // 单次采样里 scrollTop **向下掉**的最大幅度（向上拖时最容易出）
+      let maxDropRate = 0         // 同上的**速率**（px/ms）—— 虚拟时间下采样间隔会跳，只有速率可比
+      let minGridH = Number.POSITIVE_INFINITY
       const trace: Record<string, unknown>[] = []
+      let prevScroll = scrollTop()
+      let prevT = performance.now()
       for (let i = 0; i < samples; i += 1) {
-        await sleep(gap)
+        // 开场密集采样：向上的塌陷发生在最初 ~200ms 内，110ms 的粗采样会整个漏掉它
+        await sleep(i < 8 ? 30 : gap)
         await frame()
         const now = centerOf(el)
         // 期望：卡片中心 = 基准 + 指针位移（跟手恒等式，与滚了多少无关）
@@ -2993,14 +2999,27 @@ export async function runUiProbe(): Promise<void> {
         driftMax = Math.max(driftMax, drift)
         const y = modelY(el)
         if (y > 0) driftMaxFree = Math.max(driftMaxFree, drift)
-        trace.push({ i, scrollTop: scrollTop(), y, h: gridH(),
-                     phase: el.getAttribute('data-card-phase'),
+        const st = scrollTop()
+        const h = gridH()
+        const nowT = performance.now()
+        const drop = prevScroll - st                      // 正 = 这一跳往回落了多少
+        const dtMs = Math.max(1, nowT - prevT)
+        maxScrollDrop = Math.max(maxScrollDrop, drop)
+        if (drop > 0) maxDropRate = Math.max(maxDropRate, drop / dtMs)
+        minGridH = Math.min(minGridH, h)
+        prevScroll = st
+        prevT = nowT
+        trace.push({ i, scrollTop: st, y, h, phase: el.getAttribute('data-card-phase'),
+                     dt: Math.round(dtMs), drop,
                      drift: Math.round(drift * 10) / 10 })
       }
       const out = {
         scrollFrom: s0, scrollTo: scrollTop(), scrolled: scrollTop() - s0,
         modelYFrom: y0, modelYTo: modelY(el),
         gridHFrom: h0, gridHTo: gridH(),
+        gridHMin: Number.isFinite(minGridH) ? minGridH : null,
+        maxScrollDrop,
+        maxDropRate: Math.round(maxDropRate * 1000) / 1000,
         driftMax: Math.round(driftMax * 10) / 10,
         driftMaxFree: Math.round(driftMaxFree * 10) / 10,
         trace,

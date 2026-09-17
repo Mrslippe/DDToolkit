@@ -186,6 +186,21 @@ export default function ProfileBoardView({ vtuber, refreshTick, onOpenPost }: Pr
   /** 布局变化前的卡片位置（FLIP 的"F"）；由 `applyLayout` 在改 DOM 之前量 */
   const rectsRef = useRef<Record<string, { x: number; y: number }>>({})
 
+  /**
+   * 编辑态画布的**高度下限**（只增不减）—— R37-P4d 的"向上不塌陷"关键。
+   *
+   * ⚠️ 为什么需要：网格高度是内容驱动的，而**被拖的那张卡往往就是最高的那块内容**。
+   * 往上拖 ⇒ 卡片行号变小 ⇒ 网格变矮 ⇒ 内容变短 ⇒ `scrollTop` 被浏览器夹回 ⇒ `S` 掉 ⇒
+   * `D = P + S` 掉 ⇒ 卡片又被带着往上走 ⇒ 再夹一次 —— **一个正反馈塌陷**：实测向上拖时
+   * 网格从 1332px 缩到 852px，`scrollTop` 单跳回掉 **120px**（用户原话「从下面往上滚会先
+   * 瞬间回到顶部，并且闪动」）。往下拖没有这个问题（内容只会变长，越滚越有余量）。
+   *
+   * 解法：编辑态把网格高度**钉在本次编辑会话见过的最大值**上 —— 内容不再变矮，夹取无从发生，
+   * 向上滚动因此是平滑的。它同时正好对上用户的直觉（"网格向下拓展"：拓展出来的区域就是工作台，
+   * 排布期间不回收）。**退出编辑态时收回**（一次收尾，且是用户主动的动作）。
+   */
+  const [gridMinH, setGridMinH] = useState(0)
+
   const reduced = usePrefersReducedMotion()
   const plan = motionPlan(reduced)
 
@@ -289,6 +304,18 @@ export default function ProfileBoardView({ vtuber, refreshTick, onOpenPost }: Pr
     pendingScroll.current = null
     if (p != null && sc && sc.scrollTop !== p) sc.scrollTop = p
   }, [gesture])
+
+  /** 编辑态：把网格高度钉在"本次编辑会话见过的最大值"（见 `gridMinH` 的说明） */
+  useLayoutEffect(() => {
+    if (!editing) {
+      setGridMinH((m) => (m === 0 ? m : 0))          // 退出编辑态 ⇒ 收回多余高度
+      return
+    }
+    const el = gridRef.current
+    if (!el) return
+    const h = Math.round(el.getBoundingClientRect().height)
+    setGridMinH((m) => (h > m ? h : m))              // 只增不减
+  }, [cards, editing])
 
   useEffect(() => stopAutoScroll, [])
 
@@ -647,7 +674,13 @@ export default function ProfileBoardView({ vtuber, refreshTick, onOpenPost }: Pr
         onPointerMove={onDragMove}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
-        style={{ '--board-row': `${ROW_H}px`, '--board-gap': `${GRID_GAP}px` } as React.CSSProperties}
+        style={{
+          '--board-row': `${ROW_H}px`,
+          '--board-gap': `${GRID_GAP}px`,
+          /* 编辑态的高度下限（只增不减）：见 `gridMinH` 的说明 —— 防止"往上拖 ⇒ 内容变矮 ⇒
+             滚动被夹 ⇒ 卡片被带着往上跳"的正反馈塌陷。阅读态为 0（不生效）。 */
+          minHeight: gridMinH || undefined,
+        } as React.CSSProperties}
       >
         {layout.map((card) => {
           const meta = getCardKind(card.kind)
