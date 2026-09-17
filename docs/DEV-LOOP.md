@@ -115,7 +115,12 @@ python scripts/ui_probe.py --shot-board               # R37-P4a（devlog/146）�
 python scripts/ui_probe.py --motion-cards             # R37-P4b（devlog/147）：档案视图**手势动效**
                                                      # —— 合成 pointer 走「按下 → 长按 350ms 拾起 → 跟手 1:1
                                                      # （含跨格）→ 抬手落位 → 收尾」，断言相位链 / 缩放档 /
-                                                     # 跟手误差 ≤2px / 落位无内联残留 / 短按不被迟到定时器拿起
+                                                     # 跟手误差 ≤2px / **连续小步跟手（12 步逐步判，devlog/150）** /
+                                                     # **进编辑态不推动画布** / 落位无内联残留 / 短按不被迟到定时器拿起
+python scripts/ui_probe.py --motion-trace             # **手感报障先跑这个**（devlog/150）：模拟真鼠标小步连续移动
+                                                     # 26 次，逐步打印「卡片中心实际 vs 期望」误差 + 模型格位 +
+                                                     # 内联 transform + DOM 顺序。**测量模式、不做断言** ——
+                                                     # 误差在 0 与 ±一格之间来回跳 = 跟手补偿取错了格位
 python scripts/ui_probe.py --motion-cards --reduced   # 同上，但给浏览器加 `--force-prefers-reduced-motion`：
                                                      # 断言缩放归零、落位不过渡，而**跟手仍 1:1**（那是输入反馈）
 python scripts/ui_probe.py --motion-lab               # R37-P4b：动效调测页（`?motion=cards`）—— 面板是**动态载入**的，
@@ -127,6 +132,11 @@ python scripts/ui_probe.py --motion-lab               # R37-P4b：动效调测�
 > 永远停在**过渡起点**（按下时读到 1、落位后还读到拾起时的矩阵）。所以动画类的断言只能判两件事：
 > ① **我们提交了什么**（读 `element.style.transform` 内联值）；② **过渡有没有登记**
 > （读 `transition-duration`）。想看动画真的怎么走，用调测页的 0.25× 慢放，别指望 computed。
+>
+> `--motion-trace`（2026-09-18 起，devlog/150）：**"手感不对"先跑它**。它按真鼠标的节奏小步连续移动
+> 并逐步量误差 —— 抽两点采样会**假绿**（第一版 `--motion-cards` 只量"同格 +30"和"跨一格"，
+> 恰好一个不跨格、一个跨格，两点都对，而真实输入的每一步都在错，误差 212.5px）。
+> 手感类断言一律**按真实输入节奏连续采样 + 把误差写成数字**。
 
 
 > `--profile-sync`（2026-09-17 起，devlog/135）：**我看不到界面时它就是眼睛**（DSH 自己的窗口压在上面）。

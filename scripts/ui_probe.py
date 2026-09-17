@@ -1014,6 +1014,14 @@ def main() -> int:
         help="给无头浏览器加 `--force-prefers-reduced-motion`（只对 `--motion-cards` 有意义）",
     )
     ap.add_argument(
+        "--motion-trace",
+        action="store_true",
+        help="只跑一档宽度（1440）：**拖动轨迹诊断**（R37-P4b 手感排查）—— 小步连续移动 26 次"
+             "（每次 8px），逐步量「卡片中心实际位置 vs 期望位置（起点 + 指针位移）」的误差，"
+             "并记下模型格位 / DOM 顺序 / 卡片上的动画实例数。误差恒 ≤2px 才算跟手；"
+             "误差在 0 与 ±一格之间来回跳 = 逐格吸附那种闪动",
+    )
+    ap.add_argument(
         "--board-cards",
         action="store_true",
         help="只跑一档宽度（1440）：**档案视图的增删卡片**（R37-P3b）—— 编辑态删掉一张 →"
@@ -2319,6 +2327,30 @@ def main() -> int:
                 print("   -", b)
             return 1 if failures else 0
 
+        if args.motion_trace:
+            # 拖动轨迹诊断（**测量模式**，不是不变量门禁）：只为把"闪动"这件事变成数字。
+            w = max(widths[0], 1440)
+            url = f"http://localhost:{vite_port}{route}?probe=motion-trace"
+            print(f"[probe] motion-trace @{w} → {url}")
+            res = _run_probe(edge, url, w, args.height, WORK, "motion-trace")
+            mt = ((res or {}).get("motionCards") or {})
+            if not mt:
+                failures.append(f"@{w} motion-trace: 没量到轨迹段（探针未跑完？）")
+            else:
+                rows = mt.get("rows") or []
+                print(f"  卡片={mt.get('cardKey')} 最大误差={mt.get('maxErr')}px "
+                      f"超差步数={mt.get('rowsWithBigErr')}/{len(rows)} "
+                      f"DOM 顺序变化={mt.get('orderChanged')}")
+                print("   步  误差(x,y)        列  行  相位      内联 transform / flip / 动画数")
+                for r in rows:
+                    print(f"   {r.get('i'):>3}  ({r.get('errX'):>6},{r.get('errY'):>6})  "
+                          f"{r.get('col'):>2}  {r.get('row'):>2}  {str(r.get('phase')):<8} "
+                          f"{r.get('inline')!r:<44} {str(r.get('flip')):<9} {r.get('anims')}")
+                if mt.get("orderChanged"):
+                    print(f"  ⚠️ DOM 顺序变了：{mt.get('orderBefore')} → {mt.get('orderAfter')}"
+                          f"（节点被重排会让浏览器取消正在跑的过渡 ⇒ 看着就是闪）")
+            return 1 if failures else 0
+
         if args.board_cards:
             # R37-P3b：增删卡片端到端（DOM + **后端对账** —— 只看 DOM 的话
             # "界面上删了但库里还在"照样绿）。
@@ -2492,6 +2524,26 @@ def main() -> int:
                 if dx is None or abs(dx - 30) > 2 or dy is None or abs(dy - 30) > 2:
                     failures.append(f"@{w} {tag}: 跟手位移是 ({dx},{dy})，指针走了 (30,30)"
                                     f"（跟手算式漏了格子位移，或写成了「吸附」）")
+                # ③b 连续小步跟手：**每一步**误差都要 ≤2px（只抽两点量会漏掉"跨格后下一帧
+                #     补偿丢了"这种错法 —— 那正是用户看到的"每一点移动都像在吸附网格"）
+                fs = mc.get("followSteps") or {}
+                fmax = fs.get("maxErr")
+                print(f"  连续小步跟手：最大误差 {fmax}px"
+                      f"（样本 {[(s.get('i'), s.get('errX'), s.get('errY')) for s in (fs.get('samples') or [])]}）")
+                if fmax is None:
+                    failures.append(f"@{w} {tag}: 没量到连续小步跟手（探针少了一段？）")
+                elif fmax > 2:
+                    failures.append(f"@{w} {tag}: 连续小步跟手最大误差 {fmax}px（应 ≤2px）——"
+                                    f"拖动中卡片在「正确位置」与「差一整格」之间来回跳")
+                # 进编辑态（长按拾起顺手带进去）**不许把画布整体推下去**：
+                # 提示行曾在画布上方，于是拾起那一瞬间网格下移 28px（卡片与邻居一起跳）
+                gt = mc.get("gridTop") or {}
+                if gt.get("before") is not None and gt.get("after") is not None:
+                    shift = abs(int(gt["after"]) - int(gt["before"]))
+                    if shift > 1:
+                        failures.append(f"@{w} {tag}: 长按拾起（进入编辑态）后画布上缘移动了 "
+                                        f"{shift}px（{gt['before']} → {gt['after']}）——"
+                                        f"拾起那一刻整块画布被推动了")
                 cross = mc.get("crossCell") or {}
                 if cross.get("phase") != "lifted":
                     failures.append(f"@{w} {tag}: 跨格跟手时相位是 {cross.get('phase')!r}，应为 lifted")

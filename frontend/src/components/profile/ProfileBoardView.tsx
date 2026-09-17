@@ -275,20 +275,22 @@ export default function ProfileBoardView({ vtuber, refreshTick, onOpenPost }: Pr
     if (d.mode === 'move') {
       const tx = d.origin.x + dx
       const ty = d.origin.y + dy
-      if (live.x !== tx || live.y !== ty) {
+      const changed = live.x !== tx || live.y !== ty
+      if (changed) {
         d.moved = true
         next = moveCard(d.base, d.id, tx, ty)
         applyLayout(next)
       }
-      // 跟手位移：卡片视觉位置 = 指针位移 − 它所在格子的位移。
-      // 格子位移**用模型算**（不读 DOM）：拖动期间读 rect 会强制重排，而且拿到的还可能是
-      // 上一帧的位置。
+      // 跟手位移：卡片视觉位置 = 指针位移 − **它当前所在格子**的位移。
       //
-      // ⚠️ 这里**刻意不做 rAF 节流**（第一版做了，被探针逼回来）：pointermove 本来就是
-      // 每帧一两次，React 自己会把同一批状态更新合掉；再加一层 rAF 只会让"跟手位移落在
-      // 下一帧"，而**探针在多远的将来读到它就成了竞态**（实测默认档绿、reduced 档红，
-      // 差别只是那一帧有没有被服务）。手感相关的东西不该有竞态。
-      const cur = next.find((c) => c.id === d.id) ?? d.origin
+      // ⚠️⚠️ 这里的 `cur` 是这一批最容易写错的一处（2026-09-18 用户报「按住移动时明显闪动、
+      // 像是每一点移动都在吸附不同的网格」，就是它）：**没改布局时绝不能用 `d.base` 去取当前格位** ——
+      // `d.base` 是手势开始那一刻的快照，卡片早就不在那一格了。用它会得到 `cellDelta = 0`，
+      // 于是补偿凭空少一整格：卡片在"正确位置"与"差一格"之间来回跳（跨格那一帧恰好正确，
+      // 下一帧就跳走 —— 看着就是闪）。当前格位只有两个来源：
+      //   · 这一帧改过布局 ⇒ 用新布局 `next`；
+      //   · 没改 ⇒ 用**正在渲染的那一版** `cardsRef.current`（就是 `live`）。
+      const cur = changed ? (next.find((c) => c.id === d.id) ?? d.origin) : live
       const cellDx = (cur.x - d.origin.x) * (colW + GRID_GAP)
       const cellDy = (cur.y - d.origin.y) * (ROW_H + GRID_GAP)
       const off = liftOffset(dxPx, dyPx, cellDx, cellDy)
@@ -494,12 +496,11 @@ export default function ProfileBoardView({ vtuber, refreshTick, onOpenPost }: Pr
           )}
         </span>
       </div>
-      {editing && (
-        <p className="board-hint">
-          拖动卡片可换位置、拖右下角可改大小；撞到别人会把它挤下去。{' '}
-          {changed ? '（保存中…）' : '每次松手即保存'}
-        </p>
-      )}
+      {/* ⚠️ 这行提示**必须留在画布下方**（2026-09-18 用户报「按住移动时明显闪动/位移」时量出来的）：
+          它原来在画布**上方**，而它只在编辑态出现 —— 长按拾起会顺手进编辑态，于是拾起那一瞬间
+          画布被整体推下去 28px（= 行高 16 + gap 12），卡片与邻居一起跳。
+          提示放到网格之后，"进编辑态"不再改变网格上方任何东西的尺寸 ⇒ 零位移。
+          护栏：`ui_probe.py --motion-cards` 断言拾起前后画布上缘不变。 */}
       <div
         className={`board-grid${narrow ? ' narrow' : ''}${editing ? ' editing' : ''}`}
         ref={gridRef}
@@ -598,6 +599,13 @@ export default function ProfileBoardView({ vtuber, refreshTick, onOpenPost }: Pr
         })}
         {!layout.length && <p className="pcard-empty">还没有注册任何卡片</p>}
       </div>
+      {/* 编辑态的操作提示：放**网格之后**（见上面的说明 —— 放前面会在拾起那一刻把画布推下去） */}
+      {editing && (
+        <p className="board-hint">
+          拖动卡片可换位置、拖右下角可改大小；撞到别人会把它挤下去。{' '}
+          {changed ? '（保存中…）' : '每次松手即保存'}
+        </p>
+      )}
       {/* 动效调测页（R37-P4b）：只在 `?motion=cards` 时**动态**载入 —— 与 `main.tsx` 载探针
           同一路数（生产构建里 `import.meta.env.DEV` 为 false，整段被摇掉）。 */}
       {Lab && <Lab gridRef={gridRef} />}

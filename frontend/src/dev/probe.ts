@@ -2618,9 +2618,21 @@ export async function runUiProbe(): Promise<void> {
       /** 按 key 取卡片（拖完之后 DOM 顺序可能变，`cardEls()[0]` 未必还是它） */
       const same = () => (key ? document.querySelector<HTMLElement>(`[data-card-key="${key}"]`)
                               : cardEls()[0])
-      const from = { x: r.left + 24, y: r.top + 10 }
+      /** 当前指针位置：所有移动都**相对上一次**推进（不要写绝对坐标 —— 中间插一段
+       *  小步移动之后，绝对坐标会变成"往回走"，测的就不是原来那件事了）。 */
+      let px = r.left + 24
+      let py = r.top + 10
+      const moveTo = async (nx: number, ny: number, wait = 120) => {
+        px = nx
+        py = ny
+        grid.dispatchEvent(new PointerEvent('pointermove', at(px, py)))
+        await sleep(wait)
+        await frame()
+      }
+      const from = { x: Math.round(px), y: Math.round(py) }
       const before = centerOf(card)
       const editBefore = boardEl()?.getAttribute('data-board-editing')
+      const gridTopBefore = grid ? Math.round(grid.getBoundingClientRect().top) : null
 
       // ① **短按**（阅读态，<350ms 就抬手）：不许拾起、不许留内联位移，
       //    迟到的长按定时器也不许把卡片"隔空拿起来"。先做这一步是因为它必须在**阅读态**验
@@ -2654,9 +2666,7 @@ export async function runUiProbe(): Promise<void> {
       // ③ 跟手：位移**小于一格**（30px < 一列 ~58px、30px < 一行 96px）⇒ 格子不动，
       //    卡片中心应当**恰好**跟着走 30/30（差一点都说明跟手算式错了）
       const c1 = centerOf(card)
-      grid.dispatchEvent(new PointerEvent('pointermove', at(from.x + 30, from.y + 30)))
-      await sleep(120)
-      await frame()                                // 等渲染落地再量（见上面的 frame 注释）
+      await moveTo(px + 30, py + 30)
       const c2 = centerOf(card)
       result.follow = {
         dx: c2 && c1 ? Math.round(c2.x - c1.x) : null,
@@ -2666,14 +2676,54 @@ export async function runUiProbe(): Promise<void> {
       result.followCol = card ? getComputedStyle(card).gridColumnStart : null
       result.phaseFollow = phaseOf(card)
 
-      // ④ 跨格跟手：指针再走一格，格子会跟着换位 ⇒ 卡片**相对屏幕**只该走"指针位移 − 格子位移"，
-      //    同时**其余卡片**要被挤开 —— 那一段必须走 FLIP（R37-P4c），所以在这里顺带量下来。
+      // ③b **连续小步跟手**（真鼠标就是这样动的）：每一步都量误差。
+      //     只抽两点量是不够的 —— 实测踩过：跨格那一帧补偿正确、**下一帧**补偿丢了，
+      //     于是卡片在"正确位置"与"差一整格"之间来回跳（用户原话：「每一点移动都像在
+      //     吸附不同的网格」）。这里把误差变成逐步数字，任何一步超 2px 都算不跟手。
+      //
+      //     ⚠️ 这一段**放在退避检查之后**（见下）：它会顺路挤开邻居、把 FLIP 状态搅乱，
+      //     放在前面会让"让位/归位"那两条断言变成看运气（实测踩到过）。
+      const continuousFollow = async () => {
+        const steps: Record<string, unknown>[] = []
+        let maxErr = 0
+        // 期望值以**这一段的起点**为基准（而不是拖动开始前）：进编辑态时画布上方可能
+        // 出现/消失一行提示 —— 那会把整块网格推下去。跟手是"相对指针"的，基准必须是本段起点；
+        // "进编辑态不许推动画布"另有一条独立断言（见下）。
+        const segStart = centerOf(card)
+        for (let i = 1; i <= 12; i += 1) {
+          await moveTo(px + 8, py + 3, 30)
+          const now = centerOf(card)
+          const want = segStart
+            ? { x: segStart.x + i * 8, y: segStart.y + i * 3 }
+            : null
+          const errX = now && want ? Math.round((now.x - want.x) * 10) / 10 : null
+          const errY = now && want ? Math.round((now.y - want.y) * 10) / 10 : null
+          const e = Math.max(Math.abs(errX ?? 0), Math.abs(errY ?? 0))
+          maxErr = Math.max(maxErr, e)
+          if (i === 1 || i === 12 || e > 2) {
+            steps.push({
+              i, errX, errY,
+              col: card ? getComputedStyle(card).gridColumnStart : null,
+              inline: inlineTransformOf(card),
+            })
+          }
+        }
+        return { maxErr: Math.round(maxErr * 10) / 10, samples: steps }
+      }
+      // **进编辑态不许推动画布**：长按拾起会把界面带进编辑态，若这时上方多出一行提示，
+      // 整块网格会当场下移（用户看到的就是"卡片跳了一下"）。这里量画布上缘。
+      result.gridTop = {
+        before: gridTopBefore,
+        after: grid ? Math.round(grid.getBoundingClientRect().top) : null,
+      }
+
+      // ④ 跨格跟手：指针**再往前**走一格，格子会跟着换位 ⇒ 卡片**相对屏幕**只该走
+      //    "指针位移 − 格子位移"（≡ 指针位移），同时**其余卡片**要被挤开 —— 那一段必须走
+      //    FLIP（R37-P4c），所以在这里顺带量下来。
+      //    （这一段之前卡片一直在原格附近，所以这次跨格**必然**产生一次新的挤压。）
       const c3 = centerOf(card)
       const stepX = Math.round(colW + gap)
-      grid.dispatchEvent(new PointerEvent('pointermove',
-        at(from.x + 30 + stepX, from.y + 30)))
-      await sleep(150)
-      await frame()
+      await moveTo(px + stepX, py, 150)
       const c4 = centerOf(card)
       result.crossCell = {
         pointerDx: stepX,
@@ -2700,9 +2750,7 @@ export async function runUiProbe(): Promise<void> {
       //     那样"挪回去"算出来的补偿量是 0 —— 测的就不是归位了。
       settleTransforms()
       await frame()
-      grid.dispatchEvent(new PointerEvent('pointermove', at(from.x + 30, from.y + 30)))
-      await sleep(160)
-      await frame()
+      await moveTo(px - stepX, py, 160)
       result.flipBack = cardEls()
         .filter((c) => c !== card)
         .map((c) => ({
@@ -2711,8 +2759,11 @@ export async function runUiProbe(): Promise<void> {
           dur: getComputedStyle(c).transitionDuration,
         }))
 
+      // ④c 连续小步跟手（放在让位/归位之后：它会把邻居的 FLIP 状态搅乱）
+      result.followSteps = await continuousFollow()
+
       // ⑤ 抬手落位 → 收尾（探针等到收敛之后再量，避免量到过渡中间态）
-      const up = at(from.x + 30 + stepX, from.y + 30)
+      const up = at(px, py)
       grid.dispatchEvent(new PointerEvent('pointerup', { ...up, buttons: 0 }))
       await sleep(90)                              // 等 React 重渲染（state 更新是异步的）
       result.phaseOnUp = phaseOf(card)
@@ -2811,6 +2862,106 @@ export async function runUiProbe(): Promise<void> {
   // 「编辑态删掉一张 → 「+ 添加卡片」菜单里只剩它 → 加回来（默认尺寸、不重叠）→
   //   全部在板上时按钮禁用」。脚本再去后端 `GET /vtuber/{id}/profile-cards` 对账 ——
   // 只看 DOM 的话「界面上删了但库里还在」照样绿。
+  // 拖动**轨迹**诊断（`?probe=motion-trace`，配 `ui_probe.py --motion-trace`）：
+  // 模拟真鼠标那样**小步连续移动**（每次 8px），逐步量「卡片中心的实际位置 vs 期望位置」。
+  // 跟手正确时误差应当恒 ≤2px；若误差在 0 与 ±一格之间来回跳，就是"逐格吸附"那种闪动。
+  // 同时记下模型格位、DOM 顺序、卡片上的动画实例数 —— 这三样能把嫌疑分开：
+  //   · 误差 ≈ ±格距        ⇒ 跟手位移没跟上/被 FLIP 又补了一次
+  //   · DOM 顺序在变        ⇒ React 重排节点，正在跑的过渡会被浏览器取消（看着就是闪）
+  //   · 动画实例数在涨不落   ⇒ 过渡被反复重启
+  if (mode === 'motion-trace') {
+    const result: Record<string, unknown> = {}
+    const rows: Record<string, unknown>[] = []
+    const waitFor = async (fn: () => unknown, ms = 8000) => {
+      const t0 = performance.now()
+      while (performance.now() - t0 < ms) {
+        const v = fn()
+        if (v) return v
+        await sleep(60)
+      }
+      return null
+    }
+    const frame = (ms = 200) => Promise.race([
+      new Promise<void>((r) => requestAnimationFrame(() => r())),
+      sleep(ms),
+    ])
+    const boardEl = () => document.querySelector<HTMLElement>('[data-board]')
+    const cardsInOrder = () => [...document.querySelectorAll<HTMLElement>('.pcard')]
+    const centerOf = (el: Element | null) => {
+      if (!el) return null
+      const r = el.getBoundingClientRect()
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+    }
+    ;[...document.querySelectorAll<HTMLButtonElement>('.view-btn')]
+      .find((b) => (b.title || '').startsWith('档案视图'))?.click()
+    await waitFor(() => boardEl())
+    await sleep(300)
+    // 进编辑态（按下即拖），把"长按等待"这一段排除在诊断之外
+    ;[...document.querySelectorAll<HTMLButtonElement>('.board-btn')]
+      .find((b) => (b.textContent || '').includes('编辑布局'))?.click()
+    await sleep(250)
+
+    const grid = boardEl()
+    const card = cardsInOrder()[0]
+    const head = card?.querySelector<HTMLElement>('.pcard-head')
+    result.cardKey = card?.getAttribute('data-card-key') ?? null
+    result.orderBefore = cardsInOrder().map((c) => c.getAttribute('data-card-key'))
+
+    if (grid && card && head) {
+      const r = head.getBoundingClientRect()
+      const from = { x: Math.round(r.left + 24), y: Math.round(r.top + 10) }
+      const at = (x: number, y: number, buttons = 1) => ({
+        bubbles: true, cancelable: true, pointerId: 11, pointerType: 'mouse',
+        isPrimary: true, button: 0, buttons, clientX: Math.round(x), clientY: Math.round(y),
+      })
+      const start = centerOf(card)
+      head.dispatchEvent(new PointerEvent('pointerdown', at(from.x, from.y)))
+      await sleep(60)
+      const STEP = 8
+      const N = 26
+      for (let i = 1; i <= N; i += 1) {
+        const px = from.x + i * STEP
+        const py = from.y + i * 3
+        grid.dispatchEvent(new PointerEvent('pointermove', at(px, py)))
+        await sleep(30)
+        await frame()
+        const now = centerOf(card)
+        const want = start ? { x: start.x + i * STEP, y: start.y + i * 3 } : null
+        const cs = card ? getComputedStyle(card) : null
+        rows.push({
+          i,
+          errX: now && want ? Math.round((now.x - want.x) * 10) / 10 : null,
+          errY: now && want ? Math.round((now.y - want.y) * 10) / 10 : null,
+          col: cs?.gridColumnStart ?? null,
+          row: cs?.gridRowStart ?? null,
+          phase: card?.getAttribute('data-card-phase') ?? null,
+          inline: (card as HTMLElement | null)?.style.transform || '',
+          flip: card?.getAttribute('data-flip') ?? null,
+          anims: card ? card.getAnimations().length : 0,
+          order: cardsInOrder().map((c) => c.getAttribute('data-card-key')).join(','),
+        })
+      }
+      grid.dispatchEvent(new PointerEvent('pointerup', at(from.x + N * STEP, from.y + N * 3, 0)))
+      await sleep(500)
+      result.orderAfter = cardsInOrder().map((c) => c.getAttribute('data-card-key'))
+      const errs = rows.map((x) => Math.max(Math.abs(Number(x.errX) || 0), Math.abs(Number(x.errY) || 0)))
+      result.maxErr = Math.max(...errs)
+      result.rowsWithBigErr = rows.filter((x) => Math.max(Math.abs(Number(x.errX) || 0),
+                                                            Math.abs(Number(x.errY) || 0)) > 2).length
+      // ⚠️ 比数组要比**内容**：第一版写成 `orderBefore !== orderAfter`（比引用）⇒ 永远报"变了"
+      result.orderChanged = (result.orderBefore as string[]).join(',')
+        !== (result.orderAfter as string[]).join(',')
+      result.rows = rows
+    }
+
+    const pre = document.createElement('pre')
+    pre.id = 'ui-probe'
+    pre.textContent = JSON.stringify({ mode: 'motion-trace', views: [], degraded, motion: result })
+    document.body.appendChild(pre)
+    document.title = 'UI_PROBE_DONE'
+    return
+  }
+
   if (mode === 'board-cards') {
     const result: Record<string, unknown> = {}
     const waitFor = async (fn: () => unknown, ms = 8000) => {
