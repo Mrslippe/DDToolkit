@@ -657,58 +657,73 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
                 </div>
               )}
 
-              {/* ── 关于（只读：信息 + 逐条理由）──────────────────────── */}
+              {/* ── 关于（只读：信息 + 逐条理由）────────────────────────
+                  R39-B（用户 2026-09-19）：「按钮、信息、小字样有点混在一起了，重新排版」。
+                  统一成**四段同构**的小节：标题 → 信息/数字 → 动作行 → 注释小字。
+                  三条纪律（都有探针断言）：
+                    ① 按钮只出现在动作行里（不夹在信息行或注释里）；
+                    ② 注释小字一律贴小节底；
+                    ③ 版本号全页**只出现一次**（原来信息行与「应用更新」各写一遍）。 */}
               {active === ABOUT_ID && data && (
                 <>
-                  <dl className="aps-info">
-                    <dt>版本</dt><dd>{data.info.version}</dd>
-                    <dt>数据目录</dt>
-                    <dd className="aps-mono" title={data.info.data_dir}>{data.info.data_dir}</dd>
-                    <dt>数据库</dt>
-                    <dd className="aps-mono" title={data.info.database}>{data.info.database}</dd>
-                    <dt>后端端口</dt><dd>{data.info.port ?? '（由启动器分配）'}</dd>
-                    <dt>迁移版本</dt><dd>{data.info.migration_head}</dd>
-                    <dt>日志</dt>
-                    <dd className="aps-mono" title={data.info.log_file}>{data.info.log_file}</dd>
-                    <dt>进程</dt><dd>PID {data.info.pid}</dd>
-                  </dl>
+                  <section className="aps-section" data-testid="aps-about-info">
+                    <h4 className="aps-section-head">运行信息</h4>
+                    <dl className="aps-info">
+                      <dt>版本</dt><dd data-about="version">{data.info.version}</dd>
+                      <dt>数据目录</dt>
+                      <dd className="aps-mono" title={data.info.data_dir}>{data.info.data_dir}</dd>
+                      <dt>数据库</dt>
+                      <dd className="aps-mono" title={data.info.database}>{data.info.database}</dd>
+                      <dt>后端端口</dt><dd>{data.info.port ?? '（由启动器分配）'}</dd>
+                      <dt>迁移版本</dt><dd>{data.info.migration_head}</dd>
+                      <dt>日志</dt>
+                      <dd className="aps-mono" title={data.info.log_file}>{data.info.log_file}</dd>
+                      <dt>进程</dt><dd>PID {data.info.pid}</dd>
+                    </dl>
+                  </section>
 
-                  {/* 存储占用（R22-B）：谁在占地方 + 两个能立刻动手的按钮。
+                  {/* 存储占用（R22-B）：谁在占地方 + 能立刻动手的动作。
                       起因（用户 2026-09-16）："数据放 C 盘会不会挤爆" ——
-                      光显示一个路径不够，得让人**看见数字**、并且能当场清理。 */}
-                  <section className="aps-storage" data-testid="aps-storage">
+                      光显示一个路径不够，得让人**看见数字**、并且能当场清理。
+                      R39-B 起：占用三项 / （分隔线）合计与余量 / 动作行 / 注释，四段分明。 */}
+                  <section className="aps-section" data-testid="aps-storage">
                     <h4 className="aps-section-head">存储占用</h4>
                     {storage ? (
                       <>
-                        <dl className="aps-info" data-storage-rows="1">
+                        <dl className="aps-info aps-info--nums" data-storage-rows="1">
                           <dt>数据库</dt>
-                          <dd data-storage="database">{formatBytes(storage.groups.database.bytes)}</dd>
+                          <dd data-storage="database">
+                            <span>{formatBytes(storage.groups.database.bytes)}</span>
+                          </dd>
                           <dt>图片缓存</dt>
                           <dd data-storage="img_cache">
-                            {formatBytes(storage.groups.img_cache.bytes)}
+                            <span>{formatBytes(storage.groups.img_cache.bytes)}</span>
                             <span className="aps-storage-cap">
-                              （上限 {formatBytes(storage.img_cache_max_bytes)}）
+                              上限 {formatBytes(storage.img_cache_max_bytes)}
                             </span>
                           </dd>
                           <dt>日志</dt>
-                          <dd data-storage="logs">{formatBytes(storage.groups.logs.bytes)}</dd>
+                          <dd data-storage="logs">
+                            <span>{formatBytes(storage.groups.logs.bytes)}</span>
+                          </dd>
+                        </dl>
+                        {/* 合计与磁盘剩余是**另一类**数字（一个是"占了多少"，一个是"还剩多少"），
+                            用一条通栏发丝线隔开；不断在占用行里冒充第四项。 */}
+                        <dl className="aps-info aps-info--nums aps-info--sep">
                           <dt>合计</dt>
-                          <dd data-storage="total">{formatBytes(storage.total_bytes)}</dd>
+                          <dd data-storage="total" className="aps-info-strong">
+                            <span>{formatBytes(storage.total_bytes)}</span>
+                          </dd>
                           <dt>磁盘剩余</dt>
                           <dd data-storage="free" data-low-space={storage.low_space ? '1' : '0'}>
-                            {formatBytes(storage.disk.free)}
+                            <span className={storage.low_space ? 'aps-info-strong' : undefined}>
+                              {formatBytes(storage.disk.free)}
+                            </span>
                             {storage.low_space && (
                               <em className="aps-storage-warn">空间偏紧</em>
                             )}
                           </dd>
                         </dl>
-                        {storage.stale_backups.length > 0 && (
-                          <p className="aps-note" data-storage="stale">
-                            另有手工备份 {storage.stale_backups.map((b) => b.name).join('、')}
-                            （{formatBytes(storage.stale_backups.reduce((n, b) => n + b.bytes, 0))}）——
-                            它不是程序生成的，确认没用可以自己删掉。
-                          </p>
-                        )}
                         <div className="aps-storage-actions">
                           <FloatPill
                             size="md" shape="text"
@@ -737,7 +752,25 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
                               {migrateBusy ? '迁移中…' : '迁移到其他盘…'}
                             </FloatPill>
                           )}
+                          {/* 旧目录清理（R39-B）：原来是**夹在注释小字里的一个按钮** ——
+                              按"按钮只在动作行"的纪律收到这里 */}
+                          {oldDir && (
+                            <FloatPill
+                              size="md" shape="text"
+                              disabled={storageBusy !== null}
+                              onClick={() => void doDeleteOld()}
+                            >
+                              删除旧目录
+                            </FloatPill>
+                          )}
                         </div>
+                        {storage.stale_backups.length > 0 && (
+                          <p className="aps-note" data-storage="stale">
+                            另有手工备份 {storage.stale_backups.map((b) => b.name).join('、')}
+                            （{formatBytes(storage.stale_backups.reduce((n, b) => n + b.bytes, 0))}）——
+                            它不是程序生成的，确认没用可以自己删掉。
+                          </p>
+                        )}
                         {shellDir && (
                           <p className="aps-note" data-dir-source={shellDir.source}>
                             数据目录来源：
@@ -746,21 +779,15 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
                               && '（便携/自定义安装：把整个文件夹搬走即可，应用内不迁移）'}
                           </p>
                         )}
+                        {oldDir && (
+                          <p className="aps-note" data-old-dir={oldDir}>
+                            旧目录仍保留：<span className="aps-mono">{oldDir}</span>
+                            {' '}（确认新目录一切正常后，用上面的「删除旧目录」删掉）
+                          </p>
+                        )}
                         {shellDir?.pointerUnusable && (
                           <p className="aps-field-error" data-dir-fallback="1">
                             迁移记录不可用，当前已回退默认目录：{shellDir.pointerUnusable}
-                          </p>
-                        )}
-                        {oldDir && (
-                          <p className="aps-note" data-old-dir={oldDir}>
-                            旧目录仍保留：<span className="aps-mono">{oldDir}</span>{' '}
-                            <FloatPill size="sm" shape="text"
-                                       onClick={() => void doDeleteOld()}>
-                              删除旧目录
-                            </FloatPill>
-                            <span className="aps-storage-cap">
-                              （确认新目录一切正常后再删）
-                            </span>
                           </p>
                         )}
                       </>
@@ -770,12 +797,12 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
                   </section>
 
                   {/* 应用更新（R23b）：桌面端才给「检查更新」；**便携版不自我更新**
-                      （解压即用的目录不该被安装器覆盖，只提示去发布页下新版压缩包）。 */}
-                  <section className="aps-update" data-testid="aps-update">
+                      （解压即用的目录不该被安装器覆盖，只提示去发布页下新版压缩包）。
+                      R39-B：不再重复版本号（上面「运行信息」已说一次），这里只说**状态**。 */}
+                  <section className="aps-section" data-testid="aps-update">
                     <h4 className="aps-section-head">应用更新</h4>
                     <p className="aps-note">
-                      当前版本 <b>{data.info.version}</b>
-                      {!isShell && ' · 更新只在桌面端可用'}
+                      {isShell ? '检查是否有新版本' : '更新只在桌面端可用'}
                     </p>
                     {isShell && (
                       <>
@@ -839,17 +866,22 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
                       </>
                     )}
                   </section>
-                  <ul className="aps-readonly-list">
-                    {data.readonly.map((r) => (
-                      <li key={r.key} className="aps-readonly-item">
-                        <span className="aps-readonly-key">{r.label}</span>
-                        <span className="aps-readonly-why">
-                          <Info className="size-[12px]" /> {r.why}
-                        </span>
-                        <code className="aps-readonly-code">{r.key}</code>
-                      </li>
-                    ))}
-                  </ul>
+                  {/* 只读项（R39-B）：原来裸挂在小节流之外（没有标题），
+                      看着像"关于页还没结束又来了几行" —— 给它一个头，与前三段同构 */}
+                  <section className="aps-section" data-testid="aps-readonly">
+                    <h4 className="aps-section-head">这些项不开放修改</h4>
+                    <ul className="aps-readonly-list">
+                      {data.readonly.map((r) => (
+                        <li key={r.key} className="aps-readonly-item">
+                          <span className="aps-readonly-key">{r.label}</span>
+                          <span className="aps-readonly-why">
+                            <Info className="size-[12px]" /> {r.why}
+                          </span>
+                          <code className="aps-readonly-code">{r.key}</code>
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
                 </>
               )}
 

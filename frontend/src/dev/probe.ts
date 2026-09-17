@@ -1964,6 +1964,35 @@ export async function runUiProbe(): Promise<void> {
         .filter((n) => text(n).length > 6).length
       result.aboutInfoRows = dlg.querySelectorAll('.aps-info dt').length
       result.aboutHasWriteInputs = dlg.querySelectorAll('.aps-input, .aps-switch').length
+      /** ── 「关于」页排版（R39-B，用户 2026-09-19：按钮/信息/小字混在一起）──────────
+       *  这几条都是"看着乱、但很难举证"的：版本重复两遍、按钮夹在信息行里、
+       *  注释小字插在数字与按钮之间、数值列不对齐。全部变成可量的。 */
+      const aboutPane = paneOf()
+      const aboutText = text(aboutPane)
+      /** 版本号出现次数：按"版本形状"的数（`1.0.2`）数，不依赖任何属性 ——
+       *  这样即使实现还没加钩子，判据也有牙（量到 2 次就是"重复了"）。 */
+      result.aboutVersionCount = (aboutText.match(/\b\d+\.\d+\.\d+\b/g) || []).length
+      result.aboutVersions = aboutText.match(/\b\d+\.\d+\.\d+\b/g) || []
+      result.aboutInfoButtons = dlg.querySelectorAll('.aps-info button, .aps-note button').length
+      result.aboutSectionHeads = [...dlg.querySelectorAll('.aps-section-head')]
+        .map((n) => text(n))
+      const storageSec = dlg.querySelector<HTMLElement>('[data-testid="aps-storage"]')
+      result.aboutStorageOrder = storageSec
+        ? [...storageSec.children].map((n) => (n.className || '').split(' ')[0])
+        : []
+      const numDd = dlg.querySelector<HTMLElement>('[data-storage="img_cache"]')
+      if (numDd) {
+        const cs = getComputedStyle(numDd)
+        result.aboutNumAlign = {
+          display: cs.display,
+          justify: cs.justifyContent,
+          tabular: cs.fontVariantNumeric,
+        }
+      }
+      const sep = dlg.querySelector<HTMLElement>('.aps-info--sep')
+      result.aboutSepBorder = sep
+        ? parseFloat(getComputedStyle(sep).borderTopWidth) || 0
+        : null
       // 应用更新面板（R23b/R24）：**浏览器里没有更新这回事** ⇒ 面板要在（说明当前版本），
       // 但**不许出现「检查更新」按钮**（会点出一个必然失败的请求）。这条判据挡的是
       // "忘记做环境判断、把桌面端按钮渲染到浏览器里"。

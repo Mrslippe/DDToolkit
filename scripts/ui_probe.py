@@ -1583,6 +1583,50 @@ def main() -> int:
                     if aps.get("aboutHasWriteInputs"):
                         failures.append(f"@{w} app-settings: 关于页出现了可写控件"
                                         f"（{aps.get('aboutHasWriteInputs')} 个）—— 只读页不该有输入框")
+                    # ── 关于页排版（R39-B）：这几条都是"看着乱但很难举证"的 ──
+                    vc = aps.get("aboutVersionCount")
+                    if vc is None:
+                        failures.append(f"@{w} app-settings: 量不到关于页的版本号出现次数")
+                    elif vc != 1:
+                        failures.append(f"@{w} app-settings: 版本号在关于页出现 {vc} 次"
+                                        f"（{aps.get('aboutVersions')}）—— 应只出现 1 次："
+                                        f"信息行里说一次就够，「应用更新」小节不该再重复一遍")
+                    if aps.get("aboutInfoButtons"):
+                        failures.append(f"@{w} app-settings: 有 {aps.get('aboutInfoButtons')} 个按钮"
+                                        f"夹在信息行/注释里 —— 按钮应当统一收到小节底部的动作行")
+                    heads = aps.get("aboutSectionHeads") or []
+                    if len(heads) < 3:
+                        failures.append(f"@{w} app-settings: 关于页只有 {len(heads)} 个小节标题"
+                                        f"（{heads}）—— 运行信息 / 存储占用 / 应用更新 三段都要有头")
+                    order = aps.get("aboutStorageOrder") or []
+                    if order:
+                        want = ["aps-section-head", "aps-info", "aps-info", "aps-storage-actions"]
+                        if order[:4] != want:
+                            failures.append(f"@{w} app-settings: 存储占用小节的子元素顺序是 {order}，"
+                                            f"应以 {want} 开头（标题 → 占用数字 → 分隔后的合计/余量 → 动作行）")
+                        # 小字一律在动作行**之后**（不夹在数字与按钮之间）。
+                        # 不断言"最后一项必须是 note"：有没有注释取决于数据（手工备份/便携版…），
+                        # 那会让判据随数据漂 —— 顺序关系才是契约。
+                        if "aps-note" in order and "aps-storage-actions" in order \
+                                and order.index("aps-note") < order.index("aps-storage-actions"):
+                            failures.append(f"@{w} app-settings: 存储占用小节里有注释小字排在动作行"
+                                            f"**之前**（{order}）—— 小字统一贴小节底，"
+                                            f"不夹在数字与按钮之间")
+                    na = aps.get("aboutNumAlign") or {}
+                    if na:
+                        if na.get("display") != "flex" or na.get("justify") != "space-between":
+                            failures.append(f"@{w} app-settings: 存储数值列不是「数值 | 上限」两端对齐"
+                                            f"（display={na.get('display')!r} "
+                                            f"justify={na.get('justify')!r}）")
+                        if "tabular-nums" not in (na.get("tabular") or ""):
+                            failures.append(f"@{w} app-settings: 存储数值没有用等宽数字"
+                                            f"（{na.get('tabular')!r}）—— 三行数字对不齐")
+                    sep = aps.get("aboutSepBorder")
+                    if sep is None:
+                        failures.append(f"@{w} app-settings: 找不到「合计」前的分隔（`.aps-info--sep`）")
+                    elif sep <= 0:
+                        failures.append(f"@{w} app-settings: 「合计 / 磁盘剩余」与上面的占用之间"
+                                        f"没有分隔线（border-top={sep}px）")
                     # 应用更新面板（R23b/R24）：面板要在（显示当前版本），但**浏览器里不许
                     # 出现「检查更新」按钮** —— 那会点出一个必然失败的请求（探针跑在无头浏览器）
                     if not aps.get("updatePanel"):
