@@ -129,8 +129,12 @@ def test_index_origin_row_is_not_adoptable_via_pool_path(monkeypatch):
         return None
     monkeypatch.setattr(router_mod, "_adopt_background", noop_background)
 
-    with TestClient(app) as client:
-        r = client.post("/vtuber/adopt", json={"platform": "bilibili", "platform_uid": uid})
+    # ⚠️ **不要**写成 `with TestClient(app)`：那会跑应用 lifespan ⇒ **启动调度器**，
+    # 后台轮次抓住 `scheduler._fetch_lock` 不放，泄漏给后面所有"手动/自动让位"用例
+    # （2026-09-17 实测：R37-P2 批次里 7 条锁用例连带变红，日志是"上一次抓取仍在进行中，已跳过"）。
+    # 本用例只要 HTTP 层（且 404 在碰库之前就返回），不需要启动流程。
+    client = TestClient(app)
+    r = client.post("/vtuber/adopt", json={"platform": "bilibili", "platform_uid": uid})
     assert r.status_code == 404
     assert "source='bilibili'" in r.json()["detail"], \
         "404 文案要指路（用户唯一能看懂的线索）"

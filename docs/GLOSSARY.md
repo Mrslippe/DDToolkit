@@ -3,7 +3,7 @@
 > **用途**：改 bug / 做需求时快速定位「这个词在代码里叫什么、在哪个文件、牵动谁」。
 > **用法**：`Ctrl+F` 搜中文词或英文标识符；每行是「术语 · 含义 · 代码位置 · 关联」。
 > **与 `ARCHITECTURE.md` 的分工**：架构文档讲「为什么这样设计」，本文讲「这东西在哪、改它要动谁」。
-> 适用版本：`main`（2026-09-17，`MIGRATION_HEAD = f005`）。
+> 适用版本：`main`（2026-09-17，`MIGRATION_HEAD = f006`）。
 
 **目录**：§1 领域名词 · §2 数据模型与字段 · §3 抓取与调度 · §4 认证与凭据 ·
 §5 前端与界面 · §6 工程与流程 · §7 配置项速查 · §8 不变量与常见坑 · §9 需求 → 代码入口。
@@ -48,7 +48,7 @@
 | **池外收录校验** | `source='bilibili'` 时服务端必须自己打一次 `acc/info` 校验，客户端给的名字不算数 | `routers/vtuber.py::adopt_vtuber` | 非 bilibili 平台走池外 → 400；"确实没这个人" → 404，"没问到"（未登录/网络/风控）→ **503** |
 | **收录 / adopt** | 把 V+账号入库，并立刻抓账号信息 + **首屏内容** + 回填第三方历史 | `routers/vtuber.py::adopt_vtuber`、**`_adopt_background`** | 添加账号走同款（只抓新账号） |
 | **收录首屏 / first screen** | 新账号立刻抓到的第一屏内容（投稿 1 页 + 动态 1 页限 3 条） | `scheduler.async_fetch_first_screen` | v0.9.4，devlog/044 |
-| **解除订阅 / unsubscribe** | 删 V：清帖子 + 5 张子表 + 活动条目，再级联删账号 | `routers/vtuber.py::delete_vtuber`；**`services/purge.py`** | 外键全开，漏清即回滚 |
+| **解除订阅 / unsubscribe** | 删 V：清帖子 + 5 张子表 + 活动条目 + 卡片布局（f006），再级联删账号 | `routers/vtuber.py::delete_vtuber`；**`services/purge.py`** | 外键全开，漏清即回滚 |
 | **回填 / backfill** | 用第三方数据补历史（粉丝/场次/正文/时间） | `externals/runner.run_external_interval(account_ids=…)`；`scripts/backfill_*.py` | 收录时按账号白名单回填 |
 | **重要日期 / 活动** | 手动维护的纪念日/活动条目 | `models/vtuber.py::VtuberEvent`；`VtuberEventRepo` | 前端 `vtuber_events` 增删 |
 | **预约 / reservation** | 动态里的直播预约（未来场次） | `fetcher._extract_reservation`；`VtuberEventRepo.future_reservations` | `body_json.reservation` |
@@ -61,9 +61,10 @@
 
 ## 2. 数据模型与字段
 
-**11 张表**：`vtubers` / `accounts` / `posts` / `account_stat_snapshots` / `live_sessions` /
+**12 张表**：`vtubers` / `accounts` / `posts` / `account_stat_snapshots` / `live_sessions` /
 `live_gift_days` / `live_category_overrides` / `vtuber_events` / `thirdparty_vtubers` /
-`app_meta`（通用 KV，f003）/ `vtuber_field_history`（曾用名·曾用签名，f004）。
+`app_meta`（通用 KV，f003）/ `vtuber_field_history`（曾用名·曾用签名，f004）/
+`profile_cards`（档案视图卡片布局，f006）。
 列级定义见 `docs/backend-repositories-and-routers.md` §1；ER 图见 `docs/ARCHITECTURE.md` §2。
 
 | 字段/术语 | 含义 | 写入方 | 关联 |
@@ -175,7 +176,7 @@
 
 | 术语 | 含义 | 代码位置 | 关联 |
 |---|---|---|---|
-| **迁移链 / MIGRATION_HEAD** | alembic `a001→f005`（18 个版本）；`MIGRATION_HEAD` 必须同步 | `alembic/versions/`、`app/main.py::MIGRATION_HEAD` | 测试断言一致 |
+| **迁移链 / MIGRATION_HEAD** | alembic `a001→f006`（19 个版本）；`MIGRATION_HEAD` 必须同步 | `alembic/versions/`、`app/main.py::MIGRATION_HEAD` | 测试断言一致 |
 | **一键发布 / release.py** | 十步发布编排：预检→版本同步→门禁→打版→产物校验→提交/tag→推送→Release→报告 | `scripts/release.py`；手册 `docs/RELEASE.md`；上传 `scripts/upload_release_assets.py`（幂等） | 守卫：工作树脏/notes 缺失/版本不递增/NSIS 打平/**文档漂移**/tag 冲突 → 停；`--dry-run`、`--from <步骤>` 续跑；推完自动对齐本地 `origin/<分支>` tracking ref（按 URL 推送不会自动更新它） |
 | **端到端上游冒烟 / smoke_upstream** | 数据目录副本 + 真后端 + 真上游，跑"只有真环境才暴露"的链路（B 站检索 / uid 直查 / 池外收录 / 场次上游） | `scripts/smoke_upstream.py`（`--cold` = 空数据目录 + 清空凭据）；`dev_check.py --upstream` | `--capture` 顺带刷新真实 fixtures；skip 必须打印原因，不冒充通过 |
 | **真实 fixtures** | 真上游回包 / 真 `installer.nsi` 片段 / 真索引条目 —— 判据的"真形状"依据 | `tests/fixtures/`（`smoke_upstream.py --capture` 生成）；用例 `tests/test_real_fixtures.py` | 规矩：**新判据至少一条用例吃真实数据**（§8 第 13 条） |

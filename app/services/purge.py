@@ -17,6 +17,7 @@
 | live_category_overrides | account_id | 分类校正 |
 | vtuber_field_history | account_id | 曾用名/曾用签名（f004 起；account_id 可空，删 V 时另按 vtuber_id 清） |
 | vtuber_events | vtuber_id | 手动活动条目 |
+| profile_cards | vtuber_id | 档案视图的卡片布局（f006 起，R37-P2） |
 
 **不提交**：由调用方在同一事务里 commit（失败可整体回滚，避免删一半）。
 """
@@ -29,6 +30,7 @@ from app.repositories.vtuber_repo import (
     LiveGiftDayRepo,
     LiveSessionRepo,
     PostRepo,
+    ProfileCardRepo,
     VtuberEventRepo,
     VtuberFieldHistoryRepo,
 )
@@ -56,6 +58,8 @@ def purge_vtuber(db: Session, vtuber: VTuber) -> dict[str, int]:
     """
     counts: dict[str, int] = {
         "events": VtuberEventRepo(db).delete_by_vtuber(vtuber.id),
+        # R37-P2（f006）：档案视图的卡片布局也挂 vtuber 外键 —— 漏清会让删 V 整次回滚
+        "profile_cards": ProfileCardRepo(db).delete_by_vtuber(vtuber.id),
         # account_id 可为 NULL 的行不会被 purge_account 覆盖，必须按 vtuber 再清一遍
         "field_history": VtuberFieldHistoryRepo(db).delete_by_vtuber(vtuber.id),
     }

@@ -1,9 +1,9 @@
 # 后端架构总览：数据模型 + 抓取技术架构
 
-> 适用版本：`main`（2026-09-17，`MIGRATION_HEAD = f005`）。
+> 适用版本：`main`（2026-09-17，`MIGRATION_HEAD = f006`）。
 > 本文是**入口文档**：先看这里建立全貌，再按需进两份深度文档——
 > - `docs/GLOSSARY.md`：**查名词/代码路径**（改 bug 或做需求第一步）；
-> - `docs/backend-repositories-and-routers.md`：11 张表的列级定义、11 个仓储类、HTTP 路由计数（三种数法见该文 §3）；
+> - `docs/backend-repositories-and-routers.md`：12 张表的列级定义、12 个仓储类、HTTP 路由计数（三种数法见该文 §3）；
 > - `docs/backend-fetch-pipeline.md`：抓取链路细节（API 清单、节流测算、风控判定、停止原因）。
 > 前端形态见 `docs/UI-MAP.md`；本地开发/验证见 `docs/DEV-LOOP.md`；全部文档索引见 `docs/README.md`。
 
@@ -37,7 +37,7 @@ flowchart TB
     APP --> AUTH["auth 维护协程<br/>B 站 cookie 续期"]
   end
 
-  S --> DB[("SQLite vtuber.db（WAL）<br/>11 张表 / alembic a001→f005")]
+  S --> DB[("SQLite vtuber.db（WAL）<br/>12 张表 / alembic a001→f006")]
   S --> FS["DATA_DIR/static：头像 / 自定义背景 / 图片代理缓存"]
   HTTP --> UI["前端 Vite + React（只读渲染 + 轮询 fetch-status）"]
 ```
@@ -61,7 +61,7 @@ tenacity / httpx / fetcher），经 `_sched()` 缓存包装首次调用才导入
 
 ---
 
-## 2. 数据模型（11 张表 · 迁移链 a001 → f005）
+## 2. 数据模型（12 张表 · 迁移链 a001 → f006）
 
 ### 2.1 ER 总览
 
@@ -191,9 +191,10 @@ erDiagram
 | `d002` | `vtubers.background_path` | `e006` | `live_sessions` |
 | `f001` | `posts.note`（投稿动态并入后的 UP 主附言） | `e007` | `live_category_overrides` |
 | `f002` | `accounts.sort_order` + `accounts.locked_fields`（后者 f004 已删） | `f003` | `app_meta`（KV 表） |
-| `f004` | `vtubers.sign_override / sign_source_account_id` + `vtuber_field_history`，**删除 `accounts.locked_fields`**（devlog/074） | `f005` | 置顶动态：`posts.is_pinned / pinned_refreshed_at` + 索引 `ix_posts_platform_uid_pinned` = **当前 head**（devlog/139） |
+| `f004` | `vtubers.sign_override / sign_source_account_id` + `vtuber_field_history`，**删除 `accounts.locked_fields`**（devlog/074） | `f005` | 置顶动态：`posts.is_pinned / pinned_refreshed_at` + 索引 `ix_posts_platform_uid_pinned`（devlog/139） |
+| `f006` | 档案视图卡片布局：建 `profile_cards`（**12 张表**）= **当前 head**（devlog/142） | | |
 
-> 共 **18** 个版本（`alembic/versions/` 实际文件数：`a001`–`f005`）。f001–f003 由 v0.9.6–v0.9.8 批次引入，f004 见 devlog/074、f005 见 devlog/139。
+> 共 **19** 个版本（`alembic/versions/` 实际文件数：`a001`–`f006`）。f001–f003 由 v0.9.6–v0.9.8 批次引入，f004 见 devlog/074、f005 见 devlog/139、f006 见 devlog/142。
 
 启动迁移四形态（`app/main.py::_run_migrations`，冷启动快路径）：
 
@@ -630,7 +631,7 @@ flowchart LR
 
 1. **库内时间一律 naive UTC**，输出补 `+00:00`；
 2. **posts 无外键**——删除 V / 账号必须走 `app/services/purge.py`（帖子按 platform+uid，
-   5 张子表按 account_id，活动条目与曾用值按 vtuber_id），漏清一张就会被 `foreign_keys=ON`
+   6 张子表按 account_id（f006 起含 `profile_cards` 之外的五张），活动条目 / 曾用值 / 卡片布局按 vtuber_id），漏清一张就会被 `foreign_keys=ON`
    整次回滚（v0.9.3 修复的事故；f004 的 `vtuber_field_history` 两个外键都有，删 V 必须再按
    `vtuber_id` 清一遍——`account_id=NULL` 的行按 account 清不到）；
 3. **新增迁移必须同步 `MIGRATION_HEAD`**（测试断言与 alembic head 一致）；
@@ -673,7 +674,7 @@ flowchart LR
 |---|---|
 | 接入新平台（抖音/小红书…） | 继承 `platforms/base.py::BasePlatform` → `platforms/registry.py` 注册 → 前端平台常量；调度器自动接管 |
 | 接入新第三方源 | 实现 `externals/base.py::ExternalSource` → `externals/__init__.py` 注册（声明 `jobs` 与周期） |
-| 新增表/列 | 新建 `alembic/versions/{fNNN}_*.py`（编号按**实际实施顺序**顺延，当前 head `f005` = 置顶动态 `posts.is_pinned / pinned_refreshed_at`）→ 同步 `MIGRATION_HEAD` → 补 `models` 与 Repo → 若挂 `accounts/vtubers` 外键，**同步 `services/purge.py`** |
+| 新增表/列 | 新建 `alembic/versions/{fNNN}_*.py`（编号按**实际实施顺序**顺延，当前 head `f006` = 档案视图卡片布局 `profile_cards`）→ 同步 `MIGRATION_HEAD` → 补 `models` 与 Repo → 若挂 `accounts/vtubers` 外键，**同步 `services/purge.py`** |
 | 用户手改的字段被抓取覆盖 | **不再需要锁定**（`accounts.locked_fields` 已随 f004 删除）：抓取照常覆盖，覆盖前把旧值写进 `services/vtuber_history.py::record_field_change()`。⚠️ 记录只在**平台侧覆盖前**发生（手改不入账，devlog/075）；展示暂缓 —— 归入「账号信息历史快照」那条线（§TODO R9） |
 | 调整抓取频率/节流 | `app/core/config.py`（T0-T4 周期、请求间隔、批量休息、风控冷却） |
 | 新增前端视图 | `docs/UI-MAP.md`（右栏视图光条 + 场景状态机） |

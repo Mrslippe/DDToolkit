@@ -173,11 +173,11 @@ Windows 桌面应用，数据全部在本地 SQLite 里，不经过任何服务�
 ├─ app/               后端源码（FastAPI 分层）
 │  ├─ routers/        HTTP 路由层（vtuber / auth / img_proxy / settings；计数口径见 docs/backend-repositories-and-routers.md §3）
 │  ├─ repositories/   SQL 访问层（11 个仓库类，ORM 不泄漏到路由）
-│  ├─ models/         SQLAlchemy ORM（11 张表：vtubers / accounts / posts / 快照 / 场次 / app_meta / 曾用值 …）
+│  ├─ models/         SQLAlchemy ORM（12 张表：vtubers / accounts / posts / 快照 / 场次 / app_meta / 曾用值 / 卡片布局 …）
 │  ├─ schemas/        Pydantic 输入输出模型
 │  ├─ services/       抓取调度（T0–T4 分层）、平台接入、第三方源、认证、WBI、类型引擎、数据库维护
 │  └─ core/           配置（数据目录 / 环境变量）、数据库引擎与 PRAGMA
-├─ alembic/           数据库迁移链（a001 → f005，18 个版本，启动时自动升级）
+├─ alembic/           数据库迁移链（a001 → f006，19 个版本，启动时自动升级）
 ├─ tests/             pytest 测试（用例基线见 docs/TODO.md §6.2）
 ├─ scripts/           维护与构建脚本（dev_check / ui_probe / doc_check / build_backend / collect_release 等）
 ├─ devlog/            开发日志（按批次一篇，当前 001–118）
@@ -241,7 +241,7 @@ Rust 子进程由 [Job Object 看门狗](frontend/src-tauri/src/lib.rs) 管理�
 |---|---|
 | `docs/GLOSSARY.md` | **术语表**：名词 → 含义 → 代码路径 → 依赖（改 bug / 做需求先查这里） |
 | `docs/ARCHITECTURE.md` | **架构总览**：运行时形态 / 数据模型（11 表）/ 抓取分层与优先级 / 数据来源地图 / 不变量 |
-| `docs/backend-repositories-and-routers.md` | 表结构 · 11 个 Repository · HTTP 路由计数（三种数法见该文 §3） |
+| `docs/backend-repositories-and-routers.md` | 表结构 · 12 个 Repository · HTTP 路由计数（三种数法见该文 §3） |
 | `docs/backend-fetch-pipeline.md` | 抓取链路详解（频率 / API 清单 / 风控判定 / 节流测算） |
 | `docs/FRONTEND-ARCH.md` | 前端分层、数据流与 hooks |
 | `docs/UI-MAP.md` | 界面与路由映射（类名 / 设计令牌 / 动效） |

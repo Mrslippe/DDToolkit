@@ -280,7 +280,7 @@ def test_get_settings_exposes_specs_and_readonly_info(client):
     # 只读分区：版本/数据目录/端口/迁移 head 都要如实给出来
     info = body["info"]
     assert info["version"] == settings.VERSION
-    assert info["migration_head"] == "f005"
+    assert info["migration_head"] == "f006"
     assert info["data_dir"] and info["database"]
     assert body["readonly"] and all(r.get("why") for r in body["readonly"])
 

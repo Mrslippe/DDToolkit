@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.models.vtuber import (VTuber, Account, Post, AccountStatSnapshot,
                                LiveGiftDay, ThirdpartyVtuber, VtuberEvent,
                                LiveSession, LiveCategoryOverride, AppMeta,
-                               VtuberFieldHistory)
+                               VtuberFieldHistory, ProfileCard)
 from app.services.live_type import normalize_title
 
 logger = logging.getLogger(__name__)
@@ -1123,6 +1123,60 @@ def _normalize_reserve_title(title: str) -> str:
     if "|" in title:
         return title.split("|", 1)[1].strip()
     return title.replace("直播预约", "", 1).strip() if title.startswith("直播预约") else title
+
+
+class ProfileCardRepo:
+    """档案视图的卡片布局（R37-P2，devlog/142）。
+
+    保存口径选**整版替换**（`replace_all`）而不是逐卡 upsert：前端是"编辑一整张画布、
+    松手时存一次"，逐卡 diff 只会把前端的临时态泄漏到后端。整版替换在一个事务里
+    delete + insert，失败整体回滚（不会留下"删了旧的、没写新的"的半版布局）。
+    """
+
+    def __init__(self, db: Session):
+        self.db = db
+
+    def by_vtuber(self, vtuber_id: int) -> list[ProfileCard]:
+        return (
+            self.db.query(ProfileCard)
+            .filter(ProfileCard.vtuber_id == vtuber_id)
+            .order_by(ProfileCard.y.asc(), ProfileCard.x.asc())
+            .all()
+        )
+
+    def replace_all(self, vtuber_id: int, cards: list[dict]) -> list[ProfileCard]:
+        """整版替换该 V 的卡片布局；返回落库后的行（按 y, x）。
+
+        `cards` 里每项：`{card_key, kind, x, y, w, h, config_json?}`（范围校验在路由层，
+        这里只管写）。**不提交**由调用方收口？—— 不：本方法是"一次保存"的边界，
+        自己 commit（与仓库里其它写方法一致），失败时 rollback 并抛出去。
+        """
+        try:
+            self.db.query(ProfileCard).filter(
+                ProfileCard.vtuber_id == vtuber_id
+            ).delete(synchronize_session=False)
+            for c in cards:
+                self.db.add(ProfileCard(
+                    vtuber_id=vtuber_id,
+                    card_key=c["card_key"],
+                    kind=c["kind"],
+                    x=int(c["x"]), y=int(c["y"]),
+                    w=int(c["w"]), h=int(c["h"]),
+                    config_json=c.get("config_json"),
+                ))
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
+        return self.by_vtuber(vtuber_id)
+
+    def delete_by_vtuber(self, vtuber_id: int) -> int:
+        """删除该 V 全部卡片布局（级联清理用，不提交；见 app/services/purge.py）。"""
+        return (
+            self.db.query(ProfileCard)
+            .filter(ProfileCard.vtuber_id == vtuber_id)
+            .delete(synchronize_session=False)
+        )
 
 
 class VtuberEventRepo:

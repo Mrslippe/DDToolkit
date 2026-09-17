@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
-from pydantic import BaseModel, ConfigDict, field_serializer, field_validator
+from pydantic import (BaseModel, ConfigDict, Field, field_serializer, field_validator,
+                      model_validator)
 
 
 # ── Account ────────────────────────────────────────────────────────
@@ -483,6 +484,55 @@ class VtuberEventCreate(BaseModel):
             datetime.strptime(v, "%Y-%m-%d")
         except ValueError:
             raise ValueError("event_date 须为 YYYY-MM-DD")
+
+
+# ── 档案视图的卡片布局（R37-P2，devlog/142） ──────────────────────────
+
+class ProfileCardOut(BaseModel):
+    """一张卡片（`profile_cards` 表）。格位口径与前端 `profile/layoutModel.ts` 一致：
+    12 列网格、`x` 从 0 起、`h` 以行计。"""
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    card_key: str
+    kind: str
+    x: int
+    y: int
+    w: int
+    h: int
+    config_json: str | None = None
+
+
+class ProfileCardIn(BaseModel):
+    """保存时的一张卡（不带 id：整版替换由服务端重新分配）。"""
+    card_key: str = Field(min_length=1, max_length=64)
+    kind: str = Field(min_length=1, max_length=64)
+    x: int = Field(ge=0, le=11)
+    y: int = Field(ge=0, le=999)
+    w: int = Field(ge=1, le=12)
+    h: int = Field(ge=1, le=24)
+    config_json: str | None = None
+
+    @model_validator(mode="after")
+    def _fit_in_grid(self):
+        # 越界**报错而不是夹取**：夹取会把前端的排布 bug 静默写进库
+        # （用户下次打开发现卡片位置"自己变了"，且查不出是谁改的）。
+        if self.x + self.w > 12:
+            raise ValueError(f"卡片 {self.card_key} 超出 12 列（x={self.x} + w={self.w}）")
+        return self
+
+
+class ProfileLayoutIn(BaseModel):
+    """整版布局（前端是"编辑一整张画布、松手存一次"）。"""
+    cards: list[ProfileCardIn] = Field(max_length=50)
+
+    @field_validator("cards")
+    @classmethod
+    def _unique_keys(cls, v: list[ProfileCardIn]) -> list[ProfileCardIn]:
+        keys = [c.card_key for c in v]
+        dup = {k for k in keys if keys.count(k) > 1}
+        if dup:
+            raise ValueError(f"card_key 重复：{sorted(dup)}")
+        return v
         return v
 
 

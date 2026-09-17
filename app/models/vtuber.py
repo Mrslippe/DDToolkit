@@ -247,6 +247,41 @@ class VtuberEvent(Base):
     created_at = Column(DateTime, nullable=False, default=_now)
 
 
+class ProfileCard(Base):
+    """档案视图的卡片布局（R37-P2，devlog/142）：**一卡一行**。
+
+    用户口径（2026-09-17）：「以卡片为基本单位，用户可以编辑卡片的大小、位置、排布，
+    卡片内容由用户自定义……支持拓展和自定义」。四个选型里存储选了**新表**（而不是挂在
+    `vtubers` 上的布局 JSON）：一卡一行 ⇒ 局部更新、可索引、以后要加卡片级配置也不用改结构。
+
+    - `card_key` 是**实例 id**（内置卡 = kind；P3 的自定义卡允许同 kind 多实例）
+      ⇒ 唯一键是 `(vtuber_id, card_key)`；
+    - `x/y/w/h` 是 12 列网格里的格位，与前端 `components/profile/layoutModel.ts` 同一口径
+      （后端只**校验**范围，不做夹取 —— 静默夹取会把前端的 bug 藏起来）；
+    - `config_json` 留给 P3 的卡片自定义配置。
+
+    ⚠️ 本表挂 `vtubers.id` 外键 ⇒ 删除 V 必须走 `app/services/purge.py`。
+    """
+    __tablename__ = "profile_cards"
+    __table_args__ = (
+        UniqueConstraint("vtuber_id", "card_key", name="uq_profile_card_vtuber_key"),
+        # 读取热路径：按 V 取出后按 (y, x) 排（= 阅读顺序）
+        Index("ix_profile_cards_vtuber", "vtuber_id", "y", "x"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    vtuber_id = Column(Integer, ForeignKey("vtubers.id"), nullable=False)
+    card_key = Column(String, nullable=False)             # 实例 id（内置卡 = kind）
+    kind = Column(String, nullable=False)                 # 渲染类型（前端注册表认它）
+    x = Column(Integer, nullable=False, default=0)        # 列起点 0..11
+    y = Column(Integer, nullable=False, default=0)        # 行起点
+    w = Column(Integer, nullable=False, default=6)        # 列宽 1..12
+    h = Column(Integer, nullable=False, default=3)        # 行数
+    config_json = Column(Text, nullable=True)             # 卡片自定义配置（P3）
+    created_at = Column(DateTime, nullable=False, default=_now)
+    updated_at = Column(DateTime, nullable=True, onupdate=_now)
+
+
 class AppMeta(Base):
     """通用键值表（v0.9.8，P9-4）：进程外需要记住的少量状态。
 

@@ -15,7 +15,7 @@ from app.models.vtuber import VTuber, Post, Account
 from app.repositories.vtuber_repo import (
     VTuberRepo, AccountRepo, PostRepo, AccountStatSnapshotRepo,
     LiveGiftDayRepo, ThirdpartyVtuberRepo, VtuberEventRepo, LiveSessionRepo,
-    LiveCategoryOverrideRepo,
+    LiveCategoryOverrideRepo, ProfileCardRepo,
 )
 from app.schemas.vtuber import (
     VTuberOut, VTuberCreate, VTuberUpdate,
@@ -24,6 +24,7 @@ from app.schemas.vtuber import (
     AccountStatSnapshotOut, LiveGiftDayOut, ThirdpartyVtuberOut,
     FanTrendPoint, LiveSessionOut, LiveCategoryOut, LiveSessionDetailOut,
     VtuberEventOut, VtuberEventCreate, FutureReservationOut,
+    ProfileCardOut, ProfileLayoutIn,
     FormerValueOut, VTuberFormerValuesOut,
     BiliSearchOut, BiliSearchItemOut,
 )
@@ -678,6 +679,38 @@ def clear_live_category(account_id: int, live_id: str, db: Session = Depends(get
         raise HTTPException(404, f"Account id={account_id} 不存在")
     if not LiveCategoryOverrideRepo(db).delete(account_id, live_id):
         raise HTTPException(404, f"无校正记录: live_id={live_id}")
+
+
+# ── 档案视图的卡片布局（R37-P2，devlog/142） ────────────────────────
+
+@router.get("/vtuber/{vtuber_id}/profile-cards", response_model=list[ProfileCardOut])
+def list_profile_cards(vtuber_id: int, db: Session = Depends(get_db)):
+    """该 V 的档案视图卡片布局（按 y, x = 阅读顺序）。**空列表 = 还没排过**，
+    由前端用默认布局渲染（服务端不替用户决定默认长什么样 —— 默认排布属于展示口径，
+    卡片注册表在前端）。"""
+    if not VTuberRepo(db).get(vtuber_id):
+        raise HTTPException(404, f"VTuber id={vtuber_id} 不存在")
+    return [
+        ProfileCardOut.model_validate(c, from_attributes=True)
+        for c in ProfileCardRepo(db).by_vtuber(vtuber_id)
+    ]
+
+
+@router.put("/vtuber/{vtuber_id}/profile-cards",
+            response_model=list[ProfileCardOut])
+def save_profile_cards(vtuber_id: int, data: ProfileLayoutIn,
+                       db: Session = Depends(get_db)):
+    """整版保存卡片布局（delete + insert 一个事务）。
+
+    校验口径：格位越界 / card_key 重复由 Pydantic 拦下（422 带中文原因），
+    **不做静默夹取** —— 夹取会把前端 bug 写进库，用户下次打开只会觉得"卡片自己动了"。
+    """
+    if not VTuberRepo(db).get(vtuber_id):
+        raise HTTPException(404, f"VTuber id={vtuber_id} 不存在")
+    rows = ProfileCardRepo(db).replace_all(
+        vtuber_id, [c.model_dump() for c in data.cards]
+    )
+    return [ProfileCardOut.model_validate(c, from_attributes=True) for c in rows]
 
 
 # ── 重要日期·大型活动（P7，v0.7.0） ────────────────────────────────
