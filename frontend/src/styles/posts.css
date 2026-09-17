@@ -1463,26 +1463,18 @@ img.hero-avatar {
   will-change: transform, opacity;
 }
 
-/* 到边回弹：4px 的原地提示，不动索引 */
-.data-deck[data-deck-bounce='down'] .deck-card[data-deck-pos='front'] {
-  animation: deck-nudge-down 240ms var(--ease-standard);
+/* R40b：滚动改成**循环**（末张向下回首张、首张向上回末张）⇒ 到边回弹那套删掉了。
+   两张卡时 `next` 与 `prev` 撞成同一张 ⇒ 用 `both`（偏后偏下的中间位，两个方向都能起步）。 */
+.deck-card[data-deck-pos='both'] {
+  transform: translateY(16%) scale(0.97);
+  opacity: 0;
+  z-index: 1;
 }
 
-.data-deck[data-deck-bounce='up'] .deck-card[data-deck-pos='front'] {
-  animation: deck-nudge-up 240ms var(--ease-standard);
-}
-
-@keyframes deck-nudge-down {
-  0%, 100% { transform: translateY(0); }
-  45% { transform: translateY(5px); }
-}
-
-@keyframes deck-nudge-up {
-  0%, 100% { transform: translateY(0); }
-  45% { transform: translateY(-5px); }
-}
-
-/* ── 右缘竖排圆点 ─────────────────────────────────────────────────── */
+/* ── 右缘竖排圆点（R40；R40b：透明度 50% + 静止自动隐藏）──────────────
+   用户 2026-09-19：「右侧圆点透明度改为 50%，并且没有滚动或者手动切换卡片的时候自动隐藏，
+   有滚动或鼠标 hover 才显示」。隐藏时**必须连指针一起关掉** —— 否则"看不见却点得着"，
+   那是最难查的一类 bug。 */
 .deck-dots {
   position: absolute;
   right: 10px;
@@ -1492,6 +1484,14 @@ img.hero-avatar {
   flex-direction: column;
   gap: 8px;
   z-index: 4;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease;
+}
+
+.deck-dots[data-deck-dots='on'] {
+  opacity: 0.5;
+  pointer-events: auto;
 }
 
 .deck-dot {
@@ -1514,9 +1514,8 @@ img.hero-avatar {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  /* 位移/缩放归零，只留"瞬移到位"；回弹也去掉（它本来就是纯动效） */
-  .deck-card,
-  .data-deck[data-deck-bounce] .deck-card[data-deck-pos='front'] {
+  /* 位移/缩放归零，只留"瞬移到位"（圆点的淡入淡出保留 —— 它是可见性提示，不是动效） */
+  .deck-card {
     transition-duration: 0.01ms !important;
     animation: none !important;
   }
@@ -4023,8 +4022,12 @@ img.hero-avatar {
 .lc-skel--text { width: 96px; }
 .lc-skel--cloud {
   display: block;
-  height: 210px;          /* 与 MosaicCloud 的 boxH 一致 */
-  margin-top: 10px;
+  /* ⚠️ 高度必须与真实词云**逐像素一致**（R40c 修 R36 那条既有红）：
+     原来写的是 `height: 210px; margin-top: 10px` ⇒ 骨架段比真实段高 9px，
+     数据一到窗口长度就变（R36 的判据当场红，实测 1016 → 1007）。
+     真实词云没有那 10px 外边距（间距由 `.lc-dlg-body .os-scroll` 的 `gap: 12px` 管），
+     所以这里也去掉；高度按实测差值补回 1px。 */
+  height: 211px;          /* 与 MosaicCloud 的 boxH（210）+ 其容器 1px 边框一致 */
   border-radius: 8px;
   animation: lc-skel-pulse 1.6s ease-in-out infinite;
   background: #f0eded;

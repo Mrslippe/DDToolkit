@@ -712,15 +712,34 @@ def _assert_deck(dk: dict, width: int) -> list[str]:
     if dk.get("creditIdx") != 0:
         bad.append(f"@{width} deck: 锁内反向输入被吞了（欠账没消化，停在 {dk.get('creditIdx')}）"
                    f"—— 「快拨不跟手」就是这么来的")
-    # ④ 快拨 4 格：必须**很快到末张**（不能一格一格等动画放完）
-    if dk.get("fastSpinIdx") != 1:
-        bad.append(f"@{width} deck: 快拨 4 格没到末张（{dk.get('fastSpinIdx')}）")
+    # ④ 快拨：**够快**就行（不能一格一格等动画放完）。
+    #    ⚠️ 成环 + 只有 2 张卡时，索引的**奇偶**反推不出步数（4 步回到原地）⇒ 不断言"动过"，
+    #    步数契约由 `deckWheel.test.ts` 的欠账用例钉住。这里判的是用户真正在意的"卡不卡手"。
     if (dk.get("fastSpinMs") or 0) > 1800:
         bad.append(f"@{width} deck: 快拨 4 格用了 {dk.get('fastSpinMs')}ms —— 锁不该等于动画全长")
-    # ⑤ 但也不许失控
-    if dk.get("runawayIdx") != 1:
-        bad.append(f"@{width} deck: 10 格挤在 100ms 后索引是 {dk.get('runawayIdx')}"
-                   f"（2 张卡应停在末张，不许越界）")
+    # ⑤ **循环**（R40b，用户 2026-09-19）：末张向下回首张、首张向上回末张
+    n = dk.get("count") or 1
+    if dk.get("runawayIdx") not in range(n):
+        bad.append(f"@{width} deck: 10 格挤在 100ms 后索引 {dk.get('runawayIdx')} 越界"
+                   f"（共 {n} 张）")
+    # ⑤b 圆点：50% 透明度 + 静止自动隐藏（隐藏时必须连指针一起关掉）
+    if dk.get("dotsAfterWheelAttr") != "on":
+        bad.append(f"@{width} deck: 滚动之后圆点没有亮起（{dk.get('dotsAfterWheelAttr')!r}）")
+    if dk.get("dotsIdleAttr") != "off":
+        bad.append(f"@{width} deck: 静止 1.8s 后圆点还亮着（{dk.get('dotsIdleAttr')!r}）"
+                   f"—— 用户要求「没有滚动或手动切换时自动隐藏」")
+    on_s = dk.get("dotsOnStyle") or {}
+    off_s = dk.get("dotsOffStyle") or {}
+    if abs((on_s.get("opacity") or 0) - 0.5) > 0.02:
+        bad.append(f"@{width} deck: 亮起的圆点透明度是 {on_s.get('opacity')}（应 0.5）"
+                   f"—— 用户要求「透明度改为 50%」")
+    if on_s.get("pe") != "auto":
+        bad.append(f"@{width} deck: 亮起的圆点不可点（pointer-events={on_s.get('pe')!r}）")
+    if (off_s.get("opacity") or 0) > 0.01:
+        bad.append(f"@{width} deck: 隐藏的圆点透明度是 {off_s.get('opacity')}（应 0）")
+    if off_s.get("pe") != "none":
+        bad.append(f"@{width} deck: 隐藏的圆点没关掉指针事件（{off_s.get('pe')!r}）"
+                   f"—— 看不见却点得着")
     # ⑥ 触控板（连续流）**不在这里断言**：它依赖事件之间的时间差，虚拟时间下不可复现
     #    （实测 8px 的累积永远到不了阈值）。按本仓分工，那条契约由纯函数单测
     #    `deckWheel.test.ts` 的 12 条钉住（噪声/离散格/欠账封顶/惯性尾巴只算一次/新手势分界）。
@@ -760,13 +779,13 @@ def _assert_deck(dk: dict, width: int) -> list[str]:
         bad.append(f"@{width} deck: ↓ 没前进一张（{dk.get('keyDown')}）")
     if dk.get("keyEnd") != (dk.get("count") or 1) - 1:
         bad.append(f"@{width} deck: End 没跳到末张（{dk.get('keyEnd')}）")
-    if dk.get("keyDownAtEnd") != dk.get("keyEnd"):
-        bad.append(f"@{width} deck: 末张再向下越界了"
-                   f"（{dk.get('keyEnd')} → {dk.get('keyDownAtEnd')}）")
+    # R40b：滚动成环 ⇒ 键盘在首尾也应当**循环**（不再是"到边不动"）
+    if dk.get("keyDownAtEnd") != 0:
+        bad.append(f"@{width} deck: 末张按 ↓ 没有循环回首张（{dk.get('keyDownAtEnd')}）")
+    if dk.get("keyUpAtHome") != (dk.get("count") or 1) - 1:
+        bad.append(f"@{width} deck: 首张按 ↑ 没有循环回末张（{dk.get('keyUpAtHome')}）")
     if dk.get("keyPageUp") != 0:
-        bad.append(f"@{width} deck: 末张按 PageUp 没退回首张（{dk.get('keyPageUp')}）")
-    if dk.get("keyUpAtHome") != 0:
-        bad.append(f"@{width} deck: 首张再向上越界了（{dk.get('keyUpAtHome')}）")
+        bad.append(f"@{width} deck: 末张按 PageUp 没有循环回首张（{dk.get('keyPageUp')}）")
     # ⑧ 无障碍：内容藏在手势后面 ⇒ 非前卡必须对读屏与 Tab 隐藏
     if not dk.get("othersInert"):
         bad.append(f"@{width} deck: 非前卡没有 `inert` —— Tab 会跑进看不见的卡片里")
@@ -2191,6 +2210,20 @@ def main() -> int:
                       f"（可视 < 内容 = 已顶到上限；**判据看内容高**，窗高在顶到上限时恒等）")
                 caps_e = early.get("glanceCaps") or []
                 caps_l = late.get("glanceCaps") or []
+                print("  逐段高度（未到位 → 已到位）：")
+                se = early.get("sections") or []
+                sl = late.get("sections") or []
+                for i in range(max(len(se), len(sl))):
+                    a = se[i] if i < len(se) else None
+                    b = sl[i] if i < len(sl) else None
+                    d = ((b or {}).get("h") or 0) - ((a or {}).get("h") or 0)
+                    mark = "" if d == 0 else f"   ← 差 {d:+d}px"
+                    print(f"    {str((a or {}).get('cls')):<26} {(a or {}).get('h')!s:>6} → "
+                          f"{(b or {}).get('h')!s:>6}{mark}")
+                print("  骨架高度（未到位）："
+                      f"{[(s.get('cls'), s.get('h')) for s in (early.get('skelBoxes') or [])]}")
+                print("  骨架高度（已到位）："
+                      f"{[(s.get('cls'), s.get('h')) for s in (late.get('skelBoxes') or [])]}")
                 print(f"  速览胶囊（未到位）: {[(c.get('label'), c.get('value')) for c in caps_e]}")
                 print(f"  速览胶囊（已到位）: {[(c.get('label'), c.get('value')) for c in caps_l]}")
 

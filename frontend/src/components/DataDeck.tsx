@@ -37,6 +37,8 @@ interface Props {
 }
 
 const clampIdx = (i: number, n: number) => (i < 0 ? 0 : i > n - 1 ? n - 1 : i)
+/** 循环取模（R40b：用户要求"滚动做成循环"）—— 末张向下回首张、首张向上回末张 */
+const wrapIdx = (i: number, n: number) => ((i % n) + n) % n
 
 export default function DataDeck({ keys, persistKey, children }: Props) {
   const count = children.length
@@ -54,12 +56,18 @@ export default function DataDeck({ keys, persistKey, children }: Props) {
   const [phase, setPhase] = useState<'idle' | 'down' | 'up'>('idle')
   /** 出场卡（动画期间才有）：仅靠"当前索引"分不出"谁在离开"，必须显式记住 */
   const [outIdx, setOutIdx] = useState<number | null>(null)
-  /** 到边了：原地 4px 回弹（给"到头了"的反馈，而不是静默无反应） */
-  const [bounce, setBounce] = useState<'up' | 'down' | null>(null)
+  /**
+   * 圆点是否可见（R40b，用户 2026-09-19）：
+   * 「右侧圆点透明度改为 50%，并且没有滚动或者手动切换卡片的时候自动隐藏，有滚动或鼠标 hover 才显示」。
+   * 静止时**完全不占视觉**（opacity 0 + `pointer-events: none`，不会挡住卡片），
+   * 滚轮/键盘/点圆点后亮起 1.4s，鼠标进入面板期间保持。
+   */
+  const [dotsOn, setDotsOn] = useState(false)
 
   const rootRef = useRef<HTMLDivElement | null>(null)
   const phaseTimer = useRef<number | null>(null)
-  const bounceTimer = useRef<number | null>(null)
+  const dotsTimer = useRef<number | null>(null)
+  const hovering = useRef(false)
   /** 滚轮状态（纯函数持有；放 ref 里 ⇒ 滚轮事件不引起重渲染） */
   const wheel = useRef<WheelState>(initialWheelState())
 
@@ -73,22 +81,27 @@ export default function DataDeck({ keys, persistKey, children }: Props) {
 
   useEffect(() => () => {
     if (phaseTimer.current != null) window.clearTimeout(phaseTimer.current)
-    if (bounceTimer.current != null) window.clearTimeout(bounceTimer.current)
+    if (dotsTimer.current != null) window.clearTimeout(dotsTimer.current)
   }, [])
 
-  /** 唯一入口：切一张。方向非法（到边）时走回弹，不动索引 */
+  /** 亮一下圆点（滚动/键盘/点圆点之后） */
+  const flashDots = useCallback(() => {
+    setDotsOn(true)
+    if (dotsTimer.current != null) window.clearTimeout(dotsTimer.current)
+    dotsTimer.current = window.setTimeout(() => {
+      dotsTimer.current = null
+      if (!hovering.current) setDotsOn(false)     // 鼠标还在面板上就继续显示
+    }, 1400)
+  }, [])
+
+  /** 唯一入口：切一张。**循环**（R40b：末张向下回首张、首张向上回末张） */
   const step = useCallback((dir: 1 | -1) => {
     setIndex((cur) => {
-      const next = clampIdx(cur + dir, count)
-      if (next === cur) {
-        // 到边：回弹一下，并且**不动相位**（相位是"动画方向"，回弹不是换卡）
-        setBounce(dir > 0 ? 'down' : 'up')
-        if (bounceTimer.current != null) window.clearTimeout(bounceTimer.current)
-        bounceTimer.current = window.setTimeout(() => setBounce(null), 260)
-        return cur
-      }
+      if (count <= 1) return cur                  // 只有一张：没有可切的目标
+      const next = wrapIdx(cur + dir, count)
       setOutIdx(cur)
       setPhase(dir > 0 ? 'down' : 'up')
+      flashDots()
       wheel.current = { ...wheel.current, lockUntil: performance.now() + LOCK_MS }
       if (phaseTimer.current != null) window.clearTimeout(phaseTimer.current)
       phaseTimer.current = window.setTimeout(() => {
@@ -101,7 +114,7 @@ export default function DataDeck({ keys, persistKey, children }: Props) {
       }, PHASE_MS)
       return next
     })
-  }, [count])
+  }, [count, flashDots])
 
   /** 滚轮：两条通道（决策是**纯函数** `wheelAction`，见 `deckWheel.ts` 的说明） */
   const onWheel = useCallback((e: WheelEvent) => {
@@ -133,16 +146,25 @@ export default function DataDeck({ keys, persistKey, children }: Props) {
     const k = e.key
     if (k === 'ArrowDown' || k === 'PageDown') { e.preventDefault(); cancelWheelDebt(); step(1) }
     else if (k === 'ArrowUp' || k === 'PageUp') { e.preventDefault(); cancelWheelDebt(); step(-1) }
-    else if (k === 'Home') { e.preventDefault(); cancelWheelDebt(); setIndex(0) }
-    else if (k === 'End') { e.preventDefault(); cancelWheelDebt(); setIndex(count - 1) }
+    else if (k === 'Home') { e.preventDefault(); cancelWheelDebt(); flashDots(); setIndex(0) }
+    else if (k === 'End') { e.preventDefault(); cancelWheelDebt(); flashDots(); setIndex(count - 1) }
   }
 
-  /** 每张卡相对当前索引的位次：CSS 全靠它 + 相位决定落点 */
+  /**
+   * 每张卡相对当前索引的位次：CSS 全靠它 + 相位决定落点。
+   * **索引按循环算**（R40b）：末张的"下一张"是首张、首张的"上一张"是末张。
+   * ⚠️ 只有两张卡时 `next` 与 `prev` 会撞成同一张 ⇒ 给它一个 `both`（偏后偏下的中间位），
+   * 两个方向都能从那里起步；三张起 next/prev 各就各位（方向语义完全体）。
+   */
   const posOf = (i: number) => {
     if (i === index) return 'front'
     if (i === outIdx) return 'out'
-    if (i === index + 1) return 'next'     // 向下滚时从**背后**进来
-    if (i === index - 1) return 'prev'     // 向上滚时从**下方**进来
+    if (count <= 1) return 'other'
+    const nextI = wrapIdx(index + 1, count)
+    const prevI = wrapIdx(index - 1, count)
+    if (nextI === prevI) return i === nextI ? 'both' : 'other'
+    if (i === nextI) return 'next'         // 向下滚时从**背后**进来
+    if (i === prevI) return 'prev'         // 向上滚时从**下方**进来
     return 'other'
   }
 
@@ -153,12 +175,18 @@ export default function DataDeck({ keys, persistKey, children }: Props) {
       data-deck=""
       data-deck-index={index}
       data-deck-phase={phase}
-      data-deck-bounce={bounce ?? undefined}
+      data-deck-dots={dotsOn ? 'on' : 'off'}
       data-deck-count={count}
       tabIndex={0}
       role="group"
       aria-label={`数据卡片（第 ${index + 1} 张，共 ${count} 张）`}
       onKeyDown={onKeyDown}
+      onPointerEnter={() => { hovering.current = true; setDotsOn(true) }}
+      onPointerLeave={() => {
+        hovering.current = false
+        // 鼠标离开：若刚切过卡（闪显期内）就继续留着，否则立刻收
+        if (dotsTimer.current == null) setDotsOn(false)
+      }}
     >
       <div className="deck-frame">
         {children.map((child, i) => {
@@ -178,8 +206,10 @@ export default function DataDeck({ keys, persistKey, children }: Props) {
           )
         })}
       </div>
-      {/* 右缘竖排圆点：一次只看一张时，"还有几张 / 我在第几张"必须有出口 */}
-      <div className="deck-dots" role="tablist" aria-label="卡片位置">
+      {/* 右缘竖排圆点：一次只看一张时，"还有几张 / 我在第几张"必须有出口。
+          静止时**完全隐藏**（opacity 0 + 不吃指针），滚轮/键盘/点圆点后亮 1.4s、鼠标悬停期间常显。 */}
+      <div className="deck-dots" role="tablist" aria-label="卡片位置"
+           data-deck-dots={dotsOn ? 'on' : 'off'}>
         {children.map((_, i) => (
           <button
             key={keys[i] ?? i}
@@ -189,7 +219,7 @@ export default function DataDeck({ keys, persistKey, children }: Props) {
             role="tab"
             aria-selected={i === index}
             aria-label={`第 ${i + 1} 张`}
-            onClick={() => { cancelWheelDebt(); setIndex(i) }}
+            onClick={() => { cancelWheelDebt(); flashDots(); setIndex(i) }}
           />
         ))}
       </div>

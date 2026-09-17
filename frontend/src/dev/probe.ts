@@ -448,19 +448,6 @@ async function probeDeck(out: unknown[]): Promise<void> {
   await sleep(900)
   await settleTransforms()
   result.creditIdx = idx()                          // 欠账消化后应当回到 0
-  // 快拨：4 格连拨（40ms 间隔）必须**很快到末张**，而不是一格一格慢慢挪
-  const t0 = performance.now()
-  result.fastSpinIdx = await spin(100, 4, 40)
-  result.fastSpinMs = Math.round(performance.now() - t0)
-  result.runawayIdx = await spin(100, 10, 10)       // 10 格挤在 100ms：不许失控
-  // ⚠️ 触控板的连续流必须**同步连发**（gap=0）：虚拟时间下 `sleep(16)` 会一次跳掉整段时钟，
-  //    而"手势分界"是 150ms 静默 ⇒ 每个事件都被当成新手势、累积量每次清零 ⇒ 永远切不动
-  //    （第一版就是这么假红的）。真机上事件本来就 8–16ms 一个，同步连发才是"一次手势"的等价物。
-  // ⚠️ **连续流（触控板）通道不在这里断言** —— 它依赖"事件之间的时间差"，而虚拟时间下
-  //    两次 dispatch 之间时钟也会推进 ⇒ 150ms 手势分界根本复现不了（实测 8px 的累积
-  //    永远到不了阈值）。按本仓分工，那条契约由**纯函数单测** `deckWheel.test.ts` 钉住
-  //    （12 条：噪声/离散格/欠账封顶/惯性尾巴只算一次/新手势分界…），探针只守集成面。
-  result.trackpadInfo = await spin(-30, 10, 0)      // 仅供参考，不断言
 
   // ③ 方向语义 = **CSS 契约**（不能靠"抓动画中的那一帧"：虚拟时间下定时器会立刻触发，
   //    相位活不过一个 timer —— 第一版就是这么假红的）。
@@ -499,7 +486,46 @@ async function probeDeck(out: unknown[]): Promise<void> {
   result.transitionProp = cs?.transitionProperty ?? null
   result.transitionMs = Math.round((parseFloat(cs?.transitionDuration || '0') || 0) * 1000)
 
-  // ④ 键盘：五个键都要能用（内容藏在手势后面时，键盘是可达性底线）
+  // ④ 快拨 4 格：必须**很快到末张**（不能一格一格等动画放完）
+  const t0 = performance.now()
+  const fastStart = idx()
+  result.fastSpinIdx = await spin(100, 4, 40)
+  result.fastSpinMs = Math.round(performance.now() - t0)
+  result.fastSpinMoved = result.fastSpinIdx !== fastStart
+  result.runawayIdx = await spin(100, 10, 10)       // 10 格挤在 100ms：不许失控
+  // ⚠️ 连续流（触控板）通道不在这里断言 —— 见 `deckWheel.test.ts` 的说明
+  result.trackpadInfo = await spin(-30, 10, 0)      // 仅供参考，不断言
+
+  // ⑤ 圆点：50% 透明度 + 静止自动隐藏（R40b）
+  const dotsEl = () => document.querySelector<HTMLElement>('.deck-dots')
+  const dotsOnNow = () => deck()?.getAttribute('data-deck-dots')
+  const dotsStyle = () => {
+    const el = dotsEl()
+    if (!el) return null
+    const cs = getComputedStyle(el)
+    return { opacity: Math.round((parseFloat(cs.opacity) || 0) * 100) / 100, pe: cs.pointerEvents }
+  }
+  // 滚动之后**立刻**亮起（微任务读，别用 sleep：虚拟时间下定时器可能已经把闪显收掉）
+  deck()?.dispatchEvent(new WheelEvent('wheel', { deltaY: 100, bubbles: true, cancelable: true }))
+  await Promise.resolve(); await Promise.resolve()
+  result.dotsAfterWheelAttr = dotsOnNow()
+  await sleep(1800)                                 // 等闪显到期
+  await settleTransforms()
+  result.dotsIdleAttr = dotsOnNow()
+  // CSS 契约（**手动置位 + 杀掉过渡**再读计算样式 —— 不依赖定时器，也不受虚拟时间下
+  // "过渡冻在起点"的影响：本仓第四次踩这个坑了）
+  const killDots = document.createElement('style')
+  killDots.textContent = '.deck-dots{transition:none !important}'
+  document.head.appendChild(killDots)
+  const forced = (v: 'on' | 'off') => {
+    dotsEl()?.setAttribute('data-deck-dots', v)
+    void dotsEl()?.getBoundingClientRect()
+    return dotsStyle()
+  }
+  result.dotsOnStyle = forced('on')
+  result.dotsOffStyle = forced('off')
+  forced('off')
+  killDots.remove()
   const key = async (k: string) => {
     deck()?.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }))
     await sleep(600)
@@ -510,12 +536,13 @@ async function probeDeck(out: unknown[]): Promise<void> {
   result.keyPageDown = await key('PageDown')        // 从首张前进一张
   result.keyUp = await key('ArrowUp')               // 再退回首张
   result.keyDown = await key('ArrowDown')
-  result.keyEnd = await key('End')
-  result.keyDownAtEnd = await key('ArrowDown')      // 末张再向下：不越界
-  result.keyPageUp = await key('PageUp')            // 末张向上：回到首张
-  result.keyUpAtHome = await key('ArrowUp')         // 首张再向上：不越界
+  result.keyEnd = await key('End')                  // 末张
+  result.keyDownAtEnd = await key('ArrowDown')      // 末张再向下：**循环回首张**（R40b）
+  result.keyHome2 = await key('Home')               // 回到首张
+  result.keyUpAtHome = await key('ArrowUp')         // 首张再向上：**循环回末张**（R40b）
+  result.keyPageUp = await key('PageUp')            // 末张再向上：又回首张（循环的另一半）
 
-  // ⑤ 圆点可点（指示器不只是装饰）
+  // ⑦ 圆点可点（指示器不只是装饰）
   dots()[1]?.click()
   await sleep(600)
   await settleTransforms()
@@ -811,6 +838,15 @@ export async function runUiProbe(): Promise<void> {
         })),
         pending: dlg.querySelectorAll('[data-pending="1"]').length,
         skels: dlg.querySelectorAll('.lc-skel').length,
+        /** 逐段高度 + 每个骨架的高度（R40c：把 R36 那条"差 9px"定位到**具体哪一段**） */
+        sections: [...dlg.querySelectorAll('.lc-dlg-sec')].map((n) => ({
+          cls: (n.className || '').split(' ').slice(0, 2).join('.'),
+          h: Math.round(n.getBoundingClientRect().height),
+        })),
+        skelBoxes: [...dlg.querySelectorAll('.lc-skel')].map((n) => ({
+          cls: (n.className || '').split(' ').slice(0, 2).join('.'),
+          h: Math.round(n.getBoundingClientRect().height),
+        })),
         placeholders: [...dlg.querySelectorAll('.lc-dlg-ph')].map((n) =>
           (n.textContent || '').trim(),
         ),
@@ -862,6 +898,16 @@ export async function runUiProbe(): Promise<void> {
           ),
           cloudCells: dlg.querySelectorAll('.lc-dlg-cloud-cell').length,
           eventRows: dlg.querySelectorAll('.lc-dlg-evts .lc-dlg-evt').length,
+          /** 逐段高度（R40c：R36 那条"骨架比真实内容高 9px"要靠它定位到**哪一段**）。
+           *  按 `.lc-dlg-sec` 取（`.os-scroll > *` 取不到 —— 滚动体里还有一层包裹）。 */
+          sections: [...dlg.querySelectorAll('.lc-dlg-sec')].map((n) => ({
+            cls: (n.className || '').split(' ').slice(0, 2).join('.'),
+            h: Math.round(n.getBoundingClientRect().height),
+          })),
+          skelBoxes: [...dlg.querySelectorAll('.lc-skel')].map((n) => ({
+            cls: (n.className || '').split(' ').slice(0, 2).join('.'),
+            h: Math.round(n.getBoundingClientRect().height),
+          })),
         }
       }
     }
