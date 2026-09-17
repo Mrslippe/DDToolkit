@@ -1,4 +1,4 @@
-import type { Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, BiliSearchResult, Capabilities, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, PoolItem, PostPage, PostStats, Prefs, PrefsSaved, StorageActionResult, StorageInfo, ThirdpartyVtuber, UpcomingReservation, UpdatePostsResult, VTuber, VTuberFormerValues } from './types'
+import type { Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, BiliSearchResult, Capabilities, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, PoolItem, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyVtuber, UpcomingReservation, UpdatePostsResult, VTuber, VTuberFormerValues } from './types'
 
 /**
  * API 基地址：
@@ -70,6 +70,18 @@ export const api = {
 
   /** 解除订阅：删除 VTuber（连带删其账号与全部帖子记录） */
   deleteVtuber: (id: number) => request<void>(`/vtuber/${id}`, { method: 'DELETE' }),
+
+  /** 档案视图的卡片布局（空数组 = 还没排过，由前端用默认布局渲染）（R37-P2） */
+  profileCards: (id: number) =>
+    request<ProfileCardRow[]>(`/vtuber/${id}/profile-cards`),
+
+  /** **整版**保存卡片布局（服务端 delete + insert 一个事务；越界 422）（R37-P2） */
+  saveProfileCards: (id: number, cards: ProfileCardInput[]) =>
+    request<ProfileCardRow[]>(`/vtuber/${id}/profile-cards`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cards }),
+    }),
 
   /** 帖子列表（服务端分页 + 过滤）；可传 signal 取消在途请求（切换 VTuber 防回写） */
   listPosts: (platform: string, uid: string, params: PostListParams, signal?: AbortSignal) => {

@@ -160,3 +160,69 @@ export function gridStyle(card: CardLayout): {
 export function cardHeightPx(card: CardLayout): number {
   return card.h * ROW_H + (card.h - 1) * GRID_GAP
 }
+
+/** 卡片最小尺寸：再小就放不下标题 + 一行内容（拖到极限时由 `clampCard` 兜住）。 */
+export const MIN_W = 3
+export const MIN_H = 2
+
+/**
+ * 消重叠：`fixedId` 那张**不动**，其余按 (y, x) 顺序**向下推开**直到不再相交。
+ *
+ * 这就是四个选型里的「碰撞**推开**」（而不是"拒绝移动"）：拖到别人身上时把别人挤下去，
+ * 而不是让被拖的卡弹回原位 —— 后者会让人反复试、还以为是自己没拖准。
+ * `normalizeLayout` 也在用它（口径只此一份）。
+ */
+export function pushDown(cards: CardLayout[], fixedId?: string): CardLayout[] {
+  const fixed = cards.find((c) => c.id === fixedId)
+  const rest = cards
+    .filter((c) => c.id !== fixedId)
+    .sort((a, b) => (a.y - b.y) || (a.x - b.x))
+  const out: CardLayout[] = fixed ? [fixed] : []
+  for (const card of rest) {
+    let placed = { ...card }
+    let guard = 0
+    while (out.some((o) => cardsOverlap(o, placed)) && guard < 200) {
+      placed = { ...placed, y: placed.y + 1 }
+      guard += 1
+    }
+    out.push(placed)
+  }
+  return out.sort((a, b) => (a.y - b.y) || (a.x - b.x))
+}
+
+/** 拖拽：把 `id` 那张移到 `(x, y)`（夹范围），其余被压住的**向下推开**。 */
+export function moveCard(cards: CardLayout[], id: string, x: number, y: number): CardLayout[] {
+  const next = cards.map((c) => (c.id === id ? clampCard({ ...c, x, y }) : c))
+  return pushDown(next, id)
+}
+
+/** 缩放：把 `id` 那张改成 `(w, h)`，其余被压住的向下推开。
+ *
+ * ⚠️ 宽度上限是**右侧剩余空间**（`12 - x`）而不是 12：靠 `clampCard` 夹的话，
+ * 宽先被放到 12、`x` 再被拉回 0 ⇒ 卡片会**整张左移**（用户拖右下角手柄，
+ * 卡片却跳到左边）—— 这是实测抓到的第一版 bug（用例 `上限：宽不超 12…` 抓到）。
+ */
+export function resizeCard(cards: CardLayout[], id: string, w: number, h: number): CardLayout[] {
+  const next = cards.map((c) => (c.id === id
+    ? clampCard({
+        ...c,
+        w: Math.min(GRID_COLS - c.x, Math.max(MIN_W, w)),
+        h: Math.max(MIN_H, h),
+      })
+    : c))
+  return pushDown(next, id)
+}
+
+/** 像素位移 → 格子位移（拖拽手势层用；四舍五入到最近的格）。 */
+export function cellsFromPx(dxPx: number, dyPx: number,
+                            colWidth: number, rowHeight: number): { dx: number; dy: number } {
+  return {
+    dx: Math.round(dxPx / Math.max(1, colWidth)),
+    dy: Math.round(dyPx / Math.max(1, rowHeight)),
+  }
+}
+
+/** 网格单列宽（手势层把像素换算成格时要用）：`(容器宽 - 11×gap) / 12`。 */
+export function columnWidthPx(gridWidth: number): number {
+  return (gridWidth - (GRID_COLS - 1) * GRID_GAP) / GRID_COLS
+}

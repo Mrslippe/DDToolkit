@@ -414,7 +414,9 @@ DOM 契约（探针 `ui_probe --status-island` 直接查）：`.si-island`（`.o
 | 卡片注册表 | `components/profile/cardRegistry.ts` | 「支持拓展」的唯一入口（**4 条单测**）：`registerCardKind({kind,title,defaultSize,render})` —— 重复 kind **抛错**、顺序 = 注册顺序；`cards/index.tsx` 注册内置卡片，**视图不认识任何具体卡片** |
 | ├ 纪念日卡 | `cards/AnniversaryCard.tsx`（kind `anniversary`，5×3） | 两行（生日 / 出道）恒定渲染（没填也显示「未记录」）；口径 `anniversary.ts`（**14 条单测**：宽容解析 `2000-05-20`/`5月20日`/`05-20`、倒计时、2/29 平年按 3/1、就是今天） |
 | └ 优质投稿卡 | `cards/TopPostsCard.tsx`（kind `top-posts`，7×3） | 卡片**自己取数**（`listPosts` 一页 50 条）→ `topPosts.ts` 排序（**9 条单测**：排除墓碑 / 优先投稿 / 播放为主点赞兜底 / 同分按时间倒序）+ 一句「按什么排 · 共几条」；点一行开帖子详情抽屉（复用页面的那一个）；未到位 = 同尺寸骨架（R36 口径） |
-| 已知边界 | — | P1 **只读**：无拖拽/缩放/编辑态，布局来自默认排布；拖拽与落库（表 `profile_cards`）在 **P2**，自定义卡片与扩展点在 **P3** |
+| 编辑态（R37-P2b） | `.board-actions` / `.board-btn(.on)` / `.board-hint` | 头部一枚「编辑布局」；进编辑态变「重置默认 + 完成」。编辑态才有的东西：卡片描边变粉、卡头 `cursor: grab`、右下角 `.pcard-resize` 手柄、**网格辅助线**（`.board-grid.editing` 的 `repeating-linear-gradient`）。窄窗（<560）**按钮禁用**并写明原因（单列是模型算的，编辑会跟它打架） |
+| 拖拽 / 缩放 | `.pcard.dragging` + `layoutModel` 的 `moveCard`/`resizeCard` | 手势用 Pointer Events（卡头发起拖动、手柄发起缩放，`touch-action: none`）；每跨一格重算一次布局（`d.base` 快照 + 累计位移 ⇒ 不漂移）；**松手整版 PUT**，成功顶栏胶囊「布局已保存」、失败**回滚到上一版** + 说明（不留「看着排好了其实没存上」） |
+| 已知边界 | — | P2b 只改**位置与大小**，不改「有哪些卡片」；自定义卡片（新增/删除 + `config_json`）与扩展点接线在 **P3** |
 
 #### B1.5 共用层：跨视图联动刷新（事件总线）
 | 事件 | 触发方 | 消费方 |

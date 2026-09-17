@@ -102,6 +102,11 @@ python scripts/perf_report.py --affinity-proxy      # **整机体检**（devlog/
                                                      # 自动解压便携版、跑完自清；--keep 留现场、--json 落基线）
 python scripts/ui_probe.py --profile-sync --vtuber 15 # R33（devlog/135）：左栏是否跟着「档案设置」的签名/头像
                                                      # —— 探针往副本 DB 种 override，再断言左栏实际渲染值 + 对照组
+python scripts/ui_probe.py --board                    # R37-P2b（devlog/144）：档案视图的**可编辑画布**
+                                                     # —— 切视图 → 进编辑态 → 合成 PointerEvent 把第一张卡
+                                                     # 右移 2 列/下移 1 行 → 断言格位变化 + 零重叠 + **去后端对账**
+                                                     # （GET /vtuber/{id}/profile-cards 必须已是新位置）；
+                                                     # 窄窗另跑一格：单列 + 编辑按钮必须禁用
 python scripts/ui_probe.py --pinned                   # R35（devlog/139）：置顶动态排在「帖子列表」第 1 张 + 带角标
                                                      # —— 种一条 **2020 年时间戳**的置顶帖（排序不生效必掉到末尾）
                                                      # + 一条当下的对照帖（不许挂角标）

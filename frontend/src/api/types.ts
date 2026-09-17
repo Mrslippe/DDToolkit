@@ -519,6 +519,30 @@ export interface PostBodyJson {
   [key: string]: unknown
 }
 
+/** 档案视图的一张卡片布局（f006，R37-P2）。格位口径与 `components/profile/layoutModel.ts` 一致：
+ *  12 列网格、`x` 从 0 起、`h` 以行计。`card_key` 是**实例 id**（内置卡 = kind）。 */
+export interface ProfileCardRow {
+  id: number
+  card_key: string
+  kind: string
+  x: number
+  y: number
+  w: number
+  h: number
+  config_json: string | null
+}
+
+/** 保存时提交的一张卡（不带 id：服务端整版替换、重新分配 id） */
+export interface ProfileCardInput {
+  card_key: string
+  kind: string
+  x: number
+  y: number
+  w: number
+  h: number
+  config_json?: string | null
+}
+
 /** GET /auth/{platform}/status：平台登录态 */
 export interface AuthStatus {
   logged_in: boolean

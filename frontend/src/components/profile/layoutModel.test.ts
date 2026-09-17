@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  GRID_COLS, GRID_GAP, NARROW_PX, ROW_H, cardHeightPx, cardsOverlap, clampCard,
-  defaultLayout, findOverlaps, gridStyle, isNarrow, normalizeLayout, toSingleColumn,
+  GRID_COLS, GRID_GAP, MIN_H, MIN_W, NARROW_PX, ROW_H, cardHeightPx, cardsOverlap,
+  cellsFromPx, clampCard, columnWidthPx, defaultLayout, findOverlaps, gridStyle, isNarrow,
+  moveCard, normalizeLayout, pushDown, resizeCard, toSingleColumn,
   type CardLayout,
 } from './layoutModel'
 
@@ -143,5 +144,107 @@ describe('gridStyle / cardHeightPx — 与 CSS 的契约', () => {
   it('像素高 = h×ROW_H + (h-1)×GAP（探针按这个式子核对实渲染）', () => {
     expect(cardHeightPx(mk({ h: 1 }))).toBe(ROW_H)
     expect(cardHeightPx(mk({ h: 3 }))).toBe(3 * ROW_H + 2 * GRID_GAP)
+  })
+})
+
+// ── R37-P2b：拖拽 / 缩放（四个选型里的「碰撞推开」） ──────────────────
+
+describe('moveCard — 拖拽，被压住的向下推开', () => {
+  const two = () => [
+    mk({ id: 'a', x: 0, y: 0, w: 6, h: 3 }),
+    mk({ id: 'b', x: 6, y: 0, w: 6, h: 3 }),
+  ]
+
+  it('拖到空位就是平移（别人不动）', () => {
+    const out = moveCard(two(), 'a', 0, 5)
+    expect(out.find((c) => c.id === 'a')?.y).toBe(5)
+    expect(out.find((c) => c.id === 'b')?.y).toBe(0)
+  })
+
+  it('拖到别人身上 → **推开**（被压的往下让，不弹回原位）', () => {
+    const out = moveCard(two(), 'a', 6, 0)     // a 移到 b 的位置
+    expect(findOverlaps(out)).toEqual([])
+    expect(out.find((c) => c.id === 'a')?.y).toBe(0)     // 被拖的那张留在原地（位置优先）
+    expect(out.find((c) => c.id === 'b')?.y).toBe(3)     // b 被推到下一行
+  })
+
+  it('拖出右边界 → 夹回（x 最大 = 12 - w）', () => {
+    expect(moveCard(two(), 'a', 99, 0).find((c) => c.id === 'a')?.x).toBe(6)
+  })
+
+  it('拖出上边界 → y = 0', () => {
+    expect(moveCard(two(), 'a', 0, -5).find((c) => c.id === 'a')?.y).toBe(0)
+  })
+
+  it('结果零重叠、幂等（再推一次不会再动）', () => {
+    const once = moveCard(two(), 'a', 6, 0)
+    expect(findOverlaps(once)).toEqual([])
+    expect(pushDown(once)).toEqual(once)
+  })
+
+  it('三张卡连推：被拖的那张往下压时，下方的依次让位（上面的不动）', () => {
+    const cards = [
+      mk({ id: 'a', x: 0, y: 0, w: 12, h: 2 }),
+      mk({ id: 'b', x: 0, y: 2, w: 12, h: 2 }),
+      mk({ id: 'c', x: 0, y: 4, w: 12, h: 2 }),
+    ]
+    // 把 a 拖到 c 的位置：c 被推到 a 下面；b 在 a 上方，不受影响
+    const out = moveCard(cards, 'a', 0, 4)
+    expect(findOverlaps(out)).toEqual([])
+    const pos = Object.fromEntries(out.map((c) => [c.id, c.y]))
+    expect(pos['a']).toBe(4)
+    expect(pos['b']).toBe(2)
+    expect(pos['c']).toBeGreaterThanOrEqual(6)
+  })
+})
+
+describe('resizeCard — 缩放，同样推开', () => {
+  it('加宽撞到邻居 → 邻居下移', () => {
+    const cards = [
+      mk({ id: 'a', x: 0, y: 0, w: 4, h: 3 }),
+      mk({ id: 'b', x: 4, y: 0, w: 4, h: 3 }),
+    ]
+    const out = resizeCard(cards, 'a', 8, 3)
+    expect(out.find((c) => c.id === 'a')?.w).toBe(8)
+    expect(out.find((c) => c.id === 'b')?.y).toBe(3)
+    expect(findOverlaps(out)).toEqual([])
+  })
+
+  it('下限 MIN_W / MIN_H（拖到极小也不会消失）', () => {
+    const out = resizeCard([mk({ id: 'a', x: 0, y: 0, w: 6, h: 3 })], 'a', 0, 0)
+    expect(out[0].w).toBe(MIN_W)
+    expect(out[0].h).toBe(MIN_H)
+  })
+
+  it('上限：宽不超 12、x+w 仍被夹在网格内', () => {
+    const out = resizeCard([mk({ id: 'a', x: 8, y: 0, w: 4, h: 3 })], 'a', 12, 3)
+    expect(out[0].w).toBe(4)
+    expect(out[0].x + out[0].w).toBeLessThanOrEqual(GRID_COLS)
+  })
+
+  it('加高撞到下面那张 → 那张下移', () => {
+    const cards = [
+      mk({ id: 'a', x: 0, y: 0, w: 6, h: 2 }),
+      mk({ id: 'b', x: 0, y: 2, w: 6, h: 2 }),
+    ]
+    const out = resizeCard(cards, 'a', 6, 4)
+    expect(out.find((c) => c.id === 'a')?.h).toBe(4)
+    expect(out.find((c) => c.id === 'b')?.y).toBe(4)
+  })
+})
+
+describe('cellsFromPx / columnWidthPx — 手势层的像素→格换算', () => {
+  it('列宽 = (容器宽 - 11×gap) / 12', () => {
+    expect(columnWidthPx(12 * 100 + 11 * GRID_GAP)).toBe(100)
+  })
+
+  it('位移四舍五入到最近的格（拖半格不动、拖过大半格算一格）', () => {
+    expect(cellsFromPx(40, 0, 100, 96)).toEqual({ dx: 0, dy: 0 })
+    expect(cellsFromPx(60, 96, 100, 96)).toEqual({ dx: 1, dy: 1 })
+    expect(cellsFromPx(-60, -96, 100, 96)).toEqual({ dx: -1, dy: -1 })
+  })
+
+  it('列宽为 0（还没量到容器宽）时不除零', () => {
+    expect(cellsFromPx(300, 300, 0, 0)).toEqual({ dx: 300, dy: 300 })
   })
 })

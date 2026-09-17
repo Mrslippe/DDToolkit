@@ -36,6 +36,100 @@
   color: var(--c-text-sub);
 }
 
+/* ── R37-P2b：编辑布局的头部动作与手势 ─────────────────────────────── */
+
+.board-actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.board-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border: 1px solid var(--c-border);
+  border-radius: 3px;
+  background: var(--c-bg-card);
+  color: var(--c-text-main);
+  font-size: 11.5px;
+  line-height: 17px;
+  cursor: pointer;
+}
+
+.board-btn:hover:not(:disabled) {
+  border-color: var(--c-primary);
+  color: var(--c-accent);
+}
+
+.board-btn.on {
+  background: var(--c-primary-deep);
+  border-color: var(--c-primary-deep);
+  color: #fff;
+}
+
+.board-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.board-hint {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 16px;
+  color: var(--c-text-sub);
+}
+
+/* 编辑态：网格辅助线（让"格"看得见，否则拖起来全靠猜） */
+.board-grid.editing {
+  background-image:
+    repeating-linear-gradient(to right,
+      rgba(251, 119, 161, 0.10) 0 1px, transparent 1px calc((100% + var(--board-gap, 12px)) / 12)),
+    repeating-linear-gradient(to bottom,
+      rgba(251, 119, 161, 0.10) 0 1px, transparent 1px calc(var(--board-row, 84px) + var(--board-gap, 12px)));
+}
+
+.pcard.editing {
+  border-color: rgba(251, 119, 161, 0.45);
+}
+
+.pcard.editing .pcard-head {
+  cursor: grab;
+  touch-action: none;               /* 触摸/笔也走指针事件，不触发页面滚动 */
+}
+
+.pcard.dragging {
+  border-color: var(--c-primary-deep);
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.18);
+}
+
+.pcard.dragging .pcard-head {
+  cursor: grabbing;
+}
+
+.pcard-grip {
+  color: var(--c-text-sub);
+}
+
+/* 右下角缩放手柄：只在编辑态出现（阅读态零干扰） */
+.pcard-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 18px;
+  height: 18px;
+  cursor: nwse-resize;
+  touch-action: none;
+  background: linear-gradient(135deg, transparent 0 45%, rgba(251, 119, 161, 0.75) 45% 100%);
+  border-bottom-right-radius: 4px;
+}
+
+.pcard {
+  position: relative;              /* 缩放手柄的定位祖先 */
+}
+
 /* 网格：12 列 + 定高行 + 卡片跨格。窄窗（.narrow）由布局模型改成单列，
    这里只把列数换掉（卡片的内联 grid-column 在单列布局里已是 1 / span 12）。 */
 .board-grid {

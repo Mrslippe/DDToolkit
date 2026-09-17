@@ -327,6 +327,7 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
             "switchPerf": data.get("switchPerf"),
             "profileSync": data.get("profileSync"),
             "pinned": data.get("pinned"),
+            "board": data.get("board"),
             "shell": data.get("shell"),
             "degraded": data.get("degraded") or [],
             "dom": dom_file,
@@ -336,7 +337,7 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
             "polish": None, "reservations": None, "statusIsland": None,
             "appSettings": None, "filterPill": None, "traySuspend": None,
             "closeAsk": None, "switchPerf": None, "profileSync": None,
-            "pinned": None, "degraded": [], "dom": dom_file}
+            "pinned": None, "board": None, "degraded": [], "dom": dom_file}
 
 
 # ── 展示页 hero 药丸签名（P2 分层收敛 A 批次的位级回归护栏）─────────────
@@ -969,6 +970,14 @@ def main() -> int:
              "`sign_override` + `avatar`，再断言左栏那一行的签名/头像与卡片一致；"
              "另设一个无 override 的 V 作对照（防「永远显示自定义值」的假绿）。"
              "需要那个 V 至少有一个带 avatar_url 的账号。",
+    )
+    ap.add_argument(
+        "--board",
+        action="store_true",
+        help="档案视图的可编辑画布（R37-P2b，devlog/144）：切视图 → 进编辑态 → 用合成指针事件把"
+             "第一张卡往右 2 列 / 往下 1 行 → 断言列行变化、卡片数不变、零重叠，并**去后端对账**"
+             "（GET /vtuber/{id}/profile-cards 必须已经是新位置）。窄窗（1100）另跑一格："
+             "编辑按钮必须**禁用**并写明原因（单列是自动降级，编辑会跟它打架）。",
     )
     ap.add_argument(
         "--pinned",
@@ -2095,6 +2104,102 @@ def main() -> int:
                         print(f"  对照：{ctl_name!r} 仍显示平台签名 ✓")
                 if not failures:
                     print("  [ok] 左栏与卡片同源：自定义签名/头像都到位，对照组未被污染")
+            for b in failures:
+                print("   -", b)
+            return 1 if failures else 0
+
+        if args.board:
+            # R37-P2b：拖拽手势 → 几何 → 落库，一条链全验。宽窗才可编辑（窄窗单列是模型算的）。
+            w = max(widths[0], 1440)
+            url = f"http://localhost:{vite_port}{route}?probe=board"
+            print(f"[probe] board @{w} → {url}")
+            res = _run_probe(edge, url, w, args.height, WORK, "board")
+            bd = ((res or {}).get("board") or {})
+            if res and not bd:
+                print(f"  [!] 探针 mode={res.get('mode')!r} 键={sorted(res.keys())}"
+                      f"（新字段需要在 _run_probe 的白名单里登记）")
+            if not bd:
+                failures.append(f"@{w} board: 没量到画布段（探针未跑完？）")
+            else:
+                before = {c.get("key"): c for c in (bd.get("before") or [])}
+                after = {c.get("key"): c for c in (bd.get("after") or [])}
+                target = bd.get("dragTarget")
+                print(f"  视图钮={bd.get('viewFound')} 编辑钮={bd.get('editBtnFound')} "
+                      f"窄窗禁用={bd.get('editBtnDisabled')} 编辑态={bd.get('editing')} "
+                      f"网格列={bd.get('cols')}")
+                for key in before:
+                    b, a = before[key], after.get(key, {})
+                    print(f"    {key}: ({b.get('col')},{b.get('row')}) → "
+                          f"({a.get('col')},{a.get('row')}) 高 {b.get('hpx')}→{a.get('hpx')}")
+                if not bd.get("viewFound"):
+                    failures.append(f"@{w} board: 点不中「档案视图」视图钮")
+                elif bd.get("editBtnDisabled"):
+                    failures.append(f"@{w} board: 宽窗下「编辑布局」被禁用了"
+                                    f"（title={bd.get('editBtnTitle')!r}）")
+                elif bd.get("editing") != "1":
+                    failures.append(f"@{w} board: 点了「编辑布局」但没进编辑态"
+                                    f"（data-board-editing={bd.get('editing')!r}）")
+                elif not target or target not in after:
+                    failures.append(f"@{w} board: 没量到被拖的卡（target={target!r}）")
+                else:
+                    b, a = before[target], after[target]
+                    dw, dh = a.get("col", 1) - b.get("col", 1), a.get("row", 1) - b.get("row", 1)
+                    if (dw, dh) != (2, 1):
+                        failures.append(f"@{w} board: 拖动后格位变化是 (+{dw},+{dh})，期望 (+2,+1)"
+                                        f"（手势层没把像素换算成格？）")
+                    if len(after) != len(before):
+                        failures.append(f"@{w} board: 拖动后卡片数从 {len(before)} 变成 {len(after)}"
+                                        f"（卡片在拖拽里丢了？）")
+                    # 零重叠（拖拽的推开口径：被压住的往下让）
+                    boxes = [(k, c.get("box")) for k, c in after.items() if c.get("box")]
+                    for i in range(len(boxes)):
+                        for j in range(i + 1, len(boxes)):
+                            (k1, r1), (k2, r2) = boxes[i], boxes[j]
+                            if (r1["x"] < r2["x"] + r2["w"] and r2["x"] < r1["x"] + r1["w"]
+                                    and r1["y"] < r2["y"] + r2["h"] and r2["y"] < r1["y"] + r1["h"]):
+                                failures.append(f"@{w} board: 拖动后 {k1} 与 {k2} 重叠"
+                                                f"（推开口径没生效）")
+                    # **落库对账**：直接问后端 —— 只看 DOM 的话，"排好了但没存上"照样绿
+                    try:
+                        with urllib.request.urlopen(
+                                f"http://127.0.0.1:{be_port}/vtuber/{vid}/profile-cards",
+                                timeout=10) as r:
+                            stored = json.loads(r.read().decode("utf-8"))
+                    except Exception as exc:
+                        stored = None
+                        failures.append(f"@{w} board: 读不回卡片布局（{exc}）")
+                    if stored is not None:
+                        by_key = {row["card_key"]: row for row in stored}
+                        shown = [(k, v["x"], v["y"], v["w"], v["h"])
+                                 for k, v in by_key.items()]
+                        print(f"  后端已存：{shown}")
+                        for key, c in after.items():
+                            row = by_key.get(key)
+                            if not row:
+                                failures.append(f"@{w} board: 卡片 {key} 没落库")
+                                continue
+                            if (row["x"], row["y"]) != (c.get("col", 1) - 1, c.get("row", 1) - 1):
+                                failures.append(
+                                    f"@{w} board: 卡片 {key} 界面上在"
+                                    f" ({c.get('col')},{c.get('row')})，库里是 "
+                                    f"({row['x'] + 1},{row['y'] + 1}) —— 拖了没存上")
+            # 窄窗：编辑必须被禁用（单列是自动降级）
+            w2 = min(widths[0], 1100)
+            print(f"[probe] board（窄窗）@{w2} → 编辑按钮应禁用")
+            res2 = _run_probe(edge, url, w2, args.height, WORK, "board-narrow")
+            bd2 = ((res2 or {}).get("board") or {})
+            if not bd2:
+                failures.append(f"@{w2} board: 窄窗那一格没量到画布段")
+            else:
+                print(f"  窄窗：列={bd2.get('cols')} 编辑钮禁用={bd2.get('editBtnDisabled')} "
+                      f"title={bd2.get('editBtnTitle')!r}")
+                if bd2.get("cols") != "1":
+                    failures.append(f"@{w2} board: 窄窗没有降级单列（cols={bd2.get('cols')}）")
+                if not bd2.get("editBtnDisabled"):
+                    failures.append(f"@{w2} board: 窄窗下「编辑布局」没被禁用"
+                                    f"（单列是模型算的，编辑会跟它打架）")
+            if not failures:
+                print("  [ok] 拖拽换位 + 推开口径 + 落库对账 + 窄窗禁用编辑")
             for b in failures:
                 print("   -", b)
             return 1 if failures else 0

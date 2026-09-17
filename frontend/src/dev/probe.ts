@@ -2407,6 +2407,99 @@ export async function runUiProbe(): Promise<void> {
     return
   }
 
+  // 档案视图的**可编辑画布**（R37-P2b，devlog/144）：用户口径「以卡片为基本单位，用户可以编辑
+  // 卡片的大小、位置、排布」。这里做的是**端到端**的：切到档案视图 → 进编辑态 → 用合成
+  // PointerEvent 把第一张卡往右 2 列/往下 1 行拖 → 落 DOM 快照（列/行/盒）交给脚本对账，
+  // 脚本再去问后端 `GET /vtuber/{id}/profile-cards`，确认**排布真的落库了**。
+  // 宽窗才可编辑（窄窗单列是模型算出来的，编辑会跟它打架 ⇒ 按钮禁用），所以脚本用 1440 跑本模式。
+  if (mode === 'board') {
+    const result: Record<string, unknown> = {}
+    const waitFor = async (fn: () => unknown, ms = 8000) => {
+      const t0 = performance.now()
+      while (performance.now() - t0 < ms) {
+        const v = fn()
+        if (v) return v
+        await sleep(100)
+      }
+      return null
+    }
+    const boardEl = () => document.querySelector<HTMLElement>('[data-board]')
+    const cardEls = () => [...document.querySelectorAll<HTMLElement>('.pcard')]
+    const rectOf = (n: Element | null) => {
+      if (!n) return null
+      const r = n.getBoundingClientRect()
+      return { x: Math.round(r.left), y: Math.round(r.top),
+               w: Math.round(r.width), h: Math.round(r.height) }
+    }
+    const snapshot = () => cardEls().map((c) => {
+      const cs = getComputedStyle(c)
+      return {
+        key: c.getAttribute('data-card-key'),
+        kind: c.getAttribute('data-card-kind'),
+        col: Number(cs.gridColumnStart),
+        row: Number(cs.gridRowStart),
+        hpx: Number(c.getAttribute('data-card-hpx') ?? 0),
+        box: rectOf(c),
+      }
+    })
+
+    const viewBtn = [...document.querySelectorAll<HTMLButtonElement>('.view-btn')]
+      .find((b) => (b.title || '').startsWith('档案视图'))
+    viewBtn?.click()
+    result.viewFound = !!viewBtn
+    await waitFor(() => boardEl())
+    result.before = snapshot()
+    result.cols = boardEl()?.getAttribute('data-board-cols') ?? null
+
+    const editBtn = () => [...document.querySelectorAll<HTMLButtonElement>('.board-btn')]
+      .find((b) => (b.textContent || '').includes('编辑布局'))
+    result.editBtnFound = !!editBtn()
+    result.editBtnDisabled = !!editBtn()?.disabled
+    result.editBtnTitle = editBtn()?.title ?? null
+    editBtn()?.click()
+    await sleep(250)
+    result.editing = boardEl()?.getAttribute('data-board-editing') ?? null
+
+    // 合成拖拽：往右 2 列、往下 1 行（列宽从网格实宽反推，与 layoutModel 同式）
+    const grid = boardEl()
+    const grip = cardEls()[0]?.querySelector<HTMLElement>('.pcard-head')
+    result.dragTarget = cardEls()[0]?.getAttribute('data-card-key') ?? null
+    if (grid && grip && result.editing === '1') {
+      const gap = Number(getComputedStyle(grid).rowGap.replace('px', '')) || 12
+      const colW = (grid.clientWidth - 11 * gap) / 12
+      const rowH = Number(getComputedStyle(grid).gridAutoRows.replace('px', '')) || 84
+      const dx = Math.round(colW * 2)
+      const dy = Math.round(rowH + gap)
+      const r = grip.getBoundingClientRect()
+      const at = (x: number, y: number) => ({
+        bubbles: true, cancelable: true, pointerId: 1, pointerType: 'mouse',
+        isPrimary: true, clientX: x, clientY: y,
+      })
+      const from = { x: Math.round(r.left + 24), y: Math.round(r.top + 10) }
+      grip.dispatchEvent(new PointerEvent('pointerdown', at(from.x, from.y)))
+      // 分两步移动：手势层是"跨格才重算"，一步到位也能过，两步更接近真人拖动
+      grid.dispatchEvent(new PointerEvent('pointermove',
+        at(from.x + Math.round(dx / 2), from.y + dy)))
+      await sleep(80)
+      grid.dispatchEvent(new PointerEvent('pointermove', at(from.x + dx, from.y + dy)))
+      await sleep(120)
+      result.during = snapshot()
+      grid.dispatchEvent(new PointerEvent('pointerup', at(from.x + dx, from.y + dy)))
+      result.dragDx = dx
+      result.dragDy = dy
+      await sleep(900)                    // 等整版 PUT 落地 + 回填服务端返回的行
+    }
+    result.after = snapshot()
+    result.editingAfter = boardEl()?.getAttribute('data-board-editing') ?? null
+
+    const pre = document.createElement('pre')
+    pre.id = 'ui-probe'
+    pre.textContent = JSON.stringify({ mode: 'board', views: [], degraded, board: result })
+    document.body.appendChild(pre)
+    document.title = 'UI_PROBE_DONE'
+    return
+  }
+
   // 首次点 ✕ 的询问流程（`?probe=close-ask`，R20 devlog/097）：
   // 用户 2026-09-15 报的 bug 就在这条链路上（选了"最小化到托盘"之后，托盘「退出」退不出去）。
   // 托盘菜单本身是 OS 级、无头浏览器点不到，但**前端这一半**全能断言：
