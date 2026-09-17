@@ -543,6 +543,16 @@ export interface ProfileCardInput {
   config_json?: string | null
 }
 
+/** 重要日期 / 大型活动（`vtuber_events` 表，P7 起；R37-P3 接进档案视图的「大事记」卡）。
+ *  `event_date` 是 `YYYY-MM-DD` 本地日期字符串 —— 别用 `new Date(s)` 解析（会按 UTC 退一天）。 */
+export interface VtuberEvent {
+  id: number
+  vtuber_id: number
+  title: string
+  event_date: string
+  created_at: string | null
+}
+
 /** GET /auth/{platform}/status：平台登录态 */
 export interface AuthStatus {
   logged_in: boolean

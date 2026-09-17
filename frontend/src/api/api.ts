@@ -1,4 +1,4 @@
-import type { Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, BiliSearchResult, Capabilities, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, PoolItem, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyVtuber, UpcomingReservation, UpdatePostsResult, VTuber, VTuberFormerValues } from './types'
+import type { Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, BiliSearchResult, Capabilities, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, PoolItem, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyVtuber, UpcomingReservation, UpdatePostsResult, VTuber, VTuberFormerValues, VtuberEvent } from './types'
 
 /**
  * API 基地址：
@@ -82,6 +82,19 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cards }),
     }),
+
+  /** 重要日期 / 大型活动（vtuber_events）——「大事记」卡的数据源（R37-P3） */
+  listVtuberEvents: (id: number) => request<VtuberEvent[]>(`/vtuber/${id}/events`),
+
+  createVtuberEvent: (id: number, title: string, eventDate: string) =>
+    request<VtuberEvent>(`/vtuber/${id}/events`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, event_date: eventDate }),
+    }),
+
+  deleteVtuberEvent: (eventId: number) =>
+    request<void>(`/vtuber/event/${eventId}`, { method: 'DELETE' }),
 
   /** 帖子列表（服务端分页 + 过滤）；可传 signal 取消在途请求（切换 VTuber 防回写） */
   listPosts: (platform: string, uid: string, params: PostListParams, signal?: AbortSignal) => {

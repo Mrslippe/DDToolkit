@@ -438,11 +438,11 @@ def _assert_board(views: list[dict], width: int) -> list[str]:
     cards = board.get("cards") or []
     grid_w = board.get("gridW") or 0
     cols = board.get("cols") or 0
-    if len(cards) != 2:
-        bad.append(f"@{width} board: 卡片数 {len(cards)}，应为 2（纪念日 / 优质投稿）")
-    if {c.get("kind") for c in cards} != {"anniversary", "top-posts"}:
+    if len(cards) != 3:
+        bad.append(f"@{width} board: 卡片数 {len(cards)}，应为 3（纪念日 / 优质投稿 / 大事记）")
+    if {c.get("kind") for c in cards} != {"anniversary", "top-posts", "events"}:
         bad.append(f"@{width} board: 卡片 kind = {[c.get('kind') for c in cards]}，"
-                   f"应为 anniversary + top-posts")
+                   f"应为 anniversary + top-posts + events（R37-P3 加了大事记）")
     for c in cards:
         if abs((c.get("hpx") or 0) - (c.get("hh") or 0)) > 1:
             bad.append(f"@{width} board: 卡片 {c.get('kind')} 实渲染高 {c.get('hh')}px，"
@@ -473,7 +473,8 @@ def _assert_board(views: list[dict], width: int) -> list[str]:
                            f"应为 ['生日', '出道']")
             elif not c.get("hint"):
                 bad.append(f"@{width} board: 纪念日卡没有底部那句提示（最近的一个 / 还没填）")
-        elif kind == "top-posts":
+        elif kind in ("top-posts", "events"):
+            # 大事记同理：要么有行、要么有一句明说的空态（"还没有记录大事记"）
             if not (c.get("rows") or 0) and not c.get("emptyText"):
                 bad.append(f"@{width} board: 优质投稿卡既没有榜单行也没有空态文案"
                            f"（看起来像「没数据」，实际是没渲染）")

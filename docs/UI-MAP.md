@@ -390,7 +390,7 @@ DOM 契约（探针 `ui_probe --status-island` 直接查）：`.si-island`（`.o
 
 #### B1.3 archive 视图（数据视图 / v0.9.x 重建后形态：仅两张 870 定宽卡片纵向排列）
 > 🔴 **2026-09-06 重建已删**：`.archive-grid-top` 双列布局、**重要日期卡**（UpcomingEventsCard / `.event-*`）与 profile 视图里的旧档案卡布局全部退役——当前 archive = 直播日历卡 + 粉丝趋势卡（均 870px 定宽、恒高、卡片自治，不共用列表操作钮行）。
-> 后端 `GET /vtuber/{id}/events`、`future-reservations` 端点仍在，前端 `api.listVtuberEvents/createVtuberEvent/deleteVtuberEvent/futureReservations` 为**未接线封装**（死代码，重做时可用）。
+> 后端 `GET /vtuber/{id}/events`（R37-P3 起已接线，见 B1.4 的大事记卡）、`future-reservations`（R13 起已接线）都在用；`api.createVtuberEvent` / `deleteVtuberEvent` 目前**只有封装没有 UI 入口**（增删留到 R37-P3b 与自定义卡片一起做）。
 
 | 名称 | 类名 | 说明 |
 |---|---|---|
@@ -413,6 +413,7 @@ DOM 契约（探针 `ui_probe --status-island` 直接查）：`.si-island`（`.o
 | 布局模型 | `components/profile/layoutModel.ts` | 纯函数（**17 条单测**）：`defaultLayout`（书架式填行）/ `clampCard` / `normalizeLayout`（**向下推开**消重叠）/ `toSingleColumn`（窄窗降级）/ `gridStyle` / `cardHeightPx` |
 | 卡片注册表 | `components/profile/cardRegistry.ts` | 「支持拓展」的唯一入口（**4 条单测**）：`registerCardKind({kind,title,defaultSize,render})` —— 重复 kind **抛错**、顺序 = 注册顺序；`cards/index.tsx` 注册内置卡片，**视图不认识任何具体卡片** |
 | ├ 纪念日卡 | `cards/AnniversaryCard.tsx`（kind `anniversary`，5×3） | 两行（生日 / 出道）恒定渲染（没填也显示「未记录」）；口径 `anniversary.ts`（**14 条单测**：宽容解析 `2000-05-20`/`5月20日`/`05-20`、倒计时、2/29 平年按 3/1、就是今天） |
+| ├ 大事记卡 | `cards/EventsCard.tsx`（kind `events`，6×3） | **R37-P3**：`vtuber_events` 表（P7 建好、`GET /vtuber/{id}/events` 端点一直在、**UI 一直没接**）终于接上；口径 `events.ts`（**10 条单测**：未来在前 / `YYYY-MM-DD` 按**本地**解析不走 UTC / 脏数据跳过 / 空态说清）。这张卡也是**扩展点的真示例**：加它只写了 `events.ts` + `EventsCard.tsx` + 注册一行，**视图一行没改** |
 | └ 优质投稿卡 | `cards/TopPostsCard.tsx`（kind `top-posts`，7×3） | 卡片**自己取数**（`listPosts` 一页 50 条）→ `topPosts.ts` 排序（**9 条单测**：排除墓碑 / 优先投稿 / 播放为主点赞兜底 / 同分按时间倒序）+ 一句「按什么排 · 共几条」；点一行开帖子详情抽屉（复用页面的那一个）；未到位 = 同尺寸骨架（R36 口径） |
 | 编辑态（R37-P2b） | `.board-actions` / `.board-btn(.on)` / `.board-hint` | 头部一枚「编辑布局」；进编辑态变「重置默认 + 完成」。编辑态才有的东西：卡片描边变粉、卡头 `cursor: grab`、右下角 `.pcard-resize` 手柄、**网格辅助线**（`.board-grid.editing` 的 `repeating-linear-gradient`）。窄窗（<560）**按钮禁用**并写明原因（单列是模型算的，编辑会跟它打架） |
 | 拖拽 / 缩放 | `.pcard.dragging` + `layoutModel` 的 `moveCard`/`resizeCard` | 手势用 Pointer Events（卡头发起拖动、手柄发起缩放，`touch-action: none`）；每跨一格重算一次布局（`d.base` 快照 + 累计位移 ⇒ 不漂移）；**松手整版 PUT**，成功顶栏胶囊「布局已保存」、失败**回滚到上一版** + 说明（不留「看着排好了其实没存上」） |

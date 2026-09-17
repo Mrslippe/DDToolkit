@@ -144,6 +144,77 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
+/* ── 大事记卡（R37-P3）───────────────────────────────────────────── */
+
+.evt {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+}
+
+.evt-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.evt-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 12.5px;
+  line-height: 17px;
+}
+
+.evt-row.today .evt-when {
+  color: var(--c-primary-deep);
+  font-weight: 600;
+}
+
+.evt-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--c-text-sub);
+}
+
+.evt-date {
+  flex: none;
+  color: var(--c-text-sub);
+  font-variant-numeric: tabular-nums;
+}
+
+.evt-title {
+  flex: 1;
+  min-width: 0;
+  color: var(--c-text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.evt-when {
+  flex: none;
+  color: var(--c-text-sub);
+  font-variant-numeric: tabular-nums;
+}
+
+.evt-hint {
+  margin: auto 0 0;
+  font-size: 11.5px;
+  line-height: 16px;
+  color: var(--c-text-sub);
+}
+
+.evt-skel-date {
+  width: 34px;
+  flex: none;
+}
+
 /* ── 卡片外壳 ─────────────────────────────────────────────────────── */
 
 .pcard {

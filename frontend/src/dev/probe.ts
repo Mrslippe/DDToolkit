@@ -200,9 +200,9 @@ function measure(tag: string) {
           row: cs.gridRowStart,
           /** 卡片**内容**的粗采样（R37-P1）：防"卡片挂上了但里面什么都没渲染"这种
            *  静默失败 —— 空态文案也是内容，但必须是**明说**的那一种（`.pcard-empty`）。 */
-          rows: c.querySelectorAll('.anniv-row, .tp-row').length,
+          rows: c.querySelectorAll('.anniv-row, .tp-row, .evt-row').length,
           rowLabels: [...c.querySelectorAll('.anniv-label')].map((n) => (n.textContent || '').trim()),
-          hint: (c.querySelector('.anniv-hint, .tp-hint')?.textContent || '').trim(),
+          hint: (c.querySelector('.anniv-hint, .tp-hint, .evt-hint')?.textContent || '').trim(),
           emptyText: (c.querySelector('.pcard-empty')?.textContent || '').trim(),
           pending: !!c.querySelector('[data-pending="1"]'),
         }
