@@ -127,6 +127,10 @@ python scripts/ui_probe.py --motion-scroll            # R37-P4d（devlog/151）�
                                                      # 底部触发区停住 ⇒ 画布自己滚（≥200px）/ **卡片钉在手指下
                                                      # （同步误差 ≤2px）** / 模型行号与网格高度跟着涨；回到顶部区
                                                      # 反向滚；抬手停表；缩放手柄同样适用
+python scripts/ui_probe.py --deck                     # R40（devlog/158）：**数据视图牌堆**（一次一张卡）——
+                                                     # 方向语义（向下=前进/向上=退回，按 CSS 落点判）、
+                                                     # 一格一张、锁内反向不吞（欠账）、快拨到末张的耗时、
+                                                     # 键盘五键与首尾不越界、圆点与真值同源、非前卡 inert+aria-hidden
 python scripts/ui_probe.py --motion-lab               # R37-P4b：动效调测页（`?motion=cards`）—— 面板是**动态载入**的，
                                                      # 载入失败只会「什么都没有」⇒ 断言面板挂上 + 「按下」真能驱动手势
 ```

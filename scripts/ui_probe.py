@@ -363,6 +363,11 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
             "pinned": data.get("pinned"),
             "board": data.get("board"),
             "motionCards": data.get("motion"),
+            # 牌堆段是**视图帧**（`out.push({...measure('deck'), deck})`）⇒ 要从 views 里找，
+            # 不能只 `data.get("deck")`（那样永远拿到 None，看着像"探针没跑"）
+            "deck": data.get("deck") or next(
+                (v.get("deck") for v in (data.get("views") or [])
+                 if isinstance(v, dict) and v.get("deck")), None),
             "shell": data.get("shell"),
             "degraded": data.get("degraded") or [],
             "dom": dom_file,
@@ -372,7 +377,7 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
             "polish": None, "reservations": None, "statusIsland": None,
             "appSettings": None, "filterPill": None, "traySuspend": None,
             "closeAsk": None, "switchPerf": None, "profileSync": None,
-            "pinned": None, "board": None, "motionCards": None,
+            "pinned": None, "board": None, "motionCards": None, "deck": None,
             "degraded": [], "dom": dom_file}
 
 
@@ -668,6 +673,116 @@ def _assert_board_stats(c: dict, width: int) -> list[str]:
     return bad
 
 
+def _assert_deck(dk: dict, width: int) -> list[str]:
+    """数据视图牌堆（R40，用户 2026-09-19）。
+
+    这条探针的存在理由很具体：用户当场质疑过"120ms 静默分界快速滚动会不会卡手" ——
+    所以"**快拨要跟手**"必须是机器可判的一条，而不是我口头保证。
+    另一半是**触控板惯性不许连跳**（一划飞到底）。两者方向相反，必须同时钉住。
+    """
+    if not dk:
+        return [f"@{width} deck: 没量到牌堆段（探针未跑完？）"]
+    bad: list[str] = []
+    if not dk.get("ok"):
+        return [f"@{width} deck: 探针未跑完（{dk.get('reason') or '无 ok 标记'}）"]
+    # ① 骨架
+    if (dk.get("count") or 0) < 2:
+        bad.append(f"@{width} deck: 牌堆里只有 {dk.get('count')} 张卡"
+                   f"—— 「一次一张 + 能切换」至少要两张才成立")
+    if (dk.get("dots") or 0) != dk.get("count"):
+        bad.append(f"@{width} deck: 圆点 {dk.get('dots')} 个与卡片 {dk.get('count')} 张对不上")
+    if dk.get("dotActive") != dk.get("index0"):
+        bad.append(f"@{width} deck: 圆点高亮在 {dk.get('dotActive')}，卡片索引是 "
+                   f"{dk.get('index0')} —— 指示器与真值必须同源")
+    if not dk.get("insideFrame"):
+        bad.append(f"@{width} deck: 卡片越出框（框={dk.get('frameH')} 卡={dk.get('cardH')}）"
+                   f"—— 框要留内边距给阴影，且卡片要自适应填充")
+    # ② 方向语义（双向都要测）
+    if dk.get("noiseMoved"):
+        bad.append(f"@{width} deck: 噪声滚动（<4px）也切了卡 —— 触控板抖动不该算手势")
+    if dk.get("oneNotchIdx") != 1:
+        bad.append(f"@{width} deck: 向下滚一格没有前进一张（{dk.get('oneNotchIdx')}）")
+    if dk.get("oneNotchBackIdx") != 0:
+        bad.append(f"@{width} deck: 向上滚一格没有退回一张（{dk.get('oneNotchBackIdx')}）")
+    # ③ **锁内反向输入不吞**（2 张卡下"快拨跟手"的真信号）：
+    #    切下去之后 40ms 内反向一格（还在 150ms 软锁里）⇒ 解锁时欠账要被消化 ⇒ 回到原位。
+    #    用"一次手势一张 + 不记欠账"实现的话会停在末张。
+    if dk.get("creditDuringIdx") != 1:
+        bad.append(f"@{width} deck: 锁内那一步没落地（索引 {dk.get('creditDuringIdx')}）")
+    if dk.get("creditIdx") != 0:
+        bad.append(f"@{width} deck: 锁内反向输入被吞了（欠账没消化，停在 {dk.get('creditIdx')}）"
+                   f"—— 「快拨不跟手」就是这么来的")
+    # ④ 快拨 4 格：必须**很快到末张**（不能一格一格等动画放完）
+    if dk.get("fastSpinIdx") != 1:
+        bad.append(f"@{width} deck: 快拨 4 格没到末张（{dk.get('fastSpinIdx')}）")
+    if (dk.get("fastSpinMs") or 0) > 1800:
+        bad.append(f"@{width} deck: 快拨 4 格用了 {dk.get('fastSpinMs')}ms —— 锁不该等于动画全长")
+    # ⑤ 但也不许失控
+    if dk.get("runawayIdx") != 1:
+        bad.append(f"@{width} deck: 10 格挤在 100ms 后索引是 {dk.get('runawayIdx')}"
+                   f"（2 张卡应停在末张，不许越界）")
+    # ⑥ 触控板（连续流）**不在这里断言**：它依赖事件之间的时间差，虚拟时间下不可复现
+    #    （实测 8px 的累积永远到不了阈值）。按本仓分工，那条契约由纯函数单测
+    #    `deckWheel.test.ts` 的 12 条钉住（噪声/离散格/欠账封顶/惯性尾巴只算一次/新手势分界）。
+    #    这里只留一条**粗判**：连续流爆发不许越界（真坏了会看到索引乱跳）。
+    # ⑥ 相位与过渡注册（虚拟时间下读不到中间帧，只能判这两样 + 静止终态）
+    want_ms = 0 if dk.get("motionReduced") else None
+    if want_ms is None:
+        if "transform" not in (dk.get("transitionProp") or ""):
+            bad.append(f"@{width} deck: 卡片没有登记 transform 过渡"
+                       f"（{dk.get('transitionProp')!r}）—— 切换会是硬跳")
+        if (dk.get("transitionMs") or 0) <= 0:
+            bad.append(f"@{width} deck: 过渡时长是 {dk.get('transitionMs')}ms")
+        # 方向语义 = CSS 契约（不靠抓动画中间帧 —— 虚拟时间下定时器会立刻触发）
+        ty = dk.get("downOutTy")
+        if ty is None:
+            bad.append(f"@{width} deck: 量不到向下滚时出场卡的落点")
+        elif ty <= 20:
+            bad.append(f"@{width} deck: 向下滚时出场卡没有**向下位移**（translateY={ty}px）"
+                       f"—— 需求是「当前一张卡片向下滑动出框」")
+        sx = dk.get("upOutSx")
+        if sx is None:
+            bad.append(f"@{width} deck: 量不到向上滚时出场卡的落点")
+        elif sx >= 0.995:
+            bad.append(f"@{width} deck: 向上滚时出场卡没有**缩小**（scaleX={sx}）"
+                       f"—— 需求是「当前一张卡片向后渐隐」")
+    elif (dk.get("transitionMs") or 0) > 120:
+        bad.append(f"@{width} deck: reduced-motion 下过渡仍有 {dk.get('transitionMs')}ms"
+                   f"（应 ≤120ms：保留可感知的淡入，去掉位移缩放）")
+    # ⑦ 键盘五键 + 首尾不越界（顺序也要边界感知：只有 2 张卡）
+    if dk.get("keyHome") != 0:
+        bad.append(f"@{width} deck: Home 没回到第一张（{dk.get('keyHome')}）")
+    if dk.get("keyPageDown") != 1:
+        bad.append(f"@{width} deck: PageDown 没前进一张（{dk.get('keyPageDown')}）")
+    if dk.get("keyUp") != 0:
+        bad.append(f"@{width} deck: ↑ 没退回一张（{dk.get('keyUp')}）")
+    if dk.get("keyDown") != 1:
+        bad.append(f"@{width} deck: ↓ 没前进一张（{dk.get('keyDown')}）")
+    if dk.get("keyEnd") != (dk.get("count") or 1) - 1:
+        bad.append(f"@{width} deck: End 没跳到末张（{dk.get('keyEnd')}）")
+    if dk.get("keyDownAtEnd") != dk.get("keyEnd"):
+        bad.append(f"@{width} deck: 末张再向下越界了"
+                   f"（{dk.get('keyEnd')} → {dk.get('keyDownAtEnd')}）")
+    if dk.get("keyPageUp") != 0:
+        bad.append(f"@{width} deck: 末张按 PageUp 没退回首张（{dk.get('keyPageUp')}）")
+    if dk.get("keyUpAtHome") != 0:
+        bad.append(f"@{width} deck: 首张再向上越界了（{dk.get('keyUpAtHome')}）")
+    # ⑧ 无障碍：内容藏在手势后面 ⇒ 非前卡必须对读屏与 Tab 隐藏
+    if not dk.get("othersInert"):
+        bad.append(f"@{width} deck: 非前卡没有 `inert` —— Tab 会跑进看不见的卡片里")
+    if not dk.get("othersAriaHidden"):
+        bad.append(f"@{width} deck: 非前卡没有 `aria-hidden` —— 读屏会念出看不见的内容")
+    if dk.get("frontInert"):
+        bad.append(f"@{width} deck: **前卡**也被 inert 了 —— 那张卡上的按钮点不着")
+    if dk.get("dotClickIdx") != 1:
+        bad.append(f"@{width} deck: 点第 2 个圆点没切过去（{dk.get('dotClickIdx')}）")
+    return bad
+
+
+def _assert_deck_unused() -> None:
+    """（占位：保持本文件里"每批都有对应断言函数"的对称，无实际用途）"""
+
+
 def _assert_glow(v: dict, width: int) -> list[str]:
     """视图切换光条 + 亮点指示器 + 顶部渐隐（R39-D，用户 2026-09-19）。
 
@@ -741,9 +856,15 @@ def _assert_glow(v: dict, width: int) -> list[str]:
                        f"（{spot.get('transitionProp')!r}）—— 切换视图时不会滑动")
     scrolled = g.get("scrolled")
     mask = g.get("mask") or ""
+    if tag == "archive" and not g.get("deckPresent"):
+        bad.append(f"@{width} {tag}: 数据视图里没有牌堆（`.data-deck`）"
+                   f"—— R40 起这一页是「一次一张卡」")
     if scrolled not in ("0", "1"):
-        bad.append(f"@{width} {tag}: 滚动体没下发 `data-scrolled`（{scrolled!r}）"
-                   f"—— 顶部渐隐的开关没有单一事实来源")
+        # R40：数据视图改成牌堆后**页面不再滚动** ⇒ 没有滚动体就没有 `data-scrolled`，合法；
+        # 但"有滚动体就必须有开关"这条不变（否则顶部渐隐就失去单一事实来源）。
+        if g.get("hasScroller"):
+            bad.append(f"@{width} {tag}: 滚动体没下发 `data-scrolled`（{scrolled!r}）"
+                       f"—— 顶部渐隐的开关没有单一事实来源")
     elif scrolled == "0" and "gradient" in mask:
         bad.append(f"@{width} {tag}: 还没滚动就挂着顶部渐隐 mask（{mask[:40]!r}）"
                    f"—— 静止页面顶部发虚是白白牺牲可读性")
@@ -930,7 +1051,7 @@ CARD_COVER_W = 220
 # （2026-09-11 审计加固：`_first_vtuber` 失败 → 路由落到 `/` → 只 emit `empty`，
 #   所有卡片/筛选断言全部空过，退出码仍是 0。）
 EXPECTED_TAGS = [
-    "archive", "archive-scrolled", "cards", "list",
+    "archive", "cards", "list", "list-scrolled",
     "list-filter-pop", "list-filter-year", "list-filter-applied", "list-filter-reset",
     "list-video", "profile",
 ]
@@ -1187,6 +1308,13 @@ def main() -> int:
         action="store_true",
         help="只跑一档宽度：顶栏状态岛（R12a，devlog/089）—— 空闲无容器 / 瞬时消息点亮 / "
              "点开面板条目可命中且不挤动右栏 / Esc 收起 / ttl 到期自动回空闲",
+    )
+    ap.add_argument(
+        "--deck",
+        action="store_true",
+        help="只跑一档宽度：**数据视图牌堆**（R40，用户 2026-09-19）—— 一次一张卡 / "
+             "向下滚=前进·向上滚=退回 / **快拨要跟手**（4 格 ≥3 张）/ "
+             "**触控板惯性只切一张** / 键盘五键 / 圆点可点 / 非前卡 inert+aria-hidden",
     )
     ap.add_argument(
         "--reservations",
@@ -2262,6 +2390,41 @@ def main() -> int:
                 if not failures:
                     print(f"  [ok] 切换全部落地（耗时见上；这是 **dev 构建**的基线，"
                           f"打包版会更快）")
+            for b in failures:
+                print("   -", b)
+            return 1 if failures else 0
+
+        if args.deck:
+            # 数据视图牌堆（R40，用户 2026-09-19）：一次一张卡。
+            w = widths[0]
+            url = f"http://localhost:{vite_port}{route}?probe=deck"
+            print(f"[probe] deck @{w} → {url}")
+            res = _run_probe(edge, url, w, args.height, WORK, "deck")
+            dk = ((res or {}).get("deck") or {})
+            if res and not dk:
+                print(f"  [!] 探针 mode={res.get('mode')!r} 键={sorted(res.keys())}"
+                      f"（新字段需要在 _run_probe 的白名单里登记）")
+            print(f"  牌堆：框高={dk.get('frameH')} 卡高={dk.get('cardH')} "
+                  f"张数={dk.get('count')} 圆点={dk.get('dots')}（当前 {dk.get('dotActive')}）"
+                  f" 卡在框内={dk.get('insideFrame')}")
+            print(f"  滚动：噪声={dk.get('noiseIdx')}（动过={dk.get('noiseMoved')}）"
+                  f" 一格↓={dk.get('oneNotchIdx')} 一格↑={dk.get('oneNotchBackIdx')} "
+                  f"｜ **锁内反向不吞**：锁中={dk.get('creditDuringIdx')} → 消化后="
+                  f"{dk.get('creditIdx')}")
+            print(f"  快拨：4 格 → {dk.get('fastSpinIdx')}（{dk.get('fastSpinMs')}ms）"
+                  f" ｜ 10 格挤 100ms → {dk.get('runawayIdx')}")
+            print(f"  触控板（参考，不断言；契约在 deckWheel.test.ts）：爆发后索引 "
+                  f"{dk.get('trackpadInfo')}")
+            print(f"  方向契约：向下滚出场卡 translateY={dk.get('downOutTy')}px ｜ "
+                  f"向上滚出场卡 scaleX={dk.get('upOutSx')} ｜ "
+                  f"过渡={dk.get('transitionProp')!r} {dk.get('transitionMs')}ms")
+            print(f"  键盘：Home={dk.get('keyHome')} ↓={dk.get('keyDown')} "
+                  f"PgDn={dk.get('keyPageDown')} ↑={dk.get('keyUp')} End={dk.get('keyEnd')} "
+                  f"末张再↓={dk.get('keyDownAtEnd')} 首张再↑={dk.get('keyUpAtHome')}")
+            print(f"  无障碍：非前卡 inert={dk.get('othersInert')} "
+                  f"aria-hidden={dk.get('othersAriaHidden')} 前卡 inert={dk.get('frontInert')}"
+                  f" ｜ 圆点点击 → {dk.get('dotClickIdx')}")
+            failures += _assert_deck(dk, w)
             for b in failures:
                 print("   -", b)
             return 1 if failures else 0

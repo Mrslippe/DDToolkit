@@ -32,8 +32,9 @@ import PostDetailDrawer from '../components/PostDetailDrawer'
 import AddAccountDialog from '../components/AddAccountDialog'
 import VtuberSettingsDialog from '../components/VtuberSettingsDialog'
 import LiveCalendar from '../components/LiveCalendar'
+import DataDeck from '../components/DataDeck'
 import FanTrendChart from '../components/FanTrendChart'
-import OverlayScroll from '../components/OverlayScroll'
+// R40：数据视图改用 DataDeck（不再用 OverlayScroll 包那一页 —— 一次只看一张卡，没有页面滚动）
 import FloatPill from '../components/common/FloatPill'
 import StateBlock from '../components/common/StateBlock'
 import HeroCardsView from '../components/posts/HeroCardsView'
@@ -687,7 +688,10 @@ return (
         )}
 
         {vtuber && scene.view === 'archive' && (
-          <OverlayScroll className="archive-view">
+          /* R40（2026-09-19，用户）：数据视图从"固定卡片 + 上下滚动"改成**一次一张卡的牌堆** ——
+             滚轮上下切换、方向语义见 `DataDeck` 文件头；两张卡始终挂载（切换时零重建，
+             ECharts 不会被 ResizeObserver 拖着重画）。 */
+          <DataDeck keys={['live-calendar', 'fan-chart']} persistKey={String(vtuber.id)}>
             {/* 2026-09-06：archive 逐步重建（用户主导），第一步 = 直播日历卡（Frame10612 规格）
                 R13：`vtuberId` 给日历取"该 V 的未来预约"（预约是 V 级数据，跨账号共用） */}
             <LiveCalendar
@@ -703,7 +707,7 @@ return (
               accountId={heroAcc?.id ?? null}
               refreshTick={trendTick}
             />
-          </OverlayScroll>
+          </DataDeck>
         )}
 
         {vtuber && scene.view === 'profile' && (

@@ -332,6 +332,11 @@ function measure(tag: string) {
         } : null,
         /** 顶部渐隐：只有"确实有内容被遮住"（滚下去了）才挂 mask */
         scrolled: root?.getAttribute('data-scrolled') ?? null,
+        /** 本视图**有没有滚动体**：R40 起数据视图是牌堆、页面不滚动 ⇒ 没有 scroller 是合法的，
+         *  但"有 scroller 就必须有 data-scrolled 开关"这条不变 */
+        hasScroller: !!scroller,
+        /** 数据视图必须是牌堆（R40） */
+        deckPresent: !!document.querySelector('[data-deck]'),
         mask: scroller ? getComputedStyle(scroller).maskImage : null,
       }
     })(),
@@ -371,8 +376,157 @@ function measure(tag: string) {
   }
 }
 
-/** 筛选弹窗几何（P10-A）：`.posts-panel` 是 `overflow:hidden`，弹窗越出右栏即被裁掉——
- *  这是双月历（宽 520）最容易踩的坑，固化成机器可判定的不变量。 */
+/**
+ * 数据视图「一次一张卡」牌堆（R40，用户 2026-09-19）。
+ *
+ * 这条探针守的是**四件最容易做坏的事**：
+ *   ① 方向语义（向下滚 = 前进到下一张；向上滚 = 退回上一张）；
+ *   ② **快拨要跟手**（鼠标离散格每格一张 —— 用户当场质疑过"120ms 静默分界会不会卡手"，
+ *      所以这里必须有"4 格连拨至少前进 3 张"这条判据）；
+ *   ③ **触控板惯性尾巴不许连跳**（连续小流一次手势只切一张）；
+ *   ④ 静止终态与无障碍（前卡居中且可命中、非前卡 inert + aria-hidden）。
+ *
+ * ⚠️ 虚拟时间下 CSS 过渡不推进（本仓老规矩）⇒ 断言分三层：
+ *   提交值（`data-deck-index` / `data-deck-phase`）+ 过渡注册（computed transition-duration）
+ *   + `settleTransforms()` 之后的**静止终态**几何。
+ */
+async function probeDeck(out: unknown[]): Promise<void> {
+  const deck = () => document.querySelector<HTMLElement>('[data-deck]')
+  const cards = () => [...document.querySelectorAll<HTMLElement>('[data-deck-card]')]
+  const front = () => cards().find((c) => c.getAttribute('data-deck-pos') === 'front')
+  const idx = () => Number(deck()?.getAttribute('data-deck-index') ?? -1)
+  const dots = () => [...document.querySelectorAll<HTMLElement>('[data-deck-dot]')]
+  const result: Record<string, unknown> = {}
+
+  // ① 初始态：框内只有一张在前，且**卡片必须完整落在框里**（框留了内边距给阴影，
+  //    本仓栽过一次"卡片阴影被容器裁掉"）
+  const frame = deck()
+  const fr = frame?.getBoundingClientRect()
+  const f0 = front()?.getBoundingClientRect()
+  result.index0 = idx()
+  result.count = cards().length
+  result.dots = dots().length
+  result.dotActive = dots().findIndex((d) => d.getAttribute('data-deck-dot') === 'on')
+  result.frontKey = front()?.getAttribute('data-deck-card') ?? null
+  result.frameH = fr ? Math.round(fr.height) : null
+  result.cardH = f0 ? Math.round(f0.height) : null
+  result.insideFrame = !!(fr && f0 && f0.top >= fr.top - 1 && f0.bottom <= fr.bottom + 1 &&
+    f0.left >= fr.left - 1 && f0.right <= fr.right + 1)
+  // 非前卡：不可命中 + 对读屏隐藏 + 不可 Tab 进入
+  const others = cards().filter((c) => c.getAttribute('data-deck-pos') !== 'front')
+  result.othersInert = others.every((c) => c.hasAttribute('inert'))
+  result.othersAriaHidden = others.every((c) => c.getAttribute('aria-hidden') === 'true')
+  result.frontInert = !!front()?.hasAttribute('inert')
+
+  // ② 滚轮两条通道
+  // ⚠️ 顺序必须**边界感知**：牌堆现在只有 2 张卡，往下滚一次就到末张 ——
+  // 按"能连翻 4 张"写判据会全部撞在边界上（第一版就是这么假红的）。
+  // 于是把"快拨跟手"换成 2 张卡下**真有信号**的那条：**锁内反向输入不吞**（欠账）。
+  const spin = async (dy: number, times: number, gap: number) => {
+    for (let i = 0; i < times; i += 1) {
+      deck()?.dispatchEvent(new WheelEvent('wheel', {
+        deltaY: dy, bubbles: true, cancelable: true,
+      }))
+      // gap=0 ⇒ **完全同步连发**：虚拟时间下连 `sleep(0)` 都会跳掉整段时钟，
+      // 而"手势分界"是 150ms 静默 ⇒ 会退化成"每个事件都是新手势"
+      if (gap > 0) await sleep(gap)
+    }
+    await sleep(700)          // 等动画与欠账消化完
+    await settleTransforms()
+    return idx()
+  }
+  result.noiseIdx = await spin(2, 6, 16)            // 噪声（<4px）不该切
+  result.noiseMoved = result.noiseIdx !== 0
+  result.oneNotchIdx = await spin(100, 1, 16)       // 向下滚一格 = 前进一张
+  result.oneNotchBackIdx = await spin(-100, 1, 16)  // 向上滚一格 = 退回一张
+  // **锁内反向输入不吞**：切下去之后立刻反向一格（此时还在 150ms 软锁里）⇒
+  // 解锁时欠账要被消化 ⇒ 回到原位。用"一次手势一张且不记欠账"实现的话会停在 1。
+  deck()?.dispatchEvent(new WheelEvent('wheel', { deltaY: 100, bubbles: true, cancelable: true }))
+  await sleep(40)
+  deck()?.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, bubbles: true, cancelable: true }))
+  result.creditDuringIdx = idx()                    // 锁内：索引已到末张
+  await sleep(900)
+  await settleTransforms()
+  result.creditIdx = idx()                          // 欠账消化后应当回到 0
+  // 快拨：4 格连拨（40ms 间隔）必须**很快到末张**，而不是一格一格慢慢挪
+  const t0 = performance.now()
+  result.fastSpinIdx = await spin(100, 4, 40)
+  result.fastSpinMs = Math.round(performance.now() - t0)
+  result.runawayIdx = await spin(100, 10, 10)       // 10 格挤在 100ms：不许失控
+  // ⚠️ 触控板的连续流必须**同步连发**（gap=0）：虚拟时间下 `sleep(16)` 会一次跳掉整段时钟，
+  //    而"手势分界"是 150ms 静默 ⇒ 每个事件都被当成新手势、累积量每次清零 ⇒ 永远切不动
+  //    （第一版就是这么假红的）。真机上事件本来就 8–16ms 一个，同步连发才是"一次手势"的等价物。
+  // ⚠️ **连续流（触控板）通道不在这里断言** —— 它依赖"事件之间的时间差"，而虚拟时间下
+  //    两次 dispatch 之间时钟也会推进 ⇒ 150ms 手势分界根本复现不了（实测 8px 的累积
+  //    永远到不了阈值）。按本仓分工，那条契约由**纯函数单测** `deckWheel.test.ts` 钉住
+  //    （12 条：噪声/离散格/欠账封顶/惯性尾巴只算一次/新手势分界…），探针只守集成面。
+  result.trackpadInfo = await spin(-30, 10, 0)      // 仅供参考，不断言
+
+  // ③ 方向语义 = **CSS 契约**（不能靠"抓动画中的那一帧"：虚拟时间下定时器会立刻触发，
+  //    相位活不过一个 timer —— 第一版就是这么假红的）。
+  //    做法：杀掉过渡，手动摆出「出场卡 + 入场卡」，再读两者的落点。
+  //      · 向下滚：出场卡必须**向下位移**（滑出框）
+  //      · 向上滚：出场卡必须**缩小**（向后隐去）
+  const cssMatrix = async (phase: 'down' | 'up') => {
+    const el = deck()
+    const [a, b] = cards()
+    if (!el || !a || !b) return null
+    const kill = document.createElement('style')
+    kill.textContent = '.deck-card{transition:none !important}'
+    document.head.appendChild(kill)
+    el.setAttribute('data-deck-phase', phase)
+    a.setAttribute('data-deck-pos', 'out')
+    b.setAttribute('data-deck-pos', 'front')
+    void a.getBoundingClientRect()
+    const tf = (n: HTMLElement) => getComputedStyle(n).transform
+    const out = { out: tf(a), front: tf(b) }
+    kill.remove()
+    el.setAttribute('data-deck-phase', 'idle')
+    return out
+  }
+  const mtx = (s: string | null | undefined) => {
+    const m = /matrix\(([^)]+)\)/.exec(s || '')
+    if (!m) return null
+    const [sx, , , sy, tx, ty] = m[1].split(',').map((v) => Number(v.trim()))
+    return { sx, sy, tx, ty }
+  }
+  const downM = mtx((await cssMatrix('down'))?.out)
+  const upM = mtx((await cssMatrix('up'))?.out)
+  result.downOutTy = downM ? Math.round(downM.ty) : null
+  result.upOutSx = upM ? Math.round(upM.sx * 1000) / 1000 : null
+  // 过渡注册（虚拟时间下读不到中间帧，只能判"有没有登记过渡"）
+  const cs = front() ? getComputedStyle(front()!) : null
+  result.transitionProp = cs?.transitionProperty ?? null
+  result.transitionMs = Math.round((parseFloat(cs?.transitionDuration || '0') || 0) * 1000)
+
+  // ④ 键盘：五个键都要能用（内容藏在手势后面时，键盘是可达性底线）
+  const key = async (k: string) => {
+    deck()?.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }))
+    await sleep(600)
+    await settleTransforms()
+    return idx()
+  }
+  result.keyHome = await key('Home')
+  result.keyPageDown = await key('PageDown')        // 从首张前进一张
+  result.keyUp = await key('ArrowUp')               // 再退回首张
+  result.keyDown = await key('ArrowDown')
+  result.keyEnd = await key('End')
+  result.keyDownAtEnd = await key('ArrowDown')      // 末张再向下：不越界
+  result.keyPageUp = await key('PageUp')            // 末张向上：回到首张
+  result.keyUpAtHome = await key('ArrowUp')         // 首张再向上：不越界
+
+  // ⑤ 圆点可点（指示器不只是装饰）
+  dots()[1]?.click()
+  await sleep(600)
+  await settleTransforms()
+  result.dotClickIdx = idx()
+
+  result.motionReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  result.ok = true
+  out.push({ ...measure('deck'), deck: result })
+}
+
+
 function filterPopBox() {
   const pop = document.querySelector('.post-filter-pop')
   const panel = document.querySelector('.posts-panel')
@@ -565,6 +719,13 @@ export async function runUiProbe(): Promise<void> {
     document.body.appendChild(pre)
     document.title = 'UI_PROBE_DONE'
     return
+  }
+
+  if (mode === 'deck') {
+    const clicked = clickView('数据视图')
+    await sleep(2200)
+    if (!clicked) degraded.push('view:数据视图')
+    await probeDeck(out)
   }
 
   if (mode === 'archive') {
@@ -3678,18 +3839,19 @@ export async function runUiProbe(): Promise<void> {
       if (!clickView(v.title)) degraded.push(`view:${v.key}`)
       await sleep(900) // 场景入场 0.22s + 数据到位
       out.push(measure(v.key))
-      if (v.key === 'archive') {
+      if (v.key === 'list') {
         // 顶部渐隐（R39-D）的**正向**分支：滚下去之后必须挂上 mask。
         // 不滚就永远只测到 `data-scrolled=0` 那一半 —— 那是"看着有、其实没接上"的温床。
-        const sc = document.querySelector<HTMLElement>('.archive-view .os-scroll')
+        // ⚠️ R40 起**不能再拿数据视图测**：它已改成一次一张卡的牌堆，页面根本不滚动。
+        const sc = document.querySelector<HTMLElement>('.list-scroll .os-scroll')
         if (sc) {
           sc.scrollTop = 220
           await sleep(400)
-          out.push(measure('archive-scrolled'))
+          out.push(measure('list-scrolled'))
           sc.scrollTop = 0
           await sleep(300)
         } else {
-          degraded.push('archive-scroll')
+          degraded.push('list-scroll')
         }
       }
       if (v.key === 'list') {
