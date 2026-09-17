@@ -216,6 +216,9 @@
 
 .glow-bar {
   position: relative;              /* 亮点指示器的定位祖先（R39-D） */
+  /* 亮点直径（单一真源）：CSS 用它画、TS 读它算居中 —— 两处都不会各写一个 64。
+     比按钮（50px）大一圈：用户 2026-09-19「大小也调大一点」。 */
+  --glow-spot: 64px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -224,26 +227,35 @@
      （原五枚 443px，2026-09-08 删掉邮件占位钮后同步收窄） */
   width: 354px;
   height: 59px;
-  /* 软光带：**2D 径向**（R39-D，用户 2026-09-19：「边缘做点羽化，不要有太明显的分界线」）。
-     原来是 `linear-gradient(90deg,…)` —— 左右两端渐隐，但**上下缘是硬边**（59px 的一条带子
-     横在顶栏上，边界一眼可见）。径向渐变让四个方向同时收口，才是"光"的样子。 */
-  background: radial-gradient(120% 100% at 50% 50%,
-    rgba(255, 255, 255, 0.68) 0%, rgba(255, 255, 255, 0.30) 46%, rgba(255, 255, 255, 0) 100%);
+  /* 软光带：**中心 → 边缘完整渐变**（R39-D 首版留了尾巴，R39-D2 修）。
+     ⚠️ 首版写的是 `radial-gradient(120% 100% …)` —— 横向椭圆半径 120% 意味着
+     **左右两端仍在渐变内部**（实测边缘中点的白约 9%）⇒ 元素边界处出现一条淡淡的竖线，
+     用户原话「分界线和背景仍然很明显」。现在横向半径收到 **72%**（渐变在盒子**内部**
+     就归零）、纵向 100%（恰好在上下缘归零）⇒ 四个方向都看不出边界。
+     停靠点加密到 4 档，让衰减更接近"光"而不是"带子"。 */
+  background: radial-gradient(72% 100% at 50% 50%,
+    rgba(255, 255, 255, 0.72) 0%, rgba(255, 255, 255, 0.46) 34%,
+    rgba(255, 255, 255, 0.18) 66%, rgba(255, 255, 255, 0) 100%);
 }
 
-/* 亮点指示器（R39-D，用户：「有一个亮点追随当前切换的按钮，带有切换时的动画效果」）。
+/* 亮点指示器（R39-D，用户：「有一个亮点追随当前切换的按钮，带有切换时的动画效果」；
+   R39-D2：「这个光点太集中了，扩散数值调大然后大小也调大一点」）。
    位置/宽度由 PostsPage 按激活钮的 `offsetLeft/offsetWidth` 写进内联样式；这里只管长相与过渡。
    **必须 pointer-events:none** —— 否则它盖在按钮上会吃掉点击（"看着能用、其实点不着"）。 */
 .glow-spot {
   position: absolute;
   left: 0;
   top: 50%;
-  height: 50px;
-  margin-top: -25px;
+  width: var(--glow-spot);          /* 直径由光条的 CSS 变量给（TS 读同一个变量算居中） */
+  height: var(--glow-spot);
+  margin-top: calc(var(--glow-spot) / -2);
   border-radius: 50%;
   pointer-events: none;
+  /* 扩散到**整圆**（首版 72% 就归零 ⇒ 看着是一颗紧凑的亮点）：
+     从中心 0.9 一路衰减到边缘 0，四档停靠点让边缘不出现"环"。 */
   background: radial-gradient(50% 50% at 50% 50%,
-    rgba(255, 255, 255, 0.95) 0%, rgba(255, 255, 255, 0.55) 45%, rgba(255, 255, 255, 0) 72%);
+    rgba(255, 255, 255, 0.90) 0%, rgba(255, 255, 255, 0.52) 38%,
+    rgba(255, 255, 255, 0.20) 68%, rgba(255, 255, 255, 0) 100%);
   transition: transform var(--motion-base) var(--ease-standard),
               width var(--motion-base) var(--ease-standard);
 }
@@ -4769,11 +4781,11 @@ img.hero-avatar {
   font-variant-numeric: tabular-nums;
 }
 
-/* 合计 / 磁盘剩余：与上面的"占用了多少"分开（一个是占用、一个是余量） */
-.aps-info--sep {
-  margin-top: 4px;
-  padding-top: 7px;
-  border-top: 1px solid var(--c-border);
+/* 合计 / 磁盘剩余：与上面的"占用了多少"分开（一个是占用、一个是余量）。
+   R39-B2（用户 2026-09-19）：「发丝线去掉，不用这样分隔显得很怪」—— 只留一点空行，
+   不画线（`.aps-info--sep` 的 border-top 已删）。 */
+.aps-info--group {
+  margin-top: 6px;
 }
 
 .aps-info-strong {
@@ -4812,9 +4824,10 @@ img.hero-avatar {
   margin-top: 12px;
 }
 
-/* 应用更新（R23b）：说明可能很长（发布说明的开头一段），限高可滚，别把关于页撑爆 */
+/* 应用更新（R23b）：**已并入「运行信息」段末尾**（R39-B2），所以这里只需要与上面的
+   信息行拉开一点距离 —— 不再是独立小节，也不该带小节标题那套间距。 */
 .aps-update {
-  margin-top: 4px;
+  margin-top: 10px;
 }
 
 .aps-update .aps-storage-actions {

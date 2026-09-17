@@ -680,6 +680,75 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
                       <dd className="aps-mono" title={data.info.log_file}>{data.info.log_file}</dd>
                       <dt>进程</dt><dd>PID {data.info.pid}</dd>
                     </dl>
+                    {/* 应用更新（R23b/R39-B2）：**并入「运行信息」段末尾**（用户 2026-09-19：
+                        「应用更新的描述和按钮直接集成到运行信息末尾就行」）—— 它本来就是
+                        "这台机器/这个版本"的补充信息，单开一段反而把关于页切得太碎。 */}
+                    <div className="aps-update" data-testid="aps-update">
+                      <p className="aps-note">
+                        {isShell ? '检查是否有新版本' : '更新只在桌面端可用'}
+                      </p>
+                      {isShell && (
+                        <>
+                          {updateState === 'available' && update ? (
+                            <>
+                              <p className="aps-note" data-update="available">
+                                发现新版本 <b>v{update.version}</b>
+                                {update.date ? `（${update.date.slice(0, 10)}）` : ''}
+                              </p>
+                              {update.notes && (
+                                <p className="aps-note aps-update-notes">{update.notes}</p>
+                              )}
+                              <div className="aps-storage-actions">
+                                <FloatPill
+                                  size="md" shape="text" active
+                                  data-testid="aps-update-install"
+                                  disabled={installing}
+                                  onClick={() => void (portable ? openReleasePage() : doInstallUpdate())}
+                                >
+                                  {portable ? '打开发布页下载'
+                                    : installing
+                                      ? `下载中 ${updatePct === null ? '…' : `${updatePct}%`}`
+                                      : '下载并重启安装'}
+                                </FloatPill>
+                              </div>
+                              {portable && (
+                                <p className="aps-note">
+                                  便携版不自动覆盖：请到发布页下载新版压缩包，解压后替换整个目录。
+                                </p>
+                              )}
+                            </>
+                          ) : (
+                            <div className="aps-storage-actions">
+                              <FloatPill
+                                size="md" shape="text"
+                                data-testid="aps-update-check"
+                                disabled={updateState === 'checking'}
+                                onClick={() => void doCheckUpdate()}
+                              >
+                                {updateState === 'checking' ? '检查中…' : '检查更新'}
+                              </FloatPill>
+                              <FloatPill size="md" shape="text"
+                                         onClick={() => void openReleasePage()}>
+                                打开发布页
+                              </FloatPill>
+                            </div>
+                          )}
+                          {updateState === 'latest' && (
+                            <p className="aps-note" data-update="latest">已是最新版本</p>
+                          )}
+                          {updateState === 'error' && (
+                            <p className="aps-field-error" data-update="error">
+                              检查更新失败：{updateError}
+                              {updateErrorKind === 'network'
+                                ? '（可以检查代理是否正常，或直接去发布页下载）'
+                                : updateErrorKind === 'remote'
+                                  ? '（等新版本发布后再试；也可以直接去发布页看看）'
+                                  : ''}
+                            </p>
+                          )}
+                        </>
+                      )}
+                    </div>
                   </section>
 
                   {/* 存储占用（R22-B）：谁在占地方 + 能立刻动手的动作。
@@ -707,9 +776,10 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
                             <span>{formatBytes(storage.groups.logs.bytes)}</span>
                           </dd>
                         </dl>
-                        {/* 合计与磁盘剩余是**另一类**数字（一个是"占了多少"，一个是"还剩多少"），
-                            用一条通栏发丝线隔开；不断在占用行里冒充第四项。 */}
-                        <dl className="aps-info aps-info--nums aps-info--sep">
+                        {/* 合计与磁盘剩余是**另一类**数字（一个是"占了多少"，一个是"还剩多少"）。
+                            R39-B2（用户 2026-09-19）：「发丝线去掉，不用这样分隔显得很怪」——
+                            靠**空行**分组就够，不画线。 */}
+                        <dl className="aps-info aps-info--nums aps-info--group">
                           <dt>合计</dt>
                           <dd data-storage="total" className="aps-info-strong">
                             <span>{formatBytes(storage.total_bytes)}</span>
@@ -724,6 +794,33 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
                             )}
                           </dd>
                         </dl>
+                        {storage.stale_backups.length > 0 && (
+                          <p className="aps-note" data-storage="stale">
+                            另有手工备份 {storage.stale_backups.map((b) => b.name).join('、')}
+                            （{formatBytes(storage.stale_backups.reduce((n, b) => n + b.bytes, 0))}）——
+                            它不是程序生成的，确认没用可以自己删掉。
+                          </p>
+                        )}
+                        {shellDir && (
+                          <p className="aps-note" data-dir-source={shellDir.source}>
+                            数据目录来源：
+                            {DIR_SOURCE_LABEL[shellDir.source] ?? shellDir.source}
+                            {shellDir.portable
+                              && '（便携/自定义安装：把整个文件夹搬走即可，应用内不迁移）'}
+                          </p>
+                        )}
+                        {oldDir && (
+                          <p className="aps-note" data-old-dir={oldDir}>
+                            旧目录仍保留：<span className="aps-mono">{oldDir}</span>
+                            {' '}（确认新目录一切正常后，用下面的「删除旧目录」删掉）
+                          </p>
+                        )}
+                        {shellDir?.pointerUnusable && (
+                          <p className="aps-field-error" data-dir-fallback="1">
+                            迁移记录不可用，当前已回退默认目录：{shellDir.pointerUnusable}
+                          </p>
+                        )}
+                        {/* 动作行**放在整段最后**（用户 2026-09-19：「把那三个按钮（放）这一项的末尾」） */}
                         <div className="aps-storage-actions">
                           <FloatPill
                             size="md" shape="text"
@@ -796,76 +893,6 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
                     )}
                   </section>
 
-                  {/* 应用更新（R23b）：桌面端才给「检查更新」；**便携版不自我更新**
-                      （解压即用的目录不该被安装器覆盖，只提示去发布页下新版压缩包）。
-                      R39-B：不再重复版本号（上面「运行信息」已说一次），这里只说**状态**。 */}
-                  <section className="aps-section" data-testid="aps-update">
-                    <h4 className="aps-section-head">应用更新</h4>
-                    <p className="aps-note">
-                      {isShell ? '检查是否有新版本' : '更新只在桌面端可用'}
-                    </p>
-                    {isShell && (
-                      <>
-                        {updateState === 'available' && update ? (
-                          <>
-                            <p className="aps-note" data-update="available">
-                              发现新版本 <b>v{update.version}</b>
-                              {update.date ? `（${update.date.slice(0, 10)}）` : ''}
-                            </p>
-                            {update.notes && (
-                              <p className="aps-note aps-update-notes">{update.notes}</p>
-                            )}
-                            <div className="aps-storage-actions">
-                              <FloatPill
-                                size="md" shape="text" active
-                                data-testid="aps-update-install"
-                                disabled={installing}
-                                onClick={() => void (portable ? openReleasePage() : doInstallUpdate())}
-                              >
-                                {portable ? '打开发布页下载'
-                                  : installing
-                                    ? `下载中 ${updatePct === null ? '…' : `${updatePct}%`}`
-                                    : '下载并重启安装'}
-                              </FloatPill>
-                            </div>
-                            {portable && (
-                              <p className="aps-note">
-                                便携版不自动覆盖：请到发布页下载新版压缩包，解压后替换整个目录。
-                              </p>
-                            )}
-                          </>
-                        ) : (
-                          <div className="aps-storage-actions">
-                            <FloatPill
-                              size="md" shape="text"
-                              data-testid="aps-update-check"
-                              disabled={updateState === 'checking'}
-                              onClick={() => void doCheckUpdate()}
-                            >
-                              {updateState === 'checking' ? '检查中…' : '检查更新'}
-                            </FloatPill>
-                            <FloatPill size="md" shape="text"
-                                       onClick={() => void openReleasePage()}>
-                              打开发布页
-                            </FloatPill>
-                          </div>
-                        )}
-                        {updateState === 'latest' && (
-                          <p className="aps-note" data-update="latest">已是最新版本</p>
-                        )}
-                        {updateState === 'error' && (
-                          <p className="aps-field-error" data-update="error">
-                            检查更新失败：{updateError}
-                            {updateErrorKind === 'network'
-                              ? '（可以检查代理是否正常，或直接去发布页下载）'
-                              : updateErrorKind === 'remote'
-                                ? '（等新版本发布后再试；也可以直接去发布页看看）'
-                                : ''}
-                          </p>
-                        )}
-                      </>
-                    )}
-                  </section>
                   {/* 只读项（R39-B）：原来裸挂在小节流之外（没有标题），
                       看着像"关于页还没结束又来了几行" —— 给它一个头，与前三段同构 */}
                   <section className="aps-section" data-testid="aps-readonly">

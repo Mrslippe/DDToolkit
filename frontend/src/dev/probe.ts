@@ -2090,10 +2090,15 @@ export async function runUiProbe(): Promise<void> {
           tabular: cs.fontVariantNumeric,
         }
       }
-      const sep = dlg.querySelector<HTMLElement>('.aps-info--sep')
-      result.aboutSepBorder = sep
+      const sep = dlg.querySelector<HTMLElement>('.aps-info--group')
+      result.aboutGroupBorder = sep
         ? parseFloat(getComputedStyle(sep).borderTopWidth) || 0
         : null
+      /** 「应用更新」应当**并入「运行信息」段末尾**（R39-B2，用户 2026-09-19） */
+      const infoSec = dlg.querySelector<HTMLElement>('[data-testid="aps-about-info"]')
+      result.aboutUpdateInsideInfo = !!infoSec?.querySelector('[data-testid="aps-update"]')
+      result.aboutUpdateSectionHead = [...dlg.querySelectorAll('.aps-section-head')]
+        .some((n) => text(n).includes('应用更新'))
       // 应用更新面板（R23b/R24）：**浏览器里没有更新这回事** ⇒ 面板要在（说明当前版本），
       // 但**不许出现「检查更新」按钮**（会点出一个必然失败的请求）。这条判据挡的是
       // "忘记做环境判断、把桌面端按钮渲染到浏览器里"。

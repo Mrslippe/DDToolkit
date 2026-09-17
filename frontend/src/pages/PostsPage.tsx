@@ -123,13 +123,15 @@ export default function PostsPage() {
   // ── 亮点指示器（R39-D）：位置跟着激活的视图钮走 ────────────────────────
   // 量的是**激活钮自己的 offsetLeft/offsetWidth**（而不是按 50+10 的间距算）：
   // 以后改按钮尺寸/间距时，亮点自动跟得上，不用同步改两处数字。
+  // 光点直径从 CSS 变量 `--glow-spot` 读（单一真源：CSS 画、TS 只用来算居中）。
   const glowRef = useRef<HTMLDivElement | null>(null)
   const [spot, setSpot] = useState<{ x: number; w: number } | null>(null)
   useLayoutEffect(() => {
     const bar = glowRef.current
     const btn = bar?.querySelector<HTMLElement>('.view-btn.on')
     if (!bar || !btn) return
-    setSpot({ x: btn.offsetLeft, w: btn.offsetWidth })
+    const size = parseFloat(getComputedStyle(bar).getPropertyValue('--glow-spot')) || 0
+    setSpot({ x: btn.offsetLeft + (btn.offsetWidth - size) / 2, w: size })
   }, [view])
   // 列表页右侧操作钮组：收起态只露 [展开钮][更新动态]，展开向左滑出全部四钮
   const [actionsOpen, setActionsOpen] = useState(false)

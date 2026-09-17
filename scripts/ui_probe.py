@@ -688,6 +688,24 @@ def _assert_glow(v: dict, width: int) -> list[str]:
     if "radial-gradient" not in bg:
         bad.append(f"@{width} {tag}: 光条背景不是 2D 径向渐变（{bg[:60]!r}）—— "
                    f"线性渐变会让上下缘留下硬边（用户要的是「边缘羽化」）")
+    else:
+        # R39-D2（用户 2026-09-19：「分界线和背景仍然很明显」）：渐变必须在**盒子内部**就归零。
+        # 首版写的是 `radial-gradient(120% 100% …)` —— 横向半径 120% ⇒ 左右两端仍落在渐变里
+        # （实测边缘中点还有约 9% 的白）⇒ 元素边界处一条淡竖线。
+        m = re.search(r"radial-gradient\(\s*([\d.]+)%\s+([\d.]+)%", bg)
+        if not m:
+            bad.append(f"@{width} {tag}: 光条渐变的半径解析不出来（{bg[:70]!r}）")
+        else:
+            rx, ry = float(m.group(1)), float(m.group(2))
+            if rx > 100:
+                bad.append(f"@{width} {tag}: 光条渐变横向半径 {rx}% > 100% —— "
+                           f"左右两端仍在渐变内部，元素边界会留下一条淡线")
+            if ry > 100:
+                bad.append(f"@{width} {tag}: 光条渐变纵向半径 {ry}% > 100% —— "
+                           f"上下缘会留下淡线")
+        if "rgba(255, 255, 255, 0) 100%" not in bg:
+            bad.append(f"@{width} {tag}: 光条渐变末端没有归零（{bg[-60:]!r}）—— "
+                       f"边缘到不了全透明，也就等于有分界线")
     for key, label in (("barRadius", "圆角"), ("barBorder", "描边")):
         val = g.get(key)
         if val not in ("0px", 0, None) and not (isinstance(val, (int, float)) and val == 0):
@@ -705,6 +723,9 @@ def _assert_glow(v: dict, width: int) -> list[str]:
                        f"{spot['activeCx']} 偏了（应 ≤1.5px）—— 亮点要「追随当前切换的按钮」")
         if (spot.get("w") or 0) <= 0:
             bad.append(f"@{width} {tag}: 亮点宽度是 {spot.get('w')}（没尺寸等于没渲染）")
+        elif spot["w"] < 56:
+            bad.append(f"@{width} {tag}: 亮点只有 {spot['w']}px —— 用户要求「大小也调大一点」，"
+                       f"要比按钮（50px）大一圈（≥56px）才有扩散感")
         if spot.get("pointerEvents") != "none":
             bad.append(f"@{width} {tag}: 亮点没关掉指针事件（{spot.get('pointerEvents')!r}）"
                        f"—— 它会挡住视图钮的点击")
@@ -1658,18 +1679,20 @@ def main() -> int:
                                         f"（{heads}）—— 运行信息 / 存储占用 / 应用更新 三段都要有头")
                     order = aps.get("aboutStorageOrder") or []
                     if order:
-                        want = ["aps-section-head", "aps-info", "aps-info", "aps-storage-actions"]
-                        if order[:4] != want:
+                        want = ["aps-section-head", "aps-info", "aps-info"]
+                        if order[:3] != want:
                             failures.append(f"@{w} app-settings: 存储占用小节的子元素顺序是 {order}，"
-                                            f"应以 {want} 开头（标题 → 占用数字 → 分隔后的合计/余量 → 动作行）")
-                        # 小字一律在动作行**之后**（不夹在数字与按钮之间）。
-                        # 不断言"最后一项必须是 note"：有没有注释取决于数据（手工备份/便携版…），
-                        # 那会让判据随数据漂 —— 顺序关系才是契约。
+                                            f"应以 {want} 开头（标题 → 占用数字 → 合计/余量）")
+                        # R39-B2（用户 2026-09-19）：「把那三个按钮（放）这一项的**末尾**」
+                        # ⇒ 动作行必须是**最后一项**；注释小字排在它前面。
+                        if order[-1] != "aps-storage-actions":
+                            failures.append(f"@{w} app-settings: 存储占用小节最后一项是 "
+                                            f"{order[-1]!r}，应当是动作行（`aps-storage-actions`）"
+                                            f"—— 用户口径：按钮放这一项的末尾")
                         if "aps-note" in order and "aps-storage-actions" in order \
-                                and order.index("aps-note") < order.index("aps-storage-actions"):
-                            failures.append(f"@{w} app-settings: 存储占用小节里有注释小字排在动作行"
-                                            f"**之前**（{order}）—— 小字统一贴小节底，"
-                                            f"不夹在数字与按钮之间")
+                                and order.index("aps-note") > order.index("aps-storage-actions"):
+                            failures.append(f"@{w} app-settings: 有注释小字排在动作行**之后**"
+                                            f"（{order}）—— 按钮要在最末")
                     na = aps.get("aboutNumAlign") or {}
                     if na:
                         if na.get("display") != "flex" or na.get("justify") != "space-between":
@@ -1679,12 +1702,19 @@ def main() -> int:
                         if "tabular-nums" not in (na.get("tabular") or ""):
                             failures.append(f"@{w} app-settings: 存储数值没有用等宽数字"
                                             f"（{na.get('tabular')!r}）—— 三行数字对不齐")
-                    sep = aps.get("aboutSepBorder")
-                    if sep is None:
-                        failures.append(f"@{w} app-settings: 找不到「合计」前的分隔（`.aps-info--sep`）")
-                    elif sep <= 0:
-                        failures.append(f"@{w} app-settings: 「合计 / 磁盘剩余」与上面的占用之间"
-                                        f"没有分隔线（border-top={sep}px）")
+                    # R39-B2：合计/余量与占用之间**不画线**（用户：「发丝线去掉，显得很怪」）
+                    gb = aps.get("aboutGroupBorder")
+                    if gb is None:
+                        failures.append(f"@{w} app-settings: 找不到合计/余量那一组（`.aps-info--group`）")
+                    elif gb > 0:
+                        failures.append(f"@{w} app-settings: 合计/余量那组仍有分隔线"
+                                        f"（border-top={gb}px）—— 用户要求去掉，靠空行分组就够")
+                    # R39-B2：「应用更新」并进「运行信息」末尾，不再单独成段
+                    if not aps.get("aboutUpdateInsideInfo"):
+                        failures.append(f"@{w} app-settings: 「应用更新」没有并进「运行信息」段末尾")
+                    if aps.get("aboutUpdateSectionHead"):
+                        failures.append(f"@{w} app-settings: 关于页仍有「应用更新」小节标题"
+                                        f"—— 它应当并进运行信息，不再单独成段")
                     # 应用更新面板（R23b/R24）：面板要在（显示当前版本），但**浏览器里不许
                     # 出现「检查更新」按钮** —— 那会点出一个必然失败的请求（探针跑在无头浏览器）
                     if not aps.get("updatePanel"):
