@@ -751,6 +751,7 @@ def _assert_topbar(tb: dict | None, width: int) -> list[str]:
 # 这条不变量只能靠真实浏览器量，固化为断言（1100 档是最紧的一档：面板 558 vs 弹窗 536）。
 FILTER_PILL_EXPECT = {
     "list-filter-pop": "筛选",
+    "list-filter-year": "筛选",
     "list-filter-applied": "筛选 · 1",
     "list-filter-reset": "筛选",
 }
@@ -781,6 +782,31 @@ def _assert_filter_pop(v: dict, width: int) -> list[str]:
         bad.append(f"@{width} {tag}: 取不到「确认」钮状态（.drp-confirm 选择器踩空？）")
     elif fp["confirmDisabled"]:
         bad.append(f"@{width} {tag}: 「确认」初始态被禁用（区间为空时应可用）")
+    # ── 年份双箭头（R39-A）：每块月历 2 个月份箭头 + 2 个年份双箭头，且**点一下正好跳一年** ──
+    for i, panel in enumerate(fp.get("yearNav") or []):
+        if panel.get("yearBtns") != 2:
+            bad.append(f"@{width} {tag}: 第 {i + 1} 块月历的年份双箭头有 "
+                       f"{panel.get('yearBtns')} 个，应为 2（±1 年）")
+        if panel.get("monthBtns") != 2:
+            bad.append(f"@{width} {tag}: 第 {i + 1} 块月历的月份箭头有 "
+                       f"{panel.get('monthBtns')} 个，应为 2（原有行为不许被挤掉）")
+    yj = fp.get("yearJump")
+    if yj is not None:
+        if not (yj.get("hasPrev") and yj.get("hasNext")):
+            bad.append(f"@{width} {tag}: 找不到年份双箭头"
+                       f"（要 `data-nav=\"year\"` + `data-dir=\"±1\"`，探针按它点）")
+        elif yj.get("y1") is None:
+            bad.append(f"@{width} {tag}: 点「上一年」之后量不到标题年份")
+        else:
+            if (yj.get("y0") or 0) - (yj.get("y1") or 0) != 1:
+                bad.append(f"@{width} {tag}: 点「上一年」年份从 {yj.get('y0')} 变成 {yj.get('y1')}"
+                           f"（应正好 −1 年）—— 只看「按钮在不在」是不够的，粒度错了照样能绿")
+            if yj.get("m1") != yj.get("m0"):
+                bad.append(f"@{width} {tag}: 跳年份时月份也跟着变了"
+                           f"（{yj.get('m0')} 月 → {yj.get('m1')} 月）—— 应当只跳年")
+            if yj.get("y2") != yj.get("y0"):
+                bad.append(f"@{width} {tag}: 再点「下一年」没回到起点"
+                           f"（{yj.get('y0')} → {yj.get('y2')}）—— 两个方向都要能用")
     return bad
 
 
@@ -819,7 +845,7 @@ CARD_COVER_W = 220
 #   所有卡片/筛选断言全部空过，退出码仍是 0。）
 EXPECTED_TAGS = [
     "archive", "cards", "list",
-    "list-filter-pop", "list-filter-applied", "list-filter-reset",
+    "list-filter-pop", "list-filter-year", "list-filter-applied", "list-filter-reset",
     "list-video", "profile",
 ]
 

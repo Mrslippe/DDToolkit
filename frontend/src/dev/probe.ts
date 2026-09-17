@@ -340,7 +340,44 @@ function filterPopBox() {
     gridW: grid ? Math.round(grid.getBoundingClientRect().width) : null,
     presets: document.querySelectorAll('.drp-preset').length,
     confirmDisabled: (document.querySelector('.drp-confirm') as HTMLButtonElement | null)?.disabled ?? null,
+    /** 年份/月份导航钮（R39-A）：每块面板应当有 **2 个月份箭头 + 2 个年份双箭头** */
+    yearNav: panels.map((p) => ({
+      title: (p.querySelector('.drp-title')?.textContent || '').trim(),
+      monthBtns: [...p.querySelectorAll<HTMLElement>('.drp-nav')]
+        .filter((b) => b.dataset.nav !== 'year').length,
+      yearBtns: [...p.querySelectorAll<HTMLElement>('[data-nav="year"]')].length,
+    })),
   }
+}
+
+/**
+ * 年份双箭头要**真的跳一年**（R39-A）：点「上一年」⇒ 标题年份 −1；点「下一年」⇒ 复原。
+ * 只看"按钮在不在"是不够的 —— 跳错粒度（比如还是跳一个月）照样能绿。
+ */
+async function probeYearJump() {
+  const visible = () => [...document.querySelectorAll<HTMLElement>('.drp-panel')]
+    .find((n) => getComputedStyle(n).display !== 'none')
+  const yearOf = (p: HTMLElement | undefined) =>
+    Number((/(\d{4})/.exec((p?.querySelector('.drp-title')?.textContent || '')) || [])[1]) || null
+  const monthOf = (p: HTMLElement | undefined) =>
+    Number((/(\d{1,2})月/.exec((p?.querySelector('.drp-title')?.textContent || '')) || [])[1]) || null
+  const p0 = visible()
+  const y0 = yearOf(p0)
+  const m0 = monthOf(p0)
+  const prev = p0?.querySelector<HTMLButtonElement>('[data-nav="year"][data-dir="-1"]')
+  const next = p0?.querySelector<HTMLButtonElement>('[data-nav="year"][data-dir="1"]')
+  const out = { hasPrev: !!prev, hasNext: !!next, y0, m0, y1: null as number | null, m1: null as number | null, y2: null as number | null }
+  if (!prev || !next) return out
+  prev.click()
+  await sleep(220)
+  const p1 = visible()
+  out.y1 = yearOf(p1)
+  out.m1 = monthOf(p1)
+  // 再点一次「下一年」应当回到起点（同一块面板上，方向可逆）
+  visible()?.querySelector<HTMLButtonElement>('[data-nav="year"][data-dir="1"]')?.click()
+  await sleep(220)
+  out.y2 = yearOf(visible())
+  return out
 }
 
 /** 筛选弹窗全链路（开 → 点预设 → 确认 → 重置 → Esc）：草稿制是否守住、确认是否生效、
@@ -356,6 +393,10 @@ async function probeFilterPop(out: unknown[]): Promise<void> {
   q<HTMLButtonElement>('.pfilter-btn')?.click()
   await sleep(450)
   out.push({ ...measure('list-filter-pop'), filterPop: filterPopBox(), pill: pillText() })
+
+  // 年份双箭头（R39-A）：点一下必须正好跳一年（且可逆）—— 在动草稿之前先量完
+  const yearJump = await probeYearJump()
+  out.push({ ...measure('list-filter-year'), filterPop: { ...filterPopBox(), yearJump }, pill: pillText() })
 
   // 草稿制：点预设只动草稿 —— 触发器文案必须还是「筛选」（确认才生效）
   preset('近一周')?.click()

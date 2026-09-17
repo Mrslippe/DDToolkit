@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react'
 import {
   RANGE_PRESETS,
   fmtDate,
@@ -113,15 +113,37 @@ export default function DateRangePicker({ value, onConfirm, onDraftChange }: Pro
     return (
       <div className="drp-panel" key={ymKey(month)}>
         <div className="drp-head">
-          <button type="button" className="drp-nav" title="上个月" onClick={() => setMonth(shiftMonths(month, -1))}>
-            <ChevronLeft className="size-3.5" />
-          </button>
+          {/* R39-A（用户 2026-09-19）：原来只有 ±1 月的箭头，选很早的年份要点十几次；
+              在月份箭头**外侧**各加一枚双箭头跳 ±1 年（`data-nav="year"` 供探针点击对账）。
+              跳年 = `shiftMonths(month, ∓12)` —— 复用同一条月位移口径（月末夹取/闰日都已被
+              `check_date_range.mjs` 钉住），不新写日期算术。 */}
+          <span className="drp-nav-group">
+            <button
+              type="button" className="drp-nav" data-nav="year" data-dir="-1" title="上一年"
+              onClick={() => setMonth(shiftMonths(month, -12))}
+            >
+              <ChevronsLeft className="size-3.5" />
+            </button>
+            <button type="button" className="drp-nav" title="上个月"
+                    onClick={() => setMonth(shiftMonths(month, -1))}>
+              <ChevronLeft className="size-3.5" />
+            </button>
+          </span>
           <span className="drp-title">
             {month.getFullYear()}年{month.getMonth() + 1}月
           </span>
-          <button type="button" className="drp-nav" title="下个月" onClick={() => setMonth(shiftMonths(month, 1))}>
-            <ChevronRight className="size-3.5" />
-          </button>
+          <span className="drp-nav-group">
+            <button type="button" className="drp-nav" title="下个月"
+                    onClick={() => setMonth(shiftMonths(month, 1))}>
+              <ChevronRight className="size-3.5" />
+            </button>
+            <button
+              type="button" className="drp-nav" data-nav="year" data-dir="1" title="下一年"
+              onClick={() => setMonth(shiftMonths(month, 12))}
+            >
+              <ChevronsRight className="size-3.5" />
+            </button>
+          </span>
         </div>
         <div className="drp-wd">
           {WEEKDAYS.map((w) => (
