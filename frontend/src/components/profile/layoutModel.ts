@@ -213,12 +213,18 @@ export function resizeCard(cards: CardLayout[], id: string, w: number, h: number
   return pushDown(next, id)
 }
 
-/** 像素位移 → 格子位移（拖拽手势层用；四舍五入到最近的格）。 */
+/**
+ * 像素位移 → 格子位移（拖拽 / 缩放手势层用；四舍五入到最近的格）。
+ *
+ * ⚠️ 两个参数都是**格距**（`列宽 + 间隙` / `行高 + 间隙`），不是"列宽"。
+ * 卡片挪一格在屏幕上走的就是一个格距 —— 传列宽会让"拖 45% 就跨格"（R37-P4c 实测到的 bug：
+ * 缩放手柄只拖一点点，卡片整列跳）。参数名带上 `Pitch` 就是为了让传错的人在调用处就看得见。
+ */
 export function cellsFromPx(dxPx: number, dyPx: number,
-                            colWidth: number, rowHeight: number): { dx: number; dy: number } {
+                            colPitch: number, rowPitch: number): { dx: number; dy: number } {
   return {
-    dx: Math.round(dxPx / Math.max(1, colWidth)),
-    dy: Math.round(dyPx / Math.max(1, rowHeight)),
+    dx: Math.round(dxPx / Math.max(1, colPitch)),
+    dy: Math.round(dyPx / Math.max(1, rowPitch)),
   }
 }
 

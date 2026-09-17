@@ -2463,6 +2463,83 @@ def main() -> int:
                     failures.append(f"@{w} {tag}: 编辑态按下后相位是 "
                                     f"{mc.get('editModePhaseOnDown')!r}，应为 lifted"
                                     f"（编辑态按下即拖 —— 不然「编辑布局」按钮白点）")
+                # ⑦ 退避 FLIP（R37-P4c）：被挤开的卡要有补偿位移 + 登记过渡；拖动卡不许有
+                flipped = mc.get("flipDuring") or []
+                if not reduced:
+                    if not any(e.get("flip") for e in flipped):
+                        failures.append(f"@{w} {tag}: 跨格后被挤开的卡没有 FLIP 补偿位移"
+                                        f"（`data-flip` 全空 —— 退避又变回瞬移了）"
+                                        f"：{[(e.get('key'), e.get('flip')) for e in flipped]}")
+                    else:
+                        # 补偿位移必须**是整格的整数倍**（差一点就说明算式里少了 gap 或拿错了单位）
+                        pitch = ((mc.get("gridW") or 0) + 12) / 12
+                        for e in flipped:
+                            raw = e.get("flip")
+                            if not raw:
+                                continue
+                            try:
+                                fx, fy = (int(v) for v in str(raw).split(","))
+                            except ValueError:
+                                failures.append(f"@{w} {tag}: 卡片 {e.get('key')} 的 `data-flip` "
+                                                f"值 {raw!r} 解析不了")
+                                continue
+                            if (e.get("dur") or "0s") in ("0s", ""):
+                                failures.append(f"@{w} {tag}: 卡片 {e.get('key')} 有 FLIP 位移"
+                                                f"却**没登记过渡**（dur={e.get('dur')!r}）—— 会瞬移过去")
+                            if fx and abs(abs(fx) % pitch) > 2 and abs(abs(fx) % pitch) < pitch - 2:
+                                failures.append(f"@{w} {tag}: 卡片 {e.get('key')} 的横向补偿 {fx}px "
+                                                f"不是格距 {pitch:.1f}px 的整数倍")
+                            if fy and abs(abs(fy) % 96) > 2 and abs(abs(fy) % 96) < 94:
+                                failures.append(f"@{w} {tag}: 卡片 {e.get('key')} 的纵向补偿 {fy}px "
+                                                f"不是行距 96px 的整数倍")
+                    if mc.get("dragFlip"):
+                        failures.append(f"@{w} {tag}: **被拖的那张卡也带了 FLIP 补偿**"
+                                        f"（{mc.get('dragFlip')!r}）—— 两条动画会打架")
+                    # 归位（用户拍板：让位与归位都要动画）：正向补偿 = 从下面升回去
+                    back = mc.get("flipBack") or []
+                    ups = []
+                    for e in back:
+                        raw = e.get("flip")
+                        if not raw:
+                            continue
+                        try:
+                            _, fy = (int(v) for v in str(raw).split(","))
+                        except ValueError:
+                            continue
+                        if fy > 0:
+                            ups.append(fy)
+                    if not ups:
+                        failures.append(f"@{w} {tag}: 把拖动卡挪回去后，邻居没有**归位**动画"
+                                        f"（`data-flip` 里没有正 dy）："
+                                        f"{[(e.get('key'), e.get('flip')) for e in back]}"
+                                        f"—— 升回去时瞬移了")
+                # 落定后所有卡的 FLIP 都要撤干净（留着就是"回不去了"）
+                for e in (mc.get("flipAfterSettle") or []):
+                    if e.get("flip") or "translate" in (e.get("inline") or ""):
+                        failures.append(f"@{w} {tag}: 落定后卡片 {e.get('key')} 仍留 FLIP 位移"
+                                        f"（flip={e.get('flip')!r} inline={e.get('inline')!r}）")
+                # ⑧ 缩放手柄（R37-P4c）：连续 px 跟手 + 跨格才吸附 + 松手清内联
+                if mc.get("resizeHandle"):
+                    b, half, full = mc.get("resizeBefore") or {}, mc.get("resizeHalf") or {}, mc.get("resizeFull") or {}
+                    after = mc.get("resizeAfter") or {}
+                    if half.get("modelW") != b.get("modelW") or half.get("modelH") != b.get("modelH"):
+                        failures.append(f"@{w} {tag}: 拖不到半格时模型尺寸就变了"
+                                        f"（{b.get('modelW')}×{b.get('modelH')} → "
+                                        f"{half.get('modelW')}×{half.get('modelH')}）"
+                                        f"—— 应当是「连续像素跟手、跨格才吸附」")
+                    grew_w = (half.get("w") or 0) - (b.get("w") or 0)
+                    if grew_w < (half.get("dx") or 0) * 0.6:
+                        failures.append(f"@{w} {tag}: 拖了 {half.get('dx')}px，实渲染宽只长了 {grew_w}px"
+                                        f"（没跟手 —— 尺寸应当 1:1 跟着手柄走）")
+                    if (full.get("modelW") or 0) <= (b.get("modelW") or 0):
+                        failures.append(f"@{w} {tag}: 拖过一整格后模型宽仍是 {full.get('modelW')}"
+                                        f"（跨格没吸附）")
+                    if "width" in (mc.get("resizeInlineAfter") or ""):
+                        failures.append(f"@{w} {tag}: 松开手柄后仍留内联尺寸"
+                                        f"（{mc.get('resizeInlineAfter')!r}）")
+                    if (after.get("modelW") or 0) != (full.get("modelW") or 0):
+                        failures.append(f"@{w} {tag}: 落定后模型宽 {after.get('modelW')} 与拖到的 "
+                                        f"{full.get('modelW')} 不一致（尺寸没落库？）")
                 if mc.get("editingAtEnd") != "0":
                     failures.append(f"@{w} {tag}: 点「完成」后仍在编辑态"
                                     f"（{mc.get('editingAtEnd')!r}）")

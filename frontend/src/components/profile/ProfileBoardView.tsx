@@ -24,7 +24,7 @@
  * 3. **窄窗降级看容器宽**（`ResizeObserver`）—— 且**窄窗下不允许编辑**：
  *    单列布局是模型算出来的，编辑会跟它打架（按钮禁用 + 写明原因）。
  */
-import { useCallback, useEffect, useRef, useState, type ComponentType } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ComponentType } from 'react'
 import { Check, GripVertical, RotateCcw, SlidersHorizontal } from 'lucide-react'
 
 import { api } from '../../api/api'
@@ -34,10 +34,13 @@ import { pill } from '../../utils/pill'
 import OverlayScroll from '../OverlayScroll'
 import { getCardKind, listCardKinds } from './cardRegistry'
 import {
-  GRID_COLS, GRID_GAP, ROW_H, NARROW_PX, cardHeightPx, cellsFromPx, columnWidthPx,
+  GRID_COLS, GRID_GAP, ROW_H, MIN_W, MIN_H, NARROW_PX, cardHeightPx, cellsFromPx, columnWidthPx,
   defaultLayout, gridStyle, isNarrow, moveCard, resizeCard, toSingleColumn,
   type CardLayout,
 } from './layoutModel'
+import {
+  flipDelta, flipDurationMs, needsFlip,
+} from './flip'
 import {
   LONG_PRESS_MS, SETTLE_GRACE_MS, type CardPhase, isDrag, liftOffset, motionPlan, nextPhase,
   phaseTransform,
@@ -163,14 +166,47 @@ export default function ProfileBoardView({ vtuber, refreshTick, onOpenPost }: Pr
     moved: boolean
   } | null>(null)
 
-  /** 手势的**可见**部分（相位 + 跟手位移）—— 这个进 state，因为要画出来 */
+  /** 手势的**可见**部分（相位 + 跟手位移 + 缩放中的尺寸）—— 这个进 state，因为要画出来 */
   const [gesture, setGesture] = useState<
-    { id: string; phase: CardPhase; x: number; y: number } | null
+    { id: string; phase: CardPhase; x: number; y: number; w?: number; h?: number } | null
   >(null)
   const pressTimer = useRef<number | null>(null)
 
+  /**
+   * 退避动画（R37-P4c，规格 §5.2）：**被挤开的卡先补一段"抵消位移"再滑回去**（FLIP）。
+   *
+   * `settled=false` 的那一帧是 I（Invert：打上补偿位移、`transition: none`，看着没动）；
+   * `settled=true` 之后撤掉 transform 并登记过渡，于是 P（Play）——卡片从旧位置滑到新位置。
+   * 拖动中的那张卡**不参与**（它由跟手位移驱动，两条动画打架会看出"被拽回去"）。
+   */
+  const [flips, setFlips] = useState<
+    Record<string, { x: number; y: number; ms: number; settled: boolean }>
+  >({})
+  /** 布局变化前的卡片位置（FLIP 的"F"）；由 `applyLayout` 在改 DOM 之前量 */
+  const rectsRef = useRef<Record<string, { x: number; y: number }>>({})
+
   const reduced = usePrefersReducedMotion()
   const plan = motionPlan(reduced)
+
+  /** 量下当前所有卡的位置（FLIP 的 First 步） */
+  const captureRects = () => {
+    const el = gridRef.current
+    if (!el) return
+    const out: Record<string, { x: number; y: number }> = {}
+    for (const node of el.querySelectorAll<HTMLElement>('.pcard')) {
+      const key = node.getAttribute('data-card-key')
+      if (!key) continue
+      const r = node.getBoundingClientRect()
+      out[key] = { x: r.left, y: r.top }
+    }
+    rectsRef.current = out
+  }
+
+  /** 改布局的唯一入口：先记旧位置（给 FLIP 用）再落新布局 */
+  const applyLayout = (next: CardLayout[]) => {
+    if (!reduced) captureRects()      // 减少动效 ⇒ 不做退避动画，也就没必要量
+    setCards(next)
+  }
 
   const clearGestureTimers = () => {
     if (pressTimer.current != null) {
@@ -218,7 +254,9 @@ export default function ProfileBoardView({ vtuber, refreshTick, onOpenPost }: Pr
     // 防抖：还没够得上"拖动"就什么都不做（否则点一下就会挪卡片）
     if (!d.moved && !isDrag(dxPx, dyPx)) return
     const colW = columnWidthPx(gridRef.current?.clientWidth ?? 0)
-    const { dx, dy } = cellsFromPx(dxPx, dyPx, colW, ROW_H + GRID_GAP)
+    // ⚠️ 传的是**格距**（列宽 + 间隙）：卡片挪一格在屏幕上走的就是格距。
+    // 传列宽会让"拖不到半格就跨格"（R37-P4c 探针量出来的 bug）。
+    const { dx, dy } = cellsFromPx(dxPx, dyPx, colW + GRID_GAP, ROW_H + GRID_GAP)
 
     // 长按还没成立就开始拖 ⇒ 取消这一次手势（把它让给原生滚动/选择）
     if (pressTimer.current != null) {
@@ -230,27 +268,54 @@ export default function ProfileBoardView({ vtuber, refreshTick, onOpenPost }: Pr
     }
 
     let next = d.base
-    if (dx || dy) {                              // 没跨格就不重算布局
-      d.moved = true
-      next = d.mode === 'move'
-        ? moveCard(d.base, d.id, d.origin.x + dx, d.origin.y + dy)
-        : resizeCard(d.base, d.id, d.origin.w + dx, d.origin.h + dy)
-      setCards(next)
+    // ⚠️ 判"要不要重算布局"必须拿**目标格位**跟**当前模型格位**比，不能只看"指针有没有跨格线"：
+    // 卡片被拖出去一格再拖回来时，指针位移换算回格是 0（= 原点），而模型还停在被拖出去的那一格 ——
+    // 只判 `dx||dy` 的话模型不回退，松手时卡片会**凭空跳一格**（R37-P4c 的"归位"断言抓到的）。
+    const live = cardsRef.current.find((c) => c.id === d.id) ?? d.origin
+    if (d.mode === 'move') {
+      const tx = d.origin.x + dx
+      const ty = d.origin.y + dy
+      if (live.x !== tx || live.y !== ty) {
+        d.moved = true
+        next = moveCard(d.base, d.id, tx, ty)
+        applyLayout(next)
+      }
+      // 跟手位移：卡片视觉位置 = 指针位移 − 它所在格子的位移。
+      // 格子位移**用模型算**（不读 DOM）：拖动期间读 rect 会强制重排，而且拿到的还可能是
+      // 上一帧的位置。
+      //
+      // ⚠️ 这里**刻意不做 rAF 节流**（第一版做了，被探针逼回来）：pointermove 本来就是
+      // 每帧一两次，React 自己会把同一批状态更新合掉；再加一层 rAF 只会让"跟手位移落在
+      // 下一帧"，而**探针在多远的将来读到它就成了竞态**（实测默认档绿、reduced 档红，
+      // 差别只是那一帧有没有被服务）。手感相关的东西不该有竞态。
+      const cur = next.find((c) => c.id === d.id) ?? d.origin
+      const cellDx = (cur.x - d.origin.x) * (colW + GRID_GAP)
+      const cellDy = (cur.y - d.origin.y) * (ROW_H + GRID_GAP)
+      const off = liftOffset(dxPx, dyPx, cellDx, cellDy)
+      setGesture((g) => (g && g.id === d.id && g.phase === 'lifted' ? { ...g, ...off } : g))
+      return
     }
 
-    // 跟手位移（只对"移动"）：卡片视觉位置 = 指针位移 − 它所在格子的位移。
-    // 格子位移**用模型算**（不读 DOM）：拖动期间读 rect 会强制重排，而且拿到的还可能是
-    // 上一帧的位置。
-    //
-    // ⚠️ 这里**刻意不做 rAF 节流**（第一版做了，被探针逼回来）：pointermove 本来就是
-    // 每帧一两次，React 自己会把同一批事件的状态更新合掉；再加一层 rAF 只会让"跟手位移
-    // 落在下一帧"，而**探针在多远的将来读到它就成了竞态**（实测默认档绿、reduced 档红，
-    // 差别只是那一帧有没有被服务）。手感相关的东西不该有竞态。
-    const cur = next.find((c) => c.id === d.id) ?? d.origin
-    const cellDx = (cur.x - d.origin.x) * (colW + GRID_GAP)
-    const cellDy = (cur.y - d.origin.y) * (ROW_H + GRID_GAP)
-    const off = liftOffset(dxPx, dyPx, cellDx, cellDy)
-    setGesture((g) => (g && g.id === d.id && g.phase === 'lifted' ? { ...g, ...off } : g))
+    // 缩放（规格 §5.4）：**视觉尺寸 1:1 跟手，模型只在跨格时吸附**。
+    // 两者分开是有意的 —— 只在跨格时改模型，才能让"格子"这件事保持离散、可落库；
+    // 而视觉上连续，才不会一格一格地跳。
+    const spanW = (n: number) => n * colW + (n - 1) * GRID_GAP
+    const maxCols = GRID_COLS - d.origin.x
+    const minW = spanW(MIN_W)
+    const maxW = spanW(maxCols)
+    const minH = ROW_H * MIN_H + (MIN_H - 1) * GRID_GAP
+    const visW = Math.min(Math.max(spanW(d.origin.w) + dxPx, minW), maxW)
+    const visH = Math.max(ROW_H * d.origin.h + (d.origin.h - 1) * GRID_GAP + dyPx, minH)
+    const tw = d.origin.w + dx
+    const th = d.origin.h + dy
+    if (live.w !== tw || live.h !== th) {
+      d.moved = true
+      next = resizeCard(d.base, d.id, tw, th)
+      applyLayout(next)
+    }
+    setGesture((g) => (g && g.id === d.id && g.phase === 'lifted'
+      ? { ...g, w: Math.round(visW), h: Math.round(visH) }
+      : g))
   }
 
   const endDrag = () => {
@@ -275,9 +340,62 @@ export default function ProfileBoardView({ vtuber, refreshTick, onOpenPost }: Pr
 
   const resetDefault = () => {
     const layout = buildDefault()
-    setCards(layout)
+    applyLayout(layout)
     void persist(layout)
   }
+
+  // ── FLIP 的两步（R37-P4c，规格 §5.2）────────────────────────────────────
+  //
+  // ⚠️ 必须写在 `useLayoutEffect` 里：它在 DOM 变更之后、**浏览器绘制之前**同步执行，
+  // 于是"I（打上补偿位移）"与"A（新布局）"落在同一帧 —— 用户看不到中间态。
+  // 若放进 `useEffect`（绘制之后），会先闪一帧新位置再被拉回去（规格 §9.2 的"闪一帧"）。
+  useLayoutEffect(() => {
+    if (reduced) return
+    const el = gridRef.current
+    const from = rectsRef.current
+    rectsRef.current = {}
+    if (!el || !Object.keys(from).length) return
+    const next: Record<string, { x: number; y: number; ms: number; settled: boolean }> = {}
+    for (const node of el.querySelectorAll<HTMLElement>('.pcard')) {
+      const key = node.getAttribute('data-card-key')
+      if (!key) continue
+      const old = from[key]
+      if (!old) continue
+      if (dragRef.current?.id === key) continue          // 拖动卡由跟手位移驱动
+      const r = node.getBoundingClientRect()             // Last：改完 DOM 的新位置
+      const to = { x: r.left, y: r.top }
+      if (!needsFlip(old, to)) continue
+      const delta = flipDelta(old, to)
+      next[key] = { ...delta, ms: flipDurationMs(delta.y), settled: false }
+    }
+    if (Object.keys(next).length) setFlips(next)
+    // `cards` 是唯一的触发源：布局一变就补一次差
+  }, [cards, reduced])
+
+  // I → P：下一帧撤掉补偿位移（同时登记过渡），卡片就从旧位置滑到新位置
+  useEffect(() => {
+    const ids = Object.keys(flips)
+    if (!ids.length) return
+    const ms = Math.max(...ids.map((id) => flips[id].ms))
+    const timers: number[] = []
+    let raf = 0
+    if (ids.some((id) => !flips[id].settled)) {
+      const play = () => setFlips((prev) => Object.fromEntries(
+        Object.entries(prev).map(([k, v]) => [k, { ...v, settled: true }])))
+      raf = window.requestAnimationFrame(play)
+      // ⚠️ 超时兜底：某些环境**不产帧**（实测 `--force-prefers-reduced-motion` 下
+      // `requestAnimationFrame` 永不回调）—— 只靠 rAF 会让卡片永远停在补偿位置上。
+      timers.push(window.setTimeout(play, 64))
+    }
+    // 过渡走完就把条目删掉（别把 transition 常驻在卡片上）。
+    // ⚠️ 这个 timer 必须在**每次 flips 变化时都重新排**（第一版在 settled 之后 `return` 了，
+    // 于是 cleanup 清掉了上一轮的 timer、新一轮又没排 ⇒ `data-flip` 永远留着 —— 探针抓到的）。
+    timers.push(window.setTimeout(() => setFlips({}), ms + 80))
+    return () => {
+      if (raf) window.cancelAnimationFrame(raf)
+      for (const t of timers) window.clearTimeout(t)
+    }
+  }, [flips])
 
   if (cards === null) {
     return (
@@ -344,19 +462,33 @@ export default function ProfileBoardView({ vtuber, refreshTick, onOpenPost }: Pr
           const g = gesture && gesture.id === card.id ? gesture : null
           const phase: CardPhase = g?.phase ?? 'idle'
           const dragging = phase === 'lifted' || phase === 'settling'
+          const isResize = !!g && dragRef.current?.mode === 'resize'
+          const flip = flips[card.id]
           // 手势期间的内联 transform / 过渡：**相位驱动**（跟手时无过渡，落位时有）
           const liftStyle: React.CSSProperties | undefined = g
-            ? {
-                transform: phaseTransform(phase, g.x, g.y, plan),
-                transition: phase === 'lifted'
-                  ? 'none'
-                  : phase === 'settling'
-                    ? `transform ${plan.settleMs}ms var(--ease-emphasized)`
-                    : `transform var(--motion-instant) var(--ease-standard)`,
-                // 只有拿起来的时候才常驻图层；落定后就撤（留下 `will-change` 是常驻显存开销）
-                willChange: dragging ? 'transform' : undefined,
-                zIndex: dragging ? 5 : undefined,
-              }
+            ? isResize
+              ? (phase === 'lifted' && g.w != null
+                  // 缩放：视觉尺寸 1:1 跟手（尺寸动画是规格 §1 约束 2 的**刻意例外**）
+                  ? { width: g.w, height: g.h, transition: 'none' }
+                  : { transition: `width ${plan.settleMs}ms var(--ease-standard), `
+                                + `height ${plan.settleMs}ms var(--ease-standard)` })
+              : {
+                  transform: phaseTransform(phase, g.x, g.y, plan),
+                  transition: phase === 'lifted'
+                    ? 'none'
+                    : phase === 'settling'
+                      ? `transform ${plan.settleMs}ms var(--ease-emphasized)`
+                      : `transform var(--motion-instant) var(--ease-standard)`,
+                  // 只有拿起来的时候才常驻图层；落定后就撤（留下 `will-change` 是常驻显存开销）
+                  willChange: dragging ? 'transform' : undefined,
+                  zIndex: dragging ? 5 : undefined,
+                }
+            : undefined
+          // 退避（FLIP）：settled=false 是"打上补偿位移"那一帧，之后交给过渡滑回去
+          const flipStyle: React.CSSProperties | undefined = flip
+            ? flip.settled
+              ? { transition: `transform ${flip.ms}ms var(--ease-standard)` }
+              : { transform: `translate(${flip.x}px, ${flip.y}px)`, transition: 'none' }
             : undefined
           return (
             <section
@@ -364,13 +496,17 @@ export default function ProfileBoardView({ vtuber, refreshTick, onOpenPost }: Pr
               className={`pcard${editing ? ' editing' : ''}${dragging ? ' dragging' : ''}`}
               data-card-kind={card.kind}
               data-card-h={card.h}
+              data-card-w={card.w}
               data-card-hpx={cardHeightPx(card)}
               data-card-key={card.id}
               data-card-phase={phase}
+              /* 退避动画的证据（探针读它 + 时长）：值就是补偿位移，`P` 阶段仍在（表示"正在滑回去"） */
+              data-flip={flip ? `${Math.round(flip.x)},${Math.round(flip.y)}` : undefined}
+              data-flip-ms={flip ? flip.ms : undefined}
               /* R37-P4a：注册表下发的**默认行数** —— 探针只在"卡片不低于默认高度"时
                  才要求正文不裁切（用户主动缩小的卡片允许裁掉内容，见规格 §8）。 */
               data-card-min-h={meta.defaultSize.h}
-              style={{ ...gridStyle(card), ...liftStyle }}
+              style={{ ...gridStyle(card), ...flipStyle, ...liftStyle }}
             >
               <header className="pcard-head"
                       onPointerDown={(e) => beginDrag(e, card, 'move')}>

@@ -32,6 +32,23 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 /** 上游取数还没落地时，弹窗里会出现的文案（见 `LiveSessionDialog` 的 waitHint） */
 const UPSTREAM_PENDING_RE = /正在取上游弹幕|上游响应较慢/
 
+/**
+ * 把所有在飞的过渡**直接推到终点**（`Animation.finish()`）—— 量几何之前必须调。
+ *
+ * ⚠️ 为什么需要：无头浏览器在 `--virtual-time-budget` 下**过渡不推进**
+ * （`getAnimations().currentTime` 恒 0），于是卡片永远停在动画起点那一帧 ——
+ * 这时候量 `getBoundingClientRect()` 得到的是**动画起点**而不是布局位置
+ * （R37-P4c 的"零重叠"断言就这么被误判过一次：被挤开的卡片还停在原位，
+ * 看上去像和拖动卡重叠了）。把它推完，尺子量的才是布局。没有过渡时是空操作。
+ */
+function settleTransforms(): void {
+  for (const node of document.querySelectorAll<HTMLElement>('.pcard')) {
+    for (const a of node.getAnimations()) {
+      try { a.finish() } catch { /* 有的动画不可 finish（无限循环之类）：忽略 */ }
+    }
+  }
+}
+
 /** 等详情弹窗"填满"（供 `?probe=archive` 的 DOM dump 用）：
  *
  *  ① 等上游取数那两格落地（拆出 `/upstream` 后是第二个异步跳）；
@@ -2649,7 +2666,8 @@ export async function runUiProbe(): Promise<void> {
       result.followCol = card ? getComputedStyle(card).gridColumnStart : null
       result.phaseFollow = phaseOf(card)
 
-      // ④ 跨格跟手：指针再走一格，格子会跟着换位 ⇒ 卡片**相对屏幕**只该走"指针位移 − 格子位移"
+      // ④ 跨格跟手：指针再走一格，格子会跟着换位 ⇒ 卡片**相对屏幕**只该走"指针位移 − 格子位移"，
+      //    同时**其余卡片**要被挤开 —— 那一段必须走 FLIP（R37-P4c），所以在这里顺带量下来。
       const c3 = centerOf(card)
       const stepX = Math.round(colW + gap)
       grid.dispatchEvent(new PointerEvent('pointermove',
@@ -2663,6 +2681,35 @@ export async function runUiProbe(): Promise<void> {
         phase: phaseOf(card),
         col: card ? getComputedStyle(card).gridColumnStart : null,
       }
+      /** 退避（R37-P4c）：非拖动卡在这时候应当**带着 FLIP 补偿位移**（`data-flip` 有值），
+       *  而被拖的那张**不许有** —— 它由跟手位移驱动，两条动画打架会看出"被拽回去"。 */
+      result.flipDuring = cardEls()
+        .filter((c) => c !== card)
+        .map((c) => ({
+          key: c.getAttribute('data-card-key'),
+          flip: c.getAttribute('data-flip'),
+          inline: inlineTransformOf(c),
+          dur: getComputedStyle(c).transitionDuration,
+        }))
+      result.dragFlip = card.getAttribute('data-flip')
+
+      // ④b **归位**（用户 2026-09-18 决策：「让位」与「归位」都要动画）：
+      //     把拖动卡挪回原处 ⇒ 被挤开的邻居应当带着**反向**（正 dy）补偿滑回去。
+      //     只验"让位"的话，"升回去时瞬移"这种半拉子实现照样能绿。
+      //     ⚠️ 先把上一段过渡推到终点：虚拟时间下它停在起点（卡片看着没动），
+      //     那样"挪回去"算出来的补偿量是 0 —— 测的就不是归位了。
+      settleTransforms()
+      await frame()
+      grid.dispatchEvent(new PointerEvent('pointermove', at(from.x + 30, from.y + 30)))
+      await sleep(160)
+      await frame()
+      result.flipBack = cardEls()
+        .filter((c) => c !== card)
+        .map((c) => ({
+          key: c.getAttribute('data-card-key'),
+          flip: c.getAttribute('data-flip'),
+          dur: getComputedStyle(c).transitionDuration,
+        }))
 
       // ⑤ 抬手落位 → 收尾（探针等到收敛之后再量，避免量到过渡中间态）
       const up = at(from.x + 30 + stepX, from.y + 30)
@@ -2676,6 +2723,12 @@ export async function runUiProbe(): Promise<void> {
       result.inlineAfterSettle = inlineTransformOf(card)
       result.styleAfterSettle = card ? (card.getAttribute('style') || '') : null
       result.willChangeAfterSettle = card ? getComputedStyle(card).willChange : null
+      /** 落定后**所有**卡的 FLIP 补偿都必须撤掉（留着就是"回不去了"） */
+      result.flipAfterSettle = cardEls().map((c) => ({
+        key: c.getAttribute('data-card-key'),
+        flip: c.getAttribute('data-flip'),
+        inline: inlineTransformOf(c),
+      }))
       /** ⚠️ 诊断用：虚拟时间下 CSS 过渡**可能根本不推进**（`currentTime` 停在起点），
        *  那样"落位后 computed transform 还是起点值"就不是我们的 bug，而是尺子的问题。
        *  所以这里同时记下"动画实例数 + 它的当前时间"，让脚本能分辨这两种情况。 */
@@ -2700,6 +2753,44 @@ export async function runUiProbe(): Promise<void> {
         grid.dispatchEvent(new PointerEvent('pointerup', { ...at(p3.x, p3.y), buttons: 0 }))
         await sleep(120)
         result.editModePhaseOnUp = phaseOf(same())
+      }
+
+      // ⑦ **缩放手柄**（R37-P4c，规格 §5.4）：连续 px 跟手 + 跨格才吸附。
+      //    量三件事：① 拖半格 ⇒ 实渲染尺寸跟着变、而**模型格数不变**（这就是"连续跟手"）；
+      //    ② 再拖过半格 ⇒ 模型格数才 +1（这就是"跨格吸附"）；③ 松手后内联尺寸清干净。
+      await sleep(320)
+      const target = same()
+      const handle = target?.querySelector<HTMLElement>('.pcard-resize')
+      result.resizeHandle = !!handle
+      if (handle && target) {
+        const modelW = () => Number(target.getAttribute('data-card-w') ?? 0)
+        const modelH = () => Number(target.getAttribute('data-card-h') ?? 0)
+        const pxSize = () => ({ w: target.offsetWidth, h: target.offsetHeight })
+        const hr = handle.getBoundingClientRect()
+        const h0 = { x: Math.round(hr.left + 9), y: Math.round(hr.top + 9) }
+        result.resizeBefore = { modelW: modelW(), modelH: modelH(), ...pxSize() }
+        handle.dispatchEvent(new PointerEvent('pointerdown', at(h0.x, h0.y)))
+        await sleep(60)
+        // 半格：不足一次吸附 ⇒ 只该看到像素尺寸变化
+        const halfX = Math.round((colW + gap) * 0.45)
+        const halfY = Math.round(96 * 0.45)
+        grid.dispatchEvent(new PointerEvent('pointermove', at(h0.x + halfX, h0.y + halfY)))
+        await sleep(120)
+        await frame()
+        result.resizeHalf = { modelW: modelW(), modelH: modelH(), ...pxSize(), dx: halfX, dy: halfY }
+        // 再过一格：模型才该 +1 列 / +1 行
+        grid.dispatchEvent(new PointerEvent(
+          'pointermove', at(h0.x + Math.round(colW + gap) + 6, h0.y + 100)))
+        await sleep(150)
+        await frame()
+        result.resizeFull = { modelW: modelW(), modelH: modelH(), ...pxSize() }
+        grid.dispatchEvent(new PointerEvent(
+          'pointerup', { ...at(h0.x + Math.round(colW + gap) + 6, h0.y + 100), buttons: 0 }))
+        await sleep(120)
+        result.resizeInlineDuringSettle = target.getAttribute('style') || ''
+        await sleep(420)
+        result.resizeAfter = { modelW: modelW(), modelH: modelH(), ...pxSize() }
+        result.resizeInlineAfter = target.getAttribute('style') || ''
       }
       const doneBtn = [...document.querySelectorAll<HTMLButtonElement>('.board-btn')]
         .find((b) => (b.textContent || '').includes('完成'))
@@ -2793,6 +2884,10 @@ export async function runUiProbe(): Promise<void> {
       result.dragDy = dy
       await sleep(900)                    // 等整版 PUT 落地 + 回填服务端返回的行
     }
+    // ⚠️ 量几何之前先把在飞的过渡推到终点：虚拟时间下它们停在起点，rect 会量成旧位置
+    //（下一行的"零重叠"断言就是这么被误判过一次的）。没有过渡时这行是空操作。
+    settleTransforms()
+    await sleep(60)
     result.after = snapshot()
     result.editingAfter = boardEl()?.getAttribute('data-board-editing') ?? null
 
