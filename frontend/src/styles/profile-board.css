@@ -349,9 +349,86 @@
 .tone-chip[data-tone='like'] { background: var(--tone-pink-tint); color: var(--tone-pink-deep); }
 
 @media (prefers-reduced-motion: reduce) {
-  /* 只留阴影变化（信息不减：hover 仍然"看起来可点"，但不位移） */
+  /* 只留阴影变化（信息不减：hover 仍然"看起来可点"，但不位移）。
+     ⚠️ 这里**只能管 CSS 那一半**：拾起时的 `scale()` 是内联写上去的，内联优先级高于媒体查询，
+     所以缩放要在 `motion.ts::motionPlan` 那一侧归零（跟手位移仍保留 —— 那是输入反馈不是动画）。 */
   .pcard:hover:not(.editing):not(.dragging) { transform: none; }
   .pcard { transition: box-shadow 140ms ease; }
+}
+
+/* ── 手势相位（R37-P4b，规格 §5）────────────────────────────────────────
+   内联 transform 由 `motion.ts` 按相位给（`data-card-phase` 同时挂出来给探针看），
+   这里只管**与 transform 无关**的那部分：拾起时的指针形状、以及拖动期间不许选中文字。 */
+
+.pcard[data-card-phase='lifted'],
+.pcard[data-card-phase='settling'] {
+  cursor: grabbing;
+}
+
+/* 长按会顺手选中卡片里的文字（Windows 上尤其明显）—— 按下那一刻就禁掉 */
+.pcard[data-card-phase='pressing'],
+.pcard[data-card-phase='lifted'],
+.pcard[data-card-phase='settling'] {
+  user-select: none;
+}
+
+/* ── 动效调测页（R37-P4b，`?motion=cards`）────────────────────────────── */
+
+.mlab {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 60;
+  width: 560px;
+  max-width: calc(100vw - 32px);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: var(--pcard-shadow-lift);
+  font-size: 11.5px;
+  line-height: 16px;
+  color: var(--c-text-main);
+}
+
+.mlab-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.mlab-head b {
+  font-size: 12.5px;
+}
+
+.mlab-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mlab-kv {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+  color: var(--c-text-sub);
+}
+
+.mlab-kv b {
+  color: var(--c-text-main);
+}
+
+/* 跟手误差非 0 时标红：这条恒等式（卡片位移 ≡ 指针位移）破了就是手感坏了 */
+.mlab-bad {
+  color: #d14343;
+}
+
+.mlab-note {
+  color: var(--c-text-sub);
 }
 
 .pcard-empty {

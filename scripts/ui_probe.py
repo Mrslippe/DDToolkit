@@ -304,13 +304,14 @@ def _first_vtuber(port: int) -> int | None:
         return None
 
 
-def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag: str) -> dict | None:
+def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag: str,
+               extra_flags: list[str] | None = None) -> dict | None:
     dom_file = out_dir / f"dom-{tag}-{width}.html"
     profile = out_dir / f"edge-{tag}-{width}"
     cmd = [
         edge, "--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run",
         f"--window-size={width},{height}", f"--user-data-dir={profile}",
-        "--virtual-time-budget=45000", "--dump-dom", url,
+        "--virtual-time-budget=45000", *(extra_flags or []), "--dump-dom", url,
     ]
     try:
         with open(dom_file, "wb") as fh:
@@ -361,6 +362,7 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
             "profileSync": data.get("profileSync"),
             "pinned": data.get("pinned"),
             "board": data.get("board"),
+            "motionCards": data.get("motion"),
             "shell": data.get("shell"),
             "degraded": data.get("degraded") or [],
             "dom": dom_file,
@@ -370,7 +372,8 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
             "polish": None, "reservations": None, "statusIsland": None,
             "appSettings": None, "filterPill": None, "traySuspend": None,
             "closeAsk": None, "switchPerf": None, "profileSync": None,
-            "pinned": None, "board": None, "degraded": [], "dom": dom_file}
+            "pinned": None, "board": None, "motionCards": None,
+            "degraded": [], "dom": dom_file}
 
 
 # ── 展示页 hero 药丸签名（P2 分层收敛 A 批次的位级回归护栏）─────────────
@@ -989,6 +992,26 @@ def main() -> int:
         "--first-run",
         action="store_true",
         help="用空数据目录起后端，验证「首次启动自动弹登录浮窗 + 本地存储说明」",
+    )
+    ap.add_argument(
+        "--motion-cards",
+        action="store_true",
+        help="只跑一档宽度（1440）：**档案视图的手势动效**（R37-P4b）—— 合成 pointer 事件走一遍"
+             "「按下 → 长按 350ms 拾起 → 跟手 1:1（含跨格）→ 抬手落位 → 收尾」，"
+             "断言相位 / 缩放 / 跟手误差 / 落位后无残留 + 短按不拾起（迟到的定时器也要无害）。"
+             "配合 `--reduced` 再验一遍 reduced-motion 口径",
+    )
+    ap.add_argument(
+        "--motion-lab",
+        action="store_true",
+        help="只跑一档宽度：**动效调测页**（R37-P4b，`?motion=cards`）—— 断言面板挂上了、"
+             "「按下」按钮真的能驱动手势（面板是动态载入的，载入失败只会「什么都没有」，"
+             "与「本来就不显示」长得一模一样）",
+    )
+    ap.add_argument(
+        "--reduced",
+        action="store_true",
+        help="给无头浏览器加 `--force-prefers-reduced-motion`（只对 `--motion-cards` 有意义）",
     )
     ap.add_argument(
         "--shot-board",
@@ -2289,6 +2312,167 @@ def main() -> int:
                 print("   -", b)
             return 1 if failures else 0
 
+        if args.motion_lab:
+            # R37-P4b：调测页是**动态载入**的（`import('../../dev/MotionLab')`）——
+            # 载入失败只会"面板不出现"，而这与"本来就不该出现"长得一样 ⇒ 必须机器判。
+            w = max(widths[0], 1440)
+            url = (f"http://localhost:{vite_port}{route}"
+                   f"?probe=board-view&motion=cards&reset=1&lab=1")
+            print(f"[probe] motion-lab @{w} → {url}")
+            res = _run_probe(edge, url, w, args.height, WORK, "motion-lab")
+            bd = ((res or {}).get("board") or {})
+            if not bd:
+                failures.append(f"@{w} motion-lab: 没量到画布段（探针未跑完？）")
+            else:
+                print(f"  面板挂上={bd.get('lab')} 「按下」钮={bd.get('labPress')} "
+                      f"按下后相位={bd.get('labPhaseOnDown')} 长按后相位={bd.get('labPhaseAfterHold')} "
+                      f"慢放={bd.get('labSpeed')!r}")
+                if not bd.get("lab"):
+                    failures.append(f"@{w} motion-lab: `?motion=cards` 下没挂上动效调测面板")
+                elif not bd.get("labPress"):
+                    failures.append(f"@{w} motion-lab: 面板里没有「按下」按钮")
+                else:
+                    if bd.get("labPhaseOnDown") != "pressing":
+                        failures.append(f"@{w} motion-lab: 点面板「按下」后相位是 "
+                                        f"{bd.get('labPhaseOnDown')!r}（面板没驱动到真实手势？）")
+                    if bd.get("labPhaseAfterHold") != "lifted":
+                        failures.append(f"@{w} motion-lab: 面板按下 350ms 后相位是 "
+                                        f"{bd.get('labPhaseAfterHold')!r}，应为 lifted")
+                    if bd.get("labSpeed") != "1":
+                        failures.append(f"@{w} motion-lab: 慢放初值不是 1×（{bd.get('labSpeed')!r}）")
+            if not failures:
+                print("  [ok] 动效调测页：面板挂上 + 「按下」驱动真实手势（含 350ms 自动拾起）")
+            for b in failures:
+                print("   -", b)
+            return 1 if failures else 0
+
+        if args.motion_cards:
+            # R37-P4b：手势动效端到端（规格 docs/design-archive-cards.md §5 / §8 的不变量）。
+            # 手感错了**肉眼很难举证**：跟手差 40px 也像在拖、缩放没回到 1 也看不出来、
+            # 迟到的长按定时器会让卡片在抬手后又自己跳起来 —— 所以这条链要机器判。
+            w = max(widths[0], 1440)
+            url = f"http://localhost:{vite_port}{route}?probe=motion-cards"
+            tag = "motion-cards-reduced" if args.reduced else "motion-cards"
+            print(f"[probe] {tag} @{w} → {url}")
+            res = _run_probe(edge, url, w, args.height, WORK, tag,
+                             extra_flags=["--force-prefers-reduced-motion"] if args.reduced else None)
+            mc = ((res or {}).get("motionCards") or {})
+            if not mc:
+                failures.append(f"@{w} {tag}: 没量到手势段（探针未跑完？）")
+            else:
+                reduced = bool(mc.get("prefersReducedMotion"))
+                print(f"  减少动效={reduced} 卡片={mc.get('cardKey')} 网格宽={mc.get('gridW')}")
+                print(f"  相位：按下={mc.get('phaseOnDown')} 长按后={mc.get('phaseHold')} "
+                      f"跟手中={mc.get('phaseFollow')} 抬手={mc.get('phaseOnUp')} "
+                      f"落定后={mc.get('phaseAfterSettle')}")
+                print(f"  缩放：按下={mc.get('pressScale')} 拾起={mc.get('liftScale')}"
+                      f"（减少动效时应为 1）")
+                print(f"  跟手：{mc.get('follow')}（期望 {{'dx': 30, 'dy': 30}}）· "
+                      f"跨格 {mc.get('crossCell')}")
+                if args.reduced and not reduced:
+                    # flag 没生效时必须**说出来**，不能假装验过（否则这条断言永远空转）
+                    failures.append(
+                        f"@{w} {tag}: 浏览器没进 reduced-motion（Edge 忽略 "
+                        f"`--force-prefers-reduced-motion`？）—— 这一档等于没验")
+                # ① 相位链：按下必须**立刻**有反馈（不然用户不敢按满 350ms）
+                if mc.get("phaseOnDown") != "pressing":
+                    failures.append(f"@{w} {tag}: 按下后相位是 {mc.get('phaseOnDown')!r}，应为 pressing")
+                if mc.get("phaseHold") != "lifted":
+                    failures.append(f"@{w} {tag}: 长按 350ms 后相位是 {mc.get('phaseHold')!r}，应为 lifted")
+                if mc.get("editingBeforeHold") == "0" and mc.get("editingAfterHold") != "1":
+                    failures.append(f"@{w} {tag}: 阅读态长按拾起后没进编辑态"
+                                    f"（长按 = 拿起并进编辑态，2026-09-18 拍板）")
+                # ② 缩放：默认档要有（按下的即时反馈 + 拾起的小过冲），减少动效档必须**没有**。
+                #    ⚠️ 按下这一步读的是**内联** transform，不是 computed：无头浏览器的
+                #    `--virtual-time-budget` 下 CSS 过渡不推进（`getAnimations().currentTime`
+                #    恒 0），computed 永远停在过渡起点 —— 那是尺子的问题（见 probe.ts 注释）。
+                press, lift = mc.get("pressScale"), mc.get("liftScale")
+                press_inline = mc.get("pressInline") or ""
+                if reduced:
+                    if press != 1 or lift != 1 or "scale" in press_inline:
+                        failures.append(f"@{w} {tag}: reduced-motion 下仍有缩放"
+                                        f"（computed 按下 {press} / 拾起 {lift}，内联 {press_inline!r}）")
+                else:
+                    if not reduced and "scale(0.985" not in press_inline:
+                        failures.append(f"@{w} {tag}: 按下没有即时反馈（内联 transform="
+                                        f"{press_inline!r}，应为 scale(0.985…) —— 没有反馈用户不敢按满 350ms）")
+                    if not lift or not (1 < lift <= 1.055):
+                        failures.append(f"@{w} {tag}: 拾起缩放是 {lift}"
+                                        f"（应为 (1, 1.055] —— 规格 §11 的「轻微」档）")
+                # ③ 跟手 1:1（同一格内，格子不动 ⇒ 视觉位移必须**恰好**等于指针位移）
+                follow = mc.get("follow") or {}
+                dx, dy = follow.get("dx"), follow.get("dy")
+                if dx is None or abs(dx - 30) > 2 or dy is None or abs(dy - 30) > 2:
+                    failures.append(f"@{w} {tag}: 跟手位移是 ({dx},{dy})，指针走了 (30,30)"
+                                    f"（跟手算式漏了格子位移，或写成了「吸附」）")
+                cross = mc.get("crossCell") or {}
+                if cross.get("phase") != "lifted":
+                    failures.append(f"@{w} {tag}: 跨格跟手时相位是 {cross.get('phase')!r}，应为 lifted")
+                vis, pdx = cross.get("visualDx"), cross.get("pointerDx")
+                # 跨格时**格子自己跳了一格**，而卡片视觉位移仍应 ≡ 指针位移 ——
+                # 这条恒等式正是跟手算式的定义（`pointerDelta − cellDelta`）；
+                # 少了 cellDelta 会多走一格、完全没跟手会走 0，两种错法都当场露馅。
+                if vis is None or pdx is None or abs(vis - pdx) > 2:
+                    failures.append(f"@{w} {tag}: 跨格后卡片视觉位移 {vis}px，指针走了 {pdx}px"
+                                    f"（跟手算式漏了格子位移？）")
+                # ④ 落位收敛：落定后**我们提交的**内联 transform 必须清干净，
+                #    且落位那一刻确实登记了过渡（`transition-duration` = 0.22s）。
+                #    ⚠️ computed transform 在这里不可用：虚拟时间下过渡不推进，它会一直停在
+                #    拾起时的矩阵（实测 `getAnimations().currentTime` = 0）—— 见 probe.ts 注释。
+                if mc.get("phaseAfterSettle") != "idle":
+                    failures.append(f"@{w} {tag}: 抬手后相位是 "
+                                    f"{mc.get('phaseAfterSettle')!r}，应为 idle（没落定）")
+                inline_after = mc.get("inlineAfterSettle") or ""
+                if "transform" in inline_after:
+                    failures.append(f"@{w} {tag}: 落定后卡片仍留内联 transform "
+                                    f"（style={mc.get('styleAfterSettle')!r}）—— 位移残留")
+                if (mc.get("willChangeAfterSettle") or "auto") not in ("auto", ""):
+                    failures.append(f"@{w} {tag}: 落定后卡片仍带 will-change "
+                                    f"{mc.get('willChangeAfterSettle')!r}（常驻图层）")
+                settle = str(mc.get("settleTransition") or "")
+                if reduced:
+                    if settle and settle not in ("0s",):
+                        failures.append(f"@{w} {tag}: reduced-motion 下落位仍有 {settle} 的过渡"
+                                        f"（应为 0s —— 直接到位，不滑行）")
+                elif settle and settle != "0.22s":
+                    failures.append(f"@{w} {tag}: 落位过渡是 {settle}，应为 0.22s（--motion-base）")
+                elif not settle:
+                    failures.append(f"@{w} {tag}: 落位那一刻没有登记过渡（落位变成「瞬移」了？）")
+                # ⑤ 短按（阅读态，<350ms 抬手）：不许拾起、不许留内联位移，
+                #    迟到的长按定时器也不许把卡片"隔空拿起来"
+                if mc.get("shortPressPhaseDown") != "pressing":
+                    failures.append(f"@{w} {tag}: 阅读态按下后相位是 "
+                                    f"{mc.get('shortPressPhaseDown')!r}，应为 pressing")
+                if not reduced and "scale(0.985" not in (mc.get("shortPressPressInline") or ""):
+                    failures.append(f"@{w} {tag}: 阅读态按下没有即时反馈（内联 "
+                                    f"{mc.get('shortPressPressInline')!r}）")
+                if mc.get("shortPressPhase") not in (None, "idle"):
+                    failures.append(f"@{w} {tag}: 短按抬手后相位是 "
+                                    f"{mc.get('shortPressPhase')!r}（应为 idle —— 短按不该拾起）")
+                if "transform" in (mc.get("shortPressInline") or ""):
+                    failures.append(f"@{w} {tag}: 短按抬手后仍留内联 transform "
+                                    f"{mc.get('shortPressInline')!r}（没弹回去）")
+                if mc.get("phaseAfterShortPressTimer") not in (None, "idle"):
+                    failures.append(f"@{w} {tag}: 短按之后**迟到的长按定时器**把卡片又拿起来了"
+                                    f"（相位 {mc.get('phaseAfterShortPressTimer')!r}）")
+                if mc.get("editingAfterShortPress") != "0":
+                    failures.append(f"@{w} {tag}: 短按把界面带进编辑态了"
+                                    f"（{mc.get('editingAfterShortPress')!r}）")
+                # ⑥ 编辑态「按下即拖」：点过「编辑布局」之后不该再要求长按
+                if mc.get("editModePhaseOnDown") != "lifted":
+                    failures.append(f"@{w} {tag}: 编辑态按下后相位是 "
+                                    f"{mc.get('editModePhaseOnDown')!r}，应为 lifted"
+                                    f"（编辑态按下即拖 —— 不然「编辑布局」按钮白点）")
+                if mc.get("editingAtEnd") != "0":
+                    failures.append(f"@{w} {tag}: 点「完成」后仍在编辑态"
+                                    f"（{mc.get('editingAtEnd')!r}）")
+            if not failures:
+                print(f"  [ok] 手势动效：相位链 + 缩放档 + 跟手 1:1 + 落位收敛 + 短按无害"
+                      f"（{'reduced-motion' if args.reduced else '默认'}档）")
+            for b in failures:
+                print("   -", b)
+            return 1 if failures else 0
+
         if args.board:
             # R37-P2b：拖拽手势 → 几何 → 落库，一条链全验。宽窗才可编辑（窄窗单列是模型算的）。
             w = max(widths[0], 1440)
@@ -3030,7 +3214,13 @@ def main() -> int:
             # R37-P4a 的视觉评审：档案视图阅读态 / 编辑态各一张（只截最宽那档 —— 卡片排得开）。
             # 先 `reset=1` 走「重置默认」，让截图是**默认排布**而不是上一次 --board 拖出来的样子。
             if args.shot_board and not args.first_run and w == widths[-1]:
-                for tag, q in (("read", "&reset=1"), ("edit", "&reset=1&editing=1")):
+                shots = (
+                    ("read", "&reset=1"),
+                    ("edit", "&reset=1&editing=1"),
+                    # 调测页那张用 0.25× 慢放：截图看不出快慢，但面板本身要看一眼
+                    ("lab", "&motion=cards&reset=1"),
+                )
+                for tag, q in shots:
                     shot = WORK / f"board-{tag}-{w}.png"
                     _run_shot(
                         edge,

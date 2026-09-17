@@ -94,6 +94,21 @@
   --tone-gray-deep: #4b5a6b;
   --tone-gray-tint: rgba(148, 163, 184, 0.16);
 
+  /* ── 动效令牌（R37-P4b，规格 docs/design-archive-cards.md §5）─────────────
+     数值与 `docs/design-status-island.md` §2 **同一组** —— 全站只有一套节奏，
+     R38 批 1「motion token 化」直接复用这批，别再各写一份。
+     `--motion-scale` 是**慢放倍率**：默认 1，只有动效调测页（`?motion=cards`）会改小它，
+     让评审能看清每一段（"看着有点怪"没法举证，慢放能）。 */
+  --motion-scale: 1;
+  --motion-instant: calc(90ms * var(--motion-scale));    /* 按下的即时反馈 */
+  --motion-fast: calc(140ms * var(--motion-scale));      /* hover / 淡出 / 弹回 */
+  --motion-base: calc(220ms * var(--motion-scale));      /* 退避 / 落位 */
+  --motion-slow: calc(320ms * var(--motion-scale));      /* 跨多行的大位移 */
+  --ease-standard: cubic-bezier(0.22, 1, 0.36, 1);       /* 进入 / 位移 */
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);               /* 离场 */
+  --ease-emphasized: cubic-bezier(0.2, 0, 0, 1);         /* 落位：前快后慢 */
+  --ease-pop: cubic-bezier(0.2, 1.5, 0.4, 1);            /* **唯一允许的过冲**，只给"拿起"那一次 scale */
+
   /* 选中态：左缘主色竖条 + 浅粉底 */
   --sel-bar: var(--c-primary-deep);
   --sel-bg: #fff0f3;

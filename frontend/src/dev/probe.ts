@@ -2496,9 +2496,221 @@ export async function runUiProbe(): Promise<void> {
     }
     result.editing = document.querySelector('[data-board]')?.getAttribute('data-board-editing')
     result.cards = document.querySelectorAll('.pcard').length
+    // 动效调测页（R37-P4b）：`?motion=cards` 时必须挂上（它是**动态载入**的，
+    // 载入失败只会"什么都没有"，与"本来就不显示"看起来一模一样 ⇒ 必须机器判）。
+    // `lab=1` 还会点一下面板里的「按下」按钮，验证它派发的合成事件**真的**驱动了手势。
+    const lab = document.querySelector<HTMLElement>('[data-motion-lab]')
+    result.lab = !!lab
+    if (lab && q.get('lab')) {
+      const press = [...lab.querySelectorAll<HTMLButtonElement>('.board-btn')]
+        .find((b) => (b.textContent || '').trim() === '按下')
+      result.labPress = !!press
+      press?.click()
+      await sleep(120)
+      result.labPhaseOnDown = document.querySelector('.pcard')?.getAttribute('data-card-phase')
+      await sleep(420)                              // 长按 350ms 应当自动拾起
+      result.labPhaseAfterHold = document.querySelector('.pcard')?.getAttribute('data-card-phase')
+      result.labSpeed = getComputedStyle(document.documentElement)
+        .getPropertyValue('--motion-scale').trim()
+    }
     const pre = document.createElement('pre')
     pre.id = 'ui-probe'
     pre.textContent = JSON.stringify({ mode: 'board-view', views: [], degraded, board: result })
+    document.body.appendChild(pre)
+    document.title = 'UI_PROBE_DONE'
+    return
+  }
+
+  // 档案视图的**手势动效**（R37-P4b，规格 `docs/design-archive-cards.md` §5）：
+  // 端到端走一遍「按下 → 长按 350ms 拾起 → 跟手 1:1 → 抬手落位 → 收尾」，
+  // 每一步都把**相位、内联 transform、实渲染位移**抽出来交给脚本判。
+  //
+  // 这一组断言的意义在于：手感错了**肉眼很难举证**（跟手差 40px 也像在拖、
+  // 缩放没回到 1 也看不出来、迟到的长按定时器会让卡片在抬手后又自己跳起来）。
+  if (mode === 'motion-cards') {
+    const result: Record<string, unknown> = {}
+    const waitFor = async (fn: () => unknown, ms = 8000) => {
+      const t0 = performance.now()
+      while (performance.now() - t0 < ms) {
+        const v = fn()
+        if (v) return v
+        await sleep(60)
+      }
+      return null
+    }
+    /** 等一帧（几何读数前用）：虚拟时间下 rAF 与 setTimeout 的先后不保证，
+     *  "睡 120ms 再量"未必等到渲染完成的那一帧（实测过一次竞态：默认档量到跟手正确、
+     *  reduced 档量到"还没跟上"）。
+     *
+     *  ⚠️ 必须带超时兜底：`--force-prefers-reduced-motion` 下 Chromium **不产帧**，
+     *  `requestAnimationFrame` 永远不回调 —— 裸 `await frame()` 会让整个探针挂住、
+     *  连 `#ui-probe` 都不输出（第一次就是这么红的，看起来像"页面没跑完"）。 */
+    const frame = (ms = 200) => Promise.race([
+      new Promise<void>((r) => requestAnimationFrame(() => r())),
+      sleep(ms),
+    ])
+    const boardEl = () => document.querySelector<HTMLElement>('[data-board]')
+    const cardEls = () => [...document.querySelectorAll<HTMLElement>('.pcard')]
+    const phaseOf = (el: Element | null) => el?.getAttribute('data-card-phase') ?? null
+    /** 卡片**视觉**中心（含 transform）：跟手判定必须看它，不能看格位 */
+    const centerOf = (el: Element | null) => {
+      if (!el) return null
+      const r = el.getBoundingClientRect()
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+    }
+    const scaleOf = (el: Element | null) => {
+      if (!el) return null
+      const t = getComputedStyle(el).transform
+      if (!t || t === 'none') return 1
+      const m = t.match(/matrix\(([^)]+)\)/)
+      return m ? Math.round(parseFloat(m[1].split(',')[0]) * 1000) / 1000 : null
+    }
+    /** **内联** transform（`style.transform`）。
+     *
+     *  ⚠️ 为什么按下/落位这两处必须读内联值而不是 computed：无头浏览器跑在
+     *  `--virtual-time-budget` 下时 **CSS 过渡不推进** —— 实测 `getAnimations()` 里
+     *  过渡是 `running` 但 `currentTime` 恒为 0，于是 computed transform 永远停在
+     *  **过渡起点**（按下时读到 1、落位后还读到拾起时的矩阵）。那是尺子的问题，不是实现的问题：
+     *  "我们提交了什么"看内联，"过渡有没有登记"看 `transition-duration`。 */
+    const inlineTransformOf = (el: Element | null) =>
+      (el as HTMLElement | null)?.style?.transform || ''
+
+    result.prefersReducedMotion =
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    ;[...document.querySelectorAll<HTMLButtonElement>('.view-btn')]
+      .find((b) => (b.title || '').startsWith('档案视图'))?.click()
+    await waitFor(() => boardEl())
+    await sleep(300)
+
+    const grid = boardEl()
+    const card = cardEls()[0]
+    const head = card?.querySelector<HTMLElement>('.pcard-head')
+    result.cardKey = card?.getAttribute('data-card-key') ?? null
+    result.gridW = grid ? Math.round(grid.clientWidth) : 0
+
+    if (grid && card && head) {
+      const gap = 12
+      const colW = ((grid.clientWidth - 11 * gap) / 12)
+      const r = head.getBoundingClientRect()
+      const at = (x: number, y: number, extra: Record<string, unknown> = {}) => ({
+        bubbles: true, cancelable: true, pointerId: 7, pointerType: 'mouse',
+        isPrimary: true, button: 0, buttons: 1, clientX: Math.round(x), clientY: Math.round(y),
+        ...extra,
+      })
+      const key = result.cardKey as string | null
+      /** 按 key 取卡片（拖完之后 DOM 顺序可能变，`cardEls()[0]` 未必还是它） */
+      const same = () => (key ? document.querySelector<HTMLElement>(`[data-card-key="${key}"]`)
+                              : cardEls()[0])
+      const from = { x: r.left + 24, y: r.top + 10 }
+      const before = centerOf(card)
+      const editBefore = boardEl()?.getAttribute('data-board-editing')
+
+      // ① **短按**（阅读态，<350ms 就抬手）：不许拾起、不许留内联位移，
+      //    迟到的长按定时器也不许把卡片"隔空拿起来"。先做这一步是因为它必须在**阅读态**验
+      //    （编辑态是"按下即拖"，压根没有长按等待）。
+      head.dispatchEvent(new PointerEvent('pointerdown', at(from.x, from.y)))
+      await sleep(90)
+      result.shortPressPhaseDown = phaseOf(card)
+      result.shortPressPressInline = inlineTransformOf(card)
+      grid.dispatchEvent(new PointerEvent('pointerup', { ...at(from.x, from.y), buttons: 0 }))
+      await sleep(200)
+      result.shortPressPhase = phaseOf(card)
+      result.shortPressScale = scaleOf(card)
+      result.shortPressInline = inlineTransformOf(card)
+      await sleep(400)                     // 长按定时器本该在 350ms 到点
+      result.phaseAfterShortPressTimer = phaseOf(card)
+      result.editingAfterShortPress = boardEl()?.getAttribute('data-board-editing')
+
+      // ② 阅读态长按 350ms：应当拾起（并顺手进编辑态）
+      head.dispatchEvent(new PointerEvent('pointerdown', at(from.x, from.y)))
+      await sleep(60)
+      result.phaseOnDown = phaseOf(card)
+      result.pressScale = scaleOf(card)
+      result.pressInline = inlineTransformOf(card)
+      await sleep(420)
+      result.phaseHold = phaseOf(card)
+      result.liftScale = scaleOf(card)
+      result.liftShadow = card ? getComputedStyle(card).boxShadow : null
+      result.editingAfterHold = boardEl()?.getAttribute('data-board-editing')
+      result.editingBeforeHold = editBefore
+
+      // ③ 跟手：位移**小于一格**（30px < 一列 ~58px、30px < 一行 96px）⇒ 格子不动，
+      //    卡片中心应当**恰好**跟着走 30/30（差一点都说明跟手算式错了）
+      const c1 = centerOf(card)
+      grid.dispatchEvent(new PointerEvent('pointermove', at(from.x + 30, from.y + 30)))
+      await sleep(120)
+      await frame()                                // 等渲染落地再量（见上面的 frame 注释）
+      const c2 = centerOf(card)
+      result.follow = {
+        dx: c2 && c1 ? Math.round(c2.x - c1.x) : null,
+        dy: c2 && c1 ? Math.round(c2.y - c1.y) : null,
+      }
+      result.followInline = inlineTransformOf(card)
+      result.followCol = card ? getComputedStyle(card).gridColumnStart : null
+      result.phaseFollow = phaseOf(card)
+
+      // ④ 跨格跟手：指针再走一格，格子会跟着换位 ⇒ 卡片**相对屏幕**只该走"指针位移 − 格子位移"
+      const c3 = centerOf(card)
+      const stepX = Math.round(colW + gap)
+      grid.dispatchEvent(new PointerEvent('pointermove',
+        at(from.x + 30 + stepX, from.y + 30)))
+      await sleep(150)
+      await frame()
+      const c4 = centerOf(card)
+      result.crossCell = {
+        pointerDx: stepX,
+        visualDx: c4 && c3 ? Math.round(c4.x - c3.x) : null,
+        phase: phaseOf(card),
+        col: card ? getComputedStyle(card).gridColumnStart : null,
+      }
+
+      // ⑤ 抬手落位 → 收尾（探针等到收敛之后再量，避免量到过渡中间态）
+      const up = at(from.x + 30 + stepX, from.y + 30)
+      grid.dispatchEvent(new PointerEvent('pointerup', { ...up, buttons: 0 }))
+      await sleep(90)                              // 等 React 重渲染（state 更新是异步的）
+      result.phaseOnUp = phaseOf(card)
+      result.settleTransition = card ? getComputedStyle(card).transitionDuration : null
+      await sleep(450)
+      result.phaseAfterSettle = phaseOf(card)
+      result.transformAfterSettle = card ? getComputedStyle(card).transform : null
+      result.inlineAfterSettle = inlineTransformOf(card)
+      result.styleAfterSettle = card ? (card.getAttribute('style') || '') : null
+      result.willChangeAfterSettle = card ? getComputedStyle(card).willChange : null
+      /** ⚠️ 诊断用：虚拟时间下 CSS 过渡**可能根本不推进**（`currentTime` 停在起点），
+       *  那样"落位后 computed transform 还是起点值"就不是我们的 bug，而是尺子的问题。
+       *  所以这里同时记下"动画实例数 + 它的当前时间"，让脚本能分辨这两种情况。 */
+      result.animations = card
+        ? card.getAnimations().map((a) => ({
+            prop: (a as CSSTransition).transitionProperty ?? a.constructor.name,
+            time: Math.round(Number(a.currentTime) || 0),
+            state: a.playState,
+          }))
+        : []
+      result.before = before ? { x: Math.round(before.x), y: Math.round(before.y) } : null
+
+      // ⑥ 编辑态「按下即拖」（2026-09-18 细化：点过「编辑布局」之后不该再要求长按）
+      await sleep(300)
+      const head3 = same()?.querySelector<HTMLElement>('.pcard-head')
+      if (head3) {
+        const r3 = head3.getBoundingClientRect()
+        const p3 = { x: Math.round(r3.left + 24), y: Math.round(r3.top + 10) }
+        head3.dispatchEvent(new PointerEvent('pointerdown', at(p3.x, p3.y)))
+        await sleep(80)
+        result.editModePhaseOnDown = phaseOf(same())
+        grid.dispatchEvent(new PointerEvent('pointerup', { ...at(p3.x, p3.y), buttons: 0 }))
+        await sleep(120)
+        result.editModePhaseOnUp = phaseOf(same())
+      }
+      const doneBtn = [...document.querySelectorAll<HTMLButtonElement>('.board-btn')]
+        .find((b) => (b.textContent || '').includes('完成'))
+      doneBtn?.click()
+      await sleep(200)
+      result.editingAtEnd = boardEl()?.getAttribute('data-board-editing')
+    }
+
+    const pre = document.createElement('pre')
+    pre.id = 'ui-probe'
+    pre.textContent = JSON.stringify({ mode: 'motion-cards', views: [], degraded, motion: result })
     document.body.appendChild(pre)
     document.title = 'UI_PROBE_DONE'
     return

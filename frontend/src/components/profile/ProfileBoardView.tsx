@@ -24,11 +24,12 @@
  * 3. **窄窗降级看容器宽**（`ResizeObserver`）—— 且**窄窗下不允许编辑**：
  *    单列布局是模型算出来的，编辑会跟它打架（按钮禁用 + 写明原因）。
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ComponentType } from 'react'
 import { Check, GripVertical, RotateCcw, SlidersHorizontal } from 'lucide-react'
 
 import { api } from '../../api/api'
 import type { Post, ProfileCardRow, VTuber } from '../../api/types'
+import usePrefersReducedMotion from '../../hooks/usePrefersReducedMotion'
 import { pill } from '../../utils/pill'
 import OverlayScroll from '../OverlayScroll'
 import { getCardKind, listCardKinds } from './cardRegistry'
@@ -37,9 +38,12 @@ import {
   defaultLayout, gridStyle, isNarrow, moveCard, resizeCard, toSingleColumn,
   type CardLayout,
 } from './layoutModel'
+import {
+  LONG_PRESS_MS, SETTLE_GRACE_MS, type CardPhase, isDrag, liftOffset, motionPlan, nextPhase,
+  phaseTransform,
+} from './motion'
 import './cards'                       // 副作用：注册内置卡片（加卡片不用改本文件）
 import '../../styles/profile-board.css'
-
 interface Props {
   vtuber: VTuber
   /** 抓取完成边沿（卡片据此重取自己的数据） */
@@ -73,6 +77,14 @@ export default function ProfileBoardView({ vtuber, refreshTick, onOpenPost }: Pr
 
   /** 还在读布局（首帧渲染骨架，还没有网格可观察） */
   const loading = cards === null
+
+  /** 动效调测页（`?motion=cards`）：dev 构建 + 带参数时才**动态**载入 */
+  const [Lab, setLab] = useState<ComponentType<{ gridRef: typeof gridRef }> | null>(null)
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    if (!new URLSearchParams(window.location.search).has('motion')) return
+    void import('../../dev/MotionLab').then((m) => setLab(() => m.default))
+  }, [])
 
   // 容器宽 → 窄窗降级（首帧 width=0 时不降级，见 layoutModel.isNarrow）
   useEffect(() => {
@@ -134,7 +146,13 @@ export default function ProfileBoardView({ vtuber, refreshTick, onOpenPost }: Pr
     }
   }, [vtuber.id])
 
-  // ── 指针拖拽 / 缩放（手势 → 格子位移 → 纯函数算新布局）──────────────
+  // ── 指针手势（R37-P4b：长按拾起 → 跟手 1:1 → 松手落位）──────────────────
+  //
+  // 相位机与算式都在 `motion.ts`（纯函数、有单测）；这里只负责"喂事件 + 画相位"。
+  // 三条纪律：
+  //   ① 长按 350ms 才算拾起（与 Hero 药丸重排同值）；没到就抬手 ⇒ 只是短按（点击语义照常）；
+  //   ② 拾起后位置**跟手**（`pointerDelta − cellDelta`），格子仍逐格换位 ⇒ 观感连续；
+  //   ③ 迟到的长按定时器必须无害（抬手之后才到 ⇒ 不许把卡片又拿起来）。
   const dragRef = useRef<{
     id: string
     mode: 'move' | 'resize'
@@ -145,8 +163,26 @@ export default function ProfileBoardView({ vtuber, refreshTick, onOpenPost }: Pr
     moved: boolean
   } | null>(null)
 
+  /** 手势的**可见**部分（相位 + 跟手位移）—— 这个进 state，因为要画出来 */
+  const [gesture, setGesture] = useState<
+    { id: string; phase: CardPhase; x: number; y: number } | null
+  >(null)
+  const pressTimer = useRef<number | null>(null)
+
+  const reduced = usePrefersReducedMotion()
+  const plan = motionPlan(reduced)
+
+  const clearGestureTimers = () => {
+    if (pressTimer.current != null) {
+      window.clearTimeout(pressTimer.current)
+      pressTimer.current = null
+    }
+  }
+
   const beginDrag = (e: React.PointerEvent, card: CardLayout, mode: 'move' | 'resize') => {
-    if (!editing || narrow || busy) return
+    if (narrow || busy) return
+    // 缩放手柄只在编辑态存在
+    if (mode === 'resize' && !editing) return
     e.preventDefault()
     e.stopPropagation()
     // 合成事件（探针）带的是假 pointerId，`setPointerCapture` 会抛 —— 拿不到指针捕获
@@ -158,25 +194,83 @@ export default function ProfileBoardView({ vtuber, refreshTick, onOpenPost }: Pr
       id: card.id, mode, startX: e.clientX, startY: e.clientY,
       base: cardsRef.current, origin: card, moved: false,
     }
+    // 两态两种语义（2026-09-18 实现细化）：
+    //   · **阅读态**：按住 350ms 才拿起（手机语义；也避免误触把卡片碰乱），长按即进编辑态；
+    //   · **编辑态**：按下即拖（桌面习惯）—— 用户点「编辑布局」本来就是为了排布，
+    //     若每拖一次还得先按住 350ms，按钮就白点了。拿起时的缩放/阴影两态一致。
+    setGesture({ id: card.id, phase: editing ? 'lifted' : 'pressing', x: 0, y: 0 })
+    if (!editing) {
+      pressTimer.current = window.setTimeout(() => {
+        pressTimer.current = null
+        const d = dragRef.current
+        if (!d) return
+        setGesture((g) => (g && g.id === d.id ? { ...g, phase: nextPhase(g.phase, 'hold') } : g))
+        setEditing(true)
+      }, LONG_PRESS_MS)
+    }
   }
 
   const onDragMove = (e: React.PointerEvent) => {
     const d = dragRef.current
     if (!d) return
+    const dxPx = e.clientX - d.startX
+    const dyPx = e.clientY - d.startY
+    // 防抖：还没够得上"拖动"就什么都不做（否则点一下就会挪卡片）
+    if (!d.moved && !isDrag(dxPx, dyPx)) return
     const colW = columnWidthPx(gridRef.current?.clientWidth ?? 0)
-    const { dx, dy } = cellsFromPx(e.clientX - d.startX, e.clientY - d.startY,
-                                   colW, ROW_H + GRID_GAP)
-    if (!dx && !dy) return                       // 没跨格就不重算（避免每像素一次 setState）
-    d.moved = true
-    setCards(d.mode === 'move'
-      ? moveCard(d.base, d.id, d.origin.x + dx, d.origin.y + dy)
-      : resizeCard(d.base, d.id, d.origin.w + dx, d.origin.h + dy))
+    const { dx, dy } = cellsFromPx(dxPx, dyPx, colW, ROW_H + GRID_GAP)
+
+    // 长按还没成立就开始拖 ⇒ 取消这一次手势（把它让给原生滚动/选择）
+    if (pressTimer.current != null) {
+      window.clearTimeout(pressTimer.current)
+      pressTimer.current = null
+      dragRef.current = null
+      setGesture(null)
+      return
+    }
+
+    let next = d.base
+    if (dx || dy) {                              // 没跨格就不重算布局
+      d.moved = true
+      next = d.mode === 'move'
+        ? moveCard(d.base, d.id, d.origin.x + dx, d.origin.y + dy)
+        : resizeCard(d.base, d.id, d.origin.w + dx, d.origin.h + dy)
+      setCards(next)
+    }
+
+    // 跟手位移（只对"移动"）：卡片视觉位置 = 指针位移 − 它所在格子的位移。
+    // 格子位移**用模型算**（不读 DOM）：拖动期间读 rect 会强制重排，而且拿到的还可能是
+    // 上一帧的位置。
+    //
+    // ⚠️ 这里**刻意不做 rAF 节流**（第一版做了，被探针逼回来）：pointermove 本来就是
+    // 每帧一两次，React 自己会把同一批事件的状态更新合掉；再加一层 rAF 只会让"跟手位移
+    // 落在下一帧"，而**探针在多远的将来读到它就成了竞态**（实测默认档绿、reduced 档红，
+    // 差别只是那一帧有没有被服务）。手感相关的东西不该有竞态。
+    const cur = next.find((c) => c.id === d.id) ?? d.origin
+    const cellDx = (cur.x - d.origin.x) * (colW + GRID_GAP)
+    const cellDy = (cur.y - d.origin.y) * (ROW_H + GRID_GAP)
+    const off = liftOffset(dxPx, dyPx, cellDx, cellDy)
+    setGesture((g) => (g && g.id === d.id && g.phase === 'lifted' ? { ...g, ...off } : g))
   }
 
   const endDrag = () => {
+    clearGestureTimers()
     const d = dragRef.current
     dragRef.current = null
-    if (d?.moved) void persist(cardsRef.current)
+    if (!d) return
+    const phase = gesture && gesture.id === d.id ? nextPhase(gesture.phase, 'up') : 'idle'
+    if (phase === 'settling') {
+      // 落位：撤掉跟手位移（内联 transform 消失 ⇒ CSS 过渡把它滑回格位），
+      // 等过渡走完再清相位（清早了卡片会瞬间跳回，就没有"落下"的过程了）
+      setGesture((g) => (g && g.id === d.id ? { ...g, phase } : g))
+      window.setTimeout(() => {
+        setGesture((g) => (g && g.id === d.id ? null : g))
+      }, SETTLE_GRACE_MS)
+    } else {
+      // 短按 / 取消：**立刻**清干净（不留内联过渡，也不留相位）
+      setGesture((g) => (g && g.id === d.id ? null : g))
+    }
+    if (d.moved) void persist(cardsRef.current)
   }
 
   const resetDefault = () => {
@@ -247,7 +341,23 @@ export default function ProfileBoardView({ vtuber, refreshTick, onOpenPost }: Pr
         {layout.map((card) => {
           const meta = getCardKind(card.kind)
           if (!meta) return null
-          const dragging = dragRef.current?.id === card.id && dragRef.current.moved
+          const g = gesture && gesture.id === card.id ? gesture : null
+          const phase: CardPhase = g?.phase ?? 'idle'
+          const dragging = phase === 'lifted' || phase === 'settling'
+          // 手势期间的内联 transform / 过渡：**相位驱动**（跟手时无过渡，落位时有）
+          const liftStyle: React.CSSProperties | undefined = g
+            ? {
+                transform: phaseTransform(phase, g.x, g.y, plan),
+                transition: phase === 'lifted'
+                  ? 'none'
+                  : phase === 'settling'
+                    ? `transform ${plan.settleMs}ms var(--ease-emphasized)`
+                    : `transform var(--motion-instant) var(--ease-standard)`,
+                // 只有拿起来的时候才常驻图层；落定后就撤（留下 `will-change` 是常驻显存开销）
+                willChange: dragging ? 'transform' : undefined,
+                zIndex: dragging ? 5 : undefined,
+              }
+            : undefined
           return (
             <section
               key={card.id}
@@ -256,10 +366,11 @@ export default function ProfileBoardView({ vtuber, refreshTick, onOpenPost }: Pr
               data-card-h={card.h}
               data-card-hpx={cardHeightPx(card)}
               data-card-key={card.id}
+              data-card-phase={phase}
               /* R37-P4a：注册表下发的**默认行数** —— 探针只在"卡片不低于默认高度"时
                  才要求正文不裁切（用户主动缩小的卡片允许裁掉内容，见规格 §8）。 */
               data-card-min-h={meta.defaultSize.h}
-              style={gridStyle(card)}
+              style={{ ...gridStyle(card), ...liftStyle }}
             >
               <header className="pcard-head"
                       onPointerDown={(e) => beginDrag(e, card, 'move')}>
@@ -284,6 +395,9 @@ export default function ProfileBoardView({ vtuber, refreshTick, onOpenPost }: Pr
         })}
         {!layout.length && <p className="pcard-empty">还没有注册任何卡片</p>}
       </div>
+      {/* 动效调测页（R37-P4b）：只在 `?motion=cards` 时**动态**载入 —— 与 `main.tsx` 载探针
+          同一路数（生产构建里 `import.meta.env.DEV` 为 false，整段被摇掉）。 */}
+      {Lab && <Lab gridRef={gridRef} />}
     </OverlayScroll>
   )
 }

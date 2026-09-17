@@ -423,7 +423,8 @@ DOM 契约（探针 `ui_probe --status-island` 直接查）：`.si-island`（`.o
 | └ 优质投稿卡 | `cards/TopPostsCard.tsx`（kind `top-posts`，7×3，tone `coral`） | **R37-P4a**：封面 56×36 + `--pcard-radius-inner` 8px + 白环（贴纸化的最小改动，骨架尺寸同步 46×30 → 56×36）、播放/点赞变 `.tone-chip`（数字走 `formatCount`，与平台药丸同一口径）。卡片**自己取数**（`listPosts` 一页 50 条）→ `topPosts.ts` 排序（**12 条单测**）+ 一句「按什么排 · 共几条」；点一行开帖子详情抽屉；未到位 = 同尺寸骨架（R36 口径） |
 | 编辑态（R37-P2b） | `.board-actions` / `.board-btn(.on)` / `.board-hint` | 头部一枚「编辑布局」；进编辑态变「重置默认 + 完成」。编辑态才有的东西：卡片阴影升到 `--pcard-shadow-edit`、卡头 `cursor: grab` + 抓手图标、右下角 `.pcard-resize` 手柄、**网格辅助线**（`.board-grid.editing` 的 `repeating-linear-gradient`）。窄窗（<560）**按钮禁用**并写明原因（单列是模型算的，编辑会跟它打架） |
 | 拖拽 / 缩放 | `.pcard.dragging`（阴影升到 `--pcard-shadow-lift`）+ `layoutModel` 的 `moveCard`/`resizeCard` | 手势用 Pointer Events（卡头发起拖动、手柄发起缩放，`touch-action: none`）；每跨一格重算一次布局（`d.base` 快照 + 累计位移 ⇒ 不漂移）；**松手整版 PUT**，成功顶栏胶囊「布局已保存」、失败**回滚到上一版** + 说明（不留「看着排好了其实没存上」） |
-| 动效（R37-P4b/P4c 待做） | —— | 规格 `docs/design-archive-cards.md` §5 已定：长按 350ms 拾起（一次性 ≤5.5% 过冲）· 跟手位移 `pointerDelta − cellDelta` · 其他卡片退避走 FLIP（**路线 A**，2026-09-18 拍板）· 落位 220ms 无回弹 · reduced-motion 只留 ≤100ms 淡入。本批（P4a）只落了**静态**的 hover 上浮与阴影档位 |
+| 动效（R37-P4b 已落地） | `components/profile/motion.ts` + `data-card-phase` | **手势相位机**（纯函数，**18 条单测**）：`idle / pressing / lifted / settling`；口径 **阅读态长按 350ms 拿起并进编辑态 / 编辑态按下即拖**，拿起缩放 ≤1.055（`--ease-pop` 一次性过冲），跟手位移 = `指针位移 − 格子位移`（**视觉位移 ≡ 指针位移**），落位 220ms `--ease-emphasized` 无回弹。令牌 `--motion-*` / `--ease-*` 在 `tokens.css`（与状态胶囊规格同一组值，含慢放变量 `--motion-scale`）。reduced-motion：**缩放归零、落位不滑行，跟手保留 1:1**（跟手是输入反馈不是动画）。**退避 FLIP 留 P4c** |
+| 动效调测页 | `.mlab`（`data-motion-lab`，`?motion=cards`） | `components/dev/MotionLab.tsx`（**dev 构建动态载入**）：单步触发（按下/跟手/跨格/落位/连播）+ 慢放 1×·0.5×·0.25×（改 `--motion-scale`）+ 跟手误差读数。它派发**真实的合成 PointerEvent**，不是另画一套假动画。护栏 `ui_probe.py --motion-lab` |
 | 已知边界 | — | P2b 只改**位置与大小**，不改「有哪些卡片」；自定义卡片（新增/删除 + `config_json`）与扩展点接线在 **P3** |
 
 #### B1.5 共用层：跨视图联动刷新（事件总线）
@@ -549,6 +550,9 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 | `--pcard-shadow` / `-hover` / `-edit` / `-lift` | 见 tokens.css | **档案卡族**四档阴影：静止 / 阅读态 hover / 编辑态 / 拿起（R37-P4c 用） |
 | `--pcard-ring` | inset 0 1px 0 rgba(255,255,255,.9) | 卡顶 1px 高光内边 —— "稍微浮起"的关键（光从上面来） |
 | `--tone-pink/-coral/-navy/-gray`（各带 `-deep` / `-tint`） | 见 tokens.css | 卡片色调三件套（角标底 / chip 文字 / chip 底），**只许用在 ≤22px 角标与 ≤11px chip** |
+| `--motion-instant/-fast/-base/-slow` | 90 / 140 / 220 / 320ms | **动效令牌**（R37-P4b；与 `design-status-island.md` §2 同值，R38 批 1 复用） |
+| `--ease-standard/-exit/-emphasized/-pop` | 见 tokens.css | 进入位移 / 离场 / 落位（前快后慢）/ **唯一允许的过冲**（只给"拿起"那一次 scale） |
+| `--motion-scale` | 1 | **慢放倍率**：所有动效时长都是 `calc(N × var(--motion-scale))`，只有动效调测页改它 |
 | `--pill-fill-pink` / `--pill-fill-coral` | #e35d8b / #e05261 | 粉丝徽章色底（加深版：白字 26px 对比 2.5:1 → 3.4:1，**替代早期 #fb77a1/#fc7079 直接填充**） |
 | `--radius-window` | 4px | L3 窗口圆角 |
 | `--topbar-height` / `--rail-width` / `--sidebar-width` | 40px / 50px / 492px | 三段尺寸 |

@@ -110,7 +110,24 @@ python scripts/ui_probe.py --board                    # R37-P2b（devlog/144）�
 python scripts/ui_probe.py --pinned                   # R35（devlog/139）：置顶动态排在「帖子列表」第 1 张 + 带角标
                                                      # —— 种一条 **2020 年时间戳**的置顶帖（排序不生效必掉到末尾）
                                                      # + 一条当下的对照帖（不许挂角标）
+python scripts/ui_probe.py --shot-board               # R37-P4a（devlog/146）：档案视图**视觉存档** ——
+                                                     # 阅读态 / 编辑态 / 动效调测页各一张（先「重置默认」再截）
+python scripts/ui_probe.py --motion-cards             # R37-P4b（devlog/147）：档案视图**手势动效**
+                                                     # —— 合成 pointer 走「按下 → 长按 350ms 拾起 → 跟手 1:1
+                                                     # （含跨格）→ 抬手落位 → 收尾」，断言相位链 / 缩放档 /
+                                                     # 跟手误差 ≤2px / 落位无内联残留 / 短按不被迟到定时器拿起
+python scripts/ui_probe.py --motion-cards --reduced   # 同上，但给浏览器加 `--force-prefers-reduced-motion`：
+                                                     # 断言缩放归零、落位不过渡，而**跟手仍 1:1**（那是输入反馈）
+python scripts/ui_probe.py --motion-lab               # R37-P4b：动效调测页（`?motion=cards`）—— 面板是**动态载入**的，
+                                                     # 载入失败只会「什么都没有」⇒ 断言面板挂上 + 「按下」真能驱动手势
 ```
+
+> `--motion-cards` / `--motion-lab`（2026-09-18 起，devlog/147）：**虚拟时间下 CSS 过渡不推进** ——
+> 实测 `getAnimations()` 里过渡是 `running`，但 `currentTime` 恒为 0，于是 `getComputedStyle().transform`
+> 永远停在**过渡起点**（按下时读到 1、落位后还读到拾起时的矩阵）。所以动画类的断言只能判两件事：
+> ① **我们提交了什么**（读 `element.style.transform` 内联值）；② **过渡有没有登记**
+> （读 `transition-duration`）。想看动画真的怎么走，用调测页的 0.25× 慢放，别指望 computed。
+
 
 > `--profile-sync`（2026-09-17 起，devlog/135）：**我看不到界面时它就是眼睛**（DSH 自己的窗口压在上面）。
 > 两个坑写在这里免得再踩：① 探针跑在**虚拟时间**下，图片加载**永远完不成**，Radix 的 `AvatarImage`
