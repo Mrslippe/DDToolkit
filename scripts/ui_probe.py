@@ -159,6 +159,39 @@ def _seed_profile(data: Path, vtuber_id: int, base_url: str) -> dict:
             "controlSign": (ctl[1] or "").strip() if ctl else None}
 
 
+def _seed_anniversary(data: Path, vtuber_id: int) -> dict:
+    """往**副本**里种生日与出道日（R37-P4a 探针的确定性现场）。
+
+    为什么要种：开发库里 V 的 `birthday / debut_date` 实测**全是空**（2026-09-17 核过），
+    不种的话规格 §4.1 那半条"有记录时**必须**有大数字"永远空转 —— 空转的断言比没有断言更坏，
+    它会让人以为这块已经测过了。两枚故意取不同写法：
+
+    - 生日 `3月14日`（**不给年份**）→ 验"只填月日按每年循环"；
+    - 出道 `2023-09-17`（**给年份**）→ 验事实行里的"第 N 周年"。
+
+    返回：种下去的原值（供打印/排错）。找不到库或这一行就**如实返回空**（本函数不负责
+    判定现场是否存在，那是调用方的事）。
+    """
+    import sqlite3
+
+    birthday, debut = "3月14日", "2023-09-17"
+    db = data / "vtuber.db"
+    if not db.exists():
+        return {}
+    con = sqlite3.connect(db)
+    try:
+        cur = con.execute("UPDATE vtubers SET birthday=?, debut_date=? WHERE id=?",
+                          (birthday, debut, vtuber_id))
+        con.commit()
+        if not cur.rowcount:
+            return {}
+    except sqlite3.Error:
+        return {}
+    finally:
+        con.close()
+    return {"birthday": birthday, "debut": debut}
+
+
 def _seed_pinned(data: Path, vtuber_id: int) -> dict:
     """往**副本**里种一条「又老又置顶」的动态（R35 探针的确定性现场）。
 
@@ -426,6 +459,14 @@ def _assert_board(views: list[dict], width: int) -> list[str]:
       ③ 卡片**不重叠、不出网格**（只读布局的硬不变量；P2 的拖拽要复用同一套几何）；
       ④ **窄窗单列**：容器宽 < 900px 时必须是单列（`cols==1`），否则必须是 12 列 ——
          这条把"降级判据看容器宽而不是窗口宽"钉死（跨三档宽度各验一次）。
+
+    R37-P4a 追加（规格 `docs/design-archive-cards.md` §2/§3/§4）：
+      ⑤ **材质**：每张卡的圆角 = 令牌 `--pcard-radius`（探针从 CSS 变量读，不另写数字），
+         有阴影、无发丝边；
+      ⑥ **贴纸角标**：每卡恰一枚，22px 见方、在卡片右上象限、有图标、有白环、底色不是透明；
+      ⑦ **内容不裁切**：卡片高度 ≥ 自己默认行数时，正文不得溢出（溢出 = 内容静默消失）；
+      ⑧ **各卡的"生动件"到位**：纪念日 hero 只在真有数字时出现（没有就**不许**有）、
+         大事记有时间线（脊线 + 每行一个圆点 + 每行一枚 chip）、优质投稿每行一枚播放 chip。
     """
     bad: list[str] = []
     v = next((x for x in views if x.get("tag") == "profile"), None)
@@ -450,6 +491,8 @@ def _assert_board(views: list[dict], width: int) -> list[str]:
         if (c.get("x") or 0) < -1 or (c.get("x") or 0) + (c.get("w") or 0) > grid_w + 1:
             bad.append(f"@{width} board: 卡片 {c.get('kind')} 越出网格"
                        f"（x={c.get('x')} w={c.get('w')} 网格宽={grid_w}）")
+        bad += _assert_card_look(c, width)
+        bad += _assert_board_stats(c, width)
     # 两两不相交（同 R36 的"零重叠"口径；窄窗单列时天然满足）
     for i in range(len(cards)):
         for j in range(i + 1, len(cards)):
@@ -473,6 +516,7 @@ def _assert_board(views: list[dict], width: int) -> list[str]:
                            f"应为 ['生日', '出道']")
             elif not c.get("hint"):
                 bad.append(f"@{width} board: 纪念日卡没有底部那句提示（最近的一个 / 还没填）")
+            bad += _assert_anniv_hero(c, width)
         elif kind in ("top-posts", "events"):
             # 大事记同理：要么有行、要么有一句明说的空态（"还没有记录大事记"）
             if not (c.get("rows") or 0) and not c.get("emptyText"):
@@ -496,7 +540,128 @@ def _assert_board(views: list[dict], width: int) -> list[str]:
         bad.append(f"@{width} board: 容器宽 {grid_w}px（≥{narrow_px}）却不是 12 列（cols={cols}）")
     if not bad:
         print(f"  画布：{len(cards)} 张卡 · 容器 {grid_w}px · "
-              f"{'单列' if cols == 1 else f'{cols} 列'} · 高度与模型一致、无重叠无越界")
+              f"{'单列' if cols == 1 else f'{cols} 列'} · 高度与模型一致、无重叠无越界、"
+              f"材质与贴纸角标到位")
+    return bad
+
+
+def _assert_card_look(c: dict, width: int) -> list[str]:
+    """R37-P4a：卡片材质 + 贴纸角标 + 内容不裁切（规格 §2/§3）。
+
+    这几条都是"错了也看着像设计选择"的那类：没有阴影、圆角少 4px、角标跑到左上、
+    正文被 `overflow:hidden` 默默切掉 —— 肉眼扫一遍很难发现，但它就是"贴纸感"的全部。
+    """
+    bad: list[str] = []
+    kind = c.get("kind")
+    radius = c.get("radius")
+    if not radius or radius < 8 or radius > 16:
+        bad.append(f"@{width} board: 卡片 {kind} 圆角 {radius}px 不在 8–16 之间"
+                   f"（规格定的 12px 档；0 = 还是旧的方形表面层）")
+    if (c.get("shadow") or "none") in ("none", ""):
+        bad.append(f"@{width} board: 卡片 {kind} 没有阴影（「稍微浮起」的全部依据）")
+    if (c.get("borderW") or 0) > 0:
+        bad.append(f"@{width} board: 卡片 {kind} 还留着 {c.get('borderW')}px 发丝边"
+                   f"（浮起卡是「无边框 + 阴影」，两套一起上会显脏）")
+
+    badge = c.get("badge")
+    if not badge:
+        bad.append(f"@{width} board: 卡片 {kind} 没有贴纸角标（`[data-card-badge]`）"
+                   f"—— 规格 §3 要求每张卡恰有一枚")
+    else:
+        if badge.get("tone") not in ("pink", "coral", "navy", "gray"):
+            bad.append(f"@{width} board: 卡片 {kind} 的角标色调 {badge.get('tone')!r} 不在清单里")
+        if not (18 <= (badge.get("w") or 0) <= 26 and abs((badge.get("w") or 0) - (badge.get("h") or 0)) <= 1):
+            bad.append(f"@{width} board: 卡片 {kind} 的角标是 {badge.get('w')}×{badge.get('h')}，"
+                       f"应为 22px 见方（贴纸是全圆的）")
+        if not badge.get("icon"):
+            bad.append(f"@{width} board: 卡片 {kind} 的角标里没有图标（空圆片像加载失败）")
+        if "255, 255, 255" not in (badge.get("ring") or ""):
+            bad.append(f"@{width} board: 卡片 {kind} 的角标没有白环"
+                       f"（box-shadow={badge.get('ring')!r} —— 白环是「贴纸」感的来源）")
+        bg = (badge.get("bg") or "")
+        if bg in ("rgba(0, 0, 0, 0)", "transparent", ""):
+            bad.append(f"@{width} board: 卡片 {kind} 的角标底色是透明的（等于没上色）")
+        # 右上象限：横向要在右半、纵向要在上半
+        if not ((badge.get("cx") or 0) > (c.get("w") or 0) / 2
+                and (badge.get("cy") or 0) < (c.get("hh") or 0) / 2):
+            bad.append(f"@{width} board: 卡片 {kind} 的角标中心在 "
+                       f"({badge.get('cx')},{badge.get('cy')})，不在卡片右上象限"
+                       f"（卡片 {c.get('w')}×{c.get('hh')}）")
+
+    # 内容不裁切：只在卡片**不小于自己的默认高度**时判（用户主动缩小的卡片允许裁切）
+    min_h = c.get("minH") or 0
+    if min_h and (c.get("h") or 0) >= min_h:
+        for key, label in (("overH", "纵向"), ("overW", "横向")):
+            over = c.get(key)
+            if over is None:
+                bad.append(f"@{width} board: 卡片 {kind} 量不到正文溢出（选择器踩空？）")
+            elif over > 1:
+                bad.append(f"@{width} board: 卡片 {kind} 的{label}内容溢出 {over}px 被裁掉"
+                           f"（卡片高 {c.get('h')} 行 ≥ 默认 {min_h} 行 —— 默认尺寸装不下自己的内容）")
+    return bad
+
+
+def _assert_anniv_hero(c: dict, width: int) -> list[str]:
+    """纪念日 hero（规格 §4.1）：**只有真有数字时才许出现**。
+
+    反过来的那一半更重要：没有 hero 时视图不能摆一个空数字位 —— 那会让人以为
+    "有数据但没显示出来"（静默失败的另一种长相）。判据用行文本自证：
+    两行都是「未记录」⇒ 必须没有 hero；否则必须有，且值要么是「今天」要么是数字。
+    """
+    bad: list[str] = []
+    values = c.get("rowValues") or []
+    dated = [x for x in values if x and x != "未记录"]
+    hero = c.get("hero")
+    if not dated:
+        if hero:
+            bad.append(f"@{width} board: 纪念日两行都是「未记录」却渲染了 hero"
+                       f"（{hero.get('value')!r}）—— 没有可信数字就不许摆数字位")
+        return bad
+    if not hero:
+        return [f"@{width} board: 纪念日有记录（{dated}）却没有 hero 大数字"
+                f"（这张卡唯一在倒数的信息被埋在行里了）"]
+    value = (hero.get("value") or "").strip()
+    if value != "今天" and not value.isdigit():
+        bad.append(f"@{width} board: 纪念日 hero 的值 {value!r} 既不是「今天」也不是天数")
+    if not (hero.get("caption") or "").strip():
+        bad.append(f"@{width} board: 纪念日 hero 没有说明句（大数字得说清是「距离什么」）")
+    return bad
+
+
+def _assert_board_stats(c: dict, width: int) -> list[str]:
+    """大事记 / 优质投稿的"生动件"（规格 §4.2/§4.3）—— 它们只有行数够时才有意义。
+
+    ⚠️ 纪念日**不在**这一组：它的行是"静态事实"（`3/14`），行尾没有 chip ——
+    倒计时由卡面 hero 承担（见 `_assert_anniv_hero`），两处都放数字反而会出现
+    "生日 12 天 / 出道 300 天"并排让人挑的场面。
+    """
+    bad: list[str] = []
+    rows = c.get("rows") or 0
+    kind = c.get("kind")
+    if c.get("pending"):
+        # 数据没到位时卡片显示的是**同尺寸骨架**（R36 口径）：骨架本来就不该有 chip 与落点，
+        # 这一组断言在 pending 态没有意义 —— 到位之后才判（本地库直读，正常一次就到位）。
+        return bad
+    if not rows or kind == "anniversary":
+        return bad
+    if kind == "events":
+        spine = c.get("spine") or 0
+        if not (1 <= spine <= 4):
+            bad.append(f"@{width} board: 大事记的时间线脊线实渲染宽 {spine}px（期望 ≈2px）"
+                       f"—— 量的是 `.evt-list::before` 的实际宽度，节点在不在不算数")
+        if (c.get("dots") or 0) != rows:
+            bad.append(f"@{width} board: 大事记 {rows} 行却有 {c.get('dots')} 个圆点"
+                       f"（时间线的每一行都要有落点）")
+    chips = c.get("chips") or []
+    if len(chips) != rows:
+        bad.append(f"@{width} board: 卡片 {kind} {rows} 行却有 {len(chips)} 枚 chip"
+                   f"（每行一枚；chip 是行尾的视觉锚点）")
+    else:
+        want = ("today", "future", "past") if kind == "events" else ("view", "like")
+        for tone in chips:
+            if tone not in want:
+                bad.append(f"@{width} board: 卡片 {kind} 的 chip 色调 {tone!r} 不在 {want}")
+                break
     return bad
 
 
@@ -826,6 +991,12 @@ def main() -> int:
         help="用空数据目录起后端，验证「首次启动自动弹登录浮窗 + 本地存储说明」",
     )
     ap.add_argument(
+        "--shot-board",
+        action="store_true",
+        help="最宽那档额外存两张**档案视图**截图（阅读态 / 编辑态，`_ui_probe_tmp/board-*.png`）"
+             "—— 服务 R37-P4a 的视觉评审；先点「重置默认」再截（写的是数据目录**副本**）",
+    )
+    ap.add_argument(
         "--shot",
         action="store_true",
         help="额外存图：每档宽度截一张「筛选弹窗打开态」（_ui_probe_tmp/shot-<宽>.png），供视觉比对",
@@ -1075,6 +1246,15 @@ def main() -> int:
             print(f"[probe] 已种置顶帖：{seeded_pin['pinnedTitle']!r}"
                   f"（{seeded_pin['platform']}:{seeded_pin['uid']}，2020 年时间戳）"
                   f" + 对照帖 {seeded_pin['plainTitle']!r}（副本 DB，非真库）")
+
+        # R37-P4a：纪念日 hero 需要"真的有记录"才有牙 —— 开发库里没有 V 填过生日，
+        # 所以默认模式也种一次（副本 DB，非真库；与 --pinned 同一条纪律）
+        seeded_anniv: dict = {}
+        if vid and not args.first_run:
+            seeded_anniv = _seed_anniversary(data, vid)
+            if seeded_anniv:
+                print(f"[probe] 已种纪念日：生日 {seeded_anniv['birthday']!r}"
+                      f"、出道 {seeded_anniv['debut']!r}（副本 DB，非真库）")
 
         if args.app_settings:
             # 应用设置（R14a，devlog/091）：这一条是**会写盘的探针** —— 它真的改设置、
@@ -2847,6 +3027,20 @@ def main() -> int:
                 )
                 print(f"  截图 → {shot}")
 
+            # R37-P4a 的视觉评审：档案视图阅读态 / 编辑态各一张（只截最宽那档 —— 卡片排得开）。
+            # 先 `reset=1` 走「重置默认」，让截图是**默认排布**而不是上一次 --board 拖出来的样子。
+            if args.shot_board and not args.first_run and w == widths[-1]:
+                for tag, q in (("read", "&reset=1"), ("edit", "&reset=1&editing=1")):
+                    shot = WORK / f"board-{tag}-{w}.png"
+                    _run_shot(
+                        edge,
+                        f"http://localhost:{vite_port}{route}?probe=board-view{q}",
+                        w,
+                        args.height,
+                        shot,
+                    )
+                    print(f"  截图 → {shot}")
+
         print("\n=== 汇总 ===")
         if failures:
             print(f"[FAIL] {len(failures)} 处不变量被破坏")
@@ -2857,8 +3051,10 @@ def main() -> int:
         _kill_tree(vite)
         _kill_tree(be)
         be_log.close()
-        # 失败时保留现场；`--shot` 时保留截图（两者都在 _ui_probe_tmp/ 下）
-        if not failures and not args.shot:
+        # 失败时保留现场；`--shot` / `--shot-board` 时保留截图（三者都在 _ui_probe_tmp/ 下）。
+        # ⚠️ R37-P4a 实跑踩到：加了 `--shot-board` 却忘了加进这个条件 —— 跑完全绿、图也被删了，
+        # 只留一行「截图 → …」日志指向一个不存在的路径（用户要看的产物不能删）。
+        if not failures and not args.shot and not args.shot_board:
             shutil.rmtree(WORK, ignore_errors=True)
 
 

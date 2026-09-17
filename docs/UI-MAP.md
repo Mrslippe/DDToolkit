@@ -5,10 +5,14 @@
 > 本文档数值以 tokens.css 与各 css 文件实际声明为准）。
 >
 > 设计语言总纲：**方形极简 + 全平面零阴影**（shadcn `--radius:0rem`、`--shadow-card:none`）。
-> 圆角/阴影豁免收敛为三族（其余一律回方形总纲）：
+> 圆角/阴影豁免收敛为四族（其余一律回方形总纲）：
 > ① 列表工具行「浮片」：斜切白卡（`--pill-radius:3px` + `--pill-skew:-10deg` + `--pill-shadow`）；
 > ② 帖子面板「药丸族」：`type-chip` / `.search-float input` / `post-card-type`/`post-card-duration` 角标 / `stat-badge` / `glow-bar`（均 999px 或渐变软光）；
-> ③ 功能性气泡：`live-tag`（8px）、粉丝 `stat-pill`（2px 图像底）、筛选/时间 popover 抽屉阴影（16px 浮置深度）。
+> ③ 功能性气泡：`live-tag`（8px）、粉丝 `stat-pill`（2px 图像底）、筛选/时间 popover 抽屉阴影（16px 浮置深度）；
+> ④ **档案卡族**（R37-P4a）：`.pcard` 的 `--pcard-radius:12px` + `--pcard-shadow*` 四档 +
+> 顶部 1px 高光内边 `--pcard-ring` —— "圆角阴影稍微浮起"的小组件式卡片（规格 `docs/design-archive-cards.md`）。
+> ⚠️ 族内的 **tone 色**（`--tone-*`）**只许用在 ≤22px 的贴纸角标与 ≤11px 的文字 chip 上**，
+> 卡面主体永远是白卡 + 中性文字。
 >
 > 对比度约定：顶栏「标题/状态/窗口图标」为**品牌装饰性白字**（保持设计稿原稿，logo 类豁免）；
 > 功能性文字与数字一律达标（`--c-text-sub:#5b6c7e` ≥4.5:1、粉丝徽章 `--pill-fill-*` 白字 ≥3:1 大号数字）。
@@ -409,14 +413,17 @@ DOM 契约（探针 `ui_probe --status-island` 直接查）：`.si-island`（`.o
 | 视图容器 | `<ProfileBoardView>` / `.board-view`（OverlayScroll） | 与 archive 视图同构：整块视图自己滚；滚动体 padding `12px 18px 18px`、column gap 12 |
 | 头部 | `.board-head` | 标题「档案视图」+ 右侧说明（`N 张卡片 · 12 列网格 / 窄窗单列`） |
 | 网格 | `.board-grid`（`[data-board]`） | **12 列 × `--board-row`(84px) 行 + gap 12**，`grid-auto-rows` 由模型定死 ⇒ 卡片高 = `h×84 + (h-1)×12`；`data-board-cols` 与 `data-board-narrow`（阈值 560，**下发给探针**，免得 TS/Python 各写一份） |
-| 卡片外壳 | `.pcard`（`data-card-kind` / `data-card-h` / `data-card-hpx`） | 表面层风格：4px 圆角 + 发丝边；头部 `.pcard-head`（标题 12.5/600 + 下缘发丝）+ 体 `.pcard-body`（`overflow:hidden`，**高度由网格算死、内容不得撑高**） |
-| 布局模型 | `components/profile/layoutModel.ts` | 纯函数（**17 条单测**）：`defaultLayout`（书架式填行）/ `clampCard` / `normalizeLayout`（**向下推开**消重叠）/ `toSingleColumn`（窄窗降级）/ `gridStyle` / `cardHeightPx` |
-| 卡片注册表 | `components/profile/cardRegistry.ts` | 「支持拓展」的唯一入口（**4 条单测**）：`registerCardKind({kind,title,defaultSize,render})` —— 重复 kind **抛错**、顺序 = 注册顺序；`cards/index.tsx` 注册内置卡片，**视图不认识任何具体卡片** |
-| ├ 纪念日卡 | `cards/AnniversaryCard.tsx`（kind `anniversary`，5×3） | 两行（生日 / 出道）恒定渲染（没填也显示「未记录」）；口径 `anniversary.ts`（**14 条单测**：宽容解析 `2000-05-20`/`5月20日`/`05-20`、倒计时、2/29 平年按 3/1、就是今天） |
-| ├ 大事记卡 | `cards/EventsCard.tsx`（kind `events`，6×3） | **R37-P3**：`vtuber_events` 表（P7 建好、`GET /vtuber/{id}/events` 端点一直在、**UI 一直没接**）终于接上；口径 `events.ts`（**10 条单测**：未来在前 / `YYYY-MM-DD` 按**本地**解析不走 UTC / 脏数据跳过 / 空态说清）。这张卡也是**扩展点的真示例**：加它只写了 `events.ts` + `EventsCard.tsx` + 注册一行，**视图一行没改** |
-| └ 优质投稿卡 | `cards/TopPostsCard.tsx`（kind `top-posts`，7×3） | 卡片**自己取数**（`listPosts` 一页 50 条）→ `topPosts.ts` 排序（**9 条单测**：排除墓碑 / 优先投稿 / 播放为主点赞兜底 / 同分按时间倒序）+ 一句「按什么排 · 共几条」；点一行开帖子详情抽屉（复用页面的那一个）；未到位 = 同尺寸骨架（R36 口径） |
-| 编辑态（R37-P2b） | `.board-actions` / `.board-btn(.on)` / `.board-hint` | 头部一枚「编辑布局」；进编辑态变「重置默认 + 完成」。编辑态才有的东西：卡片描边变粉、卡头 `cursor: grab`、右下角 `.pcard-resize` 手柄、**网格辅助线**（`.board-grid.editing` 的 `repeating-linear-gradient`）。窄窗（<560）**按钮禁用**并写明原因（单列是模型算的，编辑会跟它打架） |
-| 拖拽 / 缩放 | `.pcard.dragging` + `layoutModel` 的 `moveCard`/`resizeCard` | 手势用 Pointer Events（卡头发起拖动、手柄发起缩放，`touch-action: none`）；每跨一格重算一次布局（`d.base` 快照 + 累计位移 ⇒ 不漂移）；**松手整版 PUT**，成功顶栏胶囊「布局已保存」、失败**回滚到上一版** + 说明（不留「看着排好了其实没存上」） |
+| 卡片外壳 | `.pcard`（`data-card-kind` / `data-card-h` / `data-card-hpx` / `data-card-min-h`） | **R37-P4a 起是「贴纸卡」**（规格 `docs/design-archive-cards.md` §2）：`--pcard-radius` 12px + `--pcard-shadow` 双层柔和阴影 + `--pcard-ring` 顶部高光内边，**无发丝边**（描边配阴影会显脏）；阅读态 hover 上浮 2px + 阴影加深（编辑态取消 hover 上浮）；头部 `.pcard-head`（标题 12.5/600 + 贴纸角标）+ 体 `.pcard-body`（`overflow:hidden`，**高度仍由网格算死、内容不得撑高**；`data-card-min-h` = 默认行数，探针据此判"默认尺寸装不下内容"） |
+| 贴纸角标 | `.pcard-badge[data-tone]`（`data-card-badge`） | **每卡恰一枚**（规格 §3 的签名元素）：22px 全圆 + 白环 `0 0 0 2px #fff` + 微阴影，内含 13px 白色 lucide 图标。**只放图标不放文字**（白图标在深档粉底上 2.4:1，属装饰、旁边必有文字标题；带词就得过 4.5:1 ⇒ 短词一律进 `.tone-chip`）。图标与色调由**注册表下发**（`CardKindMeta.icon/tone`，缺一个 `registerCardKind` 当场抛错） |
+| 卡内文字 chip | `.tone-chip[data-tone]` | 浅底（tone 14%）+ 深档字（`--tone-*-deep`，实测 ≥4.5:1）：高 18、圆角 999px、11px。色调只有五个来源：`today/future/past`（大事记时间线）与 `view/like`（优质投稿指标） |
+| 布局模型 | `components/profile/layoutModel.ts` | 纯函数（**30 条单测**）：`defaultLayout`（书架式填行）/ `clampCard` / `normalizeLayout`（**向下推开**消重叠）/ `toSingleColumn`（窄窗降级）/ `gridStyle` / `cardHeightPx` / `moveCard` / `resizeCard` / `cellsFromPx` / `columnWidthPx` |
+| 卡片注册表 | `components/profile/cardRegistry.ts` | 「支持拓展」的唯一入口（**7 条单测**）：`registerCardKind({kind,title,defaultSize,icon,tone,render})` —— 重复 kind **抛错**、**色调不在封闭清单抛错**、**没给图标抛错**、顺序 = 注册顺序；`cards/index.tsx` 注册内置卡片，**视图不认识任何具体卡片** |
+| ├ 纪念日卡 | `cards/AnniversaryCard.tsx`（kind `anniversary`，5×3，tone `pink`） | **R37-P4a 重排**（规格 §4.1）：hero 大数字（30/700 + 单位 + 一句说明，`[data-anniv-hero]`）**只在真有记录时出现**；两行退化成**静态事实**（`3/14`、`9/17 · 第 3 周年`，行间发丝），不再各自重复天数；hint 改成口径说明。口径 `anniversary.ts`（**20 条单测**：宽容解析 `2000-05-20`/`5月20日`/`05-20`、倒计时、2/29 平年按 3/1、就是今天、hero 取最近的、无记录不许有 hero） |
+| ├ 大事记卡 | `cards/EventsCard.tsx`（kind `events`，6×3，tone `navy`） | **R37-P4a 改成时间线**（规格 §4.3）：脊线由 `.evt-list::before` 画（2px，**伪元素**——`<ul>` 里塞 `<span>` 是非法结构）、每行一枚 `.evt-dot`（8px：今天实心粉 / 未来空心蓝 / 已过空心灰）、行尾 `.evt-chip`（「今天 / N 天后 / N 天前」）。骨架同样占好落点位置（数据到达不右移）。口径 `events.ts`（**14 条单测**：未来在前 / `YYYY-MM-DD` 按**本地**解析不走 UTC / 脏数据跳过 / 空态说清 / chip 三态）。这张卡也是**扩展点的真示例**：加它只写了 `events.ts` + `EventsCard.tsx` + 注册一行，**视图一行没改** |
+| └ 优质投稿卡 | `cards/TopPostsCard.tsx`（kind `top-posts`，7×3，tone `coral`） | **R37-P4a**：封面 56×36 + `--pcard-radius-inner` 8px + 白环（贴纸化的最小改动，骨架尺寸同步 46×30 → 56×36）、播放/点赞变 `.tone-chip`（数字走 `formatCount`，与平台药丸同一口径）。卡片**自己取数**（`listPosts` 一页 50 条）→ `topPosts.ts` 排序（**12 条单测**）+ 一句「按什么排 · 共几条」；点一行开帖子详情抽屉；未到位 = 同尺寸骨架（R36 口径） |
+| 编辑态（R37-P2b） | `.board-actions` / `.board-btn(.on)` / `.board-hint` | 头部一枚「编辑布局」；进编辑态变「重置默认 + 完成」。编辑态才有的东西：卡片阴影升到 `--pcard-shadow-edit`、卡头 `cursor: grab` + 抓手图标、右下角 `.pcard-resize` 手柄、**网格辅助线**（`.board-grid.editing` 的 `repeating-linear-gradient`）。窄窗（<560）**按钮禁用**并写明原因（单列是模型算的，编辑会跟它打架） |
+| 拖拽 / 缩放 | `.pcard.dragging`（阴影升到 `--pcard-shadow-lift`）+ `layoutModel` 的 `moveCard`/`resizeCard` | 手势用 Pointer Events（卡头发起拖动、手柄发起缩放，`touch-action: none`）；每跨一格重算一次布局（`d.base` 快照 + 累计位移 ⇒ 不漂移）；**松手整版 PUT**，成功顶栏胶囊「布局已保存」、失败**回滚到上一版** + 说明（不留「看着排好了其实没存上」） |
+| 动效（R37-P4b/P4c 待做） | —— | 规格 `docs/design-archive-cards.md` §5 已定：长按 350ms 拾起（一次性 ≤5.5% 过冲）· 跟手位移 `pointerDelta − cellDelta` · 其他卡片退避走 FLIP（**路线 A**，2026-09-18 拍板）· 落位 220ms 无回弹 · reduced-motion 只留 ≤100ms 淡入。本批（P4a）只落了**静态**的 hover 上浮与阴影档位 |
 | 已知边界 | — | P2b 只改**位置与大小**，不改「有哪些卡片」；自定义卡片（新增/删除 + `config_json`）与扩展点接线在 **P3** |
 
 #### B1.5 共用层：跨视图联动刷新（事件总线）
@@ -535,9 +542,13 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 | `--c-border` | rgba(210,216,222,.55) | 发丝描边 |
 | `--c-text-main` / `--c-text-sub` / `--c-text-on-primary` | #4b5a6b / #5b6c7e / #ffffff | 正文/次级/主色上文字 |
 | `--sel-bar` / `--sel-bg` / `--sel-bg-hover` | #fb77a1 / #fff0f3 / #fff7f9 | 列表选中竖条/底/hover |
-| `--radius-card` / `--radius-sm` | 0 / 0 | 方形化 |
+| `--radius-card` / `--radius-sm` | 0 / 0 | 方形化（**全仓无人引用的"总纲标记"**，别和 `--pcard-radius` 混） |
 | `--shadow-card` | none | 全平面 |
 | `--radius-dialog` / `--shadow-dialog` | 12px / 0 4px 16px rgba(15,23,42,.1) | **弹窗层**（二级界面：浮层/弹窗/查看器遮罩，v0.6.1 用户参考风格） |
+| `--pcard-radius` / `--pcard-radius-inner` | 12px / 8px | **档案卡族**（R37-P4a）：卡片 / 卡内封面（内层小一档＝同心圆角） |
+| `--pcard-shadow` / `-hover` / `-edit` / `-lift` | 见 tokens.css | **档案卡族**四档阴影：静止 / 阅读态 hover / 编辑态 / 拿起（R37-P4c 用） |
+| `--pcard-ring` | inset 0 1px 0 rgba(255,255,255,.9) | 卡顶 1px 高光内边 —— "稍微浮起"的关键（光从上面来） |
+| `--tone-pink/-coral/-navy/-gray`（各带 `-deep` / `-tint`） | 见 tokens.css | 卡片色调三件套（角标底 / chip 文字 / chip 底），**只许用在 ≤22px 角标与 ≤11px chip** |
 | `--pill-fill-pink` / `--pill-fill-coral` | #e35d8b / #e05261 | 粉丝徽章色底（加深版：白字 26px 对比 2.5:1 → 3.4:1，**替代早期 #fb77a1/#fc7079 直接填充**） |
 | `--radius-window` | 4px | L3 窗口圆角 |
 | `--topbar-height` / `--rail-width` / `--sidebar-width` | 40px / 50px / 492px | 三段尺寸 |
@@ -664,8 +675,9 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 - `.stat-pill`（平台药丸）**图像底**（`docs/design/pills` → `src/assets/pills/`，按平台映射，未知平台回退粉/珊瑚色底）+ **2px 圆角 + `1px 2px 4px rgba(15,23,42,.12)` 阴影**，**全圆 logo 盒已移除**，仅粉丝数**靠右对齐、数字 ≤4 位**（`formatCount` 收紧）+ **`text-shadow 0 1px 2px rgba(0,0,0,.35)` 保图像底可读**；`.faction-badge` 同族 2px+同款阴影
 - `.acc-switch-btn`（账号切换器）**浮片化**：白卡 + **2px 圆角 + `var(--pill-shadow)`、去发丝边**（不加斜切保文本可读）；`.on` 主色深填白字
 - `post-card`（帖子卡片）**浮片化特例**：**2px 圆角 + `var(--pill-shadow)`、去发丝边**；hover 上浮 2px + 阴影加深 + **标题变色 `--c-accent`**；`.post-card-cover` 无封面时 `.post-card-cover-paper` 米白纸纹斜条 + 居中大标题
+- `.pcard`（档案卡）**卡片族**（R37-P4a）：**12px 圆角 + `--pcard-shadow`、无发丝边 + 顶部高光内边**；hover 上浮 2px；编辑态/hover/拿起三档阴影见 `--pcard-shadow-*`（规格 `docs/design-archive-cards.md`）
 
-**豁免**：搜索胶囊（侧栏 `list-search`、帖子页 `.search-float`，用户指定原样）、滚动条圆头、头像与状态圆点（圆形）、**直播日历格 6px 圆角（设计稿规格保留）**、**详情弹窗 14px / 封面 10px（参考图规格）**。
+**豁免**：搜索胶囊（侧栏 `list-search`、帖子页 `.search-float`，用户指定原样）、滚动条圆头、头像与状态圆点（圆形）、**直播日历格 6px 圆角（设计稿规格保留）**、**详情弹窗 14px / 封面 10px（参考图规格）**、**档案卡族 12px + 阴影（R37-P4a，用户 2026-09-18 口径："圆角阴影稍微浮起"）**。
 
 ## D. 字体（tokens.css @font-face，均为 woff2 子集化资源）
 

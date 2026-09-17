@@ -92,7 +92,7 @@
 }
 
 .pcard.editing {
-  border-color: rgba(251, 119, 161, 0.45);
+  box-shadow: var(--pcard-shadow-edit), var(--pcard-ring);
 }
 
 .pcard.editing .pcard-head {
@@ -101,8 +101,7 @@
 }
 
 .pcard.dragging {
-  border-color: var(--c-primary-deep);
-  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.18);
+  box-shadow: var(--pcard-shadow-lift), var(--pcard-ring);
 }
 
 .pcard.dragging .pcard-head {
@@ -110,6 +109,7 @@
 }
 
 .pcard-grip {
+  flex: none;
   color: var(--c-text-sub);
 }
 
@@ -123,7 +123,7 @@
   cursor: nwse-resize;
   touch-action: none;
   background: linear-gradient(135deg, transparent 0 45%, rgba(251, 119, 161, 0.75) 45% 100%);
-  border-bottom-right-radius: 4px;
+  border-bottom-right-radius: var(--pcard-radius);
 }
 
 .pcard {
@@ -144,7 +144,10 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
-/* ── 大事记卡（R37-P3）───────────────────────────────────────────── */
+/* ── 大事记卡（R37-P4a：平铺三列 → **时间线**，规格 §4.3）──────────────────
+   左侧 2px 竖脊 + 每行一个 7px 落点：位置信息由"点在线上"直接给出，
+   不用再读日期大小。今天=粉实心、未来=空心蓝、已过=灰空心 —— 三态各一色，
+   但都只占 ≤8px（规格 §3：颜色只用在小面积上）。 */
 
 .evt {
   display: flex;
@@ -154,32 +157,60 @@
 }
 
 .evt-list {
+  position: relative;
   margin: 0;
   padding: 0;
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 7px;
+}
+
+/* 脊线：从第一个点到最后一个点（上下各留半个点的高度，不"露头"）。
+   ⚠️ 用伪元素而不是 DOM 节点：`<ul>` 里塞 `<span>` 是非法结构，
+   而伪元素天然跟着列表高度走（探针量的是它的实渲染宽度，不是"节点在不在"）。 */
+.evt-list::before {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  border-radius: 999px;
+  background: var(--c-border);
 }
 
 .evt-row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
+  padding-left: 16px;
   min-width: 0;
   font-size: 12.5px;
   line-height: 17px;
 }
 
-.evt-row.today .evt-when {
-  color: var(--c-primary-deep);
-  font-weight: 600;
+/* 落点：默认（未来）= 空心蓝；今天 = 实心粉；已过 = 空心灰 */
+.evt-dot {
+  position: absolute;
+  left: 1px;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  margin-top: -4px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: inset 0 0 0 2px var(--tone-navy);
 }
 
-.evt-icon {
-  display: inline-flex;
-  flex: none;
-  color: var(--c-text-sub);
+.evt-row.today .evt-dot {
+  background: var(--tone-pink);
+  box-shadow: inset 0 0 0 2px var(--tone-pink);
+}
+
+.evt-row.past .evt-dot {
+  box-shadow: inset 0 0 0 2px var(--c-text-sub);
 }
 
 .evt-date {
@@ -197,12 +228,6 @@
   text-overflow: ellipsis;
 }
 
-.evt-when {
-  flex: none;
-  color: var(--c-text-sub);
-  font-variant-numeric: tabular-nums;
-}
-
 .evt-hint {
   margin: auto 0 0;
   font-size: 11.5px;
@@ -215,39 +240,118 @@
   flex: none;
 }
 
-/* ── 卡片外壳 ─────────────────────────────────────────────────────── */
+/* 骨架里的落点：位置与真落点一致（同尺寸口径），只是不上色 */
+.evt-skel-dot {
+  position: absolute;
+  left: 1px;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  margin-top: -4px;
+  border-radius: 50%;
+}
+
+/* ── 卡片外壳（R37-P4a：方形表面层 → 贴纸卡，规格 docs/design-archive-cards.md §2/§3）──
+
+   "圆角阴影稍微浮起"的三件套：12px 圆角 + 双层柔和阴影 + 顶部 1px 高光内边（`--pcard-ring`）。
+   **去掉了发丝边** —— 低透明度描边配阴影会显脏，浮起卡只用阴影定边界（与 `.post-card` 同语言）。
+   ⚠️ 高度仍由网格算死（见文件头），这里一个 height 都不许写。 */
 
 .pcard {
+  position: relative;              /* 缩放手柄的定位祖先 */
   display: flex;
   flex-direction: column;
   min-width: 0;
   overflow: hidden;
-  border-radius: 4px;
+  border-radius: var(--pcard-radius);
   background: var(--c-bg-card);
-  border: 1px solid var(--c-border);
+  box-shadow: var(--pcard-shadow), var(--pcard-ring);
+  /* 上浮与阴影是同一件事的两半：只改阴影不改位移会像"发亮"，只位移不改阴影会像"错位" */
+  transition: transform 140ms ease, box-shadow 140ms ease;
+}
+
+/* 阅读态 hover：上浮 2px（与 `.post-card` 同量级）。
+   ⚠️ 编辑态**取消** hover 上浮 —— 那时卡片的位移语义归"拿起"所有，两套一起上会打架。 */
+.pcard:hover:not(.editing):not(.dragging) {
+  transform: translateY(-2px);
+  box-shadow: var(--pcard-shadow-hover), var(--pcard-ring);
 }
 
 .pcard-head {
   flex: none;
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
-  padding: 9px 12px 8px;
-  border-bottom: 1px solid var(--c-border);
+  padding: 10px 12px 6px;
 }
 
 .pcard-title {
+  flex: 1;
+  min-width: 0;
   font-size: 12.5px;
   font-weight: 600;
   color: var(--c-text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
+
+/* 贴纸角标（规格 §3 的签名元素）：22px 全圆 + 白环 + 微阴影 —— 像一张贴在卡上的圆贴纸。
+   只放图标不放文字：白图标在粉底上仅 2.4:1（装饰可接受，因为它旁边必有文字标题），
+   一旦带词就得过 4.5:1 —— 于是"带词的角标"这件事直接不做，短词一律进卡内的文字 chip。 */
+.pcard-badge {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  color: #fff;
+  box-shadow: 0 0 0 2px #fff, 0 2px 6px rgba(15, 23, 42, 0.16);
+}
+
+.pcard-badge[data-tone='pink'] { background: var(--tone-pink-deep); }
+.pcard-badge[data-tone='coral'] { background: var(--tone-coral-deep); }
+.pcard-badge[data-tone='navy'] { background: var(--tone-navy-deep); }
+.pcard-badge[data-tone='gray'] { background: var(--tone-gray-deep); }
 
 .pcard-body {
   flex: 1 1 auto;
   min-height: 0;
-  padding: 10px 12px 12px;
+  padding: 4px 12px 12px;
   overflow: hidden;
+}
+
+/* 卡内文字 chip（规格 §3）：**浅底 + 深档字**（对比度 ≥4.5:1），是行尾的视觉锚点。
+   深浅两档都来自 tokens.css 的 tone 表，视图只挂 `data-tone`，不自己算颜色。 */
+.tone-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: none;
+  height: 18px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+.tone-chip[data-tone='today'],
+.tone-chip[data-tone='pink'] { background: var(--tone-pink-tint); color: var(--tone-pink-deep); }
+.tone-chip[data-tone='future'],
+.tone-chip[data-tone='navy'] { background: var(--tone-navy-tint); color: var(--tone-navy-deep); }
+.tone-chip[data-tone='past'],
+.tone-chip[data-tone='gray'] { background: var(--tone-gray-tint); color: var(--tone-gray-deep); }
+.tone-chip[data-tone='coral'],
+.tone-chip[data-tone='view'] { background: var(--tone-coral-tint); color: var(--tone-coral-deep); }
+.tone-chip[data-tone='like'] { background: var(--tone-pink-tint); color: var(--tone-pink-deep); }
+
+@media (prefers-reduced-motion: reduce) {
+  /* 只留阴影变化（信息不减：hover 仍然"看起来可点"，但不位移） */
+  .pcard:hover:not(.editing):not(.dragging) { transform: none; }
+  .pcard { transition: box-shadow 140ms ease; }
 }
 
 .pcard-empty {
@@ -257,39 +361,78 @@
   color: var(--c-text-sub);
 }
 
-/* ── 纪念日卡 ─────────────────────────────────────────────────────── */
+/* ── 纪念日卡（R37-P4a 重排：hero 大数字 + 两行事实，规格 §4.1）──────────── */
 
 .anniv {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
   height: 100%;
 }
 
+/* hero：这张卡唯一在倒数的信息。大数字 30/700 + 小单位（基线对齐） */
+.anniv-hero {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.anniv-hero-main {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.anniv-hero-value {
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 34px;
+  color: var(--c-text-main);
+  font-variant-numeric: tabular-nums;
+}
+
+.anniv-hero-unit {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--c-text-sub);
+}
+
+.anniv-hero-caption {
+  font-size: 11.5px;
+  line-height: 16px;
+  color: var(--c-text-sub);
+}
+
 .anniv-list {
-  margin: 0;
+  margin: 2px 0 0;
   padding: 0;
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 6px;
 }
 
 .anniv-row {
   display: flex;
   align-items: center;
   gap: 8px;
+  padding: 5px 0;
   font-size: 12.5px;
   line-height: 17px;
+  border-top: 1px solid var(--c-border);
+}
+
+.anniv-row:first-child {
+  border-top: 0;
 }
 
 .anniv-row.today .anniv-value {
-  color: var(--c-primary-deep);
+  color: var(--tone-pink-deep);
   font-weight: 600;
 }
 
 .anniv-icon {
   display: inline-flex;
+  flex: none;
   color: var(--c-text-sub);
 }
 
@@ -304,6 +447,7 @@
   min-width: 0;
   color: var(--c-text-main);
   font-variant-numeric: tabular-nums;
+  text-align: right;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -331,7 +475,7 @@
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;                        /* R37-P4a：8（原 6）—— 封面的白环要留出空隙，别贴在一起 */
 }
 
 .tp-row {
@@ -341,7 +485,7 @@
 .tp-hit {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   width: 100%;
   padding: 0;
   border: none;
@@ -355,13 +499,16 @@
   outline-offset: 2px;
 }
 
+/* 封面 = 卡内最小的贴纸块（R37-P4a）：56×36、8px 同心圆角 + 白环，
+   与角标同一套"贴上去"的语法（原 46×30 的 3px 方角太小，撑不起贴纸感）。 */
 .tp-cover {
   flex: none;
-  width: 46px;
-  height: 30px;
-  border-radius: 3px;
+  width: 56px;
+  height: 36px;
+  border-radius: var(--pcard-radius-inner);
   overflow: hidden;
   background: #f2eff0;
+  box-shadow: 0 0 0 2px #fff, 0 1px 3px rgba(15, 23, 42, 0.12);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -374,7 +521,7 @@
 }
 
 .tp-cover-ph {
-  font-size: 13px;
+  font-size: 15px;
   color: rgba(251, 119, 161, 0.7);
 }
 
@@ -383,7 +530,7 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 3px;
 }
 
 .tp-title {
@@ -400,9 +547,9 @@
 }
 
 .tp-meta {
-  display: inline-flex;
+  display: flex;                   /* R37-P4a：inline-flex → flex（日期要能靠右推到底） */
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   font-size: 11.5px;
   line-height: 15px;
   color: var(--c-text-sub);
@@ -420,9 +567,11 @@
   color: var(--c-text-sub);
 }
 
-/* 骨架（与 R36 的 .lc-skel 同源：未到位与到位同尺寸） */
+/* 骨架（与 R36 的 .lc-skel 同源：未到位与到位同尺寸 —— 封面换了尺寸这里必须跟着换，
+   否则"数据到达让卡片变高"，正是 R36 要消灭的那件事） */
 .tp-skel-cover {
-  width: 46px;
-  height: 30px;
-  border-radius: 3px;
+  width: 56px;
+  height: 36px;
+  border-radius: var(--pcard-radius-inner);
+  box-shadow: none;
 }

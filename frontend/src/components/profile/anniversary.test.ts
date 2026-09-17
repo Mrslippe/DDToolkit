@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 
 import type { VTuber } from '../../api/types'
 import {
-  anniversaryItems, daysUntilNext, nearestAnniversary, parseAnniversary,
+  anniversaryFacts, anniversaryHero, anniversaryItems, daysUntilNext,
+  nearestAnniversary, parseAnniversary,
 } from './anniversary'
 
 /**
@@ -104,5 +105,49 @@ describe('anniversaryItems — 卡片两行', () => {
   it('nearestAnniversary 取最近的那个（都没记录时 null）', () => {
     const items = anniversaryItems(mk({ birthday: '5月20日', debut_date: '9月20日' }), today)
     expect(nearestAnniversary(items)?.key).toBe('debut')
+  })
+})
+
+/**
+ * 卡面 hero 与事实行（R37-P4a，规格 §4.1）。
+ *
+ * 这一组的重点不在"数字对不对"（那是上一组的事），而在**什么时候不许有 hero**：
+ * 一个空的数字位会让人以为"有数据但没显示出来" —— 静默失败的另一种长相。
+ */
+describe('anniversaryHero — 大数字那一块', () => {
+  const today = new Date(2026, 8, 17)
+
+  it('都没记录 → null（视图因此不放 hero，而不是放一个空数字位）', () => {
+    expect(anniversaryHero(anniversaryItems(mk(), today))).toBeNull()
+  })
+
+  it('取最近的那个，并把倒计时拆成「数字 + 单位 + 说明」', () => {
+    const items = anniversaryItems(mk({ birthday: '5月20日', debut_date: '9月20日' }), today)
+    expect(anniversaryHero(items)).toEqual(
+      { value: '3', unit: '天', caption: '距离出道', key: 'debut' })
+  })
+
+  it('就是今天 → 「今天 / 就是生日」（不是「0 天」）', () => {
+    const items = anniversaryItems(mk({ birthday: '9月17日' }), today)
+    expect(anniversaryHero(items)).toEqual(
+      { value: '今天', unit: '', caption: '就是生日', key: 'birthday' })
+  })
+
+  it('只有一枚有记录时，hero 就认那一枚（不看顺序）', () => {
+    const items = anniversaryItems(mk({ birthday: '5月20日' }), today)
+    expect(anniversaryHero(items)?.key).toBe('birthday')
+  })
+})
+
+describe('anniversaryFacts — hero 之外那两行', () => {
+  const today = new Date(2026, 8, 17)
+
+  it('给"这个日子是什么"，不再重复倒计时（避免两个不同天数并排）', () => {
+    const items = anniversaryItems(mk({ birthday: '2000-09-20', debut_date: '5月20日' }), today)
+    expect(anniversaryFacts(items)).toEqual(['9/20 · 第 26 周年', '5/20'])
+  })
+
+  it('没记录的行仍是「未记录」（行数恒定、位置恒定）', () => {
+    expect(anniversaryFacts(anniversaryItems(mk(), today))).toEqual(['未记录', '未记录'])
   })
 })

@@ -63,6 +63,37 @@
   --shadow-card: none;
   --radius-dialog: 12px;
   --shadow-dialog: 0 4px 16px rgba(15, 23, 42, 0.1);
+
+  /* ── 档案卡族（R37-P4a，规格 docs/design-archive-cards.md §2）─────────────
+     「圆角阴影稍微浮起」的贴纸卡。⚠️ 与上面那两个 `--radius-card: 0px` /
+     `--shadow-card: none` **不是一回事**：那两个是"方形总纲"的显式标记（全仓无人引用），
+     这一族只服务 `.pcard`，所以用 `--pcard-` 前缀对齐类名，避免语义撞车。
+     12px 与弹窗族同档 ⇒ 全站圆角只有「面板 4px / 卡片与弹窗 12px」两档，不新增第三档。 */
+  --pcard-radius: 12px;
+  --pcard-radius-inner: 8px;
+  /* 顶部 1px 高光内边 —— "稍微浮起"的关键：光从上面来 */
+  --pcard-ring: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  --pcard-shadow: 0 1px 2px rgba(15, 23, 42, 0.05), 0 6px 16px rgba(15, 23, 42, 0.08);
+  --pcard-shadow-hover: 0 2px 4px rgba(15, 23, 42, 0.06), 0 12px 26px rgba(15, 23, 42, 0.12);
+  --pcard-shadow-edit: 0 4px 10px rgba(15, 23, 42, 0.10), 0 14px 30px rgba(15, 23, 42, 0.14);
+  --pcard-shadow-lift: 0 10px 22px rgba(15, 23, 42, 0.16), 0 24px 48px rgba(15, 23, 42, 0.20);
+
+  /* 卡片色调（规格 §3 的 tone 表）：**只许用在 ≤22px 的贴纸角标与 ≤11px 的文字 chip 上**。
+     卡面主体永远是白卡 + 中性文字 —— 「生动」来自层次，不来自色块面积。
+     深档（*-deep）是与 tint 底配对的文字色，均已核过 ≥4.5:1（见规格 §3）。 */
+  --tone-pink: #fb77a1;
+  --tone-pink-deep: #b23a63;
+  --tone-pink-tint: rgba(251, 119, 161, 0.14);
+  --tone-coral: #fc7079;
+  --tone-coral-deep: #b2353c;
+  --tone-coral-tint: rgba(252, 112, 121, 0.14);
+  --tone-navy: #7c93b5;
+  --tone-navy-deep: #3d5573;
+  --tone-navy-tint: rgba(124, 147, 181, 0.16);
+  --tone-gray: #94a3b8;
+  --tone-gray-deep: #4b5a6b;
+  --tone-gray-tint: rgba(148, 163, 184, 0.16);
+
   /* 选中态：左缘主色竖条 + 浅粉底 */
   --sel-bar: var(--c-primary-deep);
   --sel-bg: #fff0f3;
@@ -73,8 +104,7 @@
     'PingFang SC', 'Microsoft YaHei', sans-serif;
   --font-title: var(--font-family);
 
-  /* 尺寸（紧凑壳层：顶栏 40 / 工具栏 50；侧栏 492 沿用档案页规格） */
-  --topbar-height: 40px;
+  /* 尺寸（紧凑壳层：顶栏 40 / 工具栏 50；侧栏 492 沿用档案页规格） */  --topbar-height: 40px;
   --sidebar-width: 492px;
   /* 窗口圆角度数（L3 自绘方案，随改随生效）
      ⚠️ 这只是 **Win10 / 浏览器 / 探针的兜底值**：Win11 上圆角由 DWM 画，

@@ -256,12 +256,21 @@ export default function ProfileBoardView({ vtuber, refreshTick, onOpenPost }: Pr
               data-card-h={card.h}
               data-card-hpx={cardHeightPx(card)}
               data-card-key={card.id}
+              /* R37-P4a：注册表下发的**默认行数** —— 探针只在"卡片不低于默认高度"时
+                 才要求正文不裁切（用户主动缩小的卡片允许裁掉内容，见规格 §8）。 */
+              data-card-min-h={meta.defaultSize.h}
               style={gridStyle(card)}
             >
               <header className="pcard-head"
                       onPointerDown={(e) => beginDrag(e, card, 'move')}>
                 <span className="pcard-title">{meta.title}</span>
                 {editing && <GripVertical className="pcard-grip" size={13} aria-hidden="true" />}
+                {/* 贴纸角标（规格 §3 的签名元素）：图标 + 色调都来自注册表，
+                    视图不认识具体卡片 —— 加一种卡片仍然只改 `cards/index.tsx`。 */}
+                <span className="pcard-badge" data-card-badge data-tone={meta.tone}
+                      aria-hidden="true">
+                  <meta.icon size={13} strokeWidth={2} />
+                </span>
               </header>
               <div className="pcard-body">
                 {meta.render({ vtuber, account, onOpenPost, refreshTick })}

@@ -179,7 +179,11 @@ function measure(tag: string) {
      *  为什么必须量：网格是**自研**的（没用 react-grid-layout），每张卡的位置与高度都由
      *  `layoutModel` 算出来 ⇒ 算错了（重叠 / 越界 / 高度与行数不符）在界面上"看着也能忍"，
      *  但它正是"用户以后能自己排布卡片"的地基。这里把每张卡的 kind / 格位 / 实渲染几何抽出来，
-     *  由 `scripts/ui_probe.py::_assert_board` 对账（含**窄窗单列**这条跨宽度不变量）。 */
+     *  由 `scripts/ui_probe.py::_assert_board` 对账（含**窄窗单列**这条跨宽度不变量）。
+     *
+     *  R37-P4a 追加（规格 `docs/design-archive-cards.md`）：**材质**（圆角/阴影/去发丝边）、
+     *  **贴纸角标**（每卡一枚、在右上象限、有白环）、**内容不裁切**（正文溢出会静默消失，
+     *  正是最该拦下的那类失败）。 */
     board: (() => {
       const grid = document.querySelector<HTMLElement>('[data-board]')
       if (!grid) return null
@@ -187,10 +191,17 @@ function measure(tag: string) {
       const cards = [...grid.querySelectorAll<HTMLElement>('.pcard')].map((c) => {
         const r = c.getBoundingClientRect()
         const cs = getComputedStyle(c)
+        const body = c.querySelector<HTMLElement>('.pcard-body')
+        const badge = c.querySelector<HTMLElement>('[data-card-badge]')
+        const br = badge?.getBoundingClientRect()
+        const bcs = badge ? getComputedStyle(badge) : null
+        const hero = c.querySelector<HTMLElement>('[data-anniv-hero]')
         return {
           kind: c.getAttribute('data-card-kind'),
           h: Number(c.getAttribute('data-card-h') ?? 0),
           hpx: Number(c.getAttribute('data-card-hpx') ?? 0),
+          /** 该卡默认行数（注册表下发）：只有"不小于默认高度"时才要求内容不裁切 */
+          minH: Number(c.getAttribute('data-card-min-h') ?? 0),
           /** 相对网格左上角的位置（越界判定用） */
           x: Math.round(r.left - gr.left),
           y: Math.round(r.top - gr.top),
@@ -202,15 +213,52 @@ function measure(tag: string) {
            *  静默失败 —— 空态文案也是内容，但必须是**明说**的那一种（`.pcard-empty`）。 */
           rows: c.querySelectorAll('.anniv-row, .tp-row, .evt-row').length,
           rowLabels: [...c.querySelectorAll('.anniv-label')].map((n) => (n.textContent || '').trim()),
+          rowValues: [...c.querySelectorAll('.anniv-value')].map((n) => (n.textContent || '').trim()),
           hint: (c.querySelector('.anniv-hint, .tp-hint, .evt-hint')?.textContent || '').trim(),
           emptyText: (c.querySelector('.pcard-empty')?.textContent || '').trim(),
           pending: !!c.querySelector('[data-pending="1"]'),
+          /** ── R37-P4a：材质 / 贴纸角标 / 内容不裁切 ───────────────────── */
+          radius: Math.round((parseFloat(cs.borderTopLeftRadius) || 0) * 10) / 10,
+          borderW: parseFloat(cs.borderTopWidth) || 0,
+          shadow: cs.boxShadow,
+          /** 正文溢出量（>1px 即"内容被裁掉了却不说"，只在 ≥ 默认高度时判失败） */
+          overH: body ? body.scrollHeight - body.clientHeight : null,
+          overW: body ? body.scrollWidth - body.clientWidth : null,
+          badge: badge && br && bcs ? {
+            tone: badge.getAttribute('data-tone'),
+            w: Math.round(br.width),
+            h: Math.round(br.height),
+            /** 角标中心相对卡片的位置（判"在右上象限"） */
+            cx: Math.round(br.left - r.left + br.width / 2),
+            cy: Math.round(br.top - r.top + br.height / 2),
+            icon: !!badge.querySelector('svg'),
+            bg: bcs.backgroundColor,
+            ring: bcs.boxShadow,
+          } : null,
+          /** 纪念日 hero（规格 §4.1）：没有可信数字时**必须没有这个节点** */
+          hero: hero ? {
+            value: (hero.querySelector('.anniv-hero-value')?.textContent || '').trim(),
+            caption: (hero.querySelector('.anniv-hero-caption')?.textContent || '').trim(),
+          } : null,
+          /** 大事记时间线（规格 §4.3）：脊线用伪元素画 ⇒ 量它的**实渲染宽度**，
+           *  而不是"节点在不在"（后者连 `display:none` 都拦不住） */
+          spine: (() => {
+            const list = c.querySelector<HTMLElement>('.evt-list')
+            return list ? Math.round(parseFloat(getComputedStyle(list, '::before').width) || 0) : 0
+          })(),
+          dots: c.querySelectorAll('.evt-dot').length,
+          chips: [...c.querySelectorAll('.evt-chip, .tp-plays')]
+            .map((n) => n.getAttribute('data-tone') ?? n.getAttribute('data-metric')),
         }
       })
       return {
         cols: Number(grid.getAttribute('data-board-cols') ?? 0),
         /** 模型自己的窄窗阈值（跨语言契约：TS 下发、Python 按它判，别各写一份数字） */
         narrowPx: Number(grid.getAttribute('data-board-narrow') ?? 0),
+        /** 卡片圆角：直接读 **CSS 令牌**（单源在 tokens.css）——
+         *  探针不另写一个 12，TS 也不下发一份，两处数字没有漂的机会 */
+        radius: parseFloat(getComputedStyle(document.documentElement)
+          .getPropertyValue('--pcard-radius')) || 0,
         gridW: Math.round(gr.width),
         narrow: grid.classList.contains('narrow'),
         cards,
@@ -2412,6 +2460,50 @@ export async function runUiProbe(): Promise<void> {
   // PointerEvent 把第一张卡往右 2 列/往下 1 行拖 → 落 DOM 快照（列/行/盒）交给脚本对账，
   // 脚本再去问后端 `GET /vtuber/{id}/profile-cards`，确认**排布真的落库了**。
   // 宽窗才可编辑（窄窗单列是模型算出来的，编辑会跟它打架 ⇒ 按钮禁用），所以脚本用 1440 跑本模式。
+  // 档案视图的**存图模式**（R37-P4a）：只把界面停在档案视图就交差，一个断言都不做 ——
+  // 它服务的是**视觉评审**（`ui_probe.py --shot-board` 会各截一张阅读态/编辑态）。
+  // `reset=1` 先点「重置默认」（写的是数据目录**副本**，见脚本里 `_prepare_data` 的说明）；
+  // `editing=1` 再进编辑态，好让"编辑态的卡片长什么样"也能被看见。
+  if (mode === 'board-view') {
+    const q = new URLSearchParams(location.search)
+    const waitFor = async (fn: () => unknown, ms = 8000) => {
+      const t0 = performance.now()
+      while (performance.now() - t0 < ms) {
+        const v = fn()
+        if (v) return v
+        await sleep(100)
+      }
+      return null
+    }
+    const btn = (label: string) =>
+      [...document.querySelectorAll<HTMLButtonElement>('.board-btn')]
+        .find((b) => (b.textContent || '').includes(label))
+    const result: Record<string, unknown> = {}
+    ;[...document.querySelectorAll<HTMLButtonElement>('.view-btn')]
+      .find((b) => (b.title || '').startsWith('档案视图'))?.click()
+    await waitFor(() => document.querySelector('[data-board]'))
+    if (q.get('reset')) {
+      btn('编辑布局')?.click()
+      await sleep(200)
+      btn('重置默认')?.click()
+      await sleep(1500)                 // 等整版 PUT 落地 + 回填服务端返回的行
+      btn('完成')?.click()
+      await sleep(200)
+    }
+    if (q.get('editing')) {
+      btn('编辑布局')?.click()
+      await sleep(400)
+    }
+    result.editing = document.querySelector('[data-board]')?.getAttribute('data-board-editing')
+    result.cards = document.querySelectorAll('.pcard').length
+    const pre = document.createElement('pre')
+    pre.id = 'ui-probe'
+    pre.textContent = JSON.stringify({ mode: 'board-view', views: [], degraded, board: result })
+    document.body.appendChild(pre)
+    document.title = 'UI_PROBE_DONE'
+    return
+  }
+
   if (mode === 'board') {
     const result: Record<string, unknown> = {}
     const waitFor = async (fn: () => unknown, ms = 8000) => {

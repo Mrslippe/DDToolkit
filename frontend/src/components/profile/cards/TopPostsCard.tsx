@@ -13,7 +13,7 @@ import { CirclePlay, Heart } from 'lucide-react'
 
 import { api } from '../../../api/api'
 import type { Post } from '../../../api/types'
-import { formatDateTime, postDisplayTitle } from '../../../utils/format'
+import { formatCount, formatDateTime, postDisplayTitle } from '../../../utils/format'
 import ProxyImage from '../../common/ProxyImage'
 import type { CardContext } from '../cardRegistry'
 import { rankTopPosts, topPostsHint } from '../topPosts'
@@ -89,9 +89,15 @@ export default function TopPostsCard({ account, onOpenPost, refreshTick }: CardC
                   {postDisplayTitle(post)}
                 </span>
                 <span className="tp-meta">
-                  {metric === 'view'
-                    ? <><CirclePlay size={11} aria-hidden="true" /> {score.toLocaleString('zh-CN')} 播放</>
-                    : <><Heart size={11} aria-hidden="true" /> {score.toLocaleString('zh-CN')} 点赞</>}
+                  {/* R37-P4a：播放/点赞从裸文字改成 chip（浅底 + 深档字，行尾的视觉锚点）。
+                      数字走 formatCount（万/亿缩写，最多 4 位）—— 与平台药丸同一口径，
+                      否则"12.4万"这块会长出第二套写法。 */}
+                  <span className="tone-chip tp-plays" data-metric={metric}>
+                    {metric === 'view'
+                      ? <CirclePlay size={11} aria-hidden="true" />
+                      : <Heart size={11} aria-hidden="true" />}
+                    {formatCount(score)}
+                  </span>
                   <span className="tp-date">{formatDateTime(post.published_at).slice(0, 10)}</span>
                 </span>
               </span>

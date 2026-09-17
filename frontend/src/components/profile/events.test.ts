@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { VtuberEvent } from '../../api/types'
-import { eventHint, eventItems } from './events'
+import { eventChip, eventHint, eventItems } from './events'
 
 /**
  * 「大事记」口径（R37-P3，devlog/145）。
@@ -79,5 +79,32 @@ describe('eventHint — 头部说明要如实', () => {
 
   it('全是过去的：说清"都是回顾"（不是"没数据"）', () => {
     expect(eventHint(eventItems([ev(1, '过去', '2026-09-01')], TODAY))).toBe('1 条已过 · 都是回顾')
+  })
+})
+
+/**
+ * 行尾 chip（R37-P4a，规格 §4.3）。
+ *
+ * chip 是**行尾的视觉锚点**：文案要比 `when` 短（"13 天后" 而不是 "还有 13 天"），
+ * 色调由这里一次判定（视图只负责画，不再自己 `days > 0` 判一遍 —— 判据只留一份）。
+ */
+describe('eventChip — 行尾那枚 chip', () => {
+  const chipOf = (date: string) => eventChip(eventItems([ev(1, 'x', date)], TODAY)[0])
+
+  it('今天 → 强调色调', () => {
+    expect(chipOf('2026-09-17')).toEqual({ text: '今天', tone: 'today' })
+  })
+
+  it('未来 → 「N 天后」+ 未来色调', () => {
+    expect(chipOf('2026-09-24')).toEqual({ text: '7 天后', tone: 'future' })
+  })
+
+  it('已过 → 「N 天前」+ 灰调（不是负号数字）', () => {
+    expect(chipOf('2026-09-07')).toEqual({ text: '10 天前', tone: 'past' })
+  })
+
+  it('边界：明天是 future、昨天是 past（今天不算未来也不是过去）', () => {
+    expect(chipOf('2026-09-18').tone).toBe('future')
+    expect(chipOf('2026-09-16').tone).toBe('past')
   })
 })

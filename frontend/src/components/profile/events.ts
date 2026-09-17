@@ -67,3 +67,20 @@ export function eventHint(items: EventItem[]): string {
   if (!future) return `${items.length} 条已过 · 都是回顾`
   return `${future} 条将至${items.length > future ? ` · ${items.length - future} 条已过` : ''}`
 }
+
+/** 行尾 chip 的三种色调（R37-P4a）：今天=强调粉、未来=中性蓝、已过=灰 */
+export type EventChipTone = 'today' | 'future' | 'past'
+
+/**
+ * 行尾那枚 chip（R37-P4a，规格 §4.3）。
+ *
+ * 比原来的 `when`（「还有 13 天」）更短：chip 是**行尾的视觉锚点**，
+ * 太长会把标题挤掉；而"还有"两个字在时间线语境里是冗余的（左侧的点和排序已经说明了方向）。
+ * 色调单独给出来（而不是让视图自己 `days > 0` 判断）—— 判据只有一份，视图只负责画。
+ */
+export function eventChip(item: EventItem): { text: string; tone: EventChipTone } {
+  if (item.days === 0) return { text: '今天', tone: 'today' }
+  return item.days > 0
+    ? { text: `${item.days} 天后`, tone: 'future' }
+    : { text: `${-item.days} 天前`, tone: 'past' }
+}

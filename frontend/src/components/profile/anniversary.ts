@@ -67,12 +67,18 @@ export interface AnniversaryItem {
   days: number | null
   /** 原文（供 title 提示 / 排错） */
   raw: string | null
+  /** 月/日（`3/14`）；解析不出 = null —— R37-P4a 起行内展示用它，**不再从 text 里反解** */
+  md: string | null
+  /** 第几周年（缺年份 = 0）；hero 之外那行的事实部分 */
+  nth: number
 }
 
 function item(key: 'birthday' | 'debut', label: string, raw: string | null | undefined,
               today: Date): AnniversaryItem {
   const parsed = parseAnniversary(raw)
-  if (!parsed) return { key, label, text: '未记录', days: null, raw: raw ?? null }
+  if (!parsed) {
+    return { key, label, text: '未记录', days: null, raw: raw ?? null, md: null, nth: 0 }
+  }
   const next = nextOccurrence(parsed.month, parsed.day, today)
   const days = daysUntilNext(parsed.month, parsed.day, today)
   const nth = parsed.year != null ? next.getFullYear() - parsed.year : 0
@@ -82,6 +88,7 @@ function item(key: 'birthday' | 'debut', label: string, raw: string | null | und
     key, label,
     text: `${md} · ${when}${nth > 0 ? ` · 第 ${nth} 周年` : ''}`,
     days, raw: raw ?? null,
+    md: `${parsed.month}/${parsed.day}`, nth,
   }
 }
 
@@ -98,4 +105,46 @@ export function nearestAnniversary(items: AnniversaryItem[]): AnniversaryItem | 
   const dated = items.filter((i) => i.days != null) as (AnniversaryItem & { days: number })[]
   if (!dated.length) return null
   return dated.reduce((a, b) => (b.days < a.days ? b : a))
+}
+
+/**
+ * 卡面 hero（R37-P4a，规格 `docs/design-archive-cards.md` §4.1）—— 大数字那一块。
+ *
+ * 为什么把它从 hint 里升上来：原来"最近的一个 · 还有 12 天"被埋在卡片最后一行小字里，
+ * 而它其实是这张卡**唯一在倒数**的信息 —— 卡片的价值就在"还有多久"。
+ *
+ * **没有可信数字就返回 null**（视图不放 hero，而不是放一个 `—` 占位）：
+ * 摆一个空的数字位会让人以为"有数据但没显示出来"，那正是我们要避免的静默失败。
+ */
+export interface AnniversaryHero {
+  /** 大数字（今天 → 「今天」） */
+  value: string
+  /** 紧跟数字的单位（今天 → 空串） */
+  unit: string
+  /** 数字下面那句人话 */
+  caption: string
+  /** 来源项目（生日 / 出道） */
+  key: AnniversaryItem['key']
+}
+
+export function anniversaryHero(items: AnniversaryItem[]): AnniversaryHero | null {
+  const nearest = nearestAnniversary(items)
+  if (!nearest || nearest.days == null) return null
+  return nearest.days === 0
+    ? { value: '今天', unit: '', caption: `就是${nearest.label}`, key: nearest.key }
+    : { value: String(nearest.days), unit: '天', caption: `距离${nearest.label}`, key: nearest.key }
+}
+
+/**
+ * hero 之外的两行（R37-P4a）：**静态事实**，不再各自重复倒计时。
+ *
+ * 倒计时已经由 hero 承担（并且只对"最近的那个"负责），行里再写一遍"还有 N 天"
+ * 会出现两个不同的数字（生日 12 天 / 出道 300 天）并排，读到的人得先判断该看哪个。
+ * 事实行给的是"这个日子是什么"：`3/14`、`2023/9/17 · 第 3 周年`。
+ */
+export function anniversaryFacts(items: AnniversaryItem[]): string[] {
+  return items.map((it) => {
+    if (!it.md) return '未记录'
+    return it.nth > 0 ? `${it.md} · 第 ${it.nth} 周年` : it.md
+  })
 }

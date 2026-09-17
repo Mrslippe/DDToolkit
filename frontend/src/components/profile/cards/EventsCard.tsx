@@ -8,12 +8,11 @@
  * 增删留到 P3b（与「自定义卡片」一起做）：本批先只读，把 `vtuber_events` 这条链路先接亮。
  */
 import { useEffect, useMemo, useState } from 'react'
-import { CalendarClock } from 'lucide-react'
 
 import { api } from '../../../api/api'
 import type { VtuberEvent } from '../../../api/types'
 import type { CardContext } from '../cardRegistry'
-import { eventHint, eventItems } from '../events'
+import { eventChip, eventHint, eventItems } from '../events'
 
 export default function EventsCard({ vtuber, refreshTick }: CardContext) {
   const [events, setEvents] = useState<VtuberEvent[]>([])
@@ -40,11 +39,14 @@ export default function EventsCard({ vtuber, refreshTick }: CardContext) {
   const hint = useMemo(() => eventHint(items), [items])
 
   if (state === 'loading' && !events.length) {
-    // 骨架：与"有榜单"时同尺寸（R36 的口径 —— 数据到达不该让卡片变高）
+    // 骨架：与"有榜单"时同尺寸（R36 的口径 —— 数据到达不该让卡片变高）：
+    // 连**落点**的位置都占上（`.evt-skel-dot` 与真落点同坐标），否则数据到达后
+    // 行会整体右移 16px，看起来就是"跳了一下"。
     return (
       <ul className="evt-list" data-card-body="events" data-pending="1">
         {[0, 1, 2].map((i) => (
           <li className="evt-row" key={`skel-${i}`}>
+            <span className="lc-skel evt-skel-dot" />
             <span className="lc-skel evt-skel-date" />
             <span className="lc-skel lc-skel--text" />
           </li>
@@ -60,15 +62,21 @@ export default function EventsCard({ vtuber, refreshTick }: CardContext) {
     <div className="evt" data-card-body="events">
       {items.length ? (
         <ul className="evt-list">
-          {items.map((it) => (
-            <li key={it.id} className={`evt-row${it.days === 0 ? ' today' : ''}`}
-                title={`${it.date} · ${it.when}`}>
-              <span className="evt-icon" aria-hidden="true"><CalendarClock size={12} /></span>
-              <span className="evt-date">{it.date.slice(5)}</span>
-              <span className="evt-title">{it.title}</span>
-              <span className="evt-when">{it.when}</span>
-            </li>
-          ))}
+          {/* 时间线脊线由 `.evt-list::before` 画（规格 §4.3）—— 不用 DOM 节点：
+              `<ul>` 里塞 `<span>` 是非法结构，而伪元素天然跟着列表高度走。 */}
+          {items.map((it) => {
+            const chip = eventChip(it)
+            return (
+              <li key={it.id}
+                  className={`evt-row${it.days === 0 ? ' today' : ''}${it.days < 0 ? ' past' : ''}`}
+                  title={`${it.date} · ${it.when}`}>
+                <span className="evt-dot" aria-hidden="true" />
+                <span className="evt-date">{it.date.slice(5)}</span>
+                <span className="evt-title">{it.title}</span>
+                <span className="tone-chip evt-chip" data-tone={chip.tone}>{chip.text}</span>
+              </li>
+            )
+          })}
         </ul>
       ) : (
         <p className="pcard-empty">{hint}</p>
