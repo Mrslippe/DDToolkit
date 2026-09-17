@@ -29,6 +29,7 @@
 | `backend-fetch-pipeline.md` | 抓取链路细节：触发入口、锁与让位、API 清单、风控判定、节流测算、停止原因 |
 | `FRONTEND-ARCH.md` | 前端分层（api/hooks/components/pages/styles）、数据流、状态管理 |
 | `UI-MAP.md` | 界面与路由映射：四视图、组件类名、设计令牌、动效与圆角规范 |
+| `design-status-island.md` | **状态胶囊动效规格**（R38 与后续「桌面独立控件」共用）：动效令牌、收起/展开时间轴、同心圆角、两种宿主材质、可断言的动效不变量 |
 
 ## 3. 操作指南
 
