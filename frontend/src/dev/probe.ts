@@ -281,6 +281,52 @@ function measure(tag: string) {
         cards,
       }
     })(),
+    /** 视图切换光条 + 亮点指示器 + 顶部渐隐（R39-D，用户 2026-09-19）——
+     *  「光条边缘羽化不要有明显分界线」「一个亮点追随当前切换的按钮」「被裁切的卡片要有个解释」。
+     *  三件事都只在"看着对不对"的层面，所以全部量化：光条背景是 2D 径向（不是带硬边的线性格）、
+     *  亮点中心与激活钮中心对齐、亮点不吃点击、滚动体顶部在滚下去之后才有渐隐 mask。 */
+    glow: (() => {
+      const bar = document.querySelector<HTMLElement>('.glow-bar')
+      if (!bar) return null
+      const spot = bar.querySelector<HTMLElement>('.glow-spot')
+      const active = bar.querySelector<HTMLElement>('.view-btn.on')
+      const br = bar.getBoundingClientRect()
+      // ⚠️ 量亮点之前**先杀掉过渡**（本仓老招，见 `--settings`/chevron 两处先例）：
+      // 虚拟时间下过渡不推进，`getBoundingClientRect()` 会一直报**过渡起点** ——
+      // 那样"亮点跟过去了没有"就变成了尺子问题（实测踩到过：只有一步量到旧位置）。
+      const kill = document.createElement('style')
+      kill.textContent = '.glow-spot{transition:none !important}'
+      document.head.appendChild(kill)
+      void spot?.getBoundingClientRect()          // 强制重排，让计算样式落到终值
+      const sr = spot?.getBoundingClientRect()
+      const ar = active?.getBoundingClientRect()
+      const bcs = getComputedStyle(bar)
+      const scs = spot ? getComputedStyle(spot) : null
+      kill.remove()
+      const scroller = document.querySelector<HTMLElement>('.scene-body .os-scroll, .archive-view .os-scroll, .board-view .os-scroll, .list-scroll .os-scroll, .hero-scroll .os-scroll')
+      const root = scroller?.closest<HTMLElement>('.os-root')
+      return {
+        barBg: bcs.backgroundImage,
+        barRadius: bcs.borderTopLeftRadius,
+        barShadow: bcs.boxShadow,
+        barBorder: bcs.borderTopWidth,
+        spot: spot ? {
+          /** 中心相对光条中心的偏移（应与激活钮一致） */
+          cx: sr ? Math.round(sr.left + sr.width / 2 - br.left) : null,
+          activeCx: ar ? Math.round(ar.left + ar.width / 2 - br.left) : null,
+          w: sr ? Math.round(sr.width) : null,
+          /** **提交值**（内联 transform）：与 rect 一起看，能分辨"状态没跟上"和"尺子读不到" */
+          inline: spot.style.transform || '',
+          activeOffsetLeft: active?.offsetLeft ?? null,
+          pointerEvents: scs?.pointerEvents ?? null,
+          transitionProp: scs?.transitionProperty ?? null,
+          transitionMs: Math.round((parseFloat(scs?.transitionDuration || '0') || 0) * 1000),
+        } : null,
+        /** 顶部渐隐：只有"确实有内容被遮住"（滚下去了）才挂 mask */
+        scrolled: root?.getAttribute('data-scrolled') ?? null,
+        mask: scroller ? getComputedStyle(scroller).maskImage : null,
+      }
+    })(),
     /** 可见地越过窗口左右缘的元素 */
     overflowing: [...document.querySelectorAll('body *')]
       .filter((n) => {
@@ -3610,6 +3656,20 @@ export async function runUiProbe(): Promise<void> {
       if (!clickView(v.title)) degraded.push(`view:${v.key}`)
       await sleep(900) // 场景入场 0.22s + 数据到位
       out.push(measure(v.key))
+      if (v.key === 'archive') {
+        // 顶部渐隐（R39-D）的**正向**分支：滚下去之后必须挂上 mask。
+        // 不滚就永远只测到 `data-scrolled=0` 那一半 —— 那是"看着有、其实没接上"的温床。
+        const sc = document.querySelector<HTMLElement>('.archive-view .os-scroll')
+        if (sc) {
+          sc.scrollTop = 220
+          await sleep(400)
+          out.push(measure('archive-scrolled'))
+          sc.scrollTop = 0
+          await sleep(300)
+        } else {
+          degraded.push('archive-scroll')
+        }
+      }
       if (v.key === 'list') {
         await probeFilterPop(out) // P10-A 筛选弹窗全链路
         if (clickChip('投稿')) {

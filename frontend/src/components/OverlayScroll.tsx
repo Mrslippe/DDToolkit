@@ -57,6 +57,9 @@ export default function OverlayScroll({
     const sc = scrollEl.current
     const tb = thumbEl.current
     if (!sc || !tb) return
+    // R39-D：把"滚下去了没"挂到根节点上（`data-scrolled`）—— 顶部渐隐的**单一事实来源**。
+    // 放在这里是因为它本来就随 scroll / RO / 轮询跑，零额外监听；视图侧只写 CSS。
+    rootRef.current?.setAttribute('data-scrolled', sc.scrollTop > 0 ? '1' : '0')
     const H = sc.clientHeight
     const S = sc.scrollHeight
     if (H <= 0) return                 // 布局未定，交给轮询/RO 再试

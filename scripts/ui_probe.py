@@ -668,6 +668,63 @@ def _assert_board_stats(c: dict, width: int) -> list[str]:
     return bad
 
 
+def _assert_glow(v: dict, width: int) -> list[str]:
+    """视图切换光条 + 亮点指示器 + 顶部渐隐（R39-D，用户 2026-09-19）。
+
+    三件事都只在"看着对不对"的层面 —— 所以全部量化：
+      ① 光条背景必须是 **2D 径向**（原来是 `linear-gradient(90deg,…)` ⇒ 上下缘是**硬边**，
+         用户原话「边缘做点羽化，不要有太明显的分界线」）；圆角/描边/阴影一律不许有（那都是"分界线"）；
+      ② **亮点指示器**：中心必须与激活钮中心对齐（≤1.5px）、宽 = 钮宽、`pointer-events:none`
+         （否则它会挡住按钮的点击 —— "看着能用、其实点不着"的典型）、过渡里有 transform；
+      ③ **顶部渐隐**：只有滚下去（`data-scrolled="1"`）时才挂 mask —— 没滚动时不该有渐隐
+         （静止的页面顶部发虚 = 白白牺牲可读性）。
+    """
+    g = v.get("glow")
+    if g is None:
+        return []
+    tag = v.get("tag")
+    bad: list[str] = []
+    bg = g.get("barBg") or ""
+    if "radial-gradient" not in bg:
+        bad.append(f"@{width} {tag}: 光条背景不是 2D 径向渐变（{bg[:60]!r}）—— "
+                   f"线性渐变会让上下缘留下硬边（用户要的是「边缘羽化」）")
+    for key, label in (("barRadius", "圆角"), ("barBorder", "描边")):
+        val = g.get(key)
+        if val not in ("0px", 0, None) and not (isinstance(val, (int, float)) and val == 0):
+            bad.append(f"@{width} {tag}: 光条有{label}（{val!r}）—— 那本身就是一条分界线")
+    if (g.get("barShadow") or "none") != "none":
+        bad.append(f"@{width} {tag}: 光条有阴影（{g.get('barShadow')!r}）—— 同上")
+    spot = g.get("spot")
+    if not spot:
+        bad.append(f"@{width} {tag}: 光条里没有亮点指示器（`.glow-spot`）")
+    else:
+        if spot.get("cx") is None or spot.get("activeCx") is None:
+            bad.append(f"@{width} {tag}: 量不到亮点/激活钮的中心")
+        elif abs(spot["cx"] - spot["activeCx"]) > 1.5:
+            bad.append(f"@{width} {tag}: 亮点中心 {spot['cx']} 与激活钮中心 "
+                       f"{spot['activeCx']} 偏了（应 ≤1.5px）—— 亮点要「追随当前切换的按钮」")
+        if (spot.get("w") or 0) <= 0:
+            bad.append(f"@{width} {tag}: 亮点宽度是 {spot.get('w')}（没尺寸等于没渲染）")
+        if spot.get("pointerEvents") != "none":
+            bad.append(f"@{width} {tag}: 亮点没关掉指针事件（{spot.get('pointerEvents')!r}）"
+                       f"—— 它会挡住视图钮的点击")
+        if "transform" not in (spot.get("transitionProp") or ""):
+            bad.append(f"@{width} {tag}: 亮点的过渡里没有 transform"
+                       f"（{spot.get('transitionProp')!r}）—— 切换视图时不会滑动")
+    scrolled = g.get("scrolled")
+    mask = g.get("mask") or ""
+    if scrolled not in ("0", "1"):
+        bad.append(f"@{width} {tag}: 滚动体没下发 `data-scrolled`（{scrolled!r}）"
+                   f"—— 顶部渐隐的开关没有单一事实来源")
+    elif scrolled == "0" and "gradient" in mask:
+        bad.append(f"@{width} {tag}: 还没滚动就挂着顶部渐隐 mask（{mask[:40]!r}）"
+                   f"—— 静止页面顶部发虚是白白牺牲可读性")
+    elif scrolled == "1" and "gradient" not in mask:
+        bad.append(f"@{width} {tag}: 已经滚下去了却没有顶部渐隐 mask（{mask[:40]!r}）"
+                   f"—— 卡片被容器上界硬切一刀，没有任何视觉解释")
+    return bad
+
+
 def _assert(views: list[dict], width: int) -> list[str]:
     bad: list[str] = []
     for v in views:
@@ -706,6 +763,7 @@ def _assert(views: list[dict], width: int) -> list[str]:
         bad += _assert_cards(v, width)
         bad += _assert_filter_pop(v, width)
         bad += _assert_filter_chain(v, width)
+        bad += _assert_glow(v, width)
     return bad
 
 
@@ -844,7 +902,7 @@ CARD_COVER_W = 220
 # （2026-09-11 审计加固：`_first_vtuber` 失败 → 路由落到 `/` → 只 emit `empty`，
 #   所有卡片/筛选断言全部空过，退出码仍是 0。）
 EXPECTED_TAGS = [
-    "archive", "cards", "list",
+    "archive", "archive-scrolled", "cards", "list",
     "list-filter-pop", "list-filter-year", "list-filter-applied", "list-filter-reset",
     "list-video", "profile",
 ]

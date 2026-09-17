@@ -352,8 +352,17 @@ DOM 契约（探针 `ui_probe --status-island` 直接查）：`.si-island`（`.o
 **光条视图切换**
 | 名称 | 类名 | 说明 |
 |---|---|---|
-| 光条 | `.glow-bar` | 443px 白色渐变(`rgba(255,255,255,.68)` 中心)矩形胶囊 |
+| 光条 | `.glow-bar` | **354px**（原 443，2026-09-08 删掉邮件占位钮后收窄）· **2D 径向**软光带 `radial-gradient(120% 100% at 50% 50%, rgba(255,255,255,.68), …0)` —— R39-D 起从 `linear-gradient(90deg,…)` 改径向：线性的左右两端虽渐隐，**上下缘是硬边**（用户：「边缘做点羽化，不要有太明显的分界线」）；`position:relative` 是亮点指示器的定位祖先；无圆角/描边/阴影 |
 | 视图钮 | `.view-btn.on/.off` | 四枚、**同级视图**（2026-09-08 用户定序 + 删除未接线的邮件占位钮）：**卡片(`LayoutGrid`)→`setView('cards')`** / **列表(`AlignJustify`)→`setView('list')`** / **数据视图(`BarChart3`)→`setView('archive')`** / **档案视图(`Fingerprint`)→`setView('profile')`**（P7 追加；R37-P1 改定名）；on=.8 off=.4，激活跟随 `view` |
+| 亮点指示器 | `.glow-spot` | **R39-D**（用户：「一个亮点追随当前切换的按钮，带有切换时的动画效果」）：50px 圆形径向白光，位置/宽度由 `PostsPage` 在 `useLayoutEffect([view])` 里按**激活钮自己的 `offsetLeft/offsetWidth`** 写内联样式（不是按 50+10 硬算 —— 以后改尺寸/间距自动跟上）；过渡 `transform/width 220ms var(--ease-standard)`，reduced-motion 下 0.01ms；**`pointer-events:none` 是硬要求**（否则盖住按钮、吃掉点击）。探针：中心与激活钮 ≤1.5px、过渡含 transform、pointer-events=none |
+
+> **顶部渐隐（R39-D，方案 A）**：滚动体滚下去之后才挂
+> `mask-image: linear-gradient(to bottom, transparent 0, #000 28px)`（`--view-fade`）——
+> 内容接近光条时**逐渐淡出**，而不是被容器上界硬切一刀（用户：「卡片直接被容器的上界裁切掉了，
+> 但上面是透明区域，这稍微有点不符合直觉」）。**开关的单一事实来源**是 `OverlayScroll` 下发的
+> `data-scrolled`（`scrollTop > 0`，随它既有的 scroll/RO/轮询一起更新，零额外监听）；
+> 四个视图各一行选择器（`.archive-view` / `.list-scroll` / `.board-view` / `.hero-scroll`）。
+> 探针两个方向都判：未滚动**不许**有 mask、滚动后**必须**有（`archive-scrolled` 帧）。
 
 #### B1.1 cards 视图（展示页 / 默认视图）
 | 名称 | 类名 | 说明 |

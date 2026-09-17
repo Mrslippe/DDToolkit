@@ -215,6 +215,7 @@
 }
 
 .glow-bar {
+  position: relative;              /* 亮点指示器的定位祖先（R39-D） */
   display: flex;
   align-items: center;
   justify-content: center;
@@ -223,8 +224,44 @@
      （原五枚 443px，2026-09-08 删掉邮件占位钮后同步收窄） */
   width: 354px;
   height: 59px;
-  /* 设计稿软光带：矩形渐变、无圆角；图标条内居中 */
-  background: linear-gradient(90deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.68) 29.4%, rgba(255, 255, 255, 0) 100%);
+  /* 软光带：**2D 径向**（R39-D，用户 2026-09-19：「边缘做点羽化，不要有太明显的分界线」）。
+     原来是 `linear-gradient(90deg,…)` —— 左右两端渐隐，但**上下缘是硬边**（59px 的一条带子
+     横在顶栏上，边界一眼可见）。径向渐变让四个方向同时收口，才是"光"的样子。 */
+  background: radial-gradient(120% 100% at 50% 50%,
+    rgba(255, 255, 255, 0.68) 0%, rgba(255, 255, 255, 0.30) 46%, rgba(255, 255, 255, 0) 100%);
+}
+
+/* 亮点指示器（R39-D，用户：「有一个亮点追随当前切换的按钮，带有切换时的动画效果」）。
+   位置/宽度由 PostsPage 按激活钮的 `offsetLeft/offsetWidth` 写进内联样式；这里只管长相与过渡。
+   **必须 pointer-events:none** —— 否则它盖在按钮上会吃掉点击（"看着能用、其实点不着"）。 */
+.glow-spot {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  height: 50px;
+  margin-top: -25px;
+  border-radius: 50%;
+  pointer-events: none;
+  background: radial-gradient(50% 50% at 50% 50%,
+    rgba(255, 255, 255, 0.95) 0%, rgba(255, 255, 255, 0.55) 45%, rgba(255, 255, 255, 0) 72%);
+  transition: transform var(--motion-base) var(--ease-standard),
+              width var(--motion-base) var(--ease-standard);
+}
+
+/* 顶部渐隐（R39-D，方案 A）：滚动体**滚下去之后**才挂 mask —— 内容接近光条时逐渐淡出，
+   而不是被容器上界硬切一刀（用户：「卡片直接被容器的上界裁切掉了，但上面是透明区域，
+   这稍微有点不符合直觉」）。静止时零干扰（不滚就没有渐隐）。
+   开关来自 OverlayScroll 下发的 `data-scrolled`（单一事实来源，探针照它判）。 */
+.archive-view[data-scrolled='1'] .os-scroll,
+.list-scroll[data-scrolled='1'] .os-scroll,
+.board-view[data-scrolled='1'] .os-scroll,
+.hero-scroll[data-scrolled='1'] .os-scroll {
+  mask-image: linear-gradient(to bottom, transparent 0, #000 var(--view-fade, 28px));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* 亮点只保留"瞬移到位"（渐隐是静态遮罩、不是动效，不受影响） */
+  .glow-spot { transition-duration: 0.01ms; }
 }
 
 .view-btn {

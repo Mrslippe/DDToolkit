@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   AlignJustify,
@@ -119,6 +119,17 @@ export default function PostsPage() {
   // R18：把当前视图发布给 `utils/shellState`（隐藏到托盘时存现场，深休眠唤醒后恢复）
   useEffect(() => {
     noteCurrentView(view)
+  }, [view])
+  // ── 亮点指示器（R39-D）：位置跟着激活的视图钮走 ────────────────────────
+  // 量的是**激活钮自己的 offsetLeft/offsetWidth**（而不是按 50+10 的间距算）：
+  // 以后改按钮尺寸/间距时，亮点自动跟得上，不用同步改两处数字。
+  const glowRef = useRef<HTMLDivElement | null>(null)
+  const [spot, setSpot] = useState<{ x: number; w: number } | null>(null)
+  useLayoutEffect(() => {
+    const bar = glowRef.current
+    const btn = bar?.querySelector<HTMLElement>('.view-btn.on')
+    if (!bar || !btn) return
+    setSpot({ x: btn.offsetLeft, w: btn.offsetWidth })
   }, [view])
   // 列表页右侧操作钮组：收起态只露 [展开钮][更新动态]，展开向左滑出全部四钮
   const [actionsOpen, setActionsOpen] = useState(false)
@@ -578,7 +589,14 @@ return (
             四个视图同级、共享同一状态机与数据，切换不重取）
             R37-P1（2026-09-17）：命名按用户口径改定 —— 「档案（直播日历 / 粉丝趋势）」→
             **数据视图**，「档案卡」→ **档案视图**（卡片画布）。 */}
-        <div className="glow-bar">
+        <div className="glow-bar" ref={glowRef}>
+          {/* 亮点指示器（R39-D，用户：「有一个亮点追随当前切换的按钮，带有切换时的动画效果」）：
+              位置按激活钮的 `offsetLeft/offsetWidth` 写内联样式（`useLayoutEffect`），
+              于是"按钮换高亮"与"亮点滑过去"在同一次布局里落定，不会闪。 */}
+          {spot && (
+            <span className="glow-spot" aria-hidden="true"
+                  style={{ transform: `translateX(${spot.x}px)`, width: spot.w }} />
+          )}
           <button
             type="button"
             className={`view-btn ${view === 'cards' ? 'on' : 'off'}`}
