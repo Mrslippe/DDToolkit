@@ -415,6 +415,89 @@ def _run_shot(edge: str, url: str, width: int, height: int, out_png: Path) -> No
 H_SCROLL_ALLOWLIST = ("type-chips",)
 
 
+def _assert_board(views: list[dict], width: int) -> list[str]:
+    """档案视图（R37-P1，devlog/141）的卡片画布对账。
+
+    判据四条（都是"算错了也看着能忍"的那类）：
+      ① 档案视图里**必须有**画布，且卡片数 = 注册的两种内置卡片；
+      ② 每张卡的**实渲染高 = 模型算的像素高**（`ROW_H×h + GAP×(h-1)`）——
+         高度写错时相邻行会被压住，但截图上不容易看出来；
+      ③ 卡片**不重叠、不出网格**（只读布局的硬不变量；P2 的拖拽要复用同一套几何）；
+      ④ **窄窗单列**：容器宽 < 900px 时必须是单列（`cols==1`），否则必须是 12 列 ——
+         这条把"降级判据看容器宽而不是窗口宽"钉死（跨三档宽度各验一次）。
+    """
+    bad: list[str] = []
+    v = next((x for x in views if x.get("tag") == "profile"), None)
+    if v is None:
+        return [f"@{width} board: 探针没量到 profile 视图（视图枚举改了？）"]
+    board = v.get("board")
+    if not board:
+        return [f"@{width} board: 档案视图里没有卡片画布（`[data-board]` 没渲染）"
+                f"—— 占位是不是没换掉？"]
+    cards = board.get("cards") or []
+    grid_w = board.get("gridW") or 0
+    cols = board.get("cols") or 0
+    if len(cards) != 2:
+        bad.append(f"@{width} board: 卡片数 {len(cards)}，应为 2（纪念日 / 优质投稿）")
+    if {c.get("kind") for c in cards} != {"anniversary", "top-posts"}:
+        bad.append(f"@{width} board: 卡片 kind = {[c.get('kind') for c in cards]}，"
+                   f"应为 anniversary + top-posts")
+    for c in cards:
+        if abs((c.get("hpx") or 0) - (c.get("hh") or 0)) > 1:
+            bad.append(f"@{width} board: 卡片 {c.get('kind')} 实渲染高 {c.get('hh')}px，"
+                       f"模型算的是 {c.get('hpx')}px（高度不由网格算死 ⇒ 相邻行会被压住）")
+        if (c.get("x") or 0) < -1 or (c.get("x") or 0) + (c.get("w") or 0) > grid_w + 1:
+            bad.append(f"@{width} board: 卡片 {c.get('kind')} 越出网格"
+                       f"（x={c.get('x')} w={c.get('w')} 网格宽={grid_w}）")
+    # 两两不相交（同 R36 的"零重叠"口径；窄窗单列时天然满足）
+    for i in range(len(cards)):
+        for j in range(i + 1, len(cards)):
+            a, b = cards[i], cards[j]
+            if (a["x"] < b["x"] + b["w"] and b["x"] < a["x"] + a["w"]
+                    and a["y"] < b["y"] + b["hh"] and b["y"] < a["y"] + a["hh"]):
+                bad.append(f"@{width} board: 卡片 {a.get('kind')} 与 {b.get('kind')} 重叠"
+                           f"（{a['x']},{a['y']} {a['w']}×{a['hh']} vs "
+                           f"{b['x']},{b['y']} {b['w']}×{b['hh']}）")
+    # 卡片**内容**（R37-P1）：防"卡片挂上了但里面什么都没渲染"这种静默失败。
+    # 纪念日那两行与数据无关（没填也得有两行「未记录」）；优质投稿的行数随数据变，
+    # 所以只要求"要么有行、要么有一句明说的空态" —— 什么都没有就是坏了。
+    for c in cards:
+        kind = c.get("kind")
+        if kind == "anniversary":
+            if c.get("rows") != 2:
+                bad.append(f"@{width} board: 纪念日卡渲染了 {c.get('rows')} 行，应为 2"
+                           f"（生日 / 出道；没填也得有「未记录」那两行）")
+            elif c.get("rowLabels") != ["生日", "出道"]:
+                bad.append(f"@{width} board: 纪念日卡的行标签是 {c.get('rowLabels')}，"
+                           f"应为 ['生日', '出道']")
+            elif not c.get("hint"):
+                bad.append(f"@{width} board: 纪念日卡没有底部那句提示（最近的一个 / 还没填）")
+        elif kind == "top-posts":
+            if not (c.get("rows") or 0) and not c.get("emptyText"):
+                bad.append(f"@{width} board: 优质投稿卡既没有榜单行也没有空态文案"
+                           f"（看起来像「没数据」，实际是没渲染）")
+            elif (c.get("rows") or 0) and not c.get("hint"):
+                bad.append(f"@{width} board: 优质投稿卡有榜单却没有「按什么排」的说明")
+    narrow_px = board.get("narrowPx") or 0
+    if narrow_px <= 0:
+        bad.append(f"@{width} board: 探针没拿到窄窗阈值（`data-board-narrow` 没下发）"
+                   f"—— 阈值不能由脚本另写一份，两处数字会漂")
+    elif not (400 <= narrow_px <= 1200):
+        # 判据本身自洽（cols 与阈值一致）**看不出阈值定得对不对**：定成 100 会让卡片挤成
+        # 一条、定成 3000 则永远单列 —— 都是"断言全绿但用户看着不对"。所以给一个设计区间：
+        # 低于 400 两张卡无法并排可读；高于 1200 则 1920 窗口（容器 ~1180）也永远单列。
+        bad.append(f"@{width} board: 窄窗阈值 {narrow_px}px 超出合理区间 400–1200")
+    narrow_expect = grid_w < narrow_px
+    if narrow_expect and cols != 1:
+        bad.append(f"@{width} board: 容器宽 {grid_w}px（<{narrow_px}）却没降级单列（cols={cols}）")
+    if not narrow_expect and cols != 12:
+        bad.append(f"@{width} board: 容器宽 {grid_w}px（≥{narrow_px}）却不是 12 列（cols={cols}）")
+    if not bad:
+        print(f"  画布：{len(cards)} 张卡 · 容器 {grid_w}px · "
+              f"{'单列' if cols == 1 else f'{cols} 列'} · 高度与模型一致、无重叠无越界")
+    return bad
+
+
 def _assert(views: list[dict], width: int) -> list[str]:
     bad: list[str] = []
     for v in views:
@@ -2540,6 +2623,7 @@ def main() -> int:
                 continue
             bad = _assert_probe_integrity(res, w)
             bad += _assert(res["views"], w)
+            bad += _assert_board(res["views"], w)
             bad += _assert_topbar(res.get("topbar"), w)
             # R33（devlog/135）：UI 就位后 `.app-shell` 必须透明 —— 它有底色时，
             # 子层被 4px 圆角裁切的那 1~2px 会混出白边（顶栏粉/rail 灰的角上肉眼可见）。

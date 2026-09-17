@@ -39,12 +39,14 @@ import StateBlock from '../components/common/StateBlock'
 import HeroCardsView from '../components/posts/HeroCardsView'
 import ListHeaderActions from '../components/posts/ListHeaderActions'
 import PostListView from '../components/posts/PostListView'
+import ProfileBoardView from '../components/profile/ProfileBoardView'
 import type { ArchivedFilter } from '../components/PostFilterPop'
 import './../styles/posts.css'
 
 const PAGE_SIZE = 20
 
-/** 视图枚举（P7 追加 profile：档案卡详情视图） */
+/** 视图枚举（P7 追加 profile；R37-P1 起 profile = **档案视图**（卡片画布），
+ *  archive = **数据视图**（直播日历 / 粉丝趋势）） */
 type AppView = 'cards' | 'list' | 'archive' | 'profile'
 
 /** 归档过滤类型（all / unarchived / archived）随 P10-A 的筛选弹窗一起搬到
@@ -99,7 +101,7 @@ export default function PostsPage() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const fetchBusy = useFetchBusy()
   const busyTip = '已有抓取任务进行中，请稍后再试'
-  // 视图：cards=展示页（默认）/ list=帖子列表页 / archive=档案 / profile=档案卡（P7 移出）
+  // 视图：cards=展示页（默认）/ list=帖子列表页 / archive=数据视图 / profile=档案视图（卡片画布）
   // R18：深休眠唤醒后，`App` 把"上次离开时的视图"放在 sessionStorage 里传进来
   // （深链接走不通，只能用这种方式把视图带回来；读过即删，正常启动不受影响）
   const [view, setView] = useState<AppView>(() => {
@@ -572,8 +574,10 @@ return (
             </FloatPill>
           </div>
         )}
-        {/* 视图切换光条（2026-09-08 用户定序：卡片 → 列表 → 档案 → 档案卡，
-            四个视图同级、共享同一状态机与数据，切换不重取） */}
+        {/* 视图切换光条（2026-09-08 用户定序：卡片 → 列表 → 数据视图 → 档案视图，
+            四个视图同级、共享同一状态机与数据，切换不重取）
+            R37-P1（2026-09-17）：命名按用户口径改定 —— 「档案（直播日历 / 粉丝趋势）」→
+            **数据视图**，「档案卡」→ **档案视图**（卡片画布）。 */}
         <div className="glow-bar">
           <button
             type="button"
@@ -594,7 +598,7 @@ return (
           <button
             type="button"
             className={`view-btn ${view === 'archive' ? 'on' : 'off'}`}
-            title="档案（直播日历 / 粉丝趋势）"
+            title="数据视图（直播日历 / 粉丝趋势）"
             onClick={() => setView('archive')}
           >
             <BarChart3 className="size-6" />
@@ -602,7 +606,7 @@ return (
           <button
             type="button"
             className={`view-btn ${view === 'profile' ? 'on' : 'off'}`}
-            title="档案卡（企划 / 设定 / 账号）"
+            title="档案视图（卡片画布）"
             onClick={() => setView('profile')}
           >
             <Fingerprint className="size-6" />
@@ -683,18 +687,14 @@ return (
         )}
 
         {vtuber && scene.view === 'profile' && (
-          // P8-5（2026-09-10 用户）：档案卡改版中 → 先占位。
-          // 原 ProfileView（企划/设定/账号一览）在 P8-4 的「档案设置」窗口里重建，
-          // 组件文件暂时保留（别删），改版完成后再决定去留。
-          <div className="empty-state">
-            <div className="empty-state-card">
-              <div className="empty-state-logo">档</div>
-              <p className="empty-state-title">档案卡改版中</p>
-              <p className="empty-state-desc">
-                企划 / 设定 / 账号管理正在重做，将并入展示页的「档案设置」窗口
-              </p>
-            </div>
-          </div>
+          // R37-P1（2026-09-17，devlog/141）：占位换成真正的**档案视图**（卡片画布）。
+          // 原 ProfileView（企划/设定/账号一览）在 P8-4 的「档案设置」窗口里重建过，
+          // 组件文件仍保留（别删）—— 本视图不依赖它。
+          <ProfileBoardView
+            vtuber={vtuber}
+            refreshTick={refreshTick}
+            onOpenPost={openPost}
+          />
         )}
 
         {scene.view === 'list' && (

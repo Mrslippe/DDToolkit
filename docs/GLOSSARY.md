@@ -53,7 +53,9 @@
 | **重要日期 / 活动** | 手动维护的纪念日/活动条目 | `models/vtuber.py::VtuberEvent`；`VtuberEventRepo` | 前端 `vtuber_events` 增删 |
 | **预约 / reservation** | 动态里的直播预约（未来场次） | `fetcher._extract_reservation`；`VtuberEventRepo.future_reservations` | `body_json.reservation` |
 | **第三方源 / externals** | 只读拉取「已固定化数据」（zeroroku/danmakus/laplace） | `services/externals/{base,registry,runner}.py` + 各源 | 与直采 `platforms/` 分离 |
-| **档案视图 / archive view** | 右栏四视图之一（直播日历 + 粉丝趋势） | `pages/PostsPage.tsx`（`view==='archive'`）；`components/LiveCalendar.tsx`、`FanTrendChart.tsx` | 展示页 cards / 列表 list / 档案卡 profile |
+| **数据视图 / archive view** | 右栏四视图之一（直播日历 + 粉丝趋势）。⚠️ 2026-09-17 前叫「档案」 | `pages/PostsPage.tsx`（`view==='archive'`）；`components/LiveCalendar.tsx`、`FanTrendChart.tsx` | 展示页 cards / 列表 list / **档案视图 profile** |
+| **档案视图 / profile board** | 右栏四视图之一：**卡片画布**（R37-P1 起）。⚠️ 2026-09-17 前叫「档案卡」，当时是占位页 | `components/profile/ProfileBoardView.tsx`（`view==='profile'`）；`layoutModel.ts`（几何）/ `cardRegistry.ts`（扩展点） | 卡片默认两张：纪念日 / 优质投稿 |
+| **卡片注册表 / cardRegistry** | 「支持拓展」的唯一入口：`registerCardKind({kind,title,defaultSize,render})`，重复 kind 抛错、顺序 = 注册顺序 | `components/profile/cardRegistry.ts` + `cards/index.tsx`（内置卡片注册点） | 同 `registerIdleProvider` 的先例；视图**不认识**任何具体卡片 |
 
 ---
 

@@ -1,0 +1,263 @@
+/* ── 档案视图（R37-P1，devlog/141）─────────────────────────────────────
+   卡片画布：12 列 × 84px 行的网格，卡片按布局模型给的 x/y/w/h 占格。
+   ⚠️ 高度必须由网格算死（`ROW_H×h + GAP×(h-1)`）：卡片一旦被内容撑高，
+   相邻行就会被压住 —— 探针按 `data-card-hpx` 与实渲染高度对账。
+   风格沿用「表面层」：0px 方形 + 发丝边（浮片化特例见 posts.css 的 .post-card）。 */
+
+.board-view {
+  /* 与 archive-view 同构：整块视图自己滚（外层 .os-scroll 由 OverlayScroll 提供） */
+  height: 100%;
+}
+
+.board-view .os-scroll {
+  padding: 12px 18px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overscroll-behavior: contain;
+}
+
+.board-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  flex: none;
+}
+
+.board-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--c-text-main);
+}
+
+.board-note {
+  font-size: 11.5px;
+  color: var(--c-text-sub);
+}
+
+/* 网格：12 列 + 定高行 + 卡片跨格。窄窗（.narrow）由布局模型改成单列，
+   这里只把列数换掉（卡片的内联 grid-column 在单列布局里已是 1 / span 12）。 */
+.board-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  grid-auto-rows: var(--board-row, 84px);
+  gap: var(--board-gap, 12px);
+  align-items: stretch;
+}
+
+.board-grid.narrow {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* ── 卡片外壳 ─────────────────────────────────────────────────────── */
+
+.pcard {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  border-radius: 4px;
+  background: var(--c-bg-card);
+  border: 1px solid var(--c-border);
+}
+
+.pcard-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 12px 8px;
+  border-bottom: 1px solid var(--c-border);
+}
+
+.pcard-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--c-text-main);
+}
+
+.pcard-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 10px 12px 12px;
+  overflow: hidden;
+}
+
+.pcard-empty {
+  margin: 0;
+  font-size: 12px;
+  line-height: 17px;
+  color: var(--c-text-sub);
+}
+
+/* ── 纪念日卡 ─────────────────────────────────────────────────────── */
+
+.anniv {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+}
+
+.anniv-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.anniv-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  line-height: 17px;
+}
+
+.anniv-row.today .anniv-value {
+  color: var(--c-primary-deep);
+  font-weight: 600;
+}
+
+.anniv-icon {
+  display: inline-flex;
+  color: var(--c-text-sub);
+}
+
+.anniv-label {
+  flex: none;
+  width: 30px;
+  color: var(--c-text-sub);
+}
+
+.anniv-value {
+  flex: 1;
+  min-width: 0;
+  color: var(--c-text-main);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.anniv-hint {
+  margin: auto 0 0;
+  font-size: 11.5px;
+  line-height: 16px;
+  color: var(--c-text-sub);
+}
+
+/* ── 优质投稿卡 ───────────────────────────────────────────────────── */
+
+.tp {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+}
+
+.tp-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tp-row {
+  min-width: 0;
+}
+
+.tp-hit {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tp-hit:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.tp-cover {
+  flex: none;
+  width: 46px;
+  height: 30px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: #f2eff0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tp-cover-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.tp-cover-ph {
+  font-size: 13px;
+  color: rgba(251, 119, 161, 0.7);
+}
+
+.tp-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.tp-title {
+  font-size: 12.5px;
+  line-height: 17px;
+  color: var(--c-text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tp-hit:hover .tp-title {
+  color: var(--c-accent);
+}
+
+.tp-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  line-height: 15px;
+  color: var(--c-text-sub);
+  font-variant-numeric: tabular-nums;
+}
+
+.tp-date {
+  margin-left: auto;
+}
+
+.tp-hint {
+  margin: auto 0 0;
+  font-size: 11.5px;
+  line-height: 16px;
+  color: var(--c-text-sub);
+}
+
+/* 骨架（与 R36 的 .lc-skel 同源：未到位与到位同尺寸） */
+.tp-skel-cover {
+  width: 46px;
+  height: 30px;
+  border-radius: 3px;
+}

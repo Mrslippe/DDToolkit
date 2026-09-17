@@ -21,10 +21,10 @@ interface ProbeView {
 }
 
 const VIEWS: ProbeView[] = [
-  { key: 'archive', title: '档案' },
+  { key: 'archive', title: '数据视图' },
   { key: 'cards', title: '展示页' },
   { key: 'list', title: '帖子列表' },
-  { key: 'profile', title: '档案卡' },
+  { key: 'profile', title: '档案视图' },
 ]
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -172,6 +172,48 @@ function measure(tag: string) {
         hasAddButton: !!document.querySelector('.pill-add'),
         /** 逐枚签名：`索引:色系:展示数值` —— 顺序变化会直接反映在这里 */
         signature: sig,
+      }
+    })(),
+    /** 档案视图（profile）的卡片画布（R37-P1，devlog/141）—— 与列表/hero 同款的常驻量测。
+     *
+     *  为什么必须量：网格是**自研**的（没用 react-grid-layout），每张卡的位置与高度都由
+     *  `layoutModel` 算出来 ⇒ 算错了（重叠 / 越界 / 高度与行数不符）在界面上"看着也能忍"，
+     *  但它正是"用户以后能自己排布卡片"的地基。这里把每张卡的 kind / 格位 / 实渲染几何抽出来，
+     *  由 `scripts/ui_probe.py::_assert_board` 对账（含**窄窗单列**这条跨宽度不变量）。 */
+    board: (() => {
+      const grid = document.querySelector<HTMLElement>('[data-board]')
+      if (!grid) return null
+      const gr = grid.getBoundingClientRect()
+      const cards = [...grid.querySelectorAll<HTMLElement>('.pcard')].map((c) => {
+        const r = c.getBoundingClientRect()
+        const cs = getComputedStyle(c)
+        return {
+          kind: c.getAttribute('data-card-kind'),
+          h: Number(c.getAttribute('data-card-h') ?? 0),
+          hpx: Number(c.getAttribute('data-card-hpx') ?? 0),
+          /** 相对网格左上角的位置（越界判定用） */
+          x: Math.round(r.left - gr.left),
+          y: Math.round(r.top - gr.top),
+          w: Math.round(r.width),
+          hh: Math.round(r.height),
+          col: cs.gridColumnStart,
+          row: cs.gridRowStart,
+          /** 卡片**内容**的粗采样（R37-P1）：防"卡片挂上了但里面什么都没渲染"这种
+           *  静默失败 —— 空态文案也是内容，但必须是**明说**的那一种（`.pcard-empty`）。 */
+          rows: c.querySelectorAll('.anniv-row, .tp-row').length,
+          rowLabels: [...c.querySelectorAll('.anniv-label')].map((n) => (n.textContent || '').trim()),
+          hint: (c.querySelector('.anniv-hint, .tp-hint')?.textContent || '').trim(),
+          emptyText: (c.querySelector('.pcard-empty')?.textContent || '').trim(),
+          pending: !!c.querySelector('[data-pending="1"]'),
+        }
+      })
+      return {
+        cols: Number(grid.getAttribute('data-board-cols') ?? 0),
+        /** 模型自己的窄窗阈值（跨语言契约：TS 下发、Python 按它判，别各写一份数字） */
+        narrowPx: Number(grid.getAttribute('data-board-narrow') ?? 0),
+        gridW: Math.round(gr.width),
+        narrow: grid.classList.contains('narrow'),
+        cards,
       }
     })(),
     /** 可见地越过窗口左右缘的元素 */
@@ -366,9 +408,9 @@ export async function runUiProbe(): Promise<void> {
   }
 
   if (mode === 'archive') {
-    const clicked = clickView('档案')
+    const clicked = clickView('数据视图')
     await sleep(2200)
-    if (!clicked) degraded.push('view:档案')
+    if (!clicked) degraded.push('view:数据视图')
     const cells = [...document.querySelectorAll('.lc-cell')].map((c) => ({
       day: (c.querySelector('.lc-day')?.textContent || '').trim(),
       badge: (c.querySelector('.lc-badge')?.textContent || '').trim(),

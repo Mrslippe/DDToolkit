@@ -317,8 +317,12 @@ DOM 契约（探针 `ui_probe --status-island` 直接查）：`.si-island`（`.o
 |---|---|---|---|---|
 | **展示页** cards（默认） | `cards` | `LayoutGrid`「展示页」 | `.hero-scroll`（OverlayScroll） | 背景层（自定义/头像铺底）· Hero（头像 · 直播徽标 · 名字 · 签名）· **平台药丸行**（数值/主页跳转/长按重排/尾部「+」）· 饰条 · **档案设置窗口**入口 `.bg-tools` → **B1.1** |
 | **帖子列表** list | `list` | `AlignJustify`「帖子列表」 | `.chips-bar`（固定顶）+ `.list-scroll`（OverlayScroll） | 操作按钮组 `.header-actions`（账号切换器 + 可收起抓取钮组）· 筛选行（类型 chips · 搜索浮片 · **筛选弹窗**）· 帖子流 `.post-grid`/`PostCard` · 回顶浮钮 · 无限滚动 → **B1.2** |
-| **档案** archive | `archive` | `BarChart3`「档案」 | `.archive-view`（OverlayScroll） | 直播日历卡 `<LiveCalendar>`（月历 + 场次浮层 + 场次详情弹窗）· 粉丝趋势卡 `<FanTrendChart>`（ECharts 双轴 + Brush）→ **B1.3** |
-| **档案卡** profile | `profile` | `Fingerprint`「档案卡」 | `.archive-view`（OverlayScroll） | **改版中占位**（`.empty-state`）；旧档案卡/账号抽屉组件保留待复用 → **B1.4** |
+| **数据视图** archive | `archive` | `BarChart3`「数据视图（直播日历 / 粉丝趋势）」 | `.archive-view`（OverlayScroll） | 直播日历卡 `<LiveCalendar>`（月历 + 场次浮层 + 场次详情弹窗）· 粉丝趋势卡 `<FanTrendChart>`（ECharts 双轴 + Brush）→ **B1.3** |
+| **档案视图** profile | `profile` | `Fingerprint`「档案视图（卡片画布）」 | `.board-view`（OverlayScroll） | **R37-P1 起 = 卡片画布**（12 列网格 + 卡片注册表 + 纪念日/优质投稿两张内置卡）→ **B1.4** |
+
+> **命名（R37-P1，devlog/141）**：用户口径「把那个有直播日历和粉丝趋势的视图叫做**数据视图**」、
+> 「（卡片画布）我们把它称作**档案视图**」⇒ 光条 title、注释、本文档与探针的视图枚举全部改定
+> （探针按 title 前缀点钮，所以 `clickView('档案')` 同步改成 `clickView('数据视图')`）。
 
 > 四视图**平级、互不嵌套**：切换只换 `view`，面板/背景层/滚动条标准（§F）与联动刷新（B1.5）为共用层。
 
@@ -334,7 +338,7 @@ DOM 契约（探针 `ui_probe --status-island` 直接查）：`.si-island`（`.o
 | 名称 | 类名 | 说明 |
 |---|---|---|
 | 光条 | `.glow-bar` | 443px 白色渐变(`rgba(255,255,255,.68)` 中心)矩形胶囊 |
-| 视图钮 | `.view-btn.on/.off` | 四枚、**同级视图**（2026-09-08 用户定序 + 删除未接线的邮件占位钮）：**卡片(`LayoutGrid`)→`setView('cards')`** / **列表(`AlignJustify`)→`setView('list')`** / **档案(`BarChart3`)→`setView('archive')`** / **档案卡(`Fingerprint`)→`setView('profile')`**（P7 追加）；on=.8 off=.4，激活跟随 `view` |
+| 视图钮 | `.view-btn.on/.off` | 四枚、**同级视图**（2026-09-08 用户定序 + 删除未接线的邮件占位钮）：**卡片(`LayoutGrid`)→`setView('cards')`** / **列表(`AlignJustify`)→`setView('list')`** / **数据视图(`BarChart3`)→`setView('archive')`** / **档案视图(`Fingerprint`)→`setView('profile')`**（P7 追加；R37-P1 改定名）；on=.8 off=.4，激活跟随 `view` |
 
 #### B1.1 cards 视图（展示页 / 默认视图）
 | 名称 | 类名 | 说明 |
@@ -377,7 +381,7 @@ DOM 契约（探针 `ui_probe --status-island` 直接查）：`.si-island`（`.o
 | 回顶浮钮 | `.back-to-top` | **44×44 圆形白卡**（right 18 / bottom 18，`--pill-shadow`），滚动 >400px 浮现（`.on`），点击平滑回顶；hover 图标变粉 |
 | 占位/错误 | `.posts-placeholder` / Alert(destructive) | 加载 Spin / 空列表 / 失败 |
 
-#### B1.3 archive 视图（档案 / v0.9.x 重建后形态：仅两张 870 定宽卡片纵向排列）
+#### B1.3 archive 视图（数据视图 / v0.9.x 重建后形态：仅两张 870 定宽卡片纵向排列）
 > 🔴 **2026-09-06 重建已删**：`.archive-grid-top` 双列布局、**重要日期卡**（UpcomingEventsCard / `.event-*`）与 profile 视图里的旧档案卡布局全部退役——当前 archive = 直播日历卡 + 粉丝趋势卡（均 870px 定宽、恒高、卡片自治，不共用列表操作钮行）。
 > 后端 `GET /vtuber/{id}/events`、`future-reservations` 端点仍在，前端 `api.listVtuberEvents/createVtuberEvent/deleteVtuberEvent/futureReservations` 为**未接线封装**（死代码，重做时可用）。
 
@@ -388,18 +392,22 @@ DOM 契约（探针 `ui_probe --status-island` 直接查）：`.si-island`（`.o
 | └ **未来预约标记**（R13，2026-09-15，devlog/088） | `.lc-cell.has-resv` / `[data-resv-count]` / `.lc-resv-time` / `.lc-resv-title` / `.lc-resv-mini` / 浮层 `.lc-resv-badge`、`.lc-resv-item` | 来自**动态里的直播预约**（服务端 `future_reservations` 解析 `body_json.reservation`）。口径：① **不改九类色系** —— 只在格子左缘加一道强调粉竖条 + 文案用粉；② **无场次但有预约的日子徽章是「预约」**（不是待定/休息：报待定等于把"确定会开播"这条已知信息藏起来）；③ 格内计数槽放**预约人数**（不重复"预约"二字）；④ 已有场次的日子预约压成一行小字 `.lc-resv-mini`（不与场次争主位）；⑤ hover 浮层顶部单列预约块（`.lc-pop-head` 抬头显示 `N 场 · M 预约`），**只有预约没有场次的日子也能 hover 查看**。护栏：`ui_probe --reservations`（脚本往数据副本里**种一条明天的预约**，断言格子徽章/时刻/人数/标题 + 浮层条目） |
 | 粉丝趋势 | `<FanTrendChart>` `.fan-chart` | **卡 870×460 · 4px 圆角 · `--pill-shadow`**；标题 16.5/600 同 `lc-title` 规格。**ECharts 6.1 架构**（canvas 全程自绘，React 只负责卡片壳与头部控制）。详见 B4 |
 
-#### B1.4 profile 视图（P7 追加：档案卡详情视图 · 改版中）
-> 🔵 **2026-09-10（P8-5）：本视图当前是「档案卡改版中」占位页**（`.empty-state` 骨架）。
-> 下面三行描述的 `ProfileView` / `ProfileCard` / `AccountPicker` **文件保留不删**——
-> P8-B 的「档案设置」窗口要复用其企划 Select 与账号一览逻辑；改版完成后本节重写。
+#### B1.4 profile 视图（档案视图 / R37-P1 起：卡片画布）
+> 🔵 **R37-P1（2026-09-17，devlog/141）起本视图 = 卡片画布**，占位页已撤。
+> 旧的 `ProfileView` / `ProfileCard` / `AccountPicker` **文件仍保留不删**（P8-B 的「档案设置」
+> 窗口复用其企划 Select 与账号一览逻辑），但**当前没有视图引用它们**（死代码，重做自定义卡片时可用）。
 
 | 名称 | 类名 | 说明 |
 |---|---|---|
-| 当前形态 | `.empty-state`（复用未选择 V 的空态骨架） | 标题「档案卡改版中」+ 说明「企划 / 设定 / 账号管理正在重做，将并入展示页的『档案设置』窗口」 |
-| ~~视图容器~~ | ~~`<ProfileView>` / `.archive-view`~~ | 保留待 P8-B 复用 |
-| 档案卡段 | `.archive-section`（含 `.archive-section-head`：标题 `档案` + note（第三方索引 N 项）+ `<AccountPicker>`） | 定宽契约：`max-width:960px;min-width:480px;height:460px;flex-shrink:0`，4px 圆角 + `--pill-shadow`；卡内滚动 = `<OverlayScroll className="archive-section-scroll">`（滚动体 padding `0 14px 6px`） |
-| 账号抽屉段 | 同上骨架（标题 `账号` + note N 个账号） | `.profile-account-list` 全部平台账号：平台标（B站/微博）/昵称/粉丝/房间号/直播中徽章（红描边胶囊） |
-| 内部档案卡 | `<ProfileCard>` `.profile-card*` | **企划｜公会 两列**（企划=Select 编辑，选项自动建议第三方索引 `group_name`，一键「采纳」写 `faction`；公会=只读占位「未收录」）+ 生日/出道日/房间号（跟随卡内所选账号，lucide 图标行）+ 设定集（Collapsible 折叠，`.profile-setting` 200px 内滚动） |
+| 视图容器 | `<ProfileBoardView>` / `.board-view`（OverlayScroll） | 与 archive 视图同构：整块视图自己滚；滚动体 padding `12px 18px 18px`、column gap 12 |
+| 头部 | `.board-head` | 标题「档案视图」+ 右侧说明（`N 张卡片 · 12 列网格 / 窄窗单列`） |
+| 网格 | `.board-grid`（`[data-board]`） | **12 列 × `--board-row`(84px) 行 + gap 12**，`grid-auto-rows` 由模型定死 ⇒ 卡片高 = `h×84 + (h-1)×12`；`data-board-cols` 与 `data-board-narrow`（阈值 560，**下发给探针**，免得 TS/Python 各写一份） |
+| 卡片外壳 | `.pcard`（`data-card-kind` / `data-card-h` / `data-card-hpx`） | 表面层风格：4px 圆角 + 发丝边；头部 `.pcard-head`（标题 12.5/600 + 下缘发丝）+ 体 `.pcard-body`（`overflow:hidden`，**高度由网格算死、内容不得撑高**） |
+| 布局模型 | `components/profile/layoutModel.ts` | 纯函数（**17 条单测**）：`defaultLayout`（书架式填行）/ `clampCard` / `normalizeLayout`（**向下推开**消重叠）/ `toSingleColumn`（窄窗降级）/ `gridStyle` / `cardHeightPx` |
+| 卡片注册表 | `components/profile/cardRegistry.ts` | 「支持拓展」的唯一入口（**4 条单测**）：`registerCardKind({kind,title,defaultSize,render})` —— 重复 kind **抛错**、顺序 = 注册顺序；`cards/index.tsx` 注册内置卡片，**视图不认识任何具体卡片** |
+| ├ 纪念日卡 | `cards/AnniversaryCard.tsx`（kind `anniversary`，5×3） | 两行（生日 / 出道）恒定渲染（没填也显示「未记录」）；口径 `anniversary.ts`（**14 条单测**：宽容解析 `2000-05-20`/`5月20日`/`05-20`、倒计时、2/29 平年按 3/1、就是今天） |
+| └ 优质投稿卡 | `cards/TopPostsCard.tsx`（kind `top-posts`，7×3） | 卡片**自己取数**（`listPosts` 一页 50 条）→ `topPosts.ts` 排序（**9 条单测**：排除墓碑 / 优先投稿 / 播放为主点赞兜底 / 同分按时间倒序）+ 一句「按什么排 · 共几条」；点一行开帖子详情抽屉（复用页面的那一个）；未到位 = 同尺寸骨架（R36 口径） |
+| 已知边界 | — | P1 **只读**：无拖拽/缩放/编辑态，布局来自默认排布；拖拽与落库（表 `profile_cards`）在 **P2**，自定义卡片与扩展点在 **P3** |
 
 #### B1.5 共用层：跨视图联动刷新（事件总线）
 | 事件 | 触发方 | 消费方 |
@@ -747,7 +755,8 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 | 容器 | 实现 | 备注 |
 |---|---|---|
 | list 视图帖子流 `.list-scroll` | ✅ OverlayScroll | 滚动体列布局/居中/padding 8px 16px 24px；`onScroll` 驱动回顶浮钮 |
-| archive 视图 `.archive-view` | ✅ OverlayScroll | profile 视图 + PostsPage archive 外包共用同一容器（2026-09-07 视图级修复） |
+| archive 视图 `.archive-view` | ✅ OverlayScroll | 数据视图 + PostsPage archive 外包共用同一容器（2026-09-07 视图级修复） |
+| 档案视图 `.board-view` | ✅ OverlayScroll | R37-P1 起与 archive 同构（视图级滚动） |
 | 档案卡/账号卡内 `.archive-section-scroll` | ✅ OverlayScroll | 负 margin 由滚动体承担（贴卡片缘） |
 | 详情弹窗 `.lc-dlg` | ✅ OverlayScroll | 弹窗滚动 |
 | 场次浮层 `.lc-pop` | ✅ OverlayScroll | 浮层滚动（max-height 430） |
