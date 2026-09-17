@@ -1555,6 +1555,101 @@ def main() -> int:
             # 于是「日历根本没渲染」与「日历渲染正常」在退出码上无法区分。
             bad = _assert_probe_integrity(res or {}, w, archive=True)
 
+            # ── R36：连采两格（上游未到位 / 到位），断言弹窗高度零变化 ──────────
+            # 用户报的是「上游数据没抓取下来时右列卡片高度固定，防止数据一抓到窗口
+            # 长度变化」+「左列封面下方别空着」。三条判据：
+            #   ① 第一格确实采到了**未到位态** —— 否则"两格一样高"可能只是两次都采到了
+            #      到位态，是空转的假绿（后端对上游有 10 分钟缓存，实测真的会这样）；
+            #   ② 未到位**不再靠文案**（改成同尺寸骨架，`[data-pending=1]`）；
+            #   ③ 窗 / 两列区 / 右列卡片 / 左列速览卡 四处高度差全为 0。
+            early = cal.get("pendingSample") or {}
+            late = cal.get("settledSample") or {}
+            if d and early and late:
+                print("\n=== R36 弹窗高度：未到位 vs 到位 ===")
+                print(f"  未到位：窗={early.get('h')} 两列区={early.get('mainH')} "
+                      f"右列={early.get('rightH')} 左列={early.get('leftH')} "
+                      f"速览卡={early.get('glanceH')} 骨架={early.get('skels')} "
+                      f"占位标记={early.get('pending')}")
+                print(f"  已到位：窗={late.get('h')} 两列区={late.get('mainH')} "
+                      f"右列={late.get('rightH')} 左列={late.get('leftH')} "
+                      f"速览卡={late.get('glanceH')} 骨架={late.get('skels')} "
+                      f"占位标记={late.get('pending')}")
+                print(f"  内容区：未到位 可视={early.get('bodyH')} 内容={early.get('contentH')} "
+                      f"词云={early.get('cloudH')} ｜ 已到位 可视={late.get('bodyH')} "
+                      f"内容={late.get('contentH')} 词云={late.get('cloudH')}"
+                      f"（可视 < 内容 = 已顶到上限；**判据看内容高**，窗高在顶到上限时恒等）")
+                caps_e = early.get("glanceCaps") or []
+                caps_l = late.get("glanceCaps") or []
+                print(f"  速览胶囊（未到位）: {[(c.get('label'), c.get('value')) for c in caps_e]}")
+                print(f"  速览胶囊（已到位）: {[(c.get('label'), c.get('value')) for c in caps_l]}")
+
+                wait_texts = [t for t in (early.get("placeholders") or [])
+                              if ("正在取" in t or "加载中" in t)]
+
+                # 几何（看不到界面时的眼睛，R33/R34 同款做法）：速览卡必须**紧贴封面
+                # 下方、与封面同宽**（= 那块空区域被填满而不是浮在别处），四枚胶囊
+                # 必须**两行两列**（用户口径"分双行"）且不越出卡片。
+                cb, gb = late.get("coverBox"), late.get("glanceBox")
+                boxes = late.get("capBoxes") or []
+                if cb and gb:
+                    gap = gb["y"] - (cb["y"] + cb["h"])
+                    print(f"  几何：封面 {cb} ｜ 速览卡 {gb}（间距 {gap}px）｜ 胶囊 {boxes}")
+                    if gap != 12:
+                        bad.append(f"@{w} R36: 速览卡与封面间距 {gap}px（应 12px）")
+                    if abs(gb["w"] - cb["w"]) > 1:
+                        bad.append(f"@{w} R36: 速览卡宽 {gb['w']} ≠ 封面宽 {cb['w']}"
+                                   f"（左列该是同一栏宽）")
+                    if gb["x"] != cb["x"]:
+                        bad.append(f"@{w} R36: 速览卡左缘 {gb['x']} ≠ 封面左缘 {cb['x']}")
+                if len(boxes) == 4:
+                    rows = sorted({b["y"] for b in boxes})
+                    cols = sorted({b["x"] for b in boxes})
+                    if len(rows) != 2 or len(cols) != 2:
+                        bad.append(f"@{w} R36: 胶囊不是 2×2 双行（行 {rows} / 列 {cols}）")
+                    elif gb and (max(b["x"] + b["w"] for b in boxes) > gb["x"] + gb["w"]
+                                 or max(b["y"] + b["h"] for b in boxes) > gb["y"] + gb["h"]):
+                        bad.append(f"@{w} R36: 有胶囊越出速览卡边界")
+                else:
+                    bad.append(f"@{w} R36: 量到 {len(boxes)} 枚胶囊（应 4 枚）")
+
+                if not early.get("pending") and not wait_texts:
+                    bad.append(f"@{w} R36: 第一格既没有骨架也没有「正在取」文案 —— "
+                               f"这条判据这次没验到未到位态（上游已经落地？）")
+                if not early.get("pending"):
+                    bad.append(f"@{w} R36: 未到位态还是靠文案（实得 {wait_texts}），"
+                               f"没有同尺寸骨架 `[data-pending=1]`")
+                if not early.get("glanceH"):
+                    bad.append(f"@{w} R36: 左列没有速览卡（`.lc-dlg-glance` 没渲染）"
+                               f"—— 封面下方那块空区域还是空的")
+                elif [c.get("label") for c in caps_e] != ["时长", "峰值在线", "弹幕数", "收益"]:
+                    bad.append(f"@{w} R36: 速览胶囊不是约定的四枚（实得 "
+                               f"{[c.get('label') for c in caps_e]}）")
+                else:
+                    # 交叉对账：胶囊与右列「直播信息」同一份数据必须一致。
+                    # 不依赖"这场有没有值"（两边都 `—` 也算一致），但读到值就得一模一样
+                    # —— 防"胶囊读了别的字段/读的是列表行而不是详情"这类接线错。
+                    right = {r.get("label"): r.get("value") for r in (late.get("rightRows") or [])}
+                    for label in ("峰值在线", "弹幕数"):
+                        cap_v = next((c.get("value") for c in caps_l if c.get("label") == label), None)
+                        row_v = right.get(label)
+                        if row_v is None:
+                            continue        # 右列没这行（不该发生）→ 交给别的断言
+                        if cap_v != row_v:
+                            bad.append(f"@{w} R36: 速览胶囊「{label}」= {cap_v!r}，"
+                                       f"右列同一字段 = {row_v!r}（两处读的不是同一份数据）")
+                for key, label in (("h", "弹窗"), ("mainH", "两列区"),
+                                   ("rightH", "右列卡片"), ("glanceH", "速览卡"),
+                                   ("contentH", "滚动内容")):
+                    e, l = early.get(key), late.get(key)
+                    if e != l:
+                        bad.append(f"@{w} R36: {label}高度从 {e} 变成 {l}（差 "
+                                   f"{(l or 0) - (e or 0)}px）—— 数据一到窗口长度就变了")
+                if not bad:
+                    print("  [ok] R36 弹窗高度零变化：速览卡四枚胶囊已在，四处高度一致")
+            elif d:
+                print("  [!] R36 段没量到（探针没给 pendingSample/settledSample）")
+                bad.append(f"@{w} R36: 连采两格没量到（探针未产出 pendingSample）")
+
             # ── 日历格内文本签名（位级回归护栏；与 hero 同源思路）──────────────
             # A-2（拆 `useLiveSessions` 的取数/月份/分类状态）**没有**布局层面的护栏：
             # 布局不变量看不出「场次没拉回来 / 月份错了 / 类型徽章变了」。

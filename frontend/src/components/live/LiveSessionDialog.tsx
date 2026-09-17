@@ -46,6 +46,16 @@ import { useLiveUpstream } from './useLiveUpstream'
 import {
   fmtDur, fmtMoney, fmtTime, isFreshSession, keyOf,
 } from './liveCalendarFmt'
+import { glanceCapsules } from './sessionGlance'
+
+/** 上游指标行（顺序即展示顺序）。**恒定四行**是 R36 的前提：未到位时按同尺寸骨架占位，
+ *  到位后原位换成真值 —— 行数一样，弹窗高度才不变（`在线排名` 另有保留位，见 CSS）。 */
+const METRIC_ROWS: { key: keyof LiveMetrics; label: string; suffix?: string }[] = [
+  { key: 'watch_count', label: '观看' },
+  { key: 'like_count', label: '点赞' },
+  { key: 'pay_count', label: '打赏', suffix: ' 人' },
+  { key: 'interaction_count', label: '互动' },
+]
 
 /** 上游"较慢"的提示阈值（秒）：超过它就把文案从"正在取"换成"还在等 + 已等 Ns" */
 const SLOW_HINT_SECONDS = 8
@@ -117,6 +127,9 @@ export default function LiveSessionDialog({
   const upFailed = wcStatus === 'fetch_failed'
   /** 已经等了一会儿 → 文案从"正在取"换成"还在等 + 已等 Ns"（上游会间歇性变慢） */
   const slow = up.elapsed >= SLOW_HINT_SECONDS
+  /** 上游指标**未到位**（要按骨架占位）：加载中且还没有指标；失败时 `up.loading` 已落，
+   *  此时由块内的「未取到 + 重试」那行接管（同一块、同一高度）。 */
+  const metricsPending = up.loading && !metrics
   const waitHint = slow ? `上游响应较慢，仍在重试…（已等 ${up.elapsed}s）` : ''
   /** 弹幕段的「重试」：自建失败重取自建，上游失败重取上游 */
   const retryDanmaku = () => {
@@ -263,7 +276,10 @@ export default function LiveSessionDialog({
         {/* 内容区：独立滚动（覆盖式滚动条，只在此层悬浮） */}
         <OverlayScroll className="lc-dlg-body">
           <div className="lc-dlg-main">
-          {/* 左列：场次封面（缺失/失败 → 渐变占位，右下角直播状态徽章） */}
+          {/* 左列：封面 + 「本场速览」胶囊卡（R36，devlog/140）
+              —— 封面是 4:3 定宽，右列却随上游指标变高 ⇒ 封面下方原本是一块**空区域**
+              （用户截图红圈处）。速览卡用**本地就有**的四枚值把它在第一帧就填满。 */}
+          <div className="lc-dlg-left">
           <div className="lc-dlg-cover">
             <ProxyImage
               key={s.cover_url ?? 'none'}
@@ -276,10 +292,29 @@ export default function LiveSessionDialog({
               {d1 ? '已结束' : '直播中'}
             </span>
           </div>
+          <div className="lc-dlg-glance">
+            <h4 className="lc-dlg-sec-title">本场速览</h4>
+            <div className="lc-glance-grid">
+              {glanceCapsules(s).map((c) => (
+                <div key={c.key} className="lc-glance-cap">
+                  <span className="lc-glance-label">{c.label}</span>
+                  <span className="lc-glance-value" title={c.value}>{c.value}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          </div>
 
           {/* 右列：直播信息（行式 label 左 · value 右） */}
           <section className="lc-dlg-sec">
-            <h4 className="lc-dlg-sec-title">直播信息</h4>
+            {/* 「上游慢」的提示挂在**标题行**（R36）：它原来占一行，数据一到就要撤掉 ——
+                也是高度变化。标题行在两种状态下都存在，挂这里等于零成本。 */}
+            <h4 className="lc-dlg-sec-title">
+              直播信息
+              {metricsPending && slow && (
+                <span className="lc-dlg-sec-note">{waitHint}</span>
+              )}
+            </h4>
             <dl className="lc-dlg-rows">
               <div className="lc-dlg-row">
                 <dt>时间</dt>
@@ -296,40 +331,56 @@ export default function LiveSessionDialog({
                 <dt>弹幕数</dt>
                 <dd>{s.danmakus_count ? s.danmakus_count.toLocaleString('zh-CN') : '—'}</dd>
               </div>
-              {metrics && (
-                <>
-                  <div className="lc-dlg-row">
-                    <dt>观看</dt>
-                    <dd>{metrics.watch_count != null ? metrics.watch_count.toLocaleString('zh-CN') : '—'}</dd>
+              {/* 上游指标（观看/点赞/打赏/互动/[在线排名]）——R36：**未到位时按同尺寸骨架占位**。
+                  这一块是整个弹窗高度变化的元凶：到位后凭空多出 4~5 行（实测右列卡片
+                  207 → 276px），而 `.lc-dlg` 是内容驱动的高度 ⇒ 用户看到「数据一抓到窗口
+                  长度变化」。现在四行**恒定渲染**（骨架 → 真值），第五行（在线排名）由
+                  CSS 的 `min-height` 预留，所以两种状态同高。
+                 文案只在**超时/失败**时出现：骨架本身不说"加载中"（与项目"全程没有
+                  『正在加载』闪帧"同源），但"没拿到"必须说出来（devlog/063 的教训）。 */}
+              <div className="lc-dlg-metrics"
+                   data-pending={metricsPending ? '1' : undefined}>
+                {METRIC_ROWS.map((row) => (
+                  <div className="lc-dlg-row" key={String(row.key)}>
+                    <dt>{row.label}</dt>
+                    <dd>
+                      {metricsPending ? (
+                        <span className="lc-skel lc-skel--val" />
+                      ) : (
+                        <>
+                          {metrics?.[row.key] != null
+                            ? `${Number(metrics[row.key]).toLocaleString('zh-CN')}${row.suffix ?? ''}`
+                            : '—'}
+                        </>
+                      )}
+                    </dd>
                   </div>
+                ))}
+                {!metricsPending && metrics?.online_rank != null && (
                   <div className="lc-dlg-row">
-                    <dt>点赞</dt>
-                    <dd>{metrics.like_count != null ? metrics.like_count.toLocaleString('zh-CN') : '—'}</dd>
+                    <dt>在线排名</dt>
+                    <dd>#{metrics.online_rank.toLocaleString('zh-CN')}</dd>
                   </div>
+                )}
+                {!metricsPending && !metrics && (
                   <div className="lc-dlg-row">
-                    <dt>打赏</dt>
-                    <dd>{metrics.pay_count != null ? `${metrics.pay_count.toLocaleString('zh-CN')} 人` : '—'}</dd>
+                    <dt>上游指标</dt>
+                    <dd className="lc-dlg-note">
+                      {upFailed ? (
+                        <>
+                          未取到（上游超时或不可用）
+                          <button type="button" className="lc-dlg-cloud-build"
+                                  onClick={() => up.reload()}>
+                            重试
+                          </button>
+                        </>
+                      ) : (
+                        '上游未提供'
+                      )}
+                    </dd>
                   </div>
-                  <div className="lc-dlg-row">
-                    <dt>互动</dt>
-                    <dd>{metrics.interaction_count != null ? metrics.interaction_count.toLocaleString('zh-CN') : '—'}</dd>
-                  </div>
-                  {metrics.online_rank != null && (
-                    <div className="lc-dlg-row">
-                      <dt>在线排名</dt>
-                      <dd>#{metrics.online_rank.toLocaleString('zh-CN')}</dd>
-                    </div>
-                  )}
-                </>
-              )}
-              {/* 上游还没回来时，上面这组指标是"缺席"而不是"没有" —— 说明一句，
-                  免得被读成"这场没有观看/点赞数据"（devlog/063）。 */}
-              {up.loading && (
-                <div className="lc-dlg-row">
-                  <dt>上游指标</dt>
-                  <dd className="lc-dlg-note">{waitHint || '正在取…'}</dd>
-                </div>
-              )}
+                )}
+              </div>
               {(s.segment_count ?? 1) > 1 && (
                 <div className="lc-dlg-row">
                   <dt>段数</dt>
@@ -355,8 +406,26 @@ export default function LiveSessionDialog({
               </button>
             )}
           </div>
-          {detail.loading ? (
-            <div className="lc-dlg-ph">加载中…</div>
+          {/* 段落内容统一套一层「槽」（R36）：`min-height` 定在槽上 ⇒ **未到位 / 到位 /
+              没有数据 / 拉取失败**四种形态占同一块地方，弹窗高度不随数据到达变化。
+              槽本身不解释"在等什么"——那是骨架与标题行那句话的事。 */}
+          <div className="lc-dlg-slot lc-dlg-slot--danmaku">
+          {detail.loading || (!dm && up.loading) ? (
+            /* 未到位：两行骨架（对应"弹幕总量 + 文本弹幕"）+ 词云区骨架（与 boxH 210 同高）。
+               行数/高度都按到位后的样子给，所以换成真值时**一像素都不动**。 */
+            <div className="lc-dlg-danmaku" data-pending="1">
+              <dl className="lc-dlg-rows">
+                <div className="lc-dlg-row">
+                  <dt>弹幕总量</dt>
+                  <dd><span className="lc-skel lc-skel--val" /></dd>
+                </div>
+                <div className="lc-dlg-row">
+                  <dt>文本弹幕</dt>
+                  <dd><span className="lc-skel lc-skel--val" /></dd>
+                </div>
+              </dl>
+              <div className="lc-skel lc-skel--cloud" />
+            </div>
           ) : dm ? (
             <div className="lc-dlg-danmaku">
               <dl className="lc-dlg-rows">
@@ -426,11 +495,6 @@ export default function LiveSessionDialog({
                 </div>
               )}
             </div>
-          ) : up.loading ? (
-            /* 上游取数中：详情已可读，只有这两格在等 */
-            <div className="lc-dlg-ph">
-              {waitHint || '正在取上游弹幕…'}
-            </div>
           ) : (
             <div className="lc-dlg-ph">
               {isFreshSession(s.start_at, s.end_at) ? (
@@ -456,12 +520,30 @@ export default function LiveSessionDialog({
               )}
             </div>
           )}
+          </div>
         </section>
 
         <section className="lc-dlg-sec lc-dlg-sec--full">
-          <h4 className="lc-dlg-sec-title">直播动态</h4>
+          {/* 「上游慢」同样挂在标题行（R36）——理由见「直播信息」那条注释 */}
+          <h4 className="lc-dlg-sec-title">
+            直播动态
+            {up.loading && slow && (
+              <span className="lc-dlg-sec-note">{waitHint}</span>
+            )}
+          </h4>
+          <div className="lc-dlg-slot lc-dlg-slot--evts">
           {up.loading ? (
-            <div className="lc-dlg-ph">{waitHint || '加载中…'}</div>
+            /* 未到位：三行骨架（中止/继续这类事件通常就这么几条）——到位后行数若更多，
+               多出来的部分进弹窗自己的滚动区，窗高不变（槽已把常见量预留下来）。 */
+            <div className="lc-dlg-evts" data-pending="1">
+              {[0, 1, 2].map((i) => (
+                <div className="lc-dlg-evt" key={`skel-${i}`}>
+                  <span className="lc-dlg-evt-dot" />
+                  <span className="lc-skel lc-skel--time" />
+                  <span className="lc-skel lc-skel--text" />
+                </div>
+              ))}
+            </div>
           ) : (events.length || metrics?.peaks?.length) ? (
             <div className="lc-dlg-evts">
               {events.map((ev, i) => (
@@ -504,6 +586,7 @@ export default function LiveSessionDialog({
           ) : (
             <div className="lc-dlg-ph">暂无动态数据</div>
           )}
+          </div>
         </section>
 
         <section className="lc-dlg-sec lc-dlg-sec--full">

@@ -49,6 +49,8 @@ async function waitDetailSettled(maxMs = 25000) {
       const pending = [...dlg.querySelectorAll('.lc-dlg-ph')].some((n) =>
         UPSTREAM_PENDING_RE.test(n.textContent || ''),
       )
+        // R36 起"未到位"不再靠文案表达（改成同尺寸骨架）⇒ 骨架标记同样算"没落地"
+        || !!dlg.querySelector('[data-pending="1"]')
       if (!pending) {
         if (!dlg.querySelector('.lc-dlg-cloud')) return   // 这一段没有词云可等
         const cells = dlg.querySelectorAll('.lc-dlg-cloud-cell').length
@@ -390,8 +392,88 @@ export async function runUiProbe(): Promise<void> {
         )
       : allCells.filter((c) => c.querySelector('.lc-cell-body'))
     let detail: Record<string, unknown> | null = null
+    let pendingSample: Record<string, unknown> | null = null
+
+    /** R36 连采两格用的尺子：弹窗的几处高度 + 占位标记。
+     *
+     * 为什么要量这么多层：用户报的是「上游数据一抓到**窗口长度变化**」，而窗口高度由
+     * **内容总高**驱动（`.lc-dlg` 是 `max-height` 而不是固定高）⇒ 只要"未到位态"比
+     * "到位态"矮，弹窗就会长高。所以两格都量 `.lc-dlg`（窗）+ `.lc-dlg-main`（两列区）
+     * + 右列卡片 + 左列速览卡，逐一比对**零变化**。
+     * `pending` 数的是骨架标记：第一格没有骨架 = 没采到"未到位态"，断言必须显式失败
+     * （否则「两格一样高」可能只是"两次都采到了到位态"，是空转的假绿）。 */
+    const sampleDialog = () => {
+      const dlg = document.querySelector<HTMLElement>('.lc-dlg')
+      if (!dlg) return null
+      const glance = dlg.querySelector<HTMLElement>('.lc-dlg-glance')
+      const right = dlg.querySelector<HTMLElement>('.lc-dlg-sec')
+      const main = dlg.querySelector<HTMLElement>('.lc-dlg-main')
+      const left = dlg.querySelector<HTMLElement>('.lc-dlg-left')
+      /** 相对视口的整数盒（"卡在封面正下方、同宽、2×2 不越界"这几条靠它判） */
+      const rect = (n: Element | null) => {
+        if (!n) return null
+        const r = n.getBoundingClientRect()
+        return { x: Math.round(r.left), y: Math.round(r.top),
+                 w: Math.round(r.width), h: Math.round(r.height) }
+      }
+      return {
+        h: dlg.offsetHeight,
+        mainH: main?.offsetHeight ?? null,
+        leftH: left?.offsetHeight ?? null,
+        rightH: right?.offsetHeight ?? null,
+        glanceH: glance?.offsetHeight ?? null,
+        coverBox: rect(dlg.querySelector('.lc-dlg-cover')),
+        glanceBox: rect(glance),
+        capBoxes: [...dlg.querySelectorAll('.lc-dlg-glance .lc-glance-cap')].map(rect),
+        // 词云块与内容区：用来判断"弹窗到底有没有顶到 max-height"（顶到之后
+        // 再高的内容只会进滚动区，窗高就不再变化）
+        cloudH: dlg.querySelector<HTMLElement>('.lc-dlg-cloud')?.offsetHeight ?? null,
+        bodyH: dlg.querySelector<HTMLElement>('.lc-dlg-body')?.offsetHeight ?? null,
+        bodyScrollH: dlg.querySelector<HTMLElement>('.lc-dlg-body')?.scrollHeight ?? null,
+        // ⚠️ 真正有牙口的是这一条：**滚动体的内容高**（OverlayScroll 的 `.os-scroll`）。
+        // 窗高只在"内容没顶到 max-height"时才随内容变 —— 探针窗口矮，弹窗两格都顶在
+        // 上限上，于是"窗高相等"会变成空转的假绿（反向验证实测：把预留高度改成 0
+        // 窗高仍然相等）。内容高不受上限影响，预留守恒在这里露馅。
+        contentH: dlg.querySelector<HTMLElement>('.lc-dlg-body .os-scroll')?.scrollHeight ?? null,
+        glanceCaps: [...dlg.querySelectorAll('.lc-dlg-glance .lc-glance-cap')].map((n) => ({
+          label: (n.querySelector('.lc-glance-label')?.textContent || '').trim(),
+          value: (n.querySelector('.lc-glance-value')?.textContent || '').trim(),
+        })),
+        // 右列「直播信息」的行式字段（第一个 `.lc-dlg-sec` 就是它）：用于与速览胶囊
+        // **交叉对账**同一份数据 —— 这条判据不依赖"这场有没有值"（两边都是 `—` 也算一致），
+        // 但真读到值时必须一模一样（防"胶囊读了别的字段"这种接线错）。
+        rightRows: [...dlg.querySelectorAll('.lc-dlg-sec .lc-dlg-rows .lc-dlg-row')].map((n) => ({
+          label: (n.querySelector('dt')?.textContent || '').trim(),
+          value: (n.querySelector('dd')?.textContent || '').replace(/\s+/g, ' ').trim(),
+        })),
+        pending: dlg.querySelectorAll('[data-pending="1"]').length,
+        skels: dlg.querySelectorAll('.lc-skel').length,
+        placeholders: [...dlg.querySelectorAll('.lc-dlg-ph')].map((n) =>
+          (n.textContent || '').trim(),
+        ),
+      }
+    }
     if (withBody.length) {
+      // R36 的「未到位态」必须**确定性地**存在。后端对上游有 10 分钟缓存 ⇒ 同一场次第二次
+      // 打开时数据可能几十毫秒就回来（实测第一版：两格都采到了到位态，判据空转）。
+      // 所以探针自己把 `/upstream` 压后 2.5s —— 它造现场，就像别的模式往副本库里种数据。
+      // 虚拟时间下两个定时器按到期顺序触发（120 < 2500）⇒ 第一格必然落在未到位态。
+      const realFetch = window.fetch
+      window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : String((input as Request).url ?? input)
+        if (!url.includes('/upstream')) return realFetch(input as RequestInfo, init)
+        return new Promise((resolve, reject) => {
+          setTimeout(() => {
+            realFetch(input as RequestInfo, init).then(resolve, reject)
+          }, 2500)
+        })
+      }) as typeof window.fetch
+
       withBody[withBody.length - 1].click()
+      // 第一格：**上游落地之前**（等最小的一帧让弹窗挂载：本地数据先渲染，上游那几块还在占位）
+      await sleep(120)
+      pendingSample = sampleDialog()
+      window.fetch = realFetch        // 采完就还原：后面等的是真实到达时间
       await sleep(3000)
       // 当日多场时切到**最后一场**（= 最近那场；danmakus + feed 双源的合并场次正是
       // 「信息展示不出来」的高发区），再等它拉完详情
@@ -420,6 +502,8 @@ export async function runUiProbe(): Promise<void> {
         }
       }
     }
+    // 第二格：到位态（与第一格同一把尺子；两格高度必须零变化 —— R36 的判据）
+    const settledSample = sampleDialog()
     const pre = document.createElement('pre')
     pre.id = 'ui-probe'
     pre.textContent = JSON.stringify({
@@ -431,6 +515,8 @@ export async function runUiProbe(): Promise<void> {
         note: (document.querySelector('.lc-note')?.textContent || '').trim(),
         cells,
         detail,
+        pendingSample,
+        settledSample,
       },
     })
     document.body.appendChild(pre)

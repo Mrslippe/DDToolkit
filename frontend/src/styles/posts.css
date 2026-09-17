@@ -3692,6 +3692,130 @@ img.hero-avatar {
   align-items: start;
 }
 
+/* ── R36（devlog/140）：弹窗高度不随"上游数据到达"变化 ──────────────────
+   现场：`.lc-dlg` 的高度是**内容驱动**的（只有 max-height），而封面是定宽 4:3、
+   右列却会随上游指标多出 4~5 行 ⇒ 用户看到「数据一抓到窗口长度变化」+ 封面下方
+   一块空区域。修法两条：① 左列补一张「本场速览」卡把空区域填满；② 右列/弹幕/动态
+   三处的"未到位态"改成**同尺寸骨架**，槽上再定 `min-height` 把常见量预留下来。
+   ⚠️ 这些 min-height 是**故意留白**：宁可卡片底部空一点，也不要数据到达时窗长跳一下。 */
+
+/* 左列：封面 + 速览卡（纵向排，卡片与右列同材质） */
+.lc-dlg-left {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 264px;
+}
+
+.lc-dlg-glance {
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: #faf7f8;
+}
+
+/* 2×2 胶囊（用户口径：四枚本地值、分双行） */
+.lc-glance-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.lc-glance-cap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.lc-glance-label {
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--c-text-sub);
+}
+
+.lc-glance-value {
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 18px;
+  color: var(--c-text-main);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 段落内容槽：四种形态（未到位/到位/没有/失败）占同一块地方 */
+.lc-dlg-slot--danmaku {
+  /* 两行标签行 + 词云区（MosaicCloud 的 boxH=210）+ 两处间隙 */
+  min-height: 258px;
+}
+
+.lc-dlg-slot--evts {
+  /* 三行事件（每行 17 + 间隙 6）+ 一处余量：`直播动态`通常就一两条中断/继续 +
+     最多 3 条在线峰值；超出部分进弹窗自己的滚动区，窗高不变 */
+  min-height: 150px;
+}
+
+/* 上游指标块：恒定四行（骨架 → 真值）+ 给「在线排名」预留的第五行 */
+.lc-dlg-metrics {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 109px;      /* 5 行 × 17 + 4 × 6 */
+}
+
+/* 骨架（R36）：尺寸与它替身的内容一致 —— 这是"高度不跳"的全部秘密 */
+.lc-skel {
+  display: inline-block;
+  height: 11px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #eceaea 0%, #e2dedf 50%, #eceaea 100%);
+  background-size: 200% 100%;
+  animation: lc-skel-sweep 1.4s linear infinite;
+}
+
+.lc-skel--val { width: 64px; }
+.lc-skel--time { width: 38px; flex: none; }
+.lc-skel--text { width: 96px; }
+.lc-skel--cloud {
+  display: block;
+  height: 210px;          /* 与 MosaicCloud 的 boxH 一致 */
+  margin-top: 10px;
+  border-radius: 8px;
+  animation: lc-skel-pulse 1.6s ease-in-out infinite;
+  background: #f0eded;
+}
+
+@keyframes lc-skel-sweep {
+  from { background-position: 100% 0; }
+  to   { background-position: -100% 0; }
+}
+
+@keyframes lc-skel-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.62; }
+}
+
+/* 「上游响应较慢」这类提示挂标题行（零高度成本），过长裁掉而不是换行 */
+.lc-dlg-sec-note {
+  margin-left: 6px;
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--c-text-sub);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* 与全站口径一致：减少动效时保留"未到位"的**静态**灰块，不闪 */
+  .lc-skel { animation: none; background: #eceaea; }
+  .lc-skel--cloud { animation: none; background: #f0eded; }
+}
+
 .lc-dlg-cover {
   position: relative;
   width: 264px;
