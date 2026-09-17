@@ -3903,6 +3903,8 @@ def main() -> int:
                     ("lab", "&motion=cards&reset=1"),
                     # 展示页（R39-D3）：光条压在**背景图**上时最容易看出边界，视觉评审就看这一张
                     ("cards", "&view=cards"),
+                    # 数据视图牌堆（R40）：一次一张卡的样子
+                    ("deck", "&view=archive"),
                 )
                 for tag, q in shots:
                     shot = WORK / f"board-{tag}-{w}.png"

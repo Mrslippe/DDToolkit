@@ -2842,12 +2842,17 @@ export async function runUiProbe(): Promise<void> {
         .find((b) => (b.textContent || '').includes(label))
     const result: Record<string, unknown> = {}
     // `view=cards` ⇒ 停在**展示页**（R39-D3：光条压在有背景图的那一页上最容易看出边界，
-    // 视觉评审要看的就是那一页）。默认仍是档案视图。
-    const wantCards = q.get('view') === 'cards'
+    // 视觉评审要看的就是那一页）；`view=archive` ⇒ 停在**数据视图**（R40 牌堆）；
+    // 默认仍是档案视图。
+    const wantView = q.get('view')
+    const wantCards = wantView === 'cards'
+    const wantDeck = wantView === 'archive'
     ;[...document.querySelectorAll<HTMLButtonElement>('.view-btn')]
-      .find((b) => (b.title || '').startsWith(wantCards ? '展示页' : '档案视图'))?.click()
-    await waitFor(() => document.querySelector(wantCards ? '.hero' : '[data-board]'))
-    if (!wantCards && q.get('reset')) {
+      .find((b) => (b.title || '').startsWith(
+        wantCards ? '展示页' : wantDeck ? '数据视图' : '档案视图'))?.click()
+    await waitFor(() => document.querySelector(
+      wantCards ? '.hero' : wantDeck ? '[data-deck]' : '[data-board]'))
+    if (!wantCards && !wantDeck && q.get('reset')) {
       btn('编辑布局')?.click()
       await sleep(200)
       btn('重置默认')?.click()
