@@ -2369,10 +2369,33 @@ export async function runUiProbe(): Promise<void> {
     })
     const all = [...document.querySelectorAll<HTMLElement>('.post-card')]
     result.cardCount = all.length
+    /** 相对视口的整数盒（"徽章在右上角、且不压标题"这两条靠它判） */
+    const rect = (n: Element | null) => {
+      if (!n) return null
+      const r = n.getBoundingClientRect()
+      return { x: Math.round(r.left), y: Math.round(r.top),
+               w: Math.round(r.width), h: Math.round(r.height),
+               right: Math.round(r.right), bottom: Math.round(r.bottom) }
+    }
+    /** 元素内**实际文字**的范围（Range 量字形，不是元素盒）。
+     *
+     *  为什么不能用元素盒：置顶卡的标题有 `padding-right` 给徽章让位，元素盒仍然横跨到
+     *  徽章底下 —— 拿盒去判"徽章压住标题"必然假红（第一版就这么错了）。 */
+    const textBox = (n: Element | null) => {
+      if (!n || !n.firstChild) return null
+      const r = document.createRange()
+      r.selectNodeContents(n)
+      const b = r.getBoundingClientRect()
+      return { x: Math.round(b.left), y: Math.round(b.top),
+               right: Math.round(b.right), bottom: Math.round(b.bottom) }
+    }
     result.cards = all.slice(0, 60).map((c) => ({
       title: text(c.querySelector('.post-card-title')),
       pinned: !!c.querySelector('.post-card-pin'),
       isPinnedClass: c.classList.contains('is-pinned'),
+      cardBox: rect(c),
+      pinBox: rect(c.querySelector('.post-card-pin')),
+      titleBox: textBox(c.querySelector('.post-card-title')),
     }))
     result.degraded = degraded
     const pre = document.createElement('pre')

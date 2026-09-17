@@ -9,6 +9,8 @@ import {
   parseBody,
   parseJson,
   parseStats,
+  isPlaceholderText,
+  postDisplaySummary,
   postDisplayTitle,
   postTypeLabel,
 } from './format'
@@ -52,8 +54,8 @@ describe('formatCount — 万/亿缩写，数字部分最多 4 位', () => {
   })
 })
 
-describe('postDisplayTitle — title → 摘要前 20 字 → 平台 ID', () => {
-  const base = { title: null, summary: null, platform_post_id: '12345' }
+describe('postDisplayTitle — title → 正文首行 → 摘要 → 平台 ID', () => {
+  const base = { title: null, summary: null, platform_post_id: '12345', body_json: null }
 
   it('优先标题，并去掉首尾空白', () => {
     expect(postDisplayTitle({ ...base, title: '  标题  ' })).toBe('标题')
@@ -66,6 +68,76 @@ describe('postDisplayTitle — title → 摘要前 20 字 → 平台 ID', () => 
 
   it('标题与摘要都为空时退到平台帖子 ID（保证永不空标题）', () => {
     expect(postDisplayTitle({ ...base, title: '   ', summary: '' })).toBe('12345')
+  })
+
+  // ── 2026-09-17 用户截图那条（弥月置顶动态标题 = `cv409088396`）─────────
+  const body = (text: string) => JSON.stringify({ text })
+
+  it('**占位标题要跳过**：库里已存下的 `cv<id>` 不许当标题（真文本在 body_json.text）', () => {
+    const post = { ...base, title: 'cv409088396', summary: '[9P]',
+                   body_json: body('小博兔们我来啦！我是家里蹲小博士弥月Mizuki~\n第二行') }
+    expect(postDisplayTitle(post)).toBe('小博兔们我来啦！我是家里蹲小博士弥月Mizuki~')
+  })
+
+  it('正文首行优先于摘要（摘要常是被截断的同一段话）', () => {
+    const post = { ...base, summary: '摘要版本', body_json: body('正文首行\n正文第二行') }
+    expect(postDisplayTitle(post)).toBe('正文首行')
+  })
+
+  it('正文首行本身是占位串（`[OP]`）时继续往下找，不把它当标题', () => {
+    const post = { ...base, summary: '真摘要', body_json: body('[OP]\n真正的第一行') }
+    expect(postDisplayTitle(post)).toBe('真正的第一行')
+  })
+
+  it('标题 / 正文 / 摘要全是占位串 → 退回平台 ID（不编内容）', () => {
+    const post = { ...base, title: 'cv123', summary: '[12P]', body_json: body('[OP]') }
+    expect(postDisplayTitle(post)).toBe('12345')
+  })
+
+  it('正文首行截到 40 字', () => {
+    const post = { ...base, body_json: body('长'.repeat(90)) }
+    expect(postDisplayTitle(post)).toBe('长'.repeat(40))
+  })
+
+  it('body_json 坏掉（非 JSON）不炸，继续走摘要', () => {
+    expect(postDisplayTitle({ ...base, body_json: '{不是 json', summary: '摘要' })).toBe('摘要')
+  })
+})
+
+describe('postDisplaySummary — 卡片第二行也要跳过占位串', () => {
+  const base = { summary: null, body_json: null }
+
+  it('有真摘要就用摘要', () => {
+    expect(postDisplaySummary({ ...base, summary: ' 摘要 ' })).toBe('摘要')
+  })
+
+  it('摘要只有 `[9P]`（图片张数）→ 改用正文首行', () => {
+    const post = { summary: '[9P]', body_json: JSON.stringify({ text: '正文首行\n第二行' }) }
+    expect(postDisplaySummary(post)).toBe('正文首行')
+  })
+
+  it('什么都没有 → null（卡片不渲染那一行，而不是渲染一个空 p）', () => {
+    expect(postDisplaySummary({ ...base })).toBeNull()
+    expect(postDisplaySummary({ summary: '   ', body_json: '{}' })).toBeNull()
+  })
+
+  it('正文首行按 max 截断', () => {
+    const post = { summary: null, body_json: JSON.stringify({ text: '字'.repeat(300) }) }
+    expect(postDisplaySummary(post, 10)).toBe('字'.repeat(10))
+  })
+})
+
+describe('isPlaceholderText — 哪些值"不是内容"', () => {
+  it('认得出 cv 号 / 张数 / opus 占位（含大小写与空格）', () => {
+    for (const v of ['cv409088396', '[9P]', '[12p]', '[OP]', '[ op ]', ' [1P] ']) {
+      expect(isPlaceholderText(v)).toBe(true)
+    }
+  })
+
+  it('正常文本与空串都不算占位（空串该走缺省分支，不是"占位"）', () => {
+    for (const v of ['', '   ', 'cv 号不是标题', '标题 [9P]', null, undefined]) {
+      expect(isPlaceholderText(v as string | null | undefined)).toBe(false)
+    }
   })
 })
 

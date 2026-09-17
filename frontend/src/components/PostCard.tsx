@@ -7,7 +7,7 @@ import {
   Repeat2,
 } from 'lucide-react'
 import type { Post } from '../api/types'
-import { formatDateTime, parseBody, parseStats, postDisplayTitle, postTypeLabel } from '../utils/format'
+import { formatDateTime, parseBody, parseStats, postDisplaySummary, postDisplayTitle, postTypeLabel } from '../utils/format'
 import ProxyImage from './common/ProxyImage'
 import StatBadge from './StatBadge'
 import './../styles/posts.css'
@@ -34,6 +34,8 @@ const PostCard = memo(function PostCard({ post, index, onOpen }: Props) {
   const body = useMemo(() => parseBody(post.body_json), [post.body_json])
   const stats = useMemo(() => parseStats(post.stats_json), [post.stats_json])
   const title = useMemo(() => postDisplayTitle(post), [post])
+  /** 摘要同样过滤占位串（`[9P]` 这类"不是内容"的值不该占卡片一行） */
+  const summary = useMemo(() => postDisplaySummary(post), [post])
   const images = body.images ?? []
   const duration = formatDuration(body.duration_sec)
 
@@ -74,19 +76,23 @@ const PostCard = memo(function PostCard({ post, index, onOpen }: Props) {
         )}
       </div>
 
+      {/* R35：平台置顶（B 站「置顶」/ 微博 isTop）。后端把置顶帖排在本账号列表最前，
+          这里给出「为什么它不在时间线上」的解释（devlog/139）。
+          ⚠️ 2026-09-17 用户口径：徽章钉在**卡片右上角**（不是封面右上、更不是正文里占一行）
+          —— 原来放在正文顶部会顶掉标题那一行（用户截图为证）；现在由 CSS 绝对定位到卡片
+          右上，并让标题在右端留出它的宽度（`.post-card.is-pinned .post-card-title`）。 */}
+      {post.is_pinned && (
+        <span className="post-card-pin" title="平台置顶：作者置顶的动态，已同步到列表最前">
+          <Pin size={11} aria-hidden="true" />
+          置顶
+        </span>
+      )}
+
       <div className="post-card-body">
-        {/* R35：平台置顶（B 站「置顶」/ 微博 isTop）。后端把置顶帖排在本账号列表
-            最前，这里给出「为什么它不在时间线上」的解释（devlog/139） */}
-        {post.is_pinned && (
-          <span className="post-card-pin" title="平台置顶：作者置顶的动态，已同步到列表最前">
-            <Pin size={11} aria-hidden="true" />
-            置顶
-          </span>
-        )}
         <h4 className="post-card-title" title={title}>
           {title}
         </h4>
-        {post.summary && <p className="post-card-summary">{post.summary}</p>}
+        {summary && <p className="post-card-summary">{summary}</p>}
         {/* P9-3（v0.9.6）：投稿动态的附言并入同 bvid 的投稿帖后在这里标注出来
             （一条视频只出现一次，附言不丢） */}
         {post.note && (

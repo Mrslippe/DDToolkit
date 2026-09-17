@@ -376,7 +376,14 @@ DOM 契约（探针 `ui_probe --status-island` 直接查）：`.si-island`（`.o
 | ├ 封面 | `.post-card-cover` 220×16:10；SmartImage 三态兜底 | 有封面=图；**无封面（纯文字）= `.post-card-cover-paper` 米白纸纹斜条底 + 居中大标题（`.paper-title` 4 行截断）**；类型角标/时长角标浮于其上 |
 | ├ 标题/摘要 | `.post-card-title/.summary` | 两行截断；`overflow-wrap:anywhere`——连续「！！！」或长链接这类不可断行串允许任意处折行后再截断，不横向裁掉半个字 |
 | └ 底行 | `.post-card-footer`：徽章 `.stat-badge`×n + 日期 | 播/赞/评/转；正文 `.post-card-body` 带 `min-width:0`（解除 flex 自动最小尺寸，长串不再把日期挤出卡片） |
-| └ 置顶标记 | `.post-card.is-pinned` + `.post-card-pin` | **R35（devlog/139）**：置顶帖在标题上方多一枚 `Pin` 图标 + 「置顶」粉底 pill（`.post-card-pin`，`rgba(251,119,161,.14)` 底 + `.45` 描边，同 `.deleted-flag` 家族），卡片整体加一圈 `0 0 0 1px rgba(251,119,161,.55)` 描边（叠在 `--pill-shadow` 之上**而不是画左边条**：卡片是「封面 + 正文」横排，左边条会被封面图吃掉）。排序由后端 `paginated` 负责（`is_pinned desc, published_at desc`），前端只负责"解释它为什么不在时间线上"。探针 `--pinned` 断言第 1 张 + 角标 + 对照组不挂角标 |
+| └ 置顶标记 | `.post-card.is-pinned` + `.post-card-pin` | **R35（devlog/139）**：置顶帖在标题上方多一枚 `Pin` 图标 + 「置顶」粉底 pill（`.post-card-pin`，`rgba(251,119,161,.14)` 底 + `.45` 描边，同 `.deleted-flag` 家族），卡片整体加一圈 `0 0 0 1px rgba(251,119,161,.55)` 描边（叠在 `--pill-shadow` 之上**而不是画左边条**：卡片是「封面 + 正文」横排，左边条会被封面图吃掉）。排序由后端 `paginated` 负责（`is_pinned desc, published_at desc`），前端只负责"解释它为什么不在时间线上"。**2026-09-17 用户口径改版**：徽章钉在**卡片右上角**（`.post-card` 加 `position: relative`，徽章是它的直系子元素）、**不占标题那一行** —— 置顶卡的标题用 `.post-card.is-pinned .post-card-title { padding-right: 58px }` 在右端让位。⚠️ 第一版把徽章塞进 `.post-card-cover`（那里是定位祖先）⇒ 落到**封面**右上（探针量出右内距 290px）。探针 `--pinned` 对**每一条置顶卡**断言五条几何：右内距 8px / 上内距 8px / 是胶囊宽（≤80px，不是撑满一行的块）/ 在卡内 / 在右半区，外加"徽章不压标题**文字**（Range 量字形，不是元素盒——盒子含让位内距，拿盒判必假红）" |
+> **标题 / 摘要的取值口径（2026-09-17，devlog/143）**：`utils/format.ts::postDisplayTitle`
+> = `title` → **正文首行** → `summary` → 平台 ID；`postDisplaySummary` = `summary` → 正文首行 → `null`。
+> 两者都**跳过占位串**（`cv<数字>` 专栏/opus id、`[9P]` 图片张数、`[OP]` opus 占位，见
+> `isPlaceholderText`）—— 用户截图那条「标题 = `cv409088396`、摘要 = `[9P]`」就是这么来的：
+> 后端曾把 DRAW/OPUS 的 `data.id` 当标题、把图片张数当正文（已修，但**库里已存下的**那些
+> 不会消失（刷新时"空值不覆盖"），所以展示侧必须自己认得出占位串。
+
 | 无限滚动 | `.load-sentinel` + IntersectionObserver | **不分页懒加载**：哨兵 1px（root=`list-scroll`，rootMargin 600px 预载）命中且 `hasMore=posts.length<total` 时 `page+1` 追加；`page===1` 走替换（整表 + is-refetching 变暗 + grid key 按替换型指纹重挂动画），`page>1` 走追加（按 id 去重拼接、不动 key 不重挂旧卡片）；追加失败 `loadMoreError` 尾条手动重试；到底显示 `.load-end`「已经到底啦」 |
 | 回顶浮钮 | `.back-to-top` | **44×44 圆形白卡**（right 18 / bottom 18，`--pill-shadow`），滚动 >400px 浮现（`.on`），点击平滑回顶；hover 图标变粉 |
 | 占位/错误 | `.posts-placeholder` / Alert(destructive) | 加载 Spin / 空列表 / 失败 |

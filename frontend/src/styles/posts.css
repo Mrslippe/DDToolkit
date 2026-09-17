@@ -1062,6 +1062,8 @@ img.hero-avatar {
 .post-card {
   display: flex;
   flex-direction: row;
+  /* R35 补（2026-09-17）：置顶徽章钉在**卡片**右上角 ⇒ 卡片自己得是定位祖先 */
+  position: relative;
   background: var(--c-bg-card);
   /* 浮片化：2px 圆角 + 浮片阴影，去发丝边（阴影绘于边框外，自身 overflow:hidden 不裁） */
   border: none;
@@ -1199,17 +1201,29 @@ img.hero-avatar {
 }
 
 .post-card-pin {
+  /* 2026-09-17 用户口径：钉在**卡片右上角**、**不占标题那一行**。
+     ⚠️ 第一版把徽章塞进 `.post-card-cover` 里（那里是 positioned 祖先）⇒ 落到了
+     **封面**右上（探针量出右内距 290px，一眼看穿）。所以它是 `.post-card` 的直系子元素，
+     由下面的 `.post-card { position: relative }` 锚定；标题在右端留出它的宽度。 */
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  align-self: flex-start;
-  padding: 0 7px;
+  padding: 1px 7px;
   border-radius: 3px;
-  background: rgba(251, 119, 161, 0.14);
-  border: 1px solid rgba(251, 119, 161, 0.45);
-  color: #d1517f;
+  background: rgba(251, 119, 161, 0.92);
+  color: #fff;
   font-size: 12px;
   line-height: 17px;
+  backdrop-filter: blur(2px);
+}
+
+/* 置顶卡的标题右端让位（徽章在标题那一行、但压在右端 ⇒ 不 reserve 就会盖住字） */
+.post-card.is-pinned .post-card-title {
+  padding-right: 58px;
 }
 
 /* 详情窗口：头部驻留区（标题……X 钉在面板顶部，不随内容滚动，滚动条不覆盖；

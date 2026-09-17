@@ -2128,17 +2128,79 @@ def main() -> int:
                     failures.append(f"@{w} pinned: 「帖子列表」里一张卡片都没有"
                                     f"（视图没切过去？列表接口挂了？）")
                 else:
-                    first = cards[0]
-                    if (first.get("title") or "").strip() != want_pin:
+                    # 不变量：**置顶帖必须构成列表最前的一个连续块**，块内顺序按发布时间。
+                    # ⚠️ 不能断言"第 1 张就是种下的那条"（第一版这么写，随后就假红了）：
+                    # 开发库里**已经有真置顶帖**（R35 上线后被抓到并标上），副本会继承它们 ——
+                    # 真置顶帖比种下的 2020 年那条新，按 `is_pinned desc, published_at desc`
+                    # 就该排在前面。要钉的是"置顶块在前 + 种子帖在块内 + 对照帖在块后"。
+                    seeded = next((c for c in cards
+                                   if (c.get("title") or "").strip() == want_pin), None)
+                    first_plain = next((i for i, c in enumerate(cards)
+                                        if not c.get("pinned")), None)
+                    seeded_idx = cards.index(seeded) if seeded else None
+                    pinned_block = cards[:first_plain] if first_plain is not None else cards
+                    if not seeded:
+                        failures.append(f"@{w} pinned: 置顶帖 {want_pin!r} 不在首页采样的 "
+                                        f"{len(cards)} 张里（排序没生效时它会掉到列表末尾）")
+                    elif first_plain is not None and seeded_idx >= first_plain:
                         failures.append(
-                            f"@{w} pinned: 列表第 1 张是 {first.get('title')!r}，"
-                            f"不是置顶帖 {want_pin!r}（排序没生效：置顶帖 2020 年的时间戳）")
-                    if not first.get("pinned"):
-                        failures.append(f"@{w} pinned: 第 1 张没有置顶角标"
-                                        f"（`.post-card-pin` 没渲染）")
-                    if not first.get("isPinnedClass"):
-                        failures.append(f"@{w} pinned: 第 1 张没有 `is-pinned` 类"
+                            f"@{w} pinned: 置顶帖排在非置顶帖之后（第 {seeded_idx} 张，"
+                            f"第一个非置顶在第 {first_plain} 张）—— 置顶块没排在最前")
+                    elif not seeded.get("pinned"):
+                        failures.append(f"@{w} pinned: 置顶帖没有角标（`.post-card-pin` 没渲染）")
+                    elif not seeded.get("isPinnedClass"):
+                        failures.append(f"@{w} pinned: 置顶帖没有 `is-pinned` 类"
                                         f"（粉色描边那条样式挂不上）")
+                    if first_plain is not None and pinned_block:
+                        print(f"  置顶块：前 {first_plain} 张（{len(pinned_block)} 张置顶）"
+                              f"｜ 块内: {[(c.get('title') or '')[:16] for c in pinned_block]}")
+                    # 徽章几何（2026-09-17 用户口径：放**卡片右上角**、**不占标题那一行**）。
+                    # 这两条在截图上"看着也还行"，很容易放过 —— 所以量出来判。
+                    # ⚠️ **每一条置顶卡都要量**，不能只量种子那条：第一版只量种子帖，
+                    # 而它的标题很短 ⇒ 「标题不给徽章让位」这种坏法照样全绿（反向验证当场抓到）。
+                    # 真置顶帖（长标题）在副本里是常态，正好把这条判据喂饱。
+                    for c in pinned_block:
+                        pin = c.get("pinBox")
+                        card = c.get("cardBox")
+                        tbox = c.get("titleBox")
+                        label = (c.get("title") or "")[:14]
+                        if not (pin and card):
+                            failures.append(f"@{w} pinned: 置顶卡 {label!r} 没量到徽章位置")
+                            continue
+                        inset_r = card["right"] - pin["right"]
+                        inset_t = pin["y"] - card["y"]
+                        print(f"  徽章几何 {label!r}: 卡 {card} ｜ 徽章 {pin} "
+                              f"｜ 标题文字 {tbox}（右内距 {inset_r}px / 上内距 {inset_t}px）")
+                        if not 4 <= inset_r <= 14:
+                            failures.append(f"@{w} pinned: 置顶徽章距卡片右缘 {inset_r}px"
+                                            f"（应贴右上角，约 8px）—— 卡 {label!r}")
+                        if not 4 <= inset_t <= 14:
+                            failures.append(f"@{w} pinned: 置顶徽章距卡片上缘 {inset_t}px"
+                                            f"（应贴右上角，约 8px）—— 卡 {label!r}")
+                        # 只比"右内距 8px"是不够的：把徽章放回正文时它会**撑满一行**
+                        # （实测 258px 宽、右缘恰好落在 12px 内）⇒ 判据照样绿。
+                        # 所以再钉三条：它是**胶囊**（不是一整行）、**在卡内**、**在右半区**。
+                        if pin["w"] > 80:
+                            failures.append(f"@{w} pinned: 置顶徽章宽 {pin['w']}px —— 它该是枚"
+                                            f"胶囊（≈52px），不是撑满一行的块；卡 {label!r}")
+                        inside = (card["x"] - 2 <= pin["x"] and pin["right"] <= card["right"] + 2
+                                  and card["y"] - 2 <= pin["y"]
+                                  and pin["bottom"] <= card["bottom"] + 2)
+                        if not inside:
+                            failures.append(f"@{w} pinned: 置顶徽章跑到卡片外了"
+                                            f"（徽章 {pin} vs 卡 {card}）—— 定位祖先挂错了？"
+                                            f"卡 {label!r}")
+                        if pin["x"] < card["x"] + card["w"] / 2:
+                            failures.append(f"@{w} pinned: 置顶徽章不在卡片右半区"
+                                            f"（徽章 x={pin['x']} / 卡中线 "
+                                            f"{card['x'] + card['w'] // 2}）；卡 {label!r}")
+                        if tbox and not (pin["right"] <= tbox["x"]
+                                         or pin["x"] >= tbox["right"]
+                                         or pin["bottom"] <= tbox["y"]
+                                         or pin["y"] >= tbox["bottom"]):
+                            failures.append(f"@{w} pinned: 置顶徽章压住了标题文字"
+                                            f"（徽章 {pin} vs 标题 {tbox}）"
+                                            f"—— 用户要求不占标题位置；卡 {label!r}")
                     titles = [(c.get("title") or "").strip() for c in cards]
                     if titles.count(want_pin) == 0:
                         failures.append(f"@{w} pinned: 置顶帖不在首页采样的 {len(titles)} 张里"
@@ -2156,7 +2218,7 @@ def main() -> int:
                     else:
                         print(f"  对照：{want_plain!r} 无角标 ✓")
                     if not failures:
-                        print("  [ok] 置顶排序 + 角标 + 描边：第 1 张是置顶帖，对照帖未被污染")
+                        print("  [ok] 置顶块排在最前 + 角标钉在卡片右上角（不压标题）+ 对照帖未被污染")
             for b in failures:
                 print("   -", b)
             return 1 if failures else 0

@@ -44,13 +44,65 @@ export function formatBytes(n: number | null | undefined): string {
   return `${x >= 100 ? Math.round(x) : x.toFixed(1)} ${units[i]}`
 }
 
-/** 帖子显示标题：title → 摘要前 20 字 → 平台帖子 ID（问题 3） */
-export function postDisplayTitle(post: Pick<Post, 'title' | 'summary' | 'platform_post_id'>): string {
+/**
+ * B 站动态里那些**不是内容**的占位串：
+ *   - `cv<数字>` —— 专栏 / opus 的 id（`fetcher._extract_dynamic_title` 曾把它当标题存下来）；
+ *   - `[9P]` / `[12P]` —— 图片张数（DRAW 动态的"正文"其实只是张数）；
+ *   - `[OP]` —— opus 正文占位（部分回包里 `desc.text` 就是这个）。
+ *
+ * 为什么要有一张显式的表：这些值**看着像文本**，直接展示出来就是用户截图里那条
+ * 「标题 = cv409088396」的观感 —— 而真文本其实躺在 `body_json.text` 里。
+ */
+const PLACEHOLDER_RE = /^(?:cv\d+|\[\s*\d*\s*[Pp]\s*\]|\[\s*[Oo][Pp]\s*\])$/
+
+/** 是否是"不是内容"的占位串（空串不算占位：空串该由调用方走缺省分支）。 */
+export function isPlaceholderText(s: string | null | undefined): boolean {
+  const v = (s ?? '').trim()
+  return v !== '' && PLACEHOLDER_RE.test(v)
+}
+
+/** 正文的**首个非空行**（截到 max 字）；没有正文 → 空串。 */
+function firstTextLine(s: string | null | undefined, max: number): string {
+  const line = (s ?? '')
+    .split('\n')
+    .map((x) => x.trim())
+    .find((x) => x !== '' && !isPlaceholderText(x))
+  return line ? line.slice(0, max) : ''
+}
+
+/**
+ * 帖子显示标题：`title` → **正文首行** → 摘要 → 平台帖子 ID。
+ *
+ * ⚠️ 2026-09-17 用户截图：弥月那条置顶动态标题显示成 `cv409088396`。根因有两层 ——
+ * ① 后端把 DRAW/OPUS 动态的 `data.id` 当标题存了（已修：只有专栏才用 `cv<id>` 兜底）；
+ * ② 本函数的兜底链是 `title → summary → pid`，既没过滤占位串、也没看正文。
+ * 库里**已经存下的**那些 `cv…` / `[9P]` 不会因为后端修好而消失（刷新时"空值不覆盖"），
+ * 所以展示侧必须自己认得出占位串 —— 这也是本条用例最该钉的地方。
+ */
+export function postDisplayTitle(
+  post: Pick<Post, 'title' | 'summary' | 'platform_post_id' | 'body_json'>,
+): string {
   const title = post.title?.trim()
-  if (title) return title
+  if (title && !isPlaceholderText(title)) return title
+  const line = firstTextLine(parseBody(post.body_json).text, 40)
+  if (line) return line
   const summary = post.summary?.trim()
-  if (summary) return summary.slice(0, 20)
+  if (summary && !isPlaceholderText(summary)) return summary.slice(0, 20)
   return post.platform_post_id
+}
+
+/**
+ * 帖子摘要（卡片第二行）：`summary` → 正文首行 → `null`（不渲染这一行）。
+ * 同样跳过占位串 —— 卡片上出现一个孤零零的 `[9P]` 与"标题是 cv 号"是同一种毛病。
+ */
+export function postDisplaySummary(
+  post: Pick<Post, 'summary' | 'body_json'>,
+  max = 120,
+): string | null {
+  const summary = post.summary?.trim()
+  if (summary && !isPlaceholderText(summary)) return summary
+  const line = firstTextLine(parseBody(post.body_json).text, max)
+  return line || null
 }
 
 /** 图床 URL 规范化：http → https（B 站 hdslb / 微博 sinaimg、wbcdn，避免混合内容拦截） */

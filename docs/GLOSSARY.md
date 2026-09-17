@@ -55,6 +55,7 @@
 | **第三方源 / externals** | 只读拉取「已固定化数据」（zeroroku/danmakus/laplace） | `services/externals/{base,registry,runner}.py` + 各源 | 与直采 `platforms/` 分离 |
 | **数据视图 / archive view** | 右栏四视图之一（直播日历 + 粉丝趋势）。⚠️ 2026-09-17 前叫「档案」 | `pages/PostsPage.tsx`（`view==='archive'`）；`components/LiveCalendar.tsx`、`FanTrendChart.tsx` | 展示页 cards / 列表 list / **档案视图 profile** |
 | **档案视图 / profile board** | 右栏四视图之一：**卡片画布**（R37-P1 起）。⚠️ 2026-09-17 前叫「档案卡」，当时是占位页 | `components/profile/ProfileBoardView.tsx`（`view==='profile'`）；`layoutModel.ts`（几何）/ `cardRegistry.ts`（扩展点） | 卡片默认两张：纪念日 / 优质投稿 |
+| **占位串 / placeholder** | B 站动态里那些**不是内容**的值：`cv<数字>`（专栏/opus id）、`[9P]`（图片张数）、`[OP]`（opus 正文占位）。展示侧一律跳过（`utils/format.ts::isPlaceholderText`），否则卡片上会出现「标题 = cv409088396」 | `frontend/src/utils/format.ts`；后端只在**专栏**缺标题时用 `cv<id>` 兜底（`fetcher._extract_dynamic_title`） | devlog/143 |
 | **卡片注册表 / cardRegistry** | 「支持拓展」的唯一入口：`registerCardKind({kind,title,defaultSize,render})`，重复 kind 抛错、顺序 = 注册顺序 | `components/profile/cardRegistry.ts` + `cards/index.tsx`（内置卡片注册点） | 同 `registerIdleProvider` 的先例；视图**不认识**任何具体卡片 |
 
 ---

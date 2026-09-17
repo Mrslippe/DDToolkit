@@ -874,22 +874,24 @@ def _archive_stats(major: dict, dyn_stat: dict) -> dict:
 
 
 def _extract_dynamic_title(major: dict) -> str:
-    """按 major type 提取标题"""
+    """按 major type 提取标题。
+
+    ⚠️ **只有专栏（ARTICLE）才拿 `cv<id>` 兜底**。2026-09-17 用户截图：弥月那条置顶
+    动态的标题显示成 `cv409088396` —— 根因就是这里原来对**任何** major 类型都用
+    `data["id"]` 拼了个 cv 号当标题（DRAW/OPUS 的 `data.id` 是 opus/专栏 id，
+    不是标题）。没有标题就返回空串，由展示侧从 `body_json.text` 取正文首行兜底。
+    """
     data = _get_major_data(major)
     mt = major.get("type", "")
-    # OPUS — 可能有 title
-    t = data.get("title", "")
+    t = str(data.get("title") or "").strip()
     if t:
-        return str(t)[:500]
-    # DRAW
-    t = data.get("title", "")
-    if t:
-        return str(t)[:500]
-    # ARTICLE — id 就是专栏 cv 号
-    aid = data.get("id")
-    if aid:
-        return f"cv{aid}"
-    # 无标题时返回空
+        return t[:500]
+    # ARTICLE — id 就是专栏 cv 号，是它唯一可读的标识
+    if "ARTICLE" in mt:
+        aid = data.get("id")
+        if aid:
+            return f"cv{aid}"
+    # 其余类型：没有标题就是没有（别拿 id 冒充标题）
     return ""
 
 
@@ -904,11 +906,11 @@ def _extract_dynamic_text(major: dict, desc_text: str = "") -> str:
         text = summary.get("text", "")
         return str(text)[:2000] if text else ""
 
-    # DRAW — title + items 数量
+    # DRAW — 只有 title 才算正文；`[nP]` 是**图片张数占位**，不当正文
+    # （2026-09-17：它会被当成 summary 存下来，卡片第二行就只有一个「[9P]」；
+    #   真文本在详情接口的 OPUS 分支里，这里返回空串让上层用它。）
     if "DRAW" in mt:
-        title = data.get("title", "")
-        items = data.get("items") or []
-        return f"{title} [{len(items)}P]" if title else f"[{len(items)}P]"
+        return str(data.get("title") or "")[:2000]
 
     # ARTICLE — summary
     if "ARTICLE" in mt:

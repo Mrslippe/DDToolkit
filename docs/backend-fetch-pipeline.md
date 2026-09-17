@@ -411,6 +411,20 @@ mymblog?uid=&page=&feature=0         页间 sleep 20s
 3. **已知边界**：`limit_latest`（收录首屏 / 「最新 N 条」模式）会在循环内提前 return ⇒
    那一轮不同步置顶集合（下一轮补上，首页仍在）；动态流关掉时置顶标记**冻结**（不误清）。
 
+### 5.4.1 动态的标题与正文从哪来（2026-09-17，devlog/143）
+
+`fetcher._extract_dynamic_title` / `_extract_dynamic_text` 按 major 类型分流，两条纪律：
+
+| major | 标题 | 正文 |
+|---|---|---|
+| OPUS | `opus.title`（常为空） | `opus.summary.text` |
+| DRAW | `draw.title`（常为空） | `draw.title`，**绝不回 `[nP]`**（那是图片张数，结构信息，`body_json.images` 里本来就有） |
+| ARTICLE | `article.title`，缺标题时**才**用 `cv<id>` 兜底 | `article.summary` |
+| ARCHIVE | — | `archive.desc` |
+| COMMON（转发） | — | `module_dynamic.desc.text`（转发者附言） |
+
+⚠️ **只有专栏才拿 `cv<id>` 当标题**：2026-09-17 用户截图里置顶动态的标题是 `cv409088396`，根因就是这条兜底原来对所有 major 都生效（DRAW/OPUS 的 `data.id` 是 opus/专栏 id，不是标题）。没有标题就返回空串，由展示侧从 `body_json.text` 取正文首行兜底。
+
 ### 5.5 平台化帖子类型（v0.9.6，devlog/047）
 
 后端各平台各自映射，`posts.type` 取值不再强行统一：
