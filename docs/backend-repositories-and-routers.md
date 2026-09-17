@@ -1,6 +1,6 @@
 # 数据层与接口层文档（数据库 · Repositories · Routers）
 
-> 适用版本：`main`（2026-09-13，`MIGRATION_HEAD = f004`，迁移链 17 个版本、11 张表；**路由计数的三种数法见 §3**，别处不要再复述数字）。
+> 适用版本：`main`（2026-09-17，`MIGRATION_HEAD = f005`，迁移链 18 个版本、11 张表；**路由计数的三种数法见 §3**，别处不要再复述数字）。
 > 阅读路径：HTTP 入口（`app/routers`）→ SQL 封装（`app/repositories`）→ 表映射（`app/models`）→ 迁移（`alembic/versions`）。
 > 系统全貌见 `docs/ARCHITECTURE.md`；抓取链路细节见 `docs/backend-fetch-pipeline.md`；
 > 名词与代码路径速查见 `docs/GLOSSARY.md`；文档索引见 `docs/README.md`。
@@ -119,11 +119,14 @@
 | `published_at` | DATETIME | 发布时间（naive UTC） |
 | `raw_json` | TEXT | 平台原始响应（证据保真层） |
 | `is_archived` | BOOLEAN | 默认 0（c001）；归档后不参与更新抓取遍历 |
+| `is_pinned` | BOOLEAN | NOT NULL 默认 0（f005）：平台置顶（B 站「置顶」/ 微博 `isTop`）。每轮抓取按**第一页**的置顶集合同步（新置顶标记、取消置顶撤销） |
+| `pinned_refreshed_at` | DATETIME | 置顶帖最近一次走**详情接口**刷正文的时刻（f005，节流窗口见 `settings.PINNED_DETAIL_REFRESH_HOURS`） |
 | `last_seen_at` | DATETIME | 最近一次确认仍在线（墓碑，e002） |
 | `deleted_detected_at` | DATETIME | 判定已删除的时刻（墓碑，e002） |
 | `created_at` | DATETIME | 入库时间 |
 
 索引：`ix_posts_platform_uid_published (platform, platform_uid, published_at)` 覆盖分页；
+`ix_posts_platform_uid_pinned (platform, platform_uid, is_pinned)` 覆盖置顶排序（f005）；
 `ix_posts_published_at` 覆盖归档规则；`ix_posts_deleted_detected` 覆盖墓碑筛选。
 
 #### `account_stat_snapshots` — 账号统计快照历史（P0，e001；e004 加 `source`）
@@ -230,7 +233,7 @@
 | `source` | TEXT | 来源（danmakus） |
 | `updated_at` | DATETIME | 周级整表刷新 |
 
-### 1.3 迁移链（alembic，17 版本，head = `f004`）
+### 1.3 迁移链（alembic，18 版本，head = `f005`）
 
 | 版本 | 内容 |
 |---|---|
@@ -251,6 +254,7 @@
 | `f002` account_order_and_locks | `accounts.sort_order` + `accounts.locked_fields`（v0.9.7） |
 | `f003` app_meta | 建通用 KV 表 `app_meta`（v0.9.8，键 `external.startup.last_run`） |
 | `f004` sign_source_and_field_history | `vtubers.sign_override / sign_source_account_id` + 建 `vtuber_field_history` + **删 `accounts.locked_fields`**（devlog/074） |
+| `f005` post_pinned | `posts.is_pinned`（NOT NULL 默认 0）+ `posts.pinned_refreshed_at` + 索引 `ix_posts_platform_uid_pinned`（R35，devlog/139） |
 
 **纪律**：新增迁移后必须同步 `app/main.py` 的 `MIGRATION_HEAD`（`tests/test_services.py`
 断言与 alembic head 一致），否则冷启动快路径会把旧库误判为已最新。启动迁移四形态：
@@ -335,11 +339,14 @@
 | `archive_before(cutoff)` | 归档规则：`is_archived=0 且 published_at<cutoff` → 置 1，幂等，返回条数 |
 | `get(id)` / `create(data, commit=True)` / `update(id, data)` / `delete(id)` | 标准 CRUD |
 | `delete_by_platform_uids(list[(platform, uid)])` | 按「平台+UID」组清空（解订阅/删账号用；跨平台同 UID 不误删，不提交） |
+| `by_pid(platform, platform_uid, platform_post_id)` | 按唯一键取单条（f005：置顶刷新要读 `id`/`type`/`pinned_refreshed_at`） |
+| `sync_pinned(platform, platform_uid, pinned_ids)` | 置顶集合同步（f005）：标记新置顶、**撤销**已取消的；返回 `{marked, cleared}`。**只在第一页解析成功后调用** |
 
 **`paginated` 过滤语义**：`q` 匹配 `title`/`summary`（OR，`ilike`）；`date_from`/`date_to`
 为 `published_at` 范围（`date_to` 次日零点排他 → 含结束日全天，设范围时排除空时间帖）；
 `post_type` 逗号分隔多型（如 `video,video_dynamic`）；`is_deleted` 墓碑筛选
-（True=仅已删 / False=仅未删 / None=全部）；排序恒为 `published_at desc`。
+（True=仅已删 / False=仅未删 / None=全部）；排序 `is_pinned desc, published_at desc`
+（f005 起置顶帖排本账号列表最前，只在第 1 页头部出现一次；`by_uid` 仍是纯时间序）。
 
 ### 2.7 `LiveGiftDayRepo`
 

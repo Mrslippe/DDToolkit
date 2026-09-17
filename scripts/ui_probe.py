@@ -159,6 +159,53 @@ def _seed_profile(data: Path, vtuber_id: int, base_url: str) -> dict:
             "controlSign": (ctl[1] or "").strip() if ctl else None}
 
 
+def _seed_pinned(data: Path, vtuber_id: int) -> dict:
+    """往**副本**里种一条「又老又置顶」的动态（R35 探针的确定性现场）。
+
+    为什么要种 + 为什么要"老"：开发库里未必有置顶帖，而"置顶排最前"这条断言必须
+    有对照才能咬人 —— 给它一个**远早于其它帖**的 `published_at`（2020 年），排序若
+    没生效它必然掉到列表最后，断言立刻变红（而不是"恰好也在第一张"的假绿）。
+
+    另种一枚**已取消置顶**的旧帖（`is_pinned=0` 但标题带标记）当对照：用来防
+    "所有卡片都挂置顶角标"这种错法 —— 它必须没有角标。
+    返回：期望值字典（供断言比对）。
+    """
+    import sqlite3
+    from datetime import datetime, timezone
+
+    pinned_title = "探针置顶·周表（应排最前）"
+    plain_title = "探针普通帖（不该有置顶角标）"
+    old = "2020-01-02 03:04:05"
+    # 对照帖用**当前时刻**（naive UTC，与库内约定一致）：它要留在第 1 页里才量得到
+    # 没有角标这半条断言；置顶帖则故意压到 2020 年，让"排序没生效"必然露馅
+    now = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+    con = sqlite3.connect(data / "vtuber.db")
+    try:
+        acc = con.execute(
+            "SELECT platform, platform_uid FROM accounts WHERE vtuber_id=? "
+            "ORDER BY (platform='bilibili') DESC, sort_order, id LIMIT 1",
+            (vtuber_id,)).fetchone()
+        if not acc:
+            raise SystemExit(f"[probe] VTuber#{vtuber_id} 没有任何账号，种不了置顶帖")
+        platform, uid = acc
+        con.execute("DELETE FROM posts WHERE platform_post_id LIKE 'probe-pinned%'")
+        for pid, title, pinned, when in (
+            ("probe-pinned-139", pinned_title, 1, old),
+            ("probe-pinned-139-plain", plain_title, 0, now),
+        ):
+            con.execute(
+                "INSERT INTO posts (platform, platform_uid, platform_post_id, type, "
+                "title, summary, published_at, is_archived, is_pinned, created_at) "
+                "VALUES (?,?,?,?,?,?,?,0,?,?)",
+                (platform, uid, pid, "text", title,
+                 "探针样本：置顶排序与角标", when, pinned, when))
+        con.commit()
+    finally:
+        con.close()
+    return {"pinnedTitle": pinned_title, "plainTitle": plain_title,
+            "platform": platform, "uid": uid}
+
+
 def _seed_reservation(data: Path, vtuber_id: int) -> str:
     """往**副本**里种一条明天的预约（R13 探针的确定性现场）。
 
@@ -279,6 +326,7 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
             "closeAsk": data.get("closeAsk"),
             "switchPerf": data.get("switchPerf"),
             "profileSync": data.get("profileSync"),
+            "pinned": data.get("pinned"),
             "shell": data.get("shell"),
             "degraded": data.get("degraded") or [],
             "dom": dom_file,
@@ -288,7 +336,7 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
             "polish": None, "reservations": None, "statusIsland": None,
             "appSettings": None, "filterPill": None, "traySuspend": None,
             "closeAsk": None, "switchPerf": None, "profileSync": None,
-            "degraded": [], "dom": dom_file}
+            "pinned": None, "degraded": [], "dom": dom_file}
 
 
 # ── 展示页 hero 药丸签名（P2 分层收敛 A 批次的位级回归护栏）─────────────
@@ -839,6 +887,13 @@ def main() -> int:
              "另设一个无 override 的 V 作对照（防「永远显示自定义值」的假绿）。"
              "需要那个 V 至少有一个带 avatar_url 的账号。",
     )
+    ap.add_argument(
+        "--pinned",
+        action="store_true",
+        help="只跑一档宽度：置顶动态（R35，devlog/139）—— 探针先往**副本 DB** 种一条"
+             "「又老又置顶」的帖 + 一条当轮新帖（不带置顶），再断言「帖子列表」里它排在"
+             "第一张、带置顶角标，而对照帖没有角标、且全文只出现一次（不重复）。",
+    )
     args = ap.parse_args()
     widths = args.width or [1100, 1280, 1440]
 
@@ -853,7 +908,11 @@ def main() -> int:
     WORK.mkdir(parents=True, exist_ok=True)
     # `--capabilities` 要的是"有数据但未登录"（删 .env），其余模式用开发目录副本；
     # `--first-run` 用真正空目录（走独立契约）
-    data = _prepare_logged_out() if args.capabilities else _prepare_data(empty=args.first_run)
+    # `--pinned` 也走未登录副本：后端一起来就会抓动态流，而 R35 的置顶集合同步会把
+    # **种下的假置顶帖**（不在上游置顶集合里）当场撤销，断言就会时绿时红 ——
+    # 未登录现场连一次上游请求都不发（内容闸门），本地帖子照常渲染，才是确定性的尺子。
+    data = (_prepare_logged_out() if (args.capabilities or args.pinned)
+            else _prepare_data(empty=args.first_run))
     be_port, vite_port = _free_port(), _free_port()
 
     be_env = {
@@ -915,6 +974,14 @@ def main() -> int:
                   f"（副本 DB，非真库）")
             print(f"[probe] 目标路由 {route}（VTuber #{vid}）"
                   f"；对照组 = {seeded_profile.get('controlName')!r}")
+
+        # R35：置顶动态探针同样在**后端/页面取数之前**把种子写进副本
+        seeded_pin: dict = {}
+        if args.pinned and vid:
+            seeded_pin = _seed_pinned(data, vid)
+            print(f"[probe] 已种置顶帖：{seeded_pin['pinnedTitle']!r}"
+                  f"（{seeded_pin['platform']}:{seeded_pin['uid']}，2020 年时间戳）"
+                  f" + 对照帖 {seeded_pin['plainTitle']!r}（副本 DB，非真库）")
 
         if args.app_settings:
             # 应用设置（R14a，devlog/091）：这一条是**会写盘的探针** —— 它真的改设置、
@@ -1850,6 +1917,68 @@ def main() -> int:
                         print(f"  对照：{ctl_name!r} 仍显示平台签名 ✓")
                 if not failures:
                     print("  [ok] 左栏与卡片同源：自定义签名/头像都到位，对照组未被污染")
+            for b in failures:
+                print("   -", b)
+            return 1 if failures else 0
+
+        if args.pinned:
+            # R35（devlog/139）：用户口径「将抓取到的置顶动态同样置顶」。这条断的是
+            # **端到端**：种子帖 → 后端 `paginated` 排序 → 列表第 1 张 + 角标。
+            # 对照帖（不带置顶，时间很新）必须没有角标 —— 防"所有卡片都挂角标"的假绿。
+            w = widths[0]
+            url = f"http://localhost:{vite_port}{route}?probe=pinned"
+            print(f"[probe] pinned @{w} → {url}")
+            res = _run_probe(edge, url, w, args.height, WORK, "pinned")
+            pn = ((res or {}).get("pinned") or {})
+            if res and not pn:
+                print(f"  [!] 探针 mode={res.get('mode')!r} 键={sorted(res.keys())}"
+                      f"（新字段需要在 _run_probe 的白名单里登记）")
+            cards = pn.get("cards") or []
+            print(f"  列表：视图钮={pn.get('viewFound')} 卡片数={pn.get('cardCount')} "
+                  f"降级={pn.get('degraded')}")
+            for i, c in enumerate(cards[:4]):
+                print(f"    #{i}: pinned={c.get('pinned')} class={c.get('isPinnedClass')} "
+                      f"title={c.get('title')!r}")
+            want_pin = (seeded_pin or {}).get("pinnedTitle")
+            want_plain = (seeded_pin or {}).get("plainTitle")
+            if not pn:
+                failures.append(f"@{w} pinned: 没量到置顶段（探针未跑完？）")
+            elif not seeded_pin:
+                failures.append(f"@{w} pinned: 没种上数据（需要 --vtuber 指向一个有账号的 V）")
+            else:
+                if not cards:
+                    failures.append(f"@{w} pinned: 「帖子列表」里一张卡片都没有"
+                                    f"（视图没切过去？列表接口挂了？）")
+                else:
+                    first = cards[0]
+                    if (first.get("title") or "").strip() != want_pin:
+                        failures.append(
+                            f"@{w} pinned: 列表第 1 张是 {first.get('title')!r}，"
+                            f"不是置顶帖 {want_pin!r}（排序没生效：置顶帖 2020 年的时间戳）")
+                    if not first.get("pinned"):
+                        failures.append(f"@{w} pinned: 第 1 张没有置顶角标"
+                                        f"（`.post-card-pin` 没渲染）")
+                    if not first.get("isPinnedClass"):
+                        failures.append(f"@{w} pinned: 第 1 张没有 `is-pinned` 类"
+                                        f"（粉色描边那条样式挂不上）")
+                    titles = [(c.get("title") or "").strip() for c in cards]
+                    if titles.count(want_pin) == 0:
+                        failures.append(f"@{w} pinned: 置顶帖不在首页采样的 {len(titles)} 张里"
+                                        f"（排序没生效时它会掉到列表末尾）")
+                    elif titles.count(want_pin) > 1:
+                        failures.append(f"@{w} pinned: 置顶帖在首页出现 "
+                                        f"{titles.count(want_pin)} 次（应恰好 1 次）")
+                    ctl = next((c for c in cards if (c.get("title") or "").strip() == want_plain), None)
+                    if not ctl:
+                        failures.append(f"@{w} pinned: 对照帖 {want_plain!r} 不在首页"
+                                        f"（无从判断角标是否滥挂）")
+                    elif ctl.get("pinned") or ctl.get("isPinnedClass"):
+                        failures.append(f"@{w} pinned: 对照帖也挂了置顶角标 —— 角标是按"
+                                        f"is_pinned 渲染的吗？")
+                    else:
+                        print(f"  对照：{want_plain!r} 无角标 ✓")
+                    if not failures:
+                        print("  [ok] 置顶排序 + 角标 + 描边：第 1 张是置顶帖，对照帖未被污染")
             for b in failures:
                 print("   -", b)
             return 1 if failures else 0

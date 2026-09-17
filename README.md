@@ -176,7 +176,7 @@ Windows 桌面应用，数据全部在本地 SQLite 里，不经过任何服务�
 │  ├─ schemas/        Pydantic 输入输出模型
 │  ├─ services/       抓取调度（T0–T4 分层）、平台接入、第三方源、认证、WBI、类型引擎、数据库维护
 │  └─ core/           配置（数据目录 / 环境变量）、数据库引擎与 PRAGMA
-├─ alembic/           数据库迁移链（a001 → f004，17 个版本，启动时自动升级）
+├─ alembic/           数据库迁移链（a001 → f005，18 个版本，启动时自动升级）
 ├─ tests/             pytest 测试（用例基线见 docs/TODO.md §6.2）
 ├─ scripts/           维护与构建脚本（dev_check / ui_probe / doc_check / build_backend / collect_release 等）
 ├─ devlog/            开发日志（按批次一篇，当前 001–118）

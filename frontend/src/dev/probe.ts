@@ -2210,6 +2210,52 @@ export async function runUiProbe(): Promise<void> {
     return
   }
 
+  // 置顶动态（R35，devlog/139）：用户口径「将抓取到的置顶动态同样置顶」。
+  // 这条量的是**渲染结果**：帖子里列表第 1 张是不是那张置顶帖、有没有角标与
+  // `is-pinned` 类；排序口径由后端 `paginated` 负责（pytest 已钉），这里钉接线。
+  // 种数据在 CLI 侧（`_seed_pinned` 往副本 DB 写一条 2020 年的置顶帖 + 一条新对照帖），
+  // 断言也在 CLI 侧（对照帖必须**没有**角标，防"所有卡片都挂角标"的假绿）。
+  if (mode === 'pinned') {
+    const result: Record<string, unknown> = {}
+    const text = (el: Element | null | undefined) => (el?.textContent || '').trim()
+    const waitFor = async (fn: () => unknown, ms = 10000) => {
+      const t0 = performance.now()
+      while (performance.now() - t0 < ms) {
+        const v = fn()
+        if (v) return v
+        await sleep(100)
+      }
+      return null
+    }
+    // 切到「帖子列表」视图。⚠️ 视图钮的可读名字在 `title` 上（`textContent` 是短标签），
+    // 与上面的 `clickView` 同一套约定 —— 只按文本找会一个都找不到（第一次跑就是这么假红的）
+    const btn = [...document.querySelectorAll<HTMLElement>('.view-btn')]
+      .find((b) => ((b as HTMLElement).title || '').startsWith('帖子列表')
+        || text(b).includes('帖子列表'))
+    result.viewFound = !!btn
+    if (!btn) degraded.push('view-btn:帖子列表')
+    btn?.click()
+    await waitFor(() => {
+      const n = document.querySelectorAll<HTMLElement>('.post-card')
+      return n.length ? n : null
+    })
+    const all = [...document.querySelectorAll<HTMLElement>('.post-card')]
+    result.cardCount = all.length
+    result.cards = all.slice(0, 60).map((c) => ({
+      title: text(c.querySelector('.post-card-title')),
+      pinned: !!c.querySelector('.post-card-pin'),
+      isPinnedClass: c.classList.contains('is-pinned'),
+    }))
+    result.degraded = degraded
+    const pre = document.createElement('pre')
+    pre.id = 'ui-probe'
+    pre.textContent = JSON.stringify({ mode: 'pinned', views: [], degraded,
+                                       pinned: result })
+    document.body.appendChild(pre)
+    document.title = 'UI_PROBE_DONE'
+    return
+  }
+
   // 首次点 ✕ 的询问流程（`?probe=close-ask`，R20 devlog/097）：
   // 用户 2026-09-15 报的 bug 就在这条链路上（选了"最小化到托盘"之后，托盘「退出」退不出去）。
   // 托盘菜单本身是 OS 级、无头浏览器点不到，但**前端这一半**全能断言：

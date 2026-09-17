@@ -1,6 +1,6 @@
 # 后端架构总览：数据模型 + 抓取技术架构
 
-> 适用版本：`main`（2026-09-13，`MIGRATION_HEAD = f004`）。
+> 适用版本：`main`（2026-09-17，`MIGRATION_HEAD = f005`）。
 > 本文是**入口文档**：先看这里建立全貌，再按需进两份深度文档——
 > - `docs/GLOSSARY.md`：**查名词/代码路径**（改 bug 或做需求第一步）；
 > - `docs/backend-repositories-and-routers.md`：11 张表的列级定义、11 个仓储类、HTTP 路由计数（三种数法见该文 §3）；
@@ -37,7 +37,7 @@ flowchart TB
     APP --> AUTH["auth 维护协程<br/>B 站 cookie 续期"]
   end
 
-  S --> DB[("SQLite vtuber.db（WAL）<br/>11 张表 / alembic a001→f004")]
+  S --> DB[("SQLite vtuber.db（WAL）<br/>11 张表 / alembic a001→f005")]
   S --> FS["DATA_DIR/static：头像 / 自定义背景 / 图片代理缓存"]
   HTTP --> UI["前端 Vite + React（只读渲染 + 轮询 fetch-status）"]
 ```
@@ -61,7 +61,7 @@ tenacity / httpx / fetcher），经 `_sched()` 缓存包装首次调用才导入
 
 ---
 
-## 2. 数据模型（11 张表 · 迁移链 a001 → f004）
+## 2. 数据模型（11 张表 · 迁移链 a001 → f005）
 
 ### 2.1 ER 总览
 
@@ -102,6 +102,8 @@ erDiagram
     string type
     datetime published_at
     bool is_archived
+    bool is_pinned
+    datetime pinned_refreshed_at
     datetime last_seen_at
     datetime deleted_detected_at
   }
@@ -189,9 +191,9 @@ erDiagram
 | `d002` | `vtubers.background_path` | `e006` | `live_sessions` |
 | `f001` | `posts.note`（投稿动态并入后的 UP 主附言） | `e007` | `live_category_overrides` |
 | `f002` | `accounts.sort_order` + `accounts.locked_fields`（后者 f004 已删） | `f003` | `app_meta`（KV 表） |
-| `f004` | `vtubers.sign_override / sign_source_account_id` + `vtuber_field_history`，**删除 `accounts.locked_fields`** = 当前 head（devlog/074） | | |
+| `f004` | `vtubers.sign_override / sign_source_account_id` + `vtuber_field_history`，**删除 `accounts.locked_fields`**（devlog/074） | `f005` | 置顶动态：`posts.is_pinned / pinned_refreshed_at` + 索引 `ix_posts_platform_uid_pinned` = **当前 head**（devlog/139） |
 
-> 共 **17** 个版本（`alembic/versions/` 实际文件数：`a001`–`f004`）。f001–f003 由 v0.9.6–v0.9.8 批次引入，f004 见 devlog/074。
+> 共 **18** 个版本（`alembic/versions/` 实际文件数：`a001`–`f005`）。f001–f003 由 v0.9.6–v0.9.8 批次引入，f004 见 devlog/074、f005 见 devlog/139。
 
 启动迁移四形态（`app/main.py::_run_migrations`，冷启动快路径）：
 
@@ -645,6 +647,11 @@ flowchart LR
     无关，因此可在「每档 `asyncio.run()` 各起一循环」的模型下安全共享；
 12. **增量停止必须整页扫完 + 豁免置顶帖**：平台会在流首插乱序条目（微博 `isTop` 可多条、
     B 站 `module_tag.text=置顶`），「遇已入库即 break」会漏掉同页靠后的新帖（devlog/045）；
+    **R35 起这条再加两半**（devlog/139）：① 置顶帖**不再当「跳过不管」**——每轮都要刷新
+    （列表页字段免费刷、详情接口按 `settings.PINNED_DETAIL_REFRESH_HOURS` 节流），
+    否则作者换了周表/舰礼图库里还是首次抓到的版本（`_safe_store_post` 遇唯一约束只
+    跳过**不更新**）；② 置顶集合**只在第一页同步**（平台只把置顶放首页），空集合即
+    「当前没有置顶」⇒ 撤销；**抓取失败的那一轮绝不能调同步**，否则会把置顶标记整片清空；
 13. **一条数据的多来源在写入侧合并**：B 站投稿的 `video`（arc/search）与 `video_dynamic`
     （动态流，同 bvid）只保留前者，动态附言进 `posts.note`（devlog/047）；
 14. **场次合并要防「开放式区间」**：`end_at` 缺失既可能是「正在直播」也可能是「数据未定稿」，
@@ -666,7 +673,7 @@ flowchart LR
 |---|---|
 | 接入新平台（抖音/小红书…） | 继承 `platforms/base.py::BasePlatform` → `platforms/registry.py` 注册 → 前端平台常量；调度器自动接管 |
 | 接入新第三方源 | 实现 `externals/base.py::ExternalSource` → `externals/__init__.py` 注册（声明 `jobs` 与周期） |
-| 新增表/列 | 新建 `alembic/versions/{fNNN}_*.py`（编号按**实际实施顺序**顺延，当前 head `f004` = 签名来源/覆盖 + `vtuber_field_history`）→ 同步 `MIGRATION_HEAD` → 补 `models` 与 Repo → 若挂 `accounts/vtubers` 外键，**同步 `services/purge.py`** |
+| 新增表/列 | 新建 `alembic/versions/{fNNN}_*.py`（编号按**实际实施顺序**顺延，当前 head `f005` = 置顶动态 `posts.is_pinned / pinned_refreshed_at`）→ 同步 `MIGRATION_HEAD` → 补 `models` 与 Repo → 若挂 `accounts/vtubers` 外键，**同步 `services/purge.py`** |
 | 用户手改的字段被抓取覆盖 | **不再需要锁定**（`accounts.locked_fields` 已随 f004 删除）：抓取照常覆盖，覆盖前把旧值写进 `services/vtuber_history.py::record_field_change()`。⚠️ 记录只在**平台侧覆盖前**发生（手改不入账，devlog/075）；展示暂缓 —— 归入「账号信息历史快照」那条线（§TODO R9） |
 | 调整抓取频率/节流 | `app/core/config.py`（T0-T4 周期、请求间隔、批量休息、风控冷却） |
 | 新增前端视图 | `docs/UI-MAP.md`（右栏视图光条 + 场景状态机） |

@@ -1187,6 +1187,31 @@ img.hero-avatar {
   backdrop-filter: blur(2px);
 }
 
+/* ── R35 置顶动态（devlog/139）：角标 + 一圈粉色描边 ──
+   描边叠在浮片阴影之上而不是画左边条：卡片是「封面 + 正文」横排，左边条会被
+   封面图吃掉；描边与封面有无无关，扫一眼就能看出这条为什么不在时间线上 */
+.post-card.is-pinned {
+  box-shadow: var(--pill-shadow), 0 0 0 1px rgba(251, 119, 161, 0.55);
+}
+
+.post-card.is-pinned:hover {
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.16), 0 0 0 1px rgba(251, 119, 161, 0.72);
+}
+
+.post-card-pin {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  align-self: flex-start;
+  padding: 0 7px;
+  border-radius: 3px;
+  background: rgba(251, 119, 161, 0.14);
+  border: 1px solid rgba(251, 119, 161, 0.45);
+  color: #d1517f;
+  font-size: 12px;
+  line-height: 17px;
+}
+
 /* 详情窗口：头部驻留区（标题……X 钉在面板顶部，不随内容滚动，滚动条不覆盖；
    2026-09-07 user 定案；X 为 radix 绝对定位（top-4 right-4），落在本区右缘） */
 .pd-head {

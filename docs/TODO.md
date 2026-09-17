@@ -36,24 +36,21 @@
 | # | 日期 | 一句话需求 | 期望效果（可选） | 优先级 | 状态 |
 |---|---|---|---|---|---|
 | **R25** | 2026-09-16 | **把消息推送到其他平台**（把"某 V 开播 / 发了新动态"这类事件推到外部渠道，让用户不必开着界面也能收到） | 后台常驻时也能第一时间收到通知 | 低 | 📋 **待排期（用户 2026-09-16：再往后放 —— "可能要很后面才会开发"）**。⚠️ **前提约束**：**后台/托盘挂起期间必须保持"尽可能快"的抓取节奏**——所以 R24 的"隐藏后降频"被**明确取消**：降频会直接拖慢推送时效。设计时要顺着这条走（见 `ARCHITECTURE.md` §3.10 第 4 条） |
-| **R35** | 2026-09-17 | **置顶动态跟着置顶**：有些 V 用置顶动态放周表 / 舰礼，抓到的置顶帖也要钉在列表顶部，并且**每日轮询要覆盖它**，改了能及时被捕捉 | 周表/舰礼不用翻旧帖找；改了就能看到 | 中 | 📋 **已受理**（方案见下方「R35–R37 方案要点」）—— 后端**已识别**置顶但**没落库、也不刷新**，成本主要在迁移 + 刷新路径 |
+| **R35** | 2026-09-17 | **置顶动态跟着置顶**：有些 V 用置顶动态放周表 / 舰礼，抓到的置顶帖也要钉在列表顶部，并且**每日轮询要覆盖它**，改了能及时被捕捉 | 周表/舰礼不用翻旧帖找；改了就能看到 | 中 | ✅ **已落地**（devlog/139）→ 详见 `docs/ROADMAP-DONE.md`「需求清单：R35」。迁移 `f005` 落 `posts.is_pinned`；置顶帖每轮刷新（列表页字段免费、详情按 6h 节流）、取消置顶自动撤销、列表排最前 + 「置顶」角标 |
 | **R36** | 2026-09-17 | **场次详情别空着**：上游数据没回来时，左列封面下方用一张「信息胶囊卡」填充（不要空着），右侧卡片高度也要固定，防止数据一到弹窗长度跳变 | 打开即完整，不跳动、不出现"加载中…" | 中 | 📋 **已受理**（方案见下方）—— 与项目"没有正在加载闪帧"的既有口径一致，属于同一类问题的最后一个缺口 |
 | **R37** | 2026-09-17 | **档案视图 = 自定义卡片画布**：把"档案卡"这一版做成**以卡片为单位**，用户能编辑卡片的大小 / 位置 / 排布，卡片内容可自定义（纪念日、优质投稿、大事记、时间线…），并**支持扩展** | 每个 V 的档案页由用户自己搭 | 中 | 📋 **已受理（建议分三批）**（方案见下方）—— 命名先定：**直播日历+粉丝趋势 → 「数据视图」**、**档案卡 → 「档案视图」**。这是本仓最大的一次前端结构改动，必须分批 + 每批带护栏 |
 | **R38** | 2026-09-17 | **状态胶囊的灵动岛式形变**：顶栏状态胶囊要"优雅灵动"地**向中间收起 / 展开**，为之后想做的**桌面独立控件**打基础 | 状态变化时是"同一块东西在长大/收拢"，不是闪现一块板 | 中 | 📋 **已受理**：**设计规格已落 `docs/design-status-island.md`**（动效令牌 / 时间轴 / 同心圆角 / 两种宿主材质 / 可断言的不变量 / 5 个批次）—— 动效是"看着好不好"的事，先把规格定下来再实现，评审才有依据 |
 
 > **R35–R37 方案要点（2026-09-17 受理；代码位置都已核实过）**
 >
-> **R35 置顶动态** —— 现状：`fetcher.py` 用 `modules.module_tag.text == "置顶"` 出 `pinned_ids`（微博走 `isTop`），
-> `scheduler.py` 的**增量停止已经豁免置顶**（否则置顶会把整页新帖漏掉，devlog/045）。**缺三处**：
-> ① **没落库** —— `posts` 表没有置顶列，置顶帖按 `published_at` 排进它自己的时间位（周表是 8 月发的就沉到 8 月）；
-> ② **已入库的置顶帖不更新** —— 增量路径对"已入库"直接 `skipped++ / continue`（`scheduler.py` L1611–1620），
-> 所以置顶被换成新周表时**内容不会刷新**（正是用户说的"保证修改及时被捕捉到"）；
-> ③ **前端没有置顶位** —— 列表 `ORDER BY published_at DESC`（`vtuber_repo.py` L815/863），`PostCard` 只有删除徽章与药丸行。
-> 改法：迁移 `f005` 加 `posts.is_pinned` → 抓取时把 `pinned_ids` 传进入库层（新帖写标记 + **在列则强制刷新** + **不在列则撤销**，
-> 否则取消置顶后永远钉着）→ 列表 `ORDER BY is_pinned DESC, published_at DESC` → 前端列表头固定区 + 「置顶」徽章。
-> 护栏：后端用例（落库 / 刷新 / 撤销 / 排序契约）+ 探针（种一条置顶帖 → 断言列表首条、徽章存在且普通帖没有）。
-> **要拍板**：置顶帖是否参与分页（我建议**不参与**，永远钉在头部，翻页只翻非置顶，避免跨页重复）；
-> 取消置顶要不要进墓碑留痕；「数据视图」与导出里是否也要体现置顶。
+> **R35 置顶动态** —— ✅ **已落地（devlog/139）**：迁移 `f005` 落 `posts.is_pinned / pinned_refreshed_at`；
+> `PostRepo.sync_pinned` 在**第一页解析成功后**同步集合（标记 + 撤销），`scheduler._refresh_pinned_post`
+> 让置顶帖**每轮刷新**（列表页字段免费刷、详情按 `PINNED_DETAIL_REFRESH_HOURS` 默认 6h 节流，失败不盖戳）；
+> 列表排序 `is_pinned desc, published_at desc`；前端 `.post-card-pin` 角标 + 一圈粉描边；
+> 护栏：`tests/test_pinned_posts.py` **12 条**（反向验证 7/7 红）+ 第 **17** 个探针 `ui_probe.py --pinned`（反向验证 2/2 红）。
+> **三个小口径的定论**（2026-09-17）：① 置顶帖**不单独分页**——它只占第 1 页头部一次，跨页不重复
+> （`total` 也不因置顶变化）；② 取消置顶**不进墓碑、不留痕**（静默撤销，帖子回时间线原位）；
+> ③ 「数据视图」与导出**本轮不体现置顶**（那是"证据时间线"，保持纯时间序；要动留到 R37 再评估）。
 >
 > **R36 场次详情占位** —— 现状：`LiveSessionDialog.tsx`（`.lc-dlg`）左列 `.lc-dlg-cover` 是封面 + 状态徽章，
 > 右列 `.lc-dlg-sec` 是「直播信息」；上游（danmakus 的弹幕词云 / 场次指标 / 直播动态）没回来时，
@@ -166,7 +163,6 @@
 
 | **R18 关闭窗口 → 隐藏到系统托盘** | ✅ **已落地**（2026-09-15，devlog/095） | 用户口径：首次点 ✕ 问一次并记住选择；P1（隐藏+停表）与 P2（深休眠）一起做。<br>**Rust**：`tray-icon` feature + 托盘（左键唤回 / 菜单退出）· 拦 `CloseRequested` → `prevent_close` + `hide` + `set_skip_taskbar` · `ExitRequested` 非主动退出时 `prevent_exit`（**深休眠销毁 WebView 也会走到这里，这条是必须的**）· 退出路径（**R20 起不依赖前端**：托盘「退出」先问后端 `fetch-status.manual_running`，没任务直接 `exit(0)`，有任务才唤回窗口确认）→ `quit_app`（置 `QUITTING` 再 `exit`）· 深休眠 10 分钟销毁 WebView，唤回重建窗口 + `?restored=1` · single-instance 回调改成唤回（原来只 `set_focus`，隐藏时等于点了没反应）。<br>**前端**：`utils/shellLifecycle`（同步可见性源 + dev 钩子）+ `hooks/useShellHidden`（停表：顶栏两条轮询 / 状态岛轮播；恢复：**立刻补一轮**）+ `utils/shellState`（关闭语义三态 + 深休眠现场持久化，路径/视图**都过校验**）+ `CloseActionDialog`（首次询问，两个选项各自写清后果）+ 设置「外观」页可改。<br>**护栏**：新探针 `--tray-suspend`（可见基线 → 隐藏停表 → 唤回补一轮）· vitest +17 · `cargo build` 通过 · 人工验收清单在 devlog/095 与 DEV-LOOP。<br>⚠️ **探针抓到两个真 bug**：① 停表判据读了 React 状态（有一帧延迟）→ 改读同步源；② 只在"排程"时判不够 —— 定时器可能是**还可见时**排下的 10s 后那一轮，隐藏后照样触发（实测漏网时刻 22063 / 隐藏发生在 14349）⇒ **"排程"与"触发"两处都要判** |
 
-| **R35 置顶动态跟真·置顶** | 后端 + 前端，无阻塞 | **后端已识别置顶**（`fetcher.py` 的 `pinned_ids` / 微博 `isTop`，增量停止也已豁免）⇒ 只缺"落库 + 刷新 + 撤销 + 排序 + 徽章"五步（迁移 `f005` 加 `posts.is_pinned`）。方案与拍板点见 §0「R35–R37 方案要点」 |
 | **R36 场次详情占位胶囊卡** | 前端，无阻塞 | `LiveSessionDialog.tsx` 左列封面下方加 `.lc-dlg-glance`（胶囊卡：已有数据先渲染、上游未回用同尺寸占位胶囊），右列卡片与它一起定 `min-height` ⇒ 数据到达前后高度差 0；顺带把 `.lc-dlg-ph` 的「加载中…」换成骨架。护栏扩 `ui_probe --archive` 连采两格 |
 | **R37-P1 档案视图：命名 + 网格骨架 + 2 种卡片** | 前端，无阻塞（P2/P3 见 §0） | 先把「档案卡 → 档案视图」「档案 → 数据视图」的命名落地 + 只读网格 + 纪念日/优质投稿两种卡片（数据现成：`vtubers.birthday`/`debut_date`、`posts` 统计）。**动之前先拍 §1.2 的三个选型** |
 | **R38 状态胶囊形变动效** | 前端（规格已就绪，见 `docs/design-status-island.md`） | 按规格的 5 批走：① motion token 化（零行为变化）→ ② 胶囊折叠/展开形变 → ③ 面板锚定 + 同心圆角 → ④ 打断/重定向 → ⑤ `density="widget"` + 独立小窗（**桌面控件本体**）。护栏照规格 §10 的不变量写（顶栏高度恒定 / 右簇位移 <1px / 锚点误差 ≤0.5px / 中间态圆角恒为高度半 / 可打断 / reduced-motion 只留淡入） |
@@ -178,7 +174,6 @@
 
 | 项 | 卡在哪 | 现状 |
 |---|---|---|
-| **R35 置顶帖要不要参与分页** | 口径 | 我建议**不参与**：永远钉在列表头，翻页只翻非置顶（否则置顶跨页会重复出现）。另两个小口径：取消置顶要不要进墓碑留痕；「数据视图」与导出里要不要也体现置顶（见 §0「R35–R37 方案要点」） |
 | **R37 档案视图的三处选型** | 网格引擎 / 存储 / 交互 | ① 自研 CSS Grid 拖拽缩放（可控、探针可断言）vs `react-grid-layout`；② 新表 `profile_cards` vs 挂在 `vtubers` 上的布局 JSON；③ 碰撞规则是"推开"还是"拒绝"、编辑态与阅读态是否分离、窄窗怎么降级 |
 | **场次级「直播内容分析」服务** | 要先定分析口径（独立产品级） | 接口字段早已预留（`analysis`），详情弹窗显示"接口已预留"。devlog/035 |
 | **原始弹幕明细库 / 全量分析** | 要不要做、以什么粒度落库（这是独立产品级决策） | **通道已实测可用且已被真实使用**：`/api/v3/lives/{liveId}/danmakus` 公开免鉴权 + `offset/limit` 分页（max 100000，含弹幕原文/礼物/上舰/SC）；词云自建（devlog/061）就走这条路，只差"落表 + 前端下钻"。devlog/060 §一.2 |
@@ -345,21 +340,21 @@
 > 索引已移入 **`docs/ROADMAP-DONE.md` → 「批次 → devlog 索引」**（2026-09-13 整理：
 > 本文件只留"要干什么"与当前基线，历史索引与已完成条目同处一份文件更好查）。
 
-### 6.2 当前门禁基线（2026-09-16 实测 / 复核，R24 批次）
+### 6.2 当前门禁基线（2026-09-17 实测 / 复核，R35 批次）
 
 | 门禁 | 命令 | 基线 |
 |---|---|---|
-| 后端 | `python -m pytest -q` | **503 passed**（2026-09-16 实测；上次记录 455 —— 期间 R22 周边 / R23 更新链 / R24 / 发布脚本续跑判据 / **R27 风控冷却 12 条** / **R26 设备指纹 6 条 + UA 卫生 5 条** / **R28 动态流节流 9 条** / **R30 静默时段 9 条** 共 +48。分项：R11 检索 16 + API 5；发布脚本 30；管线复盘 15；未登录能力 24；R13 路由契约 +1；R12a 风控字段 +1；R14a 运行时设置 +24；R14b 偏好 +5；**R18 关闭语义偏好 +1**；**R20 文案扫描（禁 `**` 与反引号）+1 / prefs 白名单 +1**；**R21 导航只有两大类 / 关键项白名单 / 成对不拆散 +3**；**R22 数据目录体检与库维护 7 / 图片缓存上限 5 / 存储接口与缓存全清 6**；**R27 风控冷却与状态契约 12（`tests/test_rate_limit.py`，含"写库→清内存→读回"与"按平台隔离"）**；**R26① 设备指纹 6（`tests/test_auth.py`：名字/冲突优先级/领号与落盘/失败静默）+ R26②③ UA 卫生 5（`tests/test_user_agent.py`：单一来源扫描 / 版本自洽 / 无 `Connection` / 六个消费方同源 / 机器人 UA 跟版本）**；**R28 动态流节流 9（`tests/test_dynamics_backoff.py`：档位/计数/预算真上限/两条接线）**；**R30 静默时段 9（`tests/test_quiet_hours.py`：时段边界与跨午夜 / `START==END` 不生效 / 与空闲档取更保守 / **T0 不受影响的源码级护栏**）**；含 1 条真实网络冒烟，离线环境会 skip） |
-| 桌面壳 | `cargo test`（工作目录 `frontend/src-tauri`） | **28 passed**（2026-09-16 实测；上次记录的 2 只涵盖 R18 那两条 —— 期间 R22 目录指针/迁移判定、R24a 看门狗退避、**R29 托盘状态文案复位**等陆续补齐。托盘退出判据仍在：`manual_running` 字段识别 / 字段缺失或异常一律当"没在跑"） |
+| 后端 | `python -m pytest -q` | **520 passed**（2026-09-17 实测；上次记录 503 —— 期间 **R32 体检脚本 5**、**R35 置顶动态 12**，共 +17。分项：R11 检索 16 + API 5；发布脚本 30；管线复盘 15；未登录能力 24；R13 路由契约 +1；R12a 风控字段 +1；R14a 运行时设置 +24；R14b 偏好 +5；**R18 关闭语义偏好 +1**；**R20 文案扫描（禁 `**` 与反引号）+1 / prefs 白名单 +1**；**R21 导航只有两大类 / 关键项白名单 / 成对不拆散 +3**；**R22 数据目录体检与库维护 7 / 图片缓存上限 5 / 存储接口与缓存全清 6**；**R27 风控冷却与状态契约 12（`tests/test_rate_limit.py`，含"写库→清内存→读回"与"按平台隔离"）**；**R26① 设备指纹 6（`tests/test_auth.py`：名字/冲突优先级/领号与落盘/失败静默）+ R26②③ UA 卫生 5（`tests/test_user_agent.py`：单一来源扫描 / 版本自洽 / 无 `Connection` / 六个消费方同源 / 机器人 UA 跟版本）**；**R28 动态流节流 9（`tests/test_dynamics_backoff.py`：档位/计数/预算真上限/两条接线）**；**R30 静默时段 9（`tests/test_quiet_hours.py`：时段边界与跨午夜 / `START==END` 不生效 / 与空闲档取更保守 / **T0 不受影响的源码级护栏**）**；**R32 `tests/test_perf_report.py` 5（进程树解析纯函数，含"端口取最后一条 boot 行"）**；**R35 `tests/test_pinned_posts.py` 12（集合同步标记/撤销 / 排序与跨页不重复 / 节流窗口与失败不盖戳 / B 站与微博两条循环接线；含文档门禁 `test_doc_check.py` 2 条）**；含 1 条真实网络冒烟，离线环境会 skip） |
+| 桌面壳 | `cargo test`（工作目录 `frontend/src-tauri`） | **32 passed**（2026-09-17 实测；上次记录 28 —— 期间 R33 头像/登录态相关、R34 DWM 圆角判据 `dwm_corners_ok` 各补若干。托盘退出判据仍在：`manual_running` 字段识别 / 字段缺失或异常一律当"没在跑"） |
 | 未登录能力矩阵 | `python scripts/capability_matrix.py [--include-content] --write` | 两态逐接口实测，fixture 落 `tests/fixtures/capability_matrix.json`；结论：匿名可用 = 检索 / 粉丝数 / 直播状态 / 第三方 / 本地，**内容接口 412 需登录**（devlog/086） |
 | 文档漂移 | `python scripts/doc_check.py`（或 `dev_check.py --docs`） | **0 FAIL**（1 条历史警告：41 篇早期 devlog 按批次未逐篇进索引） |
 | 上游冒烟 | `python scripts/smoke_upstream.py [--cold]`（或 `dev_check.py --upstream`） | 真上游 **5 ok / 0 FAIL**；冷进程 **3 ok / 0 FAIL**（未登录三态） |
 | 前端类型 | `npx tsc --noEmit`（`npm run build` 也会跑） | **0 错** |
 | 前端 lint | `npm --prefix frontend run lint` | **0 错**（`--max-warnings 0`） |
-| 前端单测 | `npm --prefix frontend run test` | **266 passed**（24 个文件；2026-09-16 实测，较上次记录 256 +10 —— R23d 更新错误分类 +4、**R29 托盘状态行 +6**。分项：`addVtuberSearch` 7 · `capabilities` 6 · `dialogFoot` 3 · `format` 21 · `reservationDays` 9 · `notificationHub` 12 · `idleQuotes` 18 · `settingsDraft` 22 · `settingsNav` 16 · `theme` 13 · `shellState` 11 · `shellLifecycle` 6 · **`trayStatus` 5** · 其余既有） |
+| 前端单测 | `npm --prefix frontend run test` | **283 passed**（26 个文件；2026-09-17 实测，较上次记录 266 +17 —— **R31 场景机 `sceneStep` +11**、**R33 头像取值 `avatarSource` +6**。分项：`addVtuberSearch` 7 · `capabilities` 6 · `dialogFoot` 3 · `format` 21 · `reservationDays` 9 · `notificationHub` 12 · `idleQuotes` 18 · `settingsDraft` 22 · `settingsNav` 16 · `theme` 13 · `shellState` 11 · `shellLifecycle` 6 · `trayStatus` 5 · **`sceneStep` 11** · **`avatarSource` 6** · 其余既有。R35 的置顶渲染没进这一层：本仓 vitest 跑 node 环境（无 jsdom），组件渲染由探针 `--pinned` 守） |
 | 词云布局 | `node scripts/check_wordcloud_layout.mjs` | sha256 `19ecc7e673b95c8a1fa7c8c219ada78e9b581a15764aa57b33a7de473fc63dac`（本轮实跑一致 ✓） |
-| 布局探针 | `python scripts/ui_probe.py --hero-expect c11548580e73d910ca667047b8120075a4ab121fa3fa098ff6654326ed183666 --vtuber 15`<br>`python scripts/ui_probe.py --archive --vtuber 15`（`--archive-print` 出签名）<br>`python scripts/ui_probe.py --settings --vtuber 15`（两个带签名账号）/ `--vtuber 14`（单账号长签名）<br>`python scripts/ui_probe.py --scene --vtuber 15`<br>`python scripts/ui_probe.py --add-v --vtuber 15`（R11）<br>`python scripts/ui_probe.py --capabilities`（未登录现场）<br>`python scripts/ui_probe.py --polish`（R15 三处打磨）<br>`python scripts/ui_probe.py --reservations`（R13：**探针自己种预约**进数据副本）<br>`python scripts/ui_probe.py --status-island`（R12a/R12b 顶栏状态岛）<br>`python scripts/ui_probe.py --app-settings`（R14a/R14b/R17 应用设置：**会写盘**，跑在数据副本上；`--shot` 出视觉存档）<br>`python scripts/ui_probe.py --filter-pill`（R16 两枚筛选浮片逐项对账 + 三态文字居中/caret 间距）<br>`python scripts/ui_probe.py --tray-suspend`（R18 托盘隐藏停表：可见基线 → 隐藏停表 → 唤回补一轮）<br>`python scripts/ui_probe.py --close-ask`（R20 首次点 ✕ 的询问流程：ask 弹框 → 记住 → 隐藏 → 再点不再问）<br>`python scripts/ui_probe.py --switch-perf --vtuber 15`（**R31/性能基线**：视图与 V 切换的「点击 → 目标可见」分布 + 连点 + 长任务；**测量模式、不是不变量门禁**，只在"没切成"时判失败） | 十五条实跑通过（hero 三档签名一致 `c1154858…` / settings 29 项 / scene 提交 250ms / add-v 来源分流 / capabilities 未登录提示 / **polish：标题 700 文本宽 114.3/150、筛选钮文字左右各 31.5px·中心偏移 0·caret absolute、徽标「+」空闲高度 0·不可命中·徽标→分割线 10px、hover 37px 可命中** / **filter-pill：list 那枚与侧栏那枚配方一致（STYLE 逐项相等 / SIZE 各行其是），三态文字居中且 caret 不压字** / **reservations：预约格徽章「预约」+ 计数槽 `128 人预约` + 标题、hover 浮层条目** / **status-island（R19 后）：空闲无容器 + 空闲文案恒为「数据服务运行中」·`data-idle-carousel='off'`·池 8 格（扩展点还在）→ 消息点亮 → 面板可命中不挤动右栏 → Esc 收起 → 入场动画挂上 → ttl 过期自清** / **app-settings（R17 两栏 / R21 分组、折叠、排版与控件）：导航 4 项与后端分组一致（外观 / 抓取设置 / 数据源 / 关于）→ 页内小组 5 个（顺序 = 后端声明序）→ 可见字段**恰好**等于后端非高级集 → 「高级」**默认收起**（收起时 DOM 里 0 行，不是渲染后隐藏）→ 展开后恰好等于后端高级集 8 项 → 换页自动收回 → 两栏几何/命中 → 分页只渲染当前页 → 圆点标对页且切页不丢草稿 → 越界被拦 → 保存回问后端 10→7 → 关于页只读带理由且无可写控件 → 恢复默认回 10 → 主题三卡（深色只标不藏）→ Esc 关闭** ｜ **R21 批 2 量化：排版字段名 14px/600 · 说明 12px · 行内距 9px · 小组标题 13px；步进条高 30 / 内框 0px / 点「+」得 8、点「-」回 7 / 上界「+」置灰而「-」仍可用；开关滑块 32×18 · 圆点 14 · 外壳 border·padding 0 且底色透明 · 有 `--pill-shadow` 投影 · 文案只有「开/关」** ｜ **R21 批 3：二级弹窗页脚 = `.float-pill` + 主操作带 `.on` + 可命中（`--app-settings` 2 钮 / `--capabilities` 去登录 / `--close-ask` 取消 / `--settings` 账号历史各断言自己那个弹窗）** / **tray-suspend：可见 1 次 → 隐藏 0 次（轮播也停）→ 唤回立刻补 1 次** / **close-ask：ask 弹框（两选项+记住）→ 选托盘写偏好并隐藏 → 再点不再问**）。记录值：`--archive` 日历签名 **`50b78ec0…`**（2026-09-15 20:5x 实测；17:00 那次 `48519bae…` 的差异来自当晚 V15 新落库两场直播 —— **数据漂移、非代码**） |
-| 一把梭 | `python scripts/dev_check.py` | **语法扫描**（105 个 .py，约 0.2s；补它的原因见 devlog/131：`scripts/` 不被任何其它门禁编译）+ 测试 + 后端冒烟（详见 `docs/DEV-LOOP.md`） |
+| 布局探针 | `python scripts/ui_probe.py --hero-expect c11548580e73d910ca667047b8120075a4ab121fa3fa098ff6654326ed183666 --vtuber 15`<br>`python scripts/ui_probe.py --archive --vtuber 15`（`--archive-print` 出签名）<br>`python scripts/ui_probe.py --settings --vtuber 15`（两个带签名账号）/ `--vtuber 14`（单账号长签名）<br>`python scripts/ui_probe.py --scene --vtuber 15`<br>`python scripts/ui_probe.py --add-v --vtuber 15`（R11）<br>`python scripts/ui_probe.py --capabilities`（未登录现场）<br>`python scripts/ui_probe.py --polish`（R15 三处打磨）<br>`python scripts/ui_probe.py --reservations`（R13：**探针自己种预约**进数据副本）<br>`python scripts/ui_probe.py --status-island`（R12a/R12b 顶栏状态岛）<br>`python scripts/ui_probe.py --app-settings`（R14a/R14b/R17 应用设置：**会写盘**，跑在数据副本上；`--shot` 出视觉存档）<br>`python scripts/ui_probe.py --filter-pill`（R16 两枚筛选浮片逐项对账 + 三态文字居中/caret 间距）<br>`python scripts/ui_probe.py --tray-suspend`（R18 托盘隐藏停表：可见基线 → 隐藏停表 → 唤回补一轮）<br>`python scripts/ui_probe.py --close-ask`（R20 首次点 ✕ 的询问流程：ask 弹框 → 记住 → 隐藏 → 再点不再问）<br>`python scripts/ui_probe.py --switch-perf --vtuber 15`（**R31/性能基线**：视图与 V 切换的「点击 → 目标可见」分布 + 连点 + 长任务；**测量模式、不是不变量门禁**，只在"没切成"时判失败）<br>`python scripts/ui_probe.py --profile-sync --vtuber 15`（R33：左栏跟随档案设置 + 对照组）<br>`python scripts/ui_probe.py --pinned`（**R35**：置顶帖排在帖子列表第 1 张 + 角标/描边 + 对照帖不挂角标） | 十七条实跑通过（hero 三档签名一致 `c1154858…` / settings 29 项 / scene 提交 250ms / add-v 来源分流 / capabilities 未登录提示 / **polish：标题 700 文本宽 114.3/150、筛选钮文字左右各 31.5px·中心偏移 0·caret absolute、徽标「+」空闲高度 0·不可命中·徽标→分割线 10px、hover 37px 可命中** / **filter-pill：list 那枚与侧栏那枚配方一致（STYLE 逐项相等 / SIZE 各行其是），三态文字居中且 caret 不压字** / **reservations：预约格徽章「预约」+ 计数槽 `128 人预约` + 标题、hover 浮层条目** / **status-island（R19 后）：空闲无容器 + 空闲文案恒为「数据服务运行中」·`data-idle-carousel='off'`·池 8 格（扩展点还在）→ 消息点亮 → 面板可命中不挤动右栏 → Esc 收起 → 入场动画挂上 → ttl 过期自清** / **app-settings（R17 两栏 / R21 分组、折叠、排版与控件）：导航 4 项与后端分组一致（外观 / 抓取设置 / 数据源 / 关于）→ 页内小组 5 个（顺序 = 后端声明序）→ 可见字段**恰好**等于后端非高级集 → 「高级」**默认收起**（收起时 DOM 里 0 行，不是渲染后隐藏）→ 展开后恰好等于后端高级集 8 项 → 换页自动收回 → 两栏几何/命中 → 分页只渲染当前页 → 圆点标对页且切页不丢草稿 → 越界被拦 → 保存回问后端 10→7 → 关于页只读带理由且无可写控件 → 恢复默认回 10 → 主题三卡（深色只标不藏）→ Esc 关闭** ｜ **R21 批 2 量化：排版字段名 14px/600 · 说明 12px · 行内距 9px · 小组标题 13px；步进条高 30 / 内框 0px / 点「+」得 8、点「-」回 7 / 上界「+」置灰而「-」仍可用；开关滑块 32×18 · 圆点 14 · 外壳 border·padding 0 且底色透明 · 有 `--pill-shadow` 投影 · 文案只有「开/关」** ｜ **R21 批 3：二级弹窗页脚 = `.float-pill` + 主操作带 `.on` + 可命中（`--app-settings` 2 钮 / `--capabilities` 去登录 / `--close-ask` 取消 / `--settings` 账号历史各断言自己那个弹窗）** / **tray-suspend：可见 1 次 → 隐藏 0 次（轮播也停）→ 唤回立刻补 1 次** / **close-ask：ask 弹框（两选项+记住）→ 选托盘写偏好并隐藏 → 再点不再问** / **profile-sync：左栏签名/头像与卡片同源、对照组未被污染（R33）** / **pinned：种子帖（2020 时间戳）排第 1 张 + `.post-card-pin` + `is-pinned`、首页只出现一次、对照帖无角标（R35）**）。记录值：`--archive` 日历签名 **`50b78ec0…`**（2026-09-15 20:5x 实测；17:00 那次 `48519bae…` 的差异来自当晚 V15 新落库两场直播 —— **数据漂移、非代码**） |
+| 一把梭 | `python scripts/dev_check.py` | **语法扫描**（**109** 个 .py，约 0.2s；补它的原因见 devlog/131：`scripts/` 不被任何其它门禁编译）+ 测试 + 前端静态 + 后端冒烟（详见 `docs/DEV-LOOP.md`） |
 
 > ⚠️ 探针的 `--hero-expect` / `--calendar-expect` 签名**含实时数据**，只适合"改动前后短窗口对比"，
 > 不适合当跨天基线；数据一变签名就漂（文档里的哈希值只是当时的记录值）。

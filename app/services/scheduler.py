@@ -34,6 +34,9 @@ from app.services.fetcher import (
 )
 from app.services.platforms import registry
 from app.services.post_text import extract_post_text
+from app.services.pinned_posts import (
+    DETAIL_REFRESH_TYPES, detail_refresh_due, refresh_fields,
+)
 from app.services.tombstone import apply_tombstone_scan
 from app.services.externals.runner import run_external_interval
 from app.services.weibo_auth import weibo_auth_manager
@@ -1280,6 +1283,11 @@ class PostFetchResult:
     # P9-3（v0.9.6）：并入已有投稿的「投稿动态」条数（附言已写进 video.note，
     # 不再单独入库；计入 skipped，便于前端/日志说明"少的那条去哪了"）
     note_merged: int = 0
+    # R35（devlog/139）：置顶帖刷新 —— 本轮刷新条数 / 新标记置顶 / 撤销置顶。
+    # 刷新条数**不计入 skipped**：置顶帖每轮都被显式覆盖，不是"跳过不管"
+    pinned_refreshed: int = 0
+    pinned_marked: int = 0
+    pinned_cleared: int = 0
 
 
 def _safe_json_parse(s: str | None, fallback: dict | None = None) -> dict:
@@ -1357,6 +1365,143 @@ def _absorb_video_dynamic(db: Session, platform_uid: str, item: dict,
                 Post.platform_post_id == pid,
             ).update({Post.note: text}, synchronize_session=False)
     return pid
+
+
+async def _enrich_dynamic_item(d: dict, *, client: httpx.AsyncClient | None = None) -> bool:
+    """B 站动态条目的详情补全。返回是否**真的拿到了详情**（供置顶刷新判定成败）。
+
+    新帖入库与置顶帖刷新共用同一套合并口径 —— 详情字段的取舍很细（防丢图、
+    专栏 delta、视频统计合并），两处各写一遍必然漂移。
+    """
+    got_detail = False
+
+    # 图文 / 纯文字 → detail API 拿 OPUS 格式完整数据
+    if d["type"] in ("text", "image"):
+        # 防丢图：detail（opusBigCover 特性）可能只回 1 张封面图，
+        # 若 feed 的图片数更多，保留 feed 的 images
+        feed_body = _safe_json_parse(d.get("body_json", "{}"))
+        feed_images = feed_body.get("images") if isinstance(feed_body, dict) else None
+
+        detail = await fetch_dynamic_detail(d["platform_post_id"], client=client)
+        if detail:
+            for key in ("title", "summary", "cover_url", "body_json", "stats_json",
+                         "permalink", "raw_json", "published_at"):
+                if key in detail and detail[key] is not None:
+                    d[key] = detail[key]
+            if feed_images:
+                detail_body = _safe_json_parse(d.get("body_json", "{}"))
+                if len(detail_body.get("images") or []) < len(feed_images):
+                    detail_body["images"] = feed_images
+                    d["body_json"] = _json.dumps(detail_body, ensure_ascii=False, default=str)
+            await asyncio.sleep(random.uniform(0.5, 2.0))
+            got_detail = True
+        else:
+            logger.warning(f"动态详情获取失败 id={d['platform_post_id']}, 使用 feed 数据")
+
+    # 专栏 → 拉取全文
+    if d["type"] == "article":
+        body = _safe_json_parse(d.get("body_json", "{}"))
+        cv_id = body.get("cv_id") if isinstance(body, dict) else None
+        if cv_id:
+            detail = await fetch_article_detail(cv_id, client=client)
+            if detail:
+                d["body_json"] = _json.dumps({**body, "content": detail["content"]}, ensure_ascii=False, default=str)
+                # 修复：Delta 富文本专栏 → 补 delta 字段 + 纯文本（列表摘要用）
+                if detail.get("delta"):
+                    d["body_json"] = _json.dumps({
+                        **_safe_json_parse(d["body_json"], {}),
+                        "delta": detail["delta"],
+                        "text": detail["delta_text"] or body.get("text", ""),
+                    }, ensure_ascii=False, default=str)
+                d["summary"] = detail["summary"] or detail.get("delta_text") or d["summary"]
+                d["stats_json"] = _json.dumps({
+                    "view": detail.get("stats", {}).get("view", 0),
+                    "like": detail.get("stats", {}).get("like", 0),
+                    "comment": detail.get("stats", {}).get("reply", 0),
+                    "favorite": detail.get("stats", {}).get("favorite", 0),
+                }, ensure_ascii=False, default=str)
+                await asyncio.sleep(random.uniform(0.5, 2.0))
+                got_detail = True
+    elif d["type"] in ("video", "video_dynamic"):
+        body = _safe_json_parse(d.get("body_json", "{}"))
+        bvid = body.get("bvid") if isinstance(body, dict) else None
+        if bvid:
+            detail = await fetch_video_detail(bvid, client=client)
+            if detail:
+                d["body_json"] = _json.dumps({
+                    **body,
+                    "description": detail["desc"],
+                    "duration_sec": detail["duration"],
+                    "owner": detail["owner_name"],
+                    "tags": detail["tname"],
+                }, ensure_ascii=False, default=str)
+                d["cover_url"] = d["cover_url"] or detail.get("pages", [{}])[0].get("first_frame", "")
+                # 合并：详情统计（view/coin/...）+ 动态互动（forward/dyn_like/...）
+                feed_stats = _safe_json_parse(d.get("stats_json"), {})
+                d["stats_json"] = _json.dumps(
+                    {**feed_stats, **detail["stat"]}, ensure_ascii=False, default=str
+                )
+                await asyncio.sleep(random.uniform(0.5, 2.0))
+                got_detail = True
+
+    return got_detail
+
+
+async def _weibo_pinned_detail(item: dict, pf, client) -> bool:
+    """微博置顶帖的详情档包装。
+
+    平台适配器的 `enrich` 返回「是否发起了长文请求」：False = 非长文、没活干
+    （真失败时内部已经 warn 过并返回 True）。置顶刷新要的是「这一步是否完成」，
+    所以这里恒为完成 —— 既不重复告警，也正常盖时间戳（下一轮再判窗口）。
+    """
+    await pf.enrich(item, client=client)
+    return True
+
+
+async def _refresh_pinned_post(post_repo: PostRepo, platform: str, platform_uid: str,
+                               item: dict, *, detail_refresher=None) -> bool:
+    """刷新一条**已入库**的置顶帖（R35）。返回是否命中既存行。
+
+    为什么需要单独一条写路径：`_safe_store_post` 遇到唯一约束冲突只
+    `rollback` + 跳过，**永远不更新既存行** —— 作者改周表/舰礼图之后，库里还是
+    首次抓到的那个版本（用户 2026-09-17 反馈的正是这个）。
+
+    两档刷新（口径见 settings.PINNED_DETAIL_REFRESH_HOURS）：
+      · feed 级：每轮都写，零额外请求（标题/摘要/封面/互动数来自列表页响应本身）；
+      · 详情级：节流窗口内不重复请求；只有**真的拿到详情**才盖时间戳，失败时
+        保留 feed 级刷新并 warn（下轮重试）——"静默失败"不能看起来像"没更新"。
+    """
+    pid = str(item["platform_post_id"])
+    row = post_repo.by_pid(platform, platform_uid, pid)
+    if row is None:
+        return False
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    fields = refresh_fields(item, with_detail=False)      # feed 级（免费）
+    with_detail = (
+        detail_refresher is not None
+        and row.type in DETAIL_REFRESH_TYPES
+        and detail_refresh_due(row.pinned_refreshed_at, now,
+                               settings.PINNED_DETAIL_REFRESH_HOURS)
+    )
+    if with_detail:
+        # 详情请求会把新值合并进 item，必须在取 feed 级字段**之后**再取一次详情级字段
+        ok = bool(await detail_refresher())
+        clear_rate_limit()      # 详情风控标志只用于列表页判定，处理完立即清除
+        if ok:
+            fields.update(refresh_fields(item, with_detail=True))
+            fields["pinned_refreshed_at"] = now
+        else:
+            logger.warning(f"置顶动态详情刷新失败 {platform}:{platform_uid} pid={pid}"
+                           f"（本轮只刷 feed 字段，下轮重试）")
+
+    changed = [k for k, v in fields.items() if getattr(row, k, None) != v]
+    if not changed:
+        return True
+    post_repo.update(row.id, fields)
+    logger.info(f"置顶动态已刷新 {platform}:{platform_uid} pid={pid} "
+                f"来源={'详情' if with_detail else 'feed'} 字段={','.join(sorted(changed))}")
+    return True
 
 # 直播场次路由：mid → account_id（live_sessions 需账号外键；账号表稳定，进程内缓存）
 _bili_account_id_cache: dict[str, int | None] = {}
@@ -1609,6 +1754,15 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
                 result.seen_pids.append(d["platform_post_id"])
                 result.dynamics += 1
                 if d["platform_post_id"] in existing_ids:
+                    # R35：置顶帖不是"跳过不管"——每轮都刷新（feed 免费 + 详情节流），
+                    # 作者改周表/舰礼图才能被捕捉到（devlog/139）
+                    if d["platform_post_id"] in pinned_ids:
+                        if await _refresh_pinned_post(
+                            post_repo, "bilibili", platform_uid, d,
+                            detail_refresher=lambda: _enrich_dynamic_item(d, client=client),
+                        ):
+                            result.pinned_refreshed += 1
+                        continue
                     result.skipped += 1
                     # 增量模式：命中已入库即认为更早的都已入库——但**必须整页扫完
                     # 再停**，且置顶帖不算（见下）。理由：置顶帖排在流首、可多条、
@@ -1626,71 +1780,9 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
                         result.note_merged += 1
                         continue
 
-                # 图文 / 纯文字 → detail API 拿 OPUS 格式完整数据
-                if d["type"] in ("text", "image"):
-                    # 防丢图：detail（opusBigCover 特性）可能只回 1 张封面图，
-                    # 若 feed 的图片数更多，保留 feed 的 images
-                    feed_body = _safe_json_parse(d.get("body_json", "{}"))
-                    feed_images = feed_body.get("images") if isinstance(feed_body, dict) else None
-
-                    detail = await fetch_dynamic_detail(d["platform_post_id"], client=client)
-                    if detail:
-                        for key in ("title", "summary", "cover_url", "body_json", "stats_json",
-                                     "permalink", "raw_json", "published_at"):
-                            if key in detail and detail[key] is not None:
-                                d[key] = detail[key]
-                        if feed_images:
-                            detail_body = _safe_json_parse(d.get("body_json", "{}"))
-                            if len(detail_body.get("images") or []) < len(feed_images):
-                                detail_body["images"] = feed_images
-                                d["body_json"] = _json.dumps(detail_body, ensure_ascii=False, default=str)
-                        await asyncio.sleep(random.uniform(0.5, 2.0))
-                    else:
-                        logger.warning(f"动态详情获取失败 id={d['platform_post_id']}, 使用 feed 数据")
-
-                # 专栏 → 拉取全文
-                if d["type"] == "article":
-                    body = _safe_json_parse(d.get("body_json", "{}"))
-                    cv_id = body.get("cv_id") if isinstance(body, dict) else None
-                    if cv_id:
-                        detail = await fetch_article_detail(cv_id, client=client)
-                        if detail:
-                            d["body_json"] = _json.dumps({**body, "content": detail["content"]}, ensure_ascii=False, default=str)
-                            # 修复：Delta 富文本专栏 → 补 delta 字段 + 纯文本（列表摘要用）
-                            if detail.get("delta"):
-                                d["body_json"] = _json.dumps({
-                                    **_safe_json_parse(d["body_json"], {}),
-                                    "delta": detail["delta"],
-                                    "text": detail["delta_text"] or body.get("text", ""),
-                                }, ensure_ascii=False, default=str)
-                            d["summary"] = detail["summary"] or detail.get("delta_text") or d["summary"]
-                            d["stats_json"] = _json.dumps({
-                                "view": detail.get("stats", {}).get("view", 0),
-                                "like": detail.get("stats", {}).get("like", 0),
-                                "comment": detail.get("stats", {}).get("reply", 0),
-                                "favorite": detail.get("stats", {}).get("favorite", 0),
-                            }, ensure_ascii=False, default=str)
-                            await asyncio.sleep(random.uniform(0.5, 2.0))
-                elif d["type"] in ("video", "video_dynamic"):
-                    body = _safe_json_parse(d.get("body_json", "{}"))
-                    bvid = body.get("bvid") if isinstance(body, dict) else None
-                    if bvid:
-                        detail = await fetch_video_detail(bvid, client=client)
-                        if detail:
-                            d["body_json"] = _json.dumps({
-                                **body,
-                                "description": detail["desc"],
-                                "duration_sec": detail["duration"],
-                                "owner": detail["owner_name"],
-                                "tags": detail["tname"],
-                            }, ensure_ascii=False, default=str)
-                            d["cover_url"] = d["cover_url"] or detail.get("pages", [{}])[0].get("first_frame", "")
-                            # 合并：详情统计（view/coin/...）+ 动态互动（forward/dyn_like/...）
-                            feed_stats = _safe_json_parse(d.get("stats_json"), {})
-                            d["stats_json"] = _json.dumps(
-                                {**feed_stats, **detail["stat"]}, ensure_ascii=False, default=str
-                            )
-                            await asyncio.sleep(random.uniform(0.5, 2.0))
+                # 详情补全：图文/纯文字走 opus 详情、专栏拉全文、投稿合并视频详情
+                # （R35 起这套合并口径与置顶帖刷新共用，见 _enrich_dynamic_item）
+                await _enrich_dynamic_item(d, client=client)
 
                 # 详情风控标志仅用于列表页判定（C）：每条详情处理完立即清除，
                 # 避免 fetch_dynamic_detail 置位的标志污染下一页列表请求的判定
@@ -1706,6 +1798,14 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
                     if latest_new >= limit_latest:
                         stop_now = True
                         break
+            if dyn_page == 0:
+                # R35 置顶集合同步：**只在第一页**做（平台只把置顶放首页，空集合即
+                # "当前没有置顶"，首页是权威口径）。必须等本页新帖先落库再同步，
+                # 否则本轮新抓到的置顶帖要拖到下一轮才标上
+                _flush_pending()
+                pin = post_repo.sync_pinned("bilibili", platform_uid, pinned_ids)
+                result.pinned_marked += pin["marked"]
+                result.pinned_cleared += pin["cleared"]
             dyn_page += 1
             if stop_now:
                 # 「最新 N 条」模式命中上限：立即收工
@@ -1841,6 +1941,14 @@ async def _fetch_platform_posts(pf, uid: str, pages: int, db: Session,
                 result.seen_pids.append(d["platform_post_id"])
                 result.dynamics += 1
                 if d["platform_post_id"] in existing_ids:
+                    # R35：置顶帖每轮刷新（与 B 站同一套口径，见 _refresh_pinned_post）
+                    if d["platform_post_id"] in pinned_ids:
+                        if await _refresh_pinned_post(
+                            post_repo, platform, str(uid), d,
+                            detail_refresher=lambda: _weibo_pinned_detail(d, pf, client),
+                        ):
+                            result.pinned_refreshed += 1
+                        continue
                     result.skipped += 1
                     # 增量模式：命中已入库**不当场停**，等整页扫完再停
                     # （同页靠后的新帖可能比它更新，见 devlog/045）
@@ -1863,6 +1971,13 @@ async def _fetch_platform_posts(pf, uid: str, pages: int, db: Session,
                     if latest_new >= limit_latest:
                         _flush_pending()
                         return result
+            if page == 1:
+                # R35 置顶集合同步（口径同 B 站分支）；注意 limit_latest 模式会在
+                # 上面的 for 里直接 return，那条路径不同步置顶（下轮补上即可）
+                _flush_pending()
+                pin = post_repo.sync_pinned(platform, str(uid), pinned_ids)
+                result.pinned_marked += pin["marked"]
+                result.pinned_cleared += pin["cleared"]
             if known_hit is not None:
                 # 整页扫完且页内有「已入库且非置顶」的帖子 → 更早的必然已入库
                 result.stopped_early = True

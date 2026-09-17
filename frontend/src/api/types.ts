@@ -132,6 +132,8 @@ export interface Post {
   /** P9-3（v0.9.6）：投稿动态的附言（并入同 bvid 的投稿帖，卡片/详情以「UP 主附言」标注） */
   note: string | null
   is_archived: boolean
+  /** R35：平台置顶（B 站「置顶」/ 微博 isTop）。后端按 is_pinned DESC 排在本账号列表最前 */
+  is_pinned: boolean
   /** 最近一次确认仍在线的时间（v0.5.1 墓碑机制） */
   last_seen_at: string | null
   /** 墓碑：已被判定删除的时刻（v0.5.1） */

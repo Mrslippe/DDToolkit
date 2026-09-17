@@ -830,6 +830,7 @@ class PostRepo:
         date_from/date_to 发布时间范围：from 含当天零点起；to 为次日零点排他
                  （即包含结束日全天）；设范围时 published_at 为空的帖子被排除
         is_deleted 墓碑筛选（v0.5.1）：True=仅已删除 False=仅未删除 None=全部
+        排序：is_pinned DESC, published_at DESC（R35 置顶帖排最前，见 devlog/139）
         """
         query = self.db.query(Post).filter(
             Post.platform == platform, Post.platform_uid == platform_uid
@@ -860,7 +861,9 @@ class PostRepo:
             query = query.filter(Post.published_at < date_to)
         total = query.count()
         items = (
-            query.order_by(Post.published_at.desc())
+            # R35：置顶帖排在本账号列表最前（其余仍按时间倒序）。置顶帖只有一行，
+            # 因此只会在第 1 页头部出现一次，不重复；筛选/搜索时同样要自己命中条件
+            query.order_by(Post.is_pinned.desc(), Post.published_at.desc())
             .offset((page - 1) * page_size)
             .limit(page_size)
             .all()
@@ -924,6 +927,49 @@ class PostRepo:
         self.db.commit()
         self.db.refresh(obj)
         return obj
+
+    # ── R35：置顶动态（devlog/139） ──────────────────────────────────
+
+    def by_pid(self, platform: str, platform_uid: str,
+               platform_post_id: str) -> Post | None:
+        """按唯一键取单条帖子（置顶刷新用：读 id / type / pinned_refreshed_at）。"""
+        return (
+            self.db.query(Post)
+            .filter(Post.platform == platform,
+                    Post.platform_uid == str(platform_uid),
+                    Post.platform_post_id == str(platform_post_id))
+            .first()
+        )
+
+    def sync_pinned(self, platform: str, platform_uid: str,
+                    pinned_ids: set[str] | list[str]) -> dict:
+        """把平台「第一页置顶集合」同步到库：新置顶标记、已取消的撤销。
+
+        返回 {"marked": n, "cleared": m}。**只在第一页解析成功时调用**：平台只把
+        置顶放在首页，空集合即「当前没有置顶」，所以首页是权威口径 —— 若在哪一轮
+        中途失败（风控 / 网络错）时误调，会把置顶标记整片清空，因此调用点必须
+        在 `data is not None` 之后（scheduler 两个平台分支均已如此）。
+
+        撤销的语义：作者取消置顶后，帖子回到时间线原位（按 published_at 排序），
+        不删档、不额外标记。
+        """
+        ids = {str(p) for p in (pinned_ids or []) if p}
+        base = self.db.query(Post).filter(
+            Post.platform == platform, Post.platform_uid == str(platform_uid)
+        )
+        marked = 0
+        if ids:
+            marked = base.filter(
+                Post.platform_post_id.in_(ids),
+                Post.is_pinned == False,  # noqa: E712
+            ).update({Post.is_pinned: True}, synchronize_session=False)
+        cleared_q = base.filter(Post.is_pinned == True)  # noqa: E712
+        if ids:
+            cleared_q = cleared_q.filter(Post.platform_post_id.notin_(ids))
+        cleared = cleared_q.update({Post.is_pinned: False},
+                                   synchronize_session=False)
+        self.db.commit()
+        return {"marked": marked, "cleared": cleared}
 
     def delete(self, id: int) -> bool:
         obj = self.get(id)

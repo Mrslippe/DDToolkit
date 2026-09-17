@@ -754,6 +754,13 @@ def test_fetch_posts_core_pinned_does_not_stop_and_scans_whole_page(monkeypatch,
         return None
 
     monkeypatch.setattr(sch, "fetch_bilibili_dynamics", fake_dynamics)
+
+    async def fake_detail(pid, client=None):
+        # R35 起置顶帖每轮走一次详情档（不再当"跳过不管"）——单测里不能真联网
+        # （实测该接口未登录也照发请求：0.4s 一个真响应，code=4101105）
+        return None
+
+    monkeypatch.setattr(sch, "fetch_dynamic_detail", fake_detail)
     monkeypatch.setattr("asyncio.sleep", fake_sleep)
 
     async def run():
@@ -766,6 +773,8 @@ def test_fetch_posts_core_pinned_does_not_stop_and_scans_whole_page(monkeypatch,
     assert n == 2                            # 第一页无「已入库非置顶」→ 翻到第二页才停
     assert r.stopped_early is True
     assert r.stop_existing_pid == "OLD"
+    assert r.pinned_refreshed == 2           # PIN1/PIN2 计入刷新，不再计入 skipped
+    assert r.skipped == 1                    # 只剩第二页的 OLD
     assert db.query(PostModel).filter(
         PostModel.platform_post_id == "FRESH").count() == 1
     assert db.query(PostModel).filter(
@@ -826,7 +835,11 @@ def test_fetch_posts_core_pinned_only_page_continues(monkeypatch, db):
     async def fake_sleep(_seconds):
         return None
 
+    async def fake_detail(pid, client=None):
+        return None      # 置顶帖详情档：单测里不联网（R35，同上一个用例）
+
     monkeypatch.setattr(sch, "fetch_bilibili_dynamics", fake_dynamics)
+    monkeypatch.setattr(sch, "fetch_dynamic_detail", fake_detail)
     monkeypatch.setattr("asyncio.sleep", fake_sleep)
 
     async def run():
@@ -837,6 +850,7 @@ def test_fetch_posts_core_pinned_only_page_continues(monkeypatch, db):
     assert calls["n"] == 2               # 置顶帖不触发停止 → 翻到第二页
     assert r.stored == 1
     assert r.natural_end is True         # 第二页 has_more=False 自然结束
+    assert r.pinned_refreshed == 1       # PIN 这一轮被刷新（而不是 skipped）
 
 
 # ── 优化项：img_proxy SSRF 重定向加固 / 批量入库 / 跨平台删帖 ────────────

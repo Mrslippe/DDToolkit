@@ -3,7 +3,7 @@
 > **用途**：改 bug / 做需求时快速定位「这个词在代码里叫什么、在哪个文件、牵动谁」。
 > **用法**：`Ctrl+F` 搜中文词或英文标识符；每行是「术语 · 含义 · 代码位置 · 关联」。
 > **与 `ARCHITECTURE.md` 的分工**：架构文档讲「为什么这样设计」，本文讲「这东西在哪、改它要动谁」。
-> 适用版本：`main`（2026-09-13，`MIGRATION_HEAD = f004`）。
+> 适用版本：`main`（2026-09-17，`MIGRATION_HEAD = f005`）。
 
 **目录**：§1 领域名词 · §2 数据模型与字段 · §3 抓取与调度 · §4 认证与凭据 ·
 §5 前端与界面 · §6 工程与流程 · §7 配置项速查 · §8 不变量与常见坑 · §9 需求 → 代码入口。
@@ -109,6 +109,7 @@
 | **停止原因** | `done/page_limit/rate_limited/network_error/archived_boundary/stopped_early/error` | `PostFetchResult.stop_reason` | 前端区分「预期停止」与「丢数据」 |
 | **归档边界剪枝** | 整页已归档 → 更早的页不再请求 | `_fetch_posts_core` | `archive_old_posts` 前置 |
 | **置顶帖豁免** | 置顶帖排在流首且时间乱序 → 不参与增量停止判定 | 微博 `isTop` / B 站 `module_tag.text=置顶` → 页面级 `pinned_ids` | v0.9.4，devlog/045 |
+| **置顶动态 / is_pinned** | 抓到的置顶帖**落库并钉在列表头**：`posts.is_pinned`（列表排序 `is_pinned desc, published_at desc`），且**每轮刷新**（列表页字段免费刷、详情接口按 `PINNED_DETAIL_REFRESH_HOURS` 节流） | `services/pinned_posts.py`（纯判定）、`scheduler._refresh_pinned_post`、`PostRepo.sync_pinned`、`PostCard` 的 `.post-card-pin` | R35，devlog/139；集合只在**第一页**同步（空集合 = 撤销） |
 | **增量停止（整页）** | **整页扫完**才停，边界取页内首条「已入库且非置顶」帖 | `_fetch_posts_core` / `_fetch_platform_posts` 的 `known_hit` | 旧「遇已入库即 break」会漏同页新帖 |
 | **动态流节流 / dynamics pacing** | 动态流的两条"别把请求打满"规则（R28）：**预算当真上限**（一轮装不下就按 `(n/rpm)×60s` 拉长下一轮，稳态 = `DYNAMICS_BUDGET_RPM` 次/分钟）与**空闲退避**（连续 3/6/12 轮无新帖 ⇒ 间隔下限 2/5/10 分钟） | `scheduler._dynamics_round_budget_seconds` / `dynamics_idle_floor` / `_note_dynamics_round` / `note_dynamics_activity`；常量 `DYNAMICS_IDLE_LADDER` | **R28，devlog/127**（起因见 devlog/124：动态流占日请求量约 90%，且闲时照跑满预算）；**恢复条件 = 抓到新帖 / 手动抓一次 / T0 检测到开播**；⚠️ 开播检测走 T0（1 请求/分钟）⇒ **与 R25 推送时效不冲突**；梯度是**代码常量**、不做成设置项 |
 | **风控 / rate limit** | 412/-412/-509/-799 判定 + 冷却 | `fetcher.RATE_LIMIT_CODES`、`was_rate_limited`、`clear_rate_limit` | ContextVar 任务隔离 |
@@ -172,7 +173,7 @@
 
 | 术语 | 含义 | 代码位置 | 关联 |
 |---|---|---|---|
-| **迁移链 / MIGRATION_HEAD** | alembic `a001→f004`（17 个版本）；`MIGRATION_HEAD` 必须同步 | `alembic/versions/`、`app/main.py::MIGRATION_HEAD` | 测试断言一致 |
+| **迁移链 / MIGRATION_HEAD** | alembic `a001→f005`（18 个版本）；`MIGRATION_HEAD` 必须同步 | `alembic/versions/`、`app/main.py::MIGRATION_HEAD` | 测试断言一致 |
 | **一键发布 / release.py** | 十步发布编排：预检→版本同步→门禁→打版→产物校验→提交/tag→推送→Release→报告 | `scripts/release.py`；手册 `docs/RELEASE.md`；上传 `scripts/upload_release_assets.py`（幂等） | 守卫：工作树脏/notes 缺失/版本不递增/NSIS 打平/**文档漂移**/tag 冲突 → 停；`--dry-run`、`--from <步骤>` 续跑；推完自动对齐本地 `origin/<分支>` tracking ref（按 URL 推送不会自动更新它） |
 | **端到端上游冒烟 / smoke_upstream** | 数据目录副本 + 真后端 + 真上游，跑"只有真环境才暴露"的链路（B 站检索 / uid 直查 / 池外收录 / 场次上游） | `scripts/smoke_upstream.py`（`--cold` = 空数据目录 + 清空凭据）；`dev_check.py --upstream` | `--capture` 顺带刷新真实 fixtures；skip 必须打印原因，不冒充通过 |
 | **真实 fixtures** | 真上游回包 / 真 `installer.nsi` 片段 / 真索引条目 —— 判据的"真形状"依据 | `tests/fixtures/`（`smoke_upstream.py --capture` 生成）；用例 `tests/test_real_fixtures.py` | 规矩：**新判据至少一条用例吃真实数据**（§8 第 13 条） |

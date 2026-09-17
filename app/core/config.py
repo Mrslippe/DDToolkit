@@ -94,6 +94,13 @@ class Settings:
     # 放进设置界面就是让人白改）；只读分区里如实列出它为什么不给改。
     DYNAMICS_LATEST_INTERVAL_MINUTES: int = 15   # 动态流（每 V 主账号限 2 帖，≤0=禁用）
     DYNAMICS_LATEST_JITTER_SECONDS: float = 120.0
+    # 置顶动态刷新（R35，devlog/139）：feed 级字段（标题/摘要/封面/互动数）**每轮**
+    # 免费刷新；详情接口（opus 全文 / 完整图片 / 专栏 delta）按下面这个窗口节流。
+    #   6.0 → 正文级改动最迟 6 小时落地（默认）
+    #   0   → 每轮都拉详情（最及时，请求量最大）
+    #   <0  → 永不主动拉详情，只刷 feed 级字段（最省请求）
+    # 只读：改它属于调优，不做热更入口（同 DYNAMICS_LATEST_* 的分区纪律）。
+    PINNED_DETAIL_REFRESH_HOURS: float = 6.0
     # 动态流自适应节奏（v0.9.8，P9-5 用户）：一轮接一轮跑，轮间随机间隔；
     # 频率由**按平台的请求预算**兜底（DYNAMICS_BUDGET_RPM>0 时启用自适应，
     # 否则退回上面的固定周期）

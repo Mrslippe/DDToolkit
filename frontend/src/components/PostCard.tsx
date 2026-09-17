@@ -3,6 +3,7 @@ import {
   MessageCircle,
   Heart,
   CirclePlay,
+  Pin,
   Repeat2,
 } from 'lucide-react'
 import type { Post } from '../api/types'
@@ -48,7 +49,7 @@ const PostCard = memo(function PostCard({ post, index, onOpen }: Props) {
 
   return (
     <article
-      className={`post-card anim-rise${post.deleted_detected_at ? ' is-deleted' : ''}`}
+      className={`post-card anim-rise${post.deleted_detected_at ? ' is-deleted' : ''}${post.is_pinned ? ' is-pinned' : ''}`}
       style={{ '--rise-i': index } as React.CSSProperties}
       role="button"
       tabIndex={0}
@@ -74,6 +75,14 @@ const PostCard = memo(function PostCard({ post, index, onOpen }: Props) {
       </div>
 
       <div className="post-card-body">
+        {/* R35：平台置顶（B 站「置顶」/ 微博 isTop）。后端把置顶帖排在本账号列表
+            最前，这里给出「为什么它不在时间线上」的解释（devlog/139） */}
+        {post.is_pinned && (
+          <span className="post-card-pin" title="平台置顶：作者置顶的动态，已同步到列表最前">
+            <Pin size={11} aria-hidden="true" />
+            置顶
+          </span>
+        )}
         <h4 className="post-card-title" title={title}>
           {title}
         </h4>

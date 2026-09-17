@@ -222,6 +222,9 @@ READONLY_NOTES: list[dict[str, str]] = [
      "why": "APScheduler 的 cron 在启动时按它注册，改时刻要重启才生效"},
     {"key": "DYNAMICS_LATEST_INTERVAL_MINUTES", "label": "动态流固定周期",
      "why": "仅在关闭「每分钟请求预算」（设为 0）时才有意义，当前走自适应"},
+    {"key": "PINNED_DETAIL_REFRESH_HOURS", "label": "置顶帖详情刷新窗口",
+     "why": "调优项：置顶帖的标题/摘要/封面每轮免费刷新，详情接口按这个窗口节流"
+            "（0=每轮都拉，负数=只刷列表页字段）；要改请改 config.py 后重启"},
     {"key": "STARTUP_* / PRIMARY_PLATFORM_ORDER", "label": "启动链与平台优先级",
      "why": "只在启动链那一次读取"},
 ]

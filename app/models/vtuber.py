@@ -272,6 +272,8 @@ class Post(Base):
         Index("ix_posts_published_at", "published_at"),
         # 墓碑筛选（v0.5.1）：deleted_detected_at IS NOT NULL
         Index("ix_posts_deleted_detected", "deleted_detected_at"),
+        # R35：列表热路径 order by is_pinned DESC, published_at DESC（f005 建同名索引）
+        Index("ix_posts_platform_uid_pinned", "platform", "platform_uid", "is_pinned"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -293,6 +295,11 @@ class Post(Base):
     published_at = Column(DateTime, nullable=True)
     raw_json = Column(Text, nullable=True)
     is_archived = Column(Boolean, default=False, server_default="0")    # 是否归档
+    # R35（devlog/139）：平台置顶（B 站 module_tag.text=置顶 / 微博 isTop）。每轮抓取
+    # 把「第一页置顶集合」同步进来 → 置顶帖在列表里排在时间线之前；不再置顶则自动撤销
+    is_pinned = Column(Boolean, nullable=False, default=False, server_default="0")
+    # 置顶帖最近一次走详情接口刷新正文的时刻（刷新节流，见 pinned_posts.detail_refresh_due）
+    pinned_refreshed_at = Column(DateTime, nullable=True)
     # 墓碑机制（v0.5.1）：最近一次确认仍在线的时间 / 连续两次缺席判定的删除时刻
     last_seen_at = Column(DateTime, nullable=True)
     deleted_detected_at = Column(DateTime, nullable=True)
