@@ -2188,6 +2188,11 @@ def main() -> int:
                   f"三格={si.get('idleTexts')} 索引={si.get('idleIndexes')}")
             print(f"  瞬时消息：文案={si.get('litText')!r} 亮起={si.get('litOn')} "
                   f"chevron={si.get('litHasChevron')}")
+            print(f"  悬停（R39-C）：掠过弹={si.get('panelAfterFlick')} 悬停弹={si.get('panelByHover')} "
+                  f"移入面板保持={si.get('panelKeptByEnter')} 离开收={si.get('panelClosedByLeave')} "
+                  f"｜ 点击钉住={si.get('panelPinnedByClick')} "
+                  f"居中偏移={(si.get('panelCentered') or {}).get('dx')}px"
+                  f"（被夹={(si.get('panelCentered') or {}).get('clamped')}）")
             print(f"  面板：打开={si.get('panelOpened')} 条目={si.get('panelItems')} "
                   f"种类={si.get('panelKinds')} 文本={si.get('panelItemText')!r} "
                   f"来源={si.get('panelMetaText')!r}")
@@ -2251,9 +2256,31 @@ def main() -> int:
                 elif "探针消息" not in (si.get("litText") or ""):
                     failures.append(f"@{w} status-island: 亮起后文案仍是 {si.get('litText')!r}，"
                                     f"没换成瞬时消息")
+                # ── 悬停呼出（R39-C）：四条判据，各对应一种"做错了也看着能用"的错法 ──
+                if si.get("panelAfterFlick"):
+                    failures.append(f"@{w} status-island: 鼠标**掠过**（60ms 内进出）也弹出了面板"
+                                    f"—— 进入延迟就是拦这个的")
+                if not si.get("panelByHover"):
+                    failures.append(f"@{w} status-island: 悬停 280ms 后没弹出面板"
+                                    f"（hover 呼出没接上）")
+                if not si.get("panelKeptByEnter"):
+                    failures.append(f"@{w} status-island: 指针从胶囊移进面板时面板收起了"
+                                    f"—— 离开宽限要容得下这一移（否则鼠标还没碰到就没了）")
+                if not si.get("panelClosedByLeave"):
+                    failures.append(f"@{w} status-island: 指针离开面板后没收起"
+                                    f"（hover 呼出必须能自己收）")
                 if not si.get("panelOpened"):
-                    failures.append(f"@{w} status-island: 点状态岛没打开通知面板")
+                    failures.append(f"@{w} status-island: 点状态岛没打开通知面板"
+                                    f"（hover 只是快捷方式，点击必须照旧可用）")
                 else:
+                    pc = si.get("panelCentered") or {}
+                    if pc and not pc.get("clamped") and (pc.get("dx") or 0) > 1.5:
+                        failures.append(f"@{w} status-island: 面板中心与胶囊中心偏 "
+                                        f"{pc.get('dx')}px（应 ≤1.5px，越界被夹的情况除外）"
+                                        f"—— 「下拉栏居中」")
+                    if not si.get("panelPinnedByClick"):
+                        failures.append(f"@{w} status-island: 点开之后指针一离开面板就收了"
+                                        f"—— 点击应当**钉住**它（否则「点开细看」做不到）")
                     if (si.get("panelItems") or 0) < 1:
                         failures.append(f"@{w} status-island: 面板里一条通知都没有")
                     if not si.get("panelHit"):

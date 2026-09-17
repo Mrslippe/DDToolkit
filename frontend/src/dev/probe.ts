@@ -1171,10 +1171,65 @@ export async function runUiProbe(): Promise<void> {
     result.litOn = !!island()?.classList.contains('on')
     result.litHasChevron = !!island()?.querySelector('.si-chevron')
 
-    // ③ 点开面板
+    // ③ 悬停呼出（R39-C，用户 2026-09-19：「改为鼠标 hover 就呼出，离开就收起，并且下拉栏居中」）
+    //
+    // 四条判据，各自对应一种"做错了也看着能用"的错法：
+    //   a. **掠过不许弹** —— 鼠标从顶栏扫过时弹出面板是最烦人的错法（进入 120ms 才弹拦的就是它）；
+    //   b. 正常悬停 260ms 内必须弹出来；
+    //   c. 指针从胶囊移进面板时**不许收**（200ms 宽限，否则鼠标还没碰到面板它就没了）；
+    //   d. 指针离开面板后必须收（hover 的本质）。
+    const hoverAt = (el: Element, type: string) => {
+      const r = el.getBoundingClientRect()
+      el.dispatchEvent(new PointerEvent(type, {
+        bubbles: true, cancelable: true, pointerId: 31, pointerType: 'mouse',
+        isPrimary: true, relatedTarget: document.body,
+        clientX: Math.round(r.left + r.width / 2), clientY: Math.round(r.top + r.height / 2),
+      }))
+    }
+    const cap = island()
+    if (cap) {
+      hoverAt(cap, 'pointerover')
+      await sleep(60)
+      hoverAt(cap, 'pointerout')          // 60ms 内进出 ⇒ 延迟应当拦住
+      await sleep(420)
+      result.panelAfterFlick = !!document.querySelector('.si-panel')
+
+      hoverAt(cap, 'pointerover')
+      await sleep(280)
+      result.panelByHover = !!document.querySelector('.si-panel')
+
+      const pnl = document.querySelector<HTMLElement>('.si-panel')
+      hoverAt(cap, 'pointerout')
+      if (pnl) hoverAt(pnl, 'pointerover')   // 移进面板 ⇒ 宽限内不该收
+      await sleep(420)
+      result.panelKeptByEnter = !!document.querySelector('.si-panel')
+      const pnl2 = document.querySelector<HTMLElement>('.si-panel')
+      if (pnl2) hoverAt(pnl2, 'pointerout')
+      await sleep(420)
+      result.panelClosedByLeave = !document.querySelector('.si-panel')
+    }
+
+    // ③b 点开面板（原有行为不许被 hover 顶掉）
     island()?.click()
     const panel = (await waitFor(() => document.querySelector('.si-panel'), 3000)) as HTMLElement | null
     result.panelOpened = !!panel
+    // **居中**：面板中心对齐胶囊中心（越界被夹住时不算 —— 那由 panelInViewport 管）
+    result.panelCentered = (() => {
+      const c = island()?.getBoundingClientRect()
+      const pr = panel?.getBoundingClientRect()
+      if (!c || !pr) return null
+      const clamped = pr.left <= 8.5 || pr.right >= window.innerWidth - 8.5
+      return {
+        dx: Math.round(Math.abs((pr.left + pr.width / 2) - (c.left + c.width / 2)) * 10) / 10,
+        clamped,
+      }
+    })()
+    // 点击 = **钉住**：指针离开也不许收（否则"点开细看"这件事做不到）
+    if (panel) {
+      hoverAt(island()!, 'pointerout')
+      await sleep(420)
+      result.panelPinnedByClick = !!document.querySelector('.si-panel')
+    }
     result.panelItems = panel?.querySelectorAll('.si-item').length ?? -1
     result.panelKinds = [...(panel?.querySelectorAll('.si-item') || [])]
       .map((n) => n.getAttribute('data-kind'))

@@ -52,7 +52,15 @@ const KIND_LABEL: Record<string, string> = {
  */
 export default function StatusIsland({ notices, onAction, now }: Props) {
   const [open, setOpen] = useState(false)
+  /**
+   * 「钉住」（R39-C，用户 2026-09-19：「改为鼠标 hover 就呼出，离开就收起」）：
+   * **hover 是快捷方式、点击是钉住** —— 点开之后指针移开也**不许收**（否则"点开细看"做不到），
+   * 要 Esc / 点别处 / 条目清空才收。hover 展开不钉住，离开 200ms 就收。
+   */
+  const [pinned, setPinned] = useState(false)
   const anchorRef = useRef<HTMLSpanElement | null>(null)
+  const panelRef = useRef<HTMLDivElement | null>(null)
+  const hoverTimer = useRef<number | null>(null)
   const [pos, setPos] = useState<{ left: number; top: number; width: number } | null>(null)
   const primary = pickPrimary(notices, now)
   const lit = !!primary
@@ -75,26 +83,69 @@ export default function StatusIsland({ notices, onAction, now }: Props) {
     return () => window.clearInterval(timer)
   }, [lit, hidden])
 
-  /** 面板位置：贴在状态岛下方，越界时收进视口 */
+  /** 面板位置：贴在状态岛下方，**水平中心对齐胶囊**（越界时收进视口）。
+   *  R39-C（用户）：「下拉栏居中」—— 原来是把面板**左缘**对齐胶囊左缘，胶囊越靠右面板越偏。 */
   const place = () => {
     const r = anchorRef.current?.getBoundingClientRect()
     if (!r) return
     const width = 340
-    const left = Math.min(Math.max(8, r.left), Math.max(8, window.innerWidth - width - 8))
+    const centered = r.left + r.width / 2 - width / 2
+    const left = Math.min(Math.max(8, centered), Math.max(8, window.innerWidth - width - 8))
     setPos({ left, top: r.bottom + 6, width })
   }
+
+  /** 悬停时长的两个口径：进入要**等一等**（掠过不弹），离开要**宽限**（容得下移进面板） */
+  const HOVER_OPEN_MS = 120
+  const HOVER_CLOSE_MS = 200
+
+  const clearHoverTimer = () => {
+    if (hoverTimer.current != null) {
+      window.clearTimeout(hoverTimer.current)
+      hoverTimer.current = null
+    }
+  }
+
+  const hoverIn = () => {
+    if (!lit) return
+    clearHoverTimer()
+    hoverTimer.current = window.setTimeout(() => setOpen(true), HOVER_OPEN_MS)
+  }
+
+  /** 离开：**钉住时不收**（点击过的面板要留着） */
+  const hoverOut = () => {
+    clearHoverTimer()
+    hoverTimer.current = window.setTimeout(() => {
+      hoverTimer.current = null
+      setOpen((o) => (pinned ? o : false))
+    }, HOVER_CLOSE_MS)
+  }
+
+  useEffect(() => clearHoverTimer, [])
 
   useEffect(() => {
     if (!open) return
     place()
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false)
+      if (e.key === 'Escape') {
+        setOpen(false)
+        setPinned(false)
+      }
     }
     const onResize = () => place()
+    // 点面板/胶囊之外 ⇒ 收起并解除钉住（钉住不能变成"只能按 Esc"）
+    const onOutside = (e: PointerEvent) => {
+      const t = e.target as Node | null
+      if (!t) return
+      if (anchorRef.current?.contains(t) || panelRef.current?.contains(t)) return
+      setOpen(false)
+      setPinned(false)
+    }
     document.addEventListener('keydown', onKey)
+    document.addEventListener('pointerdown', onOutside, true)
     window.addEventListener('resize', onResize)
     return () => {
       document.removeEventListener('keydown', onKey)
+      document.removeEventListener('pointerdown', onOutside, true)
       window.removeEventListener('resize', onResize)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -102,7 +153,10 @@ export default function StatusIsland({ notices, onAction, now }: Props) {
 
   // 条目清空（例如瞬时消息过期后没有别的事）→ 面板自己收起，别留个空面板
   useEffect(() => {
-    if (open && !primary) setOpen(false)
+    if (open && !primary) {
+      setOpen(false)
+      setPinned(false)
+    }
   }, [open, primary])
 
   /** 空闲轮播取词（有事故态时用主条目文案；`lit` 时不参与渲染） */
@@ -125,11 +179,24 @@ export default function StatusIsland({ notices, onAction, now }: Props) {
            开关与断言分处两地，改一处不改另一处就会红，省得悄悄开了/关了没人知道） */
         data-idle-carousel={lit ? undefined : (IDLE_CAROUSEL_ENABLED ? 'on' : 'off')}
         title={lit ? `${text}（点击查看全部通知）` : text}
-        onClick={() => lit && setOpen((o) => !o)}
+        onPointerEnter={hoverIn}
+        onPointerLeave={hoverOut}
+        onClick={() => {
+          if (!lit) return
+          clearHoverTimer()
+          setPinned((p) => {
+            const nextPinned = !open ? true : !p
+            return nextPinned
+          })
+          setOpen((o) => !o)
+        }}
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault()
-            if (lit) setOpen((o) => !o)
+            if (lit) {
+              setPinned(!open)
+              setOpen((o) => !o)
+            }
           }
         }}
       >
@@ -144,10 +211,14 @@ export default function StatusIsland({ notices, onAction, now }: Props) {
       {open && pos && primary &&
         createPortal(
           <div
+            ref={panelRef}
             className="si-panel"
             style={{ left: pos.left, top: pos.top, width: pos.width }}
             role="dialog"
             aria-label="顶栏通知"
+            data-pinned={pinned ? '1' : '0'}
+            onPointerEnter={clearHoverTimer}
+            onPointerLeave={hoverOut}
           >
             <div className="si-panel-head">
               <span className="si-panel-title">通知（{notices.length}）</span>
