@@ -2807,6 +2807,102 @@ export async function runUiProbe(): Promise<void> {
     return
   }
 
+  // 档案视图的**增删卡片**（R37-P3b，规格 §10 的 P3b）：端到端走一遍
+  // 「编辑态删掉一张 → 「+ 添加卡片」菜单里只剩它 → 加回来（默认尺寸、不重叠）→
+  //   全部在板上时按钮禁用」。脚本再去后端 `GET /vtuber/{id}/profile-cards` 对账 ——
+  // 只看 DOM 的话「界面上删了但库里还在」照样绿。
+  if (mode === 'board-cards') {
+    const result: Record<string, unknown> = {}
+    const waitFor = async (fn: () => unknown, ms = 8000) => {
+      const t0 = performance.now()
+      while (performance.now() - t0 < ms) {
+        const v = fn()
+        if (v) return v
+        await sleep(80)
+      }
+      return null
+    }
+    const boardEl = () => document.querySelector<HTMLElement>('[data-board]')
+    const cardEls = () => [...document.querySelectorAll<HTMLElement>('.pcard')]
+    const snap = () => cardEls().map((c) => {
+      const r = c.getBoundingClientRect()
+      return {
+        key: c.getAttribute('data-card-key'),
+        kind: c.getAttribute('data-card-kind'),
+        w: Number(c.getAttribute('data-card-w') ?? 0),
+        h: Number(c.getAttribute('data-card-h') ?? 0),
+        box: { x: Math.round(r.left), y: Math.round(r.top),
+               w: Math.round(r.width), h: Math.round(r.height) },
+      }
+    })
+    const pairwiseOverlap = (cards: ReturnType<typeof snap>) => {
+      for (let i = 0; i < cards.length; i += 1) {
+        for (let j = i + 1; j < cards.length; j += 1) {
+          const a = cards[i].box
+          const b = cards[j].box
+          if (a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h) {
+            return `${cards[i].key} × ${cards[j].key}`
+          }
+        }
+      }
+      return null
+    }
+
+    ;[...document.querySelectorAll<HTMLButtonElement>('.view-btn')]
+      .find((b) => (b.title || '').startsWith('档案视图'))?.click()
+    await waitFor(() => boardEl())
+    await sleep(300)
+    const editBtn = () => [...document.querySelectorAll<HTMLButtonElement>('.board-btn')]
+      .find((b) => (b.textContent || '').includes('编辑布局'))
+    editBtn()?.click()
+    await sleep(250)
+    result.editing = boardEl()?.getAttribute('data-board-editing')
+    result.before = snap()
+
+    // ① 删掉一张（选第一张；脚本侧按 kind 对账）
+    const victim = cardEls()[0]
+    result.deletedKey = victim?.getAttribute('data-card-key') ?? null
+    result.deletedKind = victim?.getAttribute('data-card-kind') ?? null
+    const del = victim?.querySelector<HTMLElement>('.pcard-remove')
+    result.removeBtn = !!del
+    del?.click()
+    await sleep(900)                    // 等整版 PUT 落地
+    result.afterDelete = snap()
+    result.deleteOverlap = pairwiseOverlap(result.afterDelete as ReturnType<typeof snap>)
+
+    // ② 「+ 添加卡片」：菜单里应当**只剩**刚删掉的那种
+    const addBtn = () => [...document.querySelectorAll<HTMLButtonElement>('.board-btn')]
+      .find((b) => (b.textContent || '').includes('添加卡片'))
+    result.addBtnFound = !!addBtn()
+    result.addBtnDisabledAfterDelete = !!addBtn()?.disabled
+    result.addBtnTitleAfterDelete = addBtn()?.title ?? null
+    addBtn()?.click()
+    await sleep(200)
+    const items = [...document.querySelectorAll<HTMLElement>('.board-add-item')]
+    result.menuKinds = items.map((b) => b.getAttribute('data-kind'))
+    result.menuLabels = items.map((b) => (b.textContent || '').trim())
+    items[0]?.click()
+    await sleep(1200)                   // 等整版 PUT 落地 + 回填服务端返回的行
+    result.afterAdd = snap()
+    result.addOverlap = pairwiseOverlap(result.afterAdd as ReturnType<typeof snap>)
+    result.addBtnDisabledAfterAdd = !!addBtn()?.disabled
+    result.addBtnTitleAfterAdd = addBtn()?.title ?? null
+    result.cardsCount = result.afterAdd ? (result.afterAdd as unknown[]).length : 0
+
+    const doneBtn = [...document.querySelectorAll<HTMLButtonElement>('.board-btn')]
+      .find((b) => (b.textContent || '').includes('完成'))
+    doneBtn?.click()
+    await sleep(200)
+    result.editingAtEnd = boardEl()?.getAttribute('data-board-editing')
+
+    const pre = document.createElement('pre')
+    pre.id = 'ui-probe'
+    pre.textContent = JSON.stringify({ mode: 'board-cards', views: [], degraded, board: result })
+    document.body.appendChild(pre)
+    document.title = 'UI_PROBE_DONE'
+    return
+  }
+
   if (mode === 'board') {
     const result: Record<string, unknown> = {}
     const waitFor = async (fn: () => unknown, ms = 8000) => {

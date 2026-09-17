@@ -1014,6 +1014,13 @@ def main() -> int:
         help="给无头浏览器加 `--force-prefers-reduced-motion`（只对 `--motion-cards` 有意义）",
     )
     ap.add_argument(
+        "--board-cards",
+        action="store_true",
+        help="只跑一档宽度（1440）：**档案视图的增删卡片**（R37-P3b）—— 编辑态删掉一张 →"
+             "「+ 添加卡片」菜单里只剩它 → 加回来（默认尺寸、不重叠）→ 全部在板上时按钮禁用；"
+             "再去后端 `GET /vtuber/{id}/profile-cards` 对账（界面删了但库里还在 ⇒ 红）",
+    )
+    ap.add_argument(
         "--shot-board",
         action="store_true",
         help="最宽那档额外存两张**档案视图**截图（阅读态 / 编辑态，`_ui_probe_tmp/board-*.png`）"
@@ -2308,6 +2315,86 @@ def main() -> int:
                         print(f"  对照：{ctl_name!r} 仍显示平台签名 ✓")
                 if not failures:
                     print("  [ok] 左栏与卡片同源：自定义签名/头像都到位，对照组未被污染")
+            for b in failures:
+                print("   -", b)
+            return 1 if failures else 0
+
+        if args.board_cards:
+            # R37-P3b：增删卡片端到端（DOM + **后端对账** —— 只看 DOM 的话
+            # "界面上删了但库里还在"照样绿）。
+            w = max(widths[0], 1440)
+            url = f"http://localhost:{vite_port}{route}?probe=board-cards"
+            print(f"[probe] board-cards @{w} → {url}")
+            res = _run_probe(edge, url, w, args.height, WORK, "board-cards")
+            bc = ((res or {}).get("board") or {})
+            if not bc:
+                failures.append(f"@{w} board-cards: 没量到画布段（探针未跑完？）")
+            else:
+                before = bc.get("before") or []
+                after_del = bc.get("afterDelete") or []
+                after_add = bc.get("afterAdd") or []
+                print(f"  编辑态={bc.get('editing')} 初始 {len(before)} 张 → 删后 "
+                      f"{len(after_del)} 张 → 加回 {len(after_add)} 张")
+                print(f"  删的是一张 {bc.get('deletedKind')!r}；菜单里剩下 "
+                      f"{bc.get('menuKinds')}")
+                if bc.get("editing") != "1":
+                    failures.append(f"@{w} board-cards: 没进编辑态（{bc.get('editing')!r}）")
+                if not bc.get("removeBtn"):
+                    failures.append(f"@{w} board-cards: 编辑态卡片上没有「移除」钮（`.pcard-remove`）")
+                elif len(after_del) != len(before) - 1:
+                    failures.append(f"@{w} board-cards: 点了移除但卡片数从 {len(before)} 变成 "
+                                    f"{len(after_del)}（DOM 没更新？）")
+                elif bc.get("deletedKey") in [c.get("key") for c in after_del]:
+                    failures.append(f"@{w} board-cards: 被删的 {bc.get('deletedKey')!r} 还在 DOM 里")
+                if bc.get("deleteOverlap"):
+                    failures.append(f"@{w} board-cards: 删完出现重叠 {bc['deleteOverlap']}")
+                if not bc.get("addBtnFound"):
+                    failures.append(f"@{w} board-cards: 编辑态没有「添加卡片」钮")
+                else:
+                    if bc.get("addBtnDisabledAfterDelete"):
+                        failures.append(f"@{w} board-cards: 删掉一张之后「添加卡片」仍是禁用的"
+                                        f"（title={bc.get('addBtnTitleAfterDelete')!r}）")
+                    menu = bc.get("menuKinds") or []
+                    if menu != [bc.get("deletedKind")]:
+                        failures.append(f"@{w} board-cards: 菜单里列出的是 {menu}，"
+                                        f"应当只剩刚删掉的那一种 [{bc.get('deletedKind')!r}]"
+                                        f"（已注册的 kind 才可选、且不在板上的才列出）")
+                    if len(after_add) != len(before):
+                        failures.append(f"@{w} board-cards: 加回之后卡片数是 {len(after_add)}，"
+                                        f"应为 {len(before)}")
+                    if bc.get("addOverlap"):
+                        failures.append(f"@{w} board-cards: 加回来的卡与别人重叠 {bc['addOverlap']}")
+                    # 加回来的那张必须是**注册表给的默认尺寸**
+                    added = next((c for c in after_add
+                                  if c.get("kind") == bc.get("deletedKind")
+                                  and c.get("key") == bc.get("deletedKey")), None)
+                    if added is None:
+                        failures.append(f"@{w} board-cards: 加回来的那张不是原来那个 key"
+                                        f"（{[(c.get('key'), c.get('kind')) for c in after_add]}）")
+                    elif bc.get("deletedKind") == "events" and (added.get("w"), added.get("h")) != (6, 3):
+                        failures.append(f"@{w} board-cards: 加回来的大事记卡是 "
+                                        f"{added.get('w')}×{added.get('h')}，注册表给的默认是 6×3")
+                    if not bc.get("addBtnDisabledAfterAdd"):
+                        failures.append(f"@{w} board-cards: 所有 kind 都在板上时「添加卡片」"
+                                        f"应当禁用（title={bc.get('addBtnTitleAfterAdd')!r}）")
+                # **后端对账**
+                try:
+                    with urllib.request.urlopen(
+                            f"http://127.0.0.1:{be_port}/vtuber/{vid}/profile-cards",
+                            timeout=10) as r:
+                        stored = json.loads(r.read().decode("utf-8"))
+                except Exception as exc:
+                    stored = None
+                    failures.append(f"@{w} board-cards: 读不回卡片布局（{exc}）")
+                if stored is not None:
+                    keys = sorted(row["card_key"] for row in stored)
+                    shown = sorted(str(c.get("key")) for c in after_add)
+                    print(f"  后端已存：{keys}")
+                    if keys != shown:
+                        failures.append(f"@{w} board-cards: 库里是 {keys}，界面上是 {shown}"
+                                        f" —— 增删没落库")
+            if not failures:
+                print("  [ok] 增删卡片：移除 → 菜单只剩它 → 加回默认尺寸 → 按钮禁用 → 落库对账")
             for b in failures:
                 print("   -", b)
             return 1 if failures else 0

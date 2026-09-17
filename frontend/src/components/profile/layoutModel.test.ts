@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest'
 
 import {
   GRID_COLS, GRID_GAP, MIN_H, MIN_W, NARROW_PX, ROW_H, cardHeightPx, cardsOverlap,
-  cellsFromPx, clampCard, columnWidthPx, defaultLayout, findOverlaps, gridStyle, isNarrow,
-  moveCard, normalizeLayout, pushDown, resizeCard, toSingleColumn,
+  cellsFromPx, clampCard, columnWidthPx, defaultLayout, findOverlaps, firstFreeSlot, gridStyle,
+  isNarrow, moveCard, normalizeLayout, pushDown, removeCard, resizeCard, toSingleColumn,
   type CardLayout,
 } from './layoutModel'
 
@@ -260,5 +260,77 @@ describe('cellsFromPx / columnWidthPx — 手势层的像素→格换算', () =>
 
   it('列宽为 0（还没量到容器宽）时不除零', () => {
     expect(cellsFromPx(300, 300, 0, 0)).toEqual({ dx: 300, dy: 300 })
+  })
+})
+
+/**
+ * 增删卡片（R37-P3b）：新卡落在哪、删卡之后别人动不动。
+ *
+ * 这两件事都"错了也看着能忍"：落点重叠会盖住别人的内容、删卡塌陷会把用户
+ * 自己排好的位置全部重排 —— 所以都要能被穷举断言。
+ */
+describe('firstFreeSlot — 新卡落在哪', () => {
+  const card = (id: string, x: number, y: number, w: number, h: number): CardLayout =>
+    ({ id, kind: id, x, y, w, h })
+
+  it('空画布 ⇒ 左上角', () => {
+    expect(firstFreeSlot([], { w: 5, h: 3 })).toEqual({ x: 0, y: 0 })
+  })
+
+  it('第一行放得下就挨着放（书架式：从左往右、放不下才换行）', () => {
+    const cards = [card('a', 0, 0, 5, 3)]
+    expect(firstFreeSlot(cards, { w: 7, h: 3 })).toEqual({ x: 5, y: 0 })
+  })
+
+  it('第一行放不下 ⇒ 换到下一行', () => {
+    const cards = [card('a', 0, 0, 5, 3), card('b', 5, 0, 7, 3)]
+    expect(firstFreeSlot(cards, { w: 6, h: 3 })).toEqual({ x: 0, y: 3 })
+  })
+
+  it('跳过被占的行（高卡挡住的那几行不算空）', () => {
+    const cards = [card('a', 0, 0, 12, 5)]      // 整行占满且高 5
+    expect(firstFreeSlot(cards, { w: 4, h: 2 })).toEqual({ x: 0, y: 5 })
+  })
+
+  it('**绝不放回重叠位置**：算出来的空位与任何现有卡片都不相交', () => {
+    const cards = [
+      card('a', 0, 0, 5, 3), card('b', 5, 0, 7, 3),
+      card('c', 0, 3, 4, 3), card('d', 8, 3, 4, 3),
+    ]
+    const slot = firstFreeSlot(cards, { w: 4, h: 3 })
+    expect(slot).toEqual({ x: 4, y: 3 })        // 中间那个缺口
+    for (const c of cards) {
+      const hit = slot.x < c.x + c.w && c.x < slot.x + 4
+        && slot.y < c.y + c.h && c.y < slot.y + 3
+      expect(hit).toBe(false)
+    }
+  })
+
+  it('画布塞满（找不到空位）⇒ 落到最底部新起一行（**永远有落点**，不返回 null）', () => {
+    const cards = [card('a', 0, 0, 12, 3)]
+    expect(firstFreeSlot(cards, { w: 12, h: 3 })).toEqual({ x: 0, y: 3 })
+  })
+
+  it('尺寸超过网格宽时按满宽算（不越界）', () => {
+    expect(firstFreeSlot([card('a', 0, 0, 6, 2)], { w: 99, h: 2 })).toEqual({ x: 0, y: 2 })
+  })
+})
+
+describe('removeCard — 删卡', () => {
+  const cards: CardLayout[] = [
+    { id: 'a', kind: 'anniversary', x: 0, y: 0, w: 5, h: 3 },
+    { id: 'b', kind: 'top-posts', x: 5, y: 0, w: 7, h: 3 },
+  ]
+
+  it('只移掉指定的那张', () => {
+    expect(removeCard(cards, 'a').map((c) => c.id)).toEqual(['b'])
+  })
+
+  it('**其余卡片位置一动不动**（不做塌陷：用户自己摆的位置不该因为删一张就全乱）', () => {
+    expect(removeCard(cards, 'a')[0]).toEqual(cards[1])
+  })
+
+  it('id 不存在时原样返回（不抛、不误删）', () => {
+    expect(removeCard(cards, 'nope')).toEqual(cards)
   })
 })

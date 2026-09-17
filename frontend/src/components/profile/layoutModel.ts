@@ -232,3 +232,41 @@ export function cellsFromPx(dxPx: number, dyPx: number,
 export function columnWidthPx(gridWidth: number): number {
   return (gridWidth - (GRID_COLS - 1) * GRID_GAP) / GRID_COLS
 }
+
+/** 两张卡的矩形是否相交（半开区间：贴边不算重叠） */
+function overlaps(a: CardLayout, x: number, y: number, w: number, h: number): boolean {
+  return x < a.x + a.w && a.x < x + w && y < a.y + a.h && a.y < y + h
+}
+
+/**
+ * 新卡片落在哪（R37-P3b，规格 §10 的 P3b）—— 返回**第一个放得下的空位**。
+ *
+ * 扫描顺序是"从上到下、从左到右"（书架式）：先在第 0 行从左往右找，
+ * 找不到就下移一行 —— 这与 `defaultLayout` 的填行顺序一致，所以"删一张再加一张"
+ * 通常会回到它原来附近的位置（用户不会觉得卡片乱飞）。
+ *
+ * **永远有落点**：实在没空位（比如画布已经被塞满）就放到**最底部的左侧新起一行**。
+ * 不返回 `null` 是有意的 —— 让调用方少一个分支，也就少一处"忘了处理 null"的静默失败。
+ */
+export function firstFreeSlot(cards: CardLayout[], size: CardSize): { x: number; y: number } {
+  const w = Math.min(GRID_COLS, Math.max(1, size.w))
+  const h = Math.max(1, size.h)
+  // 行上界：现有卡片的最低边（再往下都是空的，扫到这里就够了）
+  const maxY = cards.reduce((m, c) => Math.max(m, c.y + c.h), 0)
+  for (let y = 0; y <= maxY; y += 1) {
+    for (let x = 0; x + w <= GRID_COLS; x += 1) {
+      if (!cards.some((c) => overlaps(c, x, y, w, h))) return { x, y }
+    }
+  }
+  return { x: 0, y: maxY }
+}
+
+/**
+ * 从布局里移掉一张卡（R37-P3b）—— **其余卡片位置不动**。
+ *
+ * 为什么不做"剩下的往上塌"：用户是**自己摆过**这些卡的，塌陷会把辛苦排好的位置
+ * 全部重排（删一张、全乱），比留一个空洞更烦人。空洞用户自己拖一下就能补上。
+ */
+export function removeCard(cards: CardLayout[], id: string): CardLayout[] {
+  return cards.filter((c) => c.id !== id)
+}

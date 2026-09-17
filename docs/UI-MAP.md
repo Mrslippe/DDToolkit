@@ -425,7 +425,8 @@ DOM 契约（探针 `ui_probe --status-island` 直接查）：`.si-island`（`.o
 | 拖拽 / 缩放 | `.pcard.dragging`（阴影升到 `--pcard-shadow-lift`）+ `layoutModel` 的 `moveCard`/`resizeCard` | 手势用 Pointer Events（卡头发起拖动、手柄发起缩放，`touch-action: none`）；每跨一格重算一次布局（`d.base` 快照 + 累计位移 ⇒ 不漂移）；**松手整版 PUT**，成功顶栏胶囊「布局已保存」、失败**回滚到上一版** + 说明（不留「看着排好了其实没存上」） |
 | 动效（R37-P4b 已落地） | `components/profile/motion.ts` + `data-card-phase` | **手势相位机**（纯函数，**18 条单测**）：`idle / pressing / lifted / settling`；口径 **阅读态长按 350ms 拿起并进编辑态 / 编辑态按下即拖**，拿起缩放 ≤1.055（`--ease-pop` 一次性过冲），跟手位移 = `指针位移 − 格子位移`（**视觉位移 ≡ 指针位移**），落位 220ms `--ease-emphasized` 无回弹。令牌 `--motion-*` / `--ease-*` 在 `tokens.css`（与状态胶囊规格同一组值，含慢放变量 `--motion-scale`）。reduced-motion：**缩放归零、落位不滑行，跟手保留 1:1**（跟手是输入反馈不是动画）。**退避 FLIP 留 P4c** |
 | 动效调测页 | `.mlab`（`data-motion-lab`，`?motion=cards`） | `components/dev/MotionLab.tsx`（**dev 构建动态载入**）：单步触发（按下/跟手/跨格/落位/连播）+ 慢放 1×·0.5×·0.25×（改 `--motion-scale`）+ 跟手误差读数。它派发**真实的合成 PointerEvent**，不是另画一套假动画。护栏 `ui_probe.py --motion-lab` |
-| 已知边界 | — | P2b 只改**位置与大小**，不改「有哪些卡片」；自定义卡片（新增/删除 + `config_json`）与扩展点接线在 **P3** |
+| 增删卡片（R37-P3b） | `.board-add` / `.board-add-pop` / `.board-add-item`（`data-kind`）/ `.pcard-remove` | 编辑态头部一枚「添加卡片」：菜单只列**已注册但不在板上**的 kind（每项带该卡自己的贴纸角标 + 默认尺寸 `w×h`），全在板上时**禁用并写明原因**。每张卡头部一枚 `×`（**仅编辑态**，放在头部行内而不是绝对定位 —— 绝对定位会压住标题）；`×` 上 `pointerdown` 要 `stopPropagation`，否则会顺带触发卡头拖拽。落点 `firstFreeSlot`、尺寸取注册表默认、**不弹删除确认**（内容都在库里） |
+| 已知边界 | — | 位置 / 大小 / 增删卡片都已支持；**自定义内容**（文本 / 外链卡 + `config_json`）尚未做（R37-P3b 按拍板只做内置卡增删） |
 
 #### B1.5 共用层：跨视图联动刷新（事件总线）
 | 事件 | 触发方 | 消费方 |

@@ -82,6 +82,92 @@
   color: var(--c-text-sub);
 }
 
+/* ── 增删卡片（R37-P3b）───────────────────────────────────────────────── */
+
+.board-add {
+  position: relative;
+  display: inline-flex;
+}
+
+/* 菜单：贴着按钮下方（不做 portal —— 它是按钮的附属，跟着按钮走最省事） */
+.board-add-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 20;
+  min-width: 190px;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  border-radius: 8px;
+  background: var(--c-bg-card);
+  box-shadow: var(--pcard-shadow-lift);
+}
+
+.board-add-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--c-text-main);
+  font-size: 12.5px;
+  line-height: 17px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.board-add-item:hover {
+  background: var(--sel-bg);
+}
+
+.board-add-item:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+.board-add-title {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 尺寸提示（6×3）：让人在点之前就知道会加进来多大一块 */
+.board-add-size {
+  flex: none;
+  font-size: 11px;
+  color: var(--c-text-sub);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 卡片上的「移除」：只在编辑态出现，放在头部行内（不绝对定位 —— 那会压住标题） */
+.pcard-remove {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(15, 23, 42, 0.06);
+  color: var(--c-text-sub);
+  cursor: pointer;
+}
+
+.pcard-remove:hover {
+  background: rgba(225, 68, 68, 0.12);
+  color: var(--c-live);
+}
+
+.pcard-remove:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+
 /* 编辑态：网格辅助线（让"格"看得见，否则拖起来全靠猜） */
 .board-grid.editing {
   background-image:

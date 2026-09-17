@@ -25,18 +25,18 @@
  *    单列布局是模型算出来的，编辑会跟它打架（按钮禁用 + 写明原因）。
  */
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ComponentType } from 'react'
-import { Check, GripVertical, RotateCcw, SlidersHorizontal } from 'lucide-react'
+import { Check, GripVertical, Plus, RotateCcw, SlidersHorizontal, X } from 'lucide-react'
 
 import { api } from '../../api/api'
 import type { Post, ProfileCardRow, VTuber } from '../../api/types'
 import usePrefersReducedMotion from '../../hooks/usePrefersReducedMotion'
 import { pill } from '../../utils/pill'
 import OverlayScroll from '../OverlayScroll'
-import { getCardKind, listCardKinds } from './cardRegistry'
+import { getCardKind, listCardKinds, type CardKindMeta } from './cardRegistry'
 import {
   GRID_COLS, GRID_GAP, ROW_H, MIN_W, MIN_H, NARROW_PX, cardHeightPx, cellsFromPx, columnWidthPx,
-  defaultLayout, gridStyle, isNarrow, moveCard, resizeCard, toSingleColumn,
-  type CardLayout,
+  defaultLayout, firstFreeSlot, gridStyle, isNarrow, moveCard, removeCard, resizeCard,
+  toSingleColumn, type CardLayout,
 } from './layoutModel'
 import {
   flipDelta, flipDurationMs, needsFlip,
@@ -344,6 +344,35 @@ export default function ProfileBoardView({ vtuber, refreshTick, onOpenPost }: Pr
     void persist(layout)
   }
 
+  // ── 增删卡片（R37-P3b，规格 §10 的 P3b）────────────────────────────────
+  //
+  // 本批范围（用户 2026-09-18 拍板）：**只做内置卡片的增删** ——
+  // 把已注册、当前不在板上的 kind 加回来，或在编辑态把某张移掉。
+  // 自定义内容（文本 / 外链卡 + `config_json`）留到下一批。
+  /** 「+ 添加卡片」菜单开着没 */
+  const [addOpen, setAddOpen] = useState(false)
+  /** 还能加的 kind（已注册 − 已在板上）—— 重复加同一种没有意义，所以不允许 */
+  const available = kinds.filter((k) => !(cards ?? []).some((c) => c.kind === k.kind))
+
+  /** 加一张：落点 = 第一个放得下的空位（`firstFreeSlot`），尺寸 = 注册表的默认尺寸 */
+  const addKind = (meta: CardKindMeta) => {
+    const used = new Set(cardsRef.current.map((c) => c.id))
+    let id = meta.kind
+    for (let n = 2; used.has(id); n += 1) id = `${meta.kind}-${n}`   // 将来允许重复 kind 时也不撞
+    const slot = firstFreeSlot(cardsRef.current, meta.defaultSize)
+    const next = [...cardsRef.current, { id, kind: meta.kind, ...slot, ...meta.defaultSize }]
+    applyLayout(next)                 // 走同一条路 ⇒ 其余卡片有退避/归位动画
+    setAddOpen(false)
+    void persist(next)
+  }
+
+  /** 移掉一张：**内容不删**（帖/场次/大事记都在库里），随时能加回来，所以不弹确认 */
+  const removeAt = (id: string) => {
+    const next = removeCard(cardsRef.current, id)
+    applyLayout(next)
+    void persist(next)
+  }
+
   // ── FLIP 的两步（R37-P4c，规格 §5.2）────────────────────────────────────
   //
   // ⚠️ 必须写在 `useLayoutEffect` 里：它在 DOM 变更之后、**浏览器绘制之前**同步执行，
@@ -420,6 +449,33 @@ export default function ProfileBoardView({ vtuber, refreshTick, onOpenPost }: Pr
         <span className="board-actions">
           {editing ? (
             <>
+              {/* 增删卡片（P3b）：菜单列出**已注册但不在板上**的 kind；
+                  全都加过了就禁用并说明原因（"点了没反应"是最糟的空态）。 */}
+              <span className="board-add">
+                <button type="button" className="board-btn" onClick={() => setAddOpen((o) => !o)}
+                        disabled={busy || !available.length}
+                        title={available.length
+                          ? '把还没放上来的卡片加进来'
+                          : '已注册的卡片都已在板上（先移除一张，或等新的卡片类型）'}>
+                  <Plus size={12} aria-hidden="true" /> 添加卡片
+                </button>
+                {addOpen && available.length > 0 && (
+                  <div className="board-add-pop" role="menu">
+                    {available.map((k) => (
+                      <button key={k.kind} type="button" className="board-add-item"
+                              role="menuitem" data-kind={k.kind} onClick={() => addKind(k)}>
+                        <span className="pcard-badge" data-tone={k.tone} aria-hidden="true">
+                          <k.icon size={12} strokeWidth={2} />
+                        </span>
+                        <span className="board-add-title">{k.title}</span>
+                        <span className="board-add-size">
+                          {k.defaultSize.w}×{k.defaultSize.h}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </span>
               <button type="button" className="board-btn" onClick={resetDefault} disabled={busy}>
                 <RotateCcw size={12} aria-hidden="true" /> 重置默认
               </button>
@@ -512,6 +568,17 @@ export default function ProfileBoardView({ vtuber, refreshTick, onOpenPost }: Pr
                       onPointerDown={(e) => beginDrag(e, card, 'move')}>
                 <span className="pcard-title">{meta.title}</span>
                 {editing && <GripVertical className="pcard-grip" size={13} aria-hidden="true" />}
+                {/* 移除（P3b，仅编辑态）：**不弹确认** —— 内容都在库里（帖子 / 场次 / 大事记），
+                    这里只是把卡片从板上拿下来，随时能加回来。真会丢东西的是下一批的
+                    「自定义卡（用户自己写的文本）」，那种删除才需要问一句。 */}
+                {editing && (
+                  <button type="button" className="pcard-remove"
+                          title="把这张卡片移出档案视图（内容不会被删，随时可以加回来）"
+                          onPointerDown={(e) => e.stopPropagation()}
+                          onClick={() => removeAt(card.id)}>
+                    <X size={12} aria-hidden="true" />
+                  </button>
+                )}
                 {/* 贴纸角标（规格 §3 的签名元素）：图标 + 色调都来自注册表，
                     视图不认识具体卡片 —— 加一种卡片仍然只改 `cards/index.tsx`。 */}
                 <span className="pcard-badge" data-card-badge data-tone={meta.tone}
