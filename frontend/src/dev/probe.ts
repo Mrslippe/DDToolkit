@@ -307,6 +307,14 @@ function measure(tag: string) {
       const root = scroller?.closest<HTMLElement>('.os-root')
       return {
         barBg: bcs.backgroundImage,
+        /** 毛玻璃（R39-D3）：`backdrop-filter` + 极轻白 + 圆角 + 内描边 = "明确的形状" */
+        barBackdrop: bcs.backdropFilter || (bcs as unknown as { webkitBackdropFilter?: string })
+          .webkitBackdropFilter || 'none',
+        barBgColor: bcs.backgroundColor,
+        /** 光条实矩形（CSS px）：像素分析脚本按它去截图上取边缘剖面 —— 
+         *  "边缘还有没有一条线"最终只有量像素才算数 */
+        barRect: { x: Math.round(br.left), y: Math.round(br.top),
+                   w: Math.round(br.width), h: Math.round(br.height) },
         barRadius: bcs.borderTopLeftRadius,
         barShadow: bcs.boxShadow,
         barBorder: bcs.borderTopWidth,
@@ -2672,10 +2680,13 @@ export async function runUiProbe(): Promise<void> {
       [...document.querySelectorAll<HTMLButtonElement>('.board-btn')]
         .find((b) => (b.textContent || '').includes(label))
     const result: Record<string, unknown> = {}
+    // `view=cards` ⇒ 停在**展示页**（R39-D3：光条压在有背景图的那一页上最容易看出边界，
+    // 视觉评审要看的就是那一页）。默认仍是档案视图。
+    const wantCards = q.get('view') === 'cards'
     ;[...document.querySelectorAll<HTMLButtonElement>('.view-btn')]
-      .find((b) => (b.title || '').startsWith('档案视图'))?.click()
-    await waitFor(() => document.querySelector('[data-board]'))
-    if (q.get('reset')) {
+      .find((b) => (b.title || '').startsWith(wantCards ? '展示页' : '档案视图'))?.click()
+    await waitFor(() => document.querySelector(wantCards ? '.hero' : '[data-board]'))
+    if (!wantCards && q.get('reset')) {
       btn('编辑布局')?.click()
       await sleep(200)
       btn('重置默认')?.click()
@@ -2683,12 +2694,18 @@ export async function runUiProbe(): Promise<void> {
       btn('完成')?.click()
       await sleep(200)
     }
-    if (q.get('editing')) {
+    if (!wantCards && q.get('editing')) {
       btn('编辑布局')?.click()
       await sleep(400)
     }
     result.editing = document.querySelector('[data-board]')?.getAttribute('data-board-editing')
     result.cards = document.querySelectorAll('.pcard').length
+    /** 光条的实矩形（像素分析的锚点：分析脚本按它去图上取边缘剖面） */
+    const gb = document.querySelector<HTMLElement>('.glow-bar')?.getBoundingClientRect()
+    result.glowRect = gb
+      ? { x: Math.round(gb.left), y: Math.round(gb.top),
+          w: Math.round(gb.width), h: Math.round(gb.height) }
+      : null
     // 动效调测页（R37-P4b）：`?motion=cards` 时必须挂上（它是**动态载入**的，
     // 载入失败只会"什么都没有"，与"本来就不显示"看起来一模一样 ⇒ 必须机器判）。
     // `lab=1` 还会点一下面板里的「按下」按钮，验证它派发的合成事件**真的**驱动了手势。

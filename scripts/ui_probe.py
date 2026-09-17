@@ -685,33 +685,40 @@ def _assert_glow(v: dict, width: int) -> list[str]:
     tag = v.get("tag")
     bad: list[str] = []
     bg = g.get("barBg") or ""
-    if "radial-gradient" not in bg:
-        bad.append(f"@{width} {tag}: 光条背景不是 2D 径向渐变（{bg[:60]!r}）—— "
-                   f"线性渐变会让上下缘留下硬边（用户要的是「边缘羽化」）")
-    else:
-        # R39-D2（用户 2026-09-19：「分界线和背景仍然很明显」）：渐变必须在**盒子内部**就归零。
-        # 首版写的是 `radial-gradient(120% 100% …)` —— 横向半径 120% ⇒ 左右两端仍落在渐变里
-        # （实测边缘中点还有约 9% 的白）⇒ 元素边界处一条淡竖线。
-        m = re.search(r"radial-gradient\(\s*([\d.]+)%\s+([\d.]+)%", bg)
-        if not m:
-            bad.append(f"@{width} {tag}: 光条渐变的半径解析不出来（{bg[:70]!r}）")
-        else:
-            rx, ry = float(m.group(1)), float(m.group(2))
-            if rx > 100:
-                bad.append(f"@{width} {tag}: 光条渐变横向半径 {rx}% > 100% —— "
-                           f"左右两端仍在渐变内部，元素边界会留下一条淡线")
-            if ry > 100:
-                bad.append(f"@{width} {tag}: 光条渐变纵向半径 {ry}% > 100% —— "
-                           f"上下缘会留下淡线")
-        if "rgba(255, 255, 255, 0) 100%" not in bg:
-            bad.append(f"@{width} {tag}: 光条渐变末端没有归零（{bg[-60:]!r}）—— "
-                       f"边缘到不了全透明，也就等于有分界线")
-    for key, label in (("barRadius", "圆角"), ("barBorder", "描边")):
+    backdrop = g.get("barBackdrop") or "none"
+    # ── R39-D3（用户 2026-09-19 拍板方案 A：毛玻璃工具栏）────────────────────────
+    # 背景：**不再**是"往图上叠白光"（那个手段有天花板：量像素证明盒子边缘的亮度落差
+    # 已经是 0.0/0.0/0.8，用户看到的其实是**纹理边界** —— 半透明白抹掉了局部对比）。
+    # 换成毛玻璃 = 把"说不清的光"变成"一块被理解的工具栏"：
+    #   backdrop-filter 让背景**变糊**而不是**变白**（局部对比还在）；
+    #   极轻白（≤0.2）只提亮一点点；
+    #   圆角 ≥8px + **只有内描边**（外阴影会在背景图上也投一条线）。
+    if "blur" not in backdrop:
+        bad.append(f"@{width} {tag}: 光条没有毛玻璃（backdrop-filter={backdrop!r}）—— "
+                   f"纯半透明白叠在插画上会留下纹理边界（用户两轮反馈的都是这个）")
+    m = re.search(r"rgba?\(\s*[\d.]+\s*,\s*[\d.]+\s*,\s*[\d.]+\s*(?:,\s*([\d.]+))?\)", g.get("barBgColor") or "")
+    alpha = float(m.group(1)) if (m and m.group(1)) else (1.0 if m else None)
+    if alpha is None:
+        bad.append(f"@{width} {tag}: 光条底色解析不出来（{g.get('barBgColor')!r}）")
+    elif alpha > 0.2:
+        bad.append(f"@{width} {tag}: 光条底色太白（alpha={alpha}）—— 毛玻璃靠 blur 起作用，"
+                   f"底色只该是极轻的一层（≤0.2）")
+    radius = g.get("barRadius")
+    try:
+        rpx = float(str(radius).replace("px", ""))
+    except (TypeError, ValueError):
+        rpx = None
+    if rpx is None or rpx < 8:
+        bad.append(f"@{width} {tag}: 光条圆角是 {radius!r}（应 ≥8px）—— "
+                   f"工具栏要有明确的形状，圆角是「这是一块面板」的主要信号")
+    shadow = g.get("barShadow") or "none"
+    if shadow != "none" and "inset" not in shadow:
+        bad.append(f"@{width} {tag}: 光条有**外**阴影（{shadow!r}）—— "
+                   f"外阴影会在背景图上再投一条线；玻璃的边只该用内描边")
+    for key, label in (("barBorder", "描边"),):
         val = g.get(key)
         if val not in ("0px", 0, None) and not (isinstance(val, (int, float)) and val == 0):
-            bad.append(f"@{width} {tag}: 光条有{label}（{val!r}）—— 那本身就是一条分界线")
-    if (g.get("barShadow") or "none") != "none":
-        bad.append(f"@{width} {tag}: 光条有阴影（{g.get('barShadow')!r}）—— 同上")
+            bad.append(f"@{width} {tag}: 光条有{label}（{val!r}）—— 用内描边（box-shadow inset）")
     spot = g.get("spot")
     if not spot:
         bad.append(f"@{width} {tag}: 光条里没有亮点指示器（`.glow-spot`）")
@@ -3731,6 +3738,8 @@ def main() -> int:
                     ("edit", "&reset=1&editing=1"),
                     # 调测页那张用 0.25× 慢放：截图看不出快慢，但面板本身要看一眼
                     ("lab", "&motion=cards&reset=1"),
+                    # 展示页（R39-D3）：光条压在**背景图**上时最容易看出边界，视觉评审就看这一张
+                    ("cards", "&view=cards"),
                 )
                 for tag, q in shots:
                     shot = WORK / f"board-{tag}-{w}.png"
