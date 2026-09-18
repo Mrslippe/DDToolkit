@@ -21,8 +21,8 @@ interface Props {
 const EXIT_MS = 200
 
 /** 灯箱大图：状态机与占位统一走 ProxyImage（外层 key=url 逐张重置） */
-function ViewerImg({ src, alt, zoom = 1, origin = '50% 50%', pan = { x: 0, y: 0 } }:
-{ src: string; alt?: string; zoom?: number; origin?: string; pan?: Pan }) {
+function ViewerImg({ src, alt, zoom = 1, pan = { x: 0, y: 0 }, anim = 'none' }:
+{ src: string; alt?: string; zoom?: number; pan?: Pan; anim?: 'none' | 'zoom' | 'settle' }) {
   return (
     <ProxyImage
       src={src}
@@ -30,15 +30,20 @@ function ViewerImg({ src, alt, zoom = 1, origin = '50% 50%', pan = { x: 0, y: 0 
       className="max-h-[84vh] max-w-[92vw] select-none object-contain"
       fallbackClassName=""
       draggable={false}
-      /* R40c/R40d：缩放与拖动都走 `transform`（合成器属性，不重排）；
-         **位移写在外层、缩放写在内层** ⇒ 位移是屏幕像素，钳制范围好算。
-         `transform-origin` 跟着指针走，放大后想看哪就看哪。 */
+      /* R40c/R40e：缩放与拖动都走 `transform`（合成器属性，不重排）；
+         **位移写外层、缩放写内层** ⇒ 位移是屏幕像素，边界好算。
+         `transform-origin` **恒定居中**（跟着指针走会在缩小时闪位置 —— 用户当场否掉的那版）。
+         过渡按模式分派：拖动中 `none`（跟手）、滚轮 `zoom`（短）、松手回位 `settle`（带一点过冲 = 弹性）。 */
       style={{
         transform: zoom === 1 && !pan.x && !pan.y
           ? undefined
           : `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
-        transformOrigin: origin,
-        transition: pan.x || pan.y ? 'transform 60ms linear' : 'transform 120ms ease-out',
+        transformOrigin: '50% 50%',
+        transition: anim === 'none'
+          ? 'none'
+          : anim === 'settle'
+            ? 'transform 280ms cubic-bezier(0.22, 1.18, 0.36, 1)'   // 轻微过冲 = 弹性约束
+            : 'transform 140ms ease-out',
       }}
       fallback={
         <div className="flex flex-col items-center gap-2 px-6 text-muted-foreground">
@@ -66,13 +71,32 @@ export function nextZoom(cur: number, deltaY: number): number {
 export interface Pan { x: number; y: number }
 
 /**
- * 纯函数：把拖动位移**钳在图片边界内**（R40d，用户 2026-09-19：「放大后可以按住拖动的抓手工具」）。
+ * 纯函数：缩放时**把指针下的那个点钉住**（R40e，用户 2026-09-19）。
+ *
+ * ⚠️ 为什么不用 `transform-origin` 跟指针（R40c 的第一版就是那么写的，被用户当场否掉）：
+ *   每个滚轮事件都重算 origin，缩小时锚点又变 + 已有位移还在 ⇒ **突然闪到别的位置** ✗。
+ * 正确做法（B站那套）：**origin 恒定居中**，用**位移**去补偿缩放 ——
+ *   图片上某点 `u`（相对中心的未缩放坐标）在屏幕上的位置是 `pan + u·scale`；
+ *   要让指针位置 `a`（相对中心）底下的那个点缩放后还在原地，就得
+ *     `pan' = a − (a − pan) · (scale'/scale)`
+ *   ⇒ 缩小到 1 倍时 `pan'` 自然收敛回 0（再由 `clampPan` 钉死），**不会跳**。
+ */
+export function zoomPan(pan: Pan, scale: number, nextScale: number, anchor: Pan): Pan {
+  if (scale <= 0 || nextScale === scale) return pan
+  const k = nextScale / scale
+  return { x: anchor.x - (anchor.x - pan.x) * k, y: anchor.y - (anchor.y - pan.y) * k }
+}
+
+/**
+ * 纯函数：把拖动位移**钳在图片边界内**（R40d，抓手）。
  *
  * 规则：可拖范围 = 放大后**超出视口的那部分的一半** ——
  *   · 没放大（scale=1，图片本来就装得下）⇒ 上下左右都拖不动（`max = 0`）；
  *   · 放大后最多拖到"图片边缘与视口边缘对齐"，不会把图拖出屏幕再也找不回来。
- * ⚠️ 这是**软钳制**：`transform-origin` 跟着指针走，图片在放大那一刻可能已经偏心，
- * 所以这里按"以中心为基准"估一个安全范围 —— 宁可少钳一点，也不要出现"拖不动"的僵手感。
+ *
+ * ⚠️ 它**只用于"松手后的弹性回位"与缩放后的收敛**，不用于拖动过程 ——
+ *   用户口径（R40e）：「抓手即使左右移动也可以跟随，但是松手后会自动弹性约束到中间」
+ *   ⇒ 拖动中自由跟随，松手才把这里算出的目标值当成落点。
  */
 export function clampPan(pan: Pan, scale: number, size: { w: number; h: number },
                          viewport: { w: number; h: number }): Pan {
@@ -84,6 +108,13 @@ export function clampPan(pan: Pan, scale: number, size: { w: number; h: number }
     x: Math.min(maxX, Math.max(-maxX, pan.x)) + 0,
     y: Math.min(maxY, Math.max(-maxY, pan.y)) + 0,
   }
+}
+
+/** 松手回位用的落点：先钳制，再把"没放大"的情况一并归零 */
+export function settleTarget(pan: Pan, scale: number, size: { w: number; h: number },
+                             viewport: { w: number; h: number }): Pan {
+  if (scale <= ZOOM_MIN + 0.001) return { x: 0, y: 0 }
+  return clampPan(pan, scale, size, viewport)
 }
 
 /**
@@ -105,33 +136,46 @@ export default function ImageViewer({ images, index, onIndexChange, onClose }: P
   const [closing, setClosing] = useState(false)
   const closeTimerRef = useRef<number | undefined>(undefined)
   const [veilRect, setVeilRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
-  /** 缩放倍数与锚点（R40c）；切图时由 `key` 重建 ⇒ 自动复位 */
+  /** 缩放倍数与拖动位移（R40c/R40e）；切图时由 `key` 重建 ⇒ 自动复位 */
   const [scale, setScale] = useState(ZOOM_MIN)
-  const [origin, setOrigin] = useState('50% 50%')
-  /** 拖动位移（R40d，抓手）：只在放大后可拖 */
   const [pan, setPan] = useState<Pan>({ x: 0, y: 0 })
+  /** 动画模式：拖动中**不要过渡**（否则跟手发飘）；松手回位要**弹性**；滚轮缩放短过渡 */
+  const [anim, setAnim] = useState<'none' | 'zoom' | 'settle'>('none')
   const dragRef = useRef<{ id: number; sx: number; sy: number; ox: number; oy: number } | null>(null)
   const [dragging, setDragging] = useState(false)
   /** 刚拖过：用来吞掉紧随其后的 click（否则一松手就把查看器关了） */
   const draggedRef = useRef(false)
   const bodyRef = useRef<HTMLDivElement | null>(null)
+  const settleTimer = useRef<number | null>(null)
+  useEffect(() => () => { if (settleTimer.current != null) window.clearTimeout(settleTimer.current) }, [])
 
+  /**
+   * 滚轮缩放（R40e 重写）：**origin 恒定居中**，用位移补偿 ⇒ 指针下的点钉住、
+   * 缩小时自然收敛回中间（不再有"缩小就闪到别处"）。
+   */
   const onWheelZoom = (e: React.WheelEvent) => {
     e.preventDefault()
     e.stopPropagation()
     const next = nextZoom(scale, e.deltaY)
     if (next === scale) return
-    // 以指针为锚点：`transform-origin` 用指针在**容器内**的百分比
     const box = e.currentTarget.getBoundingClientRect()
-    const px = box.width ? ((e.clientX - box.left) / box.width) * 100 : 50
-    const py = box.height ? ((e.clientY - box.top) / box.height) * 100 : 50
-    setOrigin(`${px.toFixed(1)}% ${py.toFixed(1)}%`)
+    // 指针相对**容器中心**的偏移（origin 就是中心）
+    const anchor = {
+      x: e.clientX - (box.left + box.width / 2),
+      y: e.clientY - (box.top + box.height / 2),
+    }
+    const raw = zoomPan(pan, scale, next, anchor)
+    const img = bodyRef.current?.querySelector('img')
+    const ir = img?.getBoundingClientRect()
+    const size = ir && scale > 0
+      ? { w: ir.width / scale, h: ir.height / scale }
+      : { w: box.width, h: box.height }
+    setAnim('zoom')
     setScale(next)
-    // 缩回 1 时把位移一起复位（否则"看着适应窗口、其实偏到一边"）
-    if (next === ZOOM_MIN) setPan({ x: 0, y: 0 })
+    setPan(settleTarget(raw, next, size, { w: window.innerWidth, h: window.innerHeight }))
   }
 
-  /** 抓手拖动（R40d）：只有放大后才接管指针，否则让点击照旧关闭查看器 */
+  /** 抓手拖动（R40e）：**拖动中自由跟随**（不夹取），松手才弹性回到约束位置 */
   const canPan = scale > ZOOM_MIN + 0.001
   const onPointerDown = (e: React.PointerEvent) => {
     if (!canPan || closing) return
@@ -139,6 +183,7 @@ export default function ImageViewer({ images, index, onIndexChange, onClose }: P
     dragRef.current = { id: e.pointerId, sx: e.clientX, sy: e.clientY, ox: pan.x, oy: pan.y }
     draggedRef.current = false
     setDragging(true)
+    setAnim('none')
     e.currentTarget.setPointerCapture?.(e.pointerId)
   }
   const onPointerMove = (e: React.PointerEvent) => {
@@ -148,19 +193,26 @@ export default function ImageViewer({ images, index, onIndexChange, onClose }: P
     const dx = e.clientX - d.sx
     const dy = e.clientY - d.sy
     if (Math.abs(dx) + Math.abs(dy) > 3) draggedRef.current = true
-    const img = bodyRef.current?.querySelector('img')
-    const box = e.currentTarget.getBoundingClientRect()
-    const ir = img?.getBoundingClientRect()
-    // 未缩放尺寸：当前 rect ÷ 当前 scale（rect 已经把 scale 算进去了）
-    const size = ir ? { w: ir.width / scale, h: ir.height / scale } : { w: box.width, h: box.height }
-    setPan(clampPan({ x: d.ox + dx, y: d.oy + dy }, scale, size,
-                    { w: window.innerWidth, h: window.innerHeight }))
+    setPan({ x: d.ox + dx, y: d.oy + dy })     // 自由跟随：这里**不夹取**
   }
   const endDrag = (e: React.PointerEvent) => {
-    if (!dragRef.current) return
+    const d = dragRef.current
+    if (!d) return
     dragRef.current = null
     setDragging(false)
     e.currentTarget.releasePointerCapture?.(e.pointerId)
+    // 松手：弹性回位到约束范围内（拖出边界的部分"收回去"，而不是硬切）
+    const img = bodyRef.current?.querySelector('img')
+    const ir = img?.getBoundingClientRect()
+    const box = e.currentTarget.getBoundingClientRect()
+    const size = ir && scale > 0
+      ? { w: ir.width / scale, h: ir.height / scale }
+      : { w: box.width, h: box.height }
+    const target = settleTarget(pan, scale, size, { w: window.innerWidth, h: window.innerHeight })
+    setAnim('settle')
+    setPan(target)
+    if (settleTimer.current != null) window.clearTimeout(settleTimer.current)
+    settleTimer.current = window.setTimeout(() => setAnim('none'), 320)
   }
 
   const go = (d: number) => {
@@ -295,6 +347,7 @@ export default function ImageViewer({ images, index, onIndexChange, onClose }: P
         data-viewer-scale={scale.toFixed(2)}
         data-viewer-pan={`${Math.round(pan.x)},${Math.round(pan.y)}`}
         data-viewer-grab={canPan ? (dragging ? 'grabbing' : 'grab') : 'none'}
+        data-viewer-anim={anim}
         onWheel={onWheelZoom}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
@@ -310,7 +363,7 @@ export default function ImageViewer({ images, index, onIndexChange, onClose }: P
         }}
         style={{ cursor: canPan ? (dragging ? 'grabbing' : 'grab') : 'default' }}
       >
-        <ViewerImg src={img.url} alt={img.url} zoom={scale} origin={origin} pan={pan} />
+        <ViewerImg src={img.url} alt={img.url} zoom={scale} pan={pan} anim={anim} />
       </div>
 
       {/* 底部点状序号（单图隐藏） */}

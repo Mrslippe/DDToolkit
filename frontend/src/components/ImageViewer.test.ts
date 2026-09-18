@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ZOOM_MAX, ZOOM_MIN, clampPan, nextZoom } from './ImageViewer'
+import { ZOOM_MAX, ZOOM_MIN, clampPan, nextZoom, settleTarget, zoomPan } from './ImageViewer'
 
 /**
  * 图片查看器的滚轮缩放（R40c，用户 2026-09-19：「为帖子详情弹窗中可以打开的图片查看器
@@ -63,5 +63,52 @@ describe('图片查看器：抓手拖动钳制', () => {
     const r = clampPan({ x: 500, y: 500 }, 2, { w: 800, h: 300 }, viewport)
     expect(r.x).toBe(300)                   // 横向超出 ⇒ 可拖
     expect(r.y).toBe(0)                     // 纵向没超出 ⇒ 锁死
+  })
+})
+
+/**
+ * R40e（用户 2026-09-19）：「缩放和抓手逻辑好怪，放大后拖动了再缩小，
+ * 缩小时会因为鼠标位置不一样而突然闪到其他位置」+「B站那种原生放大：
+ * 抓手即使左右移动也可以跟随，但松手后会自动弹性约束到中间」。
+ * 这里钉住缩放补偿与松手落点两条纯逻辑。
+ */
+describe('图片查看器：缩放补偿（指针下的点钉住）', () => {
+  it('在指针处放大：那个点在屏幕上不动', () => {
+    // 图片点 u 在屏幕上的位置 = pan + u·scale；放大后要仍在 anchor 处
+    const anchor = { x: 200, y: -100 }
+    const p1 = zoomPan({ x: 0, y: 0 }, 1, 2, anchor)
+    // u = (anchor - pan)/scale = anchor；放大后 pan' = anchor - anchor*2 = -anchor
+    expect(p1).toEqual({ x: -200, y: 100 })
+    // 验算：u 在放大后的屏幕位置 = pan' + u·2 = -200 + 200*2 = 200 ✓ 仍是 anchor
+    expect(p1.x + anchor.x * 2).toBe(anchor.x)
+  })
+
+  it('**缩小回 1 倍 ⇒ 位移自然收敛回 0**（不再"闪到别处"）', () => {
+    const anchor = { x: 200, y: -100 }
+    const zoomedIn = zoomPan({ x: 0, y: 0 }, 1, 2, anchor)
+    const back = zoomPan(zoomedIn, 2, 1, { x: 0, y: 0 })   // 缩小时指针可能在别处
+    // 收敛回中心（再由 settleTarget 钉死）—— 关键是**不放大也不偏移**
+    expect(settleTarget(back, 1, { w: 800, h: 600 }, { w: 1000, h: 800 })).toEqual({ x: 0, y: 0 })
+  })
+
+  it('缩放倍率不变 ⇒ 位移原样（不产生无谓抖动）', () => {
+    const pan = { x: 33, y: -12 }
+    expect(zoomPan(pan, 2, 2, { x: 500, y: 500 })).toBe(pan)
+  })
+
+  it('非法 scale 不炸（防御）', () => {
+    expect(zoomPan({ x: 1, y: 2 }, 0, 2, { x: 0, y: 0 })).toEqual({ x: 1, y: 2 })
+  })
+})
+
+describe('图片查看器：松手回位落点', () => {
+  it('没放大 ⇒ 一律回中心（抓手在 1 倍时本来就不该有位移）', () => {
+    expect(settleTarget({ x: 500, y: -400 }, 1, { w: 800, h: 600 }, { w: 1000, h: 800 }))
+      .toEqual({ x: 0, y: 0 })
+  })
+
+  it('放大后拖出界 ⇒ 收到边界上（弹性约束的落点）', () => {
+    expect(settleTarget({ x: 9999, y: -9999 }, 2, { w: 800, h: 600 }, { w: 1000, h: 800 }))
+      .toEqual({ x: 300, y: -200 })
   })
 })
