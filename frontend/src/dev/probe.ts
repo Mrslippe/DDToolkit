@@ -2910,6 +2910,13 @@ export async function runUiProbe(): Promise<void> {
       btn('编辑布局')?.click()
       await sleep(400)
     }
+    if (wantDeck) {
+      // 牌堆截图：圆点静止时是隐藏的（R40b 用户要求）⇒ 先滚一下让它们亮起来，
+      // 否则截图上根本看不到指示器（"看不见的东西没法评审"）。
+      document.querySelector('[data-deck]')?.dispatchEvent(
+        new WheelEvent('wheel', { deltaY: 100, bubbles: true, cancelable: true }))
+      await sleep(300)
+    }
     result.editing = document.querySelector('[data-board]')?.getAttribute('data-board-editing')
     result.cards = document.querySelectorAll('.pcard').length
     /** 光条的实矩形（像素分析的锚点：分析脚本按它去图上取边缘剖面） */
