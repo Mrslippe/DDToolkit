@@ -83,14 +83,30 @@ export const api = {
       body: JSON.stringify({ cards }),
     }),
 
-  /** 重要日期 / 大型活动（vtuber_events）——「大事记」卡的数据源（R37-P3） */
-  listVtuberEvents: (id: number) => request<VtuberEvent[]>(`/vtuber/${id}/events`),
+  /** 重要日期 / 大型活动（vtuber_events）——「纪念日」与「大事记」两张卡的数据源。
+   *  R42：两张卡共用这张表、各按 `kind` 取自己的条目（互不串）。 */
+  listVtuberEvents: (id: number, kind?: 'anniversary' | 'event') =>
+    request<VtuberEvent[]>(`/vtuber/${id}/events${kind ? `?kind=${kind}` : ''}`),
 
-  createVtuberEvent: (id: number, title: string, eventDate: string) =>
+  createVtuberEvent: (id: number, data: {
+    title: string; event_date: string
+    kind?: 'anniversary' | 'event'; emoji?: string | null
+  }) =>
     request<VtuberEvent>(`/vtuber/${id}/events`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title, event_date: eventDate }),
+      body: JSON.stringify(data),
+    }),
+
+  /** 局部更新（R42）：只传要改的字段；`emoji: null` = **清空**（不是"没传"） */
+  updateVtuberEvent: (eventId: number, data: {
+    title?: string; event_date?: string
+    kind?: 'anniversary' | 'event'; emoji?: string | null
+  }) =>
+    request<VtuberEvent>(`/vtuber/event/${eventId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
     }),
 
   deleteVtuberEvent: (eventId: number) =>

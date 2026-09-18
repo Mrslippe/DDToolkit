@@ -70,7 +70,6 @@ export function eventHint(items: EventItem[]): string {
 
 /** 行尾 chip 的三种色调（R37-P4a）：今天=强调粉、未来=中性蓝、已过=灰 */
 export type EventChipTone = 'today' | 'future' | 'past'
-
 /**
  * 行尾那枚 chip（R37-P4a，规格 §4.3）。
  *
@@ -83,4 +82,37 @@ export function eventChip(item: EventItem): { text: string; tone: EventChipTone 
   return item.days > 0
     ? { text: `${item.days} 天后`, tone: 'future' }
     : { text: `${-item.days} 天前`, tone: 'past' }
+}
+
+/**
+ * 时间轴布局（R42，用户 2026-09-19：「大事记用这种**时间轴**的形式来呈现」+ 手绘草图：
+ * 一条横线、线上若干刻度、**标题在线上、日期在线下**）。
+ *
+ * 纯函数只算**位置**（0..1 的归一化横坐标），像素与样式留给组件 ——
+ * 这样"刻度是不是按日期等距排的"能被单测钉住，而不是靠肉眼看。
+ *
+ * 规则：
+ *   · 时间轴**按日期**（而不是按条目序号）等距铺开 ⇒ 疏密一眼看得出；
+ *   · 只有一条（或全部同一天）时**居中**（否则会贴在左边缘，看着像渲染坏了）；
+ *   · 未来的点在右、已过的在左（与草图的箭头方向一致：时间向右流）。
+ */
+export interface TimelineNode {
+  item: EventItem
+  /** 0..1：在时间轴上的横向位置 */
+  t: number
+  /** 是否在"今天"之后（组件用它决定点是不是实心） */
+  future: boolean
+}
+
+export function timelineNodes(items: EventItem[]): TimelineNode[] {
+  if (!items.length) return []
+  const days = items.map((i) => i.days)
+  const lo = Math.min(...days)
+  const hi = Math.max(...days)
+  const span = hi - lo
+  return items.map((item) => ({
+    item,
+    t: span === 0 ? 0.5 : (item.days - lo) / span,
+    future: item.days >= 0,
+  }))
 }

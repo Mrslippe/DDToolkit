@@ -59,7 +59,8 @@ export function daysUntilNext(month: number, day: number, today: Date): number {
 }
 
 export interface AnniversaryItem {
-  key: 'birthday' | 'debut'
+  /** `birthday` / `debut` 是内置两行；R42 起用户自定义条目是 `custom-<id>` */
+  key: string
   label: string
   /** 卡片上那一行文本（解析不出 = 「未记录」） */
   text: string
@@ -71,13 +72,21 @@ export interface AnniversaryItem {
   md: string | null
   /** 第几周年（缺年份 = 0）；hero 之外那行的事实部分 */
   nth: number
+  /**
+   * 行内右侧那截"事实"文本（R42 起**跟着条目走**，不再用平行数组 `anniversaryFacts(items)[i]`）。
+   * 平行数组在"用户自定义条目"加进来之后就会错位 —— 那是只有肉眼能发现的错。
+   */
+  fact: string
+  /** 自定义图标（R42；内置两行没有） */
+  emoji?: string | null
 }
 
-function item(key: 'birthday' | 'debut', label: string, raw: string | null | undefined,
-              today: Date): AnniversaryItem {
+function item(key: string, label: string, raw: string | null | undefined,
+              today: Date, emoji?: string | null): AnniversaryItem {
   const parsed = parseAnniversary(raw)
   if (!parsed) {
-    return { key, label, text: '未记录', days: null, raw: raw ?? null, md: null, nth: 0 }
+    return { key, label, text: '未记录', days: null, raw: raw ?? null, md: null, nth: 0,
+             fact: '未记录', emoji: emoji ?? null }
   }
   const next = nextOccurrence(parsed.month, parsed.day, today)
   const days = daysUntilNext(parsed.month, parsed.day, today)
@@ -89,6 +98,9 @@ function item(key: 'birthday' | 'debut', label: string, raw: string | null | und
     text: `${md} · ${when}${nth > 0 ? ` · 第 ${nth} 周年` : ''}`,
     days, raw: raw ?? null,
     md: `${parsed.month}/${parsed.day}`, nth,
+    // 行内事实：`3/14`（缺年份不加周年）
+    fact: `${parsed.month}/${parsed.day}${nth > 0 ? ` · 第 ${nth} 周年` : ''}`,
+    emoji: emoji ?? null,
   }
 }
 
@@ -143,8 +155,5 @@ export function anniversaryHero(items: AnniversaryItem[]): AnniversaryHero | nul
  * 事实行给的是"这个日子是什么"：`3/14`、`2023/9/17 · 第 3 周年`。
  */
 export function anniversaryFacts(items: AnniversaryItem[]): string[] {
-  return items.map((it) => {
-    if (!it.md) return '未记录'
-    return it.nth > 0 ? `${it.md} · 第 ${it.nth} 周年` : it.md
-  })
+  return items.map((it) => it.fact)      // R42：事实文本跟着条目走（见 `AnniversaryItem.fact`）
 }

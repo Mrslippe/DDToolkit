@@ -526,12 +526,15 @@ def _assert_board(views: list[dict], width: int) -> list[str]:
                 bad.append(f"@{width} board: 纪念日卡没有底部那句提示（最近的一个 / 还没填）")
             bad += _assert_anniv_hero(c, width)
         elif kind in ("top-posts", "events"):
-            # 大事记同理：要么有行、要么有一句明说的空态（"还没有记录大事记"）
+            # 大事记同理：要么有内容、要么有一句明说的空态（"还没有大事记"）
+            # R42：随机投稿改成"两张大封面"（`.rp-card`），不再是榜单行 —— 判据跟着改口径，
+            # 否则就是"文档一套、机器判另一套"。
+            label = "随机投稿卡" if kind == "top-posts" else "大事记卡"
             if not (c.get("rows") or 0) and not c.get("emptyText"):
-                bad.append(f"@{width} board: 优质投稿卡既没有榜单行也没有空态文案"
+                bad.append(f"@{width} board: {label}既没有内容也没有空态文案"
                            f"（看起来像「没数据」，实际是没渲染）")
             elif (c.get("rows") or 0) and not c.get("hint"):
-                bad.append(f"@{width} board: 优质投稿卡有榜单却没有「按什么排」的说明")
+                bad.append(f"@{width} board: {label}有内容却没有口径说明")
     narrow_px = board.get("narrowPx") or 0
     if narrow_px <= 0:
         bad.append(f"@{width} board: 探针没拿到窄窗阈值（`data-board-narrow` 没下发）"
@@ -653,23 +656,23 @@ def _assert_board_stats(c: dict, width: int) -> list[str]:
     if not rows or kind == "anniversary":
         return bad
     if kind == "events":
+        # R42：大事记改成**横向时间轴**（横线 + 刻度），原来那条竖脊线的判据跟着换口径
         spine = c.get("spine") or 0
         if not (1 <= spine <= 4):
-            bad.append(f"@{width} board: 大事记的时间线脊线实渲染宽 {spine}px（期望 ≈2px）"
-                       f"—— 量的是 `.evt-list::before` 的实际宽度，节点在不在不算数")
+            bad.append(f"@{width} board: 大事记时间轴的横线实渲染高 {spine}px（期望 ≈2px）"
+                       f"—— 量的是 `.tl-line` 的实际高度，刻度在不在不算数")
         if (c.get("dots") or 0) != rows:
-            bad.append(f"@{width} board: 大事记 {rows} 行却有 {c.get('dots')} 个圆点"
-                       f"（时间线的每一行都要有落点）")
+            bad.append(f"@{width} board: 大事记 {rows} 个刻度却有 {c.get('dots')} 个圆点"
+                       f"（时间轴的每一格都要有落点）")
     chips = c.get("chips") or []
     if len(chips) != rows:
-        bad.append(f"@{width} board: 卡片 {kind} {rows} 行却有 {len(chips)} 枚 chip"
-                   f"（每行一枚；chip 是行尾的视觉锚点）")
-    else:
-        want = ("today", "future", "past") if kind == "events" else ("view", "like")
-        for tone in chips:
-            if tone not in want:
-                bad.append(f"@{width} board: 卡片 {kind} 的 chip 色调 {tone!r} 不在 {want}")
-                break
+        bad.append(f"@{width} board: 卡片 {kind} {rows} 项内容却有 {len(chips)} 个行尾锚点"
+                   f"（每项一个：随机投稿是封面上的播放数、时间轴是刻度下的日期）")
+    if kind == "top-posts":
+        ratios = c.get("coverRatio") or []
+        if ratios and min(ratios) < 80:
+            bad.append(f"@{width} board: 随机投稿的封面只占卡片高度 {min(ratios)}%"
+                       f"—— 用户要求「让封面更大更明显」")
     return bad
 
 

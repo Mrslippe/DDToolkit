@@ -1187,20 +1187,39 @@ class VtuberEventRepo:
 
     # ── 手动条目 CRUD ──
 
-    def list_by_vtuber(self, vtuber_id: int) -> list[VtuberEvent]:
-        return (
-            self.db.query(VtuberEvent)
-            .filter(VtuberEvent.vtuber_id == vtuber_id)
-            .order_by(VtuberEvent.event_date.asc(), VtuberEvent.id.asc())
-            .all()
-        )
+    def list_by_vtuber(self, vtuber_id: int, kind: str | None = None) -> list[VtuberEvent]:
+        """按 V 列出条目；`kind` 给定时只取那一类（R42-A：两张档案卡各取各的）。
 
-    def create(self, vtuber_id: int, title: str, event_date: str) -> VtuberEvent:
-        obj = VtuberEvent(vtuber_id=vtuber_id, title=title, event_date=event_date)
+        排序：日期升序（时间轴与纪念日都按时间读）→ id 升序（同一天按录入顺序，稳定）。
+        """
+        q = self.db.query(VtuberEvent).filter(VtuberEvent.vtuber_id == vtuber_id)
+        if kind:
+            q = q.filter(VtuberEvent.kind == kind)
+        return q.order_by(VtuberEvent.event_date.asc(), VtuberEvent.id.asc()).all()
+
+    def create(self, vtuber_id: int, title: str, event_date: str,
+               kind: str = "event", emoji: str | None = None) -> VtuberEvent:
+        obj = VtuberEvent(vtuber_id=vtuber_id, title=title, event_date=event_date,
+                          kind=kind, emoji=emoji)
         self.db.add(obj)
         self.db.commit()
         self.db.refresh(obj)
         return obj
+
+    def update(self, event_id: int, **fields: object) -> VtuberEvent | None:
+        """局部更新（R42-A）：只覆盖显式传进来的字段（`None` 也算显式 —— 清空 emoji 用）。"""
+        obj = self.db.query(VtuberEvent).filter(VtuberEvent.id == event_id).first()
+        if not obj:
+            return None
+        for key, value in fields.items():
+            if hasattr(obj, key):
+                setattr(obj, key, value)
+        self.db.commit()
+        self.db.refresh(obj)
+        return obj
+
+    def get(self, event_id: int) -> VtuberEvent | None:
+        return self.db.query(VtuberEvent).filter(VtuberEvent.id == event_id).first()
 
     def delete(self, event_id: int) -> bool:
         obj = self.db.query(VtuberEvent).filter(VtuberEvent.id == event_id).first()

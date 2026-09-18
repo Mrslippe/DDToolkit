@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db
-from app.models.vtuber import VTuber, Post, Account
+from app.models.vtuber import EVENT_KINDS, VTuber, Post, Account
 from app.repositories.vtuber_repo import (
     VTuberRepo, AccountRepo, PostRepo, AccountStatSnapshotRepo,
     LiveGiftDayRepo, ThirdpartyVtuberRepo, VtuberEventRepo, LiveSessionRepo,
@@ -23,7 +23,7 @@ from app.schemas.vtuber import (
     PostOut, PostCreate, PostUpdate, PostPage, PostStats,
     AccountStatSnapshotOut, LiveGiftDayOut, ThirdpartyVtuberOut,
     FanTrendPoint, LiveSessionOut, LiveCategoryOut, LiveSessionDetailOut,
-    VtuberEventOut, VtuberEventCreate, FutureReservationOut,
+    VtuberEventOut, VtuberEventCreate, VtuberEventUpdate, FutureReservationOut,
     ProfileCardOut, ProfileLayoutIn,
     FormerValueOut, VTuberFormerValuesOut,
     BiliSearchOut, BiliSearchItemOut,
@@ -716,13 +716,20 @@ def save_profile_cards(vtuber_id: int, data: ProfileLayoutIn,
 # ── 重要日期·大型活动（P7，v0.7.0） ────────────────────────────────
 
 @router.get("/vtuber/{vtuber_id}/events", response_model=list[VtuberEventOut])
-def list_vtuber_events(vtuber_id: int, db: Session = Depends(get_db)):
-    """手动维护的重要日期/活动条目（vtuber_events），按日期升序。"""
+def list_vtuber_events(vtuber_id: int, kind: str | None = Query(None),
+                       db: Session = Depends(get_db)):
+    """手动维护的重要日期/活动条目（vtuber_events），按日期升序。
+
+    R42-A：`kind` 可选过滤（`anniversary` = 纪念日卡 / `event` = 大事记时间轴）；
+    不传则全给（老前端行为不变）。
+    """
     if not VTuberRepo(db).get(vtuber_id):
         raise HTTPException(404, f"VTuber id={vtuber_id} 不存在")
+    if kind is not None and kind not in EVENT_KINDS:
+        raise HTTPException(422, f"kind 须是 {sorted(EVENT_KINDS)} 之一")
     return [
         VtuberEventOut.model_validate(e, from_attributes=True)
-        for e in VtuberEventRepo(db).list_by_vtuber(vtuber_id)
+        for e in VtuberEventRepo(db).list_by_vtuber(vtuber_id, kind=kind)
     ]
 
 
@@ -730,11 +737,29 @@ def list_vtuber_events(vtuber_id: int, db: Session = Depends(get_db)):
              status_code=status.HTTP_201_CREATED)
 def create_vtuber_event(vtuber_id: int, data: VtuberEventCreate,
                         db: Session = Depends(get_db)):
-    """手动添加重要日期/活动条目（卡片内「添加活动」入口）。"""
+    """手动添加重要日期/活动条目（卡片内「添加」入口）。"""
     if not VTuberRepo(db).get(vtuber_id):
         raise HTTPException(404, f"VTuber id={vtuber_id} 不存在")
-    e = VtuberEventRepo(db).create(vtuber_id, data.title, data.event_date)
+    e = VtuberEventRepo(db).create(vtuber_id, data.title, data.event_date,
+                                   kind=data.kind, emoji=data.emoji)
     return VtuberEventOut.model_validate(e, from_attributes=True)
+
+
+@router.patch("/vtuber/event/{event_id}", response_model=VtuberEventOut)
+def update_vtuber_event(event_id: int, data: VtuberEventUpdate,
+                        db: Session = Depends(get_db)):
+    """局部更新（R42-A）：改名称/日期/emoji/归属卡。
+
+    `exclude_unset=True` 而不是 `exclude_none` —— 显式传 `emoji: null` 表示**清空**，
+    不能被当成"没传"（否则用户永远删不掉自己填的 emoji）。
+    """
+    fields = data.model_dump(exclude_unset=True)
+    if not fields:
+        raise HTTPException(422, "没有要更新的字段")
+    obj = VtuberEventRepo(db).update(event_id, **fields)
+    if not obj:
+        raise HTTPException(404, f"Event id={event_id} 不存在")
+    return VtuberEventOut.model_validate(obj, from_attributes=True)
 
 
 @router.delete("/vtuber/event/{event_id}", status_code=status.HTTP_204_NO_CONTENT)

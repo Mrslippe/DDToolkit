@@ -7,7 +7,7 @@
  * R37-P4a（`docs/design-archive-cards.md` §3）：每种卡片必须给出贴纸角标的**图标 + 色调**，
  * 缺一个 `registerCardKind` 当场抛错 —— 所以"加了卡片但没有角标"这种半成品进不来。
  */
-import { Cake, Flag, Sparkles } from 'lucide-react'
+import { Cake, Flag, Shuffle } from 'lucide-react'
 
 import { registerCardKind } from '../cardRegistry'
 import AnniversaryCard from './AnniversaryCard'
@@ -25,9 +25,9 @@ registerCardKind({
 
 registerCardKind({
   kind: 'top-posts',
-  title: '优质投稿',
+  title: '随机投稿',
   defaultSize: { w: 7, h: 3 },
-  icon: Sparkles,
+  icon: Shuffle,
   tone: 'coral',
   render: (ctx) => <TopPostsCard {...ctx} />,
 })

@@ -227,22 +227,37 @@ class ThirdpartyVtuber(Base):
     updated_at = Column(DateTime, nullable=False, default=_now, onupdate=_now)
 
 
+# R42-A（f007）：`vtuber_events.kind` 的取值 —— 两张档案卡各取各的条目，互不串。
+# 定义在模型层当**单一真源**（schemas 与路由都从这里引，避免三处各写一份字符串）。
+EVENT_KIND_ANNIVERSARY = "anniversary"
+EVENT_KIND_EVENT = "event"
+EVENT_KINDS = (EVENT_KIND_ANNIVERSARY, EVENT_KIND_EVENT)
+
+
 class VtuberEvent(Base):
     """重要日期·大型活动（P7，v0.7.0）：手动维护的纪念日/活动条目。
 
     与 birthday/debut_date（VTuber 字段，年循环纪念日）互补：
     本表记录一次性日期事件（演唱会/周年庆/线下活动等），卡片可增删。
     event_date 存 "YYYY-MM-DD"（ISO 日期字符串，与 posts.live日期口径一致）。
+
+    R42-A（f007，用户 2026-09-19）：加 `kind` 与 `emoji` ——
+    纪念日卡与大事记（时间轴）卡**共用这张表**、各按 `kind` 取自己的条目。
     """
     __tablename__ = "vtuber_events"
     __table_args__ = (
         Index("ix_vtuber_events_vtuber_date", "vtuber_id", "event_date"),
+        Index("ix_vtuber_events_vtuber_kind", "vtuber_id", "kind"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
     vtuber_id = Column(Integer, ForeignKey("vtubers.id"), nullable=False)
     title = Column(String, nullable=False)                # 活动名（如「生日歌回」）
     event_date = Column(String, nullable=False)           # "YYYY-MM-DD"
+    # R42-A（f007）：两张档案卡各自按 kind 取自己的条目（纪念日 / 大事记时间轴）
+    # server_default 与迁移一致（既有行回填成 event；autogenerate 比对才不报差异）
+    kind = Column(String, nullable=False, default="event", server_default="event")
+    emoji = Column(String, nullable=True)                 # 纪念日的自定义图标（可空）
     # nullable=False 与 e005 对齐（见 LiveSession.created_at 的说明）
     created_at = Column(DateTime, nullable=False, default=_now)
 

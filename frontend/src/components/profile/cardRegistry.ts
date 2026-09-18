@@ -27,6 +27,11 @@ export interface CardContext {
   onOpenPost: (post: Post) => void
   /** 抓取完成边沿：卡片据此重取自己的数据 */
   refreshTick: number
+  /**
+   * 是否在**编辑布局**态（R42）：卡片据此决定要不要露出"增删自己的条目"这类操作。
+   * 阅读态是"看"的地方 —— 误触删掉一条没法撤销，所以增删只在编辑态出现。
+   */
+  editing: boolean
 }
 
 /**

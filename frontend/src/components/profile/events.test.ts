@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
 import type { VtuberEvent } from '../../api/types'
-import { eventChip, eventHint, eventItems } from './events'
+import { eventChip, eventHint, eventItems, timelineNodes } from './events'
+import type { EventItem } from './events'
 
 /**
  * 「大事记」口径（R37-P3，devlog/145）。
@@ -12,12 +13,11 @@ import { eventChip, eventHint, eventItems } from './events'
  */
 
 const ev = (id: number, title: string, date: string): VtuberEvent =>
-  ({ id, vtuber_id: 1, title, event_date: date, created_at: null })
+  ({ id, vtuber_id: 1, title, event_date: date, kind: 'event', emoji: null, created_at: null })
 
 const TODAY = new Date(2026, 8, 17)      // 2026-09-17 本地
 
-describe('eventItems — 排序与文案', () => {
-  it('未来在前（近的优先），过去的在后（近的优先）', () => {
+describe('eventItems — 排序与文案', () => {  it('未来在前（近的优先），过去的在后（近的优先）', () => {
     const items = eventItems([
       ev(1, '去年的演唱会', '2025-12-01'),
       ev(2, '下周歌回', '2026-09-24'),
@@ -106,5 +106,33 @@ describe('eventChip — 行尾那枚 chip', () => {
   it('边界：明天是 future、昨天是 past（今天不算未来也不是过去）', () => {
     expect(chipOf('2026-09-18').tone).toBe('future')
     expect(chipOf('2026-09-16').tone).toBe('past')
+  })
+})
+
+/** R42（用户 2026-09-19）：「大事记用这种**时间轴**的形式来呈现」—— 刻度按**日期**等距铺开 */
+describe('timelineNodes — 时间轴刻度', () => {
+  const mk = (id: number, days: number): EventItem =>
+    ({ id, title: `E${id}`, date: '2026-01-01', days, when: '' })
+
+  it('按日期等距：最早的在 0、最晚的在 1', () => {
+    const ns = timelineNodes([mk(1, -10), mk(2, 0), mk(3, 10)])
+    expect(ns.map((n) => n.t)).toEqual([0, 0.5, 1])
+  })
+
+  it('只有一条 ⇒ 居中（贴左边缘看着像渲染坏了）', () => {
+    expect(timelineNodes([mk(1, 5)])[0].t).toBe(0.5)
+  })
+
+  it('全部同一天 ⇒ 都居中（span=0 不许除零）', () => {
+    expect(timelineNodes([mk(1, 3), mk(2, 3)]).map((n) => n.t)).toEqual([0.5, 0.5])
+  })
+
+  it('未来的点标 future（组件据此画实心点）', () => {
+    const ns = timelineNodes([mk(1, -1), mk(2, 1)])
+    expect(ns.map((n) => n.future)).toEqual([false, true])
+  })
+
+  it('空数组 ⇒ 空（不炸）', () => {
+    expect(timelineNodes([])).toEqual([])
   })
 })

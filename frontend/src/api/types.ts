@@ -550,6 +550,10 @@ export interface VtuberEvent {
   vtuber_id: number
   title: string
   event_date: string
+  /** R42-A：两张卡各取各的（`anniversary` = 纪念日卡 / `event` = 大事记时间轴） */
+  kind: 'anniversary' | 'event'
+  /** 纪念日的自定义图标（可空） */
+  emoji: string | null
   created_at: string | null
 }
 

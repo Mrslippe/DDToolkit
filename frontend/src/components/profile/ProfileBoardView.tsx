@@ -758,7 +758,7 @@ export default function ProfileBoardView({ vtuber, refreshTick, onOpenPost }: Pr
                 </span>
               </header>
               <div className="pcard-body">
-                {meta.render({ vtuber, account, onOpenPost, refreshTick })}
+                {meta.render({ vtuber, account, onOpenPost, refreshTick, editing })}
               </div>
               {editing && (
                 <span className="pcard-resize" title="拖动改大小"

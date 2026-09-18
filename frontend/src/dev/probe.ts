@@ -228,10 +228,10 @@ function measure(tag: string) {
           row: cs.gridRowStart,
           /** 卡片**内容**的粗采样（R37-P1）：防"卡片挂上了但里面什么都没渲染"这种
            *  静默失败 —— 空态文案也是内容，但必须是**明说**的那一种（`.pcard-empty`）。 */
-          rows: c.querySelectorAll('.anniv-row, .tp-row, .evt-row').length,
+          rows: c.querySelectorAll('.anniv-row, .rp-card, .tl-node').length,
           rowLabels: [...c.querySelectorAll('.anniv-label')].map((n) => (n.textContent || '').trim()),
           rowValues: [...c.querySelectorAll('.anniv-value')].map((n) => (n.textContent || '').trim()),
-          hint: (c.querySelector('.anniv-hint, .tp-hint, .evt-hint')?.textContent || '').trim(),
+          hint: (c.querySelector('.anniv-hint, .rp-hint, .tl-hint')?.textContent || '').trim(),
           emptyText: (c.querySelector('.pcard-empty')?.textContent || '').trim(),
           pending: !!c.querySelector('[data-pending="1"]'),
           /** ── R37-P4a：材质 / 贴纸角标 / 内容不裁切 ───────────────────── */
@@ -257,15 +257,22 @@ function measure(tag: string) {
             value: (hero.querySelector('.anniv-hero-value')?.textContent || '').trim(),
             caption: (hero.querySelector('.anniv-hero-caption')?.textContent || '').trim(),
           } : null,
-          /** 大事记时间线（规格 §4.3）：脊线用伪元素画 ⇒ 量它的**实渲染宽度**，
-           *  而不是"节点在不在"（后者连 `display:none` 都拦不住） */
+          /** 大事记**时间轴**（R42 改成横线 + 刻度；规格 §4.3 的竖脊线那版已废）：
+           *  量横线的**实渲染高度**，而不是"节点在不在"（后者连 `display:none` 都拦不住） */
           spine: (() => {
-            const list = c.querySelector<HTMLElement>('.evt-list')
-            return list ? Math.round(parseFloat(getComputedStyle(list, '::before').width) || 0) : 0
+            const line = c.querySelector<HTMLElement>('.tl-line')
+            return line ? Math.round(parseFloat(getComputedStyle(line).height) || 0) : 0
           })(),
-          dots: c.querySelectorAll('.evt-dot').length,
-          chips: [...c.querySelectorAll('.evt-chip, .tp-plays')]
-            .map((n) => n.getAttribute('data-tone') ?? n.getAttribute('data-metric')),
+          dots: c.querySelectorAll('.tl-dot').length,
+          /** 行尾锚点：随机投稿是封面上的播放数（`.rp-plays`），时间轴是刻度下的日期（`.tl-date`） */
+          chips: [...c.querySelectorAll('.rp-plays, .tl-date')]
+            .map((n) => n.getAttribute('data-tone') ?? n.getAttribute('data-metric') ?? 'plain'),
+          /** 随机投稿：封面占卡片高度的百分比（用户口径「让封面更大更明显」） */
+          coverRatio: [...c.querySelectorAll<HTMLElement>('.rp-card')].map((card) => {
+            const box = card.getBoundingClientRect()
+            const img = card.querySelector('img')?.getBoundingClientRect()
+            return box.height ? Math.round(((img?.height ?? 0) / box.height) * 100) : 0
+          }),
         }
       })
       return {
@@ -878,7 +885,7 @@ export async function runUiProbe(): Promise<void> {
 
       withBody[withBody.length - 1].click()
       // 第一格：**上游落地之前**（等最小的一帧让弹窗挂载：本地数据先渲染，上游那几块还在占位）
-      await sleep(120)
+      await sleep(60)
       pendingSample = sampleDialog()
       window.fetch = realFetch        // 采完就还原：后面等的是真实到达时间
       await sleep(3000)
@@ -1289,7 +1296,7 @@ export async function runUiProbe(): Promise<void> {
       sets.dispatchEvent(new PointerEvent('pointerover', { bubbles: true }))
       sets.dispatchEvent(new PointerEvent('pointerenter', { bubbles: false }))
       await waitFor(() => sets.getAttribute('data-hover') === '1', 2000)
-      await sleep(120)
+      await sleep(60)
       result.hoverAttrAfterEnter = sets.getAttribute('data-hover')
       result.pillAddHoverHeight = add.offsetHeight
       result.pillAddHoverOpacity = getComputedStyle(add).opacity
@@ -1305,7 +1312,7 @@ export async function runUiProbe(): Promise<void> {
       sets.dispatchEvent(new PointerEvent('pointerleave', { bubbles: false }))
       await waitFor(() => sets.getAttribute('data-hover') === '0', 2000)
       result.hoverAttrAfterLeave = sets.getAttribute('data-hover')
-      await sleep(120)
+      await sleep(60)
       result.pillAddAfterLeaveHeight = add.offsetHeight
     }
 
@@ -1868,10 +1875,10 @@ export async function runUiProbe(): Promise<void> {
       // 再点一次同一个按钮必须**收起**（2026-09-13 用户反馈：
       // 之前 mousedown 把它判成"外部"先关、click 又打开 ⇒ 看着闪一下没关）。
       toggle?.click()
-      await sleep(120)
+      await sleep(60)
       result.toggleClosedOk = !document.querySelector('.vd-sign-panel')
       toggle?.click()
-      await sleep(120)
+      await sleep(60)
       result.toggleReopenOk = !!document.querySelector('.vd-sign-panel')
       result.openPanelCount = document.querySelectorAll('.vd-sign-panel').length
 
@@ -2170,7 +2177,7 @@ export async function runUiProbe(): Promise<void> {
       // ⑤ 越界：保存钮禁用 + 红字（前端那道）
       if (inputNow()) {
         typeInto(inputNow()!, '999')
-        await sleep(120)
+        await sleep(60)
         result.overSaveDisabled = !!saveBtn?.disabled
         result.overError = text(rowNow()?.querySelector('.aps-field-error')) || null
       }
@@ -2970,7 +2977,7 @@ export async function runUiProbe(): Promise<void> {
         .find((b) => (b.textContent || '').trim() === '按下')
       result.labPress = !!press
       press?.click()
-      await sleep(120)
+      await sleep(60)
       result.labPhaseOnDown = document.querySelector('.pcard')?.getAttribute('data-card-phase')
       await sleep(420)                              // 长按 350ms 应当自动拾起
       result.labPhaseAfterHold = document.querySelector('.pcard')?.getAttribute('data-card-phase')
@@ -3251,7 +3258,7 @@ export async function runUiProbe(): Promise<void> {
         await sleep(80)
         result.editModePhaseOnDown = phaseOf(same())
         grid.dispatchEvent(new PointerEvent('pointerup', { ...at(p3.x, p3.y), buttons: 0 }))
-        await sleep(120)
+        await sleep(60)
         result.editModePhaseOnUp = phaseOf(same())
       }
 
@@ -3278,7 +3285,7 @@ export async function runUiProbe(): Promise<void> {
         const halfY = Math.round(96 * 0.45)
         const sBefore = Math.round(scroller()?.scrollTop ?? 0)
         grid.dispatchEvent(new PointerEvent('pointermove', at(h0.x + halfX, h0.y + halfY)))
-        await sleep(120)
+        await sleep(60)
         await frame()
         const sAfter = Math.round(scroller()?.scrollTop ?? 0)
         result.resizeHalf = {
@@ -3294,7 +3301,7 @@ export async function runUiProbe(): Promise<void> {
         result.resizeFull = { modelW: modelW(), modelH: modelH(), ...pxSize() }
         grid.dispatchEvent(new PointerEvent(
           'pointerup', { ...at(h0.x + Math.round(colW + gap) + 6, h0.y + 100), buttons: 0 }))
-        await sleep(120)
+        await sleep(60)
         result.resizeInlineDuringSettle = target.getAttribute('style') || ''
         await sleep(420)
         result.resizeAfter = { modelW: modelW(), modelH: modelH(), ...pxSize() }
@@ -3801,7 +3808,7 @@ export async function runUiProbe(): Promise<void> {
         at(from.x + Math.round(dx / 2), from.y + dy)))
       await sleep(80)
       grid.dispatchEvent(new PointerEvent('pointermove', at(from.x + dx, from.y + dy)))
-      await sleep(120)
+      await sleep(60)
       result.during = snapshot()
       grid.dispatchEvent(new PointerEvent('pointerup', at(from.x + dx, from.y + dy)))
       result.dragDx = dx

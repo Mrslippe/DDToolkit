@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 
+from app.models.vtuber import EVENT_KIND_EVENT, EVENT_KINDS
+
 from pydantic import (BaseModel, ConfigDict, Field, field_serializer, field_validator,
                       model_validator)
 
@@ -464,6 +466,9 @@ class VtuberEventOut(BaseModel):
     vtuber_id: int
     title: str
     event_date: str        # "YYYY-MM-DD"
+    # R42-A（f007）：两张档案卡各取各的（纪念日 / 大事记时间轴）+ 自定义图标
+    kind: str = EVENT_KIND_EVENT
+    emoji: str | None = None
     created_at: datetime | None = None
 
     @field_serializer("created_at")
@@ -476,6 +481,33 @@ class VtuberEventOut(BaseModel):
 class VtuberEventCreate(BaseModel):
     title: str
     event_date: str        # "YYYY-MM-DD"
+    kind: str = EVENT_KIND_EVENT
+    emoji: str | None = None
+
+    @field_validator("title")
+    @classmethod
+    def _validate_title(cls, v: str) -> str:
+        v = (v or "").strip()
+        if not v:
+            raise ValueError("title 不能为空")
+        if len(v) > 60:
+            raise ValueError("title 最长 60 字")
+        return v
+
+    @field_validator("kind")
+    @classmethod
+    def _validate_kind(cls, v: str) -> str:
+        if v not in EVENT_KINDS:
+            raise ValueError(f"kind 须是 {sorted(EVENT_KINDS)} 之一")
+        return v
+
+    @field_validator("emoji")
+    @classmethod
+    def _validate_emoji(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip()
+        return v[:8] or None          # 空串等同没填；长度封顶（防有人塞一整段文字）
 
     @field_validator("event_date")
     @classmethod
@@ -484,6 +516,39 @@ class VtuberEventCreate(BaseModel):
             datetime.strptime(v, "%Y-%m-%d")
         except ValueError:
             raise ValueError("event_date 须为 YYYY-MM-DD")
+        return v
+
+
+class VtuberEventUpdate(BaseModel):
+    """局部更新（R42-A）：只改传进来的字段。
+
+    ⚠️ `emoji` 显式传 `None` = **清空**（与"没传"区分开）⇒ 路由里用
+    `model_dump(exclude_unset=True)` 而不是 `exclude_none`。
+    """
+    title: str | None = None
+    event_date: str | None = None
+    kind: str | None = None
+    emoji: str | None = None
+
+    @field_validator("title")
+    @classmethod
+    def _validate_title(cls, v: str | None) -> str | None:
+        return None if v is None else VtuberEventCreate._validate_title(v)
+
+    @field_validator("kind")
+    @classmethod
+    def _validate_kind(cls, v: str | None) -> str | None:
+        return None if v is None else VtuberEventCreate._validate_kind(v)
+
+    @field_validator("emoji")
+    @classmethod
+    def _validate_emoji(cls, v: str | None) -> str | None:
+        return VtuberEventCreate._validate_emoji(v)
+
+    @field_validator("event_date")
+    @classmethod
+    def _validate_date(cls, v: str | None) -> str | None:
+        return None if v is None else VtuberEventCreate._validate_date(v)
 
 
 # ── 档案视图的卡片布局（R37-P2，devlog/142） ──────────────────────────

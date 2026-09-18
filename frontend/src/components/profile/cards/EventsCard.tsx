@@ -1,87 +1,98 @@
 /**
- * 「大事记」卡片（R37-P3，devlog/145）—— 内置卡片之三，也是**扩展点的真示例**。
+ * 「大事记」卡片（R37-P3，devlog/145；R42 改成**时间轴**）。
  *
- * 数据：`GET /vtuber/{id}/events`（`vtuber_events` 表，P7 建好、端点一直在，**UI 一直没接**）。
- * 卡片自己取数（视图不认识卡片需要什么）⇒ 加这张卡没改视图一行，只做了三件事：
- * 写 `events.ts`（纯口径）+ 写本组件 + 在 `cards/index.tsx` 里 `registerCardKind`。
+ * 用户口径（2026-09-19）：「大事记用这种**时间轴**的形式来呈现」+ 手绘草图：
+ * **一条横线 + 线上若干刻度 + 标题在线上、日期在线下**（时间向右流）。
  *
- * 增删留到 P3b（与「自定义卡片」一起做）：本批先只读，把 `vtuber_events` 这条链路先接亮。
+ * 数据：`GET /vtuber/{id}/events?kind=event`（`vtuber_events` 表）——
+ * R42 起这张表同时承载"纪念日"（`kind='anniversary'`），两张卡各取各的、互不串。
+ *
+ * ⚠️ 刻度位置由 `timelineNodes` 按**日期**算（纯函数、有单测）：疏密一眼看得出；
+ * 只有一条或全部同一天时居中，不会贴左边缘。
  */
-import { useEffect, useMemo, useState } from 'react'
+import { Plus, X } from 'lucide-react'
+import { useMemo, useState } from 'react'
 
-import { api } from '../../../api/api'
-import type { VtuberEvent } from '../../../api/types'
 import type { CardContext } from '../cardRegistry'
-import { eventChip, eventHint, eventItems } from '../events'
+import { eventItems, timelineNodes } from '../events'
+import { EMPTY_DRAFT, draftError, useCustomEntries } from '../customEntries'
+import type { EntryDraft } from '../customEntries'
 
-export default function EventsCard({ vtuber, refreshTick }: CardContext) {
-  const [events, setEvents] = useState<VtuberEvent[]>([])
-  const [state, setState] = useState<'loading' | 'ready' | 'error'>('loading')
+/** 时间轴一次展示几条（多了刻度会挤在一起，反而看不清） */
+const SHOW = 5
 
-  useEffect(() => {
-    let cancelled = false
-    setState('loading')
-    api.listVtuberEvents(vtuber.id)
-      .then((rows) => {
-        if (cancelled) return
-        setEvents(rows)
-        setState('ready')
-      })
-      .catch(() => {
-        if (cancelled) return
-        setEvents([])
-        setState('error')
-      })
-    return () => { cancelled = true }
-  }, [vtuber.id, refreshTick])
+export default function EventsCard({ vtuber, refreshTick, editing }: CardContext) {
+  const { items: events, busy, error, add, remove } =
+    useCustomEntries(vtuber.id, 'event', refreshTick)
+  const [draft, setDraft] = useState<EntryDraft>(EMPTY_DRAFT)
+  const [formOpen, setFormOpen] = useState(false)
 
-  const items = useMemo(() => eventItems(events), [events])
-  const hint = useMemo(() => eventHint(items), [items])
+  const items = useMemo(() => eventItems(events, new Date(), SHOW), [events])
+  const nodes = useMemo(() => timelineNodes(items), [items])
+  const bad = draftError(draft)
 
-  if (state === 'loading' && !events.length) {
-    // 骨架：与"有榜单"时同尺寸（R36 的口径 —— 数据到达不该让卡片变高）：
-    // 连**落点**的位置都占上（`.evt-skel-dot` 与真落点同坐标），否则数据到达后
-    // 行会整体右移 16px，看起来就是"跳了一下"。
-    return (
-      <ul className="evt-list" data-card-body="events" data-pending="1">
-        {[0, 1, 2].map((i) => (
-          <li className="evt-row" key={`skel-${i}`}>
-            <span className="lc-skel evt-skel-dot" />
-            <span className="lc-skel evt-skel-date" />
-            <span className="lc-skel lc-skel--text" />
-          </li>
-        ))}
-      </ul>
-    )
-  }
-  if (state === 'error') {
-    return <p className="pcard-empty">大事记没取到（本地库读失败）—— 切走再切回来会重试</p>
+  const submit = () => {
+    if (bad) return
+    void add(draft)
+    setDraft(EMPTY_DRAFT)
+    setFormOpen(false)
   }
 
   return (
-    <div className="evt" data-card-body="events">
-      {items.length ? (
-        <ul className="evt-list">
-          {/* 时间线脊线由 `.evt-list::before` 画（规格 §4.3）—— 不用 DOM 节点：
-              `<ul>` 里塞 `<span>` 是非法结构，而伪元素天然跟着列表高度走。 */}
-          {items.map((it) => {
-            const chip = eventChip(it)
-            return (
-              <li key={it.id}
-                  className={`evt-row${it.days === 0 ? ' today' : ''}${it.days < 0 ? ' past' : ''}`}
-                  title={`${it.date} · ${it.when}`}>
-                <span className="evt-dot" aria-hidden="true" />
-                <span className="evt-date">{it.date.slice(5)}</span>
-                <span className="evt-title">{it.title}</span>
-                <span className="tone-chip evt-chip" data-tone={chip.tone}>{chip.text}</span>
-              </li>
-            )
-          })}
-        </ul>
+    <div className="tl" data-card-body="events">
+      {nodes.length ? (
+        <div className="tl-track" data-tl-count={nodes.length}>
+          {/* 横线 + 右端箭头（时间向右流，与草图一致） */}
+          <span className="tl-line" aria-hidden="true" />
+          <span className="tl-arrow" aria-hidden="true" />
+          {nodes.map(({ item, t, future }) => (
+            <div className="tl-node" key={item.id} style={{ left: `${t * 100}%` }}
+                 data-tl-node={item.id}>
+              <span className="tl-title" title={item.title}>{item.title}</span>
+              <span className={`tl-dot${future ? ' future' : ''}${item.days === 0 ? ' today' : ''}`} />
+              <span className="tl-date">{item.date.slice(5).replace('-', '.')}</span>
+              {editing && (
+                <button type="button" className="tl-del" title="删掉这一条" disabled={busy}
+                        onClick={() => void remove(item.id)}>
+                  <X size={10} />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
       ) : (
-        <p className="pcard-empty">{hint}</p>
+        <p className="pcard-empty">
+          {error ? `读取失败：${error}` : '还没有大事记 —— 编辑布局时可以自己加'}
+        </p>
       )}
-      {items.length > 0 && <p className="evt-hint">{hint}</p>}
+
+      {editing && (
+        <div className="tl-add">
+          {formOpen ? (
+            <div className="tl-form" data-tl-form>
+              <input className="anniv-in name" value={draft.title} placeholder="大事记（周年庆）"
+                     aria-label="标题"
+                     onChange={(e) => setDraft({ ...draft, title: e.target.value })} />
+              <input className="anniv-in date" type="date" value={draft.event_date}
+                     aria-label="日期"
+                     onChange={(e) => setDraft({ ...draft, event_date: e.target.value })} />
+              <button type="button" className="anniv-op ok" disabled={!!bad || busy}
+                      title={bad ?? '保存'} onClick={submit}>添加</button>
+              <button type="button" className="anniv-op"
+                      onClick={() => { setFormOpen(false); setDraft(EMPTY_DRAFT) }}>取消</button>
+            </div>
+          ) : (
+            <button type="button" className="anniv-add-btn" data-tl-add
+                    onClick={() => setFormOpen(true)}>
+              <Plus size={12} /> 添加大事记
+            </button>
+          )}
+        </div>
+      )}
+
+      <p className="tl-hint" data-tl-hint>
+        {error ? `保存失败：${error}` : '刻度按日期铺开 · 实心点是将来的事'}
+      </p>
     </div>
   )
 }

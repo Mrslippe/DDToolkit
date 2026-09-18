@@ -1521,6 +1521,145 @@ img.hero-avatar {
   }
 }
 
+/* ── R42：三张内置卡的改造（用户 2026-09-19）────────────────────────────
+   ① 纪念日：开放自定义（名称/日期/emoji）—— 增删只在**编辑布局**态出现；
+   ② 优质投稿 → **随机投稿**：两张大封面并排（参考图一：封面占满、标题压暗角、
+      角上一枚类型标、底部一行小数字）；
+   ③ 大事记 → **时间轴**（参考图二：一条横线 + 刻度 + 标题在线上、日期在线下）。 */
+
+/* ① 自定义纪念日：行尾操作 + 内联表单 */
+.anniv-row.custom .anniv-label { font-weight: 600; }
+.anniv-emoji { font-size: 13px; line-height: 1; }
+.anniv-row-ops { display: inline-flex; align-items: center; gap: 4px; margin-left: 4px; }
+.anniv-op {
+  padding: 1px 6px;
+  border: none;
+  border-radius: 5px;
+  background: var(--pill-bg-hover);
+  color: var(--c-text-sub);
+  font-size: 11px;
+  line-height: 16px;
+  cursor: pointer;
+}
+.anniv-op:hover { background: var(--sel-bg-hover); color: var(--c-text-main); }
+.anniv-op.del { display: inline-flex; align-items: center; padding: 2px 5px; }
+.anniv-op.ok { background: var(--c-primary); color: #fff; }
+.anniv-op:disabled { opacity: .5; cursor: default; }
+.anniv-add { margin-top: 6px; }
+.anniv-add-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 8px; border: 1px dashed var(--c-border); border-radius: 6px;
+  background: none; color: var(--c-text-sub); font-size: 11.5px; cursor: pointer;
+}
+.anniv-add-btn:hover { border-color: var(--c-primary); color: var(--c-primary); }
+.anniv-form, .tl-form { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.anniv-in {
+  min-width: 0; padding: 3px 6px; border: 1px solid var(--c-border); border-radius: 6px;
+  background: #fff; font-size: 11.5px; color: var(--c-text-main);
+}
+.anniv-in.emoji { width: 40px; text-align: center; }
+.anniv-in.name { flex: 1; min-width: 90px; }
+.anniv-in.date { width: 118px; }
+
+/* ② 随机投稿：两张大封面并排 */
+.rp { display: flex; flex-direction: column; gap: 8px; height: 100%; }
+.rp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; flex: 1; min-height: 0; }
+.rp-card {
+  position: relative;
+  display: block;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #f3f0f1;
+  cursor: pointer;
+}
+.rp-cover { width: 100%; height: 100%; object-fit: cover; display: block; }
+.rp-cover-ph {
+  display: flex; align-items: center; justify-content: center;
+  width: 100%; height: 100%;
+  background: var(--c-bg-list); color: var(--c-text-sub);
+  font-size: 26px; font-weight: 700;
+}
+/* 暗角：标题压在上面也得读得清（"不要在没有保护的情况下把文字放在图上"） */
+.rp-scrim {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 66%;
+  background: linear-gradient(to top, rgba(24, 14, 18, 0.84) 0%, rgba(24, 14, 18, 0) 100%);
+}
+.rp-type {
+  position: absolute; left: 6px; top: 6px;
+  padding: 1px 6px; border-radius: 999px;
+  background: rgba(255, 255, 255, 0.86);
+  color: var(--c-text-main); font-size: 10.5px; line-height: 15px;
+}
+.rp-title {
+  position: absolute; left: 8px; right: 8px; bottom: 24px;
+  color: #fff; font-size: 12.5px; font-weight: 600; line-height: 1.3;
+  text-align: left;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.rp-meta {
+  position: absolute; left: 8px; right: 8px; bottom: 6px;
+  display: flex; align-items: center; justify-content: space-between;
+  color: rgba(255, 255, 255, 0.88); font-size: 10.5px;
+}
+.rp-plays { display: inline-flex; align-items: center; gap: 3px; }
+.rp-skel { display: block; width: 100%; height: 100%; }
+.rp-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.rp-hint { margin: 0; color: var(--c-text-sub); font-size: 11px; }
+.rp-again {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 9px; border: none; border-radius: 999px;
+  background: var(--pill-bg-hover); color: var(--c-text-main);
+  font-size: 11.5px; cursor: pointer;
+}
+.rp-again:hover { background: var(--sel-bg-hover); color: var(--c-primary); }
+
+/* ③ 大事记：时间轴 */
+.tl { display: flex; flex-direction: column; height: 100%; gap: 6px; }
+.tl-track { position: relative; flex: 1; min-height: 84px; margin: 0 10px; }
+.tl-line {
+  position: absolute; left: 0; right: 0; top: 50%;
+  height: 2px; border-radius: 1px; background: var(--c-border);
+}
+/* 右端箭头：时间向右流（与草图一致） */
+.tl-arrow {
+  position: absolute; right: -7px; top: 50%; transform: translateY(-50%);
+  width: 0; height: 0;
+  border-top: 4px solid transparent; border-bottom: 4px solid transparent;
+  border-left: 7px solid var(--c-border);
+}
+.tl-node {
+  position: absolute; top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  max-width: 88px;
+}
+.tl-title {
+  font-size: 11px; font-weight: 600; color: var(--c-text-main);
+  line-height: 1.2; text-align: center;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.tl-dot {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: #fff; border: 2px solid var(--c-border);
+  box-sizing: border-box; flex: none;
+}
+.tl-dot.future { border-color: var(--c-primary); background: var(--c-primary); }
+.tl-dot.today { box-shadow: 0 0 0 3px var(--sel-bg-hover); }
+.tl-date { font-size: 10.5px; color: var(--c-text-sub); font-variant-numeric: tabular-nums; }
+.tl-del {
+  position: absolute; right: -6px; top: -2px;
+  display: inline-flex; padding: 1px;
+  border: none; border-radius: 4px;
+  background: var(--pill-bg-hover); color: var(--c-text-sub); cursor: pointer;
+}
+.tl-del:hover { background: var(--sel-bg-hover); color: var(--c-primary); }
+.tl-add { margin-top: 2px; }
+.tl-hint { margin: 0; color: var(--c-text-sub); font-size: 11px; }
+
 /* 视图级滚动容器（2026-09-07 覆盖式滚动条 OverlayScroll）：
    原生条隐藏不占宽 + 拇指自动隐藏；滚动体接管布局（列布局/间距/内边距） */
 .archive-view {

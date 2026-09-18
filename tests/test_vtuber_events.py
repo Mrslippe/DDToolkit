@@ -64,6 +64,56 @@ def test_event_crud(db):
     assert repo.delete(9999) is False
 
 
+# ── R42-A：kind / emoji（两张档案卡各取各的）─────────────────────────
+
+def test_event_kind_default_is_event(db):
+    """不传 kind ⇒ 落 `event`（既有行的语义：大事记条目）"""
+    v = _mk_vtuber(db)
+    e = VtuberEventRepo(db).create(v.id, "线下活动", "2026-05-01")
+    assert e.kind == "event"
+    assert e.emoji is None
+
+
+def test_event_kind_filter_separates_two_cards(db):
+    """**两张卡互不串**：纪念日卡只看得到 anniversary，大事记卡只看得到 event"""
+    v = _mk_vtuber(db)
+    repo = VtuberEventRepo(db)
+    repo.create(v.id, "生日", "2026-03-14", kind="anniversary", emoji="🎂")
+    repo.create(v.id, "演唱会", "2026-05-01", kind="event")
+    ann = repo.list_by_vtuber(v.id, kind="anniversary")
+    evt = repo.list_by_vtuber(v.id, kind="event")
+    assert [r.title for r in ann] == ["生日"]
+    assert [r.title for r in evt] == ["演唱会"]
+    # 不过滤 ⇒ 两条都在（老前端行为不变）
+    assert len(repo.list_by_vtuber(v.id)) == 2
+
+
+def test_event_update_partial_and_clear_emoji(db):
+    """局部更新：只动传进来的字段；`emoji=None` 是**清空**而不是"没传" """
+    v = _mk_vtuber(db)
+    repo = VtuberEventRepo(db)
+    e = repo.create(v.id, "生日", "2026-03-14", kind="anniversary", emoji="🎂")
+    # 改名 + 改日期
+    got = repo.update(e.id, title="生日歌回", event_date="2026-03-15")
+    assert got is not None and got.title == "生日歌回" and got.event_date == "2026-03-15"
+    assert got.emoji == "🎂"                       # 没传的字段保持原值
+    # 清空 emoji（显式 None）
+    got2 = repo.update(e.id, emoji=None)
+    assert got2 is not None and got2.emoji is None
+    # 不存在的 id
+    assert repo.update(9999, title="x") is None
+
+
+def test_event_update_can_move_between_cards(db):
+    """把一条从大事记挪到纪念日（kind 也可改）"""
+    v = _mk_vtuber(db)
+    repo = VtuberEventRepo(db)
+    e = repo.create(v.id, "某次活动", "2026-06-01", kind="event")
+    repo.update(e.id, kind="anniversary")
+    assert [r.title for r in repo.list_by_vtuber(v.id, kind="anniversary")] == ["某次活动"]
+    assert repo.list_by_vtuber(v.id, kind="event") == []
+
+
 # ── 未来预约解析 ────────────────────────────────────────────────────
 
 def _resv(desc1, button_text="预约", title="", reserve_total=5, rid="21452505"):
