@@ -21,8 +21,8 @@ interface Props {
 const EXIT_MS = 200
 
 /** 灯箱大图：状态机与占位统一走 ProxyImage（外层 key=url 逐张重置） */
-function ViewerImg({ src, alt, zoom = 1, origin = '50% 50%' }:
-{ src: string; alt?: string; zoom?: number; origin?: string }) {
+function ViewerImg({ src, alt, zoom = 1, origin = '50% 50%', pan = { x: 0, y: 0 } }:
+{ src: string; alt?: string; zoom?: number; origin?: string; pan?: Pan }) {
   return (
     <ProxyImage
       src={src}
@@ -30,11 +30,15 @@ function ViewerImg({ src, alt, zoom = 1, origin = '50% 50%' }:
       className="max-h-[84vh] max-w-[92vw] select-none object-contain"
       fallbackClassName=""
       draggable={false}
-      /* R40c：缩放走 `transform`（合成器属性，不重排）；`transform-origin` 跟着指针走 */
+      /* R40c/R40d：缩放与拖动都走 `transform`（合成器属性，不重排）；
+         **位移写在外层、缩放写在内层** ⇒ 位移是屏幕像素，钳制范围好算。
+         `transform-origin` 跟着指针走，放大后想看哪就看哪。 */
       style={{
-        transform: zoom === 1 ? undefined : `scale(${zoom})`,
+        transform: zoom === 1 && !pan.x && !pan.y
+          ? undefined
+          : `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
         transformOrigin: origin,
-        transition: 'transform 120ms ease-out',
+        transition: pan.x || pan.y ? 'transform 60ms linear' : 'transform 120ms ease-out',
       }}
       fallback={
         <div className="flex flex-col items-center gap-2 px-6 text-muted-foreground">
@@ -59,6 +63,29 @@ export function nextZoom(cur: number, deltaY: number): number {
   return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(next * 1000) / 1000))
 }
 
+export interface Pan { x: number; y: number }
+
+/**
+ * 纯函数：把拖动位移**钳在图片边界内**（R40d，用户 2026-09-19：「放大后可以按住拖动的抓手工具」）。
+ *
+ * 规则：可拖范围 = 放大后**超出视口的那部分的一半** ——
+ *   · 没放大（scale=1，图片本来就装得下）⇒ 上下左右都拖不动（`max = 0`）；
+ *   · 放大后最多拖到"图片边缘与视口边缘对齐"，不会把图拖出屏幕再也找不回来。
+ * ⚠️ 这是**软钳制**：`transform-origin` 跟着指针走，图片在放大那一刻可能已经偏心，
+ * 所以这里按"以中心为基准"估一个安全范围 —— 宁可少钳一点，也不要出现"拖不动"的僵手感。
+ */
+export function clampPan(pan: Pan, scale: number, size: { w: number; h: number },
+                         viewport: { w: number; h: number }): Pan {
+  const maxX = Math.max(0, (size.w * scale - viewport.w) / 2)
+  const maxY = Math.max(0, (size.h * scale - viewport.h) / 2)
+  // `+ 0`：把 `-0` 归一成 `0`（否则 `data-viewer-pan` 会写成 "-0,0"，看着像坏了；
+  // 单测里 `toEqual` 用 Object.is，-0 与 0 也不相等）
+  return {
+    x: Math.min(maxX, Math.max(-maxX, pan.x)) + 0,
+    y: Math.min(maxY, Math.max(-maxY, pan.y)) + 0,
+  }
+}
+
 /**
  * P6-4：帖子详情中的独立图片查看器。
  * - 浮于详情窗口之上（body portal + z-[200] > dialog z-50），交互完全自持：
@@ -81,6 +108,13 @@ export default function ImageViewer({ images, index, onIndexChange, onClose }: P
   /** 缩放倍数与锚点（R40c）；切图时由 `key` 重建 ⇒ 自动复位 */
   const [scale, setScale] = useState(ZOOM_MIN)
   const [origin, setOrigin] = useState('50% 50%')
+  /** 拖动位移（R40d，抓手）：只在放大后可拖 */
+  const [pan, setPan] = useState<Pan>({ x: 0, y: 0 })
+  const dragRef = useRef<{ id: number; sx: number; sy: number; ox: number; oy: number } | null>(null)
+  const [dragging, setDragging] = useState(false)
+  /** 刚拖过：用来吞掉紧随其后的 click（否则一松手就把查看器关了） */
+  const draggedRef = useRef(false)
+  const bodyRef = useRef<HTMLDivElement | null>(null)
 
   const onWheelZoom = (e: React.WheelEvent) => {
     e.preventDefault()
@@ -93,6 +127,40 @@ export default function ImageViewer({ images, index, onIndexChange, onClose }: P
     const py = box.height ? ((e.clientY - box.top) / box.height) * 100 : 50
     setOrigin(`${px.toFixed(1)}% ${py.toFixed(1)}%`)
     setScale(next)
+    // 缩回 1 时把位移一起复位（否则"看着适应窗口、其实偏到一边"）
+    if (next === ZOOM_MIN) setPan({ x: 0, y: 0 })
+  }
+
+  /** 抓手拖动（R40d）：只有放大后才接管指针，否则让点击照旧关闭查看器 */
+  const canPan = scale > ZOOM_MIN + 0.001
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (!canPan || closing) return
+    e.stopPropagation()
+    dragRef.current = { id: e.pointerId, sx: e.clientX, sy: e.clientY, ox: pan.x, oy: pan.y }
+    draggedRef.current = false
+    setDragging(true)
+    e.currentTarget.setPointerCapture?.(e.pointerId)
+  }
+  const onPointerMove = (e: React.PointerEvent) => {
+    const d = dragRef.current
+    if (!d || d.id !== e.pointerId) return
+    e.stopPropagation()
+    const dx = e.clientX - d.sx
+    const dy = e.clientY - d.sy
+    if (Math.abs(dx) + Math.abs(dy) > 3) draggedRef.current = true
+    const img = bodyRef.current?.querySelector('img')
+    const box = e.currentTarget.getBoundingClientRect()
+    const ir = img?.getBoundingClientRect()
+    // 未缩放尺寸：当前 rect ÷ 当前 scale（rect 已经把 scale 算进去了）
+    const size = ir ? { w: ir.width / scale, h: ir.height / scale } : { w: box.width, h: box.height }
+    setPan(clampPan({ x: d.ox + dx, y: d.oy + dy }, scale, size,
+                    { w: window.innerWidth, h: window.innerHeight }))
+  }
+  const endDrag = (e: React.PointerEvent) => {
+    if (!dragRef.current) return
+    dragRef.current = null
+    setDragging(false)
+    e.currentTarget.releasePointerCapture?.(e.pointerId)
   }
 
   const go = (d: number) => {
@@ -222,12 +290,27 @@ export default function ImageViewer({ images, index, onIndexChange, onClose }: P
           · 切图/关闭自动复位（`key` 变化即重建 ⇒ scale 回到 1）。 */}
       <div
         key={`${img.url}-${index}`}
+        ref={bodyRef}
         className="image-viewer-img flex max-h-full max-w-full items-center justify-center"
         data-viewer-scale={scale.toFixed(2)}
+        data-viewer-pan={`${Math.round(pan.x)},${Math.round(pan.y)}`}
+        data-viewer-grab={canPan ? (dragging ? 'grabbing' : 'grab') : 'none'}
         onWheel={onWheelZoom}
-        onClick={(e) => e.stopPropagation()}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+        onClick={(e) => {
+          e.stopPropagation()
+          // 拖动结束时不要顺带把查看器关了（用户只是想挪一下图）
+          if (draggedRef.current) {
+            draggedRef.current = false
+            return
+          }
+        }}
+        style={{ cursor: canPan ? (dragging ? 'grabbing' : 'grab') : 'default' }}
       >
-        <ViewerImg src={img.url} alt={img.url} zoom={scale} origin={origin} />
+        <ViewerImg src={img.url} alt={img.url} zoom={scale} origin={origin} pan={pan} />
       </div>
 
       {/* 底部点状序号（单图隐藏） */}
