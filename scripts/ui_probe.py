@@ -2210,6 +2210,21 @@ def main() -> int:
                       f"（可视 < 内容 = 已顶到上限；**判据看内容高**，窗高在顶到上限时恒等）")
                 caps_e = early.get("glanceCaps") or []
                 caps_l = late.get("glanceCaps") or []
+                # R40c（用户 2026-09-19）三条排版契约
+                gt = (late.get("glanceTitle") or "").strip()
+                if gt:
+                    bad.append(f"@{w} R40c: 「本场速览」标题还在（{gt!r}）"
+                               f"—— 用户要求去掉标题与卡片底以缩减高度")
+                bgs = late.get("capBgs") or []
+                if len(set(bgs)) < min(4, len(bgs)) or len(bgs) < 4:
+                    bad.append(f"@{w} R40c: 四枚胶囊的底色只有 {len(set(bgs))} 种"
+                               f"（{bgs}）—— 用户要求「分别用不同颜色做底提高辨识度」")
+                lb, rb = late.get("leftBottom"), late.get("rightBottom")
+                if lb is None or rb is None:
+                    bad.append(f"@{w} R40c: 量不到两列的底边（left={lb} right={rb}）")
+                elif abs(lb - rb) > 2:
+                    bad.append(f"@{w} R40c: 左列底边 {lb} 与右列底边 {rb} 差 {rb - lb}px"
+                               f"—— 用户要求「保证下端对齐不要留出空白」")
                 print("  逐段高度（未到位 → 已到位）：")
                 se = early.get("sections") or []
                 sl = late.get("sections") or []
@@ -2647,8 +2662,15 @@ def main() -> int:
                 failures.append(f"@{w} reservations: 没量到预约段（探针未跑完？）")
             else:
                 if not rv.get("hasResvCell"):
-                    failures.append(f"@{w} reservations: 日历里找不到带 `data-resv-count` 的格子"
-                                    f"（预约没进日历：种的数据没被解析？接口没通？）")
+                    if not (rv.get("cellCount") or 0):
+                        failures.append(
+                            f"@{w} reservations: **日历视图根本没打开**（0 个 `.lc-cell`；"
+                            f"点中「数据视图」={rv.get('openedCalendarView')}）"
+                            f"—— 先看是不是光条按钮改名/前缀匹配点错了页（R37-P1 之后踩过一次）")
+                    else:
+                        failures.append(f"@{w} reservations: 日历里找不到带 `data-resv-count` 的格子"
+                                        f"（{rv.get('cellCount')} 个格子在，预约没进日历："
+                                        f"种的数据没被解析？接口没通？）")
                 else:
                     if rv.get("resvBadge") != "预约":
                         failures.append(f"@{w} reservations: 预约格徽章是 {rv.get('resvBadge')!r}，"
@@ -2705,17 +2727,27 @@ def main() -> int:
                     failures.append(f"@{w} profile-sync: 卡片签名是 {ps.get('heroSign')!r}"
                                     f"（卡片自己都没跟随？口径被改坏了）")
                 ctl_name, ctl_sign = seeded_profile.get("controlName"), seeded_profile.get("controlSign")
-                if ctl_name:
-                    row = next((r for r in (ps.get("rows") or [])
-                                if (r.get("name") or "").strip() == ctl_name.strip()), None)
-                    if not row:
-                        failures.append(f"@{w} profile-sync: 对照组 {ctl_name!r} 没在左栏找到")
-                    elif (row.get("sign") or "").strip() != (ctl_sign or "").strip():
-                        failures.append(f"@{w} profile-sync: 对照组 {ctl_name!r} 的签名变成 "
-                                        f"{row.get('sign')!r}（应为平台签名 {ctl_sign!r}）"
-                                        f"—— 自定义值串到别的 V 上了？")
-                    else:
-                        print(f"  对照：{ctl_name!r} 仍显示平台签名 ✓")
+                # R33 补（2026-09-19）：**当场改**之后左栏必须跟着（编辑后的同步 ——
+                # 上面那些"启动前种进库"的现场覆盖不到它，用户报的就是这一条）
+                if ps.get("liveSignError"):
+                    failures.append(f"@{w} profile-sync: 当场改签名的模拟失败"
+                                    f"（{ps.get('liveSignError')}）")
+                elif not ps.get("liveSignSynced"):
+                    failures.append(f"@{w} profile-sync: **当场改签名后左栏没跟着变**"
+                                    f"（左栏={ps.get('liveSignGot')!r}，应为 "
+                                    f"{ps.get('liveSignWant')!r}）—— 保存后没有通知左栏")
+                else:
+                    print(f"  当场改签名：左栏已同步 ✓（{ps.get('liveSignGot')!r}）")
+                # 对照组：**不许有别的 V 显示那条自定义签名**（数据无关的判法 ——
+                # 原来拿"库里挑的那个对照 V"比，库里混进脏数据就会假红）
+                seeded = [r for r in (ps.get("rows") or [])
+                          if (r.get("sign") or "").strip() == want_sign
+                          and (r.get("name") or "").strip() != (ps.get("activeName") or "").strip()]
+                if seeded:
+                    failures.append(f"@{w} profile-sync: 自定义签名串到了别的 V 上"
+                                    f"（{[(r.get('name'), r.get('sign')) for r in seeded]}）")
+                elif ctl_name:
+                    print(f"  对照：除目标 V 外没有别的行显示自定义签名 ✓")
                 if not failures:
                     print("  [ok] 左栏与卡片同源：自定义签名/头像都到位，对照组未被污染")
             for b in failures:

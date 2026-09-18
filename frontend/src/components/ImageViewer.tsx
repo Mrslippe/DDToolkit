@@ -21,7 +21,8 @@ interface Props {
 const EXIT_MS = 200
 
 /** 灯箱大图：状态机与占位统一走 ProxyImage（外层 key=url 逐张重置） */
-function ViewerImg({ src, alt }: { src: string; alt?: string }) {
+function ViewerImg({ src, alt, zoom = 1, origin = '50% 50%' }:
+{ src: string; alt?: string; zoom?: number; origin?: string }) {
   return (
     <ProxyImage
       src={src}
@@ -29,6 +30,12 @@ function ViewerImg({ src, alt }: { src: string; alt?: string }) {
       className="max-h-[84vh] max-w-[92vw] select-none object-contain"
       fallbackClassName=""
       draggable={false}
+      /* R40c：缩放走 `transform`（合成器属性，不重排）；`transform-origin` 跟着指针走 */
+      style={{
+        transform: zoom === 1 ? undefined : `scale(${zoom})`,
+        transformOrigin: origin,
+        transition: 'transform 120ms ease-out',
+      }}
       fallback={
         <div className="flex flex-col items-center gap-2 px-6 text-muted-foreground">
           <ImageOff className="size-10" />
@@ -37,6 +44,19 @@ function ViewerImg({ src, alt }: { src: string; alt?: string }) {
       }
     />
   )
+}
+
+/** 缩放范围：1 = 适应窗口（默认），最大 4 倍。不允许小于 1（比适应窗口更小没有意义）。 */
+export const ZOOM_MIN = 1
+export const ZOOM_MAX = 4
+/** 每一格滚轮的缩放步进（按 deltaY 的符号走指数曲线，手感比线性稳） */
+export const ZOOM_STEP = 0.22
+
+/** 纯函数：滚轮增量 → 新的缩放倍数（夹在 [ZOOM_MIN, ZOOM_MAX]） */
+export function nextZoom(cur: number, deltaY: number): number {
+  if (!deltaY) return cur
+  const next = deltaY < 0 ? cur * (1 + ZOOM_STEP) : cur / (1 + ZOOM_STEP)
+  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(next * 1000) / 1000))
 }
 
 /**
@@ -49,6 +69,7 @@ function ViewerImg({ src, alt }: { src: string; alt?: string }) {
  *   不给整屏加黑纱
  * - 关闭有退场动画（is-exiting 类驱动 200ms，再真正卸载）
  * - 上一张 / 下一张（循环，左右键同效）；底部点状序号点击跳转
+ * - **滚轮缩放**（R40c）：`transform: scale()` + 以指针为锚点，范围 [1, 4]
  * - 控件为黑色玻璃浮钮；关闭钮同构圆钮
  */
 export default function ImageViewer({ images, index, onIndexChange, onClose }: Props) {
@@ -57,6 +78,22 @@ export default function ImageViewer({ images, index, onIndexChange, onClose }: P
   const [closing, setClosing] = useState(false)
   const closeTimerRef = useRef<number | undefined>(undefined)
   const [veilRect, setVeilRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
+  /** 缩放倍数与锚点（R40c）；切图时由 `key` 重建 ⇒ 自动复位 */
+  const [scale, setScale] = useState(ZOOM_MIN)
+  const [origin, setOrigin] = useState('50% 50%')
+
+  const onWheelZoom = (e: React.WheelEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const next = nextZoom(scale, e.deltaY)
+    if (next === scale) return
+    // 以指针为锚点：`transform-origin` 用指针在**容器内**的百分比
+    const box = e.currentTarget.getBoundingClientRect()
+    const px = box.width ? ((e.clientX - box.left) / box.width) * 100 : 50
+    const py = box.height ? ((e.clientY - box.top) / box.height) * 100 : 50
+    setOrigin(`${px.toFixed(1)}% ${py.toFixed(1)}%`)
+    setScale(next)
+  }
 
   const go = (d: number) => {
     if (closing) return
@@ -176,13 +213,21 @@ export default function ImageViewer({ images, index, onIndexChange, onClose }: P
         </>
       )}
 
-      {/* 主体：无外框背景，图片直接浮于详情窗口上方 */}
+      {/* 主体：无外框背景，图片直接浮于详情窗口上方。
+          R40c（用户 2026-09-19）：「为帖子详情弹窗中可以打开的图片查看器新增图片缩放功能，
+          用滚轮控制放大和缩小」——
+          · 只动 `transform: scale()`（不走 width/height：那会每帧重排，且大图重排很贵）；
+          · 以**指针位置**为锚点缩放（`transform-origin` 跟着指针走），放大后想看哪就看哪；
+          · 范围 `[1, 4]`：1 = 适应窗口（默认），不允许缩到比适应窗口更小（那没有意义）；
+          · 切图/关闭自动复位（`key` 变化即重建 ⇒ scale 回到 1）。 */}
       <div
         key={`${img.url}-${index}`}
         className="image-viewer-img flex max-h-full max-w-full items-center justify-center"
+        data-viewer-scale={scale.toFixed(2)}
+        onWheel={onWheelZoom}
         onClick={(e) => e.stopPropagation()}
       >
-        <ViewerImg src={img.url} alt={img.url} />
+        <ViewerImg src={img.url} alt={img.url} zoom={scale} origin={origin} />
       </div>
 
       {/* 底部点状序号（单图隐藏） */}

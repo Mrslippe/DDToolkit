@@ -12,6 +12,7 @@ import type { AccountSnapshot, VTuber } from '../api/types'
 import { mergeVtuberSnapshots } from '../utils/accountSnapshots'
 import { resolveAvatar } from '../utils/avatarSource'
 import { resolveSign } from '../utils/signSource'
+import { VTUBER_UPDATED_EVENT, applyVtuberUpdate } from '../utils/vtuberList'
 import './../styles/layout.css'
 
 /** 把抓取完成的账号快照就地合并进侧栏数据（按 bilibili platform_uid 匹配） */
@@ -81,6 +82,21 @@ export default function VtuberSidebar() {
     window.addEventListener('ddtoolkit:fetch-idle', onFetchIdle)
     return () => window.removeEventListener('ddtoolkit:fetch-idle', onFetchIdle)
   }, [load])
+
+  /**
+   * R33 补（2026-09-19，用户：「修改过的签名左栏没有及时同步」）：
+   * 「档案设置」保存后广播一条 `ddtoolkit:vtuber-updated`，这里**就地更新**那一行。
+   * 为什么不是重新 `load()`：整表重拉会让左栏闪一下（loading 态 + 重排），
+   * 而这次改的只有一个 V 的几个字段 ⇒ 就地合并最稳（合并逻辑是纯函数，有单测）。
+   */
+  useEffect(() => {
+    const onUpdated = (e: Event) => {
+      const v = (e as CustomEvent<VTuber>).detail
+      setVtubers((prev) => applyVtuberUpdate(prev, v))
+    }
+    window.addEventListener(VTUBER_UPDATED_EVENT, onUpdated)
+    return () => window.removeEventListener(VTUBER_UPDATED_EVENT, onUpdated)
+  }, [])
 
   // 数据变更（解订阅 / 添加 VTuber）后刷新列表
   useEffect(() => {

@@ -838,6 +838,14 @@ export async function runUiProbe(): Promise<void> {
         })),
         pending: dlg.querySelectorAll('[data-pending="1"]').length,
         skels: dlg.querySelectorAll('.lc-skel').length,
+        /** R40c 排版契约：速览标题必须去掉、四枚胶囊必须**四种底色**、两列底边必须齐平 */
+        glanceTitle: (dlg.querySelector('.lc-dlg-glance .lc-dlg-sec-title')?.textContent || '').trim(),
+        capBgs: [...dlg.querySelectorAll('.lc-dlg-glance .lc-glance-cap')]
+          .map((n) => getComputedStyle(n).backgroundColor),
+        leftBottom: Math.round(
+          (dlg.querySelector('.lc-dlg-left')?.getBoundingClientRect().bottom ?? 0)),
+        rightBottom: Math.round(
+          (dlg.querySelector('.lc-dlg-main > .lc-dlg-sec')?.getBoundingClientRect().bottom ?? 0)),
         /** 逐段高度 + 每个骨架的高度（R40c：把 R36 那条"差 9px"定位到**具体哪一段**） */
         sections: [...dlg.querySelectorAll('.lc-dlg-sec')].map((n) => ({
           cls: (n.className || '').split(' ').slice(0, 2).join('.'),
@@ -1579,9 +1587,14 @@ export async function runUiProbe(): Promise<void> {
     document.head.appendChild(killAnim)
 
     // 档案视图（日历所在）
-    clickView('档案')
+    // ⚠️ R37-P1 把这一页改名为「**数据视图**」之后，这里原来写的 `clickView('档案')` 只会匹配到
+    // **档案视图（卡片画布）**（前缀匹配！）⇒ 点开的是没有日历的那一页，然后一直等 `.lc-cell` ✗
+    // —— 这就是 `--reservations` 长期红着的根因（改名留下的陈旧选择器）。
+    const openedCalendar = clickView('数据视图')
     await sleep(1500)
     await waitFor(() => document.querySelector('.lc-cell'), 8000)
+    result.openedCalendarView = openedCalendar
+    result.cellCount = document.querySelectorAll('.lc-cell').length
 
     const cells = [...document.querySelectorAll<HTMLElement>('.lc-cell')]
     const resvCell = cells.find((c) => c.hasAttribute('data-resv-count')) ?? null
@@ -2785,6 +2798,28 @@ export async function runUiProbe(): Promise<void> {
       sign: text(r.querySelector('.vtuber-sign')),
       avatar: r.querySelector('[data-src]')?.getAttribute('data-src') ?? null,
     }))
+    // ── R33 补（2026-09-19）：**当场改**之后左栏要跟着 ──────────────────────
+    // 上面那些是"启动前种进库"的现场（左右两边都是新加载的，覆盖不到"应用内编辑"）。
+    // 用户报的正是编辑后的同步 ⇒ 这里模拟"保存后广播"：从接口取一条真实 V、改掉签名、
+    // 派发 `ddtoolkit:vtuber-updated`，再读左栏那一行。
+    try {
+      const base = getApiBase()
+      const list = await (await fetch(`${base}/vtuber/list`)).json() as
+        { id: number; name: string; sign_override: string | null }[]
+      const active = list.find((v) => v.name === result.activeName) ?? list[0]
+      if (active) {
+        const liveSign = `探针当场改·${Date.now() % 100000}`
+        window.dispatchEvent(new CustomEvent('ddtoolkit:vtuber-updated', {
+          detail: { ...active, sign_override: liveSign },
+        }))
+        await sleep(300)
+        result.liveSignWant = liveSign
+        result.liveSignGot = text(activeRow()?.querySelector('.vtuber-sign'))
+        result.liveSignSynced = result.liveSignGot === liveSign
+      }
+    } catch (e) {
+      result.liveSignError = String(e)
+    }
     const pre = document.createElement('pre')
     pre.id = 'ui-probe'
     pre.textContent = JSON.stringify({ mode: 'profile-sync', views: [], degraded,

@@ -293,7 +293,9 @@ export default function LiveSessionDialog({
             </span>
           </div>
           <div className="lc-dlg-glance">
-            <h4 className="lc-dlg-sec-title">本场速览</h4>
+            {/* R40c（用户 2026-09-19）：「把本场速览卡片的标题和背景都去掉以缩减高度」——
+                标题去掉（四枚值自解释：时长/峰值在线/弹幕数/收益），背景由 CSS 收掉。
+                高度降下来之后，右列（直播信息）会被拉伸到与左列同高（两列底边齐平、不留空白）。 */}
             <div className="lc-glance-grid">
               {glanceCapsules(s).map((c) => (
                 <div key={c.key} className="lc-glance-cap">

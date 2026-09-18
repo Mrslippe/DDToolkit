@@ -28,6 +28,7 @@ import { pill } from '../utils/pill'
 import { useVtuberActions } from './useVtuberActions'
 import { useSceneTransition } from '../hooks/useSceneTransition'
 import { noteCurrentView } from '../utils/shellState'
+import { VTUBER_UPDATED_EVENT } from '../utils/vtuberList'
 import PostDetailDrawer from '../components/PostDetailDrawer'
 import AddAccountDialog from '../components/AddAccountDialog'
 import VtuberSettingsDialog from '../components/VtuberSettingsDialog'
@@ -791,6 +792,10 @@ return (
           setSelectedAccount((prev) =>
             prev ? (v.accounts.find((a) => a.id === prev.id) ?? v.accounts[0]) : prev,
           )
+          // R33 补（2026-09-19，用户：「修改过的签名左栏没有及时同步」）：
+          // 左栏那份列表是**它自己**拉的（不是本页的子节点）⇒ 必须广播一条更新，
+          // 否则右栏立刻变、左栏一直显示旧签名（R33 修的是渲染口径，缺的是这条通道）。
+          window.dispatchEvent(new CustomEvent(VTUBER_UPDATED_EVENT, { detail: v }))
         }}
         onPill={pill}
       />

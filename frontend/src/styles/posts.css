@@ -3929,7 +3929,10 @@ img.hero-avatar {
   display: grid;
   grid-template-columns: 264px minmax(0, 1fr);
   gap: 12px;
-  align-items: start;
+  /* R40c（用户 2026-09-19）：「保证下端对齐不要留出空白」——
+     原来是 `align-items: start` ⇒ 右列（直播信息）只按自己内容高，下面留一大段空白。
+     改成 stretch 后右列卡片撑满整行高度，两列底边齐平（内容仍从上往下排）。 */
+  align-items: stretch;
 }
 
 /* ── R36（devlog/140）：弹窗高度不随"上游数据到达"变化 ──────────────────
@@ -3939,7 +3942,7 @@ img.hero-avatar {
    三处的"未到位态"改成**同尺寸骨架**，槽上再定 `min-height` 把常见量预留下来。
    ⚠️ 这些 min-height 是**故意留白**：宁可卡片底部空一点，也不要数据到达时窗长跳一下。 */
 
-/* 左列：封面 + 速览卡（纵向排，卡片与右列同材质） */
+/* 左列：封面 + 速览胶囊（纵向排） */
 .lc-dlg-left {
   display: flex;
   flex-direction: column;
@@ -3947,13 +3950,19 @@ img.hero-avatar {
   width: 264px;
 }
 
+/* R40c（用户 2026-09-19）：「把本场速览卡片的标题和背景都去掉以缩减高度」——
+   原来它是一张和右列同材质的卡（`#faf7f8` 底 + 内边距 + 「本场速览」标题），
+   而左列本来就只该"封面 + 四枚值" ⇒ 去掉卡片外壳后左列矮一截，
+   右列（直播信息）再由 `align-items: stretch` 撑到同高（见 `.lc-dlg-main`）。 */
 .lc-dlg-glance {
-  padding: 12px 14px;
-  border-radius: 10px;
-  background: #faf7f8;
+  padding: 0;
+  background: none;
 }
 
-/* 2×2 胶囊（用户口径：四枚本地值、分双行） */
+/* 2×2 胶囊（用户口径：四枚本地值、分双行）。
+   R40c：「四个胶囊分别用不同颜色做底提高辨识度」—— 四枚各一个色相，
+   取的是本仓既有的**直播类型色系**（杂谈/游戏/观影/投稿 那几枚 chip 的同一族），
+   按 `--glance-i` 轮流取色，值本身仍走 `--c-text-main` 保证对比度。 */
 .lc-glance-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -3967,8 +3976,13 @@ img.hero-avatar {
   min-width: 0;
   padding: 6px 8px;
   border-radius: 6px;
-  background: #fff;
+  background: var(--glance-bg, #fff);
 }
+
+.lc-glance-cap:nth-child(1) { --glance-bg: #fdeef3; }   /* 粉（品牌主色族） */
+.lc-glance-cap:nth-child(2) { --glance-bg: #eef4fd; }   /* 蓝（游戏族） */
+.lc-glance-cap:nth-child(3) { --glance-bg: #fdf6e6; }   /* 黄（杂谈族） */
+.lc-glance-cap:nth-child(4) { --glance-bg: #eef8f0; }   /* 绿（投稿族） */
 
 .lc-glance-label {
   font-size: 11px;
