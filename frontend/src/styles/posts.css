@@ -215,10 +215,11 @@
 }
 
 .glow-bar {
-  position: relative;              /* 亮点指示器的定位祖先（R39-D） */
-  /* 亮点直径（单一真源）：CSS 用它画、TS 读它算居中 —— 两处都不会各写一个 64。
-     比按钮（50px）大一圈：用户 2026-09-19「大小也调大一点」。 */
-  --glow-spot: 64px;
+  position: relative;              /* 选中块的定位祖先（R39-D） */
+  /* 选中块边长（单一真源）：CSS 用它画、TS 读它算居中 —— 两处都不会各写一个数。
+     56px 比按钮（50px）大一圈：四周各 3px 边距，"按钮坐进一块选中底"。
+     （R39-D 的柔光点曾是 64px —— 柔光要够大才读得出来；填充块不需要那么大。） */
+  --glow-spot: 56px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -246,10 +247,19 @@
   -webkit-backdrop-filter: blur(6px) saturate(1.08);
 }
 
-/* 亮点指示器（R39-D，用户：「有一个亮点追随当前切换的按钮，带有切换时的动画效果」；
-   R39-D2：「这个光点太集中了，扩散数值调大然后大小也调大一点」）。
+/* 当前视图的**选中块**（R43，用户 2026-09-19 拍板："换成粉底圆角块"）。
    位置/宽度由 PostsPage 按激活钮的 `offsetLeft/offsetWidth` 写进内联样式；这里只管长相与过渡。
-   **必须 pointer-events:none** —— 否则它盖在按钮上会吃掉点击（"看着能用、其实点不着"）。 */
+   **必须 pointer-events:none** —— 否则它盖在按钮上会吃掉点击（"看着能用、其实点不着"）。
+
+   ⚠️ **名字是历史包袱**：R39-D 这里是"一团追随按钮的白色柔光"，R43 起是粉底圆角块。
+   不改名的原因很实际：`PostsPage`（读 `--glow-spot` 算居中）、`dev/probe.ts`（量它）、
+   `scripts/ui_probe.py`（五条判据）三处都按这个名字引用，churn 不值当。
+
+   为什么换掉白光（有截图为证）：白 0.90 叠在**默认背景**（头像铺底 0.18 + 厚白纱罩，
+   合成≈`#fefafb`）上等于看不见 —— 实测截图里"当前是哪个视图"只剩图标不透明度
+   `.8/.4` 在传话，而这套视觉的身份不该依赖"用户设过背景图"这个可选状态。
+   换成**不透明粉底**（`--sel-bg`，与侧栏选中行/类型胶囊同族的选中语言）后：
+   不透明 ⇒ 近白页与用户插画上都读得出来；同时它不再需要"柔光够大才看得见"的尺寸。 */
 .glow-spot {
   position: absolute;
   left: 0;
@@ -257,13 +267,17 @@
   width: var(--glow-spot);          /* 直径由光条的 CSS 变量给（TS 读同一个变量算居中） */
   height: var(--glow-spot);
   margin-top: calc(var(--glow-spot) / -2);
-  border-radius: 50%;
+  /* 12px = 档案卡族圆角口径（与 `--pcard-radius` 同值；块比卡小，同族即可） */
+  border-radius: 12px;
   pointer-events: none;
-  /* 扩散到**整圆**（首版 72% 就归零 ⇒ 看着是一颗紧凑的亮点）：
-     从中心 0.9 一路衰减到边缘 0，四档停靠点让边缘不出现"环"。 */
-  background: radial-gradient(50% 50% at 50% 50%,
-    rgba(255, 255, 255, 0.90) 0%, rgba(255, 255, 255, 0.52) 38%,
-    rgba(255, 255, 255, 0.20) 68%, rgba(255, 255, 255, 0) 100%);
+  background: var(--sel-bg);
+  /* 描边 = **主色粉本体**（`--c-primary-deep`，与侧栏选中行的 `--sel-bar` 同一个 token）：
+     浅粉底（#fff0f3）与近白页面（#fffbfb）的亮度差只有 ~1.07 ⇒ 光靠填充在浅底上读不出形状，
+     形状由这条边承担。首版用了 `rgba(251,119,161,.35)`（≈1.44:1，太弱且是字面量）——
+     现在直接用 token 本体：描边对填充 ≈2.3:1、对页面 ≈2.5:1，且"选中 = 浅粉底 + 主色粉边"
+     就是侧栏选中行那套语言，不再是一个孤例。
+     **不加外阴影** —— 与光条同一条纪律：外阴影会在背景图上再投一条线。 */
+  box-shadow: inset 0 0 0 1px var(--c-primary-deep);
   transition: transform var(--motion-base) var(--ease-standard),
               width var(--motion-base) var(--ease-standard);
 }
@@ -285,6 +299,12 @@
 }
 
 .view-btn {
+  /* ⚠️ **必须抬到选中块之上**（R43 实测）：`.glow-spot` 是绝对定位元素，按 CSS 绘制顺序
+     （定位后代画在 in-flow 内容之后）会盖住 in-flow 的按钮 —— 白柔光那版是"把激活图标洗淡"，
+     换成不透明粉底后就变成"块里什么都没有"（截图上整块空白）。position+z-index 让图标回到上面。
+     这不是新问题的引入，而是**旧问题被不透明填充暴露**：激活态必须让图标清楚可见。 */
+  position: relative;
+  z-index: 1;
   width: 50px;
   height: 50px;
   border: none;
@@ -297,8 +317,10 @@
   transition: opacity 0.15s ease;
 }
 
+/* 激活态：选中块已经给出"在哪"，图标就回到**实色**（不再靠 .8 的半透明兼作选中信号）。
+   off 仍是 .4（R43 未动：这一档的对比度问题单独议，见 devlog/163 §遗留）。 */
 .view-btn.on {
-  opacity: 0.8;
+  opacity: 1;
 }
 
 .view-btn.off {

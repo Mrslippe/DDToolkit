@@ -43,6 +43,33 @@ def _perf(msg: str) -> None:
     _slog(f"[perf] {msg} +{int((time.perf_counter() - _t0) * 1000)}ms")
 
 
+def _check_app_log() -> None:
+    """启动自检：**应用日志必须真的落盘**（R43-A，devlog/163）。
+
+    为什么需要它：排查 2026-09-23 那次"抓取为什么这么慢"时，`Get-ChildItem` 报的
+    `app.log` 大小是 0 —— 后来发现那是**陈旧目录项**（文件其实有 85KB），
+    但当时无从分辨"日志没写"还是"尺子读错了" ✗。这条自检把这件事变成**机器可判**：
+    写一条启动记录，再读一次文件；为空就往 sidecar.log 告警（那才是能立刻看的地方）。
+    """
+    try:
+        from app.core.config import settings
+        import logging as _logging
+
+        _logging.getLogger("app.boot").info(
+            f"后端就绪 port={os.environ.get('DDTOOLKIT_PORT')!r} "
+            f"frozen={getattr(sys, 'frozen', False)}")
+        for h in _logging.getLogger().handlers:
+            h.flush()
+        log_path = Path(settings.LOG_FILE)
+        if not log_path.exists() or log_path.stat().st_size == 0:
+            _slog(f"WARN 应用日志为空：{log_path}（文件 handler 可能没装上）")
+        else:
+            _perf(f"应用日志已落盘（{log_path.stat().st_size} 字节）")
+    except Exception as e:  # noqa: BLE001
+        # 自检本身绝不能影响启动
+        _slog(f"WARN 应用日志自检失败: {type(e).__name__}: {e}")
+
+
 def _data_dir() -> Path:
     return Path(
         os.environ.get("DDTOOLKIT_DATA_DIR")
@@ -127,7 +154,11 @@ def main() -> None:
     _perf(f"准备监听 127.0.0.1:{port}")
     # 用 Server API 而不是 uvicorn.run：只有在 bind + 启动完成后才打就绪标记，
     # 避免「进程活着但端口没监听」的假就绪（首启卡幕排查需要真实信号）。
-    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
+    # R43-A（devlog/163）：配置构造抽到 `app/core/uvicorn_setup.py` —— 那里是**可测的**
+    # （脚本 import 就跑主流程，pytest 里没法安全地构造一次），并钉住"日志必须落盘"这条不变量。
+    from app.core.uvicorn_setup import build_uvicorn_config
+
+    config = build_uvicorn_config(app, port)
     server = uvicorn.Server(config)
 
     async def _serve() -> None:
@@ -137,6 +168,7 @@ def main() -> None:
         if server.started:
             print(f"DDTOOLKIT_READY http://127.0.0.1:{port}", flush=True)
             _perf("uvicorn 已监听（就绪）")
+            _check_app_log()
         await task
 
     try:

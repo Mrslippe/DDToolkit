@@ -156,6 +156,10 @@ class Settings:
     # 距上次运行不足 STALE_HOURS 则跳过；时间戳存 app_meta（迁移 f003）
     EXTERNAL_STARTUP_CATCHUP_ENABLED: bool = True
     EXTERNAL_STARTUP_STALE_HOURS: float = 24.0
+    # R43-B（devlog/163）：**账号级**新鲜度窗口 —— 粉丝历史那种「一次返回全量」的接口
+    # （实测 197KB / 5~15s，单账号一次上千条）。用户口径：窗口放宽到 **7 天**；
+    # 这类历史数据本来就变得慢，窗口内抓过的账号一个请求都不发。
+    EXTERNAL_FAN_HISTORY_STALE_HOURS: float = 168.0
 
     # VTuber 列表文件
     VTUBER_LIST_FILE: str = str(DATA_DIR / "vtubers.csv")

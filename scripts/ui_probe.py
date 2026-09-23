@@ -858,24 +858,53 @@ def _assert_glow(v: dict, width: int) -> list[str]:
             bad.append(f"@{width} {tag}: 光条有{label}（{val!r}）—— 用内描边（box-shadow inset）")
     spot = g.get("spot")
     if not spot:
-        bad.append(f"@{width} {tag}: 光条里没有亮点指示器（`.glow-spot`）")
+        bad.append(f"@{width} {tag}: 光条里没有选中块（`.glow-spot`）")
     else:
         if spot.get("cx") is None or spot.get("activeCx") is None:
-            bad.append(f"@{width} {tag}: 量不到亮点/激活钮的中心")
+            bad.append(f"@{width} {tag}: 量不到选中块/激活钮的中心")
         elif abs(spot["cx"] - spot["activeCx"]) > 1.5:
-            bad.append(f"@{width} {tag}: 亮点中心 {spot['cx']} 与激活钮中心 "
-                       f"{spot['activeCx']} 偏了（应 ≤1.5px）—— 亮点要「追随当前切换的按钮」")
+            bad.append(f"@{width} {tag}: 选中块中心 {spot['cx']} 与激活钮中心 "
+                       f"{spot['activeCx']} 偏了（应 ≤1.5px）—— 它要「追随当前切换的按钮」")
         if (spot.get("w") or 0) <= 0:
-            bad.append(f"@{width} {tag}: 亮点宽度是 {spot.get('w')}（没尺寸等于没渲染）")
+            bad.append(f"@{width} {tag}: 选中块宽度是 {spot.get('w')}（没尺寸等于没渲染）")
         elif spot["w"] < 56:
-            bad.append(f"@{width} {tag}: 亮点只有 {spot['w']}px —— 用户要求「大小也调大一点」，"
-                       f"要比按钮（50px）大一圈（≥56px）才有扩散感")
+            bad.append(f"@{width} {tag}: 选中块只有 {spot['w']}px —— 要比按钮（50px）"
+                       f"大一圈（≥56px），否则看着像「图标自己被框住」"
+                       f"而不是「坐在一块选中底上」")
         if spot.get("pointerEvents") != "none":
-            bad.append(f"@{width} {tag}: 亮点没关掉指针事件（{spot.get('pointerEvents')!r}）"
+            bad.append(f"@{width} {tag}: 选中块没关掉指针事件（{spot.get('pointerEvents')!r}）"
                        f"—— 它会挡住视图钮的点击")
         if "transform" not in (spot.get("transitionProp") or ""):
-            bad.append(f"@{width} {tag}: 亮点的过渡里没有 transform"
+            bad.append(f"@{width} {tag}: 选中块的过渡里没有 transform"
                        f"（{spot.get('transitionProp')!r}）—— 切换视图时不会滑动")
+        # ── R43（用户 2026-09-19：「换成粉底圆角块」）────────────────────────────
+        # 这条挡的是**退回"白光点"**：白 0.90 叠在默认背景（头像铺底 + 厚白纱罩 ⇒ 合成
+        # ≈#fefafb）上等于看不见，实测截图里"当前是哪个视图"只剩图标不透明度在传话。
+        # 所以选中块必须是**不透明填充**、且**不是渐变** —— 任何背景上都读得出来。
+        bg_img = (spot.get("bgImage") or "none").strip()
+        if bg_img != "none":
+            bad.append(f"@{width} {tag}: 选中块用了渐变/图片背景（{bg_img[:60]!r}）—— "
+                       f"选中态要的是**不透明填充块**；白光那套在近白背景上看不见（R43 修的就是它）")
+        m2 = re.search(r"rgba?\(\s*[\d.]+\s*,\s*[\d.]+\s*,\s*[\d.]+\s*(?:,\s*([\d.]+))?\)",
+                       spot.get("bgColor") or "")
+        a2 = float(m2.group(1)) if (m2 and m2.group(1)) else (1.0 if m2 else None)
+        if a2 is None:
+            bad.append(f"@{width} {tag}: 选中块底色解析不出来（{spot.get('bgColor')!r}）")
+        elif a2 < 1.0:
+            bad.append(f"@{width} {tag}: 选中块底色是半透明的（alpha={a2}）—— "
+                       f"半透明在浅背景上会糊掉，选中态必须不透明")
+        # ── R43：选中块**不许盖住激活图标**（绘制顺序）─────────────────────────────
+        # `.glow-spot` 是绝对定位元素 ⇒ 按绘制顺序画在 in-flow 按钮之上；白柔光那版
+        # 表现为"把激活图标洗淡"，不透明粉底那版表现为"块里什么都没有"（截图实测）。
+        # 常规命中测试看不出（块 pointer-events:none）⇒ 探针临时打开它再问一次。
+        if spot.get("coversIcon") is True:
+            bad.append(f"@{width} {tag}: 选中块**盖住了激活图标**（绘制顺序错）—— "
+                       f"激活态必须看得见图标；给 `.view-btn` 加 position:relative + z-index "
+                       f"把它抬到块之上（R43 修过一次）")
+        if spot.get("btnPosition") == "static" or spot.get("btnZIndex") == "auto":
+            bad.append(f"@{width} {tag}: 激活钮没有参与定位层"
+                       f"（position={spot.get('btnPosition')!r} z-index={spot.get('btnZIndex')!r}）"
+                       f"—— 它会被绝对定位的选中块盖住")
     scrolled = g.get("scrolled")
     mask = g.get("mask") or ""
     if tag == "archive" and not g.get("deckPresent"):
