@@ -170,6 +170,26 @@ DOM 契约（探针 `ui_probe --status-island` 直接查）：`.si-island`（`.o
 > 面板曲线 `cubic-bezier(.22,.61,.36,1)` → **`--ease-standard`**（前者是全站唯一的异类曲线，
 > 规格 §2 曾误以为"已在用标准曲线"）。**这不是"零行为变化"** —— 见 devlog/167。
 
+**宽度形变 + 文案滞后（R38 批 2，2026-09-24）**：胶囊（`.topbar-status`）的宽度用
+**`calc-size(auto, size)`** 表达 —— 它把"内容宽"变成**可过渡的长度**，于是文案变化 / 计数徽章
+出现时宽度**平滑过渡**（`--motion-base` + `--ease-standard`）而不是硬跳。文案淡入滞后
+**`--motion-lag`（60ms）**（§3 规则 1「形变先行、内容后到」，`backwards` 填充防闪）。
+
+> ⚠️ **两条口径**：
+> ① **高度不参与过渡** —— 规格 §5 写着"折叠高 24 → 展开高 30"，但 §4 明说形变时"**高度固定**"、
+>    §10 要求"中间态**高度恒定**"。两处冲突，**用户 2026-09-24 拍板取 §4/§10**：本批只做宽度，
+>    高度恒为 `--pill-h-sm`（25px）。
+> ② `calc-size()` **不支持时该行被忽略**，退回 `width: auto`（= 批 2 之前的行为）⇒ 无需 `@supports`。
+
+> **R38 批 2 的三条不变量**（规格 §10 里原标「⛔ 待 R38 批 2」，现全部 ✅）：
+> ① **顶栏高度三态恒定** —— 并**判成因**：胶囊必须 `position: absolute`（`.topbar` 是固定高度，
+>    只有脱离文档流才不会撑高它）；
+> ② **胶囊不裁切** —— `.si-text` 的 `scrollWidth ≤ clientWidth + 1`；
+> ③ **中间态合法** —— 圆角 **≥ 高度/2**（`999px` 会被 clamp 到半高 ⇒ 任意帧都是胶囊）。
+>    ⚠️ **不是采样中间帧**：虚拟时间下过渡不推进（`DEV-LOOP.md` 记过），采不到中间帧；
+>    这条**结构级**判据等价且更可靠。
+> **反向验证过**（同时破三条 ⇒ 三条全红）：`position: static` / `max-width: 60px` / `border-radius: 4px`。
+
 > ⚠️ 三条**别改坏**的口径：
 > ① **「自动节拍不占顶栏」现在是 `notificationHub.progressNotice` 的具名规则 + 反向用例**
 >    （此前是 `TopBar` 里散落的 `isQuietTask` 判断；探针 `_assert_topbar` 照旧在真实后端上兜底）；
@@ -616,6 +636,7 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 | `--pcard-ring` | inset 0 1px 0 rgba(255,255,255,.9) | 卡顶 1px 高光内边 —— "稍微浮起"的关键（光从上面来） |
 | `--tone-pink/-coral/-navy/-gray`（各带 `-deep` / `-tint`） | 见 tokens.css | 卡片色调三件套（角标底 / chip 文字 / chip 底），**只许用在 ≤22px 角标与 ≤11px chip** |
 | `--motion-instant/-fast/-base/-slow` | 90 / 140 / 220 / 320ms | **动效令牌**（R37-P4b 建；与 `design-status-island.md` §2 同值）。**R38 批 1 起状态岛与揭幕/条目入场全部改用它们**（`si-panel-in` · `si-pop-in` · `.pill-text-fade` · chevron · `rise-in-page` · `rise-in-item`）—— 有探针对齐判据（时长 ≠ 令牌值即红），**别写回硬编码** |
+| `--motion-lag` | 60ms | **编排偏移**（不是时长）：R38 批 2 起给 `.pill-text-fade` 用，实现 §3 规则 1「形变先行、内容后到」—— 容器先动、文案滞后 60ms 才淡入。同样跟 `--motion-scale` 走 |
 | `--ease-standard/-exit/-emphasized/-pop` | 见 tokens.css | 进入位移 / 离场 / 落位（前快后慢）/ **唯一允许的过冲**（只给"拿起"那一次 scale） |
 | `--motion-scale` | 1 | **慢放倍率**：所有动效时长都是 `calc(N × var(--motion-scale))`，只有动效调测页改它 |
 | `--pill-fill-pink` / `--pill-fill-coral` | #e35d8b / #e05261 | 粉丝徽章色底（加深版：白字 26px 对比 2.5:1 → 3.4:1，**替代早期 #fb77a1/#fc7079 直接填充**） |

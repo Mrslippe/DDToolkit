@@ -1424,6 +1424,10 @@ export async function runUiProbe(): Promise<void> {
     const island = () => document.querySelector<HTMLElement>('.si-island')
     const spacerW = () => Math.round(
       (document.querySelector('.topbar-spacer')?.getBoundingClientRect().width ?? 0) * 10) / 10
+    // R38 批 2 不变量①：顶栏高度在**三态**（空闲 / 亮起 / 面板展开）下必须完全相同。
+    // 形变只许发生在胶囊自己身上 —— 胶囊长高或顶栏被撑高都算破约。
+    const topbarH = () =>
+      Math.round(document.querySelector('.topbar')?.getBoundingClientRect().height ?? 0)
 
     await waitFor(() => island(), 6000)
     await waitFor(() => !island()!.classList.contains('on'), 4000)
@@ -1459,6 +1463,7 @@ export async function runUiProbe(): Promise<void> {
     result.idleLit = !!island()?.classList.contains('on')
     result.idleCount = !!island()?.querySelector('.si-count')
     result.spacerIdle = spacerW()
+    result.topbarHIdle = topbarH()
 
     // ② 瞬时消息（走真实事件源，不直接改 React state）
     window.dispatchEvent(new CustomEvent('ddtoolkit:pill-message', {
@@ -1469,6 +1474,26 @@ export async function runUiProbe(): Promise<void> {
     result.litText = litText
     result.litOn = !!island()?.classList.contains('on')
     result.litHasChevron = !!island()?.querySelector('.si-chevron')
+    result.topbarHLit = topbarH()
+    // R38 批 2 不变量②：**胶囊不裁切** —— 文案没被 ellipsis 吃掉（宽度形变时最容易踩）。
+    const siTextEl = island()?.querySelector<HTMLElement>('.si-text')
+    if (siTextEl) {
+      result.siTextScroll = siTextEl.scrollWidth
+      result.siTextClient = siTextEl.clientWidth
+    }
+    // R38 批 2 不变量③：**中间态合法** —— 圆角必须 ≥ 高度/2。
+    // 虚拟时间下过渡不推进（DEV-LOOP 记过），量不到"中间帧"；但 `999px` 会被 clamp 到
+    // 高度/2 ⇒ **只要圆角 ≥ 高度/2，任意帧都必然是胶囊**，不会出现方角中间态。
+    // 这是**结构级**判据，比采样中间帧更可靠。
+    const pillEl = island()
+    if (pillEl) {
+      const pcs = getComputedStyle(pillEl)
+      result.pillHeight = Math.round(parseFloat(pcs.height))
+      result.pillRadius = Math.round(parseFloat(pcs.borderTopLeftRadius))
+      // 不变量①的**原因**：胶囊绝对定位 ⇒ 不可能把顶栏撑高（`.topbar` 是固定高度）。
+      // 只判"三态高度一致"是判结果；这条判原因，破了才说得清为什么破。
+      result.pillPosition = pcs.position
+    }
 
     // ③ 悬停呼出（R39-C，用户 2026-09-19：「改为鼠标 hover 就呼出，离开就收起，并且下拉栏居中」）
     //
@@ -1599,6 +1624,7 @@ export async function runUiProbe(): Promise<void> {
 
     // 展开**不该挤动右栏**（面板是 portal + fixed）
     result.spacerOpen = spacerW()
+    result.topbarHOpen = topbarH()
 
     // Esc 收起
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))

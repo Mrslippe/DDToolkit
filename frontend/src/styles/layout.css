@@ -387,7 +387,16 @@ html.window-maximized body {
   white-space: nowrap;
   overflow: hidden;
   user-select: none;
-  transition: background-color 0.18s ease;
+  /* ── R38 批 2：宽度形变（§4「容器宽度收窄」）─────────────────────────
+     `calc-size(auto, size)` 把"内容宽"变成一个**可过渡的长度** ⇒ 文案变化 / 计数徽章
+     出现时宽度平滑过渡，而不是硬跳（Chromium 129+；本机 Edge 153 支持）。
+     **不支持时这一行被忽略**，退回 `width: auto` —— 即批 2 之前的行为，无需 @supports 兜底。
+     ⚠️ **高度不参与过渡**（§4「高度固定」+ §10「中间态高度恒定」）；圆角 `999px` 会被
+     clamp 到 高度/2 ⇒ 任意帧都是胶囊，不会出现方角中间态。 */
+  width: calc-size(auto, size);
+  transition:
+    width var(--motion-base) var(--ease-standard),
+    background-color var(--motion-fast) ease;   /* R38 批 1 漏网：原是硬编码 0.18s */
 }
 
 /* 事件态：徽章亮起（TopBar 按 busy || 覆盖文案 挂类） */
@@ -413,7 +422,12 @@ html.window-maximized body {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  animation: pill-fade-in var(--motion-fast) ease;
+  /* R38 批 2：§3 规则 1「形变先行、内容后到」—— 容器先动，文案滞后 `--motion-lag` 才淡入。
+     `backwards` 必须有：否则**延迟期间**元素处于常态（opacity 1），到点才跳到 from 的
+     opacity 0 ⇒ 会闪一下。
+     取**简化实现**：所有文案淡入都滞后（同宽度换字也滞后）—— 60ms 不可感知，
+     而"按容器是否真在形变分派"要 JS 参与，收益不抵复杂度。 */
+  animation: pill-fade-in var(--motion-fast) ease var(--motion-lag) backwards;
 }
 
 @keyframes pill-fade-in {

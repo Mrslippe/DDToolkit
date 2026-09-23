@@ -109,6 +109,9 @@
   --motion-fast: calc(140ms * var(--motion-scale));      /* hover / 淡出 / 弹回 */
   --motion-base: calc(220ms * var(--motion-scale));      /* 退避 / 落位 */
   --motion-slow: calc(320ms * var(--motion-scale));      /* 跨多行的大位移 */
+  /* R38 批 2：**编排偏移**（不是时长）—— §3 规则 1「形变先行、内容后到」的 60ms。
+     单独一个令牌是因为它是"两件事之间的间隔"，不是某段动画的长度；同样跟慢放倍率走。 */
+  --motion-lag: calc(60ms * var(--motion-scale));
   --ease-standard: cubic-bezier(0.22, 1, 0.36, 1);       /* 进入 / 位移 */
   --ease-exit: cubic-bezier(0.4, 0, 1, 1);               /* 离场 */
   --ease-emphasized: cubic-bezier(0.2, 0, 0, 1);         /* 落位：前快后慢 */

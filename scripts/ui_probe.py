@@ -2543,6 +2543,10 @@ def main() -> int:
             print(f"  动效令牌：--motion-fast={si.get('motionFastMs')}ms "
                   f"--motion-base={si.get('motionBaseMs')}ms ｜ "
                   f"文案淡入={si.get('textFadeMs')}ms 计数徽章={si.get('countAnimMs')}ms")
+            print(f"  批 2 不变量：顶栏高 空闲/亮起/展开 = {si.get('topbarHIdle')}/"
+                  f"{si.get('topbarHLit')}/{si.get('topbarHOpen')} ｜ "
+                  f"文案 {si.get('siTextScroll')} ≤ {si.get('siTextClient')}+1 ｜ "
+                  f"圆角 {si.get('pillRadius')} ≥ 高/2（高 {si.get('pillHeight')}）")
             print(f"  chevron：transform={si.get('chevronTransform')!r} "
                   f"过渡={si.get('chevronTransitionMs')}ms")
             print(f"  ttl 到期后：文案={si.get('afterTtlText')!r} 亮起={si.get('afterTtlLit')}")
@@ -2679,6 +2683,31 @@ def main() -> int:
                     failures.append(f"@{w} status-island: 展开面板挤动了右栏"
                                     f"（右栏宽 {si.get('spacerIdle')} → {si.get('spacerOpen')}；"
                                     f"面板应当 portal + fixed 悬浮）")
+
+                # ── R38 批 2 三条不变量（规格 §10 里标「⛔ 待 R38 批 2」的那三条）──────
+                # ① 顶栏高度在三态（空闲 / 亮起 / 面板展开）下完全相同
+                hs = {k: si.get(k) for k in ("topbarHIdle", "topbarHLit", "topbarHOpen")}
+                if not all(hs.values()) or len(set(hs.values())) != 1:
+                    failures.append(f"@{w} status-island: 顶栏高度三态不一致 {hs} —— "
+                                    f"形变只许发生在胶囊自己身上（§10「顶栏高度恒定」）")
+                # ① 的**原因**：胶囊必须绝对定位（`.topbar` 固定高度 ⇒ 只有脱离文档流才不会撑高它）
+                if si.get("pillPosition") not in (None, "absolute"):
+                    failures.append(f"@{w} status-island: 胶囊 position 是 "
+                                    f"{si.get('pillPosition')!r}，应为 absolute —— "
+                                    f"进文档流就可能把顶栏撑高（§10「顶栏高度恒定」的成因）")
+                # ② 胶囊不裁切（文案没被 ellipsis 吃掉）
+                sc, cl = si.get("siTextScroll"), si.get("siTextClient")
+                if sc is not None and cl is not None and sc > cl + 1:
+                    failures.append(f"@{w} status-island: 胶囊文案被裁切"
+                                    f"（scrollWidth {sc} > clientWidth {cl} + 1）"
+                                    f"—— §10「胶囊不裁切」")
+                # ③ 中间态合法：圆角 ≥ 高度/2 ⇒ 任意帧都是胶囊（不会出现方角）
+                #    ⚠️ 虚拟时间下过渡不推进（DEV-LOOP 记过），**采样中间帧做不到**；
+                #    但圆角 `999px` 会被 clamp 到高度/2 ⇒ 这条**结构级**判据等价且更可靠。
+                ph, pr = si.get("pillHeight"), si.get("pillRadius")
+                if ph and pr is not None and pr < ph / 2:
+                    failures.append(f"@{w} status-island: 胶囊圆角 {pr}px < 高度/2（{ph / 2}px）"
+                                    f"—— 会出现方角中间态（§10「中间态合法」）")
                 if not si.get("panelClosedByEsc"):
                     failures.append(f"@{w} status-island: Esc 没收起面板")
                 if si.get("afterTtlLit"):
