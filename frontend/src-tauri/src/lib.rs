@@ -660,6 +660,70 @@ fn rebuild_main_window(app: &tauri::AppHandle) -> tauri::Result<tauri::WebviewWi
     Ok(w)
 }
 
+/// 桌面状态控件（R38 批 5b，devlog/173）：创建或显示那个 200×40 的无边框小窗。
+///
+/// **位置由前端给** —— 规格 §7 说"位置持久化（`utils/shellState` 同款做法）"，
+/// 也就是 localStorage 存、跨启动活着。这里只负责"按给的坐标摆好并显示"；
+/// 传 `None` 时退到右下角留边（第一次开启的落点）。
+///
+/// 与主窗口的三点不同：**置顶**（`always_on_top`）、**不进任务栏**（`skip_taskbar`）、
+/// **不可缩放**（它是个控件不是窗口）。透明 + 无边框与主窗口一致 ——
+/// 桌面上要看见的是圆角胶囊，不是一块方板。
+#[tauri::command]
+fn show_widget_window(app: tauri::AppHandle, x: Option<i32>, y: Option<i32>) -> Result<(), String> {
+    const W: f64 = 200.0;
+    const H: f64 = 40.0;
+    // 已存在就只挪位置 + 显示：开关反复切换不该重建窗口（那会丢 webview 状态，
+    // 也会让"关掉再打开"多花一次冷启动）
+    if let Some(w) = app.get_webview_window("widget") {
+        if let (Some(x), Some(y)) = (x, y) {
+            let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
+        }
+        let _ = w.show();
+        return Ok(());
+    }
+    let w = tauri::WebviewWindowBuilder::new(
+        &app,
+        "widget",
+        tauri::WebviewUrl::App("index.html?widget=1".into()),
+    )
+    .title("DDtoolkit 状态控件")
+    .inner_size(W, H)
+    .resizable(false)
+    .decorations(false)
+    .transparent(true)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .background_color(tauri::window::Color(0, 0, 0, 0))
+    .build()
+    .map_err(|e| e.to_string())?;
+    match (x, y) {
+        (Some(x), Some(y)) => {
+            let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
+        }
+        _ => {
+            // 没存过位置 ⇒ 落右下角（按缩放系数换算，留 24px 边、避开任务栏）
+            if let Ok(Some(mon)) = w.current_monitor() {
+                let sc = mon.scale_factor();
+                let s = mon.size();
+                let px = s.width as i32 - (W * sc) as i32 - (24.0 * sc) as i32;
+                let py = s.height as i32 - (H * sc) as i32 - (72.0 * sc) as i32;
+                let _ = w.set_position(tauri::PhysicalPosition::new(px, py));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 关掉桌面状态控件。**销毁而不是隐藏** —— 关掉开关就不该再留一个 webview；
+/// 位置已经由前端存进 localStorage，下次开启会回到原处。
+#[tauri::command]
+fn hide_widget_window(app: tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("widget") {
+        let _ = w.close();
+    }
+}
+
 /// 深休眠看门狗：每秒看一眼"隐藏够久了吗"。
 /// 独立线程而不是 timer 回调：逻辑简单、退出时无需注销（进程结束就没了）。
 /// 深休眠看门狗**下一次睡多久**（R24/T1，devlog/117）。
@@ -1072,7 +1136,9 @@ pub fn run() {
             open_release_page,
             probe_local_proxy,
             set_process_proxy,
-            window_corners_mode
+            window_corners_mode,
+            show_widget_window,
+            hide_widget_window
         ])
         .on_window_event(|window, event| {
             // ✕ 不再等于"退出"（R18，devlog/095）：关闭请求被拦下，改成隐藏到托盘，
@@ -1080,7 +1146,10 @@ pub fn run() {
             // 或系统注销/关机（那种情况下 `QUITTING` 不置真，但 `WindowEvent::Destroyed`
             // 之后 Tauri 仍会走 ExitRequested → 退出）。
             if let WindowEvent::CloseRequested { api, .. } = event {
-                if !QUITTING.load(Ordering::SeqCst) {
+                // ⚠️ **只拦主窗口**（R38 批 5b）：桌面控件小窗的 `close()` 是"关掉开关"的
+                // 正常路径，拦下来会变成"顺手把**主窗口**藏进托盘" —— 而用户压根没点过它。
+                // 这条判断在只有一个窗口时是多余的，加了第二个窗口之后就是必需的。
+                if window.label() == "main" && !QUITTING.load(Ordering::SeqCst) {
                     api.prevent_close();
                     hide_to_tray_impl(window.app_handle());
                 }

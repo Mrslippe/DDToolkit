@@ -38,6 +38,8 @@ import {
   parseField, stepOf, valueOf, type DraftVal,
 } from '../utils/settingsDraft'
 import OverlayScroll from './OverlayScroll'
+import { hideWidgetWindow, showWidgetWindow } from '../utils/shellBridge'
+import { WIDGET_POS_KEY, parseWidgetPos } from '../utils/widgetWindow'
 import './../styles/posts.css'
 
 interface Props {
@@ -364,6 +366,31 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
     }
   }
 
+  /**
+   * 桌面状态控件（R38 批 5b）：写偏好 **+ 立刻开关那扇窗**。
+   *
+   * 与 `pickCloseAction` 的差别只有这一点 —— 关闭语义是"下次点 ✕ 才生效"，
+   * 而这个开关的说明里写的是"立即生效，不用重启"，所以不能只写偏好。
+   *
+   * 位置从 localStorage 取（规格 §7「位置持久化（`utils/shellState` 同款做法）」）；
+   * 没存过就传 `null`，由 Rust 落到默认的右下角。
+   */
+  const pickWidgetEnabled = async (next: string) => {
+    setThemeError(null)
+    try {
+      await prefs.setPref('widget_enabled', next)
+      if (next === 'on') {
+        await showWidgetWindow(
+          parseWidgetPos(globalThis.localStorage?.getItem(WIDGET_POS_KEY)),
+        )
+      } else {
+        await hideWidgetWindow()
+      }
+    } catch (e) {
+      setThemeError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
   /** 左栏键盘：↑↓ 移动（自动激活）+ Home/End（WAI-ARIA tabs 的垂直变体） */
   const onNavKey = (e: React.KeyboardEvent) => {
     const i = nav.findIndex((n) => n.id === active)
@@ -610,6 +637,33 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
                             data-close-option={o.value}
                             className={`aps-radio${prefs.closeAction === o.value ? ' on' : ''}`}
                             onClick={() => void pickCloseAction(o.value)}
+                          >
+                            {o.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 桌面状态控件（R38 批 5b）：与 close_action 同一个「外观」组，
+                      同样用 `.aps-row-stack`（说明在上、控件在下占整行）。 */}
+                  {prefs.specOf('widget_enabled') && (
+                    <div className="aps-row aps-row-stack" data-setting="widget_enabled">
+                      <div className="aps-row-main">
+                        <span className="aps-label">{prefs.specOf('widget_enabled')!.label}</span>
+                        <span className="aps-note">{prefs.specOf('widget_enabled')!.note}</span>
+                      </div>
+                      <div className="aps-row-ctl aps-radio-group" role="radiogroup"
+                           aria-label={prefs.specOf('widget_enabled')!.label}>
+                        {prefs.specOf('widget_enabled')!.options.map((o) => (
+                          <button
+                            key={o.value}
+                            type="button"
+                            role="radio"
+                            aria-checked={prefs.widgetEnabled === o.value}
+                            data-widget-option={o.value}
+                            className={`aps-radio${prefs.widgetEnabled === o.value ? ' on' : ''}`}
+                            onClick={() => void pickWidgetEnabled(o.value)}
                           >
                             {o.label}
                           </button>

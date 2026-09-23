@@ -47,6 +47,40 @@ export function isDesktopShell(): boolean {
   return isTauri
 }
 
+// ── 桌面状态控件（R38 批 5b，devlog/173）────────────────────────────────
+
+/**
+ * 显示（必要时创建）桌面状态控件小窗。
+ *
+ * `pos` 为 `null` 时由 Rust 落到默认位置（右下角）—— 那是"第一次开启"的路径。
+ * 之后的位置由前端存 localStorage（`utils/widgetWindow`），这里只是把它递过去。
+ *
+ * 浏览器/探针环境返回 `false`：那边没有第二扇窗，界面据此**不显示**这个开关
+ * （与 `storageInfo()` 返回 `null` 是同一套取舍）。
+ */
+export async function showWidgetWindow(
+  pos: { x: number; y: number } | null,
+): Promise<boolean> {
+  if (!isTauri) return false
+  try {
+    await invoke('show_widget_window', { x: pos?.x ?? null, y: pos?.y ?? null })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** 关掉桌面状态控件小窗（**销毁**，不是隐藏 —— 关掉开关就不该再留一个 webview） */
+export async function hideWidgetWindow(): Promise<boolean> {
+  if (!isTauri) return false
+  try {
+    await invoke('hide_widget_window')
+    return true
+  } catch {
+    return false
+  }
+}
+
 // ── 数据目录（R22-B2d，devlog/108）────────────────────────────────────
 
 export interface ShellDataDirInfo {

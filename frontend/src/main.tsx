@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import './index.css'
 import './styles/tokens.css'
 import App from './App'
+import StatusWidgetWindow from './components/StatusWidgetWindow'
 import Logo from './components/common/Logo'
 import { setApiBase } from './api/api'
 import { markFirstRun } from './bootState'
@@ -224,9 +225,17 @@ function Root() {
   )
 }
 
+/**
+ * 桌面状态控件小窗（R38 批 5b）：Rust 用 `index.html?widget=1` 开这扇窗。
+ *
+ * **必须在 `Root` 之前分流** —— 小窗里不该跑主窗口那套启动链路（后端探活、揭幕幕布、
+ * 路由、首启浮窗、探针……）。它只要一个胶囊。
+ */
+const isWidgetWindow = new URLSearchParams(window.location.search).has('widget')
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <Root />
+    {isWidgetWindow ? <StatusWidgetWindow /> : <Root />}
   </React.StrictMode>,
 )
 

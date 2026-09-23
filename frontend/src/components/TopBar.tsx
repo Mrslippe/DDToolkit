@@ -28,6 +28,8 @@ import { useCapabilities, refreshCapabilities } from '../hooks/useCapabilities'
 import { hideToTray, quitApp } from '../utils/shellBridge'
 import { isShellHidden } from '../utils/shellLifecycle'
 import { closeIntent, parseCloseAction, type CloseAction } from '../utils/shellState'
+import { broadcastNotices, parseWidgetEnabled, WIDGET_POS_KEY, parseWidgetPos } from '../utils/widgetWindow'
+import { showWidgetWindow } from '../utils/shellBridge'
 import type { Notice, NoticeActionKind } from '../utils/notificationHub'
 import {
   composeTaskText, loginNotice, messageNotice, progressNotice, rateLimitNotice, reportNotice,
@@ -499,6 +501,31 @@ export default function TopBar() {
   // ⑥ R29：把风控冷却同步到**托盘**（收进托盘后没人看界面，状态岛也就看不见了）。
   // 可见时吃上面这条 2s 轮询；隐藏时 hook 内自带 60s 心跳（详见 useTrayStatus 注释）。
   useTrayStatus(status?.rate_limit)
+
+  // ⑦ R38 批 5b：把条目**推给桌面状态控件小窗**。
+  // 小窗是纯显示的（它不轮询 —— 六个信息源全在这里），所以每次汇总结果变了就推一次。
+  // 没开小窗时这次 emit 没人听，代价是一次空广播；比"先查开关再决定推不推"简单得多，
+  // 也不会出现"刚打开小窗要等下一次轮询才有内容"的空窗期。
+  useEffect(() => {
+    void broadcastNotices(notices)
+  }, [notices])
+
+  // ⑧ R38 批 5b：**启动时**按偏好把小窗摆回来。
+  // 只在挂载时跑一次：之后的开关由设置弹窗直接调 `showWidgetWindow`/`hideWidgetWindow`
+  // （那边才知道用户刚点了什么），这里重复响应反而会打架。
+  useEffect(() => {
+    void (async () => {
+      try {
+        const v = (await api.getPrefs()).values.widget_enabled
+        if (parseWidgetEnabled(v) === 'on') {
+          await showWidgetWindow(parseWidgetPos(globalThis.localStorage?.getItem(WIDGET_POS_KEY)))
+        }
+      } catch {
+        /* 后端没就绪等场景：下次启动再说，不该拦住顶栏 */
+      }
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   /** 面板动作 → 具体行为（渲染层不碰业务） */
   const onIslandAction = (kind: NoticeActionKind) => {

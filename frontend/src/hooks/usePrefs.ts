@@ -6,6 +6,7 @@ import {
   type ThemePref,
 } from '../utils/theme'
 import { parseCloseAction, type CloseAction } from '../utils/shellState'
+import { parseWidgetEnabled, type WidgetEnabled } from '../utils/widgetWindow'
 
 /**
  * 界面偏好（R14b 起：主题；R18 起：关闭窗口语义）—— 一个 hook 管全部偏好。
@@ -19,13 +20,16 @@ import { parseCloseAction, type CloseAction } from '../utils/shellState'
  * 解析与文案全在 `utils/theme.ts`（纯函数、有单测），这里只负责取数与副作用。
  */
 export function usePrefs() {
-  const [values, setValues] = useState<Record<string, string>>({ theme: 'light', close_action: 'ask' })
+  const [values, setValues] = useState<Record<string, string>>({
+    theme: 'light', close_action: 'ask', widget_enabled: 'off',
+  })
   const [specs, setSpecs] = useState<PrefsSpec[]>([])
   const [systemDark, setSystemDark] = useState(() => systemPrefersDark())
   const [loaded, setLoaded] = useState(false)
 
   const pref = (values.theme === 'system' ? 'system' : 'light') as ThemePref
   const closeAction: CloseAction = parseCloseAction(values.close_action)
+  const widgetEnabled: WidgetEnabled = parseWidgetEnabled(values.widget_enabled)
   const resolved = resolveTheme(pref, systemDark)
   const caveat = themeCaveat(pref, systemDark)
 
@@ -74,7 +78,7 @@ export function usePrefs() {
   )
 
   return {
-    values, specs, specOf, pref, closeAction, resolved, caveat, loaded,
+    values, specs, specOf, pref, closeAction, widgetEnabled, resolved, caveat, loaded,
     setPref, setTheme, reload: load,
   }
 }

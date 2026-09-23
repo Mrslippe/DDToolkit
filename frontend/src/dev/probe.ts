@@ -1691,6 +1691,44 @@ export async function runUiProbe(): Promise<void> {
     return
   }
 
+  // 桌面状态控件**小窗视图**（`?probe=status-widget-window&widget=1`，R38 批 5b）：
+  // 配合 `ui_probe.py --status-widget` 的第二段。
+  //
+  // 它验的是**分流本身**：`main.tsx` 在 `Root` 之前按 `?widget=1` 分叉，小窗里**不该**
+  // 跑主窗口那套（后端探活 / 揭幕幕布 / 路由 / 顶栏）。所以最要紧的两条是
+  // "胶囊在" 和 "顶栏不在" —— 后者错了就说明分流没生效，小窗里跑起了整个应用。
+  //
+  // ⚠️ 条目列表在这里**必然是空的**：小窗只听主窗口推的 `widget:notices`，
+  // 而浏览器里没有 Tauri 事件。所以它渲染的是空闲态 —— 这正是我们要量的东西。
+  if (mode === 'status-widget-window') {
+    const result: Record<string, unknown> = {}
+    const shell = document.querySelector<HTMLElement>('.widget-shell')
+    const island = document.querySelector<HTMLElement>('.si-island')
+    result.hasShell = !!shell
+    result.hasIsland = !!island
+    result.density = island?.getAttribute('data-density') ?? null
+    // 分流没生效的证据：主窗口那套东西还在
+    result.hasTopbar = !!document.querySelector('.topbar')
+    result.hasSidebar = !!document.querySelector('.sidebar-shell')
+    if (island) {
+      const r = island.getBoundingClientRect()
+      result.size = [Math.round(r.width), Math.round(r.height)]
+      // ⚠️ 判**居中误差**而不是绝对偏移：探针里视口是 1100 宽（不是 Tauri 那个 200×40），
+      // 所以胶囊在整屏居中 ⇒ 偏移是几百像素。绝对偏移只在真窗口里才是 0。
+      const sr = shell?.getBoundingClientRect()
+      result.centerErr = sr
+        ? [Math.round(r.left + r.width / 2 - (sr.left + sr.width / 2)),
+           Math.round(r.top + r.height / 2 - (sr.top + sr.height / 2))]
+        : null
+    }
+    const pre = document.createElement('pre')
+    pre.id = 'ui-probe'
+    pre.textContent = JSON.stringify({ mode: 'status-widget-window', views: [], degraded,
+      statusWidgetWindow: result })
+    document.body.appendChild(pre)
+    return
+  }
+
   // 直播预约进日历（`?probe=reservations`，devlog/088；配合 `ui_probe.py --reservations`）：
   // 现场由脚本侧**种一条明天的预约**进数据目录副本（开发库未必有未来预约，靠数据碰运气
   // 会让断言空转）。这里断言整条链路真的落到界面：

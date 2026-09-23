@@ -354,6 +354,7 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
             "polish": data.get("polish"),
             "reservations": data.get("reservations"),
             "statusIsland": data.get("statusIsland"),
+            "statusWidgetWindow": data.get("statusWidgetWindow"),
             "appSettings": data.get("appSettings"),
             "filterPill": data.get("filterPill"),
             "traySuspend": data.get("traySuspend"),
@@ -2840,6 +2841,38 @@ def main() -> int:
                                 f"应为 280（§7 widget 展开 280）")
             if not failures:
                 print("  [ok] 桌面控件宿主：200×40 / 深底+blur+高光内边 / 两极端壁纸对比度达标 / 不依赖顶栏")
+
+            # ── 第二段：**小窗视图**（`?widget=1`）────────────────────────────
+            # 验的是 main.tsx 的**分流本身**：小窗里不该跑主窗口那套。
+            wurl = f"http://localhost:{vite_port}{route}?probe=status-widget-window&widget=1"
+            print(f"[probe] status-widget-window @{w} → {wurl}")
+            wres = _run_probe(edge, wurl, w, args.height, WORK, "status-widget-window")
+            ww = ((wres or {}).get("statusWidgetWindow") or {})
+            print(f"  小窗：shell={ww.get('hasShell')} 胶囊={ww.get('hasIsland')} "
+                  f"density={ww.get('density')!r} 尺寸={ww.get('size')} "
+                  f"居中误差={ww.get('centerErr')}")
+            print(f"  分流：顶栏={ww.get('hasTopbar')} 侧栏={ww.get('hasSidebar')}（都应为 False）")
+            if not ww:
+                failures.append(f"@{w} status-widget: 小窗视图没量到（探针未跑完？）")
+            else:
+                if not ww.get("hasShell"):
+                    failures.append(f"@{w} status-widget: 小窗里没有 `.widget-shell`")
+                if ww.get("density") != "widget":
+                    failures.append(f"@{w} status-widget: 小窗里的胶囊 density 是 "
+                                    f"{ww.get('density')!r}，应为 'widget'")
+                if ww.get("size") != [200, 40]:
+                    failures.append(f"@{w} status-widget: 小窗里胶囊尺寸是 {ww.get('size')}，"
+                                    f"应为 [200, 40]")
+                if ww.get("centerErr") != [0, 0]:
+                    failures.append(f"@{w} status-widget: 胶囊在小窗里没居中（误差 "
+                                    f"{ww.get('centerErr')}px）—— `.widget-shell` 的 flex 居中没生效")
+                # ⚠️ 这条是**分流**的判据：`?widget=1` 没生效时小窗里会跑起整个应用
+                for key, label in (("hasTopbar", "顶栏"), ("hasSidebar", "侧栏")):
+                    if ww.get(key):
+                        failures.append(f"@{w} status-widget: 小窗里出现了{label} —— "
+                                        f"`main.tsx` 的 `?widget=1` 分流没生效（跑起了整个应用）")
+            if not failures:
+                print("  [ok] 桌面控件小窗：分流生效（无顶栏/侧栏）/ 胶囊居中 200×40")
             for b in failures:
                 print("   -", b)
             return 1 if failures else 0

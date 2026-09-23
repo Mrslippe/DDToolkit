@@ -555,6 +555,21 @@ html.window-maximized body {
   color: #fff;
 }
 
+/* 桌面状态控件**小窗**的根容器（R38 批 5b，`?widget=1`）。窗口本身就是透明的 200×40
+   无边框，所以这里不能有背景、不能有内距 —— 看得见的就是那颗胶囊自己。
+   `user-select: none`：整个面都要能拖（拖动走**指针位移阈值**，见 StatusWidgetWindow ——
+   不能用 `data-tauri-drag-region`，那会在 mousedown 就抢走点击，面板就点不开了）。 */
+.widget-shell {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+}
+
 /* 计数：多于一条时才出现（让用户知道点开还有别的） */
 .si-count {
   flex: none;
