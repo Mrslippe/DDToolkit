@@ -108,6 +108,6 @@ tsc 0 · eslint 0 · doc_check 0 FAIL · **<N> 个探针模式全绿**（新增 
 
 1. 回填 `docs/ROADMAP-DONE.md`「批次 → devlog 索引」表 —— **一行一个裸编号**（`| 167 |`）。
    无独立 devlog 的小批次写**提交短哈希**（`| c729ea3 |`）；范围行（`024–026`）只有早期批次才有。
-   三种合法写法的完整说明见 `SKILL.md` §6。
-2. 跑 `python scripts/doc_check.py` 确认 0 FAIL —— 判据是 **6 项**（完整表见 `SKILL.md` §7）：
+   三种合法写法的完整说明见 `SKILL.md` §7。
+2. 跑 `python scripts/doc_check.py` 确认 0 FAIL —— 判据是 **6 项**（完整表见 `SKILL.md` §8）：
    devlog 索引**有则必填**（编号 > 61）· 无重号 · 无幽灵行 · 六处版本号 · 发布说明与导航 · 文档数字与代码一致。

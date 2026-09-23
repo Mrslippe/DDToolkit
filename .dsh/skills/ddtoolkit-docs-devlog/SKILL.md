@@ -98,7 +98,48 @@ DDToolkit（VTuber 证据归档工具：Python + FastAPI 后端、React 前端�
 
 引用写法：代码写**仓库相对路径**（如 `app/services/scheduler.py`），文档写 `docs/<文件>`，方便 `Ctrl+F` 全局定位。
 
-## 6. TODO ↔ ROADMAP-DONE 双向维护
+## 6. 文档里的数字：三分法（2026-09-23 定）
+
+**写数字本身不是坏习惯** —— 让描述具体、让判据精确都要靠它。问题是散文里的数字分两种，
+而**两种的写法完全一样**，写的人从语法上分不出来：
+
+| 类型 | 例子 | 会漂吗 | 怎么办 |
+|---|---|---|---|
+| **测量值** | `pytest 434 passed` · `11 表` · `12 个 Repo` · 「下一篇 devlog 是三位编号」 | **每次改动都变** | **不写** → 指向真源 |
+| **定义值** | 色值 `--c-primary-deep` · `gap: 12px` · 「圆角 = 高度半」·「编号 > 61」 | 只在设计 / 规则改了时变 | **照写** —— 它就是规格本身 |
+| **带日期的快照** | 「2026-09-15 实测 96 篇」 | 不漂（已声明是历史值） | 可以写，**必须带日期** |
+
+**判据一句话**：*这个数字能从代码或测试跑出来吗？* 能 → 它是测量值，**别写，指向真源**。
+
+真源只有两个：
+
+| 要什么 | 去哪查 |
+|---|---|
+| 迁移 head / 版本数 / 表数 / 路由装饰器 / 下一篇 devlog 编号 | `python scripts/gen_doc_numbers.py --list` |
+| 门禁基线（pytest / cargo / vitest / 探针） | `docs/TODO.md` §6.2 |
+
+### ⚠️ 第三类最麻烦：**定义变更要主动搜复述点**
+
+门禁能管测量值（`gen_doc_numbers.py` 就是干这个的），**但管不了定义变更的传播**。
+
+2026-09-23 实例：门禁规则从「最近 5 篇」改成「有则必填」时，更新了本技能 §8 的判据表，
+**却漏了另外三处复述**（`conventions/references/verification.md` · `references/devlog-template.md` ·
+`docs/GLOSSARY.md`）—— 而「哪些地方复述了这条规则」**只有人知道，门禁不知道**
+（它没有"规则 → 复述点"的索引）。
+
+⇒ **改一条规则 / 一个阈值 / 一个判据时，先全局搜它，再改。**
+
+### 为什么测量值总会被写进去
+
+因为写数字**在写入那一刻是理性的**：刚跑完测试，手边就有 578，写下来读者不用自己跑。
+维护成本留给未来 —— 典型的**局部优化 + 未定价外部性**。
+而 devlog 里同一个写法是**对的**（记录本就该写死当时的值），所以这个习惯是被**正当用途**训练出来的，
+然后被无差别地用到了状态文档里。
+
+**实测密度**（2026-09-23）：devlog 11.3 处/份（记录，正确）· 设计文档 5.7–7.5 处/千字符
+（像素 / 尺寸 / 令牌，**多为定义值，正确**）· 架构与契约文档 0.3–1.0 处/千字符。
+
+## 7. TODO ↔ ROADMAP-DONE 双向维护
 
 | 阶段 | 写哪 | 怎么写 |
 |---|---|---|
@@ -126,7 +167,7 @@ DDToolkit（VTuber 证据归档工具：Python + FastAPI 后端、React 前端�
 > 而不敢瘦身 —— 实际它们的 commit message 有 655 / 815 字符，与索引行长度几乎 1:1，抄进索引是纯重复。
 > 索引行的第二列本来就是"**哪份记录记得这件事**"，所以无 devlog 时写提交短哈希即可。
 
-## 7. 门禁：`doc_check.py` 与 `dev_check.py --docs`
+## 8. 门禁：`doc_check.py` 与 `dev_check.py --docs`
 
 ```powershell
 python scripts/doc_check.py            # 只读，有 FAIL 退出 1
@@ -154,7 +195,7 @@ python scripts/dev_check.py --docs     # 一把梭里追加调用 doc_check（�
 历史引用（"某表由 `f004` 引入"）、散文里的数字复述、路由的另两种口径
 **仍要人肉复核** —— 别因为门禁绿了就当全对。
 
-## 8. 发版时的文档动作（清单见 `references/release-checklist.md`）
+## 9. 发版时的文档动作（清单见 `references/release-checklist.md`）
 
 一条命令：`python scripts/release.py <版本>`（`--bump patch|minor|major` / `--dry-run` / `--from <步骤>`）。
 十步：`preflight → version → gates → build → verify → commit → tag → push → release → report`。
@@ -173,7 +214,7 @@ python scripts/dev_check.py --docs     # 一把梭里追加调用 doc_check（�
 - **脚本不做、必须人工**：装一次直装版（`binaries\backend\_internal\` 存在 + 首启越过启动幕）、
   便携版解压启动；token 进过对话就吊销。
 
-## 9. 参考文件
+## 10. 参考文件
 
 | 文件 | 内容 |
 |---|---|
@@ -182,9 +223,12 @@ python scripts/dev_check.py --docs     # 一把梭里追加调用 doc_check（�
 | `references/release-checklist.md` | 发版文档动作清单（6 处锚点与正则 / 归档 / 门禁 / 产物契约） |
 | `scripts/gen_doc_numbers.py`（脚本） | **数字真值来源**：`--list` 查当前真值，`--check` 跑漂移门禁；口径与覆盖边界见其头部注释 |
 
-## 10. 交付前自检
+## 11. 交付前自检
 
-- [ ] 已按**第 4 节定档**（拿不准就往上一档靠）；A/B 档的活文档都同步了（数字口径改了就重新数一遍）
+- [ ] 已按**第 4 节定档**（拿不准就往上一档靠）；A/B 档的活文档都同步了
+- [ ] **本批写进文档的数字符合第 6 节三分法** —— 测量值**没写死**（指向 `gen_doc_numbers.py --list`
+      或 `TODO.md` §6.2）· 定义值照写 · 带日期的快照标了日期
+- [ ] **若本批改了规则 / 阈值 / 判据**：已**全局搜过**所有复述它的地方（门禁管不了这一类）
 - [ ] **本批可提炼的经验已落位**：不变量 → `ARCHITECTURE.md` §6 / 坑与方法论 → `DEV-LOOP.md` /
       设计原理 → `design-*.md`；devlog 里留了指针，**没有在多篇 devlog 里重复记同一个坑**
 - [ ] 本批已追加**一篇** devlog，编号 = 当前最大 +1（先跑 `gen_doc_numbers.py --list` 确认），文件名三段式正确

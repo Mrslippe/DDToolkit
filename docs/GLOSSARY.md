@@ -182,7 +182,7 @@
 | **一键发布 / release.py** | 十步发布编排：预检→版本同步→门禁→打版→产物校验→提交/tag→推送→Release→报告 | `scripts/release.py`；手册 `docs/RELEASE.md`；上传 `scripts/upload_release_assets.py`（幂等） | 守卫：工作树脏/notes 缺失/版本不递增/NSIS 打平/**文档漂移**/tag 冲突 → 停；`--dry-run`、`--from <步骤>` 续跑；推完自动对齐本地 `origin/<分支>` tracking ref（按 URL 推送不会自动更新它） |
 | **端到端上游冒烟 / smoke_upstream** | 数据目录副本 + 真后端 + 真上游，跑"只有真环境才暴露"的链路（B 站检索 / uid 直查 / 池外收录 / 场次上游） | `scripts/smoke_upstream.py`（`--cold` = 空数据目录 + 清空凭据）；`dev_check.py --upstream` | `--capture` 顺带刷新真实 fixtures；skip 必须打印原因，不冒充通过 |
 | **真实 fixtures** | 真上游回包 / 真 `installer.nsi` 片段 / 真索引条目 —— 判据的"真形状"依据 | `tests/fixtures/`（`smoke_upstream.py --capture` 生成）；用例 `tests/test_real_fixtures.py` | 规矩：**新判据至少一条用例吃真实数据**（§8 第 13 条） |
-| **文档漂移门禁 / doc_check** | 6 项：devlog 索引**有则必填** / **无重号** / **无幽灵行**、六处版本号一致、发布说明与 `docs/README.md` 导航、**文档数字与代码一致**（`gen_doc_numbers.py`） | `scripts/doc_check.py`；`dev_check.py --docs`；`release.py` 预检会调它 | 这类漂移不会让任何测试红，只会在几个月后查不到"那版改了什么"。**判据全表见 `ddtoolkit-docs-devlog` 技能 §7** |
+| **文档漂移门禁 / doc_check** | 6 项：devlog 索引**有则必填** / **无重号** / **无幽灵行**、六处版本号一致、发布说明与 `docs/README.md` 导航、**文档数字与代码一致**（`gen_doc_numbers.py`） | `scripts/doc_check.py`；`dev_check.py --docs`；`release.py` 预检会调它 | 这类漂移不会让任何测试红，只会在几个月后查不到"那版改了什么"。**判据全表见 `ddtoolkit-docs-devlog` 技能 §8** |
 | **启动迁移四形态** | 全新库 upgrade / 旧库 stamp / 落后增量 / 已最新快路径 | `app/main.py::_run_migrations` | 冷启动优化 |
 | **旧库桥接守卫** | 桥接补不了唯一约束 → 不一致**拒绝启动**（不写假 head 承诺） | `app/main.py::_missing_unique_keys` | devlog/053 |
 | **冻结后端 / frozen** | PyInstaller onedir 打包的 sidecar（`_MEIPASS` 定位资源） | `scripts/build_backend.py`、`backend_main.py`、`app/core/config.py::PROJECT_ROOT` | 资源打平事故见 devlog/036 |

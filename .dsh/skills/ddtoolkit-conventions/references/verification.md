@@ -126,7 +126,7 @@ python scripts/doc_check.py            # 只读，有 FAIL 退出 1
 python scripts/dev_check.py --docs     # 接进一把梭
 ```
 
-查（2026-09-23 起 **6 项**，完整判据表见 `ddtoolkit-docs-devlog` 技能 §7）：
+查（2026-09-23 起 **6 项**，完整判据表见 `ddtoolkit-docs-devlog` 技能 §8）：
 devlog 索引**有则必填**（编号 > 61；≤ 61 的历史欠账只 WARN）· 索引**无重号** · 索引**无幽灵行** ·
 六处版本号一致 · 发布说明与 `docs/README.md` 导航 · **文档数字与代码一致**（`gen_doc_numbers.py`）。
 `scripts/release.py` 预检也会调它。基线见 `docs/TODO.md` §6.2。
