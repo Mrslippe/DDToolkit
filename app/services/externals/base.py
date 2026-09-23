@@ -40,6 +40,34 @@ class ExternalJobSummary:
     error: str | None = None
 
 
+class FailureBudget:
+    """连续失败预算（R44，devlog/165）。
+
+    **要解决的问题**：端点整体挂掉时（超时/拒绝），逐个账号等满超时是纯浪费 ——
+    2026-09-23 实测 `zeroroku/gift_days` 7 个账号全 `ReadTimeout`、每个 25–29 秒 ⇒
+    3 分钟全花在等超时上。
+
+    语义（刻意做得**可预期**，三条单测钉住）：
+    - 连续失败到 `limit` ⇒ 本轮**放弃剩余账号**（下一个周期自然会再试）；
+    - **一次成功就把连续计数清零**（偶发抖动不该累积成"放弃"）；
+    - `limit <= 0` = 不启用（保留老行为，方便回退与对照）。
+    """
+
+    def __init__(self, limit: int = 3):
+        self.limit = limit
+        self.consecutive = 0
+
+    def ok(self) -> bool:
+        """还能继续尝试下一个账号吗。"""
+        return self.limit <= 0 or self.consecutive < self.limit
+
+    def record(self, succeeded: bool) -> None:
+        self.consecutive = 0 if succeeded else self.consecutive + 1
+
+    def reason(self) -> str:
+        return f"连续 {self.consecutive} 个账号失败（上限 {self.limit}）—— 本轮剩余账号跳过"
+
+
 class ExternalSource(ABC):
     name: str = ""
     enabled: bool = True

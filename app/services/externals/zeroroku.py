@@ -22,11 +22,17 @@ from app.core.config import settings
 from app.models.vtuber import Account, AccountStatSnapshot, LiveGiftDay
 from app.repositories.vtuber_repo import AppMetaRepo
 from app.services.externals.base import (ExternalJob, ExternalJobSummary,
-                                         ExternalSource, INTERVAL_DAILY)
+                                         ExternalSource, FailureBudget, INTERVAL_DAILY)
 
 logger = logging.getLogger(__name__)
 
 ZEROROKU_BASE = "https://zeroroku.com/api/bilibili"
+
+# R44（devlog/165）：`gift_days`（直播礼物日聚合）的**专用短超时**。
+# 它响应很小，而 runner 建的客户端默认 25s —— 2026-09-23 实测 7 个账号全 ReadTimeout、
+# 每个 25~29 秒 ⇒ 外部补抓的 3 分钟全花在等超时上。8 秒对这个小接口足够。
+# ⚠️ 只有这一个接口调小：`fan_history` 合法就要 5~15 秒（一次返回全量），不能一起调。
+GIFT_DAYS_TIMEOUT = 8.0
 
 
 def fan_history_marker_key(account_id: int) -> str:
@@ -63,8 +69,13 @@ async def fetch_fan_history(mid: str, client: httpx.AsyncClient) -> list[dict] |
     return items if isinstance(items, list) else None
 
 
-async def fetch_gift_days(mid: str, client: httpx.AsyncClient) -> dict | None:
-    resp = await client.get(f"{ZEROROKU_BASE}/author/{mid}/live-paid-aggregations")
+async def fetch_gift_days(mid: str, client: httpx.AsyncClient,
+                          timeout: float | None = GIFT_DAYS_TIMEOUT) -> dict | None:
+    # R44（devlog/165）：**这个接口带自己的短超时**。它响应很小（几十 KB 量级），
+    # 而客户端默认是 25s —— 2026-09-23 实测 7 个账号全 ReadTimeout、每个 25~29s
+    # ⇒ 3 分钟全在等超时。`fan_history` 不许跟着调小：那个合法就要 5~15 秒（一次返回全量）。
+    resp = await client.get(f"{ZEROROKU_BASE}/author/{mid}/live-paid-aggregations",
+                            timeout=timeout)
     if resp.status_code != 200:
         logger.warning(f"zeroroku gifts 失败 HTTP {resp.status_code} mid={mid}")
         return None
@@ -113,7 +124,13 @@ class ZerorokuSource(ExternalSource):
         meta = AppMetaRepo(db)
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         cutoff = now - timedelta(hours=settings.EXTERNAL_FAN_HISTORY_STALE_HOURS)
+        # R44：连续失败预算 —— 这个接口一次返回全量（5~15s/次），端点挂了时逐个等满太贵
+        budget = FailureBudget()
         for acc in accounts:
+            if not budget.ok():
+                logger.warning(f"zeroroku fan_history: {budget.reason()}")
+                summary.skipped += len(accounts) - accounts.index(acc)
+                break
             last = meta.get_dt(fan_history_marker_key(acc.id))
             if last is not None and last > cutoff:
                 summary.skipped += 1
@@ -122,6 +139,7 @@ class ZerorokuSource(ExternalSource):
                 continue
             try:
                 items = await fetch_fan_history(str(acc.platform_uid), client)
+                budget.record(items is not None)
             except Exception as e:
                 # 账号级隔离：网络异常只影响本账号，其余账号继续
                 # （带上异常类型：TimeoutException 的 str 为空，只打 {e} 看不出原因）
@@ -168,13 +186,21 @@ class ZerorokuSource(ExternalSource):
                               account_ids: list[int] | None = None) -> ExternalJobSummary:
         summary = ExternalJobSummary(self.name, "gift_days")
         accounts = self._bili_accounts(db, account_ids)
+        # R44：连续失败预算 —— 端点整体挂掉时不该逐个账号等满超时（见 `FailureBudget`）
+        budget = FailureBudget()
         for acc in accounts:
+            if not budget.ok():
+                logger.warning(f"zeroroku gift_days: {budget.reason()}")
+                summary.skipped += len(accounts) - accounts.index(acc)
+                break
             try:
                 payload = await fetch_gift_days(str(acc.platform_uid), client)
+                budget.record(payload is not None)
             except Exception as e:
                 logger.warning(f"zeroroku gifts 账号异常 {acc.platform_uid}: "
                                f"{type(e).__name__}: {e}")
                 summary.skipped += 1
+                budget.record(False)
                 continue
             if not payload:
                 summary.skipped += 1
