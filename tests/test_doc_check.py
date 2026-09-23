@@ -170,3 +170,69 @@ def test_notes_placeholder_detection(marker):
         import release as R
         problems = R.notes_problems
     assert any("占位符" in p for p in problems(text))
+
+
+# ── TODO §1 的「已落地残留」（2026-09-24 加）──────────────────────────────
+
+def _fake_todo(monkeypatch, rows: list[str]):
+    import shutil
+
+    shutil.rmtree(_TEST_TMP, ignore_errors=True)
+    _TEST_TMP.mkdir(parents=True)
+    f = _TEST_TMP / "TODO.md"
+    f.write_text("## 1. 未完成项\n\n| 项 | 性质 | 说明 |\n|---|---|---|\n"
+                 + "\n".join(rows) + "\n\n## 2. 能力现状\n", encoding="utf-8")
+    monkeypatch.setattr(D, "TODO", f)
+    return f
+
+
+def test_todo_landed_row_is_reported(monkeypatch):
+    """性质列说"已落地"的条目必须红 —— 实测 §1.1 堆过 12 条（18 条里 12 条已完成）。"""
+    _fake_todo(monkeypatch, ["| **R15 前端三处小改** | ✅ **已落地**（devlog/087） | … |"])
+    fails, _w = D.check_todo_not_stale()
+    assert fails, "§1 里的已落地条目没被报出来"
+
+
+def test_todo_partially_landed_row_is_not_reported(monkeypatch):
+    """**回归**：一个需求"5 批只落了 1 批"时，行里出现"已落地"是**对的**，不该判红。
+
+    （2026-09-24 首版按整行匹配，把 R38 那行误报了 —— R38 的批 1 落地、批 2–5 还没做。）
+    """
+    _fake_todo(monkeypatch, [
+        "| **R38 状态胶囊形变动效** | 前端（规格已就绪） | ① motion token 化 ✅ 已落地（devlog/167）→ ② 形变 |"])
+    fails, _w = D.check_todo_not_stale()
+    assert fails == [], fails
+
+
+# ── 设计规格的「现状断言」（2026-09-24 加）────────────────────────────────
+
+def _fake_design(monkeypatch, text: str):
+    import shutil
+
+    shutil.rmtree(_TEST_TMP, ignore_errors=True)
+    _TEST_TMP.mkdir(parents=True)
+    f = _TEST_TMP / "design-fake.md"
+    f.write_text(text, encoding="utf-8")
+    monkeypatch.setattr(D, "DOCS", _TEST_TMP)
+    return f
+
+
+def test_spec_undated_claim_is_warned(monkeypatch):
+    """无日期的现状断言要提醒 —— 实测规格声称 `--ease-standard`「已在用」，实际是错的，挂了一周。"""
+    _fake_design(monkeypatch, "| 曲线 | x | 进入 | **已在用**（`.si-panel` 入场曲线） |\n")
+    _f, warns = D.check_spec_claims()
+    assert warns, "无日期的现状断言没被提醒"
+
+
+def test_spec_dated_claim_is_not_warned(monkeypatch):
+    """带核实日期的算"快照"，是合法的（三分法里的第三类）。"""
+    _fake_design(monkeypatch, "> **现状基线（2026-09-17 快照）**：`si-panel-in` 220ms\n")
+    _f, warns = D.check_spec_claims()
+    assert warns == [], warns
+
+
+def test_spec_quoted_claim_is_not_warned(monkeypatch):
+    """`「…」`/`"…"` 里的算**提及**不算断言 —— 纠正记录要引用错误原文。"""
+    _fake_design(monkeypatch, "| 2 | §2「**已在用**」 | **错**，实际是另一条曲线 |\n")
+    _f, warns = D.check_spec_claims()
+    assert warns == [], warns

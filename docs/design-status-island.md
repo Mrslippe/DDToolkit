@@ -6,7 +6,9 @@
 > **来源**：用户 2026-09-17 口径 —— 「希望顶栏状态胶囊能够像灵动岛那样拥有优雅灵动的动画，
 > 例如向中间收起和展开，为之后我想做的桌面独立控件做准备」。
 >
-> **现状基线**（写规格时核实过）：`components/StatusIsland.tsx` 四态
+> **现状基线（2026-09-17 快照）**：**它说明的是"为什么要改"的起点，不是当前状态** ——
+> 当前状态看 **`docs/UI-MAP.md` A1-a（唯一真源）**；R38 批 1（2026-09-24）已改动其中若干处，
+> 逐条纠正见 §12.1。快照内容：`components/StatusIsland.tsx` 四态
 > `idle`（只有绿点、**无容器**）/ `pill` / 展开面板 `.si-panel`（portal + fixed，`si-panel-in` 220ms）
 > + 计数徽章 `si-pop-in` 180ms + 文案 key 重放淡入 `.si-text.pill-text-fade`；
 > 优先级 `alert > progress > report > message`；reduced-motion 已有 `si-panel-in-fade` 先例。
@@ -41,7 +43,7 @@
 | `--motion-fast` | **140ms** | 文案淡入淡出、计数徽章 pop | 状态类信息超过 ~150ms 就开始显得拖沓 |
 | `--motion-base` | **220ms** | 胶囊折叠/展开、面板入场 | 与现有 `si-panel-in` 一致，体感"跟手但不慌" |
 | `--motion-slow` | **320ms** | 跨级形变（两段式的第二段） | 位移大才配得上更长时间 |
-| `--ease-standard` | `cubic-bezier(0.22, 1, 0.36, 1)` | 进入 / 展开 | **已在用**（`.si-panel` 入场曲线），全站运动语言保持一致 |
+| `--ease-standard` | `cubic-bezier(0.22, 1, 0.36, 1)` | 进入 / 展开 | 全站运动语言保持一致。**2026-09-24 批 1 起 `.si-panel` 也用它** —— 此前那条曲线是 `cubic-bezier(.22,.61,.36,1)`（**全站唯一的异类**），见 §12.1 |
 | `--ease-exit` | `cubic-bezier(0.4, 0, 1, 1)` | 收起 / 离场 | 离场要干脆，不带缓出的迟疑 |
 | `--ease-emphasized` | `cubic-bezier(0.2, 0, 0, 1)` | 大块面积（面板） | 面积越大越要"前快后慢" |
 

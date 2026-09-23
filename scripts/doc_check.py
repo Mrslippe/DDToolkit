@@ -22,6 +22,8 @@
 | 5 | 当前版本的发布说明存在 | `docs/releases/v<config.VERSION>.md` |
 | 6 | 发布说明都在导航里 | `docs/releases/*.md` 每个文件都要在 `docs/README.md` 出现 |
 | 7 | 文档数字与代码一致 | 复用 `gen_doc_numbers.py` 的派生与比对（同一份实现，不另写一遍） |
+| 8 | TODO 无已落地残留 | `TODO.md` §1「未完成项」的**性质列**（第 2 列）不应说"已落地"（应搬去 `ROADMAP-DONE.md`） |
+| 9 | 规格现状断言带日期 | `docs/design-*.md` 里的「现状基线 / 已在用」必须带核实日期（或改成指向 `UI-MAP`） |
 
 ## 纪律口径（2026-09-23 修订）
 
@@ -53,9 +55,11 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
 DEVLOG = ROOT / "devlog"
-ROADMAP_DONE = ROOT / "docs" / "ROADMAP-DONE.md"
-DOCS_README = ROOT / "docs" / "README.md"
-RELEASES = ROOT / "docs" / "releases"
+DOCS = ROOT / "docs"
+ROADMAP_DONE = DOCS / "ROADMAP-DONE.md"
+DOCS_README = DOCS / "README.md"
+RELEASES = DOCS / "releases"
+TODO = DOCS / "TODO.md"
 INDEX_SECTION = "批次 → devlog 索引"
 # 历史欠账水位线（2026-09-23 冻结）：编号 1–61 里散落 41 篇"按批次建索引"时期的产物，
 # 不再要求逐篇考古。> 此编号一律"有则必填"。
@@ -206,11 +210,80 @@ def check_doc_numbers() -> tuple[list[str], list[str]]:
     return G.run(quiet=True)
 
 
+def check_todo_not_stale() -> tuple[list[str], list[str]]:
+    """`TODO.md` §1「未完成项」里**不应有"已落地"条目** —— 它们该搬去 `ROADMAP-DONE.md`。
+
+    为什么需要它（2026-09-24 实测）：技能里的「已落地 → **移到** ROADMAP-DONE」只有人知道，
+    于是 §1.1「可以立刻动手」堆了 **12 条**带 ✅ 的旧条目（18 条里 12 条已完成）——
+    那个清单名义上"能立刻动手"，实际只有 5 条能动手。**"没有门禁的纪律会漂"的又一例。**
+
+    注：§0「待提需求收集区」**允许**写 `✅ 已落地（devlog/0NN）→ 详见 …` —— 那是规定的指针形式，
+    所以本检查只看 §1。判据取**性质列（第 2 列）**，不是整行 —— 一个需求可能"5 批只落了 1 批"
+    （R38 就是这样），那种行里出现"已落地"是**对的**，不该判红。
+    """
+    if not TODO.exists():
+        return ["docs/TODO.md 不见了？"], []
+    lines = TODO.read_text(encoding="utf-8").splitlines()
+    start = next((i for i, l in enumerate(lines) if l.startswith("## 1. ")), None)
+    if start is None:
+        return ["docs/TODO.md 找不到 §1「未完成项」（标题变了？）"], []
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
+
+    stale: list[str] = []
+    for i in range(start, end):
+        t = lines[i].strip()
+        # 表格数据行 = 以 | 开头结尾，且有"表格语法之外"的内容（排除 |---|---| 分隔行）
+        if not (t.startswith("|") and t.endswith("|")) or not set(t) - set("|-: "):
+            continue
+        cells = t.strip("|").split("|")
+        if len(cells) < 2:
+            continue
+        if "已落地" in cells[1]:                     # 只看「性质」列
+            name = cells[0].strip().strip("*~").strip()
+            stale.append(f"L{i + 1}「{name[:38]}」")
+    if stale:
+        return [f"docs/TODO.md §1「未完成项」里有 {len(stale)} 条已落地条目（应搬去 "
+                f"docs/ROADMAP-DONE.md）：" + "、".join(stale[:4])
+                + ("…" if len(stale) > 4 else "")], []
+    return [], []
+
+
+# 规格里描述"现状"的断言词。`「…」`/`"…"` 里的算**提及**不算断言（纠正记录要引用错误原文）。
+SPEC_CLAIM_WORDS = ("现状基线", "已在用")
+
+
+def check_spec_claims() -> tuple[list[str], list[str]]:
+    """设计规格里的"现状"断言必须带**核实日期** —— 或者干脆别写（现状指向 `UI-MAP`）。
+
+    为什么需要它（2026-09-24 实测）：`design-status-island.md` 声称 `--ease-standard`
+    「**已在用**（`.si-panel` 入场曲线）」，而实际那条曲线是 `cubic-bezier(.22,.61,.36,1)` ——
+    **全站唯一的异类**。这条断言**从未被验证过**（不是漂移，是一开始就错），挂了一整周，
+    直到 R38 批 1 实跑才发现。
+
+    规格与实现之间**没有**一致性门禁（做不到：那要求逐句判真值），但"**断言必须带日期**"
+    是可门禁的 —— 带了日期，读者就知道它是一份快照、该复核；没日期就会被当成事实。
+    """
+    warns: list[str] = []
+    for p in sorted(DOCS.glob("design-*.md")):
+        for i, l in enumerate(p.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+            bare = re.sub(r"「[^」]*」", "", l)
+            bare = re.sub(r'"[^"]*"', "", bare)
+            if not any(w in bare for w in SPEC_CLAIM_WORDS):
+                continue
+            if re.search(r"20\d{2}-\d{2}-\d{2}", l):
+                continue
+            warns.append(f"{p.relative_to(ROOT)}:{i} 有「现状」断言但没写核实日期 —— "
+                         f"补上日期，或改成指向 `UI-MAP`（现状的唯一真源）")
+    return [], warns
+
+
 CHECKS = [
     ("devlog 索引覆盖", check_devlog_index),
     ("六处版本号一致", check_versions),
     ("发布说明与导航", check_release_notes),
     ("文档数字与代码一致", check_doc_numbers),
+    ("TODO 无已落地残留", check_todo_not_stale),
+    ("规格现状断言带日期", check_spec_claims),
 ]
 
 
