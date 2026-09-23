@@ -1,6 +1,6 @@
 # 数据层与接口层文档（数据库 · Repositories · Routers）
 
-> 适用版本：`main`（2026-09-17，`MIGRATION_HEAD = f006`，迁移链 19 个版本、12 张表；**路由计数的三种数法见 §3**，别处不要再复述数字）。
+> 适用版本：`main`（2026-09-23，`MIGRATION_HEAD = f007`，迁移链 20 个版本、12 张表；**路由计数的三种数法见 §3**，别处不要再复述数字）。
 > 阅读路径：HTTP 入口（`app/routers`）→ SQL 封装（`app/repositories`）→ 表映射（`app/models`）→ 迁移（`alembic/versions`）。
 > 系统全貌见 `docs/ARCHITECTURE.md`；抓取链路细节见 `docs/backend-fetch-pipeline.md`；
 > 名词与代码路径速查见 `docs/GLOSSARY.md`；文档索引见 `docs/README.md`。
@@ -253,7 +253,7 @@
 | `source` | TEXT | 来源（danmakus） |
 | `updated_at` | DATETIME | 周级整表刷新 |
 
-### 1.3 迁移链（alembic，19 版本，head = `f006`）
+### 1.3 迁移链（alembic，20 版本，head = `f007`）
 
 | 版本 | 内容 |
 |---|---|
@@ -276,6 +276,7 @@
 | `f004` sign_source_and_field_history | `vtubers.sign_override / sign_source_account_id` + 建 `vtuber_field_history` + **删 `accounts.locked_fields`**（devlog/074） |
 | `f005` post_pinned | `posts.is_pinned`（NOT NULL 默认 0）+ `posts.pinned_refreshed_at` + 索引 `ix_posts_platform_uid_pinned`（R35，devlog/139） |
 | `f006` profile_cards | 建 `profile_cards`（档案视图卡片布局；唯一键 `(vtuber_id, card_key)`，**挂 vtubers 外键 ⇒ purge 必清**）（R37-P2，devlog/142） |
+| `f007` event_kind_emoji | `vtuber_events` 加 `kind`（NOT NULL 默认 `event`，**回填既有行**）+ `emoji`（可空）+ 索引 `ix_vtuber_events_vtuber_kind`；⚠️ **SQLite 不支持 `ALTER COLUMN` ⇒ 走 `batch_alter_table`**（R42-A，devlog/162） |
 
 **纪律**：新增迁移后必须同步 `app/main.py` 的 `MIGRATION_HEAD`（`tests/test_services.py`
 断言与 alembic head 一致），否则冷启动快路径会把旧库误判为已最新。启动迁移四形态：
@@ -412,20 +413,21 @@
 
 ---
 
-## 3. Routers（63 个路由装饰器 = 66 个方法×路径组合）
+## 3. Routers（64 个路由装饰器 = 67 个方法×路径组合）
 
 > 口径说明（**三种数法别混**）：
 >
 > | 数法 | 值 | 怎么数 |
 > |---|---|---|
-> | **装饰器**（下文「N」用它） | **63** | `vtuber 51` + `auth 3` + `img_proxy 1` + `settings 8`；其中 2 个是 `api_route(methods=["GET","POST"])`（`/vtuber/fetch`、`/vtuber/{id}/fetch`） |
-> | `app.routes` 对象 | **69** | 63 个 router 对象 + `/healthz` + FastAPI 自带 4 条 + `Mount(/static)` |
-> | 方法×路径 | **66** | `APIRoute.methods` 求和：62 个单方法 + 2 个双方法；FastAPI 自带那 4 条是 `Route`（GET+HEAD），**不计入**这一口径 |
+> | **装饰器**（下文「N」用它） | **64** | `vtuber 52` + `auth 3` + `img_proxy 1` + `settings 8`；其中 2 个是 `api_route(methods=["GET","POST"])`（`/vtuber/fetch`、`/vtuber/{id}/fetch`）—— ⚠️ **数装饰器必须把这 2 条算进去**，只数 `@router.get/post/...` 会少 2 |
+> | `app.routes` 对象 | **70** | 64 个 router 对象 + `/healthz` + FastAPI 自带 4 条 + `Mount(/static)` |
+> | 方法×路径 | **67** | `APIRoute.methods` 求和：63 个单方法 + 2 个双方法；FastAPI 自带那 4 条是 `Route`（GET+HEAD），**不计入**这一口径 |
 >
-> ⚠️ **2026-09-17 重新数过**（R37-P2 批次加了两条 `profile-cards` 路由）：实测
-> 装饰器 **63** / `app.routes` **69** / 方法×路径 **66**（`APIRoute` 64 条 = 63 + healthz，
-> 其中 2 条是双方法 ⇒ 62 + 2×2 = 66）。上一版记的 58/64/69 里，装饰器少算了 `settings`
-> 的 3 条（R22 存储端点）、`app.routes` 停在更早的数上 —— 三种数法本来就容易漂。
+> ⚠️ **2026-09-23 重新数过**（R42-A 批次加了 `vtuber_events` 的 PATCH 与 GET `kind` 过滤）：实测
+> 装饰器 **64** / `app.routes` **70** / 方法×路径 **67**（`APIRoute` 65 条 = 64 + healthz，
+> 其中 2 条是双方法 ⇒ 63 + 2×2 = 67）。上一版记的 63/69/66 少算了 R42-A 新增的端点；
+> 再上一版的 58/64/69 少算了 `settings` 的 3 条（R22 存储端点）—— 三种数法本来就容易漂。
+> **只有「装饰器」这一口径有门禁**（`scripts/gen_doc_numbers.py`），另两种口径要人肉重数。
 > 复核命令：`python -c "import app.main as m; print(len(m.app.routes))"` +
 > 按 `len(r.methods)` 分布看（2026-09-17 实测 `{1: 62, 2: 2}`）。
 > 这类数字会随批次漂：漂了就重新数一遍再改，别留着当装饰（`dev_check.py --docs` 只查

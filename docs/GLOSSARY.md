@@ -3,7 +3,7 @@
 > **用途**：改 bug / 做需求时快速定位「这个词在代码里叫什么、在哪个文件、牵动谁」。
 > **用法**：`Ctrl+F` 搜中文词或英文标识符；每行是「术语 · 含义 · 代码位置 · 关联」。
 > **与 `ARCHITECTURE.md` 的分工**：架构文档讲「为什么这样设计」，本文讲「这东西在哪、改它要动谁」。
-> 适用版本：`main`（2026-09-17，`MIGRATION_HEAD = f006`）。
+> 适用版本：`main`（2026-09-23，`MIGRATION_HEAD = f007`）。
 
 **目录**：§1 领域名词 · §2 数据模型与字段 · §3 抓取与调度 · §4 认证与凭据 ·
 §5 前端与界面 · §6 工程与流程 · §7 配置项速查 · §8 不变量与常见坑 · §9 需求 → 代码入口。
@@ -178,7 +178,7 @@
 
 | 术语 | 含义 | 代码位置 | 关联 |
 |---|---|---|---|
-| **迁移链 / MIGRATION_HEAD** | alembic `a001→f006`（19 个版本）；`MIGRATION_HEAD` 必须同步 | `alembic/versions/`、`app/main.py::MIGRATION_HEAD` | 测试断言一致 |
+| **迁移链 / MIGRATION_HEAD** | alembic `a001→f007`（20 个版本）；`MIGRATION_HEAD` 必须同步 | `alembic/versions/`、`app/main.py::MIGRATION_HEAD` | 测试断言一致 |
 | **一键发布 / release.py** | 十步发布编排：预检→版本同步→门禁→打版→产物校验→提交/tag→推送→Release→报告 | `scripts/release.py`；手册 `docs/RELEASE.md`；上传 `scripts/upload_release_assets.py`（幂等） | 守卫：工作树脏/notes 缺失/版本不递增/NSIS 打平/**文档漂移**/tag 冲突 → 停；`--dry-run`、`--from <步骤>` 续跑；推完自动对齐本地 `origin/<分支>` tracking ref（按 URL 推送不会自动更新它） |
 | **端到端上游冒烟 / smoke_upstream** | 数据目录副本 + 真后端 + 真上游，跑"只有真环境才暴露"的链路（B 站检索 / uid 直查 / 池外收录 / 场次上游） | `scripts/smoke_upstream.py`（`--cold` = 空数据目录 + 清空凭据）；`dev_check.py --upstream` | `--capture` 顺带刷新真实 fixtures；skip 必须打印原因，不冒充通过 |
 | **真实 fixtures** | 真上游回包 / 真 `installer.nsi` 片段 / 真索引条目 —— 判据的"真形状"依据 | `tests/fixtures/`（`smoke_upstream.py --capture` 生成）；用例 `tests/test_real_fixtures.py` | 规矩：**新判据至少一条用例吃真实数据**（§8 第 13 条） |
