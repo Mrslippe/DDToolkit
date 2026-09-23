@@ -36,10 +36,12 @@ logs/
 # ⚠️ **项目专属技能例外**（2026-09-23 改，devlog/166）：`ddtoolkit-conventions` 与
 # `ddtoolkit-docs-devlog` 是本项目的工程知识（15 条不变量 / 验收命令 / 文档纪律 / 门禁口径），
 # 性质同 `docs/` —— 不入库的话，新克隆会看到 `gen_doc_numbers.py` 报出漂移却没人知道怎么修。
-# 10 个通用设计技能仍不入库（第三方内容）。**出处**（想找回时看这里）：
-#   9 个来自 github.com/hueyexe/frontend-agent-skills（MIT，仓库带 LICENSE）；
-#   `frontend-design` **不在**该仓库，frontmatter 写 `license: Complete terms in LICENSE.txt`
-#   但本地没有那个 LICENSE.txt —— 出处未确认，它是目前唯一没有可靠来源的一份。
+# 9 个通用设计技能仍不入库（第三方内容）。**出处**（想找回时看这里）：
+#   github.com/hueyexe/frontend-agent-skills（MIT，仓库带 LICENSE）。
+# 2026-09-23 另删了第 10 个 `frontend-design`：查明它是 **anthropics/skills** 的旧版副本
+#   （本地 55 行 / 8.2 KB，上游已 71 行 / 9.4 KB），且**缺 frontmatter 指向的 LICENSE.txt**
+#   —— 那份副本本身就不合规，且无独有内容（30 行里 20 行上游已改写）。
+#   要装回就用上游**当前版**，两个文件都要：SKILL.md + LICENSE.txt。
 .dsh/*
 !.dsh/skills/
 .dsh/skills/*
