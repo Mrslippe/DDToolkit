@@ -299,7 +299,7 @@
 
 ---
 
-## 2. Repositories（`app/repositories/vtuber_repo.py`，11 个类）
+## 2. Repositories（`app/repositories/vtuber_repo.py`，12 个类）
 
 构造注入会话：`Repo(db)`。CRUD 惯例：`create` 用 `model_dump()` 展开；`update` 逐个
 `setattr`；`get` 返回 `None` 表示不存在；写操作当场 `commit`（`PostRepo.create(commit=False)`

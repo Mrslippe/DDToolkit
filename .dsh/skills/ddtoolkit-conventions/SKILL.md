@@ -28,8 +28,8 @@ description: Use when 修改 DDToolkit 的后端抓取/数据层/迁移/路由�
 | 层 | 职责 | 硬约束 |
 |---|---|---|
 | `app/routers/` | HTTP 契约、状态码语义（404/409/415/413）、`Depends(get_db)` | **不写 SQL**；抓取类端点做忙判定 |
-| `app/repositories/` | 11 个 Repo，批量删除/分页/统计等 SQL | 写操作当场 commit；`PostRepo.create(commit=False)` 与各 `delete_by_*` 由调用方事务收口 |
-| `app/models/` | SQLAlchemy 2.0 ORM（单文件 11 表） | 唯一约束/索引与迁移链一致 |
+| `app/repositories/` | 12 个 Repo，批量删除/分页/统计等 SQL | 写操作当场 commit；`PostRepo.create(commit=False)` 与各 `delete_by_*` 由调用方事务收口 |
+| `app/models/` | SQLAlchemy 2.0 ORM（单文件 12 表） | 唯一约束/索引与迁移链一致 |
 | `app/schemas/` | Pydantic 输入输出模型 | `Out` 用 `from_attributes` |
 | `app/services/` | 调度、抓取、平台适配、第三方源、认证、类型引擎、墓碑、清理 | 不碰 HTTP；重依赖延迟 import |
 | `app/core/` | 配置、引擎与 PRAGMA、`get_db`、共享 HTTP 客户端构造 | 新代码发请求一律 `new_async_client()` |
@@ -80,7 +80,8 @@ description: Use when 修改 DDToolkit 的后端抓取/数据层/迁移/路由�
 | 文档 / 索引 | `python scripts/doc_check.py`（`release.py` 预检也会调） |
 | 动 Rust 壳 / `tauri.conf.json` / 安装包布局 | 只能整包重建 `npm run tauri:build`；发布 `python scripts/release.py <版本>` |
 
-逐字命令全表、探针各模式与门禁基线数值（`pytest` 432 passed 等）见 `references/verification.md`。
+逐字命令全表与探针各模式见 `references/verification.md`；**门禁基线数值只在 `docs/TODO.md` §6.2 维护**
+（本技能与 `verification.md` 都不复述 —— 散文里的数字门禁查不到，写死必漂）。
 
 ## 6. 高危清单（最容易造成事故）
 

@@ -34,18 +34,18 @@ python scripts/dev_check.py --upstream  # 接进一把梭（真上游 + 冷进�
 python -m pytest -q
 ```
 
-- **TODO §6.2 基线**：**434 passed**（R11 检索 16 + API 5；发布脚本 28；管线复盘 15；未登录能力 24；
-  R13 路由契约 +1；R12a 风控字段 +1；R14a 运行时设置 +24；R14b 偏好 +5；R18 关闭语义偏好 +1；
-  R20 文案扫描 +1 / prefs 白名单 +1；含 1 条真实网络冒烟，离线环境会 skip）。
-- `DEV-LOOP.md` §二 **不再复述用例数**，只写「基线数字只在 `docs/TODO.md` §6.2 维护」—— 数量以 §6.2 或现场实跑为准。
-  另有桌面壳门禁：`cargo test`（工作目录 `frontend/src-tauri`）**2 passed**。
+- **基线数字只在 `docs/TODO.md` §6.2 维护，本文件不复述**（2026-09-23 改）。
+  ⚠️ 此前这里写死过「**434 passed**」—— 早就漂到 578 了，而门禁查不到散文里的数字。
+  `DEV-LOOP.md` §二 也是同样处理（只写"基线只在 §6.2 维护"）。**现场实跑优先。**
+- 分项构成（哪些用例来自哪个批次）在 `docs/TODO.md` §6.2 那一行的括号里，不在这里重复。
+- 另有桌面壳门禁：`cargo test`（工作目录 `frontend/src-tauri`），基线同样见 §6.2。
 
 ## 2. 前端门禁（TODO §6.2）
 
 ```powershell
 npx tsc --noEmit                     # 前端类型：0 错（npm run build 也会跑）
 npm --prefix frontend run lint       # 前端 lint：0 错（--max-warnings 0）
-npm --prefix frontend run test       # 前端单测：241 passed
+npm --prefix frontend run test       # 前端单测：基线见 §6.2（本文件不复述数字）
 node scripts/check_wordcloud_layout.mjs   # 词云布局：sha256 断言
 ```
 
@@ -126,9 +126,10 @@ python scripts/doc_check.py            # 只读，有 FAIL 退出 1
 python scripts/dev_check.py --docs     # 接进一把梭
 ```
 
-查：`docs/ROADMAP-DONE.md` 的「批次 → devlog 索引」覆盖（最近 5 篇）、六处版本号一致、
-发布说明与 `docs/README.md` 导航。`scripts/release.py` 预检也会调它。
-TODO §6.2 基线：**0 FAIL**（1 条历史警告：41 篇早期 devlog 按批次未逐篇进索引）。
+查（2026-09-23 起 **6 项**，完整判据表见 `ddtoolkit-docs-devlog` 技能 §7）：
+devlog 索引**有则必填**（编号 > 61；≤ 61 的历史欠账只 WARN）· 索引**无重号** · 索引**无幽灵行** ·
+六处版本号一致 · 发布说明与 `docs/README.md` 导航 · **文档数字与代码一致**（`gen_doc_numbers.py`）。
+`scripts/release.py` 预检也会调它。基线见 `docs/TODO.md` §6.2。
 
 ## 6. 未登录能力边界（DEV-LOOP §二·八）
 

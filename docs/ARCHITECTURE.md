@@ -619,8 +619,8 @@ flowchart LR
 | 目录 | 职责 | 约定 |
 |---|---|---|
 | `app/routers/` | HTTP 契约、状态码语义（404/409/415/413）、`Depends(get_db)` | 不写 SQL；抓取类端点做忙判定 |
-| `app/repositories/` | 按仓库类持会话（11 个 Repo），批量删除/分页/统计等 SQL | 写操作当场 commit；`PostRepo.create(commit=False)` 供批量入库 |
-| `app/models/` | SQLAlchemy 2.0 ORM（单文件 11 表） | 唯一约束/索引与迁移链一致 |
+| `app/repositories/` | 按仓库类持会话（12 个 Repo），批量删除/分页/统计等 SQL | 写操作当场 commit；`PostRepo.create(commit=False)` 供批量入库 |
+| `app/models/` | SQLAlchemy 2.0 ORM（单文件 12 表） | 唯一约束/索引与迁移链一致 |
 | `app/schemas/` | Pydantic 输入输出模型 | `Out` 用 `from_attributes` |
 | `app/services/` | 调度、抓取、平台适配、第三方源、认证、类型引擎、墓碑、清理 | 不碰 HTTP；重依赖延迟 import |
 | `app/core/` | 配置（数据目录/环境变量）、引擎与 PRAGMA、`get_db`、共享 HTTP 客户端构造（`http.py`） | 新代码发请求一律 `new_async_client()` |

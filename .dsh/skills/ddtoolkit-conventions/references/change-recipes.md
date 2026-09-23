@@ -53,7 +53,7 @@
 1. 新建 `alembic/versions/{fNNN}_*.py` —— 编号按**实际实施顺序**顺延（当前 head `f007`）；
 2. 同步 `app/main.py::MIGRATION_HEAD`（`tests/test_services.py` 断言它与 alembic head 一致，
    否则冷启动快路径会把旧库误判为已最新）；
-3. 补 ORM：`app/models/vtuber.py`（单文件 11 表；唯一约束/索引与迁移链一致）；
+3. 补 ORM：`app/models/vtuber.py`（单文件 12 表；唯一约束/索引与迁移链一致）；
 4. 补 Repo 方法：`app/repositories/vtuber_repo.py`（写操作当场 commit；
    `PostRepo.create(commit=False)` 与各 `delete_by_*` 例外，后者不提交、由调用方事务统一收口）；
 5. **若挂 `accounts` / `vtubers` 外键 → 必须同步 `app/services/purge.py`**，
