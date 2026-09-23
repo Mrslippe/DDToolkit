@@ -1568,6 +1568,35 @@ export async function runUiProbe(): Promise<void> {
       result.chevronTransform = getComputedStyle(chev).transform
       killTransition.remove()
     }
+
+    // R38 批 1「motion token 化」的判据：元素上量到的时长必须**等于令牌解析出的毫秒**，
+    // 而不是等于某个硬编码数 —— 这样"令牌真的被用上"可断言：改令牌探针跟着走，
+    // 有人写回硬编码就红。
+    // ⚠️ 不能直接 `getPropertyValue('--motion-base')`：自定义属性拿回来的是
+    //    `calc(220ms * var(--motion-scale))` 的**原文**，不是时间。所以用一个临时元素
+    //    把令牌解析成计算后的 `animationDuration`（浏览器会算成 `0.22s`）。
+    const tokenMs = (name: string): number => {
+      const el = document.createElement('div')
+      el.style.cssText =
+        `position:absolute;left:-9999px;visibility:hidden;animation-duration:var(${name})`
+      document.body.appendChild(el)
+      const ms = Math.round(parseFloat(getComputedStyle(el).animationDuration) * 1000)
+      el.remove()
+      return ms
+    }
+    result.motionFastMs = tokenMs('--motion-fast')
+    result.motionBaseMs = tokenMs('--motion-base')
+    const textEl = island()?.querySelector<HTMLElement>('.pill-text-fade')
+    if (textEl) {
+      result.textFadeMs = Math.round(parseFloat(getComputedStyle(textEl).animationDuration) * 1000)
+    }
+    // `.si-count` 是条件渲染（`lit && notices.length > 1`）—— 本模式只派一条消息，
+    // 所以它可能不存在。存在才量；不存在时脚本侧不判（它和文案共用 `--motion-fast`）。
+    const countEl = island()?.querySelector<HTMLElement>('.si-count')
+    if (countEl) {
+      result.countAnimMs = Math.round(parseFloat(getComputedStyle(countEl).animationDuration) * 1000)
+    }
+
     // 展开**不该挤动右栏**（面板是 portal + fixed）
     result.spacerOpen = spacerW()
 

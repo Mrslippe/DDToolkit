@@ -155,13 +155,20 @@ DOM 契约（探针 `ui_probe --status-island` 直接查）：`.si-island`（`.o
 > 轮播的可见性会随之漂移 —— 谁把 `POLL_IDLE_MS` 从 10s 调大，轮播就静默变慢甚至停住。
 > 下线后连这个定时器都不开（文案恒定，每 6s 重渲染纯属白干）。
 
-**动效（R12a 期望②「优雅流畅」，2026-09-15 R12b）**：面板入场 `si-panel-in` 220ms
-（`translateY(-6px) scale(.985)` → 原位，`transform-origin: top`）· chevron 翻转 `transition .2s` ·
-计数徽章 `si-pop-in` 180ms（React 侧 `key={notices.length}`，计数变化时重放）· 文案沿用
-`.pill-text-fade` 淡入。`prefers-reduced-motion: reduce` 下**保留淡入、去掉位移/缩放/过渡**
-（`si-panel-in-fade` 180ms）——完全不淡反而像闪帧；**但 chevron 的翻转保留（瞬时、无过渡）**：
+**动效（R12a 期望②「优雅流畅」，2026-09-15 R12b；2026-09-24 **R38 批 1 令牌化**）**：
+面板入场 `si-panel-in`（**`--motion-base` 220ms + `--ease-standard`**，`translateY(-6px) scale(.985)` → 原位，
+`transform-origin: top`）· chevron 翻转 `transition **var(--motion-base)**` ·
+计数徽章 `si-pop-in`（**`--motion-fast` 140ms**；React 侧 `key={notices.length}`，计数变化时重放）· 文案沿用
+`.pill-text-fade` 淡入（**`--motion-fast`**）。`prefers-reduced-motion: reduce` 下**保留淡入、去掉位移/缩放/过渡**
+（`si-panel-in-fade`，**`--motion-fast`**）——完全不淡反而像闪帧；**但 chevron 的翻转保留（瞬时、无过渡）**：
 状态指示不该被"减少动效"减掉。探针按 `matchMedia` 判分支，两条支路都断言
 （`--force-prefers-reduced-motion` 可验 reduce 支）。
+
+> **R38 批 1 的判据**（`--status-island`）：元素上量到的时长必须**等于令牌的解析值**，而不是某个
+> 硬编码数 —— 写回硬编码会红（**反向验证过**：把面板写死 `0.3s` ⇒ 报"应等于 `--motion-base`（220ms）"）。
+> 本批的值变化：徽章 180 → **140ms** · 文案淡入 300 → **140ms** · chevron 200 → **220ms** ·
+> 面板曲线 `cubic-bezier(.22,.61,.36,1)` → **`--ease-standard`**（前者是全站唯一的异类曲线，
+> 规格 §2 曾误以为"已在用标准曲线"）。**这不是"零行为变化"** —— 见 devlog/167。
 
 > ⚠️ 三条**别改坏**的口径：
 > ① **「自动节拍不占顶栏」现在是 `notificationHub.progressNotice` 的具名规则 + 反向用例**
@@ -608,7 +615,7 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 | `--pcard-shadow` / `-hover` / `-edit` / `-lift` | 见 tokens.css | **档案卡族**四档阴影：静止 / 阅读态 hover / 编辑态 / 拿起（R37-P4c 用） |
 | `--pcard-ring` | inset 0 1px 0 rgba(255,255,255,.9) | 卡顶 1px 高光内边 —— "稍微浮起"的关键（光从上面来） |
 | `--tone-pink/-coral/-navy/-gray`（各带 `-deep` / `-tint`） | 见 tokens.css | 卡片色调三件套（角标底 / chip 文字 / chip 底），**只许用在 ≤22px 角标与 ≤11px chip** |
-| `--motion-instant/-fast/-base/-slow` | 90 / 140 / 220 / 320ms | **动效令牌**（R37-P4b；与 `design-status-island.md` §2 同值，R38 批 1 复用） |
+| `--motion-instant/-fast/-base/-slow` | 90 / 140 / 220 / 320ms | **动效令牌**（R37-P4b 建；与 `design-status-island.md` §2 同值）。**R38 批 1 起状态岛与揭幕/条目入场全部改用它们**（`si-panel-in` · `si-pop-in` · `.pill-text-fade` · chevron · `rise-in-page` · `rise-in-item`）—— 有探针对齐判据（时长 ≠ 令牌值即红），**别写回硬编码** |
 | `--ease-standard/-exit/-emphasized/-pop` | 见 tokens.css | 进入位移 / 离场 / 落位（前快后慢）/ **唯一允许的过冲**（只给"拿起"那一次 scale） |
 | `--motion-scale` | 1 | **慢放倍率**：所有动效时长都是 `calc(N × var(--motion-scale))`，只有动效调测页改它 |
 | `--pill-fill-pink` / `--pill-fill-coral` | #e35d8b / #e05261 | 粉丝徽章色底（加深版：白字 26px 对比 2.5:1 → 3.4:1，**替代早期 #fb77a1/#fc7079 直接填充**） |
@@ -704,14 +711,19 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 
 ## C4. 条目入场动效（layout.css `.anim-rise`）
 
-- 规格：`rise-in` 关键帧（opacity 0 + translateY 14px → 0），单项 320ms ease-out（cubic-bezier(0.22,1,0.36,1)），步进 45ms/项，CSS `min()` 封顶 400ms（第 10 项后不再追加），`fill-mode: both` 防闪现
+- 规格：**`rise-in-item`** 关键帧（opacity 0 + translateY 14px → 0），单项 `--motion-slow`（320ms）
+  `--ease-standard`（cubic-bezier(.22,1,.36,1)），步进 45ms/项，CSS `min()` 封顶 400ms（第 10 项后不再追加），`fill-mode: both` 防闪现
+- ⚠️ **2026-09-24 R38 批 1 改名**：原来这里叫 `rise-in`，与**启动幕揭幕**那组（`.topbar`/`.icon-rail`/
+  `.sidebar-shell`/`.app-main`）**重名** —— CSS 里同名 `@keyframes` **后者赢**，于是揭幕那组写的是
+  `translateY(8px)`、实际跑的是本组的 **14px**（设计意图从未生效）。现拆成
+  **`rise-in-item`（本组）** 与 **`rise-in-page`（揭幕组，8px + `--motion-slow`）**，两组都令牌化
 - 用法：条目根元素挂 `anim-rise` + 内联 `--rise-i` 序号；列表容器以**内容标识 key** 整体重挂载触发重播
 - 接入点：侧栏 VTuber 行（key=query+筛选+数据长度）、list 视图 `.post-grid`（key=账号+首末帖 id+数量——loading 期间 key 不变，保留旧内容降透明的无闪动重取）、Hero 平台药丸组（key=vtuber.id，切 V 重播）
 - `prefers-reduced-motion: reduce` 下全量禁用
 
 ### 退场编排（退出 → 进入，预取门控 + 原子提交）
 
-- `.scene-exit`（fall-out）：整块 `translateY(10px)` 下滑渐隐，**0.13s** ease-in（比 `EXIT_MS=150` 短 20ms，动画必在类移除前结束防竞态帧；这条同步关系由 `utils/sceneStep.test.ts` 断言），`pointer-events:none` 防误点；与 rise-in 镜像闭合
+- `.scene-exit`（fall-out）：整块 `translateY(10px)` 下滑渐隐，**0.13s** ease-in（比 `EXIT_MS=150` 短 20ms，动画必在类移除前结束防竞态帧；这条同步关系由 `utils/sceneStep.test.ts` 断言），`pointer-events:none` 防误点；与 rise-in-item 镜像闭合
 - 机制：PostsPage 场景机 `scene{acc,view,exiting}` + **预取门控**——账号目标变化先并行预取三件套（getVtuber/第1页帖子/postStats），旧内容冻结可见；**数据就绪才退场**，EXIT_MS 后一次性应用预取数据（原子提交，页码归 1、**筛选按 VTuber/账号重置**——2026-09-05 用户反馈：筛选状态不跨 V/账号共享，提交时 filterRef 已是重置态与预取默认参数一致防种子错配），**全程无「正在加载」占位帧**
 - 防重拉闪动：提交播种 `seededPostsKeyRef`（posts effect 消费一次跳过重拉）+ `vtuberLoadedRef`（跳过冗余 getVtuber）；refreshTick 变化仍正常重拉
 - 应用：切 V、视图切换（视图切换无数据依赖立即退场；cards→list 首次帖子加载仍走正常 loading）；搜索/筛选/翻页仅重播入场不退场；**P6-1：筛选切换（type/搜索/时间/已删）立即滚回列表顶部**（触发即滚，不等重取；此前缓存恢复方案实测不达预期已 revert）

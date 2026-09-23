@@ -32,7 +32,7 @@ body {
      「子层色 × 覆盖度 + **壳底色** × (1−覆盖度)」—— 壳底是近白 `#fffbfb` 时，
      角上就浮出一圈白边（实测量到 rail `#777F8B`、粉 `#FEB4C2`，正是 78~80% 压近白底）。
      壳层最终必须**透明**，角上混的才是桌面 ⇒ 白边消失。
-     但不能一开始就透明：揭幕期间各区域还在 `rise-in` 渐显，窗口会**闪桌面**
+     但不能一开始就透明：揭幕期间各区域还在 `rise-in-page` 渐显，窗口会**闪桌面**
      （实测揭幕时窗口中心是暗的）——所以启动期先用近白兜底，
      等 `main.tsx` 揭幕完成挂上 `html.shell-settled` 再撤（见该文件同名注释）。 */
   background: var(--c-bg-page);
@@ -153,8 +153,11 @@ html.window-maximized body {
 
 /* ── 启动幕：主色铺底 + 中央 LOGO + 信封上下展开 ── */
 
-/* 揭幕后内容错峰淡入（很轻量，仅页面加载时播一次） */
-@keyframes rise-in {
+/* 揭幕后内容错峰淡入（很轻量，仅页面加载时播一次）
+   ⚠️ R38 批 1 改名：原来这里也叫 `rise-in`，与下方「条目入场」的 `@keyframes rise-in`
+   **重名** —— CSS 里同名 keyframes **后者赢**，于是本块的 8px 位移从未生效，
+   `.topbar` 等实际用的是条目入场那份（14px）。改名 `rise-in-page` 恢复设计意图。 */
+@keyframes rise-in-page {
   from {
     opacity: 0;
     transform: translateY(8px);
@@ -169,7 +172,7 @@ html.window-maximized body {
 .icon-rail,
 .sidebar-shell,
 .app-main {
-  animation: rise-in 0.35s ease backwards;
+  animation: rise-in-page var(--motion-slow) ease backwards;
 }
 .topbar {
   animation-delay: 0.25s;
@@ -410,7 +413,7 @@ html.window-maximized body {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  animation: pill-fade-in 0.3s ease;
+  animation: pill-fade-in var(--motion-fast) ease;
 }
 
 @keyframes pill-fade-in {
@@ -498,7 +501,7 @@ html.window-maximized body {
   line-height: 15px;
   text-align: center;
   font-variant-numeric: tabular-nums;
-  animation: si-pop-in 0.18s ease both;   /* 徽章出现/计数变化时不硬切（React 侧用 key 触发重放） */
+  animation: si-pop-in var(--motion-fast) ease both;   /* 徽章出现/计数变化时不硬切（React 侧用 key 触发重放） */
 }
 
 @keyframes si-pop-in {
@@ -515,7 +518,7 @@ html.window-maximized body {
 .si-chevron {
   flex: none;
   opacity: 0.85;
-  transition: transform 0.2s ease;   /* 展开时翻转而不是瞬移 */
+  transition: transform var(--motion-base) ease;   /* 展开时翻转而不是瞬移（与面板入场同一时长） */
 }
 
 .si-island.open .si-chevron {
@@ -540,9 +543,11 @@ html.window-maximized body {
   box-shadow: var(--shadow-dialog);
   overflow: hidden;
   /* 入场（R12b 用户期望②「优雅流畅」）：从状态岛下方 6px 处浮现 + 一点点放大，
-     220ms 用 ease-out 曲线；`both` 保证首帧就处于 from 态（否则会先闪一帧原位） */
+     用全站标准曲线 `--ease-standard`；`both` 保证首帧就处于 from 态（否则会先闪一帧原位）。
+     ⚠️ R38 批 1：原曲线是 `cubic-bezier(0.22, 0.61, 0.36, 1)` —— 全站唯一的异类，
+     规格 §2 误以为"已在用标准曲线"；本批对齐成令牌。 */
   transform-origin: top center;
-  animation: si-panel-in 0.22s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+  animation: si-panel-in var(--motion-base) var(--ease-standard) both;
 }
 
 @keyframes si-panel-in {
@@ -678,7 +683,7 @@ html.window-maximized body {
   }
 
   .si-panel {
-    animation: si-panel-in-fade 0.18s ease both;
+    animation: si-panel-in-fade var(--motion-fast) ease both;
   }
 }
 
@@ -969,8 +974,9 @@ html.window-maximized body {
   color: #fff;
 }
 
-/* ── 条目入场动画：由下而上滑入渐显，依次步进（--rise-i 序号，CSS 层封顶）── */
-@keyframes rise-in {
+/* ── 条目入场动画：由下而上滑入渐显，依次步进（--rise-i 序号，CSS 层封顶）──
+   ⚠️ R38 批 1 改名：与上方「揭幕错峰淡入」重名过，见那边的注释。 */
+@keyframes rise-in-item {
   from {
     opacity: 0;
     transform: translateY(14px);
@@ -982,7 +988,7 @@ html.window-maximized body {
 }
 
 .anim-rise {
-  animation: rise-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: rise-in-item var(--motion-slow) var(--ease-standard) both;
   animation-delay: min(calc(var(--rise-i, 0) * 45ms), 400ms);
 }
 
@@ -993,7 +999,7 @@ html.window-maximized body {
 }
 
 /* 全局动效降级：信封揭幕/呼吸/脉冲/旋转/文案渐显全部停用（直接呈现终态）。
-   仅 .rise-in/.scene-in 等入场已在上方/下方各自覆盖；此处补齐其余全部。 */
+   仅 .anim-rise/.scene-in 等入场已在上方/下方各自覆盖；此处补齐其余全部。 */
 @media (prefers-reduced-motion: reduce) {
   .topbar,
   .icon-rail,
@@ -1025,7 +1031,7 @@ html.window-maximized body {
   }
 }
 
-/* 场景退场：整块下滑渐隐（与 rise-in 镜像闭合）。
+/* 场景退场：整块下滑渐隐（与 rise-in-item 镜像闭合）。
    0.13s 比 useSceneTransition.EXIT_MS=150 短 20ms：动画必在类移除前结束，杜绝竞态闪帧
    （这条同步关系由 src/utils/sceneStep.test.ts 断言，别只改一边） */
 @keyframes fall-out {
@@ -1047,7 +1053,7 @@ html.window-maximized body {
 }
 
 /* 场景入场：整块淡入上滑（view-body 按场景 key 重挂时播放），
-   罩住场景内未挂 rise-in 的元素（hero 头像/名字、按钮组/chips 等），杜绝瞬现帧。
+   罩住场景内未挂 rise-in-item 的元素（hero 头像/名字、按钮组/chips 等），杜绝瞬现帧。
    仅 from 帧：插值到元素自身终态 */
 @keyframes scene-in {
   from {

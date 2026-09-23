@@ -2540,6 +2540,9 @@ def main() -> int:
             print(f"  入场动画：name={si.get('panelAnimName')!r} "
                   f"{si.get('panelAnimMs')}ms 条数={si.get('panelAnimCount')} "
                   f"｜ reduce={si.get('motionReduced')}")
+            print(f"  动效令牌：--motion-fast={si.get('motionFastMs')}ms "
+                  f"--motion-base={si.get('motionBaseMs')}ms ｜ "
+                  f"文案淡入={si.get('textFadeMs')}ms 计数徽章={si.get('countAnimMs')}ms")
             print(f"  chevron：transform={si.get('chevronTransform')!r} "
                   f"过渡={si.get('chevronTransitionMs')}ms")
             print(f"  ttl 到期后：文案={si.get('afterTtlText')!r} 亮起={si.get('afterTtlLit')}")
@@ -2637,9 +2640,15 @@ def main() -> int:
                     if got != want:
                         failures.append(f"@{w} status-island: 面板入场动画是 {got!r}，"
                                         f"应为 {want!r}（reduce={si.get('motionReduced')}）")
-                    if (si.get("panelAnimMs") or 0) <= 0:
-                        failures.append(f"@{w} status-island: 面板入场动画时长为 "
-                                        f"{si.get('panelAnimMs')}ms —— 没有动画等于硬切")
+                    # R38 批 1：时长必须**等于令牌**（原来是"大于 0"）—— 这是"令牌化"的机器判据。
+                    base_ms = si.get("motionBaseMs")
+                    if not base_ms:
+                        failures.append(f"@{w} status-island: 没量到 --motion-base 的解析值"
+                                        f"（{base_ms!r}）—— 令牌没定义，或探针没采集")
+                    elif si.get("panelAnimMs") != base_ms:
+                        failures.append(f"@{w} status-island: 面板入场时长是 "
+                                        f"{si.get('panelAnimMs')}ms，应等于 --motion-base"
+                                        f"（{base_ms}ms）—— 令牌没被用上（写回硬编码了？）")
                     if (si.get("panelAnimCount") or 0) < 1:
                         failures.append(f"@{w} status-island: 面板上一条动画都没有挂上"
                                         f"（getAnimations()={si.get('panelAnimCount')}）")
@@ -2652,11 +2661,20 @@ def main() -> int:
                         failures.append(f"@{w} status-island: 展开后 chevron 没有翻转"
                                         f"（transform={chev_tf!r}）—— "
                                         f"它是「可收起」的唯一指示，reduce 下也不该丢")
-                    want_ms = 0 if si.get("motionReduced") else 200
+                    # 时长同样对齐令牌（R38 批 1 前这里硬编码 200ms）
+                    want_ms = 0 if si.get("motionReduced") else (si.get("motionBaseMs") or 0)
                     if si.get("chevronTransitionMs") != want_ms:
                         failures.append(f"@{w} status-island: chevron 过渡时长是 "
                                         f"{si.get('chevronTransitionMs')}ms，应为 {want_ms}ms"
-                                        f"（reduce={si.get('motionReduced')}）")
+                                        f"（= --motion-base；reduce={si.get('motionReduced')}）")
+                    # 文案淡入与计数徽章共用 --motion-fast（R38 批 1 起）。
+                    # `.si-count` 是条件渲染，量不到时不判（它和文案同一个令牌）。
+                    fast_ms = si.get("motionFastMs")
+                    for key, label in (("textFadeMs", "胶囊文案淡入"), ("countAnimMs", "计数徽章动画")):
+                        got_ms = si.get(key)
+                        if got_ms is not None and got_ms != fast_ms:
+                            failures.append(f"@{w} status-island: {label}时长是 {got_ms}ms，"
+                                            f"应等于 --motion-fast（{fast_ms}ms）")
                 if si.get("spacerOpen") != si.get("spacerIdle"):
                     failures.append(f"@{w} status-island: 展开面板挤动了右栏"
                                     f"（右栏宽 {si.get('spacerIdle')} → {si.get('spacerOpen')}；"
