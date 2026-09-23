@@ -49,40 +49,92 @@
     radial-gradient(120% 90% at 50% 0%, rgba(255, 251, 251, 0.55), rgba(255, 251, 251, 0.12));
 }
 
-/* 背景工具组：卡片页工具行右上角浮片（ImagePlus 换背景）；
-   默认隐藏（opacity 0 + 禁点击），悬停工具行浮现，移出 900ms 后渐隐 */
+/* 页面工具条**右上组**（R45 起并入工具条的统一显隐；原「背景工具组」自带一套）。
+   位置与 `.glow-bar` **同轴**：条 top 6 + 高 46 ⇒ 中线 29；浮片 30 高 ⇒ top 14。
+   ⚠️ 显隐已交给下面的 `.view-toolbar[data-shown]` 规则 —— 原来这里自己一套
+   `opacity` + 900ms 定时器（`bgToolsVisible`/`scheduleBgHide`），与工具条并存会**错拍**：
+   "工具条出现了、设置钮还没出现"。现在只有**一个** reveal 状态。 */
 .bg-tools {
   position: absolute;
   right: 12px;
-  top: 18px;
+  top: 14px;
   display: flex;
   align-items: center;
   gap: 8px;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.25s ease;
-}
-
-.bg-tools.on {
-  opacity: 1;
-  pointer-events: auto;
 }
 
 .bg-set {
   width: 32px;
 }
 
-/* 顶部工具条：贴面板顶（上方零缝隙），66px 行内光条贴顶居中（口播规格 1.1） */
+/* ── 工具条的显隐（R45）──────────────────────────────────────────────────
+   rest 态：不可见 **且不吃指针**；shown：由 `data-shown` 或 `:focus-within` 打开。
+
+   ⚠️ **不许用 `visibility:hidden` / `display:none`**：那会把它移出 Tab 序，
+   键盘用户将**永远够不到**视图切换器。隐藏态仍是可聚焦控件 ⇒ 必须靠
+   `:focus-within` 在聚焦时显现，否则 Tab 会落到一个看不见的按钮上。
+   （`opacity:0 + pointer-events:none` 恰好保留了可聚焦性 —— 这正是我们要的。）
+
+   ⚠️ **不许 `aria-hidden`**：这 4 个钮是真实控件，对读屏用户"一直可用"
+   比"跟着鼠标隐现"更好。
+
+   位移用 `transform`（`translateY`），与 `.glow-bar` 自己的 `translate: -50% 0`
+   不冲突 —— `translate` 与 `transform` 是两条独立属性，会叠加。 */
+.glow-bar,
+.bg-tools {
+  opacity: 0;
+  transform: translateY(-6px);
+  pointer-events: none;
+  transition: opacity var(--motion-fast) var(--ease-exit),
+              transform var(--motion-fast) var(--ease-exit);
+}
+
+.view-toolbar[data-shown='1'] .glow-bar,
+.view-toolbar[data-shown='1'] .bg-tools,
+.view-toolbar:focus-within .glow-bar,
+.view-toolbar:focus-within .bg-tools {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+  transition: opacity var(--motion-fast) var(--ease-standard),
+              transform var(--motion-fast) var(--ease-standard);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .glow-bar,
+  .bg-tools {
+    transition: none;
+  }
+}
+
+/* ── 页面工具条（R45，2026-09-24，用户拍板）────────────────────────────────
+   **覆盖**在内容之上、**按需出现**、**不占布局**。三个决定各自的理由：
+
+   ① **overlay（高度 0）**：常驻时"隐藏"只是"看不见" —— 66px 还在占位，那不是隐藏。
+      改成 overlay 后隐藏才真的把空间还给内容（按窗口 1440×800 算：卡片页可用高
+      560 → 626，+11.8%；列表页帖子容器上移 66px）。
+      ⚠️ 所以高度必须是 **0**：任何非 0 占位都会让这条白做（探针第 10 条拦这个）。
+
+   ② **`pointer-events: none` 是硬要求**：整条压在内容上，若为 auto 则
+      · 顶 66px 内**滚轮不滚列表** —— band 的祖先全是 `overflow:hidden`，
+        没有可滚动祖先，wheel 事件落空；
+      · 卡片顶部 66px **点不着**。
+      代价：CSS `:hover` 收不到事件 ⇒ 呼出只能靠**指针位置**判定
+      （`PostsPage` 的 `onMouseMove` + 140ms dwell，见那里的注释）。
+
+   ③ **不靠留白躲内容**：条高 46 覆盖 y=6..52，而内容从 y=0 起 —— 靠
+      「条不与内容控件相交」的**机器判据**保证（探针第 5 条），不靠预留空间。
+      这样窄档（1100 面板只有 558）才站得住。
+
+   显隐状态由 `data-shown` 驱动（PostsPage），键盘聚焦走 `:focus-within`。 */
 .view-toolbar {
-  position: relative;
-  z-index: 1;
-  flex-shrink: 0;
-  width: 100%;
-  height: 66px;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding: 0;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 0;
+  z-index: 3;
+  pointer-events: none;
 }
 
 /* 视图滚动层容器 */
@@ -215,36 +267,54 @@
 }
 
 .glow-bar {
-  position: relative;              /* 选中块的定位祖先（R39-D） */
+  /* 定位：overlay 在 `.view-toolbar`（高度 0）里，横向居中。
+     ⚠️ 用 `translate` 而不是 `transform: translateX(-50%)` —— 显隐动画要用
+     `transform: translateY()`（见 `.glow-bar,.bg-tools` 那条共用规则），
+     `translate` 与 `transform` 是两条独立属性，才能叠加。 */
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  translate: -50% 0;
   /* 选中块边长（单一真源）：CSS 用它画、TS 读它算居中 —— 两处都不会各写一个数。
-     56px 比按钮（50px）大一圈：四周各 3px 边距，"按钮坐进一块选中底"。
-     （R39-D 的柔光点曾是 64px —— 柔光要够大才读得出来；填充块不需要那么大。） */
-  --glow-spot: 56px;
+     40px 比按钮（34px）大一圈：四周各 3px 边距，"按钮坐进一块选中底"。 */
+  --glow-spot: 40px;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  /* 四枚 50px 视图钮 + 3×10 间距 = 230，两侧各留 ~62 让光带渐隐收口
-     （原五枚 443px，2026-09-08 删掉邮件占位钮后同步收窄） */
-  width: 354px;
-  height: 59px;
-  /* 软光带 → **毛玻璃工具栏**（R39-D3，用户 2026-09-19 拍板方案 A）。
-     ⚠️ 为什么换手段而不是继续调渐变：量像素证明**光条盒子的亮度落差已经是 0.0/0.0/0.8**
-     （左/右/下），也就是说"边界"早就不在亮度上 —— 用户看到的是**纹理边界**：
-     半透明白会抹掉背景的**局部对比**，眼睛读的是"细节消失的那条线"。
-     这是"在照片/插画上叠加白光"这个手段本身的天花板 ⇒ 要么让形状**明确**、
-     要么让形状**消失**（§ 设计指南落在 UI-MAP）。这里选"明确"：
-     一块**被理解的矩形**（毛玻璃工具栏）不刺眼，因为它不再是"光的边缘"。
-     —— blur 让背景被柔化（而不是被涂白）⇒ 局部对比仍在，只是变糊；
-     —— 极轻白 0.10 只是提亮一点点，不夺走画面；
-     —— 12px 圆角与 `--pcard-radius` 同值（本仓"贴纸卡"那一族的圆角口径）；
-     —— 内描边（inset ring）是"玻璃的边"，与 `--pcard-ring` 同语言；**不加外阴影**
-        （外阴影会在图上也投出一条线）。 */
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.10);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
-  backdrop-filter: blur(6px) saturate(1.08);
-  -webkit-backdrop-filter: blur(6px) saturate(1.08);
+  gap: 8px;
+  /* 宽度**由内容决定**，不写死：原 354px 与内容 230 脱节了 62×2（那是柔光时代
+     "在盒子内归零"留的收口），改按钮尺寸/间距时也不会再各改一处。 */
+  padding: 3px 8px;
+  /* 高 = 选中块 40 + 上下各 3。条占 y=6..52，而 `.chips-bar` 的胶囊实体从 y=52 起
+     ⇒ 严丝合缝、零视觉重叠（1100 档也成立；由探针第 5 条的不相交断言机器判）。 */
+  height: 46px;
+  /* ── 表面：**加入 ① 浮片族**（R45，用户拍板）────────────────────────────
+     从"极轻毛玻璃"改成"不透明白卡 + 阴影"，四条理由：
+
+     ① **毛玻璃在默认态等于没有**。这条 R39-D4（devlog/164 §一 第 3 条）已经量到过：
+        「白 0.10 的玻璃…叠上去等于没有」—— 但当时只修了柔光那一半，玻璃这半
+        没进 §五遗留，掉了。默认背景合成 ≈ `#fffbfb`：白 .10 叠上去 254.1 vs 254
+        （差 0.1/255），白 .22 的内描边同理，而 blur 作用在**平滑纱罩**上等于没作用
+        ⇒ 默认态下这层"面"的贡献**精确为 0**。
+
+     ② **纯白填充在近白页上同样看不见** —— 形状必须由别的东西承担。浮片族一直是
+        这么做的：`.float-pill::before` = `background: var(--pill-bg)` +
+        `box-shadow: var(--pill-shadow)`。所以这是**照抄浮片的配方**，
+        不是"给光条补个阴影"。
+
+     ③ **旧门禁「外阴影一律不要」被本次推翻**：那条写在"一团柔光"的语境里
+        （柔光 + 外阴影 = 图上两条线）。形状明确成矩形之后，阴影就是深度的
+        正常承担者。理由已写进 `docs/UI-MAP.md` 设计指南第 5 条。
+
+     ④ 删 `backdrop-filter` / `saturate(1.08)`：后者 8% 在感知阈值以下，纯多一遍滤镜；
+        前者是**全仓唯一一处压在全幅背景图上的合成效果**（本仓有 `filter: blur`
+        拖垮 WebView2 合成器的历史记录，虽非同一属性，但不必要就不留）。
+
+     圆角保留 12px：浮片是 25/30px 高的小件，3px + `-10deg` 斜切是"小卡片"语言；
+     这是横向容器，斜切更像装饰。12px 已是本仓"浮起的面"的口径（`--pcard-radius`）。 */
+  border-radius: var(--pcard-radius);
+  background: var(--pill-bg);
+  box-shadow: var(--pill-shadow);
 }
 
 /* 当前视图的**选中块**（R39-D4，用户 2026-09-23 拍板："换成粉底圆角块"）。
@@ -276,7 +346,16 @@
      形状由这条边承担。首版用了 `rgba(251,119,161,.35)`（≈1.44:1，太弱且是字面量）——
      现在直接用 token 本体：描边对填充 ≈2.3:1、对页面 ≈2.5:1，且"选中 = 浅粉底 + 主色粉边"
      就是侧栏选中行那套语言，不再是一个孤例。
-     **不加外阴影** —— 与光条同一条纪律：外阴影会在背景图上再投一条线。 */
+     ⚠️ **R45 起这条注释要改读法**：原写"与光条同一条纪律：不加外阴影"，而光条
+     本次**已经有了外阴影**（改浮片配方）。所以纪律不再是"一律不要外阴影"，
+     而是分对象：
+       · **面**（`.glow-bar`）= 一块要读得出形状的浮起卡 ⇒ 阴影是它的形状承担者；
+       · **选中块**（本元素）= 坐在面**之上**的色块，形状由填充 + 描边承担，
+         再加阴影就是"面上的面"，两层深度反而糊。
+     ⇒ 判据不是"有没有阴影"，是"**这一层是不是靠阴影读形状**"。
+     圆角仍取 12px（`--pcard-radius` 口径）：块到条缘是**不对称**内距
+     （纵 3px / 横 5px），同心圆角（内 = 外 − 内距）在这里没有唯一解，
+     且它是**选中 chip**、不是嵌套的面 —— 不套用 `ui_probe` 的同心判据。 */
   box-shadow: inset 0 0 0 1px var(--c-primary-deep);
   transition: transform var(--motion-base) var(--ease-standard),
               width var(--motion-base) var(--ease-standard);
@@ -305,8 +384,12 @@
      这不是新问题的引入，而是**旧问题被不透明填充暴露**：激活态必须让图标清楚可见。 */
   position: relative;
   z-index: 1;
-  width: 50px;
-  height: 50px;
+  /* 50 → **34**（R45）：这一行里其它控件全是 25–30px（账号切换器 30、分类胶囊 25–30、
+     配置浮片 30），只有视图钮是 50 ⇒ 它得占 59px 高、撑出 66px 的带子，是"突兀"的
+     尺寸来源。缩到 34 之后条高 46、条宽 176，既与整行成比例，又让 overlay 在
+     1100 档（面板仅 558）不与账号切换器相交 —— 这是 overlay 成立的前提，不是纯审美。 */
+  width: 34px;
+  height: 34px;
   border: none;
   background: transparent;
   display: flex;
@@ -314,17 +397,23 @@
   justify-content: center;
   cursor: pointer;
   border-radius: 0;
-  transition: opacity 0.15s ease;
+  /* 顺手令牌化（原硬编码 0.15s ⇒ `--motion-fast` 140ms，与 R38 批 1 同一口径） */
+  transition: opacity var(--motion-fast) ease;
 }
 
-/* 激活态：选中块已经给出"在哪"，图标就回到**实色**（不再靠 .8 的半透明兼作选中信号）。
-   off 仍是 .4（R39-D4 未动：这一档的对比度问题单独议，见 devlog/164 §遗留）。 */
+/* 激活态：选中块已经给出"在哪"，图标就回到**实色**（不再靠半透明兼作选中信号）。
+   off 态 R45 从 .4 提到 **.7** —— 这不是调参，是**修一个可访问性缺陷**：
+   `.4` 叠在**纯白**上只有 **1.89:1**（任何背景都到不了非文本对比 3:1 的下限，
+   连纯白都不行），而 `.7` 叠在条面（`--pill-bg` 纯白）上是 **3.44:1** ✅
+   （`.65` 是 3.09:1 的临界）。
+   ⚠️ `.4` 当初的理由是"不抢注意力" —— 这件事现在由**工具条的自动隐藏**承担了，
+   所以提高它不再有代价。这条同时关掉 devlog/164 §五遗留第 2 条。 */
 .view-btn.on {
   opacity: 1;
 }
 
 .view-btn.off {
-  opacity: 0.4;
+  opacity: 0.7;
 }
 
 .header-actions {
@@ -387,6 +476,21 @@
   overflow: hidden;
   text-overflow: ellipsis;
   vertical-align: bottom;
+}
+
+/* R45：**窄档收窄账号名，保证居中工具条与账号切换器不相交。**
+   面板宽 = 窗口 − 542（rail 50 + sidebar 492），所以 1100 档面板只有 **558px** ——
+   是探针最紧的一档（`ui_probe.py` 的 1100 注释同源）。
+   算一下：条 176 居中 ⇒ x=191..367；切换器在左、`padding-left:16`，名称 120 时
+   右缘到 ~214 ⇒ **压 23px**；收到 72 ⇒ 右缘 ~166，**余 25px** ✅。
+   ⚠️ 让**数据相关的那个**（账号数 × 名称长度）让步，而不是让布局模型变形
+   （另一条路是"窄档不居中"，但那会让工具条随账号数**跳动**）。
+   这条由探针第 5 条（条 rect 与 `.acc-switch-btn`/`.type-chip`/`.search-float`
+   的 rect 不相交）机器判 —— 上面这些数只是它的推导，不是它的真源。 */
+@media (max-width: 1200px) {
+  .acc-switch-name {
+    max-width: 72px;
+  }
 }
 
 /* ── 右侧操作按钮组：可收起浮片群 ──

@@ -319,12 +319,47 @@ function measure(tag: string) {
       // 再问一次 —— 打开后仍命中的是按钮，才说明按钮真的画在上面。
       let coversIcon: boolean | null = null
       if (spot && active && ar) {
+        // ⚠️ **R45：必须临时把整条打开，不能只打开选中块。**
+        // 这条判据问的是**绘制顺序**（块有没有盖住图标），而绘制顺序只有在
+        // **两者都可命中**时才观测得到。R45 之前工具条常驻 ⇒ 天然可命中，只打开块就够；
+        // R45 之后 rest 态整条是 `pointer-events:none`（按需出现）⇒ 只打开块的话，
+        // `elementFromPoint` 命中的必然是块本身 ⇒ **假阳性**"块盖住了图标"
+        // （实测：默认三档里 archive 视图报红，而它其实没问题 —— 那一点上恰好没有
+        //  别的可命中元素来"接住"这次命中）。
+        const prevBarPe = bar.style.pointerEvents
         const prevPe = spot.style.pointerEvents
+        bar.style.pointerEvents = 'auto'
         spot.style.pointerEvents = 'auto'
         const hit = document.elementFromPoint(ar.left + ar.width / 2, ar.top + ar.height / 2)
         coversIcon = !!hit && (hit === spot || spot.contains(hit))
+        bar.style.pointerEvents = prevBarPe
         spot.style.pointerEvents = prevPe
       }
+      // ── R45：页面工具条（overlay + 按需出现）─────────────────────────────
+      const toolbar = document.querySelector<HTMLElement>('.view-toolbar')
+      const tcs = toolbar ? getComputedStyle(toolbar) : null
+      const panel = document.querySelector<HTMLElement>('.posts-panel')
+      const vbody = document.querySelector<HTMLElement>('.view-body')
+      const tools = document.querySelector<HTMLElement>('.bg-tools')
+      const toolsR = tools?.getBoundingClientRect()
+      const btn0 = bar.querySelector<HTMLElement>('.view-btn')
+      const btn0R = btn0?.getBoundingClientRect()
+      /** 内容控件的实矩形 —— **"工具条不许压住它们"是机器判据**（用户口径：
+       *  账号切换 / 分类切换 / 搜索筛选必须**最直接可触及**）。
+       *  只在列表视图存在；其它视图为空数组（判据自动跳过）。 */
+      const contentRects = ['.acc-switch-btn', '.type-chip', '.search-float']
+        .flatMap((sel) => [...document.querySelectorAll<HTMLElement>(sel)])
+        .map((el) => {
+          const r = el.getBoundingClientRect()
+          return {
+            sel: (el.className || '').split(' ')[0] || el.tagName.toLowerCase(),
+            x: Math.round(r.left),
+            y: Math.round(r.top),
+            w: Math.round(r.width),
+            h: Math.round(r.height),
+          }
+        })
+      const offBtn = bar.querySelector<HTMLElement>('.view-btn.off')
       return {
         barBg: bcs.backgroundImage,
         /** 毛玻璃（R39-D3）：`backdrop-filter` + 极轻白 + 圆角 + 内描边 = "明确的形状" */
@@ -368,6 +403,39 @@ function measure(tag: string) {
         /** 数据视图必须是牌堆（R40） */
         deckPresent: !!document.querySelector('[data-deck]'),
         mask: scroller ? getComputedStyle(scroller).maskImage : null,
+        // ── R45：页面工具条（overlay + 按需出现）──────────────────────────
+        /** 工具条本体高度：**必须是 0** —— 它是 overlay，不许占布局。
+         *  非 0 就说明"隐藏"只是"看不见"，66px 还在占位（本次改造的全部意义所在）。 */
+        toolbarH: toolbar ? Math.round(toolbar.getBoundingClientRect().height) : null,
+        toolbarShown: toolbar?.getAttribute('data-shown') ?? null,
+        toolbarPE: tcs?.pointerEvents ?? null,
+        /** 面板高 / 内容区高：overlay 成立 ⇒ 两者应相等（内容吃满整高） */
+        panelH: panel ? Math.round(panel.getBoundingClientRect().height) : null,
+        bodyH: vbody ? Math.round(vbody.getBoundingClientRect().height) : null,
+        /** rest 态：必须不可见 **且不吃指针**（吃了就会挡住内容点击/滚轮） */
+        barOpacity: Math.round((parseFloat(bcs.opacity) || 0) * 100) / 100,
+        barPE: bcs.pointerEvents,
+        /** 视图钮尺寸（与选中块的**相对关系**由 ui_probe 判，不写死绝对数） */
+        btnW: btn0R ? Math.round(btn0R.width) : null,
+        btnH: btn0R ? Math.round(btn0R.height) : null,
+        /** 右上组（`.bg-tools`）矩形 */
+        toolsRect: toolsR
+          ? {
+              x: Math.round(toolsR.left),
+              y: Math.round(toolsR.top),
+              w: Math.round(toolsR.width),
+              h: Math.round(toolsR.height),
+            }
+          : null,
+        /** 内容控件矩形（"不相交"判据的对手方） */
+        contentRects,
+        /** `.view-btn.off` 的**实际**不透明度与图标色：非文本对比 ≥3:1 的输入。
+         *  不写死 0.7 —— 算的是渲染值，改 CSS 也拦得住。 */
+        offOpacity: offBtn
+          ? Math.round((parseFloat(getComputedStyle(offBtn).opacity) || 0) * 100) / 100
+          : null,
+        /** 图标色走 `currentColor` 继承（`body { color: var(--c-text-main) }`） */
+        offColor: offBtn ? getComputedStyle(offBtn).color : null,
       }
     })(),
     /** 可见地越过窗口左右缘的元素 */
@@ -1686,6 +1754,88 @@ export async function runUiProbe(): Promise<void> {
     pre.id = 'ui-probe'
     pre.textContent = JSON.stringify({ mode: 'status-island', views: [], degraded,
                                        statusIsland: result })
+    document.body.appendChild(pre)
+    document.title = 'UI_PROBE_DONE'
+    return
+  }
+
+  // 页面工具条（`?probe=toolbar`，R45；配合 `ui_probe.py --toolbar`）：
+  // R45 把工具条从"66px 常驻带子 + 极轻毛玻璃"改成"**overlay + 按需出现 + 不透明浮片**"，
+  // 所以要钉住的是**状态机本身**（静态几何与对比度由默认三档的 `glow` 段覆盖）：
+  //   ① **rest**：不可见、不吃指针；
+  //   ② **进热区 + dwell** ⇒ 可见、吃指针；
+  //   ③ **离开 + grace** ⇒ 回 rest；
+  //   ④ **键盘聚焦** ⇒ `:focus-within` 显形 —— 这是"自动隐藏 + 键盘可达"唯一能
+  //      同时成立的做法（隐藏态仍是可聚焦控件，没有这条 Tab 会落到看不见的按钮上）；
+  //   ⑤ **overlay 成立**：呼出前后 `.view-body` 高度**不变**（不占布局 ⇒ 不挤动内容）。
+  if (mode === 'toolbar') {
+    const result: Record<string, unknown> = {}
+    // ⚠️ **先杀掉过渡**（本仓老招，见 `--settings`/chevron 两处先例）：虚拟时间下
+    // 过渡不推进 ⇒ `getComputedStyle().opacity` 会一直报**过渡起点**（0），
+    // 那样"呼出来了没有"就变成了尺子问题。`data-shown` 不受影响，两条一起看才分得清
+    // "机制没生效"和"尺子读不到"。
+    const kill = document.createElement('style')
+    kill.textContent = '.glow-bar,.bg-tools{transition:none !important}'
+    document.head.appendChild(kill)
+    const barEl = () => document.querySelector<HTMLElement>('.glow-bar')
+    const panelEl = () => document.querySelector<HTMLElement>('.posts-panel')
+    const bodyEl = () => document.querySelector<HTMLElement>('.view-body')
+    const snap = () => {
+      const b = barEl()
+      const t = document.querySelector<HTMLElement>('.view-toolbar')
+      const body = bodyEl()
+      return {
+        shown: t?.getAttribute('data-shown') ?? null,
+        opacity: b ? Math.round((parseFloat(getComputedStyle(b).opacity) || 0) * 100) / 100 : null,
+        pe: b ? getComputedStyle(b).pointerEvents : null,
+        bodyH: body ? Math.round(body.getBoundingClientRect().height) : null,
+      }
+    }
+    /** ⚠️ 判定**完全靠 mousemove**（工具条 `pointer-events:none`，收不到 mouseenter）——
+     *  所以"移出"也必须真发一次 mousemove，不能靠别的。 */
+    const move = (x: number, y: number) => {
+      panelEl()?.dispatchEvent(
+        new MouseEvent('mousemove', { clientX: x, clientY: y, bubbles: true }),
+      )
+    }
+    const t0 = performance.now()
+    while (!barEl() && performance.now() - t0 < 8000) await sleep(100)
+    if (!barEl()) {
+      result.missing = true
+    } else {
+      // 冷启动闪现（1.2s）先放掉，否则 ① 量到的是闪现而不是 rest
+      await sleep(1600)
+      result.rest = snap()
+      // ② 指针进热区（条中心）→ dwell(140ms) 后呼出
+      const r = barEl()!.getBoundingClientRect()
+      move(r.left + r.width / 2, r.top + r.height / 2)
+      await sleep(400)
+      result.shown = snap()
+      // ③ 移出（面板底部）
+      const pr = panelEl()!.getBoundingClientRect()
+      move(pr.left + pr.width / 2, pr.bottom - 8)
+      await sleep(1400)
+      result.afterLeave = snap()
+      // ④ 键盘聚焦 ⇒ `:focus-within`（注意此时 `data-shown` 仍是 '0' ——
+      //    聚焦这条**故意**不走 state，纯 CSS 就够，也避免了"聚焦还要 setState"的回路）
+      const btn = document.querySelector<HTMLElement>('.view-btn')
+      btn?.focus()
+      await sleep(300)
+      result.focus = snap()
+      result.focusIsActive = document.activeElement === btn
+      btn?.blur()
+      await sleep(300)
+      result.afterBlur = snap()
+      // ⑤ overlay：呼出前后内容区高度必须一致（否则说明它还占着布局）
+      result.bodyHStable =
+        (result.rest as { bodyH?: number } | undefined)?.bodyH ===
+        (result.shown as { bodyH?: number } | undefined)?.bodyH
+    }
+    kill.remove()
+
+    const pre = document.createElement('pre')
+    pre.id = 'ui-probe'
+    pre.textContent = JSON.stringify({ mode: 'toolbar', views: [], degraded, toolbar: result })
     document.body.appendChild(pre)
     document.title = 'UI_PROBE_DONE'
     return

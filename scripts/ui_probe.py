@@ -354,6 +354,7 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
             "polish": data.get("polish"),
             "reservations": data.get("reservations"),
             "statusIsland": data.get("statusIsland"),
+            "toolbar": data.get("toolbar"),
             "statusWidgetWindow": data.get("statusWidgetWindow"),
             "appSettings": data.get("appSettings"),
             "filterPill": data.get("filterPill"),
@@ -806,58 +807,168 @@ def _assert_deck_unused() -> None:
     """（占位：保持本文件里"每批都有对应断言函数"的对称，无实际用途）"""
 
 
-def _assert_glow(v: dict, width: int) -> list[str]:
-    """视图切换光条 + 亮点指示器 + 顶部渐隐（R39-D，用户 2026-09-19）。
+def _srgb_lin(c: float) -> float:
+    c = c / 255
+    return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
 
-    三件事都只在"看着对不对"的层面 —— 所以全部量化：
-      ① 光条背景必须是 **2D 径向**（原来是 `linear-gradient(90deg,…)` ⇒ 上下缘是**硬边**，
-         用户原话「边缘做点羽化，不要有太明显的分界线」）；圆角/描边/阴影一律不许有（那都是"分界线"）；
-      ② **亮点指示器**：中心必须与激活钮中心对齐（≤1.5px）、宽 = 钮宽、`pointer-events:none`
-         （否则它会挡住按钮的点击 —— "看着能用、其实点不着"的典型）、过渡里有 transform；
-      ③ **顶部渐隐**：只有滚下去（`data-scrolled="1"`）时才挂 mask —— 没滚动时不该有渐隐
-         （静止的页面顶部发虚 = 白白牺牲可读性）。
+
+def _lum(rgb) -> float:
+    r, g, b = (_srgb_lin(x) for x in rgb[:3])
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def _ratio(fg, bg) -> float:
+    """WCAG 对比度。"""
+    a, b = _lum(fg), _lum(bg)
+    hi, lo = max(a, b), min(a, b)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def _rgba(s: str):
+    """解析 `rgb()/rgba()` → [r, g, b, a]；解析不出返回 None。"""
+    m = re.match(r"rgba?\(([^)]+)\)", s or "")
+    if not m:
+        return None
+    parts = [p.strip() for p in m.group(1).replace("/", " ").replace(",", " ").split()]
+    try:
+        vals = [float(p) for p in parts[:4]]
+    except ValueError:
+        return None
+    while len(vals) < 4:
+        vals.append(1.0)
+    return vals
+
+
+def _over(fg, bg):
+    """`fg`（含 alpha）叠在 `bg` 上的**合成色** —— 对比度必须按合成后的实色算。"""
+    a = fg[3] if len(fg) > 3 else 1.0
+    return [fg[i] * a + bg[i] * (1 - a) for i in range(3)]
+
+
+def _assert_glow(v: dict, width: int) -> list[str]:
+    """页面工具条 + 选中块 + 顶部渐隐。
+
+    **R45（2026-09-24，用户拍板）把口径整体换了**：工具条从"66px 常驻带子 +
+    极轻毛玻璃"改成"**overlay + 按需出现 + 不透明浮片**"。所以 R39-D3 那四条
+    （必须含 `blur` / 底色 alpha ≤0.2 / 非 none 必须含 inset / 圆角 ≥8）**整套替换**：
+    它们写的是**上一轮的手段**，不是**那一轮要保护的性质**。真正要保护的性质是
+    「默认态下这个面必须看得见」—— 而那条旧判据从来没断言过，所以 R39-D3 的
+    "白 .10 玻璃在默认态等于没有"（devlog/164 §一 第 3 条已量到）一直漏着。
+
+    现在的判据分四组：
+      ① **overlay 成立**：工具条高度必须 0、内容区高 = 面板高（否则"隐藏"只是"看不见"）；
+      ② **不与内容控件相交**：账号切换 / 分类切换 / 搜索筛选必须最直接可触及（用户口径）；
+      ③ **可见性与对比度**：rest 态不可见且不吃指针；off 态图标对条面 ≥3:1；
+      ④ **选中块**：老的六条全部保留（一条没放宽）。
     """
     g = v.get("glow")
     if g is None:
         return []
     tag = v.get("tag")
     bad: list[str] = []
-    bg = g.get("barBg") or ""
     backdrop = g.get("barBackdrop") or "none"
-    # ── R39-D3（用户 2026-09-19 拍板方案 A：毛玻璃工具栏）────────────────────────
-    # 背景：**不再**是"往图上叠白光"（那个手段有天花板：量像素证明盒子边缘的亮度落差
-    # 已经是 0.0/0.0/0.8，用户看到的其实是**纹理边界** —— 半透明白抹掉了局部对比）。
-    # 换成毛玻璃 = 把"说不清的光"变成"一块被理解的工具栏"：
-    #   backdrop-filter 让背景**变糊**而不是**变白**（局部对比还在）；
-    #   极轻白（≤0.2）只提亮一点点；
-    #   圆角 ≥8px + **只有内描边**（外阴影会在背景图上也投一条线）。
-    if "blur" not in backdrop:
-        bad.append(f"@{width} {tag}: 光条没有毛玻璃（backdrop-filter={backdrop!r}）—— "
-                   f"纯半透明白叠在插画上会留下纹理边界（用户两轮反馈的都是这个）")
-    m = re.search(r"rgba?\(\s*[\d.]+\s*,\s*[\d.]+\s*,\s*[\d.]+\s*(?:,\s*([\d.]+))?\)", g.get("barBgColor") or "")
+    # ── ① overlay 成立（R45）───────────────────────────────────────────────────
+    # 这三条拦的是本次改造**最可能的失败方式**：CSS 改了一半 —— 条藏起来了，
+    # 但 66px 还在占位。那样"自动隐藏"只是"看不见"，空间没还给内容。
+    th = g.get("toolbarH")
+    if th is None:
+        bad.append(f"@{width} {tag}: 探针没量到工具条高度（`.view-toolbar` 选择器踩空？）")
+    elif th != 0:
+        bad.append(f"@{width} {tag}: 工具条占了 {th}px 布局 —— 它是 overlay，高度必须 0。"
+                   f"非 0 就说明「隐藏」只是「看不见」，空间没还给内容（R45 的全部意义）")
+    ph, bh = g.get("panelH"), g.get("bodyH")
+    if ph and bh and abs(ph - bh) > 1:
+        bad.append(f"@{width} {tag}: 内容区高 {bh} ≠ 面板高 {ph} —— "
+                   f"工具条没真正脱离布局流")
+    if g.get("toolbarPE") != "none":
+        bad.append(f"@{width} {tag}: 工具条整条没关掉指针事件（{g.get('toolbarPE')!r}）—— "
+                   f"它压在内容上，吃指针会让顶部的**滚轮不滚列表**（祖先全是 overflow:hidden，"
+                   f"没有可滚动祖先）且卡片顶部点不着")
+    # ── ② 不与内容控件相交（R45，用户口径：账号切换/分类切换/搜索筛选最直接可触及）──
+    # ⚠️ 这是本次最有价值的一条：它把"用户要的手感"变成了机器判据。
+    # 1100 档（面板仅 558）是最紧的一档，`posts.css` 里那条 `@media (max-width:1200px)`
+    # 收窄账号名就是为了它 —— 但**真源是这条断言，不是那段推导**。
+    bar_rect = g.get("barRect") or {}
+    hot = [bar_rect] + ([g["toolsRect"]] if g.get("toolsRect") else [])
+
+    def _overlap(a, b) -> bool:
+        return not (
+            a["x"] + a["w"] <= b["x"] or b["x"] + b["w"] <= a["x"]
+            or a["y"] + a["h"] <= b["y"] or b["y"] + b["h"] <= a["y"]
+        )
+
+    if not g.get("contentRects"):
+        # 列表视图必须有这些控件；没有 = 选择器踩空，判据会静默空转（本仓踩过）
+        if tag == "list":
+            bad.append(f"@{width} {tag}: 探针没量到内容控件矩形（`.acc-switch-btn`/"
+                       f"`.type-chip`/`.search-float`）—— 不相交判据会空转")
+    else:
+        for c in g["contentRects"]:
+            for h in hot:
+                if h and _overlap(h, c):
+                    bad.append(
+                        f"@{width} {tag}: 工具条压住了 `{c['sel']}`"
+                        f"（条 {h['x']},{h['y']} {h['w']}×{h['h']} vs "
+                        f"控件 {c['x']},{c['y']} {c['w']}×{c['h']}）—— "
+                        f"账号切换/分类切换/搜索筛选必须**最直接可触及**（用户口径）"
+                    )
+    # ── ③ 可见性与对比度（R45）────────────────────────────────────────────────
+    # 反面判据：不许再退回毛玻璃（它的默认态贡献精确为 0，是本次要根治的病）
+    if "blur" in backdrop:
+        bad.append(f"@{width} {tag}: 工具条又用回了毛玻璃（backdrop-filter={backdrop!r}）—— "
+                   f"默认背景是近白平滑纱罩，白 .10 + blur 叠上去**等于没有**（贡献 0）")
+    op = g.get("barOpacity")
+    if op is None:
+        bad.append(f"@{width} {tag}: 探针没量到工具条不透明度")
+    elif op > 0.02:
+        bad.append(f"@{width} {tag}: 静止态工具条可见（opacity={op}）—— "
+                   f"它应当**按需出现**，静止时完全隐藏")
+    if g.get("barPE") != "none":
+        bad.append(f"@{width} {tag}: 静止态工具条吃指针（{g.get('barPE')!r}）")
+    # 底色必须**不透明**：形状由 `--pill-shadow` 承担（浮片族配方）。
+    # 半透明白在近白页上填充同样看不见 —— 那是 R39-D3 的病根。
+    m = re.search(r"rgba?\(\s*[\d.]+\s*,\s*[\d.]+\s*,\s*[\d.]+\s*(?:,\s*([\d.]+))?\)",
+                  g.get("barBgColor") or "")
     alpha = float(m.group(1)) if (m and m.group(1)) else (1.0 if m else None)
     if alpha is None:
-        bad.append(f"@{width} {tag}: 光条底色解析不出来（{g.get('barBgColor')!r}）")
-    elif alpha > 0.2:
-        bad.append(f"@{width} {tag}: 光条底色太白（alpha={alpha}）—— 毛玻璃靠 blur 起作用，"
-                   f"底色只该是极轻的一层（≤0.2）")
+        bad.append(f"@{width} {tag}: 工具条底色解析不出来（{g.get('barBgColor')!r}）")
+    elif alpha < 1.0:
+        bad.append(f"@{width} {tag}: 工具条底色是半透明的（alpha={alpha}）—— "
+                   f"近白页上白底看不见，必须不透明、由阴影立形状")
+    shadow = g.get("barShadow") or "none"
+    if shadow == "none":
+        bad.append(f"@{width} {tag}: 工具条没有阴影 —— 它是**浮片**，形状靠 `--pill-shadow` 读；"
+                   f"白底铺在近白页（#fffbfb）上填充看不见，没有阴影就等于没有形状")
+    elif "inset" in shadow and "rgb" not in shadow.replace("inset", "", 1):
+        bad.append(f"@{width} {tag}: 工具条只有内阴影（{shadow!r}）—— "
+                   f"内描边在近白页上同样看不见（白 on 近白）")
     radius = g.get("barRadius")
     try:
         rpx = float(str(radius).replace("px", ""))
     except (TypeError, ValueError):
         rpx = None
     if rpx is None or rpx < 8:
-        bad.append(f"@{width} {tag}: 光条圆角是 {radius!r}（应 ≥8px）—— "
+        bad.append(f"@{width} {tag}: 工具条圆角是 {radius!r}（应 ≥8px）—— "
                    f"工具栏要有明确的形状，圆角是「这是一块面板」的主要信号")
-    shadow = g.get("barShadow") or "none"
-    if shadow != "none" and "inset" not in shadow:
-        bad.append(f"@{width} {tag}: 光条有**外**阴影（{shadow!r}）—— "
-                   f"外阴影会在背景图上再投一条线；玻璃的边只该用内描边")
-    for key, label in (("barBorder", "描边"),):
-        val = g.get(key)
-        if val not in ("0px", 0, None) and not (isinstance(val, (int, float)) and val == 0):
-            bad.append(f"@{width} {tag}: 光条有{label}（{val!r}）—— 用内描边（box-shadow inset）")
+    # off 态图标的**非文本对比**必须 ≥3:1。⚠️ 按**渲染值**算，不写死 0.7 ——
+    # 这样改 CSS 也拦得住。旧值 .4 叠在纯白上只有 1.89:1（连纯白都到不了 3:1），
+    # 是 devlog/164 §五遗留第 2 条；R45 提到 .7（对纯白 3.44:1）顺手关掉它。
+    off_a, bar_rgb = g.get("offOpacity"), _rgba(g.get("barBgColor") or "")
+    ico = _rgba(g.get("offColor") or "")
+    if off_a is not None and bar_rgb is not None and ico is not None:
+        composited = _over([ico[0], ico[1], ico[2], off_a], bar_rgb)
+        cr = _ratio(composited, bar_rgb)
+        if cr < 3.0:
+            bad.append(f"@{width} {tag}: 非激活视图钮的对比度只有 {cr:.2f}:1"
+                       f"（opacity={off_a}）—— 非文本对比下限 3:1；"
+                       f"提高 `.view-btn.off` 的 opacity（.7 → 3.44:1）")
+    else:
+        bad.append(f"@{width} {tag}: off 态对比度算不出来"
+                   f"（opacity={off_a!r} color={g.get('offColor')!r} "
+                   f"bg={g.get('barBgColor')!r}）—— 判据会静默空转")
+    # ── ④ 选中块（R39-D4 的六条，**一条没放宽**）────────────────────────────────
     spot = g.get("spot")
+    bw = g.get("btnW")
     if not spot:
         bad.append(f"@{width} {tag}: 光条里没有选中块（`.glow-spot`）")
     else:
@@ -868,10 +979,14 @@ def _assert_glow(v: dict, width: int) -> list[str]:
                        f"{spot['activeCx']} 偏了（应 ≤1.5px）—— 它要「追随当前切换的按钮」")
         if (spot.get("w") or 0) <= 0:
             bad.append(f"@{width} {tag}: 选中块宽度是 {spot.get('w')}（没尺寸等于没渲染）")
-        elif spot["w"] < 56:
-            bad.append(f"@{width} {tag}: 选中块只有 {spot['w']}px —— 要比按钮（50px）"
-                       f"大一圈（≥56px），否则看着像「图标自己被框住」"
-                       f"而不是「坐在一块选中底上」")
+        # ⚠️ R45：这条从**绝对数 56** 改成**相对关系**（块 ≥ 按钮 + 6）。
+        # 原写法把上一轮的尺寸写死了（按钮 50 ⇒ 块 56）—— R45 把按钮缩到 34 后
+        # 它会立刻误报；而它**真正要保护的性质是「大一圈」这个比例**，不是 56 这个数。
+        # （这正是本仓反复出现的那类问题：断言写死了上一轮的结论。）
+        elif bw and spot["w"] < bw + 6:
+            bad.append(f"@{width} {tag}: 选中块 {spot['w']}px 对按钮 {bw}px —— "
+                       f"只大 {spot['w'] - bw}px，要 ≥6px（四周各 3px）。"
+                       f"否则看着像「图标自己被框住」而不是「坐在一块选中底上」")
         if spot.get("pointerEvents") != "none":
             bad.append(f"@{width} {tag}: 选中块没关掉指针事件（{spot.get('pointerEvents')!r}）"
                        f"—— 它会挡住视图钮的点击")
@@ -1354,6 +1469,14 @@ def main() -> int:
         help="只跑一档宽度：打开「添加 VTuber」浮窗 → 打关键词 → 断言三条不变量"
              "（敲键不打上游 / 结果行可命中 / 纯数字输入换成「按 UID 添加」）。"
              "探针**不点结果行、不点「搜索 B 站」**（那是真收录与真上游调用）。",
+    )
+    ap.add_argument(
+        "--toolbar",
+        action="store_true",
+        help="只跑一档宽度：**页面工具条**（R45）—— rest 全隐且不吃指针 / 指针进热区 + dwell "
+             "后呼出 / 移出 + grace 收回 / Tab 聚焦由 `:focus-within` 显形（拦「聚焦到看不见的"
+             "控件」）/ 呼出前后内容区高度不变（overlay 不占布局）。"
+             "静态几何与「不与内容控件相交」由默认三档的 glow 段覆盖。",
     )
     ap.add_argument(
         "--status-island",
@@ -2756,6 +2879,85 @@ def main() -> int:
                 print("   -", b)
             return 1 if failures else 0
 
+        if args.toolbar:
+            # 页面工具条（R45，2026-09-24）：从"66px 常驻带子 + 极轻毛玻璃"改成
+            # "**overlay + 按需出现 + 不透明浮片**"。
+            # 静态几何/对比度/不相交由默认三档的 `glow` 段覆盖（`_assert_glow`）；
+            # 这一段专门钉**状态机** —— 那是默认三档量不到的部分。
+            w = widths[0]
+            url = f"http://localhost:{vite_port}{route}?probe=toolbar"
+            print(f"[probe] toolbar @{w} → {url}")
+            res = _run_probe(edge, url, w, args.height, WORK, "toolbar")
+            tb = ((res or {}).get("toolbar") or {})
+            if res and not tb:
+                print(f"  [!] 探针 mode={res.get('mode')!r} 键={sorted(res.keys())}"
+                      f"（新字段需要在 _run_probe 的白名单里登记）")
+
+            def _st(name: str) -> str:
+                s = tb.get(name) or {}
+                return (f"{name}: shown={s.get('shown')} opacity={s.get('opacity')} "
+                        f"pe={s.get('pe')} bodyH={s.get('bodyH')}")
+
+            for _n in ("rest", "shown", "afterLeave", "focus", "afterBlur"):
+                print("  " + _st(_n))
+            print(f"  overlay：呼出前后内容区高一致={tb.get('bodyHStable')}")
+
+            if tb.get("missing"):
+                failures.append(f"@{w} toolbar: 页面上没有 `.glow-bar`（探针未跑完？）")
+            elif not tb:
+                failures.append(f"@{w} toolbar: 没量到工具条段（探针未跑完？）")
+            else:
+                rest, shown = tb.get("rest") or {}, tb.get("shown") or {}
+                left, foc = tb.get("afterLeave") or {}, tb.get("focus") or {}
+                blur = tb.get("afterBlur") or {}
+                # ① rest：不可见 **且不吃指针**
+                if (rest.get("opacity") or 0) > 0.02:
+                    failures.append(f"@{w} toolbar: rest 态可见（opacity={rest.get('opacity')}）"
+                                    f"—— 工具条应当**按需出现**")
+                if rest.get("pe") != "none":
+                    failures.append(f"@{w} toolbar: rest 态吃指针（{rest.get('pe')!r}）—— "
+                                    f"会挡住内容点击与滚轮")
+                # ② 进热区 + dwell ⇒ 呼出。
+                #    `data-shown` 是**机制**、`opacity` 是**效果**，两条都判：
+                #    只判一个的话，"state 变了但 CSS 没接上"和"CSS 对了但 state 没变"
+                #    会长得一模一样（本仓 R39-D4 的 coversIcon 就是同类教训）。
+                if shown.get("shown") != "1":
+                    failures.append(f"@{w} toolbar: 指针进热区 + dwell 后 `data-shown` 还是 "
+                                    f"{shown.get('shown')!r} —— 呼不出来")
+                if (shown.get("opacity") or 0) < 0.98:
+                    failures.append(f"@{w} toolbar: 呼出后仍不可见（opacity={shown.get('opacity')}）"
+                                    f"—— 过渡已在探针里杀掉，读到低值说明真的没显形")
+                if shown.get("pe") != "auto":
+                    failures.append(f"@{w} toolbar: 呼出后不吃指针（{shown.get('pe')!r}）"
+                                    f"—— 那样按钮点不着")
+                # ③ 离开 + grace ⇒ 回 rest
+                if (left.get("opacity") or 0) > 0.02 or left.get("shown") != "0":
+                    failures.append(f"@{w} toolbar: 指针移出 + grace 后没收回去"
+                                    f"（shown={left.get('shown')} opacity={left.get('opacity')}）")
+                # ④ 键盘聚焦 ⇒ `:focus-within` 显形。
+                #    ⚠️ 此时 `data-shown` **仍是 '0'** —— 这条故意不走 state（纯 CSS 就够）。
+                #    拦的是"Tab 聚焦到一个看不见的控件"：`opacity:0 + pointer-events:none`
+                #    **仍在 Tab 序里**，没有这条规则键盘用户就永远看不见自己在操作什么。
+                if not tb.get("focusIsActive"):
+                    failures.append(f"@{w} toolbar: 探针没能把焦点交给视图钮（这条判据会空转）")
+                elif (foc.get("opacity") or 0) < 0.98:
+                    failures.append(f"@{w} toolbar: Tab 聚焦后工具条仍不可见"
+                                    f"（opacity={foc.get('opacity')}）—— 键盘用户会聚焦到一个"
+                                    f"**看不见的控件**；补 `:focus-within` 的显形规则")
+                # 失焦后要收回（聚焦这条不能"粘住"）
+                if (blur.get("opacity") or 0) > 0.02:
+                    failures.append(f"@{w} toolbar: 失焦后没收回去（opacity={blur.get('opacity')}）")
+                # ⑤ overlay：呼出前后内容区高度不变
+                if not tb.get("bodyHStable"):
+                    failures.append(f"@{w} toolbar: 呼出前后内容区高变了"
+                                    f"（rest={rest.get('bodyH')} shown={shown.get('bodyH')}）"
+                                    f"—— 工具条还占着布局")
+                if not failures:
+                    print("  [ok] 工具条：rest 全隐 / 进热区呼出 / 移出收回 / 聚焦显形 / 不挤动内容")
+            for b in failures:
+                print("   -", b)
+            return 1 if failures else 0
+
         if args.status_widget:
             # 桌面控件宿主（R38 批 5，规格 §7）：`?density=widget` 让顶栏里也渲染那套材质，
             # 这样**同一个页面**就能量到它。判据全在这里算 —— 探针只带出计算样式。
@@ -2770,32 +2972,8 @@ def main() -> int:
             res = _run_probe(edge, url, w, args.height, WORK, "status-island")
             si = ((res or {}).get("statusIsland") or {})
 
-            def _srgb_lin(c: float) -> float:
-                c = c / 255
-                return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
-
-            def _lum(rgb) -> float:
-                r, g, b = (_srgb_lin(x) for x in rgb[:3])
-                return 0.2126 * r + 0.7152 * g + 0.0722 * b
-
-            def _ratio(fg, bg) -> float:
-                a, b = _lum(fg), _lum(bg)
-                hi, lo = max(a, b), min(a, b)
-                return (hi + 0.05) / (lo + 0.05)
-
-            def _rgba(s):
-                m = re.match(r"rgba?\(([^)]+)\)", s or "")
-                if not m:
-                    return None
-                parts = [p.strip() for p in m.group(1).replace("/", " ").replace(",", " ").split()]
-                try:
-                    vals = [float(p) for p in parts[:4]]
-                except ValueError:
-                    return None
-                while len(vals) < 4:
-                    vals.append(1.0)
-                return vals
-
+            # 对比度四个助手已提到模块级（`_srgb_lin`/`_lum`/`_ratio`/`_rgba`）——
+            # R45 的 `_assert_glow` 也要用同一套，就地复制会变成两份真源。
             print(f"  宿主：density={si.get('density')!r} 折叠尺寸={si.get('widgetSize')} "
                   f"position={si.get('widgetPosition')!r}")
             print(f"  材质：底色={si.get('widgetBg')!r} 文字={si.get('widgetColor')!r}")

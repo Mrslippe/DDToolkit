@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import type { MouseEvent as ReactMouseEvent } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   AlignJustify,
@@ -28,6 +29,7 @@ import { pill } from '../utils/pill'
 import { useVtuberActions } from './useVtuberActions'
 import { useSceneTransition } from '../hooks/useSceneTransition'
 import { noteCurrentView } from '../utils/shellState'
+import { inHotZone } from '../utils/toolbarZone'
 import { VTUBER_UPDATED_EVENT } from '../utils/vtuberList'
 import PostDetailDrawer from '../components/PostDetailDrawer'
 import AddAccountDialog from '../components/AddAccountDialog'
@@ -46,6 +48,20 @@ import type { ArchivedFilter } from '../components/PostFilterPop'
 import './../styles/posts.css'
 
 const PAGE_SIZE = 20
+
+// ── 页面工具条显隐的参数（R45）─────────────────────────────────────────────
+/** 进热区后要停留多久才呼出：**过滤"路过"**（见组件内 onPanelMouseMove 注释）。 */
+const BAR_DWELL_MS = 140
+/** 离开热区后多久收回：**复用现成拍子**（原 `.bg-tools` 的 900ms，"与侧栏悬浮滚动条同拍"）。 */
+const BAR_GRACE_MS = 900
+/** 冷启动 / 深休眠唤醒的闪现时长。 */
+const BAR_FLASH_MS = 1200
+/** 热区外扩：条与右上组各自的 rect 各向外 8px —— 够得到，又不把内容控件圈进来。 */
+const BAR_ZONE_PAD = 8
+
+/** 本会话是否已经"闪现"过。**必须是模块级**：`PostsPage` 按路由挂载，
+ *  切 V 会重挂，用组件内 state 就会每次切 V 都闪一下 = 噪音。 */
+let toolbarFlashedThisSession = false
 
 /** 视图枚举（P7 追加 profile；R37-P1 起 profile = **档案视图**（卡片画布），
  *  archive = **数据视图**（直播日历 / 粉丝趋势）） */
@@ -106,10 +122,15 @@ export default function PostsPage() {
   // 视图：cards=展示页（默认）/ list=帖子列表页 / archive=数据视图 / profile=档案视图（卡片画布）
   // R18：深休眠唤醒后，`App` 把"上次离开时的视图"放在 sessionStorage 里传进来
   // （深链接走不通，只能用这种方式把视图带回来；读过即删，正常启动不受影响）
+  /** R45：本次挂载是不是"深休眠唤醒"（带回了上次视图）—— 工具条据此**额外**闪现一次。 */
+  const restoredRef = useRef(false)
   const [view, setView] = useState<AppView>(() => {
     try {
       const want = window.sessionStorage.getItem('ddtoolkit.restore-view')
-      if (want) window.sessionStorage.removeItem('ddtoolkit.restore-view')
+      if (want) {
+        window.sessionStorage.removeItem('ddtoolkit.restore-view')
+        restoredRef.current = true
+      }
       if (want === 'cards' || want === 'list' || want === 'archive' || want === 'profile') {
         return want
       }
@@ -149,19 +170,95 @@ export default function PostsPage() {
   /** 最近一次非空头像：切 V 间隙背景纱罩沿用，不闪空 */
   const lastAvatarRef = useRef<string | undefined>(undefined)
   const searchTimer = useRef<number>()
-  /** 自定义背景上传：隐藏 file input + 上传中抑制 */
-  /** 背景工具浮片：悬停工具行显示，移出 900ms 后渐隐（与侧栏悬浮滚动条同拍） */
-  const [bgToolsVisible, setBgToolsVisible] = useState(false)
-  const bgHideTimer = useRef<number>()
-  const showBgTools = () => {
-    window.clearTimeout(bgHideTimer.current)
-    setBgToolsVisible(true)
+  // ── 页面工具条的显隐（R45，2026-09-24，用户拍板）─────────────────────────
+  // 工具条从"66px 常驻带子"改成"**覆盖**在内容上、**按需出现**"。三个数各有来源，
+  // **不新造**：
+  //   DWELL 140ms —— 过滤"路过"。热区在面板顶部，而从顶栏往下进内容每次都要穿过它
+  //                  ⇒ 不设门槛就是"路过即闪"。刻意去够 140ms 察觉不到、
+  //                  快速穿过去不触发（macOS 自动隐藏 Dock 用的同一招）。
+  //   GRACE 900ms —— 复用现成的拍子（原 `.bg-tools` 就是 900ms，注释写着
+  //                  "与侧栏悬浮滚动条同拍"）。**不引入第二个数**。
+  //   FLASH 1200ms — 闪现时长（冷启动 / 深休眠唤醒各一次）。
+  const [barShown, setBarShown] = useState(false)
+  const panelRef = useRef<HTMLDivElement | null>(null)
+  const toolsRef = useRef<HTMLDivElement | null>(null)
+  const dwellTimer = useRef<number>()
+  const graceTimer = useRef<number>()
+  const flashTimer = useRef<number>()
+  /** 上一次"在不在热区"。**只在边沿动作** —— mousemove 每秒几十次，
+   *  每次都重设定时器就永远触发不了。 */
+  const inZoneRef = useRef(false)
+
+  const showBar = useCallback(() => {
+    window.clearTimeout(graceTimer.current)
+    window.clearTimeout(flashTimer.current)
+    setBarShown(true)
+  }, [])
+
+  const hideBarSoon = useCallback(() => {
+    window.clearTimeout(dwellTimer.current)
+    window.clearTimeout(graceTimer.current)
+    graceTimer.current = window.setTimeout(() => setBarShown(false), BAR_GRACE_MS)
+  }, [])
+
+  /** 指针在不在热区。
+   *  ⚠️ **必须按指针位置算，不能用 CSS `:hover`**：`.view-toolbar` 是
+   *  `pointer-events:none`（硬要求 —— 整条压在内容上，若吃指针则顶 66px 内
+   *  滚轮不滚列表、卡片顶部点不着，理由见 posts.css），收不到 mouseenter。
+   *  ⚠️ 也**必须要求"移动进入"而不是"停留"**：数据视图的牌堆是**滚轮翻转**的，
+   *  用户可能把指针停在顶部中间一直滚 —— 静止指针不产生 mousemove ⇒ 不误弹。
+   *  这一条 dwell 单独做不到。
+   *  判定逻辑本身抽在 `utils/toolbarZone.ts`（纯函数，**10 条单测**）——
+   *  探针只走得到"命中 / 不命中"两个点，**边界与多矩形并集**靠那一层。 */
+  const onPanelMouseMove = (e: ReactMouseEvent) => {
+    const inside = inHotZone(
+      e.clientX,
+      e.clientY,
+      [glowRef.current, toolsRef.current].map((el) => el?.getBoundingClientRect() ?? null),
+      BAR_ZONE_PAD,
+    )
+    if (inside === inZoneRef.current) return // 只在边沿动作
+    inZoneRef.current = inside
+    if (inside) {
+      window.clearTimeout(dwellTimer.current)
+      dwellTimer.current = window.setTimeout(showBar, BAR_DWELL_MS)
+    } else {
+      hideBarSoon()
+    }
   }
-  const scheduleBgHide = () => {
-    window.clearTimeout(bgHideTimer.current)
-    bgHideTimer.current = window.setTimeout(() => setBgToolsVisible(false), 900)
+
+  // 冷启动首挂 / 深休眠唤醒 → 闪现一次。
+  // 「完全隐藏」的唯一代价是新用户不知道切换器在哪 —— 用一次性闪现付掉；
+  // 唤醒那次额外闪，是因为 R18 把上次视图带回来了，那一刻最需要知道"我在哪个视图"。
+  //
+  // ⚠️ **"要不要闪"必须在渲染期决定一次，不能放进 effect 里判断**：
+  //    StrictMode 下 effect 走 setup→cleanup→setup，cleanup 会把闪现定时器清掉；
+  //    若判断也在 effect 里，第二次 setup 会因为「本会话已闪过」而**早退**，
+  //    定时器就再没人装 ⇒ `barShown` **永久停在 true**（`ui_probe.py --toolbar` 实测抓到：
+  //    `rest: shown=1 opacity=1`，而 `afterLeave` 却正常 —— 因为那条路径是 mousemove
+  //    自己装的定时器。这就是"探针钉的是机制不是现象"的价值）。
+  //    ⇒ `toolbarFlashedThisSession` 只用来**决定**；effect 只负责**装定时器**，可重复执行。
+  const wantFlashRef = useRef<boolean | null>(null)
+  if (wantFlashRef.current === null) {
+    wantFlashRef.current = !toolbarFlashedThisSession || restoredRef.current
+    toolbarFlashedThisSession = true
   }
-  useEffect(() => () => window.clearTimeout(bgHideTimer.current), [])
+  useEffect(() => {
+    if (!wantFlashRef.current) return
+    showBar()
+    const id = window.setTimeout(() => setBarShown(false), BAR_FLASH_MS)
+    flashTimer.current = id
+    return () => window.clearTimeout(id)
+  }, [showBar])
+
+  useEffect(
+    () => () => {
+      window.clearTimeout(dwellTimer.current)
+      window.clearTimeout(graceTimer.current)
+      window.clearTimeout(flashTimer.current)
+    },
+    [],
+  )
 
   // 时间下拉的点外关闭 / Esc 双通道自 P10-A 起下沉到 `PostFilterPop`（同款实现，
   // 一次管住整个筛选弹窗的开关）
@@ -560,7 +657,7 @@ export default function PostsPage() {
   //    结果：本文件少 4 个 state（pillOrder/dragIdx/pressTimer/dragMoved）。
 
 return (
-    <div className="posts-panel">
+    <div className="posts-panel" ref={panelRef} onMouseMove={onPanelMouseMove}>
       {/* 右栏永久背景：自定义背景(custom 全图清晰) 优先，否则头像铺底 + 渐变纱罩；
           key=背景 src → 换装淡入不瞬跳 */}
       {backdropSrc && (
@@ -571,12 +668,20 @@ return (
         />
       )}
 
-      {/* 顶部工具条：贴面板顶常驻，仅视图切换光条；卡片页右上角挂背景工具组 */}
-      <div className="view-toolbar" onMouseEnter={showBgTools} onMouseLeave={scheduleBgHide}>
+      {/* 页面工具条（R45）：**覆盖**在内容之上、**按需出现**、不占布局。
+          · `data-shown` 驱动显隐；键盘聚焦由 CSS `:focus-within` 兜（见 posts.css）
+          · ⚠️ **没有 onMouseEnter/onMouseLeave** —— 它是 `pointer-events:none`
+            （硬要求，见 posts.css），收不到那些事件；呼出靠 `.posts-panel` 上的
+            `onMouseMove` 按**指针位置**判定（`inHotZone`）。
+          · ⚠️ 整条**不进 Tab 序之外**：隐藏态仍是可聚焦控件，Tab 进来会由
+            `:focus-within` 显形 —— 这是"自动隐藏 + 键盘可达"唯一能同时成立的做法。 */}
+      <div className="view-toolbar" data-shown={barShown ? '1' : '0'}>
         {scene.view === 'cards' && vtuber && (
-          <div className={`bg-tools${bgToolsVisible ? ' on' : ''}`}>
+          <div className="bg-tools" ref={toolsRef}>
             {/* P8-B：从「换背景图」扩展为「档案设置」窗口
-                （背景/名称/企划/设定/头像/签名/账号管理，承接原 profile 视图的内容） */}
+                （背景/名称/企划/设定/头像/签名/账号管理，承接原 profile 视图的内容）
+                R45：显隐并入工具条（原来自带一套 `bgToolsVisible` + 900ms 定时器，
+                与工具条并存会错拍："工具条出现了、设置钮还没出现"）。 */}
             <FloatPill
               size="md"
               shape="icon"
@@ -589,14 +694,15 @@ return (
             </FloatPill>
           </div>
         )}
-        {/* 视图切换光条（2026-09-08 用户定序：卡片 → 列表 → 数据视图 → 档案视图，
+        {/* 视图切换条（2026-09-08 用户定序：卡片 → 列表 → 数据视图 → 档案视图，
             四个视图同级、共享同一状态机与数据，切换不重取）
             R37-P1（2026-09-17）：命名按用户口径改定 —— 「档案（直播日历 / 粉丝趋势）」→
-            **数据视图**，「档案卡」→ **档案视图**（卡片画布）。 */}
+            **数据视图**，「档案卡」→ **档案视图**（卡片画布）。
+            R45：按钮 50 → 34、图标 `size-6` → 18px（尺寸理由见 posts.css 的 `.view-btn`）。 */}
         <div className="glow-bar" ref={glowRef}>
-          {/* 亮点指示器（R39-D，用户：「有一个亮点追随当前切换的按钮，带有切换时的动画效果」）：
+          {/* 选中块（R39-D，用户：「有一个亮点追随当前切换的按钮，带有切换时的动画效果」）：
               位置按激活钮的 `offsetLeft/offsetWidth` 写内联样式（`useLayoutEffect`），
-              于是"按钮换高亮"与"亮点滑过去"在同一次布局里落定，不会闪。 */}
+              于是"按钮换高亮"与"块滑过去"在同一次布局里落定，不会闪。 */}
           {spot && (
             <span className="glow-spot" aria-hidden="true"
                   style={{ transform: `translateX(${spot.x}px)`, width: spot.w }} />
@@ -607,7 +713,7 @@ return (
             title="展示页"
             onClick={() => setView('cards')}
           >
-            <LayoutGrid className="size-6" />
+            <LayoutGrid className="size-[18px]" />
           </button>
           <button
             type="button"
@@ -615,7 +721,7 @@ return (
             title="帖子列表"
             onClick={() => setView('list')}
           >
-            <AlignJustify className="size-6" />
+            <AlignJustify className="size-[18px]" />
           </button>
           <button
             type="button"
@@ -623,7 +729,7 @@ return (
             title="数据视图（直播日历 / 粉丝趋势）"
             onClick={() => setView('archive')}
           >
-            <BarChart3 className="size-6" />
+            <BarChart3 className="size-[18px]" />
           </button>
           <button
             type="button"
@@ -631,7 +737,7 @@ return (
             title="档案视图（卡片画布）"
             onClick={() => setView('profile')}
           >
-            <Fingerprint className="size-6" />
+            <Fingerprint className="size-[18px]" />
           </button>
           {/* 2026-09-08（用户）：移除未接线的「动态视图」占位图标——避免点了没反应的假入口 */}
         </div>
