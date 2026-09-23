@@ -7,10 +7,14 @@
 > 设计语言总纲：**方形极简 + 全平面零阴影**（shadcn `--radius:0rem`、`--shadow-card:none`）。
 > 圆角/阴影豁免收敛为四族（其余一律回方形总纲）：
 > ① 列表工具行「浮片」：斜切白卡（`--pill-radius:3px` + `--pill-skew:-10deg` + `--pill-shadow`）；
-> ② 帖子面板「药丸族」：`type-chip` / `.search-float input` / `post-card-type`/`post-card-duration` 角标 / `stat-badge` / `glow-bar`（均 999px 或渐变软光）；
+> ② 帖子面板「药丸族」：`type-chip` / `.search-float input` / `post-card-type`/`post-card-duration` 角标 / `stat-badge`（均 999px 或渐变软光）；
 > ③ 功能性气泡：`live-tag`（8px）、粉丝 `stat-pill`（2px 图像底）、筛选/时间 popover 抽屉阴影（16px 浮置深度）；
 > ④ **档案卡族**（R37-P4a）：`.pcard` 的 `--pcard-radius:12px` + `--pcard-shadow*` 四档 +
 > 顶部 1px 高光内边 `--pcard-ring` —— "圆角阴影稍微浮起"的小组件式卡片（规格 `docs/design-archive-cards.md`）。
+> **⑤ 视图光条**（R39-D3/D4，2026-09-23 归位）：`.glow-bar` 借 ④ 的**圆角与内描边语言**
+> （12px + 只有 inset 边、无外阴影）做"压在图上的毛玻璃工具栏"，但它**不参与** ④ 的阴影四档；
+> 条内的**选中块** `.glow-spot` 用**选中语言**（`--sel-bg` 浅粉底 + `--c-primary-deep` 主色粉边，
+> 与侧栏选中行的 `--sel-bg`/`--sel-bar` 同一套）—— 见 §B1「光条视图切换」。
 > ⚠️ 族内的 **tone 色**（`--tone-*`）**只许用在 ≤22px 的贴纸角标与 ≤11px 的文字 chip 上**，
 > 卡面主体永远是白卡 + 中性文字。
 >
@@ -352,9 +356,9 @@ DOM 契约（探针 `ui_probe --status-island` 直接查）：`.si-island`（`.o
 **光条视图切换**
 | 名称 | 类名 | 说明 |
 |---|---|---|
-| 光条 | `.glow-bar` | **毛玻璃工具栏**（R39-D3，用户拍板方案 A）：354px · `border-radius:12px` · 底色 `rgba(255,255,255,.10)` · `backdrop-filter: blur(6px) saturate(1.08)` · **只有内描边** `inset 0 0 0 1px rgba(255,255,255,.22)`（外阴影会在背景图上再投一条线）· `position:relative` 是亮点指示器的定位祖先。**演进史**：`linear-gradient(90deg,…)`（上下缘硬边）→ `radial-gradient(120% 100% …)`（横向半径 120% ⇒ 左右两端仍留约 9% 的白）→ `radial-gradient(72% 100% …)`（盒子边缘亮度落差实测 0.0/0.0/0.8，**边界已消失**）→ **毛玻璃**（用户仍觉得"边界明显" ⇒ 见下方设计指南） |
-| 视图钮 | `.view-btn.on/.off` | 四枚、**同级视图**（2026-09-08 用户定序 + 删除未接线的邮件占位钮）：**卡片(`LayoutGrid`)→`setView('cards')`** / **列表(`AlignJustify`)→`setView('list')`** / **数据视图(`BarChart3`)→`setView('archive')`** / **档案视图(`Fingerprint`)→`setView('profile')`**（P7 追加；R37-P1 改定名）；on=.8 off=.4，激活跟随 `view` |
-| 亮点指示器 | `.glow-spot` | **R39-D**（用户：「一个亮点追随当前切换的按钮，带有切换时的动画效果」）：50px 圆形径向白光，位置/宽度由 `PostsPage` 在 `useLayoutEffect([view])` 里按**激活钮自己的 `offsetLeft/offsetWidth`** 写内联样式（不是按 50+10 硬算 —— 以后改尺寸/间距自动跟上）；过渡 `transform/width 220ms var(--ease-standard)`，reduced-motion 下 0.01ms；**`pointer-events:none` 是硬要求**（否则盖住按钮、吃掉点击）。探针：中心与激活钮 ≤1.5px、过渡含 transform、pointer-events=none |
+| 光条 | `.glow-bar` | **毛玻璃工具栏**（R39-D3，用户拍板方案 A）：354px · `border-radius:12px` · 底色 `rgba(255,255,255,.10)` · `backdrop-filter: blur(6px) saturate(1.08)` · **只有内描边** `inset 0 0 0 1px rgba(255,255,255,.22)`（外阴影会在背景图上再投一条线）· `position:relative` 是选中块的定位祖先。**演进史**：`linear-gradient(90deg,…)`（上下缘硬边）→ `radial-gradient(120% 100% …)`（横向半径 120% ⇒ 左右两端仍留约 9% 的白）→ `radial-gradient(72% 100% …)`（盒子边缘亮度落差实测 0.0/0.0/0.8，**边界已消失**）→ **毛玻璃**（用户仍觉得"边界明显" ⇒ 见下方设计指南） |
+| 视图钮 | `.view-btn.on/.off` | 四枚、**同级视图**（2026-09-08 用户定序 + 删除未接线的邮件占位钮）：**卡片(`LayoutGrid`)→`setView('cards')`** / **列表(`AlignJustify`)→`setView('list')`** / **数据视图(`BarChart3`)→`setView('archive')`** / **档案视图(`Fingerprint`)→`setView('profile')`**（P7 追加；R37-P1 改定名）；`on=1 / off=.4`（R39-D4：激活态不再靠 .8 半透明兼任，见下）。⚠️ **必须 `position:relative + z-index:1`** —— 否则绝对定位的选中块会按绘制顺序盖住图标（R39-D4 实测：白柔光那版是"把图标洗淡"，不透明填充那版是"块里什么都没有"） |
+| 选中块 | `.glow-spot` | **R39-D4**（用户 2026-09-23 拍板：「换成粉底圆角块」）：**56×56 · `border-radius:12px` · `background: var(--sel-bg)` · `box-shadow: inset 0 0 0 1px var(--c-primary-deep)`**。位置/宽度由 `PostsPage` 在 `useLayoutEffect([view])` 里按**激活钮自己的 `offsetLeft/offsetWidth`** 写内联样式（不是按 50+10 硬算 —— 以后改尺寸/间距自动跟上；宽度从 CSS 变量 `--glow-spot` 读，单一真源）；过渡 `transform/width 220ms var(--ease-standard)`，reduced-motion 下 0.01ms；**`pointer-events:none` 是硬要求**（否则盖住按钮、吃掉点击）。<br>**为什么换掉白光**（R39-D 那版是"一团追随按钮的白色柔光"）：白 .90 叠在**默认背景**（头像铺底 .18 + 厚白纱罩 ⇒ 合成≈`#fefafb`）上**等于看不见** —— 截图实测里"当前是哪个视图"只剩图标不透明度 `.8/.4` 在传话，而这套视觉不该依赖"用户设过背景图"这个可选状态。不透明粉底在任何背景上都读得出来。<br>探针判据（6 条）：中心与激活钮 ≤1.5px · 宽度 ≥56 · `pointer-events:none` · 过渡含 transform · **背景不得是渐变/图片且 alpha 必须 =1** · **不得盖住激活图标**（临时打开它的 `pointer-events` 再命中测试 —— 常规命中测试看不出，因为块平时不吃指针） |
 
 > **顶部渐隐（R39-D，方案 A）**：滚动体滚下去之后才挂
 > `mask-image: linear-gradient(to bottom, transparent 0, #000 28px)`（`--view-fade`）——
@@ -379,12 +383,22 @@ DOM 契约（探针 `ui_probe --status-island` 直接查）：`.si-island`（`.o
 3. **两种正解，不要停在中间态**：
    - **让形状明确**：毛玻璃（`backdrop-filter`）或极轻实底 + 圆角 + 内描边 ⇒ 矩形是
      "**一块工具栏**"，边界被理解就不刺眼（**本仓选这条**）；
-   - **让形状消失**：不给整条做底，只在**当前项**后面留一团柔光（`.glow-spot` 已经在做这件事）。
+   - **让形状消失**：不给整条做底，只在**当前项**后面留一团柔光。
+     ⚠️ R39-D4（2026-09-23）后**本仓不再走这条**：那团白光在默认背景（近白）上看不见，
+     当前项已改成**粉底圆角块**（见 §B1 选中块行）。这条留作备选路线的记录。
    - 中间态（一团说不清边界的白）最容易露馅。
 4. **图标压在不可预测的图上必须自带对比保护**（毛玻璃 / 实底 / 描边），不能指望插画恰好是浅色。
 5. **外阴影一律不要**：它在背景图上会**再投一条线**；玻璃的边只用**内描边**
    （与 `--pcard-ring` 同语言）。探针判据：`box-shadow` 非 `none` 时**必须**含 `inset`。
 6. 圆角取 **12px**（与 `--pcard-radius` 同值）—— 全仓"贴纸卡那一族"的圆角口径。
+7. **「面」的语言与「选中」的语言是两件事，别让同一手段兼任**（R39-D4 的教训）：
+   - **面**回答"控件压在不可预测的图上怎么保住对比度" ⇒ 毛玻璃/实底（与选中无关）；
+   - **选中**回答"当前在哪一个" ⇒ 走全仓统一的选中语言（`--sel-bg` 浅粉底 +
+     `--c-primary-deep` 主色粉边，与侧栏选中行同族）；
+   - 把选中做成"白光"的代价是**它只在深色/图片背景上成立** —— 默认态下整个控件失去状态指示。
+     判据写进探针：选中块底色 **alpha 必须 =1 且不得是渐变**。
+   - 另一半教训：**绝对定位的指示器会画在 in-flow 按钮之上** ⇒ 指示器所在的那一层必须显式
+     抬起来（`position:relative + z-index`），否则"选中"会把"内容"盖掉。
 
 #### B1.1 cards 视图（展示页 / 默认视图）
 | 名称 | 类名 | 说明 |

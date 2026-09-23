@@ -150,7 +150,7 @@
 | 术语 | 含义 | 代码位置 | 关联 |
 |---|---|---|---|
 | **四视图状态机** | `cards`（展示页）/ `list`（列表）/ `archive`（档案）/ `profile`（档案卡） | `pages/PostsPage.tsx` 的 `view` | 数据共享不重取 |
-| **光条 / glow-bar** | 右栏顶部视图切换条（四枚 `.view-btn`） | `PostsPage.tsx`；`styles/posts.css::.glow-bar` | 顺序：卡片→列表→档案→档案卡 |
+| **光条 / glow-bar** | 右栏顶部视图切换条（四枚 `.view-btn` + 一枚**选中块** `.glow-spot`） | `PostsPage.tsx`；`styles/posts.css::.glow-bar` | 顺序：卡片→列表→数据→档案；条身是**毛玻璃工具栏**（R39-D3），选中块是**浅粉底 + 主色粉边**（R39-D4，2026-09-23）—— 见 UI-MAP §B1「光条视图切换」 |
 | **浮片 / float pill** | 斜切圆角白卡按钮/胶囊（全站按钮语言） | `components/common/FloatPill.tsx`；`.float-pill` | `.stat-pill` 为图像底特例 |
 | **覆盖式滚动条** | 不占宽、自动隐藏、可拖拽的滚动条 | `components/OverlayScroll.tsx`；`.os-root/.os-scroll/.os-thumb` | 全站唯一滚动容器 |
 | **场景动画** | 视图切换的入场/退场（`scene-in`/`scene-exit`/`anim-rise`） | `styles/layout.css`、`posts.css` | `--rise-i` 序号驱动错峰；退场时长 `useSceneTransition.EXIT_MS` 必须**长于** `.scene-exit` 动画（单测钉住） |

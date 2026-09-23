@@ -1,9 +1,14 @@
 /* ── Design Tokens：MomoTalk 极简风（方形化 + 深色图标栏）──
-   圆角/阴影豁免收敛为三族（详见 docs/UI-MAP.md）：
+   圆角/阴影豁免收敛为**四族 + 视图光条**（详见 docs/UI-MAP.md 顶部）：
    ① 列表工具行「浮片」（斜切白卡 --pill-skew）
-   ② 帖子面板「药丸族」（type-chip/search/角标/stat-badge/duration/glow-bar）
+   ② 帖子面板「药丸族」（type-chip/search/角标/stat-badge/duration）
    ③ 功能性气泡（live-tag / popover 阴影 / 粉丝 stat-pill）
-   其余一律回「方形零圆角零阴影」总纲。 */
+   ④ 档案卡族（--pcard-radius 12px + --pcard-shadow* 四档 + --pcard-ring）
+   ⑤ 视图光条 `.glow-bar`（R39-D3/D4）：借 ④ 的圆角与内描边语言做毛玻璃工具栏；
+      条内**选中块** `.glow-spot` 用选中语言（--sel-bg 浅粉底 + --c-primary-deep 主色粉边）。
+   其余一律回「方形零圆角零阴影」总纲。
+   ⚠️ 光条**曾**被列在 ② 药丸族（"999px 或渐变软光"）—— 那是 R39-D 柔光点时代的描述，
+   R39-D3 改毛玻璃、R39-D4 选中块改粉底后已不成立（2026-09-23 归位）。 */
 
 @font-face {
   font-family: 'Alimama FangYuanTi VF';

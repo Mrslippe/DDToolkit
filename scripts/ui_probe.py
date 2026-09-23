@@ -877,14 +877,14 @@ def _assert_glow(v: dict, width: int) -> list[str]:
         if "transform" not in (spot.get("transitionProp") or ""):
             bad.append(f"@{width} {tag}: 选中块的过渡里没有 transform"
                        f"（{spot.get('transitionProp')!r}）—— 切换视图时不会滑动")
-        # ── R43（用户 2026-09-19：「换成粉底圆角块」）────────────────────────────
+        # ── R39-D4（用户 2026-09-19：「换成粉底圆角块」）────────────────────────────
         # 这条挡的是**退回"白光点"**：白 0.90 叠在默认背景（头像铺底 + 厚白纱罩 ⇒ 合成
         # ≈#fefafb）上等于看不见，实测截图里"当前是哪个视图"只剩图标不透明度在传话。
         # 所以选中块必须是**不透明填充**、且**不是渐变** —— 任何背景上都读得出来。
         bg_img = (spot.get("bgImage") or "none").strip()
         if bg_img != "none":
             bad.append(f"@{width} {tag}: 选中块用了渐变/图片背景（{bg_img[:60]!r}）—— "
-                       f"选中态要的是**不透明填充块**；白光那套在近白背景上看不见（R43 修的就是它）")
+                       f"选中态要的是**不透明填充块**；白光那套在近白背景上看不见（R39-D4 修的就是它）")
         m2 = re.search(r"rgba?\(\s*[\d.]+\s*,\s*[\d.]+\s*,\s*[\d.]+\s*(?:,\s*([\d.]+))?\)",
                        spot.get("bgColor") or "")
         a2 = float(m2.group(1)) if (m2 and m2.group(1)) else (1.0 if m2 else None)
@@ -893,14 +893,14 @@ def _assert_glow(v: dict, width: int) -> list[str]:
         elif a2 < 1.0:
             bad.append(f"@{width} {tag}: 选中块底色是半透明的（alpha={a2}）—— "
                        f"半透明在浅背景上会糊掉，选中态必须不透明")
-        # ── R43：选中块**不许盖住激活图标**（绘制顺序）─────────────────────────────
+        # ── R39-D4：选中块**不许盖住激活图标**（绘制顺序）─────────────────────────────
         # `.glow-spot` 是绝对定位元素 ⇒ 按绘制顺序画在 in-flow 按钮之上；白柔光那版
         # 表现为"把激活图标洗淡"，不透明粉底那版表现为"块里什么都没有"（截图实测）。
         # 常规命中测试看不出（块 pointer-events:none）⇒ 探针临时打开它再问一次。
         if spot.get("coversIcon") is True:
             bad.append(f"@{width} {tag}: 选中块**盖住了激活图标**（绘制顺序错）—— "
                        f"激活态必须看得见图标；给 `.view-btn` 加 position:relative + z-index "
-                       f"把它抬到块之上（R43 修过一次）")
+                       f"把它抬到块之上（R39-D4 修过一次）")
         if spot.get("btnPosition") == "static" or spot.get("btnZIndex") == "auto":
             bad.append(f"@{width} {tag}: 激活钮没有参与定位层"
                        f"（position={spot.get('btnPosition')!r} z-index={spot.get('btnZIndex')!r}）"

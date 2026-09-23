@@ -312,7 +312,7 @@ function measure(tag: string) {
       kill.remove()
       const scroller = document.querySelector<HTMLElement>('.scene-body .os-scroll, .archive-view .os-scroll, .board-view .os-scroll, .list-scroll .os-scroll, .hero-scroll .os-scroll')
       const root = scroller?.closest<HTMLElement>('.os-root')
-      // R43：选中块**不许盖住激活图标**。`.glow-spot` 是绝对定位元素，按绘制顺序画在
+      // R39-D4：选中块**不许盖住激活图标**。`.glow-spot` 是绝对定位元素，按绘制顺序画在
       // in-flow 的按钮之上 —— 白柔光那版表现为"把激活图标洗淡"，不透明粉底那版表现为
       // "块里什么都没有"（实测截图上整块空白）。常规命中测试**看不出**这个错：
       // 块平时 `pointer-events:none`，elementFromPoint 会绕过它。所以这里临时把它打开
@@ -349,12 +349,12 @@ function measure(tag: string) {
           pointerEvents: scs?.pointerEvents ?? null,
           transitionProp: scs?.transitionProperty ?? null,
           transitionMs: Math.round((parseFloat(scs?.transitionDuration || '0') || 0) * 1000),
-          /** R43：选中块的外观口径 —— 必须是**不透明填充**、且**不是渐变**。
+          /** R39-D4：选中块的外观口径 —— 必须是**不透明填充**、且**不是渐变**。
            *  白光/半透明在默认背景（近白）上看不见，是这次返工要根治的病，故写成判据。 */
           bgImage: scs?.backgroundImage ?? null,
           bgColor: scs?.backgroundColor ?? null,
           radius: scs?.borderTopLeftRadius ?? null,
-          /** R43：选中块是否**盖住了激活图标**（绘制顺序）。判据见上面 coversIcon 的注释。 */
+          /** R39-D4：选中块是否**盖住了激活图标**（绘制顺序）。判据见上面 coversIcon 的注释。 */
           coversIcon,
           /** 激活钮的绘制层级（必须参与定位层：static/auto 会被绝对定位的块盖住） */
           btnPosition: active ? getComputedStyle(active).position : null,
