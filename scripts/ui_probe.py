@@ -2547,6 +2547,8 @@ def main() -> int:
                   f"{si.get('topbarHLit')}/{si.get('topbarHOpen')} ｜ "
                   f"文案 {si.get('siTextScroll')} ≤ {si.get('siTextClient')}+1 ｜ "
                   f"圆角 {si.get('pillRadius')} ≥ 高/2（高 {si.get('pillHeight')}）")
+            print(f"  批 3 面板：圆角={si.get('panelRadius')}px ｜ "
+                  f"内层圆角元素={si.get('panelInnerRadii') or '无（全是通栏行）'}")
             print(f"  chevron：transform={si.get('chevronTransform')!r} "
                   f"过渡={si.get('chevronTransitionMs')}ms")
             print(f"  ttl 到期后：文案={si.get('afterTtlText')!r} 亮起={si.get('afterTtlLit')}")
@@ -2679,6 +2681,18 @@ def main() -> int:
                         if got_ms is not None and got_ms != fast_ms:
                             failures.append(f"@{w} status-island: {label}时长是 {got_ms}ms，"
                                             f"应等于 --motion-fast（{fast_ms}ms）")
+                # ── R38 批 3：面板几何 ────────────────────────────────────────────
+                if si.get("panelRadius") is not None and si.get("panelRadius") != 14:
+                    failures.append(f"@{w} status-island: 面板圆角是 {si.get('panelRadius')}px，"
+                                    f"应为 14px（§5「面板圆角 14px」）")
+                # 同心圆角（§5）：内层元素圆角 = 面板圆角 − 它到面板内缘的距离。
+                # 当前**无对象**（子元素全是通栏行）⇒ 这条是给**将来**加的圆角元素立的判据。
+                for item in (si.get("panelInnerRadii") or []):
+                    want = max(0, (si.get("panelRadius") or 0) - item["inset"])
+                    if abs(item["radius"] - want) > 1:
+                        failures.append(f"@{w} status-island: 面板内层 `{item['sel']}` 圆角 "
+                                        f"{item['radius']}px，按**同心圆角**应为 "
+                                        f"面板圆角 − 内距 = {want}px（§5）")
                 if si.get("spacerOpen") != si.get("spacerIdle"):
                     failures.append(f"@{w} status-island: 展开面板挤动了右栏"
                                     f"（右栏宽 {si.get('spacerIdle')} → {si.get('spacerOpen')}；"

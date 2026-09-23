@@ -552,7 +552,9 @@ html.window-maximized body {
   flex-direction: column;
   max-height: 60vh;
   border: 1px solid var(--c-border);
-  border-radius: 10px;
+  border-radius: 14px;   /* R38 批 3：对齐规格 §5「面板圆角 14px」（原 10px）。
+                            同心圆角规则（内层元素圆角 = 面板圆角 − 内边距）本批**无对象** ——
+                            面板子元素全是通栏行（head / scroll / item），见 devlog/170 */
   background: var(--c-bg-card);
   box-shadow: var(--shadow-dialog);
   overflow: hidden;

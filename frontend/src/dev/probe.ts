@@ -1573,6 +1573,26 @@ export async function runUiProbe(): Promise<void> {
       result.panelAnimName = cs.animationName
       result.panelAnimMs = Math.round(parseFloat(cs.animationDuration) * 1000)
       result.panelAnimCount = panel.getAnimations().length
+      // R38 批 3「同心圆角」：**面板内层元素的圆角 = 面板圆角 − 它到面板内缘的距离**
+      // （规格 §5；"看起来像一块材料挖出来的"和"两块积木叠着"的分界）。
+      // 当前**无对象** —— 子元素全是通栏行（head / scroll / item）—— 但规则要**有判据**：
+      // 将来谁在面板里加了个圆角卡片，圆角不对就会红。
+      // 药丸（≥100px，如 `.si-item-action`）不算：它们不是同心圆的候选。
+      result.panelRadius = Math.round(parseFloat(cs.borderTopLeftRadius))
+      const pr = panel.getBoundingClientRect()
+      const inner: Array<{ sel: string; radius: number; inset: number }> = []
+      panel.querySelectorAll<HTMLElement>('*').forEach((el) => {
+        const radius = Math.round(parseFloat(getComputedStyle(el).borderTopLeftRadius))
+        if (!radius || radius >= 100) return
+        const b = el.getBoundingClientRect()
+        // 减去面板那 1px 边框：`inset` 是"到面板**内缘**的距离"
+        inner.push({
+          sel: typeof el.className === 'string' && el.className ? el.className : el.tagName,
+          radius,
+          inset: Math.round(b.left - pr.left) - 1,
+        })
+      })
+      result.panelInnerRadii = inner
     }
     result.motionReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
     // chevron：展开后必须**指着"可收起"**（翻转 180° ⇒ 计算值是矩阵，不是 `none`），
