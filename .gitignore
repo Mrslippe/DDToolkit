@@ -29,8 +29,16 @@ logs/
 # AI 编码工具目录（技能包 / 会话 / 依赖；与 .vscode / .idea 同类，不入库）
 # 注：opencode.json（LSP 配置）仍保留在仓库，属项目级开发环境配置
 .opencode/
-# DSH（DeepSeek Harness）技能包与会话数据；.dsh/skills 下的项目专属技能同样不入库（devlog/098）
-.dsh/
+# DSH（DeepSeek Harness）技能包与会话数据不入库。
+# ⚠️ **项目专属技能例外**（2026-09-23 改，devlog/166）：`ddtoolkit-conventions` 与
+# `ddtoolkit-docs-devlog` 是本项目的工程知识（15 条不变量 / 验收命令 / 文档纪律 / 门禁口径），
+# 性质同 `docs/` —— 不入库的话，新克隆会看到 `gen_doc_numbers.py` 报出漂移却没人知道怎么修。
+# 10 个通用设计技能仍不入库（第三方 MIT 内容，出处 github.com/hueyexe/frontend-agent-skills）。
+.dsh/*
+!.dsh/skills/
+.dsh/skills/*
+!.dsh/skills/ddtoolkit-conventions/
+!.dsh/skills/ddtoolkit-docs-devlog/
 
 # 自检 / 调试临时目录（scripts/dev_check.py、ui_probe.py 的现场，通过即删）
 /_devcheck_tmp/

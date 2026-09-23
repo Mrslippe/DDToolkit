@@ -1,0 +1,193 @@
+---
+name: ddtoolkit-docs-devlog
+description: Use when 为 DDToolkit 记开发日志、同步文档、发版或跑文档门禁；给出改动分档（A/B/C 的文档义务）、devlog 命名与编号规则、知识提炼去处、活文档更新映射、doc_check 门禁与发版版本同步清单。
+---
+
+# DDToolkit 文档与开发日志纪律
+
+DDToolkit（VTuber 证据归档工具：Python + FastAPI 后端、React 前端、Tauri v2 桌面壳；版本号以
+`app/core/config.py` 的 `VERSION` 为准，本技能写作时是 **1.0.2**）
+的文档纪律是**「同一批次同步更新」**：一次改动 = 代码 + 用例/探针 + 活文档 + 一篇 devlog。
+漏同步不会让任何测试红，只会在几个月后想查「那版改了什么」时才发现查不到 —— 所以有 `doc_check.py` 兜底。
+
+> 后端分层、不变量、改前必查项不在本技能范围 → 用同目录的 `ddtoolkit-conventions` 技能。
+
+## 1. 什么时候加载本技能
+
+- 要写 / 回填 **devlog**，或不确定下一篇该编几号；
+- 改动落地后要**同步活文档**（改表结构 / 路由 / 抓取 / 界面 / 加平台）；
+- 提新需求进 `docs/TODO.md` §0，或把已落地条目搬进 `docs/ROADMAP-DONE.md`；
+- 跑文档门禁（`scripts/doc_check.py`、`scripts/dev_check.py --docs`）并处理 FAIL；
+- 发版：版本号同步、`docs/releases/` 归档、`python scripts/release.py <版本>`。
+
+## 2. 先读这两份（别跳过）
+
+| 先读 | 为什么 |
+|---|---|
+| `docs/GLOSSARY.md` | 改 bug / 做需求第一步：名词在代码里叫什么、在哪、牵动谁（9 组术语表） |
+| `docs/README.md` | docs 目录**唯一入口**：布局约定 + 四组文档「什么时候看」+ §5 维护约定 |
+
+## 3. devlog 规则（在仓库根 `devlog/`，**不在** `docs/` 下）
+
+- **命名**：`NNN-YYYYMMDD-<版本|需求号>主题.md`
+
+| 段 | 规则 | 真实例 |
+|---|---|---|
+| 编号 | 3 位零填充、递增 | `001` … `097` |
+| 日期 | 写作日 `YYYYMMDD`（随编号单调不减） | `20260915` |
+| 版本 | 该批归属版本时写 | `001-20260804-v0.1.0-项目初始化与架构总结.md` |
+| 需求号 | `R<n>` 紧跟主题、**中间不加连字符** | `095-20260915-R18托盘隐藏与深休眠.md` |
+| 主题 | 其余部分；既无版本也无需求号时直接跟在日期后 | `045-20260909-增量抓取漏帖-置顶帖打乱流序.md` |
+
+- **下一篇编号 = 现有最大编号 + 1**。⚠️ **别把编号写死在这里** —— 每写一篇它就作废，而门禁会红
+  （2026-09-23 实测：写完 `devlog/166` 后本行立刻被 `gen_doc_numbers.py` 判为漂移）。
+  **查真值**：`python scripts/gen_doc_numbers.py --list`（从 `devlog/` 直接数，含缺号）。
+- **H1** 写 `# NNN-YYYYMMDD-<版本|R编号> <主题>`；标题**允许与文件名不一致**
+  （097 文件名「…托盘退出修复与设置窗口渲染」，H1 是「托盘退出修不好 + 设置窗口渲染问题」）—— 校验只认编号。
+- **什么时候写**：**每批次 / 每需求一篇**，不是每天一篇。跨层改动或影响全局不变量时必须写；
+  发布批次单独一篇（`082-20260914-v1.0.0发布.md`）。写 bug 批次要写清根因与「用户看到什么」。
+- **写什么**：骨架、三类模板与篇幅感见 `references/devlog-template.md`。
+- **写完之后：知识必须提炼出去**（否则它会埋在 32 万字里）。devlog 是**写入时的思考记录**，
+  不是知识的权威源 —— 没人会通读 163 篇。每条**脱离本批次仍然成立**的经验，必须落到三个去处之一，
+  并在 devlog 里留指针：
+
+  | 经验类型 | 落到哪 |
+  |---|---|
+  | 不变量（"必须 / 绝不能…"） | `docs/ARCHITECTURE.md` §6（带 `devlog/0NN` 出处） |
+  | 坑 / 测量方法论（"量 X 前必须先 Y"） | `docs/DEV-LOOP.md` |
+  | 设计原理（"为什么这样做才成立"） | 对应 `docs/design-*.md` |
+
+  判据一句话：**这条经验三个月后还成立吗？** 成立 → 提炼；只对本批次成立 → 留在 devlog 即可。
+  ⚠️ **同一个坑不要在多篇 devlog 里各记一遍** —— 实测「尺子坑」在 `devlog/155`、`devlog/159`
+  与 `DEV-LOOP.md` 共 **3 处**。第一次就该进 `DEV-LOOP.md`，后续 devlog 只写"又踩一次（见 DEV-LOOP）"。
+
+## 4. 改动分档（先定档，再决定第 5 节要同步哪些）
+
+文档义务**按风险配，不按改动大小配**。开工前先给自己定档：
+
+| 档 | 判据（**命中任一即属此档**） | 文档义务 |
+|---|---|---|
+| **A 数据 / 契约** | 碰 `alembic/` · `app/models/` · `app/services/purge.py` · 路由契约（路径 / 状态码 / 请求体）· `ARCHITECTURE.md` §6 的不变量 | **全套**：不变量 + 护栏用例 + 探针 + devlog + 第 5 节映射的全部活文档 + `MIGRATION_HEAD` |
+| **B 跨层 / 特性** | 前后端一起改 · 新增平台 · 新增/改端点 · 新增 hook 或分层 · 碰 `tokens.css` / `UI-MAP.md` | devlog + 第 5 节映射里**被碰到的那几份**活文档 |
+| **C 局部 / 表现** | 上面都没碰：纯组件内改动 · 文案 · 单个样式值 · 单文件重构 | **devlog 一段话 + commit**；活文档只在"改了类名 / 令牌 / 路由"时才动 |
+
+**定档的硬规则**：C 档 = "**没碰 A/B 清单里的任何一个文件**"。拿不准就往上一档靠 ——
+漏记不变量的代价远大于多写一份文档。
+
+⚠️ **有现成的反例**：R39-D4「光条选中块改粉底」看着是纯 UI（C 档），但它**改了设计令牌**
+（`--c-primary-deep`）并**新增了 `UI-MAP` 第 7 条**（「面」与「选中」是两件事）—— 按 C 档处理就会漏掉不变量。
+**判据是文件，不是"看起来像不像 UI"。**
+
+## 5. 改动的活文档映射（改了 X → 必须同步哪份）
+
+> 依据 `docs/README.md` §5「维护约定」与 `docs/DEV-LOOP.md`；全表见 `references/doc-map.md`。
+
+| 改了 | 同步到哪里 |
+|---|---|
+| 表结构 / 列 / 迁移 | `backend-repositories-and-routers.md` §1 表列定义 + §1.3 迁移链；`ARCHITECTURE.md` §2「12 张表 · 迁移链 a001 → f007」 |
+| HTTP 端点 | `backend-repositories-and-routers.md` §3 Routers（口径：装饰器 **64** / `app.routes` **70** / 方法×路径 **67** —— **三种数法别混**；只有装饰器那一种有门禁，另两种人肉重数） |
+| 抓取链路 / 调度 / 锁 / 节流 / 风控 | `backend-fetch-pipeline.md`；跨层再动 `ARCHITECTURE.md` §3 |
+| 前端分层 / 数据流 / hooks | `FRONTEND-ARCH.md` |
+| 界面 / 路由 / 类名 / 设计令牌 / 动效 | `UI-MAP.md` 对应节（A 壳层 / B 右栏 / C 令牌与浮片 / E 浮窗 / F 滚动条） |
+| 接入新平台 | `platforms-extension-guide.md`（继承 `BasePlatform` + 注册 + 前端常量） |
+| 新术语 / 新坑 | `GLOSSARY.md` 对应分组补一行（术语 · 含义 · 代码位置 · 关联） |
+| 新增活文档 | 放 `docs/` **顶层**；归档类进 `releases/` `reference/` `tools/` `design/` `diagrams/` |
+| 新增 `docs/releases/v<版本>.md` | **回填 `docs/README.md` §4 的 releases 列表那一行**（漏了 `doc_check.py` 直接红） |
+| 开发态验证脚本 / 流程 | `DEV-LOOP.md`；发布流程与网络参数 → `RELEASE.md` |
+| 跨层 / 影响全局不变量 | `ARCHITECTURE.md` §6「不变量与纪律」+ 根 `devlog/` 追加一篇 |
+
+引用写法：代码写**仓库相对路径**（如 `app/services/scheduler.py`），文档写 `docs/<文件>`，方便 `Ctrl+F` 全局定位。
+
+## 6. TODO ↔ ROADMAP-DONE 双向维护
+
+| 阶段 | 写哪 | 怎么写 |
+|---|---|---|
+| 想到新需求 | `TODO.md` **§0 待提需求收集区** | 表里加一行，只写现象/期望（不写实现方案），状态 `待评估` |
+| 受理要干活 | `TODO.md` **§1 未完成项** | 四组：1.1 可立刻动手 / 1.2 需先定口径 / 1.3 用户侧动作 / 1.4 已搁置 |
+| 已落地 | **移到** `ROADMAP-DONE.md`「需求清单：R…」 | 原文照抄 + 落地结论 + devlog 指向；TODO §0 那行改成 `✅ 已落地（devlog/0NN）→ 详见 docs/ROADMAP-DONE.md` |
+| 门禁数字 | `TODO.md` **§6.2 当前门禁基线** | 只放当前实测值 |
+| 版本/批次 → devlog 索引 | **`ROADMAP-DONE.md`「批次 → devlog 索引」**（原 TODO §6.1，2026-09-13 移入） | TODO §6.1 只留一句说明，不再重复 |
+
+**编号列的三种合法写法**（2026-09-23 定）：
+
+| 情况 | 写什么 | 例 |
+|---|---|---|
+| 有 devlog | **裸编号** | `\| 097 \|` |
+| **无独立 devlog** 的小批次（细节在 commit message 里） | **提交短哈希** | `\| c729ea3 \|` |
+| 早期按批次建的索引（含范围） | 范围，留原样 | `\| 024–026 \|` |
+
+后两种**解析不到** `doc_check.py` 的正则 ⇒ 不计入"已回填"。**这是有意的** —— 它们本来就没有可指的 devlog。
+⚠️ **新批次仍要一行一个裸编号**：新写的范围行若含 > 61 的编号会直接 FAIL。
+
+**第一列只放短标签**（版本 · 批次 / `R编号` + 主题，**一行以内**）。2026-09-23 瘦身前这一列漂成了
+600–1900 字符的巨型单元格、占了 `ROADMAP-DONE.md` 的 60% —— 细节属于 `devlog/` **或 commit message**，这里只做索引。
+
+> **判断"细节会不会丢"时要连 git 一起看。** R40d/R40e 当时没有 devlog，一度被当成"索引行是唯一记录"
+> 而不敢瘦身 —— 实际它们的 commit message 有 655 / 815 字符，与索引行长度几乎 1:1，抄进索引是纯重复。
+> 索引行的第二列本来就是"**哪份记录记得这件事**"，所以无 devlog 时写提交短哈希即可。
+
+## 7. 门禁：`doc_check.py` 与 `dev_check.py --docs`
+
+```powershell
+python scripts/doc_check.py            # 只读，有 FAIL 退出 1
+python scripts/doc_check.py --quiet    # 只印失败/警告
+python scripts/dev_check.py --docs     # 一把梭里追加调用 doc_check（秒级、只读）
+```
+
+**关系**：`doc_check.py` 是本体，`dev_check.py --docs` 只是它的入口（内部直接跑 doc_check 取返回码）；
+`release.py` 的 `preflight` 也会调 `doc_check.run(quiet=True)`，FAIL 直接拦住发布。
+
+| # | 检查项 | 判据 |
+|---|---|---|
+| 1 | devlog 索引覆盖（正向） | **有则必填**：编号 > 61 的 devlog 必须有索引行（缺 → FAIL）；≤ 61 的历史欠账只 WARN |
+| 2 | devlog 索引无重号 | 同一编号在索引表里出现多次 → FAIL |
+| 3 | devlog 索引无幽灵行 | 索引行指向不存在的 devlog → WARN |
+| 4 | 六处版本号一致 | 复用 `release.py` 的 `version_drift()`，与发版同一份清单 |
+| 5 | 发布说明与导航 | `docs/releases/v<config.VERSION>.md` 存在；每个 `docs/releases/*.md` 都要出现在 `docs/README.md` |
+| 6 | 文档数字与代码一致 | `gen_doc_numbers.py` 派生真值比对（迁移 head / 版本数 / 表数 / 路由装饰器 / 下一篇 devlog 编号） |
+
+**FAIL 通常就这几种**：有 devlog 忘回填索引 · 索引表有重号 · 新增发布说明没补 README 那一行 ·
+版本号漂移（`python scripts/release.py --check-version` 定位）· 当前版本还没写发布说明 ·
+**文档里的"当前状态"数字与代码不符**（先跑 `python scripts/gen_doc_numbers.py --list` 看真值）。
+
+⚠️ 数字检查只覆盖 `gen_doc_numbers.py` 头部登记的那几条**明确指当前状态**的写法。
+历史引用（"某表由 `f004` 引入"）、散文里的数字复述、路由的另两种口径
+**仍要人肉复核** —— 别因为门禁绿了就当全对。
+
+## 8. 发版时的文档动作（清单见 `references/release-checklist.md`）
+
+一条命令：`python scripts/release.py <版本>`（`--bump patch|minor|major` / `--dry-run` / `--from <步骤>`）。
+十步：`preflight → version → gates → build → verify → commit → tag → push → release → report`。
+
+- **版本号同步 = 6 个锚点**（权威清单是 `release.py` 的 `VERSION_FILES`）：
+  ① `app/core/config.py` 的 `VERSION: str`（基准）② `frontend/src-tauri/tauri.conf.json` 的 `"version"`
+  ③ `frontend/src-tauri/Cargo.toml` 的 `version`（只改 `[package]`）
+  ④ `frontend/src-tauri/Cargo.lock` 里 `name = "ddtoolkit"` 块的 `version`（**只动这一块**）
+  ⑤ `frontend/package.json` 的 `"version"` ⑥ `README.md` 的 `version-x.y.z-ffa2b4` 徽章。
+  即「**5 个文件 + README 徽章**」；`RELEASE.md` §2 标题的「5 处」是旧口径，正文与脚本都是 6 处。
+- **发布说明**：写 `docs/releases/v<版本>.md`（Release notes 来源；preflight 要求 ≥200 字符、
+  不含 `TODO` / `待填` / `xxx` / `<版本>` 占位符），并回填 `docs/README.md` §4 列表。
+- **devlog**：发布批次单独一篇（对照 `082-20260914-v1.0.0发布.md`）。
+- **续跑**：任一步失败，脚本会打印 `修好后续跑: python scripts/release.py <版本> --from <步骤>`；
+  `release`（建 Release + 传资产）是**幂等**的，重跑不会撞 422。
+- **脚本不做、必须人工**：装一次直装版（`binaries\backend\_internal\` 存在 + 首启越过启动幕）、
+  便携版解压启动；token 进过对话就吊销。
+
+## 9. 参考文件
+
+| 文件 | 内容 |
+|---|---|
+| `references/devlog-template.md` | devlog 模板（标题格式 + 三类骨架）+ 从 001 / 097 提炼的写法 + 篇幅感 |
+| `references/doc-map.md` | 文档全景表（哪份管什么、什么时候必须更新）+ 已知文档漂移 |
+| `references/release-checklist.md` | 发版文档动作清单（6 处锚点与正则 / 归档 / 门禁 / 产物契约） |
+| `scripts/gen_doc_numbers.py`（脚本） | **数字真值来源**：`--list` 查当前真值，`--check` 跑漂移门禁；口径与覆盖边界见其头部注释 |
+
+## 10. 交付前自检
+
+- [ ] 已按**第 4 节定档**（拿不准就往上一档靠）；A/B 档的活文档都同步了（数字口径改了就重新数一遍）
+- [ ] **本批可提炼的经验已落位**：不变量 → `ARCHITECTURE.md` §6 / 坑与方法论 → `DEV-LOOP.md` /
+      设计原理 → `design-*.md`；devlog 里留了指针，**没有在多篇 devlog 里重复记同一个坑**
+- [ ] 本批已追加**一篇** devlog，编号 = 当前最大 +1（先跑 `gen_doc_numbers.py --list` 确认），文件名三段式正确
+- [ ] 若新增 `docs/releases/v<版本>.md`：`docs/README.md` §4 已补那一行
+- [ ] 已落地需求从 `TODO.md` §0 搬进 `ROADMAP-DONE.md`，索引表补了**裸编号**行、第一列只放短标签
+- [ ] `python scripts/doc_check.py` → 0 FAIL
