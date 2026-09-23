@@ -1493,6 +1493,19 @@ export async function runUiProbe(): Promise<void> {
       // 不变量①的**原因**：胶囊绝对定位 ⇒ 不可能把顶栏撑高（`.topbar` 是固定高度）。
       // 只判"三态高度一致"是判结果；这条判原因，破了才说得清为什么破。
       result.pillPosition = pcs.position
+      // ── R38 批 5：桌面控件宿主（`?density=widget`）的材质与尺寸 ──────────────
+      // 判据全在脚本侧算（尤其对比度：要按 α 复算**纯白/纯黑**两个极端壁纸），
+      // 这里只负责把计算样式原样带出去。
+      result.density = pillEl.getAttribute('data-density')
+      if (result.density === 'widget') {
+        const wr = pillEl.getBoundingClientRect()
+        result.widgetSize = [Math.round(wr.width), Math.round(wr.height)]
+        result.widgetBg = pcs.backgroundColor
+        result.widgetBackdrop = pcs.backdropFilter
+        result.widgetShadow = pcs.boxShadow
+        result.widgetPosition = pcs.position
+        result.widgetColor = pcs.color
+      }
     }
 
     // ③ 悬停呼出（R39-C，用户 2026-09-19：「改为鼠标 hover 就呼出，离开就收起，并且下拉栏居中」）
@@ -1579,6 +1592,10 @@ export async function runUiProbe(): Promise<void> {
       // 将来谁在面板里加了个圆角卡片，圆角不对就会红。
       // 药丸（≥100px，如 `.si-item-action`）不算：它们不是同心圆的候选。
       result.panelRadius = Math.round(parseFloat(cs.borderTopLeftRadius))
+      // ⚠️ 用**布局宽**（`cs.width`）不用 rect：面板入场动画的 `scale(.985)` 在虚拟时间下
+      // 被冻在起始帧（DEV-LOOP 记过），rect 会量到 280 × 0.985 ≈ 276 的假值。
+      result.panelWidth = Math.round(parseFloat(cs.width))
+      result.panelDensity = panel.getAttribute('data-density')
       const pr = panel.getBoundingClientRect()
       const inner: Array<{ sel: string; radius: number; inset: number }> = []
       panel.querySelectorAll<HTMLElement>('*').forEach((el) => {

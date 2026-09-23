@@ -1361,6 +1361,13 @@ def main() -> int:
              "点开面板条目可命中且不挤动右栏 / Esc 收起 / ttl 到期自动回空闲",
     )
     ap.add_argument(
+        "--status-widget",
+        action="store_true",
+        help="只跑一档宽度：桌面控件宿主（R38 批 5，规格 §7）—— `?density=widget` 下量 "
+             "折叠尺寸 200×40 / 面板宽 280 / 深底+blur+1px 高光内边 / **按 α 复算纯白与纯黑"
+             "壁纸上的文字对比度 ≥ 4.5:1** / 不复用顶栏那套 absolute 居中（§8 宿主无关）",
+    )
+    ap.add_argument(
         "--deck",
         action="store_true",
         help="只跑一档宽度：**数据视图牌堆**（R40，用户 2026-09-19）—— 一次一张卡 / "
@@ -2744,6 +2751,95 @@ def main() -> int:
                                     f"（文案={si.get('afterTtlText')!r}）—— 过期条目必须自己消失")
                 if not failures:
                     print("  [ok] 状态岛：空闲无容器 / 消息点亮 / 面板可命中不挤动 / Esc 收起 / 过期自清")
+            for b in failures:
+                print("   -", b)
+            return 1 if failures else 0
+
+        if args.status_widget:
+            # 桌面控件宿主（R38 批 5，规格 §7）：`?density=widget` 让顶栏里也渲染那套材质，
+            # 这样**同一个页面**就能量到它。判据全在这里算 —— 探针只带出计算样式。
+            #
+            # ⚠️ 最要紧的一条是**对比度**：桌面控件要浮在**任意壁纸**上，而 `backdrop-filter`
+            # 后面的东西不可知 ⇒ 只能按"深底的不透明度"复算**最亮（纯白）与最暗（纯黑）**两个
+            # 极端壁纸上的有效底色，两端都要 ≥ 4.5:1（§7「亮/暗壁纸都要过」）。
+            # 中间壁纸必然落在两端之间（混色是线性的）⇒ 两端过 = 全过。
+            w = widths[0]
+            url = f"http://localhost:{vite_port}{route}?probe=status-island&density=widget"
+            print(f"[probe] status-widget @{w} → {url}")
+            res = _run_probe(edge, url, w, args.height, WORK, "status-island")
+            si = ((res or {}).get("statusIsland") or {})
+
+            def _srgb_lin(c: float) -> float:
+                c = c / 255
+                return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+
+            def _lum(rgb) -> float:
+                r, g, b = (_srgb_lin(x) for x in rgb[:3])
+                return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+            def _ratio(fg, bg) -> float:
+                a, b = _lum(fg), _lum(bg)
+                hi, lo = max(a, b), min(a, b)
+                return (hi + 0.05) / (lo + 0.05)
+
+            def _rgba(s):
+                m = re.match(r"rgba?\(([^)]+)\)", s or "")
+                if not m:
+                    return None
+                parts = [p.strip() for p in m.group(1).replace("/", " ").replace(",", " ").split()]
+                try:
+                    vals = [float(p) for p in parts[:4]]
+                except ValueError:
+                    return None
+                while len(vals) < 4:
+                    vals.append(1.0)
+                return vals
+
+            print(f"  宿主：density={si.get('density')!r} 折叠尺寸={si.get('widgetSize')} "
+                  f"position={si.get('widgetPosition')!r}")
+            print(f"  材质：底色={si.get('widgetBg')!r} 文字={si.get('widgetColor')!r}")
+            print(f"        backdrop-filter={si.get('widgetBackdrop')!r}")
+            print(f"        box-shadow={si.get('widgetShadow')!r}")
+            print(f"  面板宽={si.get('panelWidth')}")
+
+            if si.get("density") != "widget":
+                failures.append(f"@{w} status-widget: `?density=widget` 没生效"
+                                f"（data-density={si.get('density')!r}）—— dev 分支或属性没接上")
+            if si.get("widgetSize") != [200, 40]:
+                failures.append(f"@{w} status-widget: 折叠尺寸是 {si.get('widgetSize')}，"
+                                f"应为 [200, 40]（§7）")
+            if si.get("widgetPosition") == "absolute":
+                failures.append(f"@{w} status-widget: 胶囊仍是 absolute 居中 —— "
+                                f"那是**顶栏宿主**的定位（§8 要求宿主无关，控件自己就是窗口）")
+            backdrop = si.get("widgetBackdrop") or ""
+            if "blur(20px)" not in backdrop or "saturate(1.4)" not in backdrop:
+                failures.append(f"@{w} status-widget: backdrop-filter 是 {backdrop!r}，"
+                                f"应含 blur(20px) 与 saturate(1.4)（§7）")
+            if "inset" not in (si.get("widgetShadow") or ""):
+                failures.append(f"@{w} status-widget: box-shadow 里没有 inset —— "
+                                f"§7 要求 1px 高光内边（「光从上面来」）")
+
+            bg, fg = _rgba(si.get("widgetBg")), _rgba(si.get("widgetColor"))
+            if not bg or not fg:
+                failures.append(f"@{w} status-widget: 解析不出底色/文字色"
+                                f"（bg={si.get('widgetBg')!r} fg={si.get('widgetColor')!r}）")
+            else:
+                alpha = bg[3]
+                worst = None
+                for name, wall in (("纯白", (255.0, 255.0, 255.0)), ("纯黑", (0.0, 0.0, 0.0))):
+                    eff = [bg[i] * alpha + wall[i] * (1 - alpha) for i in range(3)]
+                    r = _ratio(fg, eff)
+                    worst = r if worst is None else min(worst, r)
+                    print(f"  对比度 @{name}壁纸：{r:.2f}:1")
+                if worst is not None and worst < 4.5:
+                    failures.append(f"@{w} status-widget: 最差壁纸下文字对比度只有 {worst:.2f}:1 "
+                                    f"（底色 α={alpha}）—— §7 要求亮/暗壁纸都 ≥ 4.5:1。"
+                                    f"调**不透明度**（不是调色值）")
+            if si.get("panelWidth") is not None and si.get("panelWidth") != 280:
+                failures.append(f"@{w} status-widget: 面板宽是 {si.get('panelWidth')}，"
+                                f"应为 280（§7 widget 展开 280）")
+            if not failures:
+                print("  [ok] 桌面控件宿主：200×40 / 深底+blur+高光内边 / 两极端壁纸对比度达标 / 不依赖顶栏")
             for b in failures:
                 print("   -", b)
             return 1 if failures else 0

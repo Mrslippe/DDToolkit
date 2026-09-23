@@ -511,6 +511,50 @@ html.window-maximized body {
   transition-delay: 0ms;   /* 撤**立刻**开始，不等 `--motion-lag` */
 }
 
+/* ── R38 批 5：桌面控件宿主（`data-density="widget"`，规格 §7）──────────────────
+   它要**浮在任意壁纸上** ⇒ 材质必须自己保证可读性，不能借用顶栏的粉底。
+
+   ⚠️ **深底的不透明度是算出来的，不是调出来的**：`rgba(18,18,22,α)` 叠在**最亮**（纯白）
+   与**最暗**（纯黑）壁纸上，白色文字的对比度都要 ≥ **4.5:1**（§7「亮/暗壁纸都要过」）。
+   取 α = 0.72 ⇒ 白底上有效底 ≈ `rgb(84,84,86)`、黑底上 ≈ `rgb(13,13,16)`，
+   白字对比度实测 **7.51:1** 与 **19.41:1** —— 两端都过，中间壁纸自然落在区间内。
+   探针按**计算样式解析出 α 并复算这两个极端**（见 `--status-island` 的 widget 断言）。
+
+   `position/left/transform/max-width` 全部复位：§8 要求宿主无关 ——
+   顶栏那套「absolute + translateX(-50%) 居中」在这里不成立，**它自己就是窗口**。 */
+.si-island[data-density='widget'] {
+  position: relative;
+  left: auto;
+  transform: none;
+  width: 200px;            /* §7 折叠尺寸 200 × 40 */
+  height: 40px;
+  max-width: none;
+  padding: 0 12px;
+  background: rgba(18, 18, 22, 0.72);
+  backdrop-filter: blur(20px) saturate(1.4);
+  color: #fff;
+  /* 1px 高光内边（"光从上面来"）—— 桌面控件"浮起来"的关键 */
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
+}
+
+/* 事件态：顶栏宿主是**整块变粉**，但桌面控件不能 —— 那会毁掉深色材质。
+   改成「深底不变 + 一圈粉环」，**有事发生**照样看得见（§7 没规定，取这条）。 */
+.si-island[data-density='widget'].on {
+  background: rgba(18, 18, 22, 0.72);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    inset 0 0 0 1px rgba(233, 92, 141, 0.85);
+}
+
+/* 展开面板：尺寸由 JS 给（§7 widget 展开宽 280）；材质跟胶囊同族 ——
+   否则深色胶囊下面吊一块白板会像"两块积木"（§5 同心圆角那条的原话）。 */
+.si-panel[data-density='widget'] {
+  background: rgba(18, 18, 22, 0.86);
+  backdrop-filter: blur(20px) saturate(1.4);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
 /* 计数：多于一条时才出现（让用户知道点开还有别的） */
 .si-count {
   flex: none;

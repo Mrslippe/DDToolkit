@@ -226,6 +226,34 @@ keyframes 只会重启**）。
 ② `transition-duration` == `--motion-fast`；③ `transition-property` 含 `opacity`。
 **反向验证过**（写回 `pill-fade-in 0.5s` ⇒ 两条同时报）。
 
+### A1-a-w. 桌面控件宿主 `density="widget"`（R38 批 5，2026-09-24）
+
+`<StatusIsland density="bar" | "widget">`（规格 §7/§8）。**宿主无关是硬要求** ——
+状态机与动画都不得依赖顶栏；`place()` 读的一直是 `anchorRef` 自己的 rect，
+**面板锚定相对胶囊自身**，所以换宿主只是换一层材质与尺寸。
+
+| | `bar`（顶栏内联） | `widget`（桌面控件） |
+|---|---|---|
+| 定位 | `absolute` + `translateX(-50%)` 居中 | **`relative`**（它自己就是窗口，§8） |
+| 折叠 | 高 `--pill-h-sm`(25) / 内容自适应 | **200 × 40** |
+| 面板宽 | 340 | **280** |
+| 底 | 透明 → `.on` 变粉 | **`rgba(18,18,22,.72)` + `backdrop-filter: blur(20px) saturate(1.4)`** + 1px 高光内边 |
+| 事件态 | **整块变粉** | 深底**不变** + 一圈粉环（整块变粉会毁掉深色材质）|
+
+> **深底的不透明度是算出来的**：要浮在**任意壁纸**上，而 `backdrop-filter` 后面的东西不可知 ⇒
+> 只能按 α 复算**最亮（纯白）与最暗（纯黑）**两个极端壁纸的有效底色。α = 0.72 时白字实测
+> **7.51:1** 与 **19.41:1**，两端都过（中间壁纸必然落在区间内 —— 混色是线性的）。
+> **改这个值要重算，不能凭手感调。**
+
+**判据**（`ui_probe --status-widget`，`?density=widget` 让顶栏里也渲染这套材质以便同页测量）：
+density / 折叠尺寸 `[200,40]` / 面板宽 280 / `backdrop-filter` 含 `blur(20px) saturate(1.4)` /
+`box-shadow` 含 `inset` / **不是 `absolute`** / **两极端壁纸对比度 ≥ 4.5:1**（脚本侧按 α 复算）。
+**反向验证过**（α 调到 0.3 + 去掉尺寸与模糊 ⇒ 四条同时报）。
+
+> ⚠️ 量面板宽要用**布局宽**（`getComputedStyle().width`）**不是 rect** ——
+> 入场动画的 `scale(.985)` 在虚拟时间下被冻在起始帧，rect 会量到 280 × 0.985 ≈ **276** 的假值
+> （首次实现就踩了，见 devlog/172 §三）。
+
 > ⚠️ 三条**别改坏**的口径：
 > ① **「自动节拍不占顶栏」现在是 `notificationHub.progressNotice` 的具名规则 + 反向用例**
 >    （此前是 `TopBar` 里散落的 `isQuietTask` 判断；探针 `_assert_topbar` 照旧在真实后端上兜底）；

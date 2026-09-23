@@ -54,6 +54,18 @@ const PILL_MS = 4000 // 操作结果覆盖态的展示时长
 const isTauri = '__TAURI_INTERNALS__' in window
 
 /**
+ * dev/探针专用：`?density=widget` 让**顶栏里**也渲染桌面控件宿主的材质与尺寸（R38 批 5）。
+ *
+ * 为什么需要：`widget` 宿主本来只该出现在独立小窗里，而探针要能在**同一个页面**上量它 ——
+ * 否则"深底的不透明度够不够 4.5:1（亮/暗壁纸都要过）"就只能靠肉眼估。
+ * 与 `__ddtoolkitCloseClick` 同一种"为可测性存在"的取舍，同样只在 `DEV` 下生效。
+ */
+const islandDensity: 'bar' | 'widget' =
+  import.meta.env.DEV && new URLSearchParams(window.location.search).get('density') === 'widget'
+    ? 'widget'
+    : 'bar'
+
+/**
  * 「静默任务」判定：定时档发起的**自动节拍**不占顶栏。
  *
  * 判据用后端给的事实（`auto`：本次是否由综合档发起），而不是任务名——同一个
@@ -557,7 +569,7 @@ export default function TopBar() {
           完成报告 AlertDialog），现在统一交给 `StatusIsland` + `utils/notificationHub`。
           空闲态仍是顶栏 chrome 的一部分（白字 + 绿点、无容器）；「自动节拍不占顶栏」
           这条口径已从"副作用"变成 notificationHub 里的具名规则（带反向用例）。 */}
-      <StatusIsland notices={notices} onAction={onIslandAction} now={now} />
+      <StatusIsland notices={notices} onAction={onIslandAction} now={now} density={islandDensity} />
 
       <div className="topbar-spacer" {...(isTauri ? { 'data-tauri-drag-region': true } : {})} />
 

@@ -15,6 +15,14 @@ interface Props {
   onAction: (kind: NoticeActionKind, n: Notice) => void
   /** 当前时间（每次渲染现取，保证过期判定跟着走） */
   now: number
+  /**
+   * 宿主（R38 批 5，规格 §7/§8）：`bar` = 顶栏内联（现状）· `widget` = 桌面独立控件。
+   *
+   * **宿主无关是硬要求**（§8）：状态机与动画都不得依赖顶栏。这一点本组件早就满足 ——
+   * `place()` 读的是 `anchorRef` 自己的 rect（**面板锚定一律相对胶囊自身**），
+   * 没有任何"相对顶栏定位"的假设。所以换宿主只是换一层材质与尺寸。
+   */
+  density?: 'bar' | 'widget'
 }
 
 const KIND_ICON: Record<string, React.ReactNode> = {
@@ -51,7 +59,7 @@ const KIND_LABEL: Record<string, string> = {
  * 面板用 **portal + fixed 定位**（顶栏容器 overflow:hidden 会裁掉内联面板）；
  * 位置在打开时按 island 的矩形算一次，滚动/缩放时重算。
  */
-export default function StatusIsland({ notices, onAction, now }: Props) {
+export default function StatusIsland({ notices, onAction, now, density = 'bar' }: Props) {
   const [open, setOpen] = useState(false)
   /**
    * 「钉住」（R39-C，用户 2026-09-19：「改为鼠标 hover 就呼出，离开就收起」）：
@@ -89,7 +97,7 @@ export default function StatusIsland({ notices, onAction, now }: Props) {
   const place = () => {
     const r = anchorRef.current?.getBoundingClientRect()
     if (!r) return
-    const width = 340
+    const width = density === 'widget' ? 280 : 340   // §7：widget 展开宽 280（bar 沿用 340）
     const centered = r.left + r.width / 2 - width / 2
     const left = Math.min(Math.max(8, centered), Math.max(8, window.innerWidth - width - 8))
     setPos({ left, top: r.bottom + 6, width })
@@ -198,6 +206,7 @@ export default function StatusIsland({ notices, onAction, now }: Props) {
       <span
         ref={anchorRef}
         className={`si-island topbar-status${lit ? ' on' : ''}${open ? ' open' : ''}`}
+        data-density={density}
         role="button"
         tabIndex={0}
         aria-expanded={open}
@@ -242,6 +251,7 @@ export default function StatusIsland({ notices, onAction, now }: Props) {
           <div
             ref={panelRef}
             className="si-panel"
+            data-density={density}
             style={{ left: pos.left, top: pos.top, width: pos.width }}
             role="dialog"
             aria-label="顶栏通知"
