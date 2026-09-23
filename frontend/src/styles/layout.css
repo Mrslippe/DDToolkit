@@ -422,22 +422,13 @@ html.window-maximized body {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  /* R38 批 2：§3 规则 1「形变先行、内容后到」—— 容器先动，文案滞后 `--motion-lag` 才淡入。
-     `backwards` 必须有：否则**延迟期间**元素处于常态（opacity 1），到点才跳到 from 的
-     opacity 0 ⇒ 会闪一下。
-     取**简化实现**：所有文案淡入都滞后（同宽度换字也滞后）—— 60ms 不可感知，
-     而"按容器是否真在形变分派"要 JS 参与，收益不抵复杂度。 */
-  animation: pill-fade-in var(--motion-fast) ease var(--motion-lag) backwards;
+  /* R38 批 4：这里原来是一条 `@keyframes` 重放（`pill-fade-in` + `var(--motion-lag)` 延迟），
+     由 React 的 `key={text}` 重挂载触发。**已撤** —— 改用 transition 驱动，
+     见 `.si-island .si-text` 的注释（可重定向 vs 从头重放）。 */
 }
 
-@keyframes pill-fade-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
+/* R38 批 4：`@keyframes pill-fade-in` 已撤 —— 文案切换改用 transition 驱动
+   （见 `.si-island .si-text`）。留个注释免得有人再把它加回来。 */
 
 .topbar-status-dot.busy {
   background: #faad14;
@@ -500,6 +491,24 @@ html.window-maximized body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  /* ── R38 批 4「打断 / 重定向」：从「keyframes 重放」改成「transition 重定向」─────
+     keyframes 被打断会**从头重放**（连续换字每次都闪），transition 从**当前值**继续。
+     **两相就够，不需要单独的 `in` 相** —— CSS 过渡取的是**变化后**那一边的
+     `transition-duration`：进 `.is-out` 用 `--motion-instant`（§3 规则 2
+     「离场比入场快 80–100ms」），回基态用 `--motion-fast` + `--motion-lag`
+     （§3 规则 1「形变先行、内容后到」）。淡入就是"撤掉 `.is-out`"这次过渡本身。 */
+  transition:
+    opacity var(--motion-fast) ease var(--motion-lag),
+    transform var(--motion-fast) ease var(--motion-lag);
+}
+
+/* §4「0–60ms 旧文案先撤：位移 6–8px 朝锚点方向 + 缩放 0.96 + 淡出」
+   —— 锚点是左侧的 `si-dot`，所以朝左（负 X）。 */
+.si-island .si-text.is-out {
+  opacity: 0;
+  transform: translateX(-7px) scale(0.96);
+  transition-duration: var(--motion-instant);
+  transition-delay: 0ms;   /* 撤**立刻**开始，不等 `--motion-lag` */
 }
 
 /* 计数：多于一条时才出现（让用户知道点开还有别的） */
@@ -1042,8 +1051,11 @@ html.window-maximized body {
   .topbar-status-spinner {
     animation: none;
   }
-  .pill-text-fade {
-    animation: none;
+  /* R38 批 4：文案切换现在是 **transition**（不再是 keyframes）—— 所以这里不能写
+     `transition: none`（那会把淡入也去掉）。§10 要求 reduce 下「**只保留淡入**：
+     位移/缩放归零，**信息不减**」⇒ 只去位移与缩放。 */
+  .si-island .si-text.is-out {
+    transform: none;
   }
 }
 

@@ -202,6 +202,30 @@ DOM 契约（探针 `ui_probe --status-island` 直接查）：`.si-island`（`.o
 > ② **两段式跨级** —— **无触发条件**：`hoverIn` 有 `if (!lit) return`（空闲态打不开面板），
 >    而 §6 的跨级指 ①→④ ⇒ 不可达。**②→④ / ③→④ 都是相邻级**，一次形变即可。
 
+**文案切换：可打断 / 可重定向（R38 批 4，2026-09-24）**：`.si-text` **不再挂 `key={text}`** ——
+原来文案一变就**重挂载** ⇒ CSS `@keyframes` **从头重放**（连续换字时每次都会闪）。
+现在元素**保持挂载**、用 **transition** 驱动 ⇒ 从**当前值**继续（**transition 可重定向，
+keyframes 只会重启**）。
+
+时序（两相就够，**不需要单独的 `in` 相** —— CSS 过渡取**变化后**那一边的 `transition-duration`）：
+
+| 阶段 | 类 | 视觉 | 时长 |
+|---|---|---|---|
+| `idle` | 无 | 可见 | 进这一相（= 淡入）用 `--motion-fast` + `--motion-lag`（§3 规则 1「形变先行、内容后到」）|
+| `out` | `.is-out` | `opacity:0` + `translateX(-7px) scale(.96)`（§4「位移 6–8px 朝锚点 + 缩放 0.96 + 淡出」；锚点是左侧 `si-dot`） | 进这一相（= 撤）用 `--motion-instant`（§3 规则 2「离场比入场快 80–100ms」）|
+
+**决策在纯函数里**：`utils/statusIslandText.ts`（`reduceText` + 9 条 vitest）—— 抽它的理由与
+`sceneStep.ts` 同（vitest 跑 node 环境、hook 测不了），而"**连续换字不重放、不排队**"必须有单测。
+核心性质：**`out` 途中再来新文案 ⇒ 继续撤（不重排、不重启定时器）**，撤完换上的是**当时最新**那一版。
+
+> ⚠️ **hook 侧有个反直觉点**：那条 effect **故意不返回 cleanup** —— 定时器属于"撤"这个**阶段**，
+> 不属于某一次 `text` 变化。返回 cleanup 会让"打断"把定时器清掉 ⇒ **文案永远换不过去**。
+> 卸载时由**另一条** effect 清。
+
+**批 4 的判据**（`--status-island`）：① `animation-name` 必须是 `none`（还挂 keyframes 就红）；
+② `transition-duration` == `--motion-fast`；③ `transition-property` 含 `opacity`。
+**反向验证过**（写回 `pill-fade-in 0.5s` ⇒ 两条同时报）。
+
 > ⚠️ 三条**别改坏**的口径：
 > ① **「自动节拍不占顶栏」现在是 `notificationHub.progressNotice` 的具名规则 + 反向用例**
 >    （此前是 `TopBar` 里散落的 `isQuietTask` 判断；探针 `_assert_topbar` 照旧在真实后端上兜底）；

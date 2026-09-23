@@ -1633,7 +1633,12 @@ export async function runUiProbe(): Promise<void> {
     result.motionBaseMs = tokenMs('--motion-base')
     const textEl = island()?.querySelector<HTMLElement>('.pill-text-fade')
     if (textEl) {
-      result.textFadeMs = Math.round(parseFloat(getComputedStyle(textEl).animationDuration) * 1000)
+      const tcs = getComputedStyle(textEl)
+      // R38 批 4：文案从「keyframes 重放」改成「transition 重定向」⇒ 判据也跟着换。
+      // `animationName` 必须是 `none`（重放会闪），时长改读 `transitionDuration`。
+      result.textAnimName = tcs.animationName
+      result.textTransitionMs = Math.round(parseFloat(tcs.transitionDuration) * 1000)
+      result.textTransitionProps = tcs.transitionProperty
     }
     // `.si-count` 是条件渲染（`lit && notices.length > 1`）—— 本模式只派一条消息，
     // 所以它可能不存在。存在才量；不存在时脚本侧不判（它和文案共用 `--motion-fast`）。

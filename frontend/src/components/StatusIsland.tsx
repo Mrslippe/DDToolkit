@@ -7,6 +7,7 @@ import { KIND_PRIORITY, pickPrimary } from '../utils/notificationHub'
 import { IDLE_CAROUSEL_ENABLED, IDLE_TICK_MS, pickIdle } from '../utils/idleQuotes'
 import { isShellHidden } from '../utils/shellLifecycle'
 import { useShellHidden } from '../hooks/useShellHidden'
+import { initialTextState, phaseClass, reduceText } from '../utils/statusIslandText'
 
 interface Props {
   notices: Notice[]
@@ -162,6 +163,34 @@ export default function StatusIsland({ notices, onAction, now }: Props) {
   /** 空闲轮播取词（有事故态时用主条目文案；`lit` 时不参与渲染） */
   const idle = pickIdle(idleTick)
   const text = primary?.text ?? idle.text
+
+  // ── R38 批 4「打断 / 重定向」：文案切换走状态机 ──────────────────────────
+  // 原来 `.si-text` 挂 `key={text}` ⇒ 文案一变就**重挂载** ⇒ CSS `@keyframes` **从头重放**
+  // （先 opacity:0 停 `--motion-lag` 再淡入），连续换字时**每次都闪**。
+  // 现在元素保持挂载、用 **transition** 驱动 ⇒ 从**当前值**继续（transition 可重定向，
+  // keyframes 只会重启）。决策在纯函数 `utils/statusIslandText.ts` 里，有 9 条单测。
+  const [textState, setTextState] = useState(() => initialTextState(text))
+  const textRef = useRef(textState)
+  textRef.current = textState
+  const textTimer = useRef<number | null>(null)
+
+  useEffect(() => {
+    const step = reduceText(textRef.current, text, false)
+    if (step.state !== textRef.current) setTextState(step.state)
+    if (step.scheduleMs == null) return
+    // ⚠️ **故意不在这里返回 cleanup** —— 定时器属于"撤"这个**阶段**，不属于某一次 `text` 变化。
+    // 若返回 cleanup，"打断"（text 又变）会把它清掉 ⇒ 文案永远换不过去，
+    // 而"打断不重排"正是本批要保住的性质（见 statusIslandText.ts 模块注释）。
+    textTimer.current = window.setTimeout(() => {
+      textTimer.current = null
+      setTextState((s) => reduceText(s, text, true).state)
+    }, step.scheduleMs)
+  }, [text])
+
+  /** 只在**卸载**时清定时器（与上面那条 effect 分开写，正是为了不误清） */
+  useEffect(() => () => {
+    if (textTimer.current != null) window.clearTimeout(textTimer.current)
+  }, [])
   const href = primary?.source ?? ''
 
   return (
@@ -202,7 +231,7 @@ export default function StatusIsland({ notices, onAction, now }: Props) {
       >
         <i className={`si-dot topbar-status-dot${primary?.kind === 'progress' ? ' busy'
           : primary?.kind === 'alert' ? ' warn' : lit ? ' ok' : ''}`} />
-        <span key={text} className="si-text pill-text-fade">{text}</span>
+        <span className={`si-text pill-text-fade${phaseClass(textState.phase)}`}>{textState.shown}</span>
         {lit && notices.length > 1 &&
           <span key={notices.length} className="si-count">{notices.length}</span>}
         {lit && <ChevronDown className="si-chevron size-[12px]" />}

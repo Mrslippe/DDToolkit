@@ -2542,7 +2542,8 @@ def main() -> int:
                   f"｜ reduce={si.get('motionReduced')}")
             print(f"  动效令牌：--motion-fast={si.get('motionFastMs')}ms "
                   f"--motion-base={si.get('motionBaseMs')}ms ｜ "
-                  f"文案淡入={si.get('textFadeMs')}ms 计数徽章={si.get('countAnimMs')}ms")
+                  f"文案 anim={si.get('textAnimName')!r} 过渡={si.get('textTransitionMs')}ms "
+                  f"（{si.get('textTransitionProps')}）计数徽章={si.get('countAnimMs')}ms")
             print(f"  批 2 不变量：顶栏高 空闲/亮起/展开 = {si.get('topbarHIdle')}/"
                   f"{si.get('topbarHLit')}/{si.get('topbarHOpen')} ｜ "
                   f"文案 {si.get('siTextScroll')} ≤ {si.get('siTextClient')}+1 ｜ "
@@ -2673,14 +2674,28 @@ def main() -> int:
                         failures.append(f"@{w} status-island: chevron 过渡时长是 "
                                         f"{si.get('chevronTransitionMs')}ms，应为 {want_ms}ms"
                                         f"（= --motion-base；reduce={si.get('motionReduced')}）")
-                    # 文案淡入与计数徽章共用 --motion-fast（R38 批 1 起）。
-                    # `.si-count` 是条件渲染，量不到时不判（它和文案同一个令牌）。
+                    # 文案与计数徽章：批 1 起共用 --motion-fast。
+                    # R38 批 4：**文案改走 transition**（不再是 keyframes 重放）⇒ 判据换成
+                    # ① `animation-name` 必须是 `none`（重放被打断会从头开始 ⇒ 连续换字会闪）；
+                    # ② 过渡时长 == --motion-fast；③ transition-property 含 opacity。
+                    # `.si-count` 仍是 keyframes（条件渲染量不到时不判）。
                     fast_ms = si.get("motionFastMs")
-                    for key, label in (("textFadeMs", "胶囊文案淡入"), ("countAnimMs", "计数徽章动画")):
-                        got_ms = si.get(key)
-                        if got_ms is not None and got_ms != fast_ms:
-                            failures.append(f"@{w} status-island: {label}时长是 {got_ms}ms，"
-                                            f"应等于 --motion-fast（{fast_ms}ms）")
+                    if si.get("textAnimName") not in (None, "none"):
+                        failures.append(f"@{w} status-island: 胶囊文案还挂着 keyframes 动画 "
+                                        f"（{si.get('textAnimName')!r}）—— 批 4 起改用 transition，"
+                                        f"keyframes 被打断会**从头重放**（连续换字会闪）")
+                    if si.get("textTransitionMs") is not None and si.get("textTransitionMs") != fast_ms:
+                        failures.append(f"@{w} status-island: 胶囊文案过渡时长是 "
+                                        f"{si.get('textTransitionMs')}ms，应等于 "
+                                        f"--motion-fast（{fast_ms}ms）")
+                    if si.get("textTransitionProps") is not None and \
+                            "opacity" not in (si.get("textTransitionProps") or ""):
+                        failures.append(f"@{w} status-island: 胶囊文案的 transition-property 不含 "
+                                        f"opacity（{si.get('textTransitionProps')!r}）")
+                    got_ms = si.get("countAnimMs")
+                    if got_ms is not None and got_ms != fast_ms:
+                        failures.append(f"@{w} status-island: 计数徽章动画时长是 {got_ms}ms，"
+                                        f"应等于 --motion-fast（{fast_ms}ms）")
                 # ── R38 批 3：面板几何 ────────────────────────────────────────────
                 if si.get("panelRadius") is not None and si.get("panelRadius") != 14:
                     failures.append(f"@{w} status-island: 面板圆角是 {si.get('panelRadius')}px，"
