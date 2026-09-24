@@ -410,6 +410,26 @@ function measure(tag: string) {
          *  "边缘还有没有一条线"最终只有量像素才算数 */
         barRect: { x: Math.round(br.left), y: Math.round(br.top),
                    w: Math.round(br.width), h: Math.round(br.height) },
+        /** R45-F：**工具条所在的层叠区**（`.view-toolbar`）的 `z-index` —— 判"条压标题"的基准。
+         *  ⚠️ **不能读 `.glow-bar` 自己的 `z-index`**：它是 `auto`（`z-index:3` 写在它的父级
+         *  `.view-toolbar` 上）。第一版就是量了 `.glow-bar` ⇒ 8 帧全红、报"读不到 z-index"
+         *  —— 字段名对、**元素选错**，与 DEV-LOOP §6.6 那类尺子坑同源。 */
+        toolbarZoneZ: tcs ? tcs.zIndex : null,
+        /** R45-F：`.view-body` 的 `z-index`（= 1）—— 它是**标题的包含块**，又带非 auto 的
+         *  `z-index` ⇒ **自成层叠上下文**：标题自己的 `z-index:2` 只是**它内部**的层级，
+         *  **爬不出** `.view-body`。这才是"工具条能盖住标题"的**真正机制**
+         *  （所以判据主要看这一条；标题自己的 z-index 只是顺带比一下）。 */
+        viewBodyZ: vbody ? getComputedStyle(vbody).zIndex : null,
+        /** R45-F：面板矩形（视口坐标，与 `pageTitle.rect` / `barRect` 同一坐标系）——
+         *  判「标题不得挤出面板」。用面板自己的 rect 而不是从 `100%` 反推：
+         *  标题的包含块是 `.view-body`（`position:relative`），面板有 padding 时两者不等。 */
+        panelRect: (() => {
+          const p = document.querySelector<HTMLElement>('.posts-panel')
+          if (!p) return null
+          const r = p.getBoundingClientRect()
+          return { x: Math.round(r.left), y: Math.round(r.top),
+                   w: Math.round(r.width), h: Math.round(r.height) }
+        })(),
         barRadius: bcs.borderTopLeftRadius,
         barShadow: bcs.boxShadow,
         barBorder: bcs.borderTopWidth,
@@ -501,9 +521,13 @@ function measure(tag: string) {
             },
             /** R45-E：标题必须**不占流**（`position:absolute`）—— 用户口径是"标题**占位**"，
              *  "占位"= 与工具条同栏、填掉那条空栏，**不是**自己再占一行把内容推下去。
-             *  ⚠️ 这条判据拦的正是 R45-B/D 那版的回流：那时 `flex:none` + `padding-top`
+             * ⚠️ 这条判据拦的正是 R45-B/D 那版的回流：那时 `flex:none` + `padding-top`
              *  白吃掉 121px。 */
             inFlow: cs.position === 'static' || cs.position === 'relative',
+            /** R45-F：标题的层叠级。用户口径「工具条直接覆盖在标题上，遮住也没关系」
+             *  ⇒ 允许重叠，但**必须是条压标题**：判据拿它与 `glow.barZIndex` 比大小。
+             *  （重叠本身不用判 —— 它只在标题很长时才发生，而"允许"正是本批的口径。） */
+            zIndex: cs.zIndex,
           }
         })(),
         /** 当前卡片**内部**渲染出来的标题（`archive` 才有）—— 与 `pageTitle.text`

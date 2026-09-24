@@ -1135,6 +1135,65 @@ def _assert_glow(v: dict, width: int) -> list[str]:
                        f"用户口径是「**占位**」：与工具条**同栏**填掉空栏，"
                        f"而不是自己再占一行把内容整体推下去"
                        f"（R45-B/D 那版白吃 121px 就是这么来的）")
+        # ── ⑤c 标题与工具条的**层叠关系**（R45-F）────────────────────────────
+        # 用户口径（2026-09-25）：「我希望**工具条直接覆盖在标题上，遮住也没关系**」
+        # —— 这句把"标题给工具条让路"整条前提**取消了**：横向不再预留工具条那 88px
+        # 半宽（`max-width` 从 `calc(50% - 116px)` 改成 `calc(100% - 32px)`）。
+        # ⚠️ **为什么必须补两条判据**：删掉的那个数原来**谁都没在判**（它只是一行 CSS
+        #    加一段注释），所以"允许重叠"如果没有新判据兜住，就等于这一块**完全没人看**：
+        #      · 标题可能**挤出面板**（`max-width` 写错、或以后有人改成 `none`）；
+        #      · 层叠可能**反过来**（标题浮在工具条上）—— 那才是真正难看的坏法，
+        #        而"遮住也没关系"这句话**恰恰以"是条压标题"为前提**才成立。
+        #    也就是说：本批删掉一个数，换来的是这两条 —— 判据更强，不是更弱。
+        # ⚠️ **"重叠"本身不判**：它只在标题很长时发生（现有四个标签都只有 4 个字，
+        #    1100 档也够不着条左缘），判它等于判一个今天恒为假的条件。
+        pt_z = pt.get("zIndex")
+        zone_z = g.get("toolbarZoneZ")
+        body_z = g.get("viewBodyZ")
+        pr = g.get("panelRect") or {}
+        if pt.get("rect"):
+            trect = pt["rect"]
+            t_right = trect["x"] + trect["w"]
+            if pr.get("w"):
+                inner_right = pr["x"] + pr["w"] - 16      # 右侧留 16px（与 left:16px 对称）
+                if t_right > inner_right + 1:
+                    bad.append(
+                        f"@{width} {tag}: 页面标题右缘 {t_right} 越过面板内缘 {inner_right}"
+                        f"（面板 {pr['x']}..{pr['x'] + pr['w']}）—— `max-width` 应保证"
+                        f"「left 16 + 右 16」；标题**可以**钻到工具条底下（R45-F 允许），"
+                        f"但**不许出面板**")
+            else:
+                bad.append(f"@{width} {tag}: 量不到 `.posts-panel` 的矩形"
+                           f"（`glow.panelRect`）—— 「标题不出面板」这条会静默空转")
+            # ── 层叠：**是条压标题**（用户口径「工具条直接覆盖在标题上」的成立前提）──
+            # ⚠️ **机制在 `.view-body` 上，不在标题自己身上**：标题的包含块 `.view-body`
+            #    带 `z-index:1` ⇒ 自成层叠上下文 ⇒ 标题那个 `z-index:2` 只是**它内部**的
+            #    层级，**爬不出** `.view-body`。所以真正决定胜负的是
+            #    `.view-body(1)` vs `.view-toolbar(3)`。
+            #    （第一版判据读的是 `.glow-bar` 的 z-index —— 那是 `auto`（3 写在它的父级
+            #      `.view-toolbar` 上）⇒ 8 帧全红。**字段名对、元素选错**，与 §6.6 同源。）
+            nums = {}
+            for k, raw in (("title", pt_z), ("viewBody", body_z), ("toolbar", zone_z)):
+                try:
+                    nums[k] = int(str(raw))
+                except (TypeError, ValueError):
+                    nums[k] = None
+            if nums["toolbar"] is None or nums["viewBody"] is None:
+                bad.append(f"@{width} {tag}: 读不到层叠级（标题 {pt_z!r} / `.view-body` "
+                           f"{body_z!r} / `.view-toolbar` {zone_z!r}）—— "
+                           f"「工具条盖住标题」这条会静默空转")
+            elif nums["viewBody"] >= nums["toolbar"]:
+                bad.append(
+                    f"@{width} {tag}: `.view-body` 的 `z-index` {nums['viewBody']} **不小于** "
+                    f"`.view-toolbar` 的 {nums['toolbar']} —— 用户口径是「工具条**直接覆盖**"
+                    f"在标题上」⇒ 必须**条压标题**。⚠️ 机制在这里而不是标题自己身上："
+                    f"`.view-body` 带着非 auto 的 z-index ⇒ 自成层叠上下文，"
+                    f"标题的 z-index 再大也爬不出来")
+            elif nums["title"] is not None and nums["title"] >= nums["toolbar"]:
+                bad.append(
+                    f"@{width} {tag}: 标题 `z-index` {nums['title']} **不小于** "
+                    f"`.view-toolbar` 的 {nums['toolbar']} —— 标题是不是被移出 `.view-body` 了？"
+                    f"用户口径是「工具条**直接覆盖在标题上**」")
         if tag == "archive":
             # ── 牌堆的上留白 = 卡片阴影余量（R45-E2）────────────────────────────
             # ⚠️ 这条是"用户问过一次"的产物：他把 `--toolbar-gap-archive` 设成 0，
