@@ -1,0 +1,39 @@
+<!doctype html>
+<!--
+  桌面状态控件小窗的**独立入口**（R38 批 5b，2026-09-24）。
+
+  为什么单独一个 HTML 而不是 `index.html?widget=1`：那个做法要靠**运行时判断**
+  （`main.tsx` 里 `if (isWidgetWindow)`），而 `main.tsx` 的**静态 import 是拦不住的** ——
+  小窗虽然只渲染 `<StatusWidgetWindow>`，却把整个应用（App / react-router / shadcn /
+  ECharts / layout.css）都拉进了它那个 renderer。实测小窗 renderer 占 **132MB**，
+  而 Chromium 的基础开销只占小部分，大头是我们自己的代码与依赖。
+
+  独立入口之后：加载量 = 状态岛组件 + 它那一份样式，物理上不可能再被主窗口的代码影响。
+  「靠运行时判断」那种分流也就不需要了。
+
+  ⚠️ 这个文件是**给 Tauri 的**（`WebviewUrl::App("widget.html")`）。浏览器里直接开
+  `http://localhost:5173/widget.html` 也能看到（没有 Tauri 事件，所以是空闲态）。
+-->
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DDtoolkit 状态控件</title>
+    <style>
+      /* 小窗的窗口底必须**全透明**：胶囊自己画背景，窗口只负责形状。
+         这条以前写在 layout.css 的 `html[data-widget-window]` 里，
+         现在入口独立了，直接挂在 html 上即可（不再需要那个数据属性当开关）。 */
+      html,
+      body,
+      #root {
+        background: transparent !important;
+        margin: 0;
+        overflow: hidden;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/widgetMain.tsx"></script>
+  </body>
+</html>

@@ -815,7 +815,7 @@ async fn show_widget_window(app: tauri::AppHandle, x: Option<i32>, y: Option<i32
     let w = tauri::WebviewWindowBuilder::new(
         &app,
         "widget",
-        tauri::WebviewUrl::App("index.html?widget=1".into()),
+        tauri::WebviewUrl::App("widget.html".into()),
     )
     .title("DDtoolkit 状态控件")
     .inner_size(W, H)

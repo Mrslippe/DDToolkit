@@ -172,22 +172,27 @@ export default function StatusWidgetWindow() {
       {import.meta.env.DEV && (
         /* ⚠️ **dev 专用自检条**（2026-09-24 第三轮真机反馈加）。
            小窗只有 200×40、又置顶无边框，出问题时**既没法开 devtools、也没法看 console** ——
-           前两轮我就是这么在黑暗里猜的（连猜两次都错）。这条把决定性的事实用 9px 字画在窗口里：
+           前三轮我就是这么在黑暗里猜的（连猜两次都错）。这条把决定性的事实用 9px 字画在窗口里：
 
-             `css` = `.widget-shell` 的 `display`（`flex` ⇒ layout.css **确实加载了**）
+             `css` = `.widget-shell` 的 `display`（`flex` ⇒ 样式真的加载了）
              `bg`  = 胶囊的计算背景色（深色 ⇒ 样式生效；`rgba(0,0,0,0)` ⇒ 没生效）
              `bf`  = 有没有 `backdrop-filter`；`w/h` = 内尺寸；`q` = 查询串；`n` = 条目数
 
-           右边两个小方块是**画得出的对照**：
-             🟥 不透明红 —— 它都不显示 ⇒ 整扇窗的绘制都坏了（不只是胶囊）
-             🟦 半透明蓝 —— 它不显示而红的显示 ⇒ **alpha 合成**坏了
-           看一眼截图就能定位，不用再让它来回试。 */
+           右边两个小方块是**画得出的对照**：🟥 不透明红 / 🟦 半透明蓝
+           （红都不显示 ⇒ 整扇窗绘制坏了；红显示蓝不显示 ⇒ alpha 合成坏了）
+
+           ⚠️⚠️ **必须是 `absolute` + 脱离文档流**（2026-09-24 修）：
+           原来是 `fixed`，而 `fixed` 元素**仍会作为 flex item 参与布局** ——
+           它把 200px 的胶囊**撑到了 224px**（9px 文本 + 两个色块装不下）。
+           **诊断工具改变了被测对象** ⇒ 探针量到的宽度是假的（实测 224 而非 200）。
+           原生 `fetch(2/2)` 的 `absolute` 才是真正脱离。 */
         <div
           style={{
-            position: 'fixed', left: 0, top: 0, zIndex: 999999,
+            position: 'absolute', left: 0, top: 0, zIndex: 999999,
             font: '9px/1.25 ui-monospace, monospace', color: '#000',
             background: 'rgba(255,255,255,.88)', padding: '1px 3px',
-            pointerEvents: 'none', whiteSpace: 'pre', maxWidth: '100%',
+            pointerEvents: 'none', whiteSpace: 'pre',
+            maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis',
           }}
         >
           {diag}

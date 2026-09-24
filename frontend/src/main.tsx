@@ -9,61 +9,7 @@ import { Button } from '@/components/ui/button'
 import './index.css'
 import './styles/tokens.css'
 import App from './App'
-import StatusWidgetWindow from './components/StatusWidgetWindow'
 
-/**
- * 小窗渲染的**错误边界**（2026-09-24 第五轮加）。
- *
- * 为什么非要它不可：`window.onerror` **抓不到 React 渲染阶段的异常** ——
- * React 自己捕获后重抛（或直接走 error boundary 链路），不会冒泡到 window。
- * 而现在的证据链是「模块执行了（启动幕被摘掉）但 React 没画出来」⇒ **就是渲染抛错**，
- * 唯一缺的是那句错误文本。小窗又开不了 devtools、看不到 console ⇒ 只能写进日志文件。
- *
- * 用 class 组件是 React 的硬要求：**只有 class 能当 error boundary**，
- * 函数组件没有 `componentDidCatch`。这也解释了为什么之前那些 hook 写法一个都抓不到。
- */
-class WidgetErrorBoundary extends React.Component<
-  { children: React.ReactNode },
-  { err: string | null }
-> {
-  constructor(props: { children: React.ReactNode }) {
-    super(props)
-    this.state = { err: null }
-  }
-
-  static getDerivedStateFromError(e: unknown) {
-    return { err: e instanceof Error ? `${e.name}: ${e.message}` : String(e) }
-  }
-
-  componentDidCatch(e: unknown, info: React.ErrorInfo) {
-    const w = window as unknown as { __widgetLog?: (m: string) => void }
-    const detail = [
-      `React 渲染抛错：${e instanceof Error ? `${e.name}: ${e.message}` : String(e)}`,
-      `  componentStack: ${(info.componentStack || '').split('\n').slice(0, 6).join(' | ')}`,
-      e instanceof Error && e.stack ? `  stack: ${e.stack.split('\n').slice(0, 6).join(' | ')}` : '',
-    ].filter(Boolean).join('\n')
-    if (w.__widgetLog) w.__widgetLog(detail)
-    else console.error('[widget]', detail)
-  }
-
-  render() {
-    if (this.state.err) {
-      // 画在窗口里（9px，200×40 塞得下多少算多少）+ 已经写进 shell.log
-      return (
-        <pre
-          style={{
-            position: 'fixed', inset: 0, margin: 0, padding: '2px 4px',
-            background: '#3a0000', color: '#ffd9d9', overflow: 'hidden',
-            font: '9px/1.2 ui-monospace, monospace', whiteSpace: 'pre-wrap',
-          }}
-        >
-          {`[渲染失败]\n${this.state.err}`}
-        </pre>
-      )
-    }
-    return this.props.children
-  }
-}
 import Logo from './components/common/Logo'
 import { setApiBase } from './api/api'
 import { markFirstRun } from './bootState'
@@ -280,70 +226,21 @@ function Root() {
 }
 
 /**
- * 桌面状态控件小窗（R38 批 5b）：Rust 用 `index.html?widget=1` 开这扇窗。
+ * 桌面状态控件小窗**不再是这个入口的责任**（R38 批 5b，2026-09-24）。
  *
- * **必须在 `Root` 之前分流** —— 小窗里不该跑主窗口那套启动链路（后端探活、揭幕幕布、
- * 路由、首启浮窗、探针……）。它只要一个胶囊。
+ * 原来它走 `index.html?widget=1`、在这里用 `if (isWidgetWindow)` 分流 —— 但
+ * **静态 import 拦不住**：文件顶部那些 `import App from './App'` / react-router / shadcn /
+ * ECharts 会被**无条件**打进小窗那个 renderer。实测小窗 renderer **132MB**，
+ * 而 Chromium 基础开销只占小部分，大头是我们自己的代码与依赖。
+ *
+ * 现在小窗有**自己的入口**：`widget.html` → `src/widgetMain.tsx`（见 `vite.config.ts` 的多入口）。
+ * 这个文件只管主窗口 —— 于是小窗的加载量变成物理上的最小集，
+ * 而且不可能再被主窗口的代码影响。
  */
-const isWidgetWindow = new URLSearchParams(window.location.search).has('widget')
-
-// ⚠️ **小窗必须自己摘掉 `index.html` 里那层静态启动幕**（2026-09-24 真机反馈的真凶）。
-//
-// 那层幕是 `#boot-splash`：`position:fixed; inset:0; z-index:150` + **不透明粉底**
-// （`background:#ffa2b4`）。它存在的理由是"HTML 解析即绘制，消除启动白闪"，
-// 而**唯一**摘掉它的地方是 `Root` 的 effect（下面那个 `document.getElementById('boot-splash')`）
-// —— 小窗跑的是 `StatusWidgetWindow`，**根本不走 `Root`** ⇒ 幕永远摘不掉，
-// 把 200×40 的胶囊整个盖住。用户看到的就是"一块粉底、看不到胶囊"。
-//
-// 为什么放在**这里**（模块作用域）而不是 `StatusWidgetWindow` 的 effect 里：
-// 这是**静态 HTML 节点**，不等 React。早一帧摘掉就少一帧"先粉后黑"的闪。
-// 主窗口那条路径**不受影响** —— React 版 `<Splash>` 在 `Root` 首帧就位、像素级一致，
-// 所以这里只摘小窗的（主窗口仍然等 `Root` 挂载后再摘，保持原来的无白闪修复）。
-if (isWidgetWindow) {
-  document.getElementById('boot-splash')?.remove()
-  document.documentElement.dataset.widgetWindow = '1'
-
-  /**
-   * ⚠️ **把任何异常写进日志文件**（2026-09-24 第五轮）。
-   *
-   * 小窗 200×40 + 置顶 + 无边框：**开不了 devtools、看不到 console、窗口里的字也看不清**。
-   * 而现在的证据链是「模块执行了（启动幕被摘掉）但 React 没画出来」⇒ **渲染阶段抛错了** ——
-   * 唯一缺的就是那句错误文本。
-   *
-   * 走 `widget_diag` 命令写进数据目录的 `shell.log`（用户能整份发过来）。
-   * 动态 import：非桌面端没有这个模块，`catch` 掉即可。
-   */
-  const logToShell = (msg: string) => {
-    void (async () => {
-      try {
-        const { invoke } = await import('@tauri-apps/api/core')
-        await invoke('widget_diag', { info: msg })
-      } catch {
-        /* 非桌面端 / 命令不可用：至少留在 console 里 */
-        console.error('[widget]', msg)
-      }
-    })()
-  }
-  ;(window as unknown as { __widgetLog?: (m: string) => void }).__widgetLog = logToShell
-
-  logToShell(`main.tsx 模块执行 isWidget=true q=${location.search}`)
-  window.addEventListener('error', (e) => {
-    logToShell(`window.onerror ${e.message} @ ${(e.filename || '').split('/').slice(-1)[0]}:${e.lineno}`)
-  })
-  window.addEventListener('unhandledrejection', (e) => {
-    logToShell(`unhandledrejection ${String((e as PromiseRejectionEvent).reason)}`)
-  })
-}
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    {isWidgetWindow ? (
-      <WidgetErrorBoundary>
-        <StatusWidgetWindow />
-      </WidgetErrorBoundary>
-    ) : (
-      <Root />
-    )}
+    <Root />
   </React.StrictMode>,
 )
 

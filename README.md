@@ -252,6 +252,21 @@ Rust 子进程由 [Job Object 看门狗](frontend/src-tauri/src/lib.rs) 管理�
 | `docs/ROADMAP-DONE.md` | 已完成：已落地需求清单 + 版本 → devlog 索引 |
 | `devlog/` | 每个批次的变更记录（001–118） |
 
+## 🙏 参考与致谢
+
+桌面小窗（顶栏状态岛的独立浮窗形态）在设计时参考了下面几个开源项目的**做法与取舍**。
+**只借鉴设计思路，没有复制代码** —— 各项目的许可与版权归其作者所有：
+
+| 项目 | 技术栈 | 参考了什么 |
+|---|---|---|
+| [LuckyIsland](https://github.com/thisxiaoyuQAQ/LuckyIsland) | Tauri 2 + React | **主要参考**。①「一个窗口一个 HTML 入口」的多入口拆分（我们据此把主窗口与小窗拆成两份入口，小窗因此不再加载整站 JS/CSS）；②窗口状态机（隐藏 / 胶囊 / 紧凑 / 展开）与**以"当前顶边中心"为锚**的 resize 思路 —— 避免展开时横向跳动 |
+| [FocuSD](https://github.com/zzliu93-debug/FocuSD) | Tauri + React | **反向对照**：它走"单个固定大窗口"路线来规避 resize 抖动。我们最终没采用，但正因为它，才确定了本项目小窗要**收窄形态梯度**（见 `docs/TODO.md` §1.2） |
+| [RustyIsland](https://github.com/iamdhakrey/RustyIsland) | Rust (Tauri) + React | 无边框、置顶、透明背景悬浮挂件的窗口配置组合 |
+| [TokenNote](https://github.com/imw61/tokennote) | Tauri 2 + React | 桌面悬浮窗做「轻量概览」的信息密度取舍 |
+
+> ⚠️ **一个明确的边界**：这些项目**都没有**用 Rust 自绘 UI，全部是「WebView + HTML/CSS」。
+> 这也是本项目小窗的路线 —— 保留 CSS 动效体系（形态渐变、弹簧缓动等）比省几十 MB 内存更值。
+
 ## 📄 许可与第三方声明
 
 **项目自身代码**：[LICENSE](LICENSE)（MIT License）。你可以在遵守条款的前提下自由使用、修改、分发。

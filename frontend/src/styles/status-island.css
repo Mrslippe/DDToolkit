@@ -1,0 +1,358 @@
+/* ⚠️ **`box-sizing: border-box` 必须在这里自己声明**（2026-09-24 独立入口后暴露）。
+
+   原来这条是 **Tailwind preflight** 设的全局规则（在 `index.css` 里），
+   而小窗的独立入口（`widgetMain.tsx`）**只引 `tokens.css` + 本文件** —— 拿不到 preflight。
+   于是 `.si-island[data-density='widget']` 的 `width: 200px` + `padding: 0 12px`
+   在默认的 `content-box` 下算成 **224px**（实测），比规格 §7 的 200 宽了 24px。
+
+   教训：**拆入口会把"蹭全局 reset"的地方全部暴露出来** ——
+   这类隐式依赖在单入口时代是看不见的。凡是靠 reset 的规则，本文件都要自带。 */
+.si-island,
+.si-island *,
+.si-panel,
+.si-panel *,
+.widget-shell,
+.widget-shell * {
+  box-sizing: border-box;
+}
+
+/* ── 状态岛（胶囊 + 面板）─────────────────────────────────────────────
+   R38 批 5b 之后**从 `layout.css` 抽出来**：小窗（`widget.html`）与主窗口共用这一份，
+   而不是让小窗也加载整个 1494 行的 `layout.css`。
+
+   为什么值得抽：小窗只渲染状态岛，而 `main.tsx` 的静态 import 会把
+   **整个应用**（App / react-router / shadcn / ECharts）都拉进它那个 renderer ——
+   实测小窗 renderer 占 **132MB**，其中 Chromium 基础开销只占小部分，
+   大头是我们自己的代码与依赖。抽成独立入口 + 独立样式表之后，小窗只加载它需要的。
+
+   ⚠️ **改这个文件要同时想着两个宿主**（顶栏 `bar` 与桌面控件 `widget`）——
+   宿主差异靠 `[data-density=...]` 区分，别再往 `layout.css` 里加状态岛的规则。 */
+
+/* ── 顶栏状态岛（R12a，devlog/089）────────────────────────────────────
+   复用 `.topbar-status` 的胶囊外观（浅粉底/胶囊/居中），新增的是：
+   条目计数、chevron、以及 portal 出来的面板。
+   四态：idle（无容器、绿点 + 「数据服务运行中」）· pill（一条主文案）·
+   expand（面板）· 空闲轮播（R12b）。 */
+.si-island {
+  cursor: default;
+}
+
+.si-island.on {
+  cursor: pointer;
+}
+
+.si-island:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+.si-island .si-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* ── R38 批 4「打断 / 重定向」：从「keyframes 重放」改成「transition 重定向」─────
+     keyframes 被打断会**从头重放**（连续换字每次都闪），transition 从**当前值**继续。
+     **两相就够，不需要单独的 `in` 相** —— CSS 过渡取的是**变化后**那一边的
+     `transition-duration`：进 `.is-out` 用 `--motion-instant`（§3 规则 2
+     「离场比入场快 80–100ms」），回基态用 `--motion-fast` + `--motion-lag`
+     （§3 规则 1「形变先行、内容后到」）。淡入就是"撤掉 `.is-out`"这次过渡本身。 */
+  transition:
+    opacity var(--motion-fast) ease var(--motion-lag),
+    transform var(--motion-fast) ease var(--motion-lag);
+}
+
+/* §4「0–60ms 旧文案先撤：位移 6–8px 朝锚点方向 + 缩放 0.96 + 淡出」
+   —— 锚点是左侧的 `si-dot`，所以朝左（负 X）。 */
+.si-island .si-text.is-out {
+  opacity: 0;
+  transform: translateX(-7px) scale(0.96);
+  transition-duration: var(--motion-instant);
+  transition-delay: 0ms;   /* 撤**立刻**开始，不等 `--motion-lag` */
+}
+
+/* ── R38 批 5：桌面控件宿主（`data-density="widget"`，规格 §7）──────────────────
+   它要**浮在任意壁纸上** ⇒ 材质必须自己保证可读性，不能借用顶栏的粉底。
+
+   ⚠️ **深底的不透明度是算出来的，不是调出来的**：`rgba(18,18,22,α)` 叠在**最亮**（纯白）
+   与**最暗**（纯黑）壁纸上，白色文字的对比度都要 ≥ **4.5:1**（§7「亮/暗壁纸都要过」）。
+   取 α = 0.72 ⇒ 白底上有效底 ≈ `rgb(84,84,86)`、黑底上 ≈ `rgb(13,13,16)`，
+   白字对比度实测 **7.51:1** 与 **19.41:1** —— 两端都过，中间壁纸自然落在区间内。
+   探针按**计算样式解析出 α 并复算这两个极端**（见 `--status-island` 的 widget 断言）。
+
+   `position/left/transform/max-width` 全部复位：§8 要求宿主无关 ——
+   顶栏那套「absolute + translateX(-50%) 居中」在这里不成立，**它自己就是窗口**。 */
+.si-island[data-density='widget'] {
+  position: relative;
+  left: auto;
+  transform: none;
+  width: 200px;            /* §7 折叠尺寸 200 × 40 */
+  height: 40px;
+  max-width: none;
+  padding: 0 12px;
+  /* ⚠️ **这里刻意不用 `backdrop-filter`**（2026-09-24 第三轮真机反馈改）。
+     规格 §7 原本写的是 `backdrop-filter: blur(20px) saturate(1.4)`，实测在**真窗口**里
+     会出现"**只画模糊、不画背景与文字**"—— 用户看到的就是一块什么都没有的磨砂方块。
+
+     为什么它在这里格外危险：**本仓自己记过一笔**（`posts.css` R45 那条）——
+     "`backdrop-filter` 是**全仓唯一一处压在全幅背景图上的合成效果**，而本仓有
+     `filter: blur` **拖垮 WebView2 合成器**的历史记录，不必要就不留"。
+     小窗这回更极端：窗口是**透明的**，`backdrop-filter` 采样的就是**桌面**。
+
+     而它在这里**几乎不贡献任何东西**：α=0.72 的黑底只透出 28%，其中被模糊改变的
+     只有壁纸的高频细节（约 3.5% 的像素贡献）。**危险且无用** ⇒ 去掉。
+     去掉后靠**提高不透明度**保证可读性：α=0.94 时最亮壁纸上仍是 17:1 以上（§7 要求 ≥4.5:1）。
+     代价：失去"透出壁纸"的观感，换成"实底浮片"—— 与全站浮片族现在的口径一致。 */
+  background: rgba(20, 20, 26, 0.94);
+  color: #fff;
+  /* 1px 高光内边（"光从上面来"）—— 桌面控件"浮起来"的关键 */
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
+}
+
+/* 事件态：顶栏宿主是**整块变粉**，但桌面控件不能 —— 那会毁掉深色材质。
+   改成「深底不变 + 一圈粉环」，**有事发生**照样看得见（§7 没规定，取这条）。 */
+.si-island[data-density='widget'].on {
+  background: rgba(20, 20, 26, 0.94);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    inset 0 0 0 1px rgba(233, 92, 141, 0.85);
+}
+
+/* 展开面板：尺寸由 JS 给（§7 widget 展开宽 280）；材质跟胶囊同族 ——
+   否则深色胶囊下面吊一块白板会像"两块积木"（§5 同心圆角那条的原话）。
+   同样不用 `backdrop-filter`（理由见上面那段）。 */
+.si-panel[data-density='widget'] {
+  background: rgba(20, 20, 26, 0.97);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+/* 桌面状态控件**小窗**的根容器（R38 批 5b，`?widget=1`）。窗口本身就是透明的 200×40
+   无边框，所以这里不能有背景、不能有内距 —— 看得见的就是那颗胶囊自己。
+   `user-select: none`：整个面都要能拖（拖动走**指针位移阈值**，见 StatusWidgetWindow ——
+   不能用 `data-tauri-drag-region`，那会在 mousedown 就抢走点击，面板就点不开了）。 */
+/* 小窗的**窗口底必须全透明**（2026-09-24 真机反馈加）。
+   主题令牌 `--c-bg*` 是给应用壳用的，小窗里不该有它们 —— 只要有一颗背景色漏出来，
+   200×40 的窗口就会显示成"一块粉/白方块"。
+
+   ⚠️ 必须盖住**两处**，少一处都不行：
+   ① `index.html` 内联样式里的 `html{background:#ffa2b4}` —— 那是"首绘即主色、消除启动中间态"
+      的刻意设计，主窗口靠揭幕完成后 `main.tsx` 把它切回透明；**小窗没有揭幕** ⇒ 会一直是粉的。
+   ② 主题令牌可能带给根元素的底色。
+   用属性选择器钉在 `<html>` 上（`main.tsx` 分流处设的 `data-widget-window`）。 */
+html[data-widget-window],
+html[data-widget-window] body,
+html[data-widget-window] #root {
+  background: transparent !important;
+  margin: 0;
+  overflow: hidden;
+}
+
+.widget-shell {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* 计数：多于一条时才出现（让用户知道点开还有别的） */
+.si-count {
+  flex: none;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.28);
+  color: inherit;
+  font-size: 10px;
+  line-height: 15px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  animation: si-pop-in var(--motion-fast) ease both;   /* 徽章出现/计数变化时不硬切（React 侧用 key 触发重放） */
+}
+
+@keyframes si-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.si-chevron {
+  flex: none;
+  opacity: 0.85;
+  transition: transform var(--motion-base) ease;   /* 展开时翻转而不是瞬移（与面板入场同一时长） */
+}
+
+.si-island.open .si-chevron {
+  transform: rotate(180deg);
+}
+
+/* 告警点：红（风控冷却/登录失效）——与 busy 的琥珀、ok 的白区分开 */
+.topbar-status-dot.warn {
+  background: #ff4d4f;
+}
+
+/* 面板：portal 到 body + fixed（顶栏 overflow:hidden 会裁掉内联面板） */
+.si-panel {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  max-height: 60vh;
+  border: 1px solid var(--c-border);
+  border-radius: 14px;   /* R38 批 3：对齐规格 §5「面板圆角 14px」（原 10px）。
+                            同心圆角规则（内层元素圆角 = 面板圆角 − 内边距）本批**无对象** ——
+                            面板子元素全是通栏行（head / scroll / item），见 devlog/170 */
+  background: var(--c-bg-card);
+  box-shadow: var(--shadow-dialog);
+  overflow: hidden;
+  /* 入场（R12b 用户期望②「优雅流畅」）：从状态岛下方 6px 处浮现 + 一点点放大，
+     用全站标准曲线 `--ease-standard`；`both` 保证首帧就处于 from 态（否则会先闪一帧原位）。
+     ⚠️ R38 批 1：原曲线是 `cubic-bezier(0.22, 0.61, 0.36, 1)` —— 全站唯一的异类，
+     规格 §2 误以为"已在用标准曲线"；本批对齐成令牌。 */
+  transform-origin: top center;
+  animation: si-panel-in var(--motion-base) var(--ease-standard) both;
+}
+
+@keyframes si-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.si-panel-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 12px 7px;
+  border-bottom: 1px solid var(--c-border);
+}
+
+.si-panel-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--c-text-main);
+}
+
+.si-panel-hint {
+  font-size: 10.5px;
+  color: var(--c-text-sub);
+}
+
+.si-panel-scroll {
+  max-height: calc(60vh - 74px);
+}
+
+.si-list {
+  margin: 0;
+  padding: 6px 0;
+  list-style: none;
+}
+
+.si-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 12px;
+}
+
+.si-item + .si-item {
+  border-top: 1px dashed var(--c-border);
+}
+
+.si-item-icon {
+  flex: none;
+  margin-top: 1px;
+  color: var(--c-text-sub);
+}
+
+.si-item-icon.k-alert {
+  color: #ff4d4f;
+}
+
+.si-item-icon.k-progress,
+.si-item-icon.k-report {
+  color: var(--c-primary-deep);
+}
+
+.si-item-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.si-item-text {
+  font-size: 12.5px;
+  color: var(--c-text-main);
+  overflow-wrap: anywhere;
+}
+
+.si-item-detail {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--c-text-sub);
+  overflow-wrap: anywhere;
+}
+
+.si-item-meta {
+  font-size: 10.5px;
+  color: var(--c-text-sub);
+}
+
+.si-item-action {
+  flex: none;
+  align-self: center;
+  padding: 3px 9px;
+  border: 1px solid var(--c-primary);
+  border-radius: 999px;
+  background: var(--c-bg-card);
+  color: var(--c-primary-deep);
+  font-family: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.si-item-action:hover {
+  background: var(--sel-bg);
+}
+
+.si-panel-foot {
+  padding: 6px 12px 8px;
+  border-top: 1px solid var(--c-border);
+}
+
+.si-panel-order {
+  font-size: 10.5px;
+  color: var(--c-text-sub);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .si-chevron {
+    transition: none;
+  }
+
+  .si-count {
+    animation: none;
+  }
+
+  .si-panel {
+    animation: si-panel-in-fade var(--motion-fast) ease both;
+  }
+}

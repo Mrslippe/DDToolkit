@@ -9,6 +9,7 @@ import ErrorBoundary from './components/ErrorBoundary'
 import { useIsMaximized } from './hooks/useIsMaximized'
 import { clearShellState, loadShellState, shouldRestoreFromTray } from './utils/shellState'
 import './styles/layout.css'
+import './styles/status-island.css'
 
 /**
  * 应用壳布局（参照设计稿 Frame1672）：

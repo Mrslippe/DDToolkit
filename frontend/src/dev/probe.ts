@@ -1532,6 +1532,29 @@ export async function runUiProbe(): Promise<void> {
     result.idleCount = !!island()?.querySelector('.si-count')
     result.spacerIdle = spacerW()
     result.topbarHIdle = topbarH()
+    // ⓪-b **后端侧的真凭据**（2026-09-24 加）：脚本要判"此刻到底有没有任务在跑"，
+    //     必须问**后端**（`/vtuber/fetch-status` 的 `external.running`），
+    //     不能拿 DOM 症状（胶囊亮着）当自己的前提 —— 那是循环论证：
+    //     "因为亮着所以有任务"会把**真 bug（空闲却常亮）**一并当成环境问题放过。
+    //     ⚠️ 直接用 `readTopbar()` 那一份（它已经 fetch 过 fetch-status，
+    //     口径与顶栏其它断言完全一致，不另起一套请求）。
+    result.idleBackend = await (async () => {
+      try {
+        const base = (import.meta.env.VITE_API_BASE as string | undefined) ?? '/api'
+        const r = await fetch(`${base}/vtuber/fetch-status`)
+        if (!r.ok) return { ok: false }
+        const st = await r.json()
+        return {
+          ok: true,
+          externalRunning: !!st?.external?.running,
+          externalLabel: st?.external?.label ?? null,
+          accountRunning: !!st?.account?.running,
+          postRunning: !!st?.post?.running,
+        }
+      } catch {
+        return { ok: false }
+      }
+    })()
 
     // ② 瞬时消息（走真实事件源，不直接改 React state）
     window.dispatchEvent(new CustomEvent('ddtoolkit:pill-message', {
@@ -1841,12 +1864,15 @@ export async function runUiProbe(): Promise<void> {
     return
   }
 
-  // 桌面状态控件**小窗视图**（`?probe=status-widget-window&widget=1`，R38 批 5b）：
+  // 桌面状态控件**小窗视图**（`widget.html?probe=status-widget-window`，R38 批 5b）：
   // 配合 `ui_probe.py --status-widget` 的第二段。
   //
-  // 它验的是**分流本身**：`main.tsx` 在 `Root` 之前按 `?widget=1` 分叉，小窗里**不该**
-  // 跑主窗口那套（后端探活 / 揭幕幕布 / 路由 / 顶栏）。所以最要紧的两条是
-  // "胶囊在" 和 "顶栏不在" —— 后者错了就说明分流没生效，小窗里跑起了整个应用。
+  // ⚠️ **2026-09-24 改了入口**：原来走 `index.html?widget=1` + `main.tsx` 里的运行时判断，
+  // 但**静态 import 拦不住**（整个应用会被打进小窗那个 renderer，实测 132MB）。
+  // 现在小窗是**独立入口** `widget.html` → `src/widgetMain.tsx`。
+  //
+  // 所以这里验的也换了：不再是"运行时分流生效没"，而是**独立入口本身** ——
+  // 小窗里**不该出现主窗口的任何东西**（顶栏 / 侧栏 / 启动幕）。
   //
   // ⚠️ 条目列表在这里**必然是空的**：小窗只听主窗口推的 `widget:notices`，
   // 而浏览器里没有 Tauri 事件。所以它渲染的是空闲态 —— 这正是我们要量的东西。

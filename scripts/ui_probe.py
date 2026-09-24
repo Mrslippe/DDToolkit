@@ -1487,7 +1487,7 @@ def main() -> int:
     ap.add_argument(
         "--status-widget",
         action="store_true",
-        help="只跑一档宽度：桌面控件宿主（R38 批 5，规格 §7）—— `?density=widget` 下量 "
+        help="只跑一档宽度：桌面控件（R38 批 5）—— ① `?density=widget` 量材质与尺寸；② 量**独立入口 `widget.html`**（不该加载主窗口那套）"
              "折叠尺寸 200×40 / 面板宽 280 / 深底+blur+1px 高光内边 / **按 α 复算纯白与纯黑"
              "壁纸上的文字对比度 ≥ 4.5:1** / **不许有 backdrop-filter**（真窗口下会盖掉内容）/ 不复用顶栏那套 absolute 居中（§8 宿主无关）",
     )
@@ -2687,54 +2687,106 @@ def main() -> int:
             if not si:
                 failures.append(f"@{w} status-island: 没量到状态岛段（探针未跑完？）")
             else:
-                if si.get("idleLit"):
-                    failures.append(f"@{w} status-island: 空闲态就亮着容器"
-                                    f"（文案={si.get('idleText')!r}）—— 用户 2026-09-10 口径："
-                                    f"频繁轮询不占顶栏，空闲只有绿点")
-                # ── 空闲轮播（R12b 起；**R19 起下线**）───────────────────
-                # 用户口径（R19，devlog/096）：「顶栏状态栏空置的时候轮播的语录集暂时下线，
-                # 等之后库中真有了条目再上线」。所以现在的判据与 R12b 那版**相反**：
-                # 空闲文案必须**恒为状态文案、不轮播**；池子与开关状态照旧量出来
-                # （池子还在 = 扩展点没被删；`data-idle-carousel` 是开关的单一事实来源，
-                # 上线时把它翻成 'on' 并恢复"必须轮播"的断言 —— 两处一起改，否则这条会红）。
-                # 语录忌词那条**继续保留**：将来接真实条目时同样不许长成进度文案。
-                size = si.get("idleSize") or 0
-                idxs = si.get("idleIndexes") or []
-                texts = si.get("idleTexts") or []
-                pool = si.get("idlePool") or []
-                if size < 2:
-                    failures.append(f"@{w} status-island: 空闲池只有 {size} 格 —— "
-                                    f"轮播虽已下线，池子与扩展点要留着（`data-idle-size`）")
-                if len(pool) != size:
-                    failures.append(f"@{w} status-island: 轮播池内容 {len(pool)} 条与池长 {size} 对不上"
-                                    f"（`data-idle-pool` 的分隔编码会因此失真）")
-                if pool and pool[0] != "数据服务运行中":
-                    failures.append(f"@{w} status-island: 轮播第 0 格是 {pool[0]!r}，"
-                                    f"应为「数据服务运行中」—— 状态文案不能被语录顶掉")
-                for t in pool:
-                    for bad in ("轮询", "抓取中", "同步"):
-                        if bad in (t or ""):
-                            failures.append(f"@{w} status-island: 池内文案 {t!r} 里出现进度词"
-                                            f"「{bad}」—— 空闲文案不许长得像任务进度")
-                if si.get("idleCarousel") != "off":
-                    failures.append(f"@{w} status-island: 轮播开关是 {si.get('idleCarousel')!r}，"
-                                    f"R19 起应为 'off'（语录集暂时下线；要上线就改 "
-                                    f"`IDLE_CAROUSEL_ENABLED` 并同步这条断言）")
-                for i, t in enumerate(texts):
-                    if t != "数据服务运行中":
-                        failures.append(f"@{w} status-island: 第 {i} 次采样的空闲文案是 {t!r}，"
-                                        f"应为「数据服务运行中」—— 轮播下线后不该再轮换语录")
-                    if idxs[i] != 0:
-                        failures.append(f"@{w} status-island: 第 {i} 次采样的轮播索引是 "
-                                        f"{idxs[i]}，下线时应恒为 0")
-                if len(texts) == 3 and len(set(texts)) != 1:
-                    failures.append(f"@{w} status-island: 空闲文案在三次采样里变了（{texts}）"
-                                    f"—— 轮播已下线，应当恒定")
+                # ── ⚠️ **环境前置：此刻必须真的空闲**（2026-09-24 加）──────────
+                #
+                # 下面这一整段（到「空闲文案恒定」为止）全部是**空闲语义**断言：
+                # 它们量的是"没有任务在跑时，顶栏状态岛应该长什么样"。
+                #
+                # 而探针跑在**真机**上，真机**可能真的有抓取任务在跑**。本项目实测撞到
+                # `app/main.py` 的**启动外部补抓**（`start_external_catchup`）：探针自己起的
+                # 后端一启动就会同步 N 个主账号的第三方数据，于是：
+                #   · `lit=true` ⇒ 胶囊亮着、`data-idle-pool` / `data-idle-size` **根本不挂**
+                #     （StatusIsland L213 的 `lit ? undefined : …`）
+                #   · 屏幕上量到的文案是同步进度 ⇒ 每条"空闲文案应为「数据服务运行中」"全红
+                # 看起来像产品崩了，其实**是探针的环境假设塌了**。
+                #
+                # 所以：先判环境，不空闲就整段跳过（`else:` 包住）。
+                #
+                # ⚠️ **跳过必须"有凭据"**（2026-09-24 加固）：判据取**后端**
+                # `/vtuber/fetch-status` 的 `external.running`（页面侧 `idleBackend` 带回），
+                # **不能**拿 DOM 症状（胶囊亮着）当自己的前提 —— 那是循环论证，
+                # 会把"空闲却常亮"这个**真 bug** 一起当环境问题放过。
+                _be = si.get("idleBackend") or {}
+                _backend_ok = bool(_be.get("ok"))
+                _busy = [k for k in ("externalRunning", "accountRunning", "postRunning")
+                         if _be.get(k)]
+                _lit_idle = si.get("idleLit")
+                if not _lit_idle:
+                    _run_idle = True                      # 真·空闲：照常判
+                elif not _backend_ok:
+                    _run_idle = False                     # 判不了环境：跳过，且不伪造成失败
+                    print(f"  [!] 胶囊亮着，但后端凭据取不到（{_be!r}）—— 环境判不了，"
+                          f"整段跳过空闲语义断言（宁可跳过，也不把'量不到'伪造成'做错了'）")
+                elif _busy:
+                    _run_idle = False                     # 前提塌了：有真任务在跑
+                    print(f"  [!] 此刻**不是空闲态**（亮起=True，文案={si.get('idleText')!r}）"
+                          f"—— 后端凭据：{'/'.join(_busy)} 在跑"
+                          f"（external label={_be.get('externalLabel')!r}）。"
+                          f"整段跳过下列空闲语义断言（前提不成立，不是产品做错了）："
+                          f"空闲池长 / 池编码 / 轮播开关 / 空闲文案恒定")
+                else:
+                    # 亮着 + 后端**确认**没任务 = 真回归（用户 2026-09-10 口径）
+                    _run_idle = False
+                    failures.append(
+                        f"@{w} status-island: 空闲态就亮着容器"
+                        f"（文案={si.get('idleText')!r}）而**后端说没有任何任务在跑**"
+                        f"（external/account/post 全 false）—— 频繁轮询不占顶栏，"
+                        f"空闲只有绿点")
+                if _run_idle:
+                    # ── 空闲轮播（R12b 起；**R19 起下线**）───────────────────
+                    # 用户口径（R19，devlog/096）：「顶栏状态栏空置的时候轮播的语录集暂时下线，
+                    # 等之后库中真有了条目再上线」。所以现在的判据与 R12b 那版**相反**：
+                    # 空闲文案必须**恒为状态文案、不轮播**；池子与开关状态照旧量出来
+                    # （池子还在 = 扩展点没被删；`data-idle-carousel` 是开关的单一事实来源，
+                    # 上线时把它翻成 'on' 并恢复"必须轮播"的断言 —— 两处一起改，否则这条会红）。
+                    # 语录忌词那条**继续保留**：将来接真实条目时同样不许长成进度文案。
+                    size = si.get("idleSize") or 0
+                    idxs = si.get("idleIndexes") or []
+                    texts = si.get("idleTexts") or []
+                    pool = si.get("idlePool") or []
+                    if size < 2:
+                        failures.append(f"@{w} status-island: 空闲池只有 {size} 格 —— "
+                                        f"轮播虽已下线，池子与扩展点要留着（`data-idle-size`）")
+                    if len(pool) != size:
+                        failures.append(f"@{w} status-island: 轮播池内容 {len(pool)} 条与池长 "
+                                        f"{size} 对不上（`data-idle-pool` 的分隔编码会因此失真）")
+                    if pool and pool[0] != "数据服务运行中":
+                        failures.append(f"@{w} status-island: 轮播第 0 格是 {pool[0]!r}，"
+                                        f"应为「数据服务运行中」—— 状态文案不能被语录顶掉")
+                    for t in pool:
+                        for bad in ("轮询", "抓取中", "同步"):
+                            if bad in (t or ""):
+                                failures.append(f"@{w} status-island: 池内文案 {t!r} 里出现进度词"
+                                                f"「{bad}」—— 空闲文案不许长得像任务进度")
+                    if si.get("idleCarousel") != "off":
+                        failures.append(f"@{w} status-island: 轮播开关是 {si.get('idleCarousel')!r}，"
+                                        f"R19 起应为 'off'（语录集暂时下线；要上线就改 "
+                                        f"`IDLE_CAROUSEL_ENABLED` 并同步这条断言）")
+                    for i, t in enumerate(texts):
+                        if t != "数据服务运行中":
+                            failures.append(f"@{w} status-island: 第 {i} 次采样的空闲文案是 {t!r}，"
+                                            f"应为「数据服务运行中」—— 轮播下线后不该再轮换语录")
+                        if i < len(idxs) and idxs[i] != 0:
+                            failures.append(f"@{w} status-island: 第 {i} 次采样的轮播索引是 "
+                                            f"{idxs[i]}，下线时应恒为 0")
+                    if len(texts) == 3 and len(set(texts)) != 1:
+                        failures.append(f"@{w} status-island: 空闲文案在三次采样里变了（{texts}）"
+                                        f"—— 轮播已下线，应当恒定")
                 if not si.get("litOn"):
                     failures.append(f"@{w} status-island: 派发 pill-message 后状态岛没亮起")
                 elif "探针消息" not in (si.get("litText") or ""):
-                    failures.append(f"@{w} status-island: 亮起后文案仍是 {si.get('litText')!r}，"
-                                    f"没换成瞬时消息")
+                    # ⚠️ **只在没有更高优先级条目时才判**（2026-09-24 修）。
+                    # `KIND_PRIORITY` 里 `progress: 3` **高于** `message: 1` ——
+                    # 所以真有抓取任务在跑时，瞬时消息**本来就该被压下去**（设计如此：
+                    # "正在跑的任务"比"操作成功"更该被看见）。原来这里无条件判"必须换成探针消息"，
+                    # 于是在有后台任务的机器上必然误报。
+                    _lit = si.get("litText") or ""
+                    if "同步" in _lit or "抓取" in _lit:
+                        print(f"  [!] 亮起后文案是 {_lit!r} —— 有更高优先级的 progress 条目"
+                              f"（progress=3 > message=1），瞬时消息被正确压下去。跳过这条断言")
+                    else:
+                        failures.append(f"@{w} status-island: 亮起后文案仍是 {_lit!r}，"
+                                        f"没换成瞬时消息")
                 # ── 悬停呼出（R39-C）：四条判据，各对应一种"做错了也看着能用"的错法 ──
                 if si.get("panelAfterFlick"):
                     failures.append(f"@{w} status-island: 鼠标**掠过**（60ms 内进出）也弹出了面板"
@@ -2870,7 +2922,11 @@ def main() -> int:
                                     f"—— 会出现方角中间态（§10「中间态合法」）")
                 if not si.get("panelClosedByEsc"):
                     failures.append(f"@{w} status-island: Esc 没收起面板")
-                if si.get("afterTtlLit"):
+                # ④ 过期自清 —— **同一条环境前置**（2026-09-24 加）：
+                #    "ttl 过后岛回空闲"只在**真的空闲**时才成立。后台有 progress 任务时
+                #    岛本来就该继续亮着（那是任务，不是过期没清）。
+                #    所以跟上面整段共用 `_run_idle`：真回归那一支已经单独报过红了。
+                if _run_idle and si.get("afterTtlLit"):
                     failures.append(f"@{w} status-island: 瞬时消息过了 ttl 还亮着"
                                     f"（文案={si.get('afterTtlText')!r}）—— 过期条目必须自己消失")
                 if not failures:
@@ -3028,9 +3084,17 @@ def main() -> int:
             if not failures:
                 print("  [ok] 桌面控件宿主：200×40 / 实底+高光内边 / 两极端壁纸对比度达标 / 不依赖顶栏 / 无 backdrop-filter")
 
-            # ── 第二段：**小窗视图**（`?widget=1`）────────────────────────────
-            # 验的是 main.tsx 的**分流本身**：小窗里不该跑主窗口那套。
-            wurl = f"http://localhost:{vite_port}{route}?probe=status-widget-window&widget=1"
+            # ── 第二段：**小窗视图**（`widget.html`，独立入口）────────────────
+            # ⚠️ **2026-09-24 改了入口**：原来走 `index.html?widget=1`、靠 `main.tsx` 里
+            #    的**运行时**判断分流 —— 但**静态 import 拦不住**，整个应用（App / react-router /
+            #    shadcn / ECharts / layout.css）都会被拉进小窗那个 renderer。
+            #    实测小窗 renderer **132MB**，而 Chromium 基础开销只占小部分。
+            #    现在小窗有**自己的入口** `widget.html` → `src/widgetMain.tsx`
+            #    （Vite 多入口，见 `vite.config.ts`）⇒ 加载量变成物理上的最小集。
+            #
+            #    所以这一段的判据也跟着变了：不再验"运行时分流生效没"，
+            #    而是验**独立入口本身**（小窗里不该出现主窗口的任何东西）。
+            wurl = f"http://localhost:{vite_port}/widget.html?probe=status-widget-window"
             print(f"[probe] status-widget-window @{w} → {wurl}")
             wres = _run_probe(edge, wurl, w, args.height, WORK, "status-widget-window")
             ww = ((wres or {}).get("statusWidgetWindow") or {})
@@ -3062,10 +3126,13 @@ def main() -> int:
                         failures.append(f"@{w} status-widget: 小窗的 {label} 背景是 {val!r}，"
                                         f"应全透明 —— 不透明背景会让 200×40 的窗口"
                                         f"显示成一块方块")
-                if not ww.get("hasWidgetMarker"):
-                    failures.append(f"@{w} status-widget: 小窗没挂 "
-                                    f"`<html data-widget-window=\"1\">` —— "
-                                    f"透明底色那条规则就不会生效")
+                # 独立入口（`widget.html`）把全透明写进自己的 <style> 了，
+                # 不再需要 `data-widget-window` 那个运行时开关 —— 挂了反而是**没清干净**。
+                if ww.get("hasWidgetMarker"):
+                    failures.append(f"@{w} status-widget: 小窗还挂着 "
+                                    f"`<html data-widget-window=\"1\">` —— 那是**旧的**运行时开关"
+                                    f"（`layout.css` 的选择器用它）；独立入口已把全透明写进 "
+                                    f"`widget.html` 的 <style>，不该再有")
                 # ⚠️ **渲染抛错**的判据：症状是"只有一块背景、胶囊没了" ——
                 # 也就是 React 在这里抛异常、整棵树没渲染出来。
                 if not ww.get("rootChildren"):
@@ -3075,17 +3142,29 @@ def main() -> int:
                 if ww.get("density") != "widget":
                     failures.append(f"@{w} status-widget: 小窗里的胶囊 density 是 "
                                     f"{ww.get('density')!r}，应为 'widget'")
-                if ww.get("size") != [200, 40]:
-                    failures.append(f"@{w} status-widget: 小窗里胶囊尺寸是 {ww.get('size')}，"
-                                    f"应为 [200, 40]")
+                # ⚠️ **尺寸必须精确等于 200×40**（2026-09-24 收严）。
+                #
+                # 一度放宽过：`width: 200px` + `padding: 0 12px` 在 `content-box` 下
+                # 算成 **224px** —— 根因是 `box-sizing: border-box` 原本由 Tailwind preflight
+                # 全局提供，而小窗的**独立入口拿不到它**（只引 tokens + status-island）。
+                # 已在 `status-island.css` 里自带重置 ⇒ 现在可以精确判。
+                #
+                # **别再放宽这条**：宽度是 §7 的硬规格（200×40），而且"胶囊比声明的宽 24px"
+                # 正是那种"看着没问题、量了才发现"的漂移。
+                sz = ww.get("size") or [0, 0]
+                if sz != [200, 40]:
+                    failures.append(f"@{w} status-widget: 小窗里胶囊尺寸是 {sz}，应为 [200, 40]"
+                                    f"（`box-sizing` 是不是又丢了？独立入口拿不到 preflight）")
                 if ww.get("centerErr") != [0, 0]:
                     failures.append(f"@{w} status-widget: 胶囊在小窗里没居中（误差 "
                                     f"{ww.get('centerErr')}px）—— `.widget-shell` 的 flex 居中没生效")
-                # ⚠️ 这条是**分流**的判据：`?widget=1` 没生效时小窗里会跑起整个应用
+                # ⚠️ 这条是**独立入口**的判据（2026-09-24 起）：小窗里出现主窗口的东西，
+                #    说明它又走回"加载整个应用"那条路了（`widget.html` 被改回 `index.html`？）
                 for key, label in (("hasTopbar", "顶栏"), ("hasSidebar", "侧栏")):
                     if ww.get(key):
                         failures.append(f"@{w} status-widget: 小窗里出现了{label} —— "
-                                        f"`main.tsx` 的 `?widget=1` 分流没生效（跑起了整个应用）")
+                                        f"`widget.html` 这个**独立入口**没生效"
+                                        f"（它加载了主窗口那套 ⇒ 又变成 132MB 了）")
             if not failures:
                 print("  [ok] 桌面控件小窗：分流生效（无顶栏/侧栏）/ 胶囊居中 200×40")
             for b in failures:
