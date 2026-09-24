@@ -248,6 +248,22 @@ const isWidgetWindow = new URLSearchParams(window.location.search).has('widget')
 if (isWidgetWindow) {
   document.getElementById('boot-splash')?.remove()
   document.documentElement.dataset.widgetWindow = '1'
+
+  // ⚠️ **小窗的兜底错误显示**（2026-09-24 第三轮真机反馈加）。
+  //
+  // 小窗是 200×40 + 置顶 + 无边框，**没法开 devtools、看不到 console** ——
+  // 一旦渲染抛错，用户只会看到"一块空白"，而排查手段为零（前两轮我就是在盲猜）。
+  // 这里把错误**画在窗口里**：至少"有没有抛错、抛在哪个文件哪一行"不用再猜。
+  window.addEventListener('error', (e) => {
+    const el = document.createElement('pre')
+    el.id = 'widget-error'
+    el.style.cssText =
+      'position:fixed;inset:0;z-index:99999;margin:0;padding:2px 4px;background:#3a0000;' +
+      'color:#ffd9d9;font:9px/1.2 ui-monospace,monospace;white-space:pre-wrap;overflow:hidden'
+    el.textContent =
+      `[widget error] ${e.message}\n${(e.filename || '').split('/').slice(-1)[0]}:${e.lineno}`
+    document.body.appendChild(el)
+  })
 }
 
 ReactDOM.createRoot(document.getElementById('root')!).render(

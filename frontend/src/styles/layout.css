@@ -530,8 +530,20 @@ html.window-maximized body {
   height: 40px;
   max-width: none;
   padding: 0 12px;
-  background: rgba(18, 18, 22, 0.72);
-  backdrop-filter: blur(20px) saturate(1.4);
+  /* ⚠️ **这里刻意不用 `backdrop-filter`**（2026-09-24 第三轮真机反馈改）。
+     规格 §7 原本写的是 `backdrop-filter: blur(20px) saturate(1.4)`，实测在**真窗口**里
+     会出现"**只画模糊、不画背景与文字**"—— 用户看到的就是一块什么都没有的磨砂方块。
+
+     为什么它在这里格外危险：**本仓自己记过一笔**（`posts.css` R45 那条）——
+     "`backdrop-filter` 是**全仓唯一一处压在全幅背景图上的合成效果**，而本仓有
+     `filter: blur` **拖垮 WebView2 合成器**的历史记录，不必要就不留"。
+     小窗这回更极端：窗口是**透明的**，`backdrop-filter` 采样的就是**桌面**。
+
+     而它在这里**几乎不贡献任何东西**：α=0.72 的黑底只透出 28%，其中被模糊改变的
+     只有壁纸的高频细节（约 3.5% 的像素贡献）。**危险且无用** ⇒ 去掉。
+     去掉后靠**提高不透明度**保证可读性：α=0.94 时最亮壁纸上仍是 17:1 以上（§7 要求 ≥4.5:1）。
+     代价：失去"透出壁纸"的观感，换成"实底浮片"—— 与全站浮片族现在的口径一致。 */
+  background: rgba(20, 20, 26, 0.94);
   color: #fff;
   /* 1px 高光内边（"光从上面来"）—— 桌面控件"浮起来"的关键 */
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
@@ -540,17 +552,17 @@ html.window-maximized body {
 /* 事件态：顶栏宿主是**整块变粉**，但桌面控件不能 —— 那会毁掉深色材质。
    改成「深底不变 + 一圈粉环」，**有事发生**照样看得见（§7 没规定，取这条）。 */
 .si-island[data-density='widget'].on {
-  background: rgba(18, 18, 22, 0.72);
+  background: rgba(20, 20, 26, 0.94);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.14),
     inset 0 0 0 1px rgba(233, 92, 141, 0.85);
 }
 
 /* 展开面板：尺寸由 JS 给（§7 widget 展开宽 280）；材质跟胶囊同族 ——
-   否则深色胶囊下面吊一块白板会像"两块积木"（§5 同心圆角那条的原话）。 */
+   否则深色胶囊下面吊一块白板会像"两块积木"（§5 同心圆角那条的原话）。
+   同样不用 `backdrop-filter`（理由见上面那段）。 */
 .si-panel[data-density='widget'] {
-  background: rgba(18, 18, 22, 0.86);
-  backdrop-filter: blur(20px) saturate(1.4);
+  background: rgba(20, 20, 26, 0.97);
   border-color: rgba(255, 255, 255, 0.12);
   color: #fff;
 }

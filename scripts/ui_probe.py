@@ -1489,7 +1489,7 @@ def main() -> int:
         action="store_true",
         help="只跑一档宽度：桌面控件宿主（R38 批 5，规格 §7）—— `?density=widget` 下量 "
              "折叠尺寸 200×40 / 面板宽 280 / 深底+blur+1px 高光内边 / **按 α 复算纯白与纯黑"
-             "壁纸上的文字对比度 ≥ 4.5:1** / 不复用顶栏那套 absolute 居中（§8 宿主无关）",
+             "壁纸上的文字对比度 ≥ 4.5:1** / **不许有 backdrop-filter**（真窗口下会盖掉内容）/ 不复用顶栏那套 absolute 居中（§8 宿主无关）",
     )
     ap.add_argument(
         "--deck",
@@ -2991,9 +2991,17 @@ def main() -> int:
                 failures.append(f"@{w} status-widget: 胶囊仍是 absolute 居中 —— "
                                 f"那是**顶栏宿主**的定位（§8 要求宿主无关，控件自己就是窗口）")
             backdrop = si.get("widgetBackdrop") or ""
-            if "blur(20px)" not in backdrop or "saturate(1.4)" not in backdrop:
-                failures.append(f"@{w} status-widget: backdrop-filter 是 {backdrop!r}，"
-                                f"应含 blur(20px) 与 saturate(1.4)（§7）")
+            # ⚠️ **这条在 2026-09-24 第三轮真机反馈后反了过来**：原来断言
+            #    "backdrop-filter 含 blur(20px) saturate(1.4)"（照规格 §7 抄的），
+            #    实测它在**真窗口**里会造成"只画模糊、不画背景与文字"（用户看到一块空磨砂）。
+            #    本仓自己早记过一笔（`posts.css` R45）：`backdrop-filter` 是全仓唯一压在全幅
+            #    背景上的合成效果，而本仓有 `filter: blur` **拖垮 WebView2 合成器**的历史。
+            #    小窗更极端 —— 窗口透明，它采样的是**桌面**。
+            #    所以现在断言**不许有**它，可读性靠**不透明度**（下面那条对比度）。
+            if backdrop and backdrop != "none":
+                failures.append(f"@{w} status-widget: 胶囊上出现了 backdrop-filter "
+                                f"（{backdrop!r}）—— 真窗口下它会盖掉背景与文字（devlog/176），"
+                                f"可读性请靠 `background` 的不透明度")
             if "inset" not in (si.get("widgetShadow") or ""):
                 failures.append(f"@{w} status-widget: box-shadow 里没有 inset —— "
                                 f"§7 要求 1px 高光内边（「光从上面来」）")
@@ -3018,7 +3026,7 @@ def main() -> int:
                 failures.append(f"@{w} status-widget: 面板宽是 {si.get('panelWidth')}，"
                                 f"应为 280（§7 widget 展开 280）")
             if not failures:
-                print("  [ok] 桌面控件宿主：200×40 / 深底+blur+高光内边 / 两极端壁纸对比度达标 / 不依赖顶栏")
+                print("  [ok] 桌面控件宿主：200×40 / 实底+高光内边 / 两极端壁纸对比度达标 / 不依赖顶栏 / 无 backdrop-filter")
 
             # ── 第二段：**小窗视图**（`?widget=1`）────────────────────────────
             # 验的是 main.tsx 的**分流本身**：小窗里不该跑主窗口那套。

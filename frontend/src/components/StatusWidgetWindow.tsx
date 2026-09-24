@@ -37,6 +37,7 @@ export default function StatusWidgetWindow() {
   const [notices, setNotices] = useState<Notice[]>([])
   const [now, setNow] = useState(() => Date.now())
   const down = useRef<{ x: number; y: number; dragging: boolean } | null>(null)
+  const [diag, setDiag] = useState('…')
 
   // ① 条目：**只听主窗口推的**
   useEffect(() => {
@@ -101,6 +102,22 @@ export default function StatusWidgetWindow() {
     return () => un?.()
   }, [])
 
+  // ⑤ dev 自检条的填充（生产构建里 `import.meta.env.DEV` 为 false ⇒ 整段被摇掉）
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    const shell = document.querySelector<HTMLElement>('.widget-shell')
+    const pill = document.querySelector<HTMLElement>('.si-island')
+    const cs = pill ? getComputedStyle(pill) : null
+    setDiag([
+      `css:${shell ? getComputedStyle(shell).display : 'no-shell'}`,
+      `bg:${cs ? cs.backgroundColor : '-'}`,
+      `bf:${cs && cs.backdropFilter && cs.backdropFilter !== 'none' ? 'Y' : 'N'}`,
+      `w/h:${pill ? Math.round(pill.getBoundingClientRect().width) : 0}x${pill ? Math.round(pill.getBoundingClientRect().height) : 0}`,
+      `q:${location.search || '-'}`,
+      `n:${notices.length}`,
+    ].join(' '))
+  }, [notices.length])
+
   const onPointerDown = (e: React.PointerEvent) => {
     down.current = { x: e.clientX, y: e.clientY, dragging: false }
   }
@@ -140,6 +157,32 @@ export default function StatusWidgetWindow() {
       onPointerUp={onPointerUp}
     >
       <StatusIsland notices={notices} onAction={onAction} now={now} density="widget" />
+      {import.meta.env.DEV && (
+        /* ⚠️ **dev 专用自检条**（2026-09-24 第三轮真机反馈加）。
+           小窗只有 200×40、又置顶无边框，出问题时**既没法开 devtools、也没法看 console** ——
+           前两轮我就是这么在黑暗里猜的（连猜两次都错）。这条把决定性的事实用 9px 字画在窗口里：
+
+             `css` = `.widget-shell` 的 `display`（`flex` ⇒ layout.css **确实加载了**）
+             `bg`  = 胶囊的计算背景色（深色 ⇒ 样式生效；`rgba(0,0,0,0)` ⇒ 没生效）
+             `bf`  = 有没有 `backdrop-filter`；`w/h` = 内尺寸；`q` = 查询串；`n` = 条目数
+
+           右边两个小方块是**画得出的对照**：
+             🟥 不透明红 —— 它都不显示 ⇒ 整扇窗的绘制都坏了（不只是胶囊）
+             🟦 半透明蓝 —— 它不显示而红的显示 ⇒ **alpha 合成**坏了
+           看一眼截图就能定位，不用再让它来回试。 */
+        <div
+          style={{
+            position: 'fixed', left: 0, top: 0, zIndex: 999999,
+            font: '9px/1.25 ui-monospace, monospace', color: '#000',
+            background: 'rgba(255,255,255,.88)', padding: '1px 3px',
+            pointerEvents: 'none', whiteSpace: 'pre', maxWidth: '100%',
+          }}
+        >
+          {diag}
+          <span style={{ display: 'inline-block', width: 8, height: 8, background: '#f00', marginLeft: 3, verticalAlign: -1 }} />
+          <span style={{ display: 'inline-block', width: 8, height: 8, background: 'rgba(0,0,255,.5)', marginLeft: 2, verticalAlign: -1 }} />
+        </div>
+      )}
     </div>
   )
 }
