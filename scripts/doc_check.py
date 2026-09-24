@@ -13,17 +13,20 @@
 
 ## 检查项
 
-| # | 检查 | 判据 |
+⚠️ **本表与下面的 `CHECKS` 列表一一对应**（同样 7 项、同样顺序）。
+2026-09-25 前两者不一致（表里 9 行、`CHECKS` 6 项 —— 因为一行只覆盖了某个检查的一部分），
+结果 **skill 照抄了这张错表**，读者按它数条目永远是错的。
+⇒ 加检查项时**两处一起改**；行里的"覆盖"是该项内部的子判据，不另算一项。
+
+| # | 检查（= `CHECKS` 顺序） | 判据 |
 |---|---|---|
-| 1 | devlog 索引覆盖（正向） | **有则必填**：编号 > `LEGACY_UNINDEXED_THROUGH` 的 devlog 必须有索引行（缺 → FAIL）；历史欠账 → WARN（不逼考古） |
-| 2 | devlog 索引无重号 | 同一编号在索引表里出现多次 → FAIL |
-| 3 | devlog 索引无幽灵行 | 索引行指向不存在的 devlog → WARN |
-| 4 | 六处版本号一致 | 复用 `release.py` 的 `version_drift()`（同一份清单，不另写一遍） |
-| 5 | 当前版本的发布说明存在 | `docs/releases/v<config.VERSION>.md` |
-| 6 | 发布说明都在导航里 | `docs/releases/*.md` 每个文件都要在 `docs/README.md` 出现 |
-| 7 | 文档数字与代码一致 | 复用 `gen_doc_numbers.py` 的派生与比对（同一份实现，不另写一遍） |
-| 8 | TODO 无已落地残留 | `TODO.md` §1「未完成项」的**性质列**（第 2 列）不应说"已落地"（应搬去 `ROADMAP-DONE.md`） |
-| 9 | 规格现状断言带日期 | `docs/design-*.md` 里的「现状基线 / 已在用」必须带核实日期（或改成指向 `UI-MAP`） |
+| 1 | devlog 索引覆盖 | 覆盖：**有则必填**（编号 > `LEGACY_UNINDEXED_THROUGH`，缺 → FAIL；历史欠账 → WARN）· 索引**无重号** · **无幽灵行** · 第一列不得超 `INDEX_LABEL_MAX` 字符 |
+| 2 | devlog 文件名重号 | 同一编号有 ≥2 个**文件** → FAIL（`gen_doc_numbers.derive_devlog()` 只排序不去重，撞号不会自己响） |
+| 3 | 六处版本号一致 | 复用 `release.py` 的 `version_drift()`（同一份清单，不另写一遍） |
+| 4 | 发布说明与导航 | `docs/releases/v<config.VERSION>.md` 存在 ＋ 每个 `docs/releases/*.md` 都出现在 `docs/README.md` |
+| 5 | 文档数字与代码一致 | 复用 `gen_doc_numbers.py` 的派生与比对（同一份实现，不另写一遍） |
+| 6 | TODO 无已落地残留 | `TODO.md` §1「未完成项」的**性质列**（第 2 列）不应说"已落地"（应搬去 `ROADMAP-DONE.md`） |
+| 7 | 规格现状断言 | `docs/design-*.md` 里凡提到「现状」，**要么带核实日期、要么指向 `UI-MAP`**（二者必居其一）。⚠️ 别改回"枚举断言词"：2026-09-25 实测枚举两轮都漏（「现状：」「（…，现状）」各逃过一次）—— **别追措辞，判不变量** |
 
 ## 纪律口径（2026-09-23 修订）
 
@@ -169,6 +172,36 @@ def check_devlog_index() -> tuple[list[str], list[str]]:
     return fails, warns
 
 
+def check_devlog_duplicates() -> tuple[list[str], list[str]]:
+    """devlog **文件名**层面的重号 —— 这是原先唯一的"靠人肉自查"的漂移点。
+
+    为什么必须机器判：`gen_doc_numbers.derive_devlog()` 用的是 `nums[-1] + 1`
+    （**只排序、不去重、也不查重复**）⇒ 同时存在 `183-…A.md` 与 `183-…B.md` 时，
+    它照常报 `count / max / next`，**看不出任何异常**；`doc_check` 的索引检查
+    也只看索引表里的编号，不看文件名。
+    ⇒ 于是"撞号不会自己变红"，只能靠人在写完 devlog 后手跑一条 PowerShell —— 
+    而**写给人做的检查 = 不会做的检查**（2026-09-25 实测：这条在 skill 里挂了很久，
+    期间真的出现过重号，是事后才发现并删掉一行的）。
+
+    ⚠️ `devlog_count < devlog_max` **不等于**重号（本仓有缺号），
+    所以判据只认"同一编号出现 ≥2 个**文件**"，不碰缺号。
+    """
+    nums: dict[str, list[str]] = {}
+    for p in sorted(DEVLOG.glob("*.md")):
+        head = p.name[:3]
+        if head.isdigit():
+            nums.setdefault(head, []).append(p.name)
+    dup = {k: v for k, v in nums.items() if len(v) > 1}
+    if not dup:
+        return [], []
+    return [
+        f"devlog 文件名重号：{k} 有 {len(v)} 个文件 —— "
+        + "；".join(v)
+        + "（索引只会认一个编号 ⇒ 另一篇等于没入账）"
+        for k, v in sorted(dup.items())
+    ], []
+
+
 def check_versions() -> tuple[list[str], list[str]]:
     import release as R
 
@@ -248,42 +281,55 @@ def check_todo_not_stale() -> tuple[list[str], list[str]]:
     return [], []
 
 
-# 规格里描述"现状"的断言词。`「…」`/`"…"` 里的算**提及**不算断言（纠正记录要引用错误原文）。
-SPEC_CLAIM_WORDS = ("现状基线", "已在用")
+# 规格里描述"现状"的断言词。
+#
+# ⚠️ 2026-09-25 两次收紧，第一次是错的、第二次才对 —— 值得记下来：
+#   ① 初版用两个词（「现状基线 / 已在用」），于是「现状：/现状是…」**整类逃逸**
+#      （审计实测 4 处，其中一处已被证伪）；
+#   ② 改成四个词之后**还是漏**：第 101 行写「（与顶栏同族，现状）」—— 换个语序就绕过了。
+#   ⇒ 判据从"**枚举措辞**"改成"**判一个不变量**"：
+#          **凡在规格里提到"现状"，要么带核实日期、要么指向 `UI-MAP`（现状的唯一真源）。**
+#      触发词只有一个「现状」，逃不掉；代价是可能多报，而"多报"在这里是可接受的
+#      （它是 WARN，且修法明确：补日期或改指针）。
+#      —— 教训与 skill §6「改规则时搜索必然漏」同源：**别去追措辞，去判那个不变量**。
+SPEC_CLAIM_WORD = "现状"
+SPEC_CLAIM_OK = "UI-MAP"      # 指向真源 = 合格（不必再抄一遍现状）
 
 
 def check_spec_claims() -> tuple[list[str], list[str]]:
-    """设计规格里的"现状"断言必须带**核实日期** —— 或者干脆别写（现状指向 `UI-MAP`）。
+    """设计规格里的"现状"断言必须带**核实日期**，或指向 `UI-MAP` —— 二者必居其一。
 
     为什么需要它（2026-09-24 实测）：`design-status-island.md` 声称 `--ease-standard`
     「**已在用**（`.si-panel` 入场曲线）」，而实际那条曲线是 `cubic-bezier(.22,.61,.36,1)` ——
     **全站唯一的异类**。这条断言**从未被验证过**（不是漂移，是一开始就错），挂了一整周，
-    直到 R38 批 1 实跑才发现。
+    直到 R38 批 1 实跑才发现。同一份文档的「现状是三处零散时长」也是同类：
+    实际 5 处，且它自己在 §12 里记着这条更正 —— **规格正文留着假事实，更正写在第 300 行**。
 
-    规格与实现之间**没有**一致性门禁（做不到：那要求逐句判真值），但"**断言必须带日期**"
-    是可门禁的 —— 带了日期，读者就知道它是一份快照、该复核；没日期就会被当成事实。
+    规格与实现之间**没有**一致性门禁（做不到：那要求逐句判真值），但"**断言必须可追溯**"
+    是可门禁的 —— 带日期读者就知道它是一份快照、该复核；指向 `UI-MAP` 则根本不抄现状。
     """
     warns: list[str] = []
     for p in sorted(DOCS.glob("design-*.md")):
         for i, l in enumerate(p.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
-            bare = re.sub(r"「[^」]*」", "", l)
+            bare = re.sub(r"「[^」]*」", "", l)      # 「…」里算**提及**（引用错误原文不算断言）
             bare = re.sub(r'"[^"]*"', "", bare)
-            if not any(w in bare for w in SPEC_CLAIM_WORDS):
+            if SPEC_CLAIM_WORD not in bare:
                 continue
-            if re.search(r"20\d{2}-\d{2}-\d{2}", l):
+            if re.search(r"20\d{2}-\d{2}-\d{2}", l) or SPEC_CLAIM_OK in l:
                 continue
-            warns.append(f"{p.relative_to(ROOT)}:{i} 有「现状」断言但没写核实日期 —— "
-                         f"补上日期，或改成指向 `UI-MAP`（现状的唯一真源）")
+            warns.append(f"{p.relative_to(ROOT)}:{i} 提到「现状」但既没核实日期、"
+                         f"也没指向 `UI-MAP` —— 二者必居其一（现状的真源只有 UI-MAP）")
     return [], warns
 
 
 CHECKS = [
     ("devlog 索引覆盖", check_devlog_index),
+    ("devlog 文件名重号", check_devlog_duplicates),
     ("六处版本号一致", check_versions),
     ("发布说明与导航", check_release_notes),
     ("文档数字与代码一致", check_doc_numbers),
     ("TODO 无已落地残留", check_todo_not_stale),
-    ("规格现状断言带日期", check_spec_claims),
+    ("规格现状断言可追溯", check_spec_claims),
 ]
 
 
