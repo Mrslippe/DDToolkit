@@ -666,6 +666,50 @@ fn rebuild_main_window(app: &tauri::AppHandle) -> tauri::Result<tauri::WebviewWi
     Ok(w)
 }
 
+/// 把小窗的 **DWM 外框**摘干净（2026-09-24 第三轮真机反馈加）。
+///
+/// 这是本仓**自己记过**的一课：`setup()` 里给主窗口做那段 DWM 处理时写着
+/// 「关 DWM 阴影/**边框描线（矩形轮廓的来源）**」—— 而那段代码写死了
+/// `get_webview_window("main")`，**小窗完全没走**。于是小窗拿到的是 Windows 默认外框：
+/// **一圈系统描边**（用户看到的"有边框"）+ DWM 给无边框透明窗口补的底色（"半透明"）。
+///
+/// 主窗口靠两件事摘掉它：`set_shadow(false)` + `apply_dwm_corners()`
+/// （后者设 `DWMWA_BORDER_COLOR = DWMWA_COLOR_NONE`，正是"去掉描线"）。
+/// 这里对小窗做同一套，另加 `DWMWCP_DONOTROUND` ——
+/// 胶囊的圆角是 CSS 的 `999px`，系统的 ~8px 圆角会跟它打架（与主窗口同理）。
+///
+/// 失败只记日志、不报错：外框难看 ≠ 功能不可用，不该让窗口建不出来。
+#[cfg(target_os = "windows")]
+fn strip_dwm_frame_for_widget(w: &tauri::WebviewWindow) {
+    use windows_sys::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND,
+    };
+    let _ = w.set_shadow(false);
+    // 描线 / 系统圆角（主窗口用的是同一个 `apply_dwm_corners`）
+    let ok = apply_dwm_corners(w);
+    let mut corner_ok = false;
+    if let Ok(hwnd) = w.hwnd() {
+        let pref = DWMWCP_DONOTROUND; // 3
+        let hr = unsafe {
+            DwmSetWindowAttribute(
+                hwnd.0,
+                DWMWA_WINDOW_CORNER_PREFERENCE as u32,
+                &pref as *const _ as *const core::ffi::c_void,
+                4,
+            )
+        };
+        corner_ok = hr == 0; // S_OK
+    }
+    println!(
+        "[ddtoolkit] 小窗 DWM 外框处理：描线/圆角={} · 不圆角={}",
+        if ok { "ok" } else { "失败" },
+        if corner_ok { "ok" } else { "失败" }
+    );
+}
+
+#[cfg(not(target_os = "windows"))]
+fn strip_dwm_frame_for_widget(_w: &tauri::WebviewWindow) {}
+
 /// 桌面状态控件（R38 批 5b，devlog/173）：创建或显示那个 200×40 的无边框小窗。
 ///
 /// **位置由前端给** —— 规格 §7 说"位置持久化（`utils/shellState` 同款做法）"，
@@ -709,12 +753,42 @@ fn show_widget_window(app: tauri::AppHandle, x: Option<i32>, y: Option<i32>) -> 
     .background_color(tauri::window::Color(0, 0, 0, 0))
     .build()
     .map_err(|e| e.to_string())?;
+    // ⚠️⚠️ **把这个窗口实际加载的地址打出来**（2026-09-24 第四轮）。
+    //
+    // 前三轮我改的都是**修饰**（启动幕 / 背景色 / `backdrop-filter` / DWM 外框），
+    // 而用户每次看到的东西**一模一样** —— 直到确认"连自检条都没画出来"才明白：
+    // **那个窗口里根本没有渲染我们的页面**，修饰一行都没机会执行。
+    //
+    // 所以这一轮不再猜，先把事实钉死 —— **双向探针**，各自独立：
+    //   ① **Rust 侧读 URL**（1.5s / 5s 各一次）：不依赖页面，哪怕空白也读得到。
+    //      URL 不对（没带 `?widget=1` / join 拼歪 / 走了资源协议）⇒ 查 Rust 侧。
+    //   ② **页面侧回传**（`widget_diag` 命令）：页面真的跑起来了才会发。
+    //      **如果这条日志从不出现，就说明页面根本没执行** —— 前三轮的修饰全是白改。
+    {
+        let probe = w.clone();
+        std::thread::spawn(move || {
+            for wait in [1500u64, 5000u64] {
+                std::thread::sleep(std::time::Duration::from_millis(wait));
+                match probe.url() {
+                    Ok(u) => println!("[ddtoolkit] 小窗 @{wait}ms URL = {u}"),
+                    Err(e) => println!("[ddtoolkit] 小窗 @{wait}ms URL 读不到：{e}"),
+                }
+            }
+            println!(
+                "[ddtoolkit] 小窗探针结束 —— 若上面没有 `[widget] 页面自检` 那行，\
+                 说明页面根本没执行（前三轮改的都是修饰，一行都没跑到）"
+            );
+        });
+    }
     // 同步钉一遍（理由见文档注释）：这些都是同步调用，`build()` 之后一定生效
     let _ = w.set_decorations(false);
     let _ = w.set_resizable(false);
     let _ = w.set_always_on_top(true);
     let _ = w.set_skip_taskbar(true);
-    let _ = w.set_shadow(false);
+    // ⚠️ **小窗必须自己摘 DWM 外框**（2026-09-24 第三轮真机反馈加）：
+    // 主窗口在 `setup()` 里做了，而那段写死了 `get_webview_window("main")` —— 小窗没做，
+    // 于是拿到 Windows 默认外框（一圈描边 + DWM 给无边框透明窗口补的底色）。
+    strip_dwm_frame_for_widget(&w);
     // 尺寸也钉一遍：`inner_size` 在 builder 里同样可能被延迟应用
     let _ = w.set_size(tauri::LogicalSize::new(W, H));
     match (x, y) {
@@ -749,6 +823,19 @@ fn hide_widget_window(app: tauri::AppHandle) {
         let _ = w.destroy();
         let _ = app.emit(crate::WIDGET_CLOSED_EVENT, ());
     }
+}
+
+/// 小窗页面自检回传（R38 批 5b，2026-09-24 第四轮）。
+///
+/// **这是"页面到底有没有执行"的唯一硬证据**：小窗是 200×40 + 置顶 + 无边框，
+/// 用户没法开 devtools；而前三轮我改的修饰（启动幕 / 背景 / `backdrop-filter` / DWM 外框）
+/// 在真机上**一行都没生效**，我却一直在从截图里猜。
+///
+/// 页面跑起来就调它 → 控制台出现 `[widget] 页面自检 …`；
+/// **如果这条日志从不出现，那就是"页面没执行"**，方向立刻转到 Rust / WebView 侧。
+#[tauri::command]
+fn widget_diag(info: String) {
+    println!("[widget] 页面自检 {info}");
 }
 
 /// 兜底：**把小窗的 webview 弄走**（Tauri v2 的 ACL 下命令不走 capability，所以这条一定可达）。
@@ -1185,7 +1272,8 @@ pub fn run() {
             window_corners_mode,
             show_widget_window,
             hide_widget_window,
-            destroy_widget_window
+            destroy_widget_window,
+            widget_diag
         ])
         .on_window_event(|window, event| {
             // ✕ 不再等于"退出"（R18，devlog/095）：关闭请求被拦下，改成隐藏到托盘，

@@ -108,14 +108,26 @@ export default function StatusWidgetWindow() {
     const shell = document.querySelector<HTMLElement>('.widget-shell')
     const pill = document.querySelector<HTMLElement>('.si-island')
     const cs = pill ? getComputedStyle(pill) : null
-    setDiag([
+    const line = [
       `css:${shell ? getComputedStyle(shell).display : 'no-shell'}`,
       `bg:${cs ? cs.backgroundColor : '-'}`,
       `bf:${cs && cs.backdropFilter && cs.backdropFilter !== 'none' ? 'Y' : 'N'}`,
       `w/h:${pill ? Math.round(pill.getBoundingClientRect().width) : 0}x${pill ? Math.round(pill.getBoundingClientRect().height) : 0}`,
       `q:${location.search || '-'}`,
       `n:${notices.length}`,
-    ].join(' '))
+    ].join(' ')
+    setDiag(line)
+    // ⚠️ **把自检行回传给 Rust 控制台**（2026-09-24 第四轮）。
+    //    这是"页面到底有没有执行"的硬证据 —— 用户看不到窗口里的字、也开不了 devtools，
+    //    但 `cargo tauri dev` 的控制台他看得到。**这条日志不出现 = 页面根本没跑。**
+    void (async () => {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core')
+        await invoke('widget_diag', { info: line })
+      } catch (err) {
+        console.warn('[widget] 自检回传失败（非桌面端？）', err)
+      }
+    })()
   }, [notices.length])
 
   const onPointerDown = (e: React.PointerEvent) => {
