@@ -11,6 +11,11 @@
    漏清会让 `DELETE FROM vtubers` 被外键挡下、**整次事务回滚**（devlog/040 那次事故的形态）；
 4. 空列表 = 「还没排过」而不是错误：前端据此用默认布局渲染。
 """
+import atexit
+import shutil
+import tempfile
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event
@@ -26,7 +31,14 @@ from app.services.purge import purge_vtuber
 # 内存库每个新连接都是一份**空**数据库（第一版就撞上 "no such table: vtubers"）。
 # 与 tests/test_vtuber_api.py 同款，另加外键 PRAGMA —— 没有它，"删 V 被外键挡下"
 # 这类事故（本文件第 ③ 组要守的）根本测不出来。
-test_engine = create_engine("sqlite:///./test_profile_cards.db",
+# ⚠️ 但路径必须是**每个进程独有**的临时目录，不能是仓库里的固定文件名
+#    （2026-09-25 修，原先 `sqlite:///./test_profile_cards.db`）—— 理由与做法同
+#    `tests/test_vtuber_api.py` 头部注释：两个 pytest 并发会互相拆台，
+#    且固定名会在仓库根堆出库文件。
+_TMPDIR = Path(tempfile.mkdtemp(prefix="ddtoolkit-test-pcards-"))
+atexit.register(shutil.rmtree, _TMPDIR, ignore_errors=True)
+
+test_engine = create_engine(f"sqlite:///{(_TMPDIR / 'test_profile_cards.db').as_posix()}",
                             connect_args={"check_same_thread": False})
 
 

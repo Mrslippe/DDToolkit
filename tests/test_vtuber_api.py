@@ -1,12 +1,32 @@
+import atexit
 import json
+import shutil
+import tempfile
+
 import pytest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
-# 独立测试库，避免污染开发数据库
-test_engine = create_engine("sqlite:///./test_vtuber.db", connect_args={"check_same_thread": False})
+# 独立测试库，避免污染开发数据库。
+#
+# ⚠️ **路径必须是"每个进程独有"的临时目录，不能是仓库里的固定文件名**
+#    （2026-09-25 修；原先写 `sqlite:///./test_vtuber.db`）：
+#      · 两个 pytest 进程**同时跑**会互相 `create_all` / `drop_all` 同一张库 ——
+#        实测报 `sqlite3.OperationalError: no such table: live_sessions`，
+#        而且**两次的失败清单还不一样**（并发污染的特征）；
+#      · 那个文件名还会在**仓库根**堆出一个 119 MB 的 `test_vtuber.db`。
+#    `tempfile.mkdtemp()` 每个进程一个目录 + `atexit` 清理 ⇒ 两个毛病一起没了。
+#    （这条修好之后，`DEV-LOOP.md` 里"门禁不能并发跑"那条规矩**整条退役**——
+#      把规矩修成代码，比留着一条要人记的规矩便宜。）
+_TMPDIR = Path(tempfile.mkdtemp(prefix="ddtoolkit-test-vtuber-"))
+atexit.register(shutil.rmtree, _TMPDIR, ignore_errors=True)
+
+test_engine = create_engine(f"sqlite:///{(_TMPDIR / 'test_vtuber.db').as_posix()}",
+                            connect_args={"check_same_thread": False})
 
 
 # 与生产同口径：SQLite 默认不校验外键，只有开 PRAGMA 才能测出

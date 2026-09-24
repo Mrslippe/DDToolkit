@@ -224,6 +224,30 @@ def test_spec_undated_claim_is_warned(monkeypatch):
     assert warns, "无日期的现状断言没被提醒"
 
 
+def test_spec_claim_trigger_is_word_order_proof(monkeypatch):
+    """⚠️ **判据不许"枚举措辞"** —— 这是 2026-09-25 两次失败的固化用例。
+
+    历史：初版只认「现状基线 / 已在用」⇒「现状：」整类逃逸；扩到四个词之后
+    「（与顶栏同族，现状）」**又**逃逸。⇒ 改成判不变量：**凡提「现状」就要交代**
+    （带日期或指向 `UI-MAP`）。这条用例把三种**语序**都钉住：
+    """
+    for line in (
+        "现状是三处零散时长（220 / 180 / rise-in）。\n",
+        "| 底 | 浅粉底（与顶栏同族，现状） | 深底 |\n",
+        "方案对比：现状：浅粉底；目标：深底。\n",
+    ):
+        _fake_design(monkeypatch, line)
+        _f, warns = D.check_spec_claims()
+        assert warns, f"这个语序又溜过去了：{line!r}"
+
+
+def test_spec_claim_pointing_at_uimap_is_not_warned(monkeypatch):
+    """指向 `UI-MAP`（现状的唯一真源）= 合格 —— 不必再抄一遍现状，自然也不会漂。"""
+    _fake_design(monkeypatch, "> 现状细节看 `UI-MAP.md` §A1-a-w2。\n")
+    _f, warns = D.check_spec_claims()
+    assert warns == [], warns
+
+
 def test_spec_dated_claim_is_not_warned(monkeypatch):
     """带核实日期的算"快照"，是合法的（三分法里的第三类）。"""
     _fake_design(monkeypatch, "> **现状基线（2026-09-17 快照）**：`si-panel-in` 220ms\n")
@@ -233,6 +257,7 @@ def test_spec_dated_claim_is_not_warned(monkeypatch):
 
 def test_spec_quoted_claim_is_not_warned(monkeypatch):
     """`「…」`/`"…"` 里的算**提及**不算断言 —— 纠正记录要引用错误原文。"""
-    _fake_design(monkeypatch, "| 2 | §2「**已在用**」 | **错**，实际是另一条曲线 |\n")
+    _fake_design(monkeypatch,
+                 "| 2 | §2「现状是三处零散时长」 | **错**，实际 5 处 |\n")
     _f, warns = D.check_spec_claims()
     assert warns == [], warns
