@@ -42,6 +42,16 @@ DDToolkit（VTuber 证据归档工具：Python + FastAPI 后端、React 前端�
 - **下一篇编号 = 现有最大编号 + 1**。⚠️ **别把编号写死在这里** —— 每写一篇它就作废，而门禁会红
   （2026-09-23 实测：写完 `devlog/166` 后本行立刻被 `gen_doc_numbers.py` 判为漂移）。
   **查真值**：`python scripts/gen_doc_numbers.py --list`（从 `devlog/` 直接数，含缺号）。
+- ⚠️ **两个会话并行时，「取最大 +1」会撞号，而且门禁不会红**（2026-09-24 实测，devlog/184）。
+  `derive_devlog()` 只排序、不去重也不查重复 ⇒ 出现两个同号文件时它照常报
+  `max/next`，`doc_check.py` 也是 `[ok]`。**并行开发的唯一防线是动手前分配编号段**
+  （例：A 用 183–189、B 用 190–196）。合并后人工过一遍：
+  ```powershell
+  Get-ChildItem devlog -Filter "*.md" | Group-Object { $_.Name.Substring(0,3) } |
+    Where-Object Count -gt 1 | ForEach-Object { "重号 $($_.Name)" }
+  ```
+  ⚠️ `count < max` **不一定是撞号**（本仓 **068 / 161 是缺号**），别把缺号误判成重号去"修"。
+  完整并行纪律见 `docs/DEV-LOOP.md` §七。
 - **H1** 写 `# NNN-YYYYMMDD-<版本|R编号> <主题>`；标题**允许与文件名不一致**
   （097 文件名「…托盘退出修复与设置窗口渲染」，H1 是「托盘退出修不好 + 设置窗口渲染问题」）—— 校验只认编号。
 - **什么时候写**：**每批次 / 每需求一篇**，不是每天一篇。跨层改动或影响全局不变量时必须写；

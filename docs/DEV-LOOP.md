@@ -604,3 +604,161 @@ preflight / base 层 / reset / 自定义属性（`tokens.css`）。判据：
 - 真要 stash，**先 `git diff --stat` 记下范围**，事后逐条核对；
 - **别用会动工作区的命令去回答一个只读问题。**
 
+---
+
+## 七、多会话并行（两个窗口同时改一个仓）（2026-09-24 实测）
+
+> **背景**：本仓实际发生过"两个会话并行改同一仓"，代价是**撞车两次**：
+> 我 `git stash -u` 扫走了对方 6 个文件（§6.6）；两个会话**都占了 devlog 182**（已让到 183）。
+> 本节把"要不要并行、怎么并行"从经验变成**可执行判据**。全部数字为 **2026-09-24 本机实测**。
+
+### 7.1 结论先行
+
+| 情况 | 做法 |
+|---|---|
+| 两边改的**代码文件不重叠** | ✅ **开 `git worktree`** —— 隔离成本远小于收益 |
+| 两边都会碰 `ui_probe.py` / `tokens.css` / `TopBar.tsx` 这类枢纽文件 | ❌ **别并行**，串行做（或一个会话里分两批，如 R38 批 5c/5d） |
+| 不管哪种 | ⚠️ **动手前必须分配 devlog 编号段**（见 §7.4） |
+
+**判据不是"功能是否独立"，而是"改动的文件集合是否重叠"。**
+两个"独立功能"如果都要动 `TopBar.tsx`，合并时的冲突量会超过并行省下的时间。
+
+### 7.2 为什么"开个分支"不够
+
+**分支只是一个指针，一个工作目录同时只能 checkout 一个分支。**
+两个会话在同一目录里 = 改同一批文件，`git status` 混在一起、`git add -A` 会扫走对方的工作。
+**要的是 `git worktree`**（独立目录 + 独立分支，共用同一个 `.git` 对象库）：
+
+```powershell
+git worktree add ..\DDToolkit-featB -b featB   # 同级的兄弟目录
+git worktree list
+git worktree remove ..\DDToolkit-featB         # 用完删（加 --force 丢弃改动）
+git worktree prune                             # 目录被手删过之后清元数据
+```
+
+⚠️ **`worktree add` 会创建分支**，失败时分支可能已经建出来了 —— 清理要连分支一起：
+`git branch -D <name>`（这条实测踩过）。
+
+**隔离性已实测**：worktree 里的 `.git` 是一个**文本指针文件**
+（内容 `gitdir: …/.git/worktrees/<name>`）；在 worktree 里新建未跟踪文件，
+**主工作区的 `git status` 完全看不到**。
+
+### 7.3 ⚠️ 两个"看起来能省事、实际会咬人"的坑
+
+#### 坑 1：新 worktree **开箱不能编译**（必须处理）
+
+`frontend/src-tauri/tauri.conf.json` 的 `bundle.resources` 是 `["binaries/backend/**/*"]`，
+而 **`frontend/src-tauri/binaries/` 被 gitignore**（本机 **163 MB**，是构建产物）。
+⇒ 新 worktree 里 `cargo check` **必然失败**：
+
+```
+error: failed to run custom build command for `ddtoolkit v1.0.2`
+Caused by: glob pattern binaries/backend/**/* path not found or didn't match any files.
+```
+
+**解决办法（实测有效）**：用 junction 指回主仓库那份，**不要复制**（省 163 MB）：
+
+```powershell
+cmd /c mklink /J "<worktree>\frontend\src-tauri\binaries" "<主仓库>\frontend\src-tauri\binaries"
+```
+
+接上之后 `cargo check` 通过（**20 秒**，增量）。
+
+#### 坑 2：**别共享 `CARGO_TARGET_DIR`**
+
+cargo 构建时对 target 目录**上独占锁**，两个会话共享会**串行化**——一个编译另一个干等，
+比各自独立更慢。本仓现在**没有**配 `CARGO_TARGET_DIR`（无 `.cargo/config.toml`），**保持这样**。
+
+**成本实测**（本机）：
+
+| 项 | 数值 |
+|---|---|
+| `frontend/src-tauri/target` | **18.9 GB**（debug 16.2 + release 2.7，是**增量累积**，不是基线） |
+| 新 worktree 冷 `cargo check` | **102 秒**，产出 target **1.1 GB** |
+| `frontend/node_modules` | **236 MB**（gitignore，要重装） |
+| `Cargo.lock` crate 数 | 527 |
+
+⇒ **18.9 GB 具有误导性**：`[profile.release]` 的 `lto`/`codegen-units=1` **只影响 release**，
+debug 侧一次冷构建只要 ~100 秒 / 1.1 GB。**并行的工作区成本远低于那个数字暗示的量。**
+
+⚠️ **`node_modules` 别用 junction 共享**：`node_modules/.vite` 是 dev server 的**共享缓存目录**，
+两个 dev server 会抢它（本仓**未**配 `cacheDir`）。要快要各自 `npm ci`。
+
+### 7.4 ⚠️ 真正的冲突面是**追加型文档**，不是代码
+
+代码再怎么分都能干净合并；每次必冲突的是这三处（都是"往末尾追加"，git **无法自动合并**）：
+
+| 文件 | 为什么必冲突 |
+|---|---|
+| `devlog/` 编号 | 两边都取"最大编号 + 1" ⇒ **撞号** |
+| `docs/ROADMAP-DONE.md` 索引表 | 两边都往表尾追加行 ⇒ **同一位置插入** |
+| `docs/TODO.md` §6.2 门禁基线 | 两边都更新实测数字 |
+
+**纪律**：
+
+1. **动手前分配编号段**（例：会话 A 用 183–189，会话 B 用 190–196）。
+   **不要**让两边各自"取最大 +1" —— 那正是撞号的机制。
+2. 索引表那一行留到**合并时由一方统一补**，别在各自分支里各加一行。
+3. 合并后**必跑** `python scripts/doc_check.py` + `python scripts/gen_doc_numbers.py`
+   （⚠️ 后者**没有 `--check` 参数**：**不带参数就是跑检查**，`--list` 才是只打真值）。
+
+#### ⚠️ 门禁**抓不到**文件名层面的重号（实测确认）
+
+`gen_doc_numbers.derive_devlog()` 用的是 `nums[-1] + 1`（**只排序、不去重，也不检查重复**）。
+实测：同时存在 `183-…A.md` 与 `183-…B.md` 时，它照常报
+`count 182 / devlog_max 183 / devlog_next 184` —— **看不出任何异常**
+（`count` 数的是文件数，所以重号时它会**正常 +1**，不是少报）。
+`doc_check.py` 同样返回 **`[ok] 无 FAIL`**。
+
+⇒ **撞号不会自己变红。** 所以 §7.4 第 1 条（预先分配编号）不是"锦上添花"，是**唯一防线**。
+合并后建议眼睛过一遍：
+
+```powershell
+# 文件名层面的重号（门禁不管这个）
+Get-ChildItem devlog -Filter "*.md" | Group-Object { $_.Name.Substring(0,3) } |
+  Where-Object Count -gt 1 | ForEach-Object { "重号 $($_.Name)" }
+```
+
+> **另注**：`devlog_count` 与本仓"篇数覆盖范围"**天然对不上**（现有 181 篇覆盖编号到 183，
+> 因为 **068 / 161 是缺号**）。看到 `count < max` **不一定是撞号**，先查缺号 ——
+> 别把缺号误判成重号去"修"。
+
+### 7.5 必须各自隔离的**运行态**（同一台机器上并行）
+
+| 资源 | 现状（2026-09-24 核实） | 并行时怎么办 |
+|---|---|---|
+| **开发数据目录** | `%APPDATA%\com.ddtoolkit.app-dev`，`app/core/config.py` **只认 `DDTOOLKIT_DATA_DIR`** | ⚠️ 两个会话跑后端会**写同一个 SQLite** ⇒ 每个 worktree 设**自己的** `DDTOOLKIT_DATA_DIR` |
+| **探针现场** `_ui_probe_tmp/` | `ui_probe.py` 里是 `ROOT / "_ui_probe_tmp"`（**仓库根相对**） | ✅ worktree 一分开**自动解决**（以前两个探针并发会撞 `OSError [WinError 1224]`） |
+| **Vite 端口** | `vite.config.ts` 写死 5173 但**未开 `strictPort`** ⇒ 自动递增；`ui_probe` 用 `_free_port()` | ✅ 本来就是动态的，不用管 |
+
+⚠️ **worktree 建在仓库目录内**（如 `_wt-test/`）时，它会以 `?? _wt-test/` 出现在主工作区的
+`git status` 里。实测**扫描类脚本不会漏进去**（`gen_doc_numbers` 只扫 `devlog/` 等固定路径），
+但**肉眼会被干扰**。建在**仓库外的兄弟目录**更干净 —— 不过那要写仓库父目录，
+在受限沙箱下会被拦（需授权）。
+
+### 7.6 一份可照抄的开工清单
+
+```powershell
+# ① 先看会不会重叠（判据是**文件集合**，不是功能名）
+git worktree add ..\DDToolkit-featB -b featB
+cd ..\DDToolkit-featB
+
+# ② 补上 gitignore 的构建依赖（不补则 cargo 必失败）
+cmd /c mklink /J "$PWD\frontend\src-tauri\binaries" "E:\work\Project\DDToolkit\frontend\src-tauri\binaries"
+npm --prefix frontend ci                 # node_modules 不共享（.vite 缓存会抢）
+
+# ③ 隔离运行态
+$env:DDTOOLKIT_DATA_DIR = "$PWD\.devdata"   # 别用共用的 app-dev
+
+# ④ 分配 devlog 编号段（**动手前**，别等写完再取"最大+1"）
+
+# ⑤ 干完：合并 → 统一补 ROADMAP-DONE 索引行 → 跑门禁
+python scripts/doc_check.py
+python scripts/gen_doc_numbers.py            # 不带参数 = 跑检查（没有 --check 参数）
+
+# ⑥ 清理
+git worktree remove ..\DDToolkit-featB
+git worktree prune; git branch -D featB
+```
+
+
