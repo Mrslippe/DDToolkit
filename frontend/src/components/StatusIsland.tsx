@@ -92,15 +92,29 @@ export default function StatusIsland({ notices, onAction, now, density = 'bar' }
     return () => window.clearInterval(timer)
   }, [lit, hidden])
 
-  /** 面板位置：贴在状态岛下方，**水平中心对齐胶囊**（越界时收进视口）。
-   *  R39-C（用户）：「下拉栏居中」—— 原来是把面板**左缘**对齐胶囊左缘，胶囊越靠右面板越偏。 */
+  /** 面板位置：**水平中心对齐胶囊**（越界时收进视口）；
+   * 纵向默认贴在胶囊**下方**，贴屏幕下沿时**向上翻**（面板在胶囊上方）。
+   *
+   *  R39-C（用户）：「下拉栏居中」—— 原来是把面板**左缘**对齐胶囊左缘，胶囊越靠右面板越偏。
+   *
+   *  ⚠️ **向上翻（R38 批 5d）**：小窗默认落在**右下角**，1080p 上向下展开需要
+   *  `968 + 40 + 6 + 面板高 ≥ 1214` ⇒ **永远放不下**。窗口那一侧会把窗口向上长
+   *  （`widgetExpandGeom` 的 `flipUp`），面板在窗口里的位置也随之要在**胶囊上方**。
+   *  两处必须一致：窗口向上长、面板却还画在胶囊下方 ⇒ 面板落在窗口外（就是那个 bug 的翻版）。 */
   const place = () => {
     const r = anchorRef.current?.getBoundingClientRect()
     if (!r) return
     const width = density === 'widget' ? 280 : 340   // §7：widget 展开宽 280（bar 沿用 340）
     const centered = r.left + r.width / 2 - width / 2
     const left = Math.min(Math.max(8, centered), Math.max(8, window.innerWidth - width - 8))
-    setPos({ left, top: r.bottom + 6, width })
+    // 面板的**实际高度**：`open` 之后才量得到；量不到时退回 0（下一帧 `place()` 会再来）
+    const h = panelRef.current?.offsetHeight ?? 0
+    // 下方放得下吗？判据与窗口侧同一套（留 8px 视口边）
+    const below = r.bottom + 6 + h
+    const flip = h > 0 && below > window.innerHeight - 4
+    setPos(flip
+      ? { left, top: Math.max(4, r.top - 6 - h), width }
+      : { left, top: r.bottom + 6, width })
   }
 
   /** 悬停时长的两个口径：进入要**等一等**（掠过不弹），离开要**宽限**（容得下移进面板） */
@@ -134,6 +148,11 @@ export default function StatusIsland({ notices, onAction, now, density = 'bar' }
   useEffect(() => {
     if (!open) return
     place()
+    // ⚠️ **量到面板真实高度后再定一次位**（R38 批 5d）：`place()` 首次跑时面板还没挂载
+    //    （`open` 刚变 true，这次渲染里 `panelRef` 还是 null）⇒ 高度量到 0 ⇒ 判不出该不该
+    //    向上翻。下一帧（`requestAnimationFrame`）面板已经在 DOM 里，此时重量才作数。
+    //    只做一次：面板高度在展开期间基本不变，反复量会让它持续微调（看起来在抖）。
+    let raf = requestAnimationFrame(() => place())
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setOpen(false)
@@ -153,6 +172,7 @@ export default function StatusIsland({ notices, onAction, now, density = 'bar' }
     document.addEventListener('pointerdown', onOutside, true)
     window.addEventListener('resize', onResize)
     return () => {
+      cancelAnimationFrame(raf)
       document.removeEventListener('keydown', onKey)
       document.removeEventListener('pointerdown', onOutside, true)
       window.removeEventListener('resize', onResize)

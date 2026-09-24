@@ -105,6 +105,16 @@
 | 待机 | 完全静止 | **完全静止**（桌面上的循环动画是注意力黑洞） |
 | 窗口 | 顶栏内联 | 无边框 + 置顶 + 可拖动 + 位置持久化（`utils/shellState` 同款做法） |
 
+> ⚠️ **"展开尺寸 280 × 面板高"这一行是到 R38 批 5d 才真正实现的**（devlog/183，2026-09-24）。
+> 在那之前它只是**规格里的字**：窗口尺寸写死 200×40、没有 resize 通路，
+> 于是面板 `top = 46` 落在 40px 高的窗口外 —— **用户从来没看见过小窗里的面板**。
+>
+> 现在由三处共同保证（改任何一处都要看另外两处）：
+> ① `utils/widgetWindow.ts` 的 `widgetExpandGeom`（几何，29 条单测）；
+> ② Rust `resize_widget_window`（通路，`set_size` + `set_position` 一起）；
+> ③ `.widget-shell[data-flip='up']` 与 `StatusIsland.place()`（方向，两处必须一致）。
+> 现状细节看 `UI-MAP.md` §A1-a-w2。
+
 ## 8. 组件契约（宿主无关是硬要求）
 
 ```tsx

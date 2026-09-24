@@ -360,6 +360,7 @@ function measure(tag: string) {
           }
         })
       const offBtn = bar.querySelector<HTMLElement>('.view-btn.off')
+      const onBtn = bar.querySelector<HTMLElement>('.view-btn.on')
       return {
         barBg: bcs.backgroundImage,
         /** 毛玻璃（R39-D3）：`backdrop-filter` + 极轻白 + 圆角 + 内描边 = "明确的形状" */
@@ -436,6 +437,45 @@ function measure(tag: string) {
           : null,
         /** 图标色走 `currentColor` 继承（`body { color: var(--c-text-main) }`） */
         offColor: offBtn ? getComputedStyle(offBtn).color : null,
+        // ── R45-A：选中态 = 深粉实底 + 白图标（去掉描边）──────────────────
+        /** **白图标**的实测色：与 `.glow-spot` 的填充一起算非文本对比 ≥3:1。
+         *  只判 on 图标 —— off 图标压在"正被滑过的块"上只有 2.43:1，但那是**行程过渡态**
+         *  （那枚图标本来就在被替换的过程中），不设为判据（见 posts.css 的 `.view-btn.off`）。 */
+        onColor: onBtn ? getComputedStyle(onBtn).color : null,
+        /** 选中块填充（`--sel-strong`）—— 对比度判据的另一半 */
+        spotBg: spot ? getComputedStyle(spot).backgroundColor : null,
+        /** 选中块**不许再有描边**（R45-A 用户口径："选中时的边框直接去掉"）。
+         *  取 `box-shadow` 与 `border` 两条：旧实现是 `inset 0 0 0 1px`，必须拦住它回流。 */
+        spotShadow: spot ? getComputedStyle(spot).boxShadow : null,
+        spotBorder: spot ? getComputedStyle(spot).borderTopWidth : null,
+        // ── R45-B：页面标题（让开工具条覆盖带）────────────────────────────
+        /** 标题文案 + 矩形。**文案为空的视图（cards）合法** —— 它不用标题。
+         *  `archive` 下还要拿卡片**内部**渲染的标题做对账（两份真源，机器比）。 */
+        pageTitle: (() => {
+          const el = document.querySelector<HTMLElement>('[data-page-title]')
+          if (!el) return { text: null, rect: null }
+          const r = el.getBoundingClientRect()
+          return {
+            text: (el.textContent || '').trim(),
+            rect: {
+              x: Math.round(r.left), y: Math.round(r.top),
+              w: Math.round(r.width), h: Math.round(r.height),
+            },
+          }
+        })(),
+        /** 当前卡片**内部**渲染出来的标题（`archive` 才有）—— 与 `pageTitle.text`
+         *  是**两份真源**，探针断言两边相等：改了 `labels` 忘了改卡片 JSX 就红。
+         *  ⚠️ 取 `childNodes[0]`：`.lc-title` / `.fc-title` 的第一个子节点是纯文本，
+         *  后面还跟着 `<span class="card-src-note">`（数据来源说明），不剥掉会带上它。 */
+        cardTitle: (() => {
+          const el = document.querySelector<HTMLElement>(
+            '.deck-card[data-deck-pos="front"] .lc-title, ' +
+            '.deck-card[data-deck-pos="front"] .fc-title')
+          return el ? (el.childNodes[0]?.textContent || '').trim() : null
+        })(),
+        /** 让开量（`--toolbar-band`）—— 判"标题有没有真的让开工具条"的基准 */
+        toolbarBand: getComputedStyle(document.documentElement)
+          .getPropertyValue('--toolbar-band').trim() || null,
       }
     })(),
     /** 可见地越过窗口左右缘的元素 */
@@ -1912,6 +1952,84 @@ export async function runUiProbe(): Promise<void> {
         ? [Math.round(r.left + r.width / 2 - (sr.left + sr.width / 2)),
            Math.round(r.top + r.height / 2 - (sr.top + sr.height / 2))]
         : null
+      // 诊断用（2026-09-24）：把参与计算的两个矩形原始值带出来。
+      // 原来只报一个 `centerErr` 数字 —— 偏了就只知道"偏了"，**不知道是谁的尺寸不对**
+      // （shell 不是视口高？胶囊被撑高？root 没撑开？），只能靠猜。
+      result.shellRect = sr
+        ? { top: Math.round(sr.top), left: Math.round(sr.left),
+            w: Math.round(sr.width), h: Math.round(sr.height) } : null
+      result.islandRect = { top: Math.round(r.top), left: Math.round(r.left),
+                            w: Math.round(r.width), h: Math.round(r.height) }
+      result.viewport = { w: window.innerWidth, h: window.innerHeight }
+      result.rootRect = (() => {
+        const rr = root?.getBoundingClientRect()
+        return rr ? { h: Math.round(rr.height), top: Math.round(rr.top) } : null
+      })()
+      // ⚠️ 胶囊**在窗口里该在哪**：折叠态窗口只有 40px 高，胶囊必须**占满它**。
+      //    这条比"居中误差"更本质 —— 居中只在折叠态成立，展开后胶囊本来就该偏到一边
+      //    （向上翻时它在窗口底部）。所以判据是"胶囊顶边贴窗口顶边"（未翻转时）。
+      result.islandTopVsShell = sr ? Math.round(r.top - sr.top) : null
+    }
+
+    // ── ⚠️ 面板在**小窗里**能不能用（2026-09-24 批 5d 加）──────────────────
+    //
+    // **这一条就是为了让那个 bug 复现时变红**：面板 `top = 胶囊底(40) + 6 = 46`，
+    // 而小窗只有 40px 高 ⇒ 面板**整个落在窗口外**，宽度 280 也超出 200。
+    // 它活了很久没被发现，是因为 `--status-island` 一直在**主窗口的大视口**（1100 宽）
+    // 里量这套样式 —— 在宽视口里面板当然"在视口内、可命中"，于是**绿**。
+    // **判据的坐标系错了**：它量的是"这套样式在大视口里对不对"，而不是"在小窗里能不能用"。
+    //
+    // 这里主动把面板**打开**（派发真实事件源），再量它是否落在窗口内、是否可命中。
+    // 小窗折叠时只有 40px 高，所以这条同时钉住了"窗口得跟着长大"这件事。
+    {
+      const island2 = document.querySelector<HTMLElement>('.si-island')
+      if (island2) {
+        // ⚠️ **先注入一条条目**：探针里小窗收不到 Tauri 事件 ⇒ 永远空闲态 ⇒ 面板不会开。
+        //    不注入的话下面三条判据全部空转（永远量不到面板，也就永远"绿"）。
+        //    走的是页面自己的事件源（与 `--status-island` 用 `ddtoolkit:pill-message` 同款）。
+        window.dispatchEvent(new CustomEvent('ddtoolkit:widget-seed', {
+          detail: [{
+            id: 'probe-widget', kind: 'message', source: '探针',
+            text: '探针消息：小窗面板可用性', ttl: 0,
+          }],
+        }))
+        await sleep(150)
+        const island3 = document.querySelector<HTMLElement>('.si-island')
+        result.widgetLitAfterSeed = !!island3?.classList.contains('on')
+        // 走**真实的 hover 通路**（不是直接改 React state）：悬停 120ms 后才展开。
+        // ⚠️ 事件类型与字段必须与 `--status-island` 那段（`hoverAt`）**完全一致**：
+        //    用 `pointerenter` + 少量字段实测**不触发** React 的合成事件，
+        //    而 `pointerover` + 完整的 pointer 字段才是这个仓里验证过能用的写法。
+        if (island3) {
+          const r3 = island3.getBoundingClientRect()
+          island3.dispatchEvent(new PointerEvent('pointerover', {
+            bubbles: true, cancelable: true, pointerId: 31, pointerType: 'mouse',
+            isPrimary: true, relatedTarget: document.body,
+            clientX: Math.round(r3.left + r3.width / 2),
+            clientY: Math.round(r3.top + r3.height / 2),
+          }))
+        }
+        await sleep(400)
+        const panel = document.querySelector<HTMLElement>('.si-panel')
+        result.widgetPanelOpened = !!panel
+        if (panel) {
+          const pr = panel.getBoundingClientRect()
+          result.widgetPanelRect = {
+            top: Math.round(pr.top), left: Math.round(pr.left),
+            w: Math.round(pr.width), h: Math.round(pr.height),
+          }
+          // ① 面板**在视口内**（真窗口里视口 == 窗口）
+          result.widgetPanelInViewport =
+            pr.left >= -0.5 && pr.right <= window.innerWidth + 0.5 &&
+            pr.top >= -0.5 && pr.bottom <= window.innerHeight + 0.5
+          // ② 面板**可命中**（点得着）—— 出窗的东西 `elementFromPoint` 取不到它
+          const hit = document.elementFromPoint(pr.left + pr.width / 2, pr.top + 8)
+          result.widgetPanelHittable = !!hit && (hit === panel || panel.contains(hit))
+          // ③ 面板**不能是 0 高**（`max-height` 若被算成 24px 就会压成一条）
+          result.widgetPanelH = Math.round(pr.height)
+          result.widgetViewport = { w: window.innerWidth, h: window.innerHeight }
+        }
+      }
     }
     const pre = document.createElement('pre')
     pre.id = 'ui-probe'

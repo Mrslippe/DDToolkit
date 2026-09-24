@@ -78,6 +78,150 @@ export function defaultWidgetPos(screen: ScreenBox, size: { w: number; h: number
 /** 开关取值（后端 `prefs.widget_enabled` 的白名单是 `off` / `on`） */
 export type WidgetEnabled = 'off' | 'on'
 
+// ── 小窗的**形态梯度**（R38 批 5d，2026-09-24）─────────────────────────
+//
+// ## 为什么必须有这个（一个真 bug 逼出来的）
+//
+// 规格 §3 早就写了「展开尺寸：**280 × 面板高**」，但 Rust 侧窗口尺寸**写死 200×40、
+// 没有 resize 通路** —— 于是小窗里那个面板 `top = 胶囊底(40) + 6 = 46`，
+// **落在 40px 高的窗口外面**，宽度 280 也超出 200。实测（`ui_probe --status-island
+// --width 200 --height 90`）：`可命中=False / 在视口内=False`。
+//
+// 也就是说：**小窗从上线起就只有那颗胶囊是真的**，悬停/点击弹出的面板用户从没看见过。
+// 这个 bug 能活下来，是因为探针一直在**主窗口的视口**（1100×800）里量那套样式 ——
+// 在宽视口里面板当然"在视口内、可命中"，于是**绿**。判据的坐标系错了，
+// 它量的是"这套样式在一个大视口里对不对"，而不是"在小窗里能不能用"。
+//
+// ## 锚点：**顶边中心**
+//
+// 展开时窗口要从 200×40 长到 280×(40+H)。若以左上角为锚，窗口会**向右下"长出去"** ——
+// 用户看到胶囊往左上跳一下。所以 resize 时要**同时挪位置**，保持**顶边中心**不动
+// （这正是 LuckyIsland `window_policy.rs` 的做法，README「参考与致谢」）。
+
+/** 折叠态尺寸（与 `layout.css` 的 `[data-density='widget']` 同值） */
+export const WIDGET_COLLAPSED = { w: 200, h: 40 } as const
+
+/** 展开态面板宽（规格 §3「展开尺寸 280 × 面板高」） */
+export const WIDGET_PANEL_W = 280
+
+/**
+ * 展开态的窗口高度 = 胶囊高 + 间隙 + 面板高。
+ *
+ * 间隙 **6px** 与 `StatusIsland.place()` 里的 `r.bottom + 6` **必须一致** ——
+ * 两处算的是同一件事（面板相对于胶囊的落点），不一致就会出现
+ * "面板下缘被窗口裁掉 6px"这种只有真机上才看得见的缝。
+ */
+export const WIDGET_PANEL_GAP = 6
+
+export interface WidgetExpandGeom {
+  /** 窗口应该长到的尺寸 */
+  w: number
+  h: number
+  /** 窗口应该挪到的位置 */
+  x: number
+  y: number
+  /**
+   * 面板开在胶囊的**下方**（`false`）还是**上方**（`true`）。
+   *
+   * ⚠️ **这个字段是必需的，不是优化**：小窗的默认落点是**右下角**
+   * （`defaultWidgetPos`：`y = 屏高 − 40 − 72`，1080p 上是 **968**）——
+   * 向下展开需要 `968 + 40 + 6 + 面板高`，**任何面板高度都放不下**（≥1214 > 1080）。
+   * 硬要向下长就只能夹取，而夹取会**把胶囊从用户摆的位置挪走**（实测 968 → 标签外的 710）。
+   *
+   * 所以真机上只有一条路：**贴着屏幕下沿时向上翻**（面板长在胶囊上方）。
+   * 这也是所有浮层控件（菜单 / 下拉 / 气泡）的标准解法 —— 不是我们发明的。
+   */
+  flipUp: boolean
+}
+
+/** 面板与胶囊之间的间隙（与 `StatusIsland.place()` 的 `r.bottom + 6` 同值） */
+const GAP = WIDGET_PANEL_GAP
+
+/**
+ * 由**当前**窗口矩形 + 面板高度，算出展开后的窗口矩形（纯函数，可单测）。
+ *
+ * ## 优先向下，放不下就**向上翻**
+ *
+ * 向下（面板在胶囊下方）是默认方向；只有当下方**真的装不下**时才向上翻。
+ * 判据用"向下展开后底边是否超出屏幕（留 `WIDGET_MIN_VISIBLE` 边）"，
+ * 而不是"当前 y 是否在下半屏" —— 后者在**面板很矮**时会做出无谓的翻转
+ * （屏幕中间的胶囊：明明下面装得下，却因为在下半屏而翻上去）。
+ *
+ * ## 翻转之后位置怎么算
+ *
+ * 向上翻意味着窗口要**向上长**：顶边 = 胶囊顶 − 间隙 − 面板高。
+ * 但**胶囊自己在窗口里的位置也得跟着换**（它在窗口顶部 ⇒ 翻上去之后胶囊该在窗口**底部**），
+ * 所以 `flipUp` 必须交给调用方（`StatusWidgetWindow`）去改 `.widget-shell` 的对齐。
+ * 光改窗口坐标而不管胶囊在窗口内的位置，会得到"面板在上面、胶囊也还在上面"的错位。
+ */
+export function widgetExpandGeom(
+  cur: { x: number; y: number; w: number; h: number },
+  panelH: number,
+  screen: ScreenBox,
+): WidgetExpandGeom {
+  const h = Math.max(0, panelH)
+  const capH = WIDGET_COLLAPSED.h
+  const w = Math.max(cur.w, WIDGET_PANEL_W)
+  const anchorX = cur.x + cur.w / 2
+  const totalH = capH + GAP + h
+
+  // 向下：窗口顶边不动，整体长到 `cur.y + totalH`
+  const downBottom = cur.y + totalH
+  const downFits = downBottom <= screen.height - WIDGET_MIN_VISIBLE
+
+  if (downFits) {
+    const raw = { x: Math.round(anchorX - w / 2), y: cur.y }
+    const c = clampWidgetPos(raw, screen, { w, h: totalH })
+    return { w, h: totalH, x: c.x, y: c.y, flipUp: false }
+  }
+
+  // 向上翻：窗口**底边**对齐胶囊底边，顶边 = 底边 − totalH
+  const capBottom = cur.y + capH
+  const raw = { x: Math.round(anchorX - w / 2), y: capBottom - totalH }
+  const c = clampWidgetPos(raw, screen, { w, h: totalH })
+  return { w, h: totalH, x: c.x, y: c.y, flipUp: true }
+}
+
+/**
+ * 收起：回到折叠尺寸。
+ *
+ * `flipUp` 决定胶囊在窗口里的哪一端 —— 收起时窗口只剩胶囊高，两种情况的
+ * **预期矩形其实是同一个**（窗口 = 胶囊大小），但**位置**取决于展开时锚的是顶边还是底边：
+ *   · 向下展开 ⇒ 顶边没动过 ⇒ 收起也用原顶边；
+ *   · 向上展开 ⇒ **底边**没动过 ⇒ 收起要保持底边（否则胶囊会从"贴着屏幕下沿"往上跳）。
+ *
+ * ## 为什么要 `restore`（2026-09-24 加，被单测逼出来的）
+ *
+ * 光靠"从展开矩形反推"**在屏幕右/左边缘会漂**：展开时窗口从 200 变 280，
+ * 贴右缘的小窗**必须**被夹回来（否则面板出屏），于是"展开矩形的中心"已经不是
+ * 原来那个中心了 —— 再反推回去就少了那几十像素（实测 1696 → 1656）。
+ * 一次展开/收起看不出什么，但**每次悬停都漂一点**，久了小窗就爬走了。
+ *
+ * 所以调用方（`StatusWidgetWindow`）在展开**之前**把胶囊矩形传进来，
+ * 收起时**直接回到那个矩形** —— 展开/收起成为一个精确的闭环。
+ * 拿不到 `restore` 时才退回反推（退化路径，仍有夹取兜底）。
+ */
+export function widgetCollapseGeom(
+  cur: { x: number; y: number; w: number; h: number },
+  screen: ScreenBox,
+  flipUp = false,
+  restore?: { x: number; y: number } | null,
+): WidgetExpandGeom {
+  const { w, h } = WIDGET_COLLAPSED
+  if (restore) {
+    const c = clampWidgetPos({ x: Math.round(restore.x), y: Math.round(restore.y) }, screen, { w, h })
+    return { w, h, x: c.x, y: c.y, flipUp: false }
+  }
+  const anchorX = cur.x + cur.w / 2
+  // 向上展开时保持**底边**不动；否则保持顶边
+  const y = flipUp ? cur.y + cur.h - h : cur.y
+  const raw = { x: Math.round(anchorX - w / 2), y }
+  const c = clampWidgetPos(raw, screen, { w, h })
+  return { w, h, x: c.x, y: c.y, flipUp: false }
+}
+
+
+
 /** 解析开关；认不出的一律当 `off`（与 `parseCloseAction` 同款：**默认安全**） */
 export function parseWidgetEnabled(raw: string | null | undefined): WidgetEnabled {
   return raw === 'on' ? 'on' : 'off'

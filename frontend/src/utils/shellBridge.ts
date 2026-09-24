@@ -109,6 +109,73 @@ export async function destroyWidgetWindow(): Promise<boolean> {
   }
 }
 
+// ── 小窗三项增强（R38 批 5d，2026-09-24）──────────────────────────────
+
+/**
+ * 设置小窗鼠标穿透。**返回"是否真的设上了"** —— 调用方据此决定要不要提示用户。
+ *
+ * 浏览器/探针环境返回 `false`（没有真窗口可穿透）。注意**这不是失败**：
+ * 探针里那条断言量的是"偏好读出来了没、命令发出去没"，不是"Windows 收没收到"。
+ */
+export async function setWidgetClickThrough(enabled: boolean): Promise<boolean> {
+  if (!isTauri) return false
+  try {
+    await invoke('set_widget_click_through', { enabled })
+    return true
+  } catch (e) {
+    console.error('[widget] set_widget_click_through 失败', e)
+    return false
+  }
+}
+
+/**
+ * 问系统"现在有没有全屏程序"（判据在 Rust：`SHQueryUserNotificationState`）。
+ *
+ * ⚠️ 浏览器/探针环境**返回 `false`**（= 没有全屏）—— 这是**刻意的**：
+ * 探针要能验"全屏隐藏这条链路接上了没"，那靠 dev 钩子注入，不靠真去问 Windows。
+ * 返回 `true` 会让探针环境里小窗**永远藏着**，反而量不到别的东西。
+ */
+export async function isFullscreenAppRunning(): Promise<boolean> {
+  if (!isTauri) return false
+  try {
+    return (await invoke('is_fullscreen_app_running')) as boolean
+  } catch {
+    return false   // 问不到就按"没有全屏"（见 Rust 侧同款取舍：宁可多露，不可永不出现）
+  }
+}
+
+/** 临时显示 / 隐藏小窗（**不销毁** —— 全屏结束要能立刻回来） */
+export async function setWidgetVisible(visible: boolean): Promise<boolean> {
+  if (!isTauri) return false
+  try {
+    await invoke('set_widget_visible', { visible })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 把小窗改成任意矩形（`resize` 通路，R38 批 5d）。
+ *
+ * **没有这条通路时小窗的面板是看不见的**（详见 `utils/widgetWindow.ts` 那段注释）：
+ * 面板落在 40px 高的窗口外面。所以这不是"锦上添花的动画"，是那个面板能不能用的前提。
+ *
+ * 坐标与尺寸都走**逻辑像素**（与 Rust 侧 `LogicalSize`/`LogicalPosition` 对齐）。
+ */
+export async function resizeWidgetWindow(
+  geom: { w: number; h: number; x: number; y: number },
+): Promise<boolean> {
+  if (!isTauri) return false
+  try {
+    await invoke('resize_widget_window', geom)
+    return true
+  } catch (e) {
+    console.error('[widget] resize_widget_window 失败', e)
+    return false
+  }
+}
+
 // ── 数据目录（R22-B2d，devlog/108）────────────────────────────────────
 
 export interface ShellDataDirInfo {

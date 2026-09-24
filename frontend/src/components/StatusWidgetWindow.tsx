@@ -7,6 +7,8 @@ import {
   WIDGET_POS_KEY,
   relayWidgetAction,
   saveWidgetPos,
+  widgetCollapseGeom,
+  widgetExpandGeom,
 } from '../utils/widgetWindow'
 
 /**
@@ -33,11 +35,48 @@ import {
 /** 超过这个位移才算"在拖窗口"，否则算点击（`4px` 是常见的"手抖"容差） */
 const DRAG_THRESHOLD_PX = 4
 
+/**
+ * **dev-only**：探针往小窗注入条目的页面事件名。
+ *
+ * 为什么需要它：小窗**只听主窗口推的** `widget:notices`（Tauri 事件），
+ * 而探针跑在无头浏览器里 —— 没有 Tauri 事件 ⇒ 小窗**永远是空闲态**
+ * （`lit=false` ⇒ hover 不展开 ⇒ 面板永远量不到）。
+ * 于是"面板在小窗里能不能用"这条判据会**空转**（永远没有面板可量）。
+ *
+ * 与 `--status-island` 用 `ddtoolkit:pill-message` 是同一套思路：
+ * 走**页面自己的事件源**，而不是直接改 React state。
+ * 生产构建里 `import.meta.env.DEV` 为 false ⇒ 整段被摇掉。
+ */
+export const WIDGET_SEED_NOTICES_EVENT = 'ddtoolkit:widget-seed'
+
 export default function StatusWidgetWindow() {
   const [notices, setNotices] = useState<Notice[]>([])
   const [now, setNow] = useState(() => Date.now())
   const down = useRef<{ x: number; y: number; dragging: boolean } | null>(null)
   const [diag, setDiag] = useState('…')
+  /**
+   * 窗口当前是展开态吗（R38 批 5d）。用来**去重** resize 调用 ——
+   * 面板每次重渲染都调一次 resize 会让窗口持续抖动（Windows 的 resize 是可见的）。
+   */
+  const expanded = useRef(false)
+  /**
+   * 展开**之前**胶囊所在的位置（收起时精确回到这里）。
+   *
+   * ⚠️ 为什么要存而不是反推：贴屏幕边的窗口展开时会**被夹**（200→280 宽必须收回来，
+   * 否则面板出屏），于是"展开矩形的中心"已经不是原来那个中心了 —— 反推回去会越来越偏，
+   * 每次悬停漂几十像素，久了小窗就爬走了。有单测守这条（`反复展开/收起不漂移`）。
+   */
+  const preExpandPos = useRef<{ x: number; y: number } | null>(null)
+  /**
+   * 面板开在胶囊上方（贴屏幕下沿时向上翻）—— 决定 `.widget-shell` 的对齐。
+   *
+   * ⚠️ **同一份事实必须同时存在于 ref 与 state**（2026-09-24 eslint 逼出来的）：
+   * `sync()` 跑在一个 `[]` 依赖的 effect 里 ⇒ 它**闭包捕获的是首次渲染的 `flipUp`**
+   * （恒为 `false`）。收起时若直接读 state，无论展开时翻没翻，都会按"没翻"去算位置 ⇒
+   * 贴屏幕下沿的小窗收起来会**往上跳一截**。所以逻辑一律读 ref，state 只负责渲染。
+   */
+  const flipUpRef = useRef(false)
+  const [flipUp, setFlipUp] = useState(false)
 
   // ① 条目：**只听主窗口推的**
   useEffect(() => {
@@ -50,6 +89,19 @@ export default function StatusWidgetWindow() {
         /* 非桌面端（探针/浏览器）：没有主窗口可听，保持空列表 */
       }
     })()
+    // ⚠️ **dev-only 的注入通路**（R38 批 5d）：探针（无头浏览器）里没有 Tauri 事件，
+    //    于是小窗**永远是空闲态**（没有条目 ⇒ `lit=false` ⇒ hover 不展开、面板永远量不到）。
+    //    而"面板在小窗里到底能不能用"正是那个真 bug 的判据 —— 不注入就永远空转。
+    //    走的是**页面自己的事件**（不是直接改 React state），与 `--status-island` 同款做法。
+    //    生产构建里 `import.meta.env.DEV` 为 false ⇒ 整段被摇掉。
+    if (import.meta.env.DEV) {
+      const onSeed = (e: Event) => {
+        const detail = (e as CustomEvent).detail
+        if (Array.isArray(detail)) setNotices(detail)
+      }
+      window.addEventListener(WIDGET_SEED_NOTICES_EVENT, onSeed)
+      return () => { un?.(); window.removeEventListener(WIDGET_SEED_NOTICES_EVENT, onSeed) }
+    }
     return () => un?.()
   }, [])
 
@@ -102,7 +154,154 @@ export default function StatusWidgetWindow() {
     return () => un?.()
   }, [])
 
-  // ⑤ dev 自检条的填充（生产构建里 `import.meta.env.DEV` 为 false ⇒ 整段被摇掉）
+  // ⑤ 小窗两项增强（R38 批 5d，2026-09-24）：**开启时把偏好补上**。
+  //
+  //    为什么小窗自己要读一遍偏好：这两个属性是**窗口级**的，而窗口是新开的 ——
+  //    主窗口设置里的那次调用发生在"小窗还不存在"的时候，那时命令是幂等的空操作
+  //    （见 Rust 侧 `set_widget_click_through` 的注释）。所以**每次小窗起来都要重新应用一次**，
+  //    否则用户设了穿透、重启应用之后穿透就"忘了"。
+  useEffect(() => {
+    if (!import.meta.env.DEV && !('__TAURI_INTERNALS__' in window)) return
+    let alive = true
+    void (async () => {
+      try {
+        const { api } = await import('../api/api')
+        const { values } = await api.getPrefs()
+        if (!alive) return
+        if (values.widget_click_through === 'on') {
+          const { setWidgetClickThrough } = await import('../utils/shellBridge')
+          const ok = await setWidgetClickThrough(true)
+          console.info('[widget] 启动时应用鼠标穿透 →', ok)
+        }
+      } catch {
+        /* 后端不可达：按默认（不穿透）—— 宁可不穿透，也别让用户点不动 */
+      }
+    })()
+    return () => { alive = false }
+  }, [])
+
+  // ⑥ 全屏时隐藏（R38 批 5d，来自 LuckyIsland）。
+  //
+  //    为什么由**小窗自己**轮询：判据（Windows 通知状态）在 Rust，而"该不该显示"这件事
+  //    只有小窗关心。主窗口那边插一脚只会让状态有两份。**2 秒一跳**：全屏切换是秒级事件，
+  //    2 秒的延迟用户察觉不到，而 `SHQueryUserNotificationState` 是极轻的本地调用
+  //    （不进网络、不碰数据库），不值得为它做事件订阅。
+  //
+  //    ⚠️ **只 `show`/`hide`，不销毁**（`set_widget_visible`）：全屏结束要能立刻回来。
+  useEffect(() => {
+    if (!('__TAURI_INTERNALS__' in window)) return          // 探针/浏览器：Rust 不在，跳过
+    let alive = true
+    let hiddenByUs = false
+    const tick = async () => {
+      try {
+        const { api } = await import('../api/api')
+        const { values } = await api.getPrefs()
+        if (!alive) return
+        const want = values.widget_hide_fullscreen !== 'off'
+        const { isFullscreenAppRunning, setWidgetVisible } = await import('../utils/shellBridge')
+        const full = want ? await isFullscreenAppRunning() : false
+        if (!alive) return
+        if (full && !hiddenByUs) {
+          hiddenByUs = true
+          console.info('[widget] 检测到全屏程序 ⇒ 暂时隐藏小窗')
+          await setWidgetVisible(false)
+        } else if (!full && hiddenByUs) {
+          hiddenByUs = false
+          console.info('[widget] 全屏结束 ⇒ 恢复显示小窗')
+          await setWidgetVisible(true)
+        }
+      } catch {
+        /* 读不到偏好 / 问不到系统：这一跳什么都不做（下一跳再试） */
+      }
+    }
+    void tick()
+    const t = window.setInterval(() => void tick(), 2000)
+    return () => { alive = false; window.clearInterval(t) }
+  }, [])
+
+  // ⑦ 形态梯度：**展开面板时把窗口长大，收起时缩回去**（R38 批 5d）。
+  //
+  //    ⚠️ **这一条修的是一个真 bug，不是加动效**：面板 `top = 胶囊底(40) + 6 = 46`，
+  //    而窗口写死 200×40 ⇒ 面板**整个落在窗口外**，宽度 280 也超出 200。
+  //    实测（`ui_probe --status-island --width 200 --height 90`）：可命中=False / 在视口内=False。
+  //    也就是说小窗从上线起**只有一个胶囊是真的**，面板用户从没看见过。
+  //
+  //    为什么用 `MutationObserver` 而不是给 `StatusIsland` 加回调：面板是
+  //    `createPortal(..., document.body)` 出去的，**宿主组件不该知道"我在窗口里还是顶栏里"**
+  //    （§8 宿主无关是硬要求）。在窗口这一侧观察"面板出现了没"，是**唯一不污染组件契约**的接法。
+  useEffect(() => {
+    if (!('__TAURI_INTERNALS__' in window)) return   // 探针/浏览器：没有真窗口可 resize
+    let alive = true
+
+    /** 读当前窗口矩形（逻辑像素口径与 Rust 侧一致） */
+    const curRect = async () => {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window')
+      const w = getCurrentWindow()
+      const size = await w.innerSize()
+      const pos = await w.outerPosition()
+      const sc = await w.scaleFactor()
+      return {
+        x: Math.round(pos.x / sc), y: Math.round(pos.y / sc),
+        w: Math.round(size.width / sc), h: Math.round(size.height / sc),
+      }
+    }
+    const screenBox = async () => {
+      const { currentMonitor } = await import('@tauri-apps/api/window')
+      const mon = await currentMonitor()
+      const sc = mon?.scaleFactor ?? 1
+      return {
+        width: Math.round((mon?.size.width ?? 1920) / sc),
+        height: Math.round((mon?.size.height ?? 1080) / sc),
+      }
+    }
+
+    const sync = async () => {
+      try {
+        const panel = document.querySelector<HTMLElement>('.si-panel')
+        const want = !!panel
+        if (want === expanded.current) return        // 状态没变：一次 IPC 都不发
+        const cur = await curRect()
+        const screen = await screenBox()
+        if (!alive) return
+        const { resizeWidgetWindow } = await import('../utils/shellBridge')
+        if (want) {
+          // ⚠️ **面板的高度上限必须按屏幕算，不能用 `vh`**（R38 批 5d）：
+          //    小窗高度跟着面板长 ⇒ `60vh` 会与面板高度互为因果、死锁在一个极小的板子上
+          //    （见 `status-island.css` 里 `.si-panel[data-density='widget']` 那段）。
+          //    这里在**量高之前**把它设好，否则量到的是被压扁后的高度。
+          //    留 120px 余量给胶囊、间隙与任务栏。
+          document.documentElement.style.setProperty(
+            '--widget-panel-max-h', `${Math.max(120, screen.height - 120)}px`)
+          // ⚠️ 量**面板自己的高**（不是 `getBoundingClientRect`：入场动画的
+          //    `scale(.985)` 会让 rect 偏小 —— 规格 §12.3 记过同一个坑，实测到 276 而非 280）。
+          const h = panel ? panel.offsetHeight : 0
+          // 记下展开前的位置：收起时要精确回到这里（反推会漂，见 `preExpandPos` 注释）
+          preExpandPos.current = { x: cur.x, y: cur.y }
+          const geom = widgetExpandGeom(cur, h, screen)
+          expanded.current = true
+          flipUpRef.current = geom.flipUp
+          setFlipUp(geom.flipUp)
+          const ok = await resizeWidgetWindow(geom)
+          console.info('[widget] 展开 →', geom, 'ok=', ok)
+        } else {
+          expanded.current = false
+          const geom = widgetCollapseGeom(cur, screen, flipUpRef.current, preExpandPos.current)
+          flipUpRef.current = false
+          setFlipUp(false)
+          const ok = await resizeWidgetWindow(geom)
+          console.info('[widget] 收起 →', geom, 'ok=', ok)
+        }
+      } catch (e) {
+        console.warn('[widget] 形态切换失败', e)
+      }
+    }
+
+    const mo = new MutationObserver(() => void sync())
+    mo.observe(document.body, { childList: true, subtree: false })
+    return () => { alive = false; mo.disconnect() }
+  }, [])
+
+  // ⑧ dev 自检条的填充（生产构建里 `import.meta.env.DEV` 为 false ⇒ 整段被摇掉）
   useEffect(() => {
     if (!import.meta.env.DEV) return
     const shell = document.querySelector<HTMLElement>('.widget-shell')
@@ -164,6 +363,9 @@ export default function StatusWidgetWindow() {
   return (
     <div
       className="widget-shell"
+      /* 展开方向（R38 批 5d）：向上翻时胶囊要落到窗口**底边**（面板在它上方）。
+         少了这个属性，窗口向上长、胶囊却还在窗口顶部 ⇒ 面板与胶囊错位。 */
+      data-flip={flipUp ? 'up' : 'down'}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}

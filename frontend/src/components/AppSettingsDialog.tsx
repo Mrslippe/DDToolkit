@@ -38,7 +38,7 @@ import {
   parseField, stepOf, valueOf, type DraftVal,
 } from '../utils/settingsDraft'
 import OverlayScroll from './OverlayScroll'
-import { hideWidgetWindow, showWidgetWindow } from '../utils/shellBridge'
+import { hideWidgetWindow, isFullscreenAppRunning, setWidgetClickThrough, showWidgetWindow } from '../utils/shellBridge'
 import {
   WIDGET_POS_KEY,
   parseWidgetPos,
@@ -385,28 +385,96 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
    * > （真凶是**同步命令卡死主线程**，见 devlog/180）。真凶修掉后这个补丁只剩副作用。
    * > 现在 `resurfaceMainWindow` **只在窗口确实不可见时**才 `show()` ⇒ 正常路径下**零动作**。
    */
-  const pickWidgetEnabled = async (next: string) => {
+  /**
+   * 小窗三项开关共用的行渲染（R38 批 5d）。
+   *
+   * 三项形状相同（label + note + 二选一），差别只在 key 与"选中值怎么算"。
+   * 抽出来是为了**探针钩子只写一遍**：`data-setting` 与 `data-widget-option`
+   * 是 `ui_probe --app-settings` 的抓手，各写三遍必有漏，而漏了的后果是
+   * "断言悄悄少一条"（绿色，但没验）。
+   */
+  const renderWidgetRow = (key: 'widget_enabled' | 'widget_click_through'
+                                 | 'widget_hide_fullscreen') => {
+    const spec = prefs.specOf(key)
+    if (!spec) return null
+    const current = prefs.values[key] ?? ''
+    return (
+      <div className="aps-row aps-row-stack" data-setting={key} key={key}>
+        <div className="aps-row-main">
+          <span className="aps-label">{spec.label}</span>
+          <span className="aps-note">{spec.note}</span>
+        </div>
+        <div className="aps-row-ctl aps-radio-group" role="radiogroup" aria-label={spec.label}>
+          {spec.options.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              role="radio"
+              aria-checked={current === o.value}
+              data-widget-option={o.value}
+              className={`aps-radio${current === o.value ? ' on' : ''}`}
+              onClick={() => void pickWidgetPref(key, o.value)}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  /**
+   * 小窗三项偏好统一入口（R38 批 5d）。
+   *
+   * ## 为什么"开关"与"穿透/全屏"必须分开处理
+   *
+   * `widget_enabled` 要**建 / 销窗口**（重动作，且有自己的兜底与提示）；
+   * 另两项只是**给已经存在的窗口改一个属性**（轻动作，窗口没开时是**幂等的成功**）。
+   * 混在一起会让"没开小窗时改穿透"也去建窗口 —— 那不是用户的意思。
+   *
+   * ⚠️ 穿透与全屏隐藏**都可能失败**（前者要 Windows API，后者要系统通知状态），
+   * 所以失败时**把偏好退回去**并说明原因 —— 否则界面显示"已开启"而实际没生效，
+   * 用户只会觉得"这个开关是假的"。
+   */
+  const pickWidgetPref = async (key: string, next: string) => {
     setThemeError(null)
-    // 每一步留痕：这条链路上有三处可能静默失败（`isTauri` 为假 / invoke 抛错被吞 /
-    // 后端没这道命令）。打点之后控制台能直接指出**卡在哪一步**。
-    console.info('[widget] 设置里切换开关 →', next, 'isTauri=', isDesktopShell())
+    console.info('[widget] 设置里切换', key, '→', next, 'isTauri=', isDesktopShell())
     try {
-      await prefs.setPref('widget_enabled', next)
-      if (next === 'on') {
-        const ok = await showWidgetWindow(
-          parseWidgetPos(globalThis.localStorage?.getItem(WIDGET_POS_KEY)),
-        )
-        console.info('[widget] showWidgetWindow →', ok)
-      } else {
-        const ok = await hideWidgetWindow()
-        console.info('[widget] hideWidgetWindow →', ok)
+      await prefs.setPref(key, next)
+      if (key === 'widget_enabled') {
+        if (next === 'on') {
+          const ok = await showWidgetWindow(
+            parseWidgetPos(globalThis.localStorage?.getItem(WIDGET_POS_KEY)),
+          )
+          console.info('[widget] showWidgetWindow →', ok)
+        } else {
+          const ok = await hideWidgetWindow()
+          console.info('[widget] hideWidgetWindow →', ok)
+        }
+        // 只做"确保可见"（可见时不动）；失败要**说出来**，否则用户只觉得"点了没反应"
+        if (!(await resurfaceMainWindow())) {
+          setThemeError('小窗开关已生效，但主窗口没有恢复显示 —— 点一下托盘图标即可唤回')
+        }
+        return
       }
-      // 只做"确保可见"（可见时不动）；失败要**说出来**，否则用户只觉得"点了没反应"
-      if (!(await resurfaceMainWindow())) {
-        setThemeError('小窗开关已生效，但主窗口没有恢复显示 —— 点一下托盘图标即可唤回')
+      if (key === 'widget_click_through') {
+        const ok = await setWidgetClickThrough(next === 'on')
+        console.info('[widget] setWidgetClickThrough →', ok)
+        // 浏览器/探针环境没有真窗口（返回 false 是**预期**），不提示
+        if (!ok && isDesktopShell()) {
+          await prefs.setPref(key, next === 'on' ? 'off' : 'on')
+          setThemeError('小窗鼠标穿透没能设上 —— 已退回原来的设置')
+        }
+        return
+      }
+      if (key === 'widget_hide_fullscreen') {
+        // 立即生效一次：用户刚把它打开时，如果此刻正有全屏程序，应当马上躲起来
+        const full = await isFullscreenAppRunning()
+        console.info('[widget] isFullscreenAppRunning →', full, ' next=', next)
+        void full
       }
     } catch (e) {
-      console.error('[widget] 切换开关失败', e)
+      console.error('[widget] 切换失败', e)
       setThemeError(e instanceof Error ? e.message : String(e))
     }
   }
@@ -665,32 +733,16 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
                     </div>
                   )}
 
-                  {/* 桌面状态控件（R38 批 5b）：与 close_action 同一个「外观」组，
-                      同样用 `.aps-row-stack`（说明在上、控件在下占整行）。 */}
-                  {prefs.specOf('widget_enabled') && (
-                    <div className="aps-row aps-row-stack" data-setting="widget_enabled">
-                      <div className="aps-row-main">
-                        <span className="aps-label">{prefs.specOf('widget_enabled')!.label}</span>
-                        <span className="aps-note">{prefs.specOf('widget_enabled')!.note}</span>
-                      </div>
-                      <div className="aps-row-ctl aps-radio-group" role="radiogroup"
-                           aria-label={prefs.specOf('widget_enabled')!.label}>
-                        {prefs.specOf('widget_enabled')!.options.map((o) => (
-                          <button
-                            key={o.value}
-                            type="button"
-                            role="radio"
-                            aria-checked={prefs.widgetEnabled === o.value}
-                            data-widget-option={o.value}
-                            className={`aps-radio${prefs.widgetEnabled === o.value ? ' on' : ''}`}
-                            onClick={() => void pickWidgetEnabled(o.value)}
-                          >
-                            {o.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+                  {/* 桌面状态控件（R38 批 5b；批 5d 加穿透与全屏隐藏共三项）：
+                      与 close_action 同一个「外观」组，同样用 `.aps-row-stack`
+                      （说明在上、控件在下占整行）。
+
+                      ⚠️ 三项都是**同一个形状**（label + note + 二选一 radio），所以走同一段渲染。
+                      从前 `widget_enabled` 那一项的 DOM 是手写的；批 5d 要加三项，
+                      手写三遍必然漂（`data-setting` / `data-widget-option` 这些探针钩子
+                      漏一个就静默少一条断言）—— 所以抽成 `renderWidgetRow`。 */}
+                  {(['widget_enabled', 'widget_click_through', 'widget_hide_fullscreen'] as const)
+                    .map((k) => renderWidgetRow(k))}
                 </div>
               )}
 

@@ -966,7 +966,81 @@ def _assert_glow(v: dict, width: int) -> list[str]:
         bad.append(f"@{width} {tag}: off 态对比度算不出来"
                    f"（opacity={off_a!r} color={g.get('offColor')!r} "
                    f"bg={g.get('barBgColor')!r}）—— 判据会静默空转")
-    # ── ④ 选中块（R39-D4 的六条，**一条没放宽**）────────────────────────────────
+    # ── ④ 选中块（R39-D4 的六条 + **R45-A 的三条**）────────────────────────────
+    # R45-A（用户 2026-09-24 拍板方案 E）：选中态从"浅粉底 + 粉描边 + 深图标"
+    # 换成"**深粉实底 + 白图标**、**去掉描边**"。所以判据跟着换一对 ——
+    #   旧："底色 alpha 必须 =1 且不得是渐变"（那是为"粉底 + 描边"立的）
+    #   新：**填充与图标的对比 ≥3:1**（这才是新方案要保护的性质）
+    # ⚠️ 按**渲染值**算，不写死 `#ec407a` —— 改色号也拦得住。
+    spot_bg = _rgba(g.get("spotBg") or "")
+    on_ico = _rgba(g.get("onColor") or "")
+    if spot_bg is None or on_ico is None:
+        bad.append(f"@{width} {tag}: 选中态对比度算不出来"
+                   f"（spotBg={g.get('spotBg')!r} onColor={g.get('onColor')!r}）"
+                   f"—— 判据会静默空转")
+    else:
+        on_cr = _ratio(_over(on_ico, spot_bg), spot_bg)
+        if on_cr < 3.0:
+            bad.append(f"@{width} {tag}: 激活图标对选中块的对比只有 {on_cr:.2f}:1"
+                       f"（图标 {g.get('onColor')!r} on 填充 {g.get('spotBg')!r}）—— "
+                       f"非文本对比下限 3:1。填充越亮这条越难过：白图标 ≥3:1 ⇔ 填充亮度 ≤0.30，"
+                       f"而顶栏粉 #ffa2b4 是 0.504 ⇒ 只有 1.90:1（用户原本想要的那档）")
+    # 描边必须真的去掉（用户口径：「选中时的边框直接去掉」）。
+    # 旧实现是 `inset 0 0 0 1px var(--c-primary-deep)` —— 这两条拦它回流。
+    ss, sb = g.get("spotShadow") or "none", g.get("spotBorder")
+    if "inset" in ss:
+        bad.append(f"@{width} {tag}: 选中块又出现了内描边（box-shadow={ss!r}）—— "
+                   f"R45-A 用户口径是「选中时的边框直接去掉」，形状改由**实底填充**承担")
+    if sb not in (None, "0px", 0):
+        bad.append(f"@{width} {tag}: 选中块出现了 border（{sb!r}）—— 同上去掉描边")
+    # ── ⑤ 页面标题让开工具条覆盖带（R45-B）────────────────────────────────────
+    # 用户口径：「list 视图和 archive 视图最顶部的部分可以用位于左侧的标题占掉
+    # 一部分顶部间距，这样页面工具条拉下来的时候就不会挡住太多内容」。
+    # 三条判据：
+    #   ① 标题下缘 ≥ `--toolbar-band`（真的让开了，不是象征性挪一点）；
+    #   ② 标题**不许与工具条 rect 相交**；
+    #   ③ archive 下标题文案 == **卡片内部渲染的标题**（两份真源，机器对账）——
+    #      防"改了 `DECK_LABELS` 忘了改卡片 JSX"这种静默漂移。
+    pt = g.get("pageTitle") or {}
+    pt_text, pt_rect = pt.get("text"), pt.get("rect")
+    band = g.get("toolbarBand")
+    band_px = None
+    if band:
+        try:
+            band_px = float(str(band).replace("px", "").strip())
+        except ValueError:
+            band_px = None
+    if tag in ("list", "archive"):
+        if not pt_text:
+            bad.append(f"@{width} {tag}: 没有页面标题（`.page-title` 缺失或为空）—— "
+                       f"这一页**必须有**：它负责让开工具条覆盖带（用户口径）")
+        elif pt_rect is None:
+            bad.append(f"@{width} {tag}: 量不到页面标题的矩形")
+        else:
+            if band_px is None:
+                bad.append(f"@{width} {tag}: 算不出 `--toolbar-band`（{band!r}）"
+                           f"—— 让开量判据会静默空转")
+            else:
+                bottom = pt_rect["y"] + pt_rect["h"]
+                if bottom < band_px - 1:
+                    bad.append(f"@{width} {tag}: 页面标题下缘 {bottom} < 工具条覆盖带 "
+                               f"{band_px}（`--toolbar-band`）—— 标题没真的让开；"
+                               f"它存在的意义就是**占掉顶部间距**（用户口径）")
+            if bar_rect and _overlap(pt_rect, bar_rect):
+                bad.append(f"@{width} {tag}: 页面标题与工具条相交"
+                           f"（标题 {pt_rect} vs 条 {bar_rect}）—— 那就又挡上了")
+            if tag == "archive":
+                card_title = g.get("cardTitle")
+                if not card_title:
+                    bad.append(f"@{width} {tag}: 量不到当前卡片**内部**的标题"
+                               f"（`.deck-card[data-deck-pos=front] .lc-title/.fc-title`）"
+                               f"—— 两份真源的对账会静默空转")
+                elif card_title != pt_text:
+                    bad.append(f"@{width} {tag}: 导航标题 {pt_text!r} ≠ 卡片内渲染的标题 "
+                               f"{card_title!r} —— 两份真源漂了（`PostsPage` 的 `DECK_LABELS` "
+                               f"与 `LiveCalendar`/`FanTrendChart` 的 JSX 必须一致）")
+    elif pt_text:
+        bad.append(f"@{width} {tag}: `{tag}` 视图不该有页面标题（拿到 {pt_text!r}）")
     spot = g.get("spot")
     bw = g.get("btnW")
     if not spot:
@@ -996,7 +1070,8 @@ def _assert_glow(v: dict, width: int) -> list[str]:
         # ── R39-D4（用户 2026-09-19：「换成粉底圆角块」）────────────────────────────
         # 这条挡的是**退回"白光点"**：白 0.90 叠在默认背景（头像铺底 + 厚白纱罩 ⇒ 合成
         # ≈#fefafb）上等于看不见，实测截图里"当前是哪个视图"只剩图标不透明度在传话。
-        # 所以选中块必须是**不透明填充**、且**不是渐变** —— 任何背景上都读得出来。
+        # 所以选中块必须是**不透明填充** —— 任何背景上都读得出来。
+        # （R45-A 起"填充 + 白图标"的对比另有一条判据，见上面 ④ 的三条。）
         bg_img = (spot.get("bgImage") or "none").strip()
         if bg_img != "none":
             bad.append(f"@{width} {tag}: 选中块用了渐变/图片背景（{bg_img[:60]!r}）—— "
@@ -3101,6 +3176,22 @@ def main() -> int:
             print(f"  小窗：shell={ww.get('hasShell')} 胶囊={ww.get('hasIsland')} "
                   f"density={ww.get('density')!r} 尺寸={ww.get('size')} "
                   f"居中误差={ww.get('centerErr')}")
+            # 诊断（2026-09-24 加）：`centerErr` 只给一个数字，偏了也**不知道是谁的锅**
+            # （shell 不是视口高？胶囊被撑高？#root 没撑开？）—— 这次就撞上了，
+            # 所以把参与计算的两个矩形原样带出来。
+            print(f"        视口={ww.get('viewport')} shell矩形={ww.get('shellRect')} "
+                  f"#root={ww.get('rootRect')}")
+            print(f"        胶囊矩形={ww.get('islandRect')} "
+                  f"胶囊顶边相对 shell={ww.get('islandTopVsShell')}")
+            # ── ⚠️ 面板在**小窗里**能不能用（2026-09-24 批 5d 加）──────────────
+            # 这条是为了让"面板落在窗口外"那个 bug 变红。它作为**真 bug** 活了很久，
+            # 因为 `--status-island` 一直在**主窗口的大视口**里量 —— 坐标系错了：
+            # 量的是"这套样式在大视口里对不对"，而不是"在小窗（200×40）里能不能用"。
+            print(f"  小窗面板：打开={ww.get('widgetPanelOpened')} "
+                  f"矩形={ww.get('widgetPanelRect')} 视口={ww.get('widgetViewport')}")
+            print(f"           注入条目后亮起={ww.get('widgetLitAfterSeed')} "
+                  f"在视口内={ww.get('widgetPanelInViewport')} "
+                  f"可命中={ww.get('widgetPanelHittable')} 高={ww.get('widgetPanelH')}")
             print(f"  渲染：#root 子元素={ww.get('rootChildren')} "
                   f"文本={ww.get('rootText')!r} ｜ 启动幕残留={ww.get('bootSplash')}")
             print(f"  窗口底：html={ww.get('htmlBg')!r} body={ww.get('bodyBg')!r} "
@@ -3155,9 +3246,61 @@ def main() -> int:
                 if sz != [200, 40]:
                     failures.append(f"@{w} status-widget: 小窗里胶囊尺寸是 {sz}，应为 [200, 40]"
                                     f"（`box-sizing` 是不是又丢了？独立入口拿不到 preflight）")
-                if ww.get("centerErr") != [0, 0]:
-                    failures.append(f"@{w} status-widget: 胶囊在小窗里没居中（误差 "
-                                    f"{ww.get('centerErr')}px）—— `.widget-shell` 的 flex 居中没生效")
+                # ⚠️ **判据在 2026-09-24（批 5d）从"居中"改成"贴顶"** —— 这不是放宽，是纠错。
+                #
+                # 旧判据是 `centerErr == [0, 0]`（胶囊在小窗里居中）。它能一直绿，是因为
+                # `.widget-shell` 当时是 `align-items: center` —— 而那是**错的**：
+                # 窗口要跟着面板长大（40 → 40+6+面板高），一旦居中，**窗口一长高胶囊就往下跑**，
+                # 而面板的 `top = 胶囊底 + 6` 是按胶囊算的 ⇒ 两者一起漂，
+                # 屏幕上看就是"展开时胶囊往下跳一截"。
+                #
+                # 更要紧的是：**"居中"从来不是需求**。真正的需求是"折叠态窗口恰好装下胶囊"
+                # —— 窗口 40px、胶囊 40px ⇒ 贴顶即占满（此时"居中"与"贴顶"是同一件事，
+                # 所以旧判据在折叠态下碰巧也对）。展开态则只有"贴顶"是对的。
+                #
+                # 判据换成**胶囊顶边贴窗口顶边**：折叠态下它等价于旧判据（占满 40px），
+                # 展开态下它才是对的那条。横向仍判居中（`centerErr[0]`）。
+                ce = ww.get("centerErr") or [None, None]
+                if ce[0] != 0:
+                    failures.append(f"@{w} status-widget: 胶囊在小窗里**横向**没居中"
+                                    f"（误差 x={ce[0]}px）—— `.widget-shell` 的 flex 横向居中没生效")
+                top_vs = ww.get("islandTopVsShell")
+                if top_vs is None:
+                    failures.append(f"@{w} status-widget: 没量到胶囊相对窗口顶边的偏移"
+                                    f"（`islandTopVsShell`）—— 探针字段丢了？")
+                elif top_vs != 0:
+                    failures.append(f"@{w} status-widget: 胶囊顶边离窗口顶边 {top_vs}px，应为 0"
+                                    f"—— 胶囊必须贴住窗口顶边（否则展开时窗口长高、胶囊会往下漂，"
+                                    f"而面板是按胶囊位置算的 ⇒ 一起漂）")
+                # ── ⚠️ 面板在**小窗里**能不能用（2026-09-24 批 5d 加）──────────
+                #
+                # **这三条就是那个真 bug 的判据**：面板 `top = 胶囊底(40) + 6 = 46`，
+                # 而小窗只有 40px 高 ⇒ 整体落在窗口外；宽 280 也超出 200。
+                # 它活了很久，因为旧探针一直在**主窗口的大视口**里量这套样式
+                # （在 1100 宽的视口里当然"在视口内、可命中"）⇒ **绿**。
+                # **判据的坐标系错了**：量的是"样式在大视口里对不对"，而不是"小窗里能不能用"。
+                #
+                # ⚠️ 探针里小窗的视口是**浏览器视口**（约 1076×621），不是真窗口的 200×40 ——
+                # 所以这三条**不能证明真机上窗口会跟着长大**（那要靠 `widgetExpandGeom` 的单测
+                # + 真机确认）。它们能证明的是**另一件同样要命的事**：
+                # 面板自己画得出来、落在视口内、点得着、且没被 `max-height` 压成一条。
+                if not ww.get("widgetPanelOpened"):
+                    failures.append(f"@{w} status-widget: 小窗里悬停后**面板没打开** —— "
+                                    f"hover 呼出在小窗里没接上（或面板被条件挡掉了）")
+                else:
+                    ph = ww.get("widgetPanelH") or 0
+                    if ph < 60:
+                        failures.append(f"@{w} status-widget: 小窗面板只有 {ph}px 高 —— "
+                                        f"`max-height: 60vh` 在小窗里会与面板高度**互为因果**"
+                                        f"（窗口跟面板长 ⇒ vh 一直很小 ⇒ 死锁在一条窄板上）。"
+                                        f"改用按屏幕算的 `--widget-panel-max-h`")
+                    if not ww.get("widgetPanelInViewport"):
+                        failures.append(f"@{w} status-widget: 小窗面板**越出视口**"
+                                        f"（矩形={ww.get('widgetPanelRect')} "
+                                        f"视口={ww.get('widgetViewport')}）—— 会被裁掉")
+                    if not ww.get("widgetPanelHittable"):
+                        failures.append(f"@{w} status-widget: 小窗面板**点不着**（命中测试失败）"
+                                        f"—— 看得见但点不到，等于没有")
                 # ⚠️ 这条是**独立入口**的判据（2026-09-24 起）：小窗里出现主窗口的东西，
                 #    说明它又走回"加载整个应用"那条路了（`widget.html` 被改回 `index.html`？）
                 for key, label in (("hasTopbar", "顶栏"), ("hasSidebar", "侧栏")):
@@ -3166,7 +3309,7 @@ def main() -> int:
                                         f"`widget.html` 这个**独立入口**没生效"
                                         f"（它加载了主窗口那套 ⇒ 又变成 132MB 了）")
             if not failures:
-                print("  [ok] 桌面控件小窗：分流生效（无顶栏/侧栏）/ 胶囊居中 200×40")
+                print("  [ok] 桌面控件小窗：分流生效（无顶栏/侧栏）/ 胶囊贴顶横向居中 200×40")
             for b in failures:
                 print("   -", b)
             return 1 if failures else 0

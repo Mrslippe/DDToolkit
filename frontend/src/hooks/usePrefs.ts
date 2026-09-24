@@ -22,6 +22,7 @@ import { parseWidgetEnabled, type WidgetEnabled } from '../utils/widgetWindow'
 export function usePrefs() {
   const [values, setValues] = useState<Record<string, string>>({
     theme: 'light', close_action: 'ask', widget_enabled: 'off',
+    widget_click_through: 'off', widget_hide_fullscreen: 'on',
   })
   const [specs, setSpecs] = useState<PrefsSpec[]>([])
   const [systemDark, setSystemDark] = useState(() => systemPrefersDark())
@@ -30,6 +31,11 @@ export function usePrefs() {
   const pref = (values.theme === 'system' ? 'system' : 'light') as ThemePref
   const closeAction: CloseAction = parseCloseAction(values.close_action)
   const widgetEnabled: WidgetEnabled = parseWidgetEnabled(values.widget_enabled)
+  // 小窗两项（R38 批 5d）：与 `widget_enabled` 同款解析（**认不出的一律取安全值**）。
+  // 穿透默认 `off`（认不出 = 不穿透，否则用户会"点不动小窗"却不知道原因）；
+  // 全屏隐藏默认 `on`（这是纯体验项，认不出时按"更不打扰"处理）。
+  const widgetClickThrough = values.widget_click_through === 'on'
+  const widgetHideFullscreen = values.widget_hide_fullscreen !== 'off'
   const resolved = resolveTheme(pref, systemDark)
   const caveat = themeCaveat(pref, systemDark)
 
@@ -44,7 +50,11 @@ export function usePrefs() {
   const load = useCallback(async () => {
     try {
       const r: Prefs = await api.getPrefs()
-      setValues({ theme: 'light', close_action: 'ask', ...r.values })
+      setValues({
+        theme: 'light', close_action: 'ask',
+        widget_enabled: 'off', widget_click_through: 'off', widget_hide_fullscreen: 'on',
+        ...r.values,
+      })
       setSpecs(r.specs ?? [])
     } catch {
       /* 后端不可达：按默认值显示，设置窗口里会给出读取失败提示 */
@@ -79,6 +89,7 @@ export function usePrefs() {
 
   return {
     values, specs, specOf, pref, closeAction, widgetEnabled, resolved, caveat, loaded,
+    widgetClickThrough, widgetHideFullscreen,
     setPref, setTheme, reload: load,
   }
 }

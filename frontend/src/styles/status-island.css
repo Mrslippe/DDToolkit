@@ -125,6 +125,13 @@
   background: rgba(20, 20, 26, 0.97);
   border-color: rgba(255, 255, 255, 0.12);
   color: #fff;
+  /* ⚠️ **小窗里不能用 `60vh` 当高度上限**（R38 批 5d 修）。
+     小窗的高度是**跟着面板长的**（窗口 = 40 + 6 + 面板高，见 `utils/widgetWindow.ts`）——
+     于是 `vh` 与面板高度**互为因果**：折叠态窗口 40px ⇒ `60vh = 24px` ⇒ 面板被压到 24px
+     ⇒ 窗口只长到 70px ⇒ `60vh` 仍然很小 ⇒ 面板永远长不开（死锁在一个 24px 的板子上）。
+     所以上限改由 JS 按**屏幕高度**算出后写进这个变量（`--widget-panel-max-h`）。
+     取不到时退回 `none`：宁可让面板高过窗口（用户滚动看到），也不要把它压成一条。 */
+  max-height: var(--widget-panel-max-h, none);
 }
 
 /* 桌面状态控件**小窗**的根容器（R38 批 5b，`?widget=1`）。窗口本身就是透明的 200×40
@@ -152,11 +159,39 @@ html[data-widget-window] #root {
   width: 100vw;
   height: 100vh;
   display: flex;
-  align-items: center;
+  /* ⚠️ **胶囊必须钉在顶边**，不能垂直居中（R38 批 5d 修）。
+     展开态窗口会长到 `40 + 6 + 面板高`（见 `utils/widgetWindow.ts` 的形态梯度），
+     面板是 portal 到 body 的 ⇒ `.widget-shell` 里**始终只有胶囊一个孩子**。
+     若还 `align-items: center`，窗口一长高，胶囊就**跑到窗口垂直中间**，
+     而面板的 `top = 胶囊底 + 6` 是**按胶囊位置算的** ⇒ 两者一起往下漂，
+     屏幕上看就是"展开时胶囊往下跳了一截"。
+     钉在顶边之后：窗口长大 = **向下长**，胶囊原地不动，面板正好落在它下面。
+     `justify-content: center` 保留（横向居中，窗口变宽时胶囊仍居中）。 */
+  align-items: flex-start;
   justify-content: center;
   background: transparent;
   overflow: hidden;
   user-select: none;
+}
+
+/* 小窗里胶囊自己**不要再撑高度**：折叠态窗口正好 40px，胶囊 40px 占满；
+   展开后多出来的高度是留给面板的，胶囊不该跟着拉伸。 */
+.widget-shell > .si-island {
+  flex: none;
+}
+
+/* ── 展开方向（R38 批 5d）─────────────────────────────────────────────
+   小窗默认落在**右下角**，向下展开需要 `968 + 40 + 6 + 面板高` —— 1080p 上任何面板高度
+   都放不下（≥1214 > 1080）。所以贴屏幕下沿时**向上翻**：面板长在胶囊**上方**。
+   窗口坐标由 `widgetExpandGeom` 算（底边对齐），这里只负责把胶囊
+   从窗口**顶边**挪到**底边** —— 少了这一步会得到"面板在上面、胶囊也还在上面"的错位。
+
+   ⚠️ 面板**不需要**在这里改定位：它是 portal 到 `body` + `position: fixed` 的，
+   而窗口的视口就是它自己 ⇒ fixed 坐标 = 窗口坐标。`StatusIsland.place()` 会按
+   `data-flip` 决定把面板放在胶囊下方（`r.bottom + 6`）还是上方（`r.top − 6 − 面板高`）。 */
+.widget-shell[data-flip='up'] {
+  flex-direction: column;
+  justify-content: flex-end;
 }
 
 /* 计数：多于一条时才出现（让用户知道点开还有别的） */
