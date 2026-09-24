@@ -5,6 +5,12 @@ use std::time::Duration;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager, RunEvent, State, WindowEvent};
+
+/// 小窗被销毁时广播给前端的事件名（与 `frontend/src/utils/widgetWindow.ts` 的
+/// `WIDGET_CLOSED_EVENT` **必须一致**）。定义在 Rust 侧是因为**两条销毁路径都在这里**
+/// （设置开关 → `hide_widget_window`，小窗 Alt+F4 → `destroy_widget_window`），
+/// 前端只负责听。
+const WIDGET_CLOSED_EVENT: &str = "widget:closed";
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
@@ -669,6 +675,12 @@ fn rebuild_main_window(app: &tauri::AppHandle) -> tauri::Result<tauri::WebviewWi
 /// 与主窗口的三点不同：**置顶**（`always_on_top`）、**不进任务栏**（`skip_taskbar`）、
 /// **不可缩放**（它是个控件不是窗口）。透明 + 无边框与主窗口一致 ——
 /// 桌面上要看见的是圆角胶囊，不是一块方板。
+///
+/// > ⚠️ **窗口创建的收尾必须同步**（2026-09-24 实测踩过）：`WebviewWindowBuilder` 里那些
+/// > `set_*` 在**别的平台**上可能变成 `dispatch`，于是 `build()` 返回时窗口还带着默认外观
+/// > （带边框、可缩放、不置顶）。所以要在**同一个同步块**里用 `w.set_*()` 把
+/// > 装饰/缩放/置顶/任务栏再钉一遍 —— 这些是同步调用，一定在 `build()` 之后生效。
+/// > 少了这一步，桌面上会出现一个**带标题栏的方窗**（那正是"透明背景小窗"的观感来源）。
 #[tauri::command]
 fn show_widget_window(app: tauri::AppHandle, x: Option<i32>, y: Option<i32>) -> Result<(), String> {
     const W: f64 = 200.0;
@@ -697,6 +709,14 @@ fn show_widget_window(app: tauri::AppHandle, x: Option<i32>, y: Option<i32>) -> 
     .background_color(tauri::window::Color(0, 0, 0, 0))
     .build()
     .map_err(|e| e.to_string())?;
+    // 同步钉一遍（理由见文档注释）：这些都是同步调用，`build()` 之后一定生效
+    let _ = w.set_decorations(false);
+    let _ = w.set_resizable(false);
+    let _ = w.set_always_on_top(true);
+    let _ = w.set_skip_taskbar(true);
+    let _ = w.set_shadow(false);
+    // 尺寸也钉一遍：`inner_size` 在 builder 里同样可能被延迟应用
+    let _ = w.set_size(tauri::LogicalSize::new(W, H));
     match (x, y) {
         (Some(x), Some(y)) => {
             let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
@@ -717,10 +737,36 @@ fn show_widget_window(app: tauri::AppHandle, x: Option<i32>, y: Option<i32>) -> 
 
 /// 关掉桌面状态控件。**销毁而不是隐藏** —— 关掉开关就不该再留一个 webview；
 /// 位置已经由前端存进 localStorage，下次开启会回到原处。
+///
+/// 幂等：窗口不在（本来就没开）也算成功。这个命令会从**两条路**被调到 ——
+/// 主窗口的开关，以及小窗自己的退出兜底 —— 不幂等就会出现"第二次调用报错"。
+///
+/// 销毁后**广播 `widget:closed`** 给前端：主窗口据此把 `prefs.widget_enabled` 落成 `off`。
+/// 不做的话用户按 Alt+F4 关掉小窗之后偏好还是 `on`，下次启动又开一个 —— 观感就是"关不掉"。
 #[tauri::command]
 fn hide_widget_window(app: tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("widget") {
-        let _ = w.close();
+        let _ = w.destroy();
+        let _ = app.emit(crate::WIDGET_CLOSED_EVENT, ());
+    }
+}
+
+/// 兜底：**把小窗的 webview 弄走**（Tauri v2 的 ACL 下命令不走 capability，所以这条一定可达）。
+///
+/// 2026-09-24 真机反馈：开了小窗之后主窗口点 ✕ / 最小化都没反应，托盘退出也杀不掉进程。
+/// 根因在 `capabilities/default.json`（作用域只写了 `"main"` ⇒ 小窗一条窗口权限都没有，
+/// `startDragging()` 抛错成未处理 rejection ⇒ IPC 通道坏掉，见 `widgetWindow.ts` 那段注释）。
+/// 权限已修，但**已经中招的机器**还留着一个半死的小窗：小窗里 `getCurrentWindow().close()`
+/// 同样要权限（一样会失败），所以**必须有一条不走 ACL 的路**。
+///
+/// 这里**只 destroy 小窗**（前端随后重拉主窗口可见性），不碰 `QUITTING`：
+/// 它不该顺手把整个应用退出 —— 用户的诉求是"把那个小窗口弄掉"。
+#[tauri::command]
+fn destroy_widget_window(app: tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("widget") {
+        let _ = w.destroy();
+        let _ = app.emit(crate::WIDGET_CLOSED_EVENT, ());
+        println!("[ddtoolkit] 小窗被兜底命令销毁（label=widget）");
     }
 }
 
@@ -1138,7 +1184,8 @@ pub fn run() {
             set_process_proxy,
             window_corners_mode,
             show_widget_window,
-            hide_widget_window
+            hide_widget_window,
+            destroy_widget_window
         ])
         .on_window_event(|window, event| {
             // ✕ 不再等于"退出"（R18，devlog/095）：关闭请求被拦下，改成隐藏到托盘，

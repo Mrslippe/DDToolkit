@@ -81,6 +81,22 @@ export async function hideWidgetWindow(): Promise<boolean> {
   }
 }
 
+/**
+ * 兜底：**不走 ACL** 地把小窗弄掉（后端 `destroy_widget_window` 直接 `destroy()`）。
+ *
+ * 2026-09-24 真机反馈的善后路径：Tauri v2 的命令不走 capability，所以即使小窗里
+ * `getCurrentWindow().close()` 因为权限失败，这条也一定能到。
+ */
+export async function destroyWidgetWindow(): Promise<boolean> {
+  if (!isTauri) return false
+  try {
+    await invoke('destroy_widget_window')
+    return true
+  } catch {
+    return false
+  }
+}
+
 // ── 数据目录（R22-B2d，devlog/108）────────────────────────────────────
 
 export interface ShellDataDirInfo {

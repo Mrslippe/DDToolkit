@@ -1,13 +1,16 @@
 {
   "$schema": "https://schema.tauri.app/capabilities/2",
   "identifier": "default",
-  "description": "主窗口默认能力：事件、窗口控制（最小化/关闭/拖拽）。R18 起隐藏与退出走自定义命令（hide_to_tray / quit_app），不再需要 allow-hide。",
-  "windows": ["main"],
+  "description": "窗口默认能力：事件、窗口控制（最小化/关闭/显示/拖拽）。R18 起隐藏与退出走自定义命令（hide_to_tray / quit_app），不再需要 allow-hide。R38 批 5b 起作用域是**所有窗口**（含桌面控件小窗）——见下。",
+  "windows": ["*"],
   "permissions": [
     "core:default",
     "core:window:allow-minimize",
     "core:window:allow-close",
     "core:window:allow-show",
+    "core:window:allow-hide",
+    "core:window:allow-set-focus",
+    "core:window:allow-get-all-windows",
     "core:window:allow-toggle-maximize",
     "core:window:allow-start-dragging",
     "core:event:allow-listen",

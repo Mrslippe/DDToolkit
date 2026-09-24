@@ -1856,6 +1856,12 @@ export async function runUiProbe(): Promise<void> {
     const island = document.querySelector<HTMLElement>('.si-island')
     result.hasShell = !!shell
     result.hasIsland = !!island
+    // ⚠️ **渲染没抛错**的判据（2026-09-24 真机反馈加）：那次的症状正是
+    // "只有一块透明背景、胶囊没了" —— 也就是 React 在这里抛了异常、整棵树没渲染出来。
+    // `#root` 里还剩多少东西，是"渲染真的跑到底了"最直接的证据。
+    const root = document.getElementById('root')
+    result.rootChildren = root ? root.children.length : 0
+    result.rootText = (root?.textContent || '').trim().slice(0, 40)
     result.density = island?.getAttribute('data-density') ?? null
     // 分流没生效的证据：主窗口那套东西还在
     result.hasTopbar = !!document.querySelector('.topbar')

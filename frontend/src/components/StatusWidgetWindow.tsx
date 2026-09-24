@@ -78,6 +78,29 @@ export default function StatusWidgetWindow() {
     return () => un?.()
   }, [])
 
+  // ④ 退出兜底（2026-09-24 真机反馈加）：**用户直接关小窗**（Alt+F4 / 系统菜单）时，
+  //    保证它真的消失。
+  //
+  //    为什么走自定义命令而不是 `getCurrentWindow().close()`：后者要 ACL 权限
+  //    （`core:window:allow-close`），而权限有问题的机器上正是它失败 ⇒ 窗口关不掉。
+  //    `destroy_widget_window` 是**自定义命令，不走 ACL**，因此一定可达 —— 这就是兜底的价值。
+  useEffect(() => {
+    let un: (() => void) | null = null
+    void (async () => {
+      try {
+        const { getCurrentWindow } = await import('@tauri-apps/api/window')
+        un = await getCurrentWindow().onCloseRequested(async (e) => {
+          e.preventDefault()
+          const { destroyWidgetWindow } = await import('../utils/shellBridge')
+          await destroyWidgetWindow()
+        })
+      } catch {
+        /* 非桌面端 / 权限不足：探针环境本来就没有窗口可关 */
+      }
+    })()
+    return () => un?.()
+  }, [])
+
   const onPointerDown = (e: React.PointerEvent) => {
     down.current = { x: e.clientX, y: e.clientY, dragging: false }
   }
@@ -87,12 +110,17 @@ export default function StatusWidgetWindow() {
     if (Math.abs(e.clientX - d.x) < DRAG_THRESHOLD_PX &&
         Math.abs(e.clientY - d.y) < DRAG_THRESHOLD_PX) return
     d.dragging = true
+    // ⚠️ **必须 catch**：Tauri v2 的 ACL 会在这里抛权限错误，而"没 catch 的 async IIFE"
+    //    会变成未处理 rejection ⇒ **WebView 的 IPC 通道被打坏**，之后主窗口那条 IPC 桥
+    //    全部失灵（关不掉、最小化不了、托盘退出也杀不掉）—— 2026-09-24 真机反馈的根因。
+    //    权限已修（`capabilities/default.json` 作用域放到所有窗口），但这里也补上兜底：
+    //    拖不动最多是"拖不动"，绝不该把整条 IPC 带走。
     void (async () => {
       try {
         const { getCurrentWindow } = await import('@tauri-apps/api/window')
         await getCurrentWindow().startDragging()
-      } catch {
-        /* 非桌面端 */
+      } catch (err) {
+        console.warn('[widget] 拖动失败（权限？）—— 已吞掉，不影响其它功能', err)
       }
     })()
   }

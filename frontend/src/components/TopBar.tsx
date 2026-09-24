@@ -28,7 +28,7 @@ import { useCapabilities, refreshCapabilities } from '../hooks/useCapabilities'
 import { hideToTray, quitApp } from '../utils/shellBridge'
 import { isShellHidden } from '../utils/shellLifecycle'
 import { closeIntent, parseCloseAction, type CloseAction } from '../utils/shellState'
-import { broadcastNotices, parseWidgetEnabled, WIDGET_POS_KEY, parseWidgetPos } from '../utils/widgetWindow'
+import { broadcastNotices, parseWidgetEnabled, WIDGET_CLOSED_EVENT, WIDGET_POS_KEY, parseWidgetPos } from '../utils/widgetWindow'
 import { showWidgetWindow } from '../utils/shellBridge'
 import type { Notice, NoticeActionKind } from '../utils/notificationHub'
 import {
@@ -525,6 +525,41 @@ export default function TopBar() {
       }
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // ⑨ R38 批 5b（2026-09-24 真机反馈加）：**小窗自己关掉时**把偏好改回 `off`。
+  // 用户按 Alt+F4 / 系统关它 → 小窗发 `widget:closed` → 这里落一次偏好。
+  // 不做的话会出现"窗口没了但设置还写着开启"，下次启动又开一个，用户会觉得"关不掉"。
+  //
+  // ⚠️ **落偏好之前必须确认窗口真的没了**：`hide_widget_window` 在**设置里关开关**那条路上
+  //    也会发这个事件，而"关掉又立刻打开"时这条可能**后到** ⇒ 会把刚打开的偏好改回 `off`。
+  //    拿不到窗口列表时**宁可不落**（少落一次只是下次启动多开一下，落错是状态不一致）。
+  useEffect(() => {
+    let un: (() => void) | null = null
+    void (async () => {
+      try {
+        const { listen } = await import('@tauri-apps/api/event')
+        un = await listen(WIDGET_CLOSED_EVENT, () => {
+          void (async () => {
+            try {
+              const { getAllWindows } = await import('@tauri-apps/api/window')
+              const wins = await getAllWindows()
+              if (wins.some((w) => w.label === 'widget')) return   // 还开着 ⇒ 是竞态，别改
+            } catch {
+              return
+            }
+            try {
+              await api.savePrefs({ widget_enabled: 'off' })
+            } catch {
+              /* 落不上就下次启动再说 */
+            }
+          })()
+        })
+      } catch {
+        /* 非桌面端 */
+      }
+    })()
+    return () => un?.()
   }, [])
 
   /** 面板动作 → 具体行为（渲染层不碰业务） */

@@ -39,7 +39,7 @@ import {
 } from '../utils/settingsDraft'
 import OverlayScroll from './OverlayScroll'
 import { hideWidgetWindow, showWidgetWindow } from '../utils/shellBridge'
-import { WIDGET_POS_KEY, parseWidgetPos } from '../utils/widgetWindow'
+import { WIDGET_POS_KEY, parseWidgetPos, resurfaceMainWindow } from '../utils/widgetWindow'
 import './../styles/posts.css'
 
 interface Props {
@@ -385,6 +385,14 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
         )
       } else {
         await hideWidgetWindow()
+      }
+      // ⚠️ **紧接着重拉一次主窗口的可见性**（2026-09-24 真机反馈加）：
+      //    权限缺失期间主窗口可能已经被 `hide()` 成功、而 `show()` 失败 ⇒ 停在"已隐藏"，
+      //    看起来跟没修一样。重拉一次才把状态摆正。理由详见 `widgetWindow.resurfaceMainWindow`。
+      //    失败要**说出来** —— 否则用户只会觉得"点了没反应"。
+      const ok = await resurfaceMainWindow()
+      if (!ok) {
+        setThemeError('小窗开关已生效，但主窗口没有恢复显示 —— 点一下托盘图标即可唤回')
       }
     } catch (e) {
       setThemeError(e instanceof Error ? e.message : String(e))

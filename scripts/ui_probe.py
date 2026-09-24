@@ -3029,12 +3029,20 @@ def main() -> int:
             print(f"  小窗：shell={ww.get('hasShell')} 胶囊={ww.get('hasIsland')} "
                   f"density={ww.get('density')!r} 尺寸={ww.get('size')} "
                   f"居中误差={ww.get('centerErr')}")
+            print(f"  渲染：#root 子元素={ww.get('rootChildren')} "
+                  f"文本={ww.get('rootText')!r}（胶囊没渲染时这里会是空的）")
             print(f"  分流：顶栏={ww.get('hasTopbar')} 侧栏={ww.get('hasSidebar')}（都应为 False）")
             if not ww:
                 failures.append(f"@{w} status-widget: 小窗视图没量到（探针未跑完？）")
             else:
                 if not ww.get("hasShell"):
                     failures.append(f"@{w} status-widget: 小窗里没有 `.widget-shell`")
+                # ⚠️ **渲染抛错**的判据：2026-09-24 真机反馈的症状正是"只有一块透明背景、
+                # 胶囊没了" —— 也就是 React 在这里抛异常、整棵树没渲染出来。
+                if not ww.get("rootChildren"):
+                    failures.append(f"@{w} status-widget: `#root` 里一个元素都没有 —— "
+                                    f"小窗的 React 渲染抛错了（真机上就表现为"
+                                    f"「只有一块透明背景、没有胶囊」）")
                 if ww.get("density") != "widget":
                     failures.append(f"@{w} status-widget: 小窗里的胶囊 density 是 "
                                     f"{ww.get('density')!r}，应为 'widget'")

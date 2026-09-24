@@ -100,6 +100,69 @@ export function saveWidgetPos(pos: WidgetPos, prevRaw: string | null): void {
 export const WIDGET_NOTICES_EVENT = 'widget:notices'
 /** 小窗 → 主窗口：面板里点了动作（"去登录"/"查看详情"这些只有主窗口做得了） */
 export const WIDGET_ACTION_EVENT = 'widget:action'
+/**
+ * 小窗 → 主窗口：**小窗自己关掉了**（用户按 Alt+F4 / 系统关它）。
+ * 主窗口据此把偏好改回 `off`（2026-09-24 真机反馈补）。
+ */
+export const WIDGET_CLOSED_EVENT = 'widget:closed'
+
+/** 桌面端判定（与 `shellBridge` 同款：`__TAURI_INTERNALS__` 在 window 上） */
+export const isDesktopShell = (): boolean =>
+  typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+
+/**
+ * 重新拉一次主窗口的**可见性**，并**报告结果**。
+ *
+ * ## 背景（2026-09-24 真机反馈）
+ *
+ * 开了小窗之后：主窗口点 ✕ / 最小化都**没反应**，托盘退出也杀不掉进程，
+ * 而且那个小窗**只有一块透明背景、没有胶囊**。
+ *
+ * ## 查证到的事实（**只有这些**）
+ *
+ * - `capabilities/default.json` 的作用域原本是 `"windows": ["main"]` ⇒ 小窗**一条窗口权限
+ *   都没有**。（顺带核实：`core:window:default` 是**包含** `allow-hide` / `allow-show` /
+ *   `allow-start-dragging` 的 —— 所以问题在**作用域**，不在权限集合里。这一点与最初的猜测不同，
+ *   特意写下来免得下次又猜错。）
+ * - 小窗前端里那句 `startDragging()` 包在一个**没被 await 的 async IIFE** 里 ⇒
+ *   权限被拒时是**未处理的 Promise rejection**。
+ * - 只补权限、不重拉主窗口是不够的（见下）。
+ *
+ * ## 为什么"先 hide 再 show"而不是直接 `show()`
+ *
+ * 权限缺失期间主窗口可能已经处于**错误状态**（它被藏起来过、或显示链路被搅过）。
+ * 重拉一次是把状态**摆正**，而不是假设它是对的。失败时返回 `false` → 调用方提示用户
+ * "点一下托盘图标" —— 比闷头做完、界面毫无反应要好。
+ *
+ * ## ⚠️ 这句是**未确证**的
+ *
+ * "小窗的未处理 rejection 会打坏**主窗口**的 IPC 通道"——两个 webview 各有各的 IPC，
+ * 这条因果**没有查到证据**。但它解释了用户看到的全部三个症状（关不掉 / 最小化不了 /
+ * 托盘退不掉），而且"async IIFE 必须 catch"本身就是对的，所以照修了。
+ * **真正的确认要靠装一次直装版复现**（见 `docs/TODO.md` §1.3）。
+ */
+export async function resurfaceMainWindow(): Promise<boolean> {
+  if (!isDesktopShell()) return false
+  try {
+    const { getAllWindows } = await import('@tauri-apps/api/window')
+    const wins = await getAllWindows()
+    for (const w of wins) {
+      if (w.label !== 'main') continue
+      try {
+        await w.hide()
+        await w.show()
+        await w.setFocus()
+      } catch {
+        // 连 show 都失败：至少别把整个 flow 带崩
+        return false
+      }
+      return true
+    }
+    return false
+  } catch {
+    return false
+  }
+}
 
 /**
  * 主窗口把条目推给小窗。
