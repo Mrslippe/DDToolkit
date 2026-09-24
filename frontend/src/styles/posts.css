@@ -74,12 +74,14 @@
    ⚠️ **它与工具条的关系是"让位"不是"参与"**：标题**不随工具条显隐**
    （它是内容，不是 chrome）—— 工具条隐着的时候标题照常在那儿。这正是"占掉
    一部分顶部间距"的实现方式：**静态地让开**，而不是等工具条出现再挤。
-   ⚠️ `padding-top: calc(var(--toolbar-band) + 8px)` —— 8px 是让开的余量。
-   带子高度走令牌（tokens.css 的 `--toolbar-band`），三处一个来源。 */
+   ⚠️ `padding-top: calc(var(--toolbar-band) + var(--toolbar-gap))` —— 让开量走令牌。
+   `--toolbar-band`(52) = 工具条覆盖的那条带子；`--toolbar-gap`(40) = **内容离它多远**，
+   按参考图量出的 7.0% 面板高定的（R45-D，用户口径：「面板主体内容距离上面工具条的距离」）。
+   两处一个来源，改条高或改间距都不会漏改。 */
 .page-title {
   flex: none;
   margin: 0;
-  padding: calc(var(--toolbar-band) + 8px) 16px 8px;
+  padding: calc(var(--toolbar-band) + var(--toolbar-gap)) 16px 8px;
   /* 与卡片族标题同规格（`lc-title` / `fc-title` 都是这套），全仓一致 */
   font-size: 16.5px;
   font-weight: 600;
@@ -575,20 +577,20 @@
 
 
 /* Hero：主题展示栏（口播规格 1.2）：宽填充、纵向居中、间隔 10。
-   ⚠️ **R45：`padding-top` 23 → 38px** —— 卡片页**没有页面标题**（它的 hero 本身就是主体，
+   ⚠️ **R45 起 `padding-top` 走让开量**：卡片页**没有页面标题**（它的 hero 本身就是主体，
    加标题反而挡头像），所以"让开按需浮出的工具条"只能靠 hero 自己的上内距。
-   实测（`ui_probe` 的 `glow.heroTop`）：padding 23 时头像顶在**面板内 37**，
-   而工具条覆盖带是 **52** ⇒ 工具条浮出时会**切掉头像顶部 15px**（截图里肉眼可见）。
-   ⇒ 取 `23 + 15 = 38`。这条由探针 `heroTop.topInPanel ≥ --toolbar-band` 机器判。
-   （R45-B 当时判断"23 已经够了"是**错的** —— 那次没量、只看代码，属于
-     "没有判据的东西我看着以为没事"。） */
+   演进：23px（原）→ **38px**（R45：实测头像顶在面板内 37、而覆盖带 52 ⇒ 会切掉 15px）
+   → **`--toolbar-band + --toolbar-gap` = 92px**（R45-D：用户要求"主体内容离工具条的距离"
+   按参考图对齐，参考量出 7.0% 面板高）。
+   ⚠️ 92px 在 581px 面板里是 16% —— 这是**用户明确要的**（「跟（卡片页也留 40px）」），
+   不是副作用。判据：`heroTop.topInPanel ≥ --toolbar-band`（探针量 `glow.heroTop`）。 */
 .hero {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 10px;
   width: 100%;
-  padding: 38px 15px 0;
+  padding: calc(var(--toolbar-band) + var(--toolbar-gap)) 15px 0;
 }
 
 .hero-avatar {
@@ -966,14 +968,13 @@ img.hero-avatar {
   top: calc(100% + 6px);
   z-index: 30;
   width: min(512px, calc(100vw - 574px));
-  /* ⚠️ R45-B：`max-height` 原来写死 `calc(100vh - 252px)` —— 那是"筛选行之上有多少
-     固定高度"的**手算值**。加了 `.page-title`（89px）之后它不再成立：弹窗顶出面板底、
-     被 `.posts-panel` 的 `overflow:hidden` 裁掉（探针实测 `insidePanel=false`，
-     `pop.bottom=629` vs `panel.bottom=661`，而 `max-height` 仍按旧的 252 算 ⇒ 高 362 放不下）。
-     改成**按同一个来源算**：`.page-title` 的高度 = `--toolbar-band`(52) + 8 + 行高(21.45)
-     + 8 = 89.45 ≈ 90px。用 `--toolbar-band` + 38px 表达（38 = 8+21.45+8 的整数化）。
-     这样以后再动标题的让开量，弹窗会跟着走，不会再各写一处。 */
-  max-height: calc(100vh - 252px - var(--toolbar-band) - 38px);
+  /* ⚠️ R45-B/C/D：`max-height` 原来写死 `calc(100vh - 252px)` —— 那是"筛选行之上有多少
+     固定高度"的**手算值**。加了让开量之后它不再成立：弹窗顶出面板底、被 `.posts-panel`
+     的 `overflow:hidden` 裁掉（探针实测 `insidePanel=false`）。
+     改成**跟同一个来源走**：让开量 = `--toolbar-band + --toolbar-gap` + 标题行高与下内距。
+     这样以后动标题的让开量，弹窗会跟着走，不会再各写一处。
+     （`--title-block` 就是"标题那一块的总高" —— 见 `.page-title`。） */
+  max-height: calc(100vh - 252px - var(--toolbar-band) - var(--toolbar-gap) - 8px);
   overflow: hidden;
   padding: 10px;
   background: #fff;

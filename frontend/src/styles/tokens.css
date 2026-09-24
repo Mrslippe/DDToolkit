@@ -148,14 +148,22 @@
 
   /* 尺寸（紧凑壳层：顶栏 40 / 工具栏 50；侧栏 492 沿用档案页规格） */  --topbar-height: 40px;
   --sidebar-width: 492px;
-  /* ── 页面工具条的几何（R45 / R45-B）────────────────────────────────────
+  /* ── 页面工具条的几何（R45 / R45-B / R45-D）────────────────────────────
      `.glow-bar` 是 **overlay**（`position:absolute`），压在内容之上、按需出现。
-     `--toolbar-band` 是**它覆盖的那条带子的高度**，给"要让开它"的内容用
-     （现在只有 `.page-title` 用）—— 三处引同一个来源，改条高不会漏改。
+     `--toolbar-band` = 它**覆盖的那条带子**的高度；`--toolbar-gap` = **内容要让开的
+     间距**。两者一起决定"主体内容从哪开始"，全仓只有这一处真源
+     —— 现在引用它们的是 `.page-title`（list/archive）与 `.hero`（cards）。
      ⚠️ 原来是散在 `.glow-bar` 里的 `top:6px; height:46px` 两个字面量。 */
   --toolbar-top: 6px;
   --toolbar-h: 46px;
   --toolbar-band: calc(var(--toolbar-top) + var(--toolbar-h));
+  /* R45-D（用户 2026-09-24）：「面板主体内容距离上面工具条的距离」——
+     按两张参考图量出来的是 **37px / 占面板高 7.0%**（两张一致），我们取 **40px**
+     （占 581 面板高 6.9%，与参考基本一致）。
+     ⚠️ **不按"条高的倍数"取**：参考图的条只有 30px 高，我们的是 46px
+     （4 枚 34px 按钮 + 上下各 3px）——套 1.23× 会得到 57px，偏大。
+     留白的视觉作用是**绝对量**（让内容离开 chrome），不随条高变。 */
+  --toolbar-gap: 40px;
   /* 窗口圆角度数（L3 自绘方案，随改随生效）
      ⚠️ 这只是 **Win10 / 浏览器 / 探针的兜底值**：Win11 上圆角由 DWM 画，
      `html.dwm-corners` 会把它覆盖成 0（见 layout.css 与 utils/windowCorners.ts，devlog/136）。

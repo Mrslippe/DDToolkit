@@ -527,6 +527,26 @@ function measure(tag: string) {
          *  才能跟 `--toolbar-band` 比。第一版就是因为没换算而假红/恒真。 */
         toolbarTop: getComputedStyle(document.documentElement)
           .getPropertyValue('--toolbar-top').trim() || null,
+        /** `--toolbar-gap`：**内容离工具条多远**（R45-D 用户口径：「面板主体内容距离上面
+         *  工具条的距离」）。参考图量出 7.0% 面板高、我们取 40px。
+         *  ⚠️ 与 `toolbarBand` 同理：它是 `:root` 上的字面量，可以直接读；
+         *  但 `--toolbar-band` 是 `calc()` ⇒ 不能直接读，见上面的算法。 */
+        toolbarGap: getComputedStyle(document.documentElement)
+          .getPropertyValue('--toolbar-gap').trim() || null,
+        /** 页面标题的**文本顶**（面板内坐标）—— 判"内容离工具条多远"的直接量。
+         *  h2 的 rect 是**含 padding 的盒**（从面板顶开始），文本顶要用 `padding-top` 补出来；
+         *  ⚠️ 不能拿盒顶当文本顶 —— 那会让判据恒真（盒顶永远是 0）。 */
+        pageTitleTextTop: (() => {
+          const el = document.querySelector<HTMLElement>('[data-page-title]')
+          if (!el) return null
+          const r = el.getBoundingClientRect()
+          const pad = parseFloat(getComputedStyle(el).paddingTop) || 0
+          const barR = bar.getBoundingClientRect()
+          const ttop = parseFloat(
+            getComputedStyle(document.documentElement)
+              .getPropertyValue('--toolbar-top').trim() || '') || 0
+          return Math.round(r.top + pad - (barR.top - ttop))
+        })(),
         /** hero 主体（头像）的顶 —— R45 视觉评审补量。
          *  ⚠️ **为什么必须量它**：卡片页被工具条盖住的那一块是**头像**，而"会不会被盖"
          *  只能靠 `头像顶 vs --toolbar-band` 判。原来探针**完全没量 hero 的几何**，
@@ -538,8 +558,9 @@ function measure(tag: string) {
           if (!el) return null
           const r = el.getBoundingClientRect()
           const barR = bar.getBoundingClientRect()
-          const rs = getComputedStyle(document.documentElement)
-          const ttop = parseFloat(rs.getPropertyValue('--toolbar-top').trim() || '') || 0
+          const ttop = parseFloat(
+            getComputedStyle(document.documentElement)
+              .getPropertyValue('--toolbar-top').trim() || '') || 0
           return {
             /** 头像顶（**面板内**坐标：换算到面板原点） */
             topInPanel: Math.round(r.top - (barR.top - ttop)),

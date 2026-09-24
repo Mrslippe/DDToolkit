@@ -1055,23 +1055,31 @@ def _assert_glow(v: dict, width: int) -> list[str]:
                    f"R45-A 用户口径是「选中时的边框直接去掉」，形状改由**实底填充**承担")
     if sb not in (None, "0px", 0):
         bad.append(f"@{width} {tag}: 选中块出现了 border（{sb!r}）—— 同上去掉描边")
-    # ── ⑤ 页面标题让开工具条覆盖带（R45-B）────────────────────────────────────
-    # 用户口径：「list 视图和 archive 视图最顶部的部分可以用位于左侧的标题占掉
-    # 一部分顶部间距，这样页面工具条拉下来的时候就不会挡住太多内容」。
-    # 三条判据：
-    #   ① 标题下缘 ≥ `--toolbar-band`（真的让开了，不是象征性挪一点）；
-    #   ② 标题**不许与工具条 rect 相交**；
-    #   ③ archive 下标题文案 == **卡片内部渲染的标题**（两份真源，机器对账）——
-    #      防"改了 `DECK_LABELS` 忘了改卡片 JSX"这种静默漂移。
+    # ── ⑤ 页面标题让开工具条（R45-B 建立，**R45-D 改判据**）──────────────────
+    # 用户口径（2026-09-24）：「list 视图和 archive 视图最顶部的部分可以用位于左侧的标题
+    # 占掉一部分顶部间距，这样页面工具条拉下来的时候就不会挡住太多内容」；
+    # 随后追加（R45-D）：「面板主体内容距离上面工具条的距离」——
+    # 并给了两张参考图，量出来是 **37px / 占面板高 7.0%**，我们取 40px（`--toolbar-gap`）。
+    #
+    # ⚠️ **判据在 R45-D 从"下缘 ≥ 覆盖带"改成"留白 ≥ `--toolbar-gap`"**：
+    #    旧判据只保证"不被挡"（≥52 就过），而用户真正要的是**一个具体的留白**
+    #    —— 旧判据下 8px 和 40px 都是绿的，等于没判。
+    #    现在判的是"**文本顶 − 覆盖带 ≥ `--toolbar-gap`**"。
     pt = g.get("pageTitle") or {}
     pt_text, pt_rect = pt.get("text"), pt.get("rect")
     band = g.get("toolbarBand")
-    band_px = None
+    gap_tok = g.get("toolbarGap")
+    band_px = gap_px = None
     if band:
         try:
             band_px = float(str(band).replace("px", "").strip())
         except ValueError:
             band_px = None
+    if gap_tok:
+        try:
+            gap_px = float(str(gap_tok).replace("px", "").strip())
+        except ValueError:
+            gap_px = None
     # ⚠️ **判定用"视图族"，不是 tag 精确相等**：`list` 还有 6 个扩展帧
     #    （`list-scrolled` / `list-filter-*` / `list-video`）—— 它们都是**列表页**，
     #    标题当然该在。第一版按 `tag in ("list","archive")` 判，把这 6 帧全判成
@@ -1084,38 +1092,32 @@ def _assert_glow(v: dict, width: int) -> list[str]:
         elif pt_rect is None:
             bad.append(f"@{width} {tag}: 量不到页面标题的矩形")
         else:
-            if band_px is None:
-                bad.append(f"@{width} {tag}: 算不出 `--toolbar-band`（{band!r}）"
-                           f"—— 让开量判据会静默空转")
-            elif bar_rect is None:
-                bad.append(f"@{width} {tag}: 量不到工具条矩形，换算不了坐标系")
+            if band_px is None or gap_px is None:
+                bad.append(f"@{width} {tag}: 算不出 `--toolbar-band`({band!r}) 或 "
+                           f"`--toolbar-gap`({gap_tok!r}) —— 留白判据会静默空转")
             else:
                 # ⚠️ **两个坐标系，第一版就是在这里错的**：
                 #   `pageTitle.rect` 是**视口坐标**（实测 y=40 = 顶栏高），
                 #   而 `--toolbar-band`（52）是**面板内坐标**。
-                #   直接拿 `y + h`（129）与 52 比 ⇒ 那条**恒真**、判据形同虚设；
-                #   而同坐标系缺失又让"与工具条相交"那条**假红**
-                #   （标题 40..129 vs 条 40..86 —— 明明只是同一起点）。
-                # 换算：面板顶 = 条顶 - `--toolbar-top`（条在面板内的 top 就是它）。
-                #   `barRect.y` 视口 − `--toolbar-top` = 面板顶的视口 y。
-                ttop = g.get("toolbarTop")
-                ttop_px = None
-                if ttop is not None:
-                    try:
-                        ttop_px = float(str(ttop).replace("px", "").strip())
-                    except ValueError:
-                        ttop_px = None
-                if ttop_px is None:
-                    bad.append(f"@{width} {tag}: 算不出 `--toolbar-top`（{ttop!r}）"
-                               f"—— 坐标系换算不了，判据会静默空转")
+                #   直接拿 `y + h`（129）与 52 比 ⇒ 那条**恒真**、判据形同虚设。
+                #   换算：面板顶的视口 y = `barRect.y` − `--toolbar-top`。
+                #
+                # ⚠️ **R45-D 换了被测量**：旧判据拿"标题**盒**的下缘"（含 padding）比 ——
+                #    而盒从面板顶开始 ⇒ 恒真。要判"内容离工具条多远"必须拿**文本顶**：
+                #    `pageTitleTextTop`（`probe.ts` 里用 `padding-top` 补出来的面板内坐标）。
+                text_top = g.get("pageTitleTextTop")
+                if text_top is None:
+                    bad.append(f"@{width} {tag}: 探针没量到标题**文本顶**"
+                               f"（`glow.pageTitleTextTop`）—— 留白判据会静默空转")
                 else:
-                    panel_top_vp = bar_rect["y"] - ttop_px
-                    bottom_in_panel = pt_rect["y"] + pt_rect["h"] - panel_top_vp
-                    if bottom_in_panel < band_px - 1:
+                    white = text_top - band_px
+                    if white < gap_px - 1:
                         bad.append(
-                            f"@{width} {tag}: 页面标题在**面板内**下缘 {bottom_in_panel:.0f} "
-                            f"< 工具条覆盖带 {band_px}（`--toolbar-band`）—— 标题没真的让开；"
-                            f"它存在的意义就是**占掉顶部间距**（用户口径）")
+                            f"@{width} {tag}: 主体内容离工具条的留白只有 {white:.0f}px"
+                            f"（文本顶 {text_top} − 覆盖带 {band_px}），"
+                            f"应 ≥ `--toolbar-gap` = {gap_px:.0f}px"
+                            f"（参考图量出 37px / 占面板高 7.0%，我们取 40px）—— "
+                            f"用户口径：「面板主体内容距离上面工具条的距离」")
                     # ⚠️ **这里不判"标题矩形与工具条矩形相交"** —— 第一版判了，报 18 处假红。
                     #    原因：`.page-title` 是**通栏横条**（宽 = 面板宽，实测 874），
                     #    它从面板最上沿开始、靠 `padding-top` 把**文本**压到带子之下；
@@ -1136,26 +1138,30 @@ def _assert_glow(v: dict, width: int) -> list[str]:
                                f"与 `LiveCalendar`/`FanTrendChart` 的 JSX 必须一致）")
     elif pt_text:
         bad.append(f"@{width} {tag}: `{tag}` 视图不该有页面标题（拿到 {pt_text!r}）")
-    # ── ⑦ 卡片页 hero 不许被工具条盖住（R45，视觉评审补）────────────────────
+    # ── ⑦ 卡片页 hero 的留白（R45 建立，**R45-D 改判据**）────────────────────
     # ⚠️ **这条是"看截图才发现的"**：R45-B 给 list/archive 加了页面标题去让开覆盖带，
     #    但 **cards 视图没加**（当时的判断是"hero 的 `padding-top:23px` 已经把头像推到
     #    y=63，而条只到 52 ⇒ 不挡"）。**实测截图里头像顶部被切了** —— 那个判断错了。
     #    而探针**从来没量过 hero 的几何** ⇒ 这件事没有任何判据，属于
-    #    "看着代码以为没事"的典型。这里补上：**头像顶必须 ≥ 工具条覆盖带**。
-    #    （同一条道理：卡片页没有页面标题，就只能靠 hero 自己的 padding 让位。）
+    #    "看着代码以为没事"的典型。
+    # R45-D：判据从"不被盖"升级为"**留白 ≥ `--toolbar-gap`**"（用户要的是距离）。
     hero_top = g.get("heroTop")
     if tag == "cards":
         if not hero_top:
             bad.append(f"@{width} {tag}: 探针没量到 hero 头像的几何（`glow.heroTop`）—— "
                        f"「工具条会不会盖住头像」这条判据会静默空转")
-        elif band_px is None:
-            bad.append(f"@{width} {tag}: 算不出 `--toolbar-band`，hero 让位判据空转")
-        elif hero_top.get("topInPanel", 0) < band_px - 1:
-            bad.append(
-                f"@{width} {tag}: 头像顶在**面板内** {hero_top.get('topInPanel')} "
-                f"< 工具条覆盖带 {band_px}（`--toolbar-band`）—— **工具条浮出时会盖住头像**。"
-                f"cards 视图没有页面标题，只能靠 hero 自己的 `padding-top` 让位；"
-                f"把 `.hero` 的 `padding-top` 加到 ≥ {band_px - 23:.0f}px（现 23px）")
+        elif band_px is None or gap_px is None:
+            bad.append(f"@{width} {tag}: 算不出 `--toolbar-band` / `--toolbar-gap`，"
+                       f"hero 留白判据空转")
+        else:
+            white = hero_top.get("topInPanel", 0) - band_px
+            if white < gap_px - 1:
+                bad.append(
+                    f"@{width} {tag}: 卡片页主体（头像）离工具条的留白只有 {white:.0f}px"
+                    f"（头像顶 {hero_top.get('topInPanel')} − 覆盖带 {band_px}），"
+                    f"应 ≥ `--toolbar-gap` = {gap_px:.0f}px —— cards 没有页面标题，"
+                    f"只能靠 `.hero` 自己的 `padding-top` 让位"
+                    f"（现为 `calc(var(--toolbar-band) + var(--toolbar-gap))`）")
     # ── ⑥ 药丸行数上限（R45-C，用户 2026-09-24：「最多两行」）──────────────────
     # 用户口径：「card 页中平台药丸行数也应该做出限制，最多两行」。
     # 但"限两行"有两种实现，只有一种是对的 ⇒ 判据必须**同时**盯住两端：
