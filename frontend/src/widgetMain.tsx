@@ -2,6 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 
 import StatusWidgetWindow from './components/StatusWidgetWindow'
+import { setApiBase } from './api/api'
 import './styles/tokens.css'
 import './styles/status-island.css'
 
@@ -99,6 +100,39 @@ const logToShell = (msg: string) => {
 }
 ;(window as unknown as { __widgetLog?: (m: string) => void }).__widgetLog = logToShell
 
+/**
+ * ⚠️ **桌面端引导：注入后端端口**（2026-09-25 批 5g 加，用户反馈"日志里还是报错"）。
+ *
+ * `api.ts` 的默认 base 是 **`/api`**（相对路径）—— 在**主窗口**里它由 Vite 代理转发，
+ * 而**桌面端根本没跑 Vite 代理**，所以 `main.tsx` 会调 `get_backend_port` 拿到 sidecar
+ * 的真实端口，再 `setApiBase('http://127.0.0.1:<port>')`。
+ *
+ * **小窗是独立入口，不经过 `main.tsx`** ⇒ 这条注入从来没跑过 ⇒ `apiBase` 一直是 `/api`
+ * ⇒ 每次 `api.getPrefs()`（穿透/全屏隐藏那两条轮询，**每 2 秒一次**）都打到
+ * `http://127.0.0.1:8000` —— 那是**开发态 Vite 代理的目标端口**，桌面端没有服务在听
+ * ⇒ `ECONNREFUSED`，日志里刷出一片 `http proxy error: /settings/prefs`（实测 ×48）。
+ *
+ * ⚠️ **这正是 `DEV-LOOP.md` §6.1 那条纪律的第三次现身**（"拆入口时顺带生效的东西最容易漏"）：
+ * 前两次是 Tailwind preflight 的 `box-sizing`、`layout.css` 里的 `.os-*` 样式；
+ * 这次是 **`main.tsx` 里的启动副作用** —— 它同样"不在 import 图里"，
+ * 而且**失败得很安静**（面板照样显示，只是每 2 秒发一个必然失败的请求）。
+ *
+ * 与主窗口的区别：这里**不轮询 `/healthz`**（小窗是纯显示，不负责等后端就绪），
+ * 拿到端口就设上；失败就保持 `/api`（探针/浏览器环境本来就走 Vite 代理，那是对的）。
+ */
+async function injectBackendPort(): Promise<void> {
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const port = await invoke<number>('get_backend_port')
+    if (typeof port === 'number' && port > 0) {
+      setApiBase(`http://127.0.0.1:${port}`)
+      logToShell(`已注入后端端口 ${port}`)
+    }
+  } catch {
+    // 非桌面端（探针/浏览器）：没有 sidecar，`/api` 走 Vite 代理即可，**这是对的**。
+  }
+}
+
 logToShell(`widgetMain 模块执行 q=${location.search}`)
 window.addEventListener('error', (e) => {
   logToShell(`window.onerror ${e.message} @ ${(e.filename || '').split('/').slice(-1)[0]}:${e.lineno}`)
@@ -107,13 +141,18 @@ window.addEventListener('unhandledrejection', (e) => {
   logToShell(`unhandledrejection ${String((e as PromiseRejectionEvent).reason)}`)
 })
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <WidgetErrorBoundary>
-      <StatusWidgetWindow />
-    </WidgetErrorBoundary>
-  </React.StrictMode>,
-)
+// ⚠️ **先注入端口再渲染**（批 5g）：小窗一挂载就会去读偏好（穿透 / 全屏隐藏那两条），
+//    而读偏好要用 `apiBase` —— 注入晚一步，那两次请求就会打到 `/api`（ECONNREFUSED）。
+//    所以这里 `await` 一次（拿端口是本进程 IPC，亚毫秒级，不会拖慢首绘）。
+void injectBackendPort().finally(() => {
+  ReactDOM.createRoot(document.getElementById('root')!).render(
+    <React.StrictMode>
+      <WidgetErrorBoundary>
+        <StatusWidgetWindow />
+      </WidgetErrorBoundary>
+    </React.StrictMode>,
+  )
+})
 
 // 开发态 UI 探针（`widget.html?probe=status-widget-window`）。
 //

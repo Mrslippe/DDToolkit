@@ -142,6 +142,59 @@ describe('widgetExpandGeom：展开要把窗口长够，且放不下时向上翻
     expect(g.y).toBeGreaterThanOrEqual(0)
   })
 
+  /**
+   * ⚠️ `capsuleOffset` 是 2026-09-25 批 5g 加的，守的是一个**真机截图里的错位**：
+   * 原来 CSS 认定"翻上去 ⇒ 胶囊贴窗口**底**边"（`flex-end`），
+   * 而贴屏幕上沿时窗口会被**夹**（顶边不能为负）⇒ 那个假设不成立 ⇒ 胶囊跳到窗口中间。
+   */
+  describe('capsuleOffset：胶囊在窗口内的偏移（几何给，CSS 不许猜）', () => {
+    it('向下展开且没被夹 ⇒ 偏移 0（胶囊仍在窗口顶边）', () => {
+      const g = widgetExpandGeom({ x: 1000, y: 300, w: 200, h: 40 }, 300, SCREEN)
+      expect(g.flipUp).toBe(false)
+      expect(g.capsuleOffset).toBe(0)
+    })
+
+    it('向上翻且**没被夹** ⇒ 偏移 = 窗口高 − 胶囊高（等价于旧的 flex-end）', () => {
+      const corner = defaultWidgetPos(SCREEN)
+      const g = widgetExpandGeom({ ...corner, w: 200, h: 40 }, 300, SCREEN)
+      expect(g.flipUp).toBe(true)
+      expect(g.y).toBeGreaterThan(0)                     // 确实没被夹
+      expect(g.capsuleOffset).toBe(g.h - WIDGET_SIZE.h)
+    })
+
+    it('**向上翻且被屏幕上沿夹住** ⇒ 偏移跟着变小（不是窗口高 − 胶囊高）', () => {
+      // 胶囊贴屏幕上沿（y=10）。面板要**够高**才能逼出"向上翻"：
+      // 向下需要 10 + 40 + 6 + 面板高 ≤ 1080 − 24 ⇒ 面板高 > 1000 才会翻。
+      const TALL = 1200
+      const g = widgetExpandGeom({ x: 800, y: 10, w: 200, h: 40 }, TALL, SCREEN)
+      expect(g.flipUp).toBe(true)
+      expect(g.y).toBe(0)                                 // 被夹到屏幕上沿
+      // 真实的胶囊偏移 = 胶囊原 y(10) − 窗口 y(0) = 10
+      expect(g.capsuleOffset).toBe(10)
+      // 而旧的"贴底边"写法会给 1206（= 1246 − 40）—— 差 1196px，就是截图里的错位
+      expect(g.capsuleOffset).not.toBe(g.h - WIDGET_SIZE.h)
+    })
+
+    it('**胶囊的屏幕位置在展开前后不变**（这才是"不动"的定义）', () => {
+      const cases = [
+        { x: 800, y: 10, w: 200, h: 40 },     // 贴上沿（会被夹）
+        { ...defaultWidgetPos(SCREEN), w: 200, h: 40 },  // 右下角
+        { x: 1000, y: 300, w: 200, h: 40 },   // 屏幕中部
+      ]
+      for (const cur of cases) {
+        const g = widgetExpandGeom(cur, 300, SCREEN)
+        // 胶囊**在屏幕上的**顶边 = 窗口 y + 窗口内偏移
+        expect(g.y + g.capsuleOffset).toBe(cur.y)
+      }
+    })
+
+    it('折叠态偏移恒为 0', () => {
+      const g = widgetCollapseGeom({ x: 900, y: 900, w: 280, h: 346 }, SCREEN, true,
+                                   { x: 900, y: 900 })
+      expect(g.capsuleOffset).toBe(0)
+    })
+  })
+
   it('翻转时横向居中**尽量**保持（贴边夹取赢过居中，这是物理约束）', () => {
     const corner = defaultWidgetPos(SCREEN)
     const cur = { ...corner, w: WIDGET_SIZE.w, h: WIDGET_SIZE.h }

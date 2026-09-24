@@ -126,12 +126,33 @@ export interface WidgetExpandGeom {
    * ⚠️ **这个字段是必需的，不是优化**：小窗的默认落点是**右下角**
    * （`defaultWidgetPos`：`y = 屏高 − 40 − 72`，1080p 上是 **968**）——
    * 向下展开需要 `968 + 40 + 6 + 面板高`，**任何面板高度都放不下**（≥1214 > 1080）。
-   * 硬要向下长就只能夹取，而夹取会**把胶囊从用户摆的位置挪走**（实测 968 → 标签外的 710）。
+   * 硬要向下长就只能夹取，而夹取会**把胶囊从用户摆的位置挪走**。
    *
    * 所以真机上只有一条路：**贴着屏幕下沿时向上翻**（面板长在胶囊上方）。
    * 这也是所有浮层控件（菜单 / 下拉 / 气泡）的标准解法 —— 不是我们发明的。
    */
   flipUp: boolean
+  /**
+   * **胶囊在窗口内的纵向偏移**（px，从窗口顶边算）。
+   *
+   * ## 为什么必须由几何算出来，不能让 CSS 猜（2026-09-25 批 5g 加）
+   *
+   * 原来 CSS 用的是"翻上去 ⇒ 胶囊贴窗口**底**边"（`flex-end`）。那在**没被夹**时是对的
+   * （窗口底边 = 胶囊底边）。但贴屏幕上沿时窗口会被**夹**（顶边不能为负）：
+   *
+   * ```
+   * 胶囊 y=10、高 40 ⇒ 向上翻要 y = 50 − 183 = −133 ⇒ 夹到 0
+   * 此时胶囊在窗口内的真实偏移 = 10 − 0 = 10（**不是** 143 = 窗口高 − 胶囊高）
+   * ```
+   *
+   * 于是 CSS 把胶囊画到窗口底部，而面板按"胶囊在 10px 处"算 ⇒ **两者错位**
+   * （用户截图：胶囊被压在顶端、和面板叠在一起）。
+   *
+   * **根因是"谁来决定胶囊在窗口里的位置"有两个主人**：几何算了窗口矩形，
+   * CSS 又自己认定胶囊贴哪条边。现在**统一由几何给**（`capsuleOffset`），
+   * CSS 只负责把它用起来 —— 单一事实源。
+   */
+  capsuleOffset: number
 }
 
 /** 面板与胶囊之间的间隙（与 `StatusIsland.place()` 的 `r.bottom + 6` 同值） */
@@ -172,14 +193,18 @@ export function widgetExpandGeom(
   if (downFits) {
     const raw = { x: Math.round(anchorX - w / 2), y: cur.y }
     const c = clampWidgetPos(raw, screen, { w, h: totalH })
-    return { w, h: totalH, x: c.x, y: c.y, flipUp: false }
+    // 向下：胶囊贴窗口**顶边**（`cur.y` 没动过 ⇒ 偏移就是被夹掉的那一点）
+    return { w, h: totalH, x: c.x, y: c.y, flipUp: false, capsuleOffset: cur.y - c.y }
   }
 
   // 向上翻：窗口**底边**对齐胶囊底边，顶边 = 底边 − totalH
   const capBottom = cur.y + capH
   const raw = { x: Math.round(anchorX - w / 2), y: capBottom - totalH }
   const c = clampWidgetPos(raw, screen, { w, h: totalH })
-  return { w, h: totalH, x: c.x, y: c.y, flipUp: true }
+  // ⚠️ 胶囊偏移 = 胶囊原顶边 − 窗口最终顶边。
+  //    **没被夹**时它等于 `totalH - capH`（= 窗口底边，与旧的 `flex-end` 一致）；
+  //    **被夹**时它更小 —— 那正是旧写法错的地方（固定成 `totalH - capH` 会让胶囊跳）。
+  return { w, h: totalH, x: c.x, y: c.y, flipUp: true, capsuleOffset: cur.y - c.y }
 }
 
 /**
@@ -210,14 +235,15 @@ export function widgetCollapseGeom(
   const { w, h } = WIDGET_COLLAPSED
   if (restore) {
     const c = clampWidgetPos({ x: Math.round(restore.x), y: Math.round(restore.y) }, screen, { w, h })
-    return { w, h, x: c.x, y: c.y, flipUp: false }
+    // 折叠态：窗口 == 胶囊，胶囊偏移恒为 0
+    return { w, h, x: c.x, y: c.y, flipUp: false, capsuleOffset: 0 }
   }
   const anchorX = cur.x + cur.w / 2
   // 向上展开时保持**底边**不动；否则保持顶边
   const y = flipUp ? cur.y + cur.h - h : cur.y
   const raw = { x: Math.round(anchorX - w / 2), y }
   const c = clampWidgetPos(raw, screen, { w, h })
-  return { w, h, x: c.x, y: c.y, flipUp: false }
+  return { w, h, x: c.x, y: c.y, flipUp: false, capsuleOffset: 0 }
 }
 
 

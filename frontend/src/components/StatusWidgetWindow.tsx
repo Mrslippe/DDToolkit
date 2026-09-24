@@ -249,6 +249,8 @@ export default function StatusWidgetWindow() {
         '--widget-panel-max-h', `${widgetPanelMaxHeight(avail)}px`)
     }
     set()
+    // 折叠态起手：偏移归零（窗口 == 胶囊）。展开时由几何写真实值。
+    document.documentElement.style.setProperty('--widget-capsule-offset', '0px')
     // 换显示器 / 改分辨率时 `screen.availHeight` 会变，但**不会**触发 window resize ——
     // 用 `matchMedia` 盯分辨率变化（比轮询便宜，且只在真正变化时醒）。
     let mq: MediaQueryList | null = null
@@ -316,6 +318,12 @@ export default function StatusWidgetWindow() {
           expanded.current = true
           flipUpRef.current = geom.flipUp
           setFlipUp(geom.flipUp)
+          // ⚠️ **胶囊在窗口内的偏移必须跟着几何走**（批 5g）：
+          //    贴屏幕上沿时窗口会被夹（顶边不能为负），此时"胶囊贴窗口底边"
+          //    这个 CSS 假设就不成立了（实测：期望 143、真实 10）⇒ 胶囊跳到窗口中间、
+          //    和面板叠住。几何把真实偏移算好了，这里写进 CSS 变量。
+          document.documentElement.style.setProperty(
+            '--widget-capsule-offset', `${geom.capsuleOffset}px`)
           const ok = await resizeWidgetWindow(geom)
           console.info('[widget] 展开 →', geom, 'ok=', ok)
         } else {
@@ -323,6 +331,8 @@ export default function StatusWidgetWindow() {
           const geom = widgetCollapseGeom(cur, screen, flipUpRef.current, preExpandPos.current)
           flipUpRef.current = false
           setFlipUp(false)
+          // 折叠态：窗口 == 胶囊 ⇒ 偏移归零（否则胶囊会被上一次的偏移顶下去）
+          document.documentElement.style.setProperty('--widget-capsule-offset', '0px')
           const ok = await resizeWidgetWindow(geom)
           console.info('[widget] 收起 →', geom, 'ok=', ok)
         }
