@@ -281,6 +281,68 @@ def _seed_reservation(data: Path, vtuber_id: int) -> str:
     return title
 
 
+def _seed_accounts(data: Path, vtuber_id: int, want: int) -> dict:
+    """往**副本**里种够 `want` 个账号（R45-C 探针的确定性现场）。
+
+    为什么要种（本仓反复踩过的坑）：**开发库里最多只有 2 个账号**（实测 v15/v16/v18 各 2 个、
+    其余 1 个）⇒ 平台药丸**永远只有 1 行**，而 R45-C 要验的是"**最多两行** + 溢出出口"。
+    不种就是**空转的门禁**：判据恒绿，却从没被触发过。
+
+    做法：对**已有的账号**复制出若干"影子账号"（改 `platform_uid` 与 `display_name`，
+    粉丝数递减 ⇒ 顺序稳定）。⚠️ 只动 `accounts` 表 —— 不造帖子、不碰别的表；
+    探针跑在副本上，开发库不受影响。
+
+    ⚠️ **两个把整轮探针跑挂过的坑，都记在这里**：
+      ① `accounts` 的必填列只有 `vtuber_id / platform / platform_uid`（`sort_order` 默认 0），
+         没有 `created_at/updated_at` —— 第一版照 `posts` 表的习惯多写了两列，直接报错。
+      ② **`live_status` 必须给值**。它可空，所以少写不会在 INSERT 时报错，但
+         `VTuberOut`（`app/routers/vtuber.py`）把它**声明成 int** ⇒ 后端 500、
+         前端 `Failed to fetch` ⇒ 页面连 V 都加载不出来，于是**所有**视图级判据
+         （页面标题 / 牌堆 / 画布）一起报"缺失"。
+         实测现场：`ValidationError: 6 validation errors for VTuberOut,
+         accounts.2.live_status Input should be a valid integer [input_value=None]`。
+         ⇒ 凡是"可空但下游当非空用"的列，种数据时必须照抄基准行的值。
+
+    返回：`{"total": 种完后的账号数, "added": 新增数, "names": [...]}`。
+    """
+    import sqlite3
+
+    con = sqlite3.connect(data / "vtuber.db")
+    try:
+        con.execute("DELETE FROM accounts WHERE platform_uid LIKE 'PROBE-ACC-%'")
+        base = con.execute(
+            "SELECT platform, platform_uid, display_name, followers_count, room_id, avatar_url, "
+            "live_status, live_title FROM accounts WHERE vtuber_id=? "
+            "ORDER BY sort_order, id LIMIT 1", (vtuber_id,)
+        ).fetchone()
+        if not base:
+            raise SystemExit(f"[probe] VTuber#{vtuber_id} 一个账号都没有，种不了")
+        platform, uid, name, fans, room, avatar, live_status, live_title = base
+        have = con.execute("SELECT count(*) FROM accounts WHERE vtuber_id=?",
+                           (vtuber_id,)).fetchone()[0]
+        max_sort = con.execute(
+            "SELECT COALESCE(MAX(sort_order),0) FROM accounts WHERE vtuber_id=?",
+            (vtuber_id,)).fetchone()[0]
+        names: list[str] = []
+        for i in range(have, want):
+            n = f"{name or uid}·探针{i + 1}"
+            con.execute(
+                "INSERT INTO accounts (vtuber_id, platform, platform_uid, display_name, "
+                "followers_count, room_id, avatar_url, live_status, live_title, sort_order) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (vtuber_id, platform, f"PROBE-ACC-{i + 1}", n,
+                 max(0, (fans or 0) - i * 1000), room, avatar,
+                 live_status if live_status is not None else 0, live_title,
+                 max_sort + (i - have) + 1))
+            names.append(n)
+        con.commit()
+        total = con.execute("SELECT count(*) FROM accounts WHERE vtuber_id=?",
+                            (vtuber_id,)).fetchone()[0]
+    finally:
+        con.close()
+    return {"total": total, "added": len(names), "names": names}
+
+
 def _prepare_logged_out() -> Path:
     """有数据但**未登录**的现场（devlog/086）：开发目录副本 + 删掉 `.env`。
 
@@ -1010,25 +1072,58 @@ def _assert_glow(v: dict, width: int) -> list[str]:
             band_px = float(str(band).replace("px", "").strip())
         except ValueError:
             band_px = None
-    if tag in ("list", "archive"):
+    # ⚠️ **判定用"视图族"，不是 tag 精确相等**：`list` 还有 6 个扩展帧
+    #    （`list-scrolled` / `list-filter-*` / `list-video`）—— 它们都是**列表页**，
+    #    标题当然该在。第一版按 `tag in ("list","archive")` 判，把这 6 帧全判成
+    #    「该页不该有页面标题」⇒ 12 处假红（每档 7 帧 × 2 档）。
+    is_list_page = tag == "list" or tag.startswith("list-")
+    if is_list_page or tag == "archive":
         if not pt_text:
             bad.append(f"@{width} {tag}: 没有页面标题（`.page-title` 缺失或为空）—— "
-                       f"这一页**必须有**：它负责让开工具条覆盖带（用户口径）")
+                      f"这一页**必须有**：它负责让开工具条覆盖带（用户口径）")
         elif pt_rect is None:
             bad.append(f"@{width} {tag}: 量不到页面标题的矩形")
         else:
             if band_px is None:
                 bad.append(f"@{width} {tag}: 算不出 `--toolbar-band`（{band!r}）"
                            f"—— 让开量判据会静默空转")
+            elif bar_rect is None:
+                bad.append(f"@{width} {tag}: 量不到工具条矩形，换算不了坐标系")
             else:
-                bottom = pt_rect["y"] + pt_rect["h"]
-                if bottom < band_px - 1:
-                    bad.append(f"@{width} {tag}: 页面标题下缘 {bottom} < 工具条覆盖带 "
-                               f"{band_px}（`--toolbar-band`）—— 标题没真的让开；"
-                               f"它存在的意义就是**占掉顶部间距**（用户口径）")
-            if bar_rect and _overlap(pt_rect, bar_rect):
-                bad.append(f"@{width} {tag}: 页面标题与工具条相交"
-                           f"（标题 {pt_rect} vs 条 {bar_rect}）—— 那就又挡上了")
+                # ⚠️ **两个坐标系，第一版就是在这里错的**：
+                #   `pageTitle.rect` 是**视口坐标**（实测 y=40 = 顶栏高），
+                #   而 `--toolbar-band`（52）是**面板内坐标**。
+                #   直接拿 `y + h`（129）与 52 比 ⇒ 那条**恒真**、判据形同虚设；
+                #   而同坐标系缺失又让"与工具条相交"那条**假红**
+                #   （标题 40..129 vs 条 40..86 —— 明明只是同一起点）。
+                # 换算：面板顶 = 条顶 - `--toolbar-top`（条在面板内的 top 就是它）。
+                #   `barRect.y` 视口 − `--toolbar-top` = 面板顶的视口 y。
+                ttop = g.get("toolbarTop")
+                ttop_px = None
+                if ttop is not None:
+                    try:
+                        ttop_px = float(str(ttop).replace("px", "").strip())
+                    except ValueError:
+                        ttop_px = None
+                if ttop_px is None:
+                    bad.append(f"@{width} {tag}: 算不出 `--toolbar-top`（{ttop!r}）"
+                               f"—— 坐标系换算不了，判据会静默空转")
+                else:
+                    panel_top_vp = bar_rect["y"] - ttop_px
+                    bottom_in_panel = pt_rect["y"] + pt_rect["h"] - panel_top_vp
+                    if bottom_in_panel < band_px - 1:
+                        bad.append(
+                            f"@{width} {tag}: 页面标题在**面板内**下缘 {bottom_in_panel:.0f} "
+                            f"< 工具条覆盖带 {band_px}（`--toolbar-band`）—— 标题没真的让开；"
+                            f"它存在的意义就是**占掉顶部间距**（用户口径）")
+                    # ⚠️ **这里不判"标题矩形与工具条矩形相交"** —— 第一版判了，报 18 处假红。
+                    #    原因：`.page-title` 是**通栏横条**（宽 = 面板宽，实测 874），
+                    #    它从面板最上沿开始、靠 `padding-top` 把**文本**压到带子之下；
+                    #    所以它的**盒子**必然与条相交（面板内 y=0..89 vs 条 6..52），
+                    #    但**文本**在带子之下 ⇒ 视觉上并没有被挡。
+                    #    "真的让开了"这件事由上面那条（下缘 vs `--toolbar-band`）保证；
+                    #    而"条有没有挡住别的东西"由 ② 组的不相交判据管
+                    #    （那条只针对账号切换 / 分类胶囊 / 搜索 —— 用户点名要保住的可触及控件）。
             if tag == "archive":
                 card_title = g.get("cardTitle")
                 if not card_title:
@@ -1041,6 +1136,54 @@ def _assert_glow(v: dict, width: int) -> list[str]:
                                f"与 `LiveCalendar`/`FanTrendChart` 的 JSX 必须一致）")
     elif pt_text:
         bad.append(f"@{width} {tag}: `{tag}` 视图不该有页面标题（拿到 {pt_text!r}）")
+    # ── ⑦ 卡片页 hero 不许被工具条盖住（R45，视觉评审补）────────────────────
+    # ⚠️ **这条是"看截图才发现的"**：R45-B 给 list/archive 加了页面标题去让开覆盖带，
+    #    但 **cards 视图没加**（当时的判断是"hero 的 `padding-top:23px` 已经把头像推到
+    #    y=63，而条只到 52 ⇒ 不挡"）。**实测截图里头像顶部被切了** —— 那个判断错了。
+    #    而探针**从来没量过 hero 的几何** ⇒ 这件事没有任何判据，属于
+    #    "看着代码以为没事"的典型。这里补上：**头像顶必须 ≥ 工具条覆盖带**。
+    #    （同一条道理：卡片页没有页面标题，就只能靠 hero 自己的 padding 让位。）
+    hero_top = g.get("heroTop")
+    if tag == "cards":
+        if not hero_top:
+            bad.append(f"@{width} {tag}: 探针没量到 hero 头像的几何（`glow.heroTop`）—— "
+                       f"「工具条会不会盖住头像」这条判据会静默空转")
+        elif band_px is None:
+            bad.append(f"@{width} {tag}: 算不出 `--toolbar-band`，hero 让位判据空转")
+        elif hero_top.get("topInPanel", 0) < band_px - 1:
+            bad.append(
+                f"@{width} {tag}: 头像顶在**面板内** {hero_top.get('topInPanel')} "
+                f"< 工具条覆盖带 {band_px}（`--toolbar-band`）—— **工具条浮出时会盖住头像**。"
+                f"cards 视图没有页面标题，只能靠 hero 自己的 `padding-top` 让位；"
+                f"把 `.hero` 的 `padding-top` 加到 ≥ {band_px - 23:.0f}px（现 23px）")
+    # ── ⑥ 药丸行数上限（R45-C，用户 2026-09-24：「最多两行」）──────────────────
+    # 用户口径：「card 页中平台药丸行数也应该做出限制，最多两行」。
+    # 但"限两行"有两种实现，只有一种是对的 ⇒ 判据必须**同时**盯住两端：
+    #   ① 行数 ≤2（这次要的东西）；
+    #   ② **超出的账号不能消失** —— 必须有一个 `.pill-more` 出口，且
+    #      `实显枚数 + 出口显示的 N == 账号总数`（一个都不丢）。
+    # 少了 ②，用 `slice()` 裁掉也能让 ① 变绿，而那会让账号在这页**不可达**。
+    hero = v.get("hero") or {}
+    if hero:
+        rows = hero.get("pillRows")
+        if rows is None:
+            bad.append(f"@{width} {tag}: 探针没量到药丸行数（`hero.pillRows`）")
+        elif rows > 2:
+            bad.append(f"@{width} {tag}: 平台药丸占了 {rows} 行（用户口径：**最多两行**）"
+                       f"—— 行数是 hero 高度的唯一增长源（每行 ≈ +60px），"
+                       f"行数一多 hero 就被挤上去、且每加一个账号都会跳一截")
+        more = hero.get("pillMore")
+        total = hero.get("accountTotal")
+        shown_n = hero.get("pillCount") or 0
+        if total is not None and shown_n + (more["n"] if more else 0) != total:
+            bad.append(f"@{width} {tag}: 药丸对不上账 —— 实显 {shown_n} + 出口 "
+                       f"{(more['n'] if more else 0)} ≠ 账号总数 {total}；"
+                       f"「限两行」不许靠裁掉账号实现，超出的必须有出口")
+        if more and more["n"] <= 0:
+            bad.append(f"@{width} {tag}: 渲染了溢出出口但 `+N` 是 {more['n']} —— "
+                       f"没溢出就不该有这个钮")
+        if more and not more["text"].startswith("+"):
+            bad.append(f"@{width} {tag}: 溢出出口文案是 {more['text']!r}，应以 `+` 开头")
     spot = g.get("spot")
     bw = g.get("btnW")
     if not spot:
@@ -1511,6 +1654,13 @@ def main() -> int:
              "再去后端 `GET /vtuber/{id}/profile-cards` 对账（界面删了但库里还在 ⇒ 红）",
     )
     ap.add_argument(
+        "--shot-toolbar",
+        action="store_true",
+        help="最宽那档另存两张 R45 视觉评审图（`_ui_probe_tmp/r45-cards-*.png` 药丸两行 + "
+             "溢出出口 / `r45-list-*.png` 页面标题）—— **只截图、不参与断言**。"
+             "配 `--seed-accounts 8` 才能看到「限两行 + `+N` 出口」那条路。",
+    )
+    ap.add_argument(
         "--shot-board",
         action="store_true",
         help="最宽那档额外存两张**档案视图**截图（阅读态 / 编辑态，`_ui_probe_tmp/board-*.png`）"
@@ -1654,6 +1804,15 @@ def main() -> int:
              "注意它同时受第三方数据变化影响，只适合重构前后短窗口比对。",
     )
     ap.add_argument(
+        "--seed-accounts",
+        type=int,
+        default=0,
+        metavar="N",
+        help="**往副本里种够 N 个账号**（R45-C）。为什么要种：开发库最多只有 2 个账号 "
+             "⇒ 平台药丸永远 1 行，而「最多两行 + 溢出出口」这条判据只在**溢出时**才触发 ⇒ "
+             "不种就是空转的门禁。只动副本 DB 的 accounts 表，开发库不受影响。",
+    )
+    ap.add_argument(
         "--vtuber",
         type=int,
         default=0,
@@ -1768,6 +1927,14 @@ def main() -> int:
         if args.reservations and vid:
             seeded_resv_title = _seed_reservation(data, vid)
             print(f"[probe] 已种预约：{seeded_resv_title!r}（副本 DB，非真库）")
+
+        # R45-C：药丸行数上限要验的是"账号多到溢出"那一档，而**开发库最多只有 2 个账号**
+        # ⇒ 不种就是空转门禁。种到 8 个（2 行 × 3 + 溢出 2）才真的走到"两行 + 出口"那条路。
+        seeded_accounts = {}
+        if args.seed_accounts and vid:
+            seeded_accounts = _seed_accounts(data, vid, args.seed_accounts)
+            print(f"[probe] 已种账号：{seeded_accounts['added']} 个新增 ⇒ 共 "
+                  f"{seeded_accounts['total']} 个（副本 DB，非真库）")
             print(f"[probe] 目标路由 {route}（VTuber #{vid}）")
 
         # R33：左栏跟随档案设置 —— 同样要在后端起来之前写进副本
@@ -4607,6 +4774,25 @@ def main() -> int:
             failures.extend(bad)
             tags = [v.get("tag") for v in res["views"]]
             print(f"  views={tags}  问题={len(bad)}")
+            # ── R45-A / R45-B / R45-C 的关键读数（原来只判不印，通过后现场又被删掉，
+            #    于是"判据到底有没有被触发"无从复核 —— 补印）───────────────────────
+            cards_v = next((v for v in res["views"] if v.get("tag") == "cards"), None)
+            if cards_v:
+                hg = cards_v.get("glow") or {}
+                hr = cards_v.get("hero") or {}
+                print(f"  R45-A 选中态: 填充={hg.get('spotBg')} 图标={hg.get('onColor')} "
+                      f"描边={hg.get('spotShadow')!r} border={hg.get('spotBorder')!r} "
+                      f"off={hg.get('offColor')}({hg.get('offOpacity')})")
+                if hr:
+                    print(f"  R45-C 药丸: {hr.get('pillCount')} 显 + 出口{hr.get('pillMore')} "
+                          f"= 总 {hr.get('accountTotal')} ｜ 行数={hr.get('pillRows')}（≤2）"
+                          f" ｜ 每行={hr.get('setSizes')}")
+            arch_v = next((v for v in res["views"] if v.get("tag") == "archive"), None)
+            if arch_v:
+                ag = arch_v.get("glow") or {}
+                apt = (ag.get("pageTitle") or {}).get("text")
+                print(f"  R45-B 标题: archive={apt!r} / 卡片内={ag.get('cardTitle')!r} "
+                      f"｜ 让开量 --toolbar-band={ag.get('toolbarBand')}")
             tb = res.get("topbar") or {}
             print(
                 "  顶栏采样: "
@@ -4631,6 +4817,22 @@ def main() -> int:
                     shot,
                 )
                 print(f"  截图 → {shot}")
+
+            # ── R45 的视觉评审：**卡片页（药丸两行 + 溢出出口）与列表页（页面标题）**
+            #    各一张。加它的直接原因：R45-A/B/C 三批都只过了判据、**没人看过实际效果** ——
+            #    而这三批改的全是"看着对不对"的东西（选中态颜色 / 标题让位 / 药丸行数）。
+            #    `--shot-toolbar` 时同时保留现场（见 main 末尾的清理条件）。
+            if args.shot_toolbar and not args.first_run and w == widths[-1]:
+                for tag, q in (("cards", "&view=cards"), ("list", "&view=list")):
+                    shot = WORK / f"r45-{tag}-{w}.png"
+                    _run_shot(
+                        edge,
+                        f"http://localhost:{vite_port}{route}?probe=board-view{q}",
+                        w,
+                        args.height,
+                        shot,
+                    )
+                    print(f"  截图 → {shot}")
 
             # R37-P4a 的视觉评审：档案视图阅读态 / 编辑态各一张（只截最宽那档 —— 卡片排得开）。
             # 先 `reset=1` 走「重置默认」，让截图是**默认排布**而不是上一次 --board 拖出来的样子。
@@ -4669,7 +4871,7 @@ def main() -> int:
         # 失败时保留现场；`--shot` / `--shot-board` 时保留截图（三者都在 _ui_probe_tmp/ 下）。
         # ⚠️ R37-P4a 实跑踩到：加了 `--shot-board` 却忘了加进这个条件 —— 跑完全绿、图也被删了，
         # 只留一行「截图 → …」日志指向一个不存在的路径（用户要看的产物不能删）。
-        if not failures and not args.shot and not args.shot_board:
+        if not failures and not args.shot and not args.shot_board and not args.shot_toolbar:
             shutil.rmtree(WORK, ignore_errors=True)
 
 

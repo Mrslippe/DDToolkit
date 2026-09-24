@@ -651,6 +651,24 @@ export default function PostsPage() {
     null
   const accounts = vtuber ? vtuber.accounts.filter((a) => a.platform_uid) : []
 
+  // ── R45-B：页面标题（用户 2026-09-24）──────────────────────────────────
+  // 放在**面板左上角、工具条覆盖带之下**，把内容整体下移一段 ⇒ 工具条拉下来时
+  // 不会盖住太多。三个视图各自的文案：
+  //   · list    = **选中账号的昵称**（用户口径："list 就是选中的平台分类按钮的昵称"）
+  //   · archive = **当前卡片的标题**（由 `DataDeck` 的 `onIndexChange` 回抛）
+  //   · profile = 本轮不做（用户："这轮不做 profile"）
+  //   · cards   = 无（它的 hero 本身就是主体，加标题反而挡头像）
+  /** 数据视图两张卡的标题 —— ⚠️ 与卡片内部渲染的那两串是**两份**，
+   *  探针 `_assert_page_title` 断言两边一致（写两份 + 机器对账）。 */
+  const DECK_LABELS = ['直播日历', '粉丝趋势']
+  const [deckIdx, setDeckIdx] = useState(0)
+  const pageTitle =
+    scene.view === 'list'
+      ? (selectedAccount?.display_name || selectedAccount?.platform_uid || '')
+      : scene.view === 'archive'
+        ? (DECK_LABELS[deckIdx] ?? '')
+        : ''
+
   // ── P8-B：平台药丸的点击开主页 + 长按拖动重排已随视图搬到
   //    `components/posts/HeroCardsView.tsx`（2026-09-13，devlog/065）——
   //    那 4 个 state / 4 个 handler / 2 个派生值只有卡片视图用，留在页面里只是噪声。
@@ -758,6 +776,14 @@ return (
           <StateBlock kind="error" variant="alert" title="无法加载" text={error} />
         )}
 
+        {/* 页面标题（R45-B）：**工具条覆盖带之下**、面板左上角，把内容整体下移
+            ⇒ 工具条拉下来时不盖住太多。它**不随工具条显隐**（内容不是 chrome）。
+            ⚠️ 放在 `.view-body` 的 key 里 ⇒ 它随视图切换重挂，但**不进滚动区**
+            （常驻，不随内容滚走）—— 所以和 `.chips-bar` 同一层级。 */}
+        {vtuber && pageTitle && (
+          <h2 className="page-title" data-page-title="">{pageTitle}</h2>
+        )}
+
         {/* 操作按钮行（仅列表视图；卡片/档案视图各自有内部账号切换与操作）：
             行首账号切换器 + 右侧可收起操作组——收起态 [展开钮][更新动态]，
             展开向左滑出 [抓取账号][抓取帖子][添加账号][解除订阅]，
@@ -791,6 +817,7 @@ return (
             liveAcc={liveAcc ?? null}
             isLive={isLive}
             onAddAccount={() => setAddAccountOpen(true)}
+            onOpenSettings={() => setSettingsOpen(true)}
           />
         )}
 
@@ -798,7 +825,12 @@ return (
           /* R40（2026-09-19，用户）：数据视图从"固定卡片 + 上下滚动"改成**一次一张卡的牌堆** ——
              滚轮上下切换、方向语义见 `DataDeck` 文件头；两张卡始终挂载（切换时零重建，
              ECharts 不会被 ResizeObserver 拖着重画）。 */
-          <DataDeck keys={['live-calendar', 'fan-chart']} persistKey={String(vtuber.id)}>
+          <DataDeck
+            keys={['live-calendar', 'fan-chart']}
+            labels={DECK_LABELS}
+            persistKey={String(vtuber.id)}
+            onIndexChange={setDeckIdx}
+          >
             {/* 2026-09-06：archive 逐步重建（用户主导），第一步 = 直播日历卡（Frame10612 规格）
                 R13：`vtuberId` 给日历取"该 V 的未来预约"（预约是 V 级数据，跨账号共用） */}
             <LiveCalendar

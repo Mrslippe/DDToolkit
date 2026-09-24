@@ -433,6 +433,9 @@ const LiveCalendar = memo(function LiveCalendar(
           R3（2026-09-13）：从含糊的「数据自动同步」改成**点名来源**，并按实际数据
           判定是否含本地快照补段（场次 `source` 里的 `+self`）。 */}
       <div className="lc-title">
+        {/* ⚠️ R45-B：这串文案与 `PostsPage` 传给 `DataDeck` 的 `labels[0]` 是**两份**。
+            探针 `_assert_page_title` 会断言"导航标题 == 当前卡片里渲染出来的标题"，
+            所以改了这里不改那边会**红**，不会静默漂移。 */}
         直播日历
         <span
           className="card-src-note"

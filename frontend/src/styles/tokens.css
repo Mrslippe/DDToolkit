@@ -129,6 +129,17 @@
   --sel-bar: var(--c-primary-deep);
   --sel-bg: #fff0f3;
   --sel-bg-hover: #fff7f9;
+  /* R45-A（用户 2026-09-24 拍板方案 E）：**选中块的实底** —— 工具条里跟着视图钮滑的那一块。
+     ⚠️ 它比 `--sel-bg` 深得多，因为**约束完全不同**：
+       · `--sel-bg`  = 浅粉底 + **深字**（侧栏 V 行等 22 处），越浅越好；
+       · `--sel-strong` = 承载**白图标**，越浅越糟。
+     白图标 ≥3:1 ⇔ 填充相对亮度 **≤0.30**。逐个量过：
+       --sel-bg #fff0f3 → 1.10:1 ❌ ｜ --c-primary #ffa2b4 → 1.90:1 ❌
+       --c-primary-deep #fb77a1 → 2.54:1 ❌ ｜ --pill-fill-pink #e35d8b → 3.38:1（余量薄）
+       本档 #ec407a（Material Pink 400，H=340° S=73% V=93%）→ **3.76:1**，余量 25%。
+     ⚠️ **不要再往亮调**：3:1 是硬下限。想更亮就只能**放弃白图标**（改深图标，
+       那时 #ffa2b4 都够 —— 见 UI-MAP「工具条选中态」那条口径）。 */
+  --sel-strong: #ec407a;
 
   /* 字体 */
   --font-family: 'Alimama FangYuanTi VF', system-ui, -apple-system, 'Segoe UI',
@@ -137,6 +148,14 @@
 
   /* 尺寸（紧凑壳层：顶栏 40 / 工具栏 50；侧栏 492 沿用档案页规格） */  --topbar-height: 40px;
   --sidebar-width: 492px;
+  /* ── 页面工具条的几何（R45 / R45-B）────────────────────────────────────
+     `.glow-bar` 是 **overlay**（`position:absolute`），压在内容之上、按需出现。
+     `--toolbar-band` 是**它覆盖的那条带子的高度**，给"要让开它"的内容用
+     （现在只有 `.page-title` 用）—— 三处引同一个来源，改条高不会漏改。
+     ⚠️ 原来是散在 `.glow-bar` 里的 `top:6px; height:46px` 两个字面量。 */
+  --toolbar-top: 6px;
+  --toolbar-h: 46px;
+  --toolbar-band: calc(var(--toolbar-top) + var(--toolbar-h));
   /* 窗口圆角度数（L3 自绘方案，随改随生效）
      ⚠️ 这只是 **Win10 / 浏览器 / 探针的兜底值**：Win11 上圆角由 DWM 画，
      `html.dwm-corners` 会把它覆盖成 0（见 layout.css 与 utils/windowCorners.ts，devlog/136）。

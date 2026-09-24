@@ -31,8 +31,16 @@ const PHASE_MS = 460
 interface Props {
   /** 每张卡的稳定 key（React key 与持久化都用它） */
   keys: string[]
+  /** 每张卡的**标题**（与 `keys` 同序、同长）—— R45-B 新增，给页面标题用。
+   *  ⚠️ 它与卡片内部渲染出来的标题是**两份**（那两份硬编码在 `LiveCalendar` /
+   *  `FanTrendChart` 的 JSX 里）⇒ 会漂移。所以探针有一条判据：
+   *  **导航标题必须等于当前卡片内渲染出来的标题**（写两份 + 机器对账，本仓惯用手法）。 */
+  labels: string[]
   /** 按 V 记住"上次看到第几张"的命名空间（通常传 vtuberId） */
   persistKey: string
+  /** 当前索引变化时回调（R45-B）—— 让外部（页面标题）知道"现在看的是哪张卡"。
+   *  原来 `index` 是纯内部 state，外面看不到。 */
+  onIndexChange?: (index: number) => void
   children: ReactNode[]
 }
 
@@ -40,7 +48,7 @@ const clampIdx = (i: number, n: number) => (i < 0 ? 0 : i > n - 1 ? n - 1 : i)
 /** 循环取模（R40b：用户要求"滚动做成循环"）—— 末张向下回首张、首张向上回末张 */
 const wrapIdx = (i: number, n: number) => ((i % n) + n) % n
 
-export default function DataDeck({ keys, persistKey, children }: Props) {
+export default function DataDeck({ keys, labels, persistKey, onIndexChange, children }: Props) {
   const count = children.length
   const storeKey = `ddtoolkit.deck.${persistKey}`
   const [index, setIndex] = useState(() => {
@@ -78,6 +86,13 @@ export default function DataDeck({ keys, persistKey, children }: Props) {
       /* 存不下就算了：不影响本次会话内的切换 */
     }
   }, [storeKey, index])
+
+  /** R45-B：把"现在看的是第几张"抛给外部（页面标题要用）。
+   *  用**普通 effect** 而不是在 `step` 里调 —— 因为 `index` 也会被
+   *  "按 V 恢复上次那张"的初始化改动，只挂 `step` 会漏掉那条路径。 */
+  useEffect(() => {
+    onIndexChange?.(index)
+  }, [index, onIndexChange])
 
   useEffect(() => () => {
     if (phaseTimer.current != null) window.clearTimeout(phaseTimer.current)
@@ -218,7 +233,7 @@ export default function DataDeck({ keys, persistKey, children }: Props) {
             data-deck-dot={i === index ? 'on' : 'off'}
             role="tab"
             aria-selected={i === index}
-            aria-label={`第 ${i + 1} 张`}
+            aria-label={`第 ${i + 1} 张：${labels[i] ?? keys[i] ?? ''}`}
             onClick={() => { cancelWheelDebt(); flashDots(); setIndex(i) }}
           />
         ))}

@@ -484,6 +484,8 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
       {/* 卡片标题（与直播日历/归档卡同规格 16.5/600/--c-text-main）+
           数据来源说明（R3：点名来源而不是含糊的"数据自动同步"） */}
       <div className="fc-title">
+        {/* ⚠️ R45-B：与 `PostsPage` 传给 `DataDeck` 的 `labels[1]` 是**两份** ——
+            探针 `_assert_page_title` 会断言两边一致，改了这里不改那边会红。 */}
         粉丝趋势
         <span
           className="card-src-note"

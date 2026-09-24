@@ -173,6 +173,10 @@ function measure(tag: string) {
     hero: (() => {
       const pills = [...document.querySelectorAll('.stat-pill[data-pill-index]')]
       const sets = [...document.querySelectorAll('.stat-sets .stat-set')]
+      // ⚠️ R45-C 首跑读到的 `hero: None` 是**设计如此、不是缺陷**：药丸只在 cards 视图渲染，
+      //    所以 list / archive / profile 三帧上 `hero` 本来就是 null，而药丸判据
+      //    （行数上限、溢出对账）只在 `if hero:` 为真时跑 ⇒ **只在 cards 帧生效**。
+      //    （真正要盯的是 cards 帧上它非空 —— 那条由 `_assert_glow` 的 `pillRows is None` 兜底。）
       if (!pills.length && !sets.length) return null
       const sig = pills.map((p) => {
         const idx = p.getAttribute('data-pill-index')
@@ -189,6 +193,28 @@ function measure(tag: string) {
         hasAddButton: !!document.querySelector('.pill-add'),
         /** 逐枚签名：`索引:色系:展示数值` —— 顺序变化会直接反映在这里 */
         signature: sig,
+        /** 诊断：DOM 里一共有几枚 `.stat-pill`（含 `--seed-accounts` 种下的影子账号）。
+         *  R45-C 首跑时 `hero` 段在 cards 帧上是 `null`，需要分清"没种进去"还是"没渲染"。 */
+        domPillCount: document.querySelectorAll('.stat-pill').length,
+        // ── R45-C：药丸**行数上限**（用户 2026-09-24：「最多两行」）──────────
+        /** 实渲染的行数（按 `.stat-set` 的纵向分组数）。**判据：≤2**。
+         *  为什么必须量行数而不是数药丸：行数才是 hero 高度的增长源（每行 ≈ +60px），
+         *  而 hero 被工具条盖住/被挤上去正是 R45-B 的成因。 */
+        pillRows: sets.length,
+        /** 溢出出口（`.pill-more`）显示的 `+N`；**无溢出时必须是 null** ——
+         *  否则"两行上限"是靠裁掉账号实现的（那会让账号隐身、不可达）。 */
+        pillMore: (() => {
+          const el = document.querySelector<HTMLElement>('.pill-more')
+          if (!el) return null
+          return {
+            n: Number(el.getAttribute('data-pill-more') ?? 0),
+            text: (el.textContent || '').trim(),
+          }
+        })(),
+        /** 全部账号数：与 `pillCount + pillMore.n` 对账 ⇒ 证明"一个都没丢" */
+        accountTotal: document.querySelectorAll('.stat-pill[data-pill-index]').length
+          + Number(document.querySelector<HTMLElement>('.pill-more')
+              ?.getAttribute('data-pill-more') ?? 0),
       }
     })(),
     /** 档案视图（profile）的卡片画布（R37-P1，devlog/141）—— 与列表/hero 同款的常驻量测。
@@ -297,18 +323,33 @@ function measure(tag: string) {
       if (!bar) return null
       const spot = bar.querySelector<HTMLElement>('.glow-spot')
       const active = bar.querySelector<HTMLElement>('.view-btn.on')
+      const off = bar.querySelector<HTMLElement>('.view-btn.off')
       const br = bar.getBoundingClientRect()
       // ⚠️ 量亮点之前**先杀掉过渡**（本仓老招，见 `--settings`/chevron 两处先例）：
       // 虚拟时间下过渡不推进，`getBoundingClientRect()` 会一直报**过渡起点** ——
       // 那样"亮点跟过去了没有"就变成了尺子问题（实测踩到过：只有一步量到旧位置）。
+      // ⚠️ R45-A 追加：`.view-btn` 也有了 `color/opacity` 过渡 ⇒ **必须一起杀**。
+      // 否则量到的是过渡中途：实测 archive 帧上 `.on` 读到深色（75,90,107）、
+      // `.off` 读到白色且 `opacity=1` —— 一个 `.off` 元素不可能有 opacity 1，
+      // 这个自相矛盾的读数就是"尺子读在半路"的铁证（它会让对比度判据假红）。
       const kill = document.createElement('style')
-      kill.textContent = '.glow-spot{transition:none !important}'
+      kill.textContent =
+        '.glow-spot,.view-btn{transition:none !important}'
       document.head.appendChild(kill)
       void spot?.getBoundingClientRect()          // 强制重排，让计算样式落到终值
+      void off?.getBoundingClientRect()           // 同上：让 `.off` 的 opacity/color 落到终值
+      void active?.getBoundingClientRect()
       const sr = spot?.getBoundingClientRect()
       const ar = active?.getBoundingClientRect()
       const bcs = getComputedStyle(bar)
       const scs = spot ? getComputedStyle(spot) : null
+      // ⚠️ 图标色必须在**杀过渡之后**读（`getComputedStyle` 返回活对象，
+      // 但下面的 `kill.remove()` 会让它回到过渡中 —— 所以先取值再 remove）
+      const onColor = active ? getComputedStyle(active).color : null
+      const offColor = off ? getComputedStyle(off).color : null
+      const offOpacity = off
+        ? Math.round((parseFloat(getComputedStyle(off).opacity) || 0) * 100) / 100
+        : null
       kill.remove()
       const scroller = document.querySelector<HTMLElement>('.scene-body .os-scroll, .archive-view .os-scroll, .board-view .os-scroll, .list-scroll .os-scroll, .hero-scroll .os-scroll')
       const root = scroller?.closest<HTMLElement>('.os-root')
@@ -359,8 +400,6 @@ function measure(tag: string) {
             h: Math.round(r.height),
           }
         })
-      const offBtn = bar.querySelector<HTMLElement>('.view-btn.off')
-      const onBtn = bar.querySelector<HTMLElement>('.view-btn.on')
       return {
         barBg: bcs.backgroundImage,
         /** 毛玻璃（R39-D3）：`backdrop-filter` + 极轻白 + 圆角 + 内描边 = "明确的形状" */
@@ -432,16 +471,14 @@ function measure(tag: string) {
         contentRects,
         /** `.view-btn.off` 的**实际**不透明度与图标色：非文本对比 ≥3:1 的输入。
          *  不写死 0.7 —— 算的是渲染值，改 CSS 也拦得住。 */
-        offOpacity: offBtn
-          ? Math.round((parseFloat(getComputedStyle(offBtn).opacity) || 0) * 100) / 100
-          : null,
+        offOpacity,
         /** 图标色走 `currentColor` 继承（`body { color: var(--c-text-main) }`） */
-        offColor: offBtn ? getComputedStyle(offBtn).color : null,
+        offColor,
         // ── R45-A：选中态 = 深粉实底 + 白图标（去掉描边）──────────────────
         /** **白图标**的实测色：与 `.glow-spot` 的填充一起算非文本对比 ≥3:1。
          *  只判 on 图标 —— off 图标压在"正被滑过的块"上只有 2.43:1，但那是**行程过渡态**
          *  （那枚图标本来就在被替换的过程中），不设为判据（见 posts.css 的 `.view-btn.off`）。 */
-        onColor: onBtn ? getComputedStyle(onBtn).color : null,
+        onColor,
         /** 选中块填充（`--sel-strong`）—— 对比度判据的另一半 */
         spotBg: spot ? getComputedStyle(spot).backgroundColor : null,
         /** 选中块**不许再有描边**（R45-A 用户口径："选中时的边框直接去掉"）。
@@ -473,9 +510,42 @@ function measure(tag: string) {
             '.deck-card[data-deck-pos="front"] .fc-title')
           return el ? (el.childNodes[0]?.textContent || '').trim() : null
         })(),
-        /** 让开量（`--toolbar-band`）—— 判"标题有没有真的让开工具条"的基准 */
-        toolbarBand: getComputedStyle(document.documentElement)
-          .getPropertyValue('--toolbar-band').trim() || null,
+        /** 让开量（`--toolbar-band`）—— 判"标题有没有真的让开工具条"的基准。
+         *  ⚠️ **不能在 `:root` 上读它**：`tokens.css` 里它是
+         *  `calc(var(--toolbar-top) + var(--toolbar-h))`，而自定义属性的值在
+         *  **使用处**才求值 ⇒ `getPropertyValue` 只会回字符串 `"calc(6px + 46px)"`。
+         *  所以这里把两个分量读出来再算一次（分量都是字面量）。
+         *  （第一次跑就踩到了：判据报"算不出 --toolbar-band"而静默空转。） */
+        toolbarBand: (() => {
+          const rs = getComputedStyle(document.documentElement)
+          const num = (n: string) => parseFloat(rs.getPropertyValue(n).trim() || '')
+          const top = num('--toolbar-top'), h = num('--toolbar-h')
+          return Number.isFinite(top) && Number.isFinite(h) ? `${top + h}px` : null
+        })(),
+        /** `--toolbar-top` 单独给一份 —— `_assert_page_title` 要用它把
+         *  **视口坐标**（`pageTitle.rect` / `barRect` 都是视口的）换算成**面板内坐标**，
+         *  才能跟 `--toolbar-band` 比。第一版就是因为没换算而假红/恒真。 */
+        toolbarTop: getComputedStyle(document.documentElement)
+          .getPropertyValue('--toolbar-top').trim() || null,
+        /** hero 主体（头像）的顶 —— R45 视觉评审补量。
+         *  ⚠️ **为什么必须量它**：卡片页被工具条盖住的那一块是**头像**，而"会不会被盖"
+         *  只能靠 `头像顶 vs --toolbar-band` 判。原来探针**完全没量 hero 的几何**，
+         *  于是"工具条按需浮出会不会盖住头像"这件事**没有任何判据** ——
+         *  正是那种"看着代码以为没事、跑起来才发现头像被切了"的形态（截图实测到了）。 */
+        heroTop: (() => {
+          const el = document.querySelector<HTMLElement>(
+            '.hero-scroll .hero-avatar, .hero-scroll .hero-avatar-fallback')
+          if (!el) return null
+          const r = el.getBoundingClientRect()
+          const barR = bar.getBoundingClientRect()
+          const rs = getComputedStyle(document.documentElement)
+          const ttop = parseFloat(rs.getPropertyValue('--toolbar-top').trim() || '') || 0
+          return {
+            /** 头像顶（**面板内**坐标：换算到面板原点） */
+            topInPanel: Math.round(r.top - (barR.top - ttop)),
+            h: Math.round(r.height),
+          }
+        })(),
       }
     })(),
     /** 可见地越过窗口左右缘的元素 */
@@ -3399,16 +3469,23 @@ export async function runUiProbe(): Promise<void> {
     const result: Record<string, unknown> = {}
     // `view=cards` ⇒ 停在**展示页**（R39-D3：光条压在有背景图的那一页上最容易看出边界，
     // 视觉评审要看的就是那一页）；`view=archive` ⇒ 停在**数据视图**（R40 牌堆）；
-    // 默认仍是档案视图。
+    // `view=list` ⇒ 停在**帖子列表**（R45-B：页面标题只在这一页与数据视图出现，
+    // 视觉评审要看"标题有没有真的让开工具条"。⚠️ 原来没有这一支 ⇒ `&view=list` 会
+    // **静默落到档案视图**，截图与预期不符却没有任何报错）；默认仍是档案视图。
     const wantView = q.get('view')
     const wantCards = wantView === 'cards'
     const wantDeck = wantView === 'archive'
+    const wantList = wantView === 'list'
     ;[...document.querySelectorAll<HTMLButtonElement>('.view-btn')]
       .find((b) => (b.title || '').startsWith(
-        wantCards ? '展示页' : wantDeck ? '数据视图' : '档案视图'))?.click()
+        wantCards ? '展示页' : wantDeck ? '数据视图' : wantList ? '帖子列表' : '档案视图'))?.click()
     await waitFor(() => document.querySelector(
-      wantCards ? '.hero' : wantDeck ? '[data-deck]' : '[data-board]'))
-    if (!wantCards && !wantDeck && q.get('reset')) {
+      wantCards ? '.hero' : wantDeck ? '[data-deck]' : wantList ? '.page-title' : '[data-board]'))
+    if (wantList) {
+      // 页面标题要等数据到位（list 的标题是**选中账号昵称**，取数前是空的）
+      await sleep(900)
+    }
+    if (!wantCards && !wantDeck && !wantList && q.get('reset')) {
       btn('编辑布局')?.click()
       await sleep(200)
       btn('重置默认')?.click()
@@ -3416,9 +3493,24 @@ export async function runUiProbe(): Promise<void> {
       btn('完成')?.click()
       await sleep(200)
     }
-    if (!wantCards && q.get('editing')) {
+    if (!wantCards && !wantList && q.get('editing')) {
       btn('编辑布局')?.click()
       await sleep(400)
+    }
+    if (wantList) {
+      // R45-B 视觉评审：**把工具条显出来**再截 —— 否则截到的是 rest 态（全隐），
+      // 而这一页要看的是"标题让开之后，工具条浮出来还挡不挡东西"。
+      // 用真派发 `mousemove` 走同一条呼出通路（工具条 `pointer-events:none`，
+      // 收不到 hover，只能按指针位置判 —— 见 PostsPage 的 `onPanelMouseMove`）。
+      const panel = document.querySelector<HTMLElement>('.posts-panel')
+      const gb0 = document.querySelector<HTMLElement>('.glow-bar')?.getBoundingClientRect()
+      if (panel && gb0) {
+        panel.dispatchEvent(new MouseEvent('mousemove', {
+          clientX: gb0.left + gb0.width / 2, clientY: gb0.top + gb0.height / 2,
+          bubbles: true,
+        }))
+        await sleep(500)                 // 等 dwell(140ms) + 淡入
+      }
     }
     if (wantDeck) {
       // 牌堆截图：圆点静止时是隐藏的（R40b 用户要求）⇒ 先滚一下让它们亮起来，

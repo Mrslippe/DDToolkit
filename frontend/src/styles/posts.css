@@ -63,6 +63,34 @@
   gap: 8px;
 }
 
+/* ── 页面标题（R45-B，用户 2026-09-24）────────────────────────────────────
+   放在**面板左上角、工具条覆盖带之下**，让内容整体下移一段，工具条拉下来时
+   就不会盖住太多。三个视图各自的文案由 `PostsPage` 给（见 `.posts-panel` 的
+   `title` prop）：
+     · list    = **选中账号的昵称**（用户口径）
+     · archive = **当前卡片的标题**
+     · profile = 本轮不做（用户 2026-09-24：这轮不动 profile）
+
+   ⚠️ **它与工具条的关系是"让位"不是"参与"**：标题**不随工具条显隐**
+   （它是内容，不是 chrome）—— 工具条隐着的时候标题照常在那儿。这正是"占掉
+   一部分顶部间距"的实现方式：**静态地让开**，而不是等工具条出现再挤。
+   ⚠️ `padding-top: calc(var(--toolbar-band) + 8px)` —— 8px 是让开的余量。
+   带子高度走令牌（tokens.css 的 `--toolbar-band`），三处一个来源。 */
+.page-title {
+  flex: none;
+  margin: 0;
+  padding: calc(var(--toolbar-band) + 8px) 16px 8px;
+  /* 与卡片族标题同规格（`lc-title` / `fc-title` 都是这套），全仓一致 */
+  font-size: 16.5px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--c-text-main);
+  /* 长名字（账号昵称可以很长）—— 单行省略，不许把它撑成两行把内容又推下去 */
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .bg-set {
   width: 32px;
 }
@@ -272,7 +300,9 @@
      `transform: translateY()`（见 `.glow-bar,.bg-tools` 那条共用规则），
      `translate` 与 `transform` 是两条独立属性，才能叠加。 */
   position: absolute;
-  top: 6px;
+  /* R45-B：`top` / `height` 改用令牌 —— `.page-title` 要按同一条带子让位，
+     散两个字面量迟早漏改一处（`--toolbar-band` 在 tokens.css）。 */
+  top: var(--toolbar-top);
   left: 50%;
   translate: -50% 0;
   /* 选中块边长（单一真源）：CSS 用它画、TS 读它算居中 —— 两处都不会各写一个数。
@@ -285,9 +315,10 @@
   /* 宽度**由内容决定**，不写死：原 354px 与内容 230 脱节了 62×2（那是柔光时代
      "在盒子内归零"留的收口），改按钮尺寸/间距时也不会再各改一处。 */
   padding: 3px 8px;
-  /* 高 = 选中块 40 + 上下各 3。条占 y=6..52，而 `.chips-bar` 的胶囊实体从 y=52 起
-     ⇒ 严丝合缝、零视觉重叠（1100 档也成立；由探针第 5 条的不相交断言机器判）。 */
-  height: 46px;
+  /* 高 = 选中块 40 + 上下各 3。条占 y=6..52（`--toolbar-band` = 52），而
+     `.chips-bar` 的胶囊实体从 y=52 起 ⇒ 严丝合缝、零视觉重叠（1100 档也成立；
+     由探针的「条不与内容控件相交」断言机器判）。 */
+  height: var(--toolbar-h);
   /* ── 表面：**加入 ① 浮片族**（R45，用户拍板）────────────────────────────
      从"极轻毛玻璃"改成"不透明白卡 + 阴影"，四条理由：
 
@@ -334,29 +365,26 @@
   position: absolute;
   left: 0;
   top: 50%;
-  width: var(--glow-spot);          /* 直径由光条的 CSS 变量给（TS 读同一个变量算居中） */
+  width: var(--glow-spot);          /* 边长由工具条的 CSS 变量给（TS 读同一个变量算居中） */
   height: var(--glow-spot);
   margin-top: calc(var(--glow-spot) / -2);
   /* 12px = 档案卡族圆角口径（与 `--pcard-radius` 同值；块比卡小，同族即可） */
   border-radius: 12px;
   pointer-events: none;
-  background: var(--sel-bg);
-  /* 描边 = **主色粉本体**（`--c-primary-deep`，与侧栏选中行的 `--sel-bar` 同一个 token）：
-     浅粉底（#fff0f3）与近白页面（#fffbfb）的亮度差只有 ~1.07 ⇒ 光靠填充在浅底上读不出形状，
-     形状由这条边承担。首版用了 `rgba(251,119,161,.35)`（≈1.44:1，太弱且是字面量）——
-     现在直接用 token 本体：描边对填充 ≈2.3:1、对页面 ≈2.5:1，且"选中 = 浅粉底 + 主色粉边"
-     就是侧栏选中行那套语言，不再是一个孤例。
-     ⚠️ **R45 起这条注释要改读法**：原写"与光条同一条纪律：不加外阴影"，而光条
-     本次**已经有了外阴影**（改浮片配方）。所以纪律不再是"一律不要外阴影"，
-     而是分对象：
-       · **面**（`.glow-bar`）= 一块要读得出形状的浮起卡 ⇒ 阴影是它的形状承担者；
-       · **选中块**（本元素）= 坐在面**之上**的色块，形状由填充 + 描边承担，
-         再加阴影就是"面上的面"，两层深度反而糊。
-     ⇒ 判据不是"有没有阴影"，是"**这一层是不是靠阴影读形状**"。
-     圆角仍取 12px（`--pcard-radius` 口径）：块到条缘是**不对称**内距
-     （纵 3px / 横 5px），同心圆角（内 = 外 − 内距）在这里没有唯一解，
-     且它是**选中 chip**、不是嵌套的面 —— 不套用 `ui_probe` 的同心判据。 */
-  box-shadow: inset 0 0 0 1px var(--c-primary-deep);
+  /* ── R45-A（用户 2026-09-24 拍板方案 E）：**深粉实底 + 白图标** ─────────────
+     从"浅粉底 `--sel-bg` + `--c-primary-deep` 粉描边 + 深图标"换成"实底 + 白图标"，
+     并把**描边整个去掉**。四步都是被迫的，不是口味：
+       ① 去描边 ⇒ 形状只能由填充扛；
+       ② 浅粉扛不住 —— `--sel-bg #fff0f3` 对**本元素自己的白条面**只有 **1.10:1**
+          （比它当年在近白页上的 1.07 还差）⇒ 等于没有形状；
+       ③ 于是填充必须压深，而**压深到能立形状的粉，深图标就读不出了**
+          （`#4b5a6b` on `#c9406f` = 1.50:1）⇒ 图标只能转白；
+       ④ 白图标 ≥3:1 又要求填充亮度 ≤0.30 ⇒ 落在 `--sel-strong #ec407a`（**3.76:1**）。
+     用户原本想要的是**顶栏粉 `#ffa2b4`**（H=348°）—— 那一档白图标只有 **1.90:1**，
+     实测在 56% 行程帧上被瞄准的图标有 **42% 露在白条上**，而那 42% 是白压白（≈1.0:1）。
+     改成"亮粉"之间能过线的最亮一档（`#ec407a`）后，同样的暴露**仍然读得出**。
+     ⚠️ **不加外阴影**：它是坐在"面"之上的色块，加阴影就是"面上的面"（R45 口径）。 */
+  background: var(--sel-strong);
   transition: transform var(--motion-base) var(--ease-standard),
               width var(--motion-base) var(--ease-standard);
 }
@@ -397,21 +425,35 @@
   justify-content: center;
   cursor: pointer;
   border-radius: 0;
-  /* 顺手令牌化（原硬编码 0.15s ⇒ `--motion-fast` 140ms，与 R38 批 1 同一口径） */
-  transition: opacity var(--motion-fast) ease;
+  /* R45-A：加 `color` —— 激活态的"图标转白"要跟块一起过渡，否则会硬切。
+     实测（预览 ?.html 的真动画台，220ms 行程）：块走满 42px 才能完全盖住新图标，
+     而滑到它左缘只需 5px ⇒ 行程中段被瞄准的图标有 **42% 露在白条上**。
+     那 42% 在 `--sel-strong #ec407a` 上是 3.76:1 —— **仍然读得出**；
+     若填充换成顶栏粉（用户原本想要的那档，1.90:1）那 42% 就是白压白、会"断成两截"。 */
+  transition: opacity var(--motion-fast) ease, color var(--motion-fast) ease;
 }
 
-/* 激活态：选中块已经给出"在哪"，图标就回到**实色**（不再靠半透明兼作选中信号）。
-   off 态 R45 从 .4 提到 **.7** —— 这不是调参，是**修一个可访问性缺陷**：
-   `.4` 叠在**纯白**上只有 **1.89:1**（任何背景都到不了非文本对比 3:1 的下限，
-   连纯白都不行），而 `.7` 叠在条面（`--pill-bg` 纯白）上是 **3.44:1** ✅
-   （`.65` 是 3.09:1 的临界）。
-   ⚠️ `.4` 当初的理由是"不抢注意力" —— 这件事现在由**工具条的自动隐藏**承担了，
-   所以提高它不再有代价。这条同时关掉 devlog/164 §五遗留第 2 条。 */
+/* 激活态：**白图标** —— 与 `.float-pill.on { color:#fff }` 同一套「粉底 + 白图标」语言，
+   所以工具条的选中态从"浅粉底 + 粉描边 + 深图标"（一个孤例）并入了浮片族的既有配方。
+   ⚠️ 但**只并语言，不并颜色**：`.float-pill.on` 的底是 `--c-primary-deep`（白 2.54:1，不达标），
+   而它影响 4 处（档案设置钮 / 列表筛选钮 / 侧栏筛选钮 / 能力窗「去登录」）——
+   其中 3 处是 **12–13px 小字**，要的是 4.5:1，比图标**更高**不是更低。
+   ⇒ 两者约束方向相反（工具条要保住亮粉 ⇒ 只能白图标 + 深一档底；
+     小字浮片要白字达标 ⇒ 只能把底压深），**不强行统一**，各自守自己的线。 */
 .view-btn.on {
   opacity: 1;
+  color: #fff;
 }
 
+/* off 态：R45 从 `.4` 提到 **`.7`** —— 这不是调参，是**修一个可访问性缺陷**：
+   `.4` 叠在**纯白条面**上只有 **1.89:1**（任何背景都到不了非文本对比 3:1 的下限，
+   连纯白都不行），而 `.7` 叠在条面（`--pill-bg` 纯白）上是 **3.44:1** ✅（`.65` 是 3.09:1 的临界）。
+   ⚠️ `.4` 当初的理由是"不抢注意力" —— 这件事现在由**工具条的自动隐藏**承担了，
+   所以提高它不再有代价。这条同时关掉 devlog/164 §五遗留第 2 条。
+   ⚠️ **R45-A 起有个已知的短暂状态**：块滑过某枚 off 图标时，`.7` 的灰压在
+   `--sel-strong #ec407a` 上只有 **2.43:1**。但那是**行程过渡态**（那枚图标本来就在
+   被替换的过程中），而且两侧的 on 图标（白 3.76:1）与其余 off 图标（3.44:1）**都达标**
+   ⇒ 判据只判这两条，**不判"off 压在被滑过的块上"**。 */
 .view-btn.off {
   opacity: 0.7;
 }
@@ -532,14 +574,21 @@
 
 
 
-/* Hero：主题展示栏（口播规格 1.2）：宽填充、纵向居中、间隔 10、头像距上缘 23 */
+/* Hero：主题展示栏（口播规格 1.2）：宽填充、纵向居中、间隔 10。
+   ⚠️ **R45：`padding-top` 23 → 38px** —— 卡片页**没有页面标题**（它的 hero 本身就是主体，
+   加标题反而挡头像），所以"让开按需浮出的工具条"只能靠 hero 自己的上内距。
+   实测（`ui_probe` 的 `glow.heroTop`）：padding 23 时头像顶在**面板内 37**，
+   而工具条覆盖带是 **52** ⇒ 工具条浮出时会**切掉头像顶部 15px**（截图里肉眼可见）。
+   ⇒ 取 `23 + 15 = 38`。这条由探针 `heroTop.topInPanel ≥ --toolbar-band` 机器判。
+   （R45-B 当时判断"23 已经够了"是**错的** —— 那次没量、只看代码，属于
+     "没有判据的东西我看着以为没事"。） */
 .hero {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 10px;
   width: 100%;
-  padding: 23px 15px 0;
+  padding: 38px 15px 0;
 }
 
 .hero-avatar {
@@ -735,6 +784,40 @@ img.hero-avatar {
   background-color: rgba(255, 82, 136, 0.9);
 }
 
+/* 药丸溢出格（R45-C，用户 2026-09-24：「平台药丸行数最多两行」）。
+   ⚠️ **它占的是"第 6 枚药丸"那一格** —— 所以两行上限不是靠裁掉账号，而是靠
+   "把最后一格换成出口"。点它开「档案设置」的「已订阅账号」节（列全部 + 可删 + 看历史）。
+
+   ⚠️ **视觉上必须跟旁边的药丸同族**（截图评审第一版就是错在这）：第一版给了个
+   白底方块，结果它比药丸**矮一截、看着像错位**（那三格是 `[药丸][药丸][白方块]`）。
+   现在：几何完全继承 `.stat-pill`（191×37 / 2px 圆角 / `padding-right:12px`），
+   底色用**比药丸粉更淡的一档粉**（而不是白）—— 既与图像底区分得开（一眼看出
+   "这不是某个平台"），又还在同一族里（不是一块白板）。 */
+.pill-more {
+  border: 0;
+  justify-content: center;   /* 覆写 `.stat-pill` 的 flex-end（那是给数字右对齐的） */
+  padding-right: 0;
+  background: var(--sel-bg);
+  color: var(--c-primary-deep);
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  /* 与 `.stat-pill` 同一条阴影 —— 「浮起的小卡片」这个真实感是药丸族的语言 */
+  box-shadow: 1px 2px 4px rgba(15, 23, 42, 0.12);
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.pill-more:hover {
+  background: var(--sel-bg-hover);
+  color: var(--c-primary-deep);
+}
+
+.pill-more:focus-visible {
+  outline: 2px solid var(--c-primary-deep);
+  outline-offset: 2px;
+}
+
 .pill-value {
   color: #fff;
   font-size: 26px;
@@ -883,7 +966,14 @@ img.hero-avatar {
   top: calc(100% + 6px);
   z-index: 30;
   width: min(512px, calc(100vw - 574px));
-  max-height: calc(100vh - 252px);
+  /* ⚠️ R45-B：`max-height` 原来写死 `calc(100vh - 252px)` —— 那是"筛选行之上有多少
+     固定高度"的**手算值**。加了 `.page-title`（89px）之后它不再成立：弹窗顶出面板底、
+     被 `.posts-panel` 的 `overflow:hidden` 裁掉（探针实测 `insidePanel=false`，
+     `pop.bottom=629` vs `panel.bottom=661`，而 `max-height` 仍按旧的 252 算 ⇒ 高 362 放不下）。
+     改成**按同一个来源算**：`.page-title` 的高度 = `--toolbar-band`(52) + 8 + 行高(21.45)
+     + 8 = 89.45 ≈ 90px。用 `--toolbar-band` + 38px 表达（38 = 8+21.45+8 的整数化）。
+     这样以后再动标题的让开量，弹窗会跟着走，不会再各写一处。 */
+  max-height: calc(100vh - 252px - var(--toolbar-band) - 38px);
   overflow: hidden;
   padding: 10px;
   background: #fff;

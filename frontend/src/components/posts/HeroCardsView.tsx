@@ -38,6 +38,8 @@ interface Props {
   isLive: boolean
   /** 打开「添加账号」弹窗 */
   onAddAccount: () => void
+  /** 打开「档案设置」（R45-C：药丸溢出时的出口 —— 它的「已订阅账号」节列全部账号） */
+  onOpenSettings: () => void
 }
 
 /** 打开外链：桌面端走 shell 插件（capability `shell:allow-open` 已就绪，无需新增依赖），
@@ -75,6 +77,7 @@ export default function HeroCardsView({
   liveAcc,
   isLive,
   onAddAccount,
+  onOpenSettings,
 }: Props) {
   // ── P8-B：平台药丸的点击开主页 + 长按拖动重排 ────────────────────────
   // 顺序是服务端事实（accounts.sort_order，拖拽后 PUT 落库）；拖拽期间先用本地
@@ -161,8 +164,25 @@ export default function HeroCardsView({
       })
   }
 
-  // 平台粉丝展示：徽章集按每集 3 枚切分（集内横排、集间纵向间隔 10）。
-  const pillSets = chunkBy(orderedAccounts, 3)
+  // 平台粉丝展示（1.2.4）：徽章集按每集 3 枚切分（集内横排、集间纵向间隔 10）。
+  //
+  // R45-C（用户 2026-09-24）：「card 页中平台药丸行数也应该做出限制，**最多两行**」。
+  // 背景（devlog/182 §二）：药丸行数是 hero 高度的**唯一增长源**（每行 ≈ +60px），
+  // 而工具条是按需浮出来的 —— 行数一多，hero 就会被挤上去、且每加一个账号都会**跳一截**。
+  // 定 2 行 ⇒ hero 高度**封顶**（`MaxRows=2` 时实测 +60 vs 不受限 +120）。
+  //
+  // ⚠️ **超出的账号不是消失，是换出口**：第 2 行尾部渲染一枚 `.pill-more`
+  // （`+N`），点开**复用 `onAddAccount` 那个窗口** —— 它里面本来就列着该 V 的
+  // **全部已订阅账号**（可删可加），所以"看全部"与"管理账号"是同一个面。
+  // 这样既不丢功能，又不用新写一个弹窗。
+  const MAX_PILL_ROWS = 2
+  /** 每行放得下几枚：3 的整倍数 —— 放得下 6 就按 3+3 排（保持原设计的两集分组） */
+  const perRow = 3
+  const maxPills = MAX_PILL_ROWS * perRow
+  const overflowCount = Math.max(0, orderedAccounts.length - maxPills)
+  /** 溢出时**留一格给 `.pill-more`**（它自己也是一枚药丸）⇒ 实显 5 枚 + 「+N」 */
+  const shown = overflowCount > 0 ? orderedAccounts.slice(0, maxPills - 1) : orderedAccounts
+  const pillSets = chunkBy(shown, perRow)
 
   return (
     <OverlayScroll className="hero-scroll">
@@ -257,6 +277,21 @@ export default function HeroCardsView({
                   />
                 )
               })}
+              {/* 溢出格（R45-C）：**只在最后一行**、且确实有溢出时渲染。
+                  它占的正是"第 6 枚药丸"那一格 —— 所以两行上限不是靠裁掉，
+                  而是靠"把第 6 格换成出口"。 */}
+              {overflowCount > 0 && si === pillSets.length - 1 && (
+                <button
+                  type="button"
+                  className="stat-pill pill-more"
+                  data-pill-more={overflowCount}
+                  title={`还有 ${overflowCount} 个账号 · 点开「档案设置」看全部（可删可看信息历史）`}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={onOpenSettings}
+                >
+                  +{overflowCount}
+                </button>
+              )}
             </div>
           ))}
           <button
