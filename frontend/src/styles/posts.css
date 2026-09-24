@@ -70,7 +70,11 @@
    ⚠️ **它不占流** —— 这是与 R45-B 那版的根本区别：那版让标题**独立占一行**
    （`padding-top: band + gap` ⇒ 92px），把内容整体推下去 65px；
    而参考图里标题是**与工具条同一栏**的 ⇒ 现在归位。
-   文案由 `PostsPage` 给：list = 选中账号昵称 / archive = 当前卡片标题 / cards 无。
+   文案由 `PostsPage` 给（**R45-E2 起是写死的每视图标签**）：
+   list = 「帖子列表」/ archive = 「数据卡片」/ cards·profile = 无标题。
+   ⚠️ 它**不再镜像卡片内部的标题**（archive 那张卡自己渲染「直播日历」）——
+   两者现在是**两件事**（导航标签 vs 卡片标题），没有必须相等的理由；
+   探针原先那条"两份真源必须相等"的对账判据已随之删掉（见 devlog/186 §八）。
    ⚠️ 横向**必须**卡住"到工具条左缘还有余量"：工具条宽 176 且居中 ⇒
    左缘恒在 `50% − 88px`。所以可用宽 = `50% − 88px`（条左缘）`− 16px`（本元素 left）
    `− 12px`（安全距）⇒ `calc(50% - 116px)`。
@@ -79,14 +83,20 @@
 .page-title {
   position: absolute;
   /* 垂直与工具条**同轴**：条占 `--toolbar-top` .. `--toolbar-top + --toolbar-h`，
-     文本高 21.45 = 16.5 × 1.3，居中即上下各让 (46 − 21.45)/2。 */
-  top: calc(var(--toolbar-top) + (var(--toolbar-h) - 21.45px) / 2);
+     文本行盒高 = `font-size × line-height` ⇒ 上下各让 (条高 − 行盒高)/2。
+     ⚠️ **用 `1.3em` 而不是写死 `21.45px` / `26px`**（2026-09-24 修）：
+     `em` 按本元素自己的 `font-size` 解析，所以它**永远等于**下面的
+     `font-size × line-height`。原先写死一个数 ⇒ 改字号时这里不同步，
+     标题就悄悄偏离工具条轴线（用户把字号 16.5 → 20 时就踩到了：
+     写死 20 而实际行盒是 20×1.3 = 26 ⇒ 标题比轴线**低 3px**）。
+     ⚠️ 以后改 `font-size`/`line-height`，这一行**不用跟着改**。 */
+  top: calc(var(--toolbar-top) + (var(--toolbar-h) - 1.3em) / 2);
   left: 16px;
   z-index: 2;                       /* 在工具条(3)之下、内容之上 —— 它只是占位，不该压过控件 */
   max-width: calc(50% - 116px);
   margin: 0;
   /* 与卡片族标题同规格（`lc-title` / `fc-title` 都是这套），全仓一致 */
-  font-size: 16.5px;
+  font-size: 20px;
   font-weight: 600;
   line-height: 1.3;
   color: var(--c-text-main);
@@ -1671,8 +1681,21 @@ img.hero-avatar {
   display: flex;
   justify-content: center;
   align-items: stretch;
-  /* 24px 给卡片阴影留余量（`overflow:hidden` 会裁在 padding 盒外缘） */
-  padding: 20px 34px 20px 20px;
+  /* ── 上留白的**两个职责**，别把它当成一个数（2026-09-24 用户问过一次）────────
+     `.data-deck` 是 `overflow:hidden`，裁在 padding 盒外缘 ⇒ 卡片上缘阴影必须有
+     余量，这是**技术需要**；而"红框里那块空白"是**版式决定**。两者叠在一起：
+
+       红框高度（工具条下缘 → 卡片上缘）
+         = `--toolbar-gap-archive`（版式决定，在 tokens.css）
+         + `--deck-shadow-room`（阴影余量，本元素）
+
+     ⚠️ 所以**把 `--toolbar-gap-archive` 设成 0 也不会让红框消失** ——
+     剩下的就是这里的阴影余量（这正是用户实测到的现象）。
+     ⚠️ 余量不能小于阴影的上溢量：`--pill-shadow: 0 2px 6px` ⇒ 上溢
+     `6 − 2 = 4px`，所以取 **8**（留 4px 余）安全；设 0 会把卡片上缘那道阴影切掉
+     （本仓栽过"卡片阴影被容器裁掉"，见上面的纪律 ②）。 */
+  --deck-shadow-room: 8px;
+  padding: var(--deck-shadow-room) 34px 20px 20px;
   overflow: hidden;
   outline: none;
   --deck-in: 380ms;          /* 入场：慢 */

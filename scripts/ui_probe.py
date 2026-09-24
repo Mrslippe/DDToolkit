@@ -907,6 +907,13 @@ def _over(fg, bg):
     return [fg[i] * a + bg[i] * (1 - a) for i in range(3)]
 
 
+# 卡片阴影**上溢量**（px）—— `tokens.css` 的 `--pill-shadow: 0 2px 6px`：
+# 模糊半径 6 − 纵向偏移 2 = 4。`.data-deck` 是 `overflow:hidden` 且裁在 padding 盒外缘，
+# 所以它的上留白**不能小于**这个数，否则卡片上缘那道阴影被切掉（本仓栽过一次）。
+# ⚠️ 这是**定义值**（从阴影令牌推出来的），不是测量值；阴影令牌一改就要跟着核。
+SHADOW_OVERFLOW_PX = 4
+
+
 def _gap_key(tag: str) -> str | None:
     """探针 tag → `--toolbar-gap-<key>` 的 key（R45-E2）。
 
@@ -1126,15 +1133,35 @@ def _assert_glow(v: dict, width: int) -> list[str]:
                        f"而不是自己再占一行把内容整体推下去"
                        f"（R45-B/D 那版白吃 121px 就是这么来的）")
         if tag == "archive":
-            card_title = g.get("cardTitle")
-            if not card_title:
-                bad.append(f"@{width} {tag}: 量不到当前卡片**内部**的标题"
-                           f"（`.deck-card[data-deck-pos=front] .lc-title/.fc-title`）"
-                           f"—— 两份真源的对账会静默空转")
-            elif card_title != pt_text:
-                bad.append(f"@{width} {tag}: 导航标题 {pt_text!r} ≠ 卡片内渲染的标题 "
-                           f"{card_title!r} —— 两份真源漂了（`PostsPage` 的 `DECK_LABELS` "
-                           f"与 `LiveCalendar`/`FanTrendChart` 的 JSX 必须一致）")
+            # ── 牌堆的上留白 = 卡片阴影余量（R45-E2）────────────────────────────
+            # ⚠️ 这条是"用户问过一次"的产物：他把 `--toolbar-gap-archive` 设成 0，
+            #    红框里**仍然有空白** —— 因为 `.data-deck` 自己还有上留白
+            #    （`overflow:hidden` 裁在 padding 盒外缘 ⇒ 卡片上缘阴影需要余量）。
+            #    于是"红框高度"= `--toolbar-gap-archive` + 这个上留白，**两项之和**。
+            #    判据只拦"余量小于阴影上溢量"这一端：`--pill-shadow: 0 2px 6px`
+            #    ⇒ 上溢 `6−2 = 4px`，低于它卡片上缘那道阴影会被切掉
+            #    （本仓栽过"卡片阴影被容器裁掉"）。
+            dpad = g.get("deckPadTop")
+            if dpad is None:
+                bad.append(f"@{width} {tag}: 量不到 `.data-deck` 的上留白"
+                           f"（`glow.deckPadTop`）—— 阴影余量没人盯了")
+            elif dpad < SHADOW_OVERFLOW_PX:
+                bad.append(
+                    f"@{width} {tag}: `.data-deck` 上留白只有 {dpad}px < 阴影上溢量 "
+                    f"{SHADOW_OVERFLOW_PX}px —— 卡片上缘那道 `--pill-shadow` 会被 "
+                    f"`overflow:hidden` 切掉（裁在 padding 盒外缘）"
+                )
+            # ⚠️ 原先还有一条"导航标题 == 卡片内渲染的标题"的两份真源对账 ——
+            #    **R45-E2 删掉**：用户把每视图标题改成**写死的标签**
+            #    （list=「帖子列表」/ archive=「数据卡片」），它不再镜像卡片标题
+            #    （archive 那张卡自己渲染「直播日历」）。两者现在是**两件事**，
+            #    "必须相等"这个前提消失了 ⇒ 留着就是一条必红的假判据。
+            #
+            # ⚠️ R45-E3：红框（工具条下缘 → 卡片上缘）**不设断言**，只印出来。
+            #    原因：它 = `--toolbar-gap-archive` + `.data-deck` 的上留白，
+            #    是**用户随手在调的一个视觉量**（他已经改过三轮：51→50→0）。
+            #    给它钉一个数，等于把"审美调整"变成"改一次红一次"。
+            #    真正该守的是**下面那半条**：上留白不能小于阴影上溢量。
     elif pt_text:
         bad.append(f"@{width} {tag}: `{tag}` 视图不该有页面标题（拿到 {pt_text!r}）")
     # ── ⑤b **主体内容离工具条的留白**（R45-E 新判据，取代旧的"标题文本顶"那条）────
@@ -4964,6 +4991,18 @@ def main() -> int:
                 apt = (ag.get("pageTitle") or {}).get("text")
                 print(f"  R45-B 标题: archive={apt!r} / 卡片内={ag.get('cardTitle')!r} "
                       f"｜ 让开量 --toolbar-band={ag.get('toolbarBand')}")
+                # R45-E3：把"红框"（工具条下缘 → 卡片上缘）**实测**印出来 ——
+                # 它就是用户画的那个框；= 让开量 + `.data-deck` 的上留白。
+                _ftop = ag.get("deckFrameTopInPanel")
+                try:
+                    _aband = float(str(ag.get("toolbarBand") or "").replace("px", ""))
+                except ValueError:
+                    _aband = None
+                if _ftop is not None and _aband is not None:
+                    print(f"  R45-E3 红框: 卡片上缘={_ftop} − 覆盖带={_aband:.0f} "
+                          f"= **{_ftop - _aband:.0f}px**"
+                          f"（= `--toolbar-gap-archive` + `.data-deck` 上留白 "
+                          f"{ag.get('deckPadTop')}px）")
             tb = res.get("topbar") or {}
             print(
                 "  顶栏采样: "

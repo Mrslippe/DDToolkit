@@ -651,22 +651,28 @@ export default function PostsPage() {
     null
   const accounts = vtuber ? vtuber.accounts.filter((a) => a.platform_uid) : []
 
-  // ── R45-B：页面标题（用户 2026-09-24）──────────────────────────────────
-  // 放在**面板左上角、工具条覆盖带之下**，把内容整体下移一段 ⇒ 工具条拉下来时
-  // 不会盖住太多。三个视图各自的文案：
-  //   · list    = **选中账号的昵称**（用户口径："list 就是选中的平台分类按钮的昵称"）
-  //   · archive = **当前卡片的标题**（由 `DataDeck` 的 `onIndexChange` 回抛）
-  //   · profile = 本轮不做（用户："这轮不做 profile"）
-  //   · cards   = 无（它的 hero 本身就是主体，加标题反而挡头像）
-  /** 数据视图两张卡的标题 —— ⚠️ 与卡片内部渲染的那两串是**两份**，
-   *  探针 `_assert_page_title` 断言两边一致（写两份 + 机器对账）。 */
+  // ── 页面标题（R45-B 建立，R45-E 改为"占位"，**R45-E2 改为写死的每视图标签**）──
+  // 它**不是信息层**，是**占位物** —— 用户口径：「让工具条隐藏后顶上那一栏空出来的
+  // 地方不至于太空了没东西可以看，所以放一个标题占位」。
+  // 位置见 `posts.css` 的 `.page-title`（绝对定位、与工具条同轴、不占流）。
+  //
+  // ⚠️ **R45-E2 起文案是写死的标签**（用户 2026-09-24 自定）：
+  //   · list    = 「帖子列表」
+  //   · archive = 「数据卡片」
+  //   · cards / profile = 无（`''` ⇒ 那个 `<h2>` 干脆不渲染）
+  // 此前 list 显示"选中账号昵称"、archive 显示"当前卡片标题"，
+  // 后者要靠 `DataDeck` 的 `onIndexChange` 回抛索引 —— 现在不需要了，
+  // 所以那个 state 一并删掉（`DataDeck.onIndexChange` 这个能力**保留**在组件上，
+  // 以后想让标题跟着卡片走，接回去即可）。
+  // ⚠️ 它**不再镜像卡片内部的标题**：archive 那张卡自己渲染「直播日历」，
+  // 而导航标签是「数据卡片」—— 两者是**两件事**，探针原先那条
+  // "两份真源必须相等"的对账判据已随之删掉（见 devlog/186 §八）。
   const DECK_LABELS = ['直播日历', '粉丝趋势']
-  const [deckIdx, setDeckIdx] = useState(0)
   const pageTitle =
     scene.view === 'list'
-      ? (selectedAccount?.display_name || selectedAccount?.platform_uid || '')
+      ? '帖子列表'
       : scene.view === 'archive'
-        ? (DECK_LABELS[deckIdx] ?? '')
+        ? '数据卡片'
         : ''
 
   // ── P8-B：平台药丸的点击开主页 + 长按拖动重排已随视图搬到
@@ -839,7 +845,6 @@ return (
             keys={['live-calendar', 'fan-chart']}
             labels={DECK_LABELS}
             persistKey={String(vtuber.id)}
-            onIndexChange={setDeckIdx}
           >
             {/* 2026-09-06：archive 逐步重建（用户主导），第一步 = 直播日历卡（Frame10612 规格）
                 R13：`vtuberId` 给日历取"该 V 的未来预约"（预约是 V 级数据，跨账号共用） */}

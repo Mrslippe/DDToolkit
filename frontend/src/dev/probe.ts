@@ -546,6 +546,28 @@ function measure(tag: string) {
           if (!vb) return null
           return getComputedStyle(vb).getPropertyValue('--toolbar-gap').trim() || null
         })(),
+        /** 数据视图牌堆的上留白（= 卡片阴影余量）—— R45-E2 补。
+         *
+         *  为什么单量它：`.data-deck` 是 `overflow:hidden`，**裁在 padding 盒外缘** ⇒
+         *  "红框里那块空白"（工具条下缘 → 卡片上缘）= `--toolbar-gap-archive`
+         *  **+ 这个上留白**。用户实测过一次"把 gap 设成 0 但红框还在" ——
+         *  剩下的就是它。所以它必须是个**被量到**的数，不是藏在 padding 里的字面量。 */
+        deckPadTop: (() => {
+          const el = document.querySelector<HTMLElement>('.data-deck')
+          return el ? Math.round(parseFloat(getComputedStyle(el).paddingTop) || 0) : null
+        })(),
+        /** **红框的底**（面板内坐标）= 牌堆卡片框（`.deck-frame`）的顶。
+         *  用户就是照这个框问的「为啥 gap=0 了还有空隙」——
+         *  所以它必须是个**量出来的数**，红框高度 = 它 − `--toolbar-band`。
+         *  ⚠️ 只量 `.deck-frame`（两张卡共用的框），不量 `.deck-card` ——
+         *  卡片在切换中带 `transform`，量它会读到动画中途的位置。 */
+        deckFrameTopInPanel: (() => {
+          const el = document.querySelector<HTMLElement>('.data-deck .deck-frame')
+          const panel = document.querySelector<HTMLElement>('.posts-panel')
+          if (!el || !panel) return null
+          return Math.round(
+            el.getBoundingClientRect().top - panel.getBoundingClientRect().top)
+        })(),
         /** `:root` 上的**四个设计值**（R45-E2）—— 探针按 tag 取对应那一个与
          *  `toolbarGap` / `beforeH` 对账：**"设计值"与"解析后的生效值"必须相等**。
          *  ⚠️ 这一条是"映射没写对"的唯一机器守卫：`posts.css` 的 `[data-view]`

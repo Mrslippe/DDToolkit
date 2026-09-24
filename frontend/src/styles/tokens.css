@@ -187,9 +187,9 @@
      （映射写在 `posts.css` 的 `.view-body[data-view=…]` 里）；
      探针按 `--toolbar-gap-<view>` 逐视图对账 ⇒ 映射漏了/写错会红。 */
   --toolbar-gap-cards: 50px;
-  --toolbar-gap-list: 50px;
-  --toolbar-gap-archive: 50px;
-  --toolbar-gap-profile: 50px;
+  --toolbar-gap-list: 8px;
+  --toolbar-gap-archive: 0px;
+  --toolbar-gap-profile: 8px;
   /* 窗口圆角度数（L3 自绘方案，随改随生效）
      ⚠️ 这只是 **Win10 / 浏览器 / 探针的兜底值**：Win11 上圆角由 DWM 画，
      `html.dwm-corners` 会把它覆盖成 0（见 layout.css 与 utils/windowCorners.ts，devlog/136）。

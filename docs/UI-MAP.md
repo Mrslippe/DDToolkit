@@ -611,9 +611,33 @@ density / 折叠尺寸 `[200,40]` / 面板宽 280 / `backdrop-filter` 含 `blur(
 | 视图 | 让开由谁承担 | 页面标题 |
 |---|---|---|
 | cards | `.view-body::before` + `--toolbar-gap-cards` | 无（hero 本身就是主体） |
-| list | 同上 + `--toolbar-gap-list` | **有**（选中账号昵称） |
-| archive | 同上 + `--toolbar-gap-archive` | **有**（当前卡片标题） |
+| list | 同上 + `--toolbar-gap-list` | **有**：「帖子列表」 |
+| archive | 同上 + `--toolbar-gap-archive`，**另加 `.data-deck` 的上留白**（见下） | **有**：「数据卡片」 |
 | profile | 同上 + `--toolbar-gap-profile` | 无（用户 2026-09-24：「这轮不做 profile」） |
+
+> **⚠️ archive 的"红框"是两项之和**（R45-E3，用户实测问过：
+> 「为啥 `--toolbar-gap-archive = 0` 了红框里还是有空隙」）：
+> ```
+> 面板内 y=52  工具条覆盖带下缘
+>         ↓    --toolbar-gap-archive
+>         y=52 .view-body::before 的底 = 数据视图内容起点
+>         ↓    .data-deck 的上留白（--deck-shadow-room，8px）★ 红框里剩下的就是它
+>         y=60 卡片（.deck-frame）上缘
+> ```
+> 为什么不能把那 8px 也归零：`.data-deck` 是 `overflow:hidden`、**裁在 padding 盒外缘**
+> ⇒ 上留白要留给卡片上缘的 `--pill-shadow`（上溢 `6−2 = 4px`）。
+> **命名成 `--deck-shadow-room` 并写清"红框 = 两项之和"** —— 两个职责不同的留白
+> 叠在同一个 padding 上，必然制造"我改了 A 为什么 B 没动"的困惑。
+> 判据只守**阴影不被切**那一端（`.data-deck` 上留白 ≥ 4px）；
+> 红框本身**只实测打印、不设断言**（那是用户随手在调的视觉量）。
+> 实测（三档一致）：卡片上缘 60 − 覆盖带 52 = **8px**。
+
+> **⚠️ 页面标题不镜像卡片标题**（R45-E2 定）：标题是**写死的每视图标签**
+> （list=「帖子列表」/ archive=「数据卡片」），而 archive 那张卡自己渲染「直播日历」——
+> 两者是**两件事**。探针原先那条"两份真源必须相等"的对账判据**已退役**
+> （"必须相等"的前提消失了；留着只会常年红着被无视）。
+> 标题的定位与横向余量见 `posts.css` 的 `.page-title`（垂直居中用 `1.3em`
+> 而不是写死行盒高 —— 改字号时那一行不用跟着改）。
 
 > **四个 50 是怎么来的**（R45-D/E，用户 2026-09-24）：用户先给了两张参考图
 > （R45-D，量出 **37px / 占面板高 7.0%** ⇒ 取 40px），随后**自己拼了一张合成图**把想要的
