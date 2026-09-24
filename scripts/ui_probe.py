@@ -1804,6 +1804,11 @@ def main() -> int:
              "`--archive` 只点格子开详情弹窗，从不 hover（功能两条入口只盖了一条）。",
     )
     ap.add_argument(
+        "--shot-cell-pop",
+        action="store_true",
+        help="额外存图：`--cell-pop` 那一档截一张 hover 悬浮窗（_ui_probe_tmp/cell-pop-<宽>.png）",
+    )
+    ap.add_argument(
         "--status-island",
         action="store_true",
         help="只跑一档宽度：顶栏状态岛（R12a，devlog/089）—— 空闲无容器 / 瞬时消息点亮 / "
@@ -3410,6 +3415,12 @@ def main() -> int:
                 if not failures:
                     print("  [ok] 悬浮窗：hover 有场次的格子 ⇒ 出现 / 有文案 / fixed / "
                           "在视口内 / 不被盖")
+            # 视觉存档（`--shot-cell-pop`）：`?probe=cell-pop` 派完事件后浮层是**开着的**，
+            # 所以直接落盘就能拍到它 —— 用户报的正是"看不见"，那就留一张能看的图。
+            if args.shot_cell_pop:
+                shot = WORK / f"cell-pop-{w}.png"
+                _run_shot(edge, url, w, args.height, shot)
+                print(f"  截图 → {shot}")
             for b in failures:
                 print("   -", b)
             return 1 if failures else 0
@@ -5151,7 +5162,8 @@ def main() -> int:
         # 失败时保留现场；`--shot` / `--shot-board` 时保留截图（三者都在 _ui_probe_tmp/ 下）。
         # ⚠️ R37-P4a 实跑踩到：加了 `--shot-board` 却忘了加进这个条件 —— 跑完全绿、图也被删了，
         # 只留一行「截图 → …」日志指向一个不存在的路径（用户要看的产物不能删）。
-        if not failures and not args.shot and not args.shot_board and not args.shot_toolbar:
+        if (not failures and not args.shot and not args.shot_board
+                and not args.shot_toolbar and not args.shot_cell_pop):
             shutil.rmtree(WORK, ignore_errors=True)
 
 
