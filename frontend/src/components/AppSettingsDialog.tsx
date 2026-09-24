@@ -382,22 +382,22 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
    */
   const pickWidgetEnabled = async (next: string) => {
     setThemeError(null)
-    // ⚠️ 先记住"切之前主窗口是不是活着的"（2026-09-24 真机反馈加）。
-    //
-    // 为什么不能无条件 `resurfaceMainWindow()`：那个函数是 `hide + show + setFocus`，
-    // 而**用户完全可能是在"已隐藏到托盘"的状态下**（托盘菜单唤回的窗口上点设置），
-    // 无条件重拉会**把用户刚唤回来的窗口又藏一下**（虽然紧跟 show，但会闪一下 + 丢焦点）。
-    // 所以只在"本来就在屏幕上"的时候才重拉 —— 那正是"权限缺失期间 hide 成功、show 失败"
-    // 留下的错误状态会发生的情形。
+    // ⚠️ **每一步都留痕**（2026-09-24 第五轮）：用户报"点了开关没反应、日志里也什么都没有"。
+    // 而这条链路上有三处可能静默失败（`isTauri` 为假 / invoke 抛错被吞 / 后端没这道命令）。
+    // 打点之后，`cargo tauri dev` 的控制台能直接指出**卡在哪一步**。
+    console.info('[widget] 设置里切换开关 →', next, 'isTauri=', isDesktopShell())
     const wasVisible = await isMainWindowVisible()
     try {
       await prefs.setPref('widget_enabled', next)
+      console.info('[widget] 偏好已保存，准备调窗口命令')
       if (next === 'on') {
-        await showWidgetWindow(
+        const ok = await showWidgetWindow(
           parseWidgetPos(globalThis.localStorage?.getItem(WIDGET_POS_KEY)),
         )
+        console.info('[widget] showWidgetWindow →', ok)
       } else {
-        await hideWidgetWindow()
+        const ok = await hideWidgetWindow()
+        console.info('[widget] hideWidgetWindow →', ok)
       }
       // 紧接着把主窗口的可见性摆正；失败要**说出来**（否则用户只会觉得"点了没反应"）
       if (wasVisible || next === 'on') {
@@ -407,6 +407,7 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
         }
       }
     } catch (e) {
+      console.error('[widget] 切换开关失败', e)
       setThemeError(e instanceof Error ? e.message : String(e))
     }
   }

@@ -61,22 +61,33 @@ export function isDesktopShell(): boolean {
 export async function showWidgetWindow(
   pos: { x: number; y: number } | null,
 ): Promise<boolean> {
-  if (!isTauri) return false
+  if (!isTauri) {
+    console.warn('[widget] 非桌面端，showWidgetWindow 跳过')
+    return false
+  }
   try {
     await invoke('show_widget_window', { x: pos?.x ?? null, y: pos?.y ?? null })
     return true
-  } catch {
+  } catch (e) {
+    // ⚠️ **不许静默**（2026-09-24 第五轮）：原来这里是空的 `catch { return false }`，
+    // 于是"命令没被调用"和"命令报错了"在日志里**长得一模一样** —— 都是什么都没有。
+    // 用户那边表现就是"点了开关没反应"，而排查手段为零。
+    console.error('[widget] show_widget_window 失败', e)
     return false
   }
 }
 
 /** 关掉桌面状态控件小窗（**销毁**，不是隐藏 —— 关掉开关就不该再留一个 webview） */
 export async function hideWidgetWindow(): Promise<boolean> {
-  if (!isTauri) return false
+  if (!isTauri) {
+    console.warn('[widget] 非桌面端，hideWidgetWindow 跳过')
+    return false
+  }
   try {
     await invoke('hide_widget_window')
     return true
-  } catch {
+  } catch (e) {
+    console.error('[widget] hide_widget_window 失败', e)
     return false
   }
 }
@@ -92,7 +103,8 @@ export async function destroyWidgetWindow(): Promise<boolean> {
   try {
     await invoke('destroy_widget_window')
     return true
-  } catch {
+  } catch (e) {
+    console.error('[widget] destroy_widget_window 失败', e)
     return false
   }
 }

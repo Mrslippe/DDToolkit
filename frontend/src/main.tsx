@@ -10,6 +10,60 @@ import './index.css'
 import './styles/tokens.css'
 import App from './App'
 import StatusWidgetWindow from './components/StatusWidgetWindow'
+
+/**
+ * 小窗渲染的**错误边界**（2026-09-24 第五轮加）。
+ *
+ * 为什么非要它不可：`window.onerror` **抓不到 React 渲染阶段的异常** ——
+ * React 自己捕获后重抛（或直接走 error boundary 链路），不会冒泡到 window。
+ * 而现在的证据链是「模块执行了（启动幕被摘掉）但 React 没画出来」⇒ **就是渲染抛错**，
+ * 唯一缺的是那句错误文本。小窗又开不了 devtools、看不到 console ⇒ 只能写进日志文件。
+ *
+ * 用 class 组件是 React 的硬要求：**只有 class 能当 error boundary**，
+ * 函数组件没有 `componentDidCatch`。这也解释了为什么之前那些 hook 写法一个都抓不到。
+ */
+class WidgetErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { err: string | null }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props)
+    this.state = { err: null }
+  }
+
+  static getDerivedStateFromError(e: unknown) {
+    return { err: e instanceof Error ? `${e.name}: ${e.message}` : String(e) }
+  }
+
+  componentDidCatch(e: unknown, info: React.ErrorInfo) {
+    const w = window as unknown as { __widgetLog?: (m: string) => void }
+    const detail = [
+      `React 渲染抛错：${e instanceof Error ? `${e.name}: ${e.message}` : String(e)}`,
+      `  componentStack: ${(info.componentStack || '').split('\n').slice(0, 6).join(' | ')}`,
+      e instanceof Error && e.stack ? `  stack: ${e.stack.split('\n').slice(0, 6).join(' | ')}` : '',
+    ].filter(Boolean).join('\n')
+    if (w.__widgetLog) w.__widgetLog(detail)
+    else console.error('[widget]', detail)
+  }
+
+  render() {
+    if (this.state.err) {
+      // 画在窗口里（9px，200×40 塞得下多少算多少）+ 已经写进 shell.log
+      return (
+        <pre
+          style={{
+            position: 'fixed', inset: 0, margin: 0, padding: '2px 4px',
+            background: '#3a0000', color: '#ffd9d9', overflow: 'hidden',
+            font: '9px/1.2 ui-monospace, monospace', whiteSpace: 'pre-wrap',
+          }}
+        >
+          {`[渲染失败]\n${this.state.err}`}
+        </pre>
+      )
+    }
+    return this.props.children
+  }
+}
 import Logo from './components/common/Logo'
 import { setApiBase } from './api/api'
 import { markFirstRun } from './bootState'
@@ -249,26 +303,47 @@ if (isWidgetWindow) {
   document.getElementById('boot-splash')?.remove()
   document.documentElement.dataset.widgetWindow = '1'
 
-  // ⚠️ **小窗的兜底错误显示**（2026-09-24 第三轮真机反馈加）。
-  //
-  // 小窗是 200×40 + 置顶 + 无边框，**没法开 devtools、看不到 console** ——
-  // 一旦渲染抛错，用户只会看到"一块空白"，而排查手段为零（前两轮我就是在盲猜）。
-  // 这里把错误**画在窗口里**：至少"有没有抛错、抛在哪个文件哪一行"不用再猜。
+  /**
+   * ⚠️ **把任何异常写进日志文件**（2026-09-24 第五轮）。
+   *
+   * 小窗 200×40 + 置顶 + 无边框：**开不了 devtools、看不到 console、窗口里的字也看不清**。
+   * 而现在的证据链是「模块执行了（启动幕被摘掉）但 React 没画出来」⇒ **渲染阶段抛错了** ——
+   * 唯一缺的就是那句错误文本。
+   *
+   * 走 `widget_diag` 命令写进数据目录的 `shell.log`（用户能整份发过来）。
+   * 动态 import：非桌面端没有这个模块，`catch` 掉即可。
+   */
+  const logToShell = (msg: string) => {
+    void (async () => {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core')
+        await invoke('widget_diag', { info: msg })
+      } catch {
+        /* 非桌面端 / 命令不可用：至少留在 console 里 */
+        console.error('[widget]', msg)
+      }
+    })()
+  }
+  ;(window as unknown as { __widgetLog?: (m: string) => void }).__widgetLog = logToShell
+
+  logToShell(`main.tsx 模块执行 isWidget=true q=${location.search}`)
   window.addEventListener('error', (e) => {
-    const el = document.createElement('pre')
-    el.id = 'widget-error'
-    el.style.cssText =
-      'position:fixed;inset:0;z-index:99999;margin:0;padding:2px 4px;background:#3a0000;' +
-      'color:#ffd9d9;font:9px/1.2 ui-monospace,monospace;white-space:pre-wrap;overflow:hidden'
-    el.textContent =
-      `[widget error] ${e.message}\n${(e.filename || '').split('/').slice(-1)[0]}:${e.lineno}`
-    document.body.appendChild(el)
+    logToShell(`window.onerror ${e.message} @ ${(e.filename || '').split('/').slice(-1)[0]}:${e.lineno}`)
+  })
+  window.addEventListener('unhandledrejection', (e) => {
+    logToShell(`unhandledrejection ${String((e as PromiseRejectionEvent).reason)}`)
   })
 }
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    {isWidgetWindow ? <StatusWidgetWindow /> : <Root />}
+    {isWidgetWindow ? (
+      <WidgetErrorBoundary>
+        <StatusWidgetWindow />
+      </WidgetErrorBoundary>
+    ) : (
+      <Root />
+    )}
   </React.StrictMode>,
 )
 

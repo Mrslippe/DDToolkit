@@ -710,6 +710,27 @@ fn strip_dwm_frame_for_widget(w: &tauri::WebviewWindow) {
 #[cfg(not(target_os = "windows"))]
 fn strip_dwm_frame_for_widget(_w: &tauri::WebviewWindow) {}
 
+/// 把小窗诊断**同时写进日志文件**（2026-09-24 第五轮）。
+///
+/// 为什么不能只 `println!`：用户是在 `npm run tauri:dev` 的控制台里看的，
+/// **输出会滚、也不方便整段发给我** —— 上一轮他就只截到 `RunEvent::Ready +34ms`，
+/// 而我加的探针在 +1500ms 才打印，于是"日志里什么都没有"变成了一个**假证据**
+/// （我据此推断"命令没被调用"，差点走错方向）。
+///
+/// 写进数据目录的 `shell.log`（`shelllog` 那套），用户可以整份发过来、也不会丢帧。
+fn widget_log(app: &tauri::AppHandle, msg: &str) {
+    println!("[ddtoolkit] {msg}");
+    let dir = app
+        .state::<DataDirState>()
+        .0
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|s| s.dir.clone()));
+    if let Some(dir) = dir {
+        shelllog::log(&dir, msg);
+    }
+}
+
 /// 桌面状态控件（R38 批 5b，devlog/173）：创建或显示那个 200×40 的无边框小窗。
 ///
 /// **位置由前端给** —— 规格 §7 说"位置持久化（`utils/shellState` 同款做法）"，
@@ -727,6 +748,10 @@ fn strip_dwm_frame_for_widget(_w: &tauri::WebviewWindow) {}
 /// > 少了这一步，桌面上会出现一个**带标题栏的方窗**（那正是"透明背景小窗"的观感来源）。
 #[tauri::command]
 fn show_widget_window(app: tauri::AppHandle, x: Option<i32>, y: Option<i32>) -> Result<(), String> {
+    // ⚠️ **入口就打印**（2026-09-24 第四轮补）：原来只在 `build()` **成功之后**才打印，
+    // 于是"窗口创建失败"和"命令压根没被调用"在日志里**长得一模一样**（都是什么都没有）。
+    // 这一行把两者分开 —— 没有它，下一次还是只能猜。
+    widget_log(&app, &format!("show_widget_window 被调用 x={x:?} y={y:?}"));
     const W: f64 = 200.0;
     const H: f64 = 40.0;
     // 已存在就只挪位置 + 显示：开关反复切换不该重建窗口（那会丢 webview 状态，
@@ -752,7 +777,12 @@ fn show_widget_window(app: tauri::AppHandle, x: Option<i32>, y: Option<i32>) -> 
     .skip_taskbar(true)
     .background_color(tauri::window::Color(0, 0, 0, 0))
     .build()
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| {
+        // 创建失败必须**说清楚**，否则前端只会收到一个 false，用户看到的是"点了没反应"
+        widget_log(&app, &format!("小窗创建失败：{e}"));
+        e.to_string()
+    })?;
+    widget_log(&app, "小窗已创建（200×40 无边框置顶）");
     // ⚠️⚠️ **把这个窗口实际加载的地址打出来**（2026-09-24 第四轮）。
     //
     // 前三轮我改的都是**修饰**（启动幕 / 背景色 / `backdrop-filter` / DWM 外框），
@@ -766,17 +796,19 @@ fn show_widget_window(app: tauri::AppHandle, x: Option<i32>, y: Option<i32>) -> 
     //      **如果这条日志从不出现，就说明页面根本没执行** —— 前三轮的修饰全是白改。
     {
         let probe = w.clone();
+        let app2 = app.clone();
         std::thread::spawn(move || {
             for wait in [1500u64, 5000u64] {
                 std::thread::sleep(std::time::Duration::from_millis(wait));
                 match probe.url() {
-                    Ok(u) => println!("[ddtoolkit] 小窗 @{wait}ms URL = {u}"),
-                    Err(e) => println!("[ddtoolkit] 小窗 @{wait}ms URL 读不到：{e}"),
+                    Ok(u) => widget_log(&app2, &format!("小窗 @{wait}ms URL = {u}")),
+                    Err(e) => widget_log(&app2, &format!("小窗 @{wait}ms URL 读不到：{e}")),
                 }
             }
-            println!(
-                "[ddtoolkit] 小窗探针结束 —— 若上面没有 `[widget] 页面自检` 那行，\
-                 说明页面根本没执行（前三轮改的都是修饰，一行都没跑到）"
+            widget_log(
+                &app2,
+                "小窗探针结束 —— 若上面没有 `[widget] 页面自检` 那行，\
+                 说明页面根本没执行（前几轮改的都是修饰，一行都没跑到）",
             );
         });
     }
@@ -834,8 +866,8 @@ fn hide_widget_window(app: tauri::AppHandle) {
 /// 页面跑起来就调它 → 控制台出现 `[widget] 页面自检 …`；
 /// **如果这条日志从不出现，那就是"页面没执行"**，方向立刻转到 Rust / WebView 侧。
 #[tauri::command]
-fn widget_diag(info: String) {
-    println!("[widget] 页面自检 {info}");
+fn widget_diag(app: tauri::AppHandle, info: String) {
+    widget_log(&app, &format!("[widget] 页面自检 {info}"));
 }
 
 /// 兜底：**把小窗的 webview 弄走**（Tauri v2 的 ACL 下命令不走 capability，所以这条一定可达）。
