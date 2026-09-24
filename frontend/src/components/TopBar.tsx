@@ -68,6 +68,18 @@ const islandDensity: 'bar' | 'widget' =
     : 'bar'
 
 /**
+ * 「启动时按偏好开小窗」是否已经做过 —— **模块级**（不是组件内 ref）。
+ *
+ * 为什么必须放模块级：`React.StrictMode` 在开发模式下会让 effect **挂载→卸载→再挂载**，
+ * 组件内的 `useRef` 会跟着重挂载一起重置 ⇒ 挡不住第二次。模块级变量在同一个 JS 上下文里
+ * 只初始化一次，才能真正做到"只开一次"。
+ *
+ * ⚠️ **这不是唯一防线**：Rust 侧 `show_widget_window` 也加了重入保护 ——
+ * 命令不幂等这件事更根本（快速双击、并发调用同样会建出第二个窗口）。
+ */
+let widgetAutoOpenDone = false
+
+/**
  * 「静默任务」判定：定时档发起的**自动节拍**不占顶栏。
  *
  * 判据用后端给的事实（`auto`：本次是否由综合档发起），而不是任务名——同一个
@@ -514,14 +526,32 @@ export default function TopBar() {
   // 只在挂载时跑一次：之后的开关由设置弹窗直接调 `showWidgetWindow`/`hideWidgetWindow`
   // （那边才知道用户刚点了什么），这里重复响应反而会打架。
   useEffect(() => {
+    // ⚠️ **StrictMode 会让这个 effect 跑两次**（开发模式：挂载→卸载→再挂载）。
+    // 2026-09-24 真机反馈：用户拖小窗时发现"原地残留了一个" —— 日志显示
+    // `show_widget_window` 被调了两次、建出**两个窗口**（重叠在一起，一拖就分开）。
+    //
+    // 两道防线：
+    //   ① 这里用模块级 ref 挡住第二次（组件重挂载时 ref 会重置，所以还得靠 ②）；
+    //   ② Rust 侧 `show_widget_window` 加了 `CREATING_WIDGET` 重入保护 ——
+    //      命令不幂等这件事更根本，任何重入（StrictMode / 快速双击 / 并发）都该被挡住。
+    if (widgetAutoOpenDone) return
+    widgetAutoOpenDone = true
     void (async () => {
       try {
         const v = (await api.getPrefs()).values.widget_enabled
+        // 调之前先问一次窗口在不在：`show_widget_window` 的"提前返回"分支以前不留痕，
+        // 于是日志里"窗口早就存在"和"窗口没建出来"长得一模一样 —— 我据此推错过一次方向。
+        let existsBefore = 'n/a'
+        try {
+          const { invoke } = await import('@tauri-apps/api/core')
+          existsBefore = String(await invoke<boolean>('widget_window_exists'))
+        } catch { /* 非桌面端 */ }
+        console.info('[widget] 启动自动开启：pref=', v, ' 调之前窗口存在=', existsBefore)
         if (parseWidgetEnabled(v) === 'on') {
           await showWidgetWindow(parseWidgetPos(globalThis.localStorage?.getItem(WIDGET_POS_KEY)))
         }
-      } catch {
-        /* 后端没就绪等场景：下次启动再说，不该拦住顶栏 */
+      } catch (e) {
+        console.warn('[widget] 启动自动开启失败', e)
       }
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps

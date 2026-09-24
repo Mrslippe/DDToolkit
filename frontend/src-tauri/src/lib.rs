@@ -11,6 +11,18 @@ use tauri::{Emitter, Manager, RunEvent, State, WindowEvent};
 /// （设置开关 → `hide_widget_window`，小窗 Alt+F4 → `destroy_widget_window`），
 /// 前端只负责听。
 const WIDGET_CLOSED_EVENT: &str = "widget:closed";
+
+/// 「正在创建小窗」的标志（重入保护）。
+///
+/// **为什么需要**（2026-09-24 第六轮真机反馈）：用户拖小窗时发现"原地残留了一个" ——
+/// 日志显示 `show_widget_window` 被调了两次、建出两个窗口（重叠在一起，一拖就分开）。
+/// 根因是前端 `main.tsx` 的 `React.StrictMode`：**开发模式下每个 effect 故意跑两次**
+/// （挂载→卸载→再挂载），而那条"启动按偏好开小窗"的 effect 没有 cleanup。
+///
+/// 前端当然也要修（加幂等 + cleanup），但**命令本身不幂等**这件事更根本：
+/// 任何重入（StrictMode / 快速双击 / 并发）都会建出第二个窗口，而窗口一旦建出来
+/// 就不会自己消失。所以这里挡住。
+static CREATING_WIDGET: AtomicBool = AtomicBool::new(false);
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
@@ -746,23 +758,60 @@ fn widget_log(app: &tauri::AppHandle, msg: &str) {
 /// > （带边框、可缩放、不置顶）。所以要在**同一个同步块**里用 `w.set_*()` 把
 /// > 装饰/缩放/置顶/任务栏再钉一遍 —— 这些是同步调用，一定在 `build()` 之后生效。
 /// > 少了这一步，桌面上会出现一个**带标题栏的方窗**（那正是"透明背景小窗"的观感来源）。
+/// ⚠️ **必须是 `async fn`**（2026-09-24 第六轮，可能是本 bug 的真凶）。
+///
+/// Tauri v2 里**同步命令跑在主线程**。而 `WebviewWindowBuilder::build()` 要创建第二个
+/// WebView2 —— 它会和主线程的消息泵打交道。在**已有一个 webview** 的进程里于主线程
+/// 同步建第二个，实测会**卡在这里**：日志停在"被调用"、UI 不再响应、
+/// 托盘菜单点了也没用（全部现象见 devlog/175–179）。
+///
+/// 改成 `async fn` 之后 Tauri 会把它放到**异步运行时**（不是主线程）执行，
+/// 消息泵就空出来了。代价：`WebviewWindow` 等类型不是 `Send`，跨 await 持有要小心 ——
+/// 本函数内没有 await，所以是安全的。
 #[tauri::command]
-fn show_widget_window(app: tauri::AppHandle, x: Option<i32>, y: Option<i32>) -> Result<(), String> {
+async fn show_widget_window(app: tauri::AppHandle, x: Option<i32>, y: Option<i32>) -> Result<(), String> {
     // ⚠️ **入口就打印**（2026-09-24 第四轮补）：原来只在 `build()` **成功之后**才打印，
     // 于是"窗口创建失败"和"命令压根没被调用"在日志里**长得一模一样**（都是什么都没有）。
     // 这一行把两者分开 —— 没有它，下一次还是只能猜。
     widget_log(&app, &format!("show_widget_window 被调用 x={x:?} y={y:?}"));
     const W: f64 = 200.0;
     const H: f64 = 40.0;
+    // ⚠️ **这里必须做"重入保护"**（2026-09-24 第六轮真机反馈）：
+    // 用户拖小窗时发现"原地残留了一个"，日志显示 `show_widget_window` 被调了**两次**、
+    // 建出了**两个窗口**（重叠在一起，一拖就分开）。根因是前端 `main.tsx` 的
+    // `React.StrictMode` —— **开发模式下每个 effect 故意跑两次**（挂载→卸载→再挂载），
+    // 而那条"启动时按偏好开小窗"的 effect 没有 cleanup。
+    //
+    // 只在前端修是不够的：命令本身不幂等，任何重入（StrictMode / 快速双击 / 并发）都会建两个。
+    // 所以这里也要挡住 —— 正在建的时候再进来直接返回。
+    if CREATING_WIDGET.swap(true, Ordering::SeqCst) {
+        widget_log(&app, "已有一次创建在进行中 ⇒ 本次调用直接返回（重入保护）");
+        return Ok(());
+    }
+    // 用一个 guard 保证任何 return 路径都会复位标志
+    struct ResetOnDrop;
+    impl Drop for ResetOnDrop {
+        fn drop(&mut self) {
+            CREATING_WIDGET.store(false, Ordering::SeqCst);
+        }
+    }
+    let _guard = ResetOnDrop;
+
     // 已存在就只挪位置 + 显示：开关反复切换不该重建窗口（那会丢 webview 状态，
     // 也会让"关掉再打开"多花一次冷启动）
     if let Some(w) = app.get_webview_window("widget") {
+        // ⚠️ **这条分支也必须留痕**（2026-09-24 第六轮）：原来它静默返回，
+        // 于是日志里只有"被调用"、没有"已创建" —— 两种完全不同的原因
+        //（"走提前返回" vs "build() 卡住"）在日志里**长得一模一样**。
+        // 用户 17:14 那次就撞在这上面：我从"没有已创建"推出"build 卡住"，又一次推错方向。
+        widget_log(&app, "小窗已存在（走提前返回：只挪位置 + show）");
         if let (Some(x), Some(y)) = (x, y) {
             let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
         }
         let _ = w.show();
         return Ok(());
     }
+    widget_log(&app, "小窗不存在，开始创建 …");
     let w = tauri::WebviewWindowBuilder::new(
         &app,
         "widget",
@@ -849,8 +898,11 @@ fn show_widget_window(app: tauri::AppHandle, x: Option<i32>, y: Option<i32>) -> 
 ///
 /// 销毁后**广播 `widget:closed`** 给前端：主窗口据此把 `prefs.widget_enabled` 落成 `off`。
 /// 不做的话用户按 Alt+F4 关掉小窗之后偏好还是 `on`，下次启动又开一个 —— 观感就是"关不掉"。
+///
+/// 同样改 `async fn`：`destroy()` 也会碰 WebView2 的消息泵，
+/// 理由见 `show_widget_window` 那段注释（**同步命令跑在主线程 ⇒ 卡死**）。
 #[tauri::command]
-fn hide_widget_window(app: tauri::AppHandle) {
+async fn hide_widget_window(app: tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("widget") {
         let _ = w.destroy();
         let _ = app.emit(crate::WIDGET_CLOSED_EVENT, ());
@@ -870,6 +922,16 @@ fn widget_diag(app: tauri::AppHandle, info: String) {
     widget_log(&app, &format!("[widget] 页面自检 {info}"));
 }
 
+/// 窗口是否已经存在（给前端/排查用）。
+///
+/// 2026-09-24 第六轮加：`show_widget_window` 的"提前返回"分支以前不留痕，
+/// 于是"窗口早就存在"与"窗口没建出来"在日志里**长得一模一样**。
+/// 这条命令让前端可以在调用前后各问一次，把状态钉死。
+#[tauri::command]
+fn widget_window_exists(app: tauri::AppHandle) -> bool {
+    app.get_webview_window("widget").is_some()
+}
+
 /// 兜底：**把小窗的 webview 弄走**（Tauri v2 的 ACL 下命令不走 capability，所以这条一定可达）。
 ///
 /// 2026-09-24 真机反馈：开了小窗之后主窗口点 ✕ / 最小化都没反应，托盘退出也杀不掉进程。
@@ -881,11 +943,11 @@ fn widget_diag(app: tauri::AppHandle, info: String) {
 /// 这里**只 destroy 小窗**（前端随后重拉主窗口可见性），不碰 `QUITTING`：
 /// 它不该顺手把整个应用退出 —— 用户的诉求是"把那个小窗口弄掉"。
 #[tauri::command]
-fn destroy_widget_window(app: tauri::AppHandle) {
+async fn destroy_widget_window(app: tauri::AppHandle) {
     if let Some(w) = app.get_webview_window("widget") {
         let _ = w.destroy();
         let _ = app.emit(crate::WIDGET_CLOSED_EVENT, ());
-        println!("[ddtoolkit] 小窗被兜底命令销毁（label=widget）");
+        widget_log(&app, "小窗被兜底命令销毁（label=widget）");
     }
 }
 
@@ -1305,7 +1367,8 @@ pub fn run() {
             show_widget_window,
             hide_widget_window,
             destroy_widget_window,
-            widget_diag
+            widget_diag,
+            widget_window_exists
         ])
         .on_window_event(|window, event| {
             // ✕ 不再等于"退出"（R18，devlog/095）：关闭请求被拦下，改成隐藏到托盘，
