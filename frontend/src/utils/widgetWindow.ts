@@ -111,81 +111,44 @@ export const isDesktopShell = (): boolean =>
   typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
 /**
- * 主窗口**现在是不是显示着**。
+ * 确保主窗口**可见**（不做多余动作），并报告结果。
  *
- * 用途见 `AppSettingsDialog.pickWidgetEnabled`：切小窗开关时，只有"主窗口本来就在屏幕上"
- * 才需要 `resurfaceMainWindow()`。已经隐藏到托盘的情况下重拉一次会**把用户刚唤回的窗口
- * 又藏一下**（虽然紧跟 show，但会闪一下 + 丢焦点）。
+ * ## 历史：这里曾经是 `hide() + show()`
  *
- * 拿不到窗口（非桌面端 / 权限不足）返回 `true`：那是"**不要**去动它"的安全侧
- * —— 少重拉一次最多是状态没摆正，多拉一次会打扰用户。
+ * 2026-09-24 第一轮真机反馈（"主窗口关不掉"）时我加的是 `hide→show→setFocus`。
+ * 但那个诊断**是错的** —— 真凶在第六轮才查明：`show_widget_window` 是**同步命令**，
+ * 在**主线程**上创建第二个 WebView2 会卡死消息泵（见 devlog/180）。
+ *
+ * 于是这个补丁只剩副作用：**每切一次开关，主窗口就藏一下再显一下 —— 整窗闪动**
+ * （用户 2026-09-24 反馈）。真凶修掉之后，这里只需要"确保可见"。
+ *
+ * ## 现在的语义
+ *
+ * - 已经可见 ⇒ **什么都不做**（这是绝大多数情况，也是"不闪"的关键）
+ * - 不可见 ⇒ `show()` + `setFocus()`
+ *
+ * 失败返回 `false`：调用方据此提示用户"点一下托盘图标"。
  */
-export async function isMainWindowVisible(): Promise<boolean> {
+export async function resurfaceMainWindow(): Promise<boolean> {
   if (!isDesktopShell()) return true
   try {
     const { getAllWindows } = await import('@tauri-apps/api/window')
     const wins = await getAllWindows()
     for (const w of wins) {
       if (w.label !== 'main') continue
-      return await w.isVisible()
-    }
-    return true
-  } catch {
-    return true
-  }
-}
-
-/**
- * 重新拉一次主窗口的**可见性**，并**报告结果**。
- *
- * ## 背景（2026-09-24 真机反馈）
- *
- * 开了小窗之后：主窗口点 ✕ / 最小化都**没反应**，托盘退出也杀不掉进程，
- * 而且那个小窗**只有一块透明背景、没有胶囊**。
- *
- * ## 查证到的事实（**只有这些**）
- *
- * - `capabilities/default.json` 的作用域原本是 `"windows": ["main"]` ⇒ 小窗**一条窗口权限
- *   都没有**。（顺带核实：`core:window:default` 是**包含** `allow-hide` / `allow-show` /
- *   `allow-start-dragging` 的 —— 所以问题在**作用域**，不在权限集合里。这一点与最初的猜测不同，
- *   特意写下来免得下次又猜错。）
- * - 小窗前端里那句 `startDragging()` 包在一个**没被 await 的 async IIFE** 里 ⇒
- *   权限被拒时是**未处理的 Promise rejection**。
- * - 只补权限、不重拉主窗口是不够的（见下）。
- *
- * ## 为什么"先 hide 再 show"而不是直接 `show()`
- *
- * 权限缺失期间主窗口可能已经处于**错误状态**（它被藏起来过、或显示链路被搅过）。
- * 重拉一次是把状态**摆正**，而不是假设它是对的。失败时返回 `false` → 调用方提示用户
- * "点一下托盘图标" —— 比闷头做完、界面毫无反应要好。
- *
- * ## ⚠️ 这句是**未确证**的
- *
- * "小窗的未处理 rejection 会打坏**主窗口**的 IPC 通道"——两个 webview 各有各的 IPC，
- * 这条因果**没有查到证据**。但它解释了用户看到的全部三个症状（关不掉 / 最小化不了 /
- * 托盘退不掉），而且"async IIFE 必须 catch"本身就是对的，所以照修了。
- * **真正的确认要靠装一次直装版复现**（见 `docs/TODO.md` §1.3）。
- */
-export async function resurfaceMainWindow(): Promise<boolean> {
-  if (!isDesktopShell()) return false
-  try {
-    const { getAllWindows } = await import('@tauri-apps/api/window')
-    const wins = await getAllWindows()
-    for (const w of wins) {
-      if (w.label !== 'main') continue
+      // ⚠️ **可见时立刻返回，绝不 hide**：`hide()` 才是闪动的来源。
+      if (await w.isVisible()) return true
       try {
-        await w.hide()
         await w.show()
         await w.setFocus()
       } catch {
-        // 连 show 都失败：至少别把整个 flow 带崩
         return false
       }
       return true
     }
     return false
   } catch {
-    return false
+    return true   // 拿不到窗口列表：不动它是最安全的
   }
 }
 

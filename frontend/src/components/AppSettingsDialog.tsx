@@ -41,7 +41,6 @@ import OverlayScroll from './OverlayScroll'
 import { hideWidgetWindow, showWidgetWindow } from '../utils/shellBridge'
 import {
   WIDGET_POS_KEY,
-  isMainWindowVisible,
   parseWidgetPos,
   resurfaceMainWindow,
 } from '../utils/widgetWindow'
@@ -379,17 +378,20 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
    *
    * 位置从 localStorage 取（规格 §7「位置持久化（`utils/shellState` 同款做法）」）；
    * 没存过就传 `null`，由 Rust 落到默认的右下角。
+   *
+   * > ⚠️ **不要再"顺手动一下主窗口"**（2026-09-24 用户反馈"整个窗口闪一下"）：
+   * > 原来这里无条件调 `resurfaceMainWindow()`，而它当时是 `hide→show→setFocus` ⇒ **整窗闪动**。
+   * > 那个补丁是第一轮为治"窗口卡在隐藏态"加的，而当时的诊断是错的
+   * > （真凶是**同步命令卡死主线程**，见 devlog/180）。真凶修掉后这个补丁只剩副作用。
+   * > 现在 `resurfaceMainWindow` **只在窗口确实不可见时**才 `show()` ⇒ 正常路径下**零动作**。
    */
   const pickWidgetEnabled = async (next: string) => {
     setThemeError(null)
-    // ⚠️ **每一步都留痕**（2026-09-24 第五轮）：用户报"点了开关没反应、日志里也什么都没有"。
-    // 而这条链路上有三处可能静默失败（`isTauri` 为假 / invoke 抛错被吞 / 后端没这道命令）。
-    // 打点之后，`cargo tauri dev` 的控制台能直接指出**卡在哪一步**。
+    // 每一步留痕：这条链路上有三处可能静默失败（`isTauri` 为假 / invoke 抛错被吞 /
+    // 后端没这道命令）。打点之后控制台能直接指出**卡在哪一步**。
     console.info('[widget] 设置里切换开关 →', next, 'isTauri=', isDesktopShell())
-    const wasVisible = await isMainWindowVisible()
     try {
       await prefs.setPref('widget_enabled', next)
-      console.info('[widget] 偏好已保存，准备调窗口命令')
       if (next === 'on') {
         const ok = await showWidgetWindow(
           parseWidgetPos(globalThis.localStorage?.getItem(WIDGET_POS_KEY)),
@@ -399,12 +401,9 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
         const ok = await hideWidgetWindow()
         console.info('[widget] hideWidgetWindow →', ok)
       }
-      // 紧接着把主窗口的可见性摆正；失败要**说出来**（否则用户只会觉得"点了没反应"）
-      if (wasVisible || next === 'on') {
-        const ok = await resurfaceMainWindow()
-        if (!ok) {
-          setThemeError('小窗开关已生效，但主窗口没有恢复显示 —— 点一下托盘图标即可唤回')
-        }
+      // 只做"确保可见"（可见时不动）；失败要**说出来**，否则用户只觉得"点了没反应"
+      if (!(await resurfaceMainWindow())) {
+        setThemeError('小窗开关已生效，但主窗口没有恢复显示 —— 点一下托盘图标即可唤回')
       }
     } catch (e) {
       console.error('[widget] 切换开关失败', e)
