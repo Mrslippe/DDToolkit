@@ -258,11 +258,29 @@ density / 折叠尺寸 `[200,40]` / 面板宽 280 / `backdrop-filter` 含 `blur(
 > 入场动画的 `scale(.985)` 在虚拟时间下被冻在起始帧，rect 会量到 280 × 0.985 ≈ **276** 的假值
 > （首次实现就踩了，见 devlog/172 §三）。
 
-### A1-a-w2. 桌面控件**小窗**（R38 批 5b，2026-09-24）
+### A1-a-w2. 桌面控件**小窗**（R38 批 5b，2026-09-24；**批 5c 起独立入口**）
 
-`index.html?widget=1` → `main.tsx` **在 `Root` 之前分流**到 `<StatusWidgetWindow>`
-（小窗里不跑主窗口那套：后端探活 / 揭幕幕布 / 路由 / 首顶栏）。
+**独立 HTML 入口**：`widget.html` → `src/widgetMain.tsx`（Vite 多入口，
+`frontend/vite.config.ts` 的 `build.rollupOptions.input`）。
 窗口由 Rust `show_widget_window` 建：**200×40 · 无边框 · 透明 · 置顶 · 不进任务栏 · 不可缩放**。
+
+> ⚠️ **批 5b 曾走 `index.html?widget=1` + `main.tsx` 运行时分流**（功能正确，devlog/180 之前都是这样）。
+> 批 5c 换成独立入口，原因是**成本**：小窗是常驻的，而运行时分流让它加载**整站**的
+> JS/CSS —— 实测渲染进程 124MB / JS 1214KB / CSS 153KB，只为画一个 200×40 的胶囊。
+> 拆完：**85MB / 188KB / 6KB**（85MB 是 WebView2 的地板价）。
+> **判据不是"能跑"，是"这钱按一整天挂着算"**（devlog/181）。
+
+**两个入口的样式边界**（拆入口时最容易错的地方）：
+
+| 入口 | import 的样式 |
+|---|---|
+| `index.html` → `main.tsx` → `App.tsx` | `index.css`（含 **Tailwind preflight**）· `tokens.css` · `styles/status-island.css` |
+| `widget.html` → `widgetMain.tsx` | **只** `tokens.css` · `styles/status-island.css` |
+
+> ⚠️ **小窗不加载 `index.css` ⇒ 拿不到 Tailwind preflight 的 `box-sizing: border-box`。**
+> 曾因此量到胶囊 **224px** 而非 200px。所以 `styles/status-island.css` **必须自包含**：
+> 文件顶部显式写了 `.si-island` / `.si-panel` / `.widget-shell` 及其后代的 border-box reset。
+> **改这个文件时别把那几行当成冗余删掉。**
 
 **它不轮询** —— 六个信息源全在主窗口的 `TopBar` 里，小窗再来一份就是**双倍请求**。
 所以小窗是**纯显示**的：
@@ -274,6 +292,11 @@ density / 折叠尺寸 `[200,40]` / 面板宽 280 / `backdrop-filter` 含 `blur(
 
 > **这就是没有按规格 §8 抽 `useStatusIsland()` 的原因**：抽了只是把轮询搬个家，
 > 两扇窗仍然各轮各的；**推事件才是真的只轮一次**。
+
+> ⚠️ **dev 自检仪器不继承**：`main.tsx` 那套 `window.onerror` / `unhandledrejection` /
+> React 错误边界 / `invoke('widget_diag')`（devlog/178 为查小窗渲染异常装的）
+> **在独立入口里全部要重挂一遍**，探针挂载（`import.meta.env.DEV && has('probe')`）同理。
+> 独立入口不会继承另一份的任何东西 —— 拆完后"仪器没了"是静默的。
 
 **拖动不能用 `data-tauri-drag-region`** —— 它在 **mousedown** 就调 `startDragging()`，
 于是"点一下打开面板"永远收不到点击（整个控件 200×40 全是可交互面，没有"空白把手"可用；
@@ -287,9 +310,17 @@ density / 折叠尺寸 `[200,40]` / 面板宽 280 / `backdrop-filter` 含 `blur(
 > —— 加了第二扇窗之后，小窗的 `close()` 会被拦下并变成"顺手把**主窗口**藏进托盘"。
 > 已加 `window.label() == "main"` 判断。**这条在只有一个窗口时是多余的，加了第二个就是必需的。**
 
-**判据**（`ui_probe --status-widget` 第二段，`?probe=status-widget-window&widget=1`）：
+> ⚠️ **`show_widget_window` 等命令必须是 `async fn`**（devlog/180）：Tauri v2 里
+> **同步命令跑在主线程**，而 `WebviewWindowBuilder::build()` 建第二个 WebView2 要跟主线程
+> 消息泵交互 ⇒ **主线程卡死**（表现为主窗口关不掉、托盘退不掉、小窗只有个空框）。
+> 另外 `React.StrictMode` 会**双调 effect** ⇒ 建出两个窗口，已用模块级标志 + Rust 侧
+> `CREATING_WIDGET` 重入闸兜住。
+
+**判据**（`ui_probe --status-widget` 第二段，`?probe=status-widget-window`）：
 `.widget-shell` 在 / 胶囊 `data-density="widget"` / 200×40 / **居中误差 = 0** /
-**顶栏与侧栏都不在**（分流生效）。**反向验证过**（把分流短路 ⇒ 六条同时报）。
+**顶栏与侧栏都不在**（独立入口生效）。**反向验证过**（把分流短路 ⇒ 六条同时报）。
+
+> 批 5c 起这一段走的是 `widget.html` 本身（独立入口），不再带 `?widget=1`。
 
 > ⚠️ 三条**别改坏**的口径：
 > ① **「自动节拍不占顶栏」现在是 `notificationHub.progressNotice` 的具名规则 + 反向用例**
