@@ -533,12 +533,32 @@ function measure(tag: string) {
          *  才能跟 `--toolbar-band` 比。第一版就是因为没换算而假红/恒真。 */
         toolbarTop: getComputedStyle(document.documentElement)
           .getPropertyValue('--toolbar-top').trim() || null,
-        /** `--toolbar-gap`：**内容离工具条多远**（R45-D 用户口径：「面板主体内容距离上面
-         *  工具条的距离」）。参考图量出 7.0% 面板高、我们取 40px。
-         *  ⚠️ 与 `toolbarBand` 同理：它是 `:root` 上的字面量，可以直接读；
-         *  但 `--toolbar-band` 是 `calc()` ⇒ 不能直接读，见上面的算法。 */
-        toolbarGap: getComputedStyle(document.documentElement)
-          .getPropertyValue('--toolbar-gap').trim() || null,
+        /** `--toolbar-gap`：**本视图**的让开量（内容离工具条多远）。
+         *
+         *  ⚠️ **R45-E2 起它不在 `:root` 上了**：用户要求「四个视图不要共用一个间距，
+         *  分别设计四个量」⇒ 四个量（`--toolbar-gap-{cards,list,archive,profile}`）
+         *  定义在 `:root`，由 `posts.css` 的 `.view-body[data-view=…]` **解析**成
+         *  `.view-body` 上的 `--toolbar-gap`。所以这里必须**读元素、不能读 `:root`**
+         *  （读 `:root` 会拿到空串）。读元素拿到的是**解析后**的值 —— 也就是真正生效的
+         *  那个，`data-view` 挂错/漏挂会直接反映在这里。 */
+        toolbarGap: (() => {
+          const vb = document.querySelector<HTMLElement>('.view-body')
+          if (!vb) return null
+          return getComputedStyle(vb).getPropertyValue('--toolbar-gap').trim() || null
+        })(),
+        /** `:root` 上的**四个设计值**（R45-E2）—— 探针按 tag 取对应那一个与
+         *  `toolbarGap` / `beforeH` 对账：**"设计值"与"解析后的生效值"必须相等**。
+         *  ⚠️ 这一条是"映射没写对"的唯一机器守卫：`posts.css` 的 `[data-view]`
+         *  少一条、或 `data-view` 没挂上，都会让某个视图静默用了别的视图的间距 ——
+         *  而"留白 ≥ 它自己那个值"这类判据**看不出来**（它只会与错的那个值自洽）。 */
+        toolbarGaps: (() => {
+          const rs = getComputedStyle(document.documentElement)
+          const out: Record<string, string | null> = {}
+          for (const k of ['cards', 'list', 'archive', 'profile']) {
+            out[k] = rs.getPropertyValue(`--toolbar-gap-${k}`).trim() || null
+          }
+          return out
+        })(),
         /** **主体内容的顶**（面板内坐标）—— R45-E 起这是"内容离工具条多远"的直接量。
          *
          *  ⚠️ **R45-E 换了被测量，理由是"被测量的东西本身变了"**：

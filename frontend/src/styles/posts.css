@@ -180,6 +180,25 @@
   /* 兄弟高度正确分配：操作钮行(flex:none) + 滚动区(flex:1)，杜绝整体 100% 高度溢出裁底 */
   display: flex;
   flex-direction: column;
+  /* ── 让开量的**解析点**（R45-E2）：把"四个视图各自的量"收成一个本元素上的
+     `--toolbar-gap`，于是 `::before` 与 `.post-filter-pop` 的兜底都只认这一个名字，
+     **不需要知道有四个量**。要调某一档，改 `tokens.css` 里那一行；要加第五个视图，
+     在下面补一条 `[data-view=…]` 即可（漏补则由探针逐视图对账拦下）。
+     ⚠️ 兜底值取 list 那一档（唯一有实测依据的一档）—— `data-view` 万一没挂上，
+     结果是"用了 list 的间距"，而不是"让开量归零、内容贴到工具条上"。 */
+  --toolbar-gap: var(--toolbar-gap-list);
+}
+
+.view-body[data-view='cards'] {
+  --toolbar-gap: var(--toolbar-gap-cards);
+}
+
+.view-body[data-view='archive'] {
+  --toolbar-gap: var(--toolbar-gap-archive);
+}
+
+.view-body[data-view='profile'] {
+  --toolbar-gap: var(--toolbar-gap-profile);
 }
 
 /* ── 顶部让开带：**内容从这里开始**（R45-E，2026-09-24，用户拍板方案 A）──────────
@@ -189,7 +208,12 @@
      所有内容都在 `--toolbar-band + --toolbar-gap` 之下（结构性保证，不是巧合）；
    · **四个视图同一个位置开始** —— 原来只有 cards（`.hero` 的上内距）与
      list/archive（页面标题那一行）两处在留，profile 根本没有 ⇒ 换视图时首块
-     内容会跳。现在一处真源。
+     内容会跳。现在一处承担。
+
+   ⚠️ **R45-E2：间距本身是"四个量"**（用户：「四个视图不要共用一个间距，
+   分别设计四个量」）—— 本规则只认 `.view-body` 上**解析后的** `--toolbar-gap`，
+   由上面那组 `[data-view=…]` 从 `--toolbar-gap-{cards,list,archive,profile}` 里选。
+   所以**改间距不必动本规则**：改 `tokens.css` 里对应那一行即可。
 
    为什么用 `::before` 占位而不是给每个视图写上内距：**上内距写在滚动容器里会被滚走**
    （`.hero` 原来就是），而占位条在滚动容器**之外** ⇒ 首块内容永远从这条线起，

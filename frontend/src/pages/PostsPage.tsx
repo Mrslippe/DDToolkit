@@ -763,10 +763,15 @@ return (
 
       {/* 场景容器：key=账号|视图 → 提交即整体重挂播放入场（scene-in），
           退场期挂 scene-exit 整块 fall-out；工具条在块外常驻，高亮即时响应。
-          加载/错误态内联于此（壳层常驻，glow-bar 不随切 V 卸载） */}
+          加载/错误态内联于此（壳层常驻，glow-bar 不随切 V 卸载）。
+          ⚠️ `data-view` 是**版式的选择器**（R45-E2）：`posts.css` 用它把
+          「四个视图各自的让开量」解析成本元素上的 `--toolbar-gap`
+          （`.view-body[data-view=…]`）。少挂它 ⇒ 兜底用 list 那一档
+          ⇒ 不该同距的视图会同距，而探针会逐视图对账报出来。 */}
       <div
         key={`${scene.acc}|${scene.view}`}
         className={`view-body${scene.exiting ? ' scene-exit' : ''}`}
+        data-view={scene.view}
       >
 
         {!vtuber && !error && (

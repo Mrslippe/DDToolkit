@@ -907,6 +907,21 @@ def _over(fg, bg):
     return [fg[i] * a + bg[i] * (1 - a) for i in range(3)]
 
 
+def _gap_key(tag: str) -> str | None:
+    """探针 tag → `--toolbar-gap-<key>` 的 key（R45-E2）。
+
+    ⚠️ **必须是"视图族"，不是 tag 精确相等**：`list` 有 6 个扩展帧
+    （`list-scrolled` / `list-filter-*` / `list-video`），它们都是列表页。
+    R45-B 第一版把判据写成 `tag in ("list","archive")`，把这 6 帧全判成
+    "该页不该有页面标题" ⇒ 12 处假红 —— 同一类错误在这里重犯一次就没意思了。
+    """
+    if tag == "list" or (tag or "").startswith("list-"):
+        return "list"
+    if tag in ("cards", "archive", "profile"):
+        return tag
+    return None
+
+
 def _assert_glow(v: dict, width: int) -> list[str]:
     """页面工具条 + 选中块 + 顶部渐隐。
 
@@ -1060,8 +1075,10 @@ def _assert_glow(v: dict, width: int) -> list[str]:
     #   ① 「list 视图和 archive 视图最顶部的部分可以用位于左侧的标题占掉一部分顶部间距」
     #   ② 「**面板主体内容距离上面工具条的距离**」+ 两张参考图（R45-D：量出 37px）
     #   ③ 「我的目的是让**工具条隐藏后顶上那一栏空出来的地方不至于太空**了没东西可以看，
-    #      所以放一个**标题占位**」+ 合成图（R45-E：量出 52px）
-    # ⇒ 最终形态：标题**与工具条同栏**（不占流），让开量由 `.view-body::before` 一处承担。
+    #      所以放一个**标题占位**」+ 合成图（R45-E：量出 52px，用户随后手改成 50）
+    #   ④ 「**四个视图不要共用一个间距 `--toolbar-gap`，分别设计四个量**」（R45-E2）
+    # ⇒ 最终形态：标题**与工具条同栏**（不占流），让开量由 `.view-body::before` 一处承担，
+    #    而**间距是四个量**（`--toolbar-gap-{cards,list,archive,profile}`）。
     #
     # ⚠️ **判据这次换了被测量，因为被测量的东西本身变了**：
     #    R45-D 判的是「标题**文本顶** − 覆盖带 ≥ `--toolbar-gap`」——那时让开量写在
@@ -1074,7 +1091,15 @@ def _assert_glow(v: dict, width: int) -> list[str]:
     pt = g.get("pageTitle") or {}
     pt_text = pt.get("text")
     band = g.get("toolbarBand")
-    gap_tok = g.get("toolbarGap")
+    # ── R45-E2：让开量是**四个量**（用户：「四个视图不要共用一个间距，分别设计四个量」）
+    #    模块级 `GAP_KEY_ALIASES` 把 tag 映到 `--toolbar-gap-<key>` 的那个 key。
+    #    两侧各有一份"映射"是有意的：CSS 那份决定**生效值**，这份决定**期望值** ——
+    #    两者必须相等，而"相等"这件事由下面 `beforeH` 与 `toolbarGap` 两条判据机器对账。
+    #    （只判"留白 ≥ 期望值"是不够的：映射漏了会让某视图静默用了别人的间距，
+    #      而判据只会与错的那个值自洽 —— 那正是本仓反复出现的"自洽的假绿"。）
+    gap_key = _gap_key(tag)
+    gaps = g.get("toolbarGaps") or {}
+    gap_tok = gaps.get(gap_key) if gap_key else None
     band_px = gap_px = None
     if band:
         try:
@@ -1122,19 +1147,56 @@ def _assert_glow(v: dict, width: int) -> list[str]:
     if ct is None:
         bad.append(f"@{width} {tag}: 探针没量到主体内容的顶"
                    f"（`glow.contentTopInPanel`）—— 留白判据会静默空转")
+    elif gap_key is None:
+        bad.append(f"@{width} {tag}: 这个 tag 没有对应的 `--toolbar-gap-<view>`"
+                   f"（`_gap_key` 没映射它）—— 留白判据会静默空转")
     elif band_px is None or gap_px is None:
         bad.append(f"@{width} {tag}: 算不出 `--toolbar-band`({band!r}) 或 "
-                   f"`--toolbar-gap`({gap_tok!r}) —— 留白判据会静默空转")
+                   f"`--toolbar-gap-{gap_key}`({gap_tok!r}) —— 留白判据会静默空转")
     else:
+        # ── R45-E2 的两条**接线**判据（这是"四个量"能否成立的唯一守卫）──────────
+        # ① `posts.css` 的 `[data-view]` 映射必须真的把**本视图**那个量解析出来。
+        #    探针同时量了"解析后的生效值"（`toolbarGap`，读 `.view-body`）与
+        #    "设计值"（`toolbarGaps[<view>]`，读 `:root`）—— 两者不等即映射错了。
+        #    少了这条，某个视图用了别人的间距时，下面的留白判据**只会与错值自洽**。
+        live_gap = g.get("toolbarGap")
+        live_px = None
+        if live_gap:
+            try:
+                live_px = float(str(live_gap).replace("px", "").strip())
+            except ValueError:
+                live_px = None
+        if live_px is None:
+            bad.append(f"@{width} {tag}: 读不到 `.view-body` 上解析后的 `--toolbar-gap`"
+                       f"（{live_gap!r}）—— `[data-view]` 映射断了？判据会静默空转")
+        elif abs(live_px - gap_px) > 0.5:
+            bad.append(
+                f"@{width} {tag}: `{tag}` 视图解析到的间距 {live_px:.0f}px ≠ 设计值 "
+                f"`--toolbar-gap-{gap_key}` = {gap_px:.0f}px —— "
+                f"`posts.css` 的 `.view-body[data-view='{gap_key}']` 映射漏了/写错了"
+                f"（或 `data-view` 没挂上，于是它静默用了兜底那一档）"
+            )
+        # ② `.view-body::before` 必须真的是"覆盖带 + 本视图的间距"。
+        #    这条独立于上面的矩形测量：它直接量占位条的实际计算高。
+        before_h = ct.get("beforeH")
+        if before_h is None:
+            bad.append(f"@{width} {tag}: 量不到 `.view-body::before` 的高度 —— "
+                       f"让开量是不是没走那条规则？")
+        elif abs(before_h - (band_px + gap_px)) > 1:
+            bad.append(
+                f"@{width} {tag}: 让开带实高 {before_h}px ≠ 覆盖带 {band_px:.0f} + "
+                f"`--toolbar-gap-{gap_key}` {gap_px:.0f} = {band_px + gap_px:.0f}px"
+                f" —— 占位条没用上本视图那个量"
+            )
         white = ct["top"] - band_px
         if white < gap_px - 1:
             bad.append(
                 f"@{width} {tag}: 主体内容（`{ct['sel']}`）离工具条的留白只有 {white:.0f}px"
-                f"（内容顶 {ct['top']} − 覆盖带 {band_px}），应 ≥ `--toolbar-gap` = "
-                f"{gap_px:.0f}px（用户合成图量出 52px，取 51）—— "
+                f"（内容顶 {ct['top']} − 覆盖带 {band_px}），应 ≥ "
+                f"`--toolbar-gap-{gap_key}` = {gap_px:.0f}px —— "
                 f"用户口径：「面板主体内容距离上面工具条的距离」"
             )
-        # 反面：留白**过多**说明让开量被写了两次（`.hero` 的内距没删干净就是双倍留白）
+        # 反面：留白**过多**说明让开量被写了两次（视图自己的 padding 没删干净）
         elif white > gap_px + 40:
             bad.append(
                 f"@{width} {tag}: 主体内容离工具条的留白多到 {white:.0f}px"
@@ -4886,6 +4948,12 @@ def main() -> int:
                       f"+ gap={hg.get('toolbarGap')}"
                       f" ｜ cards 内容顶={ct.get('top')}（`{ct.get('sel')}`）"
                       f" ｜ 留白={_white}")
+                # R45-E2：四个量并排印出来 —— 用户要的正是"分别设计四个量"，
+                # 不印就看不出它们是不是真的分开了、各自是多少。
+                _gaps = hg.get("toolbarGaps") or {}
+                print("  R45-E2 四个间距: "
+                      + " ｜ ".join(f"{k}={_gaps.get(k)}" for k in
+                                     ("cards", "list", "archive", "profile")))
                 if hr:
                     print(f"  R45-C 药丸: {hr.get('pillCount')} 显 + 出口{hr.get('pillMore')} "
                           f"= 总 {hr.get('accountTotal')} ｜ 行数={hr.get('pillRows')}（≤2）"
