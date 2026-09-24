@@ -1,9 +1,9 @@
-# DDToolkit 架构不变量（完整表述 · 15 条）
+# DDToolkit 架构不变量派生索引
 
-> **出处**：`docs/ARCHITECTURE.md` **§6 不变量与纪律（改代码前必读）**，共 **15 条**，编号照抄。
-> 本文是给"要细读原文"的场景用的副本；**冲突时以 `docs/ARCHITECTURE.md` 为准**。
-> 括号里的 devlog 编号是 `ARCHITECTURE.md` §6 原文标注；标 `GLOSSARY §8.x` 的补充来自
-> `docs/GLOSSARY.md` §8（那是**另一组 14 条**"不变量与常见坑"，编号与本节不对应，见文末对照）。
+> **条文真源只有一处**：`docs/ARCHITECTURE.md` **§6 不变量与纪律（改代码前必读）** ——**冲突以它为准**。
+> 本文不重抄条文，补的是 §6 没有的那一层：每条**落在哪个文件、被哪个测试守着**（`## 1 … ## 15` = §6.1–§6.15）。
+> 括号里的 devlog 编号是 §6 原文标注；标 `GLOSSARY §8.x` 的补充曾是**另一组**（编号不对应）—— 现已全部并入 §6，换算见文末。
+> ⚠️ 会漂的"当前值"一类**测量值本文一律不写死** —— 真源：`python scripts/gen_doc_numbers.py --list`。
 
 ---
 
@@ -12,8 +12,7 @@
 库内 datetime 一律 **naive UTC**；路由层比较参数同为 naive；输出模型补 `+00:00`。
 
 - **出处**：`ARCHITECTURE.md` §6.1；同义见 `GLOSSARY.md` §8.1。
-- **落点**：`app/core/database.py`、`app/schemas/vtuber.py`（`PostOut` / `AccountStatSnapshotOut`
-  等序列化补 `+00:00`，避免前端按本地时区偏移 8 小时 —— `backend-repositories-and-routers.md` §1.4）。
+- **落点**：`app/core/database.py`、`app/schemas/vtuber.py`（`PostOut` / `AccountStatSnapshotOut` 等序列化补 `+00:00`，避免前端按本地时区偏移 8 小时 —— `backend-repositories-and-routers.md` §1.4）。
 
 ## 2. `posts` 无外键 —— 删除必须走 `purge.py`
 
@@ -24,9 +23,8 @@
 
 - **出处**：`ARCHITECTURE.md` §6.2；事故编号见 `GLOSSARY.md` §8.2（**devlog/040**）。
 - **触发面**：`DELETE /vtuber/{vtuber_id}`（解除订阅）、`DELETE /account/{account_id}`；
-  `backend-repositories-and-routers.md` §1.1 逐条列出这些外键关系（该表共 8 条 FK，其中 **5 张子表按
-  `account_id`**，活动条目与曾用值按 `vtuber_id`）；原文口径是"5 张子表有外键且不级联"，`purge.py`
-  文档头同样写"5 张子表"。
+  外键关系逐条见 `backend-repositories-and-routers.md` §1.1（**5 张子表**按 `account_id`，
+  活动条目与曾用值按 `vtuber_id`；`purge.py` 文档头同口径）。
 
 ## 3. 新增迁移必须同步 `MIGRATION_HEAD`
 
@@ -36,8 +34,8 @@
 - **出处**：`ARCHITECTURE.md` §6.3；`GLOSSARY.md` §8.3 补充：旧库桥接（`main._sync_legacy_schema`，
   补列/补索引）**补不了唯一约束**，因此 stamp head 前必须过 `main._missing_unique_keys`
   —— 不一致就拒绝启动，不许写「本库已等于 head」的假承诺（**devlog/053**）。
-- **当前值**：`MIGRATION_HEAD = "f007"`（`app/main.py:76`，实读确认）；迁移链 20 个版本
-  （`a001`–`f007`，`alembic/versions/` 实际文件数 20）。
+- **当前值**：**不写死** —— 查 `python scripts/gen_doc_numbers.py --list`（`migration_head` / `migration_count`）；
+  `MIGRATION_HEAD` 写在 `app/main.py`（把这一处抄成常量的代价见 `docs/DEV-LOOP.md` §0.4）。
 - **等价性护栏**：`tests/test_services.py::test_orm_metadata_matches_migration_chain`
   （`backend-repositories-and-routers.md` §1.3）。
 
@@ -89,8 +87,7 @@
 
 **凭据只落本机** `DATA_DIR/.env`（原子替换），不进仓库、不上传。
 
-- **出处**：`ARCHITECTURE.md` §6.10；`GLOSSARY.md` §8.9 补充：`.env`、`*.db*`、`logs/`、`_tmp_*`
-  均已 gitignore；写入经 `services/env_store.py::save_env_keys`。
+- **出处**：`ARCHITECTURE.md` §6.10；`GLOSSARY.md` §8.9 补充：`.env` / `*.db*` / `logs/` / `_tmp_*` 均已 gitignore；写入经 `services/env_store.py::save_env_keys`。
 
 ## 11. HTTP 客户端统一走 `new_async_client()`
 
@@ -140,24 +137,20 @@ B 站 `module_tag.text=置顶`），「遇已入库即 break」会漏掉同页�
 
 ---
 
-## 附：别把 `GLOSSARY.md` §8 当同一组
+## 附：原 `GLOSSARY.md` §8 的条目去哪了
 
-`docs/GLOSSARY.md` §8「不变量与常见坑」是**另一组、共 14 条**，与 `ARCHITECTURE.md` §6 的
-15 条**部分重叠但编号不对应**（例：`GLOSSARY` §8.3 = `ARCHITECTURE` §6.3；但
-`GLOSSARY` §8.11「`asyncio.create_task` 必须留强引用」、§8.12「上游结论必须在冷进程 + 空数据目录
-里复现，devlog/085」、§8.13「判据至少有一条用例吃真实数据」、§8.14「未登录 ≠ 不可用，但内容抓取
-必须登录，devlog/086」在 `ARCHITECTURE.md` §6 里**没有**）。
+`docs/GLOSSARY.md` §8「不变量与常见坑」原有的那组条目**已全部并入** `docs/ARCHITECTURE.md` §6
+（新增部分 = §6.16–§6.23）；**逐条换算表的真源在 `GLOSSARY.md` §8 自己**（本节不再维护）。
+本文的 `## 1 … ## 15` 只覆盖 §6.1–§6.15；§6.16 起是后并入的，**尚未建派生条目**。
+引号里写"GLOSSARY §8.x"时按下面的换算对照读（要点，非穷举）：
 
-引号里写"GLOSSARY §8.x"时先确认说的是哪一份。`GLOSSARY.md` §8 里 `ARCHITECTURE.md` §6
-**没有**的条目（举例，非穷举）：
-
-| `GLOSSARY.md` §8 条目 | 要点 |
-|---|---|
-| §8.4 | **新增挂 `accounts`/`vtubers` 外键的表 → 同步 `purge.py`**（`ARCHITECTURE.md` §7 扩展点表也有这句，但 §6 的 15 条里没有） |
-| §8.5 | OverlayScroll 会插一层 `.os-scroll`：给被包容器写 CSS 一律用**后代选择器**，写成直系子会静默失效（devlog/039） |
-| §8.8 | 并发粒度是平台：同平台内部串行，不要在一条平台流里再并发放大速率 |
-| §8.10 | `scripts/backend-8000.bat` 属个人脚本，**不得提交** |
-| §8.11 | `asyncio.create_task` 必须留强引用（fire-and-forget 会被 GC 回收 → 回填静默不跑）；统一走 `routers/vtuber.py::_spawn_background` |
-| §8.12 | 上游结论必须在"冷进程 + 空数据目录"里复现一次（devlog/085）；⚠️「空数据目录」≠「候选池为空」，且 shell 里残留的 `BILI_SESSDATA` 会被子进程继承 |
-| §8.13 | 判据至少有一条用例吃真实数据（`tests/fixtures/`，由 `scripts/smoke_upstream.py --capture` 刷） |
-| §8.14 | 未登录 ≠ 不可用，但**内容抓取必须登录**（匿名 `arc/search` / `feed/space` → `-352` 后 HTTP 412，IP 级）；闸门在 `services/capabilities.content_fetch_allowed()`（devlog/086） |
+| 原 `GLOSSARY.md` §8 | 现在在 | 要点 |
+|---|---|---|
+| §8.4 | §6.16 | **新增挂 `accounts`/`vtubers` 外键的表 → 同步 `purge.py`**（`ARCHITECTURE.md` §7 扩展点表也有这句） |
+| §8.5 | §6.17 | OverlayScroll 会插一层 `.os-scroll`：给被包容器写 CSS 一律用**后代选择器**，写成直系子会静默失效（devlog/039） |
+| §8.8 | §6.18 | 并发粒度是平台：同平台内部串行，不要在一条平台流里再并发放大速率 |
+| §8.10 | §6.19 | `scripts/backend-8000.bat` 属个人脚本，**不得提交** |
+| §8.11 | §6.20 | `asyncio.create_task` 必须留强引用（fire-and-forget 会被 GC 回收 → 回填静默不跑）；统一走 `routers/vtuber.py::_spawn_background` |
+| §8.12 | §6.21 | 上游结论必须在"冷进程 + 空数据目录"里复现一次（devlog/085）；⚠️「空数据目录」≠「候选池为空」，且 shell 里残留的 `BILI_SESSDATA` 会被子进程继承 |
+| §8.13 | §6.22 | 判据至少有一条用例吃真实数据（`tests/fixtures/`，由 `scripts/smoke_upstream.py --capture` 刷） |
+| §8.14 | §6.23 | 未登录 ≠ 不可用，但**内容抓取必须登录**（匿名 `arc/search` / `feed/space` → `-352` 后 HTTP 412，IP 级）；闸门在 `services/capabilities.content_fetch_allowed()`（devlog/086） |

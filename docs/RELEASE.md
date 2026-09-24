@@ -48,52 +48,23 @@
 
 ## 1. 发布前清单（Pre-flight）
 
-- [ ] 已确认目标版本号（例：`v0.9.2`），devlog 已写并提交
-- [ ] 本地 `main` 干净，`git status` 无非预期文件
-- [ ] 代理软件已启动（本机 `7897` 或你的实际端口，见 §6）
-- [ ] GitHub token 有效（classic PAT，`repo` scope）或 GCM 已授权
-- [ ] `python -m PyInstaller --version`、`cargo --version` 可用（构建工具链）
-- [ ] 发布说明 `docs/releases/v<版本>.md` 已写（Release 描述来源，§4.3）
+- [ ] 目标版本号已定，devlog 已写并提交；发布说明 `docs/releases/v<版本>.md` 已写好（preflight 要求 ≥200 字符、无占位符）
+- [ ] 本地 `main` 干净；代理软件已启动（本机 `7897`，见 §6）；GitHub token 有效（classic PAT，`repo` scope）或 GCM 已授权
+- [ ] 构建工具链可用：`python -m PyInstaller --version`、`cargo --version`
 
-> 以上六条**就是 `release.py preflight` 检查的东西**（缺哪条它会指名道姓地说）。
+> 这三条**就是 `release.py preflight` 检查的东西**（缺哪条它会指名道姓地说），别在别处再抄一份清单。
 
 ---
 
-## 2. 版本号同步（先于构建，6 处必须一致）
+## 2. 版本号同步（先于构建）
 
-当前版本号分散在 5 个文件（历史上曾有 0.8.0/0.1.0 不一致——**必须全部改齐**）：
-另有 README 顶部徽章，共 **6 处**（`release.py` 的 `VERSION_FILES` 表就是这份清单）：
+**锚点清单的真源 = `scripts/release.py` 的 `VERSION_FILES`**（6 个锚点 = 5 个文件 + README 徽章，
+`tests/test_release_script.py` 有一条 `len(VERSION_FILES) == 6` 的用例钉住）。这里**不复述那张表** ——
+清单、每处的锚点正则、"改完复核六处一致" 都在脚本里：`python scripts/release.py <版本>` 会自动做这一步，
+`python scripts/release.py --check-version` 只校验一致性。历史上曾出现 0.8.0 / 0.1.0 不一致 ⇒ 必须全部改齐。
 
-| 文件 | 字段 | 说明 |
-|---|---|---|
-| `app/core/config.py` | `VERSION: str = "x.y.z"` | 后端版本（注释同步 devlog 版本） |
-| `frontend/src-tauri/tauri.conf.json` | `"version": "x.y.z"` | 桌面壳版本（决定安装包文件名） |
-| `frontend/src-tauri/Cargo.toml` | `version = "x.y.z"` | Rust crate 版本（**只改 `[package]` 那处**） |
-| `frontend/src-tauri/Cargo.lock` | `[[package]] name="ddtoolkit"` 下 `version = "x.y.z"` | lock 同步（**只动 ddtoolkit 块**：同文件里 serde 等依赖也常是 `1.0.0`） |
-| `frontend/package.json` | `"version": "x.y.z"` | 前端包版本 |
-| `README.md` | `version-x.y.z-ffa2b4` 徽章 | 仓库首页版本标识 |
-
-> ✅ **`python scripts/release.py <版本>` 会自动做这一步**（定点替换 + 改完复核六处一致），
-> 下面的手工写法只在脚本不可用时用。
-
-一次性替换示例（PowerShell，注意编码 UTF8）：
-
-```powershell
-$old = "0.9.1"; $new = "0.9.2"
-foreach ($f in @(
-  "app/core/config.py",
-  "frontend/src-tauri/tauri.conf.json",
-  "frontend/src-tauri/Cargo.toml",
-  "frontend/package.json"
-)) {
-  $c = Get-Content $f -Raw -Encoding UTF8
-  $c = $c.Replace($old, $new)
-  [IO.File]::WriteAllText((Join-Path $PWD $f), $c, [Text.UTF8Encoding]::new($false))
-}
-# Cargo.lock 单独处理（只改 ddtoolkit 块，勿动其他包）
-```
-
-> ⚠️ Cargo.lock 里 `name = "ddtoolkit"` 块的 `version` 必须同步——漏改会导致 tauri build 产物版本错乱。
+⚠️ 唯一容易改错的一处：`Cargo.lock` **只动 `name = "ddtoolkit"` 那一块**
+（同文件里 serde 等依赖的 `version` 也常是 `1.0.0`）—— 漏改会让 tauri build 产物版本错乱。
 
 ---
 ## 3. 构建产物（三步，产物统一 `dist-release/`）
@@ -121,9 +92,9 @@ npm run release
 ```powershell
 python scripts/release.py 1.0.2 --only verify        # 含更新清单校验，见下
 Get-ChildItem dist-release | Select-Object Name, @{n='MB';e={[math]::Round($_.Length/1MB)}}
-# 期望三个文件（大小随依赖增长，v1.0.2 实测值如下）:
-#   DDtoolkit_<新版本>_x64-setup.exe   (57.5 MB)  ← 也是应用内更新的**载体**（见 §3.1）
-#   DDtoolkit-portable-win64.zip      (71.9 MB)
+# 期望三个文件（**大小随依赖增长，不写死**，看上一条命令的实际输出）:
+#   DDtoolkit_<新版本>_x64-setup.exe   ← 也是应用内更新的**载体**（见 §3.1）
+#   DDtoolkit-portable-win64.zip
 #   latest.json                       (更新清单：版本 / 说明 / url + 签名)
 # 若出现旧版本安装包残留（如 1.0.1），删除之
 ```
@@ -321,7 +292,7 @@ Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Setti
 |---|---|
 | **一键发布**（推荐） | `python scripts/release.py <版本>`（`--bump` / `--dry-run` / `--from` 见 §0） |
 | 只查版本号一致性 | `python scripts/release.py --check-version` |
-| 版本号同步 | 由 `release.py version` 自动做（§2 是它的清单与手工兜底） |
+| 版本号同步 | 由 `release.py version` 自动做（清单 = `VERSION_FILES`，见 §2） |
 | 构建 | `npm run release --prefix frontend`（完整权限） |
 | 推代码 | `git push`（GCM 授权后免 token） |
 | 推 tag + 建 Release + 传资产 | `scripts/upload_release_assets.py v<版本>`（token 走环境变量，幂等） |

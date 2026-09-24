@@ -631,9 +631,12 @@ flowchart LR
 
 1. **库内时间一律 naive UTC**，输出补 `+00:00`；
 2. **posts 无外键**——删除 V / 账号必须走 `app/services/purge.py`（帖子按 platform+uid，
-   6 张子表按 account_id（f006 起含 `profile_cards` 之外的五张），活动条目 / 曾用值 / 卡片布局按 vtuber_id），漏清一张就会被 `foreign_keys=ON`
-   整次回滚（v0.9.3 修复的事故；f004 的 `vtuber_field_history` 两个外键都有，删 V 必须再按
-   `vtuber_id` 清一遍——`account_id=NULL` 的行按 account 清不到）；
+   **5 张子表按 account_id**：统计快照 / 直播场次 / 礼物日 / 分类校正 / 曾用值；
+   **`profile_cards`（f006）与活动条目按 `vtuber_id`** —— 不是按 account_id），漏清一张就会被
+   `foreign_keys=ON` 整次回滚（v0.9.3 修复的事故；f004 的 `vtuber_field_history` 两个外键都有，
+   删 V 必须再按 `vtuber_id` 清一遍——`account_id=NULL` 的行按 account 清不到；
+   回归用例 `test_delete_vtuber_cleans_account_children` 看住）。清单的真源是
+   `app/services/purge.py` 头部那张表，别在别处再抄一遍；
 3. **新增迁移必须同步 `MIGRATION_HEAD`**（测试断言与 alembic head 一致）；
 4. **唯一约束去重**：账号 `(platform, platform_uid)`、帖子 `(platform, platform_uid,
    platform_post_id)`、场次 `(account_id, live_id)`、礼物日 `(account_id, source, gift_date)`；
@@ -665,6 +668,35 @@ flowchart LR
     （`threading.Lock` + 时刻表，锁外 `await`），或把原语按事件循环惰性创建。
     护栏：`test_platform_pacer_survives_new_event_loops`
     + `test_module_level_pacers_hold_no_event_loop_primitives`。
+16. **新增挂 `accounts` / `vtubers` 外键的表 → 同步 `app/services/purge.py`**：
+    漏一处，删 V 就会被 `foreign_keys=ON` 整次回滚（清单见第 2 条）。
+17. **OverlayScroll 会插一层 `.os-scroll`**：给被包容器写 CSS 一律用后代选择器
+    （`.list-scroll .list-inner`），写成直系子会静默失效（devlog/039）。
+18. **并发粒度是平台**：同平台内部串行，不要在一条平台流里再并发放大速率。
+19. **`scripts/backend-8000.bat` 属个人脚本，不得提交**。
+20. **`asyncio.create_task` 必须留强引用**：收录回填是 fire-and-forget，返回值无人
+    引用时任务可能被 GC 回收（Python 文档明确警告）→ 表现为「回填静默不跑」。
+    统一走 `routers/vtuber.py::_spawn_background`（`_background_tasks` 集合 + done 回调）。
+21. **上游结论必须在「冷进程 + 空数据目录」里复现一次**（2026-09-15 立，devlog/085）：
+    凡"某情况下也能/不能工作"的判断，都要在**空数据目录 + 全新进程 + 显式清空凭据**下再验一遍
+    —— R11 的"B 站检索不需要登录"就是在 **WBI 密钥已缓存**的环境里得出的，结论完全反过来。
+    工具：`python scripts/smoke_upstream.py --cold`（断言未登录时的降级形态）。
+    ⚠️ 两个反直觉前提：① "空数据目录"**不等于**候选池为空（`backend_main.py` 首启会把
+    随包的 `vtubers.csv` 引导复制进数据目录）；② shell 里残留的 `BILI_SESSDATA` 会被子进程继承
+    （`config.py` 读 `os.getenv`），不清空就测成了"登录态"。
+22. **判据至少有一条用例吃真实数据**（同日立）：自造样本会让判据"看起来在工作"却永不命中
+    —— 同一批里出现过两次：NSIS「打平」正则的样本漏了目标路径的引号（永远返回 0 行），
+    "名字非空"的断言被 `... or str(mid)` 兜底喂成了 uid。真实数据放 `tests/fixtures/`
+    （由 `scripts/smoke_upstream.py --capture` 从真上游/真构建产物刷），新判据必须有一条吃它。
+23. **未登录 ≠ 不可用，但内容抓取必须登录**（2026-09-15，devlog/086）：
+    匿名 `nav` **也下发 `wbi_img`**（WBI 密钥不随登录态变）⇒ 检索/账号信息/粉丝数/直播状态
+    未登录都能用；而**空间内容接口**（`arc/search`、动态 `feed/space`）匿名会被平台
+    `-352` 之后 **HTTP 412 `request was banned`**（IP 级、会持续，**不连累登录态**）。
+    因此：`wbi.sign_params(allow_anonymous=True)` **只给检索路径**；
+    内容抓取一律过 `services/capabilities.content_fetch_allowed()` 闸门 ——
+    未登录时**一次请求都不发**（`stop_reason="login_required"`，5 个内容端点 403），
+    而不是"试了失败"（那会白耗配额并弄脏 IP）。能力边界由
+    `scripts/capability_matrix.py` 两态实测，落 `tests/fixtures/capability_matrix.json`。
 
 ---
 

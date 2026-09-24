@@ -6,7 +6,7 @@
 > 适用版本：`main`（2026-09-23，`MIGRATION_HEAD = f007`）。
 
 **目录**：§1 领域名词 · §2 数据模型与字段 · §3 抓取与调度 · §4 认证与凭据 ·
-§5 前端与界面 · §6 工程与流程 · §7 配置项速查 · §8 不变量与常见坑 · §9 需求 → 代码入口。
+§5 前端与界面 · §6 工程与流程 · §7 配置项速查 · §8 不变量（**指针 → `ARCHITECTURE.md` §6**） · §9 需求 → 代码入口。
 
 ---
 
@@ -178,10 +178,10 @@
 
 | 术语 | 含义 | 代码位置 | 关联 |
 |---|---|---|---|
-| **迁移链 / MIGRATION_HEAD** | alembic `a001→f007`（20 个版本）；`MIGRATION_HEAD` 必须同步 | `alembic/versions/`、`app/main.py::MIGRATION_HEAD` | 测试断言一致 |
+| **迁移链 / MIGRATION_HEAD** | alembic `a001→f007`（20 个版本） | `alembic/versions/`、`app/main.py::MIGRATION_HEAD` | 同步纪律 = 不变量 3（`docs/ARCHITECTURE.md` §6）；测试断言一致 |
 | **一键发布 / release.py** | 十步发布编排：预检→版本同步→门禁→打版→产物校验→提交/tag→推送→Release→报告 | `scripts/release.py`；手册 `docs/RELEASE.md`；上传 `scripts/upload_release_assets.py`（幂等） | 守卫：工作树脏/notes 缺失/版本不递增/NSIS 打平/**文档漂移**/tag 冲突 → 停；`--dry-run`、`--from <步骤>` 续跑；推完自动对齐本地 `origin/<分支>` tracking ref（按 URL 推送不会自动更新它） |
 | **端到端上游冒烟 / smoke_upstream** | 数据目录副本 + 真后端 + 真上游，跑"只有真环境才暴露"的链路（B 站检索 / uid 直查 / 池外收录 / 场次上游） | `scripts/smoke_upstream.py`（`--cold` = 空数据目录 + 清空凭据）；`dev_check.py --upstream` | `--capture` 顺带刷新真实 fixtures；skip 必须打印原因，不冒充通过 |
-| **真实 fixtures** | 真上游回包 / 真 `installer.nsi` 片段 / 真索引条目 —— 判据的"真形状"依据 | `tests/fixtures/`（`smoke_upstream.py --capture` 生成）；用例 `tests/test_real_fixtures.py` | 规矩：**新判据至少一条用例吃真实数据**（§8 第 13 条） |
+| **真实 fixtures** | 真上游回包 / 真 `installer.nsi` 片段 / 真索引条目 —— 判据的"真形状"依据 | `tests/fixtures/`（`smoke_upstream.py --capture` 生成）；用例 `tests/test_real_fixtures.py` | 「新判据至少一条用例吃真实数据」= 不变量 22（`docs/ARCHITECTURE.md` §6） |
 | **文档漂移门禁 / doc_check** | 判据条目**不在这里复述**（真源 = `scripts/doc_check.py` 的 `CHECKS`，跑 `python scripts/doc_check.py` 会逐条打印）：devlog 索引「有则必填 / 无重号 / 无幽灵行」、**devlog 文件名重号**（2026-09-25 加）、六处版本号一致、发布说明与 `docs/README.md` 导航、**文档数字与代码一致**（`gen_doc_numbers.py`）、**规格现状断言** | `scripts/doc_check.py`；`dev_check.py --docs`；`release.py` 预检会调它 | 这类漂移不会让任何测试红，只会在几个月后查不到"那版改了什么"。⚠️ 本节曾写死「6 项」—— 加一条判据它就漂了（**复述点漂移的活样本**，见 `DEV-LOOP.md` §0.4） |
 | **启动迁移四形态** | 全新库 upgrade / 旧库 stamp / 落后增量 / 已最新快路径 | `app/main.py::_run_migrations` | 冷启动优化 |
 | **旧库桥接守卫** | 桥接补不了唯一约束 → 不一致**拒绝启动**（不写假 head 承诺） | `app/main.py::_missing_unique_keys` | devlog/053 |
@@ -191,7 +191,7 @@
 | **发布链** | 后端 → 桌面应用 → 聚合产物 | `npm run release`；`scripts/{build_backend,collect_release,upload_release_assets}.py` | 说明 `docs/RELEASE.md`（§3.1 是应用内更新的签名密钥与产物） |
 | **应用内更新** | 「设置 → 关于」检查更新 → 下载 → 重启安装；启动后静默查一次 | `tauri-plugin-updater` / `-process`、`plugins.updater`（endpoints + pubkey）、`utils/shellBridge.ts`（`checkForUpdate`/`installUpdate`/`openReleasePage`）、`hooks/useUpdateCheck.ts`；产物 `latest.json` | **更新载体 = NSIS 安装包本身 + `.exe.sig`**（没有 `*.nsis.zip`）；签名私钥在**仓库外**、**密码不能为空**（空密码时 CLI 从终端读、脚本里会挂住）；错误分三类（`remote`=远端还没发布 / `network`=连不上、才试本地代理 / `other`）；便携版不自我更新 |
 | **数据目录体检 / 库维护** | 数据目录里谁在长（库 / 图片缓存 / 日志 / 遗留备份 + 磁盘剩余）；删数据后**真的还盘** | `app/services/db_maintenance.py`（`dir_stats` / `sqlite_stats` / `ensure_incremental_autovacuum` / `incremental_vacuum`）、`app/routers/img_proxy.py::prune_cache`、`config.IMG_CACHE_MAX_MB`（默认 300，`DDTOOLKIT_IMG_CACHE_MAX_MB` 可覆盖） | 图片缓存**按 mtime 淘汰 = 近似 LRU**（命中刷新 mtime，热图不会被误删）；库切 `auto_vacuum=INCREMENTAL` **带 512MB 门槛**（全库 VACUUM 的临时空间≈库大小，不在升级路径上冒险）；两条 PRAGMA **不能在事务里**跑（走 DBAPI autocommit）；实测 8 个 V ⇒ 库 54MB（原文 JSON 占 46%）+ 缓存 101MB —— 涨得最快的是缓存 |
-| **版本号同步点** | `settings.VERSION` / `package.json` / `tauri.conf.json` / `Cargo.toml` / `Cargo.lock` / README badge | 6 处 + devlog | 测试 `test_version_synced_with_devlog` |
+| **版本号同步点** | 发版时要一起改的那几处版本号 | **清单的真源 = `scripts/release.py::VERSION_FILES`**（别在这里复述）；口径见 `docs/RELEASE.md` §2 | 测试 `test_version_synced_with_devlog` |
 | **整机占用 / perf_report** | 应用**整棵进程树**（壳 + WebView2 各进程 + 后端 + conhost）的内存 / 线程 / 句柄，外加冷热启动、空闲 CPU、托盘深休眠、单核亲和代理 | `scripts/perf_report.py`；数字与结论：`docs/ARCHITECTURE.md` §3.13 | 内存口径 = 性能计数器 `Working Set - Private`（**任务管理器「内存」列**，不是 `PrivateUsage`）；实测空闲 **243–257MB**（其中 WebView2 占 143–152）、收进托盘十分钟后降到 **~92MB**；**"量到 0"必须区分"没进程"与"没量到"**（devlog/134：PowerShell 终止错误 rc=0 + 空 stdout，第一版打出一排 0） |
 | **测试临时目录 / TempRoot** | `cargo test` 建的 `%TEMP%\ddtk-{mig,ptr,shelllog}-*`：`Drop` 时自删 | `frontend/src-tauri/src/testtmp.rs`；三处用例的 `temp_root()` 都用它 | devlog/134：此前**只建不删**，实测堆了 **215 个目录 / 504MB**；`Drop` 两条路都收拾（目录 / 被文件占住）；`Deref<Target=Path>` 让调用点照旧写 `root.join(…)` |
 | **头像 / 签名取值链** | 卡片与左栏**同源**：头像 `resolveAvatar`、签名 `resolveSign` | `frontend/src/utils/avatarSource.ts`、`utils/signSource.ts` | R33/devlog135：左栏曾自己写一份"只看平台字段"的链 ⇒ 档案设置改完看着像没生效；护栏 `ui_probe --profile-sync`（+ 单测）；左栏 `Avatar[data-src]` 与 `.hero[data-avatar-src]` 是**为可测性挂的**（虚拟时间下图片加载不完），别删 |
@@ -217,7 +217,7 @@
 | `DATA_DIR` | `DDTOOLKIT_DATA_DIR` 或项目根 | 数据库/日志/凭据/静态资源根目录。桌面端启动优先级（`datadir::resolve_startup`，有单测）：**环境变量 > 应用内迁移指针 > 默认目录**（`%APPDATA%\com.ddtoolkit.app`）。设了环境变量即视为**便携/自定义安装**（界面不给迁移入口）；指针坏了回退默认目录并把原因显示给用户 |
 | `DATABASE_URL` | `sqlite:///<DATA_DIR>/vtuber.db` | SQLite 连接串 |
 | `LOG_FILE` / `LOG_BACKUP_DAYS` | `logs/app.log` / `7`（`DDTOOLKIT_LOG_BACKUP_DAYS` 可覆盖） | 双通道日志的文件通道：**按天轮转**（`app.log.YYYY-MM-DD`）保留最近 N 份；配置在 `app/core/logging_setup.py`（devlog/077） |
-| `VERSION` | `1.0.2` | 版本号（与 6 处同步：本文件 / `tauri.conf.json` / `Cargo.toml` / `Cargo.lock` / `package.json` / README 徽章，测试断言一致） |
+| `VERSION` | `1.0.2` | 版本号。发版时**多处一起改** → 锚点清单的真源 = `scripts/release.py::VERSION_FILES`（**别在这里复述**；口径见 `docs/RELEASE.md` §2），测试断言一致 |
 | `REQUEST_INTERVAL_MIN/MAX` | 3.0 / 5.0 s | 账号抓取每账号间隔 |
 | `MANUAL_FAST_INTERVAL_MIN/MAX` | 0.5 / 1.0 s | 收录/单V 的账号间隔（只在账号之间生效） |
 | `FIRST_SCREEN_VIDEO_PAGES` / `_DYNAMICS_PAGES` / `_DYNAMICS_LIMIT` | 1 / 1 / 3 | 收录首屏抓取规模 |
@@ -247,47 +247,11 @@
 
 ## 8. 不变量与常见坑
 
-1. **库内时间一律 naive UTC**；比较参数必须同为 naive，输出模型补 `+00:00`。
-2. **`posts` 无外键**，`accounts` 之下 5 条外键不级联且 `foreign_keys=ON` →
-   删 V / 删账号**必须**走 `app/services/purge.py`，否则整次事务回滚（devlog/040）。
-   `vtuber_field_history` **两个外键都有**（`vtuber_id` + 可空的 `account_id`）：
-   删账号按 account 清、删 V 还要按 vtuber 再清一遍，否则 `account_id=NULL` 的行会把 V 挡下
-   （f004 起，回归用例 `test_delete_vtuber_cleans_account_children` 看住）。
-3. **新增迁移必须同步 `MIGRATION_HEAD`**，否则冷启动快路径会把旧库误判为最新。
-   另：旧库桥接（`main._sync_legacy_schema`，补列/补索引）**补不了唯一约束**，
-   因此 stamp head 前必须过 `main._missing_unique_keys` —— 不一致就拒绝启动，
-   不许写「本库已等于 head」的假承诺（devlog/053）。
-4. **新增挂 `accounts`/`vtubers` 外键的表 → 同步 `purge.py`**。
-5. **OverlayScroll 会插一层 `.os-scroll`**：给被包容器写 CSS 一律用后代选择器
-   （`.list-scroll .list-inner`），写成直系子会静默失效（devlog/039）。
-6. **抓取去重靠内存集合**（`existing_ids`），不要靠捕获 `IntegrityError`。
-7. **手动任务永远优先**：自动档起跑见手动即跳过、持锁见手动则轮次断点让位。
-8. **并发粒度是平台**：同平台内部串行，不要在一条平台流里再并发放大速率。
-9. **凭据只落本机** `DATA_DIR/.env`；`.env`、`*.db*`、`logs/`、`_tmp_*` 均已 gitignore。
-10. **`scripts/backend-8000.bat` 属个人脚本，不得提交**。
-11. **`asyncio.create_task` 必须留强引用**：收录回填是 fire-and-forget，返回值无人
-    引用时任务可能被 GC 回收（Python 文档明确警告）→ 表现为「回填静默不跑」。
-    统一走 `routers/vtuber.py::_spawn_background`（`_background_tasks` 集合 + done 回调）。
-12. **上游结论必须在"冷进程 + 空数据目录"里复现一次**（2026-09-15 立，devlog/085）：
-    凡"某情况下也能/不能工作"的判断，都要在**空数据目录 + 全新进程 + 显式清空凭据**下再验一遍
-    —— R11 的"B 站检索不需要登录"就是在**WBI 密钥已缓存**的环境里得出的，结论完全反过来。
-    工具：`python scripts/smoke_upstream.py --cold`（断言未登录时的降级形态）。
-    ⚠️ 两个反直觉前提：① "空数据目录"**不等于**候选池为空（`backend_main.py` 首启会把
-    随包的 `vtubers.csv` 引导复制进数据目录）；② shell 里残留的 `BILI_SESSDATA` 会被子进程继承
-    （`config.py` 读 `os.getenv`），不清空就测成了"登录态"。
-13. **判据至少有一条用例吃真实数据**（同日立）：自造样本会让判据"看起来在工作"却永不命中
-    —— 同一批里出现过两次：NSIS「打平」正则的样本漏了目标路径的引号（永远返回 0 行），
-    "名字非空"的断言被 `... or str(mid)` 兜底喂成了 uid。真实数据放 `tests/fixtures/`
-    （由 `scripts/smoke_upstream.py --capture` 从真上游/真构建产物刷），新判据必须有一条吃它。
-14. **未登录 ≠ 不可用，但内容抓取必须登录**（2026-09-15，devlog/086）：
-    匿名 `nav` **也下发 `wbi_img`**（WBI 密钥不随登录态变）⇒ 检索/账号信息/粉丝数/直播状态
-    未登录都能用；而**空间内容接口**（`arc/search`、动态 `feed/space`）匿名会被平台
-    `-352` 之后 **HTTP 412 `request was banned`**（IP 级、会持续，**不连累登录态**）。
-    因此：`wbi.sign_params(allow_anonymous=True)` **只给检索路径**；
-    内容抓取一律过 `services/capabilities.content_fetch_allowed()` 闸门 ——
-    未登录时**一次请求都不发**（`stop_reason="login_required"`，5 个内容端点 403），
-    而不是"试了失败"（那会白耗配额并弄脏 IP）。能力边界由
-    `scripts/capability_matrix.py` 两态实测，落 `tests/fixtures/capability_matrix.json`。
+> **不变量只有一处真源：`docs/ARCHITECTURE.md` §6「不变量与纪律」（改代码前必读）。**
+> 本节原有的 14 条已**全部并入 §6**、按原顺序一一对应：
+> `8.1→§6.1 · 8.2→§6.2 · 8.3→§6.3 · 8.4→§6.16 · 8.5→§6.17 · 8.6→§6.5 · 8.7→§6.7 ·
+> 8.8→§6.18 · 8.9→§6.10 · 8.10→§6.19 · 8.11→§6.20 · 8.12→§6.21 · 8.13→§6.22 · 8.14→§6.23`。
+> 别处写的「`GLOSSARY` §8.x / §8 第 N 条」按这张表换算；**新的不变量只往 §6 加**，本节不再维护。
 
 ---
 

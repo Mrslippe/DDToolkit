@@ -60,9 +60,19 @@ ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "frontend"
 
 # ── 档位判定：路径前缀 → 归属 ────────────────────────────────────────────────
-# A：只有这些能让 pytest 有意义（后端代码或后端测试本身）
+# A：只有这些能让 pytest 有意义（后端代码 / 后端测试 / **有 pytest 护栏的脚本**）
 A_PREFIXES = ("app/", "alembic/", "tests/")
-A_FILES = ("backend_main.py",)
+A_FILES = (
+    "backend_main.py",
+    # ⚠️ 2026-09-25 补（**这个漏洞是被本仓自己的改动方式抓到的**）：原先 `scripts/**`
+    #    一律落 C 档，于是改 `doc_check.py` 的判据逻辑时**不会跑 pytest** ——
+    #    而它恰恰是被 `tests/test_doc_check.py`（24 条）与 `tests/test_release_script.py`
+    #    守着的。**档位映射漏一格 = 那个文件从此没人守**，而且不会自己响。
+    #    其余 `scripts/*.py` 仍留 C 档：它们的护栏是"跑它自己"（如 `ui_probe.py`）。
+    "scripts/doc_check.py",      # ← tests/test_doc_check.py
+    "scripts/gen_doc_numbers.py",  # ← doc_check #5 转调它（数字门禁本体）
+    "scripts/release.py",        # ← tests/test_release_script.py
+)
 # B：前端逻辑、共享令牌与 UI 规格（vitest 覆盖得到；UI-MAP 是"现状真源"，
 #    改它意味着版式口径变了，值得把单测也跑一遍）
 B_PREFIXES = ("frontend/src/utils/", "frontend/src/components/", "frontend/src/api/",

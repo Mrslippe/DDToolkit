@@ -112,6 +112,41 @@ def test_normal_index_label_is_not_flagged(monkeypatch):
     assert not any("第一列超过" in f for f in fails), fails
 
 
+# ── devlog **文件名**重号（2026-09-25 加）────────────────────────────────────
+# 这条判据的来历：原先它是**唯一靠人肉自查**的漂移点 —— `gen_doc_numbers.derive_devlog()`
+# 只排序、不去重也不查重复，两个同号文件它照常报 `count/max/next`；索引检查又只看**编号**
+# 不看文件名 ⇒ "两篇同号、其中一篇等于没入账"**没有任何东西会红**，
+# 只能靠人在写完 devlog 后手跑一条 PowerShell（写给人做的检查 = 不会做的检查）。
+
+def _fake_devlog_names(monkeypatch, names: list[str]):
+    """造一个假 `devlog/`，文件名随便给（要能构造重号）。"""
+    import shutil
+
+    shutil.rmtree(_TEST_TMP, ignore_errors=True)
+    dl = _TEST_TMP / "devlog"
+    dl.mkdir(parents=True)
+    for n in names:
+        (dl / n).write_text("x", encoding="utf-8")
+    monkeypatch.setattr(D, "DEVLOG", dl)
+
+
+def test_duplicate_devlog_filenames_are_reported(monkeypatch):
+    """同号两个文件 → FAIL（且只报那一组，别的编号不许被牵连）。"""
+    _fake_devlog_names(monkeypatch, ["183-a.md", "183-b.md", "184-c.md"])
+    fails, warns = D.check_devlog_duplicates()
+    assert len(fails) == 1, fails
+    assert "183" in fails[0], fails
+    assert warns == []
+
+
+def test_missing_devlog_number_is_not_a_duplicate(monkeypatch):
+    """⚠️ **缺号不是重号** —— 本仓 068 / 161 就是缺号，别把 `count < max` 误判成撞号。"""
+    _fake_devlog_names(monkeypatch, ["183-a.md", "185-b.md", "186-c.md"])   # 184 缺
+    fails, warns = D.check_devlog_duplicates()
+    assert fails == [], fails
+    assert warns == []
+
+
 def test_index_section_is_scoped_to_its_own_section(monkeypatch):
     """切段必须停在下一个 `## `。
 
