@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Ghost } from 'lucide-react'
 import FloatPill from './common/FloatPill'
 import DateRangePicker from './common/DateRangePicker'
@@ -6,6 +6,14 @@ import OverlayScroll from './OverlayScroll'
 import { rangeText } from '../utils/dateRange'
 import type { DateRange } from './common/DateRangePicker'
 import './../styles/posts.css'
+
+/** 弹窗与触发器之间的间隙、以及与面板底的呼吸位 —— **真源在 CSS**（`.post-filter-pop`
+ *  的 `--pop-gap` / `--pop-breath`），这里只是读出来用。组件与样式表各写一份数字
+ *  迟早会漂（本仓反复踩过），所以 TS 侧**不写死**。 */
+const CSS_VAR_GAP = '--pop-gap'
+const CSS_VAR_BREATH = '--pop-breath'
+/** 可用高度的下限：再挤也要留住一点日历可见区（此时宁可横向被裁，也好过整个不可用） */
+const POP_MIN_H = 180
 
 /** 归档过滤：all=全部（含已归档） unarchived=仅未归档 archived=仅已归档 */
 export type ArchivedFilter = 'all' | 'unarchived' | 'archived'
@@ -66,6 +74,57 @@ export default function PostFilterPop({
    *  才是已应用态的出口。 */
   const [draftText, setDraftText] = useState('')
   const wrapRef = useRef<HTMLDivElement>(null)
+  const popRef = useRef<HTMLDivElement>(null)
+
+  /**
+   * 弹窗高度上限 = **实测**「触发器下缘 → 面板下缘」的剩余空间。
+   *
+   * ⚠️ 为什么不是一条 CSS `max-height: calc(100vh - …)`（2026-09-24，R45-E 实测）：
+   * 那条路上方要减掉的东西**是数据相关的，不是一个常数** ——
+   *   · `.header-actions`（账号切换器行）**会换行**：8 个账号时它是 **2 行 68px**，
+   *     2 个账号时是 1 行 30px；
+   *   · `.chips-bar` 里的筛选行同样会换行（窄档 66px vs 宽档 25px）。
+   * 探针实测（1100 档 + `--seed-accounts 8`）：弹窗顶落在面板内 **264px**、
+   * 而手算的公式只减了 42+10+63 = 115px ⇒ 上限给到 349px，**弹窗底部越出面板 25px
+   * 被 `.posts-panel` 的 `overflow:hidden` 裁掉**（`insidePanel=false` ×2 帧）。
+   * 换句话说：**这个数没有"正确的常数"可写**，越往上加版式元素它越错。
+   * ⇒ 改成量出来。触发器下缘与面板下缘都是现成的 rect，减一下就是真实可用高度；
+   *   换行、窄档、窗口缩放全都自动跟上（下面挂了 ResizeObserver + resize）。
+   *
+   * ⚠️ `max-height` 仍然写在 CSS 里当**兜底**（首帧、JS 未跑时用），组件量到后覆盖为内联值。
+   */
+  useLayoutEffect(() => {
+    if (!open) return
+    const wrap = wrapRef.current
+    const pop = popRef.current
+    const panel = wrap?.closest<HTMLElement>('.posts-panel')
+    if (!wrap || !pop || !panel) return
+    const cs = getComputedStyle(pop)
+    const readPx = (name: string, fallback: number) =>
+      parseFloat(cs.getPropertyValue(name)) || fallback
+
+    const fit = () => {
+      const gap = readPx(CSS_VAR_GAP, 6)
+      const breath = readPx(CSS_VAR_BREATH, 8)
+      const avail = panel.getBoundingClientRect().bottom
+        - wrap.getBoundingClientRect().bottom
+        - gap
+        - breath
+      pop.style.maxHeight = `${Math.max(POP_MIN_H, Math.round(avail))}px`
+    }
+
+    fit()
+    // 换行/缩放都会改可用高度：面板尺寸变、窗口尺寸变都要重量
+    const ro = new ResizeObserver(fit)
+    ro.observe(panel)
+    ro.observe(wrap)
+    window.addEventListener('resize', fit)
+    return () => {
+      ro.disconnect()
+      window.removeEventListener('resize', fit)
+      pop.style.maxHeight = ''
+    }
+  }, [open])
 
   useEffect(() => {
     if (!open) return
@@ -129,9 +188,9 @@ export default function PostFilterPop({
       </FloatPill>
 
       {open && (
-        <div className="post-filter-pop">
-          {/* 三分区放进覆盖式滚动体：弹窗高度受「列表页可用高度」封顶（见 posts.css .post-filter-pop
-              的 max-height 注释）——窗口很矮时内部滚动，而不是被 .posts-panel 裁掉底部操作 */}
+        <div className="post-filter-pop" ref={popRef}>
+          {/* 三分区放进覆盖式滚动体：弹窗高度由上面那个 effect **实测**封顶
+              （见它的注释）——窗口很矮时内部滚动，而不是被 .posts-panel 裁掉底部操作 */}
           <OverlayScroll className="pfilter-scroll">
             <div className="pop-group">
               <span className="pop-label">状态</span>

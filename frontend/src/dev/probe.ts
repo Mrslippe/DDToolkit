@@ -485,19 +485,25 @@ function measure(tag: string) {
          *  取 `box-shadow` 与 `border` 两条：旧实现是 `inset 0 0 0 1px`，必须拦住它回流。 */
         spotShadow: spot ? getComputedStyle(spot).boxShadow : null,
         spotBorder: spot ? getComputedStyle(spot).borderTopWidth : null,
-        // ── R45-B：页面标题（让开工具条覆盖带）────────────────────────────
+        // ── R45-B：页面标题（**R45-E 起它是"占位"，不占流**）────────────────
         /** 标题文案 + 矩形。**文案为空的视图（cards）合法** —— 它不用标题。
          *  `archive` 下还要拿卡片**内部**渲染的标题做对账（两份真源，机器比）。 */
         pageTitle: (() => {
           const el = document.querySelector<HTMLElement>('[data-page-title]')
-          if (!el) return { text: null, rect: null }
+          if (!el) return { text: null, rect: null, inFlow: null }
           const r = el.getBoundingClientRect()
+          const cs = getComputedStyle(el)
           return {
             text: (el.textContent || '').trim(),
             rect: {
               x: Math.round(r.left), y: Math.round(r.top),
               w: Math.round(r.width), h: Math.round(r.height),
             },
+            /** R45-E：标题必须**不占流**（`position:absolute`）—— 用户口径是"标题**占位**"，
+             *  "占位"= 与工具条同栏、填掉那条空栏，**不是**自己再占一行把内容推下去。
+             *  ⚠️ 这条判据拦的正是 R45-B/D 那版的回流：那时 `flex:none` + `padding-top`
+             *  白吃掉 121px。 */
+            inFlow: cs.position === 'static' || cs.position === 'relative',
           }
         })(),
         /** 当前卡片**内部**渲染出来的标题（`archive` 才有）—— 与 `pageTitle.text`
@@ -533,19 +539,67 @@ function measure(tag: string) {
          *  但 `--toolbar-band` 是 `calc()` ⇒ 不能直接读，见上面的算法。 */
         toolbarGap: getComputedStyle(document.documentElement)
           .getPropertyValue('--toolbar-gap').trim() || null,
-        /** 页面标题的**文本顶**（面板内坐标）—— 判"内容离工具条多远"的直接量。
-         *  h2 的 rect 是**含 padding 的盒**（从面板顶开始），文本顶要用 `padding-top` 补出来；
-         *  ⚠️ 不能拿盒顶当文本顶 —— 那会让判据恒真（盒顶永远是 0）。 */
-        pageTitleTextTop: (() => {
-          const el = document.querySelector<HTMLElement>('[data-page-title]')
-          if (!el) return null
-          const r = el.getBoundingClientRect()
-          const pad = parseFloat(getComputedStyle(el).paddingTop) || 0
-          const barR = bar.getBoundingClientRect()
-          const ttop = parseFloat(
-            getComputedStyle(document.documentElement)
-              .getPropertyValue('--toolbar-top').trim() || '') || 0
-          return Math.round(r.top + pad - (barR.top - ttop))
+        /** **主体内容的顶**（面板内坐标）—— R45-E 起这是"内容离工具条多远"的直接量。
+         *
+         *  ⚠️ **R45-E 换了被测量，理由是"被测量的东西本身变了"**：
+         *   R45-B/D 时让开量写在**页面标题自己的 `padding-top`** 上 ⇒ 只能靠
+         *   "标题文本顶"间接推（旧字段 `pageTitleTextTop`，用 `padding-top` 从盒顶补出来）。
+         *   R45-E 把让开量收归 `.view-body::before`（一条占位带，滚动容器**之外**）⇒
+         *   现在能**直接量**"第一个在流内的内容块从哪儿开始"，不必再推。
+         *   这比旧写法硬：旧写法在标题缺失时（cards）量不到，而 cards 恰恰也要判。
+         *
+         *  取 `.view-body` 的**第一个在流内的元素子节点**（跳过 `.page-title` ——
+         *  R45-E 起它是 `position:absolute`，`getBoundingClientRect` 仍在工具栏那一行，
+         *  拿它会得到 6..52 那一带、判据恒绿）。 */
+        contentTopInPanel: (() => {
+          const body = document.querySelector<HTMLElement>('.view-body')
+          if (!body) return null
+          // ⚠️ **两个"尺子坑"，都在这里踩到了（实测数据在下面注释里）**：
+          //
+          // ① **面板原点不能用工具条反推**。原来写的是 `barR.top − --toolbar-top`，
+          //    但工具条**隐藏态**带着 `transform: translateY(-6px)`（显隐动画的 rest 态）
+          //    ⇒ `barR.top` 比它的布局位置高 6px ⇒ 面板原点算成 34（真值 40），
+          //    **整条"内容顶"读数系统性多 6px**（实测 109，真值 103 = 52 + 51）。
+          //    直接读 `.posts-panel` 自己的 rect —— 它就是面板原点，不必从别处推。
+          //
+          // ② **量之前要杀 `.view-body` 的入场动画**。`scene-in` 的 from 帧是
+          //    `translateY(8px)`，而虚拟时间下动画可能**停在起点**（实测 cards 帧读到
+          //    `matrix(1,0,0,1,0,8)`，其它帧是单位矩阵）⇒ 那一帧的内容顶凭空多 8px。
+          //    又是尺子问题，不是版式问题 —— 与 `.glow-spot`/`.view-btn` 杀过渡同一招。
+          const kill = document.createElement('style')
+          kill.textContent = '.view-body{animation:none !important}'
+          document.head.appendChild(kill)
+          try {
+            const kids = [...body.children].filter((n): n is HTMLElement => {
+              if (!(n instanceof HTMLElement)) return false
+              const p = getComputedStyle(n).position
+              return p !== 'absolute' && p !== 'fixed'
+            })
+            const first = kids[0]
+            if (!first) return null
+            const panel = document.querySelector<HTMLElement>('.posts-panel')
+            const panelTop = panel ? panel.getBoundingClientRect().top : 0
+            const bodyR = body.getBoundingClientRect()
+            return {
+              /** 面板内坐标（原点 = `.posts-panel` 自己的顶，见上面 ①） */
+              top: Math.round(first.getBoundingClientRect().top - panelTop),
+              /** 量到的是谁 —— 判据红的时候要一眼看出量错了对象 */
+              sel: (first.className || '').split(' ')[0] || first.tagName.toLowerCase(),
+              /** `.view-body` 自己的顶（面板内）—— 应当恒为 0 */
+              bodyTop: Math.round(bodyR.top - panelTop),
+              /** `::before` 的**实际**计算高。它是"让开量"的唯一承担者，
+               *  所以「留白 = top − band」对不上时，一眼就能看出是它不对还是别处多了。 */
+              beforeH: Math.round(parseFloat(getComputedStyle(body, '::before').height) || 0),
+              /** `.view-body` 的 padding/border（都会把首个子元素推下去） */
+              bodyPadTop: parseFloat(getComputedStyle(body).paddingTop) || 0,
+              bodyBorderTop: parseFloat(getComputedStyle(body).borderTopWidth) || 0,
+              bodyMarginTop: parseFloat(getComputedStyle(body).marginTop) || 0,
+              /** 首个内容块自己的 margin-top（相邻兄弟折叠不会发生：::before 也是 flex item） */
+              firstMarginTop: parseFloat(getComputedStyle(first).marginTop) || 0,
+            }
+          } finally {
+            kill.remove()
+          }
         })(),
         /** hero 主体（头像）的顶 —— R45 视觉评审补量。
          *  ⚠️ **为什么必须量它**：卡片页被工具条盖住的那一块是**头像**，而"会不会被盖"
@@ -791,12 +845,40 @@ function filterPopBox() {
   const w = panel.getBoundingClientRect()
   const panels = [...document.querySelectorAll('.drp-panel')].filter((n) => getComputedStyle(n).display !== 'none')
   const grid = document.querySelector('.drp-grid')
+  /** ⚠️ **栈的实测剖面**（R45-E 加）：`max-height` 是"弹窗上方有多少固定高度"的
+   *  手算值，而这个仓已经在同一个地方栽过两次（R45-B 加标题行、R45-E 挪标题）。
+   *  所以把"弹窗顶到底由谁堆出来"逐项量出来印出去 —— 下次再有人改版式，
+   *  照着这份剖面改公式，而不是照着脑子里的模型改。 */
+  const stack = [
+    '.view-body', '.header-actions', '.chips-bar', '.type-chips-row',
+    '.pfilter-wrap', '.post-filter-pop',
+  ].map((sel) => {
+    const el = document.querySelector<HTMLElement>(sel)
+    if (!el) return { sel, top: null, h: null }
+    const b = el.getBoundingClientRect()
+    return {
+      sel,
+      /** **面板内**坐标（同一坐标系才能逐项相加核对） */
+      top: Math.round(b.top - w.top),
+      h: Math.round(b.height),
+      /** 下内距/上内距：栈里最容易"看不见地"多出来的就是它们 */
+      padTop: Math.round(parseFloat(getComputedStyle(el).paddingTop) || 0),
+      marginTop: Math.round(parseFloat(getComputedStyle(el).marginTop) || 0),
+    }
+  })
   return {
     ok: true,
     pop: [Math.round(r.left), Math.round(r.top), Math.round(r.right), Math.round(r.bottom)],
     panel: [Math.round(w.left), Math.round(w.top), Math.round(w.right), Math.round(w.bottom)],
     /** 必须完整落在右栏可视区内（越界会被 .posts-panel 裁掉） */
     insidePanel: r.left >= w.left - 1 && r.right <= w.right + 1 && r.top >= w.top - 1 && r.bottom <= w.bottom + 1,
+    /** 弹窗自己：面板内顶 + 实高 + `max-height` 的计算值（判断"是内容撑的"还是"被上限卡的"） */
+    popTopInPanel: Math.round(r.top - w.top),
+    popH: Math.round(r.height),
+    popMaxH: getComputedStyle(pop).maxHeight,
+    popNaturalH: pop.scrollHeight,
+    panelH: Math.round(w.height),
+    stack,
     /** 窄窗口（≤1080）媒体查询会收成单月历，故按「可见面板」计数 */
     visibleMonthPanels: panels.length,
     perPanelDays: panels.map((p) => p.querySelectorAll('.drp-day').length),

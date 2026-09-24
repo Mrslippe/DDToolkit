@@ -776,10 +776,15 @@ return (
           <StateBlock kind="error" variant="alert" title="无法加载" text={error} />
         )}
 
-        {/* 页面标题（R45-B）：**工具条覆盖带之下**、面板左上角，把内容整体下移
-            ⇒ 工具条拉下来时不盖住太多。它**不随工具条显隐**（内容不是 chrome）。
-            ⚠️ 放在 `.view-body` 的 key 里 ⇒ 它随视图切换重挂，但**不进滚动区**
-            （常驻，不随内容滚走）—— 所以和 `.chips-bar` 同一层级。 */}
+        {/* 页面标题（R45-B 建立，**R45-E 降级为"占位"**，用户 2026-09-24）：
+            用户口径：「我的目的是让**工具条隐藏后顶上那一栏空出来的地方不至于太空**了
+            没东西可以看，所以放一个**标题占位**」。
+            ⇒ 它现在**与工具条同一栏**（`.page-title` 是 `position:absolute`，不占流），
+            **不再自己占一行**（R45-B/D 那版是 `flex:none` + `padding-top: band+gap`，
+            白吃掉 121px、把内容整体推下去）。
+            让开工具条那件事改由 `.view-body::before` 一处承担（见 posts.css）——
+            所以**内容的位置与这个标题无关**：标题在不在、文案多长，内容都不动。
+            ⚠️ 它**不随工具条显隐**（内容不是 chrome）；也正是"占位"的用意所在。 */}
         {vtuber && pageTitle && (
           <h2 className="page-title" data-page-title="">{pageTitle}</h2>
         )}

@@ -63,34 +63,38 @@
   gap: 8px;
 }
 
-/* ── 页面标题（R45-B，用户 2026-09-24）────────────────────────────────────
-   放在**面板左上角、工具条覆盖带之下**，让内容整体下移一段，工具条拉下来时
-   就不会盖住太多。三个视图各自的文案由 `PostsPage` 给（见 `.posts-panel` 的
-   `title` prop）：
-     · list    = **选中账号的昵称**（用户口径）
-     · archive = **当前卡片的标题**
-     · profile = 本轮不做（用户 2026-09-24：这轮不动 profile）
-
-   ⚠️ **它与工具条的关系是"让位"不是"参与"**：标题**不随工具条显隐**
-   （它是内容，不是 chrome）—— 工具条隐着的时候标题照常在那儿。这正是"占掉
-   一部分顶部间距"的实现方式：**静态地让开**，而不是等工具条出现再挤。
-   ⚠️ `padding-top: calc(var(--toolbar-band) + var(--toolbar-gap))` —— 让开量走令牌。
-   `--toolbar-band`(52) = 工具条覆盖的那条带子；`--toolbar-gap`(40) = **内容离它多远**，
-   按参考图量出的 7.0% 面板高定的（R45-D，用户口径：「面板主体内容距离上面工具条的距离」）。
-   两处一个来源，改条高或改间距都不会漏改。 */
+/* ── 页面标题（R45-B 建立，**R45-E 改为"占位"**）──────────────────────────
+   用户口径（2026-09-24）：「我的目的是让**工具条隐藏后顶上那一栏空出来的地方不至于太空**，
+   所以放一个标题占位」—— 标题在这里是**占位**，不是信息层。
+   位置：**绝对定位在左上角，垂直与工具条同轴**（`--toolbar-top` + `--toolbar-h`/2）。
+   ⚠️ **它不占流** —— 这是与 R45-B 那版的根本区别：那版让标题**独立占一行**
+   （`padding-top: band + gap` ⇒ 92px），把内容整体推下去 65px；
+   而参考图里标题是**与工具条同一栏**的 ⇒ 现在归位。
+   文案由 `PostsPage` 给：list = 选中账号昵称 / archive = 当前卡片标题 / cards 无。
+   ⚠️ 横向**必须**卡住"到工具条左缘还有余量"：工具条宽 176 且居中 ⇒
+   左缘恒在 `50% − 88px`。所以可用宽 = `50% − 88px`（条左缘）`− 16px`（本元素 left）
+   `− 12px`（安全距）⇒ `calc(50% - 116px)`。
+   **1100 档是最紧的一档**（面板仅 558）：可用 = 279 − 116 = **163px**，
+   右缘落在 179 < 条左缘 191 ✓ —— 少减这 28px 就会在窄档压上工具条。 */
 .page-title {
-  flex: none;
+  position: absolute;
+  /* 垂直与工具条**同轴**：条占 `--toolbar-top` .. `--toolbar-top + --toolbar-h`，
+     文本高 21.45 = 16.5 × 1.3，居中即上下各让 (46 − 21.45)/2。 */
+  top: calc(var(--toolbar-top) + (var(--toolbar-h) - 21.45px) / 2);
+  left: 16px;
+  z-index: 2;                       /* 在工具条(3)之下、内容之上 —— 它只是占位，不该压过控件 */
+  max-width: calc(50% - 116px);
   margin: 0;
-  padding: calc(var(--toolbar-band) + var(--toolbar-gap)) 16px 8px;
   /* 与卡片族标题同规格（`lc-title` / `fc-title` 都是这套），全仓一致 */
   font-size: 16.5px;
   font-weight: 600;
   line-height: 1.3;
   color: var(--c-text-main);
-  /* 长名字（账号昵称可以很长）—— 单行省略，不许把它撑成两行把内容又推下去 */
+  /* 长名字（账号昵称可以很长）—— 单行省略 */
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+  pointer-events: none;             /* 占位物不该吃指针 */
 }
 
 .bg-set {
@@ -176,6 +180,34 @@
   /* 兄弟高度正确分配：操作钮行(flex:none) + 滚动区(flex:1)，杜绝整体 100% 高度溢出裁底 */
   display: flex;
   flex-direction: column;
+}
+
+/* ── 顶部让开带：**内容从这里开始**（R45-E，2026-09-24，用户拍板方案 A）──────────
+   一条规则占住"工具条覆盖的那条带子 + 内容离它的间距"，于是：
+
+   · **工具条永远不可能盖住任何东西** —— 不是"各视图各自留够了"，而是
+     所有内容都在 `--toolbar-band + --toolbar-gap` 之下（结构性保证，不是巧合）；
+   · **四个视图同一个位置开始** —— 原来只有 cards（`.hero` 的上内距）与
+     list/archive（页面标题那一行）两处在留，profile 根本没有 ⇒ 换视图时首块
+     内容会跳。现在一处真源。
+
+   为什么用 `::before` 占位而不是给每个视图写上内距：**上内距写在滚动容器里会被滚走**
+   （`.hero` 原来就是），而占位条在滚动容器**之外** ⇒ 首块内容永远从这条线起，
+   滚下去之后由滚动容器自己的 `mask` 渐隐（见下方 `[data-scrolled]` 那条）。
+
+   ⚠️ **R45-E 与 R45-D 的区别**：R45-D 让**页面标题**独立占一行来实现让位
+   （`padding-top: band + gap`），把内容整体推下去 65px；用户要的是标题**占位**
+   ——「让工具条隐藏后顶上那一栏空出来的地方不至于太空了」——
+   占位物只需要**和工具条同一栏**，不必自占一行。所以让位归到本规则，
+   标题降级为纯装饰（见 `.page-title`，`position:absolute` 不占流）。
+
+   ⚠️ **它不随工具条显隐**：留白是内容版式的一部分（用户要的正是"那一栏空出来"），
+   工具条藏起来时间距照旧 —— 否则内容会在鼠标进出顶部时上下跳。 */
+.view-body::before {
+  content: '';
+  display: block;
+  flex: none;
+  height: calc(var(--toolbar-band) + var(--toolbar-gap));
 }
 
 .view-body:not(.scene-exit) {
@@ -465,7 +497,15 @@
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
-  padding: 12px 16px 0;
+  /* ⚠️ **R45-E 去掉了上内距 `12px`**（原来是 `padding: 12px 16px 0`）。
+     为什么：让开量现在归 `.view-body::before` 一处，而"内容顶"这个量
+     （探针的 `contentTopInPanel`、用户的合成图）说的都是**看得见的那一行**。
+     留着这 12px 就会让"量到的内容顶"与"眼睛看到的内容顶"差 12px ——
+     按合成图对齐时必然差一截（合成图量出工具条下缘→首行 ≈ 50px，
+     留着内距就得把 `--toolbar-gap` 调成 38 才能凑上，而那个数**不是**真源）。
+     去掉之后：内容顶 = 首行实体顶，一处一个数。
+     左右 16px 不变；行间距由 `gap: 8px` 管（换行时纵向也是 8）。 */
+  padding: 0 16px;
 }
 
 /* 账号切换器（多平台订阅：同一 V 的 bilibili/微博账号切换帖子目标） */
@@ -577,20 +617,19 @@
 
 
 /* Hero：主题展示栏（口播规格 1.2）：宽填充、纵向居中、间隔 10。
-   ⚠️ **R45 起 `padding-top` 走让开量**：卡片页**没有页面标题**（它的 hero 本身就是主体，
-   加标题反而挡头像），所以"让开按需浮出的工具条"只能靠 hero 自己的上内距。
-   演进：23px（原）→ **38px**（R45：实测头像顶在面板内 37、而覆盖带 52 ⇒ 会切掉 15px）
-   → **`--toolbar-band + --toolbar-gap` = 92px**（R45-D：用户要求"主体内容离工具条的距离"
-   按参考图对齐，参考量出 7.0% 面板高）。
-   ⚠️ 92px 在 581px 面板里是 16% —— 这是**用户明确要的**（「跟（卡片页也留 40px）」），
-   不是副作用。判据：`heroTop.topInPanel ≥ --toolbar-band`（探针量 `glow.heroTop`）。 */
+   ⚠️ **R45-E 起这里不再有 `padding-top`** —— 让开量归 `.view-body::before` 一处
+   （见那里）。演进留下的教训值得留着：这条上内距改过三次
+   （23px 原 → 38px R45 → `band + gap` R45-D），每次都是为了"躲开工具条"，
+   而**它是滚动容器内部的内距 ⇒ 会跟着内容一起滚走** —— 滚下去之后首块内容就贴到顶了。
+   放到滚动容器**之外**的占位条才真正"永远让开"。
+   ⚠️ 现在若在这里再写一次上内距，就是**双倍留白**（`::before` 已经给了 103px）。 */
 .hero {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 10px;
   width: 100%;
-  padding: calc(var(--toolbar-band) + var(--toolbar-gap)) 15px 0;
+  padding: 0 15px;
 }
 
 .hero-avatar {
@@ -958,23 +997,36 @@ img.hero-avatar {
 /* 宽度：两月历并排需要「右栏宽 ≥ 544」，故按窗口退让 `100vw − 574`
    （574 = 导航栏 50 + 侧栏 492 + 筛选条左右内距 32），保证弹窗永不被
    `.posts-panel` 的 overflow:hidden 裁掉左月历。
-   高度：弹窗顶端最坏落在 243px（顶栏 40 + hero/操作行 + 筛选条窄窗换行），
-   再留 9px 间距 → 可用高度 = 100vh − 252；**内容超限走内部覆盖式滚动**
-   （非原生滚动条），而不是被右栏裁掉底部「重置」。
-   两条不变量由 scripts/ui_probe.py 在真实浏览器里断言。 */
+   高度：见下面 `.post-filter-pop` 的 `max-height` —— **R45-E 起由组件实测**，
+   不再手算（手算的那个常数会随 `.header-actions` 换行而错）。
+   **内容超限走内部覆盖式滚动**（非原生滚动条），而不是被右栏裁掉底部「重置」。
+   两条不变量由 scripts/ui_probe.py 在真实浏览器里断言（`insidePanel`）。 */
 .post-filter-pop {
   position: absolute;
   right: 0;
-  top: calc(100% + 6px);
+  top: calc(100% + var(--pop-gap));
   z-index: 30;
   width: min(512px, calc(100vw - 574px));
-  /* ⚠️ R45-B/C/D：`max-height` 原来写死 `calc(100vh - 252px)` —— 那是"筛选行之上有多少
-     固定高度"的**手算值**。加了让开量之后它不再成立：弹窗顶出面板底、被 `.posts-panel`
-     的 `overflow:hidden` 裁掉（探针实测 `insidePanel=false`）。
-     改成**跟同一个来源走**：让开量 = `--toolbar-band + --toolbar-gap` + 标题行高与下内距。
-     这样以后动标题的让开量，弹窗会跟着走，不会再各写一处。
-     （`--title-block` 就是"标题那一块的总高" —— 见 `.page-title`。） */
-  max-height: calc(100vh - 252px - var(--toolbar-band) - var(--toolbar-gap) - 8px);
+  /* ── 两段距离的**真源**（组件读它们算可用高度，见 `PostFilterPop` 的 useLayoutEffect）
+     · `--pop-gap`    触发器下缘 → 弹窗顶
+     · `--pop-breath` 弹窗底 → 面板底
+     组件与样式表**不各写一份**：TS 侧用 `getPropertyValue` 读这两个名字。 */
+  --pop-gap: 6px;
+  --pop-breath: 8px;
+  /* ⚠️ R45-E：`max-height` **不再是手算的 `calc(100vh − …)`**。
+     那条路要减掉的东西是**数据相关**的、不是一个常数 ——
+     `.header-actions`（账号切换器行）**会因账号数换行**：8 个账号时是 2 行 68px、
+     2 个账号时是 1 行 30px；`.chips-bar` 的筛选行窄档同样会换行（66px vs 25px）。
+     探针实测（1100 档 + `--seed-accounts 8`）：弹窗顶落在面板内 **264px**，
+     而手算公式只减了 42+10+63 = 115px ⇒ 上限给到 349px，
+     **弹窗底部越出面板 25px、被 `.posts-panel` 的 `overflow:hidden` 裁掉**
+     （`insidePanel=false` ×2 帧）。⇒ **这个数没有"正确的常数"可写**，越往上加版式元素它越错。
+     真正的高度由组件**实测**「触发器下缘 → 面板下缘」后写内联 `max-height`
+     （换行 / 窄档 / 缩放全都自动跟上）。
+     下面这条只是**首帧兜底**（JS 未跑的那一瞬），故意取明显保守的值：
+     宁可首帧略矮一下，也不要在任何档位越界。 */
+  max-height: calc(100vh - var(--topbar-height) - var(--toolbar-band) - var(--toolbar-gap)
+                   - 220px);
   overflow: hidden;
   padding: 10px;
   background: #fff;
