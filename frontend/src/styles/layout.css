@@ -559,6 +559,23 @@ html.window-maximized body {
    无边框，所以这里不能有背景、不能有内距 —— 看得见的就是那颗胶囊自己。
    `user-select: none`：整个面都要能拖（拖动走**指针位移阈值**，见 StatusWidgetWindow ——
    不能用 `data-tauri-drag-region`，那会在 mousedown 就抢走点击，面板就点不开了）。 */
+/* 小窗的**窗口底必须全透明**（2026-09-24 真机反馈加）。
+   主题令牌 `--c-bg*` 是给应用壳用的，小窗里不该有它们 —— 只要有一颗背景色漏出来，
+   200×40 的窗口就会显示成"一块粉/白方块"。
+
+   ⚠️ 必须盖住**两处**，少一处都不行：
+   ① `index.html` 内联样式里的 `html{background:#ffa2b4}` —— 那是"首绘即主色、消除启动中间态"
+      的刻意设计，主窗口靠揭幕完成后 `main.tsx` 把它切回透明；**小窗没有揭幕** ⇒ 会一直是粉的。
+   ② 主题令牌可能带给根元素的底色。
+   用属性选择器钉在 `<html>` 上（`main.tsx` 分流处设的 `data-widget-window`）。 */
+html[data-widget-window],
+html[data-widget-window] body,
+html[data-widget-window] #root {
+  background: transparent !important;
+  margin: 0;
+  overflow: hidden;
+}
+
 .widget-shell {
   width: 100vw;
   height: 100vh;

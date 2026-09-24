@@ -233,6 +233,23 @@ function Root() {
  */
 const isWidgetWindow = new URLSearchParams(window.location.search).has('widget')
 
+// ⚠️ **小窗必须自己摘掉 `index.html` 里那层静态启动幕**（2026-09-24 真机反馈的真凶）。
+//
+// 那层幕是 `#boot-splash`：`position:fixed; inset:0; z-index:150` + **不透明粉底**
+// （`background:#ffa2b4`）。它存在的理由是"HTML 解析即绘制，消除启动白闪"，
+// 而**唯一**摘掉它的地方是 `Root` 的 effect（下面那个 `document.getElementById('boot-splash')`）
+// —— 小窗跑的是 `StatusWidgetWindow`，**根本不走 `Root`** ⇒ 幕永远摘不掉，
+// 把 200×40 的胶囊整个盖住。用户看到的就是"一块粉底、看不到胶囊"。
+//
+// 为什么放在**这里**（模块作用域）而不是 `StatusWidgetWindow` 的 effect 里：
+// 这是**静态 HTML 节点**，不等 React。早一帧摘掉就少一帧"先粉后黑"的闪。
+// 主窗口那条路径**不受影响** —— React 版 `<Splash>` 在 `Root` 首帧就位、像素级一致，
+// 所以这里只摘小窗的（主窗口仍然等 `Root` 挂载后再摘，保持原来的无白闪修复）。
+if (isWidgetWindow) {
+  document.getElementById('boot-splash')?.remove()
+  document.documentElement.dataset.widgetWindow = '1'
+}
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     {isWidgetWindow ? <StatusWidgetWindow /> : <Root />}

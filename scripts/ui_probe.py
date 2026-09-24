@@ -3030,19 +3030,40 @@ def main() -> int:
                   f"density={ww.get('density')!r} 尺寸={ww.get('size')} "
                   f"居中误差={ww.get('centerErr')}")
             print(f"  渲染：#root 子元素={ww.get('rootChildren')} "
-                  f"文本={ww.get('rootText')!r}（胶囊没渲染时这里会是空的）")
+                  f"文本={ww.get('rootText')!r} ｜ 启动幕残留={ww.get('bootSplash')}")
+            print(f"  窗口底：html={ww.get('htmlBg')!r} body={ww.get('bodyBg')!r} "
+                  f"标记={ww.get('hasWidgetMarker')}（底必须全透明）")
             print(f"  分流：顶栏={ww.get('hasTopbar')} 侧栏={ww.get('hasSidebar')}（都应为 False）")
             if not ww:
                 failures.append(f"@{w} status-widget: 小窗视图没量到（探针未跑完？）")
             else:
                 if not ww.get("hasShell"):
                     failures.append(f"@{w} status-widget: 小窗里没有 `.widget-shell`")
-                # ⚠️ **渲染抛错**的判据：2026-09-24 真机反馈的症状正是"只有一块透明背景、
-                # 胶囊没了" —— 也就是 React 在这里抛异常、整棵树没渲染出来。
+                # ⚠️ **2026-09-24 真机反馈的真凶**：`index.html` 的静态启动幕 `#boot-splash`
+                # （`z-index:150` + 不透明粉底）**唯一**被摘掉的地方在 `Root` 的 effect 里，
+                # 而小窗不走 `Root` ⇒ 它永远盖在胶囊上。用户看到的就是"一块粉底、没有胶囊"。
+                if ww.get("bootSplash"):
+                    failures.append(f"@{w} status-widget: 小窗里 `#boot-splash` **还在** —— "
+                                    f"静态启动幕（z-index:150 + 不透明粉底）会盖住胶囊；"
+                                    f"小窗不走 `Root`，必须在 `main.tsx` 的分流处自己摘")
+                # ⚠️ 小窗的窗口底必须**全透明**：露出任何一颗不透明背景，
+                # 200×40 的窗口就变成"一块方块"（那正是用户截图里看到的东西）。
+                for key, label in (("htmlBg", "<html>"), ("bodyBg", "<body>")):
+                    val = ww.get(key) or ""
+                    if "rgba(0, 0, 0, 0)" not in val and val != "transparent":
+                        failures.append(f"@{w} status-widget: 小窗的 {label} 背景是 {val!r}，"
+                                        f"应全透明 —— 不透明背景会让 200×40 的窗口"
+                                        f"显示成一块方块")
+                if not ww.get("hasWidgetMarker"):
+                    failures.append(f"@{w} status-widget: 小窗没挂 "
+                                    f"`<html data-widget-window=\"1\">` —— "
+                                    f"透明底色那条规则就不会生效")
+                # ⚠️ **渲染抛错**的判据：症状是"只有一块背景、胶囊没了" ——
+                # 也就是 React 在这里抛异常、整棵树没渲染出来。
                 if not ww.get("rootChildren"):
                     failures.append(f"@{w} status-widget: `#root` 里一个元素都没有 —— "
                                     f"小窗的 React 渲染抛错了（真机上就表现为"
-                                    f"「只有一块透明背景、没有胶囊」）")
+                                    f"「只有一块背景、没有胶囊」）")
                 if ww.get("density") != "widget":
                     failures.append(f"@{w} status-widget: 小窗里的胶囊 density 是 "
                                     f"{ww.get('density')!r}，应为 'widget'")

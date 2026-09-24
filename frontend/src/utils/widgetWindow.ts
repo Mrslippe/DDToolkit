@@ -111,6 +111,31 @@ export const isDesktopShell = (): boolean =>
   typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
 /**
+ * 主窗口**现在是不是显示着**。
+ *
+ * 用途见 `AppSettingsDialog.pickWidgetEnabled`：切小窗开关时，只有"主窗口本来就在屏幕上"
+ * 才需要 `resurfaceMainWindow()`。已经隐藏到托盘的情况下重拉一次会**把用户刚唤回的窗口
+ * 又藏一下**（虽然紧跟 show，但会闪一下 + 丢焦点）。
+ *
+ * 拿不到窗口（非桌面端 / 权限不足）返回 `true`：那是"**不要**去动它"的安全侧
+ * —— 少重拉一次最多是状态没摆正，多拉一次会打扰用户。
+ */
+export async function isMainWindowVisible(): Promise<boolean> {
+  if (!isDesktopShell()) return true
+  try {
+    const { getAllWindows } = await import('@tauri-apps/api/window')
+    const wins = await getAllWindows()
+    for (const w of wins) {
+      if (w.label !== 'main') continue
+      return await w.isVisible()
+    }
+    return true
+  } catch {
+    return true
+  }
+}
+
+/**
  * 重新拉一次主窗口的**可见性**，并**报告结果**。
  *
  * ## 背景（2026-09-24 真机反馈）

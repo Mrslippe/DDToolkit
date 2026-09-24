@@ -39,7 +39,12 @@ import {
 } from '../utils/settingsDraft'
 import OverlayScroll from './OverlayScroll'
 import { hideWidgetWindow, showWidgetWindow } from '../utils/shellBridge'
-import { WIDGET_POS_KEY, parseWidgetPos, resurfaceMainWindow } from '../utils/widgetWindow'
+import {
+  WIDGET_POS_KEY,
+  isMainWindowVisible,
+  parseWidgetPos,
+  resurfaceMainWindow,
+} from '../utils/widgetWindow'
 import './../styles/posts.css'
 
 interface Props {
@@ -377,6 +382,14 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
    */
   const pickWidgetEnabled = async (next: string) => {
     setThemeError(null)
+    // ⚠️ 先记住"切之前主窗口是不是活着的"（2026-09-24 真机反馈加）。
+    //
+    // 为什么不能无条件 `resurfaceMainWindow()`：那个函数是 `hide + show + setFocus`，
+    // 而**用户完全可能是在"已隐藏到托盘"的状态下**（托盘菜单唤回的窗口上点设置），
+    // 无条件重拉会**把用户刚唤回来的窗口又藏一下**（虽然紧跟 show，但会闪一下 + 丢焦点）。
+    // 所以只在"本来就在屏幕上"的时候才重拉 —— 那正是"权限缺失期间 hide 成功、show 失败"
+    // 留下的错误状态会发生的情形。
+    const wasVisible = await isMainWindowVisible()
     try {
       await prefs.setPref('widget_enabled', next)
       if (next === 'on') {
@@ -386,13 +399,12 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
       } else {
         await hideWidgetWindow()
       }
-      // ⚠️ **紧接着重拉一次主窗口的可见性**（2026-09-24 真机反馈加）：
-      //    权限缺失期间主窗口可能已经被 `hide()` 成功、而 `show()` 失败 ⇒ 停在"已隐藏"，
-      //    看起来跟没修一样。重拉一次才把状态摆正。理由详见 `widgetWindow.resurfaceMainWindow`。
-      //    失败要**说出来** —— 否则用户只会觉得"点了没反应"。
-      const ok = await resurfaceMainWindow()
-      if (!ok) {
-        setThemeError('小窗开关已生效，但主窗口没有恢复显示 —— 点一下托盘图标即可唤回')
+      // 紧接着把主窗口的可见性摆正；失败要**说出来**（否则用户只会觉得"点了没反应"）
+      if (wasVisible || next === 'on') {
+        const ok = await resurfaceMainWindow()
+        if (!ok) {
+          setThemeError('小窗开关已生效，但主窗口没有恢复显示 —— 点一下托盘图标即可唤回')
+        }
       }
     } catch (e) {
       setThemeError(e instanceof Error ? e.message : String(e))

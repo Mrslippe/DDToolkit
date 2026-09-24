@@ -1862,6 +1862,16 @@ export async function runUiProbe(): Promise<void> {
     const root = document.getElementById('root')
     result.rootChildren = root ? root.children.length : 0
     result.rootText = (root?.textContent || '').trim().slice(0, 40)
+    // ⚠️ **静态启动幕必须被摘掉**（2026-09-24 真机反馈的真凶）：
+    // `index.html` 那层 `#boot-splash` 是 `z-index:150` + **不透明粉底**，
+    // 而摘掉它的唯一地方原本在 `Root` 的 effect 里 —— 小窗不走 `Root` ⇒ 它永远盖在胶囊上。
+    // 用户看到的就是"一块粉底、没有胶囊"。这条判据就是为了让那个 bug 复现时**立刻变红**。
+    result.bootSplash = !!document.getElementById('boot-splash')
+    // ⚠️ 小窗的**窗口底必须全透明**：只要有一颗不透明背景漏出来，
+    // 200×40 的窗口就会显示成"一块粉/白方块"。这里量的正是"用户看到的那个方块"的底色。
+    result.bodyBg = getComputedStyle(document.body).backgroundColor
+    result.htmlBg = getComputedStyle(document.documentElement).backgroundColor
+    result.hasWidgetMarker = document.documentElement.dataset.widgetWindow === '1'
     result.density = island?.getAttribute('data-density') ?? null
     // 分流没生效的证据：主窗口那套东西还在
     result.hasTopbar = !!document.querySelector('.topbar')
