@@ -23,6 +23,14 @@ const WIDGET_CLOSED_EVENT: &str = "widget:closed";
 /// 任何重入（StrictMode / 快速双击 / 并发）都会建出第二个窗口，而窗口一旦建出来
 /// 就不会自己消失。所以这里挡住。
 static CREATING_WIDGET: AtomicBool = AtomicBool::new(false);
+
+/// 小窗 URL 探针**只跑一次**（2026-09-25 加，用户反馈"日志里一堆报错"）。
+///
+/// 那个探针的使命是查明"页面到底有没有执行"（devlog/178~180）—— **已经完成了**。
+/// 留着每次开窗都跑，只会在 WebView 未就绪时刷出 `failed to receive message from webview`，
+/// 而那**不是故障、是正常时序**，长得却跟真错误一样。
+static WIDGET_PROBED: AtomicBool = AtomicBool::new(false);
+
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
@@ -838,27 +846,39 @@ async fn show_widget_window(app: tauri::AppHandle, x: Option<i32>, y: Option<i32
     // 而用户每次看到的东西**一模一样** —— 直到确认"连自检条都没画出来"才明白：
     // **那个窗口里根本没有渲染我们的页面**，修饰一行都没机会执行。
     //
-    // 所以这一轮不再猜，先把事实钉死 —— **双向探针**，各自独立：
-    //   ① **Rust 侧读 URL**（1.5s / 5s 各一次）：不依赖页面，哪怕空白也读得到。
-    //      URL 不对（没带 `?widget=1` / join 拼歪 / 走了资源协议）⇒ 查 Rust 侧。
+    // ⚠️ **这一轮不再猜，先把事实钉死 —— 双向探针**（2026-09-24 第四轮加的）：
+    //   ① **Rust 侧读 URL**：不依赖页面，哪怕空白也读得到。
+    //      URL 不对（join 拼歪 / 走了资源协议）⇒ 查 Rust 侧。
     //   ② **页面侧回传**（`widget_diag` 命令）：页面真的跑起来了才会发。
-    //      **如果这条日志从不出现，就说明页面根本没执行** —— 前三轮的修饰全是白改。
-    {
+    //      **这条日志不出现 = 页面没执行**。
+    //
+    // ⚠️⚠️ **2026-09-25 收敛**（用户反馈"日志里一堆报错"）：
+    // 原来无条件在 1.5s / 5s 各读一次 URL。实测在**窗口刚建好、WebView 还没就绪**时
+    // `url()` 会返回 `runtime error: failed to receive message from webview` ——
+    // **那是正常时序，不是故障**，但它在日志里长得跟真错误一模一样，
+    // 攒了 19 条噪音（用户看到的就是这个）。
+    //
+    // 现在改成：
+    //   · **只在第一次创建窗口时探一次**（`WIDGET_PROBED` 一次性开关）——
+    //     它的使命（查明"页面到底有没有执行"）在 devlog/180 已经完成，不该每次开窗都跑；
+    //   · **失败只记一次、且降级成明确的"时序说明"**，不再逐条刷 `读不到`；
+    //   · 页面侧那条 `[widget] 页面自检` **照旧每次都发** —— 那才是现在真正有用的那半条
+    //     （它同时带 URL 查询串、胶囊尺寸、条目数）。
+    if !WIDGET_PROBED.swap(true, Ordering::SeqCst) {
         let probe = w.clone();
         let app2 = app.clone();
         std::thread::spawn(move || {
-            for wait in [1500u64, 5000u64] {
-                std::thread::sleep(std::time::Duration::from_millis(wait));
-                match probe.url() {
-                    Ok(u) => widget_log(&app2, &format!("小窗 @{wait}ms URL = {u}")),
-                    Err(e) => widget_log(&app2, &format!("小窗 @{wait}ms URL 读不到：{e}")),
-                }
+            std::thread::sleep(std::time::Duration::from_millis(3000));
+            match probe.url() {
+                Ok(u) => widget_log(&app2, &format!("小窗 URL = {u}")),
+                // 读不到**不是错误**：WebView 尚未就绪时就是这样（见上）。
+                // 页面侧的自检日志才是权威。
+                Err(_) => widget_log(
+                    &app2,
+                    "小窗 URL 一时读不到（WebView 未就绪，正常时序）—— \
+                     以页面侧 `[widget] 页面自检` 那行为准",
+                ),
             }
-            widget_log(
-                &app2,
-                "小窗探针结束 —— 若上面没有 `[widget] 页面自检` 那行，\
-                 说明页面根本没执行（前几轮改的都是修饰，一行都没跑到）",
-            );
         });
     }
     // 同步钉一遍（理由见文档注释）：这些都是同步调用，`build()` 之后一定生效

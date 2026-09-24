@@ -9,6 +9,7 @@ import {
   saveWidgetPos,
   widgetCollapseGeom,
   widgetExpandGeom,
+  widgetPanelMaxHeight,
 } from '../utils/widgetWindow'
 
 /**
@@ -219,31 +220,43 @@ export default function StatusWidgetWindow() {
     return () => { alive = false; window.clearInterval(t) }
   }, [])
 
-  // ⑦ 面板的**高度上限**：按屏幕高算好写进 CSS 变量（R38 批 5d；批 5e 挪成独立 effect）。
+  // ⑦ 面板的**高度上限**：按**屏幕**高算好写进 CSS 变量（R38 批 5d；批 5e 挪成独立 effect）。
   //
   //    ⚠️ **为什么不能用 `60vh`**：小窗的高度是**跟着面板长的**
   //    （窗口 = 40 + 6 + 面板高，见 `utils/widgetWindow.ts`）——
   //    于是 `vh` 与面板高度**互为因果**：折叠态窗口 40px ⇒ `60vh = 24px`
   //    ⇒ 面板被压到 24px ⇒ 窗口只长到 70px ⇒ `60vh` 仍然很小
-  //    ⇒ 面板永远长不开（死锁在一块 24px 的板子上）。
-  //    更糟的是 `calc(60vh - 74px)`（滚动体那条）会变成**负数**，滚动体高度归零
-  //    ⇒ 条目一条都看不见、直接压到页脚上（**用户 2026-09-24 截图就是这个**）。
+  //    ⇒ 面板永远长不开。更糟的是 `calc(60vh - 74px)`（滚动体那条）会变成**负数**，
+  //    滚动体归零、条目压到页脚上（用户 2026-09-24 第二次截图）。
   //
-  //    ⚠️⚠️ **必须独立于 Tauri 那段**（批 5e 修的自己的错）：原来它写在"展开就 resize"
-  //    那个 effect 里，而那条在**非桌面端第一行就 return**（`'__TAURI_INTERNALS__' in window`
-  //    为假）⇒ 探针里这个变量**永远设不上** ⇒ 那条判据只能靠真机发现。
-  //    **"只在真机上生效的修复"等于没法验证的修复** —— 所以它现在单独一条 effect，
-  //    任何环境都设（`window.innerHeight` 在真窗口里就是窗口高，探针里是视口高，
-  //    两者都远大于面板高，语义一致）。
+  //    ⚠️⚠️ **必须用 `screen.availHeight`，不能用 `window.innerHeight`**（批 5f 修自己的错）。
+  //
+  //    我第一版写的是 `innerHeight - 120` —— 那是**同一个循环的另一件外衣**：
+  //    `innerHeight` 就是**小窗自己的高度**，而小窗高度**由面板高度决定** ⇒
+  //    还是"面板高 → 窗口高 → 面板高"的自指。
+  //    实测这个循环**收敛在 120px 的下限**上（窗口 40 ⇒ cap=120 ⇒ 面板 120 ⇒ 窗口 166
+  //    ⇒ `innerHeight=166` ⇒ cap 仍 = max(120, 46) = **120**），于是面板被永久压在 120 高
+  //    —— **用户看到的"被挤压"就是这个**。
+  //
+  //    正确参照系是**屏幕**（与窗口自己多高无关）：`screen.availHeight` 还顺带扣掉了任务栏。
+  //    这个值在展开前后**不变** ⇒ 不构成循环。
+  //
+  //    （`window.screen` 在探针/浏览器里也有，取值是宿主屏幕，语义一致。）
   useEffect(() => {
     const set = () => {
-      // 留 120px 余量给胶囊、间隙与任务栏；下限 120px 防"屏幕特别小"时算出 0/负数
-      const h = Math.max(120, window.innerHeight - 120)
-      document.documentElement.style.setProperty('--widget-panel-max-h', `${h}px`)
+      const avail = globalThis.screen?.availHeight ?? 0
+      document.documentElement.style.setProperty(
+        '--widget-panel-max-h', `${widgetPanelMaxHeight(avail)}px`)
     }
     set()
-    window.addEventListener('resize', set)
-    return () => window.removeEventListener('resize', set)
+    // 换显示器 / 改分辨率时 `screen.availHeight` 会变，但**不会**触发 window resize ——
+    // 用 `matchMedia` 盯分辨率变化（比轮询便宜，且只在真正变化时醒）。
+    let mq: MediaQueryList | null = null
+    try {
+      mq = window.matchMedia(`(height: ${globalThis.screen.height}px)`)
+      mq.addEventListener('change', set)
+    } catch { /* 个别环境没有 matchMedia：那就只在挂载时设一次 */ }
+    return () => mq?.removeEventListener('change', set)
   }, [])
 
   // ⑧ 形态梯度：**展开面板时把窗口长大，收起时缩回去**（R38 批 5d）。

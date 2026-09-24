@@ -15,6 +15,7 @@ import {
   parseWidgetPos,
   widgetCollapseGeom,
   widgetExpandGeom,
+  widgetPanelMaxHeight,
 } from './widgetWindow'
 
 const SCREEN = { width: 1920, height: 1080 }
@@ -160,6 +161,46 @@ describe('widgetExpandGeom：展开要把窗口长够，且放不下时向上翻
   it('贴着屏幕左上角 ⇒ 横向被夹回，不越出左缘', () => {
     const g = widgetExpandGeom({ x: 0, y: 0, w: 200, h: 40 }, 300, SCREEN)
     expect(g.x).toBeGreaterThanOrEqual(WIDGET_MIN_VISIBLE - WIDGET_PANEL_W)
+  })
+})
+
+/**
+ * ⚠️ 这组用例守的是**自指循环**（2026-09-25 批 5f 实测）：
+ * 面板高 → 决定窗口高（窗口 = 40 + 6 + 面板高）→ 若上限又按**窗口**高算，循环闭合，
+ * 面板被永久压在某个值上（实测卡在 120 的下限，用户看到的就是"被挤压"）。
+ */
+describe('widgetPanelMaxHeight：面板上限必须按**屏幕**算', () => {
+  it('1080p（可用 1040）⇒ 920，远大于内容高（不会压住面板）', () => {
+    expect(widgetPanelMaxHeight(1040)).toBe(920)
+  })
+
+  it('结果**只与屏幕有关** —— 同一输入反复调用恒定（不随窗口/面板变化）', () => {
+    expect([widgetPanelMaxHeight(1040), widgetPanelMaxHeight(1040),
+            widgetPanelMaxHeight(1040)]).toEqual([920, 920, 920])
+  })
+
+  it('**关键回归**：上限必须 >120 那个曾把面板压住的下限', () => {
+    // 旧写法（按窗口高算）收敛在 120 ⇒ 这里必须明显更大，否则面板还是长不开
+    expect(widgetPanelMaxHeight(1040)).toBeGreaterThan(300)
+  })
+
+  it('小屏（可用 600）⇒ 480，仍然装得下', () => {
+    expect(widgetPanelMaxHeight(600)).toBe(480)
+  })
+
+  it('极小的屏幕也不会算出 0/负数（那会让面板整块消失）', () => {
+    expect(widgetPanelMaxHeight(100)).toBe(160)
+    expect(widgetPanelMaxHeight(0)).toBe(160)
+  })
+
+  it.each([
+    ['NaN（量不到屏幕）', Number.NaN],
+    ['负数', -500],
+    ['Infinity', Number.POSITIVE_INFINITY],
+  ])('%s ⇒ 退回下限而不是荒谬值', (_name, avail) => {
+    const v = widgetPanelMaxHeight(avail as number)
+    expect(Number.isFinite(v)).toBe(true)
+    expect(v).toBeGreaterThan(0)
   })
 })
 

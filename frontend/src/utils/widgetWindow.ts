@@ -238,6 +238,40 @@ export function saveWidgetPos(pos: WidgetPos, prevRaw: string | null): void {
   }
 }
 
+/**
+ * 面板的高度上限（px）—— **必须按屏幕算，不能按窗口算**。
+ *
+ * ## 这一条是"自指循环"的第三次现身（2026-09-25 批 5f）
+ *
+ * 面板高度 → 决定小窗窗口高度（窗口 = 40 + 6 + 面板高）→ 而窗口高度又**不能**反过来
+ * 决定面板高度。这个循环换过三件外衣，每一件都看着很合理：
+ *
+ * | 写法 | 循环怎么闭合的 | 实测后果 |
+ * |---|---|---|
+ * | `60vh` | `vh` = 窗口高的 1% | 折叠态窗口 40px ⇒ `60vh=24px` ⇒ 面板压成一条 |
+ * | `innerHeight - 120` | `innerHeight` **就是小窗自己的高** | 收敛在 120px 下限，**永远长不开** |
+ * | **`availHeight - 120`（本函数）** | 屏幕高**与窗口无关** ⇒ 不闭合 | ✅ |
+ *
+ * ⚠️ **判据（可复用）**：给小窗里任何"按高度算"的值选参照系时，先问一句
+ * **"这个值会不会因为我算出来的结果而变？"** —— 会，就不能用。
+ *
+ * ## 参数
+ *
+ * - `availHeight`：`screen.availHeight`（**已扣掉任务栏**，比 `screen.height` 更准）
+ * - `margin`：留给胶囊(40) + 间隙(6) + 屏幕上下边距的余量
+ * - `floor`：下限，防止"屏幕特别小"时算出 0 或负数（那会让面板整块消失）
+ */
+export function widgetPanelMaxHeight(
+  availHeight: number,
+  margin = 120,
+  floor = 160,
+): number {
+  // 取不到屏幕高（`availHeight` 为 0 / NaN / 负数）时**退回下限**而不是算出个荒谬值：
+  // 宁可面板矮一点（还能滚动），也不要它整块不见。
+  if (!Number.isFinite(availHeight) || availHeight <= 0) return floor
+  return Math.max(floor, Math.round(availHeight - margin))
+}
+
 // ── 两扇窗之间的通道（R38 批 5b）──────────────────────────────────────
 
 /** 主窗口 → 小窗：当前条目 */

@@ -100,7 +100,20 @@ export default function StatusIsland({ notices, onAction, now, density = 'bar' }
    *  ⚠️ **向上翻（R38 批 5d）**：小窗默认落在**右下角**，1080p 上向下展开需要
    *  `968 + 40 + 6 + 面板高 ≥ 1214` ⇒ **永远放不下**。窗口那一侧会把窗口向上长
    *  （`widgetExpandGeom` 的 `flipUp`），面板在窗口里的位置也随之要在**胶囊上方**。
-   *  两处必须一致：窗口向上长、面板却还画在胶囊下方 ⇒ 面板落在窗口外（就是那个 bug 的翻版）。 */
+   *  两处必须一致：窗口向上长、面板却还画在胶囊下方 ⇒ 面板落在窗口外（就是那个 bug 的翻版）。
+   *
+   *  ⚠️⚠️ **小窗宿主下翻不翻，由窗口那边说了算**（R38 批 5f 修）。
+   *
+   *  原来这里自己按 `window.innerHeight` 判"下方放不下就翻上去"。在**顶栏宿主**里这是对的
+   *  （`innerHeight` 就是应用窗口高，是个稳定的参照系）；但在**小窗宿主**里它是**同一个自指循环**：
+   *  小窗的高度**由面板高度决定**（窗口 = 40 + 6 + 面板高）⇒ 展开前后 `innerHeight` 从 40
+   *  变到面板高，判据跟着乱跳（实测：折叠态窗口 40px ⇒ `below(166) > 40-4` ⇒ 判"翻上去"
+   *  ⇒ `top = 0 - 6 - 120 = -126` ⇒ **面板跑到窗口上方去了**）。
+   *
+   *  而"翻不翻"真正的决定因素在**屏幕**（贴下沿才翻），那只有窗口那边知道
+   *  （`widgetExpandGeom` 用 `currentMonitor()` 算）。所以小窗宿主下**直接跟随**
+   *  窗口写下的 `data-flip`（那是几何的唯一事实源），本组件不再自行判断 ——
+   *  §8「宿主无关」没有被破坏：它只是读一个**可选**的外部信号，读不到就退回原来的算法。 */
   const place = () => {
     const r = anchorRef.current?.getBoundingClientRect()
     if (!r) return
@@ -109,9 +122,14 @@ export default function StatusIsland({ notices, onAction, now, density = 'bar' }
     const left = Math.min(Math.max(8, centered), Math.max(8, window.innerWidth - width - 8))
     // 面板的**实际高度**：`open` 之后才量得到；量不到时退回 0（下一帧 `place()` 会再来）
     const h = panelRef.current?.offsetHeight ?? 0
-    // 下方放得下吗？判据与窗口侧同一套（留 8px 视口边）
-    const below = r.bottom + 6 + h
-    const flip = h > 0 && below > window.innerHeight - 4
+    // widget 宿主：**跟随窗口那边的决定**（它是屏幕级的几何真源）
+    const shellFlip = density === 'widget'
+      ? document.querySelector<HTMLElement>('.widget-shell')?.dataset.flip
+      : undefined
+    const flip = shellFlip
+      ? shellFlip === 'up'
+      // 顶栏宿主：原来的判据（这里的 `innerHeight` 是稳定的应用窗口高，不构成循环）
+      : h > 0 && r.bottom + 6 + h > window.innerHeight - 4
     setPos(flip
       ? { left, top: Math.max(4, r.top - 6 - h), width }
       : { left, top: r.bottom + 6, width })
@@ -171,8 +189,21 @@ export default function StatusIsland({ notices, onAction, now, density = 'bar' }
     document.addEventListener('keydown', onKey)
     document.addEventListener('pointerdown', onOutside, true)
     window.addEventListener('resize', onResize)
+    // ⚠️ **`data-flip` 变了要重排**（R38 批 5f）：小窗宿主下这个属性由**窗口那边**在
+    //    resize 之后写下（`widgetExpandGeom` 算完才知道翻不翻），而那时本组件的
+    //    `place()` 已经跑过了 ⇒ 属性变了没人理，面板就停在旧方向上。
+    //    用 MutationObserver 盯它，而不是让窗口去调组件（组件不该知道窗口的存在 —— §8）。
+    let mo: MutationObserver | null = null
+    if (density === 'widget') {
+      const shell = document.querySelector<HTMLElement>('.widget-shell')
+      if (shell) {
+        mo = new MutationObserver(() => place())
+        mo.observe(shell, { attributes: true, attributeFilter: ['data-flip'] })
+      }
+    }
     return () => {
       cancelAnimationFrame(raf)
+      mo?.disconnect()
       document.removeEventListener('keydown', onKey)
       document.removeEventListener('pointerdown', onOutside, true)
       window.removeEventListener('resize', onResize)
