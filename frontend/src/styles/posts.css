@@ -4145,7 +4145,25 @@ img.hero-avatar {
     badge 复用统计胶囊配色类（lc-stat-pill--{key}）+ 紧凑尺寸覆写。
     （礼物行 lc-pop-gift 已于 2026-09-07 随礼物展示一并退役） */
 
-.lc-pop {
+/* ⚠️ **选择器是 `.os-root.lc-pop`（两个类），不是 `.lc-pop`** —— 这是**必须的**，
+   不是随手写的（2026-09-24，用户报"hover 日期格没有悬浮窗了"）：
+
+   本元素是 `<OverlayScroll className="lc-pop">`，实渲染成 `class="os-root lc-pop"`，
+   而共享组件样式里有 `.os-root { position: relative }`（滚动条的拇指要绝对定位）。
+   两个选择器**都是单个类、优先级相同** ⇒ 谁赢**只取决于 CSS 的加载顺序**：
+     · 从前 `.os-root` 住在 `layout.css` 里，它先于 `posts.css` 加载 ⇒ 本规则赢 ✓；
+     · R38 批 5e 把 `.os-root` 搬进了 `status-island.css`（小窗独立入口也要用），
+       而 `App.tsx` 里 `PostsPage`（带 posts.css）在**第 7 行**、
+       `status-island.css` 在**第 12 行** ⇒ 后者后来居上 ⇒ **本规则输**。
+   后果（探针实测）：`.lc-pop` 的计算 `position` 变成 `relative`，浮层掉进 `body` 的
+   普通流里（`left/top` 只当相对偏移用）⇒ 落在 `y=928`（视口只有 621 高）**完全看不见**。
+
+   ⇒ 用两个类把优先级抬到 (0,2,0)，**与加载顺序无关**。
+   ⚠️ 反过来说：**凡是 `.os-root` 的消费者想改 `position`，都必须用两个类。**
+   单类靠顺序赢的写法会被任何一次"样式搬家 / import 顺序调整"打碎 —— 而它
+   平时**碰巧是对的**，所以极难发现（正是本仓反复记的那类"两个主人"）。
+   护栏：`python scripts/ui_probe.py --cell-pop` 判"机制 + 效果"两条。 */
+.os-root.lc-pop {
   position: fixed;
   z-index: 56;
   width: 300px;

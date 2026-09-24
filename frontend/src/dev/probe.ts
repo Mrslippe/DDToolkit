@@ -2119,6 +2119,88 @@ export async function runUiProbe(): Promise<void> {
     return
   }
 
+  // 日历格子的 **hover 悬浮窗**（`?probe=cell-pop`，R45-E4）。
+  //
+  // 为什么要单独一段：用户报「hover 日期格没有悬浮窗了」，而**这条路上一条判据都没有** ——
+  // 探针的 `--archive` 模式只**点**格子（开详情弹窗），从不 hover。
+  // 于是"悬浮窗坏了"可以一路全绿地发生。这与 R45 那次"判据全绿、截图里头像被切"
+  // 是同一类：**功能有两条入口（点开 / 悬停），只盖了一条。**
+  //
+  // 量什么（缺一不可，否则分不清"没触发"和"触发了但看不见"）：
+  //   ① `.lc-pop` 在不在（React 状态与 `openCellPop` 的门槛）；
+  //   ② 它在视口的哪（`position:fixed` + `left/top` 是**算**出来的，可能越界）；
+  //   ③ 它可见吗（opacity/display/visibility/zIndex）。
+  if (mode === 'cell-pop') {
+    const result: Record<string, unknown> = {}
+    clickView('数据视图')
+    await sleep(2200)
+    // 挑一个**有场次**的格子（`openCellPop` 的门槛是 `state === 'live' || 有预约`，
+    //  所以拿空格子去 hover 会得到"本来就不该有浮层"的假失败 —— 必须挑对对象）
+    const cells = [...document.querySelectorAll<HTMLElement>('.lc-cell')]
+    const target = cells.find((c) => c.querySelector('.lc-cell-body'))
+      ?? cells.find((c) => c.getAttribute('data-resv-count'))
+    result.cellCount = cells.length
+    result.targetFound = !!target
+    result.targetSel = target
+      ? `${target.className.replace(/\s+/g, '.')} 文本=${(target.textContent || '').trim().slice(0, 24)}`
+      : null
+    if (target) {
+      // ⚠️ 派**真事件**：React 的 `onMouseEnter` 由根节点的 `mouseover/mouseout` 委托合成，
+      //    所以必须 `bubbles: true` 且带上 `relatedTarget`（否则合成器认不出"进入"）。
+      const r = target.getBoundingClientRect()
+      const cx = r.left + r.width / 2
+      const cy = r.top + r.height / 2
+      for (const type of ['pointerover', 'mouseover', 'pointermove', 'mousemove']) {
+        target.dispatchEvent(new MouseEvent(type, {
+          bubbles: true, cancelable: true, clientX: cx, clientY: cy,
+          relatedTarget: document.body,
+        }))
+      }
+      await sleep(500)
+      const pop = document.querySelector<HTMLElement>('.lc-pop')
+      result.popFound = !!pop
+      if (pop) {
+        // ⚠️ 量之前**杀掉入场动画**（本仓老招）：`.lc-pop` 有 `lc-dlg-pop 0.12s`，
+        //    而虚拟时间下动画不推进 ⇒ `getComputedStyle().opacity` 恒报 from 帧的 **0**，
+        //    看起来像"浮层是透明的"。那是尺子问题，不是产品问题。
+        const kill = document.createElement('style')
+        kill.textContent = '.lc-pop{animation:none !important}'
+        document.head.appendChild(kill)
+        const pr = pop.getBoundingClientRect()
+        const cs = getComputedStyle(pop)
+        result.popRect = {
+          x: Math.round(pr.left), y: Math.round(pr.top),
+          w: Math.round(pr.width), h: Math.round(pr.height),
+        }
+        result.popStyle = {
+          position: cs.position,
+          zIndex: cs.zIndex,
+          display: cs.display,
+          visibility: cs.visibility,
+          opacity: cs.opacity,
+        }
+        result.popParent = pop.parentElement?.tagName.toLowerCase() ?? null
+        result.popInViewport =
+          pr.left >= 0 && pr.top >= 0 &&
+          pr.right <= window.innerWidth && pr.bottom <= window.innerHeight
+        result.popHasText = (pop.textContent || '').trim().length > 0
+        // 浮层是否真的能被指针碰到（elementFromPoint 命中的是它 / 它的子节点）
+        const hit = document.elementFromPoint(
+          Math.min(Math.max(pr.left + 10, 1), window.innerWidth - 1),
+          Math.min(Math.max(pr.top + 10, 1), window.innerHeight - 1),
+        )
+        result.popHitTop = !!hit && (pop === hit || pop.contains(hit))
+        kill.remove()
+      }
+    }
+    const pre = document.createElement('pre')
+    pre.id = 'ui-probe'
+    pre.textContent = JSON.stringify({ mode: 'cell-pop', views: [], degraded, cellPop: result })
+    document.body.appendChild(pre)
+    document.title = 'UI_PROBE_DONE'
+    return
+  }
+
   // 桌面状态控件**小窗视图**（`widget.html?probe=status-widget-window`，R38 批 5b）：
   // 配合 `ui_probe.py --status-widget` 的第二段。
   //

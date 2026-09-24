@@ -826,7 +826,7 @@ density / 折叠尺寸 `[200,40]` / 面板宽 280 / `backdrop-filter` 含 `blur(
 | └ 数值 | `.pill-value` | **26px/600 白**，**右对齐**（`.stat-pill justify-content:flex-end`，右 padding 12px），数字 ≤4 位（`formatCount` 收紧）+ **`text-shadow 0 1px 2px rgba(0,0,0,.35)`** 保图像底可读 |
 | 饰条 | `.hero-divider` | 394×24 设计稿 SVG || ~~企划行~~ | ~~`.faction-badge`（内 `.pill-logo`）~~ | **P8-2 已删除**（card 视图不再展示企划/公会；企划编辑迁往 P8-B 的「档案设置」窗口）。`.pill-logo` 随之删除 |
 | 背景工具钮 | `.bg-tools > .bg-set`（`Settings2`） | **P8-B 起语义变更**：不再是「换背景图」直传 file input，而是打开**档案设置窗口** `<VtuberSettingsDialog>`（背景/名称/企划/设定/头像/签名/账号管理）。**R45：显隐并入工具条**（原来自带一套 `bgToolsVisible` + 900ms 定时器，与工具条并存会**错拍** —— "工具条出现了、设置钮还没出现"）；位置 `right:12px; top:14px` 与 `.glow-bar` **同轴**（条 top 6 + 高 46 ⇒ 中线 29；浮片 30 高 ⇒ top 14） |
-| 档案设置窗口 | `.vd-settings*` | **P8-B 新增**：radix Dialog（`max-w-lg` + `max-height:78vh`）＝ 头部驻留（`.vd-settings-head`）＋ `OverlayScroll`（`.vd-settings-scroll`）＋ 底部操作条（`.vd-settings-foot`）；分区 `.vd-section`（背景/头像/签名/已订阅账号 —— 原「基本资料」2026-09-13 按用户口径整节删除，devlog/067 §四）、字段 `.vd-field`、账号行 `.vd-acc`（行内两个钮：`.vd-acc-hist` 开账号信息历史、`.vd-acc-del` 删账号）。**全实时生效**（无保存钮：blur/点击即写库）；~~锁定胶囊 `.vd-lock.on`~~ **2026-09-13 退役**（devlog/074：`accounts.locked_fields` 已删，改为「允许覆盖 + 记曾用值」）。~~曾用值内联展示（`.vd-former` / `.vd-acc-former`）~~ **同日撤出**（devlog/075），**R9 改为独立弹窗**（2026-09-13，devlog/080 —— 见下方「账号信息历史弹窗」行）。⚠️ **不要给 `.vd-settings` 加 `position:relative`**：本文件在 Tailwind 之后加载，会盖掉内容体上的 `.fixed`，弹窗会从视口居中变成文档流定位（实测飘到视口下方 620px）。规格遵循 UI-MAP §C6 |
+| 档案设置窗口 | `.vd-settings*` | **P8-B 新增**：radix Dialog（`max-w-lg` + `max-height:78vh`）＝ 头部驻留（`.vd-settings-head`）＋ `OverlayScroll`（`.vd-settings-scroll`）＋ 底部操作条（`.vd-settings-foot`）；分区 `.vd-section`（背景/头像/签名/已订阅账号 —— 原「基本资料」2026-09-13 按用户口径整节删除，devlog/067 §四）、字段 `.vd-field`、账号行 `.vd-acc`（行内两个钮：`.vd-acc-hist` 开账号信息历史、`.vd-acc-del` 删账号）。**全实时生效**（无保存钮：blur/点击即写库）；~~锁定胶囊 `.vd-lock.on`~~ **2026-09-13 退役**（devlog/074：`accounts.locked_fields` 已删，改为「允许覆盖 + 记曾用值」）。~~曾用值内联展示（`.vd-former` / `.vd-acc-former`）~~ **同日撤出**（devlog/075），**R9 改为独立弹窗**（2026-09-13，devlog/080 —— 见下方「账号信息历史弹窗」行）。⚠️ **不要给 `.vd-settings` 加 `position:relative`**：本文件在 Tailwind 之后加载，会盖掉内容体上的 `.fixed`，弹窗会从视口居中变成文档流定位（实测飘到视口下方 620px）。规格遵循 UI-MAP §C6。⚠️ **这与 F2 末条是同一类事故**（"后加载的样式表压掉前者的 `position`"），全仓已发生两次（此处飘 620px、`lc-pop` 落在视口外）—— **别再用"靠加载顺序赢"的写法** |
 | └ 账号信息历史弹窗 | `.ah-dialog` / `.ah-*` | **R9 新增**（2026-09-13，devlog/080）：点已订阅账号行右侧的**历史钮**（`.vd-acc-hist`，`History` 图标）打开。「曾用名/曾用签名」只列**该账号**的平台侧旧值（`.ah-former`，`.ah-former-val` 胶囊 + 日期 `<em>`；其余账号的条数用一句 `.ah-note` 说明）；「账号信息快照」时间倒序列 `.ah-snap`（时间 / 粉丝数 / 直播状态 / 开播标题 / 来源标注，上限 60 条）。空态文案明确写"只有**抓取到**变化才会留下旧值（手改不入账）"。刻意独立成窗 —— 曾用值混在编辑区里正是用户否掉的形态；数据源 `GET /vtuber/{id}/former-values` + `GET /account/{id}/stat-snapshots` |
 | └ 签名 + 平台签名下拉 | `.vd-sign-field` / `.vd-sign-toggle` / `.vd-sign-panel` | 2026-09-13 三次迭代（devlog/072→073→**075**）：输入条右端**内嵌 chevron**（`.vd-sign-toggle`，22px 热区、右内距 30px、展开旋转 180°）→ 点开候选面板。面板是**弹窗内容体的直接子元素**（在 `.vd-settings-scroll` 之外）+ `position:absolute`，坐标由 JS 按输入条矩形算（相对内容体 padding box：同宽、贴下方 6px、放不下则向上翻转、跟随滚动/resize/**锚点矩形变化**重定位）—— 浮在「已订阅账号」之上、**不推挤**、也不会被滚动体的 `overflow:hidden` 裁掉；收起态不存在面板。⚠️ **别改回 portal+`position:fixed`**：radix 模态弹窗会给 `document.body` 打 `pointer-events:none`（只把自己的内容体改回 auto），portal 出去的面板继承 `none` ⇒ **hover 与点击全部失灵且不报错**（2026-09-13 用户实测"点不动"）；改成 `pointer-events:auto` 又会被 radix 当成"点了外面"，**点一行就把整个弹窗关掉**；portal 进内容体则因内容体带 `translate-x/y-[-50%]`（包含块）让 `fixed` 坐标全错。候选行 `.vd-sign-opt`：**单行** = 签名文字 `.vd-sign-text`（弹性、`min-width:0`、横向可滚、滚动条隐藏）+ 右端固定平台名 `.vd-sign-plat`（主账号挂 `<em>主账号</em>`、当前项粉底白字）。文字过长时在平台名之前**渐隐**（**只在真的溢出时**挂 `.ovf` 的 `mask-image`）。交互（用户定）：**只留 hover 自动滚一次**到结尾、移出回起点；再点 chevron 收起（`mousedown` 的"点外部"判定把输入条也算内部）；`↑/↓/Enter/Esc` 键盘口径见组件注释。几何、结构与**可点性**不变量由 `ui_probe.py --settings` 断言（**29 项**，含命中测试 `panelHit`/`rowHit`、"点一行不会关弹窗"`pickKeepsDialog`，以及 R9 的历史弹窗四项）。**语义（A3，devlog/074）**：下拉里点某个平台 = 把卡片签名**来源**改成那个账号（写 `sign_source_account_id` 并**清掉 `sign_override`**），**不改任何 `accounts.sign`**；输入框打字 = 写 `sign_override`（覆盖优先于来源），清空输入框 = 撤销覆盖回到跟随来源；来源账号被删 → 回落主账号。有效值解析与卡片同口径（`utils/signSource.ts::resolveSign`） |
 
@@ -1240,7 +1240,7 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 | 层 | 实现 | 适用范围 |
 |---|---|---|
 | **全局原生兜底** | `::-webkit-scrollbar`（layout.css 顶部）：槽 **12px**、thumb `border:4px transparent` + `background-clip:content-box`（视觉 4px）、常态 `--c-border`、**指针压在滑块上**收窄到 2px（视觉 8px）+ `--c-primary`、轨道/角透明 | 任何**未接入 OverlayScroll 的残留原生滚动**（如有则应视为待迁移项） |
-| **覆盖式滚动条（标准主形态）** | `<OverlayScroll>` 组件（components/OverlayScroll.tsx + layout.css `.os-*`） | 全部主滚动容器（见 F3 清单） |
+| **覆盖式滚动条（标准主形态）** | `<OverlayScroll>` 组件（components/OverlayScroll.tsx + **`status-island.css` `.os-*`**；R38 批 5e 从 `layout.css` 搬来） | 全部主滚动容器（见 F3 清单）。⚠️ 搬家改变了**加载顺序** ⇒ 见 F2 末条 |
 
 > ⚠️ **禁则**：`scrollbar-width` / `scrollbar-color` 标准属性会在 Chromium 里令 `::-webkit-scrollbar` 全部失效（回退系统默认带箭头滚动条）——全项目已无此属性（`.os-scroll` 与 `.sidebar`/`.lc-stats` 的 `scrollbar-width:none` 是**隐藏**用，配 webkit display:none 双保险，属有意为之）。
 
@@ -1255,6 +1255,7 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 - 状态同步 `sync()`（只改位置/尺寸/display，不碰显隐）：scroll（rAF）/ ResizeObserver（滚动体 + **首个子元素**——scrollHeight 增长不触发自身 RO）/ **400ms 轮询兜底**（异步内容长高）；
 - 布局要求：若用「根百分高度 + 滚动体内部滚动」，父级必须是 flex column 或明确高度，否则滚动失效（`.lc-dlg`/`.archive-view` 均按此约定）；
 - 调用面：`className`（根）/ `style` / `role` / `aria-modal` / `scrollRef`（内部滚动体 ref，**须为可写 `{current: HTMLDivElement|null}`**——React19 类型下 `useRef<HTMLDivElement>(null)` 的 RefObject 是只读 readonly）/ `onScroll`。
+- ⚠️ **消费者想覆盖基类设过的属性（`position`/`display`/`overflow`/`flex-direction`）必须用两个类**（`.os-root.lc-pop`，见 **F3** 的 `.lc-pop` 行）：基类 `.os-root` 是**单类**选择器，与消费者的单类规则**优先级相同** ⇒ 胜负只由**样式表加载顺序**决定，而 `.os-*` 现住 `status-island.css`（**R38 批 5e 从 `layout.css` 搬来**，`App.tsx` 里在 `posts.css` 之后加载）⇒ 搬完之后**后加载者胜**。历史事故：`.lc-pop { position: fixed }` 被 `.os-root { position: relative }` 压掉，hover 浮窗掉进 `body` 文档流、落在视口外**完全不显示**（devlog/186 §八）。**判据**：`python scripts/ui_probe.py --cell-pop`（既判计算 `position` 是 `fixed`，也判矩形在视口内且命中测试命中自己）。
 
 ### F3. 现役滚动容器清单
 
@@ -1265,7 +1266,7 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 | 档案视图 `.board-view` | ✅ OverlayScroll | R37-P1 起与 archive 同构（视图级滚动） |
 | 档案卡/账号卡内 `.archive-section-scroll` | ✅ OverlayScroll | 负 margin 由滚动体承担（贴卡片缘） |
 | 详情弹窗 `.lc-dlg` | ✅ OverlayScroll | 弹窗滚动 |
-| 场次浮层 `.lc-pop` | ✅ OverlayScroll | 浮层滚动（max-height 430） |
+| 场次浮层 `.lc-pop` | ✅ OverlayScroll | 浮层滚动（max-height 430）。⚠️ 选择器必须是 **`.os-root.lc-pop`（两个类）**：`position:fixed` 要压过基类的 `position:relative`，而两者同为单类同优先级 ⇒ 单类写法靠加载顺序赢，会被任何一次样式搬家打碎（2026-09-24 实际发生过，devlog/186 §八）。护栏 `ui_probe --cell-pop` |
 | 帖子详情窗口 `.post-detail-scroll` | ✅ OverlayScroll | **2026-09-07 补漏（二级界面审查 C11）**：根 max-h 90vh、滚动体 padding 20px |
 | 侧栏 `.sidebar-list` | ✅ OverlayScroll | **2026-09-07 迁移完成**（旧 `.sidebar-sb` 5px 蓝灰自绘条已删） |
 | `.type-chips`（横向溢出） | 🔶 原生隐藏 | `scrollbar-width:none` + webkit display:none（不占布局高度，纯滚轮横滚） |

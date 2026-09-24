@@ -417,6 +417,9 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
             "reservations": data.get("reservations"),
             "statusIsland": data.get("statusIsland"),
             "toolbar": data.get("toolbar"),
+            # R45-E4：日历格子 hover 悬浮窗那一段（`?probe=cell-pop`）——
+            # ⚠️ 白名单不登记=静默丢掉，页面明明写了脚本侧只拿到 None（本文件已踩过一次）
+            "cellPop": data.get("cellPop"),
             "statusWidgetWindow": data.get("statusWidgetWindow"),
             "appSettings": data.get("appSettings"),
             "filterPill": data.get("filterPill"),
@@ -1790,6 +1793,15 @@ def main() -> int:
              "后呼出 / 移出 + grace 收回 / Tab 聚焦由 `:focus-within` 显形（拦「聚焦到看不见的"
              "控件」）/ 呼出前后内容区高度不变（overlay 不占布局）。"
              "静态几何与「不与内容控件相交」由默认三档的 glow 段覆盖。",
+    )
+    ap.add_argument(
+        "--cell-pop",
+        action="store_true",
+        help="只跑一档宽度：**日历格子的 hover 悬浮窗**（R45-E4）—— 数据视图里挑一个"
+             "「有场次或预约」的格子派真鼠标事件，判：浮层出现 / 有文案 / 落在视口内 / "
+             "左上角命中的是它自己（没被别的东西盖住）。"
+             "⚠️ 加它是因为用户报「hover 没有悬浮窗了」时，这条路上**一条判据都没有** —— "
+             "`--archive` 只点格子开详情弹窗，从不 hover（功能两条入口只盖了一条）。",
     )
     ap.add_argument(
         "--status-island",
@@ -3340,6 +3352,64 @@ def main() -> int:
                                     f"—— 工具条还占着布局")
                 if not failures:
                     print("  [ok] 工具条：rest 全隐 / 进热区呼出 / 移出收回 / 聚焦显形 / 不挤动内容")
+            for b in failures:
+                print("   -", b)
+            return 1 if failures else 0
+
+        if args.cell_pop:
+            # 日历格子 **hover 悬浮窗**（R45-E4）。
+            # 起因：用户报「hover 日期格没有悬浮窗了」—— 而**这条路上一条判据都没有**
+            # （`--archive` 模式只**点**格子开详情弹窗，从不 hover）。
+            # 与 R45 那次"判据全绿、截图里头像被切"同类：**功能有两条入口，只盖了一条**。
+            w = widths[0]
+            url = f"http://localhost:{vite_port}{route}?probe=cell-pop"
+            print(f"[probe] cell-pop @{w} → {url}")
+            res = _run_probe(edge, url, w, args.height, WORK, "cell-pop")
+            cp = ((res or {}).get("cellPop") or {})
+            if res and not cp:
+                print(f"  [!] 探针 mode={res.get('mode')!r} 键={sorted(res.keys())}"
+                      f"（新字段需要在 _run_probe 的白名单里登记）")
+            print(f"  格子数={cp.get('cellCount')} 目标={cp.get('targetSel')!r}")
+            print(f"  浮层={cp.get('popFound')} 矩形={cp.get('popRect')} "
+                  f"视口内={cp.get('popInViewport')} 命中={cp.get('popHitTop')} "
+                  f"父={cp.get('popParent')}")
+            print(f"  浮层样式={cp.get('popStyle')}")
+            if not cp:
+                failures.append(f"@{w} cell-pop: 没量到悬浮窗段（探针未跑完？）")
+            elif not cp.get("targetFound"):
+                failures.append(f"@{w} cell-pop: 日历里找不到「有场次或预约」的格子 —— "
+                                f"判据会空转（`openCellPop` 对空格子本来就不开浮层）")
+            elif not cp.get("popFound"):
+                failures.append(f"@{w} cell-pop: hover 有场次的格子后**没有出现 `.lc-pop`** —— "
+                                f"悬浮窗坏了（用户 2026-09-24 报的就是这条）")
+            else:
+                if not cp.get("popHasText"):
+                    failures.append(f"@{w} cell-pop: 浮层是空的（没有文案）")
+                # ① **机制**：`.lc-pop` 必须是 `position: fixed`。
+                #    ⚠️ 这条是 2026-09-24 那次真事故的根因 —— 共享组件样式
+                #    `.os-root{position:relative}` 与 `.lc-pop{position:fixed}` 都是单类、
+                #    优先级相同 ⇒ **加载顺序决定胜负**。`.os-root` 被搬进
+                #    `status-island.css` 之后它后来居上，浮层变成 `relative`、
+                #    掉进 body 普通流（实测 y=937，视口只有 621）⇒ 完全看不见。
+                #    判据要**同时**盯机制与效果：只判"在不在视口内"也能红，
+                #    但红的时候读不出**为什么**（这正是"尺子要能解释失败"）。
+                pos = (cp.get("popStyle") or {}).get("position")
+                if pos != "fixed":
+                    failures.append(
+                        f"@{w} cell-pop: `.lc-pop` 的计算 `position` 是 {pos!r}，应为 `fixed` "
+                        f"—— 说明它被 `.os-root{{position:relative}}` 盖掉了（两个单类选择器"
+                        f"优先级相同 ⇒ 由**加载顺序**决定，而 `status-island.css` 现在"
+                        f"晚于 `posts.css` 加载）。修法：本规则用 **`.os-root.lc-pop`** 两个类"
+                    )
+                if not cp.get("popInViewport"):
+                    failures.append(f"@{w} cell-pop: 浮层越出视口 {cp.get('popRect')} —— "
+                                    f"位置由 `popStyle` 用 vw/vh 算，越界说明算式或视口取值错了")
+                if not cp.get("popHitTop"):
+                    failures.append(f"@{w} cell-pop: 浮层左上角命中的不是它自己 —— "
+                                    f"被别的东西盖住了（`z-index` 不够 / 有更高层的浮层）")
+                if not failures:
+                    print("  [ok] 悬浮窗：hover 有场次的格子 ⇒ 出现 / 有文案 / fixed / "
+                          "在视口内 / 不被盖")
             for b in failures:
                 print("   -", b)
             return 1 if failures else 0

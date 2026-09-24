@@ -781,6 +781,49 @@ R45-E 把它拆成逐项相加（`42 + 10 + 63 + 6 + 8`）—— **看着更严�
 > ⚠️ **副作用漏了不会红**：没有测试、没有类型错误、探针也不查（它只看界面）。
 > 唯一能兜住的是**看日志** —— 所以"用户说日志里有报错"永远值得当成正经线索查到底。
 
+### 6.11 ⚠️ 优先级**相同**的两条规则，谁赢只看**文件加载顺序**（2026-09-24 加，devlog/186）
+
+`.os-root { position: relative }`（在 `status-island.css`）与 `.lc-pop { position: fixed }`
+（在 `posts.css`）**都是单个类** ⇒ 优先级都是 (0,1,0)。同优先级下 CSS 不比较"谁更具体"，
+**只看谁在后面**。
+
+真正的坑不是"这条规则写错了"，而是：**它平时碰巧是对的。**
+
+| | `.os-root` 住哪 | import 顺序 | 谁赢 |
+|---|---|---|---|
+| 从前 | `layout.css` | `layout.css` → `posts.css` | `.lc-pop` ✓ |
+| R38 批 5e 之后 | `status-island.css`（小窗独立入口也要用） | `PostsPage`（`App.tsx` 第 7 行）→ `status-island.css`（第 12 行） | **`.os-root`** ✗ |
+
+批 5e 是一次**纯粹的"文件整理"**，没人会认为整理文件会改变行为 —— 这就是它的全部杀伤力。
+
+**症状**：hover 直播日历日期格，浮窗**完全不出现**（探针实测计算 `position` 是 `relative`，
+浮层留在 `body` 的普通流里，落在视口 `y≈930`，而视口只有 621 高）。
+
+**为什么极难查**：
+
+- 浮层是 `createPortal` 到 `document.body` 的 ⇒ 它**在视觉上"没有祖先"**，
+  "某个祖先的样式压住了它"这条直觉根本想不到；
+- "改 `position` 的后果"长得**像布局数学问题**（`left/top` 算错）⇒
+  第一嫌疑永远落在 `left/top` 上，而那部分**一直是对的**；
+- 它**不会红**：没有测试、类型也查不出（`position` 是合法计算值）。
+
+**规矩**：
+
+1. **共享组件的基类不允许靠"顺序"输。** 消费者要改 `position` / `display` 这类
+   **基类自己也会设的**属性时，**用两个类**（`.os-root.lc-pop`，抬到 (0,2,0)），
+   把结果钉在**与加载顺序无关**的地方。单类靠顺序赢的写法，
+   会被任何一次搬家或 import 调整打碎。
+2. **搬家样式 = 改级联**，不是整理文件。挪一条规则到另一个样式表（哪怕只是调 import 顺序）时
+   问一句：**「有没有同优先级、本来靠先后决出胜负的选择器？」** —— 见 §6.1 的第三次。
+3. 探针要**判两条**：计算 `position` 是否真是 `fixed`（**机制**）＋ 矩形是否落在视口内
+   且命中测试命中自己（**效果**）。只判效果的话，"浮窗被算到屏幕外"和"浮窗根本没渲染"
+   永远分不开（本批正是靠"机制"那条一眼定位的）。
+
+> **补充**：红线**不是**本批引入的 —— 是 R38 批 5e 那次"样式搬家"埋的。
+> **先确认"是不是我改的"，再去修**，比先怀疑自己省时间得多。
+> 查法要**只读**（`git log -S` / 看这条规则住在哪个文件 + `App.tsx` 的 import 顺序），
+> 别用会动工作区的命令去回答只读问题（见 §7.2）。
+
 ---
 
 ## 七、并行开发：**本仓不采用**（2026-09-24 定）＋ 三条通用教训
@@ -854,6 +897,41 @@ Caused by: glob pattern binaries/backend/**/* path not found or didn't match any
 > 这条原本是评估 worktree 时撞上的，但它跟 worktree 无关：
 > `git clone` 到新机器、`git clean -xfd`、CI 冷构建都会命中同一个坑，
 > 而现有文档只在 §二 / §三 零散提过 `build_backend.py`，没说过"不跑它构建会失败"。
+
+### 7.3 ⚠️ 门禁**不能并发跑**：`dev_check.py` 里本身就带 pytest（2026-09-24 加，devlog/186）
+
+**这不是"两个会话"的问题 —— 一个会话里把两条门禁并行发起就会撞。**
+本仓有两个用例文件用的是**磁盘上的固定路径库**：
+
+```python
+# tests/test_vtuber_api.py:9      ← 日志里"test_vtuber_api.py"整片红的就是它
+test_engine = create_engine("sqlite:///./test_vtuber.db", ...)
+# tests/test_profile_cards.py:29
+test_engine = create_engine("sqlite:///./test_profile_cards.db", ...)
+```
+
+它们被 **`create_all` / `drop_all` 反复重建** ⇒ 两个 pytest 进程同时跑，
+一个在 `drop` 另一个正在 `insert` ⇒ `sqlite3.OperationalError: no such table: live_sessions`。
+
+**实测（本批踩的）**：我并发起了 `python -m pytest -q` 与 `python scripts/dev_check.py`
+（后者第 1 步就是 pytest），得到：
+
+| 命令（两条**同时**发起） | 结果 |
+|---|---|
+| `python -m pytest -q` | 4 failed, 582 passed |
+| `python scripts/dev_check.py`（第 1 步也是 pytest） | 6 failed, 580 passed |
+| **事后串行重跑 `pytest -q`** | **586 passed** ✓ |
+
+**两次的失败清单还不一样**（只重叠 2 条）—— **"集合每次都在变"就是并发污染的特征**，
+不是产品 bug。
+
+**规矩**：
+
+1. **门禁串行跑。** 尤其 `dev_check.py` 已包含 pytest / eslint / vitest，别再另起一个 pytest。
+2. 看到 `test_vtuber_api.py` 成片红、且**报的是库表不存在**，先问"是不是有第二个 pytest 在跑"，
+   再怀疑自己的改动。
+3. 想省时间就把**不共用资源的**那条并行（如 `tsc` / `lint` 与探针），**共用测试库/端口的必须排队**。
+   探针（`ui_probe.py`）会自己起后端 + Vite，同理**不要两个探针同时跑**。
 
 
 
