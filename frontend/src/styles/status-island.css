@@ -16,6 +16,79 @@
   box-sizing: border-box;
 }
 
+/* ── 覆盖式滚动条（OverlayScroll 组件）─────────────────────────────────
+   ⚠️ **2026-09-24（R38 批 5e）从 `layout.css` 搬过来的**，不是新写的。
+
+   为什么必须在这一份里：状态岛面板的条目列表用 `OverlayScroll`，而
+   **小窗的独立入口（`widgetMain.tsx`）只引 `tokens.css` + 本文件** —— 不加载 `layout.css`。
+   留那份里 = 小窗里 `.os-root` / `.os-scroll` **一条样式都没有**：面板拿不到
+   `display:flex` + `overflow:hidden`，滚动体也拿不到 `flex:1 1 auto; min-height:0`
+   ⇒ 条目与页脚**互相叠在一起**（用户 2026-09-24 截图实测）。
+
+   **判据不是"它是不是滚条"，而是"用到它的入口有几个"** —— 共用组件的样式必须放共用文件。
+   搬家方向是单向的（`layout.css` → 本文件），反之不行（小窗不能引 `layout.css`）。
+
+   视觉与全局标准一致：透明轨 + 常态细灰 `--c-border` + hover 粉 `--c-primary` + 圆角胶囊。
+   拇指贴边留白 4px、常态宽 4px；**指针压在拇指上或拖拽中**才变粉并加粗至 6px（中心对齐）；
+   滚轮滚动时保持浅灰（2026-09-09 用户修订）。拖拽：显示态（`.os-show`）才启用
+   `pointer-events`，未显示不拦截指针；拖拽结束四重兜底重排隐藏（见 `OverlayScroll.tsx`）。 */
+.os-root {
+  position: relative;
+  overflow: hidden;
+  /* 经典 modal 滚动模式：flex column + 滚动体 flex:1;min-height:0 ——
+     max-height 容器（弹窗等 auto 高度根）也能正确产生内部滚动
+     （height:100% 在 auto 父级下失效，曾致弹窗加载后滚不动，2026-09-07） */
+  display: flex;
+  flex-direction: column;
+}
+
+.os-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: none;        /* 标准属性配合 webkit display:none 双保险 */
+  -ms-overflow-style: none;
+}
+
+.os-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.os-thumb {
+  position: absolute;
+  right: 4px;
+  top: 0;
+  width: 4px;
+  min-height: 28px;
+  border-radius: 999px;
+  background: var(--c-border);
+  opacity: 0;
+  pointer-events: none;      /* 未显示不拦截指针（对内容零打扰） */
+  touch-action: none;
+  transition: opacity 0.25s ease, width 0.15s ease, background-color 0.15s ease,
+    right 0.15s ease;
+  display: none;
+}
+
+.os-thumb.os-show {
+  opacity: 1;
+  pointer-events: auto;      /* 显示态可拖拽（grab 光标） */
+  cursor: grab;
+}
+
+.os-thumb.os-show:active {
+  cursor: grabbing;
+}
+
+/* 粉只属于「指针」：压在拇指上（:hover）或拖拽中（.os-drag）才变粉加粗，
+   视觉 6px、水平中心保持贴右 3px 中轴。滚动时保持浅灰。 */
+.os-thumb.os-show:hover,
+.os-thumb.os-show.os-drag {
+  right: 3px;
+  width: 6px;
+  background: var(--c-primary);
+}
+
 /* ── 状态岛（胶囊 + 面板）─────────────────────────────────────────────
    R38 批 5b 之后**从 `layout.css` 抽出来**：小窗（`widget.html`）与主窗口共用这一份，
    而不是让小窗也加载整个 1494 行的 `layout.css`。
@@ -289,8 +362,15 @@ html[data-widget-window] #root {
   color: var(--c-text-sub);
 }
 
+/* 滚动体：**头部 + 页脚之外的部分**由它承担（74px ≈ head 34 + foot 40）。
+   ⚠️ **不能用 `calc(60vh - 74px)`**（R38 批 5e 修，与上一条同源）：
+   小窗窗口高度**跟着面板长** ⇒ `vh` 会与面板高度互为因果 ——
+   40px 窗口下 `calc(60vh - 74px)` = **负数** ⇒ 滚动体高度算成 0 或非法值，
+   而条目仍按内容撑开 ⇒ 直接压到页脚上（用户 2026-09-24 截图就是这个）。
+   所以基准也换成 `--widget-panel-max-h`（小窗里由 JS 按屏幕高写；主窗口里没有这个变量，
+   退回 `60vh`，行为不变）。 */
 .si-panel-scroll {
-  max-height: calc(60vh - 74px);
+  max-height: calc(var(--widget-panel-max-h, 60vh) - 74px);
 }
 
 .si-list {

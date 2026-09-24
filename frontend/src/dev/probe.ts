@@ -2118,6 +2118,41 @@ export async function runUiProbe(): Promise<void> {
           result.widgetPanelHittable = !!hit && (hit === panel || panel.contains(hit))
           // ③ 面板**不能是 0 高**（`max-height` 若被算成 24px 就会压成一条）
           result.widgetPanelH = Math.round(pr.height)
+          // ④ ⚠️ **面板内部的排版**（2026-09-24 批 5e 加，用户截图逼出来的）。
+          //
+          //    批 5d 我只量了面板**外面**（在不在窗口内 / 点不点得着），于是探针**全绿**
+          //    而真机上条目文字与页脚「优先级：…」**叠在一起**。
+          //    **外框对 ≠ 里面没坏** —— 少的就是这一层。
+          //
+          //    两条独立的判据，各对应一种错法：
+          //    · `osStylesOk`：共用组件（`OverlayScroll`）的样式**到底加载了没**。
+          //      它的 CSS 原本在 `layout.css` 里，而小窗的独立入口**不加载那个文件** ⇒
+          //      `.os-root` 没有 `display:flex` ⇒ 头部/滚动体/页脚挤在一起。
+          //      **这条与视口高度无关，所以探针里也能抓到**（就是它逼出的本批修复）。
+          //    · `panelNonOverlapping`：头部 / 滚动体 / 页脚三个盒子的**纵向不重叠**。
+          //      这条要的是"面板里没有互相压住的东西"，与"谁给的样式"无关。
+          const osRoot = panel.querySelector<HTMLElement>('.os-root')
+          const osScroll = panel.querySelector<HTMLElement>('.os-scroll')
+          result.widgetOsRootDisplay = osRoot ? getComputedStyle(osRoot).display : null
+          result.widgetOsStylesOk = !!osRoot && !!osScroll &&
+            getComputedStyle(osRoot).display === 'flex' &&
+            getComputedStyle(osScroll).overflowY === 'auto'
+          const head = panel.querySelector<HTMLElement>('.si-panel-head')
+          const foot = panel.querySelector<HTMLElement>('.si-panel-foot')
+          const rh = head?.getBoundingClientRect()
+          const rs = osScroll?.getBoundingClientRect()
+          const rf = foot?.getBoundingClientRect()
+          result.widgetPanelBoxes = {
+            head: rh ? [Math.round(rh.top), Math.round(rh.bottom)] : null,
+            scroll: rs ? [Math.round(rs.top), Math.round(rs.bottom)] : null,
+            foot: rf ? [Math.round(rf.top), Math.round(rf.bottom)] : null,
+          }
+          // 容 1px 的亚像素误差；真正的重叠是几十像素量级
+          result.widgetPanelNonOverlapping = !!rh && !!rs && !!rf &&
+            rh.bottom <= rs.top + 1 && rs.bottom <= rf.top + 1
+          // 面板高度应约等于三段之和 —— 对不上说明有东西被压扁/被裁
+          result.widgetPanelSumH = Math.round(
+            (rh?.height ?? 0) + (rs?.height ?? 0) + (rf?.height ?? 0))
           result.widgetViewport = { w: window.innerWidth, h: window.innerHeight }
         }
       }

@@ -3365,6 +3365,73 @@ def main() -> int:
             print(f"           注入条目后亮起={ww.get('widgetLitAfterSeed')} "
                   f"在视口内={ww.get('widgetPanelInViewport')} "
                   f"可命中={ww.get('widgetPanelHittable')} 高={ww.get('widgetPanelH')}")
+            # ⚠️ 面板**内部**排版（2026-09-24 批 5e）：批 5d 只量了外框 ⇒
+            #    探针全绿而真机上条目与页脚**叠在一起**（用户截图）。**外框对 ≠ 里面没坏**。
+            print(f"           内部：头/滚动/脚={ww.get('widgetPanelBoxes')} "
+                  f"不重叠={ww.get('widgetPanelNonOverlapping')} "
+                  f"三段和={ww.get('widgetPanelSumH')}")
+            print(f"                 OverlayScroll 样式生效={ww.get('widgetOsStylesOk')} "
+                  f"（.os-root display={ww.get('widgetOsRootDisplay')!r}）")
+            # ── ⚠️ **按真窗口尺寸再量一次**（R38 批 5e 加，这一段是补课）────────
+            #
+            # 上面那一整段跑在**浏览器视口**（约 1076×621）里。这带来一个**系统性盲区**：
+            # 凡是"按 `vh` 算的高度"在 621px 下都**显得正常**（`60vh−74 = 298px`，
+            # 夹不住 137px 的面板），而真窗口只有 **40px 高** —— `60vh = 24px`、
+            # `calc(60vh−74)` = **负数**。于是：
+            #   · 探针绿；· 真机上滚动体被压塌、条目压到页脚上（用户 2026-09-24 截图）。
+            #
+            # **所以这一段连高度一起压到真窗口量级**（200 宽 × 90 高）。
+            # ⚠️ **只改宽度是不够的** —— 我第一版只把宽改成 200、高度照旧用 `--height`，
+            #    结果**绿的但什么都没验到**（`60vh` 在 621px 下永远够大）。
+            #    180 → 这个盲区的形状是"尺寸"，不是"宽度"。
+            #    200×90 下：`60vh = 54px`、`calc(60vh−74) = −20px` ⇒ 那个死锁会现身。
+            #
+            # ⚠️ 判据只看**面板内部**（不重叠 / 三段和 ≈ 面板高），不看绝对坐标 ——
+            #    窗口长高由 `widgetExpandGeom` 负责，探针里没有真窗口，
+            #    绝对坐标必然与真机不同。
+            wurl2 = f"http://localhost:{vite_port}/widget.html?probe=status-widget-window"
+            print(f"[probe] status-widget-window(真尺寸 200×90) @200 → {wurl2}")
+            wres2 = _run_probe(edge, wurl2, 200, 90, WORK, "status-widget-narrow")
+            ww2 = ((wres2 or {}).get("statusWidgetWindow") or {})
+            print(f"  窄视口面板：打开={ww2.get('widgetPanelOpened')} "
+                  f"高={ww2.get('widgetPanelH')} 内部={ww2.get('widgetPanelBoxes')}")
+            print(f"              不重叠={ww2.get('widgetPanelNonOverlapping')} "
+                  f"三段和={ww2.get('widgetPanelSumH')} "
+                  f"OverlayScroll={ww2.get('widgetOsStylesOk')}")
+            if not ww2:
+                failures.append(f"@200 status-widget: 窄视口（200 宽）那一段没量到")
+            elif not ww2.get("widgetPanelOpened"):
+                failures.append(f"@200 status-widget: 200 宽的视口里面板没打开")
+            else:
+                if not ww2.get("widgetPanelNonOverlapping"):
+                    failures.append(
+                        f"@200 status-widget: **200 宽**视口下面板内部重叠"
+                        f"（头/滚动/脚={ww2.get('widgetPanelBoxes')}）—— "
+                        f"小窗真宽就是 200，这里的排版必须是好的")
+                h2 = ww2.get("widgetPanelH") or 0
+                s2 = ww2.get("widgetPanelSumH") or 0
+                if h2 and s2 and abs(s2 - h2) > 6:
+                    failures.append(
+                        f"@200 status-widget: 窄视口面板三段之和 {s2} 与面板高 {h2} 差 "
+                        f"{abs(s2 - h2)}px —— 有内容被压扁或被裁（`max-height` 用 `vh` 就会这样）")
+                # ⚠️ **滚动体不能被压成 0 高**（R38 批 5e）。
+                #
+                # 这是那个 bug 的**精确判据**，比"三段和"灵：三段和可能**碰巧**对得上
+                # （滚动体塌成 0，头+脚的和仍然≈面板高），而滚动体 0 高意味着
+                # **条目一条都看不见** —— 面板只剩标题和页脚，用户看到的正是这个。
+                # 实测症状：`{'head': [-1,34], 'scroll': [34,34], 'foot': [34,73]}` ← scroll 是 0。
+                boxes2 = ww2.get("widgetPanelBoxes") or {}
+                sc2 = boxes2.get("scroll")
+                if sc2 and (sc2[1] - sc2[0]) < 24:
+                    failures.append(
+                        f"@200 status-widget: 窄视口下**滚动体被压成 {sc2[1] - sc2[0]}px**"
+                        f"（{boxes2}）—— 条目一条都显示不出来（面板只剩标题+页脚）。"
+                        f"根因：`calc(60vh - 74px)` 在真窗口（40px 高）下是**负数**，"
+                        f"必须用 `--widget-panel-max-h`（按屏幕高算，由 JS 写入）")
+                if not ww2.get("widgetOsStylesOk"):
+                    failures.append(
+                        f"@200 status-widget: 窄视口下 `OverlayScroll` 样式没生效"
+                        f"（display={ww2.get('widgetOsRootDisplay')!r}）")
             print(f"  渲染：#root 子元素={ww.get('rootChildren')} "
                   f"文本={ww.get('rootText')!r} ｜ 启动幕残留={ww.get('bootSplash')}")
             print(f"  窗口底：html={ww.get('htmlBg')!r} body={ww.get('bodyBg')!r} "
@@ -3474,6 +3541,30 @@ def main() -> int:
                     if not ww.get("widgetPanelHittable"):
                         failures.append(f"@{w} status-widget: 小窗面板**点不着**（命中测试失败）"
                                         f"—— 看得见但点不到，等于没有")
+                    # ── ⚠️ 面板**内部**排版（2026-09-24 批 5e 加）──────────────
+                    #
+                    # 批 5d 我只量了面板**外框**（在不在视口内 / 点不点得着）⇒ 探针**全绿**，
+                    # 而真机上条目文字与页脚「优先级：…」**叠在一起**（用户截图）。
+                    # **外框对 ≠ 里面没坏** —— 少的就是这一层。
+                    if not ww.get("widgetOsStylesOk"):
+                        failures.append(
+                            f"@{w} status-widget: 面板里 `OverlayScroll` 的样式**没生效**"
+                            f"（`.os-root` display={ww.get('widgetOsRootDisplay')!r}，应为 'flex'）"
+                            f"—— 它的 CSS 在 `layout.css` 里，而**小窗的独立入口不加载那个文件**。"
+                            f"共用组件的样式必须放进共用文件 `status-island.css`"
+                            f"（判据是「用到它的入口有几个」，不是「它看起来属于哪一块」）")
+                    if not ww.get("widgetPanelNonOverlapping"):
+                        failures.append(
+                            f"@{w} status-widget: 小窗面板内部**互相重叠**"
+                            f"（头/滚动/脚={ww.get('widgetPanelBoxes')}）—— "
+                            f"三段纵向必须首尾相接、不交叠；"
+                            f"重叠意味着某个 `max-height` 把中间那段压塌了")
+                    # 面板高应约等于三段之和（对不上说明有东西被压扁或被裁）
+                    sum_h = ww.get("widgetPanelSumH") or 0
+                    if ph and sum_h and abs(sum_h - ph) > 6:
+                        failures.append(
+                            f"@{w} status-widget: 小窗面板三段之和 {sum_h}px 与面板高 {ph}px "
+                            f"对不上（差 {abs(sum_h - ph)}px）—— 有内容被压扁或被裁掉了")
                 # ⚠️ 这条是**独立入口**的判据（2026-09-24 起）：小窗里出现主窗口的东西，
                 #    说明它又走回"加载整个应用"那条路了（`widget.html` 被改回 `index.html`？）
                 for key, label in (("hasTopbar", "顶栏"), ("hasSidebar", "侧栏")):
