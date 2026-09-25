@@ -178,6 +178,10 @@ def steps(tier: str) -> list[tuple[str, list[str], str]]:
     if tier in ("b", "a"):
         s.append(("vitest", [npx, "vitest", "run"], "前端单测（~25s）"))
     if tier == "a":
+        # ⚠️ 用 `-m pytest` 而不是 `pytest` 可执行文件（devlog/199）：
+        #    后者**不把 CWD 加进 sys.path**，于是 `tests/conftest.py` 的
+        #    `from app.services import ...` 直接 ImportError。CI 首跑就是这么红的。
+        #    `pytest.ini` 里现在显式写了 `pythonpath = .`（治本），这里保持 `-m` 是第二层。
         s.append(("pytest", [PY, "-m", "pytest", "-q", "-p", "no:cacheprovider"],
                   "后端单测（实测 180–194s）"))
     return s
