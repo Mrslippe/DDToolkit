@@ -16,6 +16,19 @@ import subprocess
 import sys
 from pathlib import Path
 
+# 本脚本的提示语是中文，而 **Windows 上 Python 的 stdout 默认跟控制台代码页走**
+# （CI runner 上是 cp1252、本地中文 Windows 常是 cp936）⇒ 一句 `print` 就抛
+# `UnicodeEncodeError: 'charmap' codec can't encode characters`，把整条构建从中间打断，
+# 而症状极具误导性：**退出码 1，但真正的错误信息一行都没有**。
+# 2026-09-25（devlog/199 的第三次红）实测踩到：CI 的 Windows 腿上面那步崩在这里。
+# 与 `scripts/ui_probe.py` 的处理同源（DEV-LOOP §二·五 记过探针打印 `✕` 的同类事故）：
+# 把编码错误降级成 `?`，**绝不让一条提示语决定构建成败**。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")   # type: ignore[union-attr]
+    except (AttributeError, ValueError):
+        pass
+
 ROOT = Path(__file__).resolve().parent.parent
 NAME = "ddtoolkit-backend"
 BINARIES = ROOT / "frontend" / "src-tauri" / "binaries"

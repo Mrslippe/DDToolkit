@@ -69,6 +69,15 @@ jobs:
       # 冻结后端：这一步才真正需要 PyInstaller 与前端产物，也是"用户拿到的那个 exe"。
       # 它比 `cargo test` 慢得多（分钟级），所以排在最后 —— 前面任何一步红了就不用付这个钱。
       - name: 冻结后端（PyInstaller onedir）
+        # ⚠️ 必须给 UTF-8（2026-09-25，本批第三次红）：Windows runner 上 Python 的 stdout
+        #    默认是 **cp1252**，而本仓脚本的提示语是中文（`build_backend.py` 的自愈分支）
+        #    ⇒ `UnicodeEncodeError: 'charmap' codec can't encode characters`，整步直接崩。
+        #    与 Rust 壳拉起 sidecar 时注入 `PYTHONUTF8=1` / `PYTHONIOENCODING=utf-8`
+        #    是同一个理由；`docs/DEV-LOOP.md` §二·五 也记过同类事故
+        #    （探针打印 `✕` 在 cp936 控制台上把整条流程从中间打断）。
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: "utf-8"
         run: uv run python scripts/build_backend.py
 
       - name: 冻结后端冒烟（空数据目录 → /healthz）
