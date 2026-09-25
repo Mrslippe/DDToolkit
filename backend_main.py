@@ -16,6 +16,27 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+# ── 控制台编码兜底（2026-09-25，devlog/200；**必须在任何输出之前**）────────────
+# 本文件与它 import 的模块里有中文 `print`，而 **Windows 上 stdout 默认跟控制台代码页走**：
+# 中文 Windows 是 cp936（能编码「已引导资源」），英文 / CI 是 **cp1252**（编不出来）。
+#
+# 实测的后果不是乱码，是**整个进程崩掉**（冻结版 exe + 空数据目录 + 首启）：
+#     File "backend_main.py", line 89, in _bootstrap_resources
+#         print(f"[sidecar] 已引导资源: {dst}", flush=True)
+#     UnicodeEncodeError: 'charmap' codec can't encode characters in position 10-14
+#     [PYI-5872:ERROR] Failed to execute script 'backend_main' due to unhandled exception!
+# ⇒ **英文 Windows 用户第一次启动就是这么崩的**，而中文开发机永远看不到。
+#
+# Tauri 启动器确实会注入 `PYTHONUTF8=1` / `PYTHONIOENCODING=utf-8`（走那条路没事），
+# 但两条纪律要求这里也自立：① `DEV-LOOP.md` §三/§四 把"直接跑冻结 exe"列为支持的路径；
+# ② **"靠外部环境才不崩"是脆的** —— 换个启动方式就复发。
+# 降级成 `?` 而不是抛异常：**绝不让一条提示语决定进程成败**（同 `scripts/ui_probe.py`）。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="replace")   # type: ignore[union-attr]
+    except (AttributeError, ValueError):
+        pass    # 无控制台（windowed 冻结）/ 已重定向 / 不支持 reconfigure：都不是错误
+
 # 启动计时基线（冷启动优化，见 devlog/021）：各阶段以毫秒记入 sidecar.log
 _t0 = time.perf_counter()
 
