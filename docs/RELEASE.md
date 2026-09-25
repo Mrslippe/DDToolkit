@@ -50,9 +50,10 @@
 
 - [ ] 目标版本号已定，devlog 已写并提交；发布说明 `docs/releases/v<版本>.md` 已写好（preflight 要求 ≥200 字符、无占位符）
 - [ ] 本地 `main` 干净；代理软件已启动（本机 `7897`，见 §6）；GitHub token 有效（classic PAT，`repo` scope）或 GCM 已授权
+- [ ] **依赖环境已按 `uv.lock` 装好**（`uv sync`）—— 真源见 §3.0
 - [ ] 构建工具链可用：`python -m PyInstaller --version`、`cargo --version`
 
-> 这三条**就是 `release.py preflight` 检查的东西**（缺哪条它会指名道姓地说），别在别处再抄一份清单。
+> 这几条**就是 `release.py preflight` 检查的东西**（缺哪条它会指名道姓地说），别在别处再抄一份清单。
 
 ---
 
@@ -69,6 +70,25 @@
 ---
 ## 3. 构建产物（三步，产物统一 `dist-release/`）
 
+### 3.0 依赖环境只认 `uv.lock`（2026-09-25，devlog/197）
+
+**真源 = `pyproject.toml` + `uv.lock`**（`requirements.txt` 是 `uv export` 的**只读导出产物**，
+带 hash，给 CI/容器用；**它不再是手改的地方**）。
+
+```powershell
+uv sync                 # dev 组（含 pytest）；build_backend 会自动补装 build 组
+```
+
+装出来的环境就是**发布环境**：`pytest` 在 `dev` 组、`PyInstaller` 在 `build` 组，
+两者都**不进**冻结产物（这是"用户拿到的包"与"开发机装的包"第一次真正分开）。
+
+- `scripts/build_backend.py` 会**拒绝在非 `.venv` 环境里构建**，并在构建前用
+  `uv sync --frozen --dry-run` 复核"环境与锁文件一致"——不一致直接停。
+  这是为了修掉一个真实缺口：迁移之前 `requirements.txt` 只有 `>=`，
+  **冻结出来的 exe 装的是"跑构建那天的版本"**，产物不可复现。
+- 加依赖的姿势：改 `pyproject.toml` → `uv lock` → `uv sync` → `uv export --frozen --no-dev --no-emit-project --no-annotate --format requirements.txt -o requirements.txt`。
+  **依赖更新单独一批**，别混进功能批次（一次切换实测把 `uvicorn` 0.46→0.54、`starlette` 0.4x→1.7 抬了上来，需要整套回归）。
+
 > 💡 **大多数改动不用走这一步**：后端/登录/首启类改动用
 > `python scripts/dev_check.py`（约 20 秒）就能验完，详见 `docs/DEV-LOOP.md`。
 > 只有动到 Rust 壳 / `tauri.conf.json` / 需要确认安装包布局时才必须整包重建。
@@ -83,9 +103,15 @@ $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = (Get-Content -Raw 'E:\work\Project\ddt
 npm run release
 ```
 
-`release` = `build:backend`（PyInstaller onedir → `src-tauri/binaries/backend/`，**v1.0.0 实测 118.8MB**）
+`release` = `build:backend`（PyInstaller onedir → `src-tauri/binaries/backend/`）
 → `tauri:build`（前端构建 + Rust release + NSIS 安装包，**实测 6m09s**）
 → `collect:release`（聚合到 `dist-release/`：安装包 + 便携 zip + **`latest.json`**）。
+
+> ⚠️ **后端产物的体积以构建输出为准，不在这里写死**（它是测量值）。
+> 但有一条**方向性事实**值得知道：2026-09-25 切到 `uv.lock` 并显式区分运行/开发依赖之后，
+> 产物**明显变小**（旧记录 118.8MB → 实测 71.7MB），因为 `pytest` / `PyInstaller` /
+> `werkzeug` / `email_validator` / `numpy` 这些**本来就被误打进去的包不再进冻结产物**了
+> —— 出包后跑一次 `python scripts/release.py <版本> --only verify`，以它报的数字为准。
 
 **验证产物**：
 
