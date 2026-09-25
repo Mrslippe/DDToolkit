@@ -60,6 +60,51 @@ app.dependency_overrides[get_db] = override_get_db
 
 
 @pytest.fixture(autouse=True)
+def _scheduler_uses_the_test_db(monkeypatch):
+    """**把后台任务的会话也钉到测试库**（2026-09-25，CI 首跑抓到的真问题）。
+
+    `app.dependency_overrides[get_db]` 只覆盖**路由**的依赖注入；而抓取类端点在后台跑时，
+    `app/services/scheduler.py` 用的是**它自己 import 的 `SessionLocal`**
+    （`scheduler.py:20` 的 `from app.core.database import SessionLocal`）
+    ⇒ 那些会话连的是 `settings.DATA_DIR/vtuber.db`，也就是**真实数据目录**。
+
+    症状（CI 首次真跑，两个 Python 版本 + Windows 三处一起红）：
+        raise OperationalError: no such table: accounts
+    而**本地一直是绿的** —— 因为开发机上的 `vtuber.db` 恰好有 `accounts` 表。
+    这正是本仓反复记过的"本地残留环境恰好满足条件"（`ARCHITECTURE.md` §6 第 21 条），
+    只是这次残留的不是"登录态"而是"库里有表"。
+
+    修法：把 `scheduler.SessionLocal` 也指到测试引擎。改了之后这些端点在**空数据目录**
+    下的行为才等于 CI 的行为 —— 也就是"用户第一次装"的行为。
+    """
+    from app.services import scheduler as _sch
+    monkeypatch.setattr(_sch, "SessionLocal", TestingSession)
+
+
+def test_scheduler_sessions_never_point_at_the_real_data_dir():
+    """**回归**：后台任务的会话不许指向真实数据目录（2026-09-25，CI 首跑抓到）。
+
+    这是上面那条 autouse 夹具自身的守卫。手法：**在夹具已生效的上下文里**读
+    `scheduler.SessionLocal` 实际绑在哪个引擎上，与 `app.core.database` 的引擎对比。
+
+    ⚠️ 第一版写成"直接调用夹具体再断言"，跑出来是红的 —— 因为 monkeypatch 在**夹具函数返回**
+    时就回滚了（teardown 由 pytest 管）。这个坑本身说明"机器判据"也会写错，
+    所以下面只在**已生效**的状态上断言，不自己去触发它。
+
+    判据为什么用"引擎 URL"而不是"跑一遍抓取再断言"：后者要打网络、还依赖库里恰好有什么，
+    属于**凭据型**判据（`DEV-LOOP` §6.3 的"跳过等于把断言删了"）。URL 一眼可判，
+    而且正好是这次踩的那个点：`settings.DATA_DIR/vtuber.db` 与测试库是**两个引擎**。
+    """
+    from app.core import database as _db
+    from app.services import scheduler as _sch
+
+    bound = str(_sch.SessionLocal.kw["bind"].url)
+    assert "ddtoolkit-test-vtuber-" in bound, f"后台会话没被钉到测试库：{bound}"
+    assert "test_vtuber.db" in bound
+    assert bound != str(_db.engine.url), "后台会话仍指向 app.core.database 的引擎（= 真实数据目录）"
+
+
+@pytest.fixture(autouse=True)
 def setup_db():
     Base.metadata.create_all(bind=test_engine)
     db = TestingSession()
@@ -76,7 +121,32 @@ def setup_db():
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
+    """测试客户端：**默认把「建账号后自动抓取」挡掉**（2026-09-25，CI 首跑抓到的真问题）。
+
+    `POST /vtuber/{id}/accounts` 会 `background.add_task(_adopt_background, …)` ——
+    也就是**真的去打 B 站/微博**并写库。这在测试里有三种坏结果，而且都不报错、只是"有时不对"：
+      · **竞态**：后台任务与本用例的断言抢同一张表。实测
+        `test_list_account_stat_snapshots` 手工塞 2 条快照、断言 `len(data) == 2`，
+        而后台抓取会**再插一条** ⇒ 变成 3；
+      · **覆盖数据**：抓到真昵称会**覆盖**用例手工设的值。实测
+        `test_wordcloud_endpoint_passes_vtuber_words_to_tokenizer` 断言的 `extra_words`
+        里因此多出一个真昵称（它期望恰好 `{名字, 企划}`）；
+      · **打真网络**：慢（本文件从 14s 涨到 74s），而且在没网的环境里行为不同。
+
+    ⚠️ 为什么以前没暴露：那时后台任务的会话连的是**开发库**（另一条 bug，见上面那个夹具），
+    于是它在本机"默默地失败"或写到别处去了。修好那条之后，这里必须一起收口 ——
+    否则测试的行为取决于"开发库里恰好有什么"和"上游此刻返回什么"。
+
+    需要真跑后台的用例**显式覆盖**它（本文件里 `noop_background` 的既有写法：
+    `monkeypatch.setattr(router_mod, "_adopt_background", fake)`）。
+    """
+    import app.routers.vtuber as _router_mod
+
+    async def _noop_background(*_a, **_kw):
+        return None
+
+    monkeypatch.setattr(_router_mod, "_adopt_background", _noop_background)
     return TestClient(app)
 
 

@@ -114,7 +114,13 @@ def test_next_due_honours_idle_floor(db, monkeypatch):
     assert due_idle - since >= 300           # 第 6 轮档位：≥ 5 分钟
 
     monkeypatch.setattr(sch, "_dynamics_idle_streak", 12)
-    assert sch._dynamics_next_due(db, since=since) - since >= 600
+    # ⚠️ 容差 0.05s，不是"大概齐"（2026-09-25，CI 首跑红过）：
+    #    `_dynamics_next_due` 内部的基准是**它自己**调的 `time.monotonic()`
+    #    （`scheduler.py:3368` 的 `base = since`，而 `due` 取自 `3364` 的 `time.monotonic()`），
+    #    比本用例早先记下的 `since` **略晚** ⇒ 表面上 `due - since` 会差出一丁点。
+    #    CI 上实测报 `assert (1167.687 - 567.687) >= 600`（即 600.000000x 被浮点显示成整数）。
+    #    单跑 20 次不复现，是"整套跑 + 慢机器"才抖出来的边界。
+    assert sch._dynamics_next_due(db, since=since) - since >= 600 - 0.05
 
 
 def test_next_due_grows_with_account_count_over_rpm(db, monkeypatch):

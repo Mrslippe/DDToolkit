@@ -415,7 +415,7 @@ W1/W2 可以在**现在的架构上**做完，但它们只是让 W3 少踩坑。
 
 | 门禁 | 命令 | 当前基线（括号里 = 该值实测日） |
 |---|---|---|
-| 后端 | `python -m pytest -q`（**解释器走 `.venv`**，见 `ARCHITECTURE.md` §6 第 24 条） | **621 passed / 0 failed**（2026-09-25 实测；`--collect-only` 也是 621） |
+| 后端 | `python -m pytest -q`（**解释器走 `.venv`**，见 `ARCHITECTURE.md` §6 第 24 条） | **622 passed / 0 failed / 约 50s**（2026-09-25；原本 ~190s，因为后台任务在打真网络 —— 见 devlog/200） |
 | 桌面壳 | `cargo test`（工作目录 `frontend/src-tauri`） | **42 passed**（2026-09-25；+10 = `delete_old_dir` 那一组，含真实 junction 用例） |
 | 前端单测 | `npm --prefix frontend run test` | **546 passed**（2026-09-24；文件数不抄，跑一次就有） |
 | 前端类型 / lint | `npx tsc --noEmit`（**必须在 `frontend/` 里跑**）/ `npm --prefix frontend run lint` | 0 错 / 0 错（2026-09-23 复核） |

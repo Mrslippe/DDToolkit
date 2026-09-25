@@ -528,6 +528,7 @@
 | 依赖来源只认 `uv.lock`（`pyproject.toml` + 分组 + `requirements.txt` 降为 hash 导出）+ 门禁档位补 `frontend/src-tauri/**` 与依赖文件两处盲区；**被锁文件咬出两个真 bug**（`python-multipart` 从未声明 / `test_services` 删掉整个 `_test_tmp` 根） | 197 |
 | S3-C 安全删除旧数据目录：一次性票据替代路径 + 五道判据（canonicalize / 拒祖先子孙 / 拒 reparse / 特征合取 / 防重放）+ 二次确认框；**junction 实验推翻了规格一处假设**（`remove_dir_all` 不穿进目标，真风险是判据被绕过） | 198 |
 | CI 落地（Linux 后端 ×2 Python + 前端 / Windows Rust + 冻结后端冒烟）；**先验卡点发现不是 `gen/` 而是资源 glob**；反向验证咬出两条**注释喂饱文本断言**的假绿 → 新增 `_run_commands()` 只认 `run:` 里的命令 | 199 |
+| CI 首跑三连红的排查：`pytest` 不把 CWD 加进 `sys.path`（补 `pythonpath = .`）+ **后台任务的会话一直连我的开发库**（`dependency_overrides` 只管路由）⇒ 修好后暴露两条"靠开发库数据才过"的用例；pytest **~190s → ~50s** | 200 |
 
 > **编号列怎么写**（2026-09-23 定）：
 > - 有 devlog 的批次 → **裸编号**（`| 097 |`）；
