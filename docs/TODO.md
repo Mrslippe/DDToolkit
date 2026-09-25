@@ -424,7 +424,7 @@ W1/W2 可以在**现在的架构上**做完，但它们只是让 W3 少踩坑。
 | 未登录能力矩阵 | `python scripts/capability_matrix.py --write` | 两态逐接口实测（结论 = `docs/ARCHITECTURE.md` §3.9；**`--include-content` 触发 IP 级 412，别顺手跑**） |
 | 布局探针 | `python scripts/ui_probe.py --seed-accounts 8` | 三档 1100/1280/1440 × 10 视图全过（2026-09-24 复核）。⚠️ `8` 是常规参数：开发库只有 2 个账号，不种就是空转的门禁 |
 | 档位门禁 | `python scripts/gate.py` | A 档 7 步全过 / **245–288s**（2026-09-25，含 `cargo test`）；C 档 ≈46s |
-| CI | GitHub Actions（`.github/workflows/`，真源在那里） | 两条腿：Linux（后端 ×2 个 Python + 前端）与 Windows（Rust + 冻结后端冒烟）。**2026-09-25 首次落地，尚未在真实 runner 上跑过** —— 本地已按同样命令在干净快照上逐条验过 |
+| CI | GitHub Actions（`.github/workflows/`，真源在那里） | 两条腿：Linux（后端 ×2 个 Python + 前端）与 Windows（Rust + 冻结后端冒烟）。**2026-09-25 已首次跑绿**（`e3499f1`）——首跑到闭环共四次红，根因见 devlog/200（其中一条是**英文 Windows 用户首启即崩**的真 bug） |
 | 冻结产物体积 | `python scripts/build_backend.py` 的输出 | **71.7 MB**（2026-09-25；切 `uv.lock` 前记录 118.8MB）。出包后以 `release.py --only verify` 为准 |
 | 一把梭 | `python scripts/dev_check.py` | syntax / pytest / frontend logic / docs drift / dev backend 五项全 ok（2026-09-23 全量实跑） |
 
