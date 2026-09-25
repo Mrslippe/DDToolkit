@@ -556,6 +556,15 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  /* ⚠️ **必须换行**（R49 批 4，2026-09-25 用户拍板"换行 vs 横向滚动" ⇒ 换行）：
+     本行是 flex item，账号一多就被收缩到比内容窄，而**它自己不换行** ⇒
+     内部药丸溢出 `.posts-panel` 的 `overflow:hidden` **被静默裁掉**
+     （`--seed-accounts 8` 时右缘那枚只剩半截）。
+     R45-E 已把筛选弹窗的高度改成**实测 + ResizeObserver** ⇒ 本行变高能自动跟上，
+     所以"换行会让弹窗算错高度"这条旧顾虑已经不成立。
+     ⚠️ **别改回 `nowrap` + 横向滚动**：那会把"第 8 个账号看不见"变成常态。 */
+  flex-wrap: wrap;
+  row-gap: 6px;                 /* 换行后行与行的间距（只写 `gap` 管不到行间距） */
   margin-right: auto;
   min-width: 0;
 }

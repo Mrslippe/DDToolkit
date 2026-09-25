@@ -1466,7 +1466,28 @@ def _assert(views: list[dict], width: int) -> list[str]:
                 for item in items:
                     bad.append(f"@{width} {tag}: 元素可见出窗 {item}")
                 continue
-            for sc in items:
+        # ── **账号切换行不许被面板裁掉**（R49 批 4，2026-09-25）────────────────
+        # 为什么单独立一条：`overflowing` 那条**主动放行了"被祖先裁掉"的**
+        # （`clippedByAncestor`）—— 折叠组那类是有意为之，但这条放行**同时盖住了一类真 bug**：
+        # `.account-switch` 是 flex item，账号一多就被收缩到比内容窄、而它自己不换行 ⇒
+        # 内部药丸溢出 `.posts-panel` 的 `overflow:hidden` **被静默裁掉**
+        # （`--seed-accounts 8` 时右缘那枚只剩半截，用户截图目视发现，**当时所有判据全绿**）。
+        # 修法是 `flex-wrap: wrap`；判据是"**子元素不许越过本行矩形**"。
+        # ⚠️ 不去改 `overflowing` 的放行条件 —— 那会把折叠组那类**有意**的裁掉全部报红。
+        # **把判据写具体，而不是把判据放宽。**
+        co = v.get("clippedOverflow")
+        if co is None:
+            # 只有列表页有这一行；其它视图没有是正常的（不判失败）
+            if tag == "list" or tag.startswith("list-"):
+                bad.append(f"@{width} {tag}: 探针没量到账号切换行（`clippedOverflow`）"
+                           f"—— 「账号行不许被裁」这条判据会静默空转")
+        elif co.get("over"):
+            bad.append(
+                f"@{width} {tag}: 账号切换行里有 {len(co['over'])} 枚药丸**越过本行矩形**"
+                f"（行高 {co.get('rowH')}px）⇒ 会被 `.posts-panel` 的 `overflow:hidden` 裁掉："
+                f"{'；'.join(co['over'])} —— `.account-switch` 必须 `flex-wrap: wrap`"
+                f"（用户 2026-09-25 拍板：换行，不是横向滚动）")
+        for sc in items:
                 el = sc.get("el", "")
                 if sc.get("nativeBarW", 0) > 0 or sc.get("nativeBarH", 0) > 0:
                     bad.append(

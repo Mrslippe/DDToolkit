@@ -777,6 +777,35 @@ function measure(tag: string) {
       })
       .slice(0, 12)
       .map((n) => `${name(n)} ${box(n)}`),
+    /** **被祖先裁掉**的越界元素（R49 批 4，2026-09-25）。
+     *
+     *  为什么单独一条：`overflowing` 那条**主动放行了"被祖先裁掉"的**
+     *  （`cross && !clippedByAncestor(n)`）—— 理由是折叠组 `max-width:0 + overflow:hidden`
+     *  属于有意为之。但这条放行**同时盖住了一类真 bug**：
+     *  `.account-switch` 是 flex item，账号一多就被收缩到比内容窄，而它自己不换行 ⇒
+     *  内部药丸溢出 `.posts-panel` 的 `overflow:hidden` **被静默裁掉**
+     *  （`--seed-accounts 8` 时右缘那枚只剩半截，用户截图目视发现，**所有判据全绿**）。
+     *
+     *  ⚠️ 不能直接把 `overflowing` 改成"被裁也算" —— 那会把折叠组那类**有意**的裁掉
+     *     全部报红。所以这条**只盯"账号切换行"这一个具体契约**：
+     *     它的子元素**不许越过它自己的矩形**（越了就是被面板裁掉的那一类）。
+     *     这是"把判据写具体"而不是"把判据放宽"。 */
+    clippedOverflow: (() => {
+      const row = document.querySelector('.account-switch')
+      if (!row) return null
+      const rr = row.getBoundingClientRect()
+      const bad = [...row.children].filter((c) => {
+        const cr = c.getBoundingClientRect()
+        return cr.right > rr.right + 1 || cr.left < rr.left - 1
+      })
+      return {
+        /** 行高（换行后会变高 —— 用它证明"真的换行了"） */
+        rowH: Math.round(rr.height),
+        /** 一行几枚（行高 ≈ 单枚高 ⇒ 1 行；≈ 2×高+gap ⇒ 2 行） */
+        childH: [...row.children].map((c) => Math.round(c.getBoundingClientRect().height)),
+        over: bad.slice(0, 6).map((c) => `${name(c)} ${box(c)}`),
+      }
+    })(),
     /** 滚动容器清单：nativeBarW/H > 0 = 原生滚动条；hOverflow = 横向内容溢出 */
     scrollers: [...document.querySelectorAll('body *')]
       .filter((n): n is HTMLElement => n instanceof HTMLElement)
