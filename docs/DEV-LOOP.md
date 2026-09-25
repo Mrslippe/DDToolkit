@@ -61,11 +61,41 @@
 |---|---|---|
 | **C** 局部/表现 | 样式值 / 探针 / 文档 / devlog | **46s** |
 | **B** 跨层/特性 | `frontend/src/**`（除 `styles/`·`dev/`）· `package.json` · `UI-MAP` | ~70s |
-| **A** 数据/契约 | `app/` · `alembic/` · `tests/` · `backend_main.py` | ~250s |
+| **A** 数据/契约 | `app/` · `alembic/` · `tests/` · `backend_main.py` · **`frontend/src-tauri/**`** · **`pyproject.toml` / `uv.lock`** · 三个有 pytest 护栏的脚本 | ~250s + cargo |
 | `--tier full` | 发版前 / 拿不准 | ~250s（含 pytest 与后端冒烟） |
 
 ⚠️ **探针永远跑满三档**：实测单档 28.3s、三档 26.6s —— 成本全在启动，少跑档只损失覆盖面。
 ⚠️ **档位映射本身会写错** ⇒ `--plan` 会打印"哪条路径把档位顶上去的"，收尾用 `full` 兜一次。
+⚠️ **档位映射漏一格 = 那个文件从此没人守**（2026-09-25 已抓到两次：`scripts/doc_check.py` 与
+`frontend/src-tauri/**`——后者意味着改**删除数据目录**那条 Rust 命令时 `cargo test` 一次都不跑）。
+现在这份映射被 `tests/test_gate.py` 的用例钉住，改它要同时过那些断言。
+
+⚠️ **Rust 档只在 A 档跑**（`cargo test` 首次含编译，分钟级；增量秒级）——它**不能**像探针那样
+无脑跑满三档：探针是"启动成本固定"，cargo 是"编译成本真实存在"，两者是不同性质的代价。
+
+### 0.6.1 CI 跑什么、本地跑什么（2026-09-25 起）
+
+**真源 = `.github/workflows/`**（两个文件：`ci.yml` 跨平台腿 / `ci-windows.yml` Windows 腿）。
+这里只记「为什么是这么分的」，命令本身不复述 —— 复述一份就多一个漂移点。
+
+分腿的唯一理由：**`src-tauri` 编译不了非 Windows**（`windows-sys` + DWM / Job Object /
+`ShellExecuteW`），所以 Rust 腿固定在 Windows，Linux 腿只做与平台无关的那些。
+
+三条本地看不出来、只有 CI 会告诉你的：
+
+1. **`uv sync --frozen --no-group build` 在 3.12 上也能过** —— 本地只有 3.14 一套环境，
+   `requires-python` 的下界从来没被真正验证过。
+2. **干净 clone 上 `cargo test` 需要 `binaries/backend/` 里有文件**（2026-09-25 实测）：
+   `tauri.conf.json` 的资源 glob 是 `binaries/backend/**/*`，而该目录由 PyInstaller 生成且被
+   gitignore ⇒ glob 匹配不到任何文件时 `tauri-build` 直接让 build.rs 失败。CI 里造一个占位文件
+   即可（**不用**真跑 PyInstaller、**也不用**前端 `dist/`）。`gen/` 不需要入库，build.rs 会自己重建。
+3. **注释里的命令会让文本型断言假绿** —— 见 `tests/test_gate.py` 的 `_run_commands`：
+   那组 CI 断言只认 `run:` 里真正会执行的命令（第一版在全文里找 `uv sync` / `cargo test`，
+   而两个 workflow 的注释里恰好都写着它们 ⇒ 把命令删掉、注释留着，断言照样绿）。
+
+⚠️ **CI 里跑不了的**（写在这里是为了不让人以为有覆盖）：`scripts/ui_probe.py`（要真浏览器与视口）、
+托盘隐藏/唤回/深休眠、数据目录迁移与删旧目录、更新器安装 —— 都是 OS 级交互，入口是本文 §一/§四
+与 `docs/TODO.md` §1.3 的真机清单。
 
 ### 0.7 反向验证要挑「真的能破坏它的改法」
 

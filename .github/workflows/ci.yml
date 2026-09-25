@@ -1,0 +1,79 @@
+# 跨平台 CI（Linux）：后端单测 + 前端静态检查与单测 + 文档门禁。
+#
+# 为什么 Linux 腿**不跑 Rust**：`src-tauri` 依赖 `windows-sys`（DWM 圆角 / Job Object /
+# `ShellExecuteW` / 全屏检测），跨平台编译不是本项目的目标（用户拿到的只有 Windows 产物）。
+# Rust 腿在 `ci-windows.yml` 里。
+#
+# ⚠️ 依赖必须走 `uv.lock`（`uv sync --frozen`）—— 这条有机器判据：
+#    `tests/test_gate.py::test_ci_installs_from_the_lock_not_from_a_loose_requirements_file`
+#    "本地按锁装、CI 按裸 pip 装"是"两边各自都能跑通、装的东西却不一样"的经典分家方式。
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  backend:
+    name: 后端（python ${{ matrix.python-version }}）
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.12 是 `requires-python` 的下界（用户不一定用 3.14）；3.14 是本机开发版本。
+        python-version: ["3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 uv（按 uv.lock 装环境，含 dev 组、**不含 build 组**）
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: 按 uv.lock 装环境
+        run: uv sync --frozen --no-group build
+
+      # 这一条守的是"没有任何其它门禁会编译 scripts/"那个盲区（devlog/131 的一次性事故）。
+      # 复用仓库自己的函数而不是在 workflow 里抄一段 python —— 抄一份就多一个漂移点。
+      - name: 全仓 Python 语法扫描
+        run: uv run python scripts/dev_check.py --syntax-only
+
+      - name: 后端单测
+        run: uv run pytest tests/ -q
+
+      - name: 文档漂移门禁
+        run: uv run python scripts/doc_check.py
+
+  frontend:
+    name: 前端（tsc + eslint + vitest）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 按 package-lock.json 装依赖
+        working-directory: frontend
+        run: npm ci
+
+      - name: 类型检查
+        working-directory: frontend
+        run: npx tsc --noEmit
+
+      - name: 静态检查（--max-warnings 0）
+        working-directory: frontend
+        run: npx eslint src --max-warnings 0
+
+      - name: 前端单测
+        working-directory: frontend
+        run: npx vitest run
+
+      - name: 日期区间纯逻辑断言
+        run: node scripts/check_date_range.mjs
