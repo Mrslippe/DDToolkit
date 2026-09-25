@@ -22,6 +22,19 @@ from app.core.database import Base
 from app.models.vtuber import Account, VTuber
 from app.services import scheduler as sch
 
+# 时间下限断言的容差（2026-09-25，CI 首跑抓到的**浮点 ULP**问题）。
+#
+# 现象：CI 上偶发 `assert (1167.687 - 567.687) >= 600`，本地单跑 20 次不复现。
+# 真因**不是"时钟漂移"**，是浮点精度：`time.monotonic()` 在 2e5 量级时，
+# `(t + 600) - t` 实测 = `599.9999992999947` —— 比 600 少 7e-7。
+# 而 `_dynamics_next_due` 的 `since + idle_floor` 正是这个形状
+# （`scheduler.py:3369` 的 `due = max(due, base + idle_floor)`），
+# 于是**严格 `>=` 会随机红**，红的概率取决于当时的 monotonic 绝对值。
+#
+# 为什么用容差而不是"把下限钉成 599"：那会把判据改弱成一个不存在的阈值。
+# 1e-3 秒比 ULP 效应（~1e-6）大三个数量级，又远小于任何有意义的时间差。
+FLOOR_EPS = 1e-3
+
 
 # ── 纯函数：退避梯度 ──────────────────────────────────────────────────
 
@@ -114,13 +127,8 @@ def test_next_due_honours_idle_floor(db, monkeypatch):
     assert due_idle - since >= 300           # 第 6 轮档位：≥ 5 分钟
 
     monkeypatch.setattr(sch, "_dynamics_idle_streak", 12)
-    # ⚠️ 容差 0.05s，不是"大概齐"（2026-09-25，CI 首跑红过）：
-    #    `_dynamics_next_due` 内部的基准是**它自己**调的 `time.monotonic()`
-    #    （`scheduler.py:3368` 的 `base = since`，而 `due` 取自 `3364` 的 `time.monotonic()`），
-    #    比本用例早先记下的 `since` **略晚** ⇒ 表面上 `due - since` 会差出一丁点。
-    #    CI 上实测报 `assert (1167.687 - 567.687) >= 600`（即 600.000000x 被浮点显示成整数）。
-    #    单跑 20 次不复现，是"整套跑 + 慢机器"才抖出来的边界。
-    assert sch._dynamics_next_due(db, since=since) - since >= 600 - 0.05
+    # 容差见文件头的 FLOOR_EPS（浮点 ULP，不是漂移）
+    assert sch._dynamics_next_due(db, since=since) - since >= 600 - FLOOR_EPS
 
 
 def test_next_due_grows_with_account_count_over_rpm(db, monkeypatch):
@@ -137,7 +145,8 @@ def test_next_due_grows_with_account_count_over_rpm(db, monkeypatch):
     db.commit()
     since = time.monotonic()
     due = sch._dynamics_next_due(db, since=since)
-    assert due - since >= 150
+    # 同 `test_next_due_honours_idle_floor`：浮点 ULP 容差（见文件头 FLOOR_EPS）
+    assert due - since >= 150 - FLOOR_EPS
 
 
 def test_manual_entry_resets_idle_streak(monkeypatch):

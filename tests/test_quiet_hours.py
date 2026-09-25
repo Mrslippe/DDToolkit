@@ -119,7 +119,8 @@ def test_next_due_honours_quiet_floor(db, monkeypatch):
 
     # 把"现在"钉进静默时段：直接让 floor 生效（避免用例随机器时钟漂）
     monkeypatch.setattr(sch, "quiet_dynamics_floor", lambda now_local=None: 900.0)
-    assert sch._dynamics_next_due(db, since=since) - since >= 900
+    # 容差见 test_dynamics_backoff.py 文件头的 FLOOR_EPS：浮点 ULP，不是时钟漂移
+    assert sch._dynamics_next_due(db, since=since) - since >= 900 - 1e-3
 
 
 def test_quiet_and_idle_floors_take_the_more_conservative(db, monkeypatch):
@@ -128,7 +129,8 @@ def test_quiet_and_idle_floors_take_the_more_conservative(db, monkeypatch):
     monkeypatch.setattr(sch, "_dynamics_idle_streak", 12)             # R28 顶档 = 600s
     monkeypatch.setattr(sch, "quiet_dynamics_floor", lambda now_local=None: 1800.0)
     since = time.monotonic()
-    assert sch._dynamics_next_due(db, since=since) - since >= 1800
+    # 同 `test_next_due_honours_quiet_floor`：浮点 ULP 容差（见 test_dynamics_backoff.py 文件头）
+    assert sch._dynamics_next_due(db, since=since) - since >= 1800 - 1e-3
 
 
 def test_live_poller_is_not_slowed_by_quiet_hours():
