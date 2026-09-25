@@ -4,9 +4,9 @@
    ② 帖子面板「药丸族」（type-chip/search/角标/stat-badge/duration）
    ③ 功能性气泡（live-tag / popover 阴影 / 粉丝 stat-pill）
    ④ 档案卡族（--pcard-radius 12px + --pcard-shadow* 四档 + --pcard-ring）
-   ⑤ 视图切换条 `.glow-bar`（R39-D3/D4 → **R45 改定**，2026-09-24）：**加入 ① 浮片族的配方**
+   ⑤ 视图切换条 `.view-switch`（R39-D3/D4 → **R45 改定**，2026-09-24）：**加入 ① 浮片族的配方**
       （`--pill-bg` 不透明实底 + `--pill-shadow`），圆角取 ④ 的 `--pcard-radius`；
-      条内**选中块** `.glow-spot` 用选中语言（--sel-bg 浅粉底 + --c-primary-deep 主色粉边），
+      条内**选中块** `.view-switch-thumb` 用选中语言（--sel-bg 浅粉底 + --c-primary-deep 主色粉边），
       且**不加外阴影**（面上的面）。
       整条**不占布局、按需出现**（`position:absolute` + `data-shown`，见 UI-MAP「工具条显隐状态机」）。
    其余一律回「方形零圆角零阴影」总纲。
@@ -149,10 +149,10 @@
   /* 尺寸（紧凑壳层：顶栏 40 / 工具栏 50；侧栏 492 沿用档案页规格） */  --topbar-height: 40px;
   --sidebar-width: 492px;
   /* ── 页面工具条的几何（R45 / R45-B / R45-D / R45-E）────────────────────
-     `.glow-bar` 是 **overlay**（`position:absolute`），压在内容之上、按需出现。
+     `.view-switch` 是 **overlay**（`position:absolute`），压在内容之上、按需出现。
      `--toolbar-band` = 它**覆盖的那条带子**的高度；`--toolbar-gap*` = **内容要让开的
      间距**（**每个视图一个**，见下）。两者一起决定"主体内容从哪开始"。
-     ⚠️ 原来是散在 `.glow-bar` 里的 `top:6px; height:46px` 两个字面量。 */
+     ⚠️ 原来是散在 `.view-switch` 里的 `top:6px; height:46px` 两个字面量。 */
   --toolbar-top: 6px;
   --toolbar-h: 46px;
   --toolbar-band: calc(var(--toolbar-top) + var(--toolbar-h));

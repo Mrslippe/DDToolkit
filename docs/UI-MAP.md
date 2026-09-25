@@ -11,12 +11,12 @@
 > ③ 功能性气泡：`live-tag`（8px）、粉丝 `stat-pill`（2px 图像底）、筛选/时间 popover 抽屉阴影（16px 浮置深度）；
 > ④ **档案卡族**（R37-P4a）：`.pcard` 的 `--pcard-radius:12px` + `--pcard-shadow*` 四档 +
 > 顶部 1px 高光内边 `--pcard-ring` —— "圆角阴影稍微浮起"的小组件式卡片（规格 `docs/design-archive-cards.md`）。
-> **⑤ 视图切换条**（R39-D3/D4 → **R45 改定**，2026-09-24）：`.glow-bar` **加入 ① 浮片族的配方**
+> **⑤ 视图切换条**（R39-D3/D4 → **R45 改定**，2026-09-24）：`.view-switch` **加入 ① 浮片族的配方**
 > （`--pill-bg` 不透明实底 + `--pill-shadow`，圆角取 ④ 的 `--pcard-radius`）—— 它**不参与**
 > ④ 的阴影四档（那四档是档案卡专用的升降序），只借"圆角 + 实底 + 阴影"这套**形状语言**。
 > ⚠️ R39-D3 那版是"毛玻璃工具栏"（白 .10 + `backdrop-filter` + 只有 inset 边），
 > **R45 已推翻** —— 它在默认近白背景上贡献为 0，理由见 §B1 与设计指南第 3/5 条。
-> 条内的**选中块** `.glow-spot` 用**选中语言**（`--sel-bg` 浅粉底 + `--c-primary-deep` 主色粉边，
+> 条内的**选中块** `.view-switch-thumb` 用**选中语言**（`--sel-bg` 浅粉底 + `--c-primary-deep` 主色粉边，
 > 与侧栏选中行的 `--sel-bg`/`--sel-bar` 同一套），**它不加外阴影**（面上的面）—— 见 §B1。
 > 整条**不占布局、按需出现**（`position:absolute` + `data-shown`）—— 见 §B1「工具条显隐状态机」。
 > ⚠️ 族内的 **tone 色**（`--tone-*`）**只许用在 ≤22px 的贴纸角标与 ≤11px 的文字 chip 上**，
@@ -560,12 +560,12 @@ density / 折叠尺寸 `[200,40]` / 面板宽 280 / `backdrop-filter` 含 `blur(
 | 背景层 | `.hero-backdrop(.custom)` | 常驻：**自定义背景优先**（`background_path` → `/static/custom_bg/...`，`.custom` 全图清晰 opacity 1 + **P8-1 起纱罩 alpha 减半**，见 `.hero-backdrop.custom::after`），否则头像铺底（0.18+原纱罩）；`key=src` 换装淡入 |
 | 工具条 | `.view-toolbar` | **R45 起是 overlay**：`position:absolute; inset:0 0 auto 0; height:0; pointer-events:none` —— **不占布局**（这样"隐藏"才真的把空间还给内容），且整条**不吃指针**（若吃，顶 66px 内滚轮不滚列表、卡片顶部点不着）。显隐由 `data-shown` 驱动、键盘聚焦走 `:focus-within`（见下方「工具条显隐状态机」）。卡片页右上角挂 `.bg-tools`（档案设置浮片，`right:12px; top:14px` 与条同轴；**与工具条同一套显隐**；无清除钮） |
 
-**视图切换条**（`.glow-bar` / `.view-btn` / `.glow-spot`）
+**视图切换条**（`.view-switch` / `.view-btn` / `.view-switch-thumb`）
 | 名称 | 类名 | 说明 |
 |---|---|---|
-| 视图切换条 | `.glow-bar` | **R45 = 不透明浮片**（用户 2026-09-24 拍板）：`border-radius: var(--pcard-radius)` · `background: var(--pill-bg)`（**不透明**）· `box-shadow: var(--pill-shadow)`（**形状承担者**）· **无 `backdrop-filter`**。定位 `top:6px; left:50%; translate:-50% 0`；宽**由内容决定**（`padding:3px 8px`，不再写死）；高 46。占 y=6..52，而 `.chips-bar` 的胶囊实体从 y=52 起 ⇒ **零视觉重叠**（1100 档亦然，由探针的不相交判据钉住）。<br>**演进史**：`linear-gradient(90deg,…)` → `radial-gradient(120% / 72% 100% …)` → **毛玻璃**（R39-D3）→ **不透明浮片**（R45）。<br>**为什么推翻毛玻璃**（三条）：① 白 .10 + blur 叠在**默认近白纱罩**上贡献**精确为 0** —— 这条 R39-D4 §一 第 3 条已经量到过（「白 0.10 的玻璃…叠上去等于没有」），但当时只修了柔光那一半、**这半没进遗留，掉了**；② 纯白填充在近白页（`#fffbfb`）上同样看不见 ⇒ 形状必须由**阴影**承担，而这正是浮片族的配方（`.float-pill::before`）；③ 旧判据「外阴影一律不要」写在"一团柔光"的语境里，形状明确成矩形后不再成立（见设计指南第 5 条）。 |
+| 视图切换条 | `.view-switch` | **R45 = 不透明浮片**（用户 2026-09-24 拍板）：`border-radius: var(--pcard-radius)` · `background: var(--pill-bg)`（**不透明**）· `box-shadow: var(--pill-shadow)`（**形状承担者**）· **无 `backdrop-filter`**。定位 `top:6px; left:50%; translate:-50% 0`；宽**由内容决定**（`padding:3px 8px`，不再写死）；高 46。占 y=6..52，而 `.chips-bar` 的胶囊实体从 y=52 起 ⇒ **零视觉重叠**（1100 档亦然，由探针的不相交判据钉住）。<br>**演进史**：`linear-gradient(90deg,…)` → `radial-gradient(120% / 72% 100% …)` → **毛玻璃**（R39-D3）→ **不透明浮片**（R45）。<br>**为什么推翻毛玻璃**（三条）：① 白 .10 + blur 叠在**默认近白纱罩**上贡献**精确为 0** —— 这条 R39-D4 §一 第 3 条已经量到过（「白 0.10 的玻璃…叠上去等于没有」），但当时只修了柔光那一半、**这半没进遗留，掉了**；② 纯白填充在近白页（`#fffbfb`）上同样看不见 ⇒ 形状必须由**阴影**承担，而这正是浮片族的配方（`.float-pill::before`）；③ 旧判据「外阴影一律不要」写在"一团柔光"的语境里，形状明确成矩形后不再成立（见设计指南第 5 条）。 |
 | 视图钮 | `.view-btn.on/.off` | 四枚、**同级视图**（2026-09-08 用户定序 + 删除未接线的邮件占位钮）：**卡片(`LayoutGrid`)→`cards`** / **列表(`AlignJustify`)→`list`** / **数据视图(`BarChart3`)→`archive`** / **档案视图(`Fingerprint`)→`profile`**（P7 追加；R37-P1 改定名）。**R45：50×50 → 34×34、图标 `size-6` → 18px** —— 同排其它控件全是 25–30px（账号切换器 30、分类胶囊 25–30、配置浮片 30），只有它 50 ⇒ 它撑出了 59px 的条与 66px 的带子，是"突兀"的尺寸来源；缩后 overlay 在 1100 档（面板仅 558）才不与账号切换器相交。**`on=1 / off=.7`**（R45：`.4` 叠在**纯白**上也只有 **1.89:1** —— 任何背景都到不了非文本对比 3:1 的下限；`.7` 对纯白条面 = **3.44:1**。`.4` 当初的理由"不抢注意力"现由**自动隐藏**承担）。**R45-A：`.on` 换 `color:#fff`**（深粉实底的配对，见上「选中块」）。⚠️ **`opacity` 与 `color` 都要过渡**（`.7↔1`、深↔白），否则滑动时硬切。⚠️ **必须 `position:relative + z-index:1`** —— 否则绝对定位的选中块会按绘制顺序盖住图标（R39-D4 实测） |
-| 选中块 | `.glow-spot` | **R39-D4**（用户 2026-09-23「换成粉底圆角块」）+ **R45 缩到 40×40** + **R45-A 换选中语言**（用户 2026-09-24 拍板方案 E：**深粉实底 + 白图标、去掉描边**）：`border-radius:12px` · `background: var(--sel-strong)`（`#ec407a`）· **`box-shadow: none`**（原来的 `inset 0 0 0 1px var(--c-primary-deep)` 已删）。位置/宽度由 `PostsPage` 在 `useLayoutEffect([view])` 里按**激活钮自己的 `offsetLeft/offsetWidth`** 写内联样式（不按 34+8 硬算 —— 以后改尺寸/间距自动跟上；边长从 CSS 变量 `--glow-spot` 读，单一真源）；过渡 `transform/width 220ms var(--ease-standard)`，reduced-motion 下 0.01ms；**`pointer-events:none` 是硬要求**（否则盖住按钮、吃掉点击）。<br>**R45-A 的四步全是被迫的，不是口味**（详见 `tokens.css` 的 `--sel-strong`）：① 去描边 ⇒ 形状只能由填充扛；② 浅粉扛不住 —— `--sel-bg` 对**自己这个白条面**只有 **1.10:1**（比它当年在近白页上的 1.07 还差）；③ 压深到能立形状的粉，**深图标就读不出了**（`#4b5a6b` on `#c9406f` = 1.50:1）⇒ 图标只能转白；④ 白图标 ≥3:1 ⇒ 填充亮度 ≤0.30 ⇒ 落在 `#ec407a`（**3.76:1**，余量 25%）。<br>⚠️ **用户原本想要的是顶栏粉 `#ffa2b4`**，那档白图标只有 **1.90:1**：实测（真动画台）块要滑满 **42px** 才能完全盖住新图标，而滑到它左缘只要 **5px** ⇒ 行程中段被瞄准的图标有 **42% 露在白条上**；在 `#ffa2b4` 上那 42% 是白压白 ⇒ 会"断成两截"。换成亮粉里能过线的最亮一档后，同样的暴露**仍然读得出**。<br>**这条边界是可算的，所以两种"粉 + 图标"组合互斥**：白图标 ≥3:1 ⇔ 填充相对亮度 **≤0.30**；顶栏粉是 **0.504**（高 68%）。要按顶栏粉的色相压到刚好过线得 `#c77e8c`（V=0.78）—— 那时"顶栏粉"已经灰掉了。**所以「亮粉 + 白图标」与「亮粉 + 深图标」不存在同时成立的一档**；想要那个粉就只能用深图标，想要白图标就得接受粉被压深。<br>探针判据：中心与激活钮 ≤1.5px · 宽 ≥ 按钮+6（**相对关系**）· `pointer-events:none` · 过渡含 transform · 底色 alpha=1 且非渐变 · **激活图标对填充 ≥3:1**（按渲染值算）· **不得有 `inset` 描边 / `border`**（R45-A 新加）· 不得盖住激活图标 |
+| 选中块 | `.view-switch-thumb` | **R39-D4**（用户 2026-09-23「换成粉底圆角块」）+ **R45 缩到 40×40** + **R45-A 换选中语言**（用户 2026-09-24 拍板方案 E：**深粉实底 + 白图标、去掉描边**）：`border-radius:12px` · `background: var(--sel-strong)`（`#ec407a`）· **`box-shadow: none`**（原来的 `inset 0 0 0 1px var(--c-primary-deep)` 已删）。位置/宽度由 `PostsPage` 在 `useLayoutEffect([view])` 里按**激活钮自己的 `offsetLeft/offsetWidth`** 写内联样式（不按 34+8 硬算 —— 以后改尺寸/间距自动跟上；边长从 CSS 变量 `--view-thumb-size` 读，单一真源）；过渡 `transform/width 220ms var(--ease-standard)`，reduced-motion 下 0.01ms；**`pointer-events:none` 是硬要求**（否则盖住按钮、吃掉点击）。<br>**R45-A 的四步全是被迫的，不是口味**（详见 `tokens.css` 的 `--sel-strong`）：① 去描边 ⇒ 形状只能由填充扛；② 浅粉扛不住 —— `--sel-bg` 对**自己这个白条面**只有 **1.10:1**（比它当年在近白页上的 1.07 还差）；③ 压深到能立形状的粉，**深图标就读不出了**（`#4b5a6b` on `#c9406f` = 1.50:1）⇒ 图标只能转白；④ 白图标 ≥3:1 ⇒ 填充亮度 ≤0.30 ⇒ 落在 `#ec407a`（**3.76:1**，余量 25%）。<br>⚠️ **用户原本想要的是顶栏粉 `#ffa2b4`**，那档白图标只有 **1.90:1**：实测（真动画台）块要滑满 **42px** 才能完全盖住新图标，而滑到它左缘只要 **5px** ⇒ 行程中段被瞄准的图标有 **42% 露在白条上**；在 `#ffa2b4` 上那 42% 是白压白 ⇒ 会"断成两截"。换成亮粉里能过线的最亮一档后，同样的暴露**仍然读得出**。<br>**这条边界是可算的，所以两种"粉 + 图标"组合互斥**：白图标 ≥3:1 ⇔ 填充相对亮度 **≤0.30**；顶栏粉是 **0.504**（高 68%）。要按顶栏粉的色相压到刚好过线得 `#c77e8c`（V=0.78）—— 那时"顶栏粉"已经灰掉了。**所以「亮粉 + 白图标」与「亮粉 + 深图标」不存在同时成立的一档**；想要那个粉就只能用深图标，想要白图标就得接受粉被压深。<br>探针判据：中心与激活钮 ≤1.5px · 宽 ≥ 按钮+6（**相对关系**）· `pointer-events:none` · 过渡含 transform · 底色 alpha=1 且非渐变 · **激活图标对填充 ≥3:1**（按渲染值算）· **不得有 `inset` 描边 / `border`**（R45-A 新加）· 不得盖住激活图标 |
 
 **决定"内容从哪开始"的令牌**（R45 / R45-B / R45-D / R45-E / **R45-E2**，真源在 `tokens.css`）：
 
@@ -601,7 +601,7 @@ density / 折叠尺寸 `[200,40]` / 面板宽 280 / `backdrop-filter` 含 `blur(
 > 换成"四个可独立调的旋钮"。已反向验证：把 `--toolbar-gap-cards` 改成 20 ⇒
 > **只有 cards** 的内容顶变 72，其余三档不动（改前是四档一起动）。
 >
-> **接线由探针逐视图对账**（`_assert_glow` ⑤b 的两条，R45-E2 新增）：
+> **接线由探针逐视图对账**（`_assert_layout` ⑤b 的两条，R45-E2 新增）：
 > ① `.view-body` 上**解析后**的 `toolbarGap` 必须等于 `:root` 上该视图的
 > `--toolbar-gap-<view>`；② `::before` 的实高必须等于 `覆盖带 + 该视图的量`。
 > ⚠️ **少了这两条，"映射写错"是查不出来的**：某个视图用了别人的间距时，
@@ -682,13 +682,13 @@ density / 折叠尺寸 `[200,40]` / 面板宽 280 / `backdrop-filter` 含 `blur(
    （反过来才是难看的坏法，而这条口径正是以"条在上"为前提）；
 3. 工具条**自动隐藏**（R45-A）⇒ 被压住的那一截在条隐去后自己就露出来了。
 
-| — | 判据（`_assert_glow` ⑤ / ⑤b / ⑤c） |
+| — | 判据（`_assert_layout` ⑤ / ⑤b / ⑤c） |
 |---|---|
 | 标题存在性 | list 族 + archive **必须有**标题；cards/profile **不许有** |
 | 标题**不占流** | `pageTitle.inFlow` 必须为假（拦 R45-B/D 那种"独立占一行"的回流） |
 | **留白** | `contentTopInPanel.top − --toolbar-band ≥ --toolbar-gap`，**且不得多过 40px** |
-| **⑤c 不出面板**（R45-F） | 标题右缘 ≤ 面板内缘 − 16（`pageTitle.rect` vs `glow.panelRect`）—— 允许被盖，**不许出界** |
-| **⑤c 条压标题**（R45-F） | `glow.viewBodyZ < glow.toolbarZoneZ`（判**层叠上下文那一层**；不判"是否重叠"） |
+| **⑤c 不出面板**（R45-F） | 标题右缘 ≤ 面板内缘 − 16（`pageTitle.rect` vs `layout.panelRect`）—— 允许被盖，**不许出界** |
+| **⑤c 条压标题**（R45-F） | `layout.viewBodyZ < layout.toolbarZoneZ`（判**层叠上下文那一层**；不判"是否重叠"） |
 
 > ⚠️ **长标题会被"切成两段"，这是已知且已接受的**（用户 2026-09-25 拍板「保持现状」）：
 > 条只有 176px 宽且居中 ⇒ 标题够长时**从条的两侧都露出来**，读起来是
@@ -702,7 +702,7 @@ density / 折叠尺寸 `[200,40]` / 面板宽 280 / `backdrop-filter` 含 `blur(
 > **⑤b 的被测量在 R45-E 换了**：旧判据量「标题**文本顶**」（让开量当时写在标题的
 > `padding-top` 上，只能这样间接推）。标题挪进工具条那一栏之后，那条判据**恒红**
 > （文本顶 ≈14，永远到不了 52+51）—— 这就是"必须换被测对象"的信号。
-> 新判据量「**第一个在流内的内容块**的顶」（`glow.contentTopInPanel`，`probe.ts` 已换算成
+> 新判据量「**第一个在流内的内容块**的顶」（`layout.contentTopInPanel`，`probe.ts` 已换算成
 > 面板内坐标）：更硬，而且 cards/profile 这两个没有标题的视图**也能用同一条判据**。
 > ⚠️ 反面也判（留白 > gap + 40）：拦"让开量写了两处"（`.view-body::before` + 视图自己的
 > padding 没删干净 ⇒ 双倍留白）。
@@ -733,7 +733,7 @@ density / 折叠尺寸 `[200,40]` / 面板宽 280 / `backdrop-filter` 含 `blur(
 | 角色 | 承担者 |
 |---|---|
 | **主指示器** | **内容本身** —— 卡片 / 列表 / 牌堆 / 画布四者形态差异极大，不需要控件告诉你 |
-| **按需指示器** | 工具条可见时的选中块（`.glow-spot`）—— 控件只在"你正在找切换入口"那一刻回答"我在哪" |
+| **按需指示器** | 工具条可见时的选中块（`.view-switch-thumb`）—— 控件只在"你正在找切换入口"那一刻回答"我在哪" |
 | **反馈** | 冷启动首挂 + 深休眠唤醒时**闪现 1.2s**（见下） |
 
 | 状态 | 触发 | 表现 |
@@ -746,7 +746,7 @@ density / 折叠尺寸 `[200,40]` / 面板宽 280 / `backdrop-filter` 含 `blur(
 
 **四个设计决定各自的理由**：
 
-1. **热区 = `.glow-bar` ∪ 右上组的 rect，各外扩 8px** —— **不是整条 66px 带子**。
+1. **热区 = `.view-switch` ∪ 右上组的 rect，各外扩 8px** —— **不是整条 66px 带子**。
    整条会把"去够列表页的分类胶囊"也算进去（那是用户要**最直接可触及**的控件）。
    窄档尤其明显：1100 档面板只有 558px。
 2. **必须要求"移动进入"而不是"停留"** —— 数据视图的牌堆是**滚轮翻转**的：用户可能把指针
@@ -777,7 +777,7 @@ density / 折叠尺寸 `[200,40]` / 面板宽 280 / `backdrop-filter` 含 `blur(
   （`ui_probe.py --toolbar` 抓到的正是这个：`rest: shown=1` 而 `afterLeave` 正常。）
 
 **探针**：`ui_probe.py --toolbar`（状态机：rest 全隐 / 进热区呼出 / 移出收回 / 聚焦显形 /
-不挤动内容）+ 默认三档的 `glow` 段（几何、对比度、**与内容控件不相交**）。
+不挤动内容）+ 默认三档的 `layout` 段（几何、对比度、**与内容控件不相交**）。
 
 #### 设计指南：在背景图/插画上放控件，怎么才不留"边界"
 
@@ -817,8 +817,8 @@ density / 折叠尺寸 `[200,40]` / 面板宽 280 / `backdrop-filter` 含 `blur(
 
    | 层 | 形状由谁承担 | 阴影 |
    |---|---|---|
-   | **面**（`.glow-bar`，一块浮起的卡） | `--pill-shadow` | **必须有** —— 白底铺在近白页（`#fffbfb`）上**填充看不见**，浮片族一直是靠阴影立形状的（`.float-pill::before`） |
-   | **面上的选中块**（`.glow-spot`） | 填充 + 描边 | **不要** —— 再加就是"面上的面"，两层深度反而糊 |
+   | **面**（`.view-switch`，一块浮起的卡） | `--pill-shadow` | **必须有** —— 白底铺在近白页（`#fffbfb`）上**填充看不见**，浮片族一直是靠阴影立形状的（`.float-pill::before`） |
+   | **面上的选中块**（`.view-switch-thumb`） | 填充 + 描边 | **不要** —— 再加就是"面上的面"，两层深度反而糊 |
 
    判据不再是"有没有阴影"，而是「**这一层是不是靠阴影读形状**」。
    ⚠️ 旧判据在探针里跑过整整一轮（R39-D3 → R45），而**它想保护的性质从没被断言过**：
@@ -848,7 +848,7 @@ density / 折叠尺寸 `[200,40]` / 面板宽 280 / `backdrop-filter` 含 `blur(
 | ├ 加账号钮 | `.pill-add` | **P8-B** + **R15③（2026-09-15）**：37×37 半透明粉方钮，**未 hover 时高度 0 + 负边距抵消列 gap ⇒ 净占位 0**（`.stat-set` 与 `.hero-divider` 的距离因此是 10px，而不是原来的 57px —— 用户要的"徽章紧贴分割线"），此时 `opacity:0` 且 `pointer-events:none`（看不见就不该能点）；hover（`:hover` 或 `.stat-sets[data-hover='1']`）展开回 37px / `opacity:.75` → 自身 hover 时 1；点击打开 `<AddAccountDialog>`。⚠️ `data-hover` 由 React 维护，**存在的唯一理由是探针**：CSS `:hover` 在 `--dump-dom` 里无法模拟，没有它"hover 后可点"这条就无从断言（`--polish` 派发 `pointerover/pointerout` 量两种状态） |
 | └ 数值 | `.pill-value` | **26px/600 白**，**右对齐**（`.stat-pill justify-content:flex-end`，右 padding 12px），数字 ≤4 位（`formatCount` 收紧）+ **`text-shadow 0 1px 2px rgba(0,0,0,.35)`** 保图像底可读 |
 | 饰条 | `.hero-divider` | 394×24 设计稿 SVG || ~~企划行~~ | ~~`.faction-badge`（内 `.pill-logo`）~~ | **P8-2 已删除**（card 视图不再展示企划/公会；企划编辑迁往 P8-B 的「档案设置」窗口）。`.pill-logo` 随之删除 |
-| 背景工具钮 | `.bg-tools > .bg-set`（`Settings2`） | **P8-B 起语义变更**：不再是「换背景图」直传 file input，而是打开**档案设置窗口** `<VtuberSettingsDialog>`（背景/名称/企划/设定/头像/签名/账号管理）。**R45：显隐并入工具条**（原来自带一套 `bgToolsVisible` + 900ms 定时器，与工具条并存会**错拍** —— "工具条出现了、设置钮还没出现"）；位置 `right:12px; top:14px` 与 `.glow-bar` **同轴**（条 top 6 + 高 46 ⇒ 中线 29；浮片 30 高 ⇒ top 14） |
+| 背景工具钮 | `.bg-tools > .bg-set`（`Settings2`） | **P8-B 起语义变更**：不再是「换背景图」直传 file input，而是打开**档案设置窗口** `<VtuberSettingsDialog>`（背景/名称/企划/设定/头像/签名/账号管理）。**R45：显隐并入工具条**（原来自带一套 `bgToolsVisible` + 900ms 定时器，与工具条并存会**错拍** —— "工具条出现了、设置钮还没出现"）；位置 `right:12px; top:14px` 与 `.view-switch` **同轴**（条 top 6 + 高 46 ⇒ 中线 29；浮片 30 高 ⇒ top 14） |
 | 档案设置窗口 | `.vd-settings*` | **P8-B 新增**：radix Dialog（`max-w-lg` + `max-height:78vh`）＝ 头部驻留（`.vd-settings-head`）＋ `OverlayScroll`（`.vd-settings-scroll`）＋ 底部操作条（`.vd-settings-foot`）；分区 `.vd-section`（背景/头像/签名/已订阅账号 —— 原「基本资料」2026-09-13 按用户口径整节删除，devlog/067 §四）、字段 `.vd-field`、账号行 `.vd-acc`（行内两个钮：`.vd-acc-hist` 开账号信息历史、`.vd-acc-del` 删账号）。**全实时生效**（无保存钮：blur/点击即写库）；~~锁定胶囊 `.vd-lock.on`~~ **2026-09-13 退役**（devlog/074：`accounts.locked_fields` 已删，改为「允许覆盖 + 记曾用值」）。~~曾用值内联展示（`.vd-former` / `.vd-acc-former`）~~ **同日撤出**（devlog/075），**R9 改为独立弹窗**（2026-09-13，devlog/080 —— 见下方「账号信息历史弹窗」行）。⚠️ **不要给 `.vd-settings` 加 `position:relative`**：本文件在 Tailwind 之后加载，会盖掉内容体上的 `.fixed`，弹窗会从视口居中变成文档流定位（实测飘到视口下方 620px）。规格遵循 UI-MAP §C6。⚠️ **这与 F2 末条是同一类事故**（"后加载的样式表压掉前者的 `position`"），全仓已发生两次（此处飘 620px、`lc-pop` 落在视口外）—— **别再用"靠加载顺序赢"的写法** |
 | └ 账号信息历史弹窗 | `.ah-dialog` / `.ah-*` | **R9 新增**（2026-09-13，devlog/080）：点已订阅账号行右侧的**历史钮**（`.vd-acc-hist`，`History` 图标）打开。「曾用名/曾用签名」只列**该账号**的平台侧旧值（`.ah-former`，`.ah-former-val` 胶囊 + 日期 `<em>`；其余账号的条数用一句 `.ah-note` 说明）；「账号信息快照」时间倒序列 `.ah-snap`（时间 / 粉丝数 / 直播状态 / 开播标题 / 来源标注，上限 60 条）。空态文案明确写"只有**抓取到**变化才会留下旧值（手改不入账）"。刻意独立成窗 —— 曾用值混在编辑区里正是用户否掉的形态；数据源 `GET /vtuber/{id}/former-values` + `GET /account/{id}/stat-snapshots` |
 | └ 签名 + 平台签名下拉 | `.vd-sign-field` / `.vd-sign-toggle` / `.vd-sign-panel` | 2026-09-13 三次迭代（devlog/072→073→**075**）：输入条右端**内嵌 chevron**（`.vd-sign-toggle`，22px 热区、右内距 30px、展开旋转 180°）→ 点开候选面板。面板是**弹窗内容体的直接子元素**（在 `.vd-settings-scroll` 之外）+ `position:absolute`，坐标由 JS 按输入条矩形算（相对内容体 padding box：同宽、贴下方 6px、放不下则向上翻转、跟随滚动/resize/**锚点矩形变化**重定位）—— 浮在「已订阅账号」之上、**不推挤**、也不会被滚动体的 `overflow:hidden` 裁掉；收起态不存在面板。⚠️ **别改回 portal+`position:fixed`**：radix 模态弹窗会给 `document.body` 打 `pointer-events:none`（只把自己的内容体改回 auto），portal 出去的面板继承 `none` ⇒ **hover 与点击全部失灵且不报错**（2026-09-13 用户实测"点不动"）；改成 `pointer-events:auto` 又会被 radix 当成"点了外面"，**点一行就把整个弹窗关掉**；portal 进内容体则因内容体带 `translate-x/y-[-50%]`（包含块）让 `fixed` 坐标全错。候选行 `.vd-sign-opt`：**单行** = 签名文字 `.vd-sign-text`（弹性、`min-width:0`、横向可滚、滚动条隐藏）+ 右端固定平台名 `.vd-sign-plat`（主账号挂 `<em>主账号</em>`、当前项粉底白字）。文字过长时在平台名之前**渐隐**（**只在真的溢出时**挂 `.ovf` 的 `mask-image`）。交互（用户定）：**只留 hover 自动滚一次**到结尾、移出回起点；再点 chevron 收起（`mousedown` 的"点外部"判定把输入条也算内部）；`↑/↓/Enter/Esc` 键盘口径见组件注释。几何、结构与**可点性**不变量由 `ui_probe.py --settings` 断言（**29 项**，含命中测试 `panelHit`/`rowHit`、"点一行不会关弹窗"`pickKeepsDialog`，以及 R9 的历史弹窗四项）。**语义（A3，devlog/074）**：下拉里点某个平台 = 把卡片签名**来源**改成那个账号（写 `sign_source_account_id` 并**清掉 `sign_override`**），**不改任何 `accounts.sign`**；输入框打字 = 写 `sign_override`（覆盖优先于来源），清空输入框 = 撤销覆盖回到跟随来源；来源账号被删 → 回落主账号。有效值解析与卡片同口径（`utils/signSource.ts::resolveSign`） |

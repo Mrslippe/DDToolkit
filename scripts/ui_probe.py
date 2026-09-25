@@ -932,7 +932,7 @@ def _gap_key(tag: str) -> str | None:
     return None
 
 
-def _assert_glow(v: dict, width: int) -> list[str]:
+def _assert_layout(v: dict, width: int) -> list[str]:
     """页面工具条 + 选中块 + 顶部渐隐。
 
     **R45（2026-09-24，用户拍板）把口径整体换了**：工具条从"66px 常驻带子 +
@@ -948,7 +948,7 @@ def _assert_glow(v: dict, width: int) -> list[str]:
       ③ **可见性与对比度**：rest 态不可见且不吃指针；off 态图标对条面 ≥3:1；
       ④ **选中块**：老的六条全部保留（一条没放宽）。
     """
-    g = v.get("glow")
+    g = v.get("layout")
     if g is None:
         return []
     tag = v.get("tag")
@@ -1164,13 +1164,13 @@ def _assert_glow(v: dict, width: int) -> list[str]:
                         f"但**不许出面板**")
             else:
                 bad.append(f"@{width} {tag}: 量不到 `.posts-panel` 的矩形"
-                           f"（`glow.panelRect`）—— 「标题不出面板」这条会静默空转")
+                           f"（`layout.panelRect`）—— 「标题不出面板」这条会静默空转")
             # ── 层叠：**是条压标题**（用户口径「工具条直接覆盖在标题上」的成立前提）──
             # ⚠️ **机制在 `.view-body` 上，不在标题自己身上**：标题的包含块 `.view-body`
             #    带 `z-index:1` ⇒ 自成层叠上下文 ⇒ 标题那个 `z-index:2` 只是**它内部**的
             #    层级，**爬不出** `.view-body`。所以真正决定胜负的是
             #    `.view-body(1)` vs `.view-toolbar(3)`。
-            #    （第一版判据读的是 `.glow-bar` 的 z-index —— 那是 `auto`（3 写在它的父级
+            #    （第一版判据读的是 `.view-switch` 的 z-index —— 那是 `auto`（3 写在它的父级
             #      `.view-toolbar` 上）⇒ 8 帧全红。**字段名对、元素选错**，与 §6.6 同源。）
             nums = {}
             for k, raw in (("title", pt_z), ("viewBody", body_z), ("toolbar", zone_z)):
@@ -1206,7 +1206,7 @@ def _assert_glow(v: dict, width: int) -> list[str]:
             dpad = g.get("deckPadTop")
             if dpad is None:
                 bad.append(f"@{width} {tag}: 量不到 `.data-deck` 的上留白"
-                           f"（`glow.deckPadTop`）—— 阴影余量没人盯了")
+                           f"（`layout.deckPadTop`）—— 阴影余量没人盯了")
             elif dpad < SHADOW_OVERFLOW_PX:
                 bad.append(
                     f"@{width} {tag}: `.data-deck` 上留白只有 {dpad}px < 阴影上溢量 "
@@ -1235,7 +1235,7 @@ def _assert_glow(v: dict, width: int) -> list[str]:
     ct = g.get("contentTopInPanel")
     if ct is None:
         bad.append(f"@{width} {tag}: 探针没量到主体内容的顶"
-                   f"（`glow.contentTopInPanel`）—— 留白判据会静默空转")
+                   f"（`layout.contentTopInPanel`）—— 留白判据会静默空转")
     elif gap_key is None:
         bad.append(f"@{width} {tag}: 这个 tag 没有对应的 `--toolbar-gap-<view>`"
                    f"（`_gap_key` 没映射它）—— 留白判据会静默空转")
@@ -1304,7 +1304,7 @@ def _assert_glow(v: dict, width: int) -> list[str]:
     #    而"头像被切"这件事就又没人盯了）。
     hero_top = g.get("heroTop")
     if tag == "cards" and not hero_top:
-        bad.append(f"@{width} {tag}: 探针没量到 hero 头像的几何（`glow.heroTop`）—— "
+        bad.append(f"@{width} {tag}: 探针没量到 hero 头像的几何（`layout.heroTop`）—— "
                    f"「工具条会不会盖住头像」这条判据会静默空转")
     # ── ⑥ 药丸行数上限（R45-C，用户 2026-09-24：「最多两行」）──────────────────
     # 用户口径：「card 页中平台药丸行数也应该做出限制，最多两行」。
@@ -1337,7 +1337,7 @@ def _assert_glow(v: dict, width: int) -> list[str]:
     spot = g.get("spot")
     bw = g.get("btnW")
     if not spot:
-        bad.append(f"@{width} {tag}: 光条里没有选中块（`.glow-spot`）")
+        bad.append(f"@{width} {tag}: 光条里没有选中块（`.view-switch-thumb`）")
     else:
         if spot.get("cx") is None or spot.get("activeCx") is None:
             bad.append(f"@{width} {tag}: 量不到选中块/激活钮的中心")
@@ -1378,7 +1378,7 @@ def _assert_glow(v: dict, width: int) -> list[str]:
             bad.append(f"@{width} {tag}: 选中块底色是半透明的（alpha={a2}）—— "
                        f"半透明在浅背景上会糊掉，选中态必须不透明")
         # ── R39-D4：选中块**不许盖住激活图标**（绘制顺序）─────────────────────────────
-        # `.glow-spot` 是绝对定位元素 ⇒ 按绘制顺序画在 in-flow 按钮之上；白柔光那版
+        # `.view-switch-thumb` 是绝对定位元素 ⇒ 按绘制顺序画在 in-flow 按钮之上；白柔光那版
         # 表现为"把激活图标洗淡"，不透明粉底那版表现为"块里什么都没有"（截图实测）。
         # 常规命中测试看不出（块 pointer-events:none）⇒ 探针临时打开它再问一次。
         if spot.get("coversIcon") is True:
@@ -1447,7 +1447,7 @@ def _assert(views: list[dict], width: int) -> list[str]:
         bad += _assert_cards(v, width)
         bad += _assert_filter_pop(v, width)
         bad += _assert_filter_chain(v, width)
-        bad += _assert_glow(v, width)
+        bad += _assert_layout(v, width)
     return bad
 
 
@@ -1851,7 +1851,7 @@ def main() -> int:
         help="只跑一档宽度：**页面工具条**（R45）—— rest 全隐且不吃指针 / 指针进热区 + dwell "
              "后呼出 / 移出 + grace 收回 / Tab 聚焦由 `:focus-within` 显形（拦「聚焦到看不见的"
              "控件」）/ 呼出前后内容区高度不变（overlay 不占布局）。"
-             "静态几何与「不与内容控件相交」由默认三档的 glow 段覆盖。",
+             "静态几何与「不与内容控件相交」由默认三档的 layout 段覆盖。",
     )
     ap.add_argument(
         "--cell-pop",
@@ -3344,7 +3344,7 @@ def main() -> int:
         if args.toolbar:
             # 页面工具条（R45，2026-09-24）：从"66px 常驻带子 + 极轻毛玻璃"改成
             # "**overlay + 按需出现 + 不透明浮片**"。
-            # 静态几何/对比度/不相交由默认三档的 `glow` 段覆盖（`_assert_glow`）；
+            # 静态几何/对比度/不相交由默认三档的 `layout` 段覆盖（`_assert_layout`）；
             # 这一段专门钉**状态机** —— 那是默认三档量不到的部分。
             w = widths[0]
             url = f"http://localhost:{vite_port}{route}?probe=toolbar"
@@ -3360,12 +3360,16 @@ def main() -> int:
                 return (f"{name}: shown={s.get('shown')} opacity={s.get('opacity')} "
                         f"pe={s.get('pe')} bodyH={s.get('bodyH')}")
 
+            def _sh(s: dict) -> str:
+                """滚动那几步的简写读数（只要 shown/opacity 两个数）。"""
+                return f"shown={s.get('shown')},op={s.get('opacity')}"
+
             for _n in ("rest", "shown", "afterLeave", "focus", "afterBlur"):
                 print("  " + _st(_n))
             print(f"  overlay：呼出前后内容区高一致={tb.get('bodyHStable')}")
 
             if tb.get("missing"):
-                failures.append(f"@{w} toolbar: 页面上没有 `.glow-bar`（探针未跑完？）")
+                failures.append(f"@{w} toolbar: 页面上没有 `.view-switch`（探针未跑完？）")
             elif not tb:
                 failures.append(f"@{w} toolbar: 没量到工具条段（探针未跑完？）")
             else:
@@ -3396,6 +3400,44 @@ def main() -> int:
                 if (left.get("opacity") or 0) > 0.02 or left.get("shown") != "0":
                     failures.append(f"@{w} toolbar: 指针移出 + grace 后没收回去"
                                     f"（shown={left.get('shown')} opacity={left.get('opacity')}）")
+                # ③b/③c/③d **滚动让位**（R45-G，用户 2026-09-25 口径：
+                #     「向上滚不动，仍靠指针呼出」⇒ 只判"下滚立即收"，另判"上滚不许自己冒"）。
+                sd = tb.get("afterScrollDown") or {}
+                su = tb.get("afterScrollUp") or {}
+                back = tb.get("afterLeaveAndBack") or {}
+                again = tb.get("shownAgain") or {}
+                if not tb.get("scrollerFound"):
+                    failures.append(f"@{w} toolbar: 找不到可滚的 `.os-scroll`"
+                                    f"（量到 {tb.get('scrollerCount')} 个，都没超过 120px 可滚量）"
+                                    f"—— 「下滚让位」这条判据会空转（**空转不是通过**）")
+                else:
+                    print(f"  滚动靶：{tb.get('scrollerInfo')}")
+                    print(f"  滚动：前={_sh(again)} 下滚后={_sh(sd)}(dir={tb.get('scrollDir')!r})"
+                          f" 上滚后={_sh(su)} 离开回来={_sh(back)}")
+                    # ⚠️ **前提检查**（§6.3：别拿被测对象的症状当前提）：
+                    #    下滚之前它必须是**呼出**的，否则"滚完是收着的"证明不了任何事。
+                    if again.get("shown") != "1":
+                        failures.append(f"@{w} toolbar: 滚动前没呼出（shown={again.get('shown')}）"
+                                        f"—— ③b/③c 两条判据都会空转，先修这个")
+                    else:
+                        if tb.get("scrollDir") != "down":
+                            failures.append(f"@{w} toolbar: 下滚后 `data-scroll-dir` 是 "
+                                            f"{tb.get('scrollDir')!r}，应为 'down' "
+                                            f"—— 方向信号没接上")
+                        if sd.get("shown") != "0" or (sd.get("opacity") or 0) > 0.02:
+                            failures.append(f"@{w} toolbar: 向下滚动后工具条**没立即让位**"
+                                            f"（shown={sd.get('shown')} opacity={sd.get('opacity')}）"
+                                            f"—— 用户口径是「开始读内容就让位」（不必等 900ms grace）")
+                        # ⚠️ 上滚这条**只在"下滚真的收了"时才判** —— 否则它是**级联假红**
+                        #    （下滚没生效 ⇒ 条一直 shown ⇒ 报"上滚自己冒出来"，指向错的地方）。
+                        elif su.get("shown") == "1" or (su.get("opacity") or 0) > 0.02:
+                            failures.append(f"@{w} toolbar: 向上滚动后工具条**自己冒出来了**"
+                                            f"（shown={su.get('shown')}）—— 用户口径是"
+                                            f"「向上滚不动，仍靠指针呼出」")
+                        if back.get("shown") != "1" or (back.get("opacity") or 0) < 0.98:
+                            failures.append(f"@{w} toolbar: 下滚过之后指针离开再回热区**呼不出来**"
+                                            f"（shown={back.get('shown')} opacity={back.get('opacity')}）"
+                                            f"—— 抑制位没在「离开热区」时解除")
                 # ④ 键盘聚焦 ⇒ `:focus-within` 显形。
                 #    ⚠️ 此时 `data-shown` **仍是 '0'** —— 这条故意不走 state（纯 CSS 就够）。
                 #    拦的是"Tab 聚焦到一个看不见的控件"：`opacity:0 + pointer-events:none`
@@ -3499,7 +3541,7 @@ def main() -> int:
             si = ((res or {}).get("statusIsland") or {})
 
             # 对比度四个助手已提到模块级（`_srgb_lin`/`_lum`/`_ratio`/`_rgba`）——
-            # R45 的 `_assert_glow` 也要用同一套，就地复制会变成两份真源。
+            # R45 的 `_assert_layout` 也要用同一套，就地复制会变成两份真源。
             print(f"  宿主：density={si.get('density')!r} 折叠尺寸={si.get('widgetSize')} "
                   f"position={si.get('widgetPosition')!r}")
             print(f"  材质：底色={si.get('widgetBg')!r} 文字={si.get('widgetColor')!r}")
@@ -5099,7 +5141,7 @@ def main() -> int:
             #    不印出来就无法回答"51px 到底落在哪、四个视图是不是同一个位置"。
             cards_v = next((v for v in res["views"] if v.get("tag") == "cards"), None)
             if cards_v:
-                hg = cards_v.get("glow") or {}
+                hg = cards_v.get("layout") or {}
                 hr = cards_v.get("hero") or {}
                 print(f"  R45-A 选中态: 填充={hg.get('spotBg')} 图标={hg.get('onColor')} "
                       f"描边={hg.get('spotShadow')!r} border={hg.get('spotBorder')!r} "
@@ -5127,7 +5169,7 @@ def main() -> int:
                           f" ｜ 每行={hr.get('setSizes')}")
             arch_v = next((v for v in res["views"] if v.get("tag") == "archive"), None)
             if arch_v:
-                ag = arch_v.get("glow") or {}
+                ag = arch_v.get("layout") or {}
                 apt = (ag.get("pageTitle") or {}).get("text")
                 print(f"  R45-B 标题: archive={apt!r} / 卡片内={ag.get('cardTitle')!r} "
                       f"｜ 让开量 --toolbar-band={ag.get('toolbarBand')}")

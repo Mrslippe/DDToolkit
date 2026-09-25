@@ -146,14 +146,14 @@ export default function PostsPage() {
   // ── 亮点指示器（R39-D）：位置跟着激活的视图钮走 ────────────────────────
   // 量的是**激活钮自己的 offsetLeft/offsetWidth**（而不是按 50+10 的间距算）：
   // 以后改按钮尺寸/间距时，亮点自动跟得上，不用同步改两处数字。
-  // 光点直径从 CSS 变量 `--glow-spot` 读（单一真源：CSS 画、TS 只用来算居中）。
-  const glowRef = useRef<HTMLDivElement | null>(null)
+  // 光点直径从 CSS 变量 `--view-thumb-size` 读（单一真源：CSS 画、TS 只用来算居中）。
+  const switchRef = useRef<HTMLDivElement | null>(null)
   const [spot, setSpot] = useState<{ x: number; w: number } | null>(null)
   useLayoutEffect(() => {
-    const bar = glowRef.current
+    const bar = switchRef.current
     const btn = bar?.querySelector<HTMLElement>('.view-btn.on')
     if (!bar || !btn) return
-    const size = parseFloat(getComputedStyle(bar).getPropertyValue('--glow-spot')) || 0
+    const size = parseFloat(getComputedStyle(bar).getPropertyValue('--view-thumb-size')) || 0
     setSpot({ x: btn.offsetLeft + (btn.offsetWidth - size) / 2, w: size })
   }, [view])
   // 列表页右侧操作钮组：收起态只露 [展开钮][更新动态]，展开向左滑出全部四钮
@@ -188,6 +188,9 @@ export default function PostsPage() {
   /** 上一次"在不在热区"。**只在边沿动作** —— mousemove 每秒几十次，
    *  每次都重设定时器就永远触发不了。 */
   const inZoneRef = useRef(false)
+  /** 「刚被向下滚动按下去」的抑制位（R45-G）：指针**先离开热区**才允许再显示。
+   *  没有它的话，指针停在热区里时 `mousemove` 会立刻把条弹回来。 */
+  const scrolledRef = useRef(false)
 
   const showBar = useCallback(() => {
     window.clearTimeout(graceTimer.current)
@@ -199,6 +202,28 @@ export default function PostsPage() {
     window.clearTimeout(dwellTimer.current)
     window.clearTimeout(graceTimer.current)
     graceTimer.current = window.setTimeout(() => setBarShown(false), BAR_GRACE_MS)
+  }, [])
+
+  /** 向下滚动 → **立即**让位（R45-G，2026-09-25 用户口径：只做这一半）。
+   *
+   *  为什么值得加：指针移开后本来就会收（900ms），但那 900ms 里用户**已经开始读了**，
+   *  条还压在内容上。向下滚动是"我要看内容"最明确的信号 ⇒ 不必等那个拍子。
+   *
+   *  ⚠️ **为什么需要 `scrolledRef` 这个抑制位**：光调 `setBarShown(false)` 是**没用的** ——
+   *     指针若还停在热区里，下一次 `mousemove` 会走 `inside === true` 那条路把它**立刻弹回来**
+   *     （更糟：`inZoneRef` 还是 true，连边沿都不算，只有再进出一次才会重新计时）。
+   *     所以按下之后，**必须等指针先离开热区**才允许再显示 —— 这正是用户选的
+   *     「**向上滚不动，仍靠指针呼出**」：抑制位只在"离开热区"那一步清掉。
+   *
+   *  ⚠️ 用户口径（2026-09-25 二选一）：「**向上滚不动**」——
+   *     所以**不要**在这里给 `up` 加"立即显示"（那会让条在滚轮时自己冒出来，
+   *     与现有的"指针 dwell 才呼出"冲突）。 */
+  const onScrollDown = useCallback(() => {
+    scrolledRef.current = true
+    window.clearTimeout(dwellTimer.current)
+    window.clearTimeout(graceTimer.current)
+    window.clearTimeout(flashTimer.current)
+    setBarShown(false)
   }, [])
 
   /** 指针在不在热区。
@@ -214,15 +239,18 @@ export default function PostsPage() {
     const inside = inHotZone(
       e.clientX,
       e.clientY,
-      [glowRef.current, toolsRef.current].map((el) => el?.getBoundingClientRect() ?? null),
+      [switchRef.current, toolsRef.current].map((el) => el?.getBoundingClientRect() ?? null),
       BAR_ZONE_PAD,
     )
     if (inside === inZoneRef.current) return // 只在边沿动作
     inZoneRef.current = inside
     if (inside) {
+      // 刚被向下滚动按下去过 ⇒ 指针得先离开热区再回来，才准重新弹（R45-G）
+      if (scrolledRef.current) return
       window.clearTimeout(dwellTimer.current)
       dwellTimer.current = window.setTimeout(showBar, BAR_DWELL_MS)
     } else {
+      scrolledRef.current = false   // 离开热区 = 抑制解除（用户口径：靠指针呼出）
       hideBarSoon()
     }
   }
@@ -259,6 +287,40 @@ export default function PostsPage() {
     },
     [],
   )
+
+  /** 向下滚动 → 立即让位（R45-G）。信号由 `OverlayScroll` 挂在滚动容器根节点的
+   *  `data-scroll-dir` 上（`up` / `down`），这里只消费它。
+   *
+   *  ⚠️ **为什么读 attribute 而不是加 prop**：`OverlayScroll` 是**共享组件**（四个视图都用），
+   *     给它加一个 `onScrollDir` prop 要动四处调用点、还要在每处接进状态机；
+   *     而方向信号本来就以 attribute 形式挂在 DOM 上（与 `data-scrolled` 同一套），
+   *     这里用 `MutationObserver` 订阅**只影响本页**，零改动其它视图（§6.1 的纪律：
+   *     拆/改共享组件时，先问"这个改动会不会波及没打算动的地方"）。
+   *
+   *  ⚠️ **只在翻成 `down` 的那一刻动作**：`MutationObserver` 每次属性变化都回调，
+   *     而滚动是连续的 —— 不加边沿判断就等于每个方向变化都调一次 `setBarShown`。
+   *
+   *  ⚠️ **观察整棵子树（`subtree: true`），不要预先 `querySelectorAll` 抓节点快照**：
+   *     第一版就是在 effect 里抓 `.os-root` 快照 —— 而**视图是之后才挂载的**
+   *     （切 V / 切视图时整体重挂），快照抓空 ⇒ 一个都没 `observe` 上 ⇒
+   *     **功能静默失效**（探针实测到的正是它：`data-scroll-dir` 已经是 `down`，
+   *     工具条纹丝不动）。`subtree: true` 自动覆盖后续挂进来的滚动体，不必猜时序。 */
+  useEffect(() => {
+    const panel = panelRef.current
+    if (!panel) return
+    const mo = new MutationObserver((records) => {
+      for (const r of records) {
+        if (r.attributeName !== 'data-scroll-dir') continue
+        if ((r.target as HTMLElement).getAttribute('data-scroll-dir') === 'down') {
+          onScrollDown()
+        }
+      }
+    })
+    mo.observe(panel, {
+      attributes: true, attributeFilter: ['data-scroll-dir'], subtree: true,
+    })
+    return () => mo.disconnect()
+  }, [onScrollDown])
 
   // 时间下拉的点外关闭 / Esc 双通道自 P10-A 起下沉到 `PostFilterPop`（同款实现，
   // 一次管住整个筛选弹窗的开关）
@@ -621,7 +683,7 @@ export default function PostsPage() {
 
   // 无限滚动：hasMore 由累计长度与总数比较派生（第 1 页后 posts.length < total）
 
-  // 壳层常驻：加载/错误态内联到 view-body（见渲染段），工具条与 glow-bar
+  // 壳层常驻：加载/错误态内联到 view-body（见渲染段），工具条与 view-switch
   // 不随切 V 卸载重挂——消除切换闪动
   // 头像 / 右栏背景以 VTuber 本体为准（稳定，不随账号切换变化）；
   // 帖子流跟随所选账户；卡片页签名/直播走 VTuber 整体事实（B站优先）——
@@ -723,12 +785,12 @@ return (
             R37-P1（2026-09-17）：命名按用户口径改定 —— 「档案（直播日历 / 粉丝趋势）」→
             **数据视图**，「档案卡」→ **档案视图**（卡片画布）。
             R45：按钮 50 → 34、图标 `size-6` → 18px（尺寸理由见 posts.css 的 `.view-btn`）。 */}
-        <div className="glow-bar" ref={glowRef}>
+        <div className="view-switch" ref={switchRef}>
           {/* 选中块（R39-D，用户：「有一个亮点追随当前切换的按钮，带有切换时的动画效果」）：
               位置按激活钮的 `offsetLeft/offsetWidth` 写内联样式（`useLayoutEffect`），
               于是"按钮换高亮"与"块滑过去"在同一次布局里落定，不会闪。 */}
           {spot && (
-            <span className="glow-spot" aria-hidden="true"
+            <span className="view-switch-thumb" aria-hidden="true"
                   style={{ transform: `translateX(${spot.x}px)`, width: spot.w }} />
           )}
           <button
@@ -769,7 +831,7 @@ return (
 
       {/* 场景容器：key=账号|视图 → 提交即整体重挂播放入场（scene-in），
           退场期挂 scene-exit 整块 fall-out；工具条在块外常驻，高亮即时响应。
-          加载/错误态内联于此（壳层常驻，glow-bar 不随切 V 卸载）。
+          加载/错误态内联于此（壳层常驻，view-switch 不随切 V 卸载）。
           ⚠️ `data-view` 是**版式的选择器**（R45-E2）：`posts.css` 用它把
           「四个视图各自的让开量」解析成本元素上的 `--toolbar-gap`
           （`.view-body[data-view=…]`）。少挂它 ⇒ 兜底用 list 那一档

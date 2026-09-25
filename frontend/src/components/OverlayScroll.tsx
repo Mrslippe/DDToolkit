@@ -40,6 +40,16 @@ interface OverlayScrollProps {
  * - 状态同步（sync）只改位置/尺寸/display：scroll（rAF）/ ResizeObserver
  *   （滚动体 + 首个子元素）/ 400ms 轮询兜底（内容异步长高）。
  */
+/** `data-scroll-dir` 的方向判据：位移小于这个值不算"换方向"（滤掉 1px 级的抖动与惯性尾巴） */
+const DIR_EPS_PX = 2
+
+/**
+ * 覆盖式滚动条：不占宽、自动隐藏、可拖拽（规格见 `docs/UI-MAP.md` §F2）。
+ *
+ * 下发给根节点的 CSS 信号（视图侧只写 CSS，不额外监听）：
+ * - `data-scrolled="0|1"` —— "滚下去了没"（顶部渐隐的单一事实来源，R39-D）
+ * - `data-scroll-dir="up|down"` —— **正在往哪滚**（R45-G，给页面工具条"向下滚让位"用）
+ */
 export default function OverlayScroll({
   className = '', style, role, children, scrollRef, onScroll,
   'aria-modal': ariaModal,
@@ -52,6 +62,13 @@ export default function OverlayScroll({
   /** 拖拽会话（无 = 未拖拽）；grabY = 按下时指针相对拇指顶的偏移 */
   const drag = useRef<{ pointerId: number; grabY: number } | null>(null)
 
+  /** 上一次的滚动方向（`1` 下 / `-1` 上）；`0` = 还没定过 */
+  const lastDir = useRef(0)
+  /** 上一次的 scrollTop（判方向用）；`-1` = 还没读过 */
+  const lastY = useRef(-1)
+  /** 已经写进 `data-scroll-dir` 的方向（避免每帧写 DOM） */
+  const lastDirWritten = useRef(0)
+
   /** 仅同步位置/尺寸/display（不动显隐），可频繁调用 */
   const sync = useCallback(() => {
     const sc = scrollEl.current
@@ -60,6 +77,24 @@ export default function OverlayScroll({
     // R39-D：把"滚下去了没"挂到根节点上（`data-scrolled`）—— 顶部渐隐的**单一事实来源**。
     // 放在这里是因为它本来就随 scroll / RO / 轮询跑，零额外监听；视图侧只写 CSS。
     rootRef.current?.setAttribute('data-scrolled', sc.scrollTop > 0 ? '1' : '0')
+    // R45-G（2026-09-25）：再挂一个**方向**信号 `data-scroll-dir`（`1` 下 / `-1` 上）。
+    // 起因：页面工具条要"向下滚就让位"（用户口径：**向上滚不动，仍靠指针呼出**）——
+    // 而 `data-scrolled` 只是布尔（"滚下去了没"），答不了"正在往哪滚"。
+    // ⚠️ **只在方向真的翻转时才写 attribute**：这个方法每次 scroll 都跑（rAF），
+    //    无条件写会让 DOM 每帧都抖一次 —— 而 CSS 只关心"翻成哪个方向了"。
+    // ⚠️ **顶部归零要复位成"上"**：滚回顶端时若仍报"下"，工具条会被一条早已结束的
+    //    向下滚动永久按住（显隐状态机读的就是这个值）。
+    const y = sc.scrollTop
+    const prev = lastY.current
+    if (Math.abs(y - prev) > DIR_EPS_PX) {
+      lastDir.current = y > prev ? 1 : -1
+      lastY.current = y
+    }
+    const dir = y <= 0 ? -1 : lastDir.current
+    if (dir !== lastDirWritten.current) {
+      rootRef.current?.setAttribute('data-scroll-dir', dir > 0 ? 'down' : 'up')
+      lastDirWritten.current = dir
+    }
     const H = sc.clientHeight
     const S = sc.scrollHeight
     if (H <= 0) return                 // 布局未定，交给轮询/RO 再试

@@ -29,6 +29,22 @@ const VIEWS: ProbeView[] = [
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+/**
+ * 等**一帧**（`requestAnimationFrame` + 兜底定时器），给"把同步包在 rAF 里"的组件用。
+ *
+ * ⚠️ **为什么不能只 `sleep`**：本仓的 `OverlayScroll.onScroll` 是
+ * `rAF(() => sync())` —— 而**虚拟时间下 rAF 几乎不被服务**（DEV-LOOP 记过：
+ * 实测 400ms 里只被叫 0–1 次）。于是"改了 `scrollTop` 就 `sleep(90)` 再读"
+ * 会读到**同步还没跑**的旧值，表现成"信号没接上"，实际是**尺子等错了东西**。
+ * 这里 `rAF` 与定时器**双保险**：谁先到算谁（定时器是给"rAF 不被服务"那一档兜的）。
+ */
+const nextFrame = () => new Promise<void>((resolve) => {
+  let done = false
+  const finish = () => { if (!done) { done = true; resolve() } }
+  requestAnimationFrame(finish)
+  setTimeout(finish, 50)
+})
+
 /** 上游取数还没落地时，弹窗里会出现的文案（见 `LiveSessionDialog` 的 waitHint） */
 const UPSTREAM_PENDING_RE = /正在取上游弹幕|上游响应较慢/
 
@@ -176,7 +192,7 @@ function measure(tag: string) {
       // ⚠️ R45-C 首跑读到的 `hero: None` 是**设计如此、不是缺陷**：药丸只在 cards 视图渲染，
       //    所以 list / archive / profile 三帧上 `hero` 本来就是 null，而药丸判据
       //    （行数上限、溢出对账）只在 `if hero:` 为真时跑 ⇒ **只在 cards 帧生效**。
-      //    （真正要盯的是 cards 帧上它非空 —— 那条由 `_assert_glow` 的 `pillRows is None` 兜底。）
+      //    （真正要盯的是 cards 帧上它非空 —— 那条由 `_assert_layout` 的 `pillRows is None` 兜底。）
       if (!pills.length && !sets.length) return null
       const sig = pills.map((p) => {
         const idx = p.getAttribute('data-pill-index')
@@ -318,10 +334,10 @@ function measure(tag: string) {
      *  「光条边缘羽化不要有明显分界线」「一个亮点追随当前切换的按钮」「被裁切的卡片要有个解释」。
      *  三件事都只在"看着对不对"的层面，所以全部量化：光条背景是 2D 径向（不是带硬边的线性格）、
      *  亮点中心与激活钮中心对齐、亮点不吃点击、滚动体顶部在滚下去之后才有渐隐 mask。 */
-    glow: (() => {
-      const bar = document.querySelector<HTMLElement>('.glow-bar')
+    layout: (() => {
+      const bar = document.querySelector<HTMLElement>('.view-switch')
       if (!bar) return null
-      const spot = bar.querySelector<HTMLElement>('.glow-spot')
+      const spot = bar.querySelector<HTMLElement>('.view-switch-thumb')
       const active = bar.querySelector<HTMLElement>('.view-btn.on')
       const off = bar.querySelector<HTMLElement>('.view-btn.off')
       const br = bar.getBoundingClientRect()
@@ -334,7 +350,7 @@ function measure(tag: string) {
       // 这个自相矛盾的读数就是"尺子读在半路"的铁证（它会让对比度判据假红）。
       const kill = document.createElement('style')
       kill.textContent =
-        '.glow-spot,.view-btn{transition:none !important}'
+        '.view-switch-thumb,.view-btn{transition:none !important}'
       document.head.appendChild(kill)
       void spot?.getBoundingClientRect()          // 强制重排，让计算样式落到终值
       void off?.getBoundingClientRect()           // 同上：让 `.off` 的 opacity/color 落到终值
@@ -353,7 +369,7 @@ function measure(tag: string) {
       kill.remove()
       const scroller = document.querySelector<HTMLElement>('.scene-body .os-scroll, .archive-view .os-scroll, .board-view .os-scroll, .list-scroll .os-scroll, .hero-scroll .os-scroll')
       const root = scroller?.closest<HTMLElement>('.os-root')
-      // R39-D4：选中块**不许盖住激活图标**。`.glow-spot` 是绝对定位元素，按绘制顺序画在
+      // R39-D4：选中块**不许盖住激活图标**。`.view-switch-thumb` 是绝对定位元素，按绘制顺序画在
       // in-flow 的按钮之上 —— 白柔光那版表现为"把激活图标洗淡"，不透明粉底那版表现为
       // "块里什么都没有"（实测截图上整块空白）。常规命中测试**看不出**这个错：
       // 块平时 `pointer-events:none`，elementFromPoint 会绕过它。所以这里临时把它打开
@@ -411,8 +427,8 @@ function measure(tag: string) {
         barRect: { x: Math.round(br.left), y: Math.round(br.top),
                    w: Math.round(br.width), h: Math.round(br.height) },
         /** R45-F：**工具条所在的层叠区**（`.view-toolbar`）的 `z-index` —— 判"条压标题"的基准。
-         *  ⚠️ **不能读 `.glow-bar` 自己的 `z-index`**：它是 `auto`（`z-index:3` 写在它的父级
-         *  `.view-toolbar` 上）。第一版就是量了 `.glow-bar` ⇒ 8 帧全红、报"读不到 z-index"
+         *  ⚠️ **不能读 `.view-switch` 自己的 `z-index`**：它是 `auto`（`z-index:3` 写在它的父级
+         *  `.view-toolbar` 上）。第一版就是量了 `.view-switch` ⇒ 8 帧全红、报"读不到 z-index"
          *  —— 字段名对、**元素选错**，与 DEV-LOOP §6.6 那类尺子坑同源。 */
         toolbarZoneZ: tcs ? tcs.zIndex : null,
         /** R45-F：`.view-body` 的 `z-index`（= 1）—— 它是**标题的包含块**，又带非 auto 的
@@ -495,7 +511,7 @@ function measure(tag: string) {
         /** 图标色走 `currentColor` 继承（`body { color: var(--c-text-main) }`） */
         offColor,
         // ── R45-A：选中态 = 深粉实底 + 白图标（去掉描边）──────────────────
-        /** **白图标**的实测色：与 `.glow-spot` 的填充一起算非文本对比 ≥3:1。
+        /** **白图标**的实测色：与 `.view-switch-thumb` 的填充一起算非文本对比 ≥3:1。
          *  只判 on 图标 —— off 图标压在"正被滑过的块"上只有 2.43:1，但那是**行程过渡态**
          *  （那枚图标本来就在被替换的过程中），不设为判据（见 posts.css 的 `.view-btn.off`）。 */
         onColor,
@@ -525,7 +541,7 @@ function measure(tag: string) {
              *  白吃掉 121px。 */
             inFlow: cs.position === 'static' || cs.position === 'relative',
             /** R45-F：标题的层叠级。用户口径「工具条直接覆盖在标题上，遮住也没关系」
-             *  ⇒ 允许重叠，但**必须是条压标题**：判据拿它与 `glow.barZIndex` 比大小。
+             *  ⇒ 允许重叠，但**必须是条压标题**：判据拿它与 `layout.barZIndex` 比大小。
              *  （重叠本身不用判 —— 它只在标题很长时才发生，而"允许"正是本批的口径。） */
             zIndex: cs.zIndex,
           }
@@ -631,7 +647,7 @@ function measure(tag: string) {
           // ② **量之前要杀 `.view-body` 的入场动画**。`scene-in` 的 from 帧是
           //    `translateY(8px)`，而虚拟时间下动画可能**停在起点**（实测 cards 帧读到
           //    `matrix(1,0,0,1,0,8)`，其它帧是单位矩阵）⇒ 那一帧的内容顶凭空多 8px。
-          //    又是尺子问题，不是版式问题 —— 与 `.glow-spot`/`.view-btn` 杀过渡同一招。
+          //    又是尺子问题，不是版式问题 —— 与 `.view-switch-thumb`/`.view-btn` 杀过渡同一招。
           const kill = document.createElement('style')
           kill.textContent = '.view-body{animation:none !important}'
           document.head.appendChild(kill)
@@ -2063,7 +2079,7 @@ export async function runUiProbe(): Promise<void> {
 
   // 页面工具条（`?probe=toolbar`，R45；配合 `ui_probe.py --toolbar`）：
   // R45 把工具条从"66px 常驻带子 + 极轻毛玻璃"改成"**overlay + 按需出现 + 不透明浮片**"，
-  // 所以要钉住的是**状态机本身**（静态几何与对比度由默认三档的 `glow` 段覆盖）：
+  // 所以要钉住的是**状态机本身**（静态几何与对比度由默认三档的 `layout` 段覆盖）：
   //   ① **rest**：不可见、不吃指针；
   //   ② **进热区 + dwell** ⇒ 可见、吃指针；
   //   ③ **离开 + grace** ⇒ 回 rest；
@@ -2077,9 +2093,9 @@ export async function runUiProbe(): Promise<void> {
     // 那样"呼出来了没有"就变成了尺子问题。`data-shown` 不受影响，两条一起看才分得清
     // "机制没生效"和"尺子读不到"。
     const kill = document.createElement('style')
-    kill.textContent = '.glow-bar,.bg-tools{transition:none !important}'
+    kill.textContent = '.view-switch,.bg-tools{transition:none !important}'
     document.head.appendChild(kill)
-    const barEl = () => document.querySelector<HTMLElement>('.glow-bar')
+    const barEl = () => document.querySelector<HTMLElement>('.view-switch')
     const panelEl = () => document.querySelector<HTMLElement>('.posts-panel')
     const bodyEl = () => document.querySelector<HTMLElement>('.view-body')
     const snap = () => {
@@ -2132,6 +2148,68 @@ export async function runUiProbe(): Promise<void> {
       result.bodyHStable =
         (result.rest as { bodyH?: number } | undefined)?.bodyH ===
         (result.shown as { bodyH?: number } | undefined)?.bodyH
+      // ⑥ **滚动让位**（R45-G，2026-09-25 用户口径：「向上滚不动，仍靠指针呼出」）。
+      //    ⚠️ **必须排在 ④⑤ 之后**：① 那时指针已在热区外，不会污染"失焦后收回"那条判据；
+      //       ② `r` / `pr` 这两个 rect 在 ⑥ 里还要用（重新呼出得知道往哪移）。
+      //    ⚠️ **必须挑"真能滚的"滚动体 + 真能滚的视图**：`document.querySelector('.os-scroll')`
+      //       拿到的是 **DOM 里第一个**，而默认视图（卡片页，`.hero-scroll`）内容往往不够长
+      //       ⇒ `scrollTop` 设了也是 0、`data-scroll-dir` 永远 `up`。
+      //       实测（2026-09-25）：卡片页两个滚动体**都不可滚** ⇒ 这条判据天然空转。
+      //       ⇒ 先在**当前视图**里挑可滚量最大的；一个都没有就**切到列表视图**再挑
+      //       （列表页帖子多，必然可滚）—— 空转不是通过，探针要自己把前提造出来。
+      const pickScroller = () => [...document.querySelectorAll<HTMLElement>('.os-scroll')]
+        .map((el) => ({ el, room: el.scrollHeight - el.clientHeight }))
+        .filter((x) => x.room > 120)
+        .sort((a, b) => b.room - a.room)[0]
+      let picked = pickScroller()
+      if (!picked) {
+        clickView('帖子列表')
+        await sleep(2200)
+        picked = pickScroller()
+      }
+      const scroller = picked?.el
+      result.scrollerCount = document.querySelectorAll('.os-scroll').length
+      result.scrollerFound = !!scroller
+      if (scroller) {
+        result.scrollerInfo =
+          `${scroller.className.replace(/\s+/g, '.')} 可滚 ${scroller.scrollHeight - scroller.clientHeight}px`
+        // 先重新呼出（④⑤ 结束时它是 shown 的，但保险起见显式来一次）
+        move(r.left + r.width / 2, r.top + r.height / 2)
+        await sleep(400)
+        result.shownAgain = snap()
+        // **向下滚**：分几步，让 `data-scroll-dir` 真的翻成 down。
+        // ⚠️ **每步都要等 `sync()` 真的跑过**：`OverlayScroll` 的 `onScroll` 把 `sync()`
+        //    包在 `requestAnimationFrame` 里，而**虚拟时间下 rAF 几乎不被服务**
+        //    （DEV-LOOP 记过：400ms 里只被叫 0–1 次）⇒ 只 `sleep` 会读到"方向还没写"。
+        //    第一次跑就踩到：报"方向信号没接上"，实际是尺子等错了东西。
+        //    `waitFrame()` 显式等一帧（探针里已有这个工具），比加长 sleep 可靠。
+        for (let i = 1; i <= 3; i++) {
+          scroller.scrollTop = 60 * i
+          scroller.dispatchEvent(new Event('scroll', { bubbles: true }))
+          await nextFrame()
+          await sleep(60)
+        }
+        await nextFrame()
+        await sleep(120)
+        result.afterScrollDown = snap()
+        result.scrollDir = scroller.closest('.os-root')?.getAttribute('data-scroll-dir') ?? null
+        // **向上滚**（用户明确选的另一半）：滚回去，条**不许**自己冒出来
+        for (let i = 2; i >= 0; i--) {
+          scroller.scrollTop = 60 * i
+          scroller.dispatchEvent(new Event('scroll', { bubbles: true }))
+          await nextFrame()
+          await sleep(60)
+        }
+        await nextFrame()
+        await sleep(300)
+        result.afterScrollUp = snap()
+        // 指针**离开热区再回来** ⇒ 抑制解除（否则"下滚过"会把它永久按死）
+        move(pr.left + pr.width / 2, pr.bottom - 8)
+        await sleep(1400)
+        move(r.left + r.width / 2, r.top + r.height / 2)
+        await sleep(400)
+        result.afterLeaveAndBack = snap()
+      }
     }
     kill.remove()
 
@@ -3789,7 +3867,7 @@ export async function runUiProbe(): Promise<void> {
       // 用真派发 `mousemove` 走同一条呼出通路（工具条 `pointer-events:none`，
       // 收不到 hover，只能按指针位置判 —— 见 PostsPage 的 `onPanelMouseMove`）。
       const panel = document.querySelector<HTMLElement>('.posts-panel')
-      const gb0 = document.querySelector<HTMLElement>('.glow-bar')?.getBoundingClientRect()
+      const gb0 = document.querySelector<HTMLElement>('.view-switch')?.getBoundingClientRect()
       if (panel && gb0) {
         panel.dispatchEvent(new MouseEvent('mousemove', {
           clientX: gb0.left + gb0.width / 2, clientY: gb0.top + gb0.height / 2,
@@ -3808,8 +3886,8 @@ export async function runUiProbe(): Promise<void> {
     result.editing = document.querySelector('[data-board]')?.getAttribute('data-board-editing')
     result.cards = document.querySelectorAll('.pcard').length
     /** 光条的实矩形（像素分析的锚点：分析脚本按它去图上取边缘剖面） */
-    const gb = document.querySelector<HTMLElement>('.glow-bar')?.getBoundingClientRect()
-    result.glowRect = gb
+    const gb = document.querySelector<HTMLElement>('.view-switch')?.getBoundingClientRect()
+    result.switchRect = gb
       ? { x: Math.round(gb.left), y: Math.round(gb.top),
           w: Math.round(gb.width), h: Math.round(gb.height) }
       : null

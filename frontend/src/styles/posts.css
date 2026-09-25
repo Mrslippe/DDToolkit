@@ -50,7 +50,7 @@
 }
 
 /* 页面工具条**右上组**（R45 起并入工具条的统一显隐；原「背景工具组」自带一套）。
-   位置与 `.glow-bar` **同轴**：条 top 6 + 高 46 ⇒ 中线 29；浮片 30 高 ⇒ top 14。
+   位置与 `.view-switch` **同轴**：条 top 6 + 高 46 ⇒ 中线 29；浮片 30 高 ⇒ top 14。
    ⚠️ 显隐已交给下面的 `.view-toolbar[data-shown]` 规则 —— 原来这里自己一套
    `opacity` + 900ms 定时器（`bgToolsVisible`/`scheduleBgHide`），与工具条并存会**错拍**：
    "工具条出现了、设置钮还没出现"。现在只有**一个** reveal 状态。 */
@@ -82,7 +82,7 @@
    它把**工具条半宽 88 写死在标题上** ⇒ 加第 5 个视图钮 / 改条内间距 / 改按钮尺寸
    都会让这个数悄悄失效，而失效的样子正是"标题被工具条压住"（现在**本来就允许**）
    ⇒ **没有任何东西会红**。这就是删掉它的理由：删的是一个数，换来的是下面两条判据。
-   "遮住也没关系"能成立的**前提有两条**（都由探针 `_assert_glow` ⑤c 判）：
+   "遮住也没关系"能成立的**前提有两条**（都由探针 `_assert_layout` ⑤c 判）：
      ① 工具条是**不透明白卡**（`--pill-bg: #ffffff`）⇒ 压住就是真遮住，
         不会从条里透出半截字（这是 R45 把条从毛玻璃改成白卡换来的性质）；
      ② 标题的 `z-index` **必须小于**工具条的 ⇒ 是**条压标题**，不是标题浮在条上。
@@ -131,9 +131,9 @@
    ⚠️ **不许 `aria-hidden`**：这 4 个钮是真实控件，对读屏用户"一直可用"
    比"跟着鼠标隐现"更好。
 
-   位移用 `transform`（`translateY`），与 `.glow-bar` 自己的 `translate: -50% 0`
+   位移用 `transform`（`translateY`），与 `.view-switch` 自己的 `translate: -50% 0`
    不冲突 —— `translate` 与 `transform` 是两条独立属性，会叠加。 */
-.glow-bar,
+.view-switch,
 .bg-tools {
   opacity: 0;
   transform: translateY(-6px);
@@ -142,9 +142,9 @@
               transform var(--motion-fast) var(--ease-exit);
 }
 
-.view-toolbar[data-shown='1'] .glow-bar,
+.view-toolbar[data-shown='1'] .view-switch,
 .view-toolbar[data-shown='1'] .bg-tools,
-.view-toolbar:focus-within .glow-bar,
+.view-toolbar:focus-within .view-switch,
 .view-toolbar:focus-within .bg-tools {
   opacity: 1;
   transform: none;
@@ -154,7 +154,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .glow-bar,
+  .view-switch,
   .bg-tools {
     transition: none;
   }
@@ -371,10 +371,10 @@
   color: var(--c-primary);
 }
 
-.glow-bar {
+.view-switch {
   /* 定位：overlay 在 `.view-toolbar`（高度 0）里，横向居中。
      ⚠️ 用 `translate` 而不是 `transform: translateX(-50%)` —— 显隐动画要用
-     `transform: translateY()`（见 `.glow-bar,.bg-tools` 那条共用规则），
+     `transform: translateY()`（见 `.view-switch,.bg-tools` 那条共用规则），
      `translate` 与 `transform` 是两条独立属性，才能叠加。 */
   position: absolute;
   /* R45-B：`top` / `height` 改用令牌 —— `.page-title` 要按同一条带子让位，
@@ -384,7 +384,7 @@
   translate: -50% 0;
   /* 选中块边长（单一真源）：CSS 用它画、TS 读它算居中 —— 两处都不会各写一个数。
      40px 比按钮（34px）大一圈：四周各 3px 边距，"按钮坐进一块选中底"。 */
-  --glow-spot: 40px;
+  --view-thumb-size: 40px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -430,7 +430,7 @@
    **必须 pointer-events:none** —— 否则它盖在按钮上会吃掉点击（"看着能用、其实点不着"）。
 
    ⚠️ **名字是历史包袱**：R39-D 这里是"一团追随按钮的白色柔光"，R39-D4 起是粉底圆角块。
-   不改名的原因很实际：`PostsPage`（读 `--glow-spot` 算居中）、`dev/probe.ts`（量它）、
+   不改名的原因很实际：`PostsPage`（读 `--view-thumb-size` 算居中）、`dev/probe.ts`（量它）、
    `scripts/ui_probe.py`（五条判据）三处都按这个名字引用，churn 不值当。
 
    为什么换掉白光（有截图为证）：白 0.90 叠在**默认背景**（头像铺底 0.18 + 厚白纱罩，
@@ -438,13 +438,13 @@
    `.8/.4` 在传话，而这套视觉的身份不该依赖"用户设过背景图"这个可选状态。
    换成**不透明粉底**（`--sel-bg`，与侧栏选中行/类型胶囊同族的选中语言）后：
    不透明 ⇒ 近白页与用户插画上都读得出来；同时它不再需要"柔光够大才看得见"的尺寸。 */
-.glow-spot {
+.view-switch-thumb {
   position: absolute;
   left: 0;
   top: 50%;
-  width: var(--glow-spot);          /* 边长由工具条的 CSS 变量给（TS 读同一个变量算居中） */
-  height: var(--glow-spot);
-  margin-top: calc(var(--glow-spot) / -2);
+  width: var(--view-thumb-size);          /* 边长由工具条的 CSS 变量给（TS 读同一个变量算居中） */
+  height: var(--view-thumb-size);
+  margin-top: calc(var(--view-thumb-size) / -2);
   /* 12px = 档案卡族圆角口径（与 `--pcard-radius` 同值；块比卡小，同族即可） */
   border-radius: 12px;
   pointer-events: none;
@@ -479,11 +479,11 @@
 
 @media (prefers-reduced-motion: reduce) {
   /* 亮点只保留"瞬移到位"（渐隐是静态遮罩、不是动效，不受影响） */
-  .glow-spot { transition-duration: 0.01ms; }
+  .view-switch-thumb { transition-duration: 0.01ms; }
 }
 
 .view-btn {
-  /* ⚠️ **必须抬到选中块之上**（R39-D4 实测）：`.glow-spot` 是绝对定位元素，按 CSS 绘制顺序
+  /* ⚠️ **必须抬到选中块之上**（R39-D4 实测）：`.view-switch-thumb` 是绝对定位元素，按 CSS 绘制顺序
      （定位后代画在 in-flow 内容之后）会盖住 in-flow 的按钮 —— 白柔光那版是"把激活图标洗淡"，
      换成不透明粉底后就变成"块里什么都没有"（截图上整块空白）。position+z-index 让图标回到上面。
      这不是新问题的引入，而是**旧问题被不透明填充暴露**：激活态必须让图标清楚可见。 */
