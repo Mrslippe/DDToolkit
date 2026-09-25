@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { AlertTriangle, CheckCircle2, ChevronDown, Loader2 } from 'lucide-react'
 import OverlayScroll from './OverlayScroll'
@@ -250,6 +250,31 @@ export default function StatusIsland({ notices, onAction, now, density = 'bar' }
   useEffect(() => () => {
     if (textTimer.current != null) window.clearTimeout(textTimer.current)
   }, [])
+
+  // ── R38 批 5 收尾（2026-09-25）：`.si-count` 从「keyframes 重放」改成「transition 重定向」──
+  // 批 4 把**文案**改了、把**计数徽章**留下了（devlog/171 §六：「收益远小于文案」）。
+  // 但这两个东西**同源** —— 计数一变就走同一条重挂载路径，留着它 means 连续变计数仍会闪，
+  // 与批 4 的整个论点自相矛盾。批 4 说难在"先置 0.6 再置 1 的帧边界"，其实**不需要帧边界**：
+  //
+  // **CSS 过渡取的是"变化后"那一边的 `transition-duration`**（与 `.si-text.is-out`
+  // 用 `--motion-instant` 是同一条性质）⇒ 进 `is-out` 给 `0s` 就是**瞬时复位**到 0.6，
+  // 撤掉 `is-out` 时按基态的 `--motion-fast` **弹出**。两相就够，没有定时器边界问题。
+  //
+  // ⚠️ 元素**保持挂载**（去掉原来的 `key={notices.length}`）—— 那正是重放的原因。
+  // 可重定向：中途再变计数只是再复位一次，不会排队。
+  const [countPopped, setCountPopped] = useState(false)
+  const countRef = useRef(notices.length)
+  // ⚠️ **必须是 `useLayoutEffect`（绘制前），不能是 `useEffect`**：
+  //    新数字先以**全尺寸**画一帧、下一拍才缩到 0.6 再弹出 ⇒ 屏幕上会看到
+  //    "新数字闪一下 → 又缩回去 → 再弹出来"。`useLayoutEffect` 在浏览器绘制前跑完，
+  //    把这一步藏掉（这也是它与"帧边界"那套说法的实际差别所在）。
+  useLayoutEffect(() => {
+    if (countRef.current === notices.length) return
+    countRef.current = notices.length
+    setCountPopped(true)                            // ① 瞬时缩到 0.6（`is-out` 的时长是 0s）
+    const t = window.setTimeout(() => setCountPopped(false), 0)   // ② 下一拍撤掉 ⇒ --motion-fast 弹出
+    return () => window.clearTimeout(t)
+  }, [notices.length])
   const href = primary?.source ?? ''
 
   return (
@@ -293,7 +318,7 @@ export default function StatusIsland({ notices, onAction, now, density = 'bar' }
           : primary?.kind === 'alert' ? ' warn' : lit ? ' ok' : ''}`} />
         <span className={`si-text pill-text-fade${phaseClass(textState.phase)}`}>{textState.shown}</span>
         {lit && notices.length > 1 &&
-          <span key={notices.length} className="si-count">{notices.length}</span>}
+          <span className={`si-count${countPopped ? ' is-out' : ''}`}>{notices.length}</span>}
         {lit && <ChevronDown className="si-chevron size-[12px]" />}
       </span>
 

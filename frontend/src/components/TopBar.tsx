@@ -638,6 +638,34 @@ export default function TopBar() {
     }
   })
 
+  /**
+   * dev/探针专用（2026-09-25，R38 批 5 收尾）：注入/清除一条**带动作按钮**的完成报告。
+   *
+   * 为什么需要：面板里真正**最小的可点目标**是 `.si-item-action`（「去登录」/「查看详情」，
+   * `padding: 3px 9px` + `11.5px` 字 ⇒ 比胶囊矮得多），而它是**条件渲染**的 ——
+   * 只有未登录或刚跑完全量抓取才出现。探针两种都造不出来 ⇒ "点击目标"判据会**漏掉
+   * 唯一可能不达标的那个对象**，只剩下一个必然通过的胶囊（＝判据空转的另一种形式）。
+   * 同一个理由，`.si-count`（计数徽章）也要 `notices.length > 1` 才出现。
+   *
+   * 走现成的 `doneReport` state（与真实路径**同一个渲染分支**），不是另写一份 DOM ——
+   * 与 `__ddtoolkitCloseClick` 同一种取舍。生产构建里 `import.meta.env.DEV` 为 false ⇒ 摇掉。
+   *
+   * @param r 传报告对象 = 注入；传 `null` = 清除（报告是 `sticky` 的，
+   *          探针采完必须清掉，否则"过期自清"那条判据会假红）
+   */
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    const w = window as unknown as {
+      __ddtoolkitSeedReport?: (r: PostFetchStatus['last_result'] | null) => void
+    }
+    w.__ddtoolkitSeedReport = (r) => {
+      setDoneReport(r as NonNullable<PostFetchStatus['last_result']> | null)
+    }
+    return () => {
+      delete w.__ddtoolkitSeedReport
+    }
+  }, [])
+
   // 最大化状态跟踪：onResized 触发时重查 isMaximized，切换 还原/最大化 图标
   const isMax = useIsMaximized()
 

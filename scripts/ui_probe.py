@@ -932,6 +932,118 @@ def _gap_key(tag: str) -> str | None:
     return None
 
 
+# ── WCAG 2.2 SC 2.5.8「Target Size (Minimum)」───────────────────────────────
+# 规格 §5 原写「点击目标 ≥ 28px」，R38 批 3 因此把那一条挂起（胶囊只有 25px）。
+# **2026-09-25 复核标准原文，那个 28 没有依据**：AA 级要求的是 **24 × 24 CSS px**，
+# 且带一条 Spacing 例外 —— 目标小于 24×24 时，只要以各目标**包围盒**中心画
+# 24px 直径圆、这些圆**不与相邻目标（或相邻目标的圆）相交**，即通过。
+#   · Size requirement：目标内必须**装得下一个 24×24 的轴对齐方块**。
+#     ⚠️ 圆角会把"包围盒里装得下方块"推翻吗？不会 —— 方块只需落在**目标区域**内；
+#     本仓目标全是 `border-radius: 999px` 的胶囊，而 24×24 方块居中放进 25px 高的
+#     胶囊时，四角落在圆角外沿之内（半径 12.5 的圆心到角点 12√2 ≈ 16.97 > 12.5）。
+#     **所以圆角胶囊这条要按"可容纳方块"判，不能只看 `height >= 24`** —— 见
+#     `_wcag_square_fits` 的注释（25px 高恰好在边界上，是本条唯一的实质判断）。
+#   · 判据**不发明阈值**：用标准原文的两个条件，谁破了报谁的名字。
+WCAG_TARGET_MIN_PX = 24
+WCAG_CIRCLE_R = WCAG_TARGET_MIN_PX / 2
+
+
+def _wcag_square_fits(w: float, h: float, radius: float) -> bool:
+    """目标里装得下一个 24×24 的**轴对齐**方块吗（WCAG 2.2 SC 2.5.8 正文）。
+
+    ⚠️ **圆角是真的会让它不达标**（标准原文 Figure 3 专门画了这个反例：
+    直径 24 的圆**装不进** 24×24 的方块 ⇒ 判 undersized）。所以不能只看 `h >= 24`。
+
+    判法 = 把方块的四个角代入**圆角矩形的内部判定**（方块与目标同心时最优：
+    圆角矩形是凸的、关于中心对称 ⇒ 可行位置集合也是凸且对称的，非空则必含中心）。
+
+    圆角矩形（半宽 `a`、半高 `b`、半径 `r`，`r` 被 CSS clamp 到 `min(a,b)`）的内部：
+      · `|x| ≤ a−r 且 |y| ≤ b−r` ⇒ 落在**核心矩形**里（离圆角远，一定在内）；
+      · 否则要落在某个圆角圆内：`(max(0,|x|−(a−r)))² + (max(0,|y|−(b−r)))² ≤ r²`。
+
+    ⚠️ **第一版这里是错的，且错得很隐蔽**：我原来算"角点到圆角圆心的距离 ≤ r"，
+    在**宽而扁**的胶囊上会误判 —— 326×25 的方块角在 `x=±12`，离圆角圆心 `x=±150.5`
+    有 138px，看着"远在圆外"，但那段是**直边中段**，根本没被圆角削掉。
+    实测把它判成 False（＝假红）。**教训：几何判据必须拿真实尺寸跑一遍边界用例**，
+    自洽的公式不一定是正确的公式（这条已进 DEV-LOOP §0.7 的"反向验证"之外 —— 属于
+    "正向也可能错"，所以本函数自带 `_tmp_wcag_check.py` 那批用例）。
+    """
+    s = WCAG_TARGET_MIN_PX
+    if w < s or h < s:
+        return False
+    a, b = w / 2, h / 2
+    # `border-radius: 999px` 会被 clamp 到短边一半 ⇒ 完美胶囊
+    r = min(float(radius), a, b)
+    if r <= 0:
+        return True                      # 直角矩形：能装下 s×s 就成立
+    x = y = s / 2
+    cx, cy = a - r, b - r
+    if x <= cx and y <= cy:
+        return True                      # 核心矩形内，与圆角无关
+    dx = max(0.0, x - cx)
+    dy = max(0.0, y - cy)
+    return (dx * dx + dy * dy) <= r * r + 1e-9
+
+
+def _wcag_circles_clear(a: dict, others: list[dict]) -> bool:
+    """Spacing 例外：以 `a` 的包围盒中心画 24px 圆，与其它目标（及其圆）**都不相交**。
+
+    ⚠️ 标准原文：「the circles do not intersect another target or the circle for
+    another undersized target」—— 两件事都要查：① 圆本身没盖到别的目标；
+    ② 圆没盖到别的**欠尺寸**目标的圆。（已达标的目标不参与 ②，因为它的圆不存在。）
+    """
+    ax = a["x"] + a["w"] / 2
+    ay = a["y"] + a["h"] / 2
+    for b in others:
+        if b is a:
+            continue
+        # ① 圆 vs 矩形（最近点距离）
+        nx = min(max(ax, b["x"]), b["x"] + b["w"])
+        ny = min(max(ay, b["y"]), b["y"] + b["h"])
+        if (ax - nx) ** 2 + (ay - ny) ** 2 < WCAG_CIRCLE_R ** 2 - 1e-9:
+            return False
+        # ② 圆 vs 圆（仅当对方也欠尺寸）
+        if not _wcag_square_fits(b["w"], b["h"], b.get("radius", 999)):
+            bx = b["x"] + b["w"] / 2
+            by = b["y"] + b["h"] / 2
+            if (ax - bx) ** 2 + (ay - by) ** 2 < (2 * WCAG_CIRCLE_R) ** 2 - 1e-9:
+                return False
+    return True
+
+
+def _assert_hit_targets(si: dict, width: int) -> list[str]:
+    """状态岛里每个可点目标都要过 WCAG 2.2 SC 2.5.8（AA）。
+
+    替掉规格 §5 自拟的「≥ 28px」—— **那条没有标准支撑，且它让批 3 白挂起了一轮**。
+    现在按标准的两条路判：装得下 24×24 ⇒ 过；否则看 Spacing 例外。
+    """
+    out: list[str] = []
+    targets = si.get("hitTargets")
+    if not targets:
+        # 采样为空 ⇒ 判据**空转**。宁可变红也不要"看起来绿"（本仓的反向验证纪律）。
+        return [f"@{width} status-island: 没采到任何点击目标（hitTargets 为空）"
+                f"—— 点击目标判据会空转"]
+    # 胶囊的**布局**口径优先（rect 可能停在宽度形变的中间帧，本仓记过三次）
+    box = si.get("pillBox") or {}
+    radius = si.get("pillRadius") or 0
+    for t in targets:
+        w, h = t["w"], t["h"]
+        rad = radius if t["sel"] == ".si-island" else t.get("radius", 999)
+        if t["sel"] == ".si-island" and box:
+            w, h = box.get("w", w), box.get("h", h)
+        if _wcag_square_fits(w, h, rad):
+            continue
+        # 没达标 ⇒ 只能靠 Spacing 例外。**但它要和谁比间距，取决于它是不是真有邻居**：
+        # 只在"确实存在相邻目标"时才有资格判例外不成立。
+        if _wcag_circles_clear(t, targets):
+            continue
+        out.append(
+            f"@{width} status-island: 点击目标 `{t['sel']}` {w:.0f}×{h:.0f}px 装不下 "
+            f"24×24 方块，且它的 24px 间距圆与相邻目标相交 ⇒ 不过 WCAG 2.2 "
+            f"SC 2.5.8（规格 §5 原写 28px，2026-09-25 已按标准原文改为 24px + 间距例外）")
+    return out
+
+
 def _assert_layout(v: dict, width: int) -> list[str]:
     """页面工具条 + 选中块 + 顶部渐隐。
 
@@ -3340,10 +3452,39 @@ def main() -> int:
                             "opacity" not in (si.get("textTransitionProps") or ""):
                         failures.append(f"@{w} status-island: 胶囊文案的 transition-property 不含 "
                                         f"opacity（{si.get('textTransitionProps')!r}）")
-                    got_ms = si.get("countAnimMs")
-                    if got_ms is not None and got_ms != fast_ms:
-                        failures.append(f"@{w} status-island: 计数徽章动画时长是 {got_ms}ms，"
+                    # ⚠️ R38 批 5 收尾（2026-09-25）：**旧的「计数徽章动画时长 ==
+                    # --motion-fast」这条判据已退役** —— 它写于「`.si-count` 还是 keyframes」
+                    # 的时代，而改成 transition 之后 `animation-duration` **合法地就是 0**
+                    # （实测 0ms，于是它反而报红）。这正是 DEV-LOOP §0.3 那条：
+                    # **判据的前提消失后，判据本身要退役**，不能留着当噪音。
+                    # 现在改判"重定向"的两项（与文案同款）：
+                    if si.get("countAnimName") not in (None, "none"):
+                        failures.append(f"@{w} status-island: 计数徽章还挂着 keyframes 动画 "
+                                        f"（{si.get('countAnimName')!r}）—— 与文案同源，"
+                                        f"批 4 起一律改 transition（重放会闪）")
+                    cms = si.get("countTransitionMs")
+                    if cms is not None and cms != fast_ms:
+                        failures.append(f"@{w} status-island: 计数徽章过渡时长是 {cms}ms，"
                                         f"应等于 --motion-fast（{fast_ms}ms）")
+                    cprops = si.get("countTransitionProps")
+                    if cprops is not None and "opacity" not in (cprops or ""):
+                        failures.append(f"@{w} status-island: 计数徽章的 transition-property "
+                                        f"不含 opacity（{cprops!r}）—— 原来的 `si-pop-in` 是"
+                                        f"「淡入 + 放大」两条，只搬缩放会把淡入丢掉（视觉回归）")
+                    if cprops is not None and "transform" not in (cprops or ""):
+                        failures.append(f"@{w} status-island: 计数徽章的 transition-property "
+                                        f"不含 transform（{cprops!r}）—— 弹出那一半靠它")
+                    # 「瞬时复位」那一半：`.is-out` 的过渡时长必须是 **0s**。
+                    # ⚠️ 这一条是**结构级**的，不采样中间帧 —— 虚拟时间下过渡不推进
+                    #    （本仓今天记过四次）。判它是因为：若 `is-out` 也有 140ms，
+                    #    视觉会变成"慢慢缩小再弹回来"，与原来的 `si-pop-in` 完全不同。
+                    cz = si.get("countOutTransitionMs")
+                    if cz is not None and cz != 0:
+                        failures.append(f"@{w} status-island: 计数徽章 `.is-out`（复位相）的"
+                                        f"过渡时长是 {cz}ms，应为 **0s** —— 复位必须是瞬时的"
+                                        f"（否则视觉变成「慢慢缩小再弹回」，不是弹出）")
+                    # R38 批 5 收尾：点击目标按 WCAG 2.2 SC 2.5.8（替掉自拟的 28px）
+                    failures.extend(_assert_hit_targets(si, w))
                 # ── R38 批 3：面板几何 ────────────────────────────────────────────
                 if si.get("panelRadius") is not None and si.get("panelRadius") != 14:
                     failures.append(f"@{w} status-island: 面板圆角是 {si.get('panelRadius')}px，"

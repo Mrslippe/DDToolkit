@@ -2135,11 +2135,99 @@ export async function runUiProbe(): Promise<void> {
       result.textTransitionMs = Math.round(parseFloat(tcs.transitionDuration) * 1000)
       result.textTransitionProps = tcs.transitionProperty
     }
-    // `.si-count` 是条件渲染（`lit && notices.length > 1`）—— 本模式只派一条消息，
-    // 所以它可能不存在。存在才量；不存在时脚本侧不判（它和文案共用 `--motion-fast`）。
+    // ── R38 批 5 收尾（2026-09-25）：注入一条**带动作按钮**的报告 ──────────────
+    // 两个判据都**缺这个对象**，不注入就是空转：
+    //   ① `.si-count`（计数徽章）**条件渲染**（`notices.length > 1`）—— 本模式只派一条
+    //      瞬时消息 ⇒ 徽章根本不存在 ⇒ 那条判据（动画时长）量到 None 就跳过。
+    //   ② `.si-item-action`（「去登录」/「查看详情」）是岛内**最小的可点目标**
+    //      （`padding: 3px 9px` + 11.5px 字），而点击目标判据若只量到一个必然通过的
+    //      胶囊，等于没判。
+    //
+    // ⚠️ **必须在 ttl 判定之前清掉**：报告是 `sticky` 的（永不自动过期），留着它
+    //    "过期自清"那条会假红。所以这里注入 → 采样 → 立刻清。
+    const seedReport = (window as unknown as {
+      __ddtoolkitSeedReport?: (r: unknown) => void
+    }).__ddtoolkitSeedReport
+    if (seedReport) {
+      seedReport({
+        seq: 999001, kind: 'full_all', stored: 1234, skipped: 5,
+        issues: [{ stop_reason: '探针注入（非真实抓取）' }],
+      })
+      await sleep(150)
+    }
+
+    // `.si-count` 是条件渲染（`lit && notices.length > 1`）—— 上面注入之后它才存在。
+    // 存在才量；不存在时脚本侧不判。
     const countEl = island()?.querySelector<HTMLElement>('.si-count')
     if (countEl) {
-      result.countAnimMs = Math.round(parseFloat(getComputedStyle(countEl).animationDuration) * 1000)
+      const ccs = getComputedStyle(countEl)
+      result.countAnimMs = Math.round(parseFloat(ccs.animationDuration) * 1000)
+      // R38 批 5 收尾：批 4 遗留说它"仍是 keyframes 重放"—— 与文案**同源**
+      // （计数一变就重挂载），所以留着 means 连续变计数仍会闪，与批 4 的论点自相矛盾。
+      // 判据与文案同款：`animation-name` 必须 `none`，时长改读 `transitionDuration`。
+      result.countAnimName = ccs.animationName
+      result.countTransitionMs = Math.round(parseFloat(ccs.transitionDuration) * 1000)
+      result.countTransitionProps = ccs.transitionProperty
+      // 「瞬时复位」那一半（`.is-out` 的时长必须是 0s）—— **结构级判据，不采中间帧**
+      // （虚拟时间下过渡不推进，本仓今天记过四次）。手动挂一次类再读：
+      // 若这里也有 140ms，视觉会变成"慢慢缩小再弹回"，与原来的 `si-pop-in` 完全不同。
+      countEl.classList.add('is-out')
+      void countEl.getBoundingClientRect()          // 强制重排，让计算样式落到新规则
+      result.countOutTransitionMs =
+        Math.round(parseFloat(getComputedStyle(countEl).transitionDuration) * 1000)
+      countEl.classList.remove('is-out')
+    }
+
+    // ── 点击目标尺寸（WCAG 2.2 SC 2.5.8，R38 批 5 收尾）──────────────────────
+    // 规格 §5 原写「点击目标 ≥ 28px」，但那个数**没有标准支撑**：WCAG 2.2 AA 要求的是
+    // **24×24 CSS px**，且带 Spacing 例外（目标小于 24×24 时，以各目标包围盒中心画
+    // 24px 直径圆，互不相交即通过）。所以采**全部真实目标**的矩形，让脚本侧按标准算，
+    // 而不是在这里判一个自拟的阈值。
+    //
+    // ⚠️ 为什么必须采"全部"：判据要算**相邻目标**的圆有没有相交 —— 只看胶囊自己
+    //    永远算不出来。面板里的动作钮是同一族的可点目标，一起量才构成相邻关系。
+    const targets: Array<{ sel: string; x: number; y: number; w: number; h: number;
+                           radius: number }> = []
+    const pushTarget = (el: HTMLElement | null, sel: string) => {
+      if (!el) return
+      const b = el.getBoundingClientRect()
+      if (b.width <= 0 || b.height <= 0) return
+      const cs = getComputedStyle(el)
+      if (cs.visibility === 'hidden' || cs.display === 'none') return
+      targets.push({
+        sel,
+        x: Math.round(b.left), y: Math.round(b.top),
+        w: Math.round(b.width), h: Math.round(b.height),
+        // 圆角**必须带上**：判"目标里装得下 24×24 方块"时圆角会把四角削掉
+        // （标准原文 Figure 3 就是拿一个圆当反例）。脚本侧按 clamp 后的真实半径算。
+        radius: Math.round(parseFloat(cs.borderTopLeftRadius)),
+      })
+    }
+    // 采样时**面板还开着**（下面才发 Esc）⇒ 胶囊与面板条目/动作钮都在 DOM 里。
+    pushTarget(island(), '.si-island')
+    document.querySelectorAll<HTMLElement>('.si-item-action').forEach((el, i) => {
+      pushTarget(el, `.si-item-action[${i}]`)
+    })
+    result.hitActionCount = targets.length - 1
+    // 胶囊在顶栏里的**邻居**：判"间距例外"要知道最近的那个目标是谁。
+    // 取顶栏里除胶囊本身以外的可点元素（按钮 / 链接 / [role=button]）。
+    document.querySelectorAll<HTMLElement>(
+      '.topbar button, .topbar a[href], .topbar [role="button"]',
+    ).forEach((el, i) => {
+      if (island()?.contains(el)) return
+      pushTarget(el, `.topbar-neighbor[${i}]`)
+    })
+    result.hitTargets = targets
+    // 胶囊自身矩形的**布局**口径（供"24×24 方块装得下"这条用）：
+    // 用 `offsetWidth/Height`（含 border、不含 transform）而不是 rect ——
+    // 胶囊有宽度形变过渡，虚拟时间下 rect 可能停在中间帧（本仓记过三次）。
+    if (pillEl) {
+      result.pillBox = { w: pillEl.offsetWidth, h: pillEl.offsetHeight }
+    }
+    // ⚠️ 采样完立刻清掉注入的报告：它是 `sticky` 的，留着会让下面"过期自清"假红。
+    if (seedReport) {
+      seedReport(null)
+      await sleep(150)
     }
 
     // 展开**不该挤动右栏**（面板是 portal + fixed）

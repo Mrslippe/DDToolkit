@@ -162,7 +162,9 @@ DOM 契约（探针 `ui_probe --status-island` 直接查）：`.si-island`（`.o
 **动效（R12a 期望②「优雅流畅」，2026-09-15 R12b；2026-09-24 **R38 批 1 令牌化**）**：
 面板入场 `si-panel-in`（**`--motion-base` 220ms + `--ease-standard`**，`translateY(-6px) scale(.985)` → 原位，
 `transform-origin: top`）· chevron 翻转 `transition **var(--motion-base)**` ·
-计数徽章 `si-pop-in`（**`--motion-fast` 140ms**；React 侧 `key={notices.length}`，计数变化时重放）· 文案沿用
+计数徽章 `.si-count` **transition 重定向**（**`--motion-fast` 140ms**，`transform + opacity`；
+2026-09-25 起从 `keyframes si-pop-in` **重放**改成 transition，与文案同款 —— 元素保持挂载、
+`.is-out` 相时长 `0s` 做**瞬时复位**再弹出；React 侧 `useLayoutEffect` 在绘制前做这两步）· 文案沿用
 `.pill-text-fade` 淡入（**`--motion-fast`**）。`prefers-reduced-motion: reduce` 下**保留淡入、去掉位移/缩放/过渡**
 （`si-panel-in-fade`，**`--motion-fast`**）——完全不淡反而像闪帧；**但 chevron 的翻转保留（瞬时、无过渡）**：
 状态指示不该被"减少动效"减掉。探针按 `matchMedia` 判分支，两条支路都断言
@@ -1061,7 +1063,7 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 | `--pcard-shadow` / `-hover` / `-edit` / `-lift` | 见 tokens.css | **档案卡族**四档阴影：静止 / 阅读态 hover / 编辑态 / 拿起（R37-P4c 用） |
 | `--pcard-ring` | inset 0 1px 0 rgba(255,255,255,.9) | 卡顶 1px 高光内边 —— "稍微浮起"的关键（光从上面来） |
 | `--tone-pink/-coral/-navy/-gray`（各带 `-deep` / `-tint`） | 见 tokens.css | 卡片色调三件套（角标底 / chip 文字 / chip 底），**只许用在 ≤22px 角标与 ≤11px chip** |
-| `--motion-instant/-fast/-base/-slow` | 90 / 140 / 220 / 320ms | **动效令牌**（R37-P4b 建；与 `design-status-island.md` §2 同值）。**R38 批 1 起状态岛与揭幕/条目入场全部改用它们**（`si-panel-in` · `si-pop-in` · `.pill-text-fade` · chevron · `rise-in-page` · `rise-in-item`）—— 有探针对齐判据（时长 ≠ 令牌值即红），**别写回硬编码** |
+| `--motion-instant/-fast/-base/-slow` | 90 / 140 / 220 / 320ms | **动效令牌**（R37-P4b 建；与 `design-status-island.md` §2 同值）。**R38 批 1 起状态岛与揭幕/条目入场全部改用它们**（`si-panel-in` · `.si-count` 过渡 · `.pill-text-fade` · chevron · `rise-in-page` · `rise-in-item`）—— 有探针对齐判据（时长 ≠ 令牌值即红），**别写回硬编码** |
 | `--motion-lag` | 60ms | **编排偏移**（不是时长）：R38 批 2 起给 `.pill-text-fade` 用，实现 §3 规则 1「形变先行、内容后到」—— 容器先动、文案滞后 60ms 才淡入。同样跟 `--motion-scale` 走 |
 | `--ease-standard/-exit/-emphasized/-pop` | 见 tokens.css | 进入位移 / 离场 / 落位（前快后慢）/ **唯一允许的过冲**（只给"拿起"那一次 scale） |
 | `--motion-scale` | 1 | **慢放倍率**：所有动效时长都是 `calc(N × var(--motion-scale))`，只有动效调测页改它 |

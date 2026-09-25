@@ -277,7 +277,16 @@ html[data-widget-window] #root {
    而窗口的视口就是它自己 ⇒ fixed 坐标 = 窗口坐标。`StatusIsland.place()` 按
    `data-flip` 决定把面板放在胶囊下方（`r.bottom + 6`）还是上方（`r.top − 6 − 面板高`）。 */
 
-/* 计数：多于一条时才出现（让用户知道点开还有别的） */
+/* 计数：多于一条时才出现（让用户知道点开还有别的）
+   ── R38 批 5 收尾（2026-09-25）：从 `animation: si-pop-in`（keyframes **重放**）
+   改成 **transition 重定向**，与 `.si-text` 同款口径（批 4 改了文案、把它留下了，
+   但两者**同源** —— 计数一变就走同一条重挂载路径，留着 means 连续变计数仍会闪）。
+   它比文案简单：视觉只有"弹出"一相（没有"撤"），所以不需要状态机 ——
+   **过渡取的是"变化后"那一边的 `transition-duration`**（与 `.si-text.is-out`
+   用 `--motion-instant` 是同一条性质）：
+     · 挂 `.is-out` → 时长 **0s** ⇒ 瞬时把 scale/opacity 复位（不占时间）
+     · 撤掉 `.is-out` → 基态时长 `--motion-fast` ⇒ 140ms 弹到 1
+   组件侧用 `useLayoutEffect` 在**绘制前**做这两步（否则新数字会先以全尺寸闪一帧）。 */
 .si-count {
   flex: none;
   min-width: 15px;
@@ -290,18 +299,17 @@ html[data-widget-window] #root {
   line-height: 15px;
   text-align: center;
   font-variant-numeric: tabular-nums;
-  animation: si-pop-in var(--motion-fast) ease both;   /* 徽章出现/计数变化时不硬切（React 侧用 key 触发重放） */
+  /* 两条一起过渡：原来的 `si-pop-in` 是「淡入 + 放大」（`opacity 0→1` + `scale .6→1`），
+     只搬缩放会丢掉淡入 ⇒ 视觉会变。探针同时钉 `transition-property` 含这两项。 */
+  transition:
+    transform var(--motion-fast) var(--ease-standard),
+    opacity var(--motion-fast) var(--ease-standard);
 }
 
-@keyframes si-pop-in {
-  from {
-    opacity: 0;
-    transform: scale(0.6);
-  }
-  to {
-    opacity: 1;
-    transform: none;
-  }
+.si-count.is-out {
+  transform: scale(0.6);
+  opacity: 0;
+  transition-duration: 0s;   /* 复位**瞬时**（否则变成"慢慢缩小再弹回"，不是弹出） */
 }
 
 .si-chevron {
