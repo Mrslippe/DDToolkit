@@ -1080,6 +1080,44 @@ def _assert_layout(v: dict, width: int) -> list[str]:
                    f"R45-A 用户口径是「选中时的边框直接去掉」，形状改由**实底填充**承担")
     if sb not in (None, "0px", 0):
         bad.append(f"@{width} {tag}: 选中块出现了 border（{sb!r}）—— 同上去掉描边")
+    # ── ③b **「激活=粉底白字」这一族的白字对比度**（R49 批 3，2026-09-25）──────────
+    # 全仓 **10 个选择器**用同一个 `--c-primary-deep` 当底、配白字（`.filter-chip.on` /
+    # `.acc-switch-btn.on` / `.type-chip.active` / `.drp-preset.on` / `.lc-dlg-tab.on` /
+    # `.board-btn.on` / 能力窗「去登录」…）。旧令牌 `#fb77a1` 上白字只有 **2.54:1**
+    # —— 小字要 4.5、图标要 3，**两边都不达标**。所以这是一处**令牌**问题：
+    # 压深 `#c9406f`（4.72:1）一次修好全部，而逐个改 CSS 会留下"同一个激活态两种粉"。
+    # ⚠️ 判据只算**有文字的**（图标类交给上面那条 3:1）：两档标准混在一起会让误差方向变模糊。
+    # ⚠️ **一处都没量到要判失败**（空转不是通过）——本批第一次跑就靠它发现"挑错了选择器"。
+    atp = g.get("activeTextPills")
+    if atp is None:
+        bad.append(f"@{width} {tag}: 探针没量到激活文字元件（`layout.activeTextPills`）"
+                   f"—— 「粉底白字」这条判据会静默空转")
+    elif not atp:
+        # 不是每个视图都有这类元件；只在**列表页**要求至少量到一处
+        # （那里必然有 `.filter-chip.on` 或 `.acc-switch-btn.on`）。
+        if tag == "list" or tag.startswith("list-"):
+            bad.append(f"@{width} {tag}: 列表页一处「激活文字元件」都没量到 —— "
+                       f"判据空转（选择器写错了？）")
+    else:
+        for item in atp:
+            fg = _rgba(item.get("color") or "")
+            bg = _rgba(item.get("bg") or "")
+            if fg is None or bg is None:
+                bad.append(f"@{width} {tag}: {item.get('sel')} 的对比度算不出来"
+                           f"（color={item.get('color')!r} bg={item.get('bg')!r}）")
+                continue
+            cr = _ratio(_over(fg, bg), bg)
+            # 12.5px 之类的小字按 4.5:1 判（WCAG 大字号门槛是 18.66px 粗体 / 24px）
+            need = 4.5 if (item.get("size") or 99) < 18.66 else 3.0
+            if cr < need:
+                bad.append(
+                    f"@{width} {tag}: 「{item.get('sel')}」里 {item.get('text')!r} 的白字"
+                    f"对比只有 {cr:.2f}:1（{item.get('size')}px）—— 下限 {need}:1。"
+                    f"这一族全压在 `--c-primary-deep` 上 ⇒ **改令牌**（别逐个改 CSS，"
+                    f"那会留下同一个激活态两种粉）。"
+                    f"［取到的底={item.get('bg')!r}"
+                    f"｜本体底={item.get('_selfBg')!r}｜::before 底={item.get('_beforeBg')!r}"
+                    f"｜元素 class={item.get('_cls')!r}｜父={item.get('_parent')!r}］")
     # ── ⑤ 页面标题 = **占位**（R45-B 建立，R45-D 改判据，**R45-E 再改一次**）──────
     # 用户口径演进（全部 2026-09-24 同一天，三句话定了最终形态）：
     #   ① 「list 视图和 archive 视图最顶部的部分可以用位于左侧的标题占掉一部分顶部间距」

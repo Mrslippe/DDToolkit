@@ -521,6 +521,69 @@ function measure(tag: string) {
          *  取 `box-shadow` 与 `border` 两条：旧实现是 `inset 0 0 0 1px`，必须拦住它回流。 */
         spotShadow: spot ? getComputedStyle(spot).boxShadow : null,
         spotBorder: spot ? getComputedStyle(spot).borderTopWidth : null,
+        /** **「激活=粉底白字」这一族的实测字色/底色**（R49 批 3，2026-09-25）。
+         *
+         *  为什么需要：全仓有 **10 个选择器**用同一个 `--c-primary-deep` 当底、配白字
+         *  （`.filter-chip.on` / `.acc-switch-btn.on` / `.type-chip.active` / `.drp-preset.on` /
+         *  `.lc-dlg-tab.on` / `.board-btn.on` / 能力窗「去登录」…）。它们的共同性质是
+         *  **白字压在粉底上**，而旧令牌 `#fb77a1` 只有 **2.54:1** —— 小字要 4.5、图标要 3，
+         *  **两边都不达标**。这是一处令牌问题，不是某几处没修。
+         *
+         *  ⚠️ 采**每个可见实例**而不是只看第一个：`.filter-chip.on` 在列表页与侧栏都有，
+         *     而 `.float-pill.on` 只在能力窗出现（要开弹窗才量得到）—— 判据按"量到几处"报，
+         *     **一处都没量到要判失败**（空转不是通过）。
+         *  ⚠️ 只采**有文字的**（`textContent` 非空）：图标类（档案设置钮）是另一档标准（3:1），
+         *     混在一起会让误差方向变模糊。 */
+        activeTextPills: (() => {
+          const SEL = ['.filter-chip.on', '.acc-switch-btn.on', '.type-chip.active',
+                       '.float-pill.on', '.drp-preset.on', '.lc-dlg-tab.on', '.board-btn.on']
+          const out: { sel: string; color: string; bg: string; size: number; text: string;
+                       _selfBg: string; _beforeBg: string; _bgImg: string; _cls: string; _parent: string }[] = []
+          // ⚠️ **量颜色前必须杀掉过渡**（本仓老招，今天第 4 次踩）：
+          //    `.type-chip { transition: all .15s }` / `.float-pill::before { transition: background-color }`
+          //    在**虚拟时间下不推进** ⇒ `getComputedStyle().backgroundColor` 读到的是
+          //    **过渡起点（白）**而不是终值（粉）。实测两个元素都读成 `rgb(255,255,255)`，
+          //    看起来像"令牌没生效"，其实**纯尺子错** —— 判据红了第一条永远是"先问是不是我量错了"。
+          const killT = document.createElement('style')
+          killT.textContent = '.type-chip,.filter-chip,.acc-switch-btn,.drp-preset,'
+            + '.lc-dlg-tab,.board-btn,.float-pill::before{transition:none !important}'
+          document.head.appendChild(killT)
+          void document.body.offsetHeight      // 强制重排，让 transition:none 立刻生效
+          for (const s of SEL) {
+            document.querySelectorAll<HTMLElement>(s).forEach((el) => {
+              const cs = getComputedStyle(el)
+              // 底色：浮片画在 `::before` 上（`.float-pill.on::before`），其余是元素自身
+              const before = getComputedStyle(el, '::before')
+              // ⚠️ **底色可能画在 `::before` 上**（`.float-pill::before` 就是浮片族的底，
+              //    且它带 `z-index:-1` 画在元素背后）。判断"有没有底"要用
+              //    **`background-color` 的 alpha**，不能只比字符串是否透明 ——
+              //    `.float-pill` 本体是 `background: transparent`，漏判就会把
+              //    白字压到白底上，读数永远是 1.00:1（本批第一次跑就是这样，纯尺子错）。
+              const bgColor = before.backgroundColor
+              const bgImg = before.backgroundImage
+              const hasBefore = bgColor && !/^rgba?\(\s*0,\s*0,\s*0,\s*0\s*\)$/.test(bgColor)
+                && bgColor !== 'transparent'
+              const selfColor = cs.backgroundColor
+              const hasSelf = selfColor && !/^rgba?\(\s*0,\s*0,\s*0,\s*0\s*\)$/.test(selfColor)
+                && selfColor !== 'transparent'
+              const bg = (hasBefore ? bgColor : (hasSelf ? selfColor : bgColor))
+              const text = (el.textContent || '').trim()
+              if (!text) return                     // 图标类交给 3:1 那条
+              const r = el.getBoundingClientRect()
+              if (r.width < 1 || r.height < 1) return // 不可见的不算
+              out.push({
+                sel: s, color: cs.color, bg,
+                size: parseFloat(cs.fontSize) || 0, text: text.slice(0, 12),
+                // 调试用：两个候选底 + 渐变 + **元素身份**（尺子错了能一眼看出来）
+                _selfBg: selfColor, _beforeBg: bgColor, _bgImg: bgImg,
+                _cls: (el.className || '').split(' ').slice(0, 4).join('.'),
+                _parent: (el.parentElement?.className || '').split(' ')[0] || '',
+              })
+            })
+          }
+          killT.remove()          // 量完立刻撤掉临时样式，别污染后面的测量
+          return out
+        })(),
         // ── R45-B：页面标题（**R45-E 起它是"占位"，不占流**）────────────────
         /** 标题文案 + 矩形。**文案为空的视图（cards）合法** —— 它不用标题。
          *  `archive` 下还要拿卡片**内部**渲染的标题做对账（两份真源，机器比）。 */
