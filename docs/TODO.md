@@ -182,6 +182,7 @@
 | **小窗形态梯度的档位与尺寸** | 要定"有几种形态、每档多大" | 见 §1.4 的 W2。**两形态（胶囊 ↔ 面板）已经能用了**（R38 批 5d 补齐 resize 通路，devlog/183），但"灵动岛式多形态"要更多档；档位一旦定了，`widgetExpandGeom` 那套几何要扩成多档 |
 | **自建词云首拉耗时**（2026-09-25 从 §1.1 移来） | 要定"**要不要牺牲完整度**换响应" | 实测 5 万条记录 ~12s 属正常，上游瞬时变慢时单场可达 **120s**（devlog/062 §四）。**当前刻意不加时间预算** —— 截断靠前记录会系统性丢掉下播前的高频词（如「晚安」）。三条可选路：分页调优 / 前端进度反馈 / 标注"基于部分弹幕"后截断（**只有第三条要动产品口径**） |
 | **自建词云支持取消**（2026-09-25 从 §1.1 移来） | 优先级最低，可不做 | 上游取数已可取消（devlog/064）；`/wordcloud` 走同一套（`api.buildLiveSessionWordCloud` 加 `signal` + 调用处 abort）。只在用户点按钮时发、120s 是可接受上限 |
+| **升级/迁移失败的用户可见分类**（2026-09-25 记，devlog/198 明确不做） | 要先定"**备份策略**"口径（备份放哪、保留几份、占多少盘） | 现状：schema 迁移失败时后端起不来，用户只看到「内置后端服务未能在时限内就绪……请关闭应用后重新打开」+「请勿删除数据目录」——**他不知道这是"数据没坏、只是迁移没过、可以找回"**。S3-C 本批只修了"删旧目录"那条不可逆路径，**这一条刻意留出**（属母计划批次 16「升级与迁移安全 + 诊断包」）。判据应当是"用户能自己找回数据"，不是"日志里有异常" |
 
 ### 1.3 用户侧动作（不需要改代码，但只有你能做）
 
@@ -405,7 +406,7 @@ W1/W2 可以在**现在的架构上**做完，但它们只是让 W3 少踩坑。
 > 索引已移入 **`docs/ROADMAP-DONE.md` → 「批次 → devlog 索引」**（2026-09-13 整理：
 > 本文件只留"要干什么"与当前基线，历史索引与已完成条目同处一份文件更好查）。
 
-### 6.2 当前门禁基线（2026-09-24 实测 / 复核）
+### 6.2 当前门禁基线（2026-09-25 实测 / 复核）
 
 > 只放**只能人跑**的实测值：一行一值 + 日期。**能派生的量指向真源，别抄** ——
 > 迁移 head / 表数 / 路由装饰器 / 下一篇 devlog 编号 / 静态用例条数 → `python scripts/gen_doc_numbers.py --list`；
@@ -414,14 +415,17 @@ W1/W2 可以在**现在的架构上**做完，但它们只是让 W3 少踩坑。
 
 | 门禁 | 命令 | 当前基线（括号里 = 该值实测日） |
 |---|---|---|
-| 后端 | `python -m pytest -q` | **586 passed / 0 failed**（2026-09-24） |
-| 桌面壳 | `cargo test`（工作目录 `frontend/src-tauri`） | **32 passed**（2026-09-23 复核一致） |
+| 后端 | `python -m pytest -q`（**解释器走 `.venv`**，见 `ARCHITECTURE.md` §6 第 24 条） | **621 passed / 0 failed**（2026-09-25 实测；`--collect-only` 也是 621） |
+| 桌面壳 | `cargo test`（工作目录 `frontend/src-tauri`） | **42 passed**（2026-09-25；+10 = `delete_old_dir` 那一组，含真实 junction 用例） |
 | 前端单测 | `npm --prefix frontend run test` | **546 passed**（2026-09-24；文件数不抄，跑一次就有） |
 | 前端类型 / lint | `npx tsc --noEmit`（**必须在 `frontend/` 里跑**）/ `npm --prefix frontend run lint` | 0 错 / 0 错（2026-09-23 复核） |
-| 文档漂移 | `python scripts/doc_check.py` | **0 FAIL**（2026-09-23 复核；WARN 看脚本逐条输出） |
+| 文档漂移 | `python scripts/doc_check.py` | **0 FAIL**（2026-09-25 复核；WARN 看脚本逐条输出） |
 | 上游冒烟 | `python scripts/smoke_upstream.py [--cold]` | 真上游 **5 ok** / 冷进程 **3 ok**，0 FAIL（2026-09-23 复核） |
 | 未登录能力矩阵 | `python scripts/capability_matrix.py --write` | 两态逐接口实测（结论 = `docs/ARCHITECTURE.md` §3.9；**`--include-content` 触发 IP 级 412，别顺手跑**） |
 | 布局探针 | `python scripts/ui_probe.py --seed-accounts 8` | 三档 1100/1280/1440 × 10 视图全过（2026-09-24 复核）。⚠️ `8` 是常规参数：开发库只有 2 个账号，不种就是空转的门禁 |
+| 档位门禁 | `python scripts/gate.py` | A 档 7 步全过 / **245–288s**（2026-09-25，含 `cargo test`）；C 档 ≈46s |
+| CI | GitHub Actions（`.github/workflows/`，真源在那里） | 两条腿：Linux（后端 ×2 个 Python + 前端）与 Windows（Rust + 冻结后端冒烟）。**2026-09-25 首次落地，尚未在真实 runner 上跑过** —— 本地已按同样命令在干净快照上逐条验过 |
+| 冻结产物体积 | `python scripts/build_backend.py` 的输出 | **71.7 MB**（2026-09-25；切 `uv.lock` 前记录 118.8MB）。出包后以 `release.py --only verify` 为准 |
 | 一把梭 | `python scripts/dev_check.py` | syntax / pytest / frontend logic / docs drift / dev backend 五项全 ok（2026-09-23 全量实跑） |
 
 > ⚠️ 探针签名（`--hero-expect` / `--calendar-expect`）**含实时数据**，只适合"改动前后短窗口对比" ——

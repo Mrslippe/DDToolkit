@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -77,6 +78,112 @@ struct BackendPort(Mutex<u16>);
 /// 界面要能回答"我的数据到底在哪、为什么在那儿" —— 尤其是**回退过**的情况。
 #[derive(Default)]
 struct DataDirState(Mutex<Option<datadir::Startup>>);
+
+/// 「上一次成功迁移留下哪份旧目录」的一次性授权票据（2026-09-25，devlog/198）。
+///
+/// **为什么需要它**：原先 `delete_old_data_dir(dir: String)` 直接收前端给的**原始路径**，
+/// 只在四道判据上做检查，而这四道**全都可以绕过**（实测见 devlog/198）：
+/// 裸 `PathBuf` 相等比较（`..` / 大小写 / 8.3 短名 / 尾随 `.` 都是"另一个字符串"）、
+/// `is_dir()` 跟随链接、特征文件是 `||` 而不是合取。
+/// ⇒ 传一个指向**当前数据目录**的 junction 或等价写法，就能让正在被 SQLite 使用的活目录
+/// 进入 `remove_dir_all`。
+///
+/// 现在：迁移成功时把 `{canonical_path, id}` 记在这里，前端只拿得到 **id**；
+/// 删除时按 id 查表、重新 canonicalize 并**严格等于**记录，成功后立刻清空（防重放）。
+///
+/// ⚠️ **故意只存在内存里**：进程重启后票据消失 ⇒ "迁移完但重启了"就删不了旧目录，
+/// 用户需要手动删（会在界面上明说）。写进磁盘的代价是"多一份可被伪造的授权文件"，
+/// 与这里要防的东西直接冲突。
+#[derive(Default)]
+struct MigrationRecord(Mutex<Option<MigrationStub>>);
+
+#[derive(Clone)]
+struct MigrationStub {
+    /// 迁移前那个目录的**规范路径**（`canonicalize` 过，消掉 `..` / 大小写 / 8.3 短名）
+    canonical: PathBuf,
+    /// 给前端的一次性票据
+    id: String,
+}
+
+/// 迁移源目录必须命中的 **DDToolkit 特征**（合取，至少 3 项）。
+///
+/// ⚠️ 原先是 `vtuber.db || .env` —— **任一命中即放行**，于是"任意含 `.env` 的目录"都能删。
+/// 合取还要"至少 3 项"而不是"全部 4 项"：真实数据目录里 `vtubers.csv` 与 `logs/`
+/// 可能分别缺失（用户删过 csv / 从没跑过写日志的路径），要求全部反而会挡下合法删除。
+const MIGRATION_SOURCE_MARKERS: [&str; 4] = ["vtuber.db", "vtubers.csv", "logs", "static"];
+const MIGRATION_SOURCE_MIN_MARKERS: usize = 3;
+
+/// 票据里那个目录够不够像"一份 DDToolkit 数据目录"。
+///
+/// **必须是合取**：`vtuber.db` 是硬要求（没有它就不是数据目录），其余 3 项里再命中 2 项。
+fn looks_like_data_dir(p: &std::path::Path) -> bool {
+    if !p.join("vtuber.db").exists() {
+        return false;
+    }
+    let hits = MIGRATION_SOURCE_MARKERS
+        .iter()
+        .filter(|m| p.join(m).exists())
+        .count();
+    hits >= MIGRATION_SOURCE_MIN_MARKERS
+}
+
+/// 生成一次性票据（16 字节随机 → 32 位十六进制）。
+fn new_migration_id() -> Result<String, String> {
+    let mut b = [0u8; 16];
+    getrandom::fill(&mut b).map_err(|e| format!("随机数生成失败：{e}"))?;
+    Ok(b.iter().map(|x| format!("{x:02x}")).collect())
+}
+
+/// 删旧数据目录的**全部判据**（拆成纯逻辑：只有它能被单测，命令壳只做状态读取）。
+///
+/// 顺序有意为之：**先认"是不是当前目录"，再谈特征文件** ——
+/// 一个指向当前数据目录的 junction 会命中第一条，而不是靠"它里面确实有 vtuber.db"混过去。
+fn prepare_old_dir_deletion(
+    id: &str,
+    recorded: Option<&MigrationStub>,
+    current: &std::path::Path,
+) -> Result<PathBuf, String> {
+    let Some(rec) = recorded else {
+        return Err("没有待删除的旧数据目录（迁移记录不存在或已使用过；\
+                    若应用重启过，请手动删除旧目录）"
+            .to_string());
+    };
+    if rec.id != id {
+        return Err("这次删除请求与迁移记录不匹配，已拒绝".to_string());
+    }
+    // 按票据指向的路径**重新**取规范路径（不信票据里那个字符串）
+    let target = std::fs::canonicalize(&rec.canonical)
+        .map_err(|e| format!("旧目录已不可访问（{}）：{e}", rec.canonical.display()))?;
+    let cur_c = std::fs::canonicalize(current)
+        .map_err(|e| format!("当前数据目录无法规范化：{e}"))?;
+    if target == cur_c {
+        return Err("这是当前正在使用的数据目录，不能删".to_string());
+    }
+    if target.starts_with(&cur_c) {
+        return Err("这个目录在当前数据目录里面，不在可删除范围内".to_string());
+    }
+    if cur_c.starts_with(&target) {
+        return Err("这个目录是当前数据目录的上级目录，不在可删除范围内".to_string());
+    }
+    // ⚠️ **必须在 canonicalize 之前判 reparse**：canonicalize 会把它解成目标，
+    // 之后就再也看不出"这原本是个链接"了（实测：junction 与它目标的 canonicalize 完全相同）。
+    match std::fs::symlink_metadata(&target) {
+        Ok(md) if md.file_type().is_symlink() => {
+            return Err("这个路径是符号链接/junction，拒绝删除（请手动处理）".to_string());
+        }
+        Ok(_) => {}
+        Err(e) => return Err(format!("读不到目录属性：{e}")),
+    }
+    if !looks_like_data_dir(&target) {
+        return Err(format!(
+            "这个目录不像 ddtoolkit 数据目录（需要 vtuber.db，且 {} 里至少命中 {} 项），拒绝删除",
+            MIGRATION_SOURCE_MARKERS.join(" / "),
+            MIGRATION_SOURCE_MIN_MARKERS
+        ));
+    }
+    Ok(target)
+}
+
 
 /// 托盘里那行「状态」菜单项的句柄（R29）：运行时改文案用它。
 ///
@@ -248,6 +355,8 @@ struct MigrateReport {
     bytes: u64,
     skipped: Vec<String>,
     port: u16,
+    /// 删旧目录要出示的一次性票据（devlog/198）。**前端只拿得到它，拿不到删除权**。
+    migration_id: String,
 }
 
 /// 选一个目录并把数据迁过去（系统文件夹选择框，用户口径 2026-09-16）。
@@ -325,6 +434,14 @@ async fn migrate_data_dir(app: tauri::AppHandle) -> Result<MigrateReport, String
         portable: false,
         pointer_unusable: None,
     });
+    // 记下"哪份旧目录可以被删"的一次性票据（devlog/198）。
+    // 规范路径在这里取：`current` 来自启动时的解析结果，可能带 `..` 或大小写差异。
+    let migration_id = new_migration_id()?;
+    let canonical = std::fs::canonicalize(&current).unwrap_or_else(|_| current.clone());
+    *app.state::<MigrationRecord>().0.lock().unwrap() = Some(MigrationStub {
+        canonical,
+        id: migration_id.clone(),
+    });
     println!(
         "[ddtoolkit] 数据目录已迁移：{} → {}（{} 个文件 / {} 字节，跳过 {:?}）",
         current.display(),
@@ -340,6 +457,7 @@ async fn migrate_data_dir(app: tauri::AppHandle) -> Result<MigrateReport, String
         bytes: report.bytes,
         skipped: plan.skipped,
         port,
+        migration_id,
     })
 }
 
@@ -458,31 +576,28 @@ fn dir_size(path: &std::path::Path) -> u64 {
 }
 
 /// 删掉迁移前的旧数据目录（用户口径：**迁移成功后问一次**，不自动删）。
+///
+/// 2026-09-25（devlog/198）**改为收"一次性票据"而不是路径**，并补上五道判据。
+/// 改造前的四道全部可绕过，最坏路径能删到正在使用的活目录（实测见 devlog §一）。
+/// 判据本体在 `prepare_old_dir_deletion`（纯函数，单测覆盖）；这里只做状态读取与执行。
 #[tauri::command]
-fn delete_old_data_dir(app: tauri::AppHandle, dir: String) -> Result<u64, String> {
-    let path = std::path::PathBuf::from(&dir);
-    if let Some(cur) = app
+fn delete_old_data_dir(app: tauri::AppHandle, id: String) -> Result<u64, String> {
+    let current = app
         .state::<DataDirState>()
         .0
         .lock()
         .unwrap()
         .as_ref()
         .map(|s| s.dir.clone())
-    {
-        if path == cur {
-            return Err("这是当前正在使用的数据目录，不能删".to_string());
-        }
-    }
-    if !path.is_dir() {
-        return Err(format!("目录不存在：{dir}"));
-    }
-    // 只删"看起来就是数据目录"的：防止界面传进来一个无关路径（或用户手改过）
-    if !path.join("vtuber.db").exists() && !path.join(".env").exists() {
-        return Err("这个目录里没有 ddtoolkit 数据（vtuber.db 与 .env 都不在），拒绝删除"
-            .to_string());
-    }
+        .ok_or_else(|| "数据目录状态未知（壳还没完成启动？）".to_string())?;
+
+    let recorded = app.state::<MigrationRecord>().0.lock().unwrap().clone();
+    let path = prepare_old_dir_deletion(&id, recorded.as_ref(), &current)?;
+
     let freed = dir_size(&path);
     std::fs::remove_dir_all(&path).map_err(|e| format!("删除失败：{e}"))?;
+    // 成功后立刻清掉票据 ⇒ 同一个 id 不能重放
+    *app.state::<MigrationRecord>().0.lock().unwrap() = None;
     println!("[ddtoolkit] 已删除旧数据目录 {}（释放 {} 字节）", path.display(), freed);
     Ok(freed)
 }
@@ -1516,6 +1631,7 @@ pub fn run() {
         .manage(BackendChild(Mutex::new(None)))
         .manage(BackendJob(Mutex::new(0)))
         .manage(DataDirState(Mutex::new(None)))
+        .manage(MigrationRecord(Mutex::new(None)))
         .manage(TrayStatusItem(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             get_backend_port,
@@ -1867,5 +1983,234 @@ mod tests {
         assert_eq!(parse(r#"{"account":{"running":true}}"#), Some(false));
         // 相似字段名不该被误当成 manual_running
         assert_eq!(parse(r#"{"auto_manual_running":true}"#), Some(false));
+    }
+
+    // ── 删旧数据目录的判据（devlog/198）───────────────────────────────────
+    //
+    // 这一组守的是**不可逆操作**：一次调用就 `remove_dir_all`。改造前的四道判据
+    // （裸 PathBuf 相等 / is_dir() 跟随链接 / `.env` 或 `vtuber.db` 任一命中 / 无链接检查）
+    // 全部可绕过，最坏路径能删到正在使用的活数据目录。
+    //
+    // 夹具刻意做成**真实目录 + 真实 junction**（本机实测 `mklink /J` 不需要管理员特权，
+    // 所以它才是真实威胁；`mklink /D` 需要特权，普通用户造不出）。
+    mod delete_old_dir {
+        use super::*;
+
+        /// 每个用例一格试验田；**用 `testtmp::TempRoot`**（Drop 时自清，devlog/134），
+        /// 别自己 `mkdtemp` —— 那正是 "215 个残留目录 / 504MB" 的成因。
+        fn scratch(tag: &str) -> crate::testtmp::TempRoot {
+            crate::testtmp::TempRoot::new("ddtk-del", tag)
+        }
+
+        /// 造一份"看起来就是数据目录"的目录（4 项特征里命中 ≥3 项）。
+        ///
+        /// `env_only = true` 时刻意造出"只有 `.env` + logs + static、**没有 vtuber.db**"
+        /// 的形态 —— 改造前的判据是 `vtuber.db || .env`，这种目录会被放行。
+        fn fake_data_dir(at: &std::path::Path, env_only: bool) {
+            std::fs::create_dir_all(at).expect("建目录");
+            if env_only {
+                std::fs::write(at.join(".env"), b"BILI_SESSDATA=x").unwrap();
+            } else {
+                std::fs::write(at.join("vtuber.db"), b"x").unwrap();
+                std::fs::write(at.join("vtubers.csv"), b"a,b\n").unwrap();
+            }
+            std::fs::create_dir_all(at.join("logs")).unwrap();
+            std::fs::create_dir_all(at.join("static")).unwrap();
+        }
+
+        fn stub(dir: &std::path::Path, id: &str) -> MigrationStub {
+            MigrationStub {
+                canonical: std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf()),
+                id: id.to_string(),
+            }
+        }
+
+        /// 建一个指向 `target` 的 junction；本机不支持时返回 false（用例跳过）。
+        ///
+        /// `mklink /J` **不需要管理员特权**（本机实测；`mklink /D` 需要）——
+        /// 所以 junction 才是真实威胁模型里的那一半。
+        fn make_junction(link: &std::path::Path, target: &std::path::Path) -> bool {
+            let _ = std::fs::remove_dir_all(link);
+            std::process::Command::new("cmd")
+                .args([
+                    "/c",
+                    "mklink",
+                    "/J",
+                    &link.to_string_lossy(),
+                    &target.to_string_lossy(),
+                ])
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        }
+
+        #[test]
+        fn rejects_without_a_record() {
+            let root = scratch("no-record");
+            let cur = root.join("cur");
+            fake_data_dir(&cur, false);
+            let err = prepare_old_dir_deletion("whatever", None, &cur).unwrap_err();
+            assert!(err.contains("没有待删除"), "实得：{err}");
+        }
+
+        #[test]
+        fn rejects_a_mismatched_id() {
+            let root = scratch("bad-id");
+            let old = root.join("old");
+            fake_data_dir(&old, false);
+            let cur = root.join("cur");
+            fake_data_dir(&cur, false);
+            let rec = stub(&old, "the-real-id");
+            let err = prepare_old_dir_deletion("a-forged-id", Some(&rec), &cur).unwrap_err();
+            assert!(err.contains("不匹配"), "实得：{err}");
+        }
+
+        #[test]
+        fn rejects_the_current_data_dir_and_its_equivalents() {
+            let root = scratch("equiv");
+            let cur = root.join("cur");
+            fake_data_dir(&cur, false);
+            std::fs::create_dir_all(cur.join("sub")).unwrap();
+            // 三种等价写法：改造前用裸 `PathBuf` 比较，它们都是"另一个字符串" ⇒ 全部放行
+            for p in [cur.clone(), cur.join("."), cur.join("sub").join("..")] {
+                let rec = MigrationStub {
+                    canonical: p.clone(),
+                    id: "i".into(),
+                };
+                let err = prepare_old_dir_deletion("i", Some(&rec), &cur).unwrap_err();
+                assert!(
+                    err.contains("当前正在使用"),
+                    "等价写法 {p:?} 必须被认成当前目录，实得：{err}"
+                );
+            }
+        }
+
+        #[test]
+        fn rejects_an_ancestor_of_the_current_dir() {
+            let root = scratch("ancestor");
+            let cur = root.join("cur");
+            fake_data_dir(&cur, false);
+            let rec = stub(&root, "i"); // 记录的是当前目录的**上级**
+            let err = prepare_old_dir_deletion("i", Some(&rec), &cur).unwrap_err();
+            assert!(err.contains("上级目录"), "实得：{err}");
+        }
+
+        #[test]
+        fn rejects_a_subdir_of_the_current_dir() {
+            let root = scratch("subdir");
+            let cur = root.join("cur");
+            fake_data_dir(&cur, false);
+            let rec = stub(&cur.join("static"), "i");
+            let err = prepare_old_dir_deletion("i", Some(&rec), &cur).unwrap_err();
+            assert!(err.contains("里面"), "实得：{err}");
+        }
+
+        #[test]
+        fn rejects_a_junction_pointing_at_the_current_dir() {
+            let root = scratch("junction-cur");
+            let cur = root.join("cur");
+            fake_data_dir(&cur, false);
+            let link = root.join("link");
+            if !make_junction(&link, &cur) {
+                eprintln!("跳过：本机造不出 junction");
+                return;
+            }
+            // 伪装成"旧目录"的 junction，目标其实是当前数据目录。
+            // 本机实测：两者 `canonicalize` 后**完全相等** ⇒ 必须被第一条拦下。
+            let rec = MigrationStub {
+                canonical: link.clone(),
+                id: "i".into(),
+            };
+            let err = prepare_old_dir_deletion("i", Some(&rec), &cur).unwrap_err();
+            assert!(
+                err.contains("当前正在使用"),
+                "指向当前目录的 junction 必须被识破，实得：{err}"
+            );
+            assert!(cur.join("vtuber.db").exists(), "拒绝之后活目录必须毫发无损");
+        }
+
+        /// junction 作为删除目标时，**真正被删的是它指向的那个真实目录**，
+        /// 而 junction 自己会变成孤立链接。
+        ///
+        /// ⚠️ 这条用例的第一版写错了预期（期望"junction 被拒"），跑出来是 `Ok(target)`。
+        /// 查清之后这是**正确行为**，而且它同时推翻了规格里的一个假设：
+        ///   · 本机实测 `remove_dir_all(junction)` **不会穿进目标**（`link_junction` 删掉后
+        ///     `real/` 与 `real/sub/marker.txt` 都还在）⇒ "删链接会毁掉目标"的原始恐惧不成立；
+        ///   · `canonicalize` 会把 junction **解成目标** ⇒ 删除路径上拿到的永远是真实目录，
+        ///     "拒 reparse"那道判据在删除路径上**不可达**（它仍保留，因为 `canonicalize`
+        ///     失败时不该退回原始路径，见那一段注释）。
+        /// ⇒ 所以对 junction 真正需要拦的是"**解出来的目标是不是当前目录**"，
+        ///    而那条由 `rejects_a_junction_pointing_at_the_current_dir` 守着（绿）。
+        /// 这条用例守的是剩下那一半：**解出来的目标是别处时，删的必须是那个真实目录**，
+        /// 而不是把 junction 当普通目录、留一堆半死不活的东西。
+        #[test]
+        fn a_junction_resolves_to_its_real_target_before_deleting() {
+            let root = scratch("junction-old");
+            let old = root.join("old");
+            fake_data_dir(&old, false);
+            let cur = root.join("cur");
+            fake_data_dir(&cur, false);
+            let link = root.join("link");
+            if !make_junction(&link, &old) {
+                eprintln!("跳过：本机造不出 junction");
+                return;
+            }
+            let rec = MigrationStub {
+                canonical: link.clone(),
+                id: "i".into(),
+            };
+            let got = prepare_old_dir_deletion("i", Some(&rec), &cur)
+                .expect("junction 解出的目标是别处 ⇒ 放行，但删的必须是真实目录");
+            assert_eq!(
+                got,
+                std::fs::canonicalize(&old).unwrap(),
+                "删除目标必须是 junction 指向的真实目录，而不是链接本身"
+            );
+            assert!(cur.join("vtuber.db").exists(), "活目录必须毫发无损");
+            assert!(old.join("vtuber.db").exists(), "还没删之前目标当然还在");
+        }
+
+        #[test]
+        fn rejects_a_dir_with_only_dot_env() {
+            let root = scratch("env-only");
+            let old = root.join("old");
+            fake_data_dir(&old, true); // 只有 .env + logs + static，没有 vtuber.db
+            let cur = root.join("cur");
+            fake_data_dir(&cur, false);
+            let rec = stub(&old, "i");
+            let err = prepare_old_dir_deletion("i", Some(&rec), &cur).unwrap_err();
+            assert!(
+                err.contains("不像 ddtoolkit 数据目录"),
+                "「有 .env 就算数据目录」是改造前 `||` 的漏洞，必须红。实得：{err}"
+            );
+        }
+
+        #[test]
+        fn rejects_a_missing_target() {
+            let root = scratch("missing");
+            let cur = root.join("cur");
+            fake_data_dir(&cur, false);
+            let rec = stub(&root.join("gone"), "i");
+            let err = prepare_old_dir_deletion("i", Some(&rec), &cur).unwrap_err();
+            assert!(err.contains("不可访问"), "实得：{err}");
+        }
+
+        #[test]
+        fn accepts_a_legitimate_old_dir_and_return_path_is_canonical() {
+            let root = scratch("ok");
+            let old = root.join("old");
+            fake_data_dir(&old, false);
+            let cur = root.join("cur");
+            fake_data_dir(&cur, false);
+            // 票据里存的是"带 `.`"的等价写法 —— 必须仍然放行，但返回的要是**规范路径**
+            // （删除用的是返回值，不是票据里那个字符串）
+            let rec = MigrationStub {
+                canonical: old.join("."),
+                id: "i".into(),
+            };
+            let got = prepare_old_dir_deletion("i", Some(&rec), &cur).expect("合法旧目录应放行");
+            assert_eq!(got, std::fs::canonicalize(&old).unwrap());
+            assert!(got.join("vtuber.db").exists());
+        }
     }
 }

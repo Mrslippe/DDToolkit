@@ -194,6 +194,12 @@ export interface MigrateReport {
   files: number
   bytes: number
   skipped: string[]
+  /**
+   * 删旧目录要出示的**一次性票据**（devlog/198）。
+   * 前端只拿得到它，拿不到删除权 —— Rust 侧按它查表 + 重新 canonicalize 比对后才肯删。
+   * ⚠️ 只存在内存里：**应用重启后这张票据就失效了**，旧目录只能手动删（界面会说明）。
+   */
+  migrationId: string
 }
 
 /**
@@ -228,6 +234,7 @@ export async function migrateDataDir(): Promise<MigrateReport> {
   try {
     const raw = await invoke<{
       data_dir: string; old_dir: string; files: number; bytes: number; skipped: string[]
+      migration_id: string
     }>('migrate_data_dir')
     return {
       dataDir: raw.data_dir,
@@ -235,6 +242,7 @@ export async function migrateDataDir(): Promise<MigrateReport> {
       files: raw.files,
       bytes: raw.bytes,
       skipped: raw.skipped ?? [],
+      migrationId: raw.migration_id,
     }
   } catch (e) {
     // Rust 侧的 `Err(String)` 会被 invoke 原样抛出（**不是** Error 对象），
@@ -243,11 +251,17 @@ export async function migrateDataDir(): Promise<MigrateReport> {
   }
 }
 
-/** 删除迁移前的旧目录（**用户确认后**才调；返回释放的字节数） */
-export async function deleteOldDataDir(dir: string): Promise<number> {
+/**
+ * 删除迁移前的旧目录（返回释放的字节数）。
+ *
+ * ⚠️ 参数是**票据 id**，不是路径（devlog/198）：改造前传的是原始路径，而那时 Rust 侧
+ * 只有裸字符串比较 + 跟随链接的 `is_dir()` + `vtuber.db || .env` 三道判据 —— 一条指向
+ * 当前数据目录的 junction 或 `..` 写法就能绕过它们。调用方**必须**先让用户确认。
+ */
+export async function deleteOldDataDir(migrationId: string): Promise<number> {
   if (!isTauri) throw new Error('只有桌面端才能删除旧数据目录')
   try {
-    return await invoke<number>('delete_old_data_dir', { dir })
+    return await invoke<number>('delete_old_data_dir', { id: migrationId })
   } catch (e) {
     throw new Error(typeof e === 'string' ? e : String(e))
   }

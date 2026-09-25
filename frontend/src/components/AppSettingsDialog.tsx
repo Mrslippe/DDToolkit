@@ -11,6 +11,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import FloatPill from './common/FloatPill'
 import { api } from '../api/api'
 import type { AppSettings, SettingSpec, StorageInfo } from '../api/types'
@@ -171,6 +181,10 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
   const [migrateBusy, setMigrateBusy] = useState(false)
   /** 迁移成功后保留的旧目录（用户确认后再删） */
   const [oldDir, setOldDir] = useState<string | null>(null)
+  /** 删旧目录的一次性票据（devlog/198）：Rust 侧只认它，不认路径 */
+  const [oldDirId, setOldDirId] = useState<string | null>(null)
+  /** 删旧目录的二次确认框（**不可逆操作，原先单击即删**） */
+  const [confirmDelOpen, setConfirmDelOpen] = useState(false)
   useEffect(() => {
     if (!open || active !== ABOUT_ID) return
     let alive = true
@@ -191,6 +205,7 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
     try {
       const got = await migrateDataDir()
       setOldDir(got.oldDir)
+      setOldDirId(got.migrationId)
       setShellDir(await storageInfo())
       setStorage(await api.getStorage())
       toast.success(`数据已迁移到 ${got.dataDir}（${got.files} 个文件）。`
@@ -202,11 +217,14 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
     }
   }
 
+  /** 真正执行删除（**只在二次确认框里点「删除」时调用**）。 */
   const doDeleteOld = async () => {
-    if (!oldDir) return
+    if (!oldDirId) return
+    setConfirmDelOpen(false)
     try {
-      const freed = await deleteOldDataDir(oldDir)
+      const freed = await deleteOldDataDir(oldDirId)
       setOldDir(null)
+      setOldDirId(null)
       setStorage(await api.getStorage())
       toast.success(`旧目录已删除，释放 ${formatBytes(freed)}`)
     } catch (e) {
@@ -595,6 +613,7 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
   }
 
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="aps-settings" data-testid="app-settings-dialog">
         <DialogHeader className="aps-settings-head">
@@ -980,8 +999,8 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
                           {oldDir && (
                             <FloatPill
                               size="md" shape="text"
-                              disabled={storageBusy !== null}
-                              onClick={() => void doDeleteOld()}
+                              disabled={storageBusy !== null || !oldDirId}
+                              onClick={() => setConfirmDelOpen(true)}
                             >
                               删除旧目录
                             </FloatPill>
@@ -1079,5 +1098,33 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
         </div>
       </DialogContent>
     </Dialog>
+
+    {/* 删旧目录的二次确认（devlog/198）——
+        这是**全应用唯一一处不可逆操作**：没有回收站、没有撤销。
+        它原来是单击即执行的（`FloatPill` 的 onClick 直接调命令），
+        而删除权当初只由"前端传什么路径"决定。现在删的是票据，但**确认这一步仍然必须有**：
+        票据只证明"这个目录确实是我们刚迁移走的那份"，不证明"用户此刻真的想删它"。 */}
+    <AlertDialog open={confirmDelOpen} onOpenChange={setConfirmDelOpen}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>删除旧数据目录？</AlertDialogTitle>
+          <AlertDialogDescription>
+            将<b>永久删除</b><span className="aps-mono">{oldDir}</span>
+            ，无法撤销。请先确认新目录里数据完整（打开几个档案看看）。
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>取消</AlertDialogCancel>
+          <AlertDialogAction
+            className="bg-red-600 text-white hover:bg-red-600/90"
+            data-testid="confirm-delete-old-dir"
+            onClick={() => void doDeleteOld()}
+          >
+            删除
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+    </>
   )
 }

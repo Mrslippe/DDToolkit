@@ -697,6 +697,30 @@ flowchart LR
     未登录时**一次请求都不发**（`stop_reason="login_required"`，5 个内容端点 403），
     而不是"试了失败"（那会白耗配额并弄脏 IP）。能力边界由
     `scripts/capability_matrix.py` 两态实测，落 `tests/fixtures/capability_matrix.json`。
+24. **依赖来源只认 `uv.lock`**（2026-09-25，devlog/197）：真源是 `pyproject.toml` + `uv.lock`；
+    `requirements.txt` 是 `uv export --frozen --no-dev` 的**只读导出产物**（带 hash，给 CI/容器用），
+    **不再手改**。运行依赖（进用户的冻结产物）与 `dev` / `build` 组**必须分开** ——
+    实测这一条就把冻结产物从 118.8MB 降到 71.7MB（`pytest` / `PyInstaller` / `werkzeug` /
+    `email_validator` / `numpy` 这些误打进去的包消失）。
+    ⚠️ **构建必须跑在锁环境里**：`scripts/build_backend.py` 会拒绝在非 `.venv` 里构建，
+    并用 `uv sync --frozen --dry-run` 复核"环境 = 锁文件"。原因是它**不装任何依赖**，
+    用"当前解释器里装了什么"去冻结 exe —— 没有这道守卫时，发布产物装的是"跑构建那天的版本"。
+    ⚠️ **新增运行依赖必须显式声明**：`python-multipart` 此前一直被隐式满足（系统 Python 里
+    别的包顺带装了它），缺失时 FastAPI 对 `UploadFile` / `Form(...)` 路由**注册即抛**
+    `RuntimeError` ⇒ 4 个测试文件直接收集失败。**"在开发机能跑"推不出"依赖声明是完整的"。**
+25. **删旧数据目录只认"一次性票据"**（2026-09-25，devlog/198）：`delete_old_data_dir` 收的是
+    `migration_id` 而不是路径。迁移成功时 Rust 把 `{canonical_path, id}` 记在**内存**里
+    （进程重启即失效 ⇒ 重启后删不了，只能手动删）；删除时按 id 查表、**重新 `canonicalize`**
+    并严格等于记录，再依次拒绝：当前目录 / 当前目录的子孙 / 当前目录的祖先 / reparse 点 /
+    "不像数据目录"（`vtuber.db` **且** 4 项特征里再命中 2 项 —— **合取，不是或**）；
+    成功后立刻清票据（**防重放**）。界面上这一步**必须有二次确认**。
+    ⚠️ **为什么这么严**：改造前的四道判据全部可绕 —— 裸 `PathBuf` 相等比不出 `..` / 大小写 /
+    8.3 短名 / 尾随 `.`；`is_dir()` 跟随链接；特征是 `\|\|`（于是"任意含 `.env` 的目录"都能删）；
+    全无链接检查。
+    ⚠️ **两条实测事实**（本机 `mklink /J` 验证；`mklink /D` 需管理员特权而 **junction 不需要**，
+    所以 junction 才是真实威胁的那一半）：① `canonicalize` 会**把 junction 解成目标** ⇒
+    拿它当判据能识破"用 junction 冒充旧目录"；② `remove_dir_all(junction)` **不会穿进目标**
+    （实测目标内容完好）⇒ 删链接本身不危险，真正的风险是①被绕过之后**直接删到活目录**。
 
 ---
 
