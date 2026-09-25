@@ -1,0 +1,51 @@
+[project]
+name = "ddtoolkit"
+version = "1.0.2"
+description = "DDToolkit 后端（FastAPI + SQLAlchemy + SQLite）—— 唯一真源是 uv.lock"
+# ⚠️ Python 3.14：本机实测 3.14.1 上全部运行依赖都有预编译轮子。
+requires-python = ">=3.12"
+
+# ── 运行依赖（进用户的冻结产物）────────────────────────────────────────────
+# 纪律：**这里不放测试/构建工具**。`pytest` / `PyInstaller` 住在下面两个 group 里，
+#      `uv sync --no-dev`（或 `--only-group runtime`）装出来的环境就是发布环境。
+#
+# 为什么写上限（`<N`）而不是只写 `>=`：锁文件已经钉死确切版本，上限是**防线**——
+# 它保证 `uv lock --upgrade` 不会把一个大版本一起抬上来（本仓有历史：`sqlalchemy<2.1`
+# 是刻意的，2.1 若改变 ORM 行为会一次性影响 12 张表的全部读写）。
+dependencies = [
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.30,<1",
+    # ⚠️ 2026-09-25（devlog/197）**由 uv.lock 抓出来的隐式依赖**：
+    #     `POST /vtuber/{id}/background` 收 `UploadFile` + 若干 `Form(...)`，
+    #     FastAPI 对这些签名的路由要求 `python-multipart`，**否则注册路由时就抛
+    #     `RuntimeError: Form data requires "python-multipart"`**（4 个测试文件直接收集失败）。
+    #     它此前能跑，只是因为系统 Python 里**别的包顺带装了它** —— 典型的"没锁文件就
+    #     不知道自己在依赖什么"。已显式声明，不再依赖运气。
+    "python-multipart>=0.0.9,<1",
+    "sqlalchemy>=2.0,<2.1",
+    "httpx>=0.27,<1",
+    "tenacity>=8,<10",
+    "apscheduler>=3.10,<4",
+    "alembic>=1.13,<2",
+    "python-dotenv>=1.0,<2",
+    # 扫码登录的二维码渲染（`app/services/auth.py` 之外由路由侧使用）
+    "qrcode>=7,<9",
+    # 弹幕分词（词云自建，devlog/061）：纯 Python、无编译依赖、自带词典数据文件；
+    # 加载 ~0.7s / 之后 ~0.1ms 条。**延迟导入**（R24/T2，devlog/117）—— 不预热。
+    # PyInstaller 静态分析看不到它 ⇒ `scripts/build_backend.py` 的 HIDDEN_IMPORTS 里显式声明。
+    "jieba>=0.42.1,<1",
+]
+
+[dependency-groups]
+# 开发（**`uv sync` 默认装它** ⇒ 开发机必须能直接 `build_backend.py`）。
+# 分组的用法约定（写在这里是因为"哪个组属于谁"是最容易漂的东西）：
+#   · 日常：      uv sync                          （dev，含 pytest 与 PyInstaller）
+#   · 测试/CI：   uv sync --no-group build          （只要 pytest）
+#   · 只看运行：  uv sync --no-dev --no-group build （= 发布环境的依赖集）
+dev = [
+    "pytest>=7,<10",
+]
+# 构建（`scripts/build_backend.py` 冻结后端；`scripts/release.py` 的 preflight 查它）
+build = [
+    "pyinstaller>=6,<7",
+]

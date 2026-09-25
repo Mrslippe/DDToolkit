@@ -46,6 +46,22 @@ def _free_port() -> int:
         return int(s.getsockname()[1])
 
 
+def project_python() -> str:
+    """跑子步骤用的解释器：**优先项目 venv**（2026-09-25，devlog/197）。
+
+    依赖的真源是 `uv.lock`，而"按锁装出来的环境"是仓库根的 `.venv`。用户完全可能用
+    系统 Python 调本脚本（`python scripts/dev_check.py`）——那时 `sys.executable`
+    指向**另一套版本**：轻则用错依赖跑测试，重则因缺包直接崩
+    （实测缺 `python-multipart` 时 4 个测试文件收集失败）。有 `.venv` 就用它，
+    没有就退回 `sys.executable`（不强迫每个人先装环境）。
+    """
+    venv_py = ROOT / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    return str(venv_py) if venv_py.exists() else sys.executable
+
+
+PY = project_python()
+
+
 def _http(method: str, url: str, timeout: float = 10.0):
     req = urllib.request.Request(url, method=method)
     with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -56,7 +72,8 @@ def _http(method: str, url: str, timeout: float = 10.0):
 
 def _run_pytest() -> bool:
     print(f"\n=== 1/3 单元测试（tests/，回归网） ===")
-    rc = subprocess.run([sys.executable, "-m", "pytest", "tests/", "-q"], cwd=ROOT).returncode
+    rc = subprocess.run([PY, "-m", "pytest", "tests/", "-q", "-p", "no:cacheprovider"],
+                        cwd=ROOT).returncode
     print(f"{OK if rc == 0 else FAIL} pytest rc={rc}")
     return rc == 0
 
@@ -207,7 +224,7 @@ def _run_docs_check() -> bool:
     这些都不会让测试红，只会在几个月后想查"那版改了什么"时才发现查不到（devlog/085）。
     """
     print(f"\n=== 文档漂移（devlog 索引 / 版本号 / 发布说明） ===")
-    rc = subprocess.run([sys.executable, "scripts/doc_check.py"], cwd=ROOT).returncode
+    rc = subprocess.run([PY, "scripts/doc_check.py"], cwd=ROOT).returncode
     print(f"{OK if rc == 0 else FAIL} doc_check rc={rc}")
     return rc == 0
 
@@ -222,7 +239,7 @@ def _run_upstream_smoke() -> bool:
     print(f"\n=== 端到端上游冒烟（真上游；慢，约 1 分钟） ===")
     ok = True
     for extra, label in (([], "真上游"), (["--cold"], "冷进程")):
-        rc = subprocess.run([sys.executable, "scripts/smoke_upstream.py", *extra],
+        rc = subprocess.run([PY, "scripts/smoke_upstream.py", *extra],
                             cwd=ROOT).returncode
         print(f"{OK if rc == 0 else FAIL} smoke_upstream {label} rc={rc}")
         ok = ok and rc == 0
@@ -237,9 +254,16 @@ def main() -> int:
     ap.add_argument("--upstream", action="store_true",
                     help="追加端到端上游冒烟（真打 B 站/danmakus，约 1 分钟，含冷进程模式）")
     ap.add_argument("--full", action="store_true", help="= --frozen --portable --docs --upstream")
+    # 单独暴露第 ① 步（devlog/199）：CI 需要在"还没装前端依赖、也没有浏览器"的 job 里
+    # 跑这一步，而它是**唯一会编译 `scripts/`** 的门禁。让 CI 复用这个函数而不是在
+    # workflow 里抄一段 `python -c`：抄一份就多一个漂移点（本仓 §0.4 的复述纪律）。
+    ap.add_argument("--syntax-only", action="store_true",
+                    help="只跑全仓语法扫描并退出（给 CI 用，秒级，不需要任何依赖）")
     args = ap.parse_args()
     if args.full:
         args.frozen = args.portable = args.docs = args.upstream = True
+    if args.syntax_only:
+        return 0 if _run_syntax_check() else 1
 
     results: list[tuple[str, bool]] = [("syntax", _run_syntax_check())]
     results.append(("pytest", _run_pytest()))
@@ -251,7 +275,7 @@ def main() -> int:
 
     print("\n=== 2/3 开发态后端冒烟（源码，秒级） ===")
     results.append(("dev backend", _smoke_backend(
-        "python backend_main.py", [sys.executable, "backend_main.py"], ROOT)))
+        "python backend_main.py", [PY, "backend_main.py"], ROOT)))
 
     if args.frozen:
         if FROZEN_EXE.exists():
@@ -265,9 +289,9 @@ def main() -> int:
 
     if args.portable:
         print("\n=== 3/3 重打便携 zip（免 cargo/NSIS） ===")
-        rc1 = subprocess.run([sys.executable, "scripts/build_backend.py"], cwd=ROOT).returncode
+        rc1 = subprocess.run([PY, "scripts/build_backend.py"], cwd=ROOT).returncode
         rc2 = subprocess.run(
-            [sys.executable, "scripts/collect_release.py", "--portable-only"], cwd=ROOT
+            [PY, "scripts/collect_release.py", "--portable-only"], cwd=ROOT
         ).returncode if rc1 == 0 else 1
         results.append(("portable zip", rc1 == 0 and rc2 == 0))
     else:

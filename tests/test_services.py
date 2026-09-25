@@ -118,15 +118,24 @@ def test_healthz_first_run_flag(monkeypatch):
 
     前端据此自动弹出登录浮窗（用户 2026-09-08 需求）。
     注：不用 pytest 的 tmp_path —— 受限沙箱下系统临时目录不可写，改用工作区内目录。
+
+    ⚠️ **只能删自己的子目录，不能删 `_test_tmp` 根**（2026-09-25，devlog/197 实测）：
+    原先这里 `rmtree(_test_tmp)` + `mkdir()`，而 `test_vtuber_api.py` /
+    `test_profile_cards.py` 是用 `tempfile.mkdtemp()` 在工作区临时目录下建库目录的
+    —— 它们的 `test_engine` 指向 `_test_tmp/ddtoolkit-test-*/`，**被这一行连根删掉**。
+    症状极具误导性：单独跑那两个文件全绿，**整套跑时 `test_vtuber_api.py` 61 个用例
+    集体 `sqlite3.OperationalError: unable to open database file`**，看起来像 SQLAlchemy
+    或锁文件升坏了（实测在系统 Python 上同样复现 ⇒ 与依赖无关，是既存的测试卫生问题）。
+    判据：**每个用例只动自己那一格**。
     """
     import shutil
     from pathlib import Path
 
     from app import main as app_main
 
-    tmp = Path(__file__).resolve().parent.parent / "_test_tmp"
+    tmp = Path(__file__).resolve().parent.parent / "_test_tmp" / "first_run"
     shutil.rmtree(tmp, ignore_errors=True)
-    tmp.mkdir()
+    tmp.mkdir(parents=True)
     try:
         marker = tmp / ".first-run-done"
         monkeypatch.setattr(app_main, "FIRST_RUN_MARKER", marker)

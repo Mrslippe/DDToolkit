@@ -59,9 +59,33 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "frontend"
 
+
+def project_python() -> str:
+    """跑子步骤用的解释器：**优先项目 venv**（2026-09-25，devlog/197）。
+
+    为什么不能直接用 `sys.executable`：依赖的真源变成了 `uv.lock`，而"按锁装出来的环境"
+    是仓库根的 `.venv`。用户完全可能用系统 Python 调本脚本（`python scripts/gate.py`），
+    那时 `sys.executable` 指向的是**另一套版本**——pytest 会用错的依赖跑，
+    甚至因为缺包直接崩（实测：缺 `python-multipart` 时 4 个测试文件收集失败）。
+    ⇒ 有 `.venv` 就用它；没有就退回 `sys.executable`（不强迫每个人先装环境）。
+    """
+    venv_py = ROOT / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    return str(venv_py) if venv_py.exists() else sys.executable
+
+
+PY = project_python()
+
 # ── 档位判定：路径前缀 → 归属 ────────────────────────────────────────────────
-# A：只有这些能让 pytest 有意义（后端代码 / 后端测试 / **有 pytest 护栏的脚本**）
-A_PREFIXES = ("app/", "alembic/", "tests/")
+# A：只有这些能让 pytest 有意义（后端代码 / 后端测试 / **有 pytest 护栏的脚本** / **Rust 壳**）
+#
+# ⚠️ `frontend/src-tauri/` 归 A 档而不是 B/C（2026-09-25，devlog/197）：
+#    原先它落 C 档 ⇒ 只跑 tsc + eslint + 探针 + doc_check，**一行 Rust 都不编译**。
+#    而 Rust 侧住着**全仓唯一一条不可逆的破坏性操作**（`lib.rs::delete_old_data_dir`
+#    一次调用 `remove_dir_all`）与整个进程生命周期（sidecar 启停 / Job Object / 托盘 /
+#    深休眠 / 窗口重建）。改它而不跑 `cargo test` 是本仓最贵的一种"改对了没人知道"。
+#    **它同时顶掉 B 档的 `frontend/src/` 前缀匹配**：`src-tauri/` 不在 `frontend/src/` 下，
+#    所以这两条前缀不重叠，但判定是"命中即返回"，A 组必须排在 B 组之前（`pick_tier` 已如此）。
+A_PREFIXES = ("app/", "alembic/", "tests/", "frontend/src-tauri/")
 A_FILES = (
     "backend_main.py",
     # ⚠️ 2026-09-25 补（**这个漏洞是被本仓自己的改动方式抓到的**）：原先 `scripts/**`
@@ -72,6 +96,13 @@ A_FILES = (
     "scripts/doc_check.py",      # ← tests/test_doc_check.py
     "scripts/gen_doc_numbers.py",  # ← doc_check #5 转调它（数字门禁本体）
     "scripts/release.py",        # ← tests/test_release_script.py
+    "scripts/gate.py",           # ← tests/test_gate.py（档位映射自身的用例）
+    # 依赖来源（2026-09-25，devlog/197）：改成"依赖来源只认 uv.lock"时立的。
+    # 为什么它属于 A 档：这两份文件决定 **CI / 打包 / 用户拿到的运行时到底是哪些版本**
+    # （实测一次切换就把 `uvicorn` 0.46→0.54、`starlette` 0.4x→1.7 抬了上来）。
+    # 改了它们却只跑 C 档 = 改了运行环境而一条后端用例都没跑。
+    "pyproject.toml",
+    "uv.lock",
 )
 # B：前端逻辑、共享令牌与 UI 规格（vitest 覆盖得到；UI-MAP 是"现状真源"，
 #    改它意味着版式口径变了，值得把单测也跑一遍）
@@ -120,16 +151,26 @@ def steps(tier: str) -> list[tuple[str, list[str], str]]:
     npx = "npx.cmd" if os.name == "nt" else "npx"
     s: list[tuple[str, list[str], str]] = [
         ("tsc", [npx, "tsc", "--noEmit"], "类型检查（实测 6s）"),
-        ("doc_check", [sys.executable, "scripts/doc_check.py"], "文档门禁（实测 0–2s）"),
+        ("doc_check", [PY, "scripts/doc_check.py"], "文档门禁（实测 0–2s）"),
+    ]
+    if tier in ("a", "full"):
+        # Rust 壳（devlog/197）。**只在 A 档跑**：改了 `app/` 也跑它是不必要的重复，
+        # 而改 `frontend/src-tauri/**` 必然落 A 档（见 A_PREFIXES 的注释）。
+        # ⚠️ 首次编译慢（cargo 冷构建分钟级），之后增量秒级 —— 这与"探针成本全在启动"
+        #    是两类不同的成本，所以它**不能**像探针那样无脑跑满三档。
+        s.append(("cargo", ["cargo", "test", "--manifest-path",
+                            str(FRONTEND / "src-tauri" / "Cargo.toml")],
+                  "Rust 壳单测（首跑含编译，几分钟；增量秒级）"))
+    s.append(
         # ⚠️ **永远跑满三档**：实测单档 28.3s / 三档 26.6s —— 成本全在启动，
         #    少跑档只损失覆盖面、不省时间（2026-09-25 实测）。
-        ("ui_probe", [sys.executable, "scripts/ui_probe.py",
+        ("ui_probe", [PY, "scripts/ui_probe.py",
                       "--vtuber", "15", "--seed-accounts", "8"],
          "版式不变量（三档 × 10 帧，实测 36s）"),
-    ]
+    )
     if tier == "full":
         # dev_check 自带 eslint + vitest + pytest + 语法扫描 + 后端冒烟 ⇒ 别再单跑一遍
-        s.append(("dev_check", [sys.executable, "scripts/dev_check.py"],
+        s.append(("dev_check", [PY, "scripts/dev_check.py"],
                   "一把梭（含 pytest 与后端冒烟，实测 180–208s）"))
         return s
     s.insert(1, ("eslint", [npx, "eslint", "src", "--max-warnings", "0"],
@@ -137,7 +178,7 @@ def steps(tier: str) -> list[tuple[str, list[str], str]]:
     if tier in ("b", "a"):
         s.append(("vitest", [npx, "vitest", "run"], "前端单测（~25s）"))
     if tier == "a":
-        s.append(("pytest", [sys.executable, "-m", "pytest", "-q"],
+        s.append(("pytest", [PY, "-m", "pytest", "-q", "-p", "no:cacheprovider"],
                   "后端单测（实测 180–194s）"))
     return s
 
