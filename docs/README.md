@@ -28,6 +28,8 @@
 | `backend-repositories-and-routers.md` | 12 张表列级定义 · 12 个 Repository 方法表 · HTTP 操作（路由计数口径见其 §3）· 迁移链（20 版本，head `f007`） |
 | `backend-fetch-pipeline.md` | 抓取链路细节：触发入口、锁与让位、API 清单、风控判定、节流测算、停止原因 |
 | `FRONTEND-ARCH.md` | 前端分层（api/hooks/components/pages/styles）、数据流、状态管理 |
+| `ARCHITECTURE-IMPROVEMENT-PLAN.md` | **待执行的架构整改路线**：安全边界、调度生命周期、事务归属、核心模块拆分、API 契约、可访问性、CI；含批次依赖、测试牙口、停止条件与 Agent 汇报模板 |
+| `ARCHITECTURE-IMPROVEMENT-EXECUTION.md` | 上面那份的**执行细化**（核实日期 2026-09-25）：16 个批次的实际排序与硬约束、逐批改动面/先补的失败用例/反向验证做法/门禁/停止条件，以及与母计划不一致的 17 处核实结论。**行号与数字是当日快照，不是真源** |
 | `UI-MAP.md` | 界面与路由映射：四视图、组件类名、设计令牌、动效与圆角规范 |
 | `design-status-island.md` | **状态胶囊动效规格**（R38 与后续「桌面独立控件」共用）：动效令牌、收起/展开时间轴、同心圆角、两种宿主材质、可断言的动效不变量 |
 | `design-archive-cards.md` | **档案视图卡片视觉与动效规格**（R37-P4 / P3b 共用）：卡片材质令牌、五槽位卡片语法、三张内置卡的重排、长按拿起/退避/落位时间轴、可断言的动效不变量 |
