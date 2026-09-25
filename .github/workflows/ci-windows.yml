@@ -68,43 +68,61 @@ jobs:
 
       # 冻结后端：这一步才真正需要 PyInstaller 与前端产物，也是"用户拿到的那个 exe"。
       # 它比 `cargo test` 慢得多（分钟级），所以排在最后 —— 前面任何一步红了就不用付这个钱。
+      #
+      # ⚠️ **必须给 UTF-8**（2026-09-25，devlog/200）：Windows runner 上 Python 的 stdout
+      #    默认跟控制台代码页走（cp1252），而本仓脚本的提示语是中文
+      #    ⇒ `UnicodeEncodeError: 'charmap' codec can't encode characters`，整步直接崩。
+      #    与 Rust 壳拉起 sidecar 时注入 `PYTHONUTF8=1`/`PYTHONIOENCODING=utf-8` 同一个理由。
       - name: 冻结后端（PyInstaller onedir）
-        # ⚠️ 必须给 UTF-8（2026-09-25，本批第三次红）：Windows runner 上 Python 的 stdout
-        #    默认是 **cp1252**，而本仓脚本的提示语是中文（`build_backend.py` 的自愈分支）
-        #    ⇒ `UnicodeEncodeError: 'charmap' codec can't encode characters`，整步直接崩。
-        #    与 Rust 壳拉起 sidecar 时注入 `PYTHONUTF8=1` / `PYTHONIOENCODING=utf-8`
-        #    是同一个理由；`docs/DEV-LOOP.md` §二·五 也记过同类事故
-        #    （探针打印 `✕` 在 cp936 控制台上把整条流程从中间打断）。
         env:
           PYTHONUTF8: "1"
           PYTHONIOENCODING: "utf-8"
         run: uv run python scripts/build_backend.py
 
+      # ⚠️ 这一步要**自证失败原因**（2026-09-25）：第一版失败时只打印 `out.log`，
+      #    而它是空的 ⇒ CI 只告诉我"60s 没就绪"，把真正的原因吞掉了。
+      #    现在失败时打全现场：进程是否还活着、exit code、stdout/stderr、
+      #    **数据目录里的 `logs/sidecar.log`**（那才是后端自己的启动日志）、以及 exe 实际大小。
       - name: 冻结后端冒烟（空数据目录 → /healthz）
         shell: pwsh
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: "utf-8"
         run: |
+          $ErrorActionPreference = "Continue"
           $d = Join-Path $env:RUNNER_TEMP "ddtoolkit-smoke"
+          Remove-Item -Recurse -Force $d -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path $d | Out-Null
           $env:DDTOOLKIT_DATA_DIR = $d
           $env:DDTOOLKIT_PORT = "8231"
-          $env:PYTHONUTF8 = "1"
-          $p = Start-Process -FilePath "frontend\src-tauri\binaries\backend\ddtoolkit-backend.exe" `
-                             -PassThru -WindowStyle Hidden `
-                             -RedirectStandardOutput (Join-Path $d "out.log")
+          $exe = "frontend\src-tauri\binaries\backend\ddtoolkit-backend.exe"
+          Write-Host ("exe: {0}  ({1:N2} MB)" -f $exe, ((Get-Item $exe).Length / 1MB))
+
+          $p = Start-Process -FilePath $exe -PassThru -WindowStyle Hidden `
+                             -RedirectStandardOutput (Join-Path $d "out.log") `
+                             -RedirectStandardError  (Join-Path $d "err.log")
           $ok = $false
           foreach ($i in 1..120) {
             Start-Sleep -Milliseconds 500
+            if ($p.HasExited) { Write-Host "进程已退出，exit code = $($p.ExitCode)"; break }
             try {
               $r = Invoke-WebRequest "http://127.0.0.1:8231/healthz" -TimeoutSec 3 -UseBasicParsing
               if ($r.StatusCode -eq 200) { $ok = $true; break }
             } catch { }
           }
-          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
           if (-not $ok) {
-            Write-Host "--- sidecar 输出 ---"
-            Get-Content (Join-Path $d "out.log") -ErrorAction SilentlyContinue | Select-Object -Last 40
-            throw "/healthz 未在 60s 内就绪"
+            Write-Host "=== 现场 ==="
+            Write-Host "HasExited = $($p.HasExited)"
+            if ($p.HasExited) { Write-Host "ExitCode = $($p.ExitCode)" }
+            foreach ($f in @("out.log", "err.log", "logs\sidecar.log", "logs\app.log")) {
+              $path = Join-Path $d $f
+              Write-Host "--- $f ---"
+              if (Test-Path $path) { Get-Content $path -Encoding UTF8 | Select-Object -Last 30 }
+              else { Write-Host "(不存在)" }
+            }
           }
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          if (-not $ok) { throw "/healthz 未在 60s 内就绪（现场见上）" }
           Write-Host "冻结后端冒烟通过：$($r.Content)"
 
 # ⚠️ **本文件不跑的**（在 CI 里跑不了，需要真桌面会话 / 真浏览器）：
