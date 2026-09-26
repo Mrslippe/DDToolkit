@@ -353,7 +353,7 @@
 
 | 方法 | 语义 | 提交 |
 |---|---|---|
-| `upsert_danmakus(account_id, items)` | 第三方场次批量幂等 upsert | ✅ 末尾 |
+| `upsert_danmakus(account_id, items, *, platform)` | 第三方场次批量幂等 upsert（**平台由调用方传入**，M1a） | ✅ 末尾 |
 | `upsert_feed(account_id, live_id, fields)` | B 站动态直播卡片幂等 upsert，返回是否新增 | ❌ 调用方 ⚠️ |
 | `list_by_account(account_id)` | 表内场次（按 `start_at`） | — |
 | `merged(account_id)` | **读取时合并**：表内场次 ∪ self 快照虚拟场次；同场去重（同 room 90min）、中断续播并段（同标题 60min）、`end_at` 补全、来源标记 `danmakus+self` 等 | — |
@@ -616,6 +616,12 @@
 
 ## 4. 分层注意点
 
+- **依赖方向只许向下**（M1a，devlog/213）：`routers → services → repositories → models`，
+  外加一条**叶子层** `app/domain/`（无 IO 的纯函数，上下都能用）。
+  `repositories` **不许** import `app.services`、`models` 不许 import 上面任何一层、
+  `domain` 连 `sqlalchemy`/`httpx`/`fastapi` 都不许碰 —— 判据
+  `tests/test_dependency_direction.py`（AST 扫 import，不是文本搜索）。
+  纯函数要下沉时放 `app/domain/`，别让下层为了一个字符串函数去 import 服务层；
 - **删除必须过 purge**：posts 无外键 + 5 张子表（+ f006 的 `profile_cards`，按 vtuber_id）有外键且不级联（§1.1）；两个删除端点都已接
   `app/services/purge.py`，返回 409 而不是 500；
 - **409 语义**：唯一约束冲突（`IntegrityError`）统一 `rollback → 409`，覆盖 V/账号/帖子建改入口

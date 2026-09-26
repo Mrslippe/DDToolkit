@@ -12,7 +12,7 @@
 | `docs/README.md` | docs 目录导航：布局约定 + 四组文档「什么时候看」+ §5 维护约定 | 新增/移动任一活文档、新增 `docs/releases/v*.md`（§4 列表那一行）、布局约定变更 |
 | `docs/GLOSSARY.md` | §1 领域名词 · §2 数据模型与字段 · §3 抓取与调度 · §4 认证与凭据 · §5 前端与界面 · §6 工程与流程 · §7 配置项速查 · §8 不变量与常见坑（**已并入 `ARCHITECTURE.md` §6**，只剩旧编号换算）· §9 需求/缺陷→代码入口（共 9 组） | 出现新名词/新坑、`app/core/config.py` 加配置项、改名或搬迁代码路径 |
 | `docs/ARCHITECTURE.md` | §0 一句话定位 · §1 运行时形态（进程/线程/协程）· §2 数据模型（12 张表 · 迁移链 a001 → f007）· §3 抓取技术架构 · §4 数据来源地图 · §5 分层与依赖方向 · §6 不变量与纪律（**改代码前必读**）· §7 扩展点 | 改动跨层、动到不变量、加表/加迁移、加数据源 |
-| `docs/backend-repositories-and-routers.md` | §1 数据库结构（列级）§1.3 迁移链（alembic，20 版本，head = `f007`）· §2 Repositories（12 个类的方法表）· §3 Routers · §4 分层注意点 | 改表/列/索引/迁移、加 Repository 方法、加/改 HTTP 端点（§3 的口径数字要重新数） |
+| `docs/backend-repositories-and-routers.md` | §1 数据库结构（列级）§1.3 迁移链（alembic，20 版本，head = `f007`）· §2 Repositories（13 个类的方法表 + 每方法的"提交"列 + 五个多表流程的 owner 表）· §3 Routers · §4 分层注意点 | 改表/列/索引/迁移、加 Repository 方法、加/改 HTTP 端点（§3 的口径数字要重新数）、改提交边界或分层方向 |
 | `docs/backend-fetch-pipeline.md` | 抓取链路细节：触发入口、锁与让位、API 清单、风控判定、节流测算、停止原因 | 改抓取链路、调度、并发/锁、节流与风控判定 |
 | `docs/FRONTEND-ARCH.md` | 前端分层（api/hooks/components/pages/styles）、数据流、状态管理 | 前端分层变化、hook 搬迁/新增、状态管理口径变化 |
 | `docs/UI-MAP.md` | 界面与路由映射：§0 启动链路 · A 壳层（A1 顶栏/A2 图标栏/A3 左栏）· B 右栏（B1 帖子/B2 详情/B3 场次/B4 趋势）· C 设计令牌与浮片 · D 字体 · E 交互浮窗 · F 滚动条标准 | 改界面结构、类名、设计令牌、动效、圆角、滚动容器 |

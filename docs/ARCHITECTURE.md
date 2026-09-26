@@ -617,6 +617,8 @@ flowchart LR
   S --> RP
   S --> P["services/platforms/（平台适配）"]
   S --> X["services/externals/（第三方源）"]
+  S --> D["domain/（无 IO 纯函数）"]
+  RP --> D
   RP --> M["models/（ORM 映射）"]
   S --> M
   M --> DB[("SQLite")]
@@ -625,11 +627,16 @@ flowchart LR
   C --- RP
 ```
 
+**依赖方向只许向下**（M1a，devlog/213）：`routers → services → repositories → models`，
+`domain/` 是**叶子**（谁都能用、它谁也不依赖）。反向边一律判红 ——
+判据 `tests/test_dependency_direction.py`（AST 扫 import）。
+
 | 目录 | 职责 | 约定 |
 |---|---|---|
 | `app/routers/` | HTTP 契约、状态码语义（404/409/415/413）、`Depends(get_db)` | 不写 SQL；抓取类端点做忙判定 |
-| `app/repositories/` | 按仓库类持会话（13 个 Repo），批量删除/分页/统计等 SQL | 多数写方法**末尾 commit**；级联清理 `delete_by_*` 与 `AccountStatSnapshotRepo.add` **不提交**（留给调用方一个事务，见 §6 第 32 条）；`PostRepo.create(commit=False)` 供批量入库 |
-| `app/models/` | SQLAlchemy 2.0 ORM（单文件 12 表） | 唯一约束/索引与迁移链一致 |
+| `app/repositories/` | 按仓库类持会话（13 个 Repo），批量删除/分页/统计等 SQL | 多数写方法**末尾 commit**；级联清理 `delete_by_*` 与 `AccountStatSnapshotRepo.add` **不提交**（留给调用方一个事务，见 §6 第 32 条）；`PostRepo.create(commit=False)` 供批量入库；**不许 import `app.services`** |
+| `app/models/` | SQLAlchemy 2.0 ORM（单文件 12 表） | 唯一约束/索引与迁移链一致；**不许 import 上面任何一层** |
+| `app/domain/` | 无 IO 的纯函数（目前只有 `text.py::normalize_title`） | **叶子**：不许 import 任何 `app.*` 上层，也不许 `sqlalchemy` / `httpx` / `fastapi`；纯函数下沉放这里 |
 | `app/schemas/` | Pydantic 输入输出模型 | `Out` 用 `from_attributes` |
 | `app/services/` | 调度、抓取、平台适配、第三方源、认证、类型引擎、墓碑、清理 | 不碰 HTTP；重依赖延迟 import |
 | `app/core/` | 配置（数据目录/环境变量）、引擎与 PRAGMA、`get_db`、共享 HTTP 客户端构造（`http.py`） | 新代码发请求一律 `new_async_client()` |
@@ -853,6 +860,20 @@ flowchart LR
       动它们之前先看 `docs/backend-repositories-and-routers.md` §2 的例外表与流程 owner 表。
     - 五个多表流程的 owner 与失败行为**逐条核实过**（删账号 / 删 VTuber / T0 / 档案布局 /
       收录），判据全部吃**文件库 + `foreign_keys=ON`**（内存库测不出锁冲突与并发窗口）。
+33. **依赖方向只许向下，纯函数下沉到 `app/domain/`**（M1a，devlog/213）：
+    `routers → services → repositories → models`；`app/domain/` 是**叶子**（谁都能用、它谁
+    也不依赖）。三条禁令，判据 `tests/test_dependency_direction.py`（**AST 扫 import**，
+    不是文本搜索 —— 注释里就写着那句历史 import）：
+    - `repositories/**` **不许** import `app.services.**`。原案：`vtuber_repo.py` 为了一个
+      纯字符串函数 `normalize_title` 去 import `services.live_type`（§2.7 的反向边）——
+      它让"仓库层能不能被单独理解"取决于 services 的整条依赖链，而且下一个顺手 import 会照抄。
+    - `models/**` 不许 import `services` / `repositories` / `routers`（ORM 是最下面那层）。
+    - `domain/**` 不许 import 上面任何一层，也**不许** `sqlalchemy` / `httpx` / `fastapi` ——
+      放这儿的必须是无 IO 纯函数，否则它只是"换个地方的服务层"。
+    - ⚠️ **搬家不许搬成副本**：`services.live_type.normalize_title` 现在只是
+      `app.domain.text` 的**同一个对象**的再导出（判据断言 `is`）——两份实现迟早漂移。
+    - 仓库层**不许替平台做决定**：`LiveSessionRepo.upsert_danmakus` 的 `platform` 由调用方传入
+      且**刻意没有默认值**（给默认值 = 把决定权又收回来）。
 
 ---
 

@@ -56,7 +56,8 @@ async def _run(uid_filter: str | None, dry_run: bool) -> None:
                 if dry_run:
                     print(f"[dry-run] uid={acc.platform_uid} lives={len(lives)}")
                     continue
-                res = LiveSessionRepo(db).upsert_danmakus(acc.id, lives)
+                res = LiveSessionRepo(db).upsert_danmakus(acc.id, lives,
+                                                          platform=acc.platform)
                 print(f"[OK] uid={acc.platform_uid} "
                       f"added={res['added']} updated={res['updated']} "
                       f"skipped={res['skipped']}")

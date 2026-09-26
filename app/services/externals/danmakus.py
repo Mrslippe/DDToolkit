@@ -409,7 +409,9 @@ class DanmakusSource(ExternalSource):
                 summary.skipped += 1
                 continue
             lives = payload.get("lives") or []
-            res = LiveSessionRepo(db).upsert_danmakus(acc.id, lives)
+            # 平台由**调用方**给（M1a，devlog/213）：仓库层不再写死 bilibili
+            res = LiveSessionRepo(db).upsert_danmakus(acc.id, lives,
+                                                      platform=acc.platform)
             summary.stored += res["added"]
             logger.info(f"danmakus live_sessions: {acc.platform_uid} "
                         f"新增 {res['added']} 刷新 {res['updated']}")

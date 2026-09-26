@@ -19,8 +19,9 @@ from app.models.vtuber import (Account, AccountStatSnapshot, LiveSession,
                                VTuber)
 from app.repositories.vtuber_repo import LiveSessionRepo
 from app.services.fetcher import _map_live_rcmd
+from app.domain.text import normalize_title          # M1a：家已下沉到 domain（devlog/213）
 from app.services.live_type import (
-    infer_category, score_title, normalize_title, plan_series, build_learned,
+    infer_category, score_title, plan_series, build_learned,
 )
 
 T0 = datetime(2026, 9, 1, 12, 0, 0)
@@ -35,11 +36,11 @@ def db():
     s.close()
 
 
-def _mk_account(db, uid="10086") -> Account:
+def _mk_account(db, uid="10086", platform="bilibili") -> Account:
     v = VTuber(name="测试V", birthday="09-01")
     db.add(v)
     db.flush()
-    acc = Account(vtuber_id=v.id, platform="bilibili", platform_uid=uid)
+    acc = Account(vtuber_id=v.id, platform=platform, platform_uid=uid)
     db.add(acc)
     db.commit()
     return acc
@@ -80,12 +81,12 @@ def test_upsert_danmakus_insert_and_update(db):
                  area="虚拟日常", parent="虚拟主播", income=123.5),
         _dm_item("live-b", "歌回", _ms(T0 + timedelta(days=1))),
     ]
-    res = repo.upsert_danmakus(acc.id, items)
+    res = repo.upsert_danmakus(acc.id, platform=acc.platform, items=items)
     assert res == {"added": 2, "updated": 0, "skipped": 0}
 
     # 幂等：重跑不新增；可变字段刷新
     items[0]["totalIncome"] = 999.0
-    res = repo.upsert_danmakus(acc.id, items)
+    res = repo.upsert_danmakus(acc.id, platform=acc.platform, items=items)
     assert res == {"added": 0, "updated": 2, "skipped": 0}
     rows = repo.list_by_account(acc.id)
     assert len(rows) == 2
@@ -95,10 +96,24 @@ def test_upsert_danmakus_insert_and_update(db):
     assert rows[0].area_name == "虚拟日常"
 
 
+def test_upsert_danmakus_writes_the_platform_the_caller_gave(db):
+    """平台来自**调用方**，不是仓库写死的 `"bilibili"`（M1a，devlog/213）。
+
+    ⚠️ 这里刻意用一个**非 bilibili** 的平台：写死那版会把它悄悄存成 bilibili，
+    而行数/字段断言全都照样绿 —— 只有断言 platform 本身才看得见。
+    """
+    acc = _mk_account(db, platform="weibo")
+    repo = LiveSessionRepo(db)
+    repo.upsert_danmakus(acc.id, [_dm_item("live-w", "播了", _ms(T0))],
+                         platform=acc.platform)
+    row = db.query(LiveSession).filter(LiveSession.live_id == "live-w").one()
+    assert row.platform == "weibo", "仓库层又把平台写死了（调用方给的是 weibo）"
+
+
 def test_upsert_danmakus_skips_invalid(db):
     acc = _mk_account(db)
     repo = LiveSessionRepo(db)
-    res = repo.upsert_danmakus(acc.id, [
+    res = repo.upsert_danmakus(acc.id, platform=acc.platform, items=[
         {"liveId": "", "startDate": _ms(T0)},                 # 无 live_id
         {"liveId": "live-x", "startDate": 0},                 # 无开始时间
         {"liveId": "live-y", "startDate": "bad"},             # 非法时间
@@ -128,7 +143,7 @@ def test_merged_snapshot_patches_danmakus_end(db):
     acc = _mk_account(db)
     repo = LiveSessionRepo(db)
     # danmakus 场次：直播中（无 end）
-    repo.upsert_danmakus(acc.id, [
+    repo.upsert_danmakus(acc.id, platform=acc.platform, items=[
         _dm_item("live-a", "周六来唱歌！", _ms(T0), 0, area="虚拟Singer",
                  parent="虚拟主播", income=10501.5),
     ])
@@ -154,7 +169,7 @@ def test_merged_finalized_row_stays_two_when_far(db):
     （防「区间重叠优先」过度合并）。"""
     acc = _mk_account(db)
     repo = LiveSessionRepo(db)
-    repo.upsert_danmakus(acc.id, [
+    repo.upsert_danmakus(acc.id, platform=acc.platform, items=[
         _dm_item("live-a", "早场", _ms(T0), _ms(T0 + timedelta(hours=1))),
     ])
     _snap(db, acc, T0 + timedelta(hours=3), status=1, title="晚场")
@@ -170,7 +185,7 @@ def test_merged_open_ended_row_absorbs_later_snapshot(db):
     （旧规则只看 start 差 90min，会把同一场算成两条）。"""
     acc = _mk_account(db)
     repo = LiveSessionRepo(db)
-    repo.upsert_danmakus(acc.id, [_dm_item("live-a", "播了", _ms(T0))])   # stop 缺省=0
+    repo.upsert_danmakus(acc.id, platform=acc.platform, items=[_dm_item("live-a", "播了", _ms(T0))])   # stop 缺省=0
     _snap(db, acc, T0 + timedelta(hours=3), status=1)
     _snap(db, acc, T0 + timedelta(hours=4), status=0)
 
@@ -191,7 +206,7 @@ def test_merged_virtual_self_and_row_alone(db):
     assert merged[0]["live_title"] is None
 
     # 只有表内场次（无快照观测期）
-    repo.upsert_danmakus(acc.id, [_dm_item("live-a", "历史场", _ms(T0 - timedelta(days=30)))])
+    repo.upsert_danmakus(acc.id, platform=acc.platform, items=[_dm_item("live-a", "历史场", _ms(T0 - timedelta(days=30)))])
     merged = repo.merged(acc.id)
     assert len(merged) == 2
     assert merged[0]["source"] == "danmakus"
@@ -208,7 +223,7 @@ def test_merged_snapshot_overlap_beyond_start_window(db):
     实测对应数据：明前奶绿 2026-09-03 danmakus 11:59→17:12 + self 15:16→17:25。"""
     acc = _mk_account(db)
     repo = LiveSessionRepo(db)
-    repo.upsert_danmakus(acc.id, [
+    repo.upsert_danmakus(acc.id, platform=acc.platform, items=[
         _dm_item("live-a", "楚什么楚！", _ms(T0), _ms(T0 + timedelta(hours=5, minutes=13))),
     ])
     # self 起点晚 3h16m（远超 90min 窗口），但区间落在 danmakus 场次内
@@ -227,7 +242,7 @@ def test_merged_snapshot_spanning_rows_absorbs_into_best(db):
     并入重叠最多的那一场，不留 self 虚拟场次。"""
     acc = _mk_account(db)
     repo = LiveSessionRepo(db)
-    repo.upsert_danmakus(acc.id, [
+    repo.upsert_danmakus(acc.id, platform=acc.platform, items=[
         _dm_item("live-a", "第一场", _ms(T0), _ms(T0 + timedelta(hours=2))),
         _dm_item("live-b", "第二场", _ms(T0 + timedelta(hours=20)),
                  _ms(T0 + timedelta(hours=29))),
@@ -276,7 +291,7 @@ def test_merged_both_live_diff_title_stays_two(db):
 def test_merged_danmakus_end_wins(db):
     acc = _mk_account(db)
     repo = LiveSessionRepo(db)
-    repo.upsert_danmakus(acc.id, [
+    repo.upsert_danmakus(acc.id, platform=acc.platform, items=[
         _dm_item("live-a", "回放场", _ms(T0), _ms(T0 + timedelta(hours=3))),
     ])
     _snap(db, acc, T0 - timedelta(minutes=2), status=1)
@@ -293,7 +308,7 @@ def test_merged_danmakus_and_feed_dedupe(db):
     """同一场直播 danmakus(uuid) 与 feed(live_id) 各一行 → 合并为一场。"""
     acc = _mk_account(db)
     repo = LiveSessionRepo(db)
-    repo.upsert_danmakus(acc.id, [
+    repo.upsert_danmakus(acc.id, platform=acc.platform, items=[
         _dm_item("uuid-a", "周六来唱歌！", _ms(T0), _ms(T0 + timedelta(hours=2)),
                  area="虚拟Singer", parent="虚拟主播", income=10501.5),
     ])
@@ -327,7 +342,7 @@ def test_merged_recent_pair_exposes_danmakus_id(db):
         "parent_area_name": "虚拟主播", "area_name": "虚拟Singer",
         "room_id": "1947277414",
     })
-    repo.upsert_danmakus(acc.id, [
+    repo.upsert_danmakus(acc.id, platform=acc.platform, items=[
         _dm_item("ee8f2f2b-8447-4eb5-99f2-1680a0923ef9", "一起看苹果发布会",
                  _ms(T0), 0, count=0),      # 刚下播：danmakus 侧还没落 end/弹幕
     ])
@@ -382,7 +397,7 @@ def test_merged_feed_supplements_danmakus_gap(db):
     """danmakus 缺标题（旧数据）→ feed 同场补标题；不同场次不误并。"""
     acc = _mk_account(db)
     repo = LiveSessionRepo(db)
-    repo.upsert_danmakus(acc.id, [
+    repo.upsert_danmakus(acc.id, platform=acc.platform, items=[
         _dm_item("uuid-old", "", _ms(T0), _ms(T0 + timedelta(hours=1))),
     ])
     repo.upsert_feed(acc.id, "feed-old", {
@@ -397,7 +412,7 @@ def test_merged_feed_supplements_danmakus_gap(db):
 def test_merged_two_days_sessions_not_merged(db):
     acc = _mk_account(db)
     repo = LiveSessionRepo(db)
-    repo.upsert_danmakus(acc.id, [
+    repo.upsert_danmakus(acc.id, platform=acc.platform, items=[
         _dm_item("uuid-day1", "第一天", _ms(T0)),
         _dm_item("uuid-day2", "第二天", _ms(T0 + timedelta(days=4))),
     ])
@@ -414,7 +429,7 @@ def test_merged_dup_records_pick_richer(db):
     repo = LiveSessionRepo(db)
     t1, t1e = T0, T0 + timedelta(hours=3)
     t2, t2e = T0 + timedelta(minutes=10), T0 + timedelta(hours=3)
-    repo.upsert_danmakus(acc.id, [
+    repo.upsert_danmakus(acc.id, platform=acc.platform, items=[
         _dm_item("uuid-a", "泽音一周年3D回", _ms(t1), _ms(t1e),
                  area="虚拟日常", parent="虚拟主播", income=12.0, count=64),
         _dm_item("uuid-b", "泽音一周年3D回", _ms(t2), _ms(t2e),
@@ -438,7 +453,7 @@ def test_merged_interruption_segments(db):
     repo = LiveSessionRepo(db)
     a, ae = T0, T0 + timedelta(hours=2)
     b, be = ae + timedelta(minutes=6), ae + timedelta(hours=2)
-    repo.upsert_danmakus(acc.id, [
+    repo.upsert_danmakus(acc.id, platform=acc.platform, items=[
         _dm_item("uuid-a", "我想你 你想我吗?", _ms(a), _ms(ae),
                  area="虚拟日常", parent="虚拟主播", income=100.0, count=453),
         _dm_item("uuid-b", "我想你 你想我吗?", _ms(b), _ms(be),
@@ -461,7 +476,7 @@ def test_merged_restart_diff_title_short_gap(db):
     repo = LiveSessionRepo(db)
     a, ae = T0, T0 + timedelta(hours=1)
     b, be = ae + timedelta(minutes=3), ae + timedelta(hours=2)
-    repo.upsert_danmakus(acc.id, [
+    repo.upsert_danmakus(acc.id, platform=acc.platform, items=[
         _dm_item("uuid-a", "LSTAR狂暴鸿儒直", _ms(a), _ms(ae), count=13701),
         _dm_item("uuid-b", "十月 绝对白兰", _ms(b), _ms(be), count=55051),
     ])
@@ -477,7 +492,7 @@ def test_merged_true_multi_session_stays(db):
     repo = LiveSessionRepo(db)
     a, ae = T0, T0 + timedelta(hours=1)
     b, be = ae + timedelta(minutes=90), ae + timedelta(hours=2)
-    repo.upsert_danmakus(acc.id, [
+    repo.upsert_danmakus(acc.id, platform=acc.platform, items=[
         _dm_item("uuid-a", "【鸣潮】2.8", _ms(a), _ms(ae),
                  area="虚拟日常", parent="虚拟主播", count=18348),
         _dm_item("uuid-b", "一起看看", _ms(b), _ms(be),
@@ -494,7 +509,7 @@ def test_merged_cross_midnight_interruption_merges(db):
     repo = LiveSessionRepo(db)
     a, ae = T0 + timedelta(hours=11), T0 + timedelta(hours=11, minutes=47)
     b, be = T0 + timedelta(hours=12, minutes=20), T0 + timedelta(hours=13)
-    repo.upsert_danmakus(acc.id, [
+    repo.upsert_danmakus(acc.id, platform=acc.platform, items=[
         _dm_item("uuid-a", "深夜电台", _ms(a), _ms(ae), area="虚拟日常"),
         _dm_item("uuid-b", "深夜电台", _ms(b), _ms(be), area="虚拟日常"),
     ])

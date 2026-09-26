@@ -54,8 +54,10 @@
 2. 同步 `app/main.py::MIGRATION_HEAD`（`tests/test_services.py` 断言它与 alembic head 一致，
    否则冷启动快路径会把旧库误判为已最新）；
 3. 补 ORM：`app/models/vtuber.py`（单文件 12 表；唯一约束/索引与迁移链一致）；
-4. 补 Repo 方法：`app/repositories/vtuber_repo.py`（写操作当场 commit；
-   `PostRepo.create(commit=False)` 与各 `delete_by_*` 例外，后者不提交、由调用方事务统一收口）；
+4. 补 Repo 方法：`app/repositories/vtuber_repo.py`（多数写方法**末尾 commit**；级联清理
+   `delete_by_*` 与 `AccountStatSnapshotRepo.add` **不提交**、由调用方**一个**事务收口 ——
+   判据 `tests/test_repository_commit_convention.py`。纯函数别让仓库层去 import 服务层，
+   下沉到 `app/domain/`）；
 5. **若挂 `accounts` / `vtubers` 外键 → 必须同步 `app/services/purge.py`**，
    否则解除订阅会被 `foreign_keys=ON` 整次回滚；
 6. 验证：`python -m pytest -q`（含 `test_orm_metadata_matches_migration_chain`）。

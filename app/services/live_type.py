@@ -114,18 +114,10 @@ AREA_RULES: list[tuple[str, list[str]]] = [
             "talk", "资讯", "户外", "美食", "料理", "绘画", "画画", "手工", "才艺", "教育", "学习"]),
 ]
 
-# 标题骨架清洗：仅剥离日期/时间/序号词汇，保留主题词（【歌回】周一 → 歌回）
-_SKELETON_STRIP_RE = re.compile(
-    r"第\d+[期场回次弹]|"
-    r"\d{4}年\d{1,2}月\d{1,2}(?:日|号)?|"
-    r"\d{1,2}月\d{1,2}(?:日|号)?|"
-    r"\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}|"
-    r"\d{1,2}:\d{2}|"
-    r"\d{1,2}点(?:半)?|"
-    r"周[一二三四五六日天]|星期[一二三四五六日天]|\d+"
-)
-# 骨架仅保留中日韩 + 字母数字
-_SKELETON_KEEP_RE = re.compile(r"[\u4e00-\u9fffa-z0-9]")
+# 标题骨架清洗的规则与 `normalize_title` 本身都**下沉到 domain** 了（M1a，devlog/213）：
+# 仓库层做场次合并时也要用同一个骨架，而 repositories 不许 import services（反向边）。
+# 这里保留同名再导出只是**兼容**（同一个对象，不是副本）——新代码请从 `app.domain.text` 取。
+from app.domain.text import normalize_title  # noqa: F401  （再导出；见上）
 
 
 # ── 标题多词评分 ─────────────────────────────────────────────────
@@ -189,19 +181,7 @@ def _confident(scores: dict[str, float]) -> bool:
 
 
 # ── 系列聚类 ─────────────────────────────────────────────────────
-
-def normalize_title(title: str | None) -> str:
-    """标题 → 系列骨架：剥离日期/时间/序号/标点/emoji，只留主题词。
-
-    「【歌回】周一 XX:00 第12期」 → 「歌回」；「晚上好！」 → 「晚上好」。
-    骨架过短（<2 字符）或无内容 → ""（不参与系列）。
-    """
-    t = (title or "").strip().lower()
-    if not t:
-        return ""
-    t = _SKELETON_STRIP_RE.sub("", t)
-    return "".join(_SKELETON_KEEP_RE.findall(t))
-
+# （`normalize_title` 的定义已下沉到 `app/domain/text.py`，本文件顶部再导出）
 
 def plan_series(sessions, overrides=None) -> dict[str, str]:
     """系列聚类 → {骨架: 分类}。

@@ -241,7 +241,7 @@ Rust 子进程由 [Job Object 看门狗](frontend/src-tauri/src/lib.rs) 管理�
 |---|---|
 | `docs/GLOSSARY.md` | **术语表**：名词 → 含义 → 代码路径 → 依赖（改 bug / 做需求先查这里） |
 | `docs/ARCHITECTURE.md` | **架构总览**：运行时形态 / 数据模型（12 表）/ 抓取分层与优先级 / 数据来源地图 / 不变量 |
-| `docs/backend-repositories-and-routers.md` | 表结构 · 12 个 Repository · HTTP 路由计数（三种数法见该文 §3） |
+| `docs/backend-repositories-and-routers.md` | 表结构 · 13 个 Repository（含每方法的"提交"归属）· HTTP 路由计数（三种数法见该文 §3） |
 | `docs/backend-fetch-pipeline.md` | 抓取链路详解（频率 / API 清单 / 风控判定 / 节流测算） |
 | `docs/FRONTEND-ARCH.md` | 前端分层、数据流与 hooks |
 | `docs/UI-MAP.md` | 界面与路由映射（类名 / 设计令牌 / 动效） |

@@ -10,7 +10,7 @@ from app.models.vtuber import (VTuber, Account, Post, AccountStatSnapshot,
                                LiveGiftDay, ThirdpartyVtuber, VtuberEvent,
                                LiveSession, LiveCategoryOverride, AppMeta,
                                VtuberFieldHistory, ProfileCard)
-from app.services.live_type import normalize_title
+from app.domain.text import normalize_title
 
 logger = logging.getLogger(__name__)
 
@@ -383,10 +383,15 @@ class LiveSessionRepo:
                 setattr(row, k, v)
         return False
 
-    def upsert_danmakus(self, account_id: int, items: list[dict]) -> dict:
+    def upsert_danmakus(self, account_id: int, items: list[dict], *,
+                        platform: str) -> dict:
         """danmakus 场次批量写入（/api/v2/channel lives 数组，毫秒时间戳）。
 
         幂等（live_id 唯一）；重跑刷新可变字段（收益/峰值在线等）。
+
+        ⚠️ **`platform` 必须由调用方传入**（M1a，devlog/213）：这里原来是写死的
+        `"platform": "bilibili"` —— 仓库层替平台做了决定（`ARCHITECTURE-IMPROVEMENT-EXECUTION.md`
+        §2.7 的第二条越界）。**没有默认值是有意的**：给个默认值等于把决定权又收回来。
         """
         added = updated = skipped = 0
         for it in items or []:
@@ -404,7 +409,7 @@ class LiveSessionRepo:
                 continue
             end_ms = _num(it.get("stopDate"), int) or 0
             fields = {
-                "platform": "bilibili",
+                "platform": platform,
                 "title": str(it.get("title") or "").strip() or None,
                 "room_id": str(it.get("roomId") or "") or None,
                 "start_at": start_at,
