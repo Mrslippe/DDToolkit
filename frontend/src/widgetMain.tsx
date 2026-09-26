@@ -2,7 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 
 import StatusWidgetWindow from './components/StatusWidgetWindow'
-import { setApiBase } from './api/api'
+import { holdApiUntilReady, markNoTokenRequired, setApiBase, setApiToken } from './api/api'
 import './styles/tokens.css'
 import './styles/status-island.css'
 
@@ -124,12 +124,18 @@ async function injectBackendPort(): Promise<void> {
   try {
     const { invoke } = await import('@tauri-apps/api/core')
     const port = await invoke<number>('get_backend_port')
+    // S1（devlog/202）：小窗**也要 token** —— 它照样发业务请求（读偏好、读状态）。
+    // 端口与令牌一起注入；拿不到令牌就让闸门保持关着（请求挂住而不是打 401 风暴）。
+    const token = await invoke<string>('get_api_token')
     if (typeof port === 'number' && port > 0) {
       setApiBase(`http://127.0.0.1:${port}`)
+      setApiToken(token)
       logToShell(`已注入后端端口 ${port}`)
     }
   } catch {
     // 非桌面端（探针/浏览器）：没有 sidecar，`/api` 走 Vite 代理即可，**这是对的**。
+    // ⚠️ 但闸门必须开 —— 见下面 `render()` 的说明。
+    markNoTokenRequired()
   }
 }
 
@@ -141,10 +147,24 @@ window.addEventListener('unhandledrejection', (e) => {
   logToShell(`unhandledrejection ${String((e as PromiseRejectionEvent).reason)}`)
 })
 
-// ⚠️ **先注入端口再渲染**（批 5g）：小窗一挂载就会去读偏好（穿透 / 全屏隐藏那两条），
-//    而读偏好要用 `apiBase` —— 注入晚一步，那两次请求就会打到 `/api`（ECONNREFUSED）。
-//    所以这里 `await` 一次（拿端口是本进程 IPC，亚毫秒级，不会拖慢首绘）。
+// ⚠️ **先关闸、再注入、最后渲染**（批 5g + S1，devlog/202）。
+//
+// 批 5g 的教训：小窗一挂载就会去读偏好（穿透 / 全屏隐藏那两条），而读偏好要用 `apiBase`
+// —— 注入晚一步，那两次请求就会打到 `/api`（ECONNREFUSED）。所以这里 `await` 一次
+// （拿端口/令牌都是本进程 IPC，亚毫秒级，不会拖慢首绘）。
+//
+// S1 追加：**闸门要在最早期关上**。`injectBackendPort()` 现在多一次 `invoke`（取令牌），
+// 而 `.finally()` 之后的渲染与"挂载即发请求"的组件之间没有别的屏障 ——
+// 关闸之后它们在注入完成前挂住，而不是打出 401。
+//
+// ⚠️ 这是 `DEV-LOOP.md` §6.1 那条纪律的**第四次**现身（"拆入口时顺带生效的东西最容易漏"）：
+//    前三次是 Tailwind preflight、`layout.css` 的 `.os-*`、`main.tsx` 的 `setApiBase` 副作用。
+//    **新入口必须自己走一遍启动副作用的清单**，别指望它"跟着一起生效"。
+holdApiUntilReady()
 void injectBackendPort().finally(() => {
+  // 兜底：无论注入成功与否都要开闸 —— 注入失败（非桌面端）时 `markNoTokenRequired()`
+  // 已在 catch 里调过；这里再兜一次，保证**绝不把请求挂死**（那个症状没有报错、最难查）。
+  if (!('__TAURI_INTERNALS__' in window)) markNoTokenRequired()
   ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>
       <WidgetErrorBoundary>

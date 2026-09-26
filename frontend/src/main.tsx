@@ -11,12 +11,19 @@ import './styles/tokens.css'
 import App from './App'
 
 import Logo from './components/common/Logo'
-import { setApiBase } from './api/api'
+import { DEV_API_TOKEN, holdApiUntilReady, markNoTokenRequired, markTokenReady, setApiBase, setApiToken } from './api/api'
 import { markFirstRun } from './bootState'
 import { installShellLifecycle } from './utils/shellLifecycle'
 import { applyCornersMode } from './utils/windowCorners'
 
 const isTauri = '__TAURI_INTERNALS__' in window
+
+// ⚠️ **闸门必须在最早期关上**（S1，devlog/202）：`Root` 在 `state !== 'pending'` 时就挂载
+// `<Main/>`，而注入基地址与 token 都在**异步**的 `tauriBootstrap` 里。原先能工作靠的是
+// "启动幕那 750ms 里没有业务请求自动发出"这个**时序巧合**；加 token 之后多一次 `invoke`，
+// 只会更晚 ⇒ 任何"挂载即发请求"的组件（更新检查 / 状态岛轮询 / 列表取数）都会打在注入之前。
+// 关闸之后它们在注入完成前**挂住**，而不是打出一个必然 401 的请求。
+holdApiUntilReady()
 
 // 冷启动计时（方案 0 埋点）：与后端 sidecar.log / Rust stdout 的 [perf] 行对照
 const _t0 = performance.now()
@@ -33,16 +40,21 @@ if (isTauri) {
 }
 perfLog('模块求值完成')
 
-/** 桌面端引导：取 sidecar 端口 → 轮询 /healthz 就绪 → 注入 API 地址 */
+/** 桌面端引导：取 sidecar 端口与**会话 token** → 轮询 /healthz 就绪 → 注入 API 地址 */
 async function tauriBootstrap(): Promise<boolean> {
   const { invoke } = await import('@tauri-apps/api/core')
   const port = await invoke<number>('get_backend_port')
+  // S1（devlog/202）：token 与端口一起取。它由壳**每次启动生成**，只存内存。
+  // 取不到就让下面轮询超时 → 走启动幕的 failed 态（那里会说明看哪个日志）——
+  // 比"带着空 token 继续跑、每个请求 401"更容易定位。
+  const token = await invoke<string>('get_api_token')
   const base = `http://127.0.0.1:${port}`
   for (let i = 0; i < 240; i++) {
     try {
       const r = await fetch(`${base}/healthz`, { cache: 'no-store' })
       if (r.ok) {
         setApiBase(base)
+        setApiToken(token)
         // 首次启动标记（后端只在第一次探活时给 true）→ TopBar 自动弹登录浮窗
         try {
           const boot = (await r.json()) as { first_run?: boolean }
@@ -147,7 +159,20 @@ function Root() {
   useEffect(() => installShellLifecycle(), [])
 
   useEffect(() => {
-    if (!isTauri) return
+    if (!isTauri) {
+      // 浏览器/探针：没有 Tauri ⇒ 拿不到"每次启动生成"的 token，靠后端的
+      // `DDTOOLKIT_DEV_API_TOKEN` 通路（探针给后端与前端注入同一个值，
+      // 见 `scripts/ui_probe.py` 与 `vite.config.ts` 的 `VITE_DEV_API_TOKEN`）。
+      //
+      // ⚠️ **只在"确实没有 token"时才 `markNoTokenRequired()`**（2026-09-25 踩到）：
+      //    那个函数会把 `apiToken` 清成空串（它的语义是"这个环境不需要 token"）。
+      //    无条件调用 ⇒ **把开发态那份好好的 token 抹掉** ⇒ 后端逐条 401，
+      //    而页面表现是"数据全空 ⇒ 布局断言集体报红"。
+      //    `DEV_API_TOKEN` 在 `api.ts` 里已经就位，这里只需要**开闸**。
+      if (!DEV_API_TOKEN) markNoTokenRequired()
+      else markTokenReady()
+      return
+    }
     perfLog('tauriBootstrap 开始')
     tauriBootstrap()
       .then((ok) => {
@@ -155,8 +180,10 @@ function Root() {
         setState(ok ? 'opening' : 'failed')
       })
       .catch((err) => {
-        // invoke（取 sidecar 端口）失败也必须落地到 failed——否则幕布永远停在
-        // 呼吸态、既无错误也无重试入口（2026-09-08 直装版首启卡幕反馈的兜底）
+        // invoke（取 sidecar 端口/令牌）失败也必须落地到 failed——否则幕布永远停在
+        // 呼吸态、既无错误也无重试入口（2026-09-08 直装版首启卡幕反馈的兜底）。
+        // ⚠️ S1 起 `get_api_token` 也在这条链上：**取不到令牌时绝不能开闸**，
+        //    否则每个请求都会打出 401，而用户只看到"数据加载失败"。
         window.__bootLog?.('[bootstrap] ' + String(err))
         setState('failed')
       })

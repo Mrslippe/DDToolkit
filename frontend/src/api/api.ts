@@ -3,7 +3,7 @@ import type { Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, BiliS
 /**
  * API 基地址：
  * - Web 开发默认走 Vite 代理（/api → http://127.0.0.1:8000，见 vite.config.ts）
- * - 也可用 VITE_API_BASE 直连后端（如 http://127.0.0.1:8000），后端 CORS 已放开
+ * - 也可用 VITE_API_BASE 直连后端（如 http://127.0.0.1:8000）
  * - 桌面端（Tauri）启动时通过 setApiBase 注入 sidecar 实际端口
  */
 export const DEFAULT_API_BASE: string =
@@ -20,8 +20,195 @@ export function getApiBase(): string {
   return apiBase
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const resp = await fetch(`${apiBase}${path}`, init)
+// ── S1（devlog/202）：会话 token 与启动闸门 ─────────────────────────────────
+//
+// ## token
+// 后端每个业务端点都要求 `X-DDToolkit-Token`（`app/core/api_auth.py`），
+// 而 token 由 Tauri **每次启动生成** —— 前端只能经 `get_api_token` 命令拿到。
+// 开发态（浏览器/探针，没有 Tauri）则用构建期注入的固定值，见下面的 `DEV_API_TOKEN`。
+//
+// ## 为什么要"闸门"
+// `main.tsx` 的 `Root` 在 `state !== 'pending'` 时就挂载 `<Main/>`，而 `setApiBase` /
+// token 都在**异步**的 `tauriBootstrap` 里。原先能工作靠的是"启动幕那 750ms 里没有业务
+// 请求自动发出"这个**时序巧合**；加 token 之后多一次 `invoke`，只会更晚 ⇒ 必须有闸门。
+// 表现上：任何在挂载时自动发请求的组件（`useUpdateCheck` / 状态岛轮询 / 列表取数）
+// 都会在闸门开之前**挂住**，而不是打出一个必然 401 的请求。
+const TOKEN_HEADER = 'X-DDToolkit-Token'
+
+/**
+ * 开发态固定 token（**只在 `import.meta.env.DEV` 下用得上**）。
+ *
+ * 环境变量经 `vite.config.ts` 的 `define` 注入；默认值与
+ * `scripts/ui_probe.py` 的 `PROBE_DEV_TOKEN` **必须一致** ——
+ * 两边不一致的症状是"探针页面所有数据为空 ⇒ 布局断言集体报红"，
+ * 而看起来像布局坏了（2026-09-25 真实踩过一次，见 devlog/201 §四）。
+ */
+export const DEV_API_TOKEN: string =
+  (import.meta.env.VITE_DEV_API_TOKEN as string | undefined) ?? 'dsh-ui-probe-dev-token'
+
+let apiToken: string = import.meta.env.DEV ? DEV_API_TOKEN : ''
+
+/** 注入本次启动的会话 token（桌面端由 `get_api_token` 拿到）。 */
+export function setApiToken(token: string): void {
+  apiToken = token
+  openGate()
+}
+
+/**
+ * 声明"这个环境不需要 token"（浏览器里**确实没有** token 时）。
+ *
+ * ⚠️ 它会**清空** `apiToken` —— 语义是"这个环境本来就不该带 token"。
+ * 所以**不能无条件调它**：2026-09-25 实测踩到，`main.tsx` 的浏览器分支无条件调了一次，
+ * 把开发态那份明明已经就位的 token 抹掉 ⇒ 后端逐条 401，
+ * 而页面表现是"数据全空 ⇒ 布局断言集体报红"。
+ * ⇒ 开发态已经有 token 时请用 `markTokenReady()`（只开闸、不动 token）。
+ */
+export function markNoTokenRequired(): void {
+  apiToken = ''
+  openGate()
+}
+
+/** 开闸但**不动** `apiToken`（开发态已经有 token 时用这个）。 */
+export function markTokenReady(): void {
+  openGate()
+}
+
+// ⚠️ **闸门只在桌面端（Tauri）关着**（2026-09-25 实测定的）。
+//
+// 闸门存在的唯一理由是"等 `tauriBootstrap` 把端口与 token 注入进来" —— 那是**异步**的。
+// 浏览器里没有任何东西要等（`apiBase` 是 `/api` 或 `VITE_API_BASE`，token 是构建期常量），
+// 所以**一开始就该是开的**。
+//
+// 实测踩到：原先两个入口都在模块加载时无条件 `holdApiUntilReady()`，而
+// `frontend/src/dev/probe.ts` 是**模块加载就 `runUiProbe()`**（不等 React effect）
+// ⇒ 它那几个 `authFetch` 卡在闸门上**永远不返回**（虚拟时间下更明显），
+// 表现为"探针没量到 fetch-status ⇒ 顶栏展示策略判不了"，
+// 而看起来像产品坏了。修法是让"需不需要等"由环境本身决定，而不是靠调用方记得。
+//
+// ⚠️ 必须 `typeof window !== 'undefined'` 兜一层：`api.ts` 也被 vitest 在 **node 环境**
+// 下 import（本仓没有 jsdom），直接写 `window` 会让**整个测试文件收集失败**
+// （`ReferenceError: window is not defined`）。
+const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+
+/**
+ * 测试专用：让 `holdApiUntilReady()` 在非 Tauri 环境里也生效。
+ *
+ * 为什么要它：闸门**只对桌面端有意义**（见上），而 vitest 跑在 node 环境下 ——
+ * 直接测"关闸后请求挂住"就永远测不到那条分支（`holdApiUntilReady` 会直接 return）。
+ * 有了这个开关，那条契约仍有机器判据；**生产代码从不调它**。
+ */
+let tauriOverrideForTest = false
+export function __setTauriForTest(v: boolean): void {
+  tauriOverrideForTest = v
+}
+
+function inTauri(): boolean {
+  return isTauri || tauriOverrideForTest
+}
+
+let releaseGate: () => void = () => {}
+/**
+ * 闸门初始**开着**（2026-09-25 定的）。
+ *
+ * 第一版是关的、靠 `setApiToken` / `markNoTokenRequired` 去开 —— 结果**测试里第一条用例
+ * 直接挂死 5 秒**（`afterEach` 还没跑过，没人开闸）。这暴露的是真实风险：
+ * 任何**新的调用方**（或新的测试文件）只要忘了开闸，症状就是"请求静静地挂着"，
+ * 比 401 更难查（没有报错、没有日志）。
+ *
+ * 契约改成：**默认放行；`holdApiUntilReady()` 才是"我要等注入"的显式声明**，
+ * 由两个入口（`main.tsx` / `widgetMain.tsx`）在**最早期**调用。
+ * 这样"忘了开闸"最多退化成旧行为（可能打一个 401），而不会把应用挂死。
+ *
+ * ⚠️ **`gate` 与 `gateOpen` 必须一起维护**：第二版把它们写岔了 —— `gateOpen` 初值 true
+ * 而 `gate` 是一个**永不 resolve** 的 pending promise ⇒ `request()` 里的 `await gate`
+ * **永远不返回**，整个应用所有请求全部挂死（实测：调试用例 5 秒超时）。
+ * 所以下面用 `newGate()` 一处构造，初值直接 `Promise.resolve()`。
+ */
+let gateOpen = true
+let gate: Promise<void> = Promise.resolve()
+
+function newGate(): Promise<void> {
+  return new Promise<void>((resolve) => { releaseGate = resolve })
+}
+
+/** 关闸：在注入完成前挂住所有请求。**只有桌面端需要**（见上面的说明）。 */
+export function holdApiUntilReady(): void {
+  // 浏览器里**直接忽略**：没有异步注入可等，关闸只会把探针自己的请求挂死。
+  if (!inTauri()) return
+  gateOpen = false
+  gate = newGate()
+}
+
+function openGate(): void {
+  if (gateOpen) return
+  gateOpen = true
+  releaseGate()
+}
+
+/** 测试用：复位成"开着"（生产代码不该调它；两个入口用 `holdApiUntilReady`）。 */
+export function resetApiReady(): void {
+  gateOpen = true
+  gate = Promise.resolve()
+}
+
+// dev 钩子（与 `__ddtoolkitShellHidden` 同路数）：让探针能**从页面里**读到
+// "token 注入成什么样了"以及"请求带没带上头"。没有它，S1 出问题时只能靠猜
+// —— 2026-09-25 实测：探针 60 条 401，而后端日志显示 `presented=''`，
+// 到底是"没注入"还是"注入了没带"分不出来。
+//
+// ⚠️ 同样要守 `typeof window`：vitest 在 node 环境下 import 本模块。
+if (import.meta.env.DEV && typeof window !== 'undefined') {
+  const diagWindow = window as unknown as { __ddtoolkitAuthDiag?: () => unknown }
+  diagWindow.__ddtoolkitAuthDiag = () => ({
+    hasToken: apiToken.length > 0,
+    tokenLen: apiToken.length,
+    devBrowser: Boolean(import.meta.env.DEV),
+    base: apiBase,
+    // 原始输入一并带出去：`hasToken=false` 时，是"define 没替换"还是"替换成了空值"，
+    // 光看 hasToken 分不出来（这一批已经在这一步上猜了一轮）。
+    rawEnvToken: String(import.meta.env.VITE_DEV_API_TOKEN ?? '<undefined>'),
+    devTokenConst: DEV_API_TOKEN,
+  })
+}
+
+/** 等"基地址与 token 都注入完成"。`request()` 内部会 await 它。 */
+export function awaitApiReady(): Promise<void> {
+  return gate
+}
+
+/**
+ * 给需要**裸 HTTP 语义**的调用方用的 fetch：会带上会话 token，但**保留原始响应**
+ * （要读 `.ok` / `.status` / 直接 `.json()` 的场景 —— 例如探针的诊断调用，
+ * 它需要区分"没在跑"与"问不到"，那正是 `request()` 会抛错的两种情形）。
+ *
+ * ⚠️ 为什么需要它（2026-09-25 实测）：`dev/probe.ts` 里有十余处**裸 `fetch`**
+ * （写于 S1 之前），它们不走 `request()` ⇒ 没有 token ⇒ 后端逐条 401。
+ * 症状极具误导性：**探针自己那些"你没在跑吧？"的断言全部拿到 401**，
+ * 于是布局/状态断言集体报红，看起来像 S1 把产品打坏了。
+ *
+ * 判据：**任何打后端的 fetch 都必须经过这里或 `request()`** ——
+ * 前者要原始响应，后者要解析过的结果，没有第三种。
+ */
+export async function authFetch(path: string, init?: RequestInit): Promise<Response> {
+  await gate
+  const headers = new Headers(init?.headers)
+  if (apiToken) headers.set(TOKEN_HEADER, apiToken)
+  // ⚠️ 容忍**绝对 URL**（2026-09-25 踩到）：探针那几处写的是
+  //    `` `${(import.meta.env.VITE_API_BASE) ?? '/api'}/xxx` `` —— 在探针里那已经是个完整地址。
+  //    无脑拼 `apiBase` 会得到 `http://127.0.0.1:59321http://127.0.0.1:59321/xxx`，
+  //    浏览器直接抛 `Failed to parse URL`（这一步的症状又是"探针没量到 fetch-status"，
+  //    看起来像产品坏了）。
+  const url = /^https?:\/\//.test(path) ? path : `${apiBase}${path}`
+  return fetch(url, { ...init, headers })
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {  await gate
+  // ⚠️ 用 `Headers` **合并**而不是直接塞一个对象：调用方可能已经带了 `Content-Type`
+  //    （JSON 的那些），而 `uploadBackground` 走 `FormData`、**绝不能**设 Content-Type
+  //    （设了浏览器就拼不出 multipart boundary）。合并两种都照顾到。
+  const headers = new Headers(init?.headers)
+  if (apiToken) headers.set(TOKEN_HEADER, apiToken)
+  const resp = await fetch(`${apiBase}${path}`, { ...init, headers })
   if (!resp.ok) {
     let detail = `${resp.status} ${resp.statusText}`
     try {
@@ -29,6 +216,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       if (body?.detail) detail = String(body.detail)
     } catch {
       /* 非 JSON 响应，保留默认信息 */
+    }
+    if (resp.status === 401) {
+      // 401 单独提一句：它在本应用里**只可能是认证**（token 没注入 / 过期 / 壳与后端对不上），
+      // 而默认文案只有"401 Unauthorized"，用户与排查者都看不出该往哪查。
+      detail = `访问令牌无效或缺失（${detail}）—— 应用若刚重启，请重开窗口`
     }
     throw new Error(detail)
   }
