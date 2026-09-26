@@ -12,6 +12,7 @@ R27 之前不需要这层隔离（旧的两个变量只被"读出来显示"，�
 """
 import pytest
 
+from app.core.config import settings
 from app.services import scheduler as sch
 
 
@@ -33,6 +34,38 @@ def _isolate_rate_limit_state():
     sch._rl_states.update(saved_states)
     sch._rl_loaded = saved_loaded
     sch._dynamics_idle_streak = saved_streak
+
+
+@pytest.fixture(autouse=True)
+def _isolate_runtime_settings():
+    """每个用例前后都清掉**运行时设置**的两处进程级残留。
+
+    **为什么提到 conftest（2026-09-27，devlog/228 顺带修的）**：这层隔离原来只写在
+    `tests/test_runtime_settings.py` 的**文件内**夹具里 ⇒ 换个**文件顺序**跑就会串台。
+    实测（按非字母序 `test_services.py` + `test_runtime_settings.py`）：
+    `assert settings.REQUEST_INTERVAL_MIN == 2.0` 读到默认值 `3.0`，5 条**假红**；
+    按仓库惯用的全量顺序跑却是全绿 —— 这种"只跟顺序有关"的红最耗排查时间。
+
+    两处残留都要清，少一处就还会漏：
+
+    ① **覆盖层**（`runtime_settings._overrides`，进程级 dict）—— `rs.clear()`；
+    ② **实例属性** —— `monkeypatch.setattr(settings, "DYNAMICS_BUDGET_RPM", 2)` 的撤销是
+       "有旧值就 `setattr` 回去"，而 SPECS 键**永远有旧值**（类属性），于是撤销后
+       `settings.__dict__` 里留下一条**优先于覆盖层**的实例属性；之后任何 `rs.apply()`
+       都改不动这个键（`config.__getattribute__` 的优先级：实例属性 > 覆盖层 > 类属性）。
+       仓库里有 6+ 个用例文件是这么改设置的，所以这条必须在这里统一收口。
+    """
+    from app.core import runtime_settings as rs
+
+    def _clean() -> None:
+        rs.clear()
+        d = settings.__dict__
+        for key in rs.SPECS:
+            d.pop(key, None)
+
+    _clean()
+    yield
+    _clean()
 
 
 @pytest.fixture(autouse=True)

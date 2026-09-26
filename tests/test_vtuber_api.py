@@ -180,6 +180,43 @@ def test_delete_vtuber(client):
     assert client.get(f"/vtuber/{vid}").status_code == 404
 
 
+# ── 左栏主播排序（R51，devlog/228）──────────────────────────────────
+# 用户口径（2026-09-27）：「长按鼠标左键可以拖动主播进行排序」。
+# 顺序必须**落库**（前端没有 localStorage 约定，与 P8-B 平台徽章同一条纪律），
+# 否则拖完刷新一次就回到原样 —— 那正是这一组用例要钉的事。
+
+def test_vtuber_order_is_persisted_and_reflected_in_list(client):
+    """拖拽后的顺序要落库、并被 `/vtuber/list` 按新顺序返回。"""
+    ids = [client.post("/vtuber", json={"name": n}).json()["id"] for n in ("A", "B", "C")]
+    assert [v["name"] for v in client.get("/vtuber/list").json()] == ["A", "B", "C"]
+
+    # 把 C 拖到最前（前端提交的是**整串新顺序**）
+    r = client.put("/vtuber/order", json={"vtuber_ids": [ids[2], ids[0], ids[1]]})
+    assert r.status_code == 200
+    assert [v["name"] for v in r.json()] == ["C", "A", "B"]
+    assert [v["name"] for v in client.get("/vtuber/list").json()] == ["C", "A", "B"]
+
+
+def test_vtuber_order_endpoint_is_not_swallowed_by_the_id_route(client):
+    """`PUT /vtuber/order` 不许被 `PUT /vtuber/{vtuber_id}` 抢走（那是 422 的经典形态）。
+
+    这条是**路由注册顺序**的判据：`/vtuber/order` 必须排在 `/vtuber/{vtuber_id}` 之前
+    （与 `/vtuber/list`、`/vtuber/fetch-status` 同一条纪律）。
+    """
+    vid = client.post("/vtuber", json={"name": "X"}).json()["id"]
+    r = client.put("/vtuber/order", json={"vtuber_ids": [vid]})
+    assert r.status_code == 200, r.text          # 被 {vtuber_id} 吃掉的话这里是 422
+
+
+def test_vtuber_order_ignores_unknown_ids_and_keeps_the_rest(client):
+    """提交里出现库里没有的 id（例如另一端刚删了）时：忽略它，其余照常排在后面。"""
+    a = client.post("/vtuber", json={"name": "A"}).json()["id"]
+    b = client.post("/vtuber", json={"name": "B"}).json()["id"]
+    r = client.put("/vtuber/order", json={"vtuber_ids": [b, 999999]})
+    assert r.status_code == 200
+    assert [v["name"] for v in r.json()] == ["B", "A"]      # 未列出的 A 排在其后
+
+
 # ── Account ─────────────────────────────────────────────────────────
 
 def test_add_account(client):

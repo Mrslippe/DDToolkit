@@ -22,7 +22,30 @@ class VTuberRepo:
         self.db = db
 
     def all(self) -> list[VTuber]:
-        return self.db.query(VTuber).options(joinedload(VTuber.accounts)).all()
+        """全部 VTuber，按**左栏展示顺序**（`sort_order` 升序，同序号退回 id）。
+
+        ⚠️ 这个顺序就是左栏的"默认排序"（R51 长按拖动重排；用户手改的顺序落库，
+        否则刷新一次就回到原样 —— 与 P8-B 的平台徽章同一条纪律）。
+        没排过的都是 `sort_order = 0`，于是老数据仍然按 id 序，行为不变。
+        """
+        return (
+            self.db.query(VTuber)
+            .options(joinedload(VTuber.accounts))
+            .order_by(VTuber.sort_order.asc(), VTuber.id.asc())
+            .all()
+        )
+
+    def reorder(self, vtuber_ids: list[int]) -> list[VTuber]:
+        """按传入 id 顺序重写 `sort_order`（R51 左栏拖拽重排；未列出的排在其后）。"""
+        vtubers = self.all()
+        by_id = {v.id: v for v in vtubers}
+        ordered = [by_id[i] for i in vtuber_ids if i in by_id]
+        given = set(vtuber_ids)
+        ordered += [v for v in vtubers if v.id not in given]
+        for idx, v in enumerate(ordered):
+            v.sort_order = idx
+        self.db.commit()
+        return ordered
 
     def get(self, id: int) -> VTuber | None:
         return self.db.query(VTuber).options(joinedload(VTuber.accounts)).filter(VTuber.id == id).first()

@@ -43,6 +43,7 @@ from app.services.externals.runner import run_external_interval
 from app.services.weibo_auth import weibo_auth_manager
 from app.services import capabilities
 from app.services import rate_limit as rl
+from app.services import notifier
 # 注意：此处不调用 logging.basicConfig —— 根日志配置统一由
 # `app/core/logging_setup.py::setup_logging()`（在 app/main.py 里调用）完成。
 # 历史上这里先执行了 basicConfig，导致 main.py 里的文件 handler 配置被静默忽略，
@@ -212,6 +213,86 @@ def _vtuber_name_of(acc: Account) -> str | None:
         return acc.vtuber.name if acc.vtuber else None
     except Exception:
         return None
+
+
+# ── R50（devlog/219）新帖通知：取数口径 ──────────────────────────
+# 判定"这一轮存了哪些新帖"用**主键水位**（抓取前记 max(id)，抓取后取 id > mark）：
+# 入库顺序就是 id 顺序，所以两种抓取实现（B 站双流核心 / 通用单流循环）都不必
+# 各自维护"我存了哪几条"—— 少一处口径就少一处漂移。
+_NOTIFY_MAX_ITEMS = 5      # 一条通知最多带几条（文案本身只显示首条标题）
+
+
+def _notify_icon(acc: Account) -> str | None:
+    """账号头像的绝对路径（通知卡片左上角的图标）；没有/文件不在就返回 None。
+
+    返回 None 时通知照常弹，只是图标退回 App 图标 —— 头像缺失不该让通知消失。
+    """
+    try:
+        if not acc.avatar_path:
+            return None
+        p = Path(acc.avatar_path)
+        p = p if p.is_absolute() else settings.DATA_DIR / p
+        return str(p) if p.exists() else None
+    except Exception:
+        return None
+
+
+def _post_mark(db: Session, acc: Account) -> tuple[int, int, datetime | None]:
+    """抓取前记一笔：该账号当前的 `(最大帖 id, 已有帖数, 最新发布时间)`。
+
+    两个闸门叠加，缺一个都会在"刚添加账号"时误报（2026-09-27 用户口径：
+    「首次添加账号抓取数据时不进行弹窗推送」）：
+
+    1. **帖数**：`count == 0` = 一次都没抓过（首次收录）⇒ 直接不通知；
+    2. **发布时间水位**：只对**比库里已有的最新一条还新**的帖子开口。
+       ⚠️ 单靠 id 水位不够：收录首屏只收前 N 条（`FIRST_SCREEN_DYNAMICS_LIMIT`），
+       随后例行轮询会**往回补更老的内容**，它们入库晚、id 更大 —— 只看 id 的话
+       这些老内容会被当成"新动态"推送（实测踩到：刚加完账号就收到"X 更新了动态"）。
+    """
+    row = db.query(func.max(Post.id), func.count(Post.id),
+                   func.max(Post.published_at)).filter(
+        Post.platform == acc.platform, Post.platform_uid == str(acc.platform_uid)
+    ).one()
+    newest = row[2]
+    if isinstance(newest, str):          # SQLite 上偶尔回来的字符串形态，统一成 datetime
+        try:
+            newest = datetime.fromisoformat(newest)
+        except ValueError:
+            newest = None
+    return int(row[0] or 0), int(row[1] or 0), newest
+
+
+def _notify_new_posts(db: Session, acc: Account, mark: int,
+                      newest_before: datetime | None) -> None:
+    """把这一轮**真的入库**的新帖汇成一条通知（一个 V 一轮只一条）。
+
+    判定 = `id > mark`（这一轮入库的）**且** `published_at > newest_before`
+    （比抓取前已有的最新一条还新）。没有发布时间（上游没给）的一律不算新帖 ——
+    宁可不弹，也不要把回填的老内容当成"更新"打扰用户。
+
+    全部包在 try 里：通知是"锦上添花"，任何异常都只记日志 —— 抓取链路不许被它拖下水。
+    """
+    if newest_before is None:
+        return
+    try:
+        rows = db.query(Post).filter(
+            Post.platform == acc.platform,
+            Post.platform_uid == str(acc.platform_uid),
+            Post.id > mark,
+            Post.published_at.isnot(None),
+            Post.published_at > newest_before,
+        ).order_by(Post.id.asc()).limit(_NOTIFY_MAX_ITEMS).all()
+        if not rows:
+            return
+        items = [{"platform_post_id": p.platform_post_id, "type": p.type,
+                  "title": p.title, "summary": p.summary, "permalink": p.permalink}
+                 for p in rows]
+        notifier.notify_new_posts(
+            _vtuber_name_of(acc) or acc.display_name or str(acc.platform_uid),
+            acc.platform, items,
+            account_url=acc.url, icon_path=_notify_icon(acc))
+    except Exception as e:
+        logger.warning(f"新帖通知失败（忽略，不影响抓取）: {type(e).__name__}: {e}")
 
 
 def _set_account_progress(current: str | None, index: int, total: int,
@@ -2292,13 +2373,18 @@ async def _fetch_posts_for_account(acc: Account, video_pages: int, dynamics_page
                                    db: Session, client: httpx.AsyncClient | None = None,
                                    include_videos: bool = True,
                                    stop_on_existing: bool = False,
-                                   limit_latest: int | None = None) -> PostFetchResult:
+                                   limit_latest: int | None = None,
+                                   notify: bool = False) -> PostFetchResult:
     """按平台分发单个账号的帖子抓取：
     - bilibili → 双流核心 _fetch_posts_core（视频+动态、归档边界、视频总数比对）
     - weibo 等单流平台 → 通用循环 _fetch_platform_posts
 
     limit_latest 对两条实现均生效（B 站双流核心 = 动态桶计数；单流平台 = 全流计数），
     收录首屏抓取即用该参数给单次时长设上界。
+
+    notify=True（R50，devlog/219）→ 本轮**真的入库**的新帖汇成一条桌面通知。
+    只有例行轮询（「更新未归档」与启动链的动态流）会传它：收录首屏、手动全量、
+    按名抓取都是用户自己发起的导入，弹通知只会变成噪音。
 
     抓取结束后统一执行墓碑判定（删除检测，v0.5.1）——本函数是各调用方
     （增量更新/全量抓取/按名抓取）的共同必经点，判定结果写入 detail，
@@ -2307,6 +2393,7 @@ async def _fetch_posts_for_account(acc: Account, video_pages: int, dynamics_page
     pf = registry.get_fetcher(acc.platform)
     if pf is None:
         return PostFetchResult(stop_reason="error", error=f"不支持的平台 '{acc.platform}'")
+    mark, before_count, newest_before = _post_mark(db, acc) if notify else (0, 0, None)
     if acc.platform == "bilibili":
         try:
             mid = int(acc.platform_uid)
@@ -2320,6 +2407,10 @@ async def _fetch_posts_for_account(acc: Account, video_pages: int, dynamics_page
         result = await _fetch_platform_posts(pf, str(acc.platform_uid), dynamics_pages, db,
                                              client=client, stop_on_existing=stop_on_existing,
                                              limit_latest=limit_latest)
+    # 通知要在**墓碑判定之前**取数：墓碑会把"判定为已删除"的帖子从 results 里排除，
+    # 而那些帖子恰恰是刚入库的（先入库、下一轮才发现删了）—— 顺序反过来会漏通知。
+    if notify and before_count:
+        _notify_new_posts(db, acc, mark, newest_before)
     _run_tombstone_scan(db, acc, result, include_videos=include_videos)
     return result
 
@@ -2772,7 +2863,8 @@ async def async_update_unarchived_posts(name: str | None = None) -> dict:
             try:
                 r = await _fetch_posts_for_account(acc, -1, -1, db, client=client,
                                                    include_videos=False,
-                                                   stop_on_existing=True)
+                                                   stop_on_existing=True,
+                                                   notify=True)
             except Exception as e:
                 logger.error(f"更新动态异常 {acc.platform}:{acc.platform_uid}: {e}", exc_info=True)
                 db.rollback()
@@ -2984,7 +3076,13 @@ async def live_sweep_core(db: Session, client: httpx.AsyncClient | None = None) 
                 if not acc.room_id and hit.get("room_id"):
                     acc.room_id = str(hit["room_id"])
                 edge = acc.live_status != prev_status
-                started = bool(acc.live_status) and not prev_status
+                # 「开播」= **直播中（live_status == 1）** 的进入沿。
+                # ⚠️ 不能写 `bool(live_status)`：B 站还有 **2 = 轮播/录播循环**
+                # （主播下播后常挂着的状态），那样 `0 → 2` 会被当成开播
+                # （2026-09-27 用户实测："现在是下播时间，但提醒我明前奶绿开播了"。
+                #  轮播也不该触发"内容马上会来"的满速恢复）。
+                # 语义：0→1 开播 ✓ / 2→1 轮播转直播 ✓ / 0→2 轮播 ✗ / 1→2 转轮播 ✗
+                started = acc.live_status == 1 and prev_status != 1
                 if edge:
                     # 直播边沿：落统计快照（直播日历场次推导的数据来源）。
                     # ⚠️ **必须与 live 字段同一个事务**（R3，devlog/212）：原来是两笔独立
@@ -2995,6 +3093,16 @@ async def live_sweep_core(db: Session, client: httpx.AsyncClient | None = None) 
                 if edge and started:
                     # R28②：开播意味着"内容马上会来" ⇒ 立刻把动态流恢复满速
                     note_dynamics_activity(f"检测到开播（{acc.display_name or acc.platform_uid}）")
+                    # R50（devlog/219）：开播 → 弹一张可点的卡片。
+                    # 放在 commit **之后**：通知要说的是"这件事已经发生并落库"，
+                    # 落盘失败时不该先弹（用户点进去反而看不到那场直播）。
+                    # `notify_live_start` 自己吞掉所有异常，绝不会拖累 T0 轮询。
+                    notifier.notify_live_start(
+                        _vtuber_name_of(acc) or acc.display_name or str(acc.platform_uid),
+                        live_title=acc.live_title, url=acc.live_url,
+                        room_id=acc.room_id, platform=acc.platform,
+                        platform_uid=acc.platform_uid, icon_path=_notify_icon(acc),
+                    )
                 _push_account_snapshot(acc)
                 result.success += 1
             idx += len(chunk)
@@ -3090,6 +3198,7 @@ async def run_latest_dynamics_sweep() -> dict:
                     local, 0, 1, s, client=client,
                     include_videos=False, stop_on_existing=True,
                     limit_latest=settings.STARTUP_DYNAMICS_LIMIT,
+                    notify=True,
                 )
             except Exception as e:
                 logger.error(f"动态流异常 {pf}:{acc.platform_uid}: {e}", exc_info=True)

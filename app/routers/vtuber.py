@@ -161,6 +161,20 @@ def fetch_status():
     return get_fetch_status()
 
 
+class VTuberOrderRequest(BaseModel):
+    """左栏主播拖拽重排的提交体（按新顺序给出 VTuber id，R51）。"""
+    vtuber_ids: list[int]
+
+
+# ⚠️ 同样必须注册在 /vtuber/{vtuber_id} 之前：`PUT /vtuber/order` 的 "order"
+#    会被 int 路径参数捕获成 422（与上面 /vtuber/list、/vtuber/fetch-status 同一条纪律）。
+@router.put("/vtuber/order", response_model=list[VTuberOut])
+def set_vtuber_order(data: VTuberOrderRequest, db: Session = Depends(get_db)):
+    """重排左栏主播展示顺序（R51 长按拖动落库；未列出的排在其后）。"""
+    vtubers = VTuberRepo(db).reorder(data.vtuber_ids)
+    return [VTuberOut.model_validate(v, from_attributes=True) for v in vtubers]
+
+
 @router.get("/vtuber/{vtuber_id}", response_model=VTuberOut)
 def get_vtuber(vtuber_id: int, db: Session = Depends(get_db)):
     v = VTuberRepo(db).get(vtuber_id)

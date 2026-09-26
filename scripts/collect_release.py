@@ -26,7 +26,7 @@ BACKEND_SRC = FRONTEND / "src-tauri" / "binaries" / "backend"
 
 OUT_DIR = ROOT / "dist-release"
 ZIP_NAME = "DDtoolkit-portable-win64.zip"
-REPO = "Mrslippe/DDToolkit"
+REPO = "laplace-dragon/DDToolkit"
 # `latest.json` 的说明字段：发布说明动辄几千字，更新器弹窗里只要开头一段
 NOTES_LIMIT = 1200
 

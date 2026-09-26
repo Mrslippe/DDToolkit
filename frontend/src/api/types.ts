@@ -645,8 +645,9 @@ export interface UpcomingReservation {
 
 export interface SettingSpec {
   key: string
-  kind: 'int' | 'float' | 'bool'
-  default: number | boolean
+  /** `color` = 取色器（值形如 `#rrggbb`，R50 的通知文字颜色） */
+  kind: 'int' | 'float' | 'bool' | 'color'
+  default: number | boolean | string
   /** 闭区间；bool 为 null */
   min: number | null
   max: number | null
@@ -663,7 +664,7 @@ export interface SettingSpec {
   /** 额外说明（例如 0 = 关闭） */
   note: string
   /** 当前生效值 */
-  value: number | boolean
+  value: number | boolean | string
   /** 是否被改过（≠ 默认值） */
   changed: boolean
 }
@@ -736,14 +737,31 @@ export interface AppSettings {
   readonly: SettingReadonlyNote[]
   info: AppSettingsInfo
   /** 被改过的键 → 当前值（界面用来标"已改过"） */
-  overrides: Record<string, number | boolean>
+  overrides: Record<string, number | boolean | string>
+}
+
+/** `POST /settings/test-notification`（R50，devlog/219）：投递判据 */
+export interface TestNotificationVerdict {
+  queued: boolean
+  title: string
+  body: string
+  /** 这条通知会打开哪里（测试通知 = 那条帖子的 permalink；通用文案 = 示例站） */
+  url?: string | null
+  /** 这条是拿什么发的（例如「明前奶绿 的最新动态」），界面原样显示 */
+  source?: string
+  /** 品牌色卡片是否真的显示出来 */
+  popup: boolean
+  /** 是否用上了主播头像（测试通知没有账号上下文，恒为 false） */
+  icon: boolean
+  /** 没显示出来时的原因（原样显示给用户，别自己编一句） */
+  detail: string
 }
 
 export interface AppSettingsSaved {
   ok: boolean
   changed: string[]
-  values: Record<string, number | boolean>
-  overrides: Record<string, number | boolean>
+  values: Record<string, number | boolean | string>
+  overrides: Record<string, number | boolean | string>
 }
 
 // ── 界面偏好（GET/PUT /settings/prefs，R14b devlog/092）───────────────

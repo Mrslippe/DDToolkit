@@ -971,6 +971,26 @@ html.window-maximized body {
   background: var(--sel-bg);
 }
 
+/* ── 长按拖动排序（R51，devlog/228）──────────────────────────────────
+   拖动中的那一行要"拿得起来"：轻微放大 + 阴影 + 提到最上层；
+   整列在拖动期间禁掉文本选中（否则鼠标划过会顺手选中名字，看起来像拖坏了）。 */
+.vtuber-list.dragging {
+  user-select: none;
+  cursor: grabbing;
+}
+
+.vtuber-list.dragging .vtuber-item:hover {
+  background: transparent;
+}
+
+.vtuber-item.dragging {
+  z-index: 2;
+  background: var(--sel-bg);
+  box-shadow: 0 6px 16px rgb(15 23 42 / 18%);
+  transform: scale(1.02);
+  cursor: grabbing;
+}
+
 /* 左缘 3px 主色竖条：唯一的选中指示，无描边 */
 .vtuber-item.active::before {
   content: '';

@@ -12,7 +12,9 @@ import type { AccountSnapshot, VTuber } from '../api/types'
 import { mergeVtuberSnapshots } from '../utils/accountSnapshots'
 import { resolveAvatar } from '../utils/avatarSource'
 import { resolveSign } from '../utils/signSource'
+import { applyVisibleOrder, moveItem, orderById } from '../utils/reorder'
 import { VTUBER_UPDATED_EVENT, applyVtuberUpdate } from '../utils/vtuberList'
+import { toast } from 'sonner'
 import './../styles/layout.css'
 
 /** 把抓取完成的账号快照就地合并进侧栏数据（按 bilibili platform_uid 匹配） */
@@ -59,6 +61,17 @@ export default function VtuberSidebar() {
   const [sortKey] = useState<SortKey>('default')
   const [addOpen, setAddOpen] = useState(false)
   const [batchOpen, setBatchOpen] = useState(false)
+
+  // ── 长按拖动排序（R51，devlog/228）──────────────────────────────────
+  // `order` = 本地的 id 顺序（null = 用服务端给的顺序）。拖动时**只改本地**，
+  // 松手才提交一次 —— 边拖边发请求会把列表刷成"服务端顺序"，手指还在按着就跳回去了。
+  const [order, setOrder] = useState<number[] | null>(null)
+  const [dragIdx, setDragIdx] = useState<number | null>(null)
+  const [dragIds, setDragIds] = useState<number[] | null>(null)
+  const dragVisible = useRef<number[]>([])   // 长按那一刻"看得见"的 id（槽位基准）
+  const dragAll = useRef<number[]>([])       // 长按那一刻的全长 id 顺序
+  const pressTimer = useRef<number>()
+  const dragMoved = useRef(false)
 
   const navigate = useNavigate()
   const location = useLocation()
@@ -131,7 +144,9 @@ export default function VtuberSidebar() {
 
   const filtered = useMemo(() => {
     const kw = query.trim().toLowerCase()
-    let list = vtubers
+    // 先按**本地手排顺序**（`order`）排，再叠加筛选/搜索 ——
+    // 拖动时改的就是 `order`，于是拖到哪一行就画到哪一行（不用重拉服务端）。
+    let list = orderById(vtubers, order)
     if (filters.live.length > 0) {
       list = list.filter((v) => filters.live.includes(isLive(v) ? 'live' : 'offline'))
     }
@@ -157,7 +172,57 @@ export default function VtuberSidebar() {
       list = [...list].sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'))
     }
     return list
-  }, [vtubers, query, filters, sortKey])
+  }, [vtubers, order, query, filters, sortKey])
+
+  // ── 长按拖动：350ms 长按进入拖动 → 指针移到哪一行就跟到哪 → 松手提交一次 ──
+  // 只有「默认」排序能拖（粉丝数/名称是**计算出来的**顺序，手排对它们没有意义）。
+  // 拖动期间只改本地 `order`：边拖边发请求会被服务端顺序刷回去（手指还按着就跳回去）。
+  const dragEnabled = sortKey === 'default'
+
+  const onItemPointerDown = (idx: number) => (e: React.PointerEvent) => {
+    if (!dragEnabled || e.button !== 0) return
+    dragMoved.current = false
+    window.clearTimeout(pressTimer.current)
+    pressTimer.current = window.setTimeout(() => {
+      // 冻结"长按那一刻"的两份基准：看得见的 id（槽位基准）与全长 id 顺序
+      dragVisible.current = filtered.map((v) => v.id)
+      dragAll.current = orderById(vtubers, order).map((v) => v.id)
+      setDragIds(dragVisible.current)
+      setOrder(dragAll.current)
+      setDragIdx(idx)
+    }, 350)
+  }
+
+  const onListPointerMove = (e: React.PointerEvent) => {
+    if (dragIdx === null || dragIds === null) return
+    const el = document.elementFromPoint(e.clientX, e.clientY)
+    const raw = el?.closest('[data-vtuber-idx]')?.getAttribute('data-vtuber-idx')
+    const target = raw == null ? NaN : Number(raw)
+    if (Number.isNaN(target) || target === dragIdx || target >= dragIds.length) return
+    dragMoved.current = true
+    const next = moveItem(dragIds, dragIdx, target)
+    setDragIds(next)
+    // 被筛掉的那些**留在原来的槽位**（见 utils/reorder.applyVisibleOrder 的注释）
+    setOrder(applyVisibleOrder(dragAll.current, dragVisible.current, next))
+    setDragIdx(target)
+  }
+
+  const onListPointerUp = () => {
+    window.clearTimeout(pressTimer.current)
+    if (dragIdx === null) return
+    const wasDrag = dragMoved.current
+    setDragIdx(null)
+    setDragIds(null)
+    if (!wasDrag) return
+    const ids = order ?? dragAll.current
+    void api
+      .reorderVtubers(ids)
+      .then(() => toast.success('主播顺序已保存'))
+      .catch((e: Error) => {
+        toast.error(`保存顺序失败：${e.message}`)
+        setOrder(null)                    // 失败回退服务端顺序（与平台徽章同款）
+      })
+  }
 
   // 筛选弹窗选项：平台 / 企划从已载数据动态提取（企划剔除空值）
   const platformOptions = useMemo(
@@ -202,7 +267,11 @@ export default function VtuberSidebar() {
   const matched = matchPath('/vtubers/:id', location.pathname)
 
   // 稳定回调：memo 化的 VtuberItem 依赖它做浅比较，避免搜索/轮询每帧新建闭包
-  const handleSelect = useCallback((id: number) => navigate(`/vtubers/${id}`), [navigate])
+  const handleSelect = useCallback((id: number) => {
+    // 刚拖完的那一下 click 不该顺带"进入这个主播"（拖动是排序，不是选择）
+    if (dragMoved.current) return
+    navigate(`/vtubers/${id}`)
+  }, [navigate])
 
   if (loading) {
     return (
@@ -367,8 +436,12 @@ export default function VtuberSidebar() {
 
       {filtered.length > 0 && (
         <div
-          className="vtuber-list"
+          className={`vtuber-list${dragIdx !== null ? ' dragging' : ''}`}
           key={`${query}|${filters.live.join(',')}|${filters.platform.join(',')}|${filters.faction.join(',')}|${vtubers.length}`}
+          onPointerMove={onListPointerMove}
+          onPointerUp={onListPointerUp}
+          onPointerCancel={onListPointerUp}
+          onPointerLeave={onListPointerUp}
         >
           {filtered.map((v, i) => (
             <VtuberItem
@@ -377,6 +450,9 @@ export default function VtuberSidebar() {
               index={i}
               active={matched !== null && Number(matched.params.id) === v.id}
               onSelect={handleSelect}
+              dragEnabled={dragEnabled}
+              dragging={dragIdx === i}
+              onDragStart={onItemPointerDown(i)}
             />
           ))}
         </div>
@@ -396,9 +472,16 @@ interface VtuberItemProps {
   index: number
   active: boolean
   onSelect: (id: number) => void
+  /** 长按拖动是否可用（只有「默认」排序能拖） */
+  dragEnabled: boolean
+  /** 这一行是不是"正被拖着"（视觉上抬起来） */
+  dragging: boolean
+  onDragStart: (e: React.PointerEvent) => void
 }
 
-const VtuberItem = memo(function VtuberItem({ vtuber, index, active, onSelect }: VtuberItemProps) {
+const VtuberItem = memo(function VtuberItem({
+  vtuber, index, active, onSelect, dragEnabled, dragging, onDragStart,
+}: VtuberItemProps) {
   const bili = biliAccount(vtuber)
   // 头像/签名与卡片**同一条链**（devlog/135）：用户在档案设置里换过的头像与签名，
   // 左栏必须跟着变 —— 此前左栏各写了一份"只看平台字段"的取值，于是设置看着像没生效。
@@ -408,9 +491,14 @@ const VtuberItem = memo(function VtuberItem({ vtuber, index, active, onSelect }:
 
   return (
     <div
-      className={`vtuber-item anim-rise${active ? ' active' : ''}`}
+      // `data-vtuber-idx`：拖动时用 `elementFromPoint().closest(...)` 反查指针落在第几行
+      // （与平台徽章的 `data-pill-index` 同一手法；行会随拖动实时重排，所以只能按"当前渲染位置"取）
+      data-vtuber-idx={index}
+      className={`vtuber-item anim-rise${active ? ' active' : ''}${dragging ? ' dragging' : ''}`}
       style={{ '--rise-i': index } as React.CSSProperties}
       onClick={() => onSelect(vtuber.id)}
+      onPointerDown={dragEnabled ? onDragStart : undefined}
+      title={dragEnabled ? '长按左键可拖动排序' : undefined}
     >
       {/* `data-src` 是**为可测性存在**的（devlog/135，同 `.stat-sets[data-hover]` 的先例）：
           探针跑在虚拟时间下，图片加载不会完成 ⇒ Radix 的 AvatarImage 不挂 `<img>` ⇒

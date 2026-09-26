@@ -16,7 +16,7 @@ REM          token 优先从 %1 读取, 其次 %GITHUB_TOKEN%。网络抖动自�
 REM ============================================================
 setlocal EnableDelayedExpansion
 
-set "REPO=https://github.com/Mrslippe/DDToolkit.git"
+set "REPO=https://github.com/laplace-dragon/DDToolkit.git"
 set "BRANCH=main"
 
 REM 读取 token: 命令行参数 %1 > 环境变量 GITHUB_TOKEN
@@ -30,7 +30,7 @@ if "%TOKEN%"=="" (
     exit /b 1
 )
 
-set "URL=https://x-access-token:%TOKEN%@github.com/Mrslippe/DDToolkit.git"
+set "URL=https://x-access-token:%TOKEN%@github.com/laplace-dragon/DDToolkit.git"
 
 echo [1/4] 验证远程连接(openssl 后端 + 禁代理 + 免证书校验)...
 set /a attempt=1
@@ -43,7 +43,7 @@ set /a attempt+=1
 if %attempt% leq 5 goto retry
 echo.
 echo [错误] 连续 5 次连接失败: 网络不通或 token 无权限。
-echo 请确认: 1) 浏览器能打开 https://github.com/Mrslippe/DDToolkit
+echo 请确认: 1) 浏览器能打开 https://github.com/laplace-dragon/DDToolkit
 echo         2) token 有效且勾选了 repo 权限 (Settings - Developer settings - PAT)
 echo         3) 代理软件已启动或本机可直连
 exit /b 1
@@ -55,7 +55,7 @@ git -c http.proxy= -c https.proxy= -c http.sslBackend=openssl -c http.sslVerify=
 if %errorlevel%==0 (
     echo.
     echo [4/4] ============ 推送成功 ============
-    echo   仓库: https://github.com/Mrslippe/DDToolkit
+    echo   仓库: https://github.com/laplace-dragon/DDToolkit
     echo   分支: %BRANCH%
     echo   提示: 推送完成后请在 GitHub 上吊销本次 PAT(两次 token 均已在对话中出现)。
 ) else (
