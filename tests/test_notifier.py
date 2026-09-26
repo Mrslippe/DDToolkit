@@ -395,10 +395,9 @@ def test_live_sweep_notifies_on_real_start_only(db, sent, monkeypatch):
 # ── 与调度器的接缝：什么时候**不**该通知 ─────────────────────────────
 
 def test_new_posts_helper_uses_id_watermark(db):
-    """新帖判定用主键水位：只有 `id > mark` 的行才算"这一轮新入库的"。
+    """新帖判定用主键水位 + **发布时间水位**：只对"这一轮入库且比已有的更新"开口。
 
-    这是"首次收录不通知"的实现基础 —— 收录首屏走的是同一段代码，
-    靠"抓取前这个账号有没有帖子"来区分（`_post_mark` 的第二个返回值）。
+    这是"首次收录/回填不通知"的实现基础（`_post_mark` 的三个返回值）。
     """
     from app.models.vtuber import Account, Post, VTuber
     from app.services import scheduler
@@ -410,24 +409,32 @@ def test_new_posts_helper_uses_id_watermark(db):
     db.add(acc)
     db.commit()
 
-    mark, count = scheduler._post_mark(db, acc)
-    assert (mark, count) == (0, 0)              # 首次抓取前：空库 → 调用方据此不通知
+    mark, count, newest = scheduler._post_mark(db, acc)
+    assert (mark, count, newest) == (0, 0, None)   # 首次抓取前：空库 → 调用方据此不通知
 
     db.add(Post(platform="bilibili", platform_uid="1", platform_post_id="100",
-                type="dynamic", title="第一条"))
+                type="dynamic", title="第一条", published_at=datetime(2026, 9, 20, 10, 0)))
     db.commit()
-    mark2, count2 = scheduler._post_mark(db, acc)
-    assert count2 == 1 and mark2 > mark
+    mark2, count2, newest2 = scheduler._post_mark(db, acc)
+    assert count2 == 1 and mark2 > mark and newest2 == datetime(2026, 9, 20, 10, 0)
 
-    db.add(Post(platform="bilibili", platform_uid="1", platform_post_id="101",
-                type="video", title="第二条"))
+    # 回填：入库一条**比已有的更老**的内容（id 更大，但发布时间更早）⇒ 不算新帖
+    db.add(Post(platform="bilibili", platform_uid="1", platform_post_id="099",
+                type="dynamic", title="补档的老内容",
+                published_at=datetime(2026, 9, 1, 10, 0)))
     db.commit()
-
     got: list = []
     notifier.set_sink(got.append)
-    scheduler._notify_new_posts(db, acc, mark2)
+    scheduler._notify_new_posts(db, acc, mark2, newest2)
+    assert got == []                       # ← 用户口径："刚添加账号时不要推送"
+
+    # 真新帖：发布时间晚于水位 ⇒ 通知，且只报它
+    db.add(Post(platform="bilibili", platform_uid="1", platform_post_id="101",
+                type="video", title="第二条", published_at=datetime(2026, 9, 26, 12, 0)))
+    db.commit()
+    scheduler._notify_new_posts(db, acc, mark2, newest2)
     assert len(got) == 1
-    assert "第二条" in got[0].body            # 只通知水位之后入库的那条
+    assert "第二条" in got[0].body            # 只通知水位之后入库、且比水位更新的那条
     assert got[0].title == "明前奶绿 更新了动态"
 
 
@@ -439,4 +446,4 @@ def test_notify_new_posts_swallows_errors(db, monkeypatch):
         raise RuntimeError("上游炸了")
 
     monkeypatch.setattr(notifier, "notify_new_posts", boom)
-    scheduler._notify_new_posts(db, object(), 0)      # 不抛 = 通过
+    scheduler._notify_new_posts(db, object(), 0, datetime(2026, 9, 1))   # 不抛 = 通过

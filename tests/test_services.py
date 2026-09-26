@@ -2293,10 +2293,15 @@ def test_migration_head_matches_alembic():
     assert MIGRATION_HEAD == head, f"MIGRATION_HEAD={MIGRATION_HEAD!r} != alembic head={head!r}"
 
 
-# 已知且**有意保留**的两处 ORM ↔ 迁移不对称（2026-09-11 审计发现，本用例显式固化）。
-# 两者都不影响运行时行为，但必须写下来，否则「新出现的漂移」与「早就知道的漂移」
+# 已知且**有意保留**的 ORM ↔ 迁移不对称（2026-09-11 审计发现，本用例显式固化；
+# R51 又添了一条同源的 `vtubers.sort_order`）。
+# 它们都不影响运行时行为，但必须写下来，否则「新出现的漂移」与「早就知道的漂移」
 # 混在一起，等于没有守卫。任何一条要动，都得连注释一起改。
-_KNOWN_NULLABLE_DRIFT = {"accounts.sort_order"}
+#
+# 为什么这两条是**同一个成因**：ORM 侧写的是 `Column(Integer, default=0, server_default="0")`
+# （nullable 未声明 ⇒ 默认 True），迁移侧写的是 `nullable=False` —— 与 P8-B 的
+# `accounts.sort_order` 完全同款（都是"排序序号"这一列）。
+_KNOWN_NULLABLE_DRIFT = {"accounts.sort_order", "vtubers.sort_order"}
 _KNOWN_ORM_ONLY_INDEXES = {
     f"{t}.ix_{t}_id"
     for t in ("account_stat_snapshots", "live_category_overrides", "live_gift_days",

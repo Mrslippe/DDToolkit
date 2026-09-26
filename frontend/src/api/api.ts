@@ -469,6 +469,14 @@ export const api = {
       body: JSON.stringify({ account_ids: accountIds }),
     }),
 
+  /** 左栏主播手排顺序（R51 长按拖动落库）；返回**新顺序**的全量列表 */
+  reorderVtubers: (vtuberIds: number[]) =>
+    request<VTuber[]>('/vtuber/order', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ vtuber_ids: vtuberIds }),
+    }),
+
   /** 手动触发全量账号信息抓取（所有 VTuber） */
   triggerFetch: () =>
     request<FetchResult>('/vtuber/fetch', { method: 'POST' }),

@@ -2,7 +2,7 @@
 
 > 本目录的**唯一入口**。找东西先看这里：查名词/代码路径 → `GLOSSARY.md`；
 > 看整体设计 → `ARCHITECTURE.md`；改具体模块 → 对应深度文档。
-> 适用版本：`main`（2026-09-23，`MIGRATION_HEAD = f007`）。
+> 适用版本：`main`（2026-09-23，`MIGRATION_HEAD = f008`）。
 
 ## 布局约定
 
@@ -25,7 +25,7 @@
 
 | 文档 | 覆盖 |
 |---|---|
-| `backend-repositories-and-routers.md` | 12 张表列级定义 · 13 个 Repository 方法表（含"提交"列）· HTTP 操作（路由计数口径见其 §3）· 迁移链（20 版本，head `f007`） |
+| `backend-repositories-and-routers.md` | 12 张表列级定义 · 13 个 Repository 方法表（含"提交"列）· HTTP 操作（路由计数口径见其 §3）· 迁移链（21 版本，head `f008`） |
 | `backend-fetch-pipeline.md` | 抓取链路细节：触发入口、锁与让位、API 清单、风控判定、节流测算、停止原因 |
 | `FRONTEND-ARCH.md` | 前端分层（api/hooks/components/pages/styles）、数据流、状态管理 |
 | `ARCHITECTURE-IMPROVEMENT-PLAN.md` | **待执行的架构整改路线**：安全边界、调度生命周期、事务归属、核心模块拆分、API 契约、可访问性、CI；含批次依赖、测试牙口、停止条件与 Agent 汇报模板 |

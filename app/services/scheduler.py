@@ -237,28 +237,50 @@ def _notify_icon(acc: Account) -> str | None:
         return None
 
 
-def _post_mark(db: Session, acc: Account) -> tuple[int, int]:
-    """抓取前记一笔：该账号当前**最大帖 id** 与**已有帖数**（返回 `(mark, count)`）。
+def _post_mark(db: Session, acc: Account) -> tuple[int, int, datetime | None]:
+    """抓取前记一笔：该账号当前的 `(最大帖 id, 已有帖数, 最新发布时间)`。
 
-    帖数是"要不要通知"的闸门：`count == 0` 说明这是**首次抓取**（收录首屏），
-    那批内容对用户不是"更新" —— 一口气几十条通知只会变成噪音。
+    两个闸门叠加，缺一个都会在"刚添加账号"时误报（2026-09-27 用户口径：
+    「首次添加账号抓取数据时不进行弹窗推送」）：
+
+    1. **帖数**：`count == 0` = 一次都没抓过（首次收录）⇒ 直接不通知；
+    2. **发布时间水位**：只对**比库里已有的最新一条还新**的帖子开口。
+       ⚠️ 单靠 id 水位不够：收录首屏只收前 N 条（`FIRST_SCREEN_DYNAMICS_LIMIT`），
+       随后例行轮询会**往回补更老的内容**，它们入库晚、id 更大 —— 只看 id 的话
+       这些老内容会被当成"新动态"推送（实测踩到：刚加完账号就收到"X 更新了动态"）。
     """
-    row = db.query(func.max(Post.id), func.count(Post.id)).filter(
+    row = db.query(func.max(Post.id), func.count(Post.id),
+                   func.max(Post.published_at)).filter(
         Post.platform == acc.platform, Post.platform_uid == str(acc.platform_uid)
     ).one()
-    return int(row[0] or 0), int(row[1] or 0)
+    newest = row[2]
+    if isinstance(newest, str):          # SQLite 上偶尔回来的字符串形态，统一成 datetime
+        try:
+            newest = datetime.fromisoformat(newest)
+        except ValueError:
+            newest = None
+    return int(row[0] or 0), int(row[1] or 0), newest
 
 
-def _notify_new_posts(db: Session, acc: Account, mark: int) -> None:
+def _notify_new_posts(db: Session, acc: Account, mark: int,
+                      newest_before: datetime | None) -> None:
     """把这一轮**真的入库**的新帖汇成一条通知（一个 V 一轮只一条）。
+
+    判定 = `id > mark`（这一轮入库的）**且** `published_at > newest_before`
+    （比抓取前已有的最新一条还新）。没有发布时间（上游没给）的一律不算新帖 ——
+    宁可不弹，也不要把回填的老内容当成"更新"打扰用户。
 
     全部包在 try 里：通知是"锦上添花"，任何异常都只记日志 —— 抓取链路不许被它拖下水。
     """
+    if newest_before is None:
+        return
     try:
         rows = db.query(Post).filter(
             Post.platform == acc.platform,
             Post.platform_uid == str(acc.platform_uid),
             Post.id > mark,
+            Post.published_at.isnot(None),
+            Post.published_at > newest_before,
         ).order_by(Post.id.asc()).limit(_NOTIFY_MAX_ITEMS).all()
         if not rows:
             return
@@ -2371,7 +2393,7 @@ async def _fetch_posts_for_account(acc: Account, video_pages: int, dynamics_page
     pf = registry.get_fetcher(acc.platform)
     if pf is None:
         return PostFetchResult(stop_reason="error", error=f"不支持的平台 '{acc.platform}'")
-    mark, before_count = _post_mark(db, acc) if notify else (0, 0)
+    mark, before_count, newest_before = _post_mark(db, acc) if notify else (0, 0, None)
     if acc.platform == "bilibili":
         try:
             mid = int(acc.platform_uid)
@@ -2388,7 +2410,7 @@ async def _fetch_posts_for_account(acc: Account, video_pages: int, dynamics_page
     # 通知要在**墓碑判定之前**取数：墓碑会把"判定为已删除"的帖子从 results 里排除，
     # 而那些帖子恰恰是刚入库的（先入库、下一轮才发现删了）—— 顺序反过来会漏通知。
     if notify and before_count:
-        _notify_new_posts(db, acc, mark)
+        _notify_new_posts(db, acc, mark, newest_before)
     _run_tombstone_scan(db, acc, result, include_videos=include_videos)
     return result
 
