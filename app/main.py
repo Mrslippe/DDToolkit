@@ -390,8 +390,12 @@ async def lifespan(app: FastAPI):
         logger.error(f"运行时设置载入失败（按默认值启动）: {type(e).__name__}: {e}")
 
     # 调度运行时（R1，devlog/211）：APScheduler（外部数据 cron）+ 三个守护线程
-    # （T0 直播轮询 / 综合档 / 启动外部补抓）**一次起齐、幂等**。
-    # 改造前这里是四个 `start_*()`，每次调用无条件再起一份 —— 连续两次 lifespan 就是两套线程。
+    # **一次起齐、幂等**。改造前这里是四个 `start_*()`，每次调用无条件再起一份 ——
+    # 连续两次 lifespan 就是两套线程。三条线程分别是：
+    #   · T0 直播状态独立线程（60s ± jitter，启动链语义并入首轮；手动任务优先）；
+    #   · 综合档线程（v0.6.1 时效分层调度：原 T1/T2/T3a 合并为一个档，启动链并入首轮）；
+    #   · 启动外部补抓线程（v0.9.8，P9-4）：每 V 主账号的第三方数据（直播日历 / 粉丝趋势），
+    #     <24h 内已跑过则跳过（时间戳存 app_meta）。
     scheduler_runtime.start()
     auth_task = asyncio.create_task(auth_manager.run_maintenance())
     # WBI 密钥预热（v0.9.4）：与 auth 心跳并行，让首次收录不必等一次 nav 往返
@@ -400,10 +404,6 @@ async def lifespan(app: FastAPI):
     # （本机分段实测：加载它 +56.4MB），而它换来的只是"首次点词云少等 0.7s"。
     # 内存吃紧的机器上这笔账不划算 ⇒ 改成首次真正要用时再建（一次 0.7s）。
     # 想要老行为的话，在调用点恢复 `asyncio.create_task(_warm_tokenizer())` 即可。
-    # 时效分层调度（v0.6.1）：T0 直播状态独立线程（60s）+ T1/T2/T3a 分层轮询
-    # （启动链语义并入 T1→T2 首轮；手动任务优先，仅 T0 与之并行）
-    # 启动外部补抓（v0.9.8，P9-4）：独立线程，每 V 主账号的第三方数据
-    # （直播日历 / 粉丝趋势），<24h 内已跑过则跳过（时间戳存 app_meta）
     _perf("调度器+auth 就绪")
 
     yield
