@@ -747,6 +747,13 @@ flowchart LR
       —— 实测过，症状是"探针没量到 fetch-status"，看起来像产品坏了。
       对应地，**任何打后端的 fetch 都必须经过 `request()` 或 `authFetch()`**：
       `dev/probe.ts` 原先有十余处裸 `fetch`，S1 之后它们逐条 401（同样伪装成"布局坏了"）。
+    - ⚠️ **开发态脚本同理，"谁起后端谁就得给它 token"**（devlog/203）：给子进程设了
+      `DDTOOLKIT_PORT` 的脚本（`ui_probe` / `dev_check` / `smoke_upstream` / `perf_report`）
+      都必须并进 `dev_token.backend_env()`，打后端时走 `dev_token.headers()`。
+      那个固定值**只有一处真源** `scripts/dev_token.py`（TS 侧的两处复述由
+      `tests/test_dev_token.py` 结构扫描钉住）。⚠️ 漏掉的症状**没有一个像门禁问题**：
+      dev_check 报"网络不可达"、smoke 报"上游挂了"、perf_report 打出假数字 —— S1 之后
+      这一组挂了整整一批才被发现（判据与命令见 `docs/DEV-LOOP.md` §6.13）。
     - ⚠️ **CORS 不是主防线，token 才是**（实测踩出来的，devlog/201 §五）：
       `CORS_ORIGINS` **保持默认 `"*"`**。一度想顺手收紧它，结果**打断了浏览器形态的开发态** ——
       探针与 `npm run dev` 都是跨源（页面在 `localhost:<vite>`、后端在 `127.0.0.1:<port>`），

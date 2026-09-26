@@ -361,6 +361,24 @@ def test_bili_poll_reads_inner_data_code():
 
 **判据**：新增用例只要**打真应用**（`TestClient(app)`）或**起后台任务**，就问一句「**它读写的 `DATA_DIR` 是谁的？**」漏网的三条路是**后台任务 / 落盘副作用 / 模块级单例**。修法统一放 `tests/conftest.py`（每进程独立测试库 + `/healthz` 标记重定向），别在每个用例文件里各写一遍。守卫用例：`tests/test_api_auth.py::test_healthz_writes_its_first_run_marker_outside_the_real_data_dir`。
 
+### 6.13 ⚠️ 加了门禁之后，把**所有**"打自己后端"的调用方过一遍（2026-09-26 加，devlog/203）
+S1 给后端加了 token 之后，**前端两个入口 + 四个开发态脚本**逐个失效，而它们各自的症状
+**没有一个像门禁问题**（"布局坏了 / 网络不可达 / 上游挂了 / 后端坏了"）。
+判据命令（一条就够）：**谁给子进程设 `DDTOOLKIT_PORT`，谁就在起后端** ⇒ 它必须同时给
+`DDTOOLKIT_DEV_API_TOKEN`。
+
+```powershell
+# 起后端的脚本：既要 Popen 又要 DDTOOLKIT_PORT（build_backend.py 只是打包，不算）
+Select-String -Path scripts\*.py -Pattern "DDTOOLKIT_PORT" | Select-Object Filename -Unique
+# 打后端的调用方（含前端）：裸 fetch / 裸 urlopen 都要走带 token 的那条路
+Select-String -Path scripts\*.py,frontend\src\**\*.ts -Pattern "urlopen\(|fetch\(" |
+  Where-Object { $_.Line -notmatch "authFetch|dev_token|headers=" }
+```
+
+开发态那个固定值**只有一处真源**：`scripts/dev_token.py`（三个 TS/Python 复述点由
+`tests/test_dev_token.py` 结构扫描钉住）；起后端的脚本一律 `**backend_env()`
+（它还负责**清掉 `DDTOOLKIT_API_TOKEN` 残留** —— 否则子后端会优先读它而两端不一致）。
+
 ---
 
 ## 七、并行开发：**本仓不采用**（2026-09-24 定）＋ 两条通用教训

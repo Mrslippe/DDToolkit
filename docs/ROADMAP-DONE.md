@@ -531,6 +531,7 @@
 | CI 首跑三连红的排查：`pytest` 不把 CWD 加进 `sys.path`（补 `pythonpath = .`）+ **后台任务的会话一直连我的开发库**（`dependency_overrides` 只管路由）⇒ 修好后暴露两条"靠开发库数据才过"的用例；pytest **~190s → ~50s** | 200 |
 | S1 会话 token 后端门禁 + 壳生成（含 `get_api_token` 的 caller label 校验）；**修掉托盘退出在 401 时静默掐掉一轮抓取**那颗地雷；排查中发现 `CORS_ORIGINS` 的正则从没走 `allow_origin_regex`（症状伪装成"布局坏了"）⇒ 并确立**CORS 不是主防线、token 才是** | 201 |
 | S1b 前端注入与启动闸门（`request()`/`authFetch()` 作唯一注入点、闸门只在桌面端关）＋ **"没配 token ⇒ 拒绝"收口**：咬出 86 条测试集体 401（`conftest` 一处带 token）⇒ 清掉"没配=放行"这类**静默失效**；三轮红**全部伪装成"布局坏了"**（浏览器分支清空 token / 探针十余处裸 `fetch` / `authFetch` 不认绝对 URL）；又抓到用例写真实数据目录（§6.12） | 202 |
+| S1 连带：**四个开发态工具漏带 token**（dev_check 报"网络不可达" / smoke 报"上游挂了" / perf_report 打假数字 / smoke_delete 401）⇒ 固定值抽出唯一真源 `scripts/dev_token.py` + 4 条结构判据（反向验证当场咬出第一版判据假绿）；**真机 S1 门验证通过**（零 401、小窗拿到令牌） | 203 |
 
 > **编号列怎么写**（2026-09-23 定）：
 > - 有 devlog 的批次 → **裸编号**（`| 097 |`）；
