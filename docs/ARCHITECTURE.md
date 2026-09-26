@@ -786,6 +786,34 @@ flowchart LR
     - ⚠️ **只有"schema 迁移失败"才允许说"数据可以找回"**：端口占用 / 超时 / 后端崩溃
       **不得**被误报成数据问题（误报会让用户去动数据目录，那才是真丢数据）。
       这句话在 `frontend/src/utils/bootFailure.ts` 里，**有 vitest 钉着**。
+29. **自定义命令的准入表默认拒绝**（S3-0，devlog/208）：`lib.rs::COMMAND_ACL` 逐条列出
+    "这条命令允许哪些窗口 label"，**没登记 = 谁都不能调**；每条命令入口第一句是
+    `if !guard_window(&window, "<自己的名字>") { … }`，拒绝时留痕（stdout +
+    `<数据目录>/logs/shell.log`）。
+    - ⚠️ **为什么必须自己判**：本应用的自定义命令**默认完全不查 ACL**
+      （vendored `tauri-2.11.5/src/webview/mod.rs:1819-1852`）⇒ **只拆 capability JSON 一点用
+      都没有**，命令自己判才是唯一有效的那一半。
+    - 小窗可调的只有六条（`get_backend_port` / `get_api_token` / `widget_diag` /
+      `resize_widget_window` / `set_widget_visible` / `set_widget_click_through`）——
+      ⚠️ **别按"这命令看起来该谁用"填**：后三条是 `StatusWidgetWindow` **自己**在调的
+      （展开就 resize / 全屏隐藏 / 穿透），填错就是把小窗点坏（devlog/175 的形态）。
+    - 判据（`cargo test`）：注册表 ↔ 准入表**双向对账**、每条命令都调了 guard（扫源码）、
+      小窗可调集恰好是那六条、危险/动数据的命令 main-only、未知命令默认拒。
+30. **外链只走 `open_external`，主机有白名单**（S3-B，devlog/208）：
+    `lib.rs::external_url_host` 只认 `https`、主机必须**精确等于** `EXTERNAL_HOSTS` 里的一条
+    （先转小写 —— 大写不算绕过，而 `bilibili.com.evil.com` / `bilibili.com.` / `%62ilibili.com`
+    都不等）、拒 userinfo、拒端口、主机字符集只允许 `[a-z0-9.-]`。
+    - ⚠️ **`shell:allow-open` 必须保持删除状态**：那条通路用的是插件内置正则
+      `^((mailto:\w+)|(tel:\w+)|(https?://\w+)).+` —— **没有主机白名单、不拒 userinfo、
+      末端无 `$`**（计划 §2.17 实测）。留着它 = 新命令只是"多了一条更严的路"。
+    - ⚠️ **接新平台（抖音/小红书）时要同时加 `EXTERNAL_HOSTS`**：否则「打开主页」会失败 ——
+      但**不会静默**（命令返回中文原因、前端 toast 出来）。
+    - 前端**不复制那张表**（`shellBridge.openExternal` 只负责转发与抛出原因）：跨语言两份真源必漂。
+    - ⚠️ capability 的**通配基线刻意保留**（`default.json` 的 `windows: ["*"]`）：小窗是运行时
+      创建的，而"显式 label 能否命中运行时窗口"**没有验证过**（计划 §S3-A）；按 label 硬拆一旦
+      猜错就是 devlog/175 那种"IPC 通道坏掉"。主窗独有的两项（updater / process.restart）
+      拆去了 `main.json`（主窗是静态 label，命中确定）；`shell:allow-open` 与
+      `dialog:allow-open` 直接删掉。
 
 ---
 
