@@ -22,14 +22,6 @@ from app.main import app
 from app.repositories.vtuber_repo import AppMetaRepo
 
 
-@pytest.fixture(autouse=True)
-def _clean_overlay():
-    """每个用例前后都清空内存覆盖 —— 它是**进程级全局**，漏一条就会影响别的用例。"""
-    rs.clear()
-    yield
-    rs.clear()
-
-
 @pytest.fixture
 def db():
     # ⚠️ 必须 StaticPool：内存 SQLite 的库是**每连接一份**，而 TestClient 把同步端点
