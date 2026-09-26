@@ -29,12 +29,16 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any
 
 logger = logging.getLogger(__name__)
 # app_meta 键前缀：同一张 KV 表里还有 `external.startup.last_run` 等别的命名空间
 PREFIX = "settings."
+
+# `kind="color"` 的取值形态（R50）：只认 6 位十六进制，前后 `#` 可省
+_HEX_COLOR = re.compile(r"^#[0-9a-f]{6}$")
 
 
 # 左栏导航的两个大类（R21，devlog/100）：原先 4 个中间分类（抓取节奏 / 动态流与轮询 /
@@ -43,6 +47,9 @@ PREFIX = "settings."
 # 界面**不写死**这两个名字：导航仍由 `spec_table()` 里 group 出现的顺序生成。
 NAV_FETCH = "抓取设置"
 NAV_SOURCES = "数据源"
+# R50（devlog/219）：桌面通知。它排在导航靠前（用户天天看得到），
+# 声明顺序决定导航顺序（见 `spec_table()`：界面不写死分组名）。
+NAV_NOTIFY = "通知"
 
 
 @dataclass(frozen=True)
@@ -76,6 +83,45 @@ def _specs() -> list[Spec]:
     idle = "下一个空闲轮次生效（不会打断正在跑的任务）"
     g, s = NAV_FETCH, "风控与节流"
     return [
+        # ══ 通知 · 开关（R50，devlog/219）══════════════════════════
+        # 通知与抓取**解耦**：关掉通知只影响"弹不弹"，抓取与入库照常。
+        Spec("NOTIFY_ENABLED", "bool", True, None, None,
+             "弹出通知", "", NAV_NOTIFY, hot,
+             "总开关；关掉后开播与动态都不再弹窗（抓取与入库照常进行）",
+             section="开关"),
+        Spec("NOTIFY_LIVE", "bool", True, None, None,
+             "开播提醒", "", NAV_NOTIFY, hot,
+             "关注的主播开播时弹一条卡片，点一下直接进直播间",
+             section="开关"),
+        Spec("NOTIFY_POST", "bool", True, None, None,
+             "动态更新提醒", "", NAV_NOTIFY, hot,
+             "抓到新动态/投稿/专栏时弹一条卡片，点一下打开那条内容；"
+             "首次收录与手动全量补档不弹（否则一口气几十条）",
+             section="开关"),
+
+        # ══ 通知 · 弹窗外观 ══════════════════════════════════════════════
+        # 用户口径："弹窗大小和字号大小分开设置" —— 两项各自一格，互不牵连。
+        Spec("NOTIFY_FONT_PCT", "int", 120, 80, 200,
+             "弹窗字号", "%", NAV_NOTIFY, hot,
+             "只放大文字；图标与内距按同一比例跟着走，卡片宽度不变",
+             section="弹窗外观"),
+        Spec("NOTIFY_POPUP_WIDTH", "int", 450, 300, 620,
+             "弹窗大小", "px", NAV_NOTIFY, hot,
+             "卡片宽度；文字会按宽度自动折行（与字号互不影响）",
+             section="弹窗外观"),
+        Spec("NOTIFY_POPUP_ALPHA_PCT", "int", 91, 31, 100,
+             "不透明度", "%", NAV_NOTIFY, hot,
+             "100 完全不透明；越低越透，太低会看不清字",
+             section="弹窗外观"),
+        Spec("NOTIFY_POPUP_SECONDS", "int", 8, 5, 120,
+             "弹窗时长", "秒", NAV_NOTIFY, hot,
+             "停留多久自动消失；鼠标停在卡片上满 3 秒、或点一下，都会提前消除",
+             section="弹窗外观"),
+        Spec("NOTIFY_POPUP_COLOR", "color", "#ffffff", None, None,
+             "文字颜色", "", NAV_NOTIFY, hot,
+             "默认白色（配粉色底最清楚）；取色器改完下一条通知就生效",
+             section="弹窗外观"),
+
         # ══ 抓取设置 · 风控与节流 ══════════════════════════════════════
         # 这三项是"普通用户唯一真正需要调的"：抓多快、被风控了歇多久。
         Spec("REQUEST_INTERVAL_MIN", "float", 3.0, 0.5, 10.0,
@@ -278,6 +324,15 @@ def coerce(key: str, raw: Any) -> Any:
         if isinstance(raw, str) and raw.strip().lower() in ("0", "false", "no", "off", "否"):
             return False
         raise ValueError(f"{s.label}：需要 true/false，实得 {raw!r}")
+    if s.kind == "color":
+        # 颜色（R50）：只收 `#rrggbb`。统一转小写并补上 `#` —— 取色器与手输
+        # 两种来源都要能过，且落库形态唯一（否则 `#FFF`/`FFFFFF`/`#ffffff` 会存成三份）。
+        text = str(raw).strip().lower()
+        if not text.startswith("#"):
+            text = "#" + text
+        if not _HEX_COLOR.match(text):
+            raise ValueError(f"{s.label}：需要 #rrggbb 形式的颜色，实得 {raw!r}")
+        return text
     if isinstance(raw, bool) or raw is None or raw == "":
         raise ValueError(f"{s.label}：需要一个{'整数' if s.kind == 'int' else '数字'}，实得 {raw!r}")
     try:

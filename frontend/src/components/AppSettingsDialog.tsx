@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Activity, Check, ChevronDown, ChevronLeft, ChevronRight, Cloud, Info, Loader2,
-  Palette, RotateCcw, Save, Sparkles, Timer, TriangleAlert,
+  Activity, Bell, Check, ChevronDown, ChevronLeft, ChevronRight, Cloud, Info, Loader2,
+  Palette, RotateCcw, Save, Send, Sparkles, Timer, TriangleAlert,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
@@ -65,6 +65,7 @@ interface Props {
 
 const NAV_ICON: Record<NavIcon, React.ReactNode> = {
   palette: <Palette className="aps-nav-icon" />,
+  bell: <Bell className="aps-nav-icon" />,
   timer: <Timer className="aps-nav-icon" />,
   activity: <Activity className="aps-nav-icon" />,
   sparkles: <Sparkles className="aps-nav-icon" />,
@@ -112,6 +113,9 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
     spec: prefs.specOf('theme'), reload: prefs.reload, loaded: prefs.loaded,
   }
   const [themeError, setThemeError] = useState<string | null>(null)
+  /** 测试通知（R50）：按钮忙态 + 上一次的结论（原样显示后端给的话） */
+  const [notifyTesting, setNotifyTesting] = useState(false)
+  const [notifyVerdict, setNotifyVerdict] = useState<string | null>(null)
   const navRefs = useRef<Record<string, HTMLButtonElement | null>>({})
 
   /** 重新拉规格表（打开时 / 保存后 / 恢复默认后） */
@@ -148,6 +152,12 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
       否则下面几个 useMemo 的依赖每次渲染都变（eslint exhaustive-deps 会报） */
   const specs = useMemo(() => data?.specs ?? [], [data])
   const activeItem = nav.find((n) => n.id === active) ?? null
+  /** 「通知」这一页在导航里的 id **由后端分组名决定**（不在这里写死中文）：
+      哪一组里有 `NOTIFY_ENABLED`，哪一组就是通知页 —— 后端改名/挪组都不会失联。 */
+  const notifyGroup = useMemo(
+    () => specs.find((s) => s.key === 'NOTIFY_ENABLED')?.group ?? null,
+    [specs],
+  )
   const groupKeys = useMemo(
     () => (activeItem?.resettable ? specs.filter((s) => s.group === active) : []),
     [specs, active, activeItem],
@@ -378,6 +388,34 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
     }
   }
 
+  /**
+   * 「发一条测试通知」（R50，devlog/219）。
+   *
+   * ⚠️ **先保存外观再发**：用户拖完字号/颜色往往直接点这个按钮，而设置在本仓是
+   * "改完点保存才生效"（草稿制）—— 不先落库的话，弹出来的还是旧外观，
+   * 用户只会得出"这个按钮是坏的"（这正是它要防的误解）。有脏改动就顺手保存。
+   */
+  const sendTestNotification = async () => {
+    if (!data || problemCount > 0) return
+    setNotifyTesting(true)
+    setNotifyVerdict(null)
+    setError(null)
+    try {
+      if (dirtyKeys.length > 0) {
+        await api.saveAppSettings(buildPayload(dirtyKeys, draft))
+        await reload()
+      }
+      const v = await api.testNotification()
+      setNotifyVerdict(v.popup
+        ? `已发出（应用弹窗${v.icon ? '，带主播头像' : ''}）`
+        : `没发出去：${v.detail || '通知被关掉了？'}`)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setNotifyTesting(false)
+    }
+  }
+
   /** 关闭语义（R18）：与首次点 ✕ 的询问框写**同一份**偏好 */
   const pickCloseAction = async (next: string) => {
     setThemeError(null)
@@ -533,7 +571,22 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
           <span className="aps-note">{s.note}</span>
         </div>
         <div className="aps-row-ctl">
-          {s.kind === 'bool' ? (
+          {s.kind === 'color' ? (
+            /* 取色器（R50）：通知卡片的文字颜色。用系统取色器而不是让用户敲
+               `#rrggbb` —— 敲错一个字符在界面上看不出来，只会"颜色没变"。
+               `data-color-value` 与旁边的十六进制文本都给探针留了判据。 */
+            <span className="aps-color">
+              <input
+                id={`aps-${s.key}`}
+                className="aps-color-input"
+                type="color"
+                value={typeof val === 'string' && val ? val : '#ffffff'}
+                data-color-value={typeof val === 'string' ? val : ''}
+                onChange={(e) => setDraft((d) => ({ ...d, [s.key]: e.target.value }))}
+              />
+              <code className="aps-color-hex">{typeof val === 'string' ? val : ''}</code>
+            </span>
+          ) : s.kind === 'bool' ? (
             <button
               type="button"
               id={`aps-${s.key}`}
@@ -602,7 +655,9 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
         <span className="aps-range">
           {s.kind === 'bool'
             ? (s.default ? '默认：开' : '默认：关')
-            : `范围 ${s.min ?? '-'} ~ ${s.max ?? '-'}${s.unit} · 默认 ${s.default}${s.unit}`}
+            : s.kind === 'color'
+              ? `默认 ${s.default}`
+              : `范围 ${s.min ?? '-'} ~ ${s.max ?? '-'}${s.unit} · 默认 ${s.default}${s.unit}`}
         </span>
         {err && <span className="aps-field-error">{err}</span>}
         {!err && pair && (
@@ -800,6 +855,41 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
                     </div>
                   )}
                 </div>
+              )}
+
+              {/* ── 通知页尾：发一条测试通知（R50，devlog/219）────────────
+                  调「字号 / 文字颜色 / 不透明度」时，如果只能等真有人开播才看得到效果，
+                  这几项等于没法调。按钮位置固定在**本页最末**（正文与「高级」之后），
+                  这样它不会夹在字段中间打乱"一行一个设置"的读法。 */}
+              {notifyGroup !== null && active === notifyGroup && (
+                <section className="aps-section" data-testid="aps-notify-test">
+                  <h4 className="aps-section-head">试一试</h4>
+                  <div className="aps-row">
+                    <div className="aps-row-main">
+                      <span className="aps-label">发一条测试通知</span>
+                      <span className="aps-note">
+                        用当前外观立刻弹一条卡片，调样式时不用等真有人开播。
+                        它不受「开播提醒 / 动态更新提醒」两个开关影响，但总开关仍然生效。
+                      </span>
+                    </div>
+                    <div className="aps-row-ctl">
+                      <FloatPill
+                        size="md" shape="text" active
+                        data-testid="aps-notify-test-btn"
+                        disabled={notifyTesting || problemCount > 0}
+                        onClick={() => void sendTestNotification()}
+                      >
+                        {notifyTesting
+                          ? <Loader2 className="size-[13px] animate-spin" />
+                          : <Send className="size-[13px]" />}
+                        发一条
+                      </FloatPill>
+                    </div>
+                    {notifyVerdict && (
+                      <span className="aps-range" data-notify-verdict="1">{notifyVerdict}</span>
+                    )}
+                  </div>
+                </section>
               )}
 
               {/* ── 关于（只读：信息 + 逐条理由）────────────────────────

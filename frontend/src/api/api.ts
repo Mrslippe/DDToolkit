@@ -1,4 +1,4 @@
-import type { Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, BiliSearchResult, Capabilities, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, PoolItem, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyVtuber, UpcomingReservation, UpdatePostsResult, VTuber, VTuberFormerValues, VtuberEvent } from './types'
+import type { Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, BiliSearchResult, Capabilities, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, PoolItem, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, TestNotificationVerdict, ThirdpartyVtuber, UpcomingReservation, UpdatePostsResult, VTuber, VTuberFormerValues, VtuberEvent } from './types'
 import { ApiError, ApiShapeError } from './errors'
 import {
   validateFetchStatus, validatePostPage, validateVtuber, validateVtuberList,
@@ -580,7 +580,7 @@ export const api = {
   appSettings: () => request<AppSettings>('/settings'),
 
   /** 保存一组改动（部分更新；`null` = 回默认值）。越界/未知键后端 400，detail 直接可显示 */
-  saveAppSettings: (values: Record<string, number | boolean | null>) =>
+  saveAppSettings: (values: Record<string, number | boolean | string | null>) =>
     request<AppSettingsSaved>('/settings', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -589,6 +589,16 @@ export const api = {
 
   /** 全部恢复默认 */
   resetAppSettings: () => request<AppSettingsSaved>('/settings/reset', { method: 'POST' }),
+
+  /**
+   * 用**当前外观**立刻发一条测试通知（R50，devlog/219），返回投递判据。
+   *
+   * 调「字号 / 文字颜色 / 不透明度」时，如果只能等真有人开播才看得到效果，
+   * 这几项等于没法调 —— 这个按钮就是让用户当场看到结果（设置窗口的通知页）。
+   * 它绕过「开播提醒 / 动态更新提醒」两个事件开关，但**总开关仍然生效**。
+   */
+  testNotification: () =>
+    request<TestNotificationVerdict>('/settings/test-notification', { method: 'POST' }),
 
   // ── 存储占用与维护（R22-B，devlog/104）──────────────────────────────
   /** 占用体检：库 / 图片缓存 / 日志 / 其余 + 磁盘剩余 + 遗留备份。

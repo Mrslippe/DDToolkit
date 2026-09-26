@@ -1,0 +1,272 @@
+"""桌面通知（R50，devlog/219）：文案 / 开关 / 降噪 / 投递链路。
+
+判错的两个代价（与 `test_runtime_settings.py` 同款思路）：
+① **弹了不该弹的**：首次收录一口气入库几十条，若照单通知，用户开机就被刷屏 ——
+   通知一旦变成噪音，用户就会把它整个关掉，那这个功能等于没做；
+② **该弹的没弹**：去重键 / 限流 / 开关任何一处写反，表现都是"什么都没发生"，
+   而界面上完全看不出来（这正是本仓最怕的那类失败）。
+
+所以断言分三层：**文案**（点哪去、说什么）、**闸门**（开关与降噪）、**链路**
+（投递判据 + 端点）。
+"""
+import time
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from app.core import runtime_settings as rs
+from app.core.config import settings
+from app.core.database import Base, get_db
+from app.main import app
+from app.services import notifier
+
+
+@pytest.fixture
+def db():
+    """内存库（StaticPool：TestClient 把同步端点丢到工作线程跑，默认池会给它另一条连接）。"""
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
+                           poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    session = sessionmaker(bind=engine)()
+    yield session
+    session.close()
+
+
+@pytest.fixture
+def client(db):
+    """HTTP 层：把 `get_db` 指到内存库（**不碰开发库**），用完恢复。"""
+    prev = app.dependency_overrides.get(get_db)
+    app.dependency_overrides[get_db] = lambda: db
+    yield TestClient(app)
+    if prev is None:
+        app.dependency_overrides.pop(get_db, None)
+    else:
+        app.dependency_overrides[get_db] = prev
+
+
+@pytest.fixture(autouse=True)
+def _clean_state():
+    """通知状态是**进程级全局**（去重/限流/最近投递），漏一条就会串到别的用例。"""
+    notifier.reset_state()
+    rs.clear()
+    yield
+    notifier.reset_state()
+    rs.clear()
+
+
+@pytest.fixture
+def sent():
+    """把投递换成同步收集：不起线程、不建窗、不弹真卡片。"""
+    got: list = []
+    notifier.set_sink(got.append)
+    yield got
+
+
+# ── 文案：点哪去、说什么 ─────────────────────────────────────────────
+
+def test_compose_live_start_text():
+    item = notifier.compose_live_start("明前奶绿", live_title="看日剧喵",
+                                       platform_uid="12345")
+    assert item.title == "明前奶绿 开播了"
+    assert "B站直播间" in item.body and "看日剧喵" in item.body
+    assert item.kind == notifier.KIND_LIVE
+    assert item.key == "live:bilibili:12345"
+
+
+def test_compose_live_start_click_target_prefers_url_then_room_then_home():
+    """点击目标优先级：直播间 url → 由房间号拼的直播链接 → 主播主页。
+
+    `room_id` 这一档是实测补的：B 站账号的 `live_url` 常常是空的，少了它用户点了
+    卡片只会落到主播主页，而不是**正在播的那一间**。
+    """
+    explicit = notifier.compose_live_start("X", url="https://live.bilibili.com/9")
+    assert explicit.url == "https://live.bilibili.com/9"
+
+    by_room = notifier.compose_live_start("X", room_id="22637261")
+    assert by_room.url == "https://live.bilibili.com/22637261"
+
+    # 房间号不是数字（上游字段脏了）→ 当作没有，退回主页
+    fallback = notifier.compose_live_start("X", room_id="not-a-number",
+                                           platform_uid="12345")
+    assert fallback.url == "https://space.bilibili.com/12345"
+
+    # 三者都没有 → 这条通知不可点（不编一个假链接）
+    assert notifier.compose_live_start("X").url is None
+
+
+def test_account_home_url_matches_frontend_convention():
+    assert notifier.account_home_url("bilibili", "123") == "https://space.bilibili.com/123"
+    assert notifier.account_home_url("weibo", "456") == "https://weibo.com/u/456"
+    assert notifier.account_home_url("bilibili", "") is None
+
+
+def test_compose_new_posts_merges_counts_and_types():
+    item = notifier.compose_new_posts("明前奶绿", "bilibili", [
+        {"platform_post_id": "1", "type": "video", "title": "新投稿",
+         "permalink": "https://www.bilibili.com/video/BV1"},
+        {"platform_post_id": "2", "type": "dynamic", "title": "转发",
+         "permalink": "https://t.bilibili.com/2"},
+    ])
+    assert item is not None
+    assert item.title == "明前奶绿 更新了动态"
+    assert "2 条新内容" in item.body and "投稿" in item.body
+    # 一个 V 一轮只一条：点它开**最新那条**（列表里没有选择余地）
+    assert item.url == "https://www.bilibili.com/video/BV1"
+    assert item.key == "post:bilibili:1,post:bilibili:2"
+
+
+def test_compose_new_posts_without_items_returns_none():
+    assert notifier.compose_new_posts("X", "bilibili", []) is None
+    assert notifier.compose_new_posts("X", "bilibili", [{}]) is None
+
+
+def test_long_text_is_trimmed_to_limits():
+    item = notifier.compose_new_posts("很长" * 40, "bilibili", [
+        {"platform_post_id": "1", "type": "dynamic", "title": "标题" * 200},
+    ])
+    assert item is not None
+    assert len(item.title) <= notifier.TITLE_LIMIT
+    assert len(item.body) <= notifier.BODY_LIMIT
+
+
+# ── 闸门：开关与降噪 ─────────────────────────────────────────────────
+
+def test_master_switch_blocks_everything(sent):
+    rs.apply({"NOTIFY_ENABLED": False})
+    assert notifier.notify("live", "T", "B") is False
+    assert notifier.notify("test", "T", "B") is False       # 测试通知也走总开关
+    assert sent == []
+
+
+def test_kind_switch_blocks_only_that_kind(sent):
+    """关掉「开播提醒」不该连带关掉动态提醒；而**测试通知不受这两个开关影响**。"""
+    rs.apply({"NOTIFY_LIVE": False})
+    assert notifier.notify("live", "开播", "B") is False
+    assert notifier.notify("post", "动态", "B") is True
+    assert notifier.notify("test", "测试", "B") is True
+    assert [n.kind for n in sent] == ["post", "test"]
+
+
+def test_same_event_is_deduped(sent):
+    """同一场直播 / 同一条帖子被两个调用点弹两次 —— 去重键挡的就是这个。"""
+    assert notifier.notify("live", "T", "B", key="live:bilibili:1") is True
+    assert notifier.notify("live", "T", "B", key="live:bilibili:1") is False
+    assert len(sent) == 1
+
+    # 新动态按**帖子级**去重：同一批里只要有一条见过，整条通知就不再弹
+    items = [{"platform_post_id": "10", "type": "video", "title": "A"}]
+    assert notifier.notify_new_posts("V", "bilibili", items) is True
+    assert notifier.notify_new_posts("V", "bilibili", items) is False
+    assert len(sent) == 2
+
+
+def test_rate_limit_drops_extra_and_test_notification_is_exempt(sent):
+    """限流：窗口内超出上限的**丢弃并记日志**（不排队补弹）；测试通知不吃配额。"""
+    monkey = settings.__dict__
+    monkey["NOTIFY_RATE_MAX"] = 3
+    try:
+        for i in range(5):
+            notifier.notify("post", f"T{i}", "B", key=f"k{i}")
+        # 测试通知 force=True：连点不该被自己人限流（实测踩过：拖滑杆连测 8 次后按钮"失效"）
+        for i in range(5):
+            notifier.notify("test", f"测试{i}", "B", key=f"t{i}", force=True)
+    finally:
+        monkey.pop("NOTIFY_RATE_MAX", None)
+    assert len([n for n in sent if n.kind == "post"]) == 3
+    assert len([n for n in sent if n.kind == "test"]) == 5
+
+
+def test_invisible_emoji_modifiers_are_stripped():
+    """变体选择符/零宽字符在 GDI 里会画成空方块 —— 落库前就该剥掉（emoji 本体保留）。"""
+    item = notifier.compose_new_posts("V", "bilibili", [
+        {"platform_post_id": "1", "type": "dynamic", "title": "弹幕\ufe0f❤️‍🔥测试\u200b"},
+    ])
+    assert item is not None
+    assert "\ufe0f" not in item.body and "\u200b" not in item.body
+    assert "测试" in item.body
+
+
+# ── 链路：投递判据 + 端点 ───────────────────────────────────────────
+
+def test_queue_path_records_delivery_verdict():
+    """不装 sink → 走**真实队列**：投递线程跑完后 `last_delivery()` 必须有判据。
+
+    这条是「发一条测试通知」端点赖以工作的那一半 —— 端点就是轮询它来回答
+    "到底弹没弹"（而不是自己猜一个成功）。注意断言只要求**判据被记下**：
+    有没有真的弹出来取决于运行环境（无头 CI 里弹不出来，`popup=False` 也算如实记录）。
+    """
+    notifier.notify("test", "标题", "正文", key="queue-path-1", force=True)
+    deadline = time.monotonic() + 5.0
+    got: dict = {}
+    while time.monotonic() < deadline:
+        got = notifier.last_delivery() or {}
+        if got.get("title") == "标题":
+            break
+        time.sleep(0.05)
+    notifier.stop_worker()
+    assert got.get("title") == "标题", "投递线程没有回写判据（端点会误报「没发出去」）"
+    assert "popup" in got and "detail" in got
+
+
+def test_test_notification_endpoint_returns_verdict(client):
+    """端点必须**真的走一遍投递**再回答：它存在的意义就是"验通道"。
+
+    这里不弹真卡片（测试环境没有桌面），所以判据是"队列收下了 + 如实带回原因"，
+    而不是静默成功。
+    """
+    body = client.post("/settings/test-notification").json()
+    assert body["queued"] is True and body["title"]
+    assert set(body) >= {"queued", "title", "body", "popup", "icon", "detail"}
+
+
+# ── 与调度器的接缝：什么时候**不**该通知 ─────────────────────────────
+
+def test_new_posts_helper_uses_id_watermark(db):
+    """新帖判定用主键水位：只有 `id > mark` 的行才算"这一轮新入库的"。
+
+    这是"首次收录不通知"的实现基础 —— 收录首屏走的是同一段代码，
+    靠"抓取前这个账号有没有帖子"来区分（`_post_mark` 的第二个返回值）。
+    """
+    from app.models.vtuber import Account, Post, VTuber
+    from app.services import scheduler
+
+    v = VTuber(name="明前奶绿")
+    db.add(v)
+    db.flush()
+    acc = Account(vtuber_id=v.id, platform="bilibili", platform_uid="1")
+    db.add(acc)
+    db.commit()
+
+    mark, count = scheduler._post_mark(db, acc)
+    assert (mark, count) == (0, 0)              # 首次抓取前：空库 → 调用方据此不通知
+
+    db.add(Post(platform="bilibili", platform_uid="1", platform_post_id="100",
+                type="dynamic", title="第一条"))
+    db.commit()
+    mark2, count2 = scheduler._post_mark(db, acc)
+    assert count2 == 1 and mark2 > mark
+
+    db.add(Post(platform="bilibili", platform_uid="1", platform_post_id="101",
+                type="video", title="第二条"))
+    db.commit()
+
+    got: list = []
+    notifier.set_sink(got.append)
+    scheduler._notify_new_posts(db, acc, mark2)
+    assert len(got) == 1
+    assert "第二条" in got[0].body            # 只通知水位之后入库的那条
+    assert got[0].title == "明前奶绿 更新了动态"
+
+
+def test_notify_new_posts_swallows_errors(db, monkeypatch):
+    """通知出任何事都不许拖累抓取：`_notify_new_posts` 必须自己吞掉异常。"""
+    from app.services import scheduler
+
+    def boom(*_a, **_k):
+        raise RuntimeError("上游炸了")
+
+    monkeypatch.setattr(notifier, "notify_new_posts", boom)
+    scheduler._notify_new_posts(db, object(), 0)      # 不抛 = 通过

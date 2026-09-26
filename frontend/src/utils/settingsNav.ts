@@ -18,10 +18,12 @@ export const APPEARANCE_ID = 'appearance'
 export const ABOUT_ID = 'about'
 
 /** 图标键（这里不引 React：组件侧再做 key → lucide 组件的映射） */
-export type NavIcon = 'palette' | 'timer' | 'activity' | 'sparkles' | 'cloud' | 'info'
+export type NavIcon = 'palette' | 'bell' | 'timer' | 'activity' | 'sparkles' | 'cloud' | 'info'
 
 /** group 名 → 图标键。**未知分组给一个默认图标**（后端加组时界面不至于没图标） */
 const GROUP_ICONS: Record<string, NavIcon> = {
+  // R50（devlog/219）：通知排在最前（用户天天看得见），图标用铃铛
+  通知: 'bell',
   抓取设置: 'timer',
   数据源: 'cloud',
   // 历史分组名（R21 合并前）：留着不占地方，万一回滚也不用改这里
@@ -93,7 +95,7 @@ export function keysOfGroup(specs: GroupedSpec[], group: string): string[] {
  * `''`（输入框被清空）也算改动 —— 它会被校验拦住，但"这页动过"要如实显示出来。
  */
 export function groupDirty(
-  specs: (GroupedSpec & { value: number | boolean })[],
+  specs: (GroupedSpec & { value: number | boolean | string })[],
   draft: Record<string, DraftVal>,
   group: string,
 ): boolean {
@@ -103,10 +105,10 @@ export function groupDirty(
 
 /** 「恢复本类默认」的草稿值：把该分类的字段填成后端给的默认值（**不落库**，仍需点保存） */
 export function resetDraftOfGroup(
-  specs: (GroupedSpec & { default: number | boolean })[],
+  specs: (GroupedSpec & { default: number | boolean | string })[],
   group: string,
-): Record<string, number | boolean> {
-  const out: Record<string, number | boolean> = {}
+): Record<string, DraftVal> {
+  const out: Record<string, DraftVal> = {}
   for (const s of specs) {
     if (s.group === group) out[s.key] = s.default
   }
@@ -119,7 +121,10 @@ export function resetDraftOfGroup(
  * 只有"能定位"的错误才切页（例如跨字段约束涉及的两个键都在同一个分组）；
  * 定位不到就返回 null —— **不要瞎猜一个页面切过去**，那只会让人更迷惑。
  */
-export function categoryOfKey(specs: (GroupedSpec & { value: number | boolean })[], key: string): string | null {
+export function categoryOfKey(
+  specs: (GroupedSpec & { value: number | boolean | string })[],
+  key: string,
+): string | null {
   return specs.find((s) => s.key === key)?.group ?? null
 }
 

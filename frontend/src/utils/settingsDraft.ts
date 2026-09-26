@@ -9,10 +9,12 @@
  * - 校验用硬编码阈值而不是后端下发的 spec：两边慢慢分叉，界面允许 999、后端 400。
  */
 
-export type SettingKind = 'int' | 'float' | 'bool'
+/** 控件类型。`color` = 取色器（R50，devlog/219 的通知文字颜色），值形如 `#rrggbb`。 */
+export type SettingKind = 'int' | 'float' | 'bool' | 'color'
 
-/** 草稿值：`''` = 输入框被清空或当前是非法中间态（**不当成 0**） */
-export type DraftVal = number | boolean | ''
+/** 草稿值：`''` = 输入框被清空或当前是非法中间态（**不当成 0**）；
+ *  颜色是字符串（`#rrggbb`），没有"中间态"这一档。 */
+export type DraftVal = number | boolean | string
 
 /** 校验只需要这几个字段（`SettingSpec` 结构上兼容它） */
 export interface RangeSpec {
@@ -20,13 +22,17 @@ export interface RangeSpec {
   min: number | null
   max: number | null
   unit: string
-  default: number | boolean
-  value: number | boolean
+  default: number | boolean | string
+  value: number | boolean | string
 }
+
+/** `#rrggbb`（与后端 `runtime_settings._HEX_COLOR` 同一形态；`#` 可省） */
+const HEX_COLOR = /^#?[0-9a-fA-F]{6}$/
 
 /** 输入框文本 → 草稿值 */
 export function parseField(raw: string, kind: SettingKind): DraftVal {
   if (raw.trim() === '') return ''
+  if (kind === 'color') return raw.trim()
   const n = kind === 'int' ? Number.parseInt(raw, 10) : Number.parseFloat(raw)
   return Number.isNaN(n) ? '' : n
 }
@@ -34,7 +40,14 @@ export function parseField(raw: string, kind: SettingKind): DraftVal {
 /** 单字段校验（**范围来自后端 spec**）；合法返回 null */
 export function fieldError(spec: RangeSpec, value: DraftVal): string | null {
   if (spec.kind === 'bool') return null
+  if (spec.kind === 'color') {
+    if (typeof value !== 'string' || !HEX_COLOR.test(value)) {
+      return '需要 #rrggbb 形式的颜色'
+    }
+    return null
+  }
   if (value === '' || typeof value === 'boolean') return '需要一个数字'
+  if (typeof value === 'string') return '需要一个数字'
   const n = Number(value)
   if (Number.isNaN(n)) return '需要一个数字'
   if (spec.min !== null && n < spec.min) return `不能小于 ${spec.min}${spec.unit}`
@@ -59,6 +72,7 @@ export function valueOf(spec: RangeSpec, draft: Record<string, DraftVal>, key: s
  * 跨度大的按 1（0~3600 秒的直播轮询，0.5 秒的步子等于没步）。
  */
 export function stepOf(spec: RangeSpec): number {
+  if (spec.kind === 'color') return 0          // 取色器没有步进
   if (spec.kind === 'int') return 1
   const lo = spec.min ?? 0
   const hi = spec.max ?? 0
@@ -67,7 +81,8 @@ export function stepOf(spec: RangeSpec): number {
 
 /** 箭头该不该置灰：到界了、当前值不是数字（空串 / 中间态）、或者这是布尔项 */
 export function atBound(spec: RangeSpec, current: DraftVal, dir: 1 | -1): boolean {
-  if (spec.kind === 'bool' || current === '' || typeof current === 'boolean') return true
+  if (spec.kind === 'bool' || spec.kind === 'color') return true
+  if (current === '' || typeof current === 'boolean' || typeof current === 'string') return true
   const v = Number(current)
   if (!Number.isFinite(v)) return true
   return dir > 0 ? (spec.max !== null && v >= spec.max) : (spec.min !== null && v <= spec.min)
@@ -80,7 +95,8 @@ export function atBound(spec: RangeSpec, current: DraftVal, dir: 1 | -1): boolea
  * 当前值不可用时返回 null（调用方忽略这次点击；按钮此时本来就是置灰的）。
  */
 export function bump(spec: RangeSpec, current: DraftVal, dir: 1 | -1): number | null {
-  if (spec.kind === 'bool' || current === '' || typeof current === 'boolean') return null
+  if (spec.kind === 'bool' || spec.kind === 'color') return null
+  if (current === '' || typeof current === 'boolean' || typeof current === 'string') return null
   const v = Number(current)
   if (!Number.isFinite(v)) return null
   const next = Math.round((v + dir * stepOf(spec)) * 10) / 10
@@ -102,11 +118,11 @@ export function dirtyKeys(
 export function buildPayload(
   dirty: string[],
   draft: Record<string, DraftVal>,
-): Record<string, number | boolean> {
-  const out: Record<string, number | boolean> = {}
+): Record<string, number | boolean | string> {
+  const out: Record<string, number | boolean | string> = {}
   for (const key of dirty) {
     const v = draft[key]
-    if (v !== '' && typeof v !== 'undefined') out[key] = v as number | boolean
+    if (v !== '' && typeof v !== 'undefined') out[key] = v
   }
   return out
 }

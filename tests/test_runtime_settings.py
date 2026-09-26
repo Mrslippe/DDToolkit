@@ -111,6 +111,12 @@ def test_defaults_are_the_values_from_before_the_overlay():
         "FIRST_SCREEN_DYNAMICS_LIMIT": 3,
         "EXTERNAL_ENABLED": True, "EXTERNAL_ZEROROKU_ENABLED": True,
         "EXTERNAL_DANMAKUS_ENABLED": True,
+        # R50（devlog/219）桌面通知：默认全开（用户口径：开播/更新动态要弹窗），
+        # 外观三项的默认值 = 老自绘窗那套（字号 120% / 宽 450 / 不透明 91% / 8 秒 / 白字）
+        "NOTIFY_ENABLED": True, "NOTIFY_LIVE": True, "NOTIFY_POST": True,
+        "NOTIFY_FONT_PCT": 120, "NOTIFY_POPUP_WIDTH": 450,
+        "NOTIFY_POPUP_ALPHA_PCT": 91, "NOTIFY_POPUP_SECONDS": 8,
+        "NOTIFY_POPUP_COLOR": "#ffffff",
     }
     assert {k: s.default for k, s in rs.SPECS.items()} == expect
     # 没覆盖时，property 读到的就是默认值（证明接线正确，而不是"恰好相等"）
@@ -290,22 +296,24 @@ def test_get_settings_exposes_specs_and_readonly_info(client):
 # 意味着什么」⇒ 导航精简到 4 项、字段按用途分小组、调优类收进「高级（默认收起）」。
 # 这一组用例钉的是**判断本身**（哪些算关键项），不是排版 —— 排版由探针 `--app-settings` 量。
 
-def test_nav_is_appearance_plus_two_categories_plus_about():
+def test_nav_is_appearance_plus_three_categories_plus_about():
     """左栏 = 外观 + 后端大类（顺序即声明序）+ 关于。
 
     判错的代价：分组一多，用户又回到"六项不知道该点哪个"的老问题。
-    所以这里钉死**只有两个大类**，且「抓取设置」在前（它是主战场）。
+    所以这里钉死**大类清单**，顺序也要钉住 —— 通知排在抓取设置**前面**
+    （R50，devlog/219）：它下面那几项是用户天天看得见的开关与外观，
+    而抓取节奏是偶尔翻一次的调优项。
     """
     groups: list[str] = []
     for s in rs.SPECS.values():
         if s.group not in groups:
             groups.append(s.group)
-    assert groups == [rs.NAV_FETCH, rs.NAV_SOURCES]
-    assert len(groups) + 2 == 4          # + 外观（prefs）+ 关于（只读）
+    assert groups == [rs.NAV_NOTIFY, rs.NAV_FETCH, rs.NAV_SOURCES]
+    assert len(groups) + 2 == 5          # + 外观（prefs）+ 关于（只读）
 
 
 def test_vital_settings_are_visible_and_tuning_knobs_are_advanced():
-    """**白名单**：普通用户该看到的 11 项 vs 收进「高级」的 9 项。
+    """**白名单**：普通用户该看到的项 vs 收进「高级」的项。
 
     为什么用白名单而不是数量：数量对了不代表对的项在里面 ——
     有人把「被风控后冷却」挪进高级、又放出一个「请求预算」，数量一样、体验两样。
@@ -314,6 +322,11 @@ def test_vital_settings_are_visible_and_tuning_knobs_are_advanced():
     visible = {k for k, s in rs.SPECS.items() if not s.advanced}
     advanced = {k for k, s in rs.SPECS.items() if s.advanced}
     assert visible == {
+        # 通知（8 项：3 个开关 + 5 项外观）—— 全是用户自己的决策，一项都不藏
+        # （R50，devlog/219；用户口径："开播或更新动态时要弹窗通知"）
+        "NOTIFY_ENABLED", "NOTIFY_LIVE", "NOTIFY_POST",
+        "NOTIFY_FONT_PCT", "NOTIFY_POPUP_WIDTH", "NOTIFY_POPUP_ALPHA_PCT",
+        "NOTIFY_POPUP_SECONDS", "NOTIFY_POPUP_COLOR",
         # 抓取设置（11 项：风控与节流 3 + 开播 1 + 动态 1 + 静默时段 3 + 每日 1 + 收录首屏 2）
         "REQUEST_INTERVAL_MIN", "REQUEST_INTERVAL_MAX", "RATE_LIMIT_COOLDOWN",
         "LIVE_POLL_SECONDS", "DYNAMICS_MIN_CYCLE_SECONDS",

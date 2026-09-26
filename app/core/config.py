@@ -197,6 +197,22 @@ class Settings:
     # 原先单文件不轮转，实测长到 5.2MB / 33963 行、跨数月 —— 排查前必须先"按天切一刀"。
     LOG_BACKUP_DAYS: int = int(os.getenv("DDTOOLKIT_LOG_BACKUP_DAYS", "7"))
 
+    # ── 桌面通知（R50，devlog/219）──────────────────────────────────
+    # 开播 / 新动态时弹一张品牌色卡片（`app/services/desktop_popup.py` 自绘），
+    # 点一下直达直播间/帖子页。**默认全开**（用户口径："关注的主播开播或更新动态
+    # 时要弹窗通知"），但每一类都能在设置窗口里单独关掉。
+    #
+    # ⚠️ 这些默认值必须与 `runtime_settings.SPECS` 里的默认值一致
+    #    （`tests/test_runtime_settings.py::test_hot_keys_bound_both_ways` 双向对账）。
+    NOTIFY_ENABLED: bool = True          # 总开关（关掉后两类都不弹）
+    NOTIFY_LIVE: bool = True             # 开播提醒
+    NOTIFY_POST: bool = True             # 动态更新提醒
+    NOTIFY_FONT_PCT: int = 120           # 弹窗字号（百分数，80~200）
+    NOTIFY_POPUP_WIDTH: int = 450        # 弹窗大小（DIP，300~620）
+    NOTIFY_POPUP_ALPHA_PCT: int = 91     # 不透明度（百分数，31~100；65535*91/255 ≈ 232）
+    NOTIFY_POPUP_SECONDS: int = 8        # 弹窗停留时长（秒，5~120）
+    NOTIFY_POPUP_COLOR: str = "#ffffff"  # 弹窗文字颜色（#rrggbb）
+
     # 图片代理（/img-proxy 兜底链路）：B 站图床 + 微博图床
     IMG_PROXY_ALLOWED_HOSTS: str = os.getenv("IMG_PROXY_ALLOWED_HOSTS", "hdslb.com,sinaimg.cn,wbcdn.cn")
     IMG_CACHE_DIR: str = str(DATA_DIR / "static" / "img-cache")

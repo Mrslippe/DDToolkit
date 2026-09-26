@@ -147,6 +147,43 @@ def reset_settings(db: Session = Depends(get_db)):
             "overrides": runtime_settings.overrides()}
 
 
+@router.post("/test-notification")
+def test_notification():
+    """用**当前外观**立刻发一条测试通知，返回投递判据（R50，devlog/219）。
+
+    为什么需要一个真投递的端点：通知的可见性受一堆因素影响（总开关、系统是否允许、
+    卡片是否画得出来）。调「字号 / 颜色 / 不透明度」时如果只能等真有人开播，
+    这个设置就等于没法调 —— 用户得当场看到效果。
+
+    ⚠️ 用 `kind="test"`：它**绕过**「开播提醒 / 动态更新提醒」两个事件开关
+    （那正是这个按钮要让人看到的东西），但**总开关仍然生效**（关着就是关着）。
+    `force=True` 让它不占限流配额：连着点几下试样式不该被自己人限流
+    （实测踩过：用户拖滑杆连测 8 次后按钮"突然失效"）。
+    """
+    import time as _time
+
+    from app.services import notifier
+
+    title = "DDtoolkit 测试通知"
+    body = "看到我说明通知通道正常｜点击打开示例链接"
+    notifier.notify("test", title, body,
+                    key=f"settings-test:{_time.time()}",
+                    url="https://example.com/ddtoolkit", force=True)
+    verdict: dict = {}
+    deadline = _time.monotonic() + 2.0          # 投递线程通常 <0.5s 就出结果
+    while _time.monotonic() < deadline:
+        got = notifier.last_delivery()
+        if got and got.get("title") == title:
+            verdict = got
+            break
+        _time.sleep(0.1)
+    return {
+        "queued": True, "title": title, "body": body,
+        "popup": bool(verdict.get("popup")), "icon": bool(verdict.get("icon")),
+        "detail": str(verdict.get("detail") or ""),
+    }
+
+
 # ── 界面偏好（R14b，devlog/092）───────────────────────────────────────
 
 def _load_prefs(db: Session) -> dict[str, str]:
