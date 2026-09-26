@@ -66,7 +66,7 @@
 
 ⚠️ **探针永远跑满三档**：实测单档 28.3s、三档 26.6s —— 成本全在启动，少跑档只损失覆盖面。
 ⚠️ **读门禁结果别把 stderr 灌进 PowerShell 管道**（`python scripts/gate.py 2>&1 | ...`）：cargo 的链接器警告
-走 stderr，PowerShell 会把它包成 ErrorRecord ⇒ **七步全绿也叫 `exit code 1`**（2026-09-25 实测）。
+走 stderr，PowerShell 会把它包成 ErrorRecord ⇒ **每步都 ok 也叫 `exit code 1`**（2026-09-25 实测）。
 判据是脚本自己那行 `=== 汇总 ===` / `全部通过`，**不是 shell 退出码**；不重定向就不会有这个问题
 （这与 `gate.py` 内部那条"`shell=True` 时别拿 `run()` 的返回值当整数、否则成功也判 FAIL"是同一类错的两次现身）。
 ⚠️ **档位映射本身会写错** ⇒ `--plan` 会打印"哪条路径把档位顶上去的"，收尾用 `full` 兜一次。
