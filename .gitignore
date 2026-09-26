@@ -10,6 +10,8 @@ dist/
 
 # 数据库文件（本地开发用，不应提交）
 *.db
+# 首启标记（本地开发用）：DATA_DIR 默认 = 项目根 ⇒ 起一次后端就生成（`app/main.py` 的 /healthz）
+/.first-run-done
 
 # IDE
 .vscode/
