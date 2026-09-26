@@ -11,7 +11,7 @@
  *
  * 输出：`<pre id="ui-probe">` 内 JSON（每个视图一段），供脚本解析。
  */
-import { api, getApiBase } from '../api/api'
+import { api, authFetch, getApiBase } from '../api/api'
 import { setShellHidden } from '../utils/shellLifecycle'
 
 interface ProbeView {
@@ -1156,9 +1156,12 @@ async function sampleTopbar() {
     manual_running?: boolean
   } | null = null
   try {
-    // 与 api.ts 同口径：dev 探针下后端是绝对地址（VITE_API_BASE），不是 /api 代理
+    // 与 api.ts 同口径：dev 探针下后端是绝对地址（VITE_API_BASE），不是 /api 代理。
+    // ⚠️ S1（devlog/202）起必须走 `authFetch` —— 裸 `fetch` 不带会话 token，
+    //    后端会逐条 401，而症状是"探针没量到 fetch-status ⇒ 顶栏展示策略判不了"，
+    //    看起来像产品坏了。`authFetch` 容忍绝对 URL，所以这里的 base 拼接保持原样。
     const base = (import.meta.env.VITE_API_BASE as string | undefined) ?? '/api'
-    const r = await fetch(`${base}/vtuber/fetch-status`)
+    const r = await authFetch(`${base}/vtuber/fetch-status`)
     st = r.ok ? await r.json() : null
   } catch {
     st = null
@@ -1928,7 +1931,7 @@ export async function runUiProbe(): Promise<void> {
     result.idleBackend = await (async () => {
       try {
         const base = (import.meta.env.VITE_API_BASE as string | undefined) ?? '/api'
-        const r = await fetch(`${base}/vtuber/fetch-status`)
+        const r = await authFetch(`${base}/vtuber/fetch-status`)
         if (!r.ok) return { ok: false }
         const st = await r.json()
         return {
@@ -3076,7 +3079,7 @@ export async function runUiProbe(): Promise<void> {
     }
     /** 直接问后端要一次（**不看界面回显**） */
     const serverValue = async (key: string): Promise<number | boolean | null> => {
-      const r = await fetch(`${getApiBase()}/settings`)
+      const r = await authFetch(`${getApiBase()}/settings`)
       const body = await r.json()
       const spec = (body.specs as { key: string; value: number | boolean }[])
         .find((s) => s.key === key)
@@ -3111,7 +3114,7 @@ export async function runUiProbe(): Promise<void> {
       // ① 导航项必须与后端 `specs[].group` **逐项对账**（数据驱动的机器判据）
       const navLabels = [...dlg.querySelectorAll<HTMLElement>('.aps-nav-item')]
         .map((n) => (n.querySelector('.aps-nav-label')?.textContent || '').trim())
-      const settingsBody = await fetch(`${getApiBase()}/settings`).then((r) => r.json())
+      const settingsBody = await authFetch(`${getApiBase()}/settings`).then((r) => r.json())
         .then((b: { specs: { key: string; group: string; section: string; advanced: boolean }[] }) => b)
       const groupsFromApi = (() => {
         const out: string[] = []
@@ -3426,7 +3429,7 @@ export async function runUiProbe(): Promise<void> {
 
       // ⑫ 主题（R14b/R17）：三张卡片（浅色 / 深色 / 跟随系统），深色**只标不藏**
       const sysDark = window.matchMedia('(prefers-color-scheme: dark)').matches
-      const prefBefore = await fetch(`${getApiBase()}/settings/prefs`).then((r) => r.json())
+      const prefBefore = await authFetch(`${getApiBase()}/settings/prefs`).then((r) => r.json())
       result.themeServerBefore = prefBefore.values.theme
       await clickNav('外观')
       result.themeOptions = [...dlg.querySelectorAll('[data-theme-option]')]
@@ -3443,7 +3446,7 @@ export async function runUiProbe(): Promise<void> {
         () => dlg.querySelector('[data-theme-option="system"]')?.getAttribute('aria-checked') === 'true',
         4000)
       await sleep(400)
-      const prefAfter = await fetch(`${getApiBase()}/settings/prefs`).then((r) => r.json())
+      const prefAfter = await authFetch(`${getApiBase()}/settings/prefs`).then((r) => r.json())
       result.themeServerAfter = prefAfter.values.theme
       result.themeSelected = dlg.querySelector('[data-theme-option="system"]')
         ?.getAttribute('aria-checked')
@@ -3457,7 +3460,7 @@ export async function runUiProbe(): Promise<void> {
         () => dlg.querySelector('[data-theme-option="light"]')?.getAttribute('aria-checked') === 'true',
         4000)
       await sleep(300)
-      result.themeServerRestored = (await fetch(`${getApiBase()}/settings/prefs`)
+      result.themeServerRestored = (await authFetch(`${getApiBase()}/settings/prefs`)
         .then((r) => r.json())).values.theme
 
       // ⑬ 关闭（Esc 是 radix 的取消手势）。
@@ -3893,7 +3896,7 @@ export async function runUiProbe(): Promise<void> {
     // 派发 `ddtoolkit:vtuber-updated`，再读左栏那一行。
     try {
       const base = getApiBase()
-      const list = await (await fetch(`${base}/vtuber/list`)).json() as
+      const list = await (await authFetch(`${base}/vtuber/list`)).json() as
         { id: number; name: string; sign_override: string | null }[]
       const active = list.find((v) => v.name === result.activeName) ?? list[0]
       if (active) {
@@ -4975,9 +4978,9 @@ export async function runUiProbe(): Promise<void> {
       return 'button'
     }
     const prefValue = async () =>
-      (await fetch(`${getApiBase()}/settings/prefs`).then((r) => r.json())).values.close_action
+      (await authFetch(`${getApiBase()}/settings/prefs`).then((r) => r.json())).values.close_action
     const setPref = async (v: string) => {
-      await fetch(`${getApiBase()}/settings/prefs`, {
+      await authFetch(`${getApiBase()}/settings/prefs`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ values: { close_action: v } }),
@@ -5094,7 +5097,14 @@ export async function runUiProbe(): Promise<void> {
       return r
     })(),
   }
-  pre.textContent = JSON.stringify({ mode: 'main', views: out, topbar, shell, degraded })
+  // S1（devlog/202）：把"token 注入成什么样了"一起带出去。
+  //
+  // 为什么必须**从页面里**读而不是靠后端日志推：2026-09-25 实测过一轮 ——
+  // 后端日志显示 `presented=''`（一个头都没带），但"是没注入、还是注入了没带"
+  // 从那一侧**分不出来**，只能猜。这个字段把答案直接给出来。
+  const auth = (window as unknown as { __ddtoolkitAuthDiag?: () => unknown })
+    .__ddtoolkitAuthDiag?.() ?? null
+  pre.textContent = JSON.stringify({ mode: 'main', views: out, topbar, shell, auth, degraded })
   document.body.appendChild(pre)
   document.title = 'UI_PROBE_DONE'
 }

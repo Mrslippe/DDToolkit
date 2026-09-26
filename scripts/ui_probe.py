@@ -28,6 +28,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "frontend"
 
+# 探针用的**开发态固定 token**（S1，devlog/202）。
+#
+# 为什么需要：生产 token 由 Tauri 每次启动生成、只存内存，而探针**没有 Tauri**
+# （它跑在无头 Edge 里）。后端为此留了 `DDTOOLKIT_DEV_API_TOKEN` 这条路，
+# 前端那一份由 `vite.config.ts` 的 `define` 注入。
+#
+# ⚠️ **这两处的值必须一致**（这里是真源，vite.config.ts 里那个默认值要跟着改）：
+#    不一致的症状是"页面所有数据为空 ⇒ 布局断言集体报红"，看起来像布局坏了 ——
+#    2026-09-25 真实踩过一次同类事故（CORS 正则没生效，见 devlog/201 §四）。
+PROBE_DEV_TOKEN = "dsh-ui-probe-dev-token"
+
 # Windows 控制台常常是 GBK（cp936），而探针的打印里有排版字符（✕ U+2715、− U+2212 等）
 # **不在 GBK 码表里** —— 一句 print 就会抛 UnicodeEncodeError，把整条探针从中间打断
 # （2026-09-16 实测：`--close-ask` 明明跑完了却"退出码 1 且没有失败行"）。
@@ -2237,6 +2248,9 @@ def main() -> int:
         # 为什么用 `.*` 而不是写死端口：Vite 端口是**每次随机挑**的（见上面的 `_free_port()`），
         # 写死必失效。这一条只活在探针进程的环境变量里，不影响任何真实运行形态。
         "CORS_ORIGINS": r"http://(localhost|127\.0\.0\.1):.*",
+        # 开发态固定 token（S1，devlog/202）：后端与前端**必须拿同一个值** ——
+        # 后端读这个环境变量，前端由 `vite.config.ts` 的 `define` 读同一个变量名。
+        "DDTOOLKIT_DEV_API_TOKEN": PROBE_DEV_TOKEN,
     }
     print(f"[probe] 起后端 :{be_port}")
     be_log = open(WORK / "backend.log", "wb")
@@ -2250,7 +2264,17 @@ def main() -> int:
             return 1
 
         print(f"[probe] 起 Vite :{vite_port}")
-        vite_env = {**os.environ, "VITE_API_BASE": f"http://127.0.0.1:{be_port}"}
+        # ⚠️ S1（devlog/202）：**前端也要拿同一个 token**，否则每个业务请求 401。
+        # 命名不同是**有意**的（两个变量由各自的工具读）：
+        #   · `DDTOOLKIT_DEV_API_TOKEN` → 后端（`app/core/config.py`）；
+        #   · `VITE_DEV_API_TOKEN`     → Vite（`vite.config.ts` 的 `define` 读 `process.env`）。
+        # 实测踩过：只给了后端那侧 ⇒ 前端拿的是 `api.ts` 里的默认值、与后端不同 ⇒
+        # **60 条 401**，而症状又长成"页面数据全空 ⇒ 布局断言集体报红"。
+        vite_env = {
+            **os.environ,
+            "VITE_API_BASE": f"http://127.0.0.1:{be_port}",
+            "VITE_DEV_API_TOKEN": PROBE_DEV_TOKEN,
+        }
         vite = subprocess.Popen(
             ["npx", "vite", "--port", str(vite_port), "--strictPort"],
             cwd=FRONTEND, env=vite_env, shell=True,
