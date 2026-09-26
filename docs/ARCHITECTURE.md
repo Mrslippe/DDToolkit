@@ -633,7 +633,7 @@ flowchart LR
 
 | 目录 | 职责 | 约定 |
 |---|---|---|
-| `app/routers/` | HTTP 契约、状态码语义（404/409/415/413）、`Depends(get_db)` | 不写 SQL；抓取类端点做忙判定 |
+| `app/routers/` | HTTP 契约、状态码语义（404/409/415/413）、`Depends(get_db)` | 不写 SQL；抓取类端点做忙判定；**文件落盘走 services**（如背景上传 `services/vtuber_background.py`，见 §6 第 34 条） |
 | `app/repositories/` | 按仓库类持会话（13 个 Repo），批量删除/分页/统计等 SQL | 多数写方法**末尾 commit**；级联清理 `delete_by_*` 与 `AccountStatSnapshotRepo.add` **不提交**（留给调用方一个事务，见 §6 第 32 条）；`PostRepo.create(commit=False)` 供批量入库；**不许 import `app.services`** |
 | `app/models/` | SQLAlchemy 2.0 ORM（单文件 12 表） | 唯一约束/索引与迁移链一致；**不许 import 上面任何一层** |
 | `app/domain/` | 无 IO 的纯函数（目前只有 `text.py::normalize_title`） | **叶子**：不许 import 任何 `app.*` 上层，也不许 `sqlalchemy` / `httpx` / `fastapi`；纯函数下沉放这里 |
@@ -874,6 +874,18 @@ flowchart LR
       `app.domain.text` 的**同一个对象**的再导出（判据断言 `is`）——两份实现迟早漂移。
     - 仓库层**不许替平台做决定**：`LiveSessionRepo.upsert_danmakus` 的 `platform` 由调用方传入
       且**刻意没有默认值**（给默认值 = 把决定权又收回来）。
+34. **上传 / 替换文件：先写临时文件、原子 rename、成功之后才删旧的**（M3b，devlog/214）：
+    `routers/vtuber.py` 的背景上传原本是「**先删旧文件、再写新文件**」三行 —— 写盘失败
+    （磁盘满 / 权限 / 断电）就把用户原来的背景弄丢了，而 DB 里还指着那个不存在的路径
+    ⇒ 卡片页背景空白且**无法恢复**。三条一起才成立（真源 `services/vtuber_background.py`）：
+    - **限额在"读"的时候生效**：按块读、超限立刻停；`UploadFile.size` 已知时连读都不读
+      （原来是 `await file.read()` 全量进内存**之后**才判 10MB ⇒ 一个大上传先吃满内存）；
+    - **类型按文件头判**：`content_type` 是客户端声明的，改个扩展名就能把 HTML 存成 `.jpg`
+      再由 `/static` 原样吐出来；声明与内容**矛盾**时 415（吵闹的失败）；
+    - **写临时文件 → 同目录 `os.replace`（原子）→ DB 提交成功之后才删旧文件**；
+      提交失败要把刚写好的新文件删掉（否则是孤儿），任何失败都不许留临时文件。
+      判据 `tests/test_background_upload.py`（14 条，含**真的注入**的写盘失败 / 半写 / rename 失败 /
+      提交失败；把这一批判据拿回旧实现上跑 ⇒ **7 条红**）。
 
 ---
 

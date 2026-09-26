@@ -482,7 +482,7 @@
 | GET `/vtuber/{vtuber_id}/profile-cards` | 档案视图卡片布局（按 `y, x`）；空数组 = 还没排过（前端用默认布局渲染）（f006，R37-P2） |
 | PUT `/vtuber/{vtuber_id}/profile-cards` | **整版保存**卡片布局；格位越界 / `card_key` 重复 / 超过 50 张 → 422（**不静默夹取**）；V 不存在 404（f006，R37-P2） |
 | GET `/vtuber/{vtuber_id}/former-values` | 曾用名 / 曾用签名（各最多 5 条、最近优先、按值去重，含平台标注；f004）。**当前未接入 UI**（devlog/075：归「账号信息历史快照」，先不展示） |
-| POST `/vtuber/{vtuber_id}/background` | 上传自定义背景（jpeg/png/webp/gif，≤10MB，否则 415/413）；时间戳后缀防缓存，替换删旧文件 |
+| POST `/vtuber/{vtuber_id}/background` | 上传自定义背景（jpeg/png/webp/gif，≤10MB，否则 415/413）；**类型按文件头判、限额流式读取、临时文件原子 rename、提交成功后才删旧文件**（`services/vtuber_background.py`，M3b devlog/214）；时间戳后缀防缓存 |
 | DELETE `/vtuber/{vtuber_id}/background` | 清除背景回退头像铺底 |
 | DELETE `/vtuber/{vtuber_id}` | 解除订阅：`purge_vtuber()` 清 posts + 5 张子表 + 活动条目 + 曾用值 + **卡片布局（f006）**，再级联删 V+accounts；外键挡下 → 409 |
 
@@ -622,6 +622,12 @@
   `domain` 连 `sqlalchemy`/`httpx`/`fastapi` 都不许碰 —— 判据
   `tests/test_dependency_direction.py`（AST 扫 import，不是文本搜索）。
   纯函数要下沉时放 `app/domain/`，别让下层为了一个字符串函数去 import 服务层；
+- **上传 / 替换文件类操作的三条纪律**（M3b，devlog/214）：① 限额在**读的时候**生效
+  （按块读、超限立刻停；有 `size` 就连读都不读）—— 别先 `await file.read()` 全量进内存；
+  ② 类型按**文件头**判，客户端声明的 `content-type` 只是提示（矛盾时 415）；
+  ③ **先写临时文件 → 原子 `os.replace` → 提交成功之后才删旧文件**，任何一步失败都要
+  保证旧文件 + DB 里的路径原样还在、且不留临时文件。真源与判据：
+  `app/services/vtuber_background.py` 头部 + `tests/test_background_upload.py`；
 - **删除必须过 purge**：posts 无外键 + 5 张子表（+ f006 的 `profile_cards`，按 vtuber_id）有外键且不级联（§1.1）；两个删除端点都已接
   `app/services/purge.py`，返回 409 而不是 500；
 - **409 语义**：唯一约束冲突（`IntegrityError`）统一 `rollback → 409`，覆盖 V/账号/帖子建改入口
