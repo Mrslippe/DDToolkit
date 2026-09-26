@@ -1636,6 +1636,11 @@ const COMMAND_ACL: &[(&str, &[&str])] = &[
     ("resize_widget_window", BOTH),
     ("set_widget_visible", BOTH),
     ("set_widget_click_through", BOTH),
+    // ⚠️ 这两条**曾经被我填成 MAIN_ONLY**（2026-09-26 真机复验抓到）：它们同样是
+    // `StatusWidgetWindow` 在调的 —— 小窗自己的关闭请求（`onCloseRequested` → 销毁自己）
+    // 与全屏隐藏逻辑。漏的原因见下方 `widget_reachable_commands_are_allowed` 那条判据的说明。
+    ("destroy_widget_window", BOTH),
+    ("is_fullscreen_app_running", BOTH),
     // —— 只有主窗口 ——
     ("present_window", MAIN_ONLY),
     ("hide_to_tray", MAIN_ONLY),
@@ -1654,9 +1659,7 @@ const COMMAND_ACL: &[(&str, &[&str])] = &[
     // 小窗的窗口管理（由主窗口的设置页/顶栏发起）
     ("show_widget_window", MAIN_ONLY),
     ("hide_widget_window", MAIN_ONLY),
-    ("destroy_widget_window", MAIN_ONLY),
     ("widget_window_exists", MAIN_ONLY),
-    ("is_fullscreen_app_running", MAIN_ONLY),
 ];
 
 /// 这条命令允不允许这个窗口调（表里查不到 ⇒ **拒绝**）。
@@ -2741,8 +2744,11 @@ mod tests {
 
     #[test]
     fn widget_may_call_only_what_the_widget_window_actually_uses() {
-        // 小窗真的会调 resize / set_visible / set_click_through（`StatusWidgetWindow.tsx` 里
-        // 那三处 `await import('../utils/shellBridge')`）—— 少一条就是把小窗点坏（devlog/175 的形态）。
+        // ⚠️ 这份清单是**手工维护的快照**（判据的真源是前端那条派生用例
+        // `frontend/src/utils/widgetCommands.test.ts`：它从 `StatusWidgetWindow.tsx` /
+        // `widgetMain.tsx` 的动态 import 里**推出**小窗能碰到哪些命令）。
+        // 2026-09-26 真机复验抓到本表少了两条（`destroy_widget_window` /
+        // `is_fullscreen_app_running`）—— 手工清单会漏，所以必须有一条派生的判据兜底。
         let mut allowed: Vec<&str> = COMMAND_ACL
             .iter()
             .filter(|(_, labels)| labels.contains(&"widget"))
@@ -2752,8 +2758,10 @@ mod tests {
         assert_eq!(
             allowed,
             vec![
+                "destroy_widget_window",
                 "get_api_token",
                 "get_backend_port",
+                "is_fullscreen_app_running",
                 "resize_widget_window",
                 "set_widget_click_through",
                 "set_widget_visible",
