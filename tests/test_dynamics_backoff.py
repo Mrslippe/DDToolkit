@@ -228,3 +228,47 @@ def test_every_lower_bound_uses_the_ulp_tolerance():
         + "\n  ".join(offenders)
     )
 
+
+# ── 热更设置必须真的生效（批次 5 切片一，devlog/209）──────────────────────
+#
+# 这一组守的是一句**用户能感觉到的话**：「我在设置里改了抓取节奏，它到底吃不吃？」
+# 原来两个模块级单例在 import 期就把 `settings.X` 取成了固定值 ⇒ 改了不生效，
+# 而 `runtime_settings` 的承诺是"每一轮读一次"。
+
+def test_production_budget_reads_the_hot_setting(monkeypatch):
+    """**用真单例**断言：改 `DYNAMICS_BUDGET_RPM` ⇒ 预算立刻跟着变。
+
+    ⚠️ 必须打真单例（`sch._dynamics_budget`）而不是新建一个 —— 新建的话，
+    就算有人把 `_PlatformBudget(settings.X)` 写回 import 期，这条用例照样绿。
+
+    反向验证：把 `_dynamics_budget = _PlatformBudget()` 改回
+    `_PlatformBudget(settings.DYNAMICS_BUDGET_RPM)` ⇒ 本用例红。
+    """
+    monkeypatch.setattr(sch.settings, "DYNAMICS_BUDGET_RPM", 3)
+    assert sch._dynamics_budget.rpm == 3
+    monkeypatch.setattr(sch.settings, "DYNAMICS_BUDGET_RPM", 30)
+    assert sch._dynamics_budget.rpm == 30
+
+
+def test_explicit_budget_stays_fixed(monkeypatch):
+    """显式传值的用法**不受影响**（用例与别的调用方要能钉一个固定值）。"""
+    monkeypatch.setattr(sch.settings, "DYNAMICS_BUDGET_RPM", 30)
+    fixed = sch._PlatformBudget(12, window_seconds=60.0)
+    assert fixed.rpm == 12
+    assert sch._PlatformBudget(0).rpm == 0        # 0 = 不启用，别被当成"没传"
+
+
+def test_production_pacer_reads_the_hot_setting(monkeypatch):
+    """起跑闸门同理：改 `STARTUP_DYNAMICS_INTERVAL_*` ⇒ 下一个时隙就按新值排。
+
+    反向验证：把 `_dynamics_pacer = _PlatformPacer()` 改回传 settings ⇒ 红。
+    """
+    pacer = sch._dynamics_pacer
+    pacer._last.clear()
+    monkeypatch.setattr(sch.settings, "STARTUP_DYNAMICS_INTERVAL_MIN", 5.0)
+    monkeypatch.setattr(sch.settings, "STARTUP_DYNAMICS_INTERVAL_MAX", 5.0)
+    pacer._reserve("bilibili", now=0.0)                 # 占下第一个时隙
+    monkeypatch.setattr(sch.settings, "STARTUP_DYNAMICS_INTERVAL_MIN", 60.0)
+    monkeypatch.setattr(sch.settings, "STARTUP_DYNAMICS_INTERVAL_MAX", 60.0)
+    assert pacer._reserve("bilibili", now=0.0) == 60.0  # 热更后立刻按 60s 排
+

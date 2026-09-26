@@ -3040,10 +3040,26 @@ class _PlatformBudget:
     而这**不是风控所需**——风控阈值取决于「该平台稳态请求速率」，不是「一轮有几个账号」。
     """
 
-    def __init__(self, rpm: int, window_seconds: float = 60.0):
-        self.rpm = rpm
+    def __init__(self, rpm: int | None = None, window_seconds: float = 60.0):
+        # ⚠️ `rpm=None` = **每次读热更值**（生产单例走这条）。显式传值 = 固定（用例/别的调用方）。
+        #    2026-09-26（批次 5 切片一，devlog/209）：原来单例是
+        #    `_PlatformBudget(settings.DYNAMICS_BUDGET_RPM)` —— **import 期快照**，
+        #    于是用户在设置里改 `DYNAMICS_BUDGET_RPM` **不会生效**（而
+        #    `runtime_settings` 的承诺是"每一轮读一次"）。
+        self._rpm = rpm
         self.window = window_seconds
         self._hits: dict[str, list[float]] = {}
+
+    @property
+    def rpm(self) -> int:
+        """生效的预算上限：显式传了就用它，否则**每次现读** `settings`（吃热更）。"""
+        if self._rpm is not None:
+            return self._rpm
+        return int(settings.DYNAMICS_BUDGET_RPM)
+
+    @rpm.setter
+    def rpm(self, value: int) -> None:
+        self._rpm = value
 
     def _prune(self, pf: str, now: float) -> list[float]:
         dq = self._hits.setdefault(pf, [])
@@ -3104,8 +3120,10 @@ class _PlatformBudget:
             dq.extend([now] * int(n))
 
 
-# 速率预算实例：进程内单例（动态流独用；账号流有自己 3~5s 的节流）
-_dynamics_budget = _PlatformBudget(settings.DYNAMICS_BUDGET_RPM)
+# 速率预算实例：进程内单例（动态流独用；账号流有自己 3~5s 的节流）。
+# ⚠️ **不传 rpm**：让它每次现读 `settings.DYNAMICS_BUDGET_RPM`（吃热更）——
+#    传 `settings.X` 进来就是 import 期快照，用户在设置里改了不生效（devlog/209）。
+_dynamics_budget = _PlatformBudget()
 
 
 class _PlatformPacer:
@@ -3131,11 +3149,33 @@ class _PlatformPacer:
     但不再持有任何 loop-bound 原语 —— 换多少个事件循环都能用。
     """
 
-    def __init__(self, gap_min: float, gap_max: float) -> None:
-        self.gap_min = gap_min
-        self.gap_max = gap_max
+    def __init__(self, gap_min: float | None = None, gap_max: float | None = None) -> None:
+        # ⚠️ `None` = 每次现读 `settings`（吃热更；生产单例走这条）；显式传值 = 固定（用例）。
+        #    同 `_PlatformBudget`：原来单例是 import 期快照 ⇒ 改设置不生效（devlog/209）。
+        self._gap_min = gap_min
+        self._gap_max = gap_max
         self._last: dict[str, float] = {}
         self._guard = threading.Lock()
+
+    @property
+    def gap_min(self) -> float:
+        if self._gap_min is not None:
+            return self._gap_min
+        return float(settings.STARTUP_DYNAMICS_INTERVAL_MIN)
+
+    @gap_min.setter
+    def gap_min(self, value: float) -> None:
+        self._gap_min = value
+
+    @property
+    def gap_max(self) -> float:
+        if self._gap_max is not None:
+            return self._gap_max
+        return float(settings.STARTUP_DYNAMICS_INTERVAL_MAX)
+
+    @gap_max.setter
+    def gap_max(self, value: float) -> None:
+        self._gap_max = value
 
     def _reserve(self, pf: str, now: float | None = None) -> float:
         """占一个起跑时隙，返回"还要等多少秒"（同步、可在任何事件循环里调）。"""
@@ -3155,9 +3195,9 @@ class _PlatformPacer:
             await asyncio.sleep(delay)
 
 
-# 动态流起跑闸门：与「每账号抓完再睡」同参数，但改成平台级 —— 并发下才有意义
-_dynamics_pacer = _PlatformPacer(settings.STARTUP_DYNAMICS_INTERVAL_MIN,
-                                 settings.STARTUP_DYNAMICS_INTERVAL_MAX)
+# 动态流起跑闸门：与「每账号抓完再睡」同参数，但改成平台级 —— 并发下才有意义。
+# ⚠️ 同样**不传参数**（现读 settings，吃热更），理由见 `_dynamics_budget` 上面那条。
+_dynamics_pacer = _PlatformPacer()
 
 
 def _next_dynamics_cost(db: Session) -> dict[str, int]:
