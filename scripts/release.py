@@ -64,7 +64,7 @@ ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "frontend"
 TAURI = FRONTEND / "src-tauri"
 DIST = ROOT / "dist-release"
-REPO_SLUG = "Mrslippe/DDToolkit"
+REPO_SLUG = "laplace-dragon/DDToolkit"
 REPO_URL = f"https://github.com/{REPO_SLUG}.git"
 PROXY = os.environ.get("DDTOOLKIT_GITHUB_PROXY", "http://127.0.0.1:7897")
 

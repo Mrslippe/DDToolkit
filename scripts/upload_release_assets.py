@@ -26,7 +26,7 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-REPO = "Mrslippe/DDToolkit"
+REPO = "laplace-dragon/DDToolkit"
 PROXY = os.environ.get("DDTOOLKIT_GITHUB_PROXY", "http://127.0.0.1:7897")
 API_BASE = f"https://api.github.com/repos/{REPO}"
 UPLOAD_BASE = f"https://uploads.github.com/repos/{REPO}/releases"

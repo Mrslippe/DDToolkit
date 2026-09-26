@@ -50,7 +50,7 @@ Windows 桌面应用，数据全部在本地 SQLite 里，不经过任何服务�
 | **安装版**<br>`DDtoolkit_1.0.2_x64-setup.exe`（约 58 MB） | 大多数人 | **用户级安装，不需要管理员权限**；带开始菜单与卸载项；支持应用内自动更新 |
 | **便携版**<br>`DDtoolkit-portable-win64.zip`（约 72 MB） | 放 U 盘 / 不想安装 | 解压即用，主程序与后端在同一目录 |
 
-到 **[Releases](https://github.com/Mrslippe/DDToolkit/releases/latest)** 页面下载。
+到 **[Releases](https://github.com/laplace-dragon/DDToolkit/releases/latest)** 页面下载。
 
 > 为什么一个抓取工具要几十 MB？因为 **Python 运行时和后端一起打包进去了** —— 装完不需要你另外装 Python、也不需要装数据库。
 

@@ -1,5 +1,12 @@
 # DDToolkit 发布手册（Release Playbook）
 
+> ⚠️ **仓库地址（2026-09-27 起）**：主仓库 = **`laplace-dragon/DDToolkit`**。
+> 与它绑定的五处**已经**一起改过来了：`frontend/src-tauri/tauri.conf.json` 的更新端点、
+> `scripts/collect_release.py` / `release.py` / `upload_release_assets.py` 的 `REPO`、
+> `scripts/push_github.bat` 的目标地址。
+> 本文档里指向 **`Mrslippe/DDToolkit`** 的链接都是**当时的发布记录**（v1.0.0–v1.0.2 确实发在那边），
+> 属于历史，别再当现状去改。
+
 > **日常发布只需一条命令**（2026-09-15 起，devlog/084）：
 >
 > ```powershell
@@ -196,7 +203,7 @@ Select-String frontend/src-tauri/target/release/nsis/x64/installer.nsi `
 
 ```powershell
 git tag -a v0.9.2 -m "DDtoolkit v0.9.2"
-git -c http.sslBackend=openssl -c http.sslVerify=false -c http.proxy=http://127.0.0.1:7897 push https://<TOKEN>@github.com/Mrslippe/DDToolkit.git v0.9.2
+git -c http.sslBackend=openssl -c http.sslVerify=false -c http.proxy=http://127.0.0.1:7897 push https://<TOKEN>@github.com/laplace-dragon/DDToolkit.git v0.9.2
 ```
 
 > ✅ `release.py` 的 `commit` / `tag` / `push` 三步就是这段，并额外做两件事：
@@ -209,7 +216,7 @@ git -c http.sslBackend=openssl -c http.sslVerify=false -c http.proxy=http://127.
 
 `scripts/upload_release_assets.py`（见 §5），支持：创建 Release + 上传两个资产 + 输出 Release URL。
 
-也可手动方式：浏览器 → `https://github.com/Mrslippe/DDToolkit/releases/new` → 选 tag → 粘贴 release notes → 拖入两个资产 → Publish。
+也可手动方式：浏览器 → `https://github.com/laplace-dragon/DDToolkit/releases/new` → 选 tag → 粘贴 release notes → 拖入两个资产 → Publish。
 
 ### 4.3 Release 描述（notes）
 
@@ -296,7 +303,7 @@ Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Setti
 
 ## 7. 发布后检查
 
-- [ ] `https://github.com/Mrslippe/DDToolkit/releases/tag/v<版本>` 可访问
+- [ ] `https://github.com/laplace-dragon/DDToolkit/releases/tag/v<版本>` 可访问
 - [ ] 两个资产可下载（大小与 dist-release 一致）
 - [ ] **装一次直装版**：安装目录 `binaries\backend\_internal\` 存在，
       首启能越过启动幕（安装版首启坏了历史上就是这一步没验，见 devlog/036）
