@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 """动态流空闲退避与预算真上限（R28，devlog/127）。
 
 起因（2026-09-16 盘点，devlog/124）：动态流占日请求量约 **90%**，而且**无论有没有新帖**
@@ -12,7 +12,9 @@
 ⚠️ 与 R25 推送时效的关系：**开播检测走 T0（1 请求/分钟），不受本批影响** —— 这条写在
 `TODO.md` §0 的 R28 行里，免得以后被"推送要快"整条否掉。
 """
+import re
 import time
+from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine
@@ -33,6 +35,12 @@ from app.services import scheduler as sch
 #
 # 为什么用容差而不是"把下限钉成 599"：那会把判据改弱成一个不存在的阈值。
 # 1e-3 秒比 ULP 效应（~1e-6）大三个数量级，又远小于任何有意义的时间差。
+#
+# ⚠️ **同类事故到 2026-09-26 已经两次**（第二次 = devlog/204）：第一次抓到 600 / 150 那几处，
+# 却**漏了 `>= 300` 那一处** ⇒ CI 的 Windows 腿又偶发红（本地/干净 clone 都不复现，
+# 因为要不要红取决于当时 `time.monotonic()` 的绝对值与小数部分）。
+# ⇒ 规矩：**这一族下限断言一律写 `>= N - FLOOR_EPS`**，且由
+# `test_every_lower_bound_uses_the_ulp_tolerance`（本文件末尾）扫源码钉住 —— 别靠人记得。
 FLOOR_EPS = 1e-3
 
 
@@ -124,7 +132,9 @@ def test_next_due_honours_idle_floor(db, monkeypatch):
 
     monkeypatch.setattr(sch, "_dynamics_idle_streak", 6)
     due_idle = sch._dynamics_next_due(db, since=since)
-    assert due_idle - since >= 300           # 第 6 轮档位：≥ 5 分钟
+    # ⚠️ 容差见文件头 FLOOR_EPS —— 这一处 2026-09-26 就是漏了它才让 CI 的 Windows 腿红的
+    #    （`assert (698.031 - 398.031) >= 300`：真值是 299.99999999999994）
+    assert due_idle - since >= 300 - FLOOR_EPS    # 第 6 轮档位：≥ 5 分钟
 
     monkeypatch.setattr(sch, "_dynamics_idle_streak", 12)
     # 容差见文件头的 FLOOR_EPS（浮点 ULP，不是漂移）
@@ -185,4 +195,36 @@ def test_live_start_resets_idle_streak(db, monkeypatch):
 
     asyncio.run(sch.live_sweep_core(db))
     assert sch._dynamics_idle_streak == 0        # 开播边沿把退避清零了
+
+
+# ── 判据自身的纪律：下限断言必须带 ULP 容差（2026-09-26 加，devlog/204）──────
+#
+# "把浮点 ULP 当容差"这件事**靠人记得已经失败两次**：第一次（devlog/200）补了 600/150/900/1800
+# 那几处，却漏了 `>= 300` 那一处 ⇒ 2026-09-26 CI 的 Windows 腿又偶发红，而本地与干净 clone
+# 都不复现（要不要红取决于当时 `time.monotonic()` 的绝对值）。
+# ⇒ 判据改成**扫源码**：凡是"两个时间量相减 >= 数字"的形状，没带容差就算漏。
+
+#: `- <名字> >= <数字>`（差值比较的形状；`< 120` 那种上界不受 ULP 影响，不在此列）
+_LOWER_BOUND = re.compile(r"-\s*\w+\s*>=\s*[\d.]+")
+#: 带容差的两种合法写法（命名常量 / 内联 1e-3）
+_TOLERANCE = ("FLOOR_EPS", "1e-3")
+
+
+def test_every_lower_bound_uses_the_ulp_tolerance():
+    """本文件与 `test_quiet_hours.py` 里所有下限断言都必须减掉 ULP 容差。
+
+    反向验证：把那处 300 秒的断言改回**不带容差的裸比较** ⇒ 本用例红并点名行号
+    —— 这正是 2026-09-26 CI 的 Windows 腿红的那一处。
+    """
+    offenders: list[str] = []
+    for name in ("test_dynamics_backoff.py", "test_quiet_hours.py"):
+        text = (Path(__file__).parent / name).read_text(encoding="utf-8")
+        for no, line in enumerate(text.splitlines(), 1):
+            if _LOWER_BOUND.search(line) and not any(t in line for t in _TOLERANCE):
+                offenders.append(f"{name}:{no}: {line.strip()}")
+    assert not offenders, (
+        "这些下限断言没带 ULP 容差（`>= N - FLOOR_EPS`）—— 它们会随 monotonic 的绝对值偶发红，"
+        "而且**本地不会复现**（CI 专属红，2026-09-25 / 2026-09-26 各一次）：\n  "
+        + "\n  ".join(offenders)
+    )
 
