@@ -220,6 +220,12 @@ def _run_syntax_check() -> bool:
     而 pytest / tsc / eslint / doc_check **没有一个会编译 scripts/**，
     于是"探针脚本坏了"这件事在任何门禁里都不红，直到下次真要跑探针才发现。
     这类"工具坏了但没人报"正是仓库最忌讳的静默失败，所以用一次 ast.parse 全仓扫一遍。
+
+    ⚠️ **读文件用 `utf-8-sig`**（2026-09-26 加）：**BOM 是合法 Python** ——
+    `python some.py` 会正常运行（解释器自己吃 BOM），所以"能不能解析"这个判据不该被它判死。
+    实测代价：用 PowerShell `Set-Content -Encoding utf8` 改了一个测试文件（Windows PowerShell
+    5.1 会写 BOM）⇒ 本地 tsc/eslint/doc_check/pytest/gate **全绿**，只有 CI 的 Linux 腿红
+    （那条腿先跑本函数）。去掉 BOM 是"顺手对齐"，**让判据接受合法输入**才是根治。
     """
     print(f"\n=== 全仓 Python 语法（scripts / app / tests / 根） ===")
     root = Path(__file__).resolve().parent.parent
@@ -229,7 +235,7 @@ def _run_syntax_check() -> bool:
         files += sorted(root.glob(pat))
     for p in files:
         try:
-            ast.parse(p.read_text(encoding="utf-8"), filename=str(p))
+            ast.parse(p.read_text(encoding="utf-8-sig"), filename=str(p))
         except SyntaxError as e:
             bad.append(f"{p.relative_to(root)}:{e.lineno}: {e.msg}")
     if bad:

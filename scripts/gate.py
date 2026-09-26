@@ -160,6 +160,12 @@ def steps(tier: str) -> list[tuple[str, list[str], str]]:
     s: list[tuple[str, list[str], str]] = [
         ("tsc", [npx, "tsc", "--noEmit"], "类型检查（实测 6s）"),
         ("doc_check", [PY, "scripts/doc_check.py"], "文档门禁（实测 0–2s）"),
+        # ⚠️ 全仓 Python 语法扫描（~1s）：**原先门禁里没有这一步**，而 CI 的 Linux 腿有
+        #    （`dev_check.py --syntax-only`）⇒ 2026-09-26 实测被咬了：一个测试文件被写进
+        #    UTF-8 BOM，本地 tsc/eslint/doc_check/pytest/gate 全绿、只有 CI 红。
+        #    "只有 CI 会红的东西"要么补进门禁、要么写清为什么不在门禁里 —— 这一步只花 1s。
+        ("syntax", [PY, "scripts/dev_check.py", "--syntax-only"],
+         "全仓 Python 语法（实测 ~1s）"),
     ]
     if tier in ("a", "full"):
         # Rust 壳（devlog/197）。**只在 A 档跑**：改了 `app/` 也跑它是不必要的重复，
