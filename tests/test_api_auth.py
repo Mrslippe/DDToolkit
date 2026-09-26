@@ -330,3 +330,28 @@ def test_default_cors_stays_permissive_because_token_is_the_real_gate():
 
     assert Settings.CORS_ORIGINS == _os.getenv("CORS_ORIGINS", "*"), \
         "CORS 默认值被动过 —— 若是有意为之，先读 devlog/201 的「CORS 不是主防线」一节"
+
+
+def test_healthz_writes_its_first_run_marker_outside_the_real_data_dir(client_real_app):
+    """打 `/healthz` **不许**往真实数据目录里写首启标记（devlog/202）。
+
+    `app/main.py` 的 `/healthz` 首次被访问时会写 `DATA_DIR/.first-run-done`，而测试里
+    `DATA_DIR` = 项目根（`config.py` 的默认值）⇒ 这条路的副作用会：
+      ① 在仓库根留下一个未跟踪文件；
+      ② **吃掉"开发态首启"那一态** —— 之后手动起后端 `first_run` 恒为 false、登录浮窗不弹。
+    实测（2026-09-26 收尾时发现）：本文件的公开白名单用例就在写它，而症状只是
+    "仓库里多了个文件" —— 与 devlog/200"后台任务连了开发库"同一类：**用例碰了真实数据目录**。
+
+    ⚠️ 两条断言都要：第一条判**行为**（文件没被创建/改写），第二条判**夹具在位**
+    —— 只留第一条会假绿：标记本来就在的机器上（手动起过后端）"存在性不变"照样成立。
+    反向验证：删掉 `tests/conftest.py` 的 `_first_run_marker_outside_the_real_data_dir` ⇒ 红。
+    """
+    from app import main as app_main
+    from app.core.config import settings
+
+    real_marker = settings.DATA_DIR / ".first-run-done"
+    before = real_marker.read_bytes() if real_marker.exists() else None
+    assert client_real_app.get("/healthz").status_code == 200
+    after = real_marker.read_bytes() if real_marker.exists() else None
+    assert after == before, "`/healthz` 往真实数据目录里写了首启标记"
+    assert app_main.FIRST_RUN_MARKER != real_marker, "测试里的首启标记没被重定向"

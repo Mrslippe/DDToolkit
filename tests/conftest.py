@@ -106,3 +106,20 @@ def _api_token_for_test_client(monkeypatch):
                         os.getenv("DDTOOLKIT_API_TOKEN", ""), raising=False)
     monkeypatch.setattr(api_auth.settings, "DEV_API_TOKEN",
                         os.getenv("DDTOOLKIT_DEV_API_TOKEN", ""), raising=False)
+
+
+# ── `/healthz` 的落盘副作用不许写进**真实数据目录**（devlog/202 收尾时发现）──────
+#
+# `app/main.py` 的 `/healthz` 在**首次被访问时**写 `DATA_DIR/.first-run-done`（前端靠它弹
+# 首启登录浮窗）。测试里 `DATA_DIR` = 项目根（`config.py` 的默认值）⇒ 任何打 `/healthz`
+# 的用例都会：① 在仓库根留下一个未跟踪文件；② **吃掉"开发态首启"那一态** ——
+# 之后手动起后端时 `first_run` 恒为 false，登录浮窗不再弹。
+#
+# 实测（2026-09-26）：本批新写的 `tests/test_api_auth.py` 公开白名单用例就这么干了，
+# 而症状只是"仓库里多了个文件" —— 与 devlog/200 那批"后台任务连了开发库"同一类：
+# **用例碰了真实数据目录，而它不会红**。放在 conftest 里一次覆盖全部用例文件。
+@pytest.fixture(autouse=True)
+def _first_run_marker_outside_the_real_data_dir(tmp_path, monkeypatch):
+    from app import main as app_main
+
+    monkeypatch.setattr(app_main, "FIRST_RUN_MARKER", tmp_path / ".first-run-done")
