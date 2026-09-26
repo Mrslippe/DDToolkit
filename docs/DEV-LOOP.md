@@ -351,6 +351,16 @@ def test_bili_poll_reads_inner_data_code():
 > **补充**：红线**不是**本批引入的 —— 是 R38 批 5e 那次"样式搬家"埋的。**先确认"是不是我改的"，再去修**，比先怀疑自己省时间得多。查法要**只读**（`git log -S` / 看这条规则住在哪个文件 + `App.tsx` 的 import 顺序），别用会动工作区的命令去回答只读问题（见 §7.2）。
 判据命令：`python scripts/ui_probe.py --cell-pop`（**机制 + 效果两条都在里面**，注释在 `ui_probe.py` 的 cell-pop 段）；同一条纪律见 `UI-MAP.md` §F2 末条 / §F3。
 
+### 6.12 ⚠️ 用例不许碰**真实数据目录**（同类事故 2 次，2026-09-26 升级成规矩）
+`DATA_DIR` 默认**就是项目根**，于是测试进程里的 `settings.DATA_DIR` 与模块级单例全都指着开发者那套真实数据，而这类越界的症状一律是"**什么都不红**"：
+
+| 次 | 越界 | 症状 |
+|---|---|---|
+| 1（devlog/200） | 后台任务用 `scheduler.SessionLocal`（`dependency_overrides` **只管路由**） | CI 上报 `no such table: accounts`，本地因为"开发库恰好有那张表"而绿 |
+| 2（devlog/202） | 本批新写的 `test_api_auth` 打 `/healthz`（首次访问会写 `DATA_DIR/.first-run-done`） | 仓库根多一个未跟踪文件，且**吃掉开发态首启那一态**（之后手动起后端，登录浮窗不再弹） |
+
+**判据**：新增用例只要**打真应用**（`TestClient(app)`）或**起后台任务**，就问一句「**它读写的 `DATA_DIR` 是谁的？**」漏网的三条路是**后台任务 / 落盘副作用 / 模块级单例**。修法统一放 `tests/conftest.py`（每进程独立测试库 + `/healthz` 标记重定向），别在每个用例文件里各写一遍。守卫用例：`tests/test_api_auth.py::test_healthz_writes_its_first_run_marker_outside_the_real_data_dir`。
+
 ---
 
 ## 七、并行开发：**本仓不采用**（2026-09-24 定）＋ 两条通用教训
