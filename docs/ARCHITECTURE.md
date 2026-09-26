@@ -29,11 +29,14 @@ flowchart TB
 
   subgraph S["Python sidecar（backend_main.py）"]
     BM["资源引导 vtubers.csv<br/>父进程看门狗<br/>uvicorn Server API（bind 后就绪）"]
-    BM --> APP["FastAPI app（app/main.py）<br/>lifespan：迁移 → 调度器 → auth 维护"]
+    BM --> APP["FastAPI app（app/main.py）<br/>lifespan：迁移 → scheduler.runtime.start() → auth 维护"]
     APP --> HTTP["HTTP API 事件循环<br/>vtuber / auth / img-proxy / 手动抓取 / BackgroundTasks"]
-    APP --> T0["T0 线程：直播轮询 60s<br/>批量接口，不占锁"]
-    APP --> TIER["综合档调度线程：动态流 + 账号流<br/>asyncio.run 同档并发"]
-    APP --> APS["APScheduler 线程：T4 外部数据<br/>每日 3AM / 每周"]
+    RT["SchedulerRuntime<br/>stop_event + 线程句柄 + APScheduler<br/>（start/stop 幂等，退出时 join）"]
+    APP --> RT
+    RT --> T0["T0 线程：直播轮询 60s<br/>批量接口，不占锁"]
+    RT --> TIER["综合档调度线程：动态流 + 账号流<br/>asyncio.run 同档并发"]
+    RT --> APS["APScheduler 线程：T4 外部数据<br/>每日 3AM / 每周"]
+    RT --> EXT["startup-external 线程<br/>启动补抓（每 V 主账号）"]
     APP --> AUTH["auth 维护协程<br/>B 站 cookie 续期"]
   end
 
@@ -49,7 +52,13 @@ flowchart TB
 | T0 直播状态 | 独立守护线程 | 每 60s ±15s 批量回写 `live_*` 字段 | **不占锁**（与一切任务并行） |
 | 综合档 | 调度线程 | 动态流（预算自适应，见 §3.1）+ 账号流（数据到期，约 24h）**同档并发** | 两把锁 |
 | T4 外部数据 | APScheduler 线程 | zeroroku / danmakus cron | 手动任务在跑则**排队等待**（v0.9.3，不再跳过） |
+| 启动外部补抓 | 独立守护线程（`startup-external`） | 每 V 主账号的第三方数据，<24h 跳过 | 与综合档互斥（`_external_running`），不占锁 |
 | auth 维护 | 事件循环协程 | B 站 cookie 心跳/续期、微博登录态探测 | — |
+
+**这五条都由 `scheduler.runtime`（`SchedulerRuntime`）起与停**（R1，devlog/211）：
+各自持 `threading.Event` + 线程句柄 + APScheduler + **在飞事件循环登记表**，
+`start()` / `stop()` 幂等；线程里用 `wait()` 代 `time.sleep`、`run()` 代 `asyncio.run`
+（后者让"停止"能取消在飞轮次）。详见 §6 第 31 条。
 
 **冷启动优化**：`app/routers/vtuber.py` 不直接 import `scheduler`（依赖链重：apscheduler /
 tenacity / httpx / fetcher），经 `_sched()` 缓存包装首次调用才导入；`main.py` 的 lifespan
@@ -814,6 +823,22 @@ flowchart LR
       猜错就是 devlog/175 那种"IPC 通道坏掉"。主窗独有的两项（updater / process.restart）
       拆去了 `main.json`（主窗是静态 label，命中确定）；`shell:allow-open` 与
       `dialog:allow-open` 直接删掉。
+31. **调度线程只许由 `SchedulerRuntime` 起停，且睡在 `wait()` 上**（R1，devlog/211）：
+    `scheduler.runtime` 是进程级唯一实例，`start()` / `stop()` **幂等**；T0 直播轮询、
+    综合档、启动外部补抓、APScheduler 全由它持有句柄。规矩三条：
+    - **守护线程里不许 `time.sleep`**：一律 `rt.wait(seconds)`（返回 True = 收到停止请求，
+      立刻返回）。改造前是 5 处不可中断睡眠，其中综合档是 `while True` + `time.sleep(10)`
+      ⇒ **没有任何停止手段**，`_wait_for_manual_tasks` 最坏睡 1800s（用户看到的形态：
+      退出应用后后台还在打接口）。
+    - **守护线程里不许裸 `asyncio.run`**：一律 `rt.run(coro)` —— 它把新建的事件循环
+      **登记在册**，`stop()` 才能取消**在飞轮次**（否则 join 要等一次网络往返跑完）。
+    - **停止顺序固定**：不接新任务（`accepting()` → False）→ 置停止事件 → 取消在飞轮次 →
+      join（**超时告警**，daemon 只作兜底）→ 关 APScheduler；`main.py` 里**先 stop 再关共享
+      HTTP 客户端**（反过来，被取消的轮次会在一个已关闭的 client 上收尾）。
+    - ⚠️ 两个坑各踩过一次，都有用例钉着：① **置位与登记共用 `_loops_lock`** —— 否则
+      线程可以在"置位之后、登记之前"把轮次跑起来，那一轮永远等不到取消（症状 = `stop()`
+      白等到 join 超时）；② **停止事件是"本代正在停"，不是"进程永远完了"** ——
+      没启动过不广播、全停干净要收回（第一版留成永久状态，毒到了与调度无关的外部批次用例）。
 
 ---
 

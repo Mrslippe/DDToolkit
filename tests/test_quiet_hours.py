@@ -12,6 +12,7 @@
 关闭时行为**完全不变** · 与 R28 空闲档位取更保守的那个 · **T0 一行都没碰**。
 """
 from datetime import datetime, timedelta
+import inspect
 
 import pytest
 from sqlalchemy import create_engine
@@ -133,14 +134,38 @@ def test_quiet_and_idle_floors_take_the_more_conservative(db, monkeypatch):
     assert sch._dynamics_next_due(db, since=since) - since >= 1800 - 1e-3
 
 
+def _code_only(src: str) -> str:
+    """去掉文档串与注释，只留代码（"判据的举例不许命中判据自己"）。
+
+    实现用 `ast`：先删函数/类的首表达式文档串（模块级同理），再 `unparse` 回来 ——
+    `unparse` 天然不产出注释，比正则逐行剔更可靠（多行文档串、行内注释都能处理）。
+    """
+    import ast
+    import textwrap
+
+    tree = ast.parse(textwrap.dedent(src))
+    holders = (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+    for node in ast.walk(tree):
+        if not isinstance(node, holders) or not node.body:
+            continue
+        first = node.body[0]
+        if (isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant)
+                and isinstance(first.value.value, str)):
+            node.body.pop(0)
+    return ast.unparse(tree)
+
+
 def test_live_poller_is_not_slowed_by_quiet_hours():
     """**用户口径的直接护栏**：静默时段只降动态流，T0 一行都没碰。
 
     做法是源码级检查：`_live_poller_loop` 的函数体里不许出现 quiet 相关标识 ——
     否则某天有人"顺手"把开播轮询也降下来，直播日历的场次时间就会悄悄变粗。
-    """
-    import inspect
 
+    ⚠️ 扫之前**必须先去掉文档串与注释**（见 `_code_only`）：否则"这条判据的举例"
+    自己就会命中判据 —— 本仓已踩过 4 次，第五次就是 2026-09-26 批次 6 在
+    `_live_poller_loop` 的文档串里写了本用例的文件名。
+    """
     src = inspect.getsource(sch._live_poller_loop)
-    assert "quiet" not in src.lower(), "T0 直播轮询不该受静默时段影响（日历场次时间会变粗）"
-    assert "LIVE_POLL_SECONDS" in src and "LIVE_POLL_JITTER_SECONDS" in src
+    code = _code_only(src)
+    assert "quiet" not in code.lower(), "T0 直播轮询不该受静默时段影响（日历场次时间会变粗）"
+    assert "LIVE_POLL_SECONDS" in code and "LIVE_POLL_JITTER_SECONDS" in code

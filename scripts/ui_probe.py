@@ -3315,7 +3315,8 @@ def main() -> int:
                 # 它们量的是"没有任务在跑时，顶栏状态岛应该长什么样"。
                 #
                 # 而探针跑在**真机**上，真机**可能真的有抓取任务在跑**。本项目实测撞到
-                # `app/main.py` 的**启动外部补抓**（`start_external_catchup`）：探针自己起的
+                # `app/main.py` 的**启动外部补抓**（`scheduler._startup_catchup_loop`，R1 起
+                # 由 `scheduler.runtime` 起）：探针自己起的
                 # 后端一启动就会同步 N 个主账号的第三方数据，于是：
                 #   · `lit=true` ⇒ 胶囊亮着、`data-idle-pool` / `data-idle-size` **根本不挂**
                 #     （StatusIsland L213 的 `lit ? undefined : …`）

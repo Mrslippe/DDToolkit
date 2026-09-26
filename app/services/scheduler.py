@@ -2,6 +2,7 @@ import asyncio
 import json as _json
 from datetime import datetime, timedelta, timezone
 import logging
+import math
 import random
 import threading
 import time
@@ -902,35 +903,272 @@ async def async_fetch_vtuber(vtuber_id: int) -> FetchResult:
     return await async_fetch_accounts(ids, label=f"VTuber#{vtuber_id}", fast=True)
 
 
-def start_scheduler():
-    # R27：先把上次运行留下的风控冷却读回来（**重启不遗忘**）。放在最前 ——
-    # 这样紧接着启动的自动档第一次排期就已经看得见冷却，不会先满速打一轮。
-    try:
-        _load_rate_limit_state()
-    except Exception as e:                      # 读不回来只是少一层保护，不该拦启动
-        logger.warning(f"风控冷却状态读取失败（按无冷却启动）: {type(e).__name__}: {e}")
-    scheduler = BackgroundScheduler()
-    # v0.6.1：账号定时任务（5min 全量）已由「时效分层调度」T1（主账号 5min）
-    # + T3a（全量 6h）替代（start_tier_scheduler），此处只保留外部数据批次 cron。
-    # 外部第三方数据源（P4）：日/周批次低频采集；抓取任务进行中则跳过本轮
-    if settings.EXTERNAL_ENABLED:
-        scheduler.add_job(
-            run_external_daily_jobs,
-            CronTrigger(hour=settings.EXTERNAL_RUN_HOUR, minute=0),
-            id="external_daily",
-            replace_existing=True,
-            max_instances=1,
-        )
-        scheduler.add_job(
-            run_external_weekly_jobs,
-            CronTrigger(day_of_week="mon", hour=settings.EXTERNAL_RUN_HOUR, minute=30),
-            id="external_weekly",
-            replace_existing=True,
-            max_instances=1,
-        )
-    scheduler.start()
-    logger.info("APScheduler 已启动（外部数据批次 cron）。")
-    return scheduler
+# ── 调度生命周期（R1，批次 6，devlog/211）───────────────────────────────
+
+STOP_JOIN_TIMEOUT = 15.0          # stop() 默认最多等这么久（daemon 只作兜底）
+
+
+def _cancel_every_task(loop: asyncio.AbstractEventLoop) -> None:
+    """在**该循环自己的线程里**取消它的全部任务（`call_soon_threadsafe` 的回调）。"""
+    for task in asyncio.all_tasks(loop):
+        task.cancel()
+
+
+def _discard_coro(coro) -> None:
+    """没跑成的协程要显式关掉，否则解释器会甩 "coroutine was never awaited" 警告。"""
+    close = getattr(coro, "close", None)
+    if callable(close):
+        close()
+
+
+class SchedulerRuntime:
+    """调度生命周期：谁在跑、怎么停、能不能再起（R1，批次 6）。
+
+    为什么要有这个对象（改造前的事实，见 `ARCHITECTURE-IMPROVEMENT-EXECUTION.md` §2.10）：
+    三个守护线程**没有任何停止手段** —— 综合档是 `while True` + `time.sleep(10)`，
+    `_wait_for_manual_tasks` 最坏 `sleep` 1800s；而四个 `start_*()` 每次调用
+    **无条件再起一份** ⇒ 连续两次 lifespan 就是两套线程各跑各的轮次（抢同一把抓取锁）。
+
+    **stop 顺序**（每一步都有它的理由）：
+    ① 不接新任务（`accepting()` → False：APScheduler 的 tick 与心跳先问这句）
+    → ② 置停止事件（`wait()` 立刻返回 ⇒ 睡着的线程马上醒）
+    → ③ 取消在飞轮次（`run()` 登记的循环被 cancel，不等一次网络往返跑完）
+    → ④ join（**超时告警**：daemon 只是兜底，静默留下一个还在抓取的线程是本仓最忌讳的形态）
+    → ⑤ 关 APScheduler。
+
+    约定：
+    - **只许同步原语**（`threading.Event` / `Lock`）：本对象被多个线程与多个事件循环共用，
+      持有 `asyncio.*` 原语必然踩 §6 第 15 条那个坑（`asyncio.Lock` 首次 await 就绑死循环）；
+    - `start()` / `stop()` **幂等**；`start()` 会开**新一代**停止事件，
+      所以"上一次的停止请求"不会漏到下一次启动（start-stop-start 可用）；
+    - 线程用 `wait()` 替 `time.sleep()`、用 `run()` 替 `asyncio.run()` —— 这两个替身
+      就是"可停止"的全部实现，判据见 `tests/test_scheduler_lifecycle.py`。
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._stop = threading.Event()
+        self._accepting = False
+        self._started = False
+        self._threads: dict[str, threading.Thread] = {}
+        self._aps: BackgroundScheduler | None = None
+        self._loops: set[asyncio.AbstractEventLoop] = set()
+        self._loops_lock = threading.Lock()
+        self._stragglers: tuple[str, ...] = ()
+
+    # ── 查询（测试 / 诊断用） ──────────────────────────────────────────
+
+    @property
+    def started(self) -> bool:
+        with self._lock:
+            return self._started
+
+    def accepting(self) -> bool:
+        """还接新任务吗？`stop()` 第一件事就是置 False。"""
+        with self._lock:
+            return self._accepting
+
+    def stop_requested(self) -> bool:
+        return self._stop.is_set()
+
+    @property
+    def threads(self) -> dict[str, threading.Thread]:
+        """**本代**线程句柄（stop 之后清空；没停下的留在 `stragglers` 里）。"""
+        with self._lock:
+            return dict(self._threads)
+
+    def alive_threads(self) -> tuple[str, ...]:
+        return tuple(sorted(n for n, t in self.threads.items() if t.is_alive()))
+
+    @property
+    def stragglers(self) -> tuple[str, ...]:
+        """上一次 `stop()` 里 join 超时的线程名（已告警，见 `stop()`）。"""
+        return self._stragglers
+
+    @property
+    def apscheduler(self) -> BackgroundScheduler | None:
+        return self._aps
+
+    # ── 生命周期 ───────────────────────────────────────────────────────
+
+    def start(self) -> "SchedulerRuntime":
+        """起 APScheduler + 三个守护线程；**幂等**（已在跑就原样返回）。"""
+        with self._lock:
+            if self._started:
+                logger.info("调度运行时已在运行 —— start() 幂等忽略。")
+                return self
+            if self._stragglers:
+                logger.warning(
+                    f"上一次停止有线程超时未退出（{'、'.join(self._stragglers)}）—— "
+                    "本次启动会再起一份，请查它们卡在哪一次网络 / 数据库调用。"
+                )
+            self._stop = threading.Event()      # 新一代：上一代的停止请求不许漏过来
+            self._accepting = True
+            self._stragglers = ()
+            self._started = True
+            try:
+                # R27：先把上次运行留下的风控冷却读回来（**重启不遗忘**）。必须早于线程启动 ——
+                # 这样紧接着跑起来的自动档第一次排期就已经看得见冷却，不会先满速打一轮。
+                try:
+                    _load_rate_limit_state()
+                except Exception as e:              # 读不回来只是少一层保护，不该拦启动
+                    logger.warning(f"风控冷却状态读取失败（按无冷却启动）: {type(e).__name__}: {e}")
+                self._aps = self._build_apscheduler()
+                for name, target in (("t0-live-poller", _live_poller_loop),
+                                     ("tier-scheduler", _tier_loop),
+                                     ("startup-external", _startup_catchup_loop)):
+                    thread = threading.Thread(target=target, args=(self,),
+                                              name=name, daemon=True)
+                    self._threads[name] = thread
+                    thread.start()
+            except Exception:
+                # 起了一半失败：把已起的收干净，绝不留下"半启动"的假象
+                self._started = False
+                self._accepting = False
+                self._stop.set()
+                for thread in self._threads.values():
+                    thread.join(timeout=1.0)
+                self._threads.clear()
+                raise
+            logger.info(f"调度运行时已启动：{'、'.join(self._threads)}")
+        return self
+
+    def stop(self, timeout: float = STOP_JOIN_TIMEOUT) -> bool:
+        """停调度（顺序见类文档）。幂等：重复调用、没启动过都安全。
+
+        返回 False = 有线程没能在 `timeout` 内退出（**已告警**）。
+        """
+        with self._lock:
+            was_started = self._started
+            self._started = False
+            self._accepting = False                      # ①
+            threads = dict(self._threads)
+            self._threads.clear()
+            aps, self._aps = self._aps, None
+        if not was_started and not threads:
+            # 没启动过：没有线程要停，也**不广播**停止请求 ——
+            # 停止事件是"本代正在停"，不是"这个进程永远完了"。给一个从未启动的运行
+            # 置位会留下**假的停止状态**，而 `_wait_for_manual_tasks()` / 外部批次
+            # 都会读它（实测：这一条毒到了后面两条外部批次用例）。
+            return True
+        # ②+③ 必须在**同一把锁**里做：先置停止事件、再取当前在册的循环。
+        # 否则有竞态 —— 线程可能在"置位之后、登记之前"把轮次跑起来，
+        # 那一轮就永远等不到取消（实测症状：stop() 白等到 join 超时才返回）。
+        with self._loops_lock:
+            self._stop.set()
+            loops = list(self._loops)
+        cancelled = self._cancel_rounds(loops)
+        deadline = time.monotonic() + max(0.0, timeout)
+        stragglers: list[str] = []
+        for name, thread in threads.items():             # ④
+            thread.join(max(0.0, deadline - time.monotonic()))
+            if thread.is_alive():
+                stragglers.append(name)
+        self._stragglers = tuple(stragglers)
+        if stragglers:
+            logger.warning(
+                f"调度线程未在 {timeout:.0f}s 内退出：{'、'.join(stragglers)} —— "
+                "daemon 只是兜底，请查它卡在哪一次网络 / 数据库调用。"
+            )
+        elif threads:
+            logger.info(f"调度运行时已停止（{len(threads)} 个线程已退出，"
+                        f"取消在飞轮次 {cancelled} 个）。")
+        if not stragglers:
+            # 全部按序停下 ⇒ **收回**停止事件。它不是"这个进程永远完了"，而是
+            # "本代正在停"；留成永久状态会让之后任何 `wait()` / `_wait_for_manual_tasks()`
+            # 立刻返回"已停止"（实测：这条毒到了后面两条外部批次用例）。
+            # 有 straggler 时**必须留着**，好让那些线程在下一个检查点退出。
+            self._stop.clear()
+        if aps is not None:                              # ⑤
+            try:
+                aps.shutdown(wait=False)
+                logger.info("APScheduler 已关闭。")
+            except Exception as e:
+                logger.warning(f"APScheduler 关闭异常: {type(e).__name__}: {e}")
+        return not stragglers
+
+    # ── 给线程用的两个替身 ─────────────────────────────────────────────
+
+    def wait(self, seconds: float | None) -> bool:
+        """**替代 `time.sleep`**：返回 True = 收到停止请求，调用方应立即返回。
+
+        `None` / 非有限值（如 `_tier_delay` 对"禁用档"返回的 `inf`）= 一直等到停止。
+        """
+        if seconds is None or not math.isfinite(seconds):
+            return self._stop.wait()
+        return self._stop.wait(max(0.0, seconds))
+
+    def run(self, coro):
+        """**替代 `asyncio.run`**：本线程新建事件循环跑协程，并把循环**登记在册**
+        ⇒ `stop()` 能取消在飞轮次（而不是等一次网络往返）。
+
+        停止后不再启动新轮次：**登记与置位共用 `_loops_lock`**，
+        所以"停止时正好要起一轮"这个竞态只有两种结果 —— 要么它被取消，要么它压根不跑。
+        """
+        if self._stop.is_set():
+            _discard_coro(coro)
+            raise asyncio.CancelledError("调度器正在停止：本轮不再启动")
+        return asyncio.run(self._tracked(coro))
+
+    async def _tracked(self, coro):
+        loop = asyncio.get_running_loop()
+        with self._loops_lock:
+            if self._stop.is_set():         # 停止请求先到：这一轮不许跑
+                _discard_coro(coro)
+                raise asyncio.CancelledError("调度器正在停止：本轮不再启动")
+            self._loops.add(loop)
+        try:
+            return await coro
+        finally:
+            with self._loops_lock:
+                self._loops.discard(loop)
+
+    def _cancel_rounds(self, loops: list[asyncio.AbstractEventLoop]) -> int:
+        done = 0
+        for loop in loops:
+            try:
+                loop.call_soon_threadsafe(_cancel_every_task, loop)
+                done += 1
+            except RuntimeError:        # 循环已关（轮次刚好跑完）：正常竞态，不算失败
+                pass
+        return done
+
+    def _build_apscheduler(self) -> BackgroundScheduler:
+        scheduler = BackgroundScheduler()
+        # v0.6.1：账号定时任务（5min 全量）已由「时效分层调度」的综合档线程替代，
+        # 此处只保留外部第三方数据源的日 / 周批次 cron。
+        if settings.EXTERNAL_ENABLED:
+            scheduler.add_job(
+                run_external_daily_jobs,
+                CronTrigger(hour=settings.EXTERNAL_RUN_HOUR, minute=0),
+                id="external_daily",
+                replace_existing=True,
+                max_instances=1,
+            )
+            scheduler.add_job(
+                run_external_weekly_jobs,
+                CronTrigger(day_of_week="mon", hour=settings.EXTERNAL_RUN_HOUR, minute=30),
+                id="external_weekly",
+                replace_existing=True,
+                max_instances=1,
+            )
+        scheduler.start()
+        logger.info("APScheduler 已启动（外部数据批次 cron）。")
+        return scheduler
+
+
+#: 进程级唯一实例（`app/main.py` 的 lifespan 起它、停它）
+runtime = SchedulerRuntime()
+
+
+def start_scheduler() -> BackgroundScheduler | None:
+    """启动入口（R1 起唯一的一个）：起运行时，返回 APScheduler 实例。
+
+    保留这个名字是给脚本 / 测试用的（"起调度"这件事的心理入口），
+    但它现在**只有一份**线程 —— 重复调用是幂等的。
+    """
+    runtime.start()
+    return runtime.apscheduler
 
 
 def _wait_for_manual_tasks(timeout_seconds: float = 1800.0,
@@ -940,13 +1178,21 @@ def _wait_for_manual_tasks(timeout_seconds: float = 1800.0,
     用户 2026-09-09 反馈：原来直接 return 跳过 → 当天这批数据就丢了。
     现在改为排队等待（默认最多 30 分钟），手动任务一结束就继续执行。
     返回 True=可以执行；False=超时放弃本轮（记日志）。
+
+    ⚠️ R1（devlog/211）：这一支也要进停止语义 —— 否则"关闭应用"最坏要等半小时。
+    等待走 `runtime.wait()`（可叫停），被叫停时返回 False（本轮放弃，绝不照跑）。
     """
+    if runtime.stop_requested():
+        logger.info("外部数据任务跳过：调度器正在停止")
+        return False
     if not any_fetch_running():
         return True
     logger.info("外部数据任务等待手动抓取结束...")
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
-        time.sleep(poll_seconds)
+        if runtime.wait(poll_seconds):
+            logger.info("外部数据任务被叫停（调度器正在停止），本轮放弃")
+            return False
         if not any_fetch_running():
             logger.info("手动抓取已结束，外部数据任务继续执行")
             return True
@@ -957,13 +1203,18 @@ def _wait_for_manual_tasks(timeout_seconds: float = 1800.0,
 def run_external_daily_jobs():
     """外部数据日任务（P4）：粉丝历史增量 + 直播礼物日聚合。"""
     global _external_running
+    if not runtime.accepting():          # R1：停止中（或从未启动）不再接新批次
+        logger.info("外部数据日批次跳过：调度器不在接单状态")
+        return
     if not _wait_for_manual_tasks():
         return
     _external_running = True
     external_task_started("daily", "第三方数据日批次")
     try:
-        results = asyncio.run(run_external_interval("daily"))
+        results = runtime.run(run_external_interval("daily"))
         logger.info(f"外部数据日任务完成: {len(results)} 个任务")
+    except asyncio.CancelledError:       # R1：停止时在飞批次被取消
+        logger.info("外部数据日任务被取消（调度器正在停止）")
     finally:
         _external_running = False
         external_task_finished("daily")
@@ -972,22 +1223,21 @@ def run_external_daily_jobs():
 def run_external_weekly_jobs():
     """外部数据周任务（P4）：VTuber 索引整表刷新（企划/公会）。"""
     global _external_running
+    if not runtime.accepting():          # R1：同上
+        logger.info("外部数据周批次跳过：调度器不在接单状态")
+        return
     if not _wait_for_manual_tasks():
         return
     _external_running = True
     external_task_started("weekly", "第三方数据周批次")
     try:
-        results = asyncio.run(run_external_interval("weekly"))
+        results = runtime.run(run_external_interval("weekly"))
         logger.info(f"外部数据周任务完成: {len(results)} 个任务")
+    except asyncio.CancelledError:       # R1：停止时在飞批次被取消
+        logger.info("外部数据周任务被取消（调度器正在停止）")
     finally:
         _external_running = False
         external_task_finished("weekly")
-
-
-def shutdown_scheduler(scheduler: BackgroundScheduler):
-    if scheduler:
-        scheduler.shutdown(wait=False)
-        logger.info("APScheduler 已安全关闭。")
 
 
 # ── 帖子抓取锁（全局单飞） ─────────────────────────────────────────────
@@ -1086,12 +1336,12 @@ def _drain_pending_fetches() -> None:
     logger.info(f"补抓排队账号：账号信息 {len(accounts)} 个，首屏内容 {len(first)} 个")
     if accounts:
         try:
-            asyncio.run(async_fetch_accounts(accounts, label="排队账号", fast=True))
+            runtime.run(async_fetch_accounts(accounts, label="排队账号", fast=True))
         except Exception as e:
             logger.error(f"补抓排队账号失败: {e}", exc_info=True)
     for aid in first:
         try:
-            asyncio.run(async_fetch_first_screen(aid))
+            runtime.run(async_fetch_first_screen(aid))
         except Exception as e:
             logger.error(f"补抓排队账号首屏失败: {e}", exc_info=True)
 
@@ -3035,19 +3285,23 @@ async def run_startup_external_catchup() -> dict:
             db.close()
 
 
-def start_external_catchup() -> None:
-    """启动入口（main.py lifespan 调用）：独立守护线程，不拖住综合档心跳。
+def _startup_catchup_loop(owner: "SchedulerRuntime | None" = None) -> None:
+    """启动外部补抓线程入口（R1 起由 `SchedulerRuntime` 起：可停止、只起一份）。
 
-    实测 10 个账号 × 3 源串行约 30~60s；跑在独立线程里，`_external_running`
+    实测 10 个账号 × 3 源串行约 30~60s；跑在自己的线程里，`_external_running`
     期间综合档跳过本轮，但用户的其它操作完全不受影响。
     """
-    def _run() -> None:
-        try:
-            asyncio.run(run_startup_external_catchup())
-        except Exception as e:
-            logger.error(f"启动外部补抓线程异常: {e}", exc_info=True)
-
-    threading.Thread(target=_run, name="startup-external", daemon=True).start()
+    rt = owner or runtime
+    try:
+        if not rt.accepting():
+            return
+        rt.run(run_startup_external_catchup())
+    except asyncio.CancelledError:
+        logger.info("启动外部补抓被取消（调度器正在停止）")
+    except Exception as e:
+        logger.error(f"启动外部补抓线程异常: {e}", exc_info=True)
+    finally:
+        logger.info("启动外部补抓线程已退出")
 
 
 def _tier_delay(interval_seconds: float, jitter_seconds: float) -> float:
@@ -3252,29 +3506,35 @@ def _next_dynamics_cost(db: Session) -> dict[str, int]:
     return {pf: len(q) for pf, q in lanes.items()}
 
 
-def _live_poller_loop() -> None:
+def _live_poller_loop(owner: "SchedulerRuntime | None" = None) -> None:
     """T0 直播状态独立守护线程：首轮于 STARTUP_CHAIN_DELAY 后立即执行，
-    之后按 LIVE_POLL_SECONDS ± jitter 循环；不占锁/状态通道/结果汇总。"""
+    之后按 LIVE_POLL_SECONDS ± jitter 循环；不占锁/状态通道/结果汇总。
+
+    R1（devlog/211）：两处等待都走 `rt.wait()`（可叫停），在飞轮次由 `rt.run()`
+    登记 ⇒ `stop()` 能立刻取消。⚠️ 本函数**不许**受静默时段影响（见 test_quiet_hours）。
+    """
+    rt = owner or runtime
     try:
-        time.sleep(settings.STARTUP_CHAIN_DELAY)
-        while settings.LIVE_POLL_SECONDS > 0:
+        if rt.wait(settings.STARTUP_CHAIN_DELAY):
+            return
+        while settings.LIVE_POLL_SECONDS > 0 and not rt.stop_requested():
             try:
                 db = SessionLocal()
                 try:
-                    asyncio.run(live_sweep_core(db))
+                    rt.run(live_sweep_core(db))
                 finally:
                     db.close()
             except Exception as e:
                 logger.error(f"T0 直播轮询异常: {e}", exc_info=True)
-            time.sleep(_tier_delay(settings.LIVE_POLL_SECONDS, settings.LIVE_POLL_JITTER_SECONDS))
-        logger.info("T0 直播轮询已关闭（LIVE_POLL_SECONDS<=0）")
+            if rt.wait(_tier_delay(settings.LIVE_POLL_SECONDS, settings.LIVE_POLL_JITTER_SECONDS)):
+                break
+        logger.info("T0 直播轮询已关闭（停止请求 / LIVE_POLL_SECONDS<=0）")
+    except asyncio.CancelledError:
+        logger.info("T0 直播轮询的在飞轮次已被取消（调度器正在停止）")
     except Exception as e:
         logger.error(f"T0 直播轮询线程退出: {e}", exc_info=True)
-
-
-def start_live_poller() -> None:
-    """T0 启动入口（main.py lifespan 调用）：独立守护线程，与一切任务并行。"""
-    threading.Thread(target=_live_poller_loop, name="t0-live-poller", daemon=True).start()
+    finally:
+        logger.info("T0 直播轮询线程已退出。")
 
 
 # ── 动态流空闲退避（R28，devlog/127）────────────────────────────────────
@@ -3471,7 +3731,25 @@ def _dynamics_due_or_retry(db: Session, *, why: str,
         return fallback
 
 
-def _tier_loop() -> None:
+def _tier_loop(owner: "SchedulerRuntime | None" = None) -> None:
+    """综合档线程入口（R1）：把"取消 / 未捕获异常 / 退出留痕"包在业务循环外面。
+
+    改造前 `_tier_loop` 就是线程函数本体，`asyncio.CancelledError`（停止时取消在飞轮次）
+    会直接穿出线程 —— 那是 BaseException，`except Exception` 拦不住，线程会以
+    "Exception in thread" 的噪声形态死掉。现在入口只负责三件事，业务在 `_tier_loop_body`。
+    """
+    rt = owner or runtime
+    try:
+        _tier_loop_body(rt)
+    except asyncio.CancelledError:
+        logger.info("综合档在飞轮次已被取消（调度器正在停止）")
+    except Exception as e:
+        logger.error(f"综合档线程退出: {e}", exc_info=True)
+    finally:
+        logger.info("综合档线程已退出。")
+
+
+def _tier_loop_body(rt: "SchedulerRuntime") -> None:
     """综合档守护线程（v0.9.3：原 T1/T2/T3a 合并为一个档；v0.9.8 自适应动态流）。
 
     - 启动链：延迟 `STARTUP_CHAIN_DELAY` 后跑一次综合档——动态流必跑；账号流按
@@ -3481,6 +3759,9 @@ def _tier_loop() -> None:
       动态流按 `_dynamics_next_due()` 到期触发（预算驱动，见上），账号流按数据到期触发，
       两者在同一事件循环里**并发执行**（各自锁），墙钟 ≈ max(两条流)；
     - 周期带抖动；interval<=0 的档位禁用。
+
+    R1（devlog/211）：两处等待都走 `rt.wait()`（可叫停）、每轮 `rt.run()` 登记循环
+    （停止时可取消在飞轮次），循环条件也看停止请求。
     """
     # R27 兜底：正常情况下 `start_scheduler()`（lifespan 里先于本线程启动）已经把风控冷却
     # 读回来了；这里再兜一次 —— 顺序若有变（或测试里直接起线程），也不会"先满速打一轮"。
@@ -3490,10 +3771,11 @@ def _tier_loop() -> None:
         except Exception as e:
             logger.warning(f"风控冷却状态读取失败（按无冷却启动）: {type(e).__name__}: {e}")
     try:
-        time.sleep(settings.STARTUP_CHAIN_DELAY)
+        if rt.wait(settings.STARTUP_CHAIN_DELAY):
+            return
         if settings.STARTUP_CHAIN_ENABLED:
             logger.info("启动链 · 综合档（动态流 + 账号流按需）")
-            asyncio.run(_run_combined_tier(dynamics=True))
+            rt.run(_run_combined_tier(dynamics=True))
     except Exception as e:
         logger.error(f"启动链异常: {e}", exc_info=True)
 
@@ -3511,9 +3793,10 @@ def _tier_loop() -> None:
     # （无兜底：跑综合档那一小段虽在 try 内，但轮末重算 due / 心跳里的
     #  `_drain_pending_fetches()` / `_next_dynamics_cost()` / 备份恢复路径都在外面）。
     # 调度线程死了不会自我重启，所以这里必须「记日志 + 重排下一轮 + 继续跑」。
-    while True:
+    while not rt.stop_requested():
         try:
-            time.sleep(max(1, settings.TIER_TICK_SECONDS))
+            if rt.wait(max(1, settings.TIER_TICK_SECONDS)):
+                break
             # 排队兜底（v0.9.4）：收录/加账号时抢锁失败的任务在此优先补抓
             if not (_fetch_running or _post_fetch_running or _external_running):
                 _drain_pending_fetches()
@@ -3538,8 +3821,8 @@ def _tier_loop() -> None:
             logger.info(f"综合档（周期）：动态流={run_dynamics} 账号流={run_account}")
             # R6：记下**轮开始**时刻 —— 下一轮到期要按"周期下限"从这一刻算（见 _dynamics_next_due）
             round_start = time.monotonic() if run_dynamics else None
-            result = asyncio.run(_run_combined_tier(dynamics=run_dynamics,
-                                                    account=run_account))
+            result = rt.run(_run_combined_tier(dynamics=run_dynamics,
+                                               account=run_account))
             if run_dynamics:
                 actual = ((result or {}).get("dynamics") or {}).get("requests") or {}
                 extra = {pf: max(0, n - next_cost.get(pf, 0)) for pf, n in actual.items()}
@@ -3560,8 +3843,3 @@ def _tier_loop() -> None:
             finally:
                 db.close()
             round_start = None
-
-
-def start_tier_scheduler() -> None:
-    """分层调度入口（main.py lifespan 调用）：守护线程；启动链语义并入首轮。"""
-    threading.Thread(target=_tier_loop, name="tier-scheduler", daemon=True).start()

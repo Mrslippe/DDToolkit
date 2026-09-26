@@ -319,7 +319,7 @@ def d3():
         ("core/logging_setup.setup_logging() — 双通道日志", ["TimedRotating(app.log, 按天·留 7 份) + StreamHandler"], "#FDF2E9", "#E67E22", "#9C4A0B"),
         ("Base.metadata.create_all(engine)", ["按 ORM 模型自动建表（与 Alembic 双轨并存）"], "#EAF2FB", "#2E86C1", "#1B4F8A"),
         ("import_from_file() — CSV 导入", ["读 vtubers.csv · flag=1 行 · 按 (platform,uid) 去重"], "#EAF2FB", "#2E86C1", "#1B4F8A"),
-        ("start_scheduler() — 定时任务", ["APScheduler BackgroundScheduler · 每 5 分钟 ±30s · max_instances=1"], "#EAF7EF", "#27AE60", "#1E6B3C"),
+        ("SchedulerRuntime.start() — 调度运行时", ["APScheduler 外部数据 cron + T0 / 综合档 / 启动补抓三个守护线程（幂等）"], "#EAF7EF", "#27AE60", "#1E6B3C"),
         ("auth_task = create_task(run_maintenance())", ["B 站登录态维护循环 · 每 30 分钟一次（后台 asyncio 任务）"], "#EAF7EF", "#27AE60", "#1E6B3C"),
         ("新增 VTuber > 0 ？", ["新名单 → 5 秒后自动触发一次全量抓取"], "#FEF9E7", "#B7950B", "#7D6608"),
         ("yield — 服务就绪", ["Web 服务 + 定时抓取 + 认证循环三者并行"], "#F5EEF8", "#8E44AD", "#5B2C6F"),
@@ -337,7 +337,7 @@ def d3():
     steps2 = [
         ("收到关闭信号 → lifespan 恢复执行", None, "#FDF0EF", "#C0392B", "#7B241C"),
         ("auth_task.cancel() — 停止认证维护循环", None, "#FDF0EF", "#C0392B", "#7B241C"),
-        ("shutdown_scheduler() — 安全关闭 APScheduler", ["wait=False · 防止挂起任务阻塞退出"], "#FDF0EF", "#C0392B", "#7B241C"),
+        ("SchedulerRuntime.stop() — 停调度", ["不接新任务 → 叫醒线程 → 取消在飞轮次 → join → 关 APScheduler"], "#FDF0EF", "#C0392B", "#7B241C"),
         ("进程退出 · 数据库连接释放", None, "#FDF0EF", "#C0392B", "#7B241C"),
     ]
     for i, (t, lines, f, s, tc) in enumerate(steps2):

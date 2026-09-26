@@ -361,10 +361,7 @@ async def lifespan(app: FastAPI):
 
     # 延迟导入：apscheduler/tenacity/httpx/auth 不参与 app 构建期导入，
     # 让 uvicorn 尽可能早绑定端口（冷启动优化）
-    from app.services.scheduler import (
-        start_scheduler, shutdown_scheduler, start_live_poller, start_tier_scheduler,
-        start_external_catchup,
-    )
+    from app.services.scheduler import runtime as scheduler_runtime
     from app.services.auth import auth_manager
 
     _run_migrations()
@@ -392,7 +389,10 @@ async def lifespan(app: FastAPI):
     except Exception as e:      # 载入失败不能挡住启动：退回默认值并留痕
         logger.error(f"运行时设置载入失败（按默认值启动）: {type(e).__name__}: {e}")
 
-    scheduler = start_scheduler()
+    # 调度运行时（R1，devlog/211）：APScheduler（外部数据 cron）+ 三个守护线程
+    # （T0 直播轮询 / 综合档 / 启动外部补抓）**一次起齐、幂等**。
+    # 改造前这里是四个 `start_*()`，每次调用无条件再起一份 —— 连续两次 lifespan 就是两套线程。
+    scheduler_runtime.start()
     auth_task = asyncio.create_task(auth_manager.run_maintenance())
     # WBI 密钥预热（v0.9.4）：与 auth 心跳并行，让首次收录不必等一次 nav 往返
     wbi_task = asyncio.create_task(_warm_wbi())
@@ -402,11 +402,8 @@ async def lifespan(app: FastAPI):
     # 想要老行为的话，在调用点恢复 `asyncio.create_task(_warm_tokenizer())` 即可。
     # 时效分层调度（v0.6.1）：T0 直播状态独立线程（60s）+ T1/T2/T3a 分层轮询
     # （启动链语义并入 T1→T2 首轮；手动任务优先，仅 T0 与之并行）
-    start_live_poller()
-    start_tier_scheduler()
     # 启动外部补抓（v0.9.8，P9-4）：独立线程，每 V 主账号的第三方数据
     # （直播日历 / 粉丝趋势），<24h 内已跑过则跳过（时间戳存 app_meta）
-    start_external_catchup()
     _perf("调度器+auth 就绪")
 
     yield
@@ -418,8 +415,11 @@ async def lifespan(app: FastAPI):
             await task
         except asyncio.CancelledError:
             pass  # 正常取消，避免 CancelledError 噪音
+    # R1：**先停调度**（不接新任务 → 叫醒等待中的线程 → 取消在飞轮次 → join → 关 APScheduler），
+    # 再关共享的 HTTP 客户端 —— 反过来的话，被取消的轮次会在一个已经关掉的 client 上收尾。
+    # stop() 有 join 超时（默认 `scheduler.STOP_JOIN_TIMEOUT`），超时会告警而不是静默卡住退出。
+    scheduler_runtime.stop()
     await img_proxy.close_client()
-    shutdown_scheduler(scheduler)
 
 
 app = FastAPI(lifespan=lifespan)

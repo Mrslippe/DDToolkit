@@ -157,12 +157,16 @@
 
 调度细节：
 
-- `start_live_poller()`：T0 线程；首轮于 `STARTUP_CHAIN_DELAY` 后立即执行
-  （启动即最快刷新直播），之后循环轮询；`LIVE_POLL_SECONDS<=0` 关闭；
-- `start_tier_scheduler()`：综合档线程；启动后跑一次综合档（动态流必跑，账号流按
-  到期判定），之后心跳（`TIER_TICK_SECONDS=10s`）检查：手动抓取 / 外部批次在跑 →
-  本轮跳过；动态流到期或账号流到期 → `asyncio.run(_run_combined_tier(...))`，
-  两条流 `asyncio.gather` 并发；
+- `scheduler.runtime.start()`（R1，devlog/211）：**一次起齐**三条守护线程 + 外部数据 cron，
+  幂等；`stop()` 按"不接新任务 → 叫醒线程 → 取消在飞轮次 → join → 关 APScheduler"收尾
+  （不变量 = `ARCHITECTURE.md` §6 第 31 条）。三条线程各自的循环：
+  - `_live_poller_loop`（T0）：首轮于 `STARTUP_CHAIN_DELAY` 后立即执行
+    （启动即最快刷新直播），之后循环轮询；`LIVE_POLL_SECONDS<=0` 关闭；
+  - `_tier_loop`（综合档）：启动后跑一次综合档（动态流必跑，账号流按
+    到期判定），之后心跳（`TIER_TICK_SECONDS=10s`）检查：手动抓取 / 外部批次在跑 →
+    本轮跳过；动态流到期或账号流到期 → `rt.run(_run_combined_tier(...))`，
+    两条流 `asyncio.gather` 并发；
+  - `_startup_catchup_loop`（启动补抓）：一次性。
 - 并发粒度 = 平台（`_run_platform_rounds`）：每轮每个「就绪平台」各取 `per_platform`
   个元素并发执行，平台之间并行；**动态流 `per_platform=DYNAMICS_CONCURRENCY=3`**（R6），
   账号流 `per_platform=1`（平台内串行，与引入该参数前逐字节等价）；
@@ -263,7 +267,7 @@ R7 把覆盖面补齐，代价是 +3 请求/轮（你库里 10 个账号），�
 
 ### 4.3.2 启动外部补抓（v0.9.8，P9-4）
 
-`start_external_catchup()`（独立守护线程）→ `run_startup_external_catchup()`：
+`_startup_catchup_loop`（`scheduler.runtime` 起的独立守护线程）→ `run_startup_external_catchup()`：
 每 V **主账号**的 zeroroku 粉丝历史/礼物日 + danmakus 场次；<24h 跳过
 （时间戳存 `app_meta.external.startup.last_run`，迁移 f003）；进度走 `external`
 状态胶囊；跑期间置 `_external_running`（综合档跳过本轮），不占锁、不挡手动任务。
@@ -518,7 +522,7 @@ def _detect_rate_limit(status_code, data=None):
 | **详情级**（每条帖子的 detail/view/article/extend） | 触发风控**不重试、不中断**：该帖跳过详情（保留 feed 数据）；**每条处理完立即 `clear_rate_limit()`**——详情风控标志只用于「列表页判定」（防止污染下一页列表请求的判定，方案 C） |
 | **账号级**（账号信息循环） | 风控 → 冷却（同样按命中次数升级）→ **从当前账号续跑**（重查账号列表防 detached 对象） |
 | **任务级** | 每次任务开始 `clear_rate_limit()`（ContextVar 隔离，防跨任务污染，见 §3.4） |
-| **启动级**（R27） | `start_scheduler()` 先把落库的冷却读回来；**自动档**（动态流名单 / 账号流）跳过仍在冷却的平台，**手动档照常受理**（显式意图优先，界面状态岛会显示冷却仍在） |
+| **启动级**（R27） | `SchedulerRuntime.start()` 先把落库的冷却读回来（早于线程启动）；**自动档**（动态流名单 / 账号流）跳过仍在冷却的平台，**手动档照常受理**（显式意图优先，界面状态岛会显示冷却仍在） |
 
 ### 7.3 为什么这样设计（实际踩坑）
 
