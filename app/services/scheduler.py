@@ -87,7 +87,21 @@ _fetch_scope: str | None = None
 # T4 外部数据批次是否正在跑：综合档据此避开（外部任务等手动任务时不算忙）。
 _external_running = False
 
-# ── 实时状态（供 /vtuber/fetch-status 轮询；仅简单赋值，GIL 下线程安全）──
+# ── 实时状态（供 /vtuber/fetch-status 轮询）────────────────────────────
+#
+# ⚠️ **2026-09-26（批次 5，devlog/210）改口径**：这里原话是"仅简单赋值，GIL 下线程安全"
+#    —— **那句话是错的**，而且已经被自己的代码破坏：`recent` 是"读-改-写"（append + 裁到
+#    100）、`external` 一次改 4 个字段、`get_fetch_status()` 给出去的还是**浅拷贝**
+#    ⇒ 前端（每几秒轮询一次）可能读到"改了一半"的结构，或者正在遍历一个被追加的 list。
+#
+# 新规矩（判据在 `tests/test_fetch_status_store.py`）：
+#   ① **跨字段一致性**与**读-改-写**必须在 `_status_lock` 里（`external_*` 两个入口、
+#      `_push_account_snapshot`、两处 `recent = []` 的重置）；
+#   ② 单字段赋值可以不在锁里（dict 的值存储是原子的），但**不许**拿它当判断依据 ——
+#      要判断就读 `_status_snapshot()`（锁内**深拷贝**，一次拿到自洽的一份）;
+#   ③ 锁内**不做**网络 / 数据库 / 重 IO（只做内存操作）。
+_status_lock = threading.RLock()
+
 # P8-C（2026-09-10）：两个抓取流都带 `task`（任务名）+ `vtuber_name`（V 名）
 # + `index/total`（进度），顶栏据此拼「动态更新中 - 明前奶绿 - 1/11」。
 _status: dict = {
@@ -106,27 +120,46 @@ _external_labels: dict[str, str] = {}
 _external_done_seq = 0
 
 
+def _status_snapshot() -> dict:
+    """**锁内深拷贝**的一份自洽状态（读路径唯一入口）。
+
+    ⚠️ 为什么必须是深拷贝（2026-09-26，devlog/210）：`get_fetch_status()` 原来给的是
+    `{**_status["account"], …}` 这种**浅拷贝** ⇒ `recent` 那个 list 与库里是**同一个对象**，
+    前端一边遍历、抓取线程一边 append ⇒ 读到"改了一半"的状态；`external` 的四个字段同理
+    （一次改 4 个，浅拷贝挡不住中间态）。
+    """
+    with _status_lock:
+        return {
+            "account": {**_status["account"],
+                        "recent": list(_status["account"].get("recent") or [])},
+            "post": dict(_status["post"]),
+            "external": dict(_status["external"]),
+        }
+
+
 def external_task_started(token: str, label: str) -> None:
     """外部数据任务进入运行态：顶栏状态胶囊展示进度。
 
     token 用于并发去重（如 `adopt:22` / `daily` / `weekly`），label 是给用户看的文案。
     """
-    _external_labels[token] = label
-    _status["external"]["running"] = True
-    _status["external"]["label"] = "、".join(dict.fromkeys(_external_labels.values()))
+    with _status_lock:
+        _external_labels[token] = label
+        _status["external"]["running"] = True
+        _status["external"]["label"] = "、".join(dict.fromkeys(_external_labels.values()))
 
 
 def external_task_finished(token: str) -> None:
     """外部数据任务结束：seq 自增（前端据变化发 fetch-idle 刷新档案卡片）。"""
     global _external_done_seq
-    label = _external_labels.pop(token, None)
-    _external_done_seq += 1
-    _status["external"]["seq"] = _external_done_seq
-    if label:
-        _status["external"]["last_label"] = label
-    _status["external"]["running"] = bool(_external_labels)
-    _status["external"]["label"] = (
-        "、".join(dict.fromkeys(_external_labels.values())) or None)
+    with _status_lock:
+        label = _external_labels.pop(token, None)
+        _external_done_seq += 1
+        _status["external"]["seq"] = _external_done_seq
+        if label:
+            _status["external"]["last_label"] = label
+        _status["external"]["running"] = bool(_external_labels)
+        _status["external"]["label"] = (
+            "、".join(dict.fromkeys(_external_labels.values())) or None)
 
 
 def _push_account_snapshot(acc) -> None:
@@ -134,19 +167,22 @@ def _push_account_snapshot(acc) -> None:
 
     前端 TopBar 轮询发现 recent 增长即派发 account-progress 事件，
     VtuberSidebar 按 platform_uid 就地合并，避免全表重刷。
+
+    ⚠️ append + 裁剪是**读-改-写**（不是"简单赋值"）⇒ 必须在锁里（devlog/210）。
     """
-    recent = _status["account"].setdefault("recent", [])
-    recent.append({
-        "platform_uid": str(acc.platform_uid),
-        "display_name": acc.display_name,
-        "sign": acc.sign,
-        "followers_count": acc.followers_count,
-        "live_status": acc.live_status,
-        "live_title": acc.live_title,
-        "avatar_path": acc.avatar_path,
-    })
-    if len(recent) > 100:
-        del recent[:-100]
+    with _status_lock:
+        recent = _status["account"].setdefault("recent", [])
+        recent.append({
+            "platform_uid": str(acc.platform_uid),
+            "display_name": acc.display_name,
+            "sign": acc.sign,
+            "followers_count": acc.followers_count,
+            "live_status": acc.live_status,
+            "live_title": acc.live_title,
+            "avatar_path": acc.avatar_path,
+        })
+        if len(recent) > 100:
+            del recent[:-100]
 
 
 def _record_stat_snapshot(db: Session, acc: Account) -> None:
@@ -406,10 +442,14 @@ def get_fetch_status() -> dict:
       自动档持锁不算忙）。前端按钮禁用改用它——此前拿 `account.running or post.running`
       当忙，用户会在自动节拍期间点不动任何手动按钮，而后端其实会受理（手动优先会抢占）。
     """
+    # ⚠️ 读路径统一走 `_status_snapshot()`（**锁内深拷贝**，devlog/210）：
+    #    原来这里是 `{**_status["account"], …}` 的**浅拷贝** ⇒ `recent` 那个 list
+    #    与库里是同一个对象，前端一边遍历、抓取线程一边 append。
+    snap = _status_snapshot()
     return {
-        "account": {**_status["account"], "auto": _auto_account_active.is_set()},
-        "post": {**_status["post"], "auto": _auto_post_active.is_set()},
-        "external": dict(_status["external"]),
+        "account": {**snap["account"], "auto": _auto_account_active.is_set()},
+        "post": {**snap["post"], "auto": _auto_post_active.is_set()},
+        "external": snap["external"],
         "manual_running": manual_task_running(),
         # R12a：风控冷却（此前只在日志里，界面看不到）
         "rate_limit": rate_limit_status(),
