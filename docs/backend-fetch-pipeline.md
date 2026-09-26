@@ -620,7 +620,7 @@ def _detect_rate_limit(status_code, data=None):
 
 | 事件 | 挂点 | 判据 | 为什么挂在这 |
 |---|---|---|---|
-| **开播** | `scheduler._refresh_live_core()`（T0 直播状态核）的 `edge and started` 分支 | `0/2 → 1` 的**上升沿**（`bool(live_status) and not prev_status`） | T0 是唯一"只回写 live 字段"的轮询；边上已经有统计快照与"恢复动态满速"，通知放同一处不会漏 |
+| **开播** | `scheduler.live_sweep_core()`（T0 直播状态核）的 `edge and started` 分支 | **进入「直播中」**（`live_status == 1 and prev_status != 1`）—— ⚠️ 不能用 `bool(live_status)`：`2` 是**轮播**，会把"下播后挂轮播"误判成开播（devlog/227） | T0 是唯一"只回写 live 字段"的轮询；边上已经有统计快照与"恢复动态满速"，通知放同一处不会漏 |
 | **新动态** | `_fetch_posts_for_account(..., notify=True)` | 抓取前后各记一次**主键水位**（`_post_mark`：`max(id)` + 已有帖数），取 `id > mark` 的行 | 入库顺序就是 id 顺序 ⇒ B 站双流核心与通用单流循环都不用各自维护"我存了哪几条" |
 
 三条**闸门**（都有用例钉住，见 `tests/test_notifier.py`）：

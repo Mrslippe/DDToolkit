@@ -315,6 +315,83 @@ def test_icon_size_follows_font_scale():
     assert base >= 32 and big > base
 
 
+# ── 「开播」的判据：轮播（live_status=2）不是开播（2026-09-27 用户实测）──────
+# 现象：用户在下播时间收到"明前奶绿 开播了"。根因：T0 的 `started` 写成
+# `bool(live_status) and not prev_status`，而 B 站 **2 = 轮播/录播循环**
+# （主播下播后常挂着）⇒ `0 → 2` 被当成开播。
+
+def _sweep_with_status(db, monkeypatch, status: list[int]):
+    """跑一遍 T0 直播状态核，`fetch_bilibili_live_batch` 换成固定返回。"""
+    import asyncio
+
+    from app.services import scheduler
+
+    async def fake_batch(uids, client=None):
+        return {str(u): {"live_status": status[0], "live_title": "测试标题",
+                         "room_id": 25034104} for u in uids}
+
+    monkeypatch.setattr(scheduler, "fetch_bilibili_live_batch", fake_batch)
+    # 批间停顿是给真轮询用的：测试要的是状态机，不必等（见 config 的 STARTUP_LIVE_INTERVAL_*）
+    for key, val in (("STARTUP_LIVE_INTERVAL_MIN", 0.0), ("STARTUP_LIVE_INTERVAL_MAX", 0.0)):
+        scheduler.settings.__dict__[key] = val
+    try:
+        return asyncio.run(scheduler.live_sweep_core(db))
+    finally:
+        for key in ("STARTUP_LIVE_INTERVAL_MIN", "STARTUP_LIVE_INTERVAL_MAX"):
+            scheduler.settings.__dict__.pop(key, None)
+
+
+def _seed_live_account(db, live_status: int = 0):
+    from app.models.vtuber import Account, VTuber
+
+    v = VTuber(name="明前奶绿")
+    db.add(v)
+    db.flush()
+    acc = Account(vtuber_id=v.id, platform="bilibili", platform_uid="22603245",
+                  live_status=live_status, room_id="25034104")
+    db.add(acc)
+    db.commit()
+    return acc
+
+
+def test_live_sweep_does_not_notify_on_round_play(db, sent, monkeypatch):
+    """0 → 2（轮播）**不是开播**：这是用户实测的那条假提醒。"""
+    _seed_live_account(db, live_status=0)
+    _sweep_with_status(db, monkeypatch, [2])
+    assert [n.kind for n in sent] == []
+
+
+def test_live_sweep_notifies_on_real_start_only(db, sent, monkeypatch):
+    """真开播（0 → 1）与"轮播转直播"（2 → 1）要通知；转到轮播（1 → 2）不通知。
+
+    ⚠️ 阶段之间 `reset_state()`：同一场直播不重复弹是**本来的设计**（去重键
+    `live:{平台}:{uid}` 带 TTL），而这里要验的是"进入沿"本身，所以把记账清干净再跑下一段。
+    """
+    _seed_live_account(db, live_status=0)
+    status = [2]
+    _sweep_with_status(db, monkeypatch, status)          # 0 → 2（轮播）
+    assert [n.kind for n in sent] == []
+
+    sent.clear()                       # 夹具给的收集列表是同一个对象，清记账时一起清
+    notifier.reset_state()
+    notifier.set_sink(sent.append)
+    status[0] = 1
+    _sweep_with_status(db, monkeypatch, status)          # 2 → 1（轮播转直播）
+    assert [n.kind for n in sent] == ["live"]
+    assert "开播了" in sent[0].title
+
+    sent.clear()
+    notifier.reset_state()
+    notifier.set_sink(sent.append)
+    status[0] = 2
+    _sweep_with_status(db, monkeypatch, status)          # 1 → 2（转轮播）
+    assert [n.kind for n in sent] == []
+
+    status[0] = 1
+    _sweep_with_status(db, monkeypatch, status)          # 2 → 1（再开播）
+    assert [n.kind for n in sent] == ["live"]
+
+
 # ── 与调度器的接缝：什么时候**不**该通知 ─────────────────────────────
 
 def test_new_posts_helper_uses_id_watermark(db):

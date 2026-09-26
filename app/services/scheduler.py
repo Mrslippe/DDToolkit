@@ -3054,7 +3054,13 @@ async def live_sweep_core(db: Session, client: httpx.AsyncClient | None = None) 
                 if not acc.room_id and hit.get("room_id"):
                     acc.room_id = str(hit["room_id"])
                 edge = acc.live_status != prev_status
-                started = bool(acc.live_status) and not prev_status
+                # 「开播」= **直播中（live_status == 1）** 的进入沿。
+                # ⚠️ 不能写 `bool(live_status)`：B 站还有 **2 = 轮播/录播循环**
+                # （主播下播后常挂着的状态），那样 `0 → 2` 会被当成开播
+                # （2026-09-27 用户实测："现在是下播时间，但提醒我明前奶绿开播了"。
+                #  轮播也不该触发"内容马上会来"的满速恢复）。
+                # 语义：0→1 开播 ✓ / 2→1 轮播转直播 ✓ / 0→2 轮播 ✗ / 1→2 转轮播 ✗
+                started = acc.live_status == 1 and prev_status != 1
                 if edge:
                     # 直播边沿：落统计快照（直播日历场次推导的数据来源）。
                     # ⚠️ **必须与 live 字段同一个事务**（R3，devlog/212）：原来是两笔独立
