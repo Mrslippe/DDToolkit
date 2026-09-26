@@ -721,6 +721,32 @@ flowchart LR
     所以 junction 才是真实威胁的那一半）：① `canonicalize` 会**把 junction 解成目标** ⇒
     拿它当判据能识破"用 junction 冒充旧目录"；② `remove_dir_all(junction)` **不会穿进目标**
     （实测目标内容完好）⇒ 删链接本身不危险，真正的风险是①被绕过之后**直接删到活目录**。
+26. **业务端点必须持本次启动的会话 token**（S1，devlog/201）：后端监听 `127.0.0.1:<随机端口>`，
+    而**端口可以扫**；在没有这道门之前，本机任何进程、以及任何网页都能读到全部归档、
+    改数据、触发抓取，而 `DATA_DIR/.env` 里是**活的登录凭据**。
+    - token 由 **Tauri 每次启动生成**（32 字节 CSPRNG → 64 位十六进制），**只存内存**、
+      不落盘、不进 argv，经子进程 env(`DDTOOLKIT_API_TOKEN`) 传给 sidecar；
+      前端要的那一份走 `get_api_token` 命令 —— **该命令自己校验调用方窗口 label**
+      （`build.rs` 没有 app manifest ⇒ 自定义命令**默认不查 ACL**，只拆 capability 等于没做）。
+    - 请求头 `X-DDToolkit-Token`；比较走 `hmac.compare_digest`；失败统一 401
+      且**不回显 token**（响应体、日志、OpenAPI schema 三处都有用例钉着）。
+    - **公开白名单只有三处**：`/healthz`、`/static/*`、`GET /img-proxy`。
+      前两者是 `<img>` 直连（带不了自定义头）与桌面端就绪探活；`/img-proxy` 另有主机白名单。
+      **往这个白名单里加东西要当成改安全边界**，`tests/test_api_auth.py` 有一条
+      "路由表对账"用例：新增路由若既不在白名单、又没被要求 token，会直接红。
+    - **开发态**（没有 Tauri：探针 / `npm run dev` / 直接跑 `backend_main.py`）用
+      `DDTOOLKIT_DEV_API_TOKEN` 指定固定值。**两个都为空 = 门不存在**（放行 + 启动 WARNING）——
+      这是分批落地期间的过渡态，**不是发布形态**。
+    - ⚠️ **CORS 不是主防线，token 才是**（实测踩出来的，devlog/201 §五）：
+      `CORS_ORIGINS` **保持默认 `"*"`**。一度想顺手收紧它，结果**打断了浏览器形态的开发态** ——
+      探针与 `npm run dev` 都是跨源（页面在 `localhost:<vite>`、后端在 `127.0.0.1:<port>`），
+      而没有允许头时浏览器**不让页面读响应**。症状极具误导性：**后端日志里一条 401 都没有**
+      （请求到了、也是 200），页面数据全空 ⇒ 探针报"缺投稿 chip / 缺 list-video 帧 /
+      页面标题为空"，**看起来像内容或布局坏了**。而收益接近零：拿不到 token 的网页
+      即使能读到响应，读到的也只是 401。⇒ 要收紧就收紧 token 的**分发**
+      （S3-A 的命令级权限），别动 CORS。
+      值含正则元字符时按**正则**处理（探针的 Vite 端口每次随机），
+      但 `"*"` 必须排除在正则判定外 —— 它本身就是元字符，会被 `re.compile` 拒掉。
 
 ---
 

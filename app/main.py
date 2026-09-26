@@ -11,6 +11,7 @@ from sqlalchemy import inspect, text, PrimaryKeyConstraint, UniqueConstraint
 
 from app.core.config import settings
 from app.core import runtime_settings
+from app.core.api_auth import require_token, token_configured
 from app.core.logging_setup import setup_logging
 from app.core.database import engine, Base
 from app.routers import vtuber, img_proxy, auth
@@ -222,6 +223,15 @@ async def lifespan(app: FastAPI):
     logger.info("启动中...")
     _perf("lifespan 开始")
 
+    # 没配 token = **门不存在**，而症状是"一切正常" ⇒ 必须大声说一次（S1，devlog/201）。
+    # 真机走 Tauri 那条路一定有 token；这条只在开发态/裸跑时出现。
+    if not token_configured():
+        logger.warning(
+            "未配置访问令牌（DDTOOLKIT_API_TOKEN / DDTOOLKIT_DEV_API_TOKEN 都为空）——"
+            "本机任何进程或网页都能读写本后端的全部数据与凭据。"
+            "真机由 Tauri 注入；开发态请设 DDTOOLKIT_DEV_API_TOKEN。"
+        )
+
     # 延迟导入：apscheduler/tenacity/httpx/auth 不参与 app 构建期导入，
     # 让 uvicorn 尽可能早绑定端口（冷启动优化）
     from app.services.scheduler import (
@@ -287,14 +297,49 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-# CORS：来源列表可配置（CORS_ORIGINS）。通配符 "*" 与 allow_credentials=True
-# 的组合不符合 CORS 规范（浏览器会拒绝带凭据的跨域响应），因此仅在
-# 显式配置来源列表时允许携带凭据。
+# 会话 token 中间件（S1，devlog/201）。
+# ⚠️ **注册顺序即执行顺序的反序**：后加的在外层。这里先加 auth、后加 CORS
+# ⇒ CORS 在最外层（预检 OPTIONS 才不会被 401 挡下）。改顺序会让浏览器跨源请求全挂。
+app.middleware("http")(require_token)
+
+# CORS（S1，devlog/201 重定口径）。
+#
+# ## 默认值为什么是 `"*"`
+# 我一度把它改成空，想顺便关掉"任意网页可读" —— 但那**同时打断了浏览器形态的开发态**
+# （探针 `ui_probe.py` 与 `npm run dev`：页面在 `localhost:<vite>`、后端在
+# `127.0.0.1:<port>` ⇒ **跨源** ⇒ 没有允许头时浏览器不让页面读响应）。
+# 而**真正的门是 token**（上面那行中间件），CORS 只是纵深防御：
+# 拿不到 token 的网页即使读到 401 也什么都得不到。所以默认保持 `"*"`
+# （= 恢复原来的开发形态），把"谁在防谁"这件事交给 token 说清楚：
+#   · Tauri（真机）    → 带 token ⇒ 一律放行，与 CORS 无关；
+#   · 浏览器开发态      → 跨源可读，但要 token 才拿得到数据；
+#   · 本机陌生进程/网页 → **没有 token ⇒ 401**。
+#
+# ## 值可以是字面来源列表，也可以是**正则**
+# 探针的 Vite 端口每次随机挑（`_free_port()`），写死字面来源必失效 ⇒ 需要正则。
+# 之前这里只把它当字面列表喂给 `allow_origins`，于是探针传进来的正则被当成
+# "一个字面 origin"，**永远匹配不上**（实测：只回 `allow-credentials`、不回
+# `allow-origin`，浏览器据此拦掉读取；而后端日志里**一条 401 都没有**，
+# 症状伪装成"内容为空 ⇒ 布局断言全红"）。
+_CORS_ORIGIN_CHARS = set("[](){}|\\^$*+?")
 _cors_origins = [o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()]
+# 含正则元字符 ⇒ 按**正则**处理（逗号是分隔符，所以正则里不能带逗号）。
+# 一个真实 origin 只会含 `:` `/` `.` `-` 与字母数字，不会命中这个集合。
+#
+# ⚠️ **`"*"` 必须先排除**（本行第一版就栽在这）：它本身就是正则元字符，会被判成正则，
+#    于是走到 `re.compile("*")` ⇒ `re.PatternError: nothing to repeat`，
+#    **整个应用起不来**。而它恰恰是默认值 ⇒ 一改就把所有人挡在门外
+#    （实测：3 条 CORS 相关用例直接报 PatternError）。
+_cors_regex = next(
+    (o for o in _cors_origins if o != "*" and set(o) & _CORS_ORIGIN_CHARS), None
+)
+_cors_literal = [o for o in _cors_origins if o != _cors_regex]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_cors_origins,
-    allow_credentials=(_cors_origins != ["*"]),
+    allow_origins=_cors_literal,
+    allow_origin_regex=_cors_regex,
+    # `*` 与携带凭据的组合不符合规范（浏览器会拒），沿用原口径
+    allow_credentials=(_cors_literal != ["*"] and _cors_regex is None),
     allow_methods=["*"],
     allow_headers=["*"],
 )

@@ -134,12 +134,60 @@ fn new_migration_id() -> Result<String, String> {
     Ok(b.iter().map(|x| format!("{x:02x}")).collect())
 }
 
+// ── 会话 token（S1，devlog/201）────────────────────────────────────────────
+//
+// 后端监听 127.0.0.1 上的**随机端口**，但端口可以扫（65536 个，几秒）。
+// 在没有 token 之前，本机任何进程、以及任何网页（那时 CORS 默认 `*`）都能读到
+// 全部归档、改数据、触发抓取；而数据目录的 `.env` 里是**活的登录凭据**。
+//
+// 这里的口径：**每次启动生成**（不复用、不落盘、不进 argv），经子进程 env 传给 sidecar；
+// 前端要用的那一份走 `get_api_token` 命令（**并校验调用方窗口 label**，见那条命令的注释）。
+
+/// 本次启动的 API token（只存内存）。
+#[derive(Default)]
+struct ApiToken(Mutex<String>);
+
+/// 生成高熵 token。`getrandom::fill` 走操作系统 CSPRNG。
+fn new_api_token() -> Result<String, String> {
+    let mut b = [0u8; 32];
+    getrandom::fill(&mut b).map_err(|e| format!("随机数生成失败：{e}"))?;
+    Ok(b.iter().map(|x| format!("{x:02x}")).collect())
+}
+
+/// 从"HTTP 响应正文"判定手动任务是否在跑 —— **纯函数，便于单测**。
+///
+/// 返回值三态，对应三种不同的处置（这是 S1 落地时最容易踩的地方）：
+/// - `Ok(Some(true/false))`：真问到了；
+/// - `Ok(None)`：**问不到**（非 200、或读到的东西不像响应）⇒ 调用方按"没在跑"处理
+///   （用户点的是退出，不该因为问不到就退不出去）；
+/// - `Err(401)`：**带了 token 却被拒** ⇒ 那是"这个壳与这个后端对不上"（比如旧壳配新后端），
+///   不是"没有任务"。**必须保守当成"在跑"** —— 否则手动抓取会被静默掐掉一轮
+///   （R20 花大力气修好的行为，devlog/095/097/129）。
+///
+/// 判定故意做得**粗**：去掉空白后找 `"manual_running":true`。uvicorn 可能回 chunked
+/// （正文多出分块长度前缀），为这一处引入 HTTP 客户端或手写分块解码都不值当；
+/// 字段名是我们自己的，够用且不会误判成 true。
+fn manual_running_from_response(raw: &str) -> Result<Option<bool>, u16> {
+    let status = raw.lines().next().unwrap_or("");
+    let code = status
+        .split_whitespace()
+        .nth(1)
+        .and_then(|c| c.parse::<u16>().ok());
+    match code {
+        Some(200) => {
+            let compact: String = raw.chars().filter(|c| !c.is_whitespace()).collect();
+            Ok(Some(compact.contains("\"manual_running\":true")))
+        }
+        Some(401) | Some(403) => Err(code.unwrap_or(401)),
+        _ => Ok(None),
+    }
+}
+
 /// 删旧数据目录的**全部判据**（拆成纯逻辑：只有它能被单测，命令壳只做状态读取）。
 ///
 /// 顺序有意为之：**先认"是不是当前目录"，再谈特征文件** ——
 /// 一个指向当前数据目录的 junction 会命中第一条，而不是靠"它里面确实有 vtuber.db"混过去。
-fn prepare_old_dir_deletion(
-    id: &str,
+fn prepare_old_dir_deletion(    id: &str,
     recorded: Option<&MigrationStub>,
     current: &std::path::Path,
 ) -> Result<PathBuf, String> {
@@ -321,7 +369,9 @@ fn start_backend_and_wait(
     port: u16,
     dir: &std::path::Path,
 ) -> Result<(), String> {
-    let child = spawn_backend(app, port, dir).map_err(|e| format!("拉起后端失败：{e}"))?;
+    // 复用**同一个** token（迁移只换数据目录，不换会话）
+    let api_token = app.state::<ApiToken>().0.lock().unwrap().clone();
+    let child = spawn_backend(app, port, dir, &api_token).map_err(|e| format!("拉起后端失败：{e}"))?;
     let pid = child.pid();
     *app.state::<BackendChild>().0.lock().unwrap() = Some(child);
     #[cfg(target_os = "windows")]
@@ -1278,10 +1328,10 @@ fn spawn_deep_sleep_watchdog(app: tauri::AppHandle) {
 /// **用户点的是退出，不该因为问不到就退不出去**（2026-09-15 实测的那个 bug 正是
 /// "点了退出没反应"：原先托盘退出只发事件给前端，而前端没人接、深休眠时更收不到）。
 ///
-/// 判断故意做得**粗**：把响应里的空白去掉后找 `"manual_running":true` —— uvicorn 可能回
-/// chunked（正文会多出分块长度前缀），为这一处引入 HTTP 客户端或手写分块解码都不值当；
-/// 字段名是我们自己的（`fetch-status` 的 `manual_running`），够用且不会误判成 true。
-fn backend_manual_running(port: u16) -> Option<bool> {
+/// ⚠️ S1 起要带 token（devlog/201）：这条探活是**手写裸 TCP**（为了一处判定不值得引 HTTP 客户端），
+/// 而 token 中间件生效后它会拿到 401。**401 不能当成"没在跑"** —— 详见
+/// `manual_running_from_response` 的三态说明。
+fn backend_manual_running(port: u16, token: &str) -> Option<bool> {
     use std::io::{Read, Write};
     if port == 0 {
         return None;
@@ -1289,23 +1339,29 @@ fn backend_manual_running(port: u16) -> Option<bool> {
     let addr: std::net::SocketAddr = format!("127.0.0.1:{port}").parse().ok()?;
     let mut sock = std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(400)).ok()?;
     sock.set_read_timeout(Some(Duration::from_millis(800))).ok()?;
-    sock.write_all(
-        b"GET /vtuber/fetch-status HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
-    )
-    .ok()?;
+    // 头值是我们自己生成的十六进制，不含 CR/LF，拼进请求行是安全的
+    let req = format!(
+        "GET /vtuber/fetch-status HTTP/1.1\r\nHost: 127.0.0.1\r\n\
+         X-DDToolkit-Token: {token}\r\nConnection: close\r\n\r\n"
+    );
+    sock.write_all(req.as_bytes()).ok()?;
     let mut raw = String::new();
     sock.read_to_string(&mut raw).ok()?;
-    if !raw.starts_with("HTTP/1.1 200") && !raw.starts_with("HTTP/1.0 200") {
-        return None;                       // 非 200：当作问不到，别猜
+    match manual_running_from_response(&raw) {
+        Ok(v) => v,
+        Err(401) => {
+            println!("[ddtoolkit] 托盘退出：探活被 401 拒绝（token 不匹配）→ 保守判定为「有任务在跑」");
+            Some(true)
+        }
+        Err(_) => None,
     }
-    let compact: String = raw.chars().filter(|c| !c.is_whitespace()).collect();
-    Some(compact.contains("\"manual_running\":true"))
 }
 
 /// 托盘「退出」：没手动任务在跑就**直接退**（不依赖前端）；在跑才唤回窗口让用户确认。
 fn tray_quit_impl(app: &tauri::AppHandle) {
     let port = *app.state::<BackendPort>().0.lock().unwrap();
-    match backend_manual_running(port) {
+    let token = app.state::<ApiToken>().0.lock().unwrap().clone();
+    match backend_manual_running(port, &token) {
         Some(true) => {
             println!("[ddtoolkit] 托盘退出：有手动任务在跑 → 唤回窗口确认");
             show_main_impl(app);
@@ -1414,6 +1470,40 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
 fn get_backend_port(port: State<'_, BackendPort>) -> u16 {
     *port.0.lock().unwrap()
 }
+
+/// 把本次启动的会话 token 交给页面（S1，devlog/201）。
+///
+/// ## 为什么**必须**校验调用方窗口 label
+///
+/// Tauri 只在三种情况下查 ACL：插件命令、应用定义了自己的 ACL manifest、
+/// 或请求来自**非本地** origin。本仓 `build.rs` 是裸 `tauri_build::build()`（无 app manifest），
+/// 两扇窗又都是本地 origin ⇒ **应用自定义命令默认完全不查 ACL**
+/// （证据：vendored `tauri-2.11.5/src/webview/mod.rs:1819-1852` 的那个 `if`）。
+/// 也就是说：**只拆 capability JSON 对自定义命令一点用都没有**，
+/// 命令自己判 label 才是唯一有效的那一半。
+///
+/// 当前允许 `main` 与 `widget`（两者都要发业务请求）。等 S3-A 收紧时，
+/// 这张表会与 capability 文件一起收敛。
+#[tauri::command]
+fn get_api_token(window: tauri::Window, token: State<'_, ApiToken>) -> Result<String, String> {
+    let label = window.label().to_string();
+    if !CALLER_LABELS_ALLOWED.contains(&label.as_str()) {
+        println!("[ddtoolkit] 拒绝 get_api_token：调用方窗口 label = {label}");
+        return Err("该窗口无权获取访问令牌".to_string());
+    }
+    let t = token.0.lock().unwrap().clone();
+    if t.is_empty() {
+        // 空 token 会让前端把空头发出去 —— 那种"看起来配了其实没有"的状态最难查
+        return Err("访问令牌尚未生成（壳还没完成启动？）".to_string());
+    }
+    Ok(t)
+}
+
+/// 允许读取会话 token 的窗口 label（`get_api_token` 的准入表）。
+///
+/// 放成常量而不是写在命令里：S3-A 收紧权限时它是**一处**要改的地方，
+/// 而且能被单测直接盯住。
+const CALLER_LABELS_ALLOWED: [&str; 2] = ["main", "widget"];
 
 /// 显示主窗口。窗口默认 visible:false（见 tauri.conf.json），页面绘制完成后
 /// 由前端 invoke 显示，避免 WebView2 首绘前的白屏（白色闪屏修复，见 devlog/021）。
@@ -1529,6 +1619,7 @@ fn spawn_backend(
     app: &tauri::AppHandle,
     port: u16,
     data_dir: &std::path::Path,
+    api_token: &str,
 ) -> Result<CommandChild, Box<dyn std::error::Error>> {
     let (mut rx, child) = {
         #[cfg(not(debug_assertions))]
@@ -1556,6 +1647,9 @@ fn spawn_backend(
                 .env("DDTOOLKIT_PORT", port.to_string())
                 .env("DDTOOLKIT_DATA_DIR", data_dir.to_string_lossy().to_string())
                 .env("DDTOOLKIT_PARENT_PID", std::process::id().to_string())
+                // S1（devlog/201）：本机后端的会话 token。只存内存、每次启动不同，
+                // 前端要用的那一份走 `get_api_token` 命令。
+                .env("DDTOOLKIT_API_TOKEN", api_token)
                 // 强制子进程 UTF-8 输出（onedir 同样生效）
                 .env("PYTHONUTF8", "1")
                 .env("PYTHONIOENCODING", "utf-8")
@@ -1580,6 +1674,9 @@ fn spawn_backend(
                 .env("DDTOOLKIT_PORT", port.to_string())
                 .env("DDTOOLKIT_DATA_DIR", data_dir.to_string_lossy().to_string())
                 .env("DDTOOLKIT_PARENT_PID", std::process::id().to_string())
+                // S1（devlog/201）：与 release 分支**同一个**注入点 —— 少一处就是
+                // "开发态没有门、生产才有"，而那正是最难发现的不一致。
+                .env("DDTOOLKIT_API_TOKEN", api_token)
                 // 强制子进程 UTF-8 输出，避免管道模式下回退 GBK 导致终端乱码
                 .env("PYTHONUTF8", "1")
                 .env("PYTHONIOENCODING", "utf-8")
@@ -1632,9 +1729,11 @@ pub fn run() {
         .manage(BackendJob(Mutex::new(0)))
         .manage(DataDirState(Mutex::new(None)))
         .manage(MigrationRecord(Mutex::new(None)))
+        .manage(ApiToken(Mutex::new(String::new())))
         .manage(TrayStatusItem(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             get_backend_port,
+            get_api_token,
             present_window,
             hide_to_tray,
             quit_app,
@@ -1687,6 +1786,14 @@ pub fn run() {
             }
 
             let port = free_port();
+            // S1（devlog/201）：**每次启动生成一个 token**，注入 sidecar，并存进壳状态
+            // 供 `get_api_token` 命令读取。只存内存：重启即换新（前端也重新取）。
+            let api_token = new_api_token()?;
+            *app.state::<ApiToken>().0.lock().unwrap() = api_token.clone();
+            println!(
+                "[ddtoolkit] api token 已生成（长度 {}，值不打印）",
+                api_token.len()
+            );
             // ── 数据目录的**启动优先级**（R22-B2b，devlog/106）────────────────
             // 环境变量 > 迁移指针 > 默认目录（判定本身在 `datadir::resolve_startup`，有单测）。
             // 之前这里是无条件用 `app_data_dir()` 覆盖 `DDTOOLKIT_DATA_DIR`，
@@ -1743,7 +1850,7 @@ pub fn run() {
                 None => println!("[ddtoolkit] WARN: Job Object 创建失败，仅剩双兜底"),
             }
 
-            let child = spawn_backend(app.handle(), port, &data_dir)?;
+            let child = spawn_backend(app.handle(), port, &data_dir, &api_token)?;
             let backend_pid = child.pid();
             perf("后端已 spawn");
 
@@ -1961,9 +2068,9 @@ mod tests {
     /// （用户点的是退出，不能因为问不到就退不出去），但不能把"在跑"误判成"没在跑"
     /// （那会在用户毫不知情时掐掉一轮抓取）。
     fn parse(body: &str) -> Option<bool> {
-        // 与 `backend_manual_running` 的正文判定同一套规则（去掉空白后找字段）
-        let compact: String = body.chars().filter(|c| !c.is_whitespace()).collect();
-        Some(compact.contains("\"manual_running\":true"))
+        // `manual_running_from_response` 要求首行是状态行 —— 测试里补一条 200 的
+        manual_running_from_response(&format!("HTTP/1.1 200 OK\r\n\r\n{body}"))
+            .expect("200 不该走 Err 分支")
     }
 
     #[test]
@@ -1983,6 +2090,55 @@ mod tests {
         assert_eq!(parse(r#"{"account":{"running":true}}"#), Some(false));
         // 相似字段名不该被误当成 manual_running
         assert_eq!(parse(r#"{"auto_manual_running":true}"#), Some(false));
+    }
+
+    /// 三态判定的另外两态（S1 落地时最容易踩的地方，devlog/201）。
+    ///
+    /// `401` **必须是 `Err`，不能是 `Ok(None)`**：`Ok(None)` 的语义是"问不到 ⇒ 当没在跑
+    /// ⇒ 直接退出"，而 401 的真实含义是"这个壳与这个后端对不上"（旧壳配新后端 / token 不同步），
+    /// 那时**很可能正有手动任务在跑** —— 当成"没在跑"就会在用户毫不知情时掐掉一轮抓取，
+    /// 而那正是 R20（devlog/095/097/129）花大力气修好的行为。
+    ///
+    /// 反向验证：把 `Some(401) | Some(403) => Err(...)` 改成 `=> Ok(None)` ⇒ 本用例红。
+    #[test]
+    fn unauthorized_is_an_error_not_a_quiet_no() {
+        let resp = "HTTP/1.1 401 Unauthorized\r\ncontent-length: 55\r\n\r\n\
+                    {\"detail\":\"缺少或无效的访问令牌（本机应用启动时生成）\"}";
+        assert_eq!(manual_running_from_response(resp), Err(401),
+                   "401 必须与\"没有任务\"区分开 —— 否则托盘退出会静默掐掉一轮抓取");
+
+        let forbidden = "HTTP/1.0 403 Forbidden\r\n\r\n{}";
+        assert_eq!(manual_running_from_response(forbidden), Err(403));
+    }
+
+    #[test]
+    fn other_statuses_are_a_quiet_no_so_quit_always_works() {
+        // 后端没起来 / 端口没监听 / 代理插了一脚：都该让用户**退得出去**
+        for resp in ["", "garbage", "HTTP/1.1 502 Bad Gateway\r\n\r\n",
+                     "HTTP/1.1 204 No Content\r\n\r\n"] {
+            assert_eq!(manual_running_from_response(resp), Ok(None),
+                       "非 200/401/403 一律当\"问不到\"：{resp:?}");
+        }
+    }
+
+    /// token 生成的形状：够长、是十六进制、两次不同（S1）。
+    ///
+    /// 判错代价：token 可预测 = 门形同虚设；两次相同 = 跨启动复用。
+    #[test]
+    fn api_token_is_long_random_and_hex() {
+        let a = new_api_token().expect("生成 token");
+        let b = new_api_token().expect("生成 token");
+        assert_eq!(a.len(), 64, "32 字节 → 64 个十六进制字符");
+        assert!(a.chars().all(|c| c.is_ascii_hexdigit()), "必须是十六进制：{a}");
+        assert_ne!(a, b, "两次启动/两次生成不能相同");
+    }
+
+    /// 准入表就是 `get_api_token` 的判据 —— 它必须**只**含预期的那两个窗口。
+    ///
+    /// 反向验证：往 `CALLER_LABELS_ALLOWED` 里加 `"evil"` ⇒ 红。
+    #[test]
+    fn only_expected_windows_may_read_the_token() {
+        assert_eq!(CALLER_LABELS_ALLOWED, ["main", "widget"]);
     }
 
     // ── 删旧数据目录的判据（devlog/198）───────────────────────────────────

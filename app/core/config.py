@@ -165,7 +165,30 @@ class Settings:
     VTUBER_LIST_FILE: str = str(DATA_DIR / "vtubers.csv")
 
     # CORS（逗号分隔；"*" 表示全部来源——此时不允许携带凭据，符合浏览器 CORS 规范）
+    #
+    # ⚠️ **S1（devlog/201）明确不改这个默认值**。我一度把它改成空，想顺便关掉
+    # "任意网页可读"，但那会**同时打断浏览器形态的开发态**：探针 `ui_probe.py` 与
+    # `npm run dev` 都是跨源（页面在 `localhost:<vite>`、后端在 `127.0.0.1:<port>`），
+    # 而症状极具误导性 —— 后端日志里**一条 401 都没有**（浏览器拦在"读响应"那一步），
+    # 页面数据全空 ⇒ 探针报"缺 chip / 缺 list-video 帧 / 页面标题为空"，
+    # 看起来像内容或布局坏了。
+    #
+    # **真正的门是 token**（`app/core/api_auth.py`）：拿不到 token 的网页即使能读响应，
+    # 读到的也只是 401。CORS 在这里是**纵深防御，不是主防线**。
+    #
+    # 值含正则元字符时按**正则**处理（见 `app/main.py` 的 `_CORS_ORIGIN_CHARS`）——
+    # 探针的 Vite 端口每次都随机挑，写死字面来源必失效。
     CORS_ORIGINS: str = os.getenv("CORS_ORIGINS", "*")
+
+    # ── 会话 token（S1，devlog/201）───────────────────────────────────────
+    # 生产：Tauri **每次启动**生成并注入 `DDTOOLKIT_API_TOKEN`（只存内存，不落盘）。
+    # 开发：没有 Tauri 时（探针 / `npm run dev` / 直接跑 backend_main.py）用
+    #       `DDTOOLKIT_DEV_API_TOKEN` 显式指定一个固定值。
+    # ⚠️ 两个都为空 = **门不存在**（`api_auth.is_authorized` 会放行）——
+    #    这是为了让"分批落地"期间应用仍然可用；启动时会为此打 WARNING。
+    #    它不是发布形态：真机走 Tauri 那条路，一定有 token。
+    API_TOKEN: str = os.getenv("DDTOOLKIT_API_TOKEN", "")
+    DEV_API_TOKEN: str = os.getenv("DDTOOLKIT_DEV_API_TOKEN", "")
 
     # 日志
     LOG_LEVEL: str = "INFO"
