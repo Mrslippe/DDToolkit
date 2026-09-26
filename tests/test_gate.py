@@ -90,6 +90,23 @@ def test_dependency_lock_files_are_tier_a():
         assert tier == "a", f"{f} 应落 A 档（依赖来源变更要跑 pytest），实际 {tier.upper()}"
 
 
+def test_dev_token_tooling_is_tier_a():
+    """"打自己后端的开发态脚本"必须落 A 档 —— 它们的价值全在那几条结构判据上。
+
+    为什么（2026-09-26，devlog/203）：S1 给后端加门禁后，这一组脚本**逐个失效**，
+    而症状分别伪装成"布局坏了 / 网络不可达 / 上游挂了"，没有一个像门禁问题。
+    现在它们由 `tests/test_dev_token.py` 守着（三处字面量同值 + 起后端必须给 token），
+    而 C 档**不跑 pytest** ⇒ 落 C 就等于"判据写了但永远不会跑"。
+
+    反向验证：把 `A_FILES` 里的 `"scripts/dev_check.py"` 删掉 ⇒ 本用例红。
+    """
+    for f in ("scripts/dev_token.py", "scripts/dev_check.py",
+              "scripts/smoke_upstream.py", "scripts/perf_report.py"):
+        tier, _why = G.pick_tier([f])
+        assert tier == "a", \
+            f"{f} 应落 A 档（被 tests/test_dev_token.py 守着），实际 {tier.upper()}"
+
+
 # ── 映射表自身的卫生 ────────────────────────────────────────────────────────
 
 def test_every_mapped_specific_file_exists():

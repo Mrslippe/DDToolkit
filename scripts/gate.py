@@ -97,6 +97,14 @@ A_FILES = (
     "scripts/gen_doc_numbers.py",  # ← doc_check #5 转调它（数字门禁本体）
     "scripts/release.py",        # ← tests/test_release_script.py
     "scripts/gate.py",           # ← tests/test_gate.py（档位映射自身的用例）
+    # 开发态 token 的单源与调用方覆盖（2026-09-26，devlog/203）：
+    #   S1 加了门禁之后，**打自己后端的开发态脚本逐个失效**（探针/dev_check/smoke/perf_report），
+    #   而症状分别伪装成"布局坏了 / 网络不可达 / 上游挂了"。现在这四者由
+    #   `tests/test_dev_token.py` 的结构判据守着 ⇒ 改它们要跑 pytest 才有意义。
+    "scripts/dev_token.py",      # ← tests/test_dev_token.py
+    "scripts/dev_check.py",      # ← tests/test_dev_token.py（起后端的脚本必须给 token）
+    "scripts/smoke_upstream.py",  # ← 同上
+    "scripts/perf_report.py",    # ← 同上
     # 依赖来源（2026-09-25，devlog/197）：改成"依赖来源只认 uv.lock"时立的。
     # 为什么它属于 A 档：这两份文件决定 **CI / 打包 / 用户拿到的运行时到底是哪些版本**
     # （实测一次切换就把 `uvicorn` 0.46→0.54、`starlette` 0.4x→1.7 抬了上来）。
