@@ -628,7 +628,7 @@ flowchart LR
 | 目录 | 职责 | 约定 |
 |---|---|---|
 | `app/routers/` | HTTP 契约、状态码语义（404/409/415/413）、`Depends(get_db)` | 不写 SQL；抓取类端点做忙判定 |
-| `app/repositories/` | 按仓库类持会话（12 个 Repo），批量删除/分页/统计等 SQL | 写操作当场 commit；`PostRepo.create(commit=False)` 供批量入库 |
+| `app/repositories/` | 按仓库类持会话（13 个 Repo），批量删除/分页/统计等 SQL | 多数写方法**末尾 commit**；级联清理 `delete_by_*` 与 `AccountStatSnapshotRepo.add` **不提交**（留给调用方一个事务，见 §6 第 32 条）；`PostRepo.create(commit=False)` 供批量入库 |
 | `app/models/` | SQLAlchemy 2.0 ORM（单文件 12 表） | 唯一约束/索引与迁移链一致 |
 | `app/schemas/` | Pydantic 输入输出模型 | `Out` 用 `from_attributes` |
 | `app/services/` | 调度、抓取、平台适配、第三方源、认证、类型引擎、墓碑、清理 | 不碰 HTTP；重依赖延迟 import |
@@ -839,6 +839,20 @@ flowchart LR
       线程可以在"置位之后、登记之前"把轮次跑起来，那一轮永远等不到取消（症状 = `stop()`
       白等到 join 超时）；② **停止事件是"本代正在停"，不是"进程永远完了"** ——
       没启动过不广播、全停干净要收回（第一版留成永久状态，毒到了与调度无关的外部批次用例）。
+32. **一次业务写入的多个落库步骤必须共用一次 commit**（R3，devlog/212）：中间多一次
+    `commit()`，失败时就会留下**半写、而且往往不可恢复**的状态。今天唯一必然复现的一处是
+    T0 直播轮询：原来是两笔 commit（先写 `live_*`、再写跳变快照），第二笔失败 ⇒ 状态已落盘、
+    快照缺失，而下一轮 `prev_status == live_status` ⇒ **这条边沿被永久吞掉**（直播日历少一场，
+    `db.rollback()` 救不回来）。现已合成一笔。
+    - **级联清理（`delete_by_*`）与 `AccountStatSnapshotRepo.add` 不许自己 commit**：
+      `app/services/purge.py` 里**一个 `.commit()` 都不许有**，原子性靠调用方**一个**事务收口。
+      判据 = `tests/test_repository_commit_convention.py`（AST 判，不做文本搜索）+ 行为版
+      `tests/test_transaction_boundaries.py` ①（给 purge 中间注入一次 commit ⇒ 立刻红）。
+    - ⚠️ **`LiveSessionRepo.upsert_feed` 与 `upsert_danmakus` 的提交行为不一致**（前者靠调用方
+      后续的 `_flush_pending()` 落盘）：今天两条路都对，但那正是"owner 看不出来"的标本 ——
+      动它们之前先看 `docs/backend-repositories-and-routers.md` §2 的例外表与流程 owner 表。
+    - 五个多表流程的 owner 与失败行为**逐条核实过**（删账号 / 删 VTuber / T0 / 档案布局 /
+      收录），判据全部吃**文件库 + `foreign_keys=ON`**（内存库测不出锁冲突与并发窗口）。
 
 ---
 

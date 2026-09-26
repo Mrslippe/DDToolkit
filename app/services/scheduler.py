@@ -2983,14 +2983,18 @@ async def live_sweep_core(db: Session, client: httpx.AsyncClient | None = None) 
                 acc.live_url = hit.get("live_url", acc.live_url)
                 if not acc.room_id and hit.get("room_id"):
                     acc.room_id = str(hit["room_id"])
-                db.commit()
-                if acc.live_status != prev_status:
-                    # 直播边沿：落统计快照（直播日历场次推导的数据来源）
+                edge = acc.live_status != prev_status
+                started = bool(acc.live_status) and not prev_status
+                if edge:
+                    # 直播边沿：落统计快照（直播日历场次推导的数据来源）。
+                    # ⚠️ **必须与 live 字段同一个事务**（R3，devlog/212）：原来是两笔独立
+                    # commit ⇒ 第二笔失败时 live 状态已落盘、快照缺失，而下一轮
+                    # `prev_status == acc.live_status` ⇒ 这条边沿被**永久吞掉**（日历少一场）。
                     _record_stat_snapshot(db, acc)
-                    db.commit()
+                db.commit()
+                if edge and started:
                     # R28②：开播意味着"内容马上会来" ⇒ 立刻把动态流恢复满速
-                    if acc.live_status and not prev_status:
-                        note_dynamics_activity(f"检测到开播（{acc.display_name or acc.platform_uid}）")
+                    note_dynamics_activity(f"检测到开播（{acc.display_name or acc.platform_uid}）")
                 _push_account_snapshot(acc)
                 result.success += 1
             idx += len(chunk)

@@ -299,70 +299,90 @@
 
 ---
 
-## 2. Repositories（`app/repositories/vtuber_repo.py`，12 个类）
+## 2. Repositories（`app/repositories/vtuber_repo.py`，13 个类）
 
 构造注入会话：`Repo(db)`。CRUD 惯例：`create` 用 `model_dump()` 展开；`update` 逐个
-`setattr`；`get` 返回 `None` 表示不存在；写操作当场 `commit`（`PostRepo.create(commit=False)`
-与各 `delete_by_*` 例外，后者不提交、由调用方事务统一收口）。
+`setattr`；`get` 返回 `None` 表示不存在。
+
+**提交约定（R3 逐方法核实，devlog/212）**：多数写方法在**方法末尾** `commit`（下表
+`✅ 末尾`）；三类例外才是"原子性靠什么"的关键，别只看默认那一行：
+
+| 例外 | 谁提交 | 为什么 |
+|---|---|---|
+| 级联清理 `delete_by_account` / `delete_by_vtuber` / `delete_by_platform_uids` | **调用方**（`services/purge.py` 或具体流程） | purge 必须"要么全删要么不动" ⇒ `purge.py` 里**一个 `.commit()` 都不许有**（判据 `tests/test_repository_commit_convention.py`） |
+| `AccountStatSnapshotRepo.add` | 调用方 | 快照必须与业务写入**同一个事务** —— T0 的直播跳变边沿就靠这条（两笔 commit 会把边沿永久吞掉，devlog/212） |
+| `LiveSessionRepo.upsert_feed` | 调用方（`_route_live_item` 之后由 `_flush_pending` 落盘） | ⚠️ 与隔壁 `upsert_danmakus`（自己 commit）**不一致**。今天两者都对，但这正是"owner 看不出来"的标本 |
+
+多表流程的事务 owner（五个流程逐条核实过，判据全部在 `tests/test_transaction_boundaries.py`）：
+
+| 流程 | owner | 中途失败会怎样 |
+|---|---|---|
+| (a) 删账号 / (b) 删 VTuber | Router 端点：`purge_*` 不提交 + `Repo.delete` 末尾 commit | 全回滚，一行不少 |
+| (c) T0 live 字段 + 跳变快照 | `live_sweep_core` 的**单次** `commit()`（R3 修；原先是两笔） | 全回滚，边沿下一轮还能补上 |
+| (d) 档案布局 `ProfileCardRepo.replace_all` | Repo 自己（全仓唯一在 Repo 内成对 commit/rollback） | 保留旧布局 |
+| (e) 收录 V + Account | Router 端点（单事务两行） | 409 且不留孤儿 V |
 
 ### 2.1 `VTuberRepo`
 
-| 方法 | 语义 |
-|---|---|
-| `all()` | 全部 V，`joinedload(accounts)` 预取 |
-| `get(id)` | 按主键取（带 accounts 预取） |
-| `create(data)` / `update(id, data)` | 插入 / 部分更新（+commit/refresh） |
-| `delete(id)` | 删除；accounts 级联（**子表需先经 purge 清空**） |
+| 方法 | 语义 | 提交 |
+|---|---|---|
+| `all()` | 全部 V，`joinedload(accounts)` 预取 | — |
+| `get(id)` | 按主键取（带 accounts 预取） | — |
+| `create(data)` / `update(id, data)` | 插入 / 部分更新（+commit/refresh） | ✅ 末尾 |
+| `delete(id)` | 删除；accounts 级联（**子表需先经 purge 清空**） | ✅ 末尾 |
 
 ### 2.2 `AccountRepo`
 
-| 方法 | 语义 |
-|---|---|
-| `by_vtuber(vtuber_id)` | 某 V 的全部账号 |
-| `get(id)` / `create(vtuber_id, data)` / `update(id, data)` / `delete(id)` | 标准 CRUD |
-| `all_for_fetch(platform=None)` | 可抓取账号（`platform_uid` 非空），可按平台过滤 |
+| 方法 | 语义 | 提交 |
+|---|---|---|
+| `by_vtuber(vtuber_id)` | 某 V 的全部账号 | — |
+| `get(id)` / `create(vtuber_id, data)` / `update(id, data)` / `delete(id)` | 标准 CRUD | ✅ 末尾 |
+| `all_for_fetch(platform=None)` | 可抓取账号（`platform_uid` 非空），可按平台过滤 | — |
 
 ### 2.3 `AccountStatSnapshotRepo`
 
-| 方法 | 语义 |
-|---|---|
-| `add(account_id, followers_count, live_status=None, live_title=None, captured_at=None)` | 追加一行（不 commit） |
-| `recent(account_id, limit=100, source=None)` | 按 `captured_at` 倒序取最近 N 条 |
-| `fan_trend_points(account_id)` | 粉丝趋势点：`self` 按天取最后一条（降抖动）、`zeroroku` 全量点（补历史） |
-| `live_sessions(account_id)` | 由快照推导直播场次（`live_status` 边沿配对，读取时合并用） |
-| `delete_by_account(account_id)` | 批量删除（级联清理，不提交） |
+| 方法 | 语义 | 提交 |
+|---|---|---|
+| `add(account_id, followers_count, live_status=None, live_title=None, captured_at=None)` | 追加一行（不 commit） | ❌ 调用方 |
+| `recent(account_id, limit=100, source=None)` | 按 `captured_at` 倒序取最近 N 条 | — |
+| `fan_trend_points(account_id)` | 粉丝趋势点：`self` 按天取最后一条（降抖动）、`zeroroku` 全量点（补历史） | — |
+| `live_sessions(account_id)` | 由快照推导直播场次（`live_status` 边沿配对，读取时合并用） | — |
+| `delete_by_account(account_id)` | 批量删除（级联清理，不提交） | ❌ 调用方 |
 
 ### 2.4 `LiveSessionRepo`
 
-| 方法 | 语义 |
-|---|---|
-| `upsert_danmakus(account_id, items)` | 第三方场次批量幂等 upsert |
-| `upsert_feed(account_id, live_id, fields)` | B 站动态直播卡片幂等 upsert，返回是否新增 |
-| `list_by_account(account_id)` | 表内场次（按 `start_at`） |
-| `merged(account_id)` | **读取时合并**：表内场次 ∪ self 快照虚拟场次；同场去重（同 room 90min）、中断续播并段（同标题 60min）、`end_at` 补全、来源标记 `danmakus+self` 等 |
-| `delete_by_account(account_id)` | 批量删除（级联清理，不提交） |
+| 方法 | 语义 | 提交 |
+|---|---|---|
+| `upsert_danmakus(account_id, items)` | 第三方场次批量幂等 upsert | ✅ 末尾 |
+| `upsert_feed(account_id, live_id, fields)` | B 站动态直播卡片幂等 upsert，返回是否新增 | ❌ 调用方 ⚠️ |
+| `list_by_account(account_id)` | 表内场次（按 `start_at`） | — |
+| `merged(account_id)` | **读取时合并**：表内场次 ∪ self 快照虚拟场次；同场去重（同 room 90min）、中断续播并段（同标题 60min）、`end_at` 补全、来源标记 `danmakus+self` 等 | — |
+| `delete_by_account(account_id)` | 批量删除（级联清理，不提交） | ❌ 调用方 |
+
+> ⚠️ `upsert_feed` 与 `upsert_danmakus` 的提交行为**不一致**（见本节开头的例外表）：
+> 前者靠调用方后续的 `_flush_pending()` 落盘。今天两条路都对，但改它的人看不出这件事。
 
 ### 2.5 `LiveCategoryOverrideRepo`
 
-| 方法 | 语义 |
-|---|---|
-| `map_by_account(account_id)` | `{live_id: category}`（推断时 override 最高优先级） |
-| `upsert(account_id, live_id, category)` | 校正写入 |
-| `delete(account_id, live_id)` | 取消校正 |
-| `delete_by_account(account_id)` | 批量删除（级联清理，不提交） |
+| 方法 | 语义 | 提交 |
+|---|---|---|
+| `map_by_account(account_id)` | `{live_id: category}`（推断时 override 最高优先级） | — |
+| `upsert(account_id, live_id, category)` | 校正写入 | ✅ 末尾 |
+| `delete(account_id, live_id)` | 取消校正 | ✅ 末尾 |
+| `delete_by_account(account_id)` | 批量删除（级联清理，不提交） | ❌ 调用方 |
 
 ### 2.6 `PostRepo`
 
-| 方法 | 语义 |
-|---|---|
-| `by_uid(platform, platform_uid)` | 该账号全部帖子（旧接口，`published_at` 倒序） |
-| `paginated(platform, platform_uid, page, page_size, post_type, is_archived, is_deleted, q, date_from, date_to)` | 服务端分页 + 过滤，返回 `(total, items)` |
-| `stats(platform, platform_uid)` | 总数 / 归档数 / 墓碑数 / 类型分布 / 时间跨度 |
-| `archive_before(cutoff)` | 归档规则：`is_archived=0 且 published_at<cutoff` → 置 1，幂等，返回条数 |
-| `get(id)` / `create(data, commit=True)` / `update(id, data)` / `delete(id)` | 标准 CRUD |
-| `delete_by_platform_uids(list[(platform, uid)])` | 按「平台+UID」组清空（解订阅/删账号用；跨平台同 UID 不误删，不提交） |
-| `by_pid(platform, platform_uid, platform_post_id)` | 按唯一键取单条（f005：置顶刷新要读 `id`/`type`/`pinned_refreshed_at`） |
-| `sync_pinned(platform, platform_uid, pinned_ids)` | 置顶集合同步（f005）：标记新置顶、**撤销**已取消的；返回 `{marked, cleared}`。**只在第一页解析成功后调用** |
+| 方法 | 语义 | 提交 |
+|---|---|---|
+| `by_uid(platform, platform_uid)` | 该账号全部帖子（旧接口，`published_at` 倒序） | — |
+| `paginated(platform, platform_uid, page, page_size, post_type, is_archived, is_deleted, q, date_from, date_to)` | 服务端分页 + 过滤，返回 `(total, items)` | — |
+| `stats(platform, platform_uid)` | 总数 / 归档数 / 墓碑数 / 类型分布 / 时间跨度 | — |
+| `archive_before(cutoff)` | 归档规则：`is_archived=0 且 published_at<cutoff` → 置 1，幂等，返回条数 | ✅ 末尾 |
+| `get(id)` / `create(data, commit=True)` / `update(id, data)` / `delete(id)` | 标准 CRUD | ✅ 末尾（`commit=False` 时 ❌） |
+| `delete_by_platform_uids(list[(platform, uid)])` | 按「平台+UID」组清空（解订阅/删账号用；跨平台同 UID 不误删，不提交） | ❌ 调用方 |
+| `by_pid(platform, platform_uid, platform_post_id)` | 按唯一键取单条（f005：置顶刷新要读 `id`/`type`/`pinned_refreshed_at`） | — |
+| `sync_pinned(platform, platform_uid, pinned_ids)` | 置顶集合同步（f005）：标记新置顶、**撤销**已取消的；返回 `{marked, cleared}`。**只在第一页解析成功后调用** | ✅ 末尾 |
 
 **`paginated` 过滤语义**：`q` 匹配 `title`/`summary`（OR，`ilike`）；`date_from`/`date_to`
 为 `published_at` 范围（`date_to` 次日零点排他 → 含结束日全天，设范围时排除空时间帖）；
@@ -372,41 +392,50 @@
 
 ### 2.7 `LiveGiftDayRepo`
 
-| 方法 | 语义 |
-|---|---|
-| `list_by_account(account_id, source=None, limit=0)` | 按日期倒序取礼物聚合（limit=0 全量） |
-| `delete_by_account(account_id)` | 批量删除（级联清理，不提交） |
+| 方法 | 语义 | 提交 |
+|---|---|---|
+| `list_by_account(account_id, source=None, limit=0)` | 按日期倒序取礼物聚合（limit=0 全量） | — |
+| `delete_by_account(account_id)` | 批量删除（级联清理，不提交） | ❌ 调用方 |
 
 ### 2.8 `ThirdpartyVtuberRepo`
 
-| 方法 | 语义 |
-|---|---|
-| `search(kw, source=None, limit=20)` | 名称关键词 / uid 前缀匹配（候选池搜索增强） |
-| `by_uid(platform_uid, source=None)` | 按 uid 取索引条目 |
+| 方法 | 语义 | 提交 |
+|---|---|---|
+| `search(kw, source=None, limit=20)` | 名称关键词 / uid 前缀匹配（候选池搜索增强） | — |
+| `by_uid(platform_uid, source=None)` | 按 uid 取索引条目 | — |
 
 ### 2.9 `VtuberEventRepo`
 
-| 方法 | 语义 |
-|---|---|
-| `list_by_vtuber(vtuber_id)` | 手动条目（按日期升序） |
-| `create(vtuber_id, title, event_date)` / `delete(event_id)` | 增删 |
-| `future_reservations(vtuber_id, now=None, days=90)` | 从预约帖 `body_json.reservation` 解析未来直播预约（含年份推断） |
-| `delete_by_vtuber(vtuber_id)` | 批量删除（级联清理，不提交） |
+| 方法 | 语义 | 提交 |
+|---|---|---|
+| `list_by_vtuber(vtuber_id)` | 手动条目（按日期升序） | — |
+| `create(vtuber_id, title, event_date)` / `delete(event_id)` | 增删 | ✅ 末尾 |
+| `future_reservations(vtuber_id, now=None, days=90)` | 从预约帖 `body_json.reservation` 解析未来直播预约（含年份推断） | — |
+| `delete_by_vtuber(vtuber_id)` | 批量删除（级联清理，不提交） | ❌ 调用方 |
 
 ### 2.10 `VtuberFieldHistoryRepo`
 
-| 方法 | 语义 |
-|---|---|
-| `delete_by_account(account_id)` | 清该账号的曾用值行（级联清理，不提交） |
-| `delete_by_vtuber(vtuber_id)` | 清该 V 的曾用值行（`account_id` 可为 NULL，删 V 时必须走这条；不提交） |
+| 方法 | 语义 | 提交 |
+|---|---|---|
+| `delete_by_account(account_id)` | 清该账号的曾用值行（级联清理，不提交） | ❌ 调用方 |
+| `delete_by_vtuber(vtuber_id)` | 清该 V 的曾用值行（`account_id` 可为 NULL，删 V 时必须走这条；不提交） | ❌ 调用方 |
 
 ### 2.11 `ProfileCardRepo`（f006，R37-P2）
 
-| 方法 | 语义 |
-|---|---|
-| `by_vtuber(vtuber_id)` | 该 V 的卡片布局（按 `y, x` = 阅读顺序） |
-| `replace_all(vtuber_id, cards)` | **整版替换**：一个事务里 delete + insert，失败整体回滚（不留半版布局）；自己 commit |
-| `delete_by_vtuber(vtuber_id)` | 批量删除（级联清理，不提交） |
+| 方法 | 语义 | 提交 |
+|---|---|---|
+| `by_vtuber(vtuber_id)` | 该 V 的卡片布局（按 `y, x` = 阅读顺序） | — |
+| `replace_all(vtuber_id, cards)` | **整版替换**：一个事务里 delete + insert，失败整体回滚（不留半版布局）；自己 commit | ✅ 自成事务 |
+| `delete_by_vtuber(vtuber_id)` | 批量删除（级联清理，不提交） | ❌ 调用方 |
+
+### 2.12 `AppMetaRepo`（f003）
+
+| 方法 | 语义 | 提交 |
+|---|---|---|
+| `get(key)` / `get_dt(key)` / `all_with_prefix(prefix)` | 通用 KV 读（键如 `external.startup.last_run`、`ratelimit.<平台>`） | — |
+| `set(key, value)` | 写一个键 | ✅ 末尾 |
+| `set_dt(key, when=None)` | 写一个 UTC 时间戳（**走 `set`** ⇒ 提交行为同它） | ✅ 末尾（间接） |
+| `delete(key)` | 删一个键 | ✅ 末尾 |
 
 > 写入不在 Repo（要按"值没变就不记"的业务口径判断）：见
 > `services/vtuber_history.py::record_field_change()` 与 `former_values()`。
