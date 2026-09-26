@@ -31,7 +31,6 @@
  * 打开即可读。
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { createPortal } from 'react-dom'
 import { ChevronDown, X } from 'lucide-react'
 
 import type { LiveDanmakuInfo, LiveEvent, LiveMetrics, LiveSession, LiveSessionDetail } from '../../api/types'
@@ -41,6 +40,9 @@ import type { CloudWord } from '../../utils/wordCloudLayout'
 import MosaicCloud from '../wordcloud/MosaicCloud'
 import OverlayScroll from '../OverlayScroll'
 import ProxyImage from '../common/ProxyImage'
+import {
+  Dialog, DialogClose, DialogContent, DialogDescription, DialogTitle,
+} from '../ui/dialog'
 import type { DetailState } from './useLiveSessions'
 import { useLiveUpstream } from './useLiveUpstream'
 import {
@@ -61,13 +63,14 @@ const METRIC_ROWS: { key: keyof LiveMetrics; label: string; suffix?: string }[] 
 const SLOW_HINT_SECONDS = 8
 
 interface Props {
-  detail: DetailState
+  /** 详情状态；`null` = 关（组件**仍然挂载**，见下面的 `shown`） */
+  detail: DetailState | null
   /** 分类校正下拉是否展开（状态归属父组件：受"详情变化即收起"那条 effect 驱动） */
   catPopOpen: boolean
   setCatPopOpen: React.Dispatch<React.SetStateAction<boolean>>
   /** 分类徽章下拉的锚点（点外关闭判定用） */
   catPopRef: React.RefObject<HTMLSpanElement>
-  /** 关闭弹窗（遮罩点击 / 关闭钮 / Esc 由父组件的 keydown effect 处理） */
+  /** 关闭弹窗（遮罩点击 / 关闭钮 / Esc 都由 Radix 的 `onOpenChange` 转到这里） */
   onClose: () => void
   /** 切换当日第 idx 场 */
   onSwitchIdx: (idx: number) => void
@@ -88,6 +91,20 @@ export default function LiveSessionDialog({
   accountId,
 }: Props) {
   /**
+   * 关闭动画期间继续渲染的那一份详情（Q2 批次 14，devlog/217）。
+   *
+   * ⚠️ 为什么需要它：改前是**父组件条件渲染**（`{detail && <LiveSessionDialog …/>}`）+
+   * 父组件的 `keydown` 监听直接 `setDetail(null)` ⇒ 组件当场卸载、**退场动画根本播不出来**
+   * （用户看到的是"Esc/点遮罩一闪就没了，点 X 也一样"）。
+   * 交给 Radix 之后 `open=false` 会先把面板留在 DOM 里播 `data-state=closed` 的动画、
+   * 播完才卸载 —— 而这段时间 `detail` 已经是 `null`，所以内容必须由这份"最后一次非空值"渲染。
+   */
+  const [shown, setShown] = useState<DetailState | null>(detail)
+  useEffect(() => {
+    if (detail) setShown(detail)
+  }, [detail])
+
+  /**
    * 自建词云（本地覆盖）：非空、且**属于当前场次**时优先于 `detail.data.danmaku` 展示。
    *
    * 为什么不把结果写回父组件的 `detail`：① 自建只影响这一次打开的词云展示，
@@ -106,23 +123,27 @@ export default function LiveSessionDialog({
   /** 自建词云的在途请求取消器（关窗 / 切场次即 abort） */
   const buildCtrl = useRef<AbortController | null>(null)
 
-  const s: LiveSessionDetail =
-    detail.data ?? { ...detail.sessions[detail.idx], analysis: null }
+  const open = Boolean(detail)
+  /** 关闭动画期间 `detail` 已为 null —— 内容仍由 `shown` 渲染（hook 也不能漏跑） */
+  const liveId = shown?.sessions[shown.idx]?.live_id ?? null
+  const s: LiveSessionDetail | null = shown
+    ? (shown.data ?? { ...shown.sessions[shown.idx], analysis: null })
+    : null
 
   /**
    * 上游取数（弹幕词云 / 指标 / 直播动态）：独立请求 + 独立 loading（devlog/063）。
-   * 切场次页签时 `s.live_id` 变 → hook 自动重取（后端有 10 分钟缓存，重取很便宜）。
+   * 切场次页签时 `live_id` 变 → hook 自动重取（后端有 10 分钟缓存，重取很便宜）。
    */
-  const up = useLiveUpstream(accountId, s.live_id)
+  const up = useLiveUpstream(accountId, liveId)
   const metrics: LiveMetrics | null = up.data?.metrics ?? null
   const events: LiveEvent[] = up.data?.events ?? []
-  const selfDm = selfWc && selfWc.liveId === s.live_id ? selfWc.data : null
+  const selfDm = selfWc && selfWc.liveId === liveId ? selfWc.data : null
   /** 本场次的生效弹幕信息：自建结果优先，其次上游 */
   const dm: LiveDanmakuInfo | null = selfDm ?? up.data?.danmaku ?? null
   /** 词云状态（缺省 = 上游没给） */
   const wcStatus = dm?.wc_status ?? (dm ? 'upstream' : 'upstream_absent')
   const hasWords = (dm?.top_words?.length ?? 0) > 0
-  const building = busyWc != null && busyWc === s.live_id
+  const building = busyWc != null && busyWc === liveId
   /** 上游这次到底拿没拿到（用于区分"没拉到"与"本场没有"） */
   const upFailed = wcStatus === 'fetch_failed'
   /** 已经等了一会儿 → 文案从"正在取"换成"还在等 + 已等 Ns"（上游会间歇性变慢） */
@@ -167,41 +188,59 @@ export default function LiveSessionDialog({
    * - **进度反馈**：按钮文案带上已等秒数（`buildElapsed`），120s 的等待不再是"卡住了"。
    */
   const buildCloud = async () => {
-    const liveId = s.live_id
-    if (!liveId || !accountId || busyWc) return
+    const target = liveId                       // 本场的场次 id（`s` 在外面可能是 null）
+    if (!target || !accountId || busyWc) return
     buildCtrl.current?.abort()
     const ac = new AbortController()
     buildCtrl.current = ac
-    setBusyWc(liveId)
+    setBusyWc(target)
     setBuildElapsed(0)
     try {
       setSelfWc({
-        liveId,
-        data: await api.buildLiveSessionWordCloud(accountId, liveId, ac.signal),
+        liveId: target,
+        data: await api.buildLiveSessionWordCloud(accountId, target, ac.signal),
       })
     } catch (e) {
       // 主动取消不算失败（关窗/切场次时不该在新场次上闪一下"拉取失败"）
       if (ac.signal.aborted || (e as Error)?.name === 'AbortError') return
       // 失败也要落到明确状态（否则按钮点了没反应，用户不知道发生了什么）
-      setSelfWc({ liveId, data: { wc_status: 'fetch_failed', top_words: [], top_keywords: [] } })
+      setSelfWc({ liveId: target, data: { wc_status: 'fetch_failed', top_words: [], top_keywords: [] } })
     } finally {
       setBusyWc(null)
     }
   }
+  // ⚠️ 早退必须在**所有 hook 之后**（本组件有 5 个 useState + 2 个 useEffect + useMemo）
+  if (!shown || !s) return null
+
   const d0 = new Date(s.start_at)
   const d1 = s.end_at ? new Date(s.end_at) : null
   const t = keyOf(s)
   const srcs = (s.source ?? 'self').split('+').filter(Boolean)
   const area = [s.parent_area_name, s.area_name].filter(Boolean).join(' / ')
 
-  return createPortal(
-    <div
-      className="lc-dlg-backdrop"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose()
-      }}
-    >
-      <div className="lc-dlg" role="dialog" aria-modal>
+  return (
+    /**
+     * 场次详情弹窗 —— **Radix Dialog**（Q2，批次 14，devlog/217）。
+     *
+     * 迁移换来的六件事（前五项都是"手搓版根本没有"的）：
+     * ① 标题关联（`DialogTitle` → `aria-labelledby`，副行给 `DialogDescription`）；
+     * ② 初始焦点进弹窗、③ **focus trap**、④ 背景 `inert`（Radix 自动）、
+     * ⑤ 关闭后焦点**回原位**；
+     * ⑥ **Esc / 点遮罩 / 点 X 走同一条 `onOpenChange`**，而且面板会先播退场动画再卸载 ——
+     *    改前由父组件的 keydown 直接 `setDetail(null)`，组件当场卸载，退场动画播不出来。
+     *
+     * ⚠️ **DOM 与类名逐字保留**（`.lc-dlg-backdrop` / `.lc-dlg` / `.lc-dlg-*`）：
+     * `scripts/ui_probe.py` 与 `frontend/src/dev/probe.ts` 都直接查这些选择器
+     * （R36 弹窗高度、速览卡几何…）。所以遮罩沿用 `.lc-dlg-backdrop`（新增的
+     * `overlayClassName`），面板额外给 `p-0 gap-0` 抵消 `ui/dialog` 的默认内边距。
+     */
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent
+        className="lc-dlg p-0 gap-0"
+        overlayClassName="lc-dlg-backdrop"
+        showCloseButton={false}
+        aria-keyshortcuts="Escape"
+      >
         {/* 头部驻留区：不随内容滚动（2026-09-07 user 定案——「标题……X」恒驻留、
             滚动条只在内容区悬浮不覆盖头部）；下缘发丝分隔 */}
         <div className="lc-dlg-head-zone">
@@ -245,25 +284,31 @@ export default function LiveSessionDialog({
               ) : (
                 <span className={`lc-pop-badge lc-stat-pill--${t}`}>{liveTypeLabel(t)}</span>
               )}
-              <span className="lc-dlg-name">{s.live_title || '场次详情'}</span>
-              <span className="lc-dlg-sub">{detail.key} {fmtTime(d0)}</span>
+              {/* 标题与副行都进 Radix 的关联体系：`DialogTitle` → `aria-labelledby`、
+                  `DialogDescription` → `aria-describedby`（改前标题只是一个裸 `<span>`）。 */}
+              <DialogTitle className="lc-dlg-name">{s.live_title || '场次详情'}</DialogTitle>
+              <DialogDescription className="lc-dlg-sub">
+                {shown.key} {fmtTime(d0)}
+              </DialogDescription>
               {s.category_from === 'override' && (
                 <span className="lc-pop-corr">已校正</span>
               )}
             </div>
-            <button type="button" className="lc-dlg-close" aria-label="关闭" onClick={onClose}>
-              <X className="size-4" />
-            </button>
+            <DialogClose asChild>
+              <button type="button" className="lc-dlg-close" aria-label="关闭">
+                <X className="size-4" />
+              </button>
+            </DialogClose>
           </div>
 
           {/* 当日多场切换（点格默认第一场）——随头部驻留 */}
-          {detail.sessions.length > 1 && (
+          {shown.sessions.length > 1 && (
             <div className="lc-dlg-tabs">
-              {detail.sessions.map((x, i) => (
+              {shown.sessions.map((x, i) => (
                 <button
                   key={x.live_id ?? `${x.start_at}-${i}`}
                   type="button"
-                  className={`lc-dlg-tab${i === detail.idx ? ' on' : ''}`}
+                  className={`lc-dlg-tab${i === shown.idx ? ' on' : ''}`}
                   onClick={() => onSwitchIdx(i)}
                 >
                   {fmtTime(new Date(x.start_at))}
@@ -412,7 +457,7 @@ export default function LiveSessionDialog({
               没有数据 / 拉取失败**四种形态占同一块地方，弹窗高度不随数据到达变化。
               槽本身不解释"在等什么"——那是骨架与标题行那句话的事。 */}
           <div className="lc-dlg-slot lc-dlg-slot--danmaku">
-          {detail.loading || (!dm && up.loading) ? (
+          {shown.loading || (!dm && up.loading) ? (
             /* 未到位：两行骨架（对应"弹幕总量 + 文本弹幕"）+ 词云区骨架（与 boxH 210 同高）。
                行数/高度都按到位后的样子给，所以换成真值时**一像素都不动**。 */
             <div className="lc-dlg-danmaku" data-pending="1">
@@ -600,8 +645,7 @@ export default function LiveSessionDialog({
           )}
         </section>
         </OverlayScroll>
-      </div>
-    </div>,
-    document.body,
+      </DialogContent>
+    </Dialog>
   )
 }

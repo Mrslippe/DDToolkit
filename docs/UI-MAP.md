@@ -1009,8 +1009,8 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 
 | 区域 | 类名 | 说明 |
 |---|---|---|
-| 遮罩 | `.lc-dlg-backdrop` | fixed inset 0、z-60、`rgba(15,23,42,.32)`、淡入 0.18s；点击空白（target===currentTarget）关闭；打开期间锁 body 滚动 |
-| 面板根 | `<div className="lc-dlg" role="dialog" aria-modal>`（**面板=头部驻留区 + 内容滚动体**，2026-09-07 user 定案） | **720px**（`max-width calc(100vw-48px)`）、`max-height min(680px, calc(100vh-64px))`、**12px 圆角**、白底 + 发丝边 `--c-border` + `--shadow-dialog`；入场 pop 0.2s（translateY 8 + scale .98）；**头部驻留区** `.lc-dlg-head-zone`（flex:none · padding `16px 18px 12px` · 下缘发丝分隔）承担头部行+多场 tabs——不随内容滚动、滚动条不覆盖；**内容区** `<OverlayScroll className="lc-dlg-body">`（flex:1 min-height:0；滚动体 `.lc-dlg-body .os-scroll` column gap 12 / padding `12px 18px 18px` / overscroll-behavior contain） |
+| 遮罩 | `.lc-dlg-backdrop`（**Radix `DialogOverlay` 的类名**，2026-09-26 迁 Radix） | fixed inset 0、z-60、`rgba(15,23,42,.32)`、淡入 0.18s / **淡出 0.16s**（`[data-state='closed']`）；点空白关闭（Radix 的点外关闭，不再手写 `target===currentTarget`）；背景 `aria-hidden` + 锁 body 滚动（Radix 模态语义） |
+| 面板根 | Radix `DialogContent`（类名仍是 `lc-dlg`，`data-slot=dialog-content`） | **720px**（`max-width calc(100vw-48px)`）、`max-height min(680px, calc(100vh-64px))`、**12px 圆角**、白底 + 发丝边 `--c-border` + `--shadow-dialog`；**z-61**（压在遮罩之上，别靠 DOM 顺序）；入场 pop 0.2s（translateY 8 + scale .98）/**退场 pop-out 0.16s**（`[data-state='closed']`，由 Radix 的 Presence 等动画播完再卸载）；标题走 `DialogTitle`（`aria-labelledby`）、副行走 `DialogDescription`（`aria-describedby`）、关闭钮走 `DialogClose`；**头部驻留区** `.lc-dlg-head-zone`（flex:none · padding `16px 18px 12px` · 下缘发丝分隔）承担头部行+多场 tabs——不随内容滚动、滚动条不覆盖；**内容区** `<OverlayScroll className="lc-dlg-body">`（flex:1 min-height:0；滚动体 `.lc-dlg-body .os-scroll` column gap 12 / padding `12px 18px 18px` / overscroll-behavior contain） |
 | 头部 | `.lc-dlg-head` | 左=**分类胶囊按钮**（点击弹全部分类下拉）+ 标题（15px/600 单行截断）+ 副行 `日期 HH:MM`（11.5px 次级）+「已校正」红字标（`category_from==='override'`）；右=关闭钮 26×26 r8 |
 | 分类下拉 | `.lc-dlg-cat-pop` | 208px 宽、max-h 340、r12、`--shadow-dialog`；列表 = **自动（跟随推断）** 灰胶囊 + 9 类彩色胶囊（26px 高 r46，`.on` 内描边 2px 深灰）；选后 PUT/DELETE override 并重拉场次+详情；点外部关闭 |
 | 多场切换 | `.lc-dlg-tabs` | 当日多场时显示：HH:MM 胶囊（r106），激活 = `--c-accent` 底白字 |
@@ -1087,7 +1087,7 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 | 发丝边 | **`--c-border`**（rgba(210,216,222,.55)）——lc 家族旧 `rgba(15,23,42,.06)` 已废弃 |
 | 阴影 | `--shadow-dialog`（0 4px 16px 10%） |
 | 遮罩 | **`rgba(15,23,42,.32)`**（radix 旧 black/50、查看器旧 black/40 已统一；lc-dlg-backdrop 本就此值） |
-| 入场动画 | 轻 pop：`lc-dlg-pop`（translateY 8 + scale .98 + 淡入）；浮层 0.16s / hover 浮层 lc-pop 0.12s / 主弹窗 0.2s；reduced-motion 全部禁用 |
+| 入场动画 | 轻 pop：`lc-dlg-pop`（translateY 8 + scale .98 + 淡入）；浮层 0.16s / hover 浮层 lc-pop 0.12s / 主弹窗 0.2s；**退场**：`lc-dlg-pop-out`（translateY 6 + scale .985 + 淡出，**0.16s**）+ 遮罩 `lc-dlg-fade-out` 同拍；reduced-motion 下入退场全部压到一帧。⚠️ **退场那两条声明是"Radix 会等动画"的判据**：`Presence` 靠 computed `animationName` 判断，缺了就关闭瞬间卸载（`LiveSessionDialog.test.tsx` 直接检查真 CSS 里有这两条） |
 | 关闭通道 | **点外关闭 + Esc 双通道**（所有浮层；radix 内建） |
 | 关闭钮 | **26×26 · r8 · `--c-text-sub` · hover 灰底 rgba(15,23,42,.05) + 主色文字**（radix 与 lc-dlg-close 同款；ImageViewer 黑玻璃圆钮为灯箱豁免）；**焦点环只在键盘态**——2026-09-09 用户反馈「点关闭会冒出粉色选中框」，radix 关闭钮由 `focus:` 改 `focus-visible:ring-*`（鼠标点击不再命中，Tab 仍有环） |
 | **头部驻留** | 详情类二级窗口 = **面板 = 头部驻留区（flex:none · 下缘发丝分隔）＋ 内容 OverlayScroll（flex:1）**——「标题……X」（含场次多场 tabs）钉顶不随内容滚动；滚动条只在内容区悬浮，**不覆盖标题与关闭钮**（2026-09-07 user 定案；已接入：帖子详情 `pd-head`、场次详情 `lc-dlg-head-zone`；短表单弹窗内容不溢出，不强制） |
@@ -1105,7 +1105,7 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 | filter-pop / post-filter-pop | 12 | --c-border | — | ✓(0.16s) | ✓ | — | 粉底白字/描边 |
 | lc-month-pop | 12 | --c-border | — | ✓(0.16s) | ✓ | — | deep 底白字 |
 | lc-pop（hover 浮层） | 12 | --c-border | — | ✓(0.12s) | ✓ | — | — |
-| lc-dlg（场次详情） | 12 | --c-border | .32 | ✓(0.2s) | ✓ | 26×26 r8 | 色体系本体 |
+| lc-dlg（场次详情） | 12 | --c-border | .32 | ✓(0.2s) | ✓(0.16s 退场) | 26×26 r8 | 色体系本体；**Radix Dialog**（Q2，devlog/217） |
 | lc-dlg-cat-pop | 12 | --c-border | — | ✓(0.16s) | ✓ | — | 色体系+内描边 |
 | Tooltip（IconRail） | 999 | — | — | ✓ | — | — | 黑玻璃胶囊 |
 | 词云提示 lc-dlg-cloud-tip | 999 | — | — | — | — | — | 黑玻璃胶囊 |

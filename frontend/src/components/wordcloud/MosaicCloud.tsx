@@ -197,7 +197,17 @@ export default function MosaicCloud({
   return (
     <div ref={ref} className="lc-dlg-cloud">
       {snap && snap.cells.length > 0 && (
-        <svg width={size.w} height={size.h} className="lc-dlg-cloud-svg">
+        /* Q2（批次 14，devlog/217）：SVG 里的词是**绘制**出来的，读屏默认只念个"图形"；
+           补 `role=img` + 一句话摘要（前 8 个词），让它至少"说得出是什么"。 */
+        <svg
+          width={size.w}
+          height={size.h}
+          className="lc-dlg-cloud-svg"
+          role="img"
+          aria-label={`本场弹幕词云（前 ${Math.min(8, snap.cells.length)} 个词：${
+            snap.cells.slice(0, 8).map((c) => c.word.text).join('、')
+          }）`}
+        >
           {snap.cells.map((c) => {
             const { word, poly, cx, cy, r } = c
             const d = poly.length

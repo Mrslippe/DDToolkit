@@ -55,7 +55,6 @@
    那个 `api.*` 方法上；**多余字段一律放过**（后端加字段是兼容变更）。
 
 ### 1.3 复用度（谁真的被复用）
-
 | 组件 | 引用者数 |
 |---|---|
 | `OverlayScroll` | 5 |
@@ -204,7 +203,7 @@
 |---|---|---|---|
 | eslint + prettier + `npm run lint` | 0.5 天 | 巨型文件里未使用变量/依赖数组漏项靠人眼 | 🔶 **eslint 已落地（2026-09-13）**：`eslint@8` flat config，**只开行为类 6 条规则**（核心是 `react-hooks/exhaustive-deps`）；首跑 59 文件仅 **1 error + 5 warning**，已清到 **0 warning** 并设 `--max-warnings 0`；5 处故意窄依赖逐条加 disable + 理由。**prettier 未引入**（会一次性重排几乎每个文件、冲掉历史 blame，建议单独一批） |
 | vitest 冒烟：`format` / `wordCloudLayout` 纯函数 | 1 天 | 词云几何算法（单调性/面积偏差）最值得测 | ✅ **已落地（2026-09-13）**：`vitest@2.1.9`（受 Vite 5 peer 约束，非 5.x）+ `src/utils/{format,wordCloudLayout}.test.ts` 共 **29 条**断言；`npm run test`；已并入 `scripts/dev_check.py` 的 `frontend logic` 一项 |
-| 渲染快照（2 个） | — | 需要 jsdom/浏览器环境 | ⬜ 未做（当前只测纯逻辑，不引环境依赖） |
+| 渲染快照（2 个） | — | 需要 jsdom/浏览器环境 | 🔶 **部分落地（2026-09-26，Q2 批次 14，devlog/217）**：环境依赖**没有新引** —— `jsdom` 本来就在 devDeps（S2 的 `sanitizePlatformHtml` 在用），于是第一条**组件用例**用 `// @vitest-environment jsdom` + `react-dom/client` + `act` 写出来了（`components/live/LiveSessionDialog.test.tsx`，11 条：aria 关联 / 初始焦点 / 背景 inert / 关闭路径 / 退场动画前提）。⚠️ **`@testing-library/react` + `user-event` + `vitest-axe` 仍未引入**（计划里属"可缓"相位）；⚠️ **jsdom 测不到 Radix 的退场动画**（它靠 computed style 判定，jsdom 不解析样式表 ⇒ 实测恒 `none`）—— 那半条判据落在"真 CSS 有退场声明 + 父组件不再条件渲染"上，真机动效仍在 `TODO.md` §1.3 |
 | storybook | — | **不建议**：单应用、无跨端复用，维护成本 > 收益 | — |
 
 > **为什么先做 vitest 而不是 eslint**：纯函数断言能锁住**行为契约**（面积∝词频、

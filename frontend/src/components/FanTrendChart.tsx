@@ -571,7 +571,18 @@ const FanTrendChart = memo(function FanTrendChart({ accountId, refreshTick = 0 }
           <StateBlock kind="empty" text="暂无趋势数据" />
         )}
         {capacity.length > 0 && (
-          <div className="fan-chart-canvas" ref={chartRef} />
+          /* Q2（批次 14，devlog/217）：ECharts 画在 canvas 上 ⇒ DOM 里**一个可读文本都没有**，
+             读屏用户拿到的是空白。这里按"它是一张图"来标记：`role=img` + 一句话摘要
+             （数字与左侧可见的 1d/7d/30d 概览同一份数据）。
+             ⚠️ **sr-only 数据表仍待做**（计划把"给 ECharts 配数据表"列在可缓相位）。 */
+          <div
+            className="fan-chart-canvas"
+            ref={chartRef}
+            role="img"
+            aria-label={`粉丝趋势图（${capacity.length} 个数据点）${
+              overview ? `：1 天 ${fmtDelta(overview.d1)}，7 天 ${fmtDelta(overview.d7)}，30 天 ${fmtDelta(overview.d30)}` : ''
+            }`}
+          />
         )}
       </div>
     </div>

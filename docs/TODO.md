@@ -194,6 +194,16 @@
 > `busy_timeout` 排队 / 竞争写 / T0 ∥ 帖子 / checkpoint 重开 / `dispose()` 与改名），
 > 别再重复验；**下面剩下的都是真窗口 / 真托盘 / 真迁移**，`ui_probe` 原理上碰不到。
 
+- **键盘走查（Q2 批次 14 留下的那一半，2026-09-26 记，devlog/217）**：场次详情弹窗已迁 Radix
+  Dialog，**机器判据已经覆盖**：标题关联 / 初始焦点 / 背景 inert / Esc·点遮罩·点 X 走同一条关闭路径
+  （`frontend/src/components/live/LiveSessionDialog.test.tsx`，11 条）。
+  **但两件事 jsdom 验不到，只能人走**：① **关闭后焦点回到打开它的那个格子**；
+  ② **退场动画真的看得见**（Radix 靠 computed style 判定"要不要等动画"，jsdom 不解析样式表 ⇒
+  实测拿不到）。期望：点日期格 → 弹窗淡入；按 Esc（或点遮罩/关闭钮）→ **面板往下淡出约 0.16s
+  再消失**（不是"一闪就没"）→ 接着按 Tab，焦点应回到刚才那个格子附近。
+  ⚠️ 另：`--archive` / `--reservations` 两个探针模式**今天跑不出日历**（实测**改动之前**就红，
+  devlog/217 §五）—— 修它们之前，弹窗几何没有机器判据。
+
 - **升级/迁移失败的两个真机现场**（批次 16 的验收要求，2026-09-26 记，devlog/207）：
   这两条 `ui_probe` 与 CI 都碰不到（要真库坏掉 / 真迁移中途失败），命令与判据写在
   `docs/DEV-LOOP.md` §一 的「真机现场：升级失败 / 迁移失败」那一小节。期望：
@@ -440,7 +450,7 @@ W1/W2 可以在**现在的架构上**做完，但它们只是让 W3 少踩坑。
 |---|---|---|
 | 后端 | `python -m pytest -q`（**解释器走 `.venv`**，见 `ARCHITECTURE.md` §6 第 24 条） | **717–718 passed / 0 failed**（总数 718：其中 1 条**打真上游**的用例在不可达时按设计 skip ⇒ `passed` 那一格会差 1；2026-09-26 实测 ≈54–80s） |
 | 桌面壳 | `cargo test`（工作目录 `frontend/src-tauri`） | **56 passed**（2026-09-26 实测；含 `delete_old_dir` 的真实 junction 用例、S1 的 token 生成用例与 S3 的准入表/白名单用例） |
-| 前端单测 | `npm --prefix frontend run test` | **608–610 passed**（2026-09-26 实测；文件数不抄，跑一次就有） |
+| 前端单测 | `npm --prefix frontend run test` | **619–621 passed**（2026-09-26 实测；文件数不抄，跑一次就有） |
 | 前端类型 / lint | `npx tsc --noEmit`（**必须在 `frontend/` 里跑**）/ `npm --prefix frontend run lint` | 0 错 / 0 错（2026-09-26 复核） |
 | 文档漂移 | `python scripts/doc_check.py` | **0 FAIL**（2026-09-26 复核；另有 1 条历史 devlog 索引欠账 WARN，WARN 看脚本逐条输出） |
 | 上游冒烟 | `python scripts/smoke_upstream.py [--cold]` | 真上游 **5 ok** / 冷进程 **3 ok**，0 FAIL（2026-09-23 复核） |

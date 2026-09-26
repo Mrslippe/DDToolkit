@@ -263,18 +263,9 @@ const LiveCalendar = memo(function LiveCalendar(
     }
   }
 
-  // Esc 关闭详情弹窗
-  useEffect(() => {
-    if (!detail) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setDetail(null)
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-    // `setDetail` 是 useState 的 setter（React 保证引用恒定，漏它不会导致陈旧闭包）；
-    // 这是 eslint 基线的已知提示，不是 bug（2026-09-13）。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [detail])
+  // ⚠️ Esc 关闭**不在这里**（Q2，批次 14，devlog/217）：改前是这里的 keydown 直接
+  // `setDetail(null)` ⇒ 弹窗组件当场卸载、退场动画根本播不出来。现在交给 Radix Dialog
+  // 的 `onOpenChange`（Esc / 点遮罩 / 点 X / 关闭钮同一条路），面板会先播完退场动画再卸载。
 
   const renderCell = (c: DayCell) => {
     const first = c.sessions[0]
@@ -530,18 +521,19 @@ const LiveCalendar = memo(function LiveCalendar(
       </div>
 
       {renderPop()}
-      {detail && (
-        <LiveSessionDialog
-          detail={detail}
-          catPopOpen={catPopOpen}
-          setCatPopOpen={setCatPopOpen}
-          catPopRef={catPopRef}
-          onClose={() => setDetail(null)}
-          onSwitchIdx={switchDetailIdx}
-          onPickCategory={onPickCategory}
-          accountId={accountId}
-        />
-      )}
+      {/* ⚠️ **不再条件渲染**（Q2，批次 14）：Radix 要 `open=false` 那一帧还挂着面板，
+          才能播退场动画（`data-state=closed`）—— 条件渲染会把整棵树当场拆掉。
+          组件内部用"最后一次非空 detail"渲染关闭动画期间的内容。 */}
+      <LiveSessionDialog
+        detail={detail}
+        catPopOpen={catPopOpen}
+        setCatPopOpen={setCatPopOpen}
+        catPopRef={catPopRef}
+        onClose={() => setDetail(null)}
+        onSwitchIdx={switchDetailIdx}
+        onPickCategory={onPickCategory}
+        accountId={accountId}
+      />
     </div>
   )
 })

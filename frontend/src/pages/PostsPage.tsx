@@ -980,6 +980,9 @@ return (
             loadingMore={loadingMore}
             loadMoreError={loadMoreError}
             onRetryLoadMore={() => setLoadMoreError(null)}
+            // 显式「加载更多」（Q2，批次 14）：与哨兵进视口**同一件事**（`setPage(p+1)`
+            // 触发上面那条取数 effect），给键盘/读屏用户一个不依赖滚动的入口。
+            onLoadMore={() => { setLoadMoreError(null); setPage((p) => p + 1) }}
             hasMore={hasMore}
             onOpenPost={openPost}
             listScrollRef={listScrollRef}

@@ -54,6 +54,9 @@ interface Props {
   loadingMore: boolean
   loadMoreError: string | null
   onRetryLoadMore: () => void
+  /** Q2（批次 14）：**显式加载更多** —— 无限滚动是 IntersectionObserver 驱动的，
+   *  键盘/读屏用户拿不到那个"滚到底自动加载"的入口，这里给一个能 Tab 到、能回车的备选 */
+  onLoadMore: () => void
   hasMore: boolean
   onOpenPost: (p: Post) => void
 
@@ -84,6 +87,7 @@ export default function PostListView({
   loadingMore,
   loadMoreError,
   onRetryLoadMore,
+  onLoadMore,
   hasMore,
   onOpenPost,
   listScrollRef,
@@ -162,10 +166,18 @@ export default function PostListView({
             </div>
           )}
 
-          {/* 无限滚动尾巴：哨兵驱动 IO 预载下一页；加载中/到底标记 */}
+          {/* 无限滚动尾巴：哨兵驱动 IO 预载下一页；加载中/到底标记。
+              Q2（批次 14，devlog/217）：尾巴进 **live region** —— 三种状态都是**异步出现**的，
+              读屏用户原来一条都听不到（`aria-live` 全仓 0 命中）。可见文案保持原样（探针与
+              几何都不受影响），另加一条 `sr-only` 的播报与一个**显式的「加载更多」按钮**。 */}
           {!error && posts.length > 0 && (
             <>
               <div ref={sentinelRef} className="load-sentinel" />
+              <span className="sr-only" role="status" aria-live="polite">
+                {loadingMore ? '正在加载更多帖子…'
+                  : loadMoreError ? '加载更多失败，可以重试'
+                    : !hasMore ? '已经到底了' : ''}
+              </span>
               {loadingMore && (
                 <div className="load-more-tip">
                   <Loader2 className="mr-2 inline size-4 animate-spin align-[-2px] text-primary" />{' '}
@@ -182,6 +194,11 @@ export default function PostListView({
               )}
               {!loadingMore && !loadMoreError && !hasMore && (
                 <div className="load-end">已经到底啦</div>
+              )}
+              {!loadingMore && !loadMoreError && hasMore && (
+                <div className="load-more-tip">
+                  <button type="button" onClick={onLoadMore}>加载更多</button>
+                </div>
               )}
             </>
           )}

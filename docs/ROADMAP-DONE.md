@@ -545,6 +545,7 @@
 | 批次 11b（M3b）：**背景上传加固** —— 「先删旧再写新」⇒ 写盘失败即丢用户背景；改成流式限额 + **文件头**判类型 + 临时文件原子 rename + **提交成功后才删旧文件**（14 条判据，拿回旧实现跑 7 条红）；router 拆分按修正不做 | 214 |
 | 批次 15（Q3，只做可脚本化那一半）：**文件 SQLite 并发面** —— 7 条真库判据（生产 PRAGMA 生效 / 竞争写 / WAL 快照语义 / `busy_timeout` 排队 / T0 ∥ 帖子 / checkpoint+重开 / dispose 后才可改名）；⚠️ **判据自己写错三次**（测成"超时"不是"排队"、驱动 timeout 与 busy_timeout 同一旋钮、微事务根本没竞争）；真机 smoke 那一半按口径推迟 | 215 |
 | 批次 13（Q1 的便宜那一半）：**失败可判别** —— `ApiError`（`status`/`detail`/`path`）+ `ApiShapeError` + 三个关键响应的**运行时**形状校验；兼容三条硬约束（extends Error、文案逐字不变、取消仍是 AbortError）审过全仓 121 处 catch；16 条判据 + 4 种反向改法全红；**不引 zod**、OpenAPI 生成按修正暂缓 | 216 |
+| 批次 14c（Q2 优先段）：**场次详情弹窗迁 Radix Dialog** —— 顺手修掉"Esc 由父组件卸载、退场动画播不出来"；标题/副行进 `aria-labelledby`/`describedby`，焦点与背景 inert 交给 Radix。另加无限滚动 **live region** + 显式「加载更多」、canvas/SVG 补 `role=img`；**本仓第一条 jsdom 组件用例（11 条，零新依赖）**；14a/14b 未做 | 217 |
 
 > **编号列怎么写**（2026-09-23 定）：
 > - 有 devlog 的批次 → **裸编号**（`| 097 |`）；

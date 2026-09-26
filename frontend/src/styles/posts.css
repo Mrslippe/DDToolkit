@@ -4303,6 +4303,13 @@ img.hero-avatar {
   animation: lc-dlg-fade 0.18s ease-out;
 }
 
+/* 退场（Q2 批次 14，devlog/217）：迁移到 Radix 之后，关闭时面板**留在 DOM 里**播这段，
+   播完才卸载 —— 改前是父组件直接卸载，所以根本没有退场可播（Esc/点遮罩一闪就没）。
+   两条都要有：Radix 的 Presence 靠 `animationend` 决定何时卸载，缺一条就是"瞬消"。 */
+.lc-dlg-backdrop[data-state='closed'] {
+  animation: lc-dlg-fade-out 0.16s ease-in both;
+}
+
 .lc-dlg {
   width: 720px;
   max-width: calc(100vw - 48px);
@@ -4312,6 +4319,9 @@ img.hero-avatar {
   border: 1px solid var(--c-border);
   box-shadow: var(--shadow-dialog);
   animation: lc-dlg-pop 0.2s cubic-bezier(0.22, 0.61, 0.36, 1);
+  /* ⚠️ 面板要**压在遮罩之上**：Radix 的遮罩与内容同在一个 portal 里、都在 z=60，
+     同 z 值时靠 DOM 顺序（内容在后）⇒ 面板在上。写死 61 是为了别依赖那个顺序。 */
+  z-index: 61;
   /* 2026-09-07：面板 = 头部驻留区 + 内容滚动区（flex column）——
      头部不随内容滚动（user 定案「标题……X」恒驻留），滚动条只在内容区悬浮 */
   display: flex;
@@ -4918,14 +4928,36 @@ img.hero-avatar {
   color: rgba(52, 52, 52, 1);
 }
 
+.lc-dlg[data-state='closed'] {
+  animation: lc-dlg-pop-out 0.16s cubic-bezier(0.55, 0, 0.55, 0.2) both;
+}
+
 @keyframes lc-dlg-fade {
   from { opacity: 0; }
   to { opacity: 1; }
 }
 
+@keyframes lc-dlg-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
 @keyframes lc-dlg-pop {
   from { transform: translateY(8px) scale(0.98); opacity: 0; }
   to { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+@keyframes lc-dlg-pop-out {
+  from { transform: translateY(0) scale(1); opacity: 1; }
+  to { transform: translateY(6px) scale(0.985); opacity: 0; }
+}
+
+/* reduced-motion：退场也压到一帧（与 .image-viewer-closing 同款口径） */
+@media (prefers-reduced-motion: reduce) {
+  .lc-dlg[data-state='closed'],
+  .lc-dlg-backdrop[data-state='closed'] {
+    animation-duration: 0.01ms;
+  }
 }
 
 /* ── 月份切换滑动动画（user 2026-09-07）──
