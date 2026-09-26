@@ -58,10 +58,30 @@ PUBLIC = [
 
 @pytest.fixture
 def token(monkeypatch):
-    """把 token 钉成确定值（`api_auth` 每次读，所以可以在用例里改）。"""
+    """把 token 钉成确定值（`api_auth` 每次读，所以可以在用例里改）。
+
+    ⚠️ **不再有"什么都不配就放行"这一态**（S1 收口，devlog/202）：
+    所以每个碰业务端点的用例都必须先经过这个夹具。
+    """
     monkeypatch.setattr(api_auth.settings, "API_TOKEN", TOKEN, raising=False)
     monkeypatch.setattr(api_auth.settings, "DEV_API_TOKEN", "", raising=False)
     return TOKEN
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_env_token(monkeypatch):
+    """把**环境变量**里的 token 清掉（属性由 conftest 的夹具统一配）。
+
+    为什么要清：`DEV_API_TOKEN` 由环境变量决定，而**跑完 `ui_probe` 之后 shell 里可能还留着
+    `DDTOOLKIT_DEV_API_TOKEN`** ⇒ 本文件的用例会时绿时红，取决于那台机器上有没有残留 ——
+    本仓记过的"本地残留环境恰好满足条件"的又一例。
+
+    ⚠️ 这里**只碰环境变量，不碰 `settings` 属性**：`settings` 是类属性，
+    setattr 会写进类、被后续测试文件继承；而"配哪个 token"由 `tests/conftest.py` 的
+    目录级夹具统一负责（它还负责尾部还原）。
+    """
+    monkeypatch.delenv("DDTOOLKIT_API_TOKEN", raising=False)
+    monkeypatch.delenv("DDTOOLKIT_DEV_API_TOKEN", raising=False)
 
 
 @pytest.fixture
@@ -223,21 +243,33 @@ def test_absent_token_configuration_is_reported_loudly(monkeypatch):
 
 
 def test_a_configured_token_actually_closes_the_door(monkeypatch):
-    """配了 token 之后，**公开路径之外**的一切都要 token（含这个探针）。
+    """配了 token 之后，**公开路径之外**的一切都要 token。
 
-    这条与 `token_configured` 那条互补：那条只说"我知道自己配了"，
-    这条说"配了之后门真的关了"。没配时放行是**有意的过渡行为**（见 `is_authorized`），
-    但如果配了还放行，那 S1 就是白做的。
-
-    反向验证：把 `is_authorized` 里 `if not expected` 那个分支挪到最前面
-    （先判"没配"再判公开）⇒ 不会红；但把 `hmac.compare_digest` 那行改成 `return True, "ok"`
-    ⇒ 红。
+    反向验证：把 `hmac.compare_digest` 那行改成 `return True, "ok"` ⇒ 红。
     """
     monkeypatch.setattr(api_auth.settings, "API_TOKEN", TOKEN, raising=False)
     assert api_auth.is_authorized("GET", "/vtuber/list", None) == (False, "missing")
     assert api_auth.is_authorized("GET", "/vtuber/list", "wrong") == (False, "mismatch")
     assert api_auth.is_authorized("GET", "/vtuber/list", TOKEN)[0] is True
     # 公开路径在配了 token 之后**依然**公开
+    assert api_auth.is_authorized("GET", "/healthz", None)[0] is True
+
+
+def test_a_missing_token_configuration_denies_rather_than_allows(monkeypatch):
+    """**没配 token ⇒ 拒绝**（S1 收口，devlog/202）。
+
+    批次 1 期间这里是"放行"（让"前端注入还没落地"时应用仍可用）。那次过渡的代价是
+    **"没配"与"配了"在行为上分不出来**，而症状是"一切正常"。
+    收口之后：没配 = 每个业务请求 401 —— **吵闹的失败**，比安静地不设防好。
+
+    反向验证：把 `return False, "no-token-configured"` 改回 `True` ⇒ 红。
+    """
+    monkeypatch.setattr(api_auth.settings, "API_TOKEN", "", raising=False)
+    monkeypatch.setattr(api_auth.settings, "DEV_API_TOKEN", "", raising=False)
+
+    assert api_auth.is_authorized("GET", "/vtuber/list", None) == \
+        (False, "no-token-configured")
+    # 公开路径不受影响（否则启动探活与图片会一起挂）
     assert api_auth.is_authorized("GET", "/healthz", None)[0] is True
 
 

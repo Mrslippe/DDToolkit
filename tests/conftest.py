@@ -58,3 +58,51 @@ def _no_ambient_login(monkeypatch):
     monkeypatch.setattr(auth_manager, "bili_jct", "")
     monkeypatch.setattr(weibo_auth_manager, "cookie", "")
     monkeypatch.setattr(weibo_auth_manager, "_valid", False)
+
+
+# ── S1：给测试里的 TestClient 统一带上会话 token（devlog/202）────────────────
+#
+# 为什么放在 conftest：S1 起**没配 token 就是 401**（收口后不再有"没配就放行"那一态），
+# 于是所有直接 `TestClient(app)` 打真应用的用例会**集体 401** ——
+# 实测第一次收口就红了 **86 条**（`KeyError: 'id'`：拿不到响应体里的 id）。
+#
+# 两件事必须同时成立，缺一条都会红：
+#   · 进程里要有一个已知 token —— 后端才有东西可比（`TEST_API_TOKEN` ←→ `settings.API_TOKEN`）；
+#   · 每个 `TestClient` 要**自动带那个头** —— 否则每个调用点都得自己写一遍，
+#     而"新写的测试忘了带"就等于新测试直接红 86 条里的那一条。
+#
+# 做法：包一层 `TestClient.__init__`，把默认头塞进去。**只在测试进程内生效**
+# （monkeypatch 会在用例结束后还原），生产代码完全不知道这件事。
+TEST_API_TOKEN = "pytest-session-token"
+
+
+@pytest.fixture(autouse=True)
+def _api_token_for_test_client(monkeypatch):
+    """进程内配一个已知 token，并让 `TestClient` 默认带上它。"""
+    import os
+    from app.core import api_auth
+    from starlette.testclient import TestClient
+
+    monkeypatch.setattr(api_auth.settings, "API_TOKEN", TEST_API_TOKEN, raising=False)
+    monkeypatch.setattr(api_auth.settings, "DEV_API_TOKEN", "", raising=False)
+    # 环境里的同名变量也要清掉：真机/探针跑完可能残留（`is_authorized` 两条路都会读），
+    # 不清就会盖掉上面那个确定值。
+    monkeypatch.delenv("DDTOOLKIT_API_TOKEN", raising=False)
+    monkeypatch.delenv("DDTOOLKIT_DEV_API_TOKEN", raising=False)
+
+    original_init = TestClient.__init__
+
+    def patched_init(self, *args, **kwargs):        # noqa: ANN001 - 透传
+        headers = dict(kwargs.get("headers") or {})
+        headers.setdefault(api_auth.TOKEN_HEADER, TEST_API_TOKEN)
+        kwargs["headers"] = headers
+        original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(TestClient, "__init__", patched_init)
+    yield
+    # ⚠️ 尾部**还原成读环境变量**：`settings` 是类属性，setattr 写进类里，
+    #    不还原会让**下一个测试文件**继承"已配 token"的状态而看不到真实行为。
+    monkeypatch.setattr(api_auth.settings, "API_TOKEN",
+                        os.getenv("DDTOOLKIT_API_TOKEN", ""), raising=False)
+    monkeypatch.setattr(api_auth.settings, "DEV_API_TOKEN",
+                        os.getenv("DDTOOLKIT_DEV_API_TOKEN", ""), raising=False)

@@ -91,9 +91,16 @@ def is_authorized(method: str, path: str, presented: str | None) -> tuple[bool, 
         return True, "public"
     expected = _expected_token()
     if not expected:
-        # 没配 token ⇒ 门不存在。**这是当前的开发态行为**，调用方（main 的 lifespan）
-        # 会为此打一条 WARNING；这里不做请求级刷屏。
-        return True, "no-token-configured"
+        # ⚠️ **没配 token ⇒ 拒绝**（S1 收口，devlog/202）。
+        #
+        # 批次 1 期间这里是"放行"（让"前端 token 注入尚未落地"时应用仍可用）。
+        # 现在前端两个入口都会注入，放行只剩坏处：**"没配"与"配了"在行为上无法区分**，
+        # 而症状恰恰是"一切正常" —— 本仓最忌讳的那类静默失效。
+        #
+        # 真机不可能走到这里（Tauri 一定注入）；开发态走 `DDTOOLKIT_DEV_API_TOKEN`。
+        # 真走到了，说明启动方式不对 —— 每个请求各回一个 401 是**吵闹**的失败，
+        # 比安静地不设防好。
+        return False, "no-token-configured"
     if not presented:
         return False, "missing"
     if hmac.compare_digest(presented, expected):
