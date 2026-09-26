@@ -6,6 +6,7 @@ import asyncio
 import logging
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 from sqlalchemy import inspect, text, PrimaryKeyConstraint, UniqueConstraint
 
@@ -193,29 +194,155 @@ def _run_migrations() -> None:
     - create_all 时代的旧库              → 补列/索引到与模型一致后 stamp head
     - 迁移链上但版本落后                 → alembic upgrade head 增量升级
     - 版本 == MIGRATION_HEAD（常态）     → 直接返回，零 alembic 开销
+
+    ⚠️ **"要真跑迁移"的那两条会先备份、失败会被隔离**（批次 16，devlog/207）：
+    见 `_migrate_with_safety`。结局写在 `_MIGRATION_STATE` 里，由 `/healthz` 带出去给前端。
     """
     inspector = inspect(engine)
     tables = set(inspector.get_table_names())
     if not tables:
         _perf("迁移: 全新库")
+        _set_migration_state(status="fresh")
         from alembic import command
         command.upgrade(_alembic_config(), "head")
         return
     if "alembic_version" not in tables:
         _perf("迁移: create_all 旧库桥接")
-        _sync_legacy_schema()
-        from alembic import command
-        command.stamp(_alembic_config(), "head")
+        _migrate_with_safety("create_all 旧库桥接", _bridge_legacy)
         return
     with engine.connect() as conn:
         current = conn.execute(
             text("SELECT version_num FROM alembic_version")
         ).scalar_one_or_none()
     if current == MIGRATION_HEAD:
+        _set_migration_state(status="fast-path", head=current)
         return  # 快路径：已是最新，跳过 alembic 模块加载
     _perf(f"迁移: {current} -> {MIGRATION_HEAD}")
+    _migrate_with_safety(f"{current} -> {MIGRATION_HEAD}", _upgrade_to_head)
+
+
+# ── 迁移安全网（批次 16，devlog/207）────────────────────────────────
+#
+# 为什么要有它："很多人用 + 继续发版"之后，**每次升级都会跑 schema 迁移**，而档案在
+# 用户自己机器上 —— 你看不见、够不着、无法远程诊断。在此之前这里没有任何退路：
+# 中途失败（磁盘满 / 断电 / SQLite locked）= 用户面对"打不开 + 不知道能不能找回"。
+#
+# 两条口径（不变量见 `docs/ARCHITECTURE.md` §6）：
+#   ① **真跑迁移之前先备份**（快路径不备份 —— 别拖慢常态启动）；
+#   ② **迁移失败绝不留下打不开的库**：把坏库挪成 `vtuber.db.failed-<时间戳>`，
+#      用空库继续启动（应用可用），并把失败**分类**带出去（`/healthz` 的 `migration`）。
+#      ⇒ 判据是"用户能自己找回数据"，不是"日志里有异常"。
+
+_MIGRATION_STATE: dict = {"status": "not-run"}
+
+
+def migration_state() -> dict:
+    """本次启动的迁移结局（`/healthz` 与诊断包共用；返回副本，防外部改）。"""
+    return dict(_MIGRATION_STATE)
+
+
+def _set_migration_state(**kw) -> None:
+    _MIGRATION_STATE.clear()
+    _MIGRATION_STATE.update(kw)
+
+
+def _bridge_legacy() -> None:
+    _sync_legacy_schema()
+    from alembic import command
+    command.stamp(_alembic_config(), "head")
+
+
+def _upgrade_to_head() -> None:
     from alembic import command
     command.upgrade(_alembic_config(), "head")
+
+
+def _quarantine_database() -> str | None:
+    """把迁移失败的库挪到一边（`.failed-<时间戳>`），返回新路径；没库可挪则 None。
+
+    ⚠️ 三个细节都不能省：
+    - **先 `engine.dispose()`**：连接池还握着句柄时，Windows 上改名会撞"另一个程序正在
+      使用此文件"，而且 WAL 里的已提交数据要先落盘；
+    - **`-wal` 跟着一起改名**（SQLite 按 `<库名>-wal` 找它）—— 那是**已提交但还没并回主库**
+      的数据，丢了就等于丢数据；
+    - **`-shm` 直接删**：共享内存索引，SQLite 打开时会重建（`migrate.rs:20-30` 记过同一条）。
+    """
+    # 按需 import（本文件一贯的冷启动纪律：快路径不 import 这些）
+    from app.services import db_maintenance
+
+    db = db_maintenance.database_path()
+    if not db.is_file():
+        return None
+    try:
+        engine.dispose()
+    except Exception as e:      # noqa: BLE001 - 关不掉也要继续尝试
+        logger.warning(f"隔离坏库前 engine.dispose() 失败（继续）: {e}")
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    dst = db.with_name(f"{db.name}.failed-{ts}")
+    try:
+        db.replace(dst)
+    except OSError as e:
+        logger.error(f"隔离坏库失败：{e}（库仍在 {db}）")
+        return None
+    for suffix in ("-wal", "-shm"):
+        side = Path(str(db) + suffix)
+        if not side.is_file():
+            continue
+        try:
+            if suffix == "-wal":
+                side.replace(Path(str(dst) + "-wal"))
+            else:
+                side.unlink()
+        except OSError as e:
+            logger.warning(f"隔离 {suffix} 失败：{e}")
+    return str(dst)
+
+
+def _migrate_with_safety(label: str, action) -> None:
+    """备份 → 真跑迁移 → 失败则隔离坏库 + 用空库继续启动。见上面那段口径。"""
+    from app.services import db_maintenance
+
+    backup: dict | None = None
+    try:
+        backup = db_maintenance.backup_database(MIGRATION_HEAD)
+        if backup.get("path"):
+            logger.info(f"迁移前已备份：{backup['name']}（{backup['path']}）")
+        # 备份成功与否都顺手清理旧份：清理失败不影响启动
+        db_maintenance.prune_backups()
+    except Exception as e:      # noqa: BLE001 - 备份失败**不挡住迁移**（见下）
+        # 为什么继续：备份失败最常见的原因正是"磁盘满/权限问题"，而那种情况下
+        # 拒绝启动 = 用户连界面都进不去、也拿不到任何提示；迁移本身是事务性的。
+        # 但这件事必须**说出来**：`/healthz` 的 `migration.backup` 会带上 error。
+        logger.warning(f"迁移前备份失败（本次升级没有退路，继续迁移）: "
+                       f"{type(e).__name__}: {e}")
+        backup = {"error": f"{type(e).__name__}: {e}"}
+
+    try:
+        action()
+    except Exception as e:      # noqa: BLE001 - 迁移失败必须兜住：绝不让库打不开
+        logger.error(f"schema 迁移失败（{label}）: {type(e).__name__}: {e}", exc_info=True)
+        quarantined = _quarantine_database()
+        recovered = False
+        try:
+            # 用**空库**继续启动：应用可用 + /healthz 能把"上次迁移失败"带出去
+            _upgrade_to_head()
+            recovered = True
+        except Exception as e2:  # noqa: BLE001 - 空库都建不起来就只能让它启动失败
+            logger.error(f"空库重建也失败: {type(e2).__name__}: {e2}", exc_info=True)
+        _set_migration_state(
+            status="failed", label=label, error=f"{type(e).__name__}: {e}",
+            quarantined=quarantined, backup=backup, recovered=recovered,
+            failed_at=datetime.now(timezone.utc).isoformat(),
+        )
+        if not recovered:
+            # 走到这里说明"迁移失败"升级成了"应用起不来" —— 让启动失败是唯一诚实的选项
+            raise
+        logger.warning(
+            "已用空库继续启动：旧的库被隔离为 %s —— 档案没有丢，可从这里找回",
+            quarantined)
+        return
+
+    _set_migration_state(status="ok", label=label, backup=backup)
 
 
 @asynccontextmanager
@@ -365,6 +492,11 @@ def healthz():
     附带 `first_run`：本次是「数据目录里还没有首次启动标记」的那一次启动——
     前端据此自动弹出登录浮窗（用户 2026-09-08 需求）。标记在首次返回后落盘，
     同一进程内只会报告一次 true，之后启动恒为 false。
+
+    附带 `migration`（批次 16，devlog/207）：本次启动的 schema 迁移结局。
+    ⚠️ 这是**唯一**能在"还没拿到 token"时把启动期故障带出去的通路（启动幕就是在轮询
+    这个端点），所以"迁移失败要告诉用户"必须走这里，而不是某个要鉴权的端点。
+    形如 `{"status": "failed", "error": …, "quarantined": …, "backup": {…}}`。
     """
     first_run = not FIRST_RUN_MARKER.exists()
     if first_run:
@@ -374,4 +506,5 @@ def healthz():
             )
         except OSError as e:
             logger.warning(f"首次启动标记写入失败: {e}")
-    return {"ok": True, "version": settings.VERSION, "first_run": first_run}
+    return {"ok": True, "version": settings.VERSION, "first_run": first_run,
+            "migration": migration_state()}

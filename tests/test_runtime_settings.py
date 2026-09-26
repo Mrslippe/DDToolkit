@@ -506,15 +506,21 @@ def test_dark_theme_hook_flag_matches_what_the_ui_tells_users():
 # ── ⑦ 存储占用与维护（R22-B，devlog/104）──────────────────────────────
 
 def test_storage_endpoint_reports_each_group_and_disk(client):
-    """「关于」页要能回答"谁在占地方"：四组占用 + 缓存上限 + 磁盘余量 + 遗留备份。"""
+    """「关于」页要能回答"谁在占地方"：五组占用 + 缓存上限 + 磁盘余量 + 遗留备份。
+
+    ⚠️ 第 5 组是 `backups`（迁移前自动备份，批次 16，devlog/207）：它是**程序自己生成**的
+    占用，用户必须看得见、也知道能删 —— 别把它并进 `other` 里当"其他"。
+    """
     body = client.get("/settings/storage").json()
-    assert set(body["groups"]) == {"database", "img_cache", "logs", "other"}
+    assert set(body["groups"]) == {"database", "img_cache", "logs", "backups", "other"}
     for name, g in body["groups"].items():
         assert g["bytes"] >= 0 and g["files"] >= 0, name
     assert body["total_bytes"] >= 0
     assert body["disk"]["total"] > 0               # 真问了一次磁盘
     assert body["img_cache"]["max_bytes"] > 0      # 上限要显示出来，否则"占用大不大"没有参照
     assert isinstance(body["stale_backups"], list)
+    assert isinstance(body["backups"], list)       # 迁移备份清单（含名称/体积）
+    assert body["backup_dir"].endswith("backups")
     assert isinstance(body["low_space"], bool)
     assert body["low_space_threshold_bytes"] == 5 * 1024 ** 3
     assert body["data_dir"] and body["database"]
