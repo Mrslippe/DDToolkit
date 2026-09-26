@@ -116,7 +116,11 @@ A_FILES = (
 #    改它意味着版式口径变了，值得把单测也跑一遍）
 B_PREFIXES = ("frontend/src/utils/", "frontend/src/components/", "frontend/src/api/",
               "frontend/src/hooks/", "frontend/src/pages/", "frontend/src/dev/")
-B_FILES = ("frontend/package.json", "docs/UI-MAP.md", "frontend/src/styles/tokens.css")
+B_FILES = ("frontend/package.json", "docs/UI-MAP.md", "frontend/src/styles/tokens.css",
+           # ⚠️ 2026-09-26 补（S2 批次顺手抓到的同一类漏洞）：依赖锁改了但 `package.json`
+           #    没动（`npm install x` 只改 lock 的版本/完整性时很常见）⇒ 落 C 档 ⇒
+           #    **一条前端用例都不跑**。与 197 补 `uv.lock` 是同一个理由的另一半。
+           "frontend/package-lock.json")
 
 
 def changed_files(base: str) -> list[str]:

@@ -107,6 +107,19 @@ def test_dev_token_tooling_is_tier_a():
             f"{f} 应落 A 档（被 tests/test_dev_token.py 守着），实际 {tier.upper()}"
 
 
+def test_frontend_lock_file_is_at_least_tier_b():
+    """`frontend/package-lock.json` 不许落 C 档 —— 否则"只改了锁"时一条前端用例都不跑。
+
+    与 197 补 `uv.lock` 是同一类漏洞的另一半（2026-09-26，S2 批次顺手抓到）：
+    `npm install <pkg>` 有时只改 lock（版本/完整性），`package.json` 一个字不动 ⇒
+    按文件判档的话它落 C，而 C 档**不跑 vitest**。
+
+    反向验证：把 `B_FILES` 里的 `"frontend/package-lock.json"` 删掉 ⇒ 本用例红。
+    """
+    tier, _why = G.pick_tier(["frontend/package-lock.json"])
+    assert tier in ("a", "b"), f"前端锁文件应至少 B 档（跑 vitest），实际 {tier.upper()}"
+
+
 # ── 映射表自身的卫生 ────────────────────────────────────────────────────────
 
 def test_every_mapped_specific_file_exists():
