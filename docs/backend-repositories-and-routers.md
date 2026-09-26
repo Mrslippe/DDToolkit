@@ -413,20 +413,20 @@
 
 ---
 
-## 3. Routers（64 个路由装饰器 = 67 个方法×路径组合）
+## 3. Routers（65 个路由装饰器 = 68 个方法×路径组合）
 
 > 口径说明（**三种数法别混**）：
 >
 > | 数法 | 值 | 怎么数 |
 > |---|---|---|
-> | **装饰器**（下文「N」用它） | **64** | `vtuber 52` + `auth 3` + `img_proxy 1` + `settings 8`；其中 2 个是 `api_route(methods=["GET","POST"])`（`/vtuber/fetch`、`/vtuber/{id}/fetch`）—— ⚠️ **数装饰器必须把这 2 条算进去**，只数 `@router.get/post/...` 会少 2 |
-> | `app.routes` 对象 | **70** | 64 个 router 对象 + `/healthz` + FastAPI 自带 4 条 + `Mount(/static)` |
-> | 方法×路径 | **67** | `APIRoute.methods` 求和：63 个单方法 + 2 个双方法；FastAPI 自带那 4 条是 `Route`（GET+HEAD），**不计入**这一口径 |
+> | **装饰器**（下文「N」用它） | **65** | `vtuber 52` + `auth 3` + `img_proxy 1` + `settings 9`；其中 2 个是 `api_route(methods=["GET","POST"])`（`/vtuber/fetch`、`/vtuber/{id}/fetch`）—— ⚠️ **数装饰器必须把这 2 条算进去**，只数 `@router.get/post/...` 会少 2 |
+> | `app.routes` 对象 | **71** | 65 个 router 对象 + `/healthz` + FastAPI 自带 4 条 + `Mount(/static)` |
+> | 方法×路径 | **68** | `APIRoute.methods` 求和：64 个单方法 + 2 个双方法；FastAPI 自带那 4 条是 `Route`（GET+HEAD），**不计入**这一口径 |
 >
-> ⚠️ **2026-09-23 重新数过**（R42-A 批次加了 `vtuber_events` 的 PATCH 与 GET `kind` 过滤）：实测
-> 装饰器 **64** / `app.routes` **70** / 方法×路径 **67**（`APIRoute` 65 条 = 64 + healthz，
-> 其中 2 条是双方法 ⇒ 63 + 2×2 = 67）。上一版记的 63/69/66 少算了 R42-A 新增的端点；
-> 再上一版的 58/64/69 少算了 `settings` 的 3 条（R22 存储端点）—— 三种数法本来就容易漂。
+> ⚠️ **2026-09-26 重新数过**（批次 16 加了 `GET /settings/diagnostics`）：实测
+> 装饰器 **65** / `app.routes` **71** / 方法×路径 **68**（`APIRoute` 66 条 = 65 + healthz，
+> 其中 2 条是双方法 ⇒ 64 + 2×2 = 68）。更早的版本：64/70/67（R42-A）、63/69/66、
+> 58/64/69 —— 三种数法本来就容易漂。
 > **只有「装饰器」这一口径有门禁**（`scripts/gen_doc_numbers.py`），另两种口径要人肉重数。
 > 复核命令：`python -c "import app.main as m; print(len(m.app.routes))"` +
 > 按 `len(r.methods)` 分布看（2026-09-17 实测 `{1: 62, 2: 2}`）。

@@ -121,6 +121,26 @@
 
 **结论**：后端逻辑 / 登录 / 首启 / 迁移类改动 → 秒级或 1 分钟级就能验完；只有动到 Rust（`src-tauri/src`）、`tauri.conf.json`、或需要真机确认前端产物时才整包重建。
 
+### 真机现场：**升级失败 / 迁移失败**（批次 16，devlog/207）
+
+这两条**只能真机走**（CI 与探针都碰不到"库坏掉"这条路），造法各一条命令：
+
+```powershell
+# ① 迁移失败 ⇒ 必须"能起来 + 提示可找回 + 备份在位"
+#    先把库改成"迁移链上但版本落后"，再让迁移炸掉（把 alembic_version 指到一个不存在的版本）
+$d = "$env:APPDATA\com.ddtoolkit.app-dev"          # 或 DDTOOLKIT_DATA_DIR 指定的目录
+python -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute(\"UPDATE alembic_version SET version_num='zzzz'\"); c.commit()" "$d\vtuber.db"
+#    起后端（或直接起应用）：期望 —— 应用照常起来、横幅说"上次升级没有完成（数据没有丢）"、
+#    $d\vtuber.db.failed-<时间戳> 存在、$d\backups\ 里有迁移前那一版的备份、/healthz 的
+#    migration.status == 'failed'。判据：**不是"日志里有异常"，而是"用户能自己找回"**。
+
+# ② 迁移中途失败 ⇒ 指针与旧目录未动（这条今天**没有集成测试**，只能真机走）
+#    在设置里点「迁移数据目录」，选一个**只读**的目标目录（或者复制到一半拔掉移动盘）
+#    期望：提示失败原因、数据目录来源没变、旧目录内容与时间戳没变、后端仍在旧目录上跑。
+```
+
+⚠️ **别拿真档案试**：先 `Copy-Item $d "$env:TEMP\dd-backup" -Recurse`（或者直接把 `DDTOOLKIT_DATA_DIR` 指到一份副本上再玩）。
+
 ## 二、一条命令的快速自检
 
 ```powershell

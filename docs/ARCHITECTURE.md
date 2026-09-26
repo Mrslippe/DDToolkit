@@ -764,6 +764,28 @@ flowchart LR
       （S3-A 的命令级权限），别动 CORS。
       值含正则元字符时按**正则**处理（探针的 Vite 端口每次随机），
       但 `"*"` 必须排除在正则判定外 —— 它本身就是元字符，会被 `re.compile` 拒掉。
+27. **真跑 schema 迁移之前必须先备份**（批次 16，devlog/207）：`app/main.py::_migrate_with_safety`
+    在动手前把库复制到 `<DATA_DIR>/backups/vtuber-<head>-<时间戳>.db`
+    （`app/services/db_maintenance.py::backup_database`）。
+    - **复制 `-wal`、不复制 `-shm`**：WAL 里有"已提交但还没并回主库"的数据，丢了就是丢数据；
+      `-shm` 是共享内存索引，SQLite 打开时会自己重建（同一条理由也记在 `migrate.rs:20-30`）。
+    - **快路径（版本已 == head）不备份** —— 那是常态启动，不能为此每次复制 50MB。
+    - 保留 **最近 3 份**且总量封顶 300MB，超限按**最旧**淘汰，**永远至少留最新那一份**；
+      排序按**文件名里的时间戳**（不是 mtime —— 复制/还原会改 mtime，那会让"最旧"变随机）。
+    - ⚠️ **备份失败不挡住迁移**（磁盘满/权限问题时拒绝启动 = 用户连界面都进不去），
+      但必须**说出来**：`/healthz` 的 `migration.backup.error` + 诊断包。
+28. **迁移失败不得留下打不开的库，且失败要分类告诉用户**（批次 16，devlog/207）：
+    迁移抛错时 `_quarantine_database()` 把坏库（**连同 `-wal`**）改名成
+    `vtuber.db.failed-<时间戳>`、删掉 `-shm`，然后**用一本空库继续启动** ——
+    应用可用，档案没丢，`/healthz` 的 `migration` 带出 `{status: "failed", error,
+    quarantined, backup, recovered}`。
+    - ⚠️ 隔离前**必须 `engine.dispose()`**：连接池握着句柄时 Windows 上改名会撞
+      "另一个程序正在使用此文件"，WAL 也要先落盘。
+    - ⚠️ **`/healthz` 是唯一能在"还没拿到 token"时把启动期故障带出去的通路**
+      （启动幕轮询它的时候前端还没有令牌）—— "迁移失败要告诉用户"必须走这里。
+    - ⚠️ **只有"schema 迁移失败"才允许说"数据可以找回"**：端口占用 / 超时 / 后端崩溃
+      **不得**被误报成数据问题（误报会让用户去动数据目录，那才是真丢数据）。
+      这句话在 `frontend/src/utils/bootFailure.ts` 里，**有 vitest 钉着**。
 
 ---
 
