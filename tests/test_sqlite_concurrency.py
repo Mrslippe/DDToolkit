@@ -13,11 +13,12 @@
 | ④ | 写冲突被 `busy_timeout` **排队**而不是报错（短超时才会抛） | `busy_timeout=30s` 是产品参数，不是装饰 |
 | ⑤ | T0 直播轮询 ∥ 帖子写入（两条真路径并发） | T0 是独立线程且**不占抓取锁**（§1 表） |
 | ⑥ | checkpoint 后**重开**新引擎仍读得到数据 | 与 `checkpoint_wal` 的配合 |
-| ⑦ | `engine.dispose()` 之后文件才**改得动名** | §6 第 28 条：隔离坏库前必须 dispose，否则 Windows 上撞"另一个程序正在使用此文件" |
+| ⑦ | `engine.dispose()` 之后文件**改得动名**（Windows 上"不 dispose 就改不动"那半条带平台守卫） | §6 第 28 条：隔离坏库前必须 dispose，否则 Windows 上撞"另一个程序正在使用此文件" |
 """
 from __future__ import annotations
 
 import asyncio
+import os
 import threading
 import time
 from pathlib import Path
@@ -339,8 +340,10 @@ def test_data_survives_checkpoint_and_reopen(env):
 def test_dispose_releases_the_file_so_it_can_be_renamed(env):
     """§6 第 28 条的实现依据：**隔离坏库前必须 `engine.dispose()`**。
 
-    在 Windows 上"文件被占用"是硬错误 ⇒ 不 dispose 就改名会撞
-    "另一个程序正在使用此文件"。这里把这条前提**测出来**，而不是靠注释记着。
+    ⚠️ **"不 dispose 就改不动名"只在 Windows 成立**：POSIX 允许改名/删除**打开中**的文件，
+    所以这半条判据带 `os.name == "nt"` 守卫（第一次上 CI 就是这里红的 —— Linux 两条腿
+    一起挂在"DID NOT RAISE"上）。**"dispose 之后一定改得动"两个平台都断言** ——
+    那才是产品真正依赖的那一半（Windows 上撞"另一个程序正在使用此文件"）。
     """
     db = env.Session()
     try:
@@ -350,11 +353,12 @@ def test_dispose_releases_the_file_so_it_can_be_renamed(env):
         db.close()
 
     target = env.path.with_suffix(".db.failed")
-    with pytest.raises(OSError):
-        env.path.rename(target)             # 连接池还握着句柄
-        target.rename(env.path)
+    if os.name == "nt":
+        with pytest.raises(OSError):
+            env.path.rename(target)         # 连接池还握着句柄（Windows：文件被占用）
+            target.rename(env.path)
 
     env.engine.dispose()
-    env.path.rename(target)                 # 释放之后才改得动
+    env.path.rename(target)                 # 释放之后才改得动（两个平台都必须成立）
     assert target.exists()
     target.rename(env.path)
