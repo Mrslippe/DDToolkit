@@ -31,6 +31,7 @@ import {
   parseStats,
   postDisplayTitle,
 } from '../utils/format'
+import { sanitizePlatformHtml } from '../utils/sanitizePlatformHtml'
 import DeltaRenderer from './DeltaRenderer'
 import ImageViewer, { type ViewerImage } from './ImageViewer'
 import OverlayScroll from './OverlayScroll'
@@ -291,10 +292,16 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
             <div>
               <SectionTitle>正文</SectionTitle>
               {isHtml ? (
-                // 专栏全文为平台 HTML；本地工具场景直接渲染，如部署公网建议净化处理
+                // 专栏全文是**平台给的 HTML**（`body_json.content`）⇒ 必须过白名单净化（S2，devlog/206）。
+                //
+                // ⚠️ 旧注释写的是"本地工具场景直接渲染，如部署公网建议净化处理"—— **那个判断是错的**：
+                //    今天的威胁不是"公网"，而是 ① `style-src 'unsafe-inline'` 让注入的样式生效
+                //    （把危险操作伪装成下一步）② 我们的 Tailwind 工具类是全局的，一条
+                //    `class="fixed inset-0 z-50"` 就能盖住界面 ③ 这篇 HTML 会渲染在**别人的机器**上。
+                //    详见 `utils/sanitizePlatformHtml.ts` 的文件头。
                 <div
                   className="rich-text mt-2 text-sm leading-[1.9]"
-                  dangerouslySetInnerHTML={{ __html: body.content }}
+                  dangerouslySetInnerHTML={{ __html: sanitizePlatformHtml(body.content) }}
                 />
               ) : (
                 <p className="mt-2 whitespace-pre-wrap text-sm">{String(body.content)}</p>
