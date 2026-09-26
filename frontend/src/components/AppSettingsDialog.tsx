@@ -920,6 +920,17 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
                           <dd data-storage="logs">
                             <span>{formatBytes(storage.groups.logs.bytes)}</span>
                           </dd>
+                          {/* 迁移前自动备份（批次 16，devlog/207）：程序生成的占用，
+                              用户要能看见、也知道"升级前它会自动留一份"。 */}
+                          <dt>迁移备份</dt>
+                          <dd data-storage="backups">
+                            <span>{formatBytes(storage.groups.backups.bytes)}</span>
+                            {storage.backups.length > 0 && (
+                              <span className="aps-storage-cap">
+                                {storage.backups.length} 份 · 保留最近 3 份
+                              </span>
+                            )}
+                          </dd>
                         </dl>
                         {/* 合计与磁盘剩余是**另一类**数字（一个是"占了多少"，一个是"还剩多少"）。
                             R39-B2（用户 2026-09-19）：「发丝线去掉，不用这样分隔显得很怪」——
@@ -939,6 +950,13 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
                             )}
                           </dd>
                         </dl>
+                        {storage.backups.length > 0 && (
+                          <p className="aps-note" data-storage="migration-backups">
+                            升级前的自动备份：{storage.backups.map((b) => b.name).join('、')}
+                            （在 <code>{storage.backup_dir}</code>；程序只保留最近几份，
+                            确认新版本没问题后可以自己删）
+                          </p>
+                        )}
                         {storage.stale_backups.length > 0 && (
                           <p className="aps-note" data-storage="stale">
                             另有手工备份 {storage.stale_backups.map((b) => b.name).join('、')}

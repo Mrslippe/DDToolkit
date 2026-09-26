@@ -224,6 +224,17 @@ export async function storageInfo(): Promise<ShellDataDirInfo | null> {
 }
 
 /**
+ * 在资源管理器里打开**数据目录**（批次 16，devlog/207）。
+ *
+ * 为什么需要它：迁移失败时界面上要能给一句"**到这里找回**"并且真能点开。
+ * ⚠️ 路径由 Rust 侧从自己的状态取，前端传不了路径（所以它不能被用来打开任意目录）。
+ */
+export async function openDataDir(): Promise<string> {
+  if (!isTauri) throw new Error('只有桌面端才能打开数据目录')
+  return await invoke<string>('open_data_dir')
+}
+
+/**
  * 迁移数据目录（系统文件夹选择框 → 规划 → 停后端 → 复制 → 校验 → 写指针 → 新目录启动并探活；
  * 任何一步失败都会回滚并用**原目录**重启，旧目录全程不动）。
  *

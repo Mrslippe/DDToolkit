@@ -1,7 +1,7 @@
 import './bootDiag' // 首个 import：诊断陷阱先于一切业务代码注册（CSP 放行同源脚本）
 import React, { useEffect, useState } from 'react'
 import ReactDOM from 'react-dom/client'
-import { RotateCcw } from 'lucide-react'
+import { FolderOpen, RotateCcw } from 'lucide-react'
 import { BrowserRouter } from 'react-router-dom'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -13,6 +13,10 @@ import App from './App'
 import Logo from './components/common/Logo'
 import { DEV_API_TOKEN, holdApiUntilReady, markNoTokenRequired, markTokenReady, setApiBase, setApiToken } from './api/api'
 import { markFirstRun } from './bootState'
+import type { BootFailureCopy, HealthzPayload } from './utils/bootFailure'
+import { classifyBootFailure } from './utils/bootFailure'
+import MigrationFailureBanner from './components/MigrationFailureBanner'
+import { openDataDir } from './utils/shellBridge'
 import { installShellLifecycle } from './utils/shellLifecycle'
 import { applyCornersMode } from './utils/windowCorners'
 
@@ -41,12 +45,12 @@ if (isTauri) {
 perfLog('模块求值完成')
 
 /** 桌面端引导：取 sidecar 端口与**会话 token** → 轮询 /healthz 就绪 → 注入 API 地址 */
-async function tauriBootstrap(): Promise<boolean> {
+async function tauriBootstrap(): Promise<{ ok: boolean; health: HealthzPayload | null }> {
   const { invoke } = await import('@tauri-apps/api/core')
   const port = await invoke<number>('get_backend_port')
-  // S1（devlog/202）：token 与端口一起取。它由壳**每次启动生成**，只存内存。
+  // S1（devlog/202）：token 与端口一起取。它由壳**每次启动生成**、只存内存。
   // 取不到就让下面轮询超时 → 走启动幕的 failed 态（那里会说明看哪个日志）——
-  // 比"带着空 token 继续跑、每个请求 401"更容易定位。
+  // 比“带着空 token 继续跑、每个请求 401”更容易定位。
   const token = await invoke<string>('get_api_token')
   const base = `http://127.0.0.1:${port}`
   for (let i = 0; i < 240; i++) {
@@ -55,23 +59,24 @@ async function tauriBootstrap(): Promise<boolean> {
       if (r.ok) {
         setApiBase(base)
         setApiToken(token)
-        // 首次启动标记（后端只在第一次探活时给 true）→ TopBar 自动弹登录浮窗
+        // 首启标记与**本次启动的迁移结局**（批次 16，devlog/207）都在这个端点上：
+        // 启动幕轮询它的时候前端还没有 token，所以“迁移失败”只能从这里带出来。
+        let health: HealthzPayload | null = null
         try {
-          const boot = (await r.json()) as { first_run?: boolean }
-          if (boot?.first_run) markFirstRun()
+          health = (await r.json()) as HealthzPayload
+          if (health?.first_run) markFirstRun()
         } catch {
           /* 响应非 JSON：忽略，不影响启动 */
         }
-        return true
+        return { ok: true, health }
       }
     } catch {
       /* 后端尚未就绪，继续等待 */
     }
     await new Promise((resolve) => setTimeout(resolve, 500))
   }
-  return false
+  return { ok: false, health: null }
 }
-
 type BootState = 'pending' | 'opening' | 'done' | 'failed'
 
 const ENVELOPE_MS = 750 // 信封展开动画时长（与 layout.css keyframes 对应）
@@ -85,10 +90,12 @@ const ENVELOPE_MS = 750 // 信封展开动画时长（与 layout.css keyframes �
 function Splash({
   state,
   waited,
+  failure,
   onRetry,
 }: {
   state: Exclude<BootState, 'done'>
   waited: number
+  failure: BootFailureCopy
   onRetry: () => void
 }) {
   const opening = state === 'opening'
@@ -100,19 +107,22 @@ function Splash({
         {state === 'failed' ? (
           <>
             <Logo className="splash-logo splash-logo-static" />
-            <div className="mt-5 text-lg font-semibold text-white">后端启动失败</div>
-            <p className="mt-2 max-w-md text-center text-sm text-white/80">
-              内置后端服务未能在时限内就绪。请关闭应用后重新打开。
-              若反复失败，请查看数据目录下的 <code>logs/sidecar.log</code>（含完整堆栈）。
+            {/* 文案来自 `utils/bootFailure.ts`（**有 vitest**）：只有 schema 迁移失败
+                才允许说"数据可以找回"；端口占用/超时**不得**被误报成数据问题。 */}
+            <div className="mt-5 text-lg font-semibold text-white">{failure.title}</div>
+            <p className="mt-2 max-w-md text-center text-sm whitespace-pre-wrap text-white/80">
+              {failure.detail}
             </p>
-            <p className="mt-2 max-w-md text-center text-xs text-white/60">
-              请勿删除数据目录 —— 那会连同已归档的证据一起删掉。
-            </p>
-            <Button variant="secondary" className="mt-4" onClick={onRetry}>
-              <RotateCcw /> 重试
-            </Button>
-          </>
-        ) : (
+            <div className="mt-4 flex gap-2">
+              <Button variant="secondary" onClick={onRetry}>
+                <RotateCcw /> 重试
+              </Button>
+              <Button variant="secondary"
+                onClick={() => { void openDataDir().catch(() => undefined) }}>
+                <FolderOpen /> 打开数据目录
+              </Button>
+            </div>
+          </>        ) : (
           <>
             <Logo className={`splash-logo ${state === 'pending' ? 'splash-logo-pulse' : ''}`} />
             {/* 冷启动可能十几秒（首次建库迁移 / 杀软首扫）：给出秒数，
@@ -140,6 +150,10 @@ function Main() {
 
 function Root() {
   const [state, setState] = useState<BootState>(isTauri ? 'pending' : 'done')
+  /** `/healthz` 的载荷：首启标记与**本次启动的迁移结局**都在这里（批次 16） */
+  const [bootHealth, setBootHealth] = useState<HealthzPayload | null>(null)
+  const [bootError, setBootError] = useState<string | null>(null)
+  const failure = classifyBootFailure(bootHealth, bootError)
 
   // 启动计时：React 挂载
   useEffect(() => {
@@ -175,8 +189,10 @@ function Root() {
     }
     perfLog('tauriBootstrap 开始')
     tauriBootstrap()
-      .then((ok) => {
+      .then(({ ok, health }) => {
         perfLog(ok ? 'healthz OK → opening' : 'healthz 超时 → failed')
+        // 迁移结局（批次 16，devlog/207）：应用**能用**也要让用户知道发生过什么
+        setBootHealth(health)
         setState(ok ? 'opening' : 'failed')
       })
       .catch((err) => {
@@ -185,6 +201,7 @@ function Root() {
         // ⚠️ S1 起 `get_api_token` 也在这条链上：**取不到令牌时绝不能开闸**，
         //    否则每个请求都会打出 401，而用户只看到"数据加载失败"。
         window.__bootLog?.('[bootstrap] ' + String(err))
+        setBootError(String(err))
         setState('failed')
       })
   }, [])
@@ -245,8 +262,14 @@ function Root() {
     <>
       {/* opening 阶段即挂载 App 在幕布之下，动画结束时无缝接管 */}
       {state !== 'pending' && state !== 'failed' && <Main />}
+      {/* 迁移失败过但**应用能用**（批次 16）：非阻塞横幅，别挡屏 —— 用户要做的是
+          "知道数据在哪 + 把诊断发出去"，而不是面对一页错误。 */}
+      {state === 'done' && bootHealth?.migration && (
+        <MigrationFailureBanner migration={bootHealth.migration} />
+      )}
       {state !== 'done' && (
-        <Splash state={state} waited={waited} onRetry={() => window.location.reload()} />
+        <Splash state={state} waited={waited} failure={failure}
+          onRetry={() => window.location.reload()} />
       )}
     </>
   )

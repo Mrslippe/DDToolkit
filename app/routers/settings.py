@@ -272,8 +272,22 @@ def _storage_payload() -> dict:
 
 @router.get("/storage")
 def get_storage():
-    """存储占用体检（库 / 图片缓存 / 日志 / 其余 + 磁盘剩余 + 遗留备份）。"""
+    """存储占用体检（库 / 图片缓存 / 日志 / 迁移备份 / 其余 + 磁盘剩余 + 遗留备份）。"""
     return _storage_payload()
+
+
+@router.get("/diagnostics")
+def get_diagnostics():
+    """诊断包（批次 16，devlog/207）：用户"一键拿到一份能发给开发者的东西"。
+
+    ⚠️ **没有进公开白名单**（`app/core/api_auth.py`）⇒ 它要会话 token ——
+    里面是日志尾部与库形态，不该让"扫到端口的任何本机进程"随便读。
+    **不含凭据**（`.env` / cookie / token 一律不读），判据在
+    `tests/test_migration_safety.py::test_diagnostics_*`。
+    """
+    from app.services import diagnostics
+
+    return diagnostics.build_diagnostics()
 
 
 @router.post("/storage/prune-cache")

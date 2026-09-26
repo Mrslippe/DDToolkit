@@ -511,6 +511,59 @@ async fn migrate_data_dir(app: tauri::AppHandle) -> Result<MigrateReport, String
     })
 }
 
+/// 用系统默认程序打开一个**路径或网址**（`ShellExecuteW`）。
+///
+/// ⚠️ 只给"路径由壳自己决定"的调用方用（发布页常量、数据目录状态）——**不要**把它
+/// 包成一个"前端传什么就开什么"的命令：那等于把任意打开/执行的能力交给页面
+/// （外链口径见批次 4ab，S2 的净化只管 HTML 边界）。
+#[cfg(target_os = "windows")]
+fn shell_open(target: &std::path::Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let wide: Vec<u16> = target.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    let op: Vec<u16> = std::ffi::OsStr::new("open").encode_wide().chain(std::iter::once(0)).collect();
+    // SAFETY: 三个参数都是以 NUL 结尾的宽字符串（或用 null）
+    let rc = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            op.as_ptr(),
+            wide.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    // ShellExecuteW 的返回值 >32 才算成功（≤32 是错误码，见 Win32 文档）
+    if rc as isize <= 32 {
+        return Err(format!("打开失败（ShellExecuteW rc={}）", rc as isize));
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn shell_open(_target: &std::path::Path) -> Result<(), String> {
+    Err("只有 Windows 端支持用系统程序打开路径".to_string())
+}
+
+/// 在资源管理器里打开**数据目录**（批次 16，devlog/207）：迁移失败后"到这里找回"的出口。
+///
+/// ⚠️ 路径取自壳自己的解析结果（`DataDirState`），**不接受前端传路径** ⇒ 它不可能被
+/// 用来打开任意目录。
+#[tauri::command]
+fn open_data_dir(state: State<'_, DataDirState>) -> Result<String, String> {
+    let dir = {
+        let g = state.0.lock().unwrap();
+        match g.as_ref() {
+            Some(s) => s.dir.clone(),
+            None => return Err("数据目录状态未知（壳还没完成启动？）".to_string()),
+        }
+    };
+    shell_open(&dir)?;
+    Ok(dir.to_string_lossy().to_string())
+}
+
 /// 打开发布页（R23b）：连不上 GitHub 时的兜底出口。
 ///
 /// 为什么直接调 Windows API 而不是插件：前端没装 `@tauri-apps/plugin-shell` 的 JS 包；
@@ -520,41 +573,7 @@ async fn migrate_data_dir(app: tauri::AppHandle) -> Result<MigrateReport, String
 #[tauri::command]
 fn open_release_page() -> Result<(), String> {
     const URL: &str = "https://github.com/Mrslippe/DDToolkit/releases/latest";
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::ffi::OsStrExt;
-        use windows_sys::Win32::UI::Shell::ShellExecuteW;
-        use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-
-        let wide: Vec<u16> = std::ffi::OsStr::new(URL)
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect();
-        let op: Vec<u16> = std::ffi::OsStr::new("open")
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect();
-        // SAFETY: 三个参数都是以 NUL 结尾的宽字符串（或用 null）
-        let rc = unsafe {
-            ShellExecuteW(
-                std::ptr::null_mut(),
-                op.as_ptr(),
-                wide.as_ptr(),
-                std::ptr::null(),
-                std::ptr::null(),
-                SW_SHOWNORMAL,
-            )
-        };
-        // ShellExecuteW 的返回值 >32 才算成功（≤32 是错误码，见 Win32 文档）
-        if rc as isize <= 32 {
-            return Err(format!("打开发布页失败（ShellExecuteW rc={}）", rc as isize));
-        }
-        Ok(())
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        Err("只有 Windows 端支持打开发布页".to_string())
-    }
+    shell_open(std::path::Path::new(URL))
 }
 
 /// 探测"本地有没有代理在监听"（R23c，devlog/115）。
@@ -1734,6 +1753,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_backend_port,
             get_api_token,
+            open_data_dir,
             present_window,
             hide_to_tray,
             quit_app,

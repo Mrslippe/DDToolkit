@@ -691,11 +691,16 @@ export interface StorageInfo {
     database: StorageGroup
     img_cache: StorageGroup
     logs: StorageGroup
+    /** 迁移前自动备份（批次 16，devlog/207）：**程序生成**的占用，用户得看得见 */
+    backups: StorageGroup
     other: StorageGroup
   }
   total_bytes: number
   /** 手工留下的 `vtuber.db.bak-*`（不是程序生成的，但确实占地方） */
   stale_backups: { name: string; bytes: number }[]
+  /** 我们自己生成的迁移备份（最新在前） */
+  backups: { name: string; path: string; bytes: number; wal_bytes: number; mtime: number }[]
+  backup_dir: string
   disk: { free: number; total: number }
   img_cache_max_bytes: number
   /** 可用空间低于阈值（后端算好，界面不抄一份阈值） */

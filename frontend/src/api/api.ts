@@ -585,6 +585,13 @@ export const api = {
   // ── 界面偏好（R14b，devlog/092）：主题 ──────────────────────────────
   /** 偏好值 + 允许取值 + 当前能力说明（说明由后端下发，界面不自己编） */
   getPrefs: () => request<Prefs>('/settings/prefs'),
+  /**
+   * 诊断包（批次 16，devlog/207）：用户"把这份发给开发者"。
+   * 后端拼好纯文本返回（**不含凭据**），前端只负责复制/展示。
+   */
+  getDiagnostics: () =>
+    request<{ filename: string; text: string; bytes: number; generated_at: string }>(
+      '/settings/diagnostics'),
 
   /** 保存偏好（枚举白名单在后端；不在集合内 → 400） */
   savePrefs: (values: Record<string, string>) =>
