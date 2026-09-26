@@ -50,6 +50,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 import ui_probe  # noqa: E402  （复用它的"数据目录副本 + 起后端 + 空闲端口"）
+import dev_token  # noqa: E402  （开发态 token：本脚本自起后端并打它，两端必须同值）
 
 FIXTURES = ROOT / "tests" / "fixtures"
 OK, SKIP, FAIL = "[ok]", "[skip]", "[FAIL]"
@@ -65,14 +66,19 @@ class Ctx:
         self.fixtures_written: list[str] = []
 
     # ── HTTP ──
+    # ⚠️ 每个请求都要带开发态 token（S1，devlog/201）：本脚本自己起后端、再打它的业务端点，
+    #    没有 Tauri ⇒ 拿不到生产 token。2026-09-26 实测漏了这一步 ⇒ **5 腿里 4 腿 401**，
+    #    而报告只会说"HTTP Error 401: Unauthorized"，看起来像上游挂了。
     def get(self, path: str, timeout: float = 90.0):
-        with urllib.request.urlopen(f"{self.base}{path}", timeout=timeout) as r:
+        req = urllib.request.Request(f"{self.base}{path}", headers=dev_token.headers())
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.status, json.loads(r.read().decode("utf-8"))
 
     def post(self, path: str, payload: dict, timeout: float = 120.0):
         req = urllib.request.Request(f"{self.base}{path}", method="POST",
                                      data=json.dumps(payload).encode("utf-8"),
-                                     headers={"Content-Type": "application/json"})
+                                     headers={"Content-Type": "application/json",
+                                              **dev_token.headers()})
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 return r.status, json.loads(r.read().decode("utf-8"))
@@ -464,7 +470,9 @@ def main() -> int:
     data = ui_probe._prepare_data(empty=args.cold)
     port = ui_probe._free_port()
     env = {**os.environ, "DDTOOLKIT_DATA_DIR": str(data), "DDTOOLKIT_PORT": str(port),
-           "DDTOOLKIT_PARENT_PID": "0", "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+           "DDTOOLKIT_PARENT_PID": "0", "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8",
+           # S1：本脚本自起的后端也要 token（`Ctx.get/post` 带的是同一个值）
+           **dev_token.backend_env()}
     if args.cold:
         # 冷进程必须**显式清空凭证**：`config.py` 读 os.getenv，shell 里残留的
         # BILI_SESSDATA 会被子进程继承 → 测出来的是"登录态"，结论会完全反过来

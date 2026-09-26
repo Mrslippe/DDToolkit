@@ -37,11 +37,15 @@ import re
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "scripts"))
+from dev_token import backend_env, headers as dev_headers  # noqa: E402
+
 RELEASE_DIR = ROOT / "dist-release"
 PORTABLE_ZIP = RELEASE_DIR / "DDtoolkit-portable-win64.zip"
 EXE_IN_ZIP = Path("DDtoolkit") / "ddtoolkit.exe"
@@ -248,16 +252,32 @@ def stop_tree(pid: int) -> None:
                    capture_output=True, text=True, errors="replace")
 
 
-def hide_to_tray(shell_pid: int, port: int) -> str:
-    """把关闭语义设成"最小化到托盘"，再发 WM_CLOSE（= 点 ✕），返回一步说明。"""
+def hide_to_tray(shell_pid: int, port: int) -> tuple[bool, str]:
+    """把关闭语义设成"最小化到托盘"，再发 WM_CLOSE（= 点 ✕）。返回 `(成功?, 说明)`。
+
+    ⚠️ **S1 起这一步在"壳模式"下量不了**（2026-09-26 发现）：会话 token 由**壳自己**
+    每次启动生成、只存内存，而 `PUT /settings/prefs` 是业务端点 ⇒ 本脚本（壳外的进程）
+    **拿不到那个 token**，只能收到 401。于是"深休眠"那一段的结论作废 —— 所以这里
+    **返回 False 让调用方整段跳过**，而不是留一个看起来量到了的假数字
+    （不写 prefs 就发 WM_CLOSE 的话，默认 `close_action="ask"` 会弹确认框，
+    量到的是"窗口还开着"的树）。
+    要恢复得先定口径（让壳支持外部注入 token / 或本脚本改用直接写库），见 `docs/TODO.md`。
+    """
     body = json.dumps({"values": {"close_action": "tray"}}).encode()
     req = urllib.request.Request(f"http://127.0.0.1:{port}/settings/prefs", data=body,
-                                 method="PUT", headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=10) as r:
-        if r.status >= 400:
-            return f"prefs 写入失败 HTTP {r.status}"
+                                 method="PUT", headers={"Content-Type": "application/json",
+                                                        **dev_headers()})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            if r.status >= 400:
+                return False, f"prefs 写入失败 HTTP {r.status}"
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            return False, ("prefs 写入被 401 拒绝 —— S1 起壳自生成的 token 外部拿不到，"
+                           "深休眠段**没量到**（不是 0，也不是省了多少）")
+        return False, f"prefs 写入失败 HTTP {e.code}"
     _ps(f"(Get-Process -Id {shell_pid}).CloseMainWindow() | Out-Null")
-    return "已发 WM_CLOSE（隐藏到托盘）"
+    return True, "已发 WM_CLOSE（隐藏到托盘）"
 
 
 def affinity_proxy(backend: Path, data: Path, rounds: int = 1) -> list[dict]:
@@ -283,7 +303,8 @@ def affinity_proxy(backend: Path, data: Path, rounds: int = 1) -> list[dict]:
         d = data.parent / f"{data.name}-aff"
         if not quiet:
             fresh_data_dir(d)
-        env = {**os.environ, "DDTOOLKIT_DATA_DIR": str(d), "DDTOOLKIT_PORT": str(port)}
+        env = {**os.environ, "DDTOOLKIT_DATA_DIR": str(d), "DDTOOLKIT_PORT": str(port),
+               **backend_env()}
         env.pop("DDTOOLKIT_PARENT_PID", None)
         base = len(log_text(d))
         t0 = time.time()
@@ -418,8 +439,13 @@ def main() -> int:
                   f"多轮启动的日志是追加的）")
             if port and not exited:
                 print(f"\n[sleep] 隐藏到托盘，等深休眠（{args.sleep}s 后销毁 WebView）……")
-                try:
-                    print(f"  {hide_to_tray(shell_pid, port)}")
+                hidden, msg = hide_to_tray(shell_pid, port)
+                print(f"  {msg}")
+                if not hidden:
+                    # ⚠️ 没切成托盘语义就别往下量：默认 `close_action="ask"` 会弹确认框，
+                    #    量到的树是"窗口还开着"的，却被当成"深休眠后"打印出来（假数字）。
+                    print("  [!] 深休眠这一段**整段跳过**（不是 0，也不是省了多少）")
+                else:
                     time.sleep(args.sleep + 20)
                     rows3, tot3 = try_snapshot("深休眠")
                     if tot3 is not None:
@@ -429,8 +455,6 @@ def main() -> int:
                         print(f"  进程 {base['procs']} → {tot3['procs']}，私有工作集 "
                               f"{base['priv_mb']} → {tot3['priv_mb']} MB"
                               f"（省 {round(base['priv_mb'] - tot3['priv_mb'], 1)} MB）")
-                except Exception as e:  # noqa: BLE001
-                    print(f"  [!] 深休眠这步没量成：{e}")
             else:
                 print("  [!] 读不到端口或壳已退出，跳过深休眠")
     finally:

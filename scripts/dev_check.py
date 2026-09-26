@@ -35,6 +35,15 @@ ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "frontend"
 FROZEN_EXE = ROOT / "frontend" / "src-tauri" / "binaries" / "backend" / "ddtoolkit-backend.exe"
 
+# 开发态固定 token：真源 `scripts/dev_token.py`（S1 起后端要 `X-DDToolkit-Token`）。
+#
+# ⚠️ 2026-09-26 补：S1 加了门禁之后，本脚本的后端冒烟**一直 401**，
+# 而 `_http` 把 HTTPError 一起当成"网络不可达" ⇒ 报的是"[skip] 扫码链路需要访问 B 站，
+# 当前网络不可达"，**排查方向被带偏到网络**（实测 dev_check 整体 FAIL）。
+# 加了门禁就要把所有"打自己后端"的开发态调用方过一遍 —— 见 `docs/DEV-LOOP.md` §6.13。
+sys.path.insert(0, str(ROOT / "scripts"))
+from dev_token import ENV as DEV_TOKEN_ENV, backend_env, headers as dev_headers  # noqa: E402
+
 OK = "[ok]"
 FAIL = "[FAIL]"
 SKIP = "[skip]"
@@ -63,7 +72,8 @@ PY = project_python()
 
 
 def _http(method: str, url: str, timeout: float = 10.0):
-    req = urllib.request.Request(url, method=method)
+    # 带开发态 token（S1 起业务端点一律要它；`/healthz` 是白名单，带了也无害）
+    req = urllib.request.Request(url, method=method, headers=dev_headers())
     with urllib.request.urlopen(req, timeout=timeout) as r:
         import json
         body = r.read().decode("utf-8", "replace")
@@ -120,6 +130,8 @@ def _smoke_backend(label: str, cmd: list[str], cwd: Path) -> bool:
         "DDTOOLKIT_DATA_DIR": str(data_dir),
         "DDTOOLKIT_PORT": str(port),
         "DDTOOLKIT_PARENT_PID": "0",  # 无效 pid：不启用看门狗
+        # S1：本进程自己起的后端也要 token —— 下面 `_http` 带的是同一个值
+        **backend_env(),
         "PYTHONUTF8": "1",
         "PYTHONIOENCODING": "utf-8",
     }
@@ -147,6 +159,18 @@ def _smoke_backend(label: str, cmd: list[str], cwd: Path) -> bool:
 
         try:
             _, start = _http("POST", f"{base}/auth/bilibili/qr/start", timeout=20)
+        except urllib.error.HTTPError as e:
+            # ⚠️ **401 不是网络问题**（2026-09-26 实测）：S1 起后端要 token，而本脚本原先
+            #    不带 ⇒ 每个业务端点各回一个 401，却被下面那句"当前网络不可达"盖住了 ——
+            #    **排查方向被带偏一整轮**。判据：先看状态码，再谈网络。
+            if e.code == 401:
+                print(f"{FAIL} qr/start 被 401 拒绝 —— 本脚本与后端的 token 不一致"
+                      f"（开发态真源：scripts/dev_token.py，环境变量 {DEV_TOKEN_ENV}）")
+                return False
+            print(f"{SKIP} 扫码链路需要访问 B 站，当前网络不可达：HTTP {e.code}")
+            print(f"{SKIP} 本次**未验证** qr/start → qr/check 状态机，按失败计"
+                  f"（不是「通过」，也不是「无结论」）")
+            return False
         except (urllib.error.URLError, TimeoutError, OSError) as e:
             # 离线时**不能**当成通过：扫码状态机回归守卫（2026-09-08「读错 code 字段」
             # 事故的固化用例）恰恰是在这里验的，旧写法打印 [skip] 后 `ok = True`

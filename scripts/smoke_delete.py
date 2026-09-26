@@ -28,8 +28,10 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))   # 与其它 scripts/ 同款：允许直跑
+sys.path.insert(0, str(Path(__file__).parent))          # 开发态 token 真源在 scripts/ 下
 
 from app.core.config import settings  # noqa: E402
+import dev_token  # noqa: E402
 
 if len(sys.argv) < 2:
     raise SystemExit("用法: python scripts/smoke_delete.py <后端端口> [platform_uid]")
@@ -53,13 +55,22 @@ print(f"目标库: {db}")
 def req(method, path, body=None):
     url = f"http://127.0.0.1:{port}{path}"
     data = json.dumps(body).encode() if body is not None else None
-    r = urllib.request.Request(url, data=data, method=method,
-                               headers={"Content-Type": "application/json"} if body else {})
+    # ⚠️ S1 起业务端点要 token（2026-09-26 补）：本脚本打的是**人手动起的**后端，
+    #    所以取值口径是"环境变量优先"（`dev_token.token()`）—— 你起后端时设了什么，
+    #    这里就用什么；都没设就用真源默认值（两边一致才通）。
+    headers = {**dev_token.headers()}
+    if body:
+        headers["Content-Type"] = "application/json"
+    r = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
         with urllib.request.urlopen(r) as resp:
             raw = resp.read()
             return resp.status, json.loads(raw) if raw else None
     except urllib.error.HTTPError as e:
+        if e.code == 401:
+            print(f"\n[!] 401：后端要 token，而本脚本发的与它认的不一致。\n"
+                  f"    起后端时请设 {dev_token.ENV}={dev_token.token()}，"
+                  f"或在本 shell 里设同一个变量后重跑本脚本。")
         return e.code, json.loads(e.read()) if e.headers.get("Content-Type", "").startswith("application/json") else None
 
 

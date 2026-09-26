@@ -28,16 +28,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "frontend"
 
-# 探针用的**开发态固定 token**（S1，devlog/202）。
+# 开发态固定 token：**真源已抽到 `scripts/dev_token.py`**（2026-09-26）。
 #
 # 为什么需要：生产 token 由 Tauri 每次启动生成、只存内存，而探针**没有 Tauri**
 # （它跑在无头 Edge 里）。后端为此留了 `DDTOOLKIT_DEV_API_TOKEN` 这条路，
 # 前端那一份由 `vite.config.ts` 的 `define` 注入。
 #
-# ⚠️ **这两处的值必须一致**（这里是真源，vite.config.ts 里那个默认值要跟着改）：
-#    不一致的症状是"页面所有数据为空 ⇒ 布局断言集体报红"，看起来像布局坏了 ——
-#    2026-09-25 真实踩过一次同类事故（CORS 正则没生效，见 devlog/201 §四）。
-PROBE_DEV_TOKEN = "dsh-ui-probe-dev-token"
+# ⚠️ 抽出去的原因：S1b 只修了探针，`dev_check.py` 与 `smoke_upstream.py` 一直 401
+#    —— "同一个固定值被三个脚本各写一遍"正是那次漏的温床（见 `dev_token.py` 的说明）。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from dev_token import DEV_TOKEN as PROBE_DEV_TOKEN  # noqa: E402
 
 # Windows 控制台常常是 GBK（cp936），而探针的打印里有排版字符（✕ U+2715、− U+2212 等）
 # **不在 GBK 码表里** —— 一句 print 就会抛 UnicodeEncodeError，把整条探针从中间打断
@@ -2250,7 +2250,13 @@ def main() -> int:
         "CORS_ORIGINS": r"http://(localhost|127\.0\.0\.1):.*",
         # 开发态固定 token（S1，devlog/202）：后端与前端**必须拿同一个值** ——
         # 后端读这个环境变量，前端由 `vite.config.ts` 的 `define` 读同一个变量名。
+        #
+        # ⚠️ 这里**刻意用常量而不是 `dev_token.token()`**（环境变量优先）：探针两端
+        #    （后端 env 与 Vite env）都必须是这一个确定值，否则 shell 里残留的
+        #    `DDTOOLKIT_DEV_API_TOKEN` 会让两端取值不同 ⇒ 整片 401（症状像布局坏了）。
         "DDTOOLKIT_DEV_API_TOKEN": PROBE_DEV_TOKEN,
+        # 同理会盖掉残留的生产 token（`_expected_token()` 优先读它，见 dev_token.py）
+        "DDTOOLKIT_API_TOKEN": "",
     }
     print(f"[probe] 起后端 :{be_port}")
     be_log = open(WORK / "backend.log", "wb")
