@@ -189,6 +189,11 @@
 
 ### 1.3 用户侧动作（不需要改代码，但只有你能做）
 
+> **2026-09-26 复评（批次 15，devlog/215）**：这一节里**看着像"只能真机"的其实分两类** ——
+> 文件 SQLite 的并发面**已经有真库用例**（`tests/test_sqlite_concurrency.py`：WAL 读写并行 /
+> `busy_timeout` 排队 / 竞争写 / T0 ∥ 帖子 / checkpoint 重开 / `dispose()` 与改名），
+> 别再重复验；**下面剩下的都是真窗口 / 真托盘 / 真迁移**，`ui_probe` 原理上碰不到。
+
 - **升级/迁移失败的两个真机现场**（批次 16 的验收要求，2026-09-26 记，devlog/207）：
   这两条 `ui_probe` 与 CI 都碰不到（要真库坏掉 / 真迁移中途失败），命令与判据写在
   `docs/DEV-LOOP.md` §一 的「真机现场：升级失败 / 迁移失败」那一小节。期望：
@@ -433,7 +438,7 @@ W1/W2 可以在**现在的架构上**做完，但它们只是让 W3 少踩坑。
 
 | 门禁 | 命令 | 当前基线（括号里 = 该值实测日） |
 |---|---|---|
-| 后端 | `python -m pytest -q`（**解释器走 `.venv`**，见 `ARCHITECTURE.md` §6 第 24 条） | **710–711 passed / 0 failed**（总数 711：其中 1 条**打真上游**的用例在不可达时按设计 skip ⇒ `passed` 那一格会差 1；2026-09-26 实测 ≈50–100s） |
+| 后端 | `python -m pytest -q`（**解释器走 `.venv`**，见 `ARCHITECTURE.md` §6 第 24 条） | **717–718 passed / 0 failed**（总数 718：其中 1 条**打真上游**的用例在不可达时按设计 skip ⇒ `passed` 那一格会差 1；2026-09-26 实测 ≈54–80s） |
 | 桌面壳 | `cargo test`（工作目录 `frontend/src-tauri`） | **56 passed**（2026-09-26 实测；含 `delete_old_dir` 的真实 junction 用例、S1 的 token 生成用例与 S3 的准入表/白名单用例） |
 | 前端单测 | `npm --prefix frontend run test` | **592–594 passed**（2026-09-26 实测；文件数不抄，跑一次就有） |
 | 前端类型 / lint | `npx tsc --noEmit`（**必须在 `frontend/` 里跑**）/ `npm --prefix frontend run lint` | 0 错 / 0 错（2026-09-26 复核） |

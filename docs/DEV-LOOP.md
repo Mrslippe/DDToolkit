@@ -141,6 +141,17 @@ python -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute(\"UPDAT
 
 ⚠️ **别拿真档案试**：先 `Copy-Item $d "$env:TEMP\dd-backup" -Recurse`（或者直接把 `DDTOOLKIT_DATA_DIR` 指到一份副本上再玩）。
 
+### 哪些"看着像真机"的其实机器能验（批次 15，devlog/215）
+
+文件 SQLite 的并发面（WAL 读写并行、`busy_timeout` 排队、多 session 竞争写、T0 ∥ 帖子写入、
+checkpoint + 重开、`dispose()` 之后文件才改得动名）**已经全部有真库用例**：
+`tests/test_sqlite_concurrency.py`（**不得用内存库宣称验证 WAL** —— 内存库连"两个连接看见
+同一份数据"都不成立）。别再把它当成"只能真机看"的事。
+
+**仍然只能真机/人工的**（`ui_probe` 跑在无头 Edge 里，没有 Tauri 窗口、没有托盘）：
+托盘隐藏 / 唤回 / **深休眠**、托盘菜单与退出、主窗 ✕ 与最小化、小窗拖拽手感、
+更新器的失败分类、以及上面那两个迁移现场。清单与逐条期望见 `docs/TODO.md` §1.3。
+
 ## 二、一条命令的快速自检
 
 ```powershell
