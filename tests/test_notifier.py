@@ -274,12 +274,18 @@ def test_test_notification_takes_the_newest_one_regardless_of_type(db, client, s
     assert body["url"] == "https://www.bilibili.com/video/BV1xx"
 
 
-def test_test_notification_falls_back_when_the_vtuber_is_absent(db, client, sent):
-    """库里没有她（或她还没有帖子）→ 退回通用文案，但**仍然要弹**（不能点了没反应）。"""
+def test_test_notification_stays_on_the_demo_vtuber_when_data_is_absent(db, client, sent):
+    """库里没有她（或她还没有帖子）→ 仍然是**她**的通知，只是退成「最小卡片」。
+
+    用户口径（2026-09-27）：「无论用户库里有没有明前奶绿动态，都默认调取明前奶绿最新动态，
+    不再调用通用文案」—— 所以这里**不许**再出现 "DDtoolkit 测试通知" 那种另一种长相，
+    也不编造内容（正文只剩"1 条新内容"），并且**仍然要弹**（不能点了没反应）。
+    """
     body = client.post("/settings/test-notification").json()
-    assert body["title"] == "DDtoolkit 测试通知"
-    assert "通用文案" in body["source"]
-    assert body["url"] and body["url"].startswith("https://")
+    assert body["title"] == "明前奶绿 更新了动态"
+    assert body["source"].startswith("明前奶绿")
+    assert "1 条新内容" in body["body"]
+    assert "DDtoolkit 测试通知" not in body["title"]
 
 
 def test_test_notification_can_be_clicked_repeatedly(db, client, sent):

@@ -207,11 +207,12 @@ def test_notification(db: Session = Depends(get_db)):
     卡片是否画得出来）。调「字号 / 颜色 / 不透明度」时如果只能等真有人开播，
     这个设置就等于没法调 —— 用户得当场看到效果。
 
-    **内容固定为「{TEST_VTUBER_NAME}」的最新动态**（用户口径 2026-09-27）：
+    **内容固定为「{TEST_VTUBER_NAME}」的最新动态**（用户口径 2026-09-27，第二次修订）：
     通用的"DDtoolkit 测试通知"看不出真实观感（没有头像、标题太短、点进去是示例站），
     而真实动态能一次验完四件事 —— 主播头像、折行、链接能不能点、点进去是不是那条帖子。
-    库里没有这个主播（或她一条帖子都没有）时**退回通用文案**，并把原因写进 `source`：
-    按钮不该因为数据缺失就变成"点了没反应"。
+    **不再有"通用文案"这条路**：库里没有她（或她还没有帖子）时，用**最小卡片**
+    （标题仍是「{TEST_VTUBER_NAME} 更新了动态」、正文只有"1 条新内容"）——
+    既不编造内容，也不会让用户看到另一种完全不同的通知长相。
 
     ⚠️ 用 `kind="test"`：它**绕过**「开播提醒 / 动态更新提醒」两个事件开关
     （那正是这个按钮要让人看到的东西），但**总开关仍然生效**（关着就是关着）。
@@ -225,10 +226,12 @@ def test_notification(db: Session = Depends(get_db)):
 
     picked = latest_post_of(db, TEST_VTUBER_NAME)
     if picked is None:
-        title, body = "DDtoolkit 测试通知", "看到我说明通知通道正常｜点击打开示例链接"
-        url: str | None = "https://example.com/ddtoolkit"
-        icon_path = None
-        source = f"通用文案（库里没有「{TEST_VTUBER_NAME}」的动态）"
+        # 最小卡片：走**同一个 composer**、同一个标题，只是没有具体内容可填
+        # （compose_new_posts 会过滤空行，所以这里给一条只有类型的占位）
+        item = notifier.compose_new_posts(TEST_VTUBER_NAME, "bilibili",
+                                          [{"type": "dynamic"}])
+        title, body, url, icon_path = item.title, item.body, item.url, None
+        source = f"{TEST_VTUBER_NAME} 的最新动态（库里暂无数据：最小卡片）"
     else:
         name, account, post = picked
         item = notifier.compose_new_posts(
