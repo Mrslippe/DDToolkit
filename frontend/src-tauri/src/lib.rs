@@ -252,7 +252,11 @@ struct DataDirInfo {
 }
 
 #[tauri::command]
-fn storage_info(state: State<'_, DataDirState>) -> DataDirInfo {
+fn storage_info(window: tauri::Window, state: State<'_, DataDirState>) -> DataDirInfo {
+    if !guard_window(&window, "storage_info") {
+        return DataDirInfo { dir: String::new(), source: "denied".to_string(), portable: false, pointer_unusable: None };
+    }
+
     let guard = state.0.lock().unwrap();
     match guard.as_ref() {
         Some(s) => DataDirInfo {
@@ -411,7 +415,11 @@ struct MigrateReport {
 
 /// 选一个目录并把数据迁过去（系统文件夹选择框，用户口径 2026-09-16）。
 #[tauri::command]
-async fn migrate_data_dir(app: tauri::AppHandle) -> Result<MigrateReport, String> {
+async fn migrate_data_dir(window: tauri::Window, app: tauri::AppHandle) -> Result<MigrateReport, String> {
+    if !guard_window(&window, "migrate_data_dir") {
+        return Err("该窗口无权调用 migrate_data_dir".to_string());
+    }
+
     use tauri_plugin_dialog::DialogExt;
 
     let Some(picked) = app.dialog().file().blocking_pick_folder() else {
@@ -552,7 +560,11 @@ fn shell_open(_target: &std::path::Path) -> Result<(), String> {
 /// ⚠️ 路径取自壳自己的解析结果（`DataDirState`），**不接受前端传路径** ⇒ 它不可能被
 /// 用来打开任意目录。
 #[tauri::command]
-fn open_data_dir(state: State<'_, DataDirState>) -> Result<String, String> {
+fn open_data_dir(window: tauri::Window, state: State<'_, DataDirState>) -> Result<String, String> {
+    if !guard_window(&window, "open_data_dir") {
+        return Err("该窗口无权调用 open_data_dir".to_string());
+    }
+
     let dir = {
         let g = state.0.lock().unwrap();
         match g.as_ref() {
@@ -571,7 +583,11 @@ fn open_data_dir(state: State<'_, DataDirState>) -> Result<String, String> {
 /// 而为了"打开一个固定网址"再引一个插件不值得 —— `ShellExecuteW` 就够，且 URL 是常量
 /// （比"前端随便传 URL"安全）。
 #[tauri::command]
-fn open_release_page() -> Result<(), String> {
+fn open_release_page(window: tauri::Window, ) -> Result<(), String> {
+    if !guard_window(&window, "open_release_page") {
+        return Err("该窗口无权调用 open_release_page".to_string());
+    }
+
     const URL: &str = "https://github.com/Mrslippe/DDToolkit/releases/latest";
     shell_open(std::path::Path::new(URL))
 }
@@ -600,7 +616,11 @@ const PROXY_PORTS: [u16; 7] = [7890, 7891, 7897, 10809, 1080, 2080, 8889];
 
 /// 探测本地代理，返回 `http://127.0.0.1:<port>`（没探测到 = `None`）。
 #[tauri::command]
-fn probe_local_proxy() -> Option<String> {
+fn probe_local_proxy(window: tauri::Window, ) -> Option<String> {
+    if !guard_window(&window, "probe_local_proxy") {
+        return None;
+    }
+
     let found = probe_ports(&PROXY_PORTS, Duration::from_millis(150));
     match found {
         Some(port) => {
@@ -620,7 +640,11 @@ fn probe_local_proxy() -> Option<String> {
 /// 且只影响**新构造**的 HTTP 客户端（reqwest 在建 client 时读环境变量）。
 /// 不写注册表、不改系统设置 —— 对用户环境零副作用。
 #[tauri::command]
-fn set_process_proxy(url: String) -> Result<(), String> {
+fn set_process_proxy(window: tauri::Window, url: String) -> Result<(), String> {
+    if !guard_window(&window, "set_process_proxy") {
+        return Err("该窗口无权调用 set_process_proxy".to_string());
+    }
+
     if !url.starts_with("http://127.0.0.1:") {
         return Err(format!("只接受本机 http 代理地址，实得 {url}"));
     }
@@ -650,7 +674,11 @@ fn dir_size(path: &std::path::Path) -> u64 {
 /// 改造前的四道全部可绕过，最坏路径能删到正在使用的活目录（实测见 devlog §一）。
 /// 判据本体在 `prepare_old_dir_deletion`（纯函数，单测覆盖）；这里只做状态读取与执行。
 #[tauri::command]
-fn delete_old_data_dir(app: tauri::AppHandle, id: String) -> Result<u64, String> {
+fn delete_old_data_dir(window: tauri::Window, app: tauri::AppHandle, id: String) -> Result<u64, String> {
+    if !guard_window(&window, "delete_old_data_dir") {
+        return Err("该窗口无权调用 delete_old_data_dir".to_string());
+    }
+
     let current = app
         .state::<DataDirState>()
         .0
@@ -772,7 +800,11 @@ fn apply_dwm_corners(_window: &tauri::WebviewWindow) -> bool {
 
 /// 前端问"这扇窗口的圆角是系统画的吗"（R34）：true ⇒ 用系统圆角，CSS 半径归零。
 #[tauri::command]
-fn window_corners_mode() -> bool {
+fn window_corners_mode(window: tauri::Window, ) -> bool {
+    if !guard_window(&window, "window_corners_mode") {
+        return false;
+    }
+
     DWM_CORNERS.load(Ordering::SeqCst)
 }
 
@@ -961,7 +993,11 @@ fn widget_log(app: &tauri::AppHandle, msg: &str) {
 /// 消息泵就空出来了。代价：`WebviewWindow` 等类型不是 `Send`，跨 await 持有要小心 ——
 /// 本函数内没有 await，所以是安全的。
 #[tauri::command]
-async fn show_widget_window(app: tauri::AppHandle, x: Option<i32>, y: Option<i32>) -> Result<(), String> {
+async fn show_widget_window(window: tauri::Window, app: tauri::AppHandle, x: Option<i32>, y: Option<i32>) -> Result<(), String> {
+    if !guard_window(&window, "show_widget_window") {
+        return Err("该窗口无权调用 show_widget_window".to_string());
+    }
+
     // ⚠️ **入口就打印**（2026-09-24 第四轮补）：原来只在 `build()` **成功之后**才打印，
     // 于是"窗口创建失败"和"命令压根没被调用"在日志里**长得一模一样**（都是什么都没有）。
     // 这一行把两者分开 —— 没有它，下一次还是只能猜。
@@ -1106,7 +1142,11 @@ async fn show_widget_window(app: tauri::AppHandle, x: Option<i32>, y: Option<i32
 /// 同样改 `async fn`：`destroy()` 也会碰 WebView2 的消息泵，
 /// 理由见 `show_widget_window` 那段注释（**同步命令跑在主线程 ⇒ 卡死**）。
 #[tauri::command]
-async fn hide_widget_window(app: tauri::AppHandle) {
+async fn hide_widget_window(window: tauri::Window, app: tauri::AppHandle) {
+    if !guard_window(&window, "hide_widget_window") {
+        return;
+    }
+
     if let Some(w) = app.get_webview_window("widget") {
         let _ = w.destroy();
         let _ = app.emit(crate::WIDGET_CLOSED_EVENT, ());
@@ -1122,7 +1162,11 @@ async fn hide_widget_window(app: tauri::AppHandle) {
 /// 页面跑起来就调它 → 控制台出现 `[widget] 页面自检 …`；
 /// **如果这条日志从不出现，那就是"页面没执行"**，方向立刻转到 Rust / WebView 侧。
 #[tauri::command]
-fn widget_diag(app: tauri::AppHandle, info: String) {
+fn widget_diag(window: tauri::Window, app: tauri::AppHandle, info: String) {
+    if !guard_window(&window, "widget_diag") {
+        return;
+    }
+
     widget_log(&app, &format!("[widget] 页面自检 {info}"));
 }
 
@@ -1132,7 +1176,11 @@ fn widget_diag(app: tauri::AppHandle, info: String) {
 /// 于是"窗口早就存在"与"窗口没建出来"在日志里**长得一模一样**。
 /// 这条命令让前端可以在调用前后各问一次，把状态钉死。
 #[tauri::command]
-fn widget_window_exists(app: tauri::AppHandle) -> bool {
+fn widget_window_exists(window: tauri::Window, app: tauri::AppHandle) -> bool {
+    if !guard_window(&window, "widget_window_exists") {
+        return false;
+    }
+
     app.get_webview_window("widget").is_some()
 }
 
@@ -1161,7 +1209,11 @@ fn widget_window_exists(app: tauri::AppHandle) -> bool {
 /// 而 **Tauri v2 里自定义命令不走 ACL**（本仓已在 `destroy_widget_window` 上踩过这个坑，
 /// devlog/175），所以这里直接用命令，少一个会漂的配置点。
 #[tauri::command]
-async fn set_widget_click_through(app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+async fn set_widget_click_through(window: tauri::Window, app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
+    if !guard_window(&window, "set_widget_click_through") {
+        return Err("该窗口无权调用 set_widget_click_through".to_string());
+    }
+
     let Some(w) = app.get_webview_window("widget") else {
         // 幂等：小窗没开时设置穿透是无意义的**成功**，不该报错
         // （用户可能在没开小窗时就调了设置项）。
@@ -1194,7 +1246,11 @@ async fn set_widget_click_through(app: tauri::AppHandle, enabled: bool) -> Resul
 /// —— **默认不隐藏**：宁可偶尔多露一下，也不要因为探测失败让小窗**永远不出现**
 /// （那才是更难查的 bug）。
 #[tauri::command]
-fn is_fullscreen_app_running() -> bool {
+fn is_fullscreen_app_running(window: tauri::Window, ) -> bool {
+    if !guard_window(&window, "is_fullscreen_app_running") {
+        return false;
+    }
+
     #[cfg(target_os = "windows")]
     {
         use windows_sys::Win32::UI::Shell::{
@@ -1240,12 +1296,17 @@ fn is_fullscreen_app_running() -> bool {
 /// 而本仓主窗口那条 resize 通路也是逻辑像素 —— 混用会在 125%/150% 缩放的屏幕上错位。
 #[tauri::command]
 async fn resize_widget_window(
+    window: tauri::Window,
     app: tauri::AppHandle,
     w: f64,
     h: f64,
     x: i32,
     y: i32,
 ) -> Result<(), String> {
+    if !guard_window(&window, "resize_widget_window") {
+        return Err("该窗口无权调用 resize_widget_window".to_string());
+    }
+
     let Some(win) = app.get_webview_window("widget") else {
         // 幂等：小窗没开时"调整它的尺寸"是无意义的成功（与另两条命令同款口径）
         return Ok(());
@@ -1270,7 +1331,11 @@ async fn resize_widget_window(
 ///
 /// 幂等 + 只在小窗**存在**时动作：小窗没开就什么都不做（成功）。
 #[tauri::command]
-async fn set_widget_visible(app: tauri::AppHandle, visible: bool) -> Result<(), String> {
+async fn set_widget_visible(window: tauri::Window, app: tauri::AppHandle, visible: bool) -> Result<(), String> {
+    if !guard_window(&window, "set_widget_visible") {
+        return Err("该窗口无权调用 set_widget_visible".to_string());
+    }
+
     let Some(w) = app.get_webview_window("widget") else {
         return Ok(());
     };
@@ -1293,7 +1358,11 @@ async fn set_widget_visible(app: tauri::AppHandle, visible: bool) -> Result<(), 
 /// 这里**只 destroy 小窗**（前端随后重拉主窗口可见性），不碰 `QUITTING`：
 /// 它不该顺手把整个应用退出 —— 用户的诉求是"把那个小窗口弄掉"。
 #[tauri::command]
-async fn destroy_widget_window(app: tauri::AppHandle) {
+async fn destroy_widget_window(window: tauri::Window, app: tauri::AppHandle) {
+    if !guard_window(&window, "destroy_widget_window") {
+        return;
+    }
+
     if let Some(w) = app.get_webview_window("widget") {
         let _ = w.destroy();
         let _ = app.emit(crate::WIDGET_CLOSED_EVENT, ());
@@ -1414,8 +1483,12 @@ fn tray_status_texts(status: Option<&str>) -> (String, String) {
 ///
 /// 失败只写壳日志（`logs/shell.log`）：托盘文案是提示，不该影响任何功能。
 #[tauri::command]
-fn set_tray_status(app: tauri::AppHandle, state: State<'_, DataDirState>,
+fn set_tray_status(window: tauri::Window, app: tauri::AppHandle, state: State<'_, DataDirState>,
                    item: State<'_, TrayStatusItem>, text: Option<String>) {
+    if !guard_window(&window, "set_tray_status") {
+        return;
+    }
+
     let (line, tooltip) = tray_status_texts(text.as_deref());
     let dir = state.0.lock().unwrap().as_ref().map(|s| s.dir.clone());
     let log = |msg: String| {
@@ -1486,7 +1559,11 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
 }
 
 #[tauri::command]
-fn get_backend_port(port: State<'_, BackendPort>) -> u16 {
+fn get_backend_port(window: tauri::Window, port: State<'_, BackendPort>) -> u16 {
+    if !guard_window(&window, "get_backend_port") {
+        return 0;
+    }
+
     *port.0.lock().unwrap()
 }
 
@@ -1505,6 +1582,10 @@ fn get_backend_port(port: State<'_, BackendPort>) -> u16 {
 /// 这张表会与 capability 文件一起收敛。
 #[tauri::command]
 fn get_api_token(window: tauri::Window, token: State<'_, ApiToken>) -> Result<String, String> {
+    if !guard_window(&window, "get_api_token") {
+        return Err("该窗口无权调用 get_api_token".to_string());
+    }
+
     let label = window.label().to_string();
     if !CALLER_LABELS_ALLOWED.contains(&label.as_str()) {
         println!("[ddtoolkit] 拒绝 get_api_token：调用方窗口 label = {label}");
@@ -1520,9 +1601,179 @@ fn get_api_token(window: tauri::Window, token: State<'_, ApiToken>) -> Result<St
 
 /// 允许读取会话 token 的窗口 label（`get_api_token` 的准入表）。
 ///
-/// 放成常量而不是写在命令里：S3-A 收紧权限时它是**一处**要改的地方，
-/// 而且能被单测直接盯住。
-const CALLER_LABELS_ALLOWED: [&str; 2] = ["main", "widget"];
+/// ⚠️ 2026-09-26（S3-0）起**并进 `COMMAND_ACL`**：一个类型（`BOTH`）、一处真源。
+/// 判据也搬了过去（`command_acl_*` 那几条）—— 别再单独维护一份。
+const CALLER_LABELS_ALLOWED: &[&str] = BOTH;
+
+// ── 命令级准入表（S3-0，devlog/208）─────────────────────────────────────
+//
+// ⚠️ **为什么必须自己判 label**：本应用的自定义命令**默认完全不查 ACL**
+// （证据：vendored `tauri-2.11.5/src/webview/mod.rs:1819-1852` 的那个 `if`；两扇窗都是
+// 本地 origin）⇒ **只拆 capability JSON 一点用都没有**，命令自己判才是唯一有效的那一半。
+//
+// 口径：**默认拒绝** —— 没登记在这里的命令，任何窗口都调不了。
+// 新增命令时必须在这里表态（有判据：`command_acl_matches_the_registered_handler`）。
+//
+// 判据清单见 `tests` 里的 `command_acl_*` / `every_command_guards_*` 四条；
+// 反向验证：删掉一条 ⇒ 覆盖用例红；把危险命令改成 `BOTH` ⇒ 矩阵用例红。
+
+/// 只有主窗口能调
+const MAIN_ONLY: &[&str] = &["main"];
+/// 两扇窗都要用（小窗也要发业务请求 / 管自己的窗口）
+const BOTH: &[&str] = &["main", "widget"];
+
+/// 每条自定义命令允许的调用方窗口 label。
+///
+/// ⚠️ **别按"这命令看起来该谁用"填** —— 小窗真的会调 `resize_widget_window` /
+/// `set_widget_visible` / `set_widget_click_through`（`components/StatusWidgetWindow.tsx`
+/// 里那三处 `await import('../utils/shellBridge')`），填错就是把小窗点坏
+/// （devlog/175 的"IPC 通道坏掉"就是这么来的）。
+const COMMAND_ACL: &[(&str, &[&str])] = &[
+    // —— 两扇窗都用 ——
+    ("get_backend_port", BOTH),
+    ("get_api_token", CALLER_LABELS_ALLOWED),
+    ("widget_diag", BOTH),
+    ("resize_widget_window", BOTH),
+    ("set_widget_visible", BOTH),
+    ("set_widget_click_through", BOTH),
+    // —— 只有主窗口 ——
+    ("present_window", MAIN_ONLY),
+    ("hide_to_tray", MAIN_ONLY),
+    ("quit_app", MAIN_ONLY),
+    ("storage_info", MAIN_ONLY),
+    ("open_data_dir", MAIN_ONLY),
+    ("open_external", MAIN_ONLY),
+    ("open_release_page", MAIN_ONLY),
+    ("probe_local_proxy", MAIN_ONLY),
+    ("set_process_proxy", MAIN_ONLY),
+    ("window_corners_mode", MAIN_ONLY),
+    // 数据目录迁移 / 删旧目录：**唯一两条不可逆或会动用户数据**的命令
+    ("migrate_data_dir", MAIN_ONLY),
+    ("delete_old_data_dir", MAIN_ONLY),
+    ("set_tray_status", MAIN_ONLY),
+    // 小窗的窗口管理（由主窗口的设置页/顶栏发起）
+    ("show_widget_window", MAIN_ONLY),
+    ("hide_widget_window", MAIN_ONLY),
+    ("destroy_widget_window", MAIN_ONLY),
+    ("widget_window_exists", MAIN_ONLY),
+    ("is_fullscreen_app_running", MAIN_ONLY),
+];
+
+/// 这条命令允不允许这个窗口调（表里查不到 ⇒ **拒绝**）。
+fn command_allowed(command: &str, label: &str) -> bool {
+    COMMAND_ACL
+        .iter()
+        .find(|(name, _)| *name == command)
+        .is_some_and(|(_, labels)| labels.contains(&label))
+}
+
+/// 命令入口的准入检查。**拒绝时留痕**（stdout + `<数据目录>/logs/shell.log`）。
+///
+/// 为什么还要落 shell.log：release 版没有控制台，`println!` 会丢 ——
+/// "某个窗口越权调了命令"这种事必须留得下来（否则就是静默失效）。
+///
+/// ⚠️ 用法（**每条命令的第一句**）：`if !guard_window(&window, "cmd_name") { return …; }`
+/// —— 有判据扫源码钉住"每条命令都调了它"。
+fn guard_window(window: &tauri::Window, command: &str) -> bool {
+    let label = window.label();
+    if command_allowed(command, label) {
+        return true;
+    }
+    let msg = format!("拒绝 {command}：调用方窗口 label = {label}（不在准入表里）");
+    println!("[ddtoolkit] {msg}");
+    if let Ok(dir) = data_dir_of(window.app_handle()) {
+        shelllog::log(&dir, &msg);
+    }
+    false
+}
+
+/// 取数据目录（给"留痕"用；拿不到就只打 stdout）。
+fn data_dir_of(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    let state = app.state::<DataDirState>();
+    let g = state.0.lock().unwrap();
+    g.as_ref()
+        .map(|s| s.dir.clone())
+        .ok_or_else(|| "数据目录状态未知".to_string())
+}
+
+// ── 外链白名单（S3-B，devlog/208）──────────────────────────────────────
+//
+// 现状问题（`ARCHITECTURE-IMPROVEMENT-EXECUTION.md` §2.17）：`plugin:shell|open` 用的是
+// 插件内置正则 `^((mailto:\w+)|(tel:\w+)|(https?://\w+)).+` —— **无主机白名单**、
+// 不拒 userinfo、末端无 `$` 锚点 ⇒ 今天任何 https 主机都能被打开。
+// 换成自己的命令 + **严格白名单**：只 https、只这几个主机、拒 userinfo/端口/编码/点结尾。
+
+/// 允许被"打开外部链接"的主机（**全小写、精确匹配**）。
+///
+/// ⚠️ 接入新平台（抖音/小红书）时要**同时**加这里 —— 否则"打开主页"会失败并提示原因
+/// （前端会把原因显示出来，不静默）。这条纪律见 `docs/ARCHITECTURE.md` §6 第 29 条。
+const EXTERNAL_HOSTS: &[&str] = &[
+    "bilibili.com",
+    "www.bilibili.com",
+    "space.bilibili.com",
+    "live.bilibili.com",
+    "weibo.com",
+    "www.weibo.com",
+];
+
+/// 校验一个外部 URL：**返回它的小写主机名**，或给用户看的原因。
+///
+/// 规则（每条都有用例，见 `tests` 里的 `external_url_*`）：
+/// - 只 `https://`（`http:` / `file:` / 自定义 scheme / `javascript:` 一律拒）；
+/// - 主机必须**精确等于**白名单里的一条（先转小写 ⇒ `BiLiBiLi.CoM` 合法，
+///   而 `bilibili.com.evil.com` / `bilibili.com.` / `%62ilibili.com` 都不等 ⇒ 拒）；
+/// - 拒 userinfo（`https://bilibili.com@evil.com/`）、拒端口（`:443`/`:8080`）；
+/// - 主机字符集只允许 `[a-z0-9.-]` ⇒ 空格/控制符/`%`/`\`/unicode 同形字全被挡住；
+/// - 允许路径与查询（`https://space.bilibili.com/123?x=1` 合法）。
+fn external_url_host(url: &str) -> Result<String, String> {
+    let raw = url.trim();
+    if raw.is_empty() {
+        return Err("链接是空的".to_string());
+    }
+    let rest = raw
+        .strip_prefix("https://")
+        .or_else(|| raw.strip_prefix("HTTPS://"))
+        .ok_or_else(|| "只允许打开 https 链接".to_string())?;
+    // authority = 到第一个 `/`、`?`、`#` 为止
+    let end = rest
+        .find(|c| c == '/' || c == '?' || c == '#')
+        .unwrap_or(rest.len());
+    let authority = &rest[..end];
+    if authority.is_empty() {
+        return Err("链接里没有主机名".to_string());
+    }
+    if authority.contains('@') {
+        return Err("链接里带了 userinfo（`@`），不接受".to_string());
+    }
+    if authority.contains(':') {
+        return Err("链接里带了端口，不接受".to_string());
+    }
+    let host = authority.to_ascii_lowercase();
+    if !host
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '-')
+    {
+        return Err("主机名里有不接受的字符".to_string());
+    }
+    if !EXTERNAL_HOSTS.contains(&host.as_str()) {
+        return Err(format!("这个主机不在允许打开的名单里：{host}"));
+    }
+    Ok(host)
+}
+
+/// 用系统默认浏览器打开一个**白名单内**的外部链接（S3-B）。
+///
+/// ⚠️ 只走这一个入口：`shell:allow-open` 已从 capability 里删掉（否则旧通路还在、
+/// 两扇窗都能调，而那个通路**没有主机白名单**）。
+#[tauri::command]
+fn open_external(url: String, window: tauri::Window) -> Result<(), String> {
+    if !guard_window(&window, "open_external") {
+        return Err("该窗口无权打开外部链接".to_string());
+    }
+    let host = external_url_host(&url)?;
+    println!("[ddtoolkit] 打开外部链接（{host}）");
+    shell_open(std::path::Path::new(&url))
+}
 
 /// 显示主窗口。窗口默认 visible:false（见 tauri.conf.json），页面绘制完成后
 /// 由前端 invoke 显示，避免 WebView2 首绘前的白屏（白色闪屏修复，见 devlog/021）。
@@ -1534,6 +1785,10 @@ const CALLER_LABELS_ALLOWED: [&str; 2] = ["main", "widget"];
 /// 首次显示与深休眠唤醒后的重建（重建窗口也是加载完页面后走这里）。
 #[tauri::command]
 fn present_window(window: tauri::Window) {
+    if !guard_window(&window, "present_window") {
+        return;
+    }
+
     let _ = window.show();
     if let Some(w) = window.app_handle().get_webview_window("main") {
         apply_dwm_corners(&w);
@@ -1542,14 +1797,22 @@ fn present_window(window: tauri::Window) {
 
 /// 隐藏到托盘（前端点 ✕ 且偏好为「最小化到托盘」时调用）。
 #[tauri::command]
-fn hide_to_tray(app: tauri::AppHandle) {
+fn hide_to_tray(window: tauri::Window, app: tauri::AppHandle) {
+    if !guard_window(&window, "hide_to_tray") {
+        return;
+    }
+
     hide_to_tray_impl(&app);
 }
 
 /// 真退出：先置标志（否则 `CloseRequested` 又把它拦成"隐藏"），再退出。
 /// 退出路径仍走 `RunEvent::Exit` —— 那里负责 kill 后端子进程。
 #[tauri::command]
-fn quit_app(app: tauri::AppHandle) {
+fn quit_app(window: tauri::Window, app: tauri::AppHandle) {
+    if !guard_window(&window, "quit_app") {
+        return;
+    }
+
     QUITTING.store(true, Ordering::SeqCst);
     println!("[ddtoolkit] 用户确认退出");
     app.exit(0);
@@ -1754,6 +2017,7 @@ pub fn run() {
             get_backend_port,
             get_api_token,
             open_data_dir,
+            open_external,
             present_window,
             hide_to_tray,
             quit_app,
@@ -2155,9 +2419,11 @@ mod tests {
 
     /// 准入表就是 `get_api_token` 的判据 —— 它必须**只**含预期的那两个窗口。
     ///
-    /// 反向验证：往 `CALLER_LABELS_ALLOWED` 里加 `"evil"` ⇒ 红。
+    /// ⚠️ 2026-09-26（S3-0）：准入表并进了 `COMMAND_ACL`，判据也搬过去
+    /// （`only_expected_windows_may_read_the_token` 在新那一组里，多了未知窗口的断言）。
+    /// 这里只留"类型没被写错"这一条最小断言。
     #[test]
-    fn only_expected_windows_may_read_the_token() {
+    fn caller_labels_const_matches_the_acl() {
         assert_eq!(CALLER_LABELS_ALLOWED, ["main", "widget"]);
     }
 
@@ -2387,6 +2653,248 @@ mod tests {
             let got = prepare_old_dir_deletion("i", Some(&rec), &cur).expect("合法旧目录应放行");
             assert_eq!(got, std::fs::canonicalize(&old).unwrap());
             assert!(got.join("vtuber.db").exists());
+        }
+    }
+
+    // ── S3-0：命令级准入（devlog/208）────────────────────────────────────
+    //
+    // ⚠️ 两条口径：**默认拒绝**（没登记 = 谁都不能调）+ **每条命令都要真的调 guard**。
+    // 前者靠"注册表 ↔ 准入表"对账，后者靠扫函数体 —— 因为自定义命令**不查 ACL**，
+    // 只有命令自己判才算数（`ARCHITECTURE-IMPROVEMENT-EXECUTION.md` §2.2）。
+
+    const SRC: &str = include_str!("lib.rs");
+
+    /// 从源码里抠出 `invoke_handler(generate_handler![…])` 的命令名。
+    fn registered_commands(src: &str) -> Vec<String> {
+        let start = src.find("generate_handler![").expect("找不到 generate_handler");
+        let rest = &src[start..];
+        let end = rest.find("])").expect("找不到 generate_handler 的收尾");
+        rest[..end]
+            .lines()
+            .filter_map(|l| {
+                let t = l.trim().trim_end_matches(',');
+                if t.is_empty() || t.contains('[') || t.contains(']') {
+                    None
+                } else {
+                    Some(t.to_string())
+                }
+            })
+            .collect()
+    }
+
+    /// 从源码里抠出 `COMMAND_ACL` 里登记的命令名。
+    fn acl_commands(src: &str) -> Vec<String> {
+        let start = src.find("const COMMAND_ACL").expect("找不到 COMMAND_ACL");
+        let rest = &src[start..];
+        let end = rest.find("];").expect("找不到 COMMAND_ACL 的收尾");
+        rest[..end]
+            .lines()
+            .filter(|l| l.trim_start().starts_with("(\""))
+            .map(|l| {
+                l.trim_start()
+                    .trim_start_matches("(\"")
+                    .split('"')
+                    .next()
+                    .unwrap_or_default()
+                    .to_string()
+            })
+            .collect()
+    }
+
+    /// 某条命令函数体的前 400 **字符**（给"有没有调 guard"用）。
+    ///
+    /// ⚠️ 按字符取而不是按字节切：源码里到处是中文注释，`src[at..at+400]` 会切进
+    /// 多字节字符中间 ⇒ `panic: byte index is not a char boundary`（第一版就这么崩的）。
+    fn command_head(src: &str, name: &str) -> String {
+        let pat = format!("fn {name}(");
+        let at = src.find(&pat).unwrap_or_else(|| panic!("找不到 fn {name}"));
+        src[at..].chars().take(400).collect()
+    }
+
+    #[test]
+    fn command_acl_matches_the_registered_handler() {
+        // 两个方向的差集都必须为空：**新增命令没表态**会红；登记了不存在的命令也会红。
+        // 反向验证：删掉 COMMAND_ACL 里任意一条 ⇒ 本用例红。
+        let mut registered = registered_commands(SRC);
+        let mut acl = acl_commands(SRC);
+        registered.sort();
+        acl.sort();
+        assert_eq!(
+            registered, acl,
+            "COMMAND_ACL 与 invoke_handler 的注册表对不上 —— 新命令必须在 COMMAND_ACL 里表态"
+        );
+    }
+
+    #[test]
+    fn every_command_guards_on_the_caller_label() {
+        // ⚠️ 本批最要紧的一条：自定义命令**不查 ACL**，命令自己不调 guard 就等于没门。
+        let missing: Vec<String> = registered_commands(SRC)
+            .into_iter()
+            .filter(|c| !command_head(SRC, c).contains(&format!("guard_window(&window, \"{c}\")")))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "这些命令没有在入口调 guard_window（等于对任何窗口开放）：{missing:?}"
+        );
+        // 反向验证：删掉任意一条命令里的 guard_window 行 ⇒ 本用例红。
+    }
+
+    #[test]
+    fn widget_may_call_only_what_the_widget_window_actually_uses() {
+        // 小窗真的会调 resize / set_visible / set_click_through（`StatusWidgetWindow.tsx` 里
+        // 那三处 `await import('../utils/shellBridge')`）—— 少一条就是把小窗点坏（devlog/175 的形态）。
+        let mut allowed: Vec<&str> = COMMAND_ACL
+            .iter()
+            .filter(|(_, labels)| labels.contains(&"widget"))
+            .map(|(name, _)| *name)
+            .collect();
+        allowed.sort_unstable();
+        assert_eq!(
+            allowed,
+            vec![
+                "get_api_token",
+                "get_backend_port",
+                "resize_widget_window",
+                "set_widget_click_through",
+                "set_widget_visible",
+                "widget_diag",
+            ],
+            "小窗可调命令集变了 —— 若是有意为之，先确认真机上小窗还点得动"
+        );
+    }
+
+    #[test]
+    fn dangerous_and_data_moving_commands_are_main_only() {
+        // 计划点名的六条 + 本批新增的两条：**只有主窗口**能调。
+        for cmd in [
+            "delete_old_data_dir", // 唯一不可逆：删旧数据目录
+            "migrate_data_dir",    // 会动用户数据：迁移数据目录
+            "quit_app",
+            "hide_to_tray",
+            "open_release_page",
+            "set_process_proxy",
+            "open_external", // 外链白名单的入口（也别让小窗开）
+            "open_data_dir",
+        ] {
+            assert!(command_allowed(cmd, "main"), "{cmd} 应当允许主窗口");
+            assert!(!command_allowed(cmd, "widget"), "{cmd} 不该允许小窗");
+            assert!(!command_allowed(cmd, "evil"), "{cmd} 不该允许未知窗口");
+        }
+    }
+
+    #[test]
+    fn unknown_commands_are_denied_by_default() {
+        assert!(!command_allowed("no_such_command", "main"));
+        assert!(!command_allowed("no_such_command", "widget"));
+        assert!(!command_allowed("", "main"));
+    }
+
+    #[test]
+    fn only_expected_windows_may_read_the_token() {
+        // 反向验证：把 ACCESS 表里 get_api_token 的标签改成 ["main"] ⇒ 红（小窗读不到令牌）。
+        assert!(command_allowed("get_api_token", "main"));
+        assert!(command_allowed("get_api_token", "widget"));
+        assert!(!command_allowed("get_api_token", "evil"));
+        assert_eq!(CALLER_LABELS_ALLOWED, ["main", "widget"]);
+    }
+
+    // ── S3-B：外链白名单（devlog/208）────────────────────────────────────
+
+    #[test]
+    fn external_url_allows_whitelisted_hosts_with_paths_and_queries() {
+        for ok in [
+            "https://space.bilibili.com/434334701",
+            "https://www.bilibili.com/read/cv3000000",
+            "https://bilibili.com",
+            "https://live.bilibili.com/123?x=1",
+            "https://weibo.com/u/1234567",
+            "https://www.weibo.com/u/1#frag",
+            "HTTPS://BILIBILI.COM/x", // 大写不算绕过：规范化后就是同一个主机
+            "  https://bilibili.com  ", // 两侧空白 trim 掉
+        ] {
+            assert!(external_url_host(ok).is_ok(), "应当放行：{ok}");
+        }
+    }
+
+    // ── S3-A：capability 分窗（devlog/208）──────────────────────────────
+
+    const CAP_BASE: &str = include_str!("../capabilities/default.json");
+    const CAP_MAIN: &str = include_str!("../capabilities/main.json");
+
+    /// 取 capability 文件里**真正的权限表**（不是整段文本 —— 描述里提到某个权限名
+    /// 不等于授予它；第一版就是被自己的说明文字弄红的，本仓第 4 次踩这个坑）。
+    fn cap_permissions(src: &str) -> Vec<String> {
+        let v: serde_json::Value = serde_json::from_str(src).expect("capability 不是合法 JSON");
+        v["permissions"]
+            .as_array()
+            .expect("permissions 必须是数组")
+            .iter()
+            .map(|p| p.as_str().unwrap_or_default().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn capability_never_grants_the_unrestricted_open_path() {
+        // ⚠️ S3-B 的关键一半：**旧通路必须一起删掉**。留着 `shell:allow-open` 的话，
+        // 那个走插件内置正则（没有主机白名单）的通路仍在，而且两扇窗都能调 ⇒
+        // 新命令 `open_external` 就只是"多了一条更严的路"。反向验证：把它加回去 ⇒ 红。
+        for (name, src) in [("default.json", CAP_BASE), ("main.json", CAP_MAIN)] {
+            let perms = cap_permissions(src);
+            assert!(
+                !perms.iter().any(|p| p == "shell:allow-open"),
+                "{name} 又给了 shell:allow-open —— 外链必须只走 open_external（带主机白名单）"
+            );
+            assert!(
+                !perms.iter().any(|p| p == "dialog:allow-open"),
+                "{name} 给了 dialog:allow-open —— JS 侧从未使用（Rust 侧系统对话框不走 ACL）"
+            );
+        }
+    }
+
+    #[test]
+    fn main_only_extras_are_not_in_the_wildcard_baseline() {
+        // 主窗独有的两项（更新 + 重启进程）不该出现在通配基线里。
+        let base = cap_permissions(CAP_BASE);
+        let main = cap_permissions(CAP_MAIN);
+        for perm in ["updater:default", "process:allow-restart"] {
+            assert!(!base.iter().any(|p| p == perm), "基线里不该有 {perm}（它属于 main.json）");
+            assert!(main.iter().any(|p| p == perm), "main.json 少了 {perm}");
+        }
+        // ⚠️ 基线**必须**留通配：小窗是运行时创建的，而"显式 label 能否命中运行时窗口"
+        // 在本仓没有验证过（计划 §S3-A）。改成按 label 拆 ⇒ 有可能把 IPC 通道整个关掉。
+        let v: serde_json::Value = serde_json::from_str(CAP_BASE).unwrap();
+        assert_eq!(v["windows"].as_array().unwrap().len(), 1, "基线的窗口作用域应当只有一项");
+        assert_eq!(v["windows"][0].as_str(), Some("*"),
+                   "通配基线被删了 —— 小窗的 capability 命中未经真机验证，别在这一批冒险");
+        let vm: serde_json::Value = serde_json::from_str(CAP_MAIN).unwrap();
+        assert_eq!(vm["windows"][0].as_str(), Some("main"), "main.json 的作用域应当是主窗口");
+    }
+
+    #[test]
+    fn external_url_rejects_everything_else() {
+        // ⚠️ 这张表就是"外链只能去白名单"这句承诺的牙齿：少一条断言，就多一条通路。
+        for bad in [
+            "http://bilibili.com",              // 只允许 https
+            "file:///C:/Windows/System32",      // 本地文件
+            "javascript:alert(1)",              // 脚本
+            "ms-settings:",                     // 自定义 scheme
+            "https://bilibili.com@evil.com/",   // userinfo 绕过
+            "https://evil.com/?x=bilibili.com", // 主机不是白名单
+            "https://bilibili.com.evil.com/",   // 后缀伪装
+            "https://evilbilibili.com/",        // 前缀伪装
+            "https://bilibili.com./",           // 结尾点
+            "https://%62ilibili.com/",          // 百分号编码
+            "https://bilibili.com:443/",        // 带端口
+            "https://127.0.0.1/",               // IP 字面量
+            "https://localhost/",
+            "https://[::1]/",
+            "https://bilibili.com\\@evil.com",  // 反斜杠
+            "https://bili bili.com/",           // 空白
+            "https://bіlibili.com/",            // 西里尔同形字（非 ASCII）
+            "",
+            "   ",
+        ] {
+            assert!(external_url_host(bad).is_err(), "必须拒绝：{bad}");
         }
     }
 }
