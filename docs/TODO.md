@@ -406,7 +406,7 @@ W1/W2 可以在**现在的架构上**做完，但它们只是让 W3 少踩坑。
 > 索引已移入 **`docs/ROADMAP-DONE.md` → 「批次 → devlog 索引」**（2026-09-13 整理：
 > 本文件只留"要干什么"与当前基线，历史索引与已完成条目同处一份文件更好查）。
 
-### 6.2 当前门禁基线（2026-09-25 实测 / 复核）
+### 6.2 当前门禁基线（2026-09-26 实测 / 复核）
 
 > 只放**只能人跑**的实测值：一行一值 + 日期。**能派生的量指向真源，别抄** ——
 > 迁移 head / 表数 / 路由装饰器 / 下一篇 devlog 编号 / 静态用例条数 → `python scripts/gen_doc_numbers.py --list`；
@@ -415,16 +415,16 @@ W1/W2 可以在**现在的架构上**做完，但它们只是让 W3 少踩坑。
 
 | 门禁 | 命令 | 当前基线（括号里 = 该值实测日） |
 |---|---|---|
-| 后端 | `python -m pytest -q`（**解释器走 `.venv`**，见 `ARCHITECTURE.md` §6 第 24 条） | **622 passed / 0 failed / 约 50s**（2026-09-25；原本 ~190s，因为后台任务在打真网络 —— 见 devlog/200） |
-| 桌面壳 | `cargo test`（工作目录 `frontend/src-tauri`） | **42 passed**（2026-09-25；+10 = `delete_old_dir` 那一组，含真实 junction 用例） |
-| 前端单测 | `npm --prefix frontend run test` | **546 passed**（2026-09-24；文件数不抄，跑一次就有） |
-| 前端类型 / lint | `npx tsc --noEmit`（**必须在 `frontend/` 里跑**）/ `npm --prefix frontend run lint` | 0 错 / 0 错（2026-09-23 复核） |
-| 文档漂移 | `python scripts/doc_check.py` | **0 FAIL**（2026-09-25 复核；WARN 看脚本逐条输出） |
+| 后端 | `python -m pytest -q`（**解释器走 `.venv`**，见 `ARCHITECTURE.md` §6 第 24 条） | **636 passed / 0 failed**（2026-09-26 实测，≈42s；原本 ~190s 是因为后台任务在打真网络 —— 见 devlog/200） |
+| 桌面壳 | `cargo test`（工作目录 `frontend/src-tauri`） | **46 passed**（2026-09-26 实测；含 `delete_old_dir` 的真实 junction 用例与 S1 的 token 生成用例） |
+| 前端单测 | `npm --prefix frontend run test` | **555 passed**（2026-09-26 实测；文件数不抄，跑一次就有） |
+| 前端类型 / lint | `npx tsc --noEmit`（**必须在 `frontend/` 里跑**）/ `npm --prefix frontend run lint` | 0 错 / 0 错（2026-09-26 复核） |
+| 文档漂移 | `python scripts/doc_check.py` | **0 FAIL**（2026-09-26 复核；另有 1 条历史 devlog 索引欠账 WARN，WARN 看脚本逐条输出） |
 | 上游冒烟 | `python scripts/smoke_upstream.py [--cold]` | 真上游 **5 ok** / 冷进程 **3 ok**，0 FAIL（2026-09-23 复核） |
 | 未登录能力矩阵 | `python scripts/capability_matrix.py --write` | 两态逐接口实测（结论 = `docs/ARCHITECTURE.md` §3.9；**`--include-content` 触发 IP 级 412，别顺手跑**） |
-| 布局探针 | `python scripts/ui_probe.py --seed-accounts 8` | 三档 1100/1280/1440 × 10 视图全过（2026-09-24 复核）。⚠️ `8` 是常规参数：开发库只有 2 个账号，不种就是空转的门禁 |
-| 档位门禁 | `python scripts/gate.py` | A 档 7 步全过 / **245–288s**（2026-09-25，含 `cargo test`）；C 档 ≈46s |
-| CI | GitHub Actions（`.github/workflows/`，真源在那里） | 两条腿：Linux（后端 ×2 个 Python + 前端）与 Windows（Rust + 冻结后端冒烟）。**2026-09-25 已首次跑绿**（`e3499f1`）——首跑到闭环共四次红，根因见 devlog/200（其中一条是**英文 Windows 用户首启即崩**的真 bug） |
+| 布局探针 | `python scripts/ui_probe.py --seed-accounts 8` | 三档 1100/1280/1440 × 10 视图全过（2026-09-26 复核）。⚠️ `8` 是常规参数：开发库只有 2 个账号，不种就是空转的门禁 |
+| 档位门禁 | `python scripts/gate.py` | A 档 7 步全过 / **98–126s**（2026-09-26 实测，含 `cargo test` 与三档探针；~250s 那版是 pytest 提速前 —— 见 devlog/200）；C 档 ≈46s |
+| CI | GitHub Actions（`.github/workflows/`，真源在那里） | 两条腿：Linux（后端 ×2 个 Python + 前端）与 Windows（Rust + 冻结后端冒烟）。**2026-09-25 已首次跑绿**（`e3499f1`）——首跑到闭环共四次红，根因见 devlog/200（其中一条是**英文 Windows 用户首启即崩**的真 bug）。此后每个推送两条腿都跑：S1（`dd1613e`）与 S1b（`eafdd73`）均全绿（2026-09-26） |
 | 冻结产物体积 | `python scripts/build_backend.py` 的输出 | **71.7 MB**（2026-09-25；切 `uv.lock` 前记录 118.8MB）。出包后以 `release.py --only verify` 为准 |
 | 一把梭 | `python scripts/dev_check.py` | syntax / pytest / frontend logic / docs drift / dev backend 五项全 ok（2026-09-23 全量实跑） |
 
