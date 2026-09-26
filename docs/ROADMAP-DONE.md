@@ -529,6 +529,7 @@
 | S3-C 安全删除旧数据目录：一次性票据替代路径 + 五道判据（canonicalize / 拒祖先子孙 / 拒 reparse / 特征合取 / 防重放）+ 二次确认框；**junction 实验推翻了规格一处假设**（`remove_dir_all` 不穿进目标，真风险是判据被绕过） | 198 |
 | CI 落地（Linux 后端 ×2 Python + 前端 / Windows Rust + 冻结后端冒烟）；**先验卡点发现不是 `gen/` 而是资源 glob**；反向验证咬出两条**注释喂饱文本断言**的假绿 → 新增 `_run_commands()` 只认 `run:` 里的命令 | 199 |
 | CI 首跑三连红的排查：`pytest` 不把 CWD 加进 `sys.path`（补 `pythonpath = .`）+ **后台任务的会话一直连我的开发库**（`dependency_overrides` 只管路由）⇒ 修好后暴露两条"靠开发库数据才过"的用例；pytest **~190s → ~50s** | 200 |
+| S1 会话 token 后端门禁 + 壳生成（含 `get_api_token` 的 caller label 校验）；**修掉托盘退出在 401 时静默掐掉一轮抓取**那颗地雷；排查中发现 `CORS_ORIGINS` 的正则从没走 `allow_origin_regex`（症状伪装成"布局坏了"）⇒ 并确立**CORS 不是主防线、token 才是** | 201 |
 
 > **编号列怎么写**（2026-09-23 定）：
 > - 有 devlog 的批次 → **裸编号**（`| 097 |`）；
