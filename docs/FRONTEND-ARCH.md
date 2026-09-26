@@ -38,9 +38,21 @@
 |---|---|---|
 | 设计令牌 | `styles/tokens.css`（65 行） | ✅ 完整，全部 `var(--token)` 引用 |
 | 基础件（primitives） | `components/ui/*`（shadcn + Radix，12 件，`components.json` 已配置） | ✅ 全部在用 |
+| **API 契约层** | `api/api.ts`（请求管道）+ **`api/errors.ts`**（`ApiError` / `ApiShapeError`）+ **`api/validate.ts`**（关键响应的运行时形状校验） | ✅ Q1 批次 13 起：失败**可判别**（`status`/`detail`/`path`）、非 JSON 不再抛裸 `SyntaxError`、列表/抓取状态/帖子分页**当场校验**（字段改名不再静默）。判据 `api/apiContract.test.ts` |
 | 共享工具 | `utils/format.ts`、`utils/chartTheme.ts`、`utils/signSource.ts`（签名解析）、`utils/signOptions.ts`（下拉候选）、`utils/fanTrend.ts`（趋势合并）、`utils/fetchIdle.ts`（抓取完成事件的 kind 判定）、`utils/accountHistory.ts`（账号信息历史口径）、`utils/pill.ts`、`utils/shellLifecycle.ts`（桌面壳可见性同步源 + dev 钩子）、`utils/shellState.ts`（关闭语义三态 + 深休眠现场）、`utils/shellBridge.ts`（Tauri 命令 + 浏览器退化）、`hooks/useShellHidden`、`hooks/usePrefs`、`hooks/useFetchBusy`、`hooks/useIsMaximized`、`hooks/useSceneTransition`（场景切换机：预取门控 + 原子提交） | ✅ 复用良好；纯函数都带 `.test.ts` |
 | 业务组件 | `components/*`（33 件 tsx） | ⚠️ 多数只有 1 个引用者（属"功能"而非"基础件"） |
 | 设计契约文档 | `docs/UI-MAP.md`（471 行，§C5 三层组件契约） | ✅ 已把"交互层/信息层/弹窗层/表面层"写死 |
+
+**API 契约层的三条规矩**（改 `api.ts` / 加端点前看一眼，详版见 `api/errors.ts` 与 `api/validate.ts` 头部）：
+
+1. **失败一律抛 `ApiError`**（`status` / `detail` / `path`），`message` 是给人看的那一份
+   （401 额外带排查提示）。⚠️ 两个错误类都 `extends Error` 且文案与改前逐字一致 ——
+   全仓 `catch` 分支几乎只读 `(e as Error).message`，**别改文案**。
+2. **取消仍是 `AbortError`**（`fetch` 直接 reject，不经过 `request()`）；
+   调用方按 `e.name === 'AbortError'` 分流的那几处（`AddVtuberDialog` / `useLiveUpstream` /
+   `LiveSessionDialog` / `PostsPage`）不受影响。
+3. **新加"界面真的读、读错会静默出错"的响应** → 在 `validate.ts` 里写一条最小校验并挂到
+   那个 `api.*` 方法上；**多余字段一律放过**（后端加字段是兼容变更）。
 
 ### 1.3 复用度（谁真的被复用）
 

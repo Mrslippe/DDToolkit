@@ -109,7 +109,10 @@ const TOKEN = 'tok-0123456789abcdef'
 
 describe('S1 会话 token 的注入', () => {
   it('每个请求都带 X-DDToolkit-Token', async () => {
-    const fetchMock = vi.fn(async () => okJson({}))
+    // ⚠️ 这里的 body 从 `{}` 改成 `[]`：批次 13 起 `/vtuber/list` 走**运行时校验**
+    //    （`validate.ts`），拿对象当列表会抛 ApiShapeError —— 而本条用例要测的是**请求头**，
+    //    不该被响应形状绊住。
+    const fetchMock = vi.fn(async () => okJson([]))
     vi.stubGlobal('fetch', fetchMock)
     setApiToken(TOKEN)
 
@@ -150,7 +153,7 @@ describe('S1 会话 token 的注入', () => {
   })
 
   it('没 token 时不造这个头（浏览器/探针开发态）', async () => {
-    const fetchMock = vi.fn(async () => okJson({}))
+    const fetchMock = vi.fn(async () => okJson([]))   // 同上：`/vtuber/list` 现在有形状校验
     vi.stubGlobal('fetch', fetchMock)
 
     await api.listVtubers()

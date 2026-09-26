@@ -1,4 +1,10 @@
 import type { Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, BiliSearchResult, Capabilities, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, PoolItem, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyVtuber, UpcomingReservation, UpdatePostsResult, VTuber, VTuberFormerValues, VtuberEvent } from './types'
+import { ApiError, ApiShapeError } from './errors'
+import {
+  validateFetchStatus, validatePostPage, validateVtuber, validateVtuberList,
+} from './validate'
+
+export { ApiError, ApiShapeError } from './errors'
 
 /**
  * API 基地址：
@@ -202,7 +208,9 @@ export async function authFetch(path: string, init?: RequestInit): Promise<Respo
   return fetch(url, { ...init, headers })
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {  await gate
+async function request<T>(path: string, init?: RequestInit,
+                          parse?: (value: unknown, path: string) => unknown): Promise<T> {
+  await gate
   // ⚠️ 用 `Headers` **合并**而不是直接塞一个对象：调用方可能已经带了 `Content-Type`
   //    （JSON 的那些），而 `uploadBackground` 走 `FormData`、**绝不能**设 Content-Type
   //    （设了浏览器就拼不出 multipart boundary）。合并两种都照顾到。
@@ -217,15 +225,27 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {  await
     } catch {
       /* 非 JSON 响应，保留默认信息 */
     }
-    if (resp.status === 401) {
-      // 401 单独提一句：它在本应用里**只可能是认证**（token 没注入 / 过期 / 壳与后端对不上），
-      // 而默认文案只有"401 Unauthorized"，用户与排查者都看不出该往哪查。
-      detail = `访问令牌无效或缺失（${detail}）—— 应用若刚重启，请重开窗口`
-    }
-    throw new Error(detail)
+    // 401 单独提一句：它在本应用里**只可能是认证**（token 没注入 / 过期 / 壳与后端对不上），
+    // 而默认文案只有"401 Unauthorized"，用户与排查者都看不出该往哪查。
+    // ⚠️ 这句只进 `message`（给人看的那一份），`detail` 保持后端原文（`errors.ts` 的分工）。
+    const message = resp.status === 401
+      ? `访问令牌无效或缺失（${detail}）—— 应用若刚重启，请重开窗口`
+      : undefined
+    // Q1（devlog/216）：抛 `ApiError`（带 status/detail/path）而不是裸 `Error`。
+    // **message 与改前逐字一致** —— 全仓 catch 分支几乎只读 `.message`，这是兼容的关键。
+    throw new ApiError(resp.status, detail, path, message)
   }
   const text = await resp.text()
-  return (text ? JSON.parse(text) : null) as T
+  if (!text) return null as T
+  let body: unknown
+  try {
+    body = JSON.parse(text)
+  } catch {
+    // 改前这里是**裸 SyntaxError**，而调用方按 `e.name === 'AbortError'` 分流 ⇒
+    // 一个"后端 ok 但响应不是 JSON"会被当成业务错误弹 toast（devlog/216）。
+    throw new ApiShapeError(path, '响应不是合法 JSON', text)
+  }
+  return (parse ? parse(body, path) : body) as T
 }
 
 export interface PostListParams {
@@ -240,14 +260,14 @@ export interface PostListParams {
 }
 
 export const api = {
-  /** 全部 VTuber（含嵌套 accounts） */
-  listVtubers: () => request<VTuber[]>('/vtuber/list'),
+  /** 全部 VTuber（含嵌套 accounts）—— **带运行时校验**（字段改名当场报错，见 validate.ts） */
+  listVtubers: () => request<VTuber[]>('/vtuber/list', undefined, validateVtuberList),
 
-  /** 抓取任务实时状态（TopBar 轮询用） */
-  getFetchStatus: () => request<FetchStatus>('/vtuber/fetch-status'),
+  /** 抓取任务实时状态（TopBar 轮询用）—— **带运行时校验** */
+  getFetchStatus: () => request<FetchStatus>('/vtuber/fetch-status', undefined, validateFetchStatus),
 
-  /** 单个 VTuber */
-  getVtuber: (id: number) => request<VTuber>(`/vtuber/${id}`),
+  /** 单个 VTuber —— **带运行时校验** */
+  getVtuber: (id: number) => request<VTuber>(`/vtuber/${id}`, undefined, validateVtuber),
 
   /** 上传卡片页自定义背景，返回更新后的 VTuber（含 background_path） */
   uploadBackground: (id: number, file: File) => {
@@ -315,7 +335,8 @@ export const api = {
     if (params.q) q.set('q', params.q)
     if (params.date_from) q.set('date_from', params.date_from)
     if (params.date_to) q.set('date_to', params.date_to)
-    return request<PostPage>(`/posts/${platform}/${uid}/paginated?${q.toString()}`, { signal })
+    return request<PostPage>(`/posts/${platform}/${uid}/paginated?${q.toString()}`,
+                             { signal }, validatePostPage)
   },
 
   /** 帖子统计概览（总数/类型分布/时间跨度） */
