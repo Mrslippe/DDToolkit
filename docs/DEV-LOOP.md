@@ -410,6 +410,17 @@ Select-String -Path scripts\*.py,frontend\src\**\*.ts -Pattern "urlopen\(|fetch\
 `tests/test_dev_token.py` 结构扫描钉住）；起后端的脚本一律 `**backend_env()`
 （它还负责**清掉 `DDTOOLKIT_API_TOKEN` 残留** —— 否则子后端会优先读它而两端不一致）。
 
+### 6.14 ⚠️ 「文件被程序占着」类判据**必须分平台**（2026-09-26 加，devlog/215）
+POSIX **允许**改名 / 删除**打开中**的文件，Windows **不允许**（撞"另一个程序正在使用此文件"）。
+批次 15 里 `test_dispose_releases_the_file_so_it_can_be_renamed` 的"不 dispose 就改不动名"
+那半条写成无条件 `pytest.raises(OSError)`，**Linux 两条腿一起挂在 `DID NOT RAISE` 上**
+（Windows 腿反而是绿的 —— 本地那条腿永远看不见）。
+
+**规矩**：凡判据依赖"文件被占用 / 删不掉 / 改不了名"这类**操作系统语义**，就
+① 用 `os.name == "nt"` 分开断言，② **可移植的那一半要在两个平台都断言**
+（这里 = "dispose 之后一定改得动"），③ 边界写进 docstring —— 别让它变成一条"只在 CI 上红"
+的谜题。同族坑：Rust 侧 `delete_old_dir` 的 junction 用例、`migrate.rs` 的文件占用重试。
+
 ---
 
 ## 七、并行开发：**本仓不采用**（2026-09-24 定）＋ 两条通用教训
