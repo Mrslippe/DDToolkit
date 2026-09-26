@@ -221,6 +221,12 @@
 2. **浮片 DOM 契约**：`.float-pill` 的斜切、阴影、`focus-visible` 环都挂在 `::before` 上，组件必须渲染**原生 `<button class="float-pill …">`**，不得外包一层 `div`。
 3. **视图重挂 key**：`PostsPage` 的 `key={`${scene.acc}|${scene.view}`}` 与 `scene-in` / `scene-exit` 入场退场编排，拆 JSX 时保持 key 位置与层级。
 4. **滚动体系**：`OverlayScroll`（5 处）、无限滚动 `IntersectionObserver`、时间筛选浮层点外关闭 —— 拆分后逐一手测。
+5. **平台 HTML 必须过白名单**（S2，devlog/206）：任何平台给的字符串进 `dangerouslySetInnerHTML` 前
+   都要走 `utils/sanitizePlatformHtml.ts`。⚠️ 别只看"防 XSS" —— 真机上 CSP 已挡脚本，
+   真正的洞是 ① `style-src 'unsafe-inline'` 让注入样式生效（UI 伪装）② **我们的 Tailwind
+   工具类是全局的**，一条 `class="fixed inset-0 z-50"` 就能盖住界面 ⇒ 净化**刻意剥掉 `class`/`style`**。
+   判据：`sanitizePlatformHtml.test.ts`（含"全仓只有一处注入点且必须过净化"的扫源码用例）。
+   外链**主机白名单**与 WebView2 跳转行为归批次 4ab，别在这里重复做一半。
 
 **回归清单**：直接沿用 `docs/UI-MAP.md` §E（交互浮窗清单）+ §F（滚动容器清单）+ §C6（二级界面统一规格），外加：词云破泡、换装淡入、账号切换重挂。
 

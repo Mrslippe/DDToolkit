@@ -958,6 +958,11 @@ density / 折叠尺寸 `[200,40]` / 面板宽 280 / `backdrop-filter` 含 `blur(
 P6-2 起为**居中 Dialog**（原 Sheet 右侧抽屉）`sm:max-w-[720px]`（⚠️ 该类名必须与模板插值分离成纯字符串——Tailwind v4 提取器对「带方括号的类名紧邻 `${`」会丢弃候选
 （曾吞掉 `sm:max-w-[720px]` 致详情窗全宽），一律 `'…' + (cond ? ' x' : '')` 写法），
 标题 = 帖子类型名。**2026-09-07：① 面板滚动改覆盖式 OverlayScroll**（`.post-detail-scroll`，内容区精确占剩余空间，滚动体 padding 20px）**② 头部驻留区**（`.pd-head`：flex:none · padding `16px 20px 12px` · 下缘发丝分隔；radix 关闭钮 absolute top-4 right-4 落在本区右缘）——`「标题……X」` 钉在面板顶部不随内容滚动，滚动条只在内容区悬浮、不覆盖标题行；动效见「抽屉动效」段（dialog-content/overlay，scale 0.97 替代右移）。**退场为类驱动（P6-4）**：radix Presence 对「换名动画」的判定基于挂载时缓存的 computed style，data-state 换名不会真播退场（面板/遮罩瞬消）——组件侧 `exiting` 态加 `is-exiting` 类播 200ms 再真正闭合，遮罩经 `[data-slot=dialog-overlay]:has(+ [data-slot=dialog-content].is-exiting)` 联动（open 态动画被覆盖为退场、卸载时已不可见）。结构未变动：元信息行(类型/时间/平台ID/原文链接/墓碑flag) → 墓碑时间线(已删时) → 统计徽章行 → 预约卡 → 封面大图 → 正文三态(Delta/HTML/纯文本) → 转发原文卡 → 图片组 → 附加字段(bvid/cvid/description) → 原始JSON 折叠。
+> **正文的 HTML 那一态先过白名单净化**（S2，devlog/206）：`utils/sanitizePlatformHtml.ts` 只放行白名单标签/属性，
+> **剥掉 `class`/`style`/`on*`/`data:*`** —— 平台 HTML 会渲染在别人的机器上，而我们的 Tailwind 工具类是全局的
+> （`class` 能改界面）＋ `style-src 'unsafe-inline'` 让内联样式生效。真实专栏里的 `<figure>` /
+> `<img src="//i0.hdslb.com/…">` / `width` / `<br/>` 保留 ⇒ 排版不损坏。
+> ⚠️ 本机库里目前**没有** `body_json.content` 的数据（两条 article 分别是 Delta 与纯文本）⇒ 这条路径当前看不到效果。
 
 ### B2.1 图片查看器 `<ImageViewer>`（components/ImageViewer.tsx）
 P6-4：从详情窗口打开图片的**独立浮层**——portal 到 body、`z-[200]` 高于详情窗（z-50）。

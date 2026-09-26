@@ -534,6 +534,7 @@
 | S1 连带：**四个开发态工具漏带 token**（dev_check 报"网络不可达" / smoke 报"上游挂了" / perf_report 打假数字 / smoke_delete 401）⇒ 固定值抽出唯一真源 `scripts/dev_token.py` + 4 条结构判据（反向验证当场咬出第一版判据假绿）；**真机 S1 门验证通过**（零 401、小窗拿到令牌） | 203 |
 | 浮点 ULP 容差**漏了一处**（`>= 300`）⇒ CI Windows 腿偶发红、本地/干净 clone 都不复现；第二次同类事故 ⇒ 判据改成**扫源码点名行号**（`FLOOR_EPS` 那一族不再靠人记得） | 204 |
 | 一个 **UTF-8 BOM** 让 CI 的 Linux 腿红了两轮（PowerShell `Set-Content -Encoding utf8` 写的）：BOM 是**合法 Python** ⇒ pytest/本地门禁全绿，只有"读成文本再 `ast.parse`"的那一处红 —— 而它**只在 CI 与一把梭里、不在 A 档门禁里** ⇒ 语法扫描补进门禁三档 + 判据改吃 `utf-8-sig` | 205 |
+| S2 平台 HTML 白名单净化：`sanitizePlatformHtml`（dompurify）关掉全仓唯一一处 `dangerouslySetInnerHTML`，**刻意剥 `class`/`style`**（我们的 Tailwind 工具类是全局的 ⇒ `class` 能盖界面；CSP 管不了这层）；两条**真实专栏 HTML** fixture + 27 条判据 + 两条反向验证；顺带补 `frontend/package-lock.json` 的档位映射 | 206 |
 
 > **编号列怎么写**（2026-09-23 定）：
 > - 有 devlog 的批次 → **裸编号**（`| 097 |`）；
