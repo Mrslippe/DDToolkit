@@ -47,6 +47,24 @@ export function isDesktopShell(): boolean {
   return isTauri
 }
 
+/**
+ * 打开外部链接（S3-B，devlog/208）。
+ *
+ * ⚠️ **主机白名单只在 Rust 侧一份**（`lib.rs::EXTERNAL_HOSTS` + `external_url_host`）——
+ * 前端**不复制那张表**（跨语言两份真源必漂）。所以这里把 Rust 的拒绝原因**原样抛出去**，
+ * 由调用方显示给用户：白名单过严时"打开主页"会失败，但**不能静默**。
+ *
+ * 桌面端走自定义命令（旧的 `plugin:shell|open` 已从 capability 删除：那个通路
+ * 用的是插件内置正则，**没有主机白名单**）；浏览器/探针退化为新标签页。
+ */
+export async function openExternal(url: string): Promise<void> {
+  if (!isTauri) {
+    window.open(url, '_blank', 'noopener')
+    return
+  }
+  await invoke('open_external', { url })
+}
+
 // ── 桌面状态控件（R38 批 5b，devlog/173）────────────────────────────────
 
 /**

@@ -23,6 +23,7 @@ import heroDivider from '../../assets/icons/hero-divider.svg'
 import { accountHomeUrl, chunkBy, orderAccounts } from '../../utils/postTypes'
 import { pill } from '../../utils/pill'
 import { resolveSign } from '../../utils/signSource'
+import { openExternal as openExternalUrl } from '../../utils/shellBridge'
 import OverlayScroll from '../OverlayScroll'
 import ProxyImage from '../common/ProxyImage'
 import StatPill from '../common/StatPill'
@@ -42,16 +43,15 @@ interface Props {
   onOpenSettings: () => void
 }
 
-/** 打开外链：桌面端走 shell 插件（capability `shell:allow-open` 已就绪，无需新增依赖），
- *  Web / 失败退化为新标签页。账号主页与直播间共用（R7）。 */
+/** 打开外链（R7 + S3-B，devlog/208）：走 `shellBridge.openExternal`
+ *  （桌面端 = 自定义命令 + **主机白名单**；浏览器/探针 = 新标签页）。
+ *  ⚠️ 拒绝原因要**显示出来**：白名单过严时"打开主页"会失败，静默失败等于用户点了没反应。 */
 function openExternal(url: string) {
-  if ('__TAURI_INTERNALS__' in window) {
-    void import('@tauri-apps/api/core')
-      .then((m) => m.invoke('plugin:shell|open', { path: url }))
-      .catch(() => window.open(url, '_blank', 'noopener'))
-  } else {
-    window.open(url, '_blank', 'noopener')
-  }
+  void openExternalUrl(url).catch((e) => {
+    const why = e instanceof Error ? e.message : String(e)
+    console.warn('[openExternal] 打不开：', why)
+    toast.error(`打不开这个链接：${why}`)
+  })
 }
 
 /**

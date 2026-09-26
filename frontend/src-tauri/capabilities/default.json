@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/capabilities/2",
   "identifier": "default",
-  "description": "窗口默认能力：事件、窗口控制（最小化/关闭/显示/拖拽）。R18 起隐藏与退出走自定义命令（hide_to_tray / quit_app），不再需要 allow-hide。R38 批 5b 起作用域是**所有窗口**（含桌面控件小窗）——见下。",
+  "description": "**两扇窗都要的基线**（主窗口 + 桌面控件小窗）：事件、窗口控制（最小化/关闭/显示/拖拽）。R18 起隐藏与退出走自定义命令（hide_to_tray / quit_app），不再需要 allow-hide。\n\n⚠️ 这里**刻意保留通配窗口**（2026-09-26，S3-A devlog/208）：小窗是**运行时创建**的，而「显式 label 的 capability 能不能命中运行时窗口」在本仓**没有验证过**（计划 §S3-A 明确标为『未验证、必须先测』）。按 label 拆成 widget.json 一旦猜错，症状是 devlog/175 那种『IPC 通道坏掉、主窗点 ✕ 没反应』。⇒ 基线留通配（与今天行为一致、不可能退化），**把主窗独有的那几项拆去 main.json** —— 主窗是静态 label（tauri.conf.json 里写死），命中是确定的、不需要真机验证。\n\n⚠️ 自定义命令**不查这张表**（见 lib.rs 顶部说明）—— 命令级准入在 lib.rs 的 COMMAND_ACL。",
   "windows": ["*"],
   "permissions": [
     "core:default",
@@ -15,10 +15,6 @@
     "core:window:allow-toggle-maximize",
     "core:window:allow-start-dragging",
     "core:event:allow-listen",
-    "core:event:allow-emit",
-    "shell:allow-open",
-    "dialog:allow-open",
-    "updater:default",
-    "process:allow-restart"
+    "core:event:allow-emit"
   ]
 }

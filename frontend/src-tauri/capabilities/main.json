@@ -1,0 +1,10 @@
+{
+  "$schema": "https://schema.tauri.app/capabilities/2",
+  "identifier": "main-window-extras",
+  "description": "**只有主窗口需要的那几项**（2026-09-26，S3-A devlog/208）：应用内更新与应用重启。\n\n`main` 是 `tauri.conf.json` 里写死的静态 label ⇒ 命中是确定的（不需要真机验证）。小窗没有更新检查、也不该能重启进程，所以这两项从基线里挪出来。\n\n⚠️ 原来在 `default.json` 里、这次**直接删掉**的两条：`shell:allow-open`（S3-B 换成了带主机白名单的 `open_external` 命令，旧通路必须一起删，否则两扇窗都还能开任意主机）与 `dialog:allow-open`（JS 侧从未使用；Rust 侧的系统对话框不走 ACL）。",
+  "windows": ["main"],
+  "permissions": [
+    "updater:default",
+    "process:allow-restart"
+  ]
+}
