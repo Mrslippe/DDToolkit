@@ -109,13 +109,14 @@ def test_font_scale_enlarges_text_geometry_but_not_width():
 
     # 界面上改不到的范围由**后端**拒绝（400 + 中文原因），绘制层再兜一道夹取：
     # 两道都要在 —— 少了前者界面会显示"已保存"但没生效；少了后者，一个脏值就能把卡片画爆。
+    # 上限 2026-09-27 由 200% 放到 300%（devlog/226）：300 现在合法，400 才该被拒。
     with pytest.raises(ValueError):
-        rs.apply({"NOTIFY_FONT_PCT": 500})
+        rs.apply({"NOTIFY_FONT_PCT": 400})
     with pytest.raises(ValueError):
         rs.apply({"NOTIFY_FONT_PCT": 10})
     settings.NOTIFY_FONT_PCT = 500
     try:
-        assert desktop_popup.popup_scale() == 2.0                     # 上限
+        assert desktop_popup.popup_scale() == 3.0                     # 上限（300%）
     finally:
         del settings.__dict__["NOTIFY_FONT_PCT"]
     settings.NOTIFY_FONT_PCT = 10
@@ -126,13 +127,13 @@ def test_font_scale_enlarges_text_geometry_but_not_width():
 
 
 def test_default_popup_scale_is_enlarged():
-    """默认值：字号 120%、弹窗大小 450 DIP（用户 2026-09-26 定的那套，原样搬过来）。"""
+    """默认值：字号 **150%**、弹窗大小 450 DIP（用户 2026-09-27 口径，devlog/226）。"""
     # 去掉上面那个"单位缩放"夹具设的实例属性，读回 `Settings` 类上的真实默认值
     settings.__dict__.pop("NOTIFY_FONT_PCT", None)
     rs.clear()
-    assert abs(desktop_popup.popup_scale() - 1.20) < 1e-9
-    assert desktop_popup._px(15, 96) == 18          # 标题 15 → 18
-    assert desktop_popup._px(12, 96) == 14          # 正文 12 → 14
+    assert abs(desktop_popup.popup_scale() - 1.50) < 1e-9
+    assert desktop_popup._px(15, 96) == 22          # 标题 15 × 150% → 22.5 → 22（银行家舍入）
+    assert desktop_popup._px(12, 96) == 18          # 正文 12 × 150% → 18
     assert desktop_popup.popup_width_dip() == 450   # 卡片宽度默认 450
     assert desktop_popup.width_px(96) == 450
 
@@ -281,8 +282,8 @@ def test_hover_dismisses_only_one_layer_at_a_time():
 
 
 def test_popup_alpha_is_clamped_semi_transparent():
-    """界面上的不透明度是**百分数**（默认 91%），绘制层要 0~255 —— 换算与夹取都在这一处。"""
-    assert desktop_popup.popup_alpha() == 232                  # 91% → 232（默认值）
+    """界面上的不透明度是**百分数**（默认 90%），绘制层要 0~255 —— 换算与夹取都在这一处。"""
+    assert desktop_popup.popup_alpha() == 230                  # 90% → 230（默认值）
     settings.NOTIFY_POPUP_ALPHA_PCT = 10                       # 太透会看不清字
     try:
         assert desktop_popup.popup_alpha() == 80

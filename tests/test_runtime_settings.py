@@ -111,11 +111,12 @@ def test_defaults_are_the_values_from_before_the_overlay():
         "FIRST_SCREEN_DYNAMICS_LIMIT": 3,
         "EXTERNAL_ENABLED": True, "EXTERNAL_ZEROROKU_ENABLED": True,
         "EXTERNAL_DANMAKUS_ENABLED": True,
-        # R50（devlog/219）桌面通知：默认全开（用户口径：开播/更新动态要弹窗），
-        # 外观三项的默认值 = 老自绘窗那套（字号 120% / 宽 450 / 不透明 91% / 8 秒 / 白字）
+        # R50（devlog/219）桌面通知：默认全开（用户口径：开播/更新动态要弹窗）。
+        # 外观默认值 2026-09-27 按用户口径修订（devlog/226）：字号 **150%**（上限放到 300%）、
+        # 不透明 **90%**；宽度 450 / 8 秒 / 白字三项不变
         "NOTIFY_ENABLED": True, "NOTIFY_LIVE": True, "NOTIFY_POST": True,
-        "NOTIFY_FONT_PCT": 120, "NOTIFY_POPUP_WIDTH": 450,
-        "NOTIFY_POPUP_ALPHA_PCT": 91, "NOTIFY_POPUP_SECONDS": 8,
+        "NOTIFY_FONT_PCT": 150, "NOTIFY_POPUP_WIDTH": 450,
+        "NOTIFY_POPUP_ALPHA_PCT": 90, "NOTIFY_POPUP_SECONDS": 8,
         "NOTIFY_POPUP_COLOR": "#ffffff",
     }
     assert {k: s.default for k, s in rs.SPECS.items()} == expect

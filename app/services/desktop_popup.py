@@ -111,16 +111,20 @@ def _scale(dpi: int) -> float:
 
 
 def popup_scale() -> float:
-    """**字号**缩放（`settings.NOTIFY_FONT_PCT`，默认 120 = 界面上的 120%）—— 只放大文字。
+    """**字号**缩放（`settings.NOTIFY_FONT_PCT`，默认 150 = 界面上的 150%）—— 只放大文字。
 
     图标与内距跟着它走（保持与文字的比例）；**卡片宽度不跟** —— 那是独立的
     「弹窗大小」设置（`popup_width_dip()`）。用户口径："弹窗大小和字号大小分开设置"。
+
+    上限 3.0（= 界面上的 300%）：用户 2026-09-27 把范围从 200% 放到 300%，
+    这里必须同步放宽 —— 否则界面允许 300%、绘制层却按 200% 画，
+    表现为"拉到 250% 以上就没变化"（正是本仓最怕的那类静默不算数）。
     """
     try:
-        value = float(getattr(settings, "NOTIFY_FONT_PCT", 120)) / 100.0
+        value = float(getattr(settings, "NOTIFY_FONT_PCT", 150)) / 100.0
     except (TypeError, ValueError):
-        value = 1.20
-    return max(0.8, min(2.0, value))
+        value = 1.50
+    return max(0.8, min(3.0, value))
 
 
 def popup_width_dip() -> int:
@@ -1085,13 +1089,13 @@ def popup_seconds() -> float:
 def popup_alpha() -> int:
     """自绘窗不透明度（0-255，来自 `settings.NOTIFY_POPUP_ALPHA_PCT` 的百分数）。
 
-    界面上是百分比（默认 91%），绘制层要 0-255 —— 换算只在这一处做，
-    免得两处各写一份（`91% → 232`，与老默认值一致）。
+    界面上是百分比（默认 90%），绘制层要 0-255 —— 换算只在这一处做，
+    免得两处各写一份（`90% → 230`）。
     """
     try:
-        pct = int(getattr(settings, "NOTIFY_POPUP_ALPHA_PCT", 91))
+        pct = int(getattr(settings, "NOTIFY_POPUP_ALPHA_PCT", 90))
     except (TypeError, ValueError):
-        pct = 91
+        pct = 90
     return max(80, min(255, round(pct * 255 / 100)))
 
 

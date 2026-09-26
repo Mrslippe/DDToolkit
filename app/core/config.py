@@ -207,9 +207,12 @@ class Settings:
     NOTIFY_ENABLED: bool = True          # 总开关（关掉后两类都不弹）
     NOTIFY_LIVE: bool = True             # 开播提醒
     NOTIFY_POST: bool = True             # 动态更新提醒
-    NOTIFY_FONT_PCT: int = 120           # 弹窗字号（百分数，80~200）
+    # 弹窗字号（百分数，80~300）。用户口径（2026-09-27）：默认 150、上限从 200 放到 300
+    # —— 高分屏 + 远看场景下 120% 偏小，放大到 150% 才是"随手一眼能读"。
+    NOTIFY_FONT_PCT: int = 150
     NOTIFY_POPUP_WIDTH: int = 450        # 弹窗大小（DIP，300~620）
-    NOTIFY_POPUP_ALPHA_PCT: int = 91     # 不透明度（百分数，31~100；65535*91/255 ≈ 232）
+    # 不透明度（百分数，31~100）。用户口径（2026-09-27）：默认 90（90% × 255 ≈ 230）
+    NOTIFY_POPUP_ALPHA_PCT: int = 90
     NOTIFY_POPUP_SECONDS: int = 8        # 弹窗停留时长（秒，5~120）
     NOTIFY_POPUP_COLOR: str = "#ffffff"  # 弹窗文字颜色（#rrggbb）
 

@@ -406,8 +406,10 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
         await reload()
       }
       const v = await api.testNotification()
+      // 说清"发的是什么"：这条固定用「明前奶绿」的最新动态（真实头像 / 标题 / 链接），
+      // 用户才知道自己看到的那张卡片是不是对的（2026-09-27 口径）
       setNotifyVerdict(v.popup
-        ? `已发出（应用弹窗${v.icon ? '，带主播头像' : ''}）`
+        ? `已发出：${v.title}${v.icon ? '（带主播头像）' : ''}`
         : `没发出去：${v.detail || '通知被关掉了？'}`)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -869,6 +871,8 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
                       <span className="aps-label">发一条测试通知</span>
                       <span className="aps-note">
                         用当前外观立刻弹一条卡片，调样式时不用等真有人开播。
+                        内容固定是「明前奶绿」的最新动态（头像 / 标题 / 链接都是真的，
+                        点一下会打开那条帖子）；库里没有她的动态时退回通用文案。
                         它不受「开播提醒 / 动态更新提醒」两个开关影响，但总开关仍然生效。
                       </span>
                     </div>

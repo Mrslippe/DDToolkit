@@ -10,6 +10,7 @@
 （投递判据 + 端点）。
 """
 import time
+from datetime import datetime
 
 import pytest
 from fastapi.testclient import TestClient
@@ -220,6 +221,92 @@ def test_test_notification_endpoint_returns_verdict(client):
     body = client.post("/settings/test-notification").json()
     assert body["queued"] is True and body["title"]
     assert set(body) >= {"queued", "title", "body", "popup", "icon", "detail"}
+
+
+# ── 测试通知的取材（R50b，devlog/226）────────────────────────────────
+# 用户口径（2026-09-27）：「测试通知修改为固定发送明前奶绿的最新动态」——
+# 通用文案验不出真实观感（没头像、标题太短、点进去是示例站）。
+
+def _seed_demo_vtuber(db, *, dynamic_at=None, video_at=None):
+    """造一个「明前奶绿」+ 她的动态/投稿（用来验测试通知的取材）。"""
+    from app.models.vtuber import Account, Post, VTuber
+
+    v = VTuber(name="明前奶绿")
+    db.add(v)
+    db.flush()
+    acc = Account(vtuber_id=v.id, platform="bilibili", platform_uid="22603245",
+                  url="https://space.bilibili.com/22603245")
+    db.add(acc)
+    db.commit()
+    if dynamic_at:
+        db.add(Post(platform="bilibili", platform_uid="22603245", platform_post_id="900",
+                    type="dynamic", title="今晚十点半来播", summary="晚安电台聊聊天",
+                    permalink="https://t.bilibili.com/900", published_at=dynamic_at))
+    if video_at:
+        db.add(Post(platform="bilibili", platform_uid="22603245", platform_post_id="901",
+                    type="video", title="新投稿：看日剧", summary="本期聊日剧",
+                    permalink="https://www.bilibili.com/video/BV1xx", published_at=video_at))
+    db.commit()
+    return v, acc
+
+
+def test_test_notification_sends_the_demo_vtuber_latest_dynamic(db, client, sent):
+    """测试通知取的必须是**她的真实动态**：标题、正文、点击目标、头像都来自那条帖子。"""
+    _seed_demo_vtuber(db, dynamic_at=datetime(2026, 9, 26, 12, 0))
+    body = client.post("/settings/test-notification").json()
+    assert body["title"] == "明前奶绿 更新了动态"
+    assert "今晚十点半来播" in body["body"]
+    # 点一下要能打开**那条帖子**（而不是示例站）
+    assert body["url"] == "https://t.bilibili.com/900"
+    assert body["source"] == "明前奶绿 的最新动态（动态）"
+
+
+def test_test_notification_takes_the_newest_one_regardless_of_type(db, client, sent):
+    """「最新」= 时间上最新，**不按类型挑**。
+
+    实测她的动态流里是「图文 / 转发」两类（B 站把带图的动态建成 `image`、纯文字才是
+    `dynamic`）：按 `type='dynamic'` 挑反而会挑到更旧的一条（2026-09-27 踩到）。
+    """
+    _seed_demo_vtuber(db, dynamic_at=datetime(2026, 9, 20, 12, 0),
+                      video_at=datetime(2026, 9, 26, 12, 0))
+    body = client.post("/settings/test-notification").json()
+    assert body["source"] == "明前奶绿 的最新动态（投稿）"
+    assert body["url"] == "https://www.bilibili.com/video/BV1xx"
+
+
+def test_test_notification_falls_back_when_the_vtuber_is_absent(db, client, sent):
+    """库里没有她（或她还没有帖子）→ 退回通用文案，但**仍然要弹**（不能点了没反应）。"""
+    body = client.post("/settings/test-notification").json()
+    assert body["title"] == "DDtoolkit 测试通知"
+    assert "通用文案" in body["source"]
+    assert body["url"] and body["url"].startswith("https://")
+
+
+def test_test_notification_can_be_clicked_repeatedly(db, client, sent):
+    """连点多次都要弹（一次性去重键）：否则第二次点看起来像"按钮坏了"。
+
+    走 sink 才能数清"投递了几次"——真实队列那条路只留最后一次判据。
+    """
+    _seed_demo_vtuber(db, dynamic_at=datetime(2026, 9, 26, 12, 0))
+    client.post("/settings/test-notification")
+    client.post("/settings/test-notification")
+    assert len([n for n in sent if n.kind == "test"]) == 2
+
+
+def test_icon_size_follows_font_scale():
+    """大字号下图标要按**目标尺寸**重新栅格化（2026-09-27）：只按 DPI 取，
+    300% 时等于把 48px 拉大到 135px，头像糊成一团。"""
+    settings.NOTIFY_FONT_PCT = 150
+    try:
+        base = notifier._icon_base_size()
+    finally:
+        del settings.__dict__["NOTIFY_FONT_PCT"]
+    settings.NOTIFY_FONT_PCT = 300
+    try:
+        big = notifier._icon_base_size()
+    finally:
+        del settings.__dict__["NOTIFY_FONT_PCT"]
+    assert base >= 32 and big > base
 
 
 # ── 与调度器的接缝：什么时候**不**该通知 ─────────────────────────────

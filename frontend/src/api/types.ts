@@ -745,6 +745,10 @@ export interface TestNotificationVerdict {
   queued: boolean
   title: string
   body: string
+  /** 这条通知会打开哪里（测试通知 = 那条帖子的 permalink；通用文案 = 示例站） */
+  url?: string | null
+  /** 这条是拿什么发的（例如「明前奶绿 的最新动态」），界面原样显示 */
+  source?: string
   /** 品牌色卡片是否真的显示出来 */
   popup: boolean
   /** 是否用上了主播头像（测试通知没有账号上下文，恒为 false） */

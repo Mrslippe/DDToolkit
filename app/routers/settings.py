@@ -147,28 +147,101 @@ def reset_settings(db: Session = Depends(get_db)):
             "overrides": runtime_settings.overrides()}
 
 
+# ── 「发一条测试通知」的取材（R50b，devlog/226）────────────────────────
+# 用户口径（2026-09-27）：「测试通知修改为固定发送明前奶绿的最新动态」——
+# 通用文案验不出真实观感，而真动态能一次验完头像 / 折行 / 链接 / 点进去是不是那条。
+TEST_VTUBER_NAME = "明前奶绿"
+
+
+def _account_icon(acc) -> str | None:
+    """账号头像的绝对路径（卡片左上角的图标）；没有 / 文件不在就返回 None（退回 App 图标）。"""
+    from pathlib import Path
+    try:
+        if not acc.avatar_path:
+            return None
+        p = Path(acc.avatar_path)
+        p = p if p.is_absolute() else settings.DATA_DIR / p
+        return str(p) if p.exists() else None
+    except Exception:
+        return None
+
+
+def latest_post_of(db: Session, name: str):
+    """找 `name` 这个 VTuber 的**最新一条动态**，返回 `(V 名, 账号, 帖子)`；找不到返回 None。
+
+    取材口径：
+    - 优先精确匹配 `vtubers.name`，没有再退到模糊匹配（用户可能把名字写得长一点）；
+    - 账号优先主平台（bilibili），同平台按 id 稳定排序；
+    - 帖子取**她最新的一条内容**（`published_at` 倒序、空值排最后、`id` 兜底）——
+      **不按类型挑**：实测她的动态流里是「图文 / 转发」两类（B 站把带图的动态建成
+      `image`、纯文字才是 `dynamic`），按 `type='dynamic'` 挑反而会挑到更旧的一条；
+      "最新"就该是时间上的最新。拿到的是哪一类写在 `source` 里，用户一眼能看出。
+    - `is_(None)` 前缀是 SQLite 上不必依赖 `NULLS LAST` 的等价写法。
+    """
+    from app.models.vtuber import Account, Post, VTuber
+
+    v = (db.query(VTuber).filter(VTuber.name == name).first()
+         or db.query(VTuber).filter(VTuber.name.like(f"%{name}%")).first())
+    if v is None:
+        return None
+    accounts = db.query(Account).filter(Account.vtuber_id == v.id).all()
+    accounts.sort(key=lambda a: (a.platform != "bilibili", a.id))
+    for acc in accounts:
+        base = db.query(Post).filter(
+            Post.platform == acc.platform,
+            Post.platform_uid == str(acc.platform_uid),
+            Post.is_archived == False,           # noqa: E712
+        )
+        order = (Post.published_at.is_(None), Post.published_at.desc(), Post.id.desc())
+        post = base.order_by(*order).first()
+        if post is not None:
+            return v.name, acc, post
+    return None
+
+
 @router.post("/test-notification")
-def test_notification():
-    """用**当前外观**立刻发一条测试通知，返回投递判据（R50，devlog/219）。
+def test_notification(db: Session = Depends(get_db)):
+    """用**当前外观**立刻发一条测试通知，返回投递判据（R50，devlog/219 / 226）。
 
     为什么需要一个真投递的端点：通知的可见性受一堆因素影响（总开关、系统是否允许、
     卡片是否画得出来）。调「字号 / 颜色 / 不透明度」时如果只能等真有人开播，
     这个设置就等于没法调 —— 用户得当场看到效果。
 
+    **内容固定为「{TEST_VTUBER_NAME}」的最新动态**（用户口径 2026-09-27）：
+    通用的"DDtoolkit 测试通知"看不出真实观感（没有头像、标题太短、点进去是示例站），
+    而真实动态能一次验完四件事 —— 主播头像、折行、链接能不能点、点进去是不是那条帖子。
+    库里没有这个主播（或她一条帖子都没有）时**退回通用文案**，并把原因写进 `source`：
+    按钮不该因为数据缺失就变成"点了没反应"。
+
     ⚠️ 用 `kind="test"`：它**绕过**「开播提醒 / 动态更新提醒」两个事件开关
     （那正是这个按钮要让人看到的东西），但**总开关仍然生效**（关着就是关着）。
-    `force=True` 让它不占限流配额：连着点几下试样式不该被自己人限流
+    `force=True` **加一次性去重键**：连着点几下试样式，既不该被自己人限流，
+    也不该因为"同一条帖子刚弹过"被去重挡掉
     （实测踩过：用户拖滑杆连测 8 次后按钮"突然失效"）。
     """
     import time as _time
 
     from app.services import notifier
 
-    title = "DDtoolkit 测试通知"
-    body = "看到我说明通知通道正常｜点击打开示例链接"
-    notifier.notify("test", title, body,
-                    key=f"settings-test:{_time.time()}",
-                    url="https://example.com/ddtoolkit", force=True)
+    picked = latest_post_of(db, TEST_VTUBER_NAME)
+    if picked is None:
+        title, body = "DDtoolkit 测试通知", "看到我说明通知通道正常｜点击打开示例链接"
+        url: str | None = "https://example.com/ddtoolkit"
+        icon_path = None
+        source = f"通用文案（库里没有「{TEST_VTUBER_NAME}」的动态）"
+    else:
+        name, account, post = picked
+        item = notifier.compose_new_posts(
+            name, account.platform,
+            [{"type": post.type, "platform_post_id": post.platform_post_id,
+              "title": post.title, "summary": post.summary, "permalink": post.permalink}],
+            account_url=account.url, icon_path=_account_icon(account))
+        title, body, url, icon_path = item.title, item.body, item.url, item.icon_path
+        label = notifier.POST_TYPE_LABELS.get(post.type or "", "动态")
+        source = f"{name} 的最新动态（{label}）"
+
+    queued = notifier.notify("test", title, body, key=f"settings-test:{_time.time()}",
+                             url=url, icon_path=icon_path, force=True)
     verdict: dict = {}
     deadline = _time.monotonic() + 2.0          # 投递线程通常 <0.5s 就出结果
     while _time.monotonic() < deadline:
@@ -178,7 +251,8 @@ def test_notification():
             break
         _time.sleep(0.1)
     return {
-        "queued": True, "title": title, "body": body,
+        "queued": bool(queued), "title": title, "body": body, "url": url,
+        "source": source,
         "popup": bool(verdict.get("popup")), "icon": bool(verdict.get("icon")),
         "detail": str(verdict.get("detail") or ""),
     }

@@ -319,8 +319,16 @@ def _system_dpi() -> int:
 
 
 def _icon_base_size() -> int:
-    """一次通知里图标的目标边长（像素）：32 @100% / 48 @150% / 64 @200%。"""
-    return max(32, round(32 * max(1.0, _system_dpi() / 96.0)))
+    """一次通知里图标的目标边长（像素）：32 DIP × 系统 DPI × **弹窗字号缩放**。
+
+    ⚠️ 必须带上字号缩放（2026-09-27 加）：卡片左上角的图标实际按
+    `_px(30) = 30 × DPI × 字号` 绘制，字号默认 150%、上限 300% ⇒ 需要 45~135 px 的位图。
+    只按 DPI 取 48 px 的话，大字号下等于把 48 px 拉大到 135 px —— 头像糊成一团
+    （用户此前专门反馈过"图标分辨率有点低/头像还是默认"，同一类问题）。
+    源图是下载下来的头像原图（通常几百像素），所以按目标尺寸重新栅格化是**有信息量**的。
+    """
+    dpi_scale = max(1.0, _system_dpi() / 96.0)
+    return max(32, round(32 * dpi_scale * desktop_popup.popup_scale()))
 
 
 def click_hint(kind: str) -> str:
