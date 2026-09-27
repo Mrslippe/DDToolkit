@@ -32,6 +32,11 @@ scheduler 统一消费框架：
   增量更新（`async_update_unarchived_posts`）均遍历**所有平台**账号。
 - 风控统一走 `fetcher._detect_rate_limit`（HTTP 412/418/429 + json 风控文案），
   冷却/重试/断点续抓由 scheduler 兜底。
+- **新平台必须接身份级那一层**（`identity_limit.py`，第 4 阶段 ⑤，devlog/237）：请求前
+  `LEDGER.acquire(身份, 端点)`、请求后 `LEDGER.record(..., 四类之一, target=uid)`，并把
+  "我们自己的节奏"（`last_error.kind="identity_throttled"`）与上游故障分开报。
+  **照抄 `xiaohongshu.py` 的 `_admit` / `_observe` / `_outcome_of` 三个小函数即可** ——
+  令牌桶与熔断的判据已经在 `tests/test_identity_limit.py`（24 条）。
 
 ## 新平台接入步骤（以抖音为例）
 

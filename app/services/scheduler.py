@@ -49,6 +49,7 @@ from app.services.tombstone import apply_tombstone_scan
 from app.services.externals.runner import run_external_interval
 from app.services.weibo_auth import weibo_auth_manager
 from app.services import capabilities
+from app.services import identity_limit
 from app.services import rate_limit as rl
 # 注意：此处不调用 logging.basicConfig —— 根日志配置统一由
 # `app/core/logging_setup.py::setup_logging()`（在 app/main.py 里调用）完成。
@@ -2053,6 +2054,11 @@ async def _fetch_platform_posts(pf, uid: str, pages: int, db: Session,
                 result.stop_reason = "rate_limited"
                 break
             if data is None:
+                # 第二层：**我们自己的节奏**（身份级令牌桶/端点熔断）不算上游故障。
+                # 报成 network_error 会让用户在报告里看到一处根本没发生的中断（devlog/237）。
+                if identity_limit.throttled(pf):
+                    result.stop_reason = "throttled"
+                    break
                 result.stop_reason = "network_error"
                 break
             items = data.get("items") or []

@@ -36,6 +36,21 @@ def _isolate_rate_limit_state():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_identity_ledger():
+    """每个用例前后清空**身份级额度台账**（devlog/237）。
+
+    令牌桶的粒度是 (身份, 端点)，默认 `user_posted` 每身份 8.3s 一次 ⇒ 不隔离的话
+    "上一个用例花掉了额度"会让下一个用例**静默少发一次请求**（表现是 `fetch_post_page`
+    返回 None、用例断言在别处炸，排查起来极绕）。这也是生产语义：这是**进程内**状态。
+    """
+    from app.services import identity_limit
+
+    identity_limit.LEDGER.reset()
+    yield
+    identity_limit.LEDGER.reset()
+
+
+@pytest.fixture(autouse=True)
 def _no_ambient_login(monkeypatch):
     """把"登录态"钉成**确定的未登录**（= 全新安装的姿态）。
 

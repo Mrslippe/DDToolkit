@@ -24,10 +24,17 @@
 按 `EXECUTION.md` §1.4 的既定顺序（**先落平台再提炼 `BasePlatform`**），这一刀不改接口，
 改为在适配器内部按 uid 记住"上一页返回的 cursor"：`page=1` 即从头开始。
 ⚠️ 这是**过渡**：真正的修法是给 `BasePlatform` 加 cursor（调研 §5.2），落完这个平台再提炼。
+
+## 身份级限速（第 4 阶段 ⑤，devlog/237；调研 §5.3.1）
+
+每个请求前问一次 `identity_limit.LEDGER`（粒度 **(身份, 端点)**），请求后按**四类响应**记账：
+额度不够/端点熔断 ⇒ **一个字节都不发**（`last_error.kind = "identity_throttled"`），
+业务失败与网络错**退还令牌**、风控才扣身份健康度。
 """
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Optional
 from urllib.parse import urlencode
 
@@ -35,8 +42,11 @@ import httpx
 
 from app.core.config import settings
 from app.core.useragent import UA_CHROME
+from app.services import identity_limit
 from app.services.platforms.base import BasePlatform
 from app.services.platforms.signing import NullSigner, Signer, SignerUnavailable
+
+logger = logging.getLogger(__name__)
 
 BASE = "https://edith.xiaohongshu.com"
 # ⚠️ UA 字面量**只能**来自 `app/core/useragent.py`（R26②，`tests/test_user_agent.py` 扫全仓盯着）
@@ -51,10 +61,17 @@ def classify_http(status: int, code: Any = None, msg: str = "") -> str:
 
     ⚠️ 这是**初版**：关键词规则来自调研里的描述（cookie 失效 / 签名失效 / 网关头缺失 / 风控），
     真机拿到真实响应后要按平台返回的 `code` 校准 —— 别把它当"已验证的码表"。
+
+    这几类是**诊断**口径（给排查看），策略口径是 `identity_limit` 的四分类
+    （映射表在那边；devlog/237 接的线）。
     """
     text = f"{code if code is not None else ''} {msg}".lower()
     if status == 200:
         return "ok"
+    if status >= 500:
+        # 上游/网关故障：**不是**业务失败（devlog/237 前它被归进 business_error，
+        # 于是"上游挂了"会被算成"这个帖子有问题"——两件事的处置完全不同）
+        return "server_error"
     if status in (461, 471) or "risk" in text or "风控" in text or "频繁" in text:
         return "risk_control"
     if any(k in text for k in ("sign", "签名", "verify", "x-s")):
@@ -71,9 +88,12 @@ def classify_http(status: int, code: Any = None, msg: str = "") -> str:
 class XiaohongshuPlatform(BasePlatform):
     platform = "xiaohongshu"
 
-    def __init__(self, cookies: str = "", signer: Optional[Signer] = None) -> None:
+    def __init__(self, cookies: str = "", signer: Optional[Signer] = None,
+                 ledger: "identity_limit.Ledger | None" = None) -> None:
         self._cookies = cookies
         self._signer: Signer = signer or NullSigner()
+        # 身份级额度台账：默认共用进程内单例；测试注入自己的（可控时钟）
+        self._ledger = ledger if ledger is not None else identity_limit.LEDGER
         # uid → 下一页 cursor（页码语义的过渡实现，见文件头）
         self._cursor: dict[str, str] = {}
         # 最近一次失败的结构化原因（调用方/排查用；不改 BasePlatform 的返回形状）
@@ -120,8 +140,35 @@ class XiaohongshuPlatform(BasePlatform):
             # cookie 失效是"身份级"事件：别继续拿它打接口
             self._cursor.clear()
 
+    # ── 身份级限速（调研 §5.3.1，devlog/237）─────────────────────────────
+    # 粒度是 **(身份, 端点)**：身份是**我们这份 cookie**（不是被查的 uid）——
+    # 风控盯的是"这份身份在这个端点上的节奏"，换个目标就满速重来等于没节流。
+    # 被查的 uid 只参与端点熔断的归因（"≥3 个不同目标都被风控 ⇒ 端点坏了"）。
+    def _identity(self) -> str:
+        """`xiaohongshu:<cookie 指纹>`（cookie 变了就是另一份身份）。"""
+        return identity_limit.identity_key(self.platform, self._cookie_header())
+
+    def _admit(self, uid: str, endpoint: str) -> bool:
+        """发请求前问一次额度。不允许 ⇒ 一个字节都不发给上游（连风控都不挨）。"""
+        d = self._ledger.acquire(self._identity(), endpoint)
+        if d.allowed:
+            return True
+        self.last_error = {"kind": "identity_throttled", "endpoint": endpoint,
+                           "reason": d.reason, "retry_after": round(d.retry_after, 2)}
+        logger.info("小红书 %s 本轮不发（%s，还需 %.1fs）", endpoint, d.reason, d.retry_after)
+        return False
+
+    def _observe(self, uid: str, endpoint: str, outcome: identity_limit.Outcome) -> None:
+        self._ledger.record(self._identity(), endpoint, outcome, target=str(uid))
+
+    def _outcome_of(self, kind: str) -> identity_limit.Outcome:
+        """诊断六分类 → 四类（映射表在 `identity_limit.py`，那里写了为什么这么归）。"""
+        return identity_limit.outcome_for_kind(kind)
+
     # ── BasePlatform ──────────────────────────────────────────────────
     async def fetch_user_info(self, uid: str, client: httpx.AsyncClient | None = None) -> dict | None:
+        if not self._admit(uid, "otherinfo"):
+            return None
         own = client is None
         if own:
             client = httpx.AsyncClient(timeout=15.0)
@@ -134,7 +181,10 @@ class XiaohongshuPlatform(BasePlatform):
             ok, body = self._parse(resp)
             if not ok:
                 self._fail(resp, body)
+                self._observe(uid, "otherinfo",
+                              self._outcome_of((self.last_error or {}).get("kind", "")))
                 return None
+            self._observe(uid, "otherinfo", "ok")
             d = body or {}
             return {
                 "name": d.get("nickname") or d.get("name"),
@@ -152,6 +202,8 @@ class XiaohongshuPlatform(BasePlatform):
 
     async def fetch_post_page(self, uid: str, page: int,
                               client: httpx.AsyncClient | None = None) -> dict | None:
+        if not self._admit(uid, "user_posted"):
+            return None
         own = client is None
         if own:
             client = httpx.AsyncClient(timeout=15.0)
@@ -169,7 +221,10 @@ class XiaohongshuPlatform(BasePlatform):
             ok, body = self._parse(resp)
             if not ok:
                 self._fail(resp, body)
+                self._observe(uid, "user_posted",
+                              self._outcome_of((self.last_error or {}).get("kind", "")))
                 return None
+            self._observe(uid, "user_posted", "ok")
             data = body or {}
             notes = data.get("notes") or []
             if "cursor" in data:

@@ -108,6 +108,38 @@
 **跨任务污染**（帖子任务的风控被账号任务误读、错误进入冷却）。因此
 `_rate_limit_ctx: ContextVar` 默认 `(False, "")`，进入任务时 `clear_rate_limit()`。
 
+### 3.4.1 身份级限速与四类响应（第 4 阶段 ⑤，devlog/237）
+
+上面那套是**按平台**的（冷却窗口键 = `platform`）。新平台的风控是**会话/账号级**的，
+所以 `app/services/identity_limit.py` 在它之上又加了一层，**目前只给小红书的抓取路径接线**
+（B 站行为不变）：
+
+```
+请求前: LEDGER.acquire(身份, 端点)      # 身份 = 平台 + cookie 指纹（不是被查的 uid）
+        ├─ 端点熔断（风控率>0.6 ∧ 样本≥20 ∧ ≥3 个不同目标）⇒ 不发
+        └─ (身份, 端点) 令牌桶（user_posted 0.12/s ≈ 8.3s）  ⇒ 不够就不发
+请求后: LEDGER.record(身份, 端点, 四类之一, target=uid)
+        ├─ ok            → 计成功（分子）
+        ├─ business_error→ **不影响健康度** + **退还令牌**（遍历 id 不该被自己节流拖死）
+        ├─ risk_control  → 扣分（成功率 × (1−风控率) × 0.5^连续失败）+ 不退令牌
+        └─ network_error → 退令牌、不计样本（超时/5xx/我们这侧坏了：cookie/签名/网关）
+```
+
+两条与"别把话说小"有关的约定：
+
+- **被节流不算故障**：`fetch_post_page` 返回 None 且 `last_error.kind="identity_throttled"` ⇒
+  调度循环记 `stop_reason="throttled"` 而**不是** `network_error`
+  （否则用户在报告里会看到一处根本没发生的中断）。
+- **诊断分类与策略分类是两层**：适配器的六分类（`classify_http`：签名失效/网关缺头/cookie 失效…）
+  给排查用；策略只看四类（映射表在 `identity_limit._KIND_TO_OUTCOME`，5xx 归 `server_error`
+  → `network_error`）。
+
+签名侧另有**影子比对**（`app/services/platforms/shadow.py`，调研 §3.4.1）：每 600s 抽样，
+拿"这次真要发出去的那组头"与新签的一组比**结构常量**（不比字节 —— 那里面有时钟与噪声）；
+不一致**重签一次再下结论**（假阳性防护）；**比不出来 = 未比对，绝不禁用本地签名**。
+⚠️ 小红书只有一份签名实现，所以它能抓"结构回归"，抓不到"签名被服务端拒绝"
+（后者靠上面的四类响应与风控统计）。
+
 ---
 
 ## 4. 账号信息抓取

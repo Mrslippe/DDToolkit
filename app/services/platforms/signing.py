@@ -23,6 +23,9 @@ from __future__ import annotations
 
 from typing import Any, Optional, Protocol
 
+from app.services.platforms.shadow import (SHADOW_KEY, Comparison, ShadowProbe,
+                                           xhs_stable_constants)
+
 
 class SignerUnavailable(RuntimeError):
     """签名器不可用（库没装 / 版本不兼容 / 平台改版）—— **不许静默降级**。"""
@@ -62,12 +65,22 @@ class XhsSigner:
     ⚠️ 这是全仓**唯一一个"平台改版即失效"的依赖**。失效时的表现是
     `SignerUnavailable`（响亮失败）—— 升级依赖，或按调研 §1.1 的兜底路线
     （浏览器只铸/签一次）处理；**不要**改成"没签名也发"。
+
+    ## 影子比对（调研 §3.4.1，devlog/237）
+
+    每次签名后按 600s 抽样：**同一个请求连签两次**，比"噪声碰不到的常量"
+    （三个签名头在不在、`x-s` 前缀形状、`x-s-common` 长度档位）。
+    ⚠️ 这只抓得住**结构回归**（依赖升级后头少了 / 形状变了），抓不住"签名被服务端拒绝"
+    —— 后者要靠抓取侧的响应分类（`identity_limit.py`）。比不出来时**绝不禁用**本地签名。
     """
 
     platform = "xiaohongshu"
 
-    def __init__(self) -> None:
+    def __init__(self, probe: "ShadowProbe | None" = None) -> None:
         self._sign = None  # 懒加载后缓存（构造时不 import，避免拖慢启动）
+        # 影子比对：**不 import 平台库**的纯逻辑（见 shadow.py）
+        self._probe = probe if probe is not None else ShadowProbe()
+        self.last_comparison: "Comparison | None" = None
 
     def _load(self):
         if self._sign is not None:
@@ -82,9 +95,9 @@ class XhsSigner:
         self._sign = Xhshow()
         return self._sign
 
-    def headers(self, *, method: str, uri: str, params: Optional[dict[str, Any]] = None,
-                payload: Optional[dict[str, Any]] = None,
-                cookies: str = "") -> dict[str, str]:
+    def _sign_once(self, *, method: str, uri: str, params: Optional[dict[str, Any]],
+                   payload: Optional[dict[str, Any]], cookies: str) -> dict[str, str]:
+        """签一次（主路径与影子路径**共用**这个函数：只有真签名器才谈得上比对）。"""
         signer = self._load()
         try:
             if method.upper() == "GET":
@@ -94,3 +107,28 @@ class XhsSigner:
         except Exception as e:  # noqa: BLE001 —— 库内部炸了同样算不可用
             raise SignerUnavailable(f"小红书签名失败（xhshow 内部错误）：{e}") from e
         return {k: str(v) for k, v in dict(out or {}).items()}
+
+    def headers(self, *, method: str, uri: str, params: Optional[dict[str, Any]] = None,
+                payload: Optional[dict[str, Any]] = None,
+                cookies: str = "") -> dict[str, str]:
+        out = self._sign_once(method=method, uri=uri, params=params,
+                              payload=payload, cookies=cookies)
+        self._maybe_shadow(out, method=method, uri=uri, params=params, payload=payload,
+                           cookies=cookies)
+        return out
+
+    def _maybe_shadow(self, primary_headers: dict[str, str], *, method: str, uri: str,
+                      params: Optional[dict[str, Any]], payload: Optional[dict[str, Any]],
+                      cookies: str) -> None:
+        """到点才比（`probe.due`）。**主侧复用刚签出来的那一份** —— 抽样只多花一次签名，
+        且判定的就是"这次真的发出去的那组头"。结果只用于告警，不影响本次返回值。"""
+        if not self._probe.due(SHADOW_KEY):
+            return
+        kwargs = dict(method=method, uri=uri, params=params, payload=payload,
+                      cookies=cookies)
+        self.last_comparison = self._probe.compare(
+            SHADOW_KEY,
+            primary=lambda: primary_headers,
+            shadow=lambda: self._sign_once(**kwargs),
+            stable=xhs_stable_constants,
+        )

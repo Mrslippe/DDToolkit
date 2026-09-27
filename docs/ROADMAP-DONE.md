@@ -565,6 +565,7 @@
 | 第 4 阶段 ④（第三刀-2 后端）：**小红书 cookie 录入** —— 新增 `services/xhs_auth.py`（**先校验再落盘**：缺 `a1` 挡在入口，避免"配好了却永远抓不到"）+ `POST /auth/xiaohongshu/cookie` / `GET /auth/xiaohongshu/status`（**不做**真实探活，只报"配齐没"）；5 条判据（含端点级 400 且不落盘） | 233 |
 | 第 4 阶段 ④（第三刀-4 前端，**收口**）：**小红书三处界面接线** —— 登录浮窗第三 Tab（粘贴 cookie，Tab 清单收进 `platformLogin.ts::LOGIN_TABS` 单一事实来源）+ 添加账号下拉 + 添加 V 的「小红书 uid」钮（`.av-xhs-btn`，粘主页链接也算：`parseXhsUid` 摘 uid，摘不出则禁用）；21 条 vitest + 探针 6+3 条，反向验证 6 刀 | 235 |
 | 第 4 阶段 ①（第二刀）：**B 站专属实现搬出 `scheduler.py`** —— 五个 B 站专属函数整块搬进 `platforms/bilibili_posts.py`（−222 行），`uid: int → str`；`_safe_json_parse` 提为 `core/jsonsafe.py` 破环；⚠️ 5 处 `sch.<名字>` monkeypatch 会静默失效（已跟着搬）；3 条新判据 + 反向验证 4/4 | 236 |
+| 第 4 阶段 ⑤：**身份级限速 + 四类响应 + 签名影子比对** —— 新增 `services/identity_limit.py`（四类响应的策略表 / **(身份,端点)** 令牌桶 / 端点熔断三条件）与 `platforms/shadow.py`（抽样比结构常量、不一致重签再判、比不出来**绝不禁用**），接在小红书与调度循环上；顺手把 5xx 从"业务失败"改判 `server_error`；26 条新判据 + 反向验证 6/6 | 237 |
 
 > **编号列怎么写**（2026-09-23 定）：
 > - 有 devlog 的批次 → **裸编号**（`| 097 |`）；

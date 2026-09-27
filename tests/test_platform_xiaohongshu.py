@@ -13,6 +13,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.database import Base
 from app.models.vtuber import Account, Post, VTuber
+from app.services import identity_limit
 from app.services import scheduler as sch
 from app.services.platforms import registry
 from app.services.platforms.signing import NullSigner, SignerUnavailable
@@ -102,15 +103,23 @@ def test_post_id_stays_a_string():
 
 
 def test_cursor_is_chained_across_pages_and_reset_on_page_1():
-    """④ cursor 串页：第 1 页用空 cursor，第 2 页用上一页返回的 cursor；回到第 1 页要重来。"""
-    pf = _pf(signer=FakeSigner())
+    """④ cursor 串页：第 1 页用空 cursor，第 2 页用上一页返回的 cursor；回到第 1 页要重来。
+
+    ⚠️ 每翻一页都要**把时钟往前推**（devlog/237 起 `user_posted` 的身份级额度是
+    每 8.3s 一次）：不推时钟的话第 2 页会被令牌桶挡下（一个字节都不发），
+    这里量到的就是"额度生效"而不是 cursor 串页 —— 两件事分开验。
+    """
+    clock = {"t": 1000.0}
+    pf = _pf(signer=FakeSigner(), ledger=identity_limit.Ledger(now=lambda: clock["t"]))
     client = FakeClient([
         FakeResp(payload={"success": True, "data": {"notes": [NOTE], "cursor": "CUR1", "has_more": True}}),
         FakeResp(payload={"success": True, "data": {"notes": [NOTE], "cursor": "CUR2", "has_more": False}}),
         FakeResp(payload={"success": True, "data": {"notes": [NOTE], "cursor": "CUR3", "has_more": True}}),
     ])
     asyncio.run(pf.fetch_post_page("u1", 1, client=client))
+    clock["t"] += 10          # 等够一个令牌（8.3s）
     asyncio.run(pf.fetch_post_page("u1", 2, client=client))
+    clock["t"] += 10
     asyncio.run(pf.fetch_post_page("u1", 1, client=client))
     assert "cursor=&user_id" in client.calls[0][0]
     assert "cursor=CUR1" in client.calls[1][0]
@@ -125,7 +134,9 @@ def test_failures_are_classified():
     assert classify_http(403, msg="missing gateway header") == "gateway_missing"
     assert classify_http(461, msg="") == "risk_control"
     assert classify_http(403, msg="") == "risk_control"      # 403 兜底按最坏算
-    assert classify_http(500, msg="boom") == "business_error"
+    # ⚠️ devlog/237 改口径：5xx 是**上游故障**，不是"这个帖子有问题"
+    assert classify_http(500, msg="boom") == "server_error"
+    assert classify_http(502, msg="") == "server_error"
 
     pf = _pf(signer=FakeSigner())
     client = FakeClient([FakeResp(status=403, payload={"success": False, "code": -101,
@@ -217,3 +228,143 @@ def test_real_signer_produces_headers_offline():
         pytest.fail(f"签名器不可用（依赖没进环境？）：{e}")
     assert {"x-s", "x-t"} <= set(heads), heads
     assert heads["x-s"], "x-s 不能是空串"
+
+
+# ── 身份级限速 / 四类响应接线（第 4 阶段 ⑤，devlog/237）──────────────────
+
+def _ledger(clock: dict) -> identity_limit.Ledger:
+    return identity_limit.Ledger(now=lambda: clock["t"])
+
+
+def test_signer_shadow_probe_samples_once_and_never_blocks():
+    """⑬ 影子比对（调研 §3.4.1）：每 TTL 抽一次；**判定不一致也照常返回主实现的头**。
+
+    ⚠️ 这条盯的是"绝不禁用本地路径"：签名器坏了的正确表现是**告警 + 继续用**，
+    而不是让整个平台停止工作（那才是"签名悄悄失效、数据静默变空"的另一种死法）。
+    """
+    from app.services.platforms.shadow import ShadowProbe
+    from app.services.platforms.signing import XhsSigner
+
+    clock = {"t": 1000.0}
+    signer = XhsSigner(probe=ShadowProbe(ttl=600.0, now=lambda: clock["t"]))
+    calls = {"n": 0}
+    mode = {"arm": False, "changed": False}
+
+    class FakeXhshow:
+        """`arm` 之后**结构就变了**：主侧用旧结构、影子侧用新结构 ⇒ 常量必然不一致。
+
+        这是真实回归的形状（依赖换版/平台改版发生在两次签名之间）；结构稳定的平时两边一致。
+        """
+
+        def sign_headers_get(self, uri, cookies, params=None):
+            calls["n"] += 1
+            # ⚠️ 顺序要紧：`arm` 表示"**下一次**签名起结构变了"（不是这次）——
+            #    这样主侧用旧结构、影子侧用新结构，才是"回归发生在两次签名之间"的形状。
+            # 变的必须是**结构常量**（前缀 / 头部长度档位）：只变 `x-s` 的内容不算 ——
+            # 那里面本来就有噪声与时钟，比对刻意不看它（见 `xhs_stable_constants`）。
+            prefix = "XYT" if mode["changed"] else "XYS"
+            if mode["arm"]:
+                mode["arm"] = False
+                mode["changed"] = True
+            return {"x-s": f"{prefix}_" + "a" * 16, "x-t": str(calls["n"]),
+                    "x-s-common": "c" * 60}
+
+        def sign_headers_post(self, uri, cookies, payload=None):
+            return self.sign_headers_get(uri, cookies, params=payload)
+
+    signer._sign = FakeXhshow()          # 等价于"依赖已装"（绕过懒加载）
+    kw = dict(method="GET", uri="/api/sns/web/v1/user_posted",
+              params={"user_id": "u1"}, cookies="a1=a; web_session=b")
+
+    heads = signer.headers(**kw)
+    assert heads["x-s"], "主实现的结果必须原样返回"
+    assert signer.last_comparison is not None
+    assert signer.last_comparison.verdict == "match"
+    assert calls["n"] == 2, "抽样那一轮只多签一次（主侧复用真正发出去的那组头）"
+
+    before = calls["n"]
+    signer.headers(**kw)
+    assert calls["n"] == before + 1, "TTL 内不该再抽（每次都签两次会白烧 CPU）"
+
+    clock["t"] += 601
+    mode["arm"] = True                   # 下次请求的主侧仍用旧结构，影子侧已用新结构
+    heads2 = signer.headers(**kw)
+    assert signer.last_comparison.verdict == "mismatch"
+    assert signer.last_comparison.should_alert
+    assert heads2["x-s"], "判定不一致**也不能**挡住签名（只告警，不禁用）"
+
+
+def test_throttled_identity_sends_nothing_upstream():
+    """⑩ 额度不够时**一个字节都不发**（连风控都不挨），并留下结构化的原因。
+
+    反向验证：把 `_admit` 的返回值忽略掉 ⇒ 本用例红（会打出去一发）。
+    """
+    clock = {"t": 1000.0}
+    pf = _pf(signer=FakeSigner(), ledger=_ledger(clock))
+    client = FakeClient([FakeResp(), FakeResp()])
+
+    assert asyncio.run(pf.fetch_post_page("u1", 1, client=client)) is not None
+    assert len(client.calls) == 1
+
+    # 同一个身份、同一个端点、时间没走 ⇒ 第二发被令牌桶挡下
+    assert asyncio.run(pf.fetch_post_page("u1", 2, client=client)) is None
+    assert len(client.calls) == 1, "被节流时不该发请求"
+    assert pf.last_error["kind"] == "identity_throttled"
+    assert pf.last_error["retry_after"] > 0
+    assert identity_limit.throttled(pf) is True
+
+    # 时间走够 ⇒ 恢复正常（节流不是"坏了"）
+    clock["t"] += 10
+    assert asyncio.run(pf.fetch_post_page("u1", 2, client=client)) is not None
+    assert len(client.calls) == 2
+
+
+def test_throttle_is_not_reported_as_a_network_failure():
+    """⑪ 调度循环必须把"额度用完"与"上游故障"分开：前者不该出现在中断列表里。
+
+    这条盯的是 `_fetch_platform_posts` 的 None 分支 —— 报成 `network_error`
+    会让用户在报告里看到一处**根本没发生**的中断。
+    """
+    class ThrottledPf:
+        platform = "xiaohongshu"
+        last_error = {"kind": "identity_throttled"}
+
+        async def fetch_post_page(self, uid, page, client=None):
+            return None
+
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine)()
+    result = asyncio.run(sch._fetch_platform_posts(ThrottledPf(), "u1", 1, db))
+    assert result.stop_reason == "throttled"
+    assert result.rate_limited is False
+    db.close()
+
+
+def test_response_classes_drive_the_ledger():
+    """⑫ 四类响应真的按策略记账：风控扣身份分且不退令牌；网络错退令牌；业务失败两者都不。"""
+    clock = {"t": 1000.0}
+    ledger = _ledger(clock)
+    pf = _pf(signer=FakeSigner(), ledger=ledger)
+    ident = pf._identity()
+
+    # 风控（403 兜底）⇒ 身份掉分
+    client = FakeClient([FakeResp(status=403, payload={"success": False, "code": -1, "msg": ""})])
+    assert asyncio.run(pf.fetch_post_page("u1", 1, client=client)) is None
+    h = ledger.health(ident)
+    assert h.risk == 1 and h.consecutive_fails == 1 and h.score < 1.0
+
+    # 上游 5xx ⇒ 网络错：不入健康度、退还令牌（下一发立刻能走）
+    clock["t"] += 10
+    client = FakeClient([FakeResp(status=502, payload={"success": False, "code": -2, "msg": "boom"})])
+    assert asyncio.run(pf.fetch_post_page("u1", 2, client=client)) is None
+    h2 = ledger.health(ident)
+    assert h2.network == 1 and h2.risk == 1 and h2.score == h.score
+    assert ledger.acquire(ident, "user_posted").allowed, "网络错必须退还令牌"
+
+    # "业务失败"（纯 404 且无风控字样）⇒ 健康度不动
+    clock["t"] += 10
+    client = FakeClient([FakeResp(status=404, payload={"success": False, "code": -3, "msg": "not found"})])
+    assert asyncio.run(pf.fetch_post_page("u1", 3, client=client)) is None
+    h3 = ledger.health(ident)
+    assert h3.samples == h2.samples and h3.score == h2.score, "业务失败不该动身份健康度"
