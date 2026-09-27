@@ -203,7 +203,11 @@ class Settings:
     LOG_BACKUP_DAYS: int = int(os.getenv("DDTOOLKIT_LOG_BACKUP_DAYS", "7"))
 
     # 图片代理（/img-proxy 兜底链路）：B 站图床 + 微博图床
-    IMG_PROXY_ALLOWED_HOSTS: str = os.getenv("IMG_PROXY_ALLOWED_HOSTS", "hdslb.com,sinaimg.cn,wbcdn.cn")
+    IMG_PROXY_ALLOWED_HOSTS: str = os.getenv(
+        "IMG_PROXY_ALLOWED_HOSTS",
+        # 小红书（xhscdn / ci.xiaohongshu.com）是第 4 阶段 ④ 加的（devlog/231）：
+        # 不加它，笔记封面走图片代理会被拒 ⇒ 列表里全是破图
+        "hdslb.com,sinaimg.cn,wbcdn.cn,xhscdn.com,ci.xiaohongshu.com")
     IMG_CACHE_DIR: str = str(DATA_DIR / "static" / "img-cache")
     # 图片磁盘缓存的**容量上限**（R22，2026-09-16）：原来只管时间（TTL 7 天）不管体积，
     # 实测开发档就到 101.7MB / 271 文件，而它是数据目录里涨得最快的一块。

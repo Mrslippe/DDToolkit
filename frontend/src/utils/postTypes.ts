@@ -38,16 +38,27 @@ export const TYPE_GROUPS_WEIBO: TypeGroup[] = [
   { key: 'system', label: '系统', types: ['system'] },
 ]
 
+/** 小红书（第 4 阶段 ④，devlog/231）：它没有投稿/专栏/音乐，也没有"转发"这一档；
+ *  适配器把 `normal → image`、`video → video`（见 `platforms/xiaohongshu.py`）。 */
+export const TYPE_GROUPS_XHS: TypeGroup[] = [
+  { key: 'image,text', label: '图文', types: ['image', 'text'] },
+  { key: 'video', label: '视频', types: ['video'] },
+]
+
 /** 按当前账号平台取分类分组（零计数组仍不显示，由调用方过滤）。
  *  未知/未选账号平台一律按 B 站处理（B 站是主平台，见 `PRIMARY_PLATFORM_ORDER`）。 */
 export function typeGroupsFor(platform: string | undefined): TypeGroup[] {
-  return platform === 'weibo' ? TYPE_GROUPS_WEIBO : TYPE_GROUPS_BILIBILI
+  if (platform === 'weibo') return TYPE_GROUPS_WEIBO
+  if (platform === 'xiaohongshu') return TYPE_GROUPS_XHS
+  return TYPE_GROUPS_BILIBILI
 }
 
 /** 平台显示名（账号切换器 / 添加账号用）。未知平台**没有条目** —— 调用方按原型链取值，
  *  未收录平台会得到 `undefined`（渲染为空）。这是既有行为，本批次**只搬不改**，
  *  不要顺手给它加"原样回显"的回退（那会改变未知平台上的展示）。 */
-export const PLATFORM_LABEL: Record<string, string> = { bilibili: 'B站', weibo: '微博' }
+export const PLATFORM_LABEL: Record<string, string> = {
+  bilibili: 'B站', weibo: '微博', xiaohongshu: '小红书',
+}
 
 /* ── 平台账号的纯逻辑（P2 分层收敛 A 批次从 `PostsPage.tsx` 搬出，只搬不改） ── */
 
@@ -67,6 +78,7 @@ export function accountHomeUrl(a: {
   if (!a.platform_uid) return null
   if (a.platform === 'bilibili') return `https://space.bilibili.com/${a.platform_uid}`
   if (a.platform === 'weibo') return `https://weibo.com/u/${a.platform_uid}`
+  if (a.platform === 'xiaohongshu') return `https://www.xiaohongshu.com/user/profile/${a.platform_uid}`
   return null
 }
 

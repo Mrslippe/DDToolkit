@@ -558,6 +558,7 @@
 | 第 4 阶段 ③（平台分支三处静默错误）：`_logged_in` 的 `else weibo`（任何非 B站平台都读微博登录态）→ 显式映射 + 未表态平台**门禁**；内容闸门写死 B 站（`platform=weibo` 被 B站登录态**越权放行**）→ 按平台分派；通用选号里的 `.isdigit()`（微博账号被静默跳过 / T0 连 `failed` 都不计）→ 只要求有 uid、不可用的**计进 failed**；7 条判据 + 四刀反向验证 | 228 |
 | 第 4 阶段 ①（第一刀）：**帖子核心循环与平台解耦** —— 新增 `platforms/streams.py::PostStreams`（两条流 + 五个可选台阶）+ `BILIBILI_STREAMS` 一处绑定；核心函数里 0 个平台字面量、0 处 `fetch_bilibili_*` 直调（AST 判据）；5 条判据 + 三刀反向验证；733 条 pytest 零回归 | 229 |
 | 第 4 阶段 ④（第一刀，用户拍板开做）：**小红书适配** —— 新增 `platforms/signing.py`（`Signer` 协议 + 懒加载 `xhshow`）与 `platforms/xiaohongshu.py`（账号信息 / 笔记流 / 失败六分类 / 三个坑：逗号不编码、id 按字符串、xsec_token 只进 raw_json）；注册进表 ⇒ 调度器**零改动**就能抓；7 条判据（含端到端落库）+ 四刀反向验证 | 230 |
+| 第 4 阶段 ④（第二刀）：**小红书的前端与壳层触点** —— `EXTERNAL_HOSTS`（打开主页）、CSP `img-src` 与 `IMG_PROXY_ALLOWED_HOSTS`（封面不破图）、`postTypes.ts` 三处（平台名 / 分类分组 / 主页兜底 URL）；Rust 白名单与前端标签各补判据（后者那条"收录了哪些平台"的旧断言被这次改动**正确地**打红，已改成对齐真源） | 231 |
 
 > **编号列怎么写**（2026-09-23 定）：
 > - 有 devlog 的批次 → **裸编号**（`| 097 |`）；

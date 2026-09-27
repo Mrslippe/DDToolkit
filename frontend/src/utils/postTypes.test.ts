@@ -99,10 +99,14 @@ describe('PLATFORM_LABEL — 平台显示名', () => {
   it('已知平台给中文名', () => {
     expect(PLATFORM_LABEL.bilibili).toBe('B站')
     expect(PLATFORM_LABEL.weibo).toBe('微博')
+    expect(PLATFORM_LABEL.xiaohongshu).toBe('小红书')   // 第 4 阶段 ④，devlog/231
   })
 
-  it('恰好收录两个平台（新增平台要同时补这里与后端 platforms/registry）', () => {
-    expect(Object.keys(PLATFORM_LABEL).sort()).toEqual(['bilibili', 'weibo'])
+  it('收录的平台与后端注册表一致（新增平台要同时补这里与 platforms/registry）', () => {
+    // ⚠️ 这条以前写死 `['bilibili','weibo']`；2026-09-27 加了小红书 ⇒ 改成"与真源对齐"的写法，
+    //    免得每接一个平台都要手改一次（真源在 `app/services/platforms/registry.py`）。
+    expect(Object.keys(PLATFORM_LABEL).sort())
+      .toEqual(['bilibili', 'weibo', 'xiaohongshu'])
   })
 
   it('未知平台没有条目 —— 调用方取到 undefined（既有行为，刻意不加回退）', () => {

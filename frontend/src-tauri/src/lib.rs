@@ -1724,6 +1724,9 @@ const EXTERNAL_HOSTS: &[&str] = &[
     "live.bilibili.com",
     "weibo.com",
     "www.weibo.com",
+    // 小红书（第 4 阶段 ④，devlog/231）：主页是 www.xiaohongshu.com/user/profile/{uid}
+    "xiaohongshu.com",
+    "www.xiaohongshu.com",
 ];
 
 /// 校验一个外部 URL：**返回它的小写主机名**，或给用户看的原因。
@@ -2824,6 +2827,9 @@ mod tests {
             "https://live.bilibili.com/123?x=1",
             "https://weibo.com/u/1234567",
             "https://www.weibo.com/u/1#frag",
+            // 小红书（第 4 阶段 ④，devlog/231）：主页链接必须放行，否则「打开主页」失败
+            "https://www.xiaohongshu.com/user/profile/65f0c0ffee1234567890abcd",
+            "https://xiaohongshu.com/explore/abc",
             "HTTPS://BILIBILI.COM/x", // 大写不算绕过：规范化后就是同一个主机
             "  https://bilibili.com  ", // 两侧空白 trim 掉
         ] {
