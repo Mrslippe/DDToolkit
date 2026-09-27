@@ -44,25 +44,6 @@ jobs:
       - name: 后端单测
         run: uv run pytest tests/ -q
 
-      # ⚠️ **临时诊断**（devlog/229 期间加的，定位完就删）：GitHub 的 job 日志要登录才能读，
-      # 但 `::error::` 会变成 check-run 的 **annotations**，那个接口匿名可读 ⇒ 把 pytest
-      # 的失败摘要与首个 traceback 片段转成 annotation，就能在无凭据环境下看到真因。
-      - name: 失败摘要（临时诊断：读 annotations）
-        if: failure()
-        run: |
-          uv run pytest tests/ -q --tb=no -rf > /tmp/pytest.out 2>&1 || true
-          echo "--- 汇总 ---" >> /tmp/diag.txt
-          tail -5 /tmp/pytest.out >> /tmp/diag.txt
-          echo "--- 失败清单 ---" >> /tmp/diag.txt
-          grep -E "^(FAILED|ERROR)" /tmp/pytest.out | head -8 >> /tmp/diag.txt
-          echo "--- 首个 traceback ---" >> /tmp/diag.txt
-          grep -n -m1 -E "^_{5,}.*_{5,}$" /tmp/pytest.out | cut -d: -f1 > /tmp/ln.txt || true
-          ln=$(cat /tmp/ln.txt 2>/dev/null || echo 0)
-          sed -n "${ln},$((ln+35))p" /tmp/pytest.out >> /tmp/diag.txt
-          while IFS= read -r line; do
-            echo "::error title=pytest-diag::${line}"
-          done < <(head -c 3000 /tmp/diag.txt | tr -d '\r' | grep -v '^$')
-
       - name: 文档漂移门禁
         run: uv run python scripts/doc_check.py
 

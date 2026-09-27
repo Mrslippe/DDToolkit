@@ -1881,11 +1881,11 @@ _PAGE_RETRIES = 2
 # 现在核心循环只认 `PostStreams` 这套形状（见 `platforms/streams.py`），
 # 绑定集中在这一处；`tests/test_posts_core_platform.py` 有一条判据盯着
 # "核心函数里不许再出现平台字面量"。
-def _bili_fetch_video_page(mid: int, page: int, client) -> Any:
+def _bili_fetch_video_page(mid: int, page: int, client):
     return fetch_bilibili_videos(mid, page=page, client=client)
 
 
-def _bili_fetch_dynamics_page(mid: int, offset: str, client) -> Any:
+def _bili_fetch_dynamics_page(mid: int, offset: str, client):
     return fetch_bilibili_dynamics(mid, offset=offset, client=client)
 
 

@@ -469,6 +469,26 @@ POSIX **允许**改名 / 删除**打开中**的文件，Windows **不允许**（
 且不是被新的等待/钩子掩盖。同族：`nextFrame()` 是 `rAF`+50ms 定时器**双保险**（dev 探针里的工具），
 要用它，别自己写裸 `requestAnimationFrame`。
 
+### 6.17 ⚠️ 本地门禁跑的是 **3.14**：注解里"名字没导入"这类错**本地永远看不见**（2026-09-27 加，devlog/229）
+**实测事故**：给两个包装函数写了 `-> Any`，而那个模块**没导入 `Any`**。
+Python **3.14** 有 PEP 649（**惰性注解**，注解到被读取时才求值）⇒ 本地 `.venv` 的
+`pytest` / `tsc` / 全套 A 档**全绿**；**3.12 在 `def` 那一刻就求值** ⇒ 导入即 `NameError`，
+而 `tests/conftest.py` 第一行就导入该模块 ⇒ **整个收集阶段失败**。CI 三条 job 全红，
+退出码 **4**（pytest 的"用法错误"）——这个症状极易被误读成"命令行参数写错了"。
+
+**两条规矩**：
+1. **改了模块级函数签名/注解之后，补一次干净克隆自检**（`uv` 按 `requires-python`
+   **下界 3.12** 建环境，正好补上本地 3.14 的盲区）：
+   ```powershell
+   git clone . ..\ddtk-cisim; cd ..\ddtk-cisim; uv run pytest tests/ -q   # 期望 732 passed / 1 skipped
+   ```
+   顺手删掉克隆目录。这条同时也是"下界版本到底能不能装/能跑"的唯一低成本自检。
+2. **CI 红了先读退出码**（GitHub 的 job 日志要登录，但 **check-run annotations 接口匿名可读**：
+   `https://api.github.com/repos/<o>/<r>/check-runs/<id>/annotations`）：
+   `1`=有用例失败 / `2`=收集被中断（含 import 错）/ `3`=pytest 内部错 / `4`=**用法错**
+   （含 conftest 导入失败）/ `5`=没收集到用例。**别拿"本地绿"当反证** —— 本地与 CI 的
+   Python 版本可以差一个大版本。
+
 ---
 
 ## 七、并行开发：**本仓不采用**（2026-09-24 定）＋ 两条通用教训
