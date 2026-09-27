@@ -135,7 +135,7 @@
 }
 
 .board-add-item:focus-visible {
-  outline: 2px solid var(--ring);
+  outline: var(--focus-ring);
   outline-offset: -2px;
 }
 
@@ -174,7 +174,7 @@
 }
 
 .pcard-remove:focus-visible {
-  outline: 2px solid var(--ring);
+  outline: var(--focus-ring);
   outline-offset: 1px;
 }
 
@@ -675,7 +675,7 @@
 }
 
 .tp-hit:focus-visible {
-  outline: 2px solid var(--ring);
+  outline: var(--focus-ring);
   outline-offset: 2px;
 }
 

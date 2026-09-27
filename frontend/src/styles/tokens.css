@@ -71,6 +71,22 @@
   --pill-fg: #3d4a5c;
   --pill-ring: inset 0 0 0 1.5px var(--c-primary);
 
+  /* ── 键盘焦点环（批次 14a，devlog/227）────────────────────────────────────
+     全站**唯一**的焦点视觉。之前焦点环颜色散落 5 种（`var(--ring)` /
+     `var(--c-primary)` / `var(--c-primary-deep)` / `#fff` / `var(--pill-ring)`），
+     谁也说不清"键盘走到这儿该长什么样"。现在只有**一种颜色**（主色）+ 三种形态：
+
+     - `--focus-ring`          ：常规控件（`outline` 简写）
+     - `--focus-ring-inset`    ：不能画到框外的地方（卡片/药丸，`box-shadow` 内描边）
+     - `--focus-ring-on-dark`  ：深色/彩色底上（状态岛）—— 粉环在粉底上看不见，只能退白
+
+     ⚠️ 焦点环**不是** `--ring`（那是 shadcn/Tailwind 的"输入态描边"，语义不同），
+     也不等于 `--pill-ring`（那是药丸自己的描边，恰好被当成焦点视觉用过）。 */
+  --focus-ring: 2px solid var(--c-primary);
+  --focus-ring-inset: inset 0 0 0 2px var(--c-primary);
+  --focus-ring-on-dark: 2px solid #ffffff;
+  --focus-ring-offset: 2px;
+
   /* 粉丝徽章底色（加深版：白字 26px 对比从 2.5:1 → 3.4:1） */
   --pill-fill-pink: #e35d8b;
   --pill-fill-coral: #e05261;

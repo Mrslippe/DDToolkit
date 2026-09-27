@@ -1122,7 +1122,8 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 | `--pill-h-sm` / `--pill-h-md` | 25px / 30px | 侧栏行 / 帖子页行 |
 | `--pill-shadow` / `--pill-shadow-hover` | 0 2px 6px rgba(15,23,42,.12) / 0 3px 8px .18 | 常态 / hover（hover 上浮 1px） |
 | `--pill-fg` | #3d4a5c | 图标与实心三角深蓝灰（⚠️ 原 tokens 误写 `--pill-fg` 与引用 `--pill-fg-icon` 不一致，2026-09-07 审计已统一为 `--pill-fg`） |
-| `--pill-ring` | inset 0 0 0 1.5px 主粉 | focus-visible 环（作用于 ::before） |
+| `--pill-ring` | inset 0 0 0 1.5px 主粉 | 药丸**自己的**描边（`.float-pill:focus-visible::before` 用它当焦点视觉 —— 2026-09-27 起该处改走 `--focus-ring-inset`，见下） |
+| **`--focus-ring`** / **`--focus-ring-inset`** / **`--focus-ring-on-dark`** | `2px solid var(--c-primary)` / `inset 0 0 0 2px var(--c-primary)` / `2px solid #fff` | **全站唯一的键盘焦点视觉**（批次 14a/14b，devlog/227）：常规控件 / 画不到框外的卡片药丸 / 深色彩色底（状态岛）。⚠️ 焦点环**不等于** `--ring`（那是输入态描边）也不等于 `--pill-ring`；散落的 5 种环色已收敛到这三个令牌，**判据** `tests/test_focus_contract.py` |
 
 - 类 API：`.float-pill` 基型 + `--icon`（方形图标钮）/ `--text`（文字钮）+ `--md`（30px）+ `.on`（激活：primary-deep 底白字）+ `--danger`（红字红图标）
 - 交互态：hover 上浮1px+阴影加深、按压回落、focus-visible 环、disabled 半透明

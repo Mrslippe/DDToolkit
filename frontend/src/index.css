@@ -63,11 +63,35 @@
   * {
     @apply border-border;
   }
-  /* 桌面应用交互：点击不残留焦点框（图表 SVG/按钮获焦时被 outline 描粉）；
-     键盘可达性由按钮自有样式承担 */
-  :focus,
-  :focus-visible {
+  /* ── 键盘焦点（批次 14a/14b，devlog/227）──────────────────────────────────
+     ⚠️ 这里以前是 `:focus, :focus-visible { outline: none }` —— 连 `:focus-visible`
+     一起关掉，等于**把键盘用户的焦点视觉全删了**（原注释的理由只有半条成立：
+     「图表 SVG/按钮获焦时被 outline 描粉」）。现在分两条：
+
+     ① 原意图的**收窄版**：图表 canvas/svg 获焦不描环（它们是被点击的，不是被 Tab 到的）；
+     ② 其余一律给**品牌焦点环**（`--focus-ring`，见 `styles/tokens.css`）——
+        这比"什么都不写、让浏览器默认 outline 冒出来"可控得多，也让
+        `posts.css` / `layout.css` 里那些逐控件的焦点规则有一致的地基。 */
+  canvas:focus,
+  svg:focus {
     outline: none;
+  }
+  :focus-visible {
+    outline: var(--focus-ring);
+    outline-offset: var(--focus-ring-offset);
+  }
+  /* 高对比度 / 强制颜色模式下：系统会用自己的焦点色，别用品牌色压过去 */
+  @media (forced-colors: active) {
+    :focus-visible {
+      outline: 2px solid Highlight;
+    }
+  }
+  /* 用户要更高对比：加粗并去掉偏移（紧贴控件更醒目） */
+  @media (prefers-contrast: more) {
+    :focus-visible {
+      outline-width: 3px;
+      outline-offset: 0;
+    }
   }
   /* 默认禁止文本选中（防点击误框选）：输入区/可编辑区恢复 */
   body {

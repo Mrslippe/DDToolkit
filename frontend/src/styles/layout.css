@@ -670,7 +670,7 @@ html.window-maximized body {
 }
 
 .float-pill:focus-visible::before {
-  box-shadow: var(--pill-ring), var(--pill-shadow);
+  box-shadow: var(--focus-ring-inset), var(--pill-shadow);
 }
 
 .float-pill:disabled {

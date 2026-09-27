@@ -776,7 +776,7 @@ img.hero-avatar {
 
 .live-tag.clickable:focus-visible {
   outline: none;
-  box-shadow: var(--pill-ring);
+  box-shadow: var(--focus-ring-inset);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -907,7 +907,7 @@ img.hero-avatar {
 }
 
 .pill-more:focus-visible {
-  outline: 2px solid var(--c-primary-deep);
+  outline: var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -1477,7 +1477,7 @@ img.hero-avatar {
 
 /* 键盘聚焦态：仅描边，不依赖边框色（已无边框） */
 .post-card:focus-visible {
-  outline: 2px solid var(--ring);
+  outline: var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -1721,7 +1721,7 @@ img.hero-avatar {
 }
 
 .data-deck:focus-visible {
-  box-shadow: inset 0 0 0 2px var(--c-primary);
+  box-shadow: var(--focus-ring-inset);
 }
 
 .deck-frame {
@@ -2268,7 +2268,7 @@ img.hero-avatar {
 }
 
 .stat-pill.is-link:focus-visible {
-  outline: 2px solid var(--c-primary);
+  outline: var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -2427,7 +2427,7 @@ img.hero-avatar {
 
 .vd-sign-toggle:focus-visible {
   outline: none;
-  box-shadow: var(--pill-ring);
+  box-shadow: var(--focus-ring-inset);
 }
 
 .vd-sign-chevron {
