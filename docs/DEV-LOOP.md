@@ -421,6 +421,39 @@ POSIX **允许**改名 / 删除**打开中**的文件，Windows **不允许**（
 （这里 = "dispose 之后一定改得动"），③ 边界写进 docstring —— 别让它变成一条"只在 CI 上红"
 的谜题。同族坑：Rust 侧 `delete_old_dir` 的 junction 用例、`migrate.rs` 的文件占用重试。
 
+### 6.15 ⚠️ 临时脚本"写回原文件"必须**逐字节**（换行会被翻译）（2026-09-27 加，devlog/219）
+反向验证的套路是"改坏 → 跑红 → 写回"。写回那一步若用
+`pathlib.Path.write_text(text)`（`newline=None`）默认会把 `\n` 翻成 `os.linesep`
+⇒ Windows 上整份文件变 **CRLF**、`git status` 立刻报该文件被改，
+而 `git diff` / `--numstat` 却是**空的**（`.gitattributes` 归一到 LF 之后内容确实没差）
+—— 于是"已还原"的自动核对**看不出来**，下次 `git add -A` 就可能把整份文件的行尾改掉。
+**规矩**：① 读用 `read_bytes`、写用 `write_bytes`（或 `open(..., newline='')`）；
+② 还原后核对的**不是 `git diff --stat`，而是 `git status --porcelain`**（只有它看得见行尾差异）；
+③ 真被翻过就 `git checkout -- <file>` 从索引取回。
+
+### 6.16 ⚠️ 探针不许靠**等待**去等 rAF 产物（虚拟时间下"等待"不产生帧）（2026-09-27 加，devlog/219）
+`ui_probe.py` 跑在 Chrome 的虚拟时间里：**定时器照常推进，`requestAnimationFrame` 却经常不被服务**
+（本仓已记过"400ms 里只被叫 0–1 次"）。于是任何"由 rAF 写出来的 DOM 信号"（`OverlayScroll`
+的 `data-scrolled` / `data-scroll-dir` 就是这样）都不能用 `await sleep(…)` 去等。
+`--toolbar` 的滚动那一步因此**假红过**：读到的是**挂载时那次同步 `sync()`** 写的旧值 `'up'`
+（`OverlayScroll` 首次 `sync()` 是直接调用，之后才走 rAF），于是报出"方向信号没接上"+
+"工具条没立即让位"两条 —— **同样的代码再跑一次就绿**，看着像产品 flake，其实是尺子。
+
+⚠️ **第一次修错了**（值得记）：改成"有界轮询等方向真翻"（上限 ~2s）—— **没好**。
+虚拟时间里 `sleep` 只是把虚拟钟快进，**并不会让浏览器多排一帧**，所以"多等一会儿"
+买不到任何东西，红绿照旧随机。
+**真正管用的两条**：
+① **能顶掉就顶掉**：让产品在 `import.meta.env.DEV` 下把**同一个**内部函数挂到 `window` 上
+（`OverlayScroll` ⇒ `__ddtoolkitOsSync`），探针显式调它。被绕过的只是**浏览器排帧**，
+被测逻辑一个字节没动 —— 本仓已有同款先例（`__ddtoolkitSetShellHidden` / `__ddtoolkitCloseClick` /
+`__ddtoolkitCorners` / `__ddtoolkitSeedReport`）。**钩子不在就等于空转** ⇒ 探针要把它当**前提**
+查出来（`osSyncHook <= 0` 直接判红），别让它悄悄退化成赌运气。
+② 顶不掉就**只把"信号到达"当判据、别把"等了多久"当判据**，并把"信号没到"报成**前提失败**
+（例如"上滚后 `data-scroll-dir` 应为 `up`"）—— 否则那条判据是**空转通过**。
+判红之后**仍要做反向验证**（§0.7）：把产品那一侧真切断，确认红的还是那几条、
+且不是被新的等待/钩子掩盖。同族：`nextFrame()` 是 `rAF`+50ms 定时器**双保险**（dev 探针里的工具），
+要用它，别自己写裸 `requestAnimationFrame`。
+
 ---
 
 ## 七、并行开发：**本仓不采用**（2026-09-24 定）＋ 两条通用教训

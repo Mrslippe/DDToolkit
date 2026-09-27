@@ -203,6 +203,17 @@ export default function OverlayScroll({
     const onWinPointerUp = () => endDrag()
     const onWinBlur = () => endDrag()
 
+    // ── dev 自检口（生产构建里 `import.meta.env.DEV` 为 false ⇒ 整段被摇掉）────
+    // `sync()` 之后只从 rAF 里跑（滚动事件里一次 + 下面 400ms 轮询一次），而
+    // **Chrome 虚拟时间下 rAF 几乎不被服务** ⇒ `scripts/ui_probe.py` 量
+    // `data-scroll-dir` / `data-scrolled` 会读到挂载时那次**同步** `sync()` 写的旧值
+    // （`--toolbar` 的"向下滚动让位"因此假红过；而且**多等一会儿救不了** ——
+    //  虚拟时间里"等待"只是把虚拟钟快进，并不产生帧，实测等 2s 仍然读到旧值）。
+    // 这里把**同一个** `sync` 交给探针显式调用：被绕过的只是**浏览器排帧**这一步，
+    // 产品逻辑（方向阈值 / 只在翻向时写 DOM / 顶部复位）一个字节都没动。
+    const devSyncHost = window as unknown as { __ddtoolkitOsSync?: Array<() => void> }
+    if (import.meta.env.DEV) (devSyncHost.__ddtoolkitOsSync ??= []).push(sync)
+
     sc.addEventListener('scroll', onScroll, { passive: true })
     root.addEventListener('mouseenter', onEnter)
     root.addEventListener('mouseleave', onLeave)
@@ -225,6 +236,11 @@ export default function OverlayScroll({
 
     sync()
     return () => {
+      if (import.meta.env.DEV) {
+        const list = devSyncHost.__ddtoolkitOsSync
+        const i = list ? list.indexOf(sync) : -1
+        if (list && i >= 0) list.splice(i, 1)
+      }
       sc.removeEventListener('scroll', onScroll)
       root.removeEventListener('mouseenter', onEnter)
       root.removeEventListener('mouseleave', onLeave)

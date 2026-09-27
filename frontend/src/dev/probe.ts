@@ -2361,31 +2361,42 @@ export async function runUiProbe(): Promise<void> {
         await sleep(400)
         result.shownAgain = snap()
         // **向下滚**：分几步，让 `data-scroll-dir` 真的翻成 down。
-        // ⚠️ **每步都要等 `sync()` 真的跑过**：`OverlayScroll` 的 `onScroll` 把 `sync()`
-        //    包在 `requestAnimationFrame` 里，而**虚拟时间下 rAF 几乎不被服务**
-        //    （DEV-LOOP 记过：400ms 里只被叫 0–1 次）⇒ 只 `sleep` 会读到"方向还没写"。
-        //    第一次跑就踩到：报"方向信号没接上"，实际是尺子等错了东西。
-        //    `waitFrame()` 显式等一帧（探针里已有这个工具），比加长 sleep 可靠。
+        // ⚠️ **`sync()` 只从 rAF 里跑**（`OverlayScroll` 的 `onScroll` 把它包在
+        //    `requestAnimationFrame` 里，另外每 400ms 轮询一次），而**虚拟时间下 rAF
+        //    几乎不被服务**（DEV-LOOP 记过：400ms 里只被叫 0–1 次）。
+        //    ⚠️ **加长等待救不了**（2026-09-27 实测，devlog/219）：虚拟时间里"等待"
+        //    只是把虚拟钟快进、**并不产生帧** —— 有界轮询 2s 之后仍读到挂载时那次
+        //    **同步** `sync()` 写的 `'up'`，还报出"方向信号没接上"+"没立即让位"
+        //    两条**假红**（同样的代码再跑一次就绿，看着像产品 flake，其实是尺子）。
+        // ⇒ 用 dev 钩子**显式顶掉排帧这一步**：`OverlayScroll` 在 dev 构建里把
+        //    **同一个** `sync` 挂在 `window.__ddtoolkitOsSync`（见那里的注释）。
+        //    产品逻辑（方向阈值 / 只在翻向时写 DOM / 顶部复位）一个字节没动。
+        const osSync = (window as unknown as { __ddtoolkitOsSync?: Array<() => void> })
+          .__ddtoolkitOsSync
+        result.osSyncHook = Array.isArray(osSync) ? osSync.length : -1
         for (let i = 1; i <= 3; i++) {
           scroller.scrollTop = 60 * i
           scroller.dispatchEvent(new Event('scroll', { bubbles: true }))
+          osSync?.forEach((f) => f())
           await nextFrame()
           await sleep(60)
         }
         await nextFrame()
-        await sleep(120)
+        await sleep(60)
         result.afterScrollDown = snap()
         result.scrollDir = scroller.closest('.os-root')?.getAttribute('data-scroll-dir') ?? null
         // **向上滚**（用户明确选的另一半）：滚回去，条**不许**自己冒出来
         for (let i = 2; i >= 0; i--) {
           scroller.scrollTop = 60 * i
           scroller.dispatchEvent(new Event('scroll', { bubbles: true }))
-          await nextFrame()
+          osSync?.forEach((f) => f())     // 同样顶掉排帧：这样"上滚写 up"这条**变异**
+          await nextFrame()              // 一定送达到状态机，判据不会空转
           await sleep(60)
         }
         await nextFrame()
         await sleep(300)
         result.afterScrollUp = snap()
+        result.scrollDirUp = scroller.closest('.os-root')?.getAttribute('data-scroll-dir') ?? null
         // 指针**离开热区再回来** ⇒ 抑制解除（否则"下滚过"会把它永久按死）
         move(pr.left + pr.width / 2, pr.bottom - 8)
         await sleep(1400)

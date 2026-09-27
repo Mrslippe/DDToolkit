@@ -3659,7 +3659,16 @@ def main() -> int:
                 else:
                     print(f"  滚动靶：{tb.get('scrollerInfo')}")
                     print(f"  滚动：前={_sh(again)} 下滚后={_sh(sd)}(dir={tb.get('scrollDir')!r})"
-                          f" 上滚后={_sh(su)} 离开回来={_sh(back)}")
+                          f" 上滚后={_sh(su)}(dir={tb.get('scrollDirUp')!r}) 离开回来={_sh(back)}")
+                    # ⚠️ **前提检查**：方向的写入只发生在 rAF 里，而虚拟时间下 rAF 几乎
+                    #    不被服务（devlog/219 §四）⇒ 探针靠 dev 钩子 `__ddtoolkitOsSync`
+                    #    把排帧那一步显式顶掉。钩子不在 = 这一读是在赌排帧运气
+                    #    （**空转不是通过**：先确认跑的是 dev 构建、钩子注册没被摇掉）。
+                    if (tb.get("osSyncHook") or 0) <= 0:
+                        failures.append(f"@{w} toolbar: 读不到 dev 钩子 `window.__ddtoolkitOsSync`"
+                                        f"（osSyncHook={tb.get('osSyncHook')!r}）—— 方向写入只从 "
+                                        f"rAF 里跑，虚拟时间下 rAF 几乎不被服务 ⇒ 下面的滚动判据"
+                                        f"会退化成赌排帧运气（**空转不是通过**）")
                     # ⚠️ **前提检查**（§6.3：别拿被测对象的症状当前提）：
                     #    下滚之前它必须是**呼出**的，否则"滚完是收着的"证明不了任何事。
                     if again.get("shown") != "1":
@@ -3680,6 +3689,12 @@ def main() -> int:
                             failures.append(f"@{w} toolbar: 向上滚动后工具条**自己冒出来了**"
                                             f"（shown={su.get('shown')}）—— 用户口径是"
                                             f"「向上滚不动，仍靠指针呼出」")
+                        # ⚠️ 上滚那条的**前提**：`up` 必须真的被写进 DOM 过 —— 否则状态机
+                        #    压根没收到通知，"没冒出来"是**空转通过**（同 §6.3 的理由）。
+                        if tb.get("scrollDirUp") != "up":
+                            failures.append(f"@{w} toolbar: 上滚后 `data-scroll-dir` 是 "
+                                            f"{tb.get('scrollDirUp')!r}，应为 'up' —— "
+                                            f"「上滚不许自己冒出来」这条会空转（空转不是通过）")
                         if back.get("shown") != "1" or (back.get("opacity") or 0) < 0.98:
                             failures.append(f"@{w} toolbar: 下滚过之后指针离开再回热区**呼不出来**"
                                             f"（shown={back.get('shown')} opacity={back.get('opacity')}）"

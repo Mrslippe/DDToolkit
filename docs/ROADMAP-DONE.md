@@ -547,6 +547,7 @@
 | 批次 13（Q1 的便宜那一半）：**失败可判别** —— `ApiError`（`status`/`detail`/`path`）+ `ApiShapeError` + 三个关键响应的**运行时**形状校验；兼容三条硬约束（extends Error、文案逐字不变、取消仍是 AbortError）审过全仓 121 处 catch；16 条判据 + 4 种反向改法全红；**不引 zod**、OpenAPI 生成按修正暂缓 | 216 |
 | 批次 14c（Q2 优先段）：**场次详情弹窗迁 Radix Dialog** —— 顺手修掉"Esc 由父组件卸载、退场动画播不出来"；标题/副行进 `aria-labelledby`/`describedby`，焦点与背景 inert 交给 Radix。另加无限滚动 **live region** + 显式「加载更多」、canvas/SVG 补 `role=img`；**本仓第一条 jsdom 组件用例（11 条，零新依赖）**；14a/14b 未做 | 217 |
 | 批次 12（M4 第一刀）：**`useToolbarVisibility` 抽成 hook**（`PostsPage` −118 行）+ 8 条 jsdom hook 用例（dwell / grace / 闪现只一次 / StrictMode 不许永久停住 / 向下滚动让位 / `subtree:true`）；三条硬约束**逐字保留**；另三台 hook 与 typed event 记进 TODO | 218 |
+| 批次 12（M4 第二刀）：**`usePostQueryState` 抽成 hook**（七字段 + 300ms 防抖 + 换账号即重置；`PostsPage` 913 → 893）+ 7 条 jsdom 用例（含时序判据）；6 个 handler 的 `setPage(1)` 留在页面（避免与分页机循环依赖）；顺带修掉 `ui_probe --toolbar` 的假红（rAF 在虚拟时间下不被服务 ⇒ 改走 dev 钩子） | 219 |
 
 > **编号列怎么写**（2026-09-23 定）：
 > - 有 devlog 的批次 → **裸编号**（`| 097 |`）；

@@ -29,6 +29,11 @@
 2. **会写盘 / 种数据的模式跑在数据目录副本上**（`--settings` / `--app-settings` / `--reservations`），绝不碰开发库。
 3. **量不到 ≠ 通过**：取值一旦为 `null`（选择器踩空）直接判失败；探针跑在**虚拟时间**下 ——
    量"有没有生效"先注入 `animation:none; transition:none`，量"动画对不对"才让它开着。
+4. **别"等"rAF 产物**：由 `requestAnimationFrame` 写出来的 DOM 信号（`OverlayScroll` 的
+   `data-scrolled` / `data-scroll-dir`）在虚拟时间下随时是**旧值**，而 `sleep` 只是快进虚拟钟、
+   **不会多排一帧**（2026-09-27 实测：`--toolbar` 假红，加长等待无效）。要么调产品在 DEV 下
+   注册的钩子（`window.__ddtoolkitOsSync`）顶掉排帧，要么把"信号到达"当**前提失败**报出来。
+   细则与反向验证做法：`docs/DEV-LOOP.md` §6.16。
 
 ## 口径提醒
 

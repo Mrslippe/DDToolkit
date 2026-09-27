@@ -42,8 +42,8 @@ import HeroCardsView from '../components/posts/HeroCardsView'
 import ListHeaderActions from '../components/posts/ListHeaderActions'
 import PostListView from '../components/posts/PostListView'
 import ProfileBoardView from '../components/profile/ProfileBoardView'
-import type { ArchivedFilter } from '../components/PostFilterPop'
 import { useToolbarVisibility } from '../hooks/useToolbarVisibility'
+import { usePostQueryState } from '../hooks/usePostQueryState'
 import './../styles/posts.css'
 
 const PAGE_SIZE = 20
@@ -83,10 +83,18 @@ export default function PostsPage() {
   // 追加失败不清网格，仅置 loadMoreError 显示尾条重试
   const [loadingMore, setLoadingMore] = useState(false)
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null)
-  const [typeFilter, setTypeFilter] = useState<string>()
-  const [archived, setArchived] = useState<ArchivedFilter>('all')
-  // 墓碑筛选（v0.5.1）：仅显示已删除帖子（独立 toggle，与归档/类型正交）
-  const [deletedOnly, setDeletedOnly] = useState(false)
+  // 筛选：七个字段 + 「换账号即重置」全在 `hooks/usePostQueryState`（M4，devlog/219）。
+  // ⚠️ 那条重置 effect 的**依赖与时序**是契约（必须先于场景提交跑完，否则种子指纹错配）。
+  // `accountKey` 是 `selectedAccount` 的**稳定代理**（`platform:uid` 串）——
+  // 用对象引用做依赖会在每次 `getVtutber` 回填后重跑，而数据其实没变（刻意保留的窄依赖）。
+  const accountKey = selectedAccount
+    ? `${selectedAccount.platform}:${selectedAccount.platform_uid}`
+    : null
+  const {
+    typeFilter, setTypeFilter, archived, setArchived, deletedOnly, setDeletedOnly,
+    searchInput, setSearchInput, searchKw,
+    dateFrom, setDateFrom, dateTo, setDateTo, resetFilters,
+  } = usePostQueryState({ sceneAcc: vtuberId, accountKey })
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // `fetching` 随 6 个动作回调一起搬到 useVtuberActions（它只被那些动作写、被按钮读）
@@ -145,16 +153,9 @@ export default function PostsPage() {
   const [actionsOpen, setActionsOpen] = useState(false)
   const navigate = useNavigate()
 
-  // 列表页筛选：搜索关键词（防抖后生效）+ 发布时间范围
-  // （已删 / 归档 / 时间三件筛选自 P10-A 起统一收进右侧「筛选」弹窗，
-  //   但状态仍由本页持有——请求参数、预取种子、回顶依赖都不受影响）
-  const [searchInput, setSearchInput] = useState('')
-  const [searchKw, setSearchKw] = useState('')
-  const [dateFrom, setDateFrom] = useState('')
-  const [dateTo, setDateTo] = useState('')
+  // 搜索关键词（防抖后生效）+ 发布时间范围同样在 usePostQueryState 里
   /** 最近一次非空头像：切 V 间隙背景纱罩沿用，不闪空 */
   const lastAvatarRef = useRef<string | undefined>(undefined)
-  const searchTimer = useRef<number>()
   // ── 页面工具条的显隐（R45 / R45-G）──────────────────────────────────────
   // 状态机（dwell / grace / flash / 向下滚动让位 / `data-scroll-dir` 订阅）已搬到
   // `hooks/useToolbarVisibility`（2026-09-26，devlog/218）—— 那里有**逐字保留**的三条
@@ -169,11 +170,7 @@ export default function PostsPage() {
   // 时间下拉的点外关闭 / Esc 双通道自 P10-A 起下沉到 `PostFilterPop`（同款实现，
   // 一次管住整个筛选弹窗的开关）
 
-  useEffect(() => {
-    window.clearTimeout(searchTimer.current)
-    searchTimer.current = window.setTimeout(() => setSearchKw(searchInput.trim()), 300)
-    return () => window.clearTimeout(searchTimer.current)
-  }, [searchInput])
+  // 搜索防抖（300ms）与「换账号即重置」两条 effect 都在 usePostQueryState 里
 
   // 稳定回调：PostCard 已 memo，依赖它做浅比较
   const openPost = useCallback((p: Post) => {
@@ -352,27 +349,12 @@ export default function PostsPage() {
     return () => window.removeEventListener('ddtoolkit:account-progress', onProgress)
   }, [])
 
+  // 「换账号 / 换 V ⇒ 筛选重置」那条 effect 已随状态一起进 `usePostQueryState`
+  // （M4，devlog/219）——它的依赖 `[sceneAcc, accountKey]` 与「先于场景提交跑完」的时序
+  // 是契约，搬动时逐字保留；`accountKey` 因此提到 hook 调用点之前（与下面这条 effect 共用）。
+
   // 统计概览（仅列表视图需要；依赖账号 key 而非对象引用——
   // fetch-idle 时 setSelectedAccount 换新对象但 key 不变，避免重复请求）
-  const accountKey = selectedAccount
-    ? `${selectedAccount.platform}:${selectedAccount.platform_uid}`
-    : null
-
-  // 用户反馈（2026-09-05）：不同 VTuber/账号之间筛选状态不共享——切换后重置。
-  // 时序：本 effect 与 scene 提交同批 render 后运行，先于 EXIT_MS 提交完成，
-  // 提交时 filterRef 已是重置态 → 与预取默认参数一致（防种子错配）。
-  useEffect(() => {
-    setTypeFilter(undefined)
-    setSearchInput('')
-    setSearchKw('')
-    setDateFrom('')
-    setDateTo('')
-    setDeletedOnly(false)
-    // `archived` 此前漏在这条重置之外（P8-A 加归档 chip 时未同步）：留在「仅已归档」切账号，
-    // 预取恒按默认参数拉、提交却带 archived 筛选 → 种子指纹错配（列表先错一帧再被重取纠正）。
-    setArchived('all')
-  }, [scene.acc, accountKey])
-
   useEffect(() => {
     if (!selectedAccount || scene.view !== 'list') return
     let cancelled = false
@@ -811,10 +793,9 @@ return (
               setPage(1)
             }}
             onFilterReset={() => {
-              setDeletedOnly(false)
-              setArchived('all')
-              setDateFrom('')
-              setDateTo('')
+              // 弹窗内三件字段的重置在 hook 里（`resetFilters`）；`setPage(1)` 留在这里 ——
+              // 它属于分页机，硬塞进 query hook 会让两台机器互相依赖（devlog/219）。
+              resetFilters()
               setPage(1)
             }}
             stats={stats}
