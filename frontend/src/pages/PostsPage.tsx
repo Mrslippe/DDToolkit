@@ -20,7 +20,7 @@ import {
 import { api, resolveAsset } from '../api/api'
 import { useFetchBusy } from '../fetchBusy'
 import type { Account, AccountSnapshot, Post, PostStats, VTuber } from '../api/types'
-import { mergeAccountSnapshots, mergeVtuberSnapshots } from '../utils/accountSnapshots'
+import { mergeVtuberSnapshots } from '../utils/accountSnapshots'
 import { resolveAvatar } from '../utils/avatarSource'
 import { affectsFanTrend, onFetchIdle } from '../utils/fetchIdle'
 import { typeGroupsFor } from '../utils/postTypes'
@@ -45,6 +45,7 @@ import ProfileBoardView from '../components/profile/ProfileBoardView'
 import { useToolbarVisibility } from '../hooks/useToolbarVisibility'
 import { usePostQueryState } from '../hooks/usePostQueryState'
 import { usePostPagination } from '../hooks/usePostPagination'
+import { useSelectedAccount } from '../hooks/useSelectedAccount'
 import './../styles/posts.css'
 
 const PAGE_SIZE = 20
@@ -74,19 +75,21 @@ export default function PostsPage() {
   const vtuberId = Number(id)
 
   const [vtuber, setVtuber] = useState<VTuber | null>(null)
-  const [selectedAccount, setSelectedAccount] = useState<Account | null>(null)
   const [stats, setStats] = useState<PostStats | null>(null)
 
   // 分页机（`posts` / `total` / `page` / `loadingMore` / `loadMoreError` + 哨兵 + 回顶）
-  // 在 `hooks/usePostPagination`（M4，devlog/220）—— 它的调用点在 `scene` 之后
+  // 在 `hooks/usePostPagination`（M4，devlog/221）—— 它的调用点在 `scene` 之后
   // （哨兵与回顶都按**已提交**的视图判定），取数 effect（下面那条）仍留在本页。
   // 筛选：七个字段 + 「换账号即重置」全在 `hooks/usePostQueryState`（M4，devlog/219）。
   // ⚠️ 那条重置 effect 的**依赖与时序**是契约（必须先于场景提交跑完，否则种子指纹错配）。
-  // `accountKey` 是 `selectedAccount` 的**稳定代理**（`platform:uid` 串）——
-  // 用对象引用做依赖会在每次 `getVtutber` 回填后重跑，而数据其实没变（刻意保留的窄依赖）。
-  const accountKey = selectedAccount
-    ? `${selectedAccount.platform}:${selectedAccount.platform_uid}`
-    : null
+  // 选定账号的身份机（`selectedAccount` + `accountKey` + 两套对账口径 + 增量合并）
+  // 在 `hooks/useSelectedAccount`（M4，devlog/222）；`accountKey` 是**稳定代理**
+  // （`platform:uid` 串）—— 用对象引用做依赖会在每次 `getVtuber` 回填后重跑，
+  // 而数据其实没变（刻意保留的窄依赖）。
+  const {
+    selectedAccount, setSelectedAccount, accountKey,
+    reconcileByUid, reconcileById, applySnapshots,
+  } = useSelectedAccount()
   const {
     typeFilter, setTypeFilter, archived, setArchived, deletedOnly, setDeletedOnly,
     searchInput, setSearchInput, searchKw,
@@ -335,11 +338,8 @@ export default function PostsPage() {
         setVtuber(v)
         const accounts = v.accounts.filter((a) => a.platform_uid)
         if (accounts.length > 0) {
-          setSelectedAccount((prev) =>
-            prev
-              ? accounts.find((a) => a.platform_uid === prev.platform_uid) ?? accounts[0]
-              : accounts[0],
-          )
+          // 认人口径（按 `platform_uid`、没选过选第一个）在 `hooks/useSelectedAccount`
+          reconcileByUid(accounts)
         } else {
           setError('该 VTuber 没有可用账号')
         }
@@ -348,7 +348,9 @@ export default function PostsPage() {
     return () => {
       cancelled = true
     }
-  }, [scene.acc, refreshTick])
+    // `reconcileByUid` 由 hook 用 `useCallback([])` 钉成稳定引用 ⇒ 列在这里不会重跑
+    // （记在 hook 文件头；`exhaustive-deps` 无法证明 hook 返回值稳定，只能显式列出）
+  }, [scene.acc, refreshTick, reconcileByUid])
 
   // 直播/资料实时同步：与侧栏同源吃 account-progress 增量快照就地合并——
   // 短任务（轮询未目睹运行 → 无 fetch-idle 边沿）后右栏徽标会停留在旧值，
@@ -359,13 +361,13 @@ export default function PostsPage() {
       const updates = (e as CustomEvent<AccountSnapshot[]>).detail
       if (!Array.isArray(updates) || updates.length === 0) return
       setVtuber((prev) => (prev ? mergeVtuberSnapshots(prev, updates) : prev))
-      setSelectedAccount((prev) =>
-        prev ? (mergeAccountSnapshots(prev, updates) ?? prev) : prev,
-      )
+      // 未命中该账号时保持原引用（合并口径在 `hooks/useSelectedAccount`）
+      applySnapshots(updates)
     }
     window.addEventListener('ddtoolkit:account-progress', onProgress)
     return () => window.removeEventListener('ddtoolkit:account-progress', onProgress)
-  }, [])
+    // `applySnapshots` 同样是 `useCallback([])` 钉住的稳定引用 ⇒ 仍然只订阅一次
+  }, [applySnapshots])
 
   // 「换账号 / 换 V ⇒ 筛选重置」那条 effect 已随状态一起进 `usePostQueryState`
   // （M4，devlog/219）——它的依赖 `[sceneAcc, accountKey]` 与「先于场景提交跑完」的时序
@@ -814,9 +816,8 @@ return (
         vtuber={vtuber}
         onSaved={(v) => {
           setVtuber(v)
-          setSelectedAccount((prev) =>
-            prev ? (v.accounts.find((a) => a.id === prev.id) ?? v.accounts[0]) : prev,
-          )
+          // 认人口径（按 `id`、没选过就不选 —— 与 E7 那条**刻意不同**，见 hook 文件头）
+          reconcileById(v.accounts)
           // R33 补（2026-09-19，用户：「修改过的签名左栏没有及时同步」）：
           // 左栏那份列表是**它自己**拉的（不是本页的子节点）⇒ 必须广播一条更新，
           // 否则右栏立刻变、左栏一直显示旧签名（R33 修的是渲染口径，缺的是这条通道）。
