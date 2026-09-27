@@ -1,5 +1,6 @@
 import type { Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliSearchResult, Capabilities, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, PoolItem, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyVtuber, UpcomingReservation, UpdatePostsResult, VTuber, VTuberFormerValues, VtuberEvent, XhsCookieSaved } from './types'
 import { ApiError, ApiShapeError } from './errors'
+import { HOST_HEADER, myHost } from '../utils/hostIdentity'
 import {
   validateFetchStatus, validatePostPage, validateVtuber, validateVtuberList,
 } from './validate'
@@ -199,6 +200,9 @@ export async function authFetch(path: string, init?: RequestInit): Promise<Respo
   await gate
   const headers = new Headers(init?.headers)
   if (apiToken) headers.set(TOKEN_HEADER, apiToken)
+  // M2（devlog/244）：宿主标识走**连接级**请求头 —— SSE 那条长连接也经过这里，
+  // 于是"这条推送是谁的"在服务端一侧就有答案（方案 §8.5 E）。
+  headers.set(HOST_HEADER, myHost())
   // ⚠️ 容忍**绝对 URL**（2026-09-25 踩到）：探针那几处写的是
   //    `` `${(import.meta.env.VITE_API_BASE) ?? '/api'}/xxx` `` —— 在探针里那已经是个完整地址。
   //    无脑拼 `apiBase` 会得到 `http://127.0.0.1:59321http://127.0.0.1:59321/xxx`，
@@ -216,6 +220,7 @@ async function request<T>(path: string, init?: RequestInit,
   //    （设了浏览器就拼不出 multipart boundary）。合并两种都照顾到。
   const headers = new Headers(init?.headers)
   if (apiToken) headers.set(TOKEN_HEADER, apiToken)
+  headers.set(HOST_HEADER, myHost())      // M2：谁点的这个动作（回环时"不重复提示"）
   const resp = await fetch(`${apiBase}${path}`, { ...init, headers })
   if (!resp.ok) {
     let detail = `${resp.status} ${resp.statusText}`

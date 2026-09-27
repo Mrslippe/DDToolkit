@@ -69,6 +69,12 @@ RING_SIZE = 50              # 回放缓冲长度（方案 §8.5 D 定稿）
 SUBSCRIBER_QUEUE_SIZE = 200  # 单个订阅者的积压上限（满了丢最旧的）
 HEARTBEAT_SECONDS = 15.0    # SSE 心跳间隔（防中间层把空闲连接掐掉）
 
+#: 宿主标识的请求头（M2，方案 §8.5 E 定稿）：`main` | `widget`。
+#: **连接级** —— 前端在 `authFetch`/`request` 里统一带上（SSE 连接也走同一条路）。
+#: 后端把"谁点的这个动作"原样放进消息的 `originator`；订阅者据此**不重复提示**自己刚做过的事。
+#: ⚠️ 前端那一份的真源是 `frontend/src/utils/hostIdentity.ts::HOST_HEADER`（有对账用例）。
+HOST_HEADER = "X-DDToolkit-Host"
+
 
 def now() -> float:
     """服务端时间（epoch 秒）。单独抽出来便于测试替换。"""

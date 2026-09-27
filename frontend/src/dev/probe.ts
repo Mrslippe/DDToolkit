@@ -1346,6 +1346,44 @@ async function probeMessages(): Promise<Record<string, unknown>> {
     result.liveAlertItems = alertItems
     result.liveShown = alertItems.includes(`${edgeName} 开播了`)
     window.removeEventListener('ddtoolkit:live-edge', onLive)
+
+    // ⑤ 手动动作（M2，devlog/244）：受理推进度、完成看 `originator`。
+    //    ⚠️ 这一步验的是**回环规则**：自己（main）点的完成提示必须**不弹**，
+    //    别人（widget）点的必须弹 —— 探针自己就是 main（`hostIdentity` 默认值）。
+    const readPanel = async () => {
+      const cap2 = island()
+      if (cap2) hoverAt(cap2, 'pointerover')
+      const pnl = await waitFor(() => document.querySelector<HTMLElement>('.si-panel'), 3000)
+      const items = pnl
+        ? [...pnl.querySelectorAll<HTMLElement>('.si-item')].map((el) => ({
+            kind: el.getAttribute('data-kind') || '',
+            text: (el.querySelector('.si-item-text')?.textContent || '').trim(),
+          }))
+        : []
+      if (pnl) hoverAt(pnl, 'pointerout')
+      await waitFor(() => !document.querySelector('.si-panel'), 3000)
+      return items
+    }
+
+    const acceptedText = `受理探针 ${Date.now() % 100000}`
+    await publish('notice.progress', { task: 'account', text: acceptedText, originator: 'main' })
+    await sleep(200)
+    const afterProgress = await readPanel()
+    result.progressPanelTexts = afterProgress.map((i) => i.text)
+    result.progressShown = afterProgress.some(
+      (i) => i.kind === 'progress' && i.text === acceptedText)
+
+    const ownText = `自己点的 ${Date.now() % 100000}`
+    await publish('notice.message', { text: ownText, originator: 'main' })
+    await sleep(200)
+    const afterOwn = await readPanel()
+    result.ownToastShown = afterOwn.some((i) => i.text === ownText)
+
+    const otherText = `别人点的 ${Date.now() % 100000}`
+    await publish('notice.message', { text: otherText, originator: 'widget' })
+    await sleep(200)
+    const afterOther = await readPanel()
+    result.otherToastShown = afterOther.some((i) => i.text === otherText)
   } catch (err) {
     result.error = String(err)
   } finally {

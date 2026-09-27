@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { on } from './appEvents'
 import { MESSAGE_STREAM_PATH } from './eventStream'
+import { myHost, setHost } from './hostIdentity'
 import {
   KNOWN_MESSAGE_TYPES, bridgeMessage, parseLiveEdge, startMessageBus, stopMessageBus,
   type BusMessage,
@@ -120,6 +121,60 @@ describe('① 消息 → 应用事件', () => {
     const edges = collector(host, 'ddtoolkit:live-edge')
     bridgeMessage(msg('domain.live.edge', EDGE, true), host)
     expect(edges).toEqual([])
+  })
+})
+
+describe('①″ 手动动作（M2）：受理推进度、完成看 originator', () => {
+  it('`notice.progress` 解成结构化事件，**不管是不是自己点的都发**', () => {
+    const host = new EventTarget()
+    const progresses = collector(host, 'ddtoolkit:progress')
+    bridgeMessage(msg('notice.progress', { task: 'account', text: '账号信息抓取中 - V',
+                                           originator: 'main' }), host)
+    expect(progresses).toEqual([
+      { task: 'account', text: '账号信息抓取中 - V', originator: 'main' },
+    ])
+  })
+
+  it('缺 `text` 的进度不发（不发半个事件）', () => {
+    const host = new EventTarget()
+    const progresses = collector(host, 'ddtoolkit:progress')
+    bridgeMessage(msg('notice.progress', { task: 'account' }), host)
+    bridgeMessage(msg('notice.progress', {}), host)
+    expect(progresses).toEqual([])
+  })
+
+  it('**自己点的那次完成不重复弹**（本地已经弹过胶囊了）', () => {
+    const host = new EventTarget()
+    const pills = collector(host, 'ddtoolkit:pill-message')
+    bridgeMessage(msg('notice.message', { text: '账号信息更新完成 · 成功 1', originator: 'main' }), host)
+    expect(pills, '自己点的 ⇒ 不弹').toEqual([])
+  })
+
+  it('别人点的完成**要**弹（小窗点的动作，主窗口得知道）', () => {
+    const host = new EventTarget()
+    const pills = collector(host, 'ddtoolkit:pill-message')
+    bridgeMessage(msg('notice.message', { text: '账号信息更新完成 · 成功 1', originator: 'widget' }), host)
+    expect(pills).toEqual([{ text: '账号信息更新完成 · 成功 1' }])
+  })
+
+  it('**没带宿主**的完成照常弹（"不知道谁点的" ⇒ 宁可重复也不要静默丢掉一条通知）', () => {
+    const host = new EventTarget()
+    const pills = collector(host, 'ddtoolkit:pill-message')
+    bridgeMessage(msg('notice.message', { text: '搞定了' }), host)
+    expect(pills).toEqual([{ text: '搞定了' }])
+  })
+
+  it('宿主标识默认 `main`，可显式切到 `widget`（小窗入口用）', () => {
+    expect(myHost()).toBe('main')
+    setHost('widget')
+    try {
+      const host = new EventTarget()
+      const pills = collector(host, 'ddtoolkit:pill-message')
+      bridgeMessage(msg('notice.message', { text: 'x', originator: 'widget' }), host)
+      expect(pills, '小窗自己点的 ⇒ 也不弹').toEqual([])
+    } finally {
+      setHost('main')
+    }
   })
 })
 

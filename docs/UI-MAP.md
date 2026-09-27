@@ -126,7 +126,10 @@
 （改为**常驻条目** + 「查看详情」开原对话框，不再自动弹窗）· 登录失效（常驻 + 「去登录」）·
 **风控冷却**（`fetch-status.rate_limit` 新增字段：`{active, reason, seconds_left}`，到点自动消失）·
 瞬时消息（ttl 4s）· **开播告警**（M1/devlog/243：**后端推来的** `domain.live.edge` ⇒
-`liveNotice`，源「开播」，**alert 级但带 2 分钟 TTL** —— 常驻会一直压住任务进度）。
+`liveNotice`，源「开播」，**alert 级但带 2 分钟 TTL** —— 常驻会一直压住任务进度）·
+**推送来的受理进度**（M2/devlog/244：手动端点受理即推 `notice.progress` ⇒ 点按钮的人
+**立刻**看到「…抓取中」，不等 3–10s 轮询；⚠️ **轮询一报到就让位**（`status.manual_running`）
++ 8s TTL 兜底 —— 两份并存会让状态岛显示"2 条通知"）。
 
 ⚠️ **第一类"推送来的"条目**（上面六类都是从 `fetch-status` 轮询算出来的）：它不经 `status`，
 而是 TopBar 上的 `liveEdge` 状态（`on(EVENTS.liveEdge)`）—— 判据要看**面板**（`.si-item[data-kind]`），
@@ -955,6 +958,7 @@ density / 折叠尺寸 `[200,40]` / 面板宽 280 / `backdrop-filter` 含 `blur(
 | `ddtoolkit:pill-message` | 抓取/更新完成；**另：后端推送来的 `notice.message`**（`utils/messageBus.ts`，M0b/devlog/242，且**补发 `replay:true` 的不发**） | TopBar 状态胶囊覆盖显示 4s |
 | `ddtoolkit:message` | **后端推送通道**（`GET /messages/stream`，SSE over fetch → `utils/eventStream.ts` → `utils/messageBus.ts`，M0b/devlog/242；信封 = `{type, payload, ts, seq, replay}`） | 暂无产品消费者（M1–M5 的挂点；探针 `ui_probe.py --messages` 与主流程三档都在断言它） |
 | `ddtoolkit:live-edge` | 后端推送的 `domain.live.edge`（T0 检测到 `live_status` 0→1，M1/devlog/243） | TopBar 收下并转成 **alert** 级条目（`liveNotice`，源「开播」，TTL 2 分钟）→ 顶栏胶囊 + 通知面板 |
+| `ddtoolkit:progress` | 后端推送的 `notice.progress`（手动端点**受理**时发，M2/devlog/244） | TopBar 收下 → **progress** 级条目（`pushed-progress`，源「任务进度」）→ 顶栏胶囊 + 面板；轮询报到即让位 |
 
 > ⚠️ **后台刷新不得打断用户草稿**（2026-09-10 修复）：上述事件会让 PostsPage 换掉 `vtuber`
 > 对象引用，任何「依赖 props 重新初始化表单」的弹窗都会把用户正在编辑的内容冲掉

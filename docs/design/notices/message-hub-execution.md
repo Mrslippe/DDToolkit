@@ -310,6 +310,19 @@ M0b 不许"探针绿了就宣布通过"。
 **门禁**：A 档（后端改）+ B 档（前端改）。
 **文档义务**：A/B 档 → devlog + `UI-MAP.md`（胶囊状态来源变更）。
 
+> ### ✅ 已落（2026-09-27，devlog/244）—— 但**只落了前半段**
+>
+> 三个手动端点（`/vtuber/{id}/fetch` · `/vtuber/fetch-posts` · `/vtuber/update-posts`）各推两条：
+> **受理** `notice.progress`（点按钮的人立刻看到，不等 3–10s 轮询）与**完成** `notice.message`
+> （带 `originator`：发起方自己**不重复提示**）。宿主标识走 **连接级**请求头
+> `X-DDToolkit-Host: main|widget`（方案 §8.5 E），`api.ts` 的两个出口统一带 ⇒ SSE 连接也带着。
+> 判据：pytest 6 + vitest 8 + 探针 3 项，**反向验证 10/10**。
+> ⚠️ 第一遍有一条变异**绿**（删掉 `request()` 的宿主头没人发现）⇒ 补了 `api.test.ts` 两条。
+>
+> ⚠️ **`kickPoll` 这次按纪律没删**（§8.4 第 1 条：先并存 → 用"断开推送 ⇒ 用例红"证明推送真的
+> 在起作用，再删补丁）⇒ **还剩 M2b**：① 做"断开推送 ⇒ 受理进度判据必须红"的反向验证；
+> ② 退役 `useVtuberActions` / `PostsPage` 的 `kickPoll()` 调用点并确认原有用例仍绿。
+
 ---
 
 ### 批次 M3 — 领域事件改推送（⚠️ **风险最高**）

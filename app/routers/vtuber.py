@@ -4,7 +4,8 @@ from datetime import date, datetime, timedelta, timezone
 
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import (APIRouter, BackgroundTasks, Depends, File, Header, HTTPException,
+                     Query, UploadFile, status)
 from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -43,8 +44,44 @@ from app.services.vtuber_history import former_values
 from app.schemas.vtuber import (LiveDanmakuInfo, LiveMetricsOut, LiveEventOut,
                                 LiveWordOut, LiveUpstreamOut)
 from app.services.post_text import extract_post_text
+from app.services import messages as message_hub
 
 logger = logging.getLogger(__name__)
+
+
+def client_host(originator: str = Header("", alias=message_hub.HOST_HEADER)) -> str:
+    """哪个宿主发起的这个动作（M2，devlog/244；方案 §8.5 E）。
+
+    前端在 `authFetch`/`request` 里统一带 `X-DDToolkit-Host: main|widget`（连接级）。
+    取不到就返回空串 —— **空串不等于任何宿主**，于是"不知道谁点的"时消息照常播给所有人
+    （宁可重复提示，也不要静默丢掉一条通知）。
+    """
+    return (originator or "").strip().lower()
+
+
+def _note_manual_start(task: str, text: str, originator: str) -> None:
+    """手动任务开始 ⇒ 推一条进度（M2）。
+
+    为什么值得推：用户点完按钮到"顶栏出现抓取中"原本要等下一次 `fetch-status` 轮询
+    （3–10s，`TopBar` 3s 忙 / 10s 闲）—— `kickPoll` 那个补丁就是为这段等待打的。
+    ⚠️ **只推"任务已受理"这一条**：逐项进度仍由状态通道（轮询）负责，前端在轮询到位后
+    就用轮询那一份（`TopBar` 的 `pushedProgress`），所以不会出现两条重复进度。
+    """
+    message_hub.HUB.publish(message_hub.MSG_NOTICE_PROGRESS, {
+        "task": task, "text": text, "originator": originator,
+    })
+
+
+def _note_manual_done(text: str, originator: str) -> None:
+    """手动任务完成 ⇒ 推一条**完成类**提示（M2）。
+
+    ⚠️ 带 `originator`：发起方自己的窗口**不重复提示**（它已经从响应里拿到结果并弹了胶囊），
+    别的订阅者（小窗 / 将来的第二窗口）才播。
+    """
+    message_hub.HUB.publish(message_hub.MSG_NOTICE_MESSAGE, {
+        "text": text, "originator": originator,
+    })
+
 
 router = APIRouter()
 
@@ -922,13 +959,18 @@ async def manual_fetch():
 
 
 @router.api_route("/vtuber/{vtuber_id}/fetch", methods=["GET", "POST"])
-async def fetch_vtuber(vtuber_id: int, db: Session = Depends(get_db)):
+async def fetch_vtuber(vtuber_id: int, db: Session = Depends(get_db),
+                       originator: str = Depends(client_host)):
     """抓取单个 VTuber 的账号信息（devlog/017）。与全局抓取互斥。"""
     if not VTuberRepo(db).get(vtuber_id):
         raise HTTPException(404, f"VTuber id={vtuber_id} 不存在")
     if manual_task_running():
         return {"status": "skipped", "message": "已有抓取任务正在进行中，请稍后再试"}
+    v = VTuberRepo(db).get(vtuber_id)
+    _note_manual_start("account", f"账号信息抓取中 - {v.name}", originator)
     result = await async_fetch_vtuber(vtuber_id)
+    text = f"账号信息更新完成 · 成功 {result.success} · 失败 {result.failed}"
+    _note_manual_done(text, originator)
     return {
         "status": "done",
         "message": f"成功 {result.success}, 失败 {result.failed}, 跳过 {result.skipped}",
@@ -948,6 +990,7 @@ async def fetch_posts_by_name(name: str, background: BackgroundTasks,
                               platform: str = "bilibili",
                               video_pages: int = 3, dynamics_pages: int = 5,
                               full: bool = False,
+                              originator: str = Depends(client_host),
                               db: Session = Depends(get_db)):
     """
     按 VTuber 名字抓取帖子。name 支持模糊匹配。
@@ -969,6 +1012,7 @@ async def fetch_posts_by_name(name: str, background: BackgroundTasks,
         if not vtubers:
             raise HTTPException(404, f"未找到名字包含 '{name}' 的 VTuber")
         background.add_task(async_fetch_vtuber_posts, name, platform)
+        _note_manual_start("full", f"全量抓取中 - {name}", originator)
         return {"status": "started", "message": "全量帖子抓取已开始（后台执行，进度见顶栏）"}
 
     if manual_task_running():
@@ -980,6 +1024,7 @@ async def fetch_posts_by_name(name: str, background: BackgroundTasks,
 
     # 前置归档：让 archived_ids 尽量完整，边界后的历史页零请求跳过
     archived_first = archive_old_posts(db=db)
+    _note_manual_start("quick", f"帖子抓取中 - {name}", originator)
 
     acc_repo = AccountRepo(db)
     total = {"videos": 0, "dynamics": 0, "stored": 0, "skipped": 0}
@@ -1009,10 +1054,12 @@ async def fetch_posts_by_name(name: str, background: BackgroundTasks,
                 for k in ("videos", "dynamics", "stored", "skipped"):
                     total[k] += getattr(r, k)
 
+    text = (f"帖子抓取完成 · 存储 {total['stored']} · 跳过 {total['skipped']}"
+            + ("（触发风控，部分内容未抓全）" if total_rl else ""))
+    _note_manual_done(text, originator)
     return {"status": "done", "archived_first": archived_first,
             "total": total, "details": results,
             "rate_limited": total_rl, "video_missing": total_vm or None}
-
 
 @router.post("/vtuber/fetch-all-posts")
 async def fetch_all_posts():
@@ -1049,7 +1096,8 @@ def archive_posts(days: int = Query(30, ge=1), db: Session = Depends(get_db)):
 
 
 @router.post("/vtuber/update-posts")
-async def update_unarchived_posts(name: str | None = None):
+async def update_unarchived_posts(name: str | None = None,
+                                  originator: str = Depends(client_host)):
     """
     更新未归档动态贴文（先归档旧帖，再抓取动态，遍历到归档边界即停）：
     1. 执行归档规则（早于 30 天前的帖子 → is_archived=1）；
@@ -1062,7 +1110,13 @@ async def update_unarchived_posts(name: str | None = None):
     _require_content_fetch()
     if manual_task_running():
         return {"status": "skipped", "message": "已有抓取任务正在进行中，请稍后再试"}
-    return await async_update_unarchived_posts(name)
+    _note_manual_start("update", f"动态更新中 - {name or '全部账号'}", originator)
+    r = await async_update_unarchived_posts(name)
+    total = (r or {}).get("total") or {}
+    _note_manual_done(
+        f"动态更新完成 · 新增 {total.get('stored', 0)} · 跳过 {total.get('skipped', 0)}",
+        originator)
+    return r
 
 
 # ── 候选池 + 添加 VTuber（v0.5：csv 降级为离线索引，启动不再导入） ──────

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { __setTauriForTest, api, holdApiUntilReady, markNoTokenRequired, resetApiReady, setApiBase, setApiToken } from './api'
+import { __setTauriForTest, api, authFetch, holdApiUntilReady, markNoTokenRequired, resetApiReady, setApiBase, setApiToken } from './api'
 
 /**
  * 取消在途请求的**管道**契约（2026-09-13，devlog/064）。
@@ -28,8 +28,29 @@ afterEach(() => {
   markNoTokenRequired()   // 默认放行闸门：**认证本身由下面那组用例专门测**
 })
 
-describe('api.liveSessionUpstream 的取消管道', () => {
-  it('把 signal 透传给 fetch（取消才可能生效）', async () => {
+describe('宿主标识（M2，devlog/244）', () => {
+  it('普通请求带 `X-DDToolkit-Host`（后端据此让"自己点的那次"不重复提示）', async () => {
+    const fetchMock = vi.fn(async () => okJson({ ok: true }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await api.deleteVtuber(9)
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    expect(new Headers(init.headers).get('X-DDToolkit-Host')).toBe('main')
+  })
+
+  it('`authFetch` 同样带上（**SSE 那条长连接也走它** —— 方案 §8.5 E 的"连接级"）', async () => {
+    const fetchMock = vi.fn(async () => okJson({ ok: true }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await authFetch('/messages/stream')
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    expect(new Headers(init.headers).get('X-DDToolkit-Host')).toBe('main')
+  })
+})
+
+describe('api.liveSessionUpstream 的取消管道', () => {  it('把 signal 透传给 fetch（取消才可能生效）', async () => {
     const fetchMock = vi.fn(async () => okJson({ danmaku: null, metrics: null, events: [] }))
     vi.stubGlobal('fetch', fetchMock)
     const ctrl = new AbortController()

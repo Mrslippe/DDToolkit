@@ -2009,6 +2009,17 @@ def _assert_messages(ms: dict | None, width: int) -> list[str]:
         bad.append(f"@{width} messages: 推了一条开播边沿，顶栏面板里却没有这条告警"
                    f"（面板={ms.get('panelOpened')}，alert 条目={ms.get('liveAlertItems')!r}）"
                    f"—— 领域事件没解出来 / 没接到 UI？")
+    # 手动动作（M2）：受理推进度 + **自家完成不重复弹**
+    if not ms.get("progressShown"):
+        bad.append(f"@{width} messages: 推了一条「任务已受理」进度，顶栏面板里没有它"
+                   f"（progress 条目={ms.get('progressPanelTexts')!r}）—— "
+                   f"点按钮的人还得等 3–10s 轮询（M2 的全部收益就在这）")
+    if ms.get("ownToastShown"):
+        bad.append(f"@{width} messages: **自己点的**完成提示又弹了一次 —— "
+                   f"自家消息回环（本地已经弹过胶囊了）")
+    if not ms.get("otherToastShown"):
+        bad.append(f"@{width} messages: **别人点的**完成提示没弹 —— "
+                   f"小窗（M4）做的动作主窗口就看不到")
     return bad
 
 
@@ -3380,6 +3391,10 @@ def main() -> int:
                 print(f"  ④ 开播边沿：发布 {ms.get('publish3Status')!r} → 事件 "
                       f"{ms.get('liveEventCount')!r} 次；面板 alert 条目="
                       f"{ms.get('liveAlertItems')!r}（进去了={ms.get('liveShown')}）")
+                print(f"  ⑤ 手动动作：受理进度进了面板={ms.get('progressShown')}"
+                      f"（{ms.get('progressPanelTexts')!r}）；"
+                      f"自家完成弹了={ms.get('ownToastShown')}（应为 False）· "
+                      f"别人完成弹了={ms.get('otherToastShown')}（应为 True）")
             rows = _assert_messages(ms, w)
             failures.extend(rows)
             for b in rows:

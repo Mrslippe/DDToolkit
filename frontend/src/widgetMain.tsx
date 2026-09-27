@@ -3,8 +3,13 @@ import ReactDOM from 'react-dom/client'
 
 import StatusWidgetWindow from './components/StatusWidgetWindow'
 import { holdApiUntilReady, markNoTokenRequired, setApiBase, setApiToken } from './api/api'
+import { setHost } from './utils/hostIdentity'
 import './styles/tokens.css'
 import './styles/status-island.css'
+
+// M2（devlog/244）：小窗的宿主标识 —— 后端据此让"小窗自己点的动作"不回环提示它自己
+// （主窗口不调它，默认就是 `main`）。
+setHost('widget')
 
 /**
  * 桌面状态控件小窗的**独立入口**（R38 批 5b，2026-09-24）。

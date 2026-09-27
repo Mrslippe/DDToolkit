@@ -572,6 +572,7 @@
 | 消息中心 M0：**推送通道骨架** —— `MessageHub` + `GET /messages/stream`（SSE over **fetch**，只在 `Last-Event-ID` 时补发带 `replay:true`）+ dev-only 合成钩子；跨线程靠 `call_soon_threadsafe`；19 条判据 + 反向 9/9；⚠️ 首版 drain 用 `run_in_executor` ⇒ 真 lifespan join 死线程、整套测试挂死 | 241 |
 | 消息中心 M0b：**前端半边** —— `utils/eventStream.ts`（帧解析、自动重连、**只在重连时带 `Last-Event-ID`**）+ `utils/messageBus.ts`（`ddtoolkit:message` + 瞬时消息点亮胶囊，**补发不弹**）+ 探针端到端（默认三档也跑）；跨语言契约读后端源码对账；顺手修探针三处裸 `urlopen`（S1 后恒定 401） | 242 |
 | 消息中心 M1：**开播边沿的出口** —— T0 的 `edge/started` 原先只喂"动态流恢复满速"，现在 `commit` **之后**多一条 `domain.live.edge` ⇒ 顶栏 alert「XXX 开播了」（带 TTL，不常驻）；补 **`POST /messages/ack`**：客户端读到第一块字节时报一次 ⇒ 真机 WebView2 能否读流在日志里一句话可查（方案停止条件的**可获得见证**，也是 M5 订阅者注册表的雏形） | 243 |
+| 消息中心 M2（**前半段**）：**手动动作走推送** —— 三个手动端点各推"受理 `notice.progress`"（点按钮立刻看到，不等 3–10s 轮询）与"完成 `notice.message`"+`originator`（发起方**不重复提示**）；宿主标识走**连接级** `X-DDToolkit-Host: main\|widget`（§8.5 E）。`kickPoll` 按 §8.4 纪律**先并存**、退役留 M2b；反向 10/10（含一条绿变异 ⇒ 补了 api 两条判据） | 244 |
 
 > **编号列怎么写**（2026-09-23 定）：
 > - 有 devlog 的批次 → **裸编号**（`| 097 |`）；

@@ -20,7 +20,8 @@
  * ⚠️ 与 `fetch-status` 轮询**并存**：推送会漏（重连窗口），轮询是兜底。本模块不退役任何轮询。
  */
 import { authFetch } from '../api/api'
-import { EVENTS, emit, type LiveEdgePayload } from './appEvents'
+import { myHost } from './hostIdentity'
+import { EVENTS, emit, type LiveEdgePayload, type PushedProgressPayload } from './appEvents'
 import { startMessageStream, type MessageStreamHandle, type StreamMessage } from './eventStream'
 
 export type BusMessage = StreamMessage
@@ -42,6 +43,34 @@ const MSG_NOTICE_MESSAGE = 'notice.message'
 
 /** 开播边沿（M1）：后端 `scheduler.py` 在 T0 检测到 `live_status` 0→1 时发。 */
 const MSG_LIVE_EDGE = 'domain.live.edge'
+
+/** 手动任务开始（M2）：后端在手动端点里发（点按钮 ⇒ 立刻看到进度，不等轮询）。 */
+const MSG_NOTICE_PROGRESS = 'notice.progress'
+
+/** 谁点的这个动作（M2，方案 §8.5 E）：与自己一致 ⇒ **完成类**提示不再重复弹。 */
+function originatorOf(payload: Record<string, unknown> | undefined): string {
+  const v = payload?.originator
+  return typeof v === 'string' ? v : ''
+}
+
+/** 完成类提示要不要弹：**自己点的那次不弹**（本地已经弹过胶囊/红字了）。 */
+function shouldToast(payload: Record<string, unknown> | undefined): boolean {
+  const who = originatorOf(payload)
+  return !who || who !== myHost()
+}
+
+/** 把信封的 payload 解成进度事件；缺 `text` 返回 null（**不发半个事件**）。 */
+export function parseProgress(
+  payload: Record<string, unknown> | undefined,
+): PushedProgressPayload | null {
+  const text = typeof payload?.text === 'string' ? payload.text : ''
+  if (!text) return null
+  return {
+    task: typeof payload?.task === 'string' ? payload.task : '',
+    text,
+    originator: originatorOf(payload),
+  }
+}
 
 /** 开播 payload 的**必需字段**（后端改名而这里没改 ⇒ 宁可当成"解不出来"也不发半个事件）。 */
 const LIVE_EDGE_FIELDS = [
@@ -85,7 +114,16 @@ export function bridgeMessage(msg: BusMessage, host: Host = defaultHost()): void
     if (edge) emit(EVENTS.liveEdge, edge, host)
     return
   }
-  if (msg.type !== MSG_NOTICE_MESSAGE) return // 别的类型各有消费者，M2–M5 里接
+  if (msg.type === MSG_NOTICE_PROGRESS) {
+    // 手动任务开始（M2）：**不管 originator 是不是自己都发** —— 让点按钮的人"立刻看到"
+    // 正是这一批的全部收益（见 hostIdentity.ts 的口径 ③）。
+    const progress = parseProgress(msg.payload)
+    if (progress) emit(EVENTS.progress, progress, host)
+    return
+  }
+  if (msg.type !== MSG_NOTICE_MESSAGE) return // 别的类型各有消费者，M3–M5 里接
+  // 完成类提示：**自己点的那次不弹**（本地已经弹过胶囊了，再弹一次就是重复提示）
+  if (!shouldToast(msg.payload)) return
   const text = typeof msg.payload?.text === 'string' ? msg.payload.text : ''
   if (text) emit(EVENTS.pillMessage, { text }, host)
 }

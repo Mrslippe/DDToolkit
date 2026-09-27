@@ -479,6 +479,12 @@
 
 > **冷启动优化**：scheduler 依赖链（apscheduler/tenacity/httpx/fetcher）较重，路由内不直接
 > import，经 `_sched()` 缓存包装首次调用才导入；测试 monkeypatch 本模块属性即可替换。
+>
+> **手动动作会推消息**（M2，devlog/244）：三个"点按钮"端点（`POST /vtuber/{id}/fetch`、
+> `POST /vtuber/fetch-posts`、`POST /vtuber/update-posts`）各在**受理时**推一条
+> `notice.progress`、**完成时**推一条 `notice.message`（带 `originator` = 请求头
+> `X-DDToolkit-Host`，见 `client_host` 依赖；发起方自己的窗口据此**不重复提示**）。
+> ⚠️ 被守卫拒绝（`skipped`）的任务**不发**受理消息；逐项进度仍由状态通道（轮询）负责。
 
 **VTuber**
 

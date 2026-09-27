@@ -41,7 +41,24 @@ export const EVENTS = {
   message: 'ddtoolkit:message',
   /** 开播边沿（M1，devlog/243）：后端推 `domain.live.edge` ⇒ 这里转成顶栏告警 */
   liveEdge: 'ddtoolkit:live-edge',
+  /** 手动任务开始（M2，devlog/244）：后端推 `notice.progress` ⇒ 点按钮的人**立刻**看到进度 */
+  progress: 'ddtoolkit:progress',
 } as const
+
+/**
+ * 手动任务进度（M2，devlog/244）—— 与后端 `routers/vtuber.py` 的发布点逐字对应。
+ *
+ * ⚠️ 它是**"抢在轮询前面"的那一份**：`fetch-status` 仍是进度的最终真源，
+ * 前端只在轮询还没报到（`manual_running` 仍为 false）时用它顶上（见 TopBar 的 `pushedProgress`）。
+ */
+export interface PushedProgressPayload {
+  /** 机器口径的任务名（`full` / `quick` / `account` / `update`…），与状态通道同一套 */
+  task: string
+  /** 给人看的一行文案（后端组好；前端不自己拼） */
+  text: string
+  /** 谁点的（`main` / `widget`；空串 = 自动档或老客户端） */
+  originator?: string
+}
 
 /**
  * 开播边沿的 payload（M1，devlog/243）—— 与后端 `scheduler.py` 发布点**逐字对应**
@@ -72,6 +89,8 @@ export interface AppEventMap {
   'ddtoolkit:message': StreamMessage
   /** 开播边沿（已解成结构化 payload，消费方不必自己解析信封） */
   'ddtoolkit:live-edge': LiveEdgePayload
+  /** 手动任务开始（抢在轮询前面的那一份进度） */
+  'ddtoolkit:progress': PushedProgressPayload
 }
 
 export type AppEventName = keyof AppEventMap
@@ -88,6 +107,7 @@ export const APP_EVENT_NAMES: readonly AppEventName[] = [
   'ddtoolkit:widget-seed',
   'ddtoolkit:message',
   'ddtoolkit:live-edge',
+  'ddtoolkit:progress',
 ]
 
 /** 默认宿主：`window`（调用时取，不在模块加载时取 —— 单测跑在 node 环境时没有 `window`） */

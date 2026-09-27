@@ -25,7 +25,7 @@ import { useUpdateCheck } from '../hooks/useUpdateCheck'
 import { setFetchBusy } from '../fetchBusy'
 import { isFirstRun } from '../bootState'
 import { dispatchFetchIdle, type FetchIdleKind } from '../utils/fetchIdle'
-import { EVENTS, emit, on, type LiveEdgePayload } from '../utils/appEvents'
+import { EVENTS, emit, on, type LiveEdgePayload, type PushedProgressPayload } from '../utils/appEvents'
 import { useCapabilities, refreshCapabilities } from '../hooks/useCapabilities'
 import { hideToTray, quitApp } from '../utils/shellBridge'
 import { isShellHidden } from '../utils/shellLifecycle'
@@ -55,6 +55,8 @@ const POLL_ACTIVE_MS = 3000 // 有任务运行时的高频轮询
 const POLL_IDLE_MS = 10000 // 空闲时的低频轮询
 const POLL_RETRY_MS = 500 // 在途冲突时的重排间隔（轮询链自愈，见 poll 内注释）
 const PILL_MS = 4000 // 操作结果覆盖态的展示时长
+/** 推送来的「任务已受理」兜底 TTL（M2）：正常 3s 内就被轮询接棒清掉，这里只是防残影 */
+const PUSHED_PROGRESS_MS = 8000
 
 const isTauri = '__TAURI_INTERNALS__' in window
 
@@ -412,6 +414,7 @@ export default function TopBar() {
   // 新任务启动时由轮询立即清除让位
   const pillTimer = useRef<number | undefined>(undefined)
   const liveTimer = useRef<number | undefined>(undefined)
+  const pushedTimer = useRef<number | undefined>(undefined)
   useEffect(() => {
     return on(EVENTS.pillMessage, (detail) => {
       const text = detail?.text
@@ -432,6 +435,25 @@ export default function TopBar() {
       liveTimer.current = window.setTimeout(() => setLiveEdge(null), LIVE_NOTICE_MS)
     })
   }, [])
+
+  // 手动任务进度（M2，devlog/244）：后端推来的"任务已受理"那一份，用来**抢在轮询前面**
+  // 让点按钮的人立刻看到「…抓取中」（`kickPoll` 那个补丁就是为这 3–10s 打的）。
+  //
+  // ⚠️ 两条配合才不留残影：
+  //   ① **轮询一报到就退位**（`status.manual_running` 变 true ⇒ 清掉）—— 轮询是进度的最终真源，
+  //      两份并存会让状态岛显示"2 条通知"（视觉噪声）且文案会跳；
+  //   ② TTL 兜底（`PUSHED_PROGRESS_MS`）：任务快到"没有任何一轮轮询看见它"时，推送那份自己过期。
+  const [pushedProgress, setPushedProgress] = useState<PushedProgressPayload | null>(null)
+  useEffect(() => {
+    return on(EVENTS.progress, (p) => {
+      setPushedProgress(p)
+      if (pushedTimer.current !== undefined) clearTimeout(pushedTimer.current)
+      pushedTimer.current = window.setTimeout(() => setPushedProgress(null), PUSHED_PROGRESS_MS)
+    })
+  }, [])
+  useEffect(() => {
+    if (status?.manual_running) setPushedProgress(null)
+  }, [status?.manual_running])
 
   // 「有事发生」= 可见任务（手动/收录/外部批次）或操作结果覆盖态。
   // 自动节拍（动态轮询、自动账号流）按 2026-09-10 用户口径静默：不亮容器、不顶部文案，
@@ -510,6 +532,11 @@ export default function TopBar() {
         title: liveEdge.live_title,
         now,
       }))
+    }
+    // ⑤′ 推送来的「任务已受理」（M2）：轮询到位后由上面那个 effect 清掉，所以这里只判非空
+    if (pushedProgress) {
+      list.push({ id: 'pushed-progress', kind: 'progress', source: '任务进度',
+                  text: pushedProgress.text })
     }
     return list
     // eslint-disable-next-line react-hooks/exhaustive-deps
