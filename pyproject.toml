@@ -28,6 +28,12 @@ dependencies = [
     "apscheduler>=3.10,<4",
     "alembic>=1.13,<2",
     "python-dotenv>=1.0,<2",
+    # 小红书签名（第 4 阶段 ④ 第三刀，devlog/232）：`x-s`/`x-t`/`x-s-common` 的纯 Python
+    # 实现（MIT）。⚠️ 这是**唯一一个"平台改版即失效"的依赖** —— 调研
+    # `docs/platforms-xhs-douyin-research.md` §1.1 的结论是"自己没理由重做一遍逆向"，
+    # 但代价要认：它失效时 `XhsSigner` 会抛 `SignerUnavailable`（**响亮失败**，
+    # 不静默降级成未签名请求），届时升级本依赖或改用浏览器铸签。
+    "xhshow>=0.2,<1",
     # 扫码登录的二维码渲染（`app/services/auth.py` 之外由路由侧使用）
     "qrcode>=7,<9",
     # 弹幕分词（词云自建，devlog/061）：纯 Python、无编译依赖、自带词典数据文件；

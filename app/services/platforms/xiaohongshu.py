@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 from typing import Any, Optional
+from urllib.parse import urlencode
 
 import httpx
 
@@ -82,8 +83,9 @@ class XiaohongshuPlatform(BasePlatform):
     def _cookie_header(self) -> str:
         return self._cookies or getattr(settings, "XHS_COOKIE", "")
 
-    def _signed_headers(self, method: str, url: str, query: str,
-                        body: Optional[str] = None) -> dict[str, str]:
+    def _signed_headers(self, method: str, path: str,
+                        params: Optional[dict] = None,
+                        payload: Optional[dict] = None) -> dict[str, str]:
         if not self._cookie_header():
             # 连身份都没有就别发请求（省得被风控记一笔）
             self.last_error = {"kind": "cookie_invalid", "msg": "未配置小红书 cookie（web_session）"}
@@ -94,7 +96,8 @@ class XiaohongshuPlatform(BasePlatform):
             "referer": "https://www.xiaohongshu.com/",
         }
         headers.update(self._signer.headers(
-            method=method, url=url, query=query, body=body, cookies=self._cookie_header()))
+            method=method, uri=path, params=params, payload=payload,
+            cookies=self._cookie_header()))
         return headers
 
     @staticmethod
@@ -123,10 +126,11 @@ class XiaohongshuPlatform(BasePlatform):
         if own:
             client = httpx.AsyncClient(timeout=15.0)
         try:
-            query = f"target_user_id={uid}"
-            url = f"{BASE}/api/sns/web/v1/user/otherinfo?{query}"
-            headers = self._signed_headers("GET", f"{BASE}/api/sns/web/v1/user/otherinfo", query)
-            resp = await client.get(url, headers=headers)
+            path = "/api/sns/web/v1/user/otherinfo"
+            params = {"target_user_id": str(uid)}
+            headers = self._signed_headers("GET", path, params)
+            resp = await client.get(f"{BASE}{path}?{urlencode(params, safe=chr(44))}",
+                                    headers=headers)
             ok, body = self._parse(resp)
             if not ok:
                 self._fail(resp, body)
@@ -155,12 +159,13 @@ class XiaohongshuPlatform(BasePlatform):
             if page <= 1:
                 self._cursor[str(uid)] = ""      # 第一页 = 从头开始（换账号/重抓也要能重来）
             cursor = self._cursor.get(str(uid), "")
-            # ⚠️ 手拼 query：逗号**不能**被编码（调研 §2.2）
-            query = (f"num=30&cursor={cursor}&user_id={uid}"
-                     f"&image_formats=jpg,webp,avif&xsec_source=pc_user")
             path = "/api/sns/web/v1/user_posted"
-            headers = self._signed_headers("GET", f"{BASE}{path}", query)
-            resp = await client.get(f"{BASE}{path}?{query}", headers=headers)
+            params = {"num": 30, "cursor": cursor, "user_id": str(uid),
+                      "image_formats": "jpg,webp,avif", "xsec_source": "pc_user"}
+            # ⚠️ 签名与请求**必须同一组键值**；`safe=","` 保证逗号不被编码（调研 §2.2）
+            headers = self._signed_headers("GET", path, params)
+            resp = await client.get(f"{BASE}{path}?{urlencode(params, safe=chr(44))}",
+                                    headers=headers)
             ok, body = self._parse(resp)
             if not ok:
                 self._fail(resp, body)

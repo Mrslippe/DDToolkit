@@ -25,8 +25,8 @@ class FakeSigner:
     def __init__(self):
         self.seen: list[dict] = []
 
-    def headers(self, *, method, url, query="", body=None, cookies=""):
-        self.seen.append({"method": method, "url": url, "query": query, "cookies": cookies})
+    def headers(self, *, method, uri, params=None, payload=None, cookies=""):
+        self.seen.append({"method": method, "uri": uri, "params": params, "cookies": cookies})
         return {"x-s": "FAKE-S", "x-t": "1700000000", "x-s-common": "FAKE-C"}
 
 
@@ -80,7 +80,8 @@ def test_signed_headers_are_sent_and_commas_are_not_encoded():
     assert headers["cookie"] == "web_session=xyz"
     assert "image_formats=jpg,webp,avif" in url, url
     assert "%2C" not in url, "逗号被编码了 —— 签名会校验失败（调研 §2.2）"
-    assert signer.seen[0]["query"].startswith("num=30&cursor=")
+    assert signer.seen[0]["uri"] == "/api/sns/web/v1/user_posted"
+    assert signer.seen[0]["params"]["num"] == 30 and "cursor" in signer.seen[0]["params"]
     assert out["has_more"] is True
 
 
@@ -192,3 +193,27 @@ def test_end_to_end_through_the_scheduler_lands_posts():
     assert {r.platform for r in rows} == {"xiaohongshu"}
     assert all(isinstance(r.platform_post_id, str) for r in rows)
     db.close()
+
+
+def test_real_signer_produces_headers_offline():
+    """⑨ **真签名器**（`xhshow`，已在 `uv.lock` 里）离线就能产出 `x-s`/`x-t`：
+
+    签名是**纯函数**（不需要网络），所以这条在 CI 里也跑得动。
+    它盯的是"依赖装没装上 + 调用形状对不对"（devlog/232：本刀把签名调用改成了
+    `xhshow` 的真实形状 —— `uri` = path + `params` 字典）。
+
+    ⚠️ 实测（2026-09-27）：`xhshow` **要 `a1`**（缺了直接报 `Missing 'a1' in cookies`）
+    ⇒ 小红书的身份 cookie 包至少是 `a1` + `web_session` 两件，不是文档里那句"只要 web_session"。
+    """
+    from app.services.platforms.signing import SignerUnavailable, XhsSigner
+
+    try:
+        heads = XhsSigner().headers(
+            method="GET", uri="/api/sns/web/v1/user_posted",
+            params={"num": 30, "cursor": "", "user_id": "u1",
+                    "image_formats": "jpg,webp,avif", "xsec_source": "pc_user"},
+            cookies="a1=1900abcdef; web_session=xyz")
+    except SignerUnavailable as e:      # pragma: no cover - 依赖没装才会走到
+        pytest.fail(f"签名器不可用（依赖没进环境？）：{e}")
+    assert {"x-s", "x-t"} <= set(heads), heads
+    assert heads["x-s"], "x-s 不能是空串"

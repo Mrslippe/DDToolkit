@@ -51,9 +51,10 @@ class Settings:
     WEIBO_UID: str = os.getenv("WEIBO_UID", "")
     WEIBO_NAME: str = os.getenv("WEIBO_NAME", "")
 
-    # 小红书（第 4 阶段 ④ 第一刀，devlog/230）：**只要 `web_session` 那一个 cookie**
-    # 就够（调研 §2.8；MediaCrawler 也是只注入它）。⚠️ 同一账号不允许多个网页端同时登录
-    # —— 用户自己在浏览器登录会把这里的会话踢掉，这是桌面常驻采集的硬约束。
+    # 小红书（第 4 阶段 ④，devlog/230、232）：**至少要有 `a1` 与 `web_session`**
+    # （实测 2026-09-27：签名器 `xhshow` 缺 `a1` 会直接报 `Missing 'a1' in cookies`；
+    #  调研 §2.8 只提 `web_session`，那条口径要按实测修正）。
+    # ⚠️ 同一账号不允许多个网页端同时登录 —— 用户自己在浏览器登录会把这边的会话踢掉。
     XHS_COOKIE: str = os.getenv("XHS_COOKIE", "")
 
     # 调度器
