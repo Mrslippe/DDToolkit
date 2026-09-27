@@ -18,8 +18,9 @@ fetch_bilibili_videos(mid, page=…)     # 平台协议细节写死在编排里
 
 - **本刀不新增平台能力**，也不改任何 B 站行为 —— 目标是"让 scheduler 不再假设自己是 B站"
   （用户口径见 `EXECUTION.md` §1.4）。
-- `uid` 仍是 **int**（B 站批量接口与 `_fetch_posts_for_account` 的既有形状）；
-  泛化成字符串是第二刀（连同把 B 站专属**实现**从 `scheduler.py` 搬进 `platforms/`）。
+- `uid` 已是 **str**（第二刀，devlog/236）：核心不再假设 uid 是数字，也不再认识
+  "mid" 这个词（那是 B 站的说法，住在 `platforms/bilibili_posts.py`）；
+  B 站分支自己负责"uid 必须是数字"这条校验。
 - 双流本身（"先视频后动态"）暂时仍是核心的形状 —— 它是**编排**，不是平台协议；
   真正平台专属的是下面这几个回调。
 
@@ -36,11 +37,11 @@ from typing import Any, Awaitable, Callable, Optional
 
 # 回调签名（都用 `Any` 描述载荷：本模块**不许** import scheduler 或 fetcher，
 # 否则就成环了 —— 类型宽松是这一步的代价，换来的是核心循环与平台解耦）
-VideoPage = Callable[[int, int, Optional[Any]], Awaitable[Optional[dict]]]
-DynamicsPage = Callable[[int, str, Optional[Any]], Awaitable[Optional[dict]]]
+VideoPage = Callable[[str, int, Optional[Any]], Awaitable[Optional[dict]]]
+DynamicsPage = Callable[[str, str, Optional[Any]], Awaitable[Optional[dict]]]
 BvidIndex = Callable[[Any, str], dict]
 AbsorbVideoDynamic = Callable[[Any, str, dict, dict], Optional[Any]]
-RouteNonPost = Callable[[Any, int, dict], bool]
+RouteNonPost = Callable[[Any, str, dict], bool]
 EnrichItem = Callable[[dict, Optional[Any]], Awaitable[None]]
 RefreshPinned = Callable[..., Awaitable[bool]]
 

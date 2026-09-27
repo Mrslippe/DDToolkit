@@ -30,10 +30,16 @@ from app.repositories.vtuber_repo import (
 from app.services.fetcher import (
     fetch_bilibili_user_info, fetch_bilibili_user_stat,
     fetch_bilibili_videos, fetch_bilibili_dynamics, fetch_bilibili_live_batch,
-    fetch_article_detail, fetch_video_detail, fetch_dynamic_detail,
     was_rate_limited, clear_rate_limit, rate_limit_info,
 )
 from app.services.platforms import registry
+from app.core.jsonsafe import safe_json_dict as _safe_json_parse
+# 第二刀（devlog/236）：B 站专属**实现**住在 platforms/bilibili_posts.py，
+# 这里只做绑定（见下方 BILIBILI_STREAMS）—— 编排与平台实现从此分家。
+from app.services.platforms.bilibili_posts import (
+    absorb_video_dynamic, enrich_dynamic_item, refresh_pinned_post,
+    route_live_item, video_bvid_index,
+)
 from app.services.platforms.streams import PostStreams
 from app.services.post_text import extract_post_text
 from app.services.pinned_posts import (
@@ -1604,21 +1610,6 @@ class PostFetchResult:
     pinned_cleared: int = 0
 
 
-def _safe_json_parse(s: str | None, fallback: dict | None = None) -> dict:
-    """安全解析 JSON 字符串；空值/解析失败返回 fallback（默认空字典）。
-
-    第二参数供调用方在「合并进现有 dict」场景下显式传 {}，语义更清晰。
-    """
-    if fallback is None:
-        fallback = {}
-    if not s:
-        return fallback
-    try:
-        parsed = _json.loads(s)
-        return parsed if isinstance(parsed, dict) else fallback
-    except (_json.JSONDecodeError, TypeError):
-        return fallback
-
 
 def _safe_store_post(post_repo: PostRepo, data: dict, commit: bool = True) -> bool:
     """存储单条帖子；唯一约束冲突时回滚并跳过，返回是否成功"""
@@ -1636,129 +1627,6 @@ def _safe_store_post(post_repo: PostRepo, data: dict, commit: bool = True) -> bo
 _POST_BATCH_SIZE = 50
 
 
-def _video_bvid_index(db: Session, platform_uid: str) -> dict[str, str]:
-    """bvid → 已入库 `video` 帖的 platform_post_id（P9-3 合并用）。
-
-    只为「投稿动态」判断该 bvid 是否已有投稿记录；一账号几百条视频，解析
-    body_json 的成本可接受（比每次查库便宜）。
-    """
-    out: dict[str, str] = {}
-    rows = db.query(Post.platform_post_id, Post.body_json).filter(
-        Post.platform == "bilibili", Post.platform_uid == platform_uid,
-        Post.type == "video",
-    ).all()
-    for pid, body in rows:
-        bvid = (_safe_json_parse(body) or {}).get("bvid") or pid
-        if bvid:
-            out[str(bvid)] = str(pid)
-    return out
-
-
-def _absorb_video_dynamic(db: Session, platform_uid: str, item: dict,
-                          video_by_bvid: dict[str, str]) -> str | None:
-    """把「投稿动态」并入同 bvid 的投稿帖：附言写 note，返回被并入的 video pid。
-
-    返回 None 表示这不是「已有投稿的重复动态」（调用方按普通新帖入库）。
-    合并口径见 devlog/047：列表里一条视频只出现一次，动态附言以「UP 主附言」展示。
-    """
-    body = _safe_json_parse(item.get("body_json"))
-    bvid = str(body.get("bvid") or "")
-    pid = video_by_bvid.get(bvid) if bvid else None
-    if not pid:
-        return None
-    text = (body.get("text") or "").strip()
-    if text:
-        # 只补空缺的附言，不覆盖已有内容（贴文附言可能被作者改过，先到先得更稳）
-        row = db.query(Post.note).filter(
-            Post.platform == "bilibili", Post.platform_uid == platform_uid,
-            Post.platform_post_id == pid,
-        ).first()
-        if row is not None and not (row[0] or "").strip():
-            db.query(Post).filter(
-                Post.platform == "bilibili", Post.platform_uid == platform_uid,
-                Post.platform_post_id == pid,
-            ).update({Post.note: text}, synchronize_session=False)
-    return pid
-
-
-async def _enrich_dynamic_item(d: dict, *, client: httpx.AsyncClient | None = None) -> bool:
-    """B 站动态条目的详情补全。返回是否**真的拿到了详情**（供置顶刷新判定成败）。
-
-    新帖入库与置顶帖刷新共用同一套合并口径 —— 详情字段的取舍很细（防丢图、
-    专栏 delta、视频统计合并），两处各写一遍必然漂移。
-    """
-    got_detail = False
-
-    # 图文 / 纯文字 → detail API 拿 OPUS 格式完整数据
-    if d["type"] in ("text", "image"):
-        # 防丢图：detail（opusBigCover 特性）可能只回 1 张封面图，
-        # 若 feed 的图片数更多，保留 feed 的 images
-        feed_body = _safe_json_parse(d.get("body_json", "{}"))
-        feed_images = feed_body.get("images") if isinstance(feed_body, dict) else None
-
-        detail = await fetch_dynamic_detail(d["platform_post_id"], client=client)
-        if detail:
-            for key in ("title", "summary", "cover_url", "body_json", "stats_json",
-                         "permalink", "raw_json", "published_at"):
-                if key in detail and detail[key] is not None:
-                    d[key] = detail[key]
-            if feed_images:
-                detail_body = _safe_json_parse(d.get("body_json", "{}"))
-                if len(detail_body.get("images") or []) < len(feed_images):
-                    detail_body["images"] = feed_images
-                    d["body_json"] = _json.dumps(detail_body, ensure_ascii=False, default=str)
-            await asyncio.sleep(random.uniform(0.5, 2.0))
-            got_detail = True
-        else:
-            logger.warning(f"动态详情获取失败 id={d['platform_post_id']}, 使用 feed 数据")
-
-    # 专栏 → 拉取全文
-    if d["type"] == "article":
-        body = _safe_json_parse(d.get("body_json", "{}"))
-        cv_id = body.get("cv_id") if isinstance(body, dict) else None
-        if cv_id:
-            detail = await fetch_article_detail(cv_id, client=client)
-            if detail:
-                d["body_json"] = _json.dumps({**body, "content": detail["content"]}, ensure_ascii=False, default=str)
-                # 修复：Delta 富文本专栏 → 补 delta 字段 + 纯文本（列表摘要用）
-                if detail.get("delta"):
-                    d["body_json"] = _json.dumps({
-                        **_safe_json_parse(d["body_json"], {}),
-                        "delta": detail["delta"],
-                        "text": detail["delta_text"] or body.get("text", ""),
-                    }, ensure_ascii=False, default=str)
-                d["summary"] = detail["summary"] or detail.get("delta_text") or d["summary"]
-                d["stats_json"] = _json.dumps({
-                    "view": detail.get("stats", {}).get("view", 0),
-                    "like": detail.get("stats", {}).get("like", 0),
-                    "comment": detail.get("stats", {}).get("reply", 0),
-                    "favorite": detail.get("stats", {}).get("favorite", 0),
-                }, ensure_ascii=False, default=str)
-                await asyncio.sleep(random.uniform(0.5, 2.0))
-                got_detail = True
-    elif d["type"] in ("video", "video_dynamic"):
-        body = _safe_json_parse(d.get("body_json", "{}"))
-        bvid = body.get("bvid") if isinstance(body, dict) else None
-        if bvid:
-            detail = await fetch_video_detail(bvid, client=client)
-            if detail:
-                d["body_json"] = _json.dumps({
-                    **body,
-                    "description": detail["desc"],
-                    "duration_sec": detail["duration"],
-                    "owner": detail["owner_name"],
-                    "tags": detail["tname"],
-                }, ensure_ascii=False, default=str)
-                d["cover_url"] = d["cover_url"] or detail.get("pages", [{}])[0].get("first_frame", "")
-                # 合并：详情统计（view/coin/...）+ 动态互动（forward/dyn_like/...）
-                feed_stats = _safe_json_parse(d.get("stats_json"), {})
-                d["stats_json"] = _json.dumps(
-                    {**feed_stats, **detail["stat"]}, ensure_ascii=False, default=str
-                )
-                await asyncio.sleep(random.uniform(0.5, 2.0))
-                got_detail = True
-
-    return got_detail
 
 
 async def _weibo_pinned_detail(item: dict, pf, client) -> bool:
@@ -1772,128 +1640,34 @@ async def _weibo_pinned_detail(item: dict, pf, client) -> bool:
     return True
 
 
-async def _refresh_pinned_post(post_repo: PostRepo, platform: str, platform_uid: str,
-                               item: dict, *, detail_refresher=None) -> bool:
-    """刷新一条**已入库**的置顶帖（R35）。返回是否命中既存行。
-
-    为什么需要单独一条写路径：`_safe_store_post` 遇到唯一约束冲突只
-    `rollback` + 跳过，**永远不更新既存行** —— 作者改周表/舰礼图之后，库里还是
-    首次抓到的那个版本（用户 2026-09-17 反馈的正是这个）。
-
-    两档刷新（口径见 settings.PINNED_DETAIL_REFRESH_HOURS）：
-      · feed 级：每轮都写，零额外请求（标题/摘要/封面/互动数来自列表页响应本身）；
-      · 详情级：节流窗口内不重复请求；只有**真的拿到详情**才盖时间戳，失败时
-        保留 feed 级刷新并 warn（下轮重试）——"静默失败"不能看起来像"没更新"。
-    """
-    pid = str(item["platform_post_id"])
-    row = post_repo.by_pid(platform, platform_uid, pid)
-    if row is None:
-        return False
-
-    now = datetime.now(timezone.utc).replace(tzinfo=None)
-    fields = refresh_fields(item, with_detail=False)      # feed 级（免费）
-    with_detail = (
-        detail_refresher is not None
-        and row.type in DETAIL_REFRESH_TYPES
-        and detail_refresh_due(row.pinned_refreshed_at, now,
-                               settings.PINNED_DETAIL_REFRESH_HOURS)
-    )
-    if with_detail:
-        # 详情请求会把新值合并进 item，必须在取 feed 级字段**之后**再取一次详情级字段
-        ok = bool(await detail_refresher())
-        clear_rate_limit()      # 详情风控标志只用于列表页判定，处理完立即清除
-        if ok:
-            fields.update(refresh_fields(item, with_detail=True))
-            fields["pinned_refreshed_at"] = now
-        else:
-            logger.warning(f"置顶动态详情刷新失败 {platform}:{platform_uid} pid={pid}"
-                           f"（本轮只刷 feed 字段，下轮重试）")
-
-    changed = [k for k, v in fields.items() if getattr(row, k, None) != v]
-    if not changed:
-        return True
-    post_repo.update(row.id, fields)
-    logger.info(f"置顶动态已刷新 {platform}:{platform_uid} pid={pid} "
-                f"来源={'详情' if with_detail else 'feed'} 字段={','.join(sorted(changed))}")
-    return True
-
-# 直播场次路由：mid → account_id（live_sessions 需账号外键；账号表稳定，进程内缓存）
-_bili_account_id_cache: dict[str, int | None] = {}
-
-
-def _bili_account_id(db: Session, mid: int) -> int | None:
-    key = str(mid)
-    if key not in _bili_account_id_cache:
-        acc = (
-            db.query(Account)
-            .filter(Account.platform == "bilibili", Account.platform_uid == key)
-            .first()
-        )
-        _bili_account_id_cache[key] = acc.id if acc else None
-    return _bili_account_id_cache[key]
-
-
-def _route_live_item(db: Session, mid: int, d: dict) -> None:
-    """直播开播卡片（type='live'）→ live_sessions 表（v0.9.x M2）。
-
-    数据不进入 posts 档案；live_id（B站场次 key）幂等 upsert；
-    秒级开播时间来自 live_play_info.live_start_time；end_at 由
-    merged() 用 self 快照/次日 danmakus 同步补全。
-    """
-    body = _safe_json_parse(d.get("body_json") or "{}")
-    live_id = str(body.get("live_id") or "")
-    start_ts = body.get("live_start_time")
-    if not live_id:
-        logger.warning(f"直播场次无 live_id，跳过: dyn={d.get('platform_post_id')}")
-        return
-    if not start_ts:
-        logger.warning(f"直播场次无 live_start_time，跳过: live_id={live_id}")
-        return
-    try:
-        start_at = datetime.fromtimestamp(int(start_ts), tz=timezone.utc).replace(tzinfo=None)
-    except (TypeError, ValueError, OverflowError, OSError):
-        logger.warning(f"直播场次 start_ts 异常: {start_ts}, live_id={live_id}")
-        return
-    account_id = _bili_account_id(db, mid)
-    if account_id is None:
-        logger.warning(f"mid={mid} 无对应账号，直播场次未入库: live_id={live_id}")
-        return
-    added = LiveSessionRepo(db).upsert_feed(account_id, live_id, {
-        "title": (d.get("title") or "").strip() or None,
-        "room_id": str(body.get("room_id") or "") or None,
-        "parent_area_name": body.get("parent_area_name"),
-        "area_name": body.get("area_name"),
-        "cover_url": d.get("cover_url"),
-        "start_at": start_at,
-        "raw_json": d.get("raw_json"),
-    })
-    if added:
-        logger.info(f"mid={mid} 直播场次入库 feed: live_id={live_id} title={d.get('title')!r}")
-
 # 风控续抓：列表页（视频/动态）触发风控后冷却重试本页的次数上限（A）
 _PAGE_RETRIES = 2
 
 
-# ── 平台流绑定（第 4 阶段的 ①，devlog/229）──────────────────────────────
+# ── 平台流绑定（第 4 阶段的 ①：第一刀 devlog/229 + 第二刀 devlog/236）──────
 # ⚠️ **这里是全仓唯一把"B 站协议细节"绑给帖子核心循环的地方。**
 # 以前 `_fetch_posts_core` 自己直接调 `fetch_bilibili_*` 并把 `"bilibili"` 写进
 # 去重/归档查询 —— 换个平台调用它，归档边界会**静默失效**（查的是别家的帖子）。
 # 现在核心循环只认 `PostStreams` 这套形状（见 `platforms/streams.py`），
 # 绑定集中在这一处；`tests/test_posts_core_platform.py` 有一条判据盯着
 # "核心函数里不许再出现平台字面量"。
-def _bili_fetch_video_page(mid: int, page: int, client):
-    return fetch_bilibili_videos(mid, page=page, client=client)
+#
+# 第二刀（devlog/236）把 B 站专属**实现**搬到了 `platforms/bilibili_posts.py`：
+# 这里只剩三个薄适配器（翻页 + 非帖子项分流），`scheduler.py` 里不再有 B 站实现细节。
+# `uid` 也从 int 泛化成了**字符串**（核心不再假设 uid 是数字）。
+def _bili_fetch_video_page(uid: str, page: int, client):
+    return fetch_bilibili_videos(uid, page=page, client=client)
 
 
-def _bili_fetch_dynamics_page(mid: int, offset: str, client):
-    return fetch_bilibili_dynamics(mid, offset=offset, client=client)
+def _bili_fetch_dynamics_page(uid: str, offset: str, client):
+    return fetch_bilibili_dynamics(uid, offset=offset, client=client)
 
 
-def _bili_route_non_post(db: Session, mid: int, d: dict) -> bool:
+def _bili_route_non_post(db: Session, uid: str, d: dict) -> bool:
     """直播开播场次卡：路由进 `live_sessions`，不进 posts（返回 True = 已处理）。"""
     if d.get("type") != "live":
         return False
-    _route_live_item(db, mid, d)
+    route_live_item(db, uid, d)
     return True
 
 
@@ -1901,24 +1675,27 @@ BILIBILI_STREAMS = PostStreams(
     platform="bilibili",
     fetch_video_page=_bili_fetch_video_page,
     fetch_dynamics_page=_bili_fetch_dynamics_page,
-    bvid_index=_video_bvid_index,
-    absorb_video_dynamic=_absorb_video_dynamic,
+    bvid_index=video_bvid_index,
+    absorb_video_dynamic=absorb_video_dynamic,
     route_non_post=_bili_route_non_post,
-    enrich_item=lambda d, client: _enrich_dynamic_item(d, client=client),
-    refresh_pinned=lambda post_repo, platform_uid, d, client: _refresh_pinned_post(
+    enrich_item=lambda d, client: enrich_dynamic_item(d, client=client),
+    refresh_pinned=lambda post_repo, platform_uid, d, client: refresh_pinned_post(
         post_repo, "bilibili", platform_uid, d,
-        detail_refresher=lambda: _enrich_dynamic_item(d, client=client),
+        detail_refresher=lambda: enrich_dynamic_item(d, client=client),
     ),
 )
 
 
-async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db: Session,
+async def _fetch_posts_core(uid: str, video_pages: int, dynamics_pages: int, db: Session,
                             client: httpx.AsyncClient | None = None,
                             include_videos: bool = True,
                             stop_on_existing: bool = False,
                             limit_latest: int | None = None,
                             streams: PostStreams = BILIBILI_STREAMS) -> PostFetchResult:
     """单个账号的帖子抓取核心逻辑（不含锁与 session 管理）。
+
+    ⚠️ `uid` 是**字符串**（第二刀，devlog/236）：核心不再假设它是数字，也不认识"mid"这个词
+    —— 那是 B 站的说法，`platforms/bilibili_posts.py` 才用它。
     video_pages=-1   → 全量拉取视频直到无更多结果。
     dynamics_pages=-1 → 全量拉取动态直到 has_more=false。
     include_videos=False → 只抓动态（更新未归档动态用）。
@@ -1947,7 +1724,7 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
         client = new_async_client(15.0)
 
     try:
-        platform_uid = str(mid)
+        platform_uid = uid
         post_repo = PostRepo(db)
         # 已入库帖子 ID 集合：内存去重，避免触发唯一约束回滚
         existing_ids = {
@@ -1964,7 +1741,7 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
         }
         # P9-3（v0.9.6）：bvid → 已入库的 video 帖 platform_post_id。
         # 「投稿动态」与「投稿」是同一条视频的两个来源，合并后只留 video 一条，
-        # 动态附言写进 video.note（见 `_absorb_video_dynamic`）。
+        # 动态附言写进 video.note（见 `platforms/bilibili_posts.absorb_video_dynamic`）。
         video_by_bvid = (streams.bvid_index(db, platform_uid)
                          if streams.bvid_index else {})
 
@@ -2004,13 +1781,13 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
                     if video_pages != 0:
                         result.stop_reason = "page_limit"
                     break
-                vdata = await streams.fetch_video_page(mid, page, client)
+                vdata = await streams.fetch_video_page(uid, page, client)
                 if was_rate_limited():
                     # 风控断点续抓（A）：落盘 → 冷却 → 从同一页重试，耗尽次数才放弃
                     _flush_pending()
                     if rl_retries < _PAGE_RETRIES:
                         rl_retries += 1
-                        logger.info(f"mid={mid} 视频第{page}页触发风控，冷却 "
+                        logger.info(f"uid={uid} 视频第{page}页触发风控，冷却 "
                                     f"{settings.RATE_LIMIT_COOLDOWN}s 起（连续命中会升级）"
                                     f"后重试 ({rl_retries}/{_PAGE_RETRIES})...")
                         clear_rate_limit()
@@ -2065,13 +1842,13 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
                 if dynamics_pages != 0:
                     result.stop_reason = "page_limit"
                 break
-            data = await streams.fetch_dynamics_page(mid, offset, client)
+            data = await streams.fetch_dynamics_page(uid, offset, client)
             if was_rate_limited():
                 # 风控断点续抓（A）：落盘 → 冷却 → 从同一 offset 重试，耗尽次数才放弃
                 _flush_pending()
                 if dyn_rl_retries < _PAGE_RETRIES:
                     dyn_rl_retries += 1
-                    logger.info(f"mid={mid} 动态第{dyn_page + 1}页触发风控，冷却 "
+                    logger.info(f"uid={uid} 动态第{dyn_page + 1}页触发风控，冷却 "
                                 f"{settings.RATE_LIMIT_COOLDOWN}s 起（连续命中会升级）"
                                 f"后重试 ({dyn_rl_retries}/{_PAGE_RETRIES})...")
                     clear_rate_limit()
@@ -2102,7 +1879,7 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
             for idx, d in enumerate(items):
                 # 直播开播场次卡（v0.9.x M2）：路由 live_sessions 表（不走 posts），
                 # 且计入 seen_pids 缺席判定——它不属于内容档案
-                if streams.route_non_post and streams.route_non_post(db, mid, d):
+                if streams.route_non_post and streams.route_non_post(db, uid, d):
                     continue
                 result.seen_pids.append(d["platform_post_id"])
                 result.dynamics += 1
@@ -2135,7 +1912,7 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
                         continue
 
                 # 详情补全：图文/纯文字走 opus 详情、专栏拉全文、投稿合并视频详情
-                # （R35 起这套合并口径与置顶帖刷新共用，见 _enrich_dynamic_item）
+                # （R35 起这套合并口径与置顶帖刷新共用，见 platforms/bilibili_posts.enrich_dynamic_item）
                 if streams.enrich_item is not None:
                     await streams.enrich_item(d, client)
 
@@ -2296,9 +2073,9 @@ async def _fetch_platform_posts(pf, uid: str, pages: int, db: Session,
                 result.seen_pids.append(d["platform_post_id"])
                 result.dynamics += 1
                 if d["platform_post_id"] in existing_ids:
-                    # R35：置顶帖每轮刷新（与 B 站同一套口径，见 _refresh_pinned_post）
+                    # R35：置顶帖每轮刷新（与 B 站同一套口径，见 platforms/bilibili_posts.refresh_pinned_post）
                     if d["platform_post_id"] in pinned_ids:
-                        if await _refresh_pinned_post(
+                        if await refresh_pinned_post(
                             post_repo, platform, str(uid), d,
                             detail_refresher=lambda: _weibo_pinned_detail(d, pf, client),
                         ):
@@ -2373,11 +2150,12 @@ async def _fetch_posts_for_account(acc: Account, video_pages: int, dynamics_page
     if pf is None:
         return PostFetchResult(stop_reason="error", error=f"不支持的平台 '{acc.platform}'")
     if acc.platform == "bilibili":
-        try:
-            mid = int(acc.platform_uid)
-        except (TypeError, ValueError):
+        # B 站 uid 必须是数字。⚠️ 这条校验**留在平台分支里**（第二刀后核心收字符串）：
+        # 非数字 uid 直接报错，比拿去打上游、再拿回一个空结果要清楚得多。
+        uid = str(acc.platform_uid or "").strip()
+        if not uid.isdigit():
             return PostFetchResult(stop_reason="error", error="非数字 UID")
-        result = await _fetch_posts_core(mid, video_pages, dynamics_pages, db,
+        result = await _fetch_posts_core(uid, video_pages, dynamics_pages, db,
                                          client=client, include_videos=include_videos,
                                          stop_on_existing=stop_on_existing,
                                          limit_latest=limit_latest)

@@ -263,7 +263,7 @@ VIDEO_LIST_URL = "https://api.bilibili.com/x/space/wbi/arc/search"
 DYNAMIC_LIST_URL = "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/space"
 
 
-async def fetch_bilibili_videos(mid: int, page: int = 1, page_size: int = 30,
+async def fetch_bilibili_videos(mid: int | str, page: int = 1, page_size: int = 30,
                                 client: Optional[httpx.AsyncClient] = None) -> Optional[dict]:
     """获取某用户的视频投稿列表，返回 {"items": [{bvid, title, ...}, ...], "total": N}。
     total 为 arc/search page.count（B站侧视频总数，方案 2 完整性比对用）；
@@ -316,7 +316,7 @@ async def fetch_bilibili_videos(mid: int, page: int = 1, page_size: int = 30,
         return None
 
 
-async def fetch_bilibili_dynamics(mid: int, offset: str = "",
+async def fetch_bilibili_dynamics(mid: int | str, offset: str = "",
                                   client: Optional[httpx.AsyncClient] = None) -> Optional[dict]:
     """获取某用户动态，返回 {items: [...], has_more, next_offset, pinned_ids}。
 

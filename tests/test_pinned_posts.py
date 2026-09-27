@@ -25,6 +25,7 @@ from app.models.vtuber import Post as PostModel
 from app.repositories.vtuber_repo import PostRepo
 from app.services import pinned_posts
 from app.services import scheduler as sch
+from app.services.platforms import bilibili_posts as bp
 
 
 @pytest.fixture
@@ -195,7 +196,7 @@ def test_pinned_refresh_feed_only_when_detail_not_due(db):
     calls: list[str] = []
 
     async def run():
-        return await sch._refresh_pinned_post(
+        return await bp.refresh_pinned_post(
             PostRepo(db), "bilibili", "10086", item,
             detail_refresher=_refresher(item, calls=calls))
 
@@ -214,7 +215,7 @@ def test_pinned_refresh_detail_when_due_stamps_and_recomputes_body_text(db):
     calls: list[str] = []
 
     async def run():
-        return await sch._refresh_pinned_post(
+        return await bp.refresh_pinned_post(
             PostRepo(db), "bilibili", "10086", item,
             detail_refresher=_refresher(item, calls=calls))
 
@@ -234,7 +235,7 @@ def test_pinned_refresh_detail_failure_keeps_timestamp_for_retry(db, caplog):
     calls: list[str] = []
 
     async def run():
-        return await sch._refresh_pinned_post(
+        return await bp.refresh_pinned_post(
             PostRepo(db), "bilibili", "10086", item,
             detail_refresher=_refresher(item, ok=False, calls=calls))
 
@@ -252,7 +253,7 @@ def test_pinned_refresh_ignores_missing_row(db):
     item = _post_item("NOPE")
 
     async def run():
-        return await sch._refresh_pinned_post(PostRepo(db), "bilibili", "10086", item)
+        return await bp.refresh_pinned_post(PostRepo(db), "bilibili", "10086", item)
 
     assert asyncio.run(run()) is False
 
@@ -281,11 +282,11 @@ def test_fetch_posts_core_refreshes_pinned_instead_of_skipping(monkeypatch, db):
         return {"summary": f"详情-{pid}"}
 
     monkeypatch.setattr(sch, "fetch_bilibili_dynamics", fake_dynamics)
-    monkeypatch.setattr(sch, "fetch_dynamic_detail", fake_detail)
+    monkeypatch.setattr(bp, "fetch_dynamic_detail", fake_detail)
     monkeypatch.setattr("asyncio.sleep", _fake_sleep)
 
     async def run():
-        return await sch._fetch_posts_core(123, 0, 10, db,
+        return await sch._fetch_posts_core("123", 0, 10, db,
                                            include_videos=False, stop_on_existing=True)
 
     r = asyncio.run(run())

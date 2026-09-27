@@ -338,6 +338,13 @@ POST /vtuber/adopt | POST /vtuber/{id}/accounts
 
 ## 5. 帖子抓取（B 站双流核心 `_fetch_posts_core`）
 
+> **第二刀（devlog/236）后的分工**：`_fetch_posts_core`（住在 `scheduler.py`）只管**编排**
+> —— 锁、会话、翻页、边界、批量提交；**B 站专属实现**搬去了
+> `app/services/platforms/bilibili_posts.py`（`video_bvid_index` / `absorb_video_dynamic` /
+> `enrich_dynamic_item` / `refresh_pinned_post` / `route_live_item`），由
+> `scheduler.BILIBILI_STREAMS` 那五个台阶绑上去。本节提到这些函数时，位置一律以新模块为准。
+> `uid` 也从 int 泛化成**字符串**（核心不再假设 uid 是数字；B 站分支自己校验"必须是数字"）。
+
 ### 5.1 流程
 
 ```
@@ -357,7 +364,7 @@ POST /vtuber/adopt | POST /vtuber/{id}/accounts
     article      → x/article/view (专栏全文, 含 Quill Delta)    sleep 0.5~2s
     video_dynamic→ x/web-interface/view (简介/时长/分区/统计)   sleep 0.5~2s
     ↑ v0.9.6（P9-3）：video_dynamic 若其 bvid 已作为 video 入库 → **不插库**，
-      动态附言写进该 video 的 `posts.note`（`_absorb_video_dynamic`）
+      动态附言写进该 video 的 `posts.note`（`platforms/bilibili_posts.absorb_video_dynamic`）
 批量入库：pending 攒 50 条 commit 一次（SQLite fsync 优化）
 ```
 
@@ -404,14 +411,14 @@ mymblog?uid=&page=&feature=0         页间 sleep 20s
    列表排序 `is_pinned desc, published_at desc`（置顶帖钉在本账号列表最前，只出现一次）。
    起因：周表/舰礼类置顶帖的 `published_at` 可能是上个月的 ⇒ 不置顶就沉回上个月去。
 2. **每轮刷新 + 撤销**：
-   - 已入库且在置顶集合里 ⇒ 走 `scheduler._refresh_pinned_post()`（**不再 `skipped++`**）：
+   - 已入库且在置顶集合里 ⇒ 走 `platforms/bilibili_posts.refresh_pinned_post()`（**不再 `skipped++`**）：
      列表页字段（标题/摘要/封面/互动数）每轮免费刷新；详情接口（opus 全文 / 专栏 delta）
      按 `settings.PINNED_DETAIL_REFRESH_HOURS` 节流（默认 6h，0=每轮，负=只刷列表页字段）。
      **详情失败不盖时间戳**（下轮重试 + warn）——静默失败不能看起来像"没改动"。
    - 置顶集合**只在第一页解析成功后**同步（`PostRepo.sync_pinned`）：平台只把置顶放首页，
      空集合即「当前没有置顶」⇒ 撤销 `is_pinned`（帖子回时间线原位，不删档、不留痕）；
      风控/网络失败的那一轮**绝不调同步**，否则会把置顶标记整片清空。
-   - 新帖与置顶刷新共用同一套详情合并口径（`_enrich_dynamic_item`，防两处漂移）。
+   - 新帖与置顶刷新共用同一套详情合并口径（`platforms/bilibili_posts.enrich_dynamic_item`，防两处漂移）。
 3. **已知边界**：`limit_latest`（收录首屏 / 「最新 N 条」模式）会在循环内提前 return ⇒
    那一轮不同步置顶集合（下一轮补上，首页仍在）；动态流关掉时置顶标记**冻结**（不误清）。
 

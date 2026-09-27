@@ -4,7 +4,9 @@
 专用逻辑），由 `scheduler._fetch_posts_core` 直接处理，不走通用单流循环；
 **平台细节的接线口是 `app/services/platforms/streams.py` 的 `PostStreams`**
 （2026-09-27，devlog/229：核心循环已平台无关，B 站那套实现由 `scheduler.BILIBILI_STREAMS`
-绑上去）；本适配器提供账号信息抓取（协议完整性见 base.py）。
+绑上去）；**B 站专属的帖子实现**（投稿动态合并 / 直播卡路由 / 详情补全 / 置顶刷新）
+住在 `app/services/platforms/bilibili_posts.py`（第二刀，devlog/236）；
+本适配器提供账号信息抓取（协议完整性见 base.py）。
 """
 from __future__ import annotations
 

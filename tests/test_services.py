@@ -27,6 +27,7 @@ from app.core.database import Base
 from app.models.vtuber import VTuber, Account, Post as PostModel, AccountStatSnapshot
 from app.repositories.vtuber_repo import PostRepo, AccountStatSnapshotRepo
 from app.services import scheduler
+from app.services.platforms import bilibili_posts as bp
 from app.services.fetcher import (
     _detect_rate_limit, _map_dynamic_type,
     _parse_pub_time, _parse_dynamic_pub_time,
@@ -507,11 +508,11 @@ def test_fetch_posts_core_absorbs_video_dynamic(db, monkeypatch):
 
     monkeypatch.setattr(sch, "fetch_bilibili_dynamics", fake_dynamics)
     monkeypatch.setattr(sch, "fetch_bilibili_videos", fake_videos)
-    monkeypatch.setattr(sch, "fetch_video_detail", fake_video_detail)
+    monkeypatch.setattr(bp, "fetch_video_detail", fake_video_detail)
     monkeypatch.setattr("asyncio.sleep", fake_sleep)
 
     async def run():
-        return await sch._fetch_posts_core(123, 0, 10, db, include_videos=True)
+        return await sch._fetch_posts_core("123", 0, 10, db, include_videos=True)
 
     r = asyncio.run(run())
     assert r.note_merged == 1                     # dyn-1 被吸收
@@ -547,7 +548,7 @@ def test_fetch_posts_core_keeps_note_when_video_has_one(db, monkeypatch):
     monkeypatch.setattr(sch, "fetch_bilibili_videos", fake_videos)
     monkeypatch.setattr("asyncio.sleep", fake_sleep)
 
-    asyncio.run(sch._fetch_posts_core(123, 0, 10, db, include_videos=True))
+    asyncio.run(sch._fetch_posts_core("123", 0, 10, db, include_videos=True))
     assert db.query(PostModel).filter(PostModel.platform_post_id == "BV1zz").one().note == "原附言"
 
 
@@ -581,7 +582,7 @@ def test_fetch_posts_core_stops_at_archived_boundary(monkeypatch, db):
     monkeypatch.setattr("asyncio.sleep", fake_sleep)
 
     async def run():
-        r = await sch._fetch_posts_core(123, 0, 5, db, include_videos=False)
+        r = await sch._fetch_posts_core("123", 0, 5, db, include_videos=False)
         return r, calls["n"]
 
     r, n = asyncio.run(run())
@@ -717,7 +718,7 @@ def test_fetch_posts_core_stops_on_existing(monkeypatch, db):
     monkeypatch.setattr("asyncio.sleep", fake_sleep)
 
     async def run():
-        r = await sch._fetch_posts_core(123, 0, 10, db,
+        r = await sch._fetch_posts_core("123", 0, 10, db,
                                         include_videos=False, stop_on_existing=True)
         return r, calls["n"]
 
@@ -769,11 +770,11 @@ def test_fetch_posts_core_pinned_does_not_stop_and_scans_whole_page(monkeypatch,
         # （实测该接口未登录也照发请求：0.4s 一个真响应，code=4101105）
         return None
 
-    monkeypatch.setattr(sch, "fetch_dynamic_detail", fake_detail)
+    monkeypatch.setattr(bp, "fetch_dynamic_detail", fake_detail)
     monkeypatch.setattr("asyncio.sleep", fake_sleep)
 
     async def run():
-        r = await sch._fetch_posts_core(123, 0, 10, db,
+        r = await sch._fetch_posts_core("123", 0, 10, db,
                                         include_videos=False, stop_on_existing=True)
         return r, calls["n"]
 
@@ -813,7 +814,7 @@ def test_fetch_posts_core_stop_after_full_page(monkeypatch, db):
     monkeypatch.setattr("asyncio.sleep", fake_sleep)
 
     async def run():
-        return await sch._fetch_posts_core(123, 0, 10, db,
+        return await sch._fetch_posts_core("123", 0, 10, db,
                                            include_videos=False, stop_on_existing=True)
 
     r = asyncio.run(run())
@@ -848,11 +849,11 @@ def test_fetch_posts_core_pinned_only_page_continues(monkeypatch, db):
         return None      # 置顶帖详情档：单测里不联网（R35，同上一个用例）
 
     monkeypatch.setattr(sch, "fetch_bilibili_dynamics", fake_dynamics)
-    monkeypatch.setattr(sch, "fetch_dynamic_detail", fake_detail)
+    monkeypatch.setattr(bp, "fetch_dynamic_detail", fake_detail)
     monkeypatch.setattr("asyncio.sleep", fake_sleep)
 
     async def run():
-        return await sch._fetch_posts_core(123, 0, 10, db,
+        return await sch._fetch_posts_core("123", 0, 10, db,
                                            include_videos=False, stop_on_existing=True)
 
     r = asyncio.run(run())
@@ -1007,7 +1008,7 @@ def test_fetch_posts_core_batch_commit(monkeypatch, db):
     monkeypatch.setattr("asyncio.sleep", fake_sleep)
 
     async def run():
-        return await sch._fetch_posts_core(123, 1, 0, db, include_videos=True)
+        return await sch._fetch_posts_core("123", 1, 0, db, include_videos=True)
 
     r = asyncio.run(run())
     assert r.videos == n_items
@@ -1040,8 +1041,8 @@ def test_fetch_posts_core_batch_dedup_after_restart(monkeypatch, db):
     monkeypatch.setattr("asyncio.sleep", fake_sleep)
 
     async def run():
-        await sch._fetch_posts_core(123, 1, 0, db, include_videos=True)
-        return await sch._fetch_posts_core(123, 1, 0, db, include_videos=True)
+        await sch._fetch_posts_core("123", 1, 0, db, include_videos=True)
+        return await sch._fetch_posts_core("123", 1, 0, db, include_videos=True)
 
     r = asyncio.run(run())
     assert r.stored == 0
@@ -3012,11 +3013,11 @@ def test_fetch_posts_core_limit_latest(monkeypatch, db):
         return None
 
     monkeypatch.setattr(sch, "fetch_bilibili_dynamics", fake_dynamics)
-    monkeypatch.setattr(sch, "fetch_dynamic_detail", fake_detail)
+    monkeypatch.setattr(bp, "fetch_dynamic_detail", fake_detail)
     monkeypatch.setattr("asyncio.sleep", fake_sleep)
 
     async def run():
-        return await sch._fetch_posts_core(123, 0, 3, db, include_videos=False,
+        return await sch._fetch_posts_core("123", 0, 3, db, include_videos=False,
                                            stop_on_existing=True, limit_latest=2)
 
     r = asyncio.run(run())

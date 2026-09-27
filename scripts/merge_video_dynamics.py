@@ -9,7 +9,7 @@ platform_post_id=动态 id，body_json.bvid 指向同一 bvid）。本地实测 
 归并口径（2026-09-10 用户定案）：**只保留 video 一条**；动态里的附言
 （body_json.text，实测 369 条动态里 47 条有附言）写进 `posts.note`，
 video_dynamic 行删除。删除而非标记：抓取侧遇到「bvid 已作为 video 入库」
-就不会再插入 video_dynamic（见 scheduler._absorb_video_dynamic），所以不会复活。
+就不会再插入 video_dynamic（见 platforms/bilibili_posts.absorb_video_dynamic），所以不会复活。
 
 用法:
     python scripts/merge_video_dynamics.py --dry-run   # 只统计不动库

@@ -7,10 +7,14 @@
 
 ```
 app/services/platforms/
-├── base.py      # BasePlatform 协议（爬虫框架接口）
-├── registry.py  # 平台注册表：get_fetcher(platform)
-├── bilibili.py  # B 站适配（包装 app/services/fetcher 既有实现）
-└── weibo.py     # 微博适配（m.weibo.cn 公开接口）
+├── base.py             # BasePlatform 协议（爬虫框架接口）
+├── registry.py         # 平台注册表：get_fetcher(platform)
+├── streams.py          # PostStreams：帖子流的平台适配形状（翻页 + 可选台阶）
+├── bilibili.py         # B 站**账号信息**适配（包装 app/services/fetcher 既有实现）
+├── bilibili_posts.py   # B 站**帖子实现**（投稿动态合并 / 直播卡路由 / 详情补全 / 置顶刷新）
+├── signing.py          # 请求签名（小红书 xhshow；NullSigner = 不需要签名的平台）
+├── xiaohongshu.py      # 小红书适配
+└── weibo.py            # 微博适配（m.weibo.cn 公开接口）
 ```
 
 scheduler 统一消费框架：
@@ -19,8 +23,10 @@ scheduler 统一消费框架：
   统一回填 `display_name / sign / avatar / followers_count / url`（平台附加字段如 live_* 一并处理）。
   头像落盘按 `{platform}_{uid}{ext}` 命名防跨平台撞名。
 - **帖子抓取** `_fetch_posts_for_account(acc, ...)` 按平台分发：
-  - bilibili → 专属双流核心 `_fetch_posts_core`（视频+动态、归档边界、视频总数比对）
-  - weibo 等单流平台 → 通用循环 `_fetch_platform_posts`（复用批量落库/去重/归档边界/
+  - bilibili → 专属双流核心 `_fetch_posts_core`（视频+动态、归档边界、视频总数比对）；
+    **核心只认 `PostStreams`**（uid 是**字符串**），B 站那套实现由 `scheduler.BILIBILI_STREAMS`
+    绑上去 —— 那五个台阶的实现住在 `platforms/bilibili_posts.py`（devlog/229 + 236）
+  - weibo / xiaohongshu 等单流平台 → 通用循环 `_fetch_platform_posts`（复用批量落库/去重/归档边界/
     定时任务让位/风控断点续抓/stop_reason/完成报告全链路）
 - 全量（`async_fetch_all_posts`）、按名全量（`async_fetch_vtuber_posts`）、
   增量更新（`async_update_unarchived_posts`）均遍历**所有平台**账号。
