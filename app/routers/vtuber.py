@@ -61,15 +61,17 @@ def _sched():
     return _sch_cache
 
 
-def _require_content_fetch() -> None:
-    """内容抓取（投稿/动态）需要登录 B 站 —— 未登录**在这里就挡掉**（403 + 原因）。
+def _require_content_fetch(platform: str = "bilibili") -> None:
+    """内容抓取（投稿/动态）需要**该平台的**登录 —— 未登录**在这里就挡掉**（403 + 原因）。
 
     2026-09-15（devlog/086）实测：B 站对匿名调用空间接口回 `412 request was banned`，
     且是 IP 级、会持续一段时间。让它"试了再失败"有两个坏处：白耗配额、脏 IP，
     而用户看到的只是一句含糊的抓取失败。所以宁可**不发请求**、直接把原因说清楚。
     ⚠️ 只挡内容：账号信息/粉丝数/直播状态匿名可用，不走这里（见 `services/capabilities.py`）。
+    ⚠️ 2026-09-27（devlog/228）：以前这里**写死 B 站**，于是带 `platform=weibo` 的端点
+    是拿 B 站登录态放行的（越权）。现在把 platform 一路传下去。
     """
-    allowed, why = capabilities.content_fetch_allowed()
+    allowed, why = capabilities.content_fetch_allowed(platform)
     if not allowed:
         raise HTTPException(status.HTTP_403_FORBIDDEN, why)
 
@@ -958,7 +960,7 @@ async def fetch_posts_by_name(name: str, background: BackgroundTasks,
 
     ⚠️ 未登录 B 站 → **403**（内容接口匿名会被平台 412 拦截，不发无谓请求；devlog/086）。
     """
-    _require_content_fetch()
+    _require_content_fetch(platform)
     if full:
         if manual_task_running():
             raise HTTPException(409, "已有抓取任务正在进行中，请稍后再试")
@@ -986,7 +988,11 @@ async def fetch_posts_by_name(name: str, background: BackgroundTasks,
 
     for v in vtubers:
         for acc in acc_repo.by_vtuber(v.id):
-            if acc.platform == platform and acc.platform_uid and acc.platform_uid.isdigit():
+            # ⚠️ 2026-09-27（devlog/228）：这里以前多一个 `acc.platform_uid.isdigit()`
+            # —— 那是 **B 站口径**（B 站 uid 是数字）。微博 uid 不是数字 ⇒ 带
+            # `platform=weibo` 调这个端点会**静默跳过所有账号**，返回"成功 0 条"，
+            # 看起来像"这个 V 没内容"。现在只要求"有 uid"。
+            if acc.platform == platform and acc.platform_uid:
                 r = await async_fetch_posts(acc.platform, acc.platform_uid, video_pages, dynamics_pages)
                 vm = None
                 if r.video_total is not None and r.stop_reason in ("rate_limited", "network_error"):

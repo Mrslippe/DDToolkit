@@ -116,10 +116,26 @@ FEATURES: tuple[Feature, ...] = (
 )
 
 
+def _login_states(bili: bool, weibo: bool) -> dict[str, bool]:
+    """平台 → 该平台的登录态。**唯一真源**：新增平台必须在这里加一条。
+
+    `tests/test_platform_branches.py::test_login_state_mapping_covers_every_feature_platform`
+    盯着它：`FEATURES` 里出现而这里没有的平台会判红（逼人表态，而不是悄悄读成别家）。
+    """
+    return {"bilibili": bili, "weibo": weibo}
+
+
 def _logged_in(platform: str | None, bili: bool, weibo: bool) -> bool:
+    """`FEATURES` 里那一项依赖的登录态是否就绪。
+
+    ⚠️ 2026-09-27（devlog/228）：以前是 `return bili if platform == "bilibili" else weibo`
+    —— **任何**非 bilibili 的平台都读**微博**的登录态。今天只有两个平台所以看不出来，
+    但新平台（小红书/抖音）一进来就会读错。现在按平台**显式表态**，未知平台**不假装**就绪
+    （宁可提示"未登录"，也不谎报"可用"）。
+    """
     if platform is None:
         return True
-    return bili if platform == "bilibili" else weibo
+    return _login_states(bili, weibo).get(platform, False)
 
 
 def snapshot(bili_logged_in: bool | None = None, weibo_logged_in: bool | None = None) -> dict:
@@ -175,15 +191,43 @@ CONTENT_FETCH_REASON = (
     "（HTTP 412 request was banned），未登录时我们**不发起**这类请求"
 )
 
+WEIBO_CONTENT_REASON = (
+    "抓微博内容需要微博登录（登录态失效或被风控时整条名单跳过）"
+)
 
-def content_fetch_allowed() -> tuple[bool, str]:
-    """能不能抓**内容**（投稿 + 动态）。返回 `(允许, 原因)`。
+UNKNOWN_PLATFORM_REASON = (
+    "未知平台：内容抓取**没有**在这里表态（新增平台要在 "
+    "`app/services/capabilities.py::content_fetch_allowed` 里显式决定匿名能不能抓）"
+)
+
+
+def _content_fetch_allowed_with(
+    platform: str, *, bili=None, weibo=None,
+) -> tuple[bool, str]:
+    """`content_fetch_allowed` 的**可注入版本**（用例注入假登录态；生产走下面那个）。"""
+    bili = auth_manager if bili is None else bili
+    weibo = weibo_auth_manager if weibo is None else weibo
+    if platform == "bilibili":
+        if bili.is_logged_in:
+            return True, ""
+        return False, CONTENT_FETCH_REASON
+    if platform == "weibo":
+        if weibo.is_logged_in and not weibo.needs_login:
+            return True, ""
+        return False, WEIBO_CONTENT_REASON
+    return False, UNKNOWN_PLATFORM_REASON
+
+
+def content_fetch_allowed(platform: str = "bilibili") -> tuple[bool, str]:
+    """能不能抓 **`platform` 的**内容（投稿 + 动态）。返回 `(允许, 原因)`。
+
+    ⚠️ 2026-09-27（devlog/228）：以前这个闸门**不带参数**、只看 B 站登录态 ——
+    于是 `POST /vtuber/fetch-posts?platform=weibo` 是拿**B 站**的登录态放行/拦截的
+    （B 站登录着、微博没登录 ⇒ 越权放行；反过来则误挡）。现在按平台分派。
 
     ⚠️ 只挡内容抓取：账号信息 / 粉丝数 / 直播状态匿名可用（见 `FEATURES`），不挡。
     """
-    if auth_manager.is_logged_in:
-        return True, ""
-    return False, CONTENT_FETCH_REASON
+    return _content_fetch_allowed_with(platform)
 
 
 def weibo_available() -> bool:

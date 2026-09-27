@@ -396,6 +396,29 @@ def platform_cooling_note(platform: str) -> str | None:
     return f"风控冷却中（剩余 {max(1, left // 60)} 分钟，连续第 {st.hits} 次）"
 
 
+def platform_accounts_of(accounts: list[Account], platform: str) -> list[Account]:
+    """挑出**该平台的**可抓账号：`platform` 对得上、且**有非空 uid**。
+
+    ⚠️ 2026-09-27（devlog/228）：以前这里还多一条 `platform_uid.isdigit()`
+    —— 那是 **B 站口径**（B 站 uid 是数字）。微博 uid 不是数字 ⇒ 按名抓取
+    （`POST /vtuber/fetch-posts?platform=weibo` 与 `/vtuber/batch/*`）会**静默跳过所有账号**，
+    返回"什么都没有"，看起来像"这个 V 没内容"。平台自己知道自己的 uid 长什么样，
+    这里只负责"有 uid"。
+    """
+    return [a for a in accounts if a.platform == platform and (a.platform_uid or "").strip()]
+
+
+def split_numeric_uids(accounts: list[Account]) -> tuple[list[Account], list[Account]]:
+    """按"uid 是不是数字"分成 `(可用, 不可用)` —— **B 站批量接口**要 int uid。
+
+    返回第二项不是"扔掉"，而是让调用方把它们**计进 failed**（§1.4 边界②：
+    「不支持」不许静默丢弃 —— 以前连 `result.failed` 都不计，界面显示"全部成功"）。
+    """
+    keep = [a for a in accounts if str(a.platform_uid).isdigit()]
+    bad = [a for a in accounts if not str(a.platform_uid).isdigit()]
+    return keep, bad
+
+
 def _filter_cooling_accounts(accounts: list, *, auto: bool) -> tuple[list, list[str]]:
     """**自动档**跳过风控冷却中的平台（R27）；手动档一律原样返回。
 
@@ -2629,9 +2652,8 @@ async def async_fetch_vtuber_posts(name: str, platform: str = "bilibili") -> dic
 
         accounts: list[Account] = []
         for v in vtubers:
-            for a in db.query(Account).filter(Account.vtuber_id == v.id).all():
-                if a.platform == platform and a.platform_uid and a.platform_uid.isdigit():
-                    accounts.append(a)
+            accounts.extend(platform_accounts_of(
+                db.query(Account).filter(Account.vtuber_id == v.id).all(), platform))
 
         if not accounts:
             logger.warning(f"名字包含 '{name}' 的 VTuber 没有可抓取的账号")
@@ -2956,9 +2978,19 @@ async def live_sweep_core(db: Session, client: httpx.AsyncClient | None = None) 
 
         idx = 0
         while idx < len(accounts):
-            chunk = [a for a in accounts[idx:idx + 100] if str(a.platform_uid).isdigit()]
+            window = accounts[idx:idx + 100]
+            idx += len(window)
+            chunk, bad = split_numeric_uids(window)
+            # ⚠️ §1.4 的边界②：「不支持」不许**静默丢弃** —— bilibili 的批量接口要 int uid，
+            #    非数字的账号以前是 `continue` 掉，连 `result.failed` 都不计 ⇒ 界面显示
+            #    "全部成功"而它们永远不会出现在任何计数里（devlog/228）。
+            for a in bad:
+                result.failed += 1
+                if len(result.details) < 5:
+                    result.details.append(
+                        f"跳过非数字 uid 的 bilibili 账号：{a.platform_uid!r}"
+                    )
             if not chunk:
-                idx += 1
                 continue
             data = await fetch_bilibili_live_batch([int(a.platform_uid) for a in chunk], client=client)
             if data is None:

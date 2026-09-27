@@ -111,7 +111,7 @@ def db(monkeypatch):
     Maker = sessionmaker(bind=engine)
     monkeypatch.setattr(sch, "SessionLocal", Maker)
     monkeypatch.setattr(sch, "_lane_skip_reason", lambda pf: None)   # 隔离登录闸门
-    monkeypatch.setattr(sch.capabilities, "content_fetch_allowed", lambda: (True, ""))
+    monkeypatch.setattr(sch.capabilities, "content_fetch_allowed", lambda platform="bilibili": (True, ""))
     session = Maker()
     # 一个 V 一个账号 → 一轮 1 个请求（远小于 rpm，用来隔离"预算上限"那条）
     v = VTuber(name="测试V")
@@ -170,7 +170,7 @@ def test_manual_entry_resets_idle_streak(monkeypatch):
     calls: list[str] = []
     monkeypatch.setattr(sch, "note_dynamics_activity", lambda why="": calls.append(why))
     monkeypatch.setattr(sch.capabilities, "content_fetch_allowed",
-                        lambda: (False, "未登录（测试）"))
+                        lambda platform="bilibili": (False, "未登录（测试）"))
 
     out = asyncio.run(sch.async_fetch_posts("bilibili", "11", 1, 1))
     assert out.stop_reason == "login_required"

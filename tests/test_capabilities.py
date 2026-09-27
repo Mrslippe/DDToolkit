@@ -37,9 +37,15 @@ def _matrix() -> dict:
 def test_feature_table_is_wellformed():
     ids = [f.id for f in C.FEATURES]
     assert len(ids) == len(set(ids)), "feature id 有重复"
+    known_platforms = set(C._login_states(True, True))
     for f in C.FEATURES:
         assert f.anon_state in C.STATES, f"{f.id} 的 anon_state 非法：{f.anon_state}"
-        assert f.platform in (None, "bilibili", "weibo"), f"{f.id} 的 platform 非法"
+        # ⚠️ 2026-09-27（devlog/228）：这里以前写死 `(None, "bilibili", "weibo")`。
+        #    改成"必须在 `_login_states` 里显式表态" —— 新增平台**必须**同时决定
+        #    它依赖哪家的登录态，否则 _logged_in 会把它读成别家（旧写法是 else weibo）。
+        assert f.platform is None or f.platform in known_platforms, (
+            f"{f.id} 的平台 {f.platform!r} 没在 capabilities._login_states 里表态"
+        )
         assert f.label and f.anon_note, f"{f.id} 缺 label/anon_note"
         assert f.evidence, f"{f.id} 没写实测依据 —— 别把没量过的结论写进表"
 

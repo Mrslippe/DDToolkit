@@ -97,7 +97,7 @@ def db(monkeypatch):
     Maker = sessionmaker(bind=engine)
     monkeypatch.setattr(sch, "SessionLocal", Maker)
     monkeypatch.setattr(sch, "_lane_skip_reason", lambda pf: None)
-    monkeypatch.setattr(sch.capabilities, "content_fetch_allowed", lambda: (True, ""))
+    monkeypatch.setattr(sch.capabilities, "content_fetch_allowed", lambda platform="bilibili": (True, ""))
     monkeypatch.setattr(sch.settings, "DYNAMICS_JITTER_SECONDS", 0.0)   # 抖动会让断言不稳
     session = Maker()
     v = VTuber(name="测试V")
