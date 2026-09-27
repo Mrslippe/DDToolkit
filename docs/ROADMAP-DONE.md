@@ -560,6 +560,7 @@
 | 第 4 阶段 ④（第一刀，用户拍板开做）：**小红书适配** —— 新增 `platforms/signing.py`（`Signer` 协议 + 懒加载 `xhshow`）与 `platforms/xiaohongshu.py`（账号信息 / 笔记流 / 失败六分类 / 三个坑：逗号不编码、id 按字符串、xsec_token 只进 raw_json）；注册进表 ⇒ 调度器**零改动**就能抓；7 条判据（含端到端落库）+ 四刀反向验证 | 230 |
 | 第 4 阶段 ④（第二刀）：**小红书的前端与壳层触点** —— `EXTERNAL_HOSTS`（打开主页）、CSP `img-src` 与 `IMG_PROXY_ALLOWED_HOSTS`（封面不破图）、`postTypes.ts` 三处（平台名 / 分类分组 / 主页兜底 URL）；Rust 白名单与前端标签各补判据（后者那条"收录了哪些平台"的旧断言被这次改动**正确地**打红，已改成对齐真源） | 231 |
 | 第 4 阶段 ④（第三刀-1）：**`xhshow` 进锁 + 签名调用按真实 API 对齐** —— `pyproject.toml`/`uv.lock`（+xhshow 0.2.0 +pycryptodome），`uv sync --frozen` 通过；`Signer` 协议改成 `uri`+`params`（原来按文档猜的）；⚠️ 实测纠正：cookie 至少 `a1`+`web_session`；新增"真签名器离线产头"判据 | 232 |
+| 第 4 阶段 ④（第三刀-2 后端）：**小红书 cookie 录入** —— 新增 `services/xhs_auth.py`（**先校验再落盘**：缺 `a1` 挡在入口，避免"配好了却永远抓不到"）+ `POST /auth/xiaohongshu/cookie` / `GET /auth/xiaohongshu/status`（**不做**真实探活，只报"配齐没"）；5 条判据（含端点级 400 且不落盘） | 233 |
 
 > **编号列怎么写**（2026-09-23 定）：
 > - 有 devlog 的批次 → **裸编号**（`| 097 |`）；
