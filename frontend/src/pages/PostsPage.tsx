@@ -45,7 +45,7 @@ import ProfileBoardView from '../components/profile/ProfileBoardView'
 import { useToolbarVisibility } from '../hooks/useToolbarVisibility'
 import { usePostQueryState } from '../hooks/usePostQueryState'
 import { usePostPagination } from '../hooks/usePostPagination'
-import { useSelectedAccount } from '../hooks/useSelectedAccount'
+import { useSelectedAccount, usableAccounts } from '../hooks/useSelectedAccount'
 import './../styles/posts.css'
 
 const PAGE_SIZE = 20
@@ -88,7 +88,7 @@ export default function PostsPage() {
   // 而数据其实没变（刻意保留的窄依赖）。
   const {
     selectedAccount, setSelectedAccount, accountKey,
-    reconcileByUid, reconcileById, applySnapshots,
+    reconcile, applySnapshots,
   } = useSelectedAccount()
   const {
     typeFilter, setTypeFilter, archived, setArchived, deletedOnly, setDeletedOnly,
@@ -336,10 +336,10 @@ export default function PostsPage() {
         if (cancelled) return
         vtuberLoadedRef.current = loadKey
         setVtuber(v)
-        const accounts = v.accounts.filter((a) => a.platform_uid)
+        const accounts = usableAccounts(v.accounts)
         if (accounts.length > 0) {
           // 认人口径（按 `platform_uid`、没选过选第一个）在 `hooks/useSelectedAccount`
-          reconcileByUid(accounts)
+          reconcile(accounts)
         } else {
           setError('该 VTuber 没有可用账号')
         }
@@ -348,9 +348,9 @@ export default function PostsPage() {
     return () => {
       cancelled = true
     }
-    // `reconcileByUid` 由 hook 用 `useCallback([])` 钉成稳定引用 ⇒ 列在这里不会重跑
+    // `reconcile` 由 hook 用 `useCallback([])` 钉成稳定引用 ⇒ 列在这里不会重跑
     // （记在 hook 文件头；`exhaustive-deps` 无法证明 hook 返回值稳定，只能显式列出）
-  }, [scene.acc, refreshTick, reconcileByUid])
+  }, [scene.acc, refreshTick, reconcile])
 
   // 直播/资料实时同步：与侧栏同源吃 account-progress 增量快照就地合并——
   // 短任务（轮询未目睹运行 → 无 fetch-idle 边沿）后右栏徽标会停留在旧值，
@@ -813,8 +813,9 @@ return (
         vtuber={vtuber}
         onSaved={(v) => {
           setVtuber(v)
-          // 认人口径（按 `id`、没选过就不选 —— 与 E7 那条**刻意不同**，见 hook 文件头）
-          reconcileById(v.accounts)
+          // 认人口径与 E7 **同一条**（按 `platform_uid`）—— 2026-09-27 拍板统一
+          // （devlog/224）；`reconcile` 内部还会滤掉空 uid 的脏行。
+          reconcile(usableAccounts(v.accounts))
           // R33 补（2026-09-19，用户：「修改过的签名左栏没有及时同步」）：
           // 左栏那份列表是**它自己**拉的（不是本页的子节点）⇒ 必须广播一条更新，
           // 否则右栏立刻变、左栏一直显示旧签名（R33 修的是渲染口径，缺的是这条通道）。

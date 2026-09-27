@@ -551,6 +551,7 @@
 | 批次 12（M4 第三刀）：**`usePostPagination` 抽成 hook**（五 state + 两 ref + 三条 effect：无限滚动哨兵 / 用户意图重置即回顶 / 回顶钮；`PostsPage` 894 → 877 行）+ 14 条 jsdom 用例（哨兵门控六态、追加失败即断开、同参数重渲染不许回顶）；**取数 effect E11 刻意不搬**、依赖数组逐字保留；五刀反向验证 | 221 |
 | 批次 12（M4 第四刀）：**`useSelectedAccount` 抽成 hook** —— 账号身份是 `platform:uid` 而非对象引用；三套认人口径**逐字保留**（E7 按 uid / 设置保存按 id / 增量合并）+ 11 条 jsdom 用例；⚠️ 反向验证暴露**判据自己空转**（命中项放在首位 ⇒ "永远取第一个"也通过），修好后五刀全红；另记两条待定项（认人键统一、未过滤兜底） | 222 |
 | 批次 12（M4 第五刀，收口）：**事件表 `utils/appEvents.ts`** —— 8 个 `ddtoolkit:*` 事件的名字与 payload 集中成一张表，`emit`/`on` 由表推导（改名或改 payload 当场编译错）；11 个生产文件迁移、删掉 6 处手写断言；无 payload 的事件照旧发裸 `Event`（`CustomEvent` 会把 detail 归一成 null）；7 条判据 + 四刀反向验证 | 223 |
+| 账号身份收口（用户拍板）：**认人口径统一按 `platform_uid`**（删掉按 `id` 的那一套与"没选过就不选"）＋**修掉未过滤兜底**（新增 `usableAccounts` 单一口径，`reconcile` 内部再过滤 ⇒ 空 uid 脏行永不被选中，`accountKey` 不会再变成 `"bilibili:"`）；12 条判据 + 四刀反向验证；同时拍板 `useVtuberRealtimeSync` **暂不做**（等第二个消费者） | 224 |
 
 > **编号列怎么写**（2026-09-23 定）：
 > - 有 devlog 的批次 → **裸编号**（`| 097 |`）；

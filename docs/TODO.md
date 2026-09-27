@@ -172,8 +172,7 @@
 | **待排期（可选，不做也不影响）** | 无阻塞，等你挑 | ① **空闲轮播上线**（R19 下线了；等库中真有条目 —— 接 `registerIdleProvider` + 翻 `IDLE_CAROUSEL_ENABLED`，同步改探针断言）；② **深色主题**：R14b 的钩子已就位（填 `:root[data-theme='dark']` + 翻 `DARK_IMPLEMENTED`），但真正做要先把 **243 处硬编码色值**收敛成令牌 + ECharts 双主题 + 逐屏走查 —— 单列一批；③ **能力受限入口并进状态岛面板**（`NoticeActionKind.open-limits` 已预留）；④ 参考图右上的动作行（复制诊断信息 / 打开数据目录）——R17 按用户口径没做，**2026-09-26 起"复制诊断"这一步已经有后端了**（`GET /settings/diagnostics`，批次 16），只差把它接到那一行 |
 | **`migrate_data_dir` 的回滚编排补 4 条集成测试**（批次 16 的 ④，2026-09-26 明确没做） | 纯代码任务，无阻塞 | 计划要求的四条失败路径（复制失败 / 校验失败 / 指针写失败 / 探活失败）各断言"**指针未变 + 旧目录内容未动 + 后端仍在旧目录上跑**"。卡点是那句编排现在长在 `#[tauri::command] migrate_data_dir` 里（要 `AppHandle`），**先把它抽成"注入 effects 的纯函数"**（照 `lib.rs::delete_old_dir` 的先例）才好测。今天只有真机验证（见 `docs/DEV-LOOP.md` §一 的真机现场②） |
 | **真机"关停"冒烟**（批次 6 的补充，2026-09-26 记） | 纯真机动作，无阻塞 | 关窗 / 托盘退出时看 `logs/app.log` 是否出现「调度运行时已停止（3 个线程已退出…）」且进程在 `scheduler.STOP_JOIN_TIMEOUT`（15s）内退出。⚠️ **自动化覆盖不到 graceful 那一半**：`scripts/dev_check.py` 的后端冒烟走 `proc.terminate()` = Windows 硬杀（不经过 lifespan），目前只有 `tests/test_scheduler_lifecycle.py` 直接驱动 `app.main.lifespan` 那一条（替身掉碰盘碰网的四件事、不起真进程） |
-| **`useVtuberRealtimeSync` 抽不干净（批次 12 复核时发现的候选，不是计划项）** | 纯前端重构；**前置条件：把身份写入收口到单一 owner** | E6/E8 是**双写者**（同时写 `vtuber` 与 `selectedAccount` 两台机器的 state），硬抽会改变请求时序（`accountKey` 引用抖动 ⇒ 取数 effect 白跑或错跑）。devlog/222 已把身份 updater 用 `useCallback([])` 钉稳，但**双写者还在**；先决定"谁拥有身份写入"（页面 or 身份机）再动 |
-| **设置保存后的账号对账兜底可能选中「没有 uid」的账号**（2026-09-27 记，devlog/222） | 纯代码任务；**先确认数据里有没有无 `platform_uid` 的账号行**（有才是真 bug） | `PostsPage` 的 `onSaved` 那条兜底是 `v.accounts.find(…) ?? v.accounts[0]`，用的是**未过滤**的列表；而 E7 那条先 `filter(a => a.platform_uid)`。若 `accounts[0]` 没有 uid ⇒ `accountKey` 变成 `"bilibili:"`，统计/帖子请求带着空 uid 发出去。重构时**没有顺手改**（属于改行为）。修法就一行（两边都过滤），但要不要顺带把两套认人键（`platform_uid` / `id`）也统一，见 §1.2 |
+| **`useVtuberRealtimeSync` 暂不做（2026-09-27 用户拍板）** | 纯前端重构；**等第二个消费者出现再做** | E6/E8 是**双写者**（同时写 `vtuber` 与 `selectedAccount` 两台机器的 state），而这两个 state 的所有权在场景机 `onCommit`（一次原子提交 7~8 个 state，为的是"切 V 不闪帧"）⇒ 抽独立 hook 会动到那条最敏感的路径。**拍板结论：先不做**，等真要在别处复用实时同步（小窗显示实时状态 / 新平台接入开新通道）时再动 —— 那时它才有第二个消费者，收益才划算。devlog/222 已把身份 updater 用 `useCallback([])` 钉稳（真要做时少一个坑） |
 
 ### 1.2 需要先定口径 / 拍板（不是写代码的问题）
 
@@ -182,7 +181,6 @@
 | **原始弹幕明细库 / 全量分析** | 要不要做、以什么粒度落库（这是独立产品级决策） | **通道已实测可用且已被真实使用**：`/api/v3/lives/{liveId}/danmakus` 公开免鉴权 + `offset/limit` 分页（max 100000，含弹幕原文/礼物/上舰/SC）；词云自建（devlog/061）就走这条路，只差"落表 + 前端下钻"。devlog/060 §一.2 |
 | **弹幕词云词字下钻**（点某词看该词在场的弹幕） | 依赖上一条的明细存储 | 现在是纯前端破泡交互（点击即消失 + 恢复），没有明细可查 |
 | **帖子互动历史曲线** | 要加 post 统计快照表（现在 `stats_json` 原地覆盖，热帖传播过程会丢） | 数据在丢，越早做保留越多；见 §3 |
-| **「账号的身份」用哪个键**（2026-09-27 记，devlog/222） | **要用户拍板**（或先定"账号被删后重建 / uid 被重新绑定"这两种边角该怎么表现） | 同一件事（把选定账号对账到新的账号列表上）现在有**两套认人键**：E7 抓取回填按 `platform_uid`（没选过就选第一个），设置保存按 `id`（没选过就保持不选）。`accountKey`（依赖去重的稳定代理）用的是 `platform:platform_uid` ⇒ **按 uid 更自洽**；但统一会改变那两种边角下的表现，属改行为。搬进 `hooks/useSelectedAccount` 时**逐字保留**、两套都有用例钉着（devlog/222 §二） |
 | **小窗形态梯度的档位与尺寸** | 要定"有几种形态、每档多大" | 见 §1.4 的 W2。**两形态（胶囊 ↔ 面板）已经能用了**（R38 批 5d 补齐 resize 通路，devlog/183），但"灵动岛式多形态"要更多档；档位一旦定了，`widgetExpandGeom` 那套几何要扩成多档 |
 | **自建词云首拉耗时**（2026-09-25 从 §1.1 移来） | 要定"**要不要牺牲完整度**换响应" | 实测 5 万条记录 ~12s 属正常，上游瞬时变慢时单场可达 **120s**（devlog/062 §四）。**当前刻意不加时间预算** —— 截断靠前记录会系统性丢掉下播前的高频词（如「晚安」）。三条可选路：分页调优 / 前端进度反馈 / 标注"基于部分弹幕"后截断（**只有第三条要动产品口径**） |
 | **自建词云支持取消**（2026-09-25 从 §1.1 移来） | 优先级最低，可不做 | 上游取数已可取消（devlog/064）；`/wordcloud` 走同一套（`api.buildLiveSessionWordCloud` 加 `signal` + 调用处 abort）。只在用户点按钮时发、120s 是可接受上限 |
@@ -452,7 +450,7 @@ W1/W2 可以在**现在的架构上**做完，但它们只是让 W3 少踩坑。
 |---|---|---|
 | 后端 | `python -m pytest -q`（**解释器走 `.venv`**，见 `ARCHITECTURE.md` §6 第 24 条） | **717–718 passed / 0 failed**（总数 718：其中 1 条**打真上游**的用例在不可达时按设计 skip ⇒ `passed` 那一格会差 1；2026-09-26 实测 ≈54–80s） |
 | 桌面壳 | `cargo test`（工作目录 `frontend/src-tauri`） | **56 passed**（2026-09-26 实测；含 `delete_old_dir` 的真实 junction 用例、S1 的 token 生成用例与 S3 的准入表/白名单用例） |
-| 前端单测 | `npm --prefix frontend run test` | **668 passed / 53 文件**（2026-09-27 实测；条数确定，不随上游浮动） |
+| 前端单测 | `npm --prefix frontend run test` | **669 passed / 53 文件**（2026-09-27 实测；条数确定，不随上游浮动） |
 | 前端类型 / lint | `npx tsc --noEmit`（**必须在 `frontend/` 里跑**）/ `npm --prefix frontend run lint` | 0 错 / 0 错（2026-09-26 复核） |
 | 文档漂移 | `python scripts/doc_check.py` | **0 FAIL**（2026-09-26 复核；另有 1 条历史 devlog 索引欠账 WARN，WARN 看脚本逐条输出） |
 | 上游冒烟 | `python scripts/smoke_upstream.py [--cold]` | 真上游 **5 ok** / 冷进程 **3 ok**，0 FAIL（2026-09-23 复核） |

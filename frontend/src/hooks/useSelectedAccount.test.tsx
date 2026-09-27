@@ -6,15 +6,15 @@
  * 1. **同 uid 要换新对象**（抓取回填后头部才拿得到新快照）；
  * 2. **增量快照未命中时引用必须不变**（`Object.is`）—— 否则每次广播都让依赖
  *    `accountKey` 的 effect 白跑一轮；
- * 3. **两套认人口径的差异是契约**（E7 按 `platform_uid` 且没选过就选第一个；
- *    设置保存按 `id` 且没选过就不选）—— 把它们"统一"掉这条会红。
+ * 3. **脏行（空 uid）永远不会被选中** —— 2026-09-27 拍板统一按 `platform_uid` 认人时，
+ *    顺手把"设置保存那条没过滤"的缺陷一起修了（见 devlog/224）。
  */
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import type { Account, AccountSnapshot } from '../api/types'
-import { useSelectedAccount } from './useSelectedAccount'
+import { useSelectedAccount, usableAccounts } from './useSelectedAccount'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true
@@ -73,13 +73,13 @@ describe('① accountKey 是稳定代理', () => {
   })
 })
 
-describe('② reconcileByUid（E7 抓取回填）', () => {
+describe('② reconcile（E7 抓取回填与设置保存**共用同一条**）', () => {
   it('同 uid 换**新对象**（头部要拿新快照）—— 命中项**排在第二位**才算数', () => {
     render()
     act(() => { api.setSelectedAccount(acc({ display_name: '旧名', platform_uid: '100' })) })
     const before = lastRef
     act(() => {
-      api.reconcileByUid([
+      api.reconcile([
         acc({ id: 2, platform_uid: '200', display_name: '别人' }),
         acc({ display_name: '新名', platform_uid: '100' }),
       ])
@@ -94,44 +94,48 @@ describe('② reconcileByUid（E7 抓取回填）', () => {
   it('uid 不在列表里 ⇒ 退回第一个', () => {
     render()
     act(() => { api.setSelectedAccount(acc({ platform_uid: '999' })) })
-    act(() => { api.reconcileByUid([acc({ platform_uid: '100' }), acc({ id: 2, platform_uid: '200' })]) })
+    act(() => { api.reconcile([acc({ platform_uid: '100' }), acc({ id: 2, platform_uid: '200' })]) })
     expect(attr('uid')).toBe('100')
   })
 
-  it('没选过 ⇒ 选第一个（首开必须有账号可看）', () => {
+  it('没选过 ⇒ 选第一个（两条路径统一后同一条规则）', () => {
     render()
-    act(() => { api.reconcileByUid([acc({ platform_uid: '100' }), acc({ id: 2, platform_uid: '200' })]) })
+    act(() => { api.reconcile([acc({ platform_uid: '100' }), acc({ id: 2, platform_uid: '200' })]) })
     expect(attr('uid')).toBe('100')
   })
 
   it('空列表 ⇒ 不动（防御；调用方另有「没有可用账号」分支）', () => {
     render()
     act(() => { api.setSelectedAccount(acc({ platform_uid: '100' })) })
-    act(() => { api.reconcileByUid([]) })
+    act(() => { api.reconcile([]) })
     expect(attr('uid'), '空列表不许把选定账号写成 undefined').toBe('100')
+  })
+
+  it('⚠️ **脏行（空 uid）永远不会被选中** —— 哪怕它排第一、也哪怕选中的就是它', () => {
+    render()
+    // ① 没选过：首位是脏行 ⇒ 应当选第二个（真账号）
+    act(() => {
+      api.reconcile([acc({ platform_uid: '', display_name: '占位' }), acc({ id: 2, platform_uid: '200' })])
+    })
+    expect(attr('uid'), 'accountKey 会变成 "bilibili:"，请求带着空 uid 发出去').toBe('200')
+    // ② 选中的那个在新列表里变成脏行 ⇒ 不认它，退回第一个可用账号
+    act(() => { api.reconcile([acc({ platform_uid: '', display_name: '占位' })]) })
+    expect(attr('uid'), '全是脏行时保持原样（防御），不许退化成空 uid').toBe('200')
+  })
+
+  it('列表里只有脏行 ⇒ 不动（`usableAccounts` 之后为空）', () => {
+    render()
+    act(() => { api.setSelectedAccount(acc({ platform_uid: '100' })) })
+    act(() => { api.reconcile([acc({ platform_uid: '' }), acc({ id: 3, platform_uid: '' })]) })
+    expect(attr('uid')).toBe('100')
   })
 })
 
-describe('③ reconcileById（设置保存）—— 与上一条**刻意不同**', () => {
-  it('同 id 换新对象（命中项也**不在首位**）；id 不在 ⇒ 第一个', () => {
-    render()
-    act(() => { api.setSelectedAccount(acc({ id: 7, display_name: '旧名', platform_uid: '100' })) })
-    act(() => {
-      api.reconcileById([
-        acc({ id: 9, platform_uid: '900', display_name: '别人' }),
-        acc({ id: 7, display_name: '新名', platform_uid: '100' }),
-      ])
-    })
-    expect(attr('uid'), '要按 id 认人，不是永远取第一个').toBe('100')
-    expect(attr('name')).toBe('新名')
-    act(() => { api.reconcileById([acc({ id: 9, platform_uid: '900' })]) })
-    expect(attr('uid')).toBe('900')
-  })
-
-  it('**没选过 ⇒ 保持不选**（把两条口径"统一"掉这条会红）', () => {
-    render()
-    act(() => { api.reconcileById([acc({ platform_uid: '100' })]) })
-    expect(attr('null'), '历史口径：prev 为空就原样返回').toBe('1')
+describe('③ usableAccounts 是「可用账号」的唯一口径', () => {
+  it('滤掉空 uid 的行', () => {
+    expect(usableAccounts([
+      acc({ platform_uid: '' }), acc({ id: 2, platform_uid: '200' }),
+    ]).map((a) => a.platform_uid)).toEqual(['200'])
   })
 })
 
