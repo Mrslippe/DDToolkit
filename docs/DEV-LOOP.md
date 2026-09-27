@@ -513,6 +513,37 @@ Python **3.14** 有 PEP 649（**惰性注解**，注解到被读取时才求值�
 > （`typing.get_type_hints`），3.14 也能提前发现 3.12 的问题。
 > 边界：只查**没有** `from __future__ import annotations` 的模块（带那行的模块在 3.12 上
 > 本来就不求值，如实豁免并数出来）。**新增/搬家模块后如果忘了导入注解里用到的名字，这条会红。**
+> ⚠️ **新模块默认不要带那行**：它 = 主动申请豁免，而这条判据带一个配额（豁免 < 待检查）。
+> 2026-09-27 三个新模块一带就把配额撑破、**判据自己红了**（"豁免太多，判据快空转了"）。
+> 只有像 `routers/img_proxy.py` 那样**为了冷启动故意延迟 import** 的模块才该带它。
+> 判据喊"我快空转了"时，**先看自己是不是在薅豁免**。
+
+### 6.18 ⚠️ 「挂死」不是「变红」：先抓栈，别猜；「单跑绿」不算数（2026-09-27 加，devlog/241）
+
+**实测事故**：消息中心的 drain 写成 `await loop.run_in_executor(None, self._inbox.get)`
+（"阻塞读丢给工作线程"那套，看着很标准）。单跑 `tests/test_messages.py` **全绿、3.8s**；
+全量跑卡在 **68%** —— CPU 冻结、**18 分钟没有任何输出**。`faulthandler` 抓到的栈是决定性的：
+
+```
+MainThread   asyncio/runners.py close → run_until_complete(shutdown_default_executor)
+Thread-1     futures/thread.py shutdown → threading.join
+asyncio_0    queue.py get              ← 卡在这里
+```
+
+`stop()` 取消了 drain，但那个工作线程**仍阻塞在 `get()` 上**，而 `asyncio.run()` 收尾要
+`shutdown_default_executor(wait=True)` 去 join 它 ⇒ 永远等下去。
+
+**三条规矩**：
+1. **卡住先抓栈**：`python -m pytest -o faulthandler_timeout=25 <用例>`（pytest 的 ini 项，
+   不需要装插件）—— 它会打出**每个线程**的栈。比"读代码猜哪儿死了"快一个数量级。
+2. **"单跑绿"不算数**：这个坑只在"真 lifespan 跑两次"的路径上出现，而那条路径在一个与本批
+   **毫无关系**的测试文件里（`test_scheduler_lifecycle.py::test_two_consecutive_lifespans_do_not_double_run`）。
+   **碰了生命周期 / 线程 / 事件循环的东西，就跑全量。**
+3. **跨线程 + 事件循环的标准形态**：投递必须发生在**应用循环的线程**里（订阅者的队列绑在那个
+   循环上），而发布方可能是**没有循环的线程**（T0 守护线程）⇒ `queue.Queue` 中转 +
+   `loop.call_soon_threadsafe(wake.set)` 唤醒 + 协程里 `get_nowait` 清空。
+   **不要在协程里 `run_in_executor(queue.get)`**：它既留下"收不掉的工作线程"，又给每条消息
+   白加一次线程池往返（而降延迟正是这类通道的全部意义）。
 
 ---
 

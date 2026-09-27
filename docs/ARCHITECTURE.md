@@ -900,6 +900,18 @@ flowchart LR
       判据 `tests/test_background_upload.py`（14 条，含**真的注入**的写盘失败 / 半写 / rename 失败 /
       提交失败；把这一批判据拿回旧实现上跑 ⇒ **7 条红**）。
 
+35. **跨线程往事件循环里送东西：`queue.Queue` 中转 + `call_soon_threadsafe` 唤醒，不许
+    `run_in_executor(queue.get)`**（M0，devlog/241）：推送通道的发布方可能是**没有事件循环的
+    线程**（T0 守护线程产生开播边沿），而订阅者的队列绑在 uvicorn 的循环上 ⇒ 只有一种形态同时
+    满足"任何线程都能发布"与"投递只发生在循环线程里"：线程安全的 `queue.Queue` 中转 +
+    `loop.call_soon_threadsafe(wake.set)` 唤醒 + 协程里 `get_nowait` 清空（第 15 条的延伸：
+    `asyncio.Event` 在 `start()` 里**现造、每代重建**；发布点必须在 `db.commit()` **之后**）。
+    ⚠️ 「阻塞读丢给工作线程」那套（`await loop.run_in_executor(None, q.get)`）**看着标准却会挂死**：
+    `stop()` 取消 drain 之后那个工作线程仍阻塞在 `get()` 上，而 `asyncio.run()` 收尾要
+    `shutdown_default_executor(wait=True)` 去 join 它 ⇒ **整个测试套卡住**（不是变红，
+    定位手法见 `DEV-LOOP.md` §6.18）。真源 `app/services/messages.py`，
+    判据 `tests/test_messages.py`（19 条，含跨线程发布与"循环重建后仍能发"）。
+
 ---
 
 ## 7. 扩展点
