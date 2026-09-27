@@ -173,6 +173,44 @@
 **停止条件**：若 `StreamingResponse` 在 Tauri WebView2 里读不出流（真机验证），
 **停下报告** —— 那意味着通道选型要重新评估（不要在探针里边"看起来能跑"就宣布通过）。
 
+> ### ✅ 已落（2026-09-27，devlog/241）
+>
+> 四个文件：`app/services/messages.py`（`MessageHub`）/ `app/routers/messages.py`
+> （`GET /messages/stream`）/ `app/routers/messages_debug.py`（dev-only 合成钩子）/
+> `app/main.py` 接线（含 lifespan 的 `HUB.start()` / `await HUB.stop()`）。
+> 19 条判据（方案那五条 + 四条实现里已存在的行为）+ **反向验证 9/9 全红**；
+> `route_decorators` 66 → 68（三处口径已重数同步）。
+> **M0 的"通道通了"到此为止**：本批**没有**接任何真实事件；`fetch-status` 轮询并存未退役。
+>
+> ⚠️ **实施中补上的第三处复核（§8 之外，方案原文没写）**：drain **不能**用
+> `run_in_executor(None, queue.get)`。drain 被 `stop()` 取消时那个工作线程**仍阻塞在
+> `get()` 上**，而 `asyncio.run()` 收尾要 `shutdown_default_executor(wait=True)` 去 join 它
+> ⇒ **整套测试挂死**（不是变红，是不动 —— 被
+> `test_scheduler_lifecycle.py::test_two_consecutive_lifespans_do_not_double_run` 逮住）。
+> 正确形态：**`loop.call_soon_threadsafe(wake.set)` 唤醒 + `get_nowait` 清空**（`asyncio.Event`
+> 在 `start()` 里现造、每代重建）。顺带省掉"每投递一条过一次线程池往返"的延迟。
+> 另：方案 §M0 用例 ③④ 的判据落在 `test_heartbeat_arrives_while_idle` 与
+> `test_publish_survives_a_rebuilt_event_loop`。
+>
+> **还没做的（= M0 没完成的部分）**：`frontend/src/utils/eventStream.ts` + 接进 `appEvents`
+> + `ui_probe` 断言（用合成钩子）+ V5 结构判据 ⇒ 见下方 **M0b**，以及 §8.4 第 3 条
+> （真机验收必须早于 M1）。
+
+---
+
+### 批次 M0b — 通道的**前端半边**（M0 拆出来的，必须先于 M1）
+
+**档位**：B（碰前端与探针，不碰后端业务）。**依赖**：M0。
+
+**改动面**：`frontend/src/utils/eventStream.ts`（`fetch` + `ReadableStream` 解析 SSE 帧；
+token 走 `X-DDToolkit-Token` header；`AbortController`；断线重连回填 `Last-Event-ID`；
+`replay:true` 的消息**不弹提示**）→ 接进 `utils/appEvents.ts` 那条总线 →
+`ui_probe` 新模式（`POST /messages/_debug/publish` 发一条，断言前端收到）+
+V5 结构判据（token 不进 URL，锚 `apiToken`）。
+
+**停止条件**：真机（Tauri WebView2）里 `ReadableStream` 读不出流 ⇒ **停下报告**（§3 M0 的原停止条件），
+M0b 不许"探针绿了就宣布通过"。
+
 ---
 
 ### 批次 M1 — 开播通知（**成本最低、收益最直观**）

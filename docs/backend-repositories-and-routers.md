@@ -442,27 +442,36 @@
 
 ---
 
-## 3. Routers（66 个路由装饰器 = 68 个方法×路径组合）
+## 3. Routers（68 个路由装饰器 = 70 个方法×路径组合）
 
 > 口径说明（**三种数法别混**）：
 >
 > | 数法 | 值 | 怎么数 |
 > |---|---|---|
-> | **装饰器**（下文「N」用它） | **66** | `vtuber 52` + `auth 3` + `img_proxy 1` + `settings 9`；其中 2 个是 `api_route(methods=["GET","POST"])`（`/vtuber/fetch`、`/vtuber/{id}/fetch`）—— ⚠️ **数装饰器必须把这 2 条算进去**，只数 `@router.get/post/...` 会少 2 |
-> | `app.routes` 对象 | **71** | 66 个 router 对象 + `/healthz` + FastAPI 自带 4 条 + `Mount(/static)` |
-> | 方法×路径 | **68** | `APIRoute.methods` 求和：64 个单方法 + 2 个双方法；FastAPI 自带那 4 条是 `Route`（GET+HEAD），**不计入**这一口径 |
+> | **装饰器**（下文「N」用它） | **68** | `vtuber 52` + `auth 4` + `img_proxy 1` + `settings 9` + `messages 1` + `messages_debug 1`（dev-only）；其中 2 个是 `api_route(methods=["GET","POST"])`（`/vtuber/fetch`、`/vtuber/{id}/fetch`）—— ⚠️ **数装饰器必须把这 2 条算进去**，只数 `@router.get/post/...` 会少 2 |
+> | **OpenAPI 方法×路径** | **70** | `sum(len(methods) for p in app.openapi()["paths"].values())`；**这是唯一与实现无关的数法** ⇒ 日常复核用它 |
+> | OpenAPI 路径数 | **56** | `len(app.openapi()["paths"])`（同路径多方法只算 1 条；dev-only 的 `_debug` 路由**不在**，它要 dev token 才挂） |
 >
-> ⚠️ **2026-09-26 重新数过**（批次 16 加了 `GET /settings/diagnostics`）：实测
-> 装饰器 **66** / `app.routes` **71** / 方法×路径 **68**（`APIRoute` 66 条 = 66 + healthz，
-> 其中 2 条是双方法 ⇒ 64 + 2×2 = 68）。更早的版本：64/70/67（R42-A）、63/69/66、
-> 58/64/69 —— 三种数法本来就容易漂。
-> **只有「装饰器」这一口径有门禁**（`scripts/gen_doc_numbers.py`），另两种口径要人肉重数。
-> 复核命令：`python -c "import app.main as m; print(len(m.app.routes))"` +
-> 按 `len(r.methods)` 分布看（2026-09-17 实测 `{1: 62, 2: 2}`）。
+> ⚠️ **2026-09-27 重新数过**（M0 加了 `GET /messages/stream` 与 dev-only 的
+> `POST /messages/_debug/publish`）：实测装饰器 **68** / OpenAPI 方法×路径 **70** / 路径数 **56**。
+> 更早的版本：66/—/—（批次 16）、64/70/67（R42-A）—— 三种数法本来就容易漂。
+>
+> ⚠️ **"`app.routes` 对象数"这个口径在新版 FastAPI 下失效了（2026-09-27 实测）**：
+> `include_router()` 现在只往 `app.routes` 里放一个 **`_IncludedRouter` 标记对象**
+> （实测：`app.routes` = 11 = `_IncludedRouter` 5 + `Route` 4 + `Mount` 1 + `/healthz` 1），
+> 子路由要请求时才展开 ⇒ 旧的"66 个 router 对象 + healthz + 4 + Mount = 71"再也量不出来
+> （本仓 fastapi **0.141.1** / starlette **1.7.0**）。**别再引用那个口径**，
+> 也**不要**用 `{r.path for r in app.routes}` 做判据 —— 它会 `AttributeError`
+> （`tests/test_messages.py::_app_paths` 就是为这条踩坑写的注释）。
+>
+> **只有「装饰器」这一口径有门禁**（`scripts/gen_doc_numbers.py`），另两种要人肉重数。
+> 复核命令：`python -c "import app.main as m; s=m.app.openapi()['paths']; print(len(s), sum(len([k for k in v if k in ('get','post','put','patch','delete')]) for v in s.values()))"`。
 > 这类数字会随批次漂：漂了就重新数一遍再改，别留着当装饰（`dev_check.py --docs` 只查
 > 版本号/索引/链接这类可机械判定的，**数不出来** —— 所以口径要写清"怎么数的"）。
+> ⚠️ **dev-only 路由也会进"装饰器"计数**：所以它单独一个模块 + 标准名 `router`
+> （`app/routers/messages_debug.py`）—— 用 `debug_router` 这种名字会让它从计数里消失。
 
-### 3.1 `app/routers/vtuber.py` — 主业务路由（51）
+### 3.1 `app/routers/vtuber.py` — 主业务路由（52，42 条路径）
 
 路径直接 `/vtuber/...`、`/account/...`、`/posts...`、`/post/...`、`/externals/...`；
 响应模型走 `app/schemas/vtuber.py`（`Out` 为 `from_attributes`）。
@@ -613,6 +622,29 @@
 - **为什么 settings 与 prefs 分成两组端点**：语义不同 —— settings 是"抓取参数"（有范围、
   下一轮生效），prefs 是"界面长什么样"（枚举、立即生效）。混在一个 PUT 里会让两套校验
   规则纠缠，也会逼着"外观"分区挂上"下一轮生效"这种不相干的说明。
+
+### 3.5 `app/routers/messages.py` — 推送通道（1）+ `messages_debug.py` — dev-only 合成钩子（1）
+
+| 方法 + 路径 | 说明 |
+|---|---|
+| GET `/messages/stream` | **SSE 推送通道**（M0，devlog/241）。首帧 `: connected` 注释行 → 消息帧（`id: <seq>` + `data: <json>`）→ 空闲 15s 发 `: ping`。**只在带 `Last-Event-ID` 时补发**环形缓冲里更新的消息，且帧内 `replay: true` |
+| POST `/messages/_debug/publish` | **dev-only**：合成一条消息（`ui_probe` / 端到端测试用）。未知 `type` → 400。`DEV_API_TOKEN` 为空时这条路径**根本不在路由表里** |
+
+- `app/services/messages.py::MessageHub` 是**推送侧唯一产生方**：类型白名单校验 → 环形
+  50 条 → 投给所有订阅者（每个订阅者一条有界队列 200，满则丢最旧并计数）。`publish()`
+  是**同步的、任何线程可调**（开播边沿产生在 T0 守护线程里，那里没有事件循环）⇒ 经
+  `queue.Queue` 中转、由 `start()` 起的 drain 任务在应用循环里投递。**模块级 asyncio
+  原语一个都不留**（`ARCHITECTURE.md` §6 第 15 条：综合档每轮一个 `asyncio.run()`）。
+- **为什么是 "SSE over fetch" 而不是 `EventSource`**：业务端点全要 `X-DDToolkit-Token`，
+  而原生 `EventSource` 不支持自定义请求头 ⇒ 只能把 token 拼进 URL，那是硬停止条件
+  （token 进日志/历史）。所以前端用 `fetch` + `ReadableStream` 读同一个 `text/event-stream`。
+- **与 `fetch-status` 轮询并存、不替代**：轮询是一致性兜底（推送漏发、重连窗口）。M0
+  **不退役**轮询，退役与否是后续批次的事。
+- 消息类型是**隐式契约**（`domain.vtuber.updated` / `domain.account.snapshot` /
+  `domain.posts.changed` / `domain.live.edge` / `notice.progress` / `notice.alert` /
+  `notice.report` / `notice.message`）：前端按它分发，所以 `publish()` 对不认识的
+  类型直接抛 `ValueError`。**发布点必须放在 `db.commit()` 之后**（事务可能回滚，
+  消息收不回）。真源：`app/services/messages.py` 头部 + `tests/test_messages.py`。
 
 ---
 

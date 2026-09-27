@@ -17,6 +17,7 @@ from app.core.logging_setup import setup_logging
 from app.core.database import engine, Base
 from app.routers import vtuber, img_proxy, auth
 from app.routers import settings as settings_router
+from app.routers import messages as messages_router
 
 # --- 日志 ---
 # 双通道（轮转文件 + 控制台）配置在 `app/core/logging_setup.py`：
@@ -397,6 +398,9 @@ async def lifespan(app: FastAPI):
     #   · 启动外部补抓线程（v0.9.8，P9-4）：每 V 主账号的第三方数据（直播日历 / 粉丝趋势），
     #     <24h 内已跑过则跳过（时间戳存 app_meta）。
     scheduler_runtime.start()
+    # 推送通道（M0，devlog/241）：记下事件循环并起 drain —— 之后 T0 线程里的
+    # messages.HUB.publish(...) 才能把消息送进应用循环里的订阅者。
+    messages_router.M.HUB.start()
     auth_task = asyncio.create_task(auth_manager.run_maintenance())
     # WBI 密钥预热（v0.9.4）：与 auth 心跳并行，让首次收录不必等一次 nav 往返
     wbi_task = asyncio.create_task(_warm_wbi())
@@ -419,6 +423,7 @@ async def lifespan(app: FastAPI):
     # 再关共享的 HTTP 客户端 —— 反过来的话，被取消的轮次会在一个已经关掉的 client 上收尾。
     # stop() 有 join 超时（默认 `scheduler.STOP_JOIN_TIMEOUT`），超时会告警而不是静默卡住退出。
     scheduler_runtime.stop()
+    await messages_router.M.HUB.stop()
     await img_proxy.close_client()
 
 
@@ -475,6 +480,10 @@ app.include_router(vtuber.router)
 app.include_router(img_proxy.router)
 app.include_router(auth.router)
 app.include_router(settings_router.router)
+# 推送通道（M0，devlog/241）：SSE over fetch，token 走 header。
+# ⚠️ debug 路由走**带守卫的助手**（仅 dev 注册）—— 生产构建里那条路径不存在。
+app.include_router(messages_router.router)
+messages_router.include_debug_routes(app)
 
 # 挂载静态文件目录，头像缓存可通过 /static/avatars/{uid}.jpg 访问
 # （目录随数据根 DATA_DIR 走，桌面端打包后位于数据目录）

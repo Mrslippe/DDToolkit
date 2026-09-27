@@ -173,6 +173,7 @@
 | **让打包版也优雅停止后端**（2026-09-27 记，devlog/226；**待拍板**） | 要你选通道；⚠️ **退出路径改错的后果是"关不干净/卡住不退出"**（R20 为此专门验过两种现场） | **现状**：关窗/托盘退出 → Job Object 或 `taskkill /PID /T /F`；壳被杀 → 后端看门狗 `os._exit(0)`；迁移 → `child.kill()` —— **三条都是硬杀**，lifespan 不跑 ⇒ 批次 6 的"调度运行时优雅停止"在打包版里是**死代码**（那行日志永远不出现）。**已就绪的一半**：`backend_main.py` 接了 `SIGBREAK`（↔ CTRL_BREAK），`scripts/shutdown_smoke.py` 用真进程验过「被礼貌叫停 ⇒ 0.36s 退出、码 0、日志命中」。**两条路选一**：**A** 后端加 `POST /shutdown`（token 守卫，壳在 `RunEvent::Exit` 先 POST ≤3s，没退再 `taskkill /F` 兜底）——与进程组无关、确定性强，代价是后端多一个端点（路由数与文档要同步）；**B** 壳发 CTRL_BREAK 给 sidecar 进程组——不动后端，但依赖 Tauri shell 插件给的**是不是独立进程组**（今天不确定，得先验） |
 | **第 4 阶段的 ①（第二刀）：把 B 站专属**实现**搬出 `scheduler.py` + `uid` 泛化成字符串**（2026-09-27 记，devlog/229；⚠️ 用户口径：**接在小红书之后做**） | 纯重构，不依赖合规拍板 | **第一刀已落**（devlog/229）：`platforms/streams.py` 的 `PostStreams` + `scheduler.BILIBILI_STREAMS` 一处绑定，核心循环里 0 个平台字面量、0 处 `fetch_bilibili_*` 直调（AST 判据盯着），733 条 pytest 零回归。**剩**：① `_enrich_dynamic_item` / `_absorb_video_dynamic` / `_route_live_item` / `_video_bvid_index` / `_refresh_pinned_post`（~250 行）搬进 `platforms/bilibili_posts.py`（⚠️ 先数清有多少 monkeypatch 点打在 `sch.<名字>` 上 —— 计划里"整体拆分搁置"的理由正是这个）；② `_fetch_posts_core` 的 `mid: int` → `uid: str` |
 | **平台框架只剩抖音（第 4 阶段 ④/①/⑤/⑥/⑦/⑧ 之后）**（2026-09-27 记，devlog/230–240） | ①②③ 已在 240 做完；剩下的都要用户拍板或等平台 | 小红书接入**已全链收口**（230→235）；① 两刀（229/236）；⑤（237）；⑥（238）；⑦（239）；⑧（**240：图片代理白名单逐条用例 / T0 直播走 registry / 熔断手动解除 + 可见性**）。⚠️ **已拍板不做**：B 站**不装令牌桶**（用户 2026-09-27）。**只剩**：① **抖音未接**（14 条白名单路径 + `bdms` 复刻维护面大，且**合规待拍板** —— 研究 §6）；② 调研 §5.2 里另两条（`resolve_identity` 两段式、`enrich` 依赖列表阶段的 `xsec_token`）今天靠"收录时复核 + raw_json 透传"绕过，**等抖音落地再定型** |
+| **消息中心（推送通道）**（2026-09-27 记，devlog/241；方案 `docs/design/notices/message-hub-execution.md`） | M0 已落；**M0b → M1 → … → M5 按顺序做**（M3 风险最高） | **M0 = 后端推送骨架**：`services/messages.py::MessageHub`（八类白名单 + 环形 50 回放 + 每订阅者有界队列 200 丢最旧）+ `GET /messages/stream`（SSE over **fetch**，token 走 header；只在 `Last-Event-ID` 时补发且带 `replay:true`）+ dev-only 合成钩子（`ui_probe` 用）。19 条判据 + 反向 9/9。**下一批 M0b**：`frontend/src/utils/eventStream.ts`（fetch + `ReadableStream`、断线重连回填 `Last-Event-ID`、`replay:true` **不弹提示**）+ 接进 `utils/appEvents.ts` 总线 + 探针新模式 + V5 结构判据（token 不进 URL）。⚠️ **真机验收（Tauri WebView2 能否读流）必须早于 M1** —— 读不出流就是方案 §3 的**停止条件**（通道选型要重新评估），不许"探针绿了"就过关。之后：**M1** 开播通知（`scheduler.py` 的开播边沿）→ **M2** 手动动作走中心 + 退役 `kickPoll`（先并存）→ **M3** 领域事件改推送（⚠️ **碰 R33 事故路径**）→ **M4** 小窗接同一通道、退役 `widget:notices` → **M5** 后端接管通知汇总 + 已读持久化（C 已拍板 ⇒ 解锁，需订阅者注册表）。**`fetch-status` 轮询并存、本线不退役** |
 | **`useVtuberRealtimeSync` 暂不做（2026-09-27 用户拍板）** | 纯前端重构；**等第二个消费者出现再做** | E6/E8 是**双写者**（同时写 `vtuber` 与 `selectedAccount` 两台机器的 state），而这两个 state 的所有权在场景机 `onCommit`（一次原子提交 7~8 个 state，为的是"切 V 不闪帧"）⇒ 抽独立 hook 会动到那条最敏感的路径。**拍板结论：先不做**，等真要在别处复用实时同步（小窗显示实时状态 / 新平台接入开新通道）时再动 —— 那时它才有第二个消费者，收益才划算。devlog/222 已把身份 updater 用 `useCallback([])` 钉稳（真要做时少一个坑） |
 
 ### 1.2 需要先定口径 / 拍板（不是写代码的问题）
@@ -453,7 +454,7 @@ W1/W2 可以在**现在的架构上**做完，但它们只是让 W3 少踩坑。
 > 索引已移入 **`docs/ROADMAP-DONE.md` → 「批次 → devlog 索引」**（2026-09-13 整理：
 > 本文件只留"要干什么"与当前基线，历史索引与已完成条目同处一份文件更好查）。
 
-### 6.2 当前门禁基线（2026-09-26 实测 / 复核）
+### 6.2 当前门禁基线（2026-09-27 实测 / 复核）
 
 > 只放**只能人跑**的实测值：一行一值 + 日期。**能派生的量指向真源，别抄** ——
 > 迁移 head / 表数 / 路由装饰器 / 下一篇 devlog 编号 / 静态用例条数 → `python scripts/gen_doc_numbers.py --list`；
@@ -462,7 +463,7 @@ W1/W2 可以在**现在的架构上**做完，但它们只是让 W3 少踩坑。
 
 | 门禁 | 命令 | 当前基线（括号里 = 该值实测日） |
 |---|---|---|
-| 后端 | `python -m pytest -q`（**解释器走 `.venv`**，见 `ARCHITECTURE.md` §6 第 24 条） | **849 passed / 0 failed**（2026-09-27 实测 ≈60–90s；其中 1 条**打真上游**的用例不可达时按设计 skip ⇒ 那一格会变 848 passed / 1 skipped） |
+| 后端 | `python -m pytest -q`（**解释器走 `.venv`**，见 `ARCHITECTURE.md` §6 第 24 条） | **868 passed / 0 failed**（2026-09-27 实测 ≈93s；其中 1 条**打真上游**的用例不可达时按设计 skip ⇒ 那一格会变 867 passed / 1 skipped） |
 | 桌面壳 | `cargo test`（工作目录 `frontend/src-tauri`） | **62 passed**（2026-09-27 实测；含 `delete_old_dir` 的真实 junction 用例、S1 的 token 生成用例、S3 的准入表/白名单用例与**迁移编排四条回滚路径**） |
 | 前端单测 | `npm --prefix frontend run test` | **690 passed / 54 文件**（2026-09-27 实测；条数确定，不随上游浮动） |
 | 前端类型 / lint | `npx tsc --noEmit`（**必须在 `frontend/` 里跑**）/ `npm --prefix frontend run lint` | 0 错 / 0 错（2026-09-26 复核） |
@@ -470,7 +471,7 @@ W1/W2 可以在**现在的架构上**做完，但它们只是让 W3 少踩坑。
 | 上游冒烟 | `python scripts/smoke_upstream.py [--cold]` | 真上游 **5 ok** / 冷进程 **3 ok**，0 FAIL（2026-09-23 复核） |
 | 未登录能力矩阵 | `python scripts/capability_matrix.py --write` | 两态逐接口实测（结论 = `docs/ARCHITECTURE.md` §3.9；**`--include-content` 触发 IP 级 412，别顺手跑**） |
 | 布局探针 | `python scripts/ui_probe.py --seed-accounts 8` | 三档 1100/1280/1440 × 10 视图全过（2026-09-27 复核）。⚠️ `8` 是常规参数：开发库只有 2 个账号，不种就是空转的门禁。⚠️ `--toolbar` 的**滚动那一步曾假红**（方向信号只从 rAF 里写，而虚拟时间下 rAF 几乎不被服务 ⇒ 读到挂载时那次同步 `sync()` 写的旧值；**加长等待救不了**，虚拟时间里等待不产生帧）：2026-09-27 改成探针显式调 **dev 钩子** `window.__ddtoolkitOsSync`（`OverlayScroll` 在 DEV 下注册的同一个 `sync`）+ 把"钩子不在 / 上滚方向没送达"当**前提失败**，两刀反向验证后连跑三次全绿（devlog/219、`DEV-LOOP.md` §6.16） |
-| 档位门禁 | `python scripts/gate.py` | A 档 **8 步**全过 / **98–126s**（2026-09-26 实测，含 `cargo test`、三档探针与**全仓语法扫描**；~250s 那版是 pytest 提速前 —— 见 devlog/200）；C 档 ≈46s |
+| 档位门禁 | `python scripts/gate.py` | A 档 **8 步**全过 / **≈165s**（2026-09-27 实测：pytest 93s + ui_probe 43s 是两笔大头；含 `cargo test`、三档探针与**全仓语法扫描**；~250s 那版是 pytest 提速前 —— 见 devlog/200）；C 档 ≈46s |
 | CI | GitHub Actions（`.github/workflows/`，真源在那里） | 两条腿：Linux（后端 ×2 个 Python + 前端）与 Windows（Rust + 冻结后端冒烟）。**2026-09-25 已首次跑绿**（`e3499f1`）——首跑到闭环共四次红，根因见 devlog/200（其中一条是**英文 Windows 用户首启即崩**的真 bug）。此后每个推送两条腿都跑：S1（`dd1613e`）与 S1b（`eafdd73`）均全绿（2026-09-26） |
 | 冻结产物体积 | `python scripts/build_backend.py` 的输出 | **71.7 MB**（2026-09-25；切 `uv.lock` 前记录 118.8MB）。出包后以 `release.py --only verify` 为准 |
 | 一把梭 | `python scripts/dev_check.py` | syntax / pytest / frontend logic / docs drift / dev backend 五项全 ok（2026-09-23 全量实跑） |

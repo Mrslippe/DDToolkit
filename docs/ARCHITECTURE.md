@@ -421,6 +421,14 @@ flowchart LR
 → 前端 TopBar 轮询（~2s）→ 左栏徽标 / 右栏卡片实时合并（`recent` 增量快照）。
 T0 的进度反馈就是这条通道（无进度条、无胶囊）。
 
+**2026-09-27 起多了一条推送通道（M0，devlog/241）**：`app/services/messages.py::MessageHub`
++ `GET /messages/stream`（SSE over fetch，token 走 header）。领域事件（`domain.*`）与
+派生通知（`notice.*`）由后端**主动**推给所有订阅者（主窗口 / 小窗），不再等下一次轮询
+—— "点击 → 各终点看到"最坏 3–10s 的延迟，99% 就耗在"等下次轮询"上。
+`publish()` **同步、任何线程可调**（开播边沿在 T0 守护线程里产生），经 `queue.Queue`
+中转到应用循环投递。**两条通道并存**：轮询是一致性兜底（推送漏发 / 重连窗口），
+M0 **不退役**轮询。细节与不变量见 `docs/backend-repositories-and-routers.md` §3.5。
+
 ---
 
 ### 3.9 未登录能力矩阵与内容抓取闸门（2026-09-15，devlog/086）

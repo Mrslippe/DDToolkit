@@ -50,7 +50,7 @@
 | `design/notices/placement-frontend-vs-backend.md` | **「通知放前端还是后端」的收益/风险对照**（2026-09-27）：F1/F2/F3 三种"前端"的区分、六源可搬迁性盘点、会改变用户可见行为的语义风险，以及**分两步（先前端后后端）**的建议路径 |
 | `design/notices/target-architecture.md` | **消息通知的改造后目标架构**（2026-09-27）：结构图、`GET /vtuber/notices` 契约、各层职责、`now` 真源、S1/S2 分步落地，以及一份「什么**不**变」清单（避免重构幻觉） |
 | `design/notices/message-hub-architecture.md` | **后端消息中心 · 分层消息类型 · 跨进程分发**（2026-09-27）：延迟的真实构成（99% 在"等下次轮询"）、推送通道选型（`EventSource` 带不了 token ⇒ 用 `fetch` + `ReadableStream`）、两层消息分类、手动动作也走中心、风险清单与 M0–M5 分步 |
-| `design/notices/message-hub-execution.md` | **消息中心的分批执行方案（交给执行 Agent）**（2026-09-27）：母计划 §0 九条 + 补六条、M0–M5 逐批的改动面/失败用例/反向验证/门禁/文档义务、**五条停止条件**、收尾清单与提交序列。⚠️ 含两条会踩空的坑：`token=` 判据会撞 `xsec_token=` 假红、`GET /events` 与既有 `GET /vtuber/{id}/events` 撞名。**§8 = 开工前复核（2026-09-27 第二批会话，基线 `5fb6ca0`）**：逐条复核前提成立、修正一处撞名判断，并补两处缺口（**T0 是守护线程 ⇒ publish 必须跨线程**、**V6 探针需要 dev-only 合成发布钩子**）+ 三条顺序纪律与 D/E 两条拍板建议 |
+| `design/notices/message-hub-execution.md` | **消息中心的分批执行方案（交给执行 Agent）**（2026-09-27）：母计划 §0 九条 + 补六条、M0–M5 逐批的改动面/失败用例/反向验证/门禁/文档义务、**五条停止条件**、收尾清单与提交序列。⚠️ 含两条会踩空的坑：`token=` 判据会撞 `xsec_token=` 假红、`GET /events` 与既有 `GET /vtuber/{id}/events` 撞名。**§8 = 开工前复核（2026-09-27 第二批会话，基线 `5fb6ca0`）**：逐条复核前提成立、修正一处撞名判断，并补两处缺口（**T0 是守护线程 ⇒ publish 必须跨线程**、**V6 探针需要 dev-only 合成发布钩子**）+ 三条顺序纪律与 D/E 两条拍板建议。**§M0 的 ✅ 已落块 = M0 实做结果（devlog/241）**：补上实施中的第三处复核（**drain 不能用 `run_in_executor` 阻塞读** ⇒ 真 lifespan 收尾会 join 死线程、整套测试挂死），并把前端半边拆成 **M0b**（真机验收必须早于 M1） |
 | `design/widget-preview/` | **小窗（状态 widget）形态预览与探针**（2026-09-27）：`direction.html`（**自包含**的形态方向对比页，展开上限 400），`content-*.png` / `fix*.png`（各形态与修复后截图），`probe.mjs`（该页的几何回归探针：`node docs/design/widget-preview/probe.mjs`，断言"看得见的边"位置、滚动条 = 0 等） |
 
 ## 3. 操作指南
