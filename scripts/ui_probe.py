@@ -2127,9 +2127,9 @@ def main() -> int:
         action="store_true",
         help="只跑一档宽度：**推送通道端到端**（M0b，devlog/242）—— 探针先确认 SSE 连接开着，"
              "再用后端 dev-only 合成钩子（`POST /messages/_debug/publish`）发一条 `notice.message`，"
-             "断言它**从推送回到页面**、应用侧总线收到、状态岛点亮；再发一条 `notice.progress`"
-             "断言它到了但**不弹提示**。⚠️ 末尾那条只在「起点岛是空闲的」时判（有抓取在跑时"
-             "点亮分不清是谁点的，会打印原因跳过）；`--vtuber` 建议显式给（自动探测要 token）。",
+             "断言它**从推送回到页面**、应用侧总线收到、并进了状态岛；再发一条 `notice.progress`"
+             "断言它到了但**不弹提示**。默认三档主流程也跑这一段（这条模式是定位用的）。"
+             "⚠️ 需要 `DEV_API_TOKEN` 非空（探针的 `be_env` 已经给了）—— 生产态那条钩子不存在。",
     )
     ap.add_argument(
         "--status-island",
