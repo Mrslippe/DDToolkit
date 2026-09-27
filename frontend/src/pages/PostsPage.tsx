@@ -298,7 +298,7 @@ export default function PostsPage() {
     exiting: sceneTransition.exiting,
   }
 
-  // 分页机（M4，批次 12 第三刀，devlog/220）：状态 + 哨兵 + 回顶全在这里。
+  // 分页机（M4，批次 12 第三刀，devlog/221）：状态 + 哨兵 + 回顶全在这里。
   // ⚠️ 取数 effect（下面那条）**刻意不搬** —— 它是分页机与「场景切换机 / 筛选机」的
   //    交汇点（播种守卫 / AbortController / `refreshTick` 边沿）；这里只把它的
   //    `loading` / `error` 当哨兵的门喂进去，依赖方向保持单向：页面 → 分页机。
@@ -490,8 +490,6 @@ export default function PostsPage() {
       })).filter((g) => g.count > 0),
     ]
   }, [stats, total, chipGroups])
-
-  // 无限滚动：hasMore 由累计长度与总数比较派生（第 1 页后 posts.length < total）
 
   // 壳层常驻：加载/错误态内联到 view-body（见渲染段），工具条与 view-switch
   // 不随切 V 卸载重挂——消除切换闪动
