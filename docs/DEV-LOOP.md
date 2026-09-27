@@ -207,6 +207,7 @@ python scripts/ui_probe.py --hero-print --vtuber 15   # 建基线；重构后带
 python scripts/ui_probe.py --status-island            # 顶栏状态岛（R12a，devlog/089、090）
 python scripts/ui_probe.py --status-widget            # 小窗独立入口 widget.html —— §6.1 / §6.5 / §6.8 的判据命令（devlog/185、187、188）
 python scripts/ui_probe.py --cell-pop                 # 日历格 hover 悬浮窗 —— §6.9 / §6.11 的判据命令（devlog/186、188）
+python scripts/ui_probe.py --vtuber 15 --messages     # 推送通道端到端（M0b，devlog/242）—— 三档主流程也跑它，这条是单跑定位用
 ```
 ⚠️ 需要完整权限（Vite 的 esbuild 与无头浏览器在受限沙箱会失败）；失败时保留 `_ui_probe_tmp/`（DOM dump + 截图 profile）供定位。`--shot*` 系列**只截图、不参与断言** —— 布局不变量只管「在不在框里」，配色/密度这类还得看图。
 它自动：复制开发数据目录 → 起后端 → 起 Vite → 无头浏览器加载 `/vtubers/<id>?probe=1`（`frontend/src/dev/probe.ts` 依次切四个视图、在列表页跑一遍筛选弹窗全链路（开 → 预设 → 确认 → 重置 → Esc）、再点一次「投稿」筛选，共八段测量），断言八组不变量（**每条断言的"为什么"都写在 `ui_probe.py` / `probe.ts` 的对应注释里**）：
@@ -440,6 +441,14 @@ Select-String -Path scripts\*.py,frontend\src\**\*.ts -Pattern "urlopen\(|fetch\
 开发态那个固定值**只有一处真源**：`scripts/dev_token.py`（三个 TS/Python 复述点由
 `tests/test_dev_token.py` 结构扫描钉住）；起后端的脚本一律 `**backend_env()`
 （它还负责**清掉 `DDTOOLKIT_API_TOKEN` 残留** —— 否则子后端会优先读它而两端不一致）。
+
+> ⚠️ **2026-09-27 第三次同类漏（devlog/242）**：`ui_probe.py` 里还有**三处**裸 `urlopen`
+> （`_first_vtuber` 与两处 `profile-cards` 落库对账）一直没带 token —— 上面那条命令
+> **查得出来**，但它是"写给人跑的"。症状又是三个不像认证问题的样子：手动裸跑探针时路由落到
+> `/`（只量到 `empty`、**所有布局断言静默空转**）、`--board-cards` 报"读不回卡片布局"。
+> ⇒ 这条现在也有 pytest 判据了：`tests/test_dev_token.py::test_probe_backend_calls_send_the_token`
+> （从 Python 侧打后端业务路径的每一发都要 `headers=`，公开三处豁免）。
+> **复用教训：能写成判据的检查，别只写成命令。**
 
 ### 6.14 ⚠️ 「文件被程序占着」类判据**必须分平台**（2026-09-26 加，devlog/215）
 POSIX **允许**改名 / 删除**打开中**的文件，Windows **不允许**（撞"另一个程序正在使用此文件"）。

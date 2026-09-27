@@ -1185,6 +1185,134 @@ async function sampleTopbar() {
   }
 }
 
+/**
+ * 推送通道端到端（M0b，devlog/242）：**后端主动推 → 页面收到 → 界面变了**。
+ *
+ * 为什么需要它：M0 的全部产出就是"通道通了"，而"通"这件事**在页面里看不出来** ——
+ * 轮询也能让界面变。所以这里用后端 dev-only 的合成钩子
+ * （`POST /messages/_debug/publish`，`DEV_API_TOKEN` 为空时那条路径根本不存在）
+ * 造一条**只有推送才可能带来**的消息：文案带一次性标记，断言它**从 SSE 回到页面**。
+ *
+ * 判据顺序是刻意的（DEV-LOOP：先有基线再谈"没发生 X"）：
+ * ① 连接先要真的开着（否则"没收到"分不清是"通道没通"还是"探针没跑"）；
+ * ② 发一条 `notice.message` ⇒ 事件到 + 状态岛点亮（**到界面了**，不只是"某个监听器收到了"）；
+ * ③ 再发一条 `notice.progress` ⇒ 到了但**不弹提示**（桥只该弹瞬时消息那类）。
+ *
+ * ⚠️ 消息正文用**一次性标记**（时间戳）：只认"这一条"，别把别处的内容算成通过。
+ * ⚠️ `latencyMs` 是**虚拟时间**里的数（探针跑在 `--virtual-time-budget` 下）——只打印、不断言。
+ */
+async function probeMessages(): Promise<Record<string, unknown>> {
+  const hook = () =>
+    ((window as unknown as { __ddtoolkitMessageStream?: () => Record<string, unknown> })
+      .__ddtoolkitMessageStream?.() ?? null)
+  const island = () => document.querySelector<HTMLElement>('.si-island')
+  const islandText = () => (island()?.querySelector('.si-text')?.textContent || '').trim()
+  /**
+   * 状态岛**当前挂着几条通知**：`.si-count` 只在 >1 条时才渲染（`StatusIsland.tsx`），
+   * 所以"没有那个元素"= 亮着 1 条、没亮 = 0 条。
+   *
+   * ⚠️ 为什么要按"条数"而不是"胶囊文案"判：胶囊只显示**优先级最高**的那条
+   * （alert > progress > report > message），而后端在跑抓取时 progress 一直占着胶囊 ——
+   * 只认文案的话，这条判据会在"有抓取在跑"时**假红**，而那是最常见的现场。
+   */
+  const noticeCount = () => {
+    const el = island()?.querySelector('.si-count')
+    if (el) return Number((el.textContent || '').trim()) || 0
+    return island()?.classList.contains('on') ? 1 : 0
+  }
+
+  const waitFor = async <T,>(fn: () => T, ms: number): Promise<T | null> => {
+    const t0 = performance.now()
+    while (performance.now() - t0 < ms) {
+      const v = fn()
+      if (v) return v
+      await sleep(100)
+    }
+    return null
+  }
+
+  const publish = async (type: string, payload: Record<string, unknown>) => {
+    const res = await authFetch('/messages/_debug/publish', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type, payload }),
+    })
+    const body = (await res.json().catch(() => null)) as Record<string, unknown> | null
+    return { status: res.status, body }
+  }
+
+  const result: Record<string, unknown> = {
+    // 探针**只按裸字符串监听**（与 `appEvents.ts` 的说明一致：探针/脚本是外部消费者）
+    state0: hook()?.state ?? null,
+    busReceived0: hook()?.received ?? null,
+  }
+
+  // ① 连接先开着
+  const opened = await waitFor(() => hook()?.state === 'open', 8000)
+  result.opened = !!opened
+  result.state1 = hook()?.state ?? null
+  if (!opened) return result
+
+  const seen: Array<Record<string, unknown>> = []
+  const onMessage = (e: Event) =>
+    seen.push((e as CustomEvent<Record<string, unknown>>).detail)
+  window.addEventListener('ddtoolkit:message', onMessage)
+
+  try {
+    // 一个空闲的起点：岛上有进度时"点亮"这件事分不清是谁点亮的
+    result.islandIdleBefore = !island()?.classList.contains('on')
+    result.islandCountBefore = noticeCount()
+
+    // ② 现场消息（该到界面）
+    const text = `推送探针 ${Date.now()}`
+    const t0 = performance.now()
+    const sent = await publish('notice.message', { text })
+    result.text = text
+    result.publishStatus = sent.status
+    result.publishedSeq = sent.body?.seq ?? null
+    const arrived = await waitFor(
+      () => seen.find((m) => (m.payload as Record<string, unknown> | undefined)?.text === text),
+      8000,
+    )
+    result.latencyMs = Math.round(performance.now() - t0)
+    result.arrived = !!arrived
+    result.arrivedType = arrived?.type ?? null
+    result.arrivedReplay = arrived?.replay ?? null
+    result.arrivedSeq = arrived?.seq ?? null
+    result.messageCount = seen.length
+    // 应用侧那条总线也收到了吗（探针自己的监听器**不算数**：那证明不了 `main.tsx` 起了流）
+    result.busReceived1 = hook()?.received ?? null
+    result.busLastType = hook()?.lastType ?? null
+
+    // 到界面：**两种证据任一**即可（见 `noticeCount` 的说明）——
+    // ① 岛空着时文案就是这条；② 岛被进度占着时，通知**条数**要 +1。
+    if (arrived) {
+      await waitFor(() => islandText() === text || noticeCount() > (result.islandCountBefore as number),
+        5000)
+    }
+    result.islandText = islandText()
+    result.islandLit = !!island()?.classList.contains('on')
+    result.islandCountAfter = noticeCount()
+    result.islandShowsIt = islandText() === text
+      || noticeCount() > (result.islandCountBefore as number)
+
+    // ③ 进度类消息：到了页面，但**不该**弹提示（不是"所有消息都点亮"）
+    const before = seen.length
+    const progressText = `进度探针 ${Date.now()}`
+    const sent2 = await publish('notice.progress', { text: progressText })
+    result.publish2Status = sent2.status
+    const progressed = await waitFor(() => (seen.length > before ? seen[seen.length - 1] : null), 5000)
+    result.progressArrived = progressed?.type ?? null
+    result.progressToasted = islandText() === progressText
+  } catch (err) {
+    result.error = String(err)
+  } finally {
+    window.removeEventListener('ddtoolkit:message', onMessage)
+  }
+  result.stateEnd = hook()?.state ?? null
+  return result
+}
+
 export async function runUiProbe(): Promise<void> {
   const out: unknown[] = []
   /**
@@ -5070,6 +5198,17 @@ export async function runUiProbe(): Promise<void> {
     return
   }
 
+  // 推送通道（M0b，devlog/242）：`?probe=messages` 只跑这一段（定位用）。
+  if (mode === 'messages') {
+    const messages = await probeMessages()
+    const pre = document.createElement('pre')
+    pre.id = 'ui-probe'
+    pre.textContent = JSON.stringify({ mode: 'messages', views: [], degraded, messages })
+    document.body.appendChild(pre)
+    document.title = 'UI_PROBE_DONE'
+    return
+  }
+
   if (!document.querySelector('.view-btn')) {
     // 走到这里 = 页面上没有视图光条。两种可能，都不能当「量过了」：
     //  ① 路由落在 `/`（没有选中 VTuber，通常是 `_first_vtuber` 失败）；
@@ -5140,7 +5279,10 @@ export async function runUiProbe(): Promise<void> {
   // 从那一侧**分不出来**，只能猜。这个字段把答案直接给出来。
   const auth = (window as unknown as { __ddtoolkitAuthDiag?: () => unknown })
     .__ddtoolkitAuthDiag?.() ?? null
-  pre.textContent = JSON.stringify({ mode: 'main', views: out, topbar, shell, auth, degraded })
+  // 推送通道端到端（M0b，devlog/242）：**放在主流程里**，这样三档宽度的门禁顺带守着它 ——
+  // 只做一个 `--messages` 专用模式的话，那条判据会变成"没人跑 = 不存在"。
+  const messages = await probeMessages()
+  pre.textContent = JSON.stringify({ mode: 'main', views: out, topbar, shell, auth, degraded, messages })
   document.body.appendChild(pre)
   document.title = 'UI_PROBE_DONE'
 }

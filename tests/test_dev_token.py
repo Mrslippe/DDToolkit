@@ -113,6 +113,62 @@ def test_scripts_that_call_the_backend_send_the_header():
 
     反向验证：把 `smoke_delete.py` 里的 `dev_token.headers()` 换成手写的 `{}` ⇒ 红。
     """
-    for name in ("dev_check.py", "smoke_upstream.py", "smoke_delete.py", "perf_report.py"):
+    for name in ("dev_check.py", "smoke_upstream.py", "smoke_delete.py", "perf_report.py",
+                 "ui_probe.py"):
         text = (ROOT / "scripts" / name).read_text(encoding="utf-8", errors="replace")
         assert "dev_token" in text, f"{name} 没有接开发态 token（S1 起它会 401）"
+
+
+#: 后端**业务**路径前缀（要 token）；公开三处（`/healthz`、`/static/`、`/img-proxy`）
+#: 是有意不鉴权的，见 `app/core/api_auth.py` 的 docstring。
+_BUSINESS_PATHS = ("/vtuber", "/account", "/posts", "/post/", "/externals", "/settings",
+                   "/auth", "/capabilities", "/messages", "/healthz")
+_PUBLIC_PATHS = ("/healthz", "/static/", "/img-proxy")
+
+
+def test_probe_backend_calls_send_the_token():
+    """`ui_probe.py` 里**从 Python 侧**打后端业务端点的每一发都要带头（devlog/242）。
+
+    为什么单列一条：S1 之后探针里留了**三处裸 `urlopen`**（`_first_vtuber` 与两处
+    `profile-cards` 对账），恒定 401，而症状**都长得不像认证问题**：
+    `_first_vtuber` 失败 ⇒ 路由落到 `/` ⇒ 只量到 `empty`、所有布局断言空转；
+    `--board-cards` 报"读不回卡片布局"。`gate.py` 显式传 `--vtuber 15`，把第一处遮住了
+    —— 同一类漏在 `dev_check.py`/`smoke_upstream.py` 上已经发生过一次
+    （`DEV-LOOP.md` §6.13），这是第三次。
+
+    认两种写法：`urlopen(Request(url, headers=…))` 与 `urlopen(url, headers=…)`；
+    判据是"**裸 URL 那一发**窗口里必须有 `headers=`"，公开路径三处豁免。
+    反向验证：把 `_first_vtuber` 里的 `Request(..., headers=DEV_HEADERS)` 还原成裸
+    `urlopen(f"…/vtuber/list")` ⇒ 本用例红并点名行号。
+    """
+    text = (ROOT / "scripts" / "ui_probe.py").read_text(encoding="utf-8", errors="replace")
+    offenders: list[str] = []
+    for m in re.finditer(r"urllib\.request\.urlopen\(", text):
+        window = text[m.end(): m.end() + 260]
+        if "127.0.0.1" not in window and "localhost" not in window:
+            continue                       # 参数是变量（`req`）：URL 在上一句的 Request 里
+        if not any(p in window for p in _BUSINESS_PATHS):
+            continue
+        if any(p in window for p in _PUBLIC_PATHS):
+            continue                       # 公开路径：有意不鉴权
+        if "headers=" in window:
+            continue
+        line = text[: m.start()].count("\n") + 1
+        offenders.append(f"ui_probe.py:{line}")
+    # `Request(...)` 那一半：URL 写在 Request 里时，同一句必须有 headers
+    for m in re.finditer(r"urllib\.request\.Request\(", text):
+        window = text[m.end(): m.end() + 260]
+        if not any(p in window for p in _BUSINESS_PATHS):
+            continue
+        if any(p in window for p in _PUBLIC_PATHS):
+            continue
+        if "headers=" in window:
+            continue
+        line = text[: m.start()].count("\n") + 1
+        offenders.append(f"ui_probe.py:{line}(Request)")
+    assert not offenders, (
+        f"这些地方打后端业务端点却没带 token 头：{offenders} —— S1 起会 401，"
+        f"而症状看着像布局/数据坏了（见本用例 docstring）。"
+        f"修法：`urllib.request.Request(url, headers=DEV_HEADERS)` 再传给 urlopen。"
+    )
+

@@ -947,7 +947,8 @@ density / 折叠尺寸 `[200,40]` / 面板宽 280 / `backdrop-filter` 含 `blur(
 | `ddtoolkit:account-progress` | TopBar 快照增量（**内容 diff 而非长度增量**，2026-09-07 修复环形上限/清空丢事件） | VtuberSidebar `mergeSnapshots` 就地合并（`utils/accountSnapshots.ts` 共享实现）；PostsPage 同源合并 hero/徽标 |
 | `ddtoolkit:data-changed` | 添加/解除订阅成功 | VtuberSidebar 刷列表 |
 | `ddtoolkit:kick-poll` | 各操作按钮 | TopBar 立即轮询一次（防单V抓取快速完成漏边沿） |
-| `ddtoolkit:pill-message` | 抓取/更新完成 | TopBar 状态胶囊覆盖显示 4s |
+| `ddtoolkit:pill-message` | 抓取/更新完成；**另：后端推送来的 `notice.message`**（`utils/messageBus.ts`，M0b/devlog/242，且**补发 `replay:true` 的不发**） | TopBar 状态胶囊覆盖显示 4s |
+| `ddtoolkit:message` | **后端推送通道**（`GET /messages/stream`，SSE over fetch → `utils/eventStream.ts` → `utils/messageBus.ts`，M0b/devlog/242；信封 = `{type, payload, ts, seq, replay}`） | 暂无产品消费者（M1–M5 的挂点；探针 `ui_probe.py --messages` 与主流程三档都在断言它） |
 
 > ⚠️ **后台刷新不得打断用户草稿**（2026-09-10 修复）：上述事件会让 PostsPage 换掉 `vtuber`
 > 对象引用，任何「依赖 props 重新初始化表单」的弹窗都会把用户正在编辑的内容冲掉

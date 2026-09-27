@@ -14,6 +14,7 @@
  * 老的裸 `addEventListener('ddtoolkit:xxx', fn)` 写法照旧可用。
  */
 import type { AccountSnapshot, VTuber } from '../api/types'
+import type { StreamMessage } from './eventStream'
 import type { FetchIdleKind } from './fetchIdle'
 import type { Notice } from './notificationHub'
 
@@ -36,6 +37,8 @@ export const EVENTS = {
   capabilitiesRefresh: 'ddtoolkit:capabilities-refresh',
   /** dev-only：给小窗注入条目（无头探针用） */
   widgetSeed: 'ddtoolkit:widget-seed',
+  /** 后端推送来的**一条消息**（M0b，devlog/242；信封见 `utils/eventStream.ts`） */
+  message: 'ddtoolkit:message',
 } as const
 
 /** 名字 → payload。`undefined` = 该事件不带 detail（老代码派发的是裸 `Event`）。 */
@@ -49,6 +52,8 @@ export interface AppEventMap {
   'ddtoolkit:capabilities-refresh': undefined
   /** dev-only：注入的条目数组 */
   'ddtoolkit:widget-seed': Notice[]
+  /** 后端推送来的一条消息（原样信封：`type` / `payload` / `ts` / `seq` / `replay`） */
+  'ddtoolkit:message': StreamMessage
 }
 
 export type AppEventName = keyof AppEventMap
@@ -63,6 +68,7 @@ export const APP_EVENT_NAMES: readonly AppEventName[] = [
   'ddtoolkit:vtuber-updated',
   'ddtoolkit:capabilities-refresh',
   'ddtoolkit:widget-seed',
+  'ddtoolkit:message',
 ]
 
 /** 默认宿主：`window`（调用时取，不在模块加载时取 —— 单测跑在 node 环境时没有 `window`） */

@@ -37,7 +37,18 @@ FRONTEND = ROOT / "frontend"
 # ⚠️ 抽出去的原因：S1b 只修了探针，`dev_check.py` 与 `smoke_upstream.py` 一直 401
 #    —— "同一个固定值被三个脚本各写一遍"正是那次漏的温床（见 `dev_token.py` 的说明）。
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from dev_token import DEV_TOKEN as PROBE_DEV_TOKEN  # noqa: E402
+from dev_token import DEV_TOKEN as PROBE_DEV_TOKEN, HEADER as DEV_TOKEN_HEADER  # noqa: E402
+
+#: 探针**从 Python 侧**打后端业务端点时要带的头（脚本侧唯一该用的写法，头名只在
+#: `dev_token.py` 一处）。值**钉常量**而不是 `dev_token.token()`：后端子进程的 env 也是
+#: 这么钉的（见 `be_env`），两端必须同一个值，否则 shell 里的残留会让一端选另一个。
+#:
+#: ⚠️ 2026-09-27（devlog/242）补：S1 之后探针里有**三处裸 `urlopen`** 一直没带这个头
+#: （`_first_vtuber` 与两处 `profile-cards` 对账）⇒ 恒定 401。症状分别是"探针落到 `/`、
+#: 所有布局断言空转"和"`--board-cards` 报拿不到卡片布局"，**都长得不像认证问题**
+#: —— 与 dev_check/smoke_upstream 那次是同一类（`DEV-LOOP.md` §6.13）。
+#: 现在有结构判据盯着（`tests/test_dev_token.py::test_probe_backend_calls_send_the_token`）。
+DEV_HEADERS = {DEV_TOKEN_HEADER: PROBE_DEV_TOKEN}
 
 # Windows 控制台常常是 GBK（cp936），而探针的打印里有排版字符（✕ U+2715、− U+2212 等）
 # **不在 GBK 码表里** —— 一句 print 就会抛 UnicodeEncodeError，把整条探针从中间打断
@@ -369,8 +380,17 @@ def _prepare_logged_out() -> Path:
 
 
 def _first_vtuber(port: int) -> int | None:
+    """取库里第一个 V 的 id（没传 `--vtuber` 时的兜底）。
+
+    ⚠️ **必须带开发态 token**（S1 起业务端点都要它）：原先这里是裸 `urlopen` ⇒ 恒定 401
+    ⇒ 静默返回 None ⇒ 路由落到 `/`，探针只量到一段 `empty`、所有断言空转
+    （正是 DEV-LOOP §二·五「探针完整性」那条假通过路径）。`gate.py` 一直显式传
+    `--vtuber 15`，所以只有手动裸跑探针才会撞上。
+    """
     try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/vtuber/list", timeout=10) as r:
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/vtuber/list",
+                                     headers=DEV_HEADERS)
+        with urllib.request.urlopen(req, timeout=10) as r:
             items = json.loads(r.read().decode("utf-8"))
         return int(items[0]["id"]) if items else None
     except Exception:
@@ -447,6 +467,9 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
                 (v.get("deck") for v in (data.get("views") or [])
                  if isinstance(v, dict) and v.get("deck")), None),
             "shell": data.get("shell"),
+            # 推送通道端到端（M0b，devlog/242）：`?probe=1` 主流程与 `?probe=messages` 都产出它。
+            # 同样：白名单不登记 = 静默丢掉（本文件已踩过一次）
+            "messages": data.get("messages"),
             "degraded": data.get("degraded") or [],
             "dom": dom_file,
         }
@@ -456,7 +479,7 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
             "appSettings": None, "filterPill": None, "traySuspend": None,
             "closeAsk": None, "switchPerf": None, "profileSync": None,
             "pinned": None, "board": None, "motionCards": None, "deck": None,
-            "degraded": [], "dom": dom_file}
+            "messages": None, "degraded": [], "dom": dom_file}
 
 
 # ── 展示页 hero 药丸签名（P2 分层收敛 A 批次的位级回归护栏）─────────────
@@ -1939,6 +1962,51 @@ def _kill_tree(proc: subprocess.Popen | None) -> None:
         proc.kill()
 
 
+def _assert_messages(ms: dict | None, width: int) -> list[str]:
+    """推送通道端到端（M0b，devlog/242）。
+
+    判据（探针侧 `probeMessages()` 收集）：连接先开着 · 合成消息**从推送回来** ·
+    应用侧总线也收到了（不是只有探针自己的监听器）· `notice.message` 点亮状态岛 ·
+    `notice.progress` 到了但**不**弹提示。
+
+    ⚠️ "状态岛那条"要求起点是空闲的（`islandIdleBefore`）：岛被抓取进度占着时，
+    "点亮"分不清是谁点亮的 —— 那时**只判到"通道通了"并打印原因**（skip 必须说出为什么，
+    别冒充通过）。
+    """
+    bad: list[str] = []
+    if not ms:
+        return [f"@{width} messages: 探针没产出推送段"
+                f"（新字段要在 `_run_probe` 的白名单里登记，页面侧在 `probeMessages()`）"]
+    if not ms.get("opened"):
+        return [f"@{width} messages: 推送连接没开起来（state={ms.get('state1')!r}）—— "
+                f"后端没起 / 端点没挂 / token 不对？"]
+    if ms.get("publishStatus") != 200:
+        bad.append(f"@{width} messages: 合成发布没成功（HTTP {ms.get('publishStatus')!r}，"
+                   f"{ms.get('error') or ms.get('publishBody')}）—— "
+                   f"dev-only 钩子在生产态**不该存在**，探针态必须在（`DEV_API_TOKEN` 非空）")
+    if not ms.get("arrived"):
+        bad.append(f"@{width} messages: 消息发出去了（seq={ms.get('publishedSeq')!r}）"
+                   f"但**没从推送回来** —— 通道没通，或前端没在监听 `ddtoolkit:message`")
+    elif ms.get("arrivedType") != "notice.message":
+        bad.append(f"@{width} messages: 回来的类型是 {ms.get('arrivedType')!r}，不是发的那个")
+    if ms.get("arrivedReplay") is not False:
+        bad.append(f"@{width} messages: 现场消息带着 replay={ms.get('arrivedReplay')!r}"
+                   f"（首连不该有补发标记）")
+    bus0, bus1 = ms.get("busReceived0"), ms.get("busReceived1")
+    if not isinstance(bus0, int) or not isinstance(bus1, int) or bus1 <= bus0:
+        bad.append(f"@{width} messages: 应用侧总线没收到（received {bus0} → {bus1}）—— "
+                   f"探针自己的监听器收到不算：那证明不了 `main.tsx` 起了流")
+    # 到界面：两种证据任一（岛空着 ⇒ 文案就是它；岛被进度占着 ⇒ 通知条数 +1）
+    if not ms.get("islandShowsIt"):
+        bad.append(f"@{width} messages: 消息到了页面却**没进状态岛**"
+                   f"（文案 {ms.get('islandText')!r}，条数 "
+                   f"{ms.get('islandCountBefore')} → {ms.get('islandCountAfter')}）—— 桥断了？")
+    if ms.get("progressArrived") and ms.get("progressToasted"):
+        bad.append(f"@{width} messages: `notice.progress` 也弹了提示 —— "
+                   f"桥只该弹瞬时消息那类（否则每种领域事件都会刷顶栏）")
+    return bad
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--width", type=int, action="append", help="窗口宽度（可多次，默认 1100/1280/1440）")
@@ -2053,6 +2121,15 @@ def main() -> int:
         "--shot-cell-pop",
         action="store_true",
         help="额外存图：`--cell-pop` 那一档截一张 hover 悬浮窗（_ui_probe_tmp/cell-pop-<宽>.png）",
+    )
+    ap.add_argument(
+        "--messages",
+        action="store_true",
+        help="只跑一档宽度：**推送通道端到端**（M0b，devlog/242）—— 探针先确认 SSE 连接开着，"
+             "再用后端 dev-only 合成钩子（`POST /messages/_debug/publish`）发一条 `notice.message`，"
+             "断言它**从推送回到页面**、应用侧总线收到、状态岛点亮；再发一条 `notice.progress`"
+             "断言它到了但**不弹提示**。⚠️ 末尾那条只在「起点岛是空闲的」时判（有抓取在跑时"
+             "点亮分不清是谁点的，会打印原因跳过）；`--vtuber` 建议显式给（自动探测要 token）。",
     )
     ap.add_argument(
         "--status-island",
@@ -3267,6 +3344,42 @@ def main() -> int:
                 print("   -", b)
             return 1 if failures else 0
 
+        if args.messages:
+            # 推送通道端到端（M0b，devlog/242）：M0 的产出就是"通道通了"，而"通"在页面里
+            # 看不出来（轮询也能让界面变）⇒ 用后端 dev-only 合成钩子造一条**只有推送才可能
+            # 带来**的消息，断言它从 SSE 回到页面并点亮状态岛。
+            # ⚠️ 主流程（默认三档）**也**跑这一段，所以这条判据不会变成"没人跑=不存在"。
+            w = widths[0]
+            url = f"http://localhost:{vite_port}{route}?probe=messages"
+            print(f"[probe] messages @{w} → {url}")
+            res = _run_probe(edge, url, w, args.height, WORK, "messages")
+            ms = ((res or {}).get("messages") or {})
+            if res and not ms:
+                print(f"  [!] 探针 mode={res.get('mode')!r} 键={sorted(res.keys())}"
+                      f"（新字段要在 _run_probe 的白名单里登记）")
+            if ms:
+                print(f"  ① 连接：state={ms.get('state0')!r} → {ms.get('state1')!r} "
+                      f"（开着={ms.get('opened')}）")
+                print(f"  ② 现场消息：发布 HTTP {ms.get('publishStatus')!r} / seq="
+                      f"{ms.get('publishedSeq')!r} → 收到={ms.get('arrived')} "
+                      f"type={ms.get('arrivedType')!r} replay={ms.get('arrivedReplay')!r} "
+                      f"（虚拟时间 {ms.get('latencyMs')}ms）")
+                print(f"     应用侧总线 received：{ms.get('busReceived0')!r} → "
+                      f"{ms.get('busReceived1')!r}（last={ms.get('busLastType')!r}）")
+                print(f"     状态岛：起点空闲={ms.get('islandIdleBefore')} "
+                      f"亮起={ms.get('islandLit')} 文案={ms.get('islandText')!r} "
+                      f"条数={ms.get('islandCountBefore')}→{ms.get('islandCountAfter')} "
+                      f"（进去了={ms.get('islandShowsIt')}）")
+                print(f"  ③ 进度消息：发布 {ms.get('publish2Status')!r} → "
+                      f"到页面={ms.get('progressArrived')!r} 弹提示={ms.get('progressToasted')!r}")
+            rows = _assert_messages(ms, w)
+            failures.extend(rows)
+            for b in rows:
+                print("   -", b)
+            if not rows:
+                print("  [ok] 推送通道：合成消息经 SSE 回到页面，桥把它变成了应用事件")
+            return 1 if failures else 0
+
         if args.status_island:
             # 顶栏状态岛（R12a，devlog/089）：把三套并存的信息渲染收成一个控件之后，
             # 要钉的是**四态与两条不变量**（空闲无容器 / 展开不挤动右栏）。
@@ -4397,11 +4510,12 @@ def main() -> int:
                     if not bc.get("addBtnDisabledAfterAdd"):
                         failures.append(f"@{w} board-cards: 所有 kind 都在板上时「添加卡片」"
                                         f"应当禁用（title={bc.get('addBtnTitleAfterAdd')!r}）")
-                # **后端对账**
+                # **后端对账**（⚠️ 必须带开发态 token —— 裸 urlopen 会被 S1 的门禁 401）
                 try:
-                    with urllib.request.urlopen(
-                            f"http://127.0.0.1:{be_port}/vtuber/{vid}/profile-cards",
-                            timeout=10) as r:
+                    req = urllib.request.Request(
+                        f"http://127.0.0.1:{be_port}/vtuber/{vid}/profile-cards",
+                        headers=DEV_HEADERS)
+                    with urllib.request.urlopen(req, timeout=10) as r:
                         stored = json.loads(r.read().decode("utf-8"))
                 except Exception as exc:
                     stored = None
@@ -4740,10 +4854,12 @@ def main() -> int:
                                 failures.append(f"@{w} board: 拖动后 {k1} 与 {k2} 重叠"
                                                 f"（推开口径没生效）")
                     # **落库对账**：直接问后端 —— 只看 DOM 的话，"排好了但没存上"照样绿
+                    # （⚠️ 同样必须带开发态 token）
                     try:
-                        with urllib.request.urlopen(
-                                f"http://127.0.0.1:{be_port}/vtuber/{vid}/profile-cards",
-                                timeout=10) as r:
+                        req = urllib.request.Request(
+                            f"http://127.0.0.1:{be_port}/vtuber/{vid}/profile-cards",
+                            headers=DEV_HEADERS)
+                        with urllib.request.urlopen(req, timeout=10) as r:
                             stored = json.loads(r.read().decode("utf-8"))
                     except Exception as exc:
                         stored = None
@@ -5397,6 +5513,9 @@ def main() -> int:
             bad += _assert(res["views"], w)
             bad += _assert_board(res["views"], w)
             bad += _assert_topbar(res.get("topbar"), w)
+            # 推送通道端到端（M0b，devlog/242）：**主流程里也跑** —— 只在专用模式里判的话，
+            # 那条判据就是"没人跑 = 不存在"（本仓对"写给人做的检查"的一贯态度）。
+            bad += _assert_messages(res.get("messages"), w)
             # R33（devlog/135）：UI 就位后 `.app-shell` 必须透明 —— 它有底色时，
             # 子层被 4px 圆角裁切的那 1~2px 会混出白边（顶栏粉/rail 灰的角上肉眼可见）。
             sh = res.get("shell") or {}

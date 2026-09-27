@@ -17,6 +17,7 @@ import type { BootFailureCopy, HealthzPayload } from './utils/bootFailure'
 import { classifyBootFailure } from './utils/bootFailure'
 import MigrationFailureBanner from './components/MigrationFailureBanner'
 import { openDataDir } from './utils/shellBridge'
+import { startMessageBus, stopMessageBus } from './utils/messageBus'
 import { installShellLifecycle } from './utils/shellLifecycle'
 import { applyCornersMode } from './utils/windowCorners'
 
@@ -171,6 +172,17 @@ function Root() {
   // （浏览器/探针退化为 visibilitychange + dev 钩子）。必须在最外层装一次 ——
   // 顶栏轮询与状态岛轮播都靠它停表。
   useEffect(() => installShellLifecycle(), [])
+
+  // 后端推送通道（M0b，devlog/242）：起一条 SSE（`utils/messageBus.ts`）。
+  //
+  // ⚠️ 它**不受 R18「隐藏即停表」约束**：那条规则针对的是**轮询**
+  // （"没人看就别问"），而推送的设计前提恰恰是"后台也在收"
+  // （收进托盘后小窗/顶栏仍要立刻变）。一条常连不产生新请求，也不会让
+  // `--tray-suspend` 的"隐藏后 0 次轮询"判据变红。
+  useEffect(() => {
+    startMessageBus()
+    return () => stopMessageBus()
+  }, [])
 
   useEffect(() => {
     if (!isTauri) {

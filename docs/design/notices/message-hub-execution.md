@@ -211,6 +211,22 @@ V5 结构判据（token 不进 URL，锚 `apiToken`）。
 **停止条件**：真机（Tauri WebView2）里 `ReadableStream` 读不出流 ⇒ **停下报告**（§3 M0 的原停止条件），
 M0b 不许"探针绿了就宣布通过"。
 
+> ### ✅ 已落（2026-09-27，devlog/242）
+>
+> `utils/eventStream.ts`（传输：帧解析 / 自动重连 / 只在重连时带 `Last-Event-ID` / `stop()` abort）
+> + `utils/messageBus.ts`（分发：`ddtoolkit:message` + `notice.message` 点亮胶囊，**补发不弹**）
+> + `appEvents` 加第 9 个事件 + `main.tsx` 起一条 + `probeMessages()`（**默认三档主流程也跑**，
+> 另有 `--messages` 单跑）。
+>
+> 判据：`eventStream.test.ts` 14 条 + `messageBus.test.ts` 9 条（含**读后端源码**对账
+> `KNOWN_TYPES` 的跨语言契约、扫全前端源码的 V5 结构判据）+ 探针端到端一条；
+> **反向验证 15/15 全红**（13 vitest + 2 探针）。
+> ⚠️ 第一遍有**两条变异是绿的**（"半个帧不交回调用方"的切点落在早退分支上；
+> `{ok:false, body:null}` 让 `!res.body` 也能拦下 401）⇒ 判据改了才对得上，教训记 devlog §四。
+>
+> ⚠️ **真机验收仍未做**（下方停止条件）：探针跑在**无头 Edge**，真机是 **WebView2** ——
+> "探针绿"推不出"真机能用"。**M1 之前必须有这一次真机确认。**
+
 ---
 
 ### 批次 M1 — 开播通知（**成本最低、收益最直观**）
