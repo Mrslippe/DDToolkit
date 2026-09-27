@@ -51,6 +51,7 @@ from app.services.externals.runner import run_external_interval
 from app.services.weibo_auth import weibo_auth_manager
 from app.services import capabilities
 from app.services import identity_limit
+from app.services import messages as message_hub
 from app.services import rate_limit as rl
 # 注意：此处不调用 logging.basicConfig —— 根日志配置统一由
 # `app/core/logging_setup.py::setup_logging()`（在 app/main.py 里调用）完成。
@@ -3003,6 +3004,22 @@ async def live_sweep_core(db: Session, client: httpx.AsyncClient | None = None) 
                     if edge and started:
                         # R28②：开播意味着"内容马上会来" ⇒ 立刻把动态流恢复满速
                         note_dynamics_activity(f"检测到开播（{acc.display_name or acc.platform_uid}）")
+                        # 开播边沿的**面向用户出口**（M1，devlog/243）：原先这条边沿的
+                        # 唯一消费者就是上面那句"恢复满速"，用户什么都看不到。
+                        # ⚠️ **必须在 `db.commit()` 之后**（方案 §2.2）：消息发出去收不回，
+                        #    而事务可能回滚 ⇒ 订阅者会收到一条"从未发生过"的事件
+                        #    （判据 `test_no_message_when_the_transaction_rolls_back`）。
+                        # ⚠️ payload 用 **snake_case**（= API/表字段口径）：领域事件带的是
+                        #    "实体长什么样"，与 `domain.vtuber.updated` 那类一致。
+                        message_hub.HUB.publish(message_hub.MSG_LIVE_EDGE, {
+                            "vtuber_id": acc.vtuber_id,
+                            "account_id": acc.id,
+                            "platform": acc.platform,
+                            "platform_uid": str(acc.platform_uid or ""),
+                            "name": acc.display_name or str(acc.platform_uid or ""),
+                            "live_title": acc.live_title or "",
+                            "live_url": acc.live_url or "",
+                        })
                     _push_account_snapshot(acc)
                     result.success += 1
                 await asyncio.sleep(random.uniform(settings.STARTUP_LIVE_INTERVAL_MIN,

@@ -149,6 +149,33 @@ export function reportNotice(opts: {
   }
 }
 
+/**
+ * 开播告警（M1，devlog/243）：后端推 `domain.live.edge` ⇒ 这是"该不该现在去看直播"的提示，
+ * 按 R12a 的口径属于 **alert**（会影响用户下一步动作）。
+ *
+ * ⚠️ **必须带 TTL，不能 sticky**：alert 的优先级（4）高于 progress（3），常驻就等于
+ * "开播过的那次会一直压住顶栏的任务进度"。取 2 分钟：够用户看见并决定，又不长期占位。
+ * ⚠️ 面板里的顺序仍由 `pickPrimary` 决定：同一时刻多条 alert 取**最新**那条。
+ */
+export const LIVE_NOTICE_MS = 2 * 60_000
+
+export function liveNotice(opts: {
+  id: string
+  name: string
+  title?: string
+  now: number
+  ttlMs?: number
+}): Notice {
+  return {
+    id: opts.id,
+    kind: 'alert',
+    text: `${opts.name} 开播了`,
+    detail: opts.title || undefined,
+    source: '开播',
+    expiresAt: opts.now + (opts.ttlMs ?? LIVE_NOTICE_MS),
+  }
+}
+
 /** 瞬时消息（`ddtoolkit:pill-message`）：ttl 后自动消失 */
 export function messageNotice(text: string, now: number, ttlMs: number): Notice {
   return {

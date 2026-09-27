@@ -1304,6 +1304,48 @@ async function probeMessages(): Promise<Record<string, unknown>> {
     const progressed = await waitFor(() => (seen.length > before ? seen[seen.length - 1] : null), 5000)
     result.progressArrived = progressed?.type ?? null
     result.progressToasted = islandText() === progressText
+
+    // ④ 开播边沿（M1，devlog/243）：后端推 `domain.live.edge` ⇒ 顶栏出现 **alert** 级告警。
+    //    这条同时验三件事：领域事件被解成结构化 payload、桥把它交给 UI、alert 进得了面板。
+    //
+    //    ⚠️ **不看胶囊文案**：`.si-text` 走的是"淡出旧的 → 换新的"两段式，而虚拟时间下
+    //    CSS 过渡不推进（DEV-LOOP §二·五），采样它等于赌相位。**看面板**才是确定的：
+    //    面板把每条 live 通知按 `data-kind` 列出来，不经过任何过渡。
+    const edgeName = `开播探针${Date.now() % 100000}`
+    const liveEvents: Array<Record<string, unknown>> = []
+    const onLive = (e: Event) => liveEvents.push((e as CustomEvent<Record<string, unknown>>).detail)
+    window.addEventListener('ddtoolkit:live-edge', onLive)
+    const sent3 = await publish('domain.live.edge', {
+      vtuber_id: 0, account_id: 0, platform: 'bilibili', platform_uid: '0',
+      name: edgeName, live_title: '探针场次', live_url: '',
+    })
+    result.publish3Status = sent3.status
+    await waitFor(() => liveEvents.length > 0, 5000)
+
+    const hoverAt = (el: Element, type: string) => {
+      const r = el.getBoundingClientRect()
+      el.dispatchEvent(new PointerEvent(type, {
+        bubbles: true, cancelable: true, pointerId: 41, pointerType: 'mouse',
+        isPrimary: true, relatedTarget: document.body,
+        clientX: Math.round(r.left + r.width / 2), clientY: Math.round(r.top + r.height / 2),
+      }))
+    }
+    const cap = island()
+    if (cap) hoverAt(cap, 'pointerover')
+    const panel = await waitFor(() => document.querySelector<HTMLElement>('.si-panel'), 3000)
+    const alertItems = panel
+      ? [...panel.querySelectorAll<HTMLElement>('.si-item[data-kind="alert"] .si-item-text')]
+          .map((el) => (el.textContent || '').trim())
+      : []
+    if (panel) hoverAt(panel, 'pointerout')
+    await waitFor(() => !document.querySelector('.si-panel'), 3000)
+
+    result.liveEventCount = liveEvents.length
+    result.liveEvent = liveEvents[0] ?? null
+    result.panelOpened = !!panel
+    result.liveAlertItems = alertItems
+    result.liveShown = alertItems.includes(`${edgeName} 开播了`)
+    window.removeEventListener('ddtoolkit:live-edge', onLive)
   } catch (err) {
     result.error = String(err)
   } finally {

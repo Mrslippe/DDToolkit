@@ -93,6 +93,33 @@ async def messages_stream(request: Request,
     )
 
 
+@router.post("/ack")
+async def messages_ack(payload: Optional[dict] = None):
+    """客户端确认"**真的读到了流**"（M1，devlog/243）。
+
+    ## 为什么需要它
+
+    M0 的停止条件是"真机（Tauri **WebView2**）里 `ReadableStream` 读得出流吗"，而这件事
+    **服务端看不见**：连接建起来 ≠ 客户端读得到字节（缓冲区不吐数据时，服务端这边一切正常、
+    也没有任何报错）。⇒ 前端在**收到第一块字节**时发一次这个 ack（每条连接一次），
+    于是"通道通没通"在日志里**一句话可查**：
+
+    ```
+    推送通道：客户端已确认读到流（seq=…，订阅者 1）
+    ```
+
+    ⚠️ 它同时是 M5「目睹才报」**订阅者注册表的雏形**（那一项需要后端知道"有没有人在看"）。
+    """
+    seq = 0
+    if isinstance(payload, dict):
+        try:
+            seq = int(payload.get("seq") or 0)
+        except (TypeError, ValueError):
+            seq = 0
+    logger.info("推送通道：客户端已确认读到流（seq=%s，订阅者 %d）", seq, M.HUB.subscriber_count)
+    return {"ok": True, "subscribers": M.HUB.subscriber_count, "seq": seq}
+
+
 def dev_mode() -> bool:
     """是不是开发态（探针 / `npm run dev`）：**只有** `DEV_API_TOKEN` 非空才算。
 

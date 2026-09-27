@@ -11,15 +11,23 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { on } from './appEvents'
 import { MESSAGE_STREAM_PATH } from './eventStream'
-import { KNOWN_MESSAGE_TYPES, bridgeMessage, type BusMessage } from './messageBus'
+import {
+  KNOWN_MESSAGE_TYPES, bridgeMessage, parseLiveEdge, startMessageBus, stopMessageBus,
+  type BusMessage,
+} from './messageBus'
 
 const msg = (type: string, payload: Record<string, unknown> = {}, replay = false): BusMessage => ({
   type, payload, ts: 1, seq: 1, replay,
 })
+
+const EDGE = {
+  vtuber_id: 15, account_id: 3, platform: 'bilibili', platform_uid: '434334701',
+  name: '七海Nana7mi', live_title: '今晚开播', live_url: 'https://live.bilibili.com/1',
+}
 
 /** 收集宿主上某个事件名收到的 detail（返回的数组随事件增长）。 */
 function collector(host: EventTarget, name: string): unknown[] {
@@ -87,6 +95,71 @@ describe('① 消息 → 应用事件', () => {
       bridgeMessage(msg(t, { text: 'x' }), host)
     }
     expect(pills).toEqual([])
+  })
+
+  it('开播边沿（M1）解成**结构化**事件 —— 消费方不必自己解析信封', () => {
+    const host = new EventTarget()
+    const edges = collector(host, 'ddtoolkit:live-edge')
+    bridgeMessage(msg('domain.live.edge', EDGE), host)
+    expect(edges).toEqual([EDGE])
+  })
+
+  it('开播 payload 缺字段 ⇒ **不发半个事件**（后端改名时宁可什么都不发）', () => {
+    const host = new EventTarget()
+    const edges = collector(host, 'ddtoolkit:live-edge')
+    const { live_url: _drop, ...partial } = EDGE
+    bridgeMessage(msg('domain.live.edge', partial), host)
+    bridgeMessage(msg('domain.live.edge', {}), host)
+    expect(edges).toEqual([])
+    expect(parseLiveEdge(undefined)).toBeNull()
+    expect(parseLiveEdge({})).toBeNull()
+  })
+
+  it('**补发的开播边沿不播** —— 重连不该把「几小时前就开播了」再提示一遍', () => {
+    const host = new EventTarget()
+    const edges = collector(host, 'ddtoolkit:live-edge')
+    bridgeMessage(msg('domain.live.edge', EDGE, true), host)
+    expect(edges).toEqual([])
+  })
+})
+
+describe('①′ 读到流的见证（M1）：第一块字节到手 ⇒ 报一次', () => {
+  afterEach(() => { stopMessageBus() })
+
+  it('`onFirstChunk` ⇒ `POST /messages/ack` **恰好一次**（真机验收靠这行日志）', async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = []
+    let push!: (chunk: string) => void
+    const body = new ReadableStream<Uint8Array>({
+      start(c) { push = (s) => c.enqueue(new TextEncoder().encode(s)) },
+    })
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => {
+      calls.push({ url: String(url), init })
+      if (String(url).includes('/messages/ack')) {
+        return { ok: true, status: 200, json: async () => ({ ok: true }) } as Response
+      }
+      return { ok: true, status: 200, body } as Response
+    }))
+
+    startMessageBus()
+    await new Promise((r) => setTimeout(r, 10))
+    push(': connected\n\n')                       // 第一块字节
+    await new Promise((r) => setTimeout(r, 30))
+    const acks = calls.filter((c) => c.url.endsWith('/messages/ack'))
+    expect(acks, `实际调用：${calls.map((c) => c.url).join(', ')}`).toHaveLength(1)
+    expect(new Headers(acks[0].init.headers).get('Content-Type')).toBe('application/json')
+  })
+
+  it('ack 失败**静默**（它只是见证，不该影响任何业务流程）', async () => {
+    const body = new ReadableStream<Uint8Array>({
+      start(c) { c.enqueue(new TextEncoder().encode(': connected\n\n')) },
+    })
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (String(url).includes('/messages/ack')) throw new Error('网络断了')
+      return { ok: true, status: 200, body } as Response
+    }))
+    startMessageBus()
+    await new Promise((r) => setTimeout(r, 40))
+    expect(true, '抛出来就会被 vitest 记为 unhandled rejection').toBe(true)
   })
 })
 

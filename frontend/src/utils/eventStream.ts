@@ -106,6 +106,14 @@ export interface StartMessageStreamOptions {
   onMessage: (msg: StreamMessage) => void
   /** 连接状态变化（探针要能区分"连上了"与"在重连"） */
   onState?: (state: StreamState) => void
+  /**
+   * 收到**第一块字节**时回调一次（每条连接一次）。
+   *
+   * ⚠️ 这是"客户端**真的读得出流**"的唯一见证：连接建起来（`fetch` resolve）不等于读得到字节
+   * —— 某些 webview / 代理会把响应体缓冲住，那时服务端一切正常、客户端却一条也收不到。
+   * `messageBus` 用它发 `/messages/ack` ⇒ 真机验收在日志里一句话可查（devlog/243）。
+   */
+  onFirstChunk?: () => void
   /** 第一次重连的等待；之后按 2 倍退避，封顶 `maxRetryMs` */
   retryMs?: number
   maxRetryMs?: number
@@ -154,6 +162,7 @@ export function startMessageStream(options: StartMessageStreamOptions): MessageS
     let buffer = ''
     let opened = false
     let received = 0
+    let sawBytes = false
     try {
       const headers: Record<string, string> = { Accept: 'text/event-stream' }
       // ⚠️ 只有"重连"才带它：首连带上就等于每次都重播历史（方案 §8.5 D）
@@ -167,6 +176,11 @@ export function startMessageStream(options: StartMessageStreamOptions): MessageS
       for (;;) {
         const { done, value } = await reader.read()
         if (done) break
+        if (!sawBytes) {
+          // 第一块字节到手 = **真的读得出流**（见 `onFirstChunk` 的说明）
+          sawBytes = true
+          options.onFirstChunk?.()
+        }
         buffer += decoder.decode(value, { stream: true })
         const { messages, rest } = parseSseFrames(buffer)
         buffer = rest

@@ -2004,6 +2004,11 @@ def _assert_messages(ms: dict | None, width: int) -> list[str]:
     if ms.get("progressArrived") and ms.get("progressToasted"):
         bad.append(f"@{width} messages: `notice.progress` 也弹了提示 —— "
                    f"桥只该弹瞬时消息那类（否则每种领域事件都会刷顶栏）")
+    # 开播边沿（M1）：领域事件 → 结构化 payload → 顶栏 **alert**（面板里能看到）
+    if not ms.get("liveShown"):
+        bad.append(f"@{width} messages: 推了一条开播边沿，顶栏面板里却没有这条告警"
+                   f"（面板={ms.get('panelOpened')}，alert 条目={ms.get('liveAlertItems')!r}）"
+                   f"—— 领域事件没解出来 / 没接到 UI？")
     return bad
 
 
@@ -3372,6 +3377,9 @@ def main() -> int:
                       f"（进去了={ms.get('islandShowsIt')}）")
                 print(f"  ③ 进度消息：发布 {ms.get('publish2Status')!r} → "
                       f"到页面={ms.get('progressArrived')!r} 弹提示={ms.get('progressToasted')!r}")
+                print(f"  ④ 开播边沿：发布 {ms.get('publish3Status')!r} → 事件 "
+                      f"{ms.get('liveEventCount')!r} 次；面板 alert 条目="
+                      f"{ms.get('liveAlertItems')!r}（进去了={ms.get('liveShown')}）")
             rows = _assert_messages(ms, w)
             failures.extend(rows)
             for b in rows:

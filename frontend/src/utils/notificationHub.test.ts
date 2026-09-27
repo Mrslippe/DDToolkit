@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest'
 import type { Notice } from './notificationHub'
 import {
   KIND_PRIORITY,
+  LIVE_NOTICE_MS,
   composeTaskText,
   isLive,
+  liveNotice,
   liveNotices,
   loginNotice,
   messageNotice,
@@ -104,6 +106,34 @@ describe('登录与报告', () => {
     const m = messageNotice('已收录「塔菲」', 5_000, 4_000)
     expect(m.expiresAt).toBe(9_000)
     expect(m.kind).toBe('message')
+  })
+})
+
+describe('开播告警（M1，devlog/243）', () => {
+  it('是 alert（会影响用户下一步动作），且**带 TTL 而不是常驻**', () => {
+    const a = liveNotice({ id: 'live-3', name: '七海Nana7mi', title: '今晚开播', now: 1_000 })
+    expect(a.kind).toBe('alert')
+    expect(a.text).toBe('七海Nana7mi 开播了')
+    expect(a.detail).toBe('今晚开播')
+    expect(a.source).toBe('开播')
+    // ⚠️ 常驻就等于"开播过的那次一直压住任务进度"（alert 4 > progress 3）——这条是牙口
+    expect(a.sticky).toBeUndefined()
+    expect(a.expiresAt).toBe(1_000 + LIVE_NOTICE_MS)
+    expect(isLive(a, 1_000 + LIVE_NOTICE_MS)).toBe(false)
+    expect(isLive(a, 1_000 + LIVE_NOTICE_MS - 1)).toBe(true)
+  })
+
+  it('没有标题时不带 detail（别在面板里留一行空说明）', () => {
+    const a = liveNotice({ id: 'live-3', name: 'V', now: 0 })
+    expect(a.detail).toBeUndefined()
+  })
+
+  it('它与进度并存时**压过**进度（alert > progress），到期后让位', () => {
+    const now = 10_000
+    const live = liveNotice({ id: 'live-3', name: 'V', now, ttlMs: 100 })
+    const prog = progressNotice({ id: 'p', running: true, auto: false, text: '抓取中' })!
+    expect(pickPrimary([live, prog], now)?.id).toBe('live-3')
+    expect(pickPrimary([live, prog], now + 101)?.id).toBe('p')
   })
 })
 

@@ -39,7 +39,23 @@ export const EVENTS = {
   widgetSeed: 'ddtoolkit:widget-seed',
   /** 后端推送来的**一条消息**（M0b，devlog/242；信封见 `utils/eventStream.ts`） */
   message: 'ddtoolkit:message',
+  /** 开播边沿（M1，devlog/243）：后端推 `domain.live.edge` ⇒ 这里转成顶栏告警 */
+  liveEdge: 'ddtoolkit:live-edge',
 } as const
+
+/**
+ * 开播边沿的 payload（M1，devlog/243）—— 与后端 `scheduler.py` 发布点**逐字对应**
+ * （snake_case = API/表字段口径；改名要两边同时改，`messageBus.test.ts` 有一条对账用例）。
+ */
+export interface LiveEdgePayload {
+  vtuber_id: number
+  account_id: number
+  platform: string
+  platform_uid: string
+  name: string
+  live_title: string
+  live_url: string
+}
 
 /** 名字 → payload。`undefined` = 该事件不带 detail（老代码派发的是裸 `Event`）。 */
 export interface AppEventMap {
@@ -54,6 +70,8 @@ export interface AppEventMap {
   'ddtoolkit:widget-seed': Notice[]
   /** 后端推送来的一条消息（原样信封：`type` / `payload` / `ts` / `seq` / `replay`） */
   'ddtoolkit:message': StreamMessage
+  /** 开播边沿（已解成结构化 payload，消费方不必自己解析信封） */
+  'ddtoolkit:live-edge': LiveEdgePayload
 }
 
 export type AppEventName = keyof AppEventMap
@@ -69,6 +87,7 @@ export const APP_EVENT_NAMES: readonly AppEventName[] = [
   'ddtoolkit:capabilities-refresh',
   'ddtoolkit:widget-seed',
   'ddtoolkit:message',
+  'ddtoolkit:live-edge',
 ]
 
 /** 默认宿主：`window`（调用时取，不在模块加载时取 —— 单测跑在 node 环境时没有 `window`） */

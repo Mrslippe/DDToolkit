@@ -25,7 +25,7 @@ import { useUpdateCheck } from '../hooks/useUpdateCheck'
 import { setFetchBusy } from '../fetchBusy'
 import { isFirstRun } from '../bootState'
 import { dispatchFetchIdle, type FetchIdleKind } from '../utils/fetchIdle'
-import { EVENTS, emit, on } from '../utils/appEvents'
+import { EVENTS, emit, on, type LiveEdgePayload } from '../utils/appEvents'
 import { useCapabilities, refreshCapabilities } from '../hooks/useCapabilities'
 import { hideToTray, quitApp } from '../utils/shellBridge'
 import { isShellHidden } from '../utils/shellLifecycle'
@@ -34,7 +34,8 @@ import { broadcastNotices, parseWidgetEnabled, WIDGET_CLOSED_EVENT, WIDGET_POS_K
 import { showWidgetWindow } from '../utils/shellBridge'
 import type { Notice, NoticeActionKind } from '../utils/notificationHub'
 import {
-  composeTaskText, loginNotice, messageNotice, progressNotice, rateLimitNotice, reportNotice,
+  composeTaskText, liveNotice, LIVE_NOTICE_MS, loginNotice, messageNotice, progressNotice,
+  rateLimitNotice, reportNotice,
 } from '../utils/notificationHub'
 import { api } from '../api/api'
 import type { AccountSnapshot, AuthStatus, FetchStatus, PostFetchStatus } from '../api/types'
@@ -410,6 +411,7 @@ export default function TopBar() {
   // 成功类操作提示覆盖态：优先于常规状态文案，PILL_MS 后自动还原；
   // 新任务启动时由轮询立即清除让位
   const pillTimer = useRef<number | undefined>(undefined)
+  const liveTimer = useRef<number | undefined>(undefined)
   useEffect(() => {
     return on(EVENTS.pillMessage, (detail) => {
       const text = detail?.text
@@ -417,6 +419,17 @@ export default function TopBar() {
       setPillMsg(text)
       if (pillTimer.current !== undefined) clearTimeout(pillTimer.current)
       pillTimer.current = window.setTimeout(() => setPillMsg(null), PILL_MS)
+    })
+  }, [])
+
+  // 开播告警（M1，devlog/243）：由**后端推送**的 `domain.live.edge` 驱动（不再靠轮询发现）。
+  // TTL 到点自己消失（`LIVE_NOTICE_MS`）—— alert 优先级高，常驻会一直压住任务进度。
+  const [liveEdge, setLiveEdge] = useState<LiveEdgePayload | null>(null)
+  useEffect(() => {
+    return on(EVENTS.liveEdge, (edge) => {
+      setLiveEdge(edge)
+      if (liveTimer.current !== undefined) clearTimeout(liveTimer.current)
+      liveTimer.current = window.setTimeout(() => setLiveEdge(null), LIVE_NOTICE_MS)
     })
   }, [])
 
@@ -489,9 +502,18 @@ export default function TopBar() {
     }
     // ⑤ 瞬时消息（操作结果，ttl 到期自动消失）
     if (pillMsg) list.push(messageNotice(pillMsg, now, PILL_MS))
+    // ④′ 开播告警（M1）：**推送来的**，与上面那些轮询算出来的条目并列在同一条优先级规则里
+    if (liveEdge) {
+      list.push(liveNotice({
+        id: `live-${liveEdge.account_id}`,
+        name: liveEdge.name,
+        title: liveEdge.live_title,
+        now,
+      }))
+    }
     return list
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, auths, doneReport, pillMsg, now, statusText])
+  }, [status, auths, doneReport, pillMsg, now, statusText, liveEdge])
 
   // ⑥ R29：把风控冷却同步到**托盘**（收进托盘后没人看界面，状态岛也就看不见了）。
   // 可见时吃上面这条 2s 轮询；隐藏时 hook 内自带 60s 心跳（详见 useTrayStatus 注释）。

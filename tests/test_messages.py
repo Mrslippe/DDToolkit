@@ -381,6 +381,49 @@ def test_stream_route_is_registered_and_not_public():
     assert not api_auth.is_public("POST", "/messages/_debug/publish")
 
 
+def test_ack_endpoint_witnesses_a_readable_stream(monkeypatch, caplog):
+    """`POST /messages/ack`：客户端"**真的读到了流**"的见证（M1，devlog/243）。
+
+    为什么需要它：连接建起来（`fetch` resolve）≠ 客户端读得到字节 —— 某些 webview / 代理
+    会把响应体缓冲住，那时服务端一切正常、客户端一条也收不到，而 M0 的停止条件正是
+    "真机 WebView2 里读得出流吗"。这条端点把那件事变成**日志里一句话**。
+    """
+    import logging
+
+    from fastapi.testclient import TestClient
+
+    from app.core import config
+    from app.core.api_auth import require_token
+    from app.routers import messages as R
+
+    monkeypatch.setattr(config.settings, "API_TOKEN", "", raising=False)
+    monkeypatch.setattr(config.settings, "DEV_API_TOKEN", "dev-token", raising=False)
+
+    app = FastAPI()
+    app.middleware("http")(require_token)
+    app.include_router(R.router)
+    client = TestClient(app)
+
+    # 没有 token ⇒ 401（它与推送通道同在门内，不是公开路径）
+    assert client.post("/messages/ack", json={"seq": 1}).status_code == 401
+
+    hub = M.HUB
+    sub = hub.subscribe()
+    try:
+        with caplog.at_level(logging.INFO, logger="app.routers.messages"):
+            resp = client.post("/messages/ack", json={"seq": 7},
+                               headers={"X-DDToolkit-Token": "dev-token"})
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"ok": True, "subscribers": 1, "seq": 7}
+        assert "客户端已确认读到流" in caplog.text, "见证必须是**日志**（真机验收靠它）"
+    finally:
+        hub.unsubscribe(sub)
+
+    # 坏 payload 不许 500（见证端点不该成为新的失败点）
+    assert client.post("/messages/ack", json={"seq": "abc"},
+                       headers={"X-DDToolkit-Token": "dev-token"}).status_code == 200
+
+
 def test_debug_publish_route_is_dev_only(monkeypatch):
     """§8.3：合成发布钩子**只在 dev 态挂上**（生产不是"关着"，是**不存在**）。
 

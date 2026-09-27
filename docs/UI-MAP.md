@@ -122,10 +122,15 @@
 | 空闲内容（纯逻辑，15 条单测） | `utils/idleQuotes.ts` | 空闲轮播池（第 0 格 = 状态文案，后接语录）、取模选格、`registerIdleProvider` 扩展点 |
 | 渲染 | `components/StatusIsland.tsx` | 四态 `idle`（绿点 + 空闲轮播文案，**无容器**）· `pill`（一条主文案 + 图标 + 计数）· `expand`（portal + fixed 面板）· 空闲轮播（R12b） |
 
-**六类信息源**：任务进度（`fetch-status`，**自动节拍不产生条目**）· 第三方同步 · 完成报告
+**七类信息源**：任务进度（`fetch-status`，**自动节拍不产生条目**）· 第三方同步 · 完成报告
 （改为**常驻条目** + 「查看详情」开原对话框，不再自动弹窗）· 登录失效（常驻 + 「去登录」）·
 **风控冷却**（`fetch-status.rate_limit` 新增字段：`{active, reason, seconds_left}`，到点自动消失）·
-瞬时消息（ttl 4s）。
+瞬时消息（ttl 4s）· **开播告警**（M1/devlog/243：**后端推来的** `domain.live.edge` ⇒
+`liveNotice`，源「开播」，**alert 级但带 2 分钟 TTL** —— 常驻会一直压住任务进度）。
+
+⚠️ **第一类"推送来的"条目**（上面六类都是从 `fetch-status` 轮询算出来的）：它不经 `status`，
+而是 TopBar 上的 `liveEdge` 状态（`on(EVENTS.liveEdge)`）—— 判据要看**面板**（`.si-item[data-kind]`），
+别看胶囊文案（`.si-text` 是两段式淡入淡出，虚拟时间下采样它等于赌相位，devlog/243 §五）。
 
 DOM 契约（探针 `ui_probe --status-island` 直接查）：`.si-island`（`.on` = 有事发生）· `.si-dot`
 （`.warn` = 红）· `.si-text` · `.si-count` · `.si-chevron` · `.si-panel`（`data-pinned` = 点击钉住）·
@@ -949,6 +954,7 @@ density / 折叠尺寸 `[200,40]` / 面板宽 280 / `backdrop-filter` 含 `blur(
 | `ddtoolkit:kick-poll` | 各操作按钮 | TopBar 立即轮询一次（防单V抓取快速完成漏边沿） |
 | `ddtoolkit:pill-message` | 抓取/更新完成；**另：后端推送来的 `notice.message`**（`utils/messageBus.ts`，M0b/devlog/242，且**补发 `replay:true` 的不发**） | TopBar 状态胶囊覆盖显示 4s |
 | `ddtoolkit:message` | **后端推送通道**（`GET /messages/stream`，SSE over fetch → `utils/eventStream.ts` → `utils/messageBus.ts`，M0b/devlog/242；信封 = `{type, payload, ts, seq, replay}`） | 暂无产品消费者（M1–M5 的挂点；探针 `ui_probe.py --messages` 与主流程三档都在断言它） |
+| `ddtoolkit:live-edge` | 后端推送的 `domain.live.edge`（T0 检测到 `live_status` 0→1，M1/devlog/243） | TopBar 收下并转成 **alert** 级条目（`liveNotice`，源「开播」，TTL 2 分钟）→ 顶栏胶囊 + 通知面板 |
 
 > ⚠️ **后台刷新不得打断用户草稿**（2026-09-10 修复）：上述事件会让 PostsPage 换掉 `vtuber`
 > 对象引用，任何「依赖 props 重新初始化表单」的弹窗都会把用户正在编辑的内容冲掉

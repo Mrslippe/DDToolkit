@@ -214,6 +214,35 @@ describe('③ 连接 / 重连 / 收摊', () => {
     expect(states[states.length - 1]).toBe('closed')
   })
 
+  it('**第一块字节**回调一次（每条连接）—— 它是"真的读得出流"的唯一见证（M1）', async () => {
+    const first = sseResponse()
+    const second = sseResponse()
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      const which = fetchMockCount++ === 0 ? first : second
+      return which.res as Response
+    }))
+    let fetchMockCount = 0
+    let chunks = 0
+    const handle = startMessageStream({
+      onMessage: () => {},
+      onFirstChunk: () => { chunks += 1 },
+      retryMs: 5,
+      maxRetryMs: 10,
+    })
+    await tick(10)
+    first.push(': connected\n\n')            // 注释行也算"读到了字节"
+    first.push(': ping\n\n')
+    await tick(20)
+    expect(chunks, '同一条连接里只许回调一次').toBe(1)
+
+    first.close()                            // 断线 ⇒ 重连 ⇒ 新一代连接再回调一次
+    await tick(80)
+    second.push(': connected\n\n')
+    await tick(20)
+    handle.stop()
+    expect(chunks, '重连后的新连接应当再报一次').toBe(2)
+  })
+
   it('HTTP 不 ok（后端还没起 / token 不对）⇒ 不当成"连上了"，走重连', async () => {
     const states: string[] = []
     // ⚠️ 401 **带一个真的流**：只回 `body: null` 的话，`!res.body` 那一半也能拦下它

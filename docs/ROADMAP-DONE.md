@@ -571,6 +571,7 @@
 | 第 4 阶段 ⑧（**平台框架收口**）：**图片代理白名单逐条用例**（平台→图床表与 registry 同批、近似域名与内网一律 403、死条目为零）+ **T0 直播走 registry**（`supports_live_batch` 能力位；int uid 与端点记账进适配器；`split_numeric_uids` 从核心删）+ **熔断手动解除**（显式抓取即清内存与落库；`fetch-status.breaker` 上报）；反向验证 7/7；修一处测试顺序依赖 | 240 |
 | 消息中心 M0：**推送通道骨架** —— `MessageHub` + `GET /messages/stream`（SSE over **fetch**，只在 `Last-Event-ID` 时补发带 `replay:true`）+ dev-only 合成钩子；跨线程靠 `call_soon_threadsafe`；19 条判据 + 反向 9/9；⚠️ 首版 drain 用 `run_in_executor` ⇒ 真 lifespan join 死线程、整套测试挂死 | 241 |
 | 消息中心 M0b：**前端半边** —— `utils/eventStream.ts`（帧解析、自动重连、**只在重连时带 `Last-Event-ID`**）+ `utils/messageBus.ts`（`ddtoolkit:message` + 瞬时消息点亮胶囊，**补发不弹**）+ 探针端到端（默认三档也跑）；跨语言契约读后端源码对账；顺手修探针三处裸 `urlopen`（S1 后恒定 401） | 242 |
+| 消息中心 M1：**开播边沿的出口** —— T0 的 `edge/started` 原先只喂"动态流恢复满速"，现在 `commit` **之后**多一条 `domain.live.edge` ⇒ 顶栏 alert「XXX 开播了」（带 TTL，不常驻）；补 **`POST /messages/ack`**：客户端读到第一块字节时报一次 ⇒ 真机 WebView2 能否读流在日志里一句话可查（方案停止条件的**可获得见证**，也是 M5 订阅者注册表的雏形） | 243 |
 
 > **编号列怎么写**（2026-09-23 定）：
 > - 有 devlog 的批次 → **裸编号**（`| 097 |`）；

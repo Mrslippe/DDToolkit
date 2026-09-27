@@ -19,7 +19,8 @@
  *
  * ⚠️ 与 `fetch-status` 轮询**并存**：推送会漏（重连窗口），轮询是兜底。本模块不退役任何轮询。
  */
-import { EVENTS, emit } from './appEvents'
+import { authFetch } from '../api/api'
+import { EVENTS, emit, type LiveEdgePayload } from './appEvents'
 import { startMessageStream, type MessageStreamHandle, type StreamMessage } from './eventStream'
 
 export type BusMessage = StreamMessage
@@ -39,6 +40,31 @@ export const KNOWN_MESSAGE_TYPES = [
 /** 瞬时消息：今天走顶栏胶囊（`utils/pill.ts` 那条路），所以它就是"该弹提示"的那一类。 */
 const MSG_NOTICE_MESSAGE = 'notice.message'
 
+/** 开播边沿（M1）：后端 `scheduler.py` 在 T0 检测到 `live_status` 0→1 时发。 */
+const MSG_LIVE_EDGE = 'domain.live.edge'
+
+/** 开播 payload 的**必需字段**（后端改名而这里没改 ⇒ 宁可当成"解不出来"也不发半个事件）。 */
+const LIVE_EDGE_FIELDS = [
+  'vtuber_id', 'account_id', 'platform', 'platform_uid', 'name', 'live_title', 'live_url',
+] as const
+
+/** 把信封的 payload 解成 `LiveEdgePayload`；缺字段返回 null（**不发半个事件**）。 */
+export function parseLiveEdge(payload: Record<string, unknown> | undefined): LiveEdgePayload | null {
+  if (!payload) return null
+  for (const f of LIVE_EDGE_FIELDS) {
+    if (payload[f] === undefined || payload[f] === null) return null
+  }
+  return {
+    vtuber_id: Number(payload.vtuber_id),
+    account_id: Number(payload.account_id),
+    platform: String(payload.platform),
+    platform_uid: String(payload.platform_uid),
+    name: String(payload.name),
+    live_title: String(payload.live_title ?? ''),
+    live_url: String(payload.live_url ?? ''),
+  }
+}
+
 type Host = EventTarget
 
 /** 事件宿主：默认 `window`；测试注入一个干净的 `EventTarget`（同 `fetchIdle.ts` 的路数）。 */
@@ -52,7 +78,14 @@ function defaultHost(): Host {
 export function bridgeMessage(msg: BusMessage, host: Host = defaultHost()): void {
   emit(EVENTS.message, msg, host)
   if (msg.replay) return                      // 补发：不弹提示（定稿语义 ②）
-  if (msg.type !== MSG_NOTICE_MESSAGE) return // 别的类型各有消费者，M1–M5 里接
+  if (msg.type === MSG_LIVE_EDGE) {
+    // 开播边沿（M1）：解成结构化 payload 再发 —— 消费方（TopBar → 状态岛）不该自己解析信封。
+    // ⚠️ 补发（replay）在上一行就返回了：重连不该把"几小时前就开播了"再播一遍。
+    const edge = parseLiveEdge(msg.payload)
+    if (edge) emit(EVENTS.liveEdge, edge, host)
+    return
+  }
+  if (msg.type !== MSG_NOTICE_MESSAGE) return // 别的类型各有消费者，M2–M5 里接
   const text = typeof msg.payload?.text === 'string' ? msg.payload.text : ''
   if (text) emit(EVENTS.pillMessage, { text }, host)
 }
@@ -63,6 +96,24 @@ let handle: MessageStreamHandle | null = null
 let received = 0
 let last: BusMessage | null = null
 
+/**
+ * 告诉后端"客户端**真的读到流了**"（M1，devlog/243）。
+ *
+ * 每条连接发一次（由 `eventStream` 的 `onFirstChunk` 触发）。为什么需要它：M0 的停止条件
+ * 是"真机 WebView2 里读得出流吗"，而**服务端看不见这件事** —— 连接建起来 ≠ 读得到字节。
+ * 这条 ack 让真机验收在日志里一句话可查：
+ * `推送通道：客户端已确认读到流`。
+ *
+ * ⚠️ 失败**静默**：它只是见证，不该因为一次网络抖动弹错或影响任何业务流程。
+ */
+function ackStreamRead(): void {
+  void authFetch('/messages/ack', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ seq: last?.seq ?? 0 }),
+  }).catch(() => undefined)
+}
+
 /** 开推送连接（**幂等**：重复调用不会开第二条）。 */
 export function startMessageBus(): void {
   if (handle) return
@@ -72,6 +123,7 @@ export function startMessageBus(): void {
       last = msg
       bridgeMessage(msg)
     },
+    onFirstChunk: ackStreamRead,
   })
   installDevHook()
 }

@@ -442,18 +442,19 @@
 
 ---
 
-## 3. Routers（68 个路由装饰器 = 70 个方法×路径组合）
+## 3. Routers（69 个路由装饰器 = 71 个方法×路径组合）
 
 > 口径说明（**三种数法别混**）：
 >
 > | 数法 | 值 | 怎么数 |
 > |---|---|---|
-> | **装饰器**（下文「N」用它） | **68** | `vtuber 52` + `auth 4` + `img_proxy 1` + `settings 9` + `messages 1` + `messages_debug 1`（dev-only）；其中 2 个是 `api_route(methods=["GET","POST"])`（`/vtuber/fetch`、`/vtuber/{id}/fetch`）—— ⚠️ **数装饰器必须把这 2 条算进去**，只数 `@router.get/post/...` 会少 2 |
-> | **OpenAPI 方法×路径** | **70** | `sum(len(methods) for p in app.openapi()["paths"].values())`；**这是唯一与实现无关的数法** ⇒ 日常复核用它 |
-> | OpenAPI 路径数 | **56** | `len(app.openapi()["paths"])`（同路径多方法只算 1 条；dev-only 的 `_debug` 路由**不在**，它要 dev token 才挂） |
+> | **装饰器**（下文「N」用它） | **69** | `vtuber 52` + `auth 4` + `img_proxy 1` + `settings 9` + `messages 2` + `messages_debug 1`（dev-only）；其中 2 个是 `api_route(methods=["GET","POST"])`（`/vtuber/fetch`、`/vtuber/{id}/fetch`）—— ⚠️ **数装饰器必须把这 2 条算进去**，只数 `@router.get/post/...` 会少 2 |
+> | **OpenAPI 方法×路径** | **71** | `sum(len(methods) for p in app.openapi()["paths"].values())`；**这是唯一与实现无关的数法** ⇒ 日常复核用它 |
+> | OpenAPI 路径数 | **57** | `len(app.openapi()["paths"])`（同路径多方法只算 1 条；dev-only 的 `_debug` 路由**不在**，它要 dev token 才挂） |
 >
 > ⚠️ **2026-09-27 重新数过**（M0 加了 `GET /messages/stream` 与 dev-only 的
-> `POST /messages/_debug/publish`）：实测装饰器 **68** / OpenAPI 方法×路径 **70** / 路径数 **56**。
+> `POST /messages/_debug/publish`，M1 加了 `POST /messages/ack`）：实测装饰器 **69** /
+> OpenAPI 方法×路径 **71** / 路径数 **57**。
 > 更早的版本：66/—/—（批次 16）、64/70/67（R42-A）—— 三种数法本来就容易漂。
 >
 > ⚠️ **"`app.routes` 对象数"这个口径在新版 FastAPI 下失效了（2026-09-27 实测）**：
@@ -623,11 +624,12 @@
   下一轮生效），prefs 是"界面长什么样"（枚举、立即生效）。混在一个 PUT 里会让两套校验
   规则纠缠，也会逼着"外观"分区挂上"下一轮生效"这种不相干的说明。
 
-### 3.5 `app/routers/messages.py` — 推送通道（1）+ `messages_debug.py` — dev-only 合成钩子（1）
+### 3.5 `app/routers/messages.py` — 推送通道（2）+ `messages_debug.py` — dev-only 合成钩子（1）
 
 | 方法 + 路径 | 说明 |
 |---|---|
 | GET `/messages/stream` | **SSE 推送通道**（M0，devlog/241）。首帧 `: connected` 注释行 → 消息帧（`id: <seq>` + `data: <json>`）→ 空闲 15s 发 `: ping`。**只在带 `Last-Event-ID` 时补发**环形缓冲里更新的消息，且帧内 `replay: true` |
+| POST `/messages/ack` | **客户端确认"真的读到了流"**（M1，devlog/243）：前端在收到**第一块字节**时发一次（每条连接一次），后端把见证写进日志（`推送通道：客户端已确认读到流`）—— 真机（WebView2）验收靠这一行；同时是 M5「目睹才报」订阅者注册表的雏形 |
 | POST `/messages/_debug/publish` | **dev-only**：合成一条消息（`ui_probe` / 端到端测试用）。未知 `type` → 400。`DEV_API_TOKEN` 为空时这条路径**根本不在路由表里** |
 
 - `app/services/messages.py::MessageHub` 是**推送侧唯一产生方**：类型白名单校验 → 环形
