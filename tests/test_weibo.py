@@ -526,7 +526,9 @@ def test_fetch_posts_for_account_dispatches_weibo(monkeypatch, db):
 def test_fetch_posts_for_account_unknown_platform(db):
     from app.services import scheduler as sch
 
-    acc = Account(vtuber_id=1, platform="xiaohongshu", platform_uid="123")
+    # ⚠️ 这里原来用 `xiaohongshu` 当"未知平台"的替身 —— 2026-09-27（devlog/230）它**被注册了**，
+    #    于是这条用例变成"抓一个真平台"，断言自然不成立。⇒ 用一个**永远不会被注册**的名字。
+    acc = Account(vtuber_id=1, platform="not_a_real_platform", platform_uid="123")
     db.add(acc)
     db.commit()
     r = asyncio.run(sch._fetch_posts_for_account(acc, -1, -1, db))

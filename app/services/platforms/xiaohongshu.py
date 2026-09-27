@@ -1,0 +1,212 @@
+"""小红书平台适配（第 4 阶段 ④ 第一刀，devlog/230）。
+
+依据：`docs/platforms-xhs-douyin-research.md` §2（接口清单 / 签名 / cookie / 登录）。
+
+## 这一刀做到哪
+
+- **账号信息**（`fetch_user_info`）与**笔记流**（`fetch_post_page`）两条都通，
+  走的是 `BasePlatform` 现有接口 ⇒ 调度器**不用改**就能抓它（`_fetch_platform_posts` 通用单流循环）；
+- 身份（cookie）与签名器**都是注入项**：cookie 走 `settings.XHS_COOKIE`（`web_session` 即可，
+  调研 §2.8），签名走 `signing.XhsSigner`（懒加载 `xhshow`）；测试注入替身，不碰网络。
+
+## ⚠️ 三个必须写下来的坑（调研 §2.2 / §5.1）
+
+1. **query 里的逗号不能编码**：`image_formats=jpg,webp,avif` 若被编成 `%2C` 则签名校验失败
+   ⇒ 这里**手拼 query**，不用 httpx 的 `params`；
+2. **`platform_post_id` 全程按字符串**（抖音 19 位 id 会超出 JS 安全整数，小红书同理）——
+   落库/JSON 路径都不许转 Number；
+3. **`xsec_token` 不是凭证、不能当去重键**（它会过期）⇒ 只进 `raw_json` 当上下文缓存
+   （详情接口 `feed` 需要它，见调研 §2.4）。
+
+## 过渡形状：cursor 编码进 `page`
+
+`BasePlatform.fetch_post_page(uid, page)` 是**页码**语义，而小红书是 **cursor** 语义。
+按 `EXECUTION.md` §1.4 的既定顺序（**先落平台再提炼 `BasePlatform`**），这一刀不改接口，
+改为在适配器内部按 uid 记住"上一页返回的 cursor"：`page=1` 即从头开始。
+⚠️ 这是**过渡**：真正的修法是给 `BasePlatform` 加 cursor（调研 §5.2），落完这个平台再提炼。
+"""
+from __future__ import annotations
+
+import json
+from typing import Any, Optional
+
+import httpx
+
+from app.core.config import settings
+from app.core.useragent import UA_CHROME
+from app.services.platforms.base import BasePlatform
+from app.services.platforms.signing import NullSigner, Signer, SignerUnavailable
+
+BASE = "https://edith.xiaohongshu.com"
+# ⚠️ UA 字面量**只能**来自 `app/core/useragent.py`（R26②，`tests/test_user_agent.py` 扫全仓盯着）
+UA = UA_CHROME
+
+# 笔记类型映射：小红书自己没有"投稿/动态"之分，落到我们的 type 上时统一给 text/image/video
+_TYPE_BY_XHS = {"normal": "image", "video": "video"}
+
+
+def classify_http(status: int, code: Any = None, msg: str = "") -> str:
+    """把一次失败的响应分成**可排查的几类**（调研 §1.3 第 3 条：会话被风控要成为一等状态）。
+
+    ⚠️ 这是**初版**：关键词规则来自调研里的描述（cookie 失效 / 签名失效 / 网关头缺失 / 风控），
+    真机拿到真实响应后要按平台返回的 `code` 校准 —— 别把它当"已验证的码表"。
+    """
+    text = f"{code if code is not None else ''} {msg}".lower()
+    if status == 200:
+        return "ok"
+    if status in (461, 471) or "risk" in text or "风控" in text or "频繁" in text:
+        return "risk_control"
+    if any(k in text for k in ("sign", "签名", "verify", "x-s")):
+        return "signature_invalid"
+    if any(k in text for k in ("login", "登录", "session", "未登录", "web_session")):
+        return "cookie_invalid"
+    if status == 403 and any(k in text for k in ("gateway", "header", "missing")):
+        return "gateway_missing"
+    if status == 403:
+        return "risk_control"      # 403 兜底：按最坏情况算（宁可多冷却，不可误判为业务失败）
+    return "business_error"
+
+
+class XiaohongshuPlatform(BasePlatform):
+    platform = "xiaohongshu"
+
+    def __init__(self, cookies: str = "", signer: Optional[Signer] = None) -> None:
+        self._cookies = cookies
+        self._signer: Signer = signer or NullSigner()
+        # uid → 下一页 cursor（页码语义的过渡实现，见文件头）
+        self._cursor: dict[str, str] = {}
+        # 最近一次失败的结构化原因（调用方/排查用；不改 BasePlatform 的返回形状）
+        self.last_error: Optional[dict] = None
+
+    # ── 内部工具 ───────────────────────────────────────────────────────
+    def _cookie_header(self) -> str:
+        return self._cookies or getattr(settings, "XHS_COOKIE", "")
+
+    def _signed_headers(self, method: str, url: str, query: str,
+                        body: Optional[str] = None) -> dict[str, str]:
+        if not self._cookie_header():
+            # 连身份都没有就别发请求（省得被风控记一笔）
+            self.last_error = {"kind": "cookie_invalid", "msg": "未配置小红书 cookie（web_session）"}
+            raise SignerUnavailable(self.last_error["msg"])
+        headers = {
+            "user-agent": UA,
+            "cookie": self._cookie_header(),
+            "referer": "https://www.xiaohongshu.com/",
+        }
+        headers.update(self._signer.headers(
+            method=method, url=url, query=query, body=body, cookies=self._cookie_header()))
+        return headers
+
+    @staticmethod
+    def _parse(resp: httpx.Response) -> tuple[bool, Optional[dict]]:
+        """返回 `(是否成功, 数据)`；失败时把分类结果写进实例属性。"""
+        try:
+            body = resp.json()
+        except Exception:  # noqa: BLE001 —— 非 JSON（网关页/HTML）也算失败
+            return False, None
+        if resp.status_code == 200 and body.get("success", True):
+            return True, body.get("data") or {}
+        return False, body
+
+    def _fail(self, resp: httpx.Response, body: Optional[dict]) -> None:
+        body = body or {}
+        kind = classify_http(resp.status_code, body.get("code"), str(body.get("msg") or ""))
+        self.last_error = {"kind": kind, "status": resp.status_code,
+                           "code": body.get("code"), "msg": body.get("msg")}
+        if kind == "cookie_invalid":
+            # cookie 失效是"身份级"事件：别继续拿它打接口
+            self._cursor.clear()
+
+    # ── BasePlatform ──────────────────────────────────────────────────
+    async def fetch_user_info(self, uid: str, client: httpx.AsyncClient | None = None) -> dict | None:
+        own = client is None
+        if own:
+            client = httpx.AsyncClient(timeout=15.0)
+        try:
+            query = f"target_user_id={uid}"
+            url = f"{BASE}/api/sns/web/v1/user/otherinfo?{query}"
+            headers = self._signed_headers("GET", f"{BASE}/api/sns/web/v1/user/otherinfo", query)
+            resp = await client.get(url, headers=headers)
+            ok, body = self._parse(resp)
+            if not ok:
+                self._fail(resp, body)
+                return None
+            d = body or {}
+            return {
+                "name": d.get("nickname") or d.get("name"),
+                "sign": d.get("desc"),
+                "avatar": d.get("image") or d.get("avatar"),
+                "followers_count": int(d.get("fans") or 0),
+                "url": f"https://www.xiaohongshu.com/user/profile/{uid}",
+                "raw_json": d,
+            }
+        except SignerUnavailable:
+            return None
+        finally:
+            if own:
+                await client.aclose()
+
+    async def fetch_post_page(self, uid: str, page: int,
+                              client: httpx.AsyncClient | None = None) -> dict | None:
+        own = client is None
+        if own:
+            client = httpx.AsyncClient(timeout=15.0)
+        try:
+            if page <= 1:
+                self._cursor[str(uid)] = ""      # 第一页 = 从头开始（换账号/重抓也要能重来）
+            cursor = self._cursor.get(str(uid), "")
+            # ⚠️ 手拼 query：逗号**不能**被编码（调研 §2.2）
+            query = (f"num=30&cursor={cursor}&user_id={uid}"
+                     f"&image_formats=jpg,webp,avif&xsec_source=pc_user")
+            path = "/api/sns/web/v1/user_posted"
+            headers = self._signed_headers("GET", f"{BASE}{path}", query)
+            resp = await client.get(f"{BASE}{path}?{query}", headers=headers)
+            ok, body = self._parse(resp)
+            if not ok:
+                self._fail(resp, body)
+                return None
+            data = body or {}
+            notes = data.get("notes") or []
+            if "cursor" in data:
+                self._cursor[str(uid)] = str(data["cursor"])   # 服务端给数值，必须转字符串
+            return {
+                "items": [self._to_item(uid, n) for n in notes],
+                "has_more": bool(data.get("has_more")) and bool(notes),
+            }
+        except SignerUnavailable:
+            return None
+        finally:
+            if own:
+                await client.aclose()
+
+    @staticmethod
+    def _to_item(uid: str, note: dict) -> dict:
+        """一条笔记 → 我们的统一 item 结构。
+
+        ⚠️ `platform_post_id` **按字符串**；`xsec_token` 只进 `raw_json`（不是凭证、不能当去重键）。
+        """
+        nid = str(note.get("note_id") or note.get("id") or "")
+        ntype = _TYPE_BY_XHS.get(str(note.get("type") or "normal"), "image")
+        # ⚠️ 三个 json 列在库里是 **Text**（其它平台同样存 JSON 串）⇒ 这里必须序列化成字符串，
+        #    直接塞 dict 会在落库时报 `type 'dict' is not supported`。
+        def _dump(obj: Any) -> str:
+            return json.dumps(obj, ensure_ascii=False)
+        permalink = f"https://www.xiaohongshu.com/explore/{nid}"
+        return {
+            "platform": "xiaohongshu",
+            "platform_uid": str(uid),
+            "platform_post_id": nid,          # 字符串，永不转 int
+            "type": ntype,
+            "title": note.get("display_title") or note.get("title"),
+            "summary": note.get("desc"),
+            "cover_url": note.get("cover", {}).get("url") if isinstance(note.get("cover"), dict) else None,
+            "permalink": permalink,
+            "body_json": _dump({"desc": note.get("desc"), "type": note.get("type")}),
+            "stats_json": _dump({"liked": note.get("liked_count"),
+                                 "collected": note.get("collected_count")}),
+            "published_at": None,             # 列表接口不给时间戳，要详情/搜索才有
+            "raw_json": _dump(note),          # xsec_token 在这里，详情接口要用
+        }
+
+
+fetcher = XiaohongshuPlatform()
