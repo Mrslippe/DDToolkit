@@ -172,13 +172,15 @@
 | **待排期（可选，不做也不影响）** | 无阻塞，等你挑 | ① **空闲轮播上线**（R19 下线了；等库中真有条目 —— 接 `registerIdleProvider` + 翻 `IDLE_CAROUSEL_ENABLED`，同步改探针断言）；② **深色主题**：R14b 的钩子已就位（填 `:root[data-theme='dark']` + 翻 `DARK_IMPLEMENTED`），但真正做要先把 **243 处硬编码色值**收敛成令牌 + ECharts 双主题 + 逐屏走查 —— 单列一批；③ **能力受限入口并进状态岛面板**（`NoticeActionKind.open-limits` 已预留）；④ 参考图右上的动作行（复制诊断信息 / 打开数据目录）——R17 按用户口径没做，**2026-09-26 起"复制诊断"这一步已经有后端了**（`GET /settings/diagnostics`，批次 16），只差把它接到那一行 |
 | **让打包版也优雅停止后端**（2026-09-27 记，devlog/226；**待拍板**） | 要你选通道；⚠️ **退出路径改错的后果是"关不干净/卡住不退出"**（R20 为此专门验过两种现场） | **现状**：关窗/托盘退出 → Job Object 或 `taskkill /PID /T /F`；壳被杀 → 后端看门狗 `os._exit(0)`；迁移 → `child.kill()` —— **三条都是硬杀**，lifespan 不跑 ⇒ 批次 6 的"调度运行时优雅停止"在打包版里是**死代码**（那行日志永远不出现）。**已就绪的一半**：`backend_main.py` 接了 `SIGBREAK`（↔ CTRL_BREAK），`scripts/shutdown_smoke.py` 用真进程验过「被礼貌叫停 ⇒ 0.36s 退出、码 0、日志命中」。**两条路选一**：**A** 后端加 `POST /shutdown`（token 守卫，壳在 `RunEvent::Exit` 先 POST ≤3s，没退再 `taskkill /F` 兜底）——与进程组无关、确定性强，代价是后端多一个端点（路由数与文档要同步）；**B** 壳发 CTRL_BREAK 给 sidecar 进程组——不动后端，但依赖 Tauri shell 插件给的**是不是独立进程组**（今天不确定，得先验） |
 | **第 4 阶段的 ①（第二刀）：把 B 站专属**实现**搬出 `scheduler.py` + `uid` 泛化成字符串**（2026-09-27 记，devlog/229；⚠️ 用户口径：**接在小红书之后做**） | 纯重构，不依赖合规拍板 | **第一刀已落**（devlog/229）：`platforms/streams.py` 的 `PostStreams` + `scheduler.BILIBILI_STREAMS` 一处绑定，核心循环里 0 个平台字面量、0 处 `fetch_bilibili_*` 直调（AST 判据盯着），733 条 pytest 零回归。**剩**：① `_enrich_dynamic_item` / `_absorb_video_dynamic` / `_route_live_item` / `_video_bvid_index` / `_refresh_pinned_post`（~250 行）搬进 `platforms/bilibili_posts.py`（⚠️ 先数清有多少 monkeypatch 点打在 `sch.<名字>` 上 —— 计划里"整体拆分搁置"的理由正是这个）；② `_fetch_posts_core` 的 `mid: int` → `uid: str` |
-| **小红书接入的剩余项（第 4 阶段 ④ 的第三刀-3 起）**（2026-09-27 记，devlog/230–233） | 剩下的都在前端/接口面：粘贴框 → 添加账号 | 已落：① 后端适配（8 条判据）；② 前端与壳层触点五处；③ `xhshow` 进锁 + 签名按真实 API 对齐；④ **cookie 录入后端**（`services/xhs_auth.py` + `POST /auth/xiaohongshu/cookie` + `GET /auth/xiaohongshu/status`，5 条判据；⚠️ 至少要 `a1` + `web_session`）。**剩**：① **前端粘贴框**（登录弹窗加小红书 Tab：输入框 + 保存 + 显示 `missing`/`note`）；② **添加账号的平台下拉与搜索**（`/vtuber/adopt` 与搜索只认 B 站/微博 ⇒ 要加小红书分支 + `resolve_identity(用户输入 → uid)`）；③ `BasePlatform` 的 cursor 语义；④ 身份级限速 + 四类响应 + 影子比对；⑤ `IMG_PROXY_ALLOWED_HOSTS` 还没有"逐条列举"的用例 |
+| **小红书接入的剩余项（只剩前端接线）**（2026-09-27 记，devlog/230–234） | 纯 UI 两处（后端已全部就绪并有判据） | 已落：① 后端适配（8 条判据）；② 前端与壳层触点五处；③ `xhshow` 进锁 + 签名按真实 API 对齐；④ cookie 录入后端（5 条判据；⚠️ 至少要 `a1` + `web_session`）；⑤ **收录**（`POST /vtuber/adopt` 的 `source="xiaohongshu"` 分支：uid → 主页复核，4 条判据；没 cookie=503 不是 404）。**剩**：① **登录弹窗的小红书 Tab**（粘贴 cookie ⇒ `POST /auth/xiaohongshu/cookie`，显示 `missing`/`note`）；② **添加账号对话框的平台下拉**（走 `source="xiaohongshu"` + uid）。另：`BasePlatform` 的 cursor 语义、身份级限速 + 四类响应 + 影子比对、`IMG_PROXY_ALLOWED_HOSTS` 的逐条用例仍是后续工程项 |
 | **`useVtuberRealtimeSync` 暂不做（2026-09-27 用户拍板）** | 纯前端重构；**等第二个消费者出现再做** | E6/E8 是**双写者**（同时写 `vtuber` 与 `selectedAccount` 两台机器的 state），而这两个 state 的所有权在场景机 `onCommit`（一次原子提交 7~8 个 state，为的是"切 V 不闪帧"）⇒ 抽独立 hook 会动到那条最敏感的路径。**拍板结论：先不做**，等真要在别处复用实时同步（小窗显示实时状态 / 新平台接入开新通道）时再动 —— 那时它才有第二个消费者，收益才划算。devlog/222 已把身份 updater 用 `useCallback([])` 钉稳（真要做时少一个坑） |
 
 ### 1.2 需要先定口径 / 拍板（不是写代码的问题）
 
 | 项 | 卡在哪 | 现状 |
 |---|---|---|
+| **① 小红书 / 抖音是否接入（合规定性）**（2026-09-27 记，调研已完成） | **要用户拍板**：两家协议**明文禁止爬虫与自动化采集**（抖音 §5.2(9)/§5.3(4)(6)、小红书 §3.4/§4.1），**不存在"允许的额度"** | **结论已落 `docs/platforms-xhs-douyin-research.md` §6**。⚠️ **这不是"抓多少以内算合规"的问题，是定性上不被允许**；官方开放平台虽存在，但**只对商业主体、且只授权"自己账号的内容"，拿不到"抓任意 V 的帖子"这个能力**（§6.3）。三条立场见 §6.4：**A 不做 / B 只做官方授权（实际≈A）/ C 明知违约而继续并把风险显性化**。**本仓对已接入的 B站/微博尚未复核同类问题**（§7 存疑 #16）—— 需要一并定口径，否则会出现"只对新平台讲合规"的不一致 |
+| **② 采集引擎选型（若仍接入）** | 依赖 ① 的决定 | 技术结论：**C 混合 ——「浏览器只铸身份、签名在本地」**。抖音 `a_bogus` + `x-secsdk-web-signature` 已有 Apache-2.0 纯 Python 复刻（浏览器只铸一次 cookie 包），小红书可直接依赖 MIT 的 [`xhshow`](https://github.com/Cloxl/xhshow)。⚠️ 首版判断（"抖音必须逐请求走浏览器"）**是错的，修正记录留在文档 §1.1**。另需一并定：默认节流值（风控是**会话/账号级**）与「是否允许用户提供自己的账号」（风控会打到用户账号上） |
 | **原始弹幕明细库 / 全量分析** | 要不要做、以什么粒度落库（这是独立产品级决策） | **通道已实测可用且已被真实使用**：`/api/v3/lives/{liveId}/danmakus` 公开免鉴权 + `offset/limit` 分页（max 100000，含弹幕原文/礼物/上舰/SC）；词云自建（devlog/061）就走这条路，只差"落表 + 前端下钻"。devlog/060 §一.2 |
 | **弹幕词云词字下钻**（点某词看该词在场的弹幕） | 依赖上一条的明细存储 | 现在是纯前端破泡交互（点击即消失 + 恢复），没有明细可查 |
 | **帖子互动历史曲线** | 要加 post 统计快照表（现在 `stats_json` 原地覆盖，热帖传播过程会丢） | 数据在丢，越早做保留越多；见 §3 |
@@ -215,6 +217,7 @@
   筛选弹窗内各控件）；④ 场次详情开关（日历格 → 弹窗 → Esc 回到格子）。
   反向看一遍：临时把 `index.css` 的全局 `:focus-visible { outline: var(--focus-ring) }` 删掉，
   焦点**必须**重新变得不可见（否则说明某些控件是靠自己的规则，令牌没接到它身上）。
+
 - **升级/迁移失败的两个真机现场**（批次 16 的验收要求，2026-09-26 记，devlog/207）：
   这两条 `ui_probe` 与 CI 都碰不到（要真库坏掉 / 真迁移中途失败），命令与判据写在
   `docs/DEV-LOOP.md` §一 的「真机现场：升级失败 / 迁移失败」那一小节。期望：

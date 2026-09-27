@@ -548,6 +548,7 @@
 | 批次 14c（Q2 优先段）：**场次详情弹窗迁 Radix Dialog** —— 顺手修掉"Esc 由父组件卸载、退场动画播不出来"；标题/副行进 `aria-labelledby`/`describedby`，焦点与背景 inert 交给 Radix。另加无限滚动 **live region** + 显式「加载更多」、canvas/SVG 补 `role=img`；**本仓第一条 jsdom 组件用例（11 条，零新依赖）**；14a/14b 未做 | 217 |
 | 批次 12（M4 第一刀）：**`useToolbarVisibility` 抽成 hook**（`PostsPage` −118 行）+ 8 条 jsdom hook 用例（dwell / grace / 闪现只一次 / StrictMode 不许永久停住 / 向下滚动让位 / `subtree:true`）；三条硬约束**逐字保留**；另三台 hook 与 typed event 记进 TODO | 218 |
 | 批次 12（M4 第二刀）：**`usePostQueryState` 抽成 hook**（七字段 + 300ms 防抖 + 换账号即重置；`PostsPage` 913 → 893）+ 7 条 jsdom 用例（含时序判据）；6 个 handler 的 `setPage(1)` 留在页面（避免与分页机循环依赖）；顺带修掉 `ui_probe --toolbar` 的假红（rAF 在虚拟时间下不被服务 ⇒ 改走 dev 钩子） | 219 |
+| 平台接入前置：**小红书 / 抖音抓取调研**（零代码改动；产出 `docs/platforms-xhs-douyin-research.md` 带日期快照 + 选型建议「C 混合：浏览器只铸身份、签名在本地」；首版判断被推翻并留了修正记录） | 220 |
 | 批次 12（M4 第三刀）：**`usePostPagination` 抽成 hook**（五 state + 两 ref + 三条 effect：无限滚动哨兵 / 用户意图重置即回顶 / 回顶钮；`PostsPage` 894 → 877 行）+ 14 条 jsdom 用例（哨兵门控六态、追加失败即断开、同参数重渲染不许回顶）；**取数 effect E11 刻意不搬**、依赖数组逐字保留；五刀反向验证 | 221 |
 | 批次 12（M4 第四刀）：**`useSelectedAccount` 抽成 hook** —— 账号身份是 `platform:uid` 而非对象引用；三套认人口径**逐字保留**（E7 按 uid / 设置保存按 id / 增量合并）+ 11 条 jsdom 用例；⚠️ 反向验证暴露**判据自己空转**（命中项放在首位 ⇒ "永远取第一个"也通过），修好后五刀全红；另记两条待定项（认人键统一、未过滤兜底） | 222 |
 | 批次 12（M4 第五刀，收口）：**事件表 `utils/appEvents.ts`** —— 8 个 `ddtoolkit:*` 事件的名字与 payload 集中成一张表，`emit`/`on` 由表推导（改名或改 payload 当场编译错）；11 个生产文件迁移、删掉 6 处手写断言；无 payload 的事件照旧发裸 `Event`（`CustomEvent` 会把 detail 归一成 null）；7 条判据 + 四刀反向验证 | 223 |
@@ -560,6 +561,7 @@
 | 第 4 阶段 ④（第一刀，用户拍板开做）：**小红书适配** —— 新增 `platforms/signing.py`（`Signer` 协议 + 懒加载 `xhshow`）与 `platforms/xiaohongshu.py`（账号信息 / 笔记流 / 失败六分类 / 三个坑：逗号不编码、id 按字符串、xsec_token 只进 raw_json）；注册进表 ⇒ 调度器**零改动**就能抓；7 条判据（含端到端落库）+ 四刀反向验证 | 230 |
 | 第 4 阶段 ④（第二刀）：**小红书的前端与壳层触点** —— `EXTERNAL_HOSTS`（打开主页）、CSP `img-src` 与 `IMG_PROXY_ALLOWED_HOSTS`（封面不破图）、`postTypes.ts` 三处（平台名 / 分类分组 / 主页兜底 URL）；Rust 白名单与前端标签各补判据（后者那条"收录了哪些平台"的旧断言被这次改动**正确地**打红，已改成对齐真源） | 231 |
 | 第 4 阶段 ④（第三刀-1）：**`xhshow` 进锁 + 签名调用按真实 API 对齐** —— `pyproject.toml`/`uv.lock`（+xhshow 0.2.0 +pycryptodome），`uv sync --frozen` 通过；`Signer` 协议改成 `uri`+`params`（原来按文档猜的）；⚠️ 实测纠正：cookie 至少 `a1`+`web_session`；新增"真签名器离线产头"判据 | 232 |
+| 第 4 阶段 ④（第三刀-3 后端）：**小红书收录（uid → 主页复核）** —— POST /vtuber/adopt 多一条池外分支：拿 uid 问主页信息复核并取服务端名字（搜索要 xsec_token，收录这步拿不到）；没 cookie=**503**（不是 404）/ 上游没有=404 / source 与 platform 不一致=400；4 条判据（不起真 app） | 234 |
 | 第 4 阶段 ④（第三刀-2 后端）：**小红书 cookie 录入** —— 新增 `services/xhs_auth.py`（**先校验再落盘**：缺 `a1` 挡在入口，避免"配好了却永远抓不到"）+ `POST /auth/xiaohongshu/cookie` / `GET /auth/xiaohongshu/status`（**不做**真实探活，只报"配齐没"）；5 条判据（含端点级 400 且不落盘） | 233 |
 
 > **编号列怎么写**（2026-09-23 定）：

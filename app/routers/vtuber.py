@@ -31,6 +31,7 @@ from app.schemas.vtuber import (
 from app.services import pool
 from app.services import bili_search as bili_search_svc
 from app.services import capabilities
+from app.services.platforms import registry
 from app.services.purge import purge_account, purge_vtuber
 from app.services.live_type import (
     infer_category, plan_series, build_learned, EDITABLE_CATEGORY_KEYS,
@@ -1251,10 +1252,29 @@ async def adopt_vtuber(data: AdoptRequest, background: BackgroundTasks,
     if hit:
         name = hit["name"]
         source = "pool"
+    elif data.source == "xiaohongshu":
+        # 小红书（第 4 阶段 ④ 第三刀-3，devlog/234）：它**没有**可用的搜索接口
+        # （搜索要 `xsec_token`，见调研 §2.4）⇒ 直接拿 uid 去问「主页信息」，
+        # 既复核了"这个人真的存在"，又拿到规范名（与 B 站那条的复核纪律一致）。
+        if data.platform != "xiaohongshu":
+            raise HTTPException(400, "source='xiaohongshu' 时 platform 必须也是 xiaohongshu")
+        pf = registry.get_fetcher("xiaohongshu")
+        info = await pf.fetch_user_info(str(data.platform_uid)) if pf else None
+        if not info or not info.get("name"):
+            kind = (getattr(pf, "last_error", None) or {}).get("kind")
+            if kind == "cookie_invalid":
+                raise HTTPException(503, "小红书 cookie 没配或已失效 —— 先在登录里粘贴"
+                                         "（至少要有 a1 与 web_session）")
+            if kind == "risk_control":
+                raise HTTPException(503, "小红书正在风控冷却，稍后再试")
+            raise HTTPException(404, "该 uid 在小红书查不到，未收录")
+        name = info["name"]
+        source = "xiaohongshu"
     else:
         if data.source != "bilibili":
             raise HTTPException(404, "候选池中不存在该 platform_uid；"
-                                     "请用「搜索 B 站」收录（source='bilibili'）")
+                                     "请用「搜索 B 站」（source='bilibili'）"
+                                     "或「小红书 uid」（source='xiaohongshu'）收录")
         if data.platform != "bilibili":
             raise HTTPException(400, "池外收录目前只支持 bilibili")
         verified = await bili_search_svc.exact_user(str(data.platform_uid))
