@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { api } from '../api/api'
+import { EVENTS, emit } from '../utils/appEvents'
 
 /**
  * 磁盘快满时提醒一次（R22-B，devlog/104）。
@@ -28,12 +29,10 @@ export function useLowSpaceNotice(enabled: boolean): void {
         localStorage.setItem(WARNED_KEY, String(Date.now()))
         const gb = Math.round(st.low_space_threshold_bytes / 1073741824)
         const usedMb = Math.round(st.total_bytes / 1048576)
-        window.dispatchEvent(new CustomEvent('ddtoolkit:pill-message', {
-          detail: {
-            text: `磁盘可用空间不足 ${gb}GB（数据目录已占 ${usedMb}MB）`
-              + '—— 设置 → 关于 可查看占用并清理',
-          },
-        }))
+        emit(EVENTS.pillMessage, {
+          text: `磁盘可用空间不足 ${gb}GB（数据目录已占 ${usedMb}MB）`
+            + '—— 设置 → 关于 可查看占用并清理',
+        })
       } catch {
         /* 静默：拿不到存储信息时不该弹任何东西 */
       }

@@ -24,6 +24,7 @@ import { useUpdateCheck } from '../hooks/useUpdateCheck'
 import { setFetchBusy } from '../fetchBusy'
 import { isFirstRun } from '../bootState'
 import { dispatchFetchIdle, type FetchIdleKind } from '../utils/fetchIdle'
+import { EVENTS, emit, on } from '../utils/appEvents'
 import { useCapabilities, refreshCapabilities } from '../hooks/useCapabilities'
 import { hideToTray, quitApp } from '../utils/shellBridge'
 import { isShellHidden } from '../utils/shellLifecycle'
@@ -225,11 +226,7 @@ export default function TopBar() {
           }
         }
         if (freshByUid.size > 0) {
-          window.dispatchEvent(
-            new CustomEvent('ddtoolkit:account-progress', {
-              detail: [...freshByUid.values()],
-            }),
-          )
+          emit(EVENTS.accountProgress, [...freshByUid.values()])
         }
 
         // 外部数据任务完成（seq 自增）→ 提示 + 让档案卡片重拉数据。
@@ -240,11 +237,7 @@ export default function TopBar() {
             seenExtSeq.current = ext.seq          // 首次轮询仅记基线
           } else if (ext.seq !== seenExtSeq.current) {
             seenExtSeq.current = ext.seq
-            window.dispatchEvent(
-              new CustomEvent('ddtoolkit:pill-message', {
-                detail: { text: `${ext.last_label ?? '第三方数据'}同步完成` },
-              }),
-            )
+            emit(EVENTS.pillMessage, { text: `${ext.last_label ?? '第三方数据'}同步完成` })
             dispatchFetchIdle(['external'])
           }
         }
@@ -266,13 +259,9 @@ export default function TopBar() {
           } else if (sawAccRun.current && !s.account.running) {
             seenAccSeq.current = accRes.seq
             sawAccRun.current = false
-            window.dispatchEvent(
-              new CustomEvent('ddtoolkit:pill-message', {
-                detail: {
-                  text: `账号信息抓取完成 · 成功 ${accRes.success ?? 0} · 失败 ${accRes.failed ?? 0}`,
-                },
-              }),
-            )
+            emit(EVENTS.pillMessage, {
+              text: `账号信息抓取完成 · 成功 ${accRes.success ?? 0} · 失败 ${accRes.failed ?? 0}`,
+            })
           }
         }
         const postRes = s.post.last_result
@@ -292,9 +281,7 @@ export default function TopBar() {
               if (postRes.issues?.length) {
                 text += ` · ${postRes.issues[0].stop_reason}`
               }
-              window.dispatchEvent(
-                new CustomEvent('ddtoolkit:pill-message', { detail: { text } }),
-              )
+              emit(EVENTS.pillMessage, { text })
             } else {
               // 其余后台任务（如批量更新动态）仍走瞬时胶囊
               let text = `帖子抓取完成 · 存储 ${postRes.stored ?? 0} · 跳过 ${postRes.skipped ?? 0}`
@@ -303,9 +290,7 @@ export default function TopBar() {
               } else if (postRes.issues?.length) {
                 text += ` · ${postRes.issues.length} 处中断(${postRes.issues[0].stop_reason})`
               }
-              window.dispatchEvent(
-                new CustomEvent('ddtoolkit:pill-message', { detail: { text } }),
-              )
+              emit(EVENTS.pillMessage, { text })
             }
           }
         }
@@ -357,8 +342,7 @@ export default function TopBar() {
   const pollRef = useRef<() => void>(() => {})
   useEffect(() => {
     const kick = () => pollRef.current?.()
-    window.addEventListener('ddtoolkit:kick-poll', kick)
-    return () => window.removeEventListener('ddtoolkit:kick-poll', kick)
+    return on(EVENTS.kickPoll, kick)
   }, [])
 
   // R18：恢复可见 → **立刻补一轮**（只恢复定时器的话，用户点开托盘看到的可能是
@@ -426,15 +410,13 @@ export default function TopBar() {
   // 新任务启动时由轮询立即清除让位
   const pillTimer = useRef<number | undefined>(undefined)
   useEffect(() => {
-    const onPill = (e: Event) => {
-      const text = (e as CustomEvent<{ text?: string }>).detail?.text
+    return on(EVENTS.pillMessage, (detail) => {
+      const text = detail?.text
       if (!text) return
       setPillMsg(text)
       if (pillTimer.current !== undefined) clearTimeout(pillTimer.current)
       pillTimer.current = window.setTimeout(() => setPillMsg(null), PILL_MS)
-    }
-    window.addEventListener('ddtoolkit:pill-message', onPill)
-    return () => window.removeEventListener('ddtoolkit:pill-message', onPill)
+    })
   }, [])
 
   // 「有事发生」= 可见任务（手动/收录/外部批次）或操作结果覆盖态。

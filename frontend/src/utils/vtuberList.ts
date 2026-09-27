@@ -1,4 +1,5 @@
 import type { VTuber } from '../api/types'
+import { EVENTS } from './appEvents'
 
 /**
  * 左栏列表的"就地更新"（R33 补，2026-09-19）。
@@ -11,8 +12,10 @@ import type { VTuber } from '../api/types'
  *
  * 通道用 window 事件而不是 prop：左栏不是 `PostsPage` 的子节点（两者都挂在 `App` 下），
  * prop 传递要穿两层；本仓已有 `ddtoolkit:pill-message` 这个同款先例。
+ *
+ * ⚠️ 名字的真源在 `utils/appEvents.ts`（M4，devlog/223）；这里只是**再导出**。
  */
-export const VTUBER_UPDATED_EVENT = 'ddtoolkit:vtuber-updated'
+export const VTUBER_UPDATED_EVENT = EVENTS.vtuberUpdated
 
 /**
  * 把一条更新后的 V 合并进列表（纯函数，可单测）。

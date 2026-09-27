@@ -19,9 +19,13 @@
  *
  * 兼容：老的 `addEventListener('ddtoolkit:fetch-idle', fn)` 写法照旧可用（detail 被忽略）。
  */
+import { EVENTS, emit, on } from './appEvents'
+
 export type FetchIdleKind = 'account' | 'posts' | 'external'
 
-export const FETCH_IDLE_EVENT = 'ddtoolkit:fetch-idle'
+/** ⚠️ 名字的真源在 `utils/appEvents.ts`（M4，devlog/223）；这里只是**再导出**，
+ *  免得出现第二份字面量（老的 import 点照旧可用）。 */
+export const FETCH_IDLE_EVENT = EVENTS.fetchIdle
 
 /** 事件宿主：默认 `window`；测试可注入一个干净的 `EventTarget`（vitest 跑在 node 环境，
  *  没有 DOM —— 把宿主当参数传进来，这套判定表才测得到）。 */
@@ -35,7 +39,7 @@ function defaultHost(): Host {
 export function dispatchFetchIdle(kinds: FetchIdleKind[], host: Host = defaultHost()): void {
   const uniq = [...new Set(kinds)]
   if (uniq.length === 0) return
-  host.dispatchEvent(new CustomEvent(FETCH_IDLE_EVENT, { detail: { kinds: uniq } }))
+  emit(EVENTS.fetchIdle, { kinds: uniq }, host)
 }
 
 /** 订阅；`kinds` 缺省（老派发方/无 detail）时按"全都算"处理，宁可多刷一次也不漏 */
@@ -43,12 +47,9 @@ export function onFetchIdle(
   cb: (kinds: FetchIdleKind[]) => void,
   host: Host = defaultHost(),
 ): () => void {
-  const handler = (e: Event) => {
-    const detail = (e as CustomEvent<{ kinds?: FetchIdleKind[] }>).detail
+  return on(EVENTS.fetchIdle, (detail) => {
     cb(detail?.kinds?.length ? detail.kinds : ['account', 'posts', 'external'])
-  }
-  host.addEventListener(FETCH_IDLE_EVENT, handler)
-  return () => host.removeEventListener(FETCH_IDLE_EVENT, handler)
+  }, host)
 }
 
 /** 该刷新"粉丝趋势"吗：只有账号快照（自采）与第三方粉丝历史会改它 */

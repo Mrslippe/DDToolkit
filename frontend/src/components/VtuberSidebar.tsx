@@ -12,7 +12,8 @@ import type { AccountSnapshot, VTuber } from '../api/types'
 import { mergeVtuberSnapshots } from '../utils/accountSnapshots'
 import { resolveAvatar } from '../utils/avatarSource'
 import { resolveSign } from '../utils/signSource'
-import { VTUBER_UPDATED_EVENT, applyVtuberUpdate } from '../utils/vtuberList'
+import { applyVtuberUpdate } from '../utils/vtuberList'
+import { EVENTS, on } from '../utils/appEvents'
 import './../styles/layout.css'
 
 /** 把抓取完成的账号快照就地合并进侧栏数据（按 bilibili platform_uid 匹配） */
@@ -78,9 +79,8 @@ export default function VtuberSidebar() {
 
   // 抓取任务结束（TopBar 轮询发现 running→空闲边沿）后自动刷新列表数据
   useEffect(() => {
-    const onFetchIdle = () => load()
-    window.addEventListener('ddtoolkit:fetch-idle', onFetchIdle)
-    return () => window.removeEventListener('ddtoolkit:fetch-idle', onFetchIdle)
+    const off = on(EVENTS.fetchIdle, () => load())
+    return off
   }, [load])
 
   /**
@@ -90,30 +90,25 @@ export default function VtuberSidebar() {
    * 而这次改的只有一个 V 的几个字段 ⇒ 就地合并最稳（合并逻辑是纯函数，有单测）。
    */
   useEffect(() => {
-    const onUpdated = (e: Event) => {
-      const v = (e as CustomEvent<VTuber>).detail
+    const off = on(EVENTS.vtuberUpdated, (v) => {
       setVtubers((prev) => applyVtuberUpdate(prev, v))
-    }
-    window.addEventListener(VTUBER_UPDATED_EVENT, onUpdated)
-    return () => window.removeEventListener(VTUBER_UPDATED_EVENT, onUpdated)
+    })
+    return off
   }, [])
 
   // 数据变更（解订阅 / 添加 VTuber）后刷新列表
   useEffect(() => {
-    const onChanged = () => load()
-    window.addEventListener('ddtoolkit:data-changed', onChanged)
-    return () => window.removeEventListener('ddtoolkit:data-changed', onChanged)
+    const off = on(EVENTS.dataChanged, () => load())
+    return off
   }, [load])
 
   // 抓取过程中每完成一条账号信息 → 用增量快照就地更新对应条目（零请求）
   useEffect(() => {
-    const onProgress = (e: Event) => {
-      const updates = (e as CustomEvent<AccountSnapshot[]>).detail
+    const off = on(EVENTS.accountProgress, (updates) => {
       if (!Array.isArray(updates) || updates.length === 0) return
       setVtubers((prev) => mergeSnapshots(prev, updates))
-    }
-    window.addEventListener('ddtoolkit:account-progress', onProgress)
-    return () => window.removeEventListener('ddtoolkit:account-progress', onProgress)
+    })
+    return off
   }, [])
 
   // `/` 快捷键聚焦搜索框（输入框内不劫持）

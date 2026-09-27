@@ -19,16 +19,16 @@ import {
 } from '@/components/ui/alert-dialog'
 import { api, resolveAsset } from '../api/api'
 import { useFetchBusy } from '../fetchBusy'
-import type { Account, AccountSnapshot, Post, PostStats, VTuber } from '../api/types'
+import type { Account, Post, PostStats, VTuber } from '../api/types'
 import { mergeVtuberSnapshots } from '../utils/accountSnapshots'
 import { resolveAvatar } from '../utils/avatarSource'
 import { affectsFanTrend, onFetchIdle } from '../utils/fetchIdle'
+import { EVENTS, emit, on } from '../utils/appEvents'
 import { typeGroupsFor } from '../utils/postTypes'
 import { pill } from '../utils/pill'
 import { useVtuberActions } from './useVtuberActions'
 import { useSceneTransition } from '../hooks/useSceneTransition'
 import { noteCurrentView } from '../utils/shellState'
-import { VTUBER_UPDATED_EVENT } from '../utils/vtuberList'
 import PostDetailDrawer from '../components/PostDetailDrawer'
 import AddAccountDialog from '../components/AddAccountDialog'
 import VtuberSettingsDialog from '../components/VtuberSettingsDialog'
@@ -357,15 +357,12 @@ export default function PostsPage() {
   // 与左栏「直播中/未开播」不一致（2026-09-05 反馈）；只更新命中账号，
   // 未命中时引用不变，不影响依赖 accountKey 的请求去重
   useEffect(() => {
-    const onProgress = (e: Event) => {
-      const updates = (e as CustomEvent<AccountSnapshot[]>).detail
+    return on(EVENTS.accountProgress, (updates) => {
       if (!Array.isArray(updates) || updates.length === 0) return
       setVtuber((prev) => (prev ? mergeVtuberSnapshots(prev, updates) : prev))
       // 未命中该账号时保持原引用（合并口径在 `hooks/useSelectedAccount`）
       applySnapshots(updates)
-    }
-    window.addEventListener('ddtoolkit:account-progress', onProgress)
-    return () => window.removeEventListener('ddtoolkit:account-progress', onProgress)
+    })
     // `applySnapshots` 同样是 `useCallback([])` 钉住的稳定引用 ⇒ 仍然只订阅一次
   }, [applySnapshots])
 
@@ -821,7 +818,7 @@ return (
           // R33 补（2026-09-19，用户：「修改过的签名左栏没有及时同步」）：
           // 左栏那份列表是**它自己**拉的（不是本页的子节点）⇒ 必须广播一条更新，
           // 否则右栏立刻变、左栏一直显示旧签名（R33 修的是渲染口径，缺的是这条通道）。
-          window.dispatchEvent(new CustomEvent(VTUBER_UPDATED_EVENT, { detail: v }))
+          emit(EVENTS.vtuberUpdated, v)
         }}
         onPill={pill}
       />

@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { checkForUpdate, isDesktopShell } from '../utils/shellBridge'
+import { EVENTS, emit } from '../utils/appEvents'
 
 /**
  * 启动后**静默**查一次更新（R23b，devlog/114）。
@@ -25,9 +26,9 @@ export function useUpdateCheck(enabled: boolean): void {
         try {
           const info = await checkForUpdate()
           if (!alive || !info) return
-          window.dispatchEvent(new CustomEvent('ddtoolkit:pill-message', {
-            detail: { text: `发现新版本 v${info.version} —— 设置 → 关于 可查看并更新` },
-          }))
+          emit(EVENTS.pillMessage, {
+            text: `发现新版本 v${info.version} —— 设置 → 关于 可查看并更新`,
+          })
         } catch (e) {
           // 静默：国内连不上 github 是常态；只有用户主动检查时才需要看到原因
           console.warn('[ddtoolkit] 启动时检查更新失败（已忽略）:', e)

@@ -172,7 +172,7 @@
 | **待排期（可选，不做也不影响）** | 无阻塞，等你挑 | ① **空闲轮播上线**（R19 下线了；等库中真有条目 —— 接 `registerIdleProvider` + 翻 `IDLE_CAROUSEL_ENABLED`，同步改探针断言）；② **深色主题**：R14b 的钩子已就位（填 `:root[data-theme='dark']` + 翻 `DARK_IMPLEMENTED`），但真正做要先把 **243 处硬编码色值**收敛成令牌 + ECharts 双主题 + 逐屏走查 —— 单列一批；③ **能力受限入口并进状态岛面板**（`NoticeActionKind.open-limits` 已预留）；④ 参考图右上的动作行（复制诊断信息 / 打开数据目录）——R17 按用户口径没做，**2026-09-26 起"复制诊断"这一步已经有后端了**（`GET /settings/diagnostics`，批次 16），只差把它接到那一行 |
 | **`migrate_data_dir` 的回滚编排补 4 条集成测试**（批次 16 的 ④，2026-09-26 明确没做） | 纯代码任务，无阻塞 | 计划要求的四条失败路径（复制失败 / 校验失败 / 指针写失败 / 探活失败）各断言"**指针未变 + 旧目录内容未动 + 后端仍在旧目录上跑**"。卡点是那句编排现在长在 `#[tauri::command] migrate_data_dir` 里（要 `AppHandle`），**先把它抽成"注入 effects 的纯函数"**（照 `lib.rs::delete_old_dir` 的先例）才好测。今天只有真机验证（见 `docs/DEV-LOOP.md` §一 的真机现场②） |
 | **真机"关停"冒烟**（批次 6 的补充，2026-09-26 记） | 纯真机动作，无阻塞 | 关窗 / 托盘退出时看 `logs/app.log` 是否出现「调度运行时已停止（3 个线程已退出…）」且进程在 `scheduler.STOP_JOIN_TIMEOUT`（15s）内退出。⚠️ **自动化覆盖不到 graceful 那一半**：`scripts/dev_check.py` 的后端冒烟走 `proc.terminate()` = Windows 硬杀（不经过 lifespan），目前只有 `tests/test_scheduler_lifecycle.py` 直接驱动 `app.main.lifespan` 那一条（替身掉碰盘碰网的四件事、不起真进程） |
-| **M4 剩下的 typed event 模块**（批次 12 的第二至五刀，2026-09-26 起记，devlog/218、219、221、222） | 纯前端重构，无阻塞；**硬要求：抽 hook 必须同时带出 hook 测试** | 已完成 `useToolbarVisibility`（8 条，devlog/218）、`usePostQueryState`（7 条，devlog/219；⚠️ E9 那条**时序契约**逐字保留：必须在 `EXIT_MS` 提交前跑完，否则 `filterRef` 残留导致种子指纹错配 ⇒ **不许改成"提交时重置"**、不许改依赖数组）、`usePostPagination`（14 条，devlog/221；五 state + 两 ref + 三条 effect；**取数 effect E11 刻意不搬**、依赖数组逐字保留；`setPage` 是唯一翻页口 ⇒ 那条 `onFetchIdle` 订阅用窄依赖 + disable 理由）与 `useSelectedAccount`（11 条，devlog/222；`accountKey` 稳定代理 + **三套认人口径逐字保留** + 增量快照未命中必须保持引用；三个 updater 用 `useCallback([])` 钉稳，零 disable）。剩下：typed event 模块（集中事件名与 payload）。⚠️ **`useVtuberRealtimeSync` 今天抽不干净**（E6/E8 同时写两台机器的 state ⇒ 双写者，`accountKey` 引用抖动会改变请求时序）——**前置条件**是先把身份写入收口到单一 owner（devlog/222 已把身份 updater 钉稳，但双写者还在），别硬抽 |
+| **`useVtuberRealtimeSync` 抽不干净（批次 12 复核时发现的候选，不是计划项）** | 纯前端重构；**前置条件：把身份写入收口到单一 owner** | E6/E8 是**双写者**（同时写 `vtuber` 与 `selectedAccount` 两台机器的 state），硬抽会改变请求时序（`accountKey` 引用抖动 ⇒ 取数 effect 白跑或错跑）。devlog/222 已把身份 updater 用 `useCallback([])` 钉稳，但**双写者还在**；先决定"谁拥有身份写入"（页面 or 身份机）再动 |
 | **设置保存后的账号对账兜底可能选中「没有 uid」的账号**（2026-09-27 记，devlog/222） | 纯代码任务；**先确认数据里有没有无 `platform_uid` 的账号行**（有才是真 bug） | `PostsPage` 的 `onSaved` 那条兜底是 `v.accounts.find(…) ?? v.accounts[0]`，用的是**未过滤**的列表；而 E7 那条先 `filter(a => a.platform_uid)`。若 `accounts[0]` 没有 uid ⇒ `accountKey` 变成 `"bilibili:"`，统计/帖子请求带着空 uid 发出去。重构时**没有顺手改**（属于改行为）。修法就一行（两边都过滤），但要不要顺带把两套认人键（`platform_uid` / `id`）也统一，见 §1.2 |
 
 ### 1.2 需要先定口径 / 拍板（不是写代码的问题）
@@ -452,7 +452,7 @@ W1/W2 可以在**现在的架构上**做完，但它们只是让 W3 少踩坑。
 |---|---|---|
 | 后端 | `python -m pytest -q`（**解释器走 `.venv`**，见 `ARCHITECTURE.md` §6 第 24 条） | **717–718 passed / 0 failed**（总数 718：其中 1 条**打真上游**的用例在不可达时按设计 skip ⇒ `passed` 那一格会差 1；2026-09-26 实测 ≈54–80s） |
 | 桌面壳 | `cargo test`（工作目录 `frontend/src-tauri`） | **56 passed**（2026-09-26 实测；含 `delete_old_dir` 的真实 junction 用例、S1 的 token 生成用例与 S3 的准入表/白名单用例） |
-| 前端单测 | `npm --prefix frontend run test` | **661 passed / 52 文件**（2026-09-27 实测；条数确定，不随上游浮动） |
+| 前端单测 | `npm --prefix frontend run test` | **668 passed / 53 文件**（2026-09-27 实测；条数确定，不随上游浮动） |
 | 前端类型 / lint | `npx tsc --noEmit`（**必须在 `frontend/` 里跑**）/ `npm --prefix frontend run lint` | 0 错 / 0 错（2026-09-26 复核） |
 | 文档漂移 | `python scripts/doc_check.py` | **0 FAIL**（2026-09-26 复核；另有 1 条历史 devlog 索引欠账 WARN，WARN 看脚本逐条输出） |
 | 上游冒烟 | `python scripts/smoke_upstream.py [--cold]` | 真上游 **5 ok** / 冷进程 **3 ok**，0 FAIL（2026-09-23 复核） |

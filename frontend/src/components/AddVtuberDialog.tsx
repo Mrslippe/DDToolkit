@@ -23,6 +23,7 @@ import OverlayScroll from './OverlayScroll'
 import ProxyImage from './common/ProxyImage'
 import { useCapabilities } from '../hooks/useCapabilities'
 import { FETCH_POSTS, isLoginRequired, limitText } from '../utils/capabilities'
+import { EVENTS, emit } from '../utils/appEvents'
 import './../styles/posts.css'
 
 interface Props {
@@ -156,7 +157,7 @@ export default function AddVtuberDialog({ open, onOpenChange, onAdded }: Props) 
       await api.adoptVtuber(row.platform, row.platform_uid, undefined, row.adoptSource)
       // 踢一脚 TopBar 立即轮询：捕获本次单V抓取进入 running 态，
       // 保证其完成时 running→idle 边沿必然派发 fetch-idle（防竞态漏刷新）
-      window.dispatchEvent(new Event('ddtoolkit:kick-poll'))
+      emit(EVENTS.kickPoll)
       toast.success(`已收录「${row.name}」，正在抓取账号信息与最新动态…`)
       onAdded()
       onOpenChange(false)

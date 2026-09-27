@@ -1,0 +1,102 @@
+/**
+ * 全站跨组件事件表：**名字 + payload 形状**集中在这一个文件（M4，批次 12 第五刀，devlog/223）。
+ *
+ * 为什么值得集中：这些事件是**隐式契约** —— 右栏改了签名要通知左栏（R33 那条"改了左栏没同步"
+ * 的事故）、顶栏抓取完成要通知侧栏与列表。今天它们散在 12 个文件里写成裸字符串，
+ * 监听侧一律 `(e as CustomEvent<X>).detail` 手写断言 —— 改名或改 payload 时**编译器一声不吭**，
+ * 只在运行时静默断开（正是 R33 那类事故的形态）。
+ *
+ * 现在：`emit` / `on` 都由这张表推导，改名或改 payload ⇒ **当场编译错误**；
+ * 事件名本身还有一条用例逐条钉住（`scripts/ui_probe.py` 与 dev 探针仍按裸字符串派发/监听 ——
+ * 那是**外部消费者**，表是给产品代码用的）。
+ *
+ * ⚠️ **只集中"名字与类型"，不换机制**：仍是 `window` 上的 `CustomEvent`，
+ * 老的裸 `addEventListener('ddtoolkit:xxx', fn)` 写法照旧可用。
+ */
+import type { AccountSnapshot, VTuber } from '../api/types'
+import type { FetchIdleKind } from './fetchIdle'
+import type { Notice } from './notificationHub'
+
+/** 事件名（唯一真源）。老的常量（`FETCH_IDLE_EVENT` / `VTUBER_UPDATED_EVENT` /
+ *  `WIDGET_SEED_NOTICES_EVENT`）现在是这里的**再导出**，避免第二份字面量。 */
+export const EVENTS = {
+  /** 顶栏胶囊提示（`utils/pill.ts` 是主入口） */
+  pillMessage: 'ddtoolkit:pill-message',
+  /** 请求顶栏立刻轮询一次抓取状态 */
+  kickPoll: 'ddtoolkit:kick-poll',
+  /** 数据变了（侧栏列表重拉） */
+  dataChanged: 'ddtoolkit:data-changed',
+  /** 抓取任务跑完（kind 口径见 `utils/fetchIdle.ts`） */
+  fetchIdle: 'ddtoolkit:fetch-idle',
+  /** 账号快照增量（就地合并，零请求刷新） */
+  accountProgress: 'ddtoolkit:account-progress',
+  /** 单个 V 被就地更新（左右栏同步） */
+  vtuberUpdated: 'ddtoolkit:vtuber-updated',
+  /** 能力/登录态变化 ⇒ 立刻重取 */
+  capabilitiesRefresh: 'ddtoolkit:capabilities-refresh',
+  /** dev-only：给小窗注入条目（无头探针用） */
+  widgetSeed: 'ddtoolkit:widget-seed',
+} as const
+
+/** 名字 → payload。`undefined` = 该事件不带 detail（老代码派发的是裸 `Event`）。 */
+export interface AppEventMap {
+  'ddtoolkit:pill-message': { text: string }
+  'ddtoolkit:kick-poll': undefined
+  'ddtoolkit:data-changed': undefined
+  'ddtoolkit:fetch-idle': { kinds: FetchIdleKind[] }
+  'ddtoolkit:account-progress': AccountSnapshot[]
+  'ddtoolkit:vtuber-updated': VTuber
+  'ddtoolkit:capabilities-refresh': undefined
+  /** dev-only：注入的条目数组 */
+  'ddtoolkit:widget-seed': Notice[]
+}
+
+export type AppEventName = keyof AppEventMap
+
+/** 冻结的名单（用例逐条钉住 —— 改名要么同时改这里与用例，要么红） */
+export const APP_EVENT_NAMES: readonly AppEventName[] = [
+  'ddtoolkit:pill-message',
+  'ddtoolkit:kick-poll',
+  'ddtoolkit:data-changed',
+  'ddtoolkit:fetch-idle',
+  'ddtoolkit:account-progress',
+  'ddtoolkit:vtuber-updated',
+  'ddtoolkit:capabilities-refresh',
+  'ddtoolkit:widget-seed',
+]
+
+/** 默认宿主：`window`（调用时取，不在模块加载时取 —— 单测跑在 node 环境时没有 `window`） */
+const defaultHost = (): EventTarget => window
+
+/** 无 detail 的事件允许 `emit(name)`；有 detail 的必须把 payload 传全 */
+type EmitArgs<K extends AppEventName> =
+  AppEventMap[K] extends undefined
+    ? [detail?: undefined, host?: EventTarget]
+    : [detail: AppEventMap[K], host?: EventTarget]
+
+/**
+ * 派发。`host` 可注入（`utils/fetchIdle.ts` 的单测就是这么跑 node 环境的）。
+ *
+ * ⚠️ **无 payload 的事件照旧派发裸 `Event`**（今天 `kick-poll` / `data-changed` /
+ * `capabilities-refresh` 就是这么发的）：`new CustomEvent(name, { detail: undefined })`
+ * 会把 `detail` 归一成 **`null`**（jsdom 实测），而裸 `Event` 上根本没有 `detail`。
+ * 虽然现有监听方都不读它，但"搬进集中表"不该顺手改掉这个可观察差异。
+ */
+export function emit<K extends AppEventName>(name: K, ...rest: EmitArgs<K>): void {
+  const [detail, host = defaultHost()] = rest as [unknown, EventTarget?]
+  host.dispatchEvent(detail === undefined ? new Event(name) : new CustomEvent(name, { detail }))
+}
+
+/**
+ * 订阅；返回**退订函数**（照 `utils/fetchIdle.ts::onFetchIdle` 的形状）。
+ * 无 detail 的事件的监听方可以写成 `() => void`（少写参数在 TS 里是允许的）。
+ */
+export function on<K extends AppEventName>(
+  name: K,
+  cb: (detail: AppEventMap[K]) => void,
+  host: EventTarget = defaultHost(),
+): () => void {
+  const handler = (e: Event) => cb((e as CustomEvent<AppEventMap[K]>).detail)
+  host.addEventListener(name, handler)
+  return () => host.removeEventListener(name, handler)
+}

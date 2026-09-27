@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api/api'
 import type { Capabilities } from '../api/types'
+import { EVENTS, emit, on } from '../utils/appEvents'
 
 /**
  * 能力矩阵的共享读取（devlog/086）。
@@ -15,7 +16,6 @@ import type { Capabilities } from '../api/types'
  *   把主界面搞挂。
  */
 const TTL_MS = 60_000
-const REFRESH_EVENT = 'ddtoolkit:capabilities-refresh'
 
 let cache: { at: number; data: Capabilities | null } = { at: 0, data: null }
 let inflight: Promise<Capabilities | null> | null = null
@@ -23,7 +23,7 @@ let inflight: Promise<Capabilities | null> | null = null
 /** 立即失效缓存并通知所有使用者重取（登录成功/退出后调用） */
 export function refreshCapabilities(): void {
   cache = { at: 0, data: null }
-  window.dispatchEvent(new Event(REFRESH_EVENT))
+  emit(EVENTS.capabilitiesRefresh)
 }
 
 export async function loadCapabilities(force = false): Promise<Capabilities | null> {
@@ -69,10 +69,10 @@ export function useCapabilities(): UseCapabilities {
       load(true)
     }
     const onFocus = () => load(false)
-    window.addEventListener(REFRESH_EVENT, onChange)
+    const off = on(EVENTS.capabilitiesRefresh, onChange)
     window.addEventListener('focus', onFocus)
     return () => {
-      window.removeEventListener(REFRESH_EVENT, onChange)
+      off()
       window.removeEventListener('focus', onFocus)
     }
   }, [load])

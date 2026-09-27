@@ -30,15 +30,17 @@ import { toast } from 'sonner'
 
 import type { Account, VTuber } from '../api/types'
 import { api } from '../api/api'
+import { EVENTS, emit } from '../utils/appEvents'
 
-/** 成功类提示走顶栏状态胶囊（渐隐渐显），错误仍用 toast */
+/** 成功类提示走顶栏状态胶囊（渐隐渐显），错误仍用 toast。
+ *  （`utils/pill.ts` 是同一件事的共享入口；这里保留本模块的窄包装，避免多一层依赖） */
 function pill(text: string) {
-  window.dispatchEvent(new CustomEvent('ddtoolkit:pill-message', { detail: { text } }))
+  emit(EVENTS.pillMessage, { text })
 }
 
 /** 通知 TopBar 立即轮询一次抓取状态（点击按钮/任务结束时即时反馈） */
 function kickPoll() {
-  window.dispatchEvent(new Event('ddtoolkit:kick-poll'))
+  emit(EVENTS.kickPoll)
 }
 
 interface Args {
@@ -159,7 +161,7 @@ export function useVtuberActions({
     try {
       await api.deleteVtuber(accountId)
       toast.success(`已解除订阅「${vtuber.name}」`)
-      window.dispatchEvent(new Event('ddtoolkit:data-changed'))
+      emit(EVENTS.dataChanged)
       navigate('/')
     } catch (e) {
       toast.error(`解除订阅失败: ${(e as Error).message}`)

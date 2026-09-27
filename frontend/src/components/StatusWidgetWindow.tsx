@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 
 import StatusIsland from './StatusIsland'
 import type { Notice, NoticeActionKind } from '../utils/notificationHub'
+import { EVENTS, on } from '../utils/appEvents'
 import {
   WIDGET_NOTICES_EVENT,
   WIDGET_POS_KEY,
@@ -48,7 +49,7 @@ const DRAG_THRESHOLD_PX = 4
  * 走**页面自己的事件源**，而不是直接改 React state。
  * 生产构建里 `import.meta.env.DEV` 为 false ⇒ 整段被摇掉。
  */
-export const WIDGET_SEED_NOTICES_EVENT = 'ddtoolkit:widget-seed'
+export const WIDGET_SEED_NOTICES_EVENT = EVENTS.widgetSeed
 
 export default function StatusWidgetWindow() {
   const [notices, setNotices] = useState<Notice[]>([])
@@ -96,12 +97,10 @@ export default function StatusWidgetWindow() {
     //    走的是**页面自己的事件**（不是直接改 React state），与 `--status-island` 同款做法。
     //    生产构建里 `import.meta.env.DEV` 为 false ⇒ 整段被摇掉。
     if (import.meta.env.DEV) {
-      const onSeed = (e: Event) => {
-        const detail = (e as CustomEvent).detail
+      const off = on(EVENTS.widgetSeed, (detail) => {
         if (Array.isArray(detail)) setNotices(detail)
-      }
-      window.addEventListener(WIDGET_SEED_NOTICES_EVENT, onSeed)
-      return () => { un?.(); window.removeEventListener(WIDGET_SEED_NOTICES_EVENT, onSeed) }
+      })
+      return () => { un?.(); off() }
     }
     return () => un?.()
   }, [])
