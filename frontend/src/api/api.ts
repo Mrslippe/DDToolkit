@@ -1,4 +1,4 @@
-import type { Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, BiliSearchResult, Capabilities, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, PoolItem, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyVtuber, UpcomingReservation, UpdatePostsResult, VTuber, VTuberFormerValues, VtuberEvent } from './types'
+import type { Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliSearchResult, Capabilities, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, PoolItem, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyVtuber, UpcomingReservation, UpdatePostsResult, VTuber, VTuberFormerValues, VtuberEvent, XhsCookieSaved } from './types'
 import { ApiError, ApiShapeError } from './errors'
 import {
   validateFetchStatus, validatePostPage, validateVtuber, validateVtuberList,
@@ -517,9 +517,11 @@ export const api = {
       `/vtuber/bili/search?kw=${encodeURIComponent(kw)}&page=${page}`, { signal }),
 
   /** 收录 VTuber（后端建库后自动调度单V账号抓取）。
-   *  `source='bilibili'` = B 站直搜来源：池外条目后端会**实查 acc/info 复核**后才建库 */
+   *  `source='bilibili'` = B 站直搜来源：池外条目后端会**实查 acc/info 复核**后才建库；
+   *  `source='xiaohongshu'` = 小红书 uid 来源（它没有可用搜索接口，devlog/234）：
+   *  后端拿 uid 实查**主页信息**复核，没配 cookie ⇒ 503、上游没有 ⇒ 404。 */
   adoptVtuber: (platform: string, platformUid: string, faction?: string,
-                source?: 'pool' | 'bilibili') =>
+                source?: 'pool' | 'bilibili' | 'xiaohongshu') =>
     request<VTuber>('/vtuber/adopt', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -555,25 +557,31 @@ export const api = {
       method: 'POST',
     }),
 
-  // ── 登录（B 站 / 微博统一扫码 UI）─────────────────────────────────
+  // ── 登录（B 站 / 微博扫码；小红书粘贴 cookie）──────────────────────
 
   /** 生成扫码登录二维码：bilibili 返回 url；weibo 返回 image(base64 data URL) */
-  startQrLogin: (platform: 'bilibili' | 'weibo') =>
+  startQrLogin: (platform: AuthPlatform) =>
     request<{ qr_id: string; url?: string; image?: string }>(`/auth/${platform}/qr/start`, {
       method: 'POST',
     }),
 
   /** 轮询扫码状态：waiting / scanned / confirmed / expired / failed */
-  checkQrLogin: (platform: 'bilibili' | 'weibo', qrId: string) =>
+  checkQrLogin: (platform: AuthPlatform, qrId: string) =>
     request<{ status: string; detail?: string }>(
       `/auth/${platform}/qr/check?qr_id=${encodeURIComponent(qrId)}`,
     ),
 
   /** 登录态（TopBar 徽章 / 登录对话框展示） */
-  authStatus: (platform: 'bilibili' | 'weibo') =>
-    request<{ logged_in: boolean; needs_login: boolean; uid: string | null; name: string | null }>(
-      `/auth/${platform}/status`,
-    ),
+  authStatus: (platform: AuthPlatform) => request<AuthStatus>(`/auth/${platform}/status`),
+
+  /** 保存小红书 cookie（**粘贴**那条路，devlog/233）。
+   *  校验不过后端 **400 且不落盘**（detail 直接可显示：缺 a1 时签名器永远签不出名）。 */
+  saveXhsCookie: (cookie: string) =>
+    request<XhsCookieSaved>('/auth/xiaohongshu/cookie', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cookie }),
+    }),
 
   // ── 应用设置（R14a，devlog/091）─────────────────────────────────────
   /** 设置规格表 + 当前生效值 + 只读信息 */

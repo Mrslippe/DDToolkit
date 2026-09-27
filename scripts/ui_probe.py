@@ -1884,13 +1884,18 @@ def _calendar_signature(cal: dict | None) -> str | None:
 
 
 def _assert_first_run(dom_file: Path) -> list[str]:
-    """首启行为：登录浮窗自动出现，且带「凭据仅保存在本机」说明。"""
+    """首启行为：登录浮窗自动出现，且带「凭据仅保存在本机」说明 + 三个平台 Tab。"""
     text = dom_file.read_text(encoding="utf-8", errors="replace")
     bad: list[str] = []
     if 'role="dialog"' not in text:
         bad.append("首启登录浮窗未自动弹出（?firstRun=1 下应打开）")
     if "仅保存在本机" not in text:
         bad.append("登录浮窗缺少「凭据仅保存在本机」说明文本")
+    # 小红书（第 4 阶段 ④，devlog/235）：Tab 清单是数据驱动的，漏了平台在界面上只表现为
+    # "少一个 Tab"——登录浮窗是**首启唯一自动弹出的窗**，在这里钉住最省事。
+    for p in ("bilibili", "weibo", "xiaohongshu"):
+        if f'data-auth-tab="{p}"' not in text:
+            bad.append(f"登录浮窗没有 {p} Tab（平台清单漏了这一处）")
     return bad
 
 
@@ -5097,6 +5102,10 @@ def main() -> int:
                   f"输入左内距={av.get('inputLeftPad')}（给图标留位={av.get('inputIconRoom')}）")
             print(f"  空态 B 站钮: 禁用={av.get('biliBtnDisabledWhenEmpty')} "
                   f"文案={av.get('biliBtnText')!r}")
+            print(f"  小红书钮: 存在={av.get('xhsBtnExists')} 文案={av.get('xhsBtnText')!r} "
+                  f"空态禁用={av.get('xhsBtnDisabledWhenEmpty')} 可命中={av.get('xhsBtnHit')} "
+                  f"中文名禁用={av.get('xhsBtnDisabledWhenName')} "
+                  f"uid 可点={av.get('xhsBtnEnabledWithUid')} 链接可点={av.get('xhsBtnEnabledWithUrl')}")
             print(f"  关键词={av.get('keyword')!r} 结果行={av.get('rows')} "
                   f"置灰行={av.get('rowsDisabled')} 行可命中={av.get('rowHit')} "
                   f"行带 uid={av.get('rowHasUid')}")
@@ -5166,6 +5175,27 @@ def main() -> int:
                                     f"（uid 不走搜索接口，用户得看得出来）")
                 if not av.get("uidBtnEnabled"):
                     failures.append(f"@{w} add-v: UID 输入态「按 UID 添加」钮不可点")
+                # 小红书收录入口（第 4 阶段 ④，devlog/235）：它没有搜索接口，这个钮就是**唯一**入口。
+                # ⚠️ 探针不点它（点一下=真收录+真抓取），只量"在不在 / 该禁用时禁用 / 点得着 /
+                #    输入 uid 与主页链接时都可点"——最后一条盯的是 `parseXhsUid` 有没有接上。
+                if not av.get("xhsBtnExists"):
+                    failures.append(f"@{w} add-v: 没有「小红书 uid」收录入口"
+                                    f"（`[data-xhs-adopt]` 找不到）—— 小红书只认 uid/主页链接，"
+                                    f"少了它就没有收录路径")
+                else:
+                    if not av.get("xhsBtnDisabledWhenEmpty"):
+                        failures.append(f"@{w} add-v: 空输入时「小红书 uid」钮仍可点")
+                    if not av.get("xhsBtnHit"):
+                        failures.append(f"@{w} add-v: 「小红书 uid」钮命中测试失败"
+                                        f"（看得见点不着：被祖先吃掉 pointer-events 的经典毛病）")
+                    if not av.get("xhsBtnDisabledWhenName"):
+                        failures.append(f"@{w} add-v: 输入**中文名字**时「小红书 uid」钮仍可点"
+                                        f"（它不是 uid、也不是主页链接，点了必然 404）")
+                    if not av.get("xhsBtnEnabledWithUid"):
+                        failures.append(f"@{w} add-v: 输入 uid 后「小红书 uid」钮不可点")
+                    if not av.get("xhsBtnEnabledWithUrl"):
+                        failures.append(f"@{w} add-v: 粘**主页链接**时「小红书 uid」钮不可点"
+                                        f"（parseXhsUid 没接上，而用户手上多半就是一条链接）")
                 if not av.get("clearOk"):
                     failures.append(f"@{w} add-v: 点清空钮后输入框没清空")
                 if (av.get("afterClearRows") or 0) > 0:

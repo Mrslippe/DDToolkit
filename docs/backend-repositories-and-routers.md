@@ -564,16 +564,18 @@
 - 抓取类端点的忙判定用 `manual_task_running()`（自动档持锁不算忙，允许抢占），
   外部批次（T4）用 `any_fetch_running()`。
 
-### 3.2 `app/routers/auth.py` — 扫码登录（3）
+### 3.2 `app/routers/auth.py` — 登录（4：扫码 3 + 小红书粘贴 cookie 1）
 
 | 方法 + 路径 | 说明 |
 |---|---|
 | POST `/auth/{platform}/qr/start` | 生成二维码会话。bilibili 返回 `{qr_id, url}`；weibo 返回 `{qr_id, image}`（data URL）。同平台旧会话作废 |
 | GET `/auth/{platform}/qr/check?qr_id=` | 轮询状态机：`waiting / scanned / confirmed / expired / failed`；`confirmed` 时完成登录并持久化凭据；TTL 180s |
-| GET `/auth/{platform}/status` | `{logged_in, needs_login, uid, name}`；B 站走内存维护结果，**微博做真实有效性探测**（结果缓存 60s） |
+| GET `/auth/{platform}/status` | `{logged_in, needs_login, uid, name}`；B 站走内存维护结果，**微博做真实有效性探测**（结果缓存 60s），**小红书只报"配齐了没"**（另带 `configured/missing/note`；没有免签名的探活端点，不做探测） |
+| POST `/auth/xiaohongshu/cookie` | **粘贴 cookie**（body `{"cookie": "a1=…; web_session=…"}`）。⚠️ 先校验再落盘：缺 `a1`/`web_session` ⇒ **400 且不写 `.env`**；成功回 `{status:"saved", ...status()}`（devlog/233） |
 
 - 实现分发：bilibili → `app/services/auth.py`（SESSDATA 管理、心跳 + `refresh_token` 续期，
   `run_maintenance()` 由 lifespan 起协程）；weibo → `app/services/weibo_auth.py`（Session v2 扫码）；
+  **xiaohongshu → `app/services/xhs_auth.py`**（粘贴 cookie，**不走 `qr/*`**：它连二维码接口都要签名）；
 - 凭据持久化经 `app/services/env_store.py`（读改写 `.env`，临时文件 + 原子替换）；
 - 新增平台只需在 `_PLATFORMS` 注册 + 提供 `begin_login` 实现（见 `docs/platforms-extension-guide.md`）。
 

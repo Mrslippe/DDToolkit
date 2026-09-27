@@ -563,6 +563,7 @@
 | 第 4 阶段 ④（第三刀-1）：**`xhshow` 进锁 + 签名调用按真实 API 对齐** —— `pyproject.toml`/`uv.lock`（+xhshow 0.2.0 +pycryptodome），`uv sync --frozen` 通过；`Signer` 协议改成 `uri`+`params`（原来按文档猜的）；⚠️ 实测纠正：cookie 至少 `a1`+`web_session`；新增"真签名器离线产头"判据 | 232 |
 | 第 4 阶段 ④（第三刀-3 后端）：**小红书收录（uid → 主页复核）** —— POST /vtuber/adopt 多一条池外分支：拿 uid 问主页信息复核并取服务端名字（搜索要 xsec_token，收录这步拿不到）；没 cookie=**503**（不是 404）/ 上游没有=404 / source 与 platform 不一致=400；4 条判据（不起真 app） | 234 |
 | 第 4 阶段 ④（第三刀-2 后端）：**小红书 cookie 录入** —— 新增 `services/xhs_auth.py`（**先校验再落盘**：缺 `a1` 挡在入口，避免"配好了却永远抓不到"）+ `POST /auth/xiaohongshu/cookie` / `GET /auth/xiaohongshu/status`（**不做**真实探活，只报"配齐没"）；5 条判据（含端点级 400 且不落盘） | 233 |
+| 第 4 阶段 ④（第三刀-4 前端，**收口**）：**小红书三处界面接线** —— 登录浮窗第三 Tab（粘贴 cookie，Tab 清单收进 `platformLogin.ts::LOGIN_TABS` 单一事实来源）+ 添加账号下拉 + 添加 V 的「小红书 uid」钮（`.av-xhs-btn`，粘主页链接也算：`parseXhsUid` 摘 uid，摘不出则禁用）；21 条 vitest + 探针 6+3 条，反向验证 6 刀 | 235 |
 
 > **编号列怎么写**（2026-09-23 定）：
 > - 有 devlog 的批次 → **裸编号**（`| 097 |`）；

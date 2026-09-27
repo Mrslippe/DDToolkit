@@ -76,17 +76,19 @@ fetcher = DouyinPlatform()
 - 时间：`created_at`（`%a %b %d %H:%M:%S %z %Y`）解析为 naive UTC；相对时间兜底
 - 风控：HTTP 418/429 + `{"ok":0,"msg":"…频繁…"}`
 
-## 扫码登录（B 站 / 微博统一 UI）
+## 登录（扫码 B 站 / 微博；粘贴 cookie 小红书）
 
-- 端点：`POST /auth/{platform}/qr/start` → `{qr_id, url|image}`；`GET /auth/{platform}/qr/check?qr_id=` 轮询（waiting/scanned/confirmed/expired/failed，confirmed 时后端同步完成取 cookie 并写入 `.env`）；`GET /auth/{platform}/status` 登录态
-- 前端：TopBar 登录按钮（B 站会话过期红点徽章）→ `LoginDialog` 双 Tab（B 站用 react-qr-code 渲染 url，微博显示 base64 图）→ 2s 轮询 → 成功 toast
+- 扫码端点：`POST /auth/{platform}/qr/start` → `{qr_id, url|image}`；`GET /auth/{platform}/qr/check?qr_id=` 轮询（waiting/scanned/confirmed/expired/failed，confirmed 时后端同步完成取 cookie 并写入 `.env`）；`GET /auth/{platform}/status` 登录态
+- 前端：TopBar 登录按钮（B 站会话过期红点徽章）→ `LoginDialog`（Tab 清单来自 `utils/platformLogin.ts::LOGIN_TABS`，**单一事实来源**）→ B 站用 react-qr-code 渲染 url、微博显示 base64 图 → 2s 轮询 → 成功 toast
 - B 站流程：generate → poll（qrcode_key）→ 回调 URL 种 SESSDATA 等 → nav 校验 → `.env`
 - 微博流程：`passport.weibo.com/sso/v2/qrcode/image`（回退 `login.sina.com.cn` JSONP）→ check（50114001/50114002/20000000/50114004）→ `login.php?alt=` 种 SUB/SUBP 等 → crossDomainUrlList 补种 → `.env`
-- `.env` 原子写共享：`app/services/env_store.py`（B 站 `auth.py`、微博 `weibo_auth.py` 共用）
+- **小红书：没有扫码**（它连二维码/状态接口都要签名与设备 cookie，见 `docs/platforms-xhs-douyin-research.md` §2.8）⇒ 走 `POST /auth/xiaohongshu/cookie`（body `{"cookie": "a1=…; web_session=…"}`）。⚠️ **先校验再落盘**：缺 `a1`/`web_session` 一律 400 且不写 `.env`；`status()` 只报"配齐了没"（不做探活：没有免签名的探活端点，硬探白挨一次风控），真实失效由抓取侧 `classify_http()=='cookie_invalid'` 反映。前端在登录浮窗的第三个 Tab 里粘贴（步骤文案 + 400 原文直接显示）
+- `.env` 原子写共享：`app/services/env_store.py`（B 站 `auth.py`、微博 `weibo_auth.py`、小红书 `xhs_auth.py` 共用）
 
 ## 使用方式（前端）
 
-- 「添加账号」按钮（帖子面板总操作按钮组）：选择平台 + 输入 UID → 入库后自动抓取账号信息
-- 「账号切换器」（操作按钮组行首）：同一 V 的 bilibili/微博账号间切换，
+- 「添加账号」按钮（帖子面板总操作按钮组）：选择平台（bilibili / weibo / xiaohongshu）+ 输入 UID → 入库后自动抓取账号信息；小红书这一格**允许粘主页链接**（`utils/platformLogin.parseXhsUid` 先摘 uid）
+- 「添加 VTuber」浮窗：B 站直搜 / 本地候选 / **小红书 uid**（`data-xhs-adopt`；没有搜索接口 ⇒ 只认 uid 或主页链接）
+- 「账号切换器」（操作按钮组行首）：同一 V 的 bilibili/微博/小红书账号间切换，
   帖子列表/统计/抓取按钮均跟随所选账号的 `(platform, uid)`
 - 抓取帖子/更新动态按所选账号平台执行（`/vtuber/fetch-posts?platform=weibo`）

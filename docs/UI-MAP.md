@@ -1224,8 +1224,8 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 | 浮窗 | 入口 | 说明 |
 |---|---|---|
 | AlertDialog 关闭确认 | TopBar 关闭钮(busy) | 「抓取任务正在进行中」 |
-| LoginDialog | TopBar 登录钮（`.topbar-login-btn` + 过期红点徽章） | B站/微博扫码登录（`/auth/weibo/qr/*`） |
-| AddVtuberDialog（`.av-dialog`） | 侧栏「+」（`.list-add-btn`） | **R11（2026-09-15，devlog/083）双来源**：① 本地候选（候选池 csv + `danmakus` 索引）输入防抖 250ms 即搜，**不打上游**；② 「B 站」只在**显式触发**（回车 / 点按钮 / 点「加载更多」）时检索（uid 直查或名称模糊搜）→ 点结果行 adopt（建库+自动单V抓取）→ 踢poll + 侧栏刷新 + 右栏跳新V。见 §E1 |
+| LoginDialog | TopBar 登录钮（`.topbar-login-btn` + 过期红点徽章） | **两种方式共用一个壳**（`utils/platformLogin.ts` 的 `LOGIN_TABS` 是单一事实来源，Tab 行由它派生）：B站/微博扫码（`/auth/{platform}/qr/*`）＋ **小红书粘贴 cookie**（`POST /auth/xiaohongshu/cookie`，它连二维码接口都要签名 ⇒ 没有扫码；见 devlog/233、235）。Tab 带 `data-auth-tab` 供探针断言（`--first-run` 逐个数三个平台） |
+| AddVtuberDialog（`.av-dialog`） | 侧栏「+」（`.list-add-btn`） | **R11（2026-09-15，devlog/083）双来源**：① 本地候选（候选池 csv + `danmakus` 索引）输入防抖 250ms 即搜，**不打上游**；② 「B 站」只在**显式触发**（回车 / 点按钮 / 点「加载更多」）时检索（uid 直查或名称模糊搜）→ 点结果行 adopt（建库+自动单V抓取）→ 踢poll + 侧栏刷新 + 右栏跳新V。**③「小红书 uid」**（devlog/235）：小红书没有可用搜索接口，只有"把主页链接或 uid 粘进来 → 按 uid 收录"这一条路（`.av-xhs-btn`，`data-xhs-adopt`）。见 §E1 |
 | BatchFetchDialog | 侧栏「拉取」 | 四项：全量账号 / 全量帖子 / 更新未归档 / 归档（前三项后台执行+409防重入，归档同步返回条数） |
 | PostDetailDrawer | 帖子卡片 | 见 B2 |
 | ImageViewer | 详情窗内图片 | 见 B2.1 |
@@ -1243,7 +1243,7 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 
 | 区域 | 类名 | 触发 | 打上游？ |
 |---|---|---|---|
-| 输入框（左内嵌放大镜 + 右清空钮 + 右侧触发钮） | `.av-search-row` / `.av-input-wrap` / `.av-input` / `.av-clear` / `.av-bili-btn` | 输入防抖 250ms 搜本地；**回车 / 点按钮**搜 B 站 | 本地：否 · B 站：是（预算 0.8s 串行 + 20 次/分 + 5 分钟缓存 + 最多 3 页；**需要 B 站登录态**，未登录回 `not_logged_in` + 提示） |
+| 输入框（左内嵌放大镜 + 右清空钮 + 右侧触发钮） | `.av-search-row` / `.av-input-wrap` / `.av-input` / `.av-clear` / `.av-bili-btn` / `.av-xhs-btn` | 输入防抖 250ms 搜本地；**回车 / 点按钮**搜 B 站；**点「小红书 uid」**按 uid 收录小红书 | 本地：否 · B 站：是（预算 0.8s 串行 + 20 次/分 + 5 分钟缓存 + 最多 3 页；**需要 B 站登录态**，未登录回 `not_logged_in` + 提示）· 小红书：是（一次主页复核，**没配 cookie ⇒ 503**） |
 | 结果区（`OverlayScroll`） | `.av-list`（= `.os-root`）/ `.av-row` | 点行 = 直接收录（决策②，不插预览卡） | 收录后后台抓该 V |
 
 行内元素：`.av-ava`（30px 圆头像，无图 → `.av-ava-ph` 首字）、`.av-name-text`（省略号截断）、
@@ -1269,6 +1269,19 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 1. 纯数字 ≥5 位 = **UID 直查**，按钮文案换成「按 UID 添加」（B 站搜索接口搜不到 uid）；
 2. `in_library=true` 的行**置灰 + `disabled`**（本地命中一律可点，后端已剔除已入库）；
 3. 敲键**只打本地** `/vtuber/pool/search`，`/vtuber/bili/search` 必须 0 次。
+
+**小红书收录入口**（devlog/235）—— `.av-xhs-btn`（`data-xhs-adopt`）的判据（探针 `--add-v`，
+⚠️ 探针**不点它**：点一下就是真收录 + 真抓取 + 打上游）：
+
+| 输入 | 按钮 | 为什么 |
+|---|---|---|
+| 空 | 禁用 | 没有关键词就没什么可收录 |
+| 中文名字（`塔菲`） | **禁用** | 小红书没有搜索接口，它既不是 uid 也不是主页链接 —— 可点只会换来 404 |
+| uid（`1265680561`） | 可点 | 直接按 uid 收录（后端拿它问主页信息复核） |
+| 主页链接（`…/user/profile/<uid>?xsec_token=…`） | **可点** | 用户手上多半就是一条链接：`utils/platformLogin.parseXhsUid` 先摘出 uid 再发请求 |
+
+> ⚠️ 上一行那种"链接也能点"的判定**只能靠探针**：`parseXhsUid` 没接上时界面完全正常
+> （按钮可点、点了只是弹一句"没认出 uid"），单测也只覆盖纯函数本身。
 
 > ⚠️ 结果区必须是 `OverlayScroll`（`.av-list.os-root > .os-scroll`）：全站约定不出现原生滚动条，
 > 旧版的 `overflow-y-auto` 正是被这一条取代的（探针会报「结果区不是覆盖式滚动条」）。

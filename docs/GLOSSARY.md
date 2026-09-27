@@ -138,9 +138,10 @@
 |---|---|---|---|
 | **B 站登录管理器** | SESSDATA 等 Cookie 管理 + 心跳 + `refresh_token` 续期 | `services/auth.py::BilibiliAuth`、`run_maintenance()` | lifespan 起协程 |
 | **扫码登录** | B 站/微博共用流程：start → check → confirmed | `routers/auth.py`、`BilibiliLoginSession`、`WeiboLoginSession` | 状态机 `waiting/scanned/confirmed/expired/failed` |
+| **小红书登录（粘贴 cookie）** | **没有扫码**：它连二维码/状态接口都要签名与设备 cookie（鸡生蛋）⇒ 在浏览器里登录后把整条 Cookie 粘进来 | `services/xhs_auth.py`、`POST /auth/xiaohongshu/cookie` | ⚠️ 至少要 `a1` + `web_session`（缺 `a1` 时签名器报 `Missing 'a1' in cookies`）⇒ **先校验再落盘**，校验不过 400；状态口径是"**配齐了没**"，不做探活（没有免签名的探活端点） |
 | **微博登录** | Session v2 扫码 + `_v2_login`/`_sina_login` 回退 | `services/weibo_auth.py` | 登录态**真实探测**（缓存 60s） |
 | **凭据持久化** | 写 `DATA_DIR/.env`（临时文件 + 原子替换） | `services/env_store.py::save_env_keys` | 只落本机，不进仓库 |
-| **登录态端点** | `{logged_in, needs_login, uid, name}` | `GET /auth/{platform}/status` | 前端 `LoginDialog` |
+| **登录态端点** | `{logged_in, needs_login, uid, name}`（小红书另带 `configured/missing/note`） | `GET /auth/{platform}/status` | 前端 `LoginDialog`（Tab 清单见 `utils/platformLogin.ts::LOGIN_TABS`） |
 | **图片代理** | 绕过图床防盗链（白名单 + 磁盘缓存 + 逐跳校验） | `routers/img_proxy.py` | `IMG_PROXY_ALLOWED_HOSTS` |
 | **设备指纹 / buvid3·buvid4** | B 站的设备号 cookie，**每个安装自己有**一份（首次运行从 `x/frontend/finger/spi` 领 `b_3`/`b_4`，落 `.env` 的 `BILI_BUVID_3`/`_4`） | `services/auth.py::ensure_device_ids` / `cookie_str` / `_ATTR_MAP`、`config.BILI_BUVID_3/4`、`SPI_URL` | **R26①，devlog/126**：web API 只认 **`buvid3`**（登录响应给的老名字是 `bvuid3`，服务端不认）；⚠️ **绝不写死一份**（全网共享设备身份比没有更糟）；抓取时**只补缺的那个**，不覆盖已有 buvid3（保住账号↔设备关联） |
 

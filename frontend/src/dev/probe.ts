@@ -1611,6 +1611,10 @@ export async function runUiProbe(): Promise<void> {
     } else {
       const input = dialog.querySelector<HTMLInputElement>('.av-input')
       const biliBtn = dialog.querySelector<HTMLElement>('.av-bili-btn')
+      // 小红书收录入口（第 4 阶段 ④，devlog/235）：它**没有搜索接口**，只有「uid/主页链接」
+      // 这一条路。这里只量"看得见 + 点得着 + 该禁用时禁用"——⚠️ **绝不点它**：
+      // 点一下就是真收录（建库 + 抓取 + 打上游）。
+      const xhsBtn = dialog.querySelector<HTMLElement>('[data-xhs-adopt="1"]')
       // 图标压字：左内距必须给 14px 的内嵌搜索图标留位（同 devlog/075 的 26px 判据）
       const padL = input ? parseFloat(getComputedStyle(input).paddingLeft) : 0
       result.inputLeftPad = input ? getComputedStyle(input).paddingLeft : null
@@ -1620,6 +1624,11 @@ export async function runUiProbe(): Promise<void> {
       // 空输入态：B 站钮必须禁用（没有关键词就没什么可搜的）+ 文案是"搜索 B 站"
       result.biliBtnDisabledWhenEmpty = !!biliBtn?.hasAttribute('disabled')
       result.biliBtnText = (biliBtn?.textContent || '').trim()
+      result.xhsBtnExists = !!xhsBtn
+      result.xhsBtnText = (xhsBtn?.textContent || '').trim()
+      result.xhsBtnDisabledWhenEmpty = !!xhsBtn?.hasAttribute('disabled')
+      const xr = xhsBtn?.getBoundingClientRect()
+      result.xhsBtnHit = !!(xhsBtn && xr && hits(xhsBtn, xr.left + xr.width / 2, xr.top + xr.height / 2))
 
       // 找一个**本地确实有命中**的关键词（探针不猜数据：先问接口，问不到就跳过行断言）。
       // ⚠️ 必须走 `api.searchPool`（= 弹窗自己那条传输）：API base 在 dev 探针下是
@@ -1671,11 +1680,27 @@ export async function runUiProbe(): Promise<void> {
       // ③ UID 换档与清空：**不依赖关键词命中**（只跟输入框/按钮有关），所以放在
       //    "有没有候选"的判断之外 —— 否则本地池没命中时这两条也一起空转了。
       if (input) {
+        // ① 中文名字（不是 uid，也不是链接）：小红书钮**必须禁用** —— 它只认 uid/主页链接，
+        //    可点就等于"点了必然 404"，把失败推给用户去猜。
+        setVal(input, '塔菲')
+        await sleep(200)
+        result.xhsBtnDisabledWhenName = !!xhsBtn?.hasAttribute('disabled')
+        // ② 纯数字 UID：B 站钮换档；小红书钮也可点（uid 本来就能收录）
         setVal(input, '1265680561')
         await waitFor(() => (biliBtn?.textContent || '').includes('按 UID'), 3000)
         result.uidBtnText = (biliBtn?.textContent || '').trim()
         result.uidBtnEnabled = !!biliBtn && !biliBtn.hasAttribute('disabled')
         result.uidSwitchOk = result.uidBtnText === '按 UID 添加'
+        result.xhsBtnEnabledWithUid =
+          !!xhsBtn && !xhsBtn.hasAttribute('disabled') && xhsBtn.textContent?.includes('小红书') === true
+        // ③ 主页链接：仍要可点 —— 用户手上多半就是一条链接，摘 uid 是 `parseXhsUid` 的活。
+        //    这条是**唯一**能拦住"链接没被认出来"的机器判据（界面上只表现为点了没反应/报错）。
+        setVal(input, 'https://www.xiaohongshu.com/user/profile/5b8e1a2b4b4b4b4b4b4b4b4b?xsec_token=ABzz')
+        await sleep(200)
+        result.xhsBtnEnabledWithUrl = !!xhsBtn && !xhsBtn.hasAttribute('disabled')
+        // 回到 UID 态再验清空钮（保持与改前同一现场）
+        setVal(input, '1265680561')
+        await sleep(200)
         // 清空钮：点一下要回到"还没搜过"的空态（B 站区块也跟着清，否则残留上次结果）
         dialog.querySelector<HTMLElement>('.av-clear')?.click()
         await sleep(300)

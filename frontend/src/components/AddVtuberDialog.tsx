@@ -23,6 +23,7 @@ import OverlayScroll from './OverlayScroll'
 import ProxyImage from './common/ProxyImage'
 import { useCapabilities } from '../hooks/useCapabilities'
 import { FETCH_POSTS, isLoginRequired, limitText } from '../utils/capabilities'
+import { XHS_UID_HINT, parseXhsUid } from '../utils/platformLogin'
 import { EVENTS, emit } from '../utils/appEvents'
 import './../styles/posts.css'
 
@@ -168,10 +169,40 @@ export default function AddVtuberDialog({ open, onOpenChange, onAdded }: Props) 
     }
   }
 
+  /**
+   * 小红书收录（第 4 阶段 ④ 第三刀-4，devlog/235）。
+   *
+   * 它**没有可用的搜索接口**（搜索要 `xsec_token`），所以这条路上只有"按 uid 收录"：
+   * 用户粘主页链接或 uid，前端摘出 uid，后端拿它问一次主页信息**复核**后才建库。
+   * 起名不由前端决定（后端取服务端名字），所以这里连名字都不用传。
+   */
+  const adoptXhs = async () => {
+    const uid = parseXhsUid(kw)
+    if (!uid) {
+      toast.error(`没认出小红书 uid —— ${XHS_UID_HINT}`)
+      return
+    }
+    setAdoptingKey(`xhs:${uid}`)
+    try {
+      const v = await api.adoptVtuber('xiaohongshu', uid, undefined, 'xiaohongshu')
+      emit(EVENTS.kickPoll)
+      toast.success(`已收录「${v.name}」，正在抓取账号信息与最新动态…`)
+      onAdded()
+      onOpenChange(false)
+    } catch (e) {
+      // 404 = 上游确实没这个 uid；503 = 我们这边没就绪（没配 cookie / 正被风控）
+      toast.error(`收录失败：${(e as Error).message}`)
+    } finally {
+      setAdoptingKey(null)
+    }
+  }
+
   const rows = mergeCandidates(local, bili ? biliToCandidates(bili.items) : [])
   const isUid = inputLooksLikeUid(kw)
   const busy = adoptingKey !== null
   const q = kw.trim()
+  /** 输入里能不能认出一个小红书 uid（认不出 ⇒ 那个钮禁用：点了只会 404 白跑一趟） */
+  const xhsUid = parseXhsUid(q)
   /** 未登录时"收录后抓不到内容"的提示（搜/收录本身照常） */
   const contentBlocked = isLoginRequired(caps, FETCH_POSTS)
 
@@ -237,6 +268,7 @@ export default function AddVtuberDialog({ open, onOpenChange, onAdded }: Props) 
           <DialogDescription className="av-desc">
             输入名字或 UID：本地候选（候选池 + 弹幕索引）即时匹配；
             <b>回车</b>或点「搜索 B 站」可直接从 B 站检索收录 —— 候选池里没有的新 V 也能加。
+            小红书没有可用的搜索接口：把<b>主页链接或 uid</b>粘进来，点「小红书 uid」收录。
           </DialogDescription>
         </DialogHeader>
 
@@ -278,6 +310,27 @@ export default function AddVtuberDialog({ open, onOpenChange, onAdded }: Props) 
               <Search className="size-3.5" />
             )}
             {isUid ? '按 UID 添加' : '搜索 B 站'}
+          </button>
+          {/* 小红书没有搜索接口 ⇒ 只有"按 uid 收录"这一条路（粘主页链接也行）。
+              输入里认不出 uid 时**禁用**：让它可点只会换来一句 404 的 toast */}
+          <button
+            type="button"
+            className="av-xhs-btn"
+            data-xhs-adopt="1"
+            disabled={!q || busy || !xhsUid}
+            onClick={() => void adoptXhs()}
+            title={
+              xhsUid
+                ? `收录小红书 uid ${xhsUid}`
+                : '小红书只能按 uid 收录：把主页链接或 uid 粘进输入框'
+            }
+          >
+            {adoptingKey?.startsWith('xhs:') ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <UserPlus className="size-3.5" />
+            )}
+            小红书 uid
           </button>
         </div>
 

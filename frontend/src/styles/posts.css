@@ -2997,7 +2997,9 @@ img.hero-avatar {
   color: var(--c-primary-deep);
 }
 
-.av-bili-btn {
+/* 收录按钮：B 站直搜 / 小红书 uid（第 4 阶段 ④，devlog/235）——同款外观并排 */
+.av-bili-btn,
+.av-xhs-btn {
   flex: none;
   display: inline-flex;
   align-items: center;
@@ -3014,12 +3016,14 @@ img.hero-avatar {
   cursor: pointer;
 }
 
-.av-bili-btn:hover:not(:disabled) {
+.av-bili-btn:hover:not(:disabled),
+.av-xhs-btn:hover:not(:disabled) {
   border-color: var(--c-primary);
   color: var(--c-primary-deep);
 }
 
-.av-bili-btn:disabled {
+.av-bili-btn:disabled,
+.av-xhs-btn:disabled {
   opacity: 0.55;
   cursor: default;
 }

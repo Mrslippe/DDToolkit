@@ -172,7 +172,7 @@
 | **待排期（可选，不做也不影响）** | 无阻塞，等你挑 | ① **空闲轮播上线**（R19 下线了；等库中真有条目 —— 接 `registerIdleProvider` + 翻 `IDLE_CAROUSEL_ENABLED`，同步改探针断言）；② **深色主题**：R14b 的钩子已就位（填 `:root[data-theme='dark']` + 翻 `DARK_IMPLEMENTED`），但真正做要先把 **243 处硬编码色值**收敛成令牌 + ECharts 双主题 + 逐屏走查 —— 单列一批；③ **能力受限入口并进状态岛面板**（`NoticeActionKind.open-limits` 已预留）；④ 参考图右上的动作行（复制诊断信息 / 打开数据目录）——R17 按用户口径没做，**2026-09-26 起"复制诊断"这一步已经有后端了**（`GET /settings/diagnostics`，批次 16），只差把它接到那一行 |
 | **让打包版也优雅停止后端**（2026-09-27 记，devlog/226；**待拍板**） | 要你选通道；⚠️ **退出路径改错的后果是"关不干净/卡住不退出"**（R20 为此专门验过两种现场） | **现状**：关窗/托盘退出 → Job Object 或 `taskkill /PID /T /F`；壳被杀 → 后端看门狗 `os._exit(0)`；迁移 → `child.kill()` —— **三条都是硬杀**，lifespan 不跑 ⇒ 批次 6 的"调度运行时优雅停止"在打包版里是**死代码**（那行日志永远不出现）。**已就绪的一半**：`backend_main.py` 接了 `SIGBREAK`（↔ CTRL_BREAK），`scripts/shutdown_smoke.py` 用真进程验过「被礼貌叫停 ⇒ 0.36s 退出、码 0、日志命中」。**两条路选一**：**A** 后端加 `POST /shutdown`（token 守卫，壳在 `RunEvent::Exit` 先 POST ≤3s，没退再 `taskkill /F` 兜底）——与进程组无关、确定性强，代价是后端多一个端点（路由数与文档要同步）；**B** 壳发 CTRL_BREAK 给 sidecar 进程组——不动后端，但依赖 Tauri shell 插件给的**是不是独立进程组**（今天不确定，得先验） |
 | **第 4 阶段的 ①（第二刀）：把 B 站专属**实现**搬出 `scheduler.py` + `uid` 泛化成字符串**（2026-09-27 记，devlog/229；⚠️ 用户口径：**接在小红书之后做**） | 纯重构，不依赖合规拍板 | **第一刀已落**（devlog/229）：`platforms/streams.py` 的 `PostStreams` + `scheduler.BILIBILI_STREAMS` 一处绑定，核心循环里 0 个平台字面量、0 处 `fetch_bilibili_*` 直调（AST 判据盯着），733 条 pytest 零回归。**剩**：① `_enrich_dynamic_item` / `_absorb_video_dynamic` / `_route_live_item` / `_video_bvid_index` / `_refresh_pinned_post`（~250 行）搬进 `platforms/bilibili_posts.py`（⚠️ 先数清有多少 monkeypatch 点打在 `sch.<名字>` 上 —— 计划里"整体拆分搁置"的理由正是这个）；② `_fetch_posts_core` 的 `mid: int` → `uid: str` |
-| **小红书接入的剩余项（只剩前端接线）**（2026-09-27 记，devlog/230–234） | 纯 UI 两处（后端已全部就绪并有判据） | 已落：① 后端适配（8 条判据）；② 前端与壳层触点五处；③ `xhshow` 进锁 + 签名按真实 API 对齐；④ cookie 录入后端（5 条判据；⚠️ 至少要 `a1` + `web_session`）；⑤ **收录**（`POST /vtuber/adopt` 的 `source="xiaohongshu"` 分支：uid → 主页复核，4 条判据；没 cookie=503 不是 404）。**剩**：① **登录弹窗的小红书 Tab**（粘贴 cookie ⇒ `POST /auth/xiaohongshu/cookie`，显示 `missing`/`note`）；② **添加账号对话框的平台下拉**（走 `source="xiaohongshu"` + uid）。另：`BasePlatform` 的 cursor 语义、身份级限速 + 四类响应 + 影子比对、`IMG_PROXY_ALLOWED_HOSTS` 的逐条用例仍是后续工程项 |
+| **平台框架的剩余工程项（第 4 阶段 ④ 收口之后）**（2026-09-27 记，devlog/230–235） | 都是"没坏但不够好"的工程项，不阻塞使用；排在第二刀（B 站实现搬出 `scheduler.py`）之后 | 小红书接入**已全链收口**：后端适配（230）→ 前端与壳层触点（231）→ `xhshow` 进锁（232）→ cookie 录入（233）→ uid 收录（234）→ 三处界面接线（235，本次）。**剩**：① `BasePlatform` 的 cursor 语义（现在各平台自己编 `page`，语义不统一）；② **身份级限速 + 四类响应 + 影子比对**（调研 §5.3.1：风控是**会话/账号级**的，全局节流不够）；③ `IMG_PROXY_ALLOWED_HOSTS` 还没有"逐条列举"的用例（白名单加新域名时不会有人提醒）；④ **抖音未接**（14 条白名单路径 + `bdms` 复刻维护面大，见调研 §5） |
 | **`useVtuberRealtimeSync` 暂不做（2026-09-27 用户拍板）** | 纯前端重构；**等第二个消费者出现再做** | E6/E8 是**双写者**（同时写 `vtuber` 与 `selectedAccount` 两台机器的 state），而这两个 state 的所有权在场景机 `onCommit`（一次原子提交 7~8 个 state，为的是"切 V 不闪帧"）⇒ 抽独立 hook 会动到那条最敏感的路径。**拍板结论：先不做**，等真要在别处复用实时同步（小窗显示实时状态 / 新平台接入开新通道）时再动 —— 那时它才有第二个消费者，收益才划算。devlog/222 已把身份 updater 用 `useCallback([])` 钉稳（真要做时少一个坑） |
 
 ### 1.2 需要先定口径 / 拍板（不是写代码的问题）
@@ -462,9 +462,9 @@ W1/W2 可以在**现在的架构上**做完，但它们只是让 W3 少踩坑。
 
 | 门禁 | 命令 | 当前基线（括号里 = 该值实测日） |
 |---|---|---|
-| 后端 | `python -m pytest -q`（**解释器走 `.venv`**，见 `ARCHITECTURE.md` §6 第 24 条） | **732–733 passed / 0 failed**（总数 733：其中 1 条**打真上游**的用例在不可达时按设计 skip ⇒ `passed` 那一格会差 1；2026-09-27 实测 ≈60–69s） |
+| 后端 | `python -m pytest -q`（**解释器走 `.venv`**，见 `ARCHITECTURE.md` §6 第 24 条） | **750 passed / 0 failed**（2026-09-27 实测 ≈60–69s；其中 1 条**打真上游**的用例在不可达时按设计 skip ⇒ `passed` 那一格会差 1） |
 | 桌面壳 | `cargo test`（工作目录 `frontend/src-tauri`） | **62 passed**（2026-09-27 实测；含 `delete_old_dir` 的真实 junction 用例、S1 的 token 生成用例、S3 的准入表/白名单用例与**迁移编排四条回滚路径**） |
-| 前端单测 | `npm --prefix frontend run test` | **669 passed / 53 文件**（2026-09-27 实测；条数确定，不随上游浮动） |
+| 前端单测 | `npm --prefix frontend run test` | **690 passed / 54 文件**（2026-09-27 实测；条数确定，不随上游浮动） |
 | 前端类型 / lint | `npx tsc --noEmit`（**必须在 `frontend/` 里跑**）/ `npm --prefix frontend run lint` | 0 错 / 0 错（2026-09-26 复核） |
 | 文档漂移 | `python scripts/doc_check.py` | **0 FAIL**（2026-09-26 复核；另有 1 条历史 devlog 索引欠账 WARN，WARN 看脚本逐条输出） |
 | 上游冒烟 | `python scripts/smoke_upstream.py [--cold]` | 真上游 **5 ok** / 冷进程 **3 ok**，0 FAIL（2026-09-23 复核） |

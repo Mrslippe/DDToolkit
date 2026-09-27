@@ -557,12 +557,31 @@ export interface VtuberEvent {
   created_at: string | null
 }
 
-/** GET /auth/{platform}/status：平台登录态 */
+/** 有登录这条路的平台（`/auth/{platform}/...` 只认这三个；第 4 阶段 ④，devlog/235） */
+export type AuthPlatform = 'bilibili' | 'weibo' | 'xiaohongshu'
+
+/** GET /auth/{platform}/status：平台登录态
+ *
+ * ⚠️ 后三个字段**只有小红书**会给：它走「粘贴 cookie」（没有可用的扫码接口，见 devlog/233），
+ * 且**不做真实有效性探测**（没有免签名的探活端点，硬探只会白挨一次风控）⇒ 状态口径是
+ * "配置齐了没"。真实失效由抓取侧报出来（`cookie_invalid`），那时用户重新粘一次即可。
+ */
 export interface AuthStatus {
   logged_in: boolean
   needs_login: boolean
   uid: string | null
   name: string | null
+  /** 有没有存过 cookie（小红书） */
+  configured?: boolean
+  /** 还缺哪些必需键，如 `['a1']`（小红书；齐了就是空数组） */
+  missing?: string[]
+  /** 给用户看的整句说明（缺键时后端已经写好了，前端直接显示） */
+  note?: string
+}
+
+/** POST /auth/xiaohongshu/cookie 的返回：`{status, ...AuthStatus}` */
+export interface XhsCookieSaved extends AuthStatus {
+  status: string
 }
 
 /** POST /auth/{platform}/qr/start */

@@ -3,6 +3,7 @@ import { useLocation } from 'react-router-dom'
 import { Copy, LogIn, Minus, Square, X } from 'lucide-react'
 import Logo from './common/Logo'
 import LoginDialog from './LoginDialog'
+import { LOGIN_TABS } from '../utils/platformLogin'
 import CapabilityLimits from './CapabilityLimits'
 import StatusIsland from './StatusIsland'
 import CloseActionDialog from './CloseActionDialog'
@@ -684,7 +685,7 @@ export default function TopBar() {
           title={
             auths.bili?.needs_login
               ? 'B 站登录已过期，点击扫码登录'
-              : '账号登录（B 站 / 微博）'
+              : `账号登录（${LOGIN_TABS.map((t) => t.label).join(' / ')}）`
           }
           onClick={() => setLoginOpen(true)}
         >
