@@ -1,10 +1,8 @@
 """B 站平台适配：包装 app.services.fetcher 既有实现。
 
 说明：B 站帖子抓取有专属双流循环（视频投稿 + 动态，含归档边界/视频总数比对等
-专用逻辑），由 `scheduler._fetch_posts_core` 直接处理，不走通用单流循环；
-**平台细节的接线口是 `app/services/platforms/streams.py` 的 `PostStreams`**
-（2026-09-27，devlog/229：核心循环已平台无关，B 站那套实现由 `scheduler.BILIBILI_STREAMS`
-绑上去）；本适配器提供账号信息抓取（协议完整性见 base.py）。
+专用逻辑），由 scheduler._fetch_posts_core 直接处理，不走通用单流循环；
+本适配器提供账号信息抓取（协议完整性见 base.py）。
 """
 from __future__ import annotations
 

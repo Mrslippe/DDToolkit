@@ -34,7 +34,6 @@ from app.services.fetcher import (
     was_rate_limited, clear_rate_limit, rate_limit_info,
 )
 from app.services.platforms import registry
-from app.services.platforms.streams import PostStreams
 from app.services.post_text import extract_post_text
 from app.services.pinned_posts import (
     DETAIL_REFRESH_TYPES, detail_refresh_due, refresh_fields,
@@ -1874,50 +1873,11 @@ def _route_live_item(db: Session, mid: int, d: dict) -> None:
 _PAGE_RETRIES = 2
 
 
-# ── 平台流绑定（第 4 阶段的 ①，devlog/229）──────────────────────────────
-# ⚠️ **这里是全仓唯一把"B 站协议细节"绑给帖子核心循环的地方。**
-# 以前 `_fetch_posts_core` 自己直接调 `fetch_bilibili_*` 并把 `"bilibili"` 写进
-# 去重/归档查询 —— 换个平台调用它，归档边界会**静默失效**（查的是别家的帖子）。
-# 现在核心循环只认 `PostStreams` 这套形状（见 `platforms/streams.py`），
-# 绑定集中在这一处；`tests/test_posts_core_platform.py` 有一条判据盯着
-# "核心函数里不许再出现平台字面量"。
-def _bili_fetch_video_page(mid: int, page: int, client) -> Any:
-    return fetch_bilibili_videos(mid, page=page, client=client)
-
-
-def _bili_fetch_dynamics_page(mid: int, offset: str, client) -> Any:
-    return fetch_bilibili_dynamics(mid, offset=offset, client=client)
-
-
-def _bili_route_non_post(db: Session, mid: int, d: dict) -> bool:
-    """直播开播场次卡：路由进 `live_sessions`，不进 posts（返回 True = 已处理）。"""
-    if d.get("type") != "live":
-        return False
-    _route_live_item(db, mid, d)
-    return True
-
-
-BILIBILI_STREAMS = PostStreams(
-    platform="bilibili",
-    fetch_video_page=_bili_fetch_video_page,
-    fetch_dynamics_page=_bili_fetch_dynamics_page,
-    bvid_index=_video_bvid_index,
-    absorb_video_dynamic=_absorb_video_dynamic,
-    route_non_post=_bili_route_non_post,
-    enrich_item=lambda d, client: _enrich_dynamic_item(d, client=client),
-    refresh_pinned=lambda post_repo, platform_uid, d, client: _refresh_pinned_post(
-        post_repo, "bilibili", platform_uid, d,
-        detail_refresher=lambda: _enrich_dynamic_item(d, client=client),
-    ),
-)
-
-
 async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db: Session,
                             client: httpx.AsyncClient | None = None,
                             include_videos: bool = True,
                             stop_on_existing: bool = False,
-                            limit_latest: int | None = None,
-                            streams: PostStreams = BILIBILI_STREAMS) -> PostFetchResult:
+                            limit_latest: int | None = None) -> PostFetchResult:
     """单个账号的帖子抓取核心逻辑（不含锁与 session 管理）。
     video_pages=-1   → 全量拉取视频直到无更多结果。
     dynamics_pages=-1 → 全量拉取动态直到 has_more=false。
@@ -1952,21 +1912,20 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
         # 已入库帖子 ID 集合：内存去重，避免触发唯一约束回滚
         existing_ids = {
             r[0] for r in db.query(Post.platform_post_id).filter(
-                Post.platform == streams.platform, Post.platform_uid == platform_uid
+                Post.platform == "bilibili", Post.platform_uid == platform_uid
             ).all()
         }
         # 已归档帖子 ID 集合：整页命中即触发归档边界停止
         archived_ids = {
             r[0] for r in db.query(Post.platform_post_id).filter(
-                Post.platform == streams.platform, Post.platform_uid == platform_uid,
+                Post.platform == "bilibili", Post.platform_uid == platform_uid,
                 Post.is_archived == True,  # noqa: E712
             ).all()
         }
         # P9-3（v0.9.6）：bvid → 已入库的 video 帖 platform_post_id。
         # 「投稿动态」与「投稿」是同一条视频的两个来源，合并后只留 video 一条，
         # 动态附言写进 video.note（见 `_absorb_video_dynamic`）。
-        video_by_bvid = (streams.bvid_index(db, platform_uid)
-                         if streams.bvid_index else {})
+        video_by_bvid = _video_bvid_index(db, platform_uid)
 
         # 批量入库：pending 攒满 _POST_BATCH_SIZE 才 commit；
         # 冲突（并发抓取竞态）时回滚整批并逐条重插定位重复项
@@ -2004,7 +1963,7 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
                     if video_pages != 0:
                         result.stop_reason = "page_limit"
                     break
-                vdata = await streams.fetch_video_page(mid, page, client)
+                vdata = await fetch_bilibili_videos(mid, page=page, client=client)
                 if was_rate_limited():
                     # 风控断点续抓（A）：落盘 → 冷却 → 从同一页重试，耗尽次数才放弃
                     _flush_pending()
@@ -2014,7 +1973,7 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
                                     f"{settings.RATE_LIMIT_COOLDOWN}s 起（连续命中会升级）"
                                     f"后重试 ({rl_retries}/{_PAGE_RETRIES})...")
                         clear_rate_limit()
-                        await _cooldown_for_rate_limit("", streams.platform)
+                        await _cooldown_for_rate_limit("", "bilibili")
                         continue
                     clear_rate_limit()
                     result.rate_limited = True
@@ -2065,7 +2024,7 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
                 if dynamics_pages != 0:
                     result.stop_reason = "page_limit"
                 break
-            data = await streams.fetch_dynamics_page(mid, offset, client)
+            data = await fetch_bilibili_dynamics(mid, offset=offset, client=client)
             if was_rate_limited():
                 # 风控断点续抓（A）：落盘 → 冷却 → 从同一 offset 重试，耗尽次数才放弃
                 _flush_pending()
@@ -2075,7 +2034,7 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
                                 f"{settings.RATE_LIMIT_COOLDOWN}s 起（连续命中会升级）"
                                 f"后重试 ({dyn_rl_retries}/{_PAGE_RETRIES})...")
                     clear_rate_limit()
-                    await _cooldown_for_rate_limit("", streams.platform)
+                    await _cooldown_for_rate_limit("", "bilibili")
                     continue
                 clear_rate_limit()
                 result.rate_limited = True
@@ -2102,7 +2061,8 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
             for idx, d in enumerate(items):
                 # 直播开播场次卡（v0.9.x M2）：路由 live_sessions 表（不走 posts），
                 # 且计入 seen_pids 缺席判定——它不属于内容档案
-                if streams.route_non_post and streams.route_non_post(db, mid, d):
+                if d["type"] == "live":
+                    _route_live_item(db, mid, d)
                     continue
                 result.seen_pids.append(d["platform_post_id"])
                 result.dynamics += 1
@@ -2110,9 +2070,10 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
                     # R35：置顶帖不是"跳过不管"——每轮都刷新（feed 免费 + 详情节流），
                     # 作者改周表/舰礼图才能被捕捉到（devlog/139）
                     if d["platform_post_id"] in pinned_ids:
-                        if (streams.refresh_pinned is not None
-                                and await streams.refresh_pinned(
-                                    post_repo, platform_uid, d, client)):
+                        if await _refresh_pinned_post(
+                            post_repo, "bilibili", platform_uid, d,
+                            detail_refresher=lambda: _enrich_dynamic_item(d, client=client),
+                        ):
                             result.pinned_refreshed += 1
                         continue
                     result.skipped += 1
@@ -2127,17 +2088,14 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
 
                 # P9-3：投稿动态并入同 bvid 的投稿帖（附言写 note），不再重复入库
                 if d["type"] == "video_dynamic":
-                    if (streams.absorb_video_dynamic is not None
-                            and streams.absorb_video_dynamic(
-                                db, platform_uid, d, video_by_bvid) is not None):
+                    if _absorb_video_dynamic(db, platform_uid, d, video_by_bvid) is not None:
                         result.skipped += 1
                         result.note_merged += 1
                         continue
 
                 # 详情补全：图文/纯文字走 opus 详情、专栏拉全文、投稿合并视频详情
                 # （R35 起这套合并口径与置顶帖刷新共用，见 _enrich_dynamic_item）
-                if streams.enrich_item is not None:
-                    await streams.enrich_item(d, client)
+                await _enrich_dynamic_item(d, client=client)
 
                 # 详情风控标志仅用于列表页判定（C）：每条详情处理完立即清除，
                 # 避免 fetch_dynamic_detail 置位的标志污染下一页列表请求的判定
@@ -2158,7 +2116,7 @@ async def _fetch_posts_core(mid: int, video_pages: int, dynamics_pages: int, db:
                 # "当前没有置顶"，首页是权威口径）。必须等本页新帖先落库再同步，
                 # 否则本轮新抓到的置顶帖要拖到下一轮才标上
                 _flush_pending()
-                pin = post_repo.sync_pinned(streams.platform, platform_uid, pinned_ids)
+                pin = post_repo.sync_pinned("bilibili", platform_uid, pinned_ids)
                 result.pinned_marked += pin["marked"]
                 result.pinned_cleared += pin["cleared"]
             dyn_page += 1
@@ -3040,7 +2998,7 @@ async def live_sweep_core(db: Session, client: httpx.AsyncClient | None = None) 
                     logger.warning(f"T0 直播状态触发风控 ({rate_limit_info()})，"
                                    f"冷却 {settings.RATE_LIMIT_COOLDOWN}s 起（连续命中会升级）后继续")
                     clear_rate_limit()
-                    await _cooldown_for_rate_limit("", streams.platform)
+                    await _cooldown_for_rate_limit("", "bilibili")
                     continue
                 # 非风控失败（网络/接口异常）：跳过本批，轮询宽容处理
                 result.failed += len(chunk)
