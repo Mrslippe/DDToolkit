@@ -480,7 +480,7 @@ Python **3.14** 有 PEP 649（**惰性注解**，注解到被读取时才求值�
 1. **改了模块级函数签名/注解之后，补一次干净克隆自检**（`uv` 按 `requires-python`
    **下界 3.12** 建环境，正好补上本地 3.14 的盲区）：
    ```powershell
-   git clone . ..\ddtk-cisim; cd ..\ddtk-cisim; uv run pytest tests/ -q   # 期望 732 passed / 1 skipped
+   git clone . ..\ddtk-cisim; cd ..\ddtk-cisim; uv run pytest tests/ -q   # 期望 753 passed / 1 skipped
    ```
    顺手删掉克隆目录。这条同时也是"下界版本到底能不能装/能跑"的唯一低成本自检。
 2. **CI 红了先读退出码**（GitHub 的 job 日志要登录，但 **check-run annotations 接口匿名可读**：
@@ -488,6 +488,15 @@ Python **3.14** 有 PEP 649（**惰性注解**，注解到被读取时才求值�
    `1`=有用例失败 / `2`=收集被中断（含 import 错）/ `3`=pytest 内部错 / `4`=**用法错**
    （含 conftest 导入失败）/ `5`=没收集到用例。**别拿"本地绿"当反证** —— 本地与 CI 的
    Python 版本可以差一个大版本。
+
+> **2026-09-27 第二次踩（devlog/236）＋ 这次上了机器判据**：同一个坑以另一个形状复发 ——
+> 新模块 `platforms/bilibili_posts.py` 里写了 `client: httpx.AsyncClient | None` 而
+> **没 `import httpx`**：本地 A 档 8 步全绿，CI **四条腿全红**（连 Rust 腿也红，因为它的
+> 冒烟要起冻结后端）。⇒ 教训靠"记住"不够，现在有判据了：
+> `tests/test_annotations_resolve.py` 把 `app/` 下每个模块的函数/类注解**主动求值一次**
+> （`typing.get_type_hints`），3.14 也能提前发现 3.12 的问题。
+> 边界：只查**没有** `from __future__ import annotations` 的模块（带那行的模块在 3.12 上
+> 本来就不求值，如实豁免并数出来）。**新增/搬家模块后如果忘了导入注解里用到的名字，这条会红。**
 
 ---
 

@@ -33,6 +33,11 @@ import logging
 import random
 from datetime import datetime, timezone
 
+# ⚠️ 别删：`enrich_dynamic_item(client: httpx.AsyncClient | None)` 的注解要它。
+#    本地 .venv 是 3.14（PEP 649 惰性注解）⇒ 少了这行本地照样全绿，CI 的 3.12 腿
+#    在 `def` 时就炸 `NameError`（2026-09-27 实测，四条腿全红）。判据见
+#    `tests/test_annotations_resolve.py`。
+import httpx
 from sqlalchemy.orm import Session
 
 from app.core.config import settings

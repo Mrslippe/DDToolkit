@@ -462,7 +462,7 @@ W1/W2 可以在**现在的架构上**做完，但它们只是让 W3 少踩坑。
 
 | 门禁 | 命令 | 当前基线（括号里 = 该值实测日） |
 |---|---|---|
-| 后端 | `python -m pytest -q`（**解释器走 `.venv`**，见 `ARCHITECTURE.md` §6 第 24 条） | **753 passed / 0 failed**（2026-09-27 实测 ≈60–70s；其中 1 条**打真上游**的用例在不可达时按设计 skip ⇒ `passed` 那一格会差 1） |
+| 后端 | `python -m pytest -q`（**解释器走 `.venv`**，见 `ARCHITECTURE.md` §6 第 24 条） | **755 passed / 0 failed**（2026-09-27 实测 ≈60–70s；其中 1 条**打真上游**的用例在不可达时按设计 skip ⇒ `passed` 那一格会差 1） |
 | 桌面壳 | `cargo test`（工作目录 `frontend/src-tauri`） | **62 passed**（2026-09-27 实测；含 `delete_old_dir` 的真实 junction 用例、S1 的 token 生成用例、S3 的准入表/白名单用例与**迁移编排四条回滚路径**） |
 | 前端单测 | `npm --prefix frontend run test` | **690 passed / 54 文件**（2026-09-27 实测；条数确定，不随上游浮动） |
 | 前端类型 / lint | `npx tsc --noEmit`（**必须在 `frontend/` 里跑**）/ `npm --prefix frontend run lint` | 0 错 / 0 错（2026-09-26 复核） |
