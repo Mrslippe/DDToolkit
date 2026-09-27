@@ -553,6 +553,7 @@
 | 批次 12（M4 第五刀，收口）：**事件表 `utils/appEvents.ts`** —— 8 个 `ddtoolkit:*` 事件的名字与 payload 集中成一张表，`emit`/`on` 由表推导（改名或改 payload 当场编译错）；11 个生产文件迁移、删掉 6 处手写断言；无 payload 的事件照旧发裸 `Event`（`CustomEvent` 会把 detail 归一成 null）；7 条判据 + 四刀反向验证 | 223 |
 | 账号身份收口（用户拍板）：**认人口径统一按 `platform_uid`**（删掉按 `id` 的那一套与"没选过就不选"）＋**修掉未过滤兜底**（新增 `usableAccounts` 单一口径，`reconcile` 内部再过滤 ⇒ 空 uid 脏行永不被选中，`accountKey` 不会再变成 `"bilibili:"`）；12 条判据 + 四刀反向验证；同时拍板 `useVtuberRealtimeSync` **暂不做**（等第二个消费者） | 224 |
 | 批次 16 的 ④：**迁移编排抽成可注入函数 + 补四条回滚判据** —— 新增 `trait MigrateEnv` 与 `migrate::orchestrate`（`lib.rs` 只留 `TauriMigrateEnv` 接线）；6 条单测（Rust 56 → 62）逐条断言「指针未变 + 旧目录哨兵未动 + 后端被拉回旧目录」；⚠️ **顺带修掉一个真缺陷**：写指针失败时后端被停在半路（应用从此没有数据服务）；反向验证四刀，含计划点名的「把指针提前写 ⇒ 必红」 | 225 |
+| 批次 6 的补充：**关停冒烟（真进程验优雅停止）** —— `backend_main.py` 把 Windows 上唯一可投递的礼貌信号 `SIGBREAK` 接到 uvicorn 优雅路径；新增 `scripts/shutdown_smoke.py`（真进程 + 四条判据：调度起来过的前提 / ≤15s 退出 / 退出码 0 / 日志命中「调度运行时已停止」）；三刀反向验证；⚠️ 查清打包版三条退出路径**都是硬杀** ⇒ 优雅停止在真机是死代码，记 TODO 待拍板 | 226 |
 
 > **编号列怎么写**（2026-09-23 定）：
 > - 有 devlog 的批次 → **裸编号**（`| 097 |`）；

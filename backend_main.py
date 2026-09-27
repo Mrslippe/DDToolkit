@@ -182,6 +182,25 @@ def main() -> None:
     config = build_uvicorn_config(app, port)
     server = uvicorn.Server(config)
 
+    # ── Windows 上的"礼貌叫停"通道（批次 6 的补充，devlog/226）─────────────────
+    # Windows **没有**可投递的软 SIGTERM：`os.kill(pid, SIGTERM)` 走的是 TerminateProcess
+    # （硬杀，lifespan 不跑）。父进程能礼貌叫停的唯一通道是控制台 **CTRL_BREAK**
+    # （Python 侧收到 `SIGBREAK`），而 uvicorn 默认只处理 SIGINT/SIGTERM ⇒ 这里把它接到
+    # **同一条优雅路径**上：`should_exit` → 主循环退出 → lifespan shutdown
+    # （调度运行时停止、线程 join、WAL checkpoint）。
+    #
+    # 判据在 `scripts/shutdown_smoke.py`（起真进程 → 发 CTRL_BREAK → 断言
+    # `logs/app.log` 出现「调度运行时已停止」且进程 ≤15s 内退出）。
+    if os.name == "nt":
+        import signal as _signal
+
+        def _on_console_break(signum, _frame):  # pragma: no cover - 真信号送达才跑
+            _slog(f"收到 SIGBREAK({signum}) —— 走优雅停止（等同 Ctrl+C）")
+            print("[sidecar] 收到 CTRL_BREAK，开始优雅停止", flush=True)
+            server.should_exit = True
+
+        _signal.signal(_signal.SIGBREAK, _on_console_break)
+
     async def _serve() -> None:
         task = asyncio.create_task(server.serve())
         while not server.started and not task.done():

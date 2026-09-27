@@ -53,6 +53,7 @@ logs/
 # 自检 / 调试临时目录（scripts/dev_check.py、ui_probe.py 的现场，通过即删）
 /_devcheck_tmp/
 /_ui_probe_tmp/
+/_shutdown_smoke_tmp/
 # 单元测试用工作区临时目录（沙箱下系统 temp 不可写，见 test_services 首启标记用例）
 /_test_tmp/
 # 排查问题时的一次性脚本/现场目录（_tmp_xxx.py、_tmp_xxx/）

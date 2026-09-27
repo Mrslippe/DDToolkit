@@ -145,6 +145,17 @@ python -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute(\"UPDAT
 
 ⚠️ **别拿真档案试**：先 `Copy-Item $d "$env:TEMP\dd-backup" -Recurse`（或者直接把 `DDTOOLKIT_DATA_DIR` 指到一份副本上再玩）。
 
+### 关停（优雅停止）：**已有真进程冒烟**（批次 6 的补充，devlog/226）
+
+```powershell
+python scripts/shutdown_smoke.py   # 起真后端 → 发 CTRL_BREAK → 断言 ≤15s 退出、码 0、日志命中
+```
+
+它顶掉的是原来那句"只能真机看 `app.log`"。⚠️ **但它验的是"后端被礼貌叫停时会不会优雅收摊"**，
+而**打包版今天根本不走这条路**：关窗/托盘退出是 Job Object / `taskkill /F`，壳被杀是后端看门狗
+`os._exit(0)`，迁移是 `child.kill()` —— **三条都是硬杀**。要让真机也优雅停止，得先给壳加礼貌
+通道（`POST /shutdown` 或 CTRL_BREAK 到子进程组），**这是待拍板项**（TODO §1.1，devlog/226 §五）。
+
 ### 哪些"看着像真机"的其实机器能验（批次 15，devlog/215）
 
 文件 SQLite 的并发面（WAL 读写并行、`busy_timeout` 排队、多 session 竞争写、T0 ∥ 帖子写入、
