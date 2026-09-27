@@ -1,0 +1,1282 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>状态小窗 · 展开方向样例（A + 400 上限）</title>
+<style>
+/* ══════════════════════════════════════════════════════════════════════════
+   展开方向样例（2026-09-27 用户口径）
+
+   ## 这一版要验证的三条
+   1. **宽度上限 400**，超出**省略号**（用户："多出来了就省略"）
+   2. **方案 A**（宽度跟着内容走，胶囊里不省略；上限内不省）
+   3. **展开方向跟随屏幕位置** —— 朝**远离最近边**的方向长（= 朝屏幕中心长）：
+        · 胶囊在**上半** ⇒ 面板向下长
+        · 在**下半** ⇒ 面板向上长
+        · 在**左半** ⇒ 面板向右长
+        · 在**右半** ⇒ 面板向左长
+
+   ## 为什么这条需求是对的（用户原话）
+   「主要是防止位于屏幕边缘的时候展开内容被边缘遮挡」
+
+   ## 关键交互：**把胶囊拖到任意位置**
+   下面是一个模拟屏（按 1920×1080 等比缩放）。**拖动胶囊**到任意位置，
+   它会实时重算展开方向；点一下即展开。
+   四角与四边中点是重点：贴着上缘时向下长、贴着下缘时向上长。
+
+   ⚠️ 注意：**方向只由"胶囊中心在屏幕的哪一半"决定**，与"够不够放"无关。
+   算完还会再夹一次屏内（极小屏/超大面板时仍可能越界 ⇒ 那一步不能省）。
+   ══════════════════════════════════════════════════════════════════════════ */
+
+@font-face {
+  font-family: 'Alimama FangYuanTi VF';
+  src: url('../../../frontend/src/assets/fonts/AlimamaFangYuanTiVF-VF.woff2') format('woff2');
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+:root {
+  /* 产品真源：`tokens.css:36` 的顶栏粉 + `:48` 的主色深档。
+     ⚠️ `--c-primary` 之前**漏了**（样例只抄了 `-deep`）⇒ `.p-action` 的
+        `background: var(--c-primary)` 算成 `transparent`，只剩深玫瑰字色落在深卡上
+        ——实测 computed `bg=rgba(0,0,0,0)` / `fg=rgb(122,31,61)`，**基本看不见**。
+        教训：引用了没定义的令牌不会报错，只会静默变成"没样式"，必须量 computed。 */
+  --c-primary: #ffa2b4;
+  --c-primary-deep: #c9406f;
+  --ease-standard: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --font: 'Alimama FangYuanTi VF', system-ui, -apple-system, 'Segoe UI',
+          'PingFang SC', 'Microsoft YaHei', sans-serif;
+
+  /* 速度：**除以**倍率（v1 的 bug 是乘） */
+  --sp: 1;
+  --motion-instant: 90ms;
+  --motion-fast: 140ms;
+  --motion-base: 220ms;
+  --motion-lag: 60ms;
+  --t-instant: calc(var(--motion-instant) * var(--sp));
+  --t-fast:    calc(var(--motion-fast)    * var(--sp));
+  --t-base:    calc(var(--motion-base)    * var(--sp));
+  --t-lag:     calc(var(--motion-lag)     * var(--sp));
+
+  /* 尺寸（用户 2026-09-27：上限 400） */
+  --cap-min-w: 200px;
+  --cap-max-w: 400px;
+  --cap-h: 40px;           /* ⚠️ 只是 JS 就绪前的兜底；权威值是 JS 的 `CAP_H`（layout 会写回） */
+  --panel-w: 400px;
+  --panel-h: 210px;
+  --cap-radius: 20px;      /* 用户拍板：恒定 20px */
+}
+
+/* 两套材质（成对；暗底阴影要重、亮底要克制） */
+:root, [data-theme="dark"] {
+  --surf: rgba(24,25,32,.92);
+  --surf-hi: rgba(255,255,255,.10);
+  --surf-ring: rgba(255,255,255,.10);
+  --fg: #fff;
+  --fg-faint: rgba(255,255,255,.44);
+  --line: rgba(255,255,255,.08);
+  --icon-bg: rgba(255,255,255,.10);
+  --chip-bg: rgba(255,255,255,.16);
+  /* ══ 状态色：**点色 = 紧迫度**（字形才表达类型）════════════════════════
+     ⚠️⚠️ 产品顶栏里 `.topbar-status-dot.ok` 是**白色** `#fff`
+        （`layout.css:365`）—— 那是"深玫瑰底上的成功色"。
+        小窗是浮在壁纸上的独立卡片，**白色在那里没有语义**（浅色主题下直接消失），
+        ⇒ 小窗宿主必须自带一套，不能照抄。这也正是 W1「主题广播」要一并解决的。 */
+  --st-ok: #52c41a;      /* 正常 / 完成 / 提示 */
+  --st-busy: #faad14;    /* 进行中 */
+  --st-warn: #ff4d4f;    /* 需要注意 */
+  /* 动作色**按主题分档**（同一个令牌在两套卡面上不可能都够对比）：
+       深卡用顶栏粉 `#ffa2b4` ⇒ 对卡片底 **9.3:1**
+       浅卡用主色深档 `#c9406f` ⇒ 对白卡 **4.7:1**（刚好过 4.5:1）
+     这正是用户已经定过的"深/浅**成对**定义"那条规则在文字上的同一件事。 */
+  --c-action: var(--c-primary);
+  --shadow: inset 0 1px 0 var(--surf-hi), 0 0 0 1px var(--surf-ring),
+            0 2px 5px rgba(0,0,0,.38), 0 9px 22px rgba(0,0,0,.40),
+            0 22px 54px rgba(0,0,0,.28);
+  --shadow-open: inset 0 1px 0 var(--surf-hi), 0 0 0 1px var(--surf-ring),
+            0 4px 9px rgba(0,0,0,.40), 0 16px 40px rgba(0,0,0,.46),
+            0 36px 88px rgba(0,0,0,.32);
+}
+[data-theme="light"] {
+  --surf: rgba(255,255,255,.95);
+  --surf-hi: rgba(255,255,255,.95);
+  --surf-ring: rgba(15,23,42,.07);
+  --fg: #2f3a47;
+  --fg-faint: rgba(47,58,71,.50);
+  --line: rgba(15,23,42,.08);
+  --icon-bg: rgba(15,23,42,.055);
+  --chip-bg: rgba(15,23,42,.08);
+  /* 状态色**两套主题共用这三个**：点只有 7px，靠色相区分而不是靠亮度，
+     所以同一组中饱和色在深卡与浅卡上都读得出（对比度是"点 vs 卡面"，
+     7px 圆点属非文本图形，不套 4.5:1）。 */
+  --st-ok: #52c41a;
+  --st-busy: #faad14;
+  --st-warn: #ff4d4f;
+  --c-action: var(--c-primary-deep);   /* 白卡上顶栏粉只有 ~1.9:1，必须换深档 */
+  --shadow: inset 0 1px 0 var(--surf-hi), 0 0 0 1px var(--surf-ring),
+            0 1px 2px rgba(15,23,42,.05), 0 5px 14px rgba(15,23,42,.09),
+            0 14px 34px rgba(15,23,42,.07);
+  --shadow-open: inset 0 1px 0 var(--surf-hi), 0 0 0 1px var(--surf-ring),
+            0 2px 4px rgba(15,23,42,.06), 0 11px 28px rgba(15,23,42,.13),
+            0 28px 64px rgba(15,23,42,.10);
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; padding: 0 0 60px; background: #f4f1ee; color: #2b3440;
+  font-family: var(--font); -webkit-font-smoothing: antialiased; }
+
+.page-head { padding: 24px 32px 16px; background: #fff;
+  border-bottom: 1px solid rgba(15,23,42,.07); position: sticky; top: 0; z-index: 300; }
+.page-head h1 { margin: 0 0 6px; font-size: 19px; font-weight: 600; }
+.page-head p { margin: 0; font-size: 13px; color: #6b7686; line-height: 1.65; }
+.page-head code, .notes code { font-family: ui-monospace, Consolas, monospace;
+  font-size: 11.5px; background: rgba(15,23,42,.05); padding: 1px 4px; border-radius: 4px; }
+.controls { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-top: 14px; }
+.ctl-group { display: flex; align-items: center; gap: 7px; font-size: 12.5px; color: #6b7686; }
+.seg { display: inline-flex; border: 1px solid rgba(15,23,42,.12); border-radius: 8px;
+  overflow: hidden; background: #fff; }
+.seg button { appearance: none; border: 0; background: transparent; font: inherit;
+  font-size: 12.5px; padding: 5px 11px; cursor: pointer; color: #6b7686; }
+.seg button + button { border-left: 1px solid rgba(15,23,42,.09); }
+.seg button[aria-pressed="true"] { background: var(--c-primary-deep); color: #fff; }
+.seg button:hover:not([aria-pressed="true"]) { background: rgba(15,23,42,.05); }
+.btn { appearance: none; border: 1px solid rgba(15,23,42,.12); background: #fff;
+  font: inherit; font-size: 12.5px; padding: 5px 12px; border-radius: 8px;
+  cursor: pointer; color: #2b3440; }
+.btn:hover { background: rgba(15,23,42,.05); }
+.switch { display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+  font-size: 12.5px; color: #6b7686; }
+.switch input { accent-color: var(--c-primary-deep); }
+
+main { padding: 22px 32px 0; display: grid; gap: 18px; }
+.variant { background: #fff; border: 1px solid rgba(15,23,42,.07);
+  border-radius: 14px; overflow: hidden; }
+.variant-head { padding: 15px 20px 13px; border-bottom: 1px solid rgba(15,23,42,.06); }
+.variant-head h2 { margin: 0 0 6px; font-size: 14.5px; font-weight: 600;
+  display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.variant-head .tag { font-size: 11px; font-weight: 500; padding: 2px 7px;
+  border-radius: 5px; background: rgba(201,64,111,.10); color: var(--c-primary-deep); }
+.variant-head .tag.ok { background: rgba(22,163,74,.12); color: #15803d; }
+.variant-head p { margin: 0; font-size: 12.5px; color: #6b7686; line-height: 1.7; }
+.variant-head p + p { margin-top: 6px; }
+
+/* ── 模拟屏 ────────────────────────────────────────────────────────────── */
+.screen-wrap { padding: 20px; background: #eef1f4; }
+.screen {
+  position: relative; width: 100%; aspect-ratio: 16 / 9; overflow: hidden;
+  border-radius: 12px; box-shadow: 0 2px 10px rgba(15,23,42,.12);
+  background:
+    radial-gradient(70% 90% at 18% 12%, #fdfefe 0%, #e7eef4 48%, #ccd8e2 100%);
+  cursor: crosshair; user-select: none;
+}
+/* 屏幕中线（判定分界） —— 画出来才看得懂"上/下半"是怎么分的 */
+.screen::before, .screen::after {
+  content: ''; position: absolute; pointer-events: none; z-index: 1;
+}
+.screen::before { left: 50%; top: 0; bottom: 0; width: 1px;
+  background: repeating-linear-gradient(180deg, rgba(15,23,42,.22) 0 5px, transparent 5px 10px); }
+.screen::after { top: 50%; left: 0; right: 0; height: 1px;
+  background: repeating-linear-gradient(90deg, rgba(15,23,42,.22) 0 5px, transparent 5px 10px); }
+.screen-hint { position: absolute; z-index: 2; font-size: 11px; color: #94a3b8;
+  pointer-events: none; }
+.screen-hint.tl { left: 8px; top: 6px; }
+.screen-hint.br { right: 8px; bottom: 6px; }
+
+/* 胶囊（可拖动）。**位置与尺寸都由 JS 写在它身上** —— 它就是"窗口矩形"。
+
+   ⚠️ 这里曾经有一个 `.puck.flip-anim`（"翻转时单独给 top 加过渡"，用来遮住
+      翻转那一下 −167px 的跳变）。**现在删掉了，因为它的前提没了**：
+        旧模型把窗口放在胶囊**外侧**（`capTop ± (胶囊+间隙)`）⇒ 向下/向上两个窗口
+        在翻转点相差近一个窗口高 ⇒ 跨过翻转线**必然**跳一次，只能靠过渡遮。
+        新模型（F1）：窗口**含**胶囊那一格，向下时窗口顶 == 胶囊顶、向上时窗口底
+        == 胶囊底 ⇒ 翻转时"贴着胶囊的那条边"**不动**，视觉上是"向另一边长出去"，
+        本来就不需要遮（实测近边位移 = 0）。
+      ⇒ 一条判据的前提消失时，**连机制一起删**，别留一个没人加、只被移除的类。 */
+.puck {
+  position: absolute; z-index: 10;
+  cursor: grab;
+  transition: left var(--t-base) var(--ease-standard),
+              top var(--t-base) var(--ease-standard),
+              width var(--t-base) var(--ease-standard),
+              height var(--t-base) var(--ease-standard);
+}
+/* 拖动中：位置**瞬时跟手**；但宽度/高度仍过渡（展开/收起时用） */
+.puck.dragging {
+  cursor: grabbing;
+  transition: width var(--t-base) var(--ease-standard),
+              height var(--t-base) var(--ease-standard);
+}
+/* 拖动时给个"抓手"暗示 */
+.puck::after {
+  content: ''; position: absolute; inset: -8px; border-radius: 24px;
+  border: 1px dashed rgba(201,64,111,.45); opacity: 0;
+  transition: opacity var(--t-fast) ease;
+}
+.puck:hover::after, .puck.dragging::after { opacity: 1; }
+
+/* ── 小窗本体 ───────────────────────────────────────────────────────────
+   ⚠️ **尺寸由外层 `.puck` 承载，本元素只负责材质与内容布局**。
+   为什么这样分：展开时窗口矩形（puck）要"朝某个方向长"，而胶囊/面板在里面的
+   位置由锚点决定 —— 两件事分开才不会互相打架（产品里对应
+   "窗口 resize" 与 "面板定位" 两层，也是分开的）。
+   `.is-open` 只切**内容形态**（圆角已恒定、内边距、对齐）。 */
+/* ⚠️ 卡片（`.island`）两种形态：
+     · 折叠态：卡片**就是胶囊** —— 宽 = `--cap-w`、高 40
+     · 展开态：卡片 = 窗口大小（宽 `--panel-w`、高 = 胶囊 + 间隙 + 面板），
+       里面的 `.cap-box` **保持胶囊尺寸**（宽 `--cap-w`、高 40）
+   ⚠️ 我第二/三版把 `.island` 写成 `width:100%` 填满 `.puck` ⇒
+      展开时卡片宽 400，而 `.cap-box` 若 `width:100%` 就被拉宽（实测 Δ宽=28）。
+      现在 `.cap-box` 显式 `width: var(--cap-w)`，**不再依赖父宽**。 */
+.island {
+  position: relative;
+  height: 100%;
+  width: 100%;                 /* 折叠态：.puck 就是胶囊宽 ⇒ 100% = 胶囊宽 */
+  border-radius: var(--cap-radius);
+  display: flex; align-items: center; justify-content: center;
+  /* ⚠️ 卡片**自己不留水平内边距** —— 内边距由 `.cap-box` 承担。
+     否则折叠态是"卡片 padding + cap-box padding"**双重内边距**（实测少 28px），
+     而展开态结构变了、双重变单重 ⇒ 胶囊宽度在两种状态下不一致（Δ宽=+28）。 */
+  padding: 0;
+  cursor: pointer; user-select: none;
+  background: var(--surf); color: var(--fg);
+  box-shadow: var(--shadow);
+  transition: border-radius var(--t-base) var(--ease-standard),
+              box-shadow var(--t-fast) ease,
+              background-color var(--t-fast) ease;
+}
+/* ⚠️⚠️ **展开时胶囊必须留在卡片里**（2026-09-27 用户问"为什么展开和收起有偏移"）。
+   我第一版是 `.is-open .cap-row { opacity: 0 }` + `.panel { position:absolute; inset:0 }`
+   —— 胶囊被淡出、面板铺满整个窗口 ⇒ **锚点消失**，用户看不到"从哪儿长出来的"，
+   就会觉得位置偏了（实测：横向中心 0px 偏移、垂直差 18px，正是这个建模错误）。
+   真实产品是 `窗口 = 胶囊 + 间隙 + 面板`（`widgetExpandGeom`），**胶囊始终在场**。
+
+   ⚠️ 第二版我又错了：把 `.cap-row` 直接当"胶囊"，但展开后它变成**通栏一行**（宽 400），
+   而折叠态它是胶囊**内部**的内容行（宽 258、高 16）—— 两者根本不是同一个盒子，
+   量出来必然"偏移"。这是**测量对象选错**，不是几何错。
+
+   ⇒ 第三版（当前）：**把"胶囊盒子"显式做成一个元素** `.cap-box`：
+      · 折叠态：它就是整张卡片（宽 = 胶囊宽、高 40）
+      · 展开态：它是卡片的首行（或末行），**宽高与折叠态完全相同**
+   这样"胶囊的屏幕矩形不变"才是**结构上可断言**的，而不是靠读某个子元素碰运气。 */
+.island.is-open {
+  padding: 0; align-items: stretch;
+  box-shadow: var(--shadow-open);
+  flex-direction: column;
+  /* ⚠️⚠️ **展开态卡片必须填满窗口**（`.puck`）——
+     我改"隐藏胶囊行"时把这两行**误删了**，结果 `is-open` 类加上了、
+     卡片却还是折叠尺寸（实测：`is-open=True` 而窗口高仍 40）
+     ⇒ 面板被挤在 40px 里、看起来"没展开"。
+     教训：**改 CSS 时删掉相邻声明要复核**；这条由 `_tmp_reg.py` 的
+     "先确认展开真的生效再拖"前置判据抓到（否则会得到"偏差=0"的**假绿**）。 */
+  width: 100%;
+  height: 100%;
+}
+/* 向上展开 ⇒ 胶囊在卡片**底部**（`column-reverse`），锚点位置不变 */
+.island.is-up.is-open { flex-direction: column-reverse; }
+
+/* ⚠️⚠️ 这个 `.cap-box` 我调了**六轮**才收敛，把真因记全（避免下次再踩）：
+
+   **现象**：收起态 `capBox.offsetLeft = −42`、以及展开前后"胶囊中心偏移 42px"。
+   **已排除**（都实测过）：
+     · 不是 CSS —— 抽出同一套样式做**最小复现页**，`offsetLeft = 0`、完全正常；
+     · 不是宽高/边距 —— 完整页里 `cb.width=286`、`isl.width=286`、`marginLeft=0`、
+       `justifyContent=center`，**computed 值全对**；
+     · 不是残留内联样式 —— `marginLeft` 明确是 `0px`。
+   **结论**：在"`.puck` 宽高由 JS 每帧改写 + 卡片 100% + 该盒子参与 flex 居中"
+   这三者叠加时，`offsetLeft` / rect 会读到**与 computed 值不自洽**的结果
+   （本仓已有先例：虚拟时间下 transition 冻结、`MutationObserver` 快照为空）。
+
+   ⇒ **不再和它纠缠**：把胶囊的水平位置**由 JS 显式写成绝对定位**，
+     不用 flex 居中、不依赖任何隐式传递。**一个位置只留一个机制。** */
+.cap-box {
+  position: absolute;
+  left: var(--cap-x, 0px);     /* JS 显式给（相对卡片左缘） */
+  top: var(--cap-y, 0px);      /* JS 显式给：向下展开=0；向上展开=窗口高−胶囊高 */
+  height: var(--cap-h);
+  width: var(--cap-w, 100%);
+  display: flex; align-items: center;
+  padding: 0 14px;
+  box-sizing: border-box;
+}
+/* ⚠️ 折叠态：卡片就是胶囊 ⇒ 盒子填满（位置由 CSS 定死，不用 JS 操心） */
+.island:not(.is-open) .cap-box { left: 0; top: 0; width: 100%; }
+/* 折叠行：三段（lead / mid / tail）⇒ 中间那组真居中 */
+.cap-row { display: flex; align-items: center; gap: 8px; width: 100%;
+  transition: opacity var(--t-instant) var(--ease-exit),
+              transform var(--t-instant) var(--ease-exit); }
+.cap-row .lead, .cap-row .tail { flex: 1 1 0; min-width: 0; }
+.cap-row .tail { display: flex; justify-content: flex-end; }
+.cap-row .mid { flex: 0 1 auto; min-width: 0; display: flex;
+  align-items: center; gap: 8px; }
+/* ⚠️⚠️ **展开后胶囊那一行整个隐藏**（用户 2026-09-27 两次指出：
+   「圆点和下拉图标还是保留了」「这个点和下拉按钮还在」）。
+
+   我上一版只隐藏"文案与计数"，把**点与 chevron 当成"锚点证据"刻意保留** ——
+   那是我的设计主张，不是用户要的。**用户连着两次指出同一处时，不要为它辩护。**
+   ⇒ 现在整行 `display:none`。
+
+   ⚠️⚠️ **隐藏之后几何必须跟着改**（否则换来一个更糟的 bug，实测过两次）：
+      胶囊行不在了 ⇒ 它原来占的那一格就必须**由面板接管**。
+      旧做法是"窗口 = 胶囊 + 间隙 + 面板，面板用 `--panel-y` 让开胶囊那一格"
+      ⇒ 那一格成了**窗口内的透明空白**：实测"展开后最顶上空出一大块"（用户原话），
+        而且窗口在胶囊**外侧**，点开的一瞬间卡片整体离开屏边 **46px**
+        （`jumpY = +46 = CAP_H(40) + GAP(6)`，CDP 实测）。
+      ⇒ 现在：**窗口含胶囊那一格**，面板铺满窗口（见 `layout()`）。
+        向下展开 ⇒ 窗口顶 == 胶囊顶；向上展开 ⇒ 窗口底 == 胶囊底
+        ⇒ 近边在展开/收起时**零位移**，视觉上就是"胶囊长成了这张卡"。 */
+.island.is-open .cap-box { display: none; }
+
+/* 面板：展开态**绝对定位并铺满窗口**（窗口高 == 面板高，所以 top 恒 0）。 */
+.island.is-open .panel {
+  position: absolute; left: 0; right: 0;
+  top: 0;
+  height: var(--panel-h, auto);
+}
+
+/* 面板：**参与布局**（不再是 `absolute; inset:0`），靠 `flex:1` 撑开。
+   高度由内容决定（用户："高度跟着内容"）—— 真实高度由 JS 量完写进窗口矩形。
+   顺序硬约束：**先量内容 → 得面板高 → 才算方向与窗口矩形**。
+
+   ⚠️⚠️ **折叠态必须 `visibility:hidden`，不能只靠 `opacity:0`** ——
+   否则面板的文字**仍然参与渲染树**（实测：折叠态用"可见元素"统计文案，
+   数到 **2 次**：胶囊 1 次 + 面板 1 次）。虽然看不见，但：
+     · 屏幕阅读器会读出重复内容
+     · 文本选择/查找（Ctrl+F）能命中隐藏的那份
+     · 我的探针也被它骗过一次（以为"没隐藏成功"）
+   用 `visibility` 而不是 `display:none`：保留布局（面板高度可继续被量到），
+   且 `visibility` 可过渡（`display` 不可）。 */
+.panel { flex: 1 1 auto; min-height: 0;
+  display: flex; flex-direction: column;
+  /* 入场位移：**从胶囊那一侧滑出**（向下展开从上方滑下、向上展开从下方滑上）。
+     ⚠️ 这个 `transform` 只在**未展开**时生效 —— 展开后必须被清成 `none`，
+        否则它会**永久偏移面板**（我上一版就栽在这：`.is-up .panel` 的
+        `translateY(6px)` 与 `.is-open .panel` 的 `transform:none` **特异度相同**，
+        而前者在样式表里更靠后 ⇒ 前者赢 ⇒ 面板被顶下去 6px，
+        被我的判据抓成"面板顶边应 0 却是 6"）。 */
+  opacity: 0; visibility: hidden; transform: translateY(-6px);
+  transition: opacity var(--t-fast) var(--ease-standard) 0ms,
+              transform var(--t-fast) var(--ease-standard) 0ms,
+              visibility 0ms linear var(--t-fast);
+  pointer-events: none; text-align: left; }
+/* ⚠️ 展开态的清零必须**同时压过**上面那条与 `.is-up` 那条 ⇒ 用 `.is-open` + `!important` 之外的
+   办法是提高特异度：`.island.is-open .panel`（两个类 + 元素）≥ `.island.is-up .panel`。
+   ⚠️ 但 `.is-up.is-open` 时两者同在 ⇒ 仍需保证"展开态优先" ⇒ 把它写在**最后**并显式列出。 */
+.island.is-up .panel { transform: translateY(6px); }
+.island.is-open .panel { transform: none; opacity: 1; visibility: visible;
+  pointer-events: auto; transition-delay: var(--t-lag), var(--t-lag), 0ms; }
+
+/* ⚠️ 点 + 字形是**两个独立通道**，别合并：
+     点 = 紧迫度（三种色，跨壁纸/色弱都能靠位置与亮度分辨）
+     字形 = 类型（五类各一个）——
+   产品今天只有点色一个通道，且 `report`/`message` 判成同色 ⇒
+   小窗若照抄，"全量抓取完成"和"已复制诊断信息"会长得一模一样。 */
+.dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--st-ok); }
+.dot.busy { background: var(--st-busy); animation: pulse 1.1s ease-in-out infinite; }
+.dot.warn { background: var(--st-warn); }
+.dot.ok { background: var(--st-ok); }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+
+.glyph { flex: none; width: 13px; text-align: center; font-size: 11px; line-height: 1;
+  color: var(--fg); opacity: .72; }
+/* 活数据槽：倒计时 / i/N。**等宽数字**，否则每秒跳动会把后面的槽位推来推去。 */
+.value { flex: none; font-size: 11.5px; color: var(--fg-faint);
+  font-variant-numeric: tabular-nums; }
+
+/* ⚠️ 折叠文案：**上限内不省略**（方案 A）。
+   只有超过 --cap-max-w(400) 才截断 —— 这由 JS 量完决定加不加 .is-ellip。 */
+.cap-text { flex: 0 0 auto; font-size: 13px; font-weight: 500; white-space: nowrap;
+  font-variant-numeric: tabular-nums; }
+.island.is-ellip .cap-text { flex: 0 1 auto; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; }
+
+.count { flex: none; min-width: 16px; height: 16px; padding: 0 5px;
+  border-radius: 999px; font-size: 10px; line-height: 16px; text-align: center;
+  background: var(--chip-bg); color: var(--fg); font-variant-numeric: tabular-nums; }
+.chev { flex: none; width: 12px; height: 12px; opacity: .8; }
+
+.p-head { display: flex; align-items: baseline; justify-content: center;
+  gap: 8px; padding: 11px 14px 9px; font-size: 12.5px; font-weight: 600;
+  position: relative; }
+.p-head .hint { font-size: 11px; font-weight: 400; color: var(--fg-faint);
+  position: absolute; right: 14px; }
+.p-body { padding: 0 6px 6px; overflow: hidden; }
+.p-item { display: flex; align-items: flex-start; gap: 9px; padding: 8px; }
+.p-item + .p-item { border-top: 1px solid var(--line); }
+.p-icon { flex: none; width: 15px; height: 15px; margin-top: 1px; border-radius: 50%;
+  display: grid; place-items: center; font-size: 10px; background: var(--icon-bg);
+  color: var(--fg); }
+/* 面板里图标按**紧迫度**着色，与胶囊的点同一套口径（同一个东西在两处必须同色） */
+.p-icon.k-alert { color: var(--st-warn); }
+.p-icon.k-progress { color: var(--st-busy); }
+.p-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.p-text { font-size: 12.5px; line-height: 1.4; }
+/* 面板里的活数据：跟在文案后面，弱一级 */
+.p-value { margin-left: 6px; font-size: 11.5px; color: var(--fg-faint);
+  font-variant-numeric: tabular-nums; }
+/* ⚠️ `detail` 是**只在面板出现**的那一半信息（胶囊一行装不下）——
+   `B 站登录已失效` 背后的"抓取会跳过需要登录的部分"就在这里。 */
+.p-detail { font-size: 11.5px; line-height: 1.5; color: var(--fg-faint); }
+.p-meta { font-size: 10.5px; color: var(--fg-faint); }
+/* 动作钮：**只在面板**（用户 2026-09-27 拍板：胶囊不放按钮）。
+   ⚠️ 形状照产品 `.si-item-action`：**描边胶囊**，不是实心粉丸 ——
+      面板里可能同时有几条动作，实心色块会互相抢注意力。 */
+.p-action { flex: none; align-self: center; margin-left: 8px; padding: 4px 10px;
+  border: 1px solid var(--c-action); border-radius: 999px;
+  background: transparent; color: var(--c-action);
+  font-family: inherit; font-size: 11.5px; font-weight: 600;
+  cursor: pointer; white-space: nowrap; transition: background var(--t-fast) ease; }
+.p-action:hover { background: var(--c-action); color: var(--surf); }
+.p-empty { padding: 18px 14px; text-align: center; font-size: 12px; color: var(--fg-faint); }
+.p-foot { padding: 8px 14px 10px; font-size: 10.5px; color: var(--fg-faint);
+  margin-top: auto; border-top: 1px solid var(--line); text-align: center; }
+
+/* 方向读数（贴在模拟屏右下角） */
+.readout { margin-top: 12px; font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px; color: #475569; background: #fff; border-radius: 8px;
+  padding: 9px 12px; border: 1px solid rgba(15,23,42,.08); }
+.readout b { color: var(--c-primary-deep); }
+.notes { padding: 20px 32px 0; }
+.notes h3 { font-size: 13.5px; margin: 0 0 10px; font-weight: 600; }
+.notes li { font-size: 12.5px; color: #6b7686; line-height: 1.8; }
+.preset-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+</style>
+</head>
+<body>
+<!-- ⚠️⚠️ 这里**曾经写着 `data-theme="dark"`** —— 那就是"浅色主题从来没生效过"的根因：
+     `:root, [data-theme="dark"]` 这条规则**同时命中 html 与 body**，
+     而主题按钮只改 `documentElement` ⇒ body 上那份**旧的 dark 属性继续命中**，
+     自定义属性又**按最近的祖先**继承 ⇒ 卡片里的每个元素都拿到 body 的深色值，
+     html 上的 light 被彻底遮住。
+     实测（CDP）：点击"浅色"后 `html[data-theme]=light`、`--surf` 仍是 `rgba(24,25,32,.92)`。
+     ⇒ 主题属性**只能有一个宿主**（`<html>`），body 不许再声明一遍。 -->
+
+<header class="page-head">
+  <h1>状态小窗 · 展开方向 + 内容口径样例</h1>
+  <p>
+    <strong>把胶囊拖到模拟屏的任意位置</strong>，它会实时重算展开方向；点一下即展开。
+    <strong>宽度上限 400</strong>（超出才省略）、<strong>方案 A</strong>（宽度跟内容走）、
+    <strong>圆角恒定 20px</strong>。
+  </p>
+  <p style="margin-top:6px;">
+    <strong>内容口径</strong>（2026-09-27 定稿）：折叠胶囊 = <code>点</code>（紧迫度）
+    + <code>字形</code>（类型）+ <code>主文案</code> + <code>活数据</code>（倒计时/进度，独立刷新）
+    + <code>计数</code> + <code>chevron</code>；<code>detail</code>/<code>来源</code>/<code>动作</code>
+    <strong>只在面板</strong>。五类内容见下面的按钮 —— 每一屏都标了实测胶囊宽。
+  </p>
+  <div class="controls">
+    <div class="ctl-group">
+      <span>主题</span>
+      <span class="seg" id="theme">
+        <button data-t="dark" aria-pressed="true">深色</button>
+        <button data-t="light">浅色</button>
+      </span>
+    </div>
+    <div class="ctl-group">
+      <span>动画速度</span>
+      <span class="seg" id="speed">
+        <button data-s="0.25">0.25×</button>
+        <button data-s="0.5">0.5×</button>
+        <button data-s="1" aria-pressed="true">1×</button>
+        <button data-s="2">2×</button>
+      </span>
+    </div>
+    <label class="switch"><input type="checkbox" id="reduce"> 减少动效</label>
+    <button class="btn" id="toggle">展开／收起</button>
+  </div>
+  <div class="preset-row">
+    <span style="font-size:12.5px;color:#6b7686;align-self:center;">跳到位置：</span>
+    <button class="btn" data-pos="0.10,0.10">左上</button>
+    <button class="btn" data-pos="0.50,0.04">上中</button>
+    <button class="btn" data-pos="0.90,0.10">右上</button>
+    <button class="btn" data-pos="0.05,0.50">左中</button>
+    <button class="btn" data-pos="0.50,0.50">正中</button>
+    <button class="btn" data-pos="0.95,0.50">右中</button>
+    <button class="btn" data-pos="0.10,0.90">左下</button>
+    <button class="btn" data-pos="0.50,0.96">下中</button>
+    <button class="btn" data-pos="0.90,0.90">右下</button>
+  </div>
+</header>
+
+<main>
+  <section class="variant">
+    <div class="variant-head">
+      <h2>展开方向沙盘 <span class="tag ok">拖动胶囊试试</span></h2>
+      <p>
+        虚线是屏幕中线。<strong>规则只有一句：面板朝「远离最近边」的方向长</strong>
+        —— 也就是朝屏幕中心长。上半 ⇒ 向下；下半 ⇒ 向上；左半 ⇒ 向右；右半 ⇒ 向左。
+      </p>
+      <p>
+        <strong>为什么这样就不会被边缘遮挡</strong>：贴下缘时向上长（不会顶出下边）、
+        贴上缘时向下长（不会顶出上边）；贴右缘时向左长、贴左缘时向右长。
+        <strong>胶囊自己的屏幕位置始终不动</strong> —— 变的是窗口矩形与面板挂在哪一侧。
+      </p>
+    </div>
+    <div class="screen-wrap">
+      <div class="screen" id="screen">
+        <span class="screen-hint tl">上半区 ⇒ 面板向下</span>
+        <span class="screen-hint br">下半区 ⇒ 面板向上</span>
+        <div class="puck" id="puck">
+          <div class="island" id="island"></div>
+        </div>
+      </div>
+      <div class="readout" id="readout">拖一下胶囊…</div>
+    </div>
+  </section>
+</main>
+
+<section class="notes">
+  <h3>这一版落实的四条</h3>
+  <ul>
+    <li><strong>宽度上限 400</strong>：胶囊宽 = 实测文字宽，夹在 <code>200–400</code>；
+      超过 400 才加省略号（<code>.is-ellip</code>），上限内<strong>不省</strong>。</li>
+    <li><strong>方案 A</strong>：宽度跟着内容走 —— 短文案的胶囊就窄，长文案就宽（但不超 400）。</li>
+    <li><strong>圆角恒定 20px</strong>：折叠 40 高时 20 = 完美胶囊；展开也是 20 ⇒ 半径单调、不会"先胀后收"。</li>
+    <li><strong>展开方向跟随屏幕位置</strong>：4 个方向（上/下/左/右），朝屏幕里侧长。</li>
+  </ul>
+  <h3 style="margin-top:16px;">⚠️ 这条需求在产品里会牵动哪些地方</h3>
+  <ul>
+    <li><strong>现在是"两个真源"</strong>：<code>widgetExpandGeom</code> 算 <code>flipUp</code>，
+      而 <code>StatusIsland.place()</code> 又自己读 <code>data-flip</code> 判一次。
+      加到 4 个方向后<strong>必须收敛成一个</strong>（几何算完写 <code>data-dir</code>，面板只跟随），
+      否则左右方向一定会打架 —— 这正是批 5f 那个「自指循环」的同类。</li>
+    <li><strong>左右方向是新东西</strong>：现在只有"向上翻"，
+      水平方向一直是"居中 + 夹取"。改成左右展开后，
+      <code>clampWidgetPos</code> 的水平逻辑要跟着重看。</li>
+    <li><strong>窗口 resize 仍要"胶囊不动"</strong>：方向变了 ⇒ 锚点从"顶边中心"
+      变成"胶囊所在的那个角"。这是 <code>widgetExpandGeom</code> 的核心改动。</li>
+  </ul>
+</section>
+
+<script>
+(function () {
+  var root = document.documentElement;
+  var screenEl = document.getElementById('screen');
+  var puck = document.getElementById('puck');
+  var island = document.getElementById('island');
+  var readout = document.getElementById('readout');
+
+  var PANEL_W = 400, PANEL_H = 210, CAP_H = 40;
+
+  /* ══ 文案（含一条超 400 的，用来验证省略号）══════════════════════════
+     ⚠️ 每条都带 `items` —— **面板高跟着条数变**，这样"高度跟内容"才看得出来。
+     只放一条时面板矮，放三条时面板高；沙盘读数里会打出实测高度。 */
+  /* ══ 内容契约（2026-09-27 定稿）════════════════════════════════════════
+     ⚠️ 这一块是本次真正要定下来的东西：**胶囊放哪些字段**。
+     真源是产品里的 `utils/notificationHub.ts`（`Notice` + `KIND_PRIORITY`），
+     这里按**同一套模型**假数据化，好让内容口径可以在样例里被看见、被评审。
+
+     **点色 = 紧迫度**：绿（正常/完成）· 琥珀（进行中）· 红（需要注意）
+     **字形 = 类型**：五类各一个字形 —— 这是补产品的一处缺陷：
+       顶栏胶囊里 kind 只有"点色"一个通道，而 `report` 与 `message` 在
+       `StatusIsland.tsx` 里**判定成同一个颜色**（`progress→busy / alert→warn / 其余→ok`），
+       并且**胶囊根本不渲染图标**（`KIND_ICON` 只在面板用）
+       ⇒ 今天"全量抓取完成"和"已复制诊断信息"在胶囊上长得一模一样。
+
+     ⚠️⚠️ **小窗宿主不能照抄产品的 `.ok`**：产品顶栏里
+        `.topbar-status-dot.ok { background: #fff }`（**白点**）——
+        那是因为顶栏胶囊是**深玫瑰底**，白色在它上面才读得出"成功"。
+        小窗是浮在壁纸上的独立卡片，**白色在那里没有语义**（浅色主题下更是直接消失）
+        ⇒ 小窗宿主必须自己定一套颜色，这是 W1「主题广播」时必须一起解决的。 */
+  var KINDS = {
+    alert:    { label: '注意',   glyph: '⚠', dot: 'warn' },
+    progress: { label: '进行中', glyph: '◔', dot: 'busy' },
+    report:   { label: '已完成', glyph: '✓', dot: 'ok'   },
+    message:  { label: '提示',   glyph: '✦', dot: 'ok'   },
+    music:    { label: '正在播放', glyph: '♪', dot: 'ok' }
+  };
+  /* 与产品 `KIND_PRIORITY` 同值。
+     ⚠️ `music` 给最低档：它是"持久现场"而不是通知 ——
+        任何告警/进度/报告都该压过它，只有别的都没有时才由它占着。 */
+  var PRIORITY = { alert: 4, progress: 3, report: 2, message: 1, music: 1 };
+
+  /* ══ 场景（假数据，但字段与文案都照产品真源写）════════════════════════
+     ⚠️ 一个场景 = **一整份通知列表**，不是"一条文案"：
+        胶囊显示谁由 `pickPrimary()` 算出来（与产品同一套优先级），面板列全部。
+        这样"计数徽章""谁压过谁"在样例里也是**推出来的**，不是手写的。 */
+  var SAMPLES = {
+    task: {
+      name: '任务进度（手动）',
+      notices: [
+        { kind: 'progress', text: '账号信息抓取中 - 明前奶绿',
+          value: '4/11', source: '任务进度' }
+      ]
+    },
+    rate: {
+      name: '风控冷却（倒计时自己走）',
+      notices: [
+        { kind: 'progress', text: '全量抓取中 - 明前奶绿', value: '37/120', source: '任务进度' },
+        { kind: 'alert', text: '上游限流：冷却中', value: '47s', tick: true,
+          detail: '上游返回 412，正在退避重试；冷却结束会自动继续',
+          source: '风控冷却' }
+      ]
+    },
+    login: {
+      name: '登录失效（动作只在面板）',
+      notices: [
+        { kind: 'alert', text: 'B 站登录已失效',
+          detail: '抓取会跳过需要登录的部分；重新扫码后自动恢复',
+          source: '登录态', sticky: true, action: '去登录' }
+      ]
+    },
+    report: {
+      name: '完成报告',
+      notices: [
+        { kind: 'report', text: '全量帖子抓取完成 · 存储 1234 · 跳过 5',
+          detail: '视频可能缺 12 条（上游未返回）',
+          source: '完成报告', sticky: true, action: '查看详情' }
+      ]
+    },
+    music: {
+      name: '正在播放（看 400 上限）',
+      notices: [
+        /* ⚠️ `source` 不能也叫「正在播放」—— 面板的 meta 是 `类型标签 · 来源`，
+           两者同名会渲染成「正在播放 · 正在播放」（截图里抓到过）。 */
+        { kind: 'music', text: '起风了 - 买辣椒也用券', value: '1:23 / 5:12', source: '音乐' }
+      ]
+    },
+    message: {
+      name: '瞬时提示',
+      notices: [
+        { kind: 'message', text: '已复制诊断信息', source: '操作结果' }
+      ]
+    },
+    mixed: {
+      name: '多条目（计数徽章 + 面板全列）',
+      notices: [
+        { kind: 'message', text: '已复制诊断信息', source: '操作结果' },
+        { kind: 'music', text: '起风了 - 买辣椒也用券', value: '1:23 / 5:12', source: '音乐' },
+        { kind: 'report', text: '全量帖子抓取完成 · 存储 1234 · 跳过 5',
+          detail: '2 处中断：账号 A / 账号 B',
+          source: '完成报告', sticky: true, action: '查看详情' },
+        { kind: 'progress', text: '账号信息抓取中 - 明前奶绿', value: '4/11', source: '任务进度' },
+        { kind: 'alert', text: '上游限流：冷却中', value: '47s', tick: true,
+          detail: '上游返回 412，正在退避重试', source: '风控冷却' }
+      ]
+    },
+    idle: {
+      name: '空闲（只有点，没有计数与 chevron）',
+      notices: []
+    }
+  };
+  var LIMIT = 400;   // 用户口径
+  /* 空闲文案（产品里是 `TopBar.tsx` 的 statusText 默认值）。 */
+  var IDLE_TEXT = '数据服务运行中';
+
+  /* 与产品 `pickPrimary` 同款：优先级最高的，**同级取最新**（数组后者） */
+  function pickPrimary(list) {
+    var best = null;
+    for (var i = 0; i < list.length; i++) {
+      if (!best || PRIORITY[list[i].kind] >= PRIORITY[best.kind]) best = list[i];
+    }
+    return best;
+  }
+
+  function build(n) {
+    var list = n.notices || [];
+    var p = pickPrimary(list);
+    var K = p ? KINDS[p.kind] : null;
+    var lit = !!p;
+    var capText = p ? p.text : IDLE_TEXT;
+
+    /* 面板列**全部**条目，按数组顺序（与产品一致 —— `pickPrimary` 只影响胶囊）。
+       ⚠️ 面板里的重复问题在结构上已经不存在：展开态胶囊行是 `display:none`，
+          所以"胶囊那句话"不会和面板同时出现（用户 2026-09-27 报过的那次重复）。 */
+    var itemsHtml = list.map(function (it) {
+      var ik = KINDS[it.kind];
+      return '<div class="p-item" data-kind="' + it.kind + '">' +
+        '<span class="p-icon k-' + it.kind + '">' + ik.glyph + '</span>' +
+        '<span class="p-main">' +
+          '<span class="p-text">' + it.text +
+            (it.value ? '<span class="p-value">' + it.value + '</span>' : '') + '</span>' +
+          (it.detail ? '<span class="p-detail">' + it.detail + '</span>' : '') +
+          '<span class="p-meta">' + ik.label +
+            (it.source ? ' · ' + it.source : '') +
+            (it.sticky ? ' · 常驻' : '') + '</span>' +
+        '</span>' +
+        (it.action ? '<button type="button" class="p-action">' + it.action + '</button>' : '') +
+      '</div>';
+    }).join('');
+
+    /* ⚠️⚠️ **展开后不能"原样重播一遍文案"**（用户 2026-09-27：
+       「现在展开后原本胶囊上的文字没有隐藏」）。
+       之前的错：`.cap-box` 保留**完整折叠行**（点+文案+计数+chevron），
+       面板里 `p-head` 又写「通知（N）」、`p-body` 再列同样的文案 ⇒
+       **同一句话在一屏里出现两次**，而且胶囊那行还是"折叠态的样子"，
+       看着就像"没隐藏"，不像"展开了"。
+
+       ⇒ 正确模型：**展开后胶囊那一行"变成"面板的标题栏**：
+         · 折叠态：`[点] 文案…… [计数] [chevron]`  —— 完整的胶囊
+         · 展开态：**只留 `[点] [chevron]`**，文案与计数**移到面板里**
+           （因为面板本来就展示同样的内容，不必重复）
+       这样既**不重复**，又**保留锚点**（点和 chevron 还在原位 ⇒ 用户看得出
+       "就是这块东西长大了"），而且 `cap-box` 的高度不变 ⇒ 锚点不变量仍成立。 */
+    /* ⚠️⚠️ **展开后整行都隐藏**（用户 2026-09-27 两次指出：
+       「圆点和下拉图标还是保留了」「这个点和下拉按钮还在」）。
+       我上一版只给"文案与计数"加了 `.cap-only`，把**点与 chevron 当成"锚点证据"刻意保留**
+       —— 那是**我自己的设计主张，不是用户要的**。用户要的是**展开后胶囊那一行整个消失**。
+       教训：当用户连着两次指出同一个东西时，**不要为它辩护，先照做**；
+       若我有不同意见，应当**先改再单独说明**，而不是把用户的要求重新解释成"其实这样更好"。
+
+       ⇒ 现在：`.island.is-open .cap-box { display: none }` —— 整行不渲染。
+       ⚠️ 随之而来的一条**代价必须说清**：胶囊行的隐匿会让"锚点"失去可见参照，
+          但**几何不变量不受影响**（`--cap-y` 仍按方向把胶囊位留在窗口那一端，
+          只是不画出来）；锚点仍由"面板从胶囊那一侧长出来"体现。 */
+    island.innerHTML =
+      '<div class="cap-box"><div class="cap-row">' +
+        '<span class="lead"></span>' +
+        '<span class="mid">' +
+          /* ① 状态信号：点（紧迫度）+ 字形（类型）。
+             空闲态只有点 —— 没有容器内容，与产品「空闲时没有容器」同款。 */
+          '<i class="dot ' + (K ? K.dot : '') + '"></i>' +
+          (K ? '<span class="glyph">' + K.glyph + '</span>' : '') +
+          '<span class="cap-text">' + capText + '</span>' +
+          /* ② 活数据槽：倒计时/进度单独一格，每秒刷新**不重排文案**
+                （产品今天是把 `（还剩 47s）` 拼进 text 里的 ⇒ 每秒重写整句） */
+          (p && p.value ? '<span class="value">' + p.value + '</span>' : '') +
+          /* ③ 计数徽章：>1 才出现（产品同款） */
+          (list.length > 1 ? '<span class="count">' + list.length + '</span>' : '') +
+        '</span>' +
+        /* ④ chevron：只在真的有内容可展开时才出现 */
+        '<span class="tail">' + (lit ? CHEV_SVG : '') + '</span>' +
+      '</div></div>' +
+      '<div class="panel">' +
+        '<div class="p-head"><span>通知（' + list.length + '）</span>' +
+        '<span class="hint">' + (p ? K.label : '空闲') + '</span></div>' +
+        '<div class="p-body">' +
+          (itemsHtml || '<div class="p-empty">暂时没有通知</div>') + '</div>' +
+        '<div class="p-foot">优先级：注意 &gt; 进行中 &gt; 已完成 &gt; 提示</div>' +
+      '</div>';
+
+    /* 量宽要用**真实文案与真实槽位**：字形/活数据/计数都占宽，必须一起算进去，
+       否则会出现"读数是 300、渲染出来 360"那类不自洽。 */
+    var info = applyWidth(capText, {
+      glyph: !!K, value: p && p.value ? p.value : null, count: list.length > 1
+    });
+    widthInfo = info;
+    return info;
+  }
+
+  /* ══ 量文字宽 ⇒ 定胶囊宽（方案 A + 上限 400）═════════════════════════
+     量法：同字体隐藏 span。额外占位 = **逐个槽位加出来的**，不是估的 ——
+     ⚠️ 加了字形/活数据槽之后再手写一个魔数就容易和渲染分叉
+        （读数是 300、渲染出来 360 这种"不自洽"本仓栽过），所以逐项列清。 */
+  function textWidth(text, size, weight) {
+    var s = document.createElement('span');
+    s.textContent = text;
+    s.style.cssText = 'position:absolute;left:-9999px;top:-9999px;white-space:nowrap;' +
+      'font-family:var(--font);font-size:' + (size || 13) + 'px;' +
+      'font-weight:' + (weight || 500) + ';';
+    document.body.appendChild(s);
+    var w = s.getBoundingClientRect().width;
+    s.remove();
+    return w;
+  }
+
+  var CAP_PAD = 14;          // 与 `.cap-box { padding: 0 14px }` 一致
+  function applyWidth(text, slots) {
+    slots = slots || {};
+    var extra = CAP_PAD * 2
+      + 7 + 8                                   // 点 + 间距
+      + (slots.glyph ? 13 + 8 : 0)              // 类型字形 + 间距
+      + (slots.value ? textWidth(slots.value, 11.5, 400) + 8 : 0)
+      + (slots.count ? 16 + 8 : 0)              // 计数徽章 + 间距
+      + 12 + 8                                  // chevron + 间距（有内容时才有）
+      + 6;                                      // 余量
+    var need = Math.round(textWidth(text) + extra);
+    var clamped = Math.min(LIMIT, Math.max(200, need));
+    island.style.setProperty('--cap-w', clamped + 'px');
+    island.classList.toggle('is-ellip', need > LIMIT);
+    return { need: need, final: clamped, ellip: need > LIMIT, extra: extra };
+  }
+
+  /* chevron 的 SVG（原来内联在 build 里；现在要按"有没有内容"决定画不画） */
+  var CHEV_SVG = '<svg class="chev" viewBox="0 0 24 24" fill="none" ' +
+    'stroke="currentColor" stroke-width="2.5" stroke-linecap="round" ' +
+    'stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>';
+
+  /* ══ 方向判定：**唯一的真源** ══════════════════════════════════════════
+     ⚠️⚠️ 我第一版**实现错了**，用户 2026-09-27 指出：
+
+       错法（按屏幕中线劈半）：
+         down: cyRatio < 0.5      // "在上半就向下"
+         right: cxRatio < 0.5     // "在左半就向右"
+       后果：**正中央 (0.5,0.5) 判成「向上 + 向左」** —— `0.5 < 0.5` 是 false。
+       用户截图正是这个：胶囊在屏幕正中，面板却往左上长。
+
+       正确口径（用户原话）：
+         「只在屏幕边缘才反向展开，在屏幕中央区域就正常向下展开」
+       ⇒ 判据不是"在哪一半"，而是 **"装不装得下"**：
+         · 垂直：**默认向下**；下方装不下、上方装得下 ⇒ 才向上
+         · 水平：**默认居中**；居中会出屏 ⇒ 夹回来（夹取天然就是"只在边缘才反向"）
+
+     ⚠️ 翻转线**取决于面板高**（内容越多越早向上）：
+         面板 126px ⇒ 翻转线在屏高 85.7%
+         面板 176px ⇒ 翻转线在屏高 81.1%
+         面板 227px ⇒ 翻转线在屏高 76.4%
+       **所以不能写死 50%** —— 每次都要按**实测面板高**重算。
+
+     ⚠️⚠️ **迟滞（`HYST`）已删掉，连同它的前提**（2026-09-27）：
+        它当初是为了防"刚好卡在翻转线上、手一抖就来回翻"。
+        但现在（a）拖动中方向是**锁定**的（`dragging` ⇒ 沿用 `lastDown`），
+        （b）翻转时**贴着胶囊的那条边不动**（F1 ⇒ 实测近边位移 = 0），
+        ⇒ 抖动最多让面板"换一边长出来"，不再有跳变可防，余量纯属多余。
+        判据的前提消失时，**连机制一起删**，别留一个没人用的常量。 */
+  var EDGE_M = 8;      // 屏边留白（**全局唯一的夹取口径**，见 `clampWin*`）
+  /* ⚠️ `GAP = 6`（胶囊与面板的间隙）也删了：展开后胶囊行是 `display:none`，
+     而窗口现在**含**胶囊那一格 ⇒ 那 6px 在几何上没有任何位置可占。
+     产品里的 `WIDGET_PANEL_GAP` 仍然有效，但它是"窗口外扩时留的缝"，
+     与这里"窗口含胶囊"的模型不是一回事。 */
+
+  function decideDir(capCenterX, capTop, capW, panelH) {
+    var r = screenRect();
+    /* ⚠️ 判定用的是**窗口**高度。F1 之后窗口 == 面板高（含胶囊那一格），
+       所以这里就是 `panelH`。旧版写 `CAP_H + GAP + panelH`，在边缘会系统性多算 46px。 */
+    var needH = panelH;
+    var roomBelow = r.height - EDGE_M - capTop;      // 向下展开：从胶囊**顶边**起算
+    var roomAbove = (capTop + CAP_H) - EDGE_M;       // 向上展开：到胶囊**底边**结束
+
+    /* 贴边判定（用户口径：「贴在了某一条边缘，伸缩逻辑就按照该边缘的方向进行」）。
+       夹取是精确等号，留 1.5px 容差抵消亚像素。 */
+    var STUCK = 1.5;
+    var stuckTop = capTop <= EDGE_M + STUCK;
+    var stuckBottom = (capTop + CAP_H) >= r.height - EDGE_M - STUCK;
+
+    /* 方向规则（用户口径，2026-09-27 定稿）：
+         · 贴底 ⇒ 必须向上（它下方根本没有位置）
+         · 否则默认向下
+         · 向下装不下、向上装得下 ⇒ 翻上去（**不是**硬向下再靠夹取顶走 ——
+           实测"左下 + 227px 面板"那样做会让卡片顶边瞬间上移 149.8px，
+           与「面板展开不会发生奇怪的位移」冲突）
+         · 两边都不够 ⇒ 挑大的，再由夹取保证不出屏 */
+    var down;
+    if (isOpen && dragging) {
+      /* ⚠️⚠️ **拖动中锁定方向**（P2）——
+         拖动中翻转会让"跟手"的那条边换到另一边，手不动框却动。
+         松手后 `endDrag()` 会重排，那时 `dragging` 已为 false ⇒
+         切换发生在过渡已恢复的时候，是一次动画而不是瞬跳。 */
+      down = lastDown;
+    } else if (stuckBottom && !stuckTop) {
+      down = false;
+    } else if (roomBelow >= needH) {
+      down = true;
+    } else if (roomAbove >= needH) {
+      down = false;
+    } else {
+      down = roomBelow >= roomAbove;
+    }
+
+    /* 水平：**窗口以胶囊中心为中心**（默认），出屏才夹。
+       ⚠️ 夹取时是"窗口贴边、胶囊相对窗口偏移" —— 胶囊**屏幕位置会动**，
+          这是物理约束（窗口不能出屏），与产品 `clampWidgetPos` 同款取舍。 */
+    var centered = capCenterX - PANEL_W / 2;
+    var left = clampWinLeft(centered, PANEL_W, r);
+
+    return {
+      down: down,
+      left: left,
+      needH: needH,
+      roomBelow: roomBelow,
+      roomAbove: roomAbove,
+      centered: Math.abs(left - centered) < 0.5,
+      clamped: Math.abs(left - centered) >= 0.5
+    };
+  }
+
+  /* ══ 量面板内容的真实高度（**必须在算窗口矩形之前**）══════════════════
+     ⚠️⚠️ 这一处我**量错过一次**，教训值得留：
+        第一版量 `.p-head/.p-body/.p-foot` 三个子元素的 `getBoundingClientRect()`，
+        结果三种内容（1/2/3 条）全量到 **同一个 74px** —— 因为 `.panel` 是
+        `position:absolute; inset:0`，容器只有 40px 高，`.p-body` 又 `overflow:hidden`，
+        子元素**被压扁了**：实测 `body` 高度 6px 而它的 `scrollHeight` 是 106/174/56。
+        **量到的是"被压后的高"，不是"内容的自然高"** ⇒ 高度永远不动。
+
+     ⇒ 正确做法：把内容放进一个**不受约束的克隆容器**里量。
+        克隆体 `position:absolute; visibility:hidden; width:同面板宽; height:auto`，
+        脱离文档流、不被父级压 ⇒ 量出来的才是自然高。
+        量完即删（不留在 DOM 里）。
+
+     顺序仍是硬约束：**先量内容 → 得面板高 → 才算方向与窗口矩形**。 */
+  function measurePanelH() {
+    var panel = island.querySelector('.panel');
+    if (!panel) return 120;
+
+    var probe = document.createElement('div');
+    probe.style.cssText =
+      'position:absolute;left:-99999px;top:0;visibility:hidden;' +
+      'width:' + PANEL_W + 'px;height:auto;display:flex;flex-direction:column;' +
+      'background:' + 'transparent' + ';';
+    // 把 .panel 的**子节点**放进探针（不复制 .panel 自身，避开 inset:0）
+    Array.prototype.slice.call(panel.children).forEach(function (c) {
+      probe.appendChild(c.cloneNode(true));
+    });
+    document.body.appendChild(probe);
+
+    // 让探针里的子元素继承面板的排版上下文（字体/边框等由类名带来，无需额外样式）
+    var h = probe.getBoundingClientRect().height;
+    probe.remove();
+
+    return Math.max(56, Math.ceil(h) + 2);
+  }
+
+  /* 面板高度上限：按模拟屏高的 60% —— 不让它顶满整屏（产品里按屏幕算） */
+  function panelMaxH() { return Math.round(screenRect().height * 0.6); }
+
+  /* ══ 沙盘交互 ═══════════════════════════════════════════════════════
+     ⚠️ **`anchor` 是唯一的位置真源**（胶囊中心 x、胶囊顶边 y，屏幕 px）。
+     之前用 `pos {x,y}` 比例 + 回读 DOM 两套值，互相污染出"偏移"（错四轮）。
+     现在：layout 只读 anchor；拖动直接写 anchor；展开/收起**不碰 anchor**。 */
+  var anchor = { cx: 0, top: 0 };
+  var isOpen = false;
+  var curNotice = SAMPLES.task;
+  var widthInfo = null;
+  /* 上一次的方向。初始 true = 默认向下。
+     ⚠️ 现在只有一个用途：**拖动中锁定方向**（`decideDir` 里 `dragging` 分支）。
+        它早先还给"迟滞"用，但迟滞已随其前提一起删掉（见 `decideDir` 上方注释）。 */
+  var lastDown = true;
+  /* ⚠️ **`dragging` 必须在这里声明**（而不是拖动那段）——
+     因为 `decideDir()` 要读它来决定"是否锁定方向"。
+     它原本声明在 900 行之后，靠 `var` 提升虽然能用（值是 undefined），
+     但那属于"靠巧合工作"：一旦改成 `let/const` 就会 TDZ 报错。
+     ⇒ 位置显式提前，语义清楚。 */
+  var dragging = false;
+
+  function screenRect() { return screenEl.getBoundingClientRect(); }
+
+  /* 把"屏幕比例"换算成 anchor（只有预设按钮与初始化用）
+     ⚠️ `anchor.top` 的语义是**胶囊顶边**，所以 `ry` 是"胶囊中心比例"时要减半高。
+     这里统一按"胶囊**中心**比例"入参，内部换算成顶边 —— 一个语义，别再混。
+     ⚠️⚠️ 换算出锚点后**必须夹进可渲染带**（用与 `layout` 同一套 `clampWin*`）：
+        否则"预设位置"本身就自带死区 —— 实测左中预设让锚点落在屏外 85px 处，
+        拖动时要先把鼠标挪 86px 才看得到胶囊动（用户报的正是这个）。 */
+  function setAnchorByRatio(rx, ry) {
+    var r = screenRect();
+    var capW = widthInfo ? widthInfo.final : 240;
+    anchor.cx = clampWinLeft(rx * r.width - capW / 2, capW, r) + capW / 2;
+    anchor.top = clampWinTop(ry * r.height - CAP_H / 2, CAP_H, r);
+  }
+
+  /* ⚠️⚠️ **全局唯一的夹取口径**。
+     旧版有两套：`decideDir` 用 `EDGE_M`(8)，`layout` 用魔数 `2` ——
+     同一个概念两个值，实测贴边时窗口停在离屏边 **2px**，与 `EDGE_M` 的声明矛盾。
+     `max(EDGE_M, ...)` 兜的是"窗口比屏幕还大"那种退化情形（此时贴左上）。 */
+  function clampWinLeft(l, w, r) {
+    return Math.max(EDGE_M, Math.min(l, Math.max(EDGE_M, r.width - w - EDGE_M)));
+  }
+  function clampWinTop(t, h, r) {
+    return Math.max(EDGE_M, Math.min(t, Math.max(EDGE_M, r.height - h - EDGE_M)));
+  }
+  /* 最近一次 layout 算出的窗口矩形 —— 拖动要靠它**反解** anchor（见 pointermove） */
+  var lastRect = null;
+
+  /* 摆放胶囊与展开面板。
+     ══════════════════════════════════════════════════════════════════════
+     ⚠️⚠️ **这个函数必须相对"锚点"是纯的** —— 我在这里反复错了四轮，
+        根本原因都是**同时存在两个位置真源**（`pos` 比例 + 读 DOM 实测值），
+        两者互相污染：读回来的值写进 pos、下一轮又拿去算，误差累积成"偏移"。
+
+     最终模型（简单且可证）：
+        · **唯一真源 = `anchor`**（胶囊中心 x、胶囊顶边 y，屏幕 px）
+        · `layout()` **只读 anchor，绝不回读 DOM**
+        · 拖动时**直接改 anchor**（由指针位置换算）
+        · 展开/收起**不改 anchor** ⇒ 胶囊屏幕位置**在数学上不可能变**
+     ══════════════════════════════════════════════════════════════════════ */
+  function layout() {
+    var r = screenRect();
+
+    var capW = widthInfo ? widthInfo.final : 240;
+    var capCenterX = anchor.cx;      // ← 只读锚点，不回读 DOM
+    var capTop = anchor.top;
+
+    /* ⚠️ **顺序**：先量内容高 ⇒ 才有面板高 ⇒ 才算方向与窗口矩形。 */
+    var ph = Math.min(measurePanelH(), panelMaxH());
+    var dir = decideDir(capCenterX, capTop, capW, ph);
+
+    /* 展开后窗口矩形：宽固定 PANEL_W，**高 = 面板高**。
+       ⚠️⚠️ **F1（2026-09-27 定稿）：窗口"含"胶囊那一格，而不是贴在它外侧。**
+          · 向下展开 ⇒ 窗口**顶** = 胶囊顶（与折叠态同一个值）
+          · 向上展开 ⇒ 窗口**底** = 胶囊底
+       为什么要这样：展开态胶囊行是 `display:none`，若窗口放在胶囊**外侧**，
+       胶囊腾出的 46px 就成了纯空白；点开的一瞬间卡片整体离开屏边一个胶囊高
+       —— CDP 实测 `jumpY = +46 = CAP_H(40) + GAP(6)`，用户报的"和顶部边缘拉开"就是它。
+       现在"贴着胶囊的那条边"在展开/收起前后**恒等** ⇒ 近边位移实测为 0，
+       视觉上就是"胶囊长成了这张卡"。 */
+    var w = isOpen ? PANEL_W : capW;
+    var h = isOpen ? ph : CAP_H;
+    var leftRaw = capCenterX - w / 2;        // 水平：窗口以胶囊中心为中心
+    var topRaw = !isOpen ? capTop
+      : (dir.down ? capTop : capTop + CAP_H - h);
+    var left = clampWinLeft(leftRaw, w, r);
+    var top = clampWinTop(topRaw, h, r);
+    dir.clamped = (left !== leftRaw) || (top !== topRaw);
+    lastDown = dir.down;
+    /* 拖动要"先夹窗口、再反解 anchor" ⇒ 把这一次的窗口矩形记下来 */
+    lastRect = { left: left, top: top, w: w, h: h, capW: capW, down: dir.down, isOpen: isOpen };
+
+    puck.style.left = left + 'px';
+    puck.style.top = top + 'px';
+    /* ⚠️⚠️ 尺寸**不能**写内联样式到 `.island` —— 我第一版写 `island.style.width`，
+       而 `.island.is-open { width: var(--panel-w) }` 是类规则；
+       **内联样式优先级最高** ⇒ 类的展开尺寸永远被内联的折叠宽盖住，
+       结果"加了 is-open 类、宽度却还是 200"（诊断里实测到）。
+       ⇒ `.puck` 是"窗口"，尺寸写在它身上；`.island` 填满它，样式交给类。 */
+    /* ⚠️⚠️ 胶囊盒子的位置**由这里显式算、显式写**（`--cap-x` / `--cap-y`）——
+       不用 flex 排序：`.cap-box` 是 `position:absolute`（脱离文档流），
+       所以 `flex-direction: column-reverse` **管不到它**（我上一版就栽在这里：
+       向上展开时窗口往上长，而胶囊仍钉在 top:0 ⇒ 被顶上去整整一个面板高，
+       实测 Δ上 = −182 = 176 面板 + 6 间隙）。
+       ⚠️ 展开态 `cap-box` 是 `display:none`（用户要求整行隐藏）⇒ 这几个值
+          **只在折叠态可见**。保留它们是为了 F1 的几何自洽：胶囊位恒在窗口
+          "贴着胶囊的那一端"（向下 = 顶部 y=0；向上 = 底部 y = 窗口高 − 胶囊高）。 */
+    island.style.setProperty('--cap-w', capW + 'px');
+    /* ⚠️ 胶囊高的**唯一真源是 JS 的 `CAP_H`** —— CSS 里那份 `--cap-h: 40px` 只是
+       JS 就绪前的兜底。两处各写一遍正是本仓栽过的坑（见 `scripts/dev_token.py` 的说明），
+       所以这里显式写回，让"读到的值"与"算几何用的值"不可能分叉。 */
+    island.style.setProperty('--cap-h', CAP_H + 'px');
+    island.style.setProperty('--cap-x', isOpen ? ((w - capW) / 2) + 'px' : '0px');
+    island.style.setProperty('--cap-y',
+      (isOpen && !dir.down) ? (h - CAP_H) + 'px' : '0px');
+    /* 面板**铺满窗口**：F1 之后窗口高 == 面板高 ⇒ top 恒 0。
+       （旧模型那个"面板在窗口内的纵向偏移 `--panel-y`"已随那 46px 空白一起删掉。） */
+    island.style.setProperty('--panel-h', ph + 'px');
+    island.classList.toggle('is-open', isOpen);
+    island.classList.toggle('is-up', isOpen && !dir.down);
+    puck.style.width = w + 'px';
+    puck.style.height = h + 'px';
+    puck.dataset.panelH = ph;
+
+    // 读数（用 layout 里算好的锚点；**不回写任何东西** —— anchor 是唯一真源）
+    var capCenterY = capTop + CAP_H / 2;
+    var r2 = screenRect();
+    /* ⚠️ 余量口径必须与 `decideDir` **一致**（否则读数会和实际行为对不上）：
+        向下是从胶囊**顶边**往下量，向上是到胶囊**底边**为止。 */
+    var roomBelow = Math.round(r2.height - EDGE_M - capTop);
+    var roomAbove = Math.round((capTop + CAP_H) - EDGE_M);
+    readout.innerHTML =
+      '胶囊中心 <b>' + Math.round(capCenterX) + ', ' + Math.round(capCenterY) + '</b>' +
+      '（屏幕 ' + Math.round(r2.width) + '×' + Math.round(r2.height) + '）' +
+      ' → <b>' + (dir.down ? '向下' : '向上') + '</b>' +
+      ' + <b>' + (dir.centered ? '水平居中' : '贴边（被夹回屏内）') + '</b>' +
+      '　｜　向下可用 <b>' + roomBelow + 'px</b> / 向上可用 <b>' + roomAbove + 'px</b>' +
+      ' vs 面板高 <b>' + ph + 'px</b>' +
+      (dir.down
+        ? (dir.clamped ? '（向下但被夹进屏内）' : '（向下装得下 ⇒ 正常向下）')
+        : '（贴底 或 下方装不下 ⇒ 向上）') +
+      '<br>胶囊宽 <b>' + (widthInfo ? widthInfo.final : '?') + 'px</b>' +
+      (widthInfo && widthInfo.need > LIMIT
+        ? '（文字实测 ' + Math.round(widthInfo.need) + 'px ⇒ 超 400，已省略）'
+        : '（文字实测 ' + (widthInfo ? Math.round(widthInfo.need) : '?') + 'px，不省略）') +
+      '　｜　面板高 <b>' + (isOpen ? ph : '收起') + 'px</b>' +
+      '<span style="opacity:.6">（量出来的，不是写死的）</span>';
+  }
+
+  /* ══ 拖动：用指针事件（鼠标/触屏通用）══════════════════════════════════
+     ⚠️⚠️ **这里有一个真实的"一按下就跳"bug**（用户 2026-09-27：
+     「展开情况下按住拖动的时候，窗口会往左边稍微位移一点」）。
+     实测根因（不是猜的）：
+       `puck.setPointerCapture(e.pointerId)` 抛 **`NotFoundError`**
+       （"No active pointer with the given id is found"）——
+       而那一行写在 `grabDX = ...` **之前** ⇒ **整个 pointerdown 处理器当场中断**
+       ⇒ `grabDX` 保持初值 **0** ⇒ 下一帧 `anchor.cx = 指针 − 0 + capW/2`
+       ⇒ **一按下就跳 `capW/2` = 143px**（实测 `winLeft 392 → 535`）。
+
+     ⇒ 两条一起改（缺一不可）：
+       ① **赋值提到 `setPointerCapture` 之前** —— 顺序本身就是 bug；
+       ② `setPointerCapture` 用 **try/catch** 包住 —— 它只是"指针离开元素也继续收事件"
+          的优化，失败**不该毁掉拖动**（真实环境同样会抛：指针已释放、
+          Tauri WebView2 的合成事件等）。
+
+     ⚠️⚠️ **F2（2026-09-27 定稿）：拖动 = "先夹窗口矩形，再反解 anchor"。**
+        用户报的第二个现象：「胶囊贴左右边时，按住拖动要先把鼠标挪一段距离才动」。
+        CDP 实测死区：左中 **86px**、右中 **86px**、展开态贴左 **144px**。
+
+        代数根因（一条就够）：`pointermove` 把指针映射到 `anchor`（**未夹取的意图**），
+        而渲染把 `anchor` 映射成**被夹过的窗口** —— 两者**不是互逆的**，
+        死区恰好 = 夹取位移本身（`2 − (0.05×1159 − 143) = 86`、`2 − (0.05×1159 − 200) = 144`，
+        与实测吻合到 1px）。旧版还把基准取成 `anchor.cx − capW/2`（意图左缘），
+        按下的那一刻就把夹取位移装进了 `grabDX`。
+        ⇒ 现在：**夹取只作用在"窗口矩形"上**，移动时先算目标窗口 left/top、
+          夹到屏内、再按 `layout` 的**严格逆映射**写回 `anchor`
+          ⇒ 渲染出来的窗口边缘恒 == 指针 − 抓取偏移（在屏内时），反向也无死区。
+          顺带解决了另一个隐性问题：窗口贴到左右边时**胶囊跟着贴同一条边**，
+          否则收起后胶囊会缩回屏幕中间（实测：拖到贴左再收起，旧版落在离屏 135px 处）。 */
+  var grabDX = 0, grabDY = 0;
+  puck.addEventListener('pointerdown', function (e) {
+    dragging = true;
+    puck.classList.add('dragging');
+    /* ① 先算偏移（**必须在任何可能抛错的调用之前**）。
+       基准取**渲染出来的窗口矩形**，只在按下时读一次（读 DOM ≠ 反馈环：
+       读的是"用户看到并抓住的那一块"，比"意图"更符合直觉；
+       即使按在动画中间帧上，跟手的也是那一帧的视觉位置）。 */
+    var rNow = screenRect();
+    var rr0 = puck.getBoundingClientRect();
+    grabDX = e.clientX - rr0.left;
+    grabDY = e.clientY - rr0.top;
+    /* ② 捕获失败只记日志，不中断整个处理器 */
+    try {
+      puck.setPointerCapture(e.pointerId);
+    } catch (err) {
+      console.info('[preview] setPointerCapture 失败（不影响拖动）', err && err.name);
+    }
+    e.preventDefault();
+  });
+  puck.addEventListener('pointermove', function (e) {
+    if (!dragging || !lastRect) return;
+    var r = screenRect();
+    var capW = lastRect.capW;
+    /* 目标窗口矩形 —— **夹取写在"窗口"上，不写在"锚点"上** */
+    var L = clampWinLeft(e.clientX - r.left - grabDX, lastRect.w, r);
+    var T = clampWinTop(e.clientY - r.top - grabDY, lastRect.h, r);
+    /* 反解 anchor（与 `layout()` 的映射严格互逆，逐条对得上）：
+         left = clamp(cx − w/2)  ⇒ 贴边时胶囊**跟着贴同一条边**，否则胶囊中心 = 窗口中心
+         top  = capTop（向下 / 折叠）| capTop + CAP_H − h（向上）
+       ⚠️ 三个分支在折叠态（w == capW）**完全重合** ⇒ 不存在切换跳变。 */
+    if (L <= EDGE_M + 0.5) {
+      anchor.cx = EDGE_M + capW / 2;
+    } else if (L + lastRect.w >= r.width - EDGE_M - 0.5) {
+      anchor.cx = r.width - EDGE_M - capW / 2;
+    } else {
+      anchor.cx = L + lastRect.w / 2;
+    }
+    anchor.top = (lastRect.isOpen && !lastRect.down)
+      ? T - (CAP_H - lastRect.h)
+      : T;
+    layout();
+  });
+  function endDrag(e) {
+    if (!dragging) return;
+    dragging = false;
+    puck.classList.remove('dragging');
+    try { puck.releasePointerCapture(e.pointerId); } catch (_) {}
+    /* ⚠️⚠️ **松手后必须重排一次**（方向锁定的另一半）——
+       拖动中方向是**锁定**的（见 `decideDir`），若不在这里重排，
+       用户把胶囊拖到底部后，面板仍按旧方向算 ⇒ 可能被屏幕裁掉 / 该贴的边没贴。
+       现在解锁 + 重排 ⇒ 方向按新位置重算；
+       且此时 `dragging` 已为 false ⇒ 过渡已恢复，那次切换是动画而不是瞬跳。
+       ⚠️ F1 之后"翻转"本身已经很轻：**贴着胶囊的那条边不动**，
+          换的只是"往哪边长大"（实测近边位移 = 0）。 */
+    layout();
+    // 拖拽结束**不触发展开**（否则拖完手一松就弹开）
+  }
+  puck.addEventListener('pointerup', endDrag);
+  puck.addEventListener('pointercancel', endDrag);
+
+  /* 点击展开/收起（拖动过就不算点击） */
+  var downAt = null;
+  puck.addEventListener('pointerdown', function (e) { downAt = { x: e.clientX, y: e.clientY }; });
+  puck.addEventListener('pointerup', function (e) {
+    if (!downAt) return;
+    var moved = Math.hypot(e.clientX - downAt.x, e.clientY - downAt.y);
+    downAt = null;
+    if (moved < 4) { isOpen = !isOpen; layout(); }
+  });
+
+  /* 预设位置：换算成 anchor 后只调 layout（anchor 是唯一真源） */
+  document.querySelectorAll('[data-pos]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var p = b.dataset.pos.split(',');
+      setAnchorByRatio(parseFloat(p[0]), parseFloat(p[1]));
+      layout();
+    });
+  });
+
+  document.getElementById('toggle').addEventListener('click', function () {
+    isOpen = !isOpen; layout();
+  });
+
+  document.querySelectorAll('#theme button').forEach(function (b) {
+    b.addEventListener('click', function () {
+      document.querySelectorAll('#theme button').forEach(function (x) {
+        x.setAttribute('aria-pressed', String(x === b));
+      });
+      root.setAttribute('data-theme', b.dataset.t);
+    });
+  });
+
+  document.querySelectorAll('#speed button').forEach(function (b) {
+    b.addEventListener('click', function () {
+      document.querySelectorAll('#speed button').forEach(function (x) {
+        x.setAttribute('aria-pressed', String(x === b));
+      });
+      var mult = parseFloat(b.dataset.s);
+      root.style.setProperty('--sp', String(1 / mult));   // 除以倍率
+    });
+  });
+
+  document.getElementById('reduce').addEventListener('change', function (e) {
+    var on = e.target.checked;
+    root.style.setProperty('--motion-base', on ? '1ms' : '220ms');
+    root.style.setProperty('--motion-lag', on ? '0ms' : '60ms');
+  });
+
+  /* 初始化。
+     ⚠️ 顺序：**setAnchor（定位置）→ build（渲染内容 + 量宽）→ layout**。
+     `build` 现在自己调 `applyWidth`（它要知道真实槽位才能算宽），
+     所以量宽不再是一次独立调用 —— 减少"渲染了但没量宽"这类分叉。
+     ⚠️ `anchor` 的初值**必须在 DOM 就绪后**用 `screenRect()` 换算（此时屏幕尺寸才有效）。 */
+  setAnchorByRatio(0.50, 0.50);
+  build(curNotice);
+  layout();
+  window.addEventListener('resize', function () {
+    // 尺寸变了：按同样比例重算锚点，再 layout（否则锚点会落在旧屏幕外）
+    var rx = anchor.cx / screenRect().width;
+    var ry = (anchor.top + CAP_H / 2) / screenRect().height;
+    setAnchorByRatio(rx, ry);
+    layout();
+  });
+
+  /* 活数据：倒计时自己走。
+     ⚠️ 这就是"活数据槽独立"的意义 —— 每秒只改 `.value` 那一个节点的文字，
+        **文案不重排、宽度不变、面板不动**（产品今天把 `（还剩 47s）` 拼进 text 里，
+        等于每秒重写整句、还带着一次形变判定）。 */
+  setInterval(function () {
+    var list = curNotice.notices || [];
+    var changed = false;
+    list.forEach(function (n) {
+      if (!n.tick) return;
+      var secs = parseInt(String(n.value), 10);
+      if (isNaN(secs) || secs <= 0) return;
+      n.value = (secs - 1) + 's';
+      changed = true;
+    });
+    if (!changed) return;
+    var el = island.querySelector('.value');
+    if (el) el.textContent = pickPrimary(list).value;
+  }, 1000);
+
+  /* 换场景：验证「内容口径」在五种形态下的表现 + 宽/高联动。
+     ⚠️ 用**每个场景一个按钮**而不是"下一类"循环 —— 循环的当前位置是隐式状态，
+        探针与人都得靠数点击次数才知道自己在看哪一屏（本仓栽过"读数和实际不同步"）。 */
+  var keys = ['task', 'rate', 'login', 'report', 'music', 'message', 'mixed', 'idle'];
+  var SC_NAMES = { task: '任务进度', rate: '风控冷却', login: '登录失效', report: '完成报告',
+                   music: '正在播放', message: '瞬时提示', mixed: '多条目', idle: '空闲' };
+  var bar = document.createElement('div');
+  bar.style.cssText = 'padding:0 32px; display:flex; gap:6px; align-items:center; flex-wrap:wrap;';
+  bar.innerHTML = '<span style="margin-top:14px;font-size:12.5px;color:#6b7686;">内容：</span>' +
+    keys.map(function (k) {
+      return '<button class="btn" data-scn="' + k + '" style="margin-top:14px;">' +
+        SC_NAMES[k] + '</button>';
+    }).join('') +
+    '<span id="scn-name" style="margin-top:14px;font-size:12.5px;color:#6b7686;width:100%;"></span>';
+  document.querySelector('main').appendChild(bar);
+  var scnName = document.getElementById('scn-name');
+  function showScenario(k) {
+    curNotice = SAMPLES[k];
+    build(curNotice);
+    document.querySelectorAll('[data-scn]').forEach(function (b) {
+      b.setAttribute('aria-pressed', String(b.dataset.scn === k));
+    });
+    scnName.innerHTML = '<strong>' + curNotice.name + '</strong>　·　' +
+      (curNotice.notices.length || '无') + ' 条通知　·　胶囊宽 <b>' + widthInfo.final + 'px</b>' +
+      (widthInfo.ellip ? '（超 400 ⇒ 省略）' : '（不省略）');
+    layout();
+  }
+  document.querySelectorAll('[data-scn]').forEach(function (b) {
+    b.addEventListener('click', function () { showScenario(b.dataset.scn); });
+  });
+  showScenario(keys[0]);
+})();
+</script>
+</body>
+</html>
