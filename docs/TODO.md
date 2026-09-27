@@ -172,13 +172,12 @@
 | **待排期（可选，不做也不影响）** | 无阻塞，等你挑 | ① **空闲轮播上线**（R19 下线了；等库中真有条目 —— 接 `registerIdleProvider` + 翻 `IDLE_CAROUSEL_ENABLED`，同步改探针断言）；② **深色主题**：R14b 的钩子已就位（填 `:root[data-theme='dark']` + 翻 `DARK_IMPLEMENTED`），但真正做要先把 **243 处硬编码色值**收敛成令牌 + ECharts 双主题 + 逐屏走查 —— 单列一批；③ **能力受限入口并进状态岛面板**（`NoticeActionKind.open-limits` 已预留）；④ 参考图右上的动作行（复制诊断信息 / 打开数据目录）——R17 按用户口径没做，**2026-09-26 起"复制诊断"这一步已经有后端了**（`GET /settings/diagnostics`，批次 16），只差把它接到那一行 |
 | **`migrate_data_dir` 的回滚编排补 4 条集成测试**（批次 16 的 ④，2026-09-26 明确没做） | 纯代码任务，无阻塞 | 计划要求的四条失败路径（复制失败 / 校验失败 / 指针写失败 / 探活失败）各断言"**指针未变 + 旧目录内容未动 + 后端仍在旧目录上跑**"。卡点是那句编排现在长在 `#[tauri::command] migrate_data_dir` 里（要 `AppHandle`），**先把它抽成"注入 effects 的纯函数"**（照 `lib.rs::delete_old_dir` 的先例）才好测。今天只有真机验证（见 `docs/DEV-LOOP.md` §一 的真机现场②） |
 | **真机"关停"冒烟**（批次 6 的补充，2026-09-26 记） | 纯真机动作，无阻塞 | 关窗 / 托盘退出时看 `logs/app.log` 是否出现「调度运行时已停止（3 个线程已退出…）」且进程在 `scheduler.STOP_JOIN_TIMEOUT`（15s）内退出。⚠️ **自动化覆盖不到 graceful 那一半**：`scripts/dev_check.py` 的后端冒烟走 `proc.terminate()` = Windows 硬杀（不经过 lifespan），目前只有 `tests/test_scheduler_lifecycle.py` 直接驱动 `app.main.lifespan` 那一条（替身掉碰盘碰网的四件事、不起真进程） |
-| **M4 剩下的两台 hook + typed event**（批次 12 的第二、三刀，2026-09-26 起记，devlog/218、219） | 纯前端重构，无阻塞；**硬要求：抽 hook 必须同时带出 hook 测试** | 已完成 `useToolbarVisibility`（8 条 jsdom 用例，devlog/218）与 `usePostQueryState`（7 条，devlog/219；⚠️ E9 那条**时序契约**逐字保留：必须在 `EXIT_MS` 提交前跑完，否则 `filterRef` 残留导致种子指纹错配 ⇒ **不许改成"提交时重置"**、不许改依赖数组；6 个 handler 的 `setPage(1)` 按偏离说明留在页面 = 避免与分页机循环依赖）。剩下：① **`usePostPagination`**（中风险：`posts`/`total`/`page`/`loadingMore`/`loadMoreError` + IO 哨兵 + `hasMore` + 回顶；**取数 effect E11 不要一起搬**；⚠️ 与上一条同源——`setPage` 是分页机的，query hook **不许**反过来拿它）；② **`useSelectedAccount`**（中风险：`accountKey` 已是显式稳定代理，但 **E7 同时写 `vtuberLoadedRef`**（场景机的记账）⇒ 记账要留在页面或显式暴露 `markLoaded`）；③ typed event 模块（集中事件名与 payload）。⚠️ **`useVtuberRealtimeSync` 今天抽不干净**（E6/E8 同时写两台机器的 state ⇒ 双写者，`accountKey` 引用抖动会改变请求时序）——**前置条件**是先把身份写入收口到单一 owner，别硬抽 |
+| **M4 剩下的一台 hook + typed event**（批次 12 的第二至四刀，2026-09-26 起记，devlog/218、219、221） | 纯前端重构，无阻塞；**硬要求：抽 hook 必须同时带出 hook 测试** | 已完成 `useToolbarVisibility`（8 条，devlog/218）、`usePostQueryState`（7 条，devlog/219；⚠️ E9 那条**时序契约**逐字保留：必须在 `EXIT_MS` 提交前跑完，否则 `filterRef` 残留导致种子指纹错配 ⇒ **不许改成"提交时重置"**、不许改依赖数组）与 `usePostPagination`（14 条，devlog/221；五 state + 两 ref + 三条 effect，`hasMore` 派生 + 哨兵门控六态；**取数 effect E11 刻意不搬**、依赖数组逐字保留；`setPage` 是唯一翻页口 ⇒ 那条 `onFetchIdle` 订阅按仓里先例用窄依赖 + disable 理由）。剩下：① **`useSelectedAccount`**（中风险：`accountKey` 已是显式稳定代理，但 **E7 同时写 `vtuberLoadedRef`**（场景机的记账）⇒ 记账要留在页面或显式暴露 `markLoaded`）；② typed event 模块（集中事件名与 payload）。⚠️ **`useVtuberRealtimeSync` 今天抽不干净**（E6/E8 同时写两台机器的 state ⇒ 双写者，`accountKey` 引用抖动会改变请求时序）——**前置条件**是先把身份写入收口到单一 owner，别硬抽 |
 
 ### 1.2 需要先定口径 / 拍板（不是写代码的问题）
 
 | 项 | 卡在哪 | 现状 |
 |---|---|---|
-| **场次级「直播内容分析」服务** | 要先定分析口径（独立产品级） | 接口字段早已预留（`analysis`），详情弹窗显示"接口已预留"。devlog/035 |
 | **原始弹幕明细库 / 全量分析** | 要不要做、以什么粒度落库（这是独立产品级决策） | **通道已实测可用且已被真实使用**：`/api/v3/lives/{liveId}/danmakus` 公开免鉴权 + `offset/limit` 分页（max 100000，含弹幕原文/礼物/上舰/SC）；词云自建（devlog/061）就走这条路，只差"落表 + 前端下钻"。devlog/060 §一.2 |
 | **弹幕词云词字下钻**（点某词看该词在场的弹幕） | 依赖上一条的明细存储 | 现在是纯前端破泡交互（点击即消失 + 恢复），没有明细可查 |
 | **帖子互动历史曲线** | 要加 post 统计快照表（现在 `stats_json` 原地覆盖，热帖传播过程会丢） | 数据在丢，越早做保留越多；见 §3 |
@@ -451,7 +450,7 @@ W1/W2 可以在**现在的架构上**做完，但它们只是让 W3 少踩坑。
 |---|---|---|
 | 后端 | `python -m pytest -q`（**解释器走 `.venv`**，见 `ARCHITECTURE.md` §6 第 24 条） | **717–718 passed / 0 failed**（总数 718：其中 1 条**打真上游**的用例在不可达时按设计 skip ⇒ `passed` 那一格会差 1；2026-09-26 实测 ≈54–80s） |
 | 桌面壳 | `cargo test`（工作目录 `frontend/src-tauri`） | **56 passed**（2026-09-26 实测；含 `delete_old_dir` 的真实 junction 用例、S1 的 token 生成用例与 S3 的准入表/白名单用例） |
-| 前端单测 | `npm --prefix frontend run test` | **636 passed / 50 文件**（2026-09-27 实测 ≈12s；条数确定，不随上游浮动） |
+| 前端单测 | `npm --prefix frontend run test` | **650 passed / 51 文件**（2026-09-27 实测 ≈5–12s；条数确定，不随上游浮动） |
 | 前端类型 / lint | `npx tsc --noEmit`（**必须在 `frontend/` 里跑**）/ `npm --prefix frontend run lint` | 0 错 / 0 错（2026-09-26 复核） |
 | 文档漂移 | `python scripts/doc_check.py` | **0 FAIL**（2026-09-26 复核；另有 1 条历史 devlog 索引欠账 WARN，WARN 看脚本逐条输出） |
 | 上游冒烟 | `python scripts/smoke_upstream.py [--cold]` | 真上游 **5 ok** / 冷进程 **3 ok**，0 FAIL（2026-09-23 复核） |

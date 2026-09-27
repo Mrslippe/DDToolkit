@@ -548,6 +548,7 @@
 | 批次 14c（Q2 优先段）：**场次详情弹窗迁 Radix Dialog** —— 顺手修掉"Esc 由父组件卸载、退场动画播不出来"；标题/副行进 `aria-labelledby`/`describedby`，焦点与背景 inert 交给 Radix。另加无限滚动 **live region** + 显式「加载更多」、canvas/SVG 补 `role=img`；**本仓第一条 jsdom 组件用例（11 条，零新依赖）**；14a/14b 未做 | 217 |
 | 批次 12（M4 第一刀）：**`useToolbarVisibility` 抽成 hook**（`PostsPage` −118 行）+ 8 条 jsdom hook 用例（dwell / grace / 闪现只一次 / StrictMode 不许永久停住 / 向下滚动让位 / `subtree:true`）；三条硬约束**逐字保留**；另三台 hook 与 typed event 记进 TODO | 218 |
 | 批次 12（M4 第二刀）：**`usePostQueryState` 抽成 hook**（七字段 + 300ms 防抖 + 换账号即重置；`PostsPage` 913 → 893）+ 7 条 jsdom 用例（含时序判据）；6 个 handler 的 `setPage(1)` 留在页面（避免与分页机循环依赖）；顺带修掉 `ui_probe --toolbar` 的假红（rAF 在虚拟时间下不被服务 ⇒ 改走 dev 钩子） | 219 |
+| 批次 12（M4 第三刀）：**`usePostPagination` 抽成 hook**（五 state + 两 ref + 三条 effect：无限滚动哨兵 / 用户意图重置即回顶 / 回顶钮；`PostsPage` 894 → 877 行）+ 14 条 jsdom 用例（哨兵门控六态、追加失败即断开、同参数重渲染不许回顶）；**取数 effect E11 刻意不搬**、依赖数组逐字保留；五刀反向验证 | 221 |
 
 > **编号列怎么写**（2026-09-23 定）：
 > - 有 devlog 的批次 → **裸编号**（`| 097 |`）；

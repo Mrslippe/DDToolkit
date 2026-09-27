@@ -44,6 +44,7 @@ import PostListView from '../components/posts/PostListView'
 import ProfileBoardView from '../components/profile/ProfileBoardView'
 import { useToolbarVisibility } from '../hooks/useToolbarVisibility'
 import { usePostQueryState } from '../hooks/usePostQueryState'
+import { usePostPagination } from '../hooks/usePostPagination'
 import './../styles/posts.css'
 
 const PAGE_SIZE = 20
@@ -76,13 +77,9 @@ export default function PostsPage() {
   const [selectedAccount, setSelectedAccount] = useState<Account | null>(null)
   const [stats, setStats] = useState<PostStats | null>(null)
 
-  const [posts, setPosts] = useState<Post[]>([])
-  const [total, setTotal] = useState(0)
-  const [page, setPage] = useState(1)
-  // 无限滚动：追加期间的独立 loading 位（区别于整表替换的 loading）；
-  // 追加失败不清网格，仅置 loadMoreError 显示尾条重试
-  const [loadingMore, setLoadingMore] = useState(false)
-  const [loadMoreError, setLoadMoreError] = useState<string | null>(null)
+  // 分页机（`posts` / `total` / `page` / `loadingMore` / `loadMoreError` + 哨兵 + 回顶）
+  // 在 `hooks/usePostPagination`（M4，devlog/220）—— 它的调用点在 `scene` 之后
+  // （哨兵与回顶都按**已提交**的视图判定），取数 effect（下面那条）仍留在本页。
   // 筛选：七个字段 + 「换账号即重置」全在 `hooks/usePostQueryState`（M4，devlog/219）。
   // ⚠️ 那条重置 effect 的**依赖与时序**是契约（必须先于场景提交跑完，否则种子指纹错配）。
   // `accountKey` 是 `selectedAccount` 的**稳定代理**（`platform:uid` 串）——
@@ -194,6 +191,11 @@ export default function PostsPage() {
         setRefreshTick((t) => t + 1)
         if (affectsFanTrend(kinds)) setTrendTick((t) => t + 1)
       }),
+    // `setPage` 现在来自 `usePostPagination`（devlog/220）。它是 `useState` 的 setter，
+    // **身份终身稳定**，这条订阅刻意只注册一次；把它列进依赖数组在这里**还写不了** ——
+    // 依赖数组是渲染期求值的，而分页机的调用点在场景机之后（本 effect 在它之前）。
+    // ⇒ 窄依赖 + 理由（与仓里另外几处同款）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   )
 
@@ -295,6 +297,22 @@ export default function PostsPage() {
     view: sceneTransition.sceneView as AppView,
     exiting: sceneTransition.exiting,
   }
+
+  // 分页机（M4，批次 12 第三刀，devlog/220）：状态 + 哨兵 + 回顶全在这里。
+  // ⚠️ 取数 effect（下面那条）**刻意不搬** —— 它是分页机与「场景切换机 / 筛选机」的
+  //    交汇点（播种守卫 / AbortController / `refreshTick` 边沿）；这里只把它的
+  //    `loading` / `error` 当哨兵的门喂进去，依赖方向保持单向：页面 → 分页机。
+  // ⚠️ `listActive` 取的是**已提交**的 `scene.view`（不是本地 `view`）—— 与抽出前一致。
+  const {
+    posts, setPosts, total, setTotal, page, setPage,
+    loadingMore, setLoadingMore, loadMoreError, setLoadMoreError,
+    hasMore, listScrollRef, sentinelRef, showTop, onScrollTop,
+    loadMore, retryLoadMore,
+  } = usePostPagination({
+    listActive: scene.view === 'list',
+    accountKey, loading, error,
+    typeFilter, archived, deletedOnly, searchKw, dateFrom, dateTo,
+  })
 
   // 加载 VTuber 与默认账号。
   // refreshTick（fetch-idle 边沿）时重拉本体，让抓取期间点开的 V 在完成
@@ -439,43 +457,9 @@ export default function PostsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accountKey, page, typeFilter, archived, deletedOnly, refreshTick, scene.view, searchKw, dateFrom, dateTo])
 
-  // 无限滚动：哨兵进入视口（提前 600px 预载）且可加载 → 追加下一页。
-  // 观察者在加载/筛选变化时重建；追加完成后自动续载（连续滚到底持续填充）
-  const listScrollRef = useRef<HTMLDivElement>(null)
-  const sentinelRef = useRef<HTMLDivElement>(null)
-  const hasMore = posts.length < total
-  // 回顶浮钮（2026-09-05 用户反馈）：滚动超过 400px 浮现，一键平滑回顶
-  const [showTop, setShowTop] = useState(false)
-  useEffect(() => {
-    if (scene.view === 'list') setShowTop(false)
-  }, [scene.view])
-  // P6-1：筛选切换 = 用户意图重置 → 立即滚回列表顶部。
-  // （此前「按筛选指纹缓存+恢复滚动位置」实测不达预期已 revert——恢复位置
-  //   对不上新内容；标准列表 UX 为回顶，触发即滚，不等重取完成）
-  // P8-7（2026-09-10 用户）：修「切平台账号继承滚动深度」——切账号只改
-  //   selectedAccount，`key={scene.acc|view}` 不变 → 滚动容器不重挂，旧 scrollTop
-  //   原样保留。accountKey / archived 一并进依赖 = 同一条「用户意图重置」语义。
-  useEffect(() => {
-    if (scene.view !== 'list') return
-    listScrollRef.current?.scrollTo({ top: 0 })
-    setShowTop(false)
-  }, [typeFilter, searchKw, dateFrom, dateTo, deletedOnly, archived, accountKey, scene.view])
-  useEffect(() => {
-    if (scene.view !== 'list' || !hasMore || loading || loadingMore || error || loadMoreError) return
-    const root = listScrollRef.current
-    const el = sentinelRef.current
-    if (!root || !el) return
-    const io = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((e) => e.isIntersecting)) {
-          setPage((p) => p + 1)
-        }
-      },
-      { root, rootMargin: '600px 0px' },
-    )
-    io.observe(el)
-    return () => io.disconnect()
-  }, [scene.view, hasMore, loading, loadingMore, error, loadMoreError, accountKey, typeFilter, archived, deletedOnly, searchKw, dateFrom, dateTo])
+  // 无限滚动哨兵（提前 600px 预载）/ 用户意图重置即回顶 / 回顶钮显隐
+  // 三条 effect 与两个 ref 都在 `hooks/usePostPagination`（M4，devlog/220）——
+  // 依赖数组逐字保留在那里的文件头约束里（切筛选、切账号都算"用户意图重置"）。
 
   // 抓取/更新/解除订阅/加账号后刷新 —— 6 个动作回调已搬到 pages/useVtuberActions.ts
   // （同一套骨架：守卫 → setFetching → kickPoll → api → 三种结果提示 → finally 复位）。
@@ -804,16 +788,16 @@ return (
             loading={loading}
             loadingMore={loadingMore}
             loadMoreError={loadMoreError}
-            onRetryLoadMore={() => setLoadMoreError(null)}
+            onRetryLoadMore={retryLoadMore}
             // 显式「加载更多」（Q2，批次 14）：与哨兵进视口**同一件事**（`setPage(p+1)`
             // 触发上面那条取数 effect），给键盘/读屏用户一个不依赖滚动的入口。
-            onLoadMore={() => { setLoadMoreError(null); setPage((p) => p + 1) }}
+            onLoadMore={loadMore}
             hasMore={hasMore}
             onOpenPost={openPost}
             listScrollRef={listScrollRef}
             sentinelRef={sentinelRef}
             showTop={showTop}
-            onScroll={(top) => setShowTop(top > 400)}
+            onScroll={onScrollTop}
           />
         )}
       </div>
