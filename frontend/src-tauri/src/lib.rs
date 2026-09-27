@@ -413,6 +413,41 @@ struct MigrateReport {
     migration_id: String,
 }
 
+/// 迁移编排的**生产实现**：把 `migrate::MigrateEnv` 的八个副作用接到真实的后端进程、
+/// 指针文件与日志上。逻辑本身在 `migrate::orchestrate`（可注入替身 ⇒ 四条失败路径测得动，
+/// 批次 16 的 ④，devlog/225）。
+struct TauriMigrateEnv<'a> {
+    app: &'a tauri::AppHandle,
+    current: std::path::PathBuf,
+}
+
+impl migrate::MigrateEnv for TauriMigrateEnv<'_> {
+    fn log(&self, msg: &str) {
+        shelllog::log(&self.current, msg);
+    }
+    fn stop_backend(&self) -> u16 {
+        stop_backend(self.app)
+    }
+    fn copy_tree(&self, plan: &migrate::Plan) -> Result<migrate::CopyReport, String> {
+        migrate::copy_tree(plan)
+    }
+    fn verify_copy(&self, plan: &migrate::Plan) -> Result<(), String> {
+        migrate::verify_copy(plan)
+    }
+    fn read_pointer(&self) -> Option<std::path::PathBuf> {
+        datadir::read_pointer().ok().flatten()
+    }
+    fn write_pointer(&self, dir: &std::path::Path) -> Result<(), String> {
+        datadir::write_pointer(dir)
+    }
+    fn clear_pointer(&self) -> Result<(), String> {
+        datadir::clear_pointer()
+    }
+    fn start_backend(&self, port: u16, dir: &std::path::Path) -> Result<(), String> {
+        start_backend_and_wait(self.app, port, dir)
+    }
+}
+
 /// 选一个目录并把数据迁过去（系统文件夹选择框，用户口径 2026-09-16）。
 #[tauri::command]
 async fn migrate_data_dir(window: tauri::Window, app: tauri::AppHandle) -> Result<MigrateReport, String> {
@@ -450,39 +485,12 @@ async fn migrate_data_dir(window: tauri::Window, app: tauri::AppHandle) -> Resul
         "迁移计划：源 {} → 目标 {}（{} 个文件 / {} 字节，跳过 {:?}）",
         plan.source.display(), plan.data_dir.display(), plan.files, plan.bytes, plan.skipped));
 
-    let port = stop_backend(&app);
-    shelllog::log(&current, &format!("已停后端（端口 {port}），开始复制"));
-    let report = match migrate::copy_tree(&plan)
-        .and_then(|r| migrate::verify_copy(&plan).map(|_| r))
-    {
-        Ok(r) => r,
-        Err(why) => {
-            // 复制/校验失败时**指针还没动**：把后端用旧目录拉回来就恢复原状
-            shelllog::log(&current, &format!("复制/校验失败：{why} —— 回滚（指针未动）"));
-            let _ = start_backend_and_wait(&app, port, &current);
-            return Err(format!("{why}（已放弃迁移，数据目录没有改变）"));
-        }
-    };
-    shelllog::log(&current, &format!(
-        "复制并校验通过：{} 个文件 / {} 字节", report.files, report.bytes));
-
-    let prev_pointer = datadir::read_pointer().ok().flatten();
-    datadir::write_pointer(&plan.data_dir)?;
-    shelllog::log(&current, &format!("已写指针 → {}，用新目录拉起后端", plan.data_dir.display()));
-    if let Err(why) = start_backend_and_wait(&app, port, &plan.data_dir) {
-        // 探活失败 ⇒ 回滚指针并用旧目录重启（旧目录里的数据一直没动过）
-        shelllog::log(&current, &format!("新目录启动失败：{why} —— 回滚指针并用旧目录重启"));
-        match &prev_pointer {
-            Some(p) => {
-                let _ = datadir::write_pointer(p);
-            }
-            None => {
-                let _ = datadir::clear_pointer();
-            }
-        }
-        let _ = start_backend_and_wait(&app, port, &current);
-        return Err(format!("新目录启动失败：{why}（已回退到原目录）"));
-    }
+    // 五步编排（停后端 → 复制 → 校验 → 写指针 → 探活）在 `migrate::orchestrate`；
+    // 任何一步失败都保证「指针没变 + 后端仍跑在旧目录上」，错误消息已带上下文。
+    let env = TauriMigrateEnv { app: &app, current: current.clone() };
+    let out = migrate::orchestrate(&env, &current, &plan)?;
+    let port = out.port;
+    let report = out.report;
     shelllog::log(&current, &format!(
         "迁移完成：数据目录 = {}（旧目录仍保留在 {}，等用户确认后再删）",
         plan.data_dir.display(), current.display()));
@@ -493,11 +501,10 @@ async fn migrate_data_dir(window: tauri::Window, app: tauri::AppHandle) -> Resul
         pointer_unusable: None,
     });
     // 记下"哪份旧目录可以被删"的一次性票据（devlog/198）。
-    // 规范路径在这里取：`current` 来自启动时的解析结果，可能带 `..` 或大小写差异。
+    // 规范路径由编排给出（`current` 来自启动时的解析结果，可能带 `..` 或大小写差异）。
     let migration_id = new_migration_id()?;
-    let canonical = std::fs::canonicalize(&current).unwrap_or_else(|_| current.clone());
     *app.state::<MigrationRecord>().0.lock().unwrap() = Some(MigrationStub {
-        canonical,
+        canonical: out.old_dir_canonical,
         id: migration_id.clone(),
     });
     println!(

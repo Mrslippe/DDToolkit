@@ -331,6 +331,112 @@ pub fn verify_copy(plan: &Plan) -> Result<(), String> {
     }
 }
 
+/// 迁移编排里用到的**全部副作用**（批次 16 的 ④，devlog/225）。
+///
+/// 编排要回答的问题是"**哪一步失败该退回到哪**"，而它原先长在
+/// `#[tauri::command] migrate_data_dir` 里（要 `AppHandle` 才能跑）⇒ 四条失败路径
+/// 一条都测不到。把副作用抽成这个 trait 之后，编排本身变成可注入、可断言的函数
+/// （照 `lib.rs::delete_old_dir` 的先例）。
+pub trait MigrateEnv {
+    fn log(&self, msg: &str);
+    /// 停后端；返回端口（回滚时要按**同一个端口**把它拉回来）
+    fn stop_backend(&self) -> u16;
+    fn copy_tree(&self, plan: &Plan) -> Result<CopyReport, String>;
+    fn verify_copy(&self, plan: &Plan) -> Result<(), String>;
+    fn read_pointer(&self) -> Option<PathBuf>;
+    fn write_pointer(&self, dir: &Path) -> Result<(), String>;
+    fn clear_pointer(&self) -> Result<(), String>;
+    /// 用 `dir` 拉起后端并等它就绪；`Err` = 探活失败
+    fn start_backend(&self, port: u16, dir: &Path) -> Result<(), String>;
+}
+
+/// 编排成功后的产物（`MigrateReport` 里与壳无关的那部分）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Orchestrated {
+    pub port: u16,
+    pub report: CopyReport,
+    /// 记"哪份旧目录可以被删"票据时要用的**规范路径**（`current` 可能带 `..` 或大小写差异）
+    pub old_dir_canonical: PathBuf,
+}
+
+/// 迁移的**五步编排**（R22-B2c；把 `migrate_data_dir` 里那段搬出来，devlog/225）。
+///
+/// ```text
+/// ① 停后端 → ② 复制 → ③ 校验 → ④ 写指针 → ⑤ 用新目录拉起后端（探活）
+/// ```
+///
+/// **不变量（贯穿全程）**：**旧目录一个字节都不动**（删除是事后单独一步、且要用户确认），
+/// 且任何一步失败后都要回到「**指针没变 + 后端仍跑在旧目录上**」——否则用户会得到一个
+/// 没有数据服务的窗口（界面看着正常，其实什么都点不动）。
+///
+/// ⚠️ **④ 失败那条以前没有把后端拉回来**（`write_pointer(…)?` 直接早退）：复制已经完成、
+/// 后端已经停掉，于是失败后应用就"哑"了。这次补上 —— 这正是"四条失败路径各断言
+/// 后端仍在旧目录上跑"这条要求逼出来的第一个真问题。
+pub fn orchestrate<E: MigrateEnv>(
+    env: &E,
+    current: &Path,
+    plan: &Plan,
+) -> Result<Orchestrated, String> {
+    let port = env.stop_backend();
+    env.log(&format!("已停后端（端口 {port}），开始复制"));
+
+    // ② 复制 + ③ 校验：失败时**指针还没动** ⇒ 用旧目录把后端拉回来就恢复原状
+    let report = match env
+        .copy_tree(plan)
+        .and_then(|r| env.verify_copy(plan).map(|_| r))
+    {
+        Ok(r) => r,
+        Err(why) => {
+            env.log(&format!("复制/校验失败：{why} —— 回滚（指针未动）"));
+            let _ = env.start_backend(port, current);
+            return Err(format!("{why}（已放弃迁移，数据目录没有改变）"));
+        }
+    };
+    env.log(&format!(
+        "复制并校验通过：{} 个文件 / {} 字节",
+        report.files, report.bytes
+    ));
+
+    // ④ 写指针：失败同样要回滚（指针没变，但后端已经停了 ⇒ 必须用旧目录拉回来）
+    let prev_pointer = env.read_pointer();
+    if let Err(why) = env.write_pointer(&plan.data_dir) {
+        env.log(&format!(
+            "写指针失败：{why} —— 回滚（指针未变，后端用旧目录拉回）"
+        ));
+        let _ = env.start_backend(port, current);
+        return Err(format!(
+            "写指针失败：{why}（已放弃迁移，数据目录没有改变）"
+        ));
+    }
+    env.log(&format!(
+        "已写指针 → {}，用新目录拉起后端",
+        plan.data_dir.display()
+    ));
+
+    // ⑤ 探活失败 ⇒ 指针回滚到原样（没有就清掉）+ 旧目录拉起
+    if let Err(why) = env.start_backend(port, &plan.data_dir) {
+        env.log(&format!(
+            "新目录启动失败：{why} —— 回滚指针并用旧目录重启"
+        ));
+        match &prev_pointer {
+            Some(p) => {
+                let _ = env.write_pointer(p);
+            }
+            None => {
+                let _ = env.clear_pointer();
+            }
+        }
+        let _ = env.start_backend(port, current);
+        return Err(format!("新目录启动失败：{why}（已回退到原目录）"));
+    }
+
+    Ok(Orchestrated {
+        port,
+        report,
+        old_dir_canonical: std::fs::canonicalize(current).unwrap_or_else(|_| current.to_path_buf()),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -533,6 +639,227 @@ mod tests {
             let f = free_space(&root);
             assert!(f.is_some(), "Windows 上应当能问到磁盘余量");
             assert!(f.unwrap() > 0);
+        }
+    }
+
+    /// 迁移编排（批次 16 的 ④，devlog/225）：把 `migrate_data_dir` 的副作用换成替身，
+    /// 四条失败路径各自断言「**指针未变 + 旧目录内容未动 + 后端仍在旧目录上跑**」。
+    mod orchestrate {
+        use super::*;
+        use std::cell::RefCell;
+
+        /// 记录每一次副作用调用（顺序断言用）+ 可注入的失败点
+        #[derive(Default)]
+        struct Fake {
+            calls: RefCell<Vec<String>>,
+            logs: RefCell<Vec<String>>,
+            pointer: RefCell<Option<PathBuf>>,
+            fail_copy: bool,
+            fail_verify: bool,
+            fail_pointer_write: bool,
+            /// 哪些目录「拉不起来」（探活失败）—— 用它只让**新目录**失败
+            start_fails_for: RefCell<Vec<PathBuf>>,
+            port: u16,
+        }
+
+        impl Fake {
+            fn new() -> Self {
+                Self { port: 4545, ..Default::default() }
+            }
+            fn with_pointer(self, p: &Path) -> Self {
+                *self.pointer.borrow_mut() = Some(p.to_path_buf());
+                self
+            }
+            fn record(&self, s: String) {
+                self.calls.borrow_mut().push(s);
+            }
+            fn calls(&self) -> Vec<String> {
+                self.calls.borrow().clone()
+            }
+            /// 只看"拉起后端"那几个调用（最后一条 = 最终后端跑在哪个目录）
+            fn starts(&self) -> Vec<String> {
+                self.calls().into_iter().filter(|c| c.starts_with("start:")).collect()
+            }
+            fn pointer_writes(&self) -> Vec<String> {
+                self.calls().into_iter()
+                    .filter(|c| c.starts_with("write_pointer:") || c == "clear_pointer")
+                    .collect()
+            }
+        }
+
+        impl MigrateEnv for Fake {
+            fn log(&self, msg: &str) {
+                self.logs.borrow_mut().push(msg.to_string());
+            }
+            fn stop_backend(&self) -> u16 {
+                self.record("stop".into());
+                self.port
+            }
+            fn copy_tree(&self, _plan: &Plan) -> Result<CopyReport, String> {
+                self.record("copy".into());
+                if self.fail_copy {
+                    return Err("磁盘满了".into());
+                }
+                Ok(CopyReport { files: 5, bytes: 4779 })
+            }
+            fn verify_copy(&self, _plan: &Plan) -> Result<(), String> {
+                self.record("verify".into());
+                if self.fail_verify {
+                    return Err("校验失败（缺 1 个文件）".into());
+                }
+                Ok(())
+            }
+            fn read_pointer(&self) -> Option<PathBuf> {
+                self.record("read_pointer".into());
+                self.pointer.borrow().clone()
+            }
+            fn write_pointer(&self, dir: &Path) -> Result<(), String> {
+                self.record(format!("write_pointer:{}", dir.display()));
+                if self.fail_pointer_write {
+                    return Err("拒绝访问".into());
+                }
+                *self.pointer.borrow_mut() = Some(dir.to_path_buf());
+                Ok(())
+            }
+            fn clear_pointer(&self) -> Result<(), String> {
+                self.record("clear_pointer".into());
+                *self.pointer.borrow_mut() = None;
+                Ok(())
+            }
+            fn start_backend(&self, port: u16, dir: &Path) -> Result<(), String> {
+                self.record(format!("start:{port}:{}", dir.display()));
+                if self.start_fails_for.borrow().iter().any(|p| p == dir) {
+                    return Err("后端 30 秒内没有就绪".into());
+                }
+                Ok(())
+            }
+        }
+
+        /// 造一套「当前目录 + 目标目录 + 计划」，并在旧目录里放一个哨兵文件
+        /// （`orchestrate` 全程不许碰旧目录）
+        fn fixture(tag: &str) -> (crate::testtmp::TempRoot, PathBuf, Plan) {
+            let root = temp_root(tag);
+            let src = fake_data_dir(&root);
+            std::fs::write(src.join("哨兵.txt"), b"old-data").unwrap();
+            let target = root.join("目标盘");
+            std::fs::create_dir_all(&target).unwrap();
+            let plan = plan_migration(&src, &target).unwrap();
+            (root, src, plan)
+        }
+
+        /// 「旧目录内容未动」：哨兵文件还在、内容一字不差
+        fn assert_old_untouched(src: &Path) {
+            assert_eq!(
+                std::fs::read(src.join("哨兵.txt")).expect("旧目录的哨兵文件不见了"),
+                b"old-data",
+                "旧目录在迁移里被改动了"
+            );
+            assert!(src.join("vtuber.db").exists());
+        }
+
+        #[test]
+        fn happy_path_stops_copies_verifies_points_and_starts_on_the_new_dir() {
+            let (_root, src, plan) = fixture("ok");
+            let env = Fake::new();
+
+            let out = orchestrate(&env, &src, &plan).unwrap();
+
+            assert_eq!(out.port, 4545);
+            assert_eq!(out.report.files, 5);
+            assert_eq!(env.calls(), vec![
+                "stop".to_string(),
+                "copy".into(),
+                "verify".into(),
+                "read_pointer".into(),
+                format!("write_pointer:{}", plan.data_dir.display()),
+                format!("start:4545:{}", plan.data_dir.display()),
+            ]);
+            assert_eq!(*env.pointer.borrow(), Some(plan.data_dir.clone()));
+            assert_old_untouched(&src);
+        }
+
+        #[test]
+        fn copy_failure_brings_the_backend_back_on_the_old_dir_pointer_untouched() {
+            let (_root, src, plan) = fixture("copy-fail");
+            let env = Fake { fail_copy: true, ..Fake::new() };
+
+            let err = orchestrate(&env, &src, &plan).unwrap_err();
+
+            assert!(err.contains("数据目录没有改变"), "{err}");
+            // 指针一个字节都没动：压根没写过
+            assert_eq!(env.pointer_writes(), Vec::<String>::new());
+            assert_eq!(*env.pointer.borrow(), None);
+            // 校验都没机会跑；最后一条 start 必须落在**旧目录**
+            assert!(!env.calls().contains(&"verify".to_string()));
+            assert_eq!(env.starts(), vec![format!("start:4545:{}", src.display())]);
+            assert_old_untouched(&src);
+        }
+
+        #[test]
+        fn verify_failure_is_the_same_rollback_as_a_copy_failure() {
+            let (_root, src, plan) = fixture("verify-fail");
+            let env = Fake { fail_verify: true, ..Fake::new() };
+
+            let err = orchestrate(&env, &src, &plan).unwrap_err();
+
+            assert!(err.contains("校验失败"), "{err}");
+            assert_eq!(env.pointer_writes(), Vec::<String>::new());
+            assert_eq!(env.starts(), vec![format!("start:4545:{}", src.display())]);
+            assert_old_untouched(&src);
+        }
+
+        /// ⚠️ 这条以前**必然失败**：`write_pointer(…)?` 直接早退，后端被停在半路，
+        ///    应用从此没有数据服务（devlog/225 §一）
+        #[test]
+        fn pointer_write_failure_still_brings_the_backend_back() {
+            let (_root, src, plan) = fixture("pointer-fail");
+            let env = Fake { fail_pointer_write: true, ..Fake::new() };
+
+            let err = orchestrate(&env, &src, &plan).unwrap_err();
+
+            assert!(err.contains("写指针失败"), "{err}");
+            assert!(err.contains("数据目录没有改变"), "{err}");
+            assert_eq!(*env.pointer.borrow(), None, "指针没写成功，不许留成新目录");
+            assert_eq!(env.starts(), vec![format!("start:4545:{}", src.display())]);
+            assert_old_untouched(&src);
+        }
+
+        #[test]
+        fn probe_failure_restores_the_previous_pointer_and_restarts_on_the_old_dir() {
+            let (_root, src, plan) = fixture("probe-fail");
+            let prev = PathBuf::from("E:\\旧的数据目录");
+            let env = Fake::new().with_pointer(&prev);
+            env.start_fails_for.borrow_mut().push(plan.data_dir.clone());
+
+            let err = orchestrate(&env, &src, &plan).unwrap_err();
+
+            assert!(err.contains("已回退到原目录"), "{err}");
+            // 指针先写新目录、失败后写回**原来那个**
+            assert_eq!(env.pointer_writes(), vec![
+                format!("write_pointer:{}", plan.data_dir.display()),
+                format!("write_pointer:{}", prev.display()),
+            ]);
+            assert_eq!(*env.pointer.borrow(), Some(prev));
+            assert_eq!(env.starts(), vec![
+                format!("start:4545:{}", plan.data_dir.display()),
+                format!("start:4545:{}", src.display()),
+            ]);
+            assert_old_untouched(&src);
+        }
+
+        #[test]
+        fn probe_failure_without_a_previous_pointer_clears_it_instead() {
+            let (_root, src, plan) = fixture("probe-fail-no-prev");
+            let env = Fake::new();                       // 从来没有指针文件（默认目录）
+            env.start_fails_for.borrow_mut().push(plan.data_dir.clone());
+
+            let err = orchestrate(&env, &src, &plan).unwrap_err();
+
+            assert!(err.contains("已回退到原目录"), "{err}");
+            assert!(env.pointer_writes().contains(&"clear_pointer".to_string()));
+            assert_eq!(*env.pointer.borrow(), None, "没有旧指针就该清掉，不许留着新目录");
+            assert_eq!(env.starts().last().unwrap(), &format!("start:4545:{}", src.display()));
+            assert_old_untouched(&src);
         }
     }
 }
