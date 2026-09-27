@@ -31,6 +31,7 @@ from app.core.database import Base, _set_sqlite_pragma
 from app.models.vtuber import Account, LiveSession, Post, VTuber
 from app.repositories.vtuber_repo import PostRepo
 from app.services import db_maintenance as m
+from app.services.platforms import bilibili as bili_mod
 
 
 def _file_engine(path: Path, *, timeout: float = 0.0):
@@ -266,7 +267,7 @@ def test_live_poller_writes_concurrently_with_post_inserts(env, monkeypatch):
                          "room_id": "1", "live_url": "https://live.bilibili.com/1"}
                 for m in mids}
 
-    monkeypatch.setattr(sch, "fetch_bilibili_live_batch", fake_batch)
+    monkeypatch.setattr(bili_mod, "fetch_bilibili_live_batch", fake_batch)
 
     t0_errors: list[str] = []
     post_errors: list[str] = []

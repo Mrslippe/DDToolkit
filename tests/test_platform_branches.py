@@ -24,6 +24,7 @@ from app.core.database import Base
 from app.models.vtuber import Account, VTuber
 from app.services import capabilities as C
 from app.services import scheduler as sch
+from app.services.platforms import registry
 
 
 # ── A：登录态映射不许"兜底成微博" ──────────────────────────────────────
@@ -114,11 +115,25 @@ def test_platform_accounts_of_keeps_non_numeric_uids():
     assert sch.platform_accounts_of([_acc("weibo", "")], "weibo") == []
 
 
-def test_split_numeric_uids_reports_the_bad_ones_instead_of_dropping_them():
-    """C2 的前半：非数字 uid 要**被交出来**（调用方计进 failed），不是被吞掉。"""
-    keep, bad = sch.split_numeric_uids([_acc("bilibili", "11073"), _acc("bilibili", "abc")])
-    assert [a.platform_uid for a in keep] == ["11073"]
-    assert [a.platform_uid for a in bad] == ["abc"]
+def test_live_batch_adapter_filters_non_numeric_and_says_so(monkeypatch):
+    """C2 的前半搬到了**适配器**里（devlog/240）：B 站批量接口要 int uid。
+
+    非数字 uid **不发给上游**，但要**记一条日志说明原因**；核心侧再把"问了没回来"的
+    一律计 failed（下一条用例端到端验）。⚠️ 两件事分开：适配器负责"为什么"，
+    核心负责"不许静默"。
+    """
+    from app.services.platforms import bilibili as B
+
+    seen: dict = {}
+
+    async def fake_batch(mids, client=None):
+        seen["mids"] = mids
+        return {"11073": {"live_status": 0}}
+
+    monkeypatch.setattr(B, "fetch_bilibili_live_batch", fake_batch)
+    out = asyncio.run(B.fetcher.fetch_live_batch(["11073", "abc"], client=None))
+    assert seen["mids"] == [11073], "非数字 uid 不该进批量接口"
+    assert out == {"11073": {"live_status": 0}}
 
 
 def test_live_sweep_counts_non_numeric_bilibili_uid_as_failed(monkeypatch):
@@ -146,7 +161,10 @@ def test_live_sweep_counts_non_numeric_bilibili_uid_as_failed(monkeypatch):
         return {"11073": {"live_status": 0, "live_title": None,
                           "room_id": None, "live_url": None}}
 
-    monkeypatch.setattr(sch, "fetch_bilibili_live_batch", fake_batch)
+    from app.services.platforms import bilibili as B
+    monkeypatch.setattr(B, "fetch_bilibili_live_batch", fake_batch)
+    # T0 现在从 registry 取适配器（devlog/240）：把替身装到注册表里
+    monkeypatch.setitem(registry._REGISTRY, "bilibili", B.fetcher)
 
     result = asyncio.run(sch.live_sweep_core(db))
     assert result.success == 1

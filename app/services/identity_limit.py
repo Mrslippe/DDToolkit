@@ -424,8 +424,23 @@ class Ledger:
         return sorted(ep for (pf, ep), w in self._windows.items()
                       if pf == platform and w.tripped)
 
+    def all_windows(self) -> dict[tuple[str, str], EndpointWindow]:
+        """全部窗口的快照（只读用途：状态上报 / 诊断）。"""
+        return dict(self._windows)
+
+    def forget(self, platform: str) -> int:
+        """丢掉该平台的**全部端点窗口**（手动解除熔断用），返回丢了几个。
+
+        ⚠️ 只动内存；落库那份由调用方删除（`clear_windows(db, platform)`）——
+        否则重启会把刚解除的熔断"想起来"。
+        """
+        keys = [k for k in self._windows if k[0] == platform]
+        for k in keys:
+            del self._windows[k]
+        return len(keys)
+
     def reset(self) -> None:
-        """清空（测试隔离用；也是将来"用户手动解除"的口子）。"""
+        """清空（测试隔离用；也是"用户手动解除"的粗粒度口子：一键清所有平台）。"""
         self._buckets.clear()
         self._health.clear()
         self._windows.clear()

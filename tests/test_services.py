@@ -27,6 +27,7 @@ from app.core.database import Base
 from app.models.vtuber import VTuber, Account, Post as PostModel, AccountStatSnapshot
 from app.repositories.vtuber_repo import PostRepo, AccountStatSnapshotRepo
 from app.services import scheduler
+from app.services.platforms import bilibili as bili_mod
 from app.services.platforms import bilibili_posts as bp
 from app.services.fetcher import (
     _detect_rate_limit, _map_dynamic_type,
@@ -482,6 +483,7 @@ def test_fetch_posts_core_absorbs_video_dynamic(db, monkeypatch):
     """P9-3（v0.9.6）：同 bvid 的「投稿动态」并入投稿帖——不重复入库，
     动态附言写进 video.note（用户口径：只保留一条 + 附注字段）。"""
     from app.services import scheduler as sch
+    from app.services.platforms import bilibili as bili_mod
 
     db.add(PostModel(platform="bilibili", platform_uid="123", platform_post_id="BV1xx",
                      type="video", title="投稿标题",
@@ -1359,9 +1361,14 @@ def test_platform_pacer_survives_new_event_loops(monkeypatch):
 
     from app.services import scheduler as sch
 
-    monkeypatch.setattr(sch._dynamics_pacer, "gap_min", 0.12)
-    monkeypatch.setattr(sch._dynamics_pacer, "gap_max", 0.12)
-    sch._dynamics_pacer._last.clear()
+    # ⚠️ 这两行以前写的是 `monkeypatch.setattr(sch._dynamics_pacer, "gap_min", 0.12)` ——
+    #    而 `gap_min` 是**带 setter 的 property**：monkeypatch 的撤销走 `setattr`，
+    #    于是它把值**永久钉进实例**（`_gap_min = 当时的设置值`）⇒ 模块级 pacer 从此
+    #    不再现读 settings（"吃热更"那半条失效）⇒ 后面 `test_dynamics_backoff` 的
+    #    "热更后立刻按新值排"会红（2026-09-27 devlog/240 顺手修）。
+    #    正确做法：**自己造一个固定值的 pacer**，别去改生产单例。
+    pacer = sch._PlatformPacer(gap_min=0.12, gap_max=0.12)
+    monkeypatch.setattr(sch, "_dynamics_pacer", pacer, raising=False)
 
     asyncio.run(sch._dynamics_pacer.wait("bilibili"))     # 第一个循环：占下时隙
     t0 = _time.monotonic()
@@ -2493,7 +2500,7 @@ def test_live_sweep_core_applies_live_fields(monkeypatch):
         return {"11073": {"live_status": 1, "live_title": "今晚开播",
                           "room_id": "123", "live_url": "https://live.bilibili.com/123"}}
 
-    monkeypatch.setattr(sch, "fetch_bilibili_live_batch", fake_batch)
+    monkeypatch.setattr(bili_mod, "fetch_bilibili_live_batch", fake_batch)
 
     result = asyncio.run(sch.live_sweep_core(db))
     assert result.success == 1

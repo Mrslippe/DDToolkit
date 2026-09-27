@@ -37,6 +37,12 @@ scheduler 统一消费框架：
   "我们自己的节奏"（`last_error.kind="identity_throttled"`）与上游故障分开报。
   **照抄 `xiaohongshu.py` 的 `_admit` / `_observe` / `_outcome_of` 三个小函数即可** ——
   令牌桶与熔断的判据已经在 `tests/test_identity_limit.py`（24 条）。
+  ⚠️ **限速表是显式的**：没写进 `ENDPOINT_RATE` 的端点**不限速**（只受熔断约束）——
+  想给新平台限速就显式加一行，别指望兜底默认值。
+- **直播状态是可选能力**（第 4 阶段 ⑧，devlog/240）：支持就设 `supports_live_batch = True`
+  并实现 `fetch_live_batch(uids) -> {uid: {...}} | None`（T0 每分钟一次）；
+  不支持就**保持默认 False** —— 调度侧会记一条日志后跳过（不是静默丢弃，也不算失败）。
+  uid 形态的过滤、端点记账都在适配器里做（看 `platforms/bilibili.py` 的 20 行实现）。
 
 ## 新平台接入步骤（以抖音为例）
 

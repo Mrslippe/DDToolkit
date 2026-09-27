@@ -209,6 +209,12 @@ B 站**不装令牌桶**（用户拍板：R27/R28/R30 已把节奏调好，且�
 
 调度细节：
 
+- **T0 走平台能力，不写死平台名**（第 4 阶段 ⑧，devlog/240）：账号按 `platform` 分组后，
+  只对 `pf.supports_live_batch` 为真的平台轮询（B 站为真，`platforms/bilibili.py::fetch_live_batch`）；
+  不支持的平台**记一条日志**后跳过（§1.4 边界②：不支持不许静默丢弃）。
+  适配器内部负责两件平台知识：**批量接口要 int uid**（非数字 uid 不发给上游并记日志）
+  与 **`live_batch` 端点的熔断检查/上报**；核心只认"问了 N 个、回来 M 个"，
+  没回来的**一律计 `failed`**。
 - `scheduler.runtime.start()`（R1，devlog/211）：**一次起齐**三条守护线程 + 外部数据 cron，
   幂等；`stop()` 按"不接新任务 → 叫醒线程 → 取消在飞轮次 → join → 关 APScheduler"收尾
   （不变量 = `ARCHITECTURE.md` §6 第 31 条）。三条线程各自的循环：

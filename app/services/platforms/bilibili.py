@@ -11,17 +11,22 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import httpx
 
 from app.services.fetcher import (
-    fetch_bilibili_user_info, fetch_bilibili_user_stat,
+    fetch_bilibili_live_batch, fetch_bilibili_user_info, fetch_bilibili_user_stat,
 )
 from app.services.platforms.base import BasePlatform
+from app.services.platforms.bilibili_posts import admit_endpoint, observe_endpoint
+
+logger = logging.getLogger(__name__)
 
 
 class BilibiliPlatform(BasePlatform):
     platform = "bilibili"
+    supports_live_batch = True      # T0 每分钟一次的批量直播状态
 
     async def fetch_user_info(self, uid: str, client: httpx.AsyncClient | None = None) -> dict | None:
         """账号资料 + 粉丝数：两个接口**并行**发出（v0.9.4 收录提速）。
@@ -42,6 +47,28 @@ class BilibiliPlatform(BasePlatform):
             return None
         merged.setdefault("followers_count", 0)
         return merged
+
+    async def fetch_live_batch(self, uids: list[str],
+                               client: httpx.AsyncClient | None = None) -> dict[str, dict] | None:
+        """批量直播状态（第 4 阶段 ⑧，devlog/240：从 `scheduler.py` 搬进来）。
+
+        两件 B 站专属的知识**住在适配器里**（以前它们写在调度核心里）：
+        ① 批量接口要 **int uid** —— 非数字 uid 在这儿被挡下并**记日志说明原因**
+           （调用方仍会把它们计进 `failed`，所以不是"静默丢弃"）；
+        ② **端点记账**（`live_batch` 的熔断检查与结果上报）也归适配器，与小红书同一分层。
+        """
+        if not admit_endpoint("live_batch"):
+            return None                      # 熔断：一个字节都不发
+        numeric = [str(u) for u in uids if str(u).strip().isdigit()]
+        bad = [str(u) for u in uids if not str(u).strip().isdigit()]
+        if bad:
+            logger.warning(f"T0 直播状态：跳过 {len(bad)} 个非数字 uid 的 bilibili 账号"
+                           f"（批量接口要 int uid）：{bad[:3]}")
+        if not numeric:
+            return {}
+        data = await fetch_bilibili_live_batch([int(u) for u in numeric], client=client)
+        observe_endpoint("live_batch", "batch", data is not None)
+        return data
 
 
 fetcher = BilibiliPlatform()

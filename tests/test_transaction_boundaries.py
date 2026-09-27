@@ -38,6 +38,7 @@ from app.main import app
 from app.models.vtuber import (
     Account, AccountStatSnapshot, LiveSession, Post, ProfileCard, VTuber,
 )
+from app.services.platforms import bilibili as bili_mod
 
 _TMPDIR = Path(tempfile.mkdtemp(prefix="ddtoolkit-test-tx-"))
 atexit.register(shutil.rmtree, _TMPDIR, ignore_errors=True)
@@ -219,7 +220,7 @@ def _patch_live_sweep(monkeypatch, live_status=1, title="今晚开播"):
                          "room_id": "123", "live_url": "https://live.bilibili.com/123"}
                 for m in mids}
 
-    monkeypatch.setattr(sch, "fetch_bilibili_live_batch", fake_batch)
+    monkeypatch.setattr(bili_mod, "fetch_bilibili_live_batch", fake_batch)
     return sch
 
 

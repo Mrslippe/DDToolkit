@@ -182,6 +182,11 @@ def _mk_accounts(db, platform, uids):
     db.commit()
 
 
+def _first_account(db):
+    from app.models.vtuber import Account
+    return db.query(Account).first()
+
+
 def test_bilibili_endpoints_are_not_rate_limited():
     """B 站**不装令牌桶**（用户拍板）：连发多次都放行，只有熔断能挡住。"""
     assert not (set(bp.BILI_ENDPOINTS) & set(il.ENDPOINT_RATE)), \
@@ -328,3 +333,94 @@ def test_load_windows_into_scheduler_is_idempotent():
     finally:
         sch._breaker_loaded = saved
         db.close()
+
+
+# ── ⑤ 手动解除 + 可见性（第 4 阶段 ⑧，devlog/240）─────────────────────
+
+def _trip(db, platform="bilibili", endpoint="video_list", targets=3):
+    """把某个端点弄成熔断（风控率 1.0、样本 24、3 个目标 ⇒ 三条件齐）。"""
+    oc.set_failure("risk_control", "412")
+    try:
+        for i in range(24):
+            bp.observe_endpoint(endpoint, f"t{i % targets}", ok=False)
+    finally:
+        oc.clear()
+    assert il.LEDGER.window(bp.bili_identity(), endpoint).tripped is True
+
+
+def test_manual_clear_forgets_memory_and_persisted_state():
+    """手动解除必须**两处都清**：只清内存的话，重启会把刚解除的熔断"想起来"。"""
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine)()
+    il.LEDGER.reset()
+    _trip(db)
+    il.LEDGER.record("weibo:abc", "dynamics_feed", "risk_control", target="w1")
+    il.save_windows(db, "bilibili", il.LEDGER)
+
+    assert sch.clear_breaker("bilibili", db) == 1
+    assert il.LEDGER.window(bp.bili_identity(), "video_list").samples == 0
+    fresh = il.Ledger()
+    assert il.load_windows(db, "bilibili", fresh) == 0, "落库那份没删掉"
+    assert il.LEDGER.window("weibo:abc", "dynamics_feed").samples == 1, "别的平台被误伤"
+    il.LEDGER.reset()
+    db.close()
+
+
+def test_manual_fetch_clears_the_breaker(monkeypatch):
+    """**手动抓取 = 显式意图** ⇒ 自动熔断不该再挡住它（同 R27"手动档照跑"的口径）。
+
+    反向验证：删掉 `async_fetch_accounts` 里那句 `clear_breaker(...)` ⇒ 本用例红。
+    """
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine)
+    db = sessionmaker(bind=engine)()
+    _mk_accounts(db, "bilibili", ["123"])
+    acc = _first_account(db)
+    il.LEDGER.reset()
+    _trip(db)
+    assert bp.admit_endpoint("video_list") is False
+
+    async def fake_one(account, session, client=None, *, pending_avatar=None):
+        return True
+
+    monkeypatch.setattr(sch, "_fetch_one_account", fake_one)
+    try:
+        # ⚠️ 不要替身 `_acquire_manual_account`：它只是"抢锁成功"的代理，
+        #    真锁没拿到的话，函数末尾的 `release()` 会抛 "release unlocked lock"。
+        asyncio.run(sch.async_fetch_accounts([acc.id], label="手动", fast=True))
+    finally:
+        db.close()
+    assert bp.admit_endpoint("video_list") is True, "手动抓取没有解除熔断"
+    il.LEDGER.reset()
+
+
+def test_breaker_status_is_visible_in_fetch_status():
+    """沉默的决定要说出来（同 R12a 风控可见性）：熔断状态进 `fetch-status`。"""
+    il.LEDGER.reset()
+    try:
+        assert sch.breaker_status() == {}
+        assert "breaker" in sch.get_fetch_status()
+        il.LEDGER.record(bp.bili_identity(), "video_list", "risk_control", target="t1")
+        snap = sch.breaker_status()
+        assert snap["bilibili"]["video_list"] == {
+            "tripped": False, "samples": 1, "risk": 1, "risk_targets": 1}
+        _trip(None)
+        assert sch.breaker_status()["bilibili"]["video_list"]["tripped"] is True
+        assert sch.get_fetch_status()["breaker"]["bilibili"]["video_list"]["tripped"] is True
+    finally:
+        il.LEDGER.reset()
+        oc.clear()
+
+
+def test_scheduler_no_longer_calls_the_bilibili_live_function():
+    """结构判据：T0 直播那条路**必须走 registry**（devlog/240）。
+
+    以前 `scheduler.py` 直接 `import fetch_bilibili_live_batch` 并写死
+    `platform == "bilibili"` —— 那是"平台框架"里最后一处硬编码（EXECUTION §1.4 的 ⑤）。
+    反向验证：把 `fetch_bilibili_live_batch` 加回 scheduler 的 import 或调用 ⇒ 本用例红。
+    """
+    src = pathlib.Path(sch.__file__).read_text(encoding="utf-8")
+    assert "fetch_bilibili_live_batch" not in src, \
+        "scheduler 又直接用了 B 站批量直播函数 —— 它该走 platforms/bilibili.py"
+    assert "supports_live_batch" in src, "T0 应当按能力筛选平台（而不是写死平台名）"

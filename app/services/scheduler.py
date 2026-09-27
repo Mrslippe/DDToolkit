@@ -29,7 +29,7 @@ from app.repositories.vtuber_repo import (
 )
 from app.services.fetcher import (
     fetch_bilibili_user_info, fetch_bilibili_user_stat,
-    fetch_bilibili_videos, fetch_bilibili_dynamics, fetch_bilibili_live_batch,
+    fetch_bilibili_videos, fetch_bilibili_dynamics,
     was_rate_limited, clear_rate_limit, rate_limit_info,
 )
 from app.services.platforms import registry
@@ -417,17 +417,6 @@ def platform_accounts_of(accounts: list[Account], platform: str) -> list[Account
     return [a for a in accounts if a.platform == platform and (a.platform_uid or "").strip()]
 
 
-def split_numeric_uids(accounts: list[Account]) -> tuple[list[Account], list[Account]]:
-    """按"uid 是不是数字"分成 `(可用, 不可用)` —— **B 站批量接口**要 int uid。
-
-    返回第二项不是"扔掉"，而是让调用方把它们**计进 failed**（§1.4 边界②：
-    「不支持」不许静默丢弃 —— 以前连 `result.failed` 都不计，界面显示"全部成功"）。
-    """
-    keep = [a for a in accounts if str(a.platform_uid).isdigit()]
-    bad = [a for a in accounts if not str(a.platform_uid).isdigit()]
-    return keep, bad
-
-
 def _account_fail_text() -> str:
     """账号抓取失败的一句话（devlog/239）：**分工不同就别用同一句话**。
 
@@ -477,6 +466,38 @@ def _ensure_breaker_loaded(db: Session) -> None:
         if n:
             logger.info(f"端点熔断窗口已恢复：{pf} {n} 个端点")
     _breaker_loaded = True
+
+
+def breaker_status() -> dict:
+    """端点熔断快照（`fetch-status.breaker`，第 4 阶段 ⑧，devlog/240）。
+
+    为什么要上报：熔断是"这个端点暂时不发请求"的**沉默**决定 —— 不上报的话，
+    用户只看到"某个平台不动了"，跟"没内容"分不清（R12a 修风控可见性时是同一条理由）。
+    """
+    out: dict[str, dict] = {}
+    for (pf, ep), w in identity_limit.LEDGER.all_windows().items():
+        if not w.samples and not w.tripped:
+            continue
+        out.setdefault(pf, {})[ep] = {
+            "tripped": w.tripped, "samples": w.samples, "risk": w.risk,
+            "risk_targets": w.risk_targets,
+        }
+    return out
+
+
+def clear_breaker(platform: str, db: Session | None = None) -> int:
+    """**手动解除**某平台的端点熔断，返回解除了几个端点。
+
+    口径与 R27 一致：**显式意图优先** —— 用户手动抓一次，就不该再被自动节流挡住
+    （冷却那套是"自动档跳过、手动档照跑"，熔断同理）。
+    ⚠️ 内存与落库**都要清**：只清内存的话，重启会把刚解除的熔断"想起来"。
+    """
+    n = identity_limit.LEDGER.forget(platform)
+    if db is not None:
+        identity_limit.clear_windows(db, platform)
+    if n:
+        logger.info(f"端点熔断已手动解除：{platform}（{n} 个端点）")
+    return n
 
 
 def _flush_breaker(db: Session, platform: str, *, force: bool = False) -> None:
@@ -537,6 +558,8 @@ def get_fetch_status() -> dict:
         "manual_running": manual_task_running(),
         # R12a：风控冷却（此前只在日志里，界面看不到）
         "rate_limit": rate_limit_status(),
+        # 第 4 阶段 ⑧（devlog/240）：端点熔断快照 —— 与上面同一条理由（沉默的决定要说出来）
+        "breaker": breaker_status(),
         # R30：静默时段快照（用户自己设的"我睡了"时段；界面/诊断据此解释"现在为什么变慢"）
         "quiet_hours": quiet_hours_status(),
     }
@@ -761,6 +784,11 @@ async def async_fetch_accounts(account_ids: list[int], *, label: str = "指定�
             logger.warning(f"{label} 没有可抓取的账号")
             result.details.append("没有可抓取的账号")
             return result
+
+        # 手动解除端点熔断（devlog/240）：**这是用户的显式动作** ⇒ 不该再被自动节流挡住
+        # （与 R27「自动档跳过冷却、手动档照跑」同一口径）。
+        for pf_name in sorted({a.platform for a in accounts}):
+            clear_breaker(pf_name, db)
 
         idx = 0
         while idx < len(accounts):
@@ -2570,6 +2598,9 @@ async def async_fetch_vtuber_posts(name: str, platform: str = "bilibili") -> dic
     client = new_async_client(15.0)
 
     try:
+        # 手动解除端点熔断（devlog/240）：用户显式点了"抓取这个 V 的帖子"
+        # ⇒ 即使这个平台的端点被判坏了，也让他试一次（显式意图优先，同 R27）。
+        clear_breaker(platform, db)
         vtubers = db.query(VTuber).filter(VTuber.name.contains(name)).all()
         if not vtubers:
             logger.warning(f"未找到名字包含 '{name}' 的 VTuber")
@@ -2890,81 +2921,92 @@ async def live_sweep_core(db: Session, client: httpx.AsyncClient | None = None) 
     if own_client:
         client = new_async_client(15.0)
 
-    def _bili_accounts() -> list[Account]:
+    def _live_accounts() -> list[Account]:
+        """有 uid 的账号（**所有平台**，按平台分组后有能力的才轮询）。"""
         return db.query(Account).filter(
-            Account.platform == "bilibili",
             Account.platform_uid != None,  # noqa: E711
             Account.platform_uid != "",
         ).all()
 
     try:
-        accounts = _bili_accounts()
+        accounts = _live_accounts()
         if not accounts:
-            logger.info("T0 直播状态：无 bilibili 账号")
+            logger.info("T0 直播状态：没有带 uid 的账号")
             return result
 
-        idx = 0
-        while idx < len(accounts):
-            window = accounts[idx:idx + 100]
-            idx += len(window)
-            chunk, bad = split_numeric_uids(window)
-            # ⚠️ §1.4 的边界②：「不支持」不许**静默丢弃** —— bilibili 的批量接口要 int uid，
-            #    非数字的账号以前是 `continue` 掉，连 `result.failed` 都不计 ⇒ 界面显示
-            #    "全部成功"而它们永远不会出现在任何计数里（devlog/228）。
-            for a in bad:
-                result.failed += 1
-                if len(result.details) < 5:
-                    result.details.append(
-                        f"跳过非数字 uid 的 bilibili 账号：{a.platform_uid!r}"
-                    )
-            if not chunk:
+        # 按平台分组（第 4 阶段 ⑧，devlog/240）：以前这里写死 `platform == "bilibili"`，
+        # 于是"直播状态"这条路上新平台要么被静默忽略、要么得回来改核心。
+        # 现在只认**能力**：适配器 `supports_live_batch` 为真才轮询，
+        # 否则**记一条日志**（每平台每轮一次）后跳过 —— 不支持要出声（§1.4 边界②）。
+        by_platform: dict[str, list[Account]] = {}
+        for a in accounts:
+            by_platform.setdefault(a.platform, []).append(a)
+        unsupported: list[str] = []
+        plan: list[tuple[object, list[Account]]] = []
+        for pf_name, accs in sorted(by_platform.items()):
+            pf_obj = registry.get_fetcher(pf_name)
+            if pf_obj is None or not getattr(pf_obj, "supports_live_batch", False):
+                unsupported.append(f"{pf_name}×{len(accs)}")
                 continue
-            if not admit_endpoint("live_batch"):
-                # 端点已熔断：本批直接跳过（**不报故障** —— 这是我们自己的判断）
-                logger.info("T0 直播状态：live_batch 端点已熔断，本批跳过")
-                idx += len(chunk)
-                continue
-            data = await fetch_bilibili_live_batch([int(a.platform_uid) for a in chunk], client=client)
-            observe_endpoint("live_batch", f"batch{idx // 100}", data is not None)
-            if data is None:
-                if was_rate_limited():
-                    logger.warning(f"T0 直播状态触发风控 ({rate_limit_info()})，"
-                                   f"冷却 {settings.RATE_LIMIT_COOLDOWN}s 起（连续命中会升级）后继续")
-                    clear_rate_limit()
-                    await _cooldown_for_rate_limit("", streams.platform)
+            plan.append((pf_obj, accs))
+        if unsupported:
+            logger.info(f"T0 直播状态：这些平台没有批量直播能力，跳过（{', '.join(unsupported)}）")
+        if not plan:
+            return result
+
+        for pf, accs in plan:
+            idx = 0
+            while idx < len(accs):
+                window = accs[idx:idx + 100]
+                idx += len(window)
+                chunk = list(window)
+                # ⚠️ 端点记账（熔断检查 + 结果上报）**搬进适配器**了：那是平台知识
+                #    （例：B 站批量接口要 int uid、非数字的要记日志说明）。核心只认
+                #    "问了 N 个、回来 M 个"，没回来的**一律计 failed**（不许静默丢弃）。
+                data = await pf.fetch_live_batch([str(a.platform_uid) for a in chunk],
+                                                 client=client)
+                if data is None:
+                    if was_rate_limited():
+                        logger.warning(f"T0 直播状态触发风控 ({rate_limit_info()})，"
+                                       f"冷却 {settings.RATE_LIMIT_COOLDOWN}s 起"
+                                       f"（连续命中会升级）后继续")
+                        clear_rate_limit()
+                        await _cooldown_for_rate_limit("", pf.platform)
+                        continue
+                    # 非风控失败（网络/接口异常 / 端点已熔断）：跳过本批，轮询宽容处理
+                    result.failed += len(chunk)
                     continue
-                # 非风控失败（网络/接口异常）：跳过本批，轮询宽容处理
-                result.failed += len(chunk)
-                idx += len(chunk)
-                continue
-            for acc in chunk:
-                hit = data.get(str(acc.platform_uid))
-                if not hit:
-                    result.failed += 1
-                    continue
-                prev_status = acc.live_status
-                acc.live_status = hit.get("live_status", 0)
-                acc.live_title = hit.get("live_title", acc.live_title)
-                acc.live_url = hit.get("live_url", acc.live_url)
-                if not acc.room_id and hit.get("room_id"):
-                    acc.room_id = str(hit["room_id"])
-                edge = acc.live_status != prev_status
-                started = bool(acc.live_status) and not prev_status
-                if edge:
-                    # 直播边沿：落统计快照（直播日历场次推导的数据来源）。
-                    # ⚠️ **必须与 live 字段同一个事务**（R3，devlog/212）：原来是两笔独立
-                    # commit ⇒ 第二笔失败时 live 状态已落盘、快照缺失，而下一轮
-                    # `prev_status == acc.live_status` ⇒ 这条边沿被**永久吞掉**（日历少一场）。
-                    _record_stat_snapshot(db, acc)
-                db.commit()
-                if edge and started:
-                    # R28②：开播意味着"内容马上会来" ⇒ 立刻把动态流恢复满速
-                    note_dynamics_activity(f"检测到开播（{acc.display_name or acc.platform_uid}）")
-                _push_account_snapshot(acc)
-                result.success += 1
-            idx += len(chunk)
-            await asyncio.sleep(random.uniform(settings.STARTUP_LIVE_INTERVAL_MIN,
-                                               settings.STARTUP_LIVE_INTERVAL_MAX))
+                for acc in chunk:
+                    hit = data.get(str(acc.platform_uid))
+                    if not hit:
+                        # 问了却没回来（例：uid 形态不是这个平台的）⇒ 计 failed
+                        result.failed += 1
+                        if len(result.details) < 5:
+                            result.details.append(
+                                f"直播状态未返回：{pf.platform}:{acc.platform_uid!r}")
+                        continue
+                    prev_status = acc.live_status
+                    acc.live_status = hit.get("live_status", 0)
+                    acc.live_title = hit.get("live_title", acc.live_title)
+                    acc.live_url = hit.get("live_url", acc.live_url)
+                    if not acc.room_id and hit.get("room_id"):
+                        acc.room_id = str(hit["room_id"])
+                    edge = acc.live_status != prev_status
+                    started = bool(acc.live_status) and not prev_status
+                    if edge:
+                        # 直播边沿：落统计快照（直播日历场次推导的数据来源）。
+                        # ⚠️ **必须与 live 字段同一个事务**（R3，devlog/212）：原来是两笔独立
+                        # commit ⇒ 第二笔失败时 live 状态已落盘、快照缺失，而下一轮
+                        # `prev_status == acc.live_status` ⇒ 这条边沿被**永久吞掉**（日历少一场）。
+                        _record_stat_snapshot(db, acc)
+                    db.commit()
+                    if edge and started:
+                        # R28②：开播意味着"内容马上会来" ⇒ 立刻把动态流恢复满速
+                        note_dynamics_activity(f"检测到开播（{acc.display_name or acc.platform_uid}）")
+                    _push_account_snapshot(acc)
+                    result.success += 1
+                await asyncio.sleep(random.uniform(settings.STARTUP_LIVE_INTERVAL_MIN,
+                                                   settings.STARTUP_LIVE_INTERVAL_MAX))
     except Exception as e:
         logger.error(f"T0 直播状态异常: {e}", exc_info=True)
         db.rollback()

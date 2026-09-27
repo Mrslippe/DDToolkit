@@ -23,6 +23,7 @@ from sqlalchemy.orm import sessionmaker
 from app.core.database import Base
 from app.models.vtuber import Account, VTuber
 from app.services import scheduler as sch
+from app.services.platforms import bilibili as bili_mod
 
 # 时间下限断言的容差（2026-09-25，CI 首跑抓到的**浮点 ULP**问题）。
 #
@@ -190,7 +191,7 @@ def test_live_start_resets_idle_streak(db, monkeypatch):
                                         "live_url": "https://live.bilibili.com/1",
                                         "room_id": 1}}
 
-    monkeypatch.setattr(sch, "fetch_bilibili_live_batch", _fake_batch)
+    monkeypatch.setattr(bili_mod, "fetch_bilibili_live_batch", _fake_batch)
     monkeypatch.setattr(sch, "_dynamics_idle_streak", 9)
 
     asyncio.run(sch.live_sweep_core(db))

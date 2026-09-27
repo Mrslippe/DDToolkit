@@ -34,6 +34,10 @@ import httpx
 
 class BasePlatform:
     platform: str = ""
+    # 支持"批量直播状态"吗（T0 每分钟一次的那条路）。
+    # ⚠️ 默认 **False**：调度侧据此**结构化跳过**并记一条日志 —— 以前这条路写死 B 站，
+    #    新平台要么被静默忽略、要么得回来改核心（第 4 阶段 ⑧，devlog/240）。
+    supports_live_batch: bool = False
 
     async def fetch_user_info(self, uid: str, client: httpx.AsyncClient | None = None) -> dict | None:
         """用户信息 → {name, sign, avatar, followers_count, url, ...平台附加字段}；失败 None。
@@ -61,3 +65,15 @@ class BasePlatform:
         """详情补全（就地修改 item，如长文全文/视频详情）。
         返回是否发起过网络请求（调用方据此节流）。默认无操作。"""
         return False
+
+    async def fetch_live_batch(self, uids: list[str],
+                               client: httpx.AsyncClient | None = None) -> dict[str, dict] | None:
+        """**批量**直播状态（T0 专用）→ `{uid(str): {"live_status", "live_title", "room_id", "live_url"}}`。
+
+        - 只在 `supports_live_batch=True` 时被调用；
+        - `None` = 这次**失败了**（风控/网络），调用方按自愈策略处理；
+        - **问了但没回来的 uid**（例：不是这个平台的 uid 形态）由适配器自己记日志说明原因，
+          调用方一律把它们计进 `failed` —— 「不支持」不许静默丢弃（§1.4 边界②）。
+        - 默认实现：**不支持**（返回 None 且 `supports_live_batch=False`，调度侧不会走到这里）。
+        """
+        return None
