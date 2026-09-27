@@ -370,6 +370,11 @@ def test_manual_clear_forgets_memory_and_persisted_state():
 def test_manual_fetch_clears_the_breaker(monkeypatch):
     """**手动抓取 = 显式意图** ⇒ 自动熔断不该再挡住它（同 R27"手动档照跑"的口径）。
 
+    ⚠️ 必须把 `SessionLocal` 换成测试库：`async_fetch_accounts` **自带会话**
+    （`SessionLocal()`，走真实数据目录）。本地开发库恰好有 `accounts` 表 ⇒ 以前这条
+    在本地"绿得莫名其妙"，而干净 clone / CI 上直接 `no such table: accounts`
+    （2026-09-27 实测：本地绿、CI 三条腿红）。
+
     反向验证：删掉 `async_fetch_accounts` 里那句 `clear_breaker(...)` ⇒ 本用例红。
     """
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
@@ -385,14 +390,13 @@ def test_manual_fetch_clears_the_breaker(monkeypatch):
         return True
 
     monkeypatch.setattr(sch, "_fetch_one_account", fake_one)
-    try:
-        # ⚠️ 不要替身 `_acquire_manual_account`：它只是"抢锁成功"的代理，
-        #    真锁没拿到的话，函数末尾的 `release()` 会抛 "release unlocked lock"。
-        asyncio.run(sch.async_fetch_accounts([acc.id], label="手动", fast=True))
-    finally:
-        db.close()
+    monkeypatch.setattr(sch, "SessionLocal", lambda: db)
+    # ⚠️ 不要替身 `_acquire_manual_account`：它只是"抢锁成功"的代理，
+    #    真锁没拿到的话，函数末尾的 `release()` 会抛 "release unlocked lock"。
+    asyncio.run(sch.async_fetch_accounts([acc.id], label="手动", fast=True))
     assert bp.admit_endpoint("video_list") is True, "手动抓取没有解除熔断"
     il.LEDGER.reset()
+    db.close()
 
 
 def test_breaker_status_is_visible_in_fetch_status():
