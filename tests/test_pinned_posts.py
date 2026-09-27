@@ -312,12 +312,11 @@ def test_fetch_platform_posts_refreshes_pinned_weibo(monkeypatch, db):
     class _PF:
         platform = "weibo"
 
-        async def fetch_post_page(self, uid, page, client=None):
-            if page == 1:
-                return {"items": [_post_item("PIN", platform="weibo", summary="新摘要"),
-                                  _post_item("FRESH", platform="weibo")],
-                        "has_more": False, "pinned_ids": ["PIN"]}
-            return {"items": [], "has_more": False}
+        async def fetch_post_page(self, uid, cursor=None, client=None):
+            # cursor 语义（devlog/238）：不透明游标；这里只有一页，`has_more=False`
+            return {"items": [_post_item("PIN", platform="weibo", summary="新摘要"),
+                              _post_item("FRESH", platform="weibo")],
+                    "has_more": False, "next_cursor": None, "pinned_ids": ["PIN"]}
 
         async def enrich(self, item, client=None):
             enrich_calls.append(item["platform_post_id"])

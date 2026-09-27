@@ -566,6 +566,7 @@
 | 第 4 阶段 ④（第三刀-4 前端，**收口**）：**小红书三处界面接线** —— 登录浮窗第三 Tab（粘贴 cookie，Tab 清单收进 `platformLogin.ts::LOGIN_TABS` 单一事实来源）+ 添加账号下拉 + 添加 V 的「小红书 uid」钮（`.av-xhs-btn`，粘主页链接也算：`parseXhsUid` 摘 uid，摘不出则禁用）；21 条 vitest + 探针 6+3 条，反向验证 6 刀 | 235 |
 | 第 4 阶段 ①（第二刀）：**B 站专属实现搬出 `scheduler.py`** —— 五个 B 站专属函数整块搬进 `platforms/bilibili_posts.py`（−222 行），`uid: int → str`；`_safe_json_parse` 提为 `core/jsonsafe.py` 破环；⚠️ 5 处 `sch.<名字>` monkeypatch 会静默失效（已跟着搬）；3 条新判据 + 反向验证 4/4 | 236 |
 | 第 4 阶段 ⑤：**身份级限速 + 四类响应 + 签名影子比对** —— 新增 `services/identity_limit.py`（四类响应的策略表 / **(身份,端点)** 令牌桶 / 端点熔断三条件）与 `platforms/shadow.py`（抽样比结构常量、不一致重签再判、比不出来**绝不禁用**），接在小红书与调度循环上；顺手把 5xx 从"业务失败"改判 `server_error`；26 条新判据 + 反向验证 6/6 | 237 |
+| 第 4 阶段 ⑥（**收口**）：**`BasePlatform` 的 cursor 语义** —— `fetch_post_page(uid, cursor)` 返回 `{items, has_more, next_cursor}`，**核心不解析游标**（AST 判据）；小红书删掉"cursor 藏进适配器字典"的过渡实现变成无状态，微博加一行页码换算；缺游标 ⇒ 当到底（不是故障）；8 条新判据 + 反向验证 6/6（含"变异把脚本挂死"的教训） | 238 |
 
 > **编号列怎么写**（2026-09-23 定）：
 > - 有 devlog 的批次 → **裸编号**（`| 097 |`）；

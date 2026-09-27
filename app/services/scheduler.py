@@ -2029,15 +2029,22 @@ async def _fetch_platform_posts(pf, uid: str, pages: int, db: Session,
                 result.stored += saved
             pending = []
 
-        page = 1
+        # 翻页：**不透明 cursor**（第 4 阶段 ⑥，devlog/238）。核心只做两件事 ——
+        # 把上一页给的 `next_cursor` 原样带回去、判空；**绝不解析它**
+        # （页码平台把它当页码，cursor 平台把它当游标，核心不需要知道区别）。
+        # `page` 是我们自己数出来的次数，只用于 `pages` 上限、日志与"是不是第一页"。
+        cursor: str | None = None
+        page = 0
+        first_page = True
         rl_retries = 0
         latest_new = 0      # 「最新 N 条」模式计数（limit_latest，收录首屏用）
         while True:
-            if pages == 0 or (pages > 0 and page > pages):
+            if pages == 0 or (pages > 0 and page >= pages):
                 if pages != 0:
                     result.stop_reason = "page_limit"
                 break
-            data = await pf.fetch_post_page(str(uid), page, client=client)
+            page += 1
+            data = await pf.fetch_post_page(str(uid), cursor, client=client)
             if was_rate_limited():
                 # 风控断点续抓（A）：落盘 → 冷却 → 从同一页重试，耗尽次数才放弃
                 _flush_pending()
@@ -2109,7 +2116,7 @@ async def _fetch_platform_posts(pf, uid: str, pages: int, db: Session,
                     if latest_new >= limit_latest:
                         _flush_pending()
                         return result
-            if page == 1:
+            if first_page:
                 # R35 置顶集合同步（口径同 B 站分支）；注意 limit_latest 模式会在
                 # 上面的 for 里直接 return，那条路径不同步置顶（下轮补上即可）
                 _flush_pending()
@@ -2126,7 +2133,17 @@ async def _fetch_platform_posts(pf, uid: str, pages: int, db: Session,
             if not data.get("has_more"):
                 result.natural_end = True
                 break
-            page += 1
+            nxt = data.get("next_cursor")
+            if not nxt:
+                # 说还有更多却没给游标 ⇒ 没法继续。**当自然结束**处理并留一条日志：
+                # 报成错误会让整个平台看起来在故障，而实际只是"这一页走到头了"
+                # （适配器契约见 `platforms/base.py` 的 docstring）。
+                logger.warning(f"{platform}:{uid} has_more=True 但没给 next_cursor，"
+                               f"按到底处理（第 {page} 页）")
+                result.natural_end = True
+                break
+            cursor = str(nxt)
+            first_page = False
             await asyncio.sleep(20)
 
         _flush_pending()

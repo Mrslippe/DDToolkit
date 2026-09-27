@@ -29,6 +29,22 @@ from app.services.weibo_auth import weibo_auth_manager
 
 logger = logging.getLogger(__name__)
 
+
+def _page_of_cursor(cursor: str | None) -> int:
+    """不透明 cursor → mymblog 的页码（`None` = 第 1 页）。
+
+    ⚠️ 坏值**不抛异常**：退回第 1 页并记一条日志 —— 翻页参数坏掉不该让整轮抓取炸，
+    而"从第 1 页重来"是可恢复的（去重会挡住重复入库）。
+    """
+    if cursor is None or cursor == "":
+        return 1
+    try:
+        page = int(str(cursor))
+    except (TypeError, ValueError):
+        logger.warning(f"微博 cursor 不是页码（{cursor!r}），按第 1 页处理")
+        return 1
+    return page if page >= 1 else 1
+
 _PC_PROFILE_URL = "https://weibo.com/ajax/profile/info"
 _PC_MYMBLOG_URL = "https://weibo.com/ajax/statuses/mymblog"
 _PC_SHOW_URL = "https://weibo.com/ajax/statuses/show"
@@ -290,7 +306,15 @@ class WeiboPlatform(BasePlatform):
             logger.warning(f"微博用户信息抓取异常: uid={uid}, {type(e).__name__}: {e}")
             return None
 
-    async def fetch_post_page(self, uid: str, page: int, client: httpx.AsyncClient | None = None) -> dict | None:
+    async def fetch_post_page(self, uid: str, cursor: str | None = None,
+                              client: httpx.AsyncClient | None = None) -> dict | None:
+        """一页微博（PC mymblog，**页码**接口）+ 统一 cursor 返回（devlog/238）。
+
+        本平台是页码语义 ⇒ cursor 就是页码的字符串形式（`None` = 第 1 页）。
+        ⚠️ 上游给的 `since_id` 只用来判 `has_more`（它**不是**可回传的 cursor：
+        mymblog 只认 `page`），所以下一页的 cursor 由我们 +1 得到。
+        """
+        page = _page_of_cursor(cursor)
         try:
             async with _client_ctx(client) as http:
                 resp = await http.get(
@@ -320,7 +344,8 @@ class WeiboPlatform(BasePlatform):
                 # 的置顶帖」会让整页后面的新帖全部漏抓（2026-09-09 用户反馈）
                 pinned_ids = [str(it["id"]) for it in raw_items if it.get("isTop")]
                 has_more = bool(items) and bool(d.get("since_id"))
-                return {"items": items, "has_more": has_more, "pinned_ids": pinned_ids}
+                return {"items": items, "has_more": has_more, "pinned_ids": pinned_ids,
+                        "next_cursor": str(page + 1) if has_more else None}
         except Exception as e:
             logger.warning(f"微博列表抓取异常: uid={uid}, {type(e).__name__}: {e}")
             return None

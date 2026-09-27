@@ -18,12 +18,18 @@
 3. **`xsec_token` 不是凭证、不能当去重键**（它会过期）⇒ 只进 `raw_json` 当上下文缓存
    （详情接口 `feed` 需要它，见调研 §2.4）。
 
-## 过渡形状：cursor 编码进 `page`
+## 翻页：cursor 语义（第 4 阶段 ⑥，devlog/238）
 
-`BasePlatform.fetch_post_page(uid, page)` 是**页码**语义，而小红书是 **cursor** 语义。
-按 `EXECUTION.md` §1.4 的既定顺序（**先落平台再提炼 `BasePlatform`**），这一刀不改接口，
-改为在适配器内部按 uid 记住"上一页返回的 cursor"：`page=1` 即从头开始。
-⚠️ 这是**过渡**：真正的修法是给 `BasePlatform` 加 cursor（调研 §5.2），落完这个平台再提炼。
+`BasePlatform.fetch_post_page` 现在收**不透明 cursor**（`None` = 从头开始，返回 `next_cursor`），
+所以这里**不再自己记"上一页给到哪"**：
+
+```python
+# 旧（过渡形状，已删）：self._cursor[uid] = data["cursor"]
+# 新：把服务端给的串原样当 next_cursor 交回核心，下一页原样带回来
+```
+
+好处不只是好看：分页状态**回到调用方**手里 —— 换账号、重抓、并发重入都不会串台，
+而"这一页是谁的"也不必靠适配器里那张按 uid 的字典去猜（那张字典正是最脏的一处状态）。
 
 ## 身份级限速（第 4 阶段 ⑤，devlog/237；调研 §5.3.1）
 
@@ -94,8 +100,7 @@ class XiaohongshuPlatform(BasePlatform):
         self._signer: Signer = signer or NullSigner()
         # 身份级额度台账：默认共用进程内单例；测试注入自己的（可控时钟）
         self._ledger = ledger if ledger is not None else identity_limit.LEDGER
-        # uid → 下一页 cursor（页码语义的过渡实现，见文件头）
-        self._cursor: dict[str, str] = {}
+        # ⚠️ 这里**没有**分页状态：cursor 由核心循环拿着（第 4 阶段 ⑥，devlog/238）。
         # 最近一次失败的结构化原因（调用方/排查用；不改 BasePlatform 的返回形状）
         self.last_error: Optional[dict] = None
 
@@ -136,9 +141,8 @@ class XiaohongshuPlatform(BasePlatform):
         kind = classify_http(resp.status_code, body.get("code"), str(body.get("msg") or ""))
         self.last_error = {"kind": kind, "status": resp.status_code,
                            "code": body.get("code"), "msg": body.get("msg")}
-        if kind == "cookie_invalid":
-            # cookie 失效是"身份级"事件：别继续拿它打接口
-            self._cursor.clear()
+        # cookie 失效是"身份级"事件：调用方（核心循环）见到失败就停这一轮，
+        # 不再需要适配器去清什么内部游标 —— 分页状态已经不住在这里了
 
     # ── 身份级限速（调研 §5.3.1，devlog/237）─────────────────────────────
     # 粒度是 **(身份, 端点)**：身份是**我们这份 cookie**（不是被查的 uid）——
@@ -200,19 +204,20 @@ class XiaohongshuPlatform(BasePlatform):
             if own:
                 await client.aclose()
 
-    async def fetch_post_page(self, uid: str, page: int,
+    async def fetch_post_page(self, uid: str, cursor: str | None = None,
                               client: httpx.AsyncClient | None = None) -> dict | None:
+        """一页笔记（cursor 语义，devlog/238）：`cursor=None` = 从头开始。
+
+        服务端给的 `cursor` **原样**作为 `next_cursor` 交回核心（我们不改写、不解析它）。
+        """
         if not self._admit(uid, "user_posted"):
             return None
         own = client is None
         if own:
             client = httpx.AsyncClient(timeout=15.0)
         try:
-            if page <= 1:
-                self._cursor[str(uid)] = ""      # 第一页 = 从头开始（换账号/重抓也要能重来）
-            cursor = self._cursor.get(str(uid), "")
             path = "/api/sns/web/v1/user_posted"
-            params = {"num": 30, "cursor": cursor, "user_id": str(uid),
+            params = {"num": 30, "cursor": cursor or "", "user_id": str(uid),
                       "image_formats": "jpg,webp,avif", "xsec_source": "pc_user"}
             # ⚠️ 签名与请求**必须同一组键值**；`safe=","` 保证逗号不被编码（调研 §2.2）
             headers = self._signed_headers("GET", path, params)
@@ -227,11 +232,13 @@ class XiaohongshuPlatform(BasePlatform):
             self._observe(uid, "user_posted", "ok")
             data = body or {}
             notes = data.get("notes") or []
-            if "cursor" in data:
-                self._cursor[str(uid)] = str(data["cursor"])   # 服务端给数值，必须转字符串
+            has_more = bool(data.get("has_more")) and bool(notes)
+            # 服务端给数值时也要转字符串（cursor 对核心是不透明的字符串）
+            nxt = data.get("cursor")
             return {
                 "items": [self._to_item(uid, n) for n in notes],
-                "has_more": bool(data.get("has_more")) and bool(notes),
+                "has_more": has_more,
+                "next_cursor": (str(nxt) if nxt not in (None, "") else None) if has_more else None,
             }
         except SignerUnavailable:
             return None

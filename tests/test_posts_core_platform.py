@@ -210,3 +210,133 @@ def test_uid_is_a_string_and_not_assumed_numeric():
     assert row.platform_uid == "xhs_7f3a91c2", "落库的 platform_uid 被改写了"
     assert result.stored == 1
     db.close()
+
+
+# ── 第 4 阶段 ⑥（devlog/238）：单流循环的 **cursor 语义** ─────────────────
+
+class _CursorPF:
+    """一个**cursor 平台**的假适配器：游标是不透明字符串，自己"发"下一串。
+
+    ⚠️ 带**硬闸**：同一个游标最多服务 3 次，之后返回空页。这不是凑数 ——
+    反向验证里"核心没把游标带回去"这类变异会让核心**永远重抓第一页**，
+    没有这道闸，那条变异就是一个死循环（2026-09-27 实测把反向验证脚本挂到超时）。
+    """
+
+    MAX_SAME_CURSOR = 3
+
+    platform = "weibo"
+
+    def __init__(self, pages: list[dict]) -> None:
+        self.pages = pages
+        self.seen: list[str | None] = []
+        self._count: dict[str | None, int] = {}
+        # 游标 → 下一页下标（**不解析游标内容**：它本来就不透明，正是本批要保的性质）
+        self._idx: dict[str | None, int] = {None: 0}
+        for i, page in enumerate(pages[:-1]):
+            self._idx[page["next_cursor"]] = i + 1
+
+    async def fetch_post_page(self, uid, cursor=None, client=None):
+        self.seen.append(cursor)
+        self._count[cursor] = self._count.get(cursor, 0) + 1
+        if self._count[cursor] > self.MAX_SAME_CURSOR:
+            return {"items": [], "has_more": False, "next_cursor": None}
+        return self.pages[self._idx[cursor]]
+
+    async def enrich(self, item, client=None):
+        return False
+
+
+async def _no_sleep(_seconds):
+    """页间 20s 的等待在测试里没必要（`test_weibo.py` 同一套做法）。"""
+    return None
+
+
+@pytest.fixture(autouse=True)
+def _fast_pages(monkeypatch):
+    """本文件的用例都不需要真等页间隔（20s × 页数会把这一个文件拖成分钟级）。"""
+    monkeypatch.setattr("asyncio.sleep", _no_sleep)
+
+
+def _item(pid: str) -> dict:
+    return {"platform": "weibo", "platform_uid": "9001", "platform_post_id": pid,
+            "type": "text", "title": pid, "body_json": "{}", "stats_json": "{}"}
+
+
+def test_single_stream_loop_passes_cursors_back_verbatim():
+    """cursor 语义（devlog/238）：核心把上一页给的游标**原样**带回去，一页页走到底。
+
+    反向验证：把 `cursor = str(nxt)` 改成 `cursor = None` ⇒ 本用例红（会一直重抓第一页）。
+    """
+    pf = _CursorPF([
+        {"items": [_item("W1")], "has_more": True, "next_cursor": "opaque-A"},
+        {"items": [_item("W2")], "has_more": True, "next_cursor": "opaque-B"},
+        {"items": [_item("W3")], "has_more": False, "next_cursor": None},
+    ])
+    db = _fresh_db()
+    result = asyncio.run(sch._fetch_platform_posts(pf, "9001", -1, db))
+
+    assert pf.seen == [None, "opaque-A", "opaque-B"], (
+        f"核心没有把游标原样带回去：{pf.seen}"
+    )
+    assert result.stored == 3 and result.natural_end is True
+    db.close()
+
+
+def test_has_more_without_a_cursor_is_a_natural_end_not_a_failure():
+    """适配器说"还有更多"却没给游标 ⇒ 当**到底**处理（留一条日志），不报成故障。
+
+    这条防的是"契约漏一半"：报成 error/network_error 会让整个平台看起来在故障，
+    而实际只是这一页到头了（契约见 `platforms/base.py`）。
+    """
+    pf = _CursorPF([{"items": [_item("W1")], "has_more": True, "next_cursor": None}])
+    db = _fresh_db()
+    result = asyncio.run(sch._fetch_platform_posts(pf, "9001", -1, db))
+
+    assert result.natural_end is True
+    assert result.stop_reason != "network_error" and result.stop_reason != "error"
+    assert result.stored == 1
+    assert pf.seen == [None], "不该拿一个空游标再问一次"
+    db.close()
+
+
+def test_single_stream_pages_limit_still_counts_requests():
+    """`pages` 上限仍然按**请求次数**算（cursor 之后核心自己数）：pages=1 ⇒ 只发一发。"""
+    pf = _CursorPF([
+        {"items": [_item("W1")], "has_more": True, "next_cursor": "opaque-A"},
+        {"items": [_item("W2")], "has_more": False, "next_cursor": None},
+    ])
+    db = _fresh_db()
+    result = asyncio.run(sch._fetch_platform_posts(pf, "9001", 1, db))
+
+    assert pf.seen == [None], f"pages=1 只该发一次请求：{pf.seen}"
+    assert result.stop_reason == "page_limit"
+    db.close()
+
+
+def test_core_does_not_parse_the_cursor():
+    """结构判据：单流循环里 **cursor 是不透明的** —— 不许对它做算术、转数字或调方法。
+
+    页码平台与 cursor 平台的差别**必须留在适配器里**（`weibo._page_of_cursor` 就是那层转换）。
+    漏回核心的后果：核心开始"理解"游标 ⇒ 换平台时又得改核心（正是第一刀要消灭的东西）。
+
+    反向验证：把 `cursor = str(nxt)` 改成 `cursor = int(nxt)` ⇒ 本用例红。
+    """
+    tree = ast.parse(SCHEDULER_SRC)
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+              and n.name == "_fetch_platform_posts")
+    names = {"cursor", "nxt"}
+    bad: list[str] = []
+    for node in ast.walk(fn):
+        if isinstance(node, ast.BinOp) and (
+                isinstance(node.left, ast.Name) and node.left.id in names
+                or isinstance(node.right, ast.Name) and node.right.id in names):
+            bad.append("对 cursor 做算术")
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) \
+                and node.func.id in ("int", "float") \
+                and any(isinstance(a, ast.Name) and a.id in names for a in node.args):
+            bad.append(f"把 cursor 转成 {node.func.id}()")
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) \
+                and node.value.id in names:
+            bad.append(f"对 cursor 调 .{node.attr}")
+    assert bad == [], f"核心开始解析游标了：{sorted(set(bad))} —— 它必须对核心不透明"

@@ -75,7 +75,7 @@ def test_signed_headers_are_sent_and_commas_are_not_encoded():
     signer = FakeSigner()
     client = FakeClient([FakeResp(payload={"success": True, "data": {"notes": [NOTE],
                                                                     "cursor": "c1", "has_more": True}})])
-    out = asyncio.run(_pf(signer=signer).fetch_post_page("u1", 1, client=client))
+    out = asyncio.run(_pf(signer=signer).fetch_post_page("u1", None, client=client))
     url, headers = client.calls[0]
     assert headers["x-s"] == "FAKE-S" and headers["x-t"] and headers["x-s-common"]
     assert headers["cookie"] == "web_session=xyz"
@@ -91,7 +91,7 @@ def test_post_id_stays_a_string():
     big = {"note_id": 6500000000000000000, "type": "video", "display_title": "x",
            "xsec_token": "TK"}          # 故意给整数 id
     client = FakeClient([FakeResp(payload={"success": True, "data": {"notes": [big], "has_more": False}})])
-    out = asyncio.run(_pf(signer=FakeSigner()).fetch_post_page("u1", 1, client=client))
+    out = asyncio.run(_pf(signer=FakeSigner()).fetch_post_page("u1", None, client=client))
     item = out["items"][0]
     assert isinstance(item["platform_post_id"], str)
     assert item["type"] == "video"
@@ -102,12 +102,15 @@ def test_post_id_stays_a_string():
         assert isinstance(item[k], str), f"{k} 必须是 JSON 串"
 
 
-def test_cursor_is_chained_across_pages_and_reset_on_page_1():
-    """④ cursor 串页：第 1 页用空 cursor，第 2 页用上一页返回的 cursor；回到第 1 页要重来。
+def test_adapter_is_stateless_about_cursor():
+    """④ cursor **不透明且无状态**（第 4 阶段 ⑥，devlog/238）。
 
-    ⚠️ 每翻一页都要**把时钟往前推**（devlog/237 起 `user_posted` 的身份级额度是
-    每 8.3s 一次）：不推时钟的话第 2 页会被令牌桶挡下（一个字节都不发），
-    这里量到的就是"额度生效"而不是 cursor 串页 —— 两件事分开验。
+    适配器只做两件事：把收到的 cursor 原样放进 query、把服务端给的串原样当 `next_cursor`
+    交回去。**它自己不记"上一页给到哪"** —— 那正是旧过渡实现（`self._cursor[uid]`）的病根：
+    分页状态住进适配器后，换账号/重抓/并发重入都会串台。
+
+    ⚠️ 每翻一页都要**把时钟往前推**（devlog/237 起 `user_posted` 的身份级额度是每 8.3s 一次），
+    否则第 2 页会被令牌桶挡下（一个字节都不发）—— 那是另一条判据的事，别混在这里。
     """
     clock = {"t": 1000.0}
     pf = _pf(signer=FakeSigner(), ledger=identity_limit.Ledger(now=lambda: clock["t"]))
@@ -116,14 +119,18 @@ def test_cursor_is_chained_across_pages_and_reset_on_page_1():
         FakeResp(payload={"success": True, "data": {"notes": [NOTE], "cursor": "CUR2", "has_more": False}}),
         FakeResp(payload={"success": True, "data": {"notes": [NOTE], "cursor": "CUR3", "has_more": True}}),
     ])
-    asyncio.run(pf.fetch_post_page("u1", 1, client=client))
+    first = asyncio.run(pf.fetch_post_page("u1", None, client=client))
     clock["t"] += 10          # 等够一个令牌（8.3s）
-    asyncio.run(pf.fetch_post_page("u1", 2, client=client))
+    second = asyncio.run(pf.fetch_post_page("u1", first["next_cursor"], client=client))
     clock["t"] += 10
-    asyncio.run(pf.fetch_post_page("u1", 1, client=client))
-    assert "cursor=&user_id" in client.calls[0][0]
-    assert "cursor=CUR1" in client.calls[1][0]
-    assert "cursor=&user_id" in client.calls[2][0], "回到第 1 页必须从头开始"
+    third = asyncio.run(pf.fetch_post_page("u1", None, client=client))
+
+    assert "cursor=&user_id" in client.calls[0][0], "从头开始 = 空 cursor"
+    assert first["next_cursor"] == "CUR1", "服务端给的游标要原样交回"
+    assert "cursor=CUR1" in client.calls[1][0], "带回来的游标要原样进 query"
+    assert second["next_cursor"] is None, "has_more=False 时不该再给游标"
+    assert "cursor=&user_id" in client.calls[2][0], "再问一次仍是从头开始（适配器不留状态）"
+    assert third["next_cursor"] == "CUR3"
 
 
 def test_failures_are_classified():
@@ -141,7 +148,7 @@ def test_failures_are_classified():
     pf = _pf(signer=FakeSigner())
     client = FakeClient([FakeResp(status=403, payload={"success": False, "code": -101,
                                                        "msg": "登录已过期"})])
-    assert asyncio.run(pf.fetch_post_page("u1", 1, client=client)) is None
+    assert asyncio.run(pf.fetch_post_page("u1", None, client=client)) is None
     assert pf.last_error["kind"] == "cookie_invalid"
 
 
@@ -307,7 +314,7 @@ def test_throttled_identity_sends_nothing_upstream():
     assert len(client.calls) == 1
 
     # 同一个身份、同一个端点、时间没走 ⇒ 第二发被令牌桶挡下
-    assert asyncio.run(pf.fetch_post_page("u1", 2, client=client)) is None
+    assert asyncio.run(pf.fetch_post_page("u1", "CUR1", client=client)) is None
     assert len(client.calls) == 1, "被节流时不该发请求"
     assert pf.last_error["kind"] == "identity_throttled"
     assert pf.last_error["retry_after"] > 0
@@ -315,7 +322,7 @@ def test_throttled_identity_sends_nothing_upstream():
 
     # 时间走够 ⇒ 恢复正常（节流不是"坏了"）
     clock["t"] += 10
-    assert asyncio.run(pf.fetch_post_page("u1", 2, client=client)) is not None
+    assert asyncio.run(pf.fetch_post_page("u1", "CUR1", client=client)) is not None
     assert len(client.calls) == 2
 
 
@@ -329,7 +336,7 @@ def test_throttle_is_not_reported_as_a_network_failure():
         platform = "xiaohongshu"
         last_error = {"kind": "identity_throttled"}
 
-        async def fetch_post_page(self, uid, page, client=None):
+        async def fetch_post_page(self, uid, cursor=None, client=None):
             return None
 
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
@@ -350,14 +357,14 @@ def test_response_classes_drive_the_ledger():
 
     # 风控（403 兜底）⇒ 身份掉分
     client = FakeClient([FakeResp(status=403, payload={"success": False, "code": -1, "msg": ""})])
-    assert asyncio.run(pf.fetch_post_page("u1", 1, client=client)) is None
+    assert asyncio.run(pf.fetch_post_page("u1", None, client=client)) is None
     h = ledger.health(ident)
     assert h.risk == 1 and h.consecutive_fails == 1 and h.score < 1.0
 
     # 上游 5xx ⇒ 网络错：不入健康度、退还令牌（下一发立刻能走）
     clock["t"] += 10
     client = FakeClient([FakeResp(status=502, payload={"success": False, "code": -2, "msg": "boom"})])
-    assert asyncio.run(pf.fetch_post_page("u1", 2, client=client)) is None
+    assert asyncio.run(pf.fetch_post_page("u1", "C1", client=client)) is None
     h2 = ledger.health(ident)
     assert h2.network == 1 and h2.risk == 1 and h2.score == h.score
     assert ledger.acquire(ident, "user_posted").allowed, "网络错必须退还令牌"
@@ -365,6 +372,6 @@ def test_response_classes_drive_the_ledger():
     # "业务失败"（纯 404 且无风控字样）⇒ 健康度不动
     clock["t"] += 10
     client = FakeClient([FakeResp(status=404, payload={"success": False, "code": -3, "msg": "not found"})])
-    assert asyncio.run(pf.fetch_post_page("u1", 3, client=client)) is None
+    assert asyncio.run(pf.fetch_post_page("u1", "C2", client=client)) is None
     h3 = ledger.health(ident)
     assert h3.samples == h2.samples and h3.score == h2.score, "业务失败不该动身份健康度"

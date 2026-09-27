@@ -314,6 +314,8 @@ flowchart LR
 ```
 
 - `BasePlatform` 只定义三个方法：`fetch_user_info` / `fetch_post_page` / `enrich`（可选）；
+  **翻页是不透明 cursor**（第 4 阶段 ⑥，devlog/238）：`fetch_post_page(uid, cursor)`
+  返回 `{"items", "has_more", "next_cursor"}`；页码平台把页码当 cursor 用，核心**不解析**它；
 - 新平台 = 继承 + 在 `platforms/registry.py` 注册一行，调度器自动获得账号抓取、
   全量/增量帖子抓取、风控退避与完成报告（详见 `docs/platforms-extension-guide.md`）；
 - B 站请求走 `fetcher.py`：WBI 签名（`wbi.py`，混钥缓存）+ `auth_manager.build_headers()`

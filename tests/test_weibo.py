@@ -15,6 +15,7 @@ from sqlalchemy.orm import sessionmaker
 from app.core.database import Base
 from app.models.vtuber import Account, Post as PostModel
 from app.services.platforms import weibo, registry
+from app.services.platforms.weibo import _page_of_cursor
 
 
 @pytest.fixture
@@ -197,13 +198,41 @@ def test_weibo_fetch_post_page():
 
     async def run():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as c:
-            return await weibo.fetcher.fetch_post_page("3669102477", 1, client=c)
+            return await weibo.fetcher.fetch_post_page("3669102477", None, client=c)
 
     page = asyncio.run(run())
     assert page is not None
     assert page["has_more"] is True
     assert len(page["items"]) == 1
     assert page["items"][0]["platform_post_id"] == "5099666961200194"
+    # cursor 语义（devlog/238）：页码平台把页码当 cursor 用
+    assert page["next_cursor"] == "2", "has_more=True 时必须给出下一页的游标"
+
+
+def test_weibo_cursor_is_the_page_number():
+    """微博是**页码**平台 ⇒ cursor 就是页码串（`None` = 第 1 页，坏值退回第 1 页）。
+
+    这条同时钉住"页码与游标的换算**只住在适配器里**"——核心循环对游标不透明
+    （判据在 `tests/test_posts_core_platform.py::test_core_does_not_parse_the_cursor`）。
+    """
+    seen: list[str] = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        return httpx.Response(200, json=_list_json())
+
+    async def fetch(cursor):
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as c:
+            return await weibo.fetcher.fetch_post_page("3669102477", cursor, client=c)
+
+    assert _page_of_cursor(None) == 1
+    assert _page_of_cursor("") == 1
+    assert _page_of_cursor("3") == 3
+    assert _page_of_cursor("坏值") == 1        # 坏值不抛异常：退回第 1 页（去重会挡住重复入库）
+    assert _page_of_cursor("0") == 1
+
+    asyncio.run(fetch("3"))
+    assert "page=3" in seen[0], seen[0]
 
 
 def test_weibo_login_required_marks_auth_invalid(monkeypatch):
@@ -230,7 +259,7 @@ def test_weibo_login_required_marks_auth_invalid(monkeypatch):
 
     async def run():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as c:
-            page = await weibo.fetcher.fetch_post_page("7198559139", 1, client=c)
+            page = await weibo.fetcher.fetch_post_page("7198559139", None, client=c)
             info = await weibo.fetcher.fetch_user_info("7198559139", client=c)
             return page, info
 
@@ -314,7 +343,7 @@ def test_weibo_fetch_post_page_msg_rate_limited():
 
     async def run():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as c:
-            res = await weibo.fetcher.fetch_post_page("1", 1, client=c)
+            res = await weibo.fetcher.fetch_post_page("1", None, client=c)
             return res, was_rate_limited()
 
     clear_rate_limit()
@@ -373,8 +402,14 @@ class _FakePF:
     def __init__(self, pages):
         self.pages = pages
 
-    async def fetch_post_page(self, uid, page, client=None):
-        return self.pages[page - 1] if page <= len(self.pages) else {"items": [], "has_more": False}
+    async def fetch_post_page(self, uid, cursor=None, client=None):
+        # 假平台照**页码平台**的口径实现：cursor 就是页码的字符串形式（devlog/238）
+        page = int(cursor) if cursor else 1
+        if page > len(self.pages):
+            return {"items": [], "has_more": False, "next_cursor": None}
+        out = dict(self.pages[page - 1])
+        out.setdefault("next_cursor", str(page + 1) if out.get("has_more") else None)
+        return out
 
     async def enrich(self, item, client=None):
         return False
@@ -401,9 +436,9 @@ def test_platform_posts_incremental_stops_on_existing(monkeypatch, db):
     pf = _FakePF(pages)
     orig = pf.fetch_post_page
 
-    async def counting(uid, page, client=None):
+    async def counting(uid, cursor=None, client=None):
         calls["n"] += 1
-        return await orig(uid, page, client)
+        return await orig(uid, cursor, client)
 
     pf.fetch_post_page = counting
     monkeypatch.setattr("asyncio.sleep", fake_sleep)
@@ -450,9 +485,9 @@ def test_platform_posts_pinned_head_does_not_stop(monkeypatch, db):
     pf = _FakePF(pages)
     orig = pf.fetch_post_page
 
-    async def counting(uid, page, client=None):
+    async def counting(uid, cursor=None, client=None):
         calls["n"] += 1
-        return await orig(uid, page, client)
+        return await orig(uid, cursor, client)
 
     pf.fetch_post_page = counting
     monkeypatch.setattr("asyncio.sleep", fake_sleep)
@@ -504,9 +539,10 @@ def test_fetch_posts_for_account_dispatches_weibo(monkeypatch, db):
     class PF:
         platform = "weibo"
 
-        async def fetch_post_page(self, uid, page, client=None):
+        async def fetch_post_page(self, uid, cursor=None, client=None):
             captured["uid"] = uid
-            return {"items": [], "has_more": False}
+            captured["cursor"] = cursor
+            return {"items": [], "has_more": False, "next_cursor": None}
 
         async def enrich(self, item, client=None):
             return False

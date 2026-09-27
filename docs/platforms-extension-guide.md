@@ -53,8 +53,11 @@ class DouyinPlatform(BasePlatform):
         # → {name, sign, avatar, followers_count, url, ...附加字段}
         ...
 
-    async def fetch_post_page(self, uid, page, client=None) -> dict | None:
-        # 一页帖子流（时间倒序）→ {"items": [...], "has_more": bool}
+    async def fetch_post_page(self, uid, cursor=None, client=None) -> dict | None:
+        # 一页帖子流（时间倒序）→ {"items": [...], "has_more": bool, "next_cursor": str | None}
+        # ⚠️ cursor 对核心**不透明**（devlog/238）：`None` = 从头开始，
+        #    之后每次把上一页给的 `next_cursor` 原样带回来；页码平台把页码当 cursor 用
+        #    （见 `weibo._page_of_cursor`）。**核心不解析它**，你也别在核心侧做换算。
         # item: {platform, platform_uid, platform_post_id,
         #        type(text/image/video/repost/article), title, summary,
         #        cover_url, permalink, body_json, stats_json,
