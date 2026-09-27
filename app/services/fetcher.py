@@ -59,6 +59,58 @@ def clear_rate_limit():
     _rate_limit_ctx.set((False, ""))
 
 
+# ── 失败语义（第 4 阶段 ⑦，devlog/239）────────────────────────────────
+# ⚠️ 与 `_detect_rate_limit` 的分工：那个决定"要不要冷却"（行为，一个字节不改），
+#    这个只说清"是哪一类失败"（语义，给报告与端点熔断用）。
+#    **风控那一类直接复用 `was_rate_limited()`** —— 两套口径在结构上不可能分叉。
+_BILI_CODE_KIND = {
+    -101: "cookie_invalid",     # 账号未登录
+    -404: "business_error",     # 啥都木有（空间/稿件不存在）
+    62002: "business_error",    # 稿件不可见
+    62004: "business_error",    # 稿件审核中
+    -403: "business_error",     # 访问权限不足
+    -509: "risk_control",       # 超出限制
+    -412: "risk_control",       # 请求被拦截
+    -799: "risk_control",       # 请求过于频繁
+}
+
+
+def _note_failure(status_code: int | None, data: dict | None = None, *,
+                  kind: str | None = None) -> str:
+    """把"为什么失败"写进任务级 ContextVar（`app.core.outcome`），返回写入的分类。
+
+    分类规则（**状态码优先**，因为 B 站业务错也是 HTTP 200）：
+
+    | 情形 | 分类 | 理由 |
+    |---|---|---|
+    | `was_rate_limited()`（`_detect_rate_limit` 已置位） | `risk_control` | 与冷却口径**同源**，不另立判据 |
+    | HTTP ≥ 500 | `server_error` | 上游/网关坏了，与身份无关 |
+    | HTTP 404 / 410 | `business_error` | 资源不存在 |
+    | 其它非 200 | `risk_control` | 不认识的失败：保守（宁可多冷却一次） |
+    | 200 + 码表命中 | 表里那一类 | `_BILI_CODE_KIND` |
+    | 200 + 未知码 | `business_error` | B 站业务错就是 200+非零码；真风控有码表与"频繁"文案兜底 |
+
+    `kind=` 显式传入时直接用它（空响应 / 非法 JSON 这类"上游给了不能用的东西" ⇒ `server_error`）。
+    """
+    if kind is None:
+        code = (data or {}).get("code")
+        if was_rate_limited():
+            kind = "risk_control"
+        elif status_code is None:
+            kind = "business_error"
+        elif status_code >= 500:
+            kind = "server_error"
+        elif status_code in (404, 410):
+            kind = "business_error"
+        elif status_code != 200:
+            kind = "risk_control"
+        else:
+            kind = _BILI_CODE_KIND.get(code, "business_error")
+    from app.core import outcome
+    outcome.set_failure(kind, f"HTTP {status_code} code={(data or {}).get('code')}")
+    return kind
+
+
 @asynccontextmanager
 async def _client_ctx(client: Optional[httpx.AsyncClient] = None, timeout: float = 10.0):
     """优先复用调用方传入的 AsyncClient（连接池），未传入时自建并关闭。"""
@@ -97,12 +149,14 @@ async def fetch_bilibili_user_info(mid: int, client: Optional[httpx.AsyncClient]
             # 1. HTTP 状态码检查
             if response.status_code != 200:
                 _detect_rate_limit(response.status_code)
+                _note_failure(response.status_code)
                 logger.warning(f"⚠️ 状态码 {response.status_code}, mid={mid}")
                 return None
 
             # 2. 响应体非空检查
             content = response.content
             if not content or content.strip() == b'':
+                _note_failure(response.status_code, kind="server_error")
                 logger.warning(f"⚠️ 响应内容为空, mid={mid}")
                 return None
 
@@ -111,18 +165,21 @@ async def fetch_bilibili_user_info(mid: int, client: Optional[httpx.AsyncClient]
                 data = response.json()
             except (UnicodeDecodeError, ValueError) as e:
                 preview = content[:200].decode('utf-8', errors='ignore')
+                _note_failure(response.status_code, kind="server_error")
                 logger.warning(f"⚠️ JSON解析失败: {e}, 前200字符: {preview}, mid={mid}")
                 return None
 
             # 4. 业务错误码检查
             if data.get("code") != 0:
                 _detect_rate_limit(response.status_code, data)
+                _note_failure(response.status_code, data)
                 logger.warning(f"❌ B站错误码 {data.get('code')}, 消息: {data.get('message')}, mid={mid}")
                 return None
 
             # 5. 数据提取
             info = data.get("data")
             if not info:
+                _note_failure(response.status_code, kind="business_error")
                 logger.warning(f"⚠️ data 字段为空, mid={mid}")
                 return None
 
@@ -166,15 +223,18 @@ async def fetch_bilibili_live_batch(mids: list[int],
             response = await http.get(url, params=params, headers=auth_manager.build_headers())
             if response.status_code != 200:
                 _detect_rate_limit(response.status_code)
+                _note_failure(response.status_code)
                 logger.warning(f"⚠️ 直播批量状态码 {response.status_code}, mids={mids[:5]}...")
                 return None
             try:
                 data = response.json()
             except (UnicodeDecodeError, ValueError) as e:
+                _note_failure(response.status_code, kind="server_error")
                 logger.warning(f"⚠️ 直播批量 JSON 解析失败: {e}")
                 return None
             if data.get("code") != 0:
                 _detect_rate_limit(response.status_code, data)
+                _note_failure(response.status_code, data)
                 logger.warning(f"❌ 直播批量错误码 {data.get('code')}, msg={data.get('message')}")
                 return None
             payload = data.get("data") or {}
@@ -190,6 +250,7 @@ async def fetch_bilibili_live_batch(mids: list[int],
                 }
             return out
     except Exception as e:
+        _note_failure(None, kind="network_error")
         logger.error(f"❌ 获取直播批量状态异常: {e}, mids={mids[:5]}...")
         return None
 
@@ -209,12 +270,14 @@ async def fetch_bilibili_user_stat(mid: int, client: Optional[httpx.AsyncClient]
             # 1. HTTP 状态码检查
             if response.status_code != 200:
                 _detect_rate_limit(response.status_code)
+                _note_failure(response.status_code)
                 logger.warning(f"⚠️ 状态码 {response.status_code}, mid={mid}")
                 return None
 
             # 2. 响应体非空检查
             content = response.content
             if not content or content.strip() == b'':
+                _note_failure(response.status_code, kind="server_error")
                 logger.warning(f"⚠️ 响应内容为空, mid={mid}")
                 return None
 
@@ -232,18 +295,21 @@ async def fetch_bilibili_user_stat(mid: int, client: Optional[httpx.AsyncClient]
             except ValueError as e:
                 # JSON 格式错误
                 preview = content[:200].decode('utf-8', errors='ignore')
+                _note_failure(response.status_code, kind="server_error")
                 logger.warning(f"⚠️ JSON解析失败: {e}, 前200字符: {preview}, mid={mid}")
                 return None
 
             # 4. 业务错误码检查
             if data.get("code") != 0:
                 _detect_rate_limit(response.status_code, data)
+                _note_failure(response.status_code, data)
                 logger.warning(f"❌ B站错误码 {data.get('code')}, 消息: {data.get('message')}, mid={mid}")
                 return None
 
             # 5. 数据提取
             stat = data.get("data")
             if not stat:
+                _note_failure(response.status_code, kind="business_error")
                 logger.warning(f"⚠️ data 字段为空, mid={mid}")
                 return None
 
@@ -277,10 +343,12 @@ async def fetch_bilibili_videos(mid: int | str, page: int = 1, page_size: int = 
             resp = await http.get(url, headers=auth_manager.build_headers())
             if resp.status_code != 200:
                 _detect_rate_limit(resp.status_code)
+                _note_failure(resp.status_code)
                 return None
             data = resp.json()
             if data.get("code") != 0:
                 _detect_rate_limit(resp.status_code, data)
+                _note_failure(resp.status_code, data)
                 return None
 
             vlist = data.get("data", {}).get("list", {}).get("vlist") or []
@@ -334,10 +402,12 @@ async def fetch_bilibili_dynamics(mid: int | str, offset: str = "",
             resp = await http.get(url, headers=auth_manager.build_headers())
             if resp.status_code != 200:
                 _detect_rate_limit(resp.status_code)
+                _note_failure(resp.status_code)
                 return None
             data = resp.json()
             if data.get("code") != 0:
                 _detect_rate_limit(resp.status_code, data)
+                _note_failure(resp.status_code, data)
                 return None
 
             items = data.get("data", {}).get("items") or []
@@ -438,9 +508,11 @@ async def fetch_article_detail(cv_id: int, client: Optional[httpx.AsyncClient] =
         async with _client_ctx(client) as http:
             resp = await http.get(url, headers=auth_manager.build_headers())
             if resp.status_code != 200:
+                _note_failure(resp.status_code)
                 return None
             data = resp.json()
             if data.get("code") != 0:
+                _note_failure(resp.status_code, data)
                 return None
             d = data["data"]
             content = d.get("content", "")
@@ -471,9 +543,11 @@ async def fetch_video_detail(bvid: str, client: Optional[httpx.AsyncClient] = No
         async with _client_ctx(client) as http:
             resp = await http.get(url, headers=auth_manager.build_headers())
             if resp.status_code != 200:
+                _note_failure(resp.status_code)
                 return None
             data = resp.json()
             if data.get("code") != 0:
+                _note_failure(resp.status_code, data)
                 return None
             d = data["data"]
             owner = d.get("owner") or {}
@@ -515,15 +589,18 @@ async def fetch_dynamic_detail(dynamic_id: str, client: Optional[httpx.AsyncClie
             resp = await http.get(url, headers=auth_manager.build_headers())
             if resp.status_code != 200:
                 _detect_rate_limit(resp.status_code)
+                _note_failure(resp.status_code)
                 return None
             data = resp.json()
             if data.get("code") != 0:
                 _detect_rate_limit(resp.status_code, data)
+                _note_failure(resp.status_code, data)
                 logger.warning(f"动态详情API错误 code={data.get('code')}, msg={data.get('message')}, id={dynamic_id}")
                 return None
 
             item = data.get("data", {}).get("item") or {}
             if not item:
+                _note_failure(resp.status_code, kind="business_error")
                 logger.warning(f"动态详情API返回空 item, id={dynamic_id}")
                 return None
 

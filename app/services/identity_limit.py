@@ -39,6 +39,7 @@ DTK v5 原文是"失败涉及 ≥3 个不同身份"，因为它是多账号采�
 CI 的 3.12 腿必炸 —— devlog/236 踩过两次）。
 """
 import hashlib
+import json
 import logging
 import math
 import time
@@ -253,12 +254,16 @@ class Bucket:
         return replace(b, tokens=min(b.capacity, b.tokens + 1.0))
 
 
-# 端点 → 每秒允许次数（**新平台**口径；B 站不在这张表里，它走原有的平台级节流）。
+# 端点 → 每秒允许次数（**显式**配置；表里没有的端点 = **不限速**，只受熔断约束）。
 # ⚠️ 这些值是"多快会被发现"的参数，不是"合法额度"（调研 §5.3 开头的声明）。
-DEFAULT_RATE = 0.1          # 未知端点：10s 一次（保守兜底）
+#
+# ⚠️ 为什么"没配 = 不限速"（devlog/239，用户拍板）：原先未知端点按 `DEFAULT_RATE` 兜底，
+#    等于给**任何**新接线的端点偷偷加一层全局限速 —— B 站接熔断时会被它顺手拖慢，
+#    而 B 站的节奏已经由 R27/R28/R30 调好了。要限速就**显式**写进这张表：
+#    这样"谁被限速"永远是一行可查的配置，而不是一个兜底默认值。
 ENDPOINT_RATE: dict[str, float] = {
-    "user_posted": 0.12,    # 笔记流：≈8.3s 一次（调研 §5.3.1 的 author_posts 同档）
-    "otherinfo": 0.2,       # 账号信息：5s 一次
+    "user_posted": 0.12,    # 小红书笔记流：≈8.3s 一次（调研 §5.3.1 的 author_posts 同档）
+    "otherinfo": 0.2,       # 小红书账号信息：5s 一次
 }
 
 
@@ -307,6 +312,24 @@ class EndpointWindow:
         return replace(self, samples=self.samples + 1,
                        risk=self.risk + (1 if is_risk else 0), per_target=per)
 
+    # ── 落库用（纯序列化；DB 读写见文件尾的 load_windows / save_windows）──
+    def to_dict(self) -> dict:
+        return {"samples": self.samples, "risk": self.risk,
+                "per_target": dict(self.per_target)}
+
+    @classmethod
+    def from_dict(cls, raw: object) -> "EndpointWindow | None":
+        """坏数据返回 None（调用方跳过并记日志）—— 一条烂记录不该让调度起不来。"""
+        if not isinstance(raw, dict):
+            return None
+        try:
+            per = raw.get("per_target") or {}
+            return cls(samples=int(raw.get("samples", 0) or 0),
+                       risk=int(raw.get("risk", 0) or 0),
+                       per_target={str(k): int(v) for k, v in dict(per).items()})
+        except (TypeError, ValueError):
+            return None
+
 
 # ── 台账（进程内状态容器）────────────────────────────────────────────
 
@@ -332,27 +355,37 @@ class Ledger:
         self._buckets: dict[tuple[str, str], Bucket] = {}
         self._health: dict[str, Health] = {}
         self._windows: dict[tuple[str, str], EndpointWindow] = {}
+        self._dirty = False
 
     # ── 取令牌 ──
-    def _bucket(self, identity: str, endpoint: str) -> Bucket:
+    def _bucket(self, identity: str, endpoint: str) -> Bucket | None:
+        """这个 (身份, 端点) 的桶；**没配速率就没有桶**（不限速，只受熔断约束）。"""
+        rate = ENDPOINT_RATE.get(endpoint)
+        if rate is None:
+            return None
         key = (identity, endpoint)
         b = self._buckets.get(key)
         if b is None:
-            rate = ENDPOINT_RATE.get(endpoint, DEFAULT_RATE)
             b = Bucket(rate=rate, capacity=1.0, tokens=1.0, updated_at=0.0)
             self._buckets[key] = b
         return b
 
     def acquire(self, identity: str, endpoint: str) -> Decision:
-        """发请求前问一次：**这份身份**在这个端点上现在能不能发。"""
+        """发请求前问一次：**这份身份**在这个端点上现在能不能发。
+
+        两步：① 端点熔断（所有身份一起停）；② 令牌桶（**只有配了速率的端点才有**）。
+        """
         win = self._windows.get((platform_of(identity), endpoint))
         if win is not None and win.tripped:
             logger.warning(f"{identity}/{endpoint} 端点已熔断"
                            f"（风控率 {win.risk_rate:.2f}，样本 {win.samples}，"
                            f"涉及 {win.risk_targets} 个目标）")
             return Decision(allowed=False, reason="breaker")
+        bucket = self._bucket(identity, endpoint)
+        if bucket is None:
+            return Decision(allowed=True)          # 不限速端点：放行
         now = self._now()
-        b, ok, need = self._bucket(identity, endpoint).take(now)
+        b, ok, need = bucket.take(now)
         self._buckets[(identity, endpoint)] = b
         if not ok:
             return Decision(allowed=False, retry_after=need, reason="bucket")
@@ -372,8 +405,12 @@ class Ledger:
             if b is not None:
                 self._buckets[key] = b.refund(self._now())
         win_key = (platform_of(identity), endpoint)
-        self._windows[win_key] = self._windows.get(
-            win_key, EndpointWindow()).observe(target, outcome)
+        before = self._windows.get(win_key, EndpointWindow())
+        after = before.observe(target, outcome)
+        self._windows[win_key] = after
+        if after.tripped != before.tripped:
+            # **熔断态翻转**才值得落库（按请求写库是写放大，见模块头的持久化说明）
+            self._dirty = True
 
     # ── 读 ──
     def health(self, identity: str) -> Health:
@@ -382,11 +419,40 @@ class Ledger:
     def window(self, identity: str, endpoint: str) -> EndpointWindow:
         return self._windows.get((platform_of(identity), endpoint), EndpointWindow())
 
+    def tripped_endpoints(self, platform: str) -> list[str]:
+        """当前已熔断的端点（诊断/日志用）。"""
+        return sorted(ep for (pf, ep), w in self._windows.items()
+                      if pf == platform and w.tripped)
+
     def reset(self) -> None:
         """清空（测试隔离用；也是将来"用户手动解除"的口子）。"""
         self._buckets.clear()
         self._health.clear()
         self._windows.clear()
+        self._dirty = False
+
+    # ── 落库（只落**端点窗口**；健康度留进程内，见模块头）────────────────
+    def dirty(self) -> bool:
+        """熔断态自上次落库以来翻转过了吗（调用方据此决定写不写）。"""
+        return self._dirty
+
+    def mark_clean(self) -> None:
+        self._dirty = False
+
+    def export_windows(self, platform: str) -> dict:
+        """该平台所有端点窗口 → 可 JSON 化的 dict（落库用）。"""
+        return {ep: w.to_dict() for (pf, ep), w in self._windows.items() if pf == platform}
+
+    def import_windows(self, platform: str, payload: dict) -> None:
+        """从落库内容恢复（**替换**该平台的窗口；坏数据跳过并记日志）。"""
+        if not isinstance(payload, dict):
+            return
+        for ep, raw in payload.items():
+            w = EndpointWindow.from_dict(raw)
+            if w is None:
+                logger.warning(f"端点窗口解析失败（{platform}/{ep}），已跳过")
+                continue
+            self._windows[(platform, ep)] = w
 
 
 # 进程内单例（接线在平台适配器；测试自己 new 一个，见 `tests/conftest.py` 的隔离 fixture）
@@ -410,3 +476,52 @@ def health_summary(ledger: Ledger, platform: str) -> dict[str, float]:
         if platform_of(identity) == platform:
             out[identity] = round(h.score, 4)
     return dict(sorted(out.items(), key=lambda kv: kv[1]))
+
+
+# ── 端点窗口的落库（`app_meta`；第 4 阶段 ⑦，devlog/239）──────────────────
+# 为什么只落窗口：熔断是"这个端点坏了"的判断，重启后**依然成立**（接口改版不会因为
+# 我们重启就修好）⇒ 重启后立刻再去撞一遍是纯浪费，还可能把风控范围扩大。
+# 健康度**不落库**：它衡量"最近表现"，进程内清零是可接受的，而且按请求写库是写放大。
+# 冷却那套（`rate_limit.py`）早就落库了（R27），两者互不替代。
+META_PREFIX = "breaker."        # 完整键 = `breaker.<平台>`
+
+
+def load_windows(db, platform: str, ledger: Ledger) -> int:
+    """把落库的端点窗口灌进台账；返回恢复了几个端点（读不到就按"没有"跑，并留痕）。"""
+    from app.repositories.vtuber_repo import AppMetaRepo
+    try:
+        raw = AppMetaRepo(db).all_with_prefix(META_PREFIX)
+    except Exception as e:                      # noqa: BLE001 —— 读不到只该"少一层保护"
+        logger.warning(f"读端点熔断窗口失败（按无记录处理）: {type(e).__name__}: {e}")
+        return 0
+    payload = raw.get(platform)
+    if not payload:
+        return 0
+    try:
+        data = json.loads(payload)
+    except (TypeError, ValueError) as e:
+        logger.warning(f"端点熔断窗口解析失败（{platform}）: {type(e).__name__}: {e}")
+        return 0
+    ledger.import_windows(platform, data if isinstance(data, dict) else {})
+    return len(data) if isinstance(data, dict) else 0
+
+
+def save_windows(db, platform: str, ledger: Ledger) -> None:
+    """把该平台的端点窗口落库（失败只记日志：这是"少一层保护"，不该带崩抓取）。"""
+    from app.repositories.vtuber_repo import AppMetaRepo
+    try:
+        AppMetaRepo(db).set(f"{META_PREFIX}{platform}",
+                            json.dumps(ledger.export_windows(platform),
+                                       ensure_ascii=False, sort_keys=True))
+        ledger.mark_clean()
+    except Exception as e:                      # noqa: BLE001
+        logger.warning(f"写端点熔断窗口失败（{platform}）: {type(e).__name__}: {e}")
+
+
+def clear_windows(db, platform: str) -> None:
+    """删掉某平台的窗口（"用户手动解除"的口子，当前未接线）。"""
+    from app.repositories.vtuber_repo import AppMetaRepo
+    try:
+        AppMetaRepo(db).delete(f"{META_PREFIX}{platform}")
+    except Exception as e:                      # noqa: BLE001
+        logger.warning(f"删端点熔断窗口失败（{platform}）: {type(e).__name__}: {e}")

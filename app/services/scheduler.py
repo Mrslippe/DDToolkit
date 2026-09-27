@@ -33,12 +33,13 @@ from app.services.fetcher import (
     was_rate_limited, clear_rate_limit, rate_limit_info,
 )
 from app.services.platforms import registry
+from app.core import outcome as platform_outcome
 from app.core.jsonsafe import safe_json_dict as _safe_json_parse
 # 第二刀（devlog/236）：B 站专属**实现**住在 platforms/bilibili_posts.py，
 # 这里只做绑定（见下方 BILIBILI_STREAMS）—— 编排与平台实现从此分家。
 from app.services.platforms.bilibili_posts import (
-    absorb_video_dynamic, enrich_dynamic_item, refresh_pinned_post,
-    route_live_item, video_bvid_index,
+    absorb_video_dynamic, admit_endpoint, bili_identity, enrich_dynamic_item,
+    observe_endpoint, refresh_pinned_post, route_live_item, video_bvid_index,
 )
 from app.services.platforms.streams import PostStreams
 from app.services.post_text import extract_post_text
@@ -427,6 +428,21 @@ def split_numeric_uids(accounts: list[Account]) -> tuple[list[Account], list[Acc
     return keep, bad
 
 
+def _account_fail_text() -> str:
+    """账号抓取失败的一句话（devlog/239）：**分工不同就别用同一句话**。
+
+    以前无论什么原因都写"更新失败" —— 用户分不出"这个号注销了"和"网络断了/被限流了"，
+    而这两件事该做的事完全不同（前者去删号，后者等一会儿）。
+    """
+    kind = platform_outcome.last_failure()[0]
+    four = identity_limit.outcome_for_kind(kind) if kind else ""
+    if four == "business_error":
+        return "账号不存在或不可见（业务失败）"
+    if four == "risk_control" or was_rate_limited():
+        return "更新失败（风控）"
+    return "更新失败（网络）"
+
+
 def _filter_cooling_accounts(accounts: list, *, auto: bool) -> tuple[list, list[str]]:
     """**自动档**跳过风控冷却中的平台（R27）；手动档一律原样返回。
 
@@ -440,6 +456,42 @@ def _filter_cooling_accounts(accounts: list, *, auto: bool) -> tuple[list, list[
     if not cooling:
         return accounts, []
     return [a for a in accounts if not is_platform_cooling(a.platform)], cooling
+
+
+_breaker_loaded: bool = False
+_breaker_saved_at: float = 0.0
+BREAKER_FLUSH_SECONDS = 30.0     # 定时落库间隔（熔断态每翻转必写）
+
+
+def _ensure_breaker_loaded(db: Session) -> None:
+    """把落库的端点窗口读回台账（第 4 阶段 ⑦，devlog/239）。
+
+    **只落窗口、不落健康度**（用户拍板 + 模块头写了理由）：熔断是"这个端点坏了"的判断，
+    重启后依然成立 —— 接口改版不会因为我们重启就修好，重启后立刻再撞一遍纯浪费。
+    """
+    global _breaker_loaded
+    if _breaker_loaded:
+        return
+    for (pf,) in db.query(Account.platform).distinct():
+        n = identity_limit.load_windows(db, pf, identity_limit.LEDGER)
+        if n:
+            logger.info(f"端点熔断窗口已恢复：{pf} {n} 个端点")
+    _breaker_loaded = True
+
+
+def _flush_breaker(db: Session, platform: str, *, force: bool = False) -> None:
+    """窗口落库：**熔断态翻转时立刻写**，其余按 `BREAKER_FLUSH_SECONDS` 攒着写。
+
+    按请求写库是写放大（每个请求一次 fsync），所以只在"值得记住"的时刻写：
+    熔断触发/解除（`dirty`）或距上次 ≥30s。
+    """
+    global _breaker_saved_at
+    now = time.time()
+    if not force and not identity_limit.LEDGER.dirty() \
+            and (now - _breaker_saved_at) < BREAKER_FLUSH_SECONDS:
+        return
+    identity_limit.save_windows(db, platform, identity_limit.LEDGER)
+    _breaker_saved_at = now
 
 
 async def _cooldown_for_rate_limit(reason: str = "", platform: str = "") -> None:
@@ -546,7 +598,9 @@ async def _fetch_one_account(acc: Account, db: Session, client: httpx.AsyncClien
     mid = acc.platform_uid
     if not mid:
         return False
+    platform_outcome.clear()          # 别读到上一个账号/上一条路径的残留
 
+    _ensure_breaker_loaded(db)
     pf = registry.get_fetcher(acc.platform)
     if pf is None:
         logger.warning(f"不支持的平台 '{acc.platform}'，跳过 account#{acc.id}")
@@ -601,6 +655,9 @@ async def _fetch_one_account(acc: Account, db: Session, client: httpx.AsyncClien
             is_update = True
     except Exception as e:
         logger.error(f"抓取 account#{acc.id} ({acc.platform}) 异常: {type(e).__name__}: {e}")
+
+    observe_endpoint("user_info", str(mid), bool(is_update))
+    _flush_breaker(db, acc.platform)      # 窗口落库（翻转立即写 / 否则 ≥30s 一次）
 
     if was_rate_limited():
         return False  # 触发风控，上层处理
@@ -745,7 +802,8 @@ async def async_fetch_accounts(account_ids: list[int], *, label: str = "指定�
                 result.success += 1
             else:
                 result.failed += 1
-                result.details.append(f"{acc.display_name or acc.platform_uid} 更新失败")
+                result.details.append(
+                    f"{acc.display_name or acc.platform_uid} {_account_fail_text()}")
             idx += 1
 
         logger.info(f"{label} 抓取完毕: {result.success} 成功, {result.failed} 失败")
@@ -883,7 +941,8 @@ async def async_fetch_and_update(auto: bool = False) -> FetchResult:
                 result.failed += 1
                 label = outcome.payload
                 name = (label.display_name or label.platform_uid) if label else pf
-                result.details.append(f"[{pf}] {name}: {outcome.error or '更新失败'}")
+                result.details.append(
+                    f"[{pf}] {name}: {outcome.error or _account_fail_text()}")
 
         logger.info(f"抓取完毕: {result.success} 成功, {result.failed} 失败, {result.skipped} 跳过")
 
@@ -1656,12 +1715,37 @@ _PAGE_RETRIES = 2
 # 第二刀（devlog/236）把 B 站专属**实现**搬到了 `platforms/bilibili_posts.py`：
 # 这里只剩三个薄适配器（翻页 + 非帖子项分流），`scheduler.py` 里不再有 B 站实现细节。
 # `uid` 也从 int 泛化成了**字符串**（核心不再假设 uid 是数字）。
-def _bili_fetch_video_page(uid: str, page: int, client):
-    return fetch_bilibili_videos(uid, page=page, client=client)
+async def _bili_fetch_video_page(uid: str, page: int, client):
+    if not admit_endpoint("video_list"):
+        return None
+    data = await fetch_bilibili_videos(uid, page=page, client=client)
+    observe_endpoint("video_list", uid, data is not None)
+    return data
 
 
-def _bili_fetch_dynamics_page(uid: str, offset: str, client):
-    return fetch_bilibili_dynamics(uid, offset=offset, client=client)
+async def _bili_fetch_dynamics_page(uid: str, offset: str, client):
+    if not admit_endpoint("dynamics_feed"):
+        return None
+    data = await fetch_bilibili_dynamics(uid, offset=offset, client=client)
+    observe_endpoint("dynamics_feed", uid, data is not None)
+    return data
+
+
+def _none_stop_reason() -> str:
+    """抓取返回 `None` 时落哪个 `stop_reason`（第 4 阶段 ⑦，devlog/239）。
+
+    ⚠️ **风控不在这里判**：风控的判定与冷却全程由 `was_rate_limited()` 说了算
+    （行为与改前**逐字一致**），本函数只回答"不是风控的那次失败，是业务还是网络"。
+    于是"号/稿件没了"不再冒充 `network_error`（那会在报告里显示成一处中断）。
+    """
+    kind = platform_outcome.last_failure()[0]
+    four = identity_limit.outcome_for_kind(kind) if kind else "network_error"
+    if four == "business_error":
+        return "business_error"
+    if four == "risk_control" and not was_rate_limited():
+        # 分类说是风控、冷却标志却没置位 ⇒ 码表可能漏了这个码（值得一条日志）
+        logger.warning(f"分类为风控但冷却标志未置位：{platform_outcome.last_failure()}")
+    return "network_error"
 
 
 def _bili_route_non_post(db: Session, uid: str, d: dict) -> bool:
@@ -1799,8 +1883,8 @@ async def _fetch_posts_core(uid: str, video_pages: int, dynamics_pages: int, db:
                     result.stop_reason = "rate_limited"
                     break
                 if vdata is None:
-                    # 非风控失败（网络/接口异常）→ 方案 1：显式标记为中断
-                    result.stop_reason = "network_error"
+                    # 四类口径（devlog/239）：业务失败（号/稿件没了）不再冒充网络中断
+                    result.stop_reason = _none_stop_reason()
                     break
                 if result.video_total is None:
                     result.video_total = vdata.get("total")
@@ -2066,7 +2150,7 @@ async def _fetch_platform_posts(pf, uid: str, pages: int, db: Session,
                 if identity_limit.throttled(pf):
                     result.stop_reason = "throttled"
                     break
-                result.stop_reason = "network_error"
+                result.stop_reason = _none_stop_reason()
                 break
             items = data.get("items") or []
             if not items:
@@ -2835,7 +2919,13 @@ async def live_sweep_core(db: Session, client: httpx.AsyncClient | None = None) 
                     )
             if not chunk:
                 continue
+            if not admit_endpoint("live_batch"):
+                # 端点已熔断：本批直接跳过（**不报故障** —— 这是我们自己的判断）
+                logger.info("T0 直播状态：live_batch 端点已熔断，本批跳过")
+                idx += len(chunk)
+                continue
             data = await fetch_bilibili_live_batch([int(a.platform_uid) for a in chunk], client=client)
+            observe_endpoint("live_batch", f"batch{idx // 100}", data is not None)
             if data is None:
                 if was_rate_limited():
                     logger.warning(f"T0 直播状态触发风控 ({rate_limit_info()})，"

@@ -44,14 +44,48 @@ from app.core.config import settings
 # 搬过来的代码把老的 `_safe_json_parse(...)` 调用换成了新家的名字（同一份实现，
 # 语义逐字未动：空/非法/非 dict → 空字典）。scheduler 那边用别名继续叫旧名字。
 from app.core.jsonsafe import safe_json_dict
+from app.core import outcome as platform_outcome
 from app.models.vtuber import Account, Post
 from app.repositories.vtuber_repo import LiveSessionRepo, PostRepo
+from app.services import identity_limit
+from app.services.auth import auth_manager
 from app.services.fetcher import (clear_rate_limit, fetch_article_detail,
                                   fetch_dynamic_detail, fetch_video_detail)
 from app.services.pinned_posts import (DETAIL_REFRESH_TYPES, detail_refresh_due,
                                        refresh_fields)
 
 logger = logging.getLogger(__name__)
+
+# ── 端点记账（第 4 阶段 ⑦，devlog/239）──────────────────────────────────
+# B 站的端点名（熔断与诊断按它聚合）。**不配速率 = 不限速**：B 站的节奏由
+# R27/R28/R30 管着（用户拍板：身份级令牌桶不进 B 站），这里只用**端点熔断**：
+# 同一个端点上 ≥3 个不同目标都被风控 ⇒ 那不是"某个号坏了"，是端点坏了。
+BILI_ENDPOINTS = ("video_list", "dynamics_feed", "user_info", "detail", "live_batch")
+
+
+def bili_identity() -> str:
+    """B 站这份身份（cookie 指纹，不落明文）。单 cookie ⇒ 现实身份数 = 1。"""
+    try:
+        cookie = auth_manager.cookie_str()
+    except Exception:                      # noqa: BLE001 —— 拿不到就按"没有身份"算
+        cookie = ""
+    return identity_limit.identity_key("bilibili", cookie)
+
+
+def admit_endpoint(endpoint: str) -> bool:
+    """发请求前问一次：这个端点熔断了吗（B 站没有令牌桶 ⇒ 不会因"额度"被拒）。"""
+    return identity_limit.LEDGER.acquire(bili_identity(), endpoint).allowed
+
+
+def observe_endpoint(endpoint: str, target: str, ok: bool) -> None:
+    """记一次端点结果（四类口径）。
+
+    `ok=False` 时读 `app.core.outcome` 里那次失败的结构化分类：**业务失败不计样本**，
+    所以"号被注销/稿件不可见"堆再多也不会把端点判成故障（这正是 devlog/237 那条策略的用处）。
+    """
+    kind = "ok" if ok else (platform_outcome.last_failure()[0] or "")
+    identity_limit.LEDGER.record(bili_identity(), endpoint,
+                                 identity_limit.outcome_for_kind(kind), target=str(target))
 
 
 def video_bvid_index(db: Session, platform_uid: str) -> dict[str, str]:
@@ -106,6 +140,8 @@ async def enrich_dynamic_item(d: dict, *, client: httpx.AsyncClient | None = Non
     专栏 delta、视频统计合并），两处各写一遍必然漂移。
     """
     got_detail = False
+    if not admit_endpoint("detail"):
+        return False
 
     # 图文 / 纯文字 → detail API 拿 OPUS 格式完整数据
     if d["type"] in ("text", "image"):
@@ -176,6 +212,7 @@ async def enrich_dynamic_item(d: dict, *, client: httpx.AsyncClient | None = Non
                 await asyncio.sleep(random.uniform(0.5, 2.0))
                 got_detail = True
 
+    observe_endpoint("detail", str(d.get("platform_uid") or ""), got_detail)
     return got_detail
 
 async def refresh_pinned_post(post_repo: PostRepo, platform: str, platform_uid: str,

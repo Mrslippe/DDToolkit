@@ -140,6 +140,26 @@
 ⚠️ 小红书只有一份签名实现，所以它能抓"结构回归"，抓不到"签名被服务端拒绝"
 （后者靠上面的四类响应与风控统计）。
 
+#### B 站的接线（第 4 阶段 ⑦，devlog/239）
+
+B 站**不装令牌桶**（用户拍板：R27/R28/R30 已把节奏调好，且它只有一份身份），
+只接**四类语义**与**端点熔断**：
+
+- `fetcher._note_failure()` 在每次失败旁记下**是哪一类**（写进任务级 `app.core.outcome`）；
+  风控那一类**直接复用 `was_rate_limited()`** ⇒ 与冷却口径结构上不会分叉。
+  `_detect_rate_limit`（决定要不要冷却）**一行没改**。
+- 核心（双流 `_fetch_posts_core` 与单流 `_fetch_platform_posts`）拿到 `None` 之后：
+  **业务失败** ⇒ `stop_reason="business_error"`（**不进 `issues`** —— 报告里不再出现
+  "根本没发生的中断"）；其余 ⇒ `network_error`（与改前一致）。
+  账号页文案也分工：`账号不存在或不可见（业务失败）` / `更新失败（风控）` / `更新失败（网络）`。
+- 五个端点（`video_list` / `dynamics_feed` / `user_info` / `detail` / `live_batch`）在
+  `platforms/bilibili_posts.py` 里 `admit_endpoint()` + `observe_endpoint()`：
+  **熔断就一个字节都不发**；**业务失败不进熔断样本**（否则"号被注销"会把端点判成故障）。
+- 熔断窗口落 `app_meta`（`breaker.<平台>`）：**熔断态翻转立刻写**，其余 ≥30s 攒着写；
+  启动时懒加载（与 R27 的 `_rl_loaded` 同一手法）。**健康度不落库**。
+- ⚠️ 限速表语义：**没配速率 = 不限速**（原先的 `DEFAULT_RATE` 兜底已删）——
+  要限速必须显式写进 `ENDPOINT_RATE`，免得给没配的端点偷偷加一层全局限速。
+
 ---
 
 ## 4. 账号信息抓取
