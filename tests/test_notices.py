@@ -74,6 +74,22 @@ def client():
     return TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def _pin_login_state(monkeypatch):
+    """把"登录态"钉成**已登录**，让每条用例与运行环境无关。
+
+    ⚠️ 这是"本地绿 CI 红"的第三次现身（devlog/247 记过复现手法）：**空数据目录**下
+    `auth_manager.needs_login()` 为真 ⇒ 会多出一条 `login-expired` alert，
+    于是"开播 alert 排第一"那条断言在 CI（干净克隆）红、本地（有凭据）绿。
+    实测复现：`DDTOOLKIT_DATA_DIR=<空目录> python -m pytest tests/test_notices.py`。
+    ⇒ 判据不许依赖"跑测试的那台机器有没有登录"。
+    """
+    from app.services import auth as auth_mod
+
+    monkeypatch.setattr(auth_mod.auth_manager, "needs_login", lambda: False, raising=False)
+    yield
+
+
 def _status(*, post_running=False, post_auto=False, acc_running=False, acc_auto=False,
             rate=None, post_result=None, acc_result=None) -> dict:
     return {
@@ -284,7 +300,7 @@ def test_live_edge_becomes_alert_with_ttl(client):
 
 
 def test_login_expired_is_sticky_alert(client, monkeypatch):
-    """③′ 登录失效：常驻 alert + 「去登录」动作。"""
+    """③′ 登录失效：常驻 alert + 「去登录」动作（其余用例把这条钉成"已登录"，见 autouse 夹具）。"""
     from app.services import auth as auth_mod
 
     monkeypatch.setattr(auth_mod.auth_manager, "needs_login", lambda: True, raising=False)
