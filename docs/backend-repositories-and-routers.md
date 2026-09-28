@@ -490,21 +490,25 @@
 
 ---
 
-## 3. Routers（70 个路由装饰器 = 72 个方法×路径组合）
+## 3. Routers（72 个路由装饰器 = 74 个方法×路径组合）
 
 > 口径说明（**三种数法别混**）：
 >
 > | 数法 | 值 | 怎么数 |
 > |---|---|---|
-> | **装饰器**（下文「N」用它） | **70** | `vtuber 53` + `auth 4` + `img_proxy 1` + `settings 9` + `messages 2` + `messages_debug 1`（dev-only）；其中 2 个是 `api_route(methods=["GET","POST"])`（`/vtuber/fetch`、`/vtuber/{id}/fetch`）—— ⚠️ **数装饰器必须把这 2 条算进去**，只数 `@router.get/post/...` 会少 2 |
-> | **OpenAPI 方法×路径** | **72** | `sum(len(methods) for p in app.openapi()["paths"].values())`；**这是唯一与实现无关的数法** ⇒ 日常复核用它 |
-> | OpenAPI 路径数 | **58** | `len(app.openapi()["paths"])`（同路径多方法只算 1 条；dev-only 的 `_debug` 路由**不在**，它要 dev token 才挂） |
+> | **装饰器**（下文「N」用它） | **72** | `vtuber 55` + `auth 4` + `img_proxy 1` + `settings 9` + `messages 2` + `messages_debug 1`（dev-only）；其中 2 个是 `api_route(methods=["GET","POST"])`（`/vtuber/fetch`、`/vtuber/{id}/fetch`）—— ⚠️ **数装饰器必须把这 2 条算进去**，只数 `@router.get/post/...` 会少 2 |
+> | **OpenAPI 方法×路径** | **74** | `sum(len(methods) for p in app.openapi()["paths"].values())`；**这是唯一与实现无关的数法** ⇒ 日常复核用它 |
+> | OpenAPI 路径数 | **60** | `len(app.openapi()["paths"])`（同路径多方法只算 1 条；dev-only 的 `_debug` 路由**不在**，它要 dev token 才挂） |
 >
-> ⚠️ **2026-09-27 重新数过**（M0 加了 `GET /messages/stream` 与 dev-only 的
+> ⚠️ **2026-09-28 重新数过**（M0 加了 `GET /messages/stream` 与 dev-only 的
 > `POST /messages/_debug/publish`，M1 加了 `POST /messages/ack`；R47 加了
-> `GET /vtuber/{id}/avatars`）：实测装饰器 **70** /
-> OpenAPI 方法×路径 **72** / 路径数 **58**。
+> `GET /vtuber/{id}/avatars`；M5-1 加了 `GET /vtuber/notices` +
+> `POST /vtuber/notices/ack`）：实测装饰器 **72** /
+> OpenAPI 方法×路径 **74** / 路径数 **60**。
 > 更早的版本：66/—/—（批次 16）、64/70/67（R42-A）—— 三种数法本来就容易漂。
+> ⚠️ **新增 `/vtuber/xxx` 这类"看起来不像参数"的路径时必须注册在 `/vtuber/{vtuber_id}` 之前**：
+> M5-1 第一版把 `/vtuber/notices` 放在文件下面，`GET` 直接被 `{vtuber_id}: int` 捕获、恒定 422
+> （`tests/test_notices.py::test_route_serves_notices` 当场抓住）。FastAPI 按**注册顺序**匹配。
 >
 > ⚠️ **"`app.routes` 对象数"这个口径在新版 FastAPI 下失效了（2026-09-27 实测）**：
 > `include_router()` 现在只往 `app.routes` 里放一个 **`_IncludedRouter` 标记对象**
@@ -521,7 +525,7 @@
 > ⚠️ **dev-only 路由也会进"装饰器"计数**：所以它单独一个模块 + 标准名 `router`
 > （`app/routers/messages_debug.py`）—— 用 `debug_router` 这种名字会让它从计数里消失。
 
-### 3.1 `app/routers/vtuber.py` — 主业务路由（53，43 条路径）
+### 3.1 `app/routers/vtuber.py` — 主业务路由（55，44 条路径）
 
 路径直接 `/vtuber/...`、`/account/...`、`/posts...`、`/post/...`、`/externals/...`；
 响应模型走 `app/schemas/vtuber.py`（`Out` 为 `from_attributes`）。
@@ -548,6 +552,8 @@
 | PUT `/vtuber/{vtuber_id}/profile-cards` | **整版保存**卡片布局；格位越界 / `card_key` 重复 / 超过 50 张 → 422（**不静默夹取**）；V 不存在 404（f006，R37-P2） |
 | GET `/vtuber/{vtuber_id}/former-values` | 曾用名 / 曾用签名（各最多 5 条、最近优先、按值去重，含平台标注；f004）。**当前未接入 UI**（devlog/075：归「账号信息历史快照」，先不展示） |
 | GET `/vtuber/{vtuber_id}/avatars` | **历次头像可选项**（新的在前）+ `current_url`（当前用的那张，后端推导）；账本为空时用账号现值兜底（`id`/`first_seen_at` 为 null）；V 不存在 404（f008，R47，devlog/249）。只读 —— 记账在抓取侧 |
+| GET `/vtuber/notices` | **通知汇总**（M5-1，devlog/253）：`{now, notices[]}`，**已按优先级排序**；`now` = 服务端毫秒（ttl 判定基准）。⚠️ 路径必须注册在 `/vtuber/{vtuber_id}` **之前**（否则被 int 参数捕获 ⇒ 422） |
+| POST `/vtuber/notices/ack` | 记一条通知**已读**（`{id}` → 落 `app_meta` 的 `notices.acked`，上限 50）；**幂等**；空 id 422。修的是"刷新/深休眠重建后完成报告复活" |
 | POST `/vtuber/{vtuber_id}/background` | 上传自定义背景（jpeg/png/webp/gif，≤10MB，否则 415/413）；**类型按文件头判、限额流式读取、临时文件原子 rename、提交成功后才删旧文件**（`services/vtuber_background.py`，M3b devlog/214）；时间戳后缀防缓存 |
 | DELETE `/vtuber/{vtuber_id}/background` | 清除背景回退头像铺底 |
 | DELETE `/vtuber/{vtuber_id}` | 解除订阅：`purge_vtuber()` 清 posts + 5 张子表 + 活动条目 + 曾用值 + **卡片布局（f006）**，再级联删 V+accounts；外键挡下 → 409 |

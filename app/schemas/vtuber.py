@@ -203,6 +203,46 @@ class VTuberAvatarsOut(BaseModel):
     versions: list[VtuberAvatarVersionOut] = []
 
 
+# ── 通知汇总（M5-1，devlog/253）────────────────────────────────────────
+
+class NoticeOut(BaseModel):
+    """一条通知（目标架构 §2.1 的契约）。
+
+    字段与前端 `utils/notificationHub.ts::Notice` **逐字对齐** —— 少一个键前端就画不出来，
+    所以 `tests/test_notices.py` 有一条**键集合**契约用例盯着（反向验证：删字段 ⇒ 当场红）。
+    `value` 是 M5 新增的"活数据"槽位（倒计时/进度独立成槽，自己刷新而不重排文案）。
+    """
+    id: str
+    kind: str                     # alert | progress | report | message
+    text: str
+    value: str | None = None      # 活数据（如风控倒计时 "47s"）
+    detail: str | None = None
+    source: str | None = None
+    sticky: bool = False
+    expiresAt: int | None = None  # 毫秒（**服务端 `now` 口径**，见响应的 `now`）
+    action: dict | None = None    # {label, kind}
+
+
+class NoticesOut(BaseModel):
+    """`GET /vtuber/notices`：**已按优先级排序**的通知 + 服务端时间戳。
+
+    ⚠️ `now` 是这一刻服务端的毫秒时间：两扇窗各自 `Date.now()` 会差 1–2s，而 ttl 判定
+    要以它为基准（目标架构 §4）。前端只负责"按 now 过滤过期"，不自己算绝对过期时刻。
+    """
+    now: int
+    notices: list[NoticeOut] = []
+
+
+class NoticeAckIn(BaseModel):
+    """`POST /vtuber/notices/ack` 的请求体（记一条通知已读）。"""
+    id: str = Field(min_length=1, max_length=120)
+
+
+class NoticeAckOut(BaseModel):
+    """已读集合（**幂等**：同一个 id 记两次结果一样）。"""
+    acked: list[str] = []
+
+
 # ── Post ───────────────────────────────────────────────────────────
 
 class PostOut(BaseModel):

@@ -27,6 +27,12 @@ export interface Notice {
   id: string
   kind: NoticeKind
   text: string
+  /**
+   * **活数据**槽位（M5-1，devlog/253）：倒计时 / 进度这类"自己刷新、不重排文案"的值。
+   * 后端 `GET /vtuber/notices` 的契约里就有它（目标架构 §2.2），前端先接上类型 ——
+   * M5-2 切换供数方时，`text` 保持稳定、只有 `value` 在跳。
+   */
+  value?: string
   /** 面板里的补充说明（可选） */
   detail?: string
   /** 来源标注（面板里显示，如「风控冷却」「登录态」），让用户知道话是谁说的 */

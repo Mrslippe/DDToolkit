@@ -28,6 +28,7 @@ from app.schemas.vtuber import (
     ProfileCardOut, ProfileLayoutIn,
     FormerValueOut, VTuberFormerValuesOut,
     VtuberAvatarVersionOut, VTuberAvatarsOut,
+    NoticeOut, NoticesOut, NoticeAckIn, NoticeAckOut,
     BiliSearchOut, BiliSearchItemOut,
 )
 from app.services import pool
@@ -43,6 +44,7 @@ from app.services.danmaku_cloud import build_word_cloud
 from app.services.danmaku_words import build_extra_words
 from app.services.vtuber_history import former_values
 from app.services.vtuber_avatars import avatar_versions
+from app.services import notices as notices_service
 from app.schemas.vtuber import (LiveDanmakuInfo, LiveMetricsOut, LiveEventOut,
                                 LiveWordOut, LiveUpstreamOut)
 from app.services.post_text import extract_post_text
@@ -75,14 +77,18 @@ def _note_manual_start(task: str, text: str, originator: str) -> None:
 
 
 def _note_manual_done(text: str, originator: str) -> None:
-    """手动任务完成 ⇒ 推一条**完成类**提示（M2）。
+    """手动任务完成 ⇒ 推一条**完成类**提示（M2），并记进通知汇总（M5-1）。
 
     ⚠️ 带 `originator`：发起方自己的窗口**不重复提示**（它已经从响应里拿到结果并弹了胶囊），
     别的订阅者（小窗 / 将来的第二窗口）才播。
+    ⚠️ **同时记进 `services/notices`**（M5-1，devlog/253）：推送是"这一刻的提示"，
+    而 M5-2 起汇总端点要能把它作为一条 `message` 通知发出去（带 TTL）。
+    两处都写不算双真源：推送是**事件**，汇总是**当前状态**（同一份内容）。
     """
     message_hub.HUB.publish(message_hub.MSG_NOTICE_MESSAGE, {
         "text": text, "originator": originator,
     })
+    notices_service.record_message(text)
 
 
 router = APIRouter()
@@ -201,6 +207,35 @@ def fetch_status():
     """抓取任务实时状态（TopBar 轮询用）：
     account=账号信息抓取（running/current/index/total），post=帖子抓取（running/target）。"""
     return get_fetch_status()
+
+
+# ⚠️ **同理**：`/vtuber/notices` 也必须注册在 `/vtuber/{vtuber_id}` **之前** ——
+#    第一版放在文件下面（挨着别的 vtuber 子路径），结果 `GET /vtuber/notices` 被
+#    `{vtuber_id}: int` 捕获、直接 422（`tests/test_notices.py::test_route_serves_notices`
+#    当场抓住）。FastAPI 按**注册顺序**匹配，路径长得像不代表能兜住。
+@router.get("/vtuber/notices", response_model=NoticesOut)
+def get_notices(db: Session = Depends(get_db)):
+    """**通知汇总**（M5-1，devlog/253）：事实 → 通知，**已按优先级排序** + 服务端 `now`。
+
+    目标架构 §3 的分工在这里落地：`services/notices.py` 只做"事实 → 文案/优先级/ttl"
+    （不碰 HTTP、不碰展示），本端点只做暴露（不写业务）。
+
+    ⚠️ **M5-1 只做供数**：前端仍在用自己那份 `useMemo` 汇总 + 推送通道
+    （M5-2 才切过来）。所以这个端点**目前没有消费者** —— 它是 M5-2 的契约与判据；
+    宁可先把它连同契约用例落地，也不要"切换 + 供数"一批做完（出问题时分不清是哪边）。
+    """
+    return NoticesOut.model_validate(notices_service.build_notices(db))
+
+
+@router.post("/vtuber/notices/ack", response_model=NoticeAckOut)
+def ack_notice(data: NoticeAckIn, db: Session = Depends(get_db)):
+    """记一条通知**已读**（M5-1，devlog/253）。
+
+    修的是"刷新 / 深休眠重建之后完成报告**原地复活**"——今天前端只 `setDoneReport(null)`
+    清内存。已读集合落 `app_meta`（那正是为"进程外要记住的少量状态"建的表，见其模型注释）。
+    **幂等**：同一个 id 记两次结果一样（判据在 `tests/test_notices.py`）。
+    """
+    return NoticeAckOut(acked=notices_service.ack_notice(db, data.id))
 
 
 @router.get("/vtuber/{vtuber_id}", response_model=VTuberOut)

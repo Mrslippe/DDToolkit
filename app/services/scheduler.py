@@ -54,6 +54,7 @@ from app.services.weibo_auth import weibo_auth_manager
 from app.services import capabilities
 from app.services import identity_limit
 from app.services import messages as message_hub
+from app.services import notices as notices_service
 from app.services import rate_limit as rl
 # 注意：此处不调用 logging.basicConfig —— 根日志配置统一由
 # `app/core/logging_setup.py::setup_logging()`（在 app/main.py 里调用）完成。
@@ -318,6 +319,13 @@ def _set_account_last_result(seq: int, label: str, success: int, failed: int, sk
         "seq": seq, "label": label,
         "success": success, "failed": failed, "skipped": skipped,
     }
+    # M5-1（devlog/253）：「目睹才报」的"谁在看" = 推送通道当时有没有订阅者。
+    # ⚠️ `subscriber_count` 是 **property**（`hub.subscriber_count`，不加括号）——
+    #    第一版写成 `subscriber_count()`，全套 `test_services` 直接 `TypeError`；
+    #    而 `tests/test_notices.py` 里的替身当时写成了**方法**，于是**替身与真身形状不同**、
+    #    替身那边全绿 —— 判据的替身必须照抄真身的形状（见 devlog/253 §五）。
+    notices_service.note_run("account", seq,
+                             witnessed=message_hub.HUB.subscriber_count > 0)
 
 
 def _set_post_last_result(seq: int, kind: str, label: str,
@@ -337,6 +345,10 @@ def _set_post_last_result(seq: int, kind: str, label: str,
     }
     _status["post"]["last_result"] = payload
     message_hub.HUB.publish(message_hub.MSG_POSTS_CHANGED, payload)
+    # M5-1（devlog/253）：完成报告的"目睹"标记 —— 与 `_set_account_last_result` 同款
+    # （`subscriber_count` 是 property，别加括号）。
+    notices_service.note_run("post", seq,
+                             witnessed=message_hub.HUB.subscriber_count > 0)
 
 
 # ── 风控冷却窗口（R12a devlog/089；**R27 devlog/125 改造**）──────────────
