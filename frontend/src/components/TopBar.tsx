@@ -25,6 +25,7 @@ import { useUpdateCheck } from '../hooks/useUpdateCheck'
 import { setFetchBusy } from '../fetchBusy'
 import { isFirstRun } from '../bootState'
 import { dispatchFetchIdle, type FetchIdleKind } from '../utils/fetchIdle'
+import { withoutAlreadyPushedPosts } from '../utils/messageBus'
 import { EVENTS, emit, on, type LiveEdgePayload, type PushedProgressPayload } from '../utils/appEvents'
 import { useCapabilities, refreshCapabilities } from '../hooks/useCapabilities'
 import { hideToTray, quitApp } from '../utils/shellBridge'
@@ -310,7 +311,10 @@ export default function TopBar() {
           if (prev?.account.running && !s.account.running) kinds.push('account')
           if (prev?.post.running && !s.post.running) kinds.push('posts')
           if (prev) {
-            if (kinds.length) dispatchFetchIdle(kinds)
+            // M3（devlog/247）：这一轮如果**推送已经通知过**（同一个 seq），别再刷一次 ——
+            // "推送与轮询并存不重复"就是这么保证的（按轮次 seq 判，不看时间窗）。
+            const todo = withoutAlreadyPushedPosts(kinds, s.post.last_result?.seq)
+            if (todo.length) dispatchFetchIdle(todo)
           } else if (prevRunning.current && !(s.account.running || s.post.running)) {
             // 首轮轮询没有 prev（拿不到分路信息）：按"全都算"发，宁可多刷一次也不漏
             dispatchFetchIdle(['account', 'posts'])

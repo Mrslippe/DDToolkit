@@ -21,6 +21,7 @@
  */
 import { authFetch } from '../api/api'
 import type { AccountSnapshot } from '../api/types'
+import { dispatchFetchIdle, type FetchIdleKind } from './fetchIdle'
 import { myHost } from './hostIdentity'
 import { EVENTS, emit, type LiveEdgePayload, type PushedProgressPayload } from './appEvents'
 import { startMessageStream, type MessageStreamHandle, type StreamMessage } from './eventStream'
@@ -50,6 +51,35 @@ const MSG_NOTICE_PROGRESS = 'notice.progress'
 
 /** 账号字段快照（M3）：后端 `_push_account_snapshot` 在每次账号抓取提交后发。 */
 const MSG_ACCOUNT_SNAPSHOT = 'domain.account.snapshot'
+
+/**
+ * 帖子抓取收尾（M3，devlog/247）：后端 `_set_post_last_result` 发（**一轮一条**，带轮次 `seq`）。
+ *
+ * ⚠️ 与轮询的 idle 边沿**按 seq 去重**（`withoutAlreadyPushedPosts`）：两条通道都会说
+ * "帖子抓完了"，靠同一个 `seq` 认出是同一轮 ⇒ 只刷一次（不看时间窗、不看先后顺序）。
+ */
+const MSG_POSTS_CHANGED = 'domain.posts.changed'
+
+/** 最近一次由**推送**通知过的帖子轮次 seq（与轮询去重用）。 */
+let pushedPostsSeq: number | null = null
+
+/** 这一轮帖子是不是已经由推送通知过了。 */
+export function isPostsRoundPushed(seq: number | null | undefined): boolean {
+  return typeof seq === 'number' && pushedPostsSeq !== null && seq === pushedPostsSeq
+}
+
+/**
+ * 轮询的 idle 边沿在派发前调它：**同一个 seq 已经推过 ⇒ 把 `'posts'` 去掉**。
+ *
+ * 纯函数 ⇒ 能在 node 里直接测。其余 kind（`account` / `external`）不受影响：各有各的来源。
+ */
+export function withoutAlreadyPushedPosts(
+  kinds: FetchIdleKind[],
+  roundSeq: number | null | undefined,
+): FetchIdleKind[] {
+  if (!kinds.includes('posts') || !isPostsRoundPushed(roundSeq)) return kinds
+  return kinds.filter((k) => k !== 'posts')
+}
 
 /**
  * 账号快照的**必需键**（与后端 `scheduler._push_account_snapshot` 那七个字段逐字对应）。
@@ -160,6 +190,15 @@ export function bridgeMessage(msg: BusMessage, host: Host = defaultHost()): void
     //    同一条快照应用两次是空操作（判据在 messageBus.test.ts）。
     const snapshot = parseSnapshot(msg.payload)
     if (snapshot) emit(EVENTS.accountProgress, [snapshot], host)
+    return
+  }
+  if (msg.type === MSG_POSTS_CHANGED) {
+    // 帖子抓完（M3）：**复用现有的刷新信号**（`fetch-idle(['posts'])` → `PostsPage.refreshTick`），
+    // 消费侧一行不动。⚠️ 同一个轮次只发一次：`seq` 相同就直接吞掉（重连补发已在上面 return）。
+    const seq = typeof msg.payload?.seq === 'number' ? msg.payload.seq : null
+    if (seq !== null && seq === pushedPostsSeq) return
+    pushedPostsSeq = seq
+    dispatchFetchIdle(['posts'], host)
     return
   }
   if (msg.type !== MSG_NOTICE_MESSAGE) return // 别的类型各有消费者，M3–M5 里接

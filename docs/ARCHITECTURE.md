@@ -442,9 +442,9 @@ M0 **不退役**轮询。细节与不变量见 `docs/backend-repositories-and-ro
 | T0 开播边沿（`scheduler.py`，`commit` **之后**） | `domain.live.edge` | 243 |
 | 三个手动端点（受理 / 完成各一条） | `notice.progress` / `notice.message`（带 `originator`） | 244 |
 | `_push_account_snapshot`（账号抓取提交后） | `domain.account.snapshot` | 246 |
+| `_set_post_last_result`（一轮帖子抓取收尾，唯一收口） | `domain.posts.changed`（带轮次 `seq`，与轮询**按 seq 去重**） | 247 |
 
-**还没接的**：`domain.vtuber.updated`（⚠️ 碰 R33 事故路径，要先取出字段差异）与
-`domain.posts.changed`（要与 `fetch-status` 的 idle 边沿去重）—— 见执行方案 M3b/M3c。
+**还没接的**：`domain.vtuber.updated`（⚠️ 碰 R33 事故路径，要先取出字段差异）—— 见执行方案 M3b。
 
 ---
 

@@ -1402,6 +1402,18 @@ async function probeMessages(): Promise<Record<string, unknown>> {
     window.removeEventListener('ddtoolkit:account-progress', onSnap)
     result.snapshotCount = snaps.length
     result.snapshotShown = snaps.length === 1 && snaps[0]?.followers_count === 4242
+
+    // ⑦ 帖子抓完（M3c，devlog/247）：`domain.posts.changed` ⇒ **现有** `fetch-idle(['posts'])`
+    //    （消费侧一行不动）。探针按公共契约监听。
+    const idleKinds: string[][] = []
+    const onIdle = (e: Event) =>
+      idleKinds.push(((e as CustomEvent<{ kinds?: string[] }>).detail?.kinds) || [])
+    window.addEventListener('ddtoolkit:fetch-idle', onIdle)
+    await publish('domain.posts.changed', { seq: 987654, kind: 'quick', stored: 3 })
+    await waitFor(() => idleKinds.some((k) => k.includes('posts')), 5000)
+    window.removeEventListener('ddtoolkit:fetch-idle', onIdle)
+    result.postsIdleKinds = idleKinds
+    result.postsIdleShown = idleKinds.some((k) => k.includes('posts'))
   } catch (err) {
     result.error = String(err)
   } finally {

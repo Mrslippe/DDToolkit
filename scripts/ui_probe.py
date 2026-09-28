@@ -2025,6 +2025,11 @@ def _assert_messages(ms: dict | None, width: int) -> list[str]:
         bad.append(f"@{width} messages: 推了一条账号快照，页面的 `account-progress` 没收到"
                    f"（收到 {ms.get('snapshotCount')!r} 条）—— "
                    f"领域事件没解出来 / 载荷形状变了（必须是数组）？")
+    # 领域事件（M3c）：帖子抓完 ⇒ 现有 `fetch-idle(['posts'])`（**消费侧未改动**）
+    if not ms.get("postsIdleShown"):
+        bad.append(f"@{width} messages: 推了一条「帖子抓完」，页面的 `fetch-idle` 没收到 posts"
+                   f"（收到 {ms.get('postsIdleKinds')!r}）—— "
+                   f"领域事件没解出来 / 没接到现有刷新信号？")
     return bad
 
 
@@ -3402,6 +3407,8 @@ def main() -> int:
                       f"别人完成弹了={ms.get('otherToastShown')}（应为 True）")
                 print(f"  ⑥ 账号快照（M3）：页面收到 account-progress "
                       f"{ms.get('snapshotCount')!r} 条（进去了={ms.get('snapshotShown')}）")
+                print(f"  ⑦ 帖子抓完（M3c）：页面收到 fetch-idle "
+                      f"{ms.get('postsIdleKinds')!r}（进去了={ms.get('postsIdleShown')}）")
             rows = _assert_messages(ms, w)
             failures.extend(rows)
             for b in rows:

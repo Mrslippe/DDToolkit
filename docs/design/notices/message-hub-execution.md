@@ -388,7 +388,13 @@ M0b 不许"探针绿了就宣布通过"。
 > 亲和性本来就保证读回来是 str）⇒ 换成"**payload 的键与前端 `SNAPSHOT_FIELDS` 逐字对账**"，
 > 同一刀立刻红。**不可证伪的断言等于没有断言。**
 >
-> **还剩 M3b/M3c**：`domain.vtuber.updated`（⚠️ 风险最高，碰 R33 事故路径；发布点要先取出
+> **M3c 已落（devlog/247）**：`_set_post_last_result`（一轮帖子抓取的唯一收口，带轮次 `seq`）
+> 多一行 `HUB.publish` ⇒ 桥映射到**现有** `fetch-idle(['posts'])`；**并存不重复按 `seq` 判**
+> （不看时间窗），推送侧也吞同 seq 重复；反向 5/5。⚠️ 顺带关掉一个「本地绿 CI 红」
+> （新用例调 `async_fetch_accounts` 自带 `SessionLocal()` 走真实数据目录 ⇒ CI `no such table`；
+> **复现手法：空数据目录本地跑**）。
+>
+> **还剩 M3b**：`domain.vtuber.updated`（⚠️ 风险最高，碰 R33 事故路径；发布点要先取出
 > **字段差异**）与 `domain.posts.changed`（发布点在帖子抓取结束，要与 `fetch-status` 的
 > idle 边沿**去重**）。两条都按本刀模板走：消费侧不动 → 换触发源 → 探针端到端 + 反向验证。
 

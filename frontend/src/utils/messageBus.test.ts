@@ -19,7 +19,7 @@ import { MESSAGE_STREAM_PATH } from './eventStream'
 import { myHost, setHost } from './hostIdentity'
 import {
   KNOWN_MESSAGE_TYPES, bridgeMessage, parseLiveEdge, parseSnapshot, startMessageBus,
-  stopMessageBus, type BusMessage,
+  stopMessageBus, withoutAlreadyPushedPosts, type BusMessage,
 } from './messageBus'
 
 const msg = (type: string, payload: Record<string, unknown> = {}, replay = false): BusMessage => ({
@@ -215,6 +215,30 @@ describe('①‴ 账号快照（M3）：复用现有 `account-progress` 事件',
     expect(twice).toEqual(once)
     expect(twice.followers_count).toBe(999)
     expect(twice.display_name).toBe('快照V')
+  })
+})
+
+describe('①⁗ 帖子抓完（M3c）：复用 fetch-idle，按轮次 seq 去重', () => {
+  it("`domain.posts.changed` ⇒ `fetch-idle(['posts'])`（消费侧一行不动）", () => {
+    const host = new EventTarget()
+    const idle = collector(host, 'ddtoolkit:fetch-idle')
+    bridgeMessage(msg('domain.posts.changed', { seq: 901, kind: 'quick', stored: 3 }), host)
+    expect(idle).toEqual([{ kinds: ['posts'] }])
+  })
+
+  it('**同一个轮次再来一次 ⇒ 不重复发**（重连补发之外的重复也要吞掉）', () => {
+    const host = new EventTarget()
+    const idle = collector(host, 'ddtoolkit:fetch-idle')
+    bridgeMessage(msg('domain.posts.changed', { seq: 902 }), host)
+    bridgeMessage(msg('domain.posts.changed', { seq: 902 }), host)
+    expect(idle).toHaveLength(1)
+  })
+
+  it('轮询那边：推过的轮次把 `posts` 去掉、**保留其它 kind**；没推过的照常', () => {
+    expect(withoutAlreadyPushedPosts(['posts', 'account'], 902)).toEqual(['account'])
+    expect(withoutAlreadyPushedPosts(['posts'], 903), '没推过的轮次不该被吞').toEqual(['posts'])
+    expect(withoutAlreadyPushedPosts(['account'], 902), '不含 posts 时原样返回').toEqual(['account'])
+    expect(withoutAlreadyPushedPosts(['posts'], undefined), '没有 seq 时原样返回').toEqual(['posts'])
   })
 })
 

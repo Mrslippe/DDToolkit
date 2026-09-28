@@ -307,12 +307,20 @@ def _set_account_last_result(seq: int, label: str, success: int, failed: int, sk
 def _set_post_last_result(seq: int, kind: str, label: str,
                           videos: int, dynamics: int, stored: int, skipped: int,
                           issues: list[dict], video_missing: int | None) -> None:
-    _status["post"]["last_result"] = {
+    """一轮帖子抓取收尾：写状态通道的 `last_result`，**并推一条 `domain.posts.changed`**。
+
+    **M3（devlog/247）**：这是"帖子抓完了"的**唯一收口**（四个调用点都从这里过），
+    所以推送也放这里 —— 两条通道发**同一份内容**（含轮次 `seq`），前端凭 `seq` 去重。
+    ⚠️ 调用点都在帖子已落库之后（`_fetch_posts_core` 内部逐批提交）⇒ 满足方案 §2.2 的顺序。
+    """
+    payload = {
         "seq": seq, "kind": kind, "label": label,
         "videos": videos, "dynamics": dynamics,
         "stored": stored, "skipped": skipped,
         "issues": issues, "video_missing": video_missing,
     }
+    _status["post"]["last_result"] = payload
+    message_hub.HUB.publish(message_hub.MSG_POSTS_CHANGED, payload)
 
 
 # ── 风控冷却窗口（R12a devlog/089；**R27 devlog/125 改造**）──────────────

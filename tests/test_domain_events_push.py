@@ -145,6 +145,39 @@ def test_snapshot_and_status_ring_are_the_same_object(db, _fresh_hub):
 
 # ── ② 失败的那次不发 ─────────────────────────────────────────────────────
 
+def test_posts_round_publishes_one_message_with_the_same_payload(db, _fresh_hub):
+    """一轮帖子抓取收尾 ⇒ 一条 `domain.posts.changed`，与状态通道**同一份内容**（含轮次 `seq`）。
+
+    两条通道发同一份、带同一个 `seq` ⇒ 前端能凭它认出"这是同一轮"（`withoutAlreadyPushedPosts`），
+    于是"推送与轮询并存"不会刷两次。
+    """
+    from app.services import scheduler as sch
+
+    sch._set_post_last_result(7, "quick", "某V", 3, 5, 8, 1, [], None)
+
+    got = [m for m in _fresh_hub.replay_since(0) if m.type == M.MSG_POSTS_CHANGED]
+    assert len(got) == 1, f"一轮应当恰好一条，实际 {len(got)}"
+    assert got[0].payload == sch._status["post"]["last_result"], \
+        "推送与轮询发的必须是同一份内容（否则前端没法按 seq 去重）"
+    assert got[0].payload["seq"] == 7 and got[0].payload["stored"] == 8
+
+
+def test_no_posts_message_when_the_fetch_fails(db, monkeypatch, _fresh_hub):
+    """抓取失败（结果对象为 None）⇒ 不写 `last_result` ⇒ **没有消息**。"""
+    from app.services import scheduler as sch
+
+    async def _fake_core(**kwargs):
+        return None
+
+    monkeypatch.setattr(sch, "_fetch_posts_core", _fake_core, raising=False)
+    monkeypatch.setattr(sch, "archive_old_posts", lambda **kw: 0, raising=False)
+
+    asyncio.run(sch.async_fetch_posts("bilibili", "11073", 1, 1))
+
+    assert [m for m in _fresh_hub.replay_since(0)
+            if m.type == M.MSG_POSTS_CHANGED] == []
+
+
 def test_no_snapshot_when_the_account_fetch_fails(db, monkeypatch, _fresh_hub):
     """上游失败 ⇒ 不写快照 ⇒ **没有消息**（发布点在提交之后，失败路径根本到不了它）。"""
     from app.services import scheduler as sch
@@ -153,6 +186,10 @@ def test_no_snapshot_when_the_account_fetch_fails(db, monkeypatch, _fresh_hub):
         return False                      # 抓取失败：拿不到字段，也就不该发快照
 
     monkeypatch.setattr(sch, "_fetch_one_account", _fail)
+    # ⚠️ `async_fetch_accounts` 会**自己开 `SessionLocal()`**（走真实数据目录）——
+    #    本地开发库恰好有表、CI 干净克隆没有 ⇒ 症状是 "no such table: accounts"
+    #    （devlog/240 同一个坑：**本地绿、CI 红不一定是版本差异，也可能是本地恰好有状态**）。
+    monkeypatch.setattr(sch, "SessionLocal", lambda: db)
     acc = _mk_account(db)
 
     asyncio.run(sch.async_fetch_accounts([acc.id], label="单测"))
@@ -182,6 +219,7 @@ def test_one_snapshot_per_account_with_string_uid(db, monkeypatch, _fresh_hub):
         return True
 
     monkeypatch.setattr(sch, "_fetch_one_account", _fake_fetch, raising=False)
+    monkeypatch.setattr(sch, "SessionLocal", lambda: db)   # 同上：别让它开真实数据目录的会话
     acc = _mk_account(db)
     asyncio.run(sch.async_fetch_accounts([acc.id], label="单测"))
 
