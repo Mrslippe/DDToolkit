@@ -3,7 +3,7 @@
 > **用途**：改 bug / 做需求时快速定位「这个词在代码里叫什么、在哪个文件、牵动谁」。
 > **用法**：`Ctrl+F` 搜中文词或英文标识符；每行是「术语 · 含义 · 代码位置 · 关联」。
 > **与 `ARCHITECTURE.md` 的分工**：架构文档讲「为什么这样设计」，本文讲「这东西在哪、改它要动谁」。
-> 适用版本：`main`（2026-09-23，`MIGRATION_HEAD = f007`）。
+> 适用版本：`main`（2026-09-28，`MIGRATION_HEAD = f008`）。
 
 **目录**：§1 领域名词 · §2 数据模型与字段 · §3 抓取与调度 · §4 认证与凭据 ·
 §5 前端与界面 · §6 工程与流程 · §7 配置项速查 · §8 不变量（**指针 → `ARCHITECTURE.md` §6**） · §9 需求 → 代码入口。
@@ -63,10 +63,10 @@
 
 ## 2. 数据模型与字段
 
-**12 张表**：`vtubers` / `accounts` / `posts` / `account_stat_snapshots` / `live_sessions` /
+**13 张表**：`vtubers` / `accounts` / `posts` / `account_stat_snapshots` / `live_sessions` /
 `live_gift_days` / `live_category_overrides` / `vtuber_events` / `thirdparty_vtubers` /
 `app_meta`（通用 KV，f003）/ `vtuber_field_history`（曾用名·曾用签名，f004）/
-`profile_cards`（档案视图卡片布局，f006）。
+`profile_cards`（档案视图卡片布局，f006）/ `vtuber_avatar_history`（历次头像账本，f008）。
 列级定义见 `docs/backend-repositories-and-routers.md` §1；ER 图见 `docs/ARCHITECTURE.md` §2。
 
 | 字段/术语 | 含义 | 写入方 | 关联 |
@@ -182,7 +182,7 @@
 
 | 术语 | 含义 | 代码位置 | 关联 |
 |---|---|---|---|
-| **迁移链 / MIGRATION_HEAD** | alembic `a001→f007`（20 个版本） | `alembic/versions/`、`app/main.py::MIGRATION_HEAD` | 同步纪律 = 不变量 3（`docs/ARCHITECTURE.md` §6）；测试断言一致 |
+| **迁移链 / MIGRATION_HEAD** | alembic `a001→f008`（21 个版本） | `alembic/versions/`、`app/main.py::MIGRATION_HEAD` | 同步纪律 = 不变量 3（`docs/ARCHITECTURE.md` §6）；测试断言一致 |
 | **一键发布 / release.py** | 十步发布编排：预检→版本同步→门禁→打版→产物校验→提交/tag→推送→Release→报告 | `scripts/release.py`；手册 `docs/RELEASE.md`；上传 `scripts/upload_release_assets.py`（幂等） | 守卫：工作树脏/notes 缺失/版本不递增/NSIS 打平/**文档漂移**/tag 冲突 → 停；`--dry-run`、`--from <步骤>` 续跑；推完自动对齐本地 `origin/<分支>` tracking ref（按 URL 推送不会自动更新它） |
 | **端到端上游冒烟 / smoke_upstream** | 数据目录副本 + 真后端 + 真上游，跑"只有真环境才暴露"的链路（B 站检索 / uid 直查 / 池外收录 / 场次上游） | `scripts/smoke_upstream.py`（`--cold` = 空数据目录 + 清空凭据）；`dev_check.py --upstream` | `--capture` 顺带刷新真实 fixtures；skip 必须打印原因，不冒充通过 |
 | **真实 fixtures** | 真上游回包 / 真 `installer.nsi` 片段 / 真索引条目 —— 判据的"真形状"依据 | `tests/fixtures/`（`smoke_upstream.py --capture` 生成；专栏 HTML 真拉自 `x/article/view`）；用例 `tests/test_real_fixtures.py` | 「新判据至少一条用例吃真实数据」= 不变量 22（`docs/ARCHITECTURE.md` §6） |
@@ -201,7 +201,8 @@
 | **版本号同步点** | 发版时要一起改的那几处版本号 | **清单的真源 = `scripts/release.py::VERSION_FILES`**（别在这里复述）；口径见 `docs/RELEASE.md` §2 | 测试 `test_version_synced_with_devlog` |
 | **整机占用 / perf_report** | 应用**整棵进程树**（壳 + WebView2 各进程 + 后端 + conhost）的内存 / 线程 / 句柄，外加冷热启动、空闲 CPU、托盘深休眠、单核亲和代理 | `scripts/perf_report.py`；数字与结论：`docs/ARCHITECTURE.md` §3.13 | 内存口径 = 性能计数器 `Working Set - Private`（**任务管理器「内存」列**，不是 `PrivateUsage`）；实测空闲 **243–257MB**（其中 WebView2 占 143–152）、收进托盘十分钟后降到 **~92MB**；**"量到 0"必须区分"没进程"与"没量到"**（devlog/134：PowerShell 终止错误 rc=0 + 空 stdout，第一版打出一排 0） |
 | **测试临时目录 / TempRoot** | `cargo test` 建的 `%TEMP%\ddtk-{mig,ptr,shelllog}-*`：`Drop` 时自删 | `frontend/src-tauri/src/testtmp.rs`；三处用例的 `temp_root()` 都用它 | devlog/134：此前**只建不删**，实测堆了 **215 个目录 / 504MB**；`Drop` 两条路都收拾（目录 / 被文件占住）；`Deref<Target=Path>` 让调用点照旧写 `root.join(…)` |
-| **头像 / 签名取值链** | 卡片与左栏**同源**：头像 `resolveAvatar`、签名 `resolveSign` | `frontend/src/utils/avatarSource.ts`、`utils/signSource.ts` | R33/devlog135：左栏曾自己写一份"只看平台字段"的链 ⇒ 档案设置改完看着像没生效；护栏 `ui_probe --profile-sync`（+ 单测）；左栏 `Avatar[data-src]` 与 `.hero[data-avatar-src]` 是**为可测性挂的**（虚拟时间下图片加载不完），别删 |
+| **头像 / 签名取值链** | 卡片与左栏**同源**：头像 `resolveAvatar`、签名 `resolveSign`；**渲染也同源**：图片一律 `ProxyImage`，代理主机规则只在 `imageHost.ts` | `frontend/src/utils/avatarSource.ts`、`utils/signSource.ts`、`utils/imageHost.ts`、`components/common/ProxyImage.tsx` | R33/devlog135：左栏曾自己写一份"只看平台字段"的链 ⇒ 档案设置改完看着像没生效；**R46/devlog249**：取值同源 ≠ 渲染同源 —— 左栏曾用 radix `Avatar` 的裸 `<img>`，微博头像被防盗链 403 ⇒ 右栏变了、左栏变灰底首字。护栏 = `--profile-sync` 探针（比 `data-render-src`）+ 单测 + 结构判据（全站不许有 `<AvatarImage`）；`data-src`（口径）/ `data-render-src`（接线）是**为可测性挂的**，别删 |
+| **历次头像账本 / vtuber_avatar_history** | 每次抓到的头像各留一行（URL + 本地文件 + 首次见到时间），**当前用的是哪张**由 `vtubers.avatar` → 账号 `avatar_url` **推导**（没有 `is_selected` 列） | `app/services/vtuber_avatars.py`（写入/淘汰/推导）、`app/models/vtuber.py::VtuberAvatarHistory`、`GET /vtuber/{id}/avatars`；迁移 `f008` | R47/devlog249：用户口径「新抓取下来的不要直接覆盖以前的，都作为可选项保留，标记当前用的是哪个」。⚠️ **只记 URL 是半件事** —— 本地文件名原先固定（`{uid}{ext}`），新图会**覆盖旧文件** ⇒ 改成 `{uid}_{URL 摘要}{ext}` 版本化命名；每 V 封顶 `AVATAR_VERSION_LIMIT` 张，淘汰最旧但**跳过当前选中那张**；挂 `vtubers`/`accounts` 两个外键 ⇒ **purge 必清** |
 | **窗口圆角（系统 vs 自绘）** | Win11：圆角由 **DWM** 画（`html.dwm-corners` ⇒ CSS 半径 0）；Win10：回退自绘 `--radius-window`（8px） | `lib.rs::apply_dwm_corners` / `window_corners_mode`；`frontend/src/utils/windowCorners.ts`；`layout.css`、`tokens.css` | R34/devlog136：交给系统后**吸附（实测四角全方）、最大化方角全自动**；⚠️ 属性要在 `present_window`（显示之后）设 —— 在 `setup()` 里设会被显示流程冲掉；HRESULT 即能力探测（描边色失败不算失败） |
 | **四角白边** | 4px 圆角的抗锯齿像素混到了**白**：① WebView 的背景（壳侧透明）② `.app-shell` 自己的近白底 `--c-bg-page` | 壳侧 `lib.rs::setup()` 的 `set_background_color(Color(0,0,0,0))` + `rebuild_main_window()` 的 `.background_color(...)`；前端 `layout.css` 的 `html.shell-settled .app-shell{background:transparent}` + `main.tsx` 揭幕完成挂类 | R33/devlog135：**两层缺一不可**；壳层不能一开始就透明（揭幕期各区域还在渐显 ⇒ **闪桌面**，实测过）⇒ 用 `shell-settled` 卡在"幕收完、壳画好"之后；护栏 = 默认探针断言 computed 背景透明（反向验证会红）。R34 之后只有 **Win10**（自绘圆角）这条路还会走到 |
 | **dev_check** | 一键本地验证（**语法扫描** + pytest + 后端冒烟） | `scripts/dev_check.py` | 可选 `--frozen` / `--portable`；语法步是 2026-09-16 补的（devlog/131：`scripts/` 不被任何其它门禁编译，工具脚本坏了会静默绕过全部红灯） |

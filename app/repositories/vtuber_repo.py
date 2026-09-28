@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.models.vtuber import (VTuber, Account, Post, AccountStatSnapshot,
                                LiveGiftDay, ThirdpartyVtuber, VtuberEvent,
                                LiveSession, LiveCategoryOverride, AppMeta,
-                               VtuberFieldHistory, ProfileCard)
+                               VtuberFieldHistory, ProfileCard, VtuberAvatarHistory)
 from app.domain.text import normalize_title
 
 logger = logging.getLogger(__name__)
@@ -1356,3 +1356,50 @@ class VtuberFieldHistoryRepo:
             .filter(VtuberFieldHistory.vtuber_id == vtuber_id)
             .delete(synchronize_session=False)
         )
+
+
+class VtuberAvatarHistoryRepo:
+    """历次头像账本（`vtuber_avatar_history`，R47/devlog/249）：删除 + 读取。
+
+    写入在 `services/vtuber_avatars.py`（upsert + 封顶淘汰是业务口径）；
+    这里只提供级联清理（`app/services/purge.py` 调用）与读取 ——
+    与 `VtuberFieldHistoryRepo` 同一分工。
+    """
+
+    def __init__(self, db: Session):
+        self.db = db
+
+    def delete_by_account(self, account_id: int) -> int:
+        """删除该账号留下的头像版本行（级联清理用，不提交）。"""
+        return (
+            self.db.query(VtuberAvatarHistory)
+            .filter(VtuberAvatarHistory.account_id == account_id)
+            .delete(synchronize_session=False)
+        )
+
+    def delete_by_vtuber(self, vtuber_id: int) -> int:
+        """删除该 V 的全部头像版本行（级联清理用，不提交）。
+
+        与 `delete_by_account` 并存的原因同上：`account_id` 可为 NULL
+        （账号已删的行），只按 account 清会漏掉它们、删 V 时被外键挡下。
+        """
+        return (
+            self.db.query(VtuberAvatarHistory)
+            .filter(VtuberAvatarHistory.vtuber_id == vtuber_id)
+            .delete(synchronize_session=False)
+        )
+
+    def list_by_vtuber(self, vtuber_id: int, limit: int = 0) -> list[VtuberAvatarHistory]:
+        """该 V 的头像版本，**新的在前**（按 `first_seen_at`，同刻按 id 兜底定序）。
+
+        `limit<=0` = 不截断（清理/核对用）。
+        """
+        q = (
+            self.db.query(VtuberAvatarHistory)
+            .filter(VtuberAvatarHistory.vtuber_id == vtuber_id)
+            .order_by(VtuberAvatarHistory.first_seen_at.desc(),
+                      VtuberAvatarHistory.id.desc())
+        )
+        if limit > 0:
+            q = q.limit(limit)
+        return q.all()

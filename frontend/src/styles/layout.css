@@ -987,6 +987,31 @@ html.window-maximized body {
   flex: 1;
 }
 
+/* 左栏头像（R46，devlog/249）：改由 `ProxyImage` 渲染（radix `Avatar` → 三态链：
+   直连 → `/img-proxy` → 占位），**与右栏 hero 同一个渲染器**。
+   radix 时代尺寸/圆角靠 Tailwind 的 `size-[58px] rounded-full`，现在类名直接落在
+   `<img>`（或 fallback 的 `<span>`）上 ⇒ 尺寸、`object-fit`、圆角写在这里，
+   fallback 与 `.hero-avatar-fallback` 同一套语言（粉底 + 主色首字）。 */
+.vtuber-avatar {
+  width: 58px;
+  height: 58px;
+  flex-shrink: 0;
+  object-fit: cover;
+  border-radius: 999px;
+}
+
+.vtuber-avatar-fallback {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--sel-bg);
+  color: var(--c-primary-deep);
+  font-size: 22px;
+  font-weight: 600;
+  user-select: none;
+}
+
 /* 企划标识槽位（原阵营位）：每行最右侧 60px 区域，紧贴右缘，暂空置（后续挂载图片资源） */
 .vtuber-emblem {
   width: 54px;

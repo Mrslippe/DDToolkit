@@ -1,9 +1,9 @@
 # 后端架构总览：数据模型 + 抓取技术架构
 
-> 适用版本：`main`（2026-09-23，`MIGRATION_HEAD = f007`）。
+> 适用版本：`main`（2026-09-28，`MIGRATION_HEAD = f008`）。
 > 本文是**入口文档**：先看这里建立全貌，再按需进两份深度文档——
 > - `docs/GLOSSARY.md`：**查名词/代码路径**（改 bug 或做需求第一步）；
-> - `docs/backend-repositories-and-routers.md`：12 张表的列级定义、12 个仓储类、HTTP 路由计数（三种数法见该文 §3）；
+> - `docs/backend-repositories-and-routers.md`：13 张表的列级定义、14 个仓储类、HTTP 路由计数（三种数法见该文 §3）；
 > - `docs/backend-fetch-pipeline.md`：抓取链路细节（API 清单、节流测算、风控判定、停止原因）。
 > 前端形态见 `docs/UI-MAP.md`；本地开发/验证见 `docs/DEV-LOOP.md`；全部文档索引见 `docs/README.md`。
 
@@ -40,7 +40,7 @@ flowchart TB
     APP --> AUTH["auth 维护协程<br/>B 站 cookie 续期"]
   end
 
-  S --> DB[("SQLite vtuber.db（WAL）<br/>12 张表 / alembic a001→f007")]
+  S --> DB[("SQLite vtuber.db（WAL）<br/>13 张表 / alembic a001→f008")]
   S --> FS["DATA_DIR/static：头像 / 自定义背景 / 图片代理缓存"]
   HTTP --> UI["前端 Vite + React（只读渲染 + 轮询 fetch-status）"]
 ```
@@ -70,7 +70,7 @@ tenacity / httpx / fetcher），经 `_sched()` 缓存包装首次调用才导入
 
 ---
 
-## 2. 数据模型（12 张表 · 迁移链 a001 → f007）
+## 2. 数据模型（13 张表 · 迁移链 a001 → f008）
 
 ### 2.1 ER 总览
 
@@ -81,6 +81,8 @@ erDiagram
   ACCOUNTS ||--o{ LIVE_SESSIONS : "1:N 不级联"
   ACCOUNTS ||--o{ LIVE_GIFT_DAYS : "1:N 不级联"
   ACCOUNTS ||--o{ LIVE_CATEGORY_OVERRIDES : "1:N 不级联"
+  ACCOUNTS ||--o{ VTUBER_AVATAR_HISTORY : "1:N 不级联（account_id 可空）"
+  VTUBERS ||--o{ VTUBER_AVATAR_HISTORY : "1:N 不级联"
   VTUBERS ||--o{ VTUBER_EVENTS : "1:N 不级联"
   ACCOUNTS ||..o{ POSTS : "逻辑关联（无外键）"
   THIRDPARTY_VTUBERS }o..|| ACCOUNTS : "候选索引（无外键）"
@@ -170,6 +172,16 @@ erDiagram
     string value
     datetime changed_at
   }
+  VTUBER_AVATAR_HISTORY {
+    int id PK
+    int vtuber_id FK
+    int account_id FK
+    string platform
+    text avatar_url
+    string avatar_path
+    datetime first_seen_at
+    datetime last_seen_at
+  }
 ```
 
 ### 2.2 表职责
@@ -187,6 +199,7 @@ erDiagram
 | `thirdparty_vtubers` | 第三方 VTuber 索引（企划 / 公会），供候选池搜索增强 | **UNIQUE(source, platform_uid)** | danmakus vup-list（周级整表刷新） |
 | `app_meta` | 通用 KV（进程外需要记住的少量状态，如 `external.startup.last_run`） | `key` 主键 | 启动外部补抓时间戳（f003） |
 | `vtuber_field_history` | **曾用值**：昵称/签名被**平台侧覆盖前**的旧值（f004 起取代字段锁定；手改不入账） | `ix_vtuber_field_history_vtuber`（`vtuber_id`, `field`） | 只由抓取回写记账（`scheduler._fetch_one_account` → `services/vtuber_history.py`） |
+| `vtuber_avatar_history` | **历次头像账本**（f008，R47）：每次抓到的头像都留一行，可回看/切回旧图；"当前用的是哪张"由 `vtubers.avatar` / 账号 `avatar_url` **推导**（无 `is_selected` 列） | **UNIQUE(vtuber_id, avatar_url)**；`ix_vtuber_avatar_history_vtuber`（`vtuber_id`, `first_seen_at`） | 只由抓取回写记账（`scheduler._fetch_one_account` / `_deferred_avatar` → `services/vtuber_avatars.py`）；`GET /vtuber/{id}/avatars` 只读 |
 
 ### 2.3 迁移链与启动迁移
 
@@ -201,9 +214,10 @@ erDiagram
 | `f001` | `posts.note`（投稿动态并入后的 UP 主附言） | `e007` | `live_category_overrides` |
 | `f002` | `accounts.sort_order` + `accounts.locked_fields`（后者 f004 已删） | `f003` | `app_meta`（KV 表） |
 | `f004` | `vtubers.sign_override / sign_source_account_id` + `vtuber_field_history`，**删除 `accounts.locked_fields`**（devlog/074） | `f005` | 置顶动态：`posts.is_pinned / pinned_refreshed_at` + 索引 `ix_posts_platform_uid_pinned`（devlog/139） |
-| `f006` | 档案视图卡片布局：建 `profile_cards`（**12 张表**）（devlog/142） | `f007` | `vtuber_events` 加 `kind` / `emoji` + 索引 `ix_vtuber_events_vtuber_kind` = **当前 head**（devlog/162） |
+| `f006` | 档案视图卡片布局：建 `profile_cards`（devlog/142） | `f007` | `vtuber_events` 加 `kind` / `emoji` + 索引 `ix_vtuber_events_vtuber_kind`（devlog/162） |
+| `f008` | 历次头像账本：建 `vtuber_avatar_history`（**13 张表**）= **当前 head**（R47，devlog/249） | — | （暂无后续版本） |
 
-> 共 **20** 个版本（`alembic/versions/` 实际文件数：`a001`–`f007`）。f001–f003 由 v0.9.6–v0.9.8 批次引入，f004 见 devlog/074、f005 见 devlog/139、f006 见 devlog/142、f007 见 devlog/162。
+> 共 **21** 个版本（`alembic/versions/` 实际文件数：`a001`–`f008`）。f001–f003 由 v0.9.6–v0.9.8 批次引入，f004 见 devlog/074、f005 见 devlog/139、f006 见 devlog/142、f007 见 devlog/162、f008 见 devlog/249。
 
 启动迁移四形态（`app/main.py::_run_migrations`，冷启动快路径）：
 
@@ -679,11 +693,12 @@ flowchart LR
 
 1. **库内时间一律 naive UTC**，输出补 `+00:00`；
 2. **posts 无外键**——删除 V / 账号必须走 `app/services/purge.py`（帖子按 platform+uid，
-   **5 张子表按 account_id**：统计快照 / 直播场次 / 礼物日 / 分类校正 / 曾用值；
+   子表按 `account_id`：统计快照 / 直播场次 / 礼物日 / 分类校正 / 曾用值 / **历次头像（f008）**；
    **`profile_cards`（f006）与活动条目按 `vtuber_id`** —— 不是按 account_id），漏清一张就会被
-   `foreign_keys=ON` 整次回滚（v0.9.3 修复的事故；f004 的 `vtuber_field_history` 两个外键都有，
-   删 V 必须再按 `vtuber_id` 清一遍——`account_id=NULL` 的行按 account 清不到；
-   回归用例 `test_delete_vtuber_cleans_account_children` 看住）。清单的真源是
+   `foreign_keys=ON` 整次回滚（v0.9.3 修复的事故；f004 的 `vtuber_field_history` 与 f008 的
+   `vtuber_avatar_history` 两个外键都有，删 V 必须再按 `vtuber_id` 清一遍——`account_id=NULL`
+   的行按 account 清不到；回归用例 `test_delete_vtuber_cleans_account_children`
+   与 `tests/test_vtuber_avatars.py` 的 ⑨ 看住）。清单的真源是
    `app/services/purge.py` 头部那张表，别在别处再抄一遍；
 3. **新增迁移必须同步 `MIGRATION_HEAD`**（测试断言与 alembic head 一致）；
 4. **唯一约束去重**：账号 `(platform, platform_uid)`、帖子 `(platform, platform_uid,
@@ -930,6 +945,19 @@ flowchart LR
     `shutdown_default_executor(wait=True)` 去 join 它 ⇒ **整个测试套卡住**（不是变红，
     定位手法见 `DEV-LOOP.md` §6.18）。真源 `app/services/messages.py`，
     判据 `tests/test_messages.py`（19 条，含跨线程发布与"循环重建后仍能发"）。
+36. **同一份数据不许有两个渲染器**（R46，devlog/249）：图片一律走
+    `components/common/ProxyImage`（"直连 → `/img-proxy` → 占位"三态链），
+    "哪些主机必须直接走代理"这条规则**只许在 `utils/imageHost.ts` 写一遍**。
+    2026-09-13 修过一次同类问题（左栏自己拼 `bili.avatar_path ?? bili.avatar_url` ⇒
+    档案设置换过头像后"卡片变了、左栏没变"），当时抽了 `resolveAvatar`；
+    但**只抽了"取哪张"，没抽"怎么渲染"** —— 右栏 hero 换成 `ProxyImage` 时左栏还留着
+    radix `Avatar` 的裸 `<img>`，于是同一个微博头像 URL：hero 走代理拿得到、左栏直连被
+    防盗链 403 ⇒ 用户看到「右栏变了、左栏变灰底首字」。
+    ⇒ 判据分三层：**口径**（`resolveAvatar` 单测）+ **渲染路唯一**（结构判据
+    `utils/avatarRender.test.ts`：两处都必须 `<ProxyImage`、全站不许有 `<AvatarImage`、
+    `imgProxyUrl(` 只许出现在 `imageHost.ts`）+ **接线**（探针 `--profile-sync` 比
+    左右栏的 `data-render-src`）。⚠️ 只比 `data-src`（解析出来的源 URL）**永远量不出这个
+    bug** —— 出事时左右栏的 `data-src` 一模一样。
 
 ---
 
@@ -939,7 +967,7 @@ flowchart LR
 |---|---|
 | 接入新平台（抖音/小红书…） | 继承 `platforms/base.py::BasePlatform` → `platforms/registry.py` 注册 → 前端平台常量；调度器自动接管 |
 | 接入新第三方源 | 实现 `externals/base.py::ExternalSource` → `externals/__init__.py` 注册（声明 `jobs` 与周期） |
-| 新增表/列 | 新建 `alembic/versions/{fNNN}_*.py`（编号按**实际实施顺序**顺延，当前 head `f007` = `vtuber_events` 的 `kind` / `emoji`）→ 同步 `MIGRATION_HEAD` → 补 `models` 与 Repo → 若挂 `accounts/vtubers` 外键，**同步 `services/purge.py`** |
+| 新增表/列 | 新建 `alembic/versions/{fNNN}_*.py`（编号按**实际实施顺序**顺延，当前 head `f008` = `vtuber_avatar_history`）→ 同步 `MIGRATION_HEAD` → 补 `models` 与 Repo → 若挂 `accounts/vtubers` 外键，**同步 `services/purge.py`** |
 | 用户手改的字段被抓取覆盖 | **不再需要锁定**（`accounts.locked_fields` 已随 f004 删除）：抓取照常覆盖，覆盖前把旧值写进 `services/vtuber_history.py::record_field_change()`。⚠️ 记录只在**平台侧覆盖前**发生（手改不入账，devlog/075）；展示暂缓 —— 归入「账号信息历史快照」那条线（§TODO R9） |
 | 调整抓取频率/节流 | `app/core/config.py`（T0-T4 周期、请求间隔、批量休息、风控冷却） |
 | 新增前端视图 | `docs/UI-MAP.md`（右栏视图光条 + 场景状态机） |

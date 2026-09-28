@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Image as ImageIcon } from 'lucide-react'
-import { imgProxyUrl } from '../../api/api'
 import { normalizeImageUrl } from '../../utils/format'
+import { initialImageSrc, needsProxyFromStart, proxiedImageSrc } from '../../utils/imageHost'
 
 type Stage = 'direct' | 'proxy' | 'failed'
 
@@ -34,6 +34,11 @@ interface Props {
  *
  * 2026-09 P0/P1 收敛：原 LiveCalendar 内部 CoverImage 已并入本组件（消除同状态机双实现，
  * 并补上其缺失的微博直连代理分支）；换图场景由调用方 key={src} 重置状态。
+ *
+ * R46（2026-09-28，devlog/249）：**头像也必须走本组件**（左栏此前是 radix `Avatar` 的裸
+ * `<img>`，微博图床防盗链一律 403 ⇒ 右栏换了头像、左栏还灰着）。规则本身抽到
+ * `utils/imageHost`（`initialImageSrc`），并由 `utils/avatarRender.test.ts` 钉住
+ * "不许有第二个渲染器、不许有第二条代理规则"。
  */
 export default function ProxyImage({
   src,
@@ -47,19 +52,23 @@ export default function ProxyImage({
   draggable,
 }: Props) {
   const direct = src ? normalizeImageUrl(src) : undefined
-  const proxy = direct ? imgProxyUrl(direct) : undefined
+  const proxy = proxiedImageSrc(src)
   // 微博图床(sinaimg/wbcdn)防盗链对应用自身来源一律 403：直连注定失败，
-  // 初始 stage 直接走代理（img-proxy 已按主机带 weibo.com Referer，可正常拉取）
-  const needProxyFromStart =
-    !!direct &&
-    (direct.includes('sinaimg.cn') || direct.includes('wbcdn.cn'))
+  // 初始 stage 直接走代理（img-proxy 已按主机带 weibo.com Referer，可正常拉取）。
+  // ⚠️ "哪些主机要代理"的判断在 `utils/imageHost`（唯一落点，R46/devlog/249）——
+  //    组件里**不许**再列一遍主机名，否则左右栏又会各走各的。
+  const needProxyFromStart = needsProxyFromStart(direct)
   const [stage, setStage] = useState<Stage>(needProxyFromStart ? 'proxy' : 'direct')
   const current = stage === 'direct' ? direct : stage === 'proxy' ? proxy : undefined
+  // 首帧**决定**要用的那个 src（与加载成败无关）—— 挂在输出节点上供探针读：
+  // 虚拟时间下图片可能加载不成功而回落到 fallback（那时 `<img>` 已不在 DOM 里），
+  // 但"左右栏对同一个 URL 做出的渲染决策是否一致"正是 R46 要断的东西。
+  const renderSrc = initialImageSrc(src)
 
   if (!current) {
     if (fallback !== undefined) {
       return (
-        <span className={fallbackClassName ?? className} style={style}>
+        <span className={fallbackClassName ?? className} style={style} data-render-src={renderSrc}>
           {fallback}
         </span>
       )
@@ -89,6 +98,7 @@ export default function ProxyImage({
       src={current}
       alt={alt}
       className={className}
+      data-render-src={renderSrc}
       style={{
         width,
         height,

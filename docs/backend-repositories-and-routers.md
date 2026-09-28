@@ -1,6 +1,6 @@
 # 数据层与接口层文档（数据库 · Repositories · Routers）
 
-> 适用版本：`main`（2026-09-23，`MIGRATION_HEAD = f007`，迁移链 20 个版本、12 张表；**路由计数的三种数法见 §3**，别处不要再复述数字）。
+> 适用版本：`main`（2026-09-28，`MIGRATION_HEAD = f008`，迁移链 21 个版本、13 张表；**路由计数的三种数法见 §3**，别处不要再复述数字）。
 > 阅读路径：HTTP 入口（`app/routers`）→ SQL 封装（`app/repositories`）→ 表映射（`app/models`）→ 迁移（`alembic/versions`）。
 > 系统全貌见 `docs/ARCHITECTURE.md`；抓取链路细节见 `docs/backend-fetch-pipeline.md`；
 > 名词与代码路径速查见 `docs/GLOSSARY.md`；文档索引见 `docs/README.md`。
@@ -53,13 +53,15 @@
 | `accounts 1—N live_gift_days` | FK，无 ORM 级联 | 同上 |
 | `accounts 1—N live_category_overrides` | FK，无 ORM 级联 | 同上 |
 | `accounts 1—N vtuber_field_history` | FK，无 ORM 级联（`account_id` **可空**） | 同上；可空意味着删 V 时还要**按 `vtuber_id` 再清一遍** |
+| `accounts 1—N vtuber_avatar_history` | FK，无 ORM 级联（`account_id` **可空**，f008，R47） | 同上一行（同一形态：可空 ⇒ 两个键都要清） |
 | `vtubers 1—N vtuber_events` | FK，无 ORM 级联 | 同上 |
 | `vtubers 1—N vtuber_field_history` | FK，无 ORM 级联 | 同上 |
+| `vtubers 1—N vtuber_avatar_history` | FK，无 ORM 级联（f008，R47） | 同上 |
 | `posts` ↔ `accounts` | **无外键**（`platform + platform_uid` 逻辑关联） | 需按平台+UID 显式清 |
 | `thirdparty_vtubers` | 无外键 | 独立，随源整表刷新 |
 
 > 因为 `foreign_keys=ON`，**删 V / 删账号必须走 `app/services/purge.py`**：
-> 帖子按 `(platform, platform_uid)`、5 张子表按 `account_id`、活动条目 / 曾用值 / **卡片布局（f006）** 按 `vtuber_id`。
+> 帖子按 `(platform, platform_uid)`、子表按 `account_id`、活动条目 / 曾用值 / **卡片布局（f006）** / **历次头像（f008）** 按 `vtuber_id`。
 > 漏清任何一张 → `DELETE FROM accounts` 被外键挡下 → 整次事务回滚（v0.9.3 修复的
 > 「解除订阅失败」事故，见 devlog/040）。
 
@@ -240,6 +242,37 @@
 **为什么必须记账**：`account_stat_snapshots` 只存粉丝数/直播状态/开播标题，
 **不含昵称与签名** —— 不记账就是永久丢失（devlog/074 纠正的前提）。
 
+#### `vtuber_avatar_history` — 历次头像账本（f008，R47）
+
+| 列 | 类型 | 约束/说明 |
+|---|---|---|
+| `id` | INTEGER | PK |
+| `vtuber_id` | INTEGER | NOT NULL，FK → vtubers.id |
+| `account_id` | INTEGER | **可空**，FK → accounts.id（账号解除订阅后这一行仍说明"曾经有过这张脸"） |
+| `platform` | TEXT | 可空：来源平台（账号被删后仍标得出是哪个平台的头像） |
+| `avatar_url` | TEXT | NOT NULL：平台侧头像**原文**（远端 URL） |
+| `avatar_path` | TEXT | 可空：本地缓存 `static/` 相对路径（延后下载时先空着） |
+| `first_seen_at` | DATETIME | NOT NULL，首次见到这张图的时刻（列表按它倒序 = 时间线） |
+| `last_seen_at` | DATETIME | 可空，最近一次**仍见到**它的时刻 |
+
+唯一键 **UNIQUE(vtuber_id, avatar_url)**（幂等 upsert 的键）；
+索引 `ix_vtuber_avatar_history_vtuber (vtuber_id, first_seen_at)`。
+
+**写入策略**（`services/vtuber_avatars.py::record_avatar_version`）：
+**每次抓到都记**（不是"URL 变了才记"）—— upsert 只前移 `last_seen_at`，
+好处是升级**自愈**（库里已有的老头像下次抓取补上一行，选择器不会先空着）。
+每个 V 封顶 **`AVATAR_VERSION_LIMIT`** 张，超出丢**最旧**的，但**跳过用户当前选中的那张**
+（`protect_url`，否则"当前"这一项会从列表里消失而卡片还在用它）。
+读取走 `GET /vtuber/{id}/avatars` → `{current_url, versions[]}`；
+**`current_url` 是推导的**（`vtubers.avatar` → B 站账号 → 首个账号，口径 = 前端 `resolveAvatar` 的 URL 侧），
+**库里没有 `is_selected` 这一列** —— 存一个选中标记就是第二份真源。
+
+⚠️ **"别覆盖 URL"只是半件事**：本地缓存文件名原先**固定**（`static/avatars/{uid}{ext}`），
+新图下载会把旧文件**覆盖掉** ⇒ 只记 URL 的话旧选项全是破图。所以
+`_download_avatar` 改成版本化命名 `{uid}_{URL 的 sha1 前 8 位}{ext}`
+（同一个 URL ⇒ 同一个文件：重复抓取幂等；换了 URL ⇒ 新文件，旧文件留着）。
+淘汰只删**行**、不删文件（用户可能正用着那张，删文件会让卡片直接破图）。
+
 #### `thirdparty_vtubers` — 第三方 VTuber 索引（e004）
 
 | 列 | 类型 | 约束/说明 |
@@ -253,7 +286,7 @@
 | `source` | TEXT | 来源（danmakus） |
 | `updated_at` | DATETIME | 周级整表刷新 |
 
-### 1.3 迁移链（alembic，20 版本，head = `f007`）
+### 1.3 迁移链（alembic，21 版本，head = `f008`）
 
 | 版本 | 内容 |
 |---|---|
@@ -277,6 +310,7 @@
 | `f005` post_pinned | `posts.is_pinned`（NOT NULL 默认 0）+ `posts.pinned_refreshed_at` + 索引 `ix_posts_platform_uid_pinned`（R35，devlog/139） |
 | `f006` profile_cards | 建 `profile_cards`（档案视图卡片布局；唯一键 `(vtuber_id, card_key)`，**挂 vtubers 外键 ⇒ purge 必清**）（R37-P2，devlog/142） |
 | `f007` event_kind_emoji | `vtuber_events` 加 `kind`（NOT NULL 默认 `event`，**回填既有行**）+ `emoji`（可空）+ 索引 `ix_vtuber_events_vtuber_kind`；⚠️ **SQLite 不支持 `ALTER COLUMN` ⇒ 走 `batch_alter_table`**（R42-A，devlog/162） |
+| `f008` avatar_history | 建 `vtuber_avatar_history`（历次头像账本；唯一键 `(vtuber_id, avatar_url)`，**挂 vtubers/accounts 两个外键 ⇒ purge 必清**）（R47，devlog/249） |
 
 **纪律**：新增迁移后必须同步 `app/main.py` 的 `MIGRATION_HEAD`（`tests/test_services.py`
 断言与 alembic head 一致），否则冷启动快路径会把旧库误判为已最新。启动迁移四形态：
@@ -295,11 +329,14 @@
   `PostOut` / `AccountStatSnapshotOut` 等序列化时补 `+00:00`，避免前端按本地时区偏移 8 小时。
 - **文件**：头像 / 背景存 `static/` 相对路径（`avatar_path`、`background_path`），随
   `DDTOOLKIT_DATA_DIR` 走；`static/img-cache/` 是图片代理磁盘缓存，可随时重建。
+  ⚠️ **头像文件名是版本化的**（f008，R47）：`static/avatars/{platform}_{uid}_{URL 摘要}{ext}`
+  —— 固定文件名会让新头像**覆盖**旧图，历次头像就只剩 URL 没有图。旧库里那些
+  `{platform}_{uid}{ext}` 的老文件仍然有效（`avatar_path` 存的就是全名，不做迁移）。
 - **删除**：见 §1.1 外键表 —— 一律经 `app/services/purge.py`。
 
 ---
 
-## 2. Repositories（`app/repositories/vtuber_repo.py`，13 个类）
+## 2. Repositories（`app/repositories/vtuber_repo.py`，14 个类）
 
 构造注入会话：`Repo(db)`。CRUD 惯例：`create` 用 `model_dump()` 展开；`update` 逐个
 `setattr`；`get` 返回 `None` 表示不存在。
@@ -428,7 +465,18 @@
 | `replace_all(vtuber_id, cards)` | **整版替换**：一个事务里 delete + insert，失败整体回滚（不留半版布局）；自己 commit | ✅ 自成事务 |
 | `delete_by_vtuber(vtuber_id)` | 批量删除（级联清理，不提交） | ❌ 调用方 |
 
-### 2.12 `AppMetaRepo`（f003）
+### 2.12 `VtuberAvatarHistoryRepo`（f008，R47）
+
+| 方法 | 语义 | 提交 |
+|---|---|---|
+| `delete_by_account(account_id)` | 清该账号留下的头像版本行（级联清理，不提交） | ❌ 调用方 |
+| `delete_by_vtuber(vtuber_id)` | 清该 V 的全部头像版本行（`account_id` 可为 NULL，删 V 时必须走这条；不提交） | ❌ 调用方 |
+| `list_by_vtuber(vtuber_id, limit=0)` | 该 V 的版本行，**新的在前**（`limit<=0` = 不截断） | — |
+
+> 写入不在 Repo（要按"幂等 upsert + 封顶淘汰 + 跳过当前选中"的口径判断）：
+> 见 `services/vtuber_avatars.py::record_avatar_version()` 与 `avatar_versions()`。
+
+### 2.13 `AppMetaRepo`（f003）
 
 | 方法 | 语义 | 提交 |
 |---|---|---|
@@ -442,19 +490,20 @@
 
 ---
 
-## 3. Routers（69 个路由装饰器 = 71 个方法×路径组合）
+## 3. Routers（70 个路由装饰器 = 72 个方法×路径组合）
 
 > 口径说明（**三种数法别混**）：
 >
 > | 数法 | 值 | 怎么数 |
 > |---|---|---|
-> | **装饰器**（下文「N」用它） | **69** | `vtuber 52` + `auth 4` + `img_proxy 1` + `settings 9` + `messages 2` + `messages_debug 1`（dev-only）；其中 2 个是 `api_route(methods=["GET","POST"])`（`/vtuber/fetch`、`/vtuber/{id}/fetch`）—— ⚠️ **数装饰器必须把这 2 条算进去**，只数 `@router.get/post/...` 会少 2 |
-> | **OpenAPI 方法×路径** | **71** | `sum(len(methods) for p in app.openapi()["paths"].values())`；**这是唯一与实现无关的数法** ⇒ 日常复核用它 |
-> | OpenAPI 路径数 | **57** | `len(app.openapi()["paths"])`（同路径多方法只算 1 条；dev-only 的 `_debug` 路由**不在**，它要 dev token 才挂） |
+> | **装饰器**（下文「N」用它） | **70** | `vtuber 53` + `auth 4` + `img_proxy 1` + `settings 9` + `messages 2` + `messages_debug 1`（dev-only）；其中 2 个是 `api_route(methods=["GET","POST"])`（`/vtuber/fetch`、`/vtuber/{id}/fetch`）—— ⚠️ **数装饰器必须把这 2 条算进去**，只数 `@router.get/post/...` 会少 2 |
+> | **OpenAPI 方法×路径** | **72** | `sum(len(methods) for p in app.openapi()["paths"].values())`；**这是唯一与实现无关的数法** ⇒ 日常复核用它 |
+> | OpenAPI 路径数 | **58** | `len(app.openapi()["paths"])`（同路径多方法只算 1 条；dev-only 的 `_debug` 路由**不在**，它要 dev token 才挂） |
 >
 > ⚠️ **2026-09-27 重新数过**（M0 加了 `GET /messages/stream` 与 dev-only 的
-> `POST /messages/_debug/publish`，M1 加了 `POST /messages/ack`）：实测装饰器 **69** /
-> OpenAPI 方法×路径 **71** / 路径数 **57**。
+> `POST /messages/_debug/publish`，M1 加了 `POST /messages/ack`；R47 加了
+> `GET /vtuber/{id}/avatars`）：实测装饰器 **70** /
+> OpenAPI 方法×路径 **72** / 路径数 **58**。
 > 更早的版本：66/—/—（批次 16）、64/70/67（R42-A）—— 三种数法本来就容易漂。
 >
 > ⚠️ **"`app.routes` 对象数"这个口径在新版 FastAPI 下失效了（2026-09-27 实测）**：
@@ -472,7 +521,7 @@
 > ⚠️ **dev-only 路由也会进"装饰器"计数**：所以它单独一个模块 + 标准名 `router`
 > （`app/routers/messages_debug.py`）—— 用 `debug_router` 这种名字会让它从计数里消失。
 
-### 3.1 `app/routers/vtuber.py` — 主业务路由（52，42 条路径）
+### 3.1 `app/routers/vtuber.py` — 主业务路由（53，43 条路径）
 
 路径直接 `/vtuber/...`、`/account/...`、`/posts...`、`/post/...`、`/externals/...`；
 响应模型走 `app/schemas/vtuber.py`（`Out` 为 `from_attributes`）。
@@ -498,6 +547,7 @@
 | GET `/vtuber/{vtuber_id}/profile-cards` | 档案视图卡片布局（按 `y, x`）；空数组 = 还没排过（前端用默认布局渲染）（f006，R37-P2） |
 | PUT `/vtuber/{vtuber_id}/profile-cards` | **整版保存**卡片布局；格位越界 / `card_key` 重复 / 超过 50 张 → 422（**不静默夹取**）；V 不存在 404（f006，R37-P2） |
 | GET `/vtuber/{vtuber_id}/former-values` | 曾用名 / 曾用签名（各最多 5 条、最近优先、按值去重，含平台标注；f004）。**当前未接入 UI**（devlog/075：归「账号信息历史快照」，先不展示） |
+| GET `/vtuber/{vtuber_id}/avatars` | **历次头像可选项**（新的在前）+ `current_url`（当前用的那张，后端推导）；账本为空时用账号现值兜底（`id`/`first_seen_at` 为 null）；V 不存在 404（f008，R47，devlog/249）。只读 —— 记账在抓取侧 |
 | POST `/vtuber/{vtuber_id}/background` | 上传自定义背景（jpeg/png/webp/gif，≤10MB，否则 415/413）；**类型按文件头判、限额流式读取、临时文件原子 rename、提交成功后才删旧文件**（`services/vtuber_background.py`，M3b devlog/214）；时间戳后缀防缓存 |
 | DELETE `/vtuber/{vtuber_id}/background` | 清除背景回退头像铺底 |
 | DELETE `/vtuber/{vtuber_id}` | 解除订阅：`purge_vtuber()` 清 posts + 5 张子表 + 活动条目 + 曾用值 + **卡片布局（f006）**，再级联删 V+accounts；外键挡下 → 409 |

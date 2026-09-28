@@ -166,6 +166,43 @@ class VTuberFormerValuesOut(BaseModel):
     signs: list[FormerValueOut] = []
 
 
+# ── 历次头像（R47，devlog/249）────────────────────────────────────────
+
+class VtuberAvatarVersionOut(BaseModel):
+    """一张可选的历次头像。
+
+    - `id` / `first_seen_at` 为 None = 这一项只来自**账号现值**（账本里还没有它）：
+      升级后尚未抓取过、或用户刚手工加了账号。前端照常展示，只是标不出"首次见到"；
+    - `path` 是 `static/` 相对路径（前端用 `resolveAsset` 拼；拿不到本地文件时为 None，
+      此时用 `url` 直连/走代理 —— 与头像取值链同一条兜底逻辑）。
+    """
+    id: int | None = None
+    url: str
+    path: str | None = None
+    platform: str | None = None
+    account_id: int | None = None
+    first_seen_at: datetime | None = None
+    last_seen_at: datetime | None = None
+
+    @field_serializer("first_seen_at", "last_seen_at")
+    def _ser_avatar_dt(self, v: datetime | None):
+        # 库内为 naive UTC（SQLite 抹掉 tz）；不补时区前端会按本地时区解析、差 8 小时
+        if v is not None and v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc)
+        return v
+
+
+class VTuberAvatarsOut(BaseModel):
+    """历次头像可选项 + **当前用的是哪张**（R47）。
+
+    `current_url` 是**推导**出来的（`vtubers.avatar` → B 站账号 → 首个账号），
+    不是库里的一列：选中标记只有一份真源，选举与账号两条路写岔了谁也发现不了
+    （口径见 `services/vtuber_avatars.py::current_avatar_url`）。
+    """
+    current_url: str | None = None
+    versions: list[VtuberAvatarVersionOut] = []
+
+
 # ── Post ───────────────────────────────────────────────────────────
 
 class PostOut(BaseModel):

@@ -809,11 +809,25 @@ function measure(tag: string) {
     /** 滚动容器清单：nativeBarW/H > 0 = 原生滚动条；hOverflow = 横向内容溢出 */
     scrollers: [...document.querySelectorAll('body *')]
       .filter((n): n is HTMLElement => n instanceof HTMLElement)
+      // ⚠️ **排除 DEV 专属的「启动诊断」覆盖层**（`bootDiag.ts` 的 `#boot-diag`）：
+      // 它是诊断工具、不是产品界面，而且**自己会飘** —— 累计 ≥3 次资源加载失败才弹出来
+      //（探针的 `--seed-accounts` 影子账号只有远端 `avatar_url`，在探针环境里失败几次很正常，
+      //  ProxyImage 的三级兜底会处理掉），弹出时装它的 `<pre id="bd-body">` 是
+      // `max-height:50vh; overflow:auto` —— 一条竖滚动条按设计就该有。
+      // 不排掉它，这条判据就变成「跑这轮时恰好有 3 张图没加载出来」的抛硬币（R48，devlog/251）。
+      .filter((n) => !n.closest('#boot-diag'))
       .filter((n) => {
         const cs = getComputedStyle(n)
         return /(auto|scroll|hidden)/.test(cs.overflowX + cs.overflowY)
       })
-      .slice(0, 30)
+      // ⚠️ **上限就是盲区**（R48，devlog/251）：这里原本是 `.slice(0, 30)`，而匹配面
+      // 含 `overflow:hidden`（每个 radix `Avatar`/截断行都算一条）⇒ 条目一多，
+      // 排在后面的容器（如 cards 的 `.hero-scroll > .os-scroll`）**根本不进清单**，
+      // 于是"任何容器不得横向溢出"这条判据对它**静默空转**。
+      // 2026-09-28 实测：R46 把左栏 8 个 radix 头像（各带 `overflow:hidden`）换掉之后
+      // 清单窗口整体前移，**一个早就存在的 1100 溢出**当场现形 —— 不是那次改动弄坏的，
+      // 是尺子变准了。上限抬到 200（页面里不会有 200 个滚动容器，等于不再截断）。
+      .slice(0, 200)
       .map((e) => {
         const cs = getComputedStyle(e)
         // offsetWidth 含边框、clientWidth 不含：先减掉边框才是「滚动条占用」
@@ -4162,20 +4176,27 @@ export async function runUiProbe(): Promise<void> {
     await waitFor(() => document.querySelector('.hero-sign'))
     result.activeName = nameOf(activeRow())
     result.sidebarSign = text(activeRow()?.querySelector('.vtuber-sign'))
-    // 左栏头像：Radix `AvatarImage` 只在图片**加载完成**后才挂 `<img>`，而探针跑在虚拟时间下，
-    // 加载永远不会完成 ⇒ 只能读我们为可测性挂上的 `data-src`（devlog/135）。
-    // 卡片那侧走 `ProxyImage`（不 gate 加载），所以直接读 `img.hero-avatar[src]`。
-    result.sidebarAvatar = activeRow()?.querySelector('[data-src]')?.getAttribute('data-src') ?? null
+    // 左栏头像分两个值读，对应**两件不同的事**（R46，devlog/249）：
+    //   · `data-src`（挂在 `.vtuber-item` 行上）= **解析出来的源 URL**（口径，devlog/135）；
+    //   · `data-render-src`（`ProxyImage` 的输出节点）= **首帧决定要用的 src**（接线）。
+    // R46 那个 bug 正是"口径相同、渲染路不同"（微博图床：hero 走代理拿到了图，左栏裸连 403
+    // 回落成灰底首字）—— 只比 `data-src` 永远量不出来，所以必须比渲染决策。
+    result.sidebarAvatar = activeRow()?.getAttribute('data-src') ?? null
+    result.sidebarRenderSrc =
+      activeRow()?.querySelector('[data-render-src]')?.getAttribute('data-render-src') ?? null
     result.sidebarImg = activeRow()?.querySelector('img')?.getAttribute('src') ?? null
     result.heroName = text(document.querySelector('.hero-name'))
     result.heroSign = text(document.querySelector('.hero-sign'))
     // 卡片头像读 `.hero[data-avatar-src]`：`ProxyImage` 在虚拟时间下可能已回落成占位，
     // 直接读 `<img>` 会量成 None（见 HeroCardsView 里的注释）
     result.heroAvatar = document.querySelector('.hero')?.getAttribute('data-avatar-src') ?? null
+    result.heroRenderSrc = document.querySelector('.hero [data-render-src]')
+      ?.getAttribute('data-render-src') ?? null
+    result.heroImg = document.querySelector('.hero img')?.getAttribute('src') ?? null
     result.rows = rows().map((r) => ({
       name: nameOf(r),
       sign: text(r.querySelector('.vtuber-sign')),
-      avatar: r.querySelector('[data-src]')?.getAttribute('data-src') ?? null,
+      avatar: r.getAttribute('data-src') ?? null,
     }))
     // ── R33 补（2026-09-19）：**当场改**之后左栏要跟着 ──────────────────────
     // 上面那些是"启动前种进库"的现场（左右两边都是新加载的，覆盖不到"应用内编辑"）。

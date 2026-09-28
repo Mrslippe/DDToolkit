@@ -1,4 +1,4 @@
-import type { Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliSearchResult, Capabilities, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, PoolItem, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyVtuber, UpcomingReservation, UpdatePostsResult, VTuber, VTuberFormerValues, VtuberEvent, XhsCookieSaved } from './types'
+import type { Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliSearchResult, Capabilities, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, PoolItem, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyVtuber, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, XhsCookieSaved } from './types'
 import { ApiError, ApiShapeError } from './errors'
 import { HOST_HEADER, myHost } from '../utils/hostIdentity'
 import {
@@ -362,6 +362,12 @@ export const api = {
    *  R9（devlog/080）：接入账号信息历史弹窗 —— 按账号过滤后展示。 */
   getFormerValues: (vtuberId: number) =>
     request<VTuberFormerValues>(`/vtuber/${vtuberId}/former-values`),
+
+  /** 该 V 的**历次头像**（可选项，新的在前）+ 当前用的是哪张（R47，devlog/249）。
+   *  用户口径：「新抓取下来的不要直接覆盖以前的，把这些都作为可选项保留下来，
+   *  标记当前用的是哪个就行」。记账发生在抓取侧，这里只读。 */
+  getVtuberAvatars: (vtuberId: number) =>
+    request<VTuberAvatars>(`/vtuber/${vtuberId}/avatars`),
 
   /** 直播场次（由 self 快照转移推导） */
   liveSessions: (accountId: number) =>

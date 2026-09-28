@@ -837,12 +837,22 @@ img.hero-avatar {
   align-items: center;
   gap: 10px;
   width: fit-content;
+  /* R48（devlog/251）：`fit-content` + 3×191px 的徽章行 = **恒 593px**，窄窗（窗口最小宽
+     960，此时英雄区内容宽只有 ~394）会**顶出右缘被窗口裁掉**（1100 实测第三枚少 30px）。
+     `max-width:100%` 把这一行交给容器约束 ⇒ 下面 `.stat-pill` 的可收缩（它 `overflow:hidden`
+     ⇒ flex 的 `min-width:auto` 解析为 0）才真的生效。⚠️ 徽章美术是 `100% 100%` 铺满，
+     所以窄窗是**横向压扁**而不是裁切或换行（换行会破「行数 ≤2」那条不变量）。 */
+  max-width: 100%;
 }
 
 /* 徽章集（1.2.4.1）：高 37，距上下缘 13，集内徽章横排间隔 10 */
 .stat-set {
   display: flex;
   align-items: center;
+  /* R48：撑满 `.stat-sets`（= 英雄区内容宽）；配 `justify-content:center` 保持居中，
+     宽窗下与原来（fit-content + 父级 align-items:center）像素一致 */
+  width: 100%;
+  justify-content: center;
   gap: 10px;
   padding: 13px 0;
 }

@@ -63,6 +63,49 @@ class VtuberFieldHistory(Base):
     changed_at = Column(DateTime, nullable=False, default=_now)
 
 
+class VtuberAvatarHistory(Base):
+    """V 的历次头像（R47，devlog/249）。
+
+    ## 为什么需要它
+
+    用户 2026-09-28 定：「发现账号更换了头像，新抓取下来的**不要直接覆盖以前的**，
+    而是把这些都作为**可选项**保留下来，标记当前用的是哪个就行」。
+    动机是两类真实损失：
+    ① 平台换图后旧图**再也找不回来**（`accounts.avatar_url` 每次抓取覆盖）；
+    ② 更彻底的一层 —— 本地缓存文件名是**固定**的 `static/avatars/{platform}_{uid}.jpg`，
+       新图**把旧文件覆盖掉**，所以哪怕记下了旧 URL，图也已经没了。
+
+    所以本表记 URL+本地路径，且下载侧改成**带摘要的版本化文件名**（见
+    `services/scheduler.py::_download_avatar`）。这与 `vtuber_field_history`（曾用名/
+    曾用签名，devlog/074）是同一个套路：平台字段允许被覆盖，**旧值显式记账**。
+
+    ## 口径
+
+    - 唯一键 `(vtuber_id, avatar_url)`：同一个 V 的同一个 URL 只留一行（幂等 upsert，
+      每次抓取 touch `last_seen_at`，不会把历史刷成噪声）；
+    - `account_id` 可空（账号被删后这一行仍能说明"曾经有过这张脸"）；
+      ⚠️ 挂 `accounts.id` 外键 ⇒ **删除账号/删除 V 必须走 `services/purge.py`**；
+    - `first_seen_at` 是"首次见到这张图"的时刻（列表按它倒序 = 时间线）；
+    - **不存"当前选中"标记**：当前用的是哪张由 `vtubers.avatar`（用户显式选过）与
+      账号的 `avatar_url`（没选过时跟随平台最新）**推导**出来 ——
+      存一个 `is_selected` 列就是第二份真源，选举与账号这两条路写岔了没人能发现。
+    """
+    __tablename__ = "vtuber_avatar_history"
+    __table_args__ = (
+        UniqueConstraint("vtuber_id", "avatar_url", name="uq_vtuber_avatar_url"),
+        Index("ix_vtuber_avatar_history_vtuber", "vtuber_id", "first_seen_at"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    vtuber_id = Column(Integer, ForeignKey("vtubers.id"), nullable=False)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=True)
+    platform = Column(String, nullable=True)          # 来源平台（账号被删后仍可展示）
+    avatar_url = Column(Text, nullable=False)         # 平台侧头像原文（远端 URL）
+    avatar_path = Column(String, nullable=True)       # 本地缓存（static/ 相对路径）
+    first_seen_at = Column(DateTime, nullable=False, default=_now)
+    last_seen_at = Column(DateTime, nullable=True)
+
+
 class Account(Base):
     """VTuber 在各平台的账号"""
     __tablename__ = "accounts"

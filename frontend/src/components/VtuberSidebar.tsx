@@ -1,11 +1,11 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Download, Plus, Search } from 'lucide-react'
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Skeleton } from '@/components/ui/skeleton'
 import AddVtuberDialog from './AddVtuberDialog'
 import BatchFetchDialog from './BatchFetchDialog'
 import OverlayScroll from './OverlayScroll'
 import FloatPill from './common/FloatPill'
+import ProxyImage from './common/ProxyImage'
 import { useLocation, useNavigate, matchPath } from 'react-router-dom'
 import { api } from '../api/api'
 import type { AccountSnapshot, VTuber } from '../api/types'
@@ -406,14 +406,24 @@ const VtuberItem = memo(function VtuberItem({ vtuber, index, active, onSelect }:
       className={`vtuber-item anim-rise${active ? ' active' : ''}`}
       style={{ '--rise-i': index } as React.CSSProperties}
       onClick={() => onSelect(vtuber.id)}
+      /* `data-src` 是**为可测性存在**的（devlog/135，同 `.stat-sets[data-hover]` 的先例）：
+          探针跑在虚拟时间下，图片加载不会完成 ⇒ "左栏头像跟没跟档案设置"就量不到。
+          这里把**解析出来的 src（口径）**挂在行上；**渲染出来的 src（接线）**由
+          `ProxyImage` 的 `data-render-src` 给出（R46 起两者分开：口径对而渲染路分叉，
+          正是 R46 那个 bug 的形态）。 */
+      data-src={avatarSrc ?? ''}
     >
-      {/* `data-src` 是**为可测性存在**的（devlog/135，同 `.stat-sets[data-hover]` 的先例）：
-          探针跑在虚拟时间下，图片加载不会完成 ⇒ Radix 的 AvatarImage 不挂 `<img>` ⇒
-          "左栏头像跟没跟档案设置"就量不到。这里把**解析出来的 src** 直接挂在节点上。 */}
-      <Avatar className="size-[58px] shrink-0" data-src={avatarSrc ?? ''}>
-        <AvatarImage src={avatarSrc} referrerPolicy="no-referrer" />
-        <AvatarFallback>{vtuber.name.slice(0, 1)}</AvatarFallback>
-      </Avatar>
+      {/* 头像走 `ProxyImage`（R46，devlog/249）—— 与右栏 hero **同一个渲染器**。
+          此前这里是 radix `Avatar` + `AvatarImage`：裸 `<img>` 直连，微博图床防盗链
+          一律 403 ⇒ 在档案设置里选了微博头像后**右栏变了、左栏变灰底首字**。
+          取值链（`resolveAvatar`）当时已经同源（devlog/135），漂的是**渲染**这一层。 */}
+      <ProxyImage
+        className="vtuber-avatar"
+        alt={vtuber.name}
+        src={avatarSrc}
+        fallbackClassName="vtuber-avatar vtuber-avatar-fallback"
+        fallback={<span>{vtuber.name.slice(0, 1)}</span>}
+      />
       <div className="vtuber-info">
         <div className="vtuber-name-row">
           <span className="vtuber-name">{vtuber.name}</span>

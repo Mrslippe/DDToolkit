@@ -22,7 +22,7 @@ import {
 import { Button } from '@/components/ui/button'
 import FloatPill from './common/FloatPill'
 import { api, resolveAsset } from '../api/api'
-import type { Account, VTuber } from '../api/types'
+import type { Account, VTuber, VTuberAvatars } from '../api/types'
 import { PLATFORM_LABEL } from '../utils/postTypes'
 import { buildSignOptions, type SignOption as SignOptionData } from '../utils/signOptions'
 import { resolveSign } from '../utils/signSource'
@@ -150,6 +150,9 @@ export default function VtuberSettingsDialog({
 }: Props) {
   const [sign, setSign] = useState('')
   const [avatar, setAvatar] = useState<string | null>(null)
+  /** 历次头像（R47，devlog/249）：可选项列表 + 当前用的那张（后端推导）。
+   *  `null` = 还没取到（或取失败）—— 此时只影响"可选项"，选中态仍以 `avatar` 为准。 */
+  const [avatarBook, setAvatarBook] = useState<VTuberAvatars | null>(null)
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [addOpen, setAddOpen] = useState(false)
@@ -262,10 +265,35 @@ export default function VtuberSettingsDialog({
   }, [open])
 
   /**
+   * 历次头像（R47，devlog/249）：打开时取一次「可选项 + 当前用的那张」。
+   *
+   * 用户口径（2026-09-28）：「发现账号更换了头像，新抓取下来的不要直接覆盖以前的，
+   * 而是把这些都作为可选项保留下来，标记当前用的是哪个就行」。
+   *
+   * ⚠️ 与账号列表**分开取**（而不是从 `vtuber.accounts` 推）：账本在服务端，
+   * 而且它带着"首次见到的时间"这种账号对象里没有的信息。取失败只退化成空列表
+   * （不弹错、不挡住窗口）—— 这里只是"多给几个可选项"，不该成为阻断。
+   */
+  const vtuberId = vtuber?.id
+  useEffect(() => {
+    if (!open || vtuberId == null) {
+      setAvatarBook(null)
+      return
+    }
+    let alive = true
+    void api.getVtuberAvatars(vtuberId)
+      .then((d) => { if (alive) setAvatarBook(d) })
+      .catch(() => { if (alive) setAvatarBook(null) })
+    return () => { alive = false }
+  }, [open, vtuberId])
+
+  /**
    * 头像**选中即写入**（R1，2026-09-13；用户补充：去掉「用平台默认」，点哪个是哪个）。
    *
    * 不设"清空头像"这条路：没有显式选择时，卡片显示的就是**首个账号的头像**
    * （`PostsPage` 的 stableAvatar 回退链），所以"默认头像"只在**一个账号都没加**时出现。
+   * R47 起这条仍然成立，而且更直白 —— "回到跟随平台最新"就等于**点最上面那张**
+   * （那张就是账号当前的 `avatar_url`），不需要再加一个语义重复的按钮。
    */
   const pickAvatar = async (url: string) => {
     if (!vtuber || saving || url === (avatar ?? '')) return
@@ -476,7 +504,11 @@ export default function VtuberSettingsDialog({
   }
 
   const bg = resolveAsset(vtuber?.background_path ?? null)
-  const avatarOptions = (vtuber?.accounts ?? []).filter((a) => a.avatar_url)
+  /** 历次头像可选项（R47，devlog/249）：账本为空时后端用**账号现值**兜底 ⇒
+   *  列表不会比"只列账号头像"的旧版更短（升级后尚未抓取也不会变空）。 */
+  const avatarVersions = avatarBook?.versions ?? []
+  /** 当前生效的那张：本地选中态优先（乐观更新），否则用后端推导的 `current_url` */
+  const currentAvatarUrl = (avatar ?? '').trim() || avatarBook?.current_url || null
   /** 生效签名与来源（与卡片同口径：覆盖 → 来源账号 → 主账号） */
   const resolved = resolveSign(vtuber, vtuber?.accounts ?? [])
   /** 签名下拉栏的行数据（整形逻辑在 `utils/signOptions.ts`，有 6 条断言） */
@@ -595,36 +627,44 @@ export default function VtuberSettingsDialog({
               <h4 className="vd-section-title">
                 头像
                 <span className="vd-hint">
-                  {avatarOptions.length > 0 ? '点哪个用哪个（点完即生效）' : '添加账号后可选'}
+                  {avatarVersions.length > 0
+                    ? `${avatarVersions.length} 张可选 · 点哪个用哪个（点完即生效）`
+                    : '添加账号并抓取后可选'}
                 </span>
               </h4>
               <div className="vd-avatar-row">
-                {avatarOptions.map((a, i) => {
-                  const src = resolveAsset(a.avatar_path) ?? a.avatar_url ?? undefined
-                  // 未显式选过时，**首个账号即当前生效头像**（卡片回退链同口径）——
+                {avatarVersions.map((a, i) => {
+                  const src = resolveAsset(a.path) ?? a.url
+                  // 当前生效的是哪张：以**本地选中态**为准（乐观更新后立即回显），
+                  // 没选过时用后端推导的 `current_url`（口径 = 卡片回退链）。
                   // 此前 avatar 为 null 时一个都不高亮，看起来像"没头像"（R1 补充）。
-                  const active = avatar
-                    ? avatar === a.avatar_url
+                  const active = currentAvatarUrl
+                    ? a.url === currentAvatarUrl
                     : i === 0
+                  // 日期只用 ISO 前 10 位（与 AccountHistoryDialog 的 `changed_at` 同一写法）；
+                  // 为 null = 这一项来自账号现值、账本里还没有它 ⇒ 不编一个假时间
+                  const when = a.first_seen_at ? a.first_seen_at.slice(0, 10) : null
+                  const label = PLATFORM_LABEL[a.platform ?? ''] ?? a.platform ?? '平台'
                   return (
                     <button
-                      key={a.id}
+                      key={a.id ?? `${a.url}-${i}`}
                       type="button"
-                      title={`用 ${a.platform} 的头像`}
+                      title={`用 ${label} 的头像`
+                        + (when ? ` · 首次见到 ${when}` : ' · 首次见到时间未知')
+                        + (active ? '（当前）' : '')}
                       className={`vd-avatar-opt${active ? ' on' : ''}`}
                       disabled={saving}
-                      onClick={() => a.avatar_url && void pickAvatar(a.avatar_url)}
+                      onClick={() => void pickAvatar(a.url)}
                     >
                       {/* R1（2026-09-13）：预览同样走 ProxyImage —— 裸 <img> 在
                           图床 403 时是破图/空白（实测 i0.hdslb.com 与 sinaimg 直连 403），
-                          看上去就像"选中的是无头像默认图" */}
-                      {src
-                        ? <ProxyImage src={src} alt="" />
-                        : <span>{a.platform}</span>}
+                          看上去就像"选中的是无账号默认图"。
+                          R47：微博头像现在**真的能选中**（同一条渲染路，见 R46/devlog249） */}
+                      <ProxyImage src={src} alt="" />
                     </button>
                   )
                 })}
-                {avatarOptions.length === 0 && (
+                {avatarVersions.length === 0 && (
                   // 只有**一个账号都没加**（或账号都没有头像）时才回到默认头像
                   <span className="vd-hint">暂无账号头像，卡片显示名字首字占位</span>
                 )}

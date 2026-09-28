@@ -27,6 +27,7 @@ from app.schemas.vtuber import (
     VtuberEventOut, VtuberEventCreate, VtuberEventUpdate, FutureReservationOut,
     ProfileCardOut, ProfileLayoutIn,
     FormerValueOut, VTuberFormerValuesOut,
+    VtuberAvatarVersionOut, VTuberAvatarsOut,
     BiliSearchOut, BiliSearchItemOut,
 )
 from app.services import pool
@@ -41,6 +42,7 @@ from app.services.live_upstream import load_live_upstream
 from app.services.danmaku_cloud import build_word_cloud
 from app.services.danmaku_words import build_extra_words
 from app.services.vtuber_history import former_values
+from app.services.vtuber_avatars import avatar_versions
 from app.schemas.vtuber import (LiveDanmakuInfo, LiveMetricsOut, LiveEventOut,
                                 LiveWordOut, LiveUpstreamOut)
 from app.services.post_text import extract_post_text
@@ -406,6 +408,22 @@ def vtuber_former_values(vtuber_id: int, db: Session = Depends(get_db)):
 class AccountOrderRequest(BaseModel):
     """平台徽章拖拽重排的提交体（按新顺序给出账号 id）。"""
     account_ids: list[int]
+
+
+@router.get("/vtuber/{vtuber_id}/avatars", response_model=VTuberAvatarsOut)
+def vtuber_avatars(vtuber_id: int, db: Session = Depends(get_db)):
+    """该 V 的**历次头像**可选项 + 当前用的是哪张（R47，devlog/249）。
+
+    用户口径（2026-09-28）：「账号更换了头像，新抓取下来的不要直接覆盖以前的，
+    把这些都作为可选项保留下来，标记当前用的是哪个」。
+
+    与 `/former-values` 同一个理由不塞进 `VTuberOut`（`/vtuber/list` 会 N+1）；
+    返回里**只读**，不在这里落库 —— 记账发生在抓取侧（`services/scheduler.py`）。
+    """
+    v = VTuberRepo(db).get(vtuber_id)
+    if not v:
+        raise HTTPException(404, f"VTuber id={vtuber_id} 不存在")
+    return VTuberAvatarsOut.model_validate(avatar_versions(db, v))
 
 
 @router.put("/vtuber/{vtuber_id}/account-order", response_model=list[AccountOut])

@@ -58,6 +58,28 @@ export interface VTuberFormerValues {
   signs: FormerValueItem[]
 }
 
+/** 一张可选的**历次头像**（R47，devlog/249）。
+ *  `id` / `first_seen_at` 为 null = 这一项只来自**账号现值**（账本里还没有它：
+ *  升级后尚未抓取过，或用户刚手工加了账号）—— 仍然可点，只是标不出"首次见到"。
+ *  `path` 是 `static/` 相对路径，用 `resolveAsset` 拼；拿不到本地文件时为 null，
+ *  此时用 `url`（`ProxyImage` 会按主机决定直连还是走代理）。 */
+export interface VtuberAvatarVersion {
+  id: number | null
+  url: string
+  path: string | null
+  platform: string | null
+  account_id: number | null
+  first_seen_at: string | null
+  last_seen_at: string | null
+}
+
+/** `GET /vtuber/{id}/avatars`：历次头像（新的在前）+ **当前用的是哪张**。
+ *  `current_url` 由后端推导（`vtubers.avatar` → B 站账号 → 首个账号），不是库里的一列。 */
+export interface VTuberAvatars {
+  current_url: string | null
+  versions: VtuberAvatarVersion[]
+}
+
 /** `GET /account/{id}/stat-snapshots`：账号信息快照（粉丝数/直播状态时间序列）。
  *  source：self = 本工具直采，zeroroku = 第三方回填（R4 的合并口径就吃这个字段）。 */
 export interface AccountStatSnapshot {

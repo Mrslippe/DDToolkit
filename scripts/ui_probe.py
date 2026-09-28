@@ -141,11 +141,13 @@ def _seed_profile(data: Path, vtuber_id: int, base_url: str) -> dict:
     ⚠️ 字段语义与「档案设置」窗口写进去的完全一致（R33 devlog/135）：avatar 存的是
     **账号头像的 URL 原文**，不是本地路径。
 
-    ⚠️ 种进 `avatar` 的 URL 用**后端自己**的 `{base_url}/static/...`（而不是 CDN 原文）：
-    Radix 的 `AvatarImage` 只在图片**真的加载成功**之后才把 `<img>` 挂进 DOM，
-    用 CDN 地址在无头探针里会因网络/CSP 拿不到 ⇒ `img` 不存在 ⇒ 断言量到 `None`，
-    看着像"没接线"，其实是尺子没加载出图（第一次跑就是这么假红了一次）。
-    本地 URL 走同一条渲染路径，且必然加载成功。
+    ⚠️ **R46（devlog/249）改口径：种的头像必须落在"直连注定失败"的微博图床主机上。**
+    原先种的是后端自己的 `{base_url}/static/...`，理由是"Radix `AvatarImage` 只在图片
+    真的加载成功之后才把 `<img>` 挂进 DOM，用 CDN 地址在无头探针里会拿不到 ⇒ 量成 None"。
+    那条理由**随 R46 失效**：左栏已改用 `ProxyImage`（不 gate 加载，且把首帧决策挂在
+    `data-render-src` 上，回落成占位也读得到）。
+    反而**必须**用微博主机 —— 用户报的 bug 只在"两处渲染路不同"时出现（hero 走代理拿得到、
+    左栏裸连 403），种一个两边都能直连成功的本地 URL，这个 bug **永远量不出来**（假绿）。
 
     另外挑一个**没有 override** 的 V 当**对照组**：它必须照旧显示平台签名 ——
     没有对照组的话，"左栏永远渲染成自定义文本"这种错法也能骗过断言。
@@ -154,6 +156,9 @@ def _seed_profile(data: Path, vtuber_id: int, base_url: str) -> dict:
     import sqlite3
 
     sign = "探针自定义签名·左栏应同步"
+    # 微博图床（sinaimg）—— 见上面那段：种本地 URL 会让 R46 那条断言空转。
+    # 固定地址（不做探测），因为断言只看**首帧决策**，不要求这个图真能下载到。
+    avatar = "https://wx1.sinaimg.cn/orj360/ddtoolkit-probe-avatar.jpg"
     con = sqlite3.connect(data / "vtuber.db")
     try:
         # ⚠️ 头像要挑**不是 bilibili 账号**那一枚：旧左栏的取值链是
@@ -166,7 +171,9 @@ def _seed_profile(data: Path, vtuber_id: int, base_url: str) -> dict:
         if not row:
             raise SystemExit(f"[probe] VTuber#{vtuber_id} 没有任何账号带头像，种不了自定义头像")
         path, url = row
-        avatar = f"{base_url}/{str(path).lstrip('/')}" if path else url
+        # `platform_avatar` = 该账号在平台上真实的那枚（`avatarLocal`/日志用）；
+        # 断言比的是种进 `vtubers.avatar` 的那个微博地址。
+        platform_avatar = f"{base_url}/{str(path).lstrip('/')}" if path else url
         con.execute("UPDATE vtubers SET sign_override=?, avatar=? WHERE id=?",
                     (sign, avatar, vtuber_id))
         ctl = con.execute(
@@ -176,7 +183,8 @@ def _seed_profile(data: Path, vtuber_id: int, base_url: str) -> dict:
         con.commit()
     finally:
         con.close()
-    return {"sign": sign, "avatar": avatar, "avatarLocal": bool(path),
+    return {"sign": sign, "avatar": avatar, "platformAvatar": platform_avatar,
+            "avatarLocal": bool(path),
             "controlName": ctl[0] if ctl else None,
             "controlSign": (ctl[1] or "").strip() if ctl else None}
 
@@ -2436,7 +2444,8 @@ def main() -> int:
             seeded_profile = _seed_profile(data, vid, f"http://127.0.0.1:{be_port}")
             print(f"[probe] 已种自定义签名/头像：{seeded_profile['sign']!r} / "
                   f"avatar={seeded_profile['avatar']!r}"
-                  f"（{'本地 static 兜底' if seeded_profile['avatarLocal'] else 'CDN 原文'}）"
+                  f"（微博图床占位地址，验「首帧走代理」；账号实有头像 "
+                  f"{'本地 static 缓存' if seeded_profile['avatarLocal'] else 'CDN 原文'}）"
                   f"（副本 DB，非真库）")
             print(f"[probe] 目标路由 {route}（VTuber #{vid}）"
                   f"；对照组 = {seeded_profile.get('controlName')!r}")
@@ -4349,6 +4358,27 @@ def main() -> int:
                 if ps.get("heroSign") != want_sign:
                     failures.append(f"@{w} profile-sync: 卡片签名是 {ps.get('heroSign')!r}"
                                     f"（卡片自己都没跟随？口径被改坏了）")
+                # ── R46（devlog/249）：**渲染路**必须也是同一条 ─────────────────
+                # 上面两条比的是**解析出来的源 URL**（口径）：R46 那个 bug 里左右栏的
+                # `data-src` **完全一样**，却一个显示图、一个显示灰底首字 —— 差别在
+                # "拿这个 URL 怎么渲染"（hero 走 `/img-proxy`，左栏裸连微博 CDN 被 403）。
+                # 所以这里比 `ProxyImage` 挂出来的**首帧决策**（`data-render-src`），
+                # 并额外要求它确实落在代理上（否则"两边一样地不代理"也能骗过相等断言）。
+                side_r, hero_r = ps.get("sidebarRenderSrc"), ps.get("heroRenderSrc")
+                print(f"    左栏渲染源={side_r!r}\n    卡片渲染源={hero_r!r}")
+                if not side_r or not hero_r:
+                    failures.append(
+                        f"@{w} profile-sync: 渲染源读不到（左栏={side_r!r} 卡片={hero_r!r}）"
+                        f"—— `ProxyImage` 必须把首帧决策挂在 `data-render-src` 上；"
+                        f"读到 None 通常意味着某一栏没用 `ProxyImage`（R46 的根因）")
+                elif side_r != hero_r:
+                    failures.append(f"@{w} profile-sync: **左右栏渲染源不一致**"
+                                    f"（左栏={side_r!r}，卡片={hero_r!r}）—— 头像渲染路又分叉了")
+                elif "/img-proxy" not in side_r:
+                    failures.append(f"@{w} profile-sync: 种下的是微博图床地址，但两栏都直连"
+                                    f"（{side_r!r}）—— 防盗链规则没生效，实机会白块/灰底")
+                else:
+                    print(f"  [ok] 微博头像左右栏同源且都走代理 ✓")
                 ctl_name, ctl_sign = seeded_profile.get("controlName"), seeded_profile.get("controlSign")
                 # R33 补（2026-09-19）：**当场改**之后左栏必须跟着（编辑后的同步 ——
                 # 上面那些"启动前种进库"的现场覆盖不到它，用户报的就是这一条）
@@ -4372,7 +4402,7 @@ def main() -> int:
                 elif ctl_name:
                     print(f"  对照：除目标 V 外没有别的行显示自定义签名 ✓")
                 if not failures:
-                    print("  [ok] 左栏与卡片同源：自定义签名/头像都到位，对照组未被污染")
+                    print("  [ok] 左栏与卡片同源：自定义签名/头像都到位、渲染源一致，对照组未被污染")
             for b in failures:
                 print("   -", b)
             return 1 if failures else 0
