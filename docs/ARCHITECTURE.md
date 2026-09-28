@@ -435,6 +435,17 @@ T0 的进度反馈就是这条通道（无进度条、无胶囊）。
 中转到应用循环投递。**两条通道并存**：轮询是一致性兜底（推送漏发 / 重连窗口），
 M0 **不退役**轮询。细节与不变量见 `docs/backend-repositories-and-routers.md` §3.5。
 
+**当前的真实发布方**（谁在 `publish` —— 有一张清单比散着找可靠）：
+
+| 发布方 | 消息 | devlog |
+|---|---|---|
+| T0 开播边沿（`scheduler.py`，`commit` **之后**） | `domain.live.edge` | 243 |
+| 三个手动端点（受理 / 完成各一条） | `notice.progress` / `notice.message`（带 `originator`） | 244 |
+| `_push_account_snapshot`（账号抓取提交后） | `domain.account.snapshot` | 246 |
+
+**还没接的**：`domain.vtuber.updated`（⚠️ 碰 R33 事故路径，要先取出字段差异）与
+`domain.posts.changed`（要与 `fetch-status` 的 idle 边沿去重）—— 见执行方案 M3b/M3c。
+
 ---
 
 ### 3.9 未登录能力矩阵与内容抓取闸门（2026-09-15，devlog/086）

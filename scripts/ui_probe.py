@@ -2020,6 +2020,11 @@ def _assert_messages(ms: dict | None, width: int) -> list[str]:
     if not ms.get("otherToastShown"):
         bad.append(f"@{width} messages: **别人点的**完成提示没弹 —— "
                    f"小窗（M4）做的动作主窗口就看不到")
+    # 领域事件（M3）：账号快照 ⇒ 现有 `account-progress` 事件（**消费侧未改动**）
+    if not ms.get("snapshotShown"):
+        bad.append(f"@{width} messages: 推了一条账号快照，页面的 `account-progress` 没收到"
+                   f"（收到 {ms.get('snapshotCount')!r} 条）—— "
+                   f"领域事件没解出来 / 载荷形状变了（必须是数组）？")
     return bad
 
 
@@ -3395,6 +3400,8 @@ def main() -> int:
                       f"（{ms.get('progressPanelTexts')!r}）；"
                       f"自家完成弹了={ms.get('ownToastShown')}（应为 False）· "
                       f"别人完成弹了={ms.get('otherToastShown')}（应为 True）")
+                print(f"  ⑥ 账号快照（M3）：页面收到 account-progress "
+                      f"{ms.get('snapshotCount')!r} 条（进去了={ms.get('snapshotShown')}）")
             rows = _assert_messages(ms, w)
             failures.extend(rows)
             for b in rows:

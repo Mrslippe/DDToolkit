@@ -20,6 +20,7 @@
  * ⚠️ 与 `fetch-status` 轮询**并存**：推送会漏（重连窗口），轮询是兜底。本模块不退役任何轮询。
  */
 import { authFetch } from '../api/api'
+import type { AccountSnapshot } from '../api/types'
 import { myHost } from './hostIdentity'
 import { EVENTS, emit, type LiveEdgePayload, type PushedProgressPayload } from './appEvents'
 import { startMessageStream, type MessageStreamHandle, type StreamMessage } from './eventStream'
@@ -46,6 +47,37 @@ const MSG_LIVE_EDGE = 'domain.live.edge'
 
 /** 手动任务开始（M2）：后端在手动端点里发（点按钮 ⇒ 立刻看到进度，不等轮询）。 */
 const MSG_NOTICE_PROGRESS = 'notice.progress'
+
+/** 账号字段快照（M3）：后端 `_push_account_snapshot` 在每次账号抓取提交后发。 */
+const MSG_ACCOUNT_SNAPSHOT = 'domain.account.snapshot'
+
+/**
+ * 账号快照的**必需键**（与后端 `scheduler._push_account_snapshot` 那七个字段逐字对应）。
+ * 缺键就当成"解不出来"⇒ **不发半个事件**：半个 snapshot 合并进侧栏会留下空字段。
+ */
+const SNAPSHOT_FIELDS = [
+  'platform_uid', 'display_name', 'sign', 'followers_count',
+  'live_status', 'live_title', 'avatar_path',
+] as const
+
+/** 把信封 payload 解成 `AccountSnapshot`；缺必需键返回 null。 */
+export function parseSnapshot(
+  payload: Record<string, unknown> | undefined,
+): AccountSnapshot | null {
+  if (!payload) return null
+  for (const f of SNAPSHOT_FIELDS) {
+    if (!(f in payload)) return null
+  }
+  return {
+    platform_uid: String(payload.platform_uid),
+    display_name: (payload.display_name ?? null) as string | null,
+    sign: (payload.sign ?? null) as string | null,
+    followers_count: (payload.followers_count ?? null) as number | null,
+    live_status: (payload.live_status ?? null) as number | null,
+    live_title: (payload.live_title ?? null) as string | null,
+    avatar_path: (payload.avatar_path ?? null) as string | null,
+  }
+}
 
 /** 谁点的这个动作（M2，方案 §8.5 E）：与自己一致 ⇒ **完成类**提示不再重复弹。 */
 function originatorOf(payload: Record<string, unknown> | undefined): string {
@@ -119,6 +151,15 @@ export function bridgeMessage(msg: BusMessage, host: Host = defaultHost()): void
     // 正是这一批的全部收益（见 hostIdentity.ts 的口径 ③）。
     const progress = parseProgress(msg.payload)
     if (progress) emit(EVENTS.progress, progress, host)
+    return
+  }
+  if (msg.type === MSG_ACCOUNT_SNAPSHOT) {
+    // 账号字段快照（M3）：**复用现有事件**（消费侧一行不动 —— 侧栏 / 右栏 / 选中账号
+    // 本来就在听 `account-progress`，载荷形状也一样：数组）。
+    // ⚠️ 与轮询那份**不冲突**：合并是**按字段内容**做的（`mergeAccountSnapshots`），
+    //    同一条快照应用两次是空操作（判据在 messageBus.test.ts）。
+    const snapshot = parseSnapshot(msg.payload)
+    if (snapshot) emit(EVENTS.accountProgress, [snapshot], host)
     return
   }
   if (msg.type !== MSG_NOTICE_MESSAGE) return // 别的类型各有消费者，M3–M5 里接

@@ -180,10 +180,16 @@ def _push_account_snapshot(acc) -> None:
     VtuberSidebar 按 platform_uid 就地合并，避免全表重刷。
 
     ⚠️ append + 裁剪是**读-改-写**（不是"简单赋值"）⇒ 必须在锁里（devlog/210）。
+
+    **M3（devlog/246）**：同一条快照**也推给推送订阅者** —— 左右栏不必等下一次
+    `fetch-status` 轮询（3–10s）才知道账号字段变了。消费侧一行不动（它本来就在听
+    `account-progress`，载荷形状也一样）。
+    ⚠️ 本函数**只在 `db.commit()` 之后**被调用（四个调用点都在提交后）⇒ 这里发布天然满足
+        "发布点必须在 commit 之后"（方案 §2.2）。**别把它挪到 commit 之前**。
     """
     with _status_lock:
         recent = _status["account"].setdefault("recent", [])
-        recent.append({
+        snapshot = {
             "platform_uid": str(acc.platform_uid),
             "display_name": acc.display_name,
             "sign": acc.sign,
@@ -191,9 +197,11 @@ def _push_account_snapshot(acc) -> None:
             "live_status": acc.live_status,
             "live_title": acc.live_title,
             "avatar_path": acc.avatar_path,
-        })
+        }
+        recent.append(snapshot)
         if len(recent) > 100:
             del recent[:-100]
+    message_hub.HUB.publish(message_hub.MSG_ACCOUNT_SNAPSHOT, snapshot)
 
 
 def _record_stat_snapshot(db: Session, acc: Account) -> None:

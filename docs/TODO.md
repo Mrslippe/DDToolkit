@@ -463,9 +463,9 @@ W1/W2 可以在**现在的架构上**做完，但它们只是让 W3 少踩坑。
 
 | 门禁 | 命令 | 当前基线（括号里 = 该值实测日） |
 |---|---|---|
-| 后端 | `python -m pytest -q`（**解释器走 `.venv`**，见 `ARCHITECTURE.md` §6 第 24 条） | **881 passed**（2026-09-27 实测 66–95s；另有 1 条**打真上游**的用例按设计 skip ⇒ 那一格是 881 passed / 1 skipped） |
+| 后端 | `python -m pytest -q`（**解释器走 `.venv`**，见 `ARCHITECTURE.md` §6 第 24 条） | **887 passed**（2026-09-27 实测 66–95s；另有 1 条**打真上游**的用例按设计 skip ⇒ 那一格是 887 passed / 1 skipped） |
 | 桌面壳 | `cargo test`（工作目录 `frontend/src-tauri`） | **62 passed**（2026-09-27 实测；含 `delete_old_dir` 的真实 junction 用例、S1 的 token 生成用例、S3 的准入表/白名单用例与**迁移编排四条回滚路径**） |
-| 前端单测 | `npm --prefix frontend run test` | **730 passed / 56 文件**（2026-09-27 实测；条数确定，不随上游浮动） |
+| 前端单测 | `npm --prefix frontend run test` | **733 passed / 56 文件**（2026-09-27 实测；条数确定，不随上游浮动） |
 | 前端类型 / lint | `npx tsc --noEmit`（**必须在 `frontend/` 里跑**）/ `npm --prefix frontend run lint` | 0 错 / 0 错（2026-09-26 复核） |
 | 文档漂移 | `python scripts/doc_check.py` | **0 FAIL**（2026-09-26 复核；另有 1 条历史 devlog 索引欠账 WARN，WARN 看脚本逐条输出） |
 | 上游冒烟 | `python scripts/smoke_upstream.py [--cold]` | 真上游 **5 ok** / 冷进程 **3 ok**，0 FAIL（2026-09-23 复核） |

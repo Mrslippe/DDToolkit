@@ -1384,6 +1384,24 @@ async function probeMessages(): Promise<Record<string, unknown>> {
     await sleep(200)
     const afterOther = await readPanel()
     result.otherToastShown = afterOther.some((i) => i.text === otherText)
+
+    // ⑥ 领域事件（M3，devlog/246）：`domain.account.snapshot` ⇒ **现有** `account-progress` 事件
+    //    （消费侧一行不动）。探针按公共契约监听 ⇒ 这条把"后端推 → SSE → 桥 → 应用事件"整条链钉住。
+    const snapUid = `999${Date.now() % 100000}`
+    const snaps: Array<Record<string, unknown>> = []
+    const onSnap = (e: Event) => {
+      const list = (e as CustomEvent<Array<Record<string, unknown>>>).detail || []
+      snaps.push(...list.filter((s) => s?.platform_uid === snapUid))
+    }
+    window.addEventListener('ddtoolkit:account-progress', onSnap)
+    await publish('domain.account.snapshot', {
+      platform_uid: snapUid, display_name: '快照探针', sign: null, followers_count: 4242,
+      live_status: 1, live_title: '探针场次', avatar_path: null,
+    })
+    await waitFor(() => snaps.length > 0, 5000)
+    window.removeEventListener('ddtoolkit:account-progress', onSnap)
+    result.snapshotCount = snaps.length
+    result.snapshotShown = snaps.length === 1 && snaps[0]?.followers_count === 4242
   } catch (err) {
     result.error = String(err)
   } finally {

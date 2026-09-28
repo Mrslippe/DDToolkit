@@ -372,6 +372,26 @@ M0b 不许"探针绿了就宣布通过"。
 
 **停止条件**：若 R33 那条既有不变量无法同时保住 ⇒ **停下报告**，不要删那条判据。
 
+> ### ◐ 第一刀已落（2026-09-27，devlog/246）：`domain.account.snapshot`
+>
+> 为什么先它：后端**已有**这条数据（`_push_account_snapshot` 本来就在喂 `recent` 环）、
+> 前端**已经在听**同一个事件（`accountProgress`，载荷同为数组）⇒ **消费侧一行不动**，
+> 换的只是触发源（本方案的关键好处）。换来：左右栏不必等 3–10s 轮询才知道字段变了。
+>
+> 改动：`_push_account_snapshot()` 里 append 之后多一行 `HUB.publish(...)`（该函数只在
+> `db.commit()` 之后被调用 ⇒ 天然满足 §2.2）；`messageBus` 里 `domain.account.snapshot`
+> → `account-progress`，先过 `parseSnapshot()` 的**七字段校验**（缺一个整条丢弃）。
+> "并存不重复"的根据：合并按**字段内容**做 ⇒ 同一条应用两次是空操作（有单测）。
+>
+> 判据：pytest 5 + vitest 3 + 探针端到端 1；**反向验证 6/6 全红**。
+> ⚠️ 第一遍有一条变异**绿**：原断言"`platform_uid` 必须是字符串"**不可证伪**（SQLite 的 TEXT
+> 亲和性本来就保证读回来是 str）⇒ 换成"**payload 的键与前端 `SNAPSHOT_FIELDS` 逐字对账**"，
+> 同一刀立刻红。**不可证伪的断言等于没有断言。**
+>
+> **还剩 M3b/M3c**：`domain.vtuber.updated`（⚠️ 风险最高，碰 R33 事故路径；发布点要先取出
+> **字段差异**）与 `domain.posts.changed`（发布点在帖子抓取结束，要与 `fetch-status` 的
+> idle 边沿**去重**）。两条都按本刀模板走：消费侧不动 → 换触发源 → 探针端到端 + 反向验证。
+
 ---
 
 ### 批次 M4 — 小窗接同一通道

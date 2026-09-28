@@ -952,7 +952,7 @@ density / 折叠尺寸 `[200,40]` / 面板宽 280 / `backdrop-filter` 含 `blur(
 | 事件 | 触发方 | 消费方 |
 |---|---|---|
 | `ddtoolkit:fetch-idle` | TopBar 轮询 running→idle 边沿（**含静默的自动节拍**——动态流每轮结束也派发，卡片才能自己刷新） | VtuberSidebar 刷列表；PostsPage `refreshTick`（重拉 vtuber 本体+统计+帖子；`selectedAccount` 按 uid 取新引用） |
-| `ddtoolkit:account-progress` | TopBar 快照增量（**内容 diff 而非长度增量**，2026-09-07 修复环形上限/清空丢事件） | VtuberSidebar `mergeSnapshots` 就地合并（`utils/accountSnapshots.ts` 共享实现）；PostsPage 同源合并 hero/徽标 |
+| `ddtoolkit:account-progress` | TopBar 快照增量（**内容 diff 而非长度增量**，2026-09-07 修复环形上限/清空丢事件）；**另：后端推送的 `domain.account.snapshot`**（`utils/messageBus.ts`，M3/devlog/246 —— 同一份载荷、同一条快照也进 `recent` 环，两条路**按字段内容合并**故不打架） | VtuberSidebar `mergeSnapshots` 就地合并（`utils/accountSnapshots.ts` 共享实现）；PostsPage 同源合并 hero/徽标 |
 | `ddtoolkit:data-changed` | 添加/解除订阅成功 | VtuberSidebar 刷列表 |
 | `ddtoolkit:kick-poll` | 各操作按钮 | TopBar 立即轮询一次（防单V抓取快速完成漏边沿） |
 | `ddtoolkit:pill-message` | 抓取/更新完成；**另：后端推送来的 `notice.message`**（`utils/messageBus.ts`，M0b/devlog/242，且**补发 `replay:true` 的不发**） | TopBar 状态胶囊覆盖显示 4s |

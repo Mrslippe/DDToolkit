@@ -14,11 +14,12 @@ import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { on } from './appEvents'
+import { mergeAccountSnapshots } from './accountSnapshots'
 import { MESSAGE_STREAM_PATH } from './eventStream'
 import { myHost, setHost } from './hostIdentity'
 import {
-  KNOWN_MESSAGE_TYPES, bridgeMessage, parseLiveEdge, startMessageBus, stopMessageBus,
-  type BusMessage,
+  KNOWN_MESSAGE_TYPES, bridgeMessage, parseLiveEdge, parseSnapshot, startMessageBus,
+  stopMessageBus, type BusMessage,
 } from './messageBus'
 
 const msg = (type: string, payload: Record<string, unknown> = {}, replay = false): BusMessage => ({
@@ -175,6 +176,45 @@ describe('①″ 手动动作（M2）：受理推进度、完成看 originator',
     } finally {
       setHost('main')
     }
+  })
+})
+
+describe('①‴ 账号快照（M3）：复用现有 `account-progress` 事件', () => {
+  const SNAP = {
+    platform_uid: '11073', display_name: '快照V', sign: '新签名', followers_count: 999,
+    live_status: 1, live_title: '今晚八点', avatar_path: null,
+  }
+
+  it('`domain.account.snapshot` ⇒ `account-progress`（**数组**，与轮询那份同形状）', () => {
+    const host = new EventTarget()
+    const updates = collector(host, 'ddtoolkit:account-progress')
+    bridgeMessage(msg('domain.account.snapshot', SNAP), host)
+    expect(updates).toEqual([[SNAP]])
+  })
+
+  it('缺字段的快照不发（半个 snapshot 合并进侧栏会留下空字段）', () => {
+    const host = new EventTarget()
+    const updates = collector(host, 'ddtoolkit:account-progress')
+    const { sign: _drop, ...partial } = SNAP
+    bridgeMessage(msg('domain.account.snapshot', partial), host)
+    bridgeMessage(msg('domain.account.snapshot', {}), host)
+    expect(updates).toEqual([])
+    expect(parseSnapshot(undefined)).toBeNull()
+  })
+
+  it('**同一条快照应用两次是空操作**（推送与轮询并存时不打架）', () => {
+    // 这是"并存"能成立的根据：合并按**字段内容**做（`mergeAccountSnapshots`），
+    // 与"谁来触发"无关 —— 推送先到、轮询后到，结果一样。
+    const acc = {
+      id: 1, vtuber_id: 1, platform: 'bilibili', platform_uid: '11073',
+      display_name: '旧名字', sign: null, followers_count: 1, live_status: 0,
+      live_title: null, avatar_path: null, sort_order: 0,
+    } as unknown as Parameters<typeof mergeAccountSnapshots>[0]
+    const once = mergeAccountSnapshots(acc, [SNAP as never])!
+    const twice = mergeAccountSnapshots(once, [SNAP as never])!
+    expect(twice).toEqual(once)
+    expect(twice.followers_count).toBe(999)
+    expect(twice.display_name).toBe('快照V')
   })
 })
 
