@@ -2,7 +2,10 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 
 import StatusWidgetWindow from './components/StatusWidgetWindow'
-import { holdApiUntilReady, markNoTokenRequired, setApiBase, setApiToken } from './api/api'
+import {
+  DEV_API_TOKEN, holdApiUntilReady, markNoTokenRequired, markTokenReady,
+  setApiBase, setApiToken,
+} from './api/api'
 import { setHost } from './utils/hostIdentity'
 import './styles/tokens.css'
 import './styles/status-island.css'
@@ -138,10 +141,28 @@ async function injectBackendPort(): Promise<void> {
       logToShell(`已注入后端端口 ${port}`)
     }
   } catch {
-    // 非桌面端（探针/浏览器）：没有 sidecar，`/api` 走 Vite 代理即可，**这是对的**。
-    // ⚠️ 但闸门必须开 —— 见下面 `render()` 的说明。
-    markNoTokenRequired()
+    // 非桌面端（探针/浏览器）：没有 sidecar —— 见下面 `openApiGate()` 的说明。
+    openApiGate()
   }
+}
+
+/**
+ * 浏览器 / 探针环境的开闸（**M4，devlog/252 补的**）。
+ *
+ * ⚠️ 这里原来是**无条件** `markNoTokenRequired()` —— 那个函数会把 `apiToken` 清成空串
+ * （语义是"这个环境不需要 token"）。于是小窗入口在开发态**每个业务请求都 401**：
+ * 实测 `backend.log` 里刷满 `拒绝未授权请求：GET /messages/stream（missing）`，
+ * 而页面表现只是"推送一直连不上 / 偏好没读回来"—— 都不报错。
+ *
+ * 这正是 `DEV-LOOP.md` §6.1 那条纪律的**第五次**现身（"拆入口时顺带生效的东西最容易漏"：
+ * Tailwind preflight → `layout.css` 的 `.os-*` → `main.tsx` 的 `setApiBase` →
+ * `main.tsx` 的探针挂载 → **`main.tsx` 的 dev token 开闸**）。
+ * 判据：`tests/test_dev_token.py` 的结构扫描（前端两处复述必须在），
+ * 以及 `ui_probe --status-widget` 的推送段（它要求小窗**自己**连上流）。
+ */
+function openApiGate(): void {
+  if (!DEV_API_TOKEN) markNoTokenRequired()
+  else markTokenReady()          // ⚠️ 只在**确实没有** token 时才清 —— 同 main.tsx 的口径
 }
 
 logToShell(`widgetMain 模块执行 q=${location.search}`)
@@ -167,9 +188,11 @@ window.addEventListener('unhandledrejection', (e) => {
 //    **新入口必须自己走一遍启动副作用的清单**，别指望它"跟着一起生效"。
 holdApiUntilReady()
 void injectBackendPort().finally(() => {
-  // 兜底：无论注入成功与否都要开闸 —— 注入失败（非桌面端）时 `markNoTokenRequired()`
+  // 兜底：无论注入成功与否都要开闸 —— 注入失败（非桌面端）时 `openApiGate()`
   // 已在 catch 里调过；这里再兜一次，保证**绝不把请求挂死**（那个症状没有报错、最难查）。
-  if (!('__TAURI_INTERNALS__' in window)) markNoTokenRequired()
+  // ⚠️ 兜底也必须走 `openApiGate()`（不能无条件 `markNoTokenRequired()` —— 那会把
+  //    开发态那份好好的 token 抹掉，见上面那段注释）。
+  if (!('__TAURI_INTERNALS__' in window)) openApiGate()
   ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>
       <WidgetErrorBoundary>

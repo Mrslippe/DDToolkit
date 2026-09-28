@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import StatusIsland from './StatusIsland'
 import type { Notice, NoticeActionKind } from '../utils/notificationHub'
+import { mergeWidgetNotices, useStreamNotices } from '../utils/noticeStream'
 import { EVENTS, on } from '../utils/appEvents'
 import {
   WIDGET_NOTICES_EVENT,
@@ -23,8 +24,21 @@ import {
  * （`widget:notices`）。反过来，面板里的动作（"去登录"/"查看详情"）只有主窗口做得了 ——
  * 小窗把点击**转回去**（`widget:action`）。
  *
+ * ## 它的条目从哪来（M4 起是**两路**）
+ *
+ * | 来源 | 覆盖的事实 | 主窗口不在时 |
+ * |---|---|---|
+ * | **自己订阅推送**（`useStreamNotices`，M4） | 开播边沿 / 任务已受理 / 操作完成 | ✅ 仍然到 |
+ * | 主窗口广播 `widget:notices` | 轮询类：登录失效 / 风控冷却 / 完成报告 / 抓取进度 i/N | ❌ 暂时没有（等 M5） |
+ *
+ * 两路的合并规则在 `utils/noticeStream.ts::mergeWidgetNotices`（纯函数，有单测）。
+ * 反过来，面板里的动作（"去登录"/"查看详情"）只有主窗口做得了 ——
+ * 小窗把点击**转回去**（`widget:action`）。
+ *
  * > 这也是**没有**按规格 §8 抽 `useStatusIsland()` 的原因：抽了只是把轮询搬个家，
  * > 两扇窗仍然各轮各的；**推事件才是真的只轮一次**。
+ * > ⚠️ M4 之后小窗**自己开了一条推送连接**（SSE，不是轮询）：订阅是"服务端推才动"，
+ * > 不存在"两扇窗各轮一遍"的双倍请求 —— 那条理由只对**轮询**成立。
  *
  * ## 拖动：不能用 `data-tauri-drag-region`
  *
@@ -52,8 +66,22 @@ const DRAG_THRESHOLD_PX = 4
 export const WIDGET_SEED_NOTICES_EVENT = EVENTS.widgetSeed
 
 export default function StatusWidgetWindow() {
-  const [notices, setNotices] = useState<Notice[]>([])
+  /**
+   * 主窗口广播来的条目（`widget:notices`）—— M4（devlog/252）起它**只是两路来源之一**：
+   * 另一路是小窗**自己**从推送通道算出来的（`useStreamNotices`）。两路怎么合见
+   * `utils/noticeStream.ts::mergeWidgetNotices`。
+   *
+   * ⚠️ 这一路**本轮不删**：轮询类的事实（登录失效 / 风控冷却 / 完成报告 / 抓取进度 i/N）
+   * 还住在主窗口，退役点落在 M5（后端接管汇总）。
+   */
+  const [fromMain, setFromMain] = useState<Notice[]>([])
   const [now, setNow] = useState(() => Date.now())
+  /** 小窗**自己**订阅推送通道算出来的条目（M4）：主窗口不在也照样更新 */
+  const streamNotices = useStreamNotices(now)
+  const notices = useMemo(
+    () => mergeWidgetNotices(streamNotices, fromMain),
+    [streamNotices, fromMain],
+  )
   const down = useRef<{ x: number; y: number; dragging: boolean } | null>(null)
   const [diag, setDiag] = useState('…')
   /**
@@ -80,15 +108,15 @@ export default function StatusWidgetWindow() {
   const flipUpRef = useRef(false)
   const [flipUp, setFlipUp] = useState(false)
 
-  // ① 条目：**只听主窗口推的**
+  // ① 条目：**主窗口广播的那一路**（另一路是自己订阅推送，见上面的 `useStreamNotices`）
   useEffect(() => {
     let un: (() => void) | null = null
     void (async () => {
       try {
         const { listen } = await import('@tauri-apps/api/event')
-        un = await listen<Notice[]>(WIDGET_NOTICES_EVENT, (e) => setNotices(e.payload ?? []))
+        un = await listen<Notice[]>(WIDGET_NOTICES_EVENT, (e) => setFromMain(e.payload ?? []))
       } catch {
-        /* 非桌面端（探针/浏览器）：没有主窗口可听，保持空列表 */
+        /* 非桌面端（探针/浏览器）：没有主窗口可听 —— M4 之后**推送那一路仍然有效** */
       }
     })()
     // ⚠️ **dev-only 的注入通路**（R38 批 5d）：探针（无头浏览器）里没有 Tauri 事件，
@@ -96,9 +124,12 @@ export default function StatusWidgetWindow() {
     //    而"面板在小窗里到底能不能用"正是那个真 bug 的判据 —— 不注入就永远空转。
     //    走的是**页面自己的事件**（不是直接改 React state），与 `--status-island` 同款做法。
     //    生产构建里 `import.meta.env.DEV` 为 false ⇒ 整段被摇掉。
+    //
+    //    M4 起它注入的是**广播那一路**（轮询类），与"自己订阅推送"那一路互相独立 ——
+    //    两路各有各的判据（`--status-widget` 用注入、`--status-widget` 的推送段用真消息）。
     if (import.meta.env.DEV) {
       const off = on(EVENTS.widgetSeed, (detail) => {
-        if (Array.isArray(detail)) setNotices(detail)
+        if (Array.isArray(detail)) setFromMain(detail)
       })
       return () => { un?.(); off() }
     }

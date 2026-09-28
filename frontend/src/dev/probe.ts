@@ -12,6 +12,7 @@
  * 输出：`<pre id="ui-probe">` 内 JSON（每个视图一段），供脚本解析。
  */
 import { api, authFetch, getApiBase } from '../api/api'
+import { myHost } from '../utils/hostIdentity'
 import { setShellHidden } from '../utils/shellLifecycle'
 
 interface ProbeView {
@@ -1235,11 +1236,18 @@ async function probeMessages(): Promise<Record<string, unknown>> {
     return island()?.classList.contains('on') ? 1 : 0
   }
 
-  const waitFor = async <T,>(fn: () => T, ms: number): Promise<T | null> => {
+  const waitFor = async <T,>(fn: () => T, ms: number, minTries = 0): Promise<T | null> => {
     const t0 = performance.now()
-    while (performance.now() - t0 < ms) {
+    let i = 0
+    // ⚠️ `minTries`（M4，devlog/252）：虚拟时间下 `sleep(100)` **几乎立即返回** ——
+    // "8000ms" 不是 8 秒真实时间。主窗口那边一直够用，是因为它前面已经跑过十几秒
+    // **真实 I/O**（数据请求把虚拟时间钉住），SSE 早连上了；而**小窗入口的第一件事就是这个**
+    // ⇒ 连接还在 `connecting` 就被判死（实测直接红在"推送连接没开起来"）。
+    // 按**轮次**兜底：每轮仍让出一次事件循环，够 localhost 的 SSE 握手。
+    while (performance.now() - t0 < ms || i < minTries) {
       const v = fn()
       if (v) return v
+      i += 1
       await sleep(100)
     }
     return null
@@ -1261,8 +1269,22 @@ async function probeMessages(): Promise<Record<string, unknown>> {
     busReceived0: hook()?.received ?? null,
   }
 
-  // ① 连接先开着
-  const opened = await waitFor(() => hook()?.state === 'open', 8000)
+  // ① 连接先开着。
+  //
+  // ⚠️ **这一条在虚拟时间下必须靠"真实 I/O"让路**（M4，devlog/252）：
+  //    `sleep(100)` 在虚拟时间里几乎立即返回 ⇒ 光轮询**换不来真实时间**，而 SSE 建连是
+  //    **真网络**。主窗口那边一直够用，是因为它前面已经跑过十几秒真实 I/O（数据请求把虚拟
+  //    时间钉住），流早连上了；而**小窗入口的第一件事就是起流** ⇒ 实测卡在 `connecting`，
+  //    判据直接红成"推送连接没开起来"（看着像后端没起，其实只是没给它时间）。
+  //    所以这里每轮补一发本地请求：它换来的是**真的几毫秒**。
+  const opened = await (async () => {
+    for (let i = 0; i < 400; i++) {
+      if (hook()?.state === 'open') return true
+      await fetch('/healthz', { cache: 'no-store' }).catch(() => undefined)
+      await sleep(50)
+    }
+    return hook()?.state === 'open'
+  })()
   result.opened = !!opened
   result.state1 = hook()?.state ?? null
   if (!opened) return result
@@ -1380,7 +1402,14 @@ async function probeMessages(): Promise<Record<string, unknown>> {
     }
 
     const acceptedText = `受理探针 ${Date.now() % 100000}`
-    await publish('notice.progress', { task: 'account', text: acceptedText, originator: 'main' })
+    // ⚠️ **"自己"与"别人"要按当前宿主的身份来发**（M4，devlog/252）：这两条判据量的是
+    // `originator` 规则，而规则是**相对**的（`shouldToast` 比的是载荷里的 originator 与
+    // **本页**的 `myHost()`）。原来这里写死 `main` / `widget` —— 那等于假设"跑探针的页面
+    // 就是主窗口"：小窗那一轮（`widget.html?probe=messages`）里语义正好反过来，
+    // 于是两条判据**同时**红（自己点的弹了、别人点的不弹），看着像实现坏了。
+    const me = myHost()
+    const other = me === 'widget' ? 'main' : 'widget'
+    await publish('notice.progress', { task: 'account', text: acceptedText, originator: me })
     await sleep(200)
     const afterProgress = await readPanel()
     result.progressPanelTexts = afterProgress.map((i) => i.text)
@@ -1388,13 +1417,13 @@ async function probeMessages(): Promise<Record<string, unknown>> {
       (i) => i.kind === 'progress' && i.text === acceptedText)
 
     const ownText = `自己点的 ${Date.now() % 100000}`
-    await publish('notice.message', { text: ownText, originator: 'main' })
+    await publish('notice.message', { text: ownText, originator: me })
     await sleep(200)
     const afterOwn = await readPanel()
     result.ownToastShown = afterOwn.some((i) => i.text === ownText)
 
     const otherText = `别人点的 ${Date.now() % 100000}`
-    await publish('notice.message', { text: otherText, originator: 'widget' })
+    await publish('notice.message', { text: otherText, originator: other })
     await sleep(200)
     const afterOther = await readPanel()
     result.otherToastShown = afterOther.some((i) => i.text === otherText)

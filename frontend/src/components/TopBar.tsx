@@ -38,6 +38,7 @@ import {
   composeTaskText, liveNotice, LIVE_NOTICE_MS, loginNotice, messageNotice, progressNotice,
   rateLimitNotice, reportNotice,
 } from '../utils/notificationHub'
+import { PILL_MS, PUSHED_PROGRESS_MS } from '../utils/noticeStream'
 import { api } from '../api/api'
 import type { AccountSnapshot, AuthStatus, FetchStatus, PostFetchStatus } from '../api/types'
 import './../styles/layout.css'
@@ -55,9 +56,9 @@ const REASON_TEXT: Record<string, string> = {
 const POLL_ACTIVE_MS = 3000 // 有任务运行时的高频轮询
 const POLL_IDLE_MS = 10000 // 空闲时的低频轮询
 const POLL_RETRY_MS = 500 // 在途冲突时的重排间隔（轮询链自愈，见 poll 内注释）
-const PILL_MS = 4000 // 操作结果覆盖态的展示时长
-/** 推送来的「任务已受理」兜底 TTL（M2）：正常 3s 内就被轮询接棒清掉，这里只是防残影 */
-const PUSHED_PROGRESS_MS = 8000
+// `PILL_MS` / `PUSHED_PROGRESS_MS` 两条 TTL 已搬到 `utils/noticeStream.ts`（M4，devlog/252）：
+// 小窗也要用它算同一批推送类条目 —— 两个宿主各写一份迟早会漂（同 R46 那条
+// "同一份数据不许有两个渲染器"的道理）。下面从那里 import。
 
 const isTauri = '__TAURI_INTERNALS__' in window
 

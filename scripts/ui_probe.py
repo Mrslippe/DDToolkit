@@ -1970,7 +1970,7 @@ def _kill_tree(proc: subprocess.Popen | None) -> None:
         proc.kill()
 
 
-def _assert_messages(ms: dict | None, width: int) -> list[str]:
+def _assert_messages(ms: dict | None, width: int, *, host: str = "main") -> list[str]:
     """推送通道端到端（M0b，devlog/242）。
 
     判据（探针侧 `probeMessages()` 收集）：连接先开着 · 合成消息**从推送回来** ·
@@ -2043,6 +2043,13 @@ def _assert_messages(ms: dict | None, width: int) -> list[str]:
         bad.append(f"@{width} messages: 推了一条 V 本体更新，页面的 `vtuber-updated` 没收到"
                    f"（收到 {ms.get('vtuberUpdateCount')!r} 条）—— "
                    f"**R33 那条「右栏改 → 左栏更新」的链断了**？")
+    # ⚠️ **小窗那一轮（M4）只判到"通知类"**（devlog/252）：账号快照 / 帖子抓完 / V 本体
+    # 这三条要求**页面上有消费者**（侧栏、右栏、帖子页），而小窗入口故意不订阅它们
+    # —— 它只画通知，那些数据它一个都不显示。在那边判就是**必然假红**。
+    # ⚠️ 按本仓规矩，**跳过必须说出为什么**（不能冒充通过）：主窗口那一轮已经把这三条判过了。
+    if host == "widget":
+        print(f"  [跳过] @{width} messages：账号快照 / 帖子抓完 / V 本体三条不在小窗判 —— "
+              f"小窗入口不订阅那三个事件（它只画通知），主窗口那一轮已判")
     return bad
 
 
@@ -4126,6 +4133,25 @@ def main() -> int:
                     failures.append(
                         f"@200 status-widget: 窄视口下 `OverlayScroll` 样式没生效"
                         f"（display={ww2.get('widgetOsRootDisplay')!r}）")
+            # ── 第三段：**小窗自己订阅推送**（M4，devlog/252）──────────────────
+            # 这一段整页只有小窗（没有主窗口、没有 `widget:notices` 广播），所以
+            # "它能显示推来的消息"本身就是 **"小窗不依赖主窗口"** 的证明。
+            #
+            # 反向验证（本批做过）：把 `useStreamNotices` 里的 `startMessageBus()` 去掉
+            # ⇒ `busReceived` 不涨、岛上没有那条消息 ⇒ 这一段红。
+            wurl3 = f"http://localhost:{vite_port}/widget.html?probe=messages"
+            print(f"[probe] status-widget-push（小窗自己收推送）@{w} → {wurl3}")
+            wres3 = _run_probe(edge, wurl3, w, args.height, WORK, "messages")
+            wm = ((wres3 or {}).get("messages") or {})
+            print(f"  小窗推送：state={wm.get('state0')!r}→{wm.get('state1')!r} "
+                  f"总线={wm.get('busReceived0')}→{wm.get('busReceived1')} "
+                  f"发布={wm.get('publishStatus')!r} 抵达={wm.get('arrived')} "
+                  f"岛上={wm.get('islandShowsIt')} err={wm.get('error')!r}")
+            failures += _assert_messages(wm, w, host="widget")
+            if wm.get("arrived") and wm.get("islandShowsIt"):
+                print(f"  [ok] 小窗独立收推送：总线收到 {wm.get('busReceived0')} → "
+                      f"{wm.get('busReceived1')}，岛上已显示 ✓")
+
             print(f"  渲染：#root 子元素={ww.get('rootChildren')} "
                   f"文本={ww.get('rootText')!r} ｜ 启动幕残留={ww.get('bootSplash')}")
             print(f"  窗口底：html={ww.get('htmlBg')!r} body={ww.get('bodyBg')!r} "
