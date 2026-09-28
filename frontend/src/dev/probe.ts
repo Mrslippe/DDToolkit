@@ -1414,6 +1414,19 @@ async function probeMessages(): Promise<Record<string, unknown>> {
     window.removeEventListener('ddtoolkit:fetch-idle', onIdle)
     result.postsIdleKinds = idleKinds
     result.postsIdleShown = idleKinds.some((k) => k.includes('posts'))
+
+    // ⑧ V 本体（M3b，devlog/248）：`domain.vtuber.updated` ⇒ **现有** `vtuber-updated`
+    //    （R33 那条"右栏改签名 → 左栏更新"的链，触发源改成后端广播）。
+    //    ⚠️ 用一个**不可能存在的 id**：侧栏 `applyVtuberUpdate` 按 id 命中，未命中时列表不变
+    //    ⇒ 探针不会污染页面状态。
+    const vUpdates: Array<Record<string, unknown>> = []
+    const onV = (e: Event) => vUpdates.push((e as CustomEvent<Record<string, unknown>>).detail)
+    window.addEventListener('ddtoolkit:vtuber-updated', onV)
+    await publish('domain.vtuber.updated', { id: 999987, name: '探针V', faction: null })
+    await waitFor(() => vUpdates.length > 0, 5000)
+    window.removeEventListener('ddtoolkit:vtuber-updated', onV)
+    result.vtuberUpdateCount = vUpdates.length
+    result.vtuberUpdateShown = vUpdates.length === 1 && vUpdates[0]?.name === '探针V'
   } catch (err) {
     result.error = String(err)
   } finally {

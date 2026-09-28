@@ -444,7 +444,9 @@ M0 **不退役**轮询。细节与不变量见 `docs/backend-repositories-and-ro
 | `_push_account_snapshot`（账号抓取提交后） | `domain.account.snapshot` | 246 |
 | `_set_post_last_result`（一轮帖子抓取收尾，唯一收口） | `domain.posts.changed`（带轮次 `seq`，与轮询**按 seq 去重**） | 247 |
 
-**还没接的**：`domain.vtuber.updated`（⚠️ 碰 R33 事故路径，要先取出字段差异）—— 见执行方案 M3b。
+| `PUT /vtuber/{id}`（V 本体提交后） | `domain.vtuber.updated`（载荷 = 接口返回同一份，**R33 那条同步链**的触发源） | 248 |
+
+**领域事件到此全部改由后端广播**（M3 三刀），消费侧一行未改。
 
 ---
 

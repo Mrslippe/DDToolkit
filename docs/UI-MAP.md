@@ -959,6 +959,7 @@ density / 折叠尺寸 `[200,40]` / 面板宽 280 / `backdrop-filter` 含 `blur(
 | `ddtoolkit:message` | **后端推送通道**（`GET /messages/stream`，SSE over fetch → `utils/eventStream.ts` → `utils/messageBus.ts`，M0b/devlog/242；信封 = `{type, payload, ts, seq, replay}`） | 暂无产品消费者（M1–M5 的挂点；探针 `ui_probe.py --messages` 与主流程三档都在断言它） |
 | `ddtoolkit:live-edge` | 后端推送的 `domain.live.edge`（T0 检测到 `live_status` 0→1，M1/devlog/243） | TopBar 收下并转成 **alert** 级条目（`liveNotice`，源「开播」，TTL 2 分钟）→ 顶栏胶囊 + 通知面板 |
 | `ddtoolkit:progress` | 后端推送的 `notice.progress`（手动端点**受理**时发，M2/devlog/244） | TopBar 收下 → **progress** 级条目（`pushed-progress`，源「任务进度」）→ 顶栏胶囊 + 面板；轮询报到即让位 |
+| `ddtoolkit:vtuber-updated` | **右栏**（设置窗保存 / 抓取回填）；**另：后端推送的 `domain.vtuber.updated`**（`PUT /vtuber/{id}` 提交后广播，M3b/devlog/248 —— **R33 那条「右栏改 → 左栏更新」的触发源搬家**） | VtuberSidebar `applyVtuberUpdate`（按 `id` 合并、未命中不改、顺序不变） |
 
 > ⚠️ **后台刷新不得打断用户草稿**（2026-09-10 修复）：上述事件会让 PostsPage 换掉 `vtuber`
 > 对象引用，任何「依赖 props 重新初始化表单」的弹窗都会把用户正在编辑的内容冲掉

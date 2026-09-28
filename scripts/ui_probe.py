@@ -2030,6 +2030,11 @@ def _assert_messages(ms: dict | None, width: int) -> list[str]:
         bad.append(f"@{width} messages: 推了一条「帖子抓完」，页面的 `fetch-idle` 没收到 posts"
                    f"（收到 {ms.get('postsIdleKinds')!r}）—— "
                    f"领域事件没解出来 / 没接到现有刷新信号？")
+    # 领域事件（M3b）：V 本体 ⇒ 现有 `vtuber-updated`（R33 那条同步链）
+    if not ms.get("vtuberUpdateShown"):
+        bad.append(f"@{width} messages: 推了一条 V 本体更新，页面的 `vtuber-updated` 没收到"
+                   f"（收到 {ms.get('vtuberUpdateCount')!r} 条）—— "
+                   f"**R33 那条「右栏改 → 左栏更新」的链断了**？")
     return bad
 
 

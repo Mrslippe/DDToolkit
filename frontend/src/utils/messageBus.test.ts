@@ -18,8 +18,8 @@ import { mergeAccountSnapshots } from './accountSnapshots'
 import { MESSAGE_STREAM_PATH } from './eventStream'
 import { myHost, setHost } from './hostIdentity'
 import {
-  KNOWN_MESSAGE_TYPES, bridgeMessage, parseLiveEdge, parseSnapshot, startMessageBus,
-  stopMessageBus, withoutAlreadyPushedPosts, type BusMessage,
+  KNOWN_MESSAGE_TYPES, bridgeMessage, parseLiveEdge, parseSnapshot, parseVtuber,
+  startMessageBus, stopMessageBus, withoutAlreadyPushedPosts, type BusMessage,
 } from './messageBus'
 
 const msg = (type: string, payload: Record<string, unknown> = {}, replay = false): BusMessage => ({
@@ -239,6 +239,27 @@ describe('①⁗ 帖子抓完（M3c）：复用 fetch-idle，按轮次 seq 去�
     expect(withoutAlreadyPushedPosts(['posts'], 903), '没推过的轮次不该被吞').toEqual(['posts'])
     expect(withoutAlreadyPushedPosts(['account'], 902), '不含 posts 时原样返回').toEqual(['account'])
     expect(withoutAlreadyPushedPosts(['posts'], undefined), '没有 seq 时原样返回').toEqual(['posts'])
+  })
+})
+
+describe('①‴‴ V 本体（M3b）：R33 那条同步链的触发源改成后端广播', () => {
+  const V = { id: 15, name: '本体V', faction: null, sign_override: '新签名', accounts: [] }
+
+  it('`domain.vtuber.updated` ⇒ `vtuber-updated`（消费侧一行不动）', () => {
+    const host = new EventTarget()
+    const seen = collector(host, 'ddtoolkit:vtuber-updated')
+    bridgeMessage(msg('domain.vtuber.updated', V), host)
+    expect(seen).toEqual([V])
+  })
+
+  it('缺 `id` / `name` 的载荷不发（侧栏按 id 认人，半个对象会换坏列表）', () => {
+    const host = new EventTarget()
+    const seen = collector(host, 'ddtoolkit:vtuber-updated')
+    bridgeMessage(msg('domain.vtuber.updated', { name: '只有名字' }), host)
+    bridgeMessage(msg('domain.vtuber.updated', { id: 1 }), host)
+    bridgeMessage(msg('domain.vtuber.updated', {}), host)
+    expect(seen).toEqual([])
+    expect(parseVtuber(undefined)).toBeNull()
   })
 })
 

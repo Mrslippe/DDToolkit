@@ -224,7 +224,16 @@ def update_vtuber(vtuber_id: int, data: VTuberUpdate, db: Session = Depends(get_
     v = VTuberRepo(db).update(vtuber_id, data.model_dump(exclude_unset=True))
     if not v:
         raise HTTPException(404, f"VTuber id={vtuber_id} 不存在")
-    return VTuberOut.model_validate(v, from_attributes=True)
+    out = VTuberOut.model_validate(v, from_attributes=True)
+    # V 本体改了 ⇒ **推给所有订阅者**（M3b，devlog/248）。
+    #
+    # 这条正是 **R33 那条事故路径**的触发源（"右栏改了签名要通知左栏"）：今天靠前端
+    # 存完之后自己 `emit(vtuberUpdated)`，只有"同一个窗口"知道 ⇒ 小窗 / 将来的第二窗口
+    # 看不到。改由后端广播，**消费侧一行不动**（侧栏与右栏本来就在听这个事件）。
+    # ⚠️ 顺序：`VTuberRepo.update()` 内部已经 commit（并 refresh）⇒ 发布点在 commit 之后，
+    #    满足方案 §2.2。`mode="json"` 是必须的：库里是 naive datetime，SSE 帧要过 `json.dumps`。
+    message_hub.HUB.publish(message_hub.MSG_VTUBER_UPDATED, out.model_dump(mode="json"))
+    return out
 
 
 CONTENT_TYPE_EXT = {

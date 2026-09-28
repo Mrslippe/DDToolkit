@@ -20,7 +20,7 @@
  * ⚠️ 与 `fetch-status` 轮询**并存**：推送会漏（重连窗口），轮询是兜底。本模块不退役任何轮询。
  */
 import { authFetch } from '../api/api'
-import type { AccountSnapshot } from '../api/types'
+import type { AccountSnapshot, VTuber } from '../api/types'
 import { dispatchFetchIdle, type FetchIdleKind } from './fetchIdle'
 import { myHost } from './hostIdentity'
 import { EVENTS, emit, type LiveEdgePayload, type PushedProgressPayload } from './appEvents'
@@ -66,6 +66,23 @@ let pushedPostsSeq: number | null = null
 /** 这一轮帖子是不是已经由推送通知过了。 */
 export function isPostsRoundPushed(seq: number | null | undefined): boolean {
   return typeof seq === 'number' && pushedPostsSeq !== null && seq === pushedPostsSeq
+}
+
+/**
+ * V 本体字段（M3b，devlog/248）：后端 `PUT /vtuber/{id}` 等改完 V 之后发。
+ *
+ * ⚠️ 这条正是 **R33 那条事故路径**的触发源（"右栏改了签名要通知左栏"）：改由后端广播，
+ * **消费侧一行不动**（`VtuberSidebar` 与 `PostsPage` 本来就在听 `vtuberUpdated`）。
+ */
+const MSG_VTUBER_UPDATED = 'domain.vtuber.updated'
+
+/**
+ * V 本体的**必需键**：`id`（数字）+ `name`（字符串）—— 侧栏按 id 认人
+ * （`utils/vtuberList.ts`），半个对象会把整份列表换坏 ⇒ 缺键就**不发半个事件**。
+ */
+export function parseVtuber(payload: Record<string, unknown> | undefined): VTuber | null {
+  if (!payload || typeof payload.id !== 'number' || typeof payload.name !== 'string') return null
+  return { ...(payload as unknown as VTuber) }
 }
 
 /**
@@ -190,6 +207,14 @@ export function bridgeMessage(msg: BusMessage, host: Host = defaultHost()): void
     //    同一条快照应用两次是空操作（判据在 messageBus.test.ts）。
     const snapshot = parseSnapshot(msg.payload)
     if (snapshot) emit(EVENTS.accountProgress, [snapshot], host)
+    return
+  }
+  if (msg.type === MSG_VTUBER_UPDATED) {
+    // V 本体（M3b，devlog/248）：**复用现有事件**（侧栏 / 右栏已经在听 `vtuberUpdated`）。
+    // ⚠️ 这里**不做 originator 过滤**：它不是"提示"，是**数据** —— 发起方自己那份也只是
+    //    用服务端的权威副本覆盖一遍（同内容 ⇒ 幂等），而"少发一次"会让状态陈旧。
+    const v = parseVtuber(msg.payload)
+    if (v) emit(EVENTS.vtuberUpdated, v, host)
     return
   }
   if (msg.type === MSG_POSTS_CHANGED) {
