@@ -7,10 +7,10 @@ import OverlayScroll from './OverlayScroll'
 import FloatPill from './common/FloatPill'
 import ProxyImage from './common/ProxyImage'
 import { useLocation, useNavigate, matchPath } from 'react-router-dom'
-import { api } from '../api/api'
+import { api, resolveAsset } from '../api/api'
 import type { AccountSnapshot, VTuber } from '../api/types'
 import { mergeVtuberSnapshots } from '../utils/accountSnapshots'
-import { resolveAvatar } from '../utils/avatarSource'
+import { resolveAvatarSources } from '../utils/avatarSource'
 import { resolveSign } from '../utils/signSource'
 import { applyVtuberUpdate } from '../utils/vtuberList'
 import { EVENTS, on } from '../utils/appEvents'
@@ -397,7 +397,11 @@ const VtuberItem = memo(function VtuberItem({ vtuber, index, active, onSelect }:
   const bili = biliAccount(vtuber)
   // 头像/签名与卡片**同一条链**（devlog/135）：用户在档案设置里换过的头像与签名，
   // 左栏必须跟着变 —— 此前左栏各写了一份"只看平台字段"的取值，于是设置看着像没生效。
-  const avatarSrc = resolveAvatar(vtuber, vtuber.accounts)
+  const { src: avatarSrc, local: avatarLocalPath } = resolveAvatarSources(vtuber, vtuber.accounts)
+  // A0（devlog/255）：**本地副本**当第三级回落（直连 → 代理 → 本地 → 占位）。
+  // 远端 URL 会死（实测某 V 的微博头像签名过期 21 小时后只靠代理缓存续命），而盘上那份一直在
+  // —— 左栏是"一眼看见"的地方，最不该在这里破图。
+  const avatarLocal = resolveAsset(avatarLocalPath)
   const sign = resolveSign(vtuber, vtuber.accounts).text || null
   const isLiveNow = (bili?.live_status ?? 0) === 1
 
@@ -421,6 +425,7 @@ const VtuberItem = memo(function VtuberItem({ vtuber, index, active, onSelect }:
         className="vtuber-avatar"
         alt={vtuber.name}
         src={avatarSrc}
+        fallbackSrc={avatarLocal}
         fallbackClassName="vtuber-avatar vtuber-avatar-fallback"
         fallback={<span>{vtuber.name.slice(0, 1)}</span>}
       />

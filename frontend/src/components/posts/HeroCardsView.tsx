@@ -34,6 +34,8 @@ interface Props {
   accounts: Account[]
   /** 头像（VTuber 本体优先，回退账号稳定源）—— 走 ProxyImage 三态链 */
   avatarSrc?: string
+  /** A0（devlog/255）：头像的**本地副本**（已 `resolveAsset` 拼好）—— `ProxyImage` 的第三级回落 */
+  avatarLocal?: string
   /** 直播状态（只读 B 站账号；`liveAcc` 也用于拿直播标题与直播间地址） */
   liveAcc: Account | null
   isLive: boolean
@@ -74,6 +76,7 @@ export default function HeroCardsView({
   vtuber,
   accounts,
   avatarSrc,
+  avatarLocal,
   liveAcc,
   isLive,
   onAddAccount,
@@ -199,6 +202,7 @@ export default function HeroCardsView({
         <ProxyImage
           className="hero-avatar"
           src={avatarSrc}
+          fallbackSrc={avatarLocal}
           alt={vtuber.name}
           fallbackClassName="hero-avatar hero-avatar-fallback"
           fallback={<span>{vtuber.name.slice(0, 1)}</span>}

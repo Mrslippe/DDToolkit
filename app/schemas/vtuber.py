@@ -115,6 +115,10 @@ class VTuberOut(BaseModel):
     debut_date: str | None = None
     setting: str | None = None
     avatar: str | None = None
+    # A0（devlog/255）：**只读派生**字段 —— 当前选中那张头像在**本地**的副本路径。
+    # `avatar` 仍是远端 URL 原文（语义不动）；这个字段让渲染侧能在直连/代理都失败后
+    # 回落到盘上那份（`ProxyImage.fallbackSrc`）。**不加库列**：由 `local_avatar_map()` 现查。
+    avatar_local: str | None = None
     background_path: str | None = None
     notes: str | None = None
     # 签名来源与覆盖（2026-09-13，devlog/074）：卡片签名 = override → 来源账号 → 主账号

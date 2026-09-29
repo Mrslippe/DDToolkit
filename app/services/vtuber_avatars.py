@@ -151,6 +151,61 @@ def current_avatar_url(vtuber: VTuber | None) -> str | None:
     return _url(first) if first is not None else None
 
 
+def local_avatar_map(db: Session, vtubers: list[VTuber]) -> dict[int, str | None]:
+    """**批量**求每个 V「当前选中那张头像」的本地路径（A0，devlog/255）。
+
+    为什么需要它：`vtubers.avatar` 存的是**远端 URL 原文**，而远端会死 ——
+    实测 2026-09-29：V#16 明前奶绿那张微博头像的签名 `Expires` 已过期 21 小时，
+    当时**只靠 `/img-proxy` 的磁盘缓存续命**。有了这个派生值，渲染侧就能在
+    "直连 / 代理都失败"之后回落到**盘上那份**（`ProxyImage` 的 `fallbackSrc`）。
+
+    派生顺序（与 `avatar_versions` 的兜底同源）：
+    ① `vtuber_avatar_history` 里 `avatar_url == vtubers.avatar` 的行的 `avatar_path`
+       （R47 起的账本最权威：它连"这张图落在哪个文件"都记着）；
+    ② 退一步：某账号的 `avatar_url == vtubers.avatar` ⇒ 该账号的 `avatar_path`
+       （账本还不认识它时用，例如升级前就选好的那些）。
+
+    ⚠️ **一次批量查，不许 N+1**：`/vtuber/list` 返回全部 V，逐 V 查就是 N 次往返
+    （判据：语句计数那条用例 —— V 数翻倍而查询数不变）。
+    ⚠️ 只认**非空**结果：查不到返回 `None`（前端据此退回占位，而不是拿空串拼出一个假 URL）。
+    """
+    wanted: dict[int, str] = {}
+    for v in vtubers:
+        url = (getattr(v, "avatar", None) or "").strip()
+        if url:
+            wanted[v.id] = url
+    if not wanted:
+        return {}
+
+    ids = list(wanted)
+    urls = sorted(set(wanted.values()))
+    out: dict[int, str | None] = {vid: None for vid in ids}
+
+    rows = (
+        db.query(VtuberAvatarHistory.vtuber_id, VtuberAvatarHistory.avatar_url,
+                 VtuberAvatarHistory.avatar_path)
+        .filter(VtuberAvatarHistory.vtuber_id.in_(ids),
+                VtuberAvatarHistory.avatar_url.in_(urls))
+        .all()
+    )
+    for vid, _url, path in rows:
+        if out.get(vid) is None and (path or "").strip():
+            out[vid] = path
+    missing = [vid for vid in ids if out[vid] is None]
+    if not missing:
+        return out
+
+    rows = (
+        db.query(Account.vtuber_id, Account.avatar_url, Account.avatar_path)
+        .filter(Account.vtuber_id.in_(missing), Account.avatar_url.in_(urls))
+        .all()
+    )
+    for vid, _url, path in rows:
+        if out.get(vid) is None and (path or "").strip():
+            out[vid] = path
+    return out
+
+
 def avatar_versions(db: Session, vtuber: VTuber,
                     limit: int = AVATAR_VERSION_LIMIT) -> dict:
     """该 V 的**可选项**列表（新的在前）+ 当前用的那张。

@@ -85,6 +85,13 @@
 
 ### 批次 A0 — **急修**：把丢的那张找回来 + 本地兜底（零迁移）
 
+> ✅ **已落地（2026-09-29，devlog/255）**：`local_avatar_map()` + `VTuberOut.avatar_local` +
+> `resolveAvatarSources()` + `ProxyImage.fallbackSrc`；真机库**先备份**（sqlite 在线备份 API，
+> 含 WAL）后**回填两行**（`d437fd…`→`434334701.jpg` 旧头像、`675fb12…`→`bilibili_434334701.jpg`
+> 当前选中那张）。判据：后端 +4（含**语句计数**那条 N+1）、前端 +9；反向 4/4。
+> ⚠️ 探针**没改**：种子头像在账本里没有对应行 ⇒ `avatar_local` 为 null，"本地"那一级在探针里
+> 天然不触发；那一级由 `components/common/proxyImage.test.tsx` 的 5 条用例覆盖。
+
 **档位**：B。**依赖**：无（先于 L1；L1 落地时把它的派生逻辑换成查 assets，**不返工**）。
 **目标**：止血 —— 用户 2026-09-29 被覆盖掉的那张头像回到选项里；此后"远端 URL 死了"不再等于破图。
 

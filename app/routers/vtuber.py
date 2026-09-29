@@ -43,7 +43,7 @@ from app.services.live_upstream import load_live_upstream
 from app.services.danmaku_cloud import build_word_cloud
 from app.services.danmaku_words import build_extra_words
 from app.services.vtuber_history import former_values
-from app.services.vtuber_avatars import avatar_versions
+from app.services.vtuber_avatars import avatar_versions, local_avatar_map
 from app.services import notices as notices_service
 from app.schemas.vtuber import (LiveDanmakuInfo, LiveMetricsOut, LiveEventOut,
                                 LiveWordOut, LiveUpstreamOut)
@@ -89,6 +89,27 @@ def _note_manual_done(text: str, originator: str) -> None:
         "text": text, "originator": originator,
     })
     notices_service.record_message(text)
+
+
+def _vtuber_out(db: Session, v: VTuber) -> VTuberOut:
+    """单个 V → `VTuberOut`（带 `avatar_local` 派生字段，A0/devlog/255）。
+
+    ⚠️ 这一行**必须**是 `VTuberOut.model_validate(...)`，不能是 `_vtuber_out(...)` ——
+    用 `replace_all` 把调用点换成这个辅助函数时，**它自己的函数体也被换掉了**，
+    于是变成"函数调用自己" ⇒ 递归爆栈（4 条用例当场红）。**改调用点前先数命中次数。**
+    """
+    out = VTuberOut.model_validate(v, from_attributes=True)
+    out.avatar_local = local_avatar_map(db, [v]).get(v.id)
+    return out
+
+
+def _vtuber_outs(db: Session, vs: list[VTuber]) -> list[VTuberOut]:
+    """批量版：**一次查完**派生字段（`/vtuber/list` 走这条，不许 N+1）。"""
+    locals_ = local_avatar_map(db, vs)
+    outs = [VTuberOut.model_validate(v, from_attributes=True) for v in vs]
+    for o in outs:
+        o.avatar_local = locals_.get(o.id)
+    return outs
 
 
 router = APIRouter()
@@ -198,7 +219,7 @@ def archive_old_posts(cutoff_days: int = 30, db=None):
 
 @router.get("/vtuber/list", response_model=list[VTuberOut])
 def list_vtubers(db: Session = Depends(get_db)):
-    return [VTuberOut.model_validate(v, from_attributes=True) for v in VTuberRepo(db).all()]
+    return _vtuber_outs(db, VTuberRepo(db).all())
 
 
 # 注意：本路由必须注册在 /vtuber/{vtuber_id} 之前，否则会被 int 路径参数捕获并 422
@@ -243,7 +264,7 @@ def get_vtuber(vtuber_id: int, db: Session = Depends(get_db)):
     v = VTuberRepo(db).get(vtuber_id)
     if not v:
         raise HTTPException(404, f"VTuber id={vtuber_id} 不存在")
-    return VTuberOut.model_validate(v, from_attributes=True)
+    return _vtuber_out(db, v)
 
 
 @router.post("/vtuber", response_model=VTuberOut, status_code=status.HTTP_201_CREATED)
@@ -253,7 +274,7 @@ def create_vtuber(data: VTuberCreate, db: Session = Depends(get_db)):
     except IntegrityError:
         db.rollback()
         raise HTTPException(409, "创建失败：数据违反唯一约束")
-    return VTuberOut.model_validate(v, from_attributes=True)
+    return _vtuber_out(db, v)
 
 
 @router.put("/vtuber/{vtuber_id}", response_model=VTuberOut)
@@ -261,7 +282,7 @@ def update_vtuber(vtuber_id: int, data: VTuberUpdate, db: Session = Depends(get_
     v = VTuberRepo(db).update(vtuber_id, data.model_dump(exclude_unset=True))
     if not v:
         raise HTTPException(404, f"VTuber id={vtuber_id} 不存在")
-    out = VTuberOut.model_validate(v, from_attributes=True)
+    out = _vtuber_out(db, v)
     # V 本体改了 ⇒ **推给所有订阅者**（M3b，devlog/248）。
     #
     # 这条正是 **R33 那条事故路径**的触发源（"右栏改了签名要通知左栏"）：今天靠前端
@@ -321,7 +342,7 @@ async def set_vtuber_background(
     db.refresh(v)
     if old_name and old_name != Path(rel).name:
         remove_background(custom_dir, old_name)     # 只有新背景真的生效了才删旧的
-    return VTuberOut.model_validate(v, from_attributes=True)
+    return _vtuber_out(db, v)
 
 
 @router.delete("/vtuber/{vtuber_id}/background", response_model=VTuberOut)
@@ -339,7 +360,7 @@ def clear_vtuber_background(vtuber_id: int, db: Session = Depends(get_db)):
         db.add(v)
         db.commit()
         db.refresh(v)
-    return VTuberOut.model_validate(v, from_attributes=True)
+    return _vtuber_out(db, v)
 
 
 @router.delete("/vtuber/{vtuber_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -1434,7 +1455,7 @@ async def adopt_vtuber(data: AdoptRequest, background: BackgroundTasks,
     # 响应送达后由事件循环执行：账号信息 + 首屏内容并发，第三方历史后台补
     background.add_task(_adopt_background, vtuber.id, acc.id,
                         acc.display_name or acc.platform_uid)
-    return VTuberOut.model_validate(vtuber, from_attributes=True)
+    return _vtuber_out(db, vtuber)
 
 
 @router.post("/vtuber/fetch-accounts")

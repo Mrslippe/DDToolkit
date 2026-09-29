@@ -3,7 +3,7 @@ import { Image as ImageIcon } from 'lucide-react'
 import { normalizeImageUrl } from '../../utils/format'
 import { initialImageSrc, needsProxyFromStart, proxiedImageSrc } from '../../utils/imageHost'
 
-type Stage = 'direct' | 'proxy' | 'failed'
+type Stage = 'direct' | 'proxy' | 'local' | 'failed'
 
 interface Props {
   src?: string | null
@@ -14,7 +14,16 @@ interface Props {
   width?: number
   height?: number
   /**
-   * 无图 / 三次加载都失败时渲染的内容（默认灰色图标块）。
+   * **本地副本**（A0，devlog/255）：直连与 `/img-proxy` **都失败**之后的第三级。
+   *
+   * 为什么需要它：远端 URL 会死 —— 实测 2026-09-29，某 V 选中的微博头像签名已过期 21 小时，
+   * 当时只靠 `/img-proxy` 的磁盘缓存续命，缓存一清就破图；而盘上其实一直有那份图。
+   * 调用方传**已经能直接用的 URL**（`static/` 相对路径要先过 `resolveAsset`）。
+   * 不传 = 保持原来的两级链，行为与从前完全一致。
+   */
+  fallbackSrc?: string
+  /**
+   * 无图 / 四级都失败时渲染的内容（默认灰色图标块）。
    * 传入后由调用方接管占位外观，例如场次封面用「渐变底 + 标题首字」。
    */
   fallback?: React.ReactNode
@@ -29,7 +38,9 @@ interface Props {
  * 1. 默认直连 CDN（https 化 + no-referrer）—— 性能最优；
  *    微博图床(sinaimg/wbcdn)防盗链对应用自身来源一律 403，直接起点走代理
  * 2. onError 自动重试后端代理 /img-proxy（带磁盘缓存）—— 兜底
- * 3. 代理也失败 → 渲染 fallback（默认占位块），不再出现破图
+ * 3. **A0（devlog/255）**：连代理也失败时，若调用方给了 `fallbackSrc`（**本地副本**）就走它
+ *    —— 远端 URL 死了但盘上还有那份图时，不该显示占位
+ * 4. 上面都失败 → 渲染 fallback（默认占位块），不再出现破图
  * 大图查看统一由 ImageViewer（P6-4 独立灯箱）承担，此处不再内置预览。
  *
  * 2026-09 P0/P1 收敛：原 LiveCalendar 内部 CoverImage 已并入本组件（消除同状态机双实现，
@@ -47,6 +58,7 @@ export default function ProxyImage({
   style,
   width,
   height,
+  fallbackSrc,
   fallback,
   fallbackClassName,
   draggable,
@@ -58,12 +70,20 @@ export default function ProxyImage({
   // ⚠️ "哪些主机要代理"的判断在 `utils/imageHost`（唯一落点，R46/devlog/249）——
   //    组件里**不许**再列一遍主机名，否则左右栏又会各走各的。
   const needProxyFromStart = needsProxyFromStart(direct)
+  const local = fallbackSrc ? normalizeImageUrl(fallbackSrc) : undefined
   const [stage, setStage] = useState<Stage>(needProxyFromStart ? 'proxy' : 'direct')
-  const current = stage === 'direct' ? direct : stage === 'proxy' ? proxy : undefined
+  const current = stage === 'direct' ? direct
+    : stage === 'proxy' ? proxy
+      : stage === 'local' ? local
+        : undefined
   // 首帧**决定**要用的那个 src（与加载成败无关）—— 挂在输出节点上供探针读：
   // 虚拟时间下图片可能加载不成功而回落到 fallback（那时 `<img>` 已不在 DOM 里），
   // 但"左右栏对同一个 URL 做出的渲染决策是否一致"正是 R46 要断的东西。
+  // ⚠️ A0 之后它仍只反映**首帧**（本地那一级不进这个值）—— R46 的探针判据靠它比左右同源。
   const renderSrc = initialImageSrc(src)
+  /** 失败一级往下走：直连 → 代理 → **本地**（有才走）→ 占位 */
+  const nextStage = (s: Stage): Stage =>
+    s === 'direct' ? 'proxy' : s === 'proxy' ? (local ? 'local' : 'failed') : 'failed'
 
   if (!current) {
     if (fallback !== undefined) {
@@ -107,10 +127,8 @@ export default function ProxyImage({
       referrerPolicy="no-referrer"
       loading="lazy"
       draggable={draggable}
-      onError={() => {
-        if (stage === 'direct') setStage('proxy')
-        else setStage('failed')
-      }}
+      data-src-stage={stage}
+      onError={() => setStage(nextStage(stage))}
     />
   )
 }

@@ -21,7 +21,7 @@ import { api, resolveAsset } from '../api/api'
 import { useFetchBusy } from '../fetchBusy'
 import type { Account, Post, PostStats, VTuber } from '../api/types'
 import { mergeVtuberSnapshots } from '../utils/accountSnapshots'
-import { resolveAvatar } from '../utils/avatarSource'
+import { resolveAvatarSources } from '../utils/avatarSource'
 import { affectsFanTrend, onFetchIdle } from '../utils/fetchIdle'
 import { EVENTS, emit, on } from '../utils/appEvents'
 import { typeGroupsFor } from '../utils/postTypes'
@@ -497,7 +497,10 @@ export default function PostsPage() {
   // list 切账号不联动 cards/archive（2026-09-05 反馈）
   // 头像解析口径已抽到 `utils/avatarSource`（devlog/135）：左栏与卡片必须同源，
   // 否则"在档案设置里换过头像，卡片变了、左栏没变"。
-  const avatarSrc = resolveAvatar(vtuber, vtuber?.accounts ?? [])
+  const avatarSources = resolveAvatarSources(vtuber, vtuber?.accounts ?? [])
+  const avatarSrc = avatarSources.src
+  // A0（devlog/255）：右栏 hero 也拿本地副本当第三级回落（`ProxyImage.fallbackSrc`）
+  const avatarLocal = resolveAsset(avatarSources.local)
   if (avatarSrc) lastAvatarRef.current = avatarSrc
   // 自定义背景优先（全图清晰显示），否则头像铺底回退链
   const customBg = vtuber?.background_path
@@ -699,6 +702,7 @@ return (
             vtuber={vtuber}
             accounts={accounts}
             avatarSrc={avatarSrc}
+            avatarLocal={avatarLocal}
             liveAcc={liveAcc ?? null}
             isLive={isLive}
             onAddAccount={() => setAddAccountOpen(true)}

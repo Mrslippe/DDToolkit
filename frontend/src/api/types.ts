@@ -28,6 +28,12 @@ export interface VTuber {
   debut_date: string | null
   setting: string | null
   avatar: string | null
+  /**
+   * 【只读派生，A0/devlog/255】当前选中那张头像在**本地**的副本路径（`static/` 相对）。
+   * `avatar` 仍是远端 URL 原文（语义不变）；这个是"远端万一死了还有盘上那份"的兜底，
+   * 由后端查头像账本/账号得出，前端**只读不写**。
+   */
+  avatar_local?: string | null
   background_path: string | null
   notes: string | null
   /**

@@ -364,6 +364,92 @@ def test_route_404_for_missing_vtuber(client):
     assert client.get("/vtuber/99999/avatars").status_code == 404
 
 
+# ── A0（devlog/255）：`avatar_local` 派生 + 本地回落 ──────────────────────
+#
+# 起因（2026-09-29 真机实测）：用户选中的头像存的是**远端 URL**，而远端会死 ——
+# V#16 那张微博头像的签名 `Expires` 已过期 21 小时，当时只靠 `/img-proxy` 缓存续命。
+# A0 给 `VTuberOut` 加一个**只读派生**字段 `avatar_local`（当前选中那张的本地副本路径），
+# 渲染侧就能在"直连 / 代理都失败"之后回落到盘上那份。
+
+def test_avatar_local_from_history_row(db, client):
+    """A0-1 账本行命中 ⇒ `avatar_local` = 该行的 `avatar_path`（账本最权威）。"""
+    v = _mk_v(db)
+    acc = _mk_acc(db, v, url="https://i2.hdslb.com/bfs/face/old.jpg",
+                  path="static/avatars/bilibili_w1.jpg")
+    VA.record_avatar_version(db, vtuber_id=v.id, account_id=acc.id, platform="weibo",
+                             url="https://i2.hdslb.com/bfs/face/old.jpg",
+                             path="static/avatars/bilibili_w1_ab12cd34.jpg")
+    v.avatar = "https://i2.hdslb.com/bfs/face/old.jpg"
+    db.commit()
+
+    got = client.get(f"/vtuber/{v.id}").json()
+    assert got["avatar"] == "https://i2.hdslb.com/bfs/face/old.jpg", "`avatar` 语义不许动"
+    assert got["avatar_local"] == "static/avatars/bilibili_w1_ab12cd34.jpg", (
+        "账本里明明记着这张图落在哪个文件，派生却没用它")
+
+
+def test_avatar_local_falls_back_to_account(db, client):
+    """A0-2 账本不认识它（升级前就选好的）⇒ 退一步用账号的 `avatar_path`；都没有 ⇒ null。"""
+    v = _mk_v(db)
+    _mk_acc(db, v, url="https://i2.hdslb.com/bfs/face/pre.jpg",
+            path="static/avatars/bilibili_w1.jpg")
+    v.avatar = "https://i2.hdslb.com/bfs/face/pre.jpg"
+    db.commit()
+    assert client.get(f"/vtuber/{v.id}").json()["avatar_local"] == "static/avatars/bilibili_w1.jpg"
+
+    v.avatar = "https://i2.hdslb.com/bfs/face/never-seen.jpg"     # 两边都不认识
+    db.commit()
+    assert client.get(f"/vtuber/{v.id}").json()["avatar_local"] is None, (
+        "查不到必须是 null —— 拿空串拼出来的假 URL 会让前端把占位当图")
+
+    v.avatar = None                                            # 没选过 ⇒ 也不派生
+    db.commit()
+    assert client.get(f"/vtuber/{v.id}").json()["avatar_local"] is None
+
+
+def test_avatar_local_batches_without_n_plus_1(db, client):
+    """A0-3 `/vtuber/list` 的派生**一次查完**：V 数翻倍，SQL 语句数不变。
+
+    判据为什么必须有：`/vtuber/list` 返回全部 V，逐 V 查就是 N 次往返（左栏首屏直接变慢）。
+    """
+    from sqlalchemy import event
+
+    def _count_for(n: int) -> int:
+        for i in range(n):
+            v = _mk_v(db, name=f"批量V{n}-{i}")
+            _mk_acc(db, v, platform="weibo", uid=f"w{n}-{i}",
+                    url=f"https://x/{n}-{i}.jpg", path=f"static/avatars/w{n}-{i}.jpg")
+            v.avatar = f"https://x/{n}-{i}.jpg"
+        db.commit()
+
+        stmts: list[str] = []
+        eng = db.get_bind()
+
+        def _rec(conn, cursor, statement, parameters, context, executemany):
+            stmts.append(statement)
+
+        event.listen(eng, "before_cursor_execute", _rec)
+        try:
+            assert client.get("/vtuber/list").status_code == 200
+        finally:
+            event.remove(eng, "before_cursor_execute", _rec)
+        return len(stmts)
+
+    one = _count_for(1)
+    many = _count_for(3)          # 再加 3 个 V
+    assert many <= one + 1, (
+        f"派生字段把查询数从 {one} 涨到 {many} —— 这是 N+1（V 越多越慢）")
+
+
+def test_avatar_local_shape_is_whitespace_tolerant(db, client):
+    """A0-2′ 空白值不许当成"有本地文件"（`avatar` 是 `'  url  '` 时应当被 strip 掉）。"""
+    v = _mk_v(db)
+    _mk_acc(db, v, url="https://x/a.jpg", path="static/avatars/a.jpg")
+    v.avatar = "  https://x/a.jpg  "
+    db.commit()
+    assert client.get(f"/vtuber/{v.id}").json()["avatar_local"] == "static/avatars/a.jpg"
+
+
 # ── ⑨ purge：漏清会被外键挡下（解除订阅 500 的老事故形态） ─────────────────
 
 def test_delete_account_clears_its_avatar_versions(db, client):
