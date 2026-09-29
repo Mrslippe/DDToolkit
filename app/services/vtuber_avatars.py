@@ -40,6 +40,7 @@ from sqlalchemy.orm import Session
 
 from app.models.vtuber import Account, VTuber, VtuberAvatarHistory
 from app.repositories.vtuber_repo import VtuberAvatarHistoryRepo
+from app.services import assets
 
 logger = logging.getLogger(__name__)
 
@@ -59,12 +60,22 @@ def record_avatar_version(db: Session, *, vtuber_id: int, account_id: int | None
                           limit: int = AVATAR_VERSION_LIMIT) -> VtuberAvatarHistory | None:
     """把"抓取到这张头像"记进账本（幂等）。**不提交**，由调用方随外层事务一起 commit。
 
-    - 已有同 `(vtuber_id, url)` 行 ⇒ 只 touch `last_seen_at`，并把**空着的**
-      `avatar_path` / `platform` / `account_id` 补上（延后下载那条路会用到）；
+    - 已有**同一个稳定键**的行 ⇒ 只 touch `last_seen_at`（见下方 §归并）；
     - 没有 ⇒ 追加一行（`first_seen_at = last_seen_at = now`）；
     - 然后按 `limit` 淘汰最旧的若干行（跳过 `protect_url`）。
 
     返回落到的行（`url` 为空或 `vtuber_id` 无效时返回 None，调用方不必判空）。
+
+    ## 归并按**稳定键**，不是完整 URL（L1，devlog/257）
+
+    微博头像签名约 3 小时轮换一次（实测同一张图的两次抓取只差 `Expires`/`ssig`，
+    盘上两个文件 sha256 逐字节相同）。按完整 URL 判存在 ⇒ 同一张脸每轮抓取都多一个"版本"，
+    选择器被签名噪声刷满 —— 而用户要的是"历次**头像**"，不是"历次 URL"。
+    ⇒ 判存在用 `assets.key_of(url)`（键相同即同一张图）。
+
+    ⚠️ **`url` 只跟到最新，但当前选中的那条不动**：`vtubers.avatar`（用户的选择）与账本行的
+    `avatar_url` 是"当前用的是哪张"的两侧真源，只有字符串相等才对得上；把行改成新签名会让
+    选择器里"当前"这一项凭空消失（而卡片还在用它）。过期 URL 的渲染由 `avatar_local` 兜底。
     """
     u = (url or "").strip()
     if not vtuber_id or not u:
@@ -78,8 +89,14 @@ def record_avatar_version(db: Session, *, vtuber_id: int, account_id: int | None
     db.flush()
 
     stamp = _now()
+    key = assets.key_of(u)
     rows = VtuberAvatarHistoryRepo(db).list_by_vtuber(vtuber_id)   # 新的在前
-    row = next((r for r in rows if (r.avatar_url or "").strip() == u), None)
+    # 判存在按**稳定键**（见上方 §归并）。⚠️ L1 之前可能已经存在"同一张图的两个签名各一行"
+    # （R47 按完整 URL 记账，而微博每 3 小时换一次签名 ⇒ 这在老数据里是真实形态）：
+    # 那样"改 URL"就会撞唯一键 `uq_vtuber_avatar_url`，而 `SessionLocal` 是 `autoflush=False`
+    # ⇒ 到 commit 才炸、整批抓取回滚。所以下面有一道**不许写成别人已有的 URL**的硬保护
+    # （判据 `test_preexisting_same_key_rows_do_not_break_the_merge`）；老数据本批不动。
+    row = next((r for r in rows if assets.key_of((r.avatar_url or "").strip()) == key), None)
     if row is None:
         row = VtuberAvatarHistory(vtuber_id=vtuber_id, account_id=account_id,
                                   platform=platform, avatar_url=u, avatar_path=path,
@@ -88,8 +105,11 @@ def record_avatar_version(db: Session, *, vtuber_id: int, account_id: int | None
         rows.insert(0, row)          # 刚记的这张就是最新的（它在列表最前）
     else:
         row.last_seen_at = stamp
-        if path:
-            row.avatar_path = path   # 延后下载：URL 先落库，文件到位后再补路径
+        taken = any(r is not row and (r.avatar_url or "").strip() == u for r in rows)
+        if not taken and (row.avatar_url or "").strip() != (protect_url or "").strip():
+            row.avatar_url = u       # 跟到最近一次见到的 URL（选择器给得出活地址）
+        if path and not _path_exists(row.avatar_path):
+            row.avatar_path = path   # 延后下载/文件被删：URL 先落库，文件到位后再补路径
         if platform and not row.platform:
             row.platform = platform
         if account_id and not row.account_id:
@@ -99,6 +119,12 @@ def record_avatar_version(db: Session, *, vtuber_id: int, account_id: int | None
     if dropped:
         logger.info(f"头像版本超过 {limit} 张，淘汰最旧 {dropped} 张（vtuber#{vtuber_id}）")
     return row
+
+
+def _path_exists(path: str | None) -> bool:
+    """账本里记的本地文件还在不在（相对 DATA_DIR，与 `assets.abs_path` 同口径）。"""
+    rel = (path or "").strip()
+    return bool(rel) and assets.abs_path(rel).exists()
 
 
 def _trim(db: Session, rows_newest_first: list[VtuberAvatarHistory], *,
@@ -159,14 +185,16 @@ def local_avatar_map(db: Session, vtubers: list[VTuber]) -> dict[int, str | None
     当时**只靠 `/img-proxy` 的磁盘缓存续命**。有了这个派生值，渲染侧就能在
     "直连 / 代理都失败"之后回落到**盘上那份**（`ProxyImage` 的 `fallbackSrc`）。
 
-    派生顺序（与 `avatar_versions` 的兜底同源）：
+    派生顺序（**L1 起第一级换成资产索引**，后两级是 A0 的兜底）：
+    ⓪ `local_assets` 里稳定键命中的那份（`static/assets/avatar/…`）—— 最权威：
+       抓取侧每次都会把"这份文件对应哪个远端资源"登记进去，且它是清理时受保护的那份；
     ① `vtuber_avatar_history` 里 `avatar_url == vtubers.avatar` 的行的 `avatar_path`
-       （R47 起的账本最权威：它连"这张图落在哪个文件"都记着）；
+       （升级前的老数据：索引里还没有它，但账本记着）；
     ② 退一步：某账号的 `avatar_url == vtubers.avatar` ⇒ 该账号的 `avatar_path`
-       （账本还不认识它时用，例如升级前就选好的那些）。
+       （账本与索引都还不认识它时用，例如升级前就选好的那些）。
 
     ⚠️ **一次批量查，不许 N+1**：`/vtuber/list` 返回全部 V，逐 V 查就是 N 次往返
-    （判据：语句计数那条用例 —— V 数翻倍而查询数不变）。
+    （判据：语句计数那条用例 —— V 数翻倍而查询数不变）。三级各自**一次**查完。
     ⚠️ 只认**非空**结果：查不到返回 `None`（前端据此退回占位，而不是拿空串拼出一个假 URL）。
     """
     wanted: dict[int, str] = {}
@@ -181,17 +209,28 @@ def local_avatar_map(db: Session, vtubers: list[VTuber]) -> dict[int, str | None
     urls = sorted(set(wanted.values()))
     out: dict[int, str | None] = {vid: None for vid in ids}
 
+    # ⓪ 轻资产索引（L1）：键 = 去掉签名参数的 URL ⇒ 远端换了签名也认得本地那份
+    keys = {vid: assets.key_of(url) for vid, url in wanted.items()}
+    by_key = assets.lookup_keys(db, assets.KIND_AVATAR, keys.values())
+    for vid, key in keys.items():
+        row = by_key.get(key)
+        if row is not None and (row.path or "").strip():
+            out[vid] = row.path
+    missing = [vid for vid in ids if out[vid] is None]
+    if not missing:
+        return out
+
     rows = (
         db.query(VtuberAvatarHistory.vtuber_id, VtuberAvatarHistory.avatar_url,
                  VtuberAvatarHistory.avatar_path)
-        .filter(VtuberAvatarHistory.vtuber_id.in_(ids),
+        .filter(VtuberAvatarHistory.vtuber_id.in_(missing),
                 VtuberAvatarHistory.avatar_url.in_(urls))
         .all()
     )
     for vid, _url, path in rows:
         if out.get(vid) is None and (path or "").strip():
             out[vid] = path
-    missing = [vid for vid in ids if out[vid] is None]
+    missing = [vid for vid in missing if out[vid] is None]
     if not missing:
         return out
 

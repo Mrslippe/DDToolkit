@@ -39,7 +39,6 @@ from app.services.fetcher import (
 )
 from app.routers import img_proxy
 from app.services.importer import import_from_file
-from app.services.scheduler import _avatar_ext
 from app.services.wbi import get_mixin_key, encrypt_wbi, MIXIN_KEY_ENC_TAB
 
 
@@ -193,6 +192,10 @@ def test_archive_dynamic_title():
 # ── P5a：头像扩展名 ───────────────────────────────────────────────────
 
 def test_avatar_ext():
+    """L1（devlog/257）：`_avatar_ext()` 搬进 `services/assets.py::ext_of()`
+    （头像/封面的扩展名判定与命名在同一处，避免两条口径），判据不变。"""
+    from app.services.assets import ext_of as _avatar_ext
+
     assert _avatar_ext("https://i0.hdslb.com/bfs/face/a1c2.jpg") == ".jpg"
     assert _avatar_ext("https://i0.hdslb.com/bfs/face/x.PNG?x=1") == ".png"
     assert _avatar_ext("https://i0.hdslb.com/bfs/face/y.webp") == ".webp"
@@ -639,8 +642,13 @@ def test_needs_avatar_download():
     assert _needs_avatar_download(acc, None, False) is False
 
 
-def test_avatar_missing():
-    from pathlib import Path as P
+def test_avatar_missing(tmp_path):
+    """L1（devlog/257）：路径基准统一走 `assets.data_root()`（= `settings.DATA_DIR`）。
+
+    ⚠️ 顺带修掉一个老毛病：本用例原来把探针文件写进**仓库根的** `static/avatars/` 再删掉
+    —— 测试不该往真实数据目录里写东西（哪怕它会自清理，失败时就会留下垃圾）。
+    现在 conftest 把 `assets.data_root()` 钉到 tmp_path，探针文件也建在 tmp_path 下。
+    """
     from app.services.scheduler import _avatar_missing
 
     # 无 avatar_path → 缺失
@@ -655,13 +663,10 @@ def test_avatar_missing():
     # avatar_path 指向真实存在的文件 → 不缺失
     acc3 = Account(platform="bilibili", platform_uid="3",
                    avatar_path="static/avatars/__exists_test__.png")
-    real = P(__file__).parent.parent / "static" / "avatars" / "__exists_test__.png"
+    real = tmp_path / "static" / "avatars" / "__exists_test__.png"
     real.parent.mkdir(parents=True, exist_ok=True)
     real.write_bytes(b"x")
-    try:
-        assert _avatar_missing(acc3) is False
-    finally:
-        real.unlink(missing_ok=True)
+    assert _avatar_missing(acc3) is False
 
 
 def test_safe_json_parse_fallback():

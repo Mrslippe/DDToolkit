@@ -1,0 +1,57 @@
+{
+  "_note": "轻资产模块（L1，devlog/257）判据用的**真实样本**：微博头像 URL 的签名轮换与同一张图的重复存储。数据来自真机数据目录 %APPDATA%\\com.ddtoolkit.app-dev 的 vtuber.db 与 backups/*.db（只读导出，2026-09-29）。不许手改：改了就不再是真实样本（ARCHITECTURE.md §6 第 22 条）。",
+  "captured_at": "2026-09-29",
+  "source": "%APPDATA%/com.ddtoolkit.app-dev/{vtuber.db, backups/vtuber-f008-20260929-010823.db}",
+  "rotated_pairs": [
+    {
+      "vtuber_id": 16,
+      "platform_uid": "7471118487",
+      "what": "同一张图（sha256 相同）的两次抓取：微博每次都换 Expires/ssig，只有 URL 变了",
+      "old": {
+        "url": "https://tvax1.sinaimg.cn/crop.0.0.828.828.1024/0089C3d5ly8gwpjla9gx0j30n00n0abc.jpg?KID=imgbed,tva&Expires=1790539776&ssig=%2Bi5AJrTZen",
+        "seen_in": "backups/vtuber-f008-20260929-010823.db（accounts#18 与 vtubers#16.avatar）",
+        "local_file": "static/avatars/weibo_7471118487.jpg",
+        "bytes": 57615,
+        "sha256": "0833d0da2c698ea9650d6c439eb3e9522c1641c67bcf689597f4372ceb2b4a5c"
+      },
+      "new": {
+        "url": "https://tvax1.sinaimg.cn/crop.0.0.828.828.1024/0089C3d5ly8gwpjla9gx0j30n00n0abc.jpg?KID=imgbed,tva&Expires=1790626278&ssig=jLCQn6IyIx",
+        "seen_in": "vtuber.db（accounts#18 / vtuber_avatar_history#2）",
+        "local_file": "static/avatars/weibo_7471118487_3d2b0b8a.jpg",
+        "bytes": 57615,
+        "sha256": "0833d0da2c698ea9650d6c439eb3e9522c1641c67bcf689597f4372ceb2b4a5c"
+      }
+    },
+    {
+      "vtuber_id": 15,
+      "platform_uid": "7198559139",
+      "what": "同上一对：盘上两个文件（R47 前固定名 + R47 后摘要名）内容逐字节相同",
+      "old": {
+        "url": "https://tvax4.sinaimg.cn/crop.0.0.1080.1080.1024/007Raq4zly8ie7sqgq4gzj30u00u0myr.jpg?KID=imgbed,tva&Expires=1790539782&ssig=Kx9rgX94bm",
+        "seen_in": "backups/vtuber-f008-20260929-010823.db（accounts#19）",
+        "local_file": "static/avatars/weibo_7198559139.jpg",
+        "bytes": 69551,
+        "sha256": "e3f1c1ef4802c62890db10b10380305dbc97d27122582dd5538a3ab5102f48d4"
+      },
+      "new": {
+        "url": "https://tvax4.sinaimg.cn/crop.0.0.1080.1080.1024/007Raq4zly8ie7sqgq4gzj30u00u0myr.jpg?KID=imgbed,tva&Expires=1790626282&ssig=VUya3ZaCVG",
+        "seen_in": "vtuber.db（accounts#19 / vtuber_avatar_history#4）",
+        "local_file": "static/avatars/weibo_7198559139_331ed204.jpg",
+        "bytes": 69551,
+        "sha256": "e3f1c1ef4802c62890db10b10380305dbc97d27122582dd5538a3ab5102f48d4"
+      }
+    }
+  ],
+  "expired_subject": {
+    "what": "V#16 那张微博头像：Expires=1790626278 ⇒ 2026-09-28 04:11 到期（抓取发生在 01:11，签名只有约 3 小时有效期）；2026-09-29 实测已过期 21 小时还能显示，靠的是 /img-proxy 磁盘缓存",
+    "url": "https://tvax1.sinaimg.cn/crop.0.0.828.828.1024/0089C3d5ly8gwpjla9gx0j30n00n0abc.jpg?KID=imgbed,tva&Expires=1790626278&ssig=jLCQn6IyIx",
+    "expires_epoch": 1790626278,
+    "expires_utc": "2026-09-28T04:11:18Z"
+  },
+  "bilibili_stable": {
+    "what": "对照组：B 站头像 URL 不带签名（换图会换文件名）⇒ 同一 URL 永远是同一张图",
+    "url": "https://i2.hdslb.com/bfs/face/d437fdb57933a7338c93b01f41394c5b227bfe5b.jpg",
+    "seen_in": "vtubers#15 丢失的那张（A0 回填，devlog/255）",
+    "local_file": "static/avatars/434334701.jpg"
+  }
+}

@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import json
 import shutil
 import tempfile
 from pathlib import Path
@@ -39,7 +40,8 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.database import Base, get_db
 from app.main import app
-from app.models.vtuber import Account, VTuber, VtuberAvatarHistory
+from app.models.vtuber import Account, LocalAsset, VTuber, VtuberAvatarHistory
+from app.services import assets as AS
 from app.services import vtuber_avatars as VA
 
 _TMPDIR = Path(tempfile.mkdtemp(prefix="ddtoolkit-test-avatar-"))
@@ -240,10 +242,13 @@ def test_avatar_file_name_is_versioned(tmp_path, monkeypatch):
 
     这条是本需求最容易被漏掉的一半：只记 URL 不换文件名，本地那张图已经被新图
     覆盖了 ⇒ 选择器里的旧选项全是破图（用户看到的现象是"旧头像点不出来"）。
+
+    ⚠️ L1（devlog/257）改了**落点与命名口径**（`static/assets/avatar/{uid}_{sha1(稳定键)[:8]}{ext}`，
+    目录由 `assets.data_root()` 决定 = conftest 指到 tmp_path），判据本身不变；
+    另加一条：**换了签名（同一张图）必须落到同一个文件**（R47 的 `sha1(URL)` 口径做不到这点，
+    微博每 3 小时换一次签名 ⇒ 每次都造一个新文件）。
     """
     from app.services import scheduler as sch
-
-    monkeypatch.setattr(sch, "AVATAR_DIR", tmp_path)
 
     class _Resp:
         def __init__(self, body: bytes):
@@ -262,14 +267,21 @@ def test_avatar_file_name_is_versioned(tmp_path, monkeypatch):
     p2 = asyncio.run(sch._download_avatar("https://wx1.sinaimg.cn/b.jpg", "weibo_w1",
                                           client=_Client(b"BBB")))
     assert p1 != p2, f"换了 URL 却写到同一个文件（旧图被覆盖）：{p1}"
-    assert p1 and p2 and p1.startswith("static/avatars/weibo_w1_")
-    f1, f2 = tmp_path / Path(p1).name, tmp_path / Path(p2).name
+    assert p1 and p2 and p1.startswith("static/assets/avatar/weibo_w1_")
+    f1, f2 = tmp_path / p1, tmp_path / p2
     assert f1.read_bytes() == b"AAA", "旧头像文件被新图覆盖了"
     assert f2.read_bytes() == b"BBB"
     # 同一个 URL 再来一次 ⇒ 同一个文件（幂等，不留垃圾）
     p3 = asyncio.run(sch._download_avatar("https://wx1.sinaimg.cn/a.jpg", "weibo_w1",
                                           client=_Client(b"AAA")))
     assert p3 == p1
+    # 换签名、同一张图 ⇒ **同一个文件**，而且一个请求都不发（L1 的核心收益）
+    signed = asyncio.run(sch._download_avatar(NEW_URL, "weibo_7471118487",
+                                              client=_Client(b"CCC")))
+    rotated = asyncio.run(sch._download_avatar(OLD_URL, "weibo_7471118487",
+                                               client=_Client(b"CCC")))
+    assert signed == rotated, "换了签名就写到另一个文件 —— 同一张图被存了两份"
+    assert (tmp_path / signed).read_bytes() == b"CCC"
 
 
 # ── ⑥ 封顶淘汰 ─────────────────────────────────────────────────────────
@@ -485,3 +497,214 @@ def test_delete_vtuber_clears_orphan_avatar_rows(db, client):
         "解除订阅被外键挡下了 —— 说明 vtuber_avatar_history 没被 purge 清干净")
     assert db.query(VtuberAvatarHistory).count() == 0
     assert db.query(VTuber).filter(VTuber.id == v.id).first() is None
+
+
+# ── L1（devlog/257）：轻资产模块接入头像这条链 ────────────────────────────
+#
+# 起因是 R47 只解决了"别覆盖"，没解决"远端会死"与"同一张图有多个 URL"：
+#   · 真实样本（`tests/fixtures/light_assets.json`，取自真机库）：同一张图的两次抓取
+#     只差 `Expires` / `ssig`（微博签名约 3 小时轮换）；而 `weibo_7471118487.jpg` 与
+#     `weibo_7471118487_3d2b0b8a.jpg` **sha256 逐字节相同** —— 一张图被存了两遍；
+#   · 本批把抓到的头像固化进 `static/assets/avatar/`，键 = **去掉签名参数的 URL**：
+#     命中键 ⇒ 读盘（**一次图片请求都不发**），换签名也认得是同一张。
+#
+# ⚠️ "没发请求"这类断言**必须配正对照**（DEV-LOOP §0.7）：先证明第一次真的发了。
+
+FIXTURE = Path(__file__).parent / "fixtures" / "light_assets.json"
+FX = json.loads(FIXTURE.read_text(encoding="utf-8"))
+_PAIR = FX["rotated_pairs"][0]
+OLD_URL, NEW_URL = _PAIR["old"]["url"], _PAIR["new"]["url"]
+
+
+class _Resp:
+    def __init__(self, status: int = 200, body: bytes = b"IMG-BYTES"):
+        self.status_code, self.content = status, body
+
+
+class _CountingClient:
+    """只记**图片请求**的假 HTTP 客户端（平台抓取走假 fetcher，不碰它）。
+
+    ⚠️ 形状必须与真身一致：`_download_avatar` 用的是 `await client.get(url)` 与
+    `resp.status_code / resp.content`（替身形状不对 ⇒ 真 bug 在替身那边照样全绿）。
+    """
+
+    def __init__(self, body: bytes = b"IMG-BYTES"):
+        self.body, self.calls = body, []
+
+    async def get(self, url: str) -> _Resp:
+        self.calls.append(url)
+        return _Resp(200, self.body)
+
+    async def aclose(self) -> None:      # 与 httpx.AsyncClient 同名同形
+        pass
+
+
+def test_second_fetch_issues_no_image_request(db, monkeypatch):
+    """判据①（本批的核心收益）：同一个 URL **第二次抓取 0 次图片请求**。"""
+    from app.services import scheduler as sch
+
+    v = _mk_v(db)
+    acc = _mk_acc(db, v, url=None, path=None)
+    monkeypatch.setattr(sch.registry, "get_fetcher", lambda p: _FakePf([NEW_URL]))
+    client = _CountingClient()
+
+    assert asyncio.run(sch._fetch_one_account(acc, db, client=client)) is True
+    db.commit()
+    assert len(client.calls) == 1, "正对照：第一次必须真的发一次图片请求"
+    assert (acc.avatar_path or "").startswith("static/assets/avatar/"), (
+        f"抓到的头像应当固化进 assets 目录（实际 {acc.avatar_path!r}）")
+    first_path = acc.avatar_path
+
+    assert asyncio.run(sch._fetch_one_account(acc, db, client=client)) is True
+    db.commit()
+    assert len(client.calls) == 1, (
+        "同一个 URL 第二次抓取**又发了图片请求** —— 轻资产模块的主要收益没兑现")
+    assert acc.avatar_path == first_path
+    hit = AS.lookup(db, AS.KIND_AVATAR, NEW_URL)
+    assert hit is not None and hit.path == first_path, "索引里应当登记着这份本地副本"
+    assert db.query(LocalAsset).count() == 1
+
+
+def test_rotated_signature_costs_no_request_and_stays_one_version(db, monkeypatch):
+    """② 真实样本：平台换了签名（同一张图）⇒ 不发请求，账本也不许多出版本。"""
+    from app.services import scheduler as sch
+
+    v = _mk_v(db)
+    acc = _mk_acc(db, v, url=None, path=None)
+    # ⚠️ 假抓取器要**建一次**再交给 `get_fetcher`：写成 `lambda p: _FakePf([...])` 的话
+    #    每次调用都新建一个实例 ⇒ 它的 `n` 永远停在 0，"第二轮换了签名"根本不会发生
+    #    （本用例的第一版就是这么假绿的 —— 断言全绿而场景没跑）。
+    pf = _FakePf([OLD_URL, NEW_URL])
+    monkeypatch.setattr(sch.registry, "get_fetcher", lambda p: pf)
+    client = _CountingClient()
+
+    asyncio.run(sch._fetch_one_account(acc, db, client=client))
+    db.commit()
+    first = acc.avatar_path
+    assert len(client.calls) == 1
+    assert len(_rows(db, v)) == 1
+
+    asyncio.run(sch._fetch_one_account(acc, db, client=client))
+    db.commit()
+    assert len(client.calls) == 1, "换了签名就重新下载 —— 稳定键没生效"
+    rows = _rows(db, v)
+    assert len(rows) == 1, f"同一张图被记成了 {len(rows)} 个版本（应当按稳定键归并）"
+    assert rows[0].avatar_url == NEW_URL, "行要跟到最近一次见到的 URL（选择器才给得出活地址）"
+    assert rows[0].avatar_path == first, "归并后仍指着同一份本地文件"
+    assert acc.avatar_path == first
+
+
+def test_preexisting_same_key_rows_do_not_break_the_merge(db):
+    """升级前可能已经存在"同一张图的两个签名各一行"⇒ 再记一次必须**安全**（不许撞唯一键）。
+
+    这种老数据是真实存在的：R47 按**完整 URL** 记账，而微博每 3 小时换一次签名。
+    归并改成按稳定键之后，若让某一行改写成另一行已有的 URL，就会撞
+    `uq_vtuber_avatar_url`；`SessionLocal` 是 `autoflush=False` ⇒ 到 commit 才炸、整批回滚。
+
+    ⚠️ 造样本时**故意**让"旧签名那行"排在列表最前（`first_seen_at` 更晚）：账本顺序与
+    "哪个签名更新"本来就不保证一致，归并不能依赖顺序 —— 判据正是"先撞上的那行不是精确命中的
+    那行时，也不许改写它的 URL"。
+    """
+    from datetime import datetime
+
+    v = _mk_v(db)
+    acc = _mk_acc(db, v, url=NEW_URL, path="static/avatars/weibo_7471118487_3d2b0b8a.jpg")
+    VA.record_avatar_version(db, vtuber_id=v.id, account_id=acc.id, platform="weibo",
+                             url=NEW_URL,
+                             path="static/avatars/weibo_7471118487_3d2b0b8a.jpg")
+    db.commit()
+    db.add(VtuberAvatarHistory(vtuber_id=v.id, account_id=acc.id, platform="weibo",
+                               avatar_url=OLD_URL,
+                               avatar_path="static/avatars/weibo_7471118487.jpg",
+                               first_seen_at=datetime(2030, 1, 1)))    # L1 之前留下的那一行
+    db.commit()
+    assert [r.avatar_url for r in _rows(db, v)][0] == OLD_URL, "前提：旧签名那行排在列表最前"
+
+    VA.record_avatar_version(db, vtuber_id=v.id, account_id=acc.id, platform="weibo",
+                             url=NEW_URL,
+                             path="static/avatars/weibo_7471118487_3d2b0b8a.jpg")
+    db.commit()      # ← 撞唯一键的话这里就炸（整批抓取回滚的那种事故形态）
+
+    rows = _rows(db, v)
+    assert len(rows) == 2, "老数据本批不动（L4 才按 sha256 合并），但也不许多插一行"
+    assert [r.avatar_url for r in rows].count(NEW_URL) == 1, "同一行 URL 出现两次（撞唯一键的前夜）"
+    assert [r.avatar_url for r in rows].count(OLD_URL) == 1, "旧签名那行的 URL 被改写了"
+
+
+def test_selected_avatar_version_keeps_its_own_url(db, monkeypatch):
+    """归并时**当前选中的那条**不许被改 URL。
+
+    为什么：`vtubers.avatar`（用户的选择）与账本行的 `avatar_url` 是"当前用的是哪张"的
+    两侧真源，只有**字符串相等**才对得上。把行改成新签名 ⇒ 选择器里"当前"这一项会消失
+    （而卡片还在用它）。过期 URL 的渲染由 `avatar_local` 兜底（A0 那条链）。
+    """
+    from app.services import scheduler as sch
+
+    v = _mk_v(db)
+    acc = _mk_acc(db, v, url=OLD_URL, path="static/avatars/weibo_7471118487.jpg")
+    VA.record_avatar_version(db, vtuber_id=v.id, account_id=acc.id, platform="weibo",
+                             url=OLD_URL, path="static/avatars/weibo_7471118487.jpg")
+    v.avatar = OLD_URL                      # 用户已经选了这张
+    db.commit()
+
+    monkeypatch.setattr(sch.registry, "get_fetcher", lambda p: _FakePf([NEW_URL]))
+    client = _CountingClient()
+    asyncio.run(sch._fetch_one_account(acc, db, client=client))
+    db.commit()
+
+    rows = _rows(db, v)
+    assert len(rows) == 1
+    assert rows[0].avatar_url == OLD_URL, (
+        "当前选中的那条被改成了新签名的 URL —— 账本与 `vtubers.avatar` 从此对不上")
+
+
+def test_deleted_local_copy_is_downloaded_again(db, monkeypatch):
+    """判据④ 端到端：索引说有、盘上没有 ⇒ 当未命中并**自动补下**（不许永远缺下去）。"""
+    from app.services import scheduler as sch
+
+    v = _mk_v(db)
+    acc = _mk_acc(db, v, url=None, path=None)
+    monkeypatch.setattr(sch.registry, "get_fetcher", lambda p: _FakePf([NEW_URL]))
+    client = _CountingClient()
+
+    asyncio.run(sch._fetch_one_account(acc, db, client=client))
+    db.commit()
+    assert len(client.calls) == 1
+    local = Path(AS.abs_path(acc.avatar_path))       # Data_DIR 已被 conftest 指到 tmp
+    local.unlink()
+
+    asyncio.run(sch._fetch_one_account(acc, db, client=client))
+    db.commit()
+    assert len(client.calls) == 2, "盘上那份没了却没补下（用户会看到破图）"
+    assert local.exists()
+    assert db.query(LocalAsset).count() == 1, "补下不许留下两条索引"
+
+
+def test_selecting_an_avatar_pins_its_asset(db, client):
+    """③ 用户选过的那张 ⇒ `local_assets.pinned=1`（清理时永不动它）。"""
+    v = _mk_v(db)
+    row = AS.put(db, AS.KIND_AVATAR, NEW_URL, b"IMG-BYTES", hint="weibo_w1")
+    db.commit()
+    assert row.pinned is False
+
+    resp = client.put(f"/vtuber/{v.id}", json={"avatar": NEW_URL})
+    assert resp.status_code == 200
+    assert resp.json()["avatar_local"] == row.path
+
+    db.expire_all()
+    assert db.get(LocalAsset, row.id).pinned is True, "用户选过的头像没有被打上 pin"
+
+
+def test_avatar_local_is_derived_from_the_assets_index(db, client):
+    """A0 的派生换了来源：先查**资产索引**（稳定键），账本/账号降为兜底。"""
+    v = _mk_v(db)
+    row = AS.put(db, AS.KIND_AVATAR, NEW_URL, b"IMG-BYTES", hint="weibo_w1")
+    v.avatar = NEW_URL
+    db.commit()
+
+    got = client.get(f"/vtuber/{v.id}").json()
+    assert got["avatar_local"] == row.path, (
+        "资产索引里明明有这一份，派生却没用它")
+    assert got["avatar"] == NEW_URL, "`avatar` 的语义不许动（仍是远端原文）"
+    # 账本/账号都不认识它 ⇒ 说明这一条确实是索引给出来的
+    assert db.query(VtuberAvatarHistory).count() == 0

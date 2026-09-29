@@ -1,6 +1,6 @@
 # 数据层与接口层文档（数据库 · Repositories · Routers）
 
-> 适用版本：`main`（2026-09-28，`MIGRATION_HEAD = f008`，迁移链 21 个版本、13 张表；**路由计数的三种数法见 §3**，别处不要再复述数字）。
+> 适用版本：`main`（2026-09-29，`MIGRATION_HEAD = f009`，迁移链 22 个版本、14 张表；**路由计数的三种数法见 §3**，别处不要再复述数字）。
 > 阅读路径：HTTP 入口（`app/routers`）→ SQL 封装（`app/repositories`）→ 表映射（`app/models`）→ 迁移（`alembic/versions`）。
 > 系统全貌见 `docs/ARCHITECTURE.md`；抓取链路细节见 `docs/backend-fetch-pipeline.md`；
 > 名词与代码路径速查见 `docs/GLOSSARY.md`；文档索引见 `docs/README.md`。
@@ -269,9 +269,37 @@
 
 ⚠️ **"别覆盖 URL"只是半件事**：本地缓存文件名原先**固定**（`static/avatars/{uid}{ext}`），
 新图下载会把旧文件**覆盖掉** ⇒ 只记 URL 的话旧选项全是破图。所以
-`_download_avatar` 改成版本化命名 `{uid}_{URL 的 sha1 前 8 位}{ext}`
-（同一个 URL ⇒ 同一个文件：重复抓取幂等；换了 URL ⇒ 新文件，旧文件留着）。
+`_download_avatar` 改成版本化命名（R47 是 `{uid}_{URL 的 sha1 前 8 位}{ext}`；
+**L1 起换成 `static/assets/avatar/{平台}_{uid}_{sha1(稳定键) 前 8 位}{ext}`**，见下一节）。
 淘汰只删**行**、不删文件（用户可能正用着那张，删文件会让卡片直接破图）。
+
+⚠️ **L1（devlog/257）起账本按"稳定键"归并**：`record_avatar_version` 判存在用的是
+`assets.key_of(url)`（去掉签名参数的 URL），不是完整 URL —— 实测微博头像签名约 3 小时
+轮换一次，按完整 URL 判存在会让**同一张脸**每轮多一个"版本"。
+归并时 `avatar_url` 跟到最近一次见到的那个 URL，**但当前选中的那条不动**
+（`vtubers.avatar` 与行的 `avatar_url` 是"当前用的是哪张"的两侧真源，只有字符串相等才对得上）。
+
+#### `local_assets` — 轻资产长期储存索引（f009，L1）
+
+| 列 | 类型 | 约束/说明 |
+|---|---|---|
+| `id` | INTEGER | PK |
+| `kind` | TEXT | NOT NULL：`avatar` / `cover` / …（模块化扩展点） |
+| `key` | TEXT | NOT NULL：**稳定键** = 去掉签名参数的 URL（`assets.key_of`，白名单 `SIGNATURE_PARAMS`） |
+| `url` | TEXT | NOT NULL：最近一次见到的**完整** URL（回源与展示用） |
+| `path` | TEXT | NOT NULL：`static/` 相对路径（`static/assets/{kind}/…`；`remember` 登记的历史文件可能是 `static/avatars/…`） |
+| `ext` / `bytes` | TEXT / INTEGER | 可空：扩展名与字节数（统计、清理） |
+| `sha256` | TEXT | 可空：内容摘要（去重、校验；L4 的历史行合并也靠它） |
+| `pinned` | BOOLEAN | NOT NULL，默认 0：用户选过的 / 手动 pin 的 ⇒ `prune` 永不删 |
+| `created_at` / `last_used_at` | DATETIME | `created_at` 决定"最旧"，`last_used_at` 决定 LRU（命中会刷新） |
+
+唯一键 **UNIQUE(kind, key)**；索引 `ix_local_assets_kind_sha256`、`ix_local_assets_kind_pinned`。
+
+**没有 Repository 类**：本表的读写全在 `services/assets.py`（`lookup` / `lookup_keys` /
+`get` / `put` / `remember` / `pin` / `stats` / `prune`）—— 它的写入必须与抓取事务**同一个
+session 收口**（先写文件、再写索引行，见 `ARCHITECTURE.md` §6 第 37 条），拆一层仓储只会
+多一次"谁提交"的歧义。⚠️ **不挂外键 ⇒ 不进 `purge.py`**；"还被谁引用"由
+`assets._referenced_keys()` 显式查（`vtubers.avatar` / 账号 `avatar_url` / 历次头像账本）。
 
 #### `thirdparty_vtubers` — 第三方 VTuber 索引（e004）
 
@@ -286,7 +314,7 @@
 | `source` | TEXT | 来源（danmakus） |
 | `updated_at` | DATETIME | 周级整表刷新 |
 
-### 1.3 迁移链（alembic，21 版本，head = `f008`）
+### 1.3 迁移链（alembic，22 版本，head = `f009`）
 
 | 版本 | 内容 |
 |---|---|
@@ -311,6 +339,7 @@
 | `f006` profile_cards | 建 `profile_cards`（档案视图卡片布局；唯一键 `(vtuber_id, card_key)`，**挂 vtubers 外键 ⇒ purge 必清**）（R37-P2，devlog/142） |
 | `f007` event_kind_emoji | `vtuber_events` 加 `kind`（NOT NULL 默认 `event`，**回填既有行**）+ `emoji`（可空）+ 索引 `ix_vtuber_events_vtuber_kind`；⚠️ **SQLite 不支持 `ALTER COLUMN` ⇒ 走 `batch_alter_table`**（R42-A，devlog/162） |
 | `f008` avatar_history | 建 `vtuber_avatar_history`（历次头像账本；唯一键 `(vtuber_id, avatar_url)`，**挂 vtubers/accounts 两个外键 ⇒ purge 必清**）（R47，devlog/249） |
+| `f009` local_assets | 建 `local_assets`（轻资产长期储存索引；唯一键 `(kind, key)`，**不挂外键 ⇒ 不进 purge**）（L1，devlog/257） = **当前 head** |
 
 **纪律**：新增迁移后必须同步 `app/main.py` 的 `MIGRATION_HEAD`（`tests/test_services.py`
 断言与 alembic head 一致），否则冷启动快路径会把旧库误判为已最新。启动迁移四形态：

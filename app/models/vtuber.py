@@ -397,3 +397,54 @@ class Post(Base):
     last_seen_at = Column(DateTime, nullable=True)
     deleted_detected_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=_now)
+
+
+class LocalAsset(Base):
+    """轻资产长期储存索引（L1，f009，devlog/257）：一个稳定键一行。
+
+    ## 为什么是一张**独立**的表（而不是往 `vtubers` / `accounts` 上挂列）
+
+    被固化的资源**不属于某一个 V**：同一张图可能被多个 V 用（转发/联动）、
+    也可能在账号被删之后仍然要留着（用户选过的那张）。资源是按 **`(kind, 稳定键)`**
+    去重的 —— 粒度是"这份资源"，不是"某个账号的某个字段"。
+    规格：`docs/design-light-assets.md` §2；服务层唯一入口 `app/services/assets.py`。
+
+    ## 口径
+
+    - `key` = **去掉签名参数的 URL**（`assets.key_of`）：微博头像签名只有约 3 小时有效期，
+      实测同一张图的两次抓取只差 `Expires`/`ssig`（两个文件 sha256 逐字节相同）⇒
+      按 URL 存会让同一张图存两份、账本里变成两个版本。**索引/去重/查盘一律按 `key`**；
+    - `url` = **最近一次见到的完整 URL**（回源与展示用）：丢掉签名参数只影响查找，
+      绝不影响下载；
+    - `path` = `static/` 相对路径（与 `avatar_path` / `background_path` 同款口径）；
+    - `sha256` = 内容摘要：去重、校验、L4 的历史行合并都靠它（**文件名**用的是 URL 摘要，
+      因为内容摘要要下完才知道 ⇒ 每次都得先发请求，恰好废掉本模块的主要收益）；
+    - `pinned` = 用户选过的 / 手动 pin 的 ⇒ `prune` **永不删**；
+    - `created_at` 决定"最旧"，`last_used_at` 决定 LRU（命中会刷新它）。
+
+    ⚠️ **不挂 `vtubers` / `accounts` 外键** ⇒ **不进 `services/purge.py` 的清单**
+    （删 V / 删账号不该动共享资源）。代价是"还被谁引用"必须**显式查**：
+    `assets._referenced_keys()` 是唯一入口（`vtubers.avatar` / 账号 `avatar_url` /
+    `vtuber_avatar_history.avatar_url`；L3 起再加 `posts.cover_local`）。
+    """
+
+    __tablename__ = "local_assets"
+    __table_args__ = (
+        UniqueConstraint("kind", "key", name="uq_local_asset_kind_key"),
+        Index("ix_local_assets_kind_sha256", "kind", "sha256"),
+        Index("ix_local_assets_kind_pinned", "kind", "pinned"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    kind = Column(String, nullable=False)             # avatar / cover / …（扩展点）
+    key = Column(Text, nullable=False)                # 稳定键（去签名后的 URL）
+    url = Column(Text, nullable=False)                # 最近一次见到的完整 URL
+    path = Column(String, nullable=False)             # static/ 相对路径
+    ext = Column(String, nullable=True)
+    bytes = Column(Integer, nullable=True)
+    sha256 = Column(String, nullable=True)
+    # server_default 与迁移一致（既有行回填成 0；autogenerate 比对才不报差异）
+    pinned = Column(Boolean, nullable=False, default=False, server_default="0")
+    # nullable=False 与 f009 对齐（见 LiveSession.created_at 的说明）
+    created_at = Column(DateTime, nullable=False, default=_now)
+    last_used_at = Column(DateTime, nullable=True)

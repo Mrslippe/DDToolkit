@@ -44,6 +44,7 @@ from app.services.danmaku_cloud import build_word_cloud
 from app.services.danmaku_words import build_extra_words
 from app.services.vtuber_history import former_values
 from app.services.vtuber_avatars import avatar_versions, local_avatar_map
+from app.services import assets
 from app.services import notices as notices_service
 from app.schemas.vtuber import (LiveDanmakuInfo, LiveMetricsOut, LiveEventOut,
                                 LiveWordOut, LiveUpstreamOut)
@@ -110,6 +111,25 @@ def _vtuber_outs(db: Session, vs: list[VTuber]) -> list[VTuberOut]:
     for o in outs:
         o.avatar_local = locals_.get(o.id)
     return outs
+
+
+def _pin_selected_asset(db: Session, v: VTuber) -> None:
+    """用户显式选过的那张头像 ⇒ 该资产 `pinned=1`（清理时永不动它）。
+
+    为什么在这里：`vtubers.avatar` 是**唯一**表达"用户选过哪张"的字段，而 pin 的语义就是
+    "这是用户的选择，不许被 LRU 淘汰"。挂在保存档案这一条路上，就不会漏掉某条选择路径
+    （幂等：已是 pin 的再设一次不产生写入）。
+    ⚠️ 失败**不能拖垮保存档案**（pin 只是清理时的保护标记，档案字段才是主产物）⇒ 只 warning。
+    """
+    url = (v.avatar or "").strip()
+    if not url:
+        return
+    try:
+        if assets.pin(db, assets.KIND_AVATAR, url) is not None:
+            db.commit()
+    except Exception as e:  # noqa: BLE001 —— 标记失败不该让用户保存不了档案
+        db.rollback()
+        logger.warning(f"头像资产 pin 失败 vtuber#{v.id}: {type(e).__name__}: {e}")
 
 
 router = APIRouter()
@@ -282,6 +302,7 @@ def update_vtuber(vtuber_id: int, data: VTuberUpdate, db: Session = Depends(get_
     v = VTuberRepo(db).update(vtuber_id, data.model_dump(exclude_unset=True))
     if not v:
         raise HTTPException(404, f"VTuber id={vtuber_id} 不存在")
+    _pin_selected_asset(db, v)
     out = _vtuber_out(db, v)
     # V 本体改了 ⇒ **推给所有订阅者**（M3b，devlog/248）。
     #

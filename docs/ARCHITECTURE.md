@@ -1,9 +1,9 @@
 # 后端架构总览：数据模型 + 抓取技术架构
 
-> 适用版本：`main`（2026-09-28，`MIGRATION_HEAD = f008`）。
+> 适用版本：`main`（2026-09-29，`MIGRATION_HEAD = f009`）。
 > 本文是**入口文档**：先看这里建立全貌，再按需进两份深度文档——
 > - `docs/GLOSSARY.md`：**查名词/代码路径**（改 bug 或做需求第一步）；
-> - `docs/backend-repositories-and-routers.md`：13 张表的列级定义、14 个仓储类、HTTP 路由计数（三种数法见该文 §3）；
+> - `docs/backend-repositories-and-routers.md`：14 张表的列级定义、14 个仓储类、HTTP 路由计数（三种数法见该文 §3）；
 > - `docs/backend-fetch-pipeline.md`：抓取链路细节（API 清单、节流测算、风控判定、停止原因）。
 > 前端形态见 `docs/UI-MAP.md`；本地开发/验证见 `docs/DEV-LOOP.md`；全部文档索引见 `docs/README.md`。
 
@@ -40,8 +40,8 @@ flowchart TB
     APP --> AUTH["auth 维护协程<br/>B 站 cookie 续期"]
   end
 
-  S --> DB[("SQLite vtuber.db（WAL）<br/>13 张表 / alembic a001→f008")]
-  S --> FS["DATA_DIR/static：头像 / 自定义背景 / 图片代理缓存"]
+  S --> DB[("SQLite vtuber.db（WAL）<br/>14 张表 / alembic a001→f009")]
+  S --> FS["DATA_DIR/static：头像 / 自定义背景 / 图片代理缓存 / 轻资产长期副本"]
   HTTP --> UI["前端 Vite + React（只读渲染 + 轮询 fetch-status）"]
 ```
 
@@ -66,11 +66,13 @@ tenacity / httpx / fetcher），经 `_sched()` 缓存包装首次调用才导入
 
 **数据目录**：一切可变数据都在 `DDTOOLKIT_DATA_DIR`（桌面端 = `%APPDATA%\com.ddtoolkit.app`，
 开发态 = `…-dev`）：`vtuber.db`（+ WAL/SHM）、`.env`（凭据）、`vtubers.csv`（候选池）、
-`logs/{app,sidecar}.log`、`static/{avatars,custom_bg,img-cache}`。
+`logs/{app,sidecar}.log`、`static/{avatars,custom_bg,img-cache,assets}`。
+（`static/avatars` 是 R47 之前/之内的历史落点，L1 起**新下载的头像进 `static/assets/avatar/`**，
+旧文件留在原地只做登记 —— 见 §3.11 与 `services/assets.py`。）
 
 ---
 
-## 2. 数据模型（13 张表 · 迁移链 a001 → f008）
+## 2. 数据模型（14 张表 · 迁移链 a001 → f009）
 
 ### 2.1 ER 总览
 
@@ -182,7 +184,21 @@ erDiagram
     datetime first_seen_at
     datetime last_seen_at
   }
+  LOCAL_ASSETS {
+    int id PK
+    string kind
+    text key
+    text url
+    string path
+    string sha256
+    bool pinned
+    datetime created_at
+    datetime last_used_at
+  }
 ```
+
+> `LOCAL_ASSETS`（f009）**不挂任何外键**（被固化的资源不属于某一个 V、账号删掉后仍要留着），
+> 所以它在上面的 ER 图里是孤立节点 —— 引用关系见 §2.2 那一行。
 
 ### 2.2 表职责
 
@@ -200,6 +216,7 @@ erDiagram
 | `app_meta` | 通用 KV（进程外需要记住的少量状态，如 `external.startup.last_run`） | `key` 主键 | 启动外部补抓时间戳（f003） |
 | `vtuber_field_history` | **曾用值**：昵称/签名被**平台侧覆盖前**的旧值（f004 起取代字段锁定；手改不入账） | `ix_vtuber_field_history_vtuber`（`vtuber_id`, `field`） | 只由抓取回写记账（`scheduler._fetch_one_account` → `services/vtuber_history.py`） |
 | `vtuber_avatar_history` | **历次头像账本**（f008，R47）：每次抓到的头像都留一行，可回看/切回旧图；"当前用的是哪张"由 `vtubers.avatar` / 账号 `avatar_url` **推导**（无 `is_selected` 列） | **UNIQUE(vtuber_id, avatar_url)**；`ix_vtuber_avatar_history_vtuber`（`vtuber_id`, `first_seen_at`） | 只由抓取回写记账（`scheduler._fetch_one_account` / `_deferred_avatar` → `services/vtuber_avatars.py`）；`GET /vtuber/{id}/avatars` 只读 |
+| `local_assets` | **轻资产长期储存索引**（f009，L1）：一个「稳定键」一行，指向 `static/assets/{kind}/` 下那份**不会随签名过期而失效**的本地副本（头像 / 封面 …）。键 = **去掉签名参数的 URL** ⇒ 跨签名同一份 | **UNIQUE(kind, key)**；`ix_local_assets_kind_sha256`、`ix_local_assets_kind_pinned` | 唯一入口 `services/assets.py`（抓取侧 `scheduler._download_avatar` / `_deferred_avatar` 登记；清理走 `prune`）。**无外键 ⇒ 不进 `purge.py`**，引用关系由 `assets._referenced_keys()` 显式查（`vtubers.avatar` / 账号 `avatar_url` / 历次头像账本；L3 起加 `posts.cover_local`） |
 
 ### 2.3 迁移链与启动迁移
 
@@ -215,9 +232,9 @@ erDiagram
 | `f002` | `accounts.sort_order` + `accounts.locked_fields`（后者 f004 已删） | `f003` | `app_meta`（KV 表） |
 | `f004` | `vtubers.sign_override / sign_source_account_id` + `vtuber_field_history`，**删除 `accounts.locked_fields`**（devlog/074） | `f005` | 置顶动态：`posts.is_pinned / pinned_refreshed_at` + 索引 `ix_posts_platform_uid_pinned`（devlog/139） |
 | `f006` | 档案视图卡片布局：建 `profile_cards`（devlog/142） | `f007` | `vtuber_events` 加 `kind` / `emoji` + 索引 `ix_vtuber_events_vtuber_kind`（devlog/162） |
-| `f008` | 历次头像账本：建 `vtuber_avatar_history`（**13 张表**）= **当前 head**（R47，devlog/249） | — | （暂无后续版本） |
+| `f008` | 历次头像账本：建 `vtuber_avatar_history`（R47，devlog/249） | `f009` | 轻资产长期储存：建 `local_assets`（**14 张表**）= **当前 head**（L1，devlog/257） |
 
-> 共 **21** 个版本（`alembic/versions/` 实际文件数：`a001`–`f008`）。f001–f003 由 v0.9.6–v0.9.8 批次引入，f004 见 devlog/074、f005 见 devlog/139、f006 见 devlog/142、f007 见 devlog/162、f008 见 devlog/249。
+> 共 **22** 个版本（`alembic/versions/` 实际文件数：`a001`–`f009`）。f001–f003 由 v0.9.6–v0.9.8 批次引入，f004 见 devlog/074、f005 见 devlog/139、f006 见 devlog/142、f007 见 devlog/162、f008 见 devlog/249、f009 见 devlog/257。
 
 启动迁移四形态（`app/main.py::_run_migrations`，冷启动快路径）：
 
@@ -543,6 +560,7 @@ M0 **不退役**轮询。细节与不变量见 `docs/backend-repositories-and-ro
 | 机制 | 规则 | 为什么 |
 |---|---|---|
 | 图片缓存 | TTL 7 天；**容量上限 `IMG_CACHE_MAX_MB`（默认 300）**，超限按 **mtime 最旧优先**淘汰 | 缓存是纯可再生数据。**命中会刷新 mtime** ⇒ 淘汰近似 LRU，热图（头像/常看封面）不会因"抓得早"被误删 |
+| **轻资产长期副本**（`static/assets/`） | 与图片缓存**两套**：按 `(kind, 稳定键)` 去重、一个键一个文件；命中稳定键 ⇒ **不再回源**；只按 pin / LRU / 每 kind 上限淘汰，**被引用的不许清** | 图片缓存是"看一眼就够"的临时数据，**清空它应用外观不变**；而固化副本是"认定的长期资源"（远端 URL 会死、会被防盗链拦）⇒ 必须有索引与 pin/引用保护。判据：清空 `img-cache` 后外观不变（L2） |
 | 库回收 | 启动时把库切成 `auto_vacuum=INCREMENTAL`（**超 512MB 跳过**）；解除订阅/删账号之后调 `incremental_vacuum()` | SQLite 默认 `NONE`：删掉的行只进 freelist，**文件永不缩小**；而全库 VACUUM 的临时空间≈库大小，不适合在升级路径上做 |
 | 体检 | `app/services/db_maintenance.py::dir_stats()`：库（含 `-wal`/`-shm`）/ 缓存 / 日志 / 其余 + 磁盘剩余 + **遗留备份清单** | "哪块在长"必须能被回答；`vtuber.db.bak-*` 这类手工备份不会自己消失 |
 
@@ -660,6 +678,7 @@ M0 **不退役**轮询。细节与不变量见 `docs/backend-repositories-and-ro
 | **laplace** | 声明为源（`jobs=[]`），当前仅作为 danmakus 的辅助 | 无 | — | — |
 | **本地名单** | `vtubers.csv`（随包分发，首启引导到数据目录） | — | 手动导入 / 候选池检索 | vtubers + accounts（收录时） |
 | **图片代理** | `/img-proxy?url=`（白名单主机 + 磁盘缓存） | 按主机带 Referer | 按需 | `static/img-cache` |
+| **轻资产固化** | 抓取侧顺路下载（`scheduler._download_avatar`）+ 远端主机与 API 不同域（CDN） | 无（走 CDN） | 只在**稳定键未命中**时发一次 | `static/assets/{kind}/` + `local_assets` 索引 |
 
 外部源契约（`app/services/externals/`）：`ExternalSource.run_job(kind, db, client,
 account_ids)`，幂等纪律「重复执行不产生重复行」；`account_ids` 白名单用于收录/加账号时
@@ -746,6 +765,9 @@ flowchart LR
     + `test_module_level_pacers_hold_no_event_loop_primitives`。
 16. **新增挂 `accounts` / `vtubers` 外键的表 → 同步 `app/services/purge.py`**：
     漏一处，删 V 就会被 `foreign_keys=ON` 整次回滚（清单见第 2 条）。
+    ⚠️ 反过来也成立：**故意不挂外键的共享资源表**（f009 的 `local_assets` —— 同一张图可能
+    被多个 V 用、账号删了用户选过的那张还要留）**不进 purge**，代价是"还被谁引用"必须
+    显式可查（`services/assets.py::_referenced_keys()`），否则清理会删掉在用的资源。
 17. **OverlayScroll 会插一层 `.os-scroll`**：给被包容器写 CSS 一律用后代选择器
     （`.list-scroll .list-inner`），写成直系子会静默失效（devlog/039）。
 18. **并发粒度是平台**：同平台内部串行，不要在一条平台流里再并发放大速率。
@@ -971,6 +993,23 @@ flowchart LR
     `imgProxyUrl(` 只许出现在 `imageHost.ts`）+ **接线**（探针 `--profile-sync` 比
     左右栏的 `data-render-src`）。⚠️ 只比 `data-src`（解析出来的源 URL）**永远量不出这个
     bug** —— 出事时左右栏的 `data-src` 一模一样。
+37. **远端资源要"抓一次、长期用"**（L1，devlog/257）：头像/封面这类**小、不变、反复要**的
+    资源一律经 `services/assets.py` 固化进 `static/assets/{kind}/`，索引在 `local_assets`。
+    四条一起才成立（真源 `services/assets.py` 头部）：
+    - **键 = 去掉签名参数的 URL**（`assets.key_of`，白名单 `SIGNATURE_PARAMS`）：
+      实测微博头像签名约 3 小时轮换一次，同一张图的两次抓取只差 `Expires`/`ssig`
+      （盘上两个文件 sha256 逐字节相同，样本在 `tests/fixtures/light_assets.json`）
+      ⇒ 按完整 URL 去重等于没去重；
+    - **文件名 = 稳定键的 URL 摘要**（不是内容摘要）：内容摘要要下完才知道 ⇒
+      每次都先发请求，恰好废掉本模块的主要收益。内容摘要另存 `sha256` 列（去重/校验）；
+    - **先写文件、再写索引**，且 `get()` 命中要求**文件与索引都在**：索引说有盘上没有 ⇒
+      当未命中并重下（复用同一行修复）。反过来会在崩溃后留下"索引说有、盘上没有"的死条目；
+    - **`remember()` 只登记、绝不搬迁**：`static/avatars/` 的历史文件留在原地
+      （用户磁盘上的文件只许增不许减/改 —— 方案 §4 S-1）。
+    ⚠️ 已知取舍：稳定键命中就**不回源核对**，万一平台"换图不换文件名"我们会一直用旧图
+    （实测微博/B 站换图都会换文件名）⇒ 留 `--verify`（≥7 天一次）这个口子在 L4。
+    ⚠️ 清理的**引用保护**（`_referenced_keys`）与被引用项的 pin 是两道防线，缺一条就会把
+    用户正看着的头像删掉（L2 的 `prune` 判据）。
 
 ---
 
@@ -980,7 +1019,7 @@ flowchart LR
 |---|---|
 | 接入新平台（抖音/小红书…） | 继承 `platforms/base.py::BasePlatform` → `platforms/registry.py` 注册 → 前端平台常量；调度器自动接管 |
 | 接入新第三方源 | 实现 `externals/base.py::ExternalSource` → `externals/__init__.py` 注册（声明 `jobs` 与周期） |
-| 新增表/列 | 新建 `alembic/versions/{fNNN}_*.py`（编号按**实际实施顺序**顺延，当前 head `f008` = `vtuber_avatar_history`）→ 同步 `MIGRATION_HEAD` → 补 `models` 与 Repo → 若挂 `accounts/vtubers` 外键，**同步 `services/purge.py`** |
+| 新增表/列 | 新建 `alembic/versions/{fNNN}_*.py`（编号按**实际实施顺序**顺延，当前 head `f009` = `local_assets`）→ 同步 `MIGRATION_HEAD` → 补 `models` 与 Repo → 若挂 `accounts/vtubers` 外键，**同步 `services/purge.py`**（不挂外键的如 `local_assets` 不必，但要把"引用关系怎么查"写进 `services/assets.py`） |
 | 用户手改的字段被抓取覆盖 | **不再需要锁定**（`accounts.locked_fields` 已随 f004 删除）：抓取照常覆盖，覆盖前把旧值写进 `services/vtuber_history.py::record_field_change()`。⚠️ 记录只在**平台侧覆盖前**发生（手改不入账，devlog/075）；展示暂缓 —— 归入「账号信息历史快照」那条线（§TODO R9） |
 | 调整抓取频率/节流 | `app/core/config.py`（T0-T4 周期、请求间隔、批量休息、风控冷却） |
 | 新增前端视图 | `docs/UI-MAP.md`（右栏视图光条 + 场景状态机） |

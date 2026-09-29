@@ -3,7 +3,7 @@
 > **用途**：改 bug / 做需求时快速定位「这个词在代码里叫什么、在哪个文件、牵动谁」。
 > **用法**：`Ctrl+F` 搜中文词或英文标识符；每行是「术语 · 含义 · 代码位置 · 关联」。
 > **与 `ARCHITECTURE.md` 的分工**：架构文档讲「为什么这样设计」，本文讲「这东西在哪、改它要动谁」。
-> 适用版本：`main`（2026-09-28，`MIGRATION_HEAD = f008`）。
+> 适用版本：`main`（2026-09-29，`MIGRATION_HEAD = f009`）。
 
 **目录**：§1 领域名词 · §2 数据模型与字段 · §3 抓取与调度 · §4 认证与凭据 ·
 §5 前端与界面 · §6 工程与流程 · §7 配置项速查 · §8 不变量（**指针 → `ARCHITECTURE.md` §6**） · §9 需求 → 代码入口。
@@ -63,11 +63,29 @@
 
 ## 2. 数据模型与字段
 
-**13 张表**：`vtubers` / `accounts` / `posts` / `account_stat_snapshots` / `live_sessions` /
+**14 张表**：`vtubers` / `accounts` / `posts` / `account_stat_snapshots` / `live_sessions` /
 `live_gift_days` / `live_category_overrides` / `vtuber_events` / `thirdparty_vtubers` /
 `app_meta`（通用 KV，f003）/ `vtuber_field_history`（曾用名·曾用签名，f004）/
-`profile_cards`（档案视图卡片布局，f006）/ `vtuber_avatar_history`（历次头像账本，f008）。
+`profile_cards`（档案视图卡片布局，f006）/ `vtuber_avatar_history`（历次头像账本，f008）/
+`local_assets`（**轻资产长期储存索引**，f009）。
 列级定义见 `docs/backend-repositories-and-routers.md` §1；ER 图见 `docs/ARCHITECTURE.md` §2。
+
+**轻资产（light asset）**：`小、不变、反复要` 的远端资源 —— 头像、帖子封面、企划徽标等。
+判定它的不是体积而是**用途**：要么"没有它界面就缺一块"（头像），要么"每次渲染都要它"（封面）。
+固化后「再要一次」= 读盘，而不是再发一次请求。
+代码位置：`app/services/assets.py`（唯一入口）；索引表 `local_assets`；副本落在
+`static/assets/{kind}/`。**不要**与 `static/img-cache/`（任意远端图的临时缓存，可随时清）
+混为一谈 —— 判据是"清空它应用外观不变"（`ARCHITECTURE.md` §6 第 37 条）。
+
+**稳定键（stable key）**：`assets.key_of(url)` —— 丢掉**签名参数**（`Expires` / `ssig` /
+`KID` / `sign` … 白名单 `SIGNATURE_PARAMS`）、去掉 fragment、query 按参数名排序后的 URL。
+用来**查找与去重**；下载与展示一律用完整 URL（存在 `local_assets.url`）。
+为什么必须有：实测微博头像签名约 3 小时轮换一次，同一张图的两次抓取只差
+`Expires`/`ssig`，盘上两个文件 sha256 逐字节相同（样本 `tests/fixtures/light_assets.json`）。
+
+**`remember` vs `put`**：`put` 会**写文件**（下载下来的那份）；`remember` **只登记**
+盘上已有的文件（`static/avatars/` 里的历史遗留），不下载、不复制、**不搬迁** ——
+用户磁盘上的文件只许增不许减/改（方案 S-1）。
 
 | 字段/术语 | 含义 | 写入方 | 关联 |
 |---|---|---|---|
@@ -182,7 +200,7 @@
 
 | 术语 | 含义 | 代码位置 | 关联 |
 |---|---|---|---|
-| **迁移链 / MIGRATION_HEAD** | alembic `a001→f008`（21 个版本） | `alembic/versions/`、`app/main.py::MIGRATION_HEAD` | 同步纪律 = 不变量 3（`docs/ARCHITECTURE.md` §6）；测试断言一致 |
+| **迁移链 / MIGRATION_HEAD** | alembic `a001→f009`（22 个版本） | `alembic/versions/`、`app/main.py::MIGRATION_HEAD` | 同步纪律 = 不变量 3（`docs/ARCHITECTURE.md` §6）；测试断言一致 |
 | **一键发布 / release.py** | 十步发布编排：预检→版本同步→门禁→打版→产物校验→提交/tag→推送→Release→报告 | `scripts/release.py`；手册 `docs/RELEASE.md`；上传 `scripts/upload_release_assets.py`（幂等） | 守卫：工作树脏/notes 缺失/版本不递增/NSIS 打平/**文档漂移**/tag 冲突 → 停；`--dry-run`、`--from <步骤>` 续跑；推完自动对齐本地 `origin/<分支>` tracking ref（按 URL 推送不会自动更新它） |
 | **端到端上游冒烟 / smoke_upstream** | 数据目录副本 + 真后端 + 真上游，跑"只有真环境才暴露"的链路（B 站检索 / uid 直查 / 池外收录 / 场次上游） | `scripts/smoke_upstream.py`（`--cold` = 空数据目录 + 清空凭据）；`dev_check.py --upstream` | `--capture` 顺带刷新真实 fixtures；skip 必须打印原因，不冒充通过 |
 | **真实 fixtures** | 真上游回包 / 真 `installer.nsi` 片段 / 真索引条目 —— 判据的"真形状"依据 | `tests/fixtures/`（`smoke_upstream.py --capture` 生成；专栏 HTML 真拉自 `x/article/view`）；用例 `tests/test_real_fixtures.py` | 「新判据至少一条用例吃真实数据」= 不变量 22（`docs/ARCHITECTURE.md` §6） |

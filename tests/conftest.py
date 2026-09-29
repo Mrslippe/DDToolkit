@@ -138,3 +138,16 @@ def _first_run_marker_outside_the_real_data_dir(tmp_path, monkeypatch):
     from app import main as app_main
 
     monkeypatch.setattr(app_main, "FIRST_RUN_MARKER", tmp_path / ".first-run-done")
+
+
+# ── 轻资产落盘（`static/assets/`）在测试里一律指向 tmp_path（L1，devlog/257）────────
+#
+# 与上面那条同类：`assets.data_root()` 默认是 `settings.DATA_DIR`，而测试里它是**仓库根**
+# （`config.py` 的默认值）⇒ 任何真的走了一次头像下载的用例都会往 `<repo>/static/assets/` 写文件。
+# 这种副作用**不会红**，只会让仓库慢慢长出没人知道来源的图片（devlog/200 那批"后台任务连了
+# 开发库"就是这个形态）。`data_root()` 是本模块唯一的目录来源，所以在这里一次钉死就够。
+@pytest.fixture(autouse=True)
+def _light_assets_outside_the_real_data_dir(tmp_path, monkeypatch):
+    from app.services import assets
+
+    monkeypatch.setattr(assets, "data_root", lambda: tmp_path)

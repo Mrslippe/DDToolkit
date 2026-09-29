@@ -282,8 +282,9 @@ def test_get_settings_exposes_specs_and_readonly_info(client):
     assert info["version"] == settings.VERSION
     # ⚠️ 这里**故意写死 head**（而不是跟 `app.main.MIGRATION_HEAD` 比）：本用例要断的是
     # "设置页展示的 head 与代码里声明的那个一致"，两边都引同一个常量就等于什么都没断。
-    # 加迁移时要顺手改这一行 —— 它会红，这是设计如此（f008：R47 历次头像，devlog/249）。
-    assert info["migration_head"] == "f008"
+    # 加迁移时要顺手改这一行 —— 它会红，这是设计如此
+    # （f008：R47 历次头像，devlog/249；f009：L1 轻资产索引，devlog/257）。
+    assert info["migration_head"] == "f009"
     assert info["data_dir"] and info["database"]
     assert body["readonly"] and all(r.get("why") for r in body["readonly"])
 

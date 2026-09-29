@@ -1,5 +1,4 @@
 import asyncio
-import hashlib
 import json as _json
 from datetime import datetime, timedelta, timezone
 import logging
@@ -7,7 +6,6 @@ import math
 import random
 import threading
 import time
-import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -25,6 +23,7 @@ from app.models.vtuber import Account, VTuber, Post
 from app.services.vtuber_history import (FIELD_DISPLAY_NAME, FIELD_SIGN,
                                          record_field_change)
 from app.services.vtuber_avatars import record_avatar_version
+from app.services import assets
 from app.repositories.vtuber_repo import (
     VTuberRepo, AccountRepo, PostRepo, AccountStatSnapshotRepo, LiveSessionRepo,
     AppMetaRepo,
@@ -62,40 +61,25 @@ from app.services import rate_limit as rl
 # logs/app.log 恒为空（修复记录见 devlog/013）。
 logger = logging.getLogger(__name__)
 
-AVATAR_DIR = settings.DATA_DIR / "static" / "avatars"
-
-# 允许的头像扩展名（修复：原来 ".jpg" in url 的判定会把 gif/webp 等存成 png）
-_ALLOWED_AVATAR_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
-
-
-def _avatar_ext(url: str) -> str:
-    """从 URL 路径推导头像扩展名；未知/无扩展名时回退 .jpg"""
-    suffix = Path(urllib.parse.urlparse(url).path).suffix.lower()
-    return suffix if suffix in _ALLOWED_AVATAR_EXTS else ".jpg"
-
-
-def _avatar_file_name(uid: str, url: str, ext: str) -> str:
-    """版本化的头像文件名 `{uid}_{URL 摘要}{ext}`（R47，devlog/249）。
-
-    此前是**固定**的 `{uid}{ext}`：新头像下载下来会**把旧文件覆盖掉**，
-    于是"保留历次头像"连图都没有（只记 URL 是没用的，本地已经没那张图了）。
-
-    摘要取 **URL 的 sha1 前 8 位**（不是内容摘要）：粒度与账本
-    `vtuber_avatar_history` 的唯一键 `(vtuber_id, avatar_url)` 一致 ——
-    同一个 URL ⇒ 同一个文件名（重复抓取幂等、不留垃圾），换了 URL ⇒ 新文件。
-    """
-    digest = hashlib.sha1(url.encode("utf-8")).hexdigest()[:8]
-    return f"{uid}_{digest}{ext}"
+# 头像文件的命名与扩展名判定已收进 `services/assets.py`（L1，devlog/257）：
+#   · 目录：`static/assets/avatar/`（不再是 `static/avatars/` —— 后者的历史文件**留在原地**，
+#     由 `assets.remember()` 登记，绝不搬迁）；
+#   · 文件名：`{platform}_{uid}_{sha1(稳定键)[:8]}{ext}`（R47 的 `sha1(URL)` 口径退役 ——
+#     微博每次抓取都换签名 ⇒ 按 URL 取摘要等于每次都造一个新文件，正是"同一张图存两份"的成因）；
+#   · 扩展名：`assets.ext_of(url)`（未知/无扩展名回退 .jpg）。
 
 
 def _avatar_missing(acc: Account) -> bool:
-    """头像本地文件是否缺失（avatar_path 相对 DATA_DIR 存储）。
+    """头像本地文件是否缺失（`avatar_path` 相对 DATA_DIR 存储）。
+
     修复（devlog/019）：此前仅 URL 变化才下载——初次下载失败或文件被删后
-    永远不会补下；全量更新时改为先检查文件再下载缺失头像。"""
+    永远不会补下；全量更新时改为先检查文件再下载缺失头像。
+    ⚠️ 路径解析统一走 `assets.abs_path()`（L1）：数据目录只有那一个来源，
+    否则"测试注入 / 便携版数据目录"这类场景会出现两套基准。
+    """
     if not acc.avatar_path:
         return True
-    p = Path(acc.avatar_path)
-    return not (p if p.is_absolute() else settings.DATA_DIR / p).exists()
+    return not assets.abs_path(acc.avatar_path).exists()
 
 
 def _needs_avatar_download(acc: Account, new_avatar: str | None, file_exists: bool) -> bool:
@@ -619,10 +603,25 @@ class FetchResult:
 
 
 async def _download_avatar(url: str, uid: str, client: httpx.AsyncClient | None = None) -> str | None:
-    AVATAR_DIR.mkdir(parents=True, exist_ok=True)
-    ext = _avatar_ext(url)
-    name = _avatar_file_name(uid, url, ext)      # R47：版本化（不再覆盖旧图）
-    filepath = AVATAR_DIR / name
+    """下载头像到 `static/assets/avatar/`，返回 `static/` 相对路径（失败 `None`）。
+
+    L1（devlog/257）三点变化：
+
+    1. **文件名可预测**（`assets.rel_path`：`{uid}_{sha1(稳定键)[:8]}{ext}`）⇒ 落盘**之前**
+       就能算出该看哪个文件：文件已在盘上 ⇒ **一个请求都不发**（这是本模块的主要收益，
+       判据在 `tests/test_vtuber_avatars.py`，配"第一次必须发"的正对照）；
+    2. **原子写**（`assets.write_bytes`：临时文件 → `os.replace`）：文件名可预测之后，
+       半截文件会被 `get()` 当成有效副本 ⇒ 不原子就等于"崩溃后永久破图"；
+    3. **索引登记不在这里**（见 `_note_asset`）：文件先落盘、索引行随后由调用方
+       在**同一个事务**里补上（先文件后索引，规格 §2.2）。
+
+    ⚠️ 被 `_fetch_one_account` / `_deferred_avatar` 调用；测试普遍 monkeypatch 本函数
+    （替身签名必须与真身一致：`(url, uid, client=None)`）。
+    """
+    rel = assets.rel_path(assets.KIND_AVATAR, url, hint=uid)
+    filepath = assets.abs_path(rel)
+    if filepath.exists():
+        return rel                       # 预检命中：同一个稳定键已经有一份，不必回源
     try:
         if client is None:
             client = new_async_client(15.0)
@@ -631,14 +630,30 @@ async def _download_avatar(url: str, uid: str, client: httpx.AsyncClient | None 
             own = False
         resp = await client.get(url)
         if resp.status_code == 200:
-            filepath.write_bytes(resp.content)
-            return f"static/avatars/{name}"
+            assets.write_bytes(filepath, resp.content)
+            return rel
     except Exception as e:
         logger.warning(f"头像下载失败 {uid}: {e}")
     finally:
         if client is not None and own:
             await client.aclose()
     return None
+
+
+def _note_asset(db: Session, url: str, path: str | None) -> None:
+    """把"这份本地文件对应哪个远端资源"登记进 `local_assets`（L1，devlog/257）。
+
+    - 升级自愈：索引一开始是空的，稳态抓取（URL 没变、文件也在）也会走到这里，
+      把盘上已有的那份登记进去 —— 于是老用户的头像不必等"下次换图"才受保护；
+    - 文件不在盘上时 `remember()` 返回 None（先文件后索引，不留指向虚空的索引行）；
+    - 登记失败**不能拖垮抓取**（它只是记账，账号字段才是主产物）⇒ 只 warning。
+    """
+    if not path or not url:
+        return
+    try:
+        assets.remember(db, assets.KIND_AVATAR, url, path)
+    except Exception as e:  # noqa: BLE001 —— 记账失败不该让整次抓取失败
+        logger.warning(f"轻资产登记失败 {url}: {type(e).__name__}: {e}")
 
 
 def _note_avatar_version(db: Session, acc: Account, url: str, path: str | None) -> None:
@@ -723,7 +738,15 @@ async def _fetch_one_account(acc: Account, db: Session, client: httpx.AsyncClien
                 # 未下载时就是现在这个文件；下载了就是新下的那份；延后下载时**先留空**
                 # （否则会把新 URL 指到旧文件上 —— 图会张冠李戴，见 _deferred_avatar）。
                 history_path = acc.avatar_path
-                if _needs_avatar_download(acc, new_avatar, file_exists):
+                # L1（devlog/257）：**先问轻资产索引** —— 稳定键命中就说明盘上已经有这张图了
+                # （微博每 3 小时换一次签名，URL 变了但键没变）⇒ 直接用本地那份、不发请求。
+                # 命中时仍把 `avatar_url` 跟到最新：远端那条链（直连 / 代理）要的是活地址。
+                asset = assets.get(db, assets.KIND_AVATAR, new_avatar)
+                if asset is not None:
+                    acc.avatar_url = new_avatar
+                    acc.avatar_path = asset.path
+                    history_path = asset.path
+                elif _needs_avatar_download(acc, new_avatar, file_exists):
                     acc.avatar_url = new_avatar
                     if pending_avatar is not None:
                         # 延后下载（收录/加账号的 fast 路径）：先让账号字段落库可见
@@ -736,6 +759,8 @@ async def _fetch_one_account(acc: Account, db: Session, client: httpx.AsyncClien
                         history_path = acc.avatar_path
                         if not file_exists:
                             logger.info(f"补下缺失头像 {acc.platform}:{acc.platform_uid} → {acc.avatar_path}")
+                # L1：把"这份文件对应哪个远端资源"登记进索引（升级自愈：老数据的文件也进来）
+                _note_asset(db, new_avatar, history_path)
                 _note_avatar_version(db, acc, new_avatar, history_path)
 
             if info.get("followers_count") is not None:
@@ -793,6 +818,9 @@ async def _deferred_avatar(account_id: int, url: str) -> None:
             # R47（devlog/249）：行已由抓取侧按 URL 落好（当时 path 留空），
             # 文件到位后在这里把它补上 —— 选择器才拿得到本地缓存那条兜底链。
             _note_avatar_version(db, fresh, url, path)
+            # L1（devlog/257）：同一个事务里把这份文件登记进轻资产索引
+            # （先文件后索引：文件已经在上面下完了）。
+            _note_asset(db, url, path)
             db.commit()
             _push_account_snapshot(fresh)
         logger.info(f"头像延后下载完成 account#{account_id} → {path}")

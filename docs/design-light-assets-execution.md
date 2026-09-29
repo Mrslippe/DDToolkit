@@ -132,6 +132,19 @@
 
 ### 批次 L1 — `local_assets` 索引 + 头像接入（**模块地基**）
 
+> ✅ **已落地（2026-09-29，devlog/257）**：迁移 `f009` 建 `local_assets`（14 张表 / 22 版本）
+> + `app/services/assets.py`（`key_of` / `lookup` / `lookup_keys` / `get` / `put` / `remember` /
+> `pin` / `stats` / `prune`）+ 抓取侧接入（命中稳定键 ⇒ **0 次图片请求**）+ 账本按稳定键归并
+> + `PUT /vtuber/{id}` 选中即 pin + `avatar_local` 改从索引派生（账本/账号降为兜底）。
+> 判据 **+19**（`tests/test_assets.py` 14 条 + 头像链 5 条），**反向验证 10/10**（每条新行为各一条
+> 变异，锚点唯一、字节级还原 + sha256 核对）。真机库已备份（`backups/vtuber-f009-20260929-205944.db`）
+> 并 `upgrade head`；`scripts/backfill_assets.py` 登记 **13 份既有文件**（3.83MB / 3 pin / 0 缺失，
+> **没有文件被复制/搬迁/删除**）；判据⑥ 真机实测：V#16 那条**已过期**微博 URL 取到
+> `static/avatars/weibo_7471118487_3d2b0b8a.jpg`（57615 字节，sha256 与登记一致），
+> 且**用旧签名 URL 命中同一条**。
+> ⚠️ 与本文的两处有意差异：① 文件名摘要取**稳定键**（不是完整 URL —— 否则微博换签名每次都造新文件）；
+> ② 不 pin「丢失的那条」（pin 只给**此刻选中**的；历史选项靠引用保护，见规格 §5 的注）。
+
 **档位**：A（迁移 `f009` + 契约）。**依赖**：A0（可并行但建议顺序做）。
 
 **改动面**
@@ -238,8 +251,8 @@
 ## 6. 推荐提交序列
 
 ```text
-fix(avatar): A0 回填丢失的旧头像 + avatar_local 本地兜底（B 档）
-feat(assets): L1 local_assets 索引 + 头像接入（迁移 f009，A 档）
+fix(avatar): A0 回填丢失的旧头像 + avatar_local 本地兜底（B 档）          ✅ 94fe9dd
+feat(assets): L1 local_assets 索引 + 头像接入（迁移 f009，A 档）          ✅ 本批（devlog/257）
 feat(assets): L2 统计与清理（dry-run）+ pin 交互（B 档）
 feat(assets): L3 未归档帖封面固化 + cover_local（A 档）
 ```
