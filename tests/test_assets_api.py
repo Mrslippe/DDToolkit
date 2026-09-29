@@ -201,3 +201,23 @@ def test_prune_endpoint_rejects_unknown_kind(db, client, data_dir):
     r = client.post("/settings/assets/prune", json={"kind": "whatever", "dry_run": False})
     assert r.status_code == 422, f"未知 kind 应当是 422，实际 {r.status_code}"
     assert db.query(LocalAsset).count() == 1 and len(_files(data_dir)) == 1, "422 之前动了数据"
+
+
+def test_diagnostics_bundle_includes_light_assets(db, data_dir, monkeypatch):
+    """诊断包里要有**按 kind 摊开**的轻资产读数（用户问"哪块在长"时要能一眼答）。
+
+    ⚠️ `build_diagnostics()` 内部自己开 `SessionLocal`（生产里 = 数据目录的库）——
+    判据里把它指到测试会话，否则读到的是仓库根那个库（`no such table`）。
+    """
+    _seed(db, "https://x/0.jpg", "https://x/1.jpg")
+    import app.core.database as db_mod
+    from app.services import diagnostics
+
+    monkeypatch.setattr(db_mod, "SessionLocal", _Session)
+    text = diagnostics.build_diagnostics()["text"]
+
+    i = text.find("轻资产")
+    assert i > 0, "诊断包里没有轻资产那一节"
+    seg = text[i:i + 400]
+    assert assets.KIND_AVATAR in seg, f"没有按 kind 摊开：{seg[:120]!r}"
+    assert "2 份" in seg, f"文件数没进诊断包：{seg[:120]!r}"

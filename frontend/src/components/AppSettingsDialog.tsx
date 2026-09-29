@@ -198,9 +198,11 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
   useEffect(() => {
     if (!open || active !== ABOUT_ID || storage) return
     let alive = true
-    void api.getStorage().then((st) => { if (alive) setStorage(st) }).catch(() => undefined)
-    // 轻资产读数与它同一时机取（同一块面板里的两组数字，分两次请求会让它们不同步）
-    void api.getAssets().then((a) => { if (alive) setAssets(a) }).catch(() => undefined)
+    // 轻资产读数与占用**一起取、一起落地**：两块数字属于同一屏，分两次落地会让它们不同步，
+    // 也多一次无谓的重渲染（探针点击与重渲染撞上时，旧节点上的 `.click()` 是静默无效的）。
+    void Promise.all([api.getStorage(), api.getAssets()])
+      .then(([st, a]) => { if (alive) { setStorage(st); setAssets(a) } })
+      .catch(() => undefined)
     return () => { alive = false }
   }, [open, active, storage])
 

@@ -148,6 +148,27 @@ def build_diagnostics(*, now: datetime | None = None) -> dict[str, Any]:
         parts.append(f"（体检失败：{type(e).__name__}: {e}）")
 
     parts.append("")
+    parts.append("── 轻资产（L2，devlog/260 的读数那一半）──")
+    # 为什么放进诊断包：用户问的是"哪块在长"，而占用面板里的「轻资产副本」那一行只说总数。
+    # 这里按 kind 摊开 + 报出**索引有盘上没有**的条数（备份还原之后最容易出现的坏形态）。
+    try:
+        from app.core.database import SessionLocal
+        from app.services import assets
+
+        db = SessionLocal()
+        try:
+            for kind, st_kind in assets.stats(db).items():
+                parts.append(f"{kind}: {st_kind['files']} 份 / "
+                             f"{st_kind['bytes'] / 1048576:.1f}MB / "
+                             f"固定 {st_kind['pinned']} / "
+                             f"索引有盘上没有 {st_kind['missing']}"
+                             + (f" / 最旧 {st_kind['oldest']}" if st_kind["oldest"] else ""))
+        finally:
+            db.close()
+    except Exception as e:      # noqa: BLE001 —— 诊断包自己不许因为一段读数失败
+        parts.append(f"（轻资产读数失败：{type(e).__name__}: {e}）")
+
+    parts.append("")
     parts.append("── 日志尾部 ──")
     for name in _LOG_FILES:
         parts.append(f"··· logs/{name} ···")

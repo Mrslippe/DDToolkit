@@ -3593,7 +3593,11 @@ export async function runUiProbe(): Promise<void> {
       //    与 devlog/071→080 那次"探针读了旧 DOM 节点"是同一类坑，这次由分页引入。
       const rowNow = () => dlg.querySelector<HTMLElement>(`[data-setting="${FIELD}"]`)
       const inputNow = () => rowNow()?.querySelector<HTMLInputElement>('.aps-input') ?? null
-      const saveBtn = dlg.querySelector<HTMLButtonElement>('[data-testid="app-settings-save"]')
+      // ⚠️ **每次现查**，不要在这个 `const` 上点：弹窗里任何一次重渲染都可能把按钮换成新节点，
+      // 而拿着**已脱离文档**的旧节点 `.click()` 是**静默无效**的 —— 实测症状是
+      // "界面回显对、服务端没变、也没有「已改过」标记"（看起来像后端拒绝，其实是没点到）。
+      // 与上面 `rowNow` / `inputNow` 是同一条纪律（devlog/071→080 那类"探针读了旧 DOM 节点"）。
+      const saveBtnNow = () => dlg.querySelector<HTMLButtonElement>('[data-testid="app-settings-save"]')
       result.beforeValue = await serverValue(FIELD)
       result.inputValueBefore = inputNow()?.value ?? null
 
@@ -3623,7 +3627,7 @@ export async function runUiProbe(): Promise<void> {
       if (inputNow()) {
         typeInto(inputNow()!, '999')
         await sleep(60)
-        result.overSaveDisabled = !!saveBtn?.disabled
+        result.overSaveDisabled = !!saveBtnNow()?.disabled
         result.overError = text(rowNow()?.querySelector('.aps-field-error')) || null
       }
 
@@ -3710,8 +3714,8 @@ export async function runUiProbe(): Promise<void> {
 
       // ⑧ 合法值 → 保存 → **服务端**对账
       if (inputNow()) {
-        result.saveEnabled = !!saveBtn && !saveBtn.disabled
-        saveBtn?.click()
+        result.saveEnabled = !!saveBtnNow() && !saveBtnNow()!.disabled
+        saveBtnNow()?.click()
         await waitFor(() => dlg.querySelector(`[data-setting="${FIELD}"] .aps-badge`), 5000)
         await sleep(400)
         result.afterValue = await serverValue(FIELD)
@@ -3761,6 +3765,11 @@ export async function runUiProbe(): Promise<void> {
       result.aboutStorageOrder = storageSec
         ? [...storageSec.children].map((n) => (n.className || '').split(' ')[0])
         : []
+      // 轻资产副本那一行（L2，devlog/260）：读数来自 `GET /settings/assets`，
+      // 与「图片缓存」并排显示。**采它的文本**，好让探针在真机上也能一眼看到数字
+      // （判据在脚本侧：有数据时不许停在"读取中…"）。
+      result.assetsReadout = text(dlg.querySelector('[data-storage="assets"]')) || null
+      result.assetsRowPresent = !!dlg.querySelector('[data-storage="assets"]')
       const numDd = dlg.querySelector<HTMLElement>('[data-storage="img_cache"]')
       if (numDd) {
         const cs = getComputedStyle(numDd)

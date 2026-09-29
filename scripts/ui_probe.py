@@ -2808,6 +2808,14 @@ def main() -> int:
                     elif "更新只在桌面端可用" not in (aps.get("updatePanelText") or ""):
                         failures.append(f"@{w} app-settings: 更新面板没写清环境限制"
                                         f"（文案={aps.get('updatePanelText')!r}）")
+                    # L2（devlog/260）：轻资产副本那一行 —— 行必须在，且**有数据时不许停在"读取中…"**
+                    # （那正是"读数没接上/接口 500"的形态：行还在、数字永远是占位符）
+                    print(f"  轻资产读数：{aps.get('assetsReadout')!r}")
+                    if not aps.get("assetsRowPresent"):
+                        failures.append(f"@{w} app-settings: 存储面板里没有「轻资产副本」那一行")
+                    elif "读取中" in (aps.get("assetsReadout") or ""):
+                        failures.append(f"@{w} app-settings: 轻资产读数停在 '读取中…'"
+                                        f"（GET /settings/assets 没回来？）")
                     if not aps.get("overSaveDisabled"):
                         failures.append(f"@{w} app-settings: 填了越界值（999）保存钮还能点")
                     if not aps.get("overError"):
