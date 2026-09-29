@@ -681,7 +681,15 @@
   align-items: center;
   gap: 10px;
   width: 100%;
-  padding: 0 15px;
+  /* R49（devlog/256）：**这 6px 上内距是给阴影留的，别当余量删掉。**
+     `filter: drop-shadow` 画在 border box **之外**，而卡片页滚动口（`.hero-scroll .os-scroll`，
+     `overflow:auto`）会在自己的 padding-box 上沿把它裁掉 —— 实测 2026-09-29 之前是
+     `topGap=0`（头像顶边正好压在那个上沿上）⇒ **只有顶部**那 2px 阴影消失
+     （左右/下方都有富余，肉眼很容易以为"阴影还在"）。
+     ⚠️ 加在 **`.hero`** 上而不是滚动口的 padding：那会挪动 R45-E 量到的"内容顶"
+     （`.hero` 的矩形顶边不变 ⇒ 既有间距判据不受影响），而头像被推下去 6px ⇒ 阴影有地方画。
+     判据：`ui_probe` 的 `heroShadow.topGap >= 4`（阴影半径 2px + 2px 余量）。 */
+  padding: 6px 15px 0;
 }
 
 .hero-avatar {

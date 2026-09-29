@@ -1629,6 +1629,21 @@ def _assert(views: list[dict], width: int) -> list[str]:
         # 修法是 `flex-wrap: wrap`；判据是"**子元素不许越过本行矩形**"。
         # ⚠️ 不去改 `overflowing` 的放行条件 —— 那会把折叠组那类**有意**的裁掉全部报红。
         # **把判据写具体，而不是把判据放宽。**
+        # R49（devlog/256）：hero 头像的**顶部阴影不许被滚动口裁掉**。
+        # 判据是"到最近裁剪祖先上沿的距离" —— `filter: drop-shadow` 画在 border box 之外，
+        # 贴边（gap=0）就只有顶部那 2px 消失（左右/下方都有富余，肉眼很容易以为"阴影还在"）。
+        # 阈值 4px = 阴影半径 2px + 2px 余量；改动前实测就是 0 ⇒ 这条判据天生能跑红。
+        hs = v.get("heroShadow")
+        if hs:
+            gap = hs.get("topGap")
+            print(f"  R49 头像顶距: {gap}px（裁剪者 {hs.get('clipper')!r}，"
+                  f"filter={hs.get('filter')!r}）")
+            if gap is None or gap < 4:
+                bad.append(
+                    f"@{width} {tag}: hero 头像的**顶部阴影被裁**（顶距 {gap}px < 4px，"
+                    f"裁剪者 {hs.get('clipper')!r}）—— `filter: drop-shadow` 画在 border box "
+                    f"之外，贴边就被 `overflow` 裁掉。修法：给 `.hero` 加 padding-top"
+                    f"（别改滚动口的 padding —— 那会挪动 R45-E 量到的 内容顶）")
         co = v.get("clippedOverflow")
         if co is None:
             # 只有列表页有这一行；其它视图没有是正常的（不判失败）

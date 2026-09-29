@@ -807,6 +807,35 @@ function measure(tag: string) {
         over: bad.slice(0, 6).map((c) => `${name(c)} ${box(c)}`),
       }
     })(),
+    /**
+     * hero 头像的**顶距**：到最近一个「会裁剪的祖先」上沿的距离（R49，devlog/256）。
+     *
+     * 为什么需要：`filter: drop-shadow` 画在 **border box 之外**，而滚动口（`.os-scroll`，
+     * `overflow:auto`）会在自己的 padding-box 上沿把它裁掉 —— 实测 2026-09-29：头像顶边
+     * 正好压在那个上沿上（`topGap=0`）⇒ **只有顶部**那 2px 阴影消失（左右/下方都有富余）。
+     */
+    heroShadow: (() => {
+      const img = document.querySelector<HTMLElement>('.hero-avatar')
+      if (!img) return null
+      const r = img.getBoundingClientRect()
+      let el: HTMLElement | null = img.parentElement
+      let clipTop: number | null = null
+      let clipper = ''
+      while (el && el !== document.body) {
+        const cs = getComputedStyle(el)
+        if (/(auto|scroll|hidden)/.test(cs.overflowX + cs.overflowY)) {
+          clipTop = el.getBoundingClientRect().top
+          clipper = el.className || el.tagName
+          break
+        }
+        el = el.parentElement
+      }
+      return {
+        topGap: clipTop === null ? null : Math.round(r.top - clipTop),
+        clipper,
+        filter: getComputedStyle(img).filter,
+      }
+    })(),
     /** 滚动容器清单：nativeBarW/H > 0 = 原生滚动条；hOverflow = 横向内容溢出 */
     scrollers: [...document.querySelectorAll('body *')]
       .filter((n): n is HTMLElement => n instanceof HTMLElement)

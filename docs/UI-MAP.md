@@ -880,7 +880,7 @@ density / 折叠尺寸 `[200,40]` / 面板宽 280 / `backdrop-filter` 含 `blur(
 | 名称 | 类名 | 说明 |
 |---|---|---|
 | 滚动层 | `.hero-scroll` | **OverlayScroll**（2026-09-08 起，原 `overflow-y:auto` 原生条会导致窗口右缘出现滚动条 + 内容宽度跳 12px）：`flex:1;min-height:0`，内层 `.os-scroll` column 居中，gap 20，padding `0 0 134px`（底部留白 134px；设计稿 70px 侧距被无收缩子元素溢出抵消，故无左右 padding） |
-| Hero | `.hero` | column 居中，`width:100%`，padding `23px 15px 0`，gap 10 |
+| Hero | `.hero` | column 居中，`width:100%`，padding **`6px 15px 0`**（实测 2026-09-29；此前这里写 `23px 15px 0` —— **那是错的**，实际一直是 `0 15px`），gap 10。⚠️ **那 6px 上内距是给阴影留的**（R49，devlog/256）：`filter: drop-shadow` 画在 border box 之外，而滚动口 `overflow:auto` 会在 padding-box 上沿裁掉它（实测顶距曾是 0 ⇒ 只切顶边）；判据 = 探针 `heroShadow.topGap >= 4` |
 | 头像 | `ProxyImage` `.hero-avatar(.hero-avatar-fallback)` | **179×179**（`img.hero-avatar` 补 `object-fit:cover` + `border-radius:999px`），`filter: drop-shadow(0 0 2px rgba(0,0,0,.98))`；取 `vtuber.avatar`（VTuber 本体，**稳定，不随账号切换变化**），回退所选账号头像。R1（devlog/135 §R1）起由 `ProxyImage` 渲染（**不再是 shadcn Avatar**），R46 起与左栏**同一个渲染器** |
 | 直播徽标 | `.live-tag`（内 `i.live-dot` 6px） | **23px 高、8px 圆角**、红边红底胶囊（`live`）/灰边灰字（`off`）+ `live_title`（14px/字距3px）；数据源=本页 `vtuber` 的 bilibili 账号（`account-progress` 增量合并，与左栏同源） |
 | 名字 | `.hero-name` | **57px/500 黑 + 投影(0 2px 4px 黑25%)**；hero-name-block 高 110 |
