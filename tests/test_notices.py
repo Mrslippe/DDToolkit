@@ -337,14 +337,23 @@ def test_message_ttl_counts_from_record_time(client):
     assert [n for n in gone["notices"] if n["kind"] == "message"] == []
 
 
-def test_live_edge_becomes_alert_with_ttl(client):
-    """⑦′ 开播边沿 → alert（优先级 4，压过进度），带 2 分钟 TTL，**不 sticky**。"""
+def test_live_edge_becomes_alert_with_ttl(client, monkeypatch):
+    """⑦′ 开播边沿 → alert（优先级 4，压过进度），带 2 分钟 TTL，**不 sticky**。
+
+    ⚠️ **钟要注入**（2026-09-29 实测踩到）：`expiresAt` 的起算点是**记录那一刻**
+    （`record_live_edge` 里的 `_now_ms()`），而 `build_notices` 又会现取一次 `now`
+    —— 原来断言 `expiresAt == body["now"] + TTL` **只在两次取钟落在同一毫秒时成立**，
+    于是它偶尔红（CI 的 3.12 腿就这么红过一次，本地全量跑 20 次才复现一次）。
+    ⇒ 钉死 `_now_ms` 并显式传 `now_ms=`，判据从"毫秒巧合"变成"确定等式"。
+    **别把它改成范围断言**（那是把判据放宽，会把真的漂移一起放过去）。
+    """
+    monkeypatch.setattr(N, "_now_ms", lambda: 1_700_000_000_000)
     N.record_live_edge({"account_id": 9, "name": "七海", "live_title": "歌回"})
     body = _get(client, _status(acc_running=True))
     live = next(n for n in body["notices"] if n["id"] == "live-9")
     assert live["kind"] == "alert" and live["text"] == "七海 开播了"
     assert live["detail"] == "歌回" and live["source"] == "开播"
-    assert live["expiresAt"] == body["now"] + N.LIVE_TTL_MS
+    assert live["expiresAt"] == 1_700_000_000_000 + N.LIVE_TTL_MS
     assert body["notices"][0]["id"] == "live-9", "alert 应当排在 progress 前面"
 
 
