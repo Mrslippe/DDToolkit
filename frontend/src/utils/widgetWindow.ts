@@ -16,7 +16,11 @@
 
 export const WIDGET_POS_KEY = 'ddtoolkit.widget-pos'
 
-/** §7：折叠尺寸 200 × 40（与 `layout.css` 的 `[data-density='widget']` 同值） */
+/**
+ * 折叠态的**最小**尺寸 200 × 40（D1 起：宽是**内容下限**，不是定值 —— 见
+ * `WIDGET_CAP_MAX_W`。CSS 里对应的三个数是 `--widget-cap-min-w` / `-max-w` / `--widget-radius`，
+ * 由 `applyWidgetCssVars()` 从这里的常量写下去 ⇒ **只有这一份真源**）。
+ */
 export const WIDGET_SIZE = { w: 200, h: 40 } as const
 
 /** 至少要有这么多像素留在屏幕内 —— 保证用户抓得到它 */
@@ -66,10 +70,16 @@ export function clampWidgetPos(
   }
 }
 
-/** 首次开启的落点：右下角（避开任务栏，按 §7 的 200×40 算） */
+/**
+ * 首次开启的落点：**顶部居中**，离屏幕上沿 `WIDGET_DEFAULT_TOP_GAP`（80px，用户 2026-09-27）。
+ *
+ * 为什么不是"某个角"：角落是**四方向里最坏**的落点 —— 它必然贴两条边，
+ * 于是第一条判据（向下）永远不成立、必须向上翻，用户看到的第一眼就是特例。
+ * 顶部居中只在"上沿"这一条轴上靠边，横向完全自由 ⇒ 默认就是"向下展开"。
+ */
 export function defaultWidgetPos(screen: ScreenBox, size: { w: number; h: number } = WIDGET_SIZE): WidgetPos {
   return clampWidgetPos(
-    { x: screen.width - size.w - WIDGET_MIN_VISIBLE, y: screen.height - size.h - 72 },
+    { x: Math.round((screen.width - size.w) / 2), y: WIDGET_DEFAULT_TOP_GAP },
     screen,
     size,
   )
@@ -98,11 +108,87 @@ export type WidgetEnabled = 'off' | 'on'
 // 用户看到胶囊往左上跳一下。所以 resize 时要**同时挪位置**，保持**顶边中心**不动
 // （这正是 LuckyIsland `window_policy.rs` 的做法，README「参考与致谢」）。
 
-/** 折叠态尺寸（与 `layout.css` 的 `[data-density='widget']` 同值） */
-export const WIDGET_COLLAPSED = { w: 200, h: 40 } as const
+/** 折叠态尺寸（= `WIDGET_SIZE`；D1 起它是**下限**，真实宽由内容决定） */
+export const WIDGET_COLLAPSED = WIDGET_SIZE
 
-/** 展开态面板宽（规格 §3「展开尺寸 280 × 面板高」） */
-export const WIDGET_PANEL_W = 280
+/** 胶囊高度（折叠态窗口高）—— §10「中间态高度恒定」，**不跟内容走** */
+export const WIDGET_CAP_H = 40
+
+/**
+ * 胶囊**宽度的下限**（= `WIDGET_SIZE.w`，内容再短也不许比它窄）。
+ *
+ * 与上限成对存在，是为了让"夹进区间"这件事只有一个出口（`clampCapsuleW`）——
+ * 调用点各写一遍 `Math.max(200, Math.min(400, w))` 就会有人写漏一边。
+ */
+export const WIDGET_CAP_MIN_W = WIDGET_SIZE.w
+
+/**
+ * 胶囊**宽度的上限**（D1 定稿，2026-09-27：用户的 400 口径）。
+ *
+ * ## 为什么是"跟内容走 + 上下限"而不是定值
+ *
+ * 09-25 那版方案给的是"折叠 200 定值 + 展开 280"（`d1-form-options.md` 的 A+280）。
+ * 09-27 的样例页（`docs/design/widget-preview/direction.html`）把它改成**方案 A**：
+ * **短文案的胶囊就窄、长文案就宽**，只有超过 400 才上省略号（上限**之内不省**）。
+ * 用户 2026-09-27 拍板按 09-27 那一版 ⇒ 这里的三个数（200 / 400 / 40）就是规格。
+ *
+ * ⚠️ **宽度不许由 JS 逐帧去改**：胶囊用 CSS `width: max-content` 自己量自己
+ * （`max-content` 与容器宽**无关** ⇒ 不构成自指循环，见 `widgetPanelMaxHeight` 那条注释
+ * 记的三次循环）。JS 只负责**读**它的 `offsetWidth` 去调窗口大小。
+ */
+export const WIDGET_CAP_MAX_W = 400
+
+/**
+ * 圆角——**恒定 20px**（09-27 定稿）。
+ *
+ * 折叠 40 高时 20 = 完美胶囊；展开（窗口长成 400×面板高）**也是 20** ⇒ 半径**单调**，
+ * 不会出现"先胀后收"那种"两个形状拼起来"的观感（规格 §5 的同心圆角同一族理由）。
+ */
+export const WIDGET_RADIUS = 20
+
+/**
+ * 展开态面板宽 = 展开态窗口宽（D1 定稿：400；09-25 的 280 已作废）。
+ *
+ * ⚠️ 取 `≥ WIDGET_CAP_MAX_W` 是**有意的**：窗口宽 ≥ 胶囊上限 ⇒ 展开后胶囊**必然**
+ * 装得进窗口，横向偏移只需要管"贴哪一边"，不会出现"胶囊比窗口还宽被裁掉"。
+ */
+export const WIDGET_PANEL_W = 400
+
+/**
+ * 展开窗口与屏幕边之间的留白（**四个方向共用这一个口径**）。
+ *
+ * ⚠️ 与 `WIDGET_MIN_VISIBLE`(24) 的分工要分清：
+ *   · `WIDGET_MIN_VISIBLE` 管**折叠态**（拖到屏幕外时至少留 24px 让人抓得到）；
+ *   · `WIDGET_EDGE` 管**展开态**（面板要能整块读，所以四边都留 8px）。
+ * 混用一个数会得到"面板下缘被裁掉 16px"或"胶囊贴边时展开方向判错"。
+ */
+export const WIDGET_EDGE = 8
+
+/**
+ * 首次开启的落点：**顶部居中**，离屏幕上沿 80px（用户 2026-09-27：「大概留出两个小窗
+ * 高度的间距」= 2 × 40）。
+ *
+ * 取代原来的**右下角**（`y = 屏高 − 40 − 72`，1080p 上是 968）。为什么落点要改：
+ * 右下角那个位置**任何面板高度都放不下**（向下展开需要 `968 + 40 + 6 + 面板高 ≥ 1214`），
+ * 于是小窗一起手就**只能向上翻** —— 一个"默认就在边缘"的落点会把四方向逻辑的第一印象
+ * 变成"永远向上"。顶部居中则四个方向都有余量：默认向下，也真的会向下。
+ */
+export const WIDGET_DEFAULT_TOP_GAP = 80
+
+/**
+ * 贴边判定的容差（px）——夹取是精确等号，亚像素会让"贴住了"判不出来。
+ * 与样例页的 `STUCK = 1.5` 同值。
+ */
+export const WIDGET_STUCK = 1.5
+
+/**
+ * 折叠态重算窗口宽时的**死区**（px）：内容宽变化小于它就不发 resize。
+ *
+ * 为什么需要：活数据槽（倒计时 `47s`→`46s`）每秒都可能让 `max-content` 变一两个像素，
+ * 而 Windows 的窗口 resize 是**可见**的（`StatusWidgetWindow` 里那条"去重"注释记过）。
+ * 2px 是人眼在 40px 高的胶囊上分不出的量级，而它能挡掉绝大多数每秒一次的抖动。
+ */
+export const WIDGET_RESIZE_DEADBAND = 2
 
 /**
  * 展开态的窗口高度 = 胶囊高 + 间隙 + 面板高。
@@ -113,25 +199,50 @@ export const WIDGET_PANEL_W = 280
  */
 export const WIDGET_PANEL_GAP = 6
 
-export interface WidgetExpandGeom {
+/** 面板与胶囊之间的间隙（与 `StatusIsland.place()` 的 `r.bottom + 6` 同值） */
+const GAP = WIDGET_PANEL_GAP
+
+/**
+ * 展开方向：面板开在胶囊的**下方**（`down`）还是**上方**（`up`）。
+ *
+ * ⚠️ **这个字段是必需的，不是优化**：小窗的落点如果贴着屏幕下沿
+ * （旧默认落点就是右下角：1080p 上 `y = 968`），向下展开需要
+ * `968 + 40 + 6 + 面板高` —— **任何面板高度都放不下**（≥1214 > 1080）。
+ * 硬要向下长就只能夹取，而夹取会**把胶囊从用户摆的位置挪走**。
+ */
+export type WidgetDir = 'down' | 'up'
+
+/**
+ * 横向：面板往哪一边长。
+ *
+ * - `right`：胶囊贴窗口**左**缘 ⇒ 多出来的宽度在胶囊右边（面板向右长）
+ * - `left`：胶囊贴窗口**右**缘 ⇒ 面板向左长
+ * - `center`：胶囊在窗口里居中（默认；居中放得下就用它）
+ *
+ * ⚠️ 判定口径是**"装不装得下"**，不是"在屏幕的哪一半"（09-27 样例页记过这个错）：
+ * 按中线劈半会把**正中央**判成"向上 + 向左"（`0.5 < 0.5` 为 false），
+ * 用户截图正是"胶囊在屏幕正中、面板却往左上长"。
+ */
+export type WidgetAlign = 'left' | 'center' | 'right'
+
+/** 一次 resize 要下发的**全部**几何事实（单一真源：窗口矩形 + 方向 + 胶囊在窗口内的偏移） */
+export interface WidgetGeom {
   /** 窗口应该长到的尺寸 */
   w: number
   h: number
   /** 窗口应该挪到的位置 */
   x: number
   y: number
+  dir: WidgetDir
+  align: WidgetAlign
   /**
-   * 面板开在胶囊的**下方**（`false`）还是**上方**（`true`）。
+   * **胶囊在窗口内的横向偏移**（px，从窗口左边算）。
    *
-   * ⚠️ **这个字段是必需的，不是优化**：小窗的默认落点是**右下角**
-   * （`defaultWidgetPos`：`y = 屏高 − 40 − 72`，1080p 上是 **968**）——
-   * 向下展开需要 `968 + 40 + 6 + 面板高`，**任何面板高度都放不下**（≥1214 > 1080）。
-   * 硬要向下长就只能夹取，而夹取会**把胶囊从用户摆的位置挪走**。
-   *
-   * 所以真机上只有一条路：**贴着屏幕下沿时向上翻**（面板长在胶囊上方）。
-   * 这也是所有浮层控件（菜单 / 下拉 / 气泡）的标准解法 —— 不是我们发明的。
+   * ⚠️ 为什么必须由几何算出来，不能让 CSS 猜（与纵向的 `capOffsetY` 同一条教训）：
+   * "胶囊在窗口里靠哪一边"曾有两个主人 —— 几何算窗口矩形，CSS 又自己认定"居中"。
+   * 四方向展开之后这个矛盾会变成**可见的错位**（面板向左长、胶囊却还在窗口中间）。
    */
-  flipUp: boolean
+  capOffsetX: number
   /**
    * **胶囊在窗口内的纵向偏移**（px，从窗口顶边算）。
    *
@@ -149,75 +260,113 @@ export interface WidgetExpandGeom {
    * （用户截图：胶囊被压在顶端、和面板叠在一起）。
    *
    * **根因是"谁来决定胶囊在窗口里的位置"有两个主人**：几何算了窗口矩形，
-   * CSS 又自己认定胶囊贴哪条边。现在**统一由几何给**（`capsuleOffset`），
+   * CSS 又自己认定胶囊贴哪条边。现在**统一由几何给**（`capOffsetX` / `capOffsetY`），
    * CSS 只负责把它用起来 —— 单一事实源。
    */
-  capsuleOffset: number
+  capOffsetY: number
 }
 
-/** 面板与胶囊之间的间隙（与 `StatusIsland.place()` 的 `r.bottom + 6` 同值） */
-const GAP = WIDGET_PANEL_GAP
+/** 把胶囊宽夹进规格区间（`200–400`）——所有入口共用，别在调用点各写一遍 */
+export function clampCapsuleW(raw: number): number {
+  if (!Number.isFinite(raw) || raw <= 0) return WIDGET_CAP_MIN_W
+  return Math.min(WIDGET_CAP_MAX_W, Math.max(WIDGET_CAP_MIN_W, Math.round(raw)))
+}
+
+/**
+ * 展开态/折叠态共用的**屏幕夹取**（四边都留 `WIDGET_EDGE`）。
+ *
+ * `max(WIDGET_EDGE, …)` 兜的是"窗口比屏幕还大"那种退化情形（此时贴左上）。
+ */
+function clampToScreen(
+  x: number, y: number, w: number, h: number, screen: ScreenBox,
+): WidgetPos {
+  const maxX = Math.max(WIDGET_EDGE, screen.width - w - WIDGET_EDGE)
+  const maxY = Math.max(WIDGET_EDGE, screen.height - h - WIDGET_EDGE)
+  return {
+    x: Math.round(Math.min(Math.max(x, WIDGET_EDGE), maxX)),
+    y: Math.round(Math.min(Math.max(y, WIDGET_EDGE), maxY)),
+  }
+}
 
 /**
  * 由**当前**窗口矩形 + 面板高度，算出展开后的窗口矩形（纯函数，可单测）。
  *
- * ## 优先向下，放不下就**向上翻**
+ * ## 四条判据（09-27 定稿，与样例页 `decideDir` 同款）
  *
- * 向下（面板在胶囊下方）是默认方向；只有当下方**真的装不下**时才向上翻。
- * 判据用"向下展开后底边是否超出屏幕（留 `WIDGET_MIN_VISIBLE` 边）"，
- * 而不是"当前 y 是否在下半屏" —— 后者在**面板很矮**时会做出无谓的翻转
- * （屏幕中间的胶囊：明明下面装得下，却因为在下半屏而翻上去）。
- *
- * ## 翻转之后位置怎么算
- *
- * 向上翻意味着窗口要**向上长**：顶边 = 胶囊顶 − 间隙 − 面板高。
- * 但**胶囊自己在窗口里的位置也得跟着换**（它在窗口顶部 ⇒ 翻上去之后胶囊该在窗口**底部**），
- * 所以 `flipUp` 必须交给调用方（`StatusWidgetWindow`）去改 `.widget-shell` 的对齐。
- * 光改窗口坐标而不管胶囊在窗口内的位置，会得到"面板在上面、胶囊也还在上面"的错位。
+ * 1. **垂直：默认向下；装不下才向上** —— 判据是"下方**装不装得下**"，不是"在哪一半"。
+ *    贴屏幕下沿（`stuckBottom`）必须向上：它下方根本没有位置。
+ *    两边都不够时挑余量大的那边，再由夹取保证不出屏。
+ * 2. **水平：默认居中；居中出屏才贴边** —— 夹取天然就是"只在边缘才反向展开"。
+ *    ⚠️ 三个候选（居中 / 贴左 / 贴右）里**居中是区间中点** ⇒ 若两侧贴边都放得下，
+ *    居中必然也放得下 ⇒ 这个顺序**不必来回比较**（可证，不是拍脑袋）。
+ * 3. **近边恒等**（F1）：窗口**贴住胶囊的那条边**在展开前后是同一个值
+ *    （向下 ⇒ 窗口顶 = 胶囊顶；向上 ⇒ 窗口底 = 胶囊底）。
+ *    样例页记过：把窗口放在胶囊**外侧**会让卡片整体离开屏边一个胶囊高
+ *    （CDP 实测 `jumpY = +46 = CAP_H + GAP`，用户报的"和边缘拉开"就是它）。
+ * 4. **锚点 = 胶囊所在的角**：方向定了之后，胶囊在窗口里贴哪一边也就定了
+ *    —— 所以 `capOffsetX/Y` 是**算出来的**，不是让 CSS 再判一次。
  */
 export function widgetExpandGeom(
   cur: { x: number; y: number; w: number; h: number },
   panelH: number,
   screen: ScreenBox,
-): WidgetExpandGeom {
+): WidgetGeom {
+  const capH = WIDGET_CAP_H
+  const capW = clampCapsuleW(cur.w)          // 折叠态：窗口 == 胶囊 ⇒ `cur.w` 就是胶囊宽
   const h = Math.max(0, panelH)
-  const capH = WIDGET_COLLAPSED.h
-  const w = Math.max(cur.w, WIDGET_PANEL_W)
-  const anchorX = cur.x + cur.w / 2
   const totalH = capH + GAP + h
+  const w = Math.max(capW, WIDGET_PANEL_W)
+  const capLeft = cur.x
+  // 中心用**夹过之后**的 capW 算（不是 `cur.w`）：调用方可能量到"窗口还差一帧没跟上"的
+  // 旧宽，两处用不同的数会让"居中"偏半个宽度差。
+  const capCenter = cur.x + capW / 2
 
-  // 向下：窗口顶边不动，整体长到 `cur.y + totalH`
-  const downBottom = cur.y + totalH
-  const downFits = downBottom <= screen.height - WIDGET_MIN_VISIBLE
+  // ── 垂直方向 ────────────────────────────────────────────────────────
+  // 余量口径：向下是"从胶囊**顶边**到屏幕下边"（窗口顶边不动），
+  //          向上是"从胶囊**底边**到屏幕上边"（窗口底边不动）。
+  const roomBelow = screen.height - WIDGET_EDGE - cur.y
+  const roomAbove = cur.y + capH - WIDGET_EDGE
+  const stuckBottom = cur.y + capH >= screen.height - WIDGET_EDGE - WIDGET_STUCK
+  let dir: WidgetDir
+  if (stuckBottom && roomAbove >= totalH) dir = 'up'
+  else if (roomBelow >= totalH) dir = 'down'
+  else if (roomAbove >= totalH) dir = 'up'
+  else dir = roomBelow >= roomAbove ? 'down' : 'up'
 
-  if (downFits) {
-    const raw = { x: Math.round(anchorX - w / 2), y: cur.y }
-    const c = clampWidgetPos(raw, screen, { w, h: totalH })
-    // 向下：胶囊贴窗口**顶边**（`cur.y` 没动过 ⇒ 偏移就是被夹掉的那一点）
-    return { w, h: totalH, x: c.x, y: c.y, flipUp: false, capsuleOffset: cur.y - c.y }
-  }
+  // ── 水平：先居中，居中放不下才贴边 ──────────────────────────────────
+  const centered = Math.round(capCenter - w / 2)
+  const fitsCentered =
+    centered >= WIDGET_EDGE && centered + w <= screen.width - WIDGET_EDGE
+  const growRight = Math.round(capLeft)                 // 胶囊贴窗口左缘 ⇒ 面板向右长
+  const growLeft = Math.round(capLeft + capW - w)        // 胶囊贴窗口右缘 ⇒ 面板向左长
+  const fitsRight =
+    growRight >= WIDGET_EDGE && growRight + w <= screen.width - WIDGET_EDGE
+  const fitsLeft =
+    growLeft >= WIDGET_EDGE && growLeft + w <= screen.width - WIDGET_EDGE
+  const rawX = fitsCentered ? centered : fitsRight ? growRight : fitsLeft ? growLeft : centered
 
-  // 向上翻：窗口**底边**对齐胶囊底边，顶边 = 底边 − totalH
-  const capBottom = cur.y + capH
-  const raw = { x: Math.round(anchorX - w / 2), y: capBottom - totalH }
-  const c = clampWidgetPos(raw, screen, { w, h: totalH })
-  // ⚠️ 胶囊偏移 = 胶囊原顶边 − 窗口最终顶边。
-  //    **没被夹**时它等于 `totalH - capH`（= 窗口底边，与旧的 `flex-end` 一致）；
-  //    **被夹**时它更小 —— 那正是旧写法错的地方（固定成 `totalH - capH` 会让胶囊跳）。
-  return { w, h: totalH, x: c.x, y: c.y, flipUp: true, capsuleOffset: cur.y - c.y }
+  // 纵向：近边恒等（向下 ⇒ 顶边不动；向上 ⇒ 底边不动），再整体夹进屏幕
+  const rawY = dir === 'down' ? cur.y : cur.y + capH - totalH
+  const c = clampToScreen(rawX, rawY, w, totalH, screen)
+
+  // 胶囊在窗口内的偏移：**默认就是它原来在屏幕上的位置**（胶囊不动），
+  // 只有当窗口被夹回来、装不下时才会被挤（退化情形：屏幕比面板还窄）。
+  const capOffsetX = Math.round(
+    Math.min(Math.max(capLeft - c.x, 0), Math.max(0, w - capW)))
+  const capOffsetY = Math.round(
+    Math.min(Math.max(cur.y - c.y, 0), Math.max(0, totalH - capH)))
+  const align: WidgetAlign = capOffsetX <= 0 ? 'right'
+    : capOffsetX >= w - capW ? 'left' : 'center'
+
+  return { w, h: totalH, x: c.x, y: c.y, dir, align, capOffsetX, capOffsetY }
 }
 
 /**
- * 收起：回到折叠尺寸。
+ * 折叠态：把窗口收成**胶囊本身**的大小（宽由调用方量出来的 `capW` 决定）。
  *
- * `flipUp` 决定胶囊在窗口里的哪一端 —— 收起时窗口只剩胶囊高，两种情况的
- * **预期矩形其实是同一个**（窗口 = 胶囊大小），但**位置**取决于展开时锚的是顶边还是底边：
- *   · 向下展开 ⇒ 顶边没动过 ⇒ 收起也用原顶边；
- *   · 向上展开 ⇒ **底边**没动过 ⇒ 收起要保持底边（否则胶囊会从"贴着屏幕下沿"往上跳）。
+ * ## 为什么必须"回到原处"而不是反推
  *
- * ## 为什么要 `restore`（2026-09-24 加，被单测逼出来的）
- *
- * 光靠"从展开矩形反推"**在屏幕右/左边缘会漂**：展开时窗口从 200 变 280，
+ * 光靠"从展开矩形反推"**在屏幕边缘会漂**：展开时窗口从 200 变 400，
  * 贴右缘的小窗**必须**被夹回来（否则面板出屏），于是"展开矩形的中心"已经不是
  * 原来那个中心了 —— 再反推回去就少了那几十像素（实测 1696 → 1656）。
  * 一次展开/收起看不出什么，但**每次悬停都漂一点**，久了小窗就爬走了。
@@ -225,25 +374,73 @@ export function widgetExpandGeom(
  * 所以调用方（`StatusWidgetWindow`）在展开**之前**把胶囊矩形传进来，
  * 收起时**直接回到那个矩形** —— 展开/收起成为一个精确的闭环。
  * 拿不到 `restore` 时才退回反推（退化路径，仍有夹取兜底）。
+ *
+ * ⚠️ 回到的是**胶囊的中心**（横向）与**顶边**（纵向），不是"窗口左上角"：
+ * 内容变了之后胶囊宽也变了（方案 A），按左上角回位会让胶囊**中心**漂掉半个宽度差。
  */
 export function widgetCollapseGeom(
   cur: { x: number; y: number; w: number; h: number },
   screen: ScreenBox,
-  flipUp = false,
-  restore?: { x: number; y: number } | null,
-): WidgetExpandGeom {
-  const { w, h } = WIDGET_COLLAPSED
-  if (restore) {
-    const c = clampWidgetPos({ x: Math.round(restore.x), y: Math.round(restore.y) }, screen, { w, h })
-    // 折叠态：窗口 == 胶囊，胶囊偏移恒为 0
-    return { w, h, x: c.x, y: c.y, flipUp: false, capsuleOffset: 0 }
-  }
-  const anchorX = cur.x + cur.w / 2
-  // 向上展开时保持**底边**不动；否则保持顶边
-  const y = flipUp ? cur.y + cur.h - h : cur.y
-  const raw = { x: Math.round(anchorX - w / 2), y }
-  const c = clampWidgetPos(raw, screen, { w, h })
-  return { w, h, x: c.x, y: c.y, flipUp: false, capsuleOffset: 0 }
+  capW: number,
+  restore?: { x: number; y: number; w: number } | null,
+): WidgetGeom {
+  const w = clampCapsuleW(capW)
+  const h = WIDGET_CAP_H
+  const anchorX = restore ? restore.x + restore.w / 2 : cur.x + cur.w / 2
+  const topY = restore ? restore.y : cur.y
+  const raw = { x: Math.round(anchorX - w / 2), y: Math.round(topY) }
+  // ⚠️ **两条路径的夹取口径不同，这不是笔误**：
+  //   · 有 `restore` ⇒ 回到的是**它自己刚才占过的那个矩形**，本来就地合法，
+  //     唯一要防的是"换显示器/改分辨率"。此时必须用**与展开同一套**的 `WIDGET_EDGE`：
+  //     展开用 EDGE(8)、收起用 `clampWidgetPos` 的 24 ⇒ **贴下沿的胶囊会被推上去 16px**
+  //     —— 一次看不出什么，但那正是"展开/收起不闭环"的老毛病（restore 这条机制存在的理由）。
+  //   · 没有 `restore` ⇒ 退化路径，位置是**反推**出来的、不保证合法 ⇒ 用放置口径
+  //     `clampWidgetPos`（右下留 24px，见它的注释）。
+  const c = restore
+    ? clampToScreen(raw.x, raw.y, w, h, screen)
+    : clampWidgetPos(raw, screen, { w, h })
+  // 折叠态：窗口 == 胶囊 ⇒ 两个偏移都是 0（方向无关紧要，给个确定的默认值）
+  return { w, h, x: c.x, y: c.y, dir: 'down', align: 'center', capOffsetX: 0, capOffsetY: 0 }
+}
+
+/**
+ * 折叠态下**只改宽度**（内容变了）：保持胶囊的**中心**与顶边不动，把窗口跟上去。
+ *
+ * 为什么不是"保持左缘"：默认落点是**顶部居中**，内容变长时用户的预期是"往两边长"，
+ * 而不是"往右长、中心跑掉"。保持中心 = 顶部居中这个落点在内容变化下**自洽**。
+ */
+export function widgetCapsuleGeom(
+  cur: { x: number; y: number; w: number },
+  screen: ScreenBox,
+  capW: number,
+): WidgetPos & { w: number; h: number } {
+  const w = clampCapsuleW(capW)
+  const h = WIDGET_CAP_H
+  const centerX = cur.x + cur.w / 2
+  const c = clampWidgetPos(
+    { x: Math.round(centerX - w / 2), y: Math.round(cur.y) }, screen, { w, h })
+  return { w, h, x: c.x, y: c.y }
+}
+
+/**
+ * 把 TS 侧的形态常量写进 CSS 变量（**单一真源**：CSS 里不许再抄一遍数字）。
+ *
+ * ⚠️ 为什么要有这一步：这些数同时被**三处**用到 —— JS 几何（算窗口矩形）、
+ * CSS（画胶囊）、探针（量出来判）。本仓为此栽过（`d1-form-options.md` §6 的"三源"）：
+ * 只改其中一两处，**单测和探针都会绿**，而真机上窗口正在裁胶囊。
+ * 现在数字只在 `widgetWindow.ts` 里写一遍，CSS 用 `var(…)` 读，探针量**变量**是否等于常量。
+ *
+ * 幂等：每帧调都行（`setProperty` 同值不触发样式重算）。
+ */
+export function applyWidgetCssVars(): void {
+  const root = globalThis.document?.documentElement
+  if (!root) return
+  const s = root.style
+  s.setProperty('--widget-cap-min-w', `${WIDGET_SIZE.w}px`)
+  s.setProperty('--widget-cap-max-w', `${WIDGET_CAP_MAX_W}px`)
+  s.setProperty('--widget-radius', `${WIDGET_RADIUS}px`)
+  s.setProperty('--widget-panel-w', `${WIDGET_PANEL_W}px`)
+  s.setProperty('--widget-cap-h', `${WIDGET_CAP_H}px`)
 }
 
 

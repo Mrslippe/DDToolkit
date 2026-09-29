@@ -2327,6 +2327,10 @@ export async function runUiProbe(): Promise<void> {
     result.litText = litText
     result.litOn = !!island()?.classList.contains('on')
     result.litHasChevron = !!island()?.querySelector('.si-chevron')
+    // D1 内容契约（2026-09-27）：胶囊上的**字形**（类型通道）。
+    // 顶栏宿主与桌面控件宿主**共用同一个字形表**；缺了它 `report`/`message` 就只靠点色区分，
+    // 而两者在产品里点色**相同** ⇒ 胶囊上长得一模一样（用户 2026-09-27 报的缺陷）。
+    result.litGlyph = (island()?.querySelector('.si-glyph')?.textContent || '').trim() || null
     result.topbarHLit = topbarH()
     // R38 批 2 不变量②：**胶囊不裁切** —— 文案没被 ellipsis 吃掉（宽度形变时最容易踩）。
     const siTextEl = island()?.querySelector<HTMLElement>('.si-text')
@@ -2358,6 +2362,14 @@ export async function runUiProbe(): Promise<void> {
         result.widgetShadow = pcs.boxShadow
         result.widgetPosition = pcs.position
         result.widgetColor = pcs.color
+        // D1（2026-09-27）：圆角**恒定 20px**（折叠 40 高 ⇒ 20 是完美胶囊；展开也是 20
+        // ⇒ 半径单调，不会"先胀后收"）。这里量的是**解析后的值**，它必须等于
+        // `--widget-radius`（同一个数由 TS 常量写进变量，见 widgetWindow.ts）。
+        result.widgetRadius = Math.round(parseFloat(pcs.borderTopLeftRadius))
+        result.widgetRadiusVar =
+          getComputedStyle(document.documentElement).getPropertyValue('--widget-radius').trim()
+        result.widgetCapMaxVar =
+          getComputedStyle(document.documentElement).getPropertyValue('--widget-cap-max-w').trim()
       }
     }
 
@@ -2935,6 +2947,37 @@ export async function runUiProbe(): Promise<void> {
       //    这条比"居中误差"更本质 —— 居中只在折叠态成立，展开后胶囊本来就该偏到一边
       //    （向上翻时它在窗口底部）。所以判据是"胶囊顶边贴窗口顶边"（未翻转时）。
       result.islandTopVsShell = sr ? Math.round(r.top - sr.top) : null
+      // ── D1（2026-09-27）：胶囊的**解剖**必须在**小窗自己的坐标系**里量一次 ────
+      //
+      // ⚠️⚠️ `--status-widget` 的第一段跑的是 `index.html?density=widget` —— 那在**主窗口**里，
+      //     它加载了 `layout.css` ⇒ 胶囊的解剖（`display:flex` / `gap` / `border-radius` /
+      //     点的 7×7）全是**那份文件**给的。而小窗的独立入口**只加载 `tokens.css` +
+      //     `status-island.css`**（见 `widgetMain.tsx`）—— 于是同一颗胶囊在真窗口里
+      //     **没有圆角、不是 flex 行、点是 0×0（看不见）**，而两段探针都绿。
+      //     这是 DEV-LOOP §6.1「顺带生效的东西」的第 5 次，也是 §6.5「坐标系错了」的同类：
+      //     判据量的是"这套样式在大视口/主窗口里对不对"。
+      //     ⇒ 这一段是**唯一**跑在 `widget.html` 里的解剖判据，别把它删掉或挪回第一段。
+      const cs2 = getComputedStyle(island)
+      result.islandDisplay = cs2.display
+      result.islandRadius = Math.round(parseFloat(cs2.borderTopLeftRadius))
+      result.islandFontSize = Math.round(parseFloat(cs2.fontSize) * 10) / 10
+      result.islandMaxWidth = cs2.maxWidth
+      result.islandLeftVsShell = sr ? Math.round(r.left - sr.left) : null
+      // 「单一真源」判据：TS 常量写进 CSS 变量，胶囊**解析出来**的必须与之一致。
+      // 只量解析值会漏掉"两处各写一遍"（值凑巧相同也算过）；量变量才能证明是**同一份**。
+      const rootCs = getComputedStyle(document.documentElement)
+      result.widgetVars = {
+        capMin: rootCs.getPropertyValue('--widget-cap-min-w').trim(),
+        capMax: rootCs.getPropertyValue('--widget-cap-max-w').trim(),
+        radius: rootCs.getPropertyValue('--widget-radius').trim(),
+        panelW: rootCs.getPropertyValue('--widget-panel-w').trim(),
+      }
+      const dotEl = island.querySelector<HTMLElement>('.si-dot')
+      if (dotEl) {
+        const dr = dotEl.getBoundingClientRect()
+        result.dotBox = [Math.round(dr.width), Math.round(dr.height)]
+        result.dotBg = getComputedStyle(dotEl).backgroundColor
+      }
     }
 
     // ── ⚠️ 面板在**小窗里**能不能用（2026-09-24 批 5d 加）──────────────────
@@ -2956,12 +2999,35 @@ export async function runUiProbe(): Promise<void> {
         window.dispatchEvent(new CustomEvent('ddtoolkit:widget-seed', {
           detail: [{
             id: 'probe-widget', kind: 'message', source: '探针',
-            text: '探针消息：小窗面板可用性', ttl: 0,
+            text: '探针消息：小窗面板可用性', value: '47s', ttl: 0,
           }],
         }))
         await sleep(150)
         const island3 = document.querySelector<HTMLElement>('.si-island')
         result.widgetLitAfterSeed = !!island3?.classList.contains('on')
+        // ── D1 内容契约（2026-09-27）：胶囊 = 点(紧迫度) + 字形(类型) + 文案 + 活数据 +
+        //    计数 + chevron。⚠️ **四条槽位各量一个**，因为它们各自的错法不同：
+        //    · 字形缺席 ⇒ `report`(✓) 与 `message`(✦) 在胶囊上又变得一模一样（用户报的那个缺陷）；
+        //    · 活数据槽缺席 ⇒ 倒计时只能拼进文案里，每秒重写整句（文案会闪）；
+        //    · chevron 尺寸失控 ⇒ 小窗不加载 Tailwind，`size-[12px]` 这种类**在这里无效**，
+        //      lucide 会按默认 24px 画（比胶囊一半还高）。
+        //    量的都是**渲染出来的盒子**，不是类名 —— 类名在小窗里根本不保证有样式。
+        if (island3) {
+          const litIsland = island3
+          const glyphEl = litIsland.querySelector<HTMLElement>('.si-glyph')
+          result.glyphText = glyphEl ? (glyphEl.textContent || '').trim() : null
+          const valueEl = litIsland.querySelector<HTMLElement>('.si-value')
+          result.valueText = valueEl ? (valueEl.textContent || '').trim() : null
+          const countEl = litIsland.querySelector<HTMLElement>('.si-count')
+          result.countText = countEl ? (countEl.textContent || '').trim() : null
+          const chevEl = litIsland.querySelector<SVGElement>('.si-chevron')
+          if (chevEl) {
+            const cr = chevEl.getBoundingClientRect()
+            result.chevronBox = [Math.round(cr.width), Math.round(cr.height)]
+          }
+          const gr = glyphEl?.getBoundingClientRect()
+          result.glyphBox = gr ? [Math.round(gr.width), Math.round(gr.height)] : null
+        }
         // 走**真实的 hover 通路**（不是直接改 React state）：悬停 120ms 后才展开。
         // ⚠️ 事件类型与字段必须与 `--status-island` 那段（`hoverAt`）**完全一致**：
         //    用 `pointerenter` + 少量字段实测**不触发** React 的合成事件，
@@ -2984,6 +3050,22 @@ export async function runUiProbe(): Promise<void> {
             top: Math.round(pr.top), left: Math.round(pr.left),
             w: Math.round(pr.width), h: Math.round(pr.height),
           }
+          // ⚠️ 面板宽用**布局宽**（`cs.width`）不用 rect：入场动画的 `scale(.985)` 在虚拟
+          //    时间下被冻在起始帧，rect 会量到 400 × 0.985 ≈ 394 的假值（devlog/172 §三）。
+          result.widgetPanelWidth = Math.round(parseFloat(getComputedStyle(panel).width))
+          // 面板里的图标尺寸（D1）：`size-[13px]` 同样是 Tailwind 类，小窗里无效 ⇒
+          // lucide 按 24×24 画、把条目行撑高。量**渲染出来的盒子**才算数。
+          const iconSvg = panel.querySelector<SVGElement>('.si-item-icon svg')
+          if (iconSvg) {
+            const irect = iconSvg.getBoundingClientRect()
+            result.widgetPanelIconBox = [Math.round(irect.width), Math.round(irect.height)]
+          }
+          // D1：展开方向由**几何**写进 `data-dir`，面板只跟随（单一真源）。
+          // 探针里没有真窗口 ⇒ 没有 `data-dir`，这条为 null 是**预期的**
+          // （面板此时按顶栏那套算法落位）。它的真判据在单测（`widgetExpandGeom`）。
+          const shellEl = document.querySelector<HTMLElement>('.widget-shell')
+          result.widgetDir = shellEl?.dataset.dir ?? null
+          result.widgetAlign = shellEl?.dataset.align ?? null
           // ① 面板**在视口内**（真窗口里视口 == 窗口）
           result.widgetPanelInViewport =
             pr.left >= -0.5 && pr.right <= window.innerWidth + 0.5 &&

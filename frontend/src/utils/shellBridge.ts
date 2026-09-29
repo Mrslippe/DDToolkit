@@ -186,7 +186,11 @@ export async function resizeWidgetWindow(
 ): Promise<boolean> {
   if (!isTauri) return false
   try {
-    await invoke('resize_widget_window', geom)
+    // ⚠️ 只把**四个数**递过去（不是整个 `geom`）：D1 起几何对象还带 `dir`/`align`/
+    //    `capOffsetX/Y`（给 CSS 与探针用的），整包转发会把它们塞进命令参数 ——
+    //    那属于"靠 serde 忽略未知字段"工作，而命令签名里根本没有它们。
+    await invoke('resize_widget_window',
+      { w: geom.w, h: geom.h, x: geom.x, y: geom.y })
     return true
   } catch (e) {
     console.error('[widget] resize_widget_window 失败', e)

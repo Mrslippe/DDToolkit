@@ -1,4 +1,4 @@
-"""UI 布局探针（机器可验证的布局回归）。
+﻿"""UI 布局探针（机器可验证的布局回归）。
 
 配合 `frontend/src/dev/probe.ts`：在 dev 构建下用 `?probe=1` 触发页面自测，
 把「窗口滚动条 / 元素出窗 / 原生滚动条」三组不变量写成 JSON 落到 DOM，
@@ -57,7 +57,37 @@ DEV_HEADERS = {DEV_TOKEN_HEADER: PROBE_DEV_TOKEN}
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(errors="replace")
 
-DEV_DATA = Path(os.environ.get("APPDATA", "")) / "com.ddtoolkit.app-dev"
+# ── 探针的"现场"（开发数据目录）**是会搬的**（2026-09-30 修）────────────────
+#
+# ⚠️ 这里曾经写死 `%APPDATA%\com.ddtoolkit.app-dev`。2026-09-30 用户用**应用内的
+# 「迁移数据目录」**把 dev 数据搬到了 `E:\test\DDToolkit-data`（指针文件
+# `%APPDATA%\DDToolkit\data-dir.txt`，见 `frontend/src-tauri/src/datadir.rs`）——
+# 于是探针**一条都跑不了**：`[FAIL] 未找到开发数据目录 …（先跑一次 dev 应用）`，
+# 而那句提示**把人指向错误的方向**（用户明明跑过 dev 应用，只是数据搬走了）。
+#
+# 这正是本仓那条元教训的又一次现身：**判据的现场比判据本身更容易陈腐**。
+# ⇒ 解析口径**必须与壳**（`datadir::resolve_startup`）逐条一致：
+#   环境变量 > 应用内迁移指针 > 默认目录。
+#   指针存在但目录不在 ⇒ 回退默认并**打印**原因（壳也是回退 + 把原因带给用户，不静默）。
+_MIGRATION_POINTER = Path(os.environ.get("APPDATA", "")) / "DDToolkit" / "data-dir.txt"
+
+
+def _resolve_dev_data() -> Path:
+    env = os.environ.get("DDTOOLKIT_DATA_DIR")
+    if env:
+        return Path(env)
+    default = Path(os.environ.get("APPDATA", "")) / "com.ddtoolkit.app-dev"
+    try:
+        pointed = Path(_MIGRATION_POINTER.read_text(encoding="utf-8").strip())
+    except OSError:
+        return default
+    if pointed.is_dir():
+        return pointed
+    print(f"[probe] 迁移指针指向 {pointed}，但那个目录不在 ⇒ 回退 {default}")
+    return default
+
+
+DEV_DATA = _resolve_dev_data()
 WORK = ROOT / "_ui_probe_tmp"
 EDGE_CANDIDATES = [
     r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
@@ -2416,6 +2446,9 @@ def main() -> int:
     # 未登录现场连一次上游请求都不发（内容闸门），本地帖子照常渲染，才是确定性的尺子。
     data = (_prepare_logged_out() if (args.capabilities or args.pinned)
             else _prepare_data(empty=args.first_run))
+    # 把"这一轮量的是谁的现场"打出来：数据目录会搬（迁移指针），
+    # 报告里没有这一行的话，"探针绿/红"到底对应哪份数据就只能靠猜。
+    print(f"[probe] 现场：真机数据目录={DEV_DATA} ｜ 本轮副本={data}")
     be_port, vite_port = _free_port(), _free_port()
 
     be_env = {
@@ -4057,14 +4090,34 @@ def main() -> int:
             print(f"  材质：底色={si.get('widgetBg')!r} 文字={si.get('widgetColor')!r}")
             print(f"        backdrop-filter={si.get('widgetBackdrop')!r}")
             print(f"        box-shadow={si.get('widgetShadow')!r}")
-            print(f"  面板宽={si.get('panelWidth')}")
+            print(f"  面板宽={si.get('panelWidth')} 圆角={si.get('widgetRadius')} "
+                  f"（--widget-radius={si.get('widgetRadiusVar')!r} "
+                  f"--widget-cap-max-w={si.get('widgetCapMaxVar')!r}）")
 
             if si.get("density") != "widget":
                 failures.append(f"@{w} status-widget: `?density=widget` 没生效"
                                 f"（data-density={si.get('density')!r}）—— dev 分支或属性没接上")
-            if si.get("widgetSize") != [200, 40]:
+            # ⚠️ D1（2026-09-27）：折叠尺寸**不再是一个定值** —— 胶囊宽**跟着内容走**
+            #   （方案 A），夹在 200–400 之间。所以判据是**区间 + 上限真的等于 400**，
+            #   而不是 `== [200,40]`（那条会把"短文案的胶囊就该窄"判成错）。
+            sz = si.get("widgetSize") or [0, 0]
+            if not (200 <= sz[0] <= 400) or sz[1] != 40:
                 failures.append(f"@{w} status-widget: 折叠尺寸是 {si.get('widgetSize')}，"
-                                f"应为 [200, 40]（§7）")
+                                f"应为 [200–400, 40]（宽跟内容、上限 400、高恒定 40）")
+            if sz[0] > 400:
+                failures.append(f"@{w} status-widget: 胶囊宽 {sz[0]} 越过了 400 上限")
+            if si.get("widgetRadius") != 20:
+                failures.append(
+                    f"@{w} status-widget: 圆角是 {si.get('widgetRadius')}，应为 20px"
+                    f"（折叠 40 高 ⇒ 完美胶囊；展开也是 20 ⇒ 半径单调）")
+            # 「单一真源」判据：解析出来的圆角必须**就是**变量给的数 ——
+            # 两处各写一遍（CSS 常量 + TS 常量）凑巧相等也能过上面那条，这条才证明同源。
+            if si.get("widgetRadiusVar") not in ("20px", ""):
+                failures.append(f"@{w} status-widget: `--widget-radius` 是 "
+                                f"{si.get('widgetRadiusVar')!r}，应为 20px（TS 常量写进变量）")
+            if si.get("widgetCapMaxVar") not in ("400px", ""):
+                failures.append(f"@{w} status-widget: `--widget-cap-max-w` 是 "
+                                f"{si.get('widgetCapMaxVar')!r}，应为 400px（TS 常量写进变量）")
             if si.get("widgetPosition") == "absolute":
                 failures.append(f"@{w} status-widget: 胶囊仍是 absolute 居中 —— "
                                 f"那是**顶栏宿主**的定位（§8 要求宿主无关，控件自己就是窗口）")
@@ -4100,11 +4153,12 @@ def main() -> int:
                     failures.append(f"@{w} status-widget: 最差壁纸下文字对比度只有 {worst:.2f}:1 "
                                     f"（底色 α={alpha}）—— §7 要求亮/暗壁纸都 ≥ 4.5:1。"
                                     f"调**不透明度**（不是调色值）")
-            if si.get("panelWidth") is not None and si.get("panelWidth") != 280:
+            if si.get("panelWidth") is not None and si.get("panelWidth") != 400:
                 failures.append(f"@{w} status-widget: 面板宽是 {si.get('panelWidth')}，"
-                                f"应为 280（§7 widget 展开 280）")
+                                f"应为 400（D1 定稿：面板 400 = 胶囊上限）")
             if not failures:
-                print("  [ok] 桌面控件宿主：200×40 / 实底+高光内边 / 两极端壁纸对比度达标 / 不依赖顶栏 / 无 backdrop-filter")
+                print("  [ok] 桌面控件宿主：宽 200–400×40 / 圆角 20 / 面板 400 / "
+                      "实底+高光内边 / 两极端壁纸对比度达标 / 不依赖顶栏 / 无 backdrop-filter")
 
             # ── 第二段：**小窗视图**（`widget.html`，独立入口）────────────────
             # ⚠️ **2026-09-24 改了入口**：原来走 `index.html?widget=1`、靠 `main.tsx` 里
@@ -4130,10 +4184,21 @@ def main() -> int:
                   f"#root={ww.get('rootRect')}")
             print(f"        胶囊矩形={ww.get('islandRect')} "
                   f"胶囊顶边相对 shell={ww.get('islandTopVsShell')}")
+            # D1（2026-09-27）：胶囊的**解剖** —— 这一段跑在小窗自己的坐标系里（`widget.html`）。
+            # 判据成立的前提是"小窗也拿到了这套样式"，而它的样式只来自 status-island.css。
+            print(f"  解剖：display={ww.get('islandDisplay')!r} 圆角={ww.get('islandRadius')} "
+                  f"字号={ww.get('islandFontSize')} max-width={ww.get('islandMaxWidth')!r}")
+            print(f"        变量：--widget-cap-min-w={ww.get('widgetVars', {}).get('capMin')!r} "
+                  f"--widget-cap-max-w={ww.get('widgetVars', {}).get('capMax')!r} "
+                  f"--widget-radius={ww.get('widgetVars', {}).get('radius')!r} "
+                  f"--widget-panel-w={ww.get('widgetVars', {}).get('panelW')!r}")
+            print(f"        点={ww.get('dotBox')} 底色={ww.get('dotBg')!r} ｜ "
+                  f"字形={ww.get('glyphText')!r} 活数据={ww.get('valueText')!r} "
+                  f"计数={ww.get('countText')!r} chevron={ww.get('chevronBox')}")
             # ── ⚠️ 面板在**小窗里**能不能用（2026-09-24 批 5d 加）──────────────
             # 这条是为了让"面板落在窗口外"那个 bug 变红。它作为**真 bug** 活了很久，
             # 因为 `--status-island` 一直在**主窗口的大视口**里量 —— 坐标系错了：
-            # 量的是"这套样式在大视口里对不对"，而不是"在小窗（200×40）里能不能用"。
+            # 量的是"这套样式在大视口里对不对"，而不是"在小窗里能不能用"。
             print(f"  小窗面板：打开={ww.get('widgetPanelOpened')} "
                   f"矩形={ww.get('widgetPanelRect')} 视口={ww.get('widgetViewport')}")
             print(f"           注入条目后亮起={ww.get('widgetLitAfterSeed')} "
@@ -4154,18 +4219,22 @@ def main() -> int:
             # `calc(60vh−74)` = **负数**。于是：
             #   · 探针绿；· 真机上滚动体被压塌、条目压到页脚上（用户 2026-09-24 截图）。
             #
-            # **所以这一段连高度一起压到真窗口量级**（200 宽 × 90 高）。
+            # **所以这一段连高度一起压到真窗口量级**（视口 400 宽 × **90 高**；D1 起真窗口宽 ≥ 400）。
             # ⚠️ **只改宽度是不够的** —— 我第一版只把宽改成 200、高度照旧用 `--height`，
             #    结果**绿的但什么都没验到**（`60vh` 在 621px 下永远够大）。
             #    180 → 这个盲区的形状是"尺寸"，不是"宽度"。
-            #    200×90 下：`60vh = 54px`、`calc(60vh−74) = −20px` ⇒ 那个死锁会现身。
+            #    400×90 下：`60vh = 54px`、`calc(60vh−74) = −20px` ⇒ 那个死锁会现身。
             #
             # ⚠️ 判据只看**面板内部**（不重叠 / 三段和 ≈ 面板高），不看绝对坐标 ——
             #    窗口长高由 `widgetExpandGeom` 负责，探针里没有真窗口，
             #    绝对坐标必然与真机不同。
             wurl2 = f"http://localhost:{vite_port}/widget.html?probe=status-widget-window"
-            print(f"[probe] status-widget-window(真尺寸 200×90) @200 → {wurl2}")
-            wres2 = _run_probe(edge, wurl2, 200, 90, WORK, "status-widget-narrow")
+            print(f"[probe] status-widget-window(窄视口) @400×90 → {wurl2}")
+            # ⚠️ D1（2026-09-27）：小窗的宽**不再是 200** —— 胶囊宽跟着内容走（下限 200），
+            #    展开后窗口宽 = 面板宽 = **400**。所以这一段压的是**矮**视口（90），
+            #    宽度给 400（真窗口的下限）。它的目标没变：`60vh` 那类"按视口算高度"的死锁
+            #    只在**矮**容器里现身（621px 下 60vh=373，什么也夹不住）。
+            wres2 = _run_probe(edge, wurl2, 400, 90, WORK, "status-widget-narrow")
             ww2 = ((wres2 or {}).get("statusWidgetWindow") or {})
             print(f"  窄视口面板：打开={ww2.get('widgetPanelOpened')} "
                   f"高={ww2.get('widgetPanelH')} 内部={ww2.get('widgetPanelBoxes')}")
@@ -4173,20 +4242,20 @@ def main() -> int:
                   f"三段和={ww2.get('widgetPanelSumH')} "
                   f"OverlayScroll={ww2.get('widgetOsStylesOk')}")
             if not ww2:
-                failures.append(f"@200 status-widget: 窄视口（200 宽）那一段没量到")
+                failures.append(f"@400 status-widget: 窄视口那一段没量到")
             elif not ww2.get("widgetPanelOpened"):
-                failures.append(f"@200 status-widget: 200 宽的视口里面板没打开")
+                failures.append(f"@400 status-widget: 窄视口里面板没打开")
             else:
                 if not ww2.get("widgetPanelNonOverlapping"):
                     failures.append(
-                        f"@200 status-widget: **200 宽**视口下面板内部重叠"
+                        f"@400 status-widget: 窄视口下面板内部重叠"
                         f"（头/滚动/脚={ww2.get('widgetPanelBoxes')}）—— "
-                        f"小窗真宽就是 200，这里的排版必须是好的")
+                        f"小窗真宽至少 400（展开态 = 面板宽），这里的排版必须是好的")
                 h2 = ww2.get("widgetPanelH") or 0
                 s2 = ww2.get("widgetPanelSumH") or 0
                 if h2 and s2 and abs(s2 - h2) > 6:
                     failures.append(
-                        f"@200 status-widget: 窄视口面板三段之和 {s2} 与面板高 {h2} 差 "
+                        f"@400 status-widget: 窄视口面板三段之和 {s2} 与面板高 {h2} 差 "
                         f"{abs(s2 - h2)}px —— 有内容被压扁或被裁（`max-height` 用 `vh` 就会这样）")
                 # ⚠️ **滚动体不能被压成 0 高**（R38 批 5e）。
                 #
@@ -4198,13 +4267,13 @@ def main() -> int:
                 sc2 = boxes2.get("scroll")
                 if sc2 and (sc2[1] - sc2[0]) < 24:
                     failures.append(
-                        f"@200 status-widget: 窄视口下**滚动体被压成 {sc2[1] - sc2[0]}px**"
+                        f"@400 status-widget: 窄视口下**滚动体被压成 {sc2[1] - sc2[0]}px**"
                         f"（{boxes2}）—— 条目一条都显示不出来（面板只剩标题+页脚）。"
                         f"根因：`calc(60vh - 74px)` 在真窗口（40px 高）下是**负数**，"
                         f"必须用 `--widget-panel-max-h`（按屏幕高算，由 JS 写入）")
                 if not ww2.get("widgetOsStylesOk"):
                     failures.append(
-                        f"@200 status-widget: 窄视口下 `OverlayScroll` 样式没生效"
+                        f"@400 status-widget: 窄视口下 `OverlayScroll` 样式没生效"
                         f"（display={ww2.get('widgetOsRootDisplay')!r}）")
             # ── 第三段：**小窗自己订阅推送**（M4，devlog/252）──────────────────
             # 这一段整页只有小窗（没有主窗口、没有 `widget:notices` 广播），所以
@@ -4266,19 +4335,26 @@ def main() -> int:
                 if ww.get("density") != "widget":
                     failures.append(f"@{w} status-widget: 小窗里的胶囊 density 是 "
                                     f"{ww.get('density')!r}，应为 'widget'")
-                # ⚠️ **尺寸必须精确等于 200×40**（2026-09-24 收严）。
+                # ⚠️ **尺寸的判据在 D1（2026-09-27）从 `== [200,40]` 改成"区间 + 上限"** ——
+                # 这不是放宽，是**规格变了**：胶囊宽改为**跟着内容走**（方案 A），夹在 200–400。
+                # 旧那条会把"短文案的胶囊就该窄"判成错，也会把"长文案被截在 200"（真错）判成对。
                 #
-                # 一度放宽过：`width: 200px` + `padding: 0 12px` 在 `content-box` 下
-                # 算成 **224px** —— 根因是 `box-sizing: border-box` 原本由 Tailwind preflight
-                # 全局提供，而小窗的**独立入口拿不到它**（只引 tokens + status-island）。
-                # 已在 `status-island.css` 里自带重置 ⇒ 现在可以精确判。
+                # 下界 200 仍然要精确（那是"内容很短时也不许窄过 200"），
+                # 上界 400 由 `--widget-cap-max-w` 与解析出的 `max-width` 一起钉（见下）。
                 #
-                # **别再放宽这条**：宽度是 §7 的硬规格（200×40），而且"胶囊比声明的宽 24px"
-                # 正是那种"看着没问题、量了才发现"的漂移。
+                # ⚠️ 历史别丢：一度量到 **224px**（`width:200px` + `padding` 在 content-box 下），
+                # 根因是 `box-sizing: border-box` 原本由 Tailwind preflight 全局提供，
+                # 而小窗的**独立入口拿不到它**（只引 tokens + status-island）。
+                # 现在胶囊是 `max-content` 宽 ⇒ box-sizing 错了会直接表现为"宽度离谱"，
+                # 所以下界那条（大等于 200）依然是它的哨兵。
                 sz = ww.get("size") or [0, 0]
-                if sz != [200, 40]:
-                    failures.append(f"@{w} status-widget: 小窗里胶囊尺寸是 {sz}，应为 [200, 40]"
-                                    f"（`box-sizing` 是不是又丢了？独立入口拿不到 preflight）")
+                if sz[1] != 40:
+                    failures.append(f"@{w} status-widget: 小窗里胶囊**高**是 {sz[1]}，应为 40"
+                                    f"（高度不跟内容走 —— 那条是 §10「中间态高度恒定」）")
+                if not (200 <= sz[0] <= 400):
+                    failures.append(f"@{w} status-widget: 小窗里胶囊宽是 {sz[0]}，"
+                                    f"应落在 200–400（宽跟内容、夹在上下限）"
+                                    f"—— `box-sizing` 是不是又丢了？独立入口拿不到 preflight")
                 # ⚠️ **判据在 2026-09-24（批 5d）从"居中"改成"贴顶"** —— 这不是放宽，是纠错。
                 #
                 # 旧判据是 `centerErr == [0, 0]`（胶囊在小窗里居中）。它能一直绿，是因为
@@ -4291,12 +4367,19 @@ def main() -> int:
                 # —— 窗口 40px、胶囊 40px ⇒ 贴顶即占满（此时"居中"与"贴顶"是同一件事，
                 # 所以旧判据在折叠态下碰巧也对）。展开态则只有"贴顶"是对的。
                 #
-                # 判据换成**胶囊顶边贴窗口顶边**：折叠态下它等价于旧判据（占满 40px），
-                # 展开态下它才是对的那条。横向仍判居中（`centerErr[0]`）。
-                ce = ww.get("centerErr") or [None, None]
-                if ce[0] != 0:
-                    failures.append(f"@{w} status-widget: 胶囊在小窗里**横向**没居中"
-                                    f"（误差 x={ce[0]}px）—— `.widget-shell` 的 flex 横向居中没生效")
+                # ⚠️ **D1（2026-09-27）横向也照这条改**：横向原来判"居中"（`centerErr[0]`），
+                # 但四方向展开之后胶囊在窗口里的横向位置**由几何给**（`--widget-capsule-x`：
+                # 面板向右/向左长时胶囊贴窗口的那一条边）—— 又一个"两个主人"。
+                # ⇒ 判据换成"胶囊左缘在窗口左缘处"（折叠态 offset 恒 0；探针里没有真窗口，
+                # 几何不跑，所以这里量的正是 CSS 的兜底值 0）。纵向同理（`islandTopVsShell`）。
+                left_vs = ww.get("islandLeftVsShell")
+                if left_vs is None:
+                    failures.append(f"@{w} status-widget: 没量到胶囊相对窗口左缘的偏移"
+                                    f"（`islandLeftVsShell`）—— 探针字段丢了？")
+                elif left_vs != 0:
+                    failures.append(f"@{w} status-widget: 胶囊左缘离窗口左缘 {left_vs}px，应为 0"
+                                    f"—— 胶囊的横向位置**由几何给**（`--widget-capsule-x`），"
+                                    f"CSS 不许自己居中（那是第二个主人）")
                 top_vs = ww.get("islandTopVsShell")
                 if top_vs is None:
                     failures.append(f"@{w} status-widget: 没量到胶囊相对窗口顶边的偏移"
@@ -4305,6 +4388,78 @@ def main() -> int:
                     failures.append(f"@{w} status-widget: 胶囊顶边离窗口顶边 {top_vs}px，应为 0"
                                     f"—— 胶囊必须贴住窗口顶边（否则展开时窗口长高、胶囊会往下漂，"
                                     f"而面板是按胶囊位置算的 ⇒ 一起漂）")
+                # ── D1（2026-09-27）：胶囊的**解剖**必须在小窗自己的坐标系里判一次 ──
+                #
+                # ⚠️⚠️ 这一段是**新发现的第 5 次「拆入口顺带生效的东西」**（DEV-LOOP §6.1）。
+                # `--status-widget` 的第一段跑 `index.html?density=widget` —— 那在**主窗口**里、
+                # 加载了 `layout.css` ⇒ 胶囊的解剖（`display:flex` / `gap` / `border-radius` /
+                # 点的 7×7 / 13px 字）**全是那份文件给的**。
+                # 而小窗的独立入口只加载 `tokens.css` + `status-island.css`
+                # ⇒ 同一颗胶囊在**真窗口**里没有圆角、不是 flex 行、点压根画不出来（0×0）。
+                # 两段探针都绿，因为**没有一条判据跑在小窗的坐标系里量解剖**（§6.5 的同类）。
+                #
+                # 这一批的内容契约（点+字形+文案+活数据+计数+chevron）正好**依赖**这套解剖 ——
+                # 不先把它钉住，改完还是看不出来对不对。
+                if ww.get("islandDisplay") != "flex":
+                    failures.append(
+                        f"@{w} status-widget: 小窗里胶囊的 `display` 是 "
+                        f"{ww.get('islandDisplay')!r}，应为 'flex' —— 胶囊的**解剖**"
+                        f"（display/align-items/gap/圆角/字号）原本只在 `layout.css` 里，"
+                        f"而小窗的独立入口不加载那个文件。共用组件的样式必须在共用文件里")
+                if ww.get("islandRadius") != 20:
+                    failures.append(
+                        f"@{w} status-widget: 小窗里胶囊圆角是 {ww.get('islandRadius')}，应为 20px"
+                        f"（同上：`border-radius` 原本只在 `layout.css` 的 `.topbar-status` 里）")
+                if (ww.get("islandFontSize") or 0) < 12:
+                    failures.append(f"@{w} status-widget: 小窗里胶囊字号是 "
+                                    f"{ww.get('islandFontSize')}，应 ≥ 12px（同样来自 layout.css）")
+                dot = ww.get("dotBox") or [0, 0]
+                if dot[0] < 6 or dot[1] < 6:
+                    failures.append(
+                        f"@{w} status-widget: 小窗里的**点**只有 {dot}（应为 7×7）—— "
+                        f"`.topbar-status-dot` 的尺寸也只在 `layout.css` 里；"
+                        f"点看不见 = 紧迫度这个通道整个丢了")
+                if "rgba(0, 0, 0, 0)" in (ww.get("dotBg") or ""):
+                    failures.append(f"@{w} status-widget: 小窗里的点没有底色"
+                                    f"（{ww.get('dotBg')!r}）—— 看不见的点等于没有点")
+                # 内容契约的四条：字形 / 活数据 / 计数 / chevron
+                if ww.get("glyphText") != "✦":
+                    failures.append(
+                        f"@{w} status-widget: 注入的 `message` 条目在胶囊上没画出字形"
+                        f"（量到 {ww.get('glyphText')!r}，应为 '✦'）—— "
+                        f"没有字形通道时 `report`(✓) 与 `message`(✦) 在胶囊上**长得一模一样**"
+                        f"（点色相同），那正是用户 2026-09-27 报的缺陷")
+                if ww.get("valueText") != "47s":
+                    failures.append(
+                        f"@{w} status-widget: 活数据槽没渲染（量到 {ww.get('valueText')!r}，"
+                        f"应为 '47s'）—— 倒计时只能拼进文案里 ⇒ 每秒重写一整句，文案会闪")
+                cb = ww.get("chevronBox")
+                if not cb or abs(cb[0] - 12) > 1 or abs(cb[1] - 12) > 1:
+                    failures.append(
+                        f"@{w} status-widget: chevron 的渲染尺寸是 {cb}，应为 12×12 —— "
+                        f"`size-[12px]` 是 **Tailwind** 类，小窗的独立入口不加载 Tailwind，"
+                        f"于是 lucide 按默认 24px 画（比半个胶囊还高）")
+                if ww.get("widgetPanelWidth") != 400:
+                    failures.append(f"@{w} status-widget: 小窗面板宽是 "
+                                    f"{ww.get('widgetPanelWidth')}，应为 400（D1 定稿：面板 400）")
+                ib = ww.get("widgetPanelIconBox")
+                if not ib or abs(ib[0] - 13) > 1 or abs(ib[1] - 13) > 1:
+                    failures.append(
+                        f"@{w} status-widget: 面板条目图标的渲染尺寸是 {ib}，应为 13×13 —— "
+                        f"同 chevron：`size-[13px]` 是 Tailwind 类，小窗里不加载 Tailwind，"
+                        f"lucide 会按默认 24px 画（条目行被撑高）")
+                # ⚠️ `data-dir` 在探针里**恒为 'down'**（`StatusWidgetWindow` 的 JSX 默认值）：
+                #    几何那条 effect 在非桌面端**直接 return**（没有真窗口可 resize），
+                #    所以**上/左/右三个方向在探针里根本跑不到** —— 它们的判据是
+                #    `widgetWindow.test.ts` 的四方向用例（24 条）+ 真机。
+                #    这条断言的价值是**把这件事写死**：谁要是把几何改到探针里也跑
+                #    （或把默认值改成别的），这里当场红，而不是让人以为"探针验过四方向了"。
+                if ww.get("widgetDir") != "down":
+                    failures.append(
+                        f"@{w} status-widget: 小窗的 `data-dir` 是 {ww.get('widgetDir')!r}，"
+                        f"应为 'down'（探针里几何不跑 ⇒ 这是 JSX 的默认值）。"
+                        f"若几何真的在探针里跑了，它算出的位置必然与真机不同 —— "
+                        f"四方向的判据在单测与真机，不在这里")
                 # ── ⚠️ 面板在**小窗里**能不能用（2026-09-24 批 5d 加）──────────
                 #
                 # **这三条就是那个真 bug 的判据**：面板 `top = 胶囊底(40) + 6 = 46`，
@@ -4366,7 +4521,7 @@ def main() -> int:
                                         f"`widget.html` 这个**独立入口**没生效"
                                         f"（它加载了主窗口那套 ⇒ 又变成 132MB 了）")
             if not failures:
-                print("  [ok] 桌面控件小窗：分流生效（无顶栏/侧栏）/ 胶囊贴顶横向居中 200×40")
+                print("  [ok] 桌面控件小窗：分流生效（无顶栏/侧栏）/ 胶囊贴顶贴左 / 宽 200–400×40 / 圆角 20 / 点+字形+活数据+chevron 都在 / 面板 400 且点得着")
             for b in failures:
                 print("   -", b)
             return 1 if failures else 0

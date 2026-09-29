@@ -1009,6 +1009,12 @@ async fn show_widget_window(window: tauri::Window, app: tauri::AppHandle, x: Opt
     // 于是"窗口创建失败"和"命令压根没被调用"在日志里**长得一模一样**（都是什么都没有）。
     // 这一行把两者分开 —— 没有它，下一次还是只能猜。
     widget_log(&app, &format!("show_widget_window 被调用 x={x:?} y={y:?}"));
+    // ⚠️ 首帧尺寸 = **胶囊的尺寸下限**（200×40），不是最终尺寸（D1，2026-09-27）：
+    //    胶囊宽现在**跟着内容走**（200–400），而内容要等页面渲染完才知道 ⇒ 由前端的
+    //    `ResizeObserver` 量出来再调 `resize_widget_window` 把窗口改到位
+    //    （见 `StatusWidgetWindow` 的第 ⑨ 条）。这里给下限就够了：窗口一开始
+    //    **只会偏小**（首帧可能裁掉一点文字），下一帧就被纠正 —— 反过来给 400 会让
+    //    短文案的小窗一开始挂着一大块透明区域（那块区域**会挡住鼠标**）。
     const W: f64 = 200.0;
     const H: f64 = 40.0;
     // ⚠️ **这里必须做"重入保护"**（2026-09-24 第六轮真机反馈）：
@@ -1066,7 +1072,7 @@ async fn show_widget_window(window: tauri::Window, app: tauri::AppHandle, x: Opt
         widget_log(&app, &format!("小窗创建失败：{e}"));
         e.to_string()
     })?;
-    widget_log(&app, "小窗已创建（200×40 无边框置顶）");
+    widget_log(&app, "小窗已创建（首帧 200×40 无边框置顶，宽由前端按内容改）");
     // ⚠️⚠️ **把这个窗口实际加载的地址打出来**（2026-09-24 第四轮）。
     //
     // 前三轮我改的都是**修饰**（启动幕 / 背景色 / `backdrop-filter` / DWM 外框），

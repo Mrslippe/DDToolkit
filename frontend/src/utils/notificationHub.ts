@@ -52,6 +52,31 @@ export const KIND_PRIORITY: Record<NoticeKind, number> = {
   message: 1,    // 操作成功的瞬时提示
 }
 
+/**
+ * 胶囊上的**类型字形**（D1 内容契约，2026-09-27）。
+ *
+ * ## 为什么类型必须有自己的通道（这是一处真缺陷的修复，不是装饰）
+ *
+ * 胶囊原先只有**点色**表达 kind，而渲染侧的判定是
+ * `progress→busy / alert→warn / 其余→ok` —— `report` 与 `message` **落在同一个颜色上**；
+ * 更要命的是胶囊**根本不渲染图标**（`KIND_ICON` 只在面板里用）。
+ * ⇒ 今天"全量抓取完成"(report) 与"已复制诊断信息"(message) 在胶囊上**长得一模一样**。
+ *
+ * 一个字形的成本换来"类型"这个维度：`点色 = 紧迫度`、`字形 = 类型`，两者正交。
+ *
+ * ⚠️ 用**文本字符**而不是 lucide 图标：小窗的独立入口不加载 Tailwind，
+ * `size-[12px]` 这类类名在那里无效 —— lucide 会按默认 **24px** 画（探针在小窗坐标系里
+ * 实测到 `chevron=[24,24]`，比半个胶囊还高）。文本字符的尺寸只受 `font-size` 控制。
+ *
+ * ⚠️ 字形**必须两两不同**（`KIND_GLYPH` 有唯一性用例）：重复就等于没修。
+ */
+export const KIND_GLYPH: Record<NoticeKind, string> = {
+  alert: '⚠',
+  progress: '◔',
+  report: '✓',
+  message: '✦',
+}
+
 /** 是否还该显示（非 sticky 且过期的条目自动淡出） */
 export function isLive(n: Notice, now: number): boolean {
   if (n.sticky) return true

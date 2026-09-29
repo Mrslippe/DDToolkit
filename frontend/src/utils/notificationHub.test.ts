@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Notice } from './notificationHub'
 import {
+  KIND_GLYPH,
   KIND_PRIORITY,
   LIVE_NOTICE_MS,
   composeTaskText,
@@ -143,5 +144,40 @@ describe('任务文案（P8-C 格式）', () => {
     expect(composeTaskText('账号信息抓取中', null, 3, 7)).toBe('账号信息抓取中 - 3/7')
     expect(composeTaskText('帖子抓取中', 'V')).toBe('帖子抓取中 - V')
     expect(composeTaskText('账号信息抓取中', null, 0, 0)).toBe('账号信息抓取中')
+  })
+})
+
+/**
+ * 类型字形（D1 内容契约，2026-09-27）。
+ *
+ * 这组用例守的是**一处真缺陷**：胶囊原先只有"点色"一个通道表达 kind，
+ * 而渲染侧的判定是 `progress→busy / alert→warn / **其余→ok**`
+ * ⇒ `report` 与 `message` **落在同一个颜色上**，且胶囊**根本不渲染图标**
+ * ⇒ "全量抓取完成"与"已复制诊断信息"在胶囊上长得一模一样（用户 2026-09-27 报的）。
+ */
+describe('KIND_GLYPH：类型必须有**自己的**通道', () => {
+  it('**report 与 message 的字形不同**（这条就是那个缺陷的判据）', () => {
+    expect(KIND_GLYPH.report).not.toBe(KIND_GLYPH.message)
+    expect(KIND_GLYPH.report).toBe('✓')
+    expect(KIND_GLYPH.message).toBe('✦')
+  })
+
+  it('四个 kind 两两不同 —— 重复一个就等于没修', () => {
+    const vals = Object.values(KIND_GLYPH)
+    expect(vals).toHaveLength(4)
+    expect(new Set(vals).size).toBe(4)
+  })
+
+  it('字形是**单个字符**（多字符会变成"缩写"，宽度也不再可控）', () => {
+    for (const [kind, g] of Object.entries(KIND_GLYPH)) {
+      // `[...g]`：按**码点**数，避免把代理对算成两个
+      expect([...g], `${kind} 的字形 ${JSON.stringify(g)} 应当是 1 个字符`).toHaveLength(1)
+    }
+  })
+
+  it('**每个 kind 都有字形**（漏一个就会在胶囊上渲染出 `undefined`）', () => {
+    for (const kind of Object.keys(KIND_PRIORITY)) {
+      expect(KIND_GLYPH[kind as keyof typeof KIND_GLYPH], `${kind} 缺字形`).toBeTruthy()
+    }
   })
 })

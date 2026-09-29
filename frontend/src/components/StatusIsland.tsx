@@ -3,11 +3,12 @@ import { createPortal } from 'react-dom'
 import { AlertTriangle, CheckCircle2, ChevronDown, Loader2 } from 'lucide-react'
 import OverlayScroll from './OverlayScroll'
 import type { Notice, NoticeActionKind } from '../utils/notificationHub'
-import { KIND_PRIORITY, pickPrimary } from '../utils/notificationHub'
+import { KIND_GLYPH, KIND_PRIORITY, pickPrimary } from '../utils/notificationHub'
 import { IDLE_CAROUSEL_ENABLED, IDLE_TICK_MS, pickIdle } from '../utils/idleQuotes'
 import { isShellHidden } from '../utils/shellLifecycle'
 import { useShellHidden } from '../hooks/useShellHidden'
 import { initialTextState, phaseClass, reduceText } from '../utils/statusIslandText'
+import { WIDGET_PANEL_GAP, WIDGET_PANEL_W, applyWidgetCssVars } from '../utils/widgetWindow'
 
 interface Props {
   notices: Notice[]
@@ -76,6 +77,14 @@ export default function StatusIsland({ notices, onAction, now, density = 'bar' }
   /** 隐藏到托盘（R18）：轮播停表 */
   const hidden = useShellHidden()
 
+  // 桌面控件宿主：把**形态常量**写进 CSS 变量（D1 单一真源，见 `applyWidgetCssVars`）。
+  // ⚠️ 必须在这里（而不是 `StatusWidgetWindow`）：`?density=widget` 在**主窗口**里也会
+  //    渲染这个宿主（探针第一段就是这么量的），而那棵树里没有 `StatusWidgetWindow`。
+  //    `useLayoutEffect`：赶在首绘前写，否则会先按兜底值画一帧。
+  useLayoutEffect(() => {
+    if (density === 'widget') applyWidgetCssVars()
+  }, [density])
+
   // 空闲轮播的时钟：**只在空闲时走**（有事发生时立刻停表，省掉一个无谓的定时器；
   // 也让"语录正在轮播"不可能和"有通知亮着"同时出现在屏幕上）。
   // R18：隐藏到托盘时同样停表 —— 6s 一次的轮播在后台跑 8 小时是纯浪费（界面根本没人看）。
@@ -117,22 +126,42 @@ export default function StatusIsland({ notices, onAction, now, density = 'bar' }
   const place = () => {
     const r = anchorRef.current?.getBoundingClientRect()
     if (!r) return
-    const width = density === 'widget' ? 280 : 340   // §7：widget 展开宽 280（bar 沿用 340）
-    const centered = r.left + r.width / 2 - width / 2
-    const left = Math.min(Math.max(8, centered), Math.max(8, window.innerWidth - width - 8))
     // 面板的**实际高度**：`open` 之后才量得到；量不到时退回 0（下一帧 `place()` 会再来）
     const h = panelRef.current?.offsetHeight ?? 0
-    // widget 宿主：**跟随窗口那边的决定**（它是屏幕级的几何真源）
-    const shellFlip = density === 'widget'
-      ? document.querySelector<HTMLElement>('.widget-shell')?.dataset.flip
-      : undefined
-    const flip = shellFlip
-      ? shellFlip === 'up'
-      // 顶栏宿主：原来的判据（这里的 `innerHeight` 是稳定的应用窗口高，不构成循环）
-      : h > 0 && r.bottom + 6 + h > window.innerHeight - 4
+    // ⚠️⚠️ **小窗（真窗口）宿主：面板铺满窗口，位置由几何定**（D1，2026-09-27）。
+    //
+    // 窗口本身就是"为面板长出来的"（`widgetExpandGeom`：宽 = 面板宽、高 = 胶囊 + 间隙 +
+    // 面板高）⇒ 面板在这个视口里就该是 `left = 0`、宽 = 窗口宽。原来那套"按胶囊中心居中 +
+    // 夹取"在这里是**错的第二真源**：窗口已经被几何夹到屏幕内了，面板再夹一次就会
+    // 相对窗口偏移（实测过 8px 的缝），而且四方向展开之后横向位置必须由**几何**说了算
+    // （面板向左/向右长时，胶囊在窗口里的偏移也跟着变）。
+    //
+    // `data-dir` 是几何写下的**唯一方向真源**（原来叫 `data-flip`，只有上/下两态）。
+    // 读不到它（探针里没有真窗口；或顶栏宿主）⇒ 退回下面那套顶栏算法。
+    const shell = density === 'widget'
+      ? document.querySelector<HTMLElement>('.widget-shell')
+      : null
+    const dir = shell?.dataset.dir
+    if (shell && dir) {
+      setPos({
+        left: 0,
+        // ⚠️ 宽取**常量**（不取 `window.innerWidth`）：面板宽 == 几何保证的窗口宽，
+        //    而窗口宽是**几何算的**（`max(胶囊宽, 400)`）。取实测视口宽会在
+        //    "窗口还没 resize 完"的那一帧量到一个更窄的值 ⇒ 内容重排版 ⇒ 面板高变
+        //    ⇒ 窗口高度按错的高算完就再也不改了（`place()` 不会因为 resize 再跑）。
+        //    `data-dir` 缺失（探针 / 还没算）时也给这个常量，两边一致。
+        top: dir === 'up' ? r.top - WIDGET_PANEL_GAP - h : r.bottom + WIDGET_PANEL_GAP,
+        width: WIDGET_PANEL_W,
+      })
+      return
+    }
+    const width = density === 'widget' ? WIDGET_PANEL_W : 340   // D1：widget 展开宽 400（bar 沿用 340）
+    const centered = r.left + r.width / 2 - width / 2
+    const left = Math.min(Math.max(8, centered), Math.max(8, window.innerWidth - width - 8))
+    const flip = h > 0 && r.bottom + WIDGET_PANEL_GAP + h > window.innerHeight - 4
     setPos(flip
-      ? { left, top: Math.max(4, r.top - 6 - h), width }
-      : { left, top: r.bottom + 6, width })
+      ? { left, top: Math.max(4, r.top - WIDGET_PANEL_GAP - h), width }
+      : { left, top: r.bottom + WIDGET_PANEL_GAP, width })
   }
 
   /** 悬停时长的两个口径：进入要**等一等**（掠过不弹），离开要**宽限**（容得下移进面板） */
@@ -189,16 +218,16 @@ export default function StatusIsland({ notices, onAction, now, density = 'bar' }
     document.addEventListener('keydown', onKey)
     document.addEventListener('pointerdown', onOutside, true)
     window.addEventListener('resize', onResize)
-    // ⚠️ **`data-flip` 变了要重排**（R38 批 5f）：小窗宿主下这个属性由**窗口那边**在
-    //    resize 之后写下（`widgetExpandGeom` 算完才知道翻不翻），而那时本组件的
-    //    `place()` 已经跑过了 ⇒ 属性变了没人理，面板就停在旧方向上。
+    // ⚠️ **`data-dir` 变了要重排**（R38 批 5f；D1 起属性名从 `data-flip` 换成 `data-dir`）：
+    //    小窗宿主下这个属性由**窗口那边**在 resize 之后写下（`widgetExpandGeom` 算完才知道
+    //    往哪边长），而那时本组件的 `place()` 已经跑过了 ⇒ 属性变了没人理，面板就停在旧方向上。
     //    用 MutationObserver 盯它，而不是让窗口去调组件（组件不该知道窗口的存在 —— §8）。
     let mo: MutationObserver | null = null
     if (density === 'widget') {
       const shell = document.querySelector<HTMLElement>('.widget-shell')
       if (shell) {
         mo = new MutationObserver(() => place())
-        mo.observe(shell, { attributes: true, attributeFilter: ['data-flip'] })
+        mo.observe(shell, { attributes: true, attributeFilter: ['data-dir'] })
       }
     }
     return () => {
@@ -314,9 +343,17 @@ export default function StatusIsland({ notices, onAction, now, density = 'bar' }
           }
         }}
       >
-        <i className={`si-dot topbar-status-dot${primary?.kind === 'progress' ? ' busy'
+        <i className={`si-dot${primary?.kind === 'progress' ? ' busy'
           : primary?.kind === 'alert' ? ' warn' : lit ? ' ok' : ''}`} />
+        {/* 类型字形（D1 内容契约）：点表达**紧迫度**、字形表达**类型**。
+            为什么必须有它：`report` 与 `message` 的点色在产品里判定相同（都是 `ok`），
+            而胶囊原先不渲染任何图标 ⇒ "全量抓取完成"与"已复制诊断信息"长得一模一样。
+            `aria-hidden`：它是**视觉冗余**，语义由 `title` / `aria-expanded` 承担。 */}
+        {lit && <span className="si-glyph" aria-hidden="true">{KIND_GLYPH[primary!.kind]}</span>}
         <span className={`si-text pill-text-fade${phaseClass(textState.phase)}`}>{textState.shown}</span>
+        {/* 活数据槽（D1）：倒计时 / 进度单独一格 —— 它每秒刷新，但**不重排文案**
+            （拼进 `text` 里会让整句走一次淡入淡出，用户看到的是"每秒闪一下"）。 */}
+        {lit && primary!.value && <span className="si-value">{primary!.value}</span>}
         {lit && notices.length > 1 &&
           <span className={`si-count${countPopped ? ' is-out' : ''}`}>{notices.length}</span>}
         {lit && <ChevronDown className="si-chevron size-[12px]" />}

@@ -321,31 +321,14 @@ html.window-maximized body {
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  gap: 6px;
   max-width: 46%;
   height: var(--pill-h-sm);
-  padding: 0 12px;
-  border-radius: 999px;
-  background: transparent;
-  color: #fff;
-  font-size: 13px;   /* 2026-09-09 用户：比 12px 大一号（空闲态白字在粉条上更好读） */
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;  /* 进度 3/14 等数字对齐 */
-  white-space: nowrap;
-  overflow: hidden;
-  user-select: none;
-  /* ── R38 批 2：宽度形变（§4「容器宽度收窄」）─────────────────────────
-     `calc-size(auto, size)` 把"内容宽"变成一个**可过渡的长度** ⇒ 文案变化 / 计数徽章
-     出现时宽度平滑过渡，而不是硬跳（Chromium 129+；本机 Edge 153 支持）。
-     **不支持时这一行被忽略**，退回 `width: auto` —— 即批 2 之前的行为，无需 @supports 兜底。
-     ⚠️ **高度不参与过渡**（§4「高度固定」+ §10「中间态高度恒定」）；圆角 `999px` 会被
-     clamp 到 高度/2 ⇒ 任意帧都是胶囊，不会出现方角中间态。 */
-  width: calc-size(auto, size);
-  transition:
-    width var(--motion-base) var(--ease-standard),
-    background-color var(--motion-fast) ease;   /* R38 批 1 漏网：原是硬编码 0.18s */
+  /* ⚠️ **胶囊的"解剖"已搬去 `status-island.css` 的 `.si-island`**（D1，2026-09-27）——
+     这里只留**顶栏宿主特有**的四条（绝对定位 / 水平居中 / 宽度上限 / 顶栏的胶囊高）。
+     为什么必须搬：小窗的独立入口（`widgetMain.tsx`）**只加载 `tokens.css` +
+     `status-island.css`**，拿不到这个文件 ⇒ 原来胶囊在小窗里 `display:block`、圆角 0、
+     点是 0×0（探针实测）。这与 `.os-*` 那次是同一类（DEV-LOOP §6.1）。
+     判据：**"用到它的入口有几个"** —— 两个宿主都要的，就必须在共用文件里。 */
 }
 
 /* 事件态：徽章亮起（TopBar 按 busy || 覆盖文案 挂类） */
@@ -353,18 +336,10 @@ html.window-maximized body {
   background: #c9406f;
 }
 
-.topbar-status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #52c41a;
-  flex-shrink: 0;
-}
-
-/* 操作成功覆盖态：白点（此时徽章已亮起，白点在深玫瑰底上才看得见） */
-.topbar-status-dot.ok {
-  background: #fff;
-}
+/* ⚠️ **点的三条（基态 / `.ok` 白点 / `.busy` 琥珀 + `status-pulse`）也搬去
+   `status-island.css` 的 `.si-dot`**（D1，2026-09-27）—— 同一条理由：
+   小窗拿不到这个文件，点会变成 **0×0**（探针在小窗坐标系里实测到）。
+   这里是**搬家**不是复制：留一份在这里就又会变成两个真源。 */
 
 /* 胶囊文案变更时的渐隐渐显 + 超长文案省略号 */
 .pill-text-fade {
@@ -378,23 +353,6 @@ html.window-maximized body {
 
 /* R38 批 4：`@keyframes pill-fade-in` 已撤 —— 文案切换改用 transition 驱动
    （见 `.si-island .si-text`）。留个注释免得有人再把它加回来。 */
-
-.topbar-status-dot.busy {
-  background: #faad14;
-  animation: status-pulse 1.2s ease-in-out infinite;
-}
-
-@keyframes status-pulse {
-  0%,
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.45;
-    transform: scale(0.8);
-  }
-}
 
 /* 抓取中：加载图标替代脉冲圆点。
    2026-09-09：状态行改成浅粉底（#ffdae1）后，原设计稿图标 Frame_41_8.svg
@@ -752,9 +710,6 @@ html.window-maximized body {
   .splash-logo-pulse,
   .splash-logo-static,
   .splash-open .splash-logo {
-    animation: none;
-  }
-  .topbar-status-dot.busy {
     animation: none;
   }
   .topbar-status-spinner {

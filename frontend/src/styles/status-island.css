@@ -106,8 +106,87 @@
    条目计数、chevron、以及 portal 出来的面板。
    四态：idle（无容器、绿点 + 「数据服务运行中」）· pill（一条主文案）·
    expand（面板）· 空闲轮播（R12b）。 */
+/* ⚠️⚠️ **胶囊的"解剖"在这一块里，不在 `layout.css`**（D1，2026-09-27 搬家）。
+ *
+ * 这一段原本写在 `layout.css` 的 `.topbar-status` 里 —— 那对**顶栏宿主**没问题，
+ * 但小窗的独立入口（`widgetMain.tsx`）**只加载 `tokens.css` + 本文件**。
+ * 后果（探针在 `widget.html` 的坐标系里实测到的原始值）：
+ *
+ * ```
+ * display='block'   ← 不是 flex 行 ⇒ 点/字形/文案/计数/chevron 退化成行内流
+ * 圆角=0            ← 胶囊是**方角**的（`.topbar-status` 的 999px 拿不到）
+ * 字号=16           ← 不是 13px
+ * 点=[0, 24]        ← `<i>` 没有宽高 ⇒ **紧迫度这个通道整个看不见**
+ * ```
+ *
+ * 而两段探针一直绿：`--status-widget` 的第一段跑的是 `index.html?density=widget`
+ * —— 那在**主窗口**里、加载了 `layout.css`。**判据的坐标系错了**（DEV-LOOP §6.5），
+ * 同时这也是 §6.1「拆入口顺带生效的东西」的**第 5 次**（前四次：preflight 的 box-sizing ·
+ * `.os-*` · `setApiBase` · dev token）。
+ *
+ * **规矩**（§6.1 第 2 条）：判据不是"它看起来属于哪一块"，而是"**用到它的入口有几个**"。
+ * 顶栏与桌面控件都要的声明，必须放**共用文件**；搬家方向单向（大文件 → 共用文件）。 */
 .si-island {
   cursor: default;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: transparent;
+  color: #fff;
+  font-size: 13px;   /* 2026-09-09 用户：比 12px 大一号（空闲态白字在粉条上更好读） */
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;  /* 进度 3/14 等数字对齐 */
+  white-space: nowrap;
+  overflow: hidden;
+  user-select: none;
+  /* ── R38 批 2：宽度形变（§4「容器宽度收窄」）─────────────────────────
+     `calc-size(auto, size)` 把"内容宽"变成一个**可过渡的长度** ⇒ 文案变化 / 计数徽章
+     出现时宽度平滑过渡，而不是硬跳（Chromium 129+；本机 Edge 153 支持）。
+     **不支持时这一行被忽略**，退回 `width: auto` —— 即批 2 之前的行为，无需 @supports 兜底。
+     ⚠️ **高度不参与过渡**（§4「高度固定」+ §10「中间态高度恒定」）；圆角 `999px` 会被
+     clamp 到 高度/2 ⇒ 任意帧都是胶囊，不会出现方角中间态。 */
+  width: calc-size(auto, size);
+  transition:
+    width var(--motion-base) var(--ease-standard),
+    background-color var(--motion-fast) ease;   /* R38 批 1 漏网：原是硬编码 0.18s */
+}
+
+/* 状态点：**紧迫度**通道（绿=正常/完成 · 琥珀=进行中 · 红=需要注意）。
+   ⚠️ 同样是 D1 从 `layout.css` 搬来的（理由见上）—— 留一份在那里就会又变成两个真源。 */
+.si-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #52c41a;
+  flex-shrink: 0;
+}
+
+/* 操作成功覆盖态：白点（此时徽章已亮起，白点在深玫瑰底上才看得见）。
+   ⚠️ **这是顶栏宿主的配色**：顶栏胶囊事件态是深玫瑰底 `#c9406f` ⇒ 白点才有"成功"语义。
+   小窗是浮在壁纸上的深色卡片，**白色在那里没有语义** ⇒ 见下面
+   `.si-island[data-density='widget'] .si-dot.ok`（改回绿）。 */
+.si-dot.ok {
+  background: #fff;
+}
+
+/* 进行中：琥珀 + 脉冲 */
+.si-dot.busy {
+  background: #faad14;
+  animation: status-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes status-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.8);
+  }
 }
 
 .si-island.on {
@@ -159,9 +238,19 @@
   position: relative;
   left: auto;
   transform: none;
-  width: 200px;            /* §7 折叠尺寸 200 × 40 */
-  height: 40px;
-  max-width: none;
+  /* ⚠️⚠️ **宽度跟着内容走**（D1 定稿 = 09-27 样例页的「方案 A + 上限 400」）。
+     三个数**不许在这里写死**：它们由 `applyWidgetCssVars()` 从
+     `utils/widgetWindow.ts` 的常量写进变量（`--widget-cap-min-w` / `-max-w` / `--widget-radius`）
+     —— 单一真源。本仓为此栽过（`d1-form-options.md` §6 的"三源"：只改一两处，
+     单测与探针都会绿，而真机上窗口正在裁胶囊）。
+     兜底值（`var(…, 200px)`）与常量同值：JS 还没跑起来时也不至于画错。 */
+  width: calc-size(max-content, size);   /* 内容宽；不支持时退回 flex 项的 max-content */
+  min-width: var(--widget-cap-min-w, 200px);
+  max-width: var(--widget-cap-max-w, 400px);   /* 超过它才上省略号：上限**之内不省** */
+  height: var(--widget-cap-h, 40px);
+  /* 圆角**恒定 20px**：折叠 40 高时 20 = 完美胶囊，展开也是 20 ⇒ 半径单调，
+     不会"先胀后收"（规格 §5 同心圆角同一族理由）。 */
+  border-radius: var(--widget-radius, 20px);
   padding: 0 12px;
   /* ⚠️ **这里刻意不用 `backdrop-filter`**（2026-09-24 第三轮真机反馈改）。
      规格 §7 原本写的是 `backdrop-filter: blur(20px) saturate(1.4)`，实测在**真窗口**里
@@ -182,6 +271,14 @@
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
 }
 
+/* ⚠️ **小窗宿主的点色不能照抄顶栏的白点**（09-27 样例页专门记过这条）：
+   顶栏里 `.si-dot.ok` 是白色，那是"深玫瑰底上的成功色"；小窗是**浮在壁纸上的深色卡片**，
+   白色在那里没有语义（浅色壁纸下更是直接消失）。所以 `ok` 在小窗里改回绿。
+   ⚠️ 这条同时是"宿主差异"的**判据**：探针在小窗坐标系里量点色，不该是 `rgb(255,255,255)`。 */
+.si-island[data-density='widget'] .si-dot.ok {
+  background: #52c41a;
+}
+
 /* 事件态：顶栏宿主是**整块变粉**，但桌面控件不能 —— 那会毁掉深色材质。
    改成「深底不变 + 一圈粉环」，**有事发生**照样看得见（§7 没规定，取这条）。 */
 .si-island[data-density='widget'].on {
@@ -191,13 +288,16 @@
     inset 0 0 0 1px rgba(233, 92, 141, 0.85);
 }
 
-/* 展开面板：尺寸由 JS 给（§7 widget 展开宽 280）；材质跟胶囊同族 ——
+/* 展开面板：宽由 JS 给（D1 定稿 400 = 胶囊上限，见 `WIDGET_PANEL_W`）；材质跟胶囊同族 ——
    否则深色胶囊下面吊一块白板会像"两块积木"（§5 同心圆角那条的原话）。
    同样不用 `backdrop-filter`（理由见上面那段）。 */
 .si-panel[data-density='widget'] {
   background: rgba(20, 20, 26, 0.97);
   border-color: rgba(255, 255, 255, 0.12);
   color: #fff;
+  /* 圆角与胶囊**同值**（D1 的"圆角恒定 20"）：胶囊(20) → 面板(20) 是同一个半径，
+     合起来读作"一块材料长出来的"。顶栏宿主那份仍是 §5 的 14px。 */
+  border-radius: var(--widget-radius, 20px);
   /* ⚠️ **小窗里不能用 `60vh` 当高度上限**（R38 批 5d 修）。
      小窗的高度是**跟着面板长的**（窗口 = 40 + 6 + 面板高，见 `utils/widgetWindow.ts`）——
      于是 `vh` 与面板高度**互为因果**：折叠态窗口 40px ⇒ `60vh = 24px` ⇒ 面板被压到 24px
@@ -232,25 +332,24 @@ html[data-widget-window] #root {
   width: 100vw;
   height: 100vh;
   display: flex;
-  /* ⚠️ **胶囊必须钉在顶边**，不能垂直居中（R38 批 5d 修）。
-     展开态窗口会长到 `40 + 6 + 面板高`（见 `utils/widgetWindow.ts` 的形态梯度），
-     面板是 portal 到 body 的 ⇒ `.widget-shell` 里**始终只有胶囊一个孩子**。
-     若还 `align-items: center`，窗口一长高，胶囊就**跑到窗口垂直中间**，
-     而面板的 `top = 胶囊底 + 6` 是**按胶囊位置算的** ⇒ 两者一起往下漂，
-     屏幕上看就是"展开时胶囊往下跳了一截"。
-     钉在顶边之后：窗口长大 = **向下长**，胶囊原地不动，面板正好落在它下面。
-     `justify-content: center` 保留（横向居中，窗口变宽时胶囊仍居中）。 */
+  /* ⚠️⚠️ **两条轴都由几何给偏移，CSS 不许自己"居中/贴边"**（D1，2026-09-27 横向统一）。
+     纵向的教训批 5d/5g 就记过（窗口一长高，居中的胶囊就往下漂，而面板是按胶囊位置算的
+     ⇒ 两者一起漂 = "展开时胶囊往下跳一截"）；横向是四方向展开之后才暴露的**同一个错**：
+     面板向左/向右长时胶囊要贴住对应的那条边，而 `justify-content: center` 会把它按回中间
+     —— "胶囊在窗口里靠哪一边"又变成两个主人。
+     ⇒ `flex-start` + `margin-*: var(--widget-capsule-*)`，位置只有一个来源（`widgetExpandGeom`）。 */
   align-items: flex-start;
-  justify-content: center;
+  justify-content: flex-start;
   background: transparent;
   overflow: hidden;
   user-select: none;
 }
 
 /* 小窗里胶囊：① **不要再撑高度**（折叠态窗口正好 40px，胶囊占满；展开后多出来的
-   高度是留给面板的）；② 纵向位置**由 `--widget-capsule-offset` 给**（见下一条）。 */
+   高度是留给面板的）；② 两条轴的偏移**都由变量给**（见上一条注释）。 */
 .widget-shell > .si-island {
   flex: none;
+  margin-left: var(--widget-capsule-x, 0px);
   margin-top: var(--widget-capsule-offset, 0px);
 }
 
@@ -312,8 +411,14 @@ html[data-widget-window] #root {
   transition-duration: 0s;   /* 复位**瞬时**（否则变成"慢慢缩小再弹回"，不是弹出） */
 }
 
+/* ⚠️ **尺寸必须在这里写死**（D1，2026-09-27）：`.si-chevron` 元素上挂的是 Tailwind 类
+   `size-[12px]`，而**小窗的独立入口不加载 Tailwind** ⇒ 那条类在那里完全无效，
+   lucide 会按自己的默认 **24×24** 画（探针在小窗坐标系里实测到 `chevron=[24,24]`，
+   比半个胶囊还高）。字号那套（`font-size`）控制不了 SVG，所以只能给宽高。 */
 .si-chevron {
   flex: none;
+  width: 12px;
+  height: 12px;
   opacity: 0.85;
   transition: transform var(--motion-base) ease;   /* 展开时翻转而不是瞬移（与面板入场同一时长） */
 }
@@ -322,9 +427,35 @@ html[data-widget-window] #root {
   transform: rotate(180deg);
 }
 
-/* 告警点：红（风控冷却/登录失效）——与 busy 的琥珀、ok 的白区分开 */
-.topbar-status-dot.warn {
+/* 告警点：红（风控冷却 / 登录失效）—— 与 busy 的琥珀、ok 的绿/白区分开 */
+.si-dot.warn {
   background: #ff4d4f;
+}
+
+/* ── 类型字形（D1 内容契约，2026-09-27）────────────────────────────────
+   点色只表达**紧迫度**（三个通道不够表达四类通知）；类型由**字形**表达：
+   `alert ⚠ · progress ◔ · report ✓ · message ✦`。
+   补的是产品的一处真缺陷：胶囊里 kind 原先只有"点色"一个通道，而
+   `report` 与 `message` 的判定**落在同一个颜色上**（`progress→busy / alert→warn / 其余→ok`），
+   并且胶囊**根本不渲染图标**（`KIND_ICON` 只在面板用）
+   ⇒ 今天"全量抓取完成"(report) 与"已复制诊断信息"(message) 在胶囊上长得一模一样。
+   字形是**文本字符**（不是 lucide 图标）：小窗的独立入口不加载 Tailwind，
+   而 `size-[12px]` 这类类名在那里**无效** —— lucide 会按默认 24px 画（探针实测过）。 */
+.si-glyph {
+  flex: none;
+  font-size: 12px;
+  line-height: 1;
+  opacity: 0.9;
+}
+
+/* 活数据槽：倒计时 / 进度（`47s`、`4/11`）单独一格，每秒刷新**不重排文案**。
+   产品今天是把 `（还剩 47s）` 拼进 text 里的 ⇒ 每秒重写整句、整句都走淡入淡出。
+   等宽数字：数字不等宽会让这一格左右抖。 */
+.si-island .si-value {
+  flex: none;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.92;
 }
 
 /* 面板：portal 到 body + fixed（顶栏 overflow:hidden 会裁掉内联面板） */
@@ -414,6 +545,13 @@ html[data-widget-window] #root {
   color: var(--c-text-sub);
 }
 
+/* ⚠️ 面板里的图标同理（D1）：`size-[13px]` 也是 Tailwind 类，小窗里无效 ⇒
+   lucide 按 24×24 画，条目行会被撑高、图标比文字大一圈。 */
+.si-item-icon svg {
+  width: 13px;
+  height: 13px;
+}
+
 .si-item-icon.k-alert {
   color: #ff4d4f;
 }
@@ -496,6 +634,12 @@ html[data-widget-window] #root {
 @media (prefers-reduced-motion: reduce) {
   .si-chevron {
     transition: none;
+  }
+
+  /* 点的脉冲也停（D1 从 `layout.css` 的 reduce 段搬来 —— 那条选择器是
+     `.topbar-status-dot.busy`，而小窗拿不到那个文件 ⇒ 小窗里 reduce 从来没生效过）。 */
+  .si-dot.busy {
+    animation: none;
   }
 
   .si-count {

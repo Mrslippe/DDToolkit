@@ -7,12 +7,16 @@ import { api } from '../api/api'
 import { EVENTS, on } from '../utils/appEvents'
 import {
   WIDGET_POS_KEY,
+  WIDGET_RESIZE_DEADBAND,
+  clampCapsuleW,
   relayWidgetAction,
   saveWidgetPos,
+  widgetCapsuleGeom,
   widgetCollapseGeom,
   widgetExpandGeom,
   widgetPanelMaxHeight,
 } from '../utils/widgetWindow'
+import type { WidgetAlign, WidgetDir } from '../utils/widgetWindow'
 
 /**
  * 桌面状态控件小窗（R38 批 5b，规格 §7/§8）。由 `?widget=1` 挂载。
@@ -48,6 +52,51 @@ import {
 
 /** 超过这个位移才算"在拖窗口"，否则算点击（`4px` 是常见的"手抖"容差） */
 const DRAG_THRESHOLD_PX = 4
+
+/**
+ * 读当前窗口矩形（**逻辑像素**口径，与 Rust 侧的 `LogicalSize`/`LogicalPosition` 一致）。
+ *
+ * 提到模块级而不是写在某个 effect 里：D1 起**两条**通路都要它
+ * （展开/收起那条；以及"内容变宽 ⇒ 折叠态窗口要跟上"那条 `ResizeObserver`）。
+ */
+async function readWidgetRect(): Promise<{ x: number; y: number; w: number; h: number }> {
+  const { getCurrentWindow } = await import('@tauri-apps/api/window')
+  const w = getCurrentWindow()
+  const size = await w.innerSize()
+  const pos = await w.outerPosition()
+  const sc = await w.scaleFactor()
+  return {
+    x: Math.round(pos.x / sc), y: Math.round(pos.y / sc),
+    w: Math.round(size.width / sc), h: Math.round(size.height / sc),
+  }
+}
+
+/** 当前所在显示器的尺寸（px）—— `currentMonitor()` 而不是主显示器：小窗可以被拖到副屏 */
+async function readScreenBox(): Promise<{ width: number; height: number }> {
+  const { currentMonitor } = await import('@tauri-apps/api/window')
+  const mon = await currentMonitor()
+  const sc = mon?.scaleFactor ?? 1
+  return {
+    width: Math.round((mon?.size.width ?? 1920) / sc),
+    height: Math.round((mon?.size.height ?? 1080) / sc),
+  }
+}
+
+/**
+ * 量胶囊的宽（**折叠态窗口就该是这么宽**）。
+ *
+ * ⚠️ 用 `offsetWidth`（**布局**宽）而不是 `getBoundingClientRect()`：胶囊有可能正处在
+ * 宽度过渡里（`calc-size(max-content, size)` 是可过渡的），rect 会量到中间帧的宽
+ * ⇒ 窗口跟着抖。`offsetWidth` 取的是布局结果，稳定。
+ *
+ * ⚠️ 胶囊的宽**与窗口宽无关**（`max-content` + min/max-width）⇒ 这里读它**不构成
+ * 自指循环**：`widgetPanelMaxHeight` 那条注释记过三次"按窗口算"的循环，这是第四次
+ * 躲开它的办法 —— **让被量的东西不受结果影响**。
+ */
+function readCapsuleW(): number {
+  const el = document.querySelector<HTMLElement>('.si-island')
+  return clampCapsuleW(el?.offsetWidth ?? 0)
+}
 
 /**
  * **dev-only**：探针往小窗注入条目的页面事件名。
@@ -100,23 +149,26 @@ export default function StatusWidgetWindow() {
    */
   const expanded = useRef(false)
   /**
-   * 展开**之前**胶囊所在的位置（收起时精确回到这里）。
+   * 展开**之前**胶囊所在的矩形（收起时精确回到这里）。
    *
-   * ⚠️ 为什么要存而不是反推：贴屏幕边的窗口展开时会**被夹**（200→280 宽必须收回来，
+   * ⚠️ 为什么要存而不是反推：贴屏幕边的窗口展开时会**被夹**（200→400 宽必须收回来，
    * 否则面板出屏），于是"展开矩形的中心"已经不是原来那个中心了 —— 反推回去会越来越偏，
    * 每次悬停漂几十像素，久了小窗就爬走了。有单测守这条（`反复展开/收起不漂移`）。
+   * ⚠️ D1 起连**宽**一起存：内容在展开期间可能变（方案 A），只回位置会让胶囊中心漂掉。
    */
-  const preExpandPos = useRef<{ x: number; y: number } | null>(null)
+  const preExpandPos = useRef<{ x: number; y: number; w: number } | null>(null)
   /**
-   * 面板开在胶囊上方（贴屏幕下沿时向上翻）—— 决定 `.widget-shell` 的对齐。
+   * 面板往哪一边长（D1 四方向）—— 决定 `.widget-shell` 的 `data-dir` 与胶囊的纵向偏移。
    *
    * ⚠️ **同一份事实必须同时存在于 ref 与 state**（2026-09-24 eslint 逼出来的）：
-   * `sync()` 跑在一个 `[]` 依赖的 effect 里 ⇒ 它**闭包捕获的是首次渲染的 `flipUp`**
-   * （恒为 `false`）。收起时若直接读 state，无论展开时翻没翻，都会按"没翻"去算位置 ⇒
-   * 贴屏幕下沿的小窗收起来会**往上跳一截**。所以逻辑一律读 ref，state 只负责渲染。
+   * `sync()` 跑在一个 `[]` 依赖的 effect 里 ⇒ 它**闭包捕获的是首次渲染的 `dir`**
+   * （恒为 `'down'`）。收起时若直接读 state，无论展开时朝哪边，都会按"向下"去算位置。
+   * 所以逻辑一律读 ref，state 只负责渲染。
    */
-  const flipUpRef = useRef(false)
-  const [flipUp, setFlipUp] = useState(false)
+  const dirRef = useRef<WidgetDir>('down')
+  const [dir, setDir] = useState<WidgetDir>('down')
+  /** 横向：面板往左/居中/往右长（几何给的，探针与文档读它；渲染只用到胶囊偏移） */
+  const [align, setAlign] = useState<WidgetAlign>('center')
 
   // ① **dev-only 的注入通路**（R38 批 5d，M5-2b 起注入的是"本地覆盖"那一层）：
   //    探针（无头浏览器）里没有推送也没有后端条目，于是小窗**永远是空闲态**
@@ -277,8 +329,12 @@ export default function StatusWidgetWindow() {
         '--widget-panel-max-h', `${widgetPanelMaxHeight(avail)}px`)
     }
     set()
-    // 折叠态起手：偏移归零（窗口 == 胶囊）。展开时由几何写真实值。
+    // 折叠态起手：两条轴的偏移都归零（窗口 == 胶囊）。展开时由几何写真实值。
+    // ⚠️ 这里**必须**设（不能只靠几何那条 effect）：真机上几何跑在首绘之后，而探针环境里
+    //    几何**根本不跑**（没有 `__TAURI_INTERNALS__`）—— 变量不设的话，探针量到的偏移
+    //    是"CSS 自己的居中"而不是几何给的值（这正是第 5 次「拆入口顺带生效的东西」的现场）。
     document.documentElement.style.setProperty('--widget-capsule-offset', '0px')
+    document.documentElement.style.setProperty('--widget-capsule-x', '0px')
     // 换显示器 / 改分辨率时 `screen.availHeight` 会变，但**不会**触发 window resize ——
     // 用 `matchMedia` 盯分辨率变化（比轮询便宜，且只在真正变化时醒）。
     let mq: MediaQueryList | null = null
@@ -303,26 +359,10 @@ export default function StatusWidgetWindow() {
     if (!('__TAURI_INTERNALS__' in window)) return   // 探针/浏览器：没有真窗口可 resize
     let alive = true
 
-    /** 读当前窗口矩形（逻辑像素口径与 Rust 侧一致） */
-    const curRect = async () => {
-      const { getCurrentWindow } = await import('@tauri-apps/api/window')
-      const w = getCurrentWindow()
-      const size = await w.innerSize()
-      const pos = await w.outerPosition()
-      const sc = await w.scaleFactor()
-      return {
-        x: Math.round(pos.x / sc), y: Math.round(pos.y / sc),
-        w: Math.round(size.width / sc), h: Math.round(size.height / sc),
-      }
-    }
-    const screenBox = async () => {
-      const { currentMonitor } = await import('@tauri-apps/api/window')
-      const mon = await currentMonitor()
-      const sc = mon?.scaleFactor ?? 1
-      return {
-        width: Math.round((mon?.size.width ?? 1920) / sc),
-        height: Math.round((mon?.size.height ?? 1080) / sc),
-      }
+    /** 两条轴的胶囊偏移都写进 CSS 变量（**几何是唯一真源**，CSS 不许自己判） */
+    const applyOffsets = (x: number, y: number) => {
+      document.documentElement.style.setProperty('--widget-capsule-x', `${x}px`)
+      document.documentElement.style.setProperty('--widget-capsule-offset', `${y}px`)
     }
 
     const sync = async () => {
@@ -330,9 +370,12 @@ export default function StatusWidgetWindow() {
         const panel = document.querySelector<HTMLElement>('.si-panel')
         const want = !!panel
         if (want === expanded.current) return        // 状态没变：一次 IPC 都不发
-        const cur = await curRect()
-        const screen = await screenBox()
+        const cur = await readWidgetRect()
+        const screen = await readScreenBox()
         if (!alive) return
+        // 胶囊宽 = 窗口该有的宽（折叠态窗口 == 胶囊）。用**量出来的**而不是常量：
+        // D1 起胶囊宽跟着内容走（200–400），写死一个数就会把胶囊裁掉。
+        const capW = readCapsuleW()
         const { resizeWidgetWindow } = await import('../utils/shellBridge')
         if (want) {
           // ⚠️ 量**面板自己的高**（不是 `getBoundingClientRect`：入场动画的
@@ -340,27 +383,30 @@ export default function StatusWidgetWindow() {
           //    高度上限 `--widget-panel-max-h` 已由**上面那条独立 effect** 设好
           //    （不放在这里：这里在非桌面端直接 return，变量就永远设不上 —— 见那条注释）。
           const h = panel ? panel.offsetHeight : 0
-          // 记下展开前的位置：收起时要精确回到这里（反推会漂，见 `preExpandPos` 注释）
-          preExpandPos.current = { x: cur.x, y: cur.y }
-          const geom = widgetExpandGeom(cur, h, screen)
+          // 记下展开前胶囊的矩形：收起时要精确回到这里（反推会漂，见 `preExpandPos` 注释）
+          preExpandPos.current = { x: cur.x, y: cur.y, w: capW }
+          // `{...cur, w: capW}`：几何要的是**胶囊**矩形，而实测里它等于窗口矩形
+          // （折叠态窗口就是胶囊）。宽用刚量到的胶囊宽 —— 窗口那一侧可能还差一帧没跟上。
+          const geom = widgetExpandGeom({ ...cur, w: capW }, h, screen)
           expanded.current = true
-          flipUpRef.current = geom.flipUp
-          setFlipUp(geom.flipUp)
-          // ⚠️ **胶囊在窗口内的偏移必须跟着几何走**（批 5g）：
-          //    贴屏幕上沿时窗口会被夹（顶边不能为负），此时"胶囊贴窗口底边"
-          //    这个 CSS 假设就不成立了（实测：期望 143、真实 10）⇒ 胶囊跳到窗口中间、
-          //    和面板叠住。几何把真实偏移算好了，这里写进 CSS 变量。
-          document.documentElement.style.setProperty(
-            '--widget-capsule-offset', `${geom.capsuleOffset}px`)
+          dirRef.current = geom.dir
+          setDir(geom.dir)
+          setAlign(geom.align)
+          // ⚠️ **胶囊在窗口内的偏移必须跟着几何走**（批 5g 纵向 / D1 横向）：
+          //    贴屏幕上沿时窗口会被夹（顶边不能为负），此时"胶囊贴窗口顶边"这个 CSS 假设
+          //    就不成立了（实测：期望 143、真实 10）⇒ 胶囊跳到窗口中间、和面板叠住。
+          //    横向同理：面板往左/右长时胶囊要贴住对应的边。两条都写进 CSS 变量。
+          applyOffsets(geom.capOffsetX, geom.capOffsetY)
           const ok = await resizeWidgetWindow(geom)
           console.info('[widget] 展开 →', geom, 'ok=', ok)
         } else {
           expanded.current = false
-          const geom = widgetCollapseGeom(cur, screen, flipUpRef.current, preExpandPos.current)
-          flipUpRef.current = false
-          setFlipUp(false)
-          // 折叠态：窗口 == 胶囊 ⇒ 偏移归零（否则胶囊会被上一次的偏移顶下去）
-          document.documentElement.style.setProperty('--widget-capsule-offset', '0px')
+          const geom = widgetCollapseGeom(cur, screen, capW, preExpandPos.current)
+          dirRef.current = 'down'
+          setDir('down')
+          setAlign('center')
+          // 折叠态：窗口 == 胶囊 ⇒ 两个偏移都归零（否则胶囊会被上一次的偏移顶偏）
+          applyOffsets(0, 0)
           const ok = await resizeWidgetWindow(geom)
           console.info('[widget] 收起 →', geom, 'ok=', ok)
         }
@@ -372,6 +418,48 @@ export default function StatusWidgetWindow() {
     const mo = new MutationObserver(() => void sync())
     mo.observe(document.body, { childList: true, subtree: false })
     return () => { alive = false; mo.disconnect() }
+  }, [])
+
+  // ⑨ 折叠态：**内容变宽/变窄 ⇒ 窗口要跟上去**（D1「方案 A：宽度跟内容走」）。
+  //
+  //    ⚠️ 没有这条会怎样：胶囊是 `max-content`，文案变长时它自己就长到 300 了，
+  //    而窗口还是 200 ⇒ 右半边被 `.widget-shell` 的 `overflow:hidden` **裁掉**，
+  //    用户看到的是"话说到一半没了"（而且探针在小窗坐标系里量得到、单测量不到）。
+  //
+  //    ⚠️ 为什么用 `ResizeObserver` 而不是在渲染时算：胶囊的宽由**字体度量 + 内容**决定，
+  //    只有浏览器知道；`ResizeObserver` 正好在布局完成后回调一次（不产生额外帧）。
+  //    也不能用 `MutationObserver` 盯文本 —— 文案换字未必改宽度，计数/字形出现却会改。
+  //
+  //    ⚠️ **不会自指**：窗口宽变了**不会**改胶囊宽（`max-content` 与容器宽无关），
+  //    所以"观察 → 改窗口 → 又触发观察"这条回路不存在（`WIDGET_RESIZE_DEADBAND`
+  //    是第二道保险，挡的是活数据每秒 ±1px 的抖动）。
+  useEffect(() => {
+    if (!('__TAURI_INTERNALS__' in window)) return
+    const cap = document.querySelector<HTMLElement>('.si-island')
+    if (!cap) return
+    let alive = true
+    let last = cap.offsetWidth
+    const fit = async () => {
+      if (!alive || expanded.current) return   // 展开态：窗口宽 = 面板宽 ≥ 胶囊上限 ⇒ 不用动
+      const capW = readCapsuleW()
+      if (Math.abs(capW - last) < WIDGET_RESIZE_DEADBAND) return
+      last = capW
+      try {
+        const cur = await readWidgetRect()
+        const screen = await readScreenBox()
+        if (!alive) return
+        const g = widgetCapsuleGeom(cur, screen, capW)
+        if (Math.abs(g.x - cur.x) < 1 && Math.abs(g.w - cur.w) < 1) return
+        const { resizeWidgetWindow } = await import('../utils/shellBridge')
+        const ok = await resizeWidgetWindow(g)
+        console.info('[widget] 内容宽变化 →', capW, g, 'ok=', ok)
+      } catch (e) {
+        console.warn('[widget] 跟随内容宽失败', e)
+      }
+    }
+    const ro = new ResizeObserver(() => void fit())
+    ro.observe(cap)
+    return () => { alive = false; ro.disconnect() }
   }, [])
 
   // ⑧ dev 自检条的填充（生产构建里 `import.meta.env.DEV` 为 false ⇒ 整段被摇掉）
@@ -436,9 +524,14 @@ export default function StatusWidgetWindow() {
   return (
     <div
       className="widget-shell"
-      /* 展开方向（R38 批 5d）：向上翻时胶囊要落到窗口**底边**（面板在它上方）。
-         少了这个属性，窗口向上长、胶囊却还在窗口顶部 ⇒ 面板与胶囊错位。 */
-      data-flip={flipUp ? 'up' : 'down'}
+      /* 展开方向（R38 批 5d；D1 起从 `data-flip` 换成 `data-dir` 并加 `data-align`）：
+         面板开在胶囊的哪一边**由几何算完写在这里**（`widgetExpandGeom`），
+         `StatusIsland.place()` 只跟随它 —— 面板定位的**唯一方向真源**。
+         少了这个属性，窗口朝一边长、面板却按另一边画 ⇒ 面板落在窗口外（那个 bug 的翻版）。
+         ⚠️ 四方向之后**必须只有这一个来源**：`place()` 自己再判一次就会与几何打架
+         （09-27 样例页的「牵动哪些地方」第一条点名的就是这个）。 */
+      data-dir={dir}
+      data-align={align}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}

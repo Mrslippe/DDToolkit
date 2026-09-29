@@ -471,8 +471,8 @@ W1/W2 可以在**现在的架构上**做完，但它们只是让 W3 少踩坑。
 |---|---|---|
 | 后端 | `python -m pytest -q`（**解释器走 `.venv`**，见 `ARCHITECTURE.md` §6 第 24 条） | **971 passed**（2026-09-29 实测；另有 1 条**打真上游**的用例按设计 skip ⇒ 那一格是 971 passed / 1 skipped）。⚠️ 用**系统 Python**（非 `.venv`）跑会多一条 `xhshow` 缺失的失败 —— 那是本机环境差异，不是回归 |
 | 桌面壳 | `cargo test`（工作目录 `frontend/src-tauri`） | **62 passed**（2026-09-27 实测；含 `delete_old_dir` 的真实 junction 用例、S1 的 token 生成用例、S3 的准入表/白名单用例与**迁移编排四条回滚路径**） |
-| 前端单测 | `npm --prefix frontend run test` | **790 passed / 62 文件**（2026-09-29 实测；条数确定，不随上游浮动） |
-| 前端类型 / lint | `npx tsc --noEmit`（**必须在 `frontend/` 里跑**）/ `npm --prefix frontend run lint` | 0 错 / 0 错（2026-09-26 复核） |
+| 前端单测 | `npm --prefix frontend run test` | **820 passed / 62 文件**（2026-09-30 实测；条数确定，不随上游浮动） |
+| 前端类型 / lint | `npx tsc --noEmit`（**必须在 `frontend/` 里跑**）/ `npm --prefix frontend run lint` | 0 错 / 0 错（2026-09-30 复核） |
 | 文档漂移 | `python scripts/doc_check.py` | **0 FAIL**（2026-09-26 复核；另有 1 条历史 devlog 索引欠账 WARN，WARN 看脚本逐条输出） |
 | 上游冒烟 | `python scripts/smoke_upstream.py [--cold]` | 真上游 **5 ok** / 冷进程 **3 ok**，0 FAIL（2026-09-23 复核） |
 | 未登录能力矩阵 | `python scripts/capability_matrix.py --write` | 两态逐接口实测（结论 = `docs/ARCHITECTURE.md` §3.9；**`--include-content` 触发 IP 级 412，别顺手跑**） |
