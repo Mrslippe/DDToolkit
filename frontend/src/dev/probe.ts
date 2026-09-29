@@ -1898,10 +1898,22 @@ export async function runUiProbe(): Promise<void> {
       }
       return null
     }
+    /**
+     * 命中测试：**只看生产里也会存在的元素**（R48 那条"DEV 启动诊断覆盖层"教训的第二次现身）。
+     *
+     * ⚠️ `elementFromPoint` 只看"最上面那个"，而 DEV 的 `#boot-diag`（资源加载失败 ≥3 次才弹，
+     * 里面是一个 `<pre>` 堆栈）会**整块压在界面之上** —— 于是"面板里的条目不可命中"这条判据
+     * 在探针里恒红，而生产根本没这个元素（实测：`elementFromPoint` 返回 `pre.`、面板矩形正常、
+     * 条目矩形正常、pointer-events 都是 auto ⇒ 不是产品的问题）。
+     * ⇒ 在**元素栈**里跳过 `#boot-diag` 子树，取"生产里真正会接住这一击"的那个元素。
+     */
     const hits = (el: HTMLElement | null, x: number, y: number) => {
       if (!el) return false
-      const hit = document.elementFromPoint(x, y)
-      return !!hit && (hit === el || el.contains(hit))
+      for (const node of document.elementsFromPoint(x, y)) {
+        if (node.closest?.('#boot-diag')) continue     // dev-only 覆盖层，生产里不存在
+        return node === el || el.contains(node)
+      }
+      return false
     }
     /** 上游请求计数（resource timing）：按路径数，不看响应内容 */
     const reqs = (frag: string) =>
@@ -2222,10 +2234,22 @@ export async function runUiProbe(): Promise<void> {
       }
       return null
     }
+    /**
+     * 命中测试：**只看生产里也会存在的元素**（R48 那条"DEV 启动诊断覆盖层"教训的第二次现身）。
+     *
+     * ⚠️ `elementFromPoint` 只看"最上面那个"，而 DEV 的 `#boot-diag`（资源加载失败 ≥3 次才弹，
+     * 里面是一个 `<pre>` 堆栈）会**整块压在界面之上** —— 于是"面板里的条目不可命中"这条判据
+     * 在探针里恒红，而生产根本没这个元素（实测：`elementFromPoint` 返回 `pre.`、面板矩形正常、
+     * 条目矩形正常、pointer-events 都是 auto ⇒ 不是产品的问题）。
+     * ⇒ 在**元素栈**里跳过 `#boot-diag` 子树，取"生产里真正会接住这一击"的那个元素。
+     */
     const hits = (el: HTMLElement | null, x: number, y: number) => {
       if (!el) return false
-      const hit = document.elementFromPoint(x, y)
-      return !!hit && (hit === el || el.contains(hit))
+      for (const node of document.elementsFromPoint(x, y)) {
+        if (node.closest?.('#boot-diag')) continue     // dev-only 覆盖层，生产里不存在
+        return node === el || el.contains(node)
+      }
+      return false
     }
     const island = () => document.querySelector<HTMLElement>('.si-island')
     const spacerW = () => Math.round(
@@ -3218,10 +3242,22 @@ export async function runUiProbe(): Promise<void> {
       return null
     }
     /** 命中测试：某点上的元素是否落在 el 之内（吃 pointer-events 时必然为 false） */
+    /**
+     * 命中测试：**只看生产里也会存在的元素**（R48 那条"DEV 启动诊断覆盖层"教训的第二次现身）。
+     *
+     * ⚠️ `elementFromPoint` 只看"最上面那个"，而 DEV 的 `#boot-diag`（资源加载失败 ≥3 次才弹，
+     * 里面是一个 `<pre>` 堆栈）会**整块压在界面之上** —— 于是"面板里的条目不可命中"这条判据
+     * 在探针里恒红，而生产根本没这个元素（实测：`elementFromPoint` 返回 `pre.`、面板矩形正常、
+     * 条目矩形正常、pointer-events 都是 auto ⇒ 不是产品的问题）。
+     * ⇒ 在**元素栈**里跳过 `#boot-diag` 子树，取"生产里真正会接住这一击"的那个元素。
+     */
     const hits = (el: HTMLElement | null, x: number, y: number) => {
       if (!el) return false
-      const hit = document.elementFromPoint(x, y)
-      return !!hit && (hit === el || el.contains(hit))
+      for (const node of document.elementsFromPoint(x, y)) {
+        if (node.closest?.('#boot-diag')) continue     // dev-only 覆盖层，生产里不存在
+        return node === el || el.contains(node)
+      }
+      return false
     }
     await waitFor(() => document.querySelector('.bg-set'))
     // 关掉动画与过渡再量：弹窗入场是 `zoom-in-95`（transform 缩放），而探针跑在
@@ -3432,10 +3468,22 @@ export async function runUiProbe(): Promise<void> {
     //    （2026-09-15 踩到：Esc 明明关了，探针却一直判"没关掉"。）
     const dlgOpen = () =>
       !!document.querySelector('[data-testid="app-settings-dialog"][data-state="open"]')
+    /**
+     * 命中测试：**只看生产里也会存在的元素**（R48 那条"DEV 启动诊断覆盖层"教训的第二次现身）。
+     *
+     * ⚠️ `elementFromPoint` 只看"最上面那个"，而 DEV 的 `#boot-diag`（资源加载失败 ≥3 次才弹，
+     * 里面是一个 `<pre>` 堆栈）会**整块压在界面之上** —— 于是"面板里的条目不可命中"这条判据
+     * 在探针里恒红，而生产根本没这个元素（实测：`elementFromPoint` 返回 `pre.`、面板矩形正常、
+     * 条目矩形正常、pointer-events 都是 auto ⇒ 不是产品的问题）。
+     * ⇒ 在**元素栈**里跳过 `#boot-diag` 子树，取"生产里真正会接住这一击"的那个元素。
+     */
     const hits = (el: HTMLElement | null, x: number, y: number) => {
       if (!el) return false
-      const hit = document.elementFromPoint(x, y)
-      return !!hit && (hit === el || el.contains(hit))
+      for (const node of document.elementsFromPoint(x, y)) {
+        if (node.closest?.('#boot-diag')) continue     // dev-only 覆盖层，生产里不存在
+        return node === el || el.contains(node)
+      }
+      return false
     }
     /** 直接问后端要一次（**不看界面回显**） */
     const serverValue = async (key: string): Promise<number | boolean | null> => {
@@ -3716,9 +3764,19 @@ export async function runUiProbe(): Promise<void> {
       if (inputNow()) {
         result.saveEnabled = !!saveBtnNow() && !saveBtnNow()!.disabled
         saveBtnNow()?.click()
-        await waitFor(() => dlg.querySelector(`[data-setting="${FIELD}"] .aps-badge`), 5000)
-        await sleep(400)
-        result.afterValue = await serverValue(FIELD)
+        // ⚠️ **保存是"真网络"，等待必须能产生真实时间**（M4 记过的坑，这里是第二次现身）：
+        //    `waitFor` 用 `performance.now()` + `sleep`，而在虚拟时间下两者都被冻住/瞬间跳过
+        //    ⇒ PUT 还在飞、探针就去读服务端了。症状极像"后端拒绝了"：
+        //    界面回显对（本地草稿）、服务端没变、也没有「已改过」标记 —— 实测 3 跑 3 红。
+        //    修法同 M4：**每轮打一发真请求当进度条**（这里正好就是那句对账）。
+        let afterValue: number | boolean | null = null
+        for (let i = 0; i < 40; i++) {
+          afterValue = await serverValue(FIELD)
+          if (afterValue === 7) break
+          await sleep(50)
+        }
+        result.afterValue = afterValue
+        await waitFor(() => dlg.querySelector(`[data-setting="${FIELD}"] .aps-badge`), 1000)
         result.badgeShown = !!dlg.querySelector(`[data-setting="${FIELD}"] .aps-badge`)
         result.inputValueAfter = inputNow()?.value ?? null
         result.footState = text(dlg.querySelector('.aps-foot-state'))
@@ -3813,10 +3871,16 @@ export async function runUiProbe(): Promise<void> {
       optSystem?.click()
       await waitFor(
         () => dlg.querySelector('[data-theme-option="system"]')?.getAttribute('aria-checked') === 'true',
-        4000)
-      await sleep(400)
-      const prefAfter = await authFetch(`${getApiBase()}/settings/prefs`).then((r) => r.json())
-      result.themeServerAfter = prefAfter.values.theme
+        1000)
+      // 同上：偏好是**真网络**写的，等"服务端真的变了"（每轮一发真请求）
+      let themeAfter: string | null = null
+      for (let i = 0; i < 40; i++) {
+        themeAfter = (await authFetch(`${getApiBase()}/settings/prefs`).then((r) => r.json()))
+          .values.theme
+        if (themeAfter === 'system') break
+        await sleep(50)
+      }
+      result.themeServerAfter = themeAfter
       result.themeSelected = dlg.querySelector('[data-theme-option="system"]')
         ?.getAttribute('aria-checked')
       result.themeRootAttr = document.documentElement.getAttribute('data-theme')
@@ -3827,10 +3891,15 @@ export async function runUiProbe(): Promise<void> {
       dlg.querySelector<HTMLElement>('[data-theme-option="light"]')?.click()
       await waitFor(
         () => dlg.querySelector('[data-theme-option="light"]')?.getAttribute('aria-checked') === 'true',
-        4000)
-      await sleep(300)
-      result.themeServerRestored = (await authFetch(`${getApiBase()}/settings/prefs`)
-        .then((r) => r.json())).values.theme
+        1000)
+      let themeBack: string | null = null
+      for (let i = 0; i < 40; i++) {
+        themeBack = (await authFetch(`${getApiBase()}/settings/prefs`).then((r) => r.json()))
+          .values.theme
+        if (themeBack === 'light') break
+        await sleep(50)
+      }
+      result.themeServerRestored = themeBack
 
       // ⑬ 关闭（Esc 是 radix 的取消手势）。
       //    `&keepOpen=1` 时**跳过关闭**：视觉存档要用一张"弹窗开着"的图

@@ -48,10 +48,16 @@ export const PUSHED_PROGRESS_MS = 8000
  */
 export function mergeNotices(local: Notice[], server: Notice[] | null): Notice[] {
   const srv = server ?? []
-  const srvHasProgress = srv.some((n) => n.kind === 'progress')
+  // ⚠️ **按任务让位，不是按 kind**（2026-09-30 探针实测抓到）：本地那条"任务已受理"只该被
+  // **同一个任务**的服务端进度顶掉（`progress-post` / `progress-account`）——
+  // 写成"服务端只要有 progress 就让位"时，**外部同步**那条（`progress-external`，与手动动作
+  // 无关，且常常一直在跑）会把本地进度一起顶掉 ⇒ 点按钮的人又得等 3–10s 轮询（M2 的收益没了）。
+  // 旧口径（TopBar 的 `status.manual_running` 一变真就清 `pushedProgress`）也是这个粒度。
+  const srvHasTaskProgress = srv.some(
+    (n) => n.kind === 'progress' && (n.id === 'progress-post' || n.id === 'progress-account'))
   const srvHasMessage = srv.some((n) => n.kind === 'message')
   const kept = local.filter((n) => !(
-    (n.kind === 'progress' && srvHasProgress) || (n.kind === 'message' && srvHasMessage)
+    (n.kind === 'progress' && srvHasTaskProgress) || (n.kind === 'message' && srvHasMessage)
   ))
   const ids = new Set(kept.map((n) => n.id))
   return [...kept, ...srv.filter((n) => !ids.has(n.id))]

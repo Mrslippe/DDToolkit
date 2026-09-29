@@ -699,6 +699,12 @@ async def _pin_account_covers(db: Session, acc: Account,
       已固化过的（稳定键命中）**一个请求都不发**（所以重跑一轮的新增是 0）；
     - **复用平台客户端**（`_fetch_posts_for_account` 传下来的那个）：图片虽然走 CDN，
       也不新开并发、不绕开平台节奏（规格 §2.3）。
+    - ⚠️ **每张落盘就提交**，绝不把"网络下载"包在一个长写事务里。2026-09-29 实测踩到：
+      第一版从头到尾只 `commit()` 一次 ⇒ 从第一张 `put` 起 SQLite 就持有写锁，而后面
+      **每张图都要下载几秒**（慢的还会 ReadTimeout 15s）⇒ 整个进程里**所有别的写**
+      全部 `database is locked`（探针那次的现场：设置保存静默失败、`_seed_accounts` 直接崩、
+      日志里 `local_assets.last_used_at` 都写不进去）。这与 `_status_lock` 那条纪律同源：
+      **锁内不做网络 / 重 IO**。
     """
     if not bool(getattr(settings, "PIN_POST_COVERS", True)):
         return 0                              # 设置项关掉 ⇒ 一个请求都不发
@@ -743,11 +749,11 @@ async def _pin_account_covers(db: Session, acc: Account,
                 logger.info(f"封面固化跳过 post#{post_id}：HTTP {resp.status_code}")
                 continue
             assets.put(db, assets.KIND_COVER, u, resp.content, hint=str(post_id))
+            db.commit()          # ⚠️ 立刻放锁：下一张的下载不许挂在写事务里（见 docstring）
             by_key[key] = True
             added += 1
             got_bytes += len(resp.content)
         if added:
-            db.commit()
             logger.info(f"封面固化：账号 {acc.platform}:{acc.platform_uid} 本轮新增 {added} 张")
     finally:
         if own and client is not None:

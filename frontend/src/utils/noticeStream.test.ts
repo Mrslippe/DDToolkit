@@ -32,6 +32,15 @@ describe('mergeNotices — 本地覆盖 vs 服务端列表', () => {
     expect(mergeNotices(own, []).map((x) => x.id)).toEqual(['live-1', 'pushed-progress'])
   })
 
+  it('⚠️ 服务端只有**别的任务**的进度（外部同步）⇒ 本地那份**留着**（按任务让位，不按 kind）', () => {
+    // 2026-09-30 探针实测抓到的真 bug：外部同步那条 progress 一直在跑，把"任务已受理"顶掉了
+    // ⇒ 点按钮的人又得等 3–10s 轮询，M2 的收益整个没了。
+    const own = [n({ id: 'pushed-progress', kind: 'progress', text: '账号信息抓取中 - 七海' })]
+    const server = [n({ id: 'progress-external', kind: 'progress', text: '正在同步第三方数据' })]
+    expect(mergeNotices(own, server).map((x) => x.id))
+      .toEqual(['pushed-progress', 'progress-external'])
+  })
+
   it('服务端报到同类进度 ⇒ 本地那份让位（否则界面显示两条进度）', () => {
     const own = [n({ id: 'pushed-progress', kind: 'progress' })]
     const server = [n({ id: 'progress-post', kind: 'progress' })]

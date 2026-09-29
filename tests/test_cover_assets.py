@@ -145,6 +145,45 @@ def test_round_stops_at_the_byte_cap(db, data_dir):
     assert len(client.calls) == 3, "超过字节上限之后还在发请求"
 
 
+def test_每张落盘即提交_不给别的写者留锁(db, data_dir, tmp_path):
+    """①″ **每张封面落盘就提交**：下载第 2 张时，第 1 张必须已经能被**另一个会话**看见。
+
+    判据为什么必须有（2026-09-29 实测）：第一版从头到尾只 commit 一次 ⇒ 从第一张 `put`
+    起 SQLite 就持写锁，而后面每张图都要下载几秒（慢的 ReadTimeout 15s）⇒ 同一进程里
+    所有别的写全部 `database is locked`（现场：探针里"保存设置"静默失败、`_seed_accounts` 崩）。
+    """
+    from app.core.database import Base
+    from sqlalchemy import create_engine
+
+    acc = _mk_acc(db)
+    for i in range(3):
+        _mk_post(db, acc, f"c{i}", f"https://i0.hdslb.com/bfs/archive/c{i}.jpg")
+
+    seen: list[int] = []
+    engine2 = create_engine(f"sqlite:///{(_TMPDIR / 'cover.db').as_posix()}",
+                            connect_args={"check_same_thread": False})
+    Session2 = sessionmaker(bind=engine2, autoflush=False, autocommit=False)
+
+    class _Peek(_CountingClient):
+        async def get(self, url: str) -> _Resp:
+            # 每次下载**之前**另开一个会话数一遍：上一张应当已经落库（= 已提交、锁已放）
+            other = Session2()
+            try:
+                seen.append(other.query(LocalAsset).filter(
+                    LocalAsset.kind == assets.KIND_COVER).count())
+            finally:
+                other.close()
+            return await super().get(url)
+
+    asyncio.run(sch._pin_account_covers(db, acc, client=_Peek()))
+
+    assert seen[0] == 0, "第一张之前不该有已落库的封面"
+    assert seen[1] == 1, (
+        f"下载第 2 张时第 1 张还没提交（另开会话只看到 {seen[1]} 条）—— "
+        f"写事务被网络下载一直占着，别的写会 database is locked")
+    assert seen[2] == 2, f"第 3 张之前应当已提交 2 张，实际 {seen[2]}"
+
+
 def test_only_unarchived_posts_are_pinned(db, data_dir):
     """③ 归档帖**不固化**（它不在列表里滚，没必要占地方）。"""
     acc = _mk_acc(db)

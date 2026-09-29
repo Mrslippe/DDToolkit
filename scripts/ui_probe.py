@@ -94,8 +94,39 @@ def _find_edge() -> str | None:
     return None
 
 
-# 探针用的数据目录源文件（静态图片缓存不需要）
-_SEED_FILES = ("vtuber.db", "vtuber.db-wal", "vtuber.db-shm", ".env", "vtubers.csv")
+# 探针用的数据目录源文件（静态图片缓存不需要）。
+# ⚠️ **只列普通文件**：库走下面的 `_copy_db_online()`（在线备份 API），
+#    **绝不拷 `-wal` / `-shm`** —— 见那个函数的注释。
+_SEED_FILES = (".env", "vtubers.csv")
+
+
+def _copy_db_online(src: Path, dst: Path) -> bool:
+    """用 SQLite **在线备份 API** 把库拷成一个**自洽的单文件**（成功返回 True）。
+
+    为什么不能 `shutil.copy2(vtuber.db)`（2026-09-29 实测踩到，这条坑本仓已经记过一次）：
+    - **`-shm` 永远不该被拷**：它是进程内共享内存（锁表 / WAL 索引），拷过去会让 SQLite
+      以为"别的进程正持着锁" ⇒ 之后所有写都 `database is locked`。实测症状：
+      探针里"保存设置"静默失败（界面回显对、服务端没变）、`_seed_accounts` 直接崩
+      （`sqlite3.OperationalError: database is locked`），后端日志里也是同一句；
+    - **只拷主库文件会漏掉 WAL 里已提交的事务**（本仓 A0 批次记过）：探针于是拿一份
+      **陈旧**的库去跑判据 —— 那是"判据测的不是当前数据"这类更隐蔽的坏法。
+    在线备份 API 一次解决两条：它读的是**当前一致快照**，落盘是**单个完整文件**。
+    """
+    import sqlite3
+
+    if not src.exists():
+        return False
+    con = sqlite3.connect(f"file:{src.as_posix()}?mode=ro", uri=True)
+    try:
+        out = sqlite3.connect(dst)
+        try:
+            con.backup(out)               # 在线备份：源库可以在被写
+            out.commit()
+        finally:
+            out.close()
+    finally:
+        con.close()
+    return True
 
 
 def _prepare_data(empty: bool = False) -> Path:
@@ -118,6 +149,7 @@ def _prepare_data(empty: bool = False) -> Path:
         src = DEV_DATA / f
         if src.exists():
             shutil.copy2(src, seed / f)
+    _copy_db_online(DEV_DATA / "vtuber.db", seed / "vtuber.db")
 
     data = WORK / "data"
     if data.exists():                      # 上一次运行的残留：整棵清掉（含 .first-run-done）
@@ -129,6 +161,7 @@ def _prepare_data(empty: bool = False) -> Path:
         src = seed / f
         if src.exists():
             shutil.copy2(src, data / f)
+    _copy_db_online(seed / "vtuber.db", data / "vtuber.db")
     return data
 
 
@@ -371,6 +404,22 @@ def _seed_accounts(data: Path, vtuber_id: int, want: int) -> dict:
     finally:
         con.close()
     return {"total": total, "added": len(names), "names": names}
+
+
+def _backend_tail(lines: int = 6) -> str:
+    """探针那次后端日志的尾巴（失败时附在消息里）。
+
+    为什么值得：设置保存失败有三种完全不同的原因 —— 界面没发出去 / 后端拒了（400）/
+    库被锁了（500）。症状**长得一模一样**（界面回显对、服务端没变），而日志一句话分得清。
+    2026-09-29 实测就是靠它查出 `database is locked`（探针拷了 `-shm` 的锅）。
+    """
+    log = WORK / "backend.log"
+    try:
+        tail = log.read_text(encoding="utf-8", errors="replace").splitlines()[-lines:]
+    except OSError:
+        return ""
+    hits = [ln.strip() for ln in tail if "ERROR" in ln or "WARNING" in ln or "Traceback" in ln]
+    return f"；后端日志：{' | '.join(hits[-3:])}" if hits else ""
 
 
 def _prepare_logged_out() -> Path:
@@ -2826,7 +2875,8 @@ def main() -> int:
                     #    "存了没生效"那种坏法照样能让回显正确。
                     if aps.get("afterValue") != 7:
                         failures.append(f"@{w} app-settings: 保存后**服务端**的值是 "
-                                        f"{aps.get('afterValue')}，应为 7（界面回显={aps.get('inputValueAfter')!r}）")
+                                        f"{aps.get('afterValue')}，应为 7"
+                                        f"（界面回显={aps.get('inputValueAfter')!r}）{_backend_tail()}")
                     if not aps.get("badgeShown"):
                         failures.append(f"@{w} app-settings: 改过的项没有「已改过」标记")
                     if not aps.get("hasResetBtn"):
