@@ -23,7 +23,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import FloatPill from './common/FloatPill'
 import { api } from '../api/api'
-import type { AppSettings, SettingSpec, StorageInfo } from '../api/types'
+import type { AppSettings, AssetsInfo, AssetsPruneResult, SettingSpec, StorageInfo } from '../api/types'
 import { usePrefs } from '../hooks/usePrefs'
 import { formatBytes } from '../utils/format'
 import {
@@ -176,6 +176,10 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
       拿它做轮询是浪费。取不到就只显示上面的只读信息，不打扰用户。 */
   const [storage, setStorage] = useState<StorageInfo | null>(null)
   const [storageBusy, setStorageBusy] = useState<string | null>(null)
+  /** 轻资产读数（L2，devlog/260）：与 `storage` 同一次加载（同一个面板里的两组数字） */
+  const [assets, setAssets] = useState<AssetsInfo | null>(null)
+  /** 轻资产清理的预览（`prune --dry-run`）：非 null 时弹确认框 —— 先看要删什么，再真删 */
+  const [prunePreview, setPrunePreview] = useState<AssetsPruneResult | null>(null)
   /** 桌面端才知道的信息：数据目录**来源**与是否便携（浏览器/探针环境恒为 null） */
   const [shellDir, setShellDir] = useState<ShellDataDirInfo | null>(null)
   const [migrateBusy, setMigrateBusy] = useState(false)
@@ -195,6 +199,8 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
     if (!open || active !== ABOUT_ID || storage) return
     let alive = true
     void api.getStorage().then((st) => { if (alive) setStorage(st) }).catch(() => undefined)
+    // 轻资产读数与它同一时机取（同一块面板里的两组数字，分两次请求会让它们不同步）
+    void api.getAssets().then((a) => { if (alive) setAssets(a) }).catch(() => undefined)
     return () => { alive = false }
   }, [open, active, storage])
 
@@ -208,6 +214,7 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
       setOldDirId(got.migrationId)
       setShellDir(await storageInfo())
       setStorage(await api.getStorage())
+      setAssets(await api.getAssets())
       toast.success(`数据已迁移到 ${got.dataDir}（${got.files} 个文件）。`
         + '旧目录仍保留，确认一切正常后可以删掉。')
     } catch (e) {
@@ -226,6 +233,7 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
       setOldDir(null)
       setOldDirId(null)
       setStorage(await api.getStorage())
+      setAssets(await api.getAssets())
       toast.success(`旧目录已删除，释放 ${formatBytes(freed)}`)
     } catch (e) {
       toast.error(`删除旧目录失败：${(e as Error).message}`)
@@ -287,6 +295,45 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
       setUpdateState('error')
     } finally {
       setInstalling(false)
+    }
+  }
+
+  /**
+   * 轻资产清理（L2）：**先预览、再确认、才真删**。
+   *
+   * 为什么不能一键直删：轻资产副本不是缓存（规格 §2.5）—— 清它**会**破图，
+   * 所以被 `vtubers.avatar` 选中的、被历次头像账本引用的一律不动，其余按 LRU 淘汰。
+   * 预览与实际删除是**同一个端点、同一份计算**（只差 `dry_run`），
+   * 所以确认框里那几个数字就是真会发生的数量。
+   */
+  const previewAssetPrune = async () => {
+    setStorageBusy('assets-preview')
+    try {
+      const got = await api.pruneAssets({ dry_run: true })
+      const n = Object.values(got.kinds).reduce((s, k) => s + k.evicted.length, 0)
+      setAssets(got.assets)
+      if (n === 0) toast.info('没有可清理的轻资产（被引用的和已固定的都不动）')
+      else setPrunePreview(got)
+    } catch (e) {
+      toast.error(`读取淘汰候选失败：${(e as Error).message}`)
+    } finally {
+      setStorageBusy(null)
+    }
+  }
+
+  const applyAssetPrune = async () => {
+    setStorageBusy('assets-prune')
+    try {
+      const got = await api.pruneAssets({ dry_run: false })
+      const n = Object.values(got.kinds).reduce((s, k) => s + k.evicted.length, 0)
+      const freed = Object.values(got.kinds).reduce((s, k) => s + k.freed_bytes, 0)
+      setAssets(got.assets)
+      setPrunePreview(null)
+      toast.success(`已清理 ${n} 项轻资产 · 释放 ${formatBytes(freed)}`)
+    } catch (e) {
+      toast.error(`清理失败：${(e as Error).message}`)
+    } finally {
+      setStorageBusy(null)
     }
   }
 
@@ -916,6 +963,24 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
                               上限 {formatBytes(storage.img_cache_max_bytes)}
                             </span>
                           </dd>
+                          {/* 轻资产长期副本（L2，devlog/260）：与「图片缓存」**并排** ——
+                              两者是两套不同的东西（规格 §2.5）：缓存随便清、外观不变；
+                              这一份是"认定的长期资源"，清它**会**破图，所以有固定与引用保护。 */}
+                          <dt>轻资产副本</dt>
+                          <dd data-storage="assets">
+                            <span>{formatBytes(assets?.total.bytes ?? 0)}</span>
+                            <span className="aps-storage-cap">
+                              {assets
+                                ? `${assets.total.files} 份`
+                                  + (Object.values(assets.kinds).some((k) => k.pinned)
+                                    ? ` · ${Object.values(assets.kinds)
+                                        .reduce((n, k) => n + k.pinned, 0)} 份已固定` : '')
+                                  + (Object.values(assets.kinds).some((k) => k.missing)
+                                    ? ` · ${Object.values(assets.kinds)
+                                        .reduce((n, k) => n + k.missing, 0)} 份索引有盘上没有` : '')
+                                : '读取中…'}
+                            </span>
+                          </dd>
                           <dt>日志</dt>
                           <dd data-storage="logs">
                             <span>{formatBytes(storage.groups.logs.bytes)}</span>
@@ -985,6 +1050,16 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
                         )}
                         {/* 动作行**放在整段最后**（用户 2026-09-19：「把那三个按钮（放）这一项的末尾」） */}
                         <div className="aps-storage-actions">
+                          {/* 轻资产清理（L2）：**先预览再确认**（预览与实际同一份计算） */}
+                          <FloatPill
+                            size="md" shape="text"
+                            data-testid="aps-prune-assets"
+                            disabled={storageBusy !== null || (assets?.total.files ?? 0) === 0}
+                            onClick={() => void previewAssetPrune()}
+                          >
+                            {storageBusy === 'assets-preview' ? '查看中…'
+                              : storageBusy === 'assets-prune' ? '清理中…' : '清理未使用的轻资产'}
+                          </FloatPill>
                           <FloatPill
                             size="md" shape="text"
                             disabled={storageBusy !== null
@@ -1122,6 +1197,34 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
         它原来是单击即执行的（`FloatPill` 的 onClick 直接调命令），
         而删除权当初只由"前端传什么路径"决定。现在删的是票据，但**确认这一步仍然必须有**：
         票据只证明"这个目录确实是我们刚迁移走的那份"，不证明"用户此刻真的想删它"。 */}
+    {/* 轻资产清理的确认框（L2）：数字来自 `prune --dry-run` 的**同一份计算** */}
+    <AlertDialog open={prunePreview !== null}
+                 onOpenChange={(o) => { if (!o) setPrunePreview(null) }}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>清理未使用的轻资产？</AlertDialogTitle>
+          <AlertDialogDescription>
+            {prunePreview && (() => {
+              const kinds = Object.entries(prunePreview.kinds).filter(([, k]) => k.evicted.length > 0)
+              const n = kinds.reduce((sum, [, k]) => sum + k.evicted.length, 0)
+              const freed = kinds.reduce((sum, [, k]) => sum + k.freed_bytes, 0)
+              return `将删除 ${n} 份本地副本（释放 ${formatBytes(freed)}）：`
+                + kinds.map(([kind, k]) => `${kind} ${k.evicted.length} 份`).join('、') + '。 '
+            })()}
+            被头像选择引用的、以及已固定的（用户选过的那张）不会被删。
+            删掉的只是本地副本，下次抓取会重新下载。
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>取消</AlertDialogCancel>
+          <AlertDialogAction data-testid="aps-prune-assets-confirm"
+                             onClick={() => void applyAssetPrune()}>
+            清理
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+
     <AlertDialog open={confirmDelOpen} onOpenChange={setConfirmDelOpen}>
       <AlertDialogContent>
         <AlertDialogHeader>

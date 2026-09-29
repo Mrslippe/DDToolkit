@@ -5,6 +5,9 @@
     POST /settings/reset  → 全部恢复默认
     GET  /prefs      → 界面偏好（R14b：主题）
     PUT  /prefs      → 保存界面偏好（枚举校验）
+    GET  /settings/assets          → 轻资产读数（按 kind，L2）
+    POST /settings/assets/prune    → 淘汰未 pin 且未被引用的（**默认 dry-run**）
+    POST /settings/assets/pin      → 长留标记
 
 口径见 `app/core/runtime_settings.py` 的模块注释：**只收"每轮读取"的键**，
 保存后下一轮生效、不用重启；启动期读取的项不在这里，只在 `readonly` 里如实列出原因。
@@ -23,12 +26,13 @@ import logging
 import os
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from app.core import runtime_settings
 from app.core.config import settings
 from app.core.database import get_db
+from app.services import assets
 
 logger = logging.getLogger(__name__)
 
@@ -315,3 +319,87 @@ def run_storage_maintenance():
                 f"还盘 {freed_pages} 页")
     return {"wal_before": wal["before"], "wal_after": wal["after"],
             "freed_pages": freed_pages, "storage": _storage_payload()}
+
+
+# ── 轻资产（L2，devlog/260）─────────────────────────────────────────────
+# 和上面那三个同族：都是"占地方的东西，看得见 + 能动手清"。放 `/settings` 而不是另开
+# `/assets` 一组：消费者只有设置页那一块（它已经在打 `/settings/storage`），
+# 而多一组路由就多一套鉴权面与前端 client（`ARCHITECTURE` §6 第 26 条那条白名单纪律）。
+#
+# 口径（规格 `docs/design-light-assets.md` §2.5）：轻资产副本**不是**缓存 ——
+# 清它**会**破图（所以有 pin 与引用保护）；`prune` 只删"未 pin 且未被引用"的。
+# 上面那个 `prune-cache`（图片缓存）才是"随便清、清完外观不变"的那一类。
+
+class AssetPruneIn(BaseModel):
+    """`POST /settings/assets/prune` 的请求体。
+
+    `dry_run` 默认 **true**：界面上的"清理"按钮先拿一份"将要删什么"给用户看，
+    确认之后才带 `dry_run=false` 再来一次（两端点形状一致 ⇒ 预览与实际是同一份计算）。
+    """
+    kind: str | None = None          # None = 所有 kind
+    max_bytes: int | None = None     # None = 用该 kind 的默认上限（头像不限 / 封面 1GB）
+    dry_run: bool = True
+
+    @field_validator("kind")
+    @classmethod
+    def _known_kind(cls, v: str | None) -> str | None:
+        """白名单之外一律 422 —— 静默忽略会让界面显示"清理完成"而实际什么都没扫到。"""
+        if v is not None and v not in assets.KINDS:
+            raise ValueError(f"未知的 kind：{v!r}（可选 {list(assets.KINDS)}）")
+        return v
+
+
+class AssetPinIn(BaseModel):
+    """`POST /settings/assets/pin`：长留标记（用户选过的头像 / 手动 pin）。"""
+    kind: str = "avatar"
+    url: str = Field(min_length=1, max_length=2048)
+    on: bool = True
+
+
+def _assets_payload(db: Session) -> dict:
+    """轻资产读数（按 kind 分账）+ 图片缓存那一份，供设置页并排显示"两套缓存的边界"。"""
+    from app.routers import img_proxy
+
+    st = assets.stats(db)
+    total_files = sum(v["files"] for v in st.values())
+    total_bytes = sum(v["bytes"] for v in st.values())
+    return {
+        "kinds": st,
+        "total": {"files": total_files, "bytes": total_bytes},
+        # 规格 §2.5 的判据就写在这条注释里：清空 img_cache **外观不变**，清空 assets 会破图
+        "img_cache": img_proxy.cache_stats(),
+    }
+
+
+@router.get("/assets")
+def get_assets(db: Session = Depends(get_db)):
+    """轻资产占用读数：按 kind 的文件数 / 字节 / pin 数 / **索引有盘上没有的条数** / 最旧一份。"""
+    return _assets_payload(db)
+
+
+@router.post("/assets/prune")
+def prune_assets(data: AssetPruneIn, db: Session = Depends(get_db)):
+    """按 LRU 淘汰未 pin 且未被引用的轻资产（**默认 dry-run**，先看要删什么）。
+
+    ⚠️ 与 `prune-cache` 的区别：这里删的是"认定的长期资源"，被 `vtubers.avatar` 选中的、
+    被历次头像账本引用的**一律不动**（`assets._referenced_keys`）—— 删错了就是用户头像破图。
+    """
+    report = assets.prune(db, data.kind, max_bytes=data.max_bytes, dry_run=data.dry_run)
+    if not data.dry_run:
+        db.commit()
+        got = report["kinds"]
+        logger.info("手动清理轻资产："
+                    + "，".join(f"{k} 删 {len(v['evicted'])} 个 / {v['freed_bytes']} 字节"
+                                for k, v in got.items()))
+    return {**report, "assets": _assets_payload(db)}
+
+
+@router.post("/assets/pin")
+def pin_asset(data: AssetPinIn, db: Session = Depends(get_db)):
+    """给一份轻资产打/撤长留标记。索引里没有它 ⇒ 404（不凭空造行）。"""
+    row = assets.pin(db, data.kind, data.url, data.on)
+    if row is None:
+        raise HTTPException(404, "这份资源还不在轻资产索引里（先让它被抓取固化一次）")
+    db.commit()
+    return {"kind": row.kind, "path": row.path, "pinned": bool(row.pinned),
+            "assets": _assets_payload(db)}

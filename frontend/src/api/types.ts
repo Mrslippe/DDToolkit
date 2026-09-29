@@ -504,6 +504,44 @@ export interface FetchStatus {
  * （前端只按它过滤过期，不自己算绝对过期时刻）。条目形状 = `utils/notificationHub.ts::Notice`
  * —— 那边是类型真源，这边不重复定义（后端 `NoticeOut` 与它逐键对齐）。
  */
+/**
+ * 轻资产读数（L2，devlog/260）：`GET /settings/assets`。
+ *
+ * 按 `kind` 分账（avatar / cover …）；`missing` = **索引说有、盘上没有**的条数
+ * （备份还原后 `static/` 不回来时就会出现）—— 它是"哪块在漏"的唯一读数。
+ * `img_cache` 与它并排：规格 §2.5 的边界判据是"清空 img_cache 外观不变、清 assets 会破图"。
+ */
+export interface AssetsInfo {
+  kinds: Record<string, {
+    files: number
+    bytes: number
+    pinned: number
+    missing: number
+    oldest: string | null
+    max_bytes: number | null
+    rows: number
+  }>
+  total: { files: number; bytes: number }
+  img_cache: { files: number; bytes: number; max_bytes?: number }
+}
+
+/** `POST /settings/assets/prune` 的回包：报告 + 顺带的最新读数。 */
+export interface AssetsPruneResult {
+  dry_run: boolean
+  kinds: Record<string, {
+    max_bytes: number | null
+    before_files: number
+    before_bytes: number
+    protected: number
+    evicted: Array<{ id: number; key: string; path: string; bytes: number;
+                     last_used_at: string | null }>
+    freed_bytes: number
+    after_files: number
+    after_bytes: number
+  }>
+  assets: AssetsInfo
+}
+
 export interface NoticesResponse {
   now: number
   notices: Notice[]

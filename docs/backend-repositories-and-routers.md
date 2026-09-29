@@ -519,21 +519,19 @@ session 收口**（先写文件、再写索引行，见 `ARCHITECTURE.md` §6 �
 
 ---
 
-## 3. Routers（72 个路由装饰器 = 74 个方法×路径组合）
+## 3. Routers（75 个路由装饰器 = 77 个方法×路径组合）
 
 > 口径说明（**三种数法别混**）：
 >
 > | 数法 | 值 | 怎么数 |
 > |---|---|---|
-> | **装饰器**（下文「N」用它） | **72** | `vtuber 55` + `auth 4` + `img_proxy 1` + `settings 9` + `messages 2` + `messages_debug 1`（dev-only）；其中 2 个是 `api_route(methods=["GET","POST"])`（`/vtuber/fetch`、`/vtuber/{id}/fetch`）—— ⚠️ **数装饰器必须把这 2 条算进去**，只数 `@router.get/post/...` 会少 2 |
-> | **OpenAPI 方法×路径** | **74** | `sum(len(methods) for p in app.openapi()["paths"].values())`；**这是唯一与实现无关的数法** ⇒ 日常复核用它 |
-> | OpenAPI 路径数 | **60** | `len(app.openapi()["paths"])`（同路径多方法只算 1 条；dev-only 的 `_debug` 路由**不在**，它要 dev token 才挂） |
+> | **装饰器**（下文「N」用它） | **75** | `vtuber 55` + `auth 4` + `img_proxy 1` + `settings 12` + `messages 2` + `messages_debug 1`（dev-only）；其中 2 个是 `api_route(methods=["GET","POST"])`（`/vtuber/fetch`、`/vtuber/{id}/fetch`）—— ⚠️ **数装饰器必须把这 2 条算进去**，只数 `@router.get/post/...` 会少 2 |
+> | **OpenAPI 方法×路径** | **77** | `sum(len(methods) for p in app.openapi()["paths"].values())`；**这是唯一与实现无关的数法** ⇒ 日常复核用它 |
+> | OpenAPI 路径数 | **63** | `len(app.openapi()["paths"])`（同路径多方法只算 1 条；dev-only 的 `_debug` 路由**不在**，它要 dev token 才挂） |
 >
-> ⚠️ **2026-09-28 重新数过**（M0 加了 `GET /messages/stream` 与 dev-only 的
-> `POST /messages/_debug/publish`，M1 加了 `POST /messages/ack`；R47 加了
-> `GET /vtuber/{id}/avatars`；M5-1 加了 `GET /vtuber/notices` +
-> `POST /vtuber/notices/ack`）：实测装饰器 **72** /
-> OpenAPI 方法×路径 **74** / 路径数 **60**。
+> ⚠️ **2026-09-29 重新数过**（M5-1 的 `GET /vtuber/notices` + `POST /vtuber/notices/ack`；
+> L2 的 `GET /settings/assets` + `POST /settings/assets/prune` + `POST /settings/assets/pin`）：
+> 实测装饰器 **75** / OpenAPI 方法×路径 **77** / 路径数 **63**。
 > 更早的版本：66/—/—（批次 16）、64/70/67（R42-A）—— 三种数法本来就容易漂。
 > ⚠️ **新增 `/vtuber/xxx` 这类"看起来不像参数"的路径时必须注册在 `/vtuber/{vtuber_id}` 之前**：
 > M5-1 第一版把 `/vtuber/notices` 放在文件下面，`GET` 直接被 `{vtuber_id}: int` 捕获、恒定 422

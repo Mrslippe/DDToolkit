@@ -1,4 +1,4 @@
-import type { Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliSearchResult, Capabilities, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, NoticesResponse, PoolItem, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyVtuber, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, XhsCookieSaved } from './types'
+import type { Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliSearchResult, Capabilities, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, NoticesResponse, PoolItem, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyVtuber, AssetsInfo, AssetsPruneResult, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, XhsCookieSaved } from './types'
 import { ApiError, ApiShapeError } from './errors'
 import { HOST_HEADER, myHost } from '../utils/hostIdentity'
 import {
@@ -274,6 +274,26 @@ export const api = {
   /** **通知汇总**（M5-2b）：由后端算出条目（服务端 `now` 做 ttl 基准）+ `manual_running`。
    *  这是通知的**唯一真源**；前端只保留"抢在轮询前面"的本地覆盖（推送 / dev 注入）。 */
   getNotices: () => request<NoticesResponse>('/vtuber/notices'),
+
+  /** **轻资产读数**（L2）：按 kind 的文件数/字节/pin/死条目 + 合计（设置页「存储占用」用） */
+  getAssets: () => request<AssetsInfo>('/settings/assets'),
+
+  /** 淘汰未 pin 且未被引用的轻资产。⚠️ `dry_run` **默认真**：界面先拿预览给用户看，
+   *  确认之后才带 `dry_run: false` 再来一次（两端点形状一致 ⇒ 预览与实际同一份计算）。 */
+  pruneAssets: (body: { kind?: string; max_bytes?: number; dry_run?: boolean }) =>
+    request<AssetsPruneResult>('/settings/assets/prune', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+
+  /** 给一份轻资产打/撤长留标记（索引里没有它 ⇒ 404）。 */
+  pinAsset: (body: { kind: string; url: string; on?: boolean }) =>
+    request<{ kind: string; path: string; pinned: boolean; assets: AssetsInfo }>(
+      '/settings/assets/pin',
+      { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body) },
+    ),
 
   /** 记一条通知**已读**（落库 `app_meta`）——「知道了 / 关闭」调它，刷新后不再复活。
    *  **幂等**：同一个 id 记两次结果一样。 */
