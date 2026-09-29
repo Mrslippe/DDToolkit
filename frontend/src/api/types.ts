@@ -1,5 +1,11 @@
 // 与后端 Pydantic schema 对齐的类型定义（app/schemas/vtuber.py）
 
+// 条目形状的真源在 `utils/notificationHub.ts`（纯函数模块，不反向依赖 api）——
+// 这里只做再导出，**不重复定义**（两份定义迟早漂）。
+import type { Notice } from '../utils/notificationHub'
+
+export type { Notice }
+
 export interface Account {
   id: number
   vtuber_id: number
@@ -489,6 +495,20 @@ export interface FetchStatus {
     platform?: string
     hits?: number
   }
+}
+
+/**
+ * `GET /vtuber/notices` 的回包（M5-2b）：通知的**唯一真源**。
+ *
+ * ⚠️ `now` 是**服务端**毫秒：两扇窗各自 `Date.now()` 会差 1–2s，而 ttl 判定要同一条基准
+ * （前端只按它过滤过期，不自己算绝对过期时刻）。条目形状 = `utils/notificationHub.ts::Notice`
+ * —— 那边是类型真源，这边不重复定义（后端 `NoticeOut` 与它逐键对齐）。
+ */
+export interface NoticesResponse {
+  now: number
+  notices: Notice[]
+  /** 是否有**手动**任务在跑（与 `FetchStatus.manual_running` 同源，见那里的注释） */
+  manual_running: boolean
 }
 
 /** stats_json 解析后的统计字段（B 站口径） */export interface PostStatsJson {

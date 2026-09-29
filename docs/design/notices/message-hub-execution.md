@@ -461,6 +461,15 @@ M0b 不许"探针绿了就宣布通过"。
 `quick` / `adopt` 都走 `_set_post_last_result` 且 `witnessed` 在主窗口开着时恒真 ⇒ 不修就是
 "每次手动抓帖都留一条『全量帖子抓取完成』的常驻假报告 + 查看详情"。判据 +3、反向 2/2。
 
+> ✅ **M5-2b 已落地（2026-09-29，devlog/259）**：`TopBar` 改用 `useNotices`（服务端列表 +
+> 本地覆盖）、小窗拉同一端点、`widget:notices` 与 `kickPoll` 退役、报告「知道了」接 `ack`、
+> `StatusIsland` 渲染 `value`（风控倒计时）、收录首屏完成由后端报（`_adopt_background`）。
+> 探针 `--messages` / `--status-widget` 全绿；下面十三条里 **R2/R3/R5/R8/R10 的处置是"保留"**
+> （本地覆盖、SSE、`fetch-status` 都不退役），R1/R4 在 M5-2a 已修，R7/R11/R13 在本批处理。
+> ⚠️ 顺带发现一条**与 M5 无关的既存红**：`ui_probe --status-island` 的
+> `panelItemHit`（"面板里的条目不可命中"）在 `32b3952` 上**就已经红**（`git stash` 全量后复现），
+> 本批不动它，记在 TODO 里。
+
 **M5-2b 的侦察结论（只读，行号是 2026-09-29 快照）** —— 这十三条就是"为什么不能搜索替换"：
 
 | # | 卡点 | 影响 |

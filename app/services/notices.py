@@ -5,7 +5,8 @@
 | 批次 | 内容 | 状态 |
 |---|---|---|
 | **M5-1（本文件）** | `services/notices.py` + `GET /vtuber/notices` + `POST /vtuber/notices/ack`（已读进 `app_meta`）+ 契约判据 | ✅ |
-| M5-2 | `TopBar` 删掉自己那份 `useMemo` 汇总、小窗改拉新端点、退役 `widget:notices`、删 `kickPoll` | ⏳ 下一批 |
+| **M5-2a** | 供数补全：`manual_running` 进端点 + 报告只对全量轮出 | ✅ devlog/258 |
+| **M5-2b** | `TopBar` 删掉自己那份 `useMemo` 汇总（改用 `useNotices`）、小窗改拉同一端点、退役 `widget:notices`、删 `kickPoll`、报告「知道了」接 `ack` | ✅ devlog/259 |
 
 为什么必须分开：M5-2 会**改用户可见的通知行为**（报告何时弹、进度由谁供），
 判据/探针/真机验收的量级与 M5-1 相当；混在一批里做，出问题时分不清是"供数错了"还是"切换错了"。

@@ -24,7 +24,6 @@ import ProxyImage from './common/ProxyImage'
 import { useCapabilities } from '../hooks/useCapabilities'
 import { FETCH_POSTS, isLoginRequired, limitText } from '../utils/capabilities'
 import { XHS_UID_HINT, parseXhsUid } from '../utils/platformLogin'
-import { EVENTS, emit } from '../utils/appEvents'
 import './../styles/posts.css'
 
 interface Props {
@@ -156,9 +155,11 @@ export default function AddVtuberDialog({ open, onOpenChange, onAdded }: Props) 
     setAdoptingKey(row.key)
     try {
       await api.adoptVtuber(row.platform, row.platform_uid, undefined, row.adoptSource)
-      // 踢一脚 TopBar 立即轮询：捕获本次单V抓取进入 running 态，
-      // 保证其完成时 running→idle 边沿必然派发 fetch-idle（防竞态漏刷新）
-      emit(EVENTS.kickPoll)
+      // ⚠️ 这里原本 `emit(kickPoll)`（"踢一脚好让 TopBar 目睹 running 态"）。M5-2b 删掉
+      // 它之后，"收录完成后各视图要刷新"由 M3 的**推送**兜底：后端 `_set_post_last_result`
+      // 每轮收尾都 `publish(domain.posts.changed)`，前端桥接里按 seq 去重后派发 `fetch-idle`。
+      // 另外后端 M5-2b 起还会为收录首屏报一条完成消息（`_adopt_background`），
+      // 用户不必靠"顶栏有没有亮过"来判断这次收录跑没跑。
       toast.success(`已收录「${row.name}」，正在抓取账号信息与最新动态…`)
       onAdded()
       onOpenChange(false)
@@ -185,7 +186,6 @@ export default function AddVtuberDialog({ open, onOpenChange, onAdded }: Props) 
     setAdoptingKey(`xhs:${uid}`)
     try {
       const v = await api.adoptVtuber('xiaohongshu', uid, undefined, 'xiaohongshu')
-      emit(EVENTS.kickPoll)
       toast.success(`已收录「${v.name}」，正在抓取账号信息与最新动态…`)
       onAdded()
       onOpenChange(false)

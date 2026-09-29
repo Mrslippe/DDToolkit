@@ -14,14 +14,13 @@ import { FETCH_IDLE_EVENT } from './fetchIdle'
 import { VTUBER_UPDATED_EVENT } from './vtuberList'
 
 describe('① 事件名是契约：逐个钉住（改名会让探针静默失效）', () => {
-  it('名单与 `EVENTS` 表完全一致，且就是这 11 个', () => {
+  it('名单与 `EVENTS` 表完全一致，且就是这 10 个（`kick-poll` 已随 M5-2b 退役）', () => {
     expect([...APP_EVENT_NAMES].sort()).toEqual([...Object.values(EVENTS)].sort())
     expect([...APP_EVENT_NAMES].sort()).toEqual([
       'ddtoolkit:account-progress',
       'ddtoolkit:capabilities-refresh',
       'ddtoolkit:data-changed',
       'ddtoolkit:fetch-idle',
-      'ddtoolkit:kick-poll',
       'ddtoolkit:live-edge',
       'ddtoolkit:message',
       'ddtoolkit:pill-message',
@@ -48,8 +47,8 @@ describe('② emit / on 往返', () => {
 
   it('不带 payload 的事件也能派发/监听（老的裸 `Event` 监听方读 `.detail` 得到 undefined）', () => {
     const cb = vi.fn()
-    const off = on(EVENTS.kickPoll, cb)
-    emit(EVENTS.kickPoll)
+    const off = on(EVENTS.dataChanged, cb)
+    emit(EVENTS.dataChanged)
     expect(cb).toHaveBeenCalledTimes(1)
     expect(cb.mock.calls[0][0], '无 detail 的事件 detail 必须是 undefined').toBeUndefined()
     off()

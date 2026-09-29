@@ -4,8 +4,8 @@
  *
  * ## 为什么值得抽
  *
- * 这 6 个回调是页面的"动作层"：每个都是「守卫 → `setFetching(true)` → `kickPoll()`
- * → api → 分三种结果提示 → `finally { setFetching(false); kickPoll() }`」的同一套骨架。
+ * 这 6 个回调是页面的"动作层"：每个都是「守卫 → `setFetching(true)` → ``
+ * → api → 分三种结果提示 → `finally { setFetching(false);  }`」的同一套骨架。
  * 它们与渲染无关，却占着 128 行；抽出来之后：
  * - `PostsPage` 少 6 个 `useCallback` 与它们的依赖数组；
  * - `fetching` 从"页面状态"变为"这个 hook 的状态"（它只被这些动作写、只被按钮读）；
@@ -38,11 +38,6 @@ function pill(text: string) {
   emit(EVENTS.pillMessage, { text })
 }
 
-/** 通知 TopBar 立即轮询一次抓取状态（点击按钮/任务结束时即时反馈） */
-function kickPoll() {
-  emit(EVENTS.kickPoll)
-}
-
 interface Args {
   vtuber: VTuber | null
   /** 当前选中账号（提供 `platform` 兜底；原文件里的 `bili` 就是它） */
@@ -65,7 +60,6 @@ export function useVtuberActions({
   const handleFetch = useCallback(async () => {
     if (!vtuber || fetching) return
     setFetching(true)
-    kickPoll() // 立即刷新胶囊 → 显示「抓取中」
     try {
       const r = await api.fetchVtuber(accountId)
       if (r.status === 'skipped') {
@@ -78,14 +72,12 @@ export function useVtuberActions({
       toast.error(`抓取失败: ${(e as Error).message}`)
     } finally {
       setFetching(false)
-      kickPoll()
     }
   }, [vtuber, accountId, fetching])
 
   const handleFetchPosts = useCallback(async () => {
     if (!vtuber || fetching) return
     setFetching(true)
-    kickPoll()
     try {
       const r = await api.fetchPostsByName(vtuber.name, 2, 3, false, selectedAccount?.platform ?? 'bilibili')
       if (r.status === 'skipped') {
@@ -106,14 +98,12 @@ export function useVtuberActions({
       toast.error(`帖子抓取失败: ${(e as Error).message}`)
     } finally {
       setFetching(false)
-      kickPoll()
     }
   }, [vtuber, fetching, selectedAccount?.platform])
 
   const handleFetchAllPosts = useCallback(async () => {
     if (!vtuber || fetching) return
     setFetching(true)
-    kickPoll()
     try {
       const r = await api.fetchPostsByName(vtuber.name, -1, -1, true, selectedAccount?.platform ?? 'bilibili')
       if (r.status === 'skipped') {
@@ -125,14 +115,12 @@ export function useVtuberActions({
       toast.error(`全量抓取失败: ${(e as Error).message}`)
     } finally {
       setFetching(false)
-      kickPoll()
     }
   }, [vtuber, fetching, selectedAccount?.platform])
 
   const handleUpdatePosts = useCallback(async () => {
     if (!vtuber || fetching) return
     setFetching(true)
-    kickPoll()
     try {
       const r = await api.updateUnarchivedPosts(vtuber.name)
       if (r.status === 'skipped') {
@@ -152,7 +140,6 @@ export function useVtuberActions({
       toast.error(`更新失败: ${(e as Error).message}`)
     } finally {
       setFetching(false)
-      kickPoll()
     }
   }, [vtuber, fetching])
 
@@ -176,7 +163,6 @@ export function useVtuberActions({
   const handleAccountAdded = useCallback(
     async (_acc: Account, platform: string, uid: string) => {
       if (!vtuber) return
-      kickPoll()
       const fresh = await api.getVtuber(vtuber.id)
       setVtuber(fresh)
       const hit = fresh.accounts.find(

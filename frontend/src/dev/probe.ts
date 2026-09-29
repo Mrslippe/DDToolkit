@@ -2855,8 +2855,9 @@ export async function runUiProbe(): Promise<void> {
   // 所以这里验的也换了：不再是"运行时分流生效没"，而是**独立入口本身** ——
   // 小窗里**不该出现主窗口的任何东西**（顶栏 / 侧栏 / 启动幕）。
   //
-  // ⚠️ 条目列表在这里**必然是空的**：小窗只听主窗口推的 `widget:notices`，
-  // 而浏览器里没有 Tauri 事件。所以它渲染的是空闲态 —— 这正是我们要量的东西。
+  // ⚠️ 条目列表在这里**必然是空的**（不注种的话）：浏览器里没有推送连接、后端也没有
+  // 它要的条目，所以它渲染的是空闲态 —— 这正是我们要量的东西。需要"亮起来"的那几条判据
+  // 走 `ddtoolkit:widget-seed` 注入（M5-2b 起注入的是**本地覆盖**那一层，见 `useNotices`）。
   if (mode === 'status-widget-window') {
     const result: Record<string, unknown> = {}
     const shell = document.querySelector<HTMLElement>('.widget-shell')

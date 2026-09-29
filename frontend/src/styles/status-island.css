@@ -431,10 +431,27 @@ html[data-widget-window] #root {
   gap: 2px;
 }
 
+/* 正文那一行（正文 + 活数据槽）：`baseline` 对齐，两段都在同一行上 */
+.si-item-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
 .si-item-text {
   font-size: 12.5px;
   color: var(--c-text-main);
   overflow-wrap: anywhere;
+}
+
+/* 活数据槽（M5-2b 起真正渲染）：与正文同一行、等宽数字 ——
+   风控倒计时每秒刷新，数字不等宽会让整行左右抖（tabular-nums 的用法）。 */
+.si-item-value {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--c-text-main);
+  white-space: nowrap;
 }
 
 .si-item-detail {

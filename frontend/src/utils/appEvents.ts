@@ -23,8 +23,6 @@ import type { Notice } from './notificationHub'
 export const EVENTS = {
   /** 顶栏胶囊提示（`utils/pill.ts` 是主入口） */
   pillMessage: 'ddtoolkit:pill-message',
-  /** 请求顶栏立刻轮询一次抓取状态 */
-  kickPoll: 'ddtoolkit:kick-poll',
   /** 数据变了（侧栏列表重拉） */
   dataChanged: 'ddtoolkit:data-changed',
   /** 抓取任务跑完（kind 口径见 `utils/fetchIdle.ts`） */
@@ -77,7 +75,6 @@ export interface LiveEdgePayload {
 /** 名字 → payload。`undefined` = 该事件不带 detail（老代码派发的是裸 `Event`）。 */
 export interface AppEventMap {
   'ddtoolkit:pill-message': { text: string }
-  'ddtoolkit:kick-poll': undefined
   'ddtoolkit:data-changed': undefined
   'ddtoolkit:fetch-idle': { kinds: FetchIdleKind[] }
   'ddtoolkit:account-progress': AccountSnapshot[]
@@ -98,7 +95,6 @@ export type AppEventName = keyof AppEventMap
 /** 冻结的名单（用例逐条钉住 —— 改名要么同时改这里与用例，要么红） */
 export const APP_EVENT_NAMES: readonly AppEventName[] = [
   'ddtoolkit:pill-message',
-  'ddtoolkit:kick-poll',
   'ddtoolkit:data-changed',
   'ddtoolkit:fetch-idle',
   'ddtoolkit:account-progress',
@@ -122,7 +118,7 @@ type EmitArgs<K extends AppEventName> =
 /**
  * 派发。`host` 可注入（`utils/fetchIdle.ts` 的单测就是这么跑 node 环境的）。
  *
- * ⚠️ **无 payload 的事件照旧派发裸 `Event`**（今天 `kick-poll` / `data-changed` /
+ * ⚠️ **无 payload 的事件照旧派发裸 `Event`**（今天 `data-changed` /
  * `capabilities-refresh` 就是这么发的）：`new CustomEvent(name, { detail: undefined })`
  * 会把 `detail` 归一成 **`null`**（jsdom 实测），而裸 `Event` 上根本没有 `detail`。
  * 虽然现有监听方都不读它，但"搬进集中表"不该顺手改掉这个可观察差异。

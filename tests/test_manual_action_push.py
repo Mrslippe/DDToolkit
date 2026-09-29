@@ -171,6 +171,65 @@ def test_update_endpoint_publishes_start_and_done(db, client, _fresh_hub):
     assert "新增 3" in done[0].payload["text"]
 
 
+def test_adopt_reports_first_screen_completion(db, monkeypatch, _fresh_hub):
+    """收录/加账号的首屏抓取完成**也要报**（M5-2b，devlog/259）。
+
+    为什么必须有这条：这条反馈原先住在 `TopBar` 的 `post.last_result` 分支里
+    （v0.9.4 的「新 V 首屏抓取完成 · 投稿 N · 动态 M · 入库 K」），而 M5-2b 把汇总交给
+    后端之后那个分支就删了 —— 不在后端补上，收录完就**没有任何反馈**（v0.9.4 那条需求
+    会静默回退）。⚠️ `originator=""`：发起方自己也要看到（旧行为就是本地弹胶囊）。
+    """
+    import asyncio
+
+    import app.routers.vtuber as R
+
+    async def _fake_accounts(ids, label=""):
+        return None
+
+    async def _fake_first_screen(_aid):
+        return type("P", (), {"videos": 7, "dynamics": 3, "stored": 9, "skipped": 1})()
+
+    monkeypatch.setattr(R, "async_fetch_accounts", _fake_accounts, raising=False)
+    monkeypatch.setattr(R, "async_fetch_first_screen", _fake_first_screen, raising=False)
+    monkeypatch.setattr(R, "_spawn_background", lambda coro: coro.close(), raising=False)
+
+    asyncio.run(R._adopt_background(vtuber_id=1, account_id=2))
+
+    done = _of_type(_fresh_hub, M.MSG_NOTICE_MESSAGE)
+    assert len(done) == 1, f"首屏抓取完成没有报出来，实际 {len(done)} 条"
+    text = done[0].payload["text"]
+    assert "首屏抓取完成" in text and "投稿 7" in text and "动态 3" in text and "入库 9" in text, text
+    assert done[0].payload.get("originator") == "", (
+        "发起方自己也要看到这条 —— originator 必须是空串（不等于任何宿主）")
+
+
+def test_adopt_reports_nothing_when_first_screen_fails(db, monkeypatch, _fresh_hub):
+    """首屏那条抛异常时**不许**报"完成 0/0/0"（假报比不报更糟）。"""
+    import asyncio
+
+    import app.routers.vtuber as R
+
+    async def _fake_accounts(ids, label=""):
+        return None
+
+    async def _boom(_aid):
+        raise RuntimeError("上游挂了")
+
+    async def _ok(_aid):
+        return type("P", (), {"videos": 0, "dynamics": 0, "stored": 0, "skipped": 0})()
+
+    monkeypatch.setattr(R, "async_fetch_accounts", _fake_accounts, raising=False)
+    monkeypatch.setattr(R, "async_fetch_first_screen", _boom, raising=False)
+    monkeypatch.setattr(R, "_spawn_background", lambda coro: coro.close(), raising=False)
+    asyncio.run(R._adopt_background(vtuber_id=1, account_id=2))
+    assert _of_type(_fresh_hub, M.MSG_NOTICE_MESSAGE) == [], "异常被 return_exceptions 吞了，不该报完成"
+
+    # 正对照：换成正常返回 ⇒ 又有那条消息（证明上一条不是"永远不报"）
+    monkeypatch.setattr(R, "async_fetch_first_screen", _ok, raising=False)
+    asyncio.run(R._adopt_background(vtuber_id=1, account_id=2))
+    assert len(_of_type(_fresh_hub, M.MSG_NOTICE_MESSAGE)) == 1
+
+
 # ── ⑤ 被拒绝的任务不许发受理消息 ─────────────────────────────────────────
 
 def test_skipped_task_publishes_nothing(db, client, monkeypatch, _fresh_hub):

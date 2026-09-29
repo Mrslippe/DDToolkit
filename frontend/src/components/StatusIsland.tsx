@@ -345,7 +345,14 @@ export default function StatusIsland({ notices, onAction, now, density = 'bar' }
                   <li key={n.id} className="si-item" data-kind={n.kind}>
                     <span className={`si-item-icon k-${n.kind}`}>{KIND_ICON[n.kind]}</span>
                     <span className="si-item-main">
-                      <span className="si-item-text">{n.text}</span>
+                      {/* 正文与活数据槽**同一行**（`.si-item-line` 是那一行的 flex 容器）：
+                          风控倒计时这类"同一句话、只有数字在变"的值放 `value` ——
+                          文案不动、数字刷新，所以它**不参与排序**，也不会让条目跳位。
+                          此前只渲染 `text` ⇒ 后端那条 `value="47s"` 会整个丢掉（M5-2b）。 */}
+                      <span className="si-item-line">
+                        <span className="si-item-text">{n.text}</span>
+                        {n.value && <span className="si-item-value">{n.value}</span>}
+                      </span>
                       {n.detail && <span className="si-item-detail">{n.detail}</span>}
                       <span className="si-item-meta">
                         {KIND_LABEL[n.kind]}

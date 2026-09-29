@@ -1,4 +1,4 @@
-import type { Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliSearchResult, Capabilities, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, PoolItem, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyVtuber, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, XhsCookieSaved } from './types'
+import type { Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliSearchResult, Capabilities, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, NoticesResponse, PoolItem, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyVtuber, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, XhsCookieSaved } from './types'
 import { ApiError, ApiShapeError } from './errors'
 import { HOST_HEADER, myHost } from '../utils/hostIdentity'
 import {
@@ -270,6 +270,19 @@ export const api = {
 
   /** 抓取任务实时状态（TopBar 轮询用）—— **带运行时校验** */
   getFetchStatus: () => request<FetchStatus>('/vtuber/fetch-status', undefined, validateFetchStatus),
+
+  /** **通知汇总**（M5-2b）：由后端算出条目（服务端 `now` 做 ttl 基准）+ `manual_running`。
+   *  这是通知的**唯一真源**；前端只保留"抢在轮询前面"的本地覆盖（推送 / dev 注入）。 */
+  getNotices: () => request<NoticesResponse>('/vtuber/notices'),
+
+  /** 记一条通知**已读**（落库 `app_meta`）——「知道了 / 关闭」调它，刷新后不再复活。
+   *  **幂等**：同一个 id 记两次结果一样。 */
+  ackNotice: (id: string) =>
+    request<{ acked: string[] }>('/vtuber/notices/ack', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    }),
 
   /** 单个 VTuber —— **带运行时校验** */
   getVtuber: (id: number) => request<VTuber>(`/vtuber/${id}`, undefined, validateVtuber),

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
 import { Copy, LogIn, Minus, Square, X } from 'lucide-react'
 import Logo from './common/Logo'
@@ -26,19 +26,15 @@ import { setFetchBusy } from '../fetchBusy'
 import { isFirstRun } from '../bootState'
 import { dispatchFetchIdle, type FetchIdleKind } from '../utils/fetchIdle'
 import { withoutAlreadyPushedPosts } from '../utils/messageBus'
-import { EVENTS, emit, on, type LiveEdgePayload, type PushedProgressPayload } from '../utils/appEvents'
+import { EVENTS, emit } from '../utils/appEvents'
 import { useCapabilities, refreshCapabilities } from '../hooks/useCapabilities'
 import { hideToTray, quitApp } from '../utils/shellBridge'
 import { isShellHidden } from '../utils/shellLifecycle'
 import { closeIntent, parseCloseAction, type CloseAction } from '../utils/shellState'
-import { broadcastNotices, parseWidgetEnabled, WIDGET_CLOSED_EVENT, WIDGET_POS_KEY, parseWidgetPos } from '../utils/widgetWindow'
+import { parseWidgetEnabled, WIDGET_CLOSED_EVENT, WIDGET_POS_KEY, parseWidgetPos } from '../utils/widgetWindow'
 import { showWidgetWindow } from '../utils/shellBridge'
 import type { Notice, NoticeActionKind } from '../utils/notificationHub'
-import {
-  composeTaskText, liveNotice, LIVE_NOTICE_MS, loginNotice, messageNotice, progressNotice,
-  rateLimitNotice, reportNotice,
-} from '../utils/notificationHub'
-import { PILL_MS, PUSHED_PROGRESS_MS } from '../utils/noticeStream'
+import { useNotices } from '../utils/noticeStream'
 import { api } from '../api/api'
 import type { AccountSnapshot, AuthStatus, FetchStatus, PostFetchStatus } from '../api/types'
 import './../styles/layout.css'
@@ -115,7 +111,6 @@ export default function TopBar() {
   const [confirmClose, setConfirmClose] = useState(false)
   /** 首次点 ✕ 的询问框（R18：`prefs.close_action === 'ask'` 时才可能打开） */
   const [askClose, setAskClose] = useState(false)
-  const [pillMsg, setPillMsg] = useState<string | null>(null)
   /** 隐藏到托盘（R18）：隐藏期间停掉两条轮询链，恢复时立刻补一轮 */
   const hidden = useShellHidden()
   // 磁盘快满时提醒一次（R22-B）：等第一轮 fetch-status 回来再查 ——
@@ -148,21 +143,21 @@ export default function TopBar() {
   // 改为内容 diff：只要某账号的快照内容变化（含 live_status 1→0）即派发，
   // 对长度变化/环形上限/清空全部免疫，一个轮询周期内必然收敛。
   const seenByUid = useRef<Record<string, string>>({})
-  // 轮询并发保护：kick-poll 在请求 in-flight 期间再次触发时只打标记，
-  // 请求结束后立即补一轮——否则会并行跑两条轮询链，频率翻倍且不收敛
+  // 轮询并发保护：在途冲突时的重排标记（见 poll 内的并发保护）
   const inFlight = useRef(false)
   const pendingKick = useRef(false)
-  // 任务完成汇总（方案 1+2）：首次轮询只记基线；仅「轮询曾目睹运行」的任务完成才弹报告
-  const seenAccSeq = useRef(-1)
-  const seenPostSeq = useRef(-1)
-  const prevAccRunning = useRef(false)
-  const prevPostRunning = useRef(false)
-  const sawAccRun = useRef(false)
-  const sawPostRun = useRef(false)
   // 外部第三方数据任务（收录回填 / 每日批次）：seq 变化即「刚完成一轮」，
   // 用来发 fetch-idle —— 只看 running 边沿会漏掉「两次轮询之间就跑完」的短任务，
   // 停在档案视图的用户就永远看不到粉丝趋势/直播日历（2026-09-09 用户反馈）
   const seenExtSeq = useRef(-1)
+  // **通知的唯一真源是后端**（M5-2b，devlog/259）：这里只存最新一份服务端列表。
+  // 原先那套"本地汇总"（六类构造器 + 四个 witnessed ref）整段删掉了 —— 报告何时该弹
+  // 已由后端的订阅者注册表决定（`services/notices.py` 的「目睹才报」）。
+  const [serverNotices, setServerNotices] = useState<Notice[] | null>(null)
+  /** 服务端那份 `manual_running`（与 fetch-status 同源）—— 只在 fetch-status 没给时兜底。
+   *  ⚠️ 用 ref 而不是 state：轮询链是 `[]` 依赖的 effect，读 state 会**被闭包钉死在首帧**
+   *  （同 `isShellHidden` 那条教训，devlog/095）。 */
+  const noticesBusy = useRef(false)
 
   useEffect(() => {
     let cancelled = false
@@ -207,6 +202,13 @@ export default function TopBar() {
       inFlight.current = true
       let active = false
       try {
+        // 通知汇总（M5-2b）：与状态**同一条轮询链**（一个节奏、一处并发保护）。
+        // 它带回服务端算好的条目 + `manual_running`；失败不影响下面那条链（各自 catch）。
+        void api.getNotices().then((nb) => {
+          if (cancelled) return
+          setServerNotices(nb.notices)
+          noticesBusy.current = nb.manual_running
+        }).catch(() => { /* 后端不可达：保持上一份 */ })
         const s = await api.getFetchStatus()
         if (cancelled) return
         const ext = s.external
@@ -217,10 +219,11 @@ export default function TopBar() {
         const postVisible = s.post.running && !isQuietTask(s.post)
         const accVisible = s.account.running && !isQuietTask(s.account)
         active = accVisible || postVisible || (ext?.running ?? false)
-        // 按钮禁用与手动端点的 409 同源；旧后端无该字段 → 退回旧判据
-        setFetchBusy(s.manual_running ?? (s.account.running || s.post.running))
+        // 按钮禁用与手动端点的 409 同源（自动档**不算忙**）。两个来源同源：
+        // fetch-status 优先，旧后端没这个字段时用 notices 端点那份（M5-2b）。
+        setFetchBusy(s.manual_running ?? noticesBusy.current)
 
-        // 账号快照变化 → 派发事件，侧栏/右栏就地刷新（内容 diff：见 seenByUid 注释）
+        // 账号快照变化 → 派发事件，侧栏/右栏就地刷新（内容 diff：见 seenUid 注释）
         const recent = s.account.recent ?? []
         const freshByUid = new Map<string, AccountSnapshot>()
         for (const snap of recent) {
@@ -247,59 +250,17 @@ export default function TopBar() {
             dispatchFetchIdle(['external'])
           }
         }
-        // 新任务启动时立即让位给实时状态显示
-        if (active) setPillMsg(null)
-
-        // 观察到「空闲→运行」：记为曾目睹运行。只有轮询目睹过的任务完成时才弹
-        // 完成报告——手动快速任务（同步按钮已在页面内反馈）大概率在目睹前结束，
-        // 不会被重复播报；长任务/后台任务则必然被目睹并获得完成汇总（方案 1+2）。
-        if (s.account.running && !prevAccRunning.current) sawAccRun.current = true
-        if (s.post.running && !prevPostRunning.current) sawPostRun.current = true
-        prevAccRunning.current = s.account.running
-        prevPostRunning.current = s.post.running
-
-        const accRes = s.account.last_result
-        if (accRes && accRes.seq !== seenAccSeq.current) {
-          if (seenAccSeq.current < 0) {
-            seenAccSeq.current = accRes.seq // 首次轮询仅记基线，不弹报告
-          } else if (sawAccRun.current && !s.account.running) {
-            seenAccSeq.current = accRes.seq
-            sawAccRun.current = false
-            emit(EVENTS.pillMessage, {
-              text: `账号信息抓取完成 · 成功 ${accRes.success ?? 0} · 失败 ${accRes.failed ?? 0}`,
-            })
-          }
-        }
-        const postRes = s.post.last_result
-        if (postRes && postRes.seq !== seenPostSeq.current) {
-          if (seenPostSeq.current < 0) {
-            seenPostSeq.current = postRes.seq
-          } else if (sawPostRun.current && !s.post.running) {
-            seenPostSeq.current = postRes.seq
-            sawPostRun.current = false
-            if (postRes.kind === 'full_all' || postRes.kind === 'full_vtuber') {
-              // 全量抓取完成（R12a）：进通知中心当**常驻条目**（不再自动弹窗），
-              // 用户点条目上的「查看详情」才开原来的对话框。
-              setDoneReport(postRes)
-            } else if (postRes.kind === 'adopt') {
-              // 收录首屏抓取（v0.9.4）：新 V 的投稿/动态第一屏，给一条简短反馈
-              let text = `新 V 首屏抓取完成 · 投稿 ${postRes.videos ?? 0} · 动态 ${postRes.dynamics ?? 0} · 入库 ${postRes.stored ?? 0}`
-              if (postRes.issues?.length) {
-                text += ` · ${postRes.issues[0].stop_reason}`
-              }
-              emit(EVENTS.pillMessage, { text })
-            } else {
-              // 其余后台任务（如批量更新动态）仍走瞬时胶囊
-              let text = `帖子抓取完成 · 存储 ${postRes.stored ?? 0} · 跳过 ${postRes.skipped ?? 0}`
-              if (postRes.video_missing) {
-                text += ` · 视频可能缺 ${postRes.video_missing}`
-              } else if (postRes.issues?.length) {
-                text += ` · ${postRes.issues.length} 处中断(${postRes.issues[0].stop_reason})`
-              }
-              emit(EVENTS.pillMessage, { text })
-            }
-          }
-        }
+        // 完成报告与"目睹才报"**不在这里判了**（M5-2b）：报告条目由后端出
+        // （`services/notices.py::_report_notices`，只对 full_all / full_vtuber），
+        // 「查看详情」要的明细仍从下面这份 status 里按 seq 取（见 onIslandAction）。
+        //
+        // ⚠️ 原先这段还负责两类**瞬时胶囊**（账号轮完成 / 帖子轮完成），它们现在都有
+        // 后端对应物，删掉不会丢反馈：
+        //   · 手动动作（抓取账号 / 抓取帖子 / 更新动态）由端点自己 `_note_manual_done`
+        //     → 环形缓冲 + 推送；
+        //   · 收录首屏（adopt）由 `_adopt_background` 报（M5-2b 补的，见 devlog/259）；
+        //   · 自动节拍的完成**本来就不该占顶栏**（2026-09-10 用户口径：频繁轮询不必占位）
+        //     —— 旧代码里账号轮每跑完一次都弹一条，正是那条口径要消掉的噪声。
 
         setStatus((prev) => {
           // 抓取任务的「运行→空闲」边沿：**不含**外部数据任务——它跑在后台且
@@ -346,13 +307,12 @@ export default function TopBar() {
     }
   }, [])
 
-  // 操作按钮点击/完成时「踢一脚」：状态即时反映任务启动与结束，
-  // 不必等下一轮轮询
+  // ⚠️ `kickPoll`（"点一下按钮就踢一脚轮询"）**已退役**（M5-2b，devlog/259）。它当年的
+  // 存在理由是"点完按钮要等 3–10s 轮询才看到抓取中"，而那件事今天由四条各管一段：
+  // 显示进度 = 推送（`notice.progress`，M2）；按钮禁用 = `manual_running`（fetch-status
+  // 与 notices 两个来源）；完成后收尾 = 通知汇总（服务端列表）；"进 running 被目睹 ⇒
+  // 完成时发 fetch-idle" = M3 的 `domain.posts.changed`。
   const pollRef = useRef<() => void>(() => {})
-  useEffect(() => {
-    const kick = () => pollRef.current?.()
-    return on(EVENTS.kickPoll, kick)
-  }, [])
 
   // R18：恢复可见 → **立刻补一轮**（只恢复定时器的话，用户点开托盘看到的可能是
   // 10s 前的旧状态）。隐藏方向的停表不靠这里 —— 那必须同步生效，见 `schedule`。
@@ -415,50 +375,9 @@ export default function TopBar() {
     if (auths.bili.needs_login) setLoginOpen(true)
   }, [auths])
 
-  // 成功类操作提示覆盖态：优先于常规状态文案，PILL_MS 后自动还原；
-  // 新任务启动时由轮询立即清除让位
-  const pillTimer = useRef<number | undefined>(undefined)
-  const liveTimer = useRef<number | undefined>(undefined)
-  const pushedTimer = useRef<number | undefined>(undefined)
-  useEffect(() => {
-    return on(EVENTS.pillMessage, (detail) => {
-      const text = detail?.text
-      if (!text) return
-      setPillMsg(text)
-      if (pillTimer.current !== undefined) clearTimeout(pillTimer.current)
-      pillTimer.current = window.setTimeout(() => setPillMsg(null), PILL_MS)
-    })
-  }, [])
-
-  // 开播告警（M1，devlog/243）：由**后端推送**的 `domain.live.edge` 驱动（不再靠轮询发现）。
-  // TTL 到点自己消失（`LIVE_NOTICE_MS`）—— alert 优先级高，常驻会一直压住任务进度。
-  const [liveEdge, setLiveEdge] = useState<LiveEdgePayload | null>(null)
-  useEffect(() => {
-    return on(EVENTS.liveEdge, (edge) => {
-      setLiveEdge(edge)
-      if (liveTimer.current !== undefined) clearTimeout(liveTimer.current)
-      liveTimer.current = window.setTimeout(() => setLiveEdge(null), LIVE_NOTICE_MS)
-    })
-  }, [])
-
-  // 手动任务进度（M2，devlog/244）：后端推来的"任务已受理"那一份，用来**抢在轮询前面**
-  // 让点按钮的人立刻看到「…抓取中」（`kickPoll` 那个补丁就是为这 3–10s 打的）。
-  //
-  // ⚠️ 两条配合才不留残影：
-  //   ① **轮询一报到就退位**（`status.manual_running` 变 true ⇒ 清掉）—— 轮询是进度的最终真源，
-  //      两份并存会让状态岛显示"2 条通知"（视觉噪声）且文案会跳；
-  //   ② TTL 兜底（`PUSHED_PROGRESS_MS`）：任务快到"没有任何一轮轮询看见它"时，推送那份自己过期。
-  const [pushedProgress, setPushedProgress] = useState<PushedProgressPayload | null>(null)
-  useEffect(() => {
-    return on(EVENTS.progress, (p) => {
-      setPushedProgress(p)
-      if (pushedTimer.current !== undefined) clearTimeout(pushedTimer.current)
-      pushedTimer.current = window.setTimeout(() => setPushedProgress(null), PUSHED_PROGRESS_MS)
-    })
-  }, [])
-  useEffect(() => {
-    if (status?.manual_running) setPushedProgress(null)
-  }, [status?.manual_running])
+  // 三类**本地覆盖**（瞬时消息 / 开播告警 / 推送来的"任务已受理"）已搬到
+  // `utils/noticeStream.ts::useNotices`（M5-2b，devlog/259）：两扇窗共用同一份订阅与 TTL，
+  // 「服务端一报到就让位」的规则也收在 `mergeNotices` 里（同一条判据，不再两处各写一遍）。
 
   // 「有事发生」= 可见任务（手动/收录/外部批次）或操作结果覆盖态。
   // 自动节拍（动态轮询、自动账号流）按 2026-09-10 用户口径静默：不亮容器、不顶部文案，
@@ -467,97 +386,27 @@ export default function TopBar() {
   const accVisible = !!status?.account.running && !isQuietTask(status?.account)
   const busy = accVisible || postVisible || (status?.external?.running ?? false)
 
-  // P8-C（2026-09-10 用户）：状态胶囊格式 = 任务名 - V名 - i/N
-  // （例：动态更新中 - 明前奶绿 - 1/11）
-  const TASK_TEXT: Record<string, string> = {
-    account: '账号信息抓取中',
-    dynamic: '动态轮询中',
-    update: '动态更新中',
-    full: '全量抓取中',
-    quick: '帖子抓取中',
-    adopt: '首屏抓取中',
-  }
-  /** 拼「任务名 - V名 - i/N」的纯函数已搬到 `utils/notificationHub.composeTaskText`（有单测） */
+  // ⚠️ 顶栏那句「任务名 - V名 - i/N」**不再由前端拼**（M5-2b）：它现在是服务端
+  // `progress` 条目（`services/notices.py::compose_task_text`，与状态岛同一个函数口径），
+  // 前端 `composeTaskText` 只留给状态岛/其它组件用。`postVisible` / `accVisible` 仍要算 ——
+  // 关窗确认与忙按钮读它们。
 
-  let statusText = '数据服务运行中'
-  if (postVisible) {
-    const p = status!.post
-    statusText = composeTaskText(TASK_TEXT[p.task ?? ''] ?? '帖子抓取中', p.vtuber_name || p.target,
-                                 p.index, p.total)
-  } else if (accVisible) {
-    const a = status!.account
-    statusText = composeTaskText(TASK_TEXT[a.task ?? ''] ?? '账号信息抓取中',
-                                 a.vtuber_name || a.current, a.index, a.total)
-  } else if (status?.external?.running) {
-    // 外部第三方数据（收录回填 / 每日批次）：与抓取任务并行，优先级最低
-    statusText = `正在同步${status.external.label ?? '第三方数据'}`
-  }
-  // 注：自动节拍（动态轮询 / 自动账号流）走到这里就是空态——顶栏保持「数据服务运行中」
-  // 白字 + 绿点、无容器（用户 2026-09-10：频繁轮询不必占顶栏）
-
-  // ── 通知中心（R12a，devlog/089）────────────────────────────────────
-  // 六类信息源汇总成条目；优先级/过期/去重全在 `utils/notificationHub` 里（有单测）。
-  const notices = useMemo(() => {
-    const list: Notice[] = []
-    // ① 任务进度（**自动节拍不产生条目** —— progressNotice 内部判定）
-    const p = progressNotice({ id: 'progress-post', running: !!status?.post.running,
-                               auto: isQuietTask(status?.post), text: statusText })
-    if (p && postVisible) list.push(p)
-    const a = progressNotice({ id: 'progress-account', running: !!status?.account.running,
-                               auto: isQuietTask(status?.account), text: statusText })
-    if (a && accVisible) list.push(a)
-    if (status?.external?.running) {
-      list.push({ id: 'progress-external', kind: 'progress', source: '第三方同步',
-                  text: `正在同步${status.external.label ?? '第三方数据'}` })
-    }
-    // ② 风控冷却（此前只在日志里）
-    const rl = rateLimitNotice(status?.rate_limit, now)
-    if (rl) list.push(rl)
-    // ③ 登录失效
-    const lg = loginNotice(!!auths.bili?.needs_login)
-    if (lg) list.push(lg)
-    // ④ 完成报告（全部中断账号进 detail；点「查看详情」开原来的弹窗）
-    if (doneReport) {
-      const issues = doneReport.issues ?? []
-      list.push(reportNotice({
-        id: `report-${doneReport.seq}`,
-        text: `全量帖子抓取完成 · 存储 ${doneReport.stored ?? 0} · 跳过 ${doneReport.skipped ?? 0}`,
-        detail: doneReport.video_missing
-          ? `视频可能缺 ${doneReport.video_missing} 条`
-          : issues.length ? `${issues.length} 处中断（${issues[0].stop_reason}）` : undefined,
-      }))
-    }
-    // ⑤ 瞬时消息（操作结果，ttl 到期自动消失）
-    if (pillMsg) list.push(messageNotice(pillMsg, now, PILL_MS))
-    // ④′ 开播告警（M1）：**推送来的**，与上面那些轮询算出来的条目并列在同一条优先级规则里
-    if (liveEdge) {
-      list.push(liveNotice({
-        id: `live-${liveEdge.account_id}`,
-        name: liveEdge.name,
-        title: liveEdge.live_title,
-        now,
-      }))
-    }
-    // ⑤′ 推送来的「任务已受理」（M2）：轮询到位后由上面那个 effect 清掉，所以这里只判非空
-    if (pushedProgress) {
-      list.push({ id: 'pushed-progress', kind: 'progress', source: '任务进度',
-                  text: pushedProgress.text })
-    }
-    return list
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status, auths, doneReport, pillMsg, now, statusText, liveEdge])
+  // ── 通知中心（R12a devlog/089 → **M5-2b 起由后端供数**，devlog/259）──────
+  // 条目模型/优先级/过期仍在 `utils/notificationHub`（纯函数，有单测）；**汇总搬到后端**
+  // （`GET /vtuber/notices`），这里只做"服务端列表 + 本地覆盖"的合并（`useNotices`）。
+  // 本地覆盖只剩服务端不知道的三类：推送来的进度/瞬时消息、dev 注入的自检条目、
+  // 客户端自己的事实（磁盘快满 / 发现新版本 —— 它们走 `pillMessage`）。
+  /** dev-only：探针注入的条目（生产构建里恒为空 —— 见下面 `__ddtoolkitSeedReport`） */
+  const [devNotices, setDevNotices] = useState<Notice[]>([])
+  const notices = useNotices(now, { server: serverNotices, extraLocal: devNotices })
 
   // ⑥ R29：把风控冷却同步到**托盘**（收进托盘后没人看界面，状态岛也就看不见了）。
   // 可见时吃上面这条 2s 轮询；隐藏时 hook 内自带 60s 心跳（详见 useTrayStatus 注释）。
   useTrayStatus(status?.rate_limit)
 
-  // ⑦ R38 批 5b：把条目**推给桌面状态控件小窗**。
-  // 小窗是纯显示的（它不轮询 —— 六个信息源全在这里），所以每次汇总结果变了就推一次。
-  // 没开小窗时这次 emit 没人听，代价是一次空广播；比"先查开关再决定推不推"简单得多，
-  // 也不会出现"刚打开小窗要等下一次轮询才有内容"的空窗期。
-  useEffect(() => {
-    void broadcastNotices(notices)
-  }, [notices])
+  // ⑦ R38 批 5b 的「把条目推给小窗」**已退役**（M5-2b，devlog/259）：小窗现在自己拉
+  // `/vtuber/notices`（同一个 `useNotices`、同一份口径），不再需要主窗口替它取数 ——
+  // 那条广播的代价正是"主窗口不在（没开 / 关掉了）时小窗永远是空的"（M4 拆了一半，本批拆干净）。
 
   // ⑧ R38 批 5b：**启动时**按偏好把小窗摆回来。
   // 只在挂载时跑一次：之后的开关由设置弹窗直接调 `showWidgetWindow`/`hideWidgetWindow`
@@ -629,12 +478,38 @@ export default function TopBar() {
     return () => un?.()
   }, [])
 
-  /** 面板动作 → 具体行为（渲染层不碰业务） */
-  const onIslandAction = (kind: NoticeActionKind) => {
-    if (kind === 'open-report') setReportOpen(true)
-    else if (kind === 'login') setLoginOpen(true)
+  /**
+   * 面板动作 → 具体行为（渲染层不碰业务）。
+   *
+   * ⚠️ M5-2b（devlog/259）：报告的**明细**不再随报告条目一起来（条目由后端出，它只有文案），
+   * 而是点「查看详情」时从**当前** `status.post.last_result` 取（`fetch-status` 那条链照旧在跑，
+   * 字段最全：stored/skipped/video_missing/issues）。点「知道了 / 关闭」则把**服务端那条
+   * 通知 id** 记成已读（`POST /vtuber/notices/ack`，落库）—— 那正是"刷新 / 深休眠重建之后
+   * 报告原地复活"这个老毛病的修法。
+   */
+  const onIslandAction = (kind: NoticeActionKind, notice?: Notice) => {
+    if (kind === 'open-report') {
+      const res = status?.post.last_result ?? null
+      if (res) setDoneReport(res)
+      setReportOpen(true)
+      return
+    }
+    if (kind === 'login') { setLoginOpen(true); return }
+    if (kind === 'dismiss') {
+      ackNotice(notice)
+      return
+    }
     // 'open-limits' 暂未接线：能力受限仍由顶栏那个**独立入口**承担
     // （工具 vs 通知的分工，见 devlog/089）；类型里保留它是给后续批次用
+  }
+
+  /** 把一条通知记成已读（落库）。失败只记日志 —— 界面已经把它收起来了，别弹错误打断用户。 */
+  const ackNotice = (notice?: Notice) => {
+    if (!notice?.id) return
+    void api.ackNotice(notice.id).then((r) => {
+      // 已读集合回来了 ⇒ 本地立刻按它过滤，不必等下一条轮询（点完就消失才跟手）
+      setServerNotices((prev) => (prev ? prev.filter((x) => !r.acked.includes(x.id)) : prev))
+    }).catch(() => { /* 后端不可达：下一条轮询会把它带回来，不打断用户 */ })
   }
 
   const handleMinimize = () => void tauriWindow().then((w) => w.minimize())
@@ -695,8 +570,22 @@ export default function TopBar() {
     const w = window as unknown as {
       __ddtoolkitSeedReport?: (r: PostFetchStatus['last_result'] | null) => void
     }
+    // ⚠️ M5-2b：报告条目现在由**后端**出（`GET /vtuber/notices`），所以只塞 `doneReport`
+    //    已经画不出那条条目了 —— 注入必须走**本地覆盖**那一层（`extraLocal`），
+    //    否则 `.si-count` / `.si-item-action` 那几条判据会**静默空转**（探针照旧绿，
+    //    而面板里根本没有对象可量）。id 与后端同格式（`report-<seq>`），
+    //    这样「查看详情」/「知道了」走的是同一条接线。
     w.__ddtoolkitSeedReport = (r) => {
       setDoneReport(r as NonNullable<PostFetchStatus['last_result']> | null)
+      if (!r) { setDevNotices([]); return }
+      const issues = r.issues ?? []
+      setDevNotices([{
+        id: `report-${r.seq}`, kind: 'report', sticky: true, source: '完成报告',
+        text: `全量帖子抓取完成 · 存储 ${r.stored ?? 0} · 跳过 ${r.skipped ?? 0}`,
+        detail: r.video_missing ? `视频可能缺 ${r.video_missing} 条`
+          : issues.length ? `${issues.length} 处中断（${issues[0].stop_reason}）` : undefined,
+        action: { label: '查看详情', kind: 'open-report' },
+      }])
     }
     return () => {
       delete w.__ddtoolkitSeedReport

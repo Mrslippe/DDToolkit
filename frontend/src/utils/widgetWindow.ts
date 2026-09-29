@@ -300,8 +300,12 @@ export function widgetPanelMaxHeight(
 
 // ── 两扇窗之间的通道（R38 批 5b）──────────────────────────────────────
 
-/** 主窗口 → 小窗：当前条目 */
-export const WIDGET_NOTICES_EVENT = 'widget:notices'
+/**
+ * ⚠️ **「主窗口 → 小窗：当前条目」那条广播已退役**（M5-2b，devlog/259）。
+ *
+ * 小窗改拉 `GET /vtuber/notices`（两扇窗同一个 hook），所以不再需要"主窗口替小窗取数"
+ * 这条通道 —— 而它的代价恰恰是"主窗口不在（没开 / 关掉了）时小窗永远是空的"。
+ */
 /** 小窗 → 主窗口：面板里点了动作（"去登录"/"查看详情"这些只有主窗口做得了） */
 export const WIDGET_ACTION_EVENT = 'widget:action'
 /**
@@ -353,25 +357,6 @@ export async function resurfaceMainWindow(): Promise<boolean> {
     return false
   } catch {
     return true   // 拿不到窗口列表：不动它是最安全的
-  }
-}
-
-/**
- * 主窗口把条目推给小窗。
- *
- * **小窗自己不轮询** —— 六个信息源（任务进度/风控/登录/完成报告/瞬时消息/磁盘）全在主窗口的
- * `TopBar` 里，小窗再来一份就是**双倍请求**。所以小窗是**纯显示**的：主窗口推什么它画什么。
- * 这也是没有按规格 §8 抽 `useStatusIsland()` 的原因 —— 抽了也只是把轮询搬个家，
- * 两扇窗仍然各轮各的；推事件才是真的只轮一次。
- *
- * 浏览器/探针环境没有 `@tauri-apps/api/event`（动态 import 会失败）—— 静默跳过。
- */
-export async function broadcastNotices(notices: unknown[]): Promise<void> {
-  try {
-    const { emit } = await import('@tauri-apps/api/event')
-    await emit(WIDGET_NOTICES_EVENT, notices)
-  } catch {
-    /* 非桌面端：没有第二扇窗，没人听 */
   }
 }
 

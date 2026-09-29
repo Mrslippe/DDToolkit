@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import StatusIsland from './StatusIsland'
 import type { Notice, NoticeActionKind } from '../utils/notificationHub'
-import { mergeWidgetNotices, useStreamNotices } from '../utils/noticeStream'
+import { useNotices } from '../utils/noticeStream'
+import { api } from '../api/api'
 import { EVENTS, on } from '../utils/appEvents'
 import {
-  WIDGET_NOTICES_EVENT,
   WIDGET_POS_KEY,
   relayWidgetAction,
   saveWidgetPos,
@@ -17,28 +17,26 @@ import {
 /**
  * 桌面状态控件小窗（R38 批 5b，规格 §7/§8）。由 `?widget=1` 挂载。
  *
- * ## 它**不轮询**
+ * ## 它现在**自己取数**（M5-2b，devlog/259）
  *
- * 六个信息源（任务进度 / 风控冷却 / 登录失效 / 完成报告 / 瞬时消息 / 磁盘）全在主窗口的
- * `TopBar` 里，小窗再来一份就是**双倍请求**。所以小窗是**纯显示**的：主窗口推什么它画什么
- * （`widget:notices`）。反过来，面板里的动作（"去登录"/"查看详情"）只有主窗口做得了 ——
- * 小窗把点击**转回去**（`widget:action`）。
- *
- * ## 它的条目从哪来（M4 起是**两路**）
+ * 改造前小窗是**纯显示**的：六个信息源全在主窗口的 `TopBar` 里，主窗口用 Tauri 事件
+ * 把汇总结果推过来 —— 代价是**主窗口不在（没开 / 关掉了）小窗就永远是空的**。
+ * M4 拆了一半（自己订阅推送），M5-2b 拆干净：
  *
  * | 来源 | 覆盖的事实 | 主窗口不在时 |
  * |---|---|---|
- * | **自己订阅推送**（`useStreamNotices`，M4） | 开播边沿 / 任务已受理 / 操作完成 | ✅ 仍然到 |
- * | 主窗口广播 `widget:notices` | 轮询类：登录失效 / 风控冷却 / 完成报告 / 抓取进度 i/N | ❌ 暂时没有（等 M5） |
+ * | **后端通知汇总**（`GET /vtuber/notices`，3s 一条轻链） | 登录失效 / 风控冷却 / 完成报告 / 抓取进度 i/N | ✅ 仍然到 |
+ * | **自己订阅推送**（`useNotices` 内部 `startMessageBus`） | 开播边沿 / 任务已受理 / 操作完成 | ✅ 仍然到 |
  *
- * 两路的合并规则在 `utils/noticeStream.ts::mergeWidgetNotices`（纯函数，有单测）。
- * 反过来，面板里的动作（"去登录"/"查看详情"）只有主窗口做得了 ——
- * 小窗把点击**转回去**（`widget:action`）。
+ * ⇒ **两扇窗各自向后端要同一份数据**（同一条端点、同一个 hook、同一套合并规则），
+ * 不再有"谁替谁取数"的依赖。那条广播（`widget:notices`）与它的 emit 点都已删除。
  *
- * > 这也是**没有**按规格 §8 抽 `useStatusIsland()` 的原因：抽了只是把轮询搬个家，
- * > 两扇窗仍然各轮各的；**推事件才是真的只轮一次**。
- * > ⚠️ M4 之后小窗**自己开了一条推送连接**（SSE，不是轮询）：订阅是"服务端推才动"，
- * > 不存在"两扇窗各轮一遍"的双倍请求 —— 那条理由只对**轮询**成立。
+ * 面板里的动作（"去登录"/"查看详情"）**仍然只有主窗口做得了**（登录浮窗 / 报告对话框
+ * 都在主窗口）—— 小窗把点击**转回去**（`widget:action`，`relayWidgetAction`）。
+ *
+ * > 规格 §8 那个 `useStatusIsland()` 仍然不抽：两扇窗的**宿主差异**（尺寸/材质/拖动/
+ * > 动作回传）比共性大，抽出来只会变成一个到处是分支的组件。共用的是**取数与合并**
+ * > （`utils/noticeStream.ts::useNotices`），那才是真正重复的那部分。
  *
  * ## 拖动：不能用 `data-tauri-drag-region`
  *
@@ -54,9 +52,8 @@ const DRAG_THRESHOLD_PX = 4
 /**
  * **dev-only**：探针往小窗注入条目的页面事件名。
  *
- * 为什么需要它：小窗**只听主窗口推的** `widget:notices`（Tauri 事件），
- * 而探针跑在无头浏览器里 —— 没有 Tauri 事件 ⇒ 小窗**永远是空闲态**
- * （`lit=false` ⇒ hover 不展开 ⇒ 面板永远量不到）。
+ * 为什么需要它：探针跑在无头浏览器里 —— 既不连推送通道、后端也没有它要的条目
+ * ⇒ 小窗**永远是空闲态**（`lit=false` ⇒ hover 不展开 ⇒ 面板永远量不到）。
  * 于是"面板在小窗里能不能用"这条判据会**空转**（永远没有面板可量）。
  *
  * 与 `--status-island` 用 `ddtoolkit:pill-message` 是同一套思路：
@@ -66,22 +63,35 @@ const DRAG_THRESHOLD_PX = 4
 export const WIDGET_SEED_NOTICES_EVENT = EVENTS.widgetSeed
 
 export default function StatusWidgetWindow() {
-  /**
-   * 主窗口广播来的条目（`widget:notices`）—— M4（devlog/252）起它**只是两路来源之一**：
-   * 另一路是小窗**自己**从推送通道算出来的（`useStreamNotices`）。两路怎么合见
-   * `utils/noticeStream.ts::mergeWidgetNotices`。
-   *
-   * ⚠️ 这一路**本轮不删**：轮询类的事实（登录失效 / 风控冷却 / 完成报告 / 抓取进度 i/N）
-   * 还住在主窗口，退役点落在 M5（后端接管汇总）。
-   */
-  const [fromMain, setFromMain] = useState<Notice[]>([])
   const [now, setNow] = useState(() => Date.now())
-  /** 小窗**自己**订阅推送通道算出来的条目（M4）：主窗口不在也照样更新 */
-  const streamNotices = useStreamNotices(now)
-  const notices = useMemo(
-    () => mergeWidgetNotices(streamNotices, fromMain),
-    [streamNotices, fromMain],
-  )
+  /**
+   * 服务端那份通知列表（M5-2b，devlog/259）：**主窗口在不在都一样**。
+   *
+   * ⚠️ `widget:notices` 广播**已退役** —— 它当年的职责（"轮询类的事实由主窗口替小窗取"）
+   * 现在由后端承担，而它的代价（主窗口不在 ⇒ 小窗永远是空的）也随之消失。
+   * 本地覆盖（推送来的进度/瞬时消息、dev 注入）在 `useNotices` 里合并。
+   */
+  const [serverNotices, setServerNotices] = useState<Notice[] | null>(null)
+  /** dev-only 注入的条目（探针用；生产构建里恒为空数组） */
+  const [seeded, setSeeded] = useState<Notice[] | null>(null)
+  const notices = useNotices(now, { server: serverNotices, extraLocal: seeded ?? undefined })
+
+  // 自己拉服务端列表：3s 一条轻链（小窗只有一个胶囊，没必要跟主窗口那条 3/10s 自适应）。
+  // ⚠️ 隐藏/最小化**不**停链：小窗本来就是"主窗口收进托盘时唯一能看的东西"（R18 立的规矩）。
+  useEffect(() => {
+    let stop = false
+    const tick = async () => {
+      try {
+        const nb = await api.getNotices()
+        if (!stop) setServerNotices(nb.notices)
+      } catch {
+        /* 后端不可达时保持上一份 */
+      }
+    }
+    void tick()
+    const t = window.setInterval(tick, 3000)
+    return () => { stop = true; window.clearInterval(t) }
+  }, [])
   const down = useRef<{ x: number; y: number; dragging: boolean } | null>(null)
   const [diag, setDiag] = useState('…')
   /**
@@ -108,32 +118,20 @@ export default function StatusWidgetWindow() {
   const flipUpRef = useRef(false)
   const [flipUp, setFlipUp] = useState(false)
 
-  // ① 条目：**主窗口广播的那一路**（另一路是自己订阅推送，见上面的 `useStreamNotices`）
+  // ① **dev-only 的注入通路**（R38 批 5d，M5-2b 起注入的是"本地覆盖"那一层）：
+  //    探针（无头浏览器）里没有推送也没有后端条目，于是小窗**永远是空闲态**
+  //    （没有条目 ⇒ `lit=false` ⇒ hover 不展开、面板永远量不到），
+  //    而"面板在小窗里到底能不能用"正是那个真 bug 的判据 —— 不注入就永远空转。
+  //    走的是**页面自己的事件**（不是直接改 React state），与 `--status-island` 同款做法。
+  //    生产构建里 `import.meta.env.DEV` 为 false ⇒ 整段被摇掉。
+  //
+  //    ⚠️ 它现在与"服务端列表"合并在 `useNotices` 里（`extraLocal`）—— 注入的条目**不进
+  //    服务端列表**，所以判据量到的仍是"面板能画出来"，与后端供数互不干扰。
   useEffect(() => {
-    let un: (() => void) | null = null
-    void (async () => {
-      try {
-        const { listen } = await import('@tauri-apps/api/event')
-        un = await listen<Notice[]>(WIDGET_NOTICES_EVENT, (e) => setFromMain(e.payload ?? []))
-      } catch {
-        /* 非桌面端（探针/浏览器）：没有主窗口可听 —— M4 之后**推送那一路仍然有效** */
-      }
-    })()
-    // ⚠️ **dev-only 的注入通路**（R38 批 5d）：探针（无头浏览器）里没有 Tauri 事件，
-    //    于是小窗**永远是空闲态**（没有条目 ⇒ `lit=false` ⇒ hover 不展开、面板永远量不到）。
-    //    而"面板在小窗里到底能不能用"正是那个真 bug 的判据 —— 不注入就永远空转。
-    //    走的是**页面自己的事件**（不是直接改 React state），与 `--status-island` 同款做法。
-    //    生产构建里 `import.meta.env.DEV` 为 false ⇒ 整段被摇掉。
-    //
-    //    M4 起它注入的是**广播那一路**（轮询类），与"自己订阅推送"那一路互相独立 ——
-    //    两路各有各的判据（`--status-widget` 用注入、`--status-widget` 的推送段用真消息）。
-    if (import.meta.env.DEV) {
-      const off = on(EVENTS.widgetSeed, (detail) => {
-        if (Array.isArray(detail)) setFromMain(detail)
-      })
-      return () => { un?.(); off() }
-    }
-    return () => un?.()
+    if (!import.meta.env.DEV) return
+    return on(EVENTS.widgetSeed, (detail) => {
+      if (Array.isArray(detail)) setSeeded(detail as Notice[])
+    })
   }, [])
 
   // ② 过期判定要跟着走 —— ttl 到点的条目得自己消失。1s 一跳够用

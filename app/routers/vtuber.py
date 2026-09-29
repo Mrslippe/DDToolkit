@@ -1269,11 +1269,26 @@ async def _adopt_background(vtuber_id: int, account_id: int, label: str = "") ->
     """
     # 先起回填：与下面两条关键路径并行（顺序上先 spawn，日志即连在一起）
     _spawn_background(_backfill_adopted_history(account_id, label))
-    await asyncio.gather(
+    results = await asyncio.gather(
         async_fetch_accounts([account_id], label=f"VTuber#{vtuber_id}"),
         async_fetch_first_screen(account_id),
         return_exceptions=True,   # 两条路径内部各自兜异常，互不牵连
     )
+    # 首屏抓取完成 ⇒ 报一条（M5-2b，devlog/259）。⚠️ 这条原本住在 `TopBar` 的
+    # `post.last_result` 分支里（v0.9.4 的「新 V 首屏抓取完成 · 投稿 N · 动态 M · 入库 K」），
+    # 而 M5-2b 把汇总交给后端之后那个分支就没了 —— 收录/加账号是**用户发起的动作**，
+    # 它的完成反馈必须和别的手动动作一样由后端出（`services/notices` 的环形缓冲 + 推送）。
+    #
+    # `originator=""`（空串）是有意的：**发起方自己也要看到**（旧行为就是本地弹胶囊），
+    # 而"空串不等于任何宿主" ⇒ 所有窗口都播（见 `_host_of` 的注释）。
+    first_screen = results[1] if len(results) > 1 else None
+    if first_screen is not None and not isinstance(first_screen, BaseException):
+        _note_manual_done(
+            f"新 V 首屏抓取完成 · 投稿 {getattr(first_screen, 'videos', 0) or 0}"
+            f" · 动态 {getattr(first_screen, 'dynamics', 0) or 0}"
+            f" · 入库 {getattr(first_screen, 'stored', 0) or 0}",
+            "",
+        )
 
 
 async def _backfill_adopted_history(account_id: int, label: str = "") -> None:

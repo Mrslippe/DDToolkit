@@ -461,7 +461,7 @@ export default function PostsPage() {
   // 依赖数组逐字保留在那里的文件头约束里（切筛选、切账号都算"用户意图重置"）。
 
   // 抓取/更新/解除订阅/加账号后刷新 —— 6 个动作回调已搬到 pages/useVtuberActions.ts
-  // （同一套骨架：守卫 → setFetching → kickPoll → api → 三种结果提示 → finally 复位）。
+  // （同一套骨架：守卫 → setFetching → api → 三种结果提示 → finally 复位）。
   const {
     fetching, handleFetch, handleFetchPosts, handleFetchAllPosts,
     handleUpdatePosts, handleDeleteVtuber, handleAccountAdded,
