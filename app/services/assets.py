@@ -54,7 +54,7 @@ import hashlib
 import logging
 import os
 import urllib.parse
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -463,6 +463,74 @@ def prune(db: Session, kind: str | None = None, *, max_bytes: int | None = None,
         entry["after_bytes"] = entry["before_bytes"] - entry["freed_bytes"]
         report["kinds"][k] = entry
     db.flush()          # 让同一会话里的下一个查询看得见删除（autoflush=False）
+    return report
+
+
+# ── L4：强制回源核对（"稳定键命中就不回源"那条取舍的逃生口）────────────────
+
+#: 默认复核节流：只核对**至少这么旧**的副本（规格 §2.1 / §7 第 3 条：≥7 天一次）
+VERIFY_MIN_AGE_DAYS = 7
+
+
+async def verify(db: Session, kind: str | None = None, *, min_age_days: int = VERIFY_MIN_AGE_DAYS,
+                 limit: int = 50, fetch=None, apply: bool = False,
+                 now: datetime | None = None) -> dict:
+    """**强制回源**核对一份份副本，返回报告（L4，devlog/262）。**不替调用方 commit**。
+
+    ## 为什么需要它
+
+    `get()` 命中稳定键就**不回源**（那是本模块的主要收益）——代价写在规格 §2.1：
+    万一平台"换了图却没换文件名"，我们会一直用旧图。实测微博/B 站换图都会换文件名，
+    所以这条取舍值；但**必须留一个口子**：这个函数就是那个口子（规格 §7 第 3 条）。
+
+    三条纪律：
+    - **节流 ≥ `min_age_days`**（默认 7 天）：以副本的 `created_at` 为基准 —— 复核是**额外**请求，
+      不能变成每轮都做（那是把收益又还回去）；想立刻全量复核就显式传 `min_age_days=0`；
+    - **只读优先**：默认 `apply=False` ⇒ 只报告不一致，**不动**文件与索引；
+      `apply=True` 才用刚取回的新字节覆盖（`put`，原子写）并把 `sha256/bytes` 更新；
+    - **失败只记账**：取不到就记 `unreachable`（图床挂了不等于我们的副本坏了）。
+    """
+    now = now or _now()
+    kinds = [kind] if kind else list(KINDS)
+    cutoff = now - timedelta(days=max(0, int(min_age_days)))
+    rows = (db.query(LocalAsset)
+            .filter(LocalAsset.kind.in_(kinds))
+            .order_by(LocalAsset.created_at.asc())
+            .all())
+    report: dict = {"checked": 0, "ok": 0, "mismatch": [], "unreachable": [],
+                    "skipped_fresh": 0, "applied": bool(apply),
+                    "min_age_days": int(min_age_days)}
+    for row in rows:
+        if report["checked"] >= limit:
+            break
+        if row.created_at and row.created_at > cutoff:
+            report["skipped_fresh"] += 1          # 还"新" ⇒ 这一轮不核对它
+            continue
+        if not abs_path(row.path).exists():
+            report["unreachable"].append({"kind": row.kind, "path": row.path,
+                                          "why": "本地副本不在盘上"})
+            continue
+        if fetch is None:
+            break                                  # 没给取数函数 ⇒ 只能回报"该核对哪些"
+        try:
+            data = await fetch(row.url)
+        except Exception as e:  # noqa: BLE001 —— 单份失败不该中断整轮
+            report["unreachable"].append({"kind": row.kind, "url": row.url,
+                                          "why": f"{type(e).__name__}: {e}"})
+            continue
+        report["checked"] += 1
+        if not data:
+            report["unreachable"].append({"kind": row.kind, "url": row.url, "why": "取不到字节"})
+            continue
+        digest = hashlib.sha256(data).hexdigest()
+        if digest == (row.sha256 or ""):
+            report["ok"] += 1
+            continue
+        report["mismatch"].append({"kind": row.kind, "url": row.url, "path": row.path,
+                                   "was": row.sha256, "now": digest})
+        if apply:
+            put(db, row.kind, row.url, data, hint=None)
+    db.flush()
     return report
 
 

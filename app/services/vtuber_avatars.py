@@ -245,6 +245,115 @@ def local_avatar_map(db: Session, vtubers: list[VTuber]) -> dict[int, str | None
     return out
 
 
+# ── L4：把"同一张头像的多行"并成一行（devlog/262）────────────────────────
+
+def _version_digest(db: Session, row: VtuberAvatarHistory) -> str | None:
+    """这一行的**内容摘要**（优先取轻资产索引里那份；索引里没有就现读盘算一次）。
+
+    为什么用内容摘要而不是只比 URL：R47 之前本地文件名是**固定**的，同一张图会先落到
+    `{platform}_{uid}.jpg`、之后又落到 `{platform}_{uid}_{摘要}.jpg` —— 两个文件名、同一张脸。
+    """
+    row_asset = assets.lookup(db, assets.KIND_AVATAR, (row.avatar_url or "").strip())
+    if row_asset is not None and row_asset.sha256:
+        return row_asset.sha256
+    rel = (row.avatar_path or "").strip()
+    if not rel:
+        return None
+    path = assets.abs_path(rel)
+    if not path.exists():
+        return None
+    return assets._sha256_file(path)
+
+
+def _pick_keeper(rows: list[VtuberAvatarHistory], selected: str) -> VtuberAvatarHistory:
+    """保留哪一行：**用户当前选中的那张优先**（否则"当前"标记会丢），再按最新的。
+
+    与 `_trim` 的 `protect_url` 同一条纪律：用户的选择不许被"整理"掉。
+    """
+    if selected:
+        for r in rows:
+            if (r.avatar_url or "").strip() == selected:
+                return r
+    return max(rows, key=lambda r: (r.first_seen_at or _now(), r.id or 0))
+
+
+def merge_duplicate_versions(db: Session, *, vtuber_id: int | None = None,
+                             dry_run: bool = True) -> dict:
+    """把**同一张图的多行**并成一行（L4，devlog/262）。**不提交**，由调用方收口。
+
+    两条判同路径（命中任一即算同一张脸）：
+    ① **稳定键**相同（`assets.key_of`）：微博每轮抓取换签名 ⇒ R47 的账本按 URL 记账会各留一行；
+    ② **内容摘要**相同（`local_assets.sha256` 或现读盘）：R47 前后两个文件名指向同一张图。
+
+    ⚠️ **只删行、绝不删文件**（方案 §4 S-1）：旧文件名/旧副本留在盘上，选择器里那几张图
+    仍然画得出来（`avatar_path` 只在保留行上，被合并掉的行本来就指向同一张图）。
+    ⚠️ `dry_run=True`（默认）⇒ 一个行都不删，只回报告；调用方拿它先给用户看。
+    """
+    from app.repositories.vtuber_repo import VtuberAvatarHistoryRepo
+
+    vids = [vtuber_id] if vtuber_id else [
+        row[0] for row in db.query(VtuberAvatarHistory.vtuber_id).distinct().all()
+    ]
+    report: dict = {"dry_run": bool(dry_run), "groups": 0, "merged": 0,
+                    "kept": [], "dropped": [], "vtubers": len(vids)}
+    for vid in vids:
+        rows = VtuberAvatarHistoryRepo(db).list_by_vtuber(vid)
+        if len(rows) < 2:
+            continue
+        selected = (db.query(VTuber.avatar).filter(VTuber.id == vid).scalar() or "").strip()
+        buckets: dict[str, list[VtuberAvatarHistory]] = {}
+        for r in rows:
+            url = (r.avatar_url or "").strip()
+            key = assets.key_of(url)
+            digest = _version_digest(db, r)
+            # 两个键都试：先按内容摘要归（最准），没有再按稳定键
+            for tag in ([f"sha:{digest}"] if digest else []) + ([f"key:{key}"] if key else []):
+                buckets.setdefault(tag, []).append(r)
+        # 一个组可能被两条路径同时命中 ⇒ 用并查集式的合并（取并集后去重）
+        merged_groups: list[list[VtuberAvatarHistory]] = []
+        for group in buckets.values():
+            if len(group) < 2:
+                continue
+            ids = {id(x) for x in group}
+            for existing in merged_groups:
+                if ids & {id(x) for x in existing}:
+                    existing.extend([x for x in group if id(x) not in {id(y) for y in existing}])
+                    break
+            else:
+                merged_groups.append(list(group))
+        for group in merged_groups:
+            if len(group) < 2:
+                continue
+            keeper = _pick_keeper(group, selected)
+            report["groups"] += 1
+            report["kept"].append({"vtuber_id": vid, "url": keeper.avatar_url,
+                                   "path": keeper.avatar_path, "rows": len(group)})
+            for r in group:
+                if r is keeper:
+                    continue
+                report["dropped"].append({"vtuber_id": vid, "id": r.id,
+                                          "url": r.avatar_url, "path": r.avatar_path})
+                report["merged"] += 1
+                if dry_run:
+                    continue
+                # 合并"曾见过"的时间窗：最早的那次留着，最近的那次也留着
+                if r.first_seen_at and (keeper.first_seen_at is None
+                                        or r.first_seen_at < keeper.first_seen_at):
+                    keeper.first_seen_at = r.first_seen_at
+                if r.last_seen_at and (keeper.last_seen_at is None
+                                       or r.last_seen_at > keeper.last_seen_at):
+                    keeper.last_seen_at = r.last_seen_at
+                if not (keeper.avatar_path or "").strip() and (r.avatar_path or "").strip():
+                    keeper.avatar_path = r.avatar_path
+                if not keeper.platform and r.platform:
+                    keeper.platform = r.platform
+                if not keeper.account_id and r.account_id:
+                    keeper.account_id = r.account_id
+                db.delete(r)
+    db.flush()
+    return report
+
+
 def avatar_versions(db: Session, vtuber: VTuber,
                     limit: int = AVATAR_VERSION_LIMIT) -> dict:
     """该 V 的**可选项**列表（新的在前）+ 当前用的那张。

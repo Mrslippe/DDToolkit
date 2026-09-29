@@ -708,3 +708,108 @@ def test_avatar_local_is_derived_from_the_assets_index(db, client):
     assert got["avatar"] == NEW_URL, "`avatar` 的语义不许动（仍是远端原文）"
     # 账本/账号都不认识它 ⇒ 说明这一条确实是索引给出来的
     assert db.query(VtuberAvatarHistory).count() == 0
+
+# ── L4（devlog/262）：把"同一张头像的多行"并成一行 ──────────────────────────
+#
+# 起因：R47 的账本按**完整 URL** 记账，而微博每轮抓取都换签名 ⇒ 同一张脸会各留一行；
+# R47 之前本地文件名还是**固定**的（`{platform}_{uid}.jpg`），同一张图会先落一个文件、
+# 之后又落一个带摘要的文件 ⇒ **两个文件名、同一张脸**（真实样本见 tests/fixtures/light_assets.json）。
+# 这批提供一次性合并：只并**行**，绝不删文件（S-1）。
+
+def _mk_row(db, v, url, path, *, minutes=0, last_minutes=None, account=None):
+    """直接造账本行（绕过抓取，便于构造"历史遗留"形态）。
+
+    `minutes` = 首次见到；`last_minutes` = 最近见到（不给就跟首次一样 —— 真实行两者都有值）。
+    """
+    from datetime import datetime, timedelta
+    from app.models.vtuber import VtuberAvatarHistory as H
+
+    base = datetime(2026, 9, 29, 10, 0, 0)
+    row = H(vtuber_id=v.id, account_id=account.id if account else None, platform="weibo",
+            avatar_url=url, avatar_path=path,
+            first_seen_at=base + timedelta(minutes=minutes),
+            last_seen_at=base + timedelta(minutes=last_minutes if last_minutes is not None
+                                          else minutes))
+    db.add(row)
+    db.commit()
+    return row
+
+
+def test_merge_collapses_rotated_signatures_into_one_row(db, tmp_path):
+    """① 同一张图的两次签名 ⇒ 两行并一行；**用户选中的那行必须活下来**。"""
+    from app.services import assets
+
+    v = _mk_v(db)
+    old_row = _mk_row(db, v, OLD_URL, "static/avatars/a.jpg", minutes=0)
+    new_row = _mk_row(db, v, NEW_URL, "static/avatars/b.jpg", minutes=5)
+    v.avatar = OLD_URL                      # 用户选的是**旧签名那行**
+    db.commit()
+
+    report = VA.merge_duplicate_versions(db, vtuber_id=v.id, dry_run=True)
+    assert report["groups"] == 1 and report["merged"] == 1, report
+    assert len(_rows(db, v)) == 2, "dry-run 不许删任何行"
+
+    report = VA.merge_duplicate_versions(db, vtuber_id=v.id, dry_run=False)
+    db.commit()
+    rows = _rows(db, v)
+    assert len(rows) == 1, f"同一张图还剩 {len(rows)} 行"
+    assert rows[0].avatar_url == OLD_URL, "用户选中的那行被合并掉了（当前标记会丢）"
+    assert report["merged"] == 1 and report["groups"] == 1
+    assert new_row.id and old_row.id
+
+
+def test_merge_collapses_same_content_under_two_file_names(db, tmp_path, monkeypatch):
+    """② 两个**不同** URL、两个文件名，但内容相同（sha256 一致）⇒ 也算同一张。"""
+    from app.services import assets
+
+    monkeypatch.setattr(assets, "data_root", lambda: tmp_path)
+    v = _mk_v(db)
+    # 盘上两个文件内容相同（真实样本：weibo_7471118487.jpg 与 …_3d2b0b8a.jpg sha256 一致）
+    for rel in ("static/avatars/a.jpg", "static/avatars/b.jpg"):
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"THE-SAME-IMAGE")
+    a = _mk_row(db, v, "https://x/a.jpg", "static/avatars/a.jpg", minutes=0)
+    b = _mk_row(db, v, "https://x/b.jpg", "static/avatars/b.jpg", minutes=1)
+
+    report = VA.merge_duplicate_versions(db, vtuber_id=v.id, dry_run=False)
+    db.commit()
+    assert report["merged"] == 1, report
+    assert len(_rows(db, v)) == 1
+    # ⚠️ 文件一个都不许删（S-1）
+    assert (tmp_path / "static/avatars/a.jpg").exists()
+    assert (tmp_path / "static/avatars/b.jpg").exists()
+    assert a.id and b.id
+
+
+def test_merge_keeps_the_time_window_and_is_idempotent(db, tmp_path, monkeypatch):
+    """③ 合并保留"最早见到"与"最近见到"；再跑一次什么都不做（幂等）。"""
+    from app.services import assets
+
+    monkeypatch.setattr(assets, "data_root", lambda: tmp_path)
+    v = _mk_v(db)
+    _mk_row(db, v, OLD_URL, "static/avatars/a.jpg", minutes=0, last_minutes=5)
+    _mk_row(db, v, NEW_URL, "static/avatars/b.jpg", minutes=30, last_minutes=45)
+
+    VA.merge_duplicate_versions(db, vtuber_id=v.id, dry_run=False)
+    db.commit()
+    row = _rows(db, v)[0]
+    assert row.first_seen_at.minute == 0, "最早那次丢了（窗口应当取并集）"
+    assert row.last_seen_at.minute == 45, "最近那次丢了（窗口应当取并集）"
+
+    again = VA.merge_duplicate_versions(db, vtuber_id=v.id, dry_run=False)
+    assert again["groups"] == 0 and again["merged"] == 0, f"不幂等：{again}"
+    assert len(_rows(db, v)) == 1
+
+
+def test_merge_does_not_touch_different_faces(db, tmp_path, monkeypatch):
+    """④ 两张**不同**的脸不许被并掉（反例：见谁像谁）。"""
+    from app.services import assets
+
+    monkeypatch.setattr(assets, "data_root", lambda: tmp_path)
+    v = _mk_v(db)
+    _mk_row(db, v, "https://x/face1.jpg", "static/avatars/1.jpg", minutes=0)
+    _mk_row(db, v, "https://x/face2.jpg", "static/avatars/2.jpg", minutes=1)
+
+    report = VA.merge_duplicate_versions(db, vtuber_id=v.id, dry_run=False)
+    assert report["merged"] == 0 and len(_rows(db, v)) == 2

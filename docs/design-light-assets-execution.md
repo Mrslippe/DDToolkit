@@ -230,7 +230,13 @@
 
 ### 批次 L4 — 可选扩展
 
-其他 kind（企划徽标 / 平台药丸艺术）、历史行按 `sha256` 合并、`--verify` 强制回源校验（≥7 天）。
+> ✅ **前两项已落地（2026-09-29，devlog/262）**：
+> ① **历史行合并** `vtuber_avatars.merge_duplicate_versions()` + `scripts/merge_avatar_versions.py`
+>    —— 两条判同路径（稳定键 / 内容摘要），保留「用户选中那行」，**只并行、绝不删文件**，默认 dry-run；
+> ② **强制回源校验** `assets.verify()` + `scripts/verify_assets.py` —— 是「稳定键命中就不回源」
+>    那条取舍的逃生口（规格 §2.1/§7），**≥7 天节流**、默认只报告、`--apply` 才用新字节覆盖。
+>    ⏭ **其他 kind（企划徽标 / 药丸艺术）不做**：没有消费者；加 kind 的成本已被 `local_assets.kind` 压得很低。
+
 **档位**：按实际改动定。
 
 ---

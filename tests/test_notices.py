@@ -320,13 +320,20 @@ def test_route_serves_notices(client):
 
 # ── ⑦ 瞬时消息 / 开播边沿的 TTL ────────────────────────────────────────
 
-def test_message_ttl_counts_from_record_time(client):
-    """⑦ TTL 从**记录时刻**起算：拉多少次都不会往后漂（否则消息永不过期）。"""
+def test_message_ttl_counts_from_record_time(client, monkeypatch):
+    """⑦ TTL 从**记录时刻**起算：拉多少次都不会往后漂（否则消息永不过期）。
+
+    ⚠️ **钟要注入**（2026-09-29，与上面开播那条同款）：`expiresAt` 的起算点是**记录那一刻**，
+    而 `build_notices` 又现取一次 `now` —— 拿 "`first["now"] + TTL`" 去断言**只在两次取钟
+    同一毫秒时成立**（实测就红过一次：`…327660 != …323661 + 4000`）。
+    钉死 `_now_ms` 并显式传 `now_ms=` 之后，"不往后漂"这条性质照样被下面两次不同 `now_ms` 看住。
+    """
+    monkeypatch.setattr(N, "_now_ms", lambda: 1_700_000_000_000)
     N.record_message("刚刚完成")
     st = _status()
-    first = _get(client, st)
+    first = N.build_notices(_Session(), status=st, now_ms=1_700_000_000_000)
     msg = [n for n in first["notices"] if n["kind"] == "message"]
-    assert len(msg) == 1 and msg[0]["expiresAt"] == first["now"] + N.MSG_TTL_MS
+    assert len(msg) == 1 and msg[0]["expiresAt"] == 1_700_000_000_000 + N.MSG_TTL_MS
 
     # 时间往后推（模拟"又一次轮询"）：到期那一刻起消失，且过期时刻**不变**
     later = N.build_notices(_Session(), status=st, now_ms=first["now"] + N.MSG_TTL_MS - 1)

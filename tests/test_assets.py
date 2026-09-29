@@ -20,6 +20,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from datetime import datetime, timedelta
@@ -313,3 +314,94 @@ def test_stats_counts_files_bytes_and_reports_dead_rows(db, data_dir):
     assert av["pinned"] == 1
     assert av["missing"] == 1, "索引有、盘上没有的条数必须报出来（否则'哪块在长/哪块在漏'答不了）"
     assert av["oldest"] is not None
+
+
+# ── L4（devlog/262）：`verify` 强制回源核对 ────────────────────────────────
+#
+# 这是"稳定键命中就不回源"那条取舍的**逃生口**（规格 §2.1：万一平台换了图却没换文件名）。
+# 判据的关键是**节流**：老的才核对，新的不碰（否则等于把主要收益还回去）。
+
+def _age(db, row, days: int):
+    """把一份副本改成 N 天前登记的（`verify` 以 `created_at` 为节流基准）。"""
+    row.created_at = datetime(2026, 9, 29, 12, 0, 0) - timedelta(days=days)
+    db.commit()
+    return row
+
+
+class _Fetcher:
+    def __init__(self, body: bytes | None = b"SAME", boom: bool = False):
+        self.body, self.boom, self.calls = body, boom, []
+
+    async def __call__(self, url: str):
+        self.calls.append(url)
+        if self.boom:
+            raise RuntimeError("图床挂了")
+        return self.body
+
+
+def test_verify_skips_fresh_and_checks_old(db, data_dir):
+    """① **老**副本才回源核对、**新**副本一个请求都不发（正对照：老的那份必须发）。"""
+    from app.services import assets as A
+
+    fresh = A.put(db, A.KIND_AVATAR, "https://x/fresh.jpg", b"SAME", hint="f")
+    old = A.put(db, A.KIND_AVATAR, "https://x/old.jpg", b"SAME", hint="o")
+    db.commit()
+    _age(db, fresh, 1)
+    _age(db, old, 30)
+
+    f = _Fetcher(b"SAME")
+    rep = asyncio.run(A.verify(db, A.KIND_AVATAR, fetch=f))
+
+    assert f.calls == ["https://x/old.jpg"], f"只该核对老的那份，实际 {f.calls}"
+    assert rep["checked"] == 1 and rep["ok"] == 1
+    assert rep["skipped_fresh"] == 1, "新的那份应当被节流跳过"
+    assert rep["mismatch"] == []
+
+
+def test_verify_reports_mismatch_and_only_repairs_with_apply(db, data_dir):
+    """② 内容不一致要报出来；**只有 `apply=True` 才动文件与索引**。"""
+    from app.services import assets as A
+
+    row = A.put(db, A.KIND_AVATAR, "https://x/a.jpg", b"OLD-BYTES", hint="a")
+    db.commit()
+    _age(db, row, 30)
+    path = data_dir / row.path
+    before = path.read_bytes()
+
+    rep = asyncio.run(A.verify(db, A.KIND_AVATAR, fetch=_Fetcher(b"NEW-BYTES")))
+    assert len(rep["mismatch"]) == 1 and rep["applied"] is False
+    assert rep["mismatch"][0]["was"] != rep["mismatch"][0]["now"]
+    assert path.read_bytes() == before, "apply=False 却改了文件"
+    db.expire_all()
+    assert A.lookup(db, A.KIND_AVATAR, "https://x/a.jpg").sha256 ==         hashlib.sha256(b"OLD-BYTES").hexdigest(), "apply=False 却改了索引"
+
+    rep2 = asyncio.run(A.verify(db, A.KIND_AVATAR, fetch=_Fetcher(b"NEW-BYTES"), apply=True))
+    db.commit()
+    assert len(rep2["mismatch"]) == 1 and rep2["applied"] is True
+    db.expire_all()
+    assert path.read_bytes() == b"NEW-BYTES", "apply=True 没有把新字节落盘"
+    assert A.lookup(db, A.KIND_AVATAR, "https://x/a.jpg").sha256 ==         hashlib.sha256(b"NEW-BYTES").hexdigest(), "apply=True 没有更新索引里的摘要"
+
+
+def test_verify_records_unreachable_without_crashing(db, data_dir):
+    """③ 取不到只记一笔（图床挂了 ≠ 我们的副本坏了），且**不许**把它算成 mismatch。"""
+    from app.services import assets as A
+
+    row = A.put(db, A.KIND_AVATAR, "https://x/a.jpg", b"BYTES", hint="a")
+    db.commit()
+    _age(db, row, 30)
+
+    rep = asyncio.run(A.verify(db, A.KIND_AVATAR, fetch=_Fetcher(boom=True)))
+    assert rep["checked"] == 0 and rep["mismatch"] == []
+    assert len(rep["unreachable"]) == 1 and "图床挂了" in rep["unreachable"][0]["why"]
+
+
+def test_verify_min_age_zero_checks_everything(db, data_dir):
+    """④ 显式 `min_age_days=0` = 立刻全量复核（逃生口要能"现在就用一次"）。"""
+    from app.services import assets as A
+
+    A.put(db, A.KIND_AVATAR, "https://x/a.jpg", b"SAME", hint="a")
+    db.commit()
+    f = _Fetcher(b"SAME")
+    rep = asyncio.run(A.verify(db, A.KIND_AVATAR, min_age_days=0, fetch=f))
+    assert rep["checked"] == 1 and rep["skipped_fresh"] == 0 and len(f.calls) == 1
