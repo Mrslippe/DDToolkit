@@ -60,7 +60,8 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models.vtuber import (Account, LocalAsset, VTuber, VtuberAvatarHistory)
+from app.models.vtuber import (Account, LocalAsset, Post, VTuber,
+                                 VtuberAvatarHistory)
 
 logger = logging.getLogger(__name__)
 
@@ -385,8 +386,21 @@ def _referenced_keys(db: Session, kind: str) -> set[str]:
     头像的三处引用：`vtubers.avatar`（用户显式选中）/ 账号 `avatar_url`（平台现值）/
     `vtuber_avatar_history.avatar_url`（历次头像账本）。少了这道保护，清理会把
     用户正看着的那张头像删掉（规格 §6 第 5 条）。
-    ⚠️ 封面（`posts.cover_local`）那条要等 L3 —— 本批还没有 cover 资产。
+
+    **封面**（L3，devlog/261）的引用面是 `posts.cover_url`，且**只看未归档的帖**：
+    归档帖本来就不在列表里滚，它的封面副本被清掉是可接受的（下次要看时还能重下），
+    而未归档帖的封面是"列表首屏就要画"的东西 —— 那正是我们主动固化的理由。
+    ⚠️ 这条查询会扫全部未归档帖（万级行），但它只在**手动清理**时跑一次，不在热路径上。
     """
+    if kind == KIND_COVER:
+        keys = set()
+        for (u,) in (db.query(Post.cover_url)
+                     .filter(Post.is_archived == False,          # noqa: E712 —— SQLAlchemy 需要 ==
+                             Post.cover_url.isnot(None)).all()):
+            k = key_of(u or "")
+            if k:
+                keys.add(k)
+        return keys
     if kind != KIND_AVATAR:
         return set()
     urls: set[str] = set()

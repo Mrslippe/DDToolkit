@@ -93,7 +93,7 @@ def test_instance_attribute_still_wins_over_the_overlay(db):
 
 
 def test_defaults_are_the_values_from_before_the_overlay():
-    """把类属性改成覆盖层 property 时**只搬不改**：默认值逐个对账（23 个）。
+    """把类属性改成覆盖层 property 时**只搬不改**：默认值逐个对账。
 
     这条是"搬迁"批次的反向保险：谁顺手调了某个默认值，测试会指出是哪一个。
     """
@@ -111,6 +111,8 @@ def test_defaults_are_the_values_from_before_the_overlay():
         "FIRST_SCREEN_DYNAMICS_LIMIT": 3,
         "EXTERNAL_ENABLED": True, "EXTERNAL_ZEROROKU_ENABLED": True,
         "EXTERNAL_DANMAKUS_ENABLED": True,
+        # L3（devlog/261）：默认**开**（否则"源站挂了封面还在"这条收益拿不到）
+        "PIN_POST_COVERS": True,
     }
     assert {k: s.default for k, s in rs.SPECS.items()} == expect
     # 没覆盖时，property 读到的就是默认值（证明接线正确，而不是"恰好相等"）
@@ -318,9 +320,13 @@ def test_vital_settings_are_visible_and_tuning_knobs_are_advanced():
     visible = {k for k, s in rs.SPECS.items() if not s.advanced}
     advanced = {k for k, s in rs.SPECS.items() if s.advanced}
     assert visible == {
-        # 抓取设置（11 项：风控与节流 3 + 开播 1 + 动态 1 + 静默时段 3 + 每日 1 + 收录首屏 2）
+        # 抓取设置（12 项：风控与节流 3 + 开播 1 + 动态 1 + **固化封面 1** + 静默时段 3
+        #          + 每日 1 + 收录首屏 2）
         "REQUEST_INTERVAL_MIN", "REQUEST_INTERVAL_MAX", "RATE_LIMIT_COOLDOWN",
         "LIVE_POLL_SECONDS", "DYNAMICS_MIN_CYCLE_SECONDS",
+        # L3（devlog/261）：固化封面会**明显占磁盘**（实测平均 1.1MB/张）⇒ 必须是用户看得见、
+        # 能关掉的决策，不能藏在高级里
+        "PIN_POST_COVERS",
         # R30：静默时段是"用户自己决定睡觉时不打扰"，属于用户该看到的决策（默认关闭）
         "QUIET_HOURS_ENABLED", "QUIET_HOURS_START", "QUIET_HOURS_END",
         "ACCOUNT_SWEEP_STALE_HOURS", "FIRST_SCREEN_VIDEO_PAGES",

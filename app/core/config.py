@@ -79,6 +79,11 @@ class Settings:
     FIRST_SCREEN_DYNAMICS_PAGES: int = 1    # 首屏：动态 1 页（可热更）
     FIRST_SCREEN_DYNAMICS_LIMIT: int = 3    # 首屏：动态最多入库 N 条新帖（每条 1 次详情；可热更）
 
+    # 轻资产 · 未归档帖封面固化（L3，devlog/261；可热更）
+    # ⚠️ 实测（本机 214 条未归档封面）：B 站**原图**封面平均 **1.1 MB/张**（最坏 4.7 MB）
+    #    ⇒ 这不是"顺手做的小事"，每轮的张数上限（20）与字节上限（24MB，见 scheduler）两条都要。
+    PIN_POST_COVERS: bool = True
+
     # 启动链（v0.6.0）：应用启动后依次执行 直播状态 → 综合档（动态流 + 账号流）
     STARTUP_CHAIN_ENABLED: bool = True
     STARTUP_CHAIN_DELAY: float = 4.0    # 启动后延迟秒数（等后端/前端就绪）

@@ -158,6 +158,8 @@ export interface Post {
   title: string | null
   summary: string | null
   cover_url: string | null
+  /** L3：封面的本地副本（`static/assets/cover/…`）；渲染**本地优先**（见 utils/coverSource.ts） */
+  cover_local?: string | null
   permalink: string | null
   body_json: string | null
   stats_json: string | null

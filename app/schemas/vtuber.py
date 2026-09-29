@@ -272,6 +272,11 @@ class PostOut(BaseModel):
     note: str | None = None                    # P9-3：投稿动态的附言（并入 video 帖）
     is_archived: bool = False
     is_pinned: bool = False                    # R35：平台置顶（列表按 is_pinned DESC 排最前）
+    # L3（devlog/261）：**只读派生** —— 该帖封面的**本地副本**（`static/assets/cover/…`）。
+    # 与 `VTuberOut.avatar_local` 同一套路（现查 `local_assets`，不加库列），但**渲染优先级相反**：
+    # 封面是**我们主动固化**的，而远端反而常被防盗链拦 ⇒ 列表**本地优先**、远端着 `fallbackSrc`
+    # （规格 §3.3）。抓取侧只固化 `is_archived=0` 的帖（每轮上限，见 `scheduler.COVER_PIN_PER_ROUND`）。
+    cover_local: str | None = None
     last_seen_at: datetime | None = None       # 最近一次确认仍在线（v0.5.1）
     deleted_detected_at: datetime | None = None  # 墓碑：判定已删除的时刻（v0.5.1）
     created_at: datetime | None = None

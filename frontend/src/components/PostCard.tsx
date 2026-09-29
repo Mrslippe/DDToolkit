@@ -9,6 +9,7 @@ import {
 import type { Post } from '../api/types'
 import { formatDateTime, parseBody, parseStats, postDisplaySummary, postDisplayTitle, postTypeLabel } from '../utils/format'
 import ProxyImage from './common/ProxyImage'
+import { resolveCoverSources } from '../utils/coverSource'
 import StatBadge from './StatBadge'
 import './../styles/posts.css'
 
@@ -39,7 +40,9 @@ const PostCard = memo(function PostCard({ post, index, onOpen }: Props) {
   const images = body.images ?? []
   const duration = formatDuration(body.duration_sec)
 
-  const coverSrc = post.cover_url ?? images[0]?.url
+  // L3（devlog/261）：封面**本地优先**（与头像相反，理由见 utils/coverSource.ts）——
+  // 已固化的帖首屏读盘即可，不再去撞图床的防盗链；没固化过就照旧走远端。
+  const cover = resolveCoverSources(post, images[0]?.url)
 
   // 键盘可达：光标 Tab 到卡片，Enter / Space 打开详情（Space 需 preventDefault 防滚动）
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -60,8 +63,9 @@ const PostCard = memo(function PostCard({ post, index, onOpen }: Props) {
       onKeyDown={handleKeyDown}
     >
       <div className="post-card-cover">
-        {coverSrc ? (
-          <ProxyImage src={coverSrc} className="post-card-cover-img" />
+        {cover.src ? (
+          <ProxyImage src={cover.src} fallbackSrc={cover.fallback}
+                      className="post-card-cover-img" />
         ) : (
           <div className="post-card-cover-paper">
             <span className="paper-title">{title}</span>

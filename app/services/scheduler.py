@@ -677,6 +677,84 @@ def _note_avatar_version(db: Session, acc: Account, url: str, path: str | None) 
         logger.warning(f"头像账本写入失败 account#{acc.id}: {type(e).__name__}: {e}")
 
 
+#: 每轮最多**新增**几张封面副本（L3，devlog/261）。已固化过的不重复下载，
+#: 所以这个上限只约束"首次见到的那批"。
+COVER_PIN_PER_ROUND = 20
+#: 每轮最多**新增多少字节**（同批实测：B 站原图封面平均 **1.1 MB/张**，最坏单张 4.7 MB）
+#: ⇒ 只按张数封顶的话，一轮最坏能下 90+ MB。这张字节上限是"条数上限"的必要补充：
+#: 固化是**顺路**做的事，不许把一轮抓取变成一次大下载。
+COVER_PIN_MAX_BYTES_PER_ROUND = 24 * 1024 * 1024
+
+
+async def _pin_account_covers(db: Session, acc: Account,
+                              client: httpx.AsyncClient | None = None) -> int:
+    """把该账号**未归档**帖的封面固化到本地（L3，devlog/261）。返回本轮新增张数。
+
+    为什么值得做（规格 §3.3）：封面是我们**主动**要画的东西，而远端反而常被防盗链拦
+    （微博图床尤其）；固化之后列表首屏读盘即可，源站挂了/图被删了也还看得见。
+
+    三条纪律：
+    - **只固化未归档的帖**（用户口径）：归档帖不在列表里滚，没必要占地方；
+    - **每轮上限** `COVER_PIN_PER_ROUND`：固化是"顺路做的小事"，不许把一轮抓取拖长；
+      已固化过的（稳定键命中）**一个请求都不发**（所以重跑一轮的新增是 0）；
+    - **复用平台客户端**（`_fetch_posts_for_account` 传下来的那个）：图片虽然走 CDN，
+      也不新开并发、不绕开平台节奏（规格 §2.3）。
+    """
+    if not bool(getattr(settings, "PIN_POST_COVERS", True)):
+        return 0                              # 设置项关掉 ⇒ 一个请求都不发
+
+    rows = (
+        db.query(Post.id, Post.cover_url)
+        .filter(Post.platform == acc.platform,
+                Post.platform_uid == str(acc.platform_uid),
+                Post.is_archived == False,          # noqa: E712 —— SQLAlchemy 需要 ==
+                Post.cover_url.isnot(None))
+        .order_by(Post.published_at.desc(), Post.id.desc())
+        .limit(COVER_PIN_PER_ROUND * 3)       # 多取一些：命中的会跳过，够填满这一轮
+        .all()
+    )
+    if not rows:
+        return 0
+    by_key = assets.lookup_keys(db, assets.KIND_COVER, [assets.key_of(u or "") for _, u in rows])
+    own = False
+    if client is None:
+        client, own = new_async_client(15.0), True
+    added = 0
+    got_bytes = 0
+    try:
+        for post_id, url in rows:
+            if added >= COVER_PIN_PER_ROUND:
+                break
+            # 字节上限：**已经存下一张之后**才判（否则一张超大图会让整轮一张都固化不了）
+            if added and got_bytes >= COVER_PIN_MAX_BYTES_PER_ROUND:
+                logger.info(f"封面固化本轮已达字节上限（{got_bytes / 1048576:.1f}MB），"
+                            f"其余留到下一轮")
+                break
+            u = (url or "").strip()
+            key = assets.key_of(u)
+            if not key or key in by_key:
+                continue                      # 已固化 ⇒ 不发请求（这是收益本身）
+            try:
+                resp = await client.get(u)
+            except Exception as e:            # noqa: BLE001 —— 单张失败不该中断固化
+                logger.warning(f"封面固化下载失败 post#{post_id}: {type(e).__name__}: {e}")
+                continue
+            if resp.status_code != 200 or not resp.content:
+                logger.info(f"封面固化跳过 post#{post_id}：HTTP {resp.status_code}")
+                continue
+            assets.put(db, assets.KIND_COVER, u, resp.content, hint=str(post_id))
+            by_key[key] = True
+            added += 1
+            got_bytes += len(resp.content)
+        if added:
+            db.commit()
+            logger.info(f"封面固化：账号 {acc.platform}:{acc.platform_uid} 本轮新增 {added} 张")
+    finally:
+        if own and client is not None:
+            await client.aclose()
+    return added
+
+
 def _field_locked(acc: Account, field: str) -> bool:
     """（已退役，2026-09-13，devlog/074）字段锁定查询。
 
@@ -2405,6 +2483,12 @@ async def _fetch_posts_for_account(acc: Account, video_pages: int, dynamics_page
                                              client=client, stop_on_existing=stop_on_existing,
                                              limit_latest=limit_latest)
     _run_tombstone_scan(db, acc, result, include_videos=include_videos)
+    # L3（devlog/261）：顺路把未归档帖的封面固化到本地（每轮上限、可关、失败只记日志）。
+    # ⚠️ 放在**刷新之后**：刚抓到的新帖这一轮就能被固化，用户不必等下一轮。
+    try:
+        await _pin_account_covers(db, acc, client)
+    except Exception as e:  # noqa: BLE001 —— 固化只是顺路的小事，拖垮整轮抓取才是大事
+        logger.warning(f"封面固化失败 account#{acc.id}: {type(e).__name__}: {e}")
     return result
 
 

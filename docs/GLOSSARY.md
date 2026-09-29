@@ -258,6 +258,7 @@
 | `DYNAMICS_LANE_TARGET_SECONDS` / `_FETCH_ESTIMATE` / `_GAP_MIN` / `_GAP_MAX` | 50 / 1.5 / 2 / 5 | 名单内间隔自适应摊平：`gap = clamp((目标轮长 − N×抓取估计)/N, 2s, 5s)` |
 | `DYNAMICS_LATEST_INTERVAL_MINUTES` / `_JITTER` | 15 min / 120 s | 动态流固定周期（**仅 `DYNAMICS_BUDGET_RPM<=0` 时生效**） |
 | `ACCOUNT_SWEEP_STALE_HOURS` | 24 h | 账号流数据到期阈值 |
+| `PIN_POST_COVERS` | 固化未归档帖的封面到本地（列表**本地优先**）；默认**开**。⚠️ 实测平均 **1.1 MB/张**（B 站原图），所以每轮还有 20 张 / 24MB 两条上限（后一条是常量，不可热更） |
 | `ACCOUNT_SWEEP_MIN_GAP_SECONDS` | 600 s | 账号流失败重试下限 |
 | `MANUAL_FAST_INTERVAL_MIN` / `_MAX` | 0.5 / 1.0 s | 收录·单V 快速链路的账号间隔 |
 | `FIRST_SCREEN_VIDEO_PAGES` / `_DYNAMICS_PAGES` / `_DYNAMICS_LIMIT` | 1 / 1 / 3 | 收录首屏：投稿 1 页 + 动态 1 页限 3 条 |

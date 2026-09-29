@@ -141,6 +141,12 @@ def _specs() -> list[Spec]:
              "所以直播日历的场次时间照旧",
              section="定期动态轮询", advanced=True),
 
+        Spec("PIN_POST_COVERS", "bool", True, None, None,
+             "固化帖子封面", "", g, hot,
+             "把未归档帖子的封面存一份到本地，列表优先用本地那份（源站防盗链或图片被删也还能看）；"
+             "每轮最多新增 20 张 / 24MB，已经存过的不重复下载。实测 B 站原图封面平均约 1.1MB/张",
+             section="定期动态轮询"),
+
         # ══ 抓取设置 · 每日定时任务 ════════════════════════════════════
         Spec("ACCOUNT_SWEEP_STALE_HOURS", "float", 24.0, 1.0, 720.0,
              "账号信息刷新周期", "小时", g, hot,

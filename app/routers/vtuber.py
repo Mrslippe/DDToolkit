@@ -132,6 +132,24 @@ def _pin_selected_asset(db: Session, v: VTuber) -> None:
         logger.warning(f"头像资产 pin 失败 vtuber#{v.id}: {type(e).__name__}: {e}")
 
 
+def _post_outs(db: Session, posts: list[Post]) -> list[PostOut]:
+    """`Post` 列表 → `PostOut`（带 `cover_local` 派生，L3/devlog/261）。
+
+    ⚠️ **一次批量查**：列表页一页最多 200 帖，逐帖查 `local_assets` 就是 200 次往返
+    （判据：`tests/test_cover_assets.py` 的语句计数那条 —— 页大小翻倍而查询数不变）。
+    这里用 `assets.lookup_keys` 一把捞：键在 Python 侧算（`key_of` 是纯函数，
+    SQLite 里没有对应表达式 ⇒ "left join" 那条只能落在应用层，语义等价）。
+    """
+    outs = [PostOut.model_validate(p, from_attributes=True) for p in posts]
+    keys = {o.id: assets.key_of((o.cover_url or "").strip()) for o in outs}
+    by_key = assets.lookup_keys(db, assets.KIND_COVER, keys.values())
+    for o in outs:
+        row = by_key.get(keys.get(o.id, ""))
+        if row is not None and (row.path or "").strip():
+            o.cover_local = row.path
+    return outs
+
+
 router = APIRouter()
 
 # 冷启动优化：scheduler 依赖链（apscheduler/tenacity/httpx/fetcher）较重，
@@ -971,10 +989,7 @@ def search_externals_vtubers(kw: str, source: str | None = Query(None),
 
 @router.get("/posts/{platform}/{platform_uid}", response_model=list[PostOut])
 def list_posts(platform: str, platform_uid: str, db: Session = Depends(get_db)):
-    return [
-        PostOut.model_validate(p, from_attributes=True)
-        for p in PostRepo(db).by_uid(platform, platform_uid)
-    ]
+    return _post_outs(db, list(PostRepo(db).by_uid(platform, platform_uid)))
 
 
 @router.get("/posts/{platform}/{platform_uid}/paginated", response_model=PostPage)
@@ -1005,7 +1020,7 @@ def list_posts_paginated(
                                   post_type, is_archived, q,
                                   date_from_dt, date_to_dt, is_deleted)
     return PostPage(
-        items=[PostOut.model_validate(p, from_attributes=True) for p in items],
+        items=_post_outs(db, list(items)),
         total=total, page=page, page_size=page_size,
     )
 
