@@ -1,4 +1,4 @@
-﻿"""UI 布局探针（机器可验证的布局回归）。
+"""UI 布局探针（机器可验证的布局回归）。
 
 配合 `frontend/src/dev/probe.ts`：在 dev 构建下用 `?probe=1` 触发页面自测，
 把「窗口滚动条 / 元素出窗 / 原生滚动条」三组不变量写成 JSON 落到 DOM，
@@ -3560,7 +3560,7 @@ def main() -> int:
             print(f"  空闲轮播：开关={si.get('idleCarousel')!r} 池={si.get('idleSize')} "
                   f"三格={si.get('idleTexts')} 索引={si.get('idleIndexes')}")
             print(f"  瞬时消息：文案={si.get('litText')!r} 亮起={si.get('litOn')} "
-                  f"chevron={si.get('litHasChevron')}")
+                  f"chevron={si.get('litHasChevron')} 字形={si.get('litGlyph')!r}")
             print(f"  悬停（R39-C）：掠过弹={si.get('panelAfterFlick')} 悬停弹={si.get('panelByHover')} "
                   f"移入面板保持={si.get('panelKeptByEnter')} 离开收={si.get('panelClosedByLeave')} "
                   f"｜ 点击钉住={si.get('panelPinnedByClick')} "
@@ -3679,6 +3679,13 @@ def main() -> int:
                                         f"—— 轮播已下线，应当恒定")
                 if not si.get("litOn"):
                     failures.append(f"@{w} status-island: 派发 pill-message 后状态岛没亮起")
+                # 类型字形（D1）：顶栏宿主也必须有这个通道 —— 它是**产品级缺陷**的修复
+                # （`report` 与 `message` 的点色相同 + 胶囊原先不渲染图标 ⇒ 两者一模一样），
+                # 与宿主无关。小窗那一侧另有一段（`--status-widget` 第二段）。
+                elif si.get("litGlyph") != "✦":
+                    failures.append(
+                        f"@{w} status-island: 亮起后胶囊上没有类型字形"
+                        f"（量到 {si.get('litGlyph')!r}，瞬时消息是 message ⇒ 应为 '✦'）")
                 elif "探针消息" not in (si.get("litText") or ""):
                     # ⚠️ **只在没有更高优先级条目时才判**（2026-09-24 修）。
                     # `KIND_PRIORITY` 里 `progress: 3` **高于** `message: 1` ——
