@@ -228,13 +228,18 @@ class NoticeOut(BaseModel):
 
 
 class NoticesOut(BaseModel):
-    """`GET /vtuber/notices`：**已按优先级排序**的通知 + 服务端时间戳。
+    """`GET /vtuber/notices`：**已按优先级排序**的通知 + 服务端时间戳 + 手动任务忙标志。
 
     ⚠️ `now` 是这一刻服务端的毫秒时间：两扇窗各自 `Date.now()` 会差 1–2s，而 ttl 判定
     要以它为基准（目标架构 §4）。前端只负责"按 now 过滤过期"，不自己算绝对过期时刻。
+
+    `manual_running`（M5-2 前置，devlog/258）与 `fetch-status` 里那个字段**同源**
+    （`scheduler.manual_task_running()`：自动档持锁**不算**忙）——顶栏据此禁用按钮，
+    与手动端点的 409 判据一致。带上它是为了让"删掉 `kickPoll`"不等于"按钮要等下一轮"。
     """
     now: int
     notices: list[NoticeOut] = []
+    manual_running: bool = False
 
 
 class NoticeAckIn(BaseModel):

@@ -452,12 +452,40 @@ M0b 不许"探针绿了就宣布通过"。
 
 ### 批次 M5 — 后端接管通知汇总（**最后做，独立一批**）
 
-**档位**：A。**依赖**：M0–M4。
+> **拆成了两批**（2026-09-29）：**M5-2a 供数补全 ✅（devlog/258）** + **M5-2b 前端切换 ⏳**。
+> 原因：只读侦察（下面 §M5 的 R1–R13）发现"切过去"不是一次替换 —— 端点当时**缺三类事实**、
+> 且有一条**潜伏 bug** 会在切换那一刻变成用户可见的假报告。供数补全独立一批，切错了也分得清。
+
+**M5-2a 已落（devlog/258）**：① `NoticesOut.manual_running`（与 `fetch-status` **同源**：
+自动档不算忙）；② 完成报告**只对全量轮出**（`REPORT_KINDS = full_all / full_vtuber`）——
+`quick` / `adopt` 都走 `_set_post_last_result` 且 `witnessed` 在主窗口开着时恒真 ⇒ 不修就是
+"每次手动抓帖都留一条『全量帖子抓取完成』的常驻假报告 + 查看详情"。判据 +3、反向 2/2。
+
+**M5-2b 的侦察结论（只读，行号是 2026-09-29 快照）** —— 这十三条就是"为什么不能搜索替换"：
+
+| # | 卡点 | 影响 |
+|---|---|---|
+| **R1** | `manual_running` 原先不在 notices 里 | ✅ M5-2a 已补；`devlog/245` §二① 的前置由此满足 |
+| **R2** | notices 里**没有"任务已受理"**（`_note_manual_start` 只 `publish` 不 `record`） | 面板改纯端点取数会把 M2 的"点完立刻看到进度"退化成 3–10s ⇒ `TopBar.tsx:542-545` 那段**本地覆盖不能删** |
+| **R3** | `MSG_TTL_MS=4000` < `POLL_IDLE_MS=10000` | 纯轮询**必然漏**瞬时消息（两扇窗都漏）⇒ 消息继续走推送/本地覆盖，或单独用 ≤2s 的 notices 节奏 |
+| **R4** | 报告原先对**任何** witnessed 帖子轮都出 | ✅ M5-2a 已修（只对全量） |
+| **R5** | 「查看详情」要的 `stored/skipped/video_missing/issues` 只在 `fetch-status` 里 | `fetch-status` 轮询**不能删**；报告条目要按 `report-<seq>` 对齐 `seq` |
+| **R6** | 已读要接 `POST /vtuber/notices/ack` | 不接 ⇒ 报告刷新后复活（M5-2b 的正面收益） |
+| **R7** | `StatusIsland.tsx:348` 只渲染 `text`，**不渲染 `value`** | 风控倒计时（后端 `value="47s"`）会丢 ⇒ 要么改渲染 `value`，要么后端把秒写回 `text` |
+| **R8** | 托盘倒计时读 `status.rate_limit`（`useTrayStatus`） | 与 notices 的格式化 `value` 会**两处不一致** ⇒ 保留 fetch-status 那一份 |
+| **R9** | 小窗动作 `relayWidgetAction` → `widget:action` **全仓无监听方** | 小窗「去登录」/「查看详情」今天不生效；M5-2b 正好用 `ackNotice` 补上，但别假设旧路在工作 |
+| **R10** | 小窗若连自己的 SSE 一起删 | 丢 `liveEdge` / `progress` / `pillMessage` 三路即时性，且在 R3 下漏消息 ⇒ **保留 SSE** |
+| **R11** | 探针靠 `__ddtoolkitSeedReport` / `ddtoolkit:widget-seed` 造条目 | 面板改由服务端列表驱动 ⇒ 注入**不再出现在列表** ⇒ WCAG 点击目标等判据**静默空转** ⇒ 注入必须做成"本地覆盖"那一层 |
+| **R12** | 小窗的 SSE 也算订阅者 | 小窗单独开着也会出报告（devlog/253 §二 已声明接受，真机验收要复验） |
+| **R13** | `AddVtuberDialog` 的 `kickPoll` 有第三个理由：保证"进入 running 态被目睹 ⇒ 完成时 `fetch-idle` 必发" | M3 的 `domain.posts.changed` 覆盖了 posts 那半，**account 那半要单独确认** |
+
+**档位**：A。**依赖**：M0–M4（+ M5-2a 已落）。
 
 **目标**：真正单一真源；报告已读持久化。
 
 **改动面**：见 `docs/design/notices/target-architecture.md` §2（`GET /vtuber/notices` +
-`POST /vtuber/notices/ack`）；`TopBar` 删掉自己的 `useMemo`（`TopBar.tsx:460-494`）。
+`POST /vtuber/notices/ack`）；`TopBar` 删掉自己的 `useMemo`（`TopBar.tsx:500-548`）
+与四个 `useRef`（`seenAccSeq` / `seenPostSeq` / `sawAccRun` / `sawPostRun`，:156-161）。
 
 **⚠️ 本批有一个必须先拍板的语义问题**（`docs/design/notices/placement-frontend-vs-backend.md` §3.2）：
 「**只有轮询目睹过运行的任务完成才弹报告**」这条逻辑今天住在主窗口的
@@ -526,7 +554,8 @@ feat: live-start notification from existing edge detection      （M1）
 perf: manual actions publish through hub, retire kickPoll      （M2）
 refactor: domain events pushed by backend instead of polled     （M3）
 feat: widget subscribes to hub, retire widget:notices           （M4）
-refactor: backend owns notice aggregation and read state        （M5）
+fix: notices endpoint carries manual_running, reports only full runs （M5-2a ✅ devlog/258）
+refactor: backend owns notice aggregation and read state        （M5-2b）
 ```
 
 禁止 squash 成一个大提交；同一需求子批按仓库纪律合并记录。

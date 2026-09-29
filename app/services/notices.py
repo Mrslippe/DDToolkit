@@ -54,6 +54,8 @@ LIVE_TTL_MS = 2 * 60_000
 READ_LIMIT = 50
 # 环形缓冲容量（瞬时消息 + 开播边沿共用一个）
 RING_MAX = 20
+#: 出**常驻报告**的轮次类型（其余是瞬时胶囊）：与前端旧口径一致（`TopBar` 只对全量开报告框）
+REPORT_KINDS = ("full_all", "full_vtuber")
 
 # 任务名（与前端 `TopBar.TASK_TEXT` 同表；后端供数后**这份是真源**）
 TASK_TEXT = {
@@ -236,11 +238,19 @@ def _login_notice() -> dict | None:
 def _report_notices(status: dict, acked: set[str]) -> list[dict]:
     """完成报告：**只在"有人看着它跑完"时出**（见文件头「目睹才报」）+ 已读的不再出。
 
-    ⚠️ 与前端旧口径一致：只对**帖子轮**出报告（`post.last_result`；账号轮只记 seq）。
+    ⚠️ **还要只对"全量"轮出**（`REPORT_KINDS`）—— 与前端旧口径逐字一致（`TopBar` 只对
+    `full_all` / `full_vtuber` 开报告框，其余走**瞬时胶囊**）。
+    少了这道过滤的后果很具体：`quick`（手动"抓取帖子"）与 `adopt`（收录首屏）**都**会
+    走 `_set_post_last_result`，而 `witnessed` 在主窗口开着时恒为真 ⇒ 每次手动抓帖都会留下
+    一条写着"**全量**帖子抓取完成"的常驻条目 + 一个「查看详情」。
+    （M5-1 期间没有消费者 ⇒ 看不出来；M5-2 一接上前端就会看到。判据
+    `test_quick_run_produces_no_report` 钉这一点。）
     """
     res = (status.get("post") or {}).get("last_result") or {}
     seq = res.get("seq")
     if seq is None or not witnessed("post", seq):
+        return []
+    if (res.get("kind") or "") not in REPORT_KINDS:
         return []
     nid = f"report-{seq}"
     if nid in acked:
@@ -286,7 +296,12 @@ def _normalize(n: dict) -> dict:
 
 def build_notices(db: Session, *, status: dict | None = None,
                   now_ms: int | None = None) -> dict:
-    """汇总成 `{"now": ms, "notices": [...]}`（**已按优先级排序**，目标架构 §3）。"""
+    """汇总成 `{"now": ms, "notices": [...], "manual_running": bool}`（**已按优先级排序**）。
+
+    `manual_running` 与 `notices` 同一趟给出（M5-2 的前置）：顶栏的按钮禁用判定读它
+    （`fetch-status` 里也有同一字段，但两扇窗各自多打一个端点不如顺手带出来）；
+    `devlog/245` 记的"删 `kickPoll` 之前要先把 `manual_running` 送进推送/端点"就是这一条。
+    """
     from app.services.scheduler import get_fetch_status    # 局部导入：循环依赖
 
     now = _now_ms() if now_ms is None else int(now_ms)
@@ -306,4 +321,5 @@ def build_notices(db: Session, *, status: dict | None = None,
 
     notices = [_normalize(n) for n in notices]
     notices.sort(key=lambda n: -KIND_PRIORITY.get(n["kind"], 0))
-    return {"now": now, "notices": notices}
+    manual_running = bool(st.get("manual_running"))
+    return {"now": now, "notices": notices, "manual_running": manual_running}

@@ -480,17 +480,22 @@ M0 **不退役**轮询。细节与不变量见 `docs/backend-repositories-and-ro
 **领域事件到此全部改由后端广播**（M3 三刀），消费侧一行未改。
 
 **M5-1（2026-09-28，devlog/253）：通知汇总也有了后端真源** ——
-`app/services/notices.py`（事实 → 文案/优先级/ttl）+ `GET /vtuber/notices`（`{now, notices[]}`，
-已排序，`now` = 服务端毫秒 ⇒ ttl 判定单一口径）+ `POST /vtuber/notices/ack`（已读落
-`app_meta` 的 `notices.acked`，**幂等**）。
+`app/services/notices.py`（事实 → 文案/优先级/ttl）+ `GET /vtuber/notices`
+（`{now, notices[], manual_running}`，已排序，`now` = 服务端毫秒 ⇒ ttl 判定单一口径）
++ `POST /vtuber/notices/ack`（已读落 `app_meta` 的 `notices.acked`，**幂等**）。
 - 五类来源：任务进度（**自动节拍不产生条目**）/ 风控冷却（倒计时进 `value` 活数据槽）/
   登录失效（sticky + 「去登录」）/ 完成报告 / 开播边沿与瞬时消息（进程内环形缓冲 + TTL）。
 - **「目睹才报」保留**（§8.5 拍板 C）：把"谁在看"表达成**推送通道有没有订阅者**，
   在任务收尾那一刻采样（`note_run`）⇒ 没人看着跑完的轮次**不出**报告。
   ⚠️ 与旧口径的差异：主窗口**收进托盘**时旧行为不报、新行为报（SSE 还连着），
   且报告已读**落库**（刷新/深休眠重建后不再复活）。
-- ⚠️ **M5-1 只做供数**：前端那一侧（`TopBar` 的 `useMemo` 汇总、`widget:notices` 广播、
-  `kickPoll`）留到 **M5-2** 一起切 —— 那一步改用户可见行为，必须独立一批。
+- **M5-2a（2026-09-29，devlog/258）补了两处、修了一处**：`manual_running` 与通知同一趟给出
+  （删 `kickPoll` 之后按钮禁用仍即时，口径与 `fetch-status` **同源**：自动档不算忙）；
+  报告**只对全量轮出**（`REPORT_KINDS`）—— 少了这道过滤，`quick`（手动抓帖）与 `adopt`
+  （收录首屏）都会留下一条写着"全量帖子抓取完成"的假报告（M5-1 期间没有消费者 ⇒ 看不出来）。
+- ⚠️ **M5-2b 未落**：前端那一侧（`TopBar` 的 `useMemo` 汇总、小窗的 `widget:notices` 广播、
+  `kickPoll`、探针等待口径）仍走旧路 —— 那一步改用户可见行为，独立一批；
+  侦察结论（R1–R13）见 `docs/design/notices/message-hub-execution.md` §M5。
 
 ---
 

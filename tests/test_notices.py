@@ -92,6 +92,10 @@ def _pin_login_state(monkeypatch):
 
 def _status(*, post_running=False, post_auto=False, acc_running=False, acc_auto=False,
             rate=None, post_result=None, acc_result=None) -> dict:
+    # 帖子轮的 `last_result` 默认按**全量**造（`REPORT_KINDS` 只对全量出报告）——
+    # 想验"别的轮次不出报告"的用例自己显式传 `kind`。
+    if post_result is not None:
+        post_result = {"kind": "full_all", **post_result}
     return {
         "account": {"running": acc_running, "auto": acc_auto, "task": "account",
                     "current": "七海", "index": 2, "total": 5,
@@ -123,13 +127,14 @@ ALLOWED_KEYS = {"id", "kind", "text", "value", "detail", "source", "sticky",
 
 
 def test_contract_keys_exact(client):
-    """① 契约：顶层两个键 + 每条通知的键集合（前端 `Notice` 的字段全集）。"""
+    """① 契约：顶层**三个**键 + 每条通知的键集合（前端 `Notice` 的字段全集）。"""
     N.record_message("抓取完成")
     N.note_run("post", 1, witnessed=True)
-    body = _get(client, _status(post_result={"seq": 1, "stored": 3, "skipped": 1,
-                                             "issues": []},
+    body = _get(client, _status(post_result={"seq": 1, "kind": "full_all", "stored": 3,
+                                            "skipped": 1, "issues": []},
                                 rate={"active": True, "reason": "412", "seconds_left": 47}))
-    assert set(body) == {"now", "notices"}, "顶层键集合变了（前端按 now 做 ttl 判定）"
+    assert set(body) == {"now", "notices", "manual_running"}, (
+        "顶层键集合变了（前端按 now 做 ttl 判定、按 manual_running 禁用按钮）")
     assert body["notices"], "这一组事实应当至少产出一条通知"
     for n in body["notices"]:
         assert set(n) <= ALLOWED_KEYS, f"多出前端不认识的键：{set(n) - ALLOWED_KEYS}"
@@ -138,11 +143,54 @@ def test_contract_keys_exact(client):
         assert n["kind"] in {"alert", "progress", "report", "message"}
 
 
+def test_manual_running_is_carried_with_the_notices(client):
+    """①″ `manual_running` 与通知同一趟给出（M5-2 前置：删 `kickPoll` 靠它保住按钮禁用）。
+
+    ⚠️ 口径必须与 `fetch-status` 同源：**自动档持锁不算忙** —— 判据里专门有一条
+    `acc_running=True, acc_auto=True` 的反例（用它当忙就会把自动节拍期间的按钮全禁掉）。
+    """
+    assert _get(client, _status())["manual_running"] is False
+    assert _get(client, _status(post_running=True))["manual_running"] is True
+    assert _get(client, _status(acc_running=True))["manual_running"] is True
+    auto = _status(acc_running=True, acc_auto=True, post_running=True, post_auto=True)
+    auto["manual_running"] = False            # 后端口径：自动档不算忙
+    assert _get(client, auto)["manual_running"] is False, (
+        "自动节拍期间把 manual_running 报成真 ⇒ 界面会把按钮全禁掉")
+
+
+def test_quick_run_produces_no_report(client):
+    """①‴ **只有全量轮出常驻报告**（R4，M5-2 发现的潜伏 bug）。
+
+    为什么必须有这条：`quick`（手动"抓取帖子"）与 `adopt`（收录首屏）**都会**走
+    `_set_post_last_result`，而 `witnessed` 在主窗口开着时恒为真 ⇒ 少了 `REPORT_KINDS`
+    这道过滤，每次手动抓帖都会留下一条写着"**全量**帖子抓取完成"的假报告 + 一个
+    「查看详情」。M5-1 期间没有消费者，所以直到 M5-2 接上前端才会现形。
+    """
+    res_quick = {"seq": 11, "kind": "quick", "stored": 2, "skipped": 0, "issues": []}
+    N.note_run("post", 11, witnessed=True)
+    assert [n for n in _get(client, _status(post_result=res_quick))["notices"]
+            if n["kind"] == "report"] == [], "手动抓帖（quick）不该出常驻报告"
+
+    res_adopt = {"seq": 12, "kind": "adopt", "stored": 5, "skipped": 1, "issues": []}
+    N.note_run("post", 12, witnessed=True)
+    assert [n for n in _get(client, _status(post_result=res_adopt))["notices"]
+            if n["kind"] == "report"] == [], "收录首屏（adopt）不该出常驻报告"
+
+    # 全量两态**都要**出（`full_vtuber` 是单 V 全量，用户同样要那个报告框）
+    for i, kind in enumerate(("full_all", "full_vtuber"), start=13):
+        N.note_run("post", i, witnessed=True)
+        got = [n for n in _get(client, _status(post_result={"seq": i, "kind": kind,
+                                                            "stored": 1, "skipped": 0,
+                                                            "issues": []}))["notices"]
+               if n["kind"] == "report"]
+        assert len(got) == 1, f"{kind} 轮次的报告不见了（用户看不到完成详情）"
+
+
 def test_report_contract_shape(client):
     """①′ 报告那条要带 `action` 与 `sticky`（它是"要你看一眼"的那类）。"""
     N.note_run("post", 7, witnessed=True)
-    body = _get(client, _status(post_result={"seq": 7, "stored": 9, "skipped": 0,
-                                             "issues": [], "video_missing": 2}))
+    body = _get(client, _status(post_result={"seq": 7, "kind": "full_all", "stored": 9,
+                                             "skipped": 0, "issues": [], "video_missing": 2}))
     rep = [n for n in body["notices"] if n["kind"] == "report"]
     assert len(rep) == 1
     assert rep[0]["id"] == "report-7"
@@ -262,11 +310,12 @@ def test_ack_rejects_empty_id(client):
 
 
 def test_route_serves_notices(client):
-    """端点本身：走 HTTP 也能拿到（并且 `now`/`notices` 都在）。"""
+    """端点本身：走 HTTP 也能拿到（`now` / `notices` / `manual_running` 三键都在）。"""
     r = client.get("/vtuber/notices")
     assert r.status_code == 200
     body = r.json()
-    assert set(body) == {"now", "notices"}
+    assert set(body) == {"now", "notices", "manual_running"}
+    assert isinstance(body["manual_running"], bool)
 
 
 # ── ⑦ 瞬时消息 / 开播边沿的 TTL ────────────────────────────────────────
