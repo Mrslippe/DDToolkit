@@ -7,7 +7,7 @@
 
 - `MIGRATION_HEAD` 已到 `f007`，9 处仍写 `f006`（含 `ARCHITECTURE` / `GLOSSARY` / `README` / 两个技能）；
 - 迁移链版本数已 20，多处仍写 19；
-- 路由装饰器已 62，`backend-repositories-and-routers.md` §3 标题写 63、两个技能写 54/58；
+- 路由装饰器已 62，`docs/backend/HTTP-CONTRACT.md` §1 标题写 63、两个技能写 54/58；
 - `ddtoolkit-docs-devlog` 技能说"下一篇 devlog 是 098"，实际是 **166**（落后 68 篇）。
 
 这些都不会让测试红、不会让程序坏，只会在**照着文档动手时**才发现口径是错的。
@@ -29,7 +29,7 @@
 - `N 张表`、`N 个路由装饰器`、`N 个版本`（限迁移语境）、`下一篇 … NNN`。
 
 **已知不覆盖**（这类要人肉，别指望本脚本）：迁移链表里"= 当前 head"那格、正文散文里的数字复述、
-`ROADMAP-DONE.md` 与 `devlog/` 里的**历史**口径（它们记的是当时的值，本就该与今天不同）、
+`devlog/` 里的**历史**口径（它们记的是当时的值，本就该与今天不同）、
 **路由的另两种口径**（`app.routes` 对象数 / 方法×路径 —— 要实跑 app 才数得准，见 §"为什么不管用例数"）、
 以及 `TODO.md` §6.2 那类**基线快照**。
 
@@ -71,8 +71,8 @@ DOCS = ROOT / "docs"
 SKILLS = ROOT / ".dsh" / "skills"
 
 # 扫描范围：活文档（docs 顶层）+ 技能 + 根 README。
-# 刻意排除：devlog/ 与 docs/ROADMAP-DONE.md（历史记录，记的是当时的值）、docs/releases/（归档）。
-SCAN_EXCLUDE = {"ROADMAP-DONE.md"}
+# 刻意排除：devlog/（历史记录，记的是当时的值）与 docs/releases/（归档）。
+SCAN_EXCLUDE: set[str] = set()
 
 
 # ── 派生：真值一律从代码算 ────────────────────────────────────────────────
@@ -113,7 +113,7 @@ def derive_declared_head() -> str | None:
 
 
 def derive_routes() -> int:
-    """路由**装饰器**数（`backend-repositories-and-routers.md` §3 的主口径「N」）。
+    """路由**装饰器**数（`docs/backend/HTTP-CONTRACT.md` §1 的主口径「N」）。
 
     必须同时数 `@router.get/...` 与 `@router.api_route(...)` —— 后者有 2 条
     （`/vtuber/fetch`、`/vtuber/{id}/fetch`），2026-09-23 实测漏算它会把 64 数成 62。

@@ -8,7 +8,7 @@
   · 触发抓取（**会打真上游**，白耗配额）；
   · 而 `.env` 里躺着**活的登录凭据**（B 站 SESSDATA + refresh token、微博 cookie）。
 
-设计口径（见 `docs/ARCHITECTURE.md` §6 与 `docs/ARCHITECTURE-IMPROVEMENT-EXECUTION.md` §S1）：
+设计口径（见 `docs/backend/ARCHITECTURE.md` §6 与 `docs/ARCHITECTURE-IMPROVEMENT-EXECUTION.md` §S1）：
   · 每次启动由 Tauri 生成高熵、**只存内存**的 token，经 sidecar 的 env 传入；
   · 后端用 `X-DDToolkit-Token` 头校验，**常量时间比较**；
   · 分级：`/healthz`、`/static/*`、`GET /img-proxy` 公开（`<img>` 带不了头），**其余一律要 token**；

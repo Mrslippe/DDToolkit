@@ -258,7 +258,7 @@ html.window-maximized body {
   min-height: 0;
 }
 
-/* ── TopBar（严格按 docs/design/react-topbar Pixso 设计稿 Frame411 规格） ── */
+/* ── TopBar（源自 Pixso 导出 Frame411；导出稿已删，见 `docs/frontend/UI-MAP.md` A1） ── */
 
 .topbar {
   position: relative;

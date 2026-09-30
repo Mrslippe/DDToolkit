@@ -41,7 +41,7 @@ Windows 桌面应用，数据全部在本地 SQLite 里，不经过任何服务�
 
 老机器上真正会慢的是**启动**和**第一次打开词云 / 趋势图**；跑起来之后它就挂在托盘里，不影响你干别的。**内存紧张的机器建议点「✕」收进托盘** —— 界面进程十分钟后会被销毁，占用降到 **90 MB 左右**，唤回时自动重建。
 
-> 这些数字怎么来的、怎么在自己机器上复测：见 `docs/ARCHITECTURE.md` §3.13；命令行一条 `python scripts/perf_report.py` 就能重跑一遍。
+> 这些数字怎么来的、怎么在自己机器上复测：见 `docs/backend/ARCHITECTURE.md` §3.13；命令行一条 `python scripts/perf_report.py` 就能重跑一遍。
 
 | 版本 | 适合谁 | 说明 |
 |---|---|---|
@@ -171,7 +171,7 @@ Windows 桌面应用，数据全部在本地 SQLite 里，不经过任何服务�
 
 ```
 ├─ app/               后端源码（FastAPI 分层）
-│  ├─ routers/        HTTP 路由层（vtuber / auth / img_proxy / settings；计数口径见 docs/backend-repositories-and-routers.md §3）
+│  ├─ routers/        HTTP 路由层（vtuber / auth / img_proxy / settings；计数口径见 `docs/backend/HTTP-CONTRACT.md` §1）
 │  ├─ repositories/   SQL 访问层（11 个仓库类，ORM 不泄漏到路由）
 │  ├─ models/         SQLAlchemy ORM（14 张表：vtubers / accounts / posts / 快照 / 场次 / app_meta / 曾用值 / 头像账本 / 轻资产索引 / 卡片布局 …）
 │  ├─ schemas/        Pydantic 输入输出模型
@@ -240,17 +240,17 @@ Rust 子进程由 [Job Object 看门狗](frontend/src-tauri/src/lib.rs) 管理�
 | 文档 | 内容 |
 |---|---|
 | `docs/GLOSSARY.md` | **术语表**：名词 → 含义 → 代码路径 → 依赖（改 bug / 做需求先查这里） |
-| `docs/ARCHITECTURE.md` | **架构总览**：运行时形态 / 数据模型（12 表）/ 抓取分层与优先级 / 数据来源地图 / 不变量 |
-| `docs/backend-repositories-and-routers.md` | 表结构 · 13 个 Repository（含每方法的"提交"归属）· HTTP 路由计数（三种数法见该文 §3） |
+| `docs/backend/ARCHITECTURE.md` | **架构总览**：运行时形态 / 数据模型（12 表）/ 抓取分层与优先级 / 数据来源地图 / 不变量 |
+| `docs/backend/DATA-MODEL.md` | 表结构 · 13 个 Repository（含每方法的"提交"归属）· HTTP 路由计数（三种数法见该文 §3） |
 | `docs/backend-fetch-pipeline.md` | 抓取链路详解（频率 / API 清单 / 风控判定 / 节流测算） |
-| `docs/FRONTEND-ARCH.md` | 前端分层、数据流与 hooks |
+| `docs/frontend/ARCHITECTURE.md` | 前端分层、数据流与 hooks |
 | `docs/UI-MAP.md` | 界面与路由映射（类名 / 设计令牌 / 动效） |
 | `docs/DEV-LOOP.md` | 本地开发与机器验证（dev_check / ui_probe / 探针模式） |
 | `docs/RELEASE.md` | 打包与发布流程（签名密钥、产物校验） |
-| `docs/platforms-extension-guide.md` | 接入新平台的扩展指南 |
-| `docs/TODO.md` | 路线图：待提需求收集区 + 未完成项 + 能力现状 + 门禁基线 |
-| `docs/ROADMAP-DONE.md` | 已完成：已落地需求清单 + 版本 → devlog 索引 |
-| `devlog/` | 每个批次的变更记录（001–118） |
+| `docs/backend/PLATFORMS.md` | 接入新平台的扩展指南 |
+| `docs/TODO.md` | 未完成项 —— 唯一「要干活」的清单（每条只写现象 / 验收 / 卡在哪） |
+| `docs/ops/PERF.md` | 占用与启动的实测口径、门禁基线 |
+| `devlog/` | 每个批次的变更记录 |
 
 ## 🙏 参考与致谢
 
@@ -278,7 +278,7 @@ Rust 子进程由 [Job Object 看门狗](frontend/src-tauri/src/lib.rs) 管理�
 | [阿里妈妈方圆体](https://www.yuque.com/alimama_ai-font/vfse9w/fco5g1gifud8lls2?singleDoc)（可变字重） | 阿里妈妈官方许可：免费商用 + **嵌入式使用**（[声明第 3 条](https://www.yuque.com/alimama_ai-font/vfse9w/fco5g1gifud8lls2?singleDoc)；[FAQ2](https://www.yuque.com/alimama_ai-font/vfse9w/co47p8ge57qsanz2?singleDoc)：嵌入 app 不侵权，但不得就字体使用收费；不可二次创作 / 商标注册） | 全站唯一字体（`--font-family`；顶栏标题 `--font-title` 同源） |
 
 > 原顶栏字体（千图小兔体·iFonts 联名 / 字小魂锐艺黑·试用版）因许可限制（禁嵌入式 / 商用需授权）**不随仓库分发**，
-> 本地备份于 `frontend/src/assets/fonts/_nondistribute/` 与 `docs/design/react-topbar/src/assets/fonts/_nondistribute/`（已 gitignore）。
+> 本地备份于 `frontend/src/assets/fonts/_nondistribute/`（已 gitignore）。
 
 **主要第三方库**（详见各包许可文件）：FastAPI / SQLAlchemy / Alembic（MIT）、Tauri v2（MIT / Apache-2.0）、
 React（MIT）、ECharts（Apache-2.0）、Radix UI（MIT）、Tailwind CSS（MIT）、Vite / TypeScript（MIT / Apache-2.0）、

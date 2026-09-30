@@ -4,7 +4,7 @@
  * 规则（user 2026-09-07）：填充浅色、文字同色系深色；按词哈希取色 → 同一个词
  * 在任何场次/任何重排下颜色恒定，不随词序闪动。
  *
- * ⚠️ 本文件与 `utils/wordCloudLayout.ts` 同属「词云算法族」，受 `FRONTEND-ARCH.md §7`
+ * ⚠️ 本文件与 `utils/wordCloudLayout.ts` 同属「词云算法族」，受 `docs/frontend/ARCHITECTURE.md §7`
  * 红线约束：**只搬不改**。搬动前后由 `scripts/check_wordcloud_layout.mjs`
  * 的 sha256 基线（覆盖 `MosaicPacker`/`packFinal`）与 `format`/`wordCloudLayout`
  * 的 vitest 断言看住；配色函数本身是纯函数，改动会直接反映在断言里。

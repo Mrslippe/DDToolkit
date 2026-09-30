@@ -123,15 +123,20 @@ def test_frontend_lock_file_is_at_least_tier_b():
 # ── 映射表自身的卫生 ────────────────────────────────────────────────────────
 
 def test_every_mapped_specific_file_exists():
-    """`A_FILES` 里写死的路径必须真实存在 —— 否则是一条**永不生效**的映射。
+    """`A_FILES` / `B_FILES` 里写死的路径必须真实存在 —— 否则是一条**永不生效**的映射。
 
     这是"配置写了不等于生效"的一种：文件名改了、映射没跟着改，
     门禁照旧绿，而那个文件其实已经回到 C 档（`doc_check.py` 的事件就是这么发生的）。
 
-    反向验证：往 `A_FILES` 里加一个 `"scripts/does_not_exist.py"` ⇒ 本用例红。
+    ⚠️ **2026-09-30（文档重构）实测漏网，因此把 `B_FILES` 也纳进来**：
+    文档重构把 `docs/UI-MAP.md` 搬成了 `docs/frontend/UI-MAP.md`，而这条用例**原先只查
+    `A_FILES`** ⇒ `B_FILES` 里那条死映射没人管，改 UI-MAP 从此静默落 C 档（不跑 vitest）。
+    **只查一半的检查，等于给另一半发了一张"看起来有人守"的假证明。**
+
+    反向验证：往 `A_FILES`（或 `B_FILES`）里加一个不存在的路径 ⇒ 本用例红。
     """
-    missing = [f for f in G.A_FILES if not (G.ROOT / f).exists()]
-    assert not missing, f"A_FILES 里有不存在的路径（映射已失效）：{missing}"
+    missing = [f for f in (*G.A_FILES, *G.B_FILES) if not (G.ROOT / f).exists()]
+    assert not missing, f"档位映射里有不存在的路径（映射已失效）：{missing}"
 
 
 def test_tier_ordering_is_monotonic():

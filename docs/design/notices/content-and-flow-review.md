@@ -1,3 +1,11 @@
+---
+doc: design/notices/content-and-flow-review
+class: snapshot
+scope: 状态内容汇总 + 信息流动路径 + 消息框架重建评估（只读分析）：两个宿主会显示什么、六个来源怎么流、生命周期失效矩阵
+not-scope: 改造后的目标架构；现行实现
+verified: 2026-09-27
+---
+
 # 状态内容汇总 · 信息流动路径 · 消息框架重建评估（2026-09-27）
 
 > **这是什么**：一次**只读**的架构分析。回答三个问题 ——
@@ -154,7 +162,7 @@ emit('widget:action')  →  主窗口执行         widgetWindow.ts:379
 | 两个窗口都在，主窗口可见 | ✅ 正常 | 广播链完整 |
 | 主窗口**隐藏到托盘** | ❌ **停更** | `TopBar.tsx:188` `if (isShellHidden()) return` ⇒ 轮询不跑 ⇒ `notices` 不变 ⇒ 不广播 |
 | 主窗口**最小化** | ✅ 通常仍更新 | 最小化不等于 `hide()`，`shell:hidden` 不发 |
-| 主窗口**关闭**（关窗不退进程） | ❌ **停更** | `CloseRequested` → `hide()` + `emit(shell:hidden)`（`ARCHITECTURE.md` §3.10 第 1 条） |
+| 主窗口**关闭**（关窗不退进程） | ❌ **停更** | `CloseRequested` → `hide()` + `emit(shell:hidden)`（`docs/backend/ARCHITECTURE.md` §3.10 第 1 条） |
 | 主窗口**深休眠**（隐藏满 10 分钟） | ❌ **停更且没人能救** | `deep_sleep_impl` 只销毁 `main`（`lib.rs:874-877`）⇒ **产生数据的那一侧不存在了**；小窗自身还活着 |
 | 只开小窗、主窗口从没开过 | ❌ 从未有数据 | 没有生产者 |
 | 小窗关掉再打开 | ⚠️ 要等下一次广播 | 无"当前快照"重放机制（无 seed） |
@@ -170,7 +178,7 @@ emit('widget:action')  →  主窗口执行         widgetWindow.ts:379
    （`lib.rs:848`），但 `installShellLifecycle()` **只在 `main.tsx:173` 挂载过** ——
    小窗入口从没调它 ⇒ 小窗连"现在该不该自己顶上"都判断不了。
 
-> 这与 `ARCHITECTURE.md` §3.10 第 3 条是**同一类错误**：
+> 这与 `docs/backend/ARCHITECTURE.md` §3.10 第 3 条是**同一类错误**：
 > 「**必须成功的动作不能建立在可被销毁的一侧**」。
 > 那条是针对"托盘退出"立的（R20 实测事故），而**消息聚合中心正踩在同一个坑上** ——
 > 通知这条链唯一的供数方，正是那个"可以被隐藏、被最小化、10 分钟后被销毁"的窗口。

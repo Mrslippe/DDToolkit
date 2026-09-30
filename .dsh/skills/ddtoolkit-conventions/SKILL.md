@@ -15,16 +15,16 @@ description: Use when 修改 DDToolkit 的后端抓取/数据层/迁移/路由�
 
 ## 2. 开工前读什么（真源，不在本技能里找）
 
-`docs/ARCHITECTURE.md` **§6 不变量与纪律**（改代码前必读）+ **§5 分层与依赖方向** + `docs/GLOSSARY.md`（术语 → 代码路径 → 依赖）。
-补充入口：`docs/backend-repositories-and-routers.md` · `docs/backend-fetch-pipeline.md` · `docs/DEV-LOOP.md`。
+`docs/backend/ARCHITECTURE.md` **§6 不变量与纪律**（改代码前必读）+ **§5 分层与依赖方向** + `docs/GLOSSARY.md`（术语 → 代码路径 → 依赖）。
+补充入口：`docs/backend/DATA-MODEL.md` · `docs/backend/FETCH-PIPELINE.md` · `docs/DEV-LOOP.md`。
 
 ## 3. 分层纪律
 
-分层表与依赖方向：`docs/ARCHITECTURE.md` **§5 分层与依赖方向**（真源）；改动 → 文件对照见 `references/change-recipes.md`（含新增 HTTP 操作的 C5 分步配方）。
+分层表与依赖方向：`docs/backend/ARCHITECTURE.md` **§5 分层与依赖方向**（真源）；改动 → 文件对照见 `references/change-recipes.md`（含新增 HTTP 操作的 C5 分步配方）。
 
 ## 4. 不变量与高危动作
 
-改后端前读 **`docs/ARCHITECTURE.md` §6 不变量与纪律（改代码前必读）——唯一真源** —— 速查表与「高危清单」已从这里删掉
+改后端前读 **`docs/backend/ARCHITECTURE.md` §6 不变量与纪律（改代码前必读）——唯一真源** —— 速查表与「高危清单」已从这里删掉
 （它们只是 §6 的展开，改一次要同步多处；复述为什么是负债见 `docs/DEV-LOOP.md` §0.4）。
 「这条不变量落在哪个文件、被哪个测试守着」的索引见 `references/invariants.md`。
 
@@ -36,7 +36,7 @@ description: Use when 修改 DDToolkit 的后端抓取/数据层/迁移/路由�
 
 ## 6. references
 
-- `references/invariants.md` —— 不变量的**落点 / 触发面 / 护栏测试名**派生索引（条文真源 = `docs/ARCHITECTURE.md` §6）+ 原 `GLOSSARY.md` §8 编号的换算对照
+- `references/invariants.md` —— 不变量的**落点 / 触发面 / 护栏测试名**派生索引（条文真源 = `docs/backend/ARCHITECTURE.md` §6）+ 原 `GLOSSARY.md` §8 编号的换算对照
 - `references/verification.md` —— 验收/门禁**去哪查**（真源是脚本 `--help`）+ 三条探针陷阱 + 口径提醒
 - `references/change-recipes.md` —— 改动 → 文件对照（扩展点总表 + 分步配方 + 文档同步约定）
 - 记 devlog / 同步活文档 / 发版 → 用 `ddtoolkit-docs-devlog` 技能；本技能只管代码侧不变量与验收命令

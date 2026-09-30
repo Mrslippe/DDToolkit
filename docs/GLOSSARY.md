@@ -1,12 +1,18 @@
+---
+doc: glossary
+class: glossary
+scope: 名词 → 含义 → 代码路径 → 牵动谁。改 bug / 做需求时定位「这个词在代码里叫什么、在哪个文件、改它要动谁」
+budget: 300
+---
 # 术语表（Glossary）：名词 → 含义 → 代码路径 → 依赖
 
 > **用途**：改 bug / 做需求时快速定位「这个词在代码里叫什么、在哪个文件、牵动谁」。
 > **用法**：`Ctrl+F` 搜中文词或英文标识符；每行是「术语 · 含义 · 代码位置 · 关联」。
-> **与 `ARCHITECTURE.md` 的分工**：架构文档讲「为什么这样设计」，本文讲「这东西在哪、改它要动谁」。
-> 适用版本：`main`（2026-09-29，`MIGRATION_HEAD = f009`）。
+> **与 `docs/backend/ARCHITECTURE.md` 的分工**：架构文档讲「为什么这样设计」，本文讲「这东西在哪、改它要动谁」。
+> 不变量按模块分散在各模块文档，全量索引 → `docs/backend/ARCHITECTURE.md` §3。
 
 **目录**：§1 领域名词 · §2 数据模型与字段 · §3 抓取与调度 · §4 认证与凭据 ·
-§5 前端与界面 · §6 工程与流程 · §7 配置项速查 · §8 不变量（**指针 → `ARCHITECTURE.md` §6**） · §9 需求 → 代码入口。
+§5 前端与界面 · §6 工程与流程 · §7 配置项速查。
 
 ---
 
@@ -63,19 +69,19 @@
 
 ## 2. 数据模型与字段
 
-**14 张表**：`vtubers` / `accounts` / `posts` / `account_stat_snapshots` / `live_sessions` /
+**数据表**：`vtubers` / `accounts` / `posts` / `account_stat_snapshots` / `live_sessions` /
 `live_gift_days` / `live_category_overrides` / `vtuber_events` / `thirdparty_vtubers` /
 `app_meta`（通用 KV，f003）/ `vtuber_field_history`（曾用名·曾用签名，f004）/
 `profile_cards`（档案视图卡片布局，f006）/ `vtuber_avatar_history`（历次头像账本，f008）/
 `local_assets`（**轻资产长期储存索引**，f009）。
-列级定义见 `docs/backend-repositories-and-routers.md` §1；ER 图见 `docs/ARCHITECTURE.md` §2。
+列级定义见 `docs/backend/DATA-MODEL.md` §1；ER 图见 `docs/backend/ARCHITECTURE.md` §2。
 
 **轻资产（light asset）**：`小、不变、反复要` 的远端资源 —— 头像、帖子封面、企划徽标等。
 判定它的不是体积而是**用途**：要么"没有它界面就缺一块"（头像），要么"每次渲染都要它"（封面）。
 固化后「再要一次」= 读盘，而不是再发一次请求。
 代码位置：`app/services/assets.py`（唯一入口）；索引表 `local_assets`；副本落在
 `static/assets/{kind}/`。**不要**与 `static/img-cache/`（任意远端图的临时缓存，可随时清）
-混为一谈 —— 判据是"清空它应用外观不变"（`ARCHITECTURE.md` §6 第 37 条）。
+混为一谈 —— 判据是"清空它应用外观不变"（`docs/backend/ASSETS.md 不变量 37）。
 
 **稳定键（stable key）**：`assets.key_of(url)` —— 丢掉**签名参数**（`Expires` / `ssig` /
 `KID` / `sign` … 白名单 `SIGNATURE_PARAMS`）、去掉 fragment、query 按参数名排序后的 URL。
@@ -140,7 +146,7 @@
 | **WBI 签名** | B 站接口签名（混钥，缓存 30min） | `services/wbi.py` | 所有 `x/space/wbi/*` 请求 |
 | **动态流预算 / dynamics budget** | 按平台的 60s 滑动窗口速率预算（12 req·min⁻¹），轮间自适应等待；**单平台主账号数 > rpm 时退化为每轮空等一个窗口**（不抛错，见 devlog/053） | `scheduler._PlatformBudget`、`_dynamics_next_due` | v0.9.8；轮前估算记账 + 轮后补差 |
 | **启动外部补抓** | 启动时对每 V 主账号跑一次第三方数据（<24h 跳过） | `scheduler._startup_catchup_loop`、`run_startup_external_catchup`（线程由 `scheduler.runtime` 起） | v0.9.8，devlog/049；R1 起并入调度运行时 |
-| **调度运行时 / scheduler runtime** | 进程级唯一的调度生命周期对象：持停止事件 + 三个守护线程句柄 + APScheduler + 在飞事件循环登记表；`start()`/`stop()` 幂等，线程用 `wait()` 代 `time.sleep`、`run()` 代 `asyncio.run`（停止时能取消在飞轮次） | `scheduler.runtime`（`SchedulerRuntime`）、`app/main.py` 的 lifespan | **R1，devlog/211**（改前综合档线程 `while True` + `time.sleep` ⇒ 无任何停止手段、连续两次 lifespan 双跑）；不变量见 `ARCHITECTURE.md` §6 第 31 条 |
+| **调度运行时 / scheduler runtime** | 进程级唯一的调度生命周期对象：持停止事件 + 三个守护线程句柄 + APScheduler + 在飞事件循环登记表；`start()`/`stop()` 幂等，线程用 `wait()` 代 `time.sleep`、`run()` 代 `asyncio.run`（停止时能取消在飞轮次） | `scheduler.runtime`（`SchedulerRuntime`）、`app/main.py` 的 lifespan | **R1，devlog/211**（改前综合档线程 `while True` + `time.sleep` ⇒ 无任何停止手段、连续两次 lifespan 双跑）；不变量见 `docs/backend/FETCH-PIPELINE.md 不变量 31 |
 | **app_meta** | 通用 KV（进程外需要记住的少量状态） | `models.AppMeta`、`AppMetaRepo`、迁移 f003 | 键 `external.startup.last_run` |
 | **状态通道** | 前端轮询的抓取进度 | `scheduler._status`（account/post/**external**，含 `task`/`vtuber_name`/`index`/`total`）、`_push_account_snapshot`、`get_fetch_status`、`GET /vtuber/fetch-status` | 前端 ~2s 轮询；顶栏文案＝「任务 - V名 - i/N」（P8-C） |
 | **消息中心 / 推送通道** | 后端**主动推**给所有订阅者（主窗口 / 小窗）的通道（241 后端 + 242 前端 + 243 开播出口，方案 `docs/design/notices/message-hub-execution.md`）：八类消息（`domain.*` 领域事件 / `notice.*` 派生通知）+ 环形 **50** 条回放；"点击 → 各终点看到"不再等下一次轮询。**M5-2b 起通知汇总也是单一真源**：两扇窗都拉 `GET /vtuber/notices`（服务端列表 + 本地覆盖，见 `utils/noticeStream.ts::useNotices`），`widget:notices` 广播已退役 | 后端 `services/messages.py::MessageHub` + `GET /messages/stream`（**SSE over fetch**，token 走 header —— `EventSource` 带不了自定义头）+ `POST /messages/ack`（客户端"读到了流"的见证）；前端 `utils/eventStream.ts`（传输：帧解析 / 自动重连 / 首块字节回调）+ `utils/messageBus.ts`（分发：`ddtoolkit:message` / `ddtoolkit:live-edge` + 瞬时消息点亮胶囊） | ⚠️ 与下面「状态通道」**并存**：轮询是丢消息/重连窗口的兜底，本线**不退役**它。跨线程：T0 守护线程发布 ⇒ `queue.Queue` 中转 + `call_soon_threadsafe` 唤醒（**别用 `run_in_executor` 阻塞读**，devlog/241 §四）；只在带 `Last-Event-ID` 时补发且帧内 `replay:true`（前端据此**不弹提示**，开播也不重播）。**发布点必须在 `db.commit()` 之后**（devlog/243）。判据：pytest `test_messages.py` / `test_live_edge_notice.py` + vitest `eventStream`/`messageBus`/`notificationHub.test.ts` + 探针 `ui_probe.py --messages`（默认三档也跑） |
@@ -200,10 +206,10 @@
 
 | 术语 | 含义 | 代码位置 | 关联 |
 |---|---|---|---|
-| **迁移链 / MIGRATION_HEAD** | alembic `a001→f009`（22 个版本） | `alembic/versions/`、`app/main.py::MIGRATION_HEAD` | 同步纪律 = 不变量 3（`docs/ARCHITECTURE.md` §6）；测试断言一致 |
-| **一键发布 / release.py** | 十步发布编排：预检→版本同步→门禁→打版→产物校验→提交/tag→推送→Release→报告 | `scripts/release.py`；手册 `docs/RELEASE.md`；上传 `scripts/upload_release_assets.py`（幂等） | 守卫：工作树脏/notes 缺失/版本不递增/NSIS 打平/**文档漂移**/tag 冲突 → 停；`--dry-run`、`--from <步骤>` 续跑；推完自动对齐本地 `origin/<分支>` tracking ref（按 URL 推送不会自动更新它） |
+| **迁移链 / MIGRATION_HEAD** | alembic `a001→f009`（22 个版本） | `alembic/versions/`、`app/main.py::MIGRATION_HEAD` | 同步纪律 = 不变量 3（`docs/backend/ARCHITECTURE.md` §6）；测试断言一致 |
+| **一键发布 / release.py** | 十步发布编排：预检→版本同步→门禁→打版→产物校验→提交/tag→推送→Release→报告 | `scripts/release.py`；手册 `docs/ops/RELEASE.md`；上传 `scripts/upload_release_assets.py`（幂等） | 守卫：工作树脏/notes 缺失/版本不递增/NSIS 打平/**文档漂移**/tag 冲突 → 停；`--dry-run`、`--from <步骤>` 续跑；推完自动对齐本地 `origin/<分支>` tracking ref（按 URL 推送不会自动更新它） |
 | **端到端上游冒烟 / smoke_upstream** | 数据目录副本 + 真后端 + 真上游，跑"只有真环境才暴露"的链路（B 站检索 / uid 直查 / 池外收录 / 场次上游） | `scripts/smoke_upstream.py`（`--cold` = 空数据目录 + 清空凭据）；`dev_check.py --upstream` | `--capture` 顺带刷新真实 fixtures；skip 必须打印原因，不冒充通过 |
-| **真实 fixtures** | 真上游回包 / 真 `installer.nsi` 片段 / 真索引条目 —— 判据的"真形状"依据 | `tests/fixtures/`（`smoke_upstream.py --capture` 生成；专栏 HTML 真拉自 `x/article/view`）；用例 `tests/test_real_fixtures.py` | 「新判据至少一条用例吃真实数据」= 不变量 22（`docs/ARCHITECTURE.md` §6） |
+| **真实 fixtures** | 真上游回包 / 真 `installer.nsi` 片段 / 真索引条目 —— 判据的"真形状"依据 | `tests/fixtures/`（`smoke_upstream.py --capture` 生成；专栏 HTML 真拉自 `x/article/view`）；用例 `tests/test_real_fixtures.py` | 「新判据至少一条用例吃真实数据」= 不变量 22（`docs/backend/ARCHITECTURE.md` §6） |
 | **迁移备份 / migration backup** | 真跑 schema 迁移**之前**自动复制的一份库（`vtuber-<head>-<时间戳>.db`，带 `-wal`、不带 `-shm`）。保留最近 3 份 / 300MB 封顶，超限淘汰最旧的，**永远留最新一份** | `app/services/db_maintenance.py::backup_database` / `prune_backups`；调用点 `app/main.py::_migrate_with_safety` | 不变量 27；存储面板「迁移备份」那一行；**快路径不备份**（常态启动不付这个代价） |
 | **隔离库 / quarantined db** | 迁移失败时被改名保留的坏库：`vtuber.db.failed-<时间戳>`（连同 `-wal`）。隔离后用**空库继续启动** ⇒ 应用可用、档案没丢 | `app/main.py::_quarantine_database`；状态经 `/healthz` 的 `migration.quarantined` 带出 | 不变量 28；前端横幅「打开数据目录」就是让人去这里找回 |
 | **诊断包 / diagnostics bundle** | 一键拼出的纯文本（版本 / OS / 迁移结局 / 库形态 / 备份清单 / 占用 / 三个日志尾部），发给开发者用。**绝不含 `.env`、cookie、token** | `app/services/diagnostics.py`；`GET /settings/diagnostics`（要 token）；前端「导出诊断」 | 判据 `tests/test_migration_safety.py::test_diagnostics_*`（植哨兵断言不泄漏） |
@@ -213,11 +219,11 @@
 | **冻结后端 / frozen** | PyInstaller onedir 打包的 sidecar（`_MEIPASS` 定位资源） | `scripts/build_backend.py`、`backend_main.py`、`app/core/config.py::PROJECT_ROOT` | 资源打平事故见 devlog/036 |
 | **sidecar 就绪信号** | `DDTOOLKIT_READY <url>` + `logs/sidecar.log` 性能打点 | `backend_main.py` | Tauri 启动器据此等就绪 |
 | **父进程看门狗** | 壳退出后后端自尽 | `backend_main.py::_watch_parent` | 防孤儿进程 |
-| **发布链** | 后端 → 桌面应用 → 聚合产物 | `npm run release`；`scripts/{build_backend,collect_release,upload_release_assets}.py` | 说明 `docs/RELEASE.md`（§3.1 是应用内更新的签名密钥与产物） |
+| **发布链** | 后端 → 桌面应用 → 聚合产物 | `npm run release`；`scripts/{build_backend,collect_release,upload_release_assets}.py` | 说明 `docs/ops/RELEASE.md`（§3.1 是应用内更新的签名密钥与产物） |
 | **应用内更新** | 「设置 → 关于」检查更新 → 下载 → 重启安装；启动后静默查一次 | `tauri-plugin-updater` / `-process`、`plugins.updater`（endpoints + pubkey）、`utils/shellBridge.ts`（`checkForUpdate`/`installUpdate`/`openReleasePage`）、`hooks/useUpdateCheck.ts`；产物 `latest.json` | **更新载体 = NSIS 安装包本身 + `.exe.sig`**（没有 `*.nsis.zip`）；签名私钥在**仓库外**、**密码不能为空**（空密码时 CLI 从终端读、脚本里会挂住）；错误分三类（`remote`=远端还没发布 / `network`=连不上、才试本地代理 / `other`）；便携版不自我更新 |
 | **数据目录体检 / 库维护** | 数据目录里谁在长（库 / 图片缓存 / 日志 / 遗留备份 + 磁盘剩余）；删数据后**真的还盘** | `app/services/db_maintenance.py`（`dir_stats` / `sqlite_stats` / `ensure_incremental_autovacuum` / `incremental_vacuum`）、`app/routers/img_proxy.py::prune_cache`、`config.IMG_CACHE_MAX_MB`（默认 300，`DDTOOLKIT_IMG_CACHE_MAX_MB` 可覆盖） | 图片缓存**按 mtime 淘汰 = 近似 LRU**（命中刷新 mtime，热图不会被误删）；库切 `auto_vacuum=INCREMENTAL` **带 512MB 门槛**（全库 VACUUM 的临时空间≈库大小，不在升级路径上冒险）；两条 PRAGMA **不能在事务里**跑（走 DBAPI autocommit）；实测 8 个 V ⇒ 库 54MB（原文 JSON 占 46%）+ 缓存 101MB —— 涨得最快的是缓存 |
-| **版本号同步点** | 发版时要一起改的那几处版本号 | **清单的真源 = `scripts/release.py::VERSION_FILES`**（别在这里复述）；口径见 `docs/RELEASE.md` §2 | 测试 `test_version_synced_with_devlog` |
-| **整机占用 / perf_report** | 应用**整棵进程树**（壳 + WebView2 各进程 + 后端 + conhost）的内存 / 线程 / 句柄，外加冷热启动、空闲 CPU、托盘深休眠、单核亲和代理 | `scripts/perf_report.py`；数字与结论：`docs/ARCHITECTURE.md` §3.13 | 内存口径 = 性能计数器 `Working Set - Private`（**任务管理器「内存」列**，不是 `PrivateUsage`）；实测空闲 **243–257MB**（其中 WebView2 占 143–152）、收进托盘十分钟后降到 **~92MB**；**"量到 0"必须区分"没进程"与"没量到"**（devlog/134：PowerShell 终止错误 rc=0 + 空 stdout，第一版打出一排 0） |
+| **版本号同步点** | 发版时要一起改的那几处版本号 | **清单的真源 = `scripts/release.py::VERSION_FILES`**（别在这里复述）；口径见 `docs/ops/RELEASE.md` §2 | 测试 `test_version_synced_with_devlog` |
+| **整机占用 / perf_report** | 应用**整棵进程树**（壳 + WebView2 各进程 + 后端 + conhost）的内存 / 线程 / 句柄，外加冷热启动、空闲 CPU、托盘深休眠、单核亲和代理 | `scripts/perf_report.py`；数字与结论：`docs/backend/ARCHITECTURE.md` §3.13 | 内存口径 = 性能计数器 `Working Set - Private`（**任务管理器「内存」列**，不是 `PrivateUsage`）；实测空闲 **243–257MB**（其中 WebView2 占 143–152）、收进托盘十分钟后降到 **~92MB**；**"量到 0"必须区分"没进程"与"没量到"**（devlog/134：PowerShell 终止错误 rc=0 + 空 stdout，第一版打出一排 0） |
 | **测试临时目录 / TempRoot** | `cargo test` 建的 `%TEMP%\ddtk-{mig,ptr,shelllog}-*`：`Drop` 时自删 | `frontend/src-tauri/src/testtmp.rs`；三处用例的 `temp_root()` 都用它 | devlog/134：此前**只建不删**，实测堆了 **215 个目录 / 504MB**；`Drop` 两条路都收拾（目录 / 被文件占住）；`Deref<Target=Path>` 让调用点照旧写 `root.join(…)` |
 | **头像 / 签名取值链** | 卡片与左栏**同源**：头像 `resolveAvatar`、签名 `resolveSign`；**渲染也同源**：图片一律 `ProxyImage`，代理主机规则只在 `imageHost.ts` | `frontend/src/utils/avatarSource.ts`、`utils/signSource.ts`、`utils/imageHost.ts`、`components/common/ProxyImage.tsx` | R33/devlog135：左栏曾自己写一份"只看平台字段"的链 ⇒ 档案设置改完看着像没生效；**R46/devlog249**：取值同源 ≠ 渲染同源 —— 左栏曾用 radix `Avatar` 的裸 `<img>`，微博头像被防盗链 403 ⇒ 右栏变了、左栏变灰底首字。护栏 = `--profile-sync` 探针（比 `data-render-src`）+ 单测 + 结构判据（全站不许有 `<AvatarImage`）；`data-src`（口径）/ `data-render-src`（接线）是**为可测性挂的**，别删 |
 | **历次头像账本 / vtuber_avatar_history** | 每次抓到的头像各留一行（URL + 本地文件 + 首次见到时间），**当前用的是哪张**由 `vtubers.avatar` → 账号 `avatar_url` **推导**（没有 `is_selected` 列） | `app/services/vtuber_avatars.py`（写入/淘汰/推导）、`app/models/vtuber.py::VtuberAvatarHistory`、`GET /vtuber/{id}/avatars`；迁移 `f008` | R47/devlog249：用户口径「新抓取下来的不要直接覆盖以前的，都作为可选项保留，标记当前用的是哪个」。⚠️ **只记 URL 是半件事** —— 本地文件名原先固定（`{uid}{ext}`），新图会**覆盖旧文件** ⇒ 改成 `{uid}_{URL 摘要}{ext}` 版本化命名；每 V 封顶 `AVATAR_VERSION_LIMIT` 张，淘汰最旧但**跳过当前选中那张**；挂 `vtubers`/`accounts` 两个外键 ⇒ **purge 必清** |
@@ -228,7 +234,7 @@
 | **运行日志 / 日志轮转** | 双通道（轮转文件 + 控制台）：`logs/app.log` 按天切成 `app.log.YYYY-MM-DD`，保留 7 份 | `app/core/logging_setup.py::setup_logging/build_file_handler` | 排查先"按天切一刀"（devlog/076）；配置本身可测（devlog/077） |
 | **场次上游取数 / live upstream** | 场次详情里"必须打第三方"的两格取数：一次调用 = **并发 2 个上游请求**（摘要 + 中断/继续事件）；成功进 10 分钟缓存，**同场次并发调用单飞共享一轮** | `services/live_upstream.py::load_live_upstream`；端点 `…/live-sessions/{id}/upstream` | 日志 `场次上游取数` ×2 + `单飞复用` ×1 是正常的（dev 下 StrictMode 会调两次，devlog/081） |
 | **文档工具** | 架构图 SVG 生成 | `docs/tools/gen_diagrams.py` → `docs/diagrams/` | 只改 `dN()` 函数即可重绘 |
-| **后端常驻内存 / frozen 占用** | 打包版空闲 **128.7MB**（任务管理器口径）；**业务代码只占 ~8MB**，其余是解释器 + FastAPI/SQLAlchemy 等框架地板；打包比 dev 多 ~19MB | 归因表与复测方法：`docs/ARCHITECTURE.md` §3.12；`scripts/check_danmaku_fetch.py`（词云上游现况） | 唯一已知涨点 = **开过一次词云后 jieba 词典常驻 ~55MB**（178 → 128MB 就是 R24a 删预热省下的）；`_internal` 里的 numpy 25.9MB + PIL 12.7MB **在盘不在内存**（`app/` 无人 import，Pillow 的 `fromarray` 把 numpy 带进依赖图）；优化候选见 `docs/TODO.md` §1.4 |
+| **后端常驻内存 / frozen 占用** | 打包版空闲 **128.7MB**（任务管理器口径）；**业务代码只占 ~8MB**，其余是解释器 + FastAPI/SQLAlchemy 等框架地板；打包比 dev 多 ~19MB | 归因表与复测方法：`docs/backend/ARCHITECTURE.md` §3.12；`scripts/check_danmaku_fetch.py`（词云上游现况） | 唯一已知涨点 = **开过一次词云后 jieba 词典常驻 ~55MB**（178 → 128MB 就是 R24a 删预热省下的）；`_internal` 里的 numpy 25.9MB + PIL 12.7MB **在盘不在内存**（`app/` 无人 import，Pillow 的 `fromarray` 把 numpy 带进依赖图）；优化候选见 `docs/TODO.md` §1.4 |
 | **静默时段 / quiet hours** | 用户自己指定的本地时段内把**动态流**降到最慢（默认 15 分钟一轮）：睡觉时没人看，少发请求 | `scheduler.quiet_hours_active` / `quiet_dynamics_floor` / `quiet_hours_status`；设置项 `QUIET_HOURS_ENABLED/START/END/DYNAMICS_MIN_SECONDS`（前三项在设置里可见、下限在「高级」） | **R30，devlog/130**（用户口径：vtuber 全天开播但**用户不会全天醒着**）：**默认关闭**（绝不悄悄改变行为）· 支持跨午夜、`START == END` = 不生效 · **只降动态流**，T0 保持 60s（日历场次时间由 live 跳变推导，降它就会变粗）· 与 R24b 不冲突（那条否的是"隐藏就降频"） |
 | **浏览器 UA / 请求头纪律** | UA 集中在一个**零依赖**模块（`UA_MAJOR`，**发版时刷新这一处**；零依赖是为了不把 httpx 拽进图片代理的冷启动路径）；口径三条：**不发 client hints**（GREASE 串只能靠猜）· **不开 HTTP/2**（要加 `h2` 依赖）· **不发 `Connection: keep-alive`**（浏览器在 h1.1 下不显式发它） | `app/core/useragent.py`；消费方 = `auth.BASE_HEADERS` / `bili_search` / `img_proxy` / `platforms/weibo` / `weibo_auth` / `danmakus`；护栏 `tests/test_user_agent.py`（结构化扫描：`app/` 下只有它能写 UA 字面量） | **R26②③，devlog/128**：盘点时全仓有 **4 个不同的大版本**（131/150/126/150）；`runner.py` 的自报家门 UA 改从 `settings.VERSION` 取（原来写死 0.5.2）。**HTTP/2 的取舍有实测**：h1.1 25.4ms vs h2 20.5ms（中位）⇒ 每次快 5ms，对后台轮询无意义 |
 | **托盘状态行 / tray status** | 收进托盘后用户**唯一能看到的风控信号**：托盘 tooltip 与菜单项 `status` 显示「风控冷却中 · B 站 · 剩余 N 分钟」，冷却结束复位成「后台运行中」 | 壳 `lib.rs::set_tray_status`（改 tooltip + 菜单项文案；`TrayIcon` 没有 `menu()` getter，所以建菜单时把句柄存进 `TrayStatusItem`）、前端 `utils/trayStatus.ts`（纯文案）+ `utils/shellBridge.setTrayStatus` + `hooks/useTrayStatus`（隐藏时 60s 心跳） | **R29，devlog/129**：隐藏期间顶栏那条 2s 轮询本来会停（R18）⇒ hook 自带 **60s 心跳**且**刻意不在隐藏瞬间打第一发**（停表判据看的就是隐藏后有没有请求）；`cargo test` 1 条钉文案复位 |
@@ -243,7 +249,7 @@
 | `DATA_DIR` | `DDTOOLKIT_DATA_DIR` 或项目根 | 数据库/日志/凭据/静态资源根目录。桌面端启动优先级（`datadir::resolve_startup`，有单测）：**环境变量 > 应用内迁移指针 > 默认目录**（`%APPDATA%\com.ddtoolkit.app`）。设了环境变量即视为**便携/自定义安装**（界面不给迁移入口）；指针坏了回退默认目录并把原因显示给用户 |
 | `DATABASE_URL` | `sqlite:///<DATA_DIR>/vtuber.db` | SQLite 连接串 |
 | `LOG_FILE` / `LOG_BACKUP_DAYS` | `logs/app.log` / `7`（`DDTOOLKIT_LOG_BACKUP_DAYS` 可覆盖） | 双通道日志的文件通道：**按天轮转**（`app.log.YYYY-MM-DD`）保留最近 N 份；配置在 `app/core/logging_setup.py`（devlog/077） |
-| `VERSION` | `1.0.2` | 版本号。发版时**多处一起改** → 锚点清单的真源 = `scripts/release.py::VERSION_FILES`（**别在这里复述**；口径见 `docs/RELEASE.md` §2），测试断言一致 |
+| `VERSION` | `1.0.2` | 版本号。发版时**多处一起改** → 锚点清单的真源 = `scripts/release.py::VERSION_FILES`（**别在这里复述**；口径见 `docs/ops/RELEASE.md` §2），测试断言一致 |
 | `REQUEST_INTERVAL_MIN/MAX` | 3.0 / 5.0 s | 账号抓取每账号间隔 |
 | `MANUAL_FAST_INTERVAL_MIN/MAX` | 0.5 / 1.0 s | 收录/单V 的账号间隔（只在账号之间生效） |
 | `FIRST_SCREEN_VIDEO_PAGES` / `_DYNAMICS_PAGES` / `_DYNAMICS_LIMIT` | 1 / 1 / 3 | 收录首屏抓取规模 |
@@ -271,37 +277,3 @@
 | `CORS_ORIGINS` | `*` | 跨域来源（`*` 时不允许带凭据） |
 
 ---
-
-## 8. 不变量与常见坑
-
-> **不变量只有一处真源：`docs/ARCHITECTURE.md` §6「不变量与纪律」（改代码前必读）。**
-> 本节原有的 14 条已**全部并入 §6**、按原顺序一一对应：
-> `8.1→§6.1 · 8.2→§6.2 · 8.3→§6.3 · 8.4→§6.16 · 8.5→§6.17 · 8.6→§6.5 · 8.7→§6.7 ·
-> 8.8→§6.18 · 8.9→§6.10 · 8.10→§6.19 · 8.11→§6.20 · 8.12→§6.21 · 8.13→§6.22 · 8.14→§6.23`。
-> 别处写的「`GLOSSARY` §8.x / §8 第 N 条」按这张表换算；**新的不变量只往 §6 加**，本节不再维护。
-
----
-
-## 9. 需求 / 缺陷 → 代码入口（速查）
-
-| 想做的事 | 先看这里 |
-|---|---|
-| 加/改一个后端接口 | `app/routers/vtuber.py`（+ `app/schemas/vtuber.py`）；抓取类端点注意 `manual_task_running()` 判定 |
-| 改「添加 V / 添加账号」后的抓取 | `routers/vtuber.py::_adopt_background`；账号侧 `scheduler.async_fetch_accounts`、内容侧 `scheduler.async_fetch_first_screen`（devlog/044） |
-| 新代码要发 HTTP 请求 | 一律 `app/core/http.py::new_async_client(timeout)`（别直接 `httpx.AsyncClient`：每次构造 ~1s） |
-| 加一张表 / 加一列 | `alembic/versions/eNNN_*.py` → `MIGRATION_HEAD` → `app/models/vtuber.py` → `app/repositories/vtuber_repo.py` →（挂外键时）`app/services/purge.py` |
-| 改唯一约束 / 怀疑旧库结构不对 | `alembic/versions/c002_*`（加宽 posts 唯一键的先例）、`app/main.py::_missing_unique_keys`（桥接守卫） |
-| 改抓取频率 / 节流 | `app/core/config.py`；调度结构在 `app/services/scheduler.py`（`_tier_loop` / `_run_combined_tier` / `_run_platform_rounds`） |
-| 接入新平台 | `app/services/platforms/base.py` + `registry.py`；参考 `docs/platforms-extension-guide.md` |
-| 接入新第三方数据源 | `app/services/externals/base.py` + `externals/__init__.py` 注册；`runner.py` 负责调度 |
-| 帖子抓取漏数据 / 停止异常 | `_fetch_posts_core` 的 `stop_reason`、`PostFetchResult`；`docs/backend-fetch-pipeline.md` §5 |
-| 删除检测（墓碑）行为不对 | `app/services/tombstone.py`（窗口可信性 + 两击）；`posts.last_seen_at/deleted_detected_at` |
-| 直播日历/场次数据不对 | `LiveSessionRepo.merged()`（合并/去重/并段）、`app/services/live_type.py`（分类）、`_route_live_item`（feed 源） |
-| 粉丝趋势不对 | `AccountStatSnapshotRepo.fan_trend_points`（按天分桶）+ `components/FanTrendChart.tsx` |
-| 登录/凭据问题 | `app/services/auth.py`（B 站）、`weibo_auth.py`（微博）、`env_store.py`（写 `.env`）、`routers/auth.py` |
-| 图片加载不出来 | `routers/img_proxy.py`（白名单/Referer/缓存）、`components/common/ProxyImage.tsx`（三态） |
-| 改右栏视图/布局 | `pages/PostsPage.tsx` + `styles/posts.css`；改完跑 `python scripts/ui_probe.py` |
-| 改侧栏/顶栏 | `components/{VtuberSidebar,TopBar,IconRail}.tsx` + `styles/layout.css` |
-| 改设计令牌（颜色/圆角/阴影） | `styles/tokens.css` + `docs/UI-MAP.md` §D |
-| 打包/发布问题 | `docs/RELEASE.md`、`scripts/{build_backend,collect_release}.py`、`frontend/src-tauri/tauri.conf.json`（resources 必须是**数组形式**） |
-| 改完想快速验证 | `python scripts/dev_check.py`；布局类再加 `python scripts/ui_probe.py` |

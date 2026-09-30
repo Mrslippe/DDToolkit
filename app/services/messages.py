@@ -21,7 +21,7 @@
    （`scheduler.py` 的 `_live_poller_loop`），**那里没有事件循环**；而订阅者的队列绑在
    uvicorn 的循环上。⇒ 用一个线程安全的 `queue.Queue` 中转 + `loop.call_soon_threadsafe()`
    叫醒 drain 任务，**投递只在应用循环的线程里发生**。**"模块级 asyncio 原语"一个都不留**
-   （`ARCHITECTURE.md` §6 第 15 条：综合档每轮一个 `asyncio.run()`，模块级 `asyncio.Lock`
+   （`docs/backend/ARCHITECTURE.md 不变量 15：综合档每轮一个 `asyncio.run()`，模块级 `asyncio.Lock`
    第二轮必抛 "bound to a different event loop"）—— `asyncio.Event` 在 `start()` 里
    **现造、每代重建**。
    ⚠️ **不要用 `run_in_executor(None, queue.get)` 那套"阻塞读放工作线程"**（本批第一版就是
@@ -194,7 +194,7 @@ class MessageHub:
         """记下当前事件循环、现造唤醒原语、起 drain 任务。**幂等**（同代起两次不会有两套）。
 
         每一代（每次 `start()`）都**重建** `asyncio.Event`：它绑在造它的那个循环上，
-        跨循环复用必抛 "bound to a different event loop"（`ARCHITECTURE.md` §6 第 15 条）。
+        跨循环复用必抛 "bound to a different event loop"（`docs/backend/ARCHITECTURE.md 不变量 15）。
         """
         loop = asyncio.get_running_loop()
         if (self._drain_task is not None and not self._drain_task.done()

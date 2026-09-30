@@ -1,8 +1,16 @@
+---
+doc: plans/architecture-improvement-plan
+class: plan
+scope: 架构整改母计划：安全边界、调度生命周期、事务归属、核心模块拆分、API 契约、可访问性、CI；含批次依赖、测试牙口与停止条件
+not-scope: 执行细化与逐批改动面（见 plans/architecture-improvement-execution）；现行架构真源
+expires: 2026-12-31
+---
+
 # DDToolkit 架构改进执行方案
 
 > 状态：待执行。
 > 适用基线：当前 `main`，迁移 head 与版本等动态事实以代码和 `python scripts/gen_doc_numbers.py --list` 为准。
-> 目标读者：负责实际修改代码的执行 Agent。本文件是实施路线与验收合同，不代替 `docs/ARCHITECTURE.md` 的现行架构真源。
+> 目标读者：负责实际修改代码的执行 Agent。本文件是实施路线与验收合同，不代替 `docs/backend/ARCHITECTURE.md` 的现行架构真源。
 > 总原则：**不重写、不微服务化、不换技术栈**；保留 Tauri + FastAPI sidecar + SQLite + React 的模块化单体，只收紧安全边界、生命周期、事务边界和高复杂度模块。
 
 ---
@@ -12,7 +20,7 @@
 执行本方案时必须遵守以下规则：
 
 1. **一次只做一个批次**。每批独立建立护栏、修改、验收、写 devlog，不允许把安全改造、模块拆分和视觉改动混在同一个提交。
-2. 开工前读取：`docs/ARCHITECTURE.md` §5/§6、`docs/GLOSSARY.md`、`docs/DEV-LOOP.md` §0、本批涉及的深度文档、`.dsh/skills/ddtoolkit-conventions/SKILL.md`；需要同步文档时再读 `ddtoolkit-docs-devlog`。
+2. 开工前读取：`docs/backend/ARCHITECTURE.md` §5/§6、`docs/GLOSSARY.md`、`docs/DEV-LOOP.md` §0、本批涉及的深度文档、`.dsh/skills/ddtoolkit-conventions/SKILL.md`；需要同步文档时再读 `ddtoolkit-docs-devlog`。
 3. **保护现有工作树**。开工先执行 `git status --short`；用户已有改动不得覆盖、重置、暂存或顺手整理。审查时已知 `frontend/src/dev/probe.ts` 有未提交改动，执行时必须重新核实。
 4. Bug 修复先补能失败的回归测试；新机制先补拒绝路径/故障路径，再写成功路径。
 5. 不凭注释判断实现完成；沿实际调用链核实。新增断言必须做反向验证：人为破坏后应变红，恢复后变绿。
@@ -201,7 +209,7 @@ FastAPI middleware/dependency
 
 扩展 `BasePlatform` 的显式能力：内容是否需登录、账号/帖子/直播支持、帖子流集合，并提供平台级 `content_fetch_allowed()` 与可选 `fetch_live_batch()`。微博登录不受 B 站状态阻断；B 站双流显式表达；T0 只调用支持 live batch 的平台；unsupported 必须结构化返回。
 
-测试 B站/微博四种登录组合、只支持账号的 fake platform、多平台风控隔离。同步 `platforms-extension-guide.md`，取消“一行注册获得全部能力”的过度承诺。
+测试 B站/微博四种登录组合、只支持账号的 fake platform、多平台风控隔离。同步 `docs/backend/PLATFORMS.md`，取消“一行注册获得全部能力”的过度承诺。
 
 ## M2. 拆 scheduler，保留 façade
 

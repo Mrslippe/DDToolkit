@@ -46,7 +46,7 @@ def test_cascade_cleanup_helpers_never_commit():
     """`delete_by_*` 与 `AccountStatSnapshotRepo.add`：只 flush/删除，绝不 commit。
 
     这三类方法是 purge 与"快照随业务写入同事务"的地基（见
-    `docs/backend-repositories-and-routers.md` §2 开头的例外表）。
+    `docs/backend/DATA-MODEL.md` §2 开头的例外表）。
     """
     offenders = []
     for (cls, name), fn in _methods(VREPO).items():

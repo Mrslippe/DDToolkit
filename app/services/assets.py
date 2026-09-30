@@ -4,7 +4,7 @@
 
 把「**小、不变、反复要**」的远端资源（头像 / 帖子封面…）按**稳定键**固化进数据目录，
 配一份 SQLite 索引（`local_assets`）⇒「再要一次」从**再发一次请求**变成**读盘**。
-规格是 `docs/design-light-assets.md`，分批方案是 `docs/design-light-assets-execution.md`。
+规格是 `docs/backend/ASSETS.md`，分批方案是 `docs/plans/light-assets-execution.md`。
 
 ## 为什么必须有"稳定键"（实测证据见 `tests/fixtures/light_assets.json`）
 

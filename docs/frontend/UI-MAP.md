@@ -1,3 +1,14 @@
+---
+doc: frontend/ui-map
+class: index
+scope: 前端组件与元素的查询索引（组件文件 → CSS 类名 → 关键子元素）+ 整体美学：设计令牌、形状语言、圆角与阴影豁免族、动效规范
+not-scope: 前端分层、数据流与状态管理；文档里凡写"当前数值"一律以 tokens.css 与各 css 的实际声明为准
+sot: frontend/src/styles/tokens.css, frontend/src/components/, frontend/src/pages/
+verify: python scripts/ui_probe.py --vtuber 15 --seed-accounts 8
+budget: 1600
+retire-when: 前端视觉体系整体重做，或组件索引改成机器生成
+---
+
 # UI 设计映射文档（UI-MAP）
 
 > 修改前端界面时，按本文档名称精确指定目标区域/元素。
@@ -10,7 +21,7 @@
 > ② 帖子面板「药丸族」：`type-chip` / `.search-float input` / `post-card-type`/`post-card-duration` 角标 / `stat-badge`（均 999px 或渐变软光）；
 > ③ 功能性气泡：`live-tag`（8px）、粉丝 `stat-pill`（2px 图像底）、筛选/时间 popover 抽屉阴影（16px 浮置深度）；
 > ④ **档案卡族**（R37-P4a）：`.pcard` 的 `--pcard-radius:12px` + `--pcard-shadow*` 四档 +
-> 顶部 1px 高光内边 `--pcard-ring` —— "圆角阴影稍微浮起"的小组件式卡片（规格 `docs/design-archive-cards.md`）。
+> 顶部 1px 高光内边 `--pcard-ring` —— "圆角阴影稍微浮起"的小组件式卡片（规格 `docs/frontend/specs/archive-cards.md`）。
 > **⑤ 视图切换条**（R39-D3/D4 → **R45 改定**，2026-09-24）：`.view-switch` **加入 ① 浮片族的配方**
 > （`--pill-bg` 不透明实底 + `--pill-shadow`，圆角取 ④ 的 `--pcard-radius`）—— 它**不参与**
 > ④ 的阴影四档（那四档是档案卡专用的升降序），只借"圆角 + 实底 + 阴影"这套**形状语言**。
@@ -538,7 +549,7 @@ density / **折叠尺寸 ∈ [200,400]×40** / **圆角 20（且 == `--widget-ra
 **禁用 + 说明原因**；账号信息与归档**保持可用**（实测匿名可用，禁掉就是过度限制）。
 探针：`python scripts/ui_probe.py --capabilities`（现场 = 数据目录副本删 `.env`）。
 
-### A2. 工具图标栏 `<IconRail>`（components/IconRail.tsx）> 视觉按 `docs/design/react-IconRail` 导出（Frame4172），**50px 紧凑栏**（原 79 栏 ×0.63 取整）。
+### A2. 工具图标栏 `<IconRail>`（components/IconRail.tsx）> 视觉源自 Pixso 导出 Frame4172（导出稿已删，内容即本节），**50px 紧凑栏**（原 79 栏 ×0.63 取整）。
 
 | 名称 | 类名 | 说明 |
 |---|---|---|
@@ -629,7 +640,7 @@ density / **折叠尺寸 ∈ [200,400]×40** / **圆角 20（且 == `--widget-ra
 
 ### A3. VTuber 左栏 `<VtuberSidebar>`（components/VtuberSidebar.tsx）
 
-视觉按 `docs/design/react-VtuberSidebar`（Frame41109）与口播定案。
+视觉源自 Pixso 导出 Frame41109（导出稿已删，内容即本节）与口播定案。
 **2026-09-07 滚动条迁移完成**：外壳改为 flex column（工具行吸顶 + OverlayScroll 列表滚动区），
 旧自绘 `.sidebar-sb` 滚动条退役（见 F3）。
 
@@ -676,7 +687,7 @@ density / **折叠尺寸 ∈ [200,400]×40** / **圆角 20（且 == `--widget-ra
 | 标题/描述 | `.empty-state-title/.desc` | 「未选择 VTuber」灰字提示 |
 
 ### B1. 帖子面板 `<PostsPage>`（pages/PostsPage.tsx，styles/posts.css）
-路由 `/vtubers/:id`。**四视图状态机**：`view: 'cards'|'list'|'archive'|'profile'`（默认 `cards`），光条切换，数据共享不重取。视觉按 `docs/design/react-PostsPage`（Frame41301）。
+路由 `/vtubers/:id`。**四视图状态机**：`view: 'cards'|'list'|'archive'|'profile'`（默认 `cards`），光条切换，数据共享不重取。视觉源自 Pixso 导出 Frame41301（导出稿已删，内容即本节）。
 
 **分层**：① 共用外壳（面板/背景层/工具条+光条）→ ② 四视图**并列**（下表总览）→ ③ 各视图子项（B1.1–B1.4）→ ④ 跨视图联动（B1.5）。
 
@@ -1066,7 +1077,7 @@ density / **折叠尺寸 ∈ [200,400]×40** / **圆角 20（且 == `--widget-ra
 | 视图容器 | `<ProfileBoardView>` / `.board-view`（OverlayScroll） | 与 archive 视图同构：整块视图自己滚；滚动体 padding `12px 18px 18px`、column gap 12 |
 | 头部 | `.board-head` | 标题「档案视图」+ 右侧说明（`N 张卡片 · 12 列网格 / 窄窗单列`） |
 | 网格 | `.board-grid`（`[data-board]`） | **12 列 × `--board-row`(84px) 行 + gap 12**，`grid-auto-rows` 由模型定死 ⇒ 卡片高 = `h×84 + (h-1)×12`；`data-board-cols` 与 `data-board-narrow`（阈值 560，**下发给探针**，免得 TS/Python 各写一份） |
-| 卡片外壳 | `.pcard`（`data-card-kind` / `data-card-h` / `data-card-hpx` / `data-card-min-h`） | **R37-P4a 起是「贴纸卡」**（规格 `docs/design-archive-cards.md` §2）：`--pcard-radius` 12px + `--pcard-shadow` 双层柔和阴影 + `--pcard-ring` 顶部高光内边，**无发丝边**（描边配阴影会显脏）；阅读态 hover 上浮 2px + 阴影加深（编辑态取消 hover 上浮）；头部 `.pcard-head`（标题 12.5/600 + 贴纸角标）+ 体 `.pcard-body`（`overflow:hidden`，**高度仍由网格算死、内容不得撑高**；`data-card-min-h` = 默认行数，探针据此判"默认尺寸装不下内容"） |
+| 卡片外壳 | `.pcard`（`data-card-kind` / `data-card-h` / `data-card-hpx` / `data-card-min-h`） | **R37-P4a 起是「贴纸卡」**（规格 `docs/frontend/specs/archive-cards.md` §2）：`--pcard-radius` 12px + `--pcard-shadow` 双层柔和阴影 + `--pcard-ring` 顶部高光内边，**无发丝边**（描边配阴影会显脏）；阅读态 hover 上浮 2px + 阴影加深（编辑态取消 hover 上浮）；头部 `.pcard-head`（标题 12.5/600 + 贴纸角标）+ 体 `.pcard-body`（`overflow:hidden`，**高度仍由网格算死、内容不得撑高**；`data-card-min-h` = 默认行数，探针据此判"默认尺寸装不下内容"） |
 | 贴纸角标 | `.pcard-badge[data-tone]`（`data-card-badge`） | **每卡恰一枚**（规格 §3 的签名元素）：22px 全圆 + 白环 `0 0 0 2px #fff` + 微阴影，内含 13px 白色 lucide 图标。**只放图标不放文字**（白图标在深档粉底上 2.4:1，属装饰、旁边必有文字标题；带词就得过 4.5:1 ⇒ 短词一律进 `.tone-chip`）。图标与色调由**注册表下发**（`CardKindMeta.icon/tone`，缺一个 `registerCardKind` 当场抛错） |
 | 卡内文字 chip | `.tone-chip[data-tone]` | 浅底（tone 14%）+ 深档字（`--tone-*-deep`，实测 ≥4.5:1）：高 18、圆角 999px、11px。色调只有五个来源：`today/future/past`（大事记时间线）与 `view/like`（优质投稿指标） |
 | 布局模型 | `components/profile/layoutModel.ts` | 纯函数（**30 条单测**）：`defaultLayout`（书架式填行）/ `clampCard` / `normalizeLayout`（**向下推开**消重叠）/ `toSingleColumn`（窄窗降级）/ `gridStyle` / `cardHeightPx` / `moveCard` / `resizeCard` / `cellsFromPx` / `columnWidthPx` |
@@ -1359,7 +1370,7 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 - `.stat-pill`（平台药丸）**图像底**（`docs/design/pills` → `src/assets/pills/`，按平台映射，未知平台回退粉/珊瑚色底）+ **2px 圆角 + `1px 2px 4px rgba(15,23,42,.12)` 阴影**，**全圆 logo 盒已移除**，仅粉丝数**靠右对齐、数字 ≤4 位**（`formatCount` 收紧）+ **`text-shadow 0 1px 2px rgba(0,0,0,.35)` 保图像底可读**；`.faction-badge` 同族 2px+同款阴影
 - `.acc-switch-btn`（账号切换器）**浮片化**：白卡 + **2px 圆角 + `var(--pill-shadow)`、去发丝边**（不加斜切保文本可读）；`.on` 主色深填白字
 - `post-card`（帖子卡片）**浮片化特例**：**2px 圆角 + `var(--pill-shadow)`、去发丝边**；hover 上浮 2px + 阴影加深 + **标题变色 `--c-accent`**；`.post-card-cover` 无封面时 `.post-card-cover-paper` 米白纸纹斜条 + 居中大标题
-- `.pcard`（档案卡）**卡片族**（R37-P4a）：**12px 圆角 + `--pcard-shadow`、无发丝边 + 顶部高光内边**；hover 上浮 2px；编辑态/hover/拿起三档阴影见 `--pcard-shadow-*`（规格 `docs/design-archive-cards.md`）
+- `.pcard`（档案卡）**卡片族**（R37-P4a）：**12px 圆角 + `--pcard-shadow`、无发丝边 + 顶部高光内边**；hover 上浮 2px；编辑态/hover/拿起三档阴影见 `--pcard-shadow-*`（规格 `docs/frontend/specs/archive-cards.md`）
 
 **豁免**：搜索胶囊（侧栏 `list-search`、帖子页 `.search-float`，用户指定原样）、滚动条圆头、头像与状态圆点（圆形）、**直播日历格 6px 圆角（设计稿规格保留）**、**详情弹窗 14px / 封面 10px（参考图规格）**、**档案卡族 12px + 阴影（R37-P4a，用户 2026-09-18 口径："圆角阴影稍微浮起"）**。
 
@@ -1499,3 +1510,27 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 - **滚动条**：见 F 节——新增滚动容器先问「是否主滚动容器、能否 OverlayScroll」，数值询问用户
 - **图表**：图表一律 ECharts 6.1 按需注册（canvas 自绘），Shadcn Chart/recharts 已退役（chart.tsx/`--chart-*` 已清）；**图表色值集中在 `utils/chartTheme.ts`**（tokens 同源注释），新图表从那里引色，禁止在组件里手写色值
 - **词云**：增量摊铺加权 Voronoi 拼贴（`utils/wordCloudLayout.ts`：力导向站点滑动 + λ 面积精确）；react-wordcloud 已退役（其 d3 依赖已随移除）
+
+## 前端不变量
+
+17. **OverlayScroll 会插一层 `.os-scroll`**：给被包容器写 CSS 一律用后代选择器
+    （`.list-scroll .list-inner`），写成直系子会静默失效（devlog/039）。
+
+## 布局归属与层叠顺序（两条踩过的坑）
+
+### 6.9 ⚠️ 「位置」只能有一个主人：布局推算 vs 几何计算（2026-09-25 加，devlog/188）
+"胶囊在小窗里的位置"有两个来源：`widgetExpandGeom` 算出的**窗口矩形**，与 CSS 自己认定的"翻上去就贴窗口**底**边"（`justify-content: flex-end`）。**大部分情况下它们碰巧一致**（没被夹时窗口底边就是胶囊底边）—— **这正是它难发现的原因**：只有**夹取/边界条件**才让两个主人分开（胶囊 y=10、高 40 ⇒ 向上翻要 y = 50 − 183 = −133 ⇒ 被夹到 0；真实偏移 = 10 − 0 = 10，而 CSS 给 143（= 183 − 40）⇒ **差 133px，胶囊跳到窗口中间**）。
+**规矩**：当"一个东西的位置"能由**布局推算**也能由**几何计算**得到时，**只留一个主人**（这里是几何 —— 它知道夹取），另一个只负责**用**那个值（写进 CSS 变量 `--widget-capsule-offset`）。
+**判据**：写完一段几何代码后问一句 —— **「这个值布局会不会自己算出一个不同的答案？」** 会，就得把它显式钉住。
+判据命令：`python scripts/ui_probe.py --status-widget`。
+
+### 6.11 ⚠️ 优先级**相同**的两条规则，谁赢只看**文件加载顺序**（2026-09-24 加，devlog/186）
+`.os-root { position: relative }`（在 `status-island.css`）与 `.lc-pop { position: fixed }`（在 `posts.css`）**都是单个类** ⇒ 优先级都是 (0,1,0)；同优先级下 CSS 不比较"谁更具体"，**只看谁在后面**。真正的坑不是"这条规则写错了"，而是：**它平时碰巧是对的** —— `.os-root` 从前住 `layout.css`（`layout.css` → `posts.css`，`.lc-pop` 赢 ✓），R38 批 5e 搬进 `status-island.css` 之后，`PostsPage`（`App.tsx` 第 7 行）先于它（第 12 行）加载 ⇒ **`.os-root` 赢 ✗**。批 5e 是一次**纯粹的"文件整理"**，没人会认为整理文件会改变行为 —— 这就是它的全部杀伤力。
+**症状**：hover 直播日历日期格，浮窗**完全不出现**（探针实测计算 `position` 是 `relative`，浮层留在 `body` 的普通流里，落在视口 `y≈930`，而视口只有 621 高）。**为什么极难查**：① 浮层是 `createPortal` 到 `document.body` 的 ⇒ 它**在视觉上"没有祖先"**，"某个祖先的样式压住了它"这条直觉根本想不到；② "改 `position` 的后果"长得**像布局数学问题**（`left/top` 算错），第一嫌疑永远落在 `left/top` 上，而那部分**一直是对的**；③ 它**不会红**（没有测试、类型也查不出，`position` 是合法计算值）。
+**规矩**：
+1. **共享组件的基类不允许靠"顺序"输。** 消费者要改 `position` / `display` 这类**基类自己也会设的**属性时，**用两个类**（`.os-root.lc-pop`，抬到 (0,2,0)），把结果钉在**与加载顺序无关**的地方；单类靠顺序赢的写法，会被任何一次搬家或 import 调整打碎。
+2. **搬家样式 = 改级联**，不是整理文件。挪一条规则到另一个样式表（哪怕只是调 import 顺序）时问一句：**「有没有同优先级、本来靠先后决出胜负的选择器？」**
+3. 探针要**判两条**：计算 `position` 是否真是 `fixed`（**机制**）＋ 矩形是否落在视口内且命中测试命中自己（**效果**）。只判效果的话，"浮窗被算到屏幕外"和"浮窗根本没渲染"永远分不开（本批正是靠"机制"那条一眼定位的）。
+
+> **补充**：红线**不是**本批引入的 —— 是 R38 批 5e 那次"样式搬家"埋的。**先确认"是不是我改的"，再去修**，比先怀疑自己省时间得多。查法要**只读**（`git log -S` / 看这条规则住在哪个文件 + `App.tsx` 的 import 顺序），别用会动工作区的命令去回答只读问题（见 §7.2）。
+判据命令：`python scripts/ui_probe.py --cell-pop`（**机制 + 效果两条都在里面**，注释在 `ui_probe.py` 的 cell-pop 段）；同一条纪律见 `UI-MAP.md` §F2 末条 / §F3。

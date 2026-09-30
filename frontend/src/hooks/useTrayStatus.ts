@@ -17,7 +17,7 @@ import { useShellHidden } from './useShellHidden'
  *
  * ⚠️ **隐藏时刻意不立刻打第一发**：隐藏那一刻界面刚同步过（≤2s 旧），而 R18 的停表判据
  * （探针 `--tray-suspend`）就看"隐藏后这段时间里有没有请求"—— 第一节拍放在 60s 后，
- * 判据与体验两不误。这条口径写进 `ARCHITECTURE.md` §3.10。
+ * 判据与体验两不误。这条口径写进 `docs/backend/ARCHITECTURE.md` §3.10。
  */
 const HIDDEN_HEARTBEAT_MS = 60_000
 

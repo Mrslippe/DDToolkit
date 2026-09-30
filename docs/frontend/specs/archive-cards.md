@@ -1,3 +1,13 @@
+---
+doc: frontend/specs/archive-cards
+class: spec
+scope: 档案视图卡片的材质令牌、五槽位卡片语法、三张内置卡的重排、长按拿起/退避/落位时间轴与动效不变量
+not-scope: 现状是什么（真源是 UI-MAP）；卡片数据的取数口径
+sot: frontend/src/components/profile/, frontend/src/styles/profile-board.css
+verify: python scripts/ui_probe.py --archive
+retire-when: 档案视图卡片体系重做
+---
+
 # 档案视图 · 卡片视觉与动效规格（贴纸 / 小组件）
 
 > **这是什么**：一份**设计规格**，不是实现说明。R37-P4（档案视图卡片的外观重做与编辑态动效）

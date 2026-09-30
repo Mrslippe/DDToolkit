@@ -1,6 +1,6 @@
 # 发版文档动作清单（release-checklist）
 
-> 权威来源：`docs/RELEASE.md` 与 `scripts/release.py`（源码）。
+> 权威来源：`docs/ops/RELEASE.md` 与 `scripts/release.py`（源码）。
 > 日常发布只需一条命令；下面只列**脚本只检查、不代写**的那些**文档侧动作** —— 步骤细节回脚本。
 
 ## 一、一条命令
@@ -30,8 +30,8 @@ python scripts/release.py <版本>        # 版本同步 → 门禁 → 打版 �
      且不含占位符 `TODO` / `待填` / `xxx` / `<版本>`；它是 Release notes 的来源。
 - [ ] **回填 `docs/README.md` §4 的 releases 列表那一行**（每个 `docs/releases/*.md` 都必须出现在那里，
       否则 `doc_check.py` FAIL —— 它就是这么被抓过）。
-- [ ] **devlog 已写并提交**：发布批次单独一篇（对照 `082-20260914-v1.0.0发布.md`），
-      并在 `docs/ROADMAP-DONE.md`「批次 → devlog 索引」补一行**裸编号**。
+- [ ] **devlog 已写并提交**：发布批次单独一篇（对照 `082-20260914-v1.0.0发布.md`）。
+      （2026-09-30 起**无需回填任何索引**：`ROADMAP-DONE.md` 已删，devlog 的登记面就是文件名本身。）
 - [ ] **`python scripts/doc_check.py` 0 FAIL**（preflight 会自己调一次，FAIL 直接停）。
 - [ ] `docs/TODO.md` §1.3 发布状态更新（已发布版本 / Release 链接 / Release 待建等）。
 - [ ] 版本号同步结果复核：`VERSION_FILES` 列的文件全部一致 + `ddtoolkit.exe` 的 FileVersion 实测 = 目标版本
@@ -71,4 +71,4 @@ python scripts/release.py <版本>        # 版本同步 → 门禁 → 打版 �
 ## 六、网络与凭据
 
 推送参数（定案参数 / 代理-直连自动切换 / `ls-remote` 复核）与"连不上 GitHub 时按序查什么"的真源：
-**`docs/RELEASE.md` §6.3** —— 本文件不复述。
+**`docs/ops/RELEASE.md` §6.3** —— 本文件不复述。

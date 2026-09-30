@@ -10,7 +10,7 @@ schema 版本、也不知道上次迁移是不是失败过。今天的材料散�
 ## 口径（两条，都有判据）
 
 1. ⚠️ **绝不含凭据**：`.env`（B 站 SESSDATA / refresh_token、微博 cookie）、会话 token、
-   图片代理的 cookie **一律不读、不拼**（`ARCHITECTURE.md` §6 第 10 条 + 第 26 条）。
+   图片代理的 cookie **一律不读、不拼**（`docs/backend/AUTH-CAPABILITIES.md 不变量 10 + 第 26 条）。
    这条不靠"我记得别加"，靠 `tests/test_migration_safety.py` 里那条
    "植一个哨兵密码 / 哨兵 token ⇒ 断言不在输出里"。
 2. **宁可截断也不能没有**：日志只取尾部若干行 + 总量封顶 —— 一份 500MB 的日志对

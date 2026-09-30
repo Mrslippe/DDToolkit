@@ -71,7 +71,7 @@ def _scheduler_uses_the_test_db(monkeypatch):
     症状（CI 首次真跑，两个 Python 版本 + Windows 三处一起红）：
         raise OperationalError: no such table: accounts
     而**本地一直是绿的** —— 因为开发机上的 `vtuber.db` 恰好有 `accounts` 表。
-    这正是本仓反复记过的"本地残留环境恰好满足条件"（`ARCHITECTURE.md` §6 第 21 条），
+    这正是本仓反复记过的"本地残留环境恰好满足条件"（`docs/DEV-LOOP.md 不变量 21），
     只是这次残留的不是"登录态"而是"库里有表"。
 
     修法：把 `scheduler.SessionLocal` 也指到测试引擎。改了之后这些端点在**空数据目录**

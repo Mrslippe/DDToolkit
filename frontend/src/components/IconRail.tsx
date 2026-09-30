@@ -10,7 +10,7 @@ import AppSettingsDialog from './AppSettingsDialog'
 import './../styles/layout.css'
 
 /**
- * 最左侧工具栏（严格按 docs/design/react-IconRail Frame4172）：
+ * 最左侧工具栏（源自 Pixso 导出 Frame4172；导出稿已删，内容见 `docs/frontend/UI-MAP.md` A2）：
  * 深蓝灰 #4b5a6f 通栏单元格；未选中整钮 opacity .6，选中实底 #647489 全亮。
  *
  * 2026-09-08（用户）：**移除未接线的占位图标**（用户 / 日历 / 刷新 / 设置）——

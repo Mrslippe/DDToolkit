@@ -9,7 +9,7 @@
  *
  * 容器宽度运行时测量（ResizeObserver），高度由 `boxH` 决定（详情弹窗传 210）。
  *
- * ⚠️ 红线（`FRONTEND-ARCH.md §7`）：本组件承载词云算法族，参数与节拍
+ * ⚠️ 红线（`docs/frontend/ARCHITECTURE.md §7`）：本组件承载词云算法族，参数与节拍
  * （150ms 入场、α=0.994 入场冷却、破泡 α=0.15 起步 + 0.997 冷却 + λ 8 轮 + `kCenter=0`、
  * 静止阈值 0.05）**不得在搬动中改动**。算法侧由 `scripts/check_wordcloud_layout.mjs`
  * 的 sha256 基线 + `utils/wordCloudLayout.test.ts` 看住；组件侧的 rAF/ResizeObserver

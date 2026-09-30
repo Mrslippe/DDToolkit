@@ -41,5 +41,5 @@
    `gen_doc_numbers.py` 只能数 `def test_` 的**静态条数**，参数化会展开、环境差异会产生 error，
    拿它当判据必然假红。用例数的真源只有 `docs/TODO.md` §6.2，**现场实跑优先**。
 2. **路由的三种数法**（装饰器 / `app.routes` 对象 / 方法×路径）：那三个数是**测量值**，会随批次漂 ——
-   口径表与当前值见 `docs/backend-repositories-and-routers.md` §3
+   口径表与当前值见 `docs/backend/HTTP-CONTRACT.md` §1
    （只有「装饰器」那一种有门禁，另两种要人肉重数，复核命令也在那节）。

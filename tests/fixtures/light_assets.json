@@ -1,5 +1,5 @@
 {
-  "_note": "轻资产模块（L1，devlog/257）判据用的**真实样本**：微博头像 URL 的签名轮换与同一张图的重复存储。数据来自真机数据目录 %APPDATA%\\com.ddtoolkit.app-dev 的 vtuber.db 与 backups/*.db（只读导出，2026-09-29）。不许手改：改了就不再是真实样本（ARCHITECTURE.md §6 第 22 条）。",
+  "_note": "轻资产模块（L1，devlog/257）判据用的**真实样本**：微博头像 URL 的签名轮换与同一张图的重复存储。数据来自真机数据目录 %APPDATA%\\com.ddtoolkit.app-dev 的 vtuber.db 与 backups/*.db（只读导出，2026-09-29）。不许手改：改了就不再是真实样本（docs/DEV-LOOP.md 不变量 22）。",
   "captured_at": "2026-09-29",
   "source": "%APPDATA%/com.ddtoolkit.app-dev/{vtuber.db, backups/vtuber-f008-20260929-010823.db}",
   "rotated_pairs": [

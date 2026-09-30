@@ -16,7 +16,7 @@
   ⑤ 停在"等手动任务"里的外部批次也能被叫停，且**不继续执行**；
   ⑥ start-stop-start 不留上一代的线程对象；
   ⑦ 真 lifespan 连跑两次不双跑、退出后线程归零；
-  ⑧ 运行时**不持有 asyncio 原语**（跨线程 / 跨循环复用，见 `ARCHITECTURE.md` §6 第 15 条）。
+  ⑧ 运行时**不持有 asyncio 原语**（跨线程 / 跨循环复用，见 `docs/backend/ARCHITECTURE.md 不变量 15）。
 
 ⚠️ **为什么不用 `with TestClient(app)` 走真 lifespan**：测试进程里 `settings.DATA_DIR`
 = **仓库根** ⇒ 真 lifespan 会在**开发者那本真库**上跑迁移 / 备份 / auto_vacuum

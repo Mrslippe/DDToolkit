@@ -1,9 +1,41 @@
-# 平台爬虫框架（app/services/platforms）
+---
+doc: backend/platforms
+class: module
+scope: 平台适配层：BasePlatform 协议、注册表、PostStreams 形状，以及接入一个新平台的完整 checklist
+not-scope: 各平台接口字段的调研 → design/xhs-douyin-research.md；调度怎么选择平台 → backend/FETCH-PIPELINE.md
+sot: app/services/platforms/, app/services/platforms/base.py, app/services/platforms/registry.py
+verify: python -m pytest -q tests/test_platform_branches.py
+budget: 700
+retire-when: 平台适配层被替换，或只剩一个平台
+---
 
-> 多平台订阅架构：同一 VTuber 可挂多个平台账号（bilibili / 微博 / …），
-> 每个账号独立抓取账号信息与帖子；帖子统一存 `posts` 表按 `platform` 区分。
+## 1. 平台适配层（直采）
 
-## 架构
+```mermaid
+flowchart LR
+  S["scheduler 循环"] --> R["platforms.registry.get_fetcher(platform)"]
+  R --> B["bilibili.fetcher"]
+  R --> W["weibo.fetcher"]
+  B -->|fetch_user_info| FI["账号资料 + 直播字段"]
+  B -->|fetch_post_page| FP["一页帖子流（统一 item 结构）"]
+  B -->|enrich| E["详情补全（长文/视频）"]
+  W --> FI
+  W --> FP
+  FI --> DB[("accounts / snapshots")]
+  FP --> DB2[("posts")]
+```
+
+- `BasePlatform` 只定义三个方法：`fetch_user_info` / `fetch_post_page` / `enrich`（可选）；
+  **翻页是不透明 cursor**（第 4 阶段 ⑥，devlog/238）：`fetch_post_page(uid, cursor)`
+  返回 `{"items", "has_more", "next_cursor"}`；页码平台把页码当 cursor 用，核心**不解析**它；
+- 新平台 = 继承 + 在 `platforms/registry.py` 注册一行，调度器自动获得账号抓取、
+  全量/增量帖子抓取、风控退避与完成报告（详见 `docs/backend/PLATFORMS.md`）；
+- B 站请求走 `fetcher.py`：WBI 签名（`wbi.py`，混钥缓存）+ `auth_manager.build_headers()`
+  注入 Cookie/UA；微博走 PC ajax 端点 + 扫码登录保存的 Cookie。
+
+> 以下三节迁自 `docs/backend/PLATFORMS.md`（2026-09-30 并入）。
+
+## 2. 目录与消费方式
 
 ```
 app/services/platforms/
@@ -44,16 +76,16 @@ scheduler 统一消费框架：
   不支持就**保持默认 False** —— 调度侧会记一条日志后跳过（不是静默丢弃，也不算失败）。
   uid 形态的过滤、端点记账都在适配器里做（看 `platforms/bilibili.py` 的 20 行实现）。
 
-## 新平台接入步骤（以抖音为例）
+## 3. 新平台接入步骤（以抖音为例）
 
-> ⚠️ **先读 `docs/platforms-xhs-douyin-research.md`**（2026-09-27 调研快照）：
+> ⚠️ **先读 `docs/design/xhs-douyin-research.md`**（2026-09-27 调研快照）：
 > ① **合规前提** —— 抖音 / 小红书的用户协议**明文禁止爬虫与自动化采集**，**不存在"允许的额度"**；
 > 该文档 §6 是定性，且**已接入的 B 站 / 微博的同类问题本仓尚未复核**（§7 存疑 #16）；
 > ② **技术前提** —— 这两家**不满足下方 `BasePlatform` 的三个隐含前提**（HTTP-only / 有稳定字符串 uid /
 > cookie 即鉴权），且**采集引擎选型尚未拍板**（见 `docs/TODO.md` §1.2）。
 > 本节的 `DouyinPlatform` 骨架只说明"大概长这样"，**不是可以直接照抄的结论**。
 
-1. **实现适配器**（`app/services/platforms/douyin.py`）：
+1. **实现适配器**（`app/services/platforms/douyin.py`）<!-- 未建 -->：
 
 ```python
 from app.services.platforms.base import BasePlatform
@@ -90,7 +122,7 @@ fetcher = DouyinPlatform()
    `tauri.conf.json` CSP `img-src` 追加图床域名。
 5. **测试**：按 `tests/test_weibo.py` 模板补适配器单测（httpx mock + 映射 + 分发）。
 
-## 微博接口速查（m.weibo.cn）
+## 4. 微博接口速查（m.weibo.cn）
 
 | 用途 | 接口 |
 |---|---|
@@ -103,16 +135,16 @@ fetcher = DouyinPlatform()
 - 时间：`created_at`（`%a %b %d %H:%M:%S %z %Y`）解析为 naive UTC；相对时间兜底
 - 风控：HTTP 418/429 + `{"ok":0,"msg":"…频繁…"}`
 
-## 登录（扫码 B 站 / 微博；粘贴 cookie 小红书）
+## 5. 登录（扫码 B 站 / 微博；粘贴 cookie 小红书）
 
 - 扫码端点：`POST /auth/{platform}/qr/start` → `{qr_id, url|image}`；`GET /auth/{platform}/qr/check?qr_id=` 轮询（waiting/scanned/confirmed/expired/failed，confirmed 时后端同步完成取 cookie 并写入 `.env`）；`GET /auth/{platform}/status` 登录态
 - 前端：TopBar 登录按钮（B 站会话过期红点徽章）→ `LoginDialog`（Tab 清单来自 `utils/platformLogin.ts::LOGIN_TABS`，**单一事实来源**）→ B 站用 react-qr-code 渲染 url、微博显示 base64 图 → 2s 轮询 → 成功 toast
 - B 站流程：generate → poll（qrcode_key）→ 回调 URL 种 SESSDATA 等 → nav 校验 → `.env`
 - 微博流程：`passport.weibo.com/sso/v2/qrcode/image`（回退 `login.sina.com.cn` JSONP）→ check（50114001/50114002/20000000/50114004）→ `login.php?alt=` 种 SUB/SUBP 等 → crossDomainUrlList 补种 → `.env`
-- **小红书：没有扫码**（它连二维码/状态接口都要签名与设备 cookie，见 `docs/platforms-xhs-douyin-research.md` §2.8）⇒ 走 `POST /auth/xiaohongshu/cookie`（body `{"cookie": "a1=…; web_session=…"}`）。⚠️ **先校验再落盘**：缺 `a1`/`web_session` 一律 400 且不写 `.env`；`status()` 只报"配齐了没"（不做探活：没有免签名的探活端点，硬探白挨一次风控），真实失效由抓取侧 `classify_http()=='cookie_invalid'` 反映。前端在登录浮窗的第三个 Tab 里粘贴（步骤文案 + 400 原文直接显示）
+- **小红书：没有扫码**（它连二维码/状态接口都要签名与设备 cookie，见 `docs/design/xhs-douyin-research.md` §2.8）⇒ 走 `POST /auth/xiaohongshu/cookie`（body `{"cookie": "a1=…; web_session=…"}`）。⚠️ **先校验再落盘**：缺 `a1`/`web_session` 一律 400 且不写 `.env`；`status()` 只报"配齐了没"（不做探活：没有免签名的探活端点，硬探白挨一次风控），真实失效由抓取侧 `classify_http()=='cookie_invalid'` 反映。前端在登录浮窗的第三个 Tab 里粘贴（步骤文案 + 400 原文直接显示）
 - `.env` 原子写共享：`app/services/env_store.py`（B 站 `auth.py`、微博 `weibo_auth.py`、小红书 `xhs_auth.py` 共用）
 
-## 使用方式（前端）
+## 6. 使用方式（前端）
 
 - 「添加账号」按钮（帖子面板总操作按钮组）：选择平台（bilibili / weibo / xiaohongshu）+ 输入 UID → 入库后自动抓取账号信息；小红书这一格**允许粘主页链接**（`utils/platformLogin.parseXhsUid` 先摘 uid）
 - 「添加 VTuber」浮窗：B 站直搜 / 本地候选 / **小红书 uid**（`data-xhs-adopt`；没有搜索接口 ⇒ 只认 uid 或主页链接）

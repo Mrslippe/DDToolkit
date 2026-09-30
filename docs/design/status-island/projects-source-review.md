@@ -1,3 +1,11 @@
+---
+doc: design/status-island/projects-source-review
+class: snapshot
+scope: 三个开源「灵动岛 / 状态浮窗」项目的源码调研（FocuSD / RustyIsland / TokenNote）：逐项带「文件:行」证据与【码】【推】【缺】标注
+not-scope: 本项目的形态决策（见 review 与 d1-form-options）
+verified: 2026-09-25
+---
+
 # 三个开源「灵动岛 / 状态浮窗」项目源码调研
 
 > 方法：`git clone --depth 1` 后**直读源码/配置**，非转述 README。
@@ -272,7 +280,7 @@ const unlistenSettings = listen<AppSettings>('settings-updated', event => {
 - ⚠️**发现一处未接线**：存在 `capabilities/console.json`（`windows: ["console-*"]`，配合 `console_scripts.rs:14` 的 `console-{station_id}`），但 `tauri.conf.json:131` 只写 `"capabilities": ["default"]` ⇒ 按官方语义*"一旦显式启用，构建中只用这些"*，`console-*` 窗口拿不到核心窗口与插件权限（自定义命令仍可用）；`build.rs` 仅 `tauri_build::build()`，未用 `AppManifest::commands(...)` 收紧自定义命令。
 - ✅**注释里的"试过 X 放弃 Y"（README 无此类章节）**：`lib.rs:1380-1383` mobile setup 里 `blocking_lock()` 会 panic → 改提前 `app.manage`；`lib.rs:1467-1469` Kotlin 曾无条件启动前台 Service 覆盖用户关闭操作；`useAppData.ts:17-25` 后端 emit 与 reorder 时序导致卡片"先回原位再换位"→ 加 800ms 抑制窗口；`styles.css:70-77` safe-area padding 曾放 body 上导致橡皮筋滚动；`lib.rs:1247-1248` 隐藏窗可能半出屏 → 改最近邻显示器；`Cargo.toml:36-38` 桌面独占依赖用 `cfg(not(target_os="android"))` 隔离。
   ⚠️注意 `useAppData.ts` 这个 **800ms 抑制窗口与 `widget.tsx` 的 520ms `suppressMoved` 是同一类招式**——**"程序化移动/变更后，在一个时间窗内忽略自己引发的回调"**，这个仓库反复用它。
-- 【推】`.github/workflows/release.yml` 只有 macOS arm64/x64 dmg + Windows x64 nsis，**无 Linux CI**（尽管 `platform.ts` 有 Linux 分支）⇒ Linux 非受支持目标。
+- 【推】`.github/workflows/release.yml` <!-- 非本仓 --> 只有 macOS arm64/x64 dmg + Windows x64 nsis，**无 Linux CI**（尽管 `platform.ts` 有 Linux 分支）⇒ Linux 非受支持目标。
 
 ---
 

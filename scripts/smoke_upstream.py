@@ -282,7 +282,7 @@ def check_cold_degradation(ctx: Ctx) -> None:
        （匿名打空间接口会被平台 412 封 IP，见 `capabilities.content_fetch_allowed`）；
     4. 本地链路照常（候选池检索 200）。
 
-    ⚠️ 两个**实测澄清**（都写进 `docs/ARCHITECTURE.md` §6.21；2026-09-25 前在 `GLOSSARY.md` §8，
+    ⚠️ 两个**实测澄清**（都写进 `docs/DEV-LOOP.md 不变量 21；2026-09-25 前在 `GLOSSARY.md` §8，
     那一节已并入 §6）：
 
     - **"空数据目录"不等于"候选池为空"**：`backend_main.py` 首启会把随包分发的

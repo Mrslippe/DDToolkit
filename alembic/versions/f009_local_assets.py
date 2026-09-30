@@ -6,7 +6,7 @@ Create Date: 2026-09-29
 
 新建一张 `local_assets`（而不是往 `vtubers` / `accounts` 上挂列）：被固化的资源**不属于
 某一个 V**（同一张图可能被多个 V 用、账号删掉后用户选过的那张仍要留着），粒度是
-`(kind, 稳定键)`。规格见 `docs/design-light-assets.md` §2.3。
+`(kind, 稳定键)`。规格见 `docs/backend/ASSETS.md` §2.3。
 
 - `key` = **去掉签名参数的 URL**：实测微博头像签名只有约 3 小时有效期，同一张图的两次
   抓取只差 `Expires`/`ssig`（盘上两个文件 sha256 逐字节相同）⇒ 按 URL 去重等于没去重；

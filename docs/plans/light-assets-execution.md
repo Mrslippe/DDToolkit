@@ -1,6 +1,14 @@
+---
+doc: plans/light-assets-execution
+class: plan
+scope: 轻资产长期储存模块的分批执行方案：A0/L1/L2/L3/L4 五批的改动面、先补的失败用例、反向验证、门禁与文档义务、停止条件
+not-scope: 模块规格与目标（规格并入 backend/ASSETS）
+expires: 2026-11-30
+---
+
 # 轻资产长期储存模块 · 分批执行方案（交给执行 Agent）
 
-> 规格是 `docs/design-light-assets.md`（写目标与判据）；本文是**执行细化**：批次怎么切、
+> 规格是 `docs/backend/ASSETS.md`（写目标与判据）；本文是**执行细化**：批次怎么切、
 > 每批动什么、先补哪个会失败的用例、怎么反向验证、门禁几档、文档义务、什么时候必须停下来。
 > 行号与数字是 `2026-09-29` 的快照 —— **开工前重新 read，别按本文行号改**。
 
@@ -22,7 +30,7 @@
 5. **本方案不引入新依赖**：`hashlib` / `sqlite3` / `pathlib` / 现有 httpx 客户端足够。
    若发现必须引依赖 ⇒ **停下报告**。
 6. **每条"必测"都写清了反向验证怎么做。只跑一遍看它是绿的，不算做过。**
-7. **收益不许夸大**：L3（封面固化）落地时**先量再说**（`docs/design-light-assets.md` §6 第 2 条）。
+7. **收益不许夸大**：L3（封面固化）落地时**先量再说**（`docs/backend/ASSETS.md` §6 第 2 条）。
 
 ---
 
@@ -42,7 +50,7 @@
 
 ### 1.2 非目标
 
-见 `docs/design-light-assets.md` §1（整站镜像 / 合并 img-cache / 改抓取频率纪律 / 给
+见 `docs/backend/ASSETS.md` §1（整站镜像 / 合并 img-cache / 改抓取频率纪律 / 给
 `vtubers.avatar` 塞两种形状 / 引新依赖 —— 都不做）。
 
 ### 1.3 验收
@@ -125,7 +133,7 @@
 把批量查改成逐 V 查 ⇒ A0-3 红。
 
 **门禁**：B 档 + `ui_probe --profile-sync`（左栏 vs 右栏渲染同源那条，R46 的既有判据）。
-**文档义务**：devlog + `UI-MAP.md`（头像行加"本地兜底"）+ `docs/design-light-assets.md` 标注 A0 已落。
+**文档义务**：devlog + `UI-MAP.md`（头像行加"本地兜底"）+ `docs/backend/ASSETS.md` 标注 A0 已落。
 **停止条件**：需要删/覆盖既有文件；或真机库备份失败。
 
 ---
@@ -163,14 +171,14 @@
 ② 同图不同 URL（两个签名 URL 指向同一 path）⇒ `local_assets` **只有一行**、账本只有一行；
 ③ `key` 命中 ⇒ `get()` 不发请求；④ 索引有、文件删掉 ⇒ `get()` 返回 None 且**自动补下**；
 ⑤ `pin` 的资产 `prune` 后仍在；⑥ **真实样本**：V#16 那条**已过期**的微博 URL 能从 assets 取到本地文件
-（本仓要求判据至少一条吃真实数据 —— `ARCHITECTURE.md` §6 第 22 条）。
+（本仓要求判据至少一条吃真实数据 —— `docs/DEV-LOOP.md 不变量 22）。
 
 **反向验证**：把 `key_of` 的白名单去掉一个签名参数 ⇒ ② 红；把 `pin` 的保护去掉 ⇒ ⑤ 红；
 把"文件缺失"分支删掉 ⇒ ④ 红。
 
 **门禁**：**A 档** + full。
-**文档义务**：A 档全套 —— devlog + `ARCHITECTURE.md`（§2 表 + §3.8 附近的图片/资源段落 + §6 若立新不变量）
-+ `backend-repositories-and-routers.md`（新表列级定义 + 迁移链 + 路由计数重数）+ `GLOSSARY` + `UI-MAP`。
+**文档义务**：A 档全套 —— devlog + `docs/backend/ARCHITECTURE.md`（§2 表 + §3.8 附近的图片/资源段落 + §6 若立新不变量）
++ `docs/backend/DATA-MODEL.md`（新表列级定义 + 迁移链 + 路由计数重数）+ `GLOSSARY` + `UI-MAP`。
 **停止条件**：§4 S-2（迁移不可回滚/需要重建既有表）。
 
 ---

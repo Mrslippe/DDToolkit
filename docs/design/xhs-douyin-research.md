@@ -1,3 +1,12 @@
+---
+doc: design/xhs-douyin-research
+class: snapshot
+scope: 小红书 / 抖音抓取的可行性调研：接口清单、签名与反爬机制、开源项目盘点、采集引擎选型、存疑清单与复核方法；**§6 是合规定性** —— 两家协议明文禁止爬虫，本文只是可行性调研、不是许可
+not-scope: 已接入平台的实现（真源是 backend/PLATFORMS 与代码）
+sot: app/services/platforms/xiaohongshu.py, app/services/platforms/signing.py
+verified: 2026-09-27
+---
+
 # 小红书 / 抖音抓取逻辑调研（接入前置）
 
 > **调研日期：2026-09-27**。本文是**带日期的快照**，不是长期规格 —— 这两家的签名算法与接口路径换代极快
@@ -131,7 +140,7 @@ header magic、SDK 版本块、两个长度字段、XOR 校验和），**不一�
    （`scheduler._fetch_one_account` 见 `pf is None` 只 `logger.warning` 后 `return False`；
    T0 的 `isdigit()` 过滤连 `result.failed` 都不计）—— 新平台一上来就会踩这条 `[源码]`。
 5. **接平台时要同步 `EXTERNAL_HOSTS`**（Rust 侧，`frontend/src-tauri/src/lib.rs`）：否则「打开主页」会失败。
-   这条在 `docs/ARCHITECTURE.md` §6 第 29 条已记为纪律，本次调研确认域名清单见 §5.4。
+   这条在 `docs/desktop/SHELL.md 不变量 29已记为纪律，本次调研确认域名清单见 §5.4。
 
 ---
 

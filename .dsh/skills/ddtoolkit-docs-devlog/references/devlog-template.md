@@ -104,8 +104,8 @@ tsc 0 · eslint 0 · doc_check 0 FAIL · **<N> 个探针模式全绿**（新增 
 
 ## 五、写完立刻做的两件事
 
-1. 回填 `docs/ROADMAP-DONE.md`「批次 → devlog 索引」表 —— **一行一个裸编号**（`| 167 |`）。
-   无独立 devlog 的小批次写**提交短哈希**（`| c729ea3 |`）；范围行（`024–026`）只有早期批次才有。
-   三种合法写法的完整说明见 `SKILL.md` §7。
+1. **无需回填任何索引**（2026-09-30 起 `ROADMAP-DONE.md` 已删）—— devlog 的登记面就是
+   **文件名本身**（三位编号递增）。要查当前真值：`python scripts/gen_doc_numbers.py --list`
+   （count / max / next）。这样做的理由见 `docs/DEV-LOOP.md` §0.4「复述 = 负债」。
 2. 跑 `python scripts/doc_check.py` 确认 0 FAIL —— **条目表见 `scripts/doc_check.py` 的 `CHECKS`**
    （跑一次即逐条打印；别在这里再抄一份，也别写项数）。

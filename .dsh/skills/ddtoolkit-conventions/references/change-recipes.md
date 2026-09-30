@@ -1,12 +1,12 @@
 # 改动配方：想做什么 → 改哪里
 
-> 主表照抄 `docs/ARCHITECTURE.md` **§7 扩展点**与 `docs/GLOSSARY.md` **§9 需求/缺陷 → 代码入口**；
-> 步骤里的纪律来自 `docs/ARCHITECTURE.md` §5/§6、`docs/backend-repositories-and-routers.md` §3.1/§4。
+> 主表照抄 `docs/backend/ARCHITECTURE.md` **§7 扩展点**与 `docs/GLOSSARY.md` **§9 需求/缺陷 → 代码入口**；
+> 步骤里的纪律来自 `docs/backend/ARCHITECTURE.md` §5/§6、`docs/backend/HTTP-CONTRACT.md` §1.1/§4。
 > 路径均为**仓库相对路径**。
 
 ---
 
-## A. 扩展点总表（`ARCHITECTURE.md` §7）
+## A. 扩展点总表（`docs/backend/ARCHITECTURE.md` §7）
 
 | 想做什么 | 改哪里 |
 |---|---|
@@ -15,7 +15,7 @@
 | 新增表/列 | 新建 `alembic/versions/{fNNN}_*.py`（编号按**实际实施顺序**顺延，当前 head `f009`）→ 同步 `MIGRATION_HEAD` → 补 `models` 与 Repo → 若挂 `accounts/vtubers` 外键，**同步 `services/purge.py`** |
 | 用户手改的字段被抓取覆盖 | **不再需要锁定**（`accounts.locked_fields` 已随 f004 删除）：抓取照常覆盖，覆盖前把旧值写进 `services/vtuber_history.py::record_field_change()`。⚠️ 只在**平台侧覆盖前**发生（手改不入账，devlog/075） |
 | 调整抓取频率/节流 | `app/core/config.py`（T0-T4 周期、请求间隔、批量休息、风控冷却） |
-| 新增前端视图 | `docs/UI-MAP.md`（右栏视图光条 + 场景状态机） |
+| 新增前端视图 | `docs/frontend/UI-MAP.md`（右栏视图光条 + 场景状态机） |
 | 改抓取/布局后的验证 | `python scripts/dev_check.py`、`python scripts/ui_probe.py` |
 
 ## B. 需求 / 缺陷 → 代码入口（`GLOSSARY.md` §9）
@@ -28,9 +28,9 @@
 | 加一张表 / 加一列 | `alembic/versions/eNNN_*.py` → `MIGRATION_HEAD` → `app/models/vtuber.py` → `app/repositories/vtuber_repo.py` →（挂外键时）`app/services/purge.py` |
 | 改唯一约束 / 怀疑旧库结构不对 | `alembic/versions/c002_*`（加宽 posts 唯一键的先例）、`app/main.py::_missing_unique_keys`（桥接守卫） |
 | 改抓取频率 / 节流 | `app/core/config.py`；调度结构在 `app/services/scheduler.py`（`_tier_loop` / `_run_combined_tier` / `_run_platform_rounds`） |
-| 接入新平台 | `app/services/platforms/base.py` + `registry.py`；参考 `docs/platforms-extension-guide.md` |
+| 接入新平台 | `app/services/platforms/base.py` + `registry.py`；参考 `docs/backend/PLATFORMS.md` |
 | 接入新第三方数据源 | `app/services/externals/base.py` + `externals/__init__.py` 注册；`runner.py` 负责调度 |
-| 帖子抓取漏数据 / 停止异常 | `_fetch_posts_core` 的 `stop_reason`、`PostFetchResult`；`docs/backend-fetch-pipeline.md` §5 |
+| 帖子抓取漏数据 / 停止异常 | `_fetch_posts_core` 的 `stop_reason`、`PostFetchResult`；`docs/backend/FETCH-PIPELINE.md` §5 |
 | 删除检测（墓碑）行为不对 | `app/services/tombstone.py`（窗口可信性 + 两击）；`posts.last_seen_at/deleted_detected_at` |
 | 直播日历/场次数据不对 | `LiveSessionRepo.merged()`（合并/去重/并段）、`app/services/live_type.py`（分类）、`_route_live_item`（feed 源） |
 | 粉丝趋势不对 | `AccountStatSnapshotRepo.fan_trend_points`（按天分桶）+ `components/FanTrendChart.tsx` |
@@ -38,8 +38,8 @@
 | 图片加载不出来 | `routers/img_proxy.py`（白名单/Referer/缓存）、`components/common/ProxyImage.tsx`（三态） |
 | 改右栏视图/布局 | `pages/PostsPage.tsx` + `styles/posts.css`；改完跑 `python scripts/ui_probe.py` |
 | 改侧栏/顶栏 | `components/{VtuberSidebar,TopBar,IconRail}.tsx` + `styles/layout.css` |
-| 改设计令牌（颜色/圆角/阴影） | `styles/tokens.css` + `docs/UI-MAP.md` §D |
-| 打包/发布问题 | `docs/RELEASE.md`、`scripts/{build_backend,collect_release}.py`、`frontend/src-tauri/tauri.conf.json`（resources 必须是**数组形式**） |
+| 改设计令牌（颜色/圆角/阴影） | `styles/tokens.css` + `docs/frontend/UI-MAP.md` §D |
+| 打包/发布问题 | `docs/ops/RELEASE.md`、`scripts/{build_backend,collect_release}.py`、`frontend/src-tauri/tauri.conf.json`（resources 必须是**数组形式**） |
 | 改完想快速验证 | `python scripts/dev_check.py`；布局类再加 `python scripts/ui_probe.py` |
 
 （前端文件的相对根是 `frontend/src/`，上表沿用原文写法。）
@@ -73,8 +73,8 @@
 3. 补前端平台常量；
 4. 调度器自动获得账号抓取、全量/增量帖子抓取、风控退避与完成报告；
 5. 若该平台要扫码登录：`app/routers/auth.py` 的 `_PLATFORMS` 注册 + 提供 `begin_login` 实现
-   （`backend-repositories-and-routers.md` §3.2）；
-6. 参考 `docs/platforms-extension-guide.md`。
+   （`docs/backend/HTTP-CONTRACT.md` §1.2）；
+6. 参考 `docs/backend/PLATFORMS.md`。
 
 ### C3. 接一个新第三方源
 
@@ -116,9 +116,9 @@
 
 ### C6. 新增前端视图
 
-- `docs/UI-MAP.md`（右栏视图光条 + 场景状态机）是唯一入口；四视图状态机在
+- `docs/frontend/UI-MAP.md`（右栏视图光条 + 场景状态机）是唯一入口；四视图状态机在
   `pages/PostsPage.tsx` 的 `view`（`cards` / `list` / `archive` / `profile`），数据共享不重取。
-- 改完必跑 `python scripts/ui_probe.py`（三档宽度 + 相关模式）；`docs/UI-MAP.md` §D 是设计令牌全表。
+- 改完必跑 `python scripts/ui_probe.py`（三档宽度 + 相关模式）；`docs/frontend/UI-MAP.md` §D 是设计令牌全表。
 
 ### C7. 改用户手改字段 / 签名来源（A3）
 
@@ -131,10 +131,10 @@
 
 ---
 
-## D. 改完顺手同步的文档（`docs/README.md` §5 维护约定）
+## D. 改完顺手同步的文档（`docs/README.md` §3 文档纪律）
 
 1. **新增术语**随手补 `docs/GLOSSARY.md` 对应分组一行（术语 · 含义 · 代码位置 · 关联）；
 2. **改数据模型/接口/抓取行为**后同步对应深度文档（表列 / 端点表 / 链路小节）；
-3. **改动跨层或影响全局不变量**时更新 `docs/ARCHITECTURE.md`，并在根 `devlog/` 追加一篇；
+3. **改动跨层或影响全局不变量**时更新 `docs/backend/ARCHITECTURE.md`，并在根 `devlog/` 追加一篇；
 4. 文档里引用代码一律写**仓库相对路径**；引用其他文档写 `docs/<文件>`；
 5. 跑 `python scripts/doc_check.py`（`release.py` 预检也会调它）。

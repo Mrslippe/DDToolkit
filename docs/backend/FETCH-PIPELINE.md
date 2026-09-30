@@ -1,3 +1,14 @@
+---
+doc: backend/fetch-pipeline
+class: module
+scope: 抓取链路的触发入口、时效分层、任务模型、两把锁与手动优先让位、帖子抓取模式与停止原因
+not-scope: 表结构列级定义 → backend/DATA-MODEL.md；平台适配与接入 checklist → backend/PLATFORMS.md；风控与节流 → backend/AUTH-CAPABILITIES.md
+sot: app/services/scheduler.py, app/services/fetcher.py, app/services/platforms/
+verify: python -m pytest -q tests/test_services.py
+budget: 850
+retire-when: scheduler.py 被拆分，或抓取链路整体重写
+---
+
 # 后端抓取链路详解（v0.9.4）
 
 > 覆盖范围：账号信息抓取 + 帖子抓取两条链路的触发入口、任务模型、API 清单、
@@ -6,7 +17,7 @@
 > `app/services/platforms/{bilibili,weibo}.py`（平台适配）、
 > `app/core/http.py`（共享 HTTP 客户端构造）、`app/routers/vtuber.py`（HTTP 入口）。
 > 本文档记录 **2026-09-09 当前实现**，与代码同步维护。
-> 总览/数据模型见 `docs/ARCHITECTURE.md`；表结构/仓储/接口见 `docs/backend-repositories-and-routers.md`；
+> 总览/数据模型见 `docs/backend/ARCHITECTURE.md`；表结构/仓储/接口见 `docs/backend/DATA-MODEL.md`；
 > 名词与代码路径速查见 `docs/GLOSSARY.md`。
 
 ---
@@ -217,7 +228,7 @@ B 站**不装令牌桶**（用户拍板：R27/R28/R30 已把节奏调好，且�
   没回来的**一律计 `failed`**。
 - `scheduler.runtime.start()`（R1，devlog/211）：**一次起齐**三条守护线程 + 外部数据 cron，
   幂等；`stop()` 按"不接新任务 → 叫醒线程 → 取消在飞轮次 → join → 关 APScheduler"收尾
-  （不变量 = `ARCHITECTURE.md` §6 第 31 条）。三条线程各自的循环：
+  （不变量 = `docs/backend/FETCH-PIPELINE.md 不变量 31）。三条线程各自的循环：
   - `_live_poller_loop`（T0）：首轮于 `STARTUP_CHAIN_DELAY` 后立即执行
     （启动即最快刷新直播），之后循环轮询；`LIVE_POLL_SECONDS<=0` 关闭；
   - `_tier_loop`（综合档）：启动后跑一次综合档（动态流必跑，账号流按
@@ -675,3 +686,61 @@ def _detect_rate_limit(status_code, data=None):
    （多付 ~6s 才进冷却）；可考虑「风控结果不重试」以缩短失败路径；
 7. 不改动建议：增量模式（stop_on_existing 第 1 页即停）已是当前最优；
    `x/web-interface/card` 合并接口拿不到直播状态且旧接口稳定性差，不采用。
+## 抓取不变量
+
+5. **抓取去重靠内存集合**，不靠捕获 IntegrityError（避免事务回滚污染整批）；
+
+6. **归档边界剪枝**：抓取前先跑归档规则，已归档帖零网络请求；
+
+7. **手动任务优先于定时档**（自动档起跑让位 + 持锁断点让位，两个方向都要在）；
+
+12. **增量停止必须整页扫完 + 豁免置顶帖**：平台会在流首插乱序条目（微博 `isTop` 可多条、
+    B 站 `module_tag.text=置顶`），「遇已入库即 break」会漏掉同页靠后的新帖（devlog/045）；
+    **R35 起这条再加两半**（devlog/139）：① 置顶帖**不再当「跳过不管」**——每轮都要刷新
+    （列表页字段免费刷、详情接口按 `settings.PINNED_DETAIL_REFRESH_HOURS` 节流），
+    否则作者换了周表/舰礼图库里还是首次抓到的版本（`_safe_store_post` 遇唯一约束只
+    跳过**不更新**）；② 置顶集合**只在第一页同步**（平台只把置顶放首页），空集合即
+    「当前没有置顶」⇒ 撤销；**抓取失败的那一轮绝不能调同步**，否则会把置顶标记整片清空；
+
+13. **一条数据的多来源在写入侧合并**：B 站投稿的 `video`（arc/search）与 `video_dynamic`
+    （动态流，同 bvid）只保留前者，动态附言进 `posts.note`（devlog/047）；
+
+18. **并发粒度是平台**：同平台内部串行，不要在一条平台流里再并发放大速率。
+
+31. **调度线程只许由 `SchedulerRuntime` 起停，且睡在 `wait()` 上**（R1，devlog/211）：
+    `scheduler.runtime` 是进程级唯一实例，`start()` / `stop()` **幂等**；T0 直播轮询、
+    综合档、启动外部补抓、APScheduler 全由它持有句柄。规矩三条：
+    - **守护线程里不许 `time.sleep`**：一律 `rt.wait(seconds)`（返回 True = 收到停止请求，
+      立刻返回）。改造前是 5 处不可中断睡眠，其中综合档是 `while True` + `time.sleep(10)`
+      ⇒ **没有任何停止手段**，`_wait_for_manual_tasks` 最坏睡 1800s（用户看到的形态：
+      退出应用后后台还在打接口）。
+    - **守护线程里不许裸 `asyncio.run`**：一律 `rt.run(coro)` —— 它把新建的事件循环
+      **登记在册**，`stop()` 才能取消**在飞轮次**（否则 join 要等一次网络往返跑完）。
+    - **停止顺序固定**：不接新任务（`accepting()` → False）→ 置停止事件 → 取消在飞轮次 →
+      join（**超时告警**，daemon 只作兜底）→ 关 APScheduler；`main.py` 里**先 stop 再关共享
+      HTTP 客户端**（反过来，被取消的轮次会在一个已关闭的 client 上收尾）。
+    - ⚠️ 两个坑各踩过一次，都有用例钉着：① **置位与登记共用 `_loops_lock`** —— 否则
+      线程可以在"置位之后、登记之前"把轮次跑起来，那一轮永远等不到取消（症状 = `stop()`
+      白等到 join 超时）；② **停止事件是"本代正在停"，不是"进程永远完了"** ——
+      没启动过不广播、全停干净要收回（第一版留成永久状态，毒到了与调度无关的外部批次用例）。
+
+
+## 上游「抓不下来」的定性与冒烟
+
+## 二·六、第三方数据「抓不下来」的定性 + 端到端上游冒烟
+
+上游（danmakus）会**间歇性变慢**：同一场次同一份代码实测在 **1.1s ↔ 15.6s** 之间摆（devlog/062）。所以「最近的数据都抓不到」这类报障，先分清是**超时 / 断供 / 真没弹幕**，不要直接当成数据问题：
+```powershell
+$env:DDTOOLKIT_DATA_DIR = "$env:APPDATA\com.ddtoolkit.app-dev"   # 必设：否则读项目根的裸跑残留库
+python scripts/check_danmaku_fetch.py          # 最近 6 个 danmakus 场次：词云状态 + 事件数 + 耗时
+python scripts/check_danmaku_fetch.py 10 --self  # 顺带跑自建路径（v3 原始弹幕 + 分词，很慢）
+```
+**只读**（sqlite `mode=ro`，不写库不删数据）；全绿退出 0、有失败退出 1，可当探针。库路径跟随 `DDTOOLKIT_DATA_DIR`，未设该变量时会告警指明用的是哪个库。
+有些链路**只在真环境里才暴露**：登录态、上游回包形态、池外收录（候选池与索引不一致）。这类问题过去靠"临时写脚本 + 用户实测"发现（2026-09-15 那批写了 5 个一次性脚本，其中 3 个抓到真问题 —— 但都被删了），现在固化成常驻护栏：
+```powershell
+python scripts/smoke_upstream.py              # 真上游（数据目录副本 + 真后端）：B 站检索 / uid 直查 / 候选池来源标注 / 池外收录 / 场次上游
+python scripts/smoke_upstream.py --cold       # 冷进程：空数据目录 + 清空凭据，断言未登录时的降级形态
+python scripts/smoke_upstream.py --capture    # 顺带把真实回包刷进 tests/fixtures/
+python scripts/dev_check.py --upstream        # 接进一把梭（真上游 + 冷进程各一次）
+```
+判定口径：`[ok]` 真验到了 · `[skip]` **环境不成立没验到**（未登录 / 上游不可用，必须打印原因）· `[FAIL]` 链路真坏了。⚠️ 池外收录检查会在**副本**里真建一个 V（副本每次重建，不碰真库）；两条实测澄清（「空数据目录」≠「候选池为空」、凭据要**显式清空**才算冷）**已写进 `docs/DEV-LOOP.md 不变量 21**（2026-09-25 前在 `GLOSSARY.md` §8，该节已并入 §6），此处不复述。

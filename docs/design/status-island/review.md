@@ -1,3 +1,11 @@
+---
+doc: design/status-island/review
+class: snapshot
+scope: 状态岛形态与主题的调研结论与建议：四个开源项目的形态事实、抖动成因归属、四条候选路线、W1 主题方案为何应被推翻
+not-scope: 源码逐项证据（见 projects-source-review）；执行方案
+verified: 2026-09-25
+---
+
 # 状态岛形态与主题：调研结论与建议（2026-09-25）
 
 > 用户 2026-09-25：「我在 readme 中留下了一些类灵动岛的开源项目参考，去看看再来决定我们现在做的

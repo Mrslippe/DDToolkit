@@ -326,7 +326,7 @@ def run_storage_maintenance():
 # `/assets` 一组：消费者只有设置页那一块（它已经在打 `/settings/storage`），
 # 而多一组路由就多一套鉴权面与前端 client（`ARCHITECTURE` §6 第 26 条那条白名单纪律）。
 #
-# 口径（规格 `docs/design-light-assets.md` §2.5）：轻资产副本**不是**缓存 ——
+# 口径（规格 `docs/backend/ASSETS.md` §2.5）：轻资产副本**不是**缓存 ——
 # 清它**会**破图（所以有 pin 与引用保护）；`prune` 只删"未 pin 且未被引用"的。
 # 上面那个 `prune-cache`（图片缓存）才是"随便清、清完外观不变"的那一类。
 

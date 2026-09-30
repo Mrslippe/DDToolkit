@@ -1,3 +1,11 @@
+---
+doc: design/notices/message-hub-execution
+class: plan
+scope: 消息中心 M0–M5 的分批执行方案：逐批改动面、失败用例、反向验证、门禁、文档义务、五条停止条件，含开工前复核与 M0 实做结果
+not-scope: 目标架构与延迟分析（见 design/notices 的其余三份）
+expires: 2026-11-30
+---
+
 # 后端消息中心 · 分批执行方案（交给执行 Agent）
 
 > 状态：**待执行**。本文件是 `docs/design/notices/message-hub-architecture.md`（设计）与
@@ -8,7 +16,7 @@
 >
 > **纪律继承**：`docs/ARCHITECTURE-IMPROVEMENT-PLAN.md` §0 的九条**全部继续有效**；
 > 每批汇报只写母计划 **§7** 那张表要求的字段；停止条件见母计划 **§9** + 本文 §4。
-> 本文件**不得成为规则真源**：不变量落 `docs/ARCHITECTURE.md` §6，门禁口径落 `scripts/`。
+> 本文件**不得成为规则真源**：不变量落 `docs/backend/ARCHITECTURE.md` §6，门禁口径落 `scripts/`。
 > 本文件只回答"**先做哪个、改哪里、怎么变红、什么时候算完、什么时候必须停**"。
 
 ---
@@ -139,7 +147,7 @@
 - 新增 `app/services/messages.py`：
   - `MessageHub`：订阅者注册表（`set` / 弱引用）+ 环形回放缓冲（长度常量放这里）。
   - `publish(msg)`：给所有活订阅者投递；无订阅者时只进环形缓冲。
-  - **不持有 asyncio 原语在模块级**（`ARCHITECTURE.md` §6 第 15 条：综合档每轮一个
+  - **不持有 asyncio 原语在模块级**（`docs/backend/ARCHITECTURE.md 不变量 15：综合档每轮一个
     `asyncio.run()`，模块级 `asyncio.Lock` 第二轮必抛 "bound to a different event loop"）。
 - 新增路由：**推送端点（路径名待定，见下方冲突警告）**（`app/routers/` 下，薄）：
   - `StreamingResponse(media_type="text/event-stream")`；**必须走 token 中间件**（不加白名单）。
@@ -168,7 +176,7 @@
 - 把 `MessageHub` 的锁改成模块级 `asyncio.Lock` ⇒ 用例 4 必须红。
 
 **门禁**：`python scripts/gate.py --tier a`（A 档含 pytest）。
-**文档义务**：A 档 → devlog + `docs/ARCHITECTURE.md` §3.8（状态通道）补一句"新增推送通道"。
+**文档义务**：A 档 → devlog + `docs/backend/ARCHITECTURE.md` §3.8（状态通道）补一句"新增推送通道"。
 
 **停止条件**：若 `StreamingResponse` 在 Tauri WebView2 里读不出流（真机验证），
 **停下报告** —— 那意味着通道选型要重新评估（不要在探针里边"看起来能跑"就宣布通过）。
@@ -260,7 +268,7 @@ M0b 不许"探针绿了就宣布通过"。
 **反向验证**：把 `if edge and started` 改成恒真 ⇒ 用例 2 必须红。
 
 **门禁**：A 档。
-**文档义务**：A 档 → devlog + `ARCHITECTURE.md` §3.7（直播场次管道）补出口说明。
+**文档义务**：A 档 → devlog + `docs/backend/ARCHITECTURE.md` §3.7（直播场次管道）补出口说明。
 
 > ### ✅ 已落（2026-09-27，devlog/243）
 >
@@ -368,7 +376,7 @@ M0b 不许"探针绿了就宣布通过"。
 而不是轮询顺手覆盖了它 —— 这是本批最容易出现的**假绿**）。
 
 **门禁**：A 档 + B 档 + **full**（本批建议收尾用 `--tier full`）。
-**文档义务**：A/B 档 → devlog + `UI-MAP.md` + `FRONTEND-ARCH.md`（数据流一节）。
+**文档义务**：A/B 档 → devlog + `UI-MAP.md` + `docs/frontend/ARCHITECTURE.md`（数据流一节）。
 
 **停止条件**：若 R33 那条既有不变量无法同时保住 ⇒ **停下报告**，不要删那条判据。
 
@@ -511,7 +519,7 @@ M0b 不许"探针绿了就宣布通过"。
 **反向验证**：删一个 `Notice` 字段 ⇒ 契约用例必须红。
 
 **门禁**：A 档 + full。
-**文档义务**：A 档 → devlog + `ARCHITECTURE.md` §3.8 + `UI-MAP.md`。
+**文档义务**：A 档 → devlog + `docs/backend/ARCHITECTURE.md` §3.8 + `UI-MAP.md`。
 
 **停止条件**：§4 的 S-3（"目睹才报"未拍板）未解决 ⇒ **不做本批**。
 

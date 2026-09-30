@@ -228,7 +228,7 @@ def _run_migrations() -> None:
 # 用户自己机器上 —— 你看不见、够不着、无法远程诊断。在此之前这里没有任何退路：
 # 中途失败（磁盘满 / 断电 / SQLite locked）= 用户面对"打不开 + 不知道能不能找回"。
 #
-# 两条口径（不变量见 `docs/ARCHITECTURE.md` §6）：
+# 两条口径（不变量见 `docs/backend/ARCHITECTURE.md` §6）：
 #   ① **真跑迁移之前先备份**（快路径不备份 —— 别拖慢常态启动）；
 #   ② **迁移失败绝不留下打不开的库**：把坏库挪成 `vtuber.db.failed-<时间戳>`，
 #      用空库继续启动（应用可用），并把失败**分类**带出去（`/healthz` 的 `migration`）。

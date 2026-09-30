@@ -407,7 +407,7 @@ class LocalAsset(Base):
     被固化的资源**不属于某一个 V**：同一张图可能被多个 V 用（转发/联动）、
     也可能在账号被删之后仍然要留着（用户选过的那张）。资源是按 **`(kind, 稳定键)`**
     去重的 —— 粒度是"这份资源"，不是"某个账号的某个字段"。
-    规格：`docs/design-light-assets.md` §2；服务层唯一入口 `app/services/assets.py`。
+    规格：`docs/backend/ASSETS.md` §2；服务层唯一入口 `app/services/assets.py`。
 
     ## 口径
 

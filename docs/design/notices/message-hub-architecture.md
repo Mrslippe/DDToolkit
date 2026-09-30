@@ -1,3 +1,11 @@
+---
+doc: design/notices/message-hub-architecture
+class: snapshot
+scope: 后端消息中心的架构设计：延迟的真实构成、推送通道选型、两层消息分类、手动动作也走中心、风险清单与 M0–M5 分步
+not-scope: 现行实现（真源是代码与 backend/MESSAGES）
+verified: 2026-09-27
+---
+
 # 后端消息中心 · 分层消息类型 · 跨进程分发（2026-09-27）
 
 > **这是什么**：针对用户 2026-09-27 提出的设计——

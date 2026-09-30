@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """未归档帖封面固化 + `cover_local`（L3，devlog/261）。
 
-规格 `docs/design-light-assets.md` §3.3；执行方案 §L3。
+规格 `docs/backend/ASSETS.md` §3.3；执行方案 §L3。
 
 | # | 判据 | 错了会怎样 |
 |---|---|---|

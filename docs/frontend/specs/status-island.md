@@ -1,3 +1,13 @@
+---
+doc: frontend/specs/status-island
+class: spec
+scope: 状态胶囊的尺寸、时间轴与可断言的动效不变量（顶栏胶囊与桌面小窗两个宿主共用一套规格）
+not-scope: 现状是什么（真源是 UI-MAP）；实现细节
+sot: frontend/src/components/StatusIsland.tsx, frontend/src/styles/status-island.css
+verify: python scripts/ui_probe.py --status-island
+retire-when: 状态胶囊形态再定稿一次，或宿主数量变化
+---
+
 # 状态胶囊 · 动效设计规格（灵动岛式形变）
 
 > **这是什么**：一份**设计规格**，不是实现说明。R38（顶栏状态胶囊的形变动效）与后续的

@@ -97,6 +97,11 @@ A_FILES = (
     "scripts/gen_doc_numbers.py",  # ← doc_check #5 转调它（数字门禁本体）
     "scripts/release.py",        # ← tests/test_release_script.py
     "scripts/gate.py",           # ← tests/test_gate.py（档位映射自身的用例）
+    # 2026-09-30 补（P0 文档结构重构）：这是本注释上面那句教训的第三次现身 ——
+    #   `docs_gate.py` 的护栏是 `tests/test_docs_gate.py`，而 `tests/` 前缀本来就让
+    #   它落 A 档；但**脚本自己**原先会落 C 档（`scripts/**` 默认 C），
+    #   于是"只改门禁脚本、不改用例"的那次改动不会跑 pytest。
+    "scripts/docs_gate.py",      # ← tests/test_docs_gate.py
     # 开发态 token 的单源与调用方覆盖（2026-09-26，devlog/203）：
     #   S1 加了门禁之后，**打自己后端的开发态脚本逐个失效**（探针/dev_check/smoke/perf_report），
     #   而症状分别伪装成"布局坏了 / 网络不可达 / 上游挂了"。现在这四者由
@@ -112,11 +117,20 @@ A_FILES = (
     "pyproject.toml",
     "uv.lock",
 )
-# B：前端逻辑、共享令牌与 UI 规格（vitest 覆盖得到；UI-MAP 是"现状真源"，
+# B：前端逻辑、共享令牌与 UI 规格（vitest 覆盖得到；UI-MAP 与 specs 是"现状/规格真源"，
 #    改它意味着版式口径变了，值得把单测也跑一遍）
 B_PREFIXES = ("frontend/src/utils/", "frontend/src/components/", "frontend/src/api/",
-              "frontend/src/hooks/", "frontend/src/pages/", "frontend/src/dev/")
-B_FILES = ("frontend/package.json", "docs/UI-MAP.md", "frontend/src/styles/tokens.css",
+              "frontend/src/hooks/", "frontend/src/pages/", "frontend/src/dev/",
+              # 2026-09-30（文档重构）补：视觉与动效规格是**实现合同**，改它同样该跑单测。
+              "docs/frontend/specs/")
+B_FILES = ("frontend/package.json",
+           # ⚠️ 2026-09-30（文档重构）**改过路径**：`docs/UI-MAP.md` → `docs/frontend/UI-MAP.md`。
+           #    搬家时漏改了这一格，于是改 UI-MAP 会静默落 C 档（不跑 vitest）——
+           #    正是本文件反复记的那条「档位映射漏一格 = 那个文件从此没人守，而且不会自己响」。
+           #    防复发：`tests/test_gate.py` 的「映射路径必须存在」现在**同时查 A_FILES 与 B_FILES**
+           #    （原先只查 A —— 那正是这次漏掉的原因）。
+           "docs/frontend/UI-MAP.md",
+           "frontend/src/styles/tokens.css",
            # ⚠️ 2026-09-26 补（S2 批次顺手抓到的同一类漏洞）：依赖锁改了但 `package.json`
            #    没动（`npm install x` 只改 lock 的版本/完整性时很常见）⇒ 落 C 档 ⇒
            #    **一条前端用例都不跑**。与 197 补 `uv.lock` 是同一个理由的另一半。
@@ -164,6 +178,11 @@ def steps(tier: str) -> list[tuple[str, list[str], str]]:
     s: list[tuple[str, list[str], str]] = [
         ("tsc", [npx, "tsc", "--noEmit"], "类型检查（实测 6s）"),
         ("doc_check", [PY, "scripts/doc_check.py"], "文档门禁（实测 0–2s）"),
+        # 文档**结构**门禁（2026-09-30，P0）：头块 / 代码路径存在 / 预算 / 豁免自清。
+        # 与 doc_check 分工：那份管"索引与数字有没有漂"，这份管"文档的声明成不成立"
+        # （`doc_check` 全绿的同时可以躺着 ≥6 处硬数字矛盾，见 docs_gate 文件头注释）。
+        # 成本：纯文本扫描，实测 <1s。
+        ("docs_gate", [PY, "scripts/docs_gate.py"], "文档结构门禁（实测 <1s）"),
         # ⚠️ 全仓 Python 语法扫描（~1s）：**原先门禁里没有这一步**，而 CI 的 Linux 腿有
         #    （`dev_check.py --syntax-only`）⇒ 2026-09-26 实测被咬了：一个测试文件被写进
         #    UTF-8 BOM，本地 tsc/eslint/doc_check/pytest/gate 全绿、只有 CI 红。

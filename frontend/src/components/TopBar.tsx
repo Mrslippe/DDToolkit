@@ -99,7 +99,7 @@ async function tauriWindow() {
 }
 
 /**
- * 顶栏（视觉严格按 docs/design/react-topbar Pixso 设计稿 Frame411）：
+ * 顶栏（视觉源自 Pixso 导出 Frame411；导出稿已删，内容见 `docs/frontend/UI-MAP.md` A1）：
  * 猫脸 LOGO + 标题（阿里妈妈方圆体，2026-09-09 起与正文同源）+ 居中状态胶囊 + 通栏窗口控制钮。
  * - 状态来自 GET /vtuber/fetch-status 轮询；抓取中显示加载图标（lucide Loader2）；
  *   任务结束沿触发 'ddtoolkit:fetch-idle' 事件，供 VtuberSidebar 等组件刷新数据。

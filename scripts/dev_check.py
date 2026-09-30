@@ -91,7 +91,7 @@ def _run_pytest() -> bool:
 def _run_frontend_check() -> bool:
     """前端三条：eslint（`--max-warnings 0`）+ vitest（纯函数单测）+ 日期区间断言。
 
-    项目没有前端验证基建是长期缺口（`docs/FRONTEND-ARCH.md` §5 P3）；
+    项目没有前端验证基建是长期缺口（`docs/frontend/ARCHITECTURE.md` §5 P3）；
     2026-09-13 起补了 vitest 与 eslint，这里把它们接进一键自检 —— 否则
     「加了检查但没人跑」等于没加（`test_version_synced_with_devlog` 曾长期红着
     就是同一类教训）。缺 node_modules 时不算失败（前端不是每次都要验），
@@ -247,16 +247,24 @@ def _run_syntax_check() -> bool:
 
 
 def _run_docs_check() -> bool:
-    """文档漂移门禁（`scripts/doc_check.py`）：devlog 索引 / 六处版本号 / 发布说明与导航。
+    """文档门禁：`scripts/doc_check.py`（索引漂移）+ `scripts/docs_gate.py`（结构声明）。
 
-    加它的理由很具体：2026-09-15 实测「批次 → devlog 索引」缺了 082 与 084
+    加前者（2026-09-15，devlog/085）的理由很具体：「批次 → devlog 索引」缺了 082 与 084
     （两次都是写完 devlog 忘了回填），`docs/README.md` 的 releases 列表也漏了新版本 ——
-    这些都不会让测试红，只会在几个月后想查"那版改了什么"时才发现查不到（devlog/085）。
+    这些都不会让测试红，只会在几个月后想查"那版改了什么"时才发现查不到。
+
+    加后者（2026-09-30，P0 文档结构重构）的理由是**另一类**失败：前者全绿的同时，
+    文档里可以躺着 ≥6 处硬数字矛盾（"12 表 ER" vs 真值 14），因为它查的是白名单正则。
+    后者改判结构不变量（头块 / 代码路径存在 / 预算 / 豁免自清），两者互补。
     """
-    print(f"\n=== 文档漂移（devlog 索引 / 版本号 / 发布说明） ===")
-    rc = subprocess.run([PY, "scripts/doc_check.py"], cwd=ROOT).returncode
-    print(f"{OK if rc == 0 else FAIL} doc_check rc={rc}")
-    return rc == 0
+    print(f"\n=== 文档门禁（索引漂移 + 结构声明） ===")
+    ok = True
+    for script, label in (("doc_check", "doc_check（索引 / 版本号 / 发布说明）"),
+                          ("docs_gate", "docs_gate（头块 / 代码路径 / 预算）")):
+        rc = subprocess.run([PY, f"scripts/{script}.py"], cwd=ROOT).returncode
+        print(f"{OK if rc == 0 else FAIL} {label} rc={rc}")
+        ok = ok and rc == 0
+    return ok
 
 
 def _run_upstream_smoke() -> bool:

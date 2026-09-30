@@ -1723,7 +1723,7 @@ fn data_dir_of(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
 /// 允许被"打开外部链接"的主机（**全小写、精确匹配**）。
 ///
 /// ⚠️ 接入新平台（抖音/小红书）时要**同时**加这里 —— 否则"打开主页"会失败并提示原因
-/// （前端会把原因显示出来，不静默）。这条纪律见 `docs/ARCHITECTURE.md` §6 第 29 条。
+/// （前端会把原因显示出来，不静默）。这条纪律见 `docs/desktop/SHELL.md 不变量 29。
 const EXTERNAL_HOSTS: &[&str] = &[
     "bilibili.com",
     "www.bilibili.com",

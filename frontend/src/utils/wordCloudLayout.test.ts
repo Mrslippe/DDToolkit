@@ -9,7 +9,7 @@ import { MosaicPacker, packFinal, roundedRectPolygon } from './wordCloudLayout'
  *   ② 覆盖容器（不留大片空白）；
  *   ③ 确定性（同输入同输出，入场不闪动）；
  *   ④ 破泡/恢复的状态一致性。
- * 阈值按 FRONTEND-ARCH.md §7 红线「只搬不改」取宽裕值 —— 调参若破坏不变量，这里会红。
+ * 阈值按 docs/frontend/ARCHITECTURE.md §7 红线「只搬不改」取宽裕值 —— 调参若破坏不变量，这里会红。
  */
 
 const BOX: [number, number] = [600, 210]

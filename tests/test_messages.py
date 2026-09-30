@@ -159,7 +159,7 @@ def test_publish_from_a_plain_thread_reaches_subscribers():
 
 
 def test_publish_survives_a_rebuilt_event_loop():
-    """方案 §M0 用例 ④：**事件循环重建后仍能 publish**（`ARCHITECTURE.md` §6 第 15 条）。
+    """方案 §M0 用例 ④：**事件循环重建后仍能 publish**（`docs/backend/ARCHITECTURE.md 不变量 15）。
 
     综合档每轮一个 `asyncio.run()`：任何"绑在造它的那个循环上"的原语跨轮必炸。
     顺带钉住两条：① 同代里 `start()` 两次不会有两套 drain；② `stop()` 之后**不留**

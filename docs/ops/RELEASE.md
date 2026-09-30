@@ -1,3 +1,14 @@
+---
+doc: ops/release
+class: module
+scope: 打包与发布：版本同步、门禁、打版、校验、提交与推送、Release 上传、失败续跑
+not-scope: 版本号锚点的权威清单 → scripts/release.py；命令开关的逐字口径以脚本 --help 为准
+sot: scripts/release.py, scripts/build_backend.py, scripts/collect_release.py, scripts/upload_release_assets.py
+verify: python scripts/release.py --dry-run
+budget: 400
+retire-when: 发布改成 CI 全自动、不再需要人工兜底步骤
+---
+
 # DDToolkit 发布手册（Release Playbook）
 
 > **日常发布只需一条命令**（2026-09-15 起，devlog/084）：
@@ -339,3 +350,20 @@ Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Setti
 | 推代码 | `git push`（GCM 授权后免 token） |
 | 推 tag + 建 Release + 传资产 | `scripts/upload_release_assets.py v<版本>`（token 走环境变量，幂等） |
 | 浏览器兜底 | 手动 upload（§4.2） |
+
+## 发布与依赖不变量
+
+19. **`scripts/backend-8000.bat` 属个人脚本，不得提交**。
+
+24. **依赖来源只认 `uv.lock`**（2026-09-25，devlog/197）：真源是 `pyproject.toml` + `uv.lock`；
+    `requirements.txt` 是 `uv export --frozen --no-dev` 的**只读导出产物**（带 hash，给 CI/容器用），
+    **不再手改**。运行依赖（进用户的冻结产物）与 `dev` / `build` 组**必须分开** ——
+    实测这一条就把冻结产物从 118.8MB 降到 71.7MB（`pytest` / `PyInstaller` / `werkzeug` /
+    `email_validator` / `numpy` 这些误打进去的包消失）。
+    ⚠️ **构建必须跑在锁环境里**：`scripts/build_backend.py` 会拒绝在非 `.venv` 里构建，
+    并用 `uv sync --frozen --dry-run` 复核"环境 = 锁文件"。原因是它**不装任何依赖**，
+    用"当前解释器里装了什么"去冻结 exe —— 没有这道守卫时，发布产物装的是"跑构建那天的版本"。
+    ⚠️ **新增运行依赖必须显式声明**：`python-multipart` 此前一直被隐式满足（系统 Python 里
+    别的包顺带装了它），缺失时 FastAPI 对 `UploadFile` / `Form(...)` 路由**注册即抛**
+    `RuntimeError` ⇒ 4 个测试文件直接收集失败。**"在开发机能跑"推不出"依赖声明是完整的"。**
+

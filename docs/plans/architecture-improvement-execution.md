@@ -1,9 +1,17 @@
+---
+doc: plans/architecture-improvement-execution
+class: plan
+scope: 母计划的执行细化：16 个批次的实际排序与硬约束、逐批改动面/先补的失败用例/反向验证/门禁/停止条件，以及与母计划不一致处的核实结论
+not-scope: 规则真源（不变量归后端框架文档，门禁口径归 scripts/）；本文件只回答"先做哪个、改哪里、怎么变红、什么时候算完"
+expires: 2026-12-31
+---
+
 # DDToolkit 架构改进 · 核实后的分批执行方案
 
 > 状态：**待执行**。本文件是 `docs/ARCHITECTURE-IMPROVEMENT-PLAN.md` 的**执行细化**，不是真源。
 > 核实日期：**2026-09-25**（本文件里所有"现状"结论都是这一天沿真实调用链读出来的，带行号；行号是快照，不要照抄）。
 > **修订记录**：**rev 2（2026-09-25）** —— 用户确认三条产品口径（**很多人用** / **即将接入小红书与抖音** / **继续发版**）后，重排了执行顺序、翻转了 S2 与 Q2 的定性、砍掉了 M2/M3 的整体拆分、新增了**批次 16（升级与迁移安全）**，并把平台采集相关工作移入"等调研结论"的第 4 阶段。改动集中在 **§1**，其余各批正文里加了 `⚠️ 2026-09-25 修正` 标注。
-> 纪律：**本文件不得成为规则真源**——不变量落 `docs/ARCHITECTURE.md` §6，门禁口径落 `scripts/`，测量值一律指向真源（`python scripts/gen_doc_numbers.py --list` / `docs/TODO.md` §6.2）。本文件只回答"**先做哪个、改哪里、怎么变红、什么时候算完、什么时候必须停**"。
+> 纪律：**本文件不得成为规则真源**——不变量落 `docs/backend/ARCHITECTURE.md` §6，门禁口径落 `scripts/`，测量值一律指向真源（`python scripts/gen_doc_numbers.py --list` / `docs/TODO.md` §6.2）。本文件只回答"**先做哪个、改哪里、怎么变红、什么时候算完、什么时候必须停**"。
 
 ---
 
@@ -454,7 +462,7 @@ Some(Regex::new(r"^((mailto:\w+)|(tel:\w+)|(https?://\w+)).+").unwrap())
 
 **门禁**：认证/API 测试 + `cargo test` + `tsc` + A 档 gate。
 
-**文档义务**：**A 档**。`docs/ARCHITECTURE.md` §6 加不变量（"sidecar 业务端点必须持本次启动 token；`/healthz`、`/static/*`、`/img-proxy` 是显式豁免且必须在此登记"）+ 护栏用例 + devlog + 第 5 节映射的活文档（`docs/backend-repositories-and-routers.md` 的路由契约节、`docs/GLOSSARY.md`）。
+**文档义务**：**A 档**。`docs/backend/ARCHITECTURE.md` §6 加不变量（"sidecar 业务端点必须持本次启动 token；`/healthz`、`/static/*`、`/img-proxy` 是显式豁免且必须在此登记"）+ 护栏用例 + devlog + 第 5 节映射的活文档（`docs/backend/DATA-MODEL.md` 的路由契约节、`docs/GLOSSARY.md`）。
 
 **停止条件**：无法确认 Tauri production origin；或发现 token 只能放 URL（会进日志/历史）。
 
@@ -481,7 +489,7 @@ Some(Regex::new(r"^((mailto:\w+)|(tel:\w+)|(https?://\w+)).+").unwrap())
 
 **门禁**：tsc + eslint + vitest + **探针三档**（`ui_probe` 成本全在启动，永远跑满三档）+ 真机冒烟。
 
-**文档义务**：A 档（碰路由契约的消费面）。devlog + `docs/FRONTEND-ARCH.md`（api 层的初始化契约）。
+**文档义务**：A 档（碰路由契约的消费面）。devlog + `docs/frontend/ARCHITECTURE.md`（api 层的初始化契约）。
 
 **停止条件**：图片鉴权迫使一次性大改 blob 管道。
 
@@ -503,11 +511,11 @@ Some(Regex::new(r"^((mailto:\w+)|(tel:\w+)|(https?://\w+)).+").unwrap())
 **先补的失败用例（怎么让它红）**：
 - 矩阵：`<script>`、`onerror=`、`javascript:`、`data:text/html`、SVG（`<svg onload>`）、`<iframe>`/`<form>`、畸形嵌套、**以及正常排版不过度损坏**（表格/引用/列表/换行必须活下来）。
 - **反向验证的正确做法**：不是"换个 payload"，而是**把净化调用去掉、改回 `body.content`** ⇒ 恶意用例必须红、正常排版必须绿。**这条要写进 devlog**，否则下一个人会以为"payload 变了还绿 = 净化有效"。
-- **真实数据 fixture**：`docs/ARCHITECTURE.md` §6 第 22 条要求"判据至少有一条用例吃真实数据"。取一条**真实专栏 HTML** 放 `tests/fixtures/`（不是手写样本）。
+- **真实数据 fixture**：`docs/DEV-LOOP.md 不变量 22要求"判据至少有一条用例吃真实数据"。取一条**真实专栏 HTML** 放 `tests/fixtures/`（不是手写样本）。
 
 **验收**：sanitizer 单测 + tsc/eslint/vitest + build + **CSP 复核（diff 应为空）**。
 
-**文档义务**：B 档。devlog（**写清 §2.1 的三层威胁模型**）+ `docs/FRONTEND-ARCH.md`。
+**文档义务**：B 档。devlog（**写清 §2.1 的三层威胁模型**）+ `docs/frontend/ARCHITECTURE.md`。
 
 **停止条件**：净化后真实专栏排版严重损坏（用户可见退化）⇒ 停，问用户"接受降级 / iframe 沙箱 / 只给纯文本"。
 
@@ -553,7 +561,7 @@ Some(Regex::new(r"^((mailto:\w+)|(tel:\w+)|(https?://\w+)).+").unwrap())
 
 **验收**：`cargo test` + capability/label 矩阵 + **Windows 真机**迁移与窗口 smoke。
 
-**文档义务**：A 档（破坏性操作 + 不变量）。`docs/ARCHITECTURE.md` §6 加"删除旧数据目录的准入条件"；`docs/DEV-LOOP.md` §四（整包重建条件）若变则同步。
+**文档义务**：A 档（破坏性操作 + 不变量）。`docs/backend/ARCHITECTURE.md` §6 加"删除旧数据目录的准入条件"；`docs/DEV-LOOP.md` §四（整包重建条件）若变则同步。
 
 ---
 
@@ -571,7 +579,7 @@ Some(Regex::new(r"^((mailto:\w+)|(tel:\w+)|(https?://\w+)).+").unwrap())
 
 **门禁**：多线程状态测试 + fetch-status 契约 + A 档 gate。
 
-**文档义务**：A 档（`/vtuber/fetch-status` 是前端契约）。devlog + `docs/ARCHITECTURE.md` §6——**把"GIL 下线程安全"那句删掉或改写成新的锁约定。这是本批最重要的一条，因为那条注释是错的。**
+**文档义务**：A 档（`/vtuber/fetch-status` 是前端契约）。devlog + `docs/backend/ARCHITECTURE.md` §6——**把"GIL 下线程安全"那句删掉或改写成新的锁约定。这是本批最重要的一条，因为那条注释是错的。**
 
 **为什么提前到批次 6 之前**：便宜、独立、不碰 scheduler 结构；而且 `FetchStatusStore` 是批次 10 要搬走的第一个"叶子"——先把它做成**有锁的类**，拆分时就不用同时改语义和搬位置。
 
@@ -588,7 +596,7 @@ Some(Regex::new(r"^((mailto:\w+)|(tel:\w+)|(https?://\w+)).+").unwrap())
 - 循环 `time.sleep(n)` → `stop_event.wait(n)`；**stop 顺序**：停止接新任务 → 通知线程 → 取消任务 → join → 关闭 APScheduler / HTTP client。
 - `start()` / `stop()` **幂等**；超时退出必须**告警**；daemon 只作兜底。
 - **`_wait_for_manual_tasks`（`:896-914`）也必须进 stop 语义**——否则"关闭"最坏要等半小时。
-- **不变量 `ARCHITECTURE.md` §6 第 15 条继续成立**：模块级对象**不得**持有 asyncio 原语（`test_services.py:1365` 遍历 `vars(pacer)` 守着）。用 `threading.Event`。
+- **不变量 `docs/backend/ARCHITECTURE.md 不变量 15继续成立**：模块级对象**不得**持有 asyncio 原语（`test_services.py:1365` 遍历 `vars(pacer)` 守着）。用 `threading.Event`。
 
 **先补的失败用例**：线程各只有一份；stop 后计数不增长；**start-stop-start 无残留**；等待/冷却中可停止（含"正在 `_wait_for_manual_tasks` 里"这一支）；**连续 `TestClient(app)` lifespan 不双跑**。
 
@@ -598,7 +606,7 @@ Some(Regex::new(r"^((mailto:\w+)|(tel:\w+)|(https?://\w+)).+").unwrap())
 
 **门禁**：生命周期测试 + pytest 相关集 + 启停冒烟。
 
-**文档义务**：A 档。`ARCHITECTURE.md` §1（运行时线程/协程表）+ §6 + devlog。
+**文档义务**：A 档。`docs/backend/ARCHITECTURE.md` §1（运行时线程/协程表）+ §6 + devlog。
 
 **停止条件**：scheduler 无稳定测试基线（母计划 §9）——**本批必须先跑通一次完整 `pytest` 并记录基线**，跑不通就停。
 
@@ -634,11 +642,11 @@ Some(Regex::new(r"^((mailto:\w+)|(tel:\w+)|(https?://\w+)).+").unwrap())
 
 **反向验证**：合并 (c) 的两个 commit 之前，先**制造 `_record_stat_snapshot` 抛错**并断言"`acc.live_status` 仍是旧值 + 快照零新增"——**今天这条必然红**，正好当"先补失败用例"的证明。
 
-**原则**（母计划原文，核实后完全同意）：Repository 默认不 commit 只 flush；application service / 任务做 owner；Router 只映射 HTTP；网络请求不持长写事务。**但必须同时改 `docs/ARCHITECTURE.md:622`**——那行白纸黑字写着"写操作当场 commit"，否则文档与代码两份口径。
+**原则**（母计划原文，核实后完全同意）：Repository 默认不 commit 只 flush；application service / 任务做 owner；Router 只映射 HTTP；网络请求不持长写事务。**但必须同时改 `docs/backend/ARCHITECTURE.md:622`**——那行白纸黑字写着"写操作当场 commit"，否则文档与代码两份口径。
 
 **门禁**：文件 SQLite 故障测试 + 删除/收录/profile/T0 回归 + A 档 gate。
 
-**文档义务**：**A 档全套**。`ARCHITECTURE.md` §5 分层表（`repositories` 行）+ §6 + `docs/backend-repositories-and-routers.md`（12 个 Repo 的方法表全部加"是否 commit"列）+ devlog。
+**文档义务**：**A 档全套**。`docs/backend/ARCHITECTURE.md` §5 分层表（`repositories` 行）+ §6 + `docs/backend/DATA-MODEL.md`（12 个 Repo 的方法表全部加"是否 commit"列）+ devlog。
 
 **停止条件**：事务改造出现跨请求共享 Session。
 
@@ -652,7 +660,7 @@ Some(Regex::new(r"^((mailto:\w+)|(tel:\w+)|(https?://\w+)).+").unwrap())
 
 **先补的失败用例**：一条**架构护栏**——"`app/repositories/**` 不得 import `app.services.**`"（用 `ast` 扫 import，比 grep 可靠）。反向验证：加回那行 import ⇒ 必红。
 
-**门禁**：pytest 相关集 + A 档 gate。**文档义务**：B 档。`ARCHITECTURE.md` §5 + devlog。
+**门禁**：pytest 相关集 + A 档 gate。**文档义务**：B 档。`docs/backend/ARCHITECTURE.md` §5 + devlog。
 
 ---
 
@@ -668,12 +676,12 @@ Some(Regex::new(r"^((mailto:\w+)|(tel:\w+)|(https?://\w+)).+").unwrap())
 - `BasePlatform` 增补（**全部带默认实现**，不改 weibo 现状行为）：`content_requires_login` / `content_fetch_allowed(auth)` / `is_logged_in(auth)` / `supports_account_info` / `supports_post_stream` / `post_streams`（B 站 = `("video", "dynamic")` 显式表达双流）/ `supports_live_status` / `live_batch_size`（0 = 不支持）/ `fetch_live_batch(...)` / `normalize_uid(...)`。
 - `registry.py` 加 `platforms_supporting(capability)`；**T0 改为遍历 registry 能力**，而不是 `Account.platform == "bilibili"`；unsupported **必须结构化返回**（不是静默丢弃）。
 - 修 `_logged_in` 的 `else weibo`；修 `routers/vtuber.py:947` 的越界闸门。
-- **`platforms-extension-guide.md` 取消"一行注册获得全部能力"的过度承诺**——`base.py:3-7` 的 docstring 写着"3. scheduler 自动获得：账号信息抓取、全量/增量帖子抓取、风控退避、完成报告"，而 `bilibili.py:3-5` 自认**没实现 `fetch_post_page`**（帖子抓取走 scheduler 专属双流）。
+- **`docs/backend/PLATFORMS.md` 取消"一行注册获得全部能力"的过度承诺**——`base.py:3-7` 的 docstring 写着"3. scheduler 自动获得：账号信息抓取、全量/增量帖子抓取、风控退避、完成报告"，而 `bilibili.py:3-5` 自认**没实现 `fetch_post_page`**（帖子抓取走 scheduler 专属双流）。
 - 改 `tests/test_capabilities.py:42` 的平台白名单断言为"platform 必须已注册"。
 
 **先补的失败用例**：B站/微博四种登录组合；只支持账号的 fake platform；**多平台风控隔离**；`isdigit()` 静默丢弃改成结构化失败。反向验证：把 `else weibo` 改成 `else False` ⇒ 微博能力断言必红。
 
-**门禁**：平台 capability 矩阵 + 扩展指南门禁 + A 档 gate。**文档义务**：B 档偏 A。`platforms-extension-guide.md`（大改）+ `ARCHITECTURE.md` §3.3/§7 + devlog。
+**门禁**：平台 capability 矩阵 + 扩展指南门禁 + A 档 gate。**文档义务**：B 档偏 A。`docs/backend/PLATFORMS.md`（大改）+ `docs/backend/ARCHITECTURE.md` §3.3/§7 + devlog。
 
 ---
 
@@ -718,7 +726,7 @@ Some(Regex::new(r"^((mailto:\w+)|(tel:\w+)|(https?://\w+)).+").unwrap())
 
 **门禁**：每搬一模块跑 scheduler 测试；收尾 `--tier full`。
 
-**文档义务**：B 档。`docs/backend-fetch-pipeline.md` + `ARCHITECTURE.md` §1/§3 + devlog（**一次拆分一篇**，不逐个字母各写一篇）。
+**文档义务**：B 档。`docs/backend-fetch-pipeline.md` + `docs/backend/ARCHITECTURE.md` §1/§3 + devlog（**一次拆分一篇**，不逐个字母各写一篇）。
 
 **停止条件**：scheduler 无稳定测试基线；或某步 patch 失联无法在不改 86 处的前提下解决 ⇒ 停，改为"先批量把 patch 目标迁到新模块"的独立批次。
 
@@ -748,7 +756,7 @@ Some(Regex::new(r"^((mailto:\w+)|(tel:\w+)|(https?://\w+)).+").unwrap())
 
 **门禁**：OpenAPI 路径 diff + API tests + `--tier full`。
 
-**文档义务**：B 档偏 A。`docs/backend-repositories-and-routers.md`（路由表 + 新的 `services/application/` 层）+ `ARCHITECTURE.md` §5 + §7 + devlog。
+**文档义务**：B 档偏 A。`docs/backend/DATA-MODEL.md`（路由表 + 新的 `services/application/` 层）+ `docs/backend/ARCHITECTURE.md` §5 + §7 + devlog。
 
 **停止条件**：结构批改变用户交互；或 OpenAPI 工具产生大面积无关 diff。
 
@@ -776,7 +784,7 @@ Some(Regex::new(r"^((mailto:\w+)|(tel:\w+)|(https?://\w+)).+").unwrap())
 
 **门禁**：hook/component tests + 探针（`--toolbar` / `--scene` / `--archive`）+ tsc/eslint/vitest。
 
-**文档义务**：B 档。`docs/FRONTEND-ARCH.md` + devlog。
+**文档义务**：B 档。`docs/frontend/ARCHITECTURE.md` + devlog。
 
 ---
 
@@ -795,7 +803,7 @@ Some(Regex::new(r"^((mailto:\w+)|(tel:\w+)|(https?://\w+)).+").unwrap())
 
 **先补的失败用例**：生成无 diff；关键响应不再裸 `JSON.parse(...) as T`；401/403/409/422 分类稳定。反向验证：改一个后端 schema 字段名 ⇒ 生成检查 / 类型检查必红。
 
-**门禁**：生成无 diff + contract tests + 前后端 build。**文档义务**：B 档。`docs/FRONTEND-ARCH.md` + devlog。
+**门禁**：生成无 diff + contract tests + 前后端 build。**文档义务**：B 档。`docs/frontend/ARCHITECTURE.md` + devlog。
 
 **注意**：必须在批次 11 之后。
 
@@ -827,7 +835,7 @@ Some(Regex::new(r"^((mailto:\w+)|(tel:\w+)|(https?://\w+)).+").unwrap())
 
 **门禁**：RTL/user-event/axe + 探针 + **手工键盘流程**（axe 不能替代手工键盘验收）。
 
-**文档义务**：B 档。`docs/UI-MAP.md`（焦点令牌 + 对话框契约）+ `docs/FRONTEND-ARCH.md` + devlog。
+**文档义务**：B 档。`docs/UI-MAP.md`（焦点令牌 + 对话框契约）+ `docs/frontend/ARCHITECTURE.md` + devlog。
 
 ---
 
@@ -866,7 +874,7 @@ Some(Regex::new(r"^((mailto:\w+)|(tel:\w+)|(https?://\w+)).+").unwrap())
 
 1. **【必做】启动期迁移前自动备份 `vtuber.db`。** 位置 `<DATA_DIR>/backups/vtuber-<MIGRATION_HEAD>-<时间戳>.db`。**要复制 `-wal`、不要复制 `-shm`**（`migrate.rs:20-30` 已经记录过原因：`-shm` 是共享内存索引，必须由进程自己重建）。仅当"库形态需要真正跑迁移"时才备份（`_run_migrations` 的快路径要跳过，别拖慢常态启动）。保留最近 N 份 + 体积上限，超限按最旧淘汰。
 2. **【必做】失败路径：迁移失败时绝不留下打不开的库，并且要告诉用户**。`_run_migrations()` 抛错时：把库移到 `vtuber.db.failed-<时间戳>`，**用空库继续启动**（应用可用），并在 `/healthz` 或启动标记里带出"上次启动的库迁移失败"；前端把它变成一句人话 + 一个"打开数据目录"的按钮 + 一个"导出诊断"的按钮。**判据是"用户能自己找回数据"，不是"日志里有异常"。**
-3. **诊断包导出**：把 `sidecar.log`（尾部）+ `app.log`（当天）+ 库形态（`alembic_version` / 表数 / 文件大小）+ 迁移备份清单 + 应用与 WebView2 的版本号 + OS 版本，打包成一份用户可复制的文本或 zip。仓库里 `bootDiag` 与 `widget_diag` 已有雏形，缺"打包"。**注意：诊断包里绝不含 `.env` / cookie / token**（`docs/ARCHITECTURE.md` §6 第 10 条）。
+3. **诊断包导出**：把 `sidecar.log`（尾部）+ `app.log`（当天）+ 库形态（`alembic_version` / 表数 / 文件大小）+ 迁移备份清单 + 应用与 WebView2 的版本号 + OS 版本，打包成一份用户可复制的文本或 zip。仓库里 `bootDiag` 与 `widget_diag` 已有雏形，缺"打包"。**注意：诊断包里绝不含 `.env` / cookie / token**（`docs/backend/AUTH-CAPABILITIES.md 不变量 10）。
 4. **`migrate_data_dir` 的回滚编排补集成测试**（用一次性临时目录，不碰真数据目录）：复制失败 / 校验失败 / 指针写失败 / 探活失败四条路径，各断言"指针未变 + 旧目录内容未动 + 后端仍在旧目录上跑"。
 5. **数据目录迁移的用户流程加强**：迁移前显式提示"将复制 N 个文件 / X MB、跳过 `logs` 与 `img-cache`"，并给"先备份"选项。
 
@@ -881,7 +889,7 @@ Some(Regex::new(r"^((mailto:\w+)|(tel:\w+)|(https?://\w+)).+").unwrap())
 
 **验收**：**Windows 真机**两个现场各走一次 —— ① 把库改坏（或人为让迁移失败）后启动，确认"能起来 + 提示可找回 + 备份在位"；② 真做一次数据目录迁移并在中途制造失败，确认指针与旧目录未动。
 
-**门禁**：A 档 gate + CI 绿 + 上面两个真机现场的证据。**文档义务**：**A 档**。`docs/ARCHITECTURE.md` §6 加不变量（"跑 schema 迁移前必须先备份；迁移失败不得留下打不开的库，且必须把失败分类告诉用户"）+ `docs/DEV-LOOP.md`（真机验证清单）+ `docs/RELEASE.md`（备份位置 / 诊断包位置 / 用户可回退到什么程度）+ `docs/GLOSSARY.md`（备份与诊断包的名词）+ devlog。
+**门禁**：A 档 gate + CI 绿 + 上面两个真机现场的证据。**文档义务**：**A 档**。`docs/backend/ARCHITECTURE.md` §6 加不变量（"跑 schema 迁移前必须先备份；迁移失败不得留下打不开的库，且必须把失败分类告诉用户"）+ `docs/DEV-LOOP.md`（真机验证清单）+ `docs/RELEASE.md`（备份位置 / 诊断包位置 / 用户可回退到什么程度）+ `docs/GLOSSARY.md`（备份与诊断包的名词）+ devlog。
 
 **停止条件**：备份在真实库上造成不可接受的启动延迟或磁盘占用（实测后定阈值）；或诊断包无法在不含凭据的前提下提供足够信息 ⇒ 停，先问用户"要不要让用户手动勾选要打包的日志"。
 

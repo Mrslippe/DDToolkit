@@ -14,7 +14,7 @@
  * ## 为什么用"注入 props"而不是读 context
  *
  * `vtuber` / `selectedAccount` / `scene.acc` 都是页面自己持有的状态，
- * 项目也没有全局 store（见 `FRONTEND-ARCH.md` §A3：局部 state + 事件总线）。
+ * 项目也没有全局 store（见 `docs/frontend/ARCHITECTURE.md` §A3：局部 state + 事件总线）。
  * 所以按显式入参注入，保持"依赖一眼可见"，不引入新机制。
  *
  * ## 行为保持要点

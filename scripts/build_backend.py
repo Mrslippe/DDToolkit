@@ -41,7 +41,7 @@ BACKEND_DIR = BINARIES / "backend"
 # 现在：环境必须由 `uv sync` 按 uv.lock 装出（即仓库根 `.venv`），否则直接停。
 #
 # ⚠️ 为什么"直接停"而不是警告一下：本仓的实测口径是「能写成机器判据的就别写成散文」
-#    （`docs/DEV-LOOP.md` §0.1），而"警告"在这种场景下等于没有——见 `docs/ARCHITECTURE.md`
+#    （`docs/DEV-LOOP.md` §0.1），而"警告"在这种场景下等于没有——见 `docs/backend/ARCHITECTURE.md`
 #    §6 第 22 条那类"判据看起来在工作却永不命中"的事故。修复只有一条命令，成本可忽略。
 LOCK_FILE = ROOT / "uv.lock"
 VENV_DIR = ROOT / ".venv"

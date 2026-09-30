@@ -1,49 +1,35 @@
-# 数据层与接口层文档（数据库 · Repositories · Routers）
-
-> 适用版本：`main`（2026-09-29，`MIGRATION_HEAD = f009`，迁移链 22 个版本、14 张表；**路由计数的三种数法见 §3**，别处不要再复述数字）。
-> 阅读路径：HTTP 入口（`app/routers`）→ SQL 封装（`app/repositories`）→ 表映射（`app/models`）→ 迁移（`alembic/versions`）。
-> 系统全貌见 `docs/ARCHITECTURE.md`；抓取链路细节见 `docs/backend-fetch-pipeline.md`；
-> 名词与代码路径速查见 `docs/GLOSSARY.md`；文档索引见 `docs/README.md`。
-> 会话注入：`Depends(get_db)`（`app/core/database.py`）用毕自动 close；每个 SQLite 连接统一 PRAGMA：
-> `journal_mode=WAL`（读写不互斥）、`busy_timeout=30000`（写锁等待而非抛错）、`synchronous=NORMAL`、**`foreign_keys=ON`**。
-
+---
+doc: backend/data-model
+class: module
+scope: 数据表的列级定义、外键与级联规则、迁移链与启动迁移、存储约定、Repository 方法表，以及数据层的不变量（时间口径 / purge / 唯一约束 / 事务边界）
+not-scope: HTTP 路由与状态码 → backend/HTTP-CONTRACT.md；抓取怎么填这些表 → backend/FETCH-PIPELINE.md
+sot: app/models/, app/repositories/, alembic/versions/, app/services/purge.py
+verify: python -m pytest -q tests/test_services.py tests/test_transaction_boundaries.py
+budget: 700
+retire-when: 数据层换掉 SQLite/SQLAlchemy，或表结构整体重做
 ---
 
-## 1. 数据库结构（SQLite，`vtuber.db`）
+## 1. 数据模型
 
 ### 1.1 ER 总览
 
-```
-                        ┌─────────────┐
-                        │  vtubers    │  主播本体（平台无关）
-                        └──────┬──────┘
-                    级联删除（ORM delete-orphan）
-                               │ 1:N
-                        ┌──────▼──────┐
-        ┌───────────────┤  accounts   ├───────────────┐
-        │               └──────┬──────┘               │
-        │ 1:N（不级联，外键在）   │ 逻辑关联（无外键）      │
-        │                      │  platform+platform_uid │
-  ┌─────▼─────┐ ┌────────────┐ │                ┌───────▼──────┐
-  │account_   │ │live_       │ │                │   posts      │
-  │stat_snap- │ │sessions    │ │                │（独立表，联合  │
-  │shots      │ ├────────────┤ │                │投稿每 V 各一份）│
-  ├───────────┤ │live_gift_  │ │                └──────────────┘
-  │（粉丝/直播  │ │days        │ │
-  │状态时序）   │ ├────────────┤ │                ┌──────────────┐
-  └───────────┘ │live_categ- │ │                │thirdparty_   │
-                │ory_overr-  │ │                │vtubers       │
-                │ides        │ │                │（候选索引，无 FK）│
-                └────────────┘ │                └──────────────┘
-                               │ 1:N（不级联）
-                        ┌──────▼──────┐
-                        │vtuber_events│  纪念日 / 活动（手动维护）
-                        └─────────────┘
+```mermaid
+erDiagram
+  VTUBERS ||--o{ ACCOUNTS : "1:N 级联删除"
+  ACCOUNTS ||--o{ ACCOUNT_STAT_SNAPSHOTS : "1:N 不级联"
+  ACCOUNTS ||--o{ LIVE_SESSIONS : "1:N 不级联"
+  ACCOUNTS ||--o{ LIVE_GIFT_DAYS : "1:N 不级联"
+  ACCOUNTS ||--o{ LIVE_CATEGORY_OVERRIDES : "1:N 不级联"
+  ACCOUNTS ||--o{ VTUBER_AVATAR_HISTORY : "1:N 不级联（account_id 可空）"
+  VTUBERS ||--o{ VTUBER_AVATAR_HISTORY : "1:N 不级联"
+  VTUBERS ||--o{ VTUBER_EVENTS : "1:N 不级联"
+  ACCOUNTS ||..o{ POSTS : "逻辑关联（无外键）"
+  THIRDPARTY_VTUBERS }o..|| ACCOUNTS : "候选索引（无外键）"
 ```
 
-（带箭头的 mermaid 版见 `docs/ARCHITECTURE.md` §2.1。）
+> 逐表列级定义见 §1.3（本节只画关系）；外键与级联规则见 §1.2。
 
-**外键与级联规则（重要）**：
+### 1.2 外键与级联规则
 
 | 关系 | 约束 | 删除行为 |
 |---|---|---|
@@ -65,7 +51,7 @@
 > 漏清任何一张 → `DELETE FROM accounts` 被外键挡下 → 整次事务回滚（v0.9.3 修复的
 > 「解除订阅失败」事故，见 devlog/040）。
 
-### 1.2 表定义
+### 1.3 表定义
 
 #### `vtubers` — 主播本体（平台无关）
 
@@ -297,7 +283,7 @@
 
 **没有 Repository 类**：本表的读写全在 `services/assets.py`（`lookup` / `lookup_keys` /
 `get` / `put` / `remember` / `pin` / `stats` / `prune`）—— 它的写入必须与抓取事务**同一个
-session 收口**（先写文件、再写索引行，见 `ARCHITECTURE.md` §6 第 37 条），拆一层仓储只会
+session 收口**（先写文件、再写索引行，见 `docs/backend/ASSETS.md 不变量 37），拆一层仓储只会
 多一次"谁提交"的歧义。⚠️ **不挂外键 ⇒ 不进 `purge.py`**；"还被谁引用"由
 `assets._referenced_keys()` 显式查（`vtubers.avatar` / 账号 `avatar_url` / 历次头像账本）。
 
@@ -314,7 +300,7 @@ session 收口**（先写文件、再写索引行，见 `ARCHITECTURE.md` §6 �
 | `source` | TEXT | 来源（danmakus） |
 | `updated_at` | DATETIME | 周级整表刷新 |
 
-### 1.3 迁移链（alembic，22 版本，head = `f009`）
+### 1.4 迁移链（alembic，22 版本，head = `f009`）
 
 | 版本 | 内容 |
 |---|---|
@@ -352,7 +338,7 @@ session 收口**（先写文件、再写索引行，见 `ARCHITECTURE.md` §6 �
 > ORM 元数据与迁移链的结构等价性由
 > `tests/test_services.py::test_orm_metadata_matches_migration_chain` 看住。
 
-### 1.4 存储约定
+### 1.5 存储约定
 
 - **时区**：库内 datetime 一律 **naive UTC**（SQLite 抹掉 tz）；路由层比较参数须同为 naive；
   `PostOut` / `AccountStatSnapshotOut` 等序列化时补 `+00:00`，避免前端按本地时区偏移 8 小时。
@@ -362,8 +348,8 @@ session 收口**（先写文件、再写索引行，见 `ARCHITECTURE.md` §6 �
   —— 固定文件名会让新头像**覆盖**旧图，历次头像就只剩 URL 没有图。旧库里那些
   `{platform}_{uid}{ext}` 的老文件仍然有效（`avatar_path` 存的就是全名，不做迁移）。
 - **删除**：见 §1.1 外键表 —— 一律经 `app/services/purge.py`。
-
----
+>
+> **删除**：见 §1.2 外键表 —— 一律经 `app/services/purge.py`。
 
 ## 2. Repositories（`app/repositories/vtuber_repo.py`，14 个类）
 
@@ -519,246 +505,103 @@ session 收口**（先写文件、再写索引行，见 `ARCHITECTURE.md` §6 �
 
 ---
 
-## 3. Routers（75 个路由装饰器 = 77 个方法×路径组合）
+## 2. 删除检测（墓碑机制，v0.5.1）
 
-> 口径说明（**三种数法别混**）：
->
-> | 数法 | 值 | 怎么数 |
-> |---|---|---|
-> | **装饰器**（下文「N」用它） | **75** | `vtuber 55` + `auth 4` + `img_proxy 1` + `settings 12` + `messages 2` + `messages_debug 1`（dev-only）；其中 2 个是 `api_route(methods=["GET","POST"])`（`/vtuber/fetch`、`/vtuber/{id}/fetch`）—— ⚠️ **数装饰器必须把这 2 条算进去**，只数 `@router.get/post/...` 会少 2 |
-> | **OpenAPI 方法×路径** | **77** | `sum(len(methods) for p in app.openapi()["paths"].values())`；**这是唯一与实现无关的数法** ⇒ 日常复核用它 |
-> | OpenAPI 路径数 | **63** | `len(app.openapi()["paths"])`（同路径多方法只算 1 条；dev-only 的 `_debug` 路由**不在**，它要 dev token 才挂） |
->
-> ⚠️ **2026-09-29 重新数过**（M5-1 的 `GET /vtuber/notices` + `POST /vtuber/notices/ack`；
-> L2 的 `GET /settings/assets` + `POST /settings/assets/prune` + `POST /settings/assets/pin`）：
-> 实测装饰器 **75** / OpenAPI 方法×路径 **77** / 路径数 **63**。
-> 更早的版本：66/—/—（批次 16）、64/70/67（R42-A）—— 三种数法本来就容易漂。
-> ⚠️ **新增 `/vtuber/xxx` 这类"看起来不像参数"的路径时必须注册在 `/vtuber/{vtuber_id}` 之前**：
-> M5-1 第一版把 `/vtuber/notices` 放在文件下面，`GET` 直接被 `{vtuber_id}: int` 捕获、恒定 422
-> （`tests/test_notices.py::test_route_serves_notices` 当场抓住）。FastAPI 按**注册顺序**匹配。
->
-> ⚠️ **"`app.routes` 对象数"这个口径在新版 FastAPI 下失效了（2026-09-27 实测）**：
-> `include_router()` 现在只往 `app.routes` 里放一个 **`_IncludedRouter` 标记对象**
-> （实测：`app.routes` = 11 = `_IncludedRouter` 5 + `Route` 4 + `Mount` 1 + `/healthz` 1），
-> 子路由要请求时才展开 ⇒ 旧的"66 个 router 对象 + healthz + 4 + Mount = 71"再也量不出来
-> （本仓 fastapi **0.141.1** / starlette **1.7.0**）。**别再引用那个口径**，
-> 也**不要**用 `{r.path for r in app.routes}` 做判据 —— 它会 `AttributeError`
-> （`tests/test_messages.py::_app_paths` 就是为这条踩坑写的注释）。
->
-> **只有「装饰器」这一口径有门禁**（`scripts/gen_doc_numbers.py`），另两种要人肉重数。
-> 复核命令：`python -c "import app.main as m; s=m.app.openapi()['paths']; print(len(s), sum(len([k for k in v if k in ('get','post','put','patch','delete')]) for v in s.values()))"`。
-> 这类数字会随批次漂：漂了就重新数一遍再改，别留着当装饰（`dev_check.py --docs` 只查
-> 版本号/索引/链接这类可机械判定的，**数不出来** —— 所以口径要写清"怎么数的"）。
-> ⚠️ **dev-only 路由也会进"装饰器"计数**：所以它单独一个模块 + 标准名 `router`
-> （`app/routers/messages_debug.py`）—— 用 `debug_router` 这种名字会让它从计数里消失。
+```mermaid
+flowchart LR
+  A["每账号帖子扫描结束"] --> B{"窗口可信？<br/>natural_end 或<br/>stop_existing_pid"}
+  B -- 否 --> Z["只推进 last_seen / scan 标记"]
+  B -- 是 --> C["窗口下界 = 停止帖发布时间<br/>或本轮最旧所见帖"]
+  C --> D{"缺席帖 last_seen_at<br/>< 上一轮扫描完成时间？"}
+  D -- 是 --> E["两击命中 → deleted_detected_at = 本轮时间"]
+  D -- 否 --> F["保持现状，等下一轮"]
+```
 
-### 3.1 `app/routers/vtuber.py` — 主业务路由（55，44 条路径）
+- 「已验证窗口」是防误判关键：增量模式停在某帖时，更早的帖子本轮**根本没扫**，
+  不参与判定；
+- 已归档帖不参与；已墓碑不重复判定、不逆转（复活只刷新 `last_seen_at`）；
+- 判定失败只记日志，不影响抓取结果。
 
-路径直接 `/vtuber/...`、`/account/...`、`/posts...`、`/post/...`、`/externals/...`；
-响应模型走 `app/schemas/vtuber.py`（`Out` 为 `from_attributes`）。
+## 数据层不变量
 
-> **冷启动优化**：scheduler 依赖链（apscheduler/tenacity/httpx/fetcher）较重，路由内不直接
-> import，经 `_sched()` 缓存包装首次调用才导入；测试 monkeypatch 本模块属性即可替换。
->
-> **手动动作会推消息**（M2，devlog/244）：三个"点按钮"端点（`POST /vtuber/{id}/fetch`、
-> `POST /vtuber/fetch-posts`、`POST /vtuber/update-posts`）各在**受理时**推一条
-> `notice.progress`、**完成时**推一条 `notice.message`（带 `originator` = 请求头
-> `X-DDToolkit-Host`，见 `client_host` 依赖；发起方自己的窗口据此**不重复提示**）。
-> ⚠️ 被守卫拒绝（`skipped`）的任务**不发**受理消息；逐项进度仍由状态通道（轮询）负责。
+1. **库内时间一律 naive UTC**，输出补 `+00:00`；
 
-**VTuber**
+2. **posts 无外键**——删除 V / 账号必须走 `app/services/purge.py`（帖子按 platform+uid，
+   子表按 `account_id`：统计快照 / 直播场次 / 礼物日 / 分类校正 / 曾用值 / **历次头像（f008）**；
+   **`profile_cards`（f006）与活动条目按 `vtuber_id`** —— 不是按 account_id），漏清一张就会被
+   `foreign_keys=ON` 整次回滚（v0.9.3 修复的事故；f004 的 `vtuber_field_history` 与 f008 的
+   `vtuber_avatar_history` 两个外键都有，删 V 必须再按 `vtuber_id` 清一遍——`account_id=NULL`
+   的行按 account 清不到；回归用例 `test_delete_vtuber_cleans_account_children`
+   与 `tests/test_vtuber_avatars.py` 的 ⑨ 看住）。清单的真源是
+   `app/services/purge.py` 头部那张表，别在别处再抄一遍；
 
-| 方法 + 路径 | 说明 |
-|---|---|
-| GET `/vtuber/list` | 全部 VTuber（含 accounts） |
-| GET `/vtuber/fetch-status` | 抓取实时状态（TopBar 轮询）：account 跑动/当前/总数 + recent 增量快照，post 跑动/目标 + last_result |
-| GET `/vtuber/{vtuber_id}` | 单 V；不存在 404 |
-| POST `/vtuber` | 建 V；唯一约束冲突 409 |
-| PUT `/vtuber/{vtuber_id}` | 部分更新；404。f004 起可写 `sign_override`（`null` = 撤销覆盖）与 `sign_source_account_id` |
-| GET `/vtuber/{vtuber_id}/profile-cards` | 档案视图卡片布局（按 `y, x`）；空数组 = 还没排过（前端用默认布局渲染）（f006，R37-P2） |
-| PUT `/vtuber/{vtuber_id}/profile-cards` | **整版保存**卡片布局；格位越界 / `card_key` 重复 / 超过 50 张 → 422（**不静默夹取**）；V 不存在 404（f006，R37-P2） |
-| GET `/vtuber/{vtuber_id}/former-values` | 曾用名 / 曾用签名（各最多 5 条、最近优先、按值去重，含平台标注；f004）。**当前未接入 UI**（devlog/075：归「账号信息历史快照」，先不展示） |
-| GET `/vtuber/{vtuber_id}/avatars` | **历次头像可选项**（新的在前）+ `current_url`（当前用的那张，后端推导）；账本为空时用账号现值兜底（`id`/`first_seen_at` 为 null）；V 不存在 404（f008，R47，devlog/249）。只读 —— 记账在抓取侧 |
-| GET `/vtuber/notices` | **通知汇总**（M5-1，devlog/253）：`{now, notices[]}`，**已按优先级排序**；`now` = 服务端毫秒（ttl 判定基准）。⚠️ 路径必须注册在 `/vtuber/{vtuber_id}` **之前**（否则被 int 参数捕获 ⇒ 422） |
-| POST `/vtuber/notices/ack` | 记一条通知**已读**（`{id}` → 落 `app_meta` 的 `notices.acked`，上限 50）；**幂等**；空 id 422。修的是"刷新/深休眠重建后完成报告复活" |
-| POST `/vtuber/{vtuber_id}/background` | 上传自定义背景（jpeg/png/webp/gif，≤10MB，否则 415/413）；**类型按文件头判、限额流式读取、临时文件原子 rename、提交成功后才删旧文件**（`services/vtuber_background.py`，M3b devlog/214）；时间戳后缀防缓存 |
-| DELETE `/vtuber/{vtuber_id}/background` | 清除背景回退头像铺底 |
-| DELETE `/vtuber/{vtuber_id}` | 解除订阅：`purge_vtuber()` 清 posts + 5 张子表 + 活动条目 + 曾用值 + **卡片布局（f006）**，再级联删 V+accounts；外键挡下 → 409 |
+3. **新增迁移必须同步 `MIGRATION_HEAD`**（测试断言与 alembic head 一致）；
 
-**Account**
+4. **唯一约束去重**：账号 `(platform, platform_uid)`、帖子 `(platform, platform_uid,
+   platform_post_id)`、场次 `(account_id, live_id)`、礼物日 `(account_id, source, gift_date)`；
 
-| 方法 + 路径 | 说明 |
-|---|---|
-| GET `/vtuber/{id}/accounts` | 某 V 的账号列表 |
-| POST `/vtuber/{id}/accounts` | 建账号；(platform, platform_uid) 重复 409；成功后**只抓该新账号的账号信息 + 首屏内容**（v0.9.4：`async_fetch_accounts(fast=True)` + `async_fetch_first_screen`，不再重抓该 V 全部账号） |
-| PUT `/account/{account_id}` | 更新账号；唯一冲突 409。**不记曾用值**（手改 ≠ 平台上曾经用过的，devlog/075）；字段锁定已退役（f004） |
-| PUT `/vtuber/{id}/account-order` | 平台徽章拖拽重排：批量写 `accounts.sort_order`（v0.9.7） |
-| DELETE `/account/{account_id}` | 删账号 + `purge_account()` 清理帖子与 5 张子表（卡片布局按 V 挂，不经这条） |
-| GET `/account/{id}/stat-snapshots?limit=` | 统计快照历史（默认 100，上限 1000，时间倒序，UTC 补时区） |
-| GET `/account/{id}/gift-days?limit=` | 礼物日聚合 |
-| GET `/account/{id}/fan-trend` | 粉丝趋势点（按天分桶） |
+16. **新增挂 `accounts` / `vtubers` 外键的表 → 同步 `app/services/purge.py`**：
+    漏一处，删 V 就会被 `foreign_keys=ON` 整次回滚（清单见第 2 条）。
+    ⚠️ 反过来也成立：**故意不挂外键的共享资源表**（f009 的 `local_assets` —— 同一张图可能
+    被多个 V 用、账号删了用户选过的那张还要留）**不进 purge**，代价是"还被谁引用"必须
+    显式可查（`services/assets.py::_referenced_keys()`），否则清理会删掉在用的资源。
 
-**直播场次 / 分类**
+27. **真跑 schema 迁移之前必须先备份**（批次 16，devlog/207）：`app/main.py::_migrate_with_safety`
+    在动手前把库复制到 `<DATA_DIR>/backups/vtuber-<head>-<时间戳>.db`
+    （`app/services/db_maintenance.py::backup_database`）。
+    - **复制 `-wal`、不复制 `-shm`**：WAL 里有"已提交但还没并回主库"的数据，丢了就是丢数据；
+      `-shm` 是共享内存索引，SQLite 打开时会自己重建（同一条理由也记在 `migrate.rs:20-30`）。
+    - **快路径（版本已 == head）不备份** —— 那是常态启动，不能为此每次复制 50MB。
+    - 保留 **最近 3 份**且总量封顶 300MB，超限按**最旧**淘汰，**永远至少留最新那一份**；
+      排序按**文件名里的时间戳**（不是 mtime —— 复制/还原会改 mtime，那会让"最旧"变随机）。
+    - ⚠️ **备份失败不挡住迁移**（磁盘满/权限问题时拒绝启动 = 用户连界面都进不去），
+      但必须**说出来**：`/healthz` 的 `migration.backup.error` + 诊断包。
 
-| 方法 + 路径 | 说明 |
-|---|---|
-| GET `/account/{id}/live-sessions` | 合并场次列表（表内 ∪ 快照推导）+ 分类推断结果 |
-| GET `/account/{id}/live-sessions/{live_id}` | 场次详情：**只回本地库可推导的内容**（场次 + 分类推断 + analysis 预留），**不发起第三方请求**（2026-09-13，devlog/063） |
-| GET `/account/{id}/live-sessions/{live_id}/upstream` | 该场次的第三方取数：弹幕词云 + 场次指标 + 直播动态；进程内缓存 10 分钟 + **同场次单飞**（并发调用共享一轮上游，devlog/081），失败如实降级为 `fetch_failed`/`no_danmaku`（同 devlog/063） |
-| GET `/account/{id}/live-sessions/{live_id}/wordcloud` | 按需自建词云（v3 原始弹幕 + jieba 分词；**用户点按钮才调**，不落库，devlog/061） |
-| PUT `/account/{id}/live-sessions/{live_id}/category` | 手工校正分类（反哺词库） |
-| DELETE `/account/{id}/live-sessions/{live_id}/category` | 取消校正 |
+28. **迁移失败不得留下打不开的库，且失败要分类告诉用户**（批次 16，devlog/207）：
+    迁移抛错时 `_quarantine_database()` 把坏库（**连同 `-wal`**）改名成
+    `vtuber.db.failed-<时间戳>`、删掉 `-shm`，然后**用一本空库继续启动** ——
+    应用可用，档案没丢，`/healthz` 的 `migration` 带出 `{status: "failed", error,
+    quarantined, backup, recovered}`。
+    - ⚠️ 隔离前**必须 `engine.dispose()`**：连接池握着句柄时 Windows 上改名会撞
+      "另一个程序正在使用此文件"，WAL 也要先落盘。
+    - ⚠️ **`/healthz` 是唯一能在"还没拿到 token"时把启动期故障带出去的通路**
+      （启动幕轮询它的时候前端还没有令牌）—— "迁移失败要告诉用户"必须走这里。
+    - ⚠️ **只有"schema 迁移失败"才允许说"数据可以找回"**：端口占用 / 超时 / 后端崩溃
+      **不得**被误报成数据问题（误报会让用户去动数据目录，那才是真丢数据）。
+      这句话在 `frontend/src/utils/bootFailure.ts` 里，**有 vitest 钉着**。
 
-**活动 / 预约 / 第三方索引**
+32. **一次业务写入的多个落库步骤必须共用一次 commit**（R3，devlog/212）：中间多一次
+    `commit()`，失败时就会留下**半写、而且往往不可恢复**的状态。今天唯一必然复现的一处是
+    T0 直播轮询：原来是两笔 commit（先写 `live_*`、再写跳变快照），第二笔失败 ⇒ 状态已落盘、
+    快照缺失，而下一轮 `prev_status == live_status` ⇒ **这条边沿被永久吞掉**（直播日历少一场，
+    `db.rollback()` 救不回来）。现已合成一笔。
+    - **级联清理（`delete_by_*`）与 `AccountStatSnapshotRepo.add` 不许自己 commit**：
+      `app/services/purge.py` 里**一个 `.commit()` 都不许有**，原子性靠调用方**一个**事务收口。
+      判据 = `tests/test_repository_commit_convention.py`（AST 判，不做文本搜索）+ 行为版
+      `tests/test_transaction_boundaries.py` ①（给 purge 中间注入一次 commit ⇒ 立刻红）。
+    - ⚠️ **`LiveSessionRepo.upsert_feed` 与 `upsert_danmakus` 的提交行为不一致**（前者靠调用方
+      后续的 `_flush_pending()` 落盘）：今天两条路都对，但那正是"owner 看不出来"的标本 ——
+      动它们之前先看 `docs/backend/DATA-MODEL.md` §2 的例外表与流程 owner 表。
+    - 五个多表流程的 owner 与失败行为**逐条核实过**（删账号 / 删 VTuber / T0 / 档案布局 /
+      收录），判据全部吃**文件库 + `foreign_keys=ON`**（内存库测不出锁冲突与并发窗口）。
 
-| 方法 + 路径 | 说明 |
-|---|---|
-| GET `/vtuber/{id}/events` / POST 同名 | 手动活动条目列表 / 新增 |
-| DELETE `/vtuber/event/{event_id}` | 删除活动条目 |
-| GET `/vtuber/{id}/future-reservations?days=` | 未来直播预约（解析预约帖） |
-| GET `/externals/vtubers?kw=&source=` | 第三方索引搜索 |
-| GET `/externals/vtubers/by-uid?uid=&source=` | 按 uid 取第三方条目 |
 
-**帖子**
+## ORM 会话的两条坑
 
-| 方法 + 路径 | 说明 |
-|---|---|
-| GET `/posts/{platform}/{uid}` | 某账号全部帖子（旧接口） |
-| GET `/posts/{platform}/{uid}/paginated` | 服务端分页；`type`/`is_archived`/`is_deleted`/`q`/`date_from`/`date_to`（`page_size` 1-200） |
-| GET `/posts/{platform}/{uid}/stats` | 统计概览 |
-| POST `/posts` | 建帖；三元组重复 409 |
-| PUT `/post/{post_id}` / DELETE `/post/{post_id}` | 更帖 / 删帖；404 |
+### 6.20 ⚠️ `SessionLocal` 是 `autoflush=False`：写一行再查它，**查不到自己刚写的那行**（2026-09-28 加，devlog/249）
 
-**抓取 / 归档 / 候选池**
+R47 的头像账本服务第一版没写 `flush`，于是"先查有没有同一 URL 的行 → 没有就追加"这个
+**幂等 upsert 在同一个未提交会话里连续调用时会重复插入**（上一次 `db.add()` 还在
+`session.new` 里，查询看不到它）⇒ 撞唯一键 `uq_vtuber_avatar_url`，而它是
+**整批抓取的 commit 时**才炸 —— 症状与"抓取偶尔整批失败"一模一样，离现场很远。
 
-> ⚠️ **未登录闸门**（devlog/086）：下面带「内容接口」标记的端点在未登录时**直接 403**
-> （`capabilities.content_fetch_allowed()`）—— 匿名打 B 站空间接口会被平台 `412 request
-> was banned`（IP 级），所以"试了失败"不可接受。账号信息类与归档类**不挡**。
+两条相关事实：
+- 本仓 `app/core/database.py::SessionLocal = sessionmaker(autocommit=False, autoflush=False, ...)`
+  ⇒ **`autoflush=False` 不是默认值**，从别处搬来的"查一下就有了"的经验在这里不成立；
+- 被 `db.delete(row)` 标删的行**同理**：不 flush 的话下一次查询**还会看到它**（删除还没下发）。
 
-| 方法 + 路径 | 说明 |
-|---|---|
-| GET `/capabilities` | 本机能力矩阵：`features`（三态 `full`/`degraded`/`requires_login` + 用户说明 + 实测依据）/ `limited` / `wbi` / `measured_at`。前端据此**标注**受限功能而不是隐藏（devlog/086） |
-| GET/POST `/vtuber/fetch` | 手动全量抓账号信息；自动档在跑时**抢占**，仅另一个手动任务在跑才 skipped |
-| GET/POST `/vtuber/{id}/fetch` | 抓单个 V 账号信息（同样可抢占自动档） |
-| POST `/vtuber/fetch-posts?name=&platform=&video_pages=&dynamics_pages=&full=` | 按名字抓帖子（-1 全量；`full=true` 后台执行）；**抓前先跑归档规则**。内容接口 → 未登录 **403** |
-| POST `/vtuber/fetch-all-posts` | 全部账号全量抓（视频+动态）。内容接口 → 未登录 **403** |
-| POST `/posts/archive?days=30` | 归档规则；幂等，返回 cutoff/unarchived_total。**纯本地，不需登录** |
-| POST `/vtuber/update-posts?name=` | 更新未归档动态：先归档再抓动态，整页已归档即停。内容接口 → 未登录 **403** |
-| GET `/vtuber/pool/search?kw=` | 本地候选检索（R11，devlog/083）：`vtubers.csv`（`origin='pool'`）+ `thirdparty_vtubers` 索引（`origin='index'`）两来源合并，按 `(platform, uid)` 去重（池优先）、剔除已入库 |
-| GET `/vtuber/bili/search?kw=&page=` | **直接从 B 站检索**（池外收录通道，R11）：纯数字 ≥5 位 → `acc/info` + `relation/stat` 精确查；否则 `wbi/search/type` 模糊搜；结果带 `in_library`。⚠️ **路径是两段**：`/vtuber/bili-search` 会被先注册的 `/vtuber/{vtuber_id}` 吃掉 → 422 `int_parsing`。**未登录也能用**（匿名 WBI 签名，devlog/086；`acc/info` 可能被平台间歇风控 → `upstream_degraded`）。上游失败如实回 `error`+`hint`（`rate_limited` / `page_limit` / `upstream_degraded` / `network_error` / `not_found`）；预算：0.8s 串行 + 20 次/分 + 5 分钟缓存 + 最多 3 页 |
-| POST `/vtuber/adopt` | 收录 V+账号。`source=None/'pool'` → 必须在候选池内，名称以池为准（池内无 404）；`source='bilibili'` → **池外通道**：platform 必须是 bilibili（否则 400）且**服务端自己打一次 `acc/info` 校验**（**客户端给的名字永不被信任**）：确实没这个人 → 404，**没问到**（未登录且拿不到密钥/网络/风控）→ **503** + 原因。已入库/并发冲突 409；成功后后台抓该 V + 回填历史（未登录时**首屏内容跳过**，账号信息与第三方历史照常） |
-| POST `/vtuber/fetch-accounts` | 批量：后台抓全部账号信息，立即返回；手动任务在跑 409 |
-| POST `/vtuber/batch/fetch-all-posts` | 批量：后台全量抓帖子 |
-| POST `/vtuber/batch/update-unarchived` | 批量：后台更新未归档 |
-| POST `/vtuber/batch/archive?days=30` | 批量归档，同步执行 |
-
-**关键调用点**：
-- `/adopt` 与 `POST /{id}/accounts` 为同步端点（线程池执行），后台抓取必须走
-  `BackgroundTasks`——直接 `asyncio.create_task` 会因工作线程无事件循环抛 `RuntimeError`；
-- `/adopt` 自 R11（devlog/083）起是 **`async def`**：池外通道要用
-  `await bili_search_svc.exact_user(uid)` 做服务端校验（客户端给的名字不算数）；
-- 路由顺序约束：`/vtuber/fetch-status` 必须注册在 `/vtuber/{vtuber_id}` **之前**；
-  **新增 `/vtuber/xxx/yyy` 之外的子资源端点时更要小心**：`/vtuber/bili-search`
-  会被 `/vtuber/{vtuber_id}` 匹配掉（422 `int_parsing`），所以是 `/vtuber/bili/search`；
-- 抓取类端点的忙判定用 `manual_task_running()`（自动档持锁不算忙，允许抢占），
-  外部批次（T4）用 `any_fetch_running()`。
-
-### 3.2 `app/routers/auth.py` — 登录（4：扫码 3 + 小红书粘贴 cookie 1）
-
-| 方法 + 路径 | 说明 |
-|---|---|
-| POST `/auth/{platform}/qr/start` | 生成二维码会话。bilibili 返回 `{qr_id, url}`；weibo 返回 `{qr_id, image}`（data URL）。同平台旧会话作废 |
-| GET `/auth/{platform}/qr/check?qr_id=` | 轮询状态机：`waiting / scanned / confirmed / expired / failed`；`confirmed` 时完成登录并持久化凭据；TTL 180s |
-| GET `/auth/{platform}/status` | `{logged_in, needs_login, uid, name}`；B 站走内存维护结果，**微博做真实有效性探测**（结果缓存 60s），**小红书只报"配齐了没"**（另带 `configured/missing/note`；没有免签名的探活端点，不做探测） |
-| POST `/auth/xiaohongshu/cookie` | **粘贴 cookie**（body `{"cookie": "a1=…; web_session=…"}`）。⚠️ 先校验再落盘：缺 `a1`/`web_session` ⇒ **400 且不写 `.env`**；成功回 `{status:"saved", ...status()}`（devlog/233） |
-
-- 实现分发：bilibili → `app/services/auth.py`（SESSDATA 管理、心跳 + `refresh_token` 续期，
-  `run_maintenance()` 由 lifespan 起协程）；weibo → `app/services/weibo_auth.py`（Session v2 扫码）；
-  **xiaohongshu → `app/services/xhs_auth.py`**（粘贴 cookie，**不走 `qr/*`**：它连二维码接口都要签名）；
-- 凭据持久化经 `app/services/env_store.py`（读改写 `.env`，临时文件 + 原子替换）；
-- 新增平台只需在 `_PLATFORMS` 注册 + 提供 `begin_login` 实现（见 `docs/platforms-extension-guide.md`）。
-
-### 3.3 `app/routers/img_proxy.py` — 图片代理（1）
-
-| 方法 + 路径 | 说明 |
-|---|---|
-| GET `/img-proxy?url=` | 转发远端图片；磁盘缓存命中直接回，回源失败 502 |
-
-**安全（防 SSRF + 存储型 XSS）**：仅 http/https；主机匹配 `IMG_PROXY_ALLOWED_HOSTS`
-（默认 `hdslb.com,sinaimg.cn,wbcdn.cn`）；`follow_redirects=False` 逐跳重新校验（最多 3 跳）；
-限响应 10MB；`content-type` 仅允许图片/octet-stream；按主机带 Referer 防盗链。
-
-**性能**：磁盘缓存 `static/img-cache/{md5}.bin + .json`（TTL 7 天，原子写入，过期 2×TTL 清理）；
-模块级共享 `httpx.AsyncClient`（lifespan 关闭时释放）。
-
-### 3.4 `app/routers/settings.py` — 应用设置与偏好（5，R14a/R14b devlog/091、092）
-
-| 方法 + 路径 | 说明 |
-|---|---|
-| GET `/settings` | 规格表（`specs`：默认/范围/单位/生效时机/当前值/是否改过）+ `readonly`（只读项**逐条带理由**）+ `info`（版本/数据目录/库/端口/迁移 head/日志/PID） |
-| PUT `/settings` | 部分更新：`{"values": {"KEY": 值}}`。白名单 + 类型 + 闭区间 + **跨字段**（上限 ≥ 下限）校验，任一不过 → **400**（detail 是中文原因，前端直接显示）；`null`/空串 = 删覆盖回默认。落库成功后才替换内存快照 |
-| POST `/settings/reset` | 全部恢复默认（删掉 `app_meta` 里所有 `settings.*` 行） |
-| GET `/settings/prefs` | 界面偏好（R14b：`theme`）+ 允许取值 + **当前能力说明**（"深色主题尚未实现…"由后端下发，界面不自己编） |
-| PUT `/settings/prefs` | 偏好部分更新（枚举白名单在后端：`light|system`；`dark` 现在还写不进来 → 400）。存 `app_meta` 的 `prefs.` 命名空间；库里存了白名单外的值 → 记 warning 并按默认值处理（**不覆盖用户数据、不让窗口打不开**） |
-
-- **可热更 vs 只读的边界**由 `app/core/runtime_settings.py::SPECS` 定义（16+3=19 个键）；
-  只读项写在同文件 `READONLY_NOTES` 里，界面照实列出"为什么不给改"；
-- 读取路径：`config.Settings.__getattribute__` 对 SPECS 内的键先问覆盖层
-  （优先级 **实例属性 > 覆盖层 > 类属性默认值**）；调用点全在 `services/scheduler.py`，
-  都是"每轮/每账号读一次"，所以改完**下一轮生效、不重启**；
-- 落库复用 `app_meta`（前缀 `settings.`）而**不新建表**：与 `app_meta` 同构的新表只是
-  多一处漂移面 + 一次迁移 + 一次 `MIGRATION_HEAD` 变更，且要让 purge 知道它（应用级配置
-  本来就不该随某个 V 被清掉）。偏好同理走 `prefs.` 前缀；
-- **为什么 settings 与 prefs 分成两组端点**：语义不同 —— settings 是"抓取参数"（有范围、
-  下一轮生效），prefs 是"界面长什么样"（枚举、立即生效）。混在一个 PUT 里会让两套校验
-  规则纠缠，也会逼着"外观"分区挂上"下一轮生效"这种不相干的说明。
-
-### 3.5 `app/routers/messages.py` — 推送通道（2）+ `messages_debug.py` — dev-only 合成钩子（1）
-
-| 方法 + 路径 | 说明 |
-|---|---|
-| GET `/messages/stream` | **SSE 推送通道**（M0，devlog/241）。首帧 `: connected` 注释行 → 消息帧（`id: <seq>` + `data: <json>`）→ 空闲 15s 发 `: ping`。**只在带 `Last-Event-ID` 时补发**环形缓冲里更新的消息，且帧内 `replay: true` |
-| POST `/messages/ack` | **客户端确认"真的读到了流"**（M1，devlog/243）：前端在收到**第一块字节**时发一次（每条连接一次），后端把见证写进日志（`推送通道：客户端已确认读到流`）—— 真机（WebView2）验收靠这一行；同时是 M5「目睹才报」订阅者注册表的雏形 |
-| POST `/messages/_debug/publish` | **dev-only**：合成一条消息（`ui_probe` / 端到端测试用）。未知 `type` → 400。`DEV_API_TOKEN` 为空时这条路径**根本不在路由表里** |
-
-- `app/services/messages.py::MessageHub` 是**推送侧唯一产生方**：类型白名单校验 → 环形
-  50 条 → 投给所有订阅者（每个订阅者一条有界队列 200，满则丢最旧并计数）。`publish()`
-  是**同步的、任何线程可调**（开播边沿产生在 T0 守护线程里，那里没有事件循环）⇒ 经
-  `queue.Queue` 中转、由 `start()` 起的 drain 任务在应用循环里投递。**模块级 asyncio
-  原语一个都不留**（`ARCHITECTURE.md` §6 第 15 条：综合档每轮一个 `asyncio.run()`）。
-- **为什么是 "SSE over fetch" 而不是 `EventSource`**：业务端点全要 `X-DDToolkit-Token`，
-  而原生 `EventSource` 不支持自定义请求头 ⇒ 只能把 token 拼进 URL，那是硬停止条件
-  （token 进日志/历史）。所以前端用 `fetch` + `ReadableStream` 读同一个 `text/event-stream`。
-- **与 `fetch-status` 轮询并存、不替代**：轮询是一致性兜底（推送漏发、重连窗口）。M0
-  **不退役**轮询，退役与否是后续批次的事。
-- 消息类型是**隐式契约**（`domain.vtuber.updated` / `domain.account.snapshot` /
-  `domain.posts.changed` / `domain.live.edge` / `notice.progress` / `notice.alert` /
-  `notice.report` / `notice.message`）：前端按它分发，所以 `publish()` 对不认识的
-  类型直接抛 `ValueError`。**发布点必须放在 `db.commit()` 之后**（事务可能回滚，
-  消息收不回）。真源：`app/services/messages.py` 头部 + `tests/test_messages.py`。
+⇒ 规矩：**服务层里"读-改-写"同一个会话时，读之前先 `db.flush()`**（判据 = 那次调用
+必须能看见本次会话里之前写/删的行）。护栏写法见 `tests/test_vtuber_avatars.py` 的封顶用例：
+**不 flush 就会多出一行**，是能跑红的，不是纸面规矩。
 
 ---
-
-## 4. 分层注意点
-
-- **依赖方向只许向下**（M1a，devlog/213）：`routers → services → repositories → models`，
-  外加一条**叶子层** `app/domain/`（无 IO 的纯函数，上下都能用）。
-  `repositories` **不许** import `app.services`、`models` 不许 import 上面任何一层、
-  `domain` 连 `sqlalchemy`/`httpx`/`fastapi` 都不许碰 —— 判据
-  `tests/test_dependency_direction.py`（AST 扫 import，不是文本搜索）。
-  纯函数要下沉时放 `app/domain/`，别让下层为了一个字符串函数去 import 服务层；
-- **上传 / 替换文件类操作的三条纪律**（M3b，devlog/214）：① 限额在**读的时候**生效
-  （按块读、超限立刻停；有 `size` 就连读都不读）—— 别先 `await file.read()` 全量进内存；
-  ② 类型按**文件头**判，客户端声明的 `content-type` 只是提示（矛盾时 415）；
-  ③ **先写临时文件 → 原子 `os.replace` → 提交成功之后才删旧文件**，任何一步失败都要
-  保证旧文件 + DB 里的路径原样还在、且不留临时文件。真源与判据：
-  `app/services/vtuber_background.py` 头部 + `tests/test_background_upload.py`；
-- **删除必须过 purge**：posts 无外键 + 5 张子表（+ f006 的 `profile_cards`，按 vtuber_id）有外键且不级联（§1.1）；两个删除端点都已接
-  `app/services/purge.py`，返回 409 而不是 500；
-- **409 语义**：唯一约束冲突（`IntegrityError`）统一 `rollback → 409`，覆盖 V/账号/帖子建改入口
-  与并发收录竞态；
-- **时区**：库内 naive UTC；比较参数须同为 naive；输出模型补 `+00:00`；
-- **归档边界剪枝**：抓取任务前置 `archive_old_posts`，已归档条目不再产生任何网络请求；
-- **迁移链纪律**：新迁移必须同步 `MIGRATION_HEAD`（tests 断言）；快路径依赖版本号判断；
-- **新增挂 `accounts`/`vtubers` 外键的表时，必须同步 `app/services/purge.py`**（否则解除订阅
-  会被外键整次回滚）。

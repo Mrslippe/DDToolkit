@@ -1,12 +1,12 @@
-# 轻资产长期储存模块（设计规格，2026-09-29）
-
-> **一句话**：把「**小、不变、反复要**」的远端资源（头像 / 帖子封面 / 企划徽标…）
-> **按稳定键固化进数据目录** + 一份 SQLite 索引 + pin/清理策略 ⇒
-> 「再要一次」从「再发一次请求」变成「读盘」。
->
-> 本文是**规格**（写目标与判据）。文中凡描述"现在是什么"的句子都带**核实日期**
-> （`20xx-xx-xx`）—— 那是快照，复核时以代码为准。
-
+---
+doc: backend/assets
+class: module
+scope: 图片代理与本地资产：远端资源固化的设计（稳定键 / 两条摘要 / local_assets 索引 / pin 与清理）、与 img-cache 的边界、契约与派生字段、风险与待拍板，以及文件写入的原子性不变量
+not-scope: 前端怎么渲染图片 → frontend/UI-MAP.md；头像/背景的业务规则 → backend/DATA-MODEL.md
+sot: app/services/assets.py, app/routers/img_proxy.py, app/services/vtuber_avatars.py, app/services/vtuber_background.py
+verify: python -m pytest -q tests/test_assets.py tests/test_cover_assets.py
+budget: 700
+retire-when: 资产改成对象存储，或不再本地化远端资源
 ---
 
 ## 0. 它要解决的四类问题（都带 2026-09-29 实测证据）
@@ -137,22 +137,8 @@ prune(kind, max_bytes, dry_run=True)    # 按 LRU 淘汰**未 pin 且未被引�
 
 ---
 
-## 5. 批次与判据（每批独立可交付）
-
-| 批 | 内容 | 判据（可机器判） |
-|---|---|---|
-| **L0** | 本文档 | `doc_check` 0 FAIL |
-| **L1** ✅ **已落地 2026-09-29（devlog/257）** | `local_assets`（f009）+ `services/assets.py` + 头像接入 + `avatar_local` 从索引派生 + 账本按稳定键归并 | ① 同一 URL 第二次**0 次图片请求**（正对照：第一次必须发）；② 同图不同 URL **只存一份**；③ 稳定键命中 ⇒ 不发请求；④ 索引有、文件缺 ⇒ 自动补下；⑤ `pin` 的资产 prune 后仍在（另加"被引用的也不许清"）；⑥ **真实样本**：V#16 那条已过期 URL 从 assets 取到本地文件（真机实测 57615 字节 + sha256 逐字节一致）。判据 19 条新增 / 反向验证 10/10 |
-| **L2** | `stats` / `prune(dry_run)` / 设置页读数 / `ui_probe --assets` 或诊断页 | 清空 `img-cache` 后**外观不变**；prune 不动 pinned 与被引用项；dry-run 与实际一致 |
-| **L3** ✅ **已落地 2026-09-29（devlog/261）** | 未归档帖封面固化（每轮 20 张 / 24MB、可关）+ `cover_local` + 列表本地优先 | 固化数量 = 上限（条数 + 字节）；已固化的**零请求**；离线/源站挂了仍可见。⚠️ **实测推翻了「封面是轻资产」这条前提**：214 条未归档封面 = **220 MB（平均 1.1 MB/张）**，见 §6 第 1 条与 devlog/261 §二 |
-| **L4** ✅ **部分落地 2026-09-29（devlog/262）** | ① **历史行按 sha256/稳定键合并**（`scripts/merge_avatar_versions.py`，只并行不删文件）② **`--verify` 强制回源校验**（`scripts/verify_assets.py`，≥7 天节流、默认只报告） | ⏭ **其他 kind 不做**：目前没有消费者（加 kind 的成本已被 `local_assets.kind` 压到很低，等真有需求再按同一模块加） |
-
-> L1 落地时与本文的两处**有意差异**（执行方案 §3 L1 已同步）：① 文件名摘要用**稳定键**
-> （不是完整 URL，否则微博换签名每次都造一个新文件）；② 「本次丢失那条」不 `pin`
-> —— `pin` 只给"用户**此刻**选中的那张"，历史选项靠**引用保护**（账本行引用 ⇒ prune 不动它），
-> 否则 pin 会渐渐覆盖所有历史选项、失去意义。
-
----
+> **批次与判据**（L0–L4 的切分、每批判据、落地状态）→ `docs/plans/light-assets-execution.md`；
+> 本节不复述那张表。
 
 ## 6. 风险（按严重度）
 
@@ -180,3 +166,66 @@ prune(kind, max_bytes, dry_run=True)    # 按 LRU 淘汰**未 pin 且未被引�
 2. **封面固化的范围与节奏**：只固化 **`is_archived=0`** 的帖子封面；**每轮上限 20 张**、
    走独立限速、设置项可关（默认**开**）。
 3. **`--verify` 强制回源校验**：默认关，间隔 ≥7 天（防"换了图没换文件名"的极端情况）。
+
+## 资产与文件写入不变量
+
+34. **上传 / 替换文件：先写临时文件、原子 rename、成功之后才删旧的**（M3b，devlog/214）：
+    `routers/vtuber.py` 的背景上传原本是「**先删旧文件、再写新文件**」三行 —— 写盘失败
+    （磁盘满 / 权限 / 断电）就把用户原来的背景弄丢了，而 DB 里还指着那个不存在的路径
+    ⇒ 卡片页背景空白且**无法恢复**。三条一起才成立（真源 `services/vtuber_background.py`）：
+    - **限额在"读"的时候生效**：按块读、超限立刻停；`UploadFile.size` 已知时连读都不读
+      （原来是 `await file.read()` 全量进内存**之后**才判 10MB ⇒ 一个大上传先吃满内存）；
+    - **类型按文件头判**：`content_type` 是客户端声明的，改个扩展名就能把 HTML 存成 `.jpg`
+      再由 `/static` 原样吐出来；声明与内容**矛盾**时 415（吵闹的失败）；
+    - **写临时文件 → 同目录 `os.replace`（原子）→ DB 提交成功之后才删旧文件**；
+      提交失败要把刚写好的新文件删掉（否则是孤儿），任何失败都不许留临时文件。
+      判据 `tests/test_background_upload.py`（14 条，含**真的注入**的写盘失败 / 半写 / rename 失败 /
+      提交失败；把这一批判据拿回旧实现上跑 ⇒ **7 条红**）。
+
+36. **同一份数据不许有两个渲染器**（R46，devlog/249）：图片一律走
+    `components/common/ProxyImage`（"直连 → `/img-proxy` → 占位"三态链），
+    "哪些主机必须直接走代理"这条规则**只许在 `utils/imageHost.ts` 写一遍**。
+    2026-09-13 修过一次同类问题（左栏自己拼 `bili.avatar_path ?? bili.avatar_url` ⇒
+    档案设置换过头像后"卡片变了、左栏没变"），当时抽了 `resolveAvatar`；
+    但**只抽了"取哪张"，没抽"怎么渲染"** —— 右栏 hero 换成 `ProxyImage` 时左栏还留着
+    radix `Avatar` 的裸 `<img>`，于是同一个微博头像 URL：hero 走代理拿得到、左栏直连被
+    防盗链 403 ⇒ 用户看到「右栏变了、左栏变灰底首字」。
+    ⇒ 判据分三层：**口径**（`resolveAvatar` 单测）+ **渲染路唯一**（结构判据
+    `utils/avatarRender.test.ts`：两处都必须 `<ProxyImage`、全站不许有 `<AvatarImage`、
+    `imgProxyUrl(` 只许出现在 `imageHost.ts`）+ **接线**（探针 `--profile-sync` 比
+    左右栏的 `data-render-src`）。⚠️ 只比 `data-src`（解析出来的源 URL）**永远量不出这个
+    bug** —— 出事时左右栏的 `data-src` 一模一样。
+
+37. **远端资源要"抓一次、长期用"**（L1，devlog/257）：头像/封面这类**小、不变、反复要**的
+    资源一律经 `services/assets.py` 固化进 `static/assets/{kind}/`，索引在 `local_assets`。
+    四条一起才成立（真源 `services/assets.py` 头部）：
+    - **键 = 去掉签名参数的 URL**（`assets.key_of`，白名单 `SIGNATURE_PARAMS`）：
+      实测微博头像签名约 3 小时轮换一次，同一张图的两次抓取只差 `Expires`/`ssig`
+      （盘上两个文件 sha256 逐字节相同，样本在 `tests/fixtures/light_assets.json`）
+      ⇒ 按完整 URL 去重等于没去重；
+    - **文件名 = 稳定键的 URL 摘要**（不是内容摘要）：内容摘要要下完才知道 ⇒
+      每次都先发请求，恰好废掉本模块的主要收益。内容摘要另存 `sha256` 列（去重/校验）；
+    - **先写文件、再写索引**，且 `get()` 命中要求**文件与索引都在**：索引说有盘上没有 ⇒
+      当未命中并重下（复用同一行修复）。反过来会在崩溃后留下"索引说有、盘上没有"的死条目；
+    - **`remember()` 只登记、绝不搬迁**：`static/avatars/` 的历史文件留在原地
+      （用户磁盘上的文件只许增不许减/改 —— 方案 §4 S-1）。
+    ⚠️ 已知取舍：稳定键命中就**不回源核对**，万一平台"换图不换文件名"我们会一直用旧图
+    （实测微博/B 站换图都会换文件名）⇒ 留 `--verify`（≥7 天一次）这个口子在 L4。
+    ⚠️ 清理的**引用保护**（`_referenced_keys`）与被引用项的 pin 是两道防线，缺一条就会把
+    用户正看着的头像删掉（L2 的 `prune` 判据）。
+
+---
+
+
+## 文件类判据的坑
+
+### 6.14 ⚠️ 「文件被程序占着」类判据**必须分平台**（2026-09-26 加，devlog/215）
+POSIX **允许**改名 / 删除**打开中**的文件，Windows **不允许**（撞"另一个程序正在使用此文件"）。
+批次 15 里 `test_dispose_releases_the_file_so_it_can_be_renamed` 的"不 dispose 就改不动名"
+那半条写成无条件 `pytest.raises(OSError)`，**Linux 两条腿一起挂在 `DID NOT RAISE` 上**
+（Windows 腿反而是绿的 —— 本地那条腿永远看不见）。
+
+**规矩**：凡判据依赖"文件被占用 / 删不掉 / 改不了名"这类**操作系统语义**，就
+① 用 `os.name == "nt"` 分开断言，② **可移植的那一半要在两个平台都断言**
+（这里 = "dispose 之后一定改得动"），③ 边界写进 docstring —— 别让它变成一条"只在 CI 上红"
+的谜题。同族坑：Rust 侧 `delete_old_dir` 的 junction 用例、`migrate.rs` 的文件占用重试。

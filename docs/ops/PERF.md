@@ -1,0 +1,122 @@
+---
+doc: ops/perf
+class: module
+scope: 占用的实测口径与基线：后端常驻内存与打包体积、整机占用与启动耗时，以及这些数怎么在自己机器上复测
+not-scope: 怎么打包发版 → ops/RELEASE.md；怎么定位功能 bug（见 DEV-LOOP）
+allow-measures: 本篇是门禁基线的登记处，测量值就是它的内容（§3）
+sot: scripts/perf_report.py
+verify: python scripts/perf_report.py
+budget: 700
+retire-when: 实测脚本换掉，或性能不再是关注点
+---
+
+## 1. 后端常驻内存与打包体积（2026-09-16 实测，devlog/121）
+
+> 起因：用户看任务管理器问"后端还是占 128MB"。结论先摆：**这是框架地板的量级，不是缺陷** ——
+> 我们自己的业务代码只占其中约 **8MB（6%）**，其余是 Python 运行时与框架依赖。
+
+**打包版空闲**（`binaries/backend/ddtoolkit-backend.exe`，空数据目录，就绪后静置 8s）
+
+| 指标 | 值 |
+|---|---|
+| **私有工作集（任务管理器"内存"列）** | **128.7 MB** |
+| 总工作集 / 提交 | 117.1 MB / 97.8 MB |
+| 线程 / 句柄 / 冷启动到就绪 | 12 / 219 / 2.0 s |
+
+**分段归因**（dev 同版本解释器，按组 import 后读工作集；跨口径有 ±10MB 模糊，比例可靠）
+
+| 段 | 累计 | 本段增量 |
+|---|---|---|
+| 裸 CPython 3.14 → +标准库 | 20.5 MB | 17.3 + 3.2 |
+| + FastAPI/Starlette（连带 Pydantic / anyio） | 43.1 MB | **+22.6** |
+| + uvicorn | 49.4 MB | +6.3 |
+| + SQLAlchemy / Alembic | 77.5 MB | **+28.1**（最大单块） |
+| + APScheduler / httpx | 82.7 MB | +5.2 |
+| + `app.core`（配置 + 数据库引擎 / PRAGMA） | 89.9 MB | +7.2 |
+| + `app.main`（**全部业务代码**：路由与服务） | 98.1 MB | **+8.2** |
+| + `import jieba`（只导模块） | 100.8 MB | +2.7 |
+| + `jieba.initialize()`（前缀词典常驻） | 155.6 MB | **+54.8** |
+
+打包版比 dev 多 ~19MB（自带一份 `python314.dll`、`base_library.zip`、冻结导入器与额外 MSVC/UCRT DLL）。
+**jieba 词典只在真开过一次词云之后才常驻**（R24a 起不再启动预热）：这既是 178MB → 128MB 的来源，
+也是"托盘常驻久了内存会不会涨"目前**唯一已知的涨点**。
+
+**打包目录里"在盘不在内存"的东西**（`_internal/` 共 100.6MB，空闲都不驻留）
+
+| 条目 | 体积 | 说明 |
+|---|---|---|
+| `jieba/` 词典数据 | 29.6 MB | 一开词云就变成内存里那 ~55MB，且不回收 |
+| `numpy` + `numpy.libs` | 25.9 MB | **`app/` 里无人 import** —— Pillow `Image.fromarray()` 里那句函数级 `import numpy` 被静态分析跟进来的 |
+| `PIL` | 12.7 MB | 同上（由依赖链的钩子带进图） |
+| `win32/` `pywin32_system32/` | 1.1 MB | **在 PyInstaller 依赖图里根本不存在** → 历史构建残留（构建产物没被彻底清干净） |
+
+> **复测方法**（本次用的两把尺子）：① 打包版空闲占用 —— 以 `DDTOOLKIT_DATA_DIR` 指空目录起 exe，
+> 等 `DDTOOLKIT_READY` 后读性能计数器 `\Process(ddtoolkit-backend)\Working Set - Private`（= 任务管理器口径）；
+> ② 分段归因 —— 按上表顺序逐组 `import`，每次读 `GetProcessMemoryInfo().WorkingSetSize`
+> （⚠️ ctypes **必须声明 argtypes**：`GetCurrentProcess()` 的伪句柄是 -1，不声明会按 32 位传、读到恒 0）。
+> 诊断脚本 `scripts/check_danmaku_fetch.py` 可验词云上游现况（中文控制台需要 `PYTHONIOENCODING=utf-8`）。
+>
+> **优化候选（都评估过、当前都不做**，用户 2026-09-16 口径"只记账不删"）：词云词典空闲卸载 **−55MB** /
+> 打包瘦身（排除 numpy+PIL）**−38.6MB 磁盘、内存无变化** / Alembic 懒加载（几 MB）。详见 `docs/TODO.md` §1.4。
+
+## 2. 整机占用与启动（"低配机器跑得怎样"的实测口径，2026-09-17，devlog/134）
+
+> 起因：用户问"这个应用在较低性能的机器上运行得怎样，或者最低限度要求怎样的性能"。
+> **§3.12 只量了后端一个进程**，而使用者在任务管理器里看到的是一整片：
+> 壳 + 五六个 WebView2 进程 + 后端 + conhost。这一节把那棵树量全，并给出**可复跑的尺子**
+> （`python scripts/perf_report.py`）。
+
+**实测环境**：Ryzen 5 5600GT（6 核 12 线程）/ 14GB / 便携版 1.0.2 / **空数据目录**（0 账号）
+/ Vite 无关（跑的是打包产物）。内存口径 = 性能计数器 `\Process(*)\Working Set - Private`
+（= 任务管理器「内存」列）。
+
+| 指标 | 实测 | 拆解 |
+|---|---|---|
+| 点图标 → 后端就绪 | **首启 3.1–4.4s / 热启动 2.2–2.9s** | 后端自报：首启 3119–3865ms（含 17 步迁移 742ms）、热启 1673–2707ms；其余是壳拉起 sidecar + WebView2 初始化 |
+| 其中 `import app.main` | 热启 **855–1207ms**（最大单块） | SQLAlchemy / Alembic / FastAPI 的 import 地板，§1 已做过一轮懒加载（vtuber.py 不 import scheduler） |
+| 整机私有工作集（空闲） | **243–257 MB** | 后端 83.4–96.7 + **WebView2 六个进程 143–152** + 壳 8.9–10.5 + conhost 1 |
+| 线程 / 句柄 | **194–199 / 4301–4582** | 后端 12 线程；其余几乎全是 WebView2（Chromium 多进程） |
+| 空闲 CPU | **0.86–1.19s / 60s ≈ 1.4–2.0% 单核** | 抓取是**定时器节奏**，与 CPU 无关；这段还含首启扫码轮询 |
+| **托盘深休眠后**（隐藏满 10 分钟销毁 WebView） | 进程 **9 → 3**，私有工作集 **230.5–250.6 → 91.5–92.5 MB（省 139–158）** | 只剩后端 + 壳 + conhost —— **低内存机器最有效的一根杠杆**。应用自己的日志链路：`已隐藏到托盘 → CloseRequested → 深休眠：已销毁界面 → Destroyed → RunEvent::ExitRequested → 拦下（托盘常驻）` |
+| 磁盘 | 便携解压 **135 MB** / 安装包 57.5 MB；空库数据目录 0.6 MB | 真实使用约 160MB（图片缓存上限 300MB，见 README） |
+
+**单核亲和实验**（弱 CPU 代理，`--affinity-proxy`）：把后端限制到 1 个逻辑核（启动路径本来就串行），
+同目录**再启动**耗时 **1707 → 2512ms（×1.47）**（另两轮 ×1.25 / ×1.74；三个样本量级一致）。
+⚠️ 这是**代理指标**：只削并行度，不削单核主频/IPC，**不等于**低配机实测。
+⚠️ 必须**先热身一轮再量**：空库首启那 17 步迁移在单核上会从 742ms 涨到 **4951ms**，把 import 路径的信号整个淹掉（第一版量出 ×2.65 的假结论）。
+
+**结论与边界（诚实版）**
+
+- 内存与磁盘都不是门槛：**双核 / 4GB / 机械盘能跑** —— 整机 250MB 量级、空闲几乎不占 CPU、
+  请求受定时器而非算力驱动；真正吃资源的是 WebView2（Chromium）那一块，**收进托盘十分钟就还回去了**。
+- **会因机器变差而难受的三处**：① **启动**（热启 2.2–2.9s 是这台机器的数，弱 CPU 按单核实验乘 ~1.2–1.7，
+  机械盘再加文件缓存未命中的钱）；② **第一次打开词云/趋势图**（词云拼版在强 CPU 上就 320–530ms，
+  且 jieba 词典一次 +55MB 常驻，§3.12）；③ 老 GPU 走软件渲染时 UI 动画变肉（**未实测**）。
+- **未做的测量**（别把上面的数当"低配机实测"）：没在 2 核 / 4GB / HDD 真机上跑过；没量 GPU 软件渲染路径；
+  没量**真实库（8V/11 账号）**的空闲 CPU（只有空库口径）。
+- 复跑方式：`python scripts/perf_report.py --affinity-proxy`（约 4 分钟，自动解压便携版、跑完自清）。
+
+## 3. 门禁基线（只能人跑的实测值）
+
+> 只放**只能人跑**的实测值：一行一值 + 日期。**能派生的量指向真源，别抄** ——
+> 迁移 head / 表数 / 路由装饰器 / 下一篇 devlog 编号 / 静态用例条数 → `python scripts/gen_doc_numbers.py --list`；
+> `.py` 文件数由 `scripts/dev_check.py` 自己打印；词云 sha256 由 `node scripts/check_wordcloud_layout.mjs` 自算；
+> 探针各模式 → `python scripts/ui_probe.py --help`。**变更史不在这里**（那是 devlog 的体裁：基线怎么涨的看各批 devlog）。
+
+| 门禁 | 命令 | 当前基线（括号里 = 该值实测日） |
+|---|---|---|
+| 后端 | `python -m pytest -q`（**解释器走 `.venv`**，见 `docs/ops/RELEASE.md 不变量 24） | **971 passed**（2026-09-29 实测；另有 1 条**打真上游**的用例按设计 skip ⇒ 那一格是 971 passed / 1 skipped）。⚠️ 用**系统 Python**（非 `.venv`）跑会多一条 `xhshow` 缺失的失败 —— 那是本机环境差异，不是回归 |
+| 桌面壳 | `cargo test`（工作目录 `frontend/src-tauri`） | **62 passed**（2026-09-27 实测；含 `delete_old_dir` 的真实 junction 用例、S1 的 token 生成用例、S3 的准入表/白名单用例与**迁移编排四条回滚路径**） |
+| 前端单测 | `npm --prefix frontend run test` | **820 passed / 62 文件**（2026-09-30 实测；条数确定，不随上游浮动） |
+| 前端类型 / lint | `npx tsc --noEmit`（**必须在 `frontend/` 里跑**）/ `npm --prefix frontend run lint` | 0 错 / 0 错（2026-09-30 复核） |
+| 文档漂移 | `python scripts/doc_check.py` | **0 FAIL**（2026-09-26 复核；另有 1 条历史 devlog 索引欠账 WARN，WARN 看脚本逐条输出） |
+| 上游冒烟 | `python scripts/smoke_upstream.py [--cold]` | 真上游 **5 ok** / 冷进程 **3 ok**，0 FAIL（2026-09-23 复核） |
+| 未登录能力矩阵 | `python scripts/capability_matrix.py --write` | 两态逐接口实测（结论 = `docs/backend/ARCHITECTURE.md` §3.9；**`--include-content` 触发 IP 级 412，别顺手跑**） |
+| 布局探针 | `python scripts/ui_probe.py --vtuber 15 --seed-accounts 8` | 三档 1100/1280/1440 × 10 视图全过（2026-09-28 复核，46s；**主流程顺带跑推送通道端到端** `_assert_messages`）。⚠️ **`--vtuber 15` 必须显式给**：不传时探针走 `_first_vtuber()` 自动探测（2026-09-27 前它少带 token ⇒ 恒定 401 ⇒ 路由落到 `/` ⇒ **只量到 `empty`、所有布局断言静默空转**；已修 + `tests/test_dev_token.py` 结构判据盯着）。⚠️ `8` 是常规参数：开发库只有 2 个账号，不种就是空转的门禁。⚠️ **`--status-widget` 多跑一段推送**（M4，devlog/252）：`widget.html?probe=messages` —— 整页只有小窗（没有主窗口、没有广播），能显示推来的消息就是"小窗独立"的证明；其中 `账号快照/帖子/V 本体` 三条**打印跳过理由**（小窗入口不订阅它们，主窗口那一轮已判）。⚠️ **判据本身也会假的两种**（M4 踩到）：① 等**网络**不能用 `sleep` 的毫秒数（虚拟时间里 `sleep` 几乎立即返回 ⇒ 小窗永远判在 `connecting`）⇒ 等待循环里补一发本地请求换真实时间；② originator 那两条判据**不能写死宿主**（小窗那一轮语义相反 ⇒ 同时假红）⇒ 按 `myHost()` 推导。⚠️ **`scrollers` 清单的上限就是盲区**（R48，devlog/251）：原 `.slice(0,30)` + 匹配面含 `overflow:hidden` ⇒ 排在后面的容器（cards 的 `.hero-scroll`）根本不进清单、"任何容器不得横向溢出"对它静默空转；2026-09-28 抬到 200 并**排除 DEV「启动诊断」覆盖层** `#boot-diag`（它 ≥3 次资源失败才弹、`<pre>` 按设计带竖滚动条，不排掉就是抛硬币）。⚠️ `--toolbar` 的**滚动那一步曾假红**（方向信号只从 rAF 里写，而虚拟时间下 rAF 几乎不被服务 ⇒ 读到挂载时那次同步 `sync()` 写的旧值；**加长等待救不了**，虚拟时间里等待不产生帧）：2026-09-27 改成探针显式调 **dev 钩子** `window.__ddtoolkitOsSync`（`OverlayScroll` 在 DEV 下注册的同一个 `sync`）+ 把"钩子不在 / 上滚方向没送达"当**前提失败**，两刀反向验证后连跑三次全绿（devlog/219、`DEV-LOOP.md` §6.16） |
+| 档位门禁 | `python scripts/gate.py` | A 档 **8 步**全过 / **≈165s**（2026-09-27 实测：pytest 93s + ui_probe 43s 是两笔大头；含 `cargo test`、三档探针与**全仓语法扫描**；~250s 那版是 pytest 提速前 —— 见 devlog/200）；C 档 ≈46s |
+| CI | GitHub Actions（`.github/workflows/`，真源在那里） | 两条腿：Linux（后端 ×2 个 Python + 前端）与 Windows（Rust + 冻结后端冒烟）。**2026-09-25 已首次跑绿**（`e3499f1`）——首跑到闭环共四次红，根因见 devlog/200（其中一条是**英文 Windows 用户首启即崩**的真 bug）。此后每个推送两条腿都跑：S1（`dd1613e`）与 S1b（`eafdd73`）均全绿（2026-09-26）。⚠️ **2026-09-30 收窄了两处**（用户问"每次都跑 15–20 分钟有必要吗"）：① 两条 workflow 都加 `concurrency: cancel-in-progress`（一批里连推几个 commit 时，前面的**排队/执行全部作废**，实测有一次被取代的运行白跑了 **55.8 分钟**）；② Windows 腿加 `paths-ignore`（`**/*.md` · `docs/**` · `devlog/**`）—— 纯文档改动不跑冻结那一笔。**实测耗时**：Linux 三段 **0.5–3.6 分钟**，Windows 腿 **3.5–56 分钟**（中位数 ~15，冷缓存/排队时最坏）⇒ "15–20 分钟"说的是 Windows 那一条腿，不是整个 CI |
+| 冻结产物体积 | `python scripts/build_backend.py` 的输出 | **71.7 MB**（2026-09-25；切 `uv.lock` 前记录 118.8MB）。出包后以 `release.py --only verify` 为准 |
+| 一把梭 | `python scripts/dev_check.py` | syntax / pytest / frontend logic / docs drift / dev backend 五项全 ok（2026-09-23 全量实跑） |
+
+> ⚠️ 探针签名（`--hero-expect` / `--calendar-expect`）**含实时数据**，只适合"改动前后短窗口对比" ——
+> 见 `docs/DEV-LOOP.md` §二·五，此处不复述。

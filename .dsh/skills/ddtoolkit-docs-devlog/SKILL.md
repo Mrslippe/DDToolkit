@@ -20,13 +20,13 @@ DDToolkit（VTuber 证据归档工具：Python + FastAPI 后端、React 前端�
 
 - 要写 / 回填 **devlog**，或不确定下一篇该编几号；
 - 改动落地后要**同步活文档**（改表结构 / 路由 / 抓取 / 界面 / 加平台）；
-- 提新需求进 `docs/TODO.md` §0，或把已落地条目搬进 `docs/ROADMAP-DONE.md`；
+- 提新需求进 `docs/TODO.md` 的对应分组；已落地的就从 TODO 里移走（记录归 `devlog/`）；
 - 跑文档门禁（`scripts/doc_check.py`、`scripts/dev_check.py --docs`）并处理 FAIL；
 - 发版：版本号同步、`docs/releases/` 归档、`python scripts/release.py <版本>`。
 
 ## 2. 先读这两份（别跳过）
 
-`docs/GLOSSARY.md`（改 bug / 做需求第一步：名词在代码里叫什么、在哪、牵动谁）+ `docs/README.md`（docs 目录**唯一入口**：布局约定 + 四组文档「什么时候看」+ §5 维护约定）。
+`docs/GLOSSARY.md`（改 bug / 做需求第一步：名词在代码里叫什么、在哪、牵动谁）+ `docs/README.md`（docs 目录**唯一入口**：目录布局 §1 + 找文档 §2 + 文档纪律 §3）。
 
 ## 3. devlog 规则（在仓库根 `devlog/`，**不在** `docs/` 下）
 
@@ -61,7 +61,7 @@ DDToolkit（VTuber 证据归档工具：Python + FastAPI 后端、React 前端�
 
   | 经验类型 | 落到哪 |
   |---|---|
-  | 不变量（"必须 / 绝不能…"） | `docs/ARCHITECTURE.md` §6（带 `devlog/0NN` 出处） |
+  | 不变量（"必须 / 绝不能…"） | `docs/backend/ARCHITECTURE.md` §6（带 `devlog/0NN` 出处） |
   | 坑 / 测量方法论（"量 X 前必须先 Y"） | `docs/DEV-LOOP.md` |
   | 设计原理（"为什么这样做才成立"） | 对应 `docs/design-*.md` |
 
@@ -75,7 +75,7 @@ DDToolkit（VTuber 证据归档工具：Python + FastAPI 后端、React 前端�
 
 | 档 | 判据（**命中任一即属此档**） | 文档义务 |
 |---|---|---|
-| **A 数据 / 契约** | 碰 `alembic/` · `app/models/` · `app/services/purge.py` · 路由契约（路径 / 状态码 / 请求体）· `ARCHITECTURE.md` §6 的不变量 | **全套**：不变量 + 护栏用例 + 探针 + devlog + 第 5 节映射的全部活文档 + `MIGRATION_HEAD` |
+| **A 数据 / 契约** | 碰 `alembic/` · `app/models/` · `app/services/purge.py` · 路由契约（路径 / 状态码 / 请求体）· `docs/backend/ARCHITECTURE.md` §6 的不变量 | **全套**：不变量 + 护栏用例 + 探针 + devlog + 第 5 节映射的全部活文档 + `MIGRATION_HEAD` |
 | **B 跨层 / 特性** | 前后端一起改 · 新增平台 · 新增/改端点 · 新增 hook 或分层 · 碰 `tokens.css` / `UI-MAP.md` | devlog + 第 5 节映射里**被碰到的那几份**活文档 |
 | **C 局部 / 表现** | 上面都没碰：纯组件内改动 · 文案 · 单个样式值 · 单文件重构 | **devlog 一段话 + commit**；活文档只在"改了类名 / 令牌 / 路由"时才动 |
 
@@ -86,7 +86,7 @@ DDToolkit（VTuber 证据归档工具：Python + FastAPI 后端、React 前端�
 ## 5. 改动的活文档映射（改了 X → 必须同步哪份）
 
 **逆索引**（每一类改动 → 要同步哪份活文档、什么时候必须更新）：`references/doc-map.md`。
-引用写法（代码写仓库相对路径 / 文档写 `docs/<文件>`）与"新增活文档放哪"的规则文本真源：`docs/README.md` §5「维护约定」。
+引用写法（代码写仓库相对路径 / 文档写 `docs/<文件>`）与"新增活文档放哪"的规则文本真源：`docs/README.md` §3「文档纪律」+ `scripts/docs_gate.py`（头块字段、各 class 必填项与行数上限）。
 
 ## 6. 文档里的数字：三分法（2026-09-23 定）
 
@@ -157,42 +157,28 @@ DDToolkit（VTuber 证据归档工具：Python + FastAPI 后端、React 前端�
 而 devlog 里同一个写法是**对的**（记录本就该写死当时的值），所以这个习惯是被**正当用途**训练出来的，
 然后被无差别地用到了状态文档里。
 
-## 7. TODO ↔ ROADMAP-DONE 双向维护
+## 7. TODO 的维护（2026-09-30 文档重构后）
+
+`TODO.md` 现在只有**一件事**：未完成项。分组是「1 可立刻动手 / 2 要先拍板 / 3 用户侧动作 /
+4 小窗演进 / 5 已搁置 / 6 明确不做」。
 
 | 阶段 | 写哪 | 怎么写 |
 |---|---|---|
-| 想到新需求 | `TODO.md` **§0 待提需求收集区** | 表里加一行，只写现象/期望（不写实现方案），状态 `待评估` |
-| 受理要干活 | `TODO.md` **§1 未完成项** | 四组：1.1 可立刻动手 / 1.2 需先定口径 / 1.3 用户侧动作 / 1.4 已搁置 |
-| 已落地 | **移到** `ROADMAP-DONE.md`「需求清单：R…」 | 原文照抄 + 落地结论 + devlog 指向；TODO §0 那行改成 `✅ 已落地（devlog/0NN）→ 详见 docs/ROADMAP-DONE.md` |
+| 想到新需求 | `TODO.md` 对应分组 | **每条 ≤3 行**：现象 / 验收 / 卡在哪。不写实现方案 |
+| 受理要干活 | 同上 | 状态流转就地改 |
+| 已落地 | **从 TODO 里移走** | 记录归 `devlog/`；**不要**在 TODO 里留 ✅ 行 |
 
-⚠️ **"移到"这一步现在有门禁了**（`doc_check.py` 的「TODO 无已落地残留」）：`TODO.md` **§1「未完成项」的性质列**不该出现
-"已落地" → FAIL。加它的原因（2026-09-24 实测）：这条纪律原先只有人知道，§1.1 因此堆了
-**12 条**带 ✅ 的旧条目（18 条里 12 条已完成）——「可以立刻动手」实际只有 5 条能动手。
+⚠️ **"移走"这一步有门禁**（`doc_check.py` 的「TODO 无已落地残留」）：§1 的**性质列（第 2 列）**
+出现"已落地" → FAIL。加它的原因（2026-09-24 实测）：这条纪律原先只有人知道，§1.1 因此堆了
+**12 条**带 ✅ 的旧条目 ——「可以立刻动手」实际只有 5 条能动手。
 
-**判据取性质列（第 2 列）不是整行**：一个需求可能"5 批只落了 1 批"（R38 就是），
-那种行里出现"已落地"是**对的**。§0 的 `✅ 已落地 → 详见 …` 是**规定的指针形式**，也不判。
-| 门禁数字 | `TODO.md` **§6.2 当前门禁基线** | 只放当前实测值 |
-| 版本/批次 → devlog 索引 | **`ROADMAP-DONE.md`「批次 → devlog 索引」**（原 TODO §6.1，2026-09-13 移入） | TODO §6.1 只留一句说明，不再重复 |
+> ⚠️ **`ROADMAP-DONE.md` 已于 2026-09-30 删除**（连同它的「批次 → devlog 索引」与
+> 「需求清单：R…」章节）。历史由 `devlog/` + git 承担：**devlog 的登记面就是文件名本身**
+> （三位编号递增），要查当前真值跑 `python scripts/gen_doc_numbers.py --list`
+> （count / max / next）。`doc_check` 那条依赖索引表的检查已按「判据前提消失就退役」删掉。
 
-**编号列的三种合法写法**（2026-09-23 定）：
-
-| 情况 | 写什么 | 例 |
-|---|---|---|
-| 有 devlog | **裸编号** | `\| 097 \|` |
-| **无独立 devlog** 的小批次（细节在 commit message 里） | **提交短哈希** | `\| c729ea3 \|` |
-| 早期按批次建的索引（含范围） | 范围，留原样 | `\| 024–026 \|` |
-
-后两种**解析不到** `doc_check.py` 的正则 ⇒ 不计入"已回填"。**这是有意的** —— 它们本来就没有可指的 devlog。
-⚠️ **新批次仍要一行一个裸编号**：新写的范围行若含 > 61 的编号会直接 FAIL。
-
-**第一列只放短标签**（版本 · 批次 / `R编号` + 主题，**一行以内**）。2026-09-23 瘦身前这一列漂成了
-600–1900 字符的巨型单元格、占了 `ROADMAP-DONE.md` 的 60% —— 细节属于 `devlog/` **或 commit message**，这里只做索引。
-⚠️ **这条有门禁**：第一列不得超 `scripts/doc_check.py` 的 `INDEX_LABEL_MAX` 字符，超了直接 FAIL
-（阈值查那个常量，别把数抄到这里）。
-
-> **判断"细节会不会丢"时要连 git 一起看。** R40d/R40e 当时没有 devlog，一度被当成"索引行是唯一记录"
-> 而不敢瘦身 —— 实际它们的 commit message 有 655 / 815 字符，与索引行长度几乎 1:1，抄进索引是纯重复。
-> 索引行的第二列本来就是"**哪份记录记得这件事**"，所以无 devlog 时写提交短哈希即可。
+**门禁基线**（只能人跑的实测值）现在登记在 `docs/ops/PERF.md` §3 —— 那是**唯一**允许写
+测量值的活文档（头块 `allow-measures` 显式声明），因为登记就是它的职责。
 
 ## 8. 门禁：`doc_check.py` 与 `dev_check.py --docs`
 
@@ -210,7 +196,7 @@ DDToolkit（VTuber 证据归档工具：Python + FastAPI 后端、React 前端�
 
 一条命令 `python scripts/release.py <版本>`（`--bump` / `--dry-run` / `--from <步骤>` / `--check-version`，全部开关见 `--help`）。
 步骤、**版本号锚点（权威清单 = `release.py` 的 `VERSION_FILES`）**、发布说明要求、续跑与"脚本不做、必须人工"的动作
-—— 见 `references/release-checklist.md`；网络与凭据口径见 `docs/RELEASE.md`。
+—— 见 `references/release-checklist.md`；网络与凭据口径见 `docs/ops/RELEASE.md`。
 
 ## 10. 参考文件
 

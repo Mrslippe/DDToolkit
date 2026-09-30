@@ -1,3 +1,11 @@
+---
+doc: design/status-island/d1-a-execution
+class: plan
+scope: D1 = A + 280 的执行细化：验收定义、真机证据（面板被右缘裁 8px）、批次划分（D1-a0 / D1-a / …），以及"为什么这条一直没被发现"
+not-scope: 形态路线对比（见 d1-form-options）；动效规格（见 frontend/specs/status-island）
+expires: 2026-11-30
+---
+
 # D1 = A + 280：执行细化（2026-09-25）
 
 > ⚠️⚠️ **本文已被取代**：折叠宽不是**恒定 280**、面板也不是 280 —— 09-27 那一版定为

@@ -1,9 +1,9 @@
 /**
- * ESLint 配置（2026-09-13 落地，`FRONTEND-ARCH.md` §5 P3 的另一半）。
+ * ESLint 配置（2026-09-13 落地，`docs/frontend/ARCHITECTURE.md` §5 P3 的另一半）。
  *
  * ## 为什么是这套规则，而不是 `eslint:recommended` 全家桶
  *
- * 本项目的代码风格已经稳定（`FRONTEND-ARCH.md` §1.4：`!important` 0 处、
+ * 本项目的代码风格已经稳定（`docs/frontend/ARCHITECTURE.md` §1.4：`!important` 0 处、
  * 依赖全部在用、选择器按 feature 前缀分区），**风格类规则加进来只会制造噪音**。
  * 真正反复咬人的是**行为类问题**，所以只开这几条：
  *
