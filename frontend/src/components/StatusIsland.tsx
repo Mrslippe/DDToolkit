@@ -85,6 +85,18 @@ export default function StatusIsland({ notices, onAction, now, density = 'bar' }
     if (density === 'widget') applyWidgetCssVars()
   }, [density])
 
+  // F1（2026-09-30）：**展开时胶囊整行隐藏**（卡片就是面板）。
+  // ⚠️ 由组件写这个属性（它知道 `open`），而不是让窗口那边写 —— 于是**探针也量得到**
+  //    这条判据（探针里没有真窗口，窗口那条路根本不跑）。
+  useEffect(() => {
+    if (density !== 'widget') return
+    const el = document.querySelector<HTMLElement>('.widget-shell')
+    if (!el) return
+    if (open) el.dataset.open = '1'
+    else delete el.dataset.open
+    return () => { delete el.dataset.open }
+  }, [density, open])
+
   // 空闲轮播的时钟：**只在空闲时走**（有事发生时立刻停表，省掉一个无谓的定时器；
   // 也让"语录正在轮播"不可能和"有通知亮着"同时出现在屏幕上）。
   // R18：隐藏到托盘时同样停表 —— 6s 一次的轮播在后台跑 8 小时是纯浪费（界面根本没人看）。
@@ -128,31 +140,22 @@ export default function StatusIsland({ notices, onAction, now, density = 'bar' }
     if (!r) return
     // 面板的**实际高度**：`open` 之后才量得到；量不到时退回 0（下一帧 `place()` 会再来）
     const h = panelRef.current?.offsetHeight ?? 0
-    // ⚠️⚠️ **小窗（真窗口）宿主：面板铺满窗口，位置由几何定**（D1，2026-09-27）。
+    // ⚠️⚠️ **小窗（真窗口）宿主：面板铺满卡片，位置由留白定**（F1，2026-09-30）。
     //
-    // 窗口本身就是"为面板长出来的"（`widgetExpandGeom`：宽 = 面板宽、高 = 胶囊 + 间隙 +
-    // 面板高）⇒ 面板在这个视口里就该是 `left = 0`、宽 = 窗口宽。原来那套"按胶囊中心居中 +
-    // 夹取"在这里是**错的第二真源**：窗口已经被几何夹到屏幕内了，面板再夹一次就会
-    // 相对窗口偏移（实测过 8px 的缝），而且四方向展开之后横向位置必须由**几何**说了算
-    // （面板向左/向右长时，胶囊在窗口里的偏移也跟着变）。
+    // F1 之后模型极简：**窗口 = 卡片 + 两侧留白**（`WIDGET_SHADOW_PAD`），
+    // 展开时**卡片就是面板**（胶囊整行隐藏），所以面板在这个视口里恒为
+    // `left = top = 留白`、宽度 = 卡片宽 = 窗口宽 − 2×留白。
+    // 原来那套"按胶囊中心居中 + 夹取 + 读 `data-dir` 判上下"整个不需要了 ——
+    // 方向现在只决定**入场动画从哪一侧滑出**（CSS 的事）。
     //
-    // `data-dir` 是几何写下的**唯一方向真源**（原来叫 `data-flip`，只有上/下两态）。
-    // 读不到它（探针里没有真窗口；或顶栏宿主）⇒ 退回下面那套顶栏算法。
+    // ⚠️ 也**不再需要胶囊的 rect**（`r`）：卡片的位置是几何算好的，面板只需铺满它。
     const shell = density === 'widget'
       ? document.querySelector<HTMLElement>('.widget-shell')
       : null
-    const dir = shell?.dataset.dir
-    if (shell && dir) {
-      setPos({
-        left: 0,
-        // ⚠️ 宽取**常量**（不取 `window.innerWidth`）：面板宽 == 几何保证的窗口宽，
-        //    而窗口宽是**几何算的**（`max(胶囊宽, 400)`）。取实测视口宽会在
-        //    "窗口还没 resize 完"的那一帧量到一个更窄的值 ⇒ 内容重排版 ⇒ 面板高变
-        //    ⇒ 窗口高度按错的高算完就再也不改了（`place()` 不会因为 resize 再跑）。
-        //    `data-dir` 缺失（探针 / 还没算）时也给这个常量，两边一致。
-        top: dir === 'up' ? r.top - WIDGET_PANEL_GAP - h : r.bottom + WIDGET_PANEL_GAP,
-        width: WIDGET_PANEL_W,
-      })
+    if (shell) {
+      const pad = parseFloat(
+        getComputedStyle(document.documentElement).getPropertyValue('--widget-shadow-pad')) || 0
+      setPos({ left: pad, top: pad, width: Math.max(1, window.innerWidth - pad * 2) })
       return
     }
     const width = density === 'widget' ? WIDGET_PANEL_W : 340   // D1：widget 展开宽 400（bar 沿用 340）
@@ -218,21 +221,12 @@ export default function StatusIsland({ notices, onAction, now, density = 'bar' }
     document.addEventListener('keydown', onKey)
     document.addEventListener('pointerdown', onOutside, true)
     window.addEventListener('resize', onResize)
-    // ⚠️ **`data-dir` 变了要重排**（R38 批 5f；D1 起属性名从 `data-flip` 换成 `data-dir`）：
-    //    小窗宿主下这个属性由**窗口那边**在 resize 之后写下（`widgetExpandGeom` 算完才知道
-    //    往哪边长），而那时本组件的 `place()` 已经跑过了 ⇒ 属性变了没人理，面板就停在旧方向上。
-    //    用 MutationObserver 盯它，而不是让窗口去调组件（组件不该知道窗口的存在 —— §8）。
-    let mo: MutationObserver | null = null
-    if (density === 'widget') {
-      const shell = document.querySelector<HTMLElement>('.widget-shell')
-      if (shell) {
-        mo = new MutationObserver(() => place())
-        mo.observe(shell, { attributes: true, attributeFilter: ['data-dir'] })
-      }
-    }
+    // ⚠️ **`data-dir` 变了要重排** —— F1 之后**这条不再需要**：面板的位置只由"留白"
+    //    决定（`left = top = pad`），与方向无关；方向只剩"入场动画从哪一侧滑出"（CSS 读
+    //    `<html data-widget-dir>`）。所以那个 `MutationObserver` 与它的
+    //    `attributeFilter: ['data-dir']` 一起删掉了 —— **判据的前提消失时，连机制一起删**。
     return () => {
       cancelAnimationFrame(raf)
-      mo?.disconnect()
       document.removeEventListener('keydown', onKey)
       document.removeEventListener('pointerdown', onOutside, true)
       window.removeEventListener('resize', onResize)

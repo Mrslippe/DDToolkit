@@ -6,8 +6,10 @@ import { useNotices } from '../utils/noticeStream'
 import { api } from '../api/api'
 import { EVENTS, on } from '../utils/appEvents'
 import {
+  WIDGET_CAP_MIN_W,
   WIDGET_POS_KEY,
   WIDGET_RESIZE_DEADBAND,
+  WIDGET_SHADOW_PAD,
   clampCapsuleW,
   relayWidgetAction,
   saveWidgetPos,
@@ -95,8 +97,22 @@ async function readScreenBox(): Promise<{ width: number; height: number }> {
  */
 function readCapsuleW(): number {
   const el = document.querySelector<HTMLElement>('.si-island')
+  // ⚠️ F1 之后**展开时胶囊是隐藏的**（`display:none` ⇒ `offsetWidth = 0`）——
+  //    所以展开/收起路径一律读下面那个"最近一次量到的宽"（`lastCapW`），
+  //    这个函数只负责"现在能读到就读"。
   return clampCapsuleW(el?.offsetWidth ?? 0)
 }
+
+/**
+ * **dev-only**：小窗里那条白色自检条的开关（`localStorage` 键）。
+ *
+ * ⚠️ 它默认**关**（2026-09-30 用户：「先把白色的 log 文字条去掉」）：
+ * 那条 9px 白底自检条画在窗口左上角、压着胶囊 —— 用户看到的是一块白字条。
+ * 但它是**真机上唯一的诊断通道**（小窗不能开 devtools、看不到 console，
+ * devlog/178/180 那九轮真机修复全靠它），所以**留代码、改开关**：
+ * 在主窗口的控制台执行 `localStorage.setItem('ddtoolkit.widget-diag','1')` 后重开小窗即可。
+ */
+export const WIDGET_DIAG_KEY = 'ddtoolkit.widget-diag'
 
 /**
  * **dev-only**：探针往小窗注入条目的页面事件名。
@@ -143,11 +159,23 @@ export default function StatusWidgetWindow() {
   }, [])
   const down = useRef<{ x: number; y: number; dragging: boolean } | null>(null)
   const [diag, setDiag] = useState('…')
+  /** 是否画那条 dev 自检条（见下面那条 effect 的注释；默认关） */
+  const [showDiag] = useState(
+    () => import.meta.env.DEV &&
+      globalThis.localStorage?.getItem(WIDGET_DIAG_KEY) === '1',
+  )
   /**
    * 窗口当前是展开态吗（R38 批 5d）。用来**去重** resize 调用 ——
    * 面板每次重渲染都调一次 resize 会让窗口持续抖动（Windows 的 resize 是可见的）。
    */
   const expanded = useRef(false)
+  /**
+   * **最近一次量到的胶囊宽**。
+   *
+   * ⚠️ F1（2026-09-30）之后它成了必需：展开时胶囊是 `display:none` ⇒ `offsetWidth` 读回 0，
+   * 而收起路径需要知道"卡片该多宽"。由上面那条 `ResizeObserver` 维护（折叠态每帧都量得到）。
+   */
+  const lastCapW = useRef<number>(WIDGET_CAP_MIN_W)
   /**
    * 展开**之前**胶囊所在的矩形（收起时精确回到这里）。
    *
@@ -329,12 +357,6 @@ export default function StatusWidgetWindow() {
         '--widget-panel-max-h', `${widgetPanelMaxHeight(avail)}px`)
     }
     set()
-    // 折叠态起手：两条轴的偏移都归零（窗口 == 胶囊）。展开时由几何写真实值。
-    // ⚠️ 这里**必须**设（不能只靠几何那条 effect）：真机上几何跑在首绘之后，而探针环境里
-    //    几何**根本不跑**（没有 `__TAURI_INTERNALS__`）—— 变量不设的话，探针量到的偏移
-    //    是"CSS 自己的居中"而不是几何给的值（这正是第 5 次「拆入口顺带生效的东西」的现场）。
-    document.documentElement.style.setProperty('--widget-capsule-offset', '0px')
-    document.documentElement.style.setProperty('--widget-capsule-x', '0px')
     // 换显示器 / 改分辨率时 `screen.availHeight` 会变，但**不会**触发 window resize ——
     // 用 `matchMedia` 盯分辨率变化（比轮询便宜，且只在真正变化时醒）。
     let mq: MediaQueryList | null = null
@@ -359,23 +381,7 @@ export default function StatusWidgetWindow() {
     if (!('__TAURI_INTERNALS__' in window)) return   // 探针/浏览器：没有真窗口可 resize
     let alive = true
 
-    /** 两条轴的胶囊偏移都写进 CSS 变量（**几何是唯一真源**，CSS 不许自己判） */
-    const applyOffsets = (x: number, y: number) => {
-      document.documentElement.style.setProperty('--widget-capsule-x', `${x}px`)
-      document.documentElement.style.setProperty('--widget-capsule-offset', `${y}px`)
-    }
-
-    /**
-     * 展开方向写进 `<html data-widget-dir>`（**面板入场动画的方向**靠它选 keyframes）。
-     *
-     * ⚠️ 为什么挂在 `<html>` 上：面板是 **portal 到 `body`** 的 ⇒ `.widget-shell` 不是它的
-     * 祖先，挂在窗口壳上的属性它看不见。
-     *
-     * ⚠️ 为什么不在收起时清掉：留着上一次的方向，下一次展开的**首帧**动画就是对的方向。
-     * 方向要等几何算完（面板高量出来）才知道，而面板**挂载时会立刻开始播动画** ——
-     * 清了的话，贴屏幕下沿的小窗每次展开都要先朝下播一帧再换成朝上（`animation-name` 一变
-     * 动画会**重头再播**，肉眼看到的是抖一下）。留着上一次的值就把这一下省掉了。
-     */
+    /** 展开方向写进 `<html data-widget-dir>`（**面板入场动画的方向**靠它选 keyframes） */
     const applyDir = (dir: WidgetDir) => {
       document.documentElement.dataset.widgetDir = dir
     }
@@ -388,30 +394,29 @@ export default function StatusWidgetWindow() {
         const cur = await readWidgetRect()
         const screen = await readScreenBox()
         if (!alive) return
-        // 胶囊宽 = 窗口该有的宽（折叠态窗口 == 胶囊）。用**量出来的**而不是常量：
-        // D1 起胶囊宽跟着内容走（200–400），写死一个数就会把胶囊裁掉。
-        const capW = readCapsuleW()
+        // 胶囊宽 = 卡片该有的宽。用**量出来的**而不是常量：D1 起胶囊宽跟着内容走（200–400）。
+        // ⚠️ F1 之后展开时胶囊是 `display:none`（量到 0）⇒ 用最近一次量到的（`lastCapW`，
+        //    由上面那条 `ResizeObserver` 维护）；量不到就退回下限。
+        const capW = readCapsuleW() || lastCapW.current
         const { resizeWidgetWindow } = await import('../utils/shellBridge')
         if (want) {
-          // ⚠️ 量**面板自己的高**（不是 `getBoundingClientRect`：入场动画的
-          //    `scale(.985)` 会让 rect 偏小 —— 规格 §12.3 记过同一个坑，实测到 276 而非 280）。
+          // ⚠️ 量**面板自己的高**（不是 `getBoundingClientRect`：入场动画的位移/缩放会让
+          //    rect 偏小 —— 规格 §12.3 记过同一个坑）。
+          //    F1 之后**卡片就是面板** ⇒ 这个高就是卡片高（不再 `+ 胶囊 + 间隙`）。
           //    高度上限 `--widget-panel-max-h` 已由**上面那条独立 effect** 设好
           //    （不放在这里：这里在非桌面端直接 return，变量就永远设不上 —— 见那条注释）。
           const h = panel ? panel.offsetHeight : 0
-          // 记下展开前胶囊的矩形：收起时要精确回到这里（反推会漂，见 `preExpandPos` 注释）
-          preExpandPos.current = { x: cur.x, y: cur.y, w: capW }
-          // `{...cur, w: capW}`：几何要的是**胶囊**矩形，而实测里它等于窗口矩形
-          // （折叠态窗口就是胶囊）。宽用刚量到的胶囊宽 —— 窗口那一侧可能还差一帧没跟上。
-          const geom = widgetExpandGeom({ ...cur, w: capW }, h, screen)
+          // 记下展开前**卡片**（= 胶囊）的矩形：收起时要精确回到这里（反推会漂）
+          preExpandPos.current = {
+            x: cur.x + WIDGET_SHADOW_PAD,
+            y: cur.y + WIDGET_SHADOW_PAD,
+            w: capW,
+          }
+          const geom = widgetExpandGeom(cur, h, screen)
           expanded.current = true
           dirRef.current = geom.dir
           setDir(geom.dir)
           setAlign(geom.align)
-          // ⚠️ **胶囊在窗口内的偏移必须跟着几何走**（批 5g 纵向 / D1 横向）：
-          //    贴屏幕上沿时窗口会被夹（顶边不能为负），此时"胶囊贴窗口顶边"这个 CSS 假设
-          //    就不成立了（实测：期望 143、真实 10）⇒ 胶囊跳到窗口中间、和面板叠住。
-          //    横向同理：面板往左/右长时胶囊要贴住对应的边。两条都写进 CSS 变量。
-          applyOffsets(geom.capOffsetX, geom.capOffsetY)
           applyDir(geom.dir)
           const ok = await resizeWidgetWindow(geom)
           console.info('[widget] 展开 →', geom, 'ok=', ok)
@@ -421,8 +426,6 @@ export default function StatusWidgetWindow() {
           dirRef.current = 'down'
           setDir('down')
           setAlign('center')
-          // 折叠态：窗口 == 胶囊 ⇒ 两个偏移都归零（否则胶囊会被上一次的偏移顶偏）
-          applyOffsets(0, 0)
           const ok = await resizeWidgetWindow(geom)
           console.info('[widget] 收起 →', geom, 'ok=', ok)
         }
@@ -455,9 +458,12 @@ export default function StatusWidgetWindow() {
     if (!cap) return
     let alive = true
     let last = cap.offsetWidth
+    lastCapW.current = clampCapsuleW(cap.offsetWidth)
     const fit = async () => {
       if (!alive || expanded.current) return   // 展开态：窗口宽 = 面板宽 ≥ 胶囊上限 ⇒ 不用动
       const capW = readCapsuleW()
+      if (!capW) return                        // 量不到（隐藏/未布局）：保持上一次的值
+      lastCapW.current = capW                  // ← 展开态读不到它，收起路径要用
       if (Math.abs(capW - last) < WIDGET_RESIZE_DEADBAND) return
       last = capW
       try {
@@ -478,7 +484,15 @@ export default function StatusWidgetWindow() {
     return () => { alive = false; ro.disconnect() }
   }, [])
 
-  // ⑧ dev 自检条的填充（生产构建里 `import.meta.env.DEV` 为 false ⇒ 整段被摇掉）
+  // ⑧ dev 自检条（生产构建里 `import.meta.env.DEV` 为 false ⇒ 整段被摇掉）
+  //
+  //    ⚠️ **默认不画**（2026-09-30 用户：「先把白色的 log 文字条去掉」）：那条 9px 白底字条
+  //    画在窗口左上角、压着胶囊 —— 用户看到的是一块白字条。
+  //    但它是**真机上唯一的诊断通道**（小窗开不了 devtools、看不到 console，devlog/178/180
+  //    那九轮真机修复全靠它）⇒ **留代码、改成开关**：在主窗口控制台执行
+  //    `localStorage.setItem('ddtoolkit.widget-diag','1')` 再重开小窗即可。
+  //    ⚠️ **回传 `widget_diag` 的那一半照旧**（它只写进 `shell.log`，屏幕上什么都不画）——
+  //    所以"页面到底有没有跑"这条硬证据没有丢。
   useEffect(() => {
     if (!import.meta.env.DEV) return
     const shell = document.querySelector<HTMLElement>('.widget-shell')
@@ -492,7 +506,7 @@ export default function StatusWidgetWindow() {
       `q:${location.search || '-'}`,
       `n:${notices.length}`,
     ].join(' ')
-    setDiag(line)
+    if (showDiag) setDiag(line)
     // ⚠️ **把自检行回传给 Rust 控制台**（2026-09-24 第四轮）。
     //    这是"页面到底有没有执行"的硬证据 —— 用户看不到窗口里的字、也开不了 devtools，
     //    但 `cargo tauri dev` 的控制台他看得到。**这条日志不出现 = 页面根本没跑。**
@@ -504,7 +518,7 @@ export default function StatusWidgetWindow() {
         console.warn('[widget] 自检回传失败（非桌面端？）', err)
       }
     })()
-  }, [notices.length])
+  }, [notices.length, showDiag])
 
   const onPointerDown = (e: React.PointerEvent) => {
     down.current = { x: e.clientX, y: e.clientY, dragging: false }
@@ -533,6 +547,51 @@ export default function StatusWidgetWindow() {
     down.current = null
   }
 
+  // ⑩ **面板就是展开态的把手**（F1，2026-09-30）。
+  //
+  //    为什么必须补这条：F1 让"展开时胶囊整行隐藏"（用户两次要求），而原来的拖动**只挂在
+  //    `.widget-shell` 上** —— 面板是 `createPortal(document.body)` 出去的，指针事件根本
+  //    不经过窗口壳 ⇒ 展开后除了那圈 32px 留白**没有东西可拖**。
+  //    ⇒ 用**文档级**监听补上（面板由 `StatusIsland` 渲染，窗口这边只能这样接 ——
+  //    与用 `MutationObserver` 观察面板出现是同一条取舍：不污染组件契约，§8）。
+  //
+  //    ⚠️ 只接管**落在面板上**的按下（`closest('.si-panel')`）：胶囊那半边仍走窗口壳上
+  //    那套 React 指针处理，两边不会各拖一次。
+  //    ⚠️ 与窗口壳一样**位移过阈值才算拖** —— 否则面板里的动作钮永远点不响。
+  useEffect(() => {
+    if (!('__TAURI_INTERNALS__' in window)) return
+    let st: { x: number; y: number; dragging: boolean } | null = null
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as Element | null
+      if (!t || typeof t.closest !== 'function' || !t.closest('.si-panel')) return
+      st = { x: e.clientX, y: e.clientY, dragging: false }
+    }
+    const onMove = (e: PointerEvent) => {
+      if (!st || st.dragging) return
+      if (Math.abs(e.clientX - st.x) < DRAG_THRESHOLD_PX &&
+          Math.abs(e.clientY - st.y) < DRAG_THRESHOLD_PX) return
+      st.dragging = true
+      // 与窗口壳那条同款：**必须 catch**（未处理的 rejection 会打坏 WebView 的 IPC 通道）
+      void (async () => {
+        try {
+          const { getCurrentWindow } = await import('@tauri-apps/api/window')
+          await getCurrentWindow().startDragging()
+        } catch (err) {
+          console.warn('[widget] 从面板拖动失败（权限？）—— 已吞掉', err)
+        }
+      })()
+    }
+    const onUp = () => { st = null }
+    document.addEventListener('pointerdown', onDown, true)
+    document.addEventListener('pointermove', onMove, true)
+    document.addEventListener('pointerup', onUp, true)
+    return () => {
+      document.removeEventListener('pointerdown', onDown, true)
+      document.removeEventListener('pointermove', onMove, true)
+      document.removeEventListener('pointerup', onUp, true)
+    }
+  }, [])
+
   const onAction = (kind: NoticeActionKind, n: Notice) => {
     void relayWidgetAction({ kind, id: n.id })
   }
@@ -546,6 +605,10 @@ export default function StatusWidgetWindow() {
          少了这个属性，窗口朝一边长、面板却按另一边画 ⇒ 面板落在窗口外（那个 bug 的翻版）。
          ⚠️ 四方向之后**必须只有这一个来源**：`place()` 自己再判一次就会与几何打架
          （09-27 样例页的「牵动哪些地方」第一条点名的就是这个）。 */
+      /* F1（2026-09-30）：**展开时胶囊整行隐藏**（卡片就是面板）。那个属性由
+         `StatusIsland` 写（它知道 `open`）—— 这样探针也量得到这条判据。
+         方向（`data-dir`）现在只剩"入场动画从哪一侧滑出"一个用途（CSS 读
+         `html[data-widget-dir]`），面板的落点与它无关。 */
       data-dir={dir}
       data-align={align}
       onPointerDown={onPointerDown}
@@ -553,10 +616,11 @@ export default function StatusWidgetWindow() {
       onPointerUp={onPointerUp}
     >
       <StatusIsland notices={notices} onAction={onAction} now={now} density="widget" />
-      {import.meta.env.DEV && (
-        /* ⚠️ **dev 专用自检条**（2026-09-24 第三轮真机反馈加）。
-           小窗只有 200×40、又置顶无边框，出问题时**既没法开 devtools、也没法看 console** ——
-           前三轮我就是这么在黑暗里猜的（连猜两次都错）。这条把决定性的事实用 9px 字画在窗口里：
+      {showDiag && (
+        /* ⚠️ **dev 专用自检条**（2026-09-24 第三轮真机反馈加；**2026-09-30 起默认关**，
+           用 `localStorage['ddtoolkit.widget-diag'] = '1'` 打开 —— 见上面那条 effect）。
+           小窗又置顶无边框，出问题时**既没法开 devtools、也没法看 console** ——
+           前三轮就是这么在黑暗里猜的（连猜两次都错）。这条把决定性的事实用 9px 字画在窗口里：
 
              `css` = `.widget-shell` 的 `display`（`flex` ⇒ 样式真的加载了）
              `bg`  = 胶囊的计算背景色（深色 ⇒ 样式生效；`rgba(0,0,0,0)` ⇒ 没生效）

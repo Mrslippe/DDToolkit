@@ -2979,6 +2979,8 @@ export async function runUiProbe(): Promise<void> {
         capMax: rootCs.getPropertyValue('--widget-cap-max-w').trim(),
         radius: rootCs.getPropertyValue('--widget-radius').trim(),
         panelW: rootCs.getPropertyValue('--widget-panel-w').trim(),
+        // F1：窗口比卡片多出来的那圈留白（给外阴影的）—— 判据要拿它比阴影的伸出量
+        shadowPad: rootCs.getPropertyValue('--widget-shadow-pad').trim(),
       }
       const dotEl = island.querySelector<HTMLElement>('.si-dot')
       if (dotEl) {
@@ -3116,7 +3118,24 @@ export async function runUiProbe(): Promise<void> {
           // 脚本侧用 `split("),")` 会数成 1 —— 我第一版就是这么错的）。
           const shadowLayers = (s: string): number =>
             !s || s === 'none' ? 0 : s.split(/,(?![^(]*\))/).length
+          /**
+           * 阴影**向外伸出多远**（px）—— 取所有非 inset 层的 `dy + blur/2` 的最大值。
+           *
+           * ⚠️ 这是用户报的「小窗阴影被截断了」的**量化判据**：伸出量必须 ≤ 窗口比卡片
+           * 多出来的那圈留白（`WIDGET_SHADOW_PAD`），否则就被窗口边缘切掉。
+           * 光数层数不够 —— 层数对、但最外圈伸出 80px 而留白只有 32px，照样是截断。
+           */
+          const reach = (s: string): number => {
+            if (!s || s === 'none') return 0
+            return Math.max(0, ...s.split(/,(?![^(]*\))/).map((layer) => {
+              if (layer.includes('inset')) return 0          // 内阴影不向外画
+              const nums = (layer.match(/-?[\d.]+px/g) ?? []).map(parseFloat)
+              // 序列化形如 `<color> 0px 2px 6px 0px` ⇒ [x, y, blur, spread]
+              return nums.length >= 3 ? nums[1] + nums[2] / 2 : 0
+            }))
+          }
           result.wgPanelShadowLayers = shadowLayers(pcsW.boxShadow)
+          result.wgPanelShadowReach = Math.round(reach(pcsW.boxShadow))
           const headEl = panel.querySelector<HTMLElement>('.si-panel-head')
           result.wgHeadPad = headEl ? getComputedStyle(headEl).padding : null
           const itemEl = panel.querySelector<HTMLElement>('.si-item')
@@ -3146,6 +3165,7 @@ export async function runUiProbe(): Promise<void> {
               !capW2.boxShadow || capW2.boxShadow === 'none'
                 ? 0
                 : capW2.boxShadow.split(/,(?![^(]*\))/).length
+            result.wgCapShadowReach = Math.round(reach(capW2.boxShadow))
             result.wgCapPadLeft = capW2.paddingLeft
             result.wgCapRadius2 = Math.round(parseFloat(capW2.borderTopLeftRadius))
             const cnt = island3.querySelector<HTMLElement>('.si-count')
@@ -3162,6 +3182,29 @@ export async function runUiProbe(): Promise<void> {
           const shellEl = document.querySelector<HTMLElement>('.widget-shell')
           result.widgetDir = shellEl?.dataset.dir ?? null
           result.widgetAlign = shellEl?.dataset.align ?? null
+          // ⚠️ 名不要与上面那个 `widgetPanelWidth`（面板自身的布局宽）混：
+          //    这条是**面板在视口里的位置** —— F1 之后它必须**铺满卡片**，
+          //    而卡片 = 留白到留白之间那一块（`pad` / `视口宽 − 2×pad`）。
+          if (panel) {
+            const pcs2 = getComputedStyle(panel)
+            result.widgetPanelBox = {
+              left: Math.round(parseFloat(pcs2.left)),
+              top: Math.round(parseFloat(pcs2.top)),
+              width: Math.round(parseFloat(pcs2.width)),
+            }
+          }
+          // F1（2026-09-30）：**展开后胶囊整行隐藏**（卡片就是面板）。
+          // ⚠️ 这条由 `StatusIsland` 写 `data-open` 驱动 ⇒ **探针里也量得到**
+          //    （不必等真机 —— 而"展开时面板在不在视口内"那几条判据在 F1 之前
+          //    一直是在"胶囊还在场"的假设下量的）。
+          result.capsuleOpenAttr = shellEl?.dataset.open ?? null
+          const capNow = document.querySelector<HTMLElement>('.si-island')
+          result.capsuleDisplayWhenOpen = capNow ? getComputedStyle(capNow).display : null
+          // 窗口比卡片多出来的那圈留白（给阴影的）：从 shell 的 padding 读
+          if (shellEl) {
+            const scs = getComputedStyle(shellEl)
+            result.shellPad = [scs.paddingTop, scs.paddingLeft]
+          }
           // ① 面板**在视口内**（真窗口里视口 == 窗口）
           result.widgetPanelInViewport =
             pr.left >= -0.5 && pr.right <= window.innerWidth + 0.5 &&

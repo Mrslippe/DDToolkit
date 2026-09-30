@@ -301,7 +301,7 @@
 | # | 层 | 内容 | 依赖 | 规模 |
 |---|---|---|---|---|
 | **W1** | **主题广播** | 主窗口 `applyTheme` → `emit('shell:theme')` → 小窗 `listen` → 同款 `applyTheme`。顺手把 widget 宿主那几个**写死的颜色变成令牌** | 无 | 小（半天）|
-| **W2** | **窗口管理器** | 抽声明式 `WindowSpec`（label / url / size / material / lifecycle / anchor），统一负责**单例保证**（现在第六轮手写的 `CREATING_WIDGET` 应是它的职责）· **位置钳制 + 多显示器** · **`resize()` 通路**（给 W2 之后的形态用）· **标准吸附位**（顶部居中 / 右下 / 左上…）| W1 | 中（1–2 天）|
+| **W2** | **窗口管理器** | 抽声明式 `WindowSpec`（label / url / size / material / lifecycle / anchor），统一负责**单例保证**（现在第六轮手写的 `CREATING_WIDGET` 应是它的职责）· **位置钳制 + 多显示器** · **`resize()` 通路**（给 W2 之后的形态用）· **标准吸附位**（顶部居中 / 右下 / 左上…）· ⚠️ **阴影留白的鼠标遮挡**：窗口比卡片大 32px（给外阴影，devlog/266），那圈透明区域**会吃掉点击** —— 要按区域做 `WM_NCHITTEST → HTTRANSPARENT`（Windows 专属，属于"按窗口行为"那一类）| W1 | 中（1–2 天）|
 | **W3** | **数据源搬进 Rust** | 新建常驻 `WidgetService`：持有通知列表 + 优先级/ttl/分组状态机（现在 `notificationHub.ts` 那套要**搬到 Rust 或让 Rust 成为真相源**）。主窗口/小窗都退化成**纯订阅者** —— 谁在谁显示、都不在也照常采集 | W2 | **大（3–5 天）** |
 
 ⚠️ **W3 才是"消息聚合中心"的地基**：不做它，主窗口一关小窗就是块废玻璃（上表前两行）。

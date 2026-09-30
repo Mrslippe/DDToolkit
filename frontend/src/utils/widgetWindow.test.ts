@@ -15,12 +15,17 @@ import {
   WIDGET_PANEL_GAP,
   WIDGET_PANEL_W,
   WIDGET_RADIUS,
+  WIDGET_SHADOW_LAYERS,
+  WIDGET_SHADOW_OPEN_LAYERS,
+  WIDGET_SHADOW_PAD,
   WIDGET_SIZE,
   applyWidgetCssVars,
   clampCapsuleW,
   clampWidgetPos,
   defaultWidgetPos,
   parseWidgetPos,
+  shadowCss,
+  shadowReachBottom,
   widgetCapsuleGeom,
   widgetCollapseGeom,
   widgetExpandGeom,
@@ -91,14 +96,15 @@ describe('clampWidgetPos：四个方向都留得住', () => {
 describe('defaultWidgetPos：首次开启**顶部居中**、留 80px', () => {
   it('顶部居中（用户 2026-09-27：约两个小窗高 = 2 × 40）', () => {
     const r = defaultWidgetPos(SCREEN)
-    expect(r.x + WIDGET_SIZE.w / 2).toBe(SCREEN.width / 2)
-    expect(r.y).toBe(80)
+    // ⚠️ 返回值是**窗口**坐标（= 卡片 + 两侧留白）；"居中 / 留 80px"讲的是**卡片**。
+    expect(r.x + WIDGET_SHADOW_PAD + WIDGET_SIZE.w / 2).toBe(SCREEN.width / 2)
+    expect(r.y + WIDGET_SHADOW_PAD).toBe(80)
   })
 
   it('小屏上也仍然合法（夹取过的）', () => {
     const r = defaultWidgetPos({ width: 800, height: 600 })
-    expect(r.x).toBeGreaterThanOrEqual(WIDGET_MIN_VISIBLE - WIDGET_SIZE.w)
-    expect(r.x + WIDGET_SIZE.w).toBeLessThanOrEqual(800)
+    expect(r.x).toBeGreaterThanOrEqual(WIDGET_MIN_VISIBLE - WIDGET_SIZE.w - WIDGET_SHADOW_PAD)
+    expect(r.x + WIDGET_SIZE.w + WIDGET_SHADOW_PAD * 2).toBeLessThanOrEqual(800)
   })
 
   /**
@@ -142,178 +148,278 @@ describe('clampCapsuleW：宽度夹在 200–400', () => {
  * ⇒ 面板整个落在窗口外，用户从来没看见过它。所以这里最要紧的两条是
  * ① 展开后窗口**真的够装下面板**；② 展开时**胶囊不动**（否则用户摆的位置会被改）。
  */
-describe('widgetExpandGeom：展开要把窗口长够，四方向朝屏幕里侧长', () => {
-  // 屏幕中部：下面装得下 ⇒ 应当向下展开（不是"在下半屏就翻上去"）
-  const MID = { x: 1000, y: 300, w: 200, h: 40 }
+/**
+ * 形态梯度（R38 批 5d → D1 四方向 → **F1 卡片模型**，2026-09-30）。
+ *
+ * 这组用例守的是**一个真 bug**：面板 `top = 胶囊底 + 6`，而窗口写死 200×40
+ * ⇒ 面板整个落在窗口外，用户从来没看见过它。所以最要紧的两条是
+ * ① 展开后**卡片真的装得下面板**；② 卡片贴住胶囊的那条边**不动**（否则用户摆的位置会被改）。
+ *
+ * ⚠️ **坐标系**：下面三个函数的入参与返回值都是**窗口**矩形，而窗口 = 卡片 + 两侧留白
+ * （`WIDGET_SHADOW_PAD` —— "卡片"才是用户看得见的那块，那圈留白是给**外阴影**的）。
+ * 用例一律用两个小助手换算，这样断言读起来是"卡片在哪"，而不是一堆 ±32。
+ */
+const PAD = WIDGET_SHADOW_PAD
+/** 折叠态的**窗口**矩形：胶囊（= 卡片）在屏幕 `(x, y)`、宽 `capW` */
+const win = (x: number, y: number, capW: number = WIDGET_SIZE.w) =>
+  ({ x: x - PAD, y: y - PAD, w: capW + PAD * 2, h: WIDGET_CAP_H + PAD * 2 })
+/** 窗口矩形 → **卡片**矩形（断言时用） */
+const card = (g: { x: number; y: number; w: number; h: number }) =>
+  ({ x: g.x + PAD, y: g.y + PAD, w: g.w - PAD * 2, h: g.h - PAD * 2 })
 
-  it('高度 = 胶囊高 + 间隙 + 面板高（这条就是那个 bug 的判据）', () => {
-    const g = widgetExpandGeom(MID, 300, SCREEN)
-    expect(g.h).toBe(40 + WIDGET_PANEL_GAP + 300)
-    expect(g.w).toBe(WIDGET_PANEL_W)
+describe('widgetExpandGeom：卡片朝屏幕里侧长（四方向）', () => {
+  it('**卡片 = 面板本身**（F1）：高就是面板高，不再 `胶囊 + 间隙 + 面板`', () => {
+    const g = widgetExpandGeom(win(1000, 300), 300, SCREEN)
+    expect(card(g)).toEqual({ x: 900, y: 300, w: WIDGET_PANEL_W, h: 300 })
+    // 窗口比卡片大一圈 —— 那圈是给外阴影的（用户报的"阴影被截断"就是它）
+    expect(g.w).toBe(WIDGET_PANEL_W + PAD * 2)
+    expect(g.h).toBe(300 + PAD * 2)
   })
 
-  it('下面装得下 ⇒ **向下**展开，顶边不动（胶囊不跳）', () => {
-    const g = widgetExpandGeom(MID, 300, SCREEN)
+  it('展开后的**卡片**必然比折叠态高（回归：曾只有 40 ⇒ 面板仍在窗外）', () => {
+    const g = widgetExpandGeom(win(1000, 300), 200, SCREEN)
+    expect(card(g).h).toBeGreaterThan(WIDGET_SIZE.h)
+  })
+
+  it('面板高为 0 时不会把卡片缩没', () => {
+    const g = widgetExpandGeom(win(1000, 300), 0, SCREEN)
+    expect(card(g).h).toBeGreaterThanOrEqual(1)
+  })
+
+  it('下面装得下 ⇒ **向下**长，卡片**顶边**不动，横向居中', () => {
+    const g = widgetExpandGeom(win(1000, 300), 300, SCREEN)
     expect(g.dir).toBe('down')
-    expect(g.y).toBe(MID.y)          // 顶边不动：向下长
-    expect(g.capOffsetX).toBe(100)   // (400 − 200) / 2：胶囊在窗口里居中
+    expect(card(g).y).toBe(300)          // 顶边不动：真的向下长
     expect(g.align).toBe('center')
-  })
-
-  it('展开后的高度**必然大于折叠态**（回归：曾等于 40 ⇒ 面板仍在窗外）', () => {
-    const g = widgetExpandGeom(MID, 200, SCREEN)
-    expect(g.h).toBeGreaterThan(WIDGET_SIZE.h)
-  })
-
-  it('面板高为 0 时不会把窗口缩没', () => {
-    const g = widgetExpandGeom(MID, 0, SCREEN)
-    expect(g.h).toBeGreaterThanOrEqual(WIDGET_SIZE.h)
+    expect(card(g).x).toBe(1100 - WIDGET_PANEL_W / 2)   // 卡片以胶囊中心为中心
   })
 
   /**
-   * ⚠️ **贴屏幕下沿**（旧默认落点就是那儿）：向下根本没有位置 ⇒ 必须**向上**，
+   * ⚠️ **贴屏幕下沿**：向下根本没有位置 ⇒ 必须**向上**，
    * 而且"贴着胶囊的那条边"（底边）**恒等** —— 否则卡片会整体离开屏边一个胶囊高
    * （09-27 样例页 CDP 实测 `jumpY = +46`，用户报的"和边缘拉开"就是它）。
    */
   it('贴屏幕下沿 ⇒ 向上展开，且**底边恒等**', () => {
-    const cur = { x: 1000, y: SCREEN.height - 8 - 40, w: 200, h: 40 }
-    const g = widgetExpandGeom(cur, 300, SCREEN)
+    const capY = SCREEN.height - 8 - WIDGET_CAP_H
+    const g = widgetExpandGeom(win(1000, capY), 300, SCREEN)
     expect(g.dir).toBe('up')
-    expect(g.y + g.h).toBe(cur.y + 40)              // 底边 = 胶囊底边（不变）
-    expect(g.capOffsetY).toBe(g.h - 40)             // 胶囊贴窗口底边
-    expect(g.y).toBeGreaterThanOrEqual(8)
+    expect(card(g).y + card(g).h).toBe(capY + WIDGET_CAP_H)   // 底边 = 胶囊底边
+    expect(card(g).y).toBeGreaterThanOrEqual(8)
   })
 
   it('**近边恒等**：向下 ⟺ 顶边不动，向上 ⟺ 底边不动（四组位置都成立）', () => {
-    for (const cur of [
-      { x: 400, y: 100, w: 200, h: 40 },                       // 上沿附近
-      { x: 400, y: 500, w: 200, h: 40 },                       // 中部
-      { x: 400, y: SCREEN.height - 48, w: 200, h: 40 },        // 贴下沿
-      { x: 1500, y: SCREEN.height - 48, w: 200, h: 40 },       // 右下角
-    ]) {
-      const g = widgetExpandGeom(cur, 300, SCREEN)
-      if (g.dir === 'down') expect(g.y + g.capOffsetY).toBe(cur.y)
-      else expect(g.y + g.capOffsetY + 40).toBe(cur.y + 40)
+    for (const [x, y] of [
+      [400, 100],                                   // 上沿附近
+      [400, 500],                                   // 中部
+      [400, SCREEN.height - 8 - WIDGET_CAP_H],      // 贴下沿
+      [1500, SCREEN.height - 8 - WIDGET_CAP_H],     // 右下角
+    ] as const) {
+      const g = widgetExpandGeom(win(x, y), 300, SCREEN)
+      if (g.dir === 'down') expect(card(g).y).toBe(y)
+      else expect(card(g).y + card(g).h).toBe(y + WIDGET_CAP_H)
     }
   })
 
+  /**
+   * ⚠️ **F1 修掉的那块空白**：旧模型"窗口 = 胶囊 + 间隙 + 面板"把胶囊那一格留成了
+   * 窗口内的透明空白（用户在样例页报的「展开后最顶上空出一大块」），
+   * 而且卡片在胶囊**外侧** ⇒ 点开的一瞬间整体离开屏边 46px。
+   * 现在卡片顶边 == 胶囊顶边、卡片高 == 面板高 ⇒ 两件事都不存在。
+   */
+  it('**没有那 46px 空白**（F1）：卡片顶 == 胶囊顶，卡片高 == 面板高', () => {
+    const capY = 300
+    const panelH = 240
+    const g = widgetExpandGeom(win(1000, capY), panelH, SCREEN)
+    expect(card(g).y).toBe(capY)
+    expect(card(g).h).toBe(panelH)
+    expect(card(g).y + card(g).h).toBe(capY + panelH)   // 不是 capY + 46 + panelH
+  })
+
   describe('横向：默认居中，居中出屏才贴边（"只在边缘才反向"）', () => {
-    it('屏幕中部 ⇒ 居中，胶囊在窗口正中', () => {
-      const g = widgetExpandGeom({ x: 860, y: 300, w: 200, h: 40 }, 300, SCREEN)
+    it('屏幕中部 ⇒ 居中', () => {
+      const g = widgetExpandGeom(win(860, 300), 300, SCREEN)
       expect(g.align).toBe('center')
-      expect(g.capOffsetX).toBe((g.w - 200) / 2)
-      expect(g.x).toBe(860 + 100 - g.w / 2)
+      expect(card(g).x).toBe(860 + 100 - WIDGET_PANEL_W / 2)
     })
 
-    it('贴右缘 ⇒ 面板**向左**长，胶囊贴窗口右缘、屏幕位置不变', () => {
-      const cur = { x: SCREEN.width - 220, y: 300, w: 200, h: 40 }
-      const g = widgetExpandGeom(cur, 300, SCREEN)
+    it('贴右缘 ⇒ 卡片**向左**长（右缘仍在屏内）', () => {
+      const capX = SCREEN.width - 220
+      const g = widgetExpandGeom(win(capX, 300), 300, SCREEN)
       expect(g.align).toBe('left')
-      expect(g.capOffsetX).toBe(g.w - 200)
-      expect(g.x + g.capOffsetX).toBe(cur.x)        // 胶囊**不动**
-      expect(g.x + g.w).toBeLessThanOrEqual(SCREEN.width)
+      expect(card(g).x + card(g).w).toBeLessThanOrEqual(SCREEN.width)
+      expect(card(g).x + card(g).w).toBe(capX + WIDGET_SIZE.w)   // 右缘 = 胶囊右缘
     })
 
-    it('贴左缘 ⇒ 面板**向右**长，胶囊贴窗口左缘、屏幕位置不变', () => {
-      const cur = { x: 8, y: 300, w: 200, h: 40 }
-      const g = widgetExpandGeom(cur, 300, SCREEN)
+    it('贴左缘 ⇒ 卡片**向右**长（左缘 = 胶囊左缘）', () => {
+      const g = widgetExpandGeom(win(8, 300), 300, SCREEN)
       expect(g.align).toBe('right')
-      expect(g.capOffsetX).toBe(0)
-      expect(g.x).toBe(8)
-      expect(g.x + g.capOffsetX).toBe(cur.x)
+      expect(card(g).x).toBe(8)
     })
 
     it('**正中央不会被判成"向上 + 向左"**（按中线劈半的老错法）', () => {
       // 用户 2026-09-27 截图：胶囊在屏幕正中，面板却往左上长。
       // 根因：`down: cy < 0.5`、`right: cx < 0.5` ⇒ 正中 `0.5 < 0.5` 为 false。
       const g = widgetExpandGeom(
-        { x: SCREEN.width / 2 - 100, y: SCREEN.height / 2 - 20, w: 200, h: 40 }, 300, SCREEN)
+        win(SCREEN.width / 2 - 100, SCREEN.height / 2 - 20), 300, SCREEN)
       expect(g.dir).toBe('down')
       expect(g.align).toBe('center')
     })
 
-    it('窄屏（500）：窗口夹回屏内，胶囊**仍然不动**', () => {
+    it('窄屏（500）：卡片夹回屏内，不越出左右缘', () => {
       const tiny = { width: 500, height: 600 }
-      const cur = { x: 100, y: 100, w: 200, h: 40 }
-      const g = widgetExpandGeom(cur, 200, tiny)
-      expect(g.x).toBeGreaterThanOrEqual(8)
-      expect(g.x + g.w).toBeLessThanOrEqual(tiny.width)
-      expect(g.x + g.capOffsetX).toBe(cur.x)        // 靠偏移吸收夹取，胶囊不挪
+      const g = widgetExpandGeom(win(100, 100), 200, tiny)
+      expect(card(g).x).toBeGreaterThanOrEqual(8)
+      expect(card(g).x + card(g).w).toBeLessThanOrEqual(tiny.width)
     })
+  })
+
+  it('**两边都装不下时挑余量大的那边**（不是无脑向上翻）', () => {
+    // 胶囊贴着**上沿**(y=10)、面板高过屏幕：下方 1062px、上方 42px ⇒ 向下（下面更多）。
+    // 旧规则是"向下装不下就向上"，那会把面板甩到只有 42px 的上方去。
+    const g = widgetExpandGeom(win(800, 10), 1200, SCREEN)
+    expect(g.dir).toBe('down')
+  })
+
+  it('面板高过屏幕（谁都装不下）时卡片夹回屏内，不出现负坐标', () => {
+    const g = widgetExpandGeom(win(860, 80), 5000, SCREEN)
+    // ⚠️ 判**卡片**：窗口（卡片 + 留白）可以探到屏幕外 —— 那圈留白本来就是给阴影的，
+    //    它出屏只意味着那一侧阴影被桌面的边缘裁掉，与"卡片看不见"是两回事。
+    expect(card(g).x).toBeGreaterThanOrEqual(WIDGET_EDGE)
+    expect(card(g).y).toBeGreaterThanOrEqual(WIDGET_EDGE)
+  })
+
+  it('胶囊顶到宽度上限（400）时卡片仍然装得下它', () => {
+    const capX = 800
+    const g = widgetExpandGeom(win(capX, 300, WIDGET_CAP_MAX_W), 300, SCREEN)
+    expect(card(g).w).toBe(WIDGET_PANEL_W)
+    expect(card(g).x).toBeLessThanOrEqual(capX)
+    expect(card(g).x + card(g).w).toBeGreaterThanOrEqual(capX + WIDGET_CAP_MAX_W)
+  })
+})
+
+describe('widgetCollapseGeom：展开→收起是闭环', () => {
+  it('回到**卡片 = 胶囊**的尺寸（宽 = 量出来的胶囊宽，不再是写死的 200）', () => {
+    const ex = widgetExpandGeom(win(1000, 300), 300, SCREEN)
+    const g = widgetCollapseGeom(ex, SCREEN, 260)
+    expect(card(g)).toEqual({ x: 1000 + 100 - 130, y: 300, w: 260, h: WIDGET_CAP_H })
+    expect(g.w).toBe(260 + PAD * 2)     // 窗口比卡片大一圈
+  })
+
+  it('**向下展开再收起** ⇒ 回到用户原来摆的位置（闭环）', () => {
+    const before = win(1000, 300)
+    const ex = widgetExpandGeom(before, 300, SCREEN)
+    const back = widgetCollapseGeom(ex, SCREEN, WIDGET_SIZE.w, { x: 1000, y: 300, w: WIDGET_SIZE.w })
+    expect(card(back)).toEqual({ x: 1000, y: 300, w: WIDGET_SIZE.w, h: WIDGET_CAP_H })
   })
 
   /**
-   * ⚠️ `capOffsetY` 是 2026-09-25 批 5g 加的，守的是一个**真机截图里的错位**：
-   * 原来 CSS 认定"翻上去 ⇒ 胶囊贴窗口**底**边"（`flex-end`），
-   * 而贴屏幕上沿时窗口会被**夹**（顶边不能为负）⇒ 那个假设不成立 ⇒ 胶囊跳到窗口中间。
+   * ⚠️ 翻转分支的闭环**靠 `restore`**：贴边展开时卡片必须被夹（否则面板出屏），
+   * 于是"从展开矩形反推"会少掉那几十像素 —— 每悬停一次漂一点，久了小窗就爬走了。
+   * 所以收起要**直接回到展开前记下的卡片矩形**。
    */
-  describe('capOffset：胶囊在窗口内的偏移（几何给，CSS 不许猜）', () => {
-    it('向下展开且没被夹 ⇒ 纵向偏移 0（胶囊仍在窗口顶边）', () => {
-      const g = widgetExpandGeom({ x: 1000, y: 300, w: 200, h: 40 }, 300, SCREEN)
-      expect(g.dir).toBe('down')
-      expect(g.capOffsetY).toBe(0)
-    })
-
-    it('**向上翻且装不下** ⇒ 窗口顶边被夹住、偏移**跟着变小**（不是窗口高 − 胶囊高）', () => {
-      // 贴屏幕下沿（y=1000，底边 1040）+ 高过屏幕的面板（1146）：
-      // 下方只剩 72px、上方有 1032px ⇒ 向上（两边都不够时挑余量大的那边）。
-      const TOTAL_TALL = 1100
-      const g = widgetExpandGeom({ x: 800, y: 1000, w: 200, h: 40 }, TOTAL_TALL, SCREEN)
-      expect(g.dir).toBe('up')
-      expect(g.y).toBe(8)                                 // 被夹到屏幕留白处
-      // 真实偏移 = 胶囊原 y(1000) − 窗口 y(8)，**远小于** `窗口高 − 胶囊高`(1106)
-      expect(g.capOffsetY).toBe(992)
-      expect(g.capOffsetY).not.toBe(g.h - 40)
-      expect(g.y + g.capOffsetY).toBe(1000)               // 即便装不下，胶囊也不许被挪
-    })
-
-    it('**两边都装不下时挑余量大的那边**（不是无脑向上翻）', () => {
-      // 胶囊贴着**上沿**(y=10)、面板高过屏幕：下方 1062px、上方 42px ⇒ 向下（下面更多）。
-      // 旧规则是"向下装不下就向上"，那会把面板甩到只有 42px 的上方去。
-      const g = widgetExpandGeom({ x: 800, y: 10, w: 200, h: 40 }, 1200, SCREEN)
-      expect(g.dir).toBe('down')
-      expect(g.y).toBe(8)
-      expect(g.y + g.capOffsetY).toBe(10)                 // 夹取被偏移吸收，胶囊不动
-    })
-
-    it('**胶囊的屏幕位置在展开前后不变**（两条轴都是"不动"的定义）', () => {
-      const cases = [
-        { x: 800, y: 10, w: 200, h: 40 },                      // 贴上沿（会被夹）
-        { x: 860, y: 80, w: 200, h: 40 },                      // 默认落点
-        { x: 1000, y: 300, w: 200, h: 40 },                    // 屏幕中部
-        { x: SCREEN.width - 220, y: 300, w: 200, h: 40 },      // 贴右缘
-        { x: 8, y: 300, w: 200, h: 40 },                        // 贴左缘
-      ]
-      for (const cur of cases) {
-        const g = widgetExpandGeom(cur, 300, SCREEN)
-        // 胶囊**在屏幕上的**矩形 = 窗口矩形 + 窗口内偏移
-        expect(g.x + g.capOffsetX).toBe(cur.x)
-        expect(g.y + g.capOffsetY).toBe(cur.y)
-      }
-    })
-
-    it('胶囊比面板还宽时（内容 400）偏移只能是 0 —— 不会算出负数', () => {
-      const g = widgetExpandGeom(
-        { x: 800, y: 300, w: WIDGET_CAP_MAX_W, h: 40 }, 300, SCREEN)
-      expect(g.w).toBe(WIDGET_PANEL_W)
-      expect(g.capOffsetX).toBe(0)
-    })
-
-    it('折叠态两个偏移恒为 0', () => {
-      const g = widgetCollapseGeom({ x: 900, y: 900, w: 400, h: 346 }, SCREEN, 200,
-                                   { x: 900, y: 900, w: 200 })
-      expect(g.capOffsetX).toBe(0)
-      expect(g.capOffsetY).toBe(0)
-      expect(g.dir).toBe('down')
-    })
+  it('**向上展开再收起** ⇒ 精确回到展开前的位置（靠 restore，不靠反推）', () => {
+    const capY = SCREEN.height - 8 - WIDGET_CAP_H
+    const before = win(1000, capY)
+    const ex = widgetExpandGeom(before, 300, SCREEN)
+    expect(ex.dir).toBe('up')
+    const back = widgetCollapseGeom(
+      ex, SCREEN, WIDGET_SIZE.w, { x: 1000, y: capY, w: WIDGET_SIZE.w })
+    expect(card(back).x).toBe(1000)
+    expect(card(back).y).toBe(capY)     // 贴着屏幕下沿**不被推上去**（两条路径夹取口径一致）
   })
 
-  it('面板高过屏幕（谁都装不下）时被夹回屏幕内，不出现负坐标', () => {
-    const g = widgetExpandGeom({ x: 860, y: 80, w: 200, h: 40 }, 5000, SCREEN)
-    expect(g.y).toBeGreaterThanOrEqual(8)
-    expect(g.x).toBeGreaterThanOrEqual(8)
-    // 即便装不下，胶囊也**不许被挪**（偏移吸收夹取）—— 这是"用户摆哪就是哪"的底线
-    expect(g.y + g.capOffsetY).toBe(80)
+  /**
+   * ⚠️ **内容在展开期间变了**（方案 A：宽度跟内容走）—— 收起时回到的是
+   * 胶囊的**中心**，不是左上角。按左上角回位会让胶囊中心漂掉半个宽度差，
+   * 而用户看到的是"我没动它，它自己偏了"。
+   */
+  it('展开期间内容变宽 ⇒ 收起时**中心**不变、宽度跟上', () => {
+    const ex = widgetExpandGeom(win(1000, 300), 300, SCREEN)
+    const back = widgetCollapseGeom(ex, SCREEN, 320, { x: 1000, y: 300, w: WIDGET_SIZE.w })
+    expect(card(back).w).toBe(320)
+    expect(card(back).x + card(back).w / 2).toBe(1000 + WIDGET_SIZE.w / 2)
+    expect(card(back).y).toBe(300)
+  })
+
+  it('**反复展开/收起不漂移**（10 轮之后仍在原处）—— 反推法会在这里累积误差', () => {
+    const p0 = defaultWidgetPos(SCREEN)
+    const capX0 = p0.x + PAD
+    const capY0 = p0.y + PAD
+    let cur = win(capX0, capY0)
+    for (let i = 0; i < 10; i++) {
+      const ex = widgetExpandGeom(cur, 300, SCREEN)
+      const back = widgetCollapseGeom(ex, SCREEN, WIDGET_SIZE.w,
+        { x: capX0, y: capY0, w: WIDGET_SIZE.w })
+      cur = { ...back }
+    }
+    // 只比四个矩形字段（几何对象现在还有 `dir`/`align`，那是给动画与探针看的）
+    expect({ x: cur.x, y: cur.y, w: cur.w, h: cur.h }).toEqual(win(capX0, capY0))
+  })
+
+  it('没有 restore 时退回反推（退化路径仍要能用）', () => {
+    const ex = widgetExpandGeom(win(1000, 300), 300, SCREEN)
+    const back = widgetCollapseGeom(ex, SCREEN, WIDGET_SIZE.w)
+    expect(card(back).w).toBe(WIDGET_SIZE.w)
+    expect(card(back).h).toBe(WIDGET_CAP_H)
+    expect(card(back).y).toBe(300)
+  })
+})
+
+/**
+ * 折叠态**只改宽**（D1：内容变长 ⇒ 窗口要跟上去，否则胶囊右半边被窗口裁掉）。
+ */
+describe('widgetCapsuleGeom：跟随内容宽，且保持胶囊中心', () => {
+  it('变宽 ⇒ 往两边长（中心不动），高度恒定', () => {
+    const g = widgetCapsuleGeom(win(1000, 300), SCREEN, 300)
+    expect(card(g)).toEqual({ x: 1000 + 100 - 150, y: 300, w: 300, h: WIDGET_CAP_H })
+  })
+
+  it('变窄 ⇒ 同样保持中心', () => {
+    const g = widgetCapsuleGeom(win(1000, 300, 400), SCREEN, 200)
+    expect(card(g).x + card(g).w / 2).toBe(1000 + 200)
+  })
+
+  it('贴右缘时长到 400 ⇒ 夹回屏内（整卡可见），不会把胶囊推出去', () => {
+    const capX = SCREEN.width - 220
+    const g = widgetCapsuleGeom(win(capX, 300), SCREEN, WIDGET_CAP_MAX_W)
+    expect(card(g).x + card(g).w).toBeLessThanOrEqual(SCREEN.width - WIDGET_MIN_VISIBLE)
+    expect(card(g).x).toBeGreaterThanOrEqual(WIDGET_MIN_VISIBLE - card(g).w)
+  })
+
+  it('量不到宽（0）⇒ 退回下限，不会算出 0 宽窗口', () => {
+    const g = widgetCapsuleGeom(win(1000, 300), SCREEN, 0)
+    expect(card(g).w).toBe(WIDGET_SIZE.w)
+  })
+})
+
+/**
+ * **外阴影的留白是算出来的**（F1 批）：用户报的"小窗阴影被截断了"，
+ * 根因就是"阴影"与"留白"这两个数各写一遍（当时留白是 0）。
+ */
+describe('阴影留白：窗口必须比卡片大出"阴影伸出去的那一段"', () => {
+  it('留白 = 所有层里最大的 `dy + blur/2`（向上取整）', () => {
+    const all = [...WIDGET_SHADOW_LAYERS, ...WIDGET_SHADOW_OPEN_LAYERS]
+    const need = Math.max(...all.map(shadowReachBottom))
+    expect(WIDGET_SHADOW_PAD).toBe(Math.ceil(need))
+  })
+
+  it('**每一层都装得下**（留白 ≥ 它的伸出量）—— 破了就是"阴影被截断"', () => {
+    for (const l of [...WIDGET_SHADOW_LAYERS, ...WIDGET_SHADOW_OPEN_LAYERS]) {
+      expect(shadowReachBottom(l)).toBeLessThanOrEqual(WIDGET_SHADOW_PAD)
+    }
+  })
+
+  it('留白不许是 0（没有留白 = 阴影一定被裁）', () => {
+    expect(WIDGET_SHADOW_PAD).toBeGreaterThan(0)
+  })
+
+  it('`shadowCss` 生成的是合法层（每层 `0 dy blur rgba(…)`）', () => {
+    const css = shadowCss(WIDGET_SHADOW_LAYERS)
+    // ⚠️ 按**括号深度**切逗号：`rgba(0, 0, 0, .38)` 里的逗号不是层分隔符
+    //    （探针侧数阴影层数时踩过同一个坑：`split('),')` 恒为 1 层）。
+    const layers = css.split(/,(?![^(]*\))/)
+    expect(layers).toHaveLength(WIDGET_SHADOW_LAYERS.length)
+    expect(css).toContain('rgba(0, 0, 0, 0.38)')
   })
 })
 
@@ -321,6 +427,10 @@ describe('widgetExpandGeom：展开要把窗口长够，四方向朝屏幕里侧
  * ⚠️ 这组用例守的是**自指循环**（2026-09-25 批 5f 实测）：
  * 面板高 → 决定窗口高（窗口 = 40 + 6 + 面板高）→ 若上限又按**窗口**高算，循环闭合，
  * 面板被永久压在某个值上（实测卡在 120 的下限，用户看到的就是"被挤压"）。
+ *
+ * ⚠️ F1 之后"窗口 = 卡片 = 面板"，这条循环**少了一环**，但判据照旧有用：
+ * 上限仍然必须只与**屏幕**有关（`screen.availHeight`）——
+ * 换成 `window.innerHeight` 一样会闭合。
  */
 describe('widgetPanelMaxHeight：面板上限必须按**屏幕**算', () => {
   it('1080p（可用 1040）⇒ 920，远大于内容高（不会压住面板）', () => {
@@ -357,109 +467,6 @@ describe('widgetPanelMaxHeight：面板上限必须按**屏幕**算', () => {
   })
 })
 
-describe('widgetCollapseGeom：展开→收起是闭环', () => {
-  it('回到折叠尺寸（宽 = **量出来的胶囊宽**，不再是写死的 200）', () => {
-    const ex = widgetExpandGeom({ x: 1000, y: 300, w: 200, h: 40 }, 300, SCREEN)
-    const g = widgetCollapseGeom({ ...ex }, SCREEN, 260)
-    expect(g.w).toBe(260)
-    expect(g.h).toBe(WIDGET_CAP_H)
-  })
-
-  it('**向下展开再收起** ⇒ 回到用户原来摆的位置（闭环）', () => {
-    const before = { x: 1000, y: 300, w: WIDGET_SIZE.w, h: WIDGET_SIZE.h }
-    const ex = widgetExpandGeom(before, 300, SCREEN)
-    const back = widgetCollapseGeom({ ...ex }, SCREEN, before.w)
-    expect(back.x).toBe(before.x)
-    expect(back.y).toBe(before.y)
-  })
-
-  /**
-   * ⚠️ 翻转分支的闭环**靠 `restore`**：贴边展开时窗口必须被夹（否则面板出屏），
-   * 于是"从展开矩形反推"会少掉那几十像素 —— 每悬停一次漂一点，久了小窗就爬走了。
-   * 所以收起要**直接回到展开前记录的矩形**。
-   */
-  it('**向上翻再收起** ⇒ 精确回到展开前的位置（靠 restore，不靠反推）', () => {
-    const before = { x: 1000, y: SCREEN.height - 48, w: WIDGET_SIZE.w, h: WIDGET_CAP_H }
-    const ex = widgetExpandGeom(before, 300, SCREEN)
-    expect(ex.dir).toBe('up')
-    const back = widgetCollapseGeom({ ...ex }, SCREEN, before.w, before)
-    expect(back.x).toBe(before.x)
-    expect(back.y).toBe(before.y)
-  })
-
-  /**
-   * ⚠️ **内容在展开期间变了**（方案 A：宽度跟内容走）—— 收起时回到的是
-   * 胶囊的**中心**，不是窗口左上角。按左上角回位会让胶囊中心漂掉半个宽度差，
-   * 而用户看到的是"我没动它，它自己偏了"。
-   */
-  it('展开期间内容变宽 ⇒ 收起时**中心**不变、宽度跟上', () => {
-    const before = { x: 1000, y: 300, w: 200, h: WIDGET_CAP_H }
-    const ex = widgetExpandGeom(before, 300, SCREEN)
-    const back = widgetCollapseGeom({ ...ex }, SCREEN, 320, before)
-    expect(back.w).toBe(320)
-    expect(back.x + back.w / 2).toBe(before.x + before.w / 2)
-    expect(back.y).toBe(before.y)
-  })
-
-  it('**反复展开/收起不漂移**（10 轮之后仍在原处）—— 反推法会在这里累积误差', () => {
-    const before = { ...defaultWidgetPos(SCREEN), w: WIDGET_SIZE.w, h: WIDGET_CAP_H }
-    let cur: { x: number; y: number; w: number; h: number } = { ...before }
-    for (let i = 0; i < 10; i++) {
-      const ex = widgetExpandGeom(cur, 300, SCREEN)
-      const back = widgetCollapseGeom({ ...ex }, SCREEN, cur.w, { ...cur })
-      cur = { ...back }
-    }
-    expect(cur.x).toBe(before.x)
-    expect(cur.y).toBe(before.y)
-    expect(cur.w).toBe(before.w)
-  })
-
-  it('没有 restore 时退回反推（退化路径仍要能用）', () => {
-    const before = { x: 1000, y: 300, w: WIDGET_SIZE.w, h: WIDGET_CAP_H }
-    const ex = widgetExpandGeom(before, 300, SCREEN)
-    const back = widgetCollapseGeom({ ...ex }, SCREEN, before.w)
-    expect(back.w).toBe(before.w)
-    expect(back.h).toBe(WIDGET_CAP_H)
-    expect(back.y).toBe(before.y)
-  })
-})
-
-/**
- * 折叠态**只改宽**（D1：内容变长 ⇒ 窗口要跟上去，否则胶囊右半边被窗口裁掉）。
- */
-describe('widgetCapsuleGeom：跟随内容宽，且保持胶囊中心', () => {
-  it('变宽 ⇒ 往两边长（中心不动），高度恒定', () => {
-    const cur = { x: 1000, y: 300, w: 200 }
-    const g = widgetCapsuleGeom(cur, SCREEN, 300)
-    expect(g.w).toBe(300)
-    expect(g.h).toBe(WIDGET_CAP_H)
-    expect(g.x + g.w / 2).toBe(cur.x + cur.w / 2)
-    expect(g.y).toBe(cur.y)
-  })
-
-  it('变窄 ⇒ 同样保持中心', () => {
-    const cur = { x: 1000, y: 300, w: 400 }
-    const g = widgetCapsuleGeom(cur, SCREEN, 200)
-    expect(g.x + g.w / 2).toBe(cur.x + cur.w / 2)
-  })
-
-  it('贴右缘时长到 400 ⇒ 夹回屏内（整窗可见），不会把胶囊推出去', () => {
-    const cur = { x: SCREEN.width - 220, y: 300, w: 200 }
-    const g = widgetCapsuleGeom(cur, SCREEN, WIDGET_CAP_MAX_W)
-    expect(g.x + g.w).toBeLessThanOrEqual(SCREEN.width - WIDGET_MIN_VISIBLE)
-    expect(g.x).toBeGreaterThanOrEqual(WIDGET_MIN_VISIBLE - g.w)
-  })
-
-  it('量不到宽（0）⇒ 退回下限，不会算出 0 宽窗口', () => {
-    const g = widgetCapsuleGeom({ x: 1000, y: 300, w: 200 }, SCREEN, 0)
-    expect(g.w).toBe(WIDGET_SIZE.w)
-  })
-})
-
-/**
- * 形态常量的**关系**（不是值本身）—— 它们之间有几条不变量，
- * 破了就会出现"胶囊被窗口裁掉"这类只有真机上看得见的问题。
- */
 describe('形态常量之间的关系（单一真源：只在 widgetWindow.ts 写一遍）', () => {
   it('面板宽 ≥ 胶囊上限 —— 展开后胶囊必然装得进窗口', () => {
     expect(WIDGET_PANEL_W).toBeGreaterThanOrEqual(WIDGET_CAP_MAX_W)
@@ -503,7 +510,7 @@ describe('applyWidgetCssVars：常量 → CSS 变量（名字也是契约）', (
     }
   }
 
-  it('写满 5 个变量、值带 px 单位', () => {
+  it('写满 8 个变量、值带 px 单位（阴影两层与留白也在这里，F1 批加）', () => {
     const written: Record<string, string> = {}
     const fakeDoc = {
       documentElement: {
@@ -517,6 +524,9 @@ describe('applyWidgetCssVars：常量 → CSS 变量（名字也是契约）', (
       '--widget-radius': '20px',
       '--widget-panel-w': '400px',
       '--widget-cap-h': '40px',
+      '--widget-shadow-pad': `${WIDGET_SHADOW_PAD}px`,
+      '--wg-shadow-layers': shadowCss(WIDGET_SHADOW_LAYERS),
+      '--wg-shadow-open-layers': shadowCss(WIDGET_SHADOW_OPEN_LAYERS),
     })
   })
 

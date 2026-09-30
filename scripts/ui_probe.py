@@ -4244,12 +4244,12 @@ def main() -> int:
             #    窗口长高由 `widgetExpandGeom` 负责，探针里没有真窗口，
             #    绝对坐标必然与真机不同。
             wurl2 = f"http://localhost:{vite_port}/widget.html?probe=status-widget-window"
-            print(f"[probe] status-widget-window(窄视口) @400×90 → {wurl2}")
+            print(f"[probe] status-widget-window(窄视口) @464×154（卡片 400×90）→ {wurl2}")
             # ⚠️ D1（2026-09-27）：小窗的宽**不再是 200** —— 胶囊宽跟着内容走（下限 200），
             #    展开后窗口宽 = 面板宽 = **400**。所以这一段压的是**矮**视口（90），
             #    宽度给 400（真窗口的下限）。它的目标没变：`60vh` 那类"按视口算高度"的死锁
             #    只在**矮**容器里现身（621px 下 60vh=373，什么也夹不住）。
-            wres2 = _run_probe(edge, wurl2, 400, 90, WORK, "status-widget-narrow")
+            wres2 = _run_probe(edge, wurl2, 464, 154, WORK, "status-widget-narrow")
             ww2 = ((wres2 or {}).get("statusWidgetWindow") or {})
             print(f"  窄视口面板：打开={ww2.get('widgetPanelOpened')} "
                   f"高={ww2.get('widgetPanelH')} 内部={ww2.get('widgetPanelBoxes')}")
@@ -4387,22 +4387,29 @@ def main() -> int:
                 # 面板向右/向左长时胶囊贴窗口的那一条边）—— 又一个"两个主人"。
                 # ⇒ 判据换成"胶囊左缘在窗口左缘处"（折叠态 offset 恒 0；探针里没有真窗口，
                 # 几何不跑，所以这里量的正是 CSS 的兜底值 0）。纵向同理（`islandTopVsShell`）。
-                left_vs = ww.get("islandLeftVsShell")
-                if left_vs is None:
-                    failures.append(f"@{w} status-widget: 没量到胶囊相对窗口左缘的偏移"
-                                    f"（`islandLeftVsShell`）—— 探针字段丢了？")
-                elif left_vs != 0:
-                    failures.append(f"@{w} status-widget: 胶囊左缘离窗口左缘 {left_vs}px，应为 0"
-                                    f"—— 胶囊的横向位置**由几何给**（`--widget-capsule-x`），"
-                                    f"CSS 不许自己居中（那是第二个主人）")
-                top_vs = ww.get("islandTopVsShell")
-                if top_vs is None:
-                    failures.append(f"@{w} status-widget: 没量到胶囊相对窗口顶边的偏移"
-                                    f"（`islandTopVsShell`）—— 探针字段丢了？")
-                elif top_vs != 0:
-                    failures.append(f"@{w} status-widget: 胶囊顶边离窗口顶边 {top_vs}px，应为 0"
-                                    f"—— 胶囊必须贴住窗口顶边（否则展开时窗口长高、胶囊会往下漂，"
-                                    f"而面板是按胶囊位置算的 ⇒ 一起漂）")
+                # ⚠️ **F1 起（2026-09-30）窗口 = 卡片 + 一圈留白**，卡片摆在留白的原点上
+                # ⇒ 胶囊（折叠态 == 卡片）离 shell 的左/上缘都应当是**那圈留白**，不是 0。
+                # 留白宽度由 `--widget-shadow-pad` 给（TS 常量写进来）—— 判据同时钉住"两边一致"。
+                pad_css = (ww.get("shellPad") or [None, None])[0]
+                pad_var = (ww.get("widgetVars") or {}).get("shadowPad")   # TS 常量写进来的那个数
+                if pad_var not in (None, "") and pad_css is not None:
+                    pad_expect = int(float(str(pad_var).replace("px", "")))
+                    if abs(int(float(str(pad_css).replace("px", ""))) - pad_expect) != 0:
+                        failures.append(f"@{w} status-widget: shell 的 padding 是 {pad_css!r}，"
+                                        f"而 `--widget-shadow-pad` 是 {ww.get('shadowPadVar')!r} —— "
+                                        f"两者必须一致（留白就是给阴影的）")
+                    for key, label in (("islandLeftVsShell", "左"), ("islandTopVsShell", "上")):
+                        got = ww.get(key)
+                        if got is None:
+                            failures.append(f"@{w} status-widget: 没量到胶囊相对窗口{label}缘的偏移"
+                                            f"（`{key}`）—— 探针字段丢了？")
+                        elif got != pad_expect:
+                            failures.append(f"@{w} status-widget: 胶囊{label}缘离窗口{label}缘 {got}px，"
+                                            f"应为 {pad_expect}px（= 给外阴影的那圈留白）。"
+                                            f"F1 之后卡片恒在窗口的 `(pad, pad)` 处 —— 位置只有一个主人")
+                else:
+                    failures.append(f"@{w} status-widget: 量不到留白（`--widget-shadow-pad`="
+                                    f"{pad_var!r} / shell padding={pad_css!r}）")
                 # ── D1（2026-09-27）：胶囊的**解剖**必须在小窗自己的坐标系里判一次 ──
                 #
                 # ⚠️⚠️ 这一段是**新发现的第 5 次「拆入口顺带生效的东西」**（DEV-LOOP §6.1）。
@@ -4464,9 +4471,22 @@ def main() -> int:
                         f"@{w} status-widget: chevron 的渲染尺寸是 {cb}，应为 12×12 —— "
                         f"`size-[12px]` 是 **Tailwind** 类，小窗的独立入口不加载 Tailwind，"
                         f"于是 lucide 按默认 24px 画（比半个胶囊还高）")
-                if ww.get("widgetPanelWidth") != 400:
-                    failures.append(f"@{w} status-widget: 小窗面板宽是 "
-                                    f"{ww.get('widgetPanelWidth')}，应为 400（D1 定稿：面板 400）")
+                # F1：面板**铺满卡片** —— 左/上都在留白处，宽 = 视口 − 2×留白。
+                # ⚠️ 探针的视口比真窗口宽（1076 vs 真窗口的 400+64），所以这里**不能判绝对值 400**：
+                #    绝对值那条在真机上成立（`widgetExpandGeom` 让卡片宽 = 面板宽），探针能判的是
+                #    "面板 == 卡片"这条关系（`left = top = pad`、`width = viewport - 2*pad`）。
+                box = ww.get("widgetPanelBox") or {}
+                vp = ww.get("widgetViewport") or {}
+                if pad_css is not None and box and vp:
+                    pad_px = int(float(str(pad_css).replace("px", "")))
+                    if box.get("left") != pad_px or box.get("top") != pad_px:
+                        failures.append(f"@{w} status-widget: 面板在视口里的原点是 "
+                                        f"({box.get('left')}, {box.get('top')})，应为 ({pad_px}, {pad_px})"
+                                        f"—— F1 之后面板**就是卡片**，卡片恒在窗口的留白处")
+                    if abs((box.get("width") or 0) - ((vp.get("w") or 0) - pad_px * 2)) > 1:
+                        failures.append(f"@{w} status-widget: 面板宽 {box.get('width')} 与"
+                                        f"「视口 {vp.get('w')} − 2×留白 {pad_px} = "
+                                        f"{(vp.get('w') or 0) - pad_px * 2}」对不上 —— 面板必须铺满卡片")
                 ib = ww.get("widgetPanelIconBox")
                 if not ib or abs(ib[0] - 11) > 1 or abs(ib[1] - 11) > 1:
                     failures.append(
@@ -4597,6 +4617,35 @@ def main() -> int:
                 if ww.get("wgPanelAnimDelay") != 60:
                     failures.append(f"@{w} status-widget: 面板入场延迟是 {ww.get('wgPanelAnimDelay')}ms，"
                                     f"应为 60ms（= --motion-lag：内容后到）")
+                # ── F1：**展开后胶囊整行隐藏**（样例页用户两次要求；卡片就是面板）────────────
+                # ⚠️ 这条由 `StatusIsland` 写 `data-open` 驱动 ⇒ **探针里也量得到**，
+                #    不必等真机（"展开时面板在不在视口内"那些判据以前是在"胶囊还在场"的假设下量的）。
+                if ww.get("capsuleOpenAttr") != "1":
+                    failures.append(f"@{w} status-widget: 展开后 `.widget-shell` 上没有 "
+                                    f"`data-open='1'`（量到 {ww.get('capsuleOpenAttr')!r}）—— "
+                                    f"F1 要求展开时把胶囊整行隐藏")
+                if ww.get("capsuleDisplayWhenOpen") != "none":
+                    failures.append(f"@{w} status-widget: 展开后胶囊的 `display` 是 "
+                                    f"{ww.get('capsuleDisplayWhenOpen')!r}，应为 'none' —— "
+                                    f"样例页用户两次指出「圆点和下拉图标还是保留了」")
+                # ── **阴影不许被窗口裁掉**（用户 2026-09-30 报的「小窗阴影被截断了」）────────
+                # 判据：阴影向外伸出的量 ≤ 窗口比卡片多出来的那圈留白。
+                # ⚠️ 光判"有几层"不够：层数对、最外圈伸出 80px 而留白只有 32px，照样是截断。
+                if pad_var:
+                    pad_v = int(float(str(pad_var).replace("px", "")))
+                    for key, label in (("wgCapShadowReach", "胶囊"), ("wgPanelShadowReach", "面板")):
+                        got = ww.get(key)
+                        if got is None:
+                            failures.append(f"@{w} status-widget: 没量到{label}阴影的伸出量"
+                                            f"（`{key}`）—— 探针字段丢了？")
+                        elif got > pad_v:
+                            failures.append(
+                                f"@{w} status-widget: {label}阴影向外伸出 {got}px，而窗口只比卡片大 "
+                                f"{pad_v}px（`--widget-shadow-pad`）⇒ **被窗口边缘裁掉**（用户报的现象）。"
+                                f"要么缩小阴影，要么把留白算大 —— 两者是同一个数（`WIDGET_SHADOW_PAD`）")
+                else:
+                    failures.append(f"@{w} status-widget: 量不到 `--widget-shadow-pad`"
+                                    f"（{pad_var!r}）—— 阴影留白的唯一真源")
                 # **对比度**：墨色按 α 复合到卡片底、卡片底再复合到两端壁纸（与胶囊那条同一套算法）。
                 # 它是上面那张墨色表的**理由**：只钉"值对不对"会让"为什么是这个值"失传。
                 pbg = _rgba(ww.get("wgPanelBg"))

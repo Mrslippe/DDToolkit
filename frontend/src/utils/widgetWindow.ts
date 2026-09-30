@@ -76,12 +76,18 @@ export function clampWidgetPos(
  * 为什么不是"某个角"：角落是**四方向里最坏**的落点 —— 它必然贴两条边，
  * 于是第一条判据（向下）永远不成立、必须向上翻，用户看到的第一眼就是特例。
  * 顶部居中只在"上沿"这一条轴上靠边，横向完全自由 ⇒ 默认就是"向下展开"。
+ *
+ * ⚠️ 参数是**卡片**尺寸，返回值是**窗口**坐标（窗口 = 卡片 + 两侧留白，见
+ * `WIDGET_SHADOW_PAD`）—— "顶部居中"说的是**用户看得见的那张卡片**居中、离上沿 80px。
  */
 export function defaultWidgetPos(screen: ScreenBox, size: { w: number; h: number } = WIDGET_SIZE): WidgetPos {
   return clampWidgetPos(
-    { x: Math.round((screen.width - size.w) / 2), y: WIDGET_DEFAULT_TOP_GAP },
+    {
+      x: Math.round((screen.width - size.w) / 2) - WIDGET_SHADOW_PAD,
+      y: WIDGET_DEFAULT_TOP_GAP - WIDGET_SHADOW_PAD,
+    },
     screen,
-    size,
+    { w: size.w + WIDGET_SHADOW_PAD * 2, h: size.h + WIDGET_SHADOW_PAD * 2 },
   )
 }
 
@@ -191,16 +197,78 @@ export const WIDGET_STUCK = 1.5
 export const WIDGET_RESIZE_DEADBAND = 2
 
 /**
- * 展开态的窗口高度 = 胶囊高 + 间隙 + 面板高。
+ * 面板与胶囊之间的间隙（**顶栏宿主**用：`StatusIsland.place()` 的 `r.bottom + 6`）。
  *
- * 间隙 **6px** 与 `StatusIsland.place()` 里的 `r.bottom + 6` **必须一致** ——
- * 两处算的是同一件事（面板相对于胶囊的落点），不一致就会出现
- * "面板下缘被窗口裁掉 6px"这种只有真机上才看得见的缝。
+ * ⚠️ **小窗几何已经不用它了**（F1，2026-09-30）：展开时窗口/卡片**就是面板本身**
+ * （胶囊整行隐藏，见 `widgetExpandGeom`），没有"胶囊与面板之间那一格"。
  */
 export const WIDGET_PANEL_GAP = 6
 
-/** 面板与胶囊之间的间隙（与 `StatusIsland.place()` 的 `r.bottom + 6` 同值） */
-const GAP = WIDGET_PANEL_GAP
+// ── 卡片的**外阴影**与它需要的透明留白（F1 批，2026-09-30）─────────────────
+//
+// ## 用户报的现象：「小窗阴影被截断了」
+//
+// 根因是**窗口 == 卡片**：阴影要画在卡片**外面**，而窗口外面没有像素 ——
+// `box-shadow` 被窗口边缘整整切掉（用户截图里那条灰边突然中止）。
+// 透明窗口也救不了：窗口尺寸就是能画的全部范围。
+//
+// ⇒ **窗口 = 卡片 + 两侧留白**（`WIDGET_SHADOW_PAD`），卡片画在里面。
+// 留白从哪来？**从阴影自己的伸出量算出来**，不是拍的：一层 `0 <dy>px <blur>px` 的阴影
+// 向下伸出 `dy + blur/2`、向两侧伸出 `blur/2`（模糊半径的一半落在盒子外）。
+// 取所有层里最大的那个、向上取整 —— 谁改阴影，留白跟着变
+// （`WIDGET_SHADOW_PAD` 是**算出来的常量**，`widgetWindow.test.ts` 钉住它）。
+//
+// ⚠️ **代价必须说清**：那圈留白是**透明的，但会挡住鼠标**（窗口是实心的可命中矩形）——
+// 单击落在留白上算点在小窗上，不会穿到桌面。32px 是"阴影可见"与"别挡太多"的取舍；
+// 想两者都要，得在 Rust 侧按区域做 `WM_NCHITTEST → HTTRANSPARENT`（没做，记在 `TODO.md` §1.5）。
+//
+// ⚠️ 样例页那套阴影最远伸到 `36 + 88/2 = 80px`，照抄要 80px 留白（窗口比卡片宽 160px）
+// ⇒ **按留白缩了一档**（见下面两组数据）：观感仍是"三层递进的柔和投影"，
+// 但最外圈的伸出量与留白对得上。**数值改了要重算留白**（有单测）。
+export interface WidgetShadowLayer {
+  /** 纵向偏移（px，正 = 向下） */
+  y: number
+  /** 模糊半径（px） */
+  blur: number
+  /** 不透明度（0–1） */
+  alpha: number
+}
+
+/** 折叠态（胶囊）的阴影：最外一层 `14 + 36/2 = 32` ⇒ 正好用满留白 */
+export const WIDGET_SHADOW_LAYERS: WidgetShadowLayer[] = [
+  { y: 2, blur: 6, alpha: 0.38 },
+  { y: 8, blur: 20, alpha: 0.34 },
+  { y: 14, blur: 36, alpha: 0.24 },
+]
+
+/** 展开态（面板）的阴影：卡片更大、投影铺得更开，但仍然收在留白之内 */
+export const WIDGET_SHADOW_OPEN_LAYERS: WidgetShadowLayer[] = [
+  { y: 4, blur: 10, alpha: 0.40 },
+  { y: 10, blur: 24, alpha: 0.38 },
+  { y: 14, blur: 34, alpha: 0.26 },
+]
+
+/** 一层阴影向**下**伸出的量（两侧是 `blur/2`，向上是 `blur/2 − y`） */
+export function shadowReachBottom(l: WidgetShadowLayer): number {
+  return l.y + l.blur / 2
+}
+
+/**
+ * 透明留白 = 所有层伸出量的最大值（向上取整）。
+ *
+ * ⚠️ 这是**算出来的**，不是常量：它是"阴影画得下"的充分必要条件。
+ * 用户报的"阴影被截断"就是这两个数脱钩的结果（当时留白是 0）。
+ */
+export const WIDGET_SHADOW_PAD = Math.ceil(
+  Math.max(...[...WIDGET_SHADOW_LAYERS, ...WIDGET_SHADOW_OPEN_LAYERS].map(shadowReachBottom)),
+)
+
+/** 一组阴影层 → CSS `box-shadow` 值（与 `--wg-shadow*` 变量同源，由它写出去） */
+export function shadowCss(layers: WidgetShadowLayer[]): string {
+  return layers
+    .map((l) => `0 ${l.y}px ${l.blur}px rgba(0, 0, 0, ${l.alpha})`)
+    .join(', ')
+}
 
 /**
  * 展开方向：面板开在胶囊的**下方**（`down`）还是**上方**（`up`）。
@@ -225,45 +293,29 @@ export type WidgetDir = 'down' | 'up'
  */
 export type WidgetAlign = 'left' | 'center' | 'right'
 
-/** 一次 resize 要下发的**全部**几何事实（单一真源：窗口矩形 + 方向 + 胶囊在窗口内的偏移） */
+/** 一次 resize 要下发的**全部**几何事实（单一真源：窗口矩形 + 方向） */
 export interface WidgetGeom {
-  /** 窗口应该长到的尺寸 */
+  /** 窗口应该长到的尺寸（= 卡片 + 两侧留白，见 `WIDGET_SHADOW_PAD`） */
   w: number
   h: number
   /** 窗口应该挪到的位置 */
   x: number
   y: number
+  /**
+   * 卡片朝**下**长（`down`）还是朝**上**长（`up`）。
+   *
+   * 用途只剩两个：① 面板**入场动画的方向**（从胶囊那一侧滑出，见
+   * `si-panel-in-wg` / `si-panel-in-wg-up`）；② 日志与探针的可读性。
+   * ⚠️ **面板的落点不再依赖它**：F1 之后卡片就是面板，面板永远铺满卡片。
+   */
   dir: WidgetDir
+  /**
+   * 横向：卡片是**居中**在胶囊中心上，还是被屏幕边夹成了贴左/贴右。
+   *
+   * ⚠️ 与 D1 那版不同，它**不再驱动任何定位**（F1 之后卡片在窗口里恒为 `(pad, pad)`）——
+   * 留着只为**可读性与判据**（探针能从它看出"这次是被夹了还是真居中"）。
+   */
   align: WidgetAlign
-  /**
-   * **胶囊在窗口内的横向偏移**（px，从窗口左边算）。
-   *
-   * ⚠️ 为什么必须由几何算出来，不能让 CSS 猜（与纵向的 `capOffsetY` 同一条教训）：
-   * "胶囊在窗口里靠哪一边"曾有两个主人 —— 几何算窗口矩形，CSS 又自己认定"居中"。
-   * 四方向展开之后这个矛盾会变成**可见的错位**（面板向左长、胶囊却还在窗口中间）。
-   */
-  capOffsetX: number
-  /**
-   * **胶囊在窗口内的纵向偏移**（px，从窗口顶边算）。
-   *
-   * ## 为什么必须由几何算出来，不能让 CSS 猜（2026-09-25 批 5g 加）
-   *
-   * 原来 CSS 用的是"翻上去 ⇒ 胶囊贴窗口**底**边"（`flex-end`）。那在**没被夹**时是对的
-   * （窗口底边 = 胶囊底边）。但贴屏幕上沿时窗口会被**夹**（顶边不能为负）：
-   *
-   * ```
-   * 胶囊 y=10、高 40 ⇒ 向上翻要 y = 50 − 183 = −133 ⇒ 夹到 0
-   * 此时胶囊在窗口内的真实偏移 = 10 − 0 = 10（**不是** 143 = 窗口高 − 胶囊高）
-   * ```
-   *
-   * 于是 CSS 把胶囊画到窗口底部，而面板按"胶囊在 10px 处"算 ⇒ **两者错位**
-   * （用户截图：胶囊被压在顶端、和面板叠在一起）。
-   *
-   * **根因是"谁来决定胶囊在窗口里的位置"有两个主人**：几何算了窗口矩形，
-   * CSS 又自己认定胶囊贴哪条边。现在**统一由几何给**（`capOffsetX` / `capOffsetY`），
-   * CSS 只负责把它用起来 —— 单一事实源。
-   */
-  capOffsetY: number
 }
 
 /** 把胶囊宽夹进规格区间（`200–400`）——所有入口共用，别在调用点各写一遍 */
@@ -289,7 +341,26 @@ function clampToScreen(
 }
 
 /**
- * 由**当前**窗口矩形 + 面板高度，算出展开后的窗口矩形（纯函数，可单测）。
+ * **卡片坐标 ↔ 窗口坐标**（F1 批）。
+ *
+ * F1 之后模型极简：**窗口 = 卡片 + 两侧留白**（`WIDGET_SHADOW_PAD`），
+ * 卡片永远画在窗口内的 `(pad, pad)` 处 —— 于是"胶囊/面板在窗口里靠哪一边"
+ * 这套偏移机制（`--widget-capsule-x/offset`）**整个消失了**：
+ * 位置问题只剩"窗口该放哪儿"，由下面三个纯函数算。
+ */
+function windowFromCard(card: { x: number; y: number; w: number; h: number }) {
+  const p = WIDGET_SHADOW_PAD
+  return { x: card.x - p, y: card.y - p, w: card.w + p * 2, h: card.h + p * 2 }
+}
+
+/** 当前窗口矩形 → 卡片矩形（折叠态下卡片 == 胶囊） */
+function cardFromWindow(win: { x: number; y: number; w: number; h: number }) {
+  const p = WIDGET_SHADOW_PAD
+  return { x: win.x + p, y: win.y + p, w: win.w - p * 2, h: win.h - p * 2 }
+}
+
+/**
+ * 展开：**卡片 = 面板本身**（F1：胶囊整行隐藏），只算"这张卡片该摆在哪"。
  *
  * ## 四条判据（09-27 定稿，与样例页 `decideDir` 同款）
  *
@@ -299,12 +370,12 @@ function clampToScreen(
  * 2. **水平：默认居中；居中出屏才贴边** —— 夹取天然就是"只在边缘才反向展开"。
  *    ⚠️ 三个候选（居中 / 贴左 / 贴右）里**居中是区间中点** ⇒ 若两侧贴边都放得下，
  *    居中必然也放得下 ⇒ 这个顺序**不必来回比较**（可证，不是拍脑袋）。
- * 3. **近边恒等**（F1）：窗口**贴住胶囊的那条边**在展开前后是同一个值
- *    （向下 ⇒ 窗口顶 = 胶囊顶；向上 ⇒ 窗口底 = 胶囊底）。
- *    样例页记过：把窗口放在胶囊**外侧**会让卡片整体离开屏边一个胶囊高
- *    （CDP 实测 `jumpY = +46 = CAP_H + GAP`，用户报的"和边缘拉开"就是它）。
- * 4. **锚点 = 胶囊所在的角**：方向定了之后，胶囊在窗口里贴哪一边也就定了
- *    —— 所以 `capOffsetX/Y` 是**算出来的**，不是让 CSS 再判一次。
+ * 3. **近边恒等**（F1）：卡片**贴住胶囊的那条边**在展开前后是同一个值
+ *    （向下 ⇒ 卡片顶 = 胶囊顶；向上 ⇒ 卡片底 = 胶囊底）。
+ *    样例页记过：把卡片放在胶囊**外侧**会让它整体离开屏边一个胶囊高
+ *    （CDP 实测 `jumpY = +46`，用户报的"和边缘拉开"就是它）。
+ * 4. **高度就是面板高**（不再 `胶囊 + 间隙 + 面板`）：F1 之后没有那一格，
+ *    而它正是"展开后顶上多出一块空白"的来源（样例页用户原话）。
  */
 export function widgetExpandGeom(
   cur: { x: number; y: number; w: number; h: number },
@@ -312,70 +383,62 @@ export function widgetExpandGeom(
   screen: ScreenBox,
 ): WidgetGeom {
   const capH = WIDGET_CAP_H
-  const capW = clampCapsuleW(cur.w)          // 折叠态：窗口 == 胶囊 ⇒ `cur.w` 就是胶囊宽
-  const h = Math.max(0, panelH)
-  const totalH = capH + GAP + h
-  const w = Math.max(capW, WIDGET_PANEL_W)
-  const capLeft = cur.x
-  // 中心用**夹过之后**的 capW 算（不是 `cur.w`）：调用方可能量到"窗口还差一帧没跟上"的
-  // 旧宽，两处用不同的数会让"居中"偏半个宽度差。
-  const capCenter = cur.x + capW / 2
+  const card = cardFromWindow(cur)
+  const capW = clampCapsuleW(card.w)   // 折叠态：卡片 == 胶囊 ⇒ 量到的宽就是胶囊宽
+  const capLeft = card.x
+  const capCenter = card.x + capW / 2
+  // 卡片宽：面板宽，但**不许比屏幕还宽**（退化：极小屏）
+  const cardW = Math.min(WIDGET_PANEL_W, Math.max(WIDGET_CAP_MIN_W, screen.width - WIDGET_EDGE * 2))
+  const cardH = Math.max(1, Math.round(panelH))
 
   // ── 垂直方向 ────────────────────────────────────────────────────────
-  // 余量口径：向下是"从胶囊**顶边**到屏幕下边"（窗口顶边不动），
-  //          向上是"从胶囊**底边**到屏幕上边"（窗口底边不动）。
-  const roomBelow = screen.height - WIDGET_EDGE - cur.y
-  const roomAbove = cur.y + capH - WIDGET_EDGE
-  const stuckBottom = cur.y + capH >= screen.height - WIDGET_EDGE - WIDGET_STUCK
+  // 余量口径：向下是"从胶囊**顶边**到屏幕下边"（卡片顶边不动），
+  //          向上是"从胶囊**底边**到屏幕上边"（卡片底边不动）。
+  const roomBelow = screen.height - WIDGET_EDGE - card.y
+  const roomAbove = card.y + capH - WIDGET_EDGE
+  const stuckBottom = card.y + capH >= screen.height - WIDGET_EDGE - WIDGET_STUCK
   let dir: WidgetDir
-  if (stuckBottom && roomAbove >= totalH) dir = 'up'
-  else if (roomBelow >= totalH) dir = 'down'
-  else if (roomAbove >= totalH) dir = 'up'
+  if (stuckBottom && roomAbove >= cardH) dir = 'up'
+  else if (roomBelow >= cardH) dir = 'down'
+  else if (roomAbove >= cardH) dir = 'up'
   else dir = roomBelow >= roomAbove ? 'down' : 'up'
 
   // ── 水平：先居中，居中放不下才贴边 ──────────────────────────────────
-  const centered = Math.round(capCenter - w / 2)
+  const centered = Math.round(capCenter - cardW / 2)
   const fitsCentered =
-    centered >= WIDGET_EDGE && centered + w <= screen.width - WIDGET_EDGE
-  const growRight = Math.round(capLeft)                 // 胶囊贴窗口左缘 ⇒ 面板向右长
-  const growLeft = Math.round(capLeft + capW - w)        // 胶囊贴窗口右缘 ⇒ 面板向左长
+    centered >= WIDGET_EDGE && centered + cardW <= screen.width - WIDGET_EDGE
+  const growRight = Math.round(capLeft)                 // 卡片左缘 = 胶囊左缘 ⇒ 向右长
+  const growLeft = Math.round(capLeft + capW - cardW)    // 卡片右缘 = 胶囊右缘 ⇒ 向左长
   const fitsRight =
-    growRight >= WIDGET_EDGE && growRight + w <= screen.width - WIDGET_EDGE
+    growRight >= WIDGET_EDGE && growRight + cardW <= screen.width - WIDGET_EDGE
   const fitsLeft =
-    growLeft >= WIDGET_EDGE && growLeft + w <= screen.width - WIDGET_EDGE
+    growLeft >= WIDGET_EDGE && growLeft + cardW <= screen.width - WIDGET_EDGE
   const rawX = fitsCentered ? centered : fitsRight ? growRight : fitsLeft ? growLeft : centered
+  const align: WidgetAlign = fitsCentered ? 'center' : fitsRight ? 'right' : fitsLeft ? 'left'
+    : rawX <= WIDGET_EDGE ? 'right' : 'left'
 
   // 纵向：近边恒等（向下 ⇒ 顶边不动；向上 ⇒ 底边不动），再整体夹进屏幕
-  const rawY = dir === 'down' ? cur.y : cur.y + capH - totalH
-  const c = clampToScreen(rawX, rawY, w, totalH, screen)
-
-  // 胶囊在窗口内的偏移：**默认就是它原来在屏幕上的位置**（胶囊不动），
-  // 只有当窗口被夹回来、装不下时才会被挤（退化情形：屏幕比面板还窄）。
-  const capOffsetX = Math.round(
-    Math.min(Math.max(capLeft - c.x, 0), Math.max(0, w - capW)))
-  const capOffsetY = Math.round(
-    Math.min(Math.max(cur.y - c.y, 0), Math.max(0, totalH - capH)))
-  const align: WidgetAlign = capOffsetX <= 0 ? 'right'
-    : capOffsetX >= w - capW ? 'left' : 'center'
-
-  return { w, h: totalH, x: c.x, y: c.y, dir, align, capOffsetX, capOffsetY }
+  const rawY = dir === 'down' ? card.y : card.y + capH - cardH
+  const c = clampToScreen(rawX, rawY, cardW, cardH, screen)
+  const win = windowFromCard({ x: c.x, y: c.y, w: cardW, h: cardH })
+  return { w: win.w, h: win.h, x: win.x, y: win.y, dir, align }
 }
 
 /**
- * 折叠态：把窗口收成**胶囊本身**的大小（宽由调用方量出来的 `capW` 决定）。
+ * 收起：卡片回到**胶囊本身**的大小（宽由调用方量出来的 `capW` 决定）。
  *
  * ## 为什么必须"回到原处"而不是反推
  *
- * 光靠"从展开矩形反推"**在屏幕边缘会漂**：展开时窗口从 200 变 400，
+ * 光靠"从展开矩形反推"**在屏幕边缘会漂**：展开时卡片从 200 变 400，
  * 贴右缘的小窗**必须**被夹回来（否则面板出屏），于是"展开矩形的中心"已经不是
  * 原来那个中心了 —— 再反推回去就少了那几十像素（实测 1696 → 1656）。
  * 一次展开/收起看不出什么，但**每次悬停都漂一点**，久了小窗就爬走了。
  *
- * 所以调用方（`StatusWidgetWindow`）在展开**之前**把胶囊矩形传进来，
+ * 所以调用方（`StatusWidgetWindow`）在展开**之前**把**胶囊的卡片矩形**传进来，
  * 收起时**直接回到那个矩形** —— 展开/收起成为一个精确的闭环。
  * 拿不到 `restore` 时才退回反推（退化路径，仍有夹取兜底）。
  *
- * ⚠️ 回到的是**胶囊的中心**（横向）与**顶边**（纵向），不是"窗口左上角"：
+ * ⚠️ 回到的是**胶囊的中心**（横向）与**顶边**（纵向），不是"左上角"：
  * 内容变了之后胶囊宽也变了（方案 A），按左上角回位会让胶囊**中心**漂掉半个宽度差。
  */
 export function widgetCollapseGeom(
@@ -386,8 +449,9 @@ export function widgetCollapseGeom(
 ): WidgetGeom {
   const w = clampCapsuleW(capW)
   const h = WIDGET_CAP_H
-  const anchorX = restore ? restore.x + restore.w / 2 : cur.x + cur.w / 2
-  const topY = restore ? restore.y : cur.y
+  const card = cardFromWindow(cur)
+  const anchorX = restore ? restore.x + restore.w / 2 : card.x + card.w / 2
+  const topY = restore ? restore.y : card.y
   const raw = { x: Math.round(anchorX - w / 2), y: Math.round(topY) }
   // ⚠️ **两条路径的夹取口径不同，这不是笔误**：
   //   · 有 `restore` ⇒ 回到的是**它自己刚才占过的那个矩形**，本来就地合法，
@@ -399,8 +463,9 @@ export function widgetCollapseGeom(
   const c = restore
     ? clampToScreen(raw.x, raw.y, w, h, screen)
     : clampWidgetPos(raw, screen, { w, h })
-  // 折叠态：窗口 == 胶囊 ⇒ 两个偏移都是 0（方向无关紧要，给个确定的默认值）
-  return { w, h, x: c.x, y: c.y, dir: 'down', align: 'center', capOffsetX: 0, capOffsetY: 0 }
+  const win = windowFromCard({ x: c.x, y: c.y, w, h })
+  // 折叠态：方向/对齐都无关紧要（卡片 == 胶囊），给个确定的默认值
+  return { w: win.w, h: win.h, x: win.x, y: win.y, dir: 'down', align: 'center' }
 }
 
 /**
@@ -416,10 +481,11 @@ export function widgetCapsuleGeom(
 ): WidgetPos & { w: number; h: number } {
   const w = clampCapsuleW(capW)
   const h = WIDGET_CAP_H
-  const centerX = cur.x + cur.w / 2
+  const card = cardFromWindow({ x: cur.x, y: cur.y, w: cur.w, h: h + WIDGET_SHADOW_PAD * 2 })
   const c = clampWidgetPos(
-    { x: Math.round(centerX - w / 2), y: Math.round(cur.y) }, screen, { w, h })
-  return { w, h, x: c.x, y: c.y }
+    { x: Math.round(card.x + card.w / 2 - w / 2), y: Math.round(card.y) }, screen, { w, h })
+  const win = windowFromCard({ x: c.x, y: c.y, w, h })
+  return { w: win.w, h: win.h, x: win.x, y: win.y }
 }
 
 /**
@@ -429,6 +495,10 @@ export function widgetCapsuleGeom(
  * CSS（画胶囊）、探针（量出来判）。本仓为此栽过（`d1-form-options.md` §6 的"三源"）：
  * 只改其中一两处，**单测和探针都会绿**，而真机上窗口正在裁胶囊。
  * 现在数字只在 `widgetWindow.ts` 里写一遍，CSS 用 `var(…)` 读，探针量**变量**是否等于常量。
+ *
+ * ⚠️ **阴影层与留白也走这条路**（F1 批）：`--wg-shadow-layers` / `--wg-shadow-open-layers`
+ * 由 `WIDGET_SHADOW_*_LAYERS` 生成、`--widget-shadow-pad` 由它们的伸出量算出 ——
+ * 用户报的"阴影被窗口截断"就是"阴影"与"留白"这两个数各写一遍的结果。
  *
  * 幂等：每帧调都行（`setProperty` 同值不触发样式重算）。
  */
@@ -441,6 +511,9 @@ export function applyWidgetCssVars(): void {
   s.setProperty('--widget-radius', `${WIDGET_RADIUS}px`)
   s.setProperty('--widget-panel-w', `${WIDGET_PANEL_W}px`)
   s.setProperty('--widget-cap-h', `${WIDGET_CAP_H}px`)
+  s.setProperty('--widget-shadow-pad', `${WIDGET_SHADOW_PAD}px`)
+  s.setProperty('--wg-shadow-layers', shadowCss(WIDGET_SHADOW_LAYERS))
+  s.setProperty('--wg-shadow-open-layers', shadowCss(WIDGET_SHADOW_OPEN_LAYERS))
 }
 
 

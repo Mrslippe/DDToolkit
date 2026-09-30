@@ -280,20 +280,18 @@
   --wg-st-busy: #faad14;
   --wg-st-warn: #ff4d4f;
   /* 阴影三层 + 1px 描边（样例页 --shadow / --shadow-open）。
-     ⚠️ **产品原来只有 inset 高光** ⇒ 卡片是"贴"在壁纸上的；样例页靠外阴影把它"抬"起来，
-     并用那圈 1px 描边在**任意壁纸**上勾出边缘（纯白壁纸上白描边、纯黑壁纸上也读得出）。 */
+     ⚠️ 层**由 TS 生成**写进 `--wg-shadow-layers`（`WIDGET_SHADOW_LAYERS`），
+     这里只负责把"高光 + 描边"与那三层拼起来 —— 因为**留白是从三层算出来的**
+     （`WIDGET_SHADOW_PAD`），两处各写一遍正是"阴影被截断"的成因。
+     ⚠️ 描边那圈是**任意壁纸上勾出卡片边缘**用的（纯白壁纸上也读得出）。 */
   --wg-shadow:
     inset 0 1px 0 var(--wg-hi),
     0 0 0 1px var(--wg-ring),
-    0 2px 5px rgba(0, 0, 0, 0.38),
-    0 9px 22px rgba(0, 0, 0, 0.40),
-    0 22px 54px rgba(0, 0, 0, 0.28);
+    var(--wg-shadow-layers);
   --wg-shadow-open:
     inset 0 1px 0 var(--wg-hi),
     0 0 0 1px var(--wg-ring),
-    0 4px 9px rgba(0, 0, 0, 0.40),
-    0 16px 40px rgba(0, 0, 0, 0.46),
-    0 36px 88px rgba(0, 0, 0, 0.32);
+    var(--wg-shadow-open-layers);
 }
 
 .si-island[data-density='widget'] {
@@ -351,9 +349,7 @@
   box-shadow:
     inset 0 1px 0 var(--wg-hi),
     0 0 0 1px rgba(233, 92, 141, 0.85),
-    0 2px 5px rgba(0, 0, 0, 0.38),
-    0 9px 22px rgba(0, 0, 0, 0.40),
-    0 22px 54px rgba(0, 0, 0, 0.28);
+    var(--wg-shadow-layers);
 }
 
 /* ── 小窗里胶囊的那几个槽位（D1 视觉：按样例页的深卡一套上墨）────────────
@@ -401,6 +397,9 @@
      另一条 keyframes（见下）。方向在探针里跑不到（没有真窗口），归单测 + 真机。 */
   transform-origin: top center;
   animation: si-panel-in-wg var(--motion-fast) var(--ease-standard) var(--motion-lag) both;
+  /* ⚠️ **面板铺满卡片**（F1）：卡片就是面板，所以面板在视口里的位置恒为
+     `(留白, 留白)`、宽度 = 卡片宽（由 `StatusIsland.place()` 给内联样式）。
+     下一条注释讲的是**为什么不能按胶囊算**（那套已经随 F1 一起删掉了）。 */
   /* ⚠️ **小窗里不能用 `60vh` 当高度上限**（R38 批 5d 修）。
      小窗的高度是**跟着面板长的**（窗口 = 40 + 6 + 面板高，见 `utils/widgetWindow.ts`）——
      于是 `vh` 与面板高度**互为因果**：折叠态窗口 40px ⇒ `60vh = 24px` ⇒ 面板被压到 24px
@@ -581,12 +580,14 @@ html[data-widget-window] #root {
   width: 100vw;
   height: 100vh;
   display: flex;
-  /* ⚠️⚠️ **两条轴都由几何给偏移，CSS 不许自己"居中/贴边"**（D1，2026-09-27 横向统一）。
-     纵向的教训批 5d/5g 就记过（窗口一长高，居中的胶囊就往下漂，而面板是按胶囊位置算的
-     ⇒ 两者一起漂 = "展开时胶囊往下跳一截"）；横向是四方向展开之后才暴露的**同一个错**：
-     面板向左/向右长时胶囊要贴住对应的那条边，而 `justify-content: center` 会把它按回中间
-     —— "胶囊在窗口里靠哪一边"又变成两个主人。
-     ⇒ `flex-start` + `margin-*: var(--widget-capsule-*)`，位置只有一个来源（`widgetExpandGeom`）。 */
+  /* ⚠️⚠️ **窗口比卡片大一圈**（F1 批，2026-09-30）：多出来的这一圈是给
+     **卡片外阴影**的 —— 用户报的"小窗阴影被截断了"，根因就是"窗口 == 卡片"，
+     阴影要画在卡片外面而窗口外面没有像素。
+     留白宽度由 `applyWidgetCssVars()` 从 `WIDGET_SHADOW_PAD` 写进来（**由阴影的伸出量
+     算出来**，不是拍的），卡片就摆在这个 padding 的原点上。
+     ⚠️ **代价**：这圈留白透明但**会挡住鼠标**（窗口是实心的可命中矩形）——
+     见 `widgetWindow.ts` 里那段注释与 `TODO.md` §1.5 的后续项（Rust 侧按区域透明）。 */
+  padding: var(--widget-shadow-pad, 32px);
   align-items: flex-start;
   justify-content: flex-start;
   background: transparent;
@@ -594,12 +595,29 @@ html[data-widget-window] #root {
   user-select: none;
 }
 
-/* 小窗里胶囊：① **不要再撑高度**（折叠态窗口正好 40px，胶囊占满；展开后多出来的
-   高度是留给面板的）；② 两条轴的偏移**都由变量给**（见上一条注释）。 */
+/* 小窗里胶囊：**不要再撑高度**（折叠态窗口正好装下它；展开后它整行隐藏，见下一条）。
+   位置由 shell 的 padding 给（卡片恒在 `(pad, pad)`）—— D1 那套
+   `--widget-capsule-x/offset` 已经**不需要了**：F1 之后卡片就是窗口里唯一的东西。 */
 .widget-shell > .si-island {
   flex: none;
-  margin-left: var(--widget-capsule-x, 0px);
-  margin-top: var(--widget-capsule-offset, 0px);
+}
+
+/* ⚠️ **展开后胶囊整行隐藏**（F1，2026-09-30；样例页用户两次要求：
+   「圆点和下拉图标还是保留了」「这个点和下拉按钮还在」）。
+
+   为什么必须连几何一起改（否则换来一个更糟的 bug）：胶囊行不在了 ⇒ 它原来占的那一格
+   必须**由面板接管**。旧模型是"窗口 = 胶囊 + 间隙 + 面板" ⇒ 那一格成了窗口内的
+   **透明空白**（"展开后最顶上空出一大块"），而且卡片在胶囊**外侧**，
+   点开的一瞬间整体离开屏边 46px（CDP 实测）。
+   现在：**窗口 = 卡片 + 留白**，展开时卡片**就是面板**（`widgetExpandGeom` 的 `h = 面板高`）
+   ⇒ 近边在展开/收起时零位移，视觉上就是"胶囊长成了这张卡"。
+
+   ⚠️ 属性由 `StatusIsland` 写（它知道 `open`），**不是**由窗口那边写 ——
+   这样探针（没有真窗口）也量得到这条判据，不必等真机。
+   ⚠️ 拖动：胶囊行没了之后**面板本身就是把手**（`StatusWidgetWindow` 把指针处理
+   挂到面板上）—— 这是采纳 F1 的前提，否则展开态只剩留白能拖。 */
+.widget-shell[data-open='1'] > .si-island {
+  display: none;
 }
 
 /* ── 胶囊在窗口内的位置：**由几何给，不由边猜**（R38 批 5g 重写）─────────
