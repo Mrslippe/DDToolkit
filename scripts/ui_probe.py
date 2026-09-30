@@ -3679,6 +3679,13 @@ def main() -> int:
                                         f"—— 轮播已下线，应当恒定")
                 if not si.get("litOn"):
                     failures.append(f"@{w} status-island: 派发 pill-message 后状态岛没亮起")
+                # 字体族（2026-09-30）：这一条是**正对照** —— 顶栏宿主在 `body` 的继承链上
+                # （`layout.css`），必然是全站字体。它绿 ⇒ "胶囊该用全站字体"这个期望本身是对的，
+                # 于是小窗那一条（`--status-widget` 第二段）红了就只能是**入口差异**。
+                if "Alimama" not in (si.get("pillFontFamily") or ""):
+                    failures.append(f"@{w} status-island: 顶栏胶囊的字体是 "
+                                    f"{si.get('pillFontFamily')!r}，不含 'Alimama' —— "
+                                    f"全站字体令牌（`--font-family`）没生效？")
                 # 类型字形（D1）：顶栏宿主也必须有这个通道 —— 它是**产品级缺陷**的修复
                 # （`report` 与 `message` 的点色相同 + 胶囊原先不渲染图标 ⇒ 两者一模一样），
                 # 与宿主无关。小窗那一侧另有一段（`--status-widget` 第二段）。
@@ -4194,7 +4201,8 @@ def main() -> int:
             # D1（2026-09-27）：胶囊的**解剖** —— 这一段跑在小窗自己的坐标系里（`widget.html`）。
             # 判据成立的前提是"小窗也拿到了这套样式"，而它的样式只来自 status-island.css。
             print(f"  解剖：display={ww.get('islandDisplay')!r} 圆角={ww.get('islandRadius')} "
-                  f"字号={ww.get('islandFontSize')} max-width={ww.get('islandMaxWidth')!r}")
+                  f"字号={ww.get('islandFontSize')} 字体={ww.get('islandFontFamily')!r} "
+                  f"max-width={ww.get('islandMaxWidth')!r}")
             print(f"        变量：--widget-cap-min-w={ww.get('widgetVars', {}).get('capMin')!r} "
                   f"--widget-cap-max-w={ww.get('widgetVars', {}).get('capMax')!r} "
                   f"--widget-radius={ww.get('widgetVars', {}).get('radius')!r} "
@@ -4420,6 +4428,16 @@ def main() -> int:
                 if (ww.get("islandFontSize") or 0) < 12:
                     failures.append(f"@{w} status-widget: 小窗里胶囊字号是 "
                                     f"{ww.get('islandFontSize')}，应 ≥ 12px（同样来自 layout.css）")
+                # 字体族（2026-09-30）：`font-family: var(--font-family)` 只在 **layout.css 的
+                # `body`** 上 —— 小窗拿不到那个文件 ⇒ 真窗口里用的是 WebView2 的默认字体
+                # （而 `@font-face` 在 `tokens.css` 里，小窗**下载了字体却没人用**）。
+                # ⚠️ 判据是"与顶栏宿主**同一族**"，不是"好看不好看"：字号对推不出字体对。
+                if "Alimama" not in (ww.get("islandFontFamily") or ""):
+                    failures.append(
+                        f"@{w} status-widget: 小窗里胶囊的字体是 "
+                        f"{ww.get('islandFontFamily')!r}，不含 'Alimama' —— "
+                        f"与顶栏宿主不是同一套字体（`font-family` 只在 `layout.css` 的 body 上；"
+                        f"共用文件 `status-island.css` 必须自己带上）")
                 dot = ww.get("dotBox") or [0, 0]
                 if dot[0] < 6 or dot[1] < 6:
                     failures.append(

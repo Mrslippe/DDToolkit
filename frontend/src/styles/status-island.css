@@ -135,6 +135,14 @@
   border-radius: 999px;
   background: transparent;
   color: #fff;
+  /* ⚠️ **字体族必须在这里自己声明**（2026-09-30，D1 的补课）：
+     全站那句 `font-family: var(--font-family)` 写在 **`layout.css` 的 `body`** 上，
+     而小窗的独立入口不加载那个文件 ⇒ 真窗口里胶囊用的是 **WebView2 的默认字体**
+     （探针在 `widget.html` 里实测到 `"Noto Sans SC"`，而顶栏宿主是 Alimama）。
+     这也是「拆入口顺带生效的东西」的**第 6 次**（DEV-LOOP §6.1）：同一条规矩 ——
+     **共用文件必须自包含，别指望调用方把字体/重置/变量设好了**。
+     顺带修掉一处浪费：`@font-face` 在 `tokens.css` 里，小窗**下载了字体却没人用**。 */
+  font-family: var(--font-family);
   font-size: 13px;   /* 2026-09-09 用户：比 12px 大一号（空闲态白字在粉条上更好读） */
   font-weight: 500;
   font-variant-numeric: tabular-nums;  /* 进度 3/14 等数字对齐 */
@@ -465,6 +473,9 @@ html[data-widget-window] #root {
   display: flex;
   flex-direction: column;
   max-height: 60vh;
+  /* ⚠️ 面板是 **portal 到 `body`** 的 ⇒ 它不继承 `.si-island` 的字体，
+     也不在小窗的 `.widget-shell` 里 ⇒ 必须自己声明（与上面那条同因，见那段注释）。 */
+  font-family: var(--font-family);
   border: 1px solid var(--c-border);
   border-radius: 14px;   /* R38 批 3：对齐规格 §5「面板圆角 14px」（原 10px）。
                             同心圆角规则（内层元素圆角 = 面板圆角 − 内边距）本批**无对象** ——

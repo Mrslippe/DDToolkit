@@ -426,6 +426,8 @@ density / **折叠尺寸 ∈ [200,400]×40** / **圆角 20（且 == `--widget-ra
 > display='block'   ← 不是 flex 行（点/字形/文案/计数/chevron 退化成行内流）
 > 圆角=0            ← 胶囊是**方角**的
 > 字号=16           ← 不是 13px
+> 字体='"Noto Sans SC"' ← **不是全站字体**（`font-family: var(--font-family)` 只在 layout.css 的 body 上；
+>                        `tokens.css` 的 `@font-face` 于是"下载了却没人用"）—— 这是同一条的第 6 次
 > 点=[0, 24]        ← <i> 没有宽高 ⇒ **紧迫度这个通道整个看不见**
 > chevron=[24,24]   ← `size-[12px]` 是 **Tailwind** 类，小窗里不加载 Tailwind ⇒ lucide 按默认画
 > ```

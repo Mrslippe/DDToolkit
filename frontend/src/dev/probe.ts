@@ -2350,6 +2350,9 @@ export async function runUiProbe(): Promise<void> {
       // 不变量①的**原因**：胶囊绝对定位 ⇒ 不可能把顶栏撑高（`.topbar` 是固定高度）。
       // 只判"三态高度一致"是判结果；这条判原因，破了才说得清为什么破。
       result.pillPosition = pcs.position
+      // 字体族（2026-09-30）：**正对照** —— 顶栏宿主在 `body` 的继承链上（layout.css），
+      // 所以它必然是全站字体；小窗那一侧（`widget.html`）要单独判（见下面那段）。
+      result.pillFontFamily = pcs.fontFamily
       // ── R38 批 5：桌面控件宿主（`?density=widget`）的材质与尺寸 ──────────────
       // 判据全在脚本侧算（尤其对比度：要按 α 复算**纯白/纯黑**两个极端壁纸），
       // 这里只负责把计算样式原样带出去。
@@ -2961,6 +2964,11 @@ export async function runUiProbe(): Promise<void> {
       result.islandDisplay = cs2.display
       result.islandRadius = Math.round(parseFloat(cs2.borderTopLeftRadius))
       result.islandFontSize = Math.round(parseFloat(cs2.fontSize) * 10) / 10
+      // 字体族（2026-09-30）：`font-family: var(--font-family)` 原本只写在 **layout.css 的
+      // `body`** 上 —— 而小窗的独立入口不加载那个文件 ⇒ 真窗口里胶囊与面板用的是
+      // **WebView2 的默认字体**（连 `@font-face` 都在 tokens.css 里被下载了却没人用）。
+      // 量的是**解析后的族名**，因为"字号对"完全推不出"字体对"。
+      result.islandFontFamily = cs2.fontFamily
       result.islandMaxWidth = cs2.maxWidth
       result.islandLeftVsShell = sr ? Math.round(r.left - sr.left) : null
       // 「单一真源」判据：TS 常量写进 CSS 变量，胶囊**解析出来**的必须与之一致。
