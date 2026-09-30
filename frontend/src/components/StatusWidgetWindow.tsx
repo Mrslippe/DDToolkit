@@ -365,6 +365,21 @@ export default function StatusWidgetWindow() {
       document.documentElement.style.setProperty('--widget-capsule-offset', `${y}px`)
     }
 
+    /**
+     * 展开方向写进 `<html data-widget-dir>`（**面板入场动画的方向**靠它选 keyframes）。
+     *
+     * ⚠️ 为什么挂在 `<html>` 上：面板是 **portal 到 `body`** 的 ⇒ `.widget-shell` 不是它的
+     * 祖先，挂在窗口壳上的属性它看不见。
+     *
+     * ⚠️ 为什么不在收起时清掉：留着上一次的方向，下一次展开的**首帧**动画就是对的方向。
+     * 方向要等几何算完（面板高量出来）才知道，而面板**挂载时会立刻开始播动画** ——
+     * 清了的话，贴屏幕下沿的小窗每次展开都要先朝下播一帧再换成朝上（`animation-name` 一变
+     * 动画会**重头再播**，肉眼看到的是抖一下）。留着上一次的值就把这一下省掉了。
+     */
+    const applyDir = (dir: WidgetDir) => {
+      document.documentElement.dataset.widgetDir = dir
+    }
+
     const sync = async () => {
       try {
         const panel = document.querySelector<HTMLElement>('.si-panel')
@@ -397,6 +412,7 @@ export default function StatusWidgetWindow() {
           //    就不成立了（实测：期望 143、真实 10）⇒ 胶囊跳到窗口中间、和面板叠住。
           //    横向同理：面板往左/右长时胶囊要贴住对应的边。两条都写进 CSS 变量。
           applyOffsets(geom.capOffsetX, geom.capOffsetY)
+          applyDir(geom.dir)
           const ok = await resizeWidgetWindow(geom)
           console.info('[widget] 展开 →', geom, 'ok=', ok)
         } else {

@@ -16,6 +16,14 @@ on:
   pull_request:
   workflow_dispatch:
 
+# ⚠️ **同一分支只保留最新一次运行**（2026-09-30 加，与 `ci-windows.yml` 同款）：
+# 一批里连推几个 commit 时，前面那几次的排队/执行都白费。
+# ⚠️ 这条 workflow **不按路径跳过** —— `doc_check`（文档漂移门禁）在它里面，
+# 而"只改了文档"恰恰是它最该跑的时候。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   backend:
     name: 后端（python ${{ matrix.python-version }}）

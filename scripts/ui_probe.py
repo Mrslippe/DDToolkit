@@ -4468,11 +4468,32 @@ def main() -> int:
                     failures.append(f"@{w} status-widget: 小窗面板宽是 "
                                     f"{ww.get('widgetPanelWidth')}，应为 400（D1 定稿：面板 400）")
                 ib = ww.get("widgetPanelIconBox")
-                if not ib or abs(ib[0] - 13) > 1 or abs(ib[1] - 13) > 1:
+                if not ib or abs(ib[0] - 11) > 1 or abs(ib[1] - 11) > 1:
                     failures.append(
-                        f"@{w} status-widget: 面板条目图标的渲染尺寸是 {ib}，应为 13×13 —— "
-                        f"同 chevron：`size-[13px]` 是 Tailwind 类，小窗里不加载 Tailwind，"
+                        f"@{w} status-widget: 面板条目图标的渲染尺寸是 {ib}，应为 11×11（chip 里的图标）—— "
+                        f"`size-[13px]` 是 Tailwind 类，小窗里不加载 Tailwind，"
                         f"lucide 会按默认 24px 画（条目行被撑高）")
+                # D1 视觉：图标外面套**圆底 chip**（样例页 `.p-icon`：15×15 圆、底 --icon-bg）
+                chip = ww.get("wgIconChipBox")
+                if not chip or abs(chip[0] - 15) > 1 or abs(chip[1] - 15) > 1:
+                    failures.append(f"@{w} status-widget: 面板条目图标的 chip 是 {chip}，应为 15×15"
+                                    f"（样例页 `.p-icon`）")
+                # ⚠️ 判**原始串**（`50%`）而不是解析出的数：`parseFloat("50%")` 是 50，
+                #    而"正圆"的语义在 `50%` 里（15px 的盒子 ⇒ 7.5px 半径）。
+                if ww.get("wgIconChipRadiusRaw") != "50%":
+                    failures.append(
+                        f"@{w} status-widget: 图标 chip 的圆角是 "
+                        f"{ww.get('wgIconChipRadiusRaw')!r}，应为 '50%'（样例页 `.p-icon` 的正圆）")
+                if ww.get("wgIconChipBg") != "rgba(255, 255, 255, 0.1)":
+                    failures.append(f"@{w} status-widget: 图标 chip 的底是 {ww.get('wgIconChipBg')!r}，"
+                                    f"应为 rgba(255, 255, 255, 0.1)（样例页 --icon-bg）")
+                # 排版：头部与条目的内距（样例页 `.p-head { padding: 11px 14px 9px }` / `.p-item { padding: 8px }`）
+                if ww.get("wgHeadPad") != "11px 14px 9px":
+                    failures.append(f"@{w} status-widget: 面板头部内距是 {ww.get('wgHeadPad')!r}，"
+                                    f"应为 '11px 14px 9px'（样例页 `.p-head`）")
+                if ww.get("wgItemPad") != "8px":
+                    failures.append(f"@{w} status-widget: 面板条目内距是 {ww.get('wgItemPad')!r}，"
+                                    f"应为 '8px'（样例页 `.p-item`）")
                 # ⚠️ `data-dir` 在探针里**恒为 'down'**（`StatusWidgetWindow` 的 JSX 默认值）：
                 #    几何那条 effect 在非桌面端**直接 return**（没有真窗口可 resize），
                 #    所以**上/左/右三个方向在探针里根本跑不到** —— 它们的判据是
@@ -4497,6 +4518,108 @@ def main() -> int:
                 # 所以这三条**不能证明真机上窗口会跟着长大**（那要靠 `widgetExpandGeom` 的单测
                 # + 真机确认）。它们能证明的是**另一件同样要命的事**：
                 # 面板自己画得出来、落在视口内、点得着、且没被 `max-height` 压成一条。
+                # ── D1 视觉：小窗的**墨色与材质**（2026-09-30 加）──────────────────
+                #
+                # 为什么单开一段：上面那些判据全是**几何**（在不在视口内 / 点不点得着 / 三段不重叠）
+                # —— 它们**一个颜色都不看**。而实测（未改代码时）：面板里的子元素用的是**全站令牌**
+                # （`--c-text-main` #4b5a6b、`--c-text-sub`、`--c-border`、`--c-primary-deep`），
+                # 那些是**浅色主题**的值 —— 铺在深色卡片上对比度只有 ~2.2:1（正文几乎读不出来），
+                # 动作钮还是一颗**白药丸**。指南：`docs/design/widget-preview/direction.html` 的深卡一套。
+                ink = ww.get("wgInk") or {}
+                print(f"  视觉·胶囊：底={ww.get('wgCapBg')!r} 圆角={ww.get('wgCapRadius2')} "
+                      f"内距={ww.get('wgCapPadLeft')!r}")
+                print(f"            阴影={ww.get('wgCapShadow')!r}")
+                print(f"            计数底={ww.get('wgCountBg')!r} 字形色={ww.get('wgGlyphColor')!r}"
+                      f"/{ww.get('wgGlyphOpacity')} 活数据色={ww.get('wgValueColor')!r}")
+                print(f"  视觉·面板：底={ww.get('wgPanelBg')!r} 阴影={ww.get('wgPanelShadow')!r}")
+                print(f"            入场动画={ww.get('wgPanelAnimName')!r} "
+                      f"{ww.get('wgPanelAnimMs')}ms 延迟 {ww.get('wgPanelAnimDelay')}ms "
+                      f"{ww.get('wgPanelAnimEase')!r}")
+                print(f"  视觉·墨色：{ink}")
+                # 样例页的深卡一套（`direction.html` 的 `:root, [data-theme=dark]`）。
+                # ⚠️ **faint 一档与样例页**不同（.52 而非 .44）：按 α 复合到纯白/纯黑两端壁纸后，
+                #    .44 只有 4.01:1 / 4.37:1 —— 低于全站"小字 ≥4.5:1"的口径。只抬 alpha、色相不动
+                #    （与胶囊那次同一个处置），下面那条对比度判据就是它的理由。
+                WG_FG, WG_FAINT = "rgb(255, 255, 255)", "rgba(255, 255, 255, 0.52)"
+                WG_ACTION, WG_LINE = "rgb(255, 162, 180)", "rgba(255, 255, 255, 0.08)"
+                want_ink = {
+                    "title": WG_FG, "itemText": WG_FG, "icon": WG_FG,
+                    "itemValue": WG_FAINT, "itemDetail": WG_FAINT, "itemMeta": WG_FAINT,
+                    "hint": WG_FAINT, "foot": WG_FAINT,
+                    "action": WG_ACTION, "actionBorder": WG_ACTION, "actionBg": "rgba(0, 0, 0, 0)",
+                    "divider": WG_LINE,
+                }
+                for key, want in want_ink.items():
+                    got = ink.get(key)
+                    if got != want:
+                        failures.append(
+                            f"@{w} status-widget: 小窗面板里 `{key}` 的墨色是 {got!r}，应为 {want!r} —— "
+                            f"子元素在用**全站（浅色主题）令牌**，铺在深卡上读不出来。"
+                            f"指南见 docs/design/widget-preview/direction.html 的深卡一套")
+                if ww.get("wgCountBg") != "rgba(255, 255, 255, 0.16)":
+                    failures.append(f"@{w} status-widget: 计数徽章底是 {ww.get('wgCountBg')!r}，"
+                                    f"应为 rgba(255, 255, 255, 0.16)（样例页 --chip-bg）")
+                for key, label, lk in (("wgCapShadow", "胶囊", "wgCapShadowLayers"),
+                                        ("wgPanelShadow", "面板", "wgPanelShadowLayers")):
+                    sh = ww.get(key) or ""
+                    if "inset" not in sh:
+                        failures.append(f"@{w} status-widget: {label}阴影里没有 inset 高光")
+                    # ⚠️ **外阴影 + 1px ring**：样例页给卡片三层（2/9/22px）＋ 一圈描边 ——
+                    #    产品原来**只有 inset 高光**（贴片感），这是与样例页差距最大的一处。
+                    if "0px 0px 0px 1px" not in sh:
+                        failures.append(f"@{w} status-widget: {label}阴影里没有 1px ring"
+                                        f"（`0 0 0 1px rgba(255,255,255,.10)`：样例页用它"
+                                        f"在任意壁纸上勾出卡片边缘）")
+                    # ⚠️ 层数由**探针在浏览器侧**数（按括号深度切逗号）——CSSOM 的序列化里层之间是 `, `、
+                    #    逗号也出现在每层的 `rgba(...)` 里，脚本侧 `split("),")` 会数成 1 层
+                    #    （第一版就是这么错的：**判据自己坏了，看着像产品坏了**）。
+                    layers = ww.get(lk) or 0
+                    if layers < 5:
+                        failures.append(f"@{w} status-widget: {label}阴影只有 {layers} 层，"
+                                        f"样例页是 inset 高光 + 1px ring + 三档外阴影（共 5 层）")
+                if ww.get("wgCapBg") != "rgba(24, 25, 32, 0.92)":
+                    failures.append(f"@{w} status-widget: 胶囊底是 {ww.get('wgCapBg')!r}，"
+                                    f"应为 rgba(24, 25, 32, 0.92)（样例页 --surf）")
+                if ww.get("wgPanelBg") != "rgba(24, 25, 32, 0.92)":
+                    failures.append(f"@{w} status-widget: 面板底是 {ww.get('wgPanelBg')!r}，"
+                                    f"应为 rgba(24, 25, 32, 0.92)（与卡片同一个 --surf）")
+                if ww.get("wgCapPadLeft") != "14px":
+                    failures.append(f"@{w} status-widget: 胶囊左内距是 {ww.get('wgCapPadLeft')!r}，"
+                                    f"应为 14px（样例页 `.cap-box { padding: 0 14px }`）")
+                # 入场动画：从**胶囊那一侧**滑出 6px + 淡入，`--motion-fast`(140ms) 起步、延迟
+                # `--motion-lag`(60ms)（"形变先行、内容后到"）。原来是一条 220ms 的 `si-panel-in`：
+                # **永远从上方滑下**（向上展开时方向是反的），而且没有"内容后到"的延迟。
+                # ⚠️ 上/下两个方向在探针里跑不到（没有真窗口 ⇒ `data-dir` 恒 'down'）——
+                #    能判的是时长/延迟/曲线/名字，方向本身归单测与真机。
+                if ww.get("wgPanelAnimMs") != 140:
+                    failures.append(f"@{w} status-widget: 面板入场时长是 {ww.get('wgPanelAnimMs')}ms，"
+                                    f"应为 140ms（= --motion-fast：形变先行）")
+                if ww.get("wgPanelAnimDelay") != 60:
+                    failures.append(f"@{w} status-widget: 面板入场延迟是 {ww.get('wgPanelAnimDelay')}ms，"
+                                    f"应为 60ms（= --motion-lag：内容后到）")
+                # **对比度**：墨色按 α 复合到卡片底、卡片底再复合到两端壁纸（与胶囊那条同一套算法）。
+                # 它是上面那张墨色表的**理由**：只钉"值对不对"会让"为什么是这个值"失传。
+                pbg = _rgba(ww.get("wgPanelBg"))
+                if not pbg:
+                    failures.append(f"@{w} status-widget: 解析不出小窗面板底色"
+                                    f"（{ww.get('wgPanelBg')!r}）")
+                else:
+                    for key, label in (("itemText", "正文"), ("itemDetail", "补充说明"),
+                                       ("itemMeta", "来源行"), ("action", "动作钮文字")):
+                        fgr = _rgba(ink.get(key))
+                        if not fgr:
+                            continue
+                        worst = None
+                        for wall in ((255.0, 255.0, 255.0), (0.0, 0.0, 0.0)):
+                            eff = [pbg[i] * pbg[3] + wall[i] * (1 - pbg[3]) for i in range(3)]
+                            comp = [fgr[i] * fgr[3] + eff[i] * (1 - fgr[3]) for i in range(3)]
+                            r = _ratio(comp, eff)
+                            worst = r if worst is None else min(worst, r)
+                        if worst is not None and worst < 4.5:
+                            failures.append(
+                                f"@{w} status-widget: 小窗面板里{label}（`{key}`）在最差壁纸下只有 "
+                                f"{worst:.2f}:1 —— 深卡上的墨色必须是自带的一套（≥4.5:1）")
+
                 if not ww.get("widgetPanelOpened"):
                     failures.append(f"@{w} status-widget: 小窗里悬停后**面板没打开** —— "
                                     f"hover 呼出在小窗里没接上（或面板被条件挡掉了）")

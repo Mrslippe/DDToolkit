@@ -242,6 +242,60 @@
 
    `position/left/transform/max-width` 全部复位：§8 要求宿主无关 ——
    顶栏那套「absolute + translateX(-50%) 居中」在这里不成立，**它自己就是窗口**。 */
+/* ══ 小窗宿主的**一套自带材质**（D1 视觉，2026-09-30）══════════════════════════
+ *
+ * 数值全部取自样例页 `docs/design/widget-preview/direction.html` 的**深卡一套**
+ * （用户 2026-09-27 拍板的指南：小窗的样式与动画以那一页为准）。
+ *
+ * ⚠️⚠️ **为什么必须自带一套**：卡片浮在**任意壁纸**上，而全站令牌
+ * （`--c-text-main` #4b5a6b · `--c-text-sub` · `--c-border` · `--c-primary-deep` ·
+ * `--shadow-dialog`）全是**浅色主题**的值。未改之前探针在小窗坐标系里实测到：
+ *
+ * ```
+ * 面板正文 = rgb(75, 90, 107)   ← 铺在深卡上 ≈ 2.2:1（正文几乎读不出来）
+ * 面板阴影 = rgba(15,23,42,.1) 0 4px 16px  ← 浅色主题的阴影，深卡上等于没有
+ * 动作钮   = 白底 + 深粉字（--c-bg-card / --c-primary-deep）← 深卡上一颗白药丸
+ * ```
+ *
+ * 判据见 `ui_probe --status-widget` 的「视觉」一段（墨色表 + 对比度按 α 复合到两端壁纸）。
+ *
+ * ⚠️ **两处都要挂**：面板是 portal 到 `body` 的 ⇒ 它既不在 `.widget-shell` 里、
+ * 也不继承胶囊上的自定义属性。
+ * ⚠️ **将来由 W1「主题广播」按主题喂**（浅色壁纸要走另一套）—— 现在只有深卡这一套。
+ */
+.si-island[data-density='widget'],
+.si-panel[data-density='widget'] {
+  --wg-surf: rgba(24, 25, 32, 0.92);        /* 样例页 --surf */
+  --wg-hi: rgba(255, 255, 255, 0.10);       /* 顶边高光 --surf-hi */
+  --wg-ring: rgba(255, 255, 255, 0.10);     /* 1px 描边 --surf-ring */
+  --wg-fg: #fff;
+  /* ⚠️ **faint 一档与样例页不同**（样例页 .44）：按 α 复合到纯白/纯黑壁纸后只有
+     4.01:1 / 4.37:1，低于全站「小字 ≥4.5:1」的口径 ⇒ **只抬 alpha、色相不动**。 */
+  --wg-faint: rgba(255, 255, 255, 0.52);
+  --wg-line: rgba(255, 255, 255, 0.08);
+  --wg-icon-bg: rgba(255, 255, 255, 0.10);
+  --wg-chip-bg: rgba(255, 255, 255, 0.16);
+  --wg-action: var(--c-primary);            /* #ffa2b4：对深卡 9.3:1（浅卡才需要深档） */
+  --wg-st-ok: #52c41a;
+  --wg-st-busy: #faad14;
+  --wg-st-warn: #ff4d4f;
+  /* 阴影三层 + 1px 描边（样例页 --shadow / --shadow-open）。
+     ⚠️ **产品原来只有 inset 高光** ⇒ 卡片是"贴"在壁纸上的；样例页靠外阴影把它"抬"起来，
+     并用那圈 1px 描边在**任意壁纸**上勾出边缘（纯白壁纸上白描边、纯黑壁纸上也读得出）。 */
+  --wg-shadow:
+    inset 0 1px 0 var(--wg-hi),
+    0 0 0 1px var(--wg-ring),
+    0 2px 5px rgba(0, 0, 0, 0.38),
+    0 9px 22px rgba(0, 0, 0, 0.40),
+    0 22px 54px rgba(0, 0, 0, 0.28);
+  --wg-shadow-open:
+    inset 0 1px 0 var(--wg-hi),
+    0 0 0 1px var(--wg-ring),
+    0 4px 9px rgba(0, 0, 0, 0.40),
+    0 16px 40px rgba(0, 0, 0, 0.46),
+    0 36px 88px rgba(0, 0, 0, 0.32);
+}
+
 .si-island[data-density='widget'] {
   position: relative;
   left: auto;
@@ -259,7 +313,7 @@
   /* 圆角**恒定 20px**：折叠 40 高时 20 = 完美胶囊，展开也是 20 ⇒ 半径单调，
      不会"先胀后收"（规格 §5 同心圆角同一族理由）。 */
   border-radius: var(--widget-radius, 20px);
-  padding: 0 12px;
+  padding: 0 14px;                       /* 样例页 `.cap-box { padding: 0 14px }` */
   /* ⚠️ **这里刻意不用 `backdrop-filter`**（2026-09-24 第三轮真机反馈改）。
      规格 §7 原本写的是 `backdrop-filter: blur(20px) saturate(1.4)`，实测在**真窗口**里
      会出现"**只画模糊、不画背景与文字**"—— 用户看到的就是一块什么都没有的磨砂方块。
@@ -269,14 +323,16 @@
      `filter: blur` **拖垮 WebView2 合成器**的历史记录，不必要就不留"。
      小窗这回更极端：窗口是**透明的**，`backdrop-filter` 采样的就是**桌面**。
 
-     而它在这里**几乎不贡献任何东西**：α=0.72 的黑底只透出 28%，其中被模糊改变的
+     而它在这里**几乎不贡献任何东西**：α=0.92 的深底只透出 8%，其中被模糊改变的
      只有壁纸的高频细节（约 3.5% 的像素贡献）。**危险且无用** ⇒ 去掉。
-     去掉后靠**提高不透明度**保证可读性：α=0.94 时最亮壁纸上仍是 17:1 以上（§7 要求 ≥4.5:1）。
-     代价：失去"透出壁纸"的观感，换成"实底浮片"—— 与全站浮片族现在的口径一致。 */
-  background: rgba(20, 20, 26, 0.94);
-  color: #fff;
-  /* 1px 高光内边（"光从上面来"）—— 桌面控件"浮起来"的关键 */
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14);
+     可读性靠**不透明度 + 自带墨色**保证（探针按 α 复算两端壁纸，实测 ≥4.5:1）。 */
+  background: var(--wg-surf);
+  color: var(--wg-fg);
+  box-shadow: var(--wg-shadow);
+  /* 卡片是"活"的：翻方向 / 亮起时阴影跟着变，而不是硬跳（样例页 `.island` 的过渡） */
+  transition:
+    box-shadow var(--motion-base) var(--ease-standard),
+    background-color var(--motion-fast) ease;
 }
 
 /* ⚠️ **小窗宿主的点色不能照抄顶栏的白点**（09-27 样例页专门记过这条）：
@@ -288,24 +344,63 @@
 }
 
 /* 事件态：顶栏宿主是**整块变粉**，但桌面控件不能 —— 那会毁掉深色材质。
-   改成「深底不变 + 一圈粉环」，**有事发生**照样看得见（§7 没规定，取这条）。 */
+   改成「深底不变 + 一圈粉环」，**有事发生**照样看得见（§7 没规定，取这条）。
+   ⚠️ 粉环**替换**那圈中性描边（`--wg-ring`），层数不变 ⇒ 亮起时卡片的立体感不丢。 */
 .si-island[data-density='widget'].on {
-  background: rgba(20, 20, 26, 0.94);
+  background: var(--wg-surf);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.14),
-    inset 0 0 0 1px rgba(233, 92, 141, 0.85);
+    inset 0 1px 0 var(--wg-hi),
+    0 0 0 1px rgba(233, 92, 141, 0.85),
+    0 2px 5px rgba(0, 0, 0, 0.38),
+    0 9px 22px rgba(0, 0, 0, 0.40),
+    0 22px 54px rgba(0, 0, 0, 0.28);
+}
+
+/* ── 小窗里胶囊的那几个槽位（D1 视觉：按样例页的深卡一套上墨）────────────
+   与顶栏宿主的差别**只有颜色**（形状/尺寸两个宿主共用）：
+     · 字形：色 `--wg-fg`、opacity **.72**（样例页 `.glyph`）
+     · 活数据：`--wg-faint`（弱一级 —— 它是活数据，不该跟文案抢）
+     · 计数：`--wg-chip-bg` + 16×16（样例页 `.count`） */
+.si-island[data-density='widget'] .si-glyph {
+  color: var(--wg-fg);
+  opacity: 0.72;
+}
+
+.si-island[data-density='widget'] .si-value {
+  color: var(--wg-faint);
+  opacity: 1;
+}
+
+.si-island[data-density='widget'] .si-count {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  line-height: 16px;
+  background: var(--wg-chip-bg);
 }
 
 /* 展开面板：宽由 JS 给（D1 定稿 400 = 胶囊上限，见 `WIDGET_PANEL_W`）；材质跟胶囊同族 ——
    否则深色胶囊下面吊一块白板会像"两块积木"（§5 同心圆角那条的原话）。
    同样不用 `backdrop-filter`（理由见上面那段）。 */
 .si-panel[data-density='widget'] {
-  background: rgba(20, 20, 26, 0.97);
-  border-color: rgba(255, 255, 255, 0.12);
-  color: #fff;
+  background: var(--wg-surf);
+  border-color: var(--wg-ring);
+  color: var(--wg-fg);
   /* 圆角与胶囊**同值**（D1 的"圆角恒定 20"）：胶囊(20) → 面板(20) 是同一个半径，
      合起来读作"一块材料长出来的"。顶栏宿主那份仍是 §5 的 14px。 */
   border-radius: var(--widget-radius, 20px);
+  /* ⚠️ **面板阴影不能用 `--shadow-dialog`**（全站令牌 = 浅色主题的 `rgba(15,23,42,.1)`）：
+     探针在小窗坐标系里实测到它 —— 深卡上几乎看不见（"面板是贴上去的"）。
+     展开态用**更重的一档**（样例页 `--shadow-open`）：卡片"抬起来"了。 */
+  box-shadow: var(--wg-shadow-open);
+  /* ── 入场（样例页的节奏，与顶栏宿主那份不同）──────────────────────────
+     样例页：从**胶囊那一侧**滑出 6px + 淡入，`--motion-fast`(140ms) + `--ease-standard`，
+     **延迟 `--motion-lag`(60ms)**（"形变先行、内容后到"）。
+     ⚠️ 顶栏宿主那份仍是 220ms（那是它自己的规格，批 1/批 3 定的）⇒ 这里**只覆盖小窗**。
+     ⚠️ **方向**：向上展开时面板该从**下方**滑上来 —— 由 `html[data-widget-dir='up']` 换成
+     另一条 keyframes（见下）。方向在探针里跑不到（没有真窗口），归单测 + 真机。 */
+  transform-origin: top center;
+  animation: si-panel-in-wg var(--motion-fast) var(--ease-standard) var(--motion-lag) both;
   /* ⚠️ **小窗里不能用 `60vh` 当高度上限**（R38 批 5d 修）。
      小窗的高度是**跟着面板长的**（窗口 = 40 + 6 + 面板高，见 `utils/widgetWindow.ts`）——
      于是 `vh` 与面板高度**互为因果**：折叠态窗口 40px ⇒ `60vh = 24px` ⇒ 面板被压到 24px
@@ -313,6 +408,152 @@
      所以上限改由 JS 按**屏幕高度**算出后写进这个变量（`--widget-panel-max-h`）。
      取不到时退回 `none`：宁可让面板高过窗口（用户滚动看到），也不要把它压成一条。 */
   max-height: var(--widget-panel-max-h, none);
+}
+
+/* 入场：向下展开 ⇒ 面板从**上方**（胶囊那一侧）滑下；向上展开 ⇒ 从下方滑上。
+   ⚠️ 属性挂在 `<html>` 上而不是 `.widget-shell` 上：面板是 **portal 到 `body`** 的，
+   `.widget-shell` 不是它的祖先 ⇒ 挂在窗口壳上的属性它看不见。
+   ⚠️ 不写 `scale`（样例页只做位移 + 淡入）：`scale(.985)` 会让 `getBoundingClientRect()`
+   量到中间帧的尺寸（规格 §12.3 / devlog/172 记过这个坑 —— 探针量面板宽时就栽过）。 */
+@keyframes si-panel-in-wg {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes si-panel-in-wg-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+html[data-widget-dir='up'] .si-panel[data-density='widget'] {
+  transform-origin: bottom center;
+  animation-name: si-panel-in-wg-up;
+}
+
+/* ⚠️ **reduce 用的那条 keyframes 原来只在 `layout.css` 里**（小窗拿不到那个文件 ⇒
+   小窗的 reduce 分支会引用一条不存在的动画名）。同属"共用文件必须自包含"。 */
+@keyframes si-panel-in-fade {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+/* ── 小窗面板的**内部排版与墨色**（D1 视觉，2026-09-30；数值照样例页的 `.p-*`）────
+   ⚠️ 面板的**结构**（头部 / 滚动体 / 页脚）与顶栏宿主共用，这里只改"深卡上的那一层"。
+   ⚠️ 每一条都是**覆盖**，不是新写：子元素原来的颜色来自浅色主题令牌（见上面那段注释）。 */
+.si-panel[data-density='widget'] .si-panel-head {
+  /* 样例页把标题**居中**、提示绝对定位到右侧（卡片是"一块材料"，头不该像表格） */
+  justify-content: center;
+  padding: 11px 14px 9px;
+  border-bottom-color: var(--wg-line);
+  position: relative;
+}
+
+.si-panel[data-density='widget'] .si-panel-title {
+  color: var(--wg-fg);
+}
+
+.si-panel[data-density='widget'] .si-panel-hint {
+  position: absolute;
+  right: 14px;
+  bottom: 9px;
+  font-size: 11px;
+  color: var(--wg-faint);
+}
+
+.si-panel[data-density='widget'] .si-list {
+  padding: 0 6px 6px;
+}
+
+.si-panel[data-density='widget'] .si-item {
+  padding: 8px;
+  gap: 9px;
+}
+
+/* 分隔线：样例页是**实线 + 白 8%**（原来用的是浅色主题的虚线 `--c-border`） */
+.si-panel[data-density='widget'] .si-item + .si-item {
+  border-top-style: solid;
+  border-top-color: var(--wg-line);
+}
+
+.si-panel[data-density='widget'] .si-item-text,
+.si-panel[data-density='widget'] .si-item-value {
+  color: var(--wg-fg);
+}
+
+.si-panel[data-density='widget'] .si-item-value {
+  color: var(--wg-faint);
+}
+
+.si-panel[data-density='widget'] .si-item-detail,
+.si-panel[data-density='widget'] .si-item-meta,
+.si-panel[data-density='widget'] .si-panel-order {
+  color: var(--wg-faint);
+}
+
+/* 图标：**圆底 chip**（样例页 `.p-icon`：15×15 圆、底 `--icon-bg`、居中）
+   ⚠️ 颜色按**紧迫度**（与胶囊的点同一套口径）：告警红 / 进行中琥珀 / 其余前景色。
+   原来这里是 `--c-text-sub`（浅色主题的灰）与 `--c-primary-deep`（深粉，深卡上几乎看不见）。 */
+.si-panel[data-density='widget'] .si-item-icon {
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--wg-icon-bg);
+  display: grid;
+  place-items: center;
+  color: var(--wg-fg);
+}
+
+.si-panel[data-density='widget'] .si-item-icon svg {
+  width: 11px;
+  height: 11px;
+}
+
+.si-panel[data-density='widget'] .si-item-icon.k-alert {
+  color: var(--wg-st-warn);
+}
+
+.si-panel[data-density='widget'] .si-item-icon.k-progress {
+  color: var(--wg-st-busy);
+}
+
+/* 动作钮：**描边胶囊**（样例页 `.p-action`）—— 透明底 + 动作色描边/文字，
+   悬停时反过来（实心底 + 卡面色文字）。原来是一颗**白药丸**（`--c-bg-card` 白底 + 深粉字）。 */
+.si-panel[data-density='widget'] .si-item-action {
+  border-color: var(--wg-action);
+  background: transparent;
+  color: var(--wg-action);
+  font-weight: 600;
+  transition: background var(--motion-fast) ease;
+}
+
+.si-panel[data-density='widget'] .si-item-action:hover {
+  background: var(--wg-action);
+  color: var(--wg-surf);
+}
+
+.si-panel[data-density='widget'] .si-panel-foot {
+  padding: 8px 14px 10px;
+  border-top-color: var(--wg-line);
+  text-align: center;
 }
 
 /* 桌面状态控件**小窗**的根容器（R38 批 5b，`?widget=1`）。窗口本身就是透明的 200×40

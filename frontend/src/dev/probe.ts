@@ -3005,10 +3005,25 @@ export async function runUiProbe(): Promise<void> {
         //    不注入的话下面三条判据全部空转（永远量不到面板，也就永远"绿"）。
         //    走的是页面自己的事件源（与 `--status-island` 用 `ddtoolkit:pill-message` 同款）。
         window.dispatchEvent(new CustomEvent('ddtoolkit:widget-seed', {
-          detail: [{
-            id: 'probe-widget', kind: 'message', source: '探针',
-            text: '探针消息：小窗面板可用性', value: '47s', ttl: 0,
-          }],
+          detail: [
+            {
+              id: 'probe-widget', kind: 'message', source: '探针',
+              text: '探针消息：小窗面板可用性', ttl: 0,
+            },
+            // ⚠️ **两条**（2026-09-30 加第二条）：一条的话 `count` 徽章与条目间的
+            // `.si-item + .si-item` 分隔线**在 DOM 里根本不存在** ⇒ 那两条视觉判据
+            // 会静默空转（"永远量不到"与"量到且正确"在报告里长得一样）。
+            // ⚠️ `pickPrimary` 同级取**数组后者** ⇒ 活数据挂在第二条上，胶囊才量得到它。
+            // ⚠️ 第二条**必须带 `detail` 与 `action`**：视觉判据里有 `detail`/`action`
+            //    两行墨色 —— 元素不存在时那两条会**静默拿到 None**（"没量到"与
+            //    "量到且正确"在报告里长得一样，这正是本仓反复踩的那类假绿）。
+            {
+              id: 'probe-widget-2', kind: 'message', source: '操作结果',
+              text: '已复制诊断信息', value: '47s', ttl: 0,
+              detail: '面板里才出现的那半句',
+              action: { label: '查看详情', kind: 'open-report' },
+            },
+          ],
         }))
         await sleep(150)
         const island3 = document.querySelector<HTMLElement>('.si-island')
@@ -3067,6 +3082,79 @@ export async function runUiProbe(): Promise<void> {
           if (iconSvg) {
             const irect = iconSvg.getBoundingClientRect()
             result.widgetPanelIconBox = [Math.round(irect.width), Math.round(irect.height)]
+          }
+          // D1 视觉（2026-09-30）：把**小窗宿主的墨色与材质**原样带出去，判据在脚本侧算
+          // （要按 α 复合到纯白/纯黑壁纸再算对比度 —— 与胶囊那条同款）。
+          //
+          // ⚠️ 为什么必须在这一段量：小窗宿主的面板里，子元素用的是**全站令牌**
+          // （`--c-text-main` #4b5a6b / `--c-text-sub` / `--c-border` / `--c-primary-deep`），
+          // 那些是**浅色主题**的值 —— 铺在深色卡片上基本读不出来。而几何判据（在不在视口内、
+          // 点不点得着、三段不重叠）**全都照样绿**：它们一个颜色都不看。
+          const ic = (sel: string, prop = 'color'): string | null => {
+            const el = panel.querySelector<HTMLElement>(sel)
+            return el ? (getComputedStyle(el) as unknown as Record<string, string>)[prop] : null
+          }
+          const second = panel.querySelector<HTMLElement>('.si-item + .si-item')
+          result.wgInk = {
+            title: ic('.si-panel-title'),
+            hint: ic('.si-panel-hint'),
+            itemText: ic('.si-item-text'),
+            itemValue: ic('.si-item-value'),
+            itemDetail: ic('.si-item-detail'),
+            itemMeta: ic('.si-item-meta'),
+            icon: ic('.si-item-icon'),
+            action: ic('.si-item-action'),
+            actionBg: ic('.si-item-action', 'backgroundColor'),
+            actionBorder: ic('.si-item-action', 'borderTopColor'),
+            foot: ic('.si-panel-order'),
+            divider: second ? getComputedStyle(second).borderTopColor : null,
+          }
+          const pcsW = getComputedStyle(panel)
+          result.wgPanelBg = pcsW.backgroundColor
+          result.wgPanelShadow = pcsW.boxShadow
+          // 阴影**层数**在浏览器侧数（CSSOM 的序列化里逗号既分隔层、也出现在 `rgba(...)` 里，
+          // 脚本侧用 `split("),")` 会数成 1 —— 我第一版就是这么错的）。
+          const shadowLayers = (s: string): number =>
+            !s || s === 'none' ? 0 : s.split(/,(?![^(]*\))/).length
+          result.wgPanelShadowLayers = shadowLayers(pcsW.boxShadow)
+          const headEl = panel.querySelector<HTMLElement>('.si-panel-head')
+          result.wgHeadPad = headEl ? getComputedStyle(headEl).padding : null
+          const itemEl = panel.querySelector<HTMLElement>('.si-item')
+          result.wgItemPad = itemEl ? getComputedStyle(itemEl).padding : null
+          const chipEl = panel.querySelector<HTMLElement>('.si-item-icon')
+          if (chipEl) {
+            const cbr = chipEl.getBoundingClientRect()
+            result.wgIconChipBox = [Math.round(cbr.width), Math.round(cbr.height)]
+            result.wgIconChipBg = getComputedStyle(chipEl).backgroundColor
+            result.wgIconChipRadius = Math.round(parseFloat(getComputedStyle(chipEl).borderTopLeftRadius))
+            // ⚠️ 圆角写的是 `50%`（样例页 `.p-icon`）⇒ 计算值就是字符串 "50%"，
+            //    `parseFloat` 拿到的是 50（**不是** 7.5）—— 判"是不是正圆"要么判原始串、
+            //    要么判"正方形 + 半径 ≥ 半边长"，这里两条都留（前者钉来源、后者钉效果）。
+            result.wgIconChipRadiusRaw = getComputedStyle(chipEl).borderTopLeftRadius
+          }
+          // 入场动画（样例页：从**胶囊那一侧**滑出 6px + 淡入，`--motion-fast`(140ms) + 延迟 `--motion-lag`(60ms)）
+          result.wgPanelAnimName = pcsW.animationName
+          result.wgPanelAnimMs = Math.round(parseFloat(pcsW.animationDuration) * 1000)
+          result.wgPanelAnimDelay = Math.round(parseFloat(pcsW.animationDelay) * 1000)
+          result.wgPanelAnimEase = pcsW.animationTimingFunction
+          // 胶囊那一侧（展开态仍可取）：卡面 / 阴影 / 内距 / 计数徽章底
+          const capW2 = island3 ? getComputedStyle(island3) : null
+          if (capW2 && island3) {
+            result.wgCapBg = capW2.backgroundColor
+            result.wgCapShadow = capW2.boxShadow
+            result.wgCapShadowLayers =
+              !capW2.boxShadow || capW2.boxShadow === 'none'
+                ? 0
+                : capW2.boxShadow.split(/,(?![^(]*\))/).length
+            result.wgCapPadLeft = capW2.paddingLeft
+            result.wgCapRadius2 = Math.round(parseFloat(capW2.borderTopLeftRadius))
+            const cnt = island3.querySelector<HTMLElement>('.si-count')
+            result.wgCountBg = cnt ? getComputedStyle(cnt).backgroundColor : null
+            const gl = island3.querySelector<HTMLElement>('.si-glyph')
+            result.wgGlyphColor = gl ? getComputedStyle(gl).color : null
+            result.wgGlyphOpacity = gl ? getComputedStyle(gl).opacity : null
+            const vl = island3.querySelector<HTMLElement>('.si-value')
+            result.wgValueColor = vl ? getComputedStyle(vl).color : null
           }
           // D1：展开方向由**几何**写进 `data-dir`，面板只跟随（单一真源）。
           // 探针里没有真窗口 ⇒ 没有 `data-dir`，这条为 null 是**预期的**

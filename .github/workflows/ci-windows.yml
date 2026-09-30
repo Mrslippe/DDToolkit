@@ -17,8 +17,29 @@ name: CI (Windows)
 on:
   push:
     branches: [main]
+    # ⚠️ **纯文档改动不跑这条腿**（2026-09-30 加）：它是全仓最贵的一步 ——
+    # `cargo test` 冷编译 + `vite build` + **PyInstaller 冻结** + exe 冒烟，
+    # 实测 **3.5–56 分钟**（中位数 ~15；52fb20e 那次 55.8 分钟）。
+    # 判据：`.md` / `docs/**` / `devlog/**` 不改任何 Rust、前端源码或依赖
+    # ⇒ 这次冻结出来的 exe 与这次改动**无关**。
+    # ⚠️ Linux 那条 workflow **照跑**（`doc_check` 文档门禁在它里面）——
+    # 所以"文档改动"并不是无人把关，只是不再付冻结那一笔。
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+      - 'devlog/**'
+      - '.gitignore'
+      - 'LICENSE'
   pull_request:
   workflow_dispatch:
+
+# ⚠️ **同一分支只保留最新一次运行**（2026-09-30 加）。
+# 为什么需要：一批活儿里连推 3 个 commit 时，前两次的 Windows 腿会**白跑十几分钟**
+# （实测：`52fb20e` 那次跑到 55.8 分钟，而它早就被后一个 commit 取代了）。
+# `cancelled` 不是失败 —— 它只是"这次不必跑了"。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   rust:

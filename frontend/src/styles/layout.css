@@ -378,15 +378,11 @@ html.window-maximized body {
 /* 状态岛（胶囊 + 面板）已抽到 `status-island.css`（R38 批 5b）——
    小窗与主窗口共用那一份，避免小窗为了一个胶囊加载整个 layout.css。 */
 
-
-@keyframes si-panel-in-fade {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
+/* ⚠️ `@keyframes si-panel-in-fade` **也搬去了 `status-island.css`**（2026-09-30）。
+   它原本只在这里，而**引用它的 reduce 分支在共用文件里** ⇒ 小窗（不加载本文件）
+   在 `prefers-reduced-motion` 下会引用一条**不存在的动画名**（等于没有入场）。
+   同属「拆入口顺带生效的东西」（DEV-LOOP §6.1 的第 7 次）：搬家不是复制，
+   留一份在这里就又变成两个真源。 */
 
 /* 窗口控制：三格 46×40 通栏贴合，无间距无右缘留白；
    hover——普通钮浅粉、关闭钮酒红 */
