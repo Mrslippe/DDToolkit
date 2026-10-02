@@ -1,11 +1,15 @@
 import pillBilibili from '../../assets/pills/bilibili.png'
 import pillWeibo from '../../assets/pills/weibo.png'
+import pillRednote from '../../assets/pills/rednote.png'
 import { formatCount } from '../../utils/format'
 
-/** 平台药丸图像底：按平台映射 docs/design/pills 资产；未知平台回退粉/珊瑚色底 */
+/** 平台药丸图像底：按平台映射 docs/design/pills 资产；未知平台回退粉/珊瑚色底。
+ *  ⚠️ 小红书用 **rednote** 品牌图（2026-10-03 用户提供的新图，替换旧图）——
+ *  平台**标识键**仍是 `xiaohongshu`（库里的值，改它要做数据迁移），对外英文名以图为准。 */
 const PILL_BG: Record<string, string> = {
   bilibili: pillBilibili,
   weibo: pillWeibo,
+  xiaohongshu: pillRednote,
 }
 
 interface Props {

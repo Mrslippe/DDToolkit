@@ -6264,3 +6264,8 @@ img.hero-avatar {
   top: 50%; transform: translateY(-50%);
 }
 .vp-progress-knob { top: 50%; transform: translate(-50%, -50%); margin-left: 0; }
+
+/* 拖拽 seek（devlog/286）：进度条要吃掉指针手势（否则拖动会选中文字/触发页面滚动），
+   拖动中圆点常显（给"正在拖"的视觉反馈）。 */
+.vp-progress { touch-action: none; user-select: none; }
+.vp-progress:active .vp-progress-knob, .vp-progress.is-dragging .vp-progress-knob { opacity: 1; }

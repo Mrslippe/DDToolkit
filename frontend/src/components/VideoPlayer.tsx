@@ -63,6 +63,8 @@ export default function VideoPlayer({ video, poster, permalink }: Props) {
   const [idle, setIdle] = useState(false)
   /** 进度条 hover 预览（图二那颗时间气泡） */
   const [hover, setHover] = useState<{ x: number; t: number } | null>(null)
+  /** 正在拖拽 seek（拖动中圆点常显，见 CSS `.is-dragging`） */
+  const [dragging, setDragging] = useState(false)
 
   const direct = [video.url, ...(video.fallbacks ?? [])].filter(Boolean)
   const proxied = direct.map((u) => `/video-proxy?url=${encodeURIComponent(u)}`)
@@ -219,19 +221,33 @@ export default function VideoPlayer({ video, poster, permalink }: Props) {
         </span>
 
         <div
-          className="vp-progress" role="slider" tabIndex={0}
+          className={`vp-progress${dragging ? ' is-dragging' : ''}`} role="slider" tabIndex={0}
           aria-label="播放进度" aria-valuemin={0} aria-valuemax={Math.round(dur)}
           aria-valuenow={Math.round(cur)}
           onClick={(e) => {
             const r = e.currentTarget.getBoundingClientRect()
             seekTo((e.clientX - r.left) / r.width)
           }}
-          onMouseMove={(e) => {
-            // hover 预览：光标位置对应的时间（图二那颗 `00:12` 气泡）
+          onPointerDown={(e) => {
+            // 拖拽 seek（devlog/286）：按下即定位 + 捕获指针，拖动中持续跟随
+            e.preventDefault()
+            e.currentTarget.setPointerCapture?.(e.pointerId)
+            const r = e.currentTarget.getBoundingClientRect()
+            setDragging(true)
+            seekTo((e.clientX - r.left) / r.width)
+          }}
+          onPointerMove={(e) => {
             const r = e.currentTarget.getBoundingClientRect()
             const ratio = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width))
+            // hover 预览：光标位置对应的时间（图二那颗 `00:12` 气泡）
             setHover({ x: ratio * r.width, t: ratio * (dur || 0) })
+            if (dragging) seekTo(ratio)          // 拖拽中：实时跟随
           }}
+          onPointerUp={(e) => {
+            e.currentTarget.releasePointerCapture?.(e.pointerId)
+            setDragging(false)
+          }}
+          onPointerCancel={() => setDragging(false)}
           onMouseLeave={() => setHover(null)}
         >
           <span className="vp-progress-buf" style={{ width: `${bufPct}%` }} />

@@ -146,7 +146,10 @@ describe('VideoPlayer', () => {
     // ⚠️ 不在这里断言"未 hover 时没有气泡"：jsdom 里 `getBoundingClientRect` 的替换与
     //    React 的状态复用让那条前置断言不稳（跑一遍红一遍绿）；**只看两条正向契约**。
     await act(async () => {
-      bar.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 40 }))
+      // ⚠️ hover 预览挂在 **pointermove** 上（拖拽 seek 与它共用一条路径，devlog/286）
+      const e = new MouseEvent('pointermove', { bubbles: true, clientX: 40 })
+      Object.defineProperty(e, 'pointerId', { value: 1 })
+      bar.dispatchEvent(e)
       await Promise.resolve()
     })
     // 40% × 30s = 12s
@@ -198,6 +201,41 @@ describe('VideoPlayer', () => {
       .toMatch(/\.vp:fullscreen \.vp-video\s*\{[^}]*object-fit:\s*contain/)
     expect(css, '进度条三层锚点不一致 ⇒ 变粗时像"先上长 1px 再下长 1px"')
       .toMatch(/\.vp-progress::before[^{]*\{[^}]*top:\s*50%[^}]*translateY\(-50%\)/)
+  })
+
+  it('拖拽 seek：按下即定位、拖动中实时跟随、松手结束（devlog/286）', async () => {
+    render()
+    const v = el()
+    Object.defineProperty(v, 'duration', { value: 100, configurable: true })
+    await act(async () => { v.dispatchEvent(new Event('loadedmetadata')) })
+
+    const bar = host.querySelector<HTMLDivElement>('.vp-progress')!
+    bar.getBoundingClientRect = () => ({ left: 0, width: 100, top: 0, height: 16,
+      right: 100, bottom: 16, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+
+    const pev = (type: string, x: number) => {
+      const e = new MouseEvent(type, { bubbles: true, clientX: x })
+      Object.defineProperty(e, 'pointerId', { value: 1 })
+      return e
+    }
+    await act(async () => {
+      bar.dispatchEvent(pev('pointerdown', 20))
+      await Promise.resolve()
+    })
+    expect(v.currentTime).toBeCloseTo(20, 1)
+    expect(bar.classList.contains('is-dragging')).toBe(true)
+
+    await act(async () => {
+      bar.dispatchEvent(pev('pointermove', 70))       // 拖到 70%
+      await Promise.resolve()
+    })
+    expect(v.currentTime, '拖动中要实时跟随').toBeCloseTo(70, 1)
+
+    await act(async () => {
+      bar.dispatchEvent(pev('pointerup', 70))
+      await Promise.resolve()
+    })
+    expect(bar.classList.contains('is-dragging')).toBe(false)
   })
 
   it('直连全失败 ⇒ 换到本机代理；代理也失败 ⇒ 兜底并报一条', async () => {
