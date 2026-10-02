@@ -406,7 +406,10 @@ Some(Regex::new(r"^((mailto:\w+)|(tel:\w+)|(https?://\w+)).+").unwrap())
 
 **核实结论**：**仓库里没有 `.github/`**（`Get-ChildItem .github` 只命中 `node_modules` 里的第三方目录）⇒ **CI 完全不存在**。
 
-**一条必须先实测的真机依赖**：`frontend/src-tauri/gen/` **被 `.gitignore` 忽略**（只入库了 `Cargo.lock` / `Cargo.toml` / `build.rs` / `icons/**` / `capabilities/default.json`）。`cargo test` 依赖 `tauri-build` 在 `build.rs` 里生成它 ⇒ **干净 clone 上 `cargo test` 到底能不能跑，必须在批次 0.2 第一次就实测**。跑不了就直接决定 CI 的 Rust leg 怎么写。
+**一条必须先实测的真机依赖**：`frontend/src-tauri/gen/` <!-- 未建 --> **被 `.gitignore` 忽略**（只入库了 `Cargo.lock` / `Cargo.toml` / `build.rs` / `icons/**` / `capabilities/default.json`）。`cargo test` 依赖 `tauri-build` 在 `build.rs` 里生成它 ⇒ **干净 clone 上 `cargo test` 到底能不能跑，必须在批次 0.2 第一次就实测**。跑不了就直接决定 CI 的 Rust leg 怎么写。
+> ⚠️ 那个 `<!-- 未建 -->` 是 2026-10-03 补的：本机构建过 ⇒ 这个目录**在**，`docs_gate` 一路绿；
+> 而 CI 是干净检出 ⇒ 它**不在** ⇒ `tests/test_docs_gate.py::test_the_real_repo_is_clean` 红。
+> 自查手法见 `docs/DEV-LOOP.md` §6「**引用了构建产物 / 被忽略的目录**」那一条。
 
 **改动面**：
 - `.github/workflows/ci.yml`（ubuntu-latest）：全仓 Python 语法扫描（`ast.parse`）→ `pytest` → `tsc --noEmit` → `eslint --max-warnings 0` → `vitest run` → `doc_check.py`（OpenAPI 无 diff 在批次 13 之后启用）。

@@ -247,3 +247,12 @@ Windows，Linux 腿只做与平台无关的。**注释里的命令会让文本�
 - ⚠️ **计时类判据一律用 release**（2026-10-03 加，devlog/273）：同一段动画 debug 构建帧间隔
   40–56 ms，release 下 16.2 ms、光栅 3.39 ms —— **差一个数量级，且 debug 的波形看着像"算法有问题"**。
   见到"帧率不达标"，先确认构建档、再看算法。
+- ⚠️ **文档里引用了构建产物 / 被 `.gitignore` 忽略的目录 ⇒ 本机绿、CI 红**（2026-10-03 加，devlog/274 收尾）：
+  `docs_gate` 会检查文档里**反引号内的代码路径是否存在**（`scripts/docs_gate.py::check_paths`），
+  而**本机构建过**就有那些目录，干净检出上它们**都不在** <!-- 未建 -->
+  —— 例如 `frontend/src-tauri/` 下的 `gen`、`target`、`binaries`，以及 `node_modules`、`static/img-cache`。
+  症状：本地两条文档门禁全绿，CI 的 `tests/test_docs_gate.py::test_the_real_repo_is_clean` 红，
+  报"第 N 行引用的路径不存在"。
+  **自查手法（10 秒，比推上去等 CI 快）**：把那些目录改名 → 跑 `python scripts/docs_gate.py` → 改回来。
+  修法：给那一行加 `<!-- 未建 -->`（本仓不建）或 `<!-- 非本仓 -->`（外部项目）——
+  ⚠️ **标记是整行生效的**（那一行里所有反引号路径都免检），**别去改检查本身**。
