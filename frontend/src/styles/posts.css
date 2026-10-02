@@ -6243,3 +6243,24 @@ img.hero-avatar {
 }
 .vp-vol::-moz-range-track { width: 4px; border-radius: 999px; background: rgba(255, 255, 255, .28); }
 .vp-vol::-moz-range-thumb { width: 12px; height: 12px; border: 0; border-radius: 999px; background: #fff; }
+
+/* ── 播放器三处修正（devlog/285）────────────────────────────────────────
+   ① 音量浮窗与按钮之间有 8px 缝 ⇒ 鼠标往上移的途中 `.vp-volwrap:hover` 断掉、浮窗消失，
+      根本够不着滑杆。修法：给浮窗加一块**看不见的"桥"**（::after 铺满缝隙）——
+      它是 wrap 的后代，指针在桥上时 `:hover` 仍然成立。
+   ② 全屏只把容器撑满，`.vp-video` 仍带着 `max-height: 60vh` ⇒ 画面缩在中间、四周黑边。
+      修法：全屏时解除上限并 `object-fit: contain`（原比例放大到最大）。
+   ③ 进度条的 ::before / 缓冲 / 已播三层锚点不一致（有的贴顶、有的居中）⇒ 变粗时看着像
+      "先往上长 1px 再往下长 1px"。修法：三层统一 `top:50% + translateY(-50%)`，从中间对称长。 */
+.vp-volpop { bottom: 30px; }
+.vp-volpop::after {
+  content: ''; position: absolute; left: 0; right: 0; bottom: -14px; height: 14px;
+}
+.vp:fullscreen { display: flex; align-items: center; justify-content: center; background: #000; }
+.vp:fullscreen .vp-video {
+  width: 100%; height: 100%; max-height: none; object-fit: contain;
+}
+.vp-progress::before, .vp-progress-buf, .vp-progress-fill {
+  top: 50%; transform: translateY(-50%);
+}
+.vp-progress-knob { top: 50%; transform: translate(-50%, -50%); margin-left: 0; }

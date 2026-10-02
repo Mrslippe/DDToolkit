@@ -7,6 +7,8 @@
  */
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import VideoPlayer from './VideoPlayer'
@@ -182,6 +184,20 @@ describe('VideoPlayer', () => {
       await Promise.resolve()
     })
     expect(host.querySelector<HTMLButtonElement>('[data-vol-level]')!.dataset.volLevel).toBe('mute')
+  })
+
+  it('三处 CSS 契约（真机报过的问题）：浮窗"桥"、全屏原比例放大、进度条对称变粗', () => {
+    // jsdom 不解析样式表，所以这里**直接读真 CSS**（与 LiveSessionDialog.test.tsx 同款做法）——
+    // 这三条各自对应一个真机现象，改回去就红。
+    const css = readFileSync(resolve(__dirname, '../styles/posts.css'), 'utf8')
+    expect(css, '音量浮窗与按钮之间的缝没有桥 ⇒ 鼠标往上移时浮窗消失、够不着滑杆')
+      .toMatch(/\.vp-volpop::after\s*\{[^}]*bottom:\s*-14px/)
+    expect(css, '全屏没解除 max-height:60vh ⇒ 画面缩在中间、四周黑边')
+      .toMatch(/\.vp:fullscreen \.vp-video\s*\{[^}]*max-height:\s*none/)
+    expect(css, '全屏没写 object-fit:contain ⇒ 比例会被拉伸')
+      .toMatch(/\.vp:fullscreen \.vp-video\s*\{[^}]*object-fit:\s*contain/)
+    expect(css, '进度条三层锚点不一致 ⇒ 变粗时像"先上长 1px 再下长 1px"')
+      .toMatch(/\.vp-progress::before[^{]*\{[^}]*top:\s*50%[^}]*translateY\(-50%\)/)
   })
 
   it('直连全失败 ⇒ 换到本机代理；代理也失败 ⇒ 兜底并报一条', async () => {
