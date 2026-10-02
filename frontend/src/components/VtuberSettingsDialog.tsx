@@ -23,7 +23,7 @@ import { Button } from '@/components/ui/button'
 import FloatPill from './common/FloatPill'
 import { api, resolveAsset } from '../api/api'
 import type { Account, VTuber, VTuberAvatars } from '../api/types'
-import { PLATFORM_LABEL } from '../utils/postTypes'
+import { PLATFORM_LABEL, platformEn } from '../utils/postTypes'
 import { buildSignOptions, type SignOption as SignOptionData } from '../utils/signOptions'
 import { resolveSign } from '../utils/signSource'
 import AddAccountDialog from './AddAccountDialog'
@@ -725,7 +725,7 @@ export default function VtuberSettingsDialog({
               <div className="vd-acc-list">
                 {(vtuber?.accounts ?? []).map((a) => (
                   <div className="vd-acc" key={a.id}>
-                    <span className="vd-acc-platform">{a.platform}</span>
+                    <span className="vd-acc-platform">{platformEn(a.platform)}</span>
                     <span className="vd-acc-name">
                       {a.display_name ?? a.platform_uid}
                       <em>{a.followers_count.toLocaleString('zh-CN')} 粉</em>

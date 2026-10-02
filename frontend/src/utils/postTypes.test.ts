@@ -102,6 +102,17 @@ describe('PLATFORM_LABEL — 平台显示名', () => {
     expect(PLATFORM_LABEL.xiaohongshu).toBe('小红书')   // 第 4 阶段 ④，devlog/231
   })
 
+  it('平台英文名：小红书是 **rednote**，不是库里的标识键', async () => {
+    // 2026-10-03 用户口径：「原本用英文的地方就接着用英文」——
+    // 「已订阅账号」那行此前直接打印 `a.platform`，于是界面上露出 `xiaohongshu`（截图报障）。
+    const { PLATFORM_EN, platformEn } = await import('./postTypes')
+    expect(platformEn('xiaohongshu')).toBe('rednote')
+    expect(PLATFORM_EN.xiaohongshu).not.toBe('xiaohongshu')
+    expect(platformEn('bilibili'), '本来就显示英文的照旧').toBe('bilibili')
+    expect(platformEn('douyin'), '未知平台原样回显标识键，不装懂').toBe('douyin')
+    expect(platformEn(null)).toBe('平台')
+  })
+
   it('收录的平台与后端注册表一致（新增平台要同时补这里与 platforms/registry）', () => {
     // ⚠️ 这条以前写死 `['bilibili','weibo']`；2026-09-27 加了小红书 ⇒ 改成"与真源对齐"的写法，
     //    免得每接一个平台都要手改一次（真源在 `app/services/platforms/registry.py`）。

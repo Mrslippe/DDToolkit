@@ -60,6 +60,27 @@ export const PLATFORM_LABEL: Record<string, string> = {
   bilibili: 'B站', weibo: '微博', xiaohongshu: '小红书',
 }
 
+/**
+ * 平台的**英文名**（给"本来就显示英文"的位置用；2026-10-03 用户口径：
+ * 「原本用英文的地方就接着用英文」）。
+ *
+ * ⚠️ 为什么不能直接打印 `a.platform`：那是**库里的标识键**，`xiaohongshu` 露在界面上就是
+ * 用户看到的那行 —— 品牌英文名是 **rednote**（与卡片药丸那张图同口径）。
+ * 未知平台**原样回显标识键**（既不装懂，也不显示空白）。
+ */
+export const PLATFORM_EN: Record<string, string> = {
+  bilibili: 'bilibili',
+  weibo: 'weibo',
+  xiaohongshu: 'rednote',
+}
+
+/** 平台英文名（空值 → 「平台」，未知平台 → 标识键原样） */
+export function platformEn(platform: string | null | undefined): string {
+  const p = (platform ?? '').trim()
+  if (!p) return '平台'
+  return PLATFORM_EN[p] ?? p
+}
+
 /* ── 平台账号的纯逻辑（P2 分层收敛 A 批次从 `PostsPage.tsx` 搬出，只搬不改） ── */
 
 /** 账号主页 URL：优先用后端抓到的 `url`；为空时按平台兜底拼。
