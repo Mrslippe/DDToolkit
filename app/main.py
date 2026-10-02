@@ -15,7 +15,7 @@ from app.core import runtime_settings
 from app.core.api_auth import require_token, token_configured
 from app.core.logging_setup import setup_logging
 from app.core.database import engine, Base
-from app.routers import vtuber, img_proxy, auth
+from app.routers import vtuber, img_proxy, auth, video_proxy
 from app.routers import settings as settings_router
 from app.routers import messages as messages_router
 
@@ -478,6 +478,7 @@ app.add_middleware(
 
 app.include_router(vtuber.router)
 app.include_router(img_proxy.router)
+app.include_router(video_proxy.router)
 app.include_router(auth.router)
 app.include_router(settings_router.router)
 # 推送通道（M0，devlog/241）：SSE over fetch，token 走 header。

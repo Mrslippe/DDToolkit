@@ -35,7 +35,16 @@ interface Props {
 export default function PostVideo({ video, poster, permalink }: Props) {
   const [idx, setIdx] = useState(0)
   const [dead, setDead] = useState(false)
-  const sources = [video.url, ...(video.fallbacks ?? [])].filter(Boolean)
+  const direct = [video.url, ...(video.fallbacks ?? [])].filter(Boolean)
+  /**
+   * 直连失败后走**本机代理**（`/video-proxy`，同源、不带 Referer）。
+   *
+   * 为什么需要这条兜底（2026-10-02 真机实测，devlog/281）：小红书 CDN 对**任何带 Referer
+   * 的请求**回 **403**，而 WebView 加载媒体子资源必然带 Referer ⇒ 直连在某些宿主上必失败；
+   * 代理由后端发请求（头由我们控制、不带 Referer），且同源 ⇒ CSP 的 `media-src 'self'` 放行。
+   */
+  const proxied = direct.map((u) => `/video-proxy?url=${encodeURIComponent(u)}`)
+  const sources = [...direct, ...proxied]
   const src = sources[idx]
 
   if (dead || !src) {
@@ -64,7 +73,6 @@ export default function PostVideo({ video, poster, permalink }: Props) {
         // 换下一条备用流；链走完才认输（别把"这一档解不了"当成"视频坏了"）
         if (idx + 1 < sources.length) setIdx(idx + 1)
         else setDead(true)
-      }}
-    />
+      }}    />
   )
 }

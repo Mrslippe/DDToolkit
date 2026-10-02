@@ -68,13 +68,33 @@ describe('PostVideo', () => {
     expect(video()!.getAttribute('src')).toBe('http://v/c.mp4')
   })
 
+  it('直连全失败 ⇒ 换到**本机代理**（CDN 见 Referer 就 403 的那条路）', () => {
+    render({ video: { url: 'http://v/a.mp4', fallbacks: ['http://v/b.mp4'] } })
+
+    const seen: string[] = []
+    for (let i = 0; i < 8; i += 1) {
+      const v = video()
+      if (!v) break
+      seen.push(v.getAttribute('src') ?? '')
+      act(() => { v.dispatchEvent(new Event('error')) })
+    }
+    expect(seen[0]).toBe('http://v/a.mp4')
+    expect(seen[1]).toBe('http://v/b.mp4')
+    // 直连链走完 → 同一个地址经本机代理再试一遍（同源、不带 Referer）
+    expect(seen[2]).toBe('/video-proxy?url=http%3A%2F%2Fv%2Fa.mp4')
+    expect(seen[3]).toBe('/video-proxy?url=http%3A%2F%2Fv%2Fb.mp4')
+  })
+
   it('链走完都失败 ⇒ 兜底「在浏览器打开」（且真的调了外链桥）', async () => {
     render({
       video: { url: 'http://v/a.mp4' },
       permalink: 'https://www.xiaohongshu.com/explore/n1?xsec_token=T',
     })
 
-    act(() => { video()!.dispatchEvent(new Event('error')) })
+    for (let i = 0; i < 6 && video(); i += 1) {
+      const v = video()!
+      act(() => { v.dispatchEvent(new Event('error')) })
+    }
 
     expect(host.querySelector('video')).toBeFalsy()
     const btn = host.querySelector<HTMLButtonElement>('.pv-open')!
@@ -88,7 +108,10 @@ describe('PostVideo', () => {
 
   it('没有 permalink 时兜底只说明情况，不给死按钮', () => {
     render({ video: { url: 'http://v/a.mp4' } })
-    act(() => { video()!.dispatchEvent(new Event('error')) })
+    for (let i = 0; i < 6 && video(); i += 1) {
+      const v = video()!
+      act(() => { v.dispatchEvent(new Event('error')) })
+    }
     expect(host.querySelector('.pv-dead')?.textContent).toContain('播不了')
     expect(host.querySelector('.pv-open')).toBeFalsy()
   })
