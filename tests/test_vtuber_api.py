@@ -1434,16 +1434,182 @@ def test_live_session_upstream_reports_fetch_failed(client, monkeypatch):
     assert len(calls) == 4                          # 失败不缓存：重试要真的重试
 
 
-def test_live_session_upstream_skips_non_danmakus(client, monkeypatch):
-    """纯 feed 场次：上游无从查起 → `no_danmaku`，且不打网络。"""
-    _vid, aid = _mk_detail_sessions(client)
+# ── 弹幕取数的两条新路径：直播中 / 按需现查（2026-10-02，devlog/275）──
+#
+# 用户口径：「每一场直播详情都能够看到弹幕记录；还在直播中的详情页就显示正在直播中
+# 而不是'本场没有可用于统计的文本弹幕记录'」。于是后端多了两条路径：
+#   ① 直播中（`end_at` 为空）→ `live`，不出网（danmakus 要等本场结束才收录）；
+#   ② 本地只有 feed/self 行且已结束 → **现去 danmakus 查一次**。
+# 为什么 ② 必须存在：每日同步会被上游 WAF 拦（302），本地缺行 ≠ 上游没有这一场；
+# 实测弥月 09-25 起 11 场全因此缺席，直到手动跑一次同步才补回来。
+
+def _patch_channel(monkeypatch, *, lives=None, reason=None) -> list[str]:
+    """把「现查」背后的 channel 拉取换成桩，返回被问到的 uid 列表。"""
+    from app.services import live_upstream
+    live_upstream.clear_lookup_state()
+    calls: list[str] = []
+
+    async def fake(mid, client, *, attempts=2):
+        calls.append(str(mid))
+        if reason is not None:
+            return None, reason
+        return {"channel": {}, "lives": list(lives or []), "fansHistory": []}, None
+
+    monkeypatch.setattr("app.services.externals.danmakus.fetch_channel_checked", fake)
+    return calls
+
+
+def _mk_recent_feed_session(client, *, hours_ago: float = 3.0) -> tuple[int, str]:
+    """建一个**近期**、已结束、只有 feed 行的场次（按需现查那一路的输入形态）。
+
+    起点用相对时间：现查有 14 天新鲜度闸门（老场次不为它出网），写死日期会随
+    时间推移把这条用例从"能查"变成"不查"。
+    """
+    start = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=hours_ago)
+    vid = client.post("/vtuber", json={"name": "现查"}).json()["id"]
+    aid = client.post(
+        f"/vtuber/{vid}/accounts",
+        json={"platform": "bilibili", "platform_uid": "123"},
+    ).json()["id"]
+    db = TestingSession()
+    db.add(LiveSession(account_id=aid, source="feed", live_id="feed-new",
+                       title="刚结束的一场", start_at=start,
+                       end_at=start + timedelta(hours=2)))
+    db.commit()
+    db.close()
+    return aid, "feed-new"
+
+
+def _ms_of(dt: datetime) -> int:
+    return int(dt.replace(tzinfo=timezone.utc).timestamp() * 1000)
+
+
+def test_live_session_upstream_reports_live_without_network(client, monkeypatch):
+    """直播中：报 `live`（"正在直播中"），**不请求任何上游**。
+
+    原先这里显示"本场没有可用于统计的文本弹幕记录" —— 把"还没到时候"说成了"没有"。
+    """
+    _vid, aid = _mk_detail_sessions(client)          # feed-1 的 end_at 为空 = 直播中
     calls = _patch_upstream(monkeypatch)
+    chan = _patch_channel(monkeypatch, lives=[{"liveId": "u-x", "startDate": 1}])
 
     d = client.get(f"/account/{aid}/live-sessions/feed-1/upstream").json()
+    assert d["danmaku"]["wc_status"] == "live"
+    assert d["danmaku"]["top_words"] == []
+    assert calls == [] and chan == []                # 两条上游路径都不该被碰
+
+
+def test_live_session_upstream_looks_up_danmakus_on_demand(client, monkeypatch):
+    """本地只有 feed 行 → 现去 danmakus 查一次；命中就补库并用 uuid 取上游词云。"""
+    aid, live_id = _mk_recent_feed_session(client)
+    calls = _patch_upstream(monkeypatch)             # 摘要里有词云
+    db = TestingSession()
+    start = db.query(LiveSession).filter(LiveSession.live_id == live_id).one().start_at
+    db.close()
+    chan = _patch_channel(monkeypatch, lives=[{
+        "liveId": "uuid-ondemand", "title": "刚结束的一场",
+        "startDate": _ms_of(start), "stopDate": _ms_of(start + timedelta(hours=2)),
+        "danmakusCount": 42,
+    }])
+
+    d = client.get(f"/account/{aid}/live-sessions/{live_id}/upstream").json()
+    assert chan == ["123"]                           # 真的按平台 uid 问了上游
+    assert d["danmaku"]["wc_status"] == "upstream"   # 补到行之后走正常取数
+    assert d["session_changed"] is True              # 前端据此重取详情（弹幕数/收益也变了）
+    assert [w["text"] for w in d["danmaku"]["top_words"]] == ["好耶", "MELODY"]
+    assert len(calls) == 2                           # 一轮 = 摘要 + 事件
+    db = TestingSession()
+    row = db.query(LiveSession).filter(LiveSession.live_id == "uuid-ondemand").one()
+    assert row.source == "danmakus" and row.danmakus_count == 42
+    db.close()
+
+
+def test_live_session_upstream_no_danmaku_only_after_asking(client, monkeypatch):
+    """问过上游、人家确实没有 → `no_danmaku`；且不白取摘要/事件。"""
+    aid, live_id = _mk_recent_feed_session(client)
+    calls = _patch_upstream(monkeypatch)
+    chan = _patch_channel(monkeypatch, lives=[])     # 上游 200，但这一场不在里面
+
+    d = client.get(f"/account/{aid}/live-sessions/{live_id}/upstream").json()
+    assert chan == ["123"]
     assert d["danmaku"]["wc_status"] == "no_danmaku"
     assert d["danmaku"]["source"] is None
-    assert d["metrics"] is None and d["events"] == []
     assert calls == []
+
+
+def test_live_session_upstream_lookup_blocked_is_fetch_failed(client, monkeypatch):
+    """现查被 WAF 拦 → `fetch_failed`（"没问到"），**不能**说成"上游没有"。"""
+    aid, live_id = _mk_recent_feed_session(client)
+    calls = _patch_upstream(monkeypatch)
+    chan = _patch_channel(monkeypatch, reason="HTTP 302")
+
+    d = client.get(f"/account/{aid}/live-sessions/{live_id}/upstream").json()
+    assert chan == ["123"]
+    assert d["danmaku"]["wc_status"] == "fetch_failed"
+    assert calls == []
+
+
+def test_live_session_lookup_is_throttled_but_refresh_forces(client, monkeypatch):
+    """同账号 10 分钟只现查一次；`?refresh=true`（用户点「查一次」）绕过节流。"""
+    aid, live_id = _mk_recent_feed_session(client)
+    _patch_upstream(monkeypatch)
+    chan = _patch_channel(monkeypatch, lives=[])
+    url = f"/account/{aid}/live-sessions/{live_id}/upstream"
+
+    assert client.get(url).json()["danmaku"]["wc_status"] == "no_danmaku"
+    assert len(chan) == 1                            # 第一次：问了上游
+    assert client.get(url).json()["danmaku"]["wc_status"] == "no_danmaku"
+    assert len(chan) == 1                            # 节流：沿用上次结论，不再打上游
+    assert client.get(f"{url}?refresh=true").json()["danmaku"]["wc_status"] == "no_danmaku"
+    assert len(chan) == 2                            # 显式重试：真的再问一次
+
+
+def test_live_session_lookup_skips_old_sessions(client, monkeypatch):
+    """很久以前的纯 feed 场次：不为它出网（上游早该收录，没有就是没有）。"""
+    aid, live_id = _mk_recent_feed_session(client, hours_ago=24 * 40)
+    _patch_upstream(monkeypatch)
+    chan = _patch_channel(monkeypatch, lives=[])
+
+    d = client.get(f"/account/{aid}/live-sessions/{live_id}/upstream").json()
+    assert d["danmaku"]["wc_status"] == "no_danmaku"
+    assert chan == []
+
+
+def test_wordcloud_endpoint_resolves_session_after_on_demand_merge(client, monkeypatch):
+    """现查补进 danmakus 行之后，前端手里仍是**旧的 feed id** —— 自建词云要能找回同一场次，
+    并且拿**定权后的 uuid** 去拉原始弹幕（danmakus v3 只认自己的 uuid）。
+
+    这条钉的是自己的坑：合并会把对外 id 换成最高优先级源，按需现查又发生在弹窗已经打开
+    之后 ⇒ 只按 `live_id` 精确匹配会让「用弹幕自建」404，而界面会把它显示成"拉取失败"。
+    """
+    aid, live_id = _mk_recent_feed_session(client)
+    _patch_upstream(monkeypatch)
+    db = TestingSession()
+    start = db.query(LiveSession).filter(LiveSession.live_id == live_id).one().start_at
+    db.close()
+    _patch_channel(monkeypatch, lives=[{
+        "liveId": "uuid-ondemand", "title": "刚结束的一场",
+        "startDate": _ms_of(start), "stopDate": _ms_of(start + timedelta(hours=2)),
+        "danmakusCount": 42,
+    }])
+    # 先触发一次现查（补进 danmakus 行 ⇒ 合并后对外 id 变成 uuid）
+    assert client.get(f"/account/{aid}/live-sessions/{live_id}/upstream").status_code == 200
+
+    seen: list[str] = []
+
+    async def fake_records(lid: str, max_records: int = 0):
+        seen.append(lid)
+        return [{"payload": {"rawText": "苹果 苹果"}}, {"payload": {"rawText": "苹果 华为"}}]
+
+    monkeypatch.setattr("app.services.danmaku_cloud.fetch_raw_danmakus", fake_records)
+    from app.services.danmaku_cloud import clear_cache
+    clear_cache()
+
+    # ⚠️ 仍然用**旧的 feed id** 调自建端点（就是弹窗手里那份）
+    d = client.get(f"/account/{aid}/live-sessions/{live_id}/wordcloud").json()
+    assert seen == ["uuid-ondemand"], "必须用定权后的 uuid 去拉原始弹幕"
+    assert d["wc_status"] == "self_built"
+    assert d["source"] == "self"
 
 
 def test_live_session_upstream_404s(client):

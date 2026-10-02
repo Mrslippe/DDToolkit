@@ -20,6 +20,7 @@
 - channel lives → live_sessions（source='danmakus'，LiveSessionRepo.upsert_danmakus，
   幂等 by (account_id, live_id)）
 """
+import asyncio
 import logging
 from datetime import datetime, timezone
 
@@ -33,8 +34,8 @@ from app.core.useragent import UA_CHROME
 from app.models.vtuber import Account, ThirdpartyVtuber
 from app.repositories.vtuber_repo import LiveSessionRepo
 from app.services.externals.base import (ExternalJob, ExternalJobSummary,
-                                         ExternalSource, INTERVAL_DAILY,
-                                         INTERVAL_WEEKLY)
+                                         ExternalSource, FailureBudget,
+                                         INTERVAL_DAILY, INTERVAL_WEEKLY)
 
 logger = logging.getLogger(__name__)
 
@@ -61,27 +62,76 @@ BROWSER_HEADERS = {
 }
 
 
+# channel 的重试与账号间隔（2026-10-02，devlog/275）。
+#
+# **为什么必须重试**：该端点会被上游 WAF 间歇拦截 —— 实测同一个请求头、
+# 同一分钟内：5 个账号 200（0.9~2.2MB / 1~8s），3 个账号 **HTTP 302 →
+# dnspod.qcloud.com/static/webblock.html**（腾讯 DNSPod 拦截页），1 个 ReadTimeout。
+# 而每日同步原先**失败即 `continue`、不重试**，于是一夜被拦 = 该账号永久留洞，
+# 直到下一次成功的同步（实测 弥月 09-25→10-02 缺 11 场，全库 danmakus 行停在 09-28）。
+CHANNEL_ATTEMPTS = 3
+CHANNEL_BACKOFF_SECONDS = (0.0, 2.0, 6.0)
+# 账号之间的间隔：连打 9 个账号正是触发 WAF 的形状（夜间批量），人为错开。
+CHANNEL_ACCOUNT_GAP_SECONDS = 1.5
+
+
+async def _fetch_channel_once(mid: str, client: httpx.AsyncClient) -> tuple[dict | None, str | None]:
+    """单次 channel 拉取 → `(payload | None, 失败原因 | None)`。
+
+    带上失败原因是为了**能排查**：原先 `skipped += 1` 把「被 WAF 拦（302）」
+    「上游自己挂了（502）」「读超时」混成同一个数字，日志里只有"新增 0，跳过 8"。
+    """
+    try:
+        resp = await client.get(
+            f"{DANMAKUS_BASE}{CHANNEL_PATH}",
+            params={"uId": mid, "includeLive": "true"},
+            headers=BROWSER_HEADERS,
+        )
+    except httpx.HTTPError as e:
+        return None, f"{type(e).__name__}"
+    if resp.status_code != 200:
+        # 302 落在 WAF 拦截页上（见上面常量注释）；502/504 是上游自己不稳
+        return None, f"HTTP {resp.status_code}"
+    try:
+        data = resp.json()
+    except ValueError:
+        return None, "响应非 JSON（多半也是 WAF 页）"
+    if not isinstance(data, dict) or data.get("code") != 200:
+        return None, f"code={data.get('code') if isinstance(data, dict) else '?'}"
+    payload = data.get("data")
+    if not isinstance(payload, dict):
+        return None, "data 结构异常"
+    return payload, None
+
+
+async def fetch_channel_checked(mid: str, client: httpx.AsyncClient, *,
+                                attempts: int = CHANNEL_ATTEMPTS
+                                ) -> tuple[dict | None, str | None]:
+    """channel 拉取 + 退避重试 → `(payload | None, 最后失败原因 | None)`。
+
+    重试次数与退避见 `CHANNEL_ATTEMPTS` / `CHANNEL_BACKOFF_SECONDS`；
+    按需现查（`live_upstream.ensure_session_recorded`）用更小的 `attempts` ——
+    那是用户点击触发的路径，不该让一次点击等上十几秒。
+    """
+    reason: str | None = None
+    for i in range(max(1, attempts)):
+        if i:
+            await asyncio.sleep(CHANNEL_BACKOFF_SECONDS[min(i, len(CHANNEL_BACKOFF_SECONDS) - 1)])
+        payload, reason = await _fetch_channel_once(mid, client)
+        if payload is not None:
+            return payload, None
+        logger.warning(f"danmakus channel 失败（第 {i + 1}/{attempts} 次）mid={mid}: {reason}")
+    return None, reason or "未知"
+
+
 async def fetch_channel(mid: str, client: httpx.AsyncClient) -> dict | None:
     """公开端点：单主播全量场次（channel + lives + fansHistory）。
 
-    返回原始 data dict（{channel, lives, fansHistory}）或 None；
-    调用方经 LiveSessionRepo.upsert_danmakus 落库。
+    返回原始 data dict（{channel, lives, fansHistory}）或 None（含重试，见
+    `fetch_channel_checked`）；调用方经 LiveSessionRepo.upsert_danmakus 落库。
     """
-    resp = await client.get(
-        f"{DANMAKUS_BASE}{CHANNEL_PATH}",
-        params={"uId": mid, "includeLive": "true"},
-        headers=BROWSER_HEADERS,
-    )
-    if resp.status_code != 200:
-        logger.warning(f"danmakus channel 失败 HTTP {resp.status_code} mid={mid}")
-        return None
-    data = resp.json()
-    if not isinstance(data, dict) or data.get("code") != 200:
-        logger.warning(f"danmakus channel 响应异常 mid={mid}: "
-                       f"code={data.get('code') if isinstance(data, dict) else '?'}")
-        return None
-    payload = data.get("data")
-    return payload if isinstance(payload, dict) else None
+    payload, _reason = await fetch_channel_checked(mid, client)
+    return payload
 
 
 def _auth_headers(token: str | None) -> dict:
@@ -385,6 +435,26 @@ class DanmakusSource(ExternalSource):
             q = q.filter(Account.id.in_(account_ids))
         return q.all()
 
+    async def sync_account(self, db: Session, acc: Account, client: httpx.AsyncClient, *,
+                           attempts: int = CHANNEL_ATTEMPTS) -> dict:
+        """单账号场次同步（每日批次与**按需现查**共用）→
+        `{"added", "updated", "skipped", "reason"}`（`reason` 非空 = 这次没拉到）。
+
+        按需现查（用户点开一场没有 danmakus 来源的详情）走这里，因此
+        `attempts` 可调小 —— 点击路径不该等满三次退避。
+        """
+        payload, reason = await fetch_channel_checked(str(acc.platform_uid), client,
+                                                       attempts=attempts)
+        if payload is None:
+            logger.warning(f"danmakus lives 账号失败 {acc.platform_uid}: {reason}")
+            return {"added": 0, "updated": 0, "skipped": 1, "reason": reason}
+        lives = payload.get("lives") or []
+        # 平台由**调用方**给（M1a，devlog/213）：仓库层不再写死 bilibili
+        res = LiveSessionRepo(db).upsert_danmakus(acc.id, lives, platform=acc.platform)
+        logger.info(f"danmakus live_sessions: {acc.platform_uid} "
+                    f"新增 {res['added']} 刷新 {res['updated']}")
+        return {**res, "reason": None}
+
     async def _sync_live_sessions(self, db: Session,
                                   client: httpx.AsyncClient,
                                   account_ids: list[int] | None = None) -> ExternalJobSummary:
@@ -393,28 +463,49 @@ class DanmakusSource(ExternalSource):
         场次含标题/起止/分区/收益/峰值在线/弹幕数；直播中场次 stopDate=0，
         end_at 由 merged() 用 self 快照补齐（当日即准确）。
         account_ids：收录新 V 时只回填该账号。
+
+        ## 失败纪律（2026-10-02，devlog/275）
+
+        原先每账号一次 `fetch_channel`、失败 `continue`，于是：
+        - WAF 拦一夜 ⇒ 该账号永久留洞（实测弥月缺 11 场，全库 danmakus 行停在 09-28）；
+        - 日志只写「新增 0，跳过 8」，看不出**为什么**。
+
+        现在：账号间人为错开（`CHANNEL_ACCOUNT_GAP_SECONDS`）、单账号退避重试
+        （`fetch_channel_checked`）、连续失败到上限就放弃本轮剩余账号（`FailureBudget`，
+        与 zeroroku 同一套语义），并把失败原因计数带进摘要 —— 全账号颗粒无收时
+        摘要把 `error` 填上，让 runner 记「未完成」而不是「完成：新增 0」。
         """
         summary = ExternalJobSummary(self.name, "live_sessions")
         accounts = self._bili_accounts(db, account_ids)
-        for acc in accounts:
+        budget = FailureBudget()
+        reasons: dict[str, int] = {}
+        for i, acc in enumerate(accounts):
+            if not budget.ok():
+                logger.warning(f"danmakus live_sessions: {budget.reason()}")
+                summary.skipped += len(accounts) - i
+                break
+            if i:
+                await asyncio.sleep(CHANNEL_ACCOUNT_GAP_SECONDS)
             try:
-                payload = await fetch_channel(str(acc.platform_uid), client)
+                res = await self.sync_account(db, acc, client)
             except Exception as e:
-                # 账号级隔离：网络异常只影响本账号，其余账号继续
+                # 账号级隔离：一个账号炸了不影响其余账号
                 logger.warning(f"danmakus lives 账号异常 {acc.platform_uid}: "
                                f"{type(e).__name__}: {e}")
-                summary.skipped += 1
-                continue
-            if not payload:
-                summary.skipped += 1
-                continue
-            lives = payload.get("lives") or []
-            # 平台由**调用方**给（M1a，devlog/213）：仓库层不再写死 bilibili
-            res = LiveSessionRepo(db).upsert_danmakus(acc.id, lives,
-                                                      platform=acc.platform)
+                res = {"added": 0, "updated": 0, "skipped": 1,
+                       "reason": f"{type(e).__name__}: {e}"}
+            budget.record(res["reason"] is None)
             summary.stored += res["added"]
-            logger.info(f"danmakus live_sessions: {acc.platform_uid} "
-                        f"新增 {res['added']} 刷新 {res['updated']}")
+            if res["reason"]:
+                summary.skipped += 1
+                reasons[res["reason"]] = reasons.get(res["reason"], 0) + 1
+        if reasons:
+            detail = "、".join(f"{r}×{n}" for r, n in sorted(reasons.items(), key=lambda kv: -kv[1]))
+            if summary.stored == 0:
+                # 一个都没进来 = 本轮什么都没做到：别让日志读成"上游没有新场次"
+                summary.error = f"账号全部拉取失败（{detail}）"
+            else:
+                logger.warning(f"danmakus live_sessions 部分账号失败：{detail}")
         return summary
 
     async def _sync_vtuber_index(self, db: Session,

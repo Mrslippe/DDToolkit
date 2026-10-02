@@ -78,6 +78,9 @@ interface Props {
   onPickCategory: (s: LiveSession, value: string) => void
   /** 账号 id（词云自建端点需要） */
   accountId: number | null
+  /** 上游取数**按需现查**补到了这一场的 danmakus 行（`session_changed`）→
+   *  父组件应重取一次详情：补进来的行带着弹幕数/收益/峰值/数据源（devlog/275） */
+  onSessionChanged?: () => void
 }
 
 export default function LiveSessionDialog({
@@ -89,6 +92,7 @@ export default function LiveSessionDialog({
   onSwitchIdx,
   onPickCategory,
   accountId,
+  onSessionChanged,
 }: Props) {
   /**
    * 关闭动画期间继续渲染的那一份详情（Q2 批次 14，devlog/217）。
@@ -166,6 +170,21 @@ export default function LiveSessionDialog({
   /** 词云破泡计数 / 恢复信号（段头右侧「已破泡 N · 恢复」，带破泡时出现） */
   const [cloudPopped, setCloudPopped] = useState(0)
   const [cloudRestoreTick, setCloudRestoreTick] = useState(0)
+
+  /**
+   * 现查补到了这一场的 danmakus 行（`session_changed`）→ 请父组件重取一次详情。
+   *
+   * 为什么必须重取：补进来的那一行带着**弹幕数 / 收益 / 峰值在线 / 数据源**，而弹窗手里
+   * 那份详情是补之前取的 —— 不重取就会出现"词云有了、弹幕数还是 `—`"这种自相矛盾的卡片
+   * （2026-10-02，devlog/275）。按场次记账：同一场只喊一次（父组件的回调每渲染都是新函数
+   * 引用，靠 ref 记住已通知过谁）。
+   */
+  const changeNotified = useRef<string | null>(null)
+  useEffect(() => {
+    if (!up.data?.session_changed || !liveId || changeNotified.current === liveId) return
+    changeNotified.current = liveId
+    onSessionChanged?.()
+  }, [up.data?.session_changed, liveId, onSessionChanged])
 
   // 自建词云已等秒数：只在 building 期间走表（文案里给用户一个"还在跑"的证据）
   useEffect(() => {
@@ -523,8 +542,30 @@ export default function LiveSessionDialog({
                         {building ? '重试中…' : '重试'}
                       </button>
                     </>
+                  ) : wcStatus === 'live' ? (
+                    /* 还在直播（2026-10-02，devlog/275）：danmakus 要等本场**结束之后**
+                       才把这一场固定化，所以此刻"没有弹幕记录"是时序，不是事实。
+                       原先这里与"确实没有"共用一句话，把"还没到时候"说成了"没有"。 */
+                    <>
+                      正在直播中
+                      <span className="lc-dlg-note">
+                        （本场弹幕要等结束后由上游收录，届时重新打开即可看到）
+                      </span>
+                    </>
                   ) : wcStatus === 'no_danmaku' ? (
-                    '本场没有可用于统计的文本弹幕记录'
+                    /* 这一态是**问过上游之后**才给的（后端按需现查，`no_danmaku` 不再是
+                       "本地没有 danmakus 行"的同义词）——所以文案说"上游尚未收录"，
+                       并给一个真的会再问一次上游的按钮（`reload(true)` 绕过节流）。 */
+                    <>
+                      上游尚未收录本场
+                      <span className="lc-dlg-note">
+                        （danmakus 没有这一场的记录；可再查一次）
+                      </span>
+                      <button type="button" className="lc-dlg-cloud-build"
+                              onClick={() => up.reload(true)} disabled={up.loading}>
+                        {up.loading ? '查询中…' : '查一次'}
+                      </button>
+                    </>
                   ) : (
                     <>
                       上游未提供热词
@@ -631,7 +672,10 @@ export default function LiveSessionDialog({
               </button>
             </div>
           ) : (
-            <div className="lc-dlg-ph">暂无动态数据</div>
+            /* 同弹幕段那条纪律：直播中"还没有事件"不等于"没有事件"（devlog/275） */
+            <div className="lc-dlg-ph">
+              {s.end_at ? '暂无动态数据' : '本场还在直播（中断/继续事件要等结束后才有）'}
+            </div>
           )}
           </div>
         </section>

@@ -2238,8 +2238,45 @@ def test_run_startup_external_catchup_runs_then_skips(db, monkeypatch):
     assert len(calls) == 1                                   # 24h 内不再请求第三方
 
 
-def test_run_startup_external_catchup_writes_timestamp_on_error(db, monkeypatch):
-    """单源报错也写时间戳：第三方抖动不该导致每次启动都重跑。"""
+def test_run_startup_external_catchup_does_not_stamp_when_a_source_errors(db, monkeypatch):
+    """有源整源报错 ⇒ **不写时间戳**：下次启动再试。
+
+    反例就是这次要修的洞（2026-10-02，devlog/275）：那天启动补抓里 danmakus
+    9 个账号全被 WAF 拦，时间戳照写 ⇒ 之后 24 小时内每次启动都跳过补抓，
+    而 3AM 的 cron 又要求应用恰好开着，于是缺口一直留到用户手动发现。
+    """
+    from app.repositories.vtuber_repo import AppMetaRepo
+    from app.services import scheduler as sch
+
+    v = VTuber(name="V")
+    db.add(v)
+    db.commit()
+    db.add(Account(vtuber_id=v.id, platform="bilibili", platform_uid="7"))
+    db.commit()
+    monkeypatch.setattr(sch, "SessionLocal", lambda: db)
+
+    calls: list[list[int]] = []
+
+    async def fake_interval(interval, account_ids=None):
+        calls.append(list(account_ids or []))
+        return [{"kind": "live_sessions", "stored": 0, "skipped": 9,
+                 "error": "账号全部拉取失败（HTTP 302×9）"}]
+
+    import app.services.externals.runner as runner_mod
+    monkeypatch.setattr(runner_mod, "run_external_interval", fake_interval)
+
+    out = asyncio.run(sch.run_startup_external_catchup())
+    assert out["status"] == "done" and out["stamped"] is False
+    assert AppMetaRepo(db).get_dt(sch.EXTERNAL_STARTUP_KEY) is None
+
+    out2 = asyncio.run(sch.run_startup_external_catchup())
+    assert out2["status"] == "done"
+    assert len(calls) == 2                       # 没记时间戳 ⇒ 下次启动会重试
+    assert sch._external_running is False
+
+
+def test_run_startup_external_catchup_stays_due_when_the_run_explodes(db, monkeypatch):
+    """整轮抛异常（连结果都没有）同样不写时间戳。"""
     from app.repositories.vtuber_repo import AppMetaRepo
     from app.services import scheduler as sch
 
@@ -2258,7 +2295,7 @@ def test_run_startup_external_catchup_writes_timestamp_on_error(db, monkeypatch)
 
     out = asyncio.run(sch.run_startup_external_catchup())
     assert out["status"] == "error"
-    assert AppMetaRepo(db).get_dt(sch.EXTERNAL_STARTUP_KEY) is not None
+    assert AppMetaRepo(db).get_dt(sch.EXTERNAL_STARTUP_KEY) is None
     assert sch._status["external"]["running"] is False
 
 

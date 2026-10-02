@@ -106,7 +106,8 @@ let outside: HTMLButtonElement
 let root: Root
 const onClose = vi.fn()
 
-function render(detail: DetailState | null) {
+function render(detail: DetailState | null,
+                extra: { onSessionChanged?: () => void } = {}) {
   act(() => {
     root.render(
       <LiveSessionDialog
@@ -118,6 +119,7 @@ function render(detail: DetailState | null) {
         onSwitchIdx={() => {}}
         onPickCategory={() => {}}
         accountId={1}
+        {...extra}
       />,
     )
   })
@@ -263,5 +265,90 @@ describe('⑥ 退场动画的前提（jsdom 测不到 Presence，改成三条静
   it('弹窗组件保留"最后一次非空 detail"给关闭那一帧用', () => {
     expect(dialogSrc).toMatch(/const \[shown, setShown\] = useState<DetailState \| null>/)
     expect(dialogSrc).toMatch(/if \(detail\) setShown\(detail\)/)
+  })
+})
+
+/**
+ * 弹幕段的状态文案（2026-10-02，devlog/275）。
+ *
+ * 起因是用户报的一件事：「还在直播中的详情页显示的是『本场没有可用于统计的文本弹幕
+ * 记录』」。原实现把三种情况压成一句话，而它们的**成因完全不同**：
+ *   ① 还在直播 → danmakus 要等本场结束才固定化这一场（时序）；
+ *   ② 上游确实没有这一场（事实）；
+ *   ③ 这次没问到（WAF/网络）→ 可重试。
+ * 三条文案各自钉一句，避免以后又被合并回去。
+ */
+describe('弹幕段：直播中 / 未收录 / 没问到 三种文案分得开', () => {
+  const upstream = (danmaku: Record<string, unknown>) =>
+    ({ danmaku: { top_words: [], top_keywords: [], ...danmaku }, metrics: null, events: [] })
+
+  async function renderWith(danmaku: Record<string, unknown>,
+                            session: Record<string, unknown> = {}) {
+    const { api } = await import('../../api/api')
+    vi.mocked(api.liveSessionUpstream).mockResolvedValue(upstream(danmaku) as never)
+    render({
+      ...detailOf(),
+      data: { ...DETAIL, ...session } as unknown as LiveSessionDetail,
+    })
+    await act(async () => { await Promise.resolve() })
+    return api
+  }
+
+  it('直播中：说「正在直播中」，不说"没有记录"', async () => {
+    await renderWith({ wc_status: 'live' }, { end_at: null })
+
+    const text = panel()?.textContent ?? ''
+    expect(text).toContain('正在直播中')
+    expect(text).not.toContain('上游尚未收录本场')
+    expect(text).not.toContain('没有可用于统计')
+  })
+
+  it('已结束且上游未收录：说「上游尚未收录本场」并给「查一次」', async () => {
+    const api = await renderWith({ wc_status: 'no_danmaku' })
+
+    const text = panel()?.textContent ?? ''
+    expect(text).toContain('上游尚未收录本场')
+    const btn = [...panel()!.querySelectorAll('button')]
+      .find((b) => b.textContent?.includes('查一次'))
+    expect(btn, '没有重试入口 ⇒ 用户只能关窗重开').toBeTruthy()
+
+    // 点它必须**真的再问一次上游**（`refresh=true` 绕过后端 10 分钟节流）
+    vi.mocked(api.liveSessionUpstream).mockClear()
+    await act(async () => { btn!.click(); await Promise.resolve() })
+    expect(vi.mocked(api.liveSessionUpstream))
+      .toHaveBeenCalledWith(1, 'live-1', expect.anything(), true)
+  })
+
+  it('没问到：说「弹幕拉取失败」+「重试」', async () => {
+    await renderWith({ wc_status: 'fetch_failed' })
+
+    const text = panel()?.textContent ?? ''
+    expect(text).toContain('弹幕拉取失败')
+    expect(text).not.toContain('上游尚未收录本场')
+  })
+
+  it('上游没说"补到了行"（没有 session_changed）→ 不打扰父组件', async () => {
+    const { api } = await import('../../api/api')
+    vi.mocked(api.liveSessionUpstream).mockResolvedValue(
+      upstream({ wc_status: 'upstream', top_words: [{ text: '好耶', count: 3 }] }) as never)
+    const onSessionChanged = vi.fn()
+    render(detailOf(), { onSessionChanged })
+
+    await act(async () => { await Promise.resolve() })
+    expect(onSessionChanged).not.toHaveBeenCalled()
+  })
+
+  it('现查补到了这一场（session_changed）→ 请父组件重取详情，且同一场只喊一次', async () => {
+    const { api } = await import('../../api/api')
+    vi.mocked(api.liveSessionUpstream).mockResolvedValue(
+      { ...upstream({ wc_status: 'upstream' }), session_changed: true } as never)
+    const onSessionChanged = vi.fn()
+    render(detailOf(), { onSessionChanged })
+
+    await act(async () => { await Promise.resolve() })
+    expect(onSessionChanged).toHaveBeenCalledTimes(1)
+    // 父组件因别的原因重渲染（回调每渲染都是新函数引用）也不该重复喊
+    await act(async () => { await Promise.resolve() })
+    expect(onSessionChanged).toHaveBeenCalledTimes(1)
   })
 })

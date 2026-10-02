@@ -252,11 +252,15 @@ export type WordCloudSource = 'upstream' | 'self'
  * | `upstream` | 上游 `/api/v2/live` 直接给了热词 | 正常展示 |
  * | `upstream_absent` | 上游**没给**热词（2026-09-13 实测该字段整个消失） | 提示 + 「用弹幕自建」按钮 |
  * | `self_built` | 用户点击后由本地分词自建 | 展示 + 标注来源 |
- * | `no_danmaku` | 本场确实没有弹幕记录 | 提示「本场无弹幕记录」 |
- * | `fetch_failed` | 拉取失败 | 提示「拉取失败，可重试」 |
+ * | `no_danmaku` | 本地与上游都没有这一场的弹幕记录（**问过了**才算） | 提示「上游尚未收录本场」+「查一次」 |
+ * | `fetch_failed` | 拉取失败（没问到） | 提示「拉取失败，可重试」 |
+ * | `live` | 本场还在直播 | 提示「正在直播中」，不是"没有弹幕" |
  */
 export type WordCloudStatus =
   | 'upstream' | 'upstream_absent' | 'self_built' | 'no_danmaku' | 'fetch_failed'
+  /** 本场**还在直播**（`end_at` 为空）：danmakus 只在开播结束后才收录这一场，
+   *  所以"还没有弹幕"是时序问题，不是"没有"（2026-10-02，devlog/275） */
+  | 'live'
 
 /** 弹幕信息（danmakus 场次级：总量 + 词云 + 来源标记） */
 export interface LiveDanmakuInfo {
@@ -327,11 +331,16 @@ export interface LiveSessionDetail extends LiveSession {
  * | `danmaku` | `wc_status='fetch_failed'`（"没拉到"，**不是**"本场没有"） |
  * | `metrics` | `null` |
  * | `events` | `[]` |
+ * | `session_changed` | `false`（true = 这次**按需现查**补到了该场次的 danmakus 行） |
+ *
+ * `session_changed` 出现的原因（2026-10-02，devlog/275）：现查补进来的行带着弹幕数/收益/
+ * 峰值/数据源，而弹窗手里那份**详情**是补之前取的 ⇒ 不重取就会出现"词云有了、弹幕数还是空"。
  */
 export interface LiveUpstream {
   danmaku?: LiveDanmakuInfo | null
   metrics?: LiveMetrics | null
   events?: LiveEvent[] | null
+  session_changed?: boolean
 }
 
 /** 第三方 VTuber 索引条目（P5 档案卡：企划/公会/房间号） */

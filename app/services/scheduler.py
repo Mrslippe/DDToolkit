@@ -3488,24 +3488,34 @@ async def run_startup_external_catchup() -> dict:
     label = f"{len(ids)} 个主账号的第三方数据"
     external_task_started("startup", label)
     _external_running = True          # 与每日批次同语义：综合档本轮跳过
+    # 是否记这次"跑过了"（见 finally）。**整源颗粒无收时不能记** —— 2026-10-02 实测：
+    # 那次启动补抓里 danmakus 9 个账号全被 WAF 拦（302/超时），但时间戳照写，
+    # 于是接下来 24 小时内每次启动都跳过补抓，而 3AM 的 cron 又要求应用恰好开着，
+    # 洞就一直留着（弥月缺 11 场、全库 danmakus 行停在 09-28）。
+    # 判据用「有没有任务报错」而不是「新增几行」：上游**确实**没有新场次时
+    # stored=0 是正常结果，不该因此每次启动都重跑（原注释要保的就是这一点）。
+    stamp = False
     try:
         from app.services.externals.runner import run_external_interval
         results = await run_external_interval("daily", account_ids=ids)
         failed = [r for r in results if r.get("error")]
+        stamp = not failed          # 没有任务报错（含 results 为空）→ 记时间戳
         logger.info(f"启动外部补抓完成：{len(ids)} 个主账号 / {len(results)} 个任务"
-                    f"{'，失败 ' + str(len(failed)) if failed else ''}")
-        return {"status": "done", "accounts": len(ids), "tasks": results}
+                    f"{'，失败 ' + str(len(failed)) if failed else ''}"
+                    f"{'' if stamp else ' ⇒ 不记时间戳，下次启动重试'}")
+        return {"status": "done", "accounts": len(ids), "tasks": results, "stamped": stamp}
     except Exception as e:
         logger.warning(f"启动外部补抓失败: {type(e).__name__}: {e}")
         return {"status": "error", "error": str(e)}
     finally:
         _external_running = False
         external_task_finished("startup")
-        db = SessionLocal()
-        try:
-            AppMetaRepo(db).set_dt(EXTERNAL_STARTUP_KEY)
-        finally:
-            db.close()
+        if stamp:
+            db = SessionLocal()
+            try:
+                AppMetaRepo(db).set_dt(EXTERNAL_STARTUP_KEY)
+            finally:
+                db.close()
 
 
 def _startup_catchup_loop(owner: "SchedulerRuntime | None" = None) -> None:

@@ -22,7 +22,8 @@ export interface LiveUpstreamState {
   failed: boolean
   /** 已等待秒数（loading 期间每秒自增） */
   elapsed: number
-  reload: () => void
+  /** 重取；`force=true` = 用户显式点重试（后端据此绕过节流，见 `api.liveSessionUpstream`） */
+  reload: (force?: boolean) => void
 }
 
 export function useLiveUpstream(
@@ -38,7 +39,7 @@ export function useLiveUpstream(
   /** 在途请求的取消器：切场次 / 关弹窗即 abort（上游最坏要等 90 多秒） */
   const ctrl = useRef<AbortController | null>(null)
 
-  const load = useCallback(() => {
+  const load = useCallback((force = false) => {
     if (accountId == null || !liveId) return
     /** 上一发还在路上就先掐掉：既省上游配额，也免得它回来把新场次的状态搅了 */
     ctrl.current?.abort()
@@ -50,7 +51,7 @@ export function useLiveUpstream(
     setElapsed(0)
     setData(null)
     api
-      .liveSessionUpstream(accountId, liveId, ac.signal)
+      .liveSessionUpstream(accountId, liveId, ac.signal, force)
       .then((d) => {
         if (my === seq.current) setData(d)
       })

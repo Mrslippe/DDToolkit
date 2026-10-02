@@ -447,7 +447,7 @@ class LiveSessionRepo:
             .all()
         )
 
-    def merged(self, account_id: int) -> list[dict]:
+    def merged(self, account_id: int, *, with_ids: bool = False) -> list[dict]:
         """多源合并视图（时间升序；字段集见 LiveSessionOut）。
 
         分组规则（v2，2026-09-07 按 dev 库 3311 场数据校准——同日相邻场次
@@ -463,6 +463,13 @@ class LiveSessionRepo:
           - 其余情况视为真正多场次（日历「N 场」计数口径）。
         - self 快照（自观测）按 ±90min 并入最近组（同场事件），未匹配 →
           'self' 虚拟场次。
+
+        `with_ids=True` 时每组多带一个 `src_live_ids`（`{source: live_id}`）：
+        **合并会把对外 live_id 换成优先级最高的源**（danmakus uuid > feed 数字 id），
+        所以"拿原来的 feed id 再找回来"只能靠这份映射 —— 弹幕按需现查补到
+        danmakus 行之后要重新定位同一场次，正是这个场景（见
+        `live_upstream.ensure_session_recorded`）。默认 False：其余调用方拿到的
+        字段集一字不变。
         """
         table_rows = self.list_by_account(account_id)
         snapshots = AccountStatSnapshotRepo(self.db).live_sessions(account_id)
@@ -488,6 +495,8 @@ class LiveSessionRepo:
         # 与行序无关——此前 id 取决于哪一行先被扫到，导致同一场次有时是 uuid、有时是数字 id。
         for g, _srcs, _prim in groups:
             ids = g.pop(_SRC_IDS_KEY, None) or {}
+            if with_ids:
+                g["src_live_ids"] = dict(ids)
             best = next(
                 (ids[s] for s in sorted(ids, key=lambda s: -_SOURCE_PRIORITY.get(s, 0))
                  if ids.get(s)),

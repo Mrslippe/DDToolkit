@@ -421,10 +421,15 @@ export const api = {
    *
    * `signal`：切场次/关弹窗时**取消在途请求**（上游最坏要等 90 多秒，
    * 用户早就不看这一场了）。走 `request()` 既有的 `init.signal`，见 devlog/064。
+   *
+   * `refresh`：**用户显式点重试**时置真 —— 后端据此绕过"同账号 10 分钟只向 danmakus
+   * 现查一次"的节流（devlog/275）。自动取数（打开弹窗/切场次）不要带它。
    */
-  liveSessionUpstream: (accountId: number, liveId: string, signal?: AbortSignal) =>
+  liveSessionUpstream: (accountId: number, liveId: string, signal?: AbortSignal,
+                        refresh = false) =>
     request<LiveUpstream>(
-      `/account/${accountId}/live-sessions/${encodeURIComponent(liveId)}/upstream`,
+      `/account/${accountId}/live-sessions/${encodeURIComponent(liveId)}/upstream`
+      + (refresh ? '?refresh=true' : ''),
       signal ? { signal } : undefined,
     ),
 

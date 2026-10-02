@@ -105,9 +105,9 @@ retire-when: 实测脚本换掉，或性能不再是关注点
 
 | 门禁 | 命令 | 当前基线（括号里 = 该值实测日） |
 |---|---|---|
-| 后端 | `python -m pytest -q`（**解释器走 `.venv`**，见 `docs/ops/RELEASE.md 不变量 24） | **995 passed**（2026-10-03 实测，无 skip；此前记的"1 条打真上游的用例按设计 skip"没出现 —— 那条与网络有关，别把它当基数）。⚠️ 用**系统 Python**（非 `.venv`）跑会多一条 `xhshow` 缺失的失败 —— 那是本机环境差异，不是回归 |
+| 后端 | `python -m pytest -q`（**解释器走 `.venv`**，见 `docs/ops/RELEASE.md 不变量 24） | **1005 passed + 1 skipped**（2026-10-02 实测；995 → 1006 是场次弹幕那批新增 11 条，见 `devlog/275`。那条 skip 就是**打真上游**的用例（`test_danmaku_words.py`，网络不通即 skip）—— 别再把它当"0 skip 基线"。⚠️ 用**系统 Python**（非 `.venv`）跑会多一条 `xhshow` 缺失的失败 —— 那是本机环境差异，不是回归 |
 | 桌面壳 | `cargo test`（工作目录 `frontend/src-tauri`） | **60 passed**（2026-10-03 实测；含 `delete_old_dir` 的真实 junction 用例、S1 的 token 生成用例、S3 的准入表/白名单用例与**迁移编排四条回滚路径**。⚠️ 61 → 60 是**小窗彻底放弃**删掉 `widget_may_call_only_what_it_actually_uses`，见 `devlog/274`；更早还有一次 62 → 60 是整窗退役，见 `devlog/270`） |
-| 前端单测 | `npm --prefix frontend run test` | **751 passed / 60 文件**（2026-10-03 复核；条数确定，不随上游浮动。⚠️ 2026-10-01 整窗退役时少了 3 个文件 / 若干条：小窗那两份单测随功能删除，见 `devlog/270`；2026-10-03 放弃重做的那版**条数未变** —— 原型本身没有单测） |
+| 前端单测 | `npm --prefix frontend run test` | **756 passed / 60 文件**（2026-10-02 复核；751 → 756 是弹幕段三种文案与 `session_changed` 的用例，见 `devlog/275`。⚠️ 2026-10-01 整窗退役时少了 3 个文件 / 若干条：小窗那两份单测随功能删除，见 `devlog/270`） |
 | 前端类型 / lint | `npx tsc --noEmit`（**必须在 `frontend/` 里跑**）/ `npm --prefix frontend run lint` | 0 错 / 0 错（2026-10-01 复核） |
 | 文档漂移 | `python scripts/doc_check.py` | **0 FAIL**（2026-10-01 复核；另有 1 条历史 devlog 索引欠账 WARN，WARN 看脚本逐条输出） |
 | 上游冒烟 | `python scripts/smoke_upstream.py [--cold]` | 真上游 **5 ok** / 冷进程 **3 ok**，0 FAIL（2026-09-23 复核） |

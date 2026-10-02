@@ -533,6 +533,12 @@ const LiveCalendar = memo(function LiveCalendar(
         onSwitchIdx={switchDetailIdx}
         onPickCategory={onPickCategory}
         accountId={accountId}
+        /* 上游按需现查补到了这一场的 danmakus 行（devlog/275）→ 重取详情，
+           把弹幕数/收益/峰值/数据源一起刷新（否则卡片自相矛盾）。 */
+        onSessionChanged={() => {
+          const lid = detail?.sessions[detail.idx]?.live_id
+          if (lid) void reloadDetail(lid)
+        }}
       />
     </div>
   )

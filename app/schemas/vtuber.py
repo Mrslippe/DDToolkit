@@ -466,8 +466,9 @@ class LiveDanmakuInfo(BaseModel):
     | `upstream` | 上游 `/api/v2/live` 直接给了 `extra.wordCloud` | 正常展示词云 |
     | `upstream_absent` | 上游**没给**热词（2026-09-13 实测 `extra` 字段整个消失） | 提示"上游未提供"+ 给「用弹幕自建」按钮 |
     | `self_built` | 用户点击后由本地分词自建（原始弹幕来自 `/api/v3/.../danmakus`） | 展示词云 + 标注来源为本地统计 |
-    | `no_danmaku` | 本场确实没有弹幕记录（`total=0`） | 提示"本场无弹幕记录" |
-    | `fetch_failed` | 拉取失败（网络/HTTP） | 提示"拉取失败，可重试" |
+    | `no_danmaku` | **问过上游**、确实没有这一场（2026-10-02 起：先按需现查一次才给这个态） | 提示"上游尚未收录本场"+「查一次」 |
+    | `live` | 本场还在直播（`end_at` 为空）——上游要等结束后才收录 | 提示"正在直播中" |
+    | `fetch_failed` | 拉取失败（网络/HTTP/被 WAF 拦） | 提示"拉取失败，可重试" |
     """
     total: int | None = None
     top_keywords: list[str] = []               # 兼容字段：仅词（旧前端）
@@ -536,16 +537,22 @@ class LiveUpstreamOut(BaseModel):
 
     | 字段 | 内容 | 失败时 |
     |---|---|---|
-    | `danmaku` | 弹幕总量 + 上游词云（`wc_status` 区分五种情况） | `wc_status='fetch_failed'` |
+    | `danmaku` | 弹幕总量 + 上游词云（`wc_status` 区分六种情况） | `wc_status='fetch_failed'` |
     | `metrics` | 场次级指标（观看/点赞/打赏/互动/峰值/录制版本/频道累计） | `null` |
     | `events` | 直播中断/继续时间线（type 7/8） | `[]` |
+    | `session_changed` | 这次请求**按需现查**补到了该场次的 danmakus 行（devlog/275） | `false` |
 
-    非 danmakus 来源的场次（纯 feed/self）**不请求网络**，直接回
-    `danmaku.wc_status='no_danmaku'`。
+    非 danmakus 来源的已结束场次会**先现查一次**（`live_upstream.ensure_session_recorded`），
+    查到了才接着取数；还在直播的场次**不请求网络**，直接回 `danmaku.wc_status='live'`。
+
+    `session_changed` 的用途：现查补进来的那一行会带上弹幕数/收益/峰值/数据源，
+    而弹窗手里那份**详情**是补之前取的 —— 前端据此重取一次详情，卡片才会整块一致
+    （否则出现"词云有了、弹幕数还是空的"）。
     """
     danmaku: LiveDanmakuInfo | None = None
     metrics: LiveMetricsOut | None = None
     events: list[LiveEventOut] = []
+    session_changed: bool = False
 
 
 # ── 重要日期·大型活动（P7，v0.7.0） ────────────────────────────────

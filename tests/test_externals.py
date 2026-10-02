@@ -262,6 +262,113 @@ def test_live_sessions_sync_skips_bad_account(db):
     assert s.stored == 0 and s.skipped == 1
 
 
+# ── channel 拉取的失败纪律（2026-10-02，devlog/275）──────────────────
+#
+# 现场：每日同步失败**即放弃、不重试**，而上游 WAF 会间歇拦截 —— 实测同一分钟
+# 9 个账号里 3 个 302（DNSPod 拦截页）+ 1 个读超时。一夜被拦 = 该账号永久留洞
+# （弥月 09-25 起缺 11 场、全库 danmakus 行停在 09-28），而日志只有"新增 0，跳过 8"。
+
+class _SeqClient:
+    """按调用次数依次返回响应的假客户端（302 ↔ 200 的抖动形状）。"""
+
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = 0
+
+    async def get(self, url, **kwargs):
+        self.calls += 1
+        idx = min(self.calls - 1, len(self.responses) - 1)
+        return self.responses[idx]
+
+
+class _UidClient:
+    """按查询参数 `uId` 决定响应的假客户端（多账号批次用）。"""
+
+    def __init__(self, by_uid):
+        self.by_uid = by_uid
+        self.calls: list[str] = []
+
+    async def get(self, url, **kwargs):
+        uid = str((kwargs.get("params") or {}).get("uId"))
+        self.calls.append(uid)
+        return self.by_uid.get(uid, FakeResp(404, {}))
+
+
+def _no_backoff(monkeypatch):
+    from app.services.externals import danmakus as dm
+    monkeypatch.setattr(dm, "CHANNEL_BACKOFF_SECONDS", (0.0, 0.0, 0.0))
+    monkeypatch.setattr(dm, "CHANNEL_ACCOUNT_GAP_SECONDS", 0.0)
+    return dm
+
+
+def test_fetch_channel_checked_retries_through_waf(monkeypatch):
+    """被 WAF 拦一次不等于这天没有场次：退避重试后应拿到数据。"""
+    import asyncio
+    dm = _no_backoff(monkeypatch)
+    payload = {"code": 200, "data": {"lives": [{"liveId": "u1", "startDate": 1788609695000}]}}
+    client = _SeqClient([FakeResp(302, {}), FakeResp(200, payload)])
+
+    out, reason = asyncio.run(dm.fetch_channel_checked("434334701", client))
+    assert reason is None
+    assert out and out["lives"][0]["liveId"] == "u1"
+    assert client.calls == 2
+
+
+def test_fetch_channel_checked_reports_reason(monkeypatch):
+    """重试耗尽要把**原因**带出来（"被 WAF 拦"与"读超时"不是一回事）。"""
+    import asyncio
+    import httpx
+    dm = _no_backoff(monkeypatch)
+
+    class _Boom:
+        async def get(self, url, **kwargs):
+            raise httpx.ReadTimeout("slow")
+
+    blocked = _SeqClient([FakeResp(302, {})])
+    out, reason = asyncio.run(dm.fetch_channel_checked("1", blocked))
+    assert out is None and reason == "HTTP 302"
+    assert blocked.calls == dm.CHANNEL_ATTEMPTS
+
+    out2, reason2 = asyncio.run(dm.fetch_channel_checked("1", _Boom()))
+    assert out2 is None and reason2 == "ReadTimeout"
+
+
+def test_live_sessions_sync_reports_all_blocked(db, monkeypatch):
+    """全账号被拦 ⇒ 摘要带上 error（别让日志读成"上游没有新场次"）。"""
+    import asyncio
+    _no_backoff(monkeypatch)
+    v = VTuber(name="测试V")
+    db.add(v)
+    db.flush()
+    db.add_all([Account(vtuber_id=v.id, platform="bilibili", platform_uid="1"),
+                Account(vtuber_id=v.id, platform="bilibili", platform_uid="2")])
+    db.commit()
+
+    client = _UidClient({"1": FakeResp(302, {}), "2": FakeResp(502, {})})
+    s = asyncio.run(DanmakusSource().run_job("live_sessions", db, client))
+    assert s.stored == 0
+    assert s.error and "HTTP 302" in s.error and "HTTP 502" in s.error
+
+
+def test_live_sessions_sync_partial_failure_keeps_error_clean(db, monkeypatch):
+    """部分账号成功 ⇒ 照常落库、不报整源失败（只有 warning 记下被拦的账号）。"""
+    import asyncio
+    _no_backoff(monkeypatch)
+    v = VTuber(name="测试V")
+    db.add(v)
+    db.flush()
+    db.add_all([Account(vtuber_id=v.id, platform="bilibili", platform_uid="1"),
+                Account(vtuber_id=v.id, platform="bilibili", platform_uid="2")])
+    db.commit()
+
+    ok = FakeResp(200, {"code": 200, "data": {"lives": [
+        {"liveId": "u-ok", "startDate": 1788609695000, "danmakusCount": 3}]}})
+    client = _UidClient({"1": ok, "2": FakeResp(302, {})})
+    s = asyncio.run(DanmakusSource().run_job("live_sessions", db, client))
+    assert s.stored == 1 and s.skipped == 1 and s.error is None
+    assert db.query(LiveSession).filter(LiveSession.live_id == "u-ok").count() == 1
+
+
 # ── 单场弹幕摘要（/api/v2/live，2026-09-07 实测公开） ────────────────
 
 def test_parse_live_summary_wordcloud():

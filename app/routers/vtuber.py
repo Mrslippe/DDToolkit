@@ -39,7 +39,9 @@ from app.services.purge import purge_account, purge_vtuber
 from app.services.live_type import (
     infer_category, plan_series, build_learned, EDITABLE_CATEGORY_KEYS,
 )
-from app.services.live_upstream import load_live_upstream
+from app.services.live_upstream import (LOOKUP_FAILED, LOOKUP_RECORDED,
+                                        ensure_session_recorded,
+                                        has_danmakus_source, load_live_upstream)
 from app.services.danmaku_cloud import build_word_cloud
 from app.services.danmaku_words import build_extra_words
 from app.services.vtuber_history import former_values
@@ -638,23 +640,39 @@ def live_sessions(account_id: int, db: Session = Depends(get_db)):
     return out
 
 
+def _find_live_session(sessions: list[dict], live_id: str) -> dict | None:
+    """按对外 `live_id` 找场次；**也认源 id**（`src_live_ids`）。
+
+    为什么需要认源 id：合并会把对外 id 定权成最高优先级源（danmakus uuid > feed 数字 id），
+    而**按需现查会在这个弹窗已经打开之后**才把 danmakus 行补进来（devlog/275）——
+    前端手里那份详情里还是旧的 feed id，此时点「用弹幕自建」/重取详情都要还能找回同一场次
+    （否则 404，而界面会把它显示成"弹幕拉取失败"，把一次成功的补抓说成故障）。
+    """
+    hit = next((x for x in sessions if x.get("live_id") == live_id), None)
+    if hit is not None:
+        return hit
+    return next((x for x in sessions
+                 if live_id in (x.get("src_live_ids") or {}).values()), None)
+
+
 def _pick_live_session(db: Session, account_id: int, live_id: str,
                        sessions: list[dict] | None = None) -> dict:
     """定位单场次（未收录 → 404）；详情端点与上游取数端点共用。
 
     `sessions` 可传入调用方已经算好的列表（`merged()` 不便宜，别为一个端点算两遍）。
+    内部走 `with_ids=True`：**源 id 也要能定位**（见 `_find_live_session`）。
     """
     if sessions is None:
-        sessions = LiveSessionRepo(db).merged(account_id)
-    s = next((x for x in sessions if x.get("live_id") == live_id), None)
+        sessions = LiveSessionRepo(db).merged(account_id, with_ids=True)
+    s = _find_live_session(sessions, live_id)
     if s is None:
         raise HTTPException(404, f"LiveSession live_id={live_id} 不存在")
     return s
 
 
 def _has_danmakus_source(s: dict) -> bool:
-    """该场次是否有 danmakus 来源（`source` 是 `+` 连接的组合标记）。"""
-    return "danmakus" in (s.get("source") or "").split("+")
+    """该场次是否有 danmakus 来源（实现见 `live_upstream.has_danmakus_source`）。"""
+    return has_danmakus_source(s)
 
 
 @router.get("/account/{account_id}/live-sessions/{live_id}",
@@ -674,8 +692,9 @@ def live_session_detail(account_id: int, live_id: str,
     account, vtuber, event_dates, overrides = _live_infer_ctx(db, account_id)
     if not account:
         raise HTTPException(404, f"Account id={account_id} 不存在")
-    sessions = LiveSessionRepo(db).merged(account_id)
+    sessions = LiveSessionRepo(db).merged(account_id, with_ids=True)
     s = _pick_live_session(db, account_id, live_id, sessions)
+    s.pop("src_live_ids", None)      # 只用于定位，不回给前端
     series_categories = plan_series(sessions, overrides)
     learned = build_learned(overrides, sessions)
     category, category_from = infer_category(
@@ -694,6 +713,7 @@ def live_session_detail(account_id: int, live_id: str,
 @router.get("/account/{account_id}/live-sessions/{live_id}/upstream",
             response_model=LiveUpstreamOut)
 async def live_session_upstream(account_id: int, live_id: str,
+                                refresh: bool = Query(False),
                                 db: Session = Depends(get_db)):
     """场次详情里「必须打第三方」的那两格：弹幕词云 + 直播动态（devlog/063）。
 
@@ -708,18 +728,39 @@ async def live_session_upstream(account_id: int, live_id: str,
     |---|---|
     | 拿到上游摘要 | `danmaku.wc_status = upstream` / `upstream_absent` + `metrics` + `events` |
     | 上游这次没拿到（超时/重试耗尽） | `danmaku.wc_status='fetch_failed'`，`metrics=null`、`events=[]` |
-    | 非 danmakus 来源（纯 feed/self） | `danmaku.wc_status='no_danmaku'`，**不请求网络** |
+    | **本场还在直播**（`end_at` 为空） | `danmaku.wc_status='live'`，**不请求网络** |
+    | 非 danmakus 来源（纯 feed/self）但已结束 | **先按需现查一次**（`ensure_session_recorded`，同账号 10 分钟一次）：查到了 → 走正常取数；上游确实没有 → `no_danmaku`；没问成 → `fetch_failed` |
 
     成功结果在进程内缓存 10 分钟（`live_upstream._CACHE_TTL`），重复开关弹窗不再打上游。
+
+    `refresh=true`：**用户显式点重试**时带上，用来绕过"同账号 10 分钟只现查一次"的
+    节流（否则点了按钮却不问上游，"重试"是句空话）。
     """
     account, _vtuber, _event_dates, _overrides = _live_infer_ctx(db, account_id)
     if not account:
         raise HTTPException(404, f"Account id={account_id} 不存在")
     s = _pick_live_session(db, account_id, live_id)
+    if not s.get("end_at"):
+        # 还在直播：danmakus 只在**开播结束之后**才固定化这一场，此刻问上游是白问。
+        # 用户口径（2026-10-02）：这里要显示"正在直播中"，而不是"本场没有可统计的
+        # 弹幕记录"—— 后者把"还没到时候"说成了"没有"。
+        return LiveUpstreamOut(danmaku=LiveDanmakuInfo(wc_status="live"))
     if not _has_danmakus_source(s):
-        # 没有 danmakus 收录 → 上游无从查起：如实报"本场没有可统计的弹幕"，
-        # 而不是报"拉取失败"（后者会让用户以为再点一次就能成功）
-        return LiveUpstreamOut(danmaku=LiveDanmakuInfo(wc_status="no_danmaku"))
+        # 本地只有 feed/self 行：先现查一次（devlog/275）。这一格原先直接返回
+        # no_danmaku，而"本地没有 danmakus 行"的常见成因是**同步那一夜被 WAF 拦了**，
+        # 上游其实早有这一场（实测：弥月 09-25 起 11 场全因此缺席）。
+        outcome, found = await ensure_session_recorded(db, account_id, s, force=refresh)
+        if outcome == LOOKUP_FAILED:
+            # 没问成 ≠ 没有：报 fetch_failed 让用户能重试
+            return LiveUpstreamOut(danmaku=LiveDanmakuInfo(wc_status="fetch_failed"))
+        if outcome != LOOKUP_RECORDED or found is None:
+            return LiveUpstreamOut(danmaku=LiveDanmakuInfo(wc_status="no_danmaku"))
+        # 现查命中：换成合并后的场次（它的 live_id 已是 danmakus uuid）
+        s = found
+        live_id = str(s.get("live_id") or live_id)
+        changed = True          # 前端据此重取一次详情（弹幕数/收益/数据源也变了）
+    else:
+        changed = False
 
     # 观测用（2026-09-14，devlog/081）：用户问过"点一次详情为什么发了四个上游请求"——
     # 有了这一行，日志里数一下就知道**我们这边被调了几次**（一次调用 = summary+events 两个上游请求）。
@@ -727,7 +768,8 @@ async def live_session_upstream(account_id: int, live_id: str,
     summary, evts = await load_live_upstream(live_id)
     if summary is None:
         # ⚠️ 这里报 fetch_failed（"没拉到"），**不能**报成"本场没弹幕"
-        return LiveUpstreamOut(danmaku=LiveDanmakuInfo(wc_status="fetch_failed"))
+        return LiveUpstreamOut(danmaku=LiveDanmakuInfo(wc_status="fetch_failed"),
+                               session_changed=changed)
 
     wc = summary.get("word_cloud") or []
     # D4（devlog/061）：把「上游给没给热词」如实报给前端 ——
@@ -769,7 +811,8 @@ async def live_session_upstream(account_id: int, live_id: str,
             send_date=datetime.fromtimestamp(sd / 1000, tz=timezone.utc)
             .replace(tzinfo=None) if sd else None,
         ))
-    return LiveUpstreamOut(danmaku=danmaku, metrics=metrics, events=events)
+    return LiveUpstreamOut(danmaku=danmaku, metrics=metrics, events=events,
+                           session_changed=changed)
 
 
 class LiveCategoryUpdate(BaseModel):
@@ -798,10 +841,13 @@ async def live_session_wordcloud(account_id: int, live_id: str,
     account, vtuber, _event_dates, _overrides = _live_infer_ctx(db, account_id)
     if not account:
         raise HTTPException(404, f"Account id={account_id} 不存在")
-    sessions = LiveSessionRepo(db).merged(account_id)
-    s = next((x for x in sessions if x.get("live_id") == live_id), None)
-    if s is None:
-        raise HTTPException(404, f"LiveSession live_id={live_id} 不存在")
+    # 与详情/上游端点同一条定位口径（认源 id）：按需现查把 uuid 补进来之后，
+    # 前端手里那份详情里的 feed id 仍要能找回同一场次（devlog/275）。
+    s = _pick_live_session(db, account_id, live_id)
+    # 用**场次的对外 id**（定权后的 danmakus uuid）去拉原始弹幕：请求里的 id 可能是
+    # 合并前的 feed 数字 id（按需现查之后前端手里那份详情就是这种形态，devlog/275），
+    # 而 danmakus v3 只认自己的 uuid（拿数字 id 去问等于空手而归）。
+    live_id = str(s.get("live_id") or live_id)
     if "danmakus" not in (s.get("source") or "").split("+"):
         # 非 danmakus 来源（例：纯 feed 场次，live_id 是 B 站数字 id）→ 没有可拉的弹幕
         return LiveDanmakuInfo(wc_status="no_danmaku", source=None)

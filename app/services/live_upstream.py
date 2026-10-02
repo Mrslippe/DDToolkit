@@ -36,9 +36,16 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from sqlalchemy.orm import Session
+
+from app.core.config import settings
+from app.core.http import new_async_client
+from app.repositories.vtuber_repo import AccountRepo, LiveSessionRepo
 from app.services.externals.danmakus import fetch_live_events, fetch_live_summary
+from app.services.externals.registry import get_external_source
 
 logger = logging.getLogger(__name__)
 
@@ -117,3 +124,132 @@ async def load_live_upstream(live_id: str) -> tuple[dict | None, list[dict]]:
 def inflight_count() -> int:
     """在途取数条数（测试与排查用）。"""
     return len(_INFLIGHT)
+
+
+# ── 按需现查（2026-10-02，devlog/275）──────────────────────────────────────
+#
+# 用户口径：**打开一场没有弹幕记录的详情时，应该回退到 danmakus 去查**
+# （原话「即使本地的数据源没有包含弹幕记录但也没有回退到 danmakus」）。
+#
+# 为什么本地会"没有"：场次行有两个来源 —— feed（B 站 live_rcmd，秒级、只有标题/起止）
+# 与 danmakus（第三方的固定化场次，带弹幕数/收益/词云）。后者的入库只靠每日同步，
+# 而那次同步会被上游 WAF 拦、且原先失败不重试 ⇒ 一场直播结束后，本地可能**永远**
+# 停在 feed 行上，详情里的「弹幕信息」就一直是"没有记录"（即使上游早就有）。
+#
+# 所以这里在**用户看得见的那一刻**补一次定向拉取：只拉该账号的 channel（全量场次，
+# 一次请求），命中就把 danmakus 行补进库、重新定位合并后的场次、接着走正常取数。
+
+LOOKUP_RECORDED = "recorded"     # 现查补到了这一场（调用方拿返回的场次继续取数）
+LOOKUP_ABSENT = "absent"         # 问了上游，确实没有这一场
+LOOKUP_FAILED = "failed"         # 这次没问成（WAF/网络）—— 与"没有"必须分开说
+
+_LOOKUP_TTL = 600.0              # 同账号 10 分钟内只现查一次（结论沿用上次）
+_LOOKUP_ATTEMPTS = 2             # 点击路径：不重试三次，别让一次点击等十几秒
+_LOOKUP_MAX_AGE_DAYS = 14        # 太老的纯 feed 场次不必现查（上游早该有）
+_LOOKUP: dict[int, tuple[float, str]] = {}
+_LOOKUP_INFLIGHT: dict[int, tuple[asyncio.AbstractEventLoop, "asyncio.Task[Any]"]] = {}
+
+
+def has_danmakus_source(s: dict) -> bool:
+    """该场次是否有 danmakus 来源（`source` 是 `+` 连接的组合标记）。"""
+    return "danmakus" in (s.get("source") or "").split("+")
+
+
+def _danmakus_source():
+    """注册表里的 danmakus 源（三道开关全开才返回，否则 None）。"""
+    src = get_external_source("danmakus")
+    if src is None or not settings.EXTERNAL_ENABLED or not src.enabled:
+        return None
+    return src if getattr(settings, "EXTERNAL_DANMAKUS_ENABLED", True) else None
+
+
+def clear_lookup_state() -> None:
+    """清空现查节流表（测试与排查用）。"""
+    _LOOKUP.clear()
+
+
+def _lookup_throttled(account_id: int) -> str | None:
+    hit = _LOOKUP.get(account_id)
+    if hit is None:
+        return None
+    at, outcome = hit
+    return outcome if time.monotonic() - at <= _LOOKUP_TTL else None
+
+
+async def ensure_session_recorded(db: Session, account_id: int,
+                                  s: dict, *, force: bool = False
+                                  ) -> tuple[str, dict | None]:
+    """场次没有 danmakus 来源时，现去 danmakus 查一次（见上面一节的说明）。
+
+    返回 `(结果, 重新定位到的场次 | None)`，结果是 `LOOKUP_RECORDED` /
+    `LOOKUP_ABSENT` / `LOOKUP_FAILED` 之一。`RECORDED` 时返回的场次 dict 是**合并后**
+    的形态 —— 它的 `live_id` 通常已经变成 danmakus uuid（对外 id 按源优先级定权），
+    调用方要用它去取上游，而不是拿原来的 feed 数字 id。
+
+    节流与单飞：同账号 10 分钟一次、并发共享同一个在途任务。**这不是优化而是必须**：
+    该路径由"打开详情"触发，而 danmakus 的 channel 端点在连打时会被 WAF 拦
+    （实测 9 个账号连打 3 个 302）。
+
+    `force=True`（用户**显式**点重试/查一次）绕过节流：否则点了按钮却不问上游，
+    "重试"就成了一句空话。
+    """
+    live_id = str(s.get("live_id") or "")
+    start_at = s.get("start_at")
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    if not live_id or not isinstance(start_at, datetime):
+        return LOOKUP_ABSENT, None
+    if start_at < now - timedelta(days=_LOOKUP_MAX_AGE_DAYS):
+        # 老场次：上游早该收录了，没有就是没有；不为它出网
+        return LOOKUP_ABSENT, None
+
+    last = None if force else _lookup_throttled(account_id)
+    if last is not None:
+        logger.info(f"场次现查节流命中 account={account_id}（上次结论 {last}）")
+        return last, None
+
+    loop = asyncio.get_running_loop()
+    task = _LOOKUP_INFLIGHT.get(account_id)
+    if task is not None and task[0] is loop and not task[1].done():
+        logger.info(f"场次现查单飞复用 account={account_id}")
+        return await asyncio.shield(task[1])
+
+    async def _check() -> tuple[str, dict | None]:
+        src = _danmakus_source()
+        if src is None:
+            # 源被用户关了 / 全局关停：不出网，也不谎称"上游没有"
+            logger.info("场次现查跳过：danmakus 源未启用")
+            return LOOKUP_ABSENT, None
+        acc = AccountRepo(db).get(account_id)
+        if acc is None:
+            return LOOKUP_ABSENT, None
+        async with new_async_client(25.0) as client:
+            res = await src.sync_account(db, acc, client, attempts=_LOOKUP_ATTEMPTS)
+        if res.get("reason"):
+            logger.warning(f"场次现查没问成 account={account_id}: {res['reason']}")
+            return LOOKUP_FAILED, None
+        groups = LiveSessionRepo(db).merged(account_id, with_ids=True)
+        hit = next((g for g in groups
+                    if live_id in (g.get("src_live_ids") or {}).values()), None)
+        if hit is not None and has_danmakus_source(hit):
+            logger.info(f"场次现查命中 account={account_id} live_id={live_id} "
+                        f"→ {hit.get('live_id')}（新增 {res.get('added')} 行）")
+            return LOOKUP_RECORDED, hit
+        return LOOKUP_ABSENT, None
+
+    created = loop.create_task(_check())
+    _LOOKUP_INFLIGHT[account_id] = (loop, created)
+    try:
+        outcome, found = await asyncio.shield(created)
+    finally:
+        cur = _LOOKUP_INFLIGHT.get(account_id)
+        if cur is not None and cur[1] is created:
+            _LOOKUP_INFLIGHT.pop(account_id, None)
+    if outcome != LOOKUP_RECORDED:
+        # 只记"没查到/没问成"的结论；命中不需要记（本地已经有 danmakus 行了）
+        _LOOKUP[account_id] = (time.monotonic(), outcome)
+    return outcome, found
+
+
+def lookup_inflight_count() -> int:
+    """在途现查条数（测试与排查用）。"""
+    return len(_LOOKUP_INFLIGHT)
