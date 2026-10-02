@@ -43,7 +43,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import httpx
 
@@ -119,6 +119,60 @@ def _images(note: dict) -> list[dict]:
         if cover:
             out.append({"url": cover})
     return out
+
+
+def _explore_url(note_id: str, xsec_token: Any) -> str:
+    """笔记详情页 URL。
+
+    ⚠️ **必须带 `xsec_token`**（2026-10-02，devlog/280）：裸的
+    `https://www.xiaohongshu.com/explore/{id}` 在小红书侧打不开，用户看到的是
+    「当前笔记暂时无法浏览」；带 token 的形状（用户给的可用样例）是
+    `…/explore/{id}?xsec_token=…&xsec_source=pc_search`。我们的 token 来自
+    `/user_posted`（主页）⇒ 配 `xsec_source=pc_user`（实测该组合在详情接口 200）。
+    token 会过期 —— 每轮抓取都会把最新的刷进库，所以列表越新越打得开。
+    """
+    if not note_id:
+        return ""
+    tok = str(xsec_token or "").strip()
+    if not tok:
+        return f"https://www.xiaohongshu.com/explore/{note_id}"
+    return (f"https://www.xiaohongshu.com/explore/{note_id}"
+            f"?xsec_token={quote(tok, safe='')}&xsec_source=pc_user")
+
+
+def parse_note_detail(card: dict, uid: str, fallback_token: Any = None) -> dict:
+    """详情接口的 `note_card` → 我们落库用的字段（**纯函数**，形状照真机）。
+
+    真机形状（2026-10-02 实测，`POST /api/sns/web/v1/feed`）：`note_card` 有
+    `title` / `desc`（**正文全文**，实测 237 字）/ `image_list`（**多图**，该帖 6 张，
+    每张 `url_default`/`url_pre`/`info_list`/`width`/`height`/`live_photo`）/
+    `tag_list` / `ip_location` / `interact_info` / `time` / `last_update_time` / `type`。
+
+    列表接口（`/user_posted`）**只有封面预览图与标题** —— 正文与多图必须走这里
+    （用户 2026-10-02 报的"只有一张照片、没有文字"正是这条）。
+    """
+    card = card if isinstance(card, dict) else {}
+    interact = card.get("interact_info") if isinstance(card.get("interact_info"), dict) else {}
+    tags = [str(t.get("name")) for t in (card.get("tag_list") or [])
+            if isinstance(t, dict) and t.get("name")]
+    images = _images(card)                       # 详情里 image_list 是全量多图
+    return {
+        "title": card.get("title") or card.get("display_title"),
+        "summary": card.get("desc"),
+        "type": _TYPE_BY_XHS.get(str(card.get("type") or "normal"), "image"),
+        "cover_url": images[0]["url"] if images else _cover_url(card),
+        "body_json": json.dumps({"desc": card.get("desc"), "type": card.get("type"),
+                                 "images": images, "tags": tags,
+                                 "ip_location": card.get("ip_location")},
+                                ensure_ascii=False),
+        "stats_json": json.dumps({"liked": interact.get("liked_count"),
+                                  "collected": interact.get("collected_count"),
+                                  "comments": interact.get("comment_count")},
+                                 ensure_ascii=False),
+        "published_at": _ms_to_utc(card.get("time")),
+        "permalink": _explore_url(str(card.get("note_id") or ""), fallback_token),
+        "raw_json": json.dumps(card, ensure_ascii=False),
+    }
 
 
 def _int_count(v: Any) -> int:
@@ -379,6 +433,75 @@ class XiaohongshuPlatform(BasePlatform):
             if own:
                 await client.aclose()
 
+    # ── 详情补全（BasePlatform.enrich 钩子；调度器**只对新帖**调用）─────────
+    async def fetch_post_detail(self, note_id: str, xsec_token: str,
+                                client: httpx.AsyncClient | None = None) -> dict | None:
+        """单篇笔记详情（`POST /api/sns/web/v1/feed`）→ 我们落库用的字段。
+
+        为什么要它：列表接口（`/user_posted`）只给封面预览图与标题，**正文与多图
+        只在详情回包里**（实测该帖 6 张图 + 237 字正文）。`xsec_token` 从列表项带过来
+        （存在 `raw_json` 里）；它会过期，所以补全要在**入库当时**做。
+        """
+        if not self._admit(note_id, "feed"):
+            return None
+        own = client is None
+        if own:
+            client = httpx.AsyncClient(timeout=20.0)
+        try:
+            path = "/api/sns/web/v1/feed"
+            payload = {"source_note_id": str(note_id),
+                       "image_formats": ["jpg", "webp", "avif"],
+                       "extra": {"need_body_topic": "1"},
+                       "xsec_source": "pc_user", "xsec_token": str(xsec_token or "")}
+            headers = self._signed_headers("POST", path, payload=payload)
+            resp = await client.post(f"{BASE}{path}", headers=headers, json=payload)
+            ok, body = self._parse(resp)
+            if not ok:
+                self._fail(resp, body)
+                self._observe(note_id, "feed",
+                              self._outcome_of((self.last_error or {}).get("kind", "")))
+                return None
+            self._observe(note_id, "feed", "ok")
+            items = (body or {}).get("items") or []
+            card = (items[0].get("note_card") or {}) if items and isinstance(items[0], dict) else {}
+            if not card:
+                return None
+            return parse_note_detail(card, str(note_id), fallback_token=xsec_token)
+        except SignerUnavailable as e:
+            self._signer_down(e)
+            return None
+        finally:
+            if own:
+                await client.aclose()
+
+    async def enrich(self, item: dict, client: httpx.AsyncClient | None = None) -> bool:
+        """入库前把笔记补全（正文/多图/标签）—— 调度器对**新帖**调这个钩子。
+
+        拿不到就**不动这个 item**（列表能给的照旧入库），并在 `last_error` 里留下原因；
+        绝不因为"详情没拉到"把整条帖子丢掉。
+        """
+        try:
+            raw = json.loads(item.get("raw_json") or "{}")
+        except (TypeError, ValueError):
+            raw = {}
+        note_id = str(raw.get("note_id") or item.get("platform_post_id") or "")
+        token = str(raw.get("xsec_token") or "")
+        if not note_id or not token:
+            return False
+        try:
+            detail = await self.fetch_post_detail(note_id, token, client=client)
+        except Exception as e:  # noqa: BLE001
+            # 补全是**可选**的：它炸了绝不能让整条帖子进不了库（列表给的数据先落下来）
+            logger.warning(f"小红书详情补全失败 {note_id}: {type(e).__name__}: {e}")
+            return False
+        if not detail:
+            return False
+        for k, v in detail.items():
+            if v not in (None, "", []):
+                item[k] = v
+        item["permalink"] = detail["permalink"] or item.get("permalink")
+        return True
+
     @staticmethod
     def _to_item(uid: str, note: dict) -> dict:
         """一条笔记 → 我们的统一 item 结构。
@@ -409,7 +532,7 @@ class XiaohongshuPlatform(BasePlatform):
         #    直接塞 dict 会在落库时报 `type 'dict' is not supported`。
         def _dump(obj: Any) -> str:
             return json.dumps(obj, ensure_ascii=False)
-        permalink = f"https://www.xiaohongshu.com/explore/{nid}"
+        permalink = _explore_url(nid, note.get("xsec_token"))
         return {
             "platform": "xiaohongshu",
             "platform_uid": str(uid),

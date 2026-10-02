@@ -329,6 +329,71 @@ def test_note_item_survives_a_crippled_note():
     assert item["type"] == "image" and item["platform_post_id"] == "n1"
 
 
+def test_note_detail_parses_multiple_images_and_body():
+    """⑬ 详情 `note_card` → 多图 + 正文 + 标签 + 可用链接（**真机形状**）。
+
+    回归背景（2026-10-02，devlog/280）用户报「笔记只有一张照片、文字内容也没展示」：
+    列表接口只给封面预览图与标题，**正文与多图只在详情回包里**（该帖实测 6 张图、
+    237 字正文）—— 所以要靠 `enrich()` 在入库时补。
+
+    链接那条同样有背景：裸 `…/explore/{id}` 在小红书侧打不开（用户看到"当前笔记暂时无法浏览"），
+    必须带 `xsec_token`（用户给过可用样例）。
+    """
+    card = {
+        "note_id": "6abf6ba8000000001303ef77",
+        "type": "normal",
+        "title": "走，秋天和我一起逛街咯",
+        "desc": "🍂秋日探店\n第二行正文",
+        "time": 1790929832000,
+        "ip_location": "上海",
+        "tag_list": [{"name": "秋日穿搭"}, {"name": "探店"}],
+        "interact_info": {"liked_count": "1036", "collected_count": "88"},
+        "image_list": [
+            {"url_default": "http://x/1.webp", "url_pre": "http://x/1p.webp"},
+            {"url_default": "http://x/2.webp"},
+            {"url_default": "http://x/3.webp"},
+        ],
+    }
+    out = xiaohongshu.parse_note_detail(card, "u1", fallback_token="TOK+/=")
+
+    body = json.loads(out["body_json"])
+    assert [i["url"] for i in body["images"]] == [
+        "http://x/1.webp", "http://x/2.webp", "http://x/3.webp"]
+    assert body["desc"].startswith("🍂秋日探店") and body["tags"] == ["秋日穿搭", "探店"]
+    assert body["ip_location"] == "上海"
+    assert out["cover_url"] == "http://x/1.webp"
+    assert out["published_at"] == datetime(2026, 10, 2, 8, 30, 32)
+    assert json.loads(out["stats_json"])["liked"] == "1036"
+    # token 里的 `+` `/` `=` 必须百分号编码（否则链接参数表就错了）
+    assert out["permalink"] == ("https://www.xiaohongshu.com/explore/6abf6ba8000000001303ef77"
+                                "?xsec_token=TOK%2B%2F%3D&xsec_source=pc_user")
+
+
+def test_note_permalink_carries_the_token():
+    """⑬′ 列表项的链接也要带 token（否则点开是"当前笔记暂时无法浏览"）。"""
+    item = XiaohongshuPlatform._to_item("u1", {
+        "note_id": "n1", "type": "normal", "xsec_token": "ABjbrMET/xyz=",
+    })
+    assert item["permalink"] == ("https://www.xiaohongshu.com/explore/n1"
+                                 "?xsec_token=ABjbrMET%2Fxyz%3D&xsec_source=pc_user")
+    bare = XiaohongshuPlatform._to_item("u1", {"note_id": "n2"})
+    assert bare["permalink"] == "https://www.xiaohongshu.com/explore/n2"
+
+
+def test_enrich_keeps_the_item_when_detail_fails():
+    """⑬″ `enrich()`：详情拿不到时**不动** item（列表能给的照旧入库）。"""
+    class _NoDetail(XiaohongshuPlatform):
+        async def fetch_post_detail(self, note_id, xsec_token, client=None):
+            return None
+
+    pf = _NoDetail(cookies="a1=x; web_session=y", signer=FakeSigner())
+    item = {"platform_post_id": "n1",
+            "raw_json": json.dumps({"note_id": "n1", "xsec_token": "tok"}),
+            "title": "只有标题"}
+    assert asyncio.run(pf.enrich(item)) is False
+    assert item["title"] == "只有标题" and "body_json" not in item
+
+
 def test_registered_fetcher_carries_a_real_signer():
     """⑩ **注册表里那一个**必须带真签名器，且离线就能签出 `x-s`。
 
