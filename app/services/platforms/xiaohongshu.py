@@ -43,7 +43,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from typing import Any, Optional
-from urllib.parse import quote, urlencode
+from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 import httpx
 
@@ -119,6 +119,24 @@ def _images(note: dict) -> list[dict]:
         if cover:
             out.append({"url": cover})
     return out
+
+
+def token_from_permalink(url: str | None) -> str | None:
+    """从已存的主页链接里取回 `xsec_token`（重解析时**不许把已有令牌弄丢**）。
+
+    2026-10-03 的教训：`--reparse-only` 从 `raw_json` 重解析时拿不到 token（详情 card 里
+    **没有**这个字段 —— 它是请求参数），于是 30 条帖子的链接被重写成裸链，
+    点开就是"当前笔记暂时无法浏览"。所以：① 令牌在 `enrich()` 里**写回 raw_json**（自给）；
+    ② 重解析时先从旧链接里把令牌捞回来。
+    """
+    if not url:
+        return None
+    try:
+        q = parse_qs(urlparse(url).query)
+    except ValueError:
+        return None
+    vals = q.get("xsec_token") or []
+    return vals[0] if vals and vals[0] else None
 
 
 def _explore_url(note_id: str, xsec_token: Any) -> str:
@@ -565,6 +583,13 @@ class XiaohongshuPlatform(BasePlatform):
             return False
         if not detail:
             return False
+        # ⚠️ 把令牌**写回 raw_json**（2026-10-03）：详情 card 本身不含 `xsec_token`（它是请求
+        # 参数），不回填的话，将来任何"从 raw_json 重解析"都会把链接里的令牌丢掉 ——
+        # 而链接没有令牌在小红书侧就是"当前笔记暂时无法浏览"。
+        card_raw = json.loads(detail.get("raw_json") or "{}")
+        if isinstance(card_raw, dict):
+            card_raw["xsec_token"] = token
+            detail["raw_json"] = json.dumps(card_raw, ensure_ascii=False)
         for k, v in detail.items():
             if v not in (None, "", []):
                 item[k] = v

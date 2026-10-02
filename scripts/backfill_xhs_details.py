@@ -19,6 +19,8 @@ import os
 import sys
 from pathlib import Path
 
+import httpx
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.core.database import SessionLocal  # noqa: E402
@@ -48,6 +50,9 @@ async def main() -> int:
     ap.add_argument("--reparse-only", action="store_true",
                     help="**不联网**：只把已存的 raw_json 重新解析一遍"
                          "（解析逻辑升级后用，例如视频段/新字段 —— devlog/281）")
+    ap.add_argument("--relink-only", action="store_true",
+                    help="**只刷链接里的令牌**：拉一次列表页（1 个请求/账号）把 `xsec_token` "
+                         "写回 raw_json 与 permalink（修「链接打不开」）")
     ap.add_argument("--gap", type=float, default=1.5, help="每条之间的间隔秒数")
     args = ap.parse_args()
 
@@ -73,16 +78,57 @@ async def main() -> int:
         db.close()
         return 0
 
+    if args.relink_only:
+        from app.services.platforms.xiaohongshu import _explore_url
+        fixed = 0
+        by_uid: dict[str, list] = {}
+        for p in rows:
+            by_uid.setdefault(p.platform_uid, []).append(p)
+        async with httpx.AsyncClient(timeout=25.0) as client:
+            for uid, posts in by_uid.items():
+                page = await pf.fetch_post_page(str(uid), None, client=client)
+                if not page:
+                    print(f"  {uid}: 列表拿不到（{pf.last_error}）")
+                    continue
+                tokens = {}
+                for it in page["items"]:
+                    try:
+                        note = json.loads(it.get("raw_json") or "{}")
+                    except (TypeError, ValueError):
+                        continue
+                    if note.get("note_id") and note.get("xsec_token"):
+                        tokens[str(note["note_id"])] = str(note["xsec_token"])
+                for post in posts:
+                    tok = tokens.get(str(post.platform_post_id))
+                    if not tok:
+                        continue
+                    try:
+                        raw = json.loads(post.raw_json or "{}")
+                    except (TypeError, ValueError):
+                        raw = {}
+                    raw["xsec_token"] = tok
+                    post.raw_json = json.dumps(raw, ensure_ascii=False)
+                    post.permalink = _explore_url(str(post.platform_post_id), tok)
+                    fixed += 1
+                db.commit()
+                await asyncio.sleep(args.gap)
+        print(f"链接令牌已刷新：{fixed} 条（未抓详情）")
+        db.close()
+        return 0
+
     if args.reparse_only:
-        from app.services.platforms.xiaohongshu import parse_note_detail
+        from app.services.platforms.xiaohongshu import (parse_note_detail,
+                                                        token_from_permalink)
         changed = video = 0
         for i, post in enumerate(todo, 1):
             try:
                 raw = json.loads(post.raw_json or "{}")
             except (TypeError, ValueError):
                 raw = {}
-            detail = parse_note_detail(raw, post.platform_uid,
-                                       fallback_token=raw.get("xsec_token"))
+            # ⚠️ 令牌优先从**旧链接**里捞回：详情 card 不含 `xsec_token`，只看 raw_json 会把它丢掉，
+            #    链接就成了打不开的裸链（2026-10-03 踩过，devlog/281 §四）
+            token = raw.get("xsec_token") or token_from_permalink(post.permalink)
+            detail = parse_note_detail(raw, post.platform_uid, fallback_token=token)
             for k in FIELDS:
                 if detail.get(k) is not None:
                     setattr(post, k, detail[k])

@@ -155,8 +155,13 @@ def test_failures_are_classified():
     assert pf.last_error["kind"] == "cookie_invalid"
 
 
-def test_no_cookie_means_no_request_at_all():
-    """⑥ 没有身份就不发请求（省得被风控记一笔），且给出结构化原因。"""
+def test_no_cookie_means_no_request_at_all(_isolate_identity_ledger):
+    """⑥ 没有身份就不发请求（省得被风控记一笔），且给出结构化原因。
+
+    ⚠️ 必须隔离身份台账（conftest 的 `_isolate_identity_ledger`）：不隔离时，前面的用例
+    把额度耗掉后 `_admit()` 会**先**拒绝，`last_error` 变成 `identity_throttled` ——
+    这条断言就成了"看跑了哪些用例"（2026-10-03 实测到一次假红）。
+    """
     pf = XiaohongshuPlatform(cookies="", signer=FakeSigner())
     client = FakeClient([])
     assert asyncio.run(pf.fetch_user_info("u1", client=client)) is None
@@ -189,7 +194,7 @@ def test_signer_unavailable_is_loud_not_silent(monkeypatch, caplog):
     assert any("签名器不可用" in r.message for r in caplog.records), caplog.text
 
 
-def test_no_cookie_keeps_its_own_diagnosis():
+def test_no_cookie_keeps_its_own_diagnosis(_isolate_identity_ledger):
     """⑦′ "没 cookie"与"没签名器"都是 `SignerUnavailable`，但**诊断不能串**：
     前者要说 `cookie_invalid`（用户能照做：去填 cookie），不能被改写成缺依赖。"""
     pf = XiaohongshuPlatform(cookies="", signer=FakeSigner())
@@ -451,6 +456,27 @@ def test_video_note_without_streams_falls_back_to_cover():
         "u1", fallback_token="tok")
     body = json.loads(out["body_json"])
     assert "video" not in body and body["images"][0]["url"] == "http://x/c.webp"
+
+
+def test_permalink_token_survives_a_reparse():
+    """⑮ **重解析不许把链接里的令牌弄丢**（2026-10-03 真实事故的判据）。
+
+    事故链条：`--reparse-only` 从 `raw_json` 重解析时拿不到 `xsec_token`（详情 card 里**没有**
+    这个字段 —— 它是请求参数），于是 30 条帖子的 permalink 被重写成裸链，用户点开就是
+    「当前笔记暂时无法浏览」。两条防线：
+    ① `token_from_permalink()` 能从旧链接把令牌捞回来；② `enrich()` 把令牌写回 raw_json（自给）。
+    """
+    link = ("https://www.xiaohongshu.com/explore/n1"
+            "?xsec_token=ABjbrMET%2Fxyz%3D&xsec_source=pc_user")
+    assert xiaohongshu.token_from_permalink(link) == "ABjbrMET/xyz="
+    assert xiaohongshu.token_from_permalink("https://www.xiaohongshu.com/explore/n1") is None
+    assert xiaohongshu.token_from_permalink(None) is None
+
+    # 重解析：raw_json 里没有令牌，但旧链接有 ⇒ 新链接必须**照样带令牌**
+    card = {"note_id": "n1", "type": "normal", "image_list": [{"url_default": "http://x/1.webp"}]}
+    token = xiaohongshu.token_from_permalink(link)
+    out = xiaohongshu.parse_note_detail(card, "u1", fallback_token=token)
+    assert "xsec_token=ABjbrMET%2Fxyz%3D" in out["permalink"], out["permalink"]
 
 
 def test_registered_fetcher_carries_a_real_signer():
