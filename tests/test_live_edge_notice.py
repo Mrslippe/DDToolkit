@@ -153,6 +153,32 @@ def test_stream_end_does_not_publish_a_start(db, monkeypatch, _no_pacing, _fresh
     assert _edges(_fresh_hub) == [], "下播边沿不该发开播消息"
 
 
+def test_round_robin_is_not_a_live_edge(db, monkeypatch, _no_pacing, _fresh_hub):
+    """③′ 0→2（房间转入**轮播**）**不是开播**；而 2→1 才是。
+
+    `live_status` 是三态（0 未开播 / 1 直播中 / **2 轮播**，见 `app/core/live_status.py`）：
+    轮播 = 房间在循环放录像，人没在播。原先写成 `bool(acc.live_status)` ⇒ 0→2 也发
+    「开播了」：实测 2026-10-02 恬豆发芽了两次 0→2 各推一条，用户看到顶栏胶囊一直挂着
+    一条**从未发生**的开播（"实际上这两者都没有开播"，devlog/276）。
+    """
+    sch = _no_pacing
+    _stub_batch(monkeypatch, live_status=2, title="国庆快乐！")
+    acc = _mk_account(db, live_status=0)
+
+    result = asyncio.run(sch.live_sweep_core(db))
+    assert result.success == 1, f"前提不成立：{result.details}"
+    assert _edges(_fresh_hub) == [], "轮播边沿被播成了开播"
+    db.expire_all()
+    assert db.get(Account, acc.id).live_status == 2, "状态照实落库（展示层另有口径）"
+
+    # 轮播 → 真开播（2→1）照旧要发：那一天人真的开播了
+    _stub_batch(monkeypatch, live_status=1, title="开播啦")
+    asyncio.run(sch.live_sweep_core(db))
+    got = _edges(_fresh_hub)
+    assert len(got) == 1, f"2→1 是真开播，应当发一条，实际 {len(got)}"
+    assert got[0].payload["live_title"] == "开播啦"
+
+
 # ── ④ §2.2：事务回滚时**不许**有消息 ─────────────────────────────────────
 
 def test_no_message_when_the_transaction_rolls_back(db, monkeypatch, _no_pacing, _fresh_hub):

@@ -54,6 +54,12 @@ describe('快照字段的展示口径', () => {
     expect(liveStatusLabel(1)).toBe('直播中')
   })
 
+  it('live_status=2 是**轮播**，不是"离线"（devlog/276）', () => {
+    // 三态口径与后端 `app/core/live_status.py` 一致：2 = 房间在循环放录像、人没在播。
+    // 写成"离线"会让"房间里有东西在放"这件事查不出来。
+    expect(liveStatusLabel(2)).toBe('轮播中')
+  })
+
   it('开播标题只在"直播中"时展示（离线快照带的是残留标题）', () => {
     expect(snapshotVisibleFields(snap({ live_status: 1, live_title: '歌回' })).title).toBe('歌回')
     expect(snapshotVisibleFields(snap({ live_status: 0, live_title: '残留' })).title).toBeNull()

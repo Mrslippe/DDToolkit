@@ -114,6 +114,7 @@ class XiaohongshuPlatform(BasePlatform):
         if not self._cookie_header():
             # 连身份都没有就别发请求（省得被风控记一笔）
             self.last_error = {"kind": "cookie_invalid", "msg": "未配置小红书 cookie（web_session）"}
+            logger.warning("小红书未配置 cookie，本次不发请求（设置 → 平台凭据里填 XHS_COOKIE）")
             raise SignerUnavailable(self.last_error["msg"])
         headers = {
             "user-agent": UA,
@@ -169,6 +170,22 @@ class XiaohongshuPlatform(BasePlatform):
         """诊断六分类 → 四类（映射表在 `identity_limit.py`，那里写了为什么这么归）。"""
         return identity_limit.outcome_for_kind(kind)
 
+    def _signer_down(self, e: Exception) -> None:
+        """签名器不可用（`xhshow` 没装 / 内部炸了）：**必须响亮**（2026-10-02，devlog/276）。
+
+        原先这里是静默 `return None` —— 症状是"配了 cookie 却什么都抓不到"，而日志里
+        连一条 warning 都没有。实测那次是 **dev 后端跑在系统解释器上**、`xhshow` 只装在
+        项目 `.venv` 里 ⇒ 请求**没签名就发出去**、上游一律 **HTTP 406**，
+        日志里只有一串 406，看不出真因。现在：warning + `last_error`（结构化，可进诊断）。
+
+        ⚠️ **不许覆盖更具体的诊断**：`_signed_headers` 在"压根没 cookie"时会先落
+        `cookie_invalid` 再抛**同一个异常类型**（都是"签不出来"）—— 那一条才是用户能照做的
+        （去设置里填 cookie），换成 `signer_unavailable` 会把"缺配置"说成"缺依赖"。
+        """
+        if (self.last_error or {}).get("kind") != "cookie_invalid":
+            self.last_error = {"kind": "signer_unavailable", "msg": str(e)}
+        logger.warning(f"小红书签名器不可用，本次不发请求：{e}")
+
     # ── BasePlatform ──────────────────────────────────────────────────
     async def fetch_user_info(self, uid: str, client: httpx.AsyncClient | None = None) -> dict | None:
         if not self._admit(uid, "otherinfo"):
@@ -198,7 +215,8 @@ class XiaohongshuPlatform(BasePlatform):
                 "url": f"https://www.xiaohongshu.com/user/profile/{uid}",
                 "raw_json": d,
             }
-        except SignerUnavailable:
+        except SignerUnavailable as e:
+            self._signer_down(e)
             return None
         finally:
             if own:
@@ -240,7 +258,8 @@ class XiaohongshuPlatform(BasePlatform):
                 "has_more": has_more,
                 "next_cursor": (str(nxt) if nxt not in (None, "") else None) if has_more else None,
             }
-        except SignerUnavailable:
+        except SignerUnavailable as e:
+            self._signer_down(e)
             return None
         finally:
             if own:

@@ -36,6 +36,7 @@ from app.services.fetcher import (
 from app.services.platforms import registry
 from app.core import outcome as platform_outcome
 from app.core.jsonsafe import safe_json_dict as _safe_json_parse
+from app.core.live_status import is_live
 # 第二刀（devlog/236）：B 站专属**实现**住在 platforms/bilibili_posts.py，
 # 这里只做绑定（见下方 BILIBILI_STREAMS）—— 编排与平台实现从此分家。
 from app.services.platforms.bilibili_posts import (
@@ -3188,7 +3189,12 @@ async def live_sweep_core(db: Session, client: httpx.AsyncClient | None = None) 
                     if not acc.room_id and hit.get("room_id"):
                         acc.room_id = str(hit["room_id"])
                     edge = acc.live_status != prev_status
-                    started = bool(acc.live_status) and not prev_status
+                    # ⚠️ "开播"只认 **1（直播中）**：`live_status` 是三态（0 未开播 / 1 直播中 /
+                    # 2 轮播，见 `app/core/live_status.py`）。这里原先写 `bool(acc.live_status)`，
+                    # 于是房间**转入轮播**（0→2，放录像）也发一条「开播了」——
+                    # 实测 2026-10-02 恬豆发芽了两次 0→2 各推一条，用户看到顶栏挂着
+                    # 一条从未发生的开播（devlog/276）。2→1 才是真开播，照旧要发。
+                    started = is_live(acc.live_status) and not is_live(prev_status)
                     if edge:
                         # 直播边沿：落统计快照（直播日历场次推导的数据来源）。
                         # ⚠️ **必须与 live 字段同一个事务**（R3，devlog/212）：原来是两笔独立

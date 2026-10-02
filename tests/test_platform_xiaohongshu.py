@@ -161,9 +161,14 @@ def test_no_cookie_means_no_request_at_all():
     assert pf.last_error["kind"] == "cookie_invalid"
 
 
-def test_signer_unavailable_is_loud_not_silent(monkeypatch):
+def test_signer_unavailable_is_loud_not_silent(monkeypatch, caplog):
     """⑦ 签名器不在时**响亮地失败**（`SignerUnavailable` 被吞成 None + last_error），
-    绝不静默发一个没签名的请求。"""
+    绝不静默发一个没签名的请求。
+
+    ⚠️ 2026-10-02（devlog/276）补上"响亮"这一半：原先这条路径**连日志都没有**，
+    真机上表现为"配了 cookie 却什么都抓不到"，而日志里只有一串上游 **406**
+    ——（当时 dev 后端跑在系统解释器上，`xhshow` 只装在项目 `.venv` 里）。
+    """
     class Boom:
         platform = "xiaohongshu"
 
@@ -172,8 +177,23 @@ def test_signer_unavailable_is_loud_not_silent(monkeypatch):
 
     pf = XiaohongshuPlatform(cookies="web_session=xyz", signer=Boom())
     client = FakeClient([])
-    assert asyncio.run(pf.fetch_user_info("u1", client=client)) is None
-    assert client.calls == [], "签名不可用时也不该发请求"
+    with caplog.at_level("WARNING"):
+        assert asyncio.run(pf.fetch_user_info("u1", client=client)) is None
+    assert client.calls == [], "签名不可用时也不该发请求（宁可什么都不抓）"
+    # 结构化原因 + 一条 warning：没有这两样，"抓不到"就没法归因
+    assert pf.last_error["kind"] == "signer_unavailable"
+    assert "xhshow" in pf.last_error["msg"]
+    assert any("签名器不可用" in r.message for r in caplog.records), caplog.text
+
+
+def test_no_cookie_keeps_its_own_diagnosis():
+    """⑦′ "没 cookie"与"没签名器"都是 `SignerUnavailable`，但**诊断不能串**：
+    前者要说 `cookie_invalid`（用户能照做：去填 cookie），不能被改写成缺依赖。"""
+    pf = XiaohongshuPlatform(cookies="", signer=FakeSigner())
+    client = FakeClient([])
+    assert asyncio.run(pf.fetch_post_page("u1", client=client)) is None
+    assert client.calls == []
+    assert pf.last_error["kind"] == "cookie_invalid"
 
 
 def test_end_to_end_through_the_scheduler_lands_posts():

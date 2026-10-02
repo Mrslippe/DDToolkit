@@ -1318,6 +1318,26 @@ fn quit_app(window: tauri::Window, app: tauri::AppHandle) {
     app.exit(0);
 }
 
+/// dev 模式用哪个解释器跑后端：**项目自带的 `.venv` 优先**，没有才回退 PATH 里的 `python`。
+///
+/// 为什么不能只用 `python`（2026-10-02，devlog/276）：本机实测 dev 后端跑在系统解释器
+/// （`C:\...\Programs\Python\Python314\python.exe`）上，而仓里的**可选依赖只装在 `.venv`**
+/// —— `xhshow`（小红书签名器）就这样丢了：请求没签名就发出去、上游一律 406，
+/// 症状是"配了 cookie 也抓不到任何东西"，日志里只有一串 406，完全看不出是解释器的问题。
+#[cfg(debug_assertions)]
+fn resolve_dev_python(project_root: &std::path::Path) -> std::path::PathBuf {
+    let venv = if cfg!(windows) {
+        project_root.join(".venv").join("Scripts").join("python.exe")
+    } else {
+        project_root.join(".venv").join("bin").join("python")
+    };
+    if venv.is_file() {
+        venv
+    } else {
+        std::path::PathBuf::from("python")
+    }
+}
+
 fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0")
         .expect("绑定空闲端口失败")
@@ -1445,12 +1465,21 @@ fn spawn_backend(
                 .nth(2)
                 .expect("定位项目根失败")
                 .to_path_buf();
+            // ⚠️ **优先项目自带的 `.venv` 解释器**（2026-10-02，devlog/276）。
+            //
+            // 原先直接 `.command("python")`（= PATH 里那个）：本机实测 dev 后端跑在
+            // **系统 Python**（`...\Programs\Python\Python314\python.exe`）上，而仓里的
+            // 可选依赖只装在 `.venv` —— `xhshow`（小红书签名器）就是这样丢的：
+            // 请求**没签名就发出去**、上游一律 406，现象是"配了 cookie 也抓不到任何东西"，
+            // 而日志里只有一串 406，看不出是解释器的问题。`.venv` 不在时照旧回退 `python`。
+            let python = resolve_dev_python(&project_root);
             println!(
-                "[ddtoolkit] dev 模式：python backend_main.py（cwd={}）",
+                "[ddtoolkit] dev 模式：{} backend_main.py（cwd={}）",
+                python.display(),
                 project_root.display()
             );
             app.shell()
-                .command("python")
+                .command(python.to_string_lossy().to_string())
                 .args(["backend_main.py"])
                 .current_dir(&project_root)
                 .env("DDTOOLKIT_PORT", port.to_string())
@@ -1773,6 +1802,31 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **dev 用哪个解释器**：`.venv` 在就用它，不在才回退 `python`（devlog/276）。
+    /// 判错的代价很具体：回退到系统解释器时，只装在 venv 里的可选依赖（`xhshow`）
+    /// 静默缺失 ⇒ 小红书请求没签名就发出去、上游一律 406，而日志里看不出真因。
+    #[cfg(debug_assertions)]
+    #[test]
+    fn resolve_dev_python_prefers_the_project_venv() {
+        let root = std::env::temp_dir().join(format!("ddtoolkit-venv-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        // 没有 .venv ⇒ 回退 PATH 里的 python（不能凭空造一个路径出来）
+        std::fs::create_dir_all(&root).unwrap();
+        assert_eq!(resolve_dev_python(&root), std::path::PathBuf::from("python"));
+
+        // 造一个 .venv ⇒ 用它
+        let exe = if cfg!(windows) {
+            root.join(".venv").join("Scripts").join("python.exe")
+        } else {
+            root.join(".venv").join("bin").join("python")
+        };
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, b"").unwrap();
+        assert_eq!(resolve_dev_python(&root), exe);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     /// **系统圆角的能力探测判据**（R34，devlog/136）：只看圆角那次调用的 HRESULT。
     /// 判错的代价很直观 —— 把"不支持"当"支持"⇒ Win10 用户拿到一扇**裸方角**窗口

@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
+from app.core.live_status import is_live
 from app.models.vtuber import (VTuber, Account, Post, AccountStatSnapshot,
                                LiveGiftDay, ThirdpartyVtuber, VtuberEvent,
                                LiveSession, LiveCategoryOverride, AppMeta,
@@ -260,8 +261,13 @@ class AccountStatSnapshotRepo:
     def live_sessions(self, account_id: int) -> list[dict]:
         """直播场次推导（P5）：self 快照 live_status 转移点 = 场次起止。
 
-        0→1 开场、1→0 收场；进行中的场次（无收场转移）end_at=None。
-        5min 粒度近似（数据源即本工具 5 分钟轮询快照，非平台精确起止）。
+        **只有 1（直播中）算在播，其余都是收场**（0 离线 / 2 轮播，见
+        `app/core/live_status.py`）：轮播 = 房间在放录像，人已经下播了。
+        原先只认 0 收场，于是 `1 → 2 → 1`（下播转轮播、隔天再开播）被并成**一场**
+        （实测 2026-10-02 明前奶绿 10-01 那场被拉长到跨天，devlog/276）。
+
+        进行中的场次（没有收场转移）end_at=None。5min 粒度近似
+        （数据源即本工具 5 分钟轮询快照，非平台精确起止）。
         P7（v0.7.0）：场次标题 = 场次内最后一条非空 live_title 快照
         （live_title 列本就随快照落库，无需迁移）。
         """
@@ -281,13 +287,13 @@ class AccountStatSnapshotRepo:
         cur_start: datetime | None = None
         cur_title: str | None = None
         for captured_at, status, title in rows:
-            if status == 1 and cur_start is None:
-                cur_start = captured_at
-                cur_title = title
-            elif status == 1:
-                if title:
+            if is_live(status):
+                if cur_start is None:
+                    cur_start = captured_at
                     cur_title = title
-            elif status == 0 and cur_start is not None:
+                elif title:
+                    cur_title = title
+            elif cur_start is not None:
                 sessions.append({
                     "start_at": cur_start,
                     "end_at": captured_at,

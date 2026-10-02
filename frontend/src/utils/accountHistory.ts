@@ -46,7 +46,10 @@ export function snapshotSourceLabel(source: string): string {
 /** 直播状态标注：null = 该次抓取没记录（老快照），不要渲染成"离线" */
 export function liveStatusLabel(status: number | null): string | null {
   if (status == null) return null
-  return status === 1 ? '直播中' : '离线'
+  // 三态（与后端 `app/core/live_status.py` 同一口径）：0 未开播 / 1 直播中 / 2 轮播。
+  // ⚠️ 2 **不等于**"离线"：房间在循环放录像，人没在播 —— 写成"离线"会让
+  //    「房间里明明有东西在放」这件事查不出来（2026-10-02，devlog/276）。
+  return status === 1 ? '直播中' : status === 2 ? '轮播中' : '离线'
 }
 
 /** 快照列表的展示行（时间倒序由后端保证；这里只做"要不要显示"的判断） */

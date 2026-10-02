@@ -206,6 +206,11 @@ python scripts/ui_probe.py                              # 界面布局不变量�
 frontend\node_modules\.bin\tsc.cmd -p frontend\tsconfig.json --noEmit
 ```
 
+> ⚠️ **桌面开发要先把依赖装进项目自带的 `.venv`**（`uv sync`）：壳在 dev 模式跑的是
+> **`.venv` 里的解释器**（没有 `.venv` 才回退 PATH 的 `python`，见 `devlog/276`）。
+> 少了这一步，只装在 venv 里的**可选依赖**会静默缺失 —— 例如小红书签名器 `xhshow`：
+> 请求没签名就发出去、上游一律 `406`，现象是"配了 cookie 却什么都抓不到"。
+
 > `-p no:cacheprovider`：历史遗留的 `frontend/pytest-cache-files-*` 与根 `.pytest_cache`
 > 目录存在权限锁时，pytest 的缓存读写会报错；这些目录属于可重建残留，可在管理员权限下删除。
 

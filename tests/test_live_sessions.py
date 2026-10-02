@@ -17,7 +17,7 @@ from sqlalchemy.orm import sessionmaker
 from app.core.database import Base
 from app.models.vtuber import (Account, AccountStatSnapshot, LiveSession,
                                VTuber)
-from app.repositories.vtuber_repo import LiveSessionRepo
+from app.repositories.vtuber_repo import AccountStatSnapshotRepo, LiveSessionRepo
 from app.services.fetcher import _map_live_rcmd
 from app.domain.text import normalize_title          # M1a：家已下沉到 domain（devlog/213）
 from app.services.live_type import (
@@ -192,6 +192,27 @@ def test_merged_open_ended_row_absorbs_later_snapshot(db):
     merged = repo.merged(acc.id)
     assert len(merged) == 1
     assert merged[0]["source"] == "danmakus+self"
+
+
+def test_self_sessions_split_on_round_robin(db):
+    """轮播（`live_status=2`）代表**上一场已经结束**：`1→2→1` 是两场，不是一场。
+
+    实测背景（2026-10-02，devlog/276）：明前奶绿 10-01 那场下播后房间转入轮播
+    （快照 1 → 2，房间开始循环放录像），隔天再开播（2 → 1）。原先只认 0 收场 ⇒
+    两场被并成一场、时长跨天 —— 日历上"15 小时"那种数字就是这么来的。
+    """
+    acc = _mk_account(db)
+    _snap(db, acc, T0, status=1, title="国庆快乐~")
+    _snap(db, acc, T0 + timedelta(hours=2), status=2)          # 下播 → 房间轮播
+    _snap(db, acc, T0 + timedelta(hours=26), status=1, title="第二天")
+    _snap(db, acc, T0 + timedelta(hours=27), status=0)
+
+    sessions = AccountStatSnapshotRepo(db).live_sessions(acc.id)
+    assert len(sessions) == 2, f"轮播没被当成收场：{sessions}"
+    assert sessions[0]["end_at"] == T0 + timedelta(hours=2)
+    assert sessions[0]["live_title"] == "国庆快乐~"
+    assert sessions[1]["start_at"] == T0 + timedelta(hours=26)
+    assert sessions[1]["end_at"] == T0 + timedelta(hours=27)
 
 
 def test_merged_virtual_self_and_row_alone(db):

@@ -37,6 +37,7 @@ budget: 300
 | **专栏 / article** | B 站 cv 长文（`type=article`，Quill Delta 富文本） | `fetcher.fetch_article_detail`；`_delta_to_plain_text` | `RichText` 渲染 |
 | **直播卡片 / live_rcmd** | 动态流里的开播卡片，**不入 posts**，转存 `live_sessions` | `fetcher._is_live_rcmd/_map_live_rcmd`；`scheduler._route_live_item` | 见「直播场次」 |
 | **直播场次 / live session** | 一次开播（标题/起止/分区/收益/弹幕数），三源合一 | `models/vtuber.py::LiveSession`；`LiveSessionRepo.merged()` | danmakus + feed + self 快照 |
+| **直播状态三态 / live_status** | **0 未开播 / 1 直播中 / 2 轮播**（房间里循环放录像）—— 判"是不是在播"**只认 1**：轮播既不该触发开播通知，也代表上一场已经结束 | `app/core/live_status.py`（单一真源）；消费方 `scheduler.live_sweep_core`（开播边沿）、`AccountStatSnapshotRepo.live_sessions`（自观测场次）、前端 `utils/accountHistory.ts::liveStatusLabel` | 2026-10-02（devlog/276）：原先多处当布尔用 ⇒ 恬豆发芽了两次 `0→2` 各推一条「开播了」，顶栏胶囊挂着一条**从未发生**的开播；自观测场次也只认 0 收场 ⇒ `1→2→1` 被并成一场（明前奶绿那场时长跨天） |
 | **统计快照 / snapshot** | 账号粉丝数/直播状态时间序列（涨粉趋势、场次推导的数据源） | `models/vtuber.py::AccountStatSnapshot`；`scheduler._record_stat_snapshot` | T0 直播跳变也写一条 |
 | **礼物日聚合 / gift day** | 第三方日粒度礼物/大航海/SC 金额 | `models/vtuber.py::LiveGiftDay`；`externals/zeroroku.py` | 金额存字符串保精度 |
 | **分类校正 / override** | 用户对某场次分类的手工校正（推断最高优先级信号） | `models/vtuber.py::LiveCategoryOverride`；`LiveCategoryOverrideRepo` | 反哺词库 `live_type.build_learned` |
