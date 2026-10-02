@@ -839,13 +839,13 @@ function measure(tag: string) {
     /** 滚动容器清单：nativeBarW/H > 0 = 原生滚动条；hOverflow = 横向内容溢出 */
     scrollers: [...document.querySelectorAll('body *')]
       .filter((n): n is HTMLElement => n instanceof HTMLElement)
-      // ⚠️ **排除 DEV 专属的「启动诊断」覆盖层**（`bootDiag.ts` 的 `#boot-diag`）：
+      // ⚠️ **排除用户可见的「问题报告」浮层**（`problemReport` + `ProblemPanel`，devlog/279）：
       // 它是诊断工具、不是产品界面，而且**自己会飘** —— 累计 ≥3 次资源加载失败才弹出来
       //（探针的 `--seed-accounts` 影子账号只有远端 `avatar_url`，在探针环境里失败几次很正常，
       //  ProxyImage 的三级兜底会处理掉），弹出时装它的 `<pre id="bd-body">` 是
       // `max-height:50vh; overflow:auto` —— 一条竖滚动条按设计就该有。
       // 不排掉它，这条判据就变成「跑这轮时恰好有 3 张图没加载出来」的抛硬币（R48，devlog/251）。
-      .filter((n) => !n.closest('#boot-diag'))
+      .filter((n) => !n.closest('#problem-report'))
       .filter((n) => {
         const cs = getComputedStyle(n)
         return /(auto|scroll|hidden)/.test(cs.overflowX + cs.overflowY)
@@ -1901,18 +1901,18 @@ export async function runUiProbe(): Promise<void> {
       return null
     }
     /**
-     * 命中测试：**只看生产里也会存在的元素**（R48 那条"DEV 启动诊断覆盖层"教训的第二次现身）。
+     * 命中测试：**只看生产里也会存在的元素**（R48 那条"浮层挡住命中测试"教训的第二次现身，devlog/279 起浮层是「问题报告」）。
      *
-     * ⚠️ `elementFromPoint` 只看"最上面那个"，而 DEV 的 `#boot-diag`（资源加载失败 ≥3 次才弹，
+     * ⚠️ `elementFromPoint` 只看"最上面那个"，而「问题报告」浮层 `#problem-report`（出真错误才出现，`<pre>` 按设计带竖滚动条，
      * 里面是一个 `<pre>` 堆栈）会**整块压在界面之上** —— 于是"面板里的条目不可命中"这条判据
      * 在探针里恒红，而生产根本没这个元素（实测：`elementFromPoint` 返回 `pre.`、面板矩形正常、
      * 条目矩形正常、pointer-events 都是 auto ⇒ 不是产品的问题）。
-     * ⇒ 在**元素栈**里跳过 `#boot-diag` 子树，取"生产里真正会接住这一击"的那个元素。
+     * ⇒ 在**元素栈**里跳过 `#problem-report` 子树，取"生产里真正会接住这一击"的那个元素。
      */
     const hits = (el: HTMLElement | null, x: number, y: number) => {
       if (!el) return false
       for (const node of document.elementsFromPoint(x, y)) {
-        if (node.closest?.('#boot-diag')) continue     // dev-only 覆盖层，生产里不存在
+        if (node.closest?.('#problem-report')) continue     // 浮层：生产里也会出现（devlog/279）
         return node === el || el.contains(node)
       }
       return false
@@ -2237,18 +2237,18 @@ export async function runUiProbe(): Promise<void> {
       return null
     }
     /**
-     * 命中测试：**只看生产里也会存在的元素**（R48 那条"DEV 启动诊断覆盖层"教训的第二次现身）。
+     * 命中测试：**只看生产里也会存在的元素**（R48 那条"浮层挡住命中测试"教训的第二次现身，devlog/279 起浮层是「问题报告」）。
      *
-     * ⚠️ `elementFromPoint` 只看"最上面那个"，而 DEV 的 `#boot-diag`（资源加载失败 ≥3 次才弹，
+     * ⚠️ `elementFromPoint` 只看"最上面那个"，而「问题报告」浮层 `#problem-report`（出真错误才出现，`<pre>` 按设计带竖滚动条，
      * 里面是一个 `<pre>` 堆栈）会**整块压在界面之上** —— 于是"面板里的条目不可命中"这条判据
      * 在探针里恒红，而生产根本没这个元素（实测：`elementFromPoint` 返回 `pre.`、面板矩形正常、
      * 条目矩形正常、pointer-events 都是 auto ⇒ 不是产品的问题）。
-     * ⇒ 在**元素栈**里跳过 `#boot-diag` 子树，取"生产里真正会接住这一击"的那个元素。
+     * ⇒ 在**元素栈**里跳过 `#problem-report` 子树，取"生产里真正会接住这一击"的那个元素。
      */
     const hits = (el: HTMLElement | null, x: number, y: number) => {
       if (!el) return false
       for (const node of document.elementsFromPoint(x, y)) {
-        if (node.closest?.('#boot-diag')) continue     // dev-only 覆盖层，生产里不存在
+        if (node.closest?.('#problem-report')) continue     // 浮层：生产里也会出现（devlog/279）
         return node === el || el.contains(node)
       }
       return false
@@ -3067,18 +3067,18 @@ export async function runUiProbe(): Promise<void> {
     }
     /** 命中测试：某点上的元素是否落在 el 之内（吃 pointer-events 时必然为 false） */
     /**
-     * 命中测试：**只看生产里也会存在的元素**（R48 那条"DEV 启动诊断覆盖层"教训的第二次现身）。
+     * 命中测试：**只看生产里也会存在的元素**（R48 那条"浮层挡住命中测试"教训的第二次现身，devlog/279 起浮层是「问题报告」）。
      *
-     * ⚠️ `elementFromPoint` 只看"最上面那个"，而 DEV 的 `#boot-diag`（资源加载失败 ≥3 次才弹，
+     * ⚠️ `elementFromPoint` 只看"最上面那个"，而「问题报告」浮层 `#problem-report`（出真错误才出现，`<pre>` 按设计带竖滚动条，
      * 里面是一个 `<pre>` 堆栈）会**整块压在界面之上** —— 于是"面板里的条目不可命中"这条判据
      * 在探针里恒红，而生产根本没这个元素（实测：`elementFromPoint` 返回 `pre.`、面板矩形正常、
      * 条目矩形正常、pointer-events 都是 auto ⇒ 不是产品的问题）。
-     * ⇒ 在**元素栈**里跳过 `#boot-diag` 子树，取"生产里真正会接住这一击"的那个元素。
+     * ⇒ 在**元素栈**里跳过 `#problem-report` 子树，取"生产里真正会接住这一击"的那个元素。
      */
     const hits = (el: HTMLElement | null, x: number, y: number) => {
       if (!el) return false
       for (const node of document.elementsFromPoint(x, y)) {
-        if (node.closest?.('#boot-diag')) continue     // dev-only 覆盖层，生产里不存在
+        if (node.closest?.('#problem-report')) continue     // 浮层：生产里也会出现（devlog/279）
         return node === el || el.contains(node)
       }
       return false
@@ -3293,18 +3293,18 @@ export async function runUiProbe(): Promise<void> {
     const dlgOpen = () =>
       !!document.querySelector('[data-testid="app-settings-dialog"][data-state="open"]')
     /**
-     * 命中测试：**只看生产里也会存在的元素**（R48 那条"DEV 启动诊断覆盖层"教训的第二次现身）。
+     * 命中测试：**只看生产里也会存在的元素**（R48 那条"浮层挡住命中测试"教训的第二次现身，devlog/279 起浮层是「问题报告」）。
      *
-     * ⚠️ `elementFromPoint` 只看"最上面那个"，而 DEV 的 `#boot-diag`（资源加载失败 ≥3 次才弹，
+     * ⚠️ `elementFromPoint` 只看"最上面那个"，而「问题报告」浮层 `#problem-report`（出真错误才出现，`<pre>` 按设计带竖滚动条，
      * 里面是一个 `<pre>` 堆栈）会**整块压在界面之上** —— 于是"面板里的条目不可命中"这条判据
      * 在探针里恒红，而生产根本没这个元素（实测：`elementFromPoint` 返回 `pre.`、面板矩形正常、
      * 条目矩形正常、pointer-events 都是 auto ⇒ 不是产品的问题）。
-     * ⇒ 在**元素栈**里跳过 `#boot-diag` 子树，取"生产里真正会接住这一击"的那个元素。
+     * ⇒ 在**元素栈**里跳过 `#problem-report` 子树，取"生产里真正会接住这一击"的那个元素。
      */
     const hits = (el: HTMLElement | null, x: number, y: number) => {
       if (!el) return false
       for (const node of document.elementsFromPoint(x, y)) {
-        if (node.closest?.('#boot-diag')) continue     // dev-only 覆盖层，生产里不存在
+        if (node.closest?.('#problem-report')) continue     // 浮层：生产里也会出现（devlog/279）
         return node === el || el.contains(node)
       }
       return false

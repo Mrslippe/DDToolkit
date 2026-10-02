@@ -32,6 +32,7 @@ import {
   postDisplayTitle,
 } from '../utils/format'
 import { sanitizePlatformHtml } from '../utils/sanitizePlatformHtml'
+import { openExternalFromHref } from '../utils/externalLinkGuard'
 import DeltaRenderer from './DeltaRenderer'
 import ImageViewer, { type ViewerImage } from './ImageViewer'
 import OverlayScroll from './OverlayScroll'
@@ -118,10 +119,11 @@ function OriginCard({ origin, onOpenImages }: {
           </div>
         )}
         {origin.permalink && (
-          <a href={origin.permalink} target="_blank" rel="noreferrer"
-            className="inline-flex items-center gap-1 text-primary hover:underline">
+          <button type="button"
+            className="inline-flex items-center gap-1 text-primary hover:underline"
+            onClick={() => void openExternalFromHref(origin.permalink!)}>
             <Link2 className="size-3.5" /> 查看原文
-          </a>
+          </button>
         )}
       </div>
     </div>
@@ -224,10 +226,14 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
             <span>发布于 {formatDateTime(shown.published_at)}</span>
             <span>ID: {shown.platform_post_id}</span>
             {shown.permalink && (
-              <a href={shown.permalink} target="_blank" rel="noreferrer"
-                className="inline-flex items-center gap-1 text-primary hover:underline">
+              /* ⚠️ 不能写成 `<a target="_blank">`：WebView 里它由壳接管并调
+                 `shell:allow-open`（该权限已从 capability 删除）⇒ 链接打不开、还冒一条内部
+                 报错（2026-10-02 用户截图，devlog/278）。统一走 `openExternalFromHref`。 */
+              <button type="button"
+                className="inline-flex items-center gap-1 text-primary hover:underline"
+                onClick={() => void openExternalFromHref(shown.permalink!)}>
                 <Link2 className="size-3.5" /> 查看原文
-              </a>
+              </button>
             )}
           </div>
 

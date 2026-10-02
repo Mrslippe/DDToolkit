@@ -71,6 +71,10 @@ purify.addHook('afterSanitizeAttributes', (node: Element) => {
   if (node.tagName === 'A') {
     // 外链统一加 `rel`/`target` —— 与仓里另外三处外链同款（`OriginCard` / `DeltaRenderer` /
     // `HeroCardsView`），也让"点了正文里的链接会不会把 WebView 带走"这件事保持一个口径。
+    //
+    // ⚠️ 真正**点开**这些链接的是全局守卫 `utils/externalLinkGuard.ts`（捕获阶段 preventDefault
+    // → `open_external` 命令）：这里保留 `target` 只是**兜底** —— 万一守卫没装上，
+    // 壳会把这次导航拒掉（而不是把 WebView 导航走，那会丢掉整个界面）。
     node.setAttribute('rel', 'noopener noreferrer')
     node.setAttribute('target', '_blank')
   }

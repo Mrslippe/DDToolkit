@@ -85,3 +85,66 @@ describe('openExternal', () => {
     expect(offenders, '外链必须走 shellBridge.openExternal（命令侧有主机白名单）').toEqual([])
   })
 })
+
+/**
+ * 全局外链守卫（devlog/278）：裸 `<a target="_blank">` 在 WebView 里会被壳接管并调
+ * `shell:allow-open` —— 那个权限**已从 capability 删除** ⇒ 链接打不开、还冒一条内部报错
+ * （2026-10-02 用户截图：「查看原文」触发）。守卫在捕获阶段把外链改道到 `open_external`。
+ */
+describe('externalLinkGuard', () => {
+  beforeEach(() => {
+    invoke.mockReset()
+    vi.spyOn(window, 'open').mockImplementation(() => null)
+  })
+  afterEach(() => {
+    delete (window as unknown as Record<string, unknown>).__TAURI_INTERNALS__
+  })
+
+  async function install(withTauri = true) {
+    vi.resetModules()
+    const w = window as unknown as Record<string, unknown>
+    if (withTauri) w.__TAURI_INTERNALS__ = {}
+    else delete w.__TAURI_INTERNALS__
+    // 守卫是幂等的（模块级标记），每个用例重建 DOM 也要能重装 ⇒ 清掉标记
+    document.body.innerHTML = ''
+    return await import('./externalLinkGuard')
+  }
+
+  function clickAnchor(href: string): MouseEvent {
+    const a = document.createElement('a')
+    a.setAttribute('href', href)
+    a.textContent = '链接'
+    document.body.append(a)
+    const ev = new MouseEvent('click', { bubbles: true, cancelable: true, button: 0 })
+    a.dispatchEvent(ev)
+    return ev
+  }
+
+  it('外链：拦住默认行为并走 open_external 命令', async () => {
+    const guard = await install(true)
+    guard.installExternalLinkGuard()
+
+    const ev = clickAnchor('https://evil.example/x')
+    expect(ev.defaultPrevented, '不拦住的话 WebView 会去导航/调 shell:allow-open').toBe(true)
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalled())
+    expect(invoke.mock.calls[0][0]).toBe('open_external')
+    expect(invoke.mock.calls[0][1]).toEqual({ url: 'https://evil.example/x' })
+  })
+
+  it('同源 / 非 http：不接管（SPA 路由与 mailto 由浏览器自己处理）', async () => {
+    const guard = await install(true)
+    guard.installExternalLinkGuard()
+
+    expect(clickAnchor('/vtubers/14').defaultPrevented).toBe(false)
+    expect(clickAnchor('mailto:a@b.c').defaultPrevented).toBe(false)
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it('`externalHref` 只认"绝对 http(s) 且不同源"', async () => {
+    const guard = await install(true)
+    expect(guard.externalHref('https://space.bilibili.com/1')).toBe('https://space.bilibili.com/1')
+    expect(guard.externalHref('/vtubers/14')).toBeNull()
+    expect(guard.externalHref('mailto:a@b.c')).toBeNull()
+    expect(guard.externalHref('')).toBeNull()
+  })
+})

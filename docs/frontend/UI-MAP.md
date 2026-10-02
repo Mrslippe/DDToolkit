@@ -46,7 +46,7 @@ retire-when: 前端视觉体系整体重做，或组件索引改成机器生成
 |---|---|---|
 | 首绘粉底 | `<head><style>html{background:#ffa2b4}` | HTML 解析即染粉，消除「白底窗口→透明轮廓」两个原生中间态 |
 | 静态启动幕 | `#boot-splash`（纯内联样式） | 粉底 + 用户设计 LOGO（白色猫脸矢量，内联 SVG）+ 呼吸动画，不依赖 bundle |
-| 启动诊断陷阱 | `#boot-diag`（`window.__bootLog` / `__bootFold`） | 捕获 `[error]/[resource]/[console.error]/[promise]` 四类，常驻右上角徽章，可展开/一键复制；React 就绪后自动折叠 |
+| 问题报告面板（原「启动诊断」） | `#problem-report`（`.problem-report`；`window.__bootLog` / `__bootTrail` / `__bootFold`） | **面向用户**的错误出口（devlog/279）：捕获 `[error]/[resource]/[console.error]/[promise]` 四类 → 去重 → 脱敏 → **右下角细条**（不遮挡界面），展开为「复制报告」（markdown）/「提 issue」（预填）/「忽略」。只有真错误才露面（资源抖动 ≥3 次才算）；报告自带版本/路由/WebView/`[perf]` 时间线，诊断包复用 `GET /settings/diagnostics`。⚠️ 是浮层：探针的命中测试与 scroller 清单都要排除它 |
 | 全局右键禁用 | `document.addEventListener('contextmenu', preventDefault, true)` | 捕获阶段，覆盖一切渲染时序 |
 | 窗口创建 | `visible:false`（tauri.conf） | 隐藏创建，杜绝原生空窗帧 |
 | 显示链路 | main.tsx 模块顶层 `invoke('present_window')` | 应用自有命令绕开 capability（`allow-show` 缺失历史问题）；失败写诊断留痕 |

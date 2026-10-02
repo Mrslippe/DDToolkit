@@ -6015,3 +6015,98 @@ img.hero-avatar {
   display: flex;
   justify-content: flex-end;
 }
+
+/* ── 问题报告面板（ProblemPanel，devlog/279）─────────────────────────────
+   面向用户的报错出口：右下角细条 → 展开成报告。原「启动诊断」红框（右上角、560px、
+   压住界面、开发者语言）由它取代。⚠️ 这是**浮层**：ui_probe 的命中测试与 scroller
+   清单都要排除 `#problem-report`（与当年排除 `#boot-diag` 同一个理由）。 */
+.problem-report {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 9000;
+  width: min(420px, 92vw);
+  font-size: 12px;
+  color: #fde8ec;
+  background: rgba(127, 29, 29, .94);
+  border: 1px solid rgba(252, 165, 165, .35);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .35);
+  overflow: hidden;
+  backdrop-filter: blur(6px);
+}
+.problem-report .pr-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+}
+.problem-report .pr-title { font-weight: 600; }
+.problem-report .pr-hint {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: .75;
+}
+.problem-report .pr-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: rgba(153, 27, 27, .9);
+  color: #fff;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.problem-report .pr-btn:hover { background: rgba(185, 28, 28, .95); }
+.problem-report .pr-btn--primary { background: var(--c-accent, #fb77a1); color: #3b0716; font-weight: 600; }
+.problem-report .pr-body {
+  padding: 0 10px 10px;
+  max-height: 60vh;
+  overflow: auto;
+  background: rgba(17, 24, 39, .55);
+}
+.problem-report .pr-lead { margin: 8px 0; line-height: 1.6; opacity: .9; }
+.problem-report .pr-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.problem-report .pr-row {
+  border: 1px solid rgba(252, 165, 165, .22);
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: rgba(0, 0, 0, .22);
+}
+.problem-report .pr-row-head { display: flex; align-items: center; gap: 6px; }
+.problem-report .pr-where { font-weight: 600; }
+.problem-report .pr-count { opacity: .8; }
+.problem-report .pr-when { margin-left: auto; opacity: .6; font-variant-numeric: tabular-nums; }
+.problem-report .pr-x {
+  all: unset;
+  cursor: pointer;
+  opacity: .7;
+  padding: 0 2px;
+}
+.problem-report .pr-x:hover { opacity: 1; }
+.problem-report .pr-detail {
+  margin: 4px 0 0;
+  font: 11px/1.5 Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 96px;
+  overflow: auto;
+  opacity: .92;
+}
+.problem-report .pr-field { display: grid; gap: 4px; margin-top: 10px; }
+.problem-report .pr-field textarea {
+  width: 100%;
+  resize: vertical;
+  border-radius: 6px;
+  border: 1px solid rgba(252, 165, 165, .3);
+  background: rgba(0, 0, 0, .3);
+  color: inherit;
+  font: inherit;
+  padding: 6px 8px;
+}
+.problem-report .pr-check { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+.problem-report .pr-actions { display: flex; gap: 8px; margin-top: 10px; justify-content: flex-end; }

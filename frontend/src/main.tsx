@@ -20,8 +20,17 @@ import { openDataDir } from './utils/shellBridge'
 import { startMessageBus, stopMessageBus } from './utils/messageBus'
 import { installShellLifecycle } from './utils/shellLifecycle'
 import { applyCornersMode } from './utils/windowCorners'
+import { installExternalLinkGuard } from './utils/externalLinkGuard'
+import { setReportEnv } from './utils/problemReport'
+import ProblemPanel from './components/ProblemPanel'
 
 const isTauri = '__TAURI_INTERNALS__' in window
+
+// 外链统一走 `open_external`（带主机白名单）：裸 `<a target="_blank">` 在 WebView 里会被壳
+// 接管并调 `shell:allow-open` —— 那个权限**已从 capability 删除** ⇒ 链接打不开、还冒一条
+// 内部报错（2026-10-02 用户截图，devlog/278）。守卫在 React 之前装，平台 HTML 里的链接也覆盖。
+installExternalLinkGuard()
+setReportEnv({ route: window.location.pathname, version: null })
 
 // ⚠️ **闸门必须在最早期关上**（S1，devlog/202）：`Root` 在 `state !== 'pending'` 时就挂载
 // `<Main/>`，而注入基地址与 token 都在**异步**的 `tauriBootstrap` 里。原先能工作靠的是
@@ -145,6 +154,8 @@ function Main() {
         <App />
       </BrowserRouter>
       <Toaster position="top-center" richColors />
+      {/* 问题报告（右下角、不遮挡）：出真错误时自己冒出来（devlog/279） */}
+      <ProblemPanel />
     </TooltipProvider>
   )
 }
@@ -205,6 +216,8 @@ function Root() {
         perfLog(ok ? 'healthz OK → opening' : 'healthz 超时 → failed')
         // 迁移结局（批次 16，devlog/207）：应用**能用**也要让用户知道发生过什么
         setBootHealth(health)
+        // 问题报告要带版本（后端 `/healthz` 是版本的运行时真源）
+        setReportEnv({ version: health?.version ?? null })
         setState(ok ? 'opening' : 'failed')
       })
       .catch((err) => {

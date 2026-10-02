@@ -1,66 +1,29 @@
-// 启动诊断陷阱：未捕获异常 / Promise 拒绝全部记录并常驻显示。
-// React 就绪后折叠为右上角徽章待查；支持一键复制全文。
-// 修复：此逻辑原为 index.html 内联 <script>，被 Tauri 打包注入的 CSP
-// `script-src 'self'` 拦截而静默失效（生产包中诊断面板/右键禁用不生效）；
-// 改为外部模块，作为 main.tsx 的首个 import 最先执行。
-(function () {
+// 启动期错误陷阱（原「启动诊断」红色面板，2026-10-02 改造，devlog/279）。
+//
+// 这里只负责**捕获**：未捕获异常 / Promise 拒绝 / console.error / 资源加载失败。
+// 判定 → 去重 → 脱敏 → 生成报告在 `utils/problemReport.ts`，呈现由 `ProblemPanel`
+// （React，右下角、不遮挡）负责 —— 用户原话：「把这个报错 log 改造成面向用户的报错日志展示，
+// 当出现类似的报错就出现，让普通用户更容易提交 bug」。
+//
+// 历史（为什么这段代码的形状这么怪）：
+// - 原为 index.html 内联 <script>，被 Tauri 打包注入的 CSP `script-src 'self'` 拦截而静默失效
+//   ⇒ 改为外部模块，作为 main.tsx 的首个 import 最先执行；
+// - 资源级失败只入账不弹面板（单张图抖一下不代表系统坏了，且有 ProxyImage 三级兜底）；
+// - `[perf]` 启动计时行同样不弹（每次启动都弹很打扰）。
+import { reportFromBootLine, reportUserError } from './utils/problemReport'
+
+;(function () {
   const lines: string[] = []
-  let open = true
-  // 资源级失败计数（2026-09-10 用户反馈：单张图直连抖一下就把红色诊断面板弹出来）
   let resourceErrors = 0
 
   function log(msg: string, opts?: { quiet?: boolean }) {
     lines.push(
       '[' + new Date().toLocaleTimeString('zh-CN', { hour12: false }) + '] ' + msg,
     )
-    // [perf] 启动计时行不弹面板（每次启动都弹很打扰）；面板由真实错误触发时
-    // 会连同 perf 时间线一起展示。
-    // quiet（资源级失败）同样只入日志不弹面板——见下方 error 捕获处的说明。
+    // 转发给问题报告：`[perf]` 与 quiet（资源抖动）只留在启动时间线里，不惊动用户
     if (opts?.quiet || msg.startsWith('[perf]')) return
-    render()
-  }
-
-  function render() {
-    if (!lines.length) return
-    let box = document.getElementById('boot-diag')
-    if (!box) {
-      box = document.createElement('div')
-      box.id = 'boot-diag'
-      box.style.cssText =
-        'position:fixed;top:8px;right:8px;z-index:10000;width:min(560px,92vw);' +
-        'font:12px/1.6 Consolas,monospace;border-radius:8px;overflow:hidden;' +
-        'box-shadow:0 4px 16px rgba(0,0,0,.35)'
-      box.innerHTML =
-        '<div id="bd-head" style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:#7f1d1d;color:#fecaca;cursor:pointer">' +
-        '<span id="bd-title">启动诊断</span><span style="flex:1"></span>' +
-        '<button id="bd-copy">复制</button>' +
-        '<button id="bd-toggle">收起</button></div>' +
-        '<pre id="bd-body" style="margin:0;padding:10px;background:#111827;color:#fca5a5;max-height:50vh;overflow:auto;white-space:pre-wrap"></pre>'
-      document.body.appendChild(box)
-      const q = <T extends HTMLElement>(sel: string) => box!.querySelector(sel) as T
-      const st =
-        'all:unset;cursor:pointer;padding:1px 10px;border-radius:4px;background:#991b1b;color:#fff;font:inherit'
-      q('#bd-copy').style.cssText = st
-      q('#bd-toggle').style.cssText = st
-      const copyBtn = q('#bd-copy')
-      copyBtn.onclick = () => {
-        try {
-          void navigator.clipboard.writeText(lines.join('\n'))
-          copyBtn.textContent = '已复制'
-        } catch {
-          copyBtn.textContent = '复制失败'
-        }
-      }
-      q('#bd-toggle').onclick = toggle
-      q('#bd-head').onclick = toggle
-    }
-    function toggle() {
-      open = !open
-      const b = document.getElementById('bd-body')
-      if (b) b.style.display = open ? 'block' : 'none'
-    }
-    document.getElementById('bd-title')!.textContent = '启动诊断 ' + lines.length + ' 条'
-    document.getElementById('bd-body')!.textContent = lines.join('\n')
+    // 行首的时间戳去掉再解析（`reportFromBootLine` 认的是 `[error] …` 形状）
+    reportFromBootLine(msg.replace(/^\[[^\]]*\]\s*/, ''))
   }
 
   window.addEventListener('error', function (e) {
@@ -71,11 +34,9 @@
   // error 会派发到已卸载的 img 上（isConnected=false），这属于交互噪声而非
   // 真实失败（真实 404 时元素仍挂载；2026-09-03 反馈：快速点类型 chips 误报）。
   //
-  // 2026-09-10 用户反馈：单张 B 站动态图（i0.hdslb.com，实测直连 200/1920×1080）
-  // 在 WebView 里偶发一次失败，就把「启动诊断」红色面板弹了出来 —— 但这类失败
-  // **已经被 ProxyImage 的三级兜底处理**（直连 → /img-proxy → 占位），属于可自愈的
-  // 瞬时抖动，不该打断用户。因此资源失败只入日志（copy 时仍能看到），
-  // 连续 ≥3 次才视为真实故障（系统性 404/断网）并弹面板。
+  // 2026-09-10 用户反馈：单张 B 站动态图在 WebView 里偶发一次失败就弹红色面板，
+  // 而这类失败**已经被 ProxyImage 的三级兜底处理**（直连 → /img-proxy → 占位）。
+  // 因此资源失败只入账；连续 ≥3 次才视为真实故障（系统性 404/断网）。
   window.addEventListener(
     'error',
     function (e) {
@@ -84,8 +45,13 @@
         const src = (t as HTMLImageElement).src || (t as HTMLLinkElement).href
         if (src) {
           resourceErrors += 1
-          log('[resource] ' + src, { quiet: true })
-          if (resourceErrors >= 3) render()
+          const quiet = resourceErrors < 3
+          log('[resource] ' + src, { quiet })
+          if (!quiet) {
+            // ≥3 次：当作真实故障报一条（此前已经记过的噪声不再重复计入）
+            reportUserError('资源加载', `${src}（连续 ${resourceErrors} 次失败）`,
+                            { kind: 'resource' })
+          }
         }
       }
     },
@@ -114,12 +80,13 @@
   }, true)
 
   window.__bootLog = log
-  // React 就绪后不再整版弹出，仅保留徽章待查
+  /** 启动时间线的原始行（问题报告据此附上"启动到出错之间发生了什么"） */
+  window.__bootTrail = () => lines.slice()
+  /**
+   * 兼容 R12a 以来的调用方（`main.tsx` 在 React 就绪后调一次）：
+   * 新面板**默认就是收起的**，这里只广播一次"可以收起了"。
+   */
   window.__bootFold = function () {
-    open = false
-    const b = document.getElementById('bd-body')
-    if (b) b.style.display = 'none'
-    const t = document.getElementById('bd-toggle')
-    if (t) t.textContent = '展开'
+    window.dispatchEvent(new Event('ddtoolkit:fold-problem-panel'))
   }
 })()

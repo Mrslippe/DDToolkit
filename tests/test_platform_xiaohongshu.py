@@ -6,6 +6,7 @@ cursor 有没有被正确串起来、失败有没有被**分门别类**、以及
 """
 import asyncio
 import json
+from datetime import datetime
 
 import pytest
 from sqlalchemy import create_engine
@@ -289,6 +290,43 @@ def test_user_info_maps_the_real_response_shape():
     assert info["sign"] is None, "`还没有简介`是平台占位文案，不该当成签名存下来"
     assert info["url"].endswith("/611bbf00000000000100a109"), "主页 URL 用请求的 uid，不是 red_id"
     assert info["raw_json"]["posted"] == 35
+
+
+def test_note_item_maps_cover_time_and_likes():
+    """⑫ 笔记字段按**真机回包**映射：封面（`cover.info_list`）、发布时间（`time`）、点赞（`interact_info`）。
+
+    回归背景（2026-10-02，devlog/278）用户报「帖子详情无法获取图片和日期信息」：
+    原实现取 `cover.url`（真回包是**空串**）、`published_at` 恒为 None（旧注释误以为
+    "列表接口不给时间戳"）、点赞读顶层 `liked_count`（真字段在 `interact_info` 里）。
+    形状照真机抓下来的写。
+    """
+    note = {
+        "type": "normal",
+        "note_id": "6abf6ba8000000001303ef77",
+        "time": 1790929832000,                       # 2026-10-02 08:30:32 UTC
+        "xsec_token": "ABjbrMETExJ2utmuHaLjQpOIP7Fr5biOkH-1AEDmn1DWk=",
+        "display_title": "走，秋天和我一起逛街咯",
+        "cover": {"url": "", "trace_id": "", "info_list": [
+            {"image_scene": "WB_PRV", "url": "http://sns-webpic-qc.xhscdn.com/prv.webp"},
+            {"image_scene": "WB_DFT", "url": "http://sns-webpic-qc.xhscdn.com/dft.webp"},
+        ]},
+        "interact_info": {"liked": False, "liked_count": "1036", "sticky": False},
+    }
+    item = XiaohongshuPlatform._to_item("611bbf00000000000100a109", note)
+
+    assert item["cover_url"] == "http://sns-webpic-qc.xhscdn.com/dft.webp", \
+        "封面取 info_list 里的 WB_DFT（大图）；cover.url 是空串"
+    assert item["published_at"] == datetime(2026, 10, 2, 8, 30, 32), "发布时间就在 time（毫秒）"
+    assert json.loads(item["stats_json"])["liked"] == "1036", "点赞在 interact_info 里"
+    assert json.loads(item["body_json"])["images"], "body_json 要带图，详情窗据此渲染"
+    assert "xsec_token" in json.loads(item["raw_json"]), "xsec_token 只进 raw_json"
+
+
+def test_note_item_survives_a_crippled_note():
+    """⑫′ 缺字段的笔记不许炸（老数据/别的端点形态）：拿不到就给 None，不抛。"""
+    item = XiaohongshuPlatform._to_item("u1", {"note_id": "n1"})
+    assert item["cover_url"] is None and item["published_at"] is None
+    assert item["type"] == "image" and item["platform_post_id"] == "n1"
 
 
 def test_registered_fetcher_carries_a_real_signer():

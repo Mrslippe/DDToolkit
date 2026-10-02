@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Any, Optional
 from urllib.parse import urlencode
 
@@ -64,6 +65,60 @@ _TYPE_BY_XHS = {"normal": "image", "video": "video"}
 
 # 空简介的占位文案（平台原样返回，不是用户写的）—— 别把它当"签名"存进库
 _XHS_EMPTY_SIGN = "还没有简介"
+
+
+def _ms_to_utc(ms: Any) -> datetime | None:
+    """毫秒时间戳 → **naive UTC**（与其它平台落库口径一致；拿不到就是 None）。"""
+    try:
+        return datetime.fromtimestamp(int(ms) / 1000, tz=timezone.utc).replace(tzinfo=None)
+    except (TypeError, ValueError, OSError):
+        return None
+
+
+def _cover_url(note: dict) -> str | None:
+    """封面地址：`cover.info_list[]` 里的 `WB_DFT`（大图）→ 第一张 → `cover.url`。
+
+    ⚠️ 真回包里 `cover.url` 是**空串**，地址只在 `info_list` 里（devlog/278）。
+    `image_list`（详情接口才给）顺带兼容一下：有就直接用第一张。
+    """
+    imgs = note.get("image_list")
+    if isinstance(imgs, list) and imgs and isinstance(imgs[0], dict):
+        first = imgs[0]
+        url = first.get("url_default") or first.get("url_pre") or first.get("url")
+        if url:
+            return str(url)
+    cover = note.get("cover") if isinstance(note.get("cover"), dict) else {}
+    info = cover.get("info_list") if isinstance(cover.get("info_list"), list) else []
+    by_scene: dict[str, str] = {}
+    for it in info:
+        if isinstance(it, dict) and it.get("url"):
+            by_scene[str(it.get("image_scene") or "")] = str(it["url"])
+    for scene in ("WB_DFT", "WB_PRV"):
+        if by_scene.get(scene):
+            return by_scene[scene]
+    if by_scene:
+        return next(iter(by_scene.values()))
+    return str(cover.get("url") or "") or None
+
+
+def _images(note: dict) -> list[dict]:
+    """笔记图片列表（存 `body_json.images`，详情窗据此渲染）。
+
+    列表接口只有封面一张；`image_list`（详情）有全部时按顺序给出。
+    """
+    imgs = note.get("image_list")
+    out: list[dict] = []
+    if isinstance(imgs, list):
+        for it in imgs:
+            if isinstance(it, dict):
+                url = it.get("url_default") or it.get("url_pre") or it.get("url")
+                if url:
+                    out.append({"url": str(url)})
+    if not out:
+        cover = _cover_url(note)
+        if cover:
+            out.append({"url": cover})
+    return out
 
 
 def _int_count(v: Any) -> int:
@@ -329,9 +384,27 @@ class XiaohongshuPlatform(BasePlatform):
         """一条笔记 → 我们的统一 item 结构。
 
         ⚠️ `platform_post_id` **按字符串**；`xsec_token` 只进 `raw_json`（不是凭证、不能当去重键）。
+
+        ## 字段形状按**真机回包**写（2026-10-02，devlog/278）
+
+        `/user_posted` 的一条笔记长这样（实测）：
+
+        ```
+        {"type": "normal", "note_id": "...", "time": 1790929832000,
+         "display_title": "走，秋天和我一起逛街咯",
+         "cover": {"url": "", "info_list": [{"image_scene": "WB_PRV", "url": "..."},
+                                             {"image_scene": "WB_DFT", "url": "..."}]},
+         "interact_info": {"liked_count": "1036", "liked": false}}
+        ```
+
+        ⚠️ 三处**曾经全错**，症状是"详情里没有图、没有日期、没有点赞"：
+        ① `cover.url` 是**空串**，真地址在 `cover.info_list[]`；
+        ② 发布时间就在 `time`（毫秒）—— 旧注释写"列表接口不给时间戳"，**是错的**；
+        ③ 点赞在 `interact_info.liked_count`，不在顶层。
         """
         nid = str(note.get("note_id") or note.get("id") or "")
         ntype = _TYPE_BY_XHS.get(str(note.get("type") or "normal"), "image")
+        interact = note.get("interact_info") if isinstance(note.get("interact_info"), dict) else {}
         # ⚠️ 三个 json 列在库里是 **Text**（其它平台同样存 JSON 串）⇒ 这里必须序列化成字符串，
         #    直接塞 dict 会在落库时报 `type 'dict' is not supported`。
         def _dump(obj: Any) -> str:
@@ -344,12 +417,14 @@ class XiaohongshuPlatform(BasePlatform):
             "type": ntype,
             "title": note.get("display_title") or note.get("title"),
             "summary": note.get("desc"),
-            "cover_url": note.get("cover", {}).get("url") if isinstance(note.get("cover"), dict) else None,
+            "cover_url": _cover_url(note),
             "permalink": permalink,
-            "body_json": _dump({"desc": note.get("desc"), "type": note.get("type")}),
-            "stats_json": _dump({"liked": note.get("liked_count"),
-                                 "collected": note.get("collected_count")}),
-            "published_at": None,             # 列表接口不给时间戳，要详情/搜索才有
+            "body_json": _dump({"desc": note.get("desc"), "type": note.get("type"),
+                                "images": _images(note)}),
+            "stats_json": _dump({"liked": interact.get("liked_count") or note.get("liked_count"),
+                                 "collected": (note.get("collected_count")
+                                               or interact.get("collected_count"))}),
+            "published_at": _ms_to_utc(note.get("time")),
             "raw_json": _dump(note),          # xsec_token 在这里，详情接口要用
         }
 
