@@ -176,7 +176,10 @@ export function redact(text: string): string {
   // ⚠️ 字符集**不含 `/`**：含了会把 Windows 路径（`C:/Users/.../diagnostics-….txt`）
   //    当凭据打掉 —— 路径正是排查要用的东西
   out = out.replace(/\b[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, '***')
-  out = out.replace(/(?<![A-Za-z0-9+_-])[A-Za-z0-9+_-]{40,}={0,2}/g, '***')
+  // ⚠️ 阈值 60（不是 40）：URL 里 `ou=`/`oi=` 这类参数值是 20~40 字符的 **ID**，打掉它们
+  //    会让报告里的链接**没法复现**（2026-10-03 用户那条视频 URL 就被打成了 `oi=***`）。
+  //    真正敏感的签名/凭据由上面的**按键名**规则负责。
+  out = out.replace(/(?<![A-Za-z0-9+_-])[A-Za-z0-9+_-]{60,}={0,2}/g, '***')
   return out
 }
 

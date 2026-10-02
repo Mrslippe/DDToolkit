@@ -44,6 +44,13 @@ import { reportFromBootLine, reportUserError } from './utils/problemReport'
       if (t && t !== document.documentElement && t !== document.body && t.isConnected) {
         const src = (t as HTMLImageElement).src || (t as HTMLLinkElement).href
         if (src) {
+          // `data-self-healing`：块内自己会恢复（如视频的直连→本机代理 fallback 链）。
+          // 那类失败**每一步都是设计的正常一环**，报给用户纯属噪音（2026-10-03 实测：
+          // 视频照常播、报告里却攒了 6 条 CDN 403）；真播不了时由该组件主动报一条。
+          if (t.closest?.('[data-self-healing]')) {
+            log('[resource:self-healing] ' + src, { quiet: true })
+            return
+          }
           resourceErrors += 1
           const quiet = resourceErrors < 3
           log('[resource] ' + src, { quiet })

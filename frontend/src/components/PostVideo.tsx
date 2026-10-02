@@ -15,6 +15,7 @@ import { useState } from 'react'
 import { ExternalLink } from 'lucide-react'
 
 import { openExternalFromHref } from '../utils/externalLinkGuard'
+import { reportUserError } from '../utils/problemReport'
 
 export interface PostVideoInfo {
   url: string
@@ -48,6 +49,9 @@ export default function PostVideo({ video, poster, permalink }: Props) {
   const src = sources[idx]
 
   if (dead || !src) {
+    // 全部源都失败 —— 这时才值得惊动用户（前面每一步失败都是链的正常一环）
+    reportUserError('视频播放', `全部播放源都失败（含本机代理）：${sources[0] ?? ''}`,
+                    { kind: 'resource' })
     return (
       <div className="pv-dead">
         <span>这个视频在当前环境里播不了</span>
@@ -62,17 +66,26 @@ export default function PostVideo({ video, poster, permalink }: Props) {
   }
 
   return (
-    <video
-      className="pv-video"
-      controls
-      playsInline
-      preload="metadata"
-      poster={poster ?? undefined}
-      src={src}
-      onError={() => {
-        // 换下一条备用流；链走完才认输（别把"这一档解不了"当成"视频坏了"）
-        if (idx + 1 < sources.length) setIdx(idx + 1)
-        else setDead(true)
-      }}    />
+    /**
+     * `data-self-healing`：告诉全局错误陷阱（`bootDiag`）**这一块自己会恢复** ——
+     * 直连被平台 CDN 拒（小红书见 Referer 就 403）是播放链的**正常一步**，不该被当成
+     * "资源加载失败"报到用户面前（2026-10-03 实测：视频照常播，报告里却攒了 6 条 403）。
+     * 真播不了时由上面那张兜底卡主动报一条。
+     */
+    <div className="pv-wrap" data-self-healing="1">
+      <video
+        className="pv-video"
+        controls
+        playsInline
+        preload="metadata"
+        poster={poster ?? undefined}
+        src={src}
+        onError={() => {
+          // 换下一条备用流；链走完才认输（别把"这一档解不了"当成"视频坏了"）
+          if (idx + 1 < sources.length) setIdx(idx + 1)
+          else setDead(true)
+        }}
+      />
+    </div>
   )
 }

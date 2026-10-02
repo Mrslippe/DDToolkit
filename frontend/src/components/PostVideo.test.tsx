@@ -115,4 +115,20 @@ describe('PostVideo', () => {
     expect(host.querySelector('.pv-dead')?.textContent).toContain('播不了')
     expect(host.querySelector('.pv-open')).toBeFalsy()
   })
+
+  it('播放链是"自愈块"：带 data-self-healing，且真失败时由组件主动报一条', async () => {
+    // 2026-10-03 实测：直连被 CDN 403 → 切代理 → 视频照常播，报告里却攒了 6 条"资源加载失败"。
+    // 判据：① 这一块必须有标记（`bootDiag` 据此只入账、不报）；② 真播不了时组件自己报一条。
+    const { reportEntries, clearReports } = await import('../utils/problemReport')
+    clearReports()
+    render({ video: { url: 'http://v/a.mp4' } })
+    expect(host.querySelector('[data-self-healing="1"]'), '缺标记 ⇒ 中间失败会被当成故障上报')
+      .toBeTruthy()
+
+    for (let i = 0; i < 6 && video(); i += 1) {
+      const v = video()!
+      act(() => { v.dispatchEvent(new Event('error')) })
+    }
+    expect(reportEntries().some((r) => r.where === '视频播放')).toBe(true)
+  })
 })
