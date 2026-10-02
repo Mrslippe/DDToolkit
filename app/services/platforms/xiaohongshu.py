@@ -50,7 +50,8 @@ from app.core.config import settings
 from app.core.useragent import UA_CHROME
 from app.services import identity_limit
 from app.services.platforms.base import BasePlatform
-from app.services.platforms.signing import NullSigner, Signer, SignerUnavailable
+from app.services.platforms.signing import (NullSigner, Signer, SignerUnavailable,
+                                            XhsSigner)
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +61,52 @@ UA = UA_CHROME
 
 # 笔记类型映射：小红书自己没有"投稿/动态"之分，落到我们的 type 上时统一给 text/image/video
 _TYPE_BY_XHS = {"normal": "image", "video": "video"}
+
+# 空简介的占位文案（平台原样返回，不是用户写的）—— 别把它当"签名"存进库
+_XHS_EMPTY_SIGN = "还没有简介"
+
+
+def _int_count(v: Any) -> int:
+    """把互动计数转成 int（xhs 给的是**字符串**，如 `"32445"`；拿不到就是 0）。"""
+    try:
+        return int(str(v).strip())
+    except (TypeError, ValueError):
+        return 0
+
+
+def parse_user_info(data: dict, uid: str) -> dict:
+    """`/user/otherinfo` 的 `data` → 我们的账号字段（**按真实回包形状解析**）。
+
+    ⚠️ 2026-10-02（devlog/277）：原实现按"顶层字段"解析（`d.get("nickname")` /
+    `d.get("fans")` / `d.get("image")`），而真回包把它们藏在 **`basic_info`** 与
+    **`interactions`（数组，`type == 'fans'` 那一项的 `count`）** 里 ——
+    结果昵称/头像/粉丝数全是 `None`/`0`，账号信息写进库等于空的。
+    这个错能活下来是因为**这条路径没有任何成功用例**（只有"没 cookie / 签名器不可用"两条失败路径）。
+
+    真回包（2026-10-02 实测，`普通小栗`）关键字段：
+    `basic_info.{nickname, desc, imageb, images, red_id}` +
+    `interactions[type=fans].count`（字符串 `"32445"`；旁边的 `i18n_count` 是 `"32.4K"`，**不能用**）。
+    """
+    d = data if isinstance(data, dict) else {}
+    basic = d.get("basic_info") if isinstance(d.get("basic_info"), dict) else {}
+    fans = _int_count(d.get("fans"))              # 兜底：老形状/别的端点给了顶层字段
+    for it in d.get("interactions") or []:
+        if isinstance(it, dict) and str(it.get("type")) == "fans":
+            fans = _int_count(it.get("count"))
+    sign = basic.get("desc") or d.get("desc")
+    if isinstance(sign, str) and sign.strip() == _XHS_EMPTY_SIGN:
+        sign = None
+    return {
+        "name": basic.get("nickname") or d.get("nickname") or d.get("name"),
+        "sign": sign,
+        "avatar": (basic.get("imageb") or basic.get("images")
+                   or d.get("image") or d.get("avatar")),
+        "followers_count": fans,
+        # ⚠️ 主页 URL 用的是**请求的那个 uid**，不是 `basic_info.red_id`（那是"小红书号"，
+        #    形如 4970845138，拼进 profile URL 是错的）
+        "url": f"https://www.xiaohongshu.com/user/profile/{uid}",
+        "raw_json": d,
+    }
 
 
 def classify_http(status: int, code: Any = None, msg: str = "") -> str:
@@ -97,7 +144,16 @@ class XiaohongshuPlatform(BasePlatform):
     def __init__(self, cookies: str = "", signer: Optional[Signer] = None,
                  ledger: "identity_limit.Ledger | None" = None) -> None:
         self._cookies = cookies
-        self._signer: Signer = signer or NullSigner()
+        # 默认就装**真签名器**（2026-10-02，devlog/277）。
+        #
+        # ⚠️ 这里原先写 `signer or NullSigner()`，而注册表用的就是这个模块级单例
+        # （`fetcher = XiaohongshuPlatform()`）⇒ **生产里从来没签过名**：所有请求裸着发出去、
+        # 上游一律 **HTTP 406**，现象是"配了 cookie 却什么都抓不到"。
+        # 之所以一路绿着：**测试全都显式注入替身**（`XiaohongshuPlatform(signer=FakeSigner())`），
+        # 连端到端那条的注释都写着"适配器是注册表里的单例（没有 cookie/签名器）⇒ 换成
+        # 注入了替身的实例再跑" —— 缺口被看见了，但没人钉住它。
+        # `XhsSigner` 是**懒加载**的（构造时不 import `xhshow`），所以这个默认值不拖启动。
+        self._signer: Signer = signer or XhsSigner()
         # 身份级额度台账：默认共用进程内单例；测试注入自己的（可控时钟）
         self._ledger = ledger if ledger is not None else identity_limit.LEDGER
         # ⚠️ 这里**没有**分页状态：cursor 由核心循环拿着（第 4 阶段 ⑥，devlog/238）。
@@ -121,9 +177,20 @@ class XiaohongshuPlatform(BasePlatform):
             "cookie": self._cookie_header(),
             "referer": "https://www.xiaohongshu.com/",
         }
-        headers.update(self._signer.headers(
+        signed = self._signer.headers(
             method=method, uri=path, params=params, payload=payload,
-            cookies=self._cookie_header()))
+            cookies=self._cookie_header())
+        # ⚠️ **未签名的请求一个都不许发**（2026-10-02，devlog/277）：`NullSigner` 返回空字典
+        # 时不会抛异常，于是"签名器没接上"会表现成"请求正常发出、上游 406"——
+        # 与"平台改版导致签名失效"完全同形，排查时根本看不出是接线问题。
+        # 小红书的每一个端点都走签名网关，没有"不需要签名的路径"这回事。
+        if not signed.get("x-s"):
+            msg = (f"签名器没有产出 `x-s`（{type(self._signer).__name__}）"
+                   f"—— 不发未签名的请求")
+            self.last_error = {"kind": "signer_unavailable", "msg": msg}
+            logger.warning(f"小红书{msg}")
+            raise SignerUnavailable(msg)
+        headers.update(signed)
         return headers
 
     @staticmethod
@@ -206,15 +273,7 @@ class XiaohongshuPlatform(BasePlatform):
                               self._outcome_of((self.last_error or {}).get("kind", "")))
                 return None
             self._observe(uid, "otherinfo", "ok")
-            d = body or {}
-            return {
-                "name": d.get("nickname") or d.get("name"),
-                "sign": d.get("desc"),
-                "avatar": d.get("image") or d.get("avatar"),
-                "followers_count": int(d.get("fans") or 0),
-                "url": f"https://www.xiaohongshu.com/user/profile/{uid}",
-                "raw_json": d,
-            }
+            return parse_user_info(body or {}, str(uid))
         except SignerUnavailable as e:
             self._signer_down(e)
             return None

@@ -15,7 +15,7 @@ from app.core.database import Base
 from app.models.vtuber import Account, Post, VTuber
 from app.services import identity_limit
 from app.services import scheduler as sch
-from app.services.platforms import registry
+from app.services.platforms import registry, xiaohongshu
 from app.services.platforms.signing import NullSigner, SignerUnavailable
 from app.services.platforms.xiaohongshu import XiaohongshuPlatform, classify_http
 
@@ -67,6 +67,8 @@ NOTE = {
 
 
 def _pf(**kw) -> XiaohongshuPlatform:
+    """测试一律**显式注入替身签名器**（生产的默认值是真签名器，见 devlog/277）。"""
+    kw.setdefault("signer", FakeSigner())
     return XiaohongshuPlatform(cookies="web_session=xyz", **kw)
 
 
@@ -217,7 +219,7 @@ def test_end_to_end_through_the_scheduler_lands_posts():
     client = FakeClient([
         FakeResp(payload={"success": True, "data": {"notes": [NOTE], "cursor": "C1", "has_more": False}}),
     ])
-    # 适配器是注册表里的单例（没有 cookie/签名器）⇒ 换成注入了替身的实例再跑
+    # 适配器换成注入了替身的实例再跑（注册表里那个**带真签名器**，见 ⑩）
     monkey = registry._REGISTRY["xiaohongshu"]
     registry._REGISTRY["xiaohongshu"] = pf
     try:
@@ -255,6 +257,78 @@ def test_real_signer_produces_headers_offline():
         pytest.fail(f"签名器不可用（依赖没进环境？）：{e}")
     assert {"x-s", "x-t"} <= set(heads), heads
     assert heads["x-s"], "x-s 不能是空串"
+
+
+def test_user_info_maps_the_real_response_shape():
+    """⑪ 账号信息按**真实回包**解析（昵称/头像/粉丝数/简介）。
+
+    回归背景（2026-10-02，devlog/277）：原实现读顶层 `nickname`/`fans`/`image`，
+    而真回包把它们放在 `basic_info` 与 `interactions[type=fans].count`（字符串）里 ⇒
+    账号名字、头像、粉丝数**全是空/0** —— 用户看到的正是"账号信息也没有抓取到"。
+    这段形状是**真机抓下来的**（`/user/otherinfo`，普通小栗），不是照着文档猜的。
+    """
+    pf = _pf()
+    client = FakeClient([FakeResp(payload={"success": True, "data": {
+        "basic_info": {"red_id": "4970845138", "gender": 1, "ip_location": "上海",
+                       "desc": "还没有简介",
+                       "imageb": "https://sns-avatar-qc.xhscdn.com/avatar/x?imageView2/2/w/540",
+                       "images": "https://sns-avatar-qc.xhscdn.com/avatar/x?imageView2/2/w/360",
+                       "nickname": "普通小栗"},
+        "interactions": [
+            {"type": "follows", "name": "关注", "count": "85", "i18n_count": "85"},
+            {"type": "fans", "name": "粉丝", "count": "32445", "i18n_count": "32.4K"},
+            {"type": "interaction", "name": "获赞与收藏", "count": "90512"},
+        ],
+        "posted": 35, "liked": 82609,
+    }})])
+    info = asyncio.run(pf.fetch_user_info("611bbf00000000000100a109", client=client))
+
+    assert info["name"] == "普通小栗"
+    assert info["followers_count"] == 32445, "粉丝数在 interactions[type=fans].count（字符串）里"
+    assert info["avatar"].endswith("/w/540"), "头像取 imageb（大图），不是缩略图"
+    assert info["sign"] is None, "`还没有简介`是平台占位文案，不该当成签名存下来"
+    assert info["url"].endswith("/611bbf00000000000100a109"), "主页 URL 用请求的 uid，不是 red_id"
+    assert info["raw_json"]["posted"] == 35
+
+
+def test_registered_fetcher_carries_a_real_signer():
+    """⑩ **注册表里那一个**必须带真签名器，且离线就能签出 `x-s`。
+
+    回归背景（2026-10-02，devlog/277）：测试全都显式注入替身，而生产的模块级单例
+    `fetcher = XiaohongshuPlatform()` 攥着 `NullSigner` ⇒ 请求**未签名**发出、
+    上游一律 **HTTP 406**（"配了 cookie 却什么都抓不到"）。这条判据必须打在
+    **注册表实例**上 —— 打在"我新建一个平台对象"上没有意义，缺口正是在注册表那一头。
+    """
+    from app.services.platforms.signing import NullSigner, XhsSigner
+
+    pf = registry.get_fetcher("xiaohongshu")
+    assert pf is not None and pf is xiaohongshu.fetcher, "注册表里不是那个模块级单例"
+    assert not isinstance(pf._signer, NullSigner), \
+        "注册表实例的签名器是 NullSigner ⇒ 线上会发未签名请求（全 406）"
+    assert isinstance(pf._signer, XhsSigner)
+
+    # 真签名（纯函数、不联网）：`a1` 是 xhshow 必需项，缺了会 SignerUnavailable
+    signed = pf._signer.headers(
+        method="GET", uri="/api/sns/web/v1/user_posted",
+        params={"num": 30, "cursor": "", "user_id": "u1",
+                "image_formats": "jpg,webp,avif", "xsec_source": "pc_user"},
+        cookies="a1=1900abcdef; web_session=xyz")
+    assert signed.get("x-s"), signed
+
+
+def test_unsigned_signer_is_refused_before_the_request(caplog):
+    """⑩′ 签名器产不出 `x-s` ⇒ **一个字节都不发**（宁可不抓，也不裸着发）。
+
+    为什么要有这条：`NullSigner` 返回空字典**不报错**，于是"签名器没接上"会伪装成
+    "请求正常、上游 406" —— 与平台改版同形，排查时看不出是接线问题（devlog/277）。
+    """
+    pf = XiaohongshuPlatform(cookies="a1=abc; web_session=xyz", signer=NullSigner())
+    client = FakeClient([FakeResp()])
+    with caplog.at_level("WARNING"):
+        assert asyncio.run(pf.fetch_post_page("u1", None, client=client)) is None
+    assert client.calls == [], "未签名的请求不许发出去"
+    assert pf.last_error["kind"] == "signer_unavailable"
+    assert any("不发未签名的请求" in r.message for r in caplog.records), caplog.text
 
 
 # ── 身份级限速 / 四类响应接线（第 4 阶段 ⑤，devlog/237）──────────────────
