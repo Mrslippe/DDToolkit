@@ -156,15 +156,18 @@ def parse_note_detail(card: dict, uid: str, fallback_token: Any = None) -> dict:
     tags = [str(t.get("name")) for t in (card.get("tag_list") or [])
             if isinstance(t, dict) and t.get("name")]
     images = _images(card)                       # 详情里 image_list 是全量多图
+    body: dict = {"desc": card.get("desc"), "type": card.get("type"),
+                  "images": images, "tags": tags,
+                  "ip_location": card.get("ip_location")}
+    video = _video_of(card)                      # 视频帖才有（devlog/281）
+    if video:
+        body["video"] = video
     return {
         "title": card.get("title") or card.get("display_title"),
         "summary": card.get("desc"),
         "type": _TYPE_BY_XHS.get(str(card.get("type") or "normal"), "image"),
         "cover_url": images[0]["url"] if images else _cover_url(card),
-        "body_json": json.dumps({"desc": card.get("desc"), "type": card.get("type"),
-                                 "images": images, "tags": tags,
-                                 "ip_location": card.get("ip_location")},
-                                ensure_ascii=False),
+        "body_json": json.dumps(body, ensure_ascii=False),
         "stats_json": json.dumps({"liked": interact.get("liked_count"),
                                   "collected": interact.get("collected_count"),
                                   "comments": interact.get("comment_count")},
@@ -172,6 +175,72 @@ def parse_note_detail(card: dict, uid: str, fallback_token: Any = None) -> dict:
         "published_at": _ms_to_utc(card.get("time")),
         "permalink": _explore_url(str(card.get("note_id") or ""), fallback_token),
         "raw_json": json.dumps(card, ensure_ascii=False),
+    }
+
+
+#: 视频档优先序：EF5（H.264 那档，WebView2 兼容性最好）→ EF4（同帖另一编码，体积更大）
+_VIDEO_CODEC_PREF = ("EF5", "EF4", "EF6", "EF7")
+
+
+def _video_of(card: dict) -> dict | None:
+    """详情 `note_card.video` → 播放信息（含 **fallback 链**）；没有视频就返回 None。
+
+    ## 真机形状（2026-10-02 实测，devlog/281）
+
+    ```
+    video.media.stream = {"EF5": [{quality_type:'HD', format:'mp4', video_codec:'EF5',
+                                   width:720, height:1280, size:1439610,
+                                   duration:13281, fps:30,
+                                   master_url:'http://sns-video-v4.xhscdn.com/…_84.mp4?b=…',
+                                   backup_urls:['http://sns-bak-v1.xhscdn.com/…']}, …],
+                          "EF4": [ … ]}
+    video.media.video  = {duration: 14, drm_type: 0, hdr_type: 0, stream_types: [259, 84]}
+    ```
+
+    ⚠️ **两处 duration 单位不同**：`stream[].duration` 是**毫秒**（13281），
+    `media.video.duration` 是**秒**（14）—— 取秒优先，回退时记得除 1000。
+
+    为什么要 fallback 链：编码档（EF4/EF5/84/259）在 WebView2 里**不一定都能解**
+    （例如 HEVC 档），前端 `onError` 时按链换源，全失败再给"在浏览器打开"。
+    """
+    v = card.get("video") if isinstance(card.get("video"), dict) else {}
+    media = v.get("media") if isinstance(v.get("media"), dict) else {}
+    streams = media.get("stream") if isinstance(media.get("stream"), dict) else {}
+    if not streams:
+        return None
+
+    ordered: list[dict] = []
+    order = list(_VIDEO_CODEC_PREF) + [k for k in streams if k not in _VIDEO_CODEC_PREF]
+    for codec in order:
+        group = [s for s in (streams.get(codec) or []) if isinstance(s, dict)]
+        # 同一档里挑**分辨率最高**那条（实测 EF5 可能有 720p 与 1080p 两条）
+        group.sort(key=lambda s: -((s.get("width") or 0) * (s.get("height") or 0)))
+        ordered += group
+
+    urls: list[str] = []
+    for s in ordered:
+        for u in [s.get("master_url"), *(s.get("backup_urls") or [])]:
+            if u and str(u) not in urls:
+                urls.append(str(u))
+    if not urls:
+        return None
+
+    best = ordered[0]
+    vid_meta = media.get("video") if isinstance(media.get("video"), dict) else {}
+    duration_s = vid_meta.get("duration")
+    if duration_s is None and best.get("duration") is not None:
+        try:
+            duration_s = round(float(best["duration"]) / 1000, 1)     # 毫秒 → 秒
+        except (TypeError, ValueError):
+            duration_s = None
+    return {
+        "url": urls[0],
+        "fallbacks": urls[1:],
+        "width": best.get("width"),
+        "height": best.get("height"),
+        "duration_s": duration_s,
+        "codec": best.get("video_codec"),
+        "fps": best.get("fps"),
     }
 
 

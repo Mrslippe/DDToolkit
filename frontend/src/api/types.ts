@@ -602,6 +602,18 @@ export interface DeltaOp {
 export interface PostBodyJson {
   text?: string
   images?: { url: string; width?: number; height?: number }[]
+  /**
+   * 视频（小红书等平台，devlog/281）：`url` + **fallback 链**（编码档在 WebView2 里
+   * 不一定都能解，前端 `onError` 沿链换源）。⚠️ `duration_s` 是**秒**。
+   */
+  video?: {
+    url: string
+    fallbacks?: string[] | null
+    width?: number | null
+    height?: number | null
+    duration_s?: number | null
+    codec?: string | null
+  } | null
   bvid?: string
   description?: string
   duration?: string

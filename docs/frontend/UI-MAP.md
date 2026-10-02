@@ -974,6 +974,7 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 | 入场动画 | 轻 pop：`lc-dlg-pop`（translateY 8 + scale .98 + 淡入）；浮层 0.16s / hover 浮层 lc-pop 0.12s / 主弹窗 0.2s；**退场**：`lc-dlg-pop-out`（translateY 6 + scale .985 + 淡出，**0.16s**）+ 遮罩 `lc-dlg-fade-out` 同拍；reduced-motion 下入退场全部压到一帧。⚠️ **退场那两条声明是"Radix 会等动画"的判据**：`Presence` 靠 computed `animationName` 判断，缺了就关闭瞬间卸载（`LiveSessionDialog.test.tsx` 直接检查真 CSS 里有这两条） |
 | 关闭通道 | **点外关闭 + Esc 双通道**（所有浮层；radix 内建） |
 | 关闭钮 | **26×26 · r8 · `--c-text-sub` · hover 灰底 rgba(15,23,42,.05) + 主色文字**（radix 与 lc-dlg-close 同款；ImageViewer 黑玻璃圆钮为灯箱豁免）；**焦点环只在键盘态**——2026-09-09 用户反馈「点关闭会冒出粉色选中框」，radix 关闭钮由 `focus:` 改 `focus-visible:ring-*`（鼠标点击不再命中，Tab 仍有环） |
+| **帖子详情：视频块** | `.pv-video` / `.pv-dead` / `.pv-open`（`components/PostVideo.tsx`） | 正文之上、封面之前：`body_json.video` 存在时渲染 `<video controls preload="metadata" poster=封面>`（**不自动播放**，devlog/281）；平台编码档在 WebView2 里不一定都能解 ⇒ `onError` 沿 `video.fallbacks` **换源**，链走完显示 `.pv-dead` +「在浏览器打开」（`openExternalFromHref`）。⚠️ 需 CSP 的 `media-src` 放行 CDN，否则连元素都加载不了。判据 `PostVideo.test.tsx`（渲染/换源/兜底/无链接） |
 | **头部驻留** | 详情类二级窗口 = **面板 = 头部驻留区（flex:none · 下缘发丝分隔）＋ 内容 OverlayScroll（flex:1）**——「标题……X」（含场次多场 tabs）钉顶不随内容滚动；滚动条只在内容区悬浮，**不覆盖标题与关闭钮**（2026-09-07 user 定案；已接入：帖子详情 `pd-head`、场次详情 `lc-dlg-head-zone`；短表单弹窗内容不溢出，不强制） |
 | Tooltip | **黑玻璃胶囊**：`rgba(15,23,42,.78)` 底白字 r999（radix tooltip 与词云提示 `lc-dlg-cloud-tip` 同源） |
 | 选中态 | 两原则：① 分类色体系元件（类型胶囊/选项）用**本体色** + 600/内描边；② 其它选择件激活 = **`--c-primary-deep` 底白字 600**（month 旧浅粉底粉字、tab 旧 accent 底均已改）；hover 统一 `--sel-bg-hover` |

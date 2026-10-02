@@ -394,6 +394,65 @@ def test_enrich_keeps_the_item_when_detail_fails():
     assert item["title"] == "只有标题" and "body_json" not in item
 
 
+def test_note_detail_parses_video_streams_in_preference_order():
+    """⑭ 视频笔记：按 **EF5 最高分辨率 → EF4 → backup** 生成播放链（真机形状）。
+
+    回归背景（2026-10-02，devlog/281）：视频帖此前只显示封面 —— `video` 段早在
+    `raw_json` 里，只是没解析。⚠️ 两处 duration 单位不同：`stream[].duration` 是毫秒、
+    `media.video.duration` 是秒。
+    """
+    card = {
+        "note_id": "n-video", "type": "video", "title": "卖萌", "desc": "甜甜的",
+        "time": 1790929832000,
+        "image_list": [{"url_default": "http://x/cover.webp"}],
+        "video": {
+            "media": {
+                "stream": {
+                    "EF5": [
+                        {"quality_type": "HD", "format": "mp4", "video_codec": "EF5",
+                         "width": 720, "height": 1280, "duration": 13281, "fps": 30,
+                         "master_url": "http://v/720.mp4",
+                         "backup_urls": ["http://bak/720.mp4"]},
+                        {"quality_type": "HD", "format": "mp4", "video_codec": "EF5",
+                         "width": 1080, "height": 1920, "duration": 13281,
+                         "master_url": "http://v/1080.mp4"},
+                    ],
+                    "EF4": [{"quality_type": "HD", "format": "mp4", "video_codec": "EF4",
+                             "width": 720, "height": 1280, "duration": 13281,
+                             "master_url": "http://v/ef4.mp4"}],
+                },
+                "video": {"duration": 14, "drm_type": 0, "hdr_type": 0},
+            },
+        },
+    }
+    out = xiaohongshu.parse_note_detail(card, "u1", fallback_token="tok")
+    video = json.loads(out["body_json"])["video"]
+
+    assert video["url"] == "http://v/1080.mp4", "同档里挑分辨率最高的那条"
+    assert video["fallbacks"] == ["http://v/720.mp4", "http://bak/720.mp4", "http://v/ef4.mp4"], \
+        "其余按 EF5 720p → backup → EF4 的次序进 fallback 链"
+    assert video["duration_s"] == 14, "秒优先（毫秒那处要除 1000）"
+    assert (video["width"], video["height"], video["codec"]) == (1080, 1920, "EF5")
+
+
+def test_image_note_has_no_video_key():
+    """⑭′ 图片笔记**不许**多出 video 键（回归：别让没视频的帖子渲染出播放器）。"""
+    out = xiaohongshu.parse_note_detail(
+        {"note_id": "n1", "type": "normal", "image_list": [{"url_default": "http://x/1.webp"}]},
+        "u1", fallback_token="tok")
+    assert "video" not in json.loads(out["body_json"])
+
+
+def test_video_note_without_streams_falls_back_to_cover():
+    """⑭″ `video` 段在但流为空 ⇒ 当图片帖处理，不写 video 键（也别抛）。"""
+    out = xiaohongshu.parse_note_detail(
+        {"note_id": "n2", "type": "video", "image_list": [{"url_default": "http://x/c.webp"}],
+         "video": {"media": {"stream": {}}}},
+        "u1", fallback_token="tok")
+    body = json.loads(out["body_json"])
+    assert "video" not in body and body["images"][0]["url"] == "http://x/c.webp"
+
+
 def test_registered_fetcher_carries_a_real_signer():
     """⑩ **注册表里那一个**必须带真签名器，且离线就能签出 `x-s`。
 

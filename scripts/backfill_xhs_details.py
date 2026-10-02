@@ -45,6 +45,9 @@ async def main() -> int:
     ap = argparse.ArgumentParser(description="补全小红书笔记详情")
     ap.add_argument("--limit", type=int, default=0, help="最多补多少条（0 = 全部）")
     ap.add_argument("--dry-run", action="store_true", help="只统计，不发请求")
+    ap.add_argument("--reparse-only", action="store_true",
+                    help="**不联网**：只把已存的 raw_json 重新解析一遍"
+                         "（解析逻辑升级后用，例如视频段/新字段 —— devlog/281）")
     ap.add_argument("--gap", type=float, default=1.5, help="每条之间的间隔秒数")
     args = ap.parse_args()
 
@@ -60,13 +63,41 @@ async def main() -> int:
             .order_by(Post.published_at.desc().nullslast() if hasattr(Post.published_at, "nullslast")
                       else Post.id.desc())
             .all())
-    todo = [p for p in rows if needs_detail(p)]
+    todo = [p for p in rows if args.reparse_only or needs_detail(p)]
     if args.limit:
         todo = todo[:args.limit]
-    print(f"小红书帖子 {len(rows)} 条，待补 {len(todo)} 条"
+    print(f"小红书帖子 {len(rows)} 条，待处理 {len(todo)} 条"
+          f"{'（reparse-only：不联网）' if args.reparse_only else ''}"
           f"{'（dry-run，不发请求）' if args.dry_run else ''}")
     if args.dry_run or not todo:
         db.close()
+        return 0
+
+    if args.reparse_only:
+        from app.services.platforms.xiaohongshu import parse_note_detail
+        changed = video = 0
+        for i, post in enumerate(todo, 1):
+            try:
+                raw = json.loads(post.raw_json or "{}")
+            except (TypeError, ValueError):
+                raw = {}
+            detail = parse_note_detail(raw, post.platform_uid,
+                                       fallback_token=raw.get("xsec_token"))
+            for k in FIELDS:
+                if detail.get(k) is not None:
+                    setattr(post, k, detail[k])
+            post.body_text = extract_post_text(post.body_json)
+            body = json.loads(post.body_json or "{}")
+            changed += 1
+            if body.get("video"):
+                video += 1
+                print(f"  [{i}/{len(todo)}] {post.platform_post_id} 🎬 "
+                      f"{body['video']['width']}x{body['video']['height']} "
+                      f"{body['video']['duration_s']}s 档={body['video']['codec']} "
+                      f"fallback {len(body['video']['fallbacks'])} 条")
+        db.commit()
+        db.close()
+        print(f"重解析完成：{changed} 条，其中带视频 {video} 条（未发任何网络请求）")
         return 0
 
     ok = fail = 0

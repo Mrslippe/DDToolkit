@@ -33,6 +33,7 @@ import {
 } from '../utils/format'
 import { sanitizePlatformHtml } from '../utils/sanitizePlatformHtml'
 import { openExternalFromHref } from '../utils/externalLinkGuard'
+import PostVideo from './PostVideo'
 import DeltaRenderer from './DeltaRenderer'
 import ImageViewer, { type ViewerImage } from './ImageViewer'
 import OverlayScroll from './OverlayScroll'
@@ -273,6 +274,13 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
               desc2={body.reservation.desc2}
               reserveTotal={body.reservation.reserve_total}
             />
+          )}
+
+          {/* 视频（devlog/281）：有就播（点才播）；播不了沿 fallback 链换源，
+              全失败给「在浏览器打开」。⚠️ 视频帖也有封面/图，下面那块照旧渲染。 */}
+          {body.video?.url && (
+            <PostVideo video={body.video} poster={shown.cover_url}
+                       permalink={shown.permalink} />
           )}
 
           {/* 封面（点击可开查看器；有多图时封面入列首位，可直接下一张。
