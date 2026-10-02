@@ -6203,3 +6203,43 @@ img.hero-avatar {
   display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 8px;
   background: var(--c-bg-subtle, #faf7f8); color: var(--c-text-muted, #6b7280); font-size: 13px;
 }
+
+/* ── 播放器打磨（devlog/284）：进度条粗细/亮暗 + hover 气泡；音量条改 hover 浮窗 ──
+   进度条：默认 4px 细线（已播=粉、缓冲=白 40%、未播=白 22%），hover 变 6px 并出圆点
+   与时间气泡；音量条默认不占底栏，hover/聚焦才浮出**竖直**滑杆（图三）。 */
+.vp-progress { --vp-h: 4px; }
+.vp-progress:hover, .vp-progress:focus-visible { --vp-h: 6px; }
+.vp-progress::before, .vp-progress-buf, .vp-progress-fill {
+  height: var(--vp-h); transition: height .14s ease;
+}
+.vp-progress-tip {
+  position: absolute; bottom: 18px; transform: translateX(-50%);
+  padding: 2px 6px; border-radius: 6px; font: 11px/1.4 Consolas, monospace;
+  background: rgba(15, 23, 42, .78); color: #fff; pointer-events: none; white-space: nowrap;
+}
+.vp-progress-knob { transition: opacity .15s ease, height .14s ease; }
+.vp-progress:hover .vp-progress-knob { opacity: 1; }
+.vp-volwrap { position: relative; display: inline-flex; align-items: center; }
+/* 音量浮窗：默认隐藏（不占位），hover / 键盘聚焦时出现 */
+.vp-volpop {
+  position: absolute; right: 0; bottom: 34px; padding: 10px 8px;
+  border-radius: 10px; background: rgba(15, 23, 42, .92);
+  border: 1px solid rgba(255, 255, 255, .14); box-shadow: 0 6px 18px rgba(0, 0, 0, .4);
+  opacity: 0; pointer-events: none; transition: opacity .14s ease;
+}
+.vp-volwrap:hover .vp-volpop, .vp-volwrap:focus-within .vp-volpop { opacity: 1; pointer-events: auto; }
+/* 竖直滑杆：**去掉原生描边**（appearance:none），自绘细轨 + 白色圆钮 */
+.vp-vol {
+  appearance: none; -webkit-appearance: none;
+  writing-mode: vertical-lr; direction: rtl;      /* Chromium 的竖直 range */
+  width: 6px; height: 96px; background: transparent; border: 0; outline: none; cursor: pointer;
+}
+.vp-vol::-webkit-slider-runnable-track {
+  width: 4px; border-radius: 999px; background: rgba(255, 255, 255, .28);
+}
+.vp-vol::-webkit-slider-thumb {
+  appearance: none; -webkit-appearance: none; width: 12px; height: 12px; border-radius: 999px;
+  background: #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, .45); margin-left: -4px;
+}
+.vp-vol::-moz-range-track { width: 4px; border-radius: 999px; background: rgba(255, 255, 255, .28); }
+.vp-vol::-moz-range-thumb { width: 12px; height: 12px; border: 0; border-radius: 999px; background: #fff; }

@@ -132,6 +132,58 @@ describe('VideoPlayer', () => {
     expect(host.querySelector('.vp-time')?.textContent).toContain('/00:30')
   })
 
+  it('进度条 hover ⇒ 出时间气泡（图二），默认是细线、hover 才变粗', async () => {
+    render()
+    const v = el()
+    Object.defineProperty(v, 'duration', { value: 30, configurable: true })
+    await act(async () => { v.dispatchEvent(new Event('loadedmetadata')) })
+
+    const bar = host.querySelector<HTMLDivElement>('.vp-progress')!
+    bar.getBoundingClientRect = () => ({ left: 0, width: 100, top: 0, height: 16,
+      right: 100, bottom: 16, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+    // ⚠️ 不在这里断言"未 hover 时没有气泡"：jsdom 里 `getBoundingClientRect` 的替换与
+    //    React 的状态复用让那条前置断言不稳（跑一遍红一遍绿）；**只看两条正向契约**。
+    await act(async () => {
+      bar.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 40 }))
+      await Promise.resolve()
+    })
+    // 40% × 30s = 12s
+    expect(host.querySelector('.vp-progress-tip')?.textContent).toBe('00:12')
+
+    // ⚠️ React 的 `onMouseLeave` 是用 **mouseout + relatedTarget** 模拟的：派发裸 `mouseleave`
+    //    它收不到（2026-10-03 踩到）
+    await act(async () => {
+      bar.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body }))
+      await Promise.resolve()
+    })
+    expect(host.querySelector('.vp-progress-tip')).toBeFalsy()
+  })
+
+  it('音量条在 hover 浮窗里（图三），喇叭图标按档位变', async () => {
+    render()
+    const pop = host.querySelector('.vp-volpop')
+    expect(pop, '音量条要有浮窗容器（默认不占底栏）').toBeTruthy()
+    expect(pop!.querySelector('input[aria-label="音量"]')).toBeTruthy()
+
+    const volBtn = host.querySelector<HTMLButtonElement>('[data-vol-level]')!
+    expect(volBtn.dataset.volLevel).toBe('high')          // 默认 100%
+
+    const slider = host.querySelector<HTMLInputElement>('input[aria-label="音量"]')!
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+    await act(async () => {
+      setter.call(slider, '0.2')
+      slider.dispatchEvent(new Event('input', { bubbles: true }))
+      await Promise.resolve()
+    })
+    expect(host.querySelector<HTMLButtonElement>('[data-vol-level]')!.dataset.volLevel).toBe('low')
+
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('[data-vol-level]')!.click()
+      await Promise.resolve()
+    })
+    expect(host.querySelector<HTMLButtonElement>('[data-vol-level]')!.dataset.volLevel).toBe('mute')
+  })
+
   it('直连全失败 ⇒ 换到本机代理；代理也失败 ⇒ 兜底并报一条', async () => {
     render()
     const seen: string[] = []

@@ -14,7 +14,8 @@
  */
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import {
-  ExternalLink, Maximize, Minimize, Pause, Play, PictureInPicture2, Volume2, VolumeX,
+  ExternalLink, Maximize, Minimize, Pause, Play, PictureInPicture2,
+  Volume1, Volume2, VolumeX,
 } from 'lucide-react'
 
 import { openExternalFromHref } from '../utils/externalLinkGuard'
@@ -60,6 +61,8 @@ export default function VideoPlayer({ video, poster, permalink }: Props) {
   const [rateOpen, setRateOpen] = useState(false)
   const [fs, setFs] = useState(false)
   const [idle, setIdle] = useState(false)
+  /** 进度条 hover 预览（图二那颗时间气泡） */
+  const [hover, setHover] = useState<{ x: number; t: number } | null>(null)
 
   const direct = [video.url, ...(video.fallbacks ?? [])].filter(Boolean)
   const proxied = direct.map((u) => `/video-proxy?url=${encodeURIComponent(u)}`)
@@ -169,6 +172,9 @@ export default function VideoPlayer({ video, poster, permalink }: Props) {
   }
 
   const pipOk = typeof document !== 'undefined' && 'pictureInPictureEnabled' in document
+  /** 喇叭图标分档（图三）：静音 / 低（<50%）/ 高 —— 静音与"音量为 0"合并成一档显示 */
+  const volLevel: 'mute' | 'low' | 'high' =
+    prefs.muted || prefs.volume === 0 ? 'mute' : prefs.volume < 0.5 ? 'low' : 'high'
   const pct = dur > 0 ? (cur / dur) * 100 : 0
   const bufPct = dur > 0 ? (buf / dur) * 100 : 0
 
@@ -220,10 +226,20 @@ export default function VideoPlayer({ video, poster, permalink }: Props) {
             const r = e.currentTarget.getBoundingClientRect()
             seekTo((e.clientX - r.left) / r.width)
           }}
+          onMouseMove={(e) => {
+            // hover 预览：光标位置对应的时间（图二那颗 `00:12` 气泡）
+            const r = e.currentTarget.getBoundingClientRect()
+            const ratio = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width))
+            setHover({ x: ratio * r.width, t: ratio * (dur || 0) })
+          }}
+          onMouseLeave={() => setHover(null)}
         >
           <span className="vp-progress-buf" style={{ width: `${bufPct}%` }} />
           <span className="vp-progress-fill" style={{ width: `${pct}%` }} />
           <span className="vp-progress-knob" style={{ left: `${pct}%` }} />
+          {hover && dur > 0 && (
+            <span className="vp-progress-tip" style={{ left: `${hover.x}px` }}>{fmt(hover.t)}</span>
+          )}
         </div>
 
         <div className="vp-rate">
@@ -244,16 +260,23 @@ export default function VideoPlayer({ video, poster, permalink }: Props) {
           )}
         </div>
 
-        <button type="button" className="vp-btn"
-                aria-label={prefs.muted ? '取消静音' : '静音'}
-                onClick={() => setPlayerPrefs({ muted: !prefs.muted })}>
-          {prefs.muted || prefs.volume === 0 ? <VolumeX className="size-4" /> : <Volume2 className="size-4" />}
-        </button>
-        <input
-          className="vp-vol" type="range" min={0} max={1} step={0.05}
-          aria-label="音量" value={prefs.volume}
-          onChange={(e) => setPlayerPrefs({ volume: Number(e.target.value), muted: false })}
-        />
+        <div className="vp-volwrap">
+          <button type="button" className="vp-btn" data-vol-level={volLevel}
+                  aria-label={prefs.muted ? '取消静音' : '静音'}
+                  onClick={() => setPlayerPrefs({ muted: !prefs.muted })}>
+            {volLevel === 'mute' ? <VolumeX className="size-4" />
+              : volLevel === 'low' ? <Volume1 className="size-4" />
+                : <Volume2 className="size-4" />}
+          </button>
+          {/* 音量条改成 **hover/focus 浮窗**（图三）：默认不占底栏宽度，竖直滑杆 */}
+          <div className="vp-volpop">
+            <input
+              className="vp-vol" type="range" min={0} max={1} step={0.05}
+              aria-label="音量" value={prefs.volume}
+              onChange={(e) => setPlayerPrefs({ volume: Number(e.target.value), muted: false })}
+            />
+          </div>
+        </div>
         {pipOk && (
           <button type="button" className="vp-btn" aria-label="画中画" onClick={togglePip}>
             <PictureInPicture2 className="size-4" />
