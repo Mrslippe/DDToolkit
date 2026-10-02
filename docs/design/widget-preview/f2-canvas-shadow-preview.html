@@ -1,0 +1,847 @@
+<!doctype html>
+<!--
+  ⚠️⚠️ **小窗已整体退役（2026-10-01），整条线 2026-10-03 彻底放弃**：本文是**设计记录**
+      （F2 那版画布 / 阴影选型稿），不是现状；实现在分支 `f2-widget-archive`，结论见 `devlog/274`。
+
+  F2 画布与阴影 · **设计预览页**（2026-09-30，第三轮返修前的选型稿）
+
+  ⚠️ 这是一页**设计稿**，不是产品代码：它不改 `status-island.css`、不改组件。
+     目的只有一个 —— 让"阴影档位 / 画布策略 / 到边即停 / 三拍动画"这四件事
+     **看着挑**，而不是看着数字猜。
+
+  ⚠️ 但它**按真机的约束**来画（用户 2026-09-30：「记得要考虑到之后会实际放在 tauri 中」）：
+     1. **窗口是一块透明画布**：真机上只有卡片与阴影可见，画布边界**看不见** ——
+        本页用**浅灰底 + 虚线边**把它标出来（这正是"按比例把画布标识出来"的用途）。
+     2. **窗口会裁切**超出它的绘制 ⇒ 开关「模拟窗口裁切」＝ 给卡片套一个
+        `overflow:hidden` 的画布框，效果与真窗口一致（阴影/内容一起被切）。
+     3. **拖动移动的是窗口**（不是 DOM 元素）⇒ 本页拖动的是整块画布；
+        到屏幕边缘会**停住**（真实规则见下面 §跨屏）。
+     4. **面板高度由内容决定**（通知条数）⇒ 面板高是滑块 + 「内容变化」按钮，
+        不是常量；画布策略决定它变高时窗口跟不跟着长。
+
+  ⚠️ 数值全部照抄产品侧的真源（`utils/widgetWindow.ts`，2026-10-01 随小窗退役删除）：
+     卡片 400 宽 / 胶囊 200–400 × 40 / 圆角 20 / 留白 = `ceil(max(y + blur/2))`。
+     阴影三层也是照抄，档位只在"扩散量"上分档。
+
+  ⚠️ 屏幕口径：本页把"主屏"设成 **1200×700**、副屏 **900×700**（并排），
+     这样 1:1 像素就能看全（真机是 1920×1080，**相对关系完全一样**，
+     只是绝对留白在更宽的屏上更不起眼）。右上角有缩放读数。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>小窗画布与阴影 · 设计预览（F2 第三轮）</title>
+<style>
+  /* ── 页面本身 ──────────────────────────────────────────────────────── */
+  :root {
+    --bg: #14161c;
+    --panel: #1c1f27;
+    --line: #2b3040;
+    --fg: #e8ecf4;
+    --fg-dim: #98a2b8;
+    --accent: #ffa2b4;
+    /* 画布标注（**只在设计稿里存在**）：浅灰底 + 虚线边 */
+    --canvas-fill: rgba(150, 168, 196, .20);
+    --canvas-line: rgba(190, 205, 230, .85);
+    /* 卡片区（= 展开后面板占的那块）标注 */
+    --cardzone-line: rgba(255, 255, 255, .38);
+    /* 屏幕（桌面）标注 */
+    --screen-line: rgba(120, 200, 255, .45);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 13px/1.6 "Microsoft YaHei", system-ui, sans-serif;
+  }
+  h1 { font-size: 17px; margin: 0 0 4px; }
+  h2 { font-size: 14px; margin: 18px 0 6px; color: var(--accent); }
+  a { color: var(--accent); }
+  code, .mono { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+  .wrap { padding: 14px 18px 60px; max-width: 1560px; }
+
+  /* ── 顶部：说明 + 控制条 ───────────────────────────────────────────── */
+  .lead { color: var(--fg-dim); margin: 0 0 10px; }
+  .lead b { color: var(--fg); }
+  .bars { display: flex; flex-wrap: wrap; gap: 10px 22px; align-items: flex-start;
+          background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+          padding: 10px 14px; margin-bottom: 12px; }
+  fieldset { border: 0; margin: 0; padding: 0; }
+  legend { color: var(--fg-dim); font-size: 12px; padding: 0 0 2px; }
+  label { display: inline-flex; align-items: center; gap: 4px; margin-right: 10px;
+          cursor: pointer; white-space: nowrap; }
+  input[type=range] { width: 132px; vertical-align: middle; }
+  button {
+    background: #262b36; color: var(--fg); border: 1px solid var(--line);
+    border-radius: 7px; padding: 5px 10px; cursor: pointer; font: inherit; font-size: 12px;
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: #2a1220; border-color: var(--accent); font-weight: 600; }
+  .hint { color: var(--fg-dim); font-size: 12px; }
+
+  /* ── 舞台：两块"屏幕"并排（桌面） ─────────────────────────────────── */
+  .stage-outer { position: relative; }
+  .stage { position: relative; transform-origin: top left; }
+  .screen {
+    position: absolute; overflow: hidden;
+    /* 桌面壁纸：三档可切（看阴影在亮/暗底上的表现） */
+    background:
+      radial-gradient(120% 120% at 20% 0%, #6f7fa8 0%, #3a4258 45%, #1b1f2b 100%);
+    box-shadow: 0 10px 40px rgba(0, 0, 0, .55);
+  }
+  .screen[data-wall="white"] { background: #ffffff; }
+  .screen[data-wall="black"] { background: #000000; }
+  .screen[data-wall="photo"] {
+    background:
+      radial-gradient(60% 80% at 15% 90%, #d98a5a 0%, rgba(0,0,0,0) 60%),
+      radial-gradient(70% 70% at 85% 15%, #6ad0c0 0%, rgba(0,0,0,0) 55%),
+      linear-gradient(135deg, #f3e6c8 0%, #7f9ec9 45%, #2b3a55 100%);
+  }
+  .screen-label {
+    position: absolute; left: 0; top: 0; padding: 2px 6px; font-size: 11px;
+    color: #0b1220; background: rgba(255, 255, 255, .82); border-bottom-right-radius: 6px;
+    pointer-events: none; z-index: 5;
+  }
+  .screen.active { outline: 2px solid var(--screen-line); outline-offset: -2px; }
+
+  /* ── 画布（= Tauri 窗口）：浅灰标注 ────────────────────────────────── */
+  .canvas {
+    position: absolute; cursor: grab; touch-action: none;
+    background: var(--canvas-fill);
+    outline: 2px dashed var(--canvas-line); outline-offset: 0;
+  }
+  /* 卡片区（= 展开后面板会占的那块）：内框 —— 一眼看出留白比例与"展开是否在画布内" */
+  .cardzone {
+    position: absolute; pointer-events: none;
+    border: 1px dashed var(--cardzone-line); border-radius: 20px;
+  }
+  .pad-tick {
+    position: absolute; pointer-events: none;
+    font: 10px/1 ui-monospace, monospace; color: #0b1220;
+    background: rgba(190, 205, 230, .9); padding: 1px 3px; border-radius: 3px;
+  }
+  .canvas.dragging { cursor: grabbing; }
+  .canvas-label {
+    position: absolute; left: 0; bottom: 100%; margin-bottom: 2px;
+    font: 11px/1.4 ui-monospace, Consolas, monospace;
+    color: #0b1220; background: rgba(160, 172, 192, .92);
+    padding: 1px 5px; border-radius: 4px; white-space: nowrap; pointer-events: none;
+  }
+  /* 「模拟窗口裁切」：真窗口会裁掉超出画布的绘制 */
+  .clip-mode .canvas { overflow: hidden; background: transparent; }
+  .clip-mode .canvas .card { /* 裁切模式下画布内不铺底色，只让卡片与阴影出现 */ }
+  .noclip-note { display: none; }
+  .clip-mode .noclip-note { display: inline; }
+
+  /* ── 卡片（= 胶囊 / 面板）+ 真实阴影 ───────────────────────────────── */
+  .card {
+    position: absolute; border-radius: 20px;
+    background: rgba(24, 25, 32, .92);
+    color: #fff; font-size: 13px; font-weight: 500;
+    display: flex; align-items: center; gap: 6px;
+    padding: 0 14px; white-space: nowrap; overflow: hidden;
+    inset: 0 0 auto auto;               /* 位置由 JS 用 left/top/width/height 给 */
+    will-change: left, top, width, height;
+  }
+  .card .lead, .card .tail { flex: 1 1 0; min-width: 0; display: flex; align-items: center; }
+  .card .tail { justify-content: flex-end; }
+  .card .mid { display: flex; align-items: center; gap: 6px; flex: 0 1 auto; min-width: 0; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: #52c41a; flex: none; }
+  .glyph { opacity: .72; }
+  .value { color: rgba(255, 255, 255, .52); font-size: 11.5px; }
+  .count {
+    min-width: 16px; height: 16px; line-height: 16px; padding: 0 5px; border-radius: 999px;
+    background: rgba(255, 255, 255, .16); font-size: 10px; text-align: center; flex: none;
+  }
+  .chev { width: 12px; height: 12px; opacity: .85; }
+  /* 面板态：铺满卡片、纵向排 */
+  .card.open {
+    flex-direction: column; align-items: stretch; gap: 0; padding: 0;
+    border-radius: 20px;
+  }
+  .card.open .lead, .card.open .tail, .card.open .mid { display: none; }
+  .p-head {
+    display: flex; justify-content: center; padding: 11px 14px 9px;
+    border-bottom: 1px solid rgba(255, 255, 255, .08); font-weight: 600;
+  }
+  .p-body {
+    flex: 1 1 auto; min-height: 0; overflow: hidden; padding: 0 6px 6px;
+  }
+  .p-item { display: flex; gap: 9px; padding: 8px; align-items: flex-start; }
+  .p-item + .p-item { border-top: 1px solid rgba(255, 255, 255, .08); }
+  .p-icon {
+    width: 15px; height: 15px; border-radius: 50%; background: rgba(255, 255, 255, .1);
+    display: flex; align-items: center; justify-content: center; font-size: 9px; flex: none;
+  }
+  .p-text { display: block; }
+  .p-meta { display: block; font-size: 11px; color: rgba(255, 255, 255, .52); }
+  .p-foot {
+    padding: 6px 12px 8px; border-top: 1px solid rgba(255, 255, 255, .08);
+    font-size: 10.5px; color: rgba(255, 255, 255, .52);
+  }
+
+  /* ── 允许范围（拖动边界）标注 ──────────────────────────────────────── */
+  .range {
+    position: absolute; border: 1px dashed rgba(120, 255, 180, .75);
+    background: rgba(120, 255, 180, .07); pointer-events: none; display: none;
+  }
+  .show-range .range { display: block; }
+  .range-label {
+    position: absolute; right: 0; top: 100%; margin-top: 3px;
+    font: 11px/1.4 ui-monospace, monospace; color: #06281a;
+    background: rgba(120, 255, 180, .85); padding: 1px 5px; border-radius: 4px; white-space: nowrap;
+  }
+
+  /* ── 读数与结论 ────────────────────────────────────────────────────── */
+  .grid2 { display: grid; grid-template-columns: minmax(420px, 1fr) minmax(420px, 1fr); gap: 14px; }
+  .cardbox { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  th, td { text-align: left; padding: 3px 8px 3px 0; vertical-align: top; }
+  th { color: var(--fg-dim); font-weight: 500; }
+  .ok { color: #7ee08a; }
+  .bad { color: #ff8a8a; }
+  .warn { color: #ffd479; }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; vertical-align: -1px; margin-right: 4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>小窗画布与阴影 · 设计预览</h1>
+  <p class="lead">
+    左边是"设计稿"（画布用<b>浅灰底 + 虚线</b>标出来，真机上那圈是<b>透明</b>的），
+    右边是实时读数与结论。所有尺寸都是<b>真实像素比例</b>：卡片恒 400 宽、胶囊 200–400 × 40、
+    留白 <code>ceil(max(y + blur/2))</code>。<b>拖动画布</b>可以试"到边即停"。
+  </p>
+
+  <div class="bars">
+    <fieldset>
+      <legend>阴影档位（决定留白 → 决定画布大小）</legend>
+      <label><input type="radio" name="tier" value="current"> 现状（样例页那套，留白 80）</label>
+      <label><input type="radio" name="tier" value="alpha" checked> α 克制一档（留白 49）</label>
+      <label><input type="radio" name="tier" value="beta"> β 更贴（留白 24）</label>
+    </fieldset>
+
+    <fieldset>
+      <legend>画布策略（面板变高时窗口跟不跟着长）</legend>
+      <label><input type="radio" name="canvasMode" value="follow" checked> 随面板</label>
+      <label><input type="radio" name="canvasMode" value="typical"> 常驻典型档</label>
+      <label><input type="radio" name="canvasMode" value="fixed"> 完全固定</label>
+      <label class="hint">固定高度 <input type="range" id="fixedH" min="200" max="620" step="10" value="420">
+        <span class="mono" id="fixedHOut">420</span></label>
+    </fieldset>
+
+    <fieldset>
+      <legend>内容</legend>
+      <label>面板高 <input type="range" id="panelH" min="120" max="560" step="10" value="240">
+        <span class="mono" id="panelHOut">240</span></label>
+      <label>胶囊宽 <input type="range" id="capW" min="200" max="400" step="4" value="212">
+        <span class="mono" id="capWOut">212</span></label>
+      <button id="grow">内容变化（+2 条通知）</button>
+    </fieldset>
+
+    <fieldset>
+      <legend>动画节奏</legend>
+      <label><input type="radio" name="timing" value="std" checked> 标准 90/220/140</label>
+      <label><input type="radio" name="timing" value="tight"> 紧凑 60/180/100</label>
+      <label><input type="checkbox" id="exitFade" checked> 收起三拍（面板内容先渐隐）</label>
+      <label><input type="checkbox" id="exitNow"> 对比：现状收起（面板瞬隐）</label>
+    </fieldset>
+
+    <fieldset>
+      <legend>显示</legend>
+      <label><input type="checkbox" id="showCanvas" checked> 画布标注</label>
+      <label><input type="checkbox" id="clipMode"> 模拟窗口裁切</label>
+      <label><input type="checkbox" id="showRange"> 显示允许范围</label>
+      <label><input type="checkbox" id="showShadowBounds"> 标出阴影最远伸出</label>
+      <label>壁纸
+        <select id="wall">
+          <option value="photo">渐变</option>
+          <option value="white">纯白</option>
+          <option value="black">纯黑</option>
+        </select>
+      </label>
+      <button class="primary" id="play">播展开</button>
+      <button id="play2">播收起</button>
+      <button id="toggle">直接切换形态（无动画，便于比阴影）</button>
+      <button id="reset">回到默认落点</button>
+    </fieldset>
+  </div>
+
+  <div class="stage-outer" id="stageOuter">
+    <div class="stage" id="stage">
+      <div class="screen" id="screenA"><div class="screen-label">主屏 1200 × 700（逻辑 px）</div>
+        <div class="range" id="rangeA"></div>
+      </div>
+      <div class="screen" id="screenB"><div class="screen-label">副屏 900 × 700</div>
+        <div class="range" id="rangeB"></div>
+      </div>
+      <div class="canvas" id="canvas">
+        <div class="canvas-label" id="canvasLabel">画布（Tauri 窗口）</div>
+        <div class="cardzone" id="cardzone"></div>
+        <div class="pad-tick" id="tickTop"></div>
+        <div class="pad-tick" id="tickBottom"></div>
+        <div class="card" id="card">
+          <span class="lead"><i class="dot"></i></span>
+          <span class="mid">
+            <span class="glyph">✓</span>
+            <span class="text" id="capText">全量抓取完成</span>
+            <span class="value">47s</span>
+            <span class="count">2</span>
+          </span>
+          <span class="tail">
+            <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          </span>
+          <div class="p-head">通知（<span id="pCount">3</span>）</div>
+          <div class="p-body" id="pBody"></div>
+          <div class="p-foot">优先级：注意 &gt; 进行中 &gt; 已完成 &gt; 提示</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid2" style="margin-top:16px">
+    <div class="cardbox">
+      <h2 style="margin-top:0">实时读数</h2>
+      <table id="readout"></table>
+    </div>
+    <div class="cardbox">
+      <h2 style="margin-top:0">结论（每帧重算）</h2>
+      <table id="verdict"></table>
+      <h2>这一页在模拟什么</h2>
+      <table>
+        <tr><th>真机上</th><th>本页</th></tr>
+        <tr><td>窗口是一块**透明**画布，边界看不见</td><td>浅灰底 + 虚线标出（<span class="mono">显示 → 画布标注</span>）</td></tr>
+        <tr><td>窗口**裁切**超出它的绘制（阴影/内容一起切）</td><td><span class="mono">显示 → 模拟窗口裁切</span></td></tr>
+        <tr><td>拖动移动的是**窗口**（OS 级）</td><td>拖动画布；屏幕边缘会**停住**</td></tr>
+        <tr><td>面板高由**内容**决定（通知条数）</td><td>滑块 + 「内容变化」按钮</td></tr>
+        <tr><td>跨屏：按**指针所在显示器**算允许范围（本轮定的 b）</td><td>两块屏并排，指针在哪块就以哪块为界</td></tr>
+      </table>
+      <p class="hint" style="margin:8px 0 0">
+        ⚠️ 「模拟窗口裁切」关掉时，阴影可以画到画布外（那是**不可实现**的视觉，
+        只用来对比"如果窗口够大，阴影会长成什么样"）。
+      </p>
+    </div>
+  </div>
+
+  <h2>三档阴影的实际数值（照抄产品常量）</h2>
+  <div class="cardbox"><table id="tierTable"></table></div>
+
+</div>
+
+<script>
+/* ════════════════════════════════════════════════════════════════════════
+   真源：数值与规则都照抄 `utils/widgetWindow.ts`（2026-10-01 随小窗退役删除）
+   ════════════════════════════════════════════════════════════════════════ */
+const WIDGET_PANEL_W = 400;      // 卡片宽
+const WIDGET_CAP_H = 40;         // 胶囊高
+const WIDGET_EDGE = 8;           // 卡片离屏幕边的呼吸位（产品里的 WIDGET_EDGE）
+const RADIUS = 20;
+
+/** 三档阴影：每层 `{y, blur, alpha}`；留白 = ceil(max(y + blur/2)) —— 与产品同一条规则 */
+const TIERS = {
+  current: {
+    name: '现状（样例页那套）',
+    cap:   [{y:2,blur:5,alpha:.38}, {y:9,blur:22,alpha:.40}, {y:22,blur:54,alpha:.28}],
+    open:  [{y:4,blur:9,alpha:.40}, {y:16,blur:40,alpha:.46}, {y:36,blur:88,alpha:.32}],
+  },
+  alpha: {
+    name: 'α 克制一档',
+    cap:   [{y:2,blur:5,alpha:.38}, {y:9,blur:22,alpha:.40}, {y:22,blur:54,alpha:.28}],
+    open:  [{y:3,blur:8,alpha:.34}, {y:10,blur:26,alpha:.38}, {y:22,blur:54,alpha:.26}],
+  },
+  beta: {
+    name: 'β 更贴',
+    cap:   [{y:1,blur:4,alpha:.28}, {y:4,blur:10,alpha:.30}, {y:8,blur:18,alpha:.20}],
+    open:  [{y:2,blur:6,alpha:.30}, {y:6,blur:14,alpha:.34}, {y:11,blur:26,alpha:.24}],
+  },
+};
+const padOf = (tier) => Math.ceil(Math.max(...[...tier.cap, ...tier.open].map(l => l.y + l.blur / 2)));
+const shadowCss = (layers) => layers.map(l => `0 ${l.y}px ${l.blur}px rgba(0,0,0,${l.alpha})`).join(', ');
+/** 卡片阴影还带"顶边高光 + 1px 描边"（产品里是 inset 与 0 0 0 1px） */
+const cardShadow = (layers) =>
+  `inset 0 1px 0 rgba(255,255,255,.10), 0 0 0 1px rgba(255,255,255,.10), ${shadowCss(layers)}`;
+
+const TIMINGS = { std: { fade: 90, grow: 220, content: 140 }, tight: { fade: 60, grow: 180, content: 100 } };
+
+/* 屏幕（逻辑 px）：两块并排 —— 跨屏规则 b（按**指针所在**显示器算范围） */
+const SCREENS = [
+  { id: 'A', x: 0,    y: 0, w: 1200, h: 700, label: '主屏' },
+  { id: 'B', x: 1224, y: 0, w: 900,  h: 700, label: '副屏' },
+];
+const STAGE_W = 1224 + 900;
+const STAGE_H = 700;
+
+/* ════════════════════════════════════════════════════════════════════════
+   状态
+   ════════════════════════════════════════════════════════════════════════ */
+const state = {
+  tier: 'alpha',
+  canvasMode: 'follow',      // follow | typical | fixed
+  fixedH: 420,
+  panelH: 240,               // 当前面板内容高（内容变化时改它）
+  rememberedPanelH: 240,     // 舞台按它预留（下一次"开"用）
+  capW: 212,
+  capAnchor: null,           // 胶囊的屏幕锚点（左上角）—— 本页把它当**位置真源**
+  open: false,
+  dragging: false,
+  grabDX: 0, grabDY: 0,
+  timing: 'std',
+  exitFade: true,
+  wall: 'photo',
+  showCanvas: true,
+  clipMode: false,
+  showRange: false,
+  shadowBounds: false,
+};
+
+/* ── 几何：与产品同规则（dir / align / 近边恒等），但**不做事后夹取** ────────
+   目标模型：拖动时就把窗口限制在屏幕内 ⇒ 永远不需要"把已经摆好的胶囊推走"。 */
+function canvasSize(panelH) {
+  const pad = padOf(TIERS[state.tier]);
+  if (state.canvasMode === 'fixed') return { w: WIDGET_PANEL_W + pad * 2, h: state.fixedH };
+  const cardH = state.canvasMode === 'typical'
+    ? Math.max(WIDGET_CAP_H, Math.min(panelH, 360))   // 常驻典型档：预留到 360，超过就不长
+    : Math.max(WIDGET_CAP_H, panelH);
+  return { w: WIDGET_PANEL_W + pad * 2, h: cardH + pad * 2 };
+}
+
+/** 由胶囊锚点 + 面板高算出**卡片矩形**（近边恒等）与 canvas 偏移 */
+function layout(screen) {
+  const pad = padOf(TIERS[state.tier]);
+  const capW = state.capW, capH = WIDGET_CAP_H;
+  const cap = { x: state.capAnchor.x, y: state.capAnchor.y, w: capW, h: capH };
+  const panelH = Math.max(1, state.panelH);
+  const { w: canvasW, h: canvasH } = canvasSize(state.open ? panelH : state.rememberedPanelH);
+  const cardW = canvasW - pad * 2;
+  const cardH = canvasH - pad * 2;
+
+  // 垂直：默认向下；贴下沿或下方装不下、上方装得下 ⇒ 向上（与产品一致）
+  const roomBelow = screen.h - WIDGET_EDGE - cap.y;
+  const roomAbove = cap.y + capH - WIDGET_EDGE;
+  const stuckBottom = cap.y + capH >= screen.h - WIDGET_EDGE - 1.5;
+  let dir;
+  if (stuckBottom && roomAbove >= cardH) dir = 'up';
+  else if (roomBelow >= cardH) dir = 'down';
+  else if (roomAbove >= cardH) dir = 'up';
+  else dir = roomBelow >= roomAbove ? 'down' : 'up';
+
+  // 水平：默认居中；居中出屏才贴边（"只在边缘才反向"）
+  const capCenter = cap.x + capW / 2;
+  const centered = Math.round(capCenter - cardW / 2);
+  const fitsCentered = centered >= WIDGET_EDGE && centered + cardW <= screen.w - WIDGET_EDGE;
+  const growRight = Math.round(cap.x);
+  const growLeft = Math.round(cap.x + capW - cardW);
+  const fitsRight = growRight >= WIDGET_EDGE && growRight + cardW <= screen.w - WIDGET_EDGE;
+  const fitsLeft = growLeft >= WIDGET_EDGE && growLeft + cardW <= screen.w - WIDGET_EDGE;
+  const cardX = fitsCentered ? centered : fitsRight ? growRight : fitsLeft ? growLeft : centered;
+  const align = fitsCentered ? 'center' : fitsRight ? 'right' : fitsLeft ? 'left'
+    : cardX <= WIDGET_EDGE ? 'right' : 'left';
+
+  // 纵向近边恒等
+  const cardY = dir === 'down' ? cap.y : cap.y + capH - cardH;
+  // 画布 = 卡片 ± 留白（**本页不夹取**：可行性由拖动边界保证）
+  const canvas = { x: cardX - pad, y: cardY - pad, w: canvasW, h: canvasH };
+  return { pad, cap, card: { x: cardX, y: cardY, w: cardW, h: cardH }, canvas, dir, align };
+}
+
+/** 允许范围：画布**完整落在屏幕内** ⇒ 胶囊锚点的可行区间（按轴分别算） */
+function allowedRange(screen, panelHForSize) {
+  const pad = padOf(TIERS[state.tier]);
+  const { w: canvasW, h: canvasH } = canvasSize(panelHForSize);
+  // 用当前方向/对齐下的"画布 − 胶囊"偏移来反推可行区间（偏移只与几何有关）
+  const L = layout(screen);
+  const dx = L.canvas.x - state.capAnchor.x;      // 画布左上 − 胶囊左上
+  const dy = L.canvas.y - state.capAnchor.y;
+  return {
+    x: { min: WIDGET_EDGE - dx, max: screen.w - canvasW - WIDGET_EDGE - dx },
+    y: { min: WIDGET_EDGE - dy, max: screen.h - canvasH - WIDGET_EDGE - dy },
+    canvasW, canvasH, pad,
+  };
+}
+
+const screenUnder = (px) => SCREENS.find(s => px >= s.x && px < s.x + s.w) || SCREENS[0];
+
+/* ════════════════════════════════════════════════════════════════════════
+   渲染
+   ════════════════════════════════════════════════════════════════════════ */
+const $ = (id) => document.getElementById(id);
+const stage = $('stage'), canvasEl = $('canvas'), cardEl = $('card');
+
+function fitStage() {
+  const avail = $('stageOuter').clientWidth || 1400;
+  const scale = Math.min(1, avail / STAGE_W);
+  stage.style.width = STAGE_W + 'px';
+  stage.style.height = STAGE_H + 'px';
+  stage.style.transform = `scale(${scale})`;
+  $('stageOuter').style.height = (STAGE_H * scale) + 'px';
+  stage.dataset.scale = scale.toFixed(3);
+}
+window.addEventListener('resize', () => { fitStage(); render(); });
+
+function render() {
+  const L = layout(SCREENS[0]);            // 先用主屏算一次（下面按指针在的那块屏重算）
+  const anchorScreen = screenUnder(state.capAnchor.x + state.capW / 2);
+  const G = layout(anchorScreen);
+  const tier = TIERS[state.tier];
+
+  // 屏幕
+  for (const s of SCREENS) {
+    const el = $('screen' + s.id);
+    el.style.left = s.x + 'px'; el.style.top = s.y + 'px';
+    el.style.width = s.w + 'px'; el.style.height = s.h + 'px';
+    el.dataset.wall = state.wall;
+    el.classList.toggle('active', s === anchorScreen);
+  }
+
+  // 画布 + 卡片
+  canvasEl.style.left = G.canvas.x + 'px';
+  canvasEl.style.top = G.canvas.y + 'px';
+  canvasEl.style.width = G.canvas.w + 'px';
+  canvasEl.style.height = G.canvas.h + 'px';
+  canvasEl.style.background = state.showCanvas && !state.clipMode ? 'var(--canvas-fill)' : 'transparent';
+  canvasEl.style.outline = state.showCanvas && !state.clipMode ? '2px dashed var(--canvas-line)' : 'none';
+  $('canvasLabel').style.display = state.showCanvas ? '' : 'none';
+  $('canvasLabel').textContent =
+    `画布 ${G.canvas.w}×${G.canvas.h}（留白 ${G.pad}）`;
+
+  // ⚠️ **折叠态画在"落点"上、不是卡片原点**（这是真机的机制：卡片恒在 (pad,pad)，
+  //    而折叠态的**胶囊**由 `--wg-cap-*` 显式定位 —— 于是窗口/卡片长大时胶囊屏幕位置不动）。
+  const spot = { x: state.capAnchor.x - G.canvas.x, y: state.capAnchor.y - G.canvas.y };
+  $('cardzone').style.left = G.pad + 'px';
+  $('cardzone').style.top = G.pad + 'px';
+  $('cardzone').style.width = G.card.w + 'px';
+  $('cardzone').style.height = G.card.h + 'px';
+  $('cardzone').style.display = state.showCanvas && !state.clipMode ? '' : 'none';
+  // 留白刻度（上下各一枚，读作"卡片与画布边之间有多少"）
+  $('tickTop').textContent = `留白 ${G.pad}`;
+  $('tickTop').style.left = (G.pad + 6) + 'px';
+  $('tickTop').style.top = '2px';
+  $('tickTop').style.display = state.showCanvas && !state.clipMode ? '' : 'none';
+  $('tickBottom').textContent = `留白 ${G.pad}`;
+  $('tickBottom').style.right = '2px';
+  $('tickBottom').style.bottom = '2px';
+  $('tickBottom').style.display = state.showCanvas && !state.clipMode ? '' : 'none';
+
+  cardEl.style.left = (state.open ? G.pad : spot.x) + 'px';
+  cardEl.style.top = (state.open ? G.pad : spot.y) + 'px';
+  cardEl.style.width = (state.open ? G.card.w : state.capW) + 'px';
+  cardEl.style.height = (state.open ? G.card.h : WIDGET_CAP_H) + 'px';
+  cardEl.style.boxShadow = cardShadow(state.open ? tier.open : tier.cap);
+  // 允许范围标注
+  const R = allowedRange(anchorScreen, state.open ? state.panelH : state.rememberedPanelH);
+  for (const s of SCREENS) {
+    const el = $('range' + s.id);
+    const isActive = s === anchorScreen;
+    el.style.display = state.showRange && isActive ? 'block' : 'none';
+    if (isActive) {
+      el.style.left = (R.x.min + (G.canvas.x - state.capAnchor.x)) + 'px';
+      el.style.top = (R.y.min + (G.canvas.y - state.capAnchor.y)) + 'px';
+      el.style.width = R.canvasW + 'px';
+      el.style.height = R.canvasH + 'px';
+      el.innerHTML = `<span class="range-label">允许范围：胶囊锚点 x∈[${Math.round(R.x.min)}, ${Math.round(R.x.max)}] · y∈[${Math.round(R.y.min)}, ${Math.round(R.y.max)}]</span>`;
+    }
+  }
+
+  // 读数
+  const capBottomGap = anchorScreen.h - (state.capAnchor.y + WIDGET_CAP_H);
+  const capRightGap = anchorScreen.w - (state.capAnchor.x + state.capW);
+  const capLeftGap = state.capAnchor.x;
+  const reachCap = Math.max(...tier.cap.map(l => l.y + l.blur / 2));
+  const reachOpen = Math.max(...tier.open.map(l => l.y + l.blur / 2));
+  const pad = G.pad;
+  $('readout').innerHTML = rows([
+    ['阴影档位', `${tier.name}`, ''],
+    ['留白（= 阴影最大伸出，向上取整）', `${pad} px`, 'mono'],
+    ['画布（= Tauri 窗口）', `${G.canvas.w} × ${G.canvas.h}`, 'mono'],
+    ['画布在屏幕内的位置', `x=${G.canvas.x}, y=${G.canvas.y}`, 'mono'],
+    ['卡片（= 面板）', `${G.card.w} × ${G.card.h}`, 'mono'],
+    ['卡片在画布内恒为', `(${G.pad}, ${G.pad})`, 'mono'],
+    ['方向 / 对齐', `${G.dir} / ${G.align}`, 'mono'],
+    ['胶囊锚点（位置真源）', `x=${state.capAnchor.x}, y=${state.capAnchor.y}`, 'mono'],
+    ['胶囊在画布内的落点', `(${Math.round(spot.x)}, ${Math.round(spot.y)})`, 'mono'],
+    ['胶囊离屏幕边', `左 ${capLeftGap} · 右 ${capRightGap} · 下 ${capBottomGap}`, 'mono'],
+    ['当前生效屏', `${anchorScreen.label}（${anchorScreen.w}×${anchorScreen.h}）`, ''],
+    ['页面缩放', `${stage.dataset.scale || 1}（屏幕按 1:1 逻辑 px 画，页面不够宽时整体缩放）`, 'mono'],
+  ]);
+
+  // 结论
+  const fitCanvas = G.canvas.x >= 0 && G.canvas.y >= 0 &&
+    G.canvas.x + G.canvas.w <= anchorScreen.x + anchorScreen.w &&
+    G.canvas.y + G.canvas.h <= anchorScreen.h;
+  const shadowFitsCanvas = reachOpen <= pad && reachCap <= pad;
+  const panelFits = !state.open || state.panelH <= G.card.h + 0.5;
+  $('verdict').innerHTML = rows([
+    ['阴影是否装得进留白',
+      shadowFitsCanvas ? `是（折叠 ${reachCap.toFixed(1)} / 展开 ${reachOpen.toFixed(1)} ≤ ${pad}）` : `否（${reachOpen.toFixed(1)} > ${pad}）`,
+      shadowFitsCanvas ? 'ok' : 'bad'],
+    ['画布是否完整在屏幕内',
+      fitCanvas ? '是 ⇒ 阴影不会被屏幕边缘裁' : '否 ⇒ 贴边那侧阴影会被屏幕裁',
+      fitCanvas ? 'ok' : 'bad'],
+    ['面板是否装得进卡片',
+      panelFits ? '是' : `否：面板 ${state.panelH} > 卡片 ${G.card.h}（真机上底部会被窗口裁 ⇒ 内容与阴影一起切）`,
+      panelFits ? 'ok' : 'bad'],
+    ['画布策略',
+      state.canvasMode === 'fixed'
+        ? `完全固定 ${R.canvasW}×${R.canvasH} ⇒ 面板上限 ${R.canvasH - pad * 2}，超出靠滚动`
+        : state.canvasMode === 'typical'
+          ? `常驻典型档 ⇒ 面板 ≤ ${R.canvasH - pad * 2} 时窗口不动，更高时往下长`
+          : '随面板 ⇒ 每次开面板都可能改一次窗口高度（只动底边、原点不动）',
+      ''],
+  ]);
+
+  // 档位对照表
+  $('tierTable').innerHTML = `
+    <tr><th>档位</th><th>折叠态三层（y/blur/α）</th><th>展开态三层</th>
+        <th>最远伸出（折叠/展开）</th><th>留白</th><th>画布（面板 240）</th></tr>
+    ${Object.entries(TIERS).map(([k, t]) => {
+      const p = padOf(t);
+      const rc = Math.max(...t.cap.map(l => l.y + l.blur / 2));
+      const ro = Math.max(...t.open.map(l => l.y + l.blur / 2));
+      const on = k === state.tier ? ' style="background:rgba(255,162,180,.10)"' : '';
+      const fmt = (ls) => ls.map(l => `${l.y}/${l.blur}/${l.alpha}`).join(' · ');
+      return `<tr${on}><td>${t.name}</td><td class="mono">${fmt(t.cap)}</td>
+        <td class="mono">${fmt(t.open)}</td>
+        <td class="mono">${rc.toFixed(1)} / ${ro.toFixed(1)}</td>
+        <td class="mono">${p}</td>
+        <td class="mono">${WIDGET_PANEL_W + p * 2} × ${240 + p * 2}</td></tr>`;
+    }).join('')}`;
+}
+const rows = (arr) => arr.map(([k, v, cls]) =>
+  `<tr><th>${k}</th><td class="${cls || ''}">${v}</td></tr>`).join('');
+
+/* ════════════════════════════════════════════════════════════════════════
+   拖动：**到边即停**（按指针所在显示器算范围，规则 b）
+   ════════════════════════════════════════════════════════════════════════ */
+function stagePoint(ev) {
+  const scale = parseFloat(stage.dataset.scale || '1');
+  const r = stage.getBoundingClientRect();
+  return { x: (ev.clientX - r.left) / scale, y: (ev.clientY - r.top) / scale };
+}
+
+canvasEl.addEventListener('pointerdown', (ev) => {
+  if (state.open) return;                      // 展开态由面板拖（真机上也是面板当把手）
+  state.dragging = true;
+  canvasEl.classList.add('dragging');
+  canvasEl.setPointerCapture(ev.pointerId);
+  const p = stagePoint(ev);
+  state.grabDX = p.x - state.capAnchor.x;
+  state.grabDY = p.y - state.capAnchor.y;
+});
+
+canvasEl.addEventListener('pointermove', (ev) => {
+  if (!state.dragging) return;
+  const p = stagePoint(ev);
+  const want = { x: Math.round(p.x - state.grabDX), y: Math.round(p.y - state.grabDY) };
+  // 按**指针所在显示器**算允许范围；逐轴判断 ⇒ 到边只停那一个方向
+  const scr = screenUnder(p.x);
+  const R = allowedRange(scr, state.rememberedPanelH);
+  const next = { ...state.capAnchor };
+  if (want.x >= R.x.min && want.x <= R.x.max) next.x = want.x;
+  if (want.y >= R.y.min && want.y <= R.y.max) next.y = want.y;
+  state.capAnchor = next;
+  render();
+});
+
+const endDrag = (ev) => {
+  if (!state.dragging) return;
+  state.dragging = false;
+  canvasEl.classList.remove('dragging');
+  try { canvasEl.releasePointerCapture(ev.pointerId); } catch { /* 指针已释放 */ }
+};
+canvasEl.addEventListener('pointerup', endDrag);
+canvasEl.addEventListener('pointercancel', endDrag);
+
+/* ════════════════════════════════════════════════════════════════════════
+   三拍动画（展开 / 收起）
+   ════════════════════════════════════════════════════════════════════════ */
+let animTimers = [];
+const clearTimers = () => { animTimers.forEach(clearTimeout); animTimers = []; };
+const after = (ms, fn) => { animTimers.push(setTimeout(fn, ms)); };
+
+function settle(open) {
+  state.open = open;
+  const t = TIMINGS[state.timing];
+  cardEl.classList.toggle('open', open);
+  cardEl.style.transition = 'none';
+  render();
+  // 位置/尺寸一次到位（形变由下面的 CSS 过渡负责）
+  requestAnimationFrame(() => {
+    cardEl.style.transition =
+      `left ${t.grow}ms cubic-bezier(.22,1,.36,1), top ${t.grow}ms cubic-bezier(.22,1,.36,1),` +
+      `width ${t.grow}ms cubic-bezier(.22,1,.36,1), height ${t.grow}ms cubic-bezier(.22,1,.36,1),` +
+      `box-shadow ${t.content}ms ease`;
+    render();
+  });
+}
+
+function playExpand() {
+  clearTimers();
+  const t = TIMINGS[state.timing];
+  if (state.open) return;
+  state.rememberedPanelH = state.panelH;      // 舞台按这次的高度预留
+  // 第 1 拍：胶囊文字/点/chevron 渐隐
+  const lead = cardEl.querySelectorAll('.lead,.mid,.tail');
+  lead.forEach(e => { e.style.transition = `opacity ${t.fade}ms ease`; e.style.opacity = '0'; });
+  // 第 2 拍：宽高长成面板（延迟 = 第 1 拍）
+  after(t.fade, () => {
+    state.open = true;
+    render();
+    cardEl.classList.add('open');
+    // 面板内容随后渐显（第 3 拍）
+    const p = cardEl.querySelectorAll('.p-head,.p-body,.p-foot');
+    p.forEach(e => { e.style.opacity = '0'; e.style.transition = `opacity ${t.content}ms ease`; });
+    render();
+    requestAnimationFrame(() => p.forEach(e => { e.style.opacity = '1'; }));
+  });
+}
+
+function playCollapse() {
+  clearTimers();
+  const t = TIMINGS[state.timing];
+  if (!state.open) return;
+  const p = cardEl.querySelectorAll('.p-head,.p-body,.p-foot');
+  if (state.exitFade) {
+    // 第 1 拍：面板内容先渐隐
+    p.forEach(e => { e.style.transition = `opacity ${t.fade}ms ease`; e.style.opacity = '0'; });
+    after(t.fade, () => {
+      // 第 2 拍：材质交给胶囊（收起），文字先不显
+      cardEl.classList.remove('open');
+      state.open = false;
+      const lead = cardEl.querySelectorAll('.lead,.mid,.tail');
+      lead.forEach(e => { e.style.transition = 'none'; e.style.opacity = '0'; });
+      render();
+      // 第 3 拍：胶囊元素渐显（等宽高收完）
+      after(t.grow, () => {
+        lead.forEach(e => { e.style.transition = `opacity ${t.content}ms ease`; e.style.opacity = '1'; });
+        render();
+      });
+    });
+    return;
+  }
+  // 对比：现状收起（面板瞬隐 → 胶囊直接缩回）
+  cardEl.classList.remove('open');
+  state.open = false;
+  const lead = cardEl.querySelectorAll('.lead,.mid,.tail');
+  lead.forEach(e => { e.style.transition = `opacity ${t.content}ms ease`; e.style.opacity = '1'; });
+  render();
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   控件绑定
+   ════════════════════════════════════════════════════════════════════════ */
+const bind = (sel, ev, fn) => document.querySelectorAll(sel).forEach(el => el.addEventListener(ev, fn));
+
+bind('input[name=tier]', 'change', (e) => { state.tier = e.target.value; render(); });
+bind('input[name=canvasMode]', 'change', (e) => { state.canvasMode = e.target.value; render(); });
+bind('input[name=timing]', 'change', (e) => { state.timing = e.target.value; });
+$('fixedH').addEventListener('input', (e) => {
+  state.fixedH = +e.target.value; $('fixedHOut').textContent = e.target.value; render();
+});
+$('panelH').addEventListener('input', (e) => {
+  state.panelH = +e.target.value; $('panelHOut').textContent = e.target.value;
+  if (!state.open) state.rememberedPanelH = state.panelH;
+  renderPanelBody();
+  render();
+});
+$('capW').addEventListener('input', (e) => {
+  state.capW = +e.target.value; $('capWOut').textContent = e.target.value; render();
+});
+$('grow').addEventListener('click', () => {
+  state.panelH = Math.min(560, state.panelH + 80);
+  if (!state.open) state.rememberedPanelH = state.panelH;
+  $('panelH').value = state.panelH; $('panelHOut').textContent = state.panelH;
+  renderPanelBody(); render();
+});
+$('exitFade').addEventListener('change', (e) => {
+  state.exitFade = e.target.checked;
+  if (state.exitFade) $('exitNow').checked = false;
+});
+$('exitNow').addEventListener('change', (e) => {
+  if (e.target.checked) { $('exitFade').checked = false; state.exitFade = false; }
+  else { $('exitFade').checked = true; state.exitFade = true; }
+});
+$('showCanvas').addEventListener('change', (e) => { state.showCanvas = e.target.checked; render(); });
+$('clipMode').addEventListener('change', (e) => {
+  state.clipMode = e.target.checked;
+  document.body.classList.toggle('clip-mode', state.clipMode);
+  render();
+});
+$('showRange').addEventListener('change', (e) => {
+  state.showRange = e.target.checked;
+  document.body.classList.toggle('show-range', state.showRange);
+  render();
+});
+$('wall').addEventListener('change', (e) => { state.wall = e.target.value; render(); });
+$('play').addEventListener('click', playExpand);
+$('play2').addEventListener('click', playCollapse);
+$('toggle').addEventListener('click', () => {
+  clearTimers();
+  state.open = !state.open;
+  cardEl.classList.toggle('open', state.open);
+  const lead = cardEl.querySelectorAll('.lead,.mid,.tail');
+  const p = cardEl.querySelectorAll('.p-head,.p-body,.p-foot');
+  lead.forEach(e => { e.style.opacity = state.open ? '0' : '1'; });
+  p.forEach(e => { e.style.opacity = state.open ? '1' : '1'; });
+  cardEl.style.transition = 'none';
+  render();
+});
+$('reset').addEventListener('click', () => {
+  clearTimers();
+  cardEl.classList.remove('open');
+  const lead = cardEl.querySelectorAll('.lead,.mid,.tail');
+  lead.forEach(e => { e.style.opacity = '1'; });
+  const p = cardEl.querySelectorAll('.p-head,.p-body,.p-foot');
+  p.forEach(e => { e.style.opacity = '1'; });
+  state.open = false;
+  state.capAnchor = { x: Math.round(SCREENS[0].w / 2 - state.capW / 2), y: 80 };  // 顶部居中（80px）
+  state.rememberedPanelH = state.panelH;
+  render();
+});
+
+/* 面板内容（按面板高铺满，看得见"内容变化 ⇒ 面板变高"） */
+function renderPanelBody() {
+  const n = Math.max(1, Math.round((state.panelH - 78) / 40));
+  $('pCount').textContent = n;
+  $('pBody').innerHTML = Array.from({ length: n }).map((_, i) => `
+    <div class="p-item">
+      <span class="p-icon">${['⚠', '◔', '✓', '✦'][i % 4]}</span>
+      <span><span class="p-text">第 ${i + 1} 条通知的正文</span>
+      <span class="p-meta">${['注意', '进行中', '已完成', '提示'][i % 4]} · 后端</span></span>
+    </div>`).join('');
+}
+
+/* 启动 */
+fitStage();
+renderPanelBody();
+state.capAnchor = { x: Math.round(SCREENS[0].w / 2 - state.capW / 2), y: 80 };
+// 可选：用查询串预置状态（便于截图/分享某一档）——
+//   ?tier=beta&mode=fixed&open=1&clip=1&range=1&wall=black&panelH=320&capW=320
+{
+  const q = new URLSearchParams(location.search);
+  if (q.get('tier') && TIERS[q.get('tier')]) state.tier = q.get('tier');
+  if (q.get('mode')) state.canvasMode = q.get('mode');
+  if (q.get('wall')) state.wall = q.get('wall');
+  if (q.get('panelH')) state.panelH = +q.get('panelH');
+  if (q.get('capW')) state.capW = +q.get('capW');
+  if (q.get('fixedH')) state.fixedH = +q.get('fixedH');
+  state.rememberedPanelH = state.panelH;
+  if (q.get('clip') === '1') { state.clipMode = true; document.body.classList.add('clip-mode'); $('clipMode').checked = true; }
+  if (q.get('range') === '1') { state.showRange = true; document.body.classList.add('show-range'); $('showRange').checked = true; }
+  if (q.get('open') === '1') {
+    state.open = true;
+    cardEl.classList.add('open');
+    cardEl.querySelectorAll('.lead,.mid,.tail').forEach(e => { e.style.opacity = '0'; });
+  }
+  document.querySelectorAll('input[name=tier]').forEach(el => { el.checked = el.value === state.tier; });
+  document.querySelectorAll('input[name=canvasMode]').forEach(el => { el.checked = el.value === state.canvasMode; });
+  $('panelH').value = state.panelH; $('panelHOut').textContent = state.panelH;
+  $('capW').value = state.capW; $('capWOut').textContent = state.capW;
+  $('fixedH').value = state.fixedH; $('fixedHOut').textContent = state.fixedH;
+  $('wall').value = state.wall;
+  renderPanelBody();
+}
+render();
+</script>
+</body>
+</html>

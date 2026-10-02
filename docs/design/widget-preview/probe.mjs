@@ -1,4 +1,7 @@
-/* 小窗样例 `direction.html` 的几何回归探针。
+/* ⚠️ 小窗已整体退役（2026-10-01），整条线 2026-10-03 彻底放弃：这个文件是**设计记录**的一部分
+   （样例页 `direction.html` 的几何回归探针），不是产品代码；实现在分支 `f2-widget-archive`，
+   结论见 `devlog/274`。
+
    用法: node docs/design/widget-preview/probe.mjs [fileUrl]
 
    用 CDP **真实派发鼠标事件**驱动页面，只量**渲染出来的矩形**，

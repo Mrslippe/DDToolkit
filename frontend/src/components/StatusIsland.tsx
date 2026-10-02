@@ -8,7 +8,6 @@ import { IDLE_CAROUSEL_ENABLED, IDLE_TICK_MS, pickIdle } from '../utils/idleQuot
 import { isShellHidden } from '../utils/shellLifecycle'
 import { useShellHidden } from '../hooks/useShellHidden'
 import { initialTextState, phaseClass, reduceText } from '../utils/statusIslandText'
-import { WIDGET_PANEL_GAP, WIDGET_PANEL_W, applyWidgetCssVars } from '../utils/widgetWindow'
 
 interface Props {
   notices: Notice[]
@@ -16,15 +15,18 @@ interface Props {
   onAction: (kind: NoticeActionKind, n: Notice) => void
   /** 当前时间（每次渲染现取，保证过期判定跟着走） */
   now: number
-  /**
-   * 宿主（R38 批 5，规格 §7/§8）：`bar` = 顶栏内联（现状）· `widget` = 桌面独立控件。
-   *
-   * **宿主无关是硬要求**（§8）：状态机与动画都不得依赖顶栏。这一点本组件早就满足 ——
-   * `place()` 读的是 `anchorRef` 自己的 rect（**面板锚定一律相对胶囊自身**），
-   * 没有任何"相对顶栏定位"的假设。所以换宿主只是换一层材质与尺寸。
-   */
-  density?: 'bar' | 'widget'
 }
+
+/**
+ * 面板与胶囊之间的间隙（px）。
+ *
+ * ⚠️ 2026-10-01 之前它是 `utils/widgetWindow.ts` 的 `WIDGET_PANEL_GAP`（那时小窗宿主
+ * 也读它）。小窗退役后只剩顶栏这一个宿主，常量就地下沉到这里 —— 它**只有这一个用处**。
+ */
+const PANEL_GAP = 6
+
+/** 面板宽（顶栏宿主。小窗宿主的 400 已随小窗一起退役） */
+const PANEL_W = 340
 
 const KIND_ICON: Record<string, React.ReactNode> = {
   alert: <AlertTriangle className="size-[13px]" />,
@@ -60,7 +62,7 @@ const KIND_LABEL: Record<string, string> = {
  * 面板用 **portal + fixed 定位**（顶栏容器 overflow:hidden 会裁掉内联面板）；
  * 位置在打开时按 island 的矩形算一次，滚动/缩放时重算。
  */
-export default function StatusIsland({ notices, onAction, now, density = 'bar' }: Props) {
+export default function StatusIsland({ notices, onAction, now }: Props) {
   const [open, setOpen] = useState(false)
   /**
    * 「钉住」（R39-C，用户 2026-09-19：「改为鼠标 hover 就呼出，离开就收起」）：
@@ -76,26 +78,6 @@ export default function StatusIsland({ notices, onAction, now, density = 'bar' }
   const lit = !!primary
   /** 隐藏到托盘（R18）：轮播停表 */
   const hidden = useShellHidden()
-
-  // 桌面控件宿主：把**形态常量**写进 CSS 变量（D1 单一真源，见 `applyWidgetCssVars`）。
-  // ⚠️ 必须在这里（而不是 `StatusWidgetWindow`）：`?density=widget` 在**主窗口**里也会
-  //    渲染这个宿主（探针第一段就是这么量的），而那棵树里没有 `StatusWidgetWindow`。
-  //    `useLayoutEffect`：赶在首绘前写，否则会先按兜底值画一帧。
-  useLayoutEffect(() => {
-    if (density === 'widget') applyWidgetCssVars()
-  }, [density])
-
-  // F1（2026-09-30）：**展开时胶囊整行隐藏**（卡片就是面板）。
-  // ⚠️ 由组件写这个属性（它知道 `open`），而不是让窗口那边写 —— 于是**探针也量得到**
-  //    这条判据（探针里没有真窗口，窗口那条路根本不跑）。
-  useEffect(() => {
-    if (density !== 'widget') return
-    const el = document.querySelector<HTMLElement>('.widget-shell')
-    if (!el) return
-    if (open) el.dataset.open = '1'
-    else delete el.dataset.open
-    return () => { delete el.dataset.open }
-  }, [density, open])
 
   // 空闲轮播的时钟：**只在空闲时走**（有事发生时立刻停表，省掉一个无谓的定时器；
   // 也让"语录正在轮播"不可能和"有通知亮着"同时出现在屏幕上）。
@@ -118,53 +100,22 @@ export default function StatusIsland({ notices, onAction, now, density = 'bar' }
    *
    *  R39-C（用户）：「下拉栏居中」—— 原来是把面板**左缘**对齐胶囊左缘，胶囊越靠右面板越偏。
    *
-   *  ⚠️ **向上翻（R38 批 5d）**：小窗默认落在**右下角**，1080p 上向下展开需要
-   *  `968 + 40 + 6 + 面板高 ≥ 1214` ⇒ **永远放不下**。窗口那一侧会把窗口向上长
-   *  （`widgetExpandGeom` 的 `flipUp`），面板在窗口里的位置也随之要在**胶囊上方**。
-   *  两处必须一致：窗口向上长、面板却还画在胶囊下方 ⇒ 面板落在窗口外（就是那个 bug 的翻版）。
-   *
-   *  ⚠️⚠️ **小窗宿主下翻不翻，由窗口那边说了算**（R38 批 5f 修）。
-   *
-   *  原来这里自己按 `window.innerHeight` 判"下方放不下就翻上去"。在**顶栏宿主**里这是对的
-   *  （`innerHeight` 就是应用窗口高，是个稳定的参照系）；但在**小窗宿主**里它是**同一个自指循环**：
-   *  小窗的高度**由面板高度决定**（窗口 = 40 + 6 + 面板高）⇒ 展开前后 `innerHeight` 从 40
-   *  变到面板高，判据跟着乱跳（实测：折叠态窗口 40px ⇒ `below(166) > 40-4` ⇒ 判"翻上去"
-   *  ⇒ `top = 0 - 6 - 120 = -126` ⇒ **面板跑到窗口上方去了**）。
-   *
-   *  而"翻不翻"真正的决定因素在**屏幕**（贴下沿才翻），那只有窗口那边知道
-   *  （`widgetExpandGeom` 用 `currentMonitor()` 算）。所以小窗宿主下**直接跟随**
-   *  窗口写下的 `data-flip`（那是几何的唯一事实源），本组件不再自行判断 ——
-   *  §8「宿主无关」没有被破坏：它只是读一个**可选**的外部信号，读不到就退回原来的算法。 */
+   *  ⚠️ 参照系是 `window.innerHeight`（主窗口视口高），这在本组件只有一个宿主（顶栏）时成立。
+   *  当年小窗宿主复用同一个 `place()` 时它是**自指循环**：小窗高度由面板高度决定 ⇒
+   *  展开前后 `innerHeight` 从 40 变到面板高、判据跟着乱跳（实测面板被放到窗口上方，
+   *  `top = -126`）。小窗已整体退役（2026-10-01），那条外部信号（窗口写的 `data-flip`）
+   *  也随它一起删掉了 —— **判据的前提消失时，连机制一起删**。 */
   const place = () => {
     const r = anchorRef.current?.getBoundingClientRect()
     if (!r) return
     // 面板的**实际高度**：`open` 之后才量得到；量不到时退回 0（下一帧 `place()` 会再来）
     const h = panelRef.current?.offsetHeight ?? 0
-    // ⚠️⚠️ **小窗（真窗口）宿主：面板铺满卡片，位置由留白定**（F1，2026-09-30）。
-    //
-    // F1 之后模型极简：**窗口 = 卡片 + 两侧留白**（`WIDGET_SHADOW_PAD`），
-    // 展开时**卡片就是面板**（胶囊整行隐藏），所以面板在这个视口里恒为
-    // `left = top = 留白`、宽度 = 卡片宽 = 窗口宽 − 2×留白。
-    // 原来那套"按胶囊中心居中 + 夹取 + 读 `data-dir` 判上下"整个不需要了 ——
-    // 方向现在只决定**入场动画从哪一侧滑出**（CSS 的事）。
-    //
-    // ⚠️ 也**不再需要胶囊的 rect**（`r`）：卡片的位置是几何算好的，面板只需铺满它。
-    const shell = density === 'widget'
-      ? document.querySelector<HTMLElement>('.widget-shell')
-      : null
-    if (shell) {
-      const pad = parseFloat(
-        getComputedStyle(document.documentElement).getPropertyValue('--widget-shadow-pad')) || 0
-      setPos({ left: pad, top: pad, width: Math.max(1, window.innerWidth - pad * 2) })
-      return
-    }
-    const width = density === 'widget' ? WIDGET_PANEL_W : 340   // D1：widget 展开宽 400（bar 沿用 340）
-    const centered = r.left + r.width / 2 - width / 2
-    const left = Math.min(Math.max(8, centered), Math.max(8, window.innerWidth - width - 8))
-    const flip = h > 0 && r.bottom + WIDGET_PANEL_GAP + h > window.innerHeight - 4
+    const centered = r.left + r.width / 2 - PANEL_W / 2
+    const left = Math.min(Math.max(8, centered), Math.max(8, window.innerWidth - PANEL_W - 8))
+    const flip = h > 0 && r.bottom + PANEL_GAP + h > window.innerHeight - 4
     setPos(flip
-      ? { left, top: Math.max(4, r.top - WIDGET_PANEL_GAP - h), width }
-      : { left, top: r.bottom + WIDGET_PANEL_GAP, width })
+      ? { left, top: Math.max(4, r.top - PANEL_GAP - h), width: PANEL_W }
+      : { left, top: r.bottom + PANEL_GAP, width: PANEL_W })
   }
 
   /** 悬停时长的两个口径：进入要**等一等**（掠过不弹），离开要**宽限**（容得下移进面板） */
@@ -221,10 +172,6 @@ export default function StatusIsland({ notices, onAction, now, density = 'bar' }
     document.addEventListener('keydown', onKey)
     document.addEventListener('pointerdown', onOutside, true)
     window.addEventListener('resize', onResize)
-    // ⚠️ **`data-dir` 变了要重排** —— F1 之后**这条不再需要**：面板的位置只由"留白"
-    //    决定（`left = top = pad`），与方向无关；方向只剩"入场动画从哪一侧滑出"（CSS 读
-    //    `<html data-widget-dir>`）。所以那个 `MutationObserver` 与它的
-    //    `attributeFilter: ['data-dir']` 一起删掉了 —— **判据的前提消失时，连机制一起删**。
     return () => {
       cancelAnimationFrame(raf)
       document.removeEventListener('keydown', onKey)
@@ -305,7 +252,6 @@ export default function StatusIsland({ notices, onAction, now, density = 'bar' }
       <span
         ref={anchorRef}
         className={`si-island topbar-status${lit ? ' on' : ''}${open ? ' open' : ''}`}
-        data-density={density}
         role="button"
         tabIndex={0}
         aria-expanded={open}
@@ -358,7 +304,6 @@ export default function StatusIsland({ notices, onAction, now, density = 'bar' }
           <div
             ref={panelRef}
             className="si-panel"
-            data-density={density}
             style={{ left: pos.left, top: pos.top, width: pos.width }}
             role="dialog"
             aria-label="顶栏通知"

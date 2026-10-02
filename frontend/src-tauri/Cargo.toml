@@ -37,6 +37,12 @@ windows-sys = { version = "0.59", features = [
   "Win32_System_SystemInformation",
   "Win32_System_Threading",
   "Win32_UI_Shell",
+  # ⚠️ **别删这一条**（2026-10-03 清理时试过）：`lib.rs::shell_open` 用的 `SW_SHOWNORMAL` 就在这个
+  # namespace 里。它此前一直没写在这儿也能编过，是因为 `window-vibrancy`（tauri 的传递依赖）
+  # 把同一个 crate 的这两个 feature 打开了、Cargo 做 feature 统一 —— **靠别人兜底**。
+  # 哪天 window-vibrancy 不再开它，这里会突然编译失败（`CreateRoundRectRgn`/`SetWindowRgn` 那套
+  # 小窗代码删掉之后，我们已经没有别的用途需要 `Win32_Graphics_Gdi`，那个就不用加回来）。
+  "Win32_UI_WindowsAndMessaging",
 ] }
 
 [profile.release]

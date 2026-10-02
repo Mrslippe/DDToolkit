@@ -477,7 +477,7 @@ Some(Regex::new(r"^((mailto:\w+)|(tel:\w+)|(https?://\w+)).+").unwrap())
 **改动面**：
 1. `api.ts`：`request()`（`:24`）是**唯一注入点**（54 个方法全经它）。必须 `new Headers(init?.headers)` 合并 —— `uploadBackground` 走 `FormData`，**不能覆盖 `Content-Type`**（否则 multipart boundary 丢）。
 2. 同文件：加**启动闸门**，或把 base + token 的注入时机改成"在 `Main` 挂载前完成"。**两种实现都行，但必须在 devlog 里写清选了哪种、为什么。**
-3. **两个入口各自初始化**：`main.tsx`（主窗）与 `widgetMain.tsx`（小窗，已经在 `injectBackendPort().finally(render)` 里 await 了）。**主窗要向小窗对齐**——`docs/DEV-LOOP.md` §6.1 第 3 条正是"新入口漏掉顶层副作用"，**犯了三次**。
+3. **每个入口各自初始化**：`main.tsx`（主窗）与 `widgetMain.tsx`（小窗，**2026-10-03 随小窗整体放弃一起删除**，见 `devlog/274`；当时它已经在 `injectBackendPort().finally(render)` 里 await 了）。**主窗要向它对齐**——`docs/DEV-LOOP.md` §6.1 第 3 条正是"新入口漏掉顶层副作用"，**犯了三次**。
 4. 401 的处理：不要只弹 toast，要与 `bootState` / 启动幕的失败态接线。
 5. **探针通路**：`scripts/ui_probe.py` 走无头 Edge + 真后端，**没有 Tauri** ⇒ token 走开发态显式 `DDTOOLKIT_DEV_API_TOKEN`；`dev/probe.ts` 里有十余处裸 `fetch`（1161/1931/3079/3114/3429/3896/4978…）会 401。**必须在批次 2 里确认探针没红**——否则整条布局回归网会因为 401 集体假绿（`ui_probe` 是布局的唯一机器判据）。
 

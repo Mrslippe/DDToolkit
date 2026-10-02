@@ -48,12 +48,6 @@ import {
   parseField, stepOf, valueOf, type DraftVal,
 } from '../utils/settingsDraft'
 import OverlayScroll from './OverlayScroll'
-import { hideWidgetWindow, isFullscreenAppRunning, setWidgetClickThrough, showWidgetWindow } from '../utils/shellBridge'
-import {
-  WIDGET_POS_KEY,
-  parseWidgetPos,
-  resurfaceMainWindow,
-} from '../utils/widgetWindow'
 import './../styles/posts.css'
 
 interface Props {
@@ -437,115 +431,6 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
     }
   }
 
-  /**
-   * 桌面状态控件（R38 批 5b）：写偏好 **+ 立刻开关那扇窗**。
-   *
-   * 与 `pickCloseAction` 的差别只有这一点 —— 关闭语义是"下次点 ✕ 才生效"，
-   * 而这个开关的说明里写的是"立即生效，不用重启"，所以不能只写偏好。
-   *
-   * 位置从 localStorage 取（规格 §7「位置持久化（`utils/shellState` 同款做法）」）；
-   * 没存过就传 `null`，由 Rust 落到默认的右下角。
-   *
-   * > ⚠️ **不要再"顺手动一下主窗口"**（2026-09-24 用户反馈"整个窗口闪一下"）：
-   * > 原来这里无条件调 `resurfaceMainWindow()`，而它当时是 `hide→show→setFocus` ⇒ **整窗闪动**。
-   * > 那个补丁是第一轮为治"窗口卡在隐藏态"加的，而当时的诊断是错的
-   * > （真凶是**同步命令卡死主线程**，见 devlog/180）。真凶修掉后这个补丁只剩副作用。
-   * > 现在 `resurfaceMainWindow` **只在窗口确实不可见时**才 `show()` ⇒ 正常路径下**零动作**。
-   */
-  /**
-   * 小窗三项开关共用的行渲染（R38 批 5d）。
-   *
-   * 三项形状相同（label + note + 二选一），差别只在 key 与"选中值怎么算"。
-   * 抽出来是为了**探针钩子只写一遍**：`data-setting` 与 `data-widget-option`
-   * 是 `ui_probe --app-settings` 的抓手，各写三遍必有漏，而漏了的后果是
-   * "断言悄悄少一条"（绿色，但没验）。
-   */
-  const renderWidgetRow = (key: 'widget_enabled' | 'widget_click_through'
-                                 | 'widget_hide_fullscreen') => {
-    const spec = prefs.specOf(key)
-    if (!spec) return null
-    const current = prefs.values[key] ?? ''
-    return (
-      <div className="aps-row aps-row-stack" data-setting={key} key={key}>
-        <div className="aps-row-main">
-          <span className="aps-label">{spec.label}</span>
-          <span className="aps-note">{spec.note}</span>
-        </div>
-        <div className="aps-row-ctl aps-radio-group" role="radiogroup" aria-label={spec.label}>
-          {spec.options.map((o) => (
-            <button
-              key={o.value}
-              type="button"
-              role="radio"
-              aria-checked={current === o.value}
-              data-widget-option={o.value}
-              className={`aps-radio${current === o.value ? ' on' : ''}`}
-              onClick={() => void pickWidgetPref(key, o.value)}
-            >
-              {o.label}
-            </button>
-          ))}
-        </div>
-      </div>
-    )
-  }
-
-  /**
-   * 小窗三项偏好统一入口（R38 批 5d）。
-   *
-   * ## 为什么"开关"与"穿透/全屏"必须分开处理
-   *
-   * `widget_enabled` 要**建 / 销窗口**（重动作，且有自己的兜底与提示）；
-   * 另两项只是**给已经存在的窗口改一个属性**（轻动作，窗口没开时是**幂等的成功**）。
-   * 混在一起会让"没开小窗时改穿透"也去建窗口 —— 那不是用户的意思。
-   *
-   * ⚠️ 穿透与全屏隐藏**都可能失败**（前者要 Windows API，后者要系统通知状态），
-   * 所以失败时**把偏好退回去**并说明原因 —— 否则界面显示"已开启"而实际没生效，
-   * 用户只会觉得"这个开关是假的"。
-   */
-  const pickWidgetPref = async (key: string, next: string) => {
-    setThemeError(null)
-    console.info('[widget] 设置里切换', key, '→', next, 'isTauri=', isDesktopShell())
-    try {
-      await prefs.setPref(key, next)
-      if (key === 'widget_enabled') {
-        if (next === 'on') {
-          const ok = await showWidgetWindow(
-            parseWidgetPos(globalThis.localStorage?.getItem(WIDGET_POS_KEY)),
-          )
-          console.info('[widget] showWidgetWindow →', ok)
-        } else {
-          const ok = await hideWidgetWindow()
-          console.info('[widget] hideWidgetWindow →', ok)
-        }
-        // 只做"确保可见"（可见时不动）；失败要**说出来**，否则用户只觉得"点了没反应"
-        if (!(await resurfaceMainWindow())) {
-          setThemeError('小窗开关已生效，但主窗口没有恢复显示 —— 点一下托盘图标即可唤回')
-        }
-        return
-      }
-      if (key === 'widget_click_through') {
-        const ok = await setWidgetClickThrough(next === 'on')
-        console.info('[widget] setWidgetClickThrough →', ok)
-        // 浏览器/探针环境没有真窗口（返回 false 是**预期**），不提示
-        if (!ok && isDesktopShell()) {
-          await prefs.setPref(key, next === 'on' ? 'off' : 'on')
-          setThemeError('小窗鼠标穿透没能设上 —— 已退回原来的设置')
-        }
-        return
-      }
-      if (key === 'widget_hide_fullscreen') {
-        // 立即生效一次：用户刚把它打开时，如果此刻正有全屏程序，应当马上躲起来
-        const full = await isFullscreenAppRunning()
-        console.info('[widget] isFullscreenAppRunning →', full, ' next=', next)
-        void full
-      }
-    } catch (e) {
-      console.error('[widget] 切换失败', e)
-      setThemeError(e instanceof Error ? e.message : String(e))
-    }
-  }
-
   /** 左栏键盘：↑↓ 移动（自动激活）+ Home/End（WAI-ARIA tabs 的垂直变体） */
   const onNavKey = (e: React.KeyboardEvent) => {
     const i = nav.findIndex((n) => n.id === active)
@@ -801,16 +686,9 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
                     </div>
                   )}
 
-                  {/* 桌面状态控件（R38 批 5b；批 5d 加穿透与全屏隐藏共三项）：
-                      与 close_action 同一个「外观」组，同样用 `.aps-row-stack`
-                      （说明在上、控件在下占整行）。
-
-                      ⚠️ 三项都是**同一个形状**（label + note + 二选一 radio），所以走同一段渲染。
-                      从前 `widget_enabled` 那一项的 DOM 是手写的；批 5d 要加三项，
-                      手写三遍必然漂（`data-setting` / `data-widget-option` 这些探针钩子
-                      漏一个就静默少一条断言）—— 所以抽成 `renderWidgetRow`。 */}
-                  {(['widget_enabled', 'widget_click_through', 'widget_hide_fullscreen'] as const)
-                    .map((k) => renderWidgetRow(k))}
+                  {/* 小窗三项开关（`widget_enabled` / `_click_through` / `_hide_fullscreen`）
+                      随小窗整窗退役一起删掉（2026-10-01）。后端偏好键仍在（数据层留着以后
+                      接线），但界面不再给出入口 —— 没有窗口可开时，这个开关只会骗人。 */}
                 </div>
               )}
 

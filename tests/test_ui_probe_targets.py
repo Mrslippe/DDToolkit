@@ -37,8 +37,8 @@ import ui_probe as U  # noqa: E402
     # 单边不足
     (326, 23, 999, False, "高 23 < 24"),
     (23, 100, 0, False, "宽 23 < 24"),
-    # 小窗胶囊（实测 200×40）
-    (200, 40, 999, True, "小窗宿主 200×40"),
+    # 已退役的小窗宿主（2026-10-01 整窗退役，devlog/270；这里留的是当年的实测尺寸）
+    (200, 40, 999, True, "历史：小窗宿主 200×40（该宿主已退役）"),
 ])
 def test_square_fit(w, h, radius, want, why):
     assert U._wcag_square_fits(w, h, radius) is want, why

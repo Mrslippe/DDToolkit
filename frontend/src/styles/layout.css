@@ -87,18 +87,19 @@ html.window-maximized body {
 }
 
 /* ── 覆盖式滚动条（OverlayScroll 组件，2026-09-07 user 定案）──
-   ⚠️ **2026-09-24（R38 批 5e）整块搬到了 `styles/status-island.css`**。
+   ⚠️ **2026-09-24（R38 批 5e）整块搬到了 `styles/status-island.css`**，别在这里补回来。
 
-   为什么搬：小窗的独立入口（`widgetMain.tsx`）**只引 `tokens.css` + `status-island.css`**，
-   不加载本文件 —— 而状态岛面板里的条目列表用的就是 `OverlayScroll`。
-   留在这里 = 小窗里 `.os-root` / `.os-scroll` **一条样式都没有**：
-   面板拿不到 `display:flex` + `overflow:hidden`，滚动体也拿不到 `flex:1 1 auto; min-height:0`
-   ⇒ 条目与页脚**互相叠在一起**（用户 2026-09-24 截图）。
+   为什么搬：状态岛面板里的条目列表用的就是 `OverlayScroll`，而当时小窗那个独立入口
+   （只引 `tokens.css` + `status-island.css`）不加载本文件 —— 留在这里 = 那边
+   `.os-root` / `.os-scroll` **一条样式都没有**：面板拿不到 `display:flex` + `overflow:hidden`，
+   滚动体也拿不到 `flex:1 1 auto; min-height:0` ⇒ 条目与页脚**互相叠在一起**
+   （用户 2026-09-24 截图）。
 
-   搬家方向是**单向的**：`layout.css` → `status-island.css`（共用那份），
-   反之不行（小窗不能引 `layout.css`，那正是独立入口要避免的 153KB）。
-   **共用组件的样式必须放在共用文件里** —— 判据不是"它是不是滚条"，
-   而是"用到它的入口有几个"。 */
+   ⚠️ 小窗入口 2026-10-01 已退役，但**别把这块搬回来**：`.os-root{position:relative}` 与
+   `posts.css` 的 `.lc-pop{position:fixed}` 优先级相同 ⇒ **谁后加载谁赢**
+   （见 `posts.css` 的 `.os-root.lc-pop` 与 `ui_probe` 的 cell-pop 判据）。
+   **共用组件的样式必须放在共用文件里** —— 判据不是"它是不是滚条"，而是
+   "用到它的入口有几个"。 */
 
 /* ── 启动幕：主色铺底 + 中央 LOGO + 信封上下展开 ── */
 
@@ -324,11 +325,11 @@ html.window-maximized body {
   max-width: 46%;
   height: var(--pill-h-sm);
   /* ⚠️ **胶囊的"解剖"已搬去 `status-island.css` 的 `.si-island`**（D1，2026-09-27）——
-     这里只留**顶栏宿主特有**的四条（绝对定位 / 水平居中 / 宽度上限 / 顶栏的胶囊高）。
-     为什么必须搬：小窗的独立入口（`widgetMain.tsx`）**只加载 `tokens.css` +
-     `status-island.css`**，拿不到这个文件 ⇒ 原来胶囊在小窗里 `display:block`、圆角 0、
-     点是 0×0（探针实测）。这与 `.os-*` 那次是同一类（DEV-LOOP §6.1）。
-     判据：**"用到它的入口有几个"** —— 两个宿主都要的，就必须在共用文件里。 */
+     这里只留**顶栏特有**的四条（绝对定位 / 水平居中 / 宽度上限 / 顶栏的胶囊高）。
+     为什么必须搬：当时小窗那个独立入口只加载 `tokens.css` + `status-island.css`，
+     拿不到这个文件 ⇒ 胶囊在那边 `display:block`、圆角 0、点是 0×0（探针实测）。
+     这与 `.os-*` 那次是同一类（DEV-LOOP §6.1）。小窗入口 2026-10-01 已退役，
+     但**判据照旧**：**"用到它的入口有几个"** —— 多处都要的就必须在共用文件里。 */
 }
 
 /* 事件态：徽章亮起（TopBar 按 busy || 覆盖文案 挂类） */
@@ -338,7 +339,7 @@ html.window-maximized body {
 
 /* ⚠️ **点的三条（基态 / `.ok` 白点 / `.busy` 琥珀 + `status-pulse`）也搬去
    `status-island.css` 的 `.si-dot`**（D1，2026-09-27）—— 同一条理由：
-   小窗拿不到这个文件，点会变成 **0×0**（探针在小窗坐标系里实测到）。
+   当时小窗那个入口拿不到这个文件，点会变成 **0×0**（探针实测到）。
    这里是**搬家**不是复制：留一份在这里就又会变成两个真源。 */
 
 /* 胶囊文案变更时的渐隐渐显 + 超长文案省略号 */
@@ -376,11 +377,11 @@ html.window-maximized body {
 }
 
 /* 状态岛（胶囊 + 面板）已抽到 `status-island.css`（R38 批 5b）——
-   小窗与主窗口共用那一份，避免小窗为了一个胶囊加载整个 layout.css。 */
+   那是一份独立的样式表，别再往本文件里加状态岛的规则（两个真源会漂）。 */
 
 /* ⚠️ `@keyframes si-panel-in-fade` **也搬去了 `status-island.css`**（2026-09-30）。
-   它原本只在这里，而**引用它的 reduce 分支在共用文件里** ⇒ 小窗（不加载本文件）
-   在 `prefers-reduced-motion` 下会引用一条**不存在的动画名**（等于没有入场）。
+   它原本只在这里，而**引用它的 reduce 分支在共用文件里** ⇒ 当时小窗那个入口
+   （不加载本文件）在 `prefers-reduced-motion` 下会引用一条**不存在的动画名**（等于没有入场）。
    同属「拆入口顺带生效的东西」（DEV-LOOP §6.1 的第 7 次）：搬家不是复制，
    留一份在这里就又变成两个真源。 */
 

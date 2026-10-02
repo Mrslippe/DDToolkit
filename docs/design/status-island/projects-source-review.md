@@ -8,6 +8,9 @@ verified: 2026-09-25
 
 # 三个开源「灵动岛 / 状态浮窗」项目源码调研
 
+> ⚠️ **小窗已整体退役（2026-10-01）**：本文是**设计记录**（外部项目调研），不是本项目现状；
+> 小窗实现在分支 `f2-widget-archive`，现状见 `docs/TODO.md` §4（`devlog/270`）。
+
 > 方法：`git clone --depth 1` 后**直读源码/配置**，非转述 README。
 > 标注：`【码】`= 从代码/配置直接读到（附 `文件:行`）；`【推】`= 推断；`【缺】`= 仓库里没找到。
 > 三者都是真实、非空、确为 Tauri 2 + React 的仓库。⚠️ **FocuSD 的 owner 已由 `zzliu93-debug` 改名为 `flyl1u`**（GitHub 自动重定向；commit author 仍为 `zzliu93-debug`，HEAD `c284eb1`，2026-08-10，v0.2.3）。

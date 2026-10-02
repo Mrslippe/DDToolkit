@@ -165,7 +165,7 @@ describe('①″ 手动动作（M2）：受理推进度、完成看 originator',
     expect(pills).toEqual([{ text: '搞定了' }])
   })
 
-  it('宿主标识默认 `main`，可显式切到 `widget`（小窗入口用）', () => {
+  it('宿主标识默认 `main`，可显式切到 `widget`（后者是后端认的 originator 标签）', () => {
     expect(myHost()).toBe('main')
     setHost('widget')
     try {

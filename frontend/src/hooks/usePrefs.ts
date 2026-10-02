@@ -6,7 +6,6 @@ import {
   type ThemePref,
 } from '../utils/theme'
 import { parseCloseAction, type CloseAction } from '../utils/shellState'
-import { parseWidgetEnabled, type WidgetEnabled } from '../utils/widgetWindow'
 
 /**
  * 界面偏好（R14b 起：主题；R18 起：关闭窗口语义）—— 一个 hook 管全部偏好。
@@ -20,6 +19,8 @@ import { parseWidgetEnabled, type WidgetEnabled } from '../utils/widgetWindow'
  * 解析与文案全在 `utils/theme.ts`（纯函数、有单测），这里只负责取数与副作用。
  */
 export function usePrefs() {
+  /** 兜底默认值。⚠️ 小窗那三项（`widget_*`）**界面已不再消费**（小窗整窗退役，
+   *  2026-10-01），但后端仍在存它们 —— 留着是**数据层的接线点**，将来重做小窗时直接读。 */
   const [values, setValues] = useState<Record<string, string>>({
     theme: 'light', close_action: 'ask', widget_enabled: 'off',
     widget_click_through: 'off', widget_hide_fullscreen: 'on',
@@ -30,12 +31,6 @@ export function usePrefs() {
 
   const pref = (values.theme === 'system' ? 'system' : 'light') as ThemePref
   const closeAction: CloseAction = parseCloseAction(values.close_action)
-  const widgetEnabled: WidgetEnabled = parseWidgetEnabled(values.widget_enabled)
-  // 小窗两项（R38 批 5d）：与 `widget_enabled` 同款解析（**认不出的一律取安全值**）。
-  // 穿透默认 `off`（认不出 = 不穿透，否则用户会"点不动小窗"却不知道原因）；
-  // 全屏隐藏默认 `on`（这是纯体验项，认不出时按"更不打扰"处理）。
-  const widgetClickThrough = values.widget_click_through === 'on'
-  const widgetHideFullscreen = values.widget_hide_fullscreen !== 'off'
   const resolved = resolveTheme(pref, systemDark)
   const caveat = themeCaveat(pref, systemDark)
 
@@ -88,8 +83,7 @@ export function usePrefs() {
   )
 
   return {
-    values, specs, specOf, pref, closeAction, widgetEnabled, resolved, caveat, loaded,
-    widgetClickThrough, widgetHideFullscreen,
+    values, specs, specOf, pref, closeAction, resolved, caveat, loaded,
     setPref, setTheme, reload: load,
   }
 }

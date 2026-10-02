@@ -128,7 +128,7 @@ FastAPI middleware/dependency
 - 新建 `app/core/api_auth.py`；
 - `app/main.py`：认证与 CORS；
 - `frontend/src/api/api.ts`：自动带 header；
-- `frontend/src/main.tsx`、`widgetMain.tsx`：业务请求前完成 base + token 注入。
+- `frontend/src/main.tsx`（当时还有一个 `widgetMain.tsx`，**2026-10-03 随小窗整体放弃删除**）：业务请求前完成 base + token 注入。
 
 ### CORS 决策
 

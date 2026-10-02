@@ -31,8 +31,6 @@ import { useCapabilities, refreshCapabilities } from '../hooks/useCapabilities'
 import { hideToTray, quitApp } from '../utils/shellBridge'
 import { isShellHidden } from '../utils/shellLifecycle'
 import { closeIntent, parseCloseAction, type CloseAction } from '../utils/shellState'
-import { parseWidgetEnabled, WIDGET_CLOSED_EVENT, WIDGET_POS_KEY, parseWidgetPos } from '../utils/widgetWindow'
-import { showWidgetWindow } from '../utils/shellBridge'
 import type { Notice, NoticeActionKind } from '../utils/notificationHub'
 import { useNotices } from '../utils/noticeStream'
 import { api } from '../api/api'
@@ -52,35 +50,10 @@ const REASON_TEXT: Record<string, string> = {
 const POLL_ACTIVE_MS = 3000 // 有任务运行时的高频轮询
 const POLL_IDLE_MS = 10000 // 空闲时的低频轮询
 const POLL_RETRY_MS = 500 // 在途冲突时的重排间隔（轮询链自愈，见 poll 内注释）
-// `PILL_MS` / `PUSHED_PROGRESS_MS` 两条 TTL 已搬到 `utils/noticeStream.ts`（M4，devlog/252）：
-// 小窗也要用它算同一批推送类条目 —— 两个宿主各写一份迟早会漂（同 R46 那条
-// "同一份数据不许有两个渲染器"的道理）。下面从那里 import。
+// `PILL_MS` / `PUSHED_PROGRESS_MS` 两条 TTL 已搬到 `utils/noticeStream.ts`（M4，devlog/252）。
+// 下面从那里 import。
 
 const isTauri = '__TAURI_INTERNALS__' in window
-
-/**
- * dev/探针专用：`?density=widget` 让**顶栏里**也渲染桌面控件宿主的材质与尺寸（R38 批 5）。
- *
- * 为什么需要：`widget` 宿主本来只该出现在独立小窗里，而探针要能在**同一个页面**上量它 ——
- * 否则"深底的不透明度够不够 4.5:1（亮/暗壁纸都要过）"就只能靠肉眼估。
- * 与 `__ddtoolkitCloseClick` 同一种"为可测性存在"的取舍，同样只在 `DEV` 下生效。
- */
-const islandDensity: 'bar' | 'widget' =
-  import.meta.env.DEV && new URLSearchParams(window.location.search).get('density') === 'widget'
-    ? 'widget'
-    : 'bar'
-
-/**
- * 「启动时按偏好开小窗」是否已经做过 —— **模块级**（不是组件内 ref）。
- *
- * 为什么必须放模块级：`React.StrictMode` 在开发模式下会让 effect **挂载→卸载→再挂载**，
- * 组件内的 `useRef` 会跟着重挂载一起重置 ⇒ 挡不住第二次。模块级变量在同一个 JS 上下文里
- * 只初始化一次，才能真正做到"只开一次"。
- *
- * ⚠️ **这不是唯一防线**：Rust 侧 `show_widget_window` 也加了重入保护 ——
- * 命令不幂等这件事更根本（快速双击、并发调用同样会建出第二个窗口）。
- */
-let widgetAutoOpenDone = false
 
 /**
  * 「静默任务」判定：定时档发起的**自动节拍**不占顶栏。
@@ -376,7 +349,7 @@ export default function TopBar() {
   }, [auths])
 
   // 三类**本地覆盖**（瞬时消息 / 开播告警 / 推送来的"任务已受理"）已搬到
-  // `utils/noticeStream.ts::useNotices`（M5-2b，devlog/259）：两扇窗共用同一份订阅与 TTL，
+  // `utils/noticeStream.ts::useNotices`（M5-2b，devlog/259）：订阅与 TTL 只此一份，
   // 「服务端一报到就让位」的规则也收在 `mergeNotices` 里（同一条判据，不再两处各写一遍）。
 
   // 「有事发生」= 可见任务（手动/收录/外部批次）或操作结果覆盖态。
@@ -404,79 +377,13 @@ export default function TopBar() {
   // 可见时吃上面这条 2s 轮询；隐藏时 hook 内自带 60s 心跳（详见 useTrayStatus 注释）。
   useTrayStatus(status?.rate_limit)
 
-  // ⑦ R38 批 5b 的「把条目推给小窗」**已退役**（M5-2b，devlog/259）：小窗现在自己拉
-  // `/vtuber/notices`（同一个 `useNotices`、同一份口径），不再需要主窗口替它取数 ——
-  // 那条广播的代价正是"主窗口不在（没开 / 关掉了）时小窗永远是空的"（M4 拆了一半，本批拆干净）。
-
-  // ⑧ R38 批 5b：**启动时**按偏好把小窗摆回来。
-  // 只在挂载时跑一次：之后的开关由设置弹窗直接调 `showWidgetWindow`/`hideWidgetWindow`
-  // （那边才知道用户刚点了什么），这里重复响应反而会打架。
-  useEffect(() => {
-    // ⚠️ **StrictMode 会让这个 effect 跑两次**（开发模式：挂载→卸载→再挂载）。
-    // 2026-09-24 真机反馈：用户拖小窗时发现"原地残留了一个" —— 日志显示
-    // `show_widget_window` 被调了两次、建出**两个窗口**（重叠在一起，一拖就分开）。
-    //
-    // 两道防线：
-    //   ① 这里用模块级 ref 挡住第二次（组件重挂载时 ref 会重置，所以还得靠 ②）；
-    //   ② Rust 侧 `show_widget_window` 加了 `CREATING_WIDGET` 重入保护 ——
-    //      命令不幂等这件事更根本，任何重入（StrictMode / 快速双击 / 并发）都该被挡住。
-    if (widgetAutoOpenDone) return
-    widgetAutoOpenDone = true
-    void (async () => {
-      try {
-        const v = (await api.getPrefs()).values.widget_enabled
-        // 调之前先问一次窗口在不在：`show_widget_window` 的"提前返回"分支以前不留痕，
-        // 于是日志里"窗口早就存在"和"窗口没建出来"长得一模一样 —— 我据此推错过一次方向。
-        let existsBefore = 'n/a'
-        try {
-          const { invoke } = await import('@tauri-apps/api/core')
-          existsBefore = String(await invoke<boolean>('widget_window_exists'))
-        } catch { /* 非桌面端 */ }
-        console.info('[widget] 启动自动开启：pref=', v, ' 调之前窗口存在=', existsBefore)
-        if (parseWidgetEnabled(v) === 'on') {
-          await showWidgetWindow(parseWidgetPos(globalThis.localStorage?.getItem(WIDGET_POS_KEY)))
-        }
-      } catch (e) {
-        console.warn('[widget] 启动自动开启失败', e)
-      }
-    })()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  // ⑨ R38 批 5b（2026-09-24 真机反馈加）：**小窗自己关掉时**把偏好改回 `off`。
-  // 用户按 Alt+F4 / 系统关它 → 小窗发 `widget:closed` → 这里落一次偏好。
-  // 不做的话会出现"窗口没了但设置还写着开启"，下次启动又开一个，用户会觉得"关不掉"。
+  // ⑦ R38 批 5b 的「把条目推给小窗」**已退役**（M5-2b，devlog/259）：各处都自己拉
+  // `/vtuber/notices`（同一个 `useNotices`、同一份口径），不再需要主窗口替谁取数 ——
+  // 那条广播的代价正是"主窗口不在（没开 / 关掉了）时另一边永远是空的"。
   //
-  // ⚠️ **落偏好之前必须确认窗口真的没了**：`hide_widget_window` 在**设置里关开关**那条路上
-  //    也会发这个事件，而"关掉又立刻打开"时这条可能**后到** ⇒ 会把刚打开的偏好改回 `off`。
-  //    拿不到窗口列表时**宁可不落**（少落一次只是下次启动多开一下，落错是状态不一致）。
-  useEffect(() => {
-    let un: (() => void) | null = null
-    void (async () => {
-      try {
-        const { listen } = await import('@tauri-apps/api/event')
-        un = await listen(WIDGET_CLOSED_EVENT, () => {
-          void (async () => {
-            try {
-              const { getAllWindows } = await import('@tauri-apps/api/window')
-              const wins = await getAllWindows()
-              if (wins.some((w) => w.label === 'widget')) return   // 还开着 ⇒ 是竞态，别改
-            } catch {
-              return
-            }
-            try {
-              await api.savePrefs({ widget_enabled: 'off' })
-            } catch {
-              /* 落不上就下次启动再说 */
-            }
-          })()
-        })
-      } catch {
-        /* 非桌面端 */
-      }
-    })()
-    return () => un?.()
-  }, [])
+  // ⑧ 小窗的启动自动开窗与小窗关闭时回写偏好（R38 批 5b）**随小窗一起退役**（2026-10-01）：
+  // 它读的 `WIDGET_POS_KEY`、`show_widget_window`、`widget:closed` 在整窗退役后都不存在了。
+  // 但偏好键 `widget_enabled` 仍留在后端（数据层留着以后接线）。
 
   /**
    * 面板动作 → 具体行为（渲染层不碰业务）。
@@ -615,7 +522,7 @@ export default function TopBar() {
           完成报告 AlertDialog），现在统一交给 `StatusIsland` + `utils/notificationHub`。
           空闲态仍是顶栏 chrome 的一部分（白字 + 绿点、无容器）；「自动节拍不占顶栏」
           这条口径已从"副作用"变成 notificationHub 里的具名规则（带反向用例）。 */}
-      <StatusIsland notices={notices} onAction={onIslandAction} now={now} density={islandDensity} />
+      <StatusIsland notices={notices} onAction={onIslandAction} now={now} />
 
       <div className="topbar-spacer" {...(isTauri ? { 'data-tauri-drag-region': true } : {})} />
 

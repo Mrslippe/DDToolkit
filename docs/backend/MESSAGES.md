@@ -1,7 +1,7 @@
 ---
 doc: backend/messages
 class: module
-scope: 状态通道与通知：消息的类型分层、取数与合并口径、已读、跨进程分发到桌面小窗
+scope: 状态通道与通知：消息的类型分层、取数与合并口径、已读、跨进程分发到前端订阅者
 not-scope: 前端怎么渲染消息 → frontend/UI-MAP.md；抓取进度本身怎么产生 → backend/FETCH-PIPELINE.md
 sot: app/services/messages.py, app/services/notices.py, app/routers/messages.py
 verify: python -m pytest -q tests/test_messages.py
@@ -17,7 +17,8 @@ T0 的进度反馈就是这条通道（无进度条、无胶囊）。
 
 **2026-09-27 起多了一条推送通道（M0，devlog/241）**：`app/services/messages.py::MessageHub`
 + `GET /messages/stream`（SSE over fetch，token 走 header）。领域事件（`domain.*`）与
-派生通知（`notice.*`）由后端**主动**推给所有订阅者（主窗口 / 小窗），不再等下一次轮询
+派生通知（`notice.*`）由后端**主动**推给**所有订阅者**（与窗口无关 —— 2026-10-01 前还包含桌面小窗，
+那条宿主已整窗退役，见 `devlog/270`），不再等下一次轮询
 —— "点击 → 各终点看到"最坏 3–10s 的延迟，99% 就耗在"等下次轮询"上。
 `publish()` **同步、任何线程可调**（开播边沿在 T0 守护线程里产生），经 `queue.Queue`
 中转到应用循环投递。**两条通道并存**：轮询是一致性兜底（推送漏发 / 重连窗口），
@@ -50,8 +51,8 @@ M0 **不退役**轮询。细节与不变量见 `docs/backend/HTTP-CONTRACT.md` �
   （删 `kickPoll` 之后按钮禁用仍即时，口径与 `fetch-status` **同源**：自动档不算忙）；
   报告**只对全量轮出**（`REPORT_KINDS`）—— 少了这道过滤，`quick`（手动抓帖）与 `adopt`
   （收录首屏）都会留下一条写着"全量帖子抓取完成"的假报告（M5-1 期间没有消费者 ⇒ 看不出来）。
-- **M5-2b（2026-09-29，devlog/259）前端切过来了**：`TopBar` 的六类本地汇总整段删除，两扇窗
-  共用 `utils/noticeStream.ts::useNotices`（**服务端列表 + 本地覆盖**合并：推送来的进度/瞬时消息、
+- **M5-2b（2026-09-29，devlog/259）前端切过来了**：`TopBar` 的六类本地汇总整段删除，消费侧
+  （当时是主窗 + 小窗两个窗口）共用 `utils/noticeStream.ts::useNotices`（**服务端列表 + 本地覆盖**合并：推送来的进度/瞬时消息、
   客户端自己的事实、dev 注入）；`widget:notices` 广播与 `kickPoll` 一并退役；
   报告的「知道了」调 `POST /vtuber/notices/ack`（**已读落库** ⇒ 刷新/深休眠后不再复活）。
   ⚠️ **`fetch-status` 那条轮询不退役**：报告的明细（stored/skipped/video_missing/issues）、
@@ -68,7 +69,8 @@ M0 **不退役**轮询。细节与不变量见 `docs/backend/HTTP-CONTRACT.md` �
 | **合并规则** | 服务端报到同类 ⇒ 本地那份让位；按 id 去重（本地优先）；TTL 从**到达时刻**起算 | 同上（`mergeNotices`，有单测） |
 
 ⚠️ 判据面：`tests/test_notices.py`（契约/语义）+ `utils/noticeStream.test.ts`（合并 + 结构判据：
-两个宿主都必须用 `useNotices`、都必须拉端点、不许再出现 `widget:notices` / `kickPoll` 的活代码）
-+ 探针 `--messages` / `--status-widget`（端到端；小窗那页没有主窗口也能显示）。
+消费侧 `TopBar` 必须用 `useNotices`、必须拉 `GET /vtuber/notices`、不许自带一份 TTL，且
+`widget:notices` / `kickPoll` / `broadcastNotices` 这几个**已退役的旧通路名**不许留下活代码引用）
++ 探针 `--messages`（端到端）。
 
 ---

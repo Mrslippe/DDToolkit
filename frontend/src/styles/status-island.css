@@ -1,32 +1,34 @@
-/* ⚠️ **`box-sizing: border-box` 必须在这里自己声明**（2026-09-24 独立入口后暴露）。
+/* ⚠️ **`box-sizing: border-box` 在这里自己声明一遍**（历史产物，留着是防御性的）。
 
-   原来这条是 **Tailwind preflight** 设的全局规则（在 `index.css` 里），
-   而小窗的独立入口（`widgetMain.tsx`）**只引 `tokens.css` + 本文件** —— 拿不到 preflight。
-   于是 `.si-island[data-density='widget']` 的 `width: 200px` + `padding: 0 12px`
-   在默认的 `content-box` 下算成 **224px**（实测），比规格 §7 的 200 宽了 24px。
+   这条本来是 **Tailwind preflight** 的全局规则（`index.css`），2026-09-24 小窗的独立入口
+   （只引 `tokens.css` + 本文件）拿不到 preflight，于是 `.si-island` 的定宽 + 内距在
+   `content-box` 下算宽了 24px —— 当场就地补了这条。
 
-   教训：**拆入口会把"蹭全局 reset"的地方全部暴露出来** ——
-   这类隐式依赖在单入口时代是看不见的。凡是靠 reset 的规则，本文件都要自带。 */
+   ⚠️ 小窗入口 2026-10-01 已退役、主窗口又有 preflight ⇒ 这条**现在是冗余的**。
+   冗余无害、删掉却要重新验证一遍胶囊宽度，所以留着 —— 但**教训别丢**：
+   *拆入口会把"蹭全局 reset"的地方全部暴露出来*（这类隐式依赖在单入口时代看不见）。
+   将来再拆入口，先自查 `box-sizing` / `.os-*` / dev token 这三样。 */
 .si-island,
 .si-island *,
 .si-panel,
-.si-panel *,
-.widget-shell,
-.widget-shell * {
+.si-panel * {
   box-sizing: border-box;
 }
 
 /* ── 覆盖式滚动条（OverlayScroll 组件）─────────────────────────────────
    ⚠️ **2026-09-24（R38 批 5e）从 `layout.css` 搬过来的**，不是新写的。
 
-   为什么必须在这一份里：状态岛面板的条目列表用 `OverlayScroll`，而
-   **小窗的独立入口（`widgetMain.tsx`）只引 `tokens.css` + 本文件** —— 不加载 `layout.css`。
-   留那份里 = 小窗里 `.os-root` / `.os-scroll` **一条样式都没有**：面板拿不到
-   `display:flex` + `overflow:hidden`，滚动体也拿不到 `flex:1 1 auto; min-height:0`
-   ⇒ 条目与页脚**互相叠在一起**（用户 2026-09-24 截图实测）。
+   搬家的理由：状态岛面板的条目列表用 `OverlayScroll`，而当时小窗的独立入口
+   （只引 `tokens.css` + 本文件）不加载 `layout.css` ⇒ 那边 `.os-root` / `.os-scroll`
+   **一条样式都没有**：面板拿不到 `display:flex` + `overflow:hidden`，滚动体也拿不到
+   `flex:1 1 auto; min-height:0` ⇒ 条目与页脚**互相叠在一起**（用户 2026-09-24 截图实测）。
 
    **判据不是"它是不是滚条"，而是"用到它的入口有几个"** —— 共用组件的样式必须放共用文件。
-   搬家方向是单向的（`layout.css` → 本文件），反之不行（小窗不能引 `layout.css`）。
+   ⚠️ 小窗入口 2026-10-01 退役后，**搬家方向这条规矩仍然有效**（大文件 → 共用文件）；
+   只是当年那个"第二个入口"没有了 —— 别把它搬回 `layout.css`：
+   搬回去要重新确认加载顺序（`.os-root{position:relative}` 与 `.lc-pop{position:fixed}`
+   优先级相同 ⇒ **谁后加载谁赢**，见 `posts.css` 的 `.os-root.lc-pop` 与 `ui_probe` 的
+   cell-pop 判据）。
 
    视觉与全局标准一致：透明轨 + 常态细灰 `--c-border` + hover 粉 `--c-primary` + 圆角胶囊。
    拇指贴边留白 4px、常态宽 4px；**指针压在拇指上或拖拽中**才变粉并加粗至 6px（中心对齐）；
@@ -90,16 +92,15 @@
 }
 
 /* ── 状态岛（胶囊 + 面板）─────────────────────────────────────────────
-   R38 批 5b 之后**从 `layout.css` 抽出来**：小窗（`widget.html`）与主窗口共用这一份，
-   而不是让小窗也加载整个 1494 行的 `layout.css`。
+   R38 批 5b 起**从 `layout.css` 抽出来的独立一份**（当时小窗与主窗口共用它）。
 
-   为什么值得抽：小窗只渲染状态岛，而 `main.tsx` 的静态 import 会把
+   ⚠️ **小窗那条宿主 2026-10-01 整窗退役了**，于是本文件现在只有顶栏一个消费者。
+   抽出来的历史理由仍然值得记住：小窗当年只渲染状态岛，而 `main.tsx` 的静态 import 会把
    **整个应用**（App / react-router / shadcn / ECharts）都拉进它那个 renderer ——
-   实测小窗 renderer 占 **132MB**，其中 Chromium 基础开销只占小部分，
-   大头是我们自己的代码与依赖。抽成独立入口 + 独立样式表之后，小窗只加载它需要的。
+   实测 132MB，其中 Chromium 基础开销只占小部分，大头是我们自己的代码与依赖。
 
-   ⚠️ **改这个文件要同时想着两个宿主**（顶栏 `bar` 与桌面控件 `widget`）——
-   宿主差异靠 `[data-density=...]` 区分，别再往 `layout.css` 里加状态岛的规则。 */
+   ⚠️ 这份文件**不跟着入口一起消失**（主窗口仍在用），所以维护规矩照旧：
+   状态岛的规则写在这里，别再往 `layout.css` 里加一份 —— 两个真源会漂。 */
 
 /* ── 顶栏状态岛（R12a，devlog/089）────────────────────────────────────
    复用 `.topbar-status` 的胶囊外观（浅粉底/胶囊/居中），新增的是：
@@ -108,9 +109,9 @@
    expand（面板）· 空闲轮播（R12b）。 */
 /* ⚠️⚠️ **胶囊的"解剖"在这一块里，不在 `layout.css`**（D1，2026-09-27 搬家）。
  *
- * 这一段原本写在 `layout.css` 的 `.topbar-status` 里 —— 那对**顶栏宿主**没问题，
- * 但小窗的独立入口（`widgetMain.tsx`）**只加载 `tokens.css` + 本文件**。
- * 后果（探针在 `widget.html` 的坐标系里实测到的原始值）：
+ * 这一段原本写在 `layout.css` 的 `.topbar-status` 里 —— 那对**主窗口**没问题，
+ * 但小窗的独立入口（只加载 `tokens.css` + 本文件）拿不到它。后果（探针在那个入口的
+ * 坐标系里实测到的原始值）：
  *
  * ```
  * display='block'   ← 不是 flex 行 ⇒ 点/字形/文案/计数/chevron 退化成行内流
@@ -119,13 +120,13 @@
  * 点=[0, 24]        ← `<i>` 没有宽高 ⇒ **紧迫度这个通道整个看不见**
  * ```
  *
- * 而两段探针一直绿：`--status-widget` 的第一段跑的是 `index.html?density=widget`
- * —— 那在**主窗口**里、加载了 `layout.css`。**判据的坐标系错了**（DEV-LOOP §6.5），
- * 同时这也是 §6.1「拆入口顺带生效的东西」的**第 5 次**（前四次：preflight 的 box-sizing ·
- * `.os-*` · `setApiBase` · dev token）。
+ * 而当时两段探针一直绿：第一段跑的是**主窗口**里加载了 `layout.css` 的那棵树 ——
+ * **判据的坐标系错了**（DEV-LOOP §6.5），同时这也是 §6.1「拆入口顺带生效的东西」的
+ * **第 5 次**（前四次：preflight 的 box-sizing · `.os-*` · `setApiBase` · dev token）。
  *
- * **规矩**（§6.1 第 2 条）：判据不是"它看起来属于哪一块"，而是"**用到它的入口有几个**"。
- * 顶栏与桌面控件都要的声明，必须放**共用文件**；搬家方向单向（大文件 → 共用文件）。 */
+ * **规矩**（§6.1 第 2 条）：判据不是"它看起来属于哪一块"，而是"**用到它的入口有几个**"；
+ * 共用声明必须放**共用文件**，搬家方向单向（大文件 → 共用文件）。
+ * ⚠️ 小窗入口已退役（2026-10-01），但**这条规矩是拆入口这件事本身的性质**，不随它失效。 */
 .si-island {
   cursor: default;
   display: flex;
@@ -137,11 +138,12 @@
   color: #fff;
   /* ⚠️ **字体族必须在这里自己声明**（2026-09-30，D1 的补课）：
      全站那句 `font-family: var(--font-family)` 写在 **`layout.css` 的 `body`** 上，
-     而小窗的独立入口不加载那个文件 ⇒ 真窗口里胶囊用的是 **WebView2 的默认字体**
-     （探针在 `widget.html` 里实测到 `"Noto Sans SC"`，而顶栏宿主是 Alimama）。
-     这也是「拆入口顺带生效的东西」的**第 6 次**（DEV-LOOP §6.1）：同一条规矩 ——
+     而当年小窗那个入口不加载那个文件 ⇒ 真窗口里胶囊用的是 **WebView2 的默认字体**
+     （探针在那边实测到 `"Noto Sans SC"`，而顶栏是 Alimama）。
+     这是「拆入口顺带生效的东西」的**第 6 次**（DEV-LOOP §6.1）：同一条规矩 ——
      **共用文件必须自包含，别指望调用方把字体/重置/变量设好了**。
-     顺带修掉一处浪费：`@font-face` 在 `tokens.css` 里，小窗**下载了字体却没人用**。 */
+     ⚠️ 主窗口这条**现在是冗余的**（`body` 已经设了同一个变量），留着是因为它零成本；
+     真要删，请连同上面那段规矩一起重新想一遍。 */
   font-family: var(--font-family);
   font-size: 13px;   /* 2026-09-09 用户：比 12px 大一号（空闲态白字在粉条上更好读） */
   font-weight: 500;
@@ -172,9 +174,8 @@
 }
 
 /* 操作成功覆盖态：白点（此时徽章已亮起，白点在深玫瑰底上才看得见）。
-   ⚠️ **这是顶栏宿主的配色**：顶栏胶囊事件态是深玫瑰底 `#c9406f` ⇒ 白点才有"成功"语义。
-   小窗是浮在壁纸上的深色卡片，**白色在那里没有语义** ⇒ 见下面
-   `.si-island[data-density='widget'] .si-dot.ok`（改回绿）。 */
+   ⚠️ **这是顶栏的配色**：顶栏胶囊事件态是深玫瑰底 `#c9406f` ⇒ 白点才有"成功"语义。
+   （当年浮在壁纸上的深色卡片宿主要把这里改回绿，那条宿主 2026-10-01 已退役。） */
 .si-dot.ok {
   background: #fff;
 }
@@ -231,220 +232,10 @@
   transition-delay: 0ms;   /* 撤**立刻**开始，不等 `--motion-lag` */
 }
 
-/* ── R38 批 5：桌面控件宿主（`data-density="widget"`，规格 §7）──────────────────
-   它要**浮在任意壁纸上** ⇒ 材质必须自己保证可读性，不能借用顶栏的粉底。
-
-   ⚠️ **深底的不透明度是算出来的，不是调出来的**：`rgba(18,18,22,α)` 叠在**最亮**（纯白）
-   与**最暗**（纯黑）壁纸上，白色文字的对比度都要 ≥ **4.5:1**（§7「亮/暗壁纸都要过」）。
-   取 α = 0.72 ⇒ 白底上有效底 ≈ `rgb(84,84,86)`、黑底上 ≈ `rgb(13,13,16)`，
-   白字对比度实测 **7.51:1** 与 **19.41:1** —— 两端都过，中间壁纸自然落在区间内。
-   探针按**计算样式解析出 α 并复算这两个极端**（见 `--status-island` 的 widget 断言）。
-
-   `position/left/transform/max-width` 全部复位：§8 要求宿主无关 ——
-   顶栏那套「absolute + translateX(-50%) 居中」在这里不成立，**它自己就是窗口**。 */
-/* ══ 小窗宿主的**一套自带材质**（D1 视觉，2026-09-30）══════════════════════════
- *
- * 数值全部取自样例页 `docs/design/widget-preview/direction.html` 的**深卡一套**
- * （用户 2026-09-27 拍板的指南：小窗的样式与动画以那一页为准）。
- *
- * ⚠️⚠️ **为什么必须自带一套**：卡片浮在**任意壁纸**上，而全站令牌
- * （`--c-text-main` #4b5a6b · `--c-text-sub` · `--c-border` · `--c-primary-deep` ·
- * `--shadow-dialog`）全是**浅色主题**的值。未改之前探针在小窗坐标系里实测到：
- *
- * ```
- * 面板正文 = rgb(75, 90, 107)   ← 铺在深卡上 ≈ 2.2:1（正文几乎读不出来）
- * 面板阴影 = rgba(15,23,42,.1) 0 4px 16px  ← 浅色主题的阴影，深卡上等于没有
- * 动作钮   = 白底 + 深粉字（--c-bg-card / --c-primary-deep）← 深卡上一颗白药丸
- * ```
- *
- * 判据见 `ui_probe --status-widget` 的「视觉」一段（墨色表 + 对比度按 α 复合到两端壁纸）。
- *
- * ⚠️ **两处都要挂**：面板是 portal 到 `body` 的 ⇒ 它既不在 `.widget-shell` 里、
- * 也不继承胶囊上的自定义属性。
- * ⚠️ **将来由 W1「主题广播」按主题喂**（浅色壁纸要走另一套）—— 现在只有深卡这一套。
- */
-.si-island[data-density='widget'],
-.si-panel[data-density='widget'] {
-  --wg-surf: rgba(24, 25, 32, 0.92);        /* 样例页 --surf */
-  --wg-hi: rgba(255, 255, 255, 0.10);       /* 顶边高光 --surf-hi */
-  --wg-ring: rgba(255, 255, 255, 0.10);     /* 1px 描边 --surf-ring */
-  --wg-fg: #fff;
-  /* ⚠️ **faint 一档与样例页不同**（样例页 .44）：按 α 复合到纯白/纯黑壁纸后只有
-     4.01:1 / 4.37:1，低于全站「小字 ≥4.5:1」的口径 ⇒ **只抬 alpha、色相不动**。 */
-  --wg-faint: rgba(255, 255, 255, 0.52);
-  --wg-line: rgba(255, 255, 255, 0.08);
-  --wg-icon-bg: rgba(255, 255, 255, 0.10);
-  --wg-chip-bg: rgba(255, 255, 255, 0.16);
-  --wg-action: var(--c-primary);            /* #ffa2b4：对深卡 9.3:1（浅卡才需要深档） */
-  --wg-st-ok: #52c41a;
-  --wg-st-busy: #faad14;
-  --wg-st-warn: #ff4d4f;
-  /* 阴影三层 + 1px 描边（样例页 --shadow / --shadow-open）。
-     ⚠️ 层**由 TS 生成**写进 `--wg-shadow-layers`（`WIDGET_SHADOW_LAYERS`），
-     这里只负责把"高光 + 描边"与那三层拼起来 —— 因为**留白是从三层算出来的**
-     （`WIDGET_SHADOW_PAD`），两处各写一遍正是"阴影被截断"的成因。
-     ⚠️ 描边那圈是**任意壁纸上勾出卡片边缘**用的（纯白壁纸上也读得出）。 */
-  --wg-shadow:
-    inset 0 1px 0 var(--wg-hi),
-    0 0 0 1px var(--wg-ring),
-    var(--wg-shadow-layers);
-  --wg-shadow-open:
-    inset 0 1px 0 var(--wg-hi),
-    0 0 0 1px var(--wg-ring),
-    var(--wg-shadow-open-layers);
-}
-
-.si-island[data-density='widget'] {
-  position: relative;
-  left: auto;
-  transform: none;
-  /* ⚠️⚠️ **宽度跟着内容走**（D1 定稿 = 09-27 样例页的「方案 A + 上限 400」）。
-     三个数**不许在这里写死**：它们由 `applyWidgetCssVars()` 从
-     `utils/widgetWindow.ts` 的常量写进变量（`--widget-cap-min-w` / `-max-w` / `--widget-radius`）
-     —— 单一真源。本仓为此栽过（`d1-form-options.md` §6 的"三源"：只改一两处，
-     单测与探针都会绿，而真机上窗口正在裁胶囊）。
-     兜底值（`var(…, 200px)`）与常量同值：JS 还没跑起来时也不至于画错。 */
-  width: calc-size(max-content, size);   /* 内容宽；不支持时退回 flex 项的 max-content */
-  min-width: var(--widget-cap-min-w, 200px);
-  max-width: var(--widget-cap-max-w, 400px);   /* 超过它才上省略号：上限**之内不省** */
-  height: var(--widget-cap-h, 40px);
-  /* 圆角**恒定 20px**：折叠 40 高时 20 = 完美胶囊，展开也是 20 ⇒ 半径单调，
-     不会"先胀后收"（规格 §5 同心圆角同一族理由）。 */
-  border-radius: var(--widget-radius, 20px);
-  padding: 0 14px;                       /* 样例页 `.cap-box { padding: 0 14px }` */
-  /* ⚠️ **这里刻意不用 `backdrop-filter`**（2026-09-24 第三轮真机反馈改）。
-     规格 §7 原本写的是 `backdrop-filter: blur(20px) saturate(1.4)`，实测在**真窗口**里
-     会出现"**只画模糊、不画背景与文字**"—— 用户看到的就是一块什么都没有的磨砂方块。
-
-     为什么它在这里格外危险：**本仓自己记过一笔**（`posts.css` R45 那条）——
-     "`backdrop-filter` 是**全仓唯一一处压在全幅背景图上的合成效果**，而本仓有
-     `filter: blur` **拖垮 WebView2 合成器**的历史记录，不必要就不留"。
-     小窗这回更极端：窗口是**透明的**，`backdrop-filter` 采样的就是**桌面**。
-
-     而它在这里**几乎不贡献任何东西**：α=0.92 的深底只透出 8%，其中被模糊改变的
-     只有壁纸的高频细节（约 3.5% 的像素贡献）。**危险且无用** ⇒ 去掉。
-     可读性靠**不透明度 + 自带墨色**保证（探针按 α 复算两端壁纸，实测 ≥4.5:1）。 */
-  background: var(--wg-surf);
-  color: var(--wg-fg);
-  box-shadow: var(--wg-shadow);
-  /* 卡片是"活"的：翻方向 / 亮起时阴影跟着变，而不是硬跳（样例页 `.island` 的过渡） */
-  transition:
-    box-shadow var(--motion-base) var(--ease-standard),
-    background-color var(--motion-fast) ease;
-}
-
-/* ⚠️ **小窗宿主的点色不能照抄顶栏的白点**（09-27 样例页专门记过这条）：
-   顶栏里 `.si-dot.ok` 是白色，那是"深玫瑰底上的成功色"；小窗是**浮在壁纸上的深色卡片**，
-   白色在那里没有语义（浅色壁纸下更是直接消失）。所以 `ok` 在小窗里改回绿。
-   ⚠️ 这条同时是"宿主差异"的**判据**：探针在小窗坐标系里量点色，不该是 `rgb(255,255,255)`。 */
-.si-island[data-density='widget'] .si-dot.ok {
-  background: #52c41a;
-}
-
-/* 事件态：顶栏宿主是**整块变粉**，但桌面控件不能 —— 那会毁掉深色材质。
-   改成「深底不变 + 一圈粉环」，**有事发生**照样看得见（§7 没规定，取这条）。
-   ⚠️ 粉环**替换**那圈中性描边（`--wg-ring`），层数不变 ⇒ 亮起时卡片的立体感不丢。 */
-.si-island[data-density='widget'].on {
-  background: var(--wg-surf);
-  box-shadow:
-    inset 0 1px 0 var(--wg-hi),
-    0 0 0 1px rgba(233, 92, 141, 0.85),
-    var(--wg-shadow-layers);
-}
-
-/* ── 小窗里胶囊的那几个槽位（D1 视觉：按样例页的深卡一套上墨）────────────
-   与顶栏宿主的差别**只有颜色**（形状/尺寸两个宿主共用）：
-     · 字形：色 `--wg-fg`、opacity **.72**（样例页 `.glyph`）
-     · 活数据：`--wg-faint`（弱一级 —— 它是活数据，不该跟文案抢）
-     · 计数：`--wg-chip-bg` + 16×16（样例页 `.count`） */
-.si-island[data-density='widget'] .si-glyph {
-  color: var(--wg-fg);
-  opacity: 0.72;
-}
-
-.si-island[data-density='widget'] .si-value {
-  color: var(--wg-faint);
-  opacity: 1;
-}
-
-.si-island[data-density='widget'] .si-count {
-  min-width: 16px;
-  height: 16px;
-  padding: 0 5px;
-  line-height: 16px;
-  background: var(--wg-chip-bg);
-}
-
-/* 展开面板：宽由 JS 给（D1 定稿 400 = 胶囊上限，见 `WIDGET_PANEL_W`）；材质跟胶囊同族 ——
-   否则深色胶囊下面吊一块白板会像"两块积木"（§5 同心圆角那条的原话）。
-   同样不用 `backdrop-filter`（理由见上面那段）。 */
-.si-panel[data-density='widget'] {
-  background: var(--wg-surf);
-  border-color: var(--wg-ring);
-  color: var(--wg-fg);
-  /* 圆角与胶囊**同值**（D1 的"圆角恒定 20"）：胶囊(20) → 面板(20) 是同一个半径，
-     合起来读作"一块材料长出来的"。顶栏宿主那份仍是 §5 的 14px。 */
-  border-radius: var(--widget-radius, 20px);
-  /* ⚠️ **面板阴影不能用 `--shadow-dialog`**（全站令牌 = 浅色主题的 `rgba(15,23,42,.1)`）：
-     探针在小窗坐标系里实测到它 —— 深卡上几乎看不见（"面板是贴上去的"）。
-     展开态用**更重的一档**（样例页 `--shadow-open`）：卡片"抬起来"了。 */
-  box-shadow: var(--wg-shadow-open);
-  /* ── 入场（样例页的节奏，与顶栏宿主那份不同）──────────────────────────
-     样例页：从**胶囊那一侧**滑出 6px + 淡入，`--motion-fast`(140ms) + `--ease-standard`，
-     **延迟 `--motion-lag`(60ms)**（"形变先行、内容后到"）。
-     ⚠️ 顶栏宿主那份仍是 220ms（那是它自己的规格，批 1/批 3 定的）⇒ 这里**只覆盖小窗**。
-     ⚠️ **方向**：向上展开时面板该从**下方**滑上来 —— 由 `html[data-widget-dir='up']` 换成
-     另一条 keyframes（见下）。方向在探针里跑不到（没有真窗口），归单测 + 真机。 */
-  transform-origin: top center;
-  animation: si-panel-in-wg var(--motion-fast) var(--ease-standard) var(--motion-lag) both;
-  /* ⚠️ **面板铺满卡片**（F1）：卡片就是面板，所以面板在视口里的位置恒为
-     `(留白, 留白)`、宽度 = 卡片宽（由 `StatusIsland.place()` 给内联样式）。
-     下一条注释讲的是**为什么不能按胶囊算**（那套已经随 F1 一起删掉了）。 */
-  /* ⚠️ **小窗里不能用 `60vh` 当高度上限**（R38 批 5d 修）。
-     小窗的高度是**跟着面板长的**（窗口 = 40 + 6 + 面板高，见 `utils/widgetWindow.ts`）——
-     于是 `vh` 与面板高度**互为因果**：折叠态窗口 40px ⇒ `60vh = 24px` ⇒ 面板被压到 24px
-     ⇒ 窗口只长到 70px ⇒ `60vh` 仍然很小 ⇒ 面板永远长不开（死锁在一个 24px 的板子上）。
-     所以上限改由 JS 按**屏幕高度**算出后写进这个变量（`--widget-panel-max-h`）。
-     取不到时退回 `none`：宁可让面板高过窗口（用户滚动看到），也不要把它压成一条。 */
-  max-height: var(--widget-panel-max-h, none);
-}
-
-/* 入场：向下展开 ⇒ 面板从**上方**（胶囊那一侧）滑下；向上展开 ⇒ 从下方滑上。
-   ⚠️ 属性挂在 `<html>` 上而不是 `.widget-shell` 上：面板是 **portal 到 `body`** 的，
-   `.widget-shell` 不是它的祖先 ⇒ 挂在窗口壳上的属性它看不见。
-   ⚠️ 不写 `scale`（样例页只做位移 + 淡入）：`scale(.985)` 会让 `getBoundingClientRect()`
-   量到中间帧的尺寸（规格 §12.3 / devlog/172 记过这个坑 —— 探针量面板宽时就栽过）。 */
-@keyframes si-panel-in-wg {
-  from {
-    opacity: 0;
-    transform: translateY(-6px);
-  }
-
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-
-@keyframes si-panel-in-wg-up {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-
-  to {
-    opacity: 1;
-    transform: none;
-  }
-}
-
-html[data-widget-dir='up'] .si-panel[data-density='widget'] {
-  transform-origin: bottom center;
-  animation-name: si-panel-in-wg-up;
-}
-
-/* ⚠️ **reduce 用的那条 keyframes 原来只在 `layout.css` 里**（小窗拿不到那个文件 ⇒
-   小窗的 reduce 分支会引用一条不存在的动画名）。同属"共用文件必须自包含"。 */
+/* ⚠️ **reduce 用的那条 keyframes 原来只在 `layout.css` 里**（小窗入口拿不到那个文件 ⇒
+   那边的 reduce 分支会引用一条不存在的动画名）。同属"共用文件必须自包含"。
+   ⚠️ 小窗入口已退役（2026-10-01），但这条 keyframes **仍被下面 `.si-panel` 的 reduce
+   分支引用**（`@media (prefers-reduced-motion: reduce)`）—— 别把它当死代码删掉。 */
 @keyframes si-panel-in-fade {
   from {
     opacity: 0;
@@ -454,194 +245,6 @@ html[data-widget-dir='up'] .si-panel[data-density='widget'] {
     opacity: 1;
   }
 }
-
-/* ── 小窗面板的**内部排版与墨色**（D1 视觉，2026-09-30；数值照样例页的 `.p-*`）────
-   ⚠️ 面板的**结构**（头部 / 滚动体 / 页脚）与顶栏宿主共用，这里只改"深卡上的那一层"。
-   ⚠️ 每一条都是**覆盖**，不是新写：子元素原来的颜色来自浅色主题令牌（见上面那段注释）。 */
-.si-panel[data-density='widget'] .si-panel-head {
-  /* 样例页把标题**居中**、提示绝对定位到右侧（卡片是"一块材料"，头不该像表格） */
-  justify-content: center;
-  padding: 11px 14px 9px;
-  border-bottom-color: var(--wg-line);
-  position: relative;
-}
-
-.si-panel[data-density='widget'] .si-panel-title {
-  color: var(--wg-fg);
-}
-
-.si-panel[data-density='widget'] .si-panel-hint {
-  position: absolute;
-  right: 14px;
-  bottom: 9px;
-  font-size: 11px;
-  color: var(--wg-faint);
-}
-
-.si-panel[data-density='widget'] .si-list {
-  padding: 0 6px 6px;
-}
-
-.si-panel[data-density='widget'] .si-item {
-  padding: 8px;
-  gap: 9px;
-}
-
-/* 分隔线：样例页是**实线 + 白 8%**（原来用的是浅色主题的虚线 `--c-border`） */
-.si-panel[data-density='widget'] .si-item + .si-item {
-  border-top-style: solid;
-  border-top-color: var(--wg-line);
-}
-
-.si-panel[data-density='widget'] .si-item-text,
-.si-panel[data-density='widget'] .si-item-value {
-  color: var(--wg-fg);
-}
-
-.si-panel[data-density='widget'] .si-item-value {
-  color: var(--wg-faint);
-}
-
-.si-panel[data-density='widget'] .si-item-detail,
-.si-panel[data-density='widget'] .si-item-meta,
-.si-panel[data-density='widget'] .si-panel-order {
-  color: var(--wg-faint);
-}
-
-/* 图标：**圆底 chip**（样例页 `.p-icon`：15×15 圆、底 `--icon-bg`、居中）
-   ⚠️ 颜色按**紧迫度**（与胶囊的点同一套口径）：告警红 / 进行中琥珀 / 其余前景色。
-   原来这里是 `--c-text-sub`（浅色主题的灰）与 `--c-primary-deep`（深粉，深卡上几乎看不见）。 */
-.si-panel[data-density='widget'] .si-item-icon {
-  width: 15px;
-  height: 15px;
-  border-radius: 50%;
-  background: var(--wg-icon-bg);
-  display: grid;
-  place-items: center;
-  color: var(--wg-fg);
-}
-
-.si-panel[data-density='widget'] .si-item-icon svg {
-  width: 11px;
-  height: 11px;
-}
-
-.si-panel[data-density='widget'] .si-item-icon.k-alert {
-  color: var(--wg-st-warn);
-}
-
-.si-panel[data-density='widget'] .si-item-icon.k-progress {
-  color: var(--wg-st-busy);
-}
-
-/* 动作钮：**描边胶囊**（样例页 `.p-action`）—— 透明底 + 动作色描边/文字，
-   悬停时反过来（实心底 + 卡面色文字）。原来是一颗**白药丸**（`--c-bg-card` 白底 + 深粉字）。 */
-.si-panel[data-density='widget'] .si-item-action {
-  border-color: var(--wg-action);
-  background: transparent;
-  color: var(--wg-action);
-  font-weight: 600;
-  transition: background var(--motion-fast) ease;
-}
-
-.si-panel[data-density='widget'] .si-item-action:hover {
-  background: var(--wg-action);
-  color: var(--wg-surf);
-}
-
-.si-panel[data-density='widget'] .si-panel-foot {
-  padding: 8px 14px 10px;
-  border-top-color: var(--wg-line);
-  text-align: center;
-}
-
-/* 桌面状态控件**小窗**的根容器（R38 批 5b，`?widget=1`）。窗口本身就是透明的 200×40
-   无边框，所以这里不能有背景、不能有内距 —— 看得见的就是那颗胶囊自己。
-   `user-select: none`：整个面都要能拖（拖动走**指针位移阈值**，见 StatusWidgetWindow ——
-   不能用 `data-tauri-drag-region`，那会在 mousedown 就抢走点击，面板就点不开了）。 */
-/* 小窗的**窗口底必须全透明**（2026-09-24 真机反馈加）。
-   主题令牌 `--c-bg*` 是给应用壳用的，小窗里不该有它们 —— 只要有一颗背景色漏出来，
-   200×40 的窗口就会显示成"一块粉/白方块"。
-
-   ⚠️ 必须盖住**两处**，少一处都不行：
-   ① `index.html` 内联样式里的 `html{background:#ffa2b4}` —— 那是"首绘即主色、消除启动中间态"
-      的刻意设计，主窗口靠揭幕完成后 `main.tsx` 把它切回透明；**小窗没有揭幕** ⇒ 会一直是粉的。
-   ② 主题令牌可能带给根元素的底色。
-   用属性选择器钉在 `<html>` 上（`main.tsx` 分流处设的 `data-widget-window`）。 */
-html[data-widget-window],
-html[data-widget-window] body,
-html[data-widget-window] #root {
-  background: transparent !important;
-  margin: 0;
-  overflow: hidden;
-}
-
-.widget-shell {
-  width: 100vw;
-  height: 100vh;
-  display: flex;
-  /* ⚠️⚠️ **窗口比卡片大一圈**（F1 批，2026-09-30）：多出来的这一圈是给
-     **卡片外阴影**的 —— 用户报的"小窗阴影被截断了"，根因就是"窗口 == 卡片"，
-     阴影要画在卡片外面而窗口外面没有像素。
-     留白宽度由 `applyWidgetCssVars()` 从 `WIDGET_SHADOW_PAD` 写进来（**由阴影的伸出量
-     算出来**，不是拍的），卡片就摆在这个 padding 的原点上。
-     ⚠️ **代价**：这圈留白透明但**会挡住鼠标**（窗口是实心的可命中矩形）——
-     见 `widgetWindow.ts` 里那段注释与 `TODO.md` §1.5 的后续项（Rust 侧按区域透明）。 */
-  padding: var(--widget-shadow-pad, 32px);
-  align-items: flex-start;
-  justify-content: flex-start;
-  background: transparent;
-  overflow: hidden;
-  user-select: none;
-}
-
-/* 小窗里胶囊：**不要再撑高度**（折叠态窗口正好装下它；展开后它整行隐藏，见下一条）。
-   位置由 shell 的 padding 给（卡片恒在 `(pad, pad)`）—— D1 那套
-   `--widget-capsule-x/offset` 已经**不需要了**：F1 之后卡片就是窗口里唯一的东西。 */
-.widget-shell > .si-island {
-  flex: none;
-}
-
-/* ⚠️ **展开后胶囊整行隐藏**（F1，2026-09-30；样例页用户两次要求：
-   「圆点和下拉图标还是保留了」「这个点和下拉按钮还在」）。
-
-   为什么必须连几何一起改（否则换来一个更糟的 bug）：胶囊行不在了 ⇒ 它原来占的那一格
-   必须**由面板接管**。旧模型是"窗口 = 胶囊 + 间隙 + 面板" ⇒ 那一格成了窗口内的
-   **透明空白**（"展开后最顶上空出一大块"），而且卡片在胶囊**外侧**，
-   点开的一瞬间整体离开屏边 46px（CDP 实测）。
-   现在：**窗口 = 卡片 + 留白**，展开时卡片**就是面板**（`widgetExpandGeom` 的 `h = 面板高`）
-   ⇒ 近边在展开/收起时零位移，视觉上就是"胶囊长成了这张卡"。
-
-   ⚠️ 属性由 `StatusIsland` 写（它知道 `open`），**不是**由窗口那边写 ——
-   这样探针（没有真窗口）也量得到这条判据，不必等真机。
-   ⚠️ 拖动：胶囊行没了之后**面板本身就是把手**（`StatusWidgetWindow` 把指针处理
-   挂到面板上）—— 这是采纳 F1 的前提，否则展开态只剩留白能拖。 */
-.widget-shell[data-open='1'] > .si-island {
-  display: none;
-}
-
-/* ── 胶囊在窗口内的位置：**由几何给，不由边猜**（R38 批 5g 重写）─────────
-   小窗默认落在**右下角**，向下展开需要 `968 + 40 + 6 + 面板高` —— 1080p 上任何面板高度
-   都放不下（≥1214 > 1080）。所以贴屏幕下沿时**向上翻**：面板长在胶囊**上方**。
-
-   ⚠️⚠️ **这里曾经写的是 `[data-flip='up'] { justify-content: flex-end }`**
-   （"翻上去 ⇒ 胶囊贴窗口底边"）—— **在没被夹时对，贴屏幕上沿时就错**：
-
-   ```
-   胶囊 y=10、高 40 ⇒ 向上翻要 y = 50 − 183 = −133 ⇒ 被夹到 0
-   此时胶囊在窗口内的真实偏移 = 10 − 0 = 10（**不是** 143 = 窗口高 − 胶囊高）
-   ```
-
-   于是 CSS 把胶囊画到窗口底部、而面板按"胶囊在 10px 处"算 ⇒ **两者错位**
-   （用户截图：胶囊被压在顶端、和面板叠住）。
-
-   **根因**："胶囊在窗口里的位置"曾有两个主人 —— 几何算窗口矩形，CSS 又自己认定贴哪条边。
-   现在**统一由 `widgetExpandGeom` 算出的 `capsuleOffset` 给**（单一事实源），
-   CSS 只负责把它用起来。折叠态偏移恒为 0（窗口 == 胶囊）。
-
-   ⚠️ 面板**不需要**在这里改定位：它是 portal 到 `body` + `position: fixed` 的，
-   而窗口的视口就是它自己 ⇒ fixed 坐标 = 窗口坐标。`StatusIsland.place()` 按
-   `data-flip` 决定把面板放在胶囊下方（`r.bottom + 6`）还是上方（`r.top − 6 − 面板高`）。 */
 
 /* 计数：多于一条时才出现（让用户知道点开还有别的）
    ── R38 批 5 收尾（2026-09-25）：从 `animation: si-pop-in`（keyframes **重放**）
@@ -678,10 +281,12 @@ html[data-widget-window] #root {
   transition-duration: 0s;   /* 复位**瞬时**（否则变成"慢慢缩小再弹回"，不是弹出） */
 }
 
-/* ⚠️ **尺寸必须在这里写死**（D1，2026-09-27）：`.si-chevron` 元素上挂的是 Tailwind 类
-   `size-[12px]`，而**小窗的独立入口不加载 Tailwind** ⇒ 那条类在那里完全无效，
-   lucide 会按自己的默认 **24×24** 画（探针在小窗坐标系里实测到 `chevron=[24,24]`，
-   比半个胶囊还高）。字号那套（`font-size`）控制不了 SVG，所以只能给宽高。 */
+/* ⚠️ **尺寸在这里写死**（D1，2026-09-27）：元素上挂着 Tailwind 类 `size-[12px]`，
+   但当年小窗那个入口**不加载 Tailwind** ⇒ 那条类在那里完全无效，lucide 会按自己的
+   默认 **24×24** 画（探针在那边实测到 `chevron=[24,24]`，比半个胶囊还高）。
+   字号那套（`font-size`）控制不了 SVG，所以只能给宽高。
+   ⚠️ 主窗口里这条与 Tailwind 类是**同值**的（都是 12px）⇒ 留着零风险，
+   也顺手保住了"没有 Tailwind 也能画对"这条性质。 */
 .si-chevron {
   flex: none;
   width: 12px;
@@ -706,8 +311,9 @@ html[data-widget-window] #root {
    `report` 与 `message` 的判定**落在同一个颜色上**（`progress→busy / alert→warn / 其余→ok`），
    并且胶囊**根本不渲染图标**（`KIND_ICON` 只在面板用）
    ⇒ 今天"全量抓取完成"(report) 与"已复制诊断信息"(message) 在胶囊上长得一模一样。
-   字形是**文本字符**（不是 lucide 图标）：小窗的独立入口不加载 Tailwind，
-   而 `size-[12px]` 这类类名在那里**无效** —— lucide 会按默认 24px 画（探针实测过）。 */
+   字形是**文本字符**（不是 lucide 图标）：当年小窗那个入口不加载 Tailwind，
+   而 `size-[12px]` 这类类名在那里**无效** —— lucide 会按默认 24px 画（探针实测过）。
+   主窗口里两种做法都行，但字形本来就是"一个字符"，用文本最省。 */
 .si-glyph {
   flex: none;
   font-size: 12px;
@@ -732,8 +338,8 @@ html[data-widget-window] #root {
   display: flex;
   flex-direction: column;
   max-height: 60vh;
-  /* ⚠️ 面板是 **portal 到 `body`** 的 ⇒ 它不继承 `.si-island` 的字体，
-     也不在小窗的 `.widget-shell` 里 ⇒ 必须自己声明（与上面那条同因，见那段注释）。 */
+  /* ⚠️ 面板是 **portal 到 `body`** 的 ⇒ 它不继承 `.si-island` 的字体，必须自己声明
+     （当年小窗那边还多一层理由：它不在 `.widget-shell` 里；那条宿主 2026-10-01 退役）。 */
   font-family: var(--font-family);
   border: 1px solid var(--c-border);
   border-radius: 14px;   /* R38 批 3：对齐规格 §5「面板圆角 14px」（原 10px）。
@@ -782,14 +388,14 @@ html[data-widget-window] #root {
 }
 
 /* 滚动体：**头部 + 页脚之外的部分**由它承担（74px ≈ head 34 + foot 40）。
-   ⚠️ **不能用 `calc(60vh - 74px)`**（R38 批 5e 修，与上一条同源）：
-   小窗窗口高度**跟着面板长** ⇒ `vh` 会与面板高度互为因果 ——
+   ⚠️ **基准只能是视口 `60vh`，不许换成"面板自身的高"**（R38 批 5e 修）：
+   当年小窗的高度是**跟着面板长的** ⇒ `vh` 与面板高度互为因果 ——
    40px 窗口下 `calc(60vh - 74px)` = **负数** ⇒ 滚动体高度算成 0 或非法值，
    而条目仍按内容撑开 ⇒ 直接压到页脚上（用户 2026-09-24 截图就是这个）。
-   所以基准也换成 `--widget-panel-max-h`（小窗里由 JS 按屏幕高写；主窗口里没有这个变量，
-   退回 `60vh`，行为不变）。 */
+   所以小窗那边当年改用 JS 按屏幕高写进 `--widget-panel-max-h`（那条宿主 2026-10-01 退役，
+   该变量也随之删除）；主窗口的视口与应用窗口同高，`60vh` 本来就不自指。 */
 .si-panel-scroll {
-  max-height: calc(var(--widget-panel-max-h, 60vh) - 74px);
+  max-height: calc(60vh - 74px);
 }
 
 .si-list {
@@ -815,8 +421,8 @@ html[data-widget-window] #root {
   color: var(--c-text-sub);
 }
 
-/* ⚠️ 面板里的图标同理（D1）：`size-[13px]` 也是 Tailwind 类，小窗里无效 ⇒
-   lucide 按 24×24 画，条目行会被撑高、图标比文字大一圈。 */
+/* ⚠️ 面板里的图标同理（D1）：`size-[13px]` 也是 Tailwind 类，当年小窗那个入口里无效 ⇒
+   lucide 按 24×24 画，条目行会被撑高、图标比文字大一圈。主窗口里与类名同值。 */
 .si-item-icon svg {
   width: 13px;
   height: 13px;
@@ -906,8 +512,9 @@ html[data-widget-window] #root {
     transition: none;
   }
 
-  /* 点的脉冲也停（D1 从 `layout.css` 的 reduce 段搬来 —— 那条选择器是
-     `.topbar-status-dot.busy`，而小窗拿不到那个文件 ⇒ 小窗里 reduce 从来没生效过）。 */
+  /* 点的脉冲也停（D1 从 `layout.css` 的 reduce 段搬来 —— 那边那条选择器是
+     `.topbar-status-dot.busy`，与本文件的选择器对不上；小窗入口当年拿不到那个文件
+     ⇒ 它那边的 reduce 从来没生效过，这条就是补的那个洞）。 */
   .si-dot.busy {
     animation: none;
   }

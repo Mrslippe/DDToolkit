@@ -1,9 +1,9 @@
 /**
- * 通知的**取数与合并**（M4 devlog/252 → **M5-2b devlog/259 起两扇窗共用**）—— 判据分两层：
+ * 通知的**取数与合并**（M4 devlog/252 → **M5-2b devlog/259 起后端供数**）—— 判据分两层：
  *
  * ① **纯逻辑**（本文件）：服务端列表与本地覆盖怎么合、TTL 从哪起算、谁是真源；
- * ② **接线**（探针 `--status-widget` 的推送段 + `--messages`）：小窗那一页**根本没有主窗口**，
- *    所以"它能显示推来的消息 / 能显示服务端条目"本身就是"小窗独立"的证明。
+ * ② **接线**（探针 `--messages`）：推来的消息真的进了订阅与状态岛。
+ *    （②当年还有"小窗那一页根本没有主窗口"那一条，小窗 2026-10-01 整窗退役后随之删除。）
  *
  * 为什么①不能省：合并规则里有三条"两边并存会难看"的错法（进度两份、消息两份、开播两条），
  * 它们只在**两路都活着**时出现 —— 探针那边很难只让一路活着。
@@ -125,8 +125,8 @@ describe('结构判据：真源与 TTL 各只有一处（M5-2b）', () => {
     .filter((l) => !l.trim().startsWith('*') && !l.trim().startsWith('//'))
     .join('\n')
 
-  it('两个宿主都从 `utils/noticeStream` 引 hook，且都不自己定义 TTL', () => {
-    for (const rel of ['components/TopBar.tsx', 'components/StatusWidgetWindow.tsx']) {
+  it('宿主从 `utils/noticeStream` 引 hook，且不自己定义 TTL', () => {
+    for (const rel of ['components/TopBar.tsx']) {
       expect(code(rel), `${rel} 必须用 useNotices`).toContain('useNotices(')
       expect(code(rel), `${rel} 必须从 utils/noticeStream 引`).toContain("from '../utils/noticeStream'")
       expect(code(rel), `${rel} 里不许再写一份 PILL_MS 定义`).not.toMatch(/const PILL_MS\s*=/)
@@ -135,19 +135,17 @@ describe('结构判据：真源与 TTL 各只有一处（M5-2b）', () => {
     }
   })
 
-  it('两个宿主都拉服务端列表 `GET /vtuber/notices`（单一真源接线）', () => {
+  it('宿主拉服务端列表 `GET /vtuber/notices`（单一真源接线）', () => {
     expect(code('components/TopBar.tsx')).toContain('api.getNotices()')
-    expect(code('components/StatusWidgetWindow.tsx')).toContain('api.getNotices()')
   })
 
   it('`widget:notices` 广播与 `kickPoll` 都已退役（不许有活代码引用）', () => {
-    for (const rel of ['components/TopBar.tsx', 'components/StatusWidgetWindow.tsx',
-                       'utils/widgetWindow.ts', 'utils/appEvents.ts']) {
+    for (const rel of ['components/TopBar.tsx', 'utils/appEvents.ts']) {
       expect(code(rel), `${rel} 里还有 ${'widget:notices'} 的活代码`).not.toContain('widget:notices')
       expect(code(rel), `${rel} 里还有 kickPoll 的活代码`).not.toContain('kickPoll')
     }
     // 结构性：全仓不许再有 `broadcastNotices` / `EVENTS.kickPoll` 这两个标识符
-    for (const rel of ['components/TopBar.tsx', 'utils/widgetWindow.ts', 'utils/appEvents.ts']) {
+    for (const rel of ['components/TopBar.tsx', 'utils/appEvents.ts']) {
       expect(code(rel)).not.toContain('broadcastNotices')
       expect(code(rel)).not.toContain('EVENTS.kickPoll')
     }

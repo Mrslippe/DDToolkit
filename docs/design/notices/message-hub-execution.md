@@ -422,8 +422,10 @@ M0b 不许"探针绿了就宣布通过"。
 **目标**：小窗不依赖主窗口也能更新；退役 `widget:notices`。
 
 **改动面**：
-- `frontend/src/components/StatusWidgetWindow.tsx`：`listen(WIDGET_NOTICES_EVENT)` →
-  改用 `eventStream`（token 已就绪，`frontend/src/widgetMain.tsx:126-129` 已在注入）。
+- 小窗组件 `StatusWidgetWindow.tsx`：`listen(WIDGET_NOTICES_EVENT)` →
+  改用 `eventStream`（token 已就绪，小窗入口 `widgetMain.tsx` 已在注入）。
+  ⚠️ 这两个文件（以及本节后面提到的小窗入口）**2026-10-01 随小窗整窗退役删除**（`devlog/270`）——
+  这里是**当年的路径记录**，留着是为了说清"改动落在哪个文件"。
 - `widget:notices` 广播**先并存、后退役**（`broadcastNotices` 在 `TopBar.tsx:505`）。
 - **保留** `widget:action`（反向动作通路不变）。
 
@@ -604,7 +606,7 @@ refactor: backend owns notice aggregation and read state        （M5-2b）
 | 前端已有一条跨组件总线（8 事件） | ✅ | `frontend/src/utils/appEvents.ts:22-38` |
 | 开播检测已在后端、且已分方向，只是没有面向用户的出口 | ✅ | `app/services/scheduler.py:2994`（`edge=`）、`:2995`（`started=`）、唯一消费者 `:3005` `note_dynamics_activity` |
 | 业务端点全要 token、公开白名单只三处 ⇒ `EventSource` 带不了头 | ✅ | `app/core/api_auth.py:47`（`TOKEN_HEADER`）、`:50`/`:53`（白名单） |
-| 小窗自己就能带 token（**不必动 Rust**） | ✅ | `frontend/src/widgetMain.tsx:127-132`（`invoke('get_api_token')` → `setApiToken`） |
+| 小窗自己就能带 token（**不必动 Rust**） | ✅ | 小窗入口 `widgetMain.tsx`（`invoke('get_api_token')` → `setApiToken`；该入口 2026-10-01 随小窗整窗退役删除，见 `devlog/270`） |
 | 「目睹才报」住在主窗口内存（M5 阻塞项） | ✅ | `TopBar.tsx:151-156` + `:248-252` |
 | `GET /events` 会"语义撞名" | ⚠️ **修正**：仓里**没有** `GET /events`；撞的是 `GET /vtuber/{vtuber_id}/events`（V 的**活动条目**）。⇒ 新端点叫 `GET /messages/stream` 即可，**不构成阻塞** |
 

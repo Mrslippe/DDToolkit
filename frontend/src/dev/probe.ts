@@ -1270,8 +1270,9 @@ async function probeMessages(): Promise<Record<string, unknown>> {
     let i = 0
     // ⚠️ `minTries`（M4，devlog/252）：虚拟时间下 `sleep(100)` **几乎立即返回** ——
     // "8000ms" 不是 8 秒真实时间。主窗口那边一直够用，是因为它前面已经跑过十几秒
-    // **真实 I/O**（数据请求把虚拟时间钉住），SSE 早连上了；而**小窗入口的第一件事就是这个**
-    // ⇒ 连接还在 `connecting` 就被判死（实测直接红在"推送连接没开起来"）。
+    // **真实 I/O**（数据请求把虚拟时间钉住），SSE 早连上了；而当年**小窗入口的第一件事
+    // 就是这个**（那条入口 2026-10-01 已退役）⇒ 连接还在 `connecting` 就被判死
+    // （实测直接红在"推送连接没开起来"）。
     // 按**轮次**兜底：每轮仍让出一次事件循环，够 localhost 的 SSE 握手。
     while (performance.now() - t0 < ms || i < minTries) {
       const v = fn()
@@ -1303,8 +1304,8 @@ async function probeMessages(): Promise<Record<string, unknown>> {
   // ⚠️ **这一条在虚拟时间下必须靠"真实 I/O"让路**（M4，devlog/252）：
   //    `sleep(100)` 在虚拟时间里几乎立即返回 ⇒ 光轮询**换不来真实时间**，而 SSE 建连是
   //    **真网络**。主窗口那边一直够用，是因为它前面已经跑过十几秒真实 I/O（数据请求把虚拟
-  //    时间钉住），流早连上了；而**小窗入口的第一件事就是起流** ⇒ 实测卡在 `connecting`，
-  //    判据直接红成"推送连接没开起来"（看着像后端没起，其实只是没给它时间）。
+  //    时间钉住），流早连上了；而当年**小窗入口的第一件事就是起流**（已退役）⇒ 实测卡在
+  //    `connecting`，判据直接红成"推送连接没开起来"（看着像后端没起，其实只是没给它时间）。
   //    所以这里每轮补一发本地请求：它换来的是**真的几毫秒**。
   const opened = await (async () => {
     for (let i = 0; i < 400; i++) {
@@ -1433,9 +1434,10 @@ async function probeMessages(): Promise<Record<string, unknown>> {
     const acceptedText = `受理探针 ${Date.now() % 100000}`
     // ⚠️ **"自己"与"别人"要按当前宿主的身份来发**（M4，devlog/252）：这两条判据量的是
     // `originator` 规则，而规则是**相对**的（`shouldToast` 比的是载荷里的 originator 与
-    // **本页**的 `myHost()`）。原来这里写死 `main` / `widget` —— 那等于假设"跑探针的页面
-    // 就是主窗口"：小窗那一轮（`widget.html?probe=messages`）里语义正好反过来，
-    // 于是两条判据**同时**红（自己点的弹了、别人点的不弹），看着像实现坏了。
+    // **本页**的 `myHost()`）。写死 `main` / `widget` 等于假设"跑探针的页面就是主窗口" ——
+    // 当年小窗那一页（已退役）语义正好反过来，两条判据**同时**红（自己点的弹了、
+    // 别人点的不弹），看着像实现坏了。`widget` 这个标签今天仍是后端认的 originator 取值
+    // （见 `tests/test_manual_action_push.py`），所以这里照旧按宿主算。
     const me = myHost()
     const other = me === 'widget' ? 'main' : 'widget'
     await publish('notice.progress', { task: 'account', text: acceptedText, originator: me })
@@ -2351,29 +2353,8 @@ export async function runUiProbe(): Promise<void> {
       // 只判"三态高度一致"是判结果；这条判原因，破了才说得清为什么破。
       result.pillPosition = pcs.position
       // 字体族（2026-09-30）：**正对照** —— 顶栏宿主在 `body` 的继承链上（layout.css），
-      // 所以它必然是全站字体；小窗那一侧（`widget.html`）要单独判（见下面那段）。
+      // 所以它必然是全站字体（当年小窗那一侧拿不到 layout.css，要单独判；那条入口已退役）。
       result.pillFontFamily = pcs.fontFamily
-      // ── R38 批 5：桌面控件宿主（`?density=widget`）的材质与尺寸 ──────────────
-      // 判据全在脚本侧算（尤其对比度：要按 α 复算**纯白/纯黑**两个极端壁纸），
-      // 这里只负责把计算样式原样带出去。
-      result.density = pillEl.getAttribute('data-density')
-      if (result.density === 'widget') {
-        const wr = pillEl.getBoundingClientRect()
-        result.widgetSize = [Math.round(wr.width), Math.round(wr.height)]
-        result.widgetBg = pcs.backgroundColor
-        result.widgetBackdrop = pcs.backdropFilter
-        result.widgetShadow = pcs.boxShadow
-        result.widgetPosition = pcs.position
-        result.widgetColor = pcs.color
-        // D1（2026-09-27）：圆角**恒定 20px**（折叠 40 高 ⇒ 20 是完美胶囊；展开也是 20
-        // ⇒ 半径单调，不会"先胀后收"）。这里量的是**解析后的值**，它必须等于
-        // `--widget-radius`（同一个数由 TS 常量写进变量，见 widgetWindow.ts）。
-        result.widgetRadius = Math.round(parseFloat(pcs.borderTopLeftRadius))
-        result.widgetRadiusVar =
-          getComputedStyle(document.documentElement).getPropertyValue('--widget-radius').trim()
-        result.widgetCapMaxVar =
-          getComputedStyle(document.documentElement).getPropertyValue('--widget-cap-max-w').trim()
-      }
     }
 
     // ③ 悬停呼出（R39-C，用户 2026-09-19：「改为鼠标 hover 就呼出，离开就收起，并且下拉栏居中」）
@@ -2463,7 +2444,6 @@ export async function runUiProbe(): Promise<void> {
       // ⚠️ 用**布局宽**（`cs.width`）不用 rect：面板入场动画的 `scale(.985)` 在虚拟时间下
       // 被冻在起始帧（DEV-LOOP 记过），rect 会量到 280 × 0.985 ≈ 276 的假值。
       result.panelWidth = Math.round(parseFloat(cs.width))
-      result.panelDensity = panel.getAttribute('data-density')
       const pr = panel.getBoundingClientRect()
       const inner: Array<{ sel: string; radius: number; inset: number }> = []
       panel.querySelectorAll<HTMLElement>('*').forEach((el) => {
@@ -2881,383 +2861,6 @@ export async function runUiProbe(): Promise<void> {
     pre.textContent = JSON.stringify({ mode: 'cell-pop', views: [], degraded, cellPop: result })
     document.body.appendChild(pre)
     document.title = 'UI_PROBE_DONE'
-    return
-  }
-
-  // 桌面状态控件**小窗视图**（`widget.html?probe=status-widget-window`，R38 批 5b）：
-  // 配合 `ui_probe.py --status-widget` 的第二段。
-  //
-  // ⚠️ **2026-09-24 改了入口**：原来走 `index.html?widget=1` + `main.tsx` 里的运行时判断，
-  // 但**静态 import 拦不住**（整个应用会被打进小窗那个 renderer，实测 132MB）。
-  // 现在小窗是**独立入口** `widget.html` → `src/widgetMain.tsx`。
-  //
-  // 所以这里验的也换了：不再是"运行时分流生效没"，而是**独立入口本身** ——
-  // 小窗里**不该出现主窗口的任何东西**（顶栏 / 侧栏 / 启动幕）。
-  //
-  // ⚠️ 条目列表在这里**必然是空的**（不注种的话）：浏览器里没有推送连接、后端也没有
-  // 它要的条目，所以它渲染的是空闲态 —— 这正是我们要量的东西。需要"亮起来"的那几条判据
-  // 走 `ddtoolkit:widget-seed` 注入（M5-2b 起注入的是**本地覆盖**那一层，见 `useNotices`）。
-  if (mode === 'status-widget-window') {
-    const result: Record<string, unknown> = {}
-    const shell = document.querySelector<HTMLElement>('.widget-shell')
-    const island = document.querySelector<HTMLElement>('.si-island')
-    result.hasShell = !!shell
-    result.hasIsland = !!island
-    // ⚠️ **渲染没抛错**的判据（2026-09-24 真机反馈加）：那次的症状正是
-    // "只有一块透明背景、胶囊没了" —— 也就是 React 在这里抛了异常、整棵树没渲染出来。
-    // `#root` 里还剩多少东西，是"渲染真的跑到底了"最直接的证据。
-    const root = document.getElementById('root')
-    result.rootChildren = root ? root.children.length : 0
-    result.rootText = (root?.textContent || '').trim().slice(0, 40)
-    // ⚠️ **静态启动幕必须被摘掉**（2026-09-24 真机反馈的真凶）：
-    // `index.html` 那层 `#boot-splash` 是 `z-index:150` + **不透明粉底**，
-    // 而摘掉它的唯一地方原本在 `Root` 的 effect 里 —— 小窗不走 `Root` ⇒ 它永远盖在胶囊上。
-    // 用户看到的就是"一块粉底、没有胶囊"。这条判据就是为了让那个 bug 复现时**立刻变红**。
-    result.bootSplash = !!document.getElementById('boot-splash')
-    // ⚠️ 小窗的**窗口底必须全透明**：只要有一颗不透明背景漏出来，
-    // 200×40 的窗口就会显示成"一块粉/白方块"。这里量的正是"用户看到的那个方块"的底色。
-    result.bodyBg = getComputedStyle(document.body).backgroundColor
-    result.htmlBg = getComputedStyle(document.documentElement).backgroundColor
-    result.hasWidgetMarker = document.documentElement.dataset.widgetWindow === '1'
-    result.density = island?.getAttribute('data-density') ?? null
-    // 分流没生效的证据：主窗口那套东西还在
-    result.hasTopbar = !!document.querySelector('.topbar')
-    result.hasSidebar = !!document.querySelector('.sidebar-shell')
-    if (island) {
-      const r = island.getBoundingClientRect()
-      result.size = [Math.round(r.width), Math.round(r.height)]
-      // ⚠️ 判**居中误差**而不是绝对偏移：探针里视口是 1100 宽（不是 Tauri 那个 200×40），
-      // 所以胶囊在整屏居中 ⇒ 偏移是几百像素。绝对偏移只在真窗口里才是 0。
-      const sr = shell?.getBoundingClientRect()
-      result.centerErr = sr
-        ? [Math.round(r.left + r.width / 2 - (sr.left + sr.width / 2)),
-           Math.round(r.top + r.height / 2 - (sr.top + sr.height / 2))]
-        : null
-      // 诊断用（2026-09-24）：把参与计算的两个矩形原始值带出来。
-      // 原来只报一个 `centerErr` 数字 —— 偏了就只知道"偏了"，**不知道是谁的尺寸不对**
-      // （shell 不是视口高？胶囊被撑高？root 没撑开？），只能靠猜。
-      result.shellRect = sr
-        ? { top: Math.round(sr.top), left: Math.round(sr.left),
-            w: Math.round(sr.width), h: Math.round(sr.height) } : null
-      result.islandRect = { top: Math.round(r.top), left: Math.round(r.left),
-                            w: Math.round(r.width), h: Math.round(r.height) }
-      result.viewport = { w: window.innerWidth, h: window.innerHeight }
-      result.rootRect = (() => {
-        const rr = root?.getBoundingClientRect()
-        return rr ? { h: Math.round(rr.height), top: Math.round(rr.top) } : null
-      })()
-      // ⚠️ 胶囊**在窗口里该在哪**：折叠态窗口只有 40px 高，胶囊必须**占满它**。
-      //    这条比"居中误差"更本质 —— 居中只在折叠态成立，展开后胶囊本来就该偏到一边
-      //    （向上翻时它在窗口底部）。所以判据是"胶囊顶边贴窗口顶边"（未翻转时）。
-      result.islandTopVsShell = sr ? Math.round(r.top - sr.top) : null
-      // ── D1（2026-09-27）：胶囊的**解剖**必须在**小窗自己的坐标系**里量一次 ────
-      //
-      // ⚠️⚠️ `--status-widget` 的第一段跑的是 `index.html?density=widget` —— 那在**主窗口**里，
-      //     它加载了 `layout.css` ⇒ 胶囊的解剖（`display:flex` / `gap` / `border-radius` /
-      //     点的 7×7）全是**那份文件**给的。而小窗的独立入口**只加载 `tokens.css` +
-      //     `status-island.css`**（见 `widgetMain.tsx`）—— 于是同一颗胶囊在真窗口里
-      //     **没有圆角、不是 flex 行、点是 0×0（看不见）**，而两段探针都绿。
-      //     这是 DEV-LOOP §6.1「顺带生效的东西」的第 5 次，也是 §6.5「坐标系错了」的同类：
-      //     判据量的是"这套样式在大视口/主窗口里对不对"。
-      //     ⇒ 这一段是**唯一**跑在 `widget.html` 里的解剖判据，别把它删掉或挪回第一段。
-      const cs2 = getComputedStyle(island)
-      result.islandDisplay = cs2.display
-      result.islandRadius = Math.round(parseFloat(cs2.borderTopLeftRadius))
-      result.islandFontSize = Math.round(parseFloat(cs2.fontSize) * 10) / 10
-      // 字体族（2026-09-30）：`font-family: var(--font-family)` 原本只写在 **layout.css 的
-      // `body`** 上 —— 而小窗的独立入口不加载那个文件 ⇒ 真窗口里胶囊与面板用的是
-      // **WebView2 的默认字体**（连 `@font-face` 都在 tokens.css 里被下载了却没人用）。
-      // 量的是**解析后的族名**，因为"字号对"完全推不出"字体对"。
-      result.islandFontFamily = cs2.fontFamily
-      result.islandMaxWidth = cs2.maxWidth
-      result.islandLeftVsShell = sr ? Math.round(r.left - sr.left) : null
-      // 「单一真源」判据：TS 常量写进 CSS 变量，胶囊**解析出来**的必须与之一致。
-      // 只量解析值会漏掉"两处各写一遍"（值凑巧相同也算过）；量变量才能证明是**同一份**。
-      const rootCs = getComputedStyle(document.documentElement)
-      result.widgetVars = {
-        capMin: rootCs.getPropertyValue('--widget-cap-min-w').trim(),
-        capMax: rootCs.getPropertyValue('--widget-cap-max-w').trim(),
-        radius: rootCs.getPropertyValue('--widget-radius').trim(),
-        panelW: rootCs.getPropertyValue('--widget-panel-w').trim(),
-        // F1：窗口比卡片多出来的那圈留白（给外阴影的）—— 判据要拿它比阴影的伸出量
-        shadowPad: rootCs.getPropertyValue('--widget-shadow-pad').trim(),
-      }
-      const dotEl = island.querySelector<HTMLElement>('.si-dot')
-      if (dotEl) {
-        const dr = dotEl.getBoundingClientRect()
-        result.dotBox = [Math.round(dr.width), Math.round(dr.height)]
-        result.dotBg = getComputedStyle(dotEl).backgroundColor
-      }
-    }
-
-    // ── ⚠️ 面板在**小窗里**能不能用（2026-09-24 批 5d 加）──────────────────
-    //
-    // **这一条就是为了让那个 bug 复现时变红**：面板 `top = 胶囊底(40) + 6 = 46`，
-    // 而小窗只有 40px 高 ⇒ 面板**整个落在窗口外**，宽度 280 也超出 200。
-    // 它活了很久没被发现，是因为 `--status-island` 一直在**主窗口的大视口**（1100 宽）
-    // 里量这套样式 —— 在宽视口里面板当然"在视口内、可命中"，于是**绿**。
-    // **判据的坐标系错了**：它量的是"这套样式在大视口里对不对"，而不是"在小窗里能不能用"。
-    //
-    // 这里主动把面板**打开**（派发真实事件源），再量它是否落在窗口内、是否可命中。
-    // 小窗折叠时只有 40px 高，所以这条同时钉住了"窗口得跟着长大"这件事。
-    {
-      const island2 = document.querySelector<HTMLElement>('.si-island')
-      if (island2) {
-        // ⚠️ **先注入一条条目**：探针里小窗收不到 Tauri 事件 ⇒ 永远空闲态 ⇒ 面板不会开。
-        //    不注入的话下面三条判据全部空转（永远量不到面板，也就永远"绿"）。
-        //    走的是页面自己的事件源（与 `--status-island` 用 `ddtoolkit:pill-message` 同款）。
-        window.dispatchEvent(new CustomEvent('ddtoolkit:widget-seed', {
-          detail: [
-            {
-              id: 'probe-widget', kind: 'message', source: '探针',
-              text: '探针消息：小窗面板可用性', ttl: 0,
-            },
-            // ⚠️ **两条**（2026-09-30 加第二条）：一条的话 `count` 徽章与条目间的
-            // `.si-item + .si-item` 分隔线**在 DOM 里根本不存在** ⇒ 那两条视觉判据
-            // 会静默空转（"永远量不到"与"量到且正确"在报告里长得一样）。
-            // ⚠️ `pickPrimary` 同级取**数组后者** ⇒ 活数据挂在第二条上，胶囊才量得到它。
-            // ⚠️ 第二条**必须带 `detail` 与 `action`**：视觉判据里有 `detail`/`action`
-            //    两行墨色 —— 元素不存在时那两条会**静默拿到 None**（"没量到"与
-            //    "量到且正确"在报告里长得一样，这正是本仓反复踩的那类假绿）。
-            {
-              id: 'probe-widget-2', kind: 'message', source: '操作结果',
-              text: '已复制诊断信息', value: '47s', ttl: 0,
-              detail: '面板里才出现的那半句',
-              action: { label: '查看详情', kind: 'open-report' },
-            },
-          ],
-        }))
-        await sleep(150)
-        const island3 = document.querySelector<HTMLElement>('.si-island')
-        result.widgetLitAfterSeed = !!island3?.classList.contains('on')
-        // ── D1 内容契约（2026-09-27）：胶囊 = 点(紧迫度) + 字形(类型) + 文案 + 活数据 +
-        //    计数 + chevron。⚠️ **四条槽位各量一个**，因为它们各自的错法不同：
-        //    · 字形缺席 ⇒ `report`(✓) 与 `message`(✦) 在胶囊上又变得一模一样（用户报的那个缺陷）；
-        //    · 活数据槽缺席 ⇒ 倒计时只能拼进文案里，每秒重写整句（文案会闪）；
-        //    · chevron 尺寸失控 ⇒ 小窗不加载 Tailwind，`size-[12px]` 这种类**在这里无效**，
-        //      lucide 会按默认 24px 画（比胶囊一半还高）。
-        //    量的都是**渲染出来的盒子**，不是类名 —— 类名在小窗里根本不保证有样式。
-        if (island3) {
-          const litIsland = island3
-          const glyphEl = litIsland.querySelector<HTMLElement>('.si-glyph')
-          result.glyphText = glyphEl ? (glyphEl.textContent || '').trim() : null
-          const valueEl = litIsland.querySelector<HTMLElement>('.si-value')
-          result.valueText = valueEl ? (valueEl.textContent || '').trim() : null
-          const countEl = litIsland.querySelector<HTMLElement>('.si-count')
-          result.countText = countEl ? (countEl.textContent || '').trim() : null
-          const chevEl = litIsland.querySelector<SVGElement>('.si-chevron')
-          if (chevEl) {
-            const cr = chevEl.getBoundingClientRect()
-            result.chevronBox = [Math.round(cr.width), Math.round(cr.height)]
-          }
-          const gr = glyphEl?.getBoundingClientRect()
-          result.glyphBox = gr ? [Math.round(gr.width), Math.round(gr.height)] : null
-        }
-        // 走**真实的 hover 通路**（不是直接改 React state）：悬停 120ms 后才展开。
-        // ⚠️ 事件类型与字段必须与 `--status-island` 那段（`hoverAt`）**完全一致**：
-        //    用 `pointerenter` + 少量字段实测**不触发** React 的合成事件，
-        //    而 `pointerover` + 完整的 pointer 字段才是这个仓里验证过能用的写法。
-        if (island3) {
-          const r3 = island3.getBoundingClientRect()
-          island3.dispatchEvent(new PointerEvent('pointerover', {
-            bubbles: true, cancelable: true, pointerId: 31, pointerType: 'mouse',
-            isPrimary: true, relatedTarget: document.body,
-            clientX: Math.round(r3.left + r3.width / 2),
-            clientY: Math.round(r3.top + r3.height / 2),
-          }))
-        }
-        await sleep(400)
-        const panel = document.querySelector<HTMLElement>('.si-panel')
-        result.widgetPanelOpened = !!panel
-        if (panel) {
-          const pr = panel.getBoundingClientRect()
-          result.widgetPanelRect = {
-            top: Math.round(pr.top), left: Math.round(pr.left),
-            w: Math.round(pr.width), h: Math.round(pr.height),
-          }
-          // ⚠️ 面板宽用**布局宽**（`cs.width`）不用 rect：入场动画的 `scale(.985)` 在虚拟
-          //    时间下被冻在起始帧，rect 会量到 400 × 0.985 ≈ 394 的假值（devlog/172 §三）。
-          result.widgetPanelWidth = Math.round(parseFloat(getComputedStyle(panel).width))
-          // 面板里的图标尺寸（D1）：`size-[13px]` 同样是 Tailwind 类，小窗里无效 ⇒
-          // lucide 按 24×24 画、把条目行撑高。量**渲染出来的盒子**才算数。
-          const iconSvg = panel.querySelector<SVGElement>('.si-item-icon svg')
-          if (iconSvg) {
-            const irect = iconSvg.getBoundingClientRect()
-            result.widgetPanelIconBox = [Math.round(irect.width), Math.round(irect.height)]
-          }
-          // D1 视觉（2026-09-30）：把**小窗宿主的墨色与材质**原样带出去，判据在脚本侧算
-          // （要按 α 复合到纯白/纯黑壁纸再算对比度 —— 与胶囊那条同款）。
-          //
-          // ⚠️ 为什么必须在这一段量：小窗宿主的面板里，子元素用的是**全站令牌**
-          // （`--c-text-main` #4b5a6b / `--c-text-sub` / `--c-border` / `--c-primary-deep`），
-          // 那些是**浅色主题**的值 —— 铺在深色卡片上基本读不出来。而几何判据（在不在视口内、
-          // 点不点得着、三段不重叠）**全都照样绿**：它们一个颜色都不看。
-          const ic = (sel: string, prop = 'color'): string | null => {
-            const el = panel.querySelector<HTMLElement>(sel)
-            return el ? (getComputedStyle(el) as unknown as Record<string, string>)[prop] : null
-          }
-          const second = panel.querySelector<HTMLElement>('.si-item + .si-item')
-          result.wgInk = {
-            title: ic('.si-panel-title'),
-            hint: ic('.si-panel-hint'),
-            itemText: ic('.si-item-text'),
-            itemValue: ic('.si-item-value'),
-            itemDetail: ic('.si-item-detail'),
-            itemMeta: ic('.si-item-meta'),
-            icon: ic('.si-item-icon'),
-            action: ic('.si-item-action'),
-            actionBg: ic('.si-item-action', 'backgroundColor'),
-            actionBorder: ic('.si-item-action', 'borderTopColor'),
-            foot: ic('.si-panel-order'),
-            divider: second ? getComputedStyle(second).borderTopColor : null,
-          }
-          const pcsW = getComputedStyle(panel)
-          result.wgPanelBg = pcsW.backgroundColor
-          result.wgPanelShadow = pcsW.boxShadow
-          // 阴影**层数**在浏览器侧数（CSSOM 的序列化里逗号既分隔层、也出现在 `rgba(...)` 里，
-          // 脚本侧用 `split("),")` 会数成 1 —— 我第一版就是这么错的）。
-          const shadowLayers = (s: string): number =>
-            !s || s === 'none' ? 0 : s.split(/,(?![^(]*\))/).length
-          /**
-           * 阴影**向外伸出多远**（px）—— 取所有非 inset 层的 `dy + blur/2` 的最大值。
-           *
-           * ⚠️ 这是用户报的「小窗阴影被截断了」的**量化判据**：伸出量必须 ≤ 窗口比卡片
-           * 多出来的那圈留白（`WIDGET_SHADOW_PAD`），否则就被窗口边缘切掉。
-           * 光数层数不够 —— 层数对、但最外圈伸出 80px 而留白只有 32px，照样是截断。
-           */
-          const reach = (s: string): number => {
-            if (!s || s === 'none') return 0
-            return Math.max(0, ...s.split(/,(?![^(]*\))/).map((layer) => {
-              if (layer.includes('inset')) return 0          // 内阴影不向外画
-              const nums = (layer.match(/-?[\d.]+px/g) ?? []).map(parseFloat)
-              // 序列化形如 `<color> 0px 2px 6px 0px` ⇒ [x, y, blur, spread]
-              return nums.length >= 3 ? nums[1] + nums[2] / 2 : 0
-            }))
-          }
-          result.wgPanelShadowLayers = shadowLayers(pcsW.boxShadow)
-          result.wgPanelShadowReach = Math.round(reach(pcsW.boxShadow))
-          const headEl = panel.querySelector<HTMLElement>('.si-panel-head')
-          result.wgHeadPad = headEl ? getComputedStyle(headEl).padding : null
-          const itemEl = panel.querySelector<HTMLElement>('.si-item')
-          result.wgItemPad = itemEl ? getComputedStyle(itemEl).padding : null
-          const chipEl = panel.querySelector<HTMLElement>('.si-item-icon')
-          if (chipEl) {
-            const cbr = chipEl.getBoundingClientRect()
-            result.wgIconChipBox = [Math.round(cbr.width), Math.round(cbr.height)]
-            result.wgIconChipBg = getComputedStyle(chipEl).backgroundColor
-            result.wgIconChipRadius = Math.round(parseFloat(getComputedStyle(chipEl).borderTopLeftRadius))
-            // ⚠️ 圆角写的是 `50%`（样例页 `.p-icon`）⇒ 计算值就是字符串 "50%"，
-            //    `parseFloat` 拿到的是 50（**不是** 7.5）—— 判"是不是正圆"要么判原始串、
-            //    要么判"正方形 + 半径 ≥ 半边长"，这里两条都留（前者钉来源、后者钉效果）。
-            result.wgIconChipRadiusRaw = getComputedStyle(chipEl).borderTopLeftRadius
-          }
-          // 入场动画（样例页：从**胶囊那一侧**滑出 6px + 淡入，`--motion-fast`(140ms) + 延迟 `--motion-lag`(60ms)）
-          result.wgPanelAnimName = pcsW.animationName
-          result.wgPanelAnimMs = Math.round(parseFloat(pcsW.animationDuration) * 1000)
-          result.wgPanelAnimDelay = Math.round(parseFloat(pcsW.animationDelay) * 1000)
-          result.wgPanelAnimEase = pcsW.animationTimingFunction
-          // 胶囊那一侧（展开态仍可取）：卡面 / 阴影 / 内距 / 计数徽章底
-          const capW2 = island3 ? getComputedStyle(island3) : null
-          if (capW2 && island3) {
-            result.wgCapBg = capW2.backgroundColor
-            result.wgCapShadow = capW2.boxShadow
-            result.wgCapShadowLayers =
-              !capW2.boxShadow || capW2.boxShadow === 'none'
-                ? 0
-                : capW2.boxShadow.split(/,(?![^(]*\))/).length
-            result.wgCapShadowReach = Math.round(reach(capW2.boxShadow))
-            result.wgCapPadLeft = capW2.paddingLeft
-            result.wgCapRadius2 = Math.round(parseFloat(capW2.borderTopLeftRadius))
-            const cnt = island3.querySelector<HTMLElement>('.si-count')
-            result.wgCountBg = cnt ? getComputedStyle(cnt).backgroundColor : null
-            const gl = island3.querySelector<HTMLElement>('.si-glyph')
-            result.wgGlyphColor = gl ? getComputedStyle(gl).color : null
-            result.wgGlyphOpacity = gl ? getComputedStyle(gl).opacity : null
-            const vl = island3.querySelector<HTMLElement>('.si-value')
-            result.wgValueColor = vl ? getComputedStyle(vl).color : null
-          }
-          // D1：展开方向由**几何**写进 `data-dir`，面板只跟随（单一真源）。
-          // 探针里没有真窗口 ⇒ 没有 `data-dir`，这条为 null 是**预期的**
-          // （面板此时按顶栏那套算法落位）。它的真判据在单测（`widgetExpandGeom`）。
-          const shellEl = document.querySelector<HTMLElement>('.widget-shell')
-          result.widgetDir = shellEl?.dataset.dir ?? null
-          result.widgetAlign = shellEl?.dataset.align ?? null
-          // ⚠️ 名不要与上面那个 `widgetPanelWidth`（面板自身的布局宽）混：
-          //    这条是**面板在视口里的位置** —— F1 之后它必须**铺满卡片**，
-          //    而卡片 = 留白到留白之间那一块（`pad` / `视口宽 − 2×pad`）。
-          if (panel) {
-            const pcs2 = getComputedStyle(panel)
-            result.widgetPanelBox = {
-              left: Math.round(parseFloat(pcs2.left)),
-              top: Math.round(parseFloat(pcs2.top)),
-              width: Math.round(parseFloat(pcs2.width)),
-            }
-          }
-          // F1（2026-09-30）：**展开后胶囊整行隐藏**（卡片就是面板）。
-          // ⚠️ 这条由 `StatusIsland` 写 `data-open` 驱动 ⇒ **探针里也量得到**
-          //    （不必等真机 —— 而"展开时面板在不在视口内"那几条判据在 F1 之前
-          //    一直是在"胶囊还在场"的假设下量的）。
-          result.capsuleOpenAttr = shellEl?.dataset.open ?? null
-          const capNow = document.querySelector<HTMLElement>('.si-island')
-          result.capsuleDisplayWhenOpen = capNow ? getComputedStyle(capNow).display : null
-          // 窗口比卡片多出来的那圈留白（给阴影的）：从 shell 的 padding 读
-          if (shellEl) {
-            const scs = getComputedStyle(shellEl)
-            result.shellPad = [scs.paddingTop, scs.paddingLeft]
-          }
-          // ① 面板**在视口内**（真窗口里视口 == 窗口）
-          result.widgetPanelInViewport =
-            pr.left >= -0.5 && pr.right <= window.innerWidth + 0.5 &&
-            pr.top >= -0.5 && pr.bottom <= window.innerHeight + 0.5
-          // ② 面板**可命中**（点得着）—— 出窗的东西 `elementFromPoint` 取不到它
-          const hit = document.elementFromPoint(pr.left + pr.width / 2, pr.top + 8)
-          result.widgetPanelHittable = !!hit && (hit === panel || panel.contains(hit))
-          // ③ 面板**不能是 0 高**（`max-height` 若被算成 24px 就会压成一条）
-          result.widgetPanelH = Math.round(pr.height)
-          // ④ ⚠️ **面板内部的排版**（2026-09-24 批 5e 加，用户截图逼出来的）。
-          //
-          //    批 5d 我只量了面板**外面**（在不在窗口内 / 点不点得着），于是探针**全绿**
-          //    而真机上条目文字与页脚「优先级：…」**叠在一起**。
-          //    **外框对 ≠ 里面没坏** —— 少的就是这一层。
-          //
-          //    两条独立的判据，各对应一种错法：
-          //    · `osStylesOk`：共用组件（`OverlayScroll`）的样式**到底加载了没**。
-          //      它的 CSS 原本在 `layout.css` 里，而小窗的独立入口**不加载那个文件** ⇒
-          //      `.os-root` 没有 `display:flex` ⇒ 头部/滚动体/页脚挤在一起。
-          //      **这条与视口高度无关，所以探针里也能抓到**（就是它逼出的本批修复）。
-          //    · `panelNonOverlapping`：头部 / 滚动体 / 页脚三个盒子的**纵向不重叠**。
-          //      这条要的是"面板里没有互相压住的东西"，与"谁给的样式"无关。
-          const osRoot = panel.querySelector<HTMLElement>('.os-root')
-          const osScroll = panel.querySelector<HTMLElement>('.os-scroll')
-          result.widgetOsRootDisplay = osRoot ? getComputedStyle(osRoot).display : null
-          result.widgetOsStylesOk = !!osRoot && !!osScroll &&
-            getComputedStyle(osRoot).display === 'flex' &&
-            getComputedStyle(osScroll).overflowY === 'auto'
-          const head = panel.querySelector<HTMLElement>('.si-panel-head')
-          const foot = panel.querySelector<HTMLElement>('.si-panel-foot')
-          const rh = head?.getBoundingClientRect()
-          const rs = osScroll?.getBoundingClientRect()
-          const rf = foot?.getBoundingClientRect()
-          result.widgetPanelBoxes = {
-            head: rh ? [Math.round(rh.top), Math.round(rh.bottom)] : null,
-            scroll: rs ? [Math.round(rs.top), Math.round(rs.bottom)] : null,
-            foot: rf ? [Math.round(rf.top), Math.round(rf.bottom)] : null,
-          }
-          // 容 1px 的亚像素误差；真正的重叠是几十像素量级
-          result.widgetPanelNonOverlapping = !!rh && !!rs && !!rf &&
-            rh.bottom <= rs.top + 1 && rs.bottom <= rf.top + 1
-          // 面板高度应约等于三段之和 —— 对不上说明有东西被压扁/被裁
-          result.widgetPanelSumH = Math.round(
-            (rh?.height ?? 0) + (rs?.height ?? 0) + (rf?.height ?? 0))
-          result.widgetViewport = { w: window.innerWidth, h: window.innerHeight }
-        }
-      }
-    }
-    const pre = document.createElement('pre')
-    pre.id = 'ui-probe'
-    pre.textContent = JSON.stringify({ mode: 'status-widget-window', views: [], degraded,
-      statusWidgetWindow: result })
-    document.body.appendChild(pre)
     return
   }
 

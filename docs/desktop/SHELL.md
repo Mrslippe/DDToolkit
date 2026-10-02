@@ -92,12 +92,12 @@ retire-when: 桌面壳换掉 Tauri，或改成多进程模型
     - ⚠️ **为什么必须自己判**：本应用的自定义命令**默认完全不查 ACL**
       （vendored `tauri-2.11.5/src/webview/mod.rs:1819-1852`）⇒ **只拆 capability JSON 一点用
       都没有**，命令自己判才是唯一有效的那一半。
-    - 小窗可调的只有六条（`get_backend_port` / `get_api_token` / `widget_diag` /
-      `resize_widget_window` / `set_widget_visible` / `set_widget_click_through`）——
-      ⚠️ **别按"这命令看起来该谁用"填**：后三条是 `StatusWidgetWindow` **自己**在调的
-      （展开就 resize / 全屏隐藏 / 穿透），填错就是把小窗点坏（devlog/175 的形态）。
+    - ⚠️ **别按"这命令看起来该谁用"填**：2026-10-01 前这里分**两档**，第二档是**小窗**（运行时
+      创建的窗口 —— 它能调的只有六条，且后三条是组件**自己**在调的：展开就 resize / 全屏隐藏 /
+      穿透；填错就是把小窗点坏，devlog/175 的形态）。小窗整窗退役后两档**合并成一个
+      `ALLOWED_CALLER = "main"`**（`devlog/270`）。
     - 判据（`cargo test`）：注册表 ↔ 准入表**双向对账**、每条命令都调了 guard（扫源码）、
-      小窗可调集恰好是那六条、危险/动数据的命令 main-only、未知命令默认拒。
+      危险/动数据的命令 main-only、未知命令默认拒。
 
 30. **外链只走 `open_external`，主机有白名单**（S3-B，devlog/208）：
     `lib.rs::external_url_host` 只认 `https`、主机必须**精确等于** `EXTERNAL_HOSTS` 里的一条
@@ -109,12 +109,24 @@ retire-when: 桌面壳换掉 Tauri，或改成多进程模型
     - ⚠️ **接新平台（抖音/小红书）时要同时加 `EXTERNAL_HOSTS`**：否则「打开主页」会失败 ——
       但**不会静默**（命令返回中文原因、前端 toast 出来）。
     - 前端**不复制那张表**（`shellBridge.openExternal` 只负责转发与抛出原因）：跨语言两份真源必漂。
-    - ⚠️ capability 的**通配基线刻意保留**（`default.json` 的 `windows: ["*"]`）：小窗是运行时
-      创建的，而"显式 label 能否命中运行时窗口"**没有验证过**（计划 §S3-A）；按 label 硬拆一旦
-      猜错就是 devlog/175 那种"IPC 通道坏掉"。主窗独有的两项（updater / process.restart）
+    - ⚠️ capability 的**通配基线刻意保留**（`default.json` 的 `windows: ["*"]`）：**按 label 硬拆
+      一旦猜错就是 devlog/175 那种"IPC 通道坏掉"**，而"显式 label 能否命中**运行时创建**的窗口"
+      至今**没有验证过**（计划 §S3-A）—— 当年那个运行时窗口（小窗）已整窗退役（`devlog/270`），
+      但这条结论对"将来再开运行时窗口"照样成立。主窗独有的两项（updater / process.restart）
       拆去了 `main.json`（主窗是静态 label，命中确定）；`shell:allow-open` 与
       `dialog:allow-open` 直接删掉。
 
+    
+> **31 号不变量已随小窗一起删除**（2026-10-03）：那一条讲的是"桌面小窗挂在宿主窗口下、靠子窗口
+> 身份去掉 DWM 系统阴影"（`ensure_widget_host` / `SetParent` / 区域镜像 / 坐标口径）。用户当天决定
+> **彻底放弃悬浮胶囊这条线**（成本远超收益，`devlog/274`），壳侧那整套（宿主窗口、区域穿透、外框自愈、
+> 三条 widget 命令与准入表第二档）已全部删除，因此**这条不变量没有对象了**。
+> 保留它的**唯一价值**是那份实测结论（如果哪天又要做"无系统阴影的自绘悬浮窗"）：
+> DWM 只给顶层窗口画框；`SetParent` 成子窗口后阴影一点不剩且可逆；宿主配方里
+> `LAYERED + LWA_ALPHA(1)` 会把整棵子树乘 1/255、`LAYERED + 色键` 会让子窗口收不到鼠标，
+> 只有 `WS_EX_NOREDIRECTIONBITMAP | NOACTIVATE | TOOLWINDOW`（无背景刷）三者兼得。
+> 细节与数字在 `devlog/272`（宿主方案）与 `devlog/273`（原生重建 N0 实测：ULW 路线无阴影、
+> 按像素穿透、p95 16.6 ms、空闲 0 帧、工作集 8.4 MB）。
 
 ## 只能真机走的两个现场
 

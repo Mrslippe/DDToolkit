@@ -14,7 +14,7 @@ import { FETCH_IDLE_EVENT } from './fetchIdle'
 import { VTUBER_UPDATED_EVENT } from './vtuberList'
 
 describe('① 事件名是契约：逐个钉住（改名会让探针静默失效）', () => {
-  it('名单与 `EVENTS` 表完全一致，且就是这 10 个（`kick-poll` 已随 M5-2b 退役）', () => {
+  it('名单与 `EVENTS` 表完全一致，且就是这 9 个（`kick-poll` 已随 M5-2b 退役）', () => {
     expect([...APP_EVENT_NAMES].sort()).toEqual([...Object.values(EVENTS)].sort())
     expect([...APP_EVENT_NAMES].sort()).toEqual([
       'ddtoolkit:account-progress',
@@ -26,7 +26,6 @@ describe('① 事件名是契约：逐个钉住（改名会让探针静默失效
       'ddtoolkit:pill-message',
       'ddtoolkit:progress',
       'ddtoolkit:vtuber-updated',
-      'ddtoolkit:widget-seed',
     ])
   })
 

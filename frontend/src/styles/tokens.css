@@ -134,9 +134,11 @@
   --tone-gray-deep: #4b5a6b;
   --tone-gray-tint: rgba(148, 163, 184, 0.16);
 
-  /* ── 动效令牌（R37-P4b，规格 docs/design-archive-cards.md §5）─────────────
-     数值与 `docs/design-status-island.md` §2 **同一组** —— 全站只有一套节奏，
+  /* ── 动效令牌（R37-P4b，规格 docs/frontend/specs/archive-cards.md §5）────────
+     数值与 `docs/frontend/specs/status-island.md` §2 **同一组** —— 全站只有一套节奏，
      R38 批 1「motion token 化」直接复用这批，别再各写一份。
+     ⚠️ 两份规格在 2026-09-30 的文档重构里搬进了 `docs/frontend/specs/`（旧路径
+     `docs/design-*.md` 已不存在）—— 改这两处指针时记得它们是真源。
      `--motion-scale` 是**慢放倍率**：默认 1，只有动效调测页（`?motion=cards`）会改小它，
      让评审能看清每一段（"看着有点怪"没法举证，慢放能）。 */
   --motion-scale: 1;

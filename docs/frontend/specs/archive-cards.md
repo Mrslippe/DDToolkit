@@ -27,7 +27,7 @@ retire-when: 档案视图卡片体系重做
 > 数据视图的两张卡（`.live-calendar` / `.fan-chart`）已是 **4px 圆角 + `--pill-shadow`**。
 >
 > **风格取向**：借手机小组件的**编排**（拿起 / 让位 / 落下）与贴纸的**层次**（白环 + 微阴影 + 大数字），
-> 但不借它的**弹跳与循环动画** —— 桌面窗口不是手机桌面（同 `design-status-island.md` 的取向）。
+> 但不借它的**弹跳与循环动画** —— 桌面窗口不是手机桌面（同 `docs/frontend/specs/status-island.md` 的取向）。
 
 ---
 
@@ -167,7 +167,7 @@ retire-when: 档案视图卡片体系重做
 
 ## 5. 动效令牌与时间轴
 
-**令牌先落地**（`tokens.css`；数值与 `design-status-island.md` §2 同一组，R38 批 1 直接复用，避免两处漂）：
+**令牌先落地**（`tokens.css`；数值与 `docs/frontend/specs/status-island.md` §2 同一组，R38 批 1 直接复用，避免两处漂）：
 
 | Token | 值 | 用在哪 |
 |---|---|---|

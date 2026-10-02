@@ -1,35 +1,44 @@
 ---
 doc: frontend/architecture
 class: framework
-scope: 前端的分层与依赖方向、两个宿主（主窗 / 桌面小窗）、场景机与数据流、与 Tauri 壳的边界、样式与令牌策略、构建入口与 dev 工具面
+scope: 前端的分层与依赖方向、唯一宿主（顶栏）与入口、场景机与数据流、与 Tauri 壳的边界、样式与令牌策略、构建入口与 dev 工具面
 not-scope: 组件与元素的逐项索引、设计令牌取值、形状语言与圆角阴影族 → frontend/UI-MAP.md；后端契约与状态码 → backend/HTTP-CONTRACT.md
-sot: frontend/src/, frontend/vite.config.ts, frontend/index.html, frontend/widget.html
+sot: frontend/src/, frontend/vite.config.ts, frontend/index.html
 verify: cd frontend && npx tsc --noEmit && npm run test
 budget: 300
-retire-when: 前端换框架，或两个宿主的划分被取消
+retire-when: 前端换框架，或"顶栏是唯一宿主"这条划分被取消
 ---
 # 前端架构
 
-## 1. 两个宿主（本层最重要的结构）
+## 1. 唯一宿主：顶栏（本层最重要的结构）
 
-前端**有两个独立入口、两个独立产物**，不是"一个应用加个开关"：
+前端**只有一个入口、一个产物** —— 不是"一个应用加个开关"，也不是"两个应用"：
 
 | 入口 | HTML | 挂载 | 是什么 |
 |---|---|---|---|
 | 主窗 | `index.html` | `src/main.tsx` → `App.tsx` | 整个应用：顶栏 + 图标栏 + V 列表栏 + 路由驱动的右栏 |
-| 小窗 | `widget.html` | `src/widgetMain.tsx` → `StatusWidgetWindow.tsx` | 桌面状态控件（只有一个胶囊 + 面板） |
 
-**为什么必须分开**（R38 批 5b，devlog/173 起）：原来小窗走 `index.html?widget=1`，靠 `main.tsx`
-里的**运行时**判断分流 —— 但**静态 import 拦不住**，`App` / `react-router` / shadcn / ECharts /
-`layout.css` 会被无条件打进小窗那个 renderer。**实测小窗 renderer 占 132MB**，而 Chromium 的
-基础开销只占小部分，大头是我们自己的代码与依赖。
+> ⚠️ **历史（2026-10-01 前）**：曾经有**第二个入口**（`widget.html` → `src/widgetMain.tsx`），挂载
+> **桌面状态控件** —— 另一个置顶透明 Tauri 窗口（label `widget`）。2026-10-01 用户拍板**小窗整窗退役**
+> （`devlog/270`）；2026-10-01..03 又重做过一版原型与"原生 Rust 重建"方案，**2026-10-03 用户决定
+> 整条线彻底放弃**（成本远超收益，`devlog/274`）—— 入口、组件、壳侧支持、方案与规格一并删除，
+> 早期实现在分支 `f2-widget-archive`。
+> **下面这条拆入口的理由对"将来再开第二个窗口"仍然成立**，所以留着而不是删掉。
 
-⇒ 独立入口后小窗的加载量 = `widgetMain.tsx` 顶部那几行，**物理上不可能**再被主窗代码影响，
-"靠运行时判断"那种分流也就不需要了。小窗**只 import 两份 CSS**：`tokens.css` + `status-island.css`
-（⚠️ **不要**在那里 import `layout.css` / `index.css` —— 那正是这个入口要避免的东西）。
+**为什么当年必须拆成独立入口**（R38 批 5b，devlog/173 起）：小窗最早走 `index.html?widget=1`，
+靠 `main.tsx` 里的**运行时**判断分流 —— 但**静态 import 拦不住**，`App` / `react-router` / shadcn /
+ECharts / `layout.css` 会被无条件打进小窗那个 renderer（当时实测大头是我们自己的代码与依赖，
+不是 Chromium 的基础开销；数字见 `devlog/173`）。
 
-**宿主身份**：两个入口各自调 `utils/hostIdentity.ts::setHost('main' | 'widget')`
-（主窗不调，默认就是 `main`）。后端据此让"小窗自己点的动作"不回环提示它自己。
+⇒ **运行时判断替不了打包边界**：拆成独立入口之后，那个入口的加载量 = 入口文件顶部那几行，
+**物理上不可能**再被主窗代码影响。代价是入口要**显式 import 它需要的那几份 CSS**
+（当年小窗只 import 两份）—— ⚠️ **别顺手 import `layout.css` / `index.css`**，那正是拆入口要避免的东西。
+
+**宿主身份**：`utils/hostIdentity.ts::setHost('main' | 'widget')` 是**连接级**的标签（放请求头
+`X-DDToolkit-Host`），由入口自己调（主窗不调，默认就是 `main`）。后端据此让"发起方自己点的动作"
+不回环提示它自己。⚠️ **`'widget'` 这个取值仍被后端承认**（`originator` 标签与三个 `widget_*`
+偏好键都在数据层留着，见 `docs/backend/MESSAGES.md`）—— 但前端已无任何入口会设它，
+而且**目前没有调用方**：它是留给将来第二个窗口的**接线点**，不是死代码。
 
 ## 2. 分层与依赖方向
 
@@ -42,13 +51,16 @@ pages/  ──►  components/  ──►  hooks/  ──►  api/
 
 | 目录 | 文件 | 非空行 | 职责 |
 |---|---|---|---|
-| `components/` | 90 | ~16.5k | 界面组件（含 `common/` `live/` `posts/` `profile/` `ui/` `wordcloud/` 六个子目录） |
-| `utils/` | 81 | ~9.1k | 无 React 依赖的工具：`shellBridge` `widgetWindow` `messageBus` `eventStream` … |
-| `styles/` | 5 | ~7.9k | 见 §5 |
-| `dev/` | 2 | ~5.8k | **dev-only**：`probe.ts`（探针的页面侧钩子）+ `MotionLab.tsx` |
-| `api/` | 6 | ~1.9k | `api.ts` 请求封装 · `types.ts` 出参类型 · `errors.ts` · `validate.ts` |
-| `hooks/` | 17 | ~1.7k | 17 个 hook（含 5 个 `.test.tsx`） |
-| `pages/` | 3 | ~1.0k | 只有 `PostsPage` / `EmptyState` / `useVtuberActions` |
+| `components/` | 89 | ~14.2k | 界面组件（含 `common/` `live/` `posts/` `profile/` `ui/` `wordcloud/` 六个子目录） |
+| `utils/` | 78 | ~7.0k | 无 React 依赖的工具：`shellBridge` `hostIdentity` `messageBus` `eventStream` … |
+| `styles/` | 5 | ~7.1k | 见 §5 |
+| `dev/` | 2 | ~4.6k | **dev-only**：`probe.ts`（探针的页面侧钩子）+ `MotionLab.tsx` |
+| `api/` | 6 | ~1.7k | `api.ts` 请求封装 · `types.ts` 出参类型 · `errors.ts` · `validate.ts` |
+| `hooks/` | 17 | ~1.5k | 17 个 hook（含 5 个 `.test.tsx`） |
+| `pages/` | 3 | ~0.9k | 只有 `PostsPage` / `EmptyState` / `useVtuberActions` |
+
+> ⚠️ 上表两列都是**测量值**，是 **2026-10-01 的快照**（`components/` 与 `utils/` 因小窗整窗退役各少 1 / 3 个文件，见 `devlog/270`）。
+> 它**只给规模感，不必每次改结构都同步**；要重算：`Get-ChildItem <目录> -Recurse -File` 数文件、按"非空行"数行。
 
 **已知的反向边**（改这两处要当心）：`utils/reservationDays.ts` → `components/live/liveCalendarFmt`、
 `hooks/usePostPagination.ts` 与 `usePostQueryState.ts` → `components/PostFilterPop`（仅类型）。
@@ -81,8 +93,6 @@ V 列表栏（均常驻）；右栏由路由驱动 —— `/` 空置界面、`/v
 
 - **`utils/shellBridge.ts`** 是调 Tauri `invoke` 的**唯一出口**：需要新命令时在
   `shellBridge` 加转发与原因，**别在组件里直接 `invoke`**（跨语言两份真源必漂）。
-- **`utils/widgetWindow.ts`** 管小窗的窗口几何（四方向展开 / 留白 / 首帧尺寸），
-  与 Rust 侧的窗口命令配对。
 - **深休眠恢复不是深链接**：隐藏 10 分钟后 Rust 销毁 WebView，唤回时**重建窗口**并加载
   `index.html?restored=1`（SPA 的深链接在资源协议下会 404）；`App.tsx` 读到标记后把存下的
   路由/视图**校验过**再恢复，并立刻清掉现场（免得下次正常启动被"上一次的位置"劫持）。
@@ -95,7 +105,7 @@ V 列表栏（均常驻）；右栏由路由驱动 —— `/` 空置界面、`/v
 |---|---|---|
 | `posts.css` | ~5.3k | 帖子列表 / 卡片 / 筛选（**单文件占了样式总量的一半以上**） |
 | `layout.css` | ~1.0k | 应用壳：顶栏 / 图标栏 / V 列表栏 / 主区 |
-| `status-island.css` | ~0.8k | 状态胶囊 + 面板（**主窗与小窗两个宿主共用这一份**） |
+| `status-island.css` | ~0.4k | 状态胶囊 + 面板（顶栏状态岛；2026-10-01 前与小窗宿主共用这一份） |
 | `profile-board.css` | ~0.7k | 档案视图卡片画布 |
 | `tokens.css` | ~0.2k | 令牌（色 / 圆角 / 动效 / 字体） |
 
@@ -103,7 +113,8 @@ V 列表栏（均常驻）；右栏由路由驱动 —— `/` 空置界面、`/v
 
 ## 7. 构建与开发工具面
 
-- **两个入口**在 `vite.config.ts` 的 `build.rollupOptions.input` 里显式列出（`main` / `widget`）。
+- **单入口**：`vite.config.ts` 不配多入口 —— 默认入口就是 `index.html` → `src/main.tsx`
+  （2026-10-01 前这里显式列出 `main` / `widget` 两个入口，随小窗退役一并删除，见 `devlog/270`）。
 - **路径别名 `@` → `frontend/src`**；生产可用 `VITE_API_BASE` 直连后端。
 - **开发代理**：`/api` → `http://127.0.0.1:8000`（剥前缀）。S1 起后端要会话 token，
   `define` 把**开发态固定 token** 编译期注入；它的默认值**必须与 `scripts/ui_probe.py` 的
@@ -126,7 +137,10 @@ V 列表栏（均常驻）；右栏由路由驱动 —— `/` 空置界面、`/v
 
 ## 六、拆前端入口 / 抽共用样式时的坑（2026-09-24 加，devlog/181）
 
-小窗拆成独立 HTML 入口（`widget.html` → `src/widgetMain.tsx`）踩到的三类问题。**共同点：它们都不在任何 import 图里，所以编译、类型检查、单测全是绿的。**
+⚠️ **这是一份历史清单，但对将来仍然适用**：全部来自 2026-09-24 把桌面状态控件拆成独立 HTML
+入口（`widget.html` → `src/widgetMain.tsx`）那一次 —— 那个入口 2026-10-01 已随小窗整窗退役删除
+（`devlog/270`）。**"要过哪些关"与那个入口叫什么无关**：将来再拆入口，照这份清单逐条过。
+**共同点：漏掉的东西都不在任何 import 图里，所以编译、类型检查、单测全是绿的。**
 
 ### 6.1 「顺带生效的东西」是拆入口最容易漏的一类依赖（样式 + 启动副作用）
 漏掉的**从来不是组件自己**，而是"原来顺带生效的全局东西"。这条纪律到目前**犯了五次**：
@@ -141,20 +155,21 @@ V 列表栏（均常驻）；右栏由路由驱动 —— `/` 空置界面、`/v
 | **7（devlog/265）** | **`layout.css` 的 `@keyframes si-panel-in-fade`** | 引用它的 **reduce 分支在共用文件里** ⇒ 小窗在 `prefers-reduced-motion` 下引用一条**不存在的动画名**（等于没有入场） | ⚠️ 只在**开了 reduce 的机器**上、且**只看小窗**才现形（definitely"没人量过"） |
 
 **第三次最危险**：前两次是**样式**（肉眼能看出不对），这次是**副作用** —— 面板照样显示、胶囊照样亮，只是后台一直在打一个死端口。**"界面看起来对"完全不能推出"它在正常工作"。** 而**副作用漏了不会红**：没有测试、没有类型错误、探针也不查（它只看界面）；唯一能兜住的是**看日志** —— 所以"用户说日志里有报错"永远值得当成正经线索查到底。
-**第 4 次没有发生**（devlog/202，S1 会话 token）：小窗是独立入口，**也要**注入 token —— 这次是按下面第 3 条清单逐条过时**提前抓到**的（小窗到 S1 前只注入端口）。⇒ 清单是能用的，别等它红。
+**第 4 次没有发生**（devlog/202，S1 会话 token）：那个入口是独立入口，**也要**注入 token —— 这次是按下面第 3 条清单逐条过时**提前抓到**的（它到 S1 前只注入端口）。⇒ 清单是能用的，别等它红。
 **第 5/6 次（2026-09-30）的教训与前面四次不同**：漏的东西都是**样式**（好发现），但**判据的坐标系错了** ——
-`--status-widget` 有两段，第一段在 `index.html?density=widget`（主窗口，加载 `layout.css`），
-第二段才在 `widget.html`。解剖与字体只被第一段量过 ⇒ 绿。
+当时那条小窗探针有**两段**：第一段跑在 `index.html?density=widget`（主窗口，加载得到 `layout.css`），
+第二段才在真入口里。解剖与字体**只被第一段量过** ⇒ 绿。（该探针段已随小窗退役删除，见 `devlog/270`。）
 **"漏了东西"和"漏了坐标系"会互相掩护**：只要有一条判据在错的地方量，前者就永远不会红。
-⇒ 拆完入口后**每一条新判据都要问一句"我量的是哪个坐标系"**（§6.5），
+⇒ 拆完入口后**每一条新判据都要问一句"我量的是哪个坐标系"**（判据必须跑在**用户实际看到的那个
+盒子**里 —— 当年就是"在大视口里量一套塞进小窗口的样式"，一路绿而用户从没看见过那个面板），
 并且**共用文件的搬家方向必须单向**：大文件 → 共用文件（D1 就是把 `.topbar-status*` 的共享部分
 搬进 `status-island.css`，**搬不是抄** —— 留一份就又变成两个真源）。
 ⚠️ **第 6 次还教了一件**：新加的那条判据在顶栏宿主里是**正对照**（那条继承链必然成立）——
-小窗那条红了就只能是入口差异，不必再论证"胶囊本来就该用全站字体"。**判据成对写，因果更省事。**
+拆出来的那个入口红了就只能是入口差异，不必再论证"胶囊本来就该用全站字体"。**判据成对写，因果更省事。**
 **规矩**：
 1. **新建/拆分入口后，逐个核「当前布局与运行靠哪些全局东西兜着」** —— preflight / base 层（⚠️ **`body` 上的 `font-family` / `color` / `line-height` 这一类和 `box-sizing` 一样会漏**）/ reset / 自定义属性（`tokens.css`）/ 被跳过的那个入口模块的**顶层副作用**。判据：*这个属性我在组件里没写过，那是谁给的？* 找不到出处，就当它不存在，**显式补上**。
-2. **审计办法（可复用）**：从组件源码抓出所有 `className`，逐个查"是否**只**在另一个入口的 CSS 里定义" —— `used − classes_in(小窗能拿到的 CSS) − classes_in(小窗拿不到的 CSS)` ⇒ **判据不是「它看起来属于哪一块」，而是「用到它的入口有几个」**。共用组件的样式必须放**共用文件**；搬家方向是单向的（大文件 → 共用文件），反过来不行（小窗引 `layout.css` 正是独立入口要避免的那 153KB）。
+2. **审计办法（可复用）**：从组件源码抓出所有 `className`，逐个查"是否**只**在另一个入口的 CSS 里定义" —— `used − classes_in(新入口能拿到的 CSS) − classes_in(新入口拿不到的 CSS)` ⇒ **判据不是「它看起来属于哪一块」，而是「用到它的入口有几个」**。共用组件的样式必须放**共用文件**；搬家方向是单向的（大文件 → 共用文件），反过来不行（新入口引 `layout.css` 正是独立入口要避免的那一类代价）。
 3. **顶层副作用清单**（逐条过）：`setApiBase` / 任何 `api.*` 的基地址注入 · 全局监听（`window.onerror` / `unhandledrejection` / `resize`）· 定时器与轮询的启动 · 埋点 / 主题应用 / `localStorage` 迁移 · 静态启动幕的摘除与根元素上的标记属性。判据还是那句：**「这个东西是谁设置的？新入口里有人设置它吗？」**
-4. **共用文件必须自包含**：抽 `status-island.css` 时开头几行 reset 是两个入口都需要的，一度只留在主入口那份 ⇒ 表现是"主窗口正常、小窗错位"。**共用样式文件不假设调用方设好了什么**，要复用的 reset / 变量跟着内容一起搬。
-5. ⚠️ **「只在真机上生效的修复」等于没法验证的修复**：`--widget-panel-max-h` 的赋值曾写在"展开就 resize"那个 effect 里，而那条 effect **第一行就** `if (!('__TAURI_INTERNALS__' in window)) return` ⇒ **探针里这个变量永远设不上**，走的还是那条有 bug 的 `60vh` 分支。**"我修了、我验了、但验的不是我修的那条路"比不修更危险**，因为它让人以为已经安全。修复若依赖"只在真机存在的条件"（Tauri 存在 / 有真窗口 / 有托盘），**它的验证也必须在真机上**，或者把**前提挪到环境无关的地方**（这次就是把变量准备单拆一条 effect）；写修复时问一句 **「这条路径在探针/CI 里跑得到吗？」** 跑不到 → 要么挪，要么在 `TODO.md` 里显式记下"只能真机验"。
-判据命令：`python scripts/ui_probe.py --status-widget`。
+4. **共用文件必须自包含**：抽 `status-island.css` 时开头几行 reset 是两个入口都需要的，一度只留在主入口那份 ⇒ 表现是"主窗口正常、另一个入口错位"。**共用样式文件不假设调用方设好了什么**，要复用的 reset / 变量跟着内容一起搬。
+5. ⚠️ **「只在真机上生效的修复」等于没法验证的修复**：`--widget-panel-max-h` 的赋值曾写在"展开就 resize"那个 effect 里（该变量随小窗退役删除），而那条 effect **第一行就** `if (!('__TAURI_INTERNALS__' in window)) return` ⇒ **探针里这个变量永远设不上**，走的还是那条有 bug 的 `60vh` 分支。**"我修了、我验了、但验的不是我修的那条路"比不修更危险**，因为它让人以为已经安全。修复若依赖"只在真机存在的条件"（Tauri 存在 / 有真窗口 / 有托盘），**它的验证也必须在真机上**，或者把**前提挪到环境无关的地方**（这次就是把变量准备单拆一条 effect）；写修复时问一句 **「这条路径在探针/CI 里跑得到吗？」** 跑不到 → 要么挪，要么在 `TODO.md` 里显式记下"只能真机验"。
+⇒ 那份入口专属的探针命令**已随小窗退役删除**（`devlog/270`），但**这份清单与上面两条方法论与入口无关** —— 拆新入口时照用。

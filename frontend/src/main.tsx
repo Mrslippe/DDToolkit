@@ -288,16 +288,16 @@ function Root() {
 }
 
 /**
- * 桌面状态控件小窗**不再是这个入口的责任**（R38 批 5b，2026-09-24）。
+ * 这是**唯一**的前端入口（桌面悬浮小窗那条线 2026-10-03 已整体放弃，见 `devlog/274`）。
  *
- * 原来它走 `index.html?widget=1`、在这里用 `if (isWidgetWindow)` 分流 —— 但
- * **静态 import 拦不住**：文件顶部那些 `import App from './App'` / react-router / shadcn /
- * ECharts 会被**无条件**打进小窗那个 renderer。实测小窗 renderer **132MB**，
- * 而 Chromium 基础开销只占小部分，大头是我们自己的代码与依赖。
+ * 历史（值得留着）：小窗曾经走 `index.html?widget=1`、在这里用 `if (isWidgetWindow)` 分流 ——
+ * 但**静态 import 拦不住**：文件顶部那些 `import App from './App'` / react-router / shadcn /
+ * ECharts 会被**无条件**打进小窗那个 renderer（实测 132MB，而 Chromium 基础开销只占小部分）。
+ * 后来给它开过独立入口 `widget.html` → `src/widgetMain.tsx`（即 `vite.config.ts` 的多入口），
+ * 那个入口前后删过两次：2026-10-01 整窗退役、2026-10-03 连重做的那版一起放弃。
  *
- * 现在小窗有**自己的入口**：`widget.html` → `src/widgetMain.tsx`（见 `vite.config.ts` 的多入口）。
- * 这个文件只管主窗口 —— 于是小窗的加载量变成物理上的最小集，
- * 而且不可能再被主窗口的代码影响。
+ * ⚠️ **拆入口会把"蹭全局 reset"的地方全部暴露出来** —— 那条教训在今天仍然成立：
+ * 只要哪天再拆一个入口，先自查它是否在蹭别处的 `box-sizing` / `.os-*` / dev token。
  */
 
 ReactDOM.createRoot(document.getElementById('root')!).render(

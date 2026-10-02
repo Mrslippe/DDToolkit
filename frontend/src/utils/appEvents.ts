@@ -16,10 +16,9 @@
 import type { AccountSnapshot, VTuber } from '../api/types'
 import type { StreamMessage } from './eventStream'
 import type { FetchIdleKind } from './fetchIdle'
-import type { Notice } from './notificationHub'
 
-/** 事件名（唯一真源）。老的常量（`FETCH_IDLE_EVENT` / `VTUBER_UPDATED_EVENT` /
- *  `WIDGET_SEED_NOTICES_EVENT`）现在是这里的**再导出**，避免第二份字面量。 */
+/** 事件名（唯一真源）。老的常量（`FETCH_IDLE_EVENT` / `VTUBER_UPDATED_EVENT`）现在是这里的
+ *  **再导出**，避免第二份字面量。 */
 export const EVENTS = {
   /** 顶栏胶囊提示（`utils/pill.ts` 是主入口） */
   pillMessage: 'ddtoolkit:pill-message',
@@ -33,8 +32,6 @@ export const EVENTS = {
   vtuberUpdated: 'ddtoolkit:vtuber-updated',
   /** 能力/登录态变化 ⇒ 立刻重取 */
   capabilitiesRefresh: 'ddtoolkit:capabilities-refresh',
-  /** dev-only：给小窗注入条目（无头探针用） */
-  widgetSeed: 'ddtoolkit:widget-seed',
   /** 后端推送来的**一条消息**（M0b，devlog/242；信封见 `utils/eventStream.ts`） */
   message: 'ddtoolkit:message',
   /** 开播边沿（M1，devlog/243）：后端推 `domain.live.edge` ⇒ 这里转成顶栏告警 */
@@ -80,8 +77,6 @@ export interface AppEventMap {
   'ddtoolkit:account-progress': AccountSnapshot[]
   'ddtoolkit:vtuber-updated': VTuber
   'ddtoolkit:capabilities-refresh': undefined
-  /** dev-only：注入的条目数组 */
-  'ddtoolkit:widget-seed': Notice[]
   /** 后端推送来的一条消息（原样信封：`type` / `payload` / `ts` / `seq` / `replay`） */
   'ddtoolkit:message': StreamMessage
   /** 开播边沿（已解成结构化 payload，消费方不必自己解析信封） */
@@ -100,7 +95,6 @@ export const APP_EVENT_NAMES: readonly AppEventName[] = [
   'ddtoolkit:account-progress',
   'ddtoolkit:vtuber-updated',
   'ddtoolkit:capabilities-refresh',
-  'ddtoolkit:widget-seed',
   'ddtoolkit:message',
   'ddtoolkit:live-edge',
   'ddtoolkit:progress',

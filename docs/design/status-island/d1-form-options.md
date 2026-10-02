@@ -8,6 +8,9 @@ expires: 2026-11-30
 
 # D1 细化：状态岛形态路线的执行方案（2026-09-25）
 
+> ⚠️ **小窗已整体退役（2026-10-01）**：本文是**设计记录**，不是现状；实现在分支
+> `f2-widget-archive`，现状见 `docs/TODO.md` §4（`devlog/270`）。
+
 > ⚠️⚠️ **本文的方案结论（A + 280）已作废**（2026-09-27 定稿 / 2026-09-30 落地，`devlog/264`）。
 >
 > 取代它的是 `docs/design/widget-preview/direction.html`（09-27 样例页，标题
@@ -198,7 +201,7 @@ raw.x   = anchorX − 140 = cur.x      ← 恒等，锚定计算不再产生任�
 
 | 文件 | 档位归属 |
 |---|---|
-| `frontend/src/utils/widgetWindow.ts` | **B**（`frontend/src/utils/` 前缀）⇒ 会跑 vitest |
+| `utils/widgetWindow.ts`（2026-10-01 随小窗整窗退役删除，见 `devlog/270`） | **B**（`frontend/src/utils/` 前缀）⇒ 会跑 vitest |
 | `frontend/src/styles/status-island.css` | **不在任何列表** ⇒ 不抬档 |
 | `frontend/src-tauri/src/lib.rs` | **不在任何列表** ⇒ 不抬档 |
 | `scripts/ui_probe.py` | **不在任何列表** ⇒ 不抬档 |

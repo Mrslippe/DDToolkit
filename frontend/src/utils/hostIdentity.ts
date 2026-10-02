@@ -11,8 +11,10 @@
  *
  * 1. **连接级**，不必每条消息重复（方案 §8.5 E 的定稿）：前端把它放在请求头
  *    `X-DDToolkit-Host` 里（`api.ts` 的 `authFetch`/`request` 统一加，SSE 连接也走同一条路）。
- * 2. **默认 `'main'`**：主窗口（`main.tsx`）不用显式设置；小窗入口（`widgetMain.tsx`）
- *    显式 `setHost('widget')`。
+ * 2. **默认 `'main'`**：主窗口（`main.tsx`）不用显式设置。
+ *    `'widget'` 这个取值**仍然有效**（后端拿它当 originator 标签，见
+ *    `tests/test_manual_action_push.py`）：当年小窗入口显式 `setHost('widget')`，
+ *    那条入口 2026-10-01 已退役 —— 留着这一档是**数据层的契约**，不是死代码。
  * 3. ⚠️ **只有"完成类"提示才跳过自己**：`notice.progress`（任务开始）恰恰是"让点按钮的人
  *    立刻看到"的东西 —— 跳过自己就等于把 M2 的全部收益丢掉。判定在 `messageBus.bridgeMessage`。
  */
@@ -23,7 +25,7 @@ export const HOST_HEADER = 'X-DDToolkit-Host'
 
 let host: HostKind = 'main'
 
-/** 显式声明宿主（只有小窗入口需要调）。 */
+/** 显式声明宿主（小窗入口退役后**目前没有调用方** —— 留着是给将来第二个窗口用的接线点）。 */
 export function setHost(h: HostKind): void {
   host = h
 }

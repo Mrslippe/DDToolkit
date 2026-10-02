@@ -7,31 +7,6 @@ use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager, RunEvent, State, WindowEvent};
 
-/// 小窗被销毁时广播给前端的事件名（与 `frontend/src/utils/widgetWindow.ts` 的
-/// `WIDGET_CLOSED_EVENT` **必须一致**）。定义在 Rust 侧是因为**两条销毁路径都在这里**
-/// （设置开关 → `hide_widget_window`，小窗 Alt+F4 → `destroy_widget_window`），
-/// 前端只负责听。
-const WIDGET_CLOSED_EVENT: &str = "widget:closed";
-
-/// 「正在创建小窗」的标志（重入保护）。
-///
-/// **为什么需要**（2026-09-24 第六轮真机反馈）：用户拖小窗时发现"原地残留了一个" ——
-/// 日志显示 `show_widget_window` 被调了两次、建出两个窗口（重叠在一起，一拖就分开）。
-/// 根因是前端 `main.tsx` 的 `React.StrictMode`：**开发模式下每个 effect 故意跑两次**
-/// （挂载→卸载→再挂载），而那条"启动按偏好开小窗"的 effect 没有 cleanup。
-///
-/// 前端当然也要修（加幂等 + cleanup），但**命令本身不幂等**这件事更根本：
-/// 任何重入（StrictMode / 快速双击 / 并发）都会建出第二个窗口，而窗口一旦建出来
-/// 就不会自己消失。所以这里挡住。
-static CREATING_WIDGET: AtomicBool = AtomicBool::new(false);
-
-/// 小窗 URL 探针**只跑一次**（2026-09-25 加，用户反馈"日志里一堆报错"）。
-///
-/// 那个探针的使命是查明"页面到底有没有执行"（devlog/178~180）—— **已经完成了**。
-/// 留着每次开窗都跑，只会在 WebView 未就绪时刷出 `failed to receive message from webview`，
-/// 而那**不是故障、是正常时序**，长得却跟真错误一样。
-static WIDGET_PROBED: AtomicBool = AtomicBool::new(false);
-
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
@@ -909,481 +884,6 @@ fn rebuild_main_window(app: &tauri::AppHandle) -> tauri::Result<tauri::WebviewWi
     Ok(w)
 }
 
-/// 把小窗的 **DWM 外框**摘干净（2026-09-24 第三轮真机反馈加）。
-///
-/// 这是本仓**自己记过**的一课：`setup()` 里给主窗口做那段 DWM 处理时写着
-/// 「关 DWM 阴影/**边框描线（矩形轮廓的来源）**」—— 而那段代码写死了
-/// `get_webview_window("main")`，**小窗完全没走**。于是小窗拿到的是 Windows 默认外框：
-/// **一圈系统描边**（用户看到的"有边框"）+ DWM 给无边框透明窗口补的底色（"半透明"）。
-///
-/// 主窗口靠两件事摘掉它：`set_shadow(false)` + `apply_dwm_corners()`
-/// （后者设 `DWMWA_BORDER_COLOR = DWMWA_COLOR_NONE`，正是"去掉描线"）。
-/// 这里对小窗做同一套，另加 `DWMWCP_DONOTROUND` ——
-/// 胶囊的圆角是 CSS 的 `999px`，系统的 ~8px 圆角会跟它打架（与主窗口同理）。
-///
-/// 失败只记日志、不报错：外框难看 ≠ 功能不可用，不该让窗口建不出来。
-#[cfg(target_os = "windows")]
-fn strip_dwm_frame_for_widget(w: &tauri::WebviewWindow) {
-    use windows_sys::Win32::Graphics::Dwm::{
-        DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND,
-    };
-    let _ = w.set_shadow(false);
-    // 描线 / 系统圆角（主窗口用的是同一个 `apply_dwm_corners`）
-    let ok = apply_dwm_corners(w);
-    let mut corner_ok = false;
-    if let Ok(hwnd) = w.hwnd() {
-        let pref = DWMWCP_DONOTROUND; // 3
-        let hr = unsafe {
-            DwmSetWindowAttribute(
-                hwnd.0,
-                DWMWA_WINDOW_CORNER_PREFERENCE as u32,
-                &pref as *const _ as *const core::ffi::c_void,
-                4,
-            )
-        };
-        corner_ok = hr == 0; // S_OK
-    }
-    println!(
-        "[ddtoolkit] 小窗 DWM 外框处理：描线/圆角={} · 不圆角={}",
-        if ok { "ok" } else { "失败" },
-        if corner_ok { "ok" } else { "失败" }
-    );
-}
-
-#[cfg(not(target_os = "windows"))]
-fn strip_dwm_frame_for_widget(_w: &tauri::WebviewWindow) {}
-
-/// 把小窗诊断**同时写进日志文件**（2026-09-24 第五轮）。
-///
-/// 为什么不能只 `println!`：用户是在 `npm run tauri:dev` 的控制台里看的，
-/// **输出会滚、也不方便整段发给我** —— 上一轮他就只截到 `RunEvent::Ready +34ms`，
-/// 而我加的探针在 +1500ms 才打印，于是"日志里什么都没有"变成了一个**假证据**
-/// （我据此推断"命令没被调用"，差点走错方向）。
-///
-/// 写进数据目录的 `shell.log`（`shelllog` 那套），用户可以整份发过来、也不会丢帧。
-fn widget_log(app: &tauri::AppHandle, msg: &str) {
-    println!("[ddtoolkit] {msg}");
-    let dir = app
-        .state::<DataDirState>()
-        .0
-        .lock()
-        .ok()
-        .and_then(|g| g.as_ref().map(|s| s.dir.clone()));
-    if let Some(dir) = dir {
-        shelllog::log(&dir, msg);
-    }
-}
-
-/// 桌面状态控件（R38 批 5b，devlog/173）：创建或显示那个 200×40 的无边框小窗。
-///
-/// **位置由前端给** —— 规格 §7 说"位置持久化（`utils/shellState` 同款做法）"，
-/// 也就是 localStorage 存、跨启动活着。这里只负责"按给的坐标摆好并显示"；
-/// 传 `None` 时退到右下角留边（第一次开启的落点）。
-///
-/// 与主窗口的三点不同：**置顶**（`always_on_top`）、**不进任务栏**（`skip_taskbar`）、
-/// **不可缩放**（它是个控件不是窗口）。透明 + 无边框与主窗口一致 ——
-/// 桌面上要看见的是圆角胶囊，不是一块方板。
-///
-/// > ⚠️ **窗口创建的收尾必须同步**（2026-09-24 实测踩过）：`WebviewWindowBuilder` 里那些
-/// > `set_*` 在**别的平台**上可能变成 `dispatch`，于是 `build()` 返回时窗口还带着默认外观
-/// > （带边框、可缩放、不置顶）。所以要在**同一个同步块**里用 `w.set_*()` 把
-/// > 装饰/缩放/置顶/任务栏再钉一遍 —— 这些是同步调用，一定在 `build()` 之后生效。
-/// > 少了这一步，桌面上会出现一个**带标题栏的方窗**（那正是"透明背景小窗"的观感来源）。
-/// ⚠️ **必须是 `async fn`**（2026-09-24 第六轮，可能是本 bug 的真凶）。
-///
-/// Tauri v2 里**同步命令跑在主线程**。而 `WebviewWindowBuilder::build()` 要创建第二个
-/// WebView2 —— 它会和主线程的消息泵打交道。在**已有一个 webview** 的进程里于主线程
-/// 同步建第二个，实测会**卡在这里**：日志停在"被调用"、UI 不再响应、
-/// 托盘菜单点了也没用（全部现象见 devlog/175–179）。
-///
-/// 改成 `async fn` 之后 Tauri 会把它放到**异步运行时**（不是主线程）执行，
-/// 消息泵就空出来了。代价：`WebviewWindow` 等类型不是 `Send`，跨 await 持有要小心 ——
-/// 本函数内没有 await，所以是安全的。
-#[tauri::command]
-async fn show_widget_window(window: tauri::Window, app: tauri::AppHandle, x: Option<i32>, y: Option<i32>) -> Result<(), String> {
-    if !guard_window(&window, "show_widget_window") {
-        return Err("该窗口无权调用 show_widget_window".to_string());
-    }
-
-    // ⚠️ **入口就打印**（2026-09-24 第四轮补）：原来只在 `build()` **成功之后**才打印，
-    // 于是"窗口创建失败"和"命令压根没被调用"在日志里**长得一模一样**（都是什么都没有）。
-    // 这一行把两者分开 —— 没有它，下一次还是只能猜。
-    widget_log(&app, &format!("show_widget_window 被调用 x={x:?} y={y:?}"));
-    // ⚠️ 首帧尺寸 = **折叠态卡片 + 两侧留白**（F1 批，2026-09-30）：
-    //    200（胶囊下限）× 40（胶囊高）+ 2 × 32（给外阴影的留白，见 TS 的 `WIDGET_SHADOW_PAD`）
-    //    = **264 × 104**。这里只给"下限尺寸"：胶囊宽跟着内容走（200–400），
-    //    内容要等页面渲染完才知道 ⇒ 由前端的 `ResizeObserver` 量出来再调
-    //    `resize_widget_window` 把窗口改到位（见 `StatusWidgetWindow` 的第 ⑨ 条）。
-    //    ⚠️ **留白不能省**：窗口 == 卡片时 `box-shadow` 会被窗口边缘整整切掉
-    //    （用户 2026-09-30 报的「小窗阴影被截断了」就是它）。
-    const W: f64 = 264.0;
-    const H: f64 = 104.0;
-    // ⚠️ **这里必须做"重入保护"**（2026-09-24 第六轮真机反馈）：
-    // 用户拖小窗时发现"原地残留了一个"，日志显示 `show_widget_window` 被调了**两次**、
-    // 建出了**两个窗口**（重叠在一起，一拖就分开）。根因是前端 `main.tsx` 的
-    // `React.StrictMode` —— **开发模式下每个 effect 故意跑两次**（挂载→卸载→再挂载），
-    // 而那条"启动时按偏好开小窗"的 effect 没有 cleanup。
-    //
-    // 只在前端修是不够的：命令本身不幂等，任何重入（StrictMode / 快速双击 / 并发）都会建两个。
-    // 所以这里也要挡住 —— 正在建的时候再进来直接返回。
-    if CREATING_WIDGET.swap(true, Ordering::SeqCst) {
-        widget_log(&app, "已有一次创建在进行中 ⇒ 本次调用直接返回（重入保护）");
-        return Ok(());
-    }
-    // 用一个 guard 保证任何 return 路径都会复位标志
-    struct ResetOnDrop;
-    impl Drop for ResetOnDrop {
-        fn drop(&mut self) {
-            CREATING_WIDGET.store(false, Ordering::SeqCst);
-        }
-    }
-    let _guard = ResetOnDrop;
-
-    // 已存在就只挪位置 + 显示：开关反复切换不该重建窗口（那会丢 webview 状态，
-    // 也会让"关掉再打开"多花一次冷启动）
-    if let Some(w) = app.get_webview_window("widget") {
-        // ⚠️ **这条分支也必须留痕**（2026-09-24 第六轮）：原来它静默返回，
-        // 于是日志里只有"被调用"、没有"已创建" —— 两种完全不同的原因
-        //（"走提前返回" vs "build() 卡住"）在日志里**长得一模一样**。
-        // 用户 17:14 那次就撞在这上面：我从"没有已创建"推出"build 卡住"，又一次推错方向。
-        widget_log(&app, "小窗已存在（走提前返回：只挪位置 + show）");
-        if let (Some(x), Some(y)) = (x, y) {
-            let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
-        }
-        let _ = w.show();
-        return Ok(());
-    }
-    widget_log(&app, "小窗不存在，开始创建 …");
-    let w = tauri::WebviewWindowBuilder::new(
-        &app,
-        "widget",
-        tauri::WebviewUrl::App("widget.html".into()),
-    )
-    .title("DDtoolkit 状态控件")
-    .inner_size(W, H)
-    .resizable(false)
-    .decorations(false)
-    .transparent(true)
-    .always_on_top(true)
-    .skip_taskbar(true)
-    .background_color(tauri::window::Color(0, 0, 0, 0))
-    .build()
-    .map_err(|e| {
-        // 创建失败必须**说清楚**，否则前端只会收到一个 false，用户看到的是"点了没反应"
-        widget_log(&app, &format!("小窗创建失败：{e}"));
-        e.to_string()
-    })?;
-    widget_log(&app, "小窗已创建（首帧 264×104 = 卡片 200×40 + 阴影留白，宽由前端按内容改）");
-    // ⚠️⚠️ **把这个窗口实际加载的地址打出来**（2026-09-24 第四轮）。
-    //
-    // 前三轮我改的都是**修饰**（启动幕 / 背景色 / `backdrop-filter` / DWM 外框），
-    // 而用户每次看到的东西**一模一样** —— 直到确认"连自检条都没画出来"才明白：
-    // **那个窗口里根本没有渲染我们的页面**，修饰一行都没机会执行。
-    //
-    // ⚠️ **这一轮不再猜，先把事实钉死 —— 双向探针**（2026-09-24 第四轮加的）：
-    //   ① **Rust 侧读 URL**：不依赖页面，哪怕空白也读得到。
-    //      URL 不对（join 拼歪 / 走了资源协议）⇒ 查 Rust 侧。
-    //   ② **页面侧回传**（`widget_diag` 命令）：页面真的跑起来了才会发。
-    //      **这条日志不出现 = 页面没执行**。
-    //
-    // ⚠️⚠️ **2026-09-25 收敛**（用户反馈"日志里一堆报错"）：
-    // 原来无条件在 1.5s / 5s 各读一次 URL。实测在**窗口刚建好、WebView 还没就绪**时
-    // `url()` 会返回 `runtime error: failed to receive message from webview` ——
-    // **那是正常时序，不是故障**，但它在日志里长得跟真错误一模一样，
-    // 攒了 19 条噪音（用户看到的就是这个）。
-    //
-    // 现在改成：
-    //   · **只在第一次创建窗口时探一次**（`WIDGET_PROBED` 一次性开关）——
-    //     它的使命（查明"页面到底有没有执行"）在 devlog/180 已经完成，不该每次开窗都跑；
-    //   · **失败只记一次、且降级成明确的"时序说明"**，不再逐条刷 `读不到`；
-    //   · 页面侧那条 `[widget] 页面自检` **照旧每次都发** —— 那才是现在真正有用的那半条
-    //     （它同时带 URL 查询串、胶囊尺寸、条目数）。
-    if !WIDGET_PROBED.swap(true, Ordering::SeqCst) {
-        let probe = w.clone();
-        let app2 = app.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(3000));
-            match probe.url() {
-                Ok(u) => widget_log(&app2, &format!("小窗 URL = {u}")),
-                // 读不到**不是错误**：WebView 尚未就绪时就是这样（见上）。
-                // 页面侧的自检日志才是权威。
-                Err(_) => widget_log(
-                    &app2,
-                    "小窗 URL 一时读不到（WebView 未就绪，正常时序）—— \
-                     以页面侧 `[widget] 页面自检` 那行为准",
-                ),
-            }
-        });
-    }
-    // 同步钉一遍（理由见文档注释）：这些都是同步调用，`build()` 之后一定生效
-    let _ = w.set_decorations(false);
-    let _ = w.set_resizable(false);
-    let _ = w.set_always_on_top(true);
-    let _ = w.set_skip_taskbar(true);
-    // ⚠️ **小窗必须自己摘 DWM 外框**（2026-09-24 第三轮真机反馈加）：
-    // 主窗口在 `setup()` 里做了，而那段写死了 `get_webview_window("main")` —— 小窗没做，
-    // 于是拿到 Windows 默认外框（一圈描边 + DWM 给无边框透明窗口补的底色）。
-    strip_dwm_frame_for_widget(&w);
-    // 尺寸也钉一遍：`inner_size` 在 builder 里同样可能被延迟应用
-    let _ = w.set_size(tauri::LogicalSize::new(W, H));
-    match (x, y) {
-        (Some(x), Some(y)) => {
-            let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
-        }
-        _ => {
-            // 没存过位置 ⇒ 落右下角（按缩放系数换算，留 24px 边、避开任务栏）
-            if let Ok(Some(mon)) = w.current_monitor() {
-                let sc = mon.scale_factor();
-                let s = mon.size();
-                let px = s.width as i32 - (W * sc) as i32 - (24.0 * sc) as i32;
-                let py = s.height as i32 - (H * sc) as i32 - (72.0 * sc) as i32;
-                let _ = w.set_position(tauri::PhysicalPosition::new(px, py));
-            }
-        }
-    }
-    Ok(())
-}
-
-/// 关掉桌面状态控件。**销毁而不是隐藏** —— 关掉开关就不该再留一个 webview；
-/// 位置已经由前端存进 localStorage，下次开启会回到原处。
-///
-/// 幂等：窗口不在（本来就没开）也算成功。这个命令会从**两条路**被调到 ——
-/// 主窗口的开关，以及小窗自己的退出兜底 —— 不幂等就会出现"第二次调用报错"。
-///
-/// 销毁后**广播 `widget:closed`** 给前端：主窗口据此把 `prefs.widget_enabled` 落成 `off`。
-/// 不做的话用户按 Alt+F4 关掉小窗之后偏好还是 `on`，下次启动又开一个 —— 观感就是"关不掉"。
-///
-/// 同样改 `async fn`：`destroy()` 也会碰 WebView2 的消息泵，
-/// 理由见 `show_widget_window` 那段注释（**同步命令跑在主线程 ⇒ 卡死**）。
-#[tauri::command]
-async fn hide_widget_window(window: tauri::Window, app: tauri::AppHandle) {
-    if !guard_window(&window, "hide_widget_window") {
-        return;
-    }
-
-    if let Some(w) = app.get_webview_window("widget") {
-        let _ = w.destroy();
-        let _ = app.emit(crate::WIDGET_CLOSED_EVENT, ());
-    }
-}
-
-/// 小窗页面自检回传（R38 批 5b，2026-09-24 第四轮）。
-///
-/// **这是"页面到底有没有执行"的唯一硬证据**：小窗是 200×40 + 置顶 + 无边框，
-/// 用户没法开 devtools；而前三轮我改的修饰（启动幕 / 背景 / `backdrop-filter` / DWM 外框）
-/// 在真机上**一行都没生效**，我却一直在从截图里猜。
-///
-/// 页面跑起来就调它 → 控制台出现 `[widget] 页面自检 …`；
-/// **如果这条日志从不出现，那就是"页面没执行"**，方向立刻转到 Rust / WebView 侧。
-#[tauri::command]
-fn widget_diag(window: tauri::Window, app: tauri::AppHandle, info: String) {
-    if !guard_window(&window, "widget_diag") {
-        return;
-    }
-
-    widget_log(&app, &format!("[widget] 页面自检 {info}"));
-}
-
-/// 窗口是否已经存在（给前端/排查用）。
-///
-/// 2026-09-24 第六轮加：`show_widget_window` 的"提前返回"分支以前不留痕，
-/// 于是"窗口早就存在"与"窗口没建出来"在日志里**长得一模一样**。
-/// 这条命令让前端可以在调用前后各问一次，把状态钉死。
-#[tauri::command]
-fn widget_window_exists(window: tauri::Window, app: tauri::AppHandle) -> bool {
-    if !guard_window(&window, "widget_window_exists") {
-        return false;
-    }
-
-    app.get_webview_window("widget").is_some()
-}
-
-// ── 小窗三项增强（R38 批 5d，2026-09-24）──────────────────────────────
-//
-// 三项都来自 LuckyIsland 的做法（README「参考与致谢」）。共同点：
-// **它们都不是"看起来更好"，而是让小窗能被安静地摆在桌面上** ——
-// 一个常驻的置顶控件如果会挡点击、会在你看全屏视频时冒出来，用户最后只能把它关掉。
-
-/// 设置小窗的**鼠标穿透**（`click_through`，来自 LuckyIsland）。
-///
-/// ## 为什么常驻控件需要它
-///
-/// 小窗是 **200×40 · 置顶 · 无边框** 的常驻控件，默认会**吃掉它覆盖的那块区域的点击**。
-/// 用户把它摆在右下角，那块地方恰好可能是别的程序的按钮 —— 于是小窗从"帮手"变成"路障"。
-///
-/// 穿透打开后，鼠标事件直接穿到下面的窗口；**代价是小窗自己也点不到了**，
-/// 所以这是**用户主动打开的开关**（设置里那个），不是默认行为。想点它时先关掉穿透
-/// （设置窗口在托盘菜单里，永远够得着 —— 这是这个开关**不会把人锁死**的原因）。
-///
-/// ## 为什么用自定义命令而不是前端的 `setIgnoreCursorEvents()`
-///
-/// `core:window:allow-set-ignore-cursor-events` **不在 `core:window:default` 里**
-/// （已核 `tauri-2.11.5` 的 `permissions/window/autogenerated/reference.md`：
-/// default 集只有 28 项，且全是查询类，不含它）。走前端就得再动 ACL ——
-/// 而 **Tauri v2 里自定义命令不走 ACL**（本仓已在 `destroy_widget_window` 上踩过这个坑，
-/// devlog/175），所以这里直接用命令，少一个会漂的配置点。
-#[tauri::command]
-async fn set_widget_click_through(window: tauri::Window, app: tauri::AppHandle, enabled: bool) -> Result<(), String> {
-    if !guard_window(&window, "set_widget_click_through") {
-        return Err("该窗口无权调用 set_widget_click_through".to_string());
-    }
-
-    let Some(w) = app.get_webview_window("widget") else {
-        // 幂等：小窗没开时设置穿透是无意义的**成功**，不该报错
-        // （用户可能在没开小窗时就调了设置项）。
-        return Ok(());
-    };
-    w.set_ignore_cursor_events(enabled).map_err(|e| {
-        widget_log(&app, &format!("小窗设置鼠标穿透失败（enabled={enabled}）：{e}"));
-        e.to_string()
-    })?;
-    widget_log(&app, &format!("小窗鼠标穿透 = {enabled}"));
-    Ok(())
-}
-
-/// 查询当前是否有**全屏程序在跑**（`hide_in_fullscreen` 的判据，来自 LuckyIsland）。
-///
-/// ## 为什么不能只看"我们自己是不是全屏"
-///
-/// 小窗要躲的是**别人的**全屏 —— 用户全屏看视频 / 打游戏时，一个置顶控件压在画面上，
-/// 观感是"删不掉的牛皮癣"。而小窗自己**永远不全屏**（200×40 固定），
-/// 所以 `window.is_fullscreen()` 在这里恒为 false，**问了等于没问**。
-///
-/// ## 判据：`SHQueryUserNotificationState`
-///
-/// Windows 为"现在该不该弹通知"提供的官方接口（shell32），它已经把
-/// "有全屏程序"这件事判好了（`QUNS_RUNNING_D3D_FULL_SCREEN` / `QUNS_PRESENTATION_MODE`
-/// / `QUNS_BUSY`）。自己用 `GetForegroundWindow` + 窗口矩形比对屏幕来推是**不可靠的**
-/// （多显示器、无边框全屏、UWP 都会误判），没必要重造。
-///
-/// 返回 `true` = **建议隐藏**（有全屏 / 演示 / 免打扰）。取不到状态时返回 `false`
-/// —— **默认不隐藏**：宁可偶尔多露一下，也不要因为探测失败让小窗**永远不出现**
-/// （那才是更难查的 bug）。
-#[tauri::command]
-fn is_fullscreen_app_running(window: tauri::Window, ) -> bool {
-    if !guard_window(&window, "is_fullscreen_app_running") {
-        return false;
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        use windows_sys::Win32::UI::Shell::{
-            SHQueryUserNotificationState, QUNS_BUSY, QUNS_PRESENTATION_MODE,
-            QUNS_RUNNING_D3D_FULL_SCREEN, QUERY_USER_NOTIFICATION_STATE,
-        };
-        let mut state: QUERY_USER_NOTIFICATION_STATE = 0;
-        // SAFETY：`state` 是栈上的合法可写指针；该 API 只写这一个 out 参数。
-        let hr = unsafe { SHQueryUserNotificationState(&mut state) };
-        if hr < 0 {
-            return false; // 拿不到状态：按"没有全屏"处理（见文档注释的取舍）
-        }
-        return state == QUNS_RUNNING_D3D_FULL_SCREEN
-            || state == QUNS_PRESENTATION_MODE
-            || state == QUNS_BUSY;
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        false
-    }
-}
-
-/// 把小窗**改成任意矩形**（`resize` 通路，R38 批 5d）。
-///
-/// ## 为什么非有这条不可
-///
-/// 规格 §3 写了小窗展开是「**280 × 面板高**」，但窗口尺寸一直**写死 200×40**。
-/// 后果是个**真 bug**：面板 `top = 胶囊底(40) + 6 = 46`，**在 40px 高的窗口外面**，
-/// 宽度 280 也超出 200 ⇒ 小窗里那个通知面板**用户从来没看见过**
-/// （实测 `可命中=False / 在视口内=False`）。
-///
-/// ## 为什么 `set_size` + `set_position` 要一起做
-///
-/// 光改尺寸的话，窗口以**左上角**为锚向外长 ⇒ 200→280 时右边缘窜出去 80px、
-/// 胶囊在屏幕上**横向跳一下**。所以调用方（`widgetExpandGeom`）把新位置也算好了，
-/// 这里两条一起下发，**顶边中心不动**。
-///
-/// ⚠️ 顺序：**先 `set_size` 再 `set_position`**。反过来的话，窗口会先在旧位置变大
-/// （有一帧是"错位的、更大的窗口"），再被挪到位 —— 虽然只有一帧，但那是可见的窜动。
-/// 先改尺寸、再归位，中间那一帧的问题只是"尺寸对了位置还差一点"。
-///
-/// 尺寸用**逻辑像素**（`LogicalSize` / `LogicalPosition`）：调用方算的是 CSS px，
-/// 而本仓主窗口那条 resize 通路也是逻辑像素 —— 混用会在 125%/150% 缩放的屏幕上错位。
-#[tauri::command]
-async fn resize_widget_window(
-    window: tauri::Window,
-    app: tauri::AppHandle,
-    w: f64,
-    h: f64,
-    x: i32,
-    y: i32,
-) -> Result<(), String> {
-    if !guard_window(&window, "resize_widget_window") {
-        return Err("该窗口无权调用 resize_widget_window".to_string());
-    }
-
-    let Some(win) = app.get_webview_window("widget") else {
-        // 幂等：小窗没开时"调整它的尺寸"是无意义的成功（与另两条命令同款口径）
-        return Ok(());
-    };
-    // 防御：调用方给 0 或负数会把窗口搞成不可见且拖不回来（无边框 + 不进任务栏 ⇒ 没有救回入口）
-    if !(w.is_finite() && h.is_finite()) || w < 1.0 || h < 1.0 {
-        return Err(format!("拒绝非法尺寸 {w}x{h}（会让小窗变成点不到的一条缝）"));
-    }
-    win.set_size(tauri::LogicalSize::new(w, h))
-        .map_err(|e| e.to_string())?;
-    win.set_position(tauri::LogicalPosition::new(x as f64, y as f64))
-        .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-/// 按"是否有全屏程序"显示 / 隐藏小窗（**只动可见性，不销毁**）。
-///
-/// 与 `hide_widget_window` 的区别很重要：那条是**关掉小窗**（销毁 webview + 通知前端
-/// 把偏好落成 `off`，用户主动关的）。这条只是**临时躲一下** —— 全屏结束要能立刻回来，
-/// 所以绝不能走销毁路径（销毁了就得重建，而重建有成本：新建 WebView2 要几十毫秒，
-/// 且位置要靠前端重新推）。用 `show` / `hide`，窗口一直活着。
-///
-/// 幂等 + 只在小窗**存在**时动作：小窗没开就什么都不做（成功）。
-#[tauri::command]
-async fn set_widget_visible(window: tauri::Window, app: tauri::AppHandle, visible: bool) -> Result<(), String> {
-    if !guard_window(&window, "set_widget_visible") {
-        return Err("该窗口无权调用 set_widget_visible".to_string());
-    }
-
-    let Some(w) = app.get_webview_window("widget") else {
-        return Ok(());
-    };
-    if visible {
-        w.show().map_err(|e| e.to_string())?;
-    } else {
-        w.hide().map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-/// 兜底：**把小窗的 webview 弄走**（Tauri v2 的 ACL 下命令不走 capability，所以这条一定可达）。
-///
-/// 2026-09-24 真机反馈：开了小窗之后主窗口点 ✕ / 最小化都没反应，托盘退出也杀不掉进程。
-/// 根因在 `capabilities/default.json`（作用域只写了 `"main"` ⇒ 小窗一条窗口权限都没有，
-/// `startDragging()` 抛错成未处理 rejection ⇒ IPC 通道坏掉，见 `widgetWindow.ts` 那段注释）。
-/// 权限已修，但**已经中招的机器**还留着一个半死的小窗：小窗里 `getCurrentWindow().close()`
-/// 同样要权限（一样会失败），所以**必须有一条不走 ACL 的路**。
-///
-/// 这里**只 destroy 小窗**（前端随后重拉主窗口可见性），不碰 `QUITTING`：
-/// 它不该顺手把整个应用退出 —— 用户的诉求是"把那个小窗口弄掉"。
-#[tauri::command]
-async fn destroy_widget_window(window: tauri::Window, app: tauri::AppHandle) {
-    if !guard_window(&window, "destroy_widget_window") {
-        return;
-    }
-
-    if let Some(w) = app.get_webview_window("widget") {
-        let _ = w.destroy();
-        let _ = app.emit(crate::WIDGET_CLOSED_EVENT, ());
-        widget_log(&app, "小窗被兜底命令销毁（label=widget）");
-    }
-}
-
 /// 深休眠看门狗：每秒看一眼"隐藏够久了吗"。
 /// 独立线程而不是 timer 回调：逻辑简单、退出时无需注销（进程结束就没了）。
 /// 深休眠看门狗**下一次睡多久**（R24/T1，devlog/117）。
@@ -1587,13 +1087,12 @@ fn get_backend_port(window: tauri::Window, port: State<'_, BackendPort>) -> u16 
 ///
 /// Tauri 只在三种情况下查 ACL：插件命令、应用定义了自己的 ACL manifest、
 /// 或请求来自**非本地** origin。本仓 `build.rs` 是裸 `tauri_build::build()`（无 app manifest），
-/// 两扇窗又都是本地 origin ⇒ **应用自定义命令默认完全不查 ACL**
+/// 页面又是本地 origin ⇒ **应用自定义命令默认完全不查 ACL**
 /// （证据：vendored `tauri-2.11.5/src/webview/mod.rs:1819-1852` 的那个 `if`）。
 /// 也就是说：**只拆 capability JSON 对自定义命令一点用都没有**，
 /// 命令自己判 label 才是唯一有效的那一半。
 ///
-/// 当前允许 `main` 与 `widget`（两者都要发业务请求）。等 S3-A 收紧时，
-/// 这张表会与 capability 文件一起收敛。
+/// 当前只允许主窗口（`ALLOWED_CALLER`）—— 桌面控件小窗退役后没有第二个窗口了。
 #[tauri::command]
 fn get_api_token(window: tauri::Window, token: State<'_, ApiToken>) -> Result<String, String> {
     if !guard_window(&window, "get_api_token") {
@@ -1615,73 +1114,54 @@ fn get_api_token(window: tauri::Window, token: State<'_, ApiToken>) -> Result<St
 
 /// 允许读取会话 token 的窗口 label（`get_api_token` 的准入表）。
 ///
-/// ⚠️ 2026-09-26（S3-0）起**并进 `COMMAND_ACL`**：一个类型（`BOTH`）、一处真源。
-/// 判据也搬了过去（`command_acl_*` 那几条）—— 别再单独维护一份。
-const CALLER_LABELS_ALLOWED: &[&str] = BOTH;
+/// ⚠️ 2026-09-26（S3-0）起**并进 `COMMAND_ACL`**：一处真源。小窗退役后调用方只剩
+/// 主窗口一种，判据见 `command_acl_*` / `every_command_guards_*` 那几条 —— 别再单独维护一份。
+const CALLER_LABELS_ALLOWED: &[&str] = &[ALLOWED_CALLER];
 
 // ── 命令级准入表（S3-0，devlog/208）─────────────────────────────────────
 //
 // ⚠️ **为什么必须自己判 label**：本应用的自定义命令**默认完全不查 ACL**
-// （证据：vendored `tauri-2.11.5/src/webview/mod.rs:1819-1852` 的那个 `if`；两扇窗都是
+// （证据：vendored `tauri-2.11.5/src/webview/mod.rs:1819-1852` 的那个 `if`；页面是
 // 本地 origin）⇒ **只拆 capability JSON 一点用都没有**，命令自己判才是唯一有效的那一半。
 //
-// 口径：**默认拒绝** —— 没登记在这里的命令，任何窗口都调不了。
+// 口径：**默认拒绝** —— 没登记在 `COMMAND_ACL` 里的命令，任何窗口都调不了。
 // 新增命令时必须在这里表态（有判据：`command_acl_matches_the_registered_handler`）。
 //
-// 判据清单见 `tests` 里的 `command_acl_*` / `every_command_guards_*` 四条；
-// 反向验证：删掉一条 ⇒ 覆盖用例红；把危险命令改成 `BOTH` ⇒ 矩阵用例红。
+// 判据清单见 `tests` 里的 `command_acl_*` / `every_command_guards_*` 几条；
+// 反向验证：从名单里删掉一条 ⇒ 覆盖用例红；把某条命令挪出名单 ⇒ 矩阵用例红。
 
-/// 只有主窗口能调
-const MAIN_ONLY: &[&str] = &["main"];
-/// 两扇窗都要用（小窗也要发业务请求 / 管自己的窗口）
-const BOTH: &[&str] = &["main", "widget"];
+/// 允许"整窗都归它"的窗口 label（主窗口）。
+const ALLOWED_CALLER: &str = "main";
 
-/// 每条自定义命令允许的调用方窗口 label。
+/// 允许被调用的自定义命令名单（只有 `ALLOWED_CALLER` 那一扇窗口够得着）。
 ///
-/// ⚠️ **别按"这命令看起来该谁用"填** —— 小窗真的会调 `resize_widget_window` /
-/// `set_widget_visible` / `set_widget_click_through`（`components/StatusWidgetWindow.tsx`
-/// 里那三处 `await import('../utils/shellBridge')`），填错就是把小窗点坏
-/// （devlog/175 的"IPC 通道坏掉"就是这么来的）。
-const COMMAND_ACL: &[(&str, &[&str])] = &[
-    // —— 两扇窗都用 ——
-    ("get_backend_port", BOTH),
-    ("get_api_token", CALLER_LABELS_ALLOWED),
-    ("widget_diag", BOTH),
-    ("resize_widget_window", BOTH),
-    ("set_widget_visible", BOTH),
-    ("set_widget_click_through", BOTH),
-    // ⚠️ 这两条**曾经被我填成 MAIN_ONLY**（2026-09-26 真机复验抓到）：它们同样是
-    // `StatusWidgetWindow` 在调的 —— 小窗自己的关闭请求（`onCloseRequested` → 销毁自己）
-    // 与全屏隐藏逻辑。漏的原因见下方 `widget_reachable_commands_are_allowed` 那条判据的说明。
-    ("destroy_widget_window", BOTH),
-    ("is_fullscreen_app_running", BOTH),
-    // —— 只有主窗口 ——
-    ("present_window", MAIN_ONLY),
-    ("hide_to_tray", MAIN_ONLY),
-    ("quit_app", MAIN_ONLY),
-    ("storage_info", MAIN_ONLY),
-    ("open_data_dir", MAIN_ONLY),
-    ("open_external", MAIN_ONLY),
-    ("open_release_page", MAIN_ONLY),
-    ("probe_local_proxy", MAIN_ONLY),
-    ("set_process_proxy", MAIN_ONLY),
-    ("window_corners_mode", MAIN_ONLY),
+/// ⚠️ **别按"这命令看起来该谁用"填** —— 漏登记就等于"这条命令谁都不能调"，
+/// 症状是界面上点了没反应（devlog/175 的"IPC 通道坏掉"就是这么来的）。
+const COMMAND_ACL: &[&str] = &[
+    "get_backend_port",
+    "get_api_token",
+    "present_window",
+    "hide_to_tray",
+    "quit_app",
+    "storage_info",
+    "open_data_dir",
+    "open_external",
+    "open_release_page",
+    "probe_local_proxy",
+    "set_process_proxy",
+    "window_corners_mode",
     // 数据目录迁移 / 删旧目录：**唯一两条不可逆或会动用户数据**的命令
-    ("migrate_data_dir", MAIN_ONLY),
-    ("delete_old_data_dir", MAIN_ONLY),
-    ("set_tray_status", MAIN_ONLY),
-    // 小窗的窗口管理（由主窗口的设置页/顶栏发起）
-    ("show_widget_window", MAIN_ONLY),
-    ("hide_widget_window", MAIN_ONLY),
-    ("widget_window_exists", MAIN_ONLY),
+    "migrate_data_dir",
+    "delete_old_data_dir",
+    "set_tray_status",
 ];
 
 /// 这条命令允不允许这个窗口调（表里查不到 ⇒ **拒绝**）。
 fn command_allowed(command: &str, label: &str) -> bool {
-    COMMAND_ACL
-        .iter()
-        .find(|(name, _)| *name == command)
-        .is_some_and(|(_, labels)| labels.contains(&label))
+    if label == ALLOWED_CALLER {
+        return COMMAND_ACL.contains(&command);
+    }
+    false
 }
 
 /// 命令入口的准入检查。**拒绝时留痕**（stdout + `<数据目录>/logs/shell.log`）。
@@ -2033,6 +1513,8 @@ pub fn run() {
         .manage(MigrationRecord(Mutex::new(None)))
         .manage(ApiToken(Mutex::new(String::new())))
         .manage(TrayStatusItem(Mutex::new(None)))
+        // ⚠️ 列表里**只放命令名**：`registered_commands()` 是按行抠名字的解析器，
+        //    混一行注释进去，它会把注释当成一条命令（本轮就被自己的判据抓到过一次）。
         .invoke_handler(tauri::generate_handler![
             get_backend_port,
             get_api_token,
@@ -2048,27 +1530,18 @@ pub fn run() {
             open_release_page,
             probe_local_proxy,
             set_process_proxy,
-            window_corners_mode,
-            show_widget_window,
-            hide_widget_window,
-            destroy_widget_window,
-            widget_diag,
-            widget_window_exists,
-            set_widget_click_through,
-            is_fullscreen_app_running,
-            set_widget_visible,
-            resize_widget_window
+            window_corners_mode
         ])
         .on_window_event(|window, event| {
             // ✕ 不再等于"退出"（R18，devlog/095）：关闭请求被拦下，改成隐藏到托盘，
             // 后台抓取照常。真正的退出只有两条路：托盘「退出」→ 前端确认 → `quit_app`，
             // 或系统注销/关机（那种情况下 `QUITTING` 不置真，但 `WindowEvent::Destroyed`
             // 之后 Tauri 仍会走 ExitRequested → 退出）。
+            //
+            // 应用只有主窗口一扇，这里不再按 label 分流（小窗退役前那条"只拦主窗口"
+            // 的判断随窗口一起删了）。
             if let WindowEvent::CloseRequested { api, .. } = event {
-                // ⚠️ **只拦主窗口**（R38 批 5b）：桌面控件小窗的 `close()` 是"关掉开关"的
-                // 正常路径，拦下来会变成"顺手把**主窗口**藏进托盘" —— 而用户压根没点过它。
-                // 这条判断在只有一个窗口时是多余的，加了第二个窗口之后就是必需的。
-                if window.label() == "main" && !QUITTING.load(Ordering::SeqCst) {
+                if !QUITTING.load(Ordering::SeqCst) {
                     api.prevent_close();
                     hide_to_tray_impl(window.app_handle());
                 }
@@ -2437,16 +1910,6 @@ mod tests {
         assert_ne!(a, b, "两次启动/两次生成不能相同");
     }
 
-    /// 准入表就是 `get_api_token` 的判据 —— 它必须**只**含预期的那两个窗口。
-    ///
-    /// ⚠️ 2026-09-26（S3-0）：准入表并进了 `COMMAND_ACL`，判据也搬过去
-    /// （`only_expected_windows_may_read_the_token` 在新那一组里，多了未知窗口的断言）。
-    /// 这里只留"类型没被写错"这一条最小断言。
-    #[test]
-    fn caller_labels_const_matches_the_acl() {
-        assert_eq!(CALLER_LABELS_ALLOWED, ["main", "widget"]);
-    }
-
     // ── 删旧数据目录的判据（devlog/198）───────────────────────────────────
     //
     // 这一组守的是**不可逆操作**：一次调用就 `remove_dir_all`。改造前的四道判据
@@ -2702,17 +2165,22 @@ mod tests {
             .collect()
     }
 
-    /// 从源码里抠出 `COMMAND_ACL` 里登记的命令名。
+    /// 从源码里抠出 `COMMAND_ACL` 名单里登记的命令名。
     fn acl_commands(src: &str) -> Vec<String> {
-        let start = src.find("const COMMAND_ACL").expect("找不到 COMMAND_ACL");
+        list_commands(src, "const COMMAND_ACL")
+    }
+
+    /// 抠出某个 `&[&str]` 常量里登记的字符串（一行一条，注释行不算）。
+    fn list_commands(src: &str, decl: &str) -> Vec<String> {
+        let start = src.find(decl).unwrap_or_else(|| panic!("找不到 {decl}"));
         let rest = &src[start..];
-        let end = rest.find("];").expect("找不到 COMMAND_ACL 的收尾");
+        let end = rest.find("];").unwrap_or_else(|| panic!("找不到 {decl} 的收尾"));
         rest[..end]
             .lines()
-            .filter(|l| l.trim_start().starts_with("(\""))
+            .filter(|l| l.trim_start().starts_with('"'))
             .map(|l| {
                 l.trim_start()
-                    .trim_start_matches("(\"")
+                    .trim_start_matches('"')
                     .split('"')
                     .next()
                     .unwrap_or_default()
@@ -2734,14 +2202,14 @@ mod tests {
     #[test]
     fn command_acl_matches_the_registered_handler() {
         // 两个方向的差集都必须为空：**新增命令没表态**会红；登记了不存在的命令也会红。
-        // 反向验证：删掉 COMMAND_ACL 里任意一条 ⇒ 本用例红。
+        // 反向验证：删掉任意一条 ⇒ 本用例红。
         let mut registered = registered_commands(SRC);
         let mut acl = acl_commands(SRC);
         registered.sort();
         acl.sort();
         assert_eq!(
             registered, acl,
-            "COMMAND_ACL 与 invoke_handler 的注册表对不上 —— 新命令必须在 COMMAND_ACL 里表态"
+            "注册表与准入表对不上 —— 新命令必须在 COMMAND_ACL 里表态"
         );
     }
 
@@ -2760,35 +2228,6 @@ mod tests {
     }
 
     #[test]
-    fn widget_may_call_only_what_the_widget_window_actually_uses() {
-        // ⚠️ 这份清单是**手工维护的快照**（判据的真源是前端那条派生用例
-        // `frontend/src/utils/widgetCommands.test.ts`：它从 `StatusWidgetWindow.tsx` /
-        // `widgetMain.tsx` 的动态 import 里**推出**小窗能碰到哪些命令）。
-        // 2026-09-26 真机复验抓到本表少了两条（`destroy_widget_window` /
-        // `is_fullscreen_app_running`）—— 手工清单会漏，所以必须有一条派生的判据兜底。
-        let mut allowed: Vec<&str> = COMMAND_ACL
-            .iter()
-            .filter(|(_, labels)| labels.contains(&"widget"))
-            .map(|(name, _)| *name)
-            .collect();
-        allowed.sort_unstable();
-        assert_eq!(
-            allowed,
-            vec![
-                "destroy_widget_window",
-                "get_api_token",
-                "get_backend_port",
-                "is_fullscreen_app_running",
-                "resize_widget_window",
-                "set_widget_click_through",
-                "set_widget_visible",
-                "widget_diag",
-            ],
-            "小窗可调命令集变了 —— 若是有意为之，先确认真机上小窗还点得动"
-        );
-    }
-
-    #[test]
     fn dangerous_and_data_moving_commands_are_main_only() {
         // 计划点名的六条 + 本批新增的两条：**只有主窗口**能调。
         for cmd in [
@@ -2798,11 +2237,10 @@ mod tests {
             "hide_to_tray",
             "open_release_page",
             "set_process_proxy",
-            "open_external", // 外链白名单的入口（也别让小窗开）
+            "open_external", // 外链白名单的入口
             "open_data_dir",
         ] {
             assert!(command_allowed(cmd, "main"), "{cmd} 应当允许主窗口");
-            assert!(!command_allowed(cmd, "widget"), "{cmd} 不该允许小窗");
             assert!(!command_allowed(cmd, "evil"), "{cmd} 不该允许未知窗口");
         }
     }
@@ -2810,17 +2248,21 @@ mod tests {
     #[test]
     fn unknown_commands_are_denied_by_default() {
         assert!(!command_allowed("no_such_command", "main"));
-        assert!(!command_allowed("no_such_command", "widget"));
         assert!(!command_allowed("", "main"));
+        // label 必须**精确**等于 `ALLOWED_CALLER`：名字像的窗口一样拒绝
+        assert!(!command_allowed("get_backend_port", "main-window"));
+        // 应用只有主窗口一扇 ⇒ 其余任何 label 都不在准入表里，一律拒绝
+        assert!(!command_allowed("get_backend_port", "evil"));
     }
 
     #[test]
     fn only_expected_windows_may_read_the_token() {
-        // 反向验证：把 ACCESS 表里 get_api_token 的标签改成 ["main"] ⇒ 红（小窗读不到令牌）。
+        // 反向验证：把 get_api_token 从 `COMMAND_ACL` 里删掉 ⇒ 红（主窗读不到令牌）。
         assert!(command_allowed("get_api_token", "main"));
-        assert!(command_allowed("get_api_token", "widget"));
+        // ⚠️ **token 只有主窗口能读**：别的 label 一律拒绝 —— 一旦读得到，
+        //    等于给"任何一扇未登记的窗口"发了一张后端 API 的通行证。
         assert!(!command_allowed("get_api_token", "evil"));
-        assert_eq!(CALLER_LABELS_ALLOWED, ["main", "widget"]);
+        assert_eq!(CALLER_LABELS_ALLOWED, [ALLOWED_CALLER]);
     }
 
     // ── S3-B：外链白名单（devlog/208）────────────────────────────────────
@@ -2864,7 +2306,7 @@ mod tests {
     #[test]
     fn capability_never_grants_the_unrestricted_open_path() {
         // ⚠️ S3-B 的关键一半：**旧通路必须一起删掉**。留着 `shell:allow-open` 的话，
-        // 那个走插件内置正则（没有主机白名单）的通路仍在，而且两扇窗都能调 ⇒
+        // 那个走插件内置正则（没有主机白名单）的通路仍在，而且任何窗口都能调 ⇒
         // 新命令 `open_external` 就只是"多了一条更严的路"。反向验证：把它加回去 ⇒ 红。
         for (name, src) in [("default.json", CAP_BASE), ("main.json", CAP_MAIN)] {
             let perms = cap_permissions(src);
@@ -2888,12 +2330,14 @@ mod tests {
             assert!(!base.iter().any(|p| p == perm), "基线里不该有 {perm}（它属于 main.json）");
             assert!(main.iter().any(|p| p == perm), "main.json 少了 {perm}");
         }
-        // ⚠️ 基线**必须**留通配：小窗是运行时创建的，而"显式 label 能否命中运行时窗口"
-        // 在本仓没有验证过（计划 §S3-A）。改成按 label 拆 ⇒ 有可能把 IPC 通道整个关掉。
+        // ⚠️ 基线**保持通配**：应用只有主窗口一扇，基线对"任何窗口"都成立；
+        // 按 label 拆只会把"显式 label 能否命中运行时重建的窗口"（深休眠唤醒会重建主窗口，
+        // 见 `rebuild_main_window`）变成一个本仓没验证过的赌注，赌错的症状是 IPC 通道整个关掉。
+        // ⇒ 真要收窄成 ["main"] 时，请连同这条断言与真机验收一起改。
         let v: serde_json::Value = serde_json::from_str(CAP_BASE).unwrap();
         assert_eq!(v["windows"].as_array().unwrap().len(), 1, "基线的窗口作用域应当只有一项");
         assert_eq!(v["windows"][0].as_str(), Some("*"),
-                   "通配基线被删了 —— 小窗的 capability 命中未经真机验证，别在这一批冒险");
+                   "通配基线被改了 —— 收窄窗口作用域要走一次真机验收，别静默改");
         let vm: serde_json::Value = serde_json::from_str(CAP_MAIN).unwrap();
         assert_eq!(vm["windows"][0].as_str(), Some("main"), "main.json 的作用域应当是主窗口");
     }
