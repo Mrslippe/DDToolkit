@@ -6142,3 +6142,64 @@ img.hero-avatar {
   font-weight: 600;
   cursor: pointer;
 }
+
+/* ── 自绘播放器（VideoPlayer，devlog/283）──────────────────────────────
+   黑玻璃皮肤 + 粉强调，与仓库既有 tooltip / ImageViewer 黑玻璃同源；
+   全屏走容器（原生 video 全屏会把控件换回系统那套）。 */
+.vp { position: relative; background: #000; border-radius: 8px; overflow: hidden; outline: none; }
+.vp-video { display: block; width: 100%; max-height: 60vh; background: #000; cursor: pointer; }
+.vp-bigplay {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  display: grid; place-items: center; width: 64px; height: 64px; border-radius: 999px;
+  background: rgba(15, 23, 42, .55); color: #fff; cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, .22); backdrop-filter: blur(4px);
+  transition: opacity .18s ease, transform .18s ease;
+}
+.vp-bigplay:hover { transform: translate(-50%, -50%) scale(1.06); }
+.vp-bar {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+  background: linear-gradient(to top, rgba(15, 23, 42, .88), rgba(15, 23, 42, 0));
+  color: #fff; transition: opacity .2s ease;
+}
+.vp.is-idle .vp-bar, .vp.is-idle .vp-bigplay { opacity: 0; pointer-events: none; }
+.vp.is-idle { cursor: none; }
+.vp-btn {
+  display: inline-grid; place-items: center; min-width: 26px; height: 26px; padding: 0 6px;
+  border-radius: 999px; background: rgba(255, 255, 255, .12); color: #fff; cursor: pointer;
+}
+.vp-btn:hover { background: rgba(255, 255, 255, .22); }
+.vp-btn--text { font-size: 12px; font-variant-numeric: tabular-nums; }
+.vp-btn--accent { background: var(--c-accent, #fb77a1); color: #3b0716; font-weight: 600; }
+.vp-time { font: 12px/1 Consolas, monospace; font-variant-numeric: tabular-nums; opacity: .9; }
+.vp-time-sep { opacity: .5; margin: 0 2px; }
+.vp-progress {
+  position: relative; flex: 1; height: 16px; display: flex; align-items: center; cursor: pointer;
+}
+.vp-progress::before {
+  content: ''; position: absolute; left: 0; right: 0; height: 4px; border-radius: 999px;
+  background: rgba(255, 255, 255, .24);
+}
+.vp-progress-buf { position: absolute; left: 0; height: 4px; border-radius: 999px; background: rgba(255, 255, 255, .34); }
+.vp-progress-fill { position: absolute; left: 0; height: 4px; border-radius: 999px; background: var(--c-accent, #fb77a1); }
+.vp-progress-knob {
+  position: absolute; width: 10px; height: 10px; margin-left: -5px; border-radius: 999px;
+  background: #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, .4); opacity: 0; transition: opacity .15s;
+}
+.vp-progress:hover .vp-progress-knob, .vp-progress:focus-visible .vp-progress-knob { opacity: 1; }
+.vp-rate { position: relative; }
+.vp-menu {
+  position: absolute; right: 0; bottom: 32px; display: grid; gap: 2px; padding: 4px;
+  border-radius: 8px; background: rgba(15, 23, 42, .95);
+  border: 1px solid rgba(255, 255, 255, .16); box-shadow: 0 6px 18px rgba(0, 0, 0, .4);
+}
+.vp-menu-item {
+  padding: 3px 12px; border-radius: 6px; color: #fff; font-size: 12px; cursor: pointer; text-align: left;
+}
+.vp-menu-item:hover { background: rgba(255, 255, 255, .14); }
+.vp-menu-item.is-on { color: var(--c-accent, #fb77a1); font-weight: 600; }
+.vp-vol { width: 72px; accent-color: var(--c-accent, #fb77a1); }
+.vp-dead {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 8px;
+  background: var(--c-bg-subtle, #faf7f8); color: var(--c-text-muted, #6b7280); font-size: 13px;
+}
