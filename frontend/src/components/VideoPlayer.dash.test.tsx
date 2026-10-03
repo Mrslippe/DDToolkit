@@ -848,6 +848,72 @@ describe('VideoPlayer · seek 期间不许按住（devlog/304）', () => {
   })
 })
 
+describe('VideoPlayer · 音轨必须跟着画面停（devlog/305）', () => {
+  it('画面饿住（`waiting`）⇒ **音轨立刻停**；出画（`playing`）⇒ 重新对齐再起', async () => {
+    act(() => root.render(<VideoPlayer video={{ url: DASH.video }} dash={DASH} />))
+    const v = host.querySelector('video') as HTMLVideoElement
+    const a = host.querySelector('audio') as HTMLAudioElement
+    Object.defineProperty(v, 'duration', { value: 300, configurable: true })
+    Object.defineProperty(v, 'currentTime', { value: 40, writable: true, configurable: true })
+    Object.defineProperty(v, 'buffered', {
+      configurable: true, value: { length: 1, start: () => 0, end: () => v.currentTime + 5 },
+    })
+    await act(async () => {
+      v.dispatchEvent(new Event('loadedmetadata'))
+      void v.play()
+      v.dispatchEvent(new Event('play'))
+      v.dispatchEvent(new Event('playing'))
+      await Promise.resolve()
+    })
+    // 让音轨处于"在放"（前面 playing 那条路会把它拉起来）
+    Object.defineProperty(a, 'paused', { value: false, configurable: true })
+    const pause = vi.spyOn(a, 'pause')
+    const play = vi.spyOn(a, 'play')
+
+    // ★ 现场就是它：画面没数据了，而音轨照跑 ⇒ 实测 30 秒能拉开 8.9 秒、
+    //   漂移纠正再把声音一秒一秒往回拽 = 用户听到的"抖一阵"
+    await act(async () => { v.dispatchEvent(new Event('waiting')); await Promise.resolve() })
+    expect(pause, '画面停了声音也必须停（两条流是两个独立的钟）').toHaveBeenCalled()
+
+    // 出画 ⇒ 对齐到画面当前时刻再出声
+    a.currentTime = 99                       // 假装饿住期间它偷偷跑远了
+    Object.defineProperty(v, 'currentTime', { value: 42, writable: true, configurable: true })
+    await act(async () => { v.dispatchEvent(new Event('playing')); await Promise.resolve() })
+    expect(a.currentTime, '起播前必须重新对齐（不能把饿住期间攒的差带进后半段）')
+      .toBeCloseTo(42, 2)
+    expect(play, '对齐之后要出声').toHaveBeenCalled()
+    pause.mockRestore()
+    play.mockRestore()
+  })
+
+  it('`playing` 之后又 `waiting` 的**反复**饿住：每次都停音轨（不许只停第一次）', async () => {
+    act(() => root.render(<VideoPlayer video={{ url: DASH.video }} dash={DASH} />))
+    const v = host.querySelector('video') as HTMLVideoElement
+    const a = host.querySelector('audio') as HTMLAudioElement
+    Object.defineProperty(v, 'duration', { value: 300, configurable: true })
+    Object.defineProperty(v, 'buffered', {
+      configurable: true, value: { length: 1, start: () => 0, end: () => v.currentTime + 5 },
+    })
+    await act(async () => {
+      v.dispatchEvent(new Event('loadedmetadata'))
+      v.dispatchEvent(new Event('play'))
+      v.dispatchEvent(new Event('playing'))
+      await Promise.resolve()
+    })
+    const pause = vi.spyOn(a, 'pause')
+    await act(async () => {
+      for (let i = 0; i < 3; i += 1) {
+        Object.defineProperty(a, 'paused', { value: false, configurable: true })
+        v.dispatchEvent(new Event('waiting'))
+        v.dispatchEvent(new Event('playing'))
+      }
+      await Promise.resolve()
+    })
+    expect(pause.mock.calls.length, '三次饿住 ⇒ 三次停（漂移才不会累积）').toBeGreaterThanOrEqual(3)
+    pause.mockRestore()
+  })
+})
+
 describe('VideoPlayer · 音画漂移分级纠正（devlog/298）', () => {
   it('`driftAction`：小漂移改速率慢慢追、大漂移才跳、稳定时恢复倍速', () => {
     // 实测 19s 漂 0.28s：旧逻辑（>0.3 才动）刚好放过它 ⇒ 现在 0.28 会走"改速率"
