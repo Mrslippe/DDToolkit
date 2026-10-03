@@ -14,8 +14,8 @@ vi.mock('../api/api', () => ({
 }))
 
 import {
-  aheadOf, curveLine, frameStats, hiddenSeconds, idleSeconds, openWindow, stalledSeconds,
-  summarize, verdict, watchPlayback,
+  aheadOf, curveLine, decoderStallSeconds, frameStats, hiddenSeconds, idleSeconds, openWindow,
+  stalledSeconds, submitStallSeconds, summarize, verdict, watchPlayback,
 } from './playbackProbe'
 
 class FakeMedia {
@@ -37,11 +37,14 @@ function makeEl(): FakeMedia & HTMLVideoElement {
 
 /** 造一条采样（只写关心的字段，其余按"一切正常"填）。 */
 function smp(t: number, o: {
-  fps?: number; presented?: number | null; ahead?: number | null
-  advanced?: boolean; hidden?: boolean; focused?: boolean
+  fps?: number; decoded?: number | null; presented?: number | null; pageFps?: number | null
+  ahead?: number | null; advanced?: boolean; hidden?: boolean; focused?: boolean
+  readyState?: number; seeking?: boolean
 } = {}) {
-  return { t, fps: 30, presented: 30 as number | null, ahead: 8 as number | null,
-           advanced: true, hidden: false, focused: true, ...o }
+  return { t, fps: 30, decoded: 30 as number | null, presented: 30 as number | null,
+           pageFps: 60 as number | null, ahead: 8 as number | null,
+           advanced: true, hidden: false, focused: true,
+           readyState: 4, seeking: false, ...o }
 }
 
 beforeEach(() => {
@@ -54,13 +57,20 @@ afterEach(() => {
 })
 
 describe('playbackProbe', () => {
-  it('`frameStats` 优先用 `getVideoPlaybackQuality`，没有就退回 webkit*', () => {
+  it('`frameStats` 优先用 `getVideoPlaybackQuality`（并带上解码计数），没有就退回 webkit*', () => {
     const el = makeEl()
     el.setFrames(120, 3)
-    expect(frameStats(el)).toEqual({ frames: 120, dropped: 3 })
+    expect(frameStats(el)).toEqual({ frames: 120, dropped: 3, decoded: null })
 
     const legacy = { webkitDecodedFrameCount: 90, webkitDroppedFrameCount: 1 } as unknown as HTMLVideoElement
-    expect(frameStats(legacy)).toEqual({ frames: 90, dropped: 1 })
+    expect(frameStats(legacy)).toEqual({ frames: 90, dropped: 1, decoded: null })
+
+    // 三段口径里"解码"这一段的来源
+    const both = {
+      getVideoPlaybackQuality: () => ({ totalVideoFrames: 200, droppedVideoFrames: 2 }),
+      webkitDecodedFrameCount: 260,
+    } as unknown as HTMLVideoElement
+    expect(frameStats(both)).toEqual({ frames: 200, dropped: 2, decoded: 260 })
   })
 
   it('`aheadOf`：当前位置落在缓冲区间里才给数，否则 null；**负毛刺按"量不到"算**', () => {
@@ -95,8 +105,10 @@ describe('playbackProbe', () => {
     expect(line).toContain('起播=4.2s')
     expect(line).toContain('饿住=6次')
     expect(line).toContain('最低缓冲=0.2s')
-    expect(line).toContain('解码=18.0fps')   // 180 帧 / 10 秒
+    expect(line).toContain('解码=30.0fps')   // 采样里 decoded 全是 30
+    expect(line).toContain('提交=18.0fps')   // 180 帧 / 10 秒（提交给合成器的那一段）
     expect(line).toContain('呈现=22.5fps')   // (5×3 + 30×7) / 10 = 22.5（增量，不是累计）
+    expect(line).toContain('页面=60.0fps')   // rAF：整页自绘节拍（用于对照"只有视频卡"）
     expect(line).toContain('前3秒=5.0')       // ← "开头差"这个事实必须留在行里
     expect(line).toContain('后段=30.0')       // ← 与"之后正常"对比
     expect(line).toContain('丢帧=3/180')     // 增量，不是 7/480
@@ -134,6 +146,26 @@ describe('playbackProbe', () => {
     const line = summarize(w, makeEl(), w.startedAt + 7_000)
     expect(line).toContain('隐藏=3s')
     expect(line).toContain('判定=窗口不可见')
+  })
+
+  it('三段口径：**解码器停**与**解码有帧没提交**要能分开（决定修法不同）', () => {
+    // 形状 A：seek 后解码器停 3 秒（真机七次的形状：1s 爆发 → 2~4s 0 → 恢复）
+    const a = openWindow(makeEl(), 'seek', 126.3)
+    a.samples.push(smp(1, { fps: 153, decoded: 153 }))
+    for (let t = 2; t <= 4; t += 1) a.samples.push(smp(t, { fps: 0, decoded: 0, ahead: 5 }))
+    a.samples.push(smp(5, { fps: 30, decoded: 30 }))
+    a.pres.supported = true
+    expect(decoderStallSeconds(a)).toBe(3)
+    expect(submitStallSeconds(a)).toBe(0)
+    expect(verdict(a, 36)).toContain('解码器停')
+
+    // 形状 B：解码一直在出帧，但一帧都没提交给合成器
+    const b = openWindow(makeEl(), 'seek', 50)
+    for (let t = 1; t <= 3; t += 1) b.samples.push(smp(t, { fps: 0, decoded: 30, ahead: 6 }))
+    b.pres.supported = true
+    expect(decoderStallSeconds(b)).toBe(0)
+    expect(submitStallSeconds(b)).toBe(3)
+    expect(verdict(b, 0)).toContain('没提交')
   })
 
   it('`verdict` 三态：数据受限 / 呈现受限 / 正常', () => {

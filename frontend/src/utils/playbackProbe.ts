@@ -22,10 +22,14 @@ import { api } from '../api/api'
 interface Sample {
   /** 第几秒（1 起） */
   t: number
-  /** 这一秒**解出**多少帧（`getVideoPlaybackQuality`） */
+  /** 这一秒**提交给合成器**的帧（`totalVideoFrames` 增量）—— 见 `frameStats` 的三段口径 */
   fps: number
+  /** 这一秒**解出来**的帧（`webkitDecodedFrameCount` 增量）；量不到 = null */
+  decoded: number | null
   /** 这一秒**呈现**了多少帧（`requestVideoFrameCallback` 的 `presentedFrames` 增量）；量不到 = null */
   presented: number | null
+  /** 这一秒页面**画了多少帧**（`requestAnimationFrame` 回调数）—— 用于区分"整页卡"与"只有视频卡" */
+  pageFps: number | null
   /** 这一秒末的前方缓冲（秒）；量不到 = null */
   ahead: number | null
   /** 这一秒 `currentTime` 有没有前进（没前进 = 数据没到） */
@@ -35,6 +39,10 @@ interface Sample {
   hidden: boolean
   /** 这一秒页面有没有焦点（部分遮挡/失焦时 Chromium 会降级渲染） */
   focused: boolean
+  /** 这一秒末的 `readyState`（4 = 够播下去） */
+  readyState: number
+  /** 这一秒里元素是不是处在 `seeking` */
+  seeking: boolean
 }
 
 export interface PlaybackWindow {
@@ -43,6 +51,8 @@ export interface PlaybackWindow {
   startedAt: number
   baseFrames: number
   baseDropped: number
+  /** 窗口开始时的**解码**帧数（`webkitDecodedFrameCount`）；量不到 = null */
+  baseDecoded: number | null
   waiting: number
   minAhead: number | null
   readyMs: number | null
@@ -56,20 +66,38 @@ const SAMPLE_MS = 1_000
 /** 低于后段的这个比例就认为"开头确实差"，多报一行每秒曲线 */
 const DIP_RATIO = 0.7
 
-/** 帧计数（Chromium 有 `getVideoPlaybackQuality`；没有就退回 webkit* 字段）。 */
-export function frameStats(el: HTMLVideoElement): { frames: number; dropped: number } {
+/**
+ * 帧计数**三段口径**（`devlog/310`）—— 卡在哪一段直接决定"该往哪儿修"：
+ *
+ * | 指标 | 来源 | 含义 |
+ * |---|---|---|
+ * | `decoded` | `webkitDecodedFrameCount` | 解码器**解出来**多少帧 |
+ * | `frames` | `getVideoPlaybackQuality().totalVideoFrames` | 有多少帧被**提交给合成器** |
+ * | `presented` | `requestVideoFrameCallback` 的 `presentedFrames` | 有多少帧**真的上了屏** |
+ *
+ * 只量其中一两个会得出互相矛盾的结论（真机上就吃过：解码 30fps、呈现 7fps，
+ * 而"到底哪一段掉的"决定了是解码器停、渲染器不提交、还是合成器不画）。
+ */
+export function frameStats(el: HTMLVideoElement): {
+  frames: number; dropped: number; decoded: number | null
+} {
   const q = el.getVideoPlaybackQuality?.()
-  if (q) return { frames: q.totalVideoFrames ?? 0, dropped: q.droppedVideoFrames ?? 0 }
   const legacy = el as HTMLVideoElement & {
     webkitDecodedFrameCount?: number; webkitDroppedFrameCount?: number
   }
-  return { frames: legacy.webkitDecodedFrameCount ?? 0, dropped: legacy.webkitDroppedFrameCount ?? 0 }
+  if (q) {
+    return { frames: q.totalVideoFrames ?? 0, dropped: q.droppedVideoFrames ?? 0,
+             decoded: legacy.webkitDecodedFrameCount ?? null }
+  }
+  return { frames: legacy.webkitDecodedFrameCount ?? 0,
+           dropped: legacy.webkitDroppedFrameCount ?? 0, decoded: null }
 }
 
 export function openWindow(el: HTMLVideoElement, reason: string, targetS?: number): PlaybackWindow {
-  const { frames, dropped } = frameStats(el)
+  const { frames, dropped, decoded } = frameStats(el)
   return { reason, targetS, startedAt: performance.now(), baseFrames: frames,
-           baseDropped: dropped, waiting: 0, minAhead: null, readyMs: null, samples: [],
+           baseDropped: dropped, baseDecoded: decoded, waiting: 0, minAhead: null,
+           readyMs: null, samples: [],
            pres: { supported: false, maxGapMs: 0, gaps: [] } }
 }
 
@@ -93,9 +121,25 @@ export function stalledSeconds(w: PlaybackWindow): number {
   return w.samples.filter((s) => !s.advanced).length
 }
 
-/** 窗口里"帧没来"的秒数（`currentTime` 在走，但这一秒一帧都没解出来 ⇒ 解码/呈现问题）。 */
+/** 窗口里"页面画不出来"的秒数（`currentTime` 在走、缓冲够，但这一秒**一帧都没提交给合成器**）。 */
 export function idleSeconds(w: PlaybackWindow): number {
   return w.samples.filter((s) => s.advanced && s.fps === 0).length
+}
+
+/** 这一秒**解码器有没有在干活**（量不到 ⇒ null）。 */
+function decoderRunning(s: Sample): boolean | null {
+  if (s.decoded == null) return null
+  return s.decoded > 0
+}
+
+/** 窗口里"解码器停着但画面本该在动"的秒数（三段里**第一段**掉的）。 */
+export function decoderStallSeconds(w: PlaybackWindow): number {
+  return w.samples.filter((s) => s.advanced && decoderRunning(s) === false).length
+}
+
+/** 窗口里"解码有帧、却一帧没提交给合成器"的秒数（三段里**第二段**掉的）。 */
+export function submitStallSeconds(w: PlaybackWindow): number {
+  return w.samples.filter((s) => s.advanced && s.fps === 0 && decoderRunning(s) === true).length
 }
 
 /** 窗口里"浏览器认为页面不可见"的秒数（切走/遮挡/最小化）。 */
@@ -112,6 +156,22 @@ function avgFps(w: PlaybackWindow, from: number, to: number): number | null {
   const seg = w.samples.filter((s) => s.t > from && s.t <= to)
   if (!seg.length) return null
   return seg.reduce((n, s) => n + s.fps, 0) / seg.length
+}
+
+function avgOf(w: PlaybackWindow, pick: (s: Sample) => number | null): number | null {
+  const vals = w.samples.map(pick).filter((v): v is number => v != null)
+  if (!vals.length) return null
+  return vals.reduce((n, v) => n + v, 0) / vals.length
+}
+
+/** 窗口里**解码**帧率的均值（量不到 = null）。 */
+export function decodedFps(w: PlaybackWindow): number | null {
+  return avgOf(w, (s) => s.decoded)
+}
+
+/** 窗口里**页面自绘**帧率的均值（rAF；量不到 = null）。用来区分"整页卡"与"只有视频卡"。 */
+export function pageFps(w: PlaybackWindow): number | null {
+  return avgOf(w, (s) => s.pageFps)
 }
 
 /** 窗口里**呈现**帧率的均值（量不到 = null）。 */
@@ -141,10 +201,18 @@ export function verdict(w: PlaybackWindow, decodedFps: number): string {
    * 所以先问"当时窗口可见吗"，可见才谈"是不是合成太慢"。
    */
   if (hiddenSeconds(w) >= 1) return '窗口不可见(浏览器挂起画面，音频照常)'
+  /* 三段里**哪一段掉的**决定修法（devlog/310）：
+     · 解码器停 ⇒ 管线在做 seek 追赶（progressive 无索引源的典型行为，MSE 能根治）；
+     · 解码有帧却没提交 ⇒ 渲染器/GPU 那一段；
+     · 都正常但呈现低 ⇒ 合成器节拍。 */
+  const decStall = decoderStallSeconds(w)
+  const subStall = submitStallSeconds(w)
+  if (decStall >= 2) return '呈现受限(解码器停：seek 后在追赶)'
+  if (subStall >= 2) return '呈现受限(解码有帧但没提交)'
   const pres = presentedFps(w)
   if (!w.pres.supported) return '正常(呈现量不到)'
-  const presBad = (pres != null && decodedFps >= 5 && pres < decodedFps * 0.7)
-  if (presBad || w.pres.maxGapMs >= 500) return '呈现受限'
+  const presBad = (pres != null && decodedFps != null && decodedFps >= 5 && pres < decodedFps * 0.7)
+  if (presBad || w.pres.maxGapMs >= 500) return '呈现受限(合成节拍)'
   return '正常'
 }
 
@@ -158,6 +226,8 @@ export function summarize(w: PlaybackWindow, el: HTMLMediaElement, now: number):
   const head = avgFps(w, 0, 3)
   const later = avgFps(w, 3, 1e9)
   const pres = presentedFps(w)
+  const dec = decodedFps(w)
+  const page = pageFps(w)
   return [
     `[video] ${w.reason}${w.targetS != null ? `→${w.targetS.toFixed(1)}s` : ''}`,
     `判定=${verdict(w, fps)}`,
@@ -165,15 +235,19 @@ export function summarize(w: PlaybackWindow, el: HTMLMediaElement, now: number):
     `起播=${w.readyMs == null ? '未出画' : `${(w.readyMs / 1000).toFixed(1)}s`}`,
     `饿住=${w.waiting}次`,
     `最低缓冲=${w.minAhead == null ? '量不到' : `${w.minAhead.toFixed(1)}s`}`,
-    `解码=${fps.toFixed(1)}fps`,
+    /* 三段口径：解码 → 提交合成器 → 真的上屏（外加"整页画了多少帧"作对照） */
+    `解码=${dec == null ? '量不到' : `${dec.toFixed(1)}fps`}`,
+    `提交=${fps.toFixed(1)}fps`,
     `呈现=${pres == null ? '量不到' : `${pres.toFixed(1)}fps`}`,
+    `页面=${page == null ? '量不到' : `${page.toFixed(1)}fps`}`,
     `最长停顿=${w.pres.supported ? `${(w.pres.maxGapMs / 1000).toFixed(2)}s` : '量不到'}`,
     `停顿次数=${w.pres.gaps.length}`,
     `前3秒=${head == null ? '-' : head.toFixed(1)}`,
     `后段=${later == null ? '-' : later.toFixed(1)}`,
-    `卡帧=${stalledSeconds(w)}s`,     // currentTime 没动 ⇒ 数据没到
-    `空转=${idleSeconds(w)}s`,        // currentTime 在动却没解出帧 ⇒ 解码
-    `隐藏=${hiddenSeconds(w)}s`,      // 浏览器判页面不可见（切走/遮挡/最小化）
+    `卡帧=${stalledSeconds(w)}s`,        // currentTime 没动 ⇒ 数据没到
+    `解码停=${decoderStallSeconds(w)}s`,  // 解码器没出帧（第一段）
+    `提交停=${submitStallSeconds(w)}s`,   // 解出来了却没交给合成器（第二段）
+    `隐藏=${hiddenSeconds(w)}s`,         // 浏览器判页面不可见（切走/遮挡/最小化）
     `失焦=${unfocusedSeconds(w)}s`,
     `丢帧=${droppedGained}/${gained}`,
     `末缓冲=${aheadOf(el)?.toFixed(1) ?? '?'}s`,
@@ -208,11 +282,19 @@ export function watchPlayback(el: HTMLVideoElement, reason: string, targetS?: nu
   const w = openWindow(el, reason, targetS)
   let alive = true
   let lastFrames = w.baseFrames
+  let lastDecoded = w.baseDecoded ?? 0
   let lastPresented = 0
   let lastPresentedSampled = 0
   let lastCur = el.currentTime
   let lastPresentedAt = 0
+  let rafCount = 0
+  let rafSampled = 0
   let tick = 0
+
+  // 整页自绘节拍（rAF）：与"视频呈现"对照，能分开"整页卡"与"只有视频卡"
+  let rafHandle = 0
+  const onRaf = () => { rafCount += 1; rafHandle = window.requestAnimationFrame(onRaf) }
+  if (typeof window.requestAnimationFrame === 'function') rafHandle = window.requestAnimationFrame(onRaf)
 
   /**
    * **呈现**侧（`devlog/308`）：`getVideoPlaybackQuality` 数的是**解出来**的帧，
@@ -245,9 +327,11 @@ export function watchPlayback(el: HTMLVideoElement, reason: string, targetS?: nu
 
   const sample = () => {
     tick += 1
-    const { frames } = frameStats(el)
+    const { frames, decoded } = frameStats(el)
     const fps = Math.max(0, frames - lastFrames)
     lastFrames = frames
+    const decDelta = decoded == null ? null : Math.max(0, decoded - lastDecoded)
+    if (decoded != null) lastDecoded = decoded
     const advanced = el.currentTime - lastCur >= 0.2
     lastCur = el.currentTime
     const ahead = aheadOf(el)
@@ -255,14 +339,24 @@ export function watchPlayback(el: HTMLVideoElement, reason: string, targetS?: nu
     // `meta.presentedFrames` 是**累计值** ⇒ 这里存**这一秒的增量**，`presentedFps` 才能当帧率用
     const presDelta = w.pres.supported ? Math.max(0, lastPresented - lastPresentedSampled) : null
     lastPresentedSampled = lastPresented
+    const pageDelta = typeof window.requestAnimationFrame === 'function'
+      ? Math.max(0, rafCount - rafSampled) : null
+    rafSampled = rafCount
     // 页面可见性/焦点：Chromium 对"不可见"的页面**会挂起画面**（音频继续）——
     // 真机三次复现的画面停摆就落在这条上（devlog/309）
     const hidden = typeof document !== 'undefined' && document.visibilityState === 'hidden'
     const focused = typeof document === 'undefined' || document.hasFocus()
-    w.samples.push({ t: tick, fps, presented: presDelta, ahead, advanced, hidden, focused })
+    w.samples.push({ t: tick, fps, decoded: decDelta, presented: presDelta, pageFps: pageDelta,
+                     ahead, advanced, hidden, focused,
+                     readyState: el.readyState, seeking: el.seeking })
   }
   const timer = window.setInterval(sample, SAMPLE_MS)
-  const stop = () => { alive = false; window.clearInterval(timer); window.clearTimeout(windowTimer) }
+  const stop = () => {
+    alive = false
+    window.clearInterval(timer)
+    window.clearTimeout(windowTimer)
+    if (rafHandle) window.cancelAnimationFrame(rafHandle)
+  }
   const post = () => {
     // 什么都没采到（挂载就被卸载）就别留垃圾行
     if (!w.samples.length && !w.waiting) return
