@@ -515,6 +515,113 @@ describe('VideoPlayer · 状态和解与控件自动隐藏（devlog/300）', () 
   })
 })
 
+describe('VideoPlayer · 缓冲治理与下边缘豁免（devlog/301）', () => {
+  /** 造一个"能报缓冲"的元素：`buffered` = `[0, currentTime + ahead]`。 */
+  function stubBuffered(v: HTMLVideoElement, ahead: () => number) {
+    Object.defineProperty(v, 'buffered', {
+      configurable: true,
+      value: { length: 1, start: () => 0, end: () => v.currentTime + ahead() },
+    })
+  }
+
+  async function mountDash(opts: { ahead: () => number; playing: boolean }) {
+    act(() => root.render(<VideoPlayer video={{ url: DASH.video }} dash={DASH} />))
+    const v = host.querySelector('video') as HTMLVideoElement
+    const a = host.querySelector('audio') as HTMLAudioElement
+    Object.defineProperty(v, 'duration', { value: 300, configurable: true })
+    Object.defineProperty(v, 'currentTime', { value: 100, writable: true, configurable: true })
+    Object.defineProperty(v, 'paused', { value: !opts.playing, configurable: true })
+    stubBuffered(v, opts.ahead)
+    await act(async () => { v.dispatchEvent(new Event('loadedmetadata')); await Promise.resolve() })
+    return { v, a }
+  }
+
+  it('饿住时**按住**（不许一帧一帧横跳），缓冲够了自动放开', async () => {
+    vi.useFakeTimers()
+    let ahead = 0.2                       // 饿着
+    const { v } = await mountDash({ ahead: () => ahead, playing: true })
+    const pause = vi.spyOn(v, 'pause')
+    const play = vi.spyOn(v, 'play')
+    await act(async () => { v.dispatchEvent(new Event('waiting')); await Promise.resolve() })
+    expect(pause, '前方不足半秒 ⇒ 先按住，别让它一帧一帧地跑').toHaveBeenCalled()
+    expect(host.querySelector('.vp-spin'), '按住期间要有转圈').toBeTruthy()
+
+    // 缓冲长到 2 秒以上 ⇒ 放开
+    ahead = 3.0
+    Object.defineProperty(v, 'paused', { value: true, configurable: true })
+    await act(async () => { vi.advanceTimersByTime(400) })
+    expect(play, '缓冲够了要自己放起来（不需要用户再点一次）').toHaveBeenCalled()
+    vi.useRealTimers()
+  })
+
+  it('**死锁兜底**：按住期间缓冲完全不涨 ⇒ 放开（实测暂停时浏览器不会继续拉缓冲）', async () => {
+    vi.useFakeTimers()
+    const { v } = await mountDash({ ahead: () => 0.1, playing: true })   // 永远不涨
+    const play = vi.spyOn(v, 'play')
+    await act(async () => { v.dispatchEvent(new Event('waiting')); await Promise.resolve() })
+    await act(async () => { vi.advanceTimersByTime(2000) })
+    expect(play, '一直等下去就是"永远加载中" —— 必须有兜底放开').toHaveBeenCalled()
+    vi.useRealTimers()
+  })
+
+  it('用户在按住期间自己按暂停 ⇒ 取消按住（别过一会儿又自己放起来）', async () => {
+    vi.useFakeTimers()
+    let ahead = 0.1
+    const { v } = await mountDash({ ahead: () => ahead, playing: true })
+    const play = vi.spyOn(v, 'play')
+    await act(async () => { v.dispatchEvent(new Event('waiting')); await Promise.resolve() })
+    await act(async () => {
+      // ⚠️ 真浏览器里 `pause()` 会**异步派发一次 `pause` 事件**（规范：queue a media task）；
+      //    测试替身不派发，所以要手动补上那一次 —— 组件靠它区分"我们自己按的"与"用户按的"。
+      v.dispatchEvent(new Event('pause'))
+      await Promise.resolve()
+    })
+    await act(async () => {
+      Object.defineProperty(v, 'paused', { value: true, configurable: true })
+      v.dispatchEvent(new Event('pause'))              // ← 这一次是用户按的
+      await Promise.resolve()
+    })
+    play.mockClear()
+    ahead = 5.0                                         // 缓冲后来够了
+    await act(async () => { vi.advanceTimersByTime(1000) })
+    expect(play, '用户按了暂停就不该被自动放起来').not.toHaveBeenCalled()
+    vi.useRealTimers()
+  })
+
+  it('全屏下贴**下边缘**不算离开：控件不被收起（那是要呼出它）', async () => {
+    vi.useFakeTimers()
+    const { v } = await mountDash({ ahead: () => 9, playing: true })
+    await act(async () => { v.dispatchEvent(new Event('play')); await Promise.resolve() })
+    const wrap = host.querySelector('.vp')!
+    wrap.getBoundingClientRect = () => ({ left: 0, top: 0, right: 1000, bottom: 600,
+      width: 1000, height: 600, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+
+    // 鼠标甩到最下面（y=598，落在"下边缘热区"里），然后**离开播放器**
+    await act(async () => {
+      wrap.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientY: 598 }))
+      await Promise.resolve()
+    })
+    await act(async () => {
+      wrap.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body,
+                                                      clientY: 598 }))
+      await Promise.resolve()
+    })
+    expect(wrap.classList.contains('is-idle'), '贴下边缘离开 ⇒ 豁免，不收起').toBe(false)
+    await act(async () => { vi.advanceTimersByTime(5000) })
+    expect(wrap.classList.contains('is-idle'), '指针还在下边缘热区 ⇒ 一直不收').toBe(false)
+
+    // 从画面中间离开 ⇒ 照旧立刻收起
+    await act(async () => {
+      wrap.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientY: 300 }))
+      wrap.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body,
+                                                      clientY: 300 }))
+      await Promise.resolve()
+    })
+    expect(wrap.classList.contains('is-idle'), '从中间离开 ⇒ 立刻收起').toBe(true)
+    vi.useRealTimers()
+  })
+})
+
 describe('VideoPlayer · 音画漂移分级纠正（devlog/298）', () => {
   it('`driftAction`：小漂移改速率慢慢追、大漂移才跳、稳定时恢复倍速', () => {
     // 实测 19s 漂 0.28s：旧逻辑（>0.3 才动）刚好放过它 ⇒ 现在 0.28 会走"改速率"

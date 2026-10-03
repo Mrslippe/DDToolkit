@@ -110,6 +110,32 @@ export function driftAction(drift: number, rate: number): { snap: boolean; rate:
   return { snap: false, rate }
 }
 
+/**
+ * 缓冲治理（devlog/301）：**饿的时候按住，缓冲够了再放**。
+ *
+ * 用户口径：「跳到很后面时视频会一帧帧播放并且每帧都暂停，播放/暂停一直反复横跳……
+ * 可以在跳转后的加载阶段保证加载了一定内容之后才开始播放」。
+ *
+ * 机理：progressive（`<video src>`）播放时**缓冲节奏由浏览器定** —— 只要缓冲里有一帧，
+ * 它就把那一帧放出来，然后立刻又饿住。观感就是"一帧一帧 + 状态横跳"。
+ * 成熟播放器都是自己管缓冲的（hls.js：`maxBufferLength` 30s 是**目标**、
+ * `maxBufferHole` 0.5s、停住 3s 就 nudge、`maxStarvationDelay`/`maxLoadingDelay` 4s 是**容忍**），
+ * 我们这层能控的只有"什么时候允许继续跑"，所以：
+ *
+ * - 前方不足 `HOLD_AT` 秒 ⇒ **主动 `pause()`**（饿着跑只会抖），转圈 + 停音轨；
+ * - 前方够 `RESUME_AT` 秒 ⇒ 放开（秒级，不是 hls.js 的 30s：那是它的**目标缓冲**，
+ *   而这里是"能不能开播"的门槛）；
+ * - ⚠️ **兜底**：按住期间缓冲**完全不涨**超过 `DEADLOCK_MS` ⇒ 立刻放开。
+ *   实测（2026-10-04，无头 Edge）：暂停状态下浏览器**不会**继续把缓冲拉起来
+ *   （`ahead` 8s 按住 8 秒纹丝不动）—— 没有这条兜底，"等缓冲"会变成**永远等下去**。
+ */
+const HOLD_AT = 0.5
+const RESUME_AT = 2.0
+const DEADLOCK_MS = 1200
+const HOLD_POLL_MS = 200
+/** 全屏时贴着下边缘是想**呼出**控件，不是"离开"（用户口径，devlog/301） */
+const BOTTOM_HOT_ZONE = 72
+
 function fmt(t: number): string {
   if (!Number.isFinite(t) || t < 0) t = 0
   const m = Math.floor(t / 60)
@@ -153,14 +179,25 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
    * 放进 state 会让每次鼠标划过底栏都重渲染一遍。
    */
   const hoverBarRef = useRef(false)
+  /** 指针在**下边缘热区**（按坐标判，不是按元素）—— 全屏时甩到最下面是想呼出控件 */
+  const nearBottomRef = useRef(false)
   const idleTimer = useRef(0)
+  const controlsPinned = useCallback(
+    () => hoverBarRef.current || nearBottomRef.current, [])
+  const nearBottom = useCallback((clientY: number) => {
+    const r = wrapRef.current?.getBoundingClientRect()
+    // ⚠️ 量不到高度就**不豁免**（jsdom/隐藏元素里 rect 全是 0，那样每个坐标都会被判成"贴下边缘"
+    // ⇒ 控件永不收起，而这个 bug 只在测试环境里显形，真机上表现为"全屏时控件再也不隐藏"）
+    if (!r || r.height <= 0) return false
+    return clientY >= r.bottom - BOTTOM_HOT_ZONE
+  }, [])
   const bumpControls = useCallback(() => {
     setIdle(false)
     window.clearTimeout(idleTimer.current)
     idleTimer.current = window.setTimeout(() => {
-      if (!hoverBarRef.current) setIdle(true)
+      if (!controlsPinned()) setIdle(true)
     }, 3000)
-  }, [])
+  }, [controlsPinned])
   useEffect(() => () => window.clearTimeout(idleTimer.current), [])
 
   /** 正在拖拽 seek（state 给渲染用；`draggingRef` 给事件监听用 —— 监听闭包会看到旧 state） */
@@ -168,6 +205,22 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
   const draggingRef = useRef(false)
   /** 缓冲中（`waiting` → `playing`/`canplay`）：中央转圈，别看起来像"暂停了"（devlog/299） */
   const [buffering, setBuffering] = useState(false)
+  /** 缓冲治理的按住状态（见 `HOLD_AT` 那段注释） */
+  const holdRef = useRef({ active: false, self: false, lastAhead: -1, stuck: 0 })
+
+  /** `[start, end]` 里包含当前位置的那一段还剩多少秒（没缓冲到当前位置 ⇒ -1） */
+  const bufferedAhead = useCallback((el: HTMLMediaElement) => {
+    try {
+      for (let i = 0; i < el.buffered.length; i += 1) {
+        if (el.buffered.start(i) <= el.currentTime && el.currentTime <= el.buffered.end(i)) {
+          return el.buffered.end(i) - el.currentTime
+        }
+      }
+    } catch {
+      /* jsdom/异常：当作没有缓冲信息 */
+    }
+    return -1
+  }, [])
 
   // DASH 模式：**只走本机代理**（媒体 CDN 不带 Referer 403）；普通模式仍是 直连 → 代理 的链。
   // ⚠️ 代理 URL 必须用 `videoProxyUrl()`（拼 `apiBase`）—— 写成相对的 `/video-proxy?…` 会落到
@@ -261,15 +314,45 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
       })
     }
 
+    /** 离开"按住"状态：放开并重新起播（音轨由 `playing` 那条路跟上）。 */
+    const releaseHold = () => {
+      const hold = holdRef.current
+      if (!hold.active) return
+      hold.active = false
+      hold.self = false
+      hold.lastAhead = -1
+      hold.stuck = 0
+      void el.play().catch(() => { /* 策略拒绝：保持暂停 */ })
+    }
+
     const onPlay = () => { setPlaying(true); setBuffering(false) }
     /* ⚠️ 暂停要把音轨一起带走（devlog/299）：暂停可能来自**画中画小窗的按钮**、
        系统媒体键、或 `navigator.mediaSession` —— 那些都不经过我们的 `toggle()`。
        不管的话：视频轨停了、音轨还在放，而每秒一次的漂移纠正发现"音轨超前 0.6s"
        就把它拽回冻结的画面时间 ⇒ **同一小段被反复重放**（用户听到的"一小段一小段重复"）。 */
-    const onPause = () => { setPlaying(false); audioRef.current?.pause() }
+    const onPause = () => {
+      setPlaying(false)
+      audioRef.current?.pause()
+      // 用户自己按的暂停（不是我们为了缓冲按住的）⇒ 取消按住，别等会儿又自己放起来
+      if (holdRef.current.active && !holdRef.current.self) {
+        holdRef.current.active = false
+        holdRef.current.lastAhead = -1
+      }
+      holdRef.current.self = false
+    }
     const onPlaying = () => { setBuffering(false); startAudio() }
     /* 缓冲中要有转圈（用户口径：点进度条跳转后在加载，不能看起来像"暂停了"） */
-    const onWaiting = () => setBuffering(true)
+    const onWaiting = () => {
+      setBuffering(true)
+      // 饿着跑 = 一帧一帧 + 状态横跳 ⇒ **按住**，等缓冲够了再放（`HOLD_AT` 那段有实测依据）
+      if (!el.paused && !holdRef.current.active && bufferedAhead(el) < HOLD_AT) {
+        holdRef.current.active = true
+        holdRef.current.self = true
+        holdRef.current.lastAhead = -1
+        holdRef.current.stuck = 0
+        el.pause()
+      }
+    }
     const onCanPlay = () => setBuffering(false)
     const onTime = () => {
       setCur(el.currentTime)
@@ -316,6 +399,25 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
     el.addEventListener('loadedmetadata', onMeta)
     el.addEventListener('progress', onProg)
     el.addEventListener('volumechange', onVolumeChange)
+    /* 按住的看门狗：每 200ms 看一次"缓冲够了没"，带**死锁兜底**（暂停时浏览器不会自己继续拉缓冲）。
+       ⚠️ `hold.self` 在这里清：它表示"这一拍之内我们自己按过暂停"。浏览器的 `pause` 事件是**异步**的
+       （规范里是 queue a task），会在下一拍之前到，所以那时 `self` 还是 true ⇒ 不会被当成用户暂停；
+       而 jsdom 的 `pause()` 不派发事件（测试替身的取舍），这一拍清掉之后，**后到的** pause 事件
+       就一定是用户按的 ⇒ 取消按住。反过来写（靠事件里清 `self`）在测试替身下会漏判。 */
+    const holdWatch = window.setInterval(() => {
+      const hold = holdRef.current
+      if (!hold.active) return
+      hold.self = false
+      const ahead = bufferedAhead(el)
+      if (ahead >= RESUME_AT) { releaseHold(); return }
+      if (ahead > hold.lastAhead + 0.01) {
+        hold.lastAhead = ahead
+        hold.stuck = 0
+      } else if ((hold.stuck += 1) * HOLD_POLL_MS > DEADLOCK_MS) {
+        // 缓冲在一段时间里**一点没涨**（实测：暂停会让浏览器停下来）⇒ 别等了，放开
+        releaseHold()
+      }
+    }, HOLD_POLL_MS)
     return () => {
       el.removeEventListener('play', onPlay)
       el.removeEventListener('pause', onPause)
@@ -326,8 +428,9 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
       el.removeEventListener('loadedmetadata', onMeta)
       el.removeEventListener('progress', onProg)
       el.removeEventListener('volumechange', onVolumeChange)
+      window.clearInterval(holdWatch)
     }
-  }, [src, isDash])
+  }, [src, isDash, bufferedAhead])
 
   // 全屏状态（Esc 退出也要同步）
   useEffect(() => {
@@ -501,9 +604,17 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
       data-vp-state={playing ? 'playing' : 'paused'}
       tabIndex={0}
       onKeyDown={onKey}
-      onMouseMove={bumpControls}
-      /* 指针离开播放器：**立刻收起**（用户就是想让它让开），但压在底栏时不算离开 */
-      onMouseLeave={() => { if (!hoverBarRef.current) setIdle(true) }}
+      onMouseMove={(e) => {
+        // 贴下边缘 = 想呼出控件（全屏时最常见）：当"钉住"处理
+        nearBottomRef.current = nearBottom(e.clientY)
+        bumpControls()
+      }}
+      /* 指针离开播放器：立刻收起；但**贴下边缘那一带豁免** —— 用户把鼠标甩到屏幕最下面
+         正是想呼出控件栏，那时收起来等于跟他对着干（用户 2026-10-04 口径） */
+      onMouseLeave={(e) => {
+        if (controlsPinned() || nearBottom(e.clientY)) return
+        setIdle(true)
+      }}
     >
       <video
         ref={videoRef}
