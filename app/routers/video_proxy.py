@@ -31,6 +31,8 @@ import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
+from app.core.useragent import UA_CHROME
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["media"])
@@ -38,7 +40,20 @@ router = APIRouter(tags=["media"])
 #: 允许代理的主机（后缀匹配）：平台视频 CDN。**新增平台时在这里加**，别放宽成通配。
 ALLOWED_HOSTS: tuple[str, ...] = (
     "xhscdn.com",              # 小红书（图片/视频同域）
-    "sns-video-v4.xhscdn.com",
+    "bilivideo.com",           # B站媒体 CDN（cn-*.bilivideo.com / upos-*.bilivideo.com …）
+)
+
+#: **按主机分请求头**（2026-10-03 实测：两家要求正好相反）
+#:
+#: | CDN | 不带 Referer | 带 `Referer: bilibili.com` |
+#: |---|---|---|
+#: | `bilivideo.com` | **403** | 206 ✓ |
+#: | `xhscdn.com` | 206 ✓ | **403** |
+#:
+#: 所以这里是一张**策略表**，不是一刀切。
+HOST_POLICY: tuple[tuple[str, dict[str, str]], ...] = (
+    ("xhscdn.com", {}),
+    ("bilivideo.com", {"Referer": "https://www.bilibili.com/", "User-Agent": UA_CHROME}),
 )
 
 _UPSTREAM_TIMEOUT = 30.0
@@ -62,11 +77,21 @@ def host_allowed(url: str) -> str:
     return host
 
 
+def policy_for(host: str) -> dict[str, str]:
+    """该主机要附带的请求头（策略表按后缀匹配；未命中 → 什么都不带）。"""
+    for suffix, headers in HOST_POLICY:
+        if host == suffix or host.endswith("." + suffix):
+            return dict(headers)
+    return {}
+
+
 @router.get("/video-proxy")
 async def video_proxy(request: Request, url: str = Query(...)):
-    """流式转发一个白名单内的视频 URL（Range 直通、不落盘）。"""
+    """流式转发一个白名单内的视频 URL（Range 直通、不落盘、**按主机补/剥请求头**）。"""
     host = host_allowed(url)
     headers = {k: v for k, v in request.headers.items() if k.lower() in _FORWARD_REQ}
+    # 策略头**最后合并**：CDN 要什么由我们决定，不听浏览器的（`Referer`/`Origin`/`Cookie` 一律不转发）
+    headers.update(policy_for(host))
     client = httpx.AsyncClient(timeout=_UPSTREAM_TIMEOUT, follow_redirects=True)
     try:
         req = client.build_request("GET", url, headers=headers)

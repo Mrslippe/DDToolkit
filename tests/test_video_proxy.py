@@ -81,8 +81,11 @@ def test_video_proxy_reports_upstream_error_as_is(client, monkeypatch):
     ("https://sns-video-v4.xhscdn.com/a.mp4", True),
     ("http://sns-bak-v1.xhscdn.com/a.mp4", True),
     ("https://xhscdn.com/a.mp4", True),
+    ("https://cn-gddg-ct-01-12.bilivideo.com/v.m4s", True),      # B站媒体 CDN（2026-10-03 加）
+    ("https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/x.m4s", True),
     ("https://evilxhscdn.com/a.mp4", False),      # 后缀伪装
     ("https://xhscdn.com.evil.com/a.mp4", False),  # 前缀伪装
+    ("https://bilivideo.com.evil.com/a.mp4", False),
     ("file:///etc/passwd", False),
     ("", False),
 ])
@@ -93,3 +96,32 @@ def test_host_whitelist_matching(url, ok):
     else:
         with pytest.raises(Exception):
             video_proxy.host_allowed(url)
+
+
+def test_host_policy_is_per_cdn_not_one_size_fits_all():
+    """**按主机分请求头**：两家要求正好相反（2026-10-03 实测）。
+
+    | CDN | 不带 Referer | 带 `Referer: bilibili.com` |
+    |---|---|---|
+    | `bilivideo.com` | 403 | 206 ✓ |
+    | `xhscdn.com` | 206 ✓ | 403 |
+    """
+    bili = video_proxy.policy_for("cn-gddg-ct-01-12.bilivideo.com")
+    assert bili.get("Referer") == "https://www.bilibili.com/", "B站媒体不带 Referer 会 403"
+    assert "User-Agent" in bili
+    assert video_proxy.policy_for("sns-video-v4.xhscdn.com") == {}, \
+        "小红书带了 Referer 会 403 ⇒ 策略必须是「什么都不加」"
+    assert video_proxy.policy_for("unknown.example") == {}
+
+
+def test_proxy_applies_host_policy_and_still_strips_browser_headers(client, monkeypatch):
+    """B站地址经代理：补上 Referer/UA，同时**仍然剥掉**浏览器的 Referer/Origin/Cookie。"""
+    monkeypatch.setattr(video_proxy.httpx, "AsyncClient", _FakeUpstream)
+    r = client.get("/video-proxy",
+                   params={"url": "https://cn-gddg-ct-01-12.bilivideo.com/v.m4s?sign=x"},
+                   headers={"Range": "bytes=0-2", "Referer": "http://localhost:1420/",
+                            "Cookie": "SESSDATA=secret"})
+    assert r.status_code == 206
+    got = {k.lower(): v for k, v in _FakeUpstream.last_headers.items()}
+    assert got.get("referer") == "https://www.bilibili.com/", "要的是**我们**定的 Referer"
+    assert "cookie" not in got and "origin" not in got

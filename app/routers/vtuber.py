@@ -1033,6 +1033,37 @@ def search_externals_vtubers(kw: str, source: str | None = Query(None),
 
 # ── Post CRUD ──────────────────────────────────────────────────────
 
+@router.get("/bili/play/{post_id}")
+async def bili_play(post_id: int, qn: int | None = Query(None),
+                    db: Session = Depends(get_db)):
+    """B站视频取流（2026-10-03，devlog/289；C1+C2，**默认 DASH**）。
+
+    为什么必须走后端：媒体 CDN 要 `Referer: https://www.bilibili.com/` 才给（实测不带 → 403），
+    而浏览器设不了 Referer；登录态也只在后端的 `.env` 里（前端拿不到、也不该拿到）。
+
+    - **按需调用**：用户点播放才取；地址短时效且绑 IP ⇒ 只做 120s 短缓存、**不落库**；
+    - `qn` 只是"我想要哪档"，实际给哪档看**账号权益 + 片源**（本账号实测最高 1080P，
+      要 1080P+/4K 会被静默回落 —— 前端照返回值里的 `quality` 显示）；
+    - 失败**如实分类**：`-404` 不存在 / `-403` 无权限（充电专属等）/ `-352` 风控 / 其它。
+    """
+    from app.core.jsonsafe import safe_json_dict
+    from app.services import bili_play
+
+    post = PostRepo(db).get(post_id)
+    if post is None:
+        raise HTTPException(404, f"Post id={post_id} 不存在")
+    if post.platform != "bilibili":
+        raise HTTPException(400, f"只有 B站帖子能取流（这条是 {post.platform}）")
+    bvid = (safe_json_dict(post.body_json) or {}).get("bvid")
+    if not bvid:
+        raise HTTPException(400, "这条帖子没有 bvid（不是视频帖）")
+    try:
+        return await bili_play.play_info(str(bvid), qn=qn)
+    except bili_play.PlayError as e:
+        status = {"not_found": 404, "forbidden": 403, "risk_control": 429}.get(e.kind, 502)
+        raise HTTPException(status, e.message) from e
+
+
 @router.get("/posts/{platform}/{platform_uid}", response_model=list[PostOut])
 def list_posts(platform: str, platform_uid: str, db: Session = Depends(get_db)):
     return _post_outs(db, list(PostRepo(db).by_uid(platform, platform_uid)))
