@@ -286,12 +286,14 @@ describe('BiliVideo · 段表（MSE 内核的输入）', () => {
     Object.defineProperty(URL, 'revokeObjectURL',
                           { value: () => { /* 忽略 */ }, configurable: true, writable: true })
     // 取段走的是 `authFetch('/api/video-proxy?…')`：这里只回答一个空段（不模拟解码）。
-    // ⚠️ 不挡这一层的话，jsdom 里相对 URL 的 fetch 会失败 ⇒ 内核真的熔断退渐进式，
-    //    用例就变成"在测失败路径"了（第一版正是这样假红的）。
-    vi.stubGlobal('fetch', vi.fn(async () => ({
-      ok: true, status: 206, arrayBuffer: async () => new ArrayBuffer(16),
-      text: async () => '',
-    })))
+    // ⚠️ 长度要**正好是请求的那一段**（内核会校验，`devlog/314`）；给固定 16 字节会被判"数据不对"。
+    vi.stubGlobal('fetch', vi.fn(async (_input: unknown, init?: RequestInit) => {
+      const range = new Headers(init?.headers).get('Range') ?? ''
+      const m = /bytes=(\d+)-(\d+)/.exec(range)
+      const size = m ? Number(m[2]) - Number(m[1]) + 1 : 16
+      return { ok: true, status: 206, arrayBuffer: async () => new ArrayBuffer(size),
+               text: async () => '' }
+    }))
     biliPlay.mockResolvedValue({ ...INFO, dash: {
       video: [{ id: 80, base_url: 'https://cdn/v.m4s', codecs: 'avc1', mime: 'video/mp4' }],
       audio: [{ id: 30280, base_url: 'https://cdn/a.m4s', codecs: 'mp4a', mime: 'audio/mp4' }] } })

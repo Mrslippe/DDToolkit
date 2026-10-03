@@ -144,7 +144,9 @@ function stubFetch(fail = false) {
       t0 = i * SEG_DUR
       t1 = t0 + SEG_DUR
     }
-    const buf = new ArrayBuffer(16)
+    // ⚠️ 长度必须正好是请求的那一段（内核会校验，见 devlog/314）：固定 16 字节会被判"数据不对"
+    const size = m ? Number(m[2]) - Number(m[1]) + 1 : 16
+    const buf = new ArrayBuffer(size)
     const dv = new DataView(buf)
     dv.setFloat64(0, t0)
     dv.setFloat64(8, t1)

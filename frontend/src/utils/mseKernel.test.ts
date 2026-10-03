@@ -46,8 +46,8 @@ function makeStreams(count = SEG_COUNT) {
 const STREAMS = makeStreams()
 
 /** 把"这一段的起止秒"编进字节里，假 SourceBuffer 就能还原出"缓冲区间"（不必解析 MP4）。 */
-function encodeRange(start: number, end: number): ArrayBuffer {
-  const buf = new ArrayBuffer(16)
+function encodeRange(start: number, end: number, bytes = 16): ArrayBuffer {
+  const buf = new ArrayBuffer(bytes)
   const dv = new DataView(buf)
   dv.setFloat64(0, start)
   dv.setFloat64(8, end)
@@ -73,10 +73,13 @@ class FakeSourceBuffer {
   readonly log: string[] = []
   /** 第几次 append 抛配额（其余正常）—— 用来测"先淘汰再重试" */
   quotaAt = 0
+  /** 冻住：append 照常"成功"但**缓冲不涨** —— 模拟"取回来了却落不到该去的地方" */
+  freeze = false
   private appends = 0
   private readonly listeners: Record<string, (() => void)[]> = {}
 
-  constructor(readonly mime: string, private readonly seg: number) {}
+  constructor(readonly mime: string, private readonly seg: number,
+              private readonly ms: { readyState: string }) {}
 
   get buffered() { return new FakeTimeRanges(this.ranges) }
 
@@ -94,6 +97,11 @@ class FakeSourceBuffer {
     if (this.updating) {
       throw new DOMException('still processing an appendBuffer', 'InvalidStateError')
     }
+    // ⚠️ `endOfStream()` 之后 `readyState` 是 `ended`，**append 与 remove 都不许再调**
+    //    （真机上这是"取完之后 seek 永久失效"的一半原因，见 devlog/314）
+    if (this.ms.readyState !== 'open') {
+      throw new DOMException('MediaSource is not open', 'InvalidStateError')
+    }
     this.appends += 1
     if (this.quotaAt && this.appends === this.quotaAt) {
       throw new DOMException('quota', 'QuotaExceededError')
@@ -103,7 +111,7 @@ class FakeSourceBuffer {
     const [s, e] = decodeRange(buf)
     queueMicrotask(() => {
       this.updating = false
-      if (e > s) this.addRange(s, e - this.seg)
+      if (e > s && !this.freeze) this.addRange(s, e - this.seg)
       this.emit('updateend')
     })
   }
@@ -166,12 +174,15 @@ class FakeMediaSource {
     if (this.buffers.some((b) => b.mime === mime)) {
       throw new DOMException('duplicate', 'NotSupportedError')
     }
-    const sb = new FakeSourceBuffer(mime, this.seg)
+    const sb = new FakeSourceBuffer(mime, this.seg, this)
     this.buffers.push(sb)
     return sb as unknown as SourceBuffer
   }
 
-  endOfStream() { this.ended = true }
+  endOfStream() {
+    this.ended = true
+    this.readyState = 'ended'          // 真实现就是这样：之后 append/remove 一律抛错
+  }
 }
 
 interface FakeEl {
@@ -215,17 +226,21 @@ function fetcher(seg = 0, failFor: (url: string, r: SegmentRange) => boolean = (
   const fn = vi.fn(async (url: string, range: SegmentRange) => {
     calls.push({ url, range })
     if (failFor(url, range)) throw new Error('boom')
-    if (range.start === 0) return encodeRange(0, 0)          // init：**不产生缓冲区间**（真 MSE 就是这样）
+    // ⚠️ **长度必须正好是请求的那一段**：内核会校验（`devlog/314` 的 Range 校验），
+    //    夹具返回固定 16 字节的话每条取数都会被判成"数据不对"⇒ 整批用例假红。
+    const size = range.end - range.start + 1
+    if (range.start === 0) return encodeRange(0, 0, size)    // init：**不产生缓冲区间**
     const i = Math.floor((range.start - SEG0_START) / SEG_BYTES)
     const t = i * SEG_DUR
-    return encodeRange(t, t + SEG_DUR + seg)
+    return encodeRange(t, t + SEG_DUR + seg, size)
   })
   return { fn, calls }
 }
 
 /** 建一个内核 + 冲刷微任务，让 `sourceopen`/`updateend` 全部跑完。 */
 async function boot(opts: { seg?: number; streams?: ReturnType<typeof makeStreams>
-                            failFor?: (u: string, r: SegmentRange) => boolean } = {}) {
+                            failFor?: (u: string, r: SegmentRange) => boolean
+                            useDefaultFetch?: boolean } = {}) {
   const seg = opts.seg ?? 0
   const streams = opts.streams ?? STREAMS
   const ms = new FakeMediaSource(seg)
@@ -233,16 +248,19 @@ async function boot(opts: { seg?: number; streams?: ReturnType<typeof makeStream
   const el = fakeEl(ms.buffers)
   const onFatal = vi.fn()
   const onSeekApplied = vi.fn()
+  const logs: string[] = []
   const kernel = new MseKernel(el as unknown as HTMLVideoElement, {
     createMediaSource: () => ms as unknown as MediaSource,
     createObjectURL: () => 'blob:test',
     revokeObjectURL: () => { /* 忽略 */ },
-    fetchRange: f.fn,
+    // `useDefaultFetch`：走**真实**的取数实现（`/video-proxy` + Range 校验），用来测它
+    ...(opts.useDefaultFetch ? {} : { fetchRange: f.fn }),
     onFatal, onSeekApplied,
+    log: (line) => { logs.push(line) },
   })
   const ok = kernel.load(streams)
   await flush(20)
-  return { kernel, ms, el, f, onFatal, onSeekApplied, ok }
+  return { kernel, ms, el, f, onFatal, onSeekApplied, ok, logs }
 }
 
 /** 冲刷到"泵暂时没事干"为止：每轮给微任务 + 一个宏任务（`updateend` 走的是微任务队列）。 */
@@ -330,13 +348,19 @@ describe('mseKernel · 起播与泵', () => {
     expect(ms.duration).toBe(SEG_COUNT * SEG_DUR)
   })
 
-  it('段取完 ⇒ endOfStream（否则进度条到不了尾）', async () => {
-    const { kernel, ms, el } = await boot()
-    // 跳到末尾：泵会把最后几段补齐
-    kernel.seekTo(SEG_COUNT * SEG_DUR - 0.5)
-    await flush(20)
-    expect(ms.ended).toBe(true)
-    expect(el.currentTime).toBeGreaterThan(SEG_COUNT * SEG_DUR - 1)
+  it('**全部段取完之后仍然能 seek** —— 不许 `endOfStream()`（真机"再跳转一直转圈"的根因）', async () => {
+    // 机理（`devlog/314`）：跳到末尾附近 ⇒ 两条轨的段全取完 ⇒ 旧实现调 `endOfStream()`
+    // ⇒ `readyState='ended'` ⇒ 之后 append 抛错、而且 `pump()` 开头就返回
+    // ⇒ **任何后续 seek 永远落不了地**（连 10 秒收手也一起失效）。
+    const { kernel, el, onSeekApplied } = await boot({ streams: makeStreams(SEG_COUNT) })
+    kernel.seekTo(SEG_COUNT * SEG_DUR - 0.5)      // 跳到末尾：泵会把剩下的段全部取完
+    await flush(60)
+    expect(onSeekApplied).toHaveBeenLastCalledWith(SEG_COUNT * SEG_DUR - 0.5)
+
+    kernel.seekTo(10)                             // 再跳回来 —— 这一下必须还能落地
+    await flush(60)
+    expect(onSeekApplied, '取完之后 seek 失效 = 一直转圈').toHaveBeenLastCalledWith(10)
+    expect(el.currentTime).toBeCloseTo(10, 0)
   })
 })
 
@@ -451,6 +475,52 @@ describe('mseKernel · seek（先取段，再设时间）', () => {
 })
 
 describe('mseKernel · 配额与失败', () => {
+  it('取数**不推进**（缓冲不涨）⇒ 报一次 + 刹车：不许刷爆日志/CDN', async () => {
+    // 起因（`devlog/314`）：真机上报「出错时日志里 info 爆发式增长」= 取数在打转。
+    // 判据不看"同一段取了几次"（索引会交替，数不出来），只看**缓冲有没有真的涨**。
+    const { kernel, ms, f, logs } = await boot({ streams: makeStreams(40) })
+    kernel.seekTo(120)                     // 让泵有事可做
+    for (const b of ms.buffers) b.freeze = true     // 之后取回来的数据**不落区间**
+    const before = f.calls.length
+    await flush(120)
+    await new Promise((r) => setTimeout(r, 300))
+
+    const stalls = logs.filter((l) => l.includes('泵无进展'))
+    expect(stalls.length, `"泵在原地打转"要**只报一次**，实得：${JSON.stringify(logs)}`).toBeLessThanOrEqual(2)
+    expect(stalls[0]).toContain('可用=')          // 那一行必须带上判断依据
+    // 刹车：没有它就会以"网络允许的最快速度"一直取（每条代理日志一行）
+    expect(f.calls.length - before, `取数次数爆了（${f.calls.length - before}）`).toBeLessThan(30)
+  })
+
+  it('上游忽略 `Range`（回 200 整份文件）⇒ **不当成功**（否则第 1 段的字节会被当成第 N 段）', async () => {
+    // 机理（`devlog/314`）：数据落在错误的时刻上 ⇒ `covers(目标)` 永远为假 ⇒ 一直转圈；
+    // 而泵还在一次次重取整份文件 ⇒ 真机"日志 INFO 暴增 + 卡顿低帧率"。
+    const seen: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (input: unknown) => {
+      seen.push(String(input))
+      return { ok: true, status: 200, text: async () => '',
+               arrayBuffer: async () => new ArrayBuffer(4096) }
+    }))
+    const { onFatal, logs } = await boot({ useDefaultFetch: true })
+    expect(seen.length, '确实走的是真实取数').toBeGreaterThan(0)
+    expect(seen[0], '请求要经本机代理并带 Range').toContain('/video-proxy?url=')
+    expect(onFatal, '拿不到"正确的那一段"就不该继续假装能播').toHaveBeenCalled()
+    expect(logs.join(' ')).toContain('Range')
+  })
+
+  it('段长不对（上游截短/多给）⇒ 换镜像重试，不 append 垃圾数据', async () => {
+    let n = 0
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      n += 1
+      return { ok: true, status: 206, text: async () => '',
+               arrayBuffer: async () => new ArrayBuffer(n === 1 ? 4096 : 16) }
+    }))
+    const { onFatal, logs, ms } = await boot({ useDefaultFetch: true })
+    expect(onFatal).toHaveBeenCalled()
+    expect(logs.join(' ')).toContain('长度不对')
+    expect(ms.buffers[0].log, '错的数据不该被 append 进去').not.toContain('append')
+  })
+
   it('QuotaExceededError ⇒ **先淘汰再重试**，不是当场判死', async () => {
     // 80 秒的表：40 秒的表根本涨不过 `MAX_BUFFER`，测不到淘汰
     const { kernel, ms, onFatal, el } = await boot({ streams: makeStreams(16) })

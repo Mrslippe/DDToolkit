@@ -100,6 +100,17 @@ const FETCH_TIMEOUT_MS = 20_000
 /** 段取数慢到这个程度就记一行（撑不住实时码率会表现为"低帧率"） */
 const SLOW_SEGMENT_MS = 1500
 const SLOW_SEGMENT_BYTES_PER_S = 300_000
+/**
+ * **取数没进展就刹车**（`devlog/314`）。
+ *
+ * 用户真机报「出错时日志里 info 爆发式增长」—— 那是**取数在打转**（每次代理转发各一行 INFO）。
+ * 判据不看"取了几次同一段"（索引会交替，数不出来），只看**缓冲有没有真的涨**：
+ * 连续 `STALL_TRIES` 次 append 之后这条轨的已缓冲末尾没动 ⇒ 停 `STALL_BACKOFF_MS` 再试，
+ * 并且**只报一次**（把"泵在原地打转"这件事写成一行，而不是让它刷满日志）。
+ * 顺带这也保证了任何未知的死循环都不会把 CDN 和日志打爆。
+ */
+const STALL_TRIES = 3
+const STALL_BACKOFF_MS = 2000
 
 /** 宿主有没有 MSE（**先问它再决定要不要去后端取段表** —— 没 MSE 时那张表纯属白跑一趟）。 */
 export function mseAvailable(): boolean {
@@ -199,7 +210,15 @@ export interface KernelDeps {
   seekGiveUpMs?: number
 }
 
-/** 默认取段：`/video-proxy` 的 Range 直通（凭据/Referer 由后端补，前端一个头都不带） */
+/**
+ * 默认取段：`/video-proxy` 的 Range 直通（凭据/Referer 由后端补，前端一个头都不带）。
+ *
+ * ⚠️ **必须验证"拿回来的确实是那一段"**（`devlog/314`）：上游若忽略 `Range`（回 200 + 整份文件，
+ * P2P/mcdn 镜像上真会这样），旧实现只看 `r.ok` 就当成功 —— 于是**第 1 段的字节被当成第 N 段
+ * append 进去**：数据落在错误的时刻上，`covers(目标)` 永远为假 ⇒ **一直转圈**，而泵还在
+ * 一次次重取整份文件（真机上就是"日志 INFO 暴增 + 卡顿低帧率"）。
+ * 判据两条：**状态必须是 206**；**长度必须正好是请求的那一段**（两处不符都换镜像/重试）。
+ */
 async function defaultFetchRange(url: string, range: SegmentRange,
                                 signal: AbortSignal): Promise<ArrayBuffer> {
   const r = await authFetch(videoProxyUrl(url), {
@@ -207,7 +226,17 @@ async function defaultFetchRange(url: string, range: SegmentRange,
     signal,
   })
   if (!r.ok) throw new Error(`HTTP ${r.status}`)
-  return await r.arrayBuffer()
+  if (r.status !== 206) {
+    throw new RangeError(`上游没按 Range 给：status=${r.status}（要的是 `
+      + `${range.start}-${range.end}）`)
+  }
+  const buf = await r.arrayBuffer()
+  const want = range.end - range.start + 1
+  if (buf.byteLength !== want) {
+    throw new RangeError(`这一段长度不对：要 ${want}B 实得 ${buf.byteLength}B`
+      + `（${range.start}-${range.end}）`)
+  }
+  return buf
 }
 
 function isQuotaError(e: unknown): boolean {
@@ -231,6 +260,14 @@ interface Track {
   /** 上一条取的段序号 + **同一段连续取了几次**（防"同一段反复取"把泵转死，见 `pump`） */
   lastIdx: number
   repeat: number
+  /** 这条轨**已缓冲末尾**的上一次读数（判"取数有没有真的推进"，见 `STALL_TRIES`） */
+  spanEnd: number
+  /** 连续几次 append 之后缓冲没涨 */
+  noProgress: number
+  /** 没进展时的冷却截止时刻（到点前不再取数） */
+  coolUntil: number
+  /** "泵在原地打转"这件事**只报一次**（直到重新有进展） */
+  warnedStall: boolean
   retry: number
   /** 镜像链游标：换一条就 +1（取不到时轮换，不回后端） */
   mirror: number
@@ -265,6 +302,9 @@ export class MseKernel {
   private startedAt = 0
   private appends = 0
   private bytes = 0
+  /** 淘汰日志的聚合（2s 一行、带次数，见 `evict`） */
+  private evictCount = 0
+  private evictLoggedAt = 0
   private onSourceOpen = () => this.open()
 
   constructor(el: HTMLVideoElement, deps: KernelDeps = {}) {
@@ -291,6 +331,7 @@ export class MseKernel {
       .map(([kind, table]) => ({
         table: table as StreamTable, kind, sb: null, busy: false, initDone: false,
         pending: null, inflight: null, seq: 0, lastIdx: -2, repeat: 0,
+        spanEnd: 0, noProgress: 0, coolUntil: 0, warnedStall: false,
         retry: 0, mirror: 0, quotaHits: 0,
       }))
     this.startedAt = Date.now()
@@ -342,9 +383,6 @@ export class MseKernel {
     window.clearInterval(this.tick)
     for (const tr of this.tracks) this.abortInflight(tr)
     try { this.ms?.removeEventListener('sourceopen', this.onSourceOpen) } catch { /* 已销毁 */ }
-    try {
-      if (this.ms?.readyState === 'open') this.ms.endOfStream()
-    } catch { /* 已经关了 */ }
     if (this.objectUrl) {
       (this.deps.revokeObjectURL ?? ((u: string) => URL.revokeObjectURL(u)))(this.objectUrl)
     }
@@ -401,6 +439,15 @@ export class MseKernel {
     tr.pending = null
     tr.retry = 0
     if (wasInit) tr.initDone = true
+    // **进展计量**：这条轨的已缓冲末尾有没有真的往前挪（没挪就攒 `noProgress`，见 `STALL_TRIES`）
+    const end = this.trackSpan(tr)?.end ?? 0
+    if (end > tr.spanEnd + 1e-3) {
+      tr.spanEnd = end
+      tr.noProgress = 0
+      tr.warnedStall = false
+    } else {
+      tr.noProgress += 1
+    }
     this.maybeEnd()
     this.evict(tr)
     this.report()
@@ -474,12 +521,23 @@ export class MseKernel {
     this.deps.onProgress?.(s ? s.end : 0, this.el.currentTime)
   }
 
+  /**
+   * ⚠️ **绝不调 `MediaSource.endOfStream()`**（`devlog/314`，真机"多次跳转后再跳转就一直转圈"的根因）。
+   *
+   * 跳到**末尾附近**会把两条轨的段全取完 ⇒ 旧实现据此调 `endOfStream()` ⇒ `readyState` 变
+   * `ended` ⇒ 之后 **`appendBuffer` 抛错、而且我们自己的 `pump()` 也在开头就返回**
+   * （`readyState !== 'open'`）⇒ **任何后续 seek 都永远落不了地**，界面就一直转圈
+   * （连"10 秒收手"也在 pump 里，所以连兜底都不会触发）。
+   *
+   * 为什么不调也没事：我们把 `ms.duration` **显式设成段表时长**了 —— 时间轴是有限的，
+   * 播到末尾元素自己会 `ended`、进度条也到得了尾。`endOfStream()` 只对"没有确定时长"的流
+   * 才有必要（直播）。⇒ 用它换来的那点好处，远不值"seek 永久失效"这个代价。
+   */
   private maybeEnd(): void {
-    if (this.ended || !this.ms || this.ms.readyState !== 'open') return
+    if (this.ended || !this.ms) return
     const done = this.tracks.every((tr) => tr.initDone && this.nextIndex(tr) >= tr.table.segments.length)
     if (!done) return
-    this.ended = true
-    try { this.ms.endOfStream() } catch { /* 已经结束 */ }
+    this.ended = true                    // 只记一笔（日志用），**不**动 MediaSource 的状态
   }
 
   /** 该轨**下一个要 append** 的段序号（按"这条轨已缓冲到哪里"推，不看历史游标）。 */
@@ -523,11 +581,37 @@ export class MseKernel {
     tr.busy = true
     try {
       sb.remove(start, keepFrom)
-      this.deps.log?.(`[media] 淘汰 ${tr.kind} ${start.toFixed(1)}–${keepFrom.toFixed(1)}s`)
+      this.evictCount += 1
+      // ⚠️ **别每次淘汰都写一行日志**（`devlog/314`）：短时间里连着淘汰会把日志刷满，
+      //    而真问题（取数打转）反而被淹掉。2 秒最多一行，并带上这期间的次数。
+      const now = Date.now()
+      if (now - this.evictLoggedAt > 2000) {
+        const n = this.evictCount
+        this.evictCount = 0
+        this.evictLoggedAt = now
+        this.deps.log?.(`[media] 淘汰 ${tr.kind} ${start.toFixed(1)}–${keepFrom.toFixed(1)}s`
+                        + (n > 1 ? `（近 2s 共 ${n} 次）` : ''))
+      }
     } catch (e) {
       tr.busy = false
       if (!isQuotaError(e)) this.fail(`${tr.kind} 淘汰失败：${String(e)}`)
     }
+  }
+
+  /**
+   * "泵在原地打转"的那一行（**一次失败只报一次**）。
+   *
+   * 这一行是给下一次真机复现准备的：它把内核此刻的**全部判断依据**写出来 ——
+   * 目标、连续可用缓冲、这条轨自己的区间、以及卡在哪一步（`pending`/`busy`）。
+   * 有了它，不用再靠猜：是"段取来了却落不到目标位置"，还是"缓冲根本没涨"。
+   */
+  private stallLine(tr: Track): string {
+    const span = this.trackSpan(tr)
+    const target = this.pendingSeek ?? this.el.currentTime
+    const seg = tr.table.segments[Math.max(0, segmentIndexAt(tr.table, target))]
+    return `[media] 泵无进展(${tr.kind}) 目标=${target.toFixed(1)}s 可用=${this.aheadFor(tr, target).toFixed(1)}s`
+      + ` 该轨末=${span ? span.end.toFixed(1) : '×'}s 段=${tr.pending ?? '-'}`
+      + ` 目标段起=${seg ? (seg.start / 1048576).toFixed(2) : '?'}MB 共取=${this.appends}次/${(this.bytes / 1048576).toFixed(1)}MB`
   }
 
   private async append(tr: Track, idx: number): Promise<void> {
@@ -583,6 +667,17 @@ export class MseKernel {
     const ms = Date.now() - t0
     const size = buf.byteLength
     this.bytes += size
+    // 段长不对/上游没给 Range 这一类的错**自带解释**（见 `defaultFetchRange`）⇒ 换镜像而不是吞掉
+    if (size !== seg.end - seg.start + 1) {
+      tr.pending = null
+      this.deps.log?.(`[media] ${tr.kind} 段 ${idx} 数据不对：要 ${seg.end - seg.start + 1}B `
+                      + `实得 ${size}B —— 换下一条镜像`)
+      if (tr.mirror + 1 < urls.length) tr.mirror += 1
+      else tr.retry += 1
+      if (tr.retry >= MAX_RETRY) this.fail(`${tr.kind} 段 ${idx} 反复拿不到正确数据`)
+      this.pump()
+      return
+    }
     if (ms > SLOW_SEGMENT_MS || (ms > 200 && size / (ms / 1000) < SLOW_SEGMENT_BYTES_PER_S)) {
       this.deps.log?.(`[media] ${tr.kind} 段 ${idx} 取数 ${ms}ms ${(size / 1048576).toFixed(2)}MB`
                       + `（${(size / 1048576 / (ms / 1000)).toFixed(2)}MB/s）`)
@@ -617,6 +712,18 @@ export class MseKernel {
     for (const tr of this.tracks) {
       if (tr.busy || tr.pending != null) continue
       if (!tr.initDone) { void this.append(tr, -1); continue }
+      // **没进展就刹车**（见 `STALL_TRIES`）：否则"判据退化 ⇒ 一直取同一段"会把 CDN 与日志打爆
+      const now = Date.now()
+      if (now < tr.coolUntil) continue
+      if (tr.noProgress >= STALL_TRIES) {
+        tr.coolUntil = now + STALL_BACKOFF_MS
+        tr.noProgress = 0
+        if (!tr.warnedStall) {
+          tr.warnedStall = true
+          this.deps.log?.(this.stallLine(tr))
+        }
+        continue
+      }
       const target = seek ?? this.el.currentTime
       /**
        * ⚠️ **"前方有多少"必须从播放点起算连续的那一段**，不能拿"最后一段的末尾"糊弄
@@ -671,6 +778,11 @@ export class MseKernel {
       this.el.currentTime = seek
       this.deps.onSeekApplied?.(seek)
       this.report()
+      // 一次 seek 一行（只有慢到 0.5s 以上才写）：真机上"跳转要多久"要和代理那侧的行对得上
+      if (waited > 500) {
+        this.deps.log?.(`[media] 跳转 ${seek.toFixed(1)}s 落地：用时=${(waited / 1000).toFixed(1)}s `
+                        + `缓冲=${this.aheadAt(seek).toFixed(1)}s 段取=${this.appends}次`)
+      }
     }
   }
 
