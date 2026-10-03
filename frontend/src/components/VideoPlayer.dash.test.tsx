@@ -617,17 +617,16 @@ describe('VideoPlayer · 缓冲治理与下边缘豁免（devlog/301）', () => 
     const { v } = await mountDash({ ahead: () => ahead, playing: true })
     const play = vi.spyOn(v, 'play')
     await act(async () => { v.dispatchEvent(new Event('waiting')); await Promise.resolve() })
-    await act(async () => {
-      // ⚠️ 真浏览器里 `pause()` 会**异步派发一次 `pause` 事件**（规范：queue a media task）；
-      //    测试替身不派发，所以要手动补上那一次 —— 组件靠它区分"我们自己按的"与"用户按的"。
-      v.dispatchEvent(new Event('pause'))
-      await Promise.resolve()
-    })
+    // 真浏览器里我们那次 `pause()` 会派发**一次** `pause` 事件（测试替身不派发，故此处不补）：
+    // 它落在 800ms 判定窗内 ⇒ 算"我们按的"。用户稍后（窗外）按暂停 ⇒ 算用户的 ⇒ 取消按住。
+    await act(async () => { vi.advanceTimersByTime(900) })   // 出窗、但还没到死锁兜底（1.2s）
     await act(async () => {
       Object.defineProperty(v, 'paused', { value: true, configurable: true })
       v.dispatchEvent(new Event('pause'))              // ← 这一次是用户按的
       await Promise.resolve()
     })
+    expect(host.querySelector('.vp')!.getAttribute('data-vp-state'), '用户按了 ⇒ 界面要显示成暂停')
+      .toBe('paused')
     play.mockClear()
     ahead = 5.0                                         // 缓冲后来够了
     await act(async () => { vi.advanceTimersByTime(1000) })
@@ -707,6 +706,54 @@ describe('VideoPlayer · 播放意图（devlog/302）', () => {
     expect(play, '拖动开始时元素是"按住"态 —— 旧实现据此认为"用户没在播"，于是永远不出声')
       .toHaveBeenCalled()
     play.mockRestore()
+  })
+})
+
+describe('VideoPlayer · 播放状态的真源（devlog/303）', () => {
+  it('音轨自己的 `pause`/`play` **不许**驱动界面（▶/⏸ 来回闪的真正根因）', async () => {
+    act(() => root.render(<VideoPlayer video={{ url: DASH.video }} dash={DASH} />))
+    const v = host.querySelector('video') as HTMLVideoElement
+    const a = host.querySelector('audio') as HTMLAudioElement
+    await act(async () => {
+      v.dispatchEvent(new Event('play'))
+      v.dispatchEvent(new Event('playing'))
+      await Promise.resolve()
+    })
+    expect(host.querySelector('.vp-bigplay'), '在播 ⇒ 没有大播放键').toBeNull()
+
+    // 我们按设计会反复暂停/恢复音轨（缓冲按住、seek 收尾、小窗暂停都走它）
+    await act(async () => { a.dispatchEvent(new Event('pause')); await Promise.resolve() })
+    expect(host.querySelector('.vp-bigplay'),
+           '音轨停一下不代表用户暂停 —— 界面跟着它翻面就是"图标闪"').toBeNull()
+    expect(host.querySelector('.vp')!.getAttribute('data-vp-state')).toBe('playing')
+
+    await act(async () => { a.dispatchEvent(new Event('play')); await Promise.resolve() })
+    expect(host.querySelector('.vp')!.getAttribute('data-vp-state')).toBe('playing')
+  })
+
+  it('**晚到的** `pause` 事件（我们自己那次按下）不会把界面翻成暂停', async () => {
+    vi.useFakeTimers()
+    act(() => root.render(<VideoPlayer video={{ url: DASH.video }} dash={DASH} />))
+    const v = host.querySelector('video') as HTMLVideoElement
+    Object.defineProperty(v, 'duration', { value: 300, configurable: true })
+    Object.defineProperty(v, 'currentTime', { value: 10, writable: true, configurable: true })
+    Object.defineProperty(v, 'buffered', {
+      configurable: true, value: { length: 1, start: () => 0, end: () => v.currentTime + 0.1 },
+    })
+    await act(async () => {
+      void v.play()                                  // 元素真的在播（替身会把 paused 置 false）
+      v.dispatchEvent(new Event('loadedmetadata'))
+      v.dispatchEvent(new Event('play'))
+      await Promise.resolve()
+    })
+    await act(async () => { v.dispatchEvent(new Event('waiting')); await Promise.resolve() })
+    expect(v.paused, '先确认确实进了"按住"（否则这条用例什么也没测）').toBe(true)
+    // 事件晚到 300ms（真实浏览器里这就是 queue 一个 task 的延迟量级）
+    await act(async () => { vi.advanceTimersByTime(300) })
+    await act(async () => { v.dispatchEvent(new Event('pause')); await Promise.resolve() })
+    expect(host.querySelector('.vp')!.getAttribute('data-vp-state'), '仍应显示在播').toBe('playing')
+    expect(host.querySelector('.vp-bigplay'), '不该冒出大播放键').toBeNull()
+    vi.useRealTimers()
   })
 })
 

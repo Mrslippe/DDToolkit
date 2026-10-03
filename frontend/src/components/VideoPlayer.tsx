@@ -216,7 +216,7 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
   /** 转圈的最短显示时长（防闪动，见 `MIN_SPIN_MS`） */
   const spinRef = useRef({ since: 0, hideTimer: 0 })
   /** 缓冲治理的按住状态（见 `HOLD_AT` 那段注释） */
-  const holdRef = useRef({ active: false, self: false, lastAhead: -1, stuck: 0 })
+  const holdRef = useRef({ active: false, selfAt: 0, lastAhead: -1, stuck: 0 })
 
   /** `[start, end]` 里包含当前位置的那一段还剩多少秒（没缓冲到当前位置 ⇒ -1） */
   const bufferedAhead = useCallback((el: HTMLMediaElement) => {
@@ -329,7 +329,6 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
       const hold = holdRef.current
       if (!hold.active) return
       hold.active = false
-      hold.self = false
       hold.lastAhead = -1
       hold.stuck = 0
       endSpin()          // 数据够了 ⇒ 转圈按最短时长收尾（不是立刻消失，免得又闪）
@@ -366,7 +365,14 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
        ⚠️ 但**我们自己为了缓冲按的那一下不算暂停**（devlog/302）：它只是"没数据，先别跑"，
        语义上还在播 —— 否则界面会在 ▶/⏸ 之间来回闪（用户看到的"播放暂停图标来回闪动"）。 */
     const onPause = () => {
-      const ours = holdRef.current.active && holdRef.current.self
+      /**
+       * 这一次暂停是不是**我们自己按的**（为了缓冲按住）？
+       *
+       * ⚠️ 判定用"多久之前按的"（800ms 窗口），**不是**"看门狗那一拍清掉的标记"（devlog/303）：
+       * 浏览器的 `pause` 事件是异步派发的，晚到一拍以上完全可能；按拍清标记的写法一旦晚到，
+       * 我们自己的暂停就被当成用户暂停 ⇒ 界面翻成 ▶，下一拍又翻回来 ⇒ **图标闪**。
+       */
+      const ours = Date.now() - holdRef.current.selfAt < 800
       audioRef.current?.pause()
       if (ours) {
         showSpin()                     // 缓冲按住 ⇒ 界面保持"在播"，只是转圈
@@ -379,7 +385,6 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
           holdRef.current.lastAhead = -1
         }
       }
-      holdRef.current.self = false
     }
     const onPlaying = () => { endSpin(); startAudio() }
     /* 缓冲中要有转圈（用户口径：点进度条跳转后在加载，不能看起来像"暂停了"） */
@@ -388,7 +393,7 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
       // 饿着跑 = 一帧一帧 + 状态横跳 ⇒ **按住**，等缓冲够了再放（`HOLD_AT` 那段有实测依据）
       if (!el.paused && !holdRef.current.active && bufferedAhead(el) < HOLD_AT) {
         holdRef.current.active = true
-        holdRef.current.self = true
+        holdRef.current.selfAt = Date.now()      // 记下"这一下是我们按的"（窗口 800ms）
         holdRef.current.lastAhead = -1
         holdRef.current.stuck = 0
         el.pause()
@@ -445,14 +450,11 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
     el.addEventListener('progress', onProg)
     el.addEventListener('volumechange', onVolumeChange)
     /* 按住的看门狗：每 200ms 看一次"缓冲够了没"，带**死锁兜底**（暂停时浏览器不会自己继续拉缓冲）。
-       ⚠️ `hold.self` 在这里清：它表示"这一拍之内我们自己按过暂停"。浏览器的 `pause` 事件是**异步**的
-       （规范里是 queue a task），会在下一拍之前到，所以那时 `self` 还是 true ⇒ 不会被当成用户暂停；
-       而 jsdom 的 `pause()` 不派发事件（测试替身的取舍），这一拍清掉之后，**后到的** pause 事件
-       就一定是用户按的 ⇒ 取消按住。反过来写（靠事件里清 `self`）在测试替身下会漏判。 */
+       "这一下暂停是谁按的"由 `hold.selfAt` 的时间窗判定（见 `onPause`），不在这里清标记 ——
+       曾经的"按拍清标记"写法会被**晚到的** `pause` 事件骗过去（devlog/303）。 */
     const holdWatch = window.setInterval(() => {
       const hold = holdRef.current
       if (!hold.active) return
-      hold.self = false
       const ahead = bufferedAhead(el)
       if (ahead >= RESUME_AT) { releaseHold(); return }
       if (ahead > hold.lastAhead + 0.01) {
@@ -701,8 +703,11 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
           data-vp-audio="1"
           src={audioSrc}
           preload="metadata"
-          onPlay={() => setPlaying(true)}
-          onPause={() => setPlaying(false)}
+          /* ⚠️ **不要用音轨的事件去驱动界面状态**（devlog/303）。这里是 ▶/⏸ 来回闪的**真正根因**：
+             我们按设计会反复暂停/恢复音轨（缓冲按住、seek 收尾、小窗暂停都会），
+             每一次都会让音轨发 `pause`/`play` —— 而这两个处理器把它们当成"用户按了暂停/播放"
+             ⇒ 界面跟着音轨一起翻面，节奏正好和缓冲治理同步，看起来就是图标在闪。
+             **视频轨是界面状态的唯一真源**（画面才是用户看到的东西），音轨只跟着走。 */
           onTimeUpdate={() => {
             const v = videoRef.current
             const a = audioRef.current
