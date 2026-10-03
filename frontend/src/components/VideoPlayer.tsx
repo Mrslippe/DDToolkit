@@ -840,6 +840,21 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
     if (!live) settleAudio()
   }, [settleAudio, startProbe])
 
+  /**
+   * 拖拽的**最后一次落点**（0–1）与"刚刚提交过"的时刻。
+   *
+   * ⚠️ MSE 下拖拽期间**不取段**（`seekTo(ratio, live=true)` 只动界面），所以**松手必须提交**
+   * —— 而松手原来走的是 `settleAudio()`，那是双元素内核的收尾，MSE 里根本没有音轨元素，
+   * 等于什么都没发生（拖完松手画面不动）。`onClick` 只兜**没有指针事件**的环境。
+   */
+  const dragRatioRef = useRef<number | null>(null)
+  const lastCommitRef = useRef({ ratio: -1, at: 0 })
+
+  const commitDrag = useCallback((ratio: number) => {
+    lastCommitRef.current = { ratio, at: Date.now() }
+    seekTo(ratio, false)
+  }, [seekTo])
+
   const toggleFs = useCallback(() => {
     const node = wrapRef.current
     if (!node) return
@@ -1026,34 +1041,57 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
           onClick={(e) => {
             // 纯点击（没有指针事件的环境也要能用）：一次到位的 seek ⇒ 直接收尾对齐
             const r = e.currentTarget.getBoundingClientRect()
-            seekTo((e.clientX - r.left) / r.width)
+            const ratio = (e.clientX - r.left) / r.width
+            // ⚠️ 指针事件那一路已经在 `pointerup` 提交过了（同一次点击会再发一个 click）——
+            //    重复提交会把刚起的转圈/攒缓冲打断一次，所以同位置 400ms 内不重复提交
+            const last = lastCommitRef.current
+            if (Math.abs(last.ratio - ratio) < 0.01 && Date.now() - last.at < 400) return
+            seekTo(ratio)
           }}
           onPointerDown={(e) => {
             // 拖拽 seek（devlog/286）：按下即定位 + 捕获指针，拖动中持续跟随
             e.preventDefault()
-            e.currentTarget.setPointerCapture?.(e.pointerId)
+            // ⚠️ `setPointerCapture` 对**已经释放/无效的 pointerId 会抛** `NotFoundError`
+            //    （真机上偶发：快速点两下进度条）—— 捕获失败只是"拖出元素外会丢事件"，
+            //    不该把整个 seek 打断，所以吞掉。
+            try { e.currentTarget.setPointerCapture?.(e.pointerId) } catch { /* 见上 */ }
             const r = e.currentTarget.getBoundingClientRect()
+            const ratio = (e.clientX - r.left) / r.width
             setDragging(true)
             draggingRef.current = true
-            seekTo((e.clientX - r.left) / r.width, true)   // live：音轨先静默，等抬手再对齐
+            dragRatioRef.current = ratio
+            seekTo(ratio, true)              // live：MSE 只动界面；双元素则音轨先静默
           }}
           onPointerMove={(e) => {
             const r = e.currentTarget.getBoundingClientRect()
             const ratio = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width))
             // hover 预览：光标位置对应的时间（图二那颗 `00:12` 气泡）
             setHover({ x: ratio * r.width, t: ratio * (dur || 0) })
-            if (dragging) seekTo(ratio, true)      // 拖拽中：视频轨实时跟随，音轨仍静默
+            // ⚠️ 判据用 **ref**（`draggingRef`）而不是 state：同一次按下里派发的头几个
+            //    `pointermove` 看到的 `dragging` 还是 false（React 状态要等一拍）
+            //    ⇒ 那几个位置被丢掉，松手时提交的是**旧的**落点（devlog/313 的用例抓到）。
+            if (draggingRef.current) {
+              dragRatioRef.current = ratio
+              seekTo(ratio, true)
+            }
           }}
           onPointerUp={(e) => {
-            e.currentTarget.releasePointerCapture?.(e.pointerId)
+            try { e.currentTarget.releasePointerCapture?.(e.pointerId) } catch { /* 没捕获过 */ }
             setDragging(false)
             draggingRef.current = false
-            settleAudio()                          // 抬手 ⇒ 等视频轨到位后对齐音轨并复播
+            const ratio = dragRatioRef.current
+            dragRatioRef.current = null
+            // MSE：松手才**真去取那一段**（拖拽期间只动界面）；双元素：等视频轨到位后对齐音轨
+            if (mseRef.current && ratio != null) commitDrag(ratio)
+            else settleAudio()
           }}
           onPointerCancel={() => {
             setDragging(false)
             draggingRef.current = false
-            settleAudio()
+            const ratio = dragRatioRef.current
+            dragRatioRef.current = null
+            if (mseRef.current && ratio != null) commitDrag(ratio)
+            else settleAudio()
           }}
           onMouseLeave={() => setHover(null)}
         >

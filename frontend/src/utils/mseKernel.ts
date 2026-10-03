@@ -73,6 +73,26 @@ export const WANT_AHEAD = 20
 export const KEEP_BEHIND = 25
 /** 触发淘汰的缓冲总量（秒） */
 export const MAX_BUFFER = 50
+/**
+ * **跳转落地前先攒多少秒**（`devlog/313`）。
+ *
+ * 真机症状：「点击跳转后播放会变得卡顿，播放一会停下，再播一会停下，重复」。
+ * 机理：目标段一 append 就落地开播 ⇒ 手里只有**那一段**（5s）；下一个 1.5MB 还在路上
+ * （真机实测代理均速 0.5–8MB/s，最差一次 0.31MB/s ≈ 刚好一段 5 秒），于是
+ * "放 5 秒 → 饿住 → 再放 5 秒"。成熟播放器都要求"起播缓冲"（hls.js 的 startBuffer），
+ * 我们之前是"有一段就走"。
+ */
+export const SEEK_CUSHION = 10
+/** 攒不够也别让人干等：超过这么久就用手里的数据开播（宁可偶尔饿，也别一直转圈） */
+const SEEK_CUSHION_MAX_MS = 2500
+/**
+ * seek **彻底落不了地**时的收手时间（`devlog/313`）。
+ *
+ * 正常路径下不该走到这里（目标段要么拿到、要么取数失败会熔断退渐进式）。留这一条是因为
+ * "永远转圈"是用户视角里最糟的失败形态（既不能看也不能操作）—— 到点就把播放点挪过去，
+ * **浏览器自己会夹到最近的已缓冲位置**，同时记一行，别静默。
+ */
+export const SEEK_GIVEUP_MS = 10_000
 /** 泵的空转节拍：`updateend` 之外再踢一脚，免得事件丢了就永远停住 */
 const TICK_MS = 400
 const MAX_RETRY = 3
@@ -143,11 +163,20 @@ export function segmentIndexAt(table: StreamTable, time: number): number {
   return ans
 }
 
-/** `time` 之后**第一个还没开始的**段序号（= 顺序续播该取的那一段）；末尾 ⇒ 段数。 */
+/**
+ * `time` 之后**还没进缓冲**的第一段（= 顺序续播该取的那一段）；都取完了 ⇒ 段数。
+ *
+ * ⚠️ **判据是"这一段的结尾是否已经越过 time"，不是"这一段的开头是否大于 time"**
+ * （`devlog/313`，真机症状「点击跳转后播放一会停下、再播一会停下」的**根因**）：
+ * 段是**首尾相接**的，append 完第 N 段后缓冲正好结束在第 N+1 段的**开头**上
+ * ⇒ 用"开头 > time"判会**跳过第 N+1 段**，泵隔一段取一段、缓冲里每隔 5 秒一个洞
+ * ⇒ 播放到洞口就饿住、补上、再撞下一个洞（实测就是这么"走走停停"的）。
+ * 顺带：`remove()` 把某段切掉一半时（淘汰），这条判据也会正确地要求把它补回来。
+ */
 export function nextSegmentAfter(table: StreamTable, time: number): number {
   const starts = segmentStarts(table)
   for (let i = 0; i < starts.length; i += 1) {
-    if (starts[i] > time + 1e-3) return i
+    if (starts[i] + table.segments[i].dur_s > time + 1e-3) return i
   }
   return table.segments.length
 }
@@ -166,6 +195,8 @@ export interface KernelDeps {
   createMediaSource?: () => MediaSource
   createObjectURL?: (ms: MediaSource) => string
   revokeObjectURL?: (url: string) => void
+  /** seek **彻底落不了地**时的收手时间（默认 `SEEK_GIVEUP_MS`；用例用它把等待压成 0） */
+  seekGiveUpMs?: number
 }
 
 /** 默认取段：`/video-proxy` 的 Range 直通（凭据/Referer 由后端补，前端一个头都不带） */
@@ -226,6 +257,8 @@ export class MseKernel {
   private tick = 0
   /** 等数据到位再设 `currentTime` 的目标（第 2 条坑） */
   private pendingSeek: number | null = null
+  /** 这次 seek 是什么时候提的（攒缓冲别超过 `SEEK_CUSHION_MAX_MS`） */
+  private seekStartedAt = 0
   private fatal = false
   private ended = false
   private dead = false
@@ -277,6 +310,7 @@ export class MseKernel {
     const dur = this.duration()
     const t = Math.min(Math.max(0, time), dur > 0 ? dur - 0.05 : time)
     this.pendingSeek = t
+    this.seekStartedAt = Date.now()
     for (const tr of this.tracks) {
       // 目标变了 ⇒ 正在取的那一段没意义了（abort 掉，别白等一个 1.5MB）
       if (tr.inflight && tr.pending !== segmentIndexAt(tr.table, t)) this.abortInflight(tr)
@@ -474,8 +508,14 @@ export class MseKernel {
      * ⚠️ `keepFrom` 是**秒**，别拿 `init.end`（那是**字节偏移**）来比 —— 第一版就是这么写错的：
      * `Math.max(947, …)` 永远大于缓冲起点 ⇒ 淘汰一次都发生不了，长播必然撞配额。
      * init 段（`ftyp+moov`）在 MSE 里不对应任何时间区间，`remove()` 不会把它删掉，不需要保护。
+     *
+     * ⚠️ **锚点必须取"播放点"和"等着的跳转目标"里更靠前的那个**（`devlog/313`，真机症状
+     * 「点击跳转后再点击跳转到其他位置 ⇒ 一直转圈」）：seek 期间 `el.currentTime` **还是旧位置**，
+     * 拿它当锚点时"回跳"会算出 `keepFrom = 旧位置 - 25`，正好把**刚为目标取来的 [B,B+5) 删掉**
+     * ⇒ `covers(B)` 永远为假 ⇒ 泵一遍遍重取、播放点永远落不了地（用例：`回跳…不许把刚取来的段淘汰`）。
      */
-    const keepFrom = Math.max(0, this.el.currentTime - KEEP_BEHIND)
+    const anchor = this.pendingSeek ?? this.el.currentTime
+    const keepFrom = Math.max(0, Math.min(anchor, this.el.currentTime) - KEEP_BEHIND)
     if (keepFrom <= start + 1) {
       if (force) this.fail(`${tr.kind} 配额不足且没有可淘汰的区间`)
       return
@@ -578,26 +618,95 @@ export class MseKernel {
       if (tr.busy || tr.pending != null) continue
       if (!tr.initDone) { void this.append(tr, -1); continue }
       const target = seek ?? this.el.currentTime
-      const want = segmentIndexAt(tr.table, target)
-      if (!this.covers(tr, target)) {
-        // 目标位置**没有数据** ⇒ 直接补那一段（顺序续播在这时是错的：会先取一段远的）
+      /**
+       * ⚠️ **"前方有多少"必须从播放点起算连续的那一段**，不能拿"最后一段的末尾"糊弄
+       * （`devlog/313`，症状「播放一会停下、再播一会停下」的第二条根因）：
+       * 回跳之后缓冲里还留着**远处**那段（[150,170)），按最后一段算就会得出"前方还有 150 秒"
+       * ⇒ 泵整段不补数 ⇒ 播完手里那 5 秒就饿住、补一段、再饿住。旧实现就是这么"走走停停"的。
+       */
+      const ahead = this.aheadFor(tr, target)
+      if (ahead <= 0) {
+        // 目标位置**没有数据**（或正好是空洞）⇒ 直接补覆盖它的那一段（顺序续播在这时是错的）
         // ⚠️ 两条兜底，都是为了"泵**永远不许**无限转"（挂死的用例比红的用例难查得多）：
         //    ① 这条轨已到尾（音轨比视频短）⇒ 别再 append 最后一段；
         //    ② 同一段连取两次还是盖不上 ⇒ 当它到头了。
+        const want = segmentIndexAt(tr.table, target)
         if (want >= 0 && !this.tailDone(tr, target) && tr.repeat < 2) void this.append(tr, want)
         continue
       }
-      const next = this.nextIndex(tr)
+      if (ahead >= WANT_AHEAD) continue
+      const next = nextSegmentAfter(tr.table, target + ahead)
       if (next >= tr.table.segments.length) continue
-      const endsAt = this.trackSpan(tr)?.end ?? 0
-      if (endsAt - target >= WANT_AHEAD) continue
-      void this.append(tr, next)
+      // ⚠️ 同一条兜底也要落在**这条**分支上（`devlog/313`）：判据一旦退化成"永远差一点"，
+      //    这里就会无限取同一段（真机上表现为内存与请求一起飞 —— 实测把测试进程 OOM 掉了）。
+      if (tr.repeat < 2) void this.append(tr, next)
     }
-    if (seek != null && this.seekReady(seek)) {
+    if (seek != null) {
+      const waited = Date.now() - this.seekStartedAt
+      const ready = this.seekReady(seek)
+      const giveUp = this.deps.seekGiveUpMs ?? SEEK_GIVEUP_MS
+      // 到点还没到位 ⇒ 收手（把播放点挪过去，浏览器会夹到最近的已缓冲位置）
+      if (!ready && waited < giveUp) return
+      if (!ready) {
+        this.deps.log?.(`[media] 跳转 ${seek.toFixed(1)}s 等了 ${(waited / 1000).toFixed(0)}s 仍无数据`
+                        + ' —— 先把播放点挪过去（别让界面一直转圈）')
+      } else {
+        /**
+         * **攒够再落地**（`SEEK_CUSHION`）：只有目标那一段（5s）就走，接下来必然是
+         * "放 5 秒停 3 秒"的循环。攒不够也**不能无限等**（真机网络最差时一段要 4.8 秒），
+         * 所以有 `SEEK_CUSHION_MAX_MS` 的上限，超时就用手里有的开播。
+         */
+        const ahead = this.aheadAt(seek)
+        // 两条**不用再等**的例外：① 两条轨的段都取完了（后面永远不会有数据，尾部就是这种情况）；
+        // ② 超时。
+        const exhausted = this.tracks.every(
+          (tr) => tr.initDone && this.nextIndex(tr) >= tr.table.segments.length)
+        if (ahead < SEEK_CUSHION && !exhausted && waited < SEEK_CUSHION_MAX_MS) return
+        if (ahead < SEEK_CUSHION && !exhausted) {
+          this.deps.log?.(`[media] 跳转 ${seek.toFixed(1)}s：等了 ${(waited / 1000).toFixed(1)}s `
+                          + `只有 ${ahead.toFixed(1)}s 缓冲（取数跟不上实时码率）`)
+        }
+      }
       this.pendingSeek = null
       this.el.currentTime = seek
       this.deps.onSeekApplied?.(seek)
       this.report()
     }
+  }
+
+  /**
+   * **单条轨**从 `t` 起**连续**可用的秒数（`t` 不在任何区间里 ⇒ 0）。
+   *
+   * ⚠️ 这是"前面还有多少能播"的**唯一正确算法**：`trackSpan().end - t` 会被远处的区间骗
+   * （回跳后缓冲里同时有 [20,25) 和 [150,170) ⇒ 那个算法说"前方 150 秒"，实际只有 5 秒）。
+   */
+  private aheadFor(tr: Track, t: number): number {
+    const b = tr.sb?.buffered
+    if (!b || !b.length) return 0
+    try {
+      for (let i = 0; i < b.length; i += 1) {
+        if (b.start(i) - 0.05 <= t && t <= b.end(i) + 0.05) {
+          return Math.max(0, b.end(i) - t)
+        }
+      }
+    } catch {
+      return 0
+    }
+    return 0
+  }
+
+  /**
+   * 目标时刻之后**两条轨都可用**的缓冲秒数（取小的那个；某条轨还没盖上 ⇒ 0）。
+   *
+   * ⚠️ 这里必须看**每条轨自己**的区间：元素级 `buffered` 是交集，而"我刚取来的那段在不在"
+   * 是单轨的事实（`devlog/312` 的 `trackSpan` 同理）。
+   */
+  private aheadAt(t: number): number {
+    let min = Number.POSITIVE_INFINITY
+    for (const tr of this.tracks) {
+      if (this.tailDone(tr, t)) continue          // 这条轨到头了：不拖后腿
+      min = Math.min(min, this.aheadFor(tr, t))
+    }
+    return Number.isFinite(min) ? min : SEEK_CUSHION
   }
 }

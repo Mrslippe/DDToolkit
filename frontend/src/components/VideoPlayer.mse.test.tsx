@@ -61,6 +61,18 @@ class FakeSourceBuffer {
   }
   addEventListener(t: string, fn: () => void) { (this.listeners[t] ??= []).push(fn) }
   private emit(t: string) { for (const fn of this.listeners[t] ?? []) fn() }
+  /** 加一段并**归一化区间**：真 `TimeRanges` 永远是最大的连续区间（相邻会合并） */
+  private addRange(s: number, e: number) {
+    this.ranges.push([s, e])
+    this.ranges.sort((a, b) => a[0] - b[0])
+    const merged: [number, number][] = []
+    for (const [a, b] of this.ranges) {
+      const last = merged[merged.length - 1]
+      if (last && a <= last[1] + 1e-6) last[1] = Math.max(last[1], b)
+      else merged.push([a, b])
+    }
+    this.ranges.splice(0, this.ranges.length, ...merged)
+  }
   appendBuffer(buf: ArrayBuffer) {
     if (this.updating) throw new DOMException('busy', 'InvalidStateError')
     this.updating = true
@@ -69,7 +81,7 @@ class FakeSourceBuffer {
     const e = dv.getFloat64(8)
     queueMicrotask(() => {
       this.updating = false
-      if (e > s) this.ranges.push([s, e])
+      if (e > s) this.addRange(s, e)
       this.emit('updateend')
     })
   }
@@ -78,9 +90,9 @@ class FakeSourceBuffer {
     this.updating = true
     queueMicrotask(() => {
       this.updating = false
-      this.ranges.splice(0, this.ranges.length,
-        ...this.ranges.map(([s, e]) => [Math.max(s, end), e] as [number, number])
-          .filter(([s, e]) => e > s))
+      const kept = this.ranges.map(([s, e]) => [Math.max(s, end), e] as [number, number])
+        .filter(([s, e]) => e > s)
+      this.ranges.splice(0, this.ranges.length, ...kept)
       this.emit('updateend')
     })
   }
@@ -288,5 +300,31 @@ describe('VideoPlayer · MSE 内核（默认内核）', () => {
     })
     expect(v.currentTime, '位置要承接（同一份媒体、同一条时间轴）').toBeCloseTo(12, 0)
     play.mockRestore()
+  })
+
+  it('**拖拽松手要提交跳转**（MSE 下拖拽期间只动界面，松手走 settleAudio = 什么都没发生）', async () => {
+    const { calls } = stubFetch()
+    await act(async () => {
+      root.render(<VideoPlayer video={{ url: DASH.video }} dash={DASH} segments={streams()} />)
+      await flush(30)
+    })
+    const v = host.querySelector('video') as HTMLVideoElement
+    const bar = host.querySelector<HTMLDivElement>('.vp-progress')!
+    bar.getBoundingClientRect = () => ({ left: 0, width: 100, top: 0, height: 16,
+      right: 100, bottom: 16, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+
+    calls.length = 0
+    const ev = (type: string, x: number) =>
+      bar.dispatchEvent(new MouseEvent(type, { bubbles: true, clientX: x }))
+    await act(async () => {
+      ev('pointerdown', 20)
+      ev('pointermove', 60)
+      ev('pointermove', 80)
+      ev('pointerup', 80)          // 松手 ⇒ 这才真去取目标段
+      await flush(40)
+    })
+    const want = `bytes=${SEG0 + 6 * SEG_BYTES}-${SEG0 + 7 * SEG_BYTES - 1}`
+    expect(calls.map((c) => c.range), `松手该取 80% 那一段（${want}）`).toContain(want)
+    expect(v.currentTime, '松手不提交 = 拖完画面不动').toBeCloseTo(32, 1)
   })
 })

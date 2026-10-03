@@ -103,9 +103,28 @@ class FakeSourceBuffer {
     const [s, e] = decodeRange(buf)
     queueMicrotask(() => {
       this.updating = false
-      if (e > s) this.ranges.push([s, e - this.seg])
+      if (e > s) this.addRange(s, e - this.seg)
       this.emit('updateend')
     })
+  }
+
+  /**
+   * 加一段缓冲并**归一化区间**。
+   *
+   * ⚠️ 真 `TimeRanges` 永远是"最大的连续区间"（相邻/重叠会合并）—— 假实现不合并的话，
+   * "目标之后还有多少秒可用"这类判据会算小（实测把 [0,5)+[5,10)+… 读成"只有 4 秒"），
+   * 于是用例报的是**夹具的错**（`devlog/313` 踩过）。
+   */
+  private addRange(s: number, e: number) {
+    this.ranges.push([s, e])
+    this.ranges.sort((a, b) => a[0] - b[0])
+    const merged: [number, number][] = []
+    for (const [a, b] of this.ranges) {
+      const last = merged[merged.length - 1]
+      if (last && a <= last[1] + 1e-6) last[1] = Math.max(last[1], b)
+      else merged.push([a, b])
+    }
+    this.ranges.splice(0, this.ranges.length, ...merged)
   }
 
   remove(start: number, end: number) {
@@ -116,9 +135,9 @@ class FakeSourceBuffer {
     this.log.push(`remove:${start.toFixed(1)}-${end.toFixed(1)}`)
     queueMicrotask(() => {
       this.updating = false
-      this.ranges.splice(0, this.ranges.length,
-        ...this.ranges.map(([s, e]) => [Math.max(s, end), e] as [number, number])
-          .filter(([s, e]) => e > s))
+      const kept = this.ranges.map(([s, e]) => [Math.max(s, end), e] as [number, number])
+        .filter(([s, e]) => e > s)
+      this.ranges.splice(0, this.ranges.length, ...kept)
       this.emit('updateend')
     })
   }
@@ -196,7 +215,7 @@ function fetcher(seg = 0, failFor: (url: string, r: SegmentRange) => boolean = (
   const fn = vi.fn(async (url: string, range: SegmentRange) => {
     calls.push({ url, range })
     if (failFor(url, range)) throw new Error('boom')
-    if (range.start === 0) return encodeRange(0, 1)          // init：占 [0,1) 那一小段
+    if (range.start === 0) return encodeRange(0, 0)          // init：**不产生缓冲区间**（真 MSE 就是这样）
     const i = Math.floor((range.start - SEG0_START) / SEG_BYTES)
     const t = i * SEG_DUR
     return encodeRange(t, t + SEG_DUR + seg)
@@ -252,11 +271,14 @@ describe('mseKernel · 纯函数', () => {
     expect(segmentIndexAt({ ...t, segments: [] }, 3)).toBe(-1)
   })
 
-  it('"这一段之后该取哪一段"：正好在段边界上不能重复取', () => {
+  it('"这一段之后该取哪一段"：判据是"这一段的**结尾**越过 time 了没有"', () => {
     const t = table('video')
-    expect(nextSegmentAfter(t, 0)).toBe(1)
-    expect(nextSegmentAfter(t, 5)).toBe(2)
-    expect(nextSegmentAfter(t, 4.9)).toBe(1)
+    // 空缓冲（time=0）⇒ 该取第 1 段
+    expect(nextSegmentAfter(t, 0)).toBe(0)
+    // ⚠️ 缓冲正好到 5.0（= 第 2 段的**开头**）⇒ 该取**第 2 段**，不是第 3 段。
+    //    差这一格 = 泵隔一段取一段 ⇒ 缓冲里每隔 5 秒一个洞 ⇒ 真机"播放一会停下、再播一会停下"。
+    expect(nextSegmentAfter(t, 5)).toBe(1)
+    expect(nextSegmentAfter(t, 4.9)).toBe(0)
     expect(nextSegmentAfter(t, 1e6)).toBe(SEG_COUNT)   // 取完了 ⇒ 段数
   })
 
@@ -286,9 +308,15 @@ describe('mseKernel · 起播与泵', () => {
     expect(f.calls.length).toBeGreaterThanOrEqual(4)
   })
 
-  it('泵把前方缓冲填到目标（WANT_AHEAD），且不会超出去太远', async () => {
+  it('泵把前方缓冲填到目标（WANT_AHEAD），且**中间不许有洞**', async () => {
     const { kernel, el, ms } = await boot()
     const videoBuf = ms.buffers[0]
+    // ⚠️ **连续性**才是这条用例的重点（`devlog/313`）：旧断言只看"最后一段够远"，
+    //    而泵隔一段取一段时缓冲里全是洞（[0,5][10,15][20,25]…）它照样绿 ——
+    //    真机上那就是"播放一会停下、再播一会停下"。
+    expect(videoBuf.ranges.length, `缓冲被切成了 ${videoBuf.ranges.length} 段（有洞）：`
+           + JSON.stringify(videoBuf.ranges)).toBe(1)
+    expect(videoBuf.ranges[0][0]).toBe(0)
     const end = videoBuf.ranges[videoBuf.ranges.length - 1][1]
     expect(end).toBeGreaterThanOrEqual(WANT_AHEAD)
     expect(end).toBeLessThanOrEqual(WANT_AHEAD + SEG_DUR * 2)
@@ -328,6 +356,9 @@ describe('mseKernel · seek（先取段，再设时间）', () => {
   it('已经缓冲过的地方 ⇒ 同步落地（不重取那一段）', async () => {    const { kernel, el, f, onSeekApplied } = await boot()
     const n = f.calls.length
     kernel.seekTo(6)
+    // eslint-disable-next-line no-console
+    console.log('DBG6 cur=', el.currentTime, 'ahead=', kernel.bufferedAhead(),
+                'applied=', JSON.stringify(onSeekApplied.mock.calls))
     expect(el.currentTime).toBeCloseTo(6, 1)
     expect(onSeekApplied).toHaveBeenCalledWith(6)
     // 落点在第 2 段（5–10s），它**已经在缓冲里** ⇒ 不该再取一次。
@@ -346,6 +377,21 @@ describe('mseKernel · seek（先取段，再设时间）', () => {
     expect(el.currentTime).toBeCloseTo(20, 1)
   })
 
+  it('**播放点往前走之后泵要接着补**（别让前方掉到 0 —— 那就是"走一段停一段"）', async () => {
+    // 真机症状 1 的收口判据：跳转落地只是一半，**播着播着还能不能续上**是另一半。
+    const { kernel, el } = await boot({ streams: makeStreams(40) })
+    kernel.seekTo(60)
+    await flush(30)
+    expect(el.currentTime).toBeCloseTo(60, 0)
+    expect(kernel.bufferedAhead()).toBeGreaterThan(0)
+
+    el.currentTime = 72                        // 模拟已经播了 12 秒（远超手里那一段）
+    await new Promise((r) => setTimeout(r, 450))   // 等那一拍 400ms 的泵
+    await flush(30)
+    expect(kernel.bufferedAhead(),
+           '播放点前进后前方还是空的 ⇒ 真机上就是"播一会停下、再播一会停下"').toBeGreaterThan(5)
+  })
+
   it('音轨比视频短（两条流时长能差零点几秒）⇒ 跳到视频尾部也要落地，**不能死循环 append**', async () => {
     // 视频 8 段（40s）、音轨 6 段（30s）：跳到 35s 时音轨永远"盖不到"这个位置
     const streams = { ...makeStreams(SEG_COUNT), audio: table('audio', 6),
@@ -359,6 +405,48 @@ describe('mseKernel · seek（先取段，再设时间）', () => {
     // 死循环的症状就是请求数爆掉（一遍遍 append 音轨最后一段）
     expect(f.calls.length - before, `取数次数爆了：${f.calls.length - before}`)
       .toBeLessThan(SEG_COUNT * 2)
+  })
+
+  it('**回跳**（第二次 seek）不许把"刚为目标取来的段"淘汰掉 —— 否则永远转圈', async () => {
+    // 真机报的第二个症状：「点击跳转后再点击跳转到其他位置，播放就卡住了，一直在转圈缓冲」。
+    // 机理：淘汰算的是 `currentTime - KEEP_BEHIND`，而 seek 期间 `currentTime` **还是旧位置**
+    // ⇒ 回跳时"保留窗口"落在旧位置附近，**把刚为目标取的 [B,B+5) 一起删掉** ⇒ covers 永远为假
+    // ⇒ 泵一遍遍重取、播放点永远落不了地。
+    const { kernel, el, f, onSeekApplied } = await boot({ streams: makeStreams(40) })
+    kernel.seekTo(150)                       // 先跳到很后面（缓冲跨过 MAX_BUFFER）
+    await flush(40)
+    expect(el.currentTime).toBeCloseTo(150, 0)
+
+    f.calls.length = 0
+    kernel.seekTo(20)                        // 再回跳
+    await flush(60)
+    expect(onSeekApplied, '回跳也必须落地').toHaveBeenLastCalledWith(20)
+    expect(el.currentTime, '一直转圈的判据就是它没落地').toBeCloseTo(20, 0)
+    expect(kernel.bufferedAhead(), '回跳之后前方要有数据').toBeGreaterThan(0)
+    expect(f.calls.length, `反复取同几段 = 已经被删了又取：${f.calls.length}`).toBeLessThan(40)
+  })
+
+  it('seek 彻底落不了地（数据一直不来）⇒ **到点收手**，别让界面永远转圈', async () => {
+    // 正常路径走不到这里（取数**失败**会熔断退渐进式；这里模拟的是"取数一直不回来"）。
+    // 留这条是因为"永远转圈"是用户视角里最糟的失败形态 —— 到点把播放点挪过去
+    // （浏览器会夹到最近的已缓冲位置）并记一行，至少还能操作。
+    const ms = new FakeMediaSource(0)
+    const el = fakeEl(ms.buffers)
+    const onSeekApplied = vi.fn()
+    const kernel = new MseKernel(el as unknown as HTMLVideoElement, {
+      createMediaSource: () => ms as unknown as MediaSource,
+      createObjectURL: () => 'blob:test',
+      revokeObjectURL: () => { /* 忽略 */ },
+      // ⚠️ **永不 resolve 也不理会 abort**：这正是"界面一直转圈"的那种卡
+      fetchRange: vi.fn(() => new Promise<ArrayBuffer>(() => { /* 挂着 */ })),
+      onSeekApplied,
+      seekGiveUpMs: 0,                            // 把 10 秒压成 0（用例不真等）
+    })
+    kernel.load(STREAMS)
+    await flush(10)
+    kernel.seekTo(30)
+    await flush(20)
+    expect(onSeekApplied, '到点还不收手 ⇒ 用户永远看着转圈').toHaveBeenCalledWith(30)
   })
 })
 
