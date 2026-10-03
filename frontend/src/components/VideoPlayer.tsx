@@ -89,6 +89,27 @@ interface Props {
   loading?: boolean
 }
 
+/**
+ * 音画漂移该做什么（纯函数，便于直接测三态）。
+ *
+ * 为什么需要分级（`devlog/298` 量出来的）：DASH 的两条流是**两个独立媒体管线**，
+ * 而视频轨那条**没有音轨**（B站把音频分出去了）⇒ 它的时钟是"墙上时间"估的，
+ * 与音轨（跟声卡时钟走）**速率略有差异**。实测 19 秒里就漂到 **0.28s**（音轨超前）。
+ *
+ * - `> 0.6s`：直接对齐（**会听到一次跳**，但那么大的偏差本来就是故障态）；
+ * - `0.05~0.6s`：**改一点点速率慢慢追**（±3%，约 1 秒追 30ms，人耳听不出，也不会"咔"一下）；
+ * - `< 0.05s`：别动，恢复用户设定的倍速。
+ *
+ * ⚠️ 阈值是量出来的、不是拍的：实测 19 秒漂 0.28s，而**旧实现只有"超 0.3s 就跳"**一档 ——
+ * 0.28s 这种"已经能感觉出来"的量级被放过去了，而且每次修都是"跳一下"。
+ */
+export function driftAction(drift: number, rate: number): { snap: boolean; rate: number } {
+  const abs = Math.abs(drift)
+  if (abs > 0.6) return { snap: true, rate }
+  if (abs > 0.05) return { snap: false, rate: rate * (drift > 0 ? 0.97 : 1.03) }
+  return { snap: false, rate }
+}
+
 function fmt(t: number): string {
   if (!Number.isFinite(t) || t < 0) t = 0
   const m = Math.floor(t / 60)
@@ -151,17 +172,26 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
     if (el) applyPlayerPrefs(el)
   }, [prefs, src, isDash])
 
-  /** DASH：音轨与视频轨的**漂移纠正**（两条独立流，浏览器不会自动对齐） */
+  /**
+   * DASH：音轨与视频轨的**漂移纠正**（两条独立流，浏览器不会自动对齐）。
+   *
+   * 实测（`devlog/298`）：19 秒漂到 **0.28s**（音轨超前）—— 视频轨那条没有音轨、时钟是墙上时间
+   * 估的，与跟声卡走的音轨有约 1.5% 的速率差。原来只有"超 0.3s 就直接对齐"一档，
+   * 于是 0.28s 这种"已经能感觉出来"的量级反而被放过去了；而且每次都靠"跳一下"来修。
+   * 现在按 `driftAction` 分级：小漂移用**改速率慢慢追**（听不出来），大漂移才跳。
+   */
   useEffect(() => {
     if (!isDash) return
     const id = window.setInterval(() => {
       const v = videoRef.current
       const a = audioRef.current
       if (!v || !a || a.paused || !Number.isFinite(a.currentTime)) return
-      if (Math.abs(a.currentTime - v.currentTime) > 0.3) a.currentTime = v.currentTime
-    }, 2000)
+      const { snap, rate } = driftAction(a.currentTime - v.currentTime, prefs.rate)
+      if (snap) a.currentTime = v.currentTime
+      a.playbackRate = rate
+    }, 1000)
     return () => window.clearInterval(id)
-  }, [isDash])
+  }, [isDash, prefs.rate])
 
   useEffect(() => {
     const el = videoRef.current
@@ -222,18 +252,30 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
   /**
    * 起播（`toggle` 与 `autoPlay` 共用一份，别写两遍 —— 两处漂移就会出现"点了能响、自动播不响"）。
    *
-   * DASH 档的两条流必须**成对**：音轨被自动播放策略拒绝时把视频轨也停住
-   * （静音画面比"没反应"更糟：用户会当成坏了）。
+   * ## 音轨要**等视频轨出画**才起（devlog/298）
+   *
+   * 用户口径：「第一次点击播放的时候音轨会提前一点然后同步，导致开头一小段重复一点」。
+   * 机理：两条流是**两个独立媒体管线** —— 音轨几乎瞬间就能出声，而视频轨要先缓冲出第一帧；
+   * 两条一起 `play()` 时，声音先跑出去几十毫秒到一秒，等 2s 一次的漂移纠正把它拽回来，
+   * 那一小段就被**听了两遍**。
+   *
+   * 所以：`play()` 视频轨 → 等它的 `playing`（真的开始出画）→ 这时才对齐并启动音轨。
+   * 已经出画的情况（暂停后复播、seek 后复播）直接起。
+   * ⚠️ 视频轨被自动播放策略拒绝时不会来 `playing`，音轨也就不会出声 —— 正确：
+   * 画面都没起来，声音不该单独跑。
    */
   const startPlayback = useCallback(() => {
     const el = videoRef.current
     if (!el) return
-    const a = audioRef.current
     void el.play().catch(() => { /* 自动播放策略拒绝：保持暂停，让用户再点一下 */ })
-    if (a) {
+    const a = audioRef.current
+    if (!a) return
+    const beginAudio = () => {
       a.currentTime = el.currentTime
-      void a.play().catch(() => { el.pause() })
+      void a.play().catch(() => { el.pause() })   // 音轨起不来 ⇒ 视频轨也停（不留静音画面）
     }
+    if (!el.paused && el.readyState >= 2) beginAudio()
+    else el.addEventListener('playing', beginAudio, { once: true })
   }, [])
 
   const toggle = useCallback(() => {

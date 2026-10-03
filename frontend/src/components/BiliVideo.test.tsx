@@ -85,9 +85,14 @@ describe('BiliVideo', () => {
       host.querySelector<HTMLButtonElement>('.vp-bigplay')!.click()
       await Promise.resolve()
     })
-    const tags = play.mock.contexts.map((el) => (el as HTMLMediaElement).tagName)
-    expect(tags, '视频轨要起播').toContain('VIDEO')
-    expect(tags, 'DASH 档的音轨也要一起起播').toContain('AUDIO')
+    const tags = () => play.mock.contexts.map((el) => (el as HTMLMediaElement).tagName)
+    expect(tags(), '视频轨要起播').toContain('VIDEO')
+    expect(tags(), '出画前音轨先不出声（否则开头会听两遍，devlog/298）').not.toContain('AUDIO')
+
+    const v = host.querySelector('video')!
+    Object.defineProperty(v, 'readyState', { value: 2, configurable: true })
+    await act(async () => { v.dispatchEvent(new Event('playing')); await Promise.resolve() })
+    expect(tags(), '视频轨出画后 DASH 音轨跟上').toContain('AUDIO')
     play.mockRestore()
   })
 

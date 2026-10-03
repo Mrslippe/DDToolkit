@@ -11,7 +11,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import VideoPlayer from './VideoPlayer'
+import VideoPlayer, { driftAction } from './VideoPlayer'
 import { resetPlayerPrefs } from '../utils/playerPrefs'
 
 vi.mock('../utils/shellBridge', () => ({ openExternal: () => Promise.resolve() }))
@@ -165,14 +165,32 @@ describe('VideoPlayer · 清晰度菜单', () => {
 })
 
 describe('VideoPlayer · 自动起播与底栏排布（devlog/295）', () => {
-  it('`autoPlay` ⇒ 地址就绪即播（"只出界面不播"是用户否掉的那一版）', () => {
+  it('`autoPlay` ⇒ 地址就绪即播（"只出界面不播"是用户否掉的那一版）', async () => {
     const play = vi.spyOn(HTMLMediaElement.prototype, 'play')
     act(() => root.render(<VideoPlayer video={{ url: DASH.video }} dash={DASH} autoPlay />))
-    expect(play, '挂载后应立刻起播').toHaveBeenCalled()
-    // DASH 档：两条流**一起**起（只响画面没声音，比"没反应"更糟）
-    const tags = play.mock.contexts.map((el) => (el as HTMLMediaElement).tagName)
-    expect(tags).toContain('VIDEO')
-    expect(tags).toContain('AUDIO')
+    const tags = (m: typeof play) => m.mock.contexts.map((el) => (el as HTMLMediaElement).tagName)
+    expect(play, '挂载后视频轨应立刻起播').toHaveBeenCalled()
+    expect(tags(play)).toContain('VIDEO')
+    // ⚠️ 音轨**不跟着立刻起**：它瞬间就能出声、视频轨还要缓冲 ⇒ 先出声就会"开头听两遍"
+    //（devlog/298）。要等视频轨的 `playing`（真的出画）。
+    expect(tags(play), '出画之前音轨不许出声').not.toContain('AUDIO')
+
+    const v = host.querySelector('video')!
+    Object.defineProperty(v, 'readyState', { value: 2, configurable: true })
+    await act(async () => { v.dispatchEvent(new Event('playing')); await Promise.resolve() })
+    expect(tags(play), '视频轨出画后音轨立刻跟上').toContain('AUDIO')
+    play.mockRestore()
+  })
+
+  it('音轨起播时**对齐到视频轨当前时刻**（不是从 0 开始）', async () => {
+    const play = vi.spyOn(HTMLMediaElement.prototype, 'play')
+    act(() => root.render(<VideoPlayer video={{ url: DASH.video }} dash={DASH} autoPlay />))
+    const v = host.querySelector('video') as HTMLVideoElement
+    const a = host.querySelector('audio') as HTMLAudioElement
+    Object.defineProperty(v, 'currentTime', { value: 3.5, writable: true, configurable: true })
+    Object.defineProperty(v, 'readyState', { value: 2, configurable: true })
+    await act(async () => { v.dispatchEvent(new Event('playing')); await Promise.resolve() })
+    expect(a.currentTime, '视频轨已经跑到 3.5s ⇒ 音轨必须从 3.5s 起').toBeCloseTo(3.5, 2)
     play.mockRestore()
   })
 
@@ -193,6 +211,13 @@ describe('VideoPlayer · 自动起播与底栏排布（devlog/295）', () => {
       })
     await act(async () => {
       root.render(<VideoPlayer video={{ url: DASH.video }} dash={DASH} autoPlay />)
+      await Promise.resolve()
+    })
+    // 音轨要等视频轨出画才起（devlog/298）⇒ 先让它 `playing`
+    const v = host.querySelector('video')!
+    Object.defineProperty(v, 'readyState', { value: 2, configurable: true })
+    await act(async () => {
+      v.dispatchEvent(new Event('playing'))
       await Promise.resolve()
       await Promise.resolve()
     })
@@ -225,8 +250,7 @@ describe('VideoPlayer · 自动起播与底栏排布（devlog/295）', () => {
   })
 })
 
-describe('VideoPlayer · seek 时音轨不许抢跑（devlog/297）', () => {
-  /** 铺一块 100px 宽、时长 100s 的进度条，并把视频轨钉在"正在 seek"的状态。 */
+describe('VideoPlayer · seek 时音轨不许抢跑（devlog/297）', () => {  /** 铺一块 100px 宽、时长 100s 的进度条，并把视频轨钉在"正在 seek"的状态。 */
   async function mountAndSeekAt(ratio: number, opts: { seeking: boolean; playing: boolean }) {
     act(() => root.render(<VideoPlayer video={{ url: DASH.video }} dash={DASH} />))
     const v = host.querySelector('video') as HTMLVideoElement
@@ -303,6 +327,37 @@ describe('VideoPlayer · seek 时音轨不许抢跑（devlog/297）', () => {
     const { a } = await mountAndSeekAt(40, { seeking: true, playing: true })
     await act(async () => { vi.advanceTimersByTime(1600) })
     expect(a.currentTime, '兜底路径也要对齐').toBeCloseTo(40, 1)
+    vi.useRealTimers()
+  })
+})
+
+describe('VideoPlayer · 音画漂移分级纠正（devlog/298）', () => {
+  it('`driftAction`：小漂移改速率慢慢追、大漂移才跳、稳定时恢复倍速', () => {
+    // 实测 19s 漂 0.28s：旧逻辑（>0.3 才动）刚好放过它 ⇒ 现在 0.28 会走"改速率"
+    expect(driftAction(0.28, 1)).toEqual({ snap: false, rate: 1 * 0.97 })
+    expect(driftAction(-0.28, 1)).toEqual({ snap: false, rate: 1 * 1.03 })
+    expect(driftAction(0.8, 1)).toEqual({ snap: true, rate: 1 })
+    expect(driftAction(-0.8, 1.5)).toEqual({ snap: true, rate: 1.5 })
+    expect(driftAction(0.02, 1.25)).toEqual({ snap: false, rate: 1.25 })
+    // 音轨超前（drift>0）⇒ 让音轨慢一点；落后 ⇒ 快一点（方向别写反）
+    expect(driftAction(0.1, 1).rate).toBeLessThan(1)
+    expect(driftAction(-0.1, 1).rate).toBeGreaterThan(1)
+  })
+
+  it('每秒跑一次纠正：中档漂移时把音轨速率调偏，稳定后恢复用户倍速', async () => {
+    vi.useFakeTimers()
+    act(() => root.render(<VideoPlayer video={{ url: DASH.video }} dash={DASH} />))
+    const v = host.querySelector('video') as HTMLVideoElement
+    const a = host.querySelector('audio') as HTMLAudioElement
+    Object.defineProperty(v, 'currentTime', { value: 10, writable: true, configurable: true })
+    Object.defineProperty(a, 'currentTime', { value: 10.2, writable: true, configurable: true })
+    Object.defineProperty(a, 'paused', { value: false, configurable: true })   // 正在播才纠正
+    await act(async () => { vi.advanceTimersByTime(1100) })
+    expect(a.playbackRate, '音轨超前 0.2s ⇒ 让它慢一点追').toBeLessThan(1)
+
+    Object.defineProperty(a, 'currentTime', { value: 10.01, writable: true, configurable: true })
+    await act(async () => { vi.advanceTimersByTime(1100) })
+    expect(a.playbackRate, '已经齐了 ⇒ 回到用户倍速').toBe(1)
     vi.useRealTimers()
   })
 })
