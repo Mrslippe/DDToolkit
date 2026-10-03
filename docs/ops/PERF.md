@@ -105,9 +105,9 @@ retire-when: 实测脚本换掉，或性能不再是关注点
 
 | 门禁 | 命令 | 当前基线（括号里 = 该值实测日） |
 |---|---|---|
-| 后端 | `python -m pytest -q`（**解释器走 `.venv`**，见 `docs/ops/RELEASE.md 不变量 24） | **1042 passed**（2026-10-02 实测；995 → 1031 = 场次弹幕 11 条（`devlog/275`）+ live_status 三态与小红书 7 条（`276`–`278`）+ 笔记详情 2 条（`280`）+ 视频解析与视频代理 13 条（`281`）+ 链接令牌 1 条（`282`）。⚠️ 那条**打真上游**的用例（`test_danmaku_words.py`）网络不通时会 **skip** —— 别把"0 skip"当基线。⚠️ 用**系统 Python**（非 `.venv`）跑会多一条 `xhshow` 缺失的失败 —— 那是本机环境差异，不是回归 |
+| 后端 | `python -m pytest -q`（**解释器走 `.venv`**，见 `docs/ops/RELEASE.md 不变量 24） | **1053 passed**（2026-10-03 实测；995 → 1031 = 场次弹幕 11 条（`devlog/275`）+ live_status 三态与小红书 7 条（`276`–`278`）+ 笔记详情 2 条（`280`）+ 视频解析与视频代理 13 条（`281`）+ 链接令牌 1 条（`282`）；1031 → 1042 = B站取流 8 条 + 代理主机策略 3 条（`289`）；1042 → 1048 = 微博视频映射 4 条 + 代理策略补测 2 条（`291`）；1048 → 1054 = 取流路由接线 5 条 + 媒体端点裸请求 1 条（`292`）。⚠️ 那条**打真上游**的用例（`test_danmaku_words.py`）网络不通时会 **skip**（2026-10-03 那次复核就 skip 了 1 条）—— 别把"0 skip"当基线。⚠️ 用**系统 Python**（非 `.venv`）跑会多一条 `xhshow` 缺失的失败 —— 那是本机环境差异，不是回归 |
 | 桌面壳 | `cargo test`（工作目录 `frontend/src-tauri`） | **61 passed**（2026-10-02 实测；60 → 61 是 `resolve_dev_python` 的".venv 优先 / 回退 python"两条断言，见 `devlog/276`。另含 `delete_old_dir` 的真实 junction 用例、S1 的 token 生成用例、S3 的准入表/白名单用例与**迁移编排四条回滚路径**） |
-| 前端单测 | `npm --prefix frontend run test` | **781 passed / 64 文件**（2026-10-02 复核；751 → 776 = 弹幕段文案、live_status 三态、外链守卫与问题报告、视频块（`devlog/275`–`281`）。⚠️ 2026-10-01 整窗退役时少了 3 个文件 / 若干条：小窗那两份单测随功能删除，见 `devlog/270`） |
+| 前端单测 | `npm --prefix frontend run test` | **790 passed / 64 文件**（2026-10-03 实测；751 → 776 = 弹幕段文案、live_status 三态、外链守卫与问题报告、视频块（`devlog/275`–`281`）；776 → 790 = 自绘播放器与拖拽 seek、B站双元素 DASH 与清晰度菜单、过期重取闸门（`283`–`293`）。⚠️ 2026-10-01 整窗退役时少了 3 个文件 / 若干条：小窗那两份单测随功能删除，见 `devlog/270`） |
 | 前端类型 / lint | `npx tsc --noEmit`（**必须在 `frontend/` 里跑**）/ `npm --prefix frontend run lint` | 0 错 / 0 错（2026-10-01 复核） |
 | 文档漂移 | `python scripts/doc_check.py` | **0 FAIL**（2026-10-01 复核；另有 1 条历史 devlog 索引欠账 WARN，WARN 看脚本逐条输出） |
 | 上游冒烟 | `python scripts/smoke_upstream.py [--cold]` | 真上游 **5 ok** / 冷进程 **3 ok**，0 FAIL（2026-09-23 复核） |
