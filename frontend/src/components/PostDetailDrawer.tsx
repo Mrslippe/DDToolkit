@@ -285,8 +285,7 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
                          permalink={shown.permalink} />
           ) : shown.platform === 'bilibili' && body.bvid ? (
             <BiliVideo postId={shown.id} poster={shown.cover_url}
-                       permalink={shown.permalink}
-                       title={postDisplayTitle(shown)} />
+                       permalink={shown.permalink} />
           ) : shown.cover_url && (
             <button type="button" className="block w-full cursor-zoom-in"
               onClick={() => setViewer({ list: coverList, index: 0 })}>

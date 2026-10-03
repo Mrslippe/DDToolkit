@@ -60,6 +60,9 @@ describe('BiliVideo', () => {
 
     expect(biliPlay, '挂载即取流 ⇒ 地址会在用户真正点播前就过期').not.toHaveBeenCalled()
     expect(host.querySelector('.vp-bigplay')).toBeTruthy()
+    // 封面下方那一条标题带**已删**（用户 2026-10-03：标题在详情页顶上已经有了）——
+    // 它当时还是块黑边，盖在封面下沿像一条多余的分隔
+    expect(host.querySelector('.bili-lazy-title'), '标题带不该再出现').toBeNull()
 
     await act(async () => {
       host.querySelector<HTMLButtonElement>('.vp-bigplay')!.click()
@@ -70,6 +73,20 @@ describe('BiliVideo', () => {
     // 拿到流之后：视频轨静音 + 音轨存在（双元素）
     expect(host.querySelector('video')?.muted).toBe(true)
     expect(host.querySelector('audio')).toBeTruthy()
+  })
+
+  it('点播放 ⇒ **拿到地址就开始播**（不是只把播放器画出来）', async () => {
+    const play = vi.spyOn(HTMLMediaElement.prototype, 'play')
+    biliPlay.mockResolvedValue(INFO)
+    act(() => root.render(<BiliVideo postId={7} />))
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('.vp-bigplay')!.click()
+      await Promise.resolve()
+    })
+    const tags = play.mock.contexts.map((el) => (el as HTMLMediaElement).tagName)
+    expect(tags, '视频轨要起播').toContain('VIDEO')
+    expect(tags, 'DASH 档的音轨也要一起起播').toContain('AUDIO')
+    play.mockRestore()
   })
 
   it('失败**如实显示**后端分类的原因，不自己编文案', async () => {

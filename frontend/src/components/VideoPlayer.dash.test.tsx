@@ -7,6 +7,8 @@
  */
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import VideoPlayer from './VideoPlayer'
@@ -136,5 +138,77 @@ describe('VideoPlayer · 清晰度菜单', () => {
     const hd = items.find((i) => i.textContent?.includes('1080P'))!
     await act(async () => { hd.click(); await Promise.resolve() })
     expect(onPick).toHaveBeenCalledWith(80)
+  })
+
+  it('大会员档用**一颗小图标**标注，档位名不换行（文字标注会把行撑成窄高条）', async () => {
+    act(() => root.render(
+      <VideoPlayer video={{ url: DASH.video }} qualities={Q} qualityId={80} />))
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('button[aria-label="清晰度"]')!.click()
+    })
+    const items = [...host.querySelectorAll<HTMLButtonElement>('.vp-menu-item')]
+    const fourK = items.find((i) => i.textContent?.includes('4K'))!
+    // 文字里**不再**出现"（需大会员）"；信息改走 title/aria-label，可访问性不丢
+    expect(fourK.textContent, '档位名旁边不该再挂着那串文字').toBe('4K')
+    expect(fourK.querySelector('.vp-crown'), '要有一颗表示大会员的小图标').toBeTruthy()
+    expect(fourK.getAttribute('aria-label')).toContain('需大会员')
+    expect(fourK.querySelector('.vp-crown')!.getAttribute('aria-hidden'), '图标别再念一遍')
+      .toBe('true')
+
+    // jsdom 不做布局 ⇒ "不换行"只能在真 CSS 里钉
+    const css = readFileSync(resolve(__dirname, '../styles/posts.css'), 'utf8')
+    const item = css.match(/\.vp-menu-item \{[^}]*\}/)?.[0] ?? ''
+    expect(item, '.vp-menu-item 缺 white-space: nowrap ⇒ 档位名会换行').toContain('nowrap')
+    const rate = css.match(/\.vp-rate \{[^}]*\}/)?.[0] ?? ''
+    expect(rate, '.vp-rate 要一行内联排布（否则"1×"会被挤到下一行）').toContain('inline-flex')
+  })
+})
+
+describe('VideoPlayer · 自动起播与底栏排布（devlog/295）', () => {
+  it('`autoPlay` ⇒ 地址就绪即播（"只出界面不播"是用户否掉的那一版）', () => {
+    const play = vi.spyOn(HTMLMediaElement.prototype, 'play')
+    act(() => root.render(<VideoPlayer video={{ url: DASH.video }} dash={DASH} autoPlay />))
+    expect(play, '挂载后应立刻起播').toHaveBeenCalled()
+    // DASH 档：两条流**一起**起（只响画面没声音，比"没反应"更糟）
+    const tags = play.mock.contexts.map((el) => (el as HTMLMediaElement).tagName)
+    expect(tags).toContain('VIDEO')
+    expect(tags).toContain('AUDIO')
+    play.mockRestore()
+  })
+
+  it('不给 `autoPlay` ⇒ 不自动播（详情页里其它视频块仍等用户点一下）', () => {
+    const play = vi.spyOn(HTMLMediaElement.prototype, 'play')
+    act(() => root.render(<VideoPlayer video={{ url: DASH.video }} dash={DASH} />))
+    expect(play).not.toHaveBeenCalled()
+    play.mockRestore()
+  })
+
+  it('音轨被自动播放策略拒绝 ⇒ **视频轨也停住**（不留静音画面骗人）', async () => {
+    const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause')
+    const play = vi.spyOn(HTMLMediaElement.prototype, 'play')
+      .mockImplementation(function (this: HTMLMediaElement) {
+        // 音轨（AUDIO）拒绝、视频轨（VIDEO）正常 —— 正是"没有用户手势时的自动播放"现场
+        return this.tagName === 'AUDIO' ? Promise.reject(new Error('NotAllowedError'))
+          : Promise.resolve()
+      })
+    await act(async () => {
+      root.render(<VideoPlayer video={{ url: DASH.video }} dash={DASH} autoPlay />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(pause, '音轨进不去就必须把视频轨停住').toHaveBeenCalled()
+    play.mockRestore()
+    pause.mockRestore()
+  })
+
+  it('底栏永远一行：进度条可缩（`min-width: 0`）+ 按钮不换行', () => {
+    const css = readFileSync(resolve(__dirname, '../styles/posts.css'), 'utf8')
+    const bar = css.match(/\.vp-bar \{[^}]*\}/)?.[0] ?? ''
+    expect(bar, '底栏要显式 nowrap').toContain('nowrap')
+    const prog = css.match(/\.vp-progress \{[^}]*\}/)?.[0] ?? ''
+    expect(prog, 'flex 项默认 min-width:auto ⇒ 档位名带空格时会把底栏撑溢出')
+      .toContain('min-width: 0')
+    const btn = css.match(/\.vp-btn \{[^}]*\}/)?.[0] ?? ''
+    expect(btn).toContain('flex: none')
   })
 })

@@ -43,10 +43,9 @@ interface Props {
   postId: number
   poster?: string | null
   permalink?: string | null
-  title?: string
 }
 
-export default function BiliVideo({ postId, poster, permalink, title }: Props) {
+export default function BiliVideo({ postId, poster, permalink }: Props) {
   const [info, setInfo] = useState<BiliPlayInfo | null>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
@@ -112,7 +111,6 @@ export default function BiliVideo({ postId, poster, permalink, title }: Props) {
         </button>
         {busy && <div className="bili-lazy-hint">正在取流…</div>}
         {err && <div className="bili-lazy-hint bili-lazy-err">{err}</div>}
-        {title && <div className="bili-lazy-title">{title}</div>}
       </div>
     )
   }
@@ -144,6 +142,9 @@ export default function BiliVideo({ postId, poster, permalink, title }: Props) {
       qualityId={info.quality}
       poster={poster}
       permalink={permalink}
+      /* B站这条路上的**每一次**取流都源于用户动作（点播放 / 换清晰度 / 播不动后的补救）
+         ⇒ 地址一到位就起播；"只出界面不播"是用户 2026-10-03 明确否掉的那一版交互 */
+      autoPlay
       onPickQuality={(id) => void load({ qn: id }, true)}
       /* 播不动：过期 ⇒ 同档重取；否则回落 durl（单 mp4、720P、不需要音视频分离）。各一次 */
       onFallback={canRetry ? onPlaybackFailed : undefined}

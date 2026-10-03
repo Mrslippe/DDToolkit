@@ -14,7 +14,7 @@
  */
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import {
-  ExternalLink, Maximize, Minimize, Pause, Play, PictureInPicture2,
+  Crown, ExternalLink, Maximize, Minimize, Pause, Play, PictureInPicture2,
   Volume1, Volume2, VolumeX,
 } from 'lucide-react'
 
@@ -65,8 +65,20 @@ interface Props {
   qualities?: { id: number; label: string; disabled?: boolean; note?: string }[] | null
   qualityId?: number | null
   onPickQuality?: (id: number) => void
-  /** 播不动时的**外部回落**（B站：DASH → durl，由调用方重新取流）；给了它就不再显示"播不了"兜底卡 */
+  /**
+   * 播不动时的**外部回落**（B站：DASH → durl，由调用方重新取流）；给了它就不再显示"播不了"兜底卡
+   */
   onFallback?: () => void
+  /**
+   * 地址就绪后**直接开始播**（2026-10-03 用户口径：「点击中央播放键后并没有开始播放，
+   * 只是显示了播放器界面，改为直接开始播放」）。
+   *
+   * 为什么是 prop 而不是组件内自己决定：B站那条路**点播放才取流**（地址短时效），
+   * 取回来是新一次挂载 ⇒ "要不要自动播"只有调用方知道（用户点了播放/换了清晰度 ⇒ 要）。
+   * ⚠️ DASH 档要**两条流一起启动**：音轨被自动播放策略拒了就**把视频轨也停住**
+   *   （静音画面比"没反应"更糟 —— 用户会以为没声音是坏了）。
+   */
+  autoPlay?: boolean
 }
 
 function fmt(t: number): string {
@@ -77,7 +89,7 @@ function fmt(t: number): string {
 }
 
 export default function VideoPlayer({ video, poster, permalink, dash, qualities, qualityId,
-                                      onPickQuality, onFallback }: Props) {
+                                      onPickQuality, onFallback, autoPlay }: Props) {
   const prefs = useSyncExternalStore(subscribePlayerPrefs, playerPrefs)
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
@@ -199,18 +211,37 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
     }
   }, [dead, src, video.url])
 
-  const toggle = useCallback(() => {
+  /**
+   * 起播（`toggle` 与 `autoPlay` 共用一份，别写两遍 —— 两处漂移就会出现"点了能响、自动播不响"）。
+   *
+   * DASH 档的两条流必须**成对**：音轨被自动播放策略拒绝时把视频轨也停住
+   * （静音画面比"没反应"更糟：用户会当成坏了）。
+   */
+  const startPlayback = useCallback(() => {
     const el = videoRef.current
     if (!el) return
     const a = audioRef.current
-    if (el.paused) {
-      void el.play().catch(() => setDead(false))
-      if (a) { a.currentTime = el.currentTime; void a.play().catch(() => {}) }
-    } else {
-      el.pause()
-      a?.pause()
+    void el.play().catch(() => { /* 自动播放策略拒绝：保持暂停，让用户再点一下 */ })
+    if (a) {
+      a.currentTime = el.currentTime
+      void a.play().catch(() => { el.pause() })
     }
   }, [])
+
+  const toggle = useCallback(() => {
+    const el = videoRef.current
+    if (!el) return
+    if (el.paused) startPlayback()
+    else {
+      el.pause()
+      audioRef.current?.pause()
+    }
+  }, [startPlayback])
+
+  // 地址就绪 ⇒ 直接起播（用户点过播放/换过清晰度；见 `autoPlay` 的说明）
+  useEffect(() => {
+    if (autoPlay) startPlayback()
+  }, [autoPlay, src, startPlayback])
 
   const seekTo = useCallback((ratio: number) => {
     const el = videoRef.current
@@ -381,13 +412,21 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
                 {qualities.find((q) => q.id === qualityId)?.label ?? '清晰度'}
               </button>
               {qualityOpen && (
-                <div className="vp-menu">
+                <div className="vp-menu vp-menu--quality">
                   {qualities.map((q) => (
                     <button key={q.id} type="button" disabled={q.disabled}
                             title={q.note}
+                            /* 档位名（含"高清 1080P"里那个空格）**不许换行**（用户 2026-10-03）：
+                               一换行菜单就变成窄高条，"1×"也会被挤下去 */
+                            aria-label={q.note ? `${q.label}（${q.note}，不可选）` : q.label}
                             className={`vp-menu-item${q.id === qualityId ? ' is-on' : ''}`}
                             onClick={() => { onPickQuality?.(q.id); setQualityOpen(false) }}>
-                      {q.label}{q.note ? `（${q.note}）` : ''}
+                      {q.label}
+                      {/* 「需大会员」用**一颗小图标**表示（文字太占宽、又把行撑换行了）；
+                          无障碍名走 `title` + `aria-label`，信息不丢 */}
+                      {q.note && (
+                        <Crown className="vp-crown" aria-hidden="true" data-vp-note={q.note} />
+                      )}
                     </button>
                   ))}
                 </div>

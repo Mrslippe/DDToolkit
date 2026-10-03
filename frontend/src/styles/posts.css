@@ -6161,20 +6161,29 @@ img.hero-avatar {
   display: flex; align-items: center; gap: 8px; padding: 8px 10px;
   background: linear-gradient(to top, rgba(15, 23, 42, .88), rgba(15, 23, 42, 0));
   color: #fff; transition: opacity .2s ease;
+  /* 底栏永远**一行**（2026-10-03 用户反馈：右侧图标挤成两行/叠在一起）：
+     挤的时候让进度条让位，而不是让按钮换行 —— 见下面 .vp-progress 的 min-width: 0 */
+  flex-wrap: nowrap;
 }
 .vp.is-idle .vp-bar, .vp.is-idle .vp-bigplay { opacity: 0; pointer-events: none; }
 .vp.is-idle { cursor: none; }
 .vp-btn {
   display: inline-grid; place-items: center; min-width: 26px; height: 26px; padding: 0 6px;
   border-radius: 999px; background: rgba(255, 255, 255, .12); color: #fff; cursor: pointer;
+  flex: none; white-space: nowrap;
 }
 .vp-btn:hover { background: rgba(255, 255, 255, .22); }
-.vp-btn--text { font-size: 12px; font-variant-numeric: tabular-nums; }
+.vp-btn--text { font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .vp-btn--accent { background: var(--c-accent, #fb77a1); color: #3b0716; font-weight: 600; }
-.vp-time { font: 12px/1 Consolas, monospace; font-variant-numeric: tabular-nums; opacity: .9; }
+.vp-time { font: 12px/1 Consolas, monospace; font-variant-numeric: tabular-nums; opacity: .9;
+  flex: none; white-space: nowrap; }
 .vp-time-sep { opacity: .5; margin: 0 2px; }
 .vp-progress {
-  position: relative; flex: 1; height: 16px; display: flex; align-items: center; cursor: pointer;
+  position: relative; flex: 1 1 auto; height: 16px; display: flex; align-items: center; cursor: pointer;
+  /* ⚠️ `min-width: 0` 是"进度条长度自适应"的关键：flex 项默认 `min-width: auto`
+     （= min-content），B站的档位名带空格（"高清 1080P"）时那一项会被撑住 ⇒ 底栏溢出、
+     按钮只好换行/互相压。让进度条能缩到 0，右侧那排才永远是一行。 */
+  min-width: 0;
 }
 .vp-progress::before {
   content: ''; position: absolute; left: 0; right: 0; height: 4px; border-radius: 999px;
@@ -6187,7 +6196,7 @@ img.hero-avatar {
   background: #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, .4); opacity: 0; transition: opacity .15s;
 }
 .vp-progress:hover .vp-progress-knob, .vp-progress:focus-visible .vp-progress-knob { opacity: 1; }
-.vp-rate { position: relative; }
+.vp-rate { position: relative; display: inline-flex; align-items: center; gap: 4px; flex: none; }
 .vp-menu {
   position: absolute; right: 0; bottom: 32px; display: grid; gap: 2px; padding: 4px;
   border-radius: 8px; background: rgba(15, 23, 42, .95);
@@ -6195,9 +6204,16 @@ img.hero-avatar {
 }
 .vp-menu-item {
   padding: 3px 12px; border-radius: 6px; color: #fff; font-size: 12px; cursor: pointer; text-align: left;
+  /* 档位名一行一个（"高清 1080P60" 里的空格不许成为换行点） */
+  white-space: nowrap; display: flex; align-items: center; gap: 5px;
 }
 .vp-menu-item:hover { background: rgba(255, 255, 255, .14); }
 .vp-menu-item.is-on { color: var(--c-accent, #fb77a1); font-weight: 600; }
+/* 拿不到的档（大会员）：整条压暗、移上去也不亮，但**文字仍可读**（如实标注 ≠ 藏起来） */
+.vp-menu-item:disabled { opacity: .5; cursor: default; }
+.vp-menu-item:disabled:hover { background: transparent; }
+/* "需大会员"那颗小图标（文字会把行撑换行，2026-10-03 用户口径） */
+.vp-crown { width: 12px; height: 12px; flex: none; }
 .vp-vol { width: 72px; accent-color: var(--c-accent, #fb77a1); }
 .vp-dead {
   display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 8px;
