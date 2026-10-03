@@ -670,17 +670,20 @@ describe('VideoPlayer · 缓冲治理与下边缘豁免（devlog/301）', () => 
 
 describe('VideoPlayer · 播放意图（devlog/302）', () => {
   it('在"缓冲按住"状态下开始拖拽 ⇒ 拖完也要把音轨拉起来（画面在动却没声音的根因）', async () => {
+    vi.useFakeTimers()
     act(() => root.render(<VideoPlayer video={{ url: DASH.video }} dash={DASH} />))
     const v = host.querySelector('video') as HTMLVideoElement
     const a = host.querySelector('audio') as HTMLAudioElement
+    let ahead = 0.1
     Object.defineProperty(v, 'duration', { value: 300, configurable: true })
     Object.defineProperty(v, 'currentTime', { value: 50, writable: true, configurable: true })
     Object.defineProperty(v, 'buffered', {
-      configurable: true, value: { length: 1, start: () => 0, end: () => v.currentTime + 0.1 },
+      configurable: true, value: { length: 1, start: () => 0, end: () => v.currentTime + ahead },
     })
     await act(async () => {
       v.dispatchEvent(new Event('loadedmetadata'))
-      v.dispatchEvent(new Event('play'))          // 意图 = 在播（setup 的替身把 paused 置 false）
+      void v.play()                               // 元素真的在播（替身把 paused 置 false）
+      v.dispatchEvent(new Event('play'))          // 意图 = 在播
       await Promise.resolve()
     })
     await act(async () => { v.dispatchEvent(new Event('waiting')); await Promise.resolve() })
@@ -703,9 +706,17 @@ describe('VideoPlayer · 播放意图（devlog/302）', () => {
       v.dispatchEvent(new Event('seeked'))
       await Promise.resolve()
     })
-    expect(play, '拖动开始时元素是"按住"态 —— 旧实现据此认为"用户没在播"，于是永远不出声')
-      .toHaveBeenCalled()
+    // 到位就**对齐**（不是"什么都不做"）；但画面还冻着（元素仍被按住）⇒ 这时先不出声
+    expect(a.currentTime, 'seek 到位必须把音轨对齐到新位置').toBeCloseTo(v.currentTime, 2)
+    expect(play, '画面还没在放就先别出声（否则又是"声音先跑、画面对不上"）').not.toHaveBeenCalled()
+
+    // 缓冲够了 ⇒ 放开 ⇒ 真的出画（`playing`）⇒ 这时才起音轨
+    ahead = 5
+    await act(async () => { vi.advanceTimersByTime(400) })
+    await act(async () => { v.dispatchEvent(new Event('playing')); await Promise.resolve() })
+    expect(play, '按住释放 + 出画 ⇒ 音轨必须起来（这就是"拖完没声音"的封口）').toHaveBeenCalled()
     play.mockRestore()
+    vi.useRealTimers()
   })
 })
 
@@ -753,6 +764,86 @@ describe('VideoPlayer · 播放状态的真源（devlog/303）', () => {
     await act(async () => { v.dispatchEvent(new Event('pause')); await Promise.resolve() })
     expect(host.querySelector('.vp')!.getAttribute('data-vp-state'), '仍应显示在播').toBe('playing')
     expect(host.querySelector('.vp-bigplay'), '不该冒出大播放键').toBeNull()
+    vi.useRealTimers()
+  })
+})
+
+describe('VideoPlayer · seek 期间不许按住（devlog/304）', () => {
+  async function mountAtSeek(opts: { seeking: boolean; ahead: number }) {
+    act(() => root.render(<VideoPlayer video={{ url: DASH.video }} dash={DASH} />))
+    const v = host.querySelector('video') as HTMLVideoElement
+    Object.defineProperty(v, 'duration', { value: 300, configurable: true })
+    Object.defineProperty(v, 'currentTime', { value: 200, writable: true, configurable: true })
+    Object.defineProperty(v, 'seeking', { value: opts.seeking, configurable: true })
+    Object.defineProperty(v, 'buffered', {
+      configurable: true,
+      value: { length: opts.ahead >= 0 ? 1 : 0, start: () => 0, end: () => 200 + opts.ahead },
+    })
+    await act(async () => {
+      v.dispatchEvent(new Event('loadedmetadata'))
+      void v.play()
+      v.dispatchEvent(new Event('play'))
+      await Promise.resolve()
+    })
+    return v
+  }
+
+  it('**正在 seek** 时的 waiting 不许按住（按住会把这次 seek 要的数据一起卡住）', async () => {
+    const v = await mountAtSeek({ seeking: true, ahead: -1 })
+    const pause = vi.spyOn(v, 'pause')
+    await act(async () => { v.dispatchEvent(new Event('waiting')); await Promise.resolve() })
+    expect(pause, 'seek 本身要数据 —— 这一下不能按').not.toHaveBeenCalled()
+    expect(v.paused, '让它继续拉（暂停会停止取数，实测过）').toBe(false)
+    expect(host.querySelector('.vp-spin'), '但转圈要给').toBeTruthy()
+    pause.mockRestore()
+  })
+
+  it('目标**不在已缓冲区间**（`ahead = -1`）时的 waiting 也不许按住', async () => {
+    const v = await mountAtSeek({ seeking: false, ahead: -1 })
+    const pause = vi.spyOn(v, 'pause')
+    await act(async () => { v.dispatchEvent(new Event('waiting')); await Promise.resolve() })
+    expect(pause, '“要重拉一段”不是“播到一半饿了”，别按').not.toHaveBeenCalled()
+    pause.mockRestore()
+  })
+
+  it('按住期间**一旦开始 seek** ⇒ 看门狗立刻放开', async () => {
+    vi.useFakeTimers()
+    const v = await mountAtSeek({ seeking: false, ahead: 0.2 })     // 播到一半饿了 ⇒ 按住
+    await act(async () => { v.dispatchEvent(new Event('waiting')); await Promise.resolve() })
+    expect(v.paused, '先确认按住了').toBe(true)
+    const play = vi.spyOn(v, 'play')
+    Object.defineProperty(v, 'seeking', { value: true, configurable: true })   // 用户拖了一下
+    await act(async () => { vi.advanceTimersByTime(300) })
+    expect(play, 'seek 开始就必须放开（否则加载被自己卡住）').toHaveBeenCalled()
+    play.mockRestore()
+    vi.useRealTimers()
+  })
+
+  it('seek 到位时画面还没在放 ⇒ 只对齐、**先不出声**（"过一会才同步"的封口）', async () => {
+    vi.useFakeTimers()
+    const v = await mountAtSeek({ seeking: true, ahead: 3 })
+    const a = host.querySelector('audio') as HTMLAudioElement
+    const play = vi.spyOn(a, 'play')
+    const bar = host.querySelector<HTMLDivElement>('.vp-progress')!
+    bar.getBoundingClientRect = () => ({ left: 0, width: 100, top: 0, height: 16,
+      right: 100, bottom: 16, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+    const pev = (type: string, x: number) => {
+      const e = new Event(type, { bubbles: true }) as Event & { clientX: number; pointerId: number }
+      e.clientX = x
+      e.pointerId = 1
+      return e
+    }
+    await act(async () => { bar.dispatchEvent(pev('pointerdown', 40)); await Promise.resolve() })
+    // 到位时元素仍是"暂停/缓冲中"（画面冻着）⇒ 音轨只对齐不出声
+    Object.defineProperty(v, 'paused', { value: true, configurable: true })
+    await act(async () => {
+      bar.dispatchEvent(pev('pointerup', 40))
+      v.dispatchEvent(new Event('seeked'))
+      await Promise.resolve()
+    })
+    expect(a.currentTime, '要对齐到新位置').toBeCloseTo(v.currentTime, 2)
+    expect(play, '画面没出帧就先别出声').not.toHaveBeenCalled()
+    play.mockRestore()
     vi.useRealTimers()
   })
 })

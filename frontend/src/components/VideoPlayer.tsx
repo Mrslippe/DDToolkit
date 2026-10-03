@@ -390,8 +390,21 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
     /* 缓冲中要有转圈（用户口径：点进度条跳转后在加载，不能看起来像"暂停了"） */
     const onWaiting = () => {
       showSpin()
-      // 饿着跑 = 一帧一帧 + 状态横跳 ⇒ **按住**，等缓冲够了再放（`HOLD_AT` 那段有实测依据）
-      if (!el.paused && !holdRef.current.active && bufferedAhead(el) < HOLD_AT) {
+      /**
+       * 饿着跑 = 一帧一帧 + 状态横跳 ⇒ **按住**，等缓冲够了再放（`HOLD_AT` 那段有实测依据）。
+       *
+       * ⚠️ 但有三种情况**绝对不能按**（`devlog/304`，用户报的"跳转后卡在一帧、再卡顿一阵才同步"）：
+       * ① 正在 seek（`el.seeking`）—— 这一下 `waiting` 就是 seek 本身要数据，按住只会**拖住它**；
+       * ② 目标位置**根本不在已缓冲区间里**（`ahead < 0`，seek 之后必然如此）——
+       *    那是"要重新拉一段"，不是"播着播着饿了"，浏览器自己会继续拉；
+       * ③ 已经在按住了（别重复按）。
+       * 而**实测过**：一旦暂停，浏览器就**不再继续拉缓冲**（`devlog/301`：ahead 8 秒纹丝不动）
+       * ⇒ 在 seek 期间按住 = 自己把加载卡死，然后靠 1.2s 死锁兜底放开 —— 表现就是
+       * "卡住 → 抖一下 → 再卡住 → 过一阵才顺"。**按住只适用于"播到一半饿了"那一种。**
+       */
+      const ahead = bufferedAhead(el)
+      if (!el.paused && !el.seeking && !holdRef.current.active
+          && ahead >= 0 && ahead < HOLD_AT) {
         holdRef.current.active = true
         holdRef.current.selfAt = Date.now()      // 记下"这一下是我们按的"（窗口 800ms）
         holdRef.current.lastAhead = -1
@@ -455,6 +468,8 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
     const holdWatch = window.setInterval(() => {
       const hold = holdRef.current
       if (!hold.active) return
+      // seek 一旦开始就**立刻放开**：按住会把这次 seek 要的数据一起卡住（devlog/304）
+      if (el.seeking) { releaseHold(); return }
       const ahead = bufferedAhead(el)
       if (ahead >= RESUME_AT) { releaseHold(); return }
       if (ahead > hold.lastAhead + 0.01) {
@@ -576,9 +591,18 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
       done = true
       window.clearTimeout(timer)
       a.currentTime = el.currentTime
-      // 用**意图**判要不要复播：元素可能正被缓冲治理按住（`el.paused === true` 但用户在等它播）
-      if (seekRef.current.wasPlaying || wantPlayRef.current) {
-        void a.play().catch(() => { /* 策略拒绝：保持暂停 */ })
+      /**
+       * ⚠️ **画面还没真的在放就不要起音轨**（devlog/304）。
+       *
+       * 用户报的"卡在一帧……然后卡顿播放一会后同步"里，"过一会才同步"就是这一段造成的：
+       * seek 到位时元素可能还在等数据（暂停着、画面冻住），原来这里照着"意图"就把音轨放出去了
+       * ⇒ 声音先跑、画面还冻着 ⇒ 要等漂移纠正慢慢拉回来。现在只**对齐**，起播交给
+       * `onPlaying → startAudio()`（那一刻画面确实在出帧）。
+       */
+      if (!el.paused) {
+        if (seekRef.current.wasPlaying || wantPlayRef.current) {
+          void a.play().catch(() => { /* 策略拒绝：保持暂停 */ })
+        }
       }
       seekRef.current.settling = false
     }
