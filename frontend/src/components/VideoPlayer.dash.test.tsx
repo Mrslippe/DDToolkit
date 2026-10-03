@@ -12,7 +12,7 @@ import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import VideoPlayer, { driftAction } from './VideoPlayer'
-import { resetPlayerPrefs } from '../utils/playerPrefs'
+import { resetPlayerPrefs, setPlayerPrefs } from '../utils/playerPrefs'
 
 vi.mock('../utils/shellBridge', () => ({ openExternal: () => Promise.resolve() }))
 
@@ -40,7 +40,7 @@ const DASH = {
 }
 
 describe('VideoPlayer · DASH 双元素', () => {
-  it('视频轨静音 + 音轨单独一条，且**两条都走本机代理**（CDN 不带 Referer 会 403）', () => {
+  it('视频轨 + 音轨各一条、**两条都走本机代理**；静音同时落在两个元素上', async () => {
     act(() => root.render(
       <VideoPlayer video={{ url: DASH.video }} dash={DASH} poster="http://x/c.webp" />))
 
@@ -53,8 +53,17 @@ describe('VideoPlayer · DASH 双元素', () => {
     expect(a.getAttribute('src')).toBe(`/api/video-proxy?url=${encodeURIComponent(DASH.audio)}`)
     expect(v.getAttribute('src')!.startsWith('/video-proxy'),
            '裸相对路径 = 落到前端自己身上').toBe(false)
-    // ⚠️ React 把 `muted` 当**属性(property)**设，不一定落到 DOM attribute 上 ⇒ 读 property
-    expect(v.muted, '视频轨不静音 ⇒ 会出双份声音').toBe(true)
+    // ⚠️ 视频轨的 `muted` **跟着全局偏好走**（不再恒定 true）：小窗（画中画）那个静音按钮
+    //    改的就是这个属性，恒定 true 会让它点了没用（devlog/299）。声音仍只在音轨上 ——
+    //    B站 DASH 的视频轨本身不含音轨（音频是分开的那条流）。
+    expect(v.muted, '默认不静音（跟随全局偏好）').toBe(false)
+    setPlayerPrefs({ muted: true })
+    await act(async () => { await Promise.resolve() })
+    expect(a.muted, '静音要落在**真正出声的那个元素**上').toBe(true)
+    expect(v.muted, '视频轨也要跟着静音（小窗图标才与真实状态一致）').toBe(true)
+    setPlayerPrefs({ muted: false })
+    await act(async () => { await Promise.resolve() })
+    expect(a.muted).toBe(false)
     expect(v.hasAttribute('controls'), '仍是自绘控件').toBe(false)
   })
 
@@ -331,6 +340,70 @@ describe('VideoPlayer · seek 时音轨不许抢跑（devlog/297）', () => {  /
   })
 })
 
+describe('VideoPlayer · 小窗（画中画）与缓冲（devlog/299）', () => {
+  async function mountDash() {
+    act(() => root.render(<VideoPlayer video={{ url: DASH.video }} dash={DASH} />))
+    const v = host.querySelector('video') as HTMLVideoElement
+    const a = host.querySelector('audio') as HTMLAudioElement
+    Object.defineProperty(v, 'duration', { value: 100, configurable: true })
+    await act(async () => { v.dispatchEvent(new Event('loadedmetadata')); await Promise.resolve() })
+    return { v, a }
+  }
+
+  it('**任何来源的暂停都要带走音轨**（小窗按钮/系统媒体键都不经过我们的 toggle）', async () => {
+    const { v, a } = await mountDash()
+    const pause = vi.spyOn(a, 'pause')
+    await act(async () => { v.dispatchEvent(new Event('pause')); await Promise.resolve() })
+    expect(pause, '视频轨停了、音轨还在放 ⇒ 用户会听到"画面停着声音还在"').toHaveBeenCalled()
+    expect(host.querySelector('.vp-bigplay'), '暂停后要露出播放键').toBeTruthy()
+  })
+
+  it('视频轨暂停时**漂移纠正必须停手**（否则音轨被每秒拽回冻结时间 = 一小段反复重放）', async () => {
+    vi.useFakeTimers()
+    const { v, a } = await mountDash()
+    // 现场：小窗里暂停了 ⇒ 视频轨停在 10s，音轨还在 10.8s 往前跑
+    Object.defineProperty(v, 'currentTime', { value: 10, writable: true, configurable: true })
+    Object.defineProperty(a, 'currentTime', { value: 10.8, writable: true, configurable: true })
+    Object.defineProperty(v, 'paused', { value: true, configurable: true })    // ← 暂停的是视频轨
+    Object.defineProperty(a, 'paused', { value: false, configurable: true })
+    a.playbackRate = 1
+    await act(async () => { vi.advanceTimersByTime(3100) })
+    expect(a.currentTime, '不许把音轨拽回冻结的画面时间（那正是"重复"的来源）').toBeCloseTo(10.8, 2)
+    expect(a.playbackRate, '也不许再改速率').toBe(1)
+    vi.useRealTimers()
+  })
+
+  it('小窗静音按钮（改的是视频元素）会回写全局偏好 ⇒ 真的静音', async () => {
+    const { v, a } = await mountDash()
+    expect(a.muted, '初始不静音').toBe(false)
+    // 小窗那个按钮 = 切换 video.muted（浏览器行为），会触发 volumechange
+    await act(async () => {
+      v.muted = true
+      v.dispatchEvent(new Event('volumechange'))
+      await Promise.resolve()
+    })
+    expect(a.muted, '声音在音轨上 ⇒ 必须跟着静').toBe(true)
+    await act(async () => {
+      v.muted = false
+      v.dispatchEvent(new Event('volumechange'))
+      await Promise.resolve()
+    })
+    expect(a.muted, '取消静音也要跟着回来').toBe(false)
+  })
+
+  it('缓冲中显示转圈（点进度条跳转后是"在加载"，不是"暂停了"）', async () => {
+    const { v } = await mountDash()
+    expect(host.querySelector('.vp-spin'), '没缓冲时不该有转圈').toBeNull()
+    await act(async () => { v.dispatchEvent(new Event('waiting')); await Promise.resolve() })
+    const spin = host.querySelector('.vp-spin')!
+    expect(spin, '缓冲要转圈').toBeTruthy()
+    expect(spin.getAttribute('aria-label')).toBe('正在缓冲')
+    expect(host.querySelector('.vp-bigplay'), '缓冲中别同时显示播放键（看着就像暂停了）').toBeNull()
+    await act(async () => { v.dispatchEvent(new Event('canplay')); await Promise.resolve() })
+    expect(host.querySelector('.vp-spin'), '能播了就该收起来').toBeNull()
+  })
+})
+
 describe('VideoPlayer · 音画漂移分级纠正（devlog/298）', () => {
   it('`driftAction`：小漂移改速率慢慢追、大漂移才跳、稳定时恢复倍速', () => {
     // 实测 19s 漂 0.28s：旧逻辑（>0.3 才动）刚好放过它 ⇒ 现在 0.28 会走"改速率"
@@ -352,6 +425,7 @@ describe('VideoPlayer · 音画漂移分级纠正（devlog/298）', () => {
     Object.defineProperty(v, 'currentTime', { value: 10, writable: true, configurable: true })
     Object.defineProperty(a, 'currentTime', { value: 10.2, writable: true, configurable: true })
     Object.defineProperty(a, 'paused', { value: false, configurable: true })   // 正在播才纠正
+    Object.defineProperty(v, 'paused', { value: false, configurable: true })   // 视频轨也在播
     await act(async () => { vi.advanceTimersByTime(1100) })
     expect(a.playbackRate, '音轨超前 0.2s ⇒ 让它慢一点追').toBeLessThan(1)
 

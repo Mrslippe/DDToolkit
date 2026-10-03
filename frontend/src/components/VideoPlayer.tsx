@@ -141,8 +141,11 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
   const [idle, setIdle] = useState(false)
   /** 进度条 hover 预览（图二那颗时间气泡） */
   const [hover, setHover] = useState<{ x: number; t: number } | null>(null)
-  /** 正在拖拽 seek（拖动中圆点常显，见 CSS `.is-dragging`） */
+  /** 正在拖拽 seek（state 给渲染用；`draggingRef` 给事件监听用 —— 监听闭包会看到旧 state） */
   const [dragging, setDragging] = useState(false)
+  const draggingRef = useRef(false)
+  /** 缓冲中（`waiting` → `playing`/`canplay`）：中央转圈，别看起来像"暂停了"（devlog/299） */
+  const [buffering, setBuffering] = useState(false)
 
   // DASH 模式：**只走本机代理**（媒体 CDN 不带 Referer 403）；普通模式仍是 直连 → 代理 的链。
   // ⚠️ 代理 URL 必须用 `videoProxyUrl()`（拼 `apiBase`）—— 写成相对的 `/video-proxy?…` 会落到
@@ -166,10 +169,19 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
 
   /** 全局偏好下发给**真正出声的那个元素**（DASH 模式 = 音轨；视频元素恒静音） */
 
-  // 全局偏好每次变更都下发给元素（音量"一个响一个轻"的根治点）
+  // 全局偏好每次变更都下发给元素。
+  // ⚠️ DASH 档**两个元素都要发**（devlog/299）：声音在音轨上，但小窗那个静音按钮看的是
+  // 视频元素的 `muted` —— 只下发一个，"小窗静音"就会和真实声音脱节。
   useEffect(() => {
-    const el = isDash ? audioRef.current : videoRef.current
-    if (el) applyPlayerPrefs(el)
+    if (isDash) {
+      const a = audioRef.current
+      const v = videoRef.current
+      if (a) applyPlayerPrefs(a)
+      if (v) applyPlayerPrefs(v)
+    } else {
+      const v = videoRef.current
+      if (v) applyPlayerPrefs(v)
+    }
   }, [prefs, src, isDash])
 
   /**
@@ -185,7 +197,10 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
     const id = window.setInterval(() => {
       const v = videoRef.current
       const a = audioRef.current
-      if (!v || !a || a.paused || !Number.isFinite(a.currentTime)) return
+      // ⚠️ **视频轨暂停时绝对不要纠正**（devlog/299）：暂停常常来自小窗/系统媒体键
+      // （不经过我们的 `toggle`）。那时音轨若还在放，漂移会立刻超过阈值 ⇒ 每秒把它拽回
+      // 冻结的画面时间 ⇒ 同一小段被反复重放。暂停的事由 `pause` 监听负责（它会停音轨）。
+      if (!v || !a || v.paused || a.paused || !Number.isFinite(a.currentTime)) return
       const { snap, rate } = driftAction(a.currentTime - v.currentTime, prefs.rate)
       if (snap) a.currentTime = v.currentTime
       a.playbackRate = rate
@@ -196,12 +211,34 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
   useEffect(() => {
     const el = videoRef.current
     if (!el) return
-    applyPlayerPrefs(el)                       // 挂载即对齐全局音量
-    if (isDash) el.muted = true                // 视频轨恒静音：声音由音轨出（否则双份声音）
     const a = audioRef.current
+    applyPlayerPrefs(el)                       // 挂载即对齐全局音量（含静音态，见下面 volumechange）
     if (a) applyPlayerPrefs(a)
-    const onPlay = () => setPlaying(true)
-    const onPause = () => setPlaying(false)
+
+    /**
+     * 出画 ⇒ 音轨对齐并起播（幂等）。
+     *
+     * 幂等很重要：视频轨每次重新缓冲回来都会再发一次 `playing`，若每次都硬对齐，
+     * 音轨会被反复拽一下。只在"没在播"或"已经偏了"时才动。
+     */
+    const startAudio = () => {
+      const audio = audioRef.current
+      if (!audio || draggingRef.current || seekRef.current.settling) return
+      if (!audio.paused && Math.abs(audio.currentTime - el.currentTime) < 0.2) return
+      audio.currentTime = el.currentTime
+      void audio.play().catch(() => el.pause())
+    }
+
+    const onPlay = () => { setPlaying(true); setBuffering(false) }
+    /* ⚠️ 暂停要把音轨一起带走（devlog/299）：暂停可能来自**画中画小窗的按钮**、
+       系统媒体键、或 `navigator.mediaSession` —— 那些都不经过我们的 `toggle()`。
+       不管的话：视频轨停了、音轨还在放，而每秒一次的漂移纠正发现"音轨超前 0.6s"
+       就把它拽回冻结的画面时间 ⇒ **同一小段被反复重放**（用户听到的"一小段一小段重复"）。 */
+    const onPause = () => { setPlaying(false); audioRef.current?.pause() }
+    const onPlaying = () => { setBuffering(false); startAudio() }
+    /* 缓冲中要有转圈（用户口径：点进度条跳转后在加载，不能看起来像"暂停了"） */
+    const onWaiting = () => setBuffering(true)
+    const onCanPlay = () => setBuffering(false)
     const onTime = () => setCur(el.currentTime)
     const onMeta = () => setDur(el.duration || 0)
     const onProg = () => {
@@ -211,17 +248,38 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
         setBuf(0)
       }
     }
+    /**
+     * 小窗（画中画）那个静音按钮改的是**视频元素**的 `muted`（devlog/299）。
+     *
+     * DASH 档下声音全在独立的音轨元素上，所以以前"视频轨恒 `muted = true`" ⇒ 那个按钮点了
+     * 对声音毫无影响（用户报"点了不会静音"）。现在**两边都跟着全局偏好走**
+     * （`video.muted = prefs.muted`，不再恒定 true），于是：
+     * 小窗按钮 → 改 `video.muted` → 这里收到 `volumechange` → 回写全局偏好 → 音轨跟着静音。
+     * ⚠️ 前提是 DASH 的**视频轨本身不含音轨**（B站就是这么分的）；真要含，也只是那一份被
+     * `prefs.muted` 控制，不会出现"两份声音"。
+     */
+    const onVolumeChange = () => {
+      if (el.muted !== playerPrefs().muted) setPlayerPrefs({ muted: el.muted })
+    }
     el.addEventListener('play', onPlay)
     el.addEventListener('pause', onPause)
+    el.addEventListener('playing', onPlaying)
+    el.addEventListener('waiting', onWaiting)
+    el.addEventListener('canplay', onCanPlay)
     el.addEventListener('timeupdate', onTime)
     el.addEventListener('loadedmetadata', onMeta)
     el.addEventListener('progress', onProg)
+    el.addEventListener('volumechange', onVolumeChange)
     return () => {
       el.removeEventListener('play', onPlay)
       el.removeEventListener('pause', onPause)
+      el.removeEventListener('playing', onPlaying)
+      el.removeEventListener('waiting', onWaiting)
+      el.removeEventListener('canplay', onCanPlay)
       el.removeEventListener('timeupdate', onTime)
       el.removeEventListener('loadedmetadata', onMeta)
       el.removeEventListener('progress', onProg)
+      el.removeEventListener('volumechange', onVolumeChange)
     }
   }, [src, isDash])
 
@@ -256,26 +314,16 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
    *
    * 用户口径：「第一次点击播放的时候音轨会提前一点然后同步，导致开头一小段重复一点」。
    * 机理：两条流是**两个独立媒体管线** —— 音轨几乎瞬间就能出声，而视频轨要先缓冲出第一帧；
-   * 两条一起 `play()` 时，声音先跑出去几十毫秒到一秒，等 2s 一次的漂移纠正把它拽回来，
+   * 两条一起 `play()` 时，声音先跑出去几十毫秒到一秒，等漂移纠正把它拽回来，
    * 那一小段就被**听了两遍**。
    *
-   * 所以：`play()` 视频轨 → 等它的 `playing`（真的开始出画）→ 这时才对齐并启动音轨。
-   * 已经出画的情况（暂停后复播、seek 后复播）直接起。
-   * ⚠️ 视频轨被自动播放策略拒绝时不会来 `playing`，音轨也就不会出声 —— 正确：
-   * 画面都没起来，声音不该单独跑。
+   * 所以这里只负责"把视频轨点着"：**音轨的起播在对 `playing` 的监听里**
+   * （`startAudio`，`devlog/298/299`）—— 暂停/续播也走同一套，避免两处各写一遍。
    */
   const startPlayback = useCallback(() => {
     const el = videoRef.current
     if (!el) return
     void el.play().catch(() => { /* 自动播放策略拒绝：保持暂停，让用户再点一下 */ })
-    const a = audioRef.current
-    if (!a) return
-    const beginAudio = () => {
-      a.currentTime = el.currentTime
-      void a.play().catch(() => { el.pause() })   // 音轨起不来 ⇒ 视频轨也停（不留静音画面）
-    }
-    if (!el.paused && el.readyState >= 2) beginAudio()
-    else el.addEventListener('playing', beginAudio, { once: true })
   }, [])
 
   const toggle = useCallback(() => {
@@ -448,15 +496,17 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
         />
       )}
 
-      {!playing && !loading && (
+      {!playing && !loading && !buffering && (
         <button type="button" className="vp-bigplay" aria-label="播放" onClick={toggle}>
           <Play className="size-7" />
         </button>
       )}
 
-      {/* 重新取流中：中央转圈（与大播放键互斥 —— 同一格位置） */}
-      {loading && (
-        <div className="vp-spin" role="status" aria-label="正在取流">
+      {/* 取流中（`loading`）/ 缓冲中（`buffering`）：中央转圈。
+          ⚠️ 缓冲也要转（devlog/299）：点进度条跳转后视频轨要重新缓冲，画面是冻住的 ——
+          不给转圈，用户会以为"点了跳转结果暂停了"。 */}
+      {(loading || buffering) && (
+        <div className="vp-spin" role="status" aria-label="正在缓冲">
           <Loader2 className="vp-spin-icon" aria-hidden="true" />
         </div>
       )}
@@ -484,6 +534,7 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
             e.currentTarget.setPointerCapture?.(e.pointerId)
             const r = e.currentTarget.getBoundingClientRect()
             setDragging(true)
+            draggingRef.current = true
             seekTo((e.clientX - r.left) / r.width, true)   // live：音轨先静默，等抬手再对齐
           }}
           onPointerMove={(e) => {
@@ -496,9 +547,14 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
           onPointerUp={(e) => {
             e.currentTarget.releasePointerCapture?.(e.pointerId)
             setDragging(false)
+            draggingRef.current = false
             settleAudio()                          // 抬手 ⇒ 等视频轨到位后对齐音轨并复播
           }}
-          onPointerCancel={() => { setDragging(false); settleAudio() }}
+          onPointerCancel={() => {
+            setDragging(false)
+            draggingRef.current = false
+            settleAudio()
+          }}
           onMouseLeave={() => setHover(null)}
         >
           <span className="vp-progress-buf" style={{ width: `${bufPct}%` }} />

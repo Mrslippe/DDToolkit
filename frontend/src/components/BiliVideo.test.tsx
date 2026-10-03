@@ -72,9 +72,10 @@ describe('BiliVideo', () => {
     })
     expect(biliPlay).toHaveBeenCalledTimes(1)
     expect(biliPlay.mock.calls[0][0]).toBe(7)
-    // 拿到流之后：视频轨静音 + 音轨存在（双元素）
-    expect(host.querySelector('video')?.muted).toBe(true)
+    // 拿到流之后：双元素（视频轨 + 独立的音轨）；声音只在音轨上，
+    // 视频轨的 `muted` 跟随全局偏好（小窗静音按钮靠它，见 devlog/299）
     expect(host.querySelector('audio')).toBeTruthy()
+    expect(host.querySelector('video')?.muted).toBe(false)
   })
 
   it('点播放 ⇒ **拿到地址就开始播**（不是只把播放器画出来）', async () => {
