@@ -425,6 +425,7 @@ async def lifespan(app: FastAPI):
     scheduler_runtime.stop()
     await messages_router.M.HUB.stop()
     await img_proxy.close_client()
+    await video_proxy.close_client()
 
 
 app = FastAPI(lifespan=lifespan)

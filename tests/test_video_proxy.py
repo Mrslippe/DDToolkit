@@ -23,6 +23,18 @@ def client():
     """与 `tests/test_notices.py` 同款：token 由 conftest 的 autouse fixture 备好。"""
     return TestClient(app)
 
+
+@pytest.fixture(autouse=True)
+def _fresh_shared_client():
+    """每个用例都从"没有共享客户端"开始（devlog/300 起代理复用同一个 `AsyncClient`）。
+
+    不复位的话：上一个用例塞进去的**假客户端**会被下一个用例捡到（`_shared_client()` 只在
+    `is_closed` 时才重建），症状是"单跑绿、整跑红"那种最费时间的形态。
+    """
+    video_proxy._client = None
+    yield
+    video_proxy._client = None
+
 UP = "http://sns-video-v4.xhscdn.com/stream/1/110/84/x_84.mp4?sign=abc&t=1"
 
 
@@ -54,6 +66,37 @@ def test_video_proxy_rejects_hosts_outside_the_whitelist(client):
     r = client.get("/video-proxy", params={"url": "https://evil.example/x.mp4"})
     assert r.status_code == 400
     assert "白名单" in r.json()["detail"]
+
+
+class _AbortingUpstream(_FakeUpstream):
+    """客户端中止（拖进度条/换源时浏览器就会这么干）：**上游流读一半失败**。"""
+
+    async def send(self, req, stream=True):  # noqa: D102
+        resp = await super().send(req, stream=stream)
+
+        async def _boom(*_a, **_kw):
+            raise ConnectionResetError(10054, "远程主机强迫关闭了一个现有的连接")
+            yield b""                      # pragma: no cover - 让它是异步生成器
+
+        resp.aiter_bytes = _boom            # type: ignore[method-assign]
+        return resp
+
+
+def test_client_abort_is_not_an_error(client, monkeypatch, caplog):
+    """前端掐掉在飞的媒体请求 ⇒ **不算错误**（devlog/300）。
+
+    真机现场：用户拖了一次进度条，后端日志里就是一大串
+    `ERROR asyncio: Exception in callback _ProactorBasePipeTransport._call_connection_lost`
+    + `ConnectionResetError: [WinError 10054]`，把真问题淹了。
+    判据：代理这边只留 debug，不 warning、不 error。
+    """
+    monkeypatch.setattr(video_proxy.httpx, "AsyncClient", _AbortingUpstream)
+    with caplog.at_level("DEBUG", logger=video_proxy.__name__):
+        r = client.get("/video-proxy", params={"url": UP})
+    # 响应头已经发出去了（206），中途断流不该变成 500
+    assert r.status_code in (200, 206)
+    assert not [rec for rec in caplog.records if rec.levelno >= 30], \
+        "客户端中止被当成错误记了日志（会淹没真问题）"
 
 
 def test_video_proxy_streams_with_range_and_without_referer(client, monkeypatch):

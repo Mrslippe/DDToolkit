@@ -141,6 +141,28 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
   const [idle, setIdle] = useState(false)
   /** 进度条 hover 预览（图二那颗时间气泡） */
   const [hover, setHover] = useState<{ x: number; t: number } | null>(null)
+  /**
+   * 控件自动隐藏（devlog/300）：**3 秒没动鼠标、且指针不在底栏上**才收起。
+   *
+   * 用户口径（全屏时尤其明显）：「控件隐藏逻辑应该是鼠标不在下部分控件区 hover 时隐藏，
+   * 而不是现在的鼠标在下部分控件区 hover 时隐藏」。原来的实现只有两个触发点 ——
+   * 移动就显示、**指针离开整个播放器**才隐藏：既没有"停手就收"（B站/YouTube 都有），
+   * 也不认"指针正压在底栏上"这件事。
+   *
+   * `hoverBar` 用 ref 而不是 state：它只参与"要不要收起"的判断，不参与渲染，
+   * 放进 state 会让每次鼠标划过底栏都重渲染一遍。
+   */
+  const hoverBarRef = useRef(false)
+  const idleTimer = useRef(0)
+  const bumpControls = useCallback(() => {
+    setIdle(false)
+    window.clearTimeout(idleTimer.current)
+    idleTimer.current = window.setTimeout(() => {
+      if (!hoverBarRef.current) setIdle(true)
+    }, 3000)
+  }, [])
+  useEffect(() => () => window.clearTimeout(idleTimer.current), [])
+
   /** 正在拖拽 seek（state 给渲染用；`draggingRef` 给事件监听用 —— 监听闭包会看到旧 state） */
   const [dragging, setDragging] = useState(false)
   const draggingRef = useRef(false)
@@ -220,13 +242,23 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
      *
      * 幂等很重要：视频轨每次重新缓冲回来都会再发一次 `playing`，若每次都硬对齐，
      * 音轨会被反复拽一下。只在"没在播"或"已经偏了"时才动。
+     *
+     * ⚠️ **失败分两类**（devlog/300）：
+     * · `NotAllowedError`（自动播放策略）⇒ 真的起不来，把视频轨也停住（不留静音画面）；
+     * · `AbortError` / `NotSupportedError` 等**瞬时**失败（跳到一个还没缓存的位置时最常见的
+     *   就是它：音轨还在 seek，`play()` 立刻被中断）⇒ **绝不能因此暂停视频轨**。
+     *   真机上就是这么坏的：用户点进度条跳到很后面，音轨 `play()` 被 abort ⇒ 我们把视频轨
+     *   暂停了 ⇒ 界面显示"暂停"、也没有声音，而画面对用户来说像在放/刚放完。
+     *   这类交给"下一拍再对齐"（`timeupdate` 的和解逻辑）就行。
      */
     const startAudio = () => {
       const audio = audioRef.current
       if (!audio || draggingRef.current || seekRef.current.settling) return
       if (!audio.paused && Math.abs(audio.currentTime - el.currentTime) < 0.2) return
       audio.currentTime = el.currentTime
-      void audio.play().catch(() => el.pause())
+      void audio.play().catch((e: DOMException) => {
+        if (e?.name === 'NotAllowedError') el.pause()
+      })
     }
 
     const onPlay = () => { setPlaying(true); setBuffering(false) }
@@ -239,7 +271,21 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
     /* 缓冲中要有转圈（用户口径：点进度条跳转后在加载，不能看起来像"暂停了"） */
     const onWaiting = () => setBuffering(true)
     const onCanPlay = () => setBuffering(false)
-    const onTime = () => setCur(el.currentTime)
+    const onTime = () => {
+      setCur(el.currentTime)
+      /**
+       * **和解**（devlog/300）：`playing` 这个 React 状态、以及"音轨到底在不在放"，
+       * 都必须能**从元素本身**重新推出来，而不是只信某一次事件。
+       *
+       * 为什么：真机上出现过"画面在放、界面显示暂停、还没有声音" —— 事件时序里只要有一次
+       * `pause` 之后没有配对的 `play`（跳转到未缓存位置、`play()` 被 abort、元素换源……
+       * 都可能），状态就会**永久停在错的**那一格。`timeupdate` 播放时每秒发 4 次，
+       * 拿它当和解心跳，最多 250ms 就能自愈。
+       */
+      // `playing` 在闭包里可能已经旧了 ⇒ 用函数式更新（值没变时 React 会跳过重渲染）
+      setPlaying((prev) => (prev === !el.paused ? prev : !el.paused))
+      if (!el.paused) startAudio()
+    }
     const onMeta = () => setDur(el.duration || 0)
     const onProg = () => {
       try {
@@ -455,8 +501,9 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
       data-vp-state={playing ? 'playing' : 'paused'}
       tabIndex={0}
       onKeyDown={onKey}
-      onMouseMove={() => setIdle(false)}
-      onMouseLeave={() => setIdle(true)}
+      onMouseMove={bumpControls}
+      /* 指针离开播放器：**立刻收起**（用户就是想让它让开），但压在底栏时不算离开 */
+      onMouseLeave={() => { if (!hoverBarRef.current) setIdle(true) }}
     >
       <video
         ref={videoRef}
@@ -511,7 +558,12 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
         </div>
       )}
 
-      <div className="vp-bar">
+      {/* 底栏：指针压在上面时**永不收起**（用户口径的另一半），离开后重新开始计时 */}
+      <div
+        className="vp-bar"
+        onMouseEnter={() => { hoverBarRef.current = true; setIdle(false); window.clearTimeout(idleTimer.current) }}
+        onMouseLeave={() => { hoverBarRef.current = false; bumpControls() }}
+      >
         <button type="button" className="vp-btn" aria-label={playing ? '暂停' : '播放'} onClick={toggle}>
           {playing ? <Pause className="size-4" /> : <Play className="size-4" />}
         </button>

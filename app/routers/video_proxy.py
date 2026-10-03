@@ -74,6 +74,34 @@ _FORWARD_REQ = ("range",)
 #: 回给浏览器的响应头（`accept-ranges` 必须留：否则播放器以为不能拖进度）
 _FORWARD_RESP = ("content-type", "content-length", "content-range", "accept-ranges",
                  "last-modified", "etag", "cache-control")
+#: 每块多大流给前端（64KB 太碎：1080P 一路要几百个 chunk，uvicorn 的写放大之外还多几百次
+#: 事件循环切换；256KB 是"首字节够快 + 拷贝次数少"的折中）
+_CHUNK = 256 * 1024
+
+
+# ── 共享客户端（与 `/img-proxy` 同款）──────────────────────────────────────────
+#
+# ⚠️ 2026-10-04（devlog/300）：以前**每个请求新建一个 `AsyncClient`** —— 媒体播放要发很多次
+# Range 请求（拖进度条、切清晰度都会重发），每一次都重做 TCP+TLS 握手，白送几百毫秒；
+# 而且旧连接被浏览器中止时留下的清理动作更多（用户日志里那串 ConnectionResetError 就有它）。
+_client: httpx.AsyncClient | None = None
+
+
+def _shared_client() -> httpx.AsyncClient:
+    global _client
+    # `getattr` 而不是直接 `.is_closed`：用例会用**假客户端**替身（它没这个属性），
+    # 代理这边不该因此炸 —— 真实现一定有。
+    if _client is None or getattr(_client, "is_closed", False):
+        _client = httpx.AsyncClient(timeout=_UPSTREAM_TIMEOUT, follow_redirects=True)
+    return _client
+
+
+async def close_client() -> None:
+    """lifespan 关闭时释放（与 `img_proxy.close_client` 一起在 `main.lifespan` 里收口）。"""
+    global _client
+    if _client is not None and not _client.is_closed:
+        await _client.aclose()
+    _client = None
 
 
 def _host_of(url: str) -> str:
@@ -119,29 +147,36 @@ async def video_proxy(request: Request, url: str = Query(...)):
     headers = {k: v for k, v in request.headers.items() if k.lower() in _FORWARD_REQ}
     # 策略头**最后合并**：CDN 要什么由我们决定，不听浏览器的（`Referer`/`Origin`/`Cookie` 一律不转发）
     headers.update(policy_for(host))
-    client = httpx.AsyncClient(timeout=_UPSTREAM_TIMEOUT, follow_redirects=True)
+    client = _shared_client()
     try:
         req = client.build_request("GET", url, headers=headers)
         upstream = await client.send(req, stream=True)
     except httpx.HTTPError as e:
-        await client.aclose()
         logger.warning(f"视频代理取数失败 {host}: {type(e).__name__}: {e}")
         raise HTTPException(502, f"上游取数失败：{type(e).__name__}") from e
 
     if upstream.status_code >= 400:
         code = upstream.status_code
         await upstream.aclose()
-        await client.aclose()
         logger.warning(f"视频代理上游 HTTP {code} host={host}")
         raise HTTPException(code, f"上游返回 {code}")
 
     async def _iter():
+        """
+        ⚠️ **客户端中止是常态，不是错误**（devlog/300）：拖进度条、切清晰度、小窗接管，
+        浏览器都会把在飞的那条媒体请求掐掉，这时 `aiter_bytes` 会抛
+        `httpx.ReadError` / `ConnectionResetError`（Windows 上是 WinError 10054）。
+        旧实现在这里没有任何保护 ⇒ 把它当异常抛回去，uvicorn 的 proactor transport 再记一条
+        **ERROR 级 traceback**（用户日志里那一大串就是它），把真问题淹了。
+        现在：**中止就当正常收尾**（记一条 debug），真错误才 warning。
+        """
         try:
-            async for chunk in upstream.aiter_bytes(64 * 1024):
+            async for chunk in upstream.aiter_bytes(_CHUNK):
                 yield chunk
+        except (httpx.HTTPError, ConnectionResetError, OSError) as e:
+            logger.debug(f"视频代理流被中止 host={host}（正常：前端换源/seek）：{type(e).__name__}")
         finally:
             await upstream.aclose()
-            await client.aclose()
 
     out = {k: v for k, v in upstream.headers.items() if k.lower() in _FORWARD_RESP}
     out.setdefault("accept-ranges", "bytes")

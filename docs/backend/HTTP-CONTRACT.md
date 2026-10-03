@@ -213,6 +213,11 @@ retire-when: HTTP 层换框架，或路由整体重排
 ⚠️ 前端拼 URL 必须用 `api.ts` 的 **`videoProxyUrl()`**（带 `apiBase`），且 CSP 的 `media-src`
 要放行 `http://127.0.0.1:*` —— 两条都是 `devlog/294` 的真机事故（相对路径落到前端自己、
 跨源媒体被 CSP 静默挡掉）。
+⚠️ **客户端中止是常态**（`devlog/300`）：拖进度条/切清晰度会让浏览器掐掉在飞的请求，
+代理这边把它当**正常收尾**（只记 debug），不做成异常 —— 否则 uvicorn 的 proactor transport
+会往日志刷 `ERROR ... ConnectionResetError: WinError 10054` 的 traceback。
+上游客户端与 `/img-proxy` 同款**模块级共享**（每请求新建要重做 TCP+TLS，Range 请求很密），
+关闭时在 `lifespan` 里释放。
 
 ### 3.5 `app/routers/settings.py` — 应用设置与偏好（12，R14a/R14b devlog/091、092）
 

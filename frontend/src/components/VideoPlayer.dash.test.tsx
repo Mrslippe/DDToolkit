@@ -210,12 +210,13 @@ describe('VideoPlayer · 自动起播与底栏排布（devlog/295）', () => {
     play.mockRestore()
   })
 
-  it('音轨被自动播放策略拒绝 ⇒ **视频轨也停住**（不留静音画面骗人）', async () => {
+  it('音轨被**自动播放策略**拒绝 ⇒ 视频轨也停住（不留静音画面骗人）', async () => {
     const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause')
     const play = vi.spyOn(HTMLMediaElement.prototype, 'play')
       .mockImplementation(function (this: HTMLMediaElement) {
         // 音轨（AUDIO）拒绝、视频轨（VIDEO）正常 —— 正是"没有用户手势时的自动播放"现场
-        return this.tagName === 'AUDIO' ? Promise.reject(new Error('NotAllowedError'))
+        return this.tagName === 'AUDIO'
+          ? Promise.reject(new DOMException('denied', 'NotAllowedError'))
           : Promise.resolve()
       })
     await act(async () => {
@@ -231,6 +232,32 @@ describe('VideoPlayer · 自动起播与底栏排布（devlog/295）', () => {
       await Promise.resolve()
     })
     expect(pause, '音轨进不去就必须把视频轨停住').toHaveBeenCalled()
+    play.mockRestore()
+    pause.mockRestore()
+  })
+
+  it('音轨是**瞬时**失败（`AbortError`：跳转后音轨还在 seek）⇒ **不许**暂停视频轨', async () => {
+    // 真机事故（devlog/300）：点进度条跳到未缓存位置 ⇒ 音轨 play() 被 abort ⇒
+    // 旧代码一律 `el.pause()` ⇒ 画面在放、界面显示"暂停"、还没声音。
+    const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause')
+    const play = vi.spyOn(HTMLMediaElement.prototype, 'play')
+      .mockImplementation(function (this: HTMLMediaElement) {
+        return this.tagName === 'AUDIO'
+          ? Promise.reject(new DOMException('interrupted', 'AbortError'))
+          : Promise.resolve()
+      })
+    await act(async () => {
+      root.render(<VideoPlayer video={{ url: DASH.video }} dash={DASH} autoPlay />)
+      await Promise.resolve()
+    })
+    const v = host.querySelector('video')!
+    Object.defineProperty(v, 'readyState', { value: 2, configurable: true })
+    await act(async () => {
+      v.dispatchEvent(new Event('playing'))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(pause, '瞬时失败不能把画面停掉（那是"看起来暂停了"的来源）').not.toHaveBeenCalled()
     play.mockRestore()
     pause.mockRestore()
   })
@@ -401,6 +428,90 @@ describe('VideoPlayer · 小窗（画中画）与缓冲（devlog/299）', () => 
     expect(host.querySelector('.vp-bigplay'), '缓冲中别同时显示播放键（看着就像暂停了）').toBeNull()
     await act(async () => { v.dispatchEvent(new Event('canplay')); await Promise.resolve() })
     expect(host.querySelector('.vp-spin'), '能播了就该收起来').toBeNull()
+  })
+})
+
+describe('VideoPlayer · 状态和解与控件自动隐藏（devlog/300）', () => {
+  async function mountPlayingDash() {
+    act(() => root.render(<VideoPlayer video={{ url: DASH.video }} dash={DASH} />))
+    const v = host.querySelector('video') as HTMLVideoElement
+    const a = host.querySelector('audio') as HTMLAudioElement
+    Object.defineProperty(v, 'duration', { value: 200, configurable: true })
+    Object.defineProperty(v, 'currentTime', { value: 5, writable: true, configurable: true })
+    await act(async () => { v.dispatchEvent(new Event('loadedmetadata')); await Promise.resolve() })
+    return { v, a }
+  }
+
+  it('`timeupdate` 是**和解心跳**：画面在放而状态说暂停时，会自动纠正回来', async () => {
+    const { v } = await mountPlayingDash()
+    // 现场：某次 `pause` 之后没有配对的 `play`（跳转/被 abort/换源都可能）⇒ 状态停在暂停
+    await act(async () => { v.dispatchEvent(new Event('pause')); await Promise.resolve() })
+    expect(host.querySelector('.vp-bigplay'), '先确认它确实显示成暂停了').toBeTruthy()
+
+    Object.defineProperty(v, 'paused', { value: false, configurable: true })   // 元素其实在放
+    await act(async () => { v.dispatchEvent(new Event('timeupdate')); await Promise.resolve() })
+    expect(host.querySelector('.vp-bigplay'), '和解之后不该再显示播放键').toBeNull()
+    expect(host.querySelector('.vp')!.getAttribute('data-vp-state')).toBe('playing')
+  })
+
+  it('`timeupdate` 也会**把音轨叫回来**（跳转后音轨 play 被 abort 造成的静音）', async () => {
+    const { v, a } = await mountPlayingDash()
+    Object.defineProperty(v, 'paused', { value: false, configurable: true })
+    Object.defineProperty(a, 'paused', { value: true, configurable: true })
+    const play = vi.spyOn(a, 'play')
+    await act(async () => { v.dispatchEvent(new Event('timeupdate')); await Promise.resolve() })
+    expect(play, '视频在放、音轨停着 ⇒ 和解时要把它拉起来').toHaveBeenCalled()
+    play.mockRestore()
+  })
+
+  it('控件自动隐藏：停手 3 秒才收，指针压在底栏上时**永不收**', async () => {
+    vi.useFakeTimers()
+    const { v } = await mountPlayingDash()
+    Object.defineProperty(v, 'paused', { value: false, configurable: true })
+    await act(async () => { v.dispatchEvent(new Event('play')); await Promise.resolve() })
+    const wrap = host.querySelector('.vp')!
+    const bar = host.querySelector('.vp-bar')!
+
+    expect(wrap.classList.contains('is-idle'), '刚进来是显示的').toBe(false)
+    await act(async () => { wrap.dispatchEvent(new MouseEvent('mousemove', { bubbles: true })) })
+    await act(async () => { vi.advanceTimersByTime(3100) })
+    expect(wrap.classList.contains('is-idle'), '停手 3 秒 ⇒ 收起').toBe(true)
+
+    // ⚠️ React 的 `onMouseEnter/Leave` 是**合成**的（监听 mouseover/mouseout + 比 relatedTarget）
+    //    ⇒ 测试里必须发 mouseover/mouseout 并带上"从哪来/到哪去"，直接发 mouseenter 不会命中。
+    const enter = (t: Element, from: Element) =>
+      t.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, relatedTarget: from }))
+    const leave = (t: Element, to: Element) =>
+      t.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: to }))
+
+    // 指针压到底栏上：立刻显示，并且**再久也不收**（用户口径的那一半）
+    await act(async () => {
+      enter(bar, document.body)
+      await Promise.resolve()
+    })
+    expect(wrap.classList.contains('is-idle'), 'hover 底栏要显示').toBe(false)
+    await act(async () => { vi.advanceTimersByTime(9000) })
+    expect(wrap.classList.contains('is-idle'), 'hover 期间不许收').toBe(false)
+
+    // 离开底栏 ⇒ 重新开始计时
+    await act(async () => {
+      leave(bar, document.body)
+      await Promise.resolve()
+    })
+    await act(async () => { vi.advanceTimersByTime(3100) })
+    expect(wrap.classList.contains('is-idle'), '离开底栏 3 秒后收起').toBe(true)
+    vi.useRealTimers()
+  })
+
+  it('暂停时永远不收控件（要能看见播放键）', async () => {
+    vi.useFakeTimers()
+    const { v } = await mountPlayingDash()
+    Object.defineProperty(v, 'paused', { value: true, configurable: true })
+    const wrap = host.querySelector('.vp')!
+    await act(async () => { wrap.dispatchEvent(new MouseEvent('mousemove', { bubbles: true })) })
+    await act(async () => { vi.advanceTimersByTime(9000) })
+    expect(wrap.classList.contains('is-idle')).toBe(false)
+    vi.useRealTimers()
   })
 })
 
