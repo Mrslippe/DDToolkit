@@ -262,6 +262,8 @@ interface Track {
   repeat: number
   /** 这条轨**已缓冲末尾**的上一次读数（判"取数有没有真的推进"，见 `STALL_TRIES`） */
   spanEnd: number
+  /** 发起这次取数时的"跑道末端"（`-1` = 这次 `updateend` 不是 append 的，别记账） */
+  fetchBaseline: number
   /** 连续几次 append 之后缓冲没涨 */
   noProgress: number
   /** 没进展时的冷却截止时刻（到点前不再取数） */
@@ -331,7 +333,7 @@ export class MseKernel {
       .map(([kind, table]) => ({
         table: table as StreamTable, kind, sb: null, busy: false, initDone: false,
         pending: null, inflight: null, seq: 0, lastIdx: -2, repeat: 0,
-        spanEnd: 0, noProgress: 0, coolUntil: 0, warnedStall: false,
+        spanEnd: 0, fetchBaseline: -1, noProgress: 0, coolUntil: 0, warnedStall: false,
         retry: 0, mirror: 0, quotaHits: 0,
       }))
     this.startedAt = Date.now()
@@ -353,6 +355,10 @@ export class MseKernel {
     this.pendingSeek = t
     this.seekStartedAt = Date.now()
     for (const tr of this.tracks) {
+      // 换了目标 ⇒ 上一处的"无进展"记账作废、刹车也解除（新位置值得重新试一次）
+      tr.noProgress = 0
+      tr.coolUntil = 0
+      tr.fetchBaseline = -1
       // 目标变了 ⇒ 正在取的那一段没意义了（abort 掉，别白等一个 1.5MB）
       if (tr.inflight && tr.pending !== segmentIndexAt(tr.table, t)) this.abortInflight(tr)
     }
@@ -439,14 +445,24 @@ export class MseKernel {
     tr.pending = null
     tr.retry = 0
     if (wasInit) tr.initDone = true
-    // **进展计量**：这条轨的已缓冲末尾有没有真的往前挪（没挪就攒 `noProgress`，见 `STALL_TRIES`）
-    const end = this.trackSpan(tr)?.end ?? 0
-    if (end > tr.spanEnd + 1e-3) {
-      tr.spanEnd = end
-      tr.noProgress = 0
-      tr.warnedStall = false
-    } else {
-      tr.noProgress += 1
+    /**
+     * **进展计量**：这次 append 有没有让"**播放点前方**能连续播多久"变长。
+     *
+     * ⚠️ 两个坑（都是真机日志里踩出来的，`devlog/315`）：
+     * ① 用"这条轨最后一段的末尾"当刻度会**误报** —— 回跳后缓冲里还留着远处那段
+     *    （`目标=75.9s 该轨末=223.6s`），在播放点前面补数据永远不动它；
+     * ② 只有当这次 `updateend` 是 **append** 的回执时才记账（`remove` 会让跑道变短，
+     *    那是淘汰的正常后果，不该算"取数没进展"）。
+     */
+    if (tr.fetchBaseline >= 0) {
+      const grew = this.runwayEnd(tr) > tr.fetchBaseline + 1e-3
+      tr.fetchBaseline = -1
+      if (grew) {
+        tr.noProgress = 0
+        tr.warnedStall = false
+      } else {
+        tr.noProgress += 1
+      }
     }
     this.maybeEnd()
     this.evict(tr)
@@ -606,12 +622,10 @@ export class MseKernel {
    * 有了它，不用再靠猜：是"段取来了却落不到目标位置"，还是"缓冲根本没涨"。
    */
   private stallLine(tr: Track): string {
-    const span = this.trackSpan(tr)
     const target = this.pendingSeek ?? this.el.currentTime
-    const seg = tr.table.segments[Math.max(0, segmentIndexAt(tr.table, target))]
     return `[media] 泵无进展(${tr.kind}) 目标=${target.toFixed(1)}s 可用=${this.aheadFor(tr, target).toFixed(1)}s`
-      + ` 该轨末=${span ? span.end.toFixed(1) : '×'}s 段=${tr.pending ?? '-'}`
-      + ` 目标段起=${seg ? (seg.start / 1048576).toFixed(2) : '?'}MB 共取=${this.appends}次/${(this.bytes / 1048576).toFixed(1)}MB`
+      + ` 该轨末=${(this.trackSpan(tr)?.end ?? 0).toFixed(1)}s 段=${tr.pending ?? '-'}`
+      + ` 共取=${this.appends}次/${(this.bytes / 1048576).toFixed(1)}MB`
   }
 
   private async append(tr: Track, idx: number): Promise<void> {
@@ -685,6 +699,8 @@ export class MseKernel {
     try {
       sb.appendBuffer(buf)
       this.appends += 1
+      // 记账基准：这一次 append 之前"播放点前方有多长"，`updateend` 时比一比（见 `onUpdateEnd`）
+      tr.fetchBaseline = this.runwayEnd(tr)
     } catch (e) {
       tr.pending = null
       if (isQuotaError(e)) {
@@ -784,6 +800,16 @@ export class MseKernel {
                         + `缓冲=${this.aheadAt(seek).toFixed(1)}s 段取=${this.appends}次`)
       }
     }
+  }
+
+  /**
+   * 这条轨**从播放点（或等着的跳转目标）起算**能连续播到哪一刻（秒）。
+   *
+   * 这是"进展"的正确刻度：`trackSpan().end` 会被**远处残留的区间**带偏（回跳之后尤其明显）。
+   */
+  private runwayEnd(tr: Track): number {
+    const target = this.pendingSeek ?? this.el.currentTime
+    return target + this.aheadFor(tr, target)
   }
 
   /**

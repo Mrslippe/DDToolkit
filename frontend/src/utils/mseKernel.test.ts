@@ -431,6 +431,23 @@ describe('mseKernel · seek（先取段，再设时间）', () => {
       .toBeLessThan(SEG_COUNT * 2)
   })
 
+  it('回跳之后在播放点前面补数据**不许**被判成"无进展"（远处残留区间会骗过刻度）', async () => {
+    // 真机日志里的假警报（`devlog/315`）：`目标=75.9s 可用=14.3s 该轨末=223.6s` ——
+    // 刻度若取"这条轨最后一段的末尾"，回跳后在播放点前面补数据**永远不动那个数**
+    // ⇒ 连报三次"无进展" ⇒ 白刹车 2 秒（那 2 秒里前方真的会饿）。
+    const { kernel, el, logs } = await boot({ streams: makeStreams(40) })
+    kernel.seekTo(150)                     // 先跳到很后面（缓冲里留下远处那段）
+    await flush(40)
+    expect(el.currentTime).toBeCloseTo(150, 0)
+
+    kernel.seekTo(20)                      // 回跳：此后补的是 20s 附近的数据
+    await flush(60)
+    expect(el.currentTime).toBeCloseTo(20, 0)
+    expect(logs.filter((l) => l.includes('泵无进展')),
+           `误报的刹车：${JSON.stringify(logs)}`).toEqual([])
+    expect(kernel.bufferedAhead(), '回跳后前方要真的涨起来').toBeGreaterThan(10)
+  })
+
   it('**回跳**（第二次 seek）不许把"刚为目标取来的段"淘汰掉 —— 否则永远转圈', async () => {
     // 真机报的第二个症状：「点击跳转后再点击跳转到其他位置，播放就卡住了，一直在转圈缓冲」。
     // 机理：淘汰算的是 `currentTime - KEEP_BEHIND`，而 seek 期间 `currentTime` **还是旧位置**

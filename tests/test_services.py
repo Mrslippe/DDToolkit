@@ -1405,6 +1405,33 @@ def test_module_level_pacers_hold_no_event_loop_primitives():
                     assert not isinstance(v, loop_bound), f"{name}[{k}] 持有 loop-bound 原语"
 
 
+def test_noisy_third_party_loggers_are_quiet():
+    """`httpx` 的逐请求 INFO 不许进日志（2026-10-04，devlog/315）。
+
+    用户真机问「为什么 log 会这么多」——实测 3482 行里 **1621 行（47%）** 是它每个出站请求一行，
+    而且还**把带签名的完整 CDN URL 写进了日志**（我们那行只记 `hash=`）。压到 WARNING：
+    超时/连接失败照样报，逐请求不报。
+
+    判据打在**行为**上（`isEnabledFor`），不是"配置里写了那几行字"——
+    只断言常量的话，把 `quiet_noisy_loggers()` 从 `setup_logging` 里删掉也不会红。
+    """
+    import logging as _logging
+
+    from app.core.logging_setup import NOISY_LOGGERS, quiet_noisy_loggers
+
+    # 先摆一个"吵"的现场（别的用例可能已经把根配好了，所以不能只靠 setup_logging）
+    _logging.getLogger("httpx").setLevel(_logging.INFO)
+    assert _logging.getLogger("httpx").isEnabledFor(_logging.INFO)
+
+    quiet_noisy_loggers()
+
+    for name in NOISY_LOGGERS:
+        lg = _logging.getLogger(name)
+        assert not lg.isEnabledFor(_logging.INFO), f"{name} 还会逐请求刷 INFO"
+        # ⚠️ 别把它压到 ERROR：真出问题（超时/协议错）时我们要看得到
+        assert lg.isEnabledFor(_logging.WARNING), f"{name} 压过头了，真错误也会被吞"
+
+
 def test_log_file_handler_rotates_daily_and_prunes(tmp_path):
     """日志按天轮转 + 保留 N 份（2026-09-13 用户定，devlog/077）。
 

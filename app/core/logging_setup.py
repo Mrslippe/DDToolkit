@@ -36,6 +36,26 @@ from pathlib import Path
 
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 
+#: **逐请求打 INFO 的第三方库**（2026-10-04，devlog/315）。
+#:
+#: 用户真机反馈「为什么 log 会这么多」——实测一份 3482 行的 `app.log` 里 **1621 行（47%）
+#: 是 `httpx` 每个出站请求打的一行**：
+#:
+#: ```
+#: [INFO] httpx: HTTP Request: GET https://cn-sccd-ct-02-16.bilivideo.com/upgcxcode/…?e=…&sign=…
+#: ```
+#:
+#: 两个问题：① 纯噪音（我们自己那行 `[视频代理] … 首字节= 均速= 共=` 信息更全、还带 `range` 与
+#: `status`）；② **它把带签名的完整 URL 写进了日志**（视频地址短时效且绑 IP，仍属不该落盘的东西
+#: —— 我们那行刻意只记 `hash=`）。⇒ 统一压到 WARNING：出问题（超时/连接失败）时照样会报。
+NOISY_LOGGERS: tuple[str, ...] = ("httpx", "httpcore")
+
+
+def quiet_noisy_loggers() -> None:
+    """把逐请求 INFO 的第三方库压到 WARNING（**幂等**，且不依赖 `basicConfig` 是否生效）。"""
+    for name in NOISY_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)
+
 
 def build_file_handler(log_file: str | Path, backup_days: int) -> logging.Handler:
     """按天轮转的文件 handler（目录不存在会创建；`backup_days<=0` 表示不删旧文件）。"""
@@ -56,7 +76,11 @@ def setup_logging(level: str, log_file: str | Path, backup_days: int) -> None:
     ⚠️ 与直接 `basicConfig` 一样，**只在根 logger 还没有 handler 时生效** ——
     测试环境（pytest 日志捕获）与某些宿主会先挂自己的 handler，那时这里静默跳过是
     正确行为（不抢别人已经配好的根）。要断言配置本身请直接用 `build_file_handler`。
+
+    ⚠️ 「压噪音」那一步**放在 `basicConfig` 之前**：它对每个 logger 生效、与根 handler 无关，
+    所以即使 `basicConfig` 被跳过（pytest 里就是），`httpx` 也不会再逐请求刷 INFO。
     """
+    quiet_noisy_loggers()
     logging.basicConfig(
         level=getattr(logging, str(level).upper(), logging.INFO),
         format=LOG_FORMAT,
