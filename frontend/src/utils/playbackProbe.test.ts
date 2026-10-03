@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * 播放诊断窗口（devlog/306）：把"跳转后画面低帧率"这种**只在真机上出现**的现象
+ * 播放诊断窗口（devlog/306–309）：把"跳转后画面低帧率"这种**只在真机上出现**的现象
  * 变成一行可交付的数字。
  *
  * 这里钉的是**数字怎么算的**（纯函数），以及"收尾时真的上报了一行"——
@@ -14,7 +14,7 @@ vi.mock('../api/api', () => ({
 }))
 
 import {
-  aheadOf, curveLine, frameStats, idleSeconds, openWindow, stalledSeconds,
+  aheadOf, curveLine, frameStats, hiddenSeconds, idleSeconds, openWindow, stalledSeconds,
   summarize, verdict, watchPlayback,
 } from './playbackProbe'
 
@@ -33,6 +33,15 @@ function ranges(start: number, end: number): TimeRanges {
 
 function makeEl(): FakeMedia & HTMLVideoElement {
   return new FakeMedia() as FakeMedia & HTMLVideoElement
+}
+
+/** 造一条采样（只写关心的字段，其余按"一切正常"填）。 */
+function smp(t: number, o: {
+  fps?: number; presented?: number | null; ahead?: number | null
+  advanced?: boolean; hidden?: boolean; focused?: boolean
+} = {}) {
+  return { t, fps: 30, presented: 30 as number | null, ahead: 8 as number | null,
+           advanced: true, hidden: false, focused: true, ...o }
 }
 
 beforeEach(() => {
@@ -70,8 +79,8 @@ describe('playbackProbe', () => {
     el.setFrames(300, 4)
     const w = openWindow(el, 'seek', 198.5)
     // 前 3 秒很惨（每秒 5 帧），之后正常（每秒 30 帧）
-    for (let t = 1; t <= 3; t += 1) w.samples.push({ t, fps: 5, presented: 5, ahead: 0.4, advanced: true })
-    for (let t = 4; t <= 10; t += 1) w.samples.push({ t, fps: 30, presented: 30, ahead: 6, advanced: true })
+    for (let t = 1; t <= 3; t += 1) w.samples.push(smp(t, { fps: 5, presented: 5, ahead: 0.4 }))
+    for (let t = 4; t <= 10; t += 1) w.samples.push(smp(t, { fps: 30, presented: 30, ahead: 6 }))
     w.pres.supported = true
     el.setFrames(480, 7)                    // 窗口里又解了 180 帧、丢了 3 帧
     w.waiting = 6
@@ -99,9 +108,7 @@ describe('playbackProbe', () => {
     const el = makeEl()
     const w = openWindow(el, 'seek', 100)
     // 解码 30fps、呈现只有 8fps：帧解出来了，但没上屏
-    for (let t = 1; t <= 6; t += 1) {
-      w.samples.push({ t, fps: 30, presented: 8, ahead: 6, advanced: true })
-    }
+    for (let t = 1; t <= 6; t += 1) w.samples.push(smp(t, { presented: 8 }))
     w.pres.supported = true
     w.pres.maxGapMs = 700                        // 有一次 0.7 秒的大洞
     w.pres.gaps.push(700)
@@ -113,9 +120,25 @@ describe('playbackProbe', () => {
     expect(line).toContain('判定=呈现受限')
   })
 
+  it('★ 真机三次复现的形状：缓冲够、解码够、**呈现很低** + 那几秒是"页面不可见" ⇒ 判定要指名它', () => {
+    // 现场（devlog/309）：最低缓冲 2.6s、解码 30.2fps、呈现 7.3fps、最长停顿 4.15s，而这几秒
+    // 页面被判为不可见（切走/被完全遮挡/最小化）——Chromium 对不可见页面**挂起画面、继续放音频**
+    const w = openWindow(makeEl(), 'seek', 161.4)
+    for (let t = 1; t <= 3; t += 1) w.samples.push(smp(t, { hidden: true, focused: false }))
+    for (let t = 4; t <= 7; t += 1) w.samples.push(smp(t, { presented: 30 }))
+    w.pres.supported = true
+    w.pres.maxGapMs = 4150
+    w.minAhead = 2.6
+    expect(hiddenSeconds(w)).toBe(3)
+    expect(verdict(w, 30.2)).toBe('窗口不可见(浏览器挂起画面，音频照常)')
+    const line = summarize(w, makeEl(), w.startedAt + 7_000)
+    expect(line).toContain('隐藏=3s')
+    expect(line).toContain('判定=窗口不可见')
+  })
+
   it('`verdict` 三态：数据受限 / 呈现受限 / 正常', () => {
     const w = openWindow(makeEl(), 'seek', 10)
-    for (let t = 1; t <= 4; t += 1) w.samples.push({ t, fps: 30, presented: 30, ahead: 5, advanced: true })
+    for (let t = 1; t <= 4; t += 1) w.samples.push(smp(t, { ahead: 5 }))
     expect(verdict(w, 30)).toBe('正常(呈现量不到)')     // jsdom 没有 rVFC ⇒ 如实说量不到
 
     w.pres.supported = true
@@ -123,8 +146,8 @@ describe('playbackProbe', () => {
 
     const stalled = openWindow(makeEl(), 'seek', 10)
     stalled.pres.supported = true
-    stalled.samples.push({ t: 1, fps: 0, presented: 0, ahead: 0.1, advanced: false })
-    stalled.samples.push({ t: 2, fps: 0, presented: 0, ahead: 0.1, advanced: false })
+    stalled.samples.push(smp(1, { fps: 0, presented: 0, ahead: 0.1, advanced: false }))
+    stalled.samples.push(smp(2, { fps: 0, presented: 0, ahead: 0.1, advanced: false }))
     expect(verdict(stalled, 0)).toBe('数据受限')
   })
 
@@ -148,12 +171,12 @@ describe('playbackProbe', () => {
     expect(line).toContain('停顿次数=1')
   })
 
-  it('**卡帧与空转分开**：`currentTime` 不动 = 数据没到；动了却没帧 = 解码/呈现', () => {
+  it('**卡帧与空转分开**：`currentTime` 不动 = 数据没到；动了却没帧 = 解码', () => {
     const w = openWindow(makeEl(), 'seek', 10)
-    w.samples.push({ t: 1, fps: 0, presented: 0, ahead: 0.1, advanced: false })  // 卡帧（数据没到）
-    w.samples.push({ t: 2, fps: 0, presented: 0, ahead: 0.1, advanced: false })
-    w.samples.push({ t: 3, fps: 0, presented: 0, ahead: 8.0, advanced: true })   // 空转（缓冲够、没出帧）
-    w.samples.push({ t: 4, fps: 30, presented: 30, ahead: 8.0, advanced: true })
+    w.samples.push(smp(1, { fps: 0, presented: 0, ahead: 0.1, advanced: false }))  // 卡帧（数据没到）
+    w.samples.push(smp(2, { fps: 0, presented: 0, ahead: 0.1, advanced: false }))
+    w.samples.push(smp(3, { fps: 0, presented: 0, ahead: 8.0 }))                  // 空转（缓冲够、没出帧）
+    w.samples.push(smp(4, { ahead: 8.0 }))
     expect(stalledSeconds(w)).toBe(2)
     expect(idleSeconds(w)).toBe(1)
   })
@@ -161,8 +184,8 @@ describe('playbackProbe', () => {
   it('`curveLine`：只在**确实有低谷**时给每一步曲线，并把"没前进"标出来', () => {
     const w = openWindow(makeEl(), 'seek', 10)
     for (let t = 1; t <= 6; t += 1) {
-      w.samples.push({ t, fps: t <= 3 ? 4 : 30, presented: t <= 3 ? 4 : 30,
-                       ahead: t <= 3 ? 0.3 : 6, advanced: t !== 2 })
+      w.samples.push(smp(t, { fps: t <= 3 ? 4 : 30, presented: t <= 3 ? 4 : 30,
+                              ahead: t <= 3 ? 0.3 : 6, advanced: t !== 2 }))
     }
     const line = curveLine(w)
     expect(line).toContain('曲线(seek)')
@@ -171,9 +194,7 @@ describe('playbackProbe', () => {
     expect(line).toContain('4s:30fps/6.0')
 
     const calm = openWindow(makeEl(), 'start')
-    for (let t = 1; t <= 6; t += 1) {
-      calm.samples.push({ t, fps: 30, presented: 30, ahead: 8, advanced: true })
-    }
+    for (let t = 1; t <= 6; t += 1) calm.samples.push(smp(t))
     expect(curveLine(calm), '一切正常就不该多刷一行').toBeNull()
   })
 

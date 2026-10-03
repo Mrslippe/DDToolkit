@@ -30,6 +30,11 @@ interface Sample {
   ahead: number | null
   /** 这一秒 `currentTime` 有没有前进（没前进 = 数据没到） */
   advanced: boolean
+  /** 这一秒页面是不是**被浏览器判为不可见**（`document.visibilityState === 'hidden'`：
+   *  切走、最小化、以及 Windows 上的"窗口被完全遮挡"都会落到这里） */
+  hidden: boolean
+  /** 这一秒页面有没有焦点（部分遮挡/失焦时 Chromium 会降级渲染） */
+  focused: boolean
 }
 
 export interface PlaybackWindow {
@@ -93,6 +98,16 @@ export function idleSeconds(w: PlaybackWindow): number {
   return w.samples.filter((s) => s.advanced && s.fps === 0).length
 }
 
+/** 窗口里"浏览器认为页面不可见"的秒数（切走/遮挡/最小化）。 */
+export function hiddenSeconds(w: PlaybackWindow): number {
+  return w.samples.filter((s) => s.hidden).length
+}
+
+/** 窗口里"页面失焦"的秒数。 */
+export function unfocusedSeconds(w: PlaybackWindow): number {
+  return w.samples.filter((s) => !s.focused).length
+}
+
 function avgFps(w: PlaybackWindow, from: number, to: number): number | null {
   const seg = w.samples.filter((s) => s.t > from && s.t <= to)
   if (!seg.length) return null
@@ -118,6 +133,14 @@ export function verdict(w: PlaybackWindow, decodedFps: number): string {
   const stalled = stalledSeconds(w)
   const thin = w.minAhead != null && w.minAhead < 0.5 && w.waiting >= 3
   if (stalled >= 2 || thin) return '数据受限'
+  /**
+   * ⚠️ 真机三次复现全落在这里（`devlog/309`）：**缓冲 2.6–19.4 秒、解码 30–75fps、
+   * 但呈现只有 7–15fps 且出现过 3–4 秒完全不出帧**（`currentTime` 一直在走、音频正常）。
+   * 那个形状只说明一件事：**浏览器把画面挂起了**——而这正是 Chromium 对
+   * "页面不可见 / 窗口被完全遮挡 / 最小化"的标准行为（音频继续、视频停）。
+   * 所以先问"当时窗口可见吗"，可见才谈"是不是合成太慢"。
+   */
+  if (hiddenSeconds(w) >= 1) return '窗口不可见(浏览器挂起画面，音频照常)'
   const pres = presentedFps(w)
   if (!w.pres.supported) return '正常(呈现量不到)'
   const presBad = (pres != null && decodedFps >= 5 && pres < decodedFps * 0.7)
@@ -150,6 +173,8 @@ export function summarize(w: PlaybackWindow, el: HTMLMediaElement, now: number):
     `后段=${later == null ? '-' : later.toFixed(1)}`,
     `卡帧=${stalledSeconds(w)}s`,     // currentTime 没动 ⇒ 数据没到
     `空转=${idleSeconds(w)}s`,        // currentTime 在动却没解出帧 ⇒ 解码
+    `隐藏=${hiddenSeconds(w)}s`,      // 浏览器判页面不可见（切走/遮挡/最小化）
+    `失焦=${unfocusedSeconds(w)}s`,
     `丢帧=${droppedGained}/${gained}`,
     `末缓冲=${aheadOf(el)?.toFixed(1) ?? '?'}s`,
   ].join(' ')
@@ -230,7 +255,11 @@ export function watchPlayback(el: HTMLVideoElement, reason: string, targetS?: nu
     // `meta.presentedFrames` 是**累计值** ⇒ 这里存**这一秒的增量**，`presentedFps` 才能当帧率用
     const presDelta = w.pres.supported ? Math.max(0, lastPresented - lastPresentedSampled) : null
     lastPresentedSampled = lastPresented
-    w.samples.push({ t: tick, fps, presented: presDelta, ahead, advanced })
+    // 页面可见性/焦点：Chromium 对"不可见"的页面**会挂起画面**（音频继续）——
+    // 真机三次复现的画面停摆就落在这条上（devlog/309）
+    const hidden = typeof document !== 'undefined' && document.visibilityState === 'hidden'
+    const focused = typeof document === 'undefined' || document.hasFocus()
+    w.samples.push({ t: tick, fps, presented: presDelta, ahead, advanced, hidden, focused })
   }
   const timer = window.setInterval(sample, SAMPLE_MS)
   const stop = () => { alive = false; window.clearInterval(timer); window.clearTimeout(windowTimer) }
