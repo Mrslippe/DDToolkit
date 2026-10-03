@@ -1,45 +1,51 @@
 /**
- * 播放诊断（2026-10-03，devlog/306）：把"跳转后画面低帧率"这类**只在真机上出现**的现象
+ * 播放诊断（2026-10-03，devlog/306/307）：把"跳转后画面低帧率"这类**只在真机上出现**的现象
  * 变成一行可以交给开发者的数字。
  *
- * ## 为什么要它
+ * ## 为什么要它（以及第一版为什么不够）
  *
  * 用户报的是：「点跳转 → 画面先卡在一帧 → 以很低的帧率播一段 → 再正常；音频全程正常」。
- * 这句话能排除"音画不同步"，但**分不出**是 CDN 慢、本机代理慢、还是浏览器/解码慢：
- * · CDN/代理慢 ⇒ 本机日志里那条 `[视频代理]` 诊断行会显示首字节/前 5 秒吞吐；
- * · 浏览器侧慢 ⇒ 这里量到的**有效帧率**与**掉帧数**会难看，而缓冲其实是够的。
+ * 第一版只量"8 秒一行的平均帧率"，真机跑了几次**只留下一行**：
+ * 平均会把 3 秒的低谷抹平；而且窗口被顶掉、或组件卸载时**整条丢弃**（`cancel`）——
+ * 偏偏"关掉抽屉那几次"才是要看的那几次。
  *
- * 两边一对照，结论就不用猜了。
+ * ## 这一版量什么（能直接分开两种病因）
  *
- * ## 口径
- *
- * · 只量**一段窗口**（默认 8 秒，从 seek 到位 / 起播那一刻开始）；
- * · 帧数用 `getVideoPlaybackQuality()`（没有就退回 `webkitDecodedFrameCount`）；
- * · 一行一并发给后端（`POST /settings/client-log`）⇒ 落进 `logs/app.log`，
- *   与代理那些行在**同一个文件**里，用户一次就能把整条证据交上来；
- * · 失败（没网/端点不通）**静默**：诊断绝不影响播放。
+ * 每秒采一次样，记 `currentTime` 与**解码帧数的增量**：
+ * · `currentTime` 不前进 ⇒ **数据没到**（卡帧/饿住）；
+ * · `currentTime` 前进但这一秒一帧都没解出来 ⇒ **帧没被解出/没被呈现**（解码或合成的问题）。
+ * 再把窗口切成"前 3 秒 vs 之后"——用户描述的就是"开头差、之后正常"，这两段一比就出来。
+ * 窗口 30 秒；**卸载时把已采到的先报出去**（不再丢弃）。
  */
 import { api } from '../api/api'
 
-export interface PlaybackWindow {
-  /** 哪个动作触发的（`seek` / `start`） */
-  reason: string
-  /** 目标时刻（seek 才有） */
-  targetS?: number
-  /** 窗口开始时刻（ms，`performance.now()`） */
-  startedAt: number
-  /** 进入窗口那一刻的丢帧计数（用来算增量） */
-  frames: number
-  dropped: number
-  /** 窗口内 `waiting` 次数（画面饿住的次数） */
-  waiting: number
-  /** 窗口内见过的最低"前方缓冲"（秒；null = 量不到） */
-  minAhead: number | null
-  /** 从窗口开始到**第一次真的出画**（`playing`）用了多久（ms；null = 窗口内没出画） */
-  readyMs: number | null
+interface Sample {
+  /** 第几秒（1 起） */
+  t: number
+  /** 这一秒解了多少帧 */
+  fps: number
+  /** 这一秒末的前方缓冲（秒）；量不到 = null */
+  ahead: number | null
+  /** 这一秒 `currentTime` 有没有前进（没前进 = 数据没到） */
+  advanced: boolean
 }
 
-const WINDOW_MS = 8000
+export interface PlaybackWindow {
+  reason: string
+  targetS?: number
+  startedAt: number
+  baseFrames: number
+  baseDropped: number
+  waiting: number
+  minAhead: number | null
+  readyMs: number | null
+  samples: Sample[]
+}
+
+const WINDOW_MS = 30_000
+const SAMPLE_MS = 1_000
+/** 低于后段的这个比例就认为"开头确实差"，多报一行每秒曲线 */
+const DIP_RATIO = 0.7
 
 /** 帧计数（Chromium 有 `getVideoPlaybackQuality`；没有就退回 webkit* 字段）。 */
 export function frameStats(el: HTMLVideoElement): { frames: number; dropped: number } {
@@ -53,16 +59,17 @@ export function frameStats(el: HTMLVideoElement): { frames: number; dropped: num
 
 export function openWindow(el: HTMLVideoElement, reason: string, targetS?: number): PlaybackWindow {
   const { frames, dropped } = frameStats(el)
-  return { reason, targetS, startedAt: performance.now(), frames, dropped,
-           waiting: 0, minAhead: null, readyMs: null }
+  return { reason, targetS, startedAt: performance.now(), baseFrames: frames,
+           baseDropped: dropped, waiting: 0, minAhead: null, readyMs: null, samples: [] }
 }
 
 /** 当前位置前方还有多少秒缓冲（不在任何缓冲区间 ⇒ null）。 */
-export function aheadOf(el: HTMLVideoElement): number | null {
+export function aheadOf(el: HTMLMediaElement): number | null {
   try {
     for (let i = 0; i < el.buffered.length; i += 1) {
       if (el.buffered.start(i) <= el.currentTime && el.currentTime <= el.buffered.end(i)) {
-        return el.buffered.end(i) - el.currentTime
+        const v = el.buffered.end(i) - el.currentTime
+        return v >= 0 ? v : null        // 负数只是读数竞争的毛刺，**别当成"缓冲 −1 秒"报上去**
       }
     }
   } catch {
@@ -71,55 +78,107 @@ export function aheadOf(el: HTMLVideoElement): number | null {
   return null
 }
 
+/** 窗口里"数据没到"的秒数（`currentTime` 没前进）。 */
+export function stalledSeconds(w: PlaybackWindow): number {
+  return w.samples.filter((s) => !s.advanced).length
+}
+
+/** 窗口里"帧没来"的秒数（`currentTime` 在走，但这一秒一帧都没解出来 ⇒ 解码/呈现问题）。 */
+export function idleSeconds(w: PlaybackWindow): number {
+  return w.samples.filter((s) => s.advanced && s.fps === 0).length
+}
+
+function avgFps(w: PlaybackWindow, from: number, to: number): number | null {
+  const seg = w.samples.filter((s) => s.t > from && s.t <= to)
+  if (!seg.length) return null
+  return seg.reduce((n, s) => n + s.fps, 0) / seg.length
+}
+
 /** 把窗口收成一行（纯函数，便于单测：数字怎么算的都能钉住）。 */
-export function summarize(w: PlaybackWindow, el: HTMLVideoElement, now: number): string {
+export function summarize(w: PlaybackWindow, el: HTMLMediaElement, now: number): string {
   const elapsed = (now - w.startedAt) / 1000
-  const { frames, dropped } = frameStats(el)
-  const gained = Math.max(0, frames - w.frames)
-  const droppedGained = Math.max(0, dropped - w.dropped)
+  const { frames, dropped } = frameStats(el as HTMLVideoElement)
+  const gained = Math.max(0, frames - w.baseFrames)
+  const droppedGained = Math.max(0, dropped - w.baseDropped)
   const fps = elapsed > 0 ? gained / elapsed : 0
-  const parts = [
+  const head = avgFps(w, 0, 3)
+  const later = avgFps(w, 3, 1e9)
+  return [
     `[video] ${w.reason}${w.targetS != null ? `→${w.targetS.toFixed(1)}s` : ''}`,
     `窗口=${elapsed.toFixed(1)}s`,
     `起播=${w.readyMs == null ? '未出画' : `${(w.readyMs / 1000).toFixed(1)}s`}`,
     `饿住=${w.waiting}次`,
     `最低缓冲=${w.minAhead == null ? '量不到' : `${w.minAhead.toFixed(1)}s`}`,
-    `帧率=${fps.toFixed(1)}fps`,
+    `总体=${fps.toFixed(1)}fps`,
+    `前3秒=${head == null ? '-' : head.toFixed(1)}`,
+    `后段=${later == null ? '-' : later.toFixed(1)}`,
+    `卡帧=${stalledSeconds(w)}s`,     // currentTime 没动 ⇒ 数据没到
+    `空转=${idleSeconds(w)}s`,        // currentTime 在动却没出帧 ⇒ 解码/呈现
     `丢帧=${droppedGained}/${gained}`,
-    `已缓冲=${aheadOf(el)?.toFixed(1) ?? '?'}s`,
-  ]
-  return parts.join(' ')
+    `末缓冲=${aheadOf(el)?.toFixed(1) ?? '?'}s`,
+  ].join(' ')
+}
+
+/** 每秒曲线（只在确实有低谷/卡顿时附一行，避免把日志刷满）。 */
+export function curveLine(w: PlaybackWindow, max = 15): string | null {
+  const head = avgFps(w, 0, 3)
+  const later = avgFps(w, 3, 1e9)
+  const dip = head != null && later != null && later > 0 && head < later * DIP_RATIO
+  const bad = stalledSeconds(w) >= 2 || idleSeconds(w) >= 2
+  if (!dip && !bad) return null
+  const items = w.samples.slice(0, max).map(
+    (s) => `${s.t}s:${s.fps}fps/${s.ahead == null ? '×' : s.ahead.toFixed(1)}${s.advanced ? '' : '*'}`)
+  return `[video] 曲线(${w.reason}) ${items.join(' ')}${w.samples.length > max ? ' …' : ''}`
+    + ' （`*` = 该秒 currentTime 没前进）'
 }
 
 export interface ProbeHandle {
   noteWaiting: () => void
   noteAhead: (v: number | null) => void
   noteReady: () => void
-  /** 取消（组件卸载 / 又被新的窗口顶掉）——**必须取消**：否则窗口会在卸载后照样发一行，
-   *  连续拖拽还会攒出一串没人看的行（单测里表现为"跑完还有一堆定时器"）。 */
+  /** **现在就把已采到的报出去**（组件卸载/播放结束时用）。第一版这里是"丢弃"，
+   *  于是用户关掉抽屉那几次恰好什么都没留下（真机只捞到 1 行就是这么来的）。 */
+  finish: () => void
+  /** 丢弃（被新的窗口顶掉：连续拖拽只留最后一次） */
   cancel: () => void
 }
 
-/**
- * 开一个窗口并在 `WINDOW_MS` 后收尾上报（**一个播放器同时只跟一个窗口**：
- * 连续拖拽会反复开窗，旧的那个直接丢弃 —— 我们要的是"这次操作之后发生了什么"）。
- */
 export function watchPlayback(el: HTMLVideoElement, reason: string, targetS?: number): ProbeHandle {
   const w = openWindow(el, reason, targetS)
   let alive = true
-  const timer = window.setTimeout(() => {
-    if (!alive) return
-    alive = false
-    const line = summarize(w, el, performance.now())
-    void api.clientLog(line).catch(() => { /* 诊断上报失败就算了，绝不影响播放 */ })
-  }, WINDOW_MS)
+  let lastFrames = w.baseFrames
+  let lastCur = el.currentTime
+  let tick = 0
+
+  const sample = () => {
+    tick += 1
+    const { frames } = frameStats(el)
+    const fps = Math.max(0, frames - lastFrames)
+    lastFrames = frames
+    const advanced = el.currentTime - lastCur >= 0.2
+    lastCur = el.currentTime
+    const ahead = aheadOf(el)
+    if (ahead != null) w.minAhead = w.minAhead == null ? ahead : Math.min(w.minAhead, ahead)
+    w.samples.push({ t: tick, fps, ahead, advanced })
+  }
+  const timer = window.setInterval(sample, SAMPLE_MS)
+  const stop = () => { alive = false; window.clearInterval(timer); window.clearTimeout(windowTimer) }
+  const post = () => {
+    void api.clientLog(summarize(w, el, performance.now()))
+      .catch(() => { /* 诊断上报失败就算了，绝不影响播放 */ })
+    const curve = curveLine(w)
+    if (curve) void api.clientLog(curve).catch(() => { /* 同上 */ })
+  }
+  const windowTimer = window.setTimeout(() => { if (alive) { stop(); post() } }, WINDOW_MS)
+
   return {
     noteWaiting: () => { w.waiting += 1 },
     noteAhead: (v) => {
-      if (v == null) return
+      if (v == null || v < 0) return
       w.minAhead = w.minAhead == null ? v : Math.min(w.minAhead, v)
     },
     noteReady: () => { if (w.readyMs == null) w.readyMs = performance.now() - w.startedAt },
-    cancel: () => { alive = false; window.clearTimeout(timer) },
+    finish: () => { if (alive) { stop(); post() } },
+    cancel: () => stop(),
   }
 }

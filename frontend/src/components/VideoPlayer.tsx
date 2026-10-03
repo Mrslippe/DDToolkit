@@ -227,8 +227,9 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
     probeRef.current?.cancel()          // 连续拖拽：只跟最后一个窗口
     probeRef.current = watchPlayback(el, reason, targetS)
   }, [])
-  // 卸载时取消（否则窗口会在卸载后照样上报一行）
-  useEffect(() => () => probeRef.current?.cancel(), [])
+  // 卸载时**先把已采到的报出去**（不是丢弃）：第一版丢弃，于是用户关掉抽屉那几次
+  // 恰好什么都没留下（真机只捞到 1 行就是这么来的，devlog/307）
+  useEffect(() => () => probeRef.current?.finish(), [])
 
   /** `[start, end]` 里包含当前位置的那一段还剩多少秒（没缓冲到当前位置 ⇒ -1） */
   const bufferedAhead = useCallback((el: HTMLMediaElement) => {
