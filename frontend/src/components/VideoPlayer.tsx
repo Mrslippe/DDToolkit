@@ -21,6 +21,7 @@ import {
 import { videoProxyUrl } from '../api/api'
 import { normalizeImageUrl } from '../utils/format'
 import { openExternalFromHref } from '../utils/externalLinkGuard'
+import { watchPlayback } from '../utils/playbackProbe'
 import { reportUserError } from '../utils/problemReport'
 import {
   PLAYBACK_RATES, applyPlayerPrefs, playerPrefs, setPlayerPrefs, subscribePlayerPrefs,
@@ -217,6 +218,17 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
   const spinRef = useRef({ since: 0, hideTimer: 0 })
   /** 缓冲治理的按住状态（见 `HOLD_AT` 那段注释） */
   const holdRef = useRef({ active: false, selfAt: 0, lastAhead: -1, stuck: 0 })
+  /**
+   * 播放诊断窗口（devlog/306）：**只在真机上出现**的现象（"跳转后画面低帧率"）靠它留证据。
+   * 起播与每次 seek 各开一个 8 秒窗口，收尾时把一行数字发给后端日志。
+   */
+  const probeRef = useRef<ReturnType<typeof watchPlayback> | null>(null)
+  const startProbe = useCallback((el: HTMLVideoElement, reason: string, targetS?: number) => {
+    probeRef.current?.cancel()          // 连续拖拽：只跟最后一个窗口
+    probeRef.current = watchPlayback(el, reason, targetS)
+  }, [])
+  // 卸载时取消（否则窗口会在卸载后照样上报一行）
+  useEffect(() => () => probeRef.current?.cancel(), [])
 
   /** `[start, end]` 里包含当前位置的那一段还剩多少秒（没缓冲到当前位置 ⇒ -1） */
   const bufferedAhead = useCallback((el: HTMLMediaElement) => {
@@ -387,10 +399,13 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
         }
       }
     }
-    const onPlaying = () => { endSpin(); startAudio() }
+    const onPlaying = () => { endSpin(); startAudio(); probeRef.current?.noteReady() }
     /* 缓冲中要有转圈（用户口径：点进度条跳转后在加载，不能看起来像"暂停了"） */
     const onWaiting = () => {
       showSpin()
+      // 诊断：这一下饿住记进窗口（"低帧率那段时间里饿了几次"是关键数字）
+      probeRef.current?.noteWaiting()
+      probeRef.current?.noteAhead(bufferedAhead(el))
       /**
        * ★ **画面停了，声音也必须停**（`devlog/305`，本条是"卡一帧 + 抖一阵"的真正根因）。
        *
@@ -552,8 +567,9 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
     const el = videoRef.current
     if (!el) return
     wantPlayRef.current = true
+    startProbe(el, 'start')          // 起播也开一个窗口（"点开详情页→播放"那条路径）
     void el.play().catch(() => { /* 自动播放策略拒绝：保持暂停，让用户再点一下 */ })
-  }, [])
+  }, [startProbe])
 
   const toggle = useCallback(() => {
     const el = videoRef.current
@@ -644,11 +660,13 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
       seekRef.current.settling = true
       seekRef.current.wasPlaying = wantPlayRef.current || !el.paused
       a.pause()
+      // 诊断窗口从**按下那一刻**开始（用户感知的"卡住"就是从这时算的）
+      startProbe(el, 'seek', Math.min(el.duration, Math.max(0, ratio * el.duration)))
     }
     el.currentTime = Math.min(el.duration, Math.max(0, ratio * el.duration))
     setCur(el.currentTime)
     if (!live) settleAudio()
-  }, [settleAudio])
+  }, [settleAudio, startProbe])
 
   const toggleFs = useCallback(() => {
     const node = wrapRef.current

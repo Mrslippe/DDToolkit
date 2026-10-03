@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from urllib.parse import urlparse
 
 import httpx
@@ -104,6 +105,33 @@ async def close_client() -> None:
     _client = None
 
 
+# ── 每请求诊断（devlog/306）───────────────────────────────────────────────────
+#
+# 用户真机反馈："点跳转之后画面先卡在一帧，然后以很低的帧率播一段，再正常；音频全程正常"。
+# 那是**视频这一路数据到得不够快**，但"不够快"到底是 CDN、是我们这层代理、还是浏览器，
+# 在不看数字的情况下只能猜（前面几批就吃了这个亏）。所以每次转发都记四个数：
+#   · **首字节延迟**（CDN 认不认这个 Range、边缘有没有缓存 —— 冷启动就慢在这）
+#   · **前 5 秒的吞吐**（够不够撑住实时码率）
+#   · 总计字节 / 用时 / 是否被客户端中止
+# 一次跳转一行，落在 `logs/app.log`（诊断包里带的就是它）。
+_THROUGHPUT_WINDOW = 5.0
+_SLOW_TTFB_MS = 1500
+#: 低于这个速率就撑不住 1080P（实测片源 ~1900 kbps ⇒ 需要 ~240KB/s）
+_SLOW_RATE_BYTES_PER_S = 300_000
+
+
+def _q_hash(url: str) -> str:
+    """URL 的短指纹（**不带签名**）：用来在同一份日志里认出"是不是同一个地址"。"""
+    import hashlib
+
+    return hashlib.sha1(url.encode("utf-8", "replace")).hexdigest()[:8]
+
+
+def _kind_of(url: str) -> str:
+    """视频还是音轨（B站的分片文件名以 `-1-302xx.m4s` 收尾，30216/30232/30280 都是音频）。"""
+    return "audio" if "-302" in url else "video"
+
+
 def _host_of(url: str) -> str:
     """URL 的主机名（小写）；解析不了就空串。"""
     try:
@@ -148,18 +176,23 @@ async def video_proxy(request: Request, url: str = Query(...)):
     # 策略头**最后合并**：CDN 要什么由我们决定，不听浏览器的（`Referer`/`Origin`/`Cookie` 一律不转发）
     headers.update(policy_for(host))
     client = _shared_client()
+    t0 = time.monotonic()
     try:
         req = client.build_request("GET", url, headers=headers)
         upstream = await client.send(req, stream=True)
     except httpx.HTTPError as e:
         logger.warning(f"视频代理取数失败 {host}: {type(e).__name__}: {e}")
         raise HTTPException(502, f"上游取数失败：{type(e).__name__}") from e
+    ttfb_ms = int((time.monotonic() - t0) * 1000)
 
     if upstream.status_code >= 400:
         code = upstream.status_code
         await upstream.aclose()
         logger.warning(f"视频代理上游 HTTP {code} host={host}")
         raise HTTPException(code, f"上游返回 {code}")
+
+    #: 吞吐采样：`(已送出字节, 相对开始秒数)`，只在前 `_THROUGHPUT_WINDOW` 秒记
+    stats = {"sent": 0, "first5": None, "start": time.monotonic()}
 
     async def _iter():
         """
@@ -170,14 +203,58 @@ async def video_proxy(request: Request, url: str = Query(...)):
         **ERROR 级 traceback**（用户日志里那一大串就是它），把真问题淹了。
         现在：**中止就当正常收尾**（记一条 debug），真错误才 warning。
         """
+        aborted = False
         try:
             async for chunk in upstream.aiter_bytes(_CHUNK):
                 yield chunk
+                stats["sent"] += len(chunk)
+                el = time.monotonic() - stats["start"]
+                if stats["first5"] is None and el >= _THROUGHPUT_WINDOW:
+                    stats["first5"] = stats["sent"] / el
         except (httpx.HTTPError, ConnectionResetError, OSError) as e:
+            aborted = True
             logger.debug(f"视频代理流被中止 host={host}（正常：前端换源/seek）：{type(e).__name__}")
         finally:
             await upstream.aclose()
+            _log_stream_done(kind=_kind_of(url), host=host, headers=headers,
+                             status=upstream.status_code, ttfb_ms=ttfb_ms,
+                             sent=stats["sent"], elapsed=time.monotonic() - stats["start"],
+                             first5=stats["first5"], aborted=aborted,
+                             url_hash=_q_hash(url))
 
     out = {k: v for k, v in upstream.headers.items() if k.lower() in _FORWARD_RESP}
     out.setdefault("accept-ranges", "bytes")
     return StreamingResponse(_iter(), status_code=upstream.status_code, headers=out)
+
+
+def _log_stream_done(*, kind: str, host: str, headers: dict, status: int, ttfb_ms: int,
+                     sent: int, elapsed: float, first5: float | None, aborted: bool,
+                     url_hash: str) -> None:
+    """一条转发结束时的诊断行（跳转/开播各一行，见上面那段注释的动机）。"""
+    rate = sent / elapsed if elapsed > 0 else 0.0
+    rng = (headers.get("Range") or headers.get("range") or "全量")
+    line = (f"[视频代理] {kind} hash={url_hash} host={host} range={rng} status={status} "
+            f"首字节={ttfb_ms}ms 前{_THROUGHPUT_WINDOW:.0f}秒={_mb(first5)} 均速={_mb(rate)} "
+            f"共={sent / 1048576:.2f}MB 用时={elapsed:.1f}s 中止={'是' if aborted else '否'}")
+    # 只把**可疑**的那些提到 WARNING（正常播放每条都 warning 会淹掉真问题）
+    slow_ttfb = ttfb_ms > _SLOW_TTFB_MS
+    slow_start = first5 is not None and first5 < _SLOW_RATE_BYTES_PER_S
+    slow_avg = rate < _SLOW_RATE_BYTES_PER_S and sent > 512 * 1024
+    if slow_ttfb or slow_start or slow_avg:
+        why = []
+        if slow_ttfb:
+            why.append(f"首字节 {ttfb_ms}ms（> {_SLOW_TTFB_MS}）—— CDN 认这个 Range 慢/边缘没缓存")
+        if slow_start:
+            why.append(f"前{_THROUGHPUT_WINDOW:.0f}秒只有 {_mb(first5)} —— 撑不住实时码率会表现为"
+                       f"『画面低帧率』")
+        if slow_avg:
+            why.append(f"均速 {_mb(rate)} 偏低")
+        logger.warning(f"{line} ⚠️ {'；'.join(why)}")
+    else:
+        logger.info(line)
+
+
+def _mb(bytes_per_s: float | None) -> str:
+    if bytes_per_s is None:
+        return "未满窗口"
+    return f"{bytes_per_s / 1048576:.2f}MB/s"

@@ -686,6 +686,20 @@ export const api = {
     request<{ filename: string; text: string; bytes: number; generated_at: string }>(
       '/settings/diagnostics'),
 
+  /**
+   * 把**一行前端诊断**写进后端日志（devlog/306）。
+   *
+   * 为什么需要它：真机现象的第一现场在浏览器里（跳转后低帧率…），而用户能交给我们的是
+   * 后端日志 / 诊断包。落进同一个文件，证据才对得上（代理那侧的行由 `video_proxy` 记）。
+   * ⚠️ 只认白名单标签（`[video]`/`[player]`/`[media]`），单行 ≤400 字，有频率上限。
+   */
+  clientLog: (line: string) =>
+    request<{ ok: boolean; dropped: boolean }>('/settings/client-log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ line }),
+    }),
+
   /** 保存偏好（枚举白名单在后端；不在集合内 → 400） */
   savePrefs: (values: Record<string, string>) =>
     request<PrefsSaved>('/settings/prefs', {

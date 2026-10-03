@@ -294,6 +294,52 @@ def get_diagnostics():
     return diagnostics.build_diagnostics()
 
 
+#: 前端允许写进后端日志的**行首标签白名单**（devlog/306）。
+#: 只收这几种：别让它变成"任意写日志"的通道（那会被拿来伪造日志/刷盘）。
+CLIENT_LOG_TAGS = ("[video]", "[player]", "[media]")
+
+
+class ClientLogIn(BaseModel):
+    """前端诊断行（**只收一行、只收白名单标签**）。"""
+
+    line: str = Field(min_length=1, max_length=400)
+
+
+#: 每分钟允许多少条（按进程计数）。正常用量：一次跳转一条 ⇒ 远低于这个数；
+#: 超了只丢弃并记一条自身日志，不做惩罚 —— 这是诊断通道，不是安全边界。
+_CLIENT_LOG_PER_MIN = 30
+_client_log_window: dict[str, object] = {"start": 0.0, "count": 0}
+
+
+@router.post("/client-log")
+def client_log(payload: ClientLogIn):
+    """前端把**关键诊断行**写进后端日志（2026-10-03，devlog/306）。
+
+    为什么值得单开一个端点：真机现象（"跳转后画面低帧率"这类）第一现场在**浏览器**里，
+    而用户能交给我们的是**后端日志 / 诊断包**。让前端的量测行落进 `logs/app.log`，
+    整条证据链就在同一个文件里 —— 不用让用户开 devtools，也不用凭记忆复述数字。
+
+    ⚠️ 三条边界：① 只认白名单标签（`CLIENT_LOG_TAGS`）；② 单行 ≤400 字；
+    ③ 每进程每分钟 ≤`_CLIENT_LOG_PER_MIN` 条，超了丢弃（不回错，免得前端还要处理）。
+    级别固定 INFO，**不接受调用方指定**（否则前端一句话就能把日志刷成 error）。
+    """
+    import time as _time
+
+    line = payload.line.strip()
+    if not any(line.startswith(tag) for tag in CLIENT_LOG_TAGS):
+        raise HTTPException(400, f"只收这些标签开头的诊断行：{'/'.join(CLIENT_LOG_TAGS)}")
+    now = _time.monotonic()
+    if now - float(_client_log_window["start"]) > 60:      # 新窗口
+        _client_log_window["start"] = now
+        _client_log_window["count"] = 0
+    _client_log_window["count"] = int(_client_log_window["count"]) + 1
+    if int(_client_log_window["count"]) > _CLIENT_LOG_PER_MIN:
+        logger.warning(f"前端诊断行超频（>{_CLIENT_LOG_PER_MIN}/分钟），本条丢弃")
+        return {"ok": False, "dropped": True}
+    logger.info(f"前端 {line}")
+    return {"ok": True, "dropped": False}
+
+
 @router.post("/storage/prune-cache")
 def prune_img_cache():
     """清空图片缓存 —— 用户主动点的按钮，口径是**全清**（缓存可再生，删了下次重下）。"""

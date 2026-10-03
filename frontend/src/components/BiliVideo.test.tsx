@@ -17,6 +17,9 @@ vi.mock('../api/api', () => ({
   // 只 mock `biliPlay` 而漏掉这两个 ⇒ 组件直接抛 "No export is defined on the mock"。
   videoProxyUrl: (u: string) => `/api/video-proxy?url=${encodeURIComponent(u)}`,
   imgProxyUrl: (u: string) => `/api/img-proxy?url=${encodeURIComponent(u)}`,
+  // 播放诊断上报（devlog/306）：组件会 `api.clientLog(一行)`，mock 里缺它就会抛
+  // "No export is defined on the mock"（跟上面两个代理 URL 同一类坑）
+  clientLog: () => Promise.resolve({ ok: true, dropped: false }),
 }))
 vi.mock('../utils/shellBridge', () => ({ openExternal: () => Promise.resolve() }))
 

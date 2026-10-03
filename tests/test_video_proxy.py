@@ -99,6 +99,64 @@ def test_client_abort_is_not_an_error(client, monkeypatch, caplog):
         "客户端中止被当成错误记了日志（会淹没真问题）"
 
 
+# ── 诊断行（devlog/306）：真机"跳转后画面低帧率"要靠这些数字定位 ──────────────
+
+def test_every_stream_logs_a_diagnostic_line(client, monkeypatch, caplog):
+    """每次转发结束都留一行：**首字节延迟 + 前 5 秒吞吐 + 总量 + 是否中止**。
+
+    为什么必须有：用户报的"跳转后画面卡一帧、再以很低帧率播一段"分不出是 CDN、本机代理
+    还是浏览器。这行给的是**代理侧**的数字，与前端那行（`[video] 帧率=…`）一对照就定案。
+    """
+    monkeypatch.setattr(video_proxy.httpx, "AsyncClient", _FakeUpstream)
+    with caplog.at_level("INFO", logger=video_proxy.__name__):
+        client.get("/video-proxy", params={"url": UP}, headers={"Range": "bytes=0-2"})
+    lines = [r.getMessage() for r in caplog.records if "[视频代理]" in r.getMessage()]
+    assert lines, "一次转发至少要留一行诊断"
+    line = lines[-1]
+    for needle in ("首字节=", "前5秒=", "共=", "用时=", "中止=", "range=bytes=0-2"):
+        assert needle in line, f"诊断行缺 {needle}：{line}"
+    # 指纹用来认"是不是同一个地址"，**不能把签名原样写进日志**
+    assert "hash=" in line and "sign=" not in line
+
+
+def test_slow_first_bytes_are_warned_not_buried(client, monkeypatch, caplog):
+    """首字节慢 ⇒ 提到 WARNING 并**写明像什么**（否则用户拿到的只是"一条 INFO"）。
+
+    真机判据：跳转后画面低帧率的头号嫌疑是"CDN 对随机 Range 冷启动慢"，
+    这条 warning 就是它的现场记录。
+    """
+    monkeypatch.setattr(video_proxy.httpx, "AsyncClient", _FakeUpstream)
+    monkeypatch.setattr(video_proxy, "_SLOW_TTFB_MS", -1)     # 强制判"首字节慢"
+    with caplog.at_level("INFO", logger=video_proxy.__name__):
+        client.get("/video-proxy", params={"url": UP}, headers={"Range": "bytes=0-2"})
+    warns = [r.getMessage() for r in caplog.records if r.levelno >= 30]
+    assert warns and "首字节" in warns[-1]
+    assert "边缘没缓存" in warns[-1], "要写清这个数字意味着什么"
+
+
+def test_slow_throughput_warning_says_the_symptom(caplog):
+    """吞吐不够 ⇒ warning 要**点名现象**（"撑不住实时码率 ⇒ 画面低帧率"）。
+
+    直接调 `_log_stream_done`：真跑一段慢流要 5 秒，而这里要钉的只是"文案与判据"。
+    """
+    with caplog.at_level("INFO", logger=video_proxy.__name__):
+        video_proxy._log_stream_done(kind="video", host="upos-sz-x.bilivideo.com",
+                                     headers={"Range": "bytes=74383360-"},
+                                     status=206, ttfb_ms=120, sent=3 * 1024 * 1024,
+                                     elapsed=12.0, first5=120_000.0, aborted=False,
+                                     url_hash="deadbeef")
+    warns = [r.getMessage() for r in caplog.records if r.levelno >= 30]
+    assert warns and "低帧率" in warns[-1] and "前5秒" in warns[-1]
+
+    caplog.clear()
+    with caplog.at_level("INFO", logger=video_proxy.__name__):
+        video_proxy._log_stream_done(kind="video", host="upos-sz-x.bilivideo.com",
+                                     headers={}, status=206, ttfb_ms=80,
+                                     sent=20 * 1024 * 1024, elapsed=9.0,
+                                     first5=2_600_000.0, aborted=False, url_hash="deadbeef")
+    assert not [r for r in caplog.records if r.levelno >= 30], "正常的一次不该报警"
+
+
 def test_video_proxy_streams_with_range_and_without_referer(client, monkeypatch):
     """Range 直通（播放器靠它拖进度），且**不把 Referer/Origin/Cookie 转给上游**。"""
     monkeypatch.setattr(video_proxy.httpx, "AsyncClient", _FakeUpstream)
