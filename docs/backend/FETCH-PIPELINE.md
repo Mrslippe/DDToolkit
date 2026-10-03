@@ -544,7 +544,14 @@ mymblog?uid=&page=&feature=0         页间 sleep 20s
 | `GET /x/polymer/web-dynamic/v1/feed/space` | 动态流 | 无 | 中（列表） |
 | `GET /x/polymer/web-dynamic/v1/detail` | 单条动态详情（OPUS） | 无 | **高（风控最严）** |
 | `GET /x/web-interface/view` | 视频详情（bvid） | WBI | 中 |
+| `GET /x/player/playurl` | 播放地址（**用户点播放才调**，`fnval=16` DASH；`fnval=1` 是 durl 单 mp4 回落） | WBI | **高（取流是最敏感的一类，见下）** |
 | `GET /x/article/view` | 专栏全文（cv_id） | 无 | 低 |
+
+> ⚠️ **取流的额外纪律**（`services/bili_play.py`，devlog/289/290）：① **只在用户点播放时调**，
+> 不预取、不扫库；② 结果**只缓存 120s**（地址短时效且**绑 IP**，不落库、不进日志）；
+> ③ `qn` **必须显式给**（不传只回 720P），且 `dash` 与 `durl` **互斥**（要 durl 得再调一次）；
+> ④ 错误如实分类：`-404` 视频不存在 / `-403` 无权限（充电专属）/ `-352` 风控冷却 → `429`，
+> **绝不把"没权限"说成"取不到"**；⑤ Cookie 只在请求头里用，响应里连片段都不出现（哨兵用例在钉）。
 
 ### 6.2 微博（PC ajax，Cookie = 扫码登录保存的 WEIBO_COOKIE）
 

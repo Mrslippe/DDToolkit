@@ -41,6 +41,8 @@ router = APIRouter(tags=["media"])
 ALLOWED_HOSTS: tuple[str, ...] = (
     "xhscdn.com",              # 小红书（图片/视频同域）
     "bilivideo.com",           # B站媒体 CDN（cn-*.bilivideo.com / upos-*.bilivideo.com …）
+    "weibocdn.com",            # 微博视频 CDN（f.video.weibocdn.com）
+    "sinaimg.cn",              # 微博图床（gif 转的 mp4 也叫这个域）
 )
 
 #: **按主机分请求头**（2026-10-03 实测：两家要求正好相反）
@@ -54,6 +56,10 @@ ALLOWED_HOSTS: tuple[str, ...] = (
 HOST_POLICY: tuple[tuple[str, dict[str, str]], ...] = (
     ("xhscdn.com", {}),
     ("bilivideo.com", {"Referer": "https://www.bilibili.com/", "User-Agent": UA_CHROME}),
+    # 微博（实测 2026-10-03，devlog/291）：**裸请求 200，但带 UA+Range 而无 Referer → 403**，
+    # 带 `Referer: https://weibo.com/` → 206 ⇒ 与 B站 同款策略
+    ("weibocdn.com", {"Referer": "https://weibo.com/", "User-Agent": UA_CHROME}),
+    ("sinaimg.cn", {"Referer": "https://weibo.com/", "User-Agent": UA_CHROME}),
 )
 
 _UPSTREAM_TIMEOUT = 30.0

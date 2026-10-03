@@ -162,10 +162,55 @@ def _images_of(m: dict) -> list[dict]:
     return imgs
 
 
+#: 微博视频地址的优先序（**实测**，devlog/291）：720P 优先，H.265 放最后
+#: （WebView2 不一定能解 HEVC；它只是"有更好"的候选，不能当首选）
+_VIDEO_KEYS = ("mp4_720p_mp4", "stream_url_hd", "mp4_hd_url", "stream_url",
+               "mp4_sd_url", "h265_mp4_hd")
+
+
+def _video_of(m: dict, page_info: dict, media: dict) -> dict | None:
+    """微博视频 → 与小红书同款形状 `{url, fallbacks[], duration_s}`（前端一个播放器通吃）。
+
+    ## 现场（2026-10-03 实测真机，devlog/291）
+
+    - 视频帖的 `page_info.type` 是**数字 11**（不是字符串 `"video"`）——旧判定按字符串比，
+      于是"有媒体却认不出视频"，`body.video` 只剩 `{mp4: null}`（用户报的"没有视频"）；
+    - 地址在 `page_info.media_info.{mp4_720p_mp4, stream_url_hd, mp4_hd_url, …}`；
+    - CDN 策略（`f.video.weibocdn.com`）：**裸请求 200，但带 UA+Range 而无 Referer → 403**，
+      带 `Referer: https://weibo.com/` → 206 ⇒ 与 B站 同款策略，走 `/video-proxy`。
+    """
+    src = media if isinstance(media, dict) else {}
+    urls: list[str] = []
+    for k in _VIDEO_KEYS:
+        u = src.get(k)
+        if isinstance(u, str) and u.startswith("http") and u not in urls:
+            urls.append(u)
+    # 新版形态：`page_info.urls` 是个 {清晰度: url} 字典（不总是有）
+    pool = page_info.get("urls")
+    if isinstance(pool, dict):
+        for v in pool.values():
+            u = v.get("url") if isinstance(v, dict) else v
+            if isinstance(u, str) and u.startswith("http") and ".mp4" in u and u not in urls:
+                urls.append(u)
+    if not urls:
+        return None
+    dur = src.get("duration")
+    try:
+        duration_s = int(dur) if dur is not None else None
+    except (TypeError, ValueError):
+        duration_s = None
+    return {"url": urls[0], "fallbacks": urls[1:], "duration_s": duration_s,
+            "cover": page_info.get("page_pic")}
+
+
 def _page_type(m: dict) -> str:
     """PC page_info.type 可能是字符串或数字：统一转小写字符串对比。
+
+    ⚠️ **实测（2026-10-03，devlog/291）：视频帖是数字 `11`**（`page_info.type = 11`），
+    所以判定处要同时认 `"video"` 与 `"11"` —— 旧注释写"仅接受字符串 video/article"，
+    正是"微博视频认不出来"的根因。
     注意：type=23 等数字型是推广卡（SVIP 卡/网页卡，object_type=webpage、无 media），
-    不是视频——分类时仅接受字符串 "video"/"article"。"""
+    不是视频。"""
     pi = m.get("page_info") or {}
     return str(pi.get("type", "") or "").lower()
 
@@ -203,7 +248,9 @@ def _map_mblog(m: dict, uid: str) -> dict:
     page_info = m.get("page_info") or {}
     media = page_info.get("media_info") or {}
 
-    has_video_media = ptype == "video" and bool(
+    # ⚠️ 视频帖的 `page_info.type` 是**数字 11**（PC 站实测，devlog/291）——只按字符串 "video"
+    #    比会漏判，于是"有媒体却认不出视频"（用户报的"微博视频打不开"）。
+    has_video_media = ptype in ("video", "11") and bool(
         media.get("stream_url") or media.get("mp4_720p_mp4") or media.get("mp4_sd_url")
         or media.get("mp4_hd_url") or page_info.get("page_pic"))
 
@@ -231,11 +278,7 @@ def _map_mblog(m: dict, uid: str) -> dict:
         t = page_info.get("title")
         if t:
             body["title"] = t
-        body["video"] = {
-            "mp4": (media.get("stream_url") or media.get("mp4_720p_mp4")
-                    or media.get("mp4_sd_url") or media.get("mp4_hd_url")),
-            "cover": page_info.get("page_pic"),
-        }
+        body["video"] = _video_of(m, page_info, media)
 
     cover = images[0]["url"] if images else (page_info.get("page_pic") or None)
     return {

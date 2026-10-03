@@ -119,7 +119,9 @@ def test_map_mblog_image_repost_video():
     }), "1")
     assert vd["type"] == "video"
     vbody = json.loads(vd["body_json"])
-    assert vbody["video"]["mp4"].startswith("https://")
+    # devlog/291：口径与小红书统一成 `video.url` + fallback 链（旧 `mp4` 键已废）
+    assert vbody["video"]["url"].startswith("https://")
+    assert vbody["video"]["cover"].endswith("cover.jpg")
 
     # video 仅 page_pic（无 mp4 字段）也归 video，cover 保留
     vc = weibo._map_mblog(_mblog(page_info={

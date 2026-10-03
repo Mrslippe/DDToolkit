@@ -170,6 +170,7 @@ budget: 300
 | **凭据持久化** | 写 `DATA_DIR/.env`（临时文件 + 原子替换） | `services/env_store.py::save_env_keys` | 只落本机，不进仓库 |
 | **登录态端点** | `{logged_in, needs_login, uid, name}`（小红书另带 `configured/missing/note`） | `GET /auth/{platform}/status` | 前端 `LoginDialog`（Tab 清单见 `utils/platformLogin.ts::LOGIN_TABS`） |
 | **图片代理** | 绕过图床防盗链（白名单 + 磁盘缓存 + 逐跳校验） | `routers/img_proxy.py` | `IMG_PROXY_ALLOWED_HOSTS` |
+| **视频代理 / 按主机分策略** | 绕过**视频** CDN 防盗链：`<video>` 设不了 `Referer`，而两家 CDN 的要求**正好相反** ⇒ 白名单 + **按主机**补/剥请求头（不落盘、Range 直通） | `routers/video_proxy.py`（`ALLOWED_HOSTS` / `HOST_POLICY` / `policy_for`）、前端 `components/VideoPlayer.tsx` 一律经 `/video-proxy` | **实测 2026-10-03**：`bilivideo.com` 不带 `Referer` → **403**、带 `bilibili.com` → 206；`xhscdn.com` 带 `Referer` → 403、不带 → 206；微博 `weibocdn.com`/`sinaimg.cn` 带 `Referer: weibo.com` → 206。⚠️ 与 `/img-proxy` 同款：**`<video>` 带不了 token 头** ⇒ 必须进公开白名单（见 `api_auth.PUBLIC_EXACT`）；边界 = 主机白名单只有这四家 + 不转发 `Cookie`/`Origin` |
 | **设备指纹 / buvid3·buvid4** | B 站的设备号 cookie，**每个安装自己有**一份（首次运行从 `x/frontend/finger/spi` 领 `b_3`/`b_4`，落 `.env` 的 `BILI_BUVID_3`/`_4`） | `services/auth.py::ensure_device_ids` / `cookie_str` / `_ATTR_MAP`、`config.BILI_BUVID_3/4`、`SPI_URL` | **R26①，devlog/126**：web API 只认 **`buvid3`**（登录响应给的老名字是 `bvuid3`，服务端不认）；⚠️ **绝不写死一份**（全网共享设备身份比没有更糟）；抓取时**只补缺的那个**，不覆盖已有 buvid3（保住账号↔设备关联） |
 
 ---
