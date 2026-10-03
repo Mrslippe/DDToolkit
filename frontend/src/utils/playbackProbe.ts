@@ -22,8 +22,10 @@ import { api } from '../api/api'
 interface Sample {
   /** 第几秒（1 起） */
   t: number
-  /** 这一秒解了多少帧 */
+  /** 这一秒**解出**多少帧（`getVideoPlaybackQuality`） */
   fps: number
+  /** 这一秒**呈现**了多少帧（`requestVideoFrameCallback` 的 `presentedFrames` 增量）；量不到 = null */
+  presented: number | null
   /** 这一秒末的前方缓冲（秒）；量不到 = null */
   ahead: number | null
   /** 这一秒 `currentTime` 有没有前进（没前进 = 数据没到） */
@@ -40,6 +42,8 @@ export interface PlaybackWindow {
   minAhead: number | null
   readyMs: number | null
   samples: Sample[]
+  /** **呈现**侧（`requestVideoFrameCallback`）：见 `summarize` 的"判定" */
+  pres: { supported: boolean; maxGapMs: number; gaps: number[] }
 }
 
 const WINDOW_MS = 30_000
@@ -60,7 +64,8 @@ export function frameStats(el: HTMLVideoElement): { frames: number; dropped: num
 export function openWindow(el: HTMLVideoElement, reason: string, targetS?: number): PlaybackWindow {
   const { frames, dropped } = frameStats(el)
   return { reason, targetS, startedAt: performance.now(), baseFrames: frames,
-           baseDropped: dropped, waiting: 0, minAhead: null, readyMs: null, samples: [] }
+           baseDropped: dropped, waiting: 0, minAhead: null, readyMs: null, samples: [],
+           pres: { supported: false, maxGapMs: 0, gaps: [] } }
 }
 
 /** 当前位置前方还有多少秒缓冲（不在任何缓冲区间 ⇒ null）。 */
@@ -94,6 +99,32 @@ function avgFps(w: PlaybackWindow, from: number, to: number): number | null {
   return seg.reduce((n, s) => n + s.fps, 0) / seg.length
 }
 
+/** 窗口里**呈现**帧率的均值（量不到 = null）。 */
+export function presentedFps(w: PlaybackWindow): number | null {
+  const seg = w.samples.filter((s) => s.presented != null)
+  if (!seg.length) return null
+  return seg.reduce((n, s) => n + (s.presented ?? 0), 0) / seg.length
+}
+
+/**
+ * 一句判定（`devlog/308`）：把"该往哪儿修"直接写在行里，省得每次都要人肉对表。
+ *
+ * - **数据受限**：`currentTime` 卡住过，或缓冲掉到 0.5s 以下还反复饿；
+ * - **呈现受限**：帧**解出来了**（解码帧率正常）却**没被呈现**——`presentedFrames` 明显低于解码帧率，
+ *   或呈现间隔里出现过 ≥0.5s 的大洞。这条以前量不到，而真机上"画面卡一帧/低帧率"最可能落在它上面；
+ * - **正常**：都不成立。
+ */
+export function verdict(w: PlaybackWindow, decodedFps: number): string {
+  const stalled = stalledSeconds(w)
+  const thin = w.minAhead != null && w.minAhead < 0.5 && w.waiting >= 3
+  if (stalled >= 2 || thin) return '数据受限'
+  const pres = presentedFps(w)
+  if (!w.pres.supported) return '正常(呈现量不到)'
+  const presBad = (pres != null && decodedFps >= 5 && pres < decodedFps * 0.7)
+  if (presBad || w.pres.maxGapMs >= 500) return '呈现受限'
+  return '正常'
+}
+
 /** 把窗口收成一行（纯函数，便于单测：数字怎么算的都能钉住）。 */
 export function summarize(w: PlaybackWindow, el: HTMLMediaElement, now: number): string {
   const elapsed = (now - w.startedAt) / 1000
@@ -103,17 +134,22 @@ export function summarize(w: PlaybackWindow, el: HTMLMediaElement, now: number):
   const fps = elapsed > 0 ? gained / elapsed : 0
   const head = avgFps(w, 0, 3)
   const later = avgFps(w, 3, 1e9)
+  const pres = presentedFps(w)
   return [
     `[video] ${w.reason}${w.targetS != null ? `→${w.targetS.toFixed(1)}s` : ''}`,
+    `判定=${verdict(w, fps)}`,
     `窗口=${elapsed.toFixed(1)}s`,
     `起播=${w.readyMs == null ? '未出画' : `${(w.readyMs / 1000).toFixed(1)}s`}`,
     `饿住=${w.waiting}次`,
     `最低缓冲=${w.minAhead == null ? '量不到' : `${w.minAhead.toFixed(1)}s`}`,
-    `总体=${fps.toFixed(1)}fps`,
+    `解码=${fps.toFixed(1)}fps`,
+    `呈现=${pres == null ? '量不到' : `${pres.toFixed(1)}fps`}`,
+    `最长停顿=${w.pres.supported ? `${(w.pres.maxGapMs / 1000).toFixed(2)}s` : '量不到'}`,
+    `停顿次数=${w.pres.gaps.length}`,
     `前3秒=${head == null ? '-' : head.toFixed(1)}`,
     `后段=${later == null ? '-' : later.toFixed(1)}`,
     `卡帧=${stalledSeconds(w)}s`,     // currentTime 没动 ⇒ 数据没到
-    `空转=${idleSeconds(w)}s`,        // currentTime 在动却没出帧 ⇒ 解码/呈现
+    `空转=${idleSeconds(w)}s`,        // currentTime 在动却没解出帧 ⇒ 解码
     `丢帧=${droppedGained}/${gained}`,
     `末缓冲=${aheadOf(el)?.toFixed(1) ?? '?'}s`,
   ].join(' ')
@@ -147,8 +183,40 @@ export function watchPlayback(el: HTMLVideoElement, reason: string, targetS?: nu
   const w = openWindow(el, reason, targetS)
   let alive = true
   let lastFrames = w.baseFrames
+  let lastPresented = 0
+  let lastPresentedSampled = 0
   let lastCur = el.currentTime
+  let lastPresentedAt = 0
   let tick = 0
+
+  /**
+   * **呈现**侧（`devlog/308`）：`getVideoPlaybackQuality` 数的是**解出来**的帧，
+   * 而用户看到的是**被画出来**的帧 —— 两者可以差很远（合成/GPU/窗口遮挡时：
+   * 解码 30fps、画面却一顿一顿）。`requestVideoFrameCallback` 给的 `presentedFrames`
+   * 才是"真的上了屏"的数，回调之间的间隔就是**卡顿本身**。
+   */
+  const rvfc = (el as HTMLVideoElement & {
+    requestVideoFrameCallback?: (cb: (now: number, meta: { presentedFrames?: number }) => void) => number
+  }).requestVideoFrameCallback?.bind(el)
+  if (rvfc) {
+    w.pres.supported = true
+    const onFrame = (now: number, meta: { presentedFrames?: number }) => {
+      if (!alive) return
+      // ⚠️ 用**回调自带的 `now`**（浏览器给的呈现时刻），不用 `performance.now()`：
+      //    前者才是"这一帧什么时候上的屏"，而且它可注入 ⇒ 单测能确定性地造出"卡 1.2 秒"
+      const t = typeof now === 'number' && now > 0 ? now : performance.now()
+      if (lastPresentedAt) {
+        const gap = t - lastPresentedAt
+        if (gap > w.pres.maxGapMs) w.pres.maxGapMs = gap
+        // 只留"看得见的卡顿"（>100ms ≈ 掉了 3 帧以上），最多 20 条免得涨内存
+        if (gap > 100 && w.pres.gaps.length < 20) w.pres.gaps.push(Math.round(gap))
+      }
+      lastPresentedAt = t
+      if (typeof meta?.presentedFrames === 'number') lastPresented = meta.presentedFrames
+      rvfc(onFrame)
+    }
+    rvfc(onFrame)
+  }
 
   const sample = () => {
     tick += 1
@@ -159,11 +227,16 @@ export function watchPlayback(el: HTMLVideoElement, reason: string, targetS?: nu
     lastCur = el.currentTime
     const ahead = aheadOf(el)
     if (ahead != null) w.minAhead = w.minAhead == null ? ahead : Math.min(w.minAhead, ahead)
-    w.samples.push({ t: tick, fps, ahead, advanced })
+    // `meta.presentedFrames` 是**累计值** ⇒ 这里存**这一秒的增量**，`presentedFps` 才能当帧率用
+    const presDelta = w.pres.supported ? Math.max(0, lastPresented - lastPresentedSampled) : null
+    lastPresentedSampled = lastPresented
+    w.samples.push({ t: tick, fps, presented: presDelta, ahead, advanced })
   }
   const timer = window.setInterval(sample, SAMPLE_MS)
   const stop = () => { alive = false; window.clearInterval(timer); window.clearTimeout(windowTimer) }
   const post = () => {
+    // 什么都没采到（挂载就被卸载）就别留垃圾行
+    if (!w.samples.length && !w.waiting) return
     void api.clientLog(summarize(w, el, performance.now()))
       .catch(() => { /* 诊断上报失败就算了，绝不影响播放 */ })
     const curve = curveLine(w)
