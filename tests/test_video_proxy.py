@@ -260,3 +260,21 @@ def test_csp_allows_the_backend_origin_for_media():
         "media-src 没放行后端来源 ⇒ 经 /video-proxy 的流会被 CSP 全挡（真机表现为'播不了'）")
     # 直连那两级（非 DASH 档先试直连）仍要留着 —— 别为了修上面那条把它们删了
     assert "'self'" in media and "xhscdn.com" in media
+
+
+def test_csp_allows_blob_urls_for_media():
+    """CSP 的 `media-src` 必须放行 **`blob:`**（MSE 内核，devlog/312）。
+
+    为什么（2026-10-04）：MSE 的内核把 `MediaSource` 挂成 **blob URL**（`el.src = URL.createObjectURL(ms)`）
+    —— 没有 `blob:` 时**桌面上每一条 MSE 流都会被 CSP 挡掉**，内核当场判"不成立"退回渐进式，
+    于是这一整批（按段取数、一个时钟）在真机上等于没上；而**无头探针看不见**（探针跑的是 vite
+    页面，没有 Tauri 那份 CSP 头），症状只会在真机上表现为"还是旧内核那样卡"。
+
+    ⚠️ 反向验证：把 `blob:` 从 `media-src` 删掉 ⇒ 本用例红（这一次是真踩到的漏洞）。
+    """
+    root = Path(__file__).resolve().parent.parent
+    conf = json.loads((root / "frontend/src-tauri/tauri.conf.json").read_text(encoding="utf-8"))
+    csp = conf["app"]["security"]["csp"]
+    media = next((d for d in csp.split(";") if d.strip().startswith("media-src")), "")
+    assert "blob:" in media, (
+        f"media-src 没放行 blob: ⇒ MSE 的 blob 流会被 CSP 全挡（真机表现为'新内核从不生效'）：{media}")

@@ -1,4 +1,4 @@
-import type { Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliPlayInfo, BiliSearchResult, Capabilities, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, NoticesResponse, PoolItem, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyVtuber, AssetsInfo, AssetsPruneResult, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, XhsCookieSaved } from './types'
+import type { Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliPlayInfo, BiliSearchResult, BiliSegments, Capabilities, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, NoticesResponse, PoolItem, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyVtuber, AssetsInfo, AssetsPruneResult, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, XhsCookieSaved } from './types'
 import { ApiError, ApiShapeError } from './errors'
 import { HOST_HEADER, myHost } from '../utils/hostIdentity'
 import {
@@ -674,6 +674,19 @@ export const api = {
     if (opts.fallback) q.set('fallback', 'true')
     const qs = q.toString()
     return request<BiliPlayInfo>(`/bili/play/${postId}${qs ? `?${qs}` : ''}`)
+  },
+
+  /**
+   * B站 DASH 的**段表**（devlog/312）：MSE 内核靠它"跳到哪一秒就取哪一段"。
+   *
+   * 只在新内核这条路用（`kernelChoice() === 'mse'` 且是 DASH）；拿不到就**静默退回**渐进式
+   * —— 所以这里失败不该弹错误，只该留一行诊断。
+   */
+  biliSegments: (postId: number, opts: { qn?: number } = {}) => {
+    const q = new URLSearchParams()
+    if (opts.qn) q.set('qn', String(opts.qn))
+    const qs = q.toString()
+    return request<BiliSegments>(`/bili/segments/${postId}${qs ? `?${qs}` : ''}`)
   },
 
   /** 偏好值 + 允许取值 + 当前能力说明（说明由后端下发，界面不自己编） */

@@ -1820,3 +1820,77 @@ def test_bili_play_route_rejects_non_video_posts(client):
     assert client.get(f"/bili/play/{_bili_video_post(platform='weibo', bvid='BV1')}"
                       ).status_code == 400
     assert client.get(f"/bili/play/{_bili_video_post(bvid='')}").status_code == 400
+
+
+# ── B站段表端点（S2，devlog/312）──────────────────────────────────────────────
+
+def test_bili_segments_route_forwards_qn_and_returns_both_tables(monkeypatch, client):
+    """`/bili/segments/{id}`：**qn 原样接到取流上**，返回音视频两张表。
+
+    为什么要打在路由层：这一层的价值是"接线接上了没有"（`?fallback` 漏接那次，
+    服务层用例全绿而真机上回落取回来的还是 DASH，devlog/292）。
+    """
+    import app.services.bili_play as play_svc
+    import app.services.bili_segments as seg_svc
+
+    seen: dict = {}
+
+    async def _fake_play(bvid, **kw):
+        seen["bvid"] = bvid
+        seen.update(kw)
+        return {"quality": 64, "dash": {"video": [], "audio": []}}
+
+    async def _fake_tables(play, **kw):
+        seen["quality_from_play"] = play.get("quality")
+        return {"video": {"url": "https://cn-x.bilivideo.com/v.m4s",
+                          "mime": 'video/mp4; codecs="avc1"', "init": {"start": 0, "end": 947},
+                          "segments": [{"i": 0, "start": 948, "end": 1000, "dur_s": 5.0,
+                                        "sap": True}],
+                          "duration_s": 5.0, "urls": ["https://cn-x.bilivideo.com/v.m4s"]},
+                "audio": {"url": "https://cn-x.bilivideo.com/a.m4s",
+                          "mime": 'audio/mp4; codecs="mp4a.40.2"', "init": {"start": 0, "end": 700},
+                          "segments": [{"i": 0, "start": 700, "end": 900, "dur_s": 5.1, "sap": True}],
+                          "duration_s": 5.1, "urls": ["https://cn-x.bilivideo.com/a.m4s"]},
+                "duration_s": 5.1}
+
+    monkeypatch.setattr(play_svc, "play_info", _fake_play)
+    monkeypatch.setattr(seg_svc, "stream_tables", _fake_tables)
+    pid = _bili_video_post(bvid="BVSEG")
+
+    r = client.get(f"/bili/segments/{pid}?qn=64")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert seen == {"bvid": "BVSEG", "qn": 64, "quality_from_play": 64}, \
+        f"qn 没原样接到取流上：{seen}"
+    assert body["bvid"] == "BVSEG" and body["quality"] == 64
+    assert body["video"]["segments"][0]["start"] == 948
+    assert body["audio"]["mime"] == 'audio/mp4; codecs="mp4a.40.2"'
+    assert body["duration_s"] == 5.1, "两条流时长不同时取**长的**（短的会截尾）"
+
+
+def test_bili_segments_route_maps_segments_error_to_502(monkeypatch, client):
+    """拿不到段表 ⇒ **502 + 如实原因**（前端拿它当"这条路不成立"，静默退渐进式）。"""
+    import app.services.bili_play as play_svc
+    import app.services.bili_segments as seg_svc
+
+    async def _fake_play(bvid, **kw):
+        return {"quality": 80, "dash": {"video": [], "audio": []}}
+
+    async def _no_sidx(play, **kw):
+        raise seg_svc.SegmentsError("这条流没有 sidx", kind="no_sidx")
+
+    monkeypatch.setattr(play_svc, "play_info", _fake_play)
+    monkeypatch.setattr(seg_svc, "stream_tables", _no_sidx)
+    pid = _bili_video_post(bvid="BVNOSIDX")
+
+    r = client.get(f"/bili/segments/{pid}")
+    assert r.status_code == 502
+    assert "sidx" in r.json()["detail"]
+
+
+def test_bili_segments_route_rejects_non_video_posts(client):
+    """与 `/bili/play` **同一套分类**（两条路由共用 `_bili_bvid_of`，别各写一遍）。"""
+    assert client.get("/bili/segments/999999").status_code == 404
+    assert client.get(f"/bili/segments/{_bili_video_post(platform='weibo', bvid='BV1')}"
+                      ).status_code == 400
+    assert client.get(f"/bili/segments/{_bili_video_post(bvid='')}").status_code == 400

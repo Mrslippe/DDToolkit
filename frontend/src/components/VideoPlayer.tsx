@@ -5,6 +5,20 @@
  * 与仓库的黑玻璃 + 粉强调不是一套东西；而**全屏走容器**（`requestFullscreen()`）才能保住
  * 自绘控件（原生 video 全屏会把控件换回系统那套）。
  *
+ * ## 两条内核（2026-10-04，devlog/312）
+ *
+ * | | **MSE（默认）** | progressive（退路） |
+ * |---|---|---|
+ * | 取数 | 段表在手，按 `Range` 取**那一段** | 浏览器自己在百万字节上猜位置 |
+ * | 时钟 | **一个**（音视频两条 SourceBuffer 喂同一个元素） | 两个（独立 `<audio>` + 漂移纠正） |
+ * | seek | 先 append 目标段，再设 `currentTime` | 设 `currentTime` 后等浏览器追 |
+ * | 失败 | 建不起来/取不到段/append 报错 ⇒ **当场**退回右边这列 | 全失败 ⇒ 交给调用方换内核（durl） |
+ *
+ * 默认走 MSE 的理由是**旧内核 seek 后必卡**（`devlog/310` 八次复现同形状）；
+ * 开关与自动熔断在 `utils/videoKernel`（用户口径：「默认 MSE、开关只作为退路」）。
+ * 走 MSE 时下面**所有**音轨相关的接线都自动失效（没有 `<audio>` 元素可管），
+ * 这是这一刀最值钱的地方：`devlog/298`–`305` 六批补丁治的都是"两个钟"。
+ *
  * 口径（承接 `PostVideo` 的既有纪律）：
  * - **不自动播放**、`preload="metadata"`；
  * - **fallback 链**：直连全部 → 同一批经 `/video-proxy`（小红书 CDN 见 Referer 就 403）；
@@ -18,11 +32,13 @@ import {
   Volume1, Volume2, VolumeX,
 } from 'lucide-react'
 
-import { videoProxyUrl } from '../api/api'
+import { api, videoProxyUrl } from '../api/api'
 import { normalizeImageUrl } from '../utils/format'
 import { openExternalFromHref } from '../utils/externalLinkGuard'
 import { watchPlayback } from '../utils/playbackProbe'
 import { reportUserError } from '../utils/problemReport'
+import { MseKernel, kernelSupported, type KernelStreams } from '../utils/mseKernel'
+import { effectiveKernel, noteMseFailure, subscribeKernel } from '../utils/videoKernel'
 import {
   PLAYBACK_RATES, applyPlayerPrefs, playerPrefs, setPlayerPrefs, subscribePlayerPrefs,
 } from '../utils/playerPrefs'
@@ -88,6 +104,16 @@ interface Props {
    * （可能还能拖着看/听），换掉整块会把画面和进度一起丢掉。
    */
   loading?: boolean
+  /**
+   * **段表**（2026-10-04，devlog/312）：MSE 内核的输入（`GET /bili/segments/{post_id}`）。
+   *
+   * 给了它、且内核没被开关切走 ⇒ 走 MSE：按段 `Range` 取数、音视频同一个元素（一个钟）。
+   * 没给（取不到表 / 非 B站 / 开关切回旧内核）⇒ 自动落回下面的渐进式路径，**不报错**。
+   */
+  segments?: KernelStreams | null
+  /** MSE 这条路不成立（不支持 / 取不到段 / append 报错）：调用方记一行诊断即可 ——
+   *  退回渐进式是**本组件自动做的**（`videoKernel` 的会话熔断），调用方不需要换 props。 */
+  onKernelFallback?: (why: string) => void
 }
 
 /**
@@ -153,13 +179,44 @@ function fmt(t: number): string {
 }
 
 export default function VideoPlayer({ video, poster, permalink, dash, qualities, qualityId,
-                                      onPickQuality, onFallback, autoPlay, loading }: Props) {
+                                      onPickQuality, onFallback, autoPlay, loading,
+                                      segments, onKernelFallback }: Props) {
   const prefs = useSyncExternalStore(subscribePlayerPrefs, playerPrefs)
+  /**
+   * 内核选择（**订阅**：设置里切一下、或 MSE 当场熔断，界面立刻换路径，不用重开）。
+   * ⚠️ 用的是 `effectiveKernel()`（含会话熔断）而不是 `kernelChoice()`（用户存的那份）。
+   */
+  const kernel = useSyncExternalStore(subscribeKernel, effectiveKernel)
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
-  /** DASH 模式的独立音轨（视频元素那边静音） */
+  /** DASH 模式的独立音轨（视频元素那边静音）—— **只在渐进式内核下存在** */
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const isDash = Boolean(dash?.video)
+  /** MSE 内核实例（渐进式路径下恒为 null —— 它就是"走哪条路"的判据本身） */
+  const mseRef = useRef<MseKernel | null>(null)
+  /** 段表的最新一份（内核 effect 靠 ref 读它，依赖只挂**内容键**，见下） */
+  const segmentsRef = useRef(segments)
+  useEffect(() => { segmentsRef.current = segments }, [segments])
+  /** 段表的**内容键**：两条流的地址 + 时长（同内容不同对象不该重建内核） */
+  const streamsKey = segments
+    ? `${segments.video?.url ?? ''}|${segments.audio?.url ?? ''}|${segments.duration_s ?? 0}`
+    : ''
+  /** `onKernelFallback` 走 ref 读（见 MSE 那个 effect 的依赖说明） */
+  const onKernelFallbackRef = useRef(onKernelFallback)
+  useEffect(() => { onKernelFallbackRef.current = onKernelFallback }, [onKernelFallback])
+  /** 等目标段落地的这段时间：中央转圈（否则用户看到的是"画面冻住不动"） */
+  const [mseSeeking, setMseSeeking] = useState(false)
+  /** 正在等的目标时刻（`null` = 没在等）。**只在 MSE 下有值**，见 `onTime` 那条注释 */
+  const mseTargetRef = useRef<number | null>(null)
+  /** MSE 退场时要**接着播**的位置（见那条 effect 的注释）；渐进式那边 `loadedmetadata` 后落地 */
+  const resumeRef = useRef(0)
+  /** 上一次渲染是不是 MSE（用来认"**刚刚**退场"这件事，而不是"一直没走 MSE"） */
+  const wasMseRef = useRef(false)
+  const mseReady = isDash && kernel === 'mse' && Boolean(segments?.video)
+  /** 真走 MSE 吗（要过 codecs/表完整性判定；**纯判定**，这里只是渲染期的判断） */
+  const useMse = mseReady && kernelSupported(segments).ok
+  /** 音视频分离的双元素模式（旧内核）。MSE 下声音就在同一个 `<video>` 里 */
+  const dualTrack = isDash && !useMse
 
   const [idx, setIdx] = useState(0)
   /** DASH 音轨的镜像序号（视频轨用 `idx`，两条流各自换源 —— 一条挂了不必重来另一条） */
@@ -225,7 +282,9 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
   const probeRef = useRef<ReturnType<typeof watchPlayback> | null>(null)
   const startProbe = useCallback((el: HTMLVideoElement, reason: string, targetS?: number) => {
     probeRef.current?.cancel()          // 连续拖拽：只跟最后一个窗口
-    probeRef.current = watchPlayback(el, reason, targetS)
+    // 内核名进诊断行：真机上"这次是 MSE 还是渐进式"必须能从日志里读出来（不然没法对账）
+    probeRef.current = watchPlayback(el, reason, targetS,
+                                     mseRef.current ? 'MSE' : '渐进')
   }, [])
   // 卸载时**先把已采到的报出去**（不是丢弃）：第一版丢弃，于是用户关掉抽屉那几次
   // 恰好什么都没留下（真机只捞到 1 行就是这么来的，devlog/307）
@@ -245,8 +304,60 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
     return -1
   }, [])
 
-  // DASH 模式：**只走本机代理**（媒体 CDN 不带 Referer 403）；普通模式仍是 直连 → 代理 的链。
-  // ⚠️ 代理 URL 必须用 `videoProxyUrl()`（拼 `apiBase`）—— 写成相对的 `/video-proxy?…` 会落到
+  /**
+   * **MSE 内核**（devlog/312）：建 MediaSource、挂 init、按段取数。
+   *
+   * 为什么整条路都在这里而不是让调用方换组件：控件/清晰度菜单/音量倍速/诊断窗口都是现成的，
+   * 换内核不该把它们一起换掉 —— 换的只有"数据怎么进这个 `<video>`"。
+   *
+   * ⚠️ **退回渐进式是自动的**：`noteMseFailure` 让 `effectiveKernel()` 变 `progressive`
+   * ⇒ 本组件重渲染 ⇒ 下面 `useMse` 为假 ⇒ 清理这个 effect（销毁内核、摘掉 blob URL）
+   * ⇒ 直接走渐进式那套。**用户不会看到任何弹窗**（他不需要知道内核叫什么，只关心能不能看），
+   * 诊断留在日志里（`[video] MSE 不可用…`）。
+   */
+  useEffect(() => {
+    if (!useMse) return
+    const s = segmentsRef.current
+    if (!s) return
+    const el = videoRef.current
+    if (!el) return
+    const kernel = new MseKernel(el, {
+      onFatal: (why) => {
+        void api.clientLog(`[video] MSE 不成立，退回渐进式：${why}`)
+          .catch(() => { /* 诊断上报失败绝不影响播放 */ })
+        noteMseFailure(why)
+        onKernelFallbackRef.current?.(why)
+      },
+      onProgress: (end) => setBuf(end),
+      onSeekApplied: (t) => { mseTargetRef.current = null; setCur(t); setMseSeeking(false) },
+      // 慢段/换镜像/淘汰各一行：真机"卡不卡"要和代理那边的 `[视频代理]` 行对得上
+      log: (line) => { void api.clientLog(line).catch(() => { /* 同上 */ }) },
+    })
+    mseRef.current = kernel
+    if (!kernel.load(s)) {
+      mseRef.current = null
+      noteMseFailure('内核建不起来')
+      return
+    }
+    // 段表自带总时长 ⇒ 进度条立刻是对的（不用等 `loadedmetadata`；MSE 下它有时来得晚）
+    setDur(s.duration_s || 0)
+    return () => { kernel.destroy(); mseRef.current = null }
+    // ⚠️ 依赖是**内容键**（`streamsKey`）而不是 `segments` 对象本身：父组件只要**每次渲染
+    //    新造一个同内容的 `{video, audio}`**，按对象比就会**每渲染一次重建内核**
+    //    （重新取 init、画面从头来）。真机症状是"画面莫名其妙重载"，而生产里
+    //    `BiliVideo` 传的是 state（引用稳定）—— 这个坑先按内容钉死，别等人踩。
+    // ⚠️ `onKernelFallback` 走 ref 而不是进依赖：同理（内联箭头函数会每次换引用）。
+  }, [useMse, streamsKey])
+
+  /** MSE 中途退场（熔断/换清晰度）⇒ 别把"等跳转"的转圈留在屏幕上。
+   *  ⚠️ 真正的"接着播回去"在 `startPlayback` 定义之后那个 effect 里（它要用到它）。 */
+  useEffect(() => {
+    if (useMse) return
+    mseTargetRef.current = null
+    setMseSeeking(false)
+  }, [useMse])
+
+  // DASH 模式：**只走本机代理**（媒体 CDN 不带 Referer 403）；普通模式仍是 直连 → 代理 的链。  // ⚠️ 代理 URL 必须用 `videoProxyUrl()`（拼 `apiBase`）—— 写成相对的 `/video-proxy?…` 会落到
   //    页面来源（dev 的 vite / 桌面的 tauri://localhost）⇒ 全都 404（devlog/294 的真机事故）。
   const dashVideoUrls: string[] = isDash
     ? [dash!.video, ...(dash!.videoFallbacks ?? [])].filter((u): u is string => Boolean(u))
@@ -261,17 +372,17 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
     ? dashVideoUrls.map(videoProxyUrl)
     : [...direct, ...direct.map(videoProxyUrl)]     // 直连链走完再走同一批的代理链
   const src = sources[idx]
-  const audioSrc = isDash && dashAudioUrls.length
+  const audioSrc = dualTrack && dashAudioUrls.length
     ? videoProxyUrl(dashAudioUrls[Math.min(aidx, dashAudioUrls.length - 1)])
     : null
 
-  /** 全局偏好下发给**真正出声的那个元素**（DASH 模式 = 音轨；视频元素恒静音） */
+  /** 全局偏好下发给**真正出声的那个元素**（DASH 双元素 = 音轨；MSE/单文件 = 视频元素自身） */
 
   // 全局偏好每次变更都下发给元素。
   // ⚠️ DASH 档**两个元素都要发**（devlog/299）：声音在音轨上，但小窗那个静音按钮看的是
   // 视频元素的 `muted` —— 只下发一个，"小窗静音"就会和真实声音脱节。
   useEffect(() => {
-    if (isDash) {
+    if (dualTrack) {
       const a = audioRef.current
       const v = videoRef.current
       if (a) applyPlayerPrefs(a)
@@ -280,18 +391,21 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
       const v = videoRef.current
       if (v) applyPlayerPrefs(v)
     }
-  }, [prefs, src, isDash])
+  }, [prefs, src, dualTrack])
 
   /**
-   * DASH：音轨与视频轨的**漂移纠正**（两条独立流，浏览器不会自动对齐）。
+   * DASH 双元素：音轨与视频轨的**漂移纠正**（两条独立流，浏览器不会自动对齐）。
    *
    * 实测（`devlog/298`）：19 秒漂到 **0.28s**（音轨超前）—— 视频轨那条没有音轨、时钟是墙上时间
    * 估的，与跟声卡走的音轨有约 1.5% 的速率差。原来只有"超 0.3s 就直接对齐"一档，
    * 于是 0.28s 这种"已经能感觉出来"的量级反而被放过去了；而且每次都靠"跳一下"来修。
    * 现在按 `driftAction` 分级：小漂移用**改速率慢慢追**（听不出来），大漂移才跳。
+   *
+   * ⚠️ **MSE 下这条整段都不存在**（`dualTrack` 为假）：音视频在同一个元素、同一个时钟上，
+   * 没有漂移这回事。这一条就是新内核最值钱的地方（用户"抖一阵"的病根）。
    */
   useEffect(() => {
-    if (!isDash) return
+    if (!dualTrack) return
     const id = window.setInterval(() => {
       const v = videoRef.current
       const a = audioRef.current
@@ -304,7 +418,7 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
       a.playbackRate = rate
     }, 1000)
     return () => window.clearInterval(id)
-  }, [isDash, prefs.rate])
+  }, [dualTrack, prefs.rate])
 
   useEffect(() => {
     const el = videoRef.current
@@ -447,7 +561,13 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
     }
     const onCanPlay = () => endSpin()
     const onTime = () => {
-      setCur(el.currentTime)
+      /**
+       * ⚠️ **等跳转落地期间不要用元素的 `currentTime` 覆盖界面**（devlog/312）：
+       * MSE 的 seek 是"先取段再设时间"，这期间元素还在放**旧位置** ⇒ 每一拍 `timeupdate`
+       * 都把进度条拽回旧位置、段落再跳一次，看起来就是"拖完又弹回去"。
+       * 界面此刻显示的目标时间由 `seekTo` 给，落地的时刻由 `onSeekApplied` 给。
+       */
+      if (mseTargetRef.current == null) setCur(el.currentTime)
       /**
        * **和解**（devlog/300）：`playing` 这个 React 状态、以及"音轨到底在不在放"，
        * 都必须能**从元素本身**重新推出来，而不是只信某一次事件。
@@ -465,7 +585,15 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
       setPlaying((prev) => (prev === want ? prev : want))
       if (!el.paused) startAudio()
     }
-    const onMeta = () => setDur(el.duration || 0)
+    const onMeta = () => {
+      setDur(el.duration || 0)
+      // 内核退场时记下的位置：**必须等到这里才设**（换 `src` 的加载算法会把早设的值清掉）
+      if (resumeRef.current > 0.3) {
+        const t = resumeRef.current
+        resumeRef.current = 0
+        try { el.currentTime = t } catch { /* 元素已卸载/不支持 seek：保持从头播 */ }
+      }
+    }
     const onProg = () => {
       try {
         setBuf(el.buffered.length ? el.buffered.end(el.buffered.length - 1) : 0)
@@ -525,7 +653,7 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
       el.removeEventListener('volumechange', onVolumeChange)
       window.clearInterval(holdWatch)
     }
-  }, [src, isDash, bufferedAhead])
+  }, [src, dualTrack, bufferedAhead])
 
   // 全屏状态（Esc 退出也要同步）
   useEffect(() => {
@@ -571,6 +699,25 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
     startProbe(el, 'start')          // 起播也开一个窗口（"点开详情页→播放"那条路径）
     void el.play().catch(() => { /* 自动播放策略拒绝：保持暂停，让用户再点一下 */ })
   }, [startProbe])
+
+  /**
+   * **MSE 中途栽了 ⇒ 把播放接着接回去**（`devlog/312`）。
+   *
+   * 为什么需要：换 `src` 会让元素重跑一遍加载算法（**回到 0 且暂停**）。对用户来说
+   * "内核被悄悄换掉"是他不该看见的事 —— 一看见就是"播到一半跳回开头 / 停下来不动了"。
+   * 两条流是**同一份媒体**、时间轴一致，所以位置能直接承接；位置要等 `loadedmetadata`
+   * 之后再设（加载算法会把早设的值清掉，见 `onMeta`）。
+   */
+  useEffect(() => {
+    if (useMse) { wasMseRef.current = true; return }
+    if (!wasMseRef.current) return
+    wasMseRef.current = false
+    if (!(wantPlayRef.current || autoPlay)) return       // 用户没在播 ⇒ 别自己播起来
+    const el = videoRef.current
+    if (el && el.currentTime > 0.3) resumeRef.current = el.currentTime
+    setCur(el?.currentTime ?? 0)
+    startPlayback()
+  }, [useMse, autoPlay, startPlayback])
 
   const toggle = useCallback(() => {
     const el = videoRef.current
@@ -652,19 +799,43 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
   /**
    * 定位。`live=true` = 拖拽中（位置还会变）⇒ **不安排对齐**，音轨保持静默，
    * 等 `pointerup` 一次性对齐（否则每一帧都去重设一次音轨，反而更抖）。
+   *
+   * ## MSE 下这一步是**"取段"，不是"设时间"**（devlog/312）
+   *
+   * MSE 的 `currentTime` **设不到没有缓冲的地方**（浏览器会静默夹到最近的已缓冲位置）——
+   * 所以 `kernel.seekTo()` 的语义是"**先把目标那一段 append 进来，再设时间**"，
+   * 期间画面停在原处、转圈（`mseSeeking`）。这正是真机那个"先卡一帧再低帧率追一阵"的解药：
+   * 旧内核是"设了时间，然后等浏览器猜字节位置去取"。
+   *
+   * ⚠️ 拖拽中（`live`）**只动界面上的时间**，抬手才真取段：一次拖拽会经过几十个段，
+   * 每帧都发一次取段就是自己给自己制造拥塞（旧内核同样靠 `live` 只让浏览器跟着滚）。
    */
   const seekTo = useCallback((ratio: number, live = false) => {
     const el = videoRef.current
-    if (!el || !Number.isFinite(el.duration) || el.duration <= 0) return
+    if (!el) return
+    const kernel = mseRef.current
+    // 总时长：MSE 下段表就是真源（`loadedmetadata` 在 MSE 里来得晚，甚至先于 init append）
+    const total = kernel ? kernel.duration() : el.duration
+    if (!Number.isFinite(total) || total <= 0) return
+    const target = Math.min(total, Math.max(0, ratio * total))
+    if (kernel) {
+      if (live) { setCur(target); return }
+      mseTargetRef.current = target
+      setMseSeeking(true)
+      startProbe(el, 'seek', target)
+      kernel.seekTo(target)
+      setCur(target)
+      return
+    }
     const a = audioRef.current
     if (a && !seekRef.current.settling) {          // 进入一次 seek：先让音轨停下
       seekRef.current.settling = true
       seekRef.current.wasPlaying = wantPlayRef.current || !el.paused
       a.pause()
       // 诊断窗口从**按下那一刻**开始（用户感知的"卡住"就是从这时算的）
-      startProbe(el, 'seek', Math.min(el.duration, Math.max(0, ratio * el.duration)))
+      startProbe(el, 'seek', target)
     }
-    el.currentTime = Math.min(el.duration, Math.max(0, ratio * el.duration))
+    el.currentTime = target
     setCur(el.currentTime)
     if (!live) settleAudio()
   }, [settleAudio, startProbe])
@@ -685,14 +856,35 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
     else void el.requestPictureInPicture().catch(() => { /* 同上 */ })
   }, [])
 
+  /**
+   * 快进/快退 `delta` 秒（方向键）。MSE 下也必须走 `kernel.seekTo()` —— 直接写
+   * `el.currentTime` 会落在没有缓冲的地方，被浏览器夹回去（"按了没反应"）。
+   */
+  const seekBy = useCallback((delta: number) => {
+    const el = videoRef.current
+    if (!el) return
+    const kernel = mseRef.current
+    const total = kernel ? kernel.duration() : el.duration || 0
+    const target = Math.min(Math.max(0, (el.currentTime || 0) + delta), total || 0)
+    if (kernel) {
+      mseTargetRef.current = target
+      setMseSeeking(true)
+      startProbe(el, 'seek', target)
+      kernel.seekTo(target)
+      setCur(target)
+    } else {
+      el.currentTime = target
+    }
+  }, [startProbe])
+
   // 快捷键：只在控件区域内接管（不抢抽屉的 Esc / 滚动）
   const onKey = (e: React.KeyboardEvent) => {
     const el = videoRef.current
     if (!el) return
     const k = e.key.toLowerCase()
     if (k === ' ' || k === 'k') { e.preventDefault(); toggle() }
-    else if (e.key === 'ArrowLeft') { e.preventDefault(); el.currentTime = Math.max(0, el.currentTime - 5) }
-    else if (e.key === 'ArrowRight') { e.preventDefault(); el.currentTime = Math.min(el.duration || 0, el.currentTime + 5) }
+    else if (e.key === 'ArrowLeft') { e.preventDefault(); seekBy(-5) }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); seekBy(5) }
     else if (e.key === 'ArrowUp') { e.preventDefault(); setPlayerPrefs({ volume: prefs.volume + 0.05, muted: false }) }
     else if (e.key === 'ArrowDown') { e.preventDefault(); setPlayerPrefs({ volume: prefs.volume - 0.05 }) }
     else if (k === 'm') { e.preventDefault(); setPlayerPrefs({ muted: !prefs.muted }) }
@@ -746,18 +938,29 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
         className="vp-video"
         playsInline
         preload="metadata"
-        muted={isDash}
+        /* ⚠️ **走 MSE 时元素上不能有 `src`**：那条流由 MediaSource 的 blob URL 提供
+           （内核里 `el.src = URL.createObjectURL(ms)`）。这里给 `undefined`，React 会把属性摘掉。
+           双元素模式下视频轨恒静音（声音在独立音轨上）；MSE/单文件模式下它自己出声。 */
+        muted={dualTrack}
         poster={poster ? normalizeImageUrl(poster) : undefined}
-        src={src}
+        src={useMse ? undefined : src}
         onClick={toggle}
         onError={() => {
+          if (useMse) {
+            // 元素级错误 = 这条 MSE 路真的不行了（解码/容器）⇒ 熔断退渐进式，别在这里换源
+            void api.clientLog('[video] MSE 媒体元素报错（换渐进式）').catch(() => { /* 忽略 */ })
+            noteMseFailure('媒体元素报错')
+            return
+          }
           if (idx + 1 < sources.length) setIdx(idx + 1)   // 同档的下一面镜像（devlog/294）
           else if (onFallback) onFallback()               // 交给调用方换内核（DASH → durl）
           else setDead(true)
         }}
       />
-      {/* DASH 的独立音轨（隐藏元素；音量/静音/倍速都作用在它身上） */}
-      {isDash && audioSrc && (
+      {/* DASH 的独立音轨（隐藏元素；音量/静音/倍速都作用在它身上）
+          ⚠️ **只在渐进式内核下渲染**（devlog/312）：MSE 里音轨是同一个元素上的第二条
+          SourceBuffer —— 那正是"只有一个钟"的实现方式。 */}
+      {dualTrack && audioSrc && (
         <audio
           ref={audioRef}
           data-vp-audio="1"
@@ -782,16 +985,18 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
         />
       )}
 
-      {!playing && !loading && !buffering && (
+      {!playing && !loading && !buffering && !mseSeeking && (
         <button type="button" className="vp-bigplay" aria-label="播放" onClick={toggle}>
           <Play className="size-7" />
         </button>
       )}
 
-      {/* 取流中（`loading`）/ 缓冲中（`buffering`）：中央转圈。
+      {/* 取流中（`loading`）/ 缓冲中（`buffering`）/ **等跳转那一段落地**（`mseSeeking`）：中央转圈。
           ⚠️ 缓冲也要转（devlog/299）：点进度条跳转后视频轨要重新缓冲，画面是冻住的 ——
-          不给转圈，用户会以为"点了跳转结果暂停了"。 */}
-      {(loading || buffering) && (
+          不给转圈，用户会以为"点了跳转结果暂停了"。
+          ⚠️ MSE 的跳转**必须有转圈**（devlog/312）：那时画面**故意**停着等目标段
+          （不是"暂停"，用户没按过暂停键），没有转圈就是"点了跳转没反应"。 */}
+      {(loading || buffering || mseSeeking) && (
         <div className="vp-spin" role="status" aria-label="正在缓冲">
           <Loader2 className="vp-spin-icon" aria-hidden="true" />
         </div>
@@ -806,7 +1011,7 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
         <button type="button" className="vp-btn" aria-label={playing ? '暂停' : '播放'} onClick={toggle}>
           {/* 在播 + 缓冲 ⇒ 按键位置显示转圈（不是 ⏸ 也不是 ▶）：
               成熟播放器都这么表示"没停，只是在等数据"，也让图标不再来回闪（devlog/302） */}
-          {playing && buffering
+          {playing && (buffering || mseSeeking)
             ? <Loader2 className="vp-btn-spin" aria-hidden="true" />
             : playing ? <Pause className="size-4" /> : <Play className="size-4" />}
         </button>

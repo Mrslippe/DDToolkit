@@ -48,6 +48,8 @@ interface Sample {
 export interface PlaybackWindow {
   reason: string
   targetS?: number
+  /** 这次窗口是哪个内核在放（`MSE` / `渐进`，devlog/312）。**空 = 没记**（老调用方）。 */
+  kernel?: string
   startedAt: number
   baseFrames: number
   baseDropped: number
@@ -93,9 +95,10 @@ export function frameStats(el: HTMLVideoElement): {
            dropped: legacy.webkitDroppedFrameCount ?? 0, decoded: null }
 }
 
-export function openWindow(el: HTMLVideoElement, reason: string, targetS?: number): PlaybackWindow {
+export function openWindow(el: HTMLVideoElement, reason: string, targetS?: number,
+                           kernel?: string): PlaybackWindow {
   const { frames, dropped, decoded } = frameStats(el)
-  return { reason, targetS, startedAt: performance.now(), baseFrames: frames,
+  return { reason, targetS, kernel, startedAt: performance.now(), baseFrames: frames,
            baseDropped: dropped, baseDecoded: decoded, waiting: 0, minAhead: null,
            readyMs: null, samples: [],
            pres: { supported: false, maxGapMs: 0, gaps: [] } }
@@ -230,6 +233,8 @@ export function summarize(w: PlaybackWindow, el: HTMLMediaElement, now: number):
   const page = pageFps(w)
   return [
     `[video] ${w.reason}${w.targetS != null ? `→${w.targetS.toFixed(1)}s` : ''}`,
+    /* 哪个内核（devlog/312）：旧内核的病（seek 后解码追赶）和新内核的效果必须能对账 */
+    ...(w.kernel ? [`内核=${w.kernel}`] : []),
     `判定=${verdict(w, fps)}`,
     `窗口=${elapsed.toFixed(1)}s`,
     `起播=${w.readyMs == null ? '未出画' : `${(w.readyMs / 1000).toFixed(1)}s`}`,
@@ -278,8 +283,9 @@ export interface ProbeHandle {
   cancel: () => void
 }
 
-export function watchPlayback(el: HTMLVideoElement, reason: string, targetS?: number): ProbeHandle {
-  const w = openWindow(el, reason, targetS)
+export function watchPlayback(el: HTMLVideoElement, reason: string, targetS?: number,
+                              kernel?: string): ProbeHandle {
+  const w = openWindow(el, reason, targetS, kernel)
   let alive = true
   let lastFrames = w.baseFrames
   let lastDecoded = w.baseDecoded ?? 0

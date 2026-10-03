@@ -1033,6 +1033,24 @@ def search_externals_vtubers(kw: str, source: str | None = Query(None),
 
 # ── Post CRUD ──────────────────────────────────────────────────────
 
+def _bili_bvid_of(db: Session, post_id: int) -> str:
+    """帖子 id → bvid（**两条 B站播放路由共用**：错误分类必须一致，别各写一遍）。
+
+    三类失败**分开**（devlog/289 的口径）：不存在 404 / 不是 B站帖 400 / 不是视频帖 400。
+    """
+    from app.core.jsonsafe import safe_json_dict
+
+    post = PostRepo(db).get(post_id)
+    if post is None:
+        raise HTTPException(404, f"Post id={post_id} 不存在")
+    if post.platform != "bilibili":
+        raise HTTPException(400, f"只有 B站帖子能取流（这条是 {post.platform}）")
+    bvid = (safe_json_dict(post.body_json) or {}).get("bvid")
+    if not bvid:
+        raise HTTPException(400, "这条帖子没有 bvid（不是视频帖）")
+    return str(bvid)
+
+
 @router.get("/bili/play/{post_id}")
 async def bili_play(post_id: int, qn: int | None = Query(None),
                     fallback: bool = Query(False),
@@ -1050,22 +1068,48 @@ async def bili_play(post_id: int, qn: int | None = Query(None),
       于是 DASH 失败后重取回来的还是 DASH —— devlog/292）；
     - 失败**如实分类**：`-404` 不存在 / `-403` 无权限（充电专属等）/ `-352` 风控 / 其它。
     """
-    from app.core.jsonsafe import safe_json_dict
     from app.services import bili_play
 
-    post = PostRepo(db).get(post_id)
-    if post is None:
-        raise HTTPException(404, f"Post id={post_id} 不存在")
-    if post.platform != "bilibili":
-        raise HTTPException(400, f"只有 B站帖子能取流（这条是 {post.platform}）")
-    bvid = (safe_json_dict(post.body_json) or {}).get("bvid")
-    if not bvid:
-        raise HTTPException(400, "这条帖子没有 bvid（不是视频帖）")
+    bvid = _bili_bvid_of(db, post_id)
     try:
-        return await bili_play.play_info(str(bvid), qn=qn, durl_fallback=fallback)
+        return await bili_play.play_info(bvid, qn=qn, durl_fallback=fallback)
     except bili_play.PlayError as e:
         status = {"not_found": 404, "forbidden": 403, "risk_control": 429}.get(e.kind, 502)
         raise HTTPException(status, e.message) from e
+
+
+@router.get("/bili/segments/{post_id}")
+async def bili_segments(post_id: int, qn: int | None = Query(None),
+                        db: Session = Depends(get_db)):
+    """B站 DASH 的**段表**（2026-10-04，devlog/312）：`时间 → 字节`，MSE 内核按它取段。
+
+    ```json
+    {"bvid": "...", "quality": 80, "duration_s": 265.3,
+     "video": {"mime": "video/mp4; codecs=\\"avc1.640033\\"", "urls": [...],
+               "init": {"start": 0, "end": 947}, "segments": [{"i":0,"start":1628,…}]},
+     "audio": {…同形…}}
+    ```
+
+    为什么单独一个端点（而不是塞进 `/bili/play`）：段表要**额外取两条流的头部**
+    （各 64KB）—— 塞进取流会把"渐进式路径"也拖慢；而 MSE 这条路本来就必须先有表才能开播。
+    前端拿不到表就**静默退回渐进式**（`kernelChoice` 那条退路），播放不受影响。
+
+    失败一律 502 + 如实原因（`no_sidx` = 这条流没有索引 ⇒ 做不了按段取数，不是我们挂了）。
+    """
+    from app.services import bili_play, bili_segments
+
+    bvid = _bili_bvid_of(db, post_id)
+    try:
+        play = await bili_play.play_info(bvid, qn=qn)
+        tables = await bili_segments.stream_tables(play)
+    except bili_play.PlayError as e:
+        status = {"not_found": 404, "forbidden": 403, "risk_control": 429}.get(e.kind, 502)
+        raise HTTPException(status, e.message) from e
+    except bili_segments.SegmentsError as e:
+        raise HTTPException(502, f"{e.message}（这段流做不了 MSE，将退回渐进式）") from e
+    return {"bvid": bvid, "quality": play.get("quality"),
+            "duration_s": tables["duration_s"],
+            "video": tables["video"], "audio": tables["audio"]}
 
 
 @router.get("/posts/{platform}/{platform_uid}", response_model=list[PostOut])

@@ -41,6 +41,12 @@ if (typeof HTMLMediaElement !== 'undefined') {
   HTMLMediaElement.prototype.pause = function pause(this: HTMLMediaElement) {
     paused.set(this, true)
   }
+
+  // ⚠️ `load()` 同样没实现（jsdom 只打印 "Not implemented"）。MSE 内核销毁时会调它
+  //（把 `<video>` 从 blob 流上摘下来），不补的话每批用例都刷一串 stderr 噪音。
+  HTMLMediaElement.prototype.load = function load(this: HTMLMediaElement) {
+    paused.set(this, true)
+  }
 }
 
 /** 用例可用来断言"自动起播发生了"；`vi.spyOn` 也照常可用（spy 会在用例结束后还原）。 */

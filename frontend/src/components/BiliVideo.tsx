@@ -19,16 +19,27 @@
  * ⚠️ 为什么必须"各只一次"：回落本身是一次重新取流，若后端没换内核（`?fallback` 参数漏接那次
  * 就是这么坏的，见 devlog/292）就会**无限重取**。判据 `nextRetryAction` 是纯函数 ⇒ 直接测。
  */
-import { useRef, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { Loader2, Play } from 'lucide-react'
 
 import { api } from '../api/api'
 import type { BiliPlayInfo } from '../api/types'
 import ProxyImage from './common/ProxyImage'
 import VideoPlayer from './VideoPlayer'
+import { mseAvailable, type KernelStreams } from '../utils/mseKernel'
+import { effectiveKernel } from '../utils/videoKernel'
 
 /** B站清晰度 id → 是否大会员档（112=1080P+ / 116=1080P60 / 120=4K / 125=HDR / 126=杜比 / 127=8K） */
 const PREMIUM_QN = new Set([112, 116, 120, 125, 126, 127])
+
+/**
+ * 段表的等待上限（**毫秒**）。
+ *
+ * 为什么要有上限：段表要后端多取两条流的头部（各 64KB），正常几百毫秒；但**起播不能被它拖住**
+ * —— 超时就让渐进式先放起来（拿不到表 ⇒ 播放器自动走旧内核，用户无感）。
+ * 这是"新内核更快"与"新内核不能成为新的卡点"之间的取舍，取 4s（实测抖动都在 1s 内）。
+ */
+const SEGMENTS_WAIT_MS = 4000
 
 /** 播放失败的补救动作（纯函数，便于直接测三态）。 */
 export function nextRetryAction(
@@ -47,6 +58,8 @@ interface Props {
 
 export default function BiliVideo({ postId, poster, permalink }: Props) {
   const [info, setInfo] = useState<BiliPlayInfo | null>(null)
+  /** 段表（MSE 内核的输入，devlog/312）：null = 走渐进式 */
+  const [segments, setSegments] = useState<KernelStreams | null>(null)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   /** 回落标记：DASH 播不动时改用 durl（单 mp4） */
@@ -56,6 +69,43 @@ export default function BiliVideo({ postId, poster, permalink }: Props) {
   /** 这批发来的地址什么时候过期（`fetchedAt + expires_in`，毫秒） */
   const expiresAt = useRef(0)
   const isExpired = () => expiresAt.current > 0 && Date.now() > expiresAt.current
+  /**
+   * MSE 不可用时的诊断（**退回渐进式是本组件的默认行为，不是错误**）。
+   *
+   * ⚠️ 这里**不** `setSegments(null)`：熔断在 `videoKernel` 里（会话级），播放器自己就会切；
+   * 再动一次 state 只会多一次无谓的重渲染。
+   * ⚠️ 必须在下面那个 `if (!info) return` **之前**（否则 hooks 数量在两次渲染间不等 —— 真踩过）。
+   */
+  const onKernelFallback = useCallback((why: string) => {
+    void api.clientLog(`[video] 本次会话改用渐进式内核：${why}`)
+      .catch(() => { /* 诊断失败不影响播放 */ })
+  }, [])
+
+  /**
+   * 取段表（**在把播放器放上屏之前**）。
+   *
+   * 为什么先取表再渲染：不给表就先渲染，播放器会先用渐进式起播、几百毫秒后再被 MSE 接管
+   * —— 用户看到的是"画面重来一次"。所以这里等一下（上限 `SEGMENTS_WAIT_MS`），
+   * 拿不到就 `null` 交给旧内核，**不报错**（用户不需要知道内核的事，他只要画面）。
+   */
+  const loadSegments = async (got: BiliPlayInfo, qn?: number): Promise<KernelStreams | null> => {
+    const best = got.dash.video[0]
+    // 三道闸门：只有 DASH 能按段取；内核被切回旧的就别白跑一次；宿主没有 MSE 更别跑
+    if (got.kernel !== 'dash' || !best?.base_url || !mseAvailable()
+        || effectiveKernel() !== 'mse') {
+      return null
+    }
+    const race = await Promise.race([
+      api.biliSegments(postId, { qn }).catch((e: Error) => {
+        void api.clientLog(`[video] 段表取不到（走渐进式）：${e?.message ?? String(e)}`)
+          .catch(() => { /* 诊断失败不影响播放 */ })
+        return null
+      }),
+      new Promise<null>((r) => window.setTimeout(() => r(null), SEGMENTS_WAIT_MS)),
+    ])
+    if (!race) return null
+    return { video: race.video, audio: race.audio, duration_s: race.duration_s }
+  }
 
   /**
    * 取流。`resetRetry` **只在用户手势**（首次点播放 / 换清晰度）上传 true：
@@ -68,7 +118,10 @@ export default function BiliVideo({ postId, poster, permalink }: Props) {
     if (resetRetry) tried.current = { triedRefresh: false, triedFallback: false }
     try {
       const got = await api.biliPlay(postId, opts)
+      const segs = await loadSegments(got, opts.qn)
+      // 两个 state 同一次提交（React 18 会批）：第一帧就带着内核信息上屏，不会先渐进后 MSE
       setInfo(got)
+      setSegments(segs)
       setUseDurl(got.kernel === 'durl')
       expiresAt.current = Date.now() + (got.expires_in || 0) * 1000
     } catch (e) {
@@ -147,6 +200,9 @@ export default function BiliVideo({ postId, poster, permalink }: Props) {
                        videoFallbacks: rest(best!.urls, best!.base_url),
                        audio: audio?.base_url ?? null,
                        audioFallbacks: rest(audio?.urls, audio?.base_url) } : null}
+      /* 段表（devlog/312）：给了它就走 MSE（按段取数、一个时钟）；null ⇒ 渐进式 */
+      segments={segments}
+      onKernelFallback={onKernelFallback}
       qualities={qualities}
       qualityId={info.quality}
       poster={poster}

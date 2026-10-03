@@ -11,13 +11,22 @@ import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const biliPlay = vi.fn()
+const biliSegments = vi.fn()
+const clientLog = vi.fn((..._a: unknown[]) => Promise.resolve({ ok: true, dropped: false }))
 vi.mock('../api/api', () => ({
   api: {
     biliPlay: (...a: unknown[]) => biliPlay(...a),
+    // 段表（devlog/312）：默认内核是 MSE ⇒ 取流之后会接着要它。mock 里缺这个函数就是
+    // "api.biliSegments is not a function"（与 clientLog / 两个代理 URL 同一类坑）。
+    biliSegments: (...a: unknown[]) => biliSegments(...a),
     // 播放诊断上报（devlog/306）：组件会 `api.clientLog(一行)`，mock 里缺它就会抛
     // "api.clientLog is not a function"（跟上面两个代理 URL 同一类坑）
-    clientLog: () => Promise.resolve({ ok: true, dropped: false }),
+    clientLog: (...a: unknown[]) => clientLog(...a),
   },
+  // ⚠️ **`authFetch` 也必须导出**：MSE 内核取段走的就是它（`utils/mseKernel` 的默认取数）。
+  //    漏一个符号的后果是"内核当场熔断、静默退回渐进式"—— 用例会看到渐进式，却看不出为什么
+  //    （这一批真踩过：报错原文是 vitest 的 `No "authFetch" export is defined on the mock`）。
+  authFetch: (path: string, init?: RequestInit) => fetch(path, init),
   // 两个代理 URL 的拼法要**真的**走一遍（它们带着 apiBase，见 devlog/294）：
   // 只 mock `biliPlay` 而漏掉这两个 ⇒ 组件直接抛 "No export is defined on the mock"。
   videoProxyUrl: (u: string) => `/api/video-proxy?url=${encodeURIComponent(u)}`,
@@ -26,6 +35,7 @@ vi.mock('../api/api', () => ({
 vi.mock('../utils/shellBridge', () => ({ openExternal: () => Promise.resolve() }))
 
 import BiliVideo, { nextRetryAction } from './BiliVideo'
+import { resetVideoKernel, setKernelChoice } from '../utils/videoKernel'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true
@@ -49,6 +59,8 @@ let root: Root
 
 beforeEach(() => {
   biliPlay.mockReset()
+  biliSegments.mockReset()
+  resetVideoKernel()          // 内核开关是 localStorage 里的（跨用例会串）
   host = document.createElement('div')
   document.body.append(host)
   root = createRoot(host)
@@ -58,6 +70,7 @@ afterEach(() => {
   act(() => root.unmount())
   host.remove()
   vi.useRealTimers()
+  vi.unstubAllGlobals()
 })
 
 describe('BiliVideo', () => {
@@ -227,6 +240,107 @@ describe('BiliVideo', () => {
     expect(biliPlay).toHaveBeenCalledTimes(2)
     expect(biliPlay.mock.calls[1][1], '过期要重取**同一档**' +
       '（降级 durl 会白丢 1080P）').toEqual({ qn: 80 })
+  })
+})
+
+// ── S2：段表接线（devlog/312）───────────────────────────────────────────────
+
+/** 最小 MediaSource/SourceBuffer 替身：只为"段表真的进了播放器"这件事服务 */
+class TinySourceBuffer {
+  updating = false
+  mode = ''
+  readonly buffered = { length: 0, start: () => 0, end: () => 0 }
+  addEventListener() { /* 忽略 */ }
+  appendBuffer() { /* 忽略 */ }
+  remove() { /* 忽略 */ }
+}
+class TinyMediaSource {
+  static isTypeSupported = () => true
+  readyState = 'closed'
+  duration = NaN
+  private readonly listeners: Record<string, (() => void)[]> = {}
+  addEventListener(t: string, fn: () => void) {
+    (this.listeners[t] ??= []).push(fn)
+    if (t === 'sourceopen') queueMicrotask(() => { this.readyState = 'open'; fn() })
+  }
+  removeEventListener() { /* 忽略 */ }
+  addSourceBuffer() { return new TinySourceBuffer() as unknown as SourceBuffer }
+  endOfStream() { /* 忽略 */ }
+}
+
+const SEGMENTS = {
+  bvid: 'BV1', quality: 80, duration_s: 10,
+  video: { url: 'https://cdn/v.m4s', urls: ['https://cdn/v.m4s'],
+           mime: 'video/mp4; codecs="avc1"', init: { start: 0, end: 947 },
+           segments: [{ i: 0, start: 948, end: 1947, dur_s: 10, sap: true }], duration_s: 10 },
+  audio: { url: 'https://cdn/a.m4s', urls: ['https://cdn/a.m4s'],
+           mime: 'audio/mp4; codecs="mp4a"', init: { start: 0, end: 700 },
+           segments: [{ i: 0, start: 701, end: 900, dur_s: 10, sap: true }], duration_s: 10 },
+}
+
+describe('BiliVideo · 段表（MSE 内核的输入）', () => {
+  it('默认内核 ⇒ 取流之后接着取段表，并把两轨交给播放器（**不再有独立音轨**）', async () => {
+    vi.stubGlobal('MediaSource', TinyMediaSource)
+    Object.defineProperty(URL, 'createObjectURL',
+                          { value: () => 'blob:tiny', configurable: true, writable: true })
+    Object.defineProperty(URL, 'revokeObjectURL',
+                          { value: () => { /* 忽略 */ }, configurable: true, writable: true })
+    // 取段走的是 `authFetch('/api/video-proxy?…')`：这里只回答一个空段（不模拟解码）。
+    // ⚠️ 不挡这一层的话，jsdom 里相对 URL 的 fetch 会失败 ⇒ 内核真的熔断退渐进式，
+    //    用例就变成"在测失败路径"了（第一版正是这样假红的）。
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true, status: 206, arrayBuffer: async () => new ArrayBuffer(16),
+      text: async () => '',
+    })))
+    biliPlay.mockResolvedValue({ ...INFO, dash: {
+      video: [{ id: 80, base_url: 'https://cdn/v.m4s', codecs: 'avc1', mime: 'video/mp4' }],
+      audio: [{ id: 30280, base_url: 'https://cdn/a.m4s', codecs: 'mp4a', mime: 'audio/mp4' }] } })
+    biliSegments.mockResolvedValue(SEGMENTS)
+
+    act(() => root.render(<BiliVideo postId={7} />))
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('.vp-bigplay')!.click()
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(biliSegments).toHaveBeenCalledTimes(1)
+    expect(biliSegments.mock.calls[0][0]).toBe(7)
+    expect(host.querySelector('video')!.getAttribute('src'), '走 MSE ⇒ 流由 blob 提供')
+      .toBe('blob:tiny')
+    expect(host.querySelector('audio'), '段表生效后音轨在同一条元素上（一个钟）').toBeNull()
+    expect(host.querySelector('.bili-lazy-err'), '内核切换不是错误，别弹给用户').toBeNull()
+  })
+
+  it('内核被切回渐进式 ⇒ **连段表都不取**（退路要真的少走一步，而不是取了不用）', async () => {
+    setKernelChoice('progressive')
+    biliPlay.mockResolvedValue(INFO)
+    act(() => root.render(<BiliVideo postId={7} />))
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('.vp-bigplay')!.click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(biliSegments).not.toHaveBeenCalled()
+    expect(host.querySelector('audio'), '渐进式 = 双元素').not.toBeNull()
+  })
+
+  it('段表拿不到（502/超时）⇒ **照样播**，只是走渐进式', async () => {
+    vi.stubGlobal('MediaSource', TinyMediaSource)
+    biliPlay.mockResolvedValue(INFO)
+    biliSegments.mockRejectedValue(new Error('502 这条流没有 sidx'))
+    act(() => root.render(<BiliVideo postId={7} />))
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('.vp-bigplay')!.click()
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(host.querySelector('video')!.getAttribute('src'))
+      .toBe(`/api/video-proxy?url=${encodeURIComponent(INFO.dash.video[0].base_url)}`)
+    expect(host.querySelector('audio')).not.toBeNull()
+    expect(host.querySelector('.bili-lazy-err'), '段表失败不该让用户看到报错').toBeNull()
   })
 })
 

@@ -368,6 +368,47 @@ export interface BiliPlayInfo {
   expires_in: number
 }
 
+/** 段表里的一个字节区间（**闭区间**，直接喂 `Range: bytes=start-end`）。 */
+export interface BiliSegmentRange {
+  start: number
+  end: number
+}
+
+export interface BiliSegmentInfo extends BiliSegmentRange {
+  i: number
+  dur_s: number
+  sap: boolean
+}
+
+/**
+ * 一条流的**段表**（`GET /bili/segments/{post_id}` 的 `video`/`audio`，devlog/312）。
+ *
+ * `mime` 是给 `MediaSource.isTypeSupported()` 的**精确 codecs 串**
+ * （`video/mp4; codecs="avc1.640033"`）—— 缺 codecs 时后端只回容器类型，
+ * 前端据此判"不支持"并退回渐进式（别猜）。
+ */
+export interface BiliStreamTable {
+  /** 首选地址（后端已按"能不能过代理"排序） */
+  url: string
+  /** 同档镜像链：段取不到时前端自己换下一条，不必回后端重取 */
+  urls?: string[] | null
+  mime: string
+  kind?: string
+  init: BiliSegmentRange
+  segments: BiliSegmentInfo[]
+  duration_s: number
+  total_bytes?: number | null
+}
+
+export interface BiliSegments {
+  bvid: string
+  quality: number | null
+  /** 两条流取**长的**那个时长（音轨结尾补齐方式不同，短的会截尾） */
+  duration_s: number
+  video: BiliStreamTable
+  audio: BiliStreamTable
+}
+
 export interface LiveUpstream {
   danmaku?: LiveDanmakuInfo | null
   metrics?: LiveMetrics | null

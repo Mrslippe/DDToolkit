@@ -1,0 +1,579 @@
+/**
+ * MSE 播放内核（2026-10-04，devlog/312；计划 `docs/plans/bili-mse-kernel-execution.md` S2）。
+ *
+ * ## 为什么换掉 progressive（`<video src>` + 独立 `<audio>`）
+ *
+ * 真机八次复现的形状完全一致（`devlog/310`）：seek 之后**第 1 秒爆发 150+ 帧 → 2–4 秒一帧不出
+ * → 恢复 30fps**，而缓冲、时钟、音频全程正常。根因是**裸 fMP4 直喂**：Chromium 的 MP4 demuxer
+ * 不读 `sidx`，"跳到第 N 秒"只能按码率猜字节位置、再从关键帧解码丢弃到目标。
+ *
+ * MSE 把这件事换成：**段表在手，跳到哪里就取哪一段**（5s / ~1.5MB，段首是关键帧，实测
+ * `devlog/311`：54 段 × 5.0s、init 948B）。附带三个结构性好处：
+ * ① **只剩一个钟**（音视频两条 SourceBuffer 喂同一个元素）⇒ 漂移/快跑/静音归属/暂停归属
+ *    那一整类问题消失（`devlog/298`–`305` 全是在给"两个钟"打补丁）；
+ * ② **缓冲由我们控制**（要多少给多少，"一帧一帧"变成"干净的缓冲中"）；
+ * ③ 有 ABR 手段（段取慢了就降档，S3）。
+ *
+ * ## 这个模块刻意不碰 DOM 之外的东西
+ *
+ * 它只做四件事：**取段 → append → 按目标 seek → 淘汰**。控件、清晰度菜单、音量倍速、
+ * 诊断窗口都留给 `VideoPlayer`（那里已经有一套；内核换掉不该把它们也换掉）。
+ *
+ * ## 三个真踩过的坑（都写成了判据）
+ *
+ * 1. **同一个 SourceBuffer 同时只能有一个操作**：`appendBuffer` 与 `remove` 撞在一起会抛
+ *    `This SourceBuffer is still processing an 'appendBuffer' or 'remove' operation`。
+ *    spike 第一版两者各自异步发起，泵一停缓冲从 5.5s 抽干到 `None`（`devlog/311`）。
+ *    ⇒ 这里所有操作走**单飞**（`busy` + `updateend` 才继续）。
+ * 2. **MSE 下 `currentTime` 不能设到没有缓冲的地方**（浏览器会**夹到最近的已缓冲位置**，
+ *    静默跳到别处）⇒ `seekTo()` 是"**先把目标段 append 进去，再设 currentTime**"。
+ * 3. **配额**：Chromium 有总量上限，长视频不清会 `QuotaExceededError`。⇒ 主动淘汰 +
+ *   配额报错时"先淘汰再重试"（不是立刻判死）。
+ *
+ * ⚠️ MSE **消不掉"段内预滚"**（seek 落在段中间时解码器仍要从段首关键帧解到目标，
+ * spike 里那次 142 帧的爆发就是它）；它消掉的是"**先猜字节位置再去取**"那一步。
+ */
+import { authFetch, videoProxyUrl } from '../api/api'
+
+export interface SegmentRange {
+  /** 闭区间字节偏移（`Range: bytes=start-end`） */
+  start: number
+  end: number
+}
+
+export interface SegmentInfo extends SegmentRange {
+  i: number
+  dur_s: number
+  sap: boolean
+}
+
+export interface StreamTable {
+  /** 首选地址（后端排过序：能过代理的普通 CDN 在前） */
+  url: string
+  /** 同档镜像链：段取不到时**自己换下一条**，不必回后端重取 */
+  urls?: string[] | null
+  /** MSE 要的精确 codecs 串，如 `video/mp4; codecs="avc1.640033"` */
+  mime: string
+  kind?: string
+  init: SegmentRange
+  segments: SegmentInfo[]
+  duration_s: number
+  total_bytes?: number | null
+}
+
+export interface KernelStreams {
+  video: StreamTable
+  audio?: StreamTable | null
+  duration_s?: number
+}
+
+/** 前方目标缓冲（秒）：比 hls.js 的 30s 小 —— 这里量的是"够不够稳"，不是"要不要开播" */
+export const WANT_AHEAD = 20
+/** 当前位置**之后**留多久不淘汰（回拖一小段不用重取） */
+export const KEEP_BEHIND = 25
+/** 触发淘汰的缓冲总量（秒） */
+export const MAX_BUFFER = 50
+/** 泵的空转节拍：`updateend` 之外再踢一脚，免得事件丢了就永远停住 */
+const TICK_MS = 400
+const MAX_RETRY = 3
+const FETCH_TIMEOUT_MS = 20_000
+/** 段取数慢到这个程度就记一行（撑不住实时码率会表现为"低帧率"） */
+const SLOW_SEGMENT_MS = 1500
+const SLOW_SEGMENT_BYTES_PER_S = 300_000
+
+/** 宿主有没有 MSE（**先问它再决定要不要去后端取段表** —— 没 MSE 时那张表纯属白跑一趟）。 */
+export function mseAvailable(): boolean {
+  return Boolean((globalThis as { MediaSource?: unknown }).MediaSource)
+}
+
+/** `MediaSource.isTypeSupported` 的**安全包装**（没有 MSE 的宿主 ⇒ false，不抛）。 */
+export function mimeSupported(mime: string): boolean {
+  const MS = (globalThis as { MediaSource?: typeof MediaSource }).MediaSource
+  if (!MS || typeof MS.isTypeSupported !== 'function') return false
+  try {
+    return Boolean(mime) && MS.isTypeSupported(mime)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 这条路能不能走 MSE（**纯判定**，不产生副作用）。
+ *
+ * 三个条件缺一不可：宿主有 `MediaSource`；**两条轨**的 codecs 串都被支持；
+ * 两张表都有段。判据要能说出"为什么不行"—— 真机上这行字是唯一能解释
+ * "为什么又退回旧内核了"的东西。
+ */
+export function kernelSupported(s: KernelStreams | null | undefined): { ok: boolean; why: string } {
+  const MS = (globalThis as { MediaSource?: typeof MediaSource }).MediaSource
+  if (!MS) return { ok: false, why: '这个环境没有 MediaSource' }
+  if (!s?.video?.segments?.length) return { ok: false, why: '没有视频段表' }
+  if (!s.audio?.segments?.length) {
+    // ⚠️ 只有视频能走 MSE **不算成立**：音轨留在独立 `<audio>` 上就又是两个钟（旧病）
+    return { ok: false, why: '没有音轨段表（只有视频走 MSE 会退回两个钟）' }
+  }
+  if (!mimeSupported(s.video.mime)) return { ok: false, why: `视频 codecs 不支持：${s.video.mime}` }
+  if (!mimeSupported(s.audio.mime)) return { ok: false, why: `音轨 codecs 不支持：${s.audio.mime}` }
+  return { ok: true, why: '' }
+}
+
+/** 每段的起始时刻（秒）；表只有 54 条，直接算，不做缓存复杂度。 */
+export function segmentStarts(table: StreamTable): number[] {
+  const out: number[] = []
+  let t = 0
+  for (const s of table.segments) {
+    out.push(t)
+    t += s.dur_s
+  }
+  return out
+}
+
+/** 第 `time` 秒落在哪一段（夹到有效范围；空表 ⇒ -1）。 */
+export function segmentIndexAt(table: StreamTable, time: number): number {
+  const n = table.segments.length
+  if (!n) return -1
+  const starts = segmentStarts(table)
+  let lo = 0
+  let hi = n - 1
+  let ans = 0
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    if (starts[mid] <= time) { ans = mid; lo = mid + 1 } else { hi = mid - 1 }
+  }
+  return ans
+}
+
+/** `time` 之后**第一个还没开始的**段序号（= 顺序续播该取的那一段）；末尾 ⇒ 段数。 */
+export function nextSegmentAfter(table: StreamTable, time: number): number {
+  const starts = segmentStarts(table)
+  for (let i = 0; i < starts.length; i += 1) {
+    if (starts[i] > time + 1e-3) return i
+  }
+  return table.segments.length
+}
+
+export interface KernelDeps {
+  /** 取一段字节（默认走 `/video-proxy` 的 Range 直通）；测试可注入 */
+  fetchRange?: (url: string, range: SegmentRange, signal: AbortSignal) => Promise<ArrayBuffer>
+  /** 缓冲/进度变化（`bufferedEnd` 秒）—— 进度条的"已缓冲"那截靠它 */
+  onProgress?: (bufferedEnd: number, currentTime: number) => void
+  /** 一次 seek **真的落地**了（目标段已 append、`currentTime` 已设）⇒ 界面收起转圈 */
+  onSeekApplied?: (time: number) => void
+  /** 致命（这条路不成立）⇒ 调用方退回渐进式。**只报一次** */
+  onFatal?: (why: string) => void
+  /** 诊断一行（慢段 / 换镜像 / 淘汰） */
+  log?: (line: string) => void
+  createMediaSource?: () => MediaSource
+  createObjectURL?: (ms: MediaSource) => string
+  revokeObjectURL?: (url: string) => void
+}
+
+/** 默认取段：`/video-proxy` 的 Range 直通（凭据/Referer 由后端补，前端一个头都不带） */
+async function defaultFetchRange(url: string, range: SegmentRange,
+                                signal: AbortSignal): Promise<ArrayBuffer> {
+  const r = await authFetch(videoProxyUrl(url), {
+    headers: { Range: `bytes=${range.start}-${range.end}` },
+    signal,
+  })
+  if (!r.ok) throw new Error(`HTTP ${r.status}`)
+  return await r.arrayBuffer()
+}
+
+function isQuotaError(e: unknown): boolean {
+  const name = (e as { name?: string })?.name
+  return name === 'QuotaExceededError' || name === 'NS_ERROR_DOM_QUOTA_REACHED'
+}
+
+/** 一条轨的运行时状态（视频/音轨各一份，结构完全相同）。 */
+interface Track {
+  table: StreamTable
+  kind: 'video' | 'audio'
+  sb: SourceBuffer | null
+  /** 有一次操作在飞（`appendBuffer`/`remove`），期间的 `updateend` 才算它的回执 */
+  busy: boolean
+  initDone: boolean
+  /** 正在取的那一段（-1 = 取 init）；`null` = 没在取 */
+  pending: number | null
+  inflight: AbortController | null
+  /** **操作代数**：每次发起 `+1`。取数回来时代数变了 ⇒ 这次结果作废（别 append 到已经被顶掉的位置） */
+  seq: number
+  retry: number
+  /** 镜像链游标：换一条就 +1（取不到时轮换，不回后端） */
+  mirror: number
+  quotaHits: number
+}
+
+/**
+ * MSE 内核。用法：
+ * ```ts
+ * const k = new MseKernel(el, { onFatal: (why) => fallback() })
+ * k.load(streams)          // 建 MediaSource、挂 init、开泵
+ * k.seekTo(123.4)          // **先取目标段，再设 currentTime**
+ * k.destroy()
+ * ```
+ */
+export class MseKernel {
+  private readonly el: HTMLVideoElement
+  private readonly deps: KernelDeps
+  private readonly fetchRange: NonNullable<KernelDeps['fetchRange']>
+  private streams: KernelStreams | null = null
+  private ms: MediaSource | null = null
+  private objectUrl = ''
+  private tracks: Track[] = []
+  private tick = 0
+  /** 等数据到位再设 `currentTime` 的目标（第 2 条坑） */
+  private pendingSeek: number | null = null
+  private fatal = false
+  private ended = false
+  private dead = false
+  private startedAt = 0
+  private appends = 0
+  private bytes = 0
+  private onSourceOpen = () => this.open()
+
+  constructor(el: HTMLVideoElement, deps: KernelDeps = {}) {
+    this.el = el
+    this.deps = deps
+    this.fetchRange = deps.fetchRange ?? defaultFetchRange
+  }
+
+  /** 建 MediaSource 并开始取数。返回 false = 这条路不成立（调用方退回渐进式）。 */
+  load(streams: KernelStreams): boolean {
+    const ok = kernelSupported(streams)
+    if (!ok.ok) { this.fail(ok.why); return false }
+    const create = this.deps.createMediaSource
+      ?? (() => new (globalThis as unknown as { MediaSource: new () => MediaSource }).MediaSource())
+    try {
+      this.ms = create()
+    } catch (e) {
+      this.fail(`MediaSource 建不起来：${String(e)}`)
+      return false
+    }
+    this.streams = streams
+    this.tracks = ([['video', streams.video], ['audio', streams.audio]] as const)
+      .filter(([, t]) => Boolean(t))
+      .map(([kind, table]) => ({
+        table: table as StreamTable, kind, sb: null, busy: false, initDone: false,
+        pending: null, inflight: null, seq: 0, retry: 0, mirror: 0, quotaHits: 0,
+      }))
+    this.startedAt = Date.now()
+    this.ms.addEventListener('sourceopen', this.onSourceOpen)
+    const mkUrl = this.deps.createObjectURL ?? ((m: MediaSource) => URL.createObjectURL(m))
+    this.objectUrl = mkUrl(this.ms)
+    this.el.src = this.objectUrl
+    this.tick = window.setInterval(() => this.pump(), TICK_MS)
+    // 有的宿主 `sourceopen` 在 addEventListener 之前就发过了 ⇒ 直接试一次
+    if (this.ms.readyState === 'open') this.open()
+    return true
+  }
+
+  /** 目标时刻（秒）：**数据到位之后**才真的设 `currentTime`（第 2 条坑）。 */
+  seekTo(time: number): void {
+    if (this.dead || !this.streams) return
+    const dur = this.duration()
+    const t = Math.min(Math.max(0, time), dur > 0 ? dur - 0.05 : time)
+    this.pendingSeek = t
+    for (const tr of this.tracks) {
+      // 目标变了 ⇒ 正在取的那一段没意义了（abort 掉，别白等一个 1.5MB）
+      if (tr.inflight && tr.pending !== segmentIndexAt(tr.table, t)) this.abortInflight(tr)
+    }
+    this.pump()
+  }
+
+  /** 时长（秒）：段表优先（`loadedmetadata` 之前界面就要显示总长）。 */
+  duration(): number {
+    if (this.streams?.duration_s) return this.streams.duration_s
+    const d = this.el.duration
+    return Number.isFinite(d) && d > 0 ? d : 0
+  }
+
+  /** 当前位置前方已缓冲多少秒（不在任何区间 ⇒ -1）。 */
+  bufferedAhead(): number {
+    const s = this.bufferedSpan()
+    if (!s) return -1
+    return s.end - this.el.currentTime
+  }
+
+  stats(): { appends: number; bytes: number; ms: number; fatal: boolean } {
+    return { appends: this.appends, bytes: this.bytes,
+             ms: this.startedAt ? Date.now() - this.startedAt : 0, fatal: this.fatal }
+  }
+
+  destroy(): void {
+    this.dead = true
+    window.clearInterval(this.tick)
+    for (const tr of this.tracks) this.abortInflight(tr)
+    try { this.ms?.removeEventListener('sourceopen', this.onSourceOpen) } catch { /* 已销毁 */ }
+    try {
+      if (this.ms?.readyState === 'open') this.ms.endOfStream()
+    } catch { /* 已经关了 */ }
+    if (this.objectUrl) {
+      (this.deps.revokeObjectURL ?? ((u: string) => URL.revokeObjectURL(u)))(this.objectUrl)
+    }
+    /**
+     * 元素上的 `src` 只在我们**还是那个 blob** 时才摘。
+     *
+     * ⚠️ 退回渐进式时 React 已经**先**把 `src` 换成了新地址（提交顺序：DOM 变更 → effect 清理），
+     * 这里无脑 `removeAttribute('src')` 会把刚设好的地址一起擦掉 ⇒ 元素**永远没源**、
+     * 界面停在"点了播放没反应"（而且看不出原因）。所以先比对再摘。
+     */
+    const blob = this.objectUrl
+    this.objectUrl = ''
+    if (blob && (this.el.src === blob || this.el.currentSrc === blob)) {
+      try {
+        this.el.removeAttribute('src')
+        this.el.load?.()
+      } catch { /* jsdom/已卸载 */ }
+    }
+    this.ms = null
+    this.tracks = []
+  }
+
+  // ── 内部 ────────────────────────────────────────────────────────────────
+
+  private fail(why: string): void {
+    if (this.fatal) return
+    this.fatal = true
+    this.deps.log?.(`[media] MSE 不成立：${why}`)
+    this.deps.onFatal?.(why)
+  }
+
+  private open(): void {
+    if (!this.ms || this.dead) return
+    for (const tr of this.tracks) {
+      if (tr.sb) continue
+      try {
+        tr.sb = this.ms.addSourceBuffer(tr.table.mime)
+      } catch (e) {
+        this.fail(`addSourceBuffer 失败（${tr.kind}：${tr.table.mime}）：${String(e)}`)
+        return
+      }
+      tr.sb.mode = 'segments'
+      tr.sb.addEventListener('updateend', () => this.onUpdateEnd(tr))
+      tr.sb.addEventListener('error', () => this.fail(`${tr.kind} SourceBuffer 报错`))
+    }
+    // ⚠️ 时长要**显式设**：MSE 的 `duration` 默认是 Infinity，进度条会拿不到总长
+    try { this.ms.duration = this.duration() } catch { /* 某些实现对时长锁定会抛 */ }
+    this.pump()
+  }
+
+  private onUpdateEnd(tr: Track): void {
+    const wasInit = tr.pending === -1
+    tr.busy = false
+    tr.pending = null
+    tr.retry = 0
+    if (wasInit) tr.initDone = true
+    this.maybeEnd()
+    this.evict(tr)
+    this.report()
+    this.pump()
+  }
+
+  private abortInflight(tr: Track): void {
+    tr.inflight?.abort()
+    tr.inflight = null
+    tr.pending = null
+  }
+
+  /** 目标时刻两条轨都**已经有数据**了吗（有没有音轨都算"就绪"）。 */
+  private seekReady(t: number): boolean {
+    return this.tracks.every((tr) => this.covers(tr, t))
+  }
+
+  private covers(tr: Track, t: number): boolean {
+    const b = tr.sb?.buffered
+    if (!b) return false
+    try {
+      for (let i = 0; i < b.length; i += 1) {
+        if (b.start(i) - 0.05 <= t && t <= b.end(i) - 0.02) return true
+      }
+    } catch { /* 配额/实现异常：当作没有 */ }
+    return false
+  }
+
+  private bufferedSpan(): { start: number; end: number } | null {
+    const b = this.el.buffered
+    if (!b || !b.length) return null
+    try {
+      return { start: b.start(0), end: b.end(b.length - 1) }
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * **单条轨**自己的已缓冲区间。
+   *
+   * ⚠️ 不能拿元素的 `buffered` 代替：元素上那个是**两条轨的交集**，而"这条轨续到哪里了"
+   * 必须看它自己 —— 否则音轨领先时视频轨会以为"20 秒处已经有数据了"，泵就此停住。
+   */
+  private trackSpan(tr: Track): { start: number; end: number } | null {
+    const b = tr.sb?.buffered
+    if (!b || !b.length) return null
+    try {
+      return { start: b.start(0), end: b.end(b.length - 1) }
+    } catch {
+      return null
+    }
+  }
+
+  private report(): void {
+    const s = this.bufferedSpan()
+    this.deps.onProgress?.(s ? s.end : 0, this.el.currentTime)
+  }
+
+  private maybeEnd(): void {
+    if (this.ended || !this.ms || this.ms.readyState !== 'open') return
+    const done = this.tracks.every((tr) => tr.initDone && this.nextIndex(tr) >= tr.table.segments.length)
+    if (!done) return
+    this.ended = true
+    try { this.ms.endOfStream() } catch { /* 已经结束 */ }
+  }
+
+  /** 该轨**下一个要 append** 的段序号（按"这条轨已缓冲到哪里"推，不看历史游标）。 */
+  private nextIndex(tr: Track): number {
+    const s = this.trackSpan(tr)
+    if (!s) return 0
+    return nextSegmentAfter(tr.table, s.end)
+  }
+
+  /** 主动淘汰：留 `KEEP_BEHIND` 秒回看，超 `MAX_BUFFER` 就砍掉前面。 */
+  private evict(tr: Track, force = false): void {
+    const sb = tr.sb
+    if (!sb || sb.updating || tr.pending != null) return
+    const b = sb.buffered
+    if (!b.length) return
+    let start = 0
+    let end = 0
+    try {
+      start = b.start(0)
+      end = b.end(b.length - 1)
+    } catch {
+      return
+    }
+    if (!force && end - start <= MAX_BUFFER) return
+    /**
+     * ⚠️ `keepFrom` 是**秒**，别拿 `init.end`（那是**字节偏移**）来比 —— 第一版就是这么写错的：
+     * `Math.max(947, …)` 永远大于缓冲起点 ⇒ 淘汰一次都发生不了，长播必然撞配额。
+     * init 段（`ftyp+moov`）在 MSE 里不对应任何时间区间，`remove()` 不会把它删掉，不需要保护。
+     */
+    const keepFrom = Math.max(0, this.el.currentTime - KEEP_BEHIND)
+    if (keepFrom <= start + 1) {
+      if (force) this.fail(`${tr.kind} 配额不足且没有可淘汰的区间`)
+      return
+    }
+    tr.busy = true
+    try {
+      sb.remove(start, keepFrom)
+      this.deps.log?.(`[media] 淘汰 ${tr.kind} ${start.toFixed(1)}–${keepFrom.toFixed(1)}s`)
+    } catch (e) {
+      tr.busy = false
+      if (!isQuotaError(e)) this.fail(`${tr.kind} 淘汰失败：${String(e)}`)
+    }
+  }
+
+  private async append(tr: Track, idx: number): Promise<void> {
+    const sb = tr.sb
+    if (!sb || this.dead || !this.streams) return
+    const seg = idx < 0 ? tr.table.init : tr.table.segments[idx]
+    const urls = (tr.table.urls ?? []).filter(Boolean)
+    if (!urls.length) urls.push(tr.table.url)
+    const url = urls[Math.min(tr.mirror, urls.length - 1)]
+    const ac = new AbortController()
+    tr.inflight = ac
+    tr.pending = idx
+    const my = ++tr.seq
+    const timeout = window.setTimeout(() => ac.abort(), FETCH_TIMEOUT_MS)
+    const t0 = Date.now()
+    let buf: ArrayBuffer | null = null
+    try {
+      buf = await this.fetchRange(url, seg, ac.signal)
+    } catch (e) {
+      window.clearTimeout(timeout)
+      /**
+       * ⚠️ **代数变了就闭嘴**（`devlog/312` 的连续拖拽）：拖拽时前一个目标的取数会晚回来，
+       * 若照着它继续 append，就会把**旧位置的数据**塞进新位置的计划里 ——
+       * 轻则白取一次，重则和当前那次操作撞成 `InvalidStateError`（假 SB 会当场抛出来）。
+       */
+      if (this.dead || tr.seq !== my) return
+      tr.inflight = null
+      if ((e as { name?: string })?.name === 'AbortError' && tr.pending !== idx) {
+        tr.pending = null
+        this.pump()
+        return
+      }
+      tr.pending = null
+      tr.retry += 1
+      if (urls.length > 1 && tr.mirror + 1 < urls.length) {
+        tr.mirror += 1
+        this.deps.log?.(`[media] ${tr.kind} 段 ${idx} 取不到（${String(e)}），换镜像 ${tr.mirror}`)
+      } else if (tr.retry >= MAX_RETRY) {
+        this.fail(`${tr.kind} 段 ${idx} 连续 ${tr.retry} 次取不到：${String(e)}`)
+        return
+      }
+      this.pump()
+      return
+    }
+    window.clearTimeout(timeout)
+    if (this.dead || tr.seq !== my) return      // 同上：这一份数据已经没人要了
+    tr.inflight = null
+    if (this.dead) return
+    if (buf === null) { tr.pending = null; return }
+    const ms = Date.now() - t0
+    const size = buf.byteLength
+    this.bytes += size
+    if (ms > SLOW_SEGMENT_MS || (ms > 200 && size / (ms / 1000) < SLOW_SEGMENT_BYTES_PER_S)) {
+      this.deps.log?.(`[media] ${tr.kind} 段 ${idx} 取数 ${ms}ms ${(size / 1048576).toFixed(2)}MB`
+                      + `（${(size / 1048576 / (ms / 1000)).toFixed(2)}MB/s）`)
+    }
+    try {
+      sb.appendBuffer(buf)
+      this.appends += 1
+    } catch (e) {
+      tr.pending = null
+      if (isQuotaError(e)) {
+        tr.quotaHits += 1
+        if (tr.quotaHits > 3) { this.fail(`${tr.kind} 配额反复不足（淘汰也救不回来）`); return }
+        this.evict(tr, true)
+      } else {
+        this.fail(`${tr.kind} appendBuffer 失败：${String(e)}`)
+      }
+      return
+    }
+    // appendBuffer 是同步返回、**异步完成** ⇒ `busy` 由 `updateend` 清
+    tr.busy = true
+  }
+
+  /**
+   * 泵：每次只推进"一条轨的一个操作"（第 1 条坑）。
+   *
+   * 优先级：① 把 seek 目标那一段先 append（用户等的是它）；② 目标之后按顺序续播到
+   * `WANT_AHEAD`；③ 都够了就顺手淘汰。
+   */
+  private pump(): void {
+    if (this.dead || this.fatal || !this.ms || this.ms.readyState !== 'open') return
+    const seek = this.pendingSeek
+    for (const tr of this.tracks) {
+      if (tr.busy || tr.pending != null) continue
+      if (!tr.initDone) { void this.append(tr, -1); continue }
+      const target = seek ?? this.el.currentTime
+      const want = segmentIndexAt(tr.table, target)
+      if (!this.covers(tr, target)) {
+        // 目标位置**没有数据** ⇒ 直接补那一段（顺序续播在这时是错的：会先取一段远的）
+        if (want >= 0) void this.append(tr, want)
+        continue
+      }
+      const next = this.nextIndex(tr)
+      if (next >= tr.table.segments.length) continue
+      const endsAt = this.trackSpan(tr)?.end ?? 0
+      if (endsAt - target >= WANT_AHEAD) continue
+      void this.append(tr, next)
+    }
+    if (seek != null && this.seekReady(seek)) {
+      this.pendingSeek = null
+      this.el.currentTime = seek
+      this.deps.onSeekApplied?.(seek)
+      this.report()
+    }
+  }
+}

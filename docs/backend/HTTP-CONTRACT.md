@@ -24,6 +24,9 @@ retire-when: HTTP 层换框架，或路由整体重排
 >
 > ⚠️ **2026-10-03 重新数过**（B站取流 `GET /bili/play/{post_id}` + 视频代理 `GET /video-proxy`，
 > devlog/289）：实测装饰器 **77** / OpenAPI 方法×路径 **79** / 路径数 **65**。
+> ⚠️ **2026-10-04：三个数各 +1**（S2 加了 `GET /bili/segments/{post_id}`，devlog/312）——
+> 这一批只记**增量**、没重数全量：本机用同一套数法量到的基线已经比上面这行高 2（说明中间还有别的改动
+> 没同步到这里），所以别把 78/80/66 当"重数过的值"，复核时**照本节第一条那样现数**。
 > 更早的版本：75/77/63（2026-09-29 M5-1 + L2）、66/—/—（批次 16）、64/70/67（R42-A）
 > —— 三种数法本来就容易漂。
 > ⚠️ **新增 `/vtuber/xxx` 这类"看起来不像参数"的路径时必须注册在 `/vtuber/{vtuber_id}` 之前**：
@@ -127,6 +130,7 @@ retire-when: HTTP 层换框架，或路由整体重排
 | 方法 + 路径 | 说明 |
 |---|---|
 | GET `/bili/play/{post_id}?qn=&fallback=` | 取播放地址：**用户点播放才调**（地址短时效 + 绑 IP ⇒ 120s 短缓存、**不落库**）。`qn` = "想要哪档"（实际档看账号权益，响应里的 `quality` 才是真给的）；`fallback=true` ⇒ 换 `fnval=1` 取 **durl 单 mp4**（720P 封顶，DASH 播不动时用）。响应只给前端要用的 `{quality, accept[], dash:{video[],audio[]}, durl[], expires_in, kernel}`；**Cookie 只在请求头**。错误如实分级：帖子不存在 404 / 非 B站帖或缺 bvid 400 / 上游 `-404` 404、`-403` 403（充电专属等）、`-352` 429 |
+| GET `/bili/segments/{post_id}?qn=` | **段表**（devlog/312）：MSE 内核靠它"跳到第 N 秒就取那一段"。响应 `{bvid, quality, duration_s, video:{mime,urls[],init,segments[],duration_s}, audio:{…同形…}}`——`mime` 是 `MediaSource.isTypeSupported` 要的**精确 codecs 串**（缺 codecs 时只给容器类型，前端据此判"不支持"并退渐进式），`init`/`segments[].start|end` 是**闭区间字节偏移**（直接喂 `Range`）。两条流各取 64KB 头部解析 `ftyp/moov/sidx`（110s 缓存，跟着取流那 120s 走）。错误与 `/bili/play` 同一套分级，另加 **502**：拿不到段表（没有 `sidx` / 上游取头部失败）——前端把 502 当"这条路不成立"，**静默退回渐进式**，不打扰用户 |
 
 **抓取 / 归档 / 候选池**
 

@@ -22,6 +22,12 @@ sidx: v0 / reference_ID=1 / timescale=16000 / EPT=0 / first_offset=0
 ```
 
 ⇒ **init 段** = `ftyp`+`moov`（前 948 字节）；**媒体段**从 `sidx` 之后开始，按表切。
+
+## 给谁用（S2 起）
+
+`GET /bili/segments/{post_id}` 把 `stream_tables()` 的结果下发给前端 MSE 内核
+（`frontend/src/utils/mseKernel.ts`）；内核按段表 `Range: bytes=start-end` 取段、append，
+于是"跳到第 N 秒"= **取那一段 1.5MB**，而不是让浏览器在百万字节上猜位置。
 """
 from __future__ import annotations
 
@@ -178,7 +184,11 @@ async def fetch_table(url: str, *, client: httpx.AsyncClient | None = None) -> d
     if own:
         client = new_async_client(20.0)
     try:
-        resp = await client.get(url, headers=headers)
+        try:
+            resp = await client.get(url, headers=headers)
+        except httpx.HTTPError as e:
+            # 取头部时的网络失败要**如实分类**（upstream）：路由层才不会把它当 500
+            raise SegmentsError(f"取头部失败：{type(e).__name__}", kind="upstream") from e
         if resp.status_code >= 400:
             raise SegmentsError(f"取头部失败：HTTP {resp.status_code}", kind="upstream")
         total = None
@@ -198,6 +208,67 @@ async def fetch_table(url: str, *, client: httpx.AsyncClient | None = None) -> d
                 f"段长≈{table['segments'][0]['dur_s'] if table['segments'] else '?'}s "
                 f"总时长≈{table['duration_s']}s init={table['init']['end'] + 1}B")
     return table
+
+
+def mime_of(stream: dict, kind: str) -> str:
+    """MSE 要的 **codecs 串**：`video/mp4; codecs="avc1.640033"`（纯函数）。
+
+    ⚠️ `MediaSource.isTypeSupported()` 认的是**这个整串**，不是 `video/mp4` ——
+    只给容器类型在 Chromium 上会返回 true（容器认识），真 append 时才失败，
+    那就把失败推到了播放中途。所以缺 codecs 时**宁可让上层判定"不支持"**也别猜：
+    B站 playurl 一直带 `codecs`（实测 `avc1.640033` / `mp4a.40.2`），缺失是异常情况。
+    """
+    mime = str(stream.get("mime") or "").strip() or f"{kind}/mp4"
+    if "codecs" in mime.lower():
+        return mime
+    codecs = str(stream.get("codecs") or "").strip()
+    return f'{mime}; codecs="{codecs}"' if codecs else mime
+
+
+async def _first_working_table(urls: list[str], *, client: httpx.AsyncClient | None,
+                               tries: int = 3) -> dict:
+    """镜像链里**第一条能出段表**的（B站的 `baseUrl` 常是 P2P 主机，实测见 `bili_play`）。"""
+    last: SegmentsError | None = None
+    for url in urls[:tries]:
+        try:
+            return await fetch_table(url, client=client)
+        except SegmentsError as e:
+            last = e
+            logger.info(f"段表取不到（换下一条镜像）host={_host_of(url)}：{e.message}")
+    raise last or SegmentsError("没有可用的流地址", kind="failed")
+
+
+async def stream_tables(play: dict, *, client: httpx.AsyncClient | None = None) -> dict:
+    """一次 `bili_play.play_info` 的结果 → **音视频两条流的段表**（MSE 内核的输入）。
+
+    ⚠️ **两条都要**：音轨拿不到表就整条路退回 progressive ——
+    "视频走 MSE、音轨还是独立 `<audio>`"正是现在这套两个钟的老问题（`devlog/298`–`305`），
+    换成 MSE 的一半没有意义。
+    """
+    own = client is None
+    if own:
+        client = new_async_client(20.0)
+    try:
+        out: dict = {}
+        for kind in ("video", "audio"):
+            streams = (play.get("dash") or {}).get(kind) or []
+            stream = streams[0] if streams else None
+            if not isinstance(stream, dict):
+                raise SegmentsError(f"这次没有 {kind} 流（DASH 才有）", kind="failed")
+            urls = [u for u in (stream.get("urls") or [stream.get("base_url")]) if u]
+            if not urls:
+                raise SegmentsError(f"{kind} 流没有可用地址", kind="failed")
+            table = await _first_working_table(urls, client=client)
+            out[kind] = {**table, "kind": kind, "urls": urls,
+                         "mime": mime_of(stream, kind),
+                         "codecs": stream.get("codecs"),
+                         "bandwidth": stream.get("bandwidth")}
+        # 两条流的时长会差零点几秒（音轨末尾补齐方式不同）⇒ 取长的，免得结尾被截
+        out["duration_s"] = max(t["duration_s"] for k, t in out.items() if k in ("video", "audio"))
+        return out
+    finally:
+        if own:
+            await client.aclose()
 
 
 def clear_cache() -> None:

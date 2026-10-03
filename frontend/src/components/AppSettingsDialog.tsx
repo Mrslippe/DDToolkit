@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import {
   Activity, Check, ChevronDown, ChevronLeft, ChevronRight, Cloud, Info, Loader2,
   Palette, RotateCcw, Save, Sparkles, Timer, TriangleAlert,
@@ -39,6 +39,9 @@ const DIR_SOURCE_LABEL: Record<string, string> = {
   env: '由环境变量 DDTOOLKIT_DATA_DIR 指定',
 }
 import { themeCards, type ThemePref } from '../utils/theme'
+import {
+  KERNEL_OPTIONS, kernelChoice, mseSessionOff, setKernelChoice, subscribeKernel,
+} from '../utils/videoKernel'
 import {
   ABOUT_ID, APPEARANCE_ID, buildNav, buildSections, groupDirty, resetDraftOfGroup,
   type NavIcon,
@@ -99,6 +102,13 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
   const [error, setError] = useState<string | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [busy, setBusy] = useState<'save' | 'reset' | null>(null)
+  /**
+   * 播放内核（devlog/312）：存 localStorage（与音量/倍速同族，播放器要**同步**读），
+   * 所以这里订阅它而不是走后端偏好 —— 与 `usePrefs` 那套（主题/关窗）刻意分开。
+   */
+  const kernelValue = useSyncExternalStore(subscribeKernel, kernelChoice)
+  const mseOff = useSyncExternalStore(subscribeKernel, mseSessionOff)
+  const kernelOpt = KERNEL_OPTIONS.find((o) => o.value === kernelValue) ?? KERNEL_OPTIONS[0]
   /** 隐藏到托盘 / 主题等界面偏好（R14b 起；R18 起是一个 hook 管全部偏好） */
   const prefs = usePrefs()
   const theme = {
@@ -684,6 +694,41 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
                         ))}
                       </div>
                     </div>
+                  )}
+
+                  {/* 视频播放内核（2026-10-04，devlog/312）：默认 MSE，渐进式只作退路。
+                      用户口径：「默认 MSE、开关只作为退路」—— 卡顿几乎每次跳转都出现，
+                      所以默认值就该是新内核；这一项是**真机万一更差**时的回退入口。
+                      值存在 localStorage（`utils/videoKernel`，与音量/倍速同族）——
+                      播放器要同步读到它，走后端就得在起播前多一次往返。 */}
+                  <h4 className="aps-section-head">视频播放</h4>
+                  <div className="aps-row aps-row-stack" data-setting="video_kernel">
+                    <div className="aps-row-main">
+                      <span className="aps-label">播放内核</span>
+                      <span className="aps-note">{kernelOpt.note}</span>
+                    </div>
+                    <div className="aps-row-ctl aps-radio-group" role="radiogroup"
+                         aria-label="播放内核">
+                      {KERNEL_OPTIONS.map((o) => (
+                        <button
+                          key={o.value}
+                          type="button"
+                          role="radio"
+                          aria-checked={kernelValue === o.value}
+                          data-kernel-option={o.value}
+                          className={`aps-radio${kernelValue === o.value ? ' on' : ''}`}
+                          onClick={() => setKernelChoice(o.value)}
+                        >
+                          {o.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {mseOff.off && (
+                    <p className="aps-range" data-kernel-breaker="1">
+                      本次运行中新内核出过问题（{mseOff.why}），已自动改用渐进式；
+                      重开应用或在这里重新选一次就能再试。
+                    </p>
                   )}
 
                   {/* 小窗三项开关（`widget_enabled` / `_click_through` / `_hide_fullscreen`）
