@@ -34,6 +34,7 @@ import {
 import { sanitizePlatformHtml } from '../utils/sanitizePlatformHtml'
 import { openExternalFromHref } from '../utils/externalLinkGuard'
 import VideoPlayer from './VideoPlayer'
+import BiliVideo from './BiliVideo'
 import DeltaRenderer from './DeltaRenderer'
 import ImageViewer, { type ViewerImage } from './ImageViewer'
 import OverlayScroll from './OverlayScroll'
@@ -276,23 +277,16 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
             />
           )}
 
-          {/* B 站视频（devlog/287，P2）：**官方 iframe 播放器**。B 站没有"一个 URL 就能播"的
-              直链（要 playurl + WBI 签名 + 登录态），而官方播放器把这些都包了 ——
-              我们不碰视频流，只嵌它。CSP 的 `frame-src` 必须放行 player.bilibili.com。 */}
+          {/* B 站视频（devlog/290）：**按需取流 + 双元素 DASH**（视频静音 + 独立音轨），
+              播不动回落 durl。取代了上一版的官方 iframe（控件才统一；iframe 仍可作为
+              "在浏览器打开"的兜底）。 */}
           {body.video?.url ? (
             <VideoPlayer video={body.video} poster={shown.cover_url}
                          permalink={shown.permalink} />
           ) : shown.platform === 'bilibili' && body.bvid ? (
-            <div className="vp bili-embed">
-              <iframe
-                className="vp-iframe"
-                src={`https://player.bilibili.com/player.html?bvid=${encodeURIComponent(body.bvid)}&autoplay=0&high_quality=1`}
-                title={postDisplayTitle(shown)}
-                scrolling="no"
-                frameBorder="0"
-                allowFullScreen
-              />
-            </div>
+            <BiliVideo postId={shown.id} poster={shown.cover_url}
+                       permalink={shown.permalink}
+                       title={postDisplayTitle(shown)} />
           ) : shown.cover_url && (
             <button type="button" className="block w-full cursor-zoom-in"
               onClick={() => setViewer({ list: coverList, index: 0 })}>

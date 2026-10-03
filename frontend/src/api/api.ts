@@ -1,4 +1,4 @@
-import type { Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliSearchResult, Capabilities, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, NoticesResponse, PoolItem, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyVtuber, AssetsInfo, AssetsPruneResult, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, XhsCookieSaved } from './types'
+import type { Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliPlayInfo, BiliSearchResult, Capabilities, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, NoticesResponse, PoolItem, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyVtuber, AssetsInfo, AssetsPruneResult, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, XhsCookieSaved } from './types'
 import { ApiError, ApiShapeError } from './errors'
 import { HOST_HEADER, myHost } from '../utils/hostIdentity'
 import {
@@ -661,6 +661,21 @@ export const api = {
     { method: 'POST' }),
 
   // ── 界面偏好（R14b，devlog/092）：主题 ──────────────────────────────
+  /**
+   * B站视频取流（devlog/290）：**按需调用**（用户点播放才取）。
+   *
+   * 为什么必须走后端：媒体 CDN 要 `Referer: bilibili.com` 才给（浏览器设不了），
+   * 登录态也只在后端的 `.env` 里。地址**短时效 + 绑 IP** ⇒ 过期（`expires_in`）要重取一次。
+   * `qn` 是"我想要哪档"（默认最高，B站按权益回落）；`fallback` 取 durl 单 mp4（720P 封顶）。
+   */
+  biliPlay: (postId: number, opts: { qn?: number; fallback?: boolean } = {}) => {
+    const q = new URLSearchParams()
+    if (opts.qn) q.set('qn', String(opts.qn))
+    if (opts.fallback) q.set('fallback', 'true')
+    const qs = q.toString()
+    return request<BiliPlayInfo>(`/bili/play/${postId}${qs ? `?${qs}` : ''}`)
+  },
+
   /** 偏好值 + 允许取值 + 当前能力说明（说明由后端下发，界面不自己编） */
   getPrefs: () => request<Prefs>('/settings/prefs'),
   /**

@@ -336,6 +336,34 @@ export interface LiveSessionDetail extends LiveSession {
  * `session_changed` 出现的原因（2026-10-02，devlog/275）：现查补进来的行带着弹幕数/收益/
  * 峰值/数据源，而弹窗手里那份**详情**是补之前取的 ⇒ 不重取就会出现"词云有了、弹幕数还是空"。
  */
+/** B站取流（devlog/290）：`GET /bili/play/{post_id}` 的返回。
+ *
+ * ⚠️ 地址**短时效且绑 IP** ⇒ 只在用户点播放时取；`expires_in` 到了就重取一次（不要缓存复用）。
+ * `quality` 是**实际拿到**的档（B站按账号权益 + 片源回落），`accept` 才是可选列表。
+ */
+export interface BiliStreamRef {
+  id: number | null
+  base_url: string | null
+  backup_url?: string | null
+  bandwidth?: number | null
+  codecs?: string | null
+  width?: number | null
+  height?: number | null
+  mime?: string | null
+}
+
+export interface BiliPlayInfo {
+  bvid: string
+  cid: number
+  /** `dash`（默认，音视频分离，可到 1080P）/ `durl`（单 mp4，720P 封顶，回落用） */
+  kernel: 'dash' | 'durl'
+  quality: number | null
+  accept: { id: number; label: string }[]
+  dash: { video: BiliStreamRef[]; audio: BiliStreamRef[] }
+  durl: { url: string | null; size?: number | null; length?: number | null }[]
+  expires_in: number
+}
+
 export interface LiveUpstream {
   danmaku?: LiveDanmakuInfo | null
   metrics?: LiveMetrics | null

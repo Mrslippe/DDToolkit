@@ -38,6 +38,26 @@ interface Props {
   poster?: string | null
   /** 原帖链接（兜底按钮用） */
   permalink?: string | null
+  /**
+   * B站 DASH（devlog/290）：**音视频分离的裸 fMP4** ⇒ 双元素播放。
+   *
+   * 为什么不用 dash.js/MSE（原计划）而是双元素：实测 B站给的是**顺序 fMP4**
+   * （`ftyp+moov+sidx+moof+mdat`，见 devlog/290），浏览器能直接播，而 dash.js 需要 MPD
+   * —— B站**根本没有 manifest**，用它就得自己合成 MPD 或写 MSE。双元素零依赖、
+   * 原生 `buffered/seekable` 全保住，自绘控件一行不用改。
+   *
+   * ⚠️ 这两条流**必须经 `/video-proxy`**：媒体 CDN 不带 Referer 就 403，浏览器设不了 Referer。
+   */
+  dash?: { video: string; audio?: string | null } | null
+  /**
+   * 清晰度菜单（B站）：`current` 是**实际拿到**的档，`disabled` 的档**如实标注原因**
+   * （大会员档位拿不到就说"需大会员"，不做成"点了没反应"）。
+   */
+  qualities?: { id: number; label: string; disabled?: boolean; note?: string }[] | null
+  qualityId?: number | null
+  onPickQuality?: (id: number) => void
+  /** 播不动时的**外部回落**（B站：DASH → durl，由调用方重新取流）；给了它就不再显示"播不了"兜底卡 */
+  onFallback?: () => void
 }
 
 function fmt(t: number): string {
@@ -47,10 +67,14 @@ function fmt(t: number): string {
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
 }
 
-export default function VideoPlayer({ video, poster, permalink }: Props) {
+export default function VideoPlayer({ video, poster, permalink, dash, qualities, qualityId,
+                                      onPickQuality, onFallback }: Props) {
   const prefs = useSyncExternalStore(subscribePlayerPrefs, playerPrefs)
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
+  /** DASH 模式的独立音轨（视频元素那边静音） */
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const isDash = Boolean(dash?.video)
 
   const [idx, setIdx] = useState(0)
   const [dead, setDead] = useState(false)
@@ -59,6 +83,8 @@ export default function VideoPlayer({ video, poster, permalink }: Props) {
   const [dur, setDur] = useState(0)
   const [buf, setBuf] = useState(0)
   const [rateOpen, setRateOpen] = useState(false)
+  /** 清晰度菜单（B站；默认关） */
+  const [qualityOpen, setQualityOpen] = useState(false)
   const [fs, setFs] = useState(false)
   const [idle, setIdle] = useState(false)
   /** 进度条 hover 预览（图二那颗时间气泡） */
@@ -66,21 +92,43 @@ export default function VideoPlayer({ video, poster, permalink }: Props) {
   /** 正在拖拽 seek（拖动中圆点常显，见 CSS `.is-dragging`） */
   const [dragging, setDragging] = useState(false)
 
-  const direct = [video.url, ...(video.fallbacks ?? [])].filter(Boolean)
-  const proxied = direct.map((u) => `/video-proxy?url=${encodeURIComponent(u)}`)
-  const sources = [...direct, ...proxied]
+  // DASH 模式：**只走本机代理**（媒体 CDN 不带 Referer 403）；普通模式仍是 直连 → 代理 的链
+  const direct = isDash ? [] : [video.url, ...(video.fallbacks ?? [])].filter(Boolean)
+  const proxied = (isDash ? [dash!.video, ...(dash!.video ? [] : [])] : direct)
+    .map((u) => `/video-proxy?url=${encodeURIComponent(u)}`)
+  const sources = isDash ? proxied : [...direct, ...proxied]
   const src = sources[idx]
+  const audioSrc = dash?.audio
+    ? `/video-proxy?url=${encodeURIComponent(dash.audio)}`
+    : null
 
-  // 全局偏好每次变更都下发给这个元素（音量"一个响一个轻"的根治点）
+  /** 全局偏好下发给**真正出声的那个元素**（DASH 模式 = 音轨；视频元素恒静音） */
+
+  // 全局偏好每次变更都下发给元素（音量"一个响一个轻"的根治点）
   useEffect(() => {
-    const el = videoRef.current
+    const el = isDash ? audioRef.current : videoRef.current
     if (el) applyPlayerPrefs(el)
-  }, [prefs, src])
+  }, [prefs, src, isDash])
+
+  /** DASH：音轨与视频轨的**漂移纠正**（两条独立流，浏览器不会自动对齐） */
+  useEffect(() => {
+    if (!isDash) return
+    const id = window.setInterval(() => {
+      const v = videoRef.current
+      const a = audioRef.current
+      if (!v || !a || a.paused || !Number.isFinite(a.currentTime)) return
+      if (Math.abs(a.currentTime - v.currentTime) > 0.3) a.currentTime = v.currentTime
+    }, 2000)
+    return () => window.clearInterval(id)
+  }, [isDash])
 
   useEffect(() => {
     const el = videoRef.current
     if (!el) return
     applyPlayerPrefs(el)                       // 挂载即对齐全局音量
+    if (isDash) el.muted = true                // 视频轨恒静音：声音由音轨出（否则双份声音）
+    const a = audioRef.current
+    if (a) applyPlayerPrefs(a)
     const onPlay = () => setPlaying(true)
     const onPause = () => setPlaying(false)
     const onTime = () => setCur(el.currentTime)
@@ -104,7 +152,7 @@ export default function VideoPlayer({ video, poster, permalink }: Props) {
       el.removeEventListener('loadedmetadata', onMeta)
       el.removeEventListener('progress', onProg)
     }
-  }, [src])
+  }, [src, isDash])
 
   // 全屏状态（Esc 退出也要同步）
   useEffect(() => {
@@ -116,14 +164,22 @@ export default function VideoPlayer({ video, poster, permalink }: Props) {
   const toggle = useCallback(() => {
     const el = videoRef.current
     if (!el) return
-    if (el.paused) void el.play().catch(() => setDead(false))
-    else el.pause()
+    const a = audioRef.current
+    if (el.paused) {
+      void el.play().catch(() => setDead(false))
+      if (a) { a.currentTime = el.currentTime; void a.play().catch(() => {}) }
+    } else {
+      el.pause()
+      a?.pause()
+    }
   }, [])
 
   const seekTo = useCallback((ratio: number) => {
     const el = videoRef.current
     if (!el || !Number.isFinite(el.duration) || el.duration <= 0) return
     el.currentTime = Math.min(el.duration, Math.max(0, ratio * el.duration))
+    const a = audioRef.current
+    if (a) a.currentTime = el.currentTime        // 音轨跟着跳（否则跳完不同步）
     setCur(el.currentTime)
   }, [])
 
@@ -197,14 +253,34 @@ export default function VideoPlayer({ video, poster, permalink }: Props) {
         className="vp-video"
         playsInline
         preload="metadata"
+        muted={isDash}
         poster={poster ?? undefined}
         src={src}
         onClick={toggle}
         onError={() => {
           if (idx + 1 < sources.length) setIdx(idx + 1)
+          else if (onFallback) onFallback()          // 交给调用方换内核（DASH → durl）
           else setDead(true)
         }}
       />
+      {/* DASH 的独立音轨（隐藏元素；音量/静音/倍速都作用在它身上） */}
+      {isDash && audioSrc && (
+        <audio
+          ref={audioRef}
+          data-vp-audio="1"
+          src={audioSrc}
+          preload="metadata"
+          onPlay={() => setPlaying(true)}
+          onPause={() => setPlaying(false)}
+          onTimeUpdate={() => {
+            const v = videoRef.current
+            const a = audioRef.current
+            if (v && a) setCur(v.currentTime)
+          }}
+          onError={() => reportUserError('视频音轨', `音轨加载失败（本机代理）：${dash?.audio}`,
+                                         { kind: 'resource' })}
+        />
+      )}
 
       {!playing && (
         <button type="button" className="vp-bigplay" aria-label="播放" onClick={toggle}>
@@ -259,6 +335,26 @@ export default function VideoPlayer({ video, poster, permalink }: Props) {
         </div>
 
         <div className="vp-rate">
+          {qualities && qualities.length > 0 && (
+            <div className="vp-rate">
+              <button type="button" className="vp-btn vp-btn--text"
+                      aria-label="清晰度" onClick={() => setQualityOpen((v) => !v)}>
+                {qualities.find((q) => q.id === qualityId)?.label ?? '清晰度'}
+              </button>
+              {qualityOpen && (
+                <div className="vp-menu">
+                  {qualities.map((q) => (
+                    <button key={q.id} type="button" disabled={q.disabled}
+                            title={q.note}
+                            className={`vp-menu-item${q.id === qualityId ? ' is-on' : ''}`}
+                            onClick={() => { onPickQuality?.(q.id); setQualityOpen(false) }}>
+                      {q.label}{q.note ? `（${q.note}）` : ''}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           <button type="button" className="vp-btn vp-btn--text"
                   aria-label="倍速" onClick={() => setRateOpen((v) => !v)}>
             {prefs.rate}×
