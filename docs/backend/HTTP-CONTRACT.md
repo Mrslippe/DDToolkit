@@ -18,14 +18,14 @@ retire-when: HTTP 层换框架，或路由整体重排
 >
 > | 数法 | 值 | 怎么数 |
 > |---|---|---|
-> | **装饰器**（下文「N」用它） | **75** | `vtuber 55` + `auth 4` + `img_proxy 1` + `settings 12` + `messages 2` + `messages_debug 1`（dev-only）；其中 2 个是 `api_route(methods=["GET","POST"])`（`/vtuber/fetch`、`/vtuber/{id}/fetch`）—— ⚠️ **数装饰器必须把这 2 条算进去**，只数 `@router.get/post/...` 会少 2 |
-> | **OpenAPI 方法×路径** | **77** | `sum(len(methods) for p in app.openapi()["paths"].values())`；**这是唯一与实现无关的数法** ⇒ 日常复核用它 |
-> | OpenAPI 路径数 | **63** | `len(app.openapi()["paths"])`（同路径多方法只算 1 条；dev-only 的 `_debug` 路由**不在**，它要 dev token 才挂） |
+> | **装饰器**（下文「N」用它） | **77** | `vtuber 56` + `auth 4` + `img_proxy 1` + `video_proxy 1` + `settings 12` + `messages 2` + `messages_debug 1`（dev-only）；其中 2 个是 `api_route(methods=["GET","POST"])`（`/vtuber/fetch`、`/vtuber/{id}/fetch`）—— ⚠️ **数装饰器必须把这 2 条算进去**，只数 `@router.get/post/...` 会少 2 |
+> | **OpenAPI 方法×路径** | **79** | `sum(len(methods) for p in app.openapi()["paths"].values())`；**这是唯一与实现无关的数法** ⇒ 日常复核用它 |
+> | OpenAPI 路径数 | **65** | `len(app.openapi()["paths"])`（同路径多方法只算 1 条；dev-only 的 `_debug` 路由**不在**，它要 dev token 才挂） |
 >
-> ⚠️ **2026-09-29 重新数过**（M5-1 的 `GET /vtuber/notices` + `POST /vtuber/notices/ack`；
-> L2 的 `GET /settings/assets` + `POST /settings/assets/prune` + `POST /settings/assets/pin`）：
-> 实测装饰器 **75** / OpenAPI 方法×路径 **77** / 路径数 **63**。
-> 更早的版本：66/—/—（批次 16）、64/70/67（R42-A）—— 三种数法本来就容易漂。
+> ⚠️ **2026-10-03 重新数过**（B站取流 `GET /bili/play/{post_id}` + 视频代理 `GET /video-proxy`，
+> devlog/289）：实测装饰器 **77** / OpenAPI 方法×路径 **79** / 路径数 **65**。
+> 更早的版本：75/77/63（2026-09-29 M5-1 + L2）、66/—/—（批次 16）、64/70/67（R42-A）
+> —— 三种数法本来就容易漂。
 > ⚠️ **新增 `/vtuber/xxx` 这类"看起来不像参数"的路径时必须注册在 `/vtuber/{vtuber_id}` 之前**：
 > M5-1 第一版把 `/vtuber/notices` 放在文件下面，`GET` 直接被 `{vtuber_id}: int` 捕获、恒定 422
 > （`tests/test_notices.py::test_route_serves_notices` 当场抓住）。FastAPI 按**注册顺序**匹配。
@@ -45,7 +45,7 @@ retire-when: HTTP 层换框架，或路由整体重排
 > ⚠️ **dev-only 路由也会进"装饰器"计数**：所以它单独一个模块 + 标准名 `router`
 > （`app/routers/messages_debug.py`）—— 用 `debug_router` 这种名字会让它从计数里消失。
 
-### 3.1 `app/routers/vtuber.py` — 主业务路由（55，44 条路径）
+### 3.1 `app/routers/vtuber.py` — 主业务路由（56，44 条路径）
 
 路径直接 `/vtuber/...`、`/account/...`、`/posts...`、`/post/...`、`/externals/...`；
 响应模型走 `app/schemas/vtuber.py`（`Out` 为 `from_attributes`）。
@@ -122,6 +122,12 @@ retire-when: HTTP 层换框架，或路由整体重排
 | POST `/posts` | 建帖；三元组重复 409 |
 | PUT `/post/{post_id}` / DELETE `/post/{post_id}` | 更帖 / 删帖；404 |
 
+**播放（B站取流，C1+C2，devlog/289）**
+
+| 方法 + 路径 | 说明 |
+|---|---|
+| GET `/bili/play/{post_id}?qn=&fallback=` | 取播放地址：**用户点播放才调**（地址短时效 + 绑 IP ⇒ 120s 短缓存、**不落库**）。`qn` = "想要哪档"（实际档看账号权益，响应里的 `quality` 才是真给的）；`fallback=true` ⇒ 换 `fnval=1` 取 **durl 单 mp4**（720P 封顶，DASH 播不动时用）。响应只给前端要用的 `{quality, accept[], dash:{video[],audio[]}, durl[], expires_in, kernel}`；**Cookie 只在请求头**。错误如实分级：帖子不存在 404 / 非 B站帖或缺 bvid 400 / 上游 `-404` 404、`-403` 403（充电专属等）、`-352` 429 |
+
 **抓取 / 归档 / 候选池**
 
 > ⚠️ **未登录闸门**（devlog/086）：下面带「内容接口」标记的端点在未登录时**直接 403**
@@ -184,7 +190,26 @@ retire-when: HTTP 层换框架，或路由整体重排
 **性能**：磁盘缓存 `static/img-cache/{md5}.bin + .json`（TTL 7 天，原子写入，过期 2×TTL 清理）；
 模块级共享 `httpx.AsyncClient`（lifespan 关闭时释放）。
 
-### 3.4 `app/routers/settings.py` — 应用设置与偏好（5，R14a/R14b devlog/091、092）
+### 3.4 `app/routers/video_proxy.py` — 视频代理（1）
+
+| 方法 + 路径 | 说明 |
+|---|---|
+| GET `/video-proxy?url=` | 流式转发白名单内的**视频** URL（Range 直通、**不落盘**、上游非 2xx 原样回该状态码；上游连不上 502，主机不在白名单 400） |
+
+**为什么必须存在**：`<video>` 设不了 `Referer`，而平台 CDN 要 Referer 才给（`bilivideo.com`
+不带 → 403）；同源代理还天然过 CSP 的 `media-src`。
+
+**按主机分策略**（`HOST_POLICY`，2026-10-03 实测两家要求**正好相反**）：`xhscdn.com`
+**不带** `Referer`；`bilivideo.com` 带 `https://www.bilibili.com/`；`weibocdn.com` /
+`sinaimg.cn` 带 `https://weibo.com/`（后两个还要 UA —— 带 UA+Range 而无 Referer 实测 403）。
+本机送来的请求头里**只转发 `Range`**（`Referer`/`Origin`/`Cookie` 一律丢掉，就是它们惹的 403）。
+
+**安全**：`ALLOWED_HOSTS` 后缀匹配只认四个平台 CDN（`host == h or host.endswith("." + h)`，
+`xhscdn.com.evil.com` 这类伪装被挡）；⚠️ 它和 `/img-proxy` 一样是**公开端点**
+（`api_auth.PUBLIC_EXACT`，`<video>` 带不了 token 头）—— 边界就是这份主机白名单 + 不转发凭据
+（devlog/292 记的就是"漏登记 ⇒ 真机全 401"）。
+
+### 3.5 `app/routers/settings.py` — 应用设置与偏好（12，R14a/R14b devlog/091、092）
 
 | 方法 + 路径 | 说明 |
 |---|---|
@@ -206,7 +231,7 @@ retire-when: HTTP 层换框架，或路由整体重排
   下一轮生效），prefs 是"界面长什么样"（枚举、立即生效）。混在一个 PUT 里会让两套校验
   规则纠缠，也会逼着"外观"分区挂上"下一轮生效"这种不相干的说明。
 
-### 3.5 `app/routers/messages.py` — 推送通道（2）+ `messages_debug.py` — dev-only 合成钩子（1）
+### 3.6 `app/routers/messages.py` — 推送通道（2）+ `messages_debug.py` — dev-only 合成钩子（1）
 
 | 方法 + 路径 | 说明 |
 |---|---|

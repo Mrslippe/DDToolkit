@@ -11,7 +11,8 @@
 设计口径（见 `docs/backend/ARCHITECTURE.md` §6 与 `docs/ARCHITECTURE-IMPROVEMENT-EXECUTION.md` §S1）：
   · 每次启动由 Tauri 生成高熵、**只存内存**的 token，经 sidecar 的 env 传入；
   · 后端用 `X-DDToolkit-Token` 头校验，**常量时间比较**；
-  · 分级：`/healthz`、`/static/*`、`GET /img-proxy` 公开（`<img>` 带不了头），**其余一律要 token**；
+  · 分级：`/healthz`、`/static/*`、`GET /img-proxy`、`GET /video-proxy` 公开（媒体元素带不了头），
+    **其余一律要 token**；
   · 失败统一 401，**错误文本不回显 token**；
   · 开发态（没有 Tauri）允许显式配置固定 token —— 探针与 `npm run dev` 走这条。
 
@@ -53,6 +54,7 @@ PUBLIC = [
     ("GET", "/healthz"),
     ("GET", "/static/avatars/whatever.jpg"),
     ("GET", "/img-proxy?url=https://i0.hdslb.com/x.jpg"),
+    ("GET", "/video-proxy?url=https://sns-video-v4.xhscdn.com/a.mp4"),
 ]
 
 
@@ -158,12 +160,38 @@ def test_every_protected_route_is_covered_by_the_decision_function(token):
 
 
 def test_public_whitelist_is_exactly_what_we_intend(token):
-    """公开白名单**必须只有**这三类 —— 多一个都是没注意到（少一个则是功能坏）。
+    """公开白名单**必须只有**这四类 —— 多一个都是没注意到（少一个则是功能坏）。
 
     反向验证：往 `PUBLIC_PREFIXES` 里塞 `"/vtuber"` ⇒ 红。
     """
     assert api_auth.PUBLIC_PREFIXES == ("/healthz", "/static/")
-    assert api_auth.PUBLIC_EXACT == {("GET", "/img-proxy")}
+    assert api_auth.PUBLIC_EXACT == {("GET", "/img-proxy"), ("GET", "/video-proxy")}
+
+
+def test_header_less_media_endpoints_are_public(token):
+    """`<img>` / `<video>` **带不了自定义头** ⇒ 这两个端点"没有 token 也必须过门"。
+
+    为什么不能靠上面的 `test_public_endpoints_stay_open`：那个夹具（`tests/conftest.py`）
+    会给**每个** `TestClient` 默认塞上正确 token ⇒ 它证明的是"带对 token 能过"，
+    而不是"不带头也能过"。真机上的 `<video src="/video-proxy?...">` 恰好就是不带头的那一类。
+
+    ⚠️ **2026-10-03 实测的洞（devlog/292）**：`/video-proxy` 上线时没进 `PUBLIC_EXACT`，
+    于是真机上**每一段视频都 401**（B站 DASH 档更是 100% 走代理），而当时全部单测是绿的。
+    所以这里**故意用错 token** 建客户端：只要过门（非 401）就说明白名单认领了它。
+
+    反向验证：把 `("GET", "/video-proxy")` 从 `PUBLIC_EXACT` 删掉 ⇒ 红。
+    """
+    anon = TestClient(app, headers={api_auth.TOKEN_HEADER: "deliberately-wrong"})
+    bad = []
+    for path in ("/video-proxy?url=https://sns-video-v4.xhscdn.com/a.mp4",
+                 "/img-proxy?url=https://i0.hdslb.com/x.jpg"):
+        # 只断言"不是 401"：这两个端点的上游在没网/CI 里会 502/504，那都说明门放行了
+        r = anon.get(path)
+        if r.status_code == 401:
+            bad.append(f"GET {path} 无 token 被 401 —— 媒体元素带不了头，等于功能全废")
+    assert not bad, "\n  - ".join(bad)
+    # 方法限死：给它们加写语义的那天必须重新过一遍鉴权（GET 公开 ≠ POST 公开）
+    assert anon.post("/video-proxy").status_code == 401, "只公开 GET"
 
 
 def test_wrong_token_is_rejected(client, token):

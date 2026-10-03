@@ -19,13 +19,20 @@
 
 ## 为什么有"公开路径"这个白名单
 
-`<img>` 直连（`/static/*` 与 `/img-proxy`）**带不了自定义头**；给它们加鉴权就得把整条
-图片链路改成 blob 拉取再转 objectURL（母计划把它列为停止条件之一）。
+`<img>` / `<video>` 直连（`/static/*`、`/img-proxy`、`/video-proxy`）**带不了自定义头**；
+给它们加鉴权就得把整条图片/视频链路改成 blob 拉取再转 objectURL（母计划把它列为停止条件之一）。
 `/healthz` 还兼着桌面端的就绪探活（`main.tsx` 轮询它 240 次），也必须公开。
 
-⇒ 这**三处是本机可读的**，这是**有意留下的**，不是漏配。它们的边界是：
+⇒ 这**四处是本机可读的**，这是**有意留下的**，不是漏配。它们的边界是：
 `/healthz` 只返回最小启动信息；`/static/*` 只是图片与自绘背景；
-`/img-proxy` 有主机白名单 + 逐跳校验 + 类型/体积上限，且**只能取图床**。
+`/img-proxy` 有主机白名单 + 逐跳校验 + 类型/体积上限，且**只能取图床**；
+`/video-proxy` 的主机白名单**只有四个平台 CDN**（`video_proxy.ALLOWED_HOSTS`）、
+**不转发 `Cookie`/`Origin`/`Referer`**（按主机由策略表补）、不落盘。
+
+⚠️ **2026-10-03（devlog/292）踩过一次**：`/video-proxy` 上线时**没进这张表**，
+而单测全绿 —— 因为 `tests/conftest.py` 会给每个 `TestClient` **默认塞上正确 token**，
+真机上 `<video src>` 却一个头都带不了 ⇒ **所有视频 401**。判据补在
+`tests/test_api_auth.py::test_header_less_media_endpoints_are_public`（**故意用错 token** 建客户端）。
 
 ## 反过来说：这条中间件不是"防住本机攻击者"
 
@@ -48,9 +55,9 @@ TOKEN_HEADER = "X-DDToolkit-Token"
 
 # 公开路径（**精确前缀**，见模块 docstring 的取舍说明）
 PUBLIC_PREFIXES = ("/healthz", "/static/")
-# 公开的**单个路径 + 方法**组合（`/img-proxy` 只在 GET 上公开：
-# 它没有写语义，但把方法限死可以让"以后给它加个 POST"自动落进要鉴权的那一侧）
-PUBLIC_EXACT = {("GET", "/img-proxy")}
+# 公开的**单个路径 + 方法**组合（`/img-proxy`、`/video-proxy` 只在 GET 上公开：
+# 它们没有写语义，但把方法限死可以让"以后给它加个 POST"自动落进要鉴权的那一侧）
+PUBLIC_EXACT = {("GET", "/img-proxy"), ("GET", "/video-proxy")}
 
 # 前端在没有 token 时会看到一串 401；把这一句做成常量，测试与文档都引用它
 MISSING_TOKEN_DETAIL = "缺少或无效的访问令牌（本机应用启动时生成）"

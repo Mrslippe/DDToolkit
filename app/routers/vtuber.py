@@ -1035,6 +1035,7 @@ def search_externals_vtubers(kw: str, source: str | None = Query(None),
 
 @router.get("/bili/play/{post_id}")
 async def bili_play(post_id: int, qn: int | None = Query(None),
+                    fallback: bool = Query(False),
                     db: Session = Depends(get_db)):
     """B站视频取流（2026-10-03，devlog/289；C1+C2，**默认 DASH**）。
 
@@ -1044,6 +1045,9 @@ async def bili_play(post_id: int, qn: int | None = Query(None),
     - **按需调用**：用户点播放才取；地址短时效且绑 IP ⇒ 只做 120s 短缓存、**不落库**；
     - `qn` 只是"我想要哪档"，实际给哪档看**账号权益 + 片源**（本账号实测最高 1080P，
       要 1080P+/4K 会被静默回落 —— 前端照返回值里的 `quality` 显示）；
+    - `fallback=true` ⇒ 换 `fnval=1` 取 **durl 单 mp4**（720P 封顶）：DASH 那条路在真机上
+      播不动时，前端拿它当兜底（⚠️ 这个参数 2026-10-03 曾**漏接**：前端发了、路由没收，
+      于是 DASH 失败后重取回来的还是 DASH —— devlog/292）；
     - 失败**如实分类**：`-404` 不存在 / `-403` 无权限（充电专属等）/ `-352` 风控 / 其它。
     """
     from app.core.jsonsafe import safe_json_dict
@@ -1058,7 +1062,7 @@ async def bili_play(post_id: int, qn: int | None = Query(None),
     if not bvid:
         raise HTTPException(400, "这条帖子没有 bvid（不是视频帖）")
     try:
-        return await bili_play.play_info(str(bvid), qn=qn)
+        return await bili_play.play_info(str(bvid), qn=qn, durl_fallback=fallback)
     except bili_play.PlayError as e:
         status = {"not_found": 404, "forbidden": 403, "risk_control": 429}.get(e.kind, 502)
         raise HTTPException(status, e.message) from e

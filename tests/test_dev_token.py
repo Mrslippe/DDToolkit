@@ -119,11 +119,11 @@ def test_scripts_that_call_the_backend_send_the_header():
         assert "dev_token" in text, f"{name} 没有接开发态 token（S1 起它会 401）"
 
 
-#: 后端**业务**路径前缀（要 token）；公开三处（`/healthz`、`/static/`、`/img-proxy`）
-#: 是有意不鉴权的，见 `app/core/api_auth.py` 的 docstring。
+#: 后端**业务**路径前缀（要 token）；公开四处（`/healthz`、`/static/`、`/img-proxy`、
+#: `/video-proxy`）是有意不鉴权的，见 `app/core/api_auth.py` 的 docstring。
 _BUSINESS_PATHS = ("/vtuber", "/account", "/posts", "/post/", "/externals", "/settings",
                    "/auth", "/capabilities", "/messages", "/healthz")
-_PUBLIC_PATHS = ("/healthz", "/static/", "/img-proxy")
+_PUBLIC_PATHS = ("/healthz", "/static/", "/img-proxy", "/video-proxy")
 
 
 def test_probe_backend_calls_send_the_token():

@@ -76,10 +76,17 @@ flowchart LR
       （`build.rs` 没有 app manifest ⇒ 自定义命令**默认不查 ACL**，只拆 capability 等于没做）。
     - 请求头 `X-DDToolkit-Token`；比较走 `hmac.compare_digest`；失败统一 401
       且**不回显 token**（响应体、日志、OpenAPI schema 三处都有用例钉着）。
-    - **公开白名单只有三处**：`/healthz`、`/static/*`、`GET /img-proxy`。
-      前两者是 `<img>` 直连（带不了自定义头）与桌面端就绪探活；`/img-proxy` 另有主机白名单。
+    - **公开白名单只有四处**：`/healthz`、`/static/*`、`GET /img-proxy`、`GET /video-proxy`。
+      `/healthz` 是桌面端的就绪探活；另三个是 `<img>` / `<video>` **直连**（带不了自定义头）
+      与静态图；两个代理各有主机白名单（`/video-proxy` 只认四个平台视频 CDN，
+      且不转发 `Cookie`/`Origin`）。
       **往这个白名单里加东西要当成改安全边界**，`tests/test_api_auth.py` 有一条
       "路由表对账"用例：新增路由若既不在白名单、又没被要求 token，会直接红。
+      ⚠️ 但"对账"**不足以**证明公开性 —— `tests/conftest.py` 会给每个 `TestClient` 默认塞上
+      正确 token，所以"能过门"可能只是"带了 token"。真机形态（**一个头都不带**的媒体请求）
+      由 `test_header_less_media_endpoints_are_public` 单独钉（它**故意用错 token** 建客户端）。
+      2026-10-03 的 `/video-proxy` 就是栽在这里：没进白名单 ⇒ 真机每一段视频都 401，
+      而当时单测全绿（devlog/292）。
     - **开发态**（没有 Tauri：探针 / `npm run dev` / 直接跑 `backend_main.py`）用
       `DDTOOLKIT_DEV_API_TOKEN` 指定固定值；前端那一份由 `vite.config.ts` 的
       `VITE_DEV_API_TOKEN` 注入，**两处值必须一致**（不一致的症状是"页面数据全空 ⇒

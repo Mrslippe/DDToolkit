@@ -1757,3 +1757,66 @@ def test_wordcloud_endpoint_404s(client):
     ).json()["id"]
     assert client.get(f"/account/{aid}/live-sessions/nope/wordcloud").status_code == 404
     assert client.get("/account/999999/live-sessions/x/wordcloud").status_code == 404
+
+
+# ── B站取流端点（C1+C2，devlog/289/292）────────────────────────────────────────
+
+def _bili_video_post(platform="bilibili", bvid="BV1TEST"):
+    """造一条带 `body_json.bvid` 的帖子，返回 post id。"""
+    db = TestingSession()
+    try:
+        p = Post(platform=platform, platform_uid="88001", platform_post_id="P-BV",
+                 type="video", published_at=datetime.now(),
+                 body_json=json.dumps({"bvid": bvid} if bvid else {}))
+        db.add(p)
+        db.commit()
+        db.refresh(p)
+        return p.id
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("qs,expect", [
+    ("", {"qn": None, "durl_fallback": False}),
+    ("?qn=80", {"qn": 80, "durl_fallback": False}),
+    ("?fallback=true", {"qn": None, "durl_fallback": True}),
+    ("?qn=64&fallback=true", {"qn": 64, "durl_fallback": True}),
+])
+def test_bili_play_route_forwards_qn_and_fallback(monkeypatch, client, qs, expect):
+    """`/bili/play/{id}` 把 `qn` / `fallback` **原样接到** `bili_play.play_info` 上。
+
+    为什么这条必须打在**路由层**：`?fallback=true` 曾被漏接 —— 前端发了，路由签名里没这个
+    参数，而 **FastAPI 对未知查询参数默认静默忽略** ⇒ 用户点"播不动"后回落重取，取回来的
+    还是 DASH。当时的服务层用例直接调 `play_info(durl_fallback=True)`，**绕过了路由**，
+    所以全绿（devlog/292）。这一层的价值就是"接线接上了没有"。
+
+    反向验证：把路由签名里的 `fallback` 参数删掉 ⇒ `?fallback=true` 那两条红。
+    """
+    import app.services.bili_play as play_svc
+
+    seen: dict = {}
+
+    async def _fake(bvid, **kw):
+        seen["bvid"] = bvid
+        seen.update(kw)
+        return {"quality": 80, "accept": [], "dash": {"video": [], "audio": []},
+                "durl": [], "expires_in": 120,
+                "kernel": "durl" if kw.get("durl_fallback") else "dash"}
+
+    monkeypatch.setattr(play_svc, "play_info", _fake)
+    pid = _bili_video_post()
+
+    r = client.get(f"/bili/play/{pid}{qs}")
+    assert r.status_code == 200, r.text
+    assert seen.get("bvid") == "BV1TEST"
+    assert {k: v for k, v in seen.items() if k != "bvid"} == expect, \
+        f"{qs or '(无参数)'} 没接到服务上：{seen}"
+    assert r.json()["kernel"] == ("durl" if expect.get("durl_fallback") else "dash")
+
+
+def test_bili_play_route_rejects_non_video_posts(client):
+    """非 B站帖 400、没有 bvid 400、帖子不存在 404（**别把三类混成一句"取不到"**）。"""
+    assert client.get("/bili/play/999999").status_code == 404
+    assert client.get(f"/bili/play/{_bili_video_post(platform='weibo', bvid='BV1')}"
+                      ).status_code == 400
+    assert client.get(f"/bili/play/{_bili_video_post(bvid='')}").status_code == 400
