@@ -78,7 +78,7 @@ flowchart LR
       且**不回显 token**（响应体、日志、OpenAPI schema 三处都有用例钉着）。
     - **公开白名单只有四处**：`/healthz`、`/static/*`、`GET /img-proxy`、`GET /video-proxy`。
       `/healthz` 是桌面端的就绪探活；另三个是 `<img>` / `<video>` **直连**（带不了自定义头）
-      与静态图；两个代理各有主机白名单（`/video-proxy` 只认四个平台视频 CDN，
+      与静态图；两个代理各有主机白名单（`/video-proxy` 只认五个平台视频 CDN 域，
       且不转发 `Cookie`/`Origin`）。
       **往这个白名单里加东西要当成改安全边界**，`tests/test_api_auth.py` 有一条
       "路由表对账"用例：新增路由若既不在白名单、又没被要求 token，会直接红。

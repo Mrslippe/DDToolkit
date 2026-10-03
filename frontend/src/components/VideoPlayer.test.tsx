@@ -249,8 +249,14 @@ describe('VideoPlayer', () => {
     }
     expect(seen[0]).toBe('http://v/a.mp4')
     expect(seen[1]).toBe('http://v/b.mp4')
-    expect(seen[2]).toBe('/video-proxy?url=http%3A%2F%2Fv%2Fa.mp4')
+    // 代理那两级必须带 `apiBase`（`/api`），不能是裸相对的 `/video-proxy`（devlog/294）
+    expect(seen[2]).toBe('/api/video-proxy?url=http%3A%2F%2Fv%2Fa.mp4')
+    expect(seen[3]).toBe('/api/video-proxy?url=http%3A%2F%2Fv%2Fb.mp4')
     expect(host.querySelector('.vp-dead')?.textContent).toContain('播不了')
     expect(reportEntries().some((r) => r.where === '视频播放')).toBe(true)
+    // ⚠️ 这条报告**只能有一条**：以前写在渲染分支里，一次失败会随重渲染刷出好几条
+    //    （真机报告里同一条 ×6，把原因淹了）。反向验证：把 effect 里的判断挪回渲染 ⇒ 红。
+    expect(reportEntries().filter((r) => r.where === '视频播放').length,
+           '同一条失败报告刷屏了').toBe(1)
   })
 })

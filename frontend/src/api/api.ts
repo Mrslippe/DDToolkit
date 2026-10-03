@@ -705,3 +705,15 @@ export function resolveAsset(path: string | null | undefined): string | undefine
 export function imgProxyUrl(src: string): string {
   return `${apiBase}/img-proxy?url=${encodeURIComponent(src)}`
 }
+
+/**
+ * 视频代理 URL（devlog/294）：**必须走 `apiBase`**，不能写成相对的 `/video-proxy?…`。
+ *
+ * 为什么：相对路径落在**页面来源**上 —— 开发态是 `http://localhost:5173`（vite 只代理 `/api`）、
+ * 桌面端是 `tauri://localhost`，两者都不是后端。写成相对路径的后果是"每一段视频都 404"，
+ * 而错误长得像 CDN 挂了（真机就是这么烧掉的，见 devlog/294）。`imgProxyUrl` 一直是这么拼的，
+ * 视频那条当初漏了。
+ */
+export function videoProxyUrl(src: string): string {
+  return `${apiBase}/video-proxy?url=${encodeURIComponent(src)}`
+}

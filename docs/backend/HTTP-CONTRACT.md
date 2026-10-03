@@ -200,14 +200,19 @@ retire-when: HTTP 层换框架，或路由整体重排
 不带 → 403）；同源代理还天然过 CSP 的 `media-src`。
 
 **按主机分策略**（`HOST_POLICY`，2026-10-03 实测两家要求**正好相反**）：`xhscdn.com`
-**不带** `Referer`；`bilivideo.com` 带 `https://www.bilibili.com/`；`weibocdn.com` /
-`sinaimg.cn` 带 `https://weibo.com/`（后两个还要 UA —— 带 UA+Range 而无 Referer 实测 403）。
-本机送来的请求头里**只转发 `Range`**（`Referer`/`Origin`/`Cookie` 一律丢掉，就是它们惹的 403）。
+**不带** `Referer`；`bilivideo.com` / `bilivideo.cn` 带 `https://www.bilibili.com/`；
+`weibocdn.com` / `sinaimg.cn` 带 `https://weibo.com/`（后两个还要 UA —— 带 UA+Range 而无 Referer
+实测 403）。本机送来的请求头里**只转发 `Range`**（`Referer`/`Origin`/`Cookie` 一律丢掉，
+就是它们惹的 403）。⚠️ `bilivideo.cn` 是 B站的 **mcdn/P2P 镜像域**，
+实测某视频**每一条流的 `baseUrl` 都是它**（`devlog/294`）—— 只认 `.com` 时真机全被 400 挡回。
 
-**安全**：`ALLOWED_HOSTS` 后缀匹配只认四个平台 CDN（`host == h or host.endswith("." + h)`，
+**安全**：`ALLOWED_HOSTS` 后缀匹配只认五个平台 CDN 域（`host == h or host.endswith("." + h)`，
 `xhscdn.com.evil.com` 这类伪装被挡）；⚠️ 它和 `/img-proxy` 一样是**公开端点**
 （`api_auth.PUBLIC_EXACT`，`<video>` 带不了 token 头）—— 边界就是这份主机白名单 + 不转发凭据
 （devlog/292 记的就是"漏登记 ⇒ 真机全 401"）。
+⚠️ 前端拼 URL 必须用 `api.ts` 的 **`videoProxyUrl()`**（带 `apiBase`），且 CSP 的 `media-src`
+要放行 `http://127.0.0.1:*` —— 两条都是 `devlog/294` 的真机事故（相对路径落到前端自己、
+跨源媒体被 CSP 静默挡掉）。
 
 ### 3.5 `app/routers/settings.py` — 应用设置与偏好（12，R14a/R14b devlog/091、092）
 

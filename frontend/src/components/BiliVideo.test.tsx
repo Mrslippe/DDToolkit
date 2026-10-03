@@ -9,7 +9,13 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const biliPlay = vi.fn()
-vi.mock('../api/api', () => ({ api: { biliPlay: (...a: unknown[]) => biliPlay(...a) } }))
+vi.mock('../api/api', () => ({
+  api: { biliPlay: (...a: unknown[]) => biliPlay(...a) },
+  // 两个代理 URL 的拼法要**真的**走一遍（它们带着 apiBase，见 devlog/294）：
+  // 只 mock `biliPlay` 而漏掉这两个 ⇒ 组件直接抛 "No export is defined on the mock"。
+  videoProxyUrl: (u: string) => `/api/video-proxy?url=${encodeURIComponent(u)}`,
+  imgProxyUrl: (u: string) => `/api/img-proxy?url=${encodeURIComponent(u)}`,
+}))
 vi.mock('../utils/shellBridge', () => ({ openExternal: () => Promise.resolve() }))
 
 import BiliVideo, { nextRetryAction } from './BiliVideo'
@@ -75,6 +81,39 @@ describe('BiliVideo', () => {
       await Promise.resolve()
     })
     expect(host.querySelector('.bili-lazy-err')?.textContent).toContain('没有观看权限')
+  })
+
+  it('封面走 ProxyImage：`http://` 要 https 化 + 带 no-referrer（裸 `<img>` 会破图）', () => {
+    // 真机现场（devlog/294）：B站封面是 `http://i1.hdslb.com/…`，页面里的裸 `<img>` 直接破图
+    // （黑底 + "图片"占位）。ProxyImage 会 https 化、带 no-referrer、失败还能转 `/img-proxy`。
+    act(() => root.render(
+      <BiliVideo postId={7} poster="http://i1.hdslb.com/bfs/archive/c.jpg" />))
+    const img = host.querySelector<HTMLImageElement>('.bili-lazy img')!
+    expect(img.getAttribute('src')).toBe('https://i1.hdslb.com/bfs/archive/c.jpg')
+    expect(img.getAttribute('referrerpolicy')).toBe('no-referrer')
+    expect(img.getAttribute('data-render-src'), 'ProxyImage 的探针属性（R46）')
+      .toBe('https://i1.hdslb.com/bfs/archive/c.jpg')
+  })
+
+  it('镜像链交给播放器：`urls` 里第 2 条起进 `videoFallbacks`（不必回后端重取）', async () => {
+    const alt = 'https://upos-sz-estgoss.bilivideo.com/v2.m4s?sign=y'
+    biliPlay.mockResolvedValue({
+      ...INFO,
+      dash: { video: [{ id: 80, base_url: 'https://xy1.mcdn.bilivideo.cn:8082/v.m4s',
+                        urls: ['https://xy1.mcdn.bilivideo.cn:8082/v.m4s', alt], height: 1080 }],
+              audio: [{ id: 30280, base_url: 'https://xy1.mcdn.bilivideo.cn:8082/a.m4s',
+                        urls: ['https://xy1.mcdn.bilivideo.cn:8082/a.m4s'], }] },
+    })
+    act(() => root.render(<BiliVideo postId={7} />))
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('.vp-bigplay')!.click()
+      await Promise.resolve()
+    })
+    const v = host.querySelector('video')!
+    expect(v.getAttribute('src')).toContain('xy1.mcdn.bilivideo.cn')
+    await act(async () => { v.dispatchEvent(new Event('error')); await Promise.resolve() })
+    expect(host.querySelector('video')!.getAttribute('src'), '第二条镜像要用上')
+      .toBe(`/api/video-proxy?url=${encodeURIComponent(alt)}`)
   })
 
   it('播不动 ⇒ **先回落 durl**（换内核重取一次），只回落一次', async () => {

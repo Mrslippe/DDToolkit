@@ -134,3 +134,48 @@ def test_short_cache_blocks_double_clicks():
     asyncio.run(bili_play.play_info("BV1", client=c))
     asyncio.run(bili_play.play_info("BV1", client=c))
     assert len([1 for u, _p, _h in c.calls if "playurl" in u]) == 1
+
+
+# ── 镜像排序：真机实测"每一条流的 baseUrl 都是 P2P/mcdn"（devlog/294）────────────
+#
+# 现场（用户真机 2026-10-03，BV16tHY6UEid）：`baseUrl` 全是 `xy*.mcdn.bilivideo.cn`，
+# 而 `/video-proxy` 的白名单只认平台自家域名 ⇒ 前端拿 `baseUrl` 去代理被 **400** 挡回，
+# 表现是"全部都播不了"。`backupUrl` 里其实有能过的 `upos-*.bilivideo.com`。
+# ⇒ 取流侧负责**排序**：先能过代理的、且优先普通 CDN（mcdn 是 P2P，排在白名单里的后面）。
+
+_MCDN = "https://xy39x174x255x9xy.mcdn.bilivideo.cn:8082/v1/resource/a.m4s?e=x"
+_P2P = "https://b-baa0.edge.mountaintoys.cn/upgcxcode/a.m4s?e=x"
+_UPOS = "https://upos-sz-estgoss.bilivideo.com/upgcxcode/a.m4s?e=x"
+_CN = "https://cn-gddg-ct-01-10.bilivideo.com/upgcxcode/a.m4s?e=x"
+
+
+def test_dash_prefers_a_mirror_that_can_go_through_our_proxy():
+    """`baseUrl`(mcdn) + `backupUrl`(P2P, 普通 CDN) ⇒ 选出**普通 CDN**，并把整条链带出去。"""
+    data = {"dash": {"video": [{"id": 80, "baseUrl": _MCDN, "backupUrl": [_P2P, _UPOS],
+                               "height": 1080}],
+                     "audio": [{"id": 30280, "baseUrl": _MCDN, "backupUrl": [_UPOS]}]}}
+    out = bili_play.parse_dash(data)
+    v = out["video"][0]
+    assert v["base_url"] == _UPOS, "必须挑能过我们代理的那条（P2P/mcdn 是白名单外/末位）"
+    assert v["urls"] == [_UPOS, _MCDN, _P2P], "链要排好：普通 CDN → mcdn（自家域名）→ P2P"
+    assert out["audio"][0]["base_url"] == _UPOS
+
+    # 只在白名单里的普通 CDN 与 mcdn 之间选时，普通 CDN 仍然优先
+    out2 = bili_play.parse_dash({"dash": {"video": [{"id": 80, "baseUrl": _MCDN,
+                                                     "backupUrl": [_CN]}]}})
+    assert out2["video"][0]["base_url"] == _CN
+
+
+def test_dash_keeps_the_original_order_when_nothing_can_go_through():
+    """一个能过的都没有 ⇒ **保持上游顺序**（别把 P2P 排前面，也别丢地址）。"""
+    out = bili_play.parse_dash({"dash": {"video": [{"id": 80, "baseUrl": _P2P,
+                                                    "backupUrl": [_P2P]}]}})
+    assert out["video"][0]["urls"] == [_P2P]
+
+
+def test_durl_entry_is_reranked_too():
+    """durl 回落同样要排：实测 `url` 是 `edge.mountaintoys.cn`，`backup_url` 才是 upos。"""
+    rows = bili_play.parse_durl({"durl": [{"url": _P2P, "backup_url": [_UPOS], "length": 263488}]})
+    assert rows[0]["url"] == _UPOS
+    assert rows[0]["urls"] == [_UPOS, _P2P]
+    assert rows[0]["length"] == 263488

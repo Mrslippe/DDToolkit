@@ -18,6 +18,8 @@ import {
   Volume1, Volume2, VolumeX,
 } from 'lucide-react'
 
+import { videoProxyUrl } from '../api/api'
+import { normalizeImageUrl } from '../utils/format'
 import { openExternalFromHref } from '../utils/externalLinkGuard'
 import { reportUserError } from '../utils/problemReport'
 import {
@@ -47,8 +49,15 @@ interface Props {
    * 原生 `buffered/seekable` 全保住，自绘控件一行不用改。
    *
    * ⚠️ 这两条流**必须经 `/video-proxy`**：媒体 CDN 不带 Referer 就 403，浏览器设不了 Referer。
+   * `videoFallbacks` / `audioFallbacks` 是后端排过序的**同档镜像**（devlog/294）：B站的 `baseUrl`
+   * 常常是 P2P/mcdn 主机，备份里才有普通 CDN ⇒ 挂一条就换下一条，不用回后端重取。
    */
-  dash?: { video: string; audio?: string | null } | null
+  dash?: {
+    video: string
+    videoFallbacks?: string[] | null
+    audio?: string | null
+    audioFallbacks?: string[] | null
+  } | null
   /**
    * 清晰度菜单（B站）：`current` 是**实际拿到**的档，`disabled` 的档**如实标注原因**
    * （大会员档位拿不到就说"需大会员"，不做成"点了没反应"）。
@@ -77,6 +86,8 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
   const isDash = Boolean(dash?.video)
 
   const [idx, setIdx] = useState(0)
+  /** DASH 音轨的镜像序号（视频轨用 `idx`，两条流各自换源 —— 一条挂了不必重来另一条） */
+  const [aidx, setAidx] = useState(0)
   const [dead, setDead] = useState(false)
   const [playing, setPlaying] = useState(false)
   const [cur, setCur] = useState(0)
@@ -92,14 +103,24 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
   /** 正在拖拽 seek（拖动中圆点常显，见 CSS `.is-dragging`） */
   const [dragging, setDragging] = useState(false)
 
-  // DASH 模式：**只走本机代理**（媒体 CDN 不带 Referer 403）；普通模式仍是 直连 → 代理 的链
-  const direct = isDash ? [] : [video.url, ...(video.fallbacks ?? [])].filter(Boolean)
-  const proxied = (isDash ? [dash!.video, ...(dash!.video ? [] : [])] : direct)
-    .map((u) => `/video-proxy?url=${encodeURIComponent(u)}`)
-  const sources = isDash ? proxied : [...direct, ...proxied]
+  // DASH 模式：**只走本机代理**（媒体 CDN 不带 Referer 403）；普通模式仍是 直连 → 代理 的链。
+  // ⚠️ 代理 URL 必须用 `videoProxyUrl()`（拼 `apiBase`）—— 写成相对的 `/video-proxy?…` 会落到
+  //    页面来源（dev 的 vite / 桌面的 tauri://localhost）⇒ 全都 404（devlog/294 的真机事故）。
+  const dashVideoUrls: string[] = isDash
+    ? [dash!.video, ...(dash!.videoFallbacks ?? [])].filter((u): u is string => Boolean(u))
+    : []
+  const dashAudioUrls: string[] = isDash
+    ? [dash!.audio, ...(dash!.audioFallbacks ?? [])].filter((u): u is string => Boolean(u))
+    : []
+  const direct: string[] = isDash
+    ? []
+    : [video.url, ...(video.fallbacks ?? [])].filter((u): u is string => Boolean(u))
+  const sources = isDash
+    ? dashVideoUrls.map(videoProxyUrl)
+    : [...direct, ...direct.map(videoProxyUrl)]     // 直连链走完再走同一批的代理链
   const src = sources[idx]
-  const audioSrc = dash?.audio
-    ? `/video-proxy?url=${encodeURIComponent(dash.audio)}`
+  const audioSrc = isDash && dashAudioUrls.length
+    ? videoProxyUrl(dashAudioUrls[Math.min(aidx, dashAudioUrls.length - 1)])
     : null
 
   /** 全局偏好下发给**真正出声的那个元素**（DASH 模式 = 音轨；视频元素恒静音） */
@@ -161,6 +182,23 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
     return () => document.removeEventListener('fullscreenchange', onFs)
   }, [])
 
+  /**
+   * 真播不了才报一条（`data-self-healing` 只管中间那几步）。
+   *
+   * ⚠️ **必须在 effect 里报，不能在渲染里报**（devlog/294）：以前写在 `.vp-dead` 那个分支里，
+   * 而渲染函数在一次失败后会跑很多遍（父组件一更新就再渲染一次）—— 真机报告里因此出现
+   * **同一条 ×6**。用户看到的是"报错日志刷屏"，把真正的原因淹了。
+   *
+   * 依赖只放 `[dead, src, video.url]`（都是字符串/布尔）：`sources` 每次渲染都是新数组，
+   * 放进依赖会让这条 effect 每渲染必跑 —— 那就又回到"刷屏"了。
+   */
+  useEffect(() => {
+    if (dead || !src) {
+      reportUserError('视频播放', `全部播放源都失败（含本机代理）：${src ?? video.url}`,
+                      { kind: 'resource' })
+    }
+  }, [dead, src, video.url])
+
   const toggle = useCallback(() => {
     const el = videoRef.current
     if (!el) return
@@ -200,8 +238,7 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
   }, [])
 
   // 快捷键：只在控件区域内接管（不抢抽屉的 Esc / 滚动）
-  const onKey = (e: React.KeyboardEvent) => {
-    const el = videoRef.current
+  const onKey = (e: React.KeyboardEvent) => {    const el = videoRef.current
     if (!el) return
     const k = e.key.toLowerCase()
     if (k === ' ' || k === 'k') { e.preventDefault(); toggle() }
@@ -214,8 +251,6 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
   }
 
   if (dead || !src) {
-    reportUserError('视频播放', `全部播放源都失败（含本机代理）：${sources[0] ?? ''}`,
-                    { kind: 'resource' })
     return (
       <div className="vp-dead">
         <span>这个视频在当前环境里播不了</span>
@@ -254,12 +289,12 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
         playsInline
         preload="metadata"
         muted={isDash}
-        poster={poster ?? undefined}
+        poster={poster ? normalizeImageUrl(poster) : undefined}
         src={src}
         onClick={toggle}
         onError={() => {
-          if (idx + 1 < sources.length) setIdx(idx + 1)
-          else if (onFallback) onFallback()          // 交给调用方换内核（DASH → durl）
+          if (idx + 1 < sources.length) setIdx(idx + 1)   // 同档的下一面镜像（devlog/294）
+          else if (onFallback) onFallback()               // 交给调用方换内核（DASH → durl）
           else setDead(true)
         }}
       />
@@ -277,8 +312,12 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
             const a = audioRef.current
             if (v && a) setCur(v.currentTime)
           }}
-          onError={() => reportUserError('视频音轨', `音轨加载失败（本机代理）：${dash?.audio}`,
-                                         { kind: 'resource' })}
+          onError={() => {
+            // 音轨自己也有镜像链：换下一条；全试完才报一条（**别一条流失败刷一串报告**）
+            if (aidx + 1 < dashAudioUrls.length) { setAidx(aidx + 1); return }
+            reportUserError('视频音轨', `音轨全部镜像都失败（本机代理）：${dashAudioUrls[0] ?? ''}`,
+                            { kind: 'resource' })
+          }}
         />
       )}
 

@@ -74,7 +74,14 @@ def _headers() -> dict:
 
 
 def parse_dash(data: dict) -> dict:
-    """DASH 段 → 只留前端要用的字段（URL 原样，带签名）。"""
+    """DASH 段 → 只留前端要用的字段（URL 原样，带签名）。
+
+    ⚠️ **候选要排过序**（2026-10-03 真机，devlog/294）：B站给的 `baseUrl` 常常是
+    P2P/mcdn 镜像（`xy*.mcdn.bilivideo.cn`），而 `/video-proxy` 的白名单只认平台自家域名
+    —— 实测某个视频**每一条流**的 `baseUrl` 都是 mcdn、`backupUrl[1]` 才是普通 CDN。
+    不排序的话，前端拿 `baseUrl` 去代理 ⇒ 400「主机不在白名单」⇒ "全部都播不了"。
+    所以这里把 `[baseUrl, *backupUrl]` 排成 `urls`：**先能过代理的、且不是 mcdn 的**。
+    """
     dash = data.get("dash") or {}
 
     def streams(items) -> list[dict]:
@@ -82,24 +89,59 @@ def parse_dash(data: dict) -> dict:
         for s in items or []:
             if not isinstance(s, dict):
                 continue
+            base = s.get("baseUrl") or s.get("base_url")
+            if not base:
+                continue
+            backups = s.get("backupUrl") or s.get("backup_url") or []
+            if isinstance(backups, str):
+                backups = [backups]
+            urls = rank_urls([base, *[b for b in backups if b]])
             out.append({
                 "id": s.get("id"),
-                "base_url": s.get("baseUrl") or s.get("base_url"),
-                "backup_url": (s.get("backupUrl") or s.get("backup_url") or [None])[0],
+                "base_url": urls[0],
+                "urls": urls,
+                "backup_url": urls[1] if len(urls) > 1 else None,
                 "bandwidth": s.get("bandwidth"),
                 "codecs": s.get("codecs"),
                 "width": s.get("width"),
                 "height": s.get("height"),
                 "mime": s.get("mimeType") or s.get("mime_type"),
             })
-        return [s for s in out if s["base_url"]]
+        return out
 
     return {"video": streams(dash.get("video")), "audio": streams(dash.get("audio"))}
 
 
+def _host_rank(url: str) -> int:
+    """越小越优先：0 = 代理白名单里的普通 CDN，1 = 白名单里的 mcdn/P2P 镜像，2 = 过不了代理。"""
+    from app.routers.video_proxy import _host_of, is_allowed_url
+
+    if not is_allowed_url(url):
+        return 2
+    return 1 if "mcdn" in _host_of(url) else 0
+
+
+def rank_urls(urls: list[str]) -> list[str]:
+    """把同一个流的多个镜像按"能不能过代理"排序（**稳定**：同档保持上游给的顺序）。"""
+    seen: set[str] = set()
+    uniq = [u for u in urls if u and not (u in seen or seen.add(u))]
+    return sorted(uniq, key=_host_rank)
+
+
 def parse_durl(data: dict) -> list[dict]:
-    return [{"url": d.get("url"), "size": d.get("size"), "length": d.get("length")}
-            for d in (data.get("durl") or []) if isinstance(d, dict) and d.get("url")]
+    """durl 段（回落内核）：同样排过序 —— 实测 `url` 可以是 P2P 的 `edge.mountaintoys.cn`，
+    而 `backup_url` 里才有能过代理的 `upos-*.bilivideo.com`。"""
+    out = []
+    for d in data.get("durl") or []:
+        if not isinstance(d, dict) or not d.get("url"):
+            continue
+        backups = d.get("backup_url") or d.get("backupUrl") or []
+        if isinstance(backups, str):
+            backups = [backups]
+        urls = rank_urls([d["url"], *[b for b in backups if b]])
+        out.append({"url": urls[0], "urls": urls,
+                    "size": d.get("size"), "length": d.get("length")})
+    return out
 
 
 def normalize(data: dict, *, bvid: str, cid: int) -> dict:

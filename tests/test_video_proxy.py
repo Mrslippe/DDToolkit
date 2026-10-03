@@ -1,8 +1,15 @@
 """视频代理（devlog/281 补丁）的判据：**白名单 / Range 直通 / 上游错误如实回**。
 
 背景（真机实测）：小红书 CDN 对任何带 `Referer` 的请求回 403，而 WebView 加载媒体必然带 Referer
-⇒ 前端直连不可靠，兜底走本机 `/video-proxy`（不带 Referer、同源）。
+⇒ 前端直连不可靠，兜底走本机 `/video-proxy`（不带 Referer、**按主机补策略头**）。
+
+2026-10-03（devlog/294）真机补的三条：① `/video-proxy` 是**后端的端点**，前端必须用
+`videoProxyUrl()`（带 `apiBase`）拼，写成相对路径会落到页面来源；② `media-src` 里必须放行
+后端来源；③ 白名单要包含 B站的 mcdn 镜像域（`bilivideo.cn`）。
 """
+import json
+from pathlib import Path
+
 import httpx
 import pytest
 from fastapi.testclient import TestClient
@@ -81,6 +88,9 @@ def test_video_proxy_reports_upstream_error_as_is(client, monkeypatch):
     ("https://sns-video-v4.xhscdn.com/a.mp4", True),
     ("http://sns-bak-v1.xhscdn.com/a.mp4", True),
     ("https://xhscdn.com/a.mp4", True),
+    # B站 mcdn/P2P 镜像（真机实测**每条流的 baseUrl 都是它**，devlog/294）
+    ("https://xy39x174x255x9xy.mcdn.bilivideo.cn:8082/v1/resource/a.m4s", True),
+    ("https://upos-sz-estgoss.bilivideo.com/upgcxcode/a.m4s", True),
     ("https://cn-gddg-ct-01-12.bilivideo.com/v.m4s", True),      # B站媒体 CDN（2026-10-03 加）
     ("https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/x.m4s", True),
     ("https://evilxhscdn.com/a.mp4", False),      # 后缀伪装
@@ -109,6 +119,9 @@ def test_host_policy_is_per_cdn_not_one_size_fits_all():
     bili = video_proxy.policy_for("cn-gddg-ct-01-12.bilivideo.com")
     assert bili.get("Referer") == "https://www.bilibili.com/", "B站媒体不带 Referer 会 403"
     assert "User-Agent" in bili
+    # mcdn（`.cn`）与普通 CDN 同款策略：同属 B站媒体，防盗链要求一致
+    assert video_proxy.policy_for("xy39x174x255x9xy.mcdn.bilivideo.cn").get("Referer") == \
+        "https://www.bilibili.com/"
     assert video_proxy.policy_for("sns-video-v4.xhscdn.com") == {}, \
         "小红书带了 Referer 会 403 ⇒ 策略必须是「什么都不加」"
     assert video_proxy.policy_for("unknown.example") == {}
@@ -125,3 +138,24 @@ def test_proxy_applies_host_policy_and_still_strips_browser_headers(client, monk
     got = {k.lower(): v for k, v in _FakeUpstream.last_headers.items()}
     assert got.get("referer") == "https://www.bilibili.com/", "要的是**我们**定的 Referer"
     assert "cookie" not in got and "origin" not in got
+
+
+def test_csp_allows_the_backend_origin_for_media():
+    """CSP 的 `media-src` 必须放行**后端自己的来源**（`http://127.0.0.1:*`）。
+
+    为什么（2026-10-03 真机，devlog/294）：`/video-proxy` 挂在后端上，而桌面端页面来源是
+    `tauri://localhost`（开发态是 `http://localhost:5173`）⇒ 媒体请求是**跨源**的。
+    `media-src` 里只有 `'self' https://*.xhscdn.com` 时，**所有经代理的流都会被 CSP 挡掉**，
+    控制台一句 `Refused to load media`，而用户看到的症状与"CDN 挂了"一模一样。
+
+    反向验证：把 `http://127.0.0.1:*` 从 `media-src` 删掉 ⇒ 本用例红。
+    """
+    root = Path(__file__).resolve().parent.parent
+    conf = json.loads((root / "frontend/src-tauri/tauri.conf.json").read_text(encoding="utf-8"))
+    csp = conf["app"]["security"]["csp"]
+    media = next((d for d in csp.split(";") if d.strip().startswith("media-src")), "")
+    assert media, f"CSP 里没有 media-src：{csp}"
+    assert "http://127.0.0.1:*" in media, (
+        "media-src 没放行后端来源 ⇒ 经 /video-proxy 的流会被 CSP 全挡（真机表现为'播不了'）")
+    # 直连那两级（非 DASH 档先试直连）仍要留着 —— 别为了修上面那条把它们删了
+    assert "'self'" in media and "xhscdn.com" in media

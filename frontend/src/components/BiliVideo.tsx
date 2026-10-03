@@ -24,6 +24,7 @@ import { Play } from 'lucide-react'
 
 import { api } from '../api/api'
 import type { BiliPlayInfo } from '../api/types'
+import ProxyImage from './common/ProxyImage'
 import VideoPlayer from './VideoPlayer'
 
 /** B站清晰度 id → 是否大会员档（112=1080P+ / 116=1080P60 / 120=4K / 125=HDR / 126=杜比 / 127=8K） */
@@ -101,7 +102,10 @@ export default function BiliVideo({ postId, poster, permalink, title }: Props) {
   if (!info) {
     return (
       <div className="vp bili-lazy">
-        {poster && <img className="vp-video" src={poster} alt="封面" />}
+        {/* ⚠️ 封面走 `ProxyImage`（**不是裸 `<img>`**）：B站的封面常是 `http://…hdslb.com/…`
+            —— 裸 `<img>` 会因混合内容/防盗链直接破图（真机上就是那条黑底"图片"占位，
+            见 devlog/294）。ProxyImage 负责 https 化 + 直连失败转 `/img-proxy`。 */}
+        {poster && <ProxyImage className="vp-video" src={poster} alt="封面" />}
         <button type="button" className="vp-bigplay" aria-label="播放"
                 disabled={busy} onClick={() => void load({}, true)}>
           <Play className="size-7" />
@@ -123,11 +127,19 @@ export default function BiliVideo({ postId, poster, permalink, title }: Props) {
     note: PREMIUM_QN.has(q.id) ? '需大会员' : undefined,
   }))
   const canRetry = nextRetryAction({ expired: isExpired(), ...tried.current }) !== 'none'
+  const rest = (urls?: string[] | null, head?: string | null) =>
+    (urls ?? []).filter((u) => u && u !== head)
 
   return (
     <VideoPlayer
-      video={{ url: durl ?? best?.base_url ?? '' }}
-      dash={dashOk ? { video: best!.base_url!, audio: audio?.base_url ?? null } : null}
+      video={{ url: durl ?? best?.base_url ?? '',
+               fallbacks: rest(info.durl[0]?.urls, durl) }}
+      /* 镜像链交给播放器自己换源（devlog/294）：baseURL 常常是 P2P/mcdn 主机，
+         后端已按"能不能过代理"排好序，挂一条就换下一条，不必回后端重取 */
+      dash={dashOk ? { video: best!.base_url!,
+                       videoFallbacks: rest(best!.urls, best!.base_url),
+                       audio: audio?.base_url ?? null,
+                       audioFallbacks: rest(audio?.urls, audio?.base_url) } : null}
       qualities={qualities}
       qualityId={info.quality}
       poster={poster}

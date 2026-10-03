@@ -44,8 +44,13 @@ describe('VideoPlayer · DASH 双元素', () => {
 
     const v = host.querySelector('video')!
     const a = host.querySelector('audio')!
-    expect(v.getAttribute('src')).toBe(`/video-proxy?url=${encodeURIComponent(DASH.video)}`)
-    expect(a.getAttribute('src')).toBe(`/video-proxy?url=${encodeURIComponent(DASH.audio)}`)
+    // ⚠️ 代理 URL **必须带 `apiBase`**（这里默认 `/api`）：写成相对的 `/video-proxy?…` 会落在
+    //    页面来源上（dev 的 vite / 桌面的 tauri://localhost）⇒ 每一段视频都 404。
+    //    真机就是这么烧掉的（devlog/294），所以这里钉的是**完整前缀**，不是"能拼出来"。
+    expect(v.getAttribute('src')).toBe(`/api/video-proxy?url=${encodeURIComponent(DASH.video)}`)
+    expect(a.getAttribute('src')).toBe(`/api/video-proxy?url=${encodeURIComponent(DASH.audio)}`)
+    expect(v.getAttribute('src')!.startsWith('/video-proxy'),
+           '裸相对路径 = 落到前端自己身上').toBe(false)
     // ⚠️ React 把 `muted` 当**属性(property)**设，不一定落到 DOM attribute 上 ⇒ 读 property
     expect(v.muted, '视频轨不静音 ⇒ 会出双份声音').toBe(true)
     expect(v.hasAttribute('controls'), '仍是自绘控件').toBe(false)
@@ -67,6 +72,42 @@ describe('VideoPlayer · DASH 双元素', () => {
     })
     expect(v.currentTime).toBeCloseTo(30, 1)
     expect(a.currentTime, '音轨没跟着跳 ⇒ 声音会停在原处').toBeCloseTo(30, 1)
+  })
+
+  it('镜像链：视频轨挂一条就换下一条（**各自换源**），音轨同理', async () => {
+    // 真机现场（devlog/294）：`baseUrl` 全是 P2P/mcdn，普通 CDN 在备份里；后端排好序递过来。
+    const alt = 'https://upos-sz-estgoss.bilivideo.com/v2.m4s?sign=y'
+    const altA = 'https://upos-sz-estgoss.bilivideo.com/a2.m4s?sign=y'
+    act(() => root.render(
+      <VideoPlayer video={{ url: DASH.video }}
+                   dash={{ ...DASH, videoFallbacks: [alt], audioFallbacks: [altA] }} />))
+
+    const v = host.querySelector('video')!
+    await act(async () => { v.dispatchEvent(new Event('error')); await Promise.resolve() })
+    expect(host.querySelector('video')!.getAttribute('src'))
+      .toBe(`/api/video-proxy?url=${encodeURIComponent(alt)}`)
+    // 视频轨换源不该动音轨（两条独立流各有各的链）
+    expect(host.querySelector('audio')!.getAttribute('src'))
+      .toBe(`/api/video-proxy?url=${encodeURIComponent(DASH.audio)}`)
+
+    await act(async () => {
+      host.querySelector('audio')!.dispatchEvent(new Event('error'))
+      await Promise.resolve()
+    })
+    expect(host.querySelector('audio')!.getAttribute('src'))
+      .toBe(`/api/video-proxy?url=${encodeURIComponent(altA)}`)
+  })
+
+  it('链走完就交给调用方换内核（DASH → durl），不自己判死', async () => {
+    const onFallback = vi.fn()
+    act(() => root.render(
+      <VideoPlayer video={{ url: DASH.video }} dash={DASH} onFallback={onFallback} />))
+    await act(async () => {
+      host.querySelector('video')!.dispatchEvent(new Event('error'))
+      await Promise.resolve()
+    })
+    expect(onFallback).toHaveBeenCalledTimes(1)
+    expect(host.querySelector('.vp-dead'), '还没换内核就显示"播不了"是抢跑').toBeNull()
   })
 })
 

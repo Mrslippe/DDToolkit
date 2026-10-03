@@ -38,9 +38,14 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["media"])
 
 #: 允许代理的主机（后缀匹配）：平台视频 CDN。**新增平台时在这里加**，别放宽成通配。
+#:
+#: ⚠️ **2026-10-03 真机补的 `.cn`**：B站的 `baseUrl` 常常给 P2P/mcdn 镜像
+#: （`xy*.mcdn.bilivideo.cn`，实测某视频**每一条流**都是它），而 `backupUrl` 里才是普通 CDN。
+#: 只认 `.com` 时，前端把 `baseUrl` 递过来 → **400「不在白名单」**，表现为"全部都播不了"。
 ALLOWED_HOSTS: tuple[str, ...] = (
     "xhscdn.com",              # 小红书（图片/视频同域）
     "bilivideo.com",           # B站媒体 CDN（cn-*.bilivideo.com / upos-*.bilivideo.com …）
+    "bilivideo.cn",            # B站 mcdn/P2P 镜像（xy*.mcdn.bilivideo.cn）
     "weibocdn.com",            # 微博视频 CDN（f.video.weibocdn.com）
     "sinaimg.cn",              # 微博图床（gif 转的 mp4 也叫这个域）
 )
@@ -56,6 +61,7 @@ ALLOWED_HOSTS: tuple[str, ...] = (
 HOST_POLICY: tuple[tuple[str, dict[str, str]], ...] = (
     ("xhscdn.com", {}),
     ("bilivideo.com", {"Referer": "https://www.bilibili.com/", "User-Agent": UA_CHROME}),
+    ("bilivideo.cn", {"Referer": "https://www.bilibili.com/", "User-Agent": UA_CHROME}),
     # 微博（实测 2026-10-03，devlog/291）：**裸请求 200，但带 UA+Range 而无 Referer → 403**，
     # 带 `Referer: https://weibo.com/` → 206 ⇒ 与 B站 同款策略
     ("weibocdn.com", {"Referer": "https://weibo.com/", "User-Agent": UA_CHROME}),
@@ -70,15 +76,30 @@ _FORWARD_RESP = ("content-type", "content-length", "content-range", "accept-rang
                  "last-modified", "etag", "cache-control")
 
 
+def _host_of(url: str) -> str:
+    """URL 的主机名（小写）；解析不了就空串。"""
+    try:
+        return (urlparse(url).hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def is_allowed_url(url: str) -> bool:
+    """这个 URL 的主机在白名单里吗（**纯函数**）。
+
+    为什么单独抽出来：取流侧（`services/bili_play.py`）要在**多个镜像里挑一个能过代理的**
+    —— 它需要的是"能不能过"，不是"抛不抛 HTTPException"。
+    """
+    host = _host_of(url)
+    return bool(host) and any(host == h or host.endswith("." + h) for h in ALLOWED_HOSTS)
+
+
 def host_allowed(url: str) -> str:
     """URL 的主机在白名单里吗（是 → 返回 host；否则抛 400）。"""
-    try:
-        host = (urlparse(url).hostname or "").lower()
-    except ValueError:
-        host = ""
+    host = _host_of(url)
     if not host:
         raise HTTPException(400, "url 不合法")
-    if not any(host == h or host.endswith("." + h) for h in ALLOWED_HOSTS):
+    if not is_allowed_url(url):
         raise HTTPException(400, f"这个主机不在视频代理的白名单里：{host}")
     return host
 

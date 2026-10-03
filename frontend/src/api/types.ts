@@ -343,7 +343,10 @@ export interface LiveSessionDetail extends LiveSession {
  */
 export interface BiliStreamRef {
   id: number | null
+  /** **排过序**的首选地址（后端把"能过 `/video-proxy` 白名单的"排前面，见 devlog/294） */
   base_url: string | null
+  /** 同一档的整条镜像链（`base_url` = `urls[0]`）：一条挂了就换下一条，不必回后端重取 */
+  urls?: string[] | null
   backup_url?: string | null
   bandwidth?: number | null
   codecs?: string | null
@@ -360,7 +363,8 @@ export interface BiliPlayInfo {
   quality: number | null
   accept: { id: number; label: string }[]
   dash: { video: BiliStreamRef[]; audio: BiliStreamRef[] }
-  durl: { url: string | null; size?: number | null; length?: number | null }[]
+  durl: { url: string | null; urls?: string[] | null
+          size?: number | null; length?: number | null }[]
   expires_in: number
 }
 
