@@ -135,6 +135,14 @@ const DEADLOCK_MS = 1200
 const HOLD_POLL_MS = 200
 /** 全屏时贴着下边缘是想**呼出**控件，不是"离开"（用户口径，devlog/301） */
 const BOTTOM_HOT_ZONE = 72
+/**
+ * 转圈**至少要亮这么久**（devlog/302）。
+ *
+ * 用户口径：「缓冲按钮在缓冲的时候还会**闪动**」—— `waiting` / `canplay` 在饿住-回血的
+ * 边界上会连着来回发（一帧一帧那种），每次 `canplay` 就把转圈收掉 ⇒ 屏幕上一闪一闪。
+ * 给"显示"一个最短时长，短于它的回血**不收起**，看起来才是一个稳定的"正在缓冲"。
+ */
+const MIN_SPIN_MS = 450
 
 function fmt(t: number): string {
   if (!Number.isFinite(t) || t < 0) t = 0
@@ -205,6 +213,8 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
   const draggingRef = useRef(false)
   /** 缓冲中（`waiting` → `playing`/`canplay`）：中央转圈，别看起来像"暂停了"（devlog/299） */
   const [buffering, setBuffering] = useState(false)
+  /** 转圈的最短显示时长（防闪动，见 `MIN_SPIN_MS`） */
+  const spinRef = useRef({ since: 0, hideTimer: 0 })
   /** 缓冲治理的按住状态（见 `HOLD_AT` 那段注释） */
   const holdRef = useRef({ active: false, self: false, lastAhead: -1, stuck: 0 })
 
@@ -322,28 +332,59 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
       hold.self = false
       hold.lastAhead = -1
       hold.stuck = 0
+      endSpin()          // 数据够了 ⇒ 转圈按最短时长收尾（不是立刻消失，免得又闪）
       void el.play().catch(() => { /* 策略拒绝：保持暂停 */ })
     }
 
-    const onPlay = () => { setPlaying(true); setBuffering(false) }
+    /** 显示转圈（最短 `MIN_SPIN_MS`，防闪动） */
+    const showSpin = () => {
+      window.clearTimeout(spinRef.current.hideTimer)
+      if (!spinRef.current.since) spinRef.current.since = Date.now()
+      setBuffering(true)
+    }
+    /** 回血：短于最短时长**先不收**（否则饿住-回血的边界上会一闪一闪） */
+    const endSpin = () => {
+      const shown = spinRef.current.since ? Date.now() - spinRef.current.since : MIN_SPIN_MS
+      const left = MIN_SPIN_MS - shown
+      window.clearTimeout(spinRef.current.hideTimer)
+      const done = () => { spinRef.current.since = 0; setBuffering(false) }
+      if (left > 0) spinRef.current.hideTimer = window.setTimeout(done, left)
+      else done()
+    }
+
+    /* 点了播放就进入"在播"语义；但**第一帧还没出来**（readyState < 3）时按缓冲处理 ——
+       否则那 1 秒多里界面是"封面 + 暂停键"，用户读成"卡在暂停上"（devlog/302） */
+    const onPlay = () => {
+      wantPlayRef.current = true
+      setPlaying(true)
+      if (el.readyState < 3) showSpin()
+    }
     /* ⚠️ 暂停要把音轨一起带走（devlog/299）：暂停可能来自**画中画小窗的按钮**、
        系统媒体键、或 `navigator.mediaSession` —— 那些都不经过我们的 `toggle()`。
        不管的话：视频轨停了、音轨还在放，而每秒一次的漂移纠正发现"音轨超前 0.6s"
-       就把它拽回冻结的画面时间 ⇒ **同一小段被反复重放**（用户听到的"一小段一小段重复"）。 */
+       就把它拽回冻结的画面时间 ⇒ **同一小段被反复重放**（用户听到的"一小段一小段重复"）。
+       ⚠️ 但**我们自己为了缓冲按的那一下不算暂停**（devlog/302）：它只是"没数据，先别跑"，
+       语义上还在播 —— 否则界面会在 ▶/⏸ 之间来回闪（用户看到的"播放暂停图标来回闪动"）。 */
     const onPause = () => {
-      setPlaying(false)
+      const ours = holdRef.current.active && holdRef.current.self
       audioRef.current?.pause()
-      // 用户自己按的暂停（不是我们为了缓冲按住的）⇒ 取消按住，别等会儿又自己放起来
-      if (holdRef.current.active && !holdRef.current.self) {
-        holdRef.current.active = false
-        holdRef.current.lastAhead = -1
+      if (ours) {
+        showSpin()                     // 缓冲按住 ⇒ 界面保持"在播"，只是转圈
+      } else {
+        wantPlayRef.current = false      // 用户/系统按的暂停 ⇒ 意图也翻掉
+        setPlaying(false)
+        // 用户自己按的暂停 ⇒ 取消按住，别等会儿又自己放起来
+        if (holdRef.current.active) {
+          holdRef.current.active = false
+          holdRef.current.lastAhead = -1
+        }
       }
       holdRef.current.self = false
     }
-    const onPlaying = () => { setBuffering(false); startAudio() }
+    const onPlaying = () => { endSpin(); startAudio() }
     /* 缓冲中要有转圈（用户口径：点进度条跳转后在加载，不能看起来像"暂停了"） */
     const onWaiting = () => {
-      setBuffering(true)
+      showSpin()
       // 饿着跑 = 一帧一帧 + 状态横跳 ⇒ **按住**，等缓冲够了再放（`HOLD_AT` 那段有实测依据）
       if (!el.paused && !holdRef.current.active && bufferedAhead(el) < HOLD_AT) {
         holdRef.current.active = true
@@ -353,7 +394,7 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
         el.pause()
       }
     }
-    const onCanPlay = () => setBuffering(false)
+    const onCanPlay = () => endSpin()
     const onTime = () => {
       setCur(el.currentTime)
       /**
@@ -365,8 +406,12 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
        * 都可能），状态就会**永久停在错的**那一格。`timeupdate` 播放时每秒发 4 次，
        * 拿它当和解心跳，最多 250ms 就能自愈。
        */
-      // `playing` 在闭包里可能已经旧了 ⇒ 用函数式更新（值没变时 React 会跳过重渲染）
-      setPlaying((prev) => (prev === !el.paused ? prev : !el.paused))
+      // `playing` 在闭包里可能已经旧了 ⇒ 用函数式更新（值没变时 React 会跳过重渲染）。
+      // ⚠️ 缓冲按住期间元素是暂停的，但**语义上仍在播** —— 不能拿 `el.paused` 直接覆盖，
+      //    否则每一拍都把界面按回"暂停"（用户看到的 ▶/⏸ 闪动，devlog/302）。
+      const holding = holdRef.current.active
+      const want = holding ? true : !el.paused
+      setPlaying((prev) => (prev === want ? prev : want))
       if (!el.paused) startAudio()
     }
     const onMeta = () => setDur(el.duration || 0)
@@ -472,16 +517,23 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
   const startPlayback = useCallback(() => {
     const el = videoRef.current
     if (!el) return
+    wantPlayRef.current = true
     void el.play().catch(() => { /* 自动播放策略拒绝：保持暂停，让用户再点一下 */ })
   }, [])
 
   const toggle = useCallback(() => {
     const el = videoRef.current
     if (!el) return
-    if (el.paused) startPlayback()
-    else {
+    // 判据是**意图**而不是 `el.paused`：缓冲按住期间元素是暂停的，但用户点一下应该是"暂停"，
+    // 不是"再播一次"（否则点了没反应、还和治理器打架，devlog/302）
+    if (wantPlayRef.current) {
+      wantPlayRef.current = false
+      holdRef.current.active = false     // 取消缓冲按住（用户要停就停）
       el.pause()
       audioRef.current?.pause()
+    } else {
+      wantPlayRef.current = true
+      startPlayback()
     }
   }, [startPlayback])
 
@@ -501,6 +553,14 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
    * 现在的口径：**seek 时先把音轨闭上嘴**（`pause`），等视频轨 `seeked`（真的到位）再对齐并复播。
    */
   const seekRef = useRef({ settling: false, wasPlaying: false })
+  /**
+   * **播放意图**（devlog/302）：用户/自动播想要的终态，而不是元素此刻的 `paused`。
+   *
+   * 为什么必须分开：缓冲治理会把元素 `pause()` 住（"没数据先别跑"），那时 `el.paused === true`
+   * 但意图仍是"在播"。落点就是用户报的那条 —— **拖到未缓冲处后画面在动、却没有声音**：
+   * 拖动开始时若元素正好在"按住"状态，`wasPlaying` 被记成 false ⇒ seek 结束后**永远不去起音轨**。
+   */
+  const wantPlayRef = useRef(false)
 
   /** 收尾：视频轨到位后把音轨对齐（必要时复播）。**幂等**，并带兜底定时器（见下）。 */
   const settleAudio = useCallback(() => {
@@ -514,7 +574,10 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
       done = true
       window.clearTimeout(timer)
       a.currentTime = el.currentTime
-      if (seekRef.current.wasPlaying) void a.play().catch(() => { /* 策略拒绝：保持暂停 */ })
+      // 用**意图**判要不要复播：元素可能正被缓冲治理按住（`el.paused === true` 但用户在等它播）
+      if (seekRef.current.wasPlaying || wantPlayRef.current) {
+        void a.play().catch(() => { /* 策略拒绝：保持暂停 */ })
+      }
       seekRef.current.settling = false
     }
     if (el.seeking) {
@@ -536,7 +599,7 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
     const a = audioRef.current
     if (a && !seekRef.current.settling) {          // 进入一次 seek：先让音轨停下
       seekRef.current.settling = true
-      seekRef.current.wasPlaying = !el.paused
+      seekRef.current.wasPlaying = wantPlayRef.current || !el.paused
       a.pause()
     }
     el.currentTime = Math.min(el.duration, Math.max(0, ratio * el.duration))
@@ -676,7 +739,11 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
         onMouseLeave={() => { hoverBarRef.current = false; bumpControls() }}
       >
         <button type="button" className="vp-btn" aria-label={playing ? '暂停' : '播放'} onClick={toggle}>
-          {playing ? <Pause className="size-4" /> : <Play className="size-4" />}
+          {/* 在播 + 缓冲 ⇒ 按键位置显示转圈（不是 ⏸ 也不是 ▶）：
+              成熟播放器都这么表示"没停，只是在等数据"，也让图标不再来回闪（devlog/302） */}
+          {playing && buffering
+            ? <Loader2 className="vp-btn-spin" aria-hidden="true" />
+            : playing ? <Pause className="size-4" /> : <Play className="size-4" />}
         </button>
         <span className="vp-time">
           {fmt(cur)}<span className="vp-time-sep">/</span>{fmt(dur)}

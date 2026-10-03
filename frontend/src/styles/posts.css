@@ -6214,6 +6214,12 @@ img.hero-avatar {
 .vp-menu-item:disabled:hover { background: transparent; }
 /* "需大会员"那颗小图标（文字会把行撑换行，2026-10-03 用户口径） */
 .vp-crown { width: 12px; height: 12px; flex: none; }
+/* 底栏播放键位置上的**缓冲转圈**（devlog/302）：在播但没数据时用它替掉 ⏸，
+   这样图标不会在 ▶/⏸ 之间闪，也和成熟播放器的表示法一致 */
+.vp-btn-spin { width: 14px; height: 14px; animation: vp-spin .9s linear infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .vp-btn-spin { animation: vp-pulse 1.4s ease-in-out infinite; }
+}
 .vp-vol { width: 72px; accent-color: var(--c-accent, #fb77a1); }
 .vp-dead {
   display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 8px;

@@ -419,6 +419,7 @@ describe('VideoPlayer · 小窗（画中画）与缓冲（devlog/299）', () => 
   })
 
   it('缓冲中显示转圈（点进度条跳转后是"在加载"，不是"暂停了"）', async () => {
+    vi.useFakeTimers()
     const { v } = await mountDash()
     expect(host.querySelector('.vp-spin'), '没缓冲时不该有转圈').toBeNull()
     await act(async () => { v.dispatchEvent(new Event('waiting')); await Promise.resolve() })
@@ -426,8 +427,54 @@ describe('VideoPlayer · 小窗（画中画）与缓冲（devlog/299）', () => 
     expect(spin, '缓冲要转圈').toBeTruthy()
     expect(spin.getAttribute('aria-label')).toBe('正在缓冲')
     expect(host.querySelector('.vp-bigplay'), '缓冲中别同时显示播放键（看着就像暂停了）').toBeNull()
+    // 回血也不立刻收：短于 `MIN_SPIN_MS` 的回血不收起（否则饿住-回血的边界上一闪一闪）
     await act(async () => { v.dispatchEvent(new Event('canplay')); await Promise.resolve() })
-    expect(host.querySelector('.vp-spin'), '能播了就该收起来').toBeNull()
+    expect(host.querySelector('.vp-spin'), '刚亮就收 = 闪动，要留满最短时长').toBeTruthy()
+    await act(async () => { vi.advanceTimersByTime(600) })
+    expect(host.querySelector('.vp-spin'), '过了最短时长就该收起来').toBeNull()
+    vi.useRealTimers()
+  })
+
+  it('饿住-回血**快速交替**时转圈不闪（连发 waiting/canplay 也只有一个稳定的转圈）', async () => {
+    vi.useFakeTimers()
+    const { v } = await mountDash()
+    await act(async () => {
+      for (let i = 0; i < 6; i += 1) {
+        v.dispatchEvent(new Event('waiting'))
+        v.dispatchEvent(new Event('canplay'))
+      }
+      await Promise.resolve()
+    })
+    expect(host.querySelector('.vp-spin'), '交替期间必须一直有转圈').toBeTruthy()
+    await act(async () => { vi.advanceTimersByTime(1000) })
+    expect(host.querySelector('.vp-spin'), '最后一次回血之后才收').toBeNull()
+    vi.useRealTimers()
+  })
+
+  it('缓冲按住**不等于暂停**：底栏按键位置显示转圈，界面状态仍是"在播"', async () => {
+    vi.useFakeTimers()
+    let ahead = 0.1
+    const { v } = await mountDash()
+    Object.defineProperty(v, 'buffered', {
+      configurable: true, value: { length: 1, start: () => 0, end: () => v.currentTime + ahead },
+    })
+    Object.defineProperty(v, 'paused', { value: false, configurable: true })
+    await act(async () => { v.dispatchEvent(new Event('play')); await Promise.resolve() })
+    await act(async () => {
+      v.dispatchEvent(new Event('waiting'))            // ⇒ 进入按住（饿着）
+      v.dispatchEvent(new Event('pause'))              // 真浏览器会为我们的 pause() 补这一发
+      await Promise.resolve()
+    })
+    const btn = host.querySelector<HTMLButtonElement>('button[aria-label="暂停"]')
+    expect(btn, '按住期间语义仍是"在播"（按钮还是暂停语义）').toBeTruthy()
+    expect(host.querySelector('.vp-btn-spin'), '按键位置显示转圈，不是 ▶ 也不是 ⏸').toBeTruthy()
+    expect(host.querySelector('.vp')!.getAttribute('data-vp-state')).toBe('playing')
+    expect(host.querySelector('.vp-bigplay'), '不该冒出大播放键（那才是"看着像暂停"）').toBeNull()
+
+    ahead = 5                                        // 缓冲够了 ⇒ 放开
+    await act(async () => { vi.advanceTimersByTime(900) })   // 含 `MIN_SPIN_MS` 的收尾时长
+    expect(host.querySelector('.vp-btn-spin'), '放开了就不该再转').toBeNull()
+    vi.useRealTimers()
   })
 })
 
@@ -619,6 +666,47 @@ describe('VideoPlayer · 缓冲治理与下边缘豁免（devlog/301）', () => 
     })
     expect(wrap.classList.contains('is-idle'), '从中间离开 ⇒ 立刻收起').toBe(true)
     vi.useRealTimers()
+  })
+})
+
+describe('VideoPlayer · 播放意图（devlog/302）', () => {
+  it('在"缓冲按住"状态下开始拖拽 ⇒ 拖完也要把音轨拉起来（画面在动却没声音的根因）', async () => {
+    act(() => root.render(<VideoPlayer video={{ url: DASH.video }} dash={DASH} />))
+    const v = host.querySelector('video') as HTMLVideoElement
+    const a = host.querySelector('audio') as HTMLAudioElement
+    Object.defineProperty(v, 'duration', { value: 300, configurable: true })
+    Object.defineProperty(v, 'currentTime', { value: 50, writable: true, configurable: true })
+    Object.defineProperty(v, 'buffered', {
+      configurable: true, value: { length: 1, start: () => 0, end: () => v.currentTime + 0.1 },
+    })
+    await act(async () => {
+      v.dispatchEvent(new Event('loadedmetadata'))
+      v.dispatchEvent(new Event('play'))          // 意图 = 在播（setup 的替身把 paused 置 false）
+      await Promise.resolve()
+    })
+    await act(async () => { v.dispatchEvent(new Event('waiting')); await Promise.resolve() })
+    expect(v.paused, '饿着 ⇒ 被治理器按住（元素是暂停态，但用户要的是"在播"）').toBe(true)
+
+    const play = vi.spyOn(a, 'play')
+    const bar = host.querySelector<HTMLDivElement>('.vp-progress')!
+    bar.getBoundingClientRect = () => ({ left: 0, width: 100, top: 0, height: 16,
+      right: 100, bottom: 16, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+    const pev = (type: string, x: number) => {
+      const e = new Event(type, { bubbles: true }) as Event & { clientX: number; pointerId: number }
+      e.clientX = x
+      e.pointerId = 1
+      return e
+    }
+    await act(async () => { bar.dispatchEvent(pev('pointerdown', 20)); await Promise.resolve() })
+    await act(async () => { bar.dispatchEvent(pev('pointermove', 80)); await Promise.resolve() })
+    await act(async () => {
+      bar.dispatchEvent(pev('pointerup', 80))
+      v.dispatchEvent(new Event('seeked'))
+      await Promise.resolve()
+    })
+    expect(play, '拖动开始时元素是"按住"态 —— 旧实现据此认为"用户没在播"，于是永远不出声')
+      .toHaveBeenCalled()
+    play.mockRestore()
   })
 })
 
