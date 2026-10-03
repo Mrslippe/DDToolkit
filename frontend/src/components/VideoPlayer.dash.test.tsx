@@ -224,3 +224,85 @@ describe('VideoPlayer · 自动起播与底栏排布（devlog/295）', () => {
     expect(host.querySelector('.vp-bigplay')).toBeTruthy()
   })
 })
+
+describe('VideoPlayer · seek 时音轨不许抢跑（devlog/297）', () => {
+  /** 铺一块 100px 宽、时长 100s 的进度条，并把视频轨钉在"正在 seek"的状态。 */
+  async function mountAndSeekAt(ratio: number, opts: { seeking: boolean; playing: boolean }) {
+    act(() => root.render(<VideoPlayer video={{ url: DASH.video }} dash={DASH} />))
+    const v = host.querySelector('video') as HTMLVideoElement
+    const a = host.querySelector('audio') as HTMLAudioElement
+    Object.defineProperty(v, 'duration', { value: 100, configurable: true })
+    Object.defineProperty(v, 'seeking', { value: opts.seeking, configurable: true })
+    Object.defineProperty(v, 'paused', { value: !opts.playing, configurable: true })
+    const pause = vi.spyOn(a, 'pause')
+    const play = vi.spyOn(a, 'play')
+    await act(async () => { v.dispatchEvent(new Event('loadedmetadata')) })
+    const bar = host.querySelector<HTMLDivElement>('.vp-progress')!
+    bar.getBoundingClientRect = () => ({ left: 0, width: 100, top: 0, height: 16,
+      right: 100, bottom: 16, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+    await act(async () => {
+      bar.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: ratio }))
+      await Promise.resolve()
+    })
+    return { v, a, pause, play, bar }
+  }
+
+  it('视频轨还在 seek ⇒ 音轨**先停住**，绝不允许"声音先到、画面还在原地"', async () => {
+    const { v, a, pause } = await mountAndSeekAt(30, { seeking: true, playing: true })
+    expect(pause, 'seek 一开始就要把音轨闭上嘴').toHaveBeenCalled()
+    expect(v.currentTime).toBeCloseTo(30, 1)
+    // ⚠️ 关键断言：视频轨没到位之前，音轨**不许**被对齐到新位置
+    expect(a.currentTime, '音轨抢跑到新位置 ⇒ 这期间听到的和看到的是两段').not.toBeCloseTo(30, 1)
+  })
+
+  it('视频轨 `seeked` 之后才对齐 + 复播（原来是"先跳完再纠正"，现在是"到位才出声"）', async () => {
+    const { v, a, play } = await mountAndSeekAt(30, { seeking: true, playing: true })
+    await act(async () => {
+      Object.defineProperty(v, 'seeking', { value: false, configurable: true })
+      v.dispatchEvent(new Event('seeked'))
+      await Promise.resolve()
+    })
+    expect(a.currentTime, '到位后才把音轨拉齐').toBeCloseTo(30, 1)
+    expect(play, '本来在播的 ⇒ 对齐后要接着播').toHaveBeenCalled()
+  })
+
+  it('拖拽中音轨保持静默，抬手后一次性对齐（不是每帧都去重设音轨）', async () => {
+    const { v, a, play } = await mountAndSeekAt(10, { seeking: true, playing: true })
+    const bar = host.querySelector<HTMLDivElement>('.vp-progress')!
+    const pev = (type: string, x: number) => {
+      const e = new Event(type, { bubbles: true }) as Event & { clientX: number; pointerId: number }
+      e.clientX = x
+      e.pointerId = 1
+      return e
+    }
+    a.currentTime = 0
+    await act(async () => {
+      bar.dispatchEvent(pev('pointerdown', 10))
+      await Promise.resolve()          // `dragging` 是 state：要让它落地再拖动
+    })
+    await act(async () => {
+      bar.dispatchEvent(pev('pointermove', 50))
+      bar.dispatchEvent(pev('pointermove', 70))
+      await Promise.resolve()
+    })
+    expect(v.currentTime, '视频轨拖拽中实时跟随').toBeCloseTo(70, 1)
+    expect(a.currentTime, '拖拽期间音轨一直静默（0）').toBeCloseTo(0, 1)
+
+    await act(async () => {
+      bar.dispatchEvent(pev('pointerup', 70))
+      Object.defineProperty(v, 'seeking', { value: false, configurable: true })
+      v.dispatchEvent(new Event('seeked'))
+      await Promise.resolve()
+    })
+    expect(a.currentTime, '抬手 + 到位 ⇒ 一次对齐').toBeCloseTo(70, 1)
+    expect(play).toHaveBeenCalled()
+  })
+
+  it('`seeked` 万一不来，兜底定时器也要把音轨放出来（别永远哑着）', async () => {
+    vi.useFakeTimers()
+    const { a } = await mountAndSeekAt(40, { seeking: true, playing: true })
+    await act(async () => { vi.advanceTimersByTime(1600) })
+    expect(a.currentTime, '兜底路径也要对齐').toBeCloseTo(40, 1)
+    vi.useRealTimers()
+  })
+})

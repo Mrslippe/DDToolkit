@@ -179,3 +179,48 @@ def test_durl_entry_is_reranked_too():
     assert rows[0]["url"] == _UPOS
     assert rows[0]["urls"] == [_UPOS, _P2P]
     assert rows[0]["length"] == 263488
+
+
+# ── 交付档对齐：`dash.video[0]` 必须是**实际交付的那一档**（devlog/297 的 bug）─────────
+#
+# 现场（真机 + 上游实测）：`playurl` 的 `dash.video` 列的是**所有可用档**，顺序恒为降序；
+# 交付档在 `data.quality` 里。前端取 `[0]` ⇒ 用户选 720P（qn=64）时交付 64、**播的还是 80**
+# （菜单显示 720P、画面是 1080P）。判据钉住"按 quality 对齐"。
+
+def _dash_with(*, quality, ids_and_codecs):
+    """造一个 playurl 回包：`ids_and_codecs` = [(id, codecs), …]（顺序即上游顺序）。"""
+    return {"quality": quality,
+            "accept_quality": [116, 80, 64, 32, 16],
+            "accept_description": ["高清 1080P60", "高清 1080P", "高清 720P", "清晰 480P",
+                                   "流畅 360P"],
+            "dash": {"video": [{"id": i, "baseUrl": f"https://upos-sz-x.bilivideo.com/{i}.m4s",
+                                "codecs": c, "height": i, "backupUrl": []}
+                               for i, c in ids_and_codecs],
+                     "audio": [{"id": 30280, "baseUrl": "https://upos-sz-x.bilivideo.com/a.m4s"}]}}
+
+
+def test_delivered_quality_wins_over_upstream_order():
+    """要 720P（交付 `quality=64`）⇒ 首选必须是 64 那条，而不是列表里排第一的 1080P。"""
+    data = _dash_with(quality=64, ids_and_codecs=[(80, "avc1.640032"), (64, "avc1.640028"),
+                                                  (32, "avc1.64001F")])
+    out = bili_play.normalize(data, bvid="BV1", cid=1)
+    assert out["quality"] == 64
+    assert out["dash"]["video"][0]["id"] == 64, "选 720P 却播 1080P —— 菜单与画面会对不上"
+    # 其余档保持原来的相对顺序（稳定排序，便于排查）
+    assert [s["id"] for s in out["dash"]["video"]] == [64, 80, 32]
+
+
+def test_avc_variant_wins_inside_the_same_quality():
+    """同一档有 AVC 与 HEVC 两条（实测码率差一倍）⇒ 选 **AVC**（HEVC 要看系统装没装解码器）。"""
+    data = _dash_with(quality=80, ids_and_codecs=[(80, "hvc1.1.6.L150.90"),
+                                                  (80, "avc1.640032")])
+    out = bili_play.normalize(data, bvid="BV1", cid=1)
+    assert out["dash"]["video"][0]["codecs"] == "avc1.640032"
+    assert out["dash"]["video"][0]["urls"], "镜像链不能因为排序丢掉"
+
+
+def test_missing_quality_keeps_upstream_order():
+    """回包里没有 `quality`（理论上不该发生）⇒ 别乱排，保持上游顺序。"""
+    data = _dash_with(quality=None, ids_and_codecs=[(80, "avc1.640032"), (64, "avc1.640028")])
+    out = bili_play.normalize(data, bvid="BV1", cid=1)
+    assert [s["id"] for s in out["dash"]["video"]] == [80, 64]

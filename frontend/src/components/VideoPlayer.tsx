@@ -251,14 +251,59 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
     if (autoPlay) startPlayback()
   }, [autoPlay, src, startPlayback])
 
-  const seekTo = useCallback((ratio: number) => {
+  /**
+   * 一次 seek 的收尾状态。
+   *
+   * 为什么需要它（2026-10-03 用户口径：「点进度条跳转时音轨先跳完、视频轨才跟上，卡一下才同步，
+   * 声音和画面会错位」）：**视频轨 seek 比音轨慢** —— 它要回到关键帧并重新缓冲，而音轨几乎瞬时。
+   * 原来的实现是"两条都直接写 `currentTime`"，于是音轨先到位、视频轨还在原地 ⇒ 那一段时间里
+   * 听到的是新位置的声音、看到的是旧位置的画面（要等 2s 一次的漂移纠正才拉回来）。
+   *
+   * 现在的口径：**seek 时先把音轨闭上嘴**（`pause`），等视频轨 `seeked`（真的到位）再对齐并复播。
+   */
+  const seekRef = useRef({ settling: false, wasPlaying: false })
+
+  /** 收尾：视频轨到位后把音轨对齐（必要时复播）。**幂等**，并带兜底定时器（见下）。 */
+  const settleAudio = useCallback(() => {
+    const el = videoRef.current
+    const a = audioRef.current
+    if (!el || !a) return
+    let done = false
+    let timer = 0
+    const apply = () => {
+      if (done) return
+      done = true
+      window.clearTimeout(timer)
+      a.currentTime = el.currentTime
+      if (seekRef.current.wasPlaying) void a.play().catch(() => { /* 策略拒绝：保持暂停 */ })
+      seekRef.current.settling = false
+    }
+    if (el.seeking) {
+      el.addEventListener('seeked', apply, { once: true })
+      // ⚠️ 兜底：万一 `seeked` 没来（同一个位置重跳、或浏览器吞了事件），别让音轨**永远哑着**
+      timer = window.setTimeout(apply, 1500)
+    } else {
+      apply()
+    }
+  }, [])
+
+  /**
+   * 定位。`live=true` = 拖拽中（位置还会变）⇒ **不安排对齐**，音轨保持静默，
+   * 等 `pointerup` 一次性对齐（否则每一帧都去重设一次音轨，反而更抖）。
+   */
+  const seekTo = useCallback((ratio: number, live = false) => {
     const el = videoRef.current
     if (!el || !Number.isFinite(el.duration) || el.duration <= 0) return
-    el.currentTime = Math.min(el.duration, Math.max(0, ratio * el.duration))
     const a = audioRef.current
-    if (a) a.currentTime = el.currentTime        // 音轨跟着跳（否则跳完不同步）
+    if (a && !seekRef.current.settling) {          // 进入一次 seek：先让音轨停下
+      seekRef.current.settling = true
+      seekRef.current.wasPlaying = !el.paused
+      a.pause()
+    }
+    el.currentTime = Math.min(el.duration, Math.max(0, ratio * el.duration))
     setCur(el.currentTime)
-  }, [])
+    if (!live) settleAudio()
+  }, [settleAudio])
 
   const toggleFs = useCallback(() => {
     const node = wrapRef.current
@@ -277,7 +322,8 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
   }, [])
 
   // 快捷键：只在控件区域内接管（不抢抽屉的 Esc / 滚动）
-  const onKey = (e: React.KeyboardEvent) => {    const el = videoRef.current
+  const onKey = (e: React.KeyboardEvent) => {
+    const el = videoRef.current
     if (!el) return
     const k = e.key.toLowerCase()
     if (k === ' ' || k === 'k') { e.preventDefault(); toggle() }
@@ -386,6 +432,7 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
           aria-label="播放进度" aria-valuemin={0} aria-valuemax={Math.round(dur)}
           aria-valuenow={Math.round(cur)}
           onClick={(e) => {
+            // 纯点击（没有指针事件的环境也要能用）：一次到位的 seek ⇒ 直接收尾对齐
             const r = e.currentTarget.getBoundingClientRect()
             seekTo((e.clientX - r.left) / r.width)
           }}
@@ -395,20 +442,21 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
             e.currentTarget.setPointerCapture?.(e.pointerId)
             const r = e.currentTarget.getBoundingClientRect()
             setDragging(true)
-            seekTo((e.clientX - r.left) / r.width)
+            seekTo((e.clientX - r.left) / r.width, true)   // live：音轨先静默，等抬手再对齐
           }}
           onPointerMove={(e) => {
             const r = e.currentTarget.getBoundingClientRect()
             const ratio = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width))
             // hover 预览：光标位置对应的时间（图二那颗 `00:12` 气泡）
             setHover({ x: ratio * r.width, t: ratio * (dur || 0) })
-            if (dragging) seekTo(ratio)          // 拖拽中：实时跟随
+            if (dragging) seekTo(ratio, true)      // 拖拽中：视频轨实时跟随，音轨仍静默
           }}
           onPointerUp={(e) => {
             e.currentTarget.releasePointerCapture?.(e.pointerId)
             setDragging(false)
+            settleAudio()                          // 抬手 ⇒ 等视频轨到位后对齐音轨并复播
           }}
-          onPointerCancel={() => setDragging(false)}
+          onPointerCancel={() => { setDragging(false); settleAudio() }}
           onMouseLeave={() => setHover(null)}
         >
           <span className="vp-progress-buf" style={{ width: `${bufPct}%` }} />

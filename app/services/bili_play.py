@@ -144,14 +144,45 @@ def parse_durl(data: dict) -> list[dict]:
     return out
 
 
+def _codec_rank(stream: dict) -> int:
+    """同档里哪条编码先播：**AVC 优先**（0），其余（HEVC/AV1）次之。
+
+    为什么：`dash.video` 里同一档常有两条（实测 2026-10-03：`avc1.640032` 与
+    `hvc1.1.6.L150.90` 各一条，码率差一倍）。HEVC/AV1 要看 WebView2 有没有那个解码器
+    （Windows 的 HEVC 要单独装扩展），AVC 则到处都能解 —— 拿不准就选能解的。
+    """
+    codecs = (stream.get("codecs") or "").lower()
+    if codecs.startswith("avc"):
+        return 0
+    return 1
+
+
+def prefer_quality(streams: list[dict], quality) -> list[dict]:
+    """把**实际交付的那一档**排到第一（`dash.video[0]` 就是它），其余保持上游顺序。
+
+    ⚠️ **这是 2026-10-03 真机抓出来的 bug**：`playurl` 的 `dash.video` 列的是**所有可用档**
+    （实测顺序恒为降序 80,80,64,64,32,32,16,16），而交付档在 `data.quality` 里。
+    前端原来直接取 `[0]` ⇒ 用户在菜单里选 720P（`qn=64`）时，**交付的是 64、播的还是 80**
+    （菜单显示 720P、画面却是 1080P）。所以"选哪档"必须按 `quality` 对齐，不能靠顺序。
+    """
+    if quality is None:
+        return streams
+    order = sorted(range(len(streams)),
+                   key=lambda i: (0 if streams[i].get("id") == quality else 1,
+                                  _codec_rank(streams[i]), i))
+    return [streams[i] for i in order]
+
+
 def normalize(data: dict, *, bvid: str, cid: int) -> dict:
     """playurl 的 `data` → 我们的返回形状（**纯函数**，可单测）。"""
     q = data.get("quality")
     accept = [{"id": i, "label": lbl} for i, lbl in
               zip(data.get("accept_quality") or [], data.get("accept_description") or [])]
+    dash = parse_dash(data)
+    dash["video"] = prefer_quality(dash["video"], q)
     return {
         "bvid": bvid, "cid": cid, "quality": q, "accept": accept,
-        "dash": parse_dash(data), "durl": parse_durl(data),
+        "dash": dash, "durl": parse_durl(data),
         # 前端据此判断"这次取到的地址还能用多久"（到期就重取一次）
         "expires_in": CACHE_TTL,
     }
