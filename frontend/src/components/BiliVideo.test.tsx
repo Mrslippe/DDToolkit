@@ -6,6 +6,8 @@
  */
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const biliPlay = vi.fn()
@@ -97,7 +99,38 @@ describe('BiliVideo', () => {
       await Promise.resolve()
       await Promise.resolve()
     })
-    expect(host.querySelector('.bili-lazy-err')?.textContent).toContain('没有观看权限')
+    const pill = host.querySelector('.bili-lazy-err')!
+    expect(pill.textContent).toContain('没有观看权限')
+    expect(pill.getAttribute('role'), '失败要走 alert（读屏要念）').toBe('alert')
+    // 失败之后播放键要回来（一点就重试），且**不是**贴在底部的黑条
+    expect(host.querySelector('.vp-bigplay')).toBeTruthy()
+    expect(host.querySelector('.bili-lazy-hint'), '底部那条黑边不该再存在').toBeNull()
+  })
+
+  it('取流中：**屏幕中央转圈**，不再有"正在取流…"的下黑边', async () => {
+    biliPlay.mockReturnValue(new Promise(() => { /* 永不 resolve：停在取流中 */ }))
+    act(() => root.render(<BiliVideo postId={7} poster="http://x/c.webp" />))
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('.vp-bigplay')!.click()
+      await Promise.resolve()
+    })
+    const spin = host.querySelector('.vp-spin')!
+    expect(spin, '取流中要有中央缓冲标识').toBeTruthy()
+    expect(spin.getAttribute('role')).toBe('status')
+    expect(spin.getAttribute('aria-label')).toBe('正在取流')
+    expect(spin.querySelector('.vp-spin-icon'), '转的是图标本身').toBeTruthy()
+    expect(host.querySelector('.bili-lazy-hint'), '那条"正在取流…"黑边已删').toBeNull()
+    // 转圈时不再同时显示播放键（同一格位置，两个元素会叠在一起）
+    expect(host.querySelector('.vp-bigplay')).toBeNull()
+
+    // 位置与旋转必须在**真 CSS** 里（jsdom 不做布局，只能查声明）
+    const css = readFileSync(resolve(__dirname, '../styles/posts.css'), 'utf8')
+    const box = css.match(/\.vp-spin \{[^}]*\}/)?.[0] ?? ''
+    expect(box, '.vp-spin 要绝对定位（居中靠它）').toContain('position: absolute')
+    expect(box, '要居中').toContain('translate(-50%, -50%)')
+    expect(css, '转起来靠 keyframes').toContain('@keyframes vp-spin')
+    expect(css.match(/@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?vp-spin-icon/),
+           'reduced-motion 下别把动效整个去掉（会像卡住）').toBeTruthy()
   })
 
   it('封面走 ProxyImage：`http://` 要 https 化 + 带 no-referrer（裸 `<img>` 会破图）', () => {

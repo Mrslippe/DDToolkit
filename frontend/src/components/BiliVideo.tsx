@@ -20,7 +20,7 @@
  * 就是这么坏的，见 devlog/292）就会**无限重取**。判据 `nextRetryAction` 是纯函数 ⇒ 直接测。
  */
 import { useRef, useState } from 'react'
-import { Play } from 'lucide-react'
+import { Loader2, Play } from 'lucide-react'
 
 import { api } from '../api/api'
 import type { BiliPlayInfo } from '../api/types'
@@ -105,12 +105,21 @@ export default function BiliVideo({ postId, poster, permalink }: Props) {
             —— 裸 `<img>` 会因混合内容/防盗链直接破图（真机上就是那条黑底"图片"占位，
             见 devlog/294）。ProxyImage 负责 https 化 + 直连失败转 `/img-proxy`。 */}
         {poster && <ProxyImage className="vp-video" src={poster} alt="封面" />}
-        <button type="button" className="vp-bigplay" aria-label="播放"
-                disabled={busy} onClick={() => void load({}, true)}>
-          <Play className="size-7" />
-        </button>
-        {busy && <div className="bili-lazy-hint">正在取流…</div>}
-        {err && <div className="bili-lazy-hint bili-lazy-err">{err}</div>}
+        {/* 取流中：**屏幕中央的旋转缓冲图标**（用户 2026-10-03 口径：那条"正在取流…"的下黑边
+            去掉）。取流要走一次 playurl，通常不到 1s，但缓存/风控下可能几秒 —— 有转圈才不心虚。 */}
+        {busy ? (
+          <div className="vp-spin" role="status" aria-label="正在取流">
+            <Loader2 className="vp-spin-icon" aria-hidden="true" />
+          </div>
+        ) : (
+          <button type="button" className="vp-bigplay" aria-label="播放"
+                  onClick={() => void load({}, true)}>
+            <Play className="size-7" />
+          </button>
+        )}
+        {/* 失败**如实显示后端分类的原因**（不存在/无权限/风控），居中成一颗玻璃药丸 —— 
+            别贴在底部当条黑边（那位置和"标题带"一样容易被当成元素错位） */}
+        {err && <div className="bili-lazy-err" role="alert">{err}</div>}
       </div>
     )
   }
@@ -145,6 +154,8 @@ export default function BiliVideo({ postId, poster, permalink }: Props) {
       /* B站这条路上的**每一次**取流都源于用户动作（点播放 / 换清晰度 / 播不动后的补救）
          ⇒ 地址一到位就起播；"只出界面不播"是用户 2026-10-03 明确否掉的那一版交互 */
       autoPlay
+      /* 换清晰度/补救时的重新取流：播放器中央转圈（旧流还在，别把画面与进度丢掉） */
+      loading={busy}
       onPickQuality={(id) => void load({ qn: id }, true)}
       /* 播不动：过期 ⇒ 同档重取；否则回落 durl（单 mp4、720P、不需要音视频分离）。各一次 */
       onFallback={canRetry ? onPlaybackFailed : undefined}

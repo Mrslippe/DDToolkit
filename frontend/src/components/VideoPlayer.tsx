@@ -14,7 +14,7 @@
  */
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import {
-  Crown, ExternalLink, Maximize, Minimize, Pause, Play, PictureInPicture2,
+  Crown, ExternalLink, Loader2, Maximize, Minimize, Pause, Play, PictureInPicture2,
   Volume1, Volume2, VolumeX,
 } from 'lucide-react'
 
@@ -79,6 +79,14 @@ interface Props {
    *   （静音画面比"没反应"更糟 —— 用户会以为没声音是坏了）。
    */
   autoPlay?: boolean
+  /**
+   * 正在**重新取流**（B站：换清晰度 / 播不动后的同档重取或回落）。给 true 时中央转圈，
+   * 并且**暂时收起大播放键**（两者都在正中，会叠在一起）。
+   *
+   * 为什么转圈要画在播放器里而不是让调用方换掉整块：重新取流时旧的那条流还在元素上
+   * （可能还能拖着看/听），换掉整块会把画面和进度一起丢掉。
+   */
+  loading?: boolean
 }
 
 function fmt(t: number): string {
@@ -89,7 +97,7 @@ function fmt(t: number): string {
 }
 
 export default function VideoPlayer({ video, poster, permalink, dash, qualities, qualityId,
-                                      onPickQuality, onFallback, autoPlay }: Props) {
+                                      onPickQuality, onFallback, autoPlay, loading }: Props) {
   const prefs = useSyncExternalStore(subscribePlayerPrefs, playerPrefs)
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
@@ -352,10 +360,17 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
         />
       )}
 
-      {!playing && (
+      {!playing && !loading && (
         <button type="button" className="vp-bigplay" aria-label="播放" onClick={toggle}>
           <Play className="size-7" />
         </button>
+      )}
+
+      {/* 重新取流中：中央转圈（与大播放键互斥 —— 同一格位置） */}
+      {loading && (
+        <div className="vp-spin" role="status" aria-label="正在取流">
+          <Loader2 className="vp-spin-icon" aria-hidden="true" />
+        </div>
       )}
 
       <div className="vp-bar">

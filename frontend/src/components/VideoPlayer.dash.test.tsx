@@ -211,4 +211,16 @@ describe('VideoPlayer · 自动起播与底栏排布（devlog/295）', () => {
     const btn = css.match(/\.vp-btn \{[^}]*\}/)?.[0] ?? ''
     expect(btn).toContain('flex: none')
   })
+
+  it('`loading` ⇒ 中央转圈，且大播放键**让位**（两者都在正中会叠起来）', () => {
+    act(() => root.render(
+      <VideoPlayer video={{ url: DASH.video }} dash={DASH} loading />))
+    expect(host.querySelector('.vp-spin')).toBeTruthy()
+    expect(host.querySelector('.vp-bigplay'), '转圈时不该同时显示播放键').toBeNull()
+
+    act(() => root.render(
+      <VideoPlayer video={{ url: DASH.video }} dash={DASH} />))
+    expect(host.querySelector('.vp-spin'), '不取流时不该有转圈').toBeNull()
+    expect(host.querySelector('.vp-bigplay')).toBeTruthy()
+  })
 })

@@ -6280,7 +6280,6 @@ img.hero-avatar {
   top: 50%; transform: translateY(-50%);
 }
 .vp-progress-knob { top: 50%; transform: translate(-50%, -50%); margin-left: 0; }
-
 /* 拖拽 seek（devlog/286）：进度条要吃掉指针手势（否则拖动会选中文字/触发页面滚动），
    拖动中圆点常显（给"正在拖"的视觉反馈）。 */
 .vp-progress { touch-action: none; user-select: none; }
@@ -6288,3 +6287,30 @@ img.hero-avatar {
 
 /* B 站官方播放器（devlog/287）：16:9 容器 + 圆角，与自绘播放器同一个视觉位。 */
 .vp-iframe { display: block; width: 100%; aspect-ratio: 16 / 9; border: 0; background: #000; }
+
+/* ── 取流中 / 取流失败（BiliVideo 懒加载态，devlog/296）─────────────────────
+   用户 2026-10-03 口径：「『正在取流…』那条下黑边去掉，改在**屏幕中央用旋转缓冲图标**」。
+   ⚠️ 这里以前**一条规则都没有** —— `bili-lazy-hint` 是个裸 div，靠 `.vp` 的黑底长成
+   "封面下的一条黑边"（和刚删掉的标题带同一个成因）。所以这回把状态都显式画出来。 */
+.vp-spin {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  display: grid; place-items: center; width: 64px; height: 64px; border-radius: 999px;
+  background: rgba(15, 23, 42, .55); color: #fff;
+  border: 1px solid rgba(255, 255, 255, .22); backdrop-filter: blur(4px);
+}
+.vp-spin-icon { width: 26px; height: 26px; animation: vp-spin .9s linear infinite; }
+@keyframes vp-spin { to { transform: rotate(360deg); } }
+@keyframes vp-pulse { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
+/* reduced-motion：**别把转圈整个去掉**（那就成了"卡住了"）—— 换成呼吸式明暗，仍是"在动" */
+@media (prefers-reduced-motion: reduce) {
+  .vp-spin-icon { animation: vp-pulse 1.4s ease-in-out infinite; }
+}
+/* 取流失败：玻璃药丸挂在**播放键下面**（播放键仍在中央 ⇒ 一点就能重试，两者不打架）；
+   可换行、有宽度上限，长文案不撑破容器 */
+.bili-lazy-err {
+  position: absolute; left: 50%; top: calc(50% + 48px); transform: translateX(-50%);
+  max-width: min(86%, 420px); padding: 8px 14px; border-radius: 10px;
+  background: rgba(15, 23, 42, .82); color: #fff; font-size: 12px; line-height: 1.5;
+  text-align: center; backdrop-filter: blur(4px);
+  border: 1px solid rgba(255, 255, 255, .18);
+}
