@@ -197,6 +197,9 @@ interface Track {
   inflight: AbortController | null
   /** **操作代数**：每次发起 `+1`。取数回来时代数变了 ⇒ 这次结果作废（别 append 到已经被顶掉的位置） */
   seq: number
+  /** 上一条取的段序号 + **同一段连续取了几次**（防"同一段反复取"把泵转死，见 `pump`） */
+  lastIdx: number
+  repeat: number
   retry: number
   /** 镜像链游标：换一条就 +1（取不到时轮换，不回后端） */
   mirror: number
@@ -254,7 +257,8 @@ export class MseKernel {
       .filter(([, t]) => Boolean(t))
       .map(([kind, table]) => ({
         table: table as StreamTable, kind, sb: null, busy: false, initDone: false,
-        pending: null, inflight: null, seq: 0, retry: 0, mirror: 0, quotaHits: 0,
+        pending: null, inflight: null, seq: 0, lastIdx: -2, repeat: 0,
+        retry: 0, mirror: 0, quotaHits: 0,
       }))
     this.startedAt = Date.now()
     this.ms.addEventListener('sourceopen', this.onSourceOpen)
@@ -377,7 +381,21 @@ export class MseKernel {
 
   /** 目标时刻两条轨都**已经有数据**了吗（有没有音轨都算"就绪"）。 */
   private seekReady(t: number): boolean {
-    return this.tracks.every((tr) => this.covers(tr, t))
+    return this.tracks.every((tr) => this.covers(tr, t) || this.tailDone(tr, t))
+  }
+
+  /**
+   * 这条轨**已经取到尾了**（末尾那一段在缓冲里），而目标落在它之后 —— 音视频两条流的时长
+   * 能差零点几秒（B站的音轨末尾补齐方式和视频不同）。
+   *
+   * ⚠️ 没有这条判据就会**死循环**：`covers()` 永远为假 ⇒ 泵一遍遍 append **最后一段**
+   * ⇒ 微任务链不断（`flush` 那种"等一轮"的用例会**挂死**，而不是报红）。
+   */
+  private tailDone(tr: Track, t: number): boolean {
+    const span = this.trackSpan(tr)
+    if (!span) return false
+    // "这条轨到头了" = 末尾那段已缓冲（`t` 落在它之后正是本函数的用途，不能拿 `t` 当条件）
+    return span.end >= tr.table.duration_s - 0.2 && t > span.end - 0.02
   }
 
   private covers(tr: Track, t: number): boolean {
@@ -475,6 +493,9 @@ export class MseKernel {
   private async append(tr: Track, idx: number): Promise<void> {
     const sb = tr.sb
     if (!sb || this.dead || !this.streams) return
+    // 同一段连着取第二次 ⇒ 记一笔（`pump` 用它设上限：泵**不许无限转**）
+    if (tr.lastIdx === idx) tr.repeat += 1
+    else { tr.lastIdx = idx; tr.repeat = 0 }
     const seg = idx < 0 ? tr.table.init : tr.table.segments[idx]
     const urls = (tr.table.urls ?? []).filter(Boolean)
     if (!urls.length) urls.push(tr.table.url)
@@ -560,7 +581,10 @@ export class MseKernel {
       const want = segmentIndexAt(tr.table, target)
       if (!this.covers(tr, target)) {
         // 目标位置**没有数据** ⇒ 直接补那一段（顺序续播在这时是错的：会先取一段远的）
-        if (want >= 0) void this.append(tr, want)
+        // ⚠️ 两条兜底，都是为了"泵**永远不许**无限转"（挂死的用例比红的用例难查得多）：
+        //    ① 这条轨已到尾（音轨比视频短）⇒ 别再 append 最后一段；
+        //    ② 同一段连取两次还是盖不上 ⇒ 当它到头了。
+        if (want >= 0 && !this.tailDone(tr, target) && tr.repeat < 2) void this.append(tr, want)
         continue
       }
       const next = this.nextIndex(tr)

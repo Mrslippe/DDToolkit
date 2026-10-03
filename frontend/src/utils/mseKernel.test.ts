@@ -325,8 +325,7 @@ describe('mseKernel · seek（先取段，再设时间）', () => {
     expect(onSeekApplied).toHaveBeenCalledWith(30)
   })
 
-  it('已经缓冲过的地方 ⇒ 同步落地（不重取那一段）', async () => {
-    const { kernel, el, f, onSeekApplied } = await boot()
+  it('已经缓冲过的地方 ⇒ 同步落地（不重取那一段）', async () => {    const { kernel, el, f, onSeekApplied } = await boot()
     const n = f.calls.length
     kernel.seekTo(6)
     expect(el.currentTime).toBeCloseTo(6, 1)
@@ -345,6 +344,21 @@ describe('mseKernel · seek（先取段，再设时间）', () => {
     kernel.seekTo(20)
     await flush(12)
     expect(el.currentTime).toBeCloseTo(20, 1)
+  })
+
+  it('音轨比视频短（两条流时长能差零点几秒）⇒ 跳到视频尾部也要落地，**不能死循环 append**', async () => {
+    // 视频 8 段（40s）、音轨 6 段（30s）：跳到 35s 时音轨永远"盖不到"这个位置
+    const streams = { ...makeStreams(SEG_COUNT), audio: table('audio', 6),
+                      duration_s: SEG_COUNT * SEG_DUR }
+    const { kernel, el, f, onSeekApplied } = await boot({ streams })
+    const before = f.calls.length
+    kernel.seekTo(35)
+    await flush(30)
+    expect(onSeekApplied, '音轨到头了不该拖住这次 seek').toHaveBeenCalledWith(35)
+    expect(el.currentTime).toBeCloseTo(35, 1)
+    // 死循环的症状就是请求数爆掉（一遍遍 append 音轨最后一段）
+    expect(f.calls.length - before, `取数次数爆了：${f.calls.length - before}`)
+      .toBeLessThan(SEG_COUNT * 2)
   })
 })
 
