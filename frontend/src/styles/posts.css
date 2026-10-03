@@ -6269,3 +6269,6 @@ img.hero-avatar {
    拖动中圆点常显（给"正在拖"的视觉反馈）。 */
 .vp-progress { touch-action: none; user-select: none; }
 .vp-progress:active .vp-progress-knob, .vp-progress.is-dragging .vp-progress-knob { opacity: 1; }
+
+/* B 站官方播放器（devlog/287）：16:9 容器 + 圆角，与自绘播放器同一个视觉位。 */
+.vp-iframe { display: block; width: 100%; aspect-ratio: 16 / 9; border: 0; background: #000; }

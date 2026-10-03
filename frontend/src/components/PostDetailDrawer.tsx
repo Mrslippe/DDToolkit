@@ -276,11 +276,23 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
             />
           )}
 
-          {/* 视频（devlog/281/283）：有就播；**视频帖不再单独渲染封面** ——
-              封面就是视频首帧，重复一张图纯属占地方（2026-10-03 用户口径）。 */}
+          {/* B 站视频（devlog/287，P2）：**官方 iframe 播放器**。B 站没有"一个 URL 就能播"的
+              直链（要 playurl + WBI 签名 + 登录态），而官方播放器把这些都包了 ——
+              我们不碰视频流，只嵌它。CSP 的 `frame-src` 必须放行 player.bilibili.com。 */}
           {body.video?.url ? (
             <VideoPlayer video={body.video} poster={shown.cover_url}
                          permalink={shown.permalink} />
+          ) : shown.platform === 'bilibili' && body.bvid ? (
+            <div className="vp bili-embed">
+              <iframe
+                className="vp-iframe"
+                src={`https://player.bilibili.com/player.html?bvid=${encodeURIComponent(body.bvid)}&autoplay=0&high_quality=1`}
+                title={postDisplayTitle(shown)}
+                scrolling="no"
+                frameBorder="0"
+                allowFullScreen
+              />
+            </div>
           ) : shown.cover_url && (
             <button type="button" className="block w-full cursor-zoom-in"
               onClick={() => setViewer({ list: coverList, index: 0 })}>

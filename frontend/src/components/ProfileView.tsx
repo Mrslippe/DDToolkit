@@ -2,6 +2,7 @@ import { memo, useEffect, useState } from 'react'
 import { api } from '../api/api'
 import type { Account, ThirdpartyVtuber, VTuber } from '../api/types'
 import AccountPicker from './AccountPicker'
+import { PLATFORM_LABEL } from '../utils/postTypes'
 import ProfileCard from './ProfileCard'
 import OverlayScroll from './OverlayScroll'
 
@@ -84,7 +85,8 @@ const ProfileView = memo(function ProfileView({ vtuber, refreshTick }: Props) {
             {vtuber.accounts.map((a) => (
               <li key={a.id} className="profile-account-row">
                 <span className={`acc-switch-platform${a.platform === 'bilibili' ? '' : ' weibo'}`}>
-                  {a.platform === 'bilibili' ? 'B站' : a.platform === 'weibo' ? '微博' : a.platform}
+                  {/* 走映射表，别落裸标识键（`xiaohongshu` 会直接露在界面上，devlog/287） */}
+                  {PLATFORM_LABEL[a.platform] ?? a.platform}
                 </span>
                 <span className="profile-account-name">{a.display_name || a.platform_uid}</span>
                 <span className="profile-account-meta">

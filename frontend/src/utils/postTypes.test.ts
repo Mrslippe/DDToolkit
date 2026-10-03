@@ -113,6 +113,35 @@ describe('PLATFORM_LABEL — 平台显示名', () => {
     expect(platformEn(null)).toBe('平台')
   })
 
+  it('界面层不许直接渲染平台标识键（全仓扫描，防"漏映射就露 xiaohongshu"）', async () => {
+    // 2026-10-03：`{a.platform}` 这种写法在界面上露出库里的键（用户截图报了 xiaohongshu）。
+    // 这条扫源码而不是靠人记得：要展示平台就过 `PLATFORM_LABEL` / `platformEn`。
+    const { readdirSync, readFileSync } = await import('node:fs')
+    const path = await import('node:path')
+    const root = path.resolve(path.dirname(new URL(import.meta.url).pathname.slice(1)), '..')
+    const offenders: string[] = []
+    // 只认**当作文本子节点直接渲染**的 `>{a.platform}` —— 那正是用户截图里那种露法。
+    // ⚠️ 不扫模板串插值：`${a.platform}` 在**拼身份键 / 拼 URL** 时是正常用法
+    //   （如 `accountKeyOf` 的 `${a.platform}:${a.platform_uid}`），一律拦会天天假红。
+    const raw = /(>\s*\{a\.platform\s*\}|\{account\.platform\s*\})/
+    const walk = (dir: string): void => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name)
+        if (e.isDirectory()) { walk(p); continue }
+        if (!/\.tsx?$/.test(e.name) || e.name.endsWith('.test.ts')) continue
+        readFileSync(p, 'utf-8').split('\n').forEach((line, i) => {
+          const t = line.trim()
+          if (t.startsWith('*') || t.startsWith('//') || t.startsWith('/*')) return
+          if (raw.test(line) && !/PLATFORM_|platformEn\(/.test(line)) {
+            offenders.push(`${path.relative(root, p)}:${i + 1}`)
+          }
+        })
+      }
+    }
+    walk(root)
+    expect(offenders, '平台标识键必须过映射（PLATFORM_LABEL / platformEn）').toEqual([])
+  })
+
   it('收录的平台与后端注册表一致（新增平台要同时补这里与 platforms/registry）', () => {
     // ⚠️ 这条以前写死 `['bilibili','weibo']`；2026-09-27 加了小红书 ⇒ 改成"与真源对齐"的写法，
     //    免得每接一个平台都要手改一次（真源在 `app/services/platforms/registry.py`）。

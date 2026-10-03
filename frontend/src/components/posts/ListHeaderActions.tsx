@@ -10,7 +10,7 @@
 import { ChevronsLeft, RefreshCw, Trash2, UserPlus, Zap } from 'lucide-react'
 
 import type { Account } from '../../api/types'
-import { PLATFORM_LABEL } from '../../utils/postTypes'
+import { PLATFORM_LABEL, platformEn } from '../../utils/postTypes'
 import FloatPill from '../common/FloatPill'
 
 interface Props {
@@ -57,7 +57,7 @@ export default function ListHeaderActions({
             key={a.id}
             type="button"
             className={`acc-switch-btn${selectedAccountId === a.id ? ' on' : ''}`}
-            title={`${a.platform} ${a.platform_uid}`}
+            title={`${platformEn(a.platform)} ${a.platform_uid}`}
             onClick={() => onSelectAccount(a)}
           >
             <span className="acc-switch-platform">{PLATFORM_LABEL[a.platform] ?? a.platform}</span>
