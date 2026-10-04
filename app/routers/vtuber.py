@@ -135,20 +135,43 @@ def _pin_selected_asset(db: Session, v: VTuber) -> None:
 
 
 def _post_outs(db: Session, posts: list[Post]) -> list[PostOut]:
-    """`Post` 列表 → `PostOut`（带 `cover_local` 派生，L3/devlog/261）。
+    """`Post` 列表 → `PostOut`（带 `cover_local` / `images_local` / `video_local` 派生）。
 
     ⚠️ **一次批量查**：列表页一页最多 200 帖，逐帖查 `local_assets` 就是 200 次往返
     （判据：`tests/test_cover_assets.py` 的语句计数那条 —— 页大小翻倍而查询数不变）。
     这里用 `assets.lookup_keys` 一把捞：键在 Python 侧算（`key_of` 是纯函数，
     SQLite 里没有对应表达式 ⇒ "left join" 那条只能落在应用层，语义等价）。
+
+    正文媒体（devlog/319）与封面同一套路，只是**每个帖子有多个键**：先把全页的键收齐、
+    一次查完，再按索引回填（`images_local` 与 `body_json.images` 同序同长）。
     """
     outs = [PostOut.model_validate(p, from_attributes=True) for p in posts]
     keys = {o.id: assets.key_of((o.cover_url or "").strip()) for o in outs}
     by_key = assets.lookup_keys(db, assets.KIND_COVER, keys.values())
+
+    # 正文图 / 视频：一页里所有帖的键收齐再一次查（**不许 N+1**）
+    img_urls: dict[int, list[str]] = {}
+    vid_urls: dict[int, list[str]] = {}
+    for o in outs:
+        img_urls[o.id] = assets._media_urls(o.body_json, video=False)
+        vid_urls[o.id] = assets._media_urls(o.body_json, video=True)
+    all_img_keys = [assets.key_of(u) for us in img_urls.values() for u in us]
+    all_vid_keys = [assets.key_of(u) for us in vid_urls.values() for u in us]
+    img_by_key = assets.lookup_keys(db, assets.KIND_POST_IMAGE, all_img_keys)
+    vid_by_key = assets.lookup_keys(db, assets.KIND_POST_VIDEO, all_vid_keys)
+
+    def local_of(by: dict, url: str) -> str:
+        row = by.get(assets.key_of(url))
+        return (row.path or "").strip() if row is not None else ""
+
     for o in outs:
         row = by_key.get(keys.get(o.id, ""))
         if row is not None and (row.path or "").strip():
             o.cover_local = row.path
+        # ⚠️ **同序同长**：没有副本的位置留空串（前端按索引对齐，不靠 URL 匹配）
+        o.images_local = [local_of(img_by_key, u) for u in img_urls.get(o.id, [])]
+        vids = vid_urls.get(o.id, [])
+        o.video_local = next((p for p in (local_of(vid_by_key, u) for u in vids) if p), None)
     return outs
 
 

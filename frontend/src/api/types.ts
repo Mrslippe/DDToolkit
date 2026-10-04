@@ -160,6 +160,16 @@ export interface Post {
   cover_url: string | null
   /** L3：封面的本地副本（`static/assets/cover/…`）；渲染**本地优先**（见 utils/coverSource.ts） */
   cover_local?: string | null
+  /**
+   * 媒体固化（devlog/319）：正文媒体的本地副本。
+   *
+   * ⚠️ `images_local` 与 `body_json.images` **同序同长**（没有副本的位置是空串）——
+   * 按**索引**对齐，不靠 URL 匹配；渲染时本地那级走 `ProxyImage.fallbackSrc`
+   * （远端优先、本地兜底：远端签名过期时本地那份还在）。
+   */
+  images_local?: string[] | null
+  /** 视频的本地副本（只在设置里打开"连视频一起固化"后才有） */
+  video_local?: string | null
   permalink: string | null
   body_json: string | null
   stats_json: string | null

@@ -7,6 +7,8 @@ export interface ViewerImage {
   url: string
   width?: number
   height?: number
+  /** 本地副本（`static/assets/post_image/…`，devlog/319）：远端挂了就画它（`ProxyImage` 兜底那一级） */
+  local?: string
 }
 
 interface Props {
@@ -21,11 +23,14 @@ interface Props {
 const EXIT_MS = 200
 
 /** 灯箱大图：状态机与占位统一走 ProxyImage（外层 key=url 逐张重置） */
-function ViewerImg({ src, alt, zoom = 1, pan = { x: 0, y: 0 }, anim = 'none' }:
-{ src: string; alt?: string; zoom?: number; pan?: Pan; anim?: 'none' | 'zoom' | 'settle' }) {
+function ViewerImg({ src, local, alt, zoom = 1, pan = { x: 0, y: 0 }, anim = 'none' }:
+{ src: string; local?: string; alt?: string
+  zoom?: number; pan?: Pan; anim?: 'none' | 'zoom' | 'settle' }) {
   return (
     <ProxyImage
       src={src}
+      /* 本地副本兜底（devlog/319）：图床签名过期（远端 403）时，盘上那份还在 */
+      fallbackSrc={local}
       alt={alt}
       className="max-h-[84vh] max-w-[92vw] select-none object-contain"
       fallbackClassName=""
@@ -363,7 +368,8 @@ export default function ImageViewer({ images, index, onIndexChange, onClose }: P
         }}
         style={{ cursor: canPan ? (dragging ? 'grabbing' : 'grab') : 'default' }}
       >
-        <ViewerImg src={img.url} alt={img.url} zoom={scale} pan={pan} anim={anim} />
+        <ViewerImg src={img.url} local={img.local} alt={img.url}
+                   zoom={scale} pan={pan} anim={anim} />
       </div>
 
       {/* 底部点状序号（单图隐藏） */}

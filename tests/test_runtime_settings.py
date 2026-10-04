@@ -113,6 +113,10 @@ def test_defaults_are_the_values_from_before_the_overlay():
         "EXTERNAL_DANMAKUS_ENABLED": True,
         # L3（devlog/261）：默认**开**（否则"源站挂了封面还在"这条收益拿不到）
         "PIN_POST_COVERS": True,
+        # 媒体固化（devlog/319）：默认开、窗口 30 天、**视频默认关**（几十上百 MB/条）
+        "MEDIA_PIN_ENABLED": True, "MEDIA_PIN_MAX_AGE_DAYS": 30.0,
+        "MEDIA_PIN_VIDEO": False, "MEDIA_PIN_CLEAN_ARCHIVED": True,
+        "MEDIA_PIN_PER_ROUND": 20, "MEDIA_PIN_MB_PER_ROUND": 24.0,
     }
     assert {k: s.default for k, s in rs.SPECS.items()} == expect
     # 没覆盖时，property 读到的就是默认值（证明接线正确，而不是"恰好相等"）
@@ -300,14 +304,16 @@ def test_nav_is_appearance_plus_two_categories_plus_about():
     """左栏 = 外观 + 后端大类（顺序即声明序）+ 关于。
 
     判错的代价：分组一多，用户又回到"六项不知道该点哪个"的老问题。
-    所以这里钉死**只有两个大类**，且「抓取设置」在前（它是主战场）。
+    所以这里钉死**分组清单**：抓取设置（主战场）→ 数据源 → **媒体固化**
+    （2026-10-04 用户口径：「设置中给出可以调整固定选项」—— 它管的是"占本地磁盘"，
+    与"抓多快"是两件事，混进抓取设置会让那一页更杂）。
     """
     groups: list[str] = []
     for s in rs.SPECS.values():
         if s.group not in groups:
             groups.append(s.group)
-    assert groups == [rs.NAV_FETCH, rs.NAV_SOURCES]
-    assert len(groups) + 2 == 4          # + 外观（prefs）+ 关于（只读）
+    assert groups == [rs.NAV_FETCH, rs.NAV_SOURCES, rs.NAV_MEDIA]
+    assert len(groups) + 2 == 5          # + 外观（prefs）+ 关于（只读）
 
 
 def test_vital_settings_are_visible_and_tuning_knobs_are_advanced():
@@ -333,6 +339,10 @@ def test_vital_settings_are_visible_and_tuning_knobs_are_advanced():
         "FIRST_SCREEN_DYNAMICS_LIMIT",
         # 数据源（3 个开关：总闸 + 两个上游）——它们是"要不要用这个源"的决策，不该藏
         "EXTERNAL_ENABLED", "EXTERNAL_ZEROROKU_ENABLED", "EXTERNAL_DANMAKUS_ENABLED",
+        # 媒体固化（devlog/319）：这四项都会**明显影响本地磁盘**（固化本身 / 时间窗 /
+        # 要不要连视频 / 归档后清不清）⇒ 必须是用户看得见的决策，不能藏在高级里
+        "MEDIA_PIN_ENABLED", "MEDIA_PIN_MAX_AGE_DAYS",
+        "MEDIA_PIN_VIDEO", "MEDIA_PIN_CLEAN_ARCHIVED",
     }
     assert advanced == {
         "FETCH_BATCH_SIZE", "FETCH_BATCH_COOLDOWN",
@@ -340,6 +350,8 @@ def test_vital_settings_are_visible_and_tuning_knobs_are_advanced():
         "QUIET_HOURS_DYNAMICS_MIN_SECONDS",       # R30：静默期"降到多慢"属于调优
         "ACCOUNT_SWEEP_MIN_GAP_SECONDS", "FIRST_SCREEN_DYNAMICS_PAGES",
         "MANUAL_FAST_INTERVAL_MIN", "MANUAL_FAST_INTERVAL_MAX",
+        # 媒体固化的"每轮多少"是调优（默认值已经够保守），收进高级
+        "MEDIA_PIN_PER_ROUND", "MEDIA_PIN_MB_PER_ROUND",
     }
     assert visible | advanced == set(rs.SPECS)      # 没有第三个去处
 

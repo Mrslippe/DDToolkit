@@ -123,6 +123,20 @@ prune(kind, max_bytes, dry_run=True)    # 按 LRU 淘汰**未 pin 且未被引�
 渲染优先级与头像**相反**：**本地优先**，远端着 `fallbackSrc` —— 因为封面是我们主动固化的，
 而远端反而常被防盗链拦。
 
+### 3.4 正文媒体：`images_local` / `video_local`（2026-10-04，devlog/319）
+
+同一套路，但**一个帖子有多份**：`images_local` 与 `body_json.images` **同序同长**
+（没有副本的位置是空串，前端按**索引**对齐，不靠 URL 匹配）；`video_local` 是那条视频的副本。
+键在 Python 侧算、一次 `lookup_keys` 查完全页（判据 `tests/test_media_pin.py` 的语句计数那条）。
+
+正文媒体用两个新 kind：`post_image` / `post_video`（`KINDS` 里加了它们，
+`/settings/assets` 的读数与设置页的"清理未使用"自动覆盖到）。两条与封面**不同**的口径：
+
+- **保护名单 = 未归档帖引用的媒体**（`_referenced_keys`）⇒ 帖子一归档就失去保护；
+- 于是"**归档后自动移除**"不需要新写清理器：`prune(kind, max_bytes=0)` 的语义就是
+  "清空未 pin 且未被引用的"（`services/media_pin.clean_archived` 只是加上开关与报告）；
+- 默认容量上限是 `None`（不限）—— 回收靠"归档就清"，不是靠容量 LRU。
+
 ---
 
 ## 4. 头像这条链怎么接（C 的落地形态）

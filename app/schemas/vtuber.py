@@ -277,6 +277,11 @@ class PostOut(BaseModel):
     # 封面是**我们主动固化**的，而远端反而常被防盗链拦 ⇒ 列表**本地优先**、远端着 `fallbackSrc`
     # （规格 §3.3）。抓取侧只固化 `is_archived=0` 的帖（每轮上限，见 `scheduler.COVER_PIN_PER_ROUND`）。
     cover_local: str | None = None
+    # 媒体固化（devlog/319）：正文媒体的**本地副本**。
+    # `images_local` 与 `body_json.images` **同序同长**（没有副本的位置是空串 —— 前端按索引对齐，
+    # 不靠 URL 匹配）；`video_local` 是那条视频的本地副本（只在 `MEDIA_PIN_VIDEO` 开着时才有）。
+    images_local: list[str] = []
+    video_local: str | None = None
     last_seen_at: datetime | None = None       # 最近一次确认仍在线（v0.5.1）
     deleted_detected_at: datetime | None = None  # 墓碑：判定已删除的时刻（v0.5.1）
     created_at: datetime | None = None

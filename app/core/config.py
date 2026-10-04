@@ -84,6 +84,17 @@ class Settings:
     #    ⇒ 这不是"顺手做的小事"，每轮的张数上限（20）与字节上限（24MB，见 scheduler）两条都要。
     PIN_POST_COVERS: bool = True
 
+    # 帖子媒体固化（2026-10-04，devlog/319；可热更）：未归档帖的正文图（可选视频）存本地。
+    # ⚠️ 与封面同源的问题（图床地址是平台签发的**限时**地址：小红书实测 181 个 URL 签于
+    #    10-03 00:50、到 10-04 13:54 全部 403），但**回收口径不同** —— 封面按容量 LRU，
+    #    媒体按"**归档就清**"（见 `services/media_pin.clean_archived`）。
+    MEDIA_PIN_ENABLED: bool = True
+    MEDIA_PIN_MAX_AGE_DAYS: float = 30.0     # 0 = 不限（只固化这个窗口内的未归档帖）
+    MEDIA_PIN_VIDEO: bool = False            # 视频默认不固化（几十上百 MB/条）
+    MEDIA_PIN_CLEAN_ARCHIVED: bool = True    # 帖子归档后清掉它的媒体副本
+    MEDIA_PIN_PER_ROUND: int = 20            # 每轮最多新存几份（命中的不计）
+    MEDIA_PIN_MB_PER_ROUND: float = 24.0     # 每轮最多下载多少 MB
+
     # 启动链（v0.6.0）：应用启动后依次执行 直播状态 → 综合档（动态流 + 账号流）
     STARTUP_CHAIN_ENABLED: bool = True
     STARTUP_CHAIN_DELAY: float = 4.0    # 启动后延迟秒数（等后端/前端就绪）

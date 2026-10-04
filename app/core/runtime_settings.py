@@ -43,6 +43,9 @@ PREFIX = "settings."
 # 界面**不写死**这两个名字：导航仍由 `spec_table()` 里 group 出现的顺序生成。
 NAV_FETCH = "抓取设置"
 NAV_SOURCES = "数据源"
+#: 媒体固化（2026-10-04，devlog/319）：单独一组 —— 它管的是"占本地磁盘"，
+#: 与"抓多快"是两件不同的事（用户口径：「设置中给出可以调整固定选项」）
+NAV_MEDIA = "媒体固化"
 
 
 @dataclass(frozen=True)
@@ -195,6 +198,42 @@ def _specs() -> list[Spec]:
              "启用 danmakus", "", NAV_SOURCES, hot,
              "弹幕索引上游（收录检索与词云自建会用到）",
              section=NAV_SOURCES),
+
+        # ══ 媒体固化（2026-10-04，devlog/319）═════════════════════════════
+        # 用户口径：「不论什么平台，未归档的帖子都可以作为轻资产固定下来，已归档的部分就自动移除，
+        # 然后再设置中给出可以调整固定选项（是否固定资产、未归档时长、是否自动清理归档资产、
+        # 视频资源是否固定）」。为什么必须做：图床地址是**平台签发的带时限地址**（小红书实测
+        # 签于 10-03 00:50 的 181 个 URL 到 10-04 13:54 全部 403），不固化就必然会一片灰。
+        Spec("MEDIA_PIN_ENABLED", "bool", True, None, None,
+             "固化正文媒体", "", NAV_MEDIA, hot,
+             "把未归档帖的正文图片存一份到本地 —— 图床地址是平台签发的限时地址，"
+             "过期后（小红书实测不到一天）就再也取不到；固化过的帖子永远画得出来。"
+             "封面由「固化帖子封面」那一项单独管",
+             section="固化范围"),
+        Spec("MEDIA_PIN_MAX_AGE_DAYS", "float", 30.0, 0.0, 3650.0,
+             "只固化最近多少天的帖子", "天", NAV_MEDIA, hot,
+             "发布时间在这个窗口内的未归档帖才会固化（越老越没人看，也就越不值得占盘）；"
+             "0 = 不限（所有未归档帖都固化）",
+             section="固化范围"),
+        Spec("MEDIA_PIN_VIDEO", "bool", False, None, None,
+             "连视频一起固化", "", NAV_MEDIA, hot,
+             "默认关闭（视频动辄几十上百 MB）。只对单文件直链视频生效"
+             "（小红书/微博的视频、B站的 durl 回落档）；B站的 DASH 是分片流，暂不固化。"
+             "单个视频超过 200MB 会跳过并记账",
+             section="固化范围"),
+        Spec("MEDIA_PIN_CLEAN_ARCHIVED", "bool", True, None, None,
+             "帖子归档后清掉本地副本", "", NAV_MEDIA, hot,
+             "归档帖不再出现在列表里滚动，它的媒体副本也就不必占地方（要看时还能重新取）。"
+             "关闭后本地副本只增不减",
+             section="清理"),
+        Spec("MEDIA_PIN_PER_ROUND", "int", 20, 1, 200,
+             "每轮最多固化", "份", NAV_MEDIA, hot,
+             "一轮抓取里最多新存多少份媒体（命中的不计）—— 每份都要下载，别把一轮拖太长",
+             section="清理", advanced=True),
+        Spec("MEDIA_PIN_MB_PER_ROUND", "float", 24.0, 1.0, 1024.0,
+             "每轮最多下载", "MB", NAV_MEDIA, hot,
+             "同上，按体积兜一道（B站原图封面实测平均 1.1MB/张）",
+             section="清理", advanced=True),
     ]
 
 

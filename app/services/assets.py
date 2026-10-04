@@ -51,6 +51,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import urllib.parse
@@ -68,7 +69,16 @@ logger = logging.getLogger(__name__)
 #: 资源种类（模块化扩展点：L3 的 `cover`、L4 的企划徽标…）
 KIND_AVATAR = "avatar"
 KIND_COVER = "cover"
-KINDS: tuple[str, ...] = (KIND_AVATAR, KIND_COVER)
+#: **帖子媒体**（2026-10-04，devlog/319）：未归档帖的正文图 / 视频。
+#: 与封面同源的问题（远端签名会过期），但**保护名单不同**：正文图只按"未归档帖引用"保护，
+#: 帖子一归档就失去保护 ⇒ `prune(..., max_bytes=0)` 就是"归档后自动移除"。
+KIND_POST_IMAGE = "post_image"
+KIND_POST_VIDEO = "post_video"
+KINDS: tuple[str, ...] = (KIND_AVATAR, KIND_COVER, KIND_POST_IMAGE, KIND_POST_VIDEO)
+#: 只靠"未归档帖引用"保护的种类（清理归档资产时用的就是这一组）
+MEDIA_KINDS: tuple[str, ...] = (KIND_POST_IMAGE, KIND_POST_VIDEO)
+#: 单个视频副本的体积上限（超过就跳过并记账）：轻资产不装大文件
+MAX_VIDEO_BYTES = 200 * 1024 * 1024
 
 #: **白名单**（不是黑名单）：列在这里的 query 参数一律不参与稳定键 ——
 #: 没列进去的一律保留（少归一化只是多存一份，误删参数会让不同资源撞成一个键）
@@ -88,7 +98,10 @@ TMP_SUFFIX = ".part"
 
 #: 每 kind 的默认容量上限；`None` = 不限。
 #: 头像不限（用户口径：pin 的全留、抓到的都留）；封面默认 1GB，超出按 LRU 淘汰未 pin 的。
-DEFAULT_MAX_BYTES: dict[str, int | None] = {KIND_AVATAR: None, KIND_COVER: 1024 ** 3}
+#: ⚠️ 帖子媒体**默认不限**（`None`）：它的回收口径不是"按容量 LRU"，而是"**归档就清**"
+#: （`MEDIA_PIN_CLEAN_ARCHIVED` + `prune(max_bytes=0)`）—— 那才是用户要的语义。
+DEFAULT_MAX_BYTES: dict[str, int | None] = {KIND_AVATAR: None, KIND_COVER: 1024 ** 3,
+                                           KIND_POST_IMAGE: None, KIND_POST_VIDEO: None}
 
 
 def _now() -> datetime:
@@ -380,6 +393,37 @@ def stats(db: Session, kind: str | None = None) -> dict:
     return out
 
 
+def _media_urls(body_json: str | None, *, video: bool) -> list[str]:
+    """`body_json` → 这个帖子要固化的媒体 URL（纯函数）。
+
+    - 图片：`images[].url`（微博/小红书都是这个形状；B 站帖没有 `images`）；
+    - 视频：`video.url` **+ 整条 fallback 链**（同一份视频的多个镜像各有自己的稳定键，
+      固化一条就够，但把链都算进"引用面"才不会让清理把正在用的那份删掉）。
+      ⚠️ B 站的 DASH 分片**不在**这里（它只有 `bvid`，没有 `video.url`）—— 分片固化明确不做。
+    """
+    if not body_json:
+        return []
+    try:
+        body = json.loads(body_json)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(body, dict):
+        return []
+    out: list[str] = []
+    if not video:
+        for im in (body.get("images") or []):
+            u = im.get("url") if isinstance(im, dict) else (im if isinstance(im, str) else None)
+            if isinstance(u, str) and u.strip():
+                out.append(u.strip())
+        return out
+    v = body.get("video")
+    if isinstance(v, dict):
+        for u in [v.get("url"), *(v.get("fallbacks") or [])]:
+            if isinstance(u, str) and u.strip():
+                out.append(u.strip())
+    return out
+
+
 def _referenced_keys(db: Session, kind: str) -> set[str]:
     """**还被引用的稳定键**（prune 的保护名单）。
 
@@ -400,6 +444,24 @@ def _referenced_keys(db: Session, kind: str) -> set[str]:
             k = key_of(u or "")
             if k:
                 keys.add(k)
+        return keys
+    if kind in MEDIA_KINDS:
+        """**帖子媒体**（2026-10-04，devlog/319）：保护面 = **未归档帖**引用的正文媒体。
+
+        这条规则的直接后果就是用户要的语义：**帖子一归档 ⇒ 它的媒体失去保护 ⇒
+        `prune(kind, max_bytes=0)` 把它清掉**（"已归档的部分自动移除"）。
+        ⚠️ 扫的是未归档帖的 `body_json`（要 JSON 解析）。只在**清理**时跑，不在热路径上；
+        真库上万级帖如果超过 2s，就按计划 §四 停下来改设计（给 `local_assets` 加 `post_id`）。
+        """
+        video = kind == KIND_POST_VIDEO
+        keys = set()
+        for (body,) in (db.query(Post.body_json)
+                        .filter(Post.is_archived == False,      # noqa: E712
+                                Post.body_json.isnot(None)).all()):
+            for u in _media_urls(body, video=video):
+                k = key_of(u)
+                if k:
+                    keys.add(k)
         return keys
     if kind != KIND_AVATAR:
         return set()

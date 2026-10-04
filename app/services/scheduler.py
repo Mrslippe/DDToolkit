@@ -24,6 +24,7 @@ from app.services.vtuber_history import (FIELD_DISPLAY_NAME, FIELD_SIGN,
                                          record_field_change)
 from app.services.vtuber_avatars import record_avatar_version
 from app.services import assets
+from app.services import media_pin
 from app.repositories.vtuber_repo import (
     VTuberRepo, AccountRepo, PostRepo, AccountStatSnapshotRepo, LiveSessionRepo,
     AppMetaRepo,
@@ -2496,6 +2497,19 @@ async def _fetch_posts_for_account(acc: Account, video_pages: int, dynamics_page
         await _pin_account_covers(db, acc, client)
     except Exception as e:  # noqa: BLE001 —— 固化只是顺路的小事，拖垮整轮抓取才是大事
         logger.warning(f"封面固化失败 account#{acc.id}: {type(e).__name__}: {e}")
+    # 媒体固化（2026-10-04，devlog/319）：**正文图**（可选视频）同样顺路固化 ——
+    # 图床地址是平台签发的限时地址，不固化就会在一天内全部 403（小红书实测）。
+    # 与封面共用"每份落盘即提交 / 锁内不下载 / 每轮限额"三条纪律，见 `services/media_pin.py`。
+    try:
+        await media_pin.pin_account_media(db, acc, client)
+        # 归档清理放在**同一轮收尾**：刚归档的帖这一轮就释放它的媒体副本（受开关管）。
+        # ⚠️ 只在固化开着时跑（关掉固化的人不需要我们替他打扫），且失败只记日志。
+        if bool(getattr(settings, "MEDIA_PIN_ENABLED", True)):
+            media_pin.clean_archived(db)
+            db.commit()
+    except Exception as e:  # noqa: BLE001 —— 同上：清理失败不该拖垮抓取
+        logger.warning(f"媒体固化/清理失败 account#{acc.id}: {type(e).__name__}: {e}")
+        db.rollback()
     return result
 
 

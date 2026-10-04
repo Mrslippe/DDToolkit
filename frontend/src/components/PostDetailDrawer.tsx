@@ -24,6 +24,7 @@ import {
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
 import type { Post } from '../api/types'
+import { resolveAsset } from '../api/api'
 import {
   formatCount,
   formatDateTime,
@@ -177,10 +178,20 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
 
   const body = parseBody(shown.body_json)
   const stats = parseStats(shown.stats_json)
-  const images = dedupeImages(body.images ?? [])
+  /**
+   * 本地副本按**索引**对齐（`devlog/319`）：后端保证 `images_local` 与 `body_json.images`
+   * 同序同长（没有副本的位置是空串）。要在 `dedupeImages` **之前**挂上去 —— 去重会重排/丢项，
+   * 之后就没法按索引对回来了。
+   */
+  const localImages = (shown.images_local ?? []).map((p) => (p ? resolveAsset(p) : undefined))
+  const withLocal = <T extends ViewerImage>(list: T[]): T[] =>
+    list.map((im, i) => (localImages[i] ? { ...im, local: localImages[i] } : im))
+  const images = dedupeImages(withLocal(body.images ?? []))
   // 封面 + 正文图合并去重：单图帖封面与 images[0] 同源，去重后查看器只显示一张
   const coverList = shown.cover_url
-    ? dedupeImages([{ url: shown.cover_url }, ...images])
+    ? dedupeImages([{ url: shown.cover_url,
+                      local: shown.cover_local ? resolveAsset(shown.cover_local) : undefined },
+                    ...images])
     : images
   const isHtml = typeof body.content === 'string' && /<[a-z][\s\S]*>/i.test(body.content)
 
@@ -291,6 +302,8 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
               onClick={() => setViewer({ list: coverList, index: 0 })}>
               <ProxyImage
                 src={shown.cover_url}
+                /* 封面本地副本兜底（devlog/319）：远端图床签名过期后 403，盘上那份还在 */
+                fallbackSrc={shown.cover_local ? resolveAsset(shown.cover_local) : undefined}
                 alt="封面"
                 className="w-full rounded-lg object-contain"
                 style={{ maxHeight: 320 }}
@@ -344,6 +357,8 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
                   <button key={`${img.url}-${i}`} type="button" className="cursor-zoom-in"
                     onClick={() => setViewer({ list: images, index: i })}>
                     <ProxyImage src={img.url} width={120} height={120}
+                      /* 本地副本兜底（devlog/319）：远端签名过期 ⇒ 画盘上那份，而不是灰块 */
+                      fallbackSrc={img.local}
                       style={{ objectFit: 'cover', borderRadius: 6 }} />
                   </button>
                 ))}
