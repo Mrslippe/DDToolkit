@@ -365,7 +365,7 @@ class XiaohongshuPlatform(BasePlatform):
                         payload: Optional[dict] = None) -> dict[str, str]:
         if not self._cookie_header():
             # 连身份都没有就别发请求（省得被风控记一笔）
-            self.last_error = {"kind": "cookie_invalid", "msg": "未配置小红书 cookie（web_session）"}
+            self._note("cookie_invalid", msg="未配置小红书 cookie（web_session）")
             logger.warning("小红书未配置 cookie，本次不发请求（设置 → 平台凭据里填 XHS_COOKIE）")
             raise SignerUnavailable(self.last_error["msg"])
         headers = {
@@ -383,7 +383,7 @@ class XiaohongshuPlatform(BasePlatform):
         if not signed.get("x-s"):
             msg = (f"签名器没有产出 `x-s`（{type(self._signer).__name__}）"
                    f"—— 不发未签名的请求")
-            self.last_error = {"kind": "signer_unavailable", "msg": msg}
+            self._note("signer_unavailable", msg=msg)
             logger.warning(f"小红书{msg}")
             raise SignerUnavailable(msg)
         headers.update(signed)
@@ -403,8 +403,8 @@ class XiaohongshuPlatform(BasePlatform):
     def _fail(self, resp: httpx.Response, body: Optional[dict]) -> None:
         body = body or {}
         kind = classify_http(resp.status_code, body.get("code"), str(body.get("msg") or ""))
-        self.last_error = {"kind": kind, "status": resp.status_code,
-                           "code": body.get("code"), "msg": body.get("msg")}
+        self._note(kind, status=resp.status_code,
+                   code=body.get("code"), msg=str(body.get("msg") or ""))
         # cookie 失效是"身份级"事件：调用方（核心循环）见到失败就停这一轮，
         # 不再需要适配器去清什么内部游标 —— 分页状态已经不住在这里了
         if kind == "cookie_invalid":
@@ -427,8 +427,9 @@ class XiaohongshuPlatform(BasePlatform):
         d = self._ledger.acquire(self._identity(), endpoint)
         if d.allowed:
             return True
-        self.last_error = {"kind": "identity_throttled", "endpoint": endpoint,
-                           "reason": d.reason, "retry_after": round(d.retry_after, 2)}
+        self._note("identity_throttled", endpoint=endpoint, reason=d.reason,
+                   retry_after=round(d.retry_after, 2),
+                   msg=f"本轮没发（自己的节奏：{d.reason}，还需 {d.retry_after:.1f}s）")
         logger.info("小红书 %s 本轮不发（%s，还需 %.1fs）", endpoint, d.reason, d.retry_after)
         return False
 
@@ -438,6 +439,23 @@ class XiaohongshuPlatform(BasePlatform):
     def _outcome_of(self, kind: str) -> identity_limit.Outcome:
         """诊断六分类 → 四类（映射表在 `identity_limit.py`，那里写了为什么这么归）。"""
         return identity_limit.outcome_for_kind(kind)
+
+    def _note(self, kind: str, *, msg: str = "", **extra: Any) -> None:
+        """记下"这次为什么没成"：**一个口子写两处**（devlog/337）。
+
+        | 写到哪 | 谁读它 |
+        |---|---|
+        | `self.last_error`（结构化） | 调用方/诊断（`identity_limit.throttled()` 也读它）|
+        | `app.core.outcome.set_failure()` | **报告文案**（`scheduler._account_fail_text()` 按四类分工）|
+
+        ⚠️ `outcome` 那条路原先**只有 `fetcher.py`（B站/微博）在写** ⇒ 适配器框架这两家
+        不管真因为什么失败，报告里永远落到兜底那句「更新失败（网络）」——cookie 失效、
+        风控、自节流全说成网络。两处分开写迟早又漂，所以收敛到这里（抖音同款，见那边注释）。
+        """
+        from app.core import outcome as _outcome
+
+        self.last_error = {"kind": kind, "msg": msg, **extra} if msg or extra else {"kind": kind}
+        _outcome.set_failure(kind, msg)
 
     def _signer_down(self, e: Exception) -> None:
         """签名器不可用（`xhshow` 没装 / 内部炸了）：**必须响亮**（2026-10-02，devlog/276）。
@@ -452,7 +470,7 @@ class XiaohongshuPlatform(BasePlatform):
         （去设置里填 cookie），换成 `signer_unavailable` 会把"缺配置"说成"缺依赖"。
         """
         if (self.last_error or {}).get("kind") != "cookie_invalid":
-            self.last_error = {"kind": "signer_unavailable", "msg": str(e)}
+            self._note("signer_unavailable", msg=str(e))
         logger.warning(f"小红书签名器不可用，本次不发请求：{e}")
 
     # ── BasePlatform ──────────────────────────────────────────────────

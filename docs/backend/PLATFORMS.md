@@ -70,8 +70,13 @@ scheduler 统一消费框架：
 - **新平台必须接身份级那一层**（`identity_limit.py`，第 4 阶段 ⑤，devlog/237）：请求前
   `LEDGER.acquire(身份, 端点)`、请求后 `LEDGER.record(..., 四类之一, target=uid)`，并把
   "我们自己的节奏"（`last_error.kind="identity_throttled"`）与上游故障分开报。
-  **照抄 `xiaohongshu.py` 的 `_admit` / `_observe` / `_outcome_of` 三个小函数即可** ——
+  **照抄 `xiaohongshu.py` 的 `_admit` / `_observe` / `_outcome_of` / `_note` 四个小函数即可** ——
   令牌桶与熔断的判据已经在 `tests/test_identity_limit.py`（24 条）。
+  ⚠️ 两条**新平台最容易漏**的（`devlog/337`）：
+  ① `_note(kind)` 要**同时**写 `last_error` 与 `app.core.outcome.set_failure()` ——
+     后者是报告文案的唯一来源（只写前者 ⇒ 小红书/抖音的失败永远被说成「网络」）；
+  ② **闸门要问这个账号的平台**：`content_fetch_allowed(platform)` 别漏参数
+     （漏了就是「非 B站账号被未登录 B站挡下 / B站登录着时越权放行」—— 这类已踩三次）。
   ⚠️ **限速表是显式的**：没写进 `ENDPOINT_RATE` 的端点**不限速**（只受熔断约束）——
   想给新平台限速就显式加一行，别指望兜底默认值。
   ⚠️⚠️ **而且限速表的键是全局的**（`Ledger._bucket` 只按 endpoint 查它）⇒ 两个平台

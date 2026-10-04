@@ -328,7 +328,12 @@ def test_broken_window_records_are_skipped_not_fatal():
 
 
 def test_account_failure_text_says_which_kind():
-    """账号页那句话要分得清"号没了"与"网络/风控"（本批的用户可见收益）。"""
+    """账号页那句话要分得清"号没了"与"网络/风控"（本批的用户可见收益）。
+
+    ⚠️ 2026-10-05（`devlog/337`）补的三类：新平台（小红书/抖音）原先**进不来这张表**
+    （`platform_outcome` / `was_rate_limited()` 都只有 B 站/微博那条路在写）⇒ 不管真因为什么，
+    报告里永远是「更新失败（网络）」。下面这几种都是"用户该做的事完全不同"的情形。
+    """
     oc.clear()
     try:
         oc.set_failure("business_error", "62002")
@@ -337,6 +342,147 @@ def test_account_failure_text_says_which_kind():
         assert "网络" in sch._account_fail_text()
         oc.set_failure("risk_control", "412")
         assert "风控" in sch._account_fail_text()
+        # ── 新增的三类（每种都指向一件**用户能立刻做**的事）──
+        oc.set_failure("cookie_invalid", "HTTP 2483")
+        assert "登录" in sch._account_fail_text() and "网络" not in sch._account_fail_text()
+        oc.set_failure("signer_unavailable", "xhshow 没装")
+        assert "签名" in sch._account_fail_text()
+        oc.set_failure("douyin_disabled", "")
+        assert "开关" in sch._account_fail_text()
+        oc.set_failure("identity_throttled", "本轮没发")
+        assert "没发" in sch._account_fail_text(), "自节流要说成'没发'，不是'失败'"
+    finally:
+        oc.clear()
+
+
+class _FakePf:
+    """只带 `last_error` 的平台替身（`_throttle_note` 只读这一个字段）。"""
+
+    def __init__(self, kind: str = "", msg: str = ""):
+        self.last_error = {"kind": kind, "msg": msg} if kind else None
+
+
+def test_self_throttle_is_told_apart_from_a_real_failure(monkeypatch):
+    """**我们自己的节奏** ≠ 上游失败：`_throttle_note()` 只在 kind 是自节流时给话。
+
+    这条判据是 `devlog/337` 的核心：账号那条路原先不看这个 ⇒ 收录/加账号之后
+    （`user_profile` 桶 0.2/s 刚被花掉，**必现**）报告里写"1 失败"，而平台什么都没说。
+    """
+    monkeypatch.setattr(sch.registry, "get_fetcher",
+                        lambda p: _FakePf("identity_throttled", "本轮没发（自己的节奏：bucket）"))
+    assert "自己的节奏" in (sch._throttle_note("douyin") or "")
+
+    monkeypatch.setattr(sch.registry, "get_fetcher", lambda p: _FakePf("network_error", "超时"))
+    assert sch._throttle_note("douyin") is None, "真失败不许被当成自节流"
+
+    monkeypatch.setattr(sch.registry, "get_fetcher", lambda p: _FakePf())
+    assert sch._throttle_note("douyin") is None
+    monkeypatch.setattr(sch.registry, "get_fetcher", lambda p: None)
+    assert sch._throttle_note("nosuchplatform") is None
+
+
+def test_content_gate_asks_the_accounts_platform(monkeypatch):
+    """**闸门要问这个账号的平台**（2026-10-05，devlog/337）—— 这是同一类坑的第三次。
+
+    原先 `async_fetch_posts(platform, uid, …)` 手里攥着 `platform` 却调
+    `content_fetch_allowed()`（不带参数，默认 B 站）⇒ 抖音/小红书的"抓取帖子"被**"未登录
+    B 站"**挡下；反过来 B站登录着时又成了越权放行。`async_fetch_first_screen` 更彻底
+    （连平台都没有，真机上一条抖音账号的首屏抓取就是这么被跳过的）。
+
+    判据打在**传给闸门的那个参数**上：两处都必须是被抓账号的平台。
+    """
+    seen: list = []
+
+    def _spy(platform="bilibili"):
+        seen.append(platform)
+        return False, "stub"          # 直接返回 ⇒ 函数在闸门处早退，不碰 DB/网络
+
+    monkeypatch.setattr(sch.capabilities, "content_fetch_allowed", _spy)
+
+    asyncio.run(sch.async_fetch_posts("douyin", "MS4wLjABAAAAx", 3, 5))
+    assert seen[-1] == "douyin", f"手动抓取要问抖音的登录态，实际问了 {seen[-1]!r}"
+
+    monkeypatch.setattr(sch, "_platform_of_account", lambda aid: "xiaohongshu")
+    asyncio.run(sch.async_fetch_first_screen(1))
+    assert seen[-1] == "xiaohongshu", f"首屏抓取要问小红书，实际问了 {seen[-1]!r}"
+
+    # 查不到平台 ⇒ 按默认 B站口径（宁可严，不可宽）
+    monkeypatch.setattr(sch, "_platform_of_account", lambda aid: None)
+    asyncio.run(sch.async_fetch_first_screen(999))
+    assert seen[-1] == "bilibili"
+def test_contextvar_failure_kind_does_not_escape_the_task():
+    """把一条**事实**钉住：`outcome` 的 ContextVar 是**任务级**的 —— 子任务里写，父任务读不到。
+
+    为什么值得一条判据：`scheduler` 里两条账号路一条是顺序（同任务，能读到）、一条是
+    平台并行（worker 子任务 ⇒ 读不到）。少了这条事实，就会有人写出"父任务里再读一次
+    `_account_fail_text()`"的代码 —— 那条路会静默退回「更新失败（网络）」（devlog/337）。
+    """
+    async def child() -> None:
+        oc.set_failure("risk_control", "x")
+
+    async def parent() -> str:
+        oc.clear()
+        await asyncio.create_task(child())
+        return oc.last_failure()[0]
+
+    assert asyncio.run(parent()) == "", "子任务的写入不该出现在父任务的上下文里"
+
+
+def test_adapters_feed_the_failure_kind_into_outcome(monkeypatch):
+    """适配器（小红书/抖音）必须把失败原因喂给 `outcome` —— 否则文案永远落到"网络"。
+
+    ⚠️ 反向验证：把 `DouyinPlatform._note` 换回"只写 last_error"，本用例当场红。
+    三条路都验：缺 cookie（不发请求）/ 自节流（不发请求）/ 上游验证码（发了请求）。
+    ⚠️ 断言在**协程内部**读（`outcome` 是任务级 ContextVar ⇒ 外面读不到，见上一条判据）。
+    """
+    from app.services.platforms.douyin import DouyinPlatform
+    from app.services.platforms.xiaohongshu import XiaohongshuPlatform
+
+    sec = "MS4wLjABAAAAYbIZRpNPRPJ28dxKRyqtmQXtxN5EC_uAfePn3mPehcQ"
+    # 抖音有**总开关**（默认关）⇒ 要走到"缺 cookie"那一步得先把它打开
+    from app.core import runtime_settings
+
+    real_get = runtime_settings.get
+    monkeypatch.setattr(runtime_settings, "get",
+                        lambda key: True if key == "DOUYIN_ENABLED" else real_get(key))
+
+    class _Client:
+        def __init__(self, status: int = 200, content: bytes = b"{}"):
+            self.status_code, self.content, self.headers = status, content, {}
+
+        async def get(self, url, headers=None):
+            return self
+
+        async def aclose(self):
+            pass
+
+    async def go() -> tuple[str, str, str, bool]:
+        """在**同一个任务**里依次跑三条路并读回 kind（ContextVar 的任务级语义）。"""
+        oc.clear()
+        await DouyinPlatform(cookie="").fetch_user_info(sec)
+        missing_cookie = oc.last_failure()[0]
+        await XiaohongshuPlatform(cookies="").fetch_user_info("u1")
+        xhs_missing_cookie = oc.last_failure()[0]
+
+        ledger = il.Ledger(now=lambda: 1000.0)
+        pf = DouyinPlatform(cookie="UIFID=abc; s_v_web_id=x; ttwid=y", user_agent="UA",
+                            ledger=ledger)
+        assert pf._admit(sec, "user_profile") is True
+        assert pf._admit(sec, "user_profile") is False
+        throttled = oc.last_failure()[0]
+        assert "自己的节奏" in (pf.last_error or {}).get("msg", "")
+
+        oc.clear()
+        await pf.fetch_post_detail("7692759522204795110", client=_Client(461))
+        captcha = oc.last_failure()[0]
+        return missing_cookie, xhs_missing_cookie, throttled, (pf.captcha_seen, captcha)  # type: ignore[return-value]
+
+    try:
+        dy_cookie, xhs_cookie, throttled, (captcha_seen, captcha_kind) = asyncio.run(go())
+        assert dy_cookie == "cookie_invalid", "抖音缺 cookie 的原因要能到报告那一层"
+        assert xhs_cookie == "cookie_invalid", "小红书同理"
+        assert throttled == "identity_throttled", "自节流要能到报告那一层（D4 撞到的形态）"
+        assert captcha_seen is True and captcha_kind == "captcha", "验证码要能被报告层看见"
     finally:
         oc.clear()
 

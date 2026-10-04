@@ -453,14 +453,64 @@ def _account_fail_text() -> str:
 
     以前无论什么原因都写"更新失败" —— 用户分不出"这个号注销了"和"网络断了/被限流了"，
     而这两件事该做的事完全不同（前者去删号，后者等一会儿）。
+
+    ⚠️ **2026-10-05（devlog/337）补的两类**：新平台（小红书/抖音）的失败原因原先**进不来**
+    —— `platform_outcome.last_failure()` 与 `was_rate_limited()` 都只有 B 站/微博那条路在写，
+    于是它们不管真因为什么，永远落到兜底那句「更新失败（网络）」。现在适配器统一经
+    `_note()` 写 `outcome`（见 `platforms/douyin.py::_note`），这里再按 kind 分工。
     """
     kind = platform_outcome.last_failure()[0]
     four = identity_limit.outcome_for_kind(kind) if kind else ""
     if four == "business_error":
         return "账号不存在或不可见（业务失败）"
+    # ⚠️ **自节流要排在风控前面**（devlog/337）：它的四类归属是 network_error（我们这侧），
+    #    但旧映射里没有这个 kind ⇒ `outcome_for_kind` 的兜底会把它当 risk_control，
+    #    于是文案变成"更新失败（风控）"—— 那比"网络"更吓人，而且是假的（平台没说话）。
+    if kind == "identity_throttled":
+        return "本轮没发（自己的节奏，稍后自动重试）"
     if four == "risk_control" or was_rate_limited():
         return "更新失败（风控）"
+    # ↓ 2026-10-05 新增：这三种都不是"网络"，而用户该做的事各不相同
+    if kind == "cookie_invalid":
+        return "登录态失效（到「设置 → 登录」重新粘贴 Cookie）"
+    if kind in ("signature_invalid", "signer_unavailable", "argus_missing"):
+        return "签名不可用（我们这侧没发请求，见日志）"
+    if kind == "douyin_disabled":
+        return "抖音总开关关着（设置 → 抓取设置 → 平台抓取）"
+    if kind == "identity_throttled":
+        # 走到这里说明调用方没按"跳过"处理（正常路径会记 skipped，见 `_throttle_note`）
+        return "本轮没发（自己的节奏，稍后自动重试）"
     return "更新失败（网络）"
+
+
+def _platform_of_account(account_id: int) -> str | None:
+    """账号属于哪个平台（给"闸门要按平台问"那两处用）；读不到 ⇒ `None`（调用方按默认口径）。
+
+    ⚠️ 单独一个短会话查一次就关：`async_fetch_first_screen` 要**在拿锁之前**问闸门，
+    而它自己的会话是拿锁之后才开的（顺序不能反过来 —— 问了闸门再排队/拿锁是既有语义）。
+    """
+    db: Session = SessionLocal()
+    try:
+        acc = db.get(Account, account_id)
+        return acc.platform if acc is not None else None
+    except Exception as e:  # noqa: BLE001 —— 查不到只该"按严口径挡"，不该炸整条链路
+        logger.warning(f"查账号平台失败 account#{account_id}: {type(e).__name__}: {e}")
+        return None
+    finally:
+        db.close()
+
+
+def _throttle_note(platform: str) -> str | None:
+    """这次"没成"是不是**我们自己的节奏**（自节流）？是就给一句给用户看的话（devlog/337）。
+
+    为什么单独一个函数：账号流与帖子流**两条路**都要判它（帖子那条早在 `devlog/237` 就接了
+    `stop_reason="throttled"`，账号这条一直没接 ⇒ 报告里写成"失败"，而平台什么都没说）。
+    """
+    pf = registry.get_fetcher(platform)
+    if pf is None or not identity_limit.throttled(pf):
+        return None
+    err = getattr(pf, "last_error", None) or {}
+    return err.get("msg") or "本轮没发（自己的节奏，稍后自动重试）"
 
 
 def _filter_cooling_accounts(accounts: list, *, auto: bool) -> tuple[list, list[str]]:
@@ -1021,9 +1071,18 @@ async def async_fetch_accounts(account_ids: list[int], *, label: str = "指定�
                     asyncio.create_task(_deferred_avatar(acc.id, pending_avatar[0]))
                 result.success += 1
             else:
-                result.failed += 1
-                result.details.append(
-                    f"{acc.display_name or acc.platform_uid} {_account_fail_text()}")
+                # ⚠️ **自节流不是失败**（devlog/337）：平台什么都没说，是我们自己这一轮没发
+                # （`user_profile` 桶 0.2/s 刚被上一次花掉 —— 收录/加账号后**必现**）。
+                # 记进 skipped，并在明细里说清"还需多久"，与帖子那条路的 `throttled` 同口径。
+                throttled_msg = _throttle_note(acc.platform)
+                if throttled_msg:
+                    result.skipped += 1
+                    result.details.append(
+                        f"{acc.display_name or acc.platform_uid} {throttled_msg}")
+                else:
+                    result.failed += 1
+                    result.details.append(
+                        f"{acc.display_name or acc.platform_uid} {_account_fail_text()}")
             idx += 1
 
         logger.info(f"{label} 抓取完毕: {result.success} 成功, {result.failed} 失败")
@@ -1124,7 +1183,9 @@ async def async_fetch_and_update(auto: bool = False) -> FetchResult:
                 else:
                     s.rollback()
                 return _RoundOutcome(ok=ok, rate_limited=was_rate_limited(),
-                                     payload=local)
+                                     payload=local,
+                                     # ⚠️ 在 worker 内算（ContextVar 是任务级的，见 `_RoundOutcome`）
+                                     fail_text="" if ok else _account_fail_text())
             except Exception as e:
                 s.rollback()
                 logger.error(f"抓取 account#{acc.id} ({pf}) 异常: {type(e).__name__}: {e}")
@@ -1158,11 +1219,18 @@ async def async_fetch_and_update(auto: bool = False) -> FetchResult:
             if outcome.ok:
                 result.success += 1
             else:
-                result.failed += 1
                 label = outcome.payload
                 name = (label.display_name or label.platform_uid) if label else pf
-                result.details.append(
-                    f"[{pf}] {name}: {outcome.error or _account_fail_text()}")
+                # 同 `_fetch_accounts_by_ids`：自节流记 skipped，不是失败（devlog/337）
+                throttled_msg = _throttle_note(pf) if outcome.error is None else None
+                if throttled_msg:
+                    result.skipped += 1
+                    result.details.append(f"[{pf}] {name}: {throttled_msg}")
+                else:
+                    result.failed += 1
+                    # ⚠️ 用 worker 带出来的文案（父任务读不到那个 ContextVar，见 `_RoundOutcome`）
+                    result.details.append(
+                        f"[{pf}] {name}: {outcome.error or outcome.fail_text or _account_fail_text()}")
 
         logger.info(f"抓取完毕: {result.success} 成功, {result.failed} 失败, {result.skipped} 跳过")
 
@@ -1770,11 +1838,20 @@ async def _maybe_preempt_post(db: Session) -> bool:
 
 @dataclass
 class _RoundOutcome:
-    """单元素执行结果：worker 必须自己吞异常，用 ok/error 表达失败。"""
+    """单元素执行结果：worker 必须自己吞异常，用 ok/error 表达失败。
+
+    ⚠️ `fail_text` 必须在 **worker 内部**算好（2026-10-05，devlog/337）：失败原因住在
+    `app.core.outcome` 的 **ContextVar** 里，而它是**任务级**的 —— 子任务的写入
+    **父任务读不到**（`asyncio.create_task` 复制一份上下文）。原先父任务直接调
+    `_account_fail_text()`，在并行批次那条路上只会读到空 ⇒ 文案永远落到
+    「更新失败（网络）」（B 站也一样，属既有洞）。
+    """
     ok: bool = True
     error: str | None = None
     rate_limited: bool = False
     payload: object = None
+    #: worker 内部算好的失败文案（父任务读不到 ContextVar，所以只能这样带出来）
+    fail_text: str = ""
 
 
 async def _run_platform_rounds(
@@ -2552,13 +2629,19 @@ async def async_fetch_posts(platform: str, uid: str, video_pages: int, dynamics_
     ⚠️ **未登录直接不发起**（2026-09-15，devlog/086）：B 站对匿名调用空间接口
     （`arc/search` / 动态流）回 `412 request was banned`，且是 IP 级、会持续一段时间 ——
     硬试只会白耗配额、脏 IP，然后由用户承担"抓取失败"的困惑。所以这里在**入口**就挡掉。
+
+    ⚠️ 闸门必须问**这个账号的平台**（2026-10-05，devlog/337）：原先调的是
+    `content_fetch_allowed()`（**不带平台**）⇒ 非 B站账号被"未登录 B 站"挡下；
+    反过来 B站登录着时又成了**越权放行**。这与 `devlog/228`（端点级判据拿 B站登录态放行）
+    和 `devlog/320`（闸门漏了小红书）是同一类，第三次了 ⇒ 判据见
+    `tests/test_outcome_and_breaker.py::test_content_gate_asks_the_accounts_platform`。
     """
     global _post_fetch_running
 
     # R28②：手动抓一次 = "有事发生" ⇒ 把动态流的空闲退避清零（否则用户点了抓取，
     # 自动档还按"库很安静"的 10 分钟档位在跑）
     note_dynamics_activity("手动抓取帖子")
-    allowed, why = capabilities.content_fetch_allowed()
+    allowed, why = capabilities.content_fetch_allowed(platform)
     if not allowed:
         logger.info(f"帖子抓取跳过（{platform}:{uid}）：{why}")
         return PostFetchResult(stop_reason="login_required", error=why)
@@ -2626,12 +2709,17 @@ async def async_fetch_first_screen(account_id: int) -> PostFetchResult:
     ⚠️ **未登录不发起**（2026-09-15，devlog/086）：本函数全是内容抓取（投稿 + 动态），
     匿名会被平台 412 封 —— 收录仍然照常完成（建库 + 账号信息 + 粉丝数 + 第三方历史），
     只是拿不到首屏内容。
+
+    ⚠️ 闸门同样要问**这个账号的平台**（2026-10-05，devlog/337）：原先不带平台 ⇒ 收录一个
+    抖音/小红书账号后，首屏抓取被**"要登录 B 站"**那句理由跳过（真机日志实证）。
     """
     global _post_fetch_running
 
-    allowed, why = capabilities.content_fetch_allowed()
+    # 先查账号属于哪个平台（闸门要按它问）；查不到就按默认 B站口径 —— **宁可严，不可宽**
+    platform = _platform_of_account(account_id)
+    allowed, why = capabilities.content_fetch_allowed(platform or "bilibili")
     if not allowed:
-        logger.info(f"首屏抓取跳过（account#{account_id}）：{why}")
+        logger.info(f"首屏抓取跳过（account#{account_id}，{platform or '未知平台'}）：{why}")
         return PostFetchResult(stop_reason="login_required", error=why)
 
     if not await _acquire_manual_post():

@@ -61,7 +61,13 @@ def test_fetch_posts_returns_login_required_without_touching_network(logged_out,
 
 
 def test_first_screen_returns_login_required_without_touching_network(logged_out, monkeypatch):
-    """收录首屏：未登录跳过（收录本身照常完成，只是没有首屏内容）。"""
+    """收录首屏：未登录跳过（收录本身照常完成，只是没有首屏内容）。
+
+    ⚠️ 2026-10-05（`devlog/337`）：闸门现在要**按账号的平台**问 —— 首屏那条路要先查一次
+    平台（`_platform_of_account`）。这里把那次查询**打桩掉**：本用例管的是"未登录不发请求"，
+    而"闸门问对了平台"由 `test_outcome_and_breaker.py::test_content_gate_asks_the_accounts_platform`
+    盯着（否则这里的 `SessionLocal = boom` 会把那次查询也算成"干了活"）。
+    """
     sent = []
 
     def boom(*a, **k):
@@ -70,6 +76,7 @@ def test_first_screen_returns_login_required_without_touching_network(logged_out
 
     monkeypatch.setattr(scheduler, "new_async_client", boom)
     monkeypatch.setattr(scheduler, "SessionLocal", boom)
+    monkeypatch.setattr(scheduler, "_platform_of_account", lambda aid: "bilibili")
 
     out = asyncio.run(scheduler.async_fetch_first_screen(999999))
     assert out.stop_reason == "login_required"

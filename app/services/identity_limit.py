@@ -97,6 +97,11 @@ _KIND_TO_OUTCOME: dict[str, Outcome] = {
     # 总开关关着（抖音 `DOUYIN_ENABLED`，devlog/335）：是**我们自己**没开，与上游无关
     # ⇒ 退令牌、不计样本（与 cookie/签名那一类同归"我们这侧"）。
     "douyin_disabled": "network_error",
+    # 自节流（`_admit` 里桶空 ⇒ 一个字节都没发，devlog/337）：同样是"我们这侧"。
+    # ⚠️ **必须有这一条**：没有它，`outcome_for_kind` 的兜底会把它算成 `risk_control`
+    #    ⇒ 报告文案变成"更新失败（风控）"，而平台什么都没说（比说成"网络"更误导）。
+    #    注意这条映射**只影响文案**：走 `_admit` 拒绝时根本不会调 `_observe`，不进健康度。
+    "identity_throttled": "network_error",
     # 验证码挑战：停止条件（计划 §四-2 立即停）。它确实是"平台在拦我们" ⇒ 按风控算。
     "captcha": "risk_control",
     # 下面这几个都是"我们这侧坏了"：cookie 没了 / 签名不对 / 网关头缺失 / 签名器不可用。

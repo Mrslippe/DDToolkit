@@ -480,8 +480,7 @@ class DouyinPlatform(BasePlatform):
         """身份齐了才签；签不出来 ⇒ **响亮失败**（未签名的请求一个都不许发）。"""
         cookie = self._cookie_header()
         if not cookie:
-            self.last_error = {"kind": "cookie_invalid",
-                               "msg": "未配置抖音 cookie（设置 → 登录 → 抖音）"}
+            self._note("cookie_invalid", msg="未配置抖音 cookie（设置 → 登录 → 抖音）")
             logger.warning("抖音未配置 cookie，本次不发请求（设置 → 登录 → 抖音，粘贴浏览器整条 Cookie）")
             raise SignerUnavailable(self.last_error["msg"])
         signer = self._signer
@@ -512,15 +511,18 @@ class DouyinPlatform(BasePlatform):
         if not self._enabled():
             # **总开关关着 ⇒ 一个字节都不发**（devlog/335）。放在 `_admit` 这个唯一入口上：
             # 账号信息 / 作品 / 详情三条路都要过它，将来加端点也漏不掉。
-            self.last_error = {"kind": "douyin_disabled",
-                               "msg": "抖音抓取默认关闭（设置 → 抓取设置 → 平台抓取里显式打开）"}
+            self._note("douyin_disabled",
+                       msg="抖音抓取默认关闭（设置 → 抓取设置 → 平台抓取里显式打开）")
             logger.info("抖音总开关关着，本次不发请求（设置 → 抓取设置 → 平台抓取）")
             return False
         d = self._ledger.acquire(self._identity(), endpoint)
         if d.allowed:
             return True
-        self.last_error = {"kind": "identity_throttled", "endpoint": endpoint,
-                           "reason": d.reason, "retry_after": round(d.retry_after, 2)}
+        # ⚠️ 这是**我们自己的节奏**（不是上游拒绝）⇒ 报告里要能分开说（devlog/337：
+        #    `identity_limit.throttled()` 与 `_account_fail_text()` 都靠这个 kind）
+        self._note("identity_throttled", endpoint=endpoint, reason=d.reason,
+                   retry_after=round(d.retry_after, 2),
+                   msg=f"本轮没发（自己的节奏：{d.reason}，还需 {d.retry_after:.1f}s）")
         logger.info("抖音 %s 本轮不发（%s，还需 %.1fs）", endpoint, d.reason, d.retry_after)
         return False
 
@@ -544,14 +546,31 @@ class DouyinPlatform(BasePlatform):
     def _outcome_of(self, kind: str) -> identity_limit.Outcome:
         return identity_limit.outcome_for_kind(kind)
 
+    def _note(self, kind: str, *, msg: str = "", **extra: Any) -> None:
+        """记下"这次为什么没成"：**一个口子写两处**（devlog/337）。
+
+        | 写到哪 | 谁读它 |
+        |---|---|
+        | `self.last_error`（结构化） | 调用方/诊断（`identity_limit.throttled()` 也读它）|
+        | `app.core.outcome.set_failure()` | **报告文案**（`scheduler._account_fail_text()` 按四类分工）|
+
+        ⚠️ 为什么要一个口子：`outcome` 那条路原先**只有 `fetcher.py`（B站/微博）在写** ⇒
+        适配器框架这两家不管真因为什么失败，报告里永远是兜底那句「更新失败（网络）」——
+        cookie 失效、风控、自节流全说成网络。两处分开写迟早又漂，所以收敛到这里。
+        """
+        from app.core import outcome as _outcome
+
+        self.last_error = {"kind": kind, "msg": msg, **extra} if msg or extra else {"kind": kind}
+        _outcome.set_failure(kind, msg)
+
     def _fail(self, status: int, *, headers: Optional[dict], payload: Any, body: bytes,
               expect: str) -> None:
         kind = classify_http(status, headers=headers, payload=payload, body_len=len(body),
                              body_head=body[:300].decode("utf-8", "replace"), expect=expect)
-        self.last_error = {"kind": kind, "status": status,
-                           "status_code": (payload or {}).get("status_code")
-                           if isinstance(payload, dict) else None,
-                           "msg": body[:300].decode("utf-8", "replace") if body else "（空体）"}
+        self._note(kind, status=status,
+                   status_code=(payload or {}).get("status_code")
+                   if isinstance(payload, dict) else None,
+                   msg=body[:300].decode("utf-8", "replace") if body else "（空体）")
         if kind == "captcha":
             self.captcha_seen = True
             # 停止条件（计划 §四-2）：出现验证码挑战**立即停**，不绕
@@ -581,7 +600,7 @@ class DouyinPlatform(BasePlatform):
             query, extra_headers = self._signed(params)
         except SignerUnavailable as e:
             if (self.last_error or {}).get("kind") != "cookie_invalid":
-                self.last_error = {"kind": "signer_unavailable", "msg": str(e)}
+                self._note("signer_unavailable", msg=str(e))
                 logger.warning("抖音签名器不可用，本次不发请求：%s", e)
             return None
         headers = {
@@ -616,7 +635,7 @@ class DouyinPlatform(BasePlatform):
         try:
             return await self._get(client, path, params, uid=uid, endpoint=endpoint, expect=expect)
         except httpx.HTTPError as e:            # 网络错：与身份无关（退令牌、不计样本）
-            self.last_error = {"kind": "network_error", "msg": f"{type(e).__name__}: {e}"}
+            self._note("network_error", msg=f"{type(e).__name__}: {e}")
             self._observe(uid, endpoint, "network_error")
             logger.warning("抖音请求失败（%s）：%s: %s", endpoint, type(e).__name__, e)
             return None
@@ -629,12 +648,10 @@ class DouyinPlatform(BasePlatform):
         sec_uid = sec_uid_from_input(uid)
         if not sec_uid:
             # 不猜：抖音号要搜索接口（本刀未接入），猜错就是静默播别人的号
-            self.last_error = {
-                "kind": "unsupported_input",
-                "msg": ("没认出抖音 sec_user_id —— 抖音号（unique_id）需要搜索接口才能解析，"
-                        "本版未接入。请在浏览器打开该账号主页，把链接"
-                        "（www.douyin.com/user/MS4wLjABAAAA…）整条粘进来"),
-            }
+            self._note("unsupported_input",
+                       msg=("没认出抖音 sec_user_id —— 抖音号（unique_id）需要搜索接口才能解析，"
+                            "本版未接入。请在浏览器打开该账号主页，把链接"
+                            "（www.douyin.com/user/MS4wLjABAAAA…）整条粘进来"))
             logger.warning("抖音 uid 认不出来（%r）：%s", str(uid)[:80], self.last_error["msg"])
             return None
         if not self._admit(sec_uid, ENDPOINT_PROFILE):
@@ -656,11 +673,9 @@ class DouyinPlatform(BasePlatform):
         """
         sec_uid = sec_uid_from_input(uid)
         if not sec_uid:
-            self.last_error = {
-                "kind": "unsupported_input",
-                "msg": ("没认出抖音 sec_user_id —— 抖音号（unique_id）需要搜索接口才能解析，"
-                        "本版未接入。请粘主页链接（www.douyin.com/user/MS4wLjABAAAA…）"),
-            }
+            self._note("unsupported_input",
+                       msg=("没认出抖音 sec_user_id —— 抖音号（unique_id）需要搜索接口才能解析，"
+                            "本版未接入。请粘主页链接（www.douyin.com/user/MS4wLjABAAAA…）"))
             logger.warning("抖音 uid 认不出来（%r）：%s", str(uid)[:80], self.last_error["msg"])
             return None
         if not self._admit(sec_uid, ENDPOINT_POSTS):
