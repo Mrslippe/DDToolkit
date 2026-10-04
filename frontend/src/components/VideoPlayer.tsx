@@ -587,6 +587,17 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
       if (left > 0) spinRef.current.hideTimer = window.setTimeout(done, left)
       else done()
     }
+    /**
+     * **立刻**收掉转圈（不走最短时长）。
+     *
+     * 只给"播完了"这一种用（`devlog/318`）：那时不存在"饿住又被喂饱"的闪动问题，
+     * 而 `MIN_SPIN_MS` 的 450ms 迟滞会让尾帧上继续转小半秒 —— 用户要的是"冻住 + 重新播放"。
+     */
+    const killSpin = () => {
+      window.clearTimeout(spinRef.current.hideTimer)
+      spinRef.current.since = 0
+      setBuffering(false)
+    }
 
     /* 点了播放就进入"在播"语义；但**第一帧还没出来**（readyState < 3）时按缓冲处理 ——
        否则那 1 秒多里界面是"封面 + 暂停键"，用户读成"卡在暂停上"（devlog/302） */
@@ -675,6 +686,10 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
       wantPlayRef.current = false
       setPlaying(false)
       setEnded(true)
+      // ⚠️ **必须把转圈收掉**（2026-10-04 用户口径）：播到最后一帧时缓冲吃完会发一次
+      //    `waiting` ⇒ `showSpin()` 亮起；而 `ended` 之后不再有 `playing`/`canplay`，
+      //    `endSpin()` 永远等不到 ⇒ 尾帧上**一直转圈**，还和"重新播放"叠在一起。
+      killSpin()
     }
     const onTime = () => {
       /**
@@ -715,6 +730,7 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
           && el.currentTime >= el.duration - 0.35 && el.paused && !el.seeking
           && !holding && mseTargetRef.current == null) {
         setEnded(true)
+        killSpin()     // 同上：尾帧上不许再转圈（这一条是 MSE 侧的兜底路径）
       }
     }
     const onMeta = () => {
@@ -1215,8 +1231,10 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
           ⚠️ 缓冲也要转（devlog/299）：点进度条跳转后视频轨要重新缓冲，画面是冻住的 ——
           不给转圈，用户会以为"点了跳转结果暂停了"。
           ⚠️ MSE 的跳转**必须有转圈**（devlog/312）：那时画面**故意**停着等目标段
-          （不是"暂停"，用户没按过暂停键），没有转圈就是"点了跳转没反应"。 */}
-      {(loading || buffering || mseSeeking) && (
+          （不是"暂停"，用户没按过暂停键），没有转圈就是"点了跳转没反应"。
+          ⚠️ **播完了就不许再转**（devlog/318，用户口径「用重新播放的按钮替代转圈缓冲按钮」）：
+          `ended` 时只出"重新播放"，两个都画在正中间会叠。 */}
+      {(loading || buffering || mseSeeking) && !ended && (
         <div className="vp-spin" role="status" aria-label="正在缓冲">
           <Loader2 className="vp-spin-icon" aria-hidden="true" />
         </div>

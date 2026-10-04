@@ -10,11 +10,12 @@
 //   ⇒ 改为外部模块，作为 main.tsx 的首个 import 最先执行；
 // - 资源级失败只入账不弹面板（单张图抖一下不代表系统坏了，且有 ProxyImage 三级兜底）；
 // - `[perf]` 启动计时行同样不弹（每次启动都弹很打扰）。
-import { reportFromBootLine, reportUserError } from './utils/problemReport'
+import { reportFromBootLine, reportResourceFailure } from './utils/problemReport'
 
 ;(function () {
   const lines: string[] = []
-  let resourceErrors = 0
+  /** **按主机**记资源失败次数（`devlog/318`：全局计数会把"一页 7 张过期图"算成系统性故障） */
+  const resourceFailures = new Map<string, number>()
 
   function log(msg: string, opts?: { quiet?: boolean }) {
     lines.push(
@@ -36,7 +37,14 @@ import { reportFromBootLine, reportUserError } from './utils/problemReport'
   //
   // 2026-09-10 用户反馈：单张 B 站动态图在 WebView 里偶发一次失败就弹红色面板，
   // 而这类失败**已经被 ProxyImage 的三级兜底处理**（直连 → /img-proxy → 占位）。
-  // 因此资源失败只入账；连续 ≥3 次才视为真实故障（系统性 404/断网）。
+  // 因此资源失败只入账；**同一个主机**连续 ≥3 次才视为真实故障（系统性 404/断网）。
+  //
+  // ⚠️ 2026-10-04（`devlog/318`）两处修正，别改回去：
+  // ① 计数从"全局"改成"**按主机**"——全局计数下，一页里 7 张签名过期的图（每张直连+代理
+  //    各失败一次）= 14 次，直接被判成系统性故障，弹出一份 14 条的 `[resource]` 报告；
+  // ② 条目里**不再拼 URL**（改由 `reportResourceFailure` 只写主机名）——拼 URL 就永远去重不了，
+  //    报告里一行一条，计数还是看不出所以然的全局序数。
+  // 而 `ProxyImage` 自己也挂了 `data-self-healing`（见上面那段注释的同一个理由）。
   window.addEventListener(
     'error',
     function (e) {
@@ -44,21 +52,19 @@ import { reportFromBootLine, reportUserError } from './utils/problemReport'
       if (t && t !== document.documentElement && t !== document.body && t.isConnected) {
         const src = (t as HTMLImageElement).src || (t as HTMLLinkElement).href
         if (src) {
-          // `data-self-healing`：块内自己会恢复（如视频的直连→本机代理 fallback 链）。
-          // 那类失败**每一步都是设计的正常一环**，报给用户纯属噪音（2026-10-03 实测：
-          // 视频照常播、报告里却攒了 6 条 CDN 403）；真播不了时由该组件主动报一条。
+          // `data-self-healing`：块内自己会恢复（如视频的直连→本机代理 fallback 链、
+          // `ProxyImage` 的三级兜底）。那类失败**每一步都是设计的正常一环**，报给用户纯属噪音
+          // （2026-10-03 实测：视频照常播、报告里却攒了 6 条 CDN 403；2026-10-04 又在小红书
+          // 详情页上重演一次：14 条过期图 URL）。真失败时由该组件自己主动报一条。
           if (t.closest?.('[data-self-healing]')) {
             log('[resource:self-healing] ' + src, { quiet: true })
             return
           }
-          resourceErrors += 1
-          const quiet = resourceErrors < 3
-          log('[resource] ' + src, { quiet })
-          if (!quiet) {
-            // ≥3 次：当作真实故障报一条（此前已经记过的噪声不再重复计入）
-            reportUserError('资源加载', `${src}（连续 ${resourceErrors} 次失败）`,
-                            { kind: 'resource' })
-          }
+          const host = new URL(src, 'http://local.invalid').host || src
+          const n = (resourceFailures.get(host) ?? 0) + 1
+          resourceFailures.set(host, n)
+          log('[resource] ' + src, { quiet: n < 3 })
+          reportResourceFailure(src, n)
         }
       }
     },

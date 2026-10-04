@@ -50,6 +50,18 @@ afterEach(() => {
 })
 
 describe('ProxyImage 的四级回落（A0）', () => {
+  it('每一级都挂 `data-self-healing`（否则整页过期图会弹一份报告，devlog/318）', () => {
+    // `bootDiag` 只对 `closest('[data-self-healing]')` 的资源失败"只记账不弹面板"。
+    // 本组件的回落链**每一步失败都是设计的正常一环**；没有这个标记时，一页 7 张签名过期的图
+    // （直连+代理各失败一次）会被算成 14 次"系统性资源故障" ⇒ 用户看到一份 14 条的报错报告。
+    render({ src: 'https://i0.hdslb.com/a.jpg', fallback: <span>占位</span> })
+    expect(img()?.getAttribute('data-self-healing'), '直连那一级').toBe('1')
+    void fail()
+    expect(img()?.getAttribute('data-self-healing'), '代理那一级').toBe('1')
+    void fail()
+    expect(host.querySelector('[data-self-healing]'), '占位那一级').toBeTruthy()
+  })
+
   it('没有 fallbackSrc ⇒ 保持原来的两级：直连 → 代理 → 占位', () => {
     render({ src: 'https://i0.hdslb.com/a.jpg', fallback: <span>占位</span> })
     expect(stage()).toBe('direct')

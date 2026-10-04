@@ -8,8 +8,9 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
 import {
-  buildReportMarkdown, clearReports, issueUrl, redact, reportEntries, reportEnv,
-  reportFromBootLine, reportTitle, reportUserError, setReportEnv, subscribeReport,
+  RESOURCE_REPORT_AT, buildReportMarkdown, clearReports, issueUrl, redact, reportEntries,
+  reportEnv, reportFromBootLine, reportResourceFailure, reportTitle, reportUserError,
+  resourceHost, setReportEnv, subscribeReport,
 } from './problemReport'
 
 beforeEach(() => {
@@ -56,6 +57,37 @@ describe('去重与分级', () => {
     const rows = reportEntries()
     expect(rows).toHaveLength(1)
     expect(rows[0].reportable).toBe(false)
+  })
+
+  it('资源失败按**主机**归并、到阈值才报（一页十几张过期图不该变成十几条报告）', () => {
+    // 真事故（devlog/318）：小红书笔记详情里 7 张签名过期的图，每张走"直连失败 → 代理失败"
+    // 两级 = 14 次 —— 旧实现用**全局**计数、且每条都拼上完整 URL（永远去重不了）
+    // ⇒ 弹出一份 14 条 `[resource]` 的报告，计数还是 51…64 这种看不出所以然的序数。
+    const a = 'http://sns-webpic-qc.xhscdn.com/t/1/notes_pre_post/a!nd_dft_wlteh_webp_3'
+    const b = 'http://sns-webpic-qc.xhscdn.com/t/1/notes_pre_post/b!nd_dft_wlteh_webp_3'
+    const p = 'http://127.0.0.1:49997/img-proxy?url=http%3A%2F%2Fsns-webpic-qc.xhscdn.com%2Fa'
+
+    expect(resourceHost(a)).toBe('sns-webpic-qc.xhscdn.com')
+    // 同一主机：前两次只记账
+    reportResourceFailure(a, 1)
+    reportResourceFailure(b, 2)
+    expect(reportEntries(), '没到阈值不该有条目').toHaveLength(0)
+    // 第三次：报一条，**detail 只有主机名**（下次同一主机还会命中同一条）
+    reportResourceFailure(a, RESOURCE_REPORT_AT)
+    let rows = reportEntries()
+    expect(rows).toHaveLength(1)
+    expect(rows[0].detail).toBe('sns-webpic-qc.xhscdn.com')
+    expect(rows[0].reportable, '系统性资源故障要惊动用户').toBe(true)
+    // 第四个主机各算各的（代理那条是另一个主机）
+    reportResourceFailure(p, 1)
+    reportResourceFailure(p, 2)
+    reportResourceFailure(p, 3)
+    rows = reportEntries()
+    expect(rows).toHaveLength(2)
+    expect(rows.map((r) => r.detail)).toContain('127.0.0.1:49997')
+    // 同主机的后续失败不再新增条目（报告里一行就够，逐条 URL 在启动时间线里）
+    reportResourceFailure(a, RESOURCE_REPORT_AT + 1)
+    expect(reportEntries()).toHaveLength(2)
   })
 
   it('Promise 拒绝会惊动用户（"查看原文"那次就是这条）', () => {

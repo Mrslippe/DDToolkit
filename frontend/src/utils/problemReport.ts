@@ -116,6 +116,36 @@ export function reportUserError(
 }
 
 /**
+ * 资源失败**按主机**归并 + 阈值（2026-10-04，devlog/318）。
+ *
+ * 原先 `bootDiag` 用一个**全局**计数器："资源失败 ≥3 次就报一条"，而且每条都带上
+ * `（连续 N 次失败）` —— 后果（用户 2026-10-04 报的"打开小红书帖子详情报错"）：
+ * 一个笔记详情页里 7 张签名过期的图、每张走"直连失败 → 代理失败"两级 = 14 次
+ * ⇒ 报告里 **14 条** `[resource]`，计数还是 51…64 这种看不出所以然的全局序数。
+ *
+ * 现在的口径：**按主机计数**，同一个主机（同一类故障）到 `RESOURCE_REPORT_AT` 次才报一条，
+ * 且 `detail` 只用主机名（**稳定 ⇒ 去重**，面板显示成 `×N`）。真正的逐条 URL 仍在
+ * `bootDiag` 的启动时间线里（报告会自动附上），排查不缺材料。
+ */
+export const RESOURCE_REPORT_AT = 3
+
+/** 从资源 URL 取主机（相对路径/坏 URL 都退化成原串，用作 key 也够） */
+export function resourceHost(src: string): string {
+  try {
+    return new URL(src, 'http://local.invalid').host || src
+  } catch {
+    return src
+  }
+}
+
+/** 记一次资源失败（`bootDiag` 调）。`count` = 这个主机**累计**失败次数（含本次）。 */
+export function reportResourceFailure(src: string, count: number): void {
+  // 只在**跨过阈值那一次**报（同主机后续失败不再刷条目：报告里一行 + 时间线里有全部）
+  if (count !== RESOURCE_REPORT_AT) return
+  reportUserError('资源加载', resourceHost(src), { kind: 'resource' })
+}
+
+/**
  * `bootDiag` 的行 → 结构化条目（保持"捕获"与"呈现"解耦）。
  *
  * 行形如 `[promise] Promise shell:allow-open not allowed…`；解析不出类别时按 `console` 记。

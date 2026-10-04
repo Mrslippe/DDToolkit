@@ -88,7 +88,8 @@ export default function ProxyImage({
   if (!current) {
     if (fallback !== undefined) {
       return (
-        <span className={fallbackClassName ?? className} style={style} data-render-src={renderSrc}>
+        <span className={fallbackClassName ?? className} style={style}
+              data-render-src={renderSrc} data-self-healing="1">
           {fallback}
         </span>
       )
@@ -96,6 +97,7 @@ export default function ProxyImage({
     return (
       <div
         className={className}
+        data-self-healing="1"
         style={{
           width: width ?? style?.width ?? 120,
           height: height ?? style?.height ?? 120,
@@ -119,6 +121,14 @@ export default function ProxyImage({
       alt={alt}
       className={className}
       data-render-src={renderSrc}
+      /**
+       * ⚠️ **必须挂这个标记**（2026-10-04，devlog/318）：`bootDiag` 只在
+       * `closest('[data-self-healing]')` 时把资源失败**只记账不弹面板**。本组件的
+       * 直连 → `/img-proxy` → 本地副本 → 占位**每一步失败都是设计的正常一环**，
+       * 没有这个标记时，一个笔记详情页里 7 张签名过期的图会算成 14 次"系统性资源故障"
+       * ⇒ 弹一份 14 条 `[resource]` 的报告（用户 2026-10-04 报的"打开小红书帖子详情报错"）。
+       */
+      data-self-healing="1"
       style={{
         width,
         height,

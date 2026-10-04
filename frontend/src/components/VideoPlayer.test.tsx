@@ -176,6 +176,29 @@ describe('VideoPlayer', () => {
     expect(paused).toBe(false)
   })
 
+  it('播完**不再转圈**：尾帧上只留"重新播放"（用户口径，devlog/318）', async () => {
+    // 「视频播放完毕之后依旧会一直显示缓冲中转圈的图标，并且还在下面叠加了一个更大的播放按钮；
+    //   我想要的效果是直接冻结在尾帧，并且用重新播放的按钮替代转圈缓冲按钮」
+    render()
+    const v = el()
+    Object.defineProperty(v, 'duration', { value: 30, configurable: true })
+    await act(async () => {
+      v.dispatchEvent(new Event('loadedmetadata'))
+      v.dispatchEvent(new Event('play'))
+      v.dispatchEvent(new Event('waiting'))       // 尾帧前缓冲吃完 ⇒ 转圈亮起（真机就是这样）
+      await Promise.resolve()
+    })
+    expect(host.querySelector('.vp-spin'), '饿住时该转').toBeTruthy()
+
+    await act(async () => {
+      v.dispatchEvent(new Event('ended'))
+      await Promise.resolve()
+    })
+    expect(host.querySelector('.vp-replay'), '尾帧上给"重新播放"').toBeTruthy()
+    expect(host.querySelector('.vp-spin'), '转圈要在播完那一刻**立刻**消失（不走 450ms 迟滞）')
+      .toBeNull()
+  })
+
   it('播完 ⇒ 冻结在尾帧 + 中央"重新播放"，点击从头播（devlog/317）', async () => {
     render()
     const v = el()
