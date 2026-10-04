@@ -152,6 +152,12 @@ async def pin_post_media(db: Session, post: Post,
     if not bool(getattr(settings, "MEDIA_PIN_ENABLED", True)):
         out["reason"] = "开关关着"
         return out
+    # 已归档的帖**不固化**：保护名单只认未归档帖（`assets._referenced_keys`），
+    # 所以刚下下来的字节会被下一次归档清理立刻删掉 —— 白下一趟。重取本身照常
+    # （用户这会儿正看着这一帖，新地址照样能画出来），只是不落盘。
+    if bool(getattr(post, "is_archived", False)):
+        out["reason"] = "帖子已归档（按口径不固化：归档即失去保护，下次清理会删）"
+        return out
     per_round, max_bytes, want_video = _caps()
     wanted = _wanted_for_post(post.id, post.body_json, video=want_video)
     return await _pin_items(db, wanted, per_round=per_round, max_bytes=max_bytes, client=client)

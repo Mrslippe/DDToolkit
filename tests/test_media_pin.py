@@ -317,6 +317,21 @@ def test_pin_post_media_pins_only_that_post(db, data_dir):
     assert client.calls == [], "已经固化过还发请求 = 稳定键命中没生效"
 
 
+def test_pin_post_media_skips_archived_posts(db, data_dir):
+    """已归档的帖**一个请求都不发**：保护名单只认未归档帖 ⇒ 下了也会被下次清理删掉。
+
+    重取本身照常（用户正开着这一帖，新地址照样能画出来），只是不落盘。
+    """
+    acc = _mk_acc(db)
+    p = _mk_post(db, acc, "p-arch", images=["https://x.hdslb.com/old.jpg"], archived=True)
+    client = _CountingClient()
+
+    out = asyncio.run(mp.pin_post_media(db, p, client=client))
+    assert client.calls == [], "归档帖不该下载（下完就被归档清理删掉，纯属白跑）"
+    assert out["images"] == 0 and "归档" in out["reason"]
+    assert _files(data_dir, assets.KIND_POST_IMAGE) == []
+
+
 def test_post_outs_carry_images_local_in_order(db):
     """⑦ `images_local` 与 `body_json.images` **同序同长**（没有副本的位置是空串）。"""
     from app.routers.vtuber import _post_outs

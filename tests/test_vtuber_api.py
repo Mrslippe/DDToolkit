@@ -1924,6 +1924,45 @@ def test_refresh_media_route_updates_urls_and_pins(monkeypatch, client):
     assert "秒后再试" in r2.json()["detail"]
 
 
+def test_refresh_media_gate_knows_xiaohongshu(monkeypatch, client):
+    """真实事故（2026-10-04，devlog/320）：小红书帖的重取被闸门当成**未知平台** ⇒ 永远 403。
+
+    真机日志（14:58:16 / 14:58:30）：`前端 [media] 重取媒体失败 post#4992：未知平台：…显式决定
+    匿名能不能抓` —— 用户点了两帖，两次都是这句话。
+
+    判据：缺 Cookie ⇒ 403 **且理由照着能做**（说清去哪配、缺哪两个键）；配齐 ⇒ 不再是 403
+    （走到平台层，成败由上游决定）。
+    """
+    from app.routers.vtuber import _refresh_at
+    from app.services.xhs_auth import xhs_auth_manager
+
+    _refresh_at.clear()
+    db = TestingSession()
+    try:
+        p = Post(platform="xiaohongshu", platform_uid="u-gate", platform_post_id="g1",
+                 type="note", body_json='{"text": "正文", "images": []}')
+        db.add(p)
+        db.commit()
+        pid = p.id
+    finally:
+        db.close()
+
+    monkeypatch.setattr(xhs_auth_manager, "cookie", "")
+    r = client.post(f"/posts/{pid}/refresh-media")
+    assert r.status_code == 403, r.text
+    detail = r.json()["detail"]
+    assert "未知平台" not in detail, "又退回那句给开发者看的话了"
+    assert "a1" in detail and "设置" in detail, f"拒绝理由要能照着做：{detail}"
+
+    # 配齐 Cookie（a1 + web_session）⇒ 闸门放行；平台层拿到的是假 fetcher，如实 502
+    _install_fake_fetcher(monkeypatch, enrich=None)
+    monkeypatch.setattr(xhs_auth_manager, "cookie", "a1=1900abcdef; web_session=xyz")
+    _refresh_at.clear()
+    r2 = client.post(f"/posts/{pid}/refresh-media")
+    assert r2.status_code == 502, r2.text
+    assert "没能取到新的媒体地址" in r2.json()["detail"]
+
+
 def test_refresh_media_route_is_honest_about_what_it_cannot_do(monkeypatch, client):
     """三类如实拒绝：帖不存在 **404** / 未登录 **403** / 平台没有详情补全 **409**。"""
     from app.routers.vtuber import _refresh_at

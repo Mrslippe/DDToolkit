@@ -202,8 +202,9 @@ describe('详情页 · 打开时重取（devlog/320）', () => {
     expect(hasSrc(`/api/${LOCAL}`), '落地了本地副本却没兜住').toBe(true)
   })
 
-  it('重取失败 ⇒ **不打扰用户**：详情照旧、只留一行诊断', async () => {
-    refreshMedia.mockRejectedValue(new Error('429 太频繁'))
+  it('重取失败 ⇒ 照旧显示详情，但**要说一句为什么**（不许让用户对着灰块猜）', async () => {
+    refreshMedia.mockRejectedValue(
+      new Error('小红书内容需要 Cookie（至少 a1 与 web_session）：没配置时我们不发起请求 —— 补救：设置 → 登录 → 小红书'))
     act(() => root.render(
       <PostDetailDrawer post={post({ images_local: [''] })} open onClose={() => {}} />))
 
@@ -212,8 +213,30 @@ describe('详情页 · 打开时重取（devlog/320）', () => {
     await settle()
 
     expect(document.body.textContent, '详情页不该因为重取失败就空掉').toContain('标题')
+    const hint = document.body.querySelector('[data-media-hint]')
+    expect(hint?.textContent, '失败原因没露出来 —— 用户只会看到灰块').toContain('Cookie')
+    expect(hint?.textContent).toContain('设置')
     expect(clientLog).toHaveBeenCalled()
     expect(String(clientLog.mock.calls[0][0])).toContain('重取媒体失败')
+  })
+
+  it('换帖后不留上一条的重取失败提示（提示与帖同生命周期）', async () => {
+    refreshMedia.mockRejectedValue(new Error('小红书内容需要 Cookie'))
+    act(() => root.render(
+      <PostDetailDrawer post={post({ images_local: [''] })} open onClose={() => {}} />))
+    failOnce()
+    failOnce()
+    await settle()
+    expect(document.body.querySelector('[data-media-hint]')).toBeTruthy()
+
+    act(() => root.render(
+      <PostDetailDrawer
+        post={post({ id: 2, platform_post_id: 'n2',
+                     body_json: JSON.stringify({ text: '正文', images: [{ url: OTHER_REMOTE }] }) })}
+        open onClose={() => {}} />))
+
+    expect(document.body.querySelector('[data-media-hint]'), '上一条的失败提示漏到下一条了')
+      .toBeNull()
   })
 
   it('换了帖就把重取回来的那份丢掉（上一条的地址不许漏到下一条）', async () => {

@@ -124,7 +124,7 @@ retire-when: HTTP 层换框架，或路由整体重排
 | GET `/posts/{platform}/{uid}/stats` | 统计概览 |
 | POST `/posts` | 建帖；三元组重复 409 |
 | PUT `/post/{post_id}` / DELETE `/post/{post_id}` | 更帖 / 删帖；404 |
-| POST `/posts/{post_id}/refresh-media` | **重取这一帖的媒体地址**（devlog/320，批次 3）：本地没有固化副本而远端图床签名过期时的备选路径（详情页四级回落全失败时**一帖只调一次**）。走平台自己的详情补全（`BasePlatform.enrich`），写回**只动 `cover_url`/`body_json`/`raw_json`/`stats_json`**（标题/发布时间不动 ⇒ 列表顺序不因重取而变），随后顺手固化一次。如实分级：404 帖不存在 / **403 未登录**（内容接口闸门）/ **409 平台没有详情补全**（如 B站视频帖）/ **429 同帖 30s 内重来**（图床地址限时，重取太频只会白跑）/ 502 上游失败。响应 `{ok, pinned, post}`——`post` 是最新的一整帖，前端直接就地替换 |
+| POST `/posts/{post_id}/refresh-media` | **重取这一帖的媒体地址**（devlog/320，批次 3）：本地没有固化副本而远端图床签名过期时的备选路径（详情页四级回落全失败时**一帖只调一次**）。走平台自己的详情补全（`BasePlatform.enrich`），写回**只动 `cover_url`/`body_json`/`raw_json`/`stats_json`**（标题/发布时间不动 ⇒ 列表顺序不因重取而变），随后顺手固化一次（**已归档的帖不固化** —— 保护名单只认未归档帖，下了也会被归档清理删掉）。如实分级：404 帖不存在 / **403 该平台未就绪**（内容接口闸门：B站要登录、微博要登录、**小红书要 Cookie**，理由由 `capabilities` 下发）/ **409 平台没有详情补全**（如 B站视频帖）/ **429 同帖 30s 内重来**（图床地址限时，重取太频只会白跑）/ 502 上游失败。响应 `{ok, pinned, post}`——`post` 是最新的一整帖，前端直接就地替换 |
 
 **播放（B站取流，C1+C2，devlog/289）**
 
@@ -141,7 +141,7 @@ retire-when: HTTP 层换框架，或路由整体重排
 
 | 方法 + 路径 | 说明 |
 |---|---|
-| GET `/capabilities` | 本机能力矩阵：`features`（三态 `full`/`degraded`/`requires_login` + 用户说明 + 实测依据）/ `limited` / `wbi` / `measured_at`。前端据此**标注**受限功能而不是隐藏（devlog/086） |
+| GET `/capabilities` | 本机能力矩阵：`features`（三态 `full`/`degraded`/`requires_login` + 用户说明 + 实测依据）/ `limited` / `wbi` / `measured_at` / 三家的登录态（`bilibili_logged_in` / `weibo_logged_in` / **`xiaohongshu_logged_in`** = Cookie 配齐没有）。前端据此**标注**受限功能而不是隐藏（devlog/086；小红书那条 2026-10-04 才补上，`devlog/321`） |
 | GET/POST `/vtuber/fetch` | 手动全量抓账号信息；自动档在跑时**抢占**，仅另一个手动任务在跑才 skipped |
 | GET/POST `/vtuber/{id}/fetch` | 抓单个 V 账号信息（同样可抢占自动档） |
 | POST `/vtuber/fetch-posts?name=&platform=&video_pages=&dynamics_pages=&full=` | 按名字抓帖子（-1 全量；`full=true` 后台执行）；**抓前先跑归档规则**。内容接口 → 未登录 **403** |

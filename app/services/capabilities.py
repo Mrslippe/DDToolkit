@@ -39,6 +39,7 @@ from dataclasses import asdict, dataclass
 from app.services.auth import auth_manager
 from app.services import wbi
 from app.services.weibo_auth import weibo_auth_manager
+from app.services.xhs_auth import xhs_auth_manager
 
 # 三态（前端按它渲染角标；不要新增第四种而不更新前端）
 FULL = "full"                      # 完整可用（与登录态无差别）
@@ -113,19 +114,30 @@ FEATURES: tuple[Feature, ...] = (
         login_note="已登录：微博名单正常参与动态轮次",
         evidence="匿名 mymblog → 302 passport.weibo.com/visitor，2026-09-15",
     ),
+    Feature(
+        id="xhs_content", label="小红书内容（笔记列表 / 详情重取）", platform="xiaohongshu",
+        anon_state=REQUIRES_LOGIN,
+        anon_note="小红书接口必须带签名（`a1` + `web_session`）：没配置 Cookie 时我们"
+                  "**不发起**请求 —— 笔记列表抓不到、详情里的图也没法重取。"
+                  "补救：设置 → 登录 → 小红书，粘贴浏览器里的整条 Cookie",
+        login_note="已配置 Cookie：笔记列表与详情重取可用（重取到的图会顺手固化）",
+        evidence="未配 Cookie 时签名器直接抛 Missing 'a1'（`services/platforms/signing.py`）；"
+                 "且图床地址是限时签名（库内 181 个 URL 签于 10-03 00:50，10-04 13:54 全部 403），"
+                 "2026-10-04",
+    ),
 )
 
 
-def _login_states(bili: bool, weibo: bool) -> dict[str, bool]:
+def _login_states(bili: bool, weibo: bool, xhs: bool = False) -> dict[str, bool]:
     """平台 → 该平台的登录态。**唯一真源**：新增平台必须在这里加一条。
 
     `tests/test_platform_branches.py::test_login_state_mapping_covers_every_feature_platform`
     盯着它：`FEATURES` 里出现而这里没有的平台会判红（逼人表态，而不是悄悄读成别家）。
     """
-    return {"bilibili": bili, "weibo": weibo}
+    return {"bilibili": bili, "weibo": weibo, "xiaohongshu": xhs}
 
 
-def _logged_in(platform: str | None, bili: bool, weibo: bool) -> bool:
+def _logged_in(platform: str | None, bili: bool, weibo: bool, xhs: bool = False) -> bool:
     """`FEATURES` 里那一项依赖的登录态是否就绪。
 
     ⚠️ 2026-09-27（devlog/228）：以前是 `return bili if platform == "bilibili" else weibo`
@@ -135,19 +147,21 @@ def _logged_in(platform: str | None, bili: bool, weibo: bool) -> bool:
     """
     if platform is None:
         return True
-    return _login_states(bili, weibo).get(platform, False)
+    return _login_states(bili, weibo, xhs).get(platform, False)
 
 
-def snapshot(bili_logged_in: bool | None = None, weibo_logged_in: bool | None = None) -> dict:
-    """当前能力快照（给 `GET /capabilities`）。两个登录态参数只为可测性，默认读真实状态。"""
+def snapshot(bili_logged_in: bool | None = None, weibo_logged_in: bool | None = None,
+             xhs_logged_in: bool | None = None) -> dict:
+    """当前能力快照（给 `GET /capabilities`）。三个登录态参数只为可测性，默认读真实状态。"""
     bili = auth_manager.is_logged_in if bili_logged_in is None else bili_logged_in
     weibo = ((weibo_auth_manager.is_logged_in and not weibo_auth_manager.needs_login)
              if weibo_logged_in is None else weibo_logged_in)
+    xhs = xhs_auth_manager.is_configured if xhs_logged_in is None else xhs_logged_in
 
     items: list[dict] = []
     limited: list[dict] = []
     for f in FEATURES:
-        ready = _logged_in(f.platform, bili, weibo)
+        ready = _logged_in(f.platform, bili, weibo, xhs)
         state = FULL if ready else f.anon_state
         note = (f.login_note or f.anon_note) if ready else f.anon_note
         row = {**asdict(f), "state": state, "note": note}
@@ -157,6 +171,7 @@ def snapshot(bili_logged_in: bool | None = None, weibo_logged_in: bool | None = 
     return {
         "bilibili_logged_in": bili,
         "weibo_logged_in": weibo,
+        "xiaohongshu_logged_in": xhs,
         "wbi": wbi.wbi_status(),
         "features": items,
         "limited": limited,
@@ -177,6 +192,7 @@ PROBE_MAP: dict[str, tuple[str, ...]] = {
     "browse_local": (),
     "archive_views": (),
     "weibo_content": (),             # 微博匿名实测在 capabilities 的 evidence 里，不在本矩阵
+    "xhs_content": (),               # 小红书不在 B 站矩阵里（Cookie 口径见 xhs_auth.status）
 }
 
 
@@ -195,6 +211,14 @@ WEIBO_CONTENT_REASON = (
     "抓微博内容需要微博登录（登录态失效或被风控时整条名单跳过）"
 )
 
+#: 小红书（2026-10-04，devlog/320 的真实事故）：这条以前**没有** ——
+#: `content_fetch_allowed("xiaohongshu")` 落到"未知平台"分支 ⇒ 详情的"重取媒体"对小红书
+#: **永远 403**，而且理由是一句给开发者看的话（用户点了两帖，日志里两条这个）。
+XHS_CONTENT_REASON = (
+    "小红书内容需要 Cookie（至少 a1 与 web_session）：没配置时我们**不发起**请求 —— "
+    "签名器会直接报 Missing 'a1'。补救：设置 → 登录 → 小红书，粘贴浏览器里的整条 Cookie"
+)
+
 UNKNOWN_PLATFORM_REASON = (
     "未知平台：内容抓取**没有**在这里表态（新增平台要在 "
     "`app/services/capabilities.py::content_fetch_allowed` 里显式决定匿名能不能抓）"
@@ -202,11 +226,12 @@ UNKNOWN_PLATFORM_REASON = (
 
 
 def _content_fetch_allowed_with(
-    platform: str, *, bili=None, weibo=None,
+    platform: str, *, bili=None, weibo=None, xhs=None,
 ) -> tuple[bool, str]:
     """`content_fetch_allowed` 的**可注入版本**（用例注入假登录态；生产走下面那个）。"""
     bili = auth_manager if bili is None else bili
     weibo = weibo_auth_manager if weibo is None else weibo
+    xhs = xhs_auth_manager if xhs is None else xhs
     if platform == "bilibili":
         if bili.is_logged_in:
             return True, ""
@@ -215,6 +240,10 @@ def _content_fetch_allowed_with(
         if weibo.is_logged_in and not weibo.needs_login:
             return True, ""
         return False, WEIBO_CONTENT_REASON
+    if platform == "xiaohongshu":
+        if xhs.is_configured:
+            return True, ""
+        return False, XHS_CONTENT_REASON
     return False, UNKNOWN_PLATFORM_REASON
 
 

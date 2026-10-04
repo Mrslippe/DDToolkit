@@ -824,6 +824,8 @@ export interface CapabilityLimit {
 export interface Capabilities {
   bilibili_logged_in: boolean
   weibo_logged_in: boolean
+  /** 小红书：**Cookie 配齐了没有**（a1 + web_session，不是"探测过有效"，见 `xhs_auth.status`） */
+  xiaohongshu_logged_in: boolean
   /** WBI 密钥状态；`anonymous=true` 表示密钥来自匿名 nav（未登录也能搜） */
   wbi: { cached: boolean; anonymous: boolean | null }
   features: CapabilityFeature[]

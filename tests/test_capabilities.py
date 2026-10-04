@@ -68,8 +68,9 @@ def test_snapshot_reports_limits_per_login_state():
     assert "fetch_posts" not in limited2, "登录后内容抓取必须解除限制"
     assert "weibo_content" in limited2, "微博未登录时仍应受限（微博匿名不可用）"
 
-    both = C.snapshot(bili_logged_in=True, weibo_logged_in=True)
-    assert both["limited"] == [], f"两平台都登录后不该还有受限项：{both['limited']}"
+    # 三家的登录态**各算各的**（devlog/228 的口径，含 10-04 补上的小红书）
+    both = C.snapshot(bili_logged_in=True, weibo_logged_in=True, xhs_logged_in=True)
+    assert both["limited"] == [], f"三家都就绪后不该还有受限项：{both['limited']}"
 
 
 def test_snapshot_rows_carry_state_and_note():
@@ -160,3 +161,42 @@ def test_weibo_available_requires_cookie_and_no_invalid_flag(monkeypatch):
     monkeypatch.setattr(weibo_auth_manager, "_valid", True)
     monkeypatch.setattr(weibo_auth_manager, "cookie", "")        # 没 cookie
     assert C.weibo_available() is False
+
+
+def test_content_fetch_gate_knows_xiaohongshu(monkeypatch):
+    """小红书（2026-10-04 真实事故，devlog/320）：这条闸门以前**没有**小红书分支 ⇒
+    `content_fetch_allowed("xiaohongshu")` 落到"未知平台"，把详情的"重取媒体"永远挡在 403，
+    而且理由是一句给开发者看的话（用户点了两帖，日志里两条）。
+
+    判据：缺 Cookie ⇒ 拒绝**且说清怎么补救**；配齐 ⇒ 放行。
+    """
+    from app.services.xhs_auth import xhs_auth_manager
+
+    monkeypatch.setattr(xhs_auth_manager, "cookie", "")
+    allowed, why = C.content_fetch_allowed("xiaohongshu")
+    assert allowed is False
+    assert "未知平台" not in why, "又退回那句给开发者看的话了"
+    assert "a1" in why and "设置" in why, f"拒绝理由要能照着做：{why}"
+
+    monkeypatch.setattr(xhs_auth_manager, "cookie", "a1=1900abcdef; web_session=xyz")
+    assert C.content_fetch_allowed("xiaohongshu") == (True, ""), \
+        "配了 Cookie 还挡着 ⇒ 笔记详情永远重取不了"
+
+    # 只配一半（缺 a1 时签名器会直接报 Missing 'a1'）⇒ 仍然如实拒绝
+    monkeypatch.setattr(xhs_auth_manager, "cookie", "web_session=xyz")
+    assert C.content_fetch_allowed("xiaohongshu")[0] is False
+
+
+def test_snapshot_reports_xiaohongshu_cookie_state(monkeypatch):
+    """`/capabilities` 要如实说小红书就差一个 Cookie（而不是整条不出现）。"""
+    from app.services.xhs_auth import xhs_auth_manager
+
+    monkeypatch.setattr(xhs_auth_manager, "cookie", "")
+    snap = C.snapshot(bili_logged_in=True, weibo_logged_in=True)
+    assert snap["xiaohongshu_logged_in"] is False
+    xhs = next(r for r in snap["features"] if r["id"] == "xhs_content")
+    assert xhs["state"] == C.REQUIRES_LOGIN and "Cookie" in xhs["note"]
+
+    monkeypatch.setattr(xhs_auth_manager, "cookie", "a1=1900abcdef; web_session=xyz")
+    snap2 = C.snapshot(bili_logged_in=True, weibo_logged_in=True)
+    assert snap2["xiaohongshu_logged_in"] is True and snap2["limited"] == []

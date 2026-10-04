@@ -3,6 +3,7 @@ import type { Capabilities, CapabilityFeature } from '../api/types'
 import {
   FETCH_POSTS,
   WEIBO_CONTENT,
+  XHS_CONTENT,
   availableSummary,
   featureOf,
   isDegraded,
@@ -26,6 +27,7 @@ const feature = (over: Partial<CapabilityFeature>): CapabilityFeature => ({
 const anonCaps = (): Capabilities => ({
   bilibili_logged_in: false,
   weibo_logged_in: false,
+  xiaohongshu_logged_in: false,
   wbi: { cached: true, anonymous: true },
   features: [
     feature({ id: 'browse_local', label: '浏览与搜索已归档内容', state: 'full' }),
@@ -34,11 +36,16 @@ const anonCaps = (): Capabilities => ({
               anon_state: 'requires_login', state: 'requires_login', note: '需要登录 B 站' }),
     feature({ id: WEIBO_CONTENT, label: '微博内容', platform: 'weibo',
               anon_state: 'requires_login', state: 'requires_login', note: '需要微博登录' }),
+    feature({ id: XHS_CONTENT, label: '小红书内容', platform: 'xiaohongshu',
+              anon_state: 'requires_login', state: 'requires_login',
+              note: '没配置 Cookie ⇒ 详情里的图也没法重取' }),
   ],
   limited: [
     { id: 'account_info', label: '账号信息', state: 'degraded', note: '会被间歇性风控' },
     { id: FETCH_POSTS, label: '抓取投稿与动态内容', state: 'requires_login', note: '需要登录 B 站' },
     { id: WEIBO_CONTENT, label: '微博内容', state: 'requires_login', note: '需要微博登录' },
+    { id: XHS_CONTENT, label: '小红书内容', state: 'requires_login',
+      note: '没配置 Cookie ⇒ 详情里的图也没法重取' },
   ],
   measured_at: '2026-09-15',
 })
@@ -65,10 +72,19 @@ describe('限制查询', () => {
 
 describe('文案', () => {
   it('顶栏一句话：未登录时带前缀，全可用时为空串（不渲染入口）', () => {
-    expect(limitsSummary(anonCaps())).toBe('未登录 · 3 项受限')
+    expect(limitsSummary(anonCaps())).toBe('未登录 · 4 项受限')
     const allGood = { ...anonCaps(), limited: [], bilibili_logged_in: true, weibo_logged_in: true }
     expect(limitsSummary(allGood)).toBe('')
     expect(limitsSummary(null)).toBe('')
+  })
+
+  it('小红书的限制也要出现在清单里（2026-10-04：矩阵里以前根本没这条）', () => {
+    const caps = anonCaps()
+    expect(isLoginRequired(caps, XHS_CONTENT)).toBe(true)
+    expect(limitText(caps, XHS_CONTENT)).toContain('Cookie')
+    // 只差小红书时，顶栏还得说一句"有受限项"（别因为 B 站登录了就当没事）
+    const biliOnly = { ...caps, bilibili_logged_in: true, weibo_logged_in: true }
+    expect(limitsSummary(biliOnly)).toBe('4 项受限')
   })
 
   it('登录按钮文案随平台登录态变化', () => {

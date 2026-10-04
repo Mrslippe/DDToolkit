@@ -190,15 +190,17 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
    * 向上游重新要一次媒体地址 —— 图床签名是平台签发的限时地址，只有重取才能拿到新的。
    *
    * 三条纪律：① **一帖只试一次**（`refreshedRef`，否则 N 张坏图会把上游打爆）；
-   * ② 失败**不打扰用户**（详情页照旧显示占位，只记一行诊断）；
+   * ② 失败**要说一句**（`hint`：403 的原文就是"去哪儿配 Cookie"，只写日志等于让用户对着灰块猜）；
    * ③ 回来的是**新的一整帖**（端点里已经顺手固化过），直接替换渲染。
    */
+  const [hint, setHint] = useState<{ id: number; text: string } | null>(null)
   const onMediaDead = useCallback(() => {
     if (!shownId || refreshedRef.current.has(shownId)) return
     refreshedRef.current.add(shownId)
     void api.refreshMedia(shownId)
       .then((r) => { if (r?.post) setPatched({ id: shownId, post: r.post }) })
       .catch((e: Error) => {
+        setHint({ id: shownId, text: e?.message || String(e) })
         void api.clientLog(`[media] 重取媒体失败 post#${shownId}：${e?.message ?? e}`)
           .catch(() => { /* 诊断失败无所谓 */ })
       })
@@ -401,6 +403,14 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
                 ))}
               </div>
             </div>
+          )}
+
+          {/* 重取失败的那句话（403 的原文就是"去哪儿配 Cookie"）——
+              只写日志等于让用户对着灰块猜；这条只在**真的试过重取且失败**时出现 */}
+          {hint && hint.id === shownId && (
+            <p className="mt-2 text-xs text-muted-foreground" data-media-hint="1">
+              图片没能加载，重取也没成功：{hint.text}
+            </p>
           )}
 
           {/* 附加字段 */}

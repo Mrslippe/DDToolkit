@@ -67,6 +67,13 @@ class _Auth:
         self.needs_login = needs_login
 
 
+class _XhsAuth:
+    """小红书的口径不是 `is_logged_in` 而是"Cookie 配齐了没有"（`xhs_auth.status`）。"""
+
+    def __init__(self, configured: bool):
+        self.is_configured = configured
+
+
 def test_content_fetch_gate_is_per_platform():
     """B 的判据：**只有微博登录**时，微博内容抓取必须放行、B 站必须拦住。"""
     allowed, why = C._content_fetch_allowed_with(
@@ -75,10 +82,22 @@ def test_content_fetch_gate_is_per_platform():
     allowed, why = C._content_fetch_allowed_with(
         "bilibili", bili=_Auth(False), weibo=_Auth(True))
     assert allowed is False and "B 站" in why
-    # 未知平台：保守拒绝，且原因要说清"没表态"
+    # 未知平台：保守拒绝，且原因要说清"没表态"。
+    # ⚠️ 2026-10-04（devlog/320）：这里以前拿 **xiaohongshu** 当"未知平台"的样本 ——
+    #    它其实早就是已接入平台（有 fetcher、有登录卡、库里有帖），于是那句"未知平台"
+    #    被真的端到端撞上了（详情重取对小红书永远 403，用户日志里两条）。样本换成
+    #    **真的没接**的平台，小红书另按自己的 Cookie 口径断言。
     allowed, why = C._content_fetch_allowed_with(
-        "xiaohongshu", bili=_Auth(True), weibo=_Auth(True))
+        "douyin", bili=_Auth(True), weibo=_Auth(True), xhs=_XhsAuth(True))
     assert allowed is False and "没有" in why
+
+    # 小红书：**只看自己的 Cookie**（与 B 站/微博登录态无关）
+    assert C._content_fetch_allowed_with(
+        "xiaohongshu", bili=_Auth(False), weibo=_Auth(False), xhs=_XhsAuth(True))[0] is True, \
+        "配了 Cookie 却还被别家的登录态拦着"
+    allowed, why = C._content_fetch_allowed_with(
+        "xiaohongshu", bili=_Auth(True), weibo=_Auth(True), xhs=_XhsAuth(False))
+    assert allowed is False and "Cookie" in why, f"没配 Cookie 要如实说清：{why}"
 
 
 def test_require_content_fetch_uses_the_requested_platform(monkeypatch):

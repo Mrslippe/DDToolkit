@@ -1,9 +1,9 @@
 ---
 doc: backend/auth-capabilities
 class: module
-scope: 登录与凭据（B 站 / 微博）、未登录能力矩阵与内容抓取闸门、风控与节流判定
+scope: 登录与凭据（B 站 / 微博 / 小红书 Cookie）、未登录能力矩阵与内容抓取闸门、风控与节流判定
 not-scope: 抓取链路的任务模型与停止原因 → backend/FETCH-PIPELINE.md；壳侧的会话 token → desktop/SHELL.md
-sot: app/services/auth.py, app/services/weibo_auth.py, app/services/capabilities.py, app/services/identity_limit.py, app/services/rate_limit.py
+sot: app/services/auth.py, app/services/weibo_auth.py, app/services/xhs_auth.py, app/services/capabilities.py, app/services/identity_limit.py, app/services/rate_limit.py
 verify: python scripts/capability_matrix.py
 budget: 700
 retire-when: 认证方式换掉扫码，或风控策略整体重做
@@ -22,15 +22,24 @@ retire-when: 认证方式换掉扫码，或风控策略整体重做
 | 账号信息 / 粉丝数 / 直播状态 | ⚠️ 间歇 | `acc/info` 实测一次 `code=0`、一次 `-352`；`stat`/`live` 稳定 |
 | **抓投稿与动态内容** | ❌ **要登录** | 匿名 `arc/search` → `-352`；重复后 **412 封禁**；动态流**直接 412** |
 | 微博内容 | ❌ **要登录** | 匿名 `mymblog` → `302` 登录页 |
+| 小红书内容（笔记列表 / 详情重取） | ❌ **要 Cookie** | 接口必须带签名（`a1` + `web_session`），缺 `a1` 时签名器直接抛 `Missing 'a1'`（2026-10-04） |
+
+⚠️ **新平台一进来就必须在这里表态**（2026-10-04，`devlog/321`）：小红书此前**漏了** ——
+`content_fetch_allowed("xiaohongshu")` 落到"未知平台"分支 ⇒ 详情页的"重取媒体"对它**恒 403**，
+理由还是一句给开发者看的话。教训有两条：① `FEATURES` / `_login_states` / 闸门**三处要一起加**
+（`tests/test_platform_branches.py` 与 `tests/test_capabilities.py` 是那道门禁）；
+② **别拿"已接入平台"当"未知平台"的测试样本** —— 那会把洞固化成期望行为。
 
 三条实现纪律：
 
 1. **`wbi` 分层**：`get_wbi_keys(allow_anonymous=…)` —— 检索路径放行匿名签名，
    **抓取路径保持严格默认**（未登录快速明确失败）；密钥来源记录在 `wbi_status()` 里。
-2. **闸门在入口**（`services/capabilities.content_fetch_allowed()`）：未登录时
+2. **闸门在入口**（`services/capabilities.content_fetch_allowed(platform)`）：未登录时
    `async_fetch_posts` / `async_fetch_first_screen` **一次请求都不发**（返回 `login_required`），
    动态名单整条跳过（与微博名单同一套 `_lane_skip_reason`），5 个内容端点直接 **403 + 原因**。
    理由不只是省配额：匿名硬撞会把 IP 弄脏，代价由用户承担。
+   ⚠️ 三家**各算各的**（`devlog/228` 起）：B 站看 `auth_manager`、微博看 `weibo_auth_manager`、
+   小红书看 `xhs_auth_manager.is_configured`（Cookie 配齐没有）；没表态的平台**保守拒绝**。
 3. **能力是策略，不是断言**：`services/capabilities.py::FEATURES` 是**我们承诺什么**，
    `tests/fixtures/capability_matrix.json` 是**平台当时给什么**；`tests/test_capabilities.py`
    双向约束（实测可用 ⇒ 不得标 `requires_login`；被 412 硬拒 ⇒ 必须标）——

@@ -11,6 +11,8 @@ import type { Capabilities, CapabilityFeature, CapabilityLimit } from '../api/ty
 export const FETCH_POSTS = 'fetch_posts'
 /** 微博内容的 feature id */
 export const WEIBO_CONTENT = 'weibo_content'
+/** 小红书内容的 feature id（2026-10-04 补：以前矩阵里根本没有这一条，devlog/320） */
+export const XHS_CONTENT = 'xhs_content'
 
 /** 取某条限制（没有 = 该功能当前完整可用） */
 export function limitOf(caps: Capabilities | null, id: string): CapabilityLimit | null {
@@ -45,6 +47,8 @@ export function limitsSummary(caps: Capabilities | null): string {
 /**
  * 给"去登录"按钮的文案。
  * 微博与 B 站都得登录时不必分平台 —— 登录窗口本身就是两个平台页签。
+ * ⚠️ 小红书（Cookie 口径）**不改这里**：登录窗口有它自己的页签，顶上这句是给
+ * "要不要点进去"用的，只说 B 站/微博（多一个名字反而更长、更容易看错）。
  */
 export function loginActionLabel(caps: Capabilities | null): string {
   if (!caps) return '登录'

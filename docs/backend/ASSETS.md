@@ -143,11 +143,13 @@ prune(kind, max_bytes, dry_run=True)    # 按 LRU 淘汰**未 pin 且未被引�
 `POST /posts/{post_id}/refresh-media` 走平台自己的详情补全（`BasePlatform.enrich`），
 **只写回媒体相关的列**（`cover_url`/`body_json`/`raw_json`/`stats_json`）并顺手固化一次；
 未登录 403 / 没详情 409 / 同帖 30s 内 429 / 上游失败 502，全部如实分类。
-前端在 `ProxyImage` **四级全失败**时回调一次（一帖只调一次 `refreshedRef`），用回来的整帖就地替换。
+前端在 `ProxyImage` **四级全失败**时回调一次（一帖只调一次 `refreshedRef`），用回来的整帖就地替换；
+重取失败**要在界面上说一句**（后端 403 的原文就是"去哪儿配 Cookie"，只写日志等于让用户对着灰块猜）。
 
-⚠️ **两条容易踩的**：① 重取与固化**都不许**碰 `title`/`published_at`（列表顺序不因重取而变，
+⚠️ **三条容易踩的**：① 重取与固化**都不许**碰 `title`/`published_at`（列表顺序不因重取而变，
 用例钉住）；② `ProxyImage` 的四级状态在组件内 ⇒ 调用方必须把图源写进 `key`（`url + local`、
-封面 `cover_url`），否则新地址/新副本进不到那个已停在 `failed` 的实例（同样有反向验证过的用例）。
+封面 `cover_url`），否则新地址/新副本进不到那个已停在 `failed` 的实例（同样有反向验证过的用例）；
+③ `pin_post_media` 对**已归档**帖直接返回不下载（保护名单只认未归档帖 ⇒ 下完就被归档清理删掉）。
 
 ---
 
