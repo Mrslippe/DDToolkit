@@ -1414,8 +1414,11 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
                               pageMenu.close()
                               if (p.page !== (currentPage ?? 1)) onPickPage?.(p.cid)
                             }}>
-                      {/* `P1 标题`（标题可能很长 ⇒ 由 CSS 截断，别让菜单无限宽） */}
-                      P{p.page} {p.part}
+                      {/* 同一行「P1 标题」（用户口径）：整段包一层 span —— 菜单**固定 7 字宽**，
+                          超出部分由 CSS 在 hover 时横向滚动（`vp-page-scroll`），
+                          ⚠️ 裁切必须落在这层 span 上：给 grid 项自己加 `overflow: hidden` 会让它的
+                          min-content 变成 0 ⇒ 自动轨道塌成按钮那么宽、标题被裁光（2026-10-04 的真机截图） */}
+                      <span className="vp-page-label">P{p.page} {p.part}</span>
                     </button>
                   ))}
                 </div>

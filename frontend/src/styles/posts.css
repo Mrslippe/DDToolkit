@@ -6202,8 +6202,14 @@ img.hero-avatar {
 }
 .vp-progress:hover .vp-progress-knob, .vp-progress:focus-visible .vp-progress-knob { opacity: 1; }
 .vp-rate { position: relative; display: inline-flex; align-items: center; gap: 4px; flex: none; }
+/* 控件栏的上拉栏：一律**与触发它的按钮水平居中**（用户口径 2026-10-04，devlog/332）。
+   ⚠️ 旧口径是 `right: 0`（右缘贴按钮右缘）：菜单比按钮宽时看着整体偏右、不像"从这颗按钮长出来"。
+   锚点是 `.vp-rate` / `.vp-volwrap`（`position: relative`，盒宽 = 按钮宽）⇒ `left: 50%` 正好是按钮中线。
+   ⚠️ `.vp` 有 `overflow: hidden` ⇒ 居中后更要留意别探出播放器；本栏里每颗按钮左右都有邻居
+   （全屏一定在最后），所以最宽的清晰度菜单也仍在框内。 */
 .vp-menu {
-  position: absolute; right: 0; bottom: 32px; display: grid; gap: 2px; padding: 4px;
+  position: absolute; left: 50%; transform: translateX(-50%); bottom: 32px;
+  display: grid; gap: 2px; padding: 4px;
   border-radius: 8px; background: rgba(15, 23, 42, .95);
   border: 1px solid rgba(255, 255, 255, .16); box-shadow: 0 6px 18px rgba(0, 0, 0, .4);
 }
@@ -6224,10 +6230,41 @@ img.hero-avatar {
   color: rgba(255, 255, 255, .72); white-space: normal;
   border-bottom: 1px solid rgba(255, 255, 255, .12); margin-bottom: 2px;
 }
-/* 分P 菜单（devlog/329）：P 的标题可能很长（"第一章沐霂（男主）视角"）⇒ 单行截断，
-   不让菜单宽到盖住进度条；完整标题仍可从 `title` 看到 */
-.vp-menu--page { max-width: 260px; }
-.vp-menu--page .vp-menu-item { overflow: hidden; text-overflow: ellipsis; }
+/* 分P 菜单（devlog/329；2026-10-04 按用户口径重做，devlog/331）：
+   **宽度固定 7 个字符**、整行左对齐（`P1 标题` 一行）、标题过长时 hover 滚一次**停在末尾**。
+   ⚠️ 踩过的坑：`.vp-menu` 是 grid，给 grid 项（按钮）自己加 `overflow: hidden` 会让它的
+   min-content 变成 0 ⇒ 自动轨道塌成按钮那么宽（≈2 个字符），标题被裁光 —— 真机上就是
+   "只有 P1…P7、没有标题"。所以：**宽度写在菜单上**，裁切交给内层 `.vp-page-label`。 */
+.vp-menu--page {
+  --vp-page-w: 7em;            /* 用户口径：固定 7 个字符宽（CJK 字符 = 1em） */
+  --vp-page-pad: 4px;          /* 菜单自身左右内边距（滚动位移要把它减掉） */
+  width: var(--vp-page-w);
+  padding: var(--vp-page-pad);
+}
+.vp-menu--page .vp-menu-item {
+  padding: 3px 0;              /* 横向 padding 归零：可见文字宽 = 菜单宽 − 2×菜单内边距 */
+  display: block;              /* 让 text-align 生效（默认那套是 flex） */
+  text-align: left;            /* 用户口径：左对齐（标题从左边读起，滚动的起点也一致） */
+  overflow: hidden;
+}
+.vp-menu--page .vp-page-label { display: inline-block; white-space: nowrap; }
+/* 太长 ⇒ hover 时**滚一次就停在末尾**（用户口径：不回滚）；不 hover 不动。
+   `min(0em, …)` 保证短标题**不**被推着跑；`translateX` 的百分比按元素自身宽度算
+   ⇒ `100%` 就是文字宽度。`forwards` = 动画结束后保持终态（鼠标还在菜单上时不弹回起点）。 */
+.vp-menu--page .vp-menu-item:hover .vp-page-label {
+  animation: vp-page-scroll 3s linear .35s 1 forwards;
+}
+@keyframes vp-page-scroll {
+  from { transform: translateX(0); }
+  to {
+    transform: translateX(
+      min(0em, calc(var(--vp-page-w) - var(--vp-page-pad) * 2 - 100%))
+    );
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .vp-menu--page .vp-menu-item:hover .vp-page-label { animation: none; }
+}
 /* "需大会员"那颗小图标（文字会把行撑换行，2026-10-03 用户口径）：
    2026-10-04 起是**圆圈里一个「大」**（用户给的参考图，devlog/317）——自绘 SVG，不依赖图标字体 */
 .vp-vip { width: 12px; height: 12px; flex: none; }
@@ -6261,7 +6298,8 @@ img.hero-avatar {
 .vp-volwrap { position: relative; display: inline-flex; align-items: center; }
 /* 音量浮窗：默认隐藏（不占位），hover / 键盘聚焦时出现 */
 .vp-volpop {
-  position: absolute; right: 0; bottom: 34px; padding: 10px 8px;
+  /* 与按钮**水平居中**（同 `.vp-menu` 的口径，devlog/332）：锚点是 `.vp-volwrap`（盒宽 = 按钮宽） */
+  position: absolute; left: 50%; transform: translateX(-50%); bottom: 34px; padding: 10px 8px;
   border-radius: 10px; background: rgba(15, 23, 42, .92);
   border: 1px solid rgba(255, 255, 255, .14); box-shadow: 0 6px 18px rgba(0, 0, 0, .4);
   opacity: 0; pointer-events: none; transition: opacity .14s ease;

@@ -278,6 +278,8 @@ describe('VideoPlayer · MSE 内核（默认内核）', () => {
 
     const items = [...host.querySelectorAll('.vp-menu--page .vp-menu-item')]
     expect(items.map((b) => b.textContent)).toEqual(['P1 第一章', 'P2 第二章'])
+    // 标题必须**在同一行**（P1 标题）且包在可滚动的 span 里 —— 只有 P1…P7 是 CSS 塌宽那次的形状
+    expect(items[0].querySelector('.vp-page-label')?.textContent).toBe('P1 第一章')
     const p2 = items[1] as HTMLButtonElement
     await act(async () => { p2.dispatchEvent(new MouseEvent('click', { bubbles: true })); await flush() })
     expect(onPickPage, '切 P 要把那一 P 的 cid 交给调用方（它负责重取流）').toHaveBeenCalledWith(222)

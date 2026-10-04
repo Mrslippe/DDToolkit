@@ -156,6 +156,75 @@ describe('VideoPlayer · 浮层由 hover 触发（与音量同一套）', () => 
   })
 })
 
+describe('VideoPlayer · 上拉栏与按钮水平居中（CSS，devlog/332）', () => {
+  /**
+   * 用户口径（2026-10-04）：控件栏里**每一颗**按钮呼出的上拉栏都要与它**水平居中** ——
+   * 旧口径是 `right: 0`（菜单右缘贴按钮右缘），菜单比按钮宽时整体看着偏右、
+   * 不像"从这颗按钮长出来"。锚点是 `.vp-rate` / `.vp-volwrap`（盒宽 = 按钮宽），
+   * 所以 `left: 50%` 正好是按钮中线。
+   */
+  const css = () => readFileSync(resolve(__dirname, '../styles/posts.css'), 'utf8')
+
+  it('清晰度 / 倍速 / 分P 共用 `.vp-menu`：必须居中，且**不许**回到 `right: 0`', () => {
+    const block = css().match(/\.vp-menu\s*\{[^}]*\}/)?.[0] ?? ''
+    expect(block, '找不到 .vp-menu 的规则').not.toBe('')
+    expect(block, '要居中：锚点盒宽 = 按钮宽 ⇒ left:50% 就是中线').toContain('left: 50%')
+    expect(block, '配 translateX(-50%) 才是"以中线为准"').toContain('translateX(-50%)')
+    expect(block, '`right: 0` 是旧口径（右对齐 ⇒ 看着偏右）').not.toContain('right: 0')
+  })
+
+  it('音量浮窗同样居中（它是另一套规则 `.vp-volpop`）', () => {
+    const block = css().match(/\.vp-volpop\s*\{[^}]*\}/)?.[0] ?? ''
+    expect(block, '找不到音量浮窗的规则').not.toBe('')
+    expect(block).toContain('left: 50%')
+    expect(block).toContain('translateX(-50%)')
+    expect(block, '音量浮窗也要跟按钮对齐').not.toContain('right: 0')
+  })
+})
+
+describe('VideoPlayer · 分P 菜单的宽度与滚动（CSS，devlog/331）', () => {
+  /**
+   * 起因（用户 2026-10-04 截图）：分P 菜单里**只有 P1…P7、没有标题**。
+   * 根因不在数据（上游 `part` 都有），在 CSS：`.vp-menu` 是 grid，而我给 grid 项自己加了
+   * `overflow: hidden` ⇒ 该项的 min-content 贡献变成 0 ⇒ 自动轨道塌成按钮那么宽（≈2 个字符）
+   * ⇒ 标题被裁光。**规矩：宽度写在菜单上，裁切交给内层 `.vp-page-label`。**
+   */
+  const css = () => readFileSync(resolve(__dirname, '../styles/posts.css'), 'utf8')
+
+  it('菜单宽度是**写死的 7 个字符**（不许塌成按钮宽，也不用 max-width）', () => {
+    const block = css().match(/\.vp-menu--page\s*\{[^}]*\}/)?.[0] ?? ''
+    expect(block, '找不到分P 菜单的规则').not.toBe('')
+    expect(block, '7 个字符宽是用户口径').toContain('--vp-page-w: 7em')
+    expect(block, '宽度要真的用上这个变量').toMatch(/width:\s*var\(--vp-page-w\)/)
+    expect(block, 'max-width 挡不住"塌成按钮宽"').not.toContain('max-width')
+  })
+
+  it('裁切落在**内层 span** 上（挂 grid 项自己身上会把宽度塌掉），且整行**左对齐**', () => {
+    const item = css().match(/\.vp-menu--page \.vp-menu-item\s*\{[^}]*\}/)?.[0] ?? ''
+    expect(item).toContain('overflow: hidden')
+    expect(item, '用户口径：左对齐（滚动起点也从左边读起）').toContain('text-align: left')
+    expect(item, '居中那版是上一稿，别再回来').not.toContain('text-align: center')
+    const label = css().match(/\.vp-menu--page \.vp-page-label\s*\{[^}]*\}/)?.[0] ?? ''
+    expect(label, '标签要能整体位移且不换行').toContain('inline-block')
+    expect(label).toContain('nowrap')
+  })
+
+  it('过长 ⇒ hover 滚一次并**停在末尾**（不回滚）；短标题不被推着跑；reduced-motion 关掉', () => {
+    const all = css()
+    const hover = all.match(/\.vp-menu--page \.vp-menu-item:hover \.vp-page-label\s*\{[^}]*\}/)?.[0] ?? ''
+    expect(hover, '要有"hover 才滚"的规则').toContain('animation: vp-page-scroll')
+    expect(hover, '滚到末尾要停住（不是来回滚）').toContain('forwards')
+    expect(hover, '用户口径：不回滚').not.toContain('alternate')
+    expect(hover, '用户口径：只滚一次').not.toContain('infinite')
+    const key = all.match(/@keyframes vp-page-scroll\s*\{[\s\S]*?\n\}/)?.[0] ?? ''
+    expect(key, '找不到滚动关键帧').not.toBe('')
+    // `min(0em, …)`：文字比菜单窄时位移取 0（不滚）；百分比按 span 自身宽度算
+    expect(key).toMatch(/translateX\(\s*min\(0em, calc\(var\(--vp-page-w\)/)
+    expect(all, 'reduced-motion 下不许动').toMatch(
+      /prefers-reduced-motion[\s\S]{0,240}vp-page-label\s*\{\s*animation: none/)
+  })
+})
+
 describe('VideoPlayer · 音量浮窗的收起条件（CSS）', () => {
   it('显示规则里**不许**有裸 `:focus-within`（点一下滑杆就再也不收 = 用户报的那条）', () => {
     const css = readFileSync(resolve(__dirname, '../styles/posts.css'), 'utf8')
