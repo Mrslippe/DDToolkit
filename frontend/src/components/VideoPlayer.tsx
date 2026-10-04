@@ -38,6 +38,7 @@ import { openExternalFromHref } from '../utils/externalLinkGuard'
 import { watchPlayback } from '../utils/playbackProbe'
 import { reportUserError } from '../utils/problemReport'
 import { MseKernel, kernelSupported, type KernelStreams } from '../utils/mseKernel'
+import { MAX_AUTO_DOWNGRADES, linkSlowNote, mbps, pickDowngrade } from '../utils/qualityAbr'
 import { effectiveKernel, noteMseFailure, subscribeKernel } from '../utils/videoKernel'
 import {
   PLAYBACK_RATES, applyPlayerPrefs, playerPrefs, setPlayerPrefs, subscribePlayerPrefs,
@@ -295,9 +296,34 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
   const streamsKey = segments
     ? `${segments.video?.url ?? ''}|${segments.audio?.url ?? ''}|${segments.duration_s ?? 0}`
     : ''
+  /**
+   * 换**片**了才把自动降档的记账清零（`permalink` 认这一件事）。
+   *
+   * ⚠️ 别挂在 `streamsKey` 上：换清晰度本身就会换流 —— 那样每降一档额度就重置一次，
+   * `MAX_AUTO_DOWNGRADES` 等于没有（这条是写完用例才发现的）。
+   */
+  useEffect(() => { autoDowngradesRef.current = 0; setAutoNote(null) }, [permalink])
   /** `onKernelFallback` 走 ref 读（见 MSE 那个 effect 的依赖说明） */
   const onKernelFallbackRef = useRef(onKernelFallback)
   useEffect(() => { onKernelFallbackRef.current = onKernelFallback }, [onKernelFallback])
+  /**
+   * **自动降档**（ABR，`devlog/328`）：内核只报"链路喂不饱这一档"，降不降、降到哪一档在这里定。
+   *
+   * ⚠️ 档位与当前档也要走 ref：内核 effect 的依赖只挂**内容键**（换档会重建内核，见下），
+   * 闭包里的 `qualities`/`qualityId` 会过期 —— 真踩过"降档后还拿旧档算下一档"这类 stale closure。
+   */
+  const qualitiesRef = useRef(qualities)
+  const qualityIdRef = useRef(qualityId)
+  const onPickQualityRef = useRef(onPickQuality)
+  useEffect(() => {
+    qualitiesRef.current = qualities
+    qualityIdRef.current = qualityId
+    onPickQualityRef.current = onPickQuality
+  }, [qualities, qualityId, onPickQuality])
+  /** 本轮播放已经自动降过几次（上限 `MAX_AUTO_DOWNGRADES`）——**只在内容键变化时清零** */
+  const autoDowngradesRef = useRef(0)
+  /** 自动降档的说明（放进清晰度菜单里，不弹窗）；`null` = 没降过 */
+  const [autoNote, setAutoNote] = useState<string | null>(null)
   /** 等目标段落地的这段时间：中央转圈（否则用户看到的是"画面冻住不动"） */
   const [mseSeeking, setMseSeeking] = useState(false)
   /** 正在等的目标时刻（`null` = 没在等）。**只在 MSE 下有值**，见 `onTime` 那条注释 */
@@ -429,6 +455,33 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
         onKernelFallbackRef.current?.(why)
       },
       onProgress: (end) => setBuf(end),
+      /**
+       * **链路喂不饱这一档**（`devlog/328`）：只降一级、只降不升、一次播放最多降两次。
+       * 走的是与"用户自己点档位"**同一条路**（`onPickQuality` ⇒ 调用方重取流 ⇒ 重建内核），
+       * 所以清晰度菜单显示的就是**实际**那一档（不撒谎）。
+       */
+      onLinkSlow: (s) => {
+        const cur = qualityIdRef.current
+        const next = pickDowngrade(qualitiesRef.current, cur)
+        const from = qualitiesRef.current?.find((q) => q.id === cur)?.label ?? '当前档'
+        if (!next) {
+          void api.clientLog(`[video] 链路喂不饱${from}（实测 ${mbps(s.bytesPerSec)} / `
+                             + `需要 ${mbps(s.neededBytesPerSec)}），但没有更低的可用档`)
+            .catch(() => { /* 诊断失败无所谓 */ })
+          return
+        }
+        if (autoDowngradesRef.current >= MAX_AUTO_DOWNGRADES) {
+          void api.clientLog(`[video] 链路喂不饱${from}，但自动降档已用满 ${MAX_AUTO_DOWNGRADES} 次`
+                             + ` ⇒ 不再降（交给用户自己选）`).catch(() => { /* 同上 */ })
+          return
+        }
+        autoDowngradesRef.current += 1
+        const note = linkSlowNote(s.bytesPerSec, s.neededBytesPerSec, from, next.label)
+        setAutoNote(note)
+        void api.clientLog(`[video] ${note}（第 ${autoDowngradesRef.current} 次自动降档）`)
+          .catch(() => { /* 同上 */ })
+        onPickQualityRef.current?.(next.id)
+      },
       onSeekApplied: (t) => {
         mseTargetRef.current = null
         setCur(t)
@@ -1339,6 +1392,9 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
               </button>
               {qualityMenu.open && (
                 <div className="vp-menu vp-menu--quality">
+                  {/* 自动降档**要说出来**（devlog/328）：菜单里一行，不弹窗 ——
+                      用户看到画质掉了得知道为什么，也知道可以自己点回原档 */}
+                  {autoNote && <div className="vp-menu-note" data-vp-autonote="1">{autoNote}</div>}
                   {qualities.map((q) => (
                     <button key={q.id} type="button" disabled={q.disabled}
                             title={q.note}
@@ -1346,7 +1402,12 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
                                一换行菜单就变成窄高条，"1×"也会被挤下去 */
                             aria-label={q.note ? `${q.label}（${q.note}，不可选）` : q.label}
                             className={`vp-menu-item${q.id === qualityId ? ' is-on' : ''}`}
-                            onClick={() => { onPickQuality?.(q.id); qualityMenu.close() }}>
+                            onClick={() => {
+                              // 用户自己选档 ⇒ 那条"已自动降档"的说明就该消失（情况变了）
+                              setAutoNote(null)
+                              onPickQuality?.(q.id)
+                              qualityMenu.close()
+                            }}>
                       {q.label}
                       {/* 「需大会员」用**一颗小图标**表示（文字太占宽、又把行撑换行了）；
                           无障碍名走 `title` + `aria-label`，信息不丢 */}

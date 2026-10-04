@@ -6217,6 +6217,13 @@ img.hero-avatar {
 /* 拿不到的档（大会员）：整条压暗、移上去也不亮，但**文字仍可读**（如实标注 ≠ 藏起来） */
 .vp-menu-item:disabled { opacity: .5; cursor: default; }
 .vp-menu-item:disabled:hover { background: transparent; }
+/* 「已自动降到 X（链路实测 …）」那一行（ABR，devlog/328）：
+   菜单里的**说明**，不是可点的项 ⇒ 不参与 hover 高亮、不抢焦点；够窄才不会把菜单撑歪 */
+.vp-menu-note {
+  max-width: 240px; padding: 3px 12px 5px; font-size: 11px; line-height: 1.5;
+  color: rgba(255, 255, 255, .72); white-space: normal;
+  border-bottom: 1px solid rgba(255, 255, 255, .12); margin-bottom: 2px;
+}
 /* "需大会员"那颗小图标（文字会把行撑换行，2026-10-03 用户口径）：
    2026-10-04 起是**圆圈里一个「大」**（用户给的参考图，devlog/317）——自绘 SVG，不依赖图标字体 */
 .vp-vip { width: 12px; height: 12px; flex: none; }

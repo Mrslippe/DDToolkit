@@ -27,7 +27,7 @@ const INIT_END = 947
 const SEG0 = 948
 const SEG_BYTES = 1000
 
-function streams(prefix = 'v', count = SEG_COUNT): KernelStreams {
+function streams(prefix = 'v', count = SEG_COUNT, bandwidth = 0): KernelStreams {
   const seg = (kind: 'video' | 'audio') => ({
     url: `https://cn-x.bilivideo.com/${prefix}.m4s`,
     urls: [`https://cn-x.bilivideo.com/${prefix}.m4s`],
@@ -39,6 +39,7 @@ function streams(prefix = 'v', count = SEG_COUNT): KernelStreams {
       dur_s: SEG_DUR, sap: true,
     })),
     duration_s: count * SEG_DUR,
+    bandwidth,
   })
   return { video: seg('video'), audio: seg('audio'), duration_s: count * SEG_DUR }
 }
@@ -123,7 +124,7 @@ class FakeMediaSource {
  * `fail=true` 时**挂在闸门上不返回**，由用例调 `release()` 决定什么时候失败 ——
  * 失败时机必须是确定的（否则"回退时接着播"那条根本摆不好"已经在播"的前置状态）。
  */
-function stubFetch(fail = false) {
+function stubFetch(fail = false, delayMs = 0) {
   const calls: { url: string; range: string }[] = []
   let open: () => void = () => { /* 未启用闸门 */ }
   const gate = new Promise<void>((r) => { open = r })
@@ -131,6 +132,7 @@ function stubFetch(fail = false) {
     const url = String(input)
     const range = new Headers(init?.headers).get('Range') ?? ''
     calls.push({ url, range })
+    if (delayMs) await new Promise((r) => setTimeout(r, delayMs))
     if (fail) {
       await gate
       throw new TypeError('network down')
@@ -215,6 +217,40 @@ describe('VideoPlayer · MSE 内核（默认内核）', () => {
     expect(v.getAttribute('src')).toBe('blob:mse')
     // 总时长：段表 8×5=40s ⇒ 进度条立刻是 00:40（不用等 loadedmetadata）
     expect(host.querySelector('.vp-time')!.textContent).toContain('00:40')
+  })
+
+  it('**链路喂不饱这一档 ⇒ 自动降一级**，并在清晰度菜单里如实说明（ABR，devlog/328）', async () => {
+    /**
+     * 内核量"取回来的字节 / 耗时"，与段表里的码率比；连续几段都喂不饱就报事实，
+     * 播放器据此降**一级**（走与"用户自己点档位"同一条路 ⇒ 菜单显示的是实际那一档）。
+     * 这条用例把两半串起来跑：假网慢（每段 25ms、只有 1KB ⇒ ≈40KB/s）而段表写着 2Mbps。
+     */
+    stubFetch(false, 25)
+    const onPickQuality = vi.fn()
+    const qualities = [
+      { id: 80, label: '高清 1080P' },
+      { id: 64, label: '高清 720P' },
+      { id: 32, label: '清晰 480P' },
+    ]
+    await act(async () => {
+      root.render(
+        <VideoPlayer video={{ url: DASH.video }} dash={DASH} permalink="https://b/1"
+                      segments={streams('v', SEG_COUNT, 2_000_000)}
+                      qualities={qualities} qualityId={80} onPickQuality={onPickQuality} />)
+      await flush()
+    })
+
+    expect(await waitUntil(() => onPickQuality.mock.calls.length > 0, 6000),
+           '链路喂不饱却一直不降 ⇒ 用户就一直卡').toBe(true)
+    expect(onPickQuality, '只降**一级**（1080P ⇒ 720P）').toHaveBeenCalledWith(64)
+
+    // 说明要看得见（菜单里一行，不弹窗）—— 用户得知道画质为什么掉了
+    const btn = [...host.querySelectorAll('button')]
+      .find((b) => b.getAttribute('aria-label') === '清晰度')!
+    await act(async () => { btn.dispatchEvent(new MouseEvent('click', { bubbles: true })); await flush() })
+    const note = host.querySelector('[data-vp-autonote]')
+    expect(note?.textContent, '自动降档不许静默').toContain('已自动降到 高清 720P')
+    expect(note?.textContent).toContain('链路实测')
   })
 
   it('拖到未缓冲处 ⇒ 取的是**目标那一段**的字节范围（治"跳转后卡一帧"的那一步）', async () => {

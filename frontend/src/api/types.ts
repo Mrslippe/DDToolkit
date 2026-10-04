@@ -408,6 +408,13 @@ export interface BiliStreamTable {
   segments: BiliSegmentInfo[]
   duration_s: number
   total_bytes?: number | null
+  /**
+   * 这一档的码率（**bits/s**，上游 `playurl` 给的）。
+   *
+   * ABR 的"需要多少"就靠它（`devlog/328`）：内核量到"取回来的字节/耗时"低于这个的一倍多，
+   * 就说明链路撑不住这一档 ⇒ 通知播放器降一档。缺了它（老后端/异常响应）就不做自动降档。
+   */
+  bandwidth?: number | null
 }
 
 export interface BiliSegments {

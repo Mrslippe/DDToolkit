@@ -68,6 +68,8 @@ export interface StreamTable {
   segments: SegmentInfo[]
   duration_s: number
   total_bytes?: number | null
+  /** 这一档的码率（**bits/s**）—— ABR 的"需要多少"（`devlog/328`） */
+  bandwidth?: number | null
 }
 
 export interface KernelStreams {
@@ -146,6 +148,29 @@ export const SEEK_GIVEUP_RETRIES = 1
  * 取值 0.5s：远大于观测到的偏差（≤ 数十毫秒），又远小于一个段长（5s）⇒ 不会真的跳过一段。
  */
 export const SEG_END_TOL = 0.5
+/**
+ * **链路跟不跟得上**（ABR，2026-10-04，`devlog/328`）。
+ *
+ * 量什么：每次取段都记"这一段多少字节 / 花了多久"，做成加权均值（`bw`）。
+ * 比什么：与**段表里的码率**（`table.bandwidth`，bits/s）比 —— 低于它 `SLOW_LINK_RATIO` 倍
+ * 就说明这一档喂不饱，连续 `SLOW_LINK_STREAK` 段都这样才通知播放器（一次抖动不算）。
+ *
+ * ⚠️ **内核只报事实，不决定降档**：选哪一档、用户手动选过没有、还能降几次，都是播放器的事
+ * （见 `utils/qualityAbr.ts`）；这里只给出"实测 X B/s / 需要 Y B/s"。
+ */
+export const SLOW_LINK_RATIO = 1.15
+export const SLOW_LINK_STREAK = 3
+/** 同一条轨多久最多报一次"链路跟不上"（别刷屏） */
+const LINK_NOTICE_MS = 15_000
+
+/** 链路实测（给播放器做降档决策用） */
+export interface LinkSample {
+  kind: string
+  /** 实测吞吐（bytes/s，加权均值） */
+  bytesPerSec: number
+  /** 这一档需要多少（bytes/s；`0` = 段表没给码率 ⇒ 别做判断） */
+  neededBytesPerSec: number
+}
 
 /** 宿主有没有 MSE（**先问它再决定要不要去后端取段表** —— 没 MSE 时那张表纯属白跑一趟）。 */
 export function mseAvailable(): boolean {
@@ -264,6 +289,11 @@ export interface KernelDeps {
   seekGiveUpRetries?: number
   /** 一次操作卡多久算卡住（默认 `STUCK_OP_MS`；用例把它压小，别真等 6 秒） */
   stuckOpMs?: number
+  /**
+   * **链路跟不上这一档**（ABR，`devlog/328`）：内核量到实测吞吐持续低于段表码率时叫一次
+   * （同一条轨 15s 内最多一次）。调用方据此决定降不降、降到哪一档 —— 内核不替它决定。
+   */
+  onLinkSlow?: (info: LinkSample) => void
 }
 
 /**
@@ -341,6 +371,12 @@ interface Track {
   lastDiscardLogAt: number
   /** "追加了但缓冲没变"的日志节流（`devlog/326`） */
   lastNoGrowLogAt: number
+  /** 实测吞吐（bytes/s）的加权均值；`0` = 还没量到（`devlog/328` 的 ABR 用它） */
+  bw: number
+  /** 连续几段"喂不饱这一档"；喂够了就清零 */
+  slowStreak: number
+  /** 这条轨上一次报"链路跟不上"是什么时候（节流） */
+  lastLinkNoticeAt: number
 }
 
 /**
@@ -405,6 +441,7 @@ export class MseKernel {
         spanEnd: 0, fetchBaseline: -1, noProgress: 0, coolUntil: 0, warnedStall: false,
         retry: 0, mirror: 0, quotaHits: 0, opSince: 0, stuckHits: 0, warnedRepeat: false,
         lastFailLogAt: 0, lastDiscardLogAt: 0, lastNoGrowLogAt: 0,
+        bw: 0, slowStreak: 0, lastLinkNoticeAt: 0,
       }))
     this.startedAt = Date.now()
     this.ms.addEventListener('sourceopen', this.onSourceOpen)
@@ -806,6 +843,35 @@ export class MseKernel {
                     + `${range} 重试=${tr.retry} 镜像=${tr.mirror} 表=${tr.table.segments.length}段`)
   }
 
+  /**
+   * 记一次"这一段多少字节、花了多久"，并判断这条轨喂不喂得饱（ABR，`devlog/328`）。
+   *
+   * 加权均值（新样本 40%）而不是单段判定：CDN 抖一下就降档是错的（用户会看到画质无谓地掉）。
+   * 只有**连续 `SLOW_LINK_STREAK` 段**实测吞吐都低于这一档码率的 `SLOW_LINK_RATIO` 倍，
+   * 才把事实报给播放器（同一条轨 15s 内最多一次）。
+   */
+  private noteLinkSample(tr: Track, size: number, ms: number): void {
+    const sample = size / (Math.max(ms, 1) / 1000)
+    tr.bw = tr.bw > 0 ? tr.bw * 0.6 + sample * 0.4 : sample
+    const needed = (tr.table.bandwidth ?? 0) / 8      // bits/s → bytes/s
+    if (!needed || needed <= 0) return                // 段表没给码率 ⇒ 不猜
+    if (tr.bw * SLOW_LINK_RATIO >= needed) { tr.slowStreak = 0; return }
+    tr.slowStreak += 1
+    if (tr.slowStreak < SLOW_LINK_STREAK) return
+    const now = Date.now()
+    if (now - tr.lastLinkNoticeAt < LINK_NOTICE_MS) return
+    tr.lastLinkNoticeAt = now
+    this.deps.onLinkSlow?.({ kind: tr.kind, bytesPerSec: tr.bw, neededBytesPerSec: needed })
+  }
+
+  /** 当前各轨的链路实测（诊断/用例用） */
+  linkStats(): LinkSample[] {
+    return this.tracks.map((tr) => ({
+      kind: tr.kind, bytesPerSec: tr.bw,
+      neededBytesPerSec: (tr.table.bandwidth ?? 0) / 8,
+    }))
+  }
+
   /** 取回来了但"已经没人要"（拖拽换代 / 被中止）也要留痕；`devlog/325` */
   private noteDiscard(tr: Track, why: string): void {
     const now = Date.now()
@@ -931,6 +997,7 @@ export class MseKernel {
       this.deps.log?.(`[media] ${tr.kind} 段 ${idx} 取数 ${ms}ms ${(size / 1048576).toFixed(2)}MB`
                       + `（${(size / 1048576 / (ms / 1000)).toFixed(2)}MB/s）`)
     }
+    this.noteLinkSample(tr, size, ms)
     try {
       sb.appendBuffer(buf)
       this.appends += 1

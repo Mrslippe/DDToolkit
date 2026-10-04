@@ -681,6 +681,65 @@ describe('mseKernel · "同一段连取两次"不许把一条轨永久冻死（d
   })
 })
 
+describe('mseKernel · 链路喂不喂得饱（ABR 的事实来源，devlog/328）', () => {
+  /**
+   * 内核只报事实：实测吞吐（字节/耗时，加权均值）与段表码率（`bandwidth`，bits/s）比。
+   * 判据两条：**抖一下不报**（连续 3 段都喂不饱才算）、**喂得饱就永不报**。
+   */
+  function bwTable(kind: 'video' | 'audio', bandwidth: number): StreamTable {
+    const t = table(kind)
+    return { ...t, bandwidth }
+  }
+
+  async function run(opts: { bandwidth: number; delayMs: number }) {
+    const ms = new FakeMediaSource(0)
+    const el = fakeEl(ms.buffers)
+    const onLinkSlow = vi.fn()
+    const kernel = new MseKernel(el as unknown as HTMLVideoElement, {
+      createMediaSource: () => ms as unknown as MediaSource,
+      createObjectURL: () => 'blob:test',
+      revokeObjectURL: () => { /* 忽略 */ },
+      fetchRange: vi.fn(async (_u: string, r: SegmentRange) => {
+        if (opts.delayMs) await new Promise((res) => setTimeout(res, opts.delayMs))
+        const size = r.end - r.start + 1
+        if (r.start === 0) return encodeRange(0, 0, size)
+        const i = Math.floor((r.start - SEG0_START) / SEG_BYTES)
+        return encodeRange(i * SEG_DUR, (i + 1) * SEG_DUR, size)
+      }),
+      onLinkSlow,
+      log: () => { /* 静音 */ },
+      seekGiveUpMs: 60_000,
+    })
+    kernel.load({ video: bwTable('video', opts.bandwidth),
+                  audio: bwTable('audio', opts.bandwidth),
+                  duration_s: SEG_COUNT * SEG_DUR })
+    await flush(60)
+    return { kernel, onLinkSlow }
+  }
+
+  it('连续几段都低于这一档码率 ⇒ 报一次事实（带实测与需要两个数）', async () => {
+    // 段只有 1000B、每段等 25ms ⇒ 实测 ≈40KB/s；而这一档写着 2Mbps（=250KB/s）
+    const { onLinkSlow } = await run({ bandwidth: 2_000_000, delayMs: 25 })
+    expect(onLinkSlow, '喂不饱就必须报（否则播放器没法降档）').toHaveBeenCalled()
+    const info = onLinkSlow.mock.calls[0][0] as { kind: string; bytesPerSec: number;
+                                                  neededBytesPerSec: number }
+    expect(info.neededBytesPerSec).toBe(250_000)          // 2Mbps / 8
+    expect(info.bytesPerSec).toBeLessThan(info.neededBytesPerSec)
+    expect(onLinkSlow.mock.calls.length, '别刷屏：同一条轨 15s 内最多一次').toBeLessThanOrEqual(2)
+  })
+
+  it('链路喂得饱 ⇒ **一次都不报**（别让画质无谓地掉）', async () => {
+    // 同一档 2Mbps，但每段 1000B 几乎不耗时 ⇒ 实测远高于 250KB/s
+    const { onLinkSlow } = await run({ bandwidth: 2_000_000, delayMs: 0 })
+    expect(onLinkSlow).not.toHaveBeenCalled()
+  })
+
+  it('段表没给码率 ⇒ 不猜（老后端照旧能播）', async () => {
+    const { onLinkSlow } = await run({ bandwidth: 0, delayMs: 25 })
+    expect(onLinkSlow).not.toHaveBeenCalled()
+  })
+})
+
 describe('mseKernel · 取数失败一律留痕（devlog/325）', () => {
   it('**追加了但缓冲没变**也要留一行（带全部区间与 duration）', async () => {
     /**
