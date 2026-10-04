@@ -134,6 +134,18 @@ const STALL_BACKOFF_MS = 2000
 export const STUCK_OP_MS = 6000
 /** 跳转"一条轨都没取到数据"时**允许重试几次**（每次重新开一个等待窗口，见 `pump` 的收手分支） */
 export const SEEK_GIVEUP_RETRIES = 1
+/**
+ * 段表时刻与媒体自己 `tfdt` 的允许偏差（秒）—— **续播判据用它避开"取回刚取过的那一段"**
+ * （2026-10-04，`devlog/327`）。
+ *
+ * 实测（`BV1esa36qEPX`，sidx 累计 vs 段内 `tfdt`）：第 249 段 +7ms、536 段 +13ms、803 段 +21ms ——
+ * **段表一律比媒体自己的时间戳偏晚**，且随索引缓慢增长。后果：缓冲末尾（真实时刻）算"下一段"时，
+ * "结尾越过它的第一段"**永远是刚 append 过的那一段** ⇒ 泵反复重取同一段、缓冲不长 ⇒
+ * 真机"跳转后播一小段就卡住"（`追加段 803 后**缓冲没变**` 那行就是它）。
+ *
+ * 取值 0.5s：远大于观测到的偏差（≤ 数十毫秒），又远小于一个段长（5s）⇒ 不会真的跳过一段。
+ */
+export const SEG_END_TOL = 0.5
 
 /** 宿主有没有 MSE（**先问它再决定要不要去后端取段表** —— 没 MSE 时那张表纯属白跑一趟）。 */
 export function mseAvailable(): boolean {
@@ -223,6 +235,13 @@ export function nextSegmentAfter(table: StreamTable, time: number): number {
     if (end > time + 1e-3) return i
   }
   return table.segments.length
+}
+
+/** 第 `i` 段的**表内结尾**（秒；越界 ⇒ 段数以外返回 `null`）。`devlog/327` 的续播判据要用它。 */
+export function segmentEndAt(table: StreamTable, i: number): number | null {
+  const starts = segmentStarts(table)
+  if (i < 0 || i >= starts.length) return null
+  return i + 1 < starts.length ? starts[i + 1] : starts[i] + table.segments[i].dur_s
 }
 
 export interface KernelDeps {
@@ -1006,7 +1025,23 @@ export class MseKernel {
         continue
       }
       if (ahead >= WANT_AHEAD) continue
-      const next = nextSegmentAfter(tr.table, target + ahead)
+      const runway = target + ahead
+      let next = nextSegmentAfter(tr.table, runway)
+      /**
+       * ⚠️ **别把刚取过的那一段再取一遍**（`devlog/327`）。
+       *
+       * 段表的累计时刻比媒体自己的 `tfdt` **偏晚几十毫秒**（实测 249/536/803 段：+7/+13/+21ms），
+       * 于是"缓冲末尾（真实时刻）之后的第一段"永远是**刚 append 过的那一段** ⇒ 泵反复重取、
+       * 缓冲一点都不长 ⇒ 真机"跳转后播一小段就卡住、再点别处也一样"。
+       *
+       * 判据刻意做窄：**只有**"算出来的正是刚取过的那一段、且它的表内结尾只比缓冲末尾晚
+       * 一点点（< `SEG_END_TOL`，远小于一个段长）"时才往后推一段 —— 既不会跳过真正缺的那一段，
+       * 也把这次重复取数省掉。
+       */
+      const endOfNext = segmentEndAt(tr.table, next)
+      if (next === tr.lastIdx && endOfNext !== null && endOfNext - runway < SEG_END_TOL) {
+        next += 1
+      }
       if (next >= tr.table.segments.length) continue
       // ⚠️ 同一条兜底也要落在**这条**分支上（`devlog/313`）：判据一旦退化成"永远差一点"，
       //    这里就会无限取同一段（真机上表现为内存与请求一起飞 —— 实测把测试进程 OOM 掉了）。

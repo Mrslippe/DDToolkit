@@ -507,6 +507,52 @@ describe('mseKernel · seek（先取段，再设时间）', () => {
   })
 })
 
+describe('mseKernel · 段表比媒体 tfdt 偏晚时不许反复取同一段（devlog/327）', () => {
+  /**
+   * 真机（`BV1esa36qEPX`，16:43 那次）：
+   * `追加段 803 后**缓冲没变**：区间=[0.0–30.0, 4015.0–4020.0]×2 目标=4015.6s`
+   * —— 缓冲里已经有 803（真实 [4015.000, 4020.000)），而段表说 803 的结尾是 **4020.021**
+   * （sidx 比媒体自己的 `tfdt` 偏晚 21ms；实测 249/536/803 段 = +7/+13/+21ms）。
+   * ⇒ "缓冲末尾之后的第一段"永远是**刚取过的那一段** ⇒ 泵反复重取、缓冲不长 ⇒ 播一小段就卡住。
+   */
+  const OFFSET = 0.021                      // 段表比媒体晚 21ms（真机实测值）
+  const N = 12
+
+  it('缓冲末尾落在表内结尾前一点点 ⇒ 必须往后推一段，而不是重取它', async () => {
+    const ms = new FakeMediaSource(0)
+    const el = fakeEl(ms.buffers)
+    const calls: SegmentRange[] = []
+    const t = table('video', N)
+    const kernel = new MseKernel(el as unknown as HTMLVideoElement, {
+      createMediaSource: () => ms as unknown as MediaSource,
+      createObjectURL: () => 'blob:test',
+      revokeObjectURL: () => { /* 忽略 */ },
+      // 媒体里的真实时间戳 = 表内时刻 - OFFSET（这就是真机上"表偏晚"的形状）
+      fetchRange: vi.fn(async (_u: string, r: SegmentRange) => {
+        calls.push(r)
+        const size = r.end - r.start + 1
+        if (r.start === 0) return encodeRange(0, 0, size)
+        const i = Math.floor((r.start - SEG0_START) / SEG_BYTES)
+        const real = i * SEG_DUR - OFFSET
+        return encodeRange(real, real + SEG_DUR, size)
+      }),
+      seekGiveUpMs: 60_000,
+    })
+    kernel.load({ video: t, audio: table('audio', N), duration_s: N * SEG_DUR })
+    await flush(20)
+
+    kernel.seekTo(20)                        // 目标在段 4 里
+    await flush(60)
+
+    const videoSb = ms.buffers.find((b) => b.mime.startsWith('video'))!
+    const end = videoSb.ranges.length ? videoSb.ranges[videoSb.ranges.length - 1][1] : 0
+    expect(end, `续播卡在 ${end}s（目标 20s）—— 20ms 的表内偏差把它顶住了`)
+      .toBeGreaterThan(20 + 10)
+    const distinct = new Set(calls.filter((r) => r.start !== 0).map((r) => r.start))
+    expect(distinct.size, '反复取同一段 = 每次都被算成"下一段"').toBeGreaterThan(3)
+  })
+})
+
 describe('mseKernel · 段表时刻的舍入误差不许把续播卡住（devlog/324）', () => {
   /**
    * 真机现场（15:56，`BV1esa36qEPX`，76 分钟）：音频段表 `dur_s` 是四舍五入的
@@ -577,9 +623,13 @@ describe('mseKernel · 段表时刻的舍入误差不许把续播卡住（devlog
     expect(r.distinct, '反复取同一段 = 每次都算回"刚取过的那段"').toBeGreaterThan(3)
   })
 
-  it('**没有** `t`（老后端）⇒ 退回累加，现象可复现（这就是真机那条路径）', async () => {
+  it('**没有** `t`（老后端）⇒ 还有第二道防线（`devlog/327` 的表内偏差容差）', async () => {
+    // ⚠️ 这两条判据本来是"带 t 前进 / 不带 t 卡住"的正反对照（`devlog/324`）。
+    //    327 又加了一道更一般的防线（"算出来的正是刚取过的那一段、且它的表内结尾只比缓冲末尾
+    //    晚一点点 ⇒ 往后推一段"），它把"累加偏差"这条路径也一起兜住了 ⇒ 这里改成断言
+    //    "两道防线各自都够用"。真正针对 327 的反向验证在 327 那组用例里（去掉容差即红）。
     const r = await run(false)
-    expect(r.end, '老后端还能往前走？那这条判据就没在测该测的东西').toBeLessThan(30)
+    expect(r.end, `老后端也该能往前走（第二道防线）：${r.logs.join(' | ')}`).toBeGreaterThan(30)
   })
 })
 
