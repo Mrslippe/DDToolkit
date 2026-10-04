@@ -68,6 +68,52 @@ def _client(**kw):
     return _FakeClient({"playurl": _playurl(**kw), "view": _view()})
 
 
+def _view_multi():
+    """分P 的 view 响应（形状照真机 `BV1esa36qEPX`：顶层 `cid` = 第 1 P，`duration` = 各 P 之和）。"""
+    return _FakeResp({"code": 0, "data": {
+        "cid": 111, "title": "多P实况", "duration": 100 + 200 + 300,
+        "pages": [{"cid": 111, "page": 1, "part": "第一章", "duration": 100},
+                  {"cid": 222, "page": 2, "part": "第二章", "duration": 200},
+                  {"cid": 333, "page": 3, "part": "第三章", "duration": 300}]}})
+
+
+def test_pages_are_carried_out_of_view():
+    """`resolve_video` 要带出 `pages`（`devlog/329`）：只播第 1 P 就是因为以前没这东西。"""
+    c = _FakeClient({"view": _view_multi()})
+    got = asyncio.run(bili_play.resolve_video("BV1", client=c))
+    assert got["cid"] == 111, "顶层 cid 就是第 1 P（真机实测）"
+    assert [p["page"] for p in got["pages"]] == [1, 2, 3]
+    assert got["pages"][1] == {"cid": 222, "page": 2, "part": "第二章", "duration_s": 200}
+
+
+def test_explicit_cid_is_sent_to_playurl_and_not_served_from_page1_cache():
+    """指定 `cid` ⇒ playurl 必须带它，**且不能被第 1 P 的缓存命中**（`devlog/329`）。
+
+    判据挑这里：缓存键少一个 `cid` 就会出现"点了 P2、播的还是 P1" —— 那正是老实现的表现。
+    """
+    bili_play.clear_cache()
+    c = _FakeClient({"view": _view_multi(),
+                     "playurl": _playurl()})
+    first = asyncio.run(bili_play.play_info("BV1", client=c))
+    assert first["cid"] == 111 and first["page"] == 1
+    second = asyncio.run(bili_play.play_info("BV1", cid=222, client=c))
+    assert second["cid"] == 222 and second["page"] == 2, "切 P 命中了 P1 的缓存"
+    sent = [p for u, p, _h in c.calls if "playurl" in u]
+    assert [p["cid"] for p in sent] == [111, 222]
+    # 响应里带上分P 列表，前端不必再跑一趟（少一次往返）
+    assert [p["page"] for p in second["pages"]] == [1, 2, 3]
+
+
+def test_unknown_cid_is_honest_not_silently_page1():
+    """要的那一 P 不在这个视频里 ⇒ 如实 `not_found`（别静默播第 1 P：那会让人以为切成功了）。"""
+    bili_play.clear_cache()
+    c = _FakeClient({"view": _view_multi()})
+    with pytest.raises(bili_play.PlayError) as ei:
+        asyncio.run(bili_play.play_info("BV1", cid=999, client=c))
+    assert ei.value.kind == "not_found"
+    assert "999" in ei.value.message
+
+
 def test_defaults_to_dash_with_top_quality_and_durl_is_a_separate_call():
     """① 默认 `fnval=16` + **显式要最高档**（不传 qn 只给 720P，实测）；
     ② durl 与 DASH **互斥**：回落是**另一次** `fnval=1` 调用，不是同一次带着。"""

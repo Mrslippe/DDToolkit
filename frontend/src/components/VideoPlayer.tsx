@@ -38,6 +38,7 @@ import { openExternalFromHref } from '../utils/externalLinkGuard'
 import { watchPlayback } from '../utils/playbackProbe'
 import { reportUserError } from '../utils/problemReport'
 import { MseKernel, kernelSupported, type KernelStreams } from '../utils/mseKernel'
+import type { BiliPage } from '../api/types'
 import { MAX_AUTO_DOWNGRADES, linkSlowNote, mbps, pickDowngrade } from '../utils/qualityAbr'
 import { effectiveKernel, noteMseFailure, subscribeKernel } from '../utils/videoKernel'
 import {
@@ -83,6 +84,17 @@ interface Props {
   qualities?: { id: number; label: string; disabled?: boolean; note?: string }[] | null
   qualityId?: number | null
   onPickQuality?: (id: number) => void
+  /**
+   * **分P**（`devlog/329`）：B站一个视频可以有多个 P（每 P 是独立的一条流）。
+   *
+   * 老实现永远只播第 1 P —— 实测某 7 P 直播实况（共 6.6 小时）在应用里只剩 76 分钟，
+   * 且**没有任何入口**。`pages.length > 1` 时才渲染"分P"菜单。
+   */
+  pages?: BiliPage[] | null
+  /** 当前第几 P（1 起） */
+  currentPage?: number
+  /** 用户选了另一 P（调用方重取流；与换清晰度同一条路） */
+  onPickPage?: (cid: number) => void
   /**
    * 播不动时的**外部回落**（B站：DASH → durl，由调用方重新取流）；给了它就不再显示"播不了"兜底卡
    */
@@ -274,7 +286,8 @@ function fmt(t: number): string {
 }
 
 export default function VideoPlayer({ video, poster, permalink, dash, qualities, qualityId,
-                                      onPickQuality, onFallback, autoPlay, loading,
+                                      onPickQuality, pages, currentPage, onPickPage,
+                                      onFallback, autoPlay, loading,
                                       segments, onKernelFallback }: Props) {
   const prefs = useSyncExternalStore(subscribePlayerPrefs, playerPrefs)
   /**
@@ -349,6 +362,7 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
   /** 倍速 / 清晰度浮层：**hover 触发**（devlog/316；键盘与触屏走点击，见 `useHoverMenu`） */
   const rateMenu = useHoverMenu()
   const qualityMenu = useHoverMenu()
+  const pageMenu = useHoverMenu()
   const [fs, setFs] = useState(false)
   /**
    * **播完了**（`devlog/317`）：画面冻结在尾帧 + 中央一颗"重新播放"。
@@ -1380,6 +1394,34 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
         </div>
 
         <div className="vp-rate">
+          {/* 分P（`devlog/329`）：只在**真的多P**时出现（单P视频多一个按钮纯属噪音）。
+              放在清晰度左边：它决定"播哪一段"，比清晰度更靠前 */}
+          {pages && pages.length > 1 && (
+            <div className="vp-rate" data-vp-menu="page"
+                 onMouseEnter={pageMenu.enter} onMouseLeave={pageMenu.leave}>
+              <button type="button" className="vp-btn vp-btn--text"
+                      aria-label="分P" aria-haspopup="true" aria-expanded={pageMenu.open}
+                      onClick={pageMenu.toggle}>
+                P{currentPage ?? 1}
+              </button>
+              {pageMenu.open && (
+                <div className="vp-menu vp-menu--page">
+                  {pages.map((p) => (
+                    <button key={p.cid} type="button"
+                            className={`vp-menu-item${p.page === (currentPage ?? 1) ? ' is-on' : ''}`}
+                            title={p.part}
+                            onClick={() => {
+                              pageMenu.close()
+                              if (p.page !== (currentPage ?? 1)) onPickPage?.(p.cid)
+                            }}>
+                      {/* `P1 标题`（标题可能很长 ⇒ 由 CSS 截断，别让菜单无限宽） */}
+                      P{p.page} {p.part}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           {qualities && qualities.length > 0 && (
             /* 清晰度这一组**自己**是 hover 区（不能挂在外面那个 `.vp-rate` 上：
                那样指针划过倍速也会把清晰度菜单带出来）—— devlog/316 */

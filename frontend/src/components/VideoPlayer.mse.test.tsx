@@ -253,6 +253,49 @@ describe('VideoPlayer · MSE 内核（默认内核）', () => {
     expect(note?.textContent).toContain('链路实测')
   })
 
+  it('**多P 视频**：分P 菜单列出每一 P，点另一 P 回调 `onPickPage(cid)`（devlog/329）', async () => {
+    /**
+     * 起因：老实现永远只播第 1 P —— 实测某 7 P 直播实况（共 6.6 小时）在应用里只剩 76 分钟，
+     * 而界面上**没有任何入口**（用户根本没机会发现丢了内容）。
+     */
+    stubFetch()
+    const onPickPage = vi.fn()
+    const pages = [
+      { cid: 111, page: 1, part: '第一章', duration_s: 100 },
+      { cid: 222, page: 2, part: '第二章', duration_s: 200 },
+    ]
+    await act(async () => {
+      root.render(
+        <VideoPlayer video={{ url: DASH.video }} dash={DASH} segments={streams()}
+                      pages={pages} currentPage={1} onPickPage={onPickPage} />)
+      await flush()
+    })
+
+    const btn = [...host.querySelectorAll('button')]
+      .find((b) => b.getAttribute('aria-label') === '分P')!
+    expect(btn.textContent, '按钮显示当前在第几 P').toContain('P1')
+    await act(async () => { btn.dispatchEvent(new MouseEvent('click', { bubbles: true })); await flush() })
+
+    const items = [...host.querySelectorAll('.vp-menu--page .vp-menu-item')]
+    expect(items.map((b) => b.textContent)).toEqual(['P1 第一章', 'P2 第二章'])
+    const p2 = items[1] as HTMLButtonElement
+    await act(async () => { p2.dispatchEvent(new MouseEvent('click', { bubbles: true })); await flush() })
+    expect(onPickPage, '切 P 要把那一 P 的 cid 交给调用方（它负责重取流）').toHaveBeenCalledWith(222)
+  })
+
+  it('**单P 视频**不渲染分P 菜单（多一个按钮纯属噪音）', async () => {
+    stubFetch()
+    await act(async () => {
+      root.render(
+        <VideoPlayer video={{ url: DASH.video }} dash={DASH} segments={streams()}
+                      pages={[{ cid: 111, page: 1, part: '唯一一 P', duration_s: 100 }]}
+                      currentPage={1} />)
+      await flush()
+    })
+    expect([...host.querySelectorAll('button')]
+      .some((b) => b.getAttribute('aria-label') === '分P')).toBe(false)
+  })
+
   it('拖到未缓冲处 ⇒ 取的是**目标那一段**的字节范围（治"跳转后卡一帧"的那一步）', async () => {
     const { calls } = stubFetch()
     await act(async () => {

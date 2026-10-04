@@ -115,6 +115,40 @@ describe('BiliVideo', () => {
     play.mockRestore()
   })
 
+  it('**切 P 要带上 cid 重取流**（且不重置用户选的清晰度）—— devlog/329', async () => {
+    /**
+     * 老实现永远只播第 1 P（`play_info` 只发顶层 cid）：7 P 的实况在应用里只剩 76 分钟，
+     * 而且没有任何入口。这条盯的是"切 P 到底发了什么"：
+     * ① `cid` 必须带上；② 顺带把当前清晰度带上（别悄悄回到默认档）。
+     */
+    const MULTI = {
+      ...INFO,
+      pages: [{ cid: 111, page: 1, part: '第一章', duration_s: 100 },
+              { cid: 222, page: 2, part: '第二章', duration_s: 200 }],
+      page: 1,
+    }
+    biliPlay.mockResolvedValue(MULTI)
+    biliSegments.mockResolvedValue({ bvid: 'BV1', quality: 80, duration_s: 10,
+                                     video: null, audio: null })
+    act(() => root.render(<BiliVideo postId={7} />))
+    await act(async () => {
+      host.querySelector<HTMLButtonElement>('.vp-bigplay')!.click()
+      await Promise.resolve()
+    })
+    expect(biliPlay.mock.calls[0][1] ?? {}, '第一次不指定 cid（默认第 1 P）')
+      .not.toHaveProperty('cid')
+
+    // 打开分P 菜单 → 点 P2
+    const btn = [...host.querySelectorAll('button')]
+      .find((b) => b.getAttribute('aria-label') === '分P')!
+    await act(async () => { btn.dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve() })
+    const p2 = [...host.querySelectorAll<HTMLButtonElement>('.vp-menu--page .vp-menu-item')][1]
+    await act(async () => { p2.dispatchEvent(new MouseEvent('click', { bubbles: true })); await Promise.resolve() })
+
+    const second = biliPlay.mock.calls[1]
+    expect(second?.[1], `切 P 没带 cid：${JSON.stringify(second)}`).toMatchObject({ cid: 222, qn: 80 })
+  })
+
   it('失败**如实显示**后端分类的原因，不自己编文案', async () => {
     biliPlay.mockRejectedValue(new Error('没有观看权限（充电专属 / 地区限制 / 需要登录）'))
     act(() => root.render(<BiliVideo postId={7} />))

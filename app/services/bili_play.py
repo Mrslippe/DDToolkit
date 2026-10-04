@@ -215,7 +215,12 @@ def clear_cache() -> None:
 
 
 async def resolve_video(bvid: str, *, client: httpx.AsyncClient | None = None) -> dict:
-    """bvid → `{cid, title, duration}`（带 1 小时缓存：这些字段不会变）。"""
+    """bvid → `{cid, title, duration, pages}`（带 1 小时缓存：这些字段不会变）。
+
+    ⚠️ **分P**（2026-10-04，`devlog/329`）：`view` 顶层的 `cid` **就是第 1 P**，
+    而 `duration` 是**各 P 之和**（实测 `BV1esa36qEPX`：7 P 共 28526s，P1 只有 4587s）。
+    所以这里把 `pages` 一起带出来 —— 上层据此播"用户选的那一 P"，并且**别拿 duration 当片长**。
+    """
     hit = _view_cache.get(bvid)
     if hit and time.monotonic() - hit[2] < _VIEW_TTL:
         return {"cid": hit[0], **hit[1]}
@@ -227,7 +232,12 @@ async def resolve_video(bvid: str, *, client: httpx.AsyncClient | None = None) -
     finally:
         if own:
             await client.aclose()
-    info = {"title": data.get("title"), "duration": data.get("duration")}
+    pages = [{"cid": int(p.get("cid") or 0),
+              "page": int(p.get("page") or 0),
+              "part": p.get("part") or "",
+              "duration_s": int(p.get("duration") or 0)}
+             for p in (data.get("pages") or []) if p.get("cid")]
+    info = {"title": data.get("title"), "duration": data.get("duration"), "pages": pages}
     cid = int(data.get("cid") or 0)
     if not cid:
         raise PlayError("拿不到 cid（视频信息不完整）", kind="failed")
@@ -235,7 +245,24 @@ async def resolve_video(bvid: str, *, client: httpx.AsyncClient | None = None) -
     return {"cid": cid, **info}
 
 
+def _pick_page(pages: list[dict], cid: int | None, default_cid: int) -> int:
+    """用户要哪一 P：没指定 ⇒ 第 1 P（`pages[0]`，与上游顶层 `cid` 同义）。
+
+    指定了但不在这个视频里 ⇒ 如实报 `not_found`（别静默播第 1 P —— 那会让人以为切成功了）。
+    ⚠️ 上游没给 `pages` 时**退回顶层 `cid`**（老行为）：缺一个可选字段不该让视频播不了。
+    """
+    if not pages:
+        return int(cid) if cid is not None else int(default_cid)
+    if cid is None:
+        return int(pages[0]["cid"])
+    for p in pages:
+        if int(p["cid"]) == int(cid):
+            return int(cid)
+    raise PlayError(f"这一 P（cid={cid}）不在该视频里", kind="not_found")
+
+
 async def play_info(bvid: str, *, qn: int | None = None, durl_fallback: bool = False,
+                    cid: int | None = None,
                     client: httpx.AsyncClient | None = None) -> dict:
     """取流：**默认 DASH（fnval=16）+ 显式要最高档**。
 
@@ -245,13 +272,18 @@ async def play_info(bvid: str, *, qn: int | None = None, durl_fallback: bool = F
 
     `qn` 只表达"我想要哪档"；B站按**账号权益 + 片源**给（实测本账号最高 1080P），
     返回值里的 `quality` 才是**实际拿到的档**，前端照它显示。
+
+    `cid` 指定**哪一 P**（`devlog/329`）；不传 = 第 1 P（老行为）。⚠️ 缓存键必须带上它 ——
+    少了它，"切到 P2"会命中 P1 的缓存、播的还是 P1（这正是"分P 只有第一段能看"的一半原因）。
     """
-    key = f"{bvid}:{qn or DEFAULT_QN}:{'durl' if durl_fallback else 'dash'}"
+    resolved = await resolve_video(bvid, client=client)
+    pages = resolved["pages"]
+    want = _pick_page(pages, cid, resolved["cid"])
+    key = (f"{bvid}:{want}:{qn or DEFAULT_QN}:{'durl' if durl_fallback else 'dash'}")
     hit = _play_cache.get(key)
     if hit and time.monotonic() - hit[1] < CACHE_TTL:
         return hit[0]
-    cid = (await resolve_video(bvid, client=client))["cid"]
-    params = {"bvid": bvid, "cid": cid, "fourk": 1,
+    params = {"bvid": bvid, "cid": want, "fourk": 1,
               "fnval": FNVAL_DURL if durl_fallback else FNVAL_DASH,
               "qn": qn or DEFAULT_QN}
     own = client is None
@@ -262,8 +294,11 @@ async def play_info(bvid: str, *, qn: int | None = None, durl_fallback: bool = F
     finally:
         if own:
             await client.aclose()
-    out = normalize(data, bvid=bvid, cid=cid)
+    out = normalize(data, bvid=bvid, cid=want)
     out["kernel"] = "durl" if durl_fallback else "dash"
+    # 分P 信息随取流一起下发（前端要拿它渲染"分P"菜单；少一次往返）
+    out["pages"] = pages
+    out["page"] = next((p["page"] for p in pages if p["cid"] == want), 1)
     if not out["dash"]["video"] and not out["durl"]:
         raise PlayError("这次没有拿到任何播放地址（可重试）", kind="failed")
     _play_cache[key] = (out, time.monotonic())

@@ -376,6 +376,22 @@ export interface BiliPlayInfo {
   durl: { url: string | null; urls?: string[] | null
           size?: number | null; length?: number | null }[]
   expires_in: number
+  /**
+   * **分P 列表**（`devlog/329`）：`null`/空 = 单 P 视频（绝大多数）。
+   *
+   * ⚠️ 上游 `view.duration` 是**各 P 之和** —— 别拿它当片长（进度条一律以段表/元素时长为准）。
+   */
+  pages?: BiliPage[] | null
+  /** 这次播的是第几 P（1 起） */
+  page?: number
+}
+
+/** B站视频的一 P（`view.pages[]`） */
+export interface BiliPage {
+  cid: number
+  page: number
+  part: string
+  duration_s: number
 }
 
 /** 段表里的一个字节区间（**闭区间**，直接喂 `Range: bytes=start-end`）。 */

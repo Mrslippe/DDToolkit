@@ -88,7 +88,8 @@ export default function BiliVideo({ postId, poster, permalink }: Props) {
    * —— 用户看到的是"画面重来一次"。所以这里等一下（上限 `SEGMENTS_WAIT_MS`），
    * 拿不到就 `null` 交给旧内核，**不报错**（用户不需要知道内核的事，他只要画面）。
    */
-  const loadSegments = async (got: BiliPlayInfo, qn?: number): Promise<KernelStreams | null> => {
+  const loadSegments = async (got: BiliPlayInfo, qn?: number,
+                             cid?: number): Promise<KernelStreams | null> => {
     const best = got.dash.video[0]
     // 三道闸门：只有 DASH 能按段取；内核被切回旧的就别白跑一次；宿主没有 MSE 更别跑
     if (got.kernel !== 'dash' || !best?.base_url || !mseAvailable()
@@ -96,7 +97,7 @@ export default function BiliVideo({ postId, poster, permalink }: Props) {
       return null
     }
     const race = await Promise.race([
-      api.biliSegments(postId, { qn }).catch((e: Error) => {
+      api.biliSegments(postId, { qn, cid }).catch((e: Error) => {
         void api.clientLog(`[video] 段表取不到（走渐进式）：${e?.message ?? String(e)}`)
           .catch(() => { /* 诊断失败不影响播放 */ })
         return null
@@ -111,14 +112,14 @@ export default function BiliVideo({ postId, poster, permalink }: Props) {
    * 取流。`resetRetry` **只在用户手势**（首次点播放 / 换清晰度）上传 true：
    * 自动补救不算新手势 —— 否则"重取成功 → 又播不动"会无限重取（devlog/293）。
    */
-  const load = async (opts: { qn?: number; fallback?: boolean } = {},
+  const load = async (opts: { qn?: number; fallback?: boolean; cid?: number } = {},
                       resetRetry = false) => {
     setBusy(true)
     setErr(null)
     if (resetRetry) tried.current = { triedRefresh: false, triedFallback: false }
     try {
       const got = await api.biliPlay(postId, opts)
-      const segs = await loadSegments(got, opts.qn)
+      const segs = await loadSegments(got, opts.qn, opts.cid)
       // 两个 state 同一次提交（React 18 会批）：第一帧就带着内核信息上屏，不会先渐进后 MSE
       setInfo(got)
       setSegments(segs)
@@ -187,6 +188,12 @@ export default function BiliVideo({ postId, poster, permalink }: Props) {
     note: PREMIUM_QN.has(q.id) ? '需大会员' : undefined,
   }))
   const canRetry = nextRetryAction({ expired: isExpired(), ...tried.current }) !== 'none'
+  /**
+   * **分P 菜单的数据**（`devlog/329`）：上游 `view.duration` 是各 P 之和，
+   * 老实现永远播第 1 P —— 7 P 的直播实况在应用里只剩第一段，且**没有任何入口**。
+   * 只有一 P（绝大多数视频）时 `VideoPlayer` 不渲染这个菜单。
+   */
+  const pages = info.pages ?? []
   const rest = (urls?: string[] | null, head?: string | null) =>
     (urls ?? []).filter((u) => u && u !== head)
 
@@ -213,6 +220,11 @@ export default function BiliVideo({ postId, poster, permalink }: Props) {
       /* 换清晰度/补救时的重新取流：播放器中央转圈（旧流还在，别把画面与进度丢掉） */
       loading={busy}
       onPickQuality={(id) => void load({ qn: id }, true)}
+      /* 分P（devlog/329）：切 P = 重取流（与换清晰度同一条路，播不动时才回落）。
+         ⚠️ `qn` 要带上当前档：切 P 不该把用户选的清晰度悄悄重置回默认 */
+      pages={pages}
+      currentPage={info.page ?? 1}
+      onPickPage={(cid) => void load({ qn: info.quality || undefined, cid }, true)}
       /* 播不动：过期 ⇒ 同档重取；否则回落 durl（单 mp4、720P、不需要音视频分离）。各一次 */
       onFallback={canRetry ? onPlaybackFailed : undefined}
     />

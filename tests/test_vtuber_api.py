@@ -1777,20 +1777,23 @@ def _bili_video_post(platform="bilibili", bvid="BV1TEST"):
 
 
 @pytest.mark.parametrize("qs,expect", [
-    ("", {"qn": None, "durl_fallback": False}),
-    ("?qn=80", {"qn": 80, "durl_fallback": False}),
-    ("?fallback=true", {"qn": None, "durl_fallback": True}),
-    ("?qn=64&fallback=true", {"qn": 64, "durl_fallback": True}),
+    ("", {"qn": None, "durl_fallback": False, "cid": None}),
+    ("?qn=80", {"qn": 80, "durl_fallback": False, "cid": None}),
+    ("?fallback=true", {"qn": None, "durl_fallback": True, "cid": None}),
+    ("?qn=64&fallback=true", {"qn": 64, "durl_fallback": True, "cid": None}),
+    # 分P（devlog/329）：`cid` 也必须**原样接到**服务层 —— 漏接的表现是"点了 P2、播的还是 P1"
+    ("?cid=222", {"qn": None, "durl_fallback": False, "cid": 222}),
+    ("?qn=64&cid=333", {"qn": 64, "durl_fallback": False, "cid": 333}),
 ])
 def test_bili_play_route_forwards_qn_and_fallback(monkeypatch, client, qs, expect):
-    """`/bili/play/{id}` 把 `qn` / `fallback` **原样接到** `bili_play.play_info` 上。
+    """`/bili/play/{id}` 把 `qn` / `fallback` / `cid` **原样接到** `bili_play.play_info` 上。
 
     为什么这条必须打在**路由层**：`?fallback=true` 曾被漏接 —— 前端发了，路由签名里没这个
     参数，而 **FastAPI 对未知查询参数默认静默忽略** ⇒ 用户点"播不动"后回落重取，取回来的
     还是 DASH。当时的服务层用例直接调 `play_info(durl_fallback=True)`，**绕过了路由**，
     所以全绿（devlog/292）。这一层的价值就是"接线接上了没有"。
 
-    反向验证：把路由签名里的 `fallback` 参数删掉 ⇒ `?fallback=true` 那两条红。
+    反向验证：把路由签名里的 `fallback`（或 `cid`）参数删掉 ⇒ 对应用例红。
     """
     import app.services.bili_play as play_svc
 
@@ -1812,6 +1815,38 @@ def test_bili_play_route_forwards_qn_and_fallback(monkeypatch, client, qs, expec
     assert {k: v for k, v in seen.items() if k != "bvid"} == expect, \
         f"{qs or '(无参数)'} 没接到服务上：{seen}"
     assert r.json()["kernel"] == ("durl" if expect.get("durl_fallback") else "dash")
+
+
+def test_bili_segments_route_forwards_cid(monkeypatch, client):
+    """`/bili/segments/{id}` 的 `cid` 也要接到服务层（`devlog/329`）。
+
+    判据挑这里：段表与播放地址**必须是同一条流** —— 段表按 P1 取、地址按 P2 取的话，
+    内核会拿着 P1 的字节表去 P2 的文件里取段（现象与 `devlog/327` 那类"取回来落不下"同形）。
+    """
+    import app.services.bili_play as play_svc
+    import app.services.bili_segments as seg_svc
+
+    seen: dict = {}
+
+    async def _fake_play(bvid, **kw):
+        seen.update(kw)
+        return {"quality": 80, "dash": {"video": [], "audio": []}, "durl": [],
+                "expires_in": 120, "kernel": "dash"}
+
+    async def _fake_tables(play):
+        return {"video": {"mime": "video/mp4; codecs=\"x\"", "init": {"start": 0, "end": 1},
+                          "segments": [], "duration_s": 1, "urls": ["u"]},
+                "audio": {"mime": "audio/mp4; codecs=\"x\"", "init": {"start": 0, "end": 1},
+                          "segments": [], "duration_s": 1, "urls": ["u"]},
+                "duration_s": 1}
+
+    monkeypatch.setattr(play_svc, "play_info", _fake_play)
+    monkeypatch.setattr(seg_svc, "stream_tables", _fake_tables)
+    pid = _bili_video_post()
+
+    r = client.get(f"/bili/segments/{pid}?qn=64&cid=222")
+    assert r.status_code == 200, r.text
+    assert seen.get("qn") == 64 and seen.get("cid") == 222, f"cid 没接到服务上：{seen}"
 
 
 def test_bili_play_route_rejects_non_video_posts(client):
@@ -2039,7 +2074,7 @@ def test_bili_segments_route_forwards_qn_and_returns_both_tables(monkeypatch, cl
     r = client.get(f"/bili/segments/{pid}?qn=64")
     assert r.status_code == 200, r.text
     body = r.json()
-    assert seen == {"bvid": "BVSEG", "qn": 64, "quality_from_play": 64}, \
+    assert seen == {"bvid": "BVSEG", "qn": 64, "cid": None, "quality_from_play": 64}, \
         f"qn 没原样接到取流上：{seen}"
     assert body["bvid"] == "BVSEG" and body["quality"] == 64
     assert body["video"]["segments"][0]["start"] == 948

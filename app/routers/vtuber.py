@@ -1077,6 +1077,7 @@ def _bili_bvid_of(db: Session, post_id: int) -> str:
 @router.get("/bili/play/{post_id}")
 async def bili_play(post_id: int, qn: int | None = Query(None),
                     fallback: bool = Query(False),
+                    cid: int | None = Query(None),
                     db: Session = Depends(get_db)):
     """B站视频取流（2026-10-03，devlog/289；C1+C2，**默认 DASH**）。
 
@@ -1089,13 +1090,16 @@ async def bili_play(post_id: int, qn: int | None = Query(None),
     - `fallback=true` ⇒ 换 `fnval=1` 取 **durl 单 mp4**（720P 封顶）：DASH 那条路在真机上
       播不动时，前端拿它当兜底（⚠️ 这个参数 2026-10-03 曾**漏接**：前端发了、路由没收，
       于是 DASH 失败后重取回来的还是 DASH —— devlog/292）；
+    - **分P**（devlog/329）：`cid` 指定哪一 P（不传 = 第 1 P）。响应里带 `pages`
+      （`[{cid,page,part,duration_s}]`）与 `page`，前端据此渲染"分P"菜单。
+      ⚠️ 上游 `view.duration` 是**各 P 之和**，别拿它当片长（进度条一律以段表/元素时长为准）；
     - 失败**如实分类**：`-404` 不存在 / `-403` 无权限（充电专属等）/ `-352` 风控 / 其它。
     """
     from app.services import bili_play
 
     bvid = _bili_bvid_of(db, post_id)
     try:
-        return await bili_play.play_info(bvid, qn=qn, durl_fallback=fallback)
+        return await bili_play.play_info(bvid, qn=qn, durl_fallback=fallback, cid=cid)
     except bili_play.PlayError as e:
         status = {"not_found": 404, "forbidden": 403, "risk_control": 429}.get(e.kind, 502)
         raise HTTPException(status, e.message) from e
@@ -1103,6 +1107,7 @@ async def bili_play(post_id: int, qn: int | None = Query(None),
 
 @router.get("/bili/segments/{post_id}")
 async def bili_segments(post_id: int, qn: int | None = Query(None),
+                        cid: int | None = Query(None),
                         db: Session = Depends(get_db)):
     """B站 DASH 的**段表**（2026-10-04，devlog/312）：`时间 → 字节`，MSE 内核按它取段。
 
@@ -1117,13 +1122,16 @@ async def bili_segments(post_id: int, qn: int | None = Query(None),
     （各 64KB）—— 塞进取流会把"渐进式路径"也拖慢；而 MSE 这条路本来就必须先有表才能开播。
     前端拿不到表就**静默退回渐进式**（`kernelChoice` 那条退路），播放不受影响。
 
+    `cid` 与 `/bili/play` 同义（哪一 P，`devlog/329`）—— ⚠️ 两条端点必须拿到**同一条流**，
+    否则"分段表与播放地址对不上"（切 P 时尤其明显）。
+
     失败一律 502 + 如实原因（`no_sidx` = 这条流没有索引 ⇒ 做不了按段取数，不是我们挂了）。
     """
     from app.services import bili_play, bili_segments
 
     bvid = _bili_bvid_of(db, post_id)
     try:
-        play = await bili_play.play_info(bvid, qn=qn)
+        play = await bili_play.play_info(bvid, qn=qn, cid=cid)
         tables = await bili_segments.stream_tables(play)
     except bili_play.PlayError as e:
         status = {"not_found": 404, "forbidden": 403, "risk_control": 429}.get(e.kind, 502)

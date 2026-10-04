@@ -668,10 +668,11 @@ export const api = {
    * 登录态也只在后端的 `.env` 里。地址**短时效 + 绑 IP** ⇒ 过期（`expires_in`）要重取一次。
    * `qn` 是"我想要哪档"（默认最高，B站按权益回落）；`fallback` 取 durl 单 mp4（720P 封顶）。
    */
-  biliPlay: (postId: number, opts: { qn?: number; fallback?: boolean } = {}) => {
+  biliPlay: (postId: number, opts: { qn?: number; fallback?: boolean; cid?: number } = {}) => {
     const q = new URLSearchParams()
     if (opts.qn) q.set('qn', String(opts.qn))
     if (opts.fallback) q.set('fallback', 'true')
+    if (opts.cid) q.set('cid', String(opts.cid))     // 分P：哪一 P（devlog/329）
     const qs = q.toString()
     return request<BiliPlayInfo>(`/bili/play/${postId}${qs ? `?${qs}` : ''}`)
   },
@@ -682,9 +683,11 @@ export const api = {
    * 只在新内核这条路用（`kernelChoice() === 'mse'` 且是 DASH）；拿不到就**静默退回**渐进式
    * —— 所以这里失败不该弹错误，只该留一行诊断。
    */
-  biliSegments: (postId: number, opts: { qn?: number } = {}) => {
+  biliSegments: (postId: number, opts: { qn?: number; cid?: number } = {}) => {
     const q = new URLSearchParams()
     if (opts.qn) q.set('qn', String(opts.qn))
+    // ⚠️ 段表必须与取流**同一条流**：切 P 时少这个参数就会"拿着 P1 的字节表去 P2 取段"
+    if (opts.cid) q.set('cid', String(opts.cid))
     const qs = q.toString()
     return request<BiliSegments>(`/bili/segments/${postId}${qs ? `?${qs}` : ''}`)
   },
