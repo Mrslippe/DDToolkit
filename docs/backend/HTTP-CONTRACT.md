@@ -131,7 +131,7 @@ retire-when: HTTP 层换框架，或路由整体重排
 | 方法 + 路径 | 说明 |
 |---|---|
 | GET `/bili/play/{post_id}?qn=&fallback=` | 取播放地址：**用户点播放才调**（地址短时效 + 绑 IP ⇒ 120s 短缓存、**不落库**）。`qn` = "想要哪档"（实际档看账号权益，响应里的 `quality` 才是真给的）；`fallback=true` ⇒ 换 `fnval=1` 取 **durl 单 mp4**（720P 封顶，DASH 播不动时用）。响应只给前端要用的 `{quality, accept[], dash:{video[],audio[]}, durl[], expires_in, kernel}`；**Cookie 只在请求头**。错误如实分级：帖子不存在 404 / 非 B站帖或缺 bvid 400 / 上游 `-404` 404、`-403` 403（充电专属等）、`-352` 429 |
-| GET `/bili/segments/{post_id}?qn=` | **段表**（devlog/312）：MSE 内核靠它"跳到第 N 秒就取那一段"。响应 `{bvid, quality, duration_s, video:{mime,urls[],init,segments[],duration_s}, audio:{…同形…}}`——`mime` 是 `MediaSource.isTypeSupported` 要的**精确 codecs 串**（缺 codecs 时只给容器类型，前端据此判"不支持"并退渐进式），`init`/`segments[].start|end` 是**闭区间字节偏移**（直接喂 `Range`）。两条流各取 64KB 头部解析 `ftyp/moov/sidx`（110s 缓存，跟着取流那 120s 走）。错误与 `/bili/play` 同一套分级，另加 **502**：拿不到段表（没有 `sidx` / 上游取头部失败）——前端把 502 当"这条路不成立"，**静默退回渐进式**，不打扰用户 |
+| GET `/bili/segments/{post_id}?qn=` | **段表**（devlog/312）：MSE 内核靠它"跳到第 N 秒就取那一段"。响应 `{bvid, quality, duration_s, video:{mime,urls[],init,segments[],duration_s}, audio:{…同形…}}`——`mime` 是 `MediaSource.isTypeSupported` 要的**精确 codecs 串**（缺 codecs 时只给容器类型，前端据此判"不支持"并退渐进式），`init`/`segments[].start|end` 是**闭区间字节偏移**（直接喂 `Range`）。⚠️ 每段还带 **`t` = 精确起点（秒，按原始 tick 累加）**（`devlog/324`）：`dur_s` 是三位小数四舍五入的（音频 5.0155 → 5.016，每段多 0.0005s，531 段累计**偏晚 0.26s**）⇒ 前端若拿它累加，"缓冲末尾之后该取哪一段"会永远算回刚取过的那一段（真机"一直转圈"）；整表另有 `duration_exact_s`。两条流各取 64KB 头部解析 `ftyp/moov/sidx`（110s 缓存，跟着取流那 120s 走）。错误与 `/bili/play` 同一套分级，另加 **502**：拿不到段表（没有 `sidx` / 上游取头部失败）——前端把 502 当"这条路不成立"，**静默退回渐进式**，不打扰用户 |
 
 **抓取 / 归档 / 候选池**
 

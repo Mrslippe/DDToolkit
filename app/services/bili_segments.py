@@ -150,17 +150,25 @@ def segment_table(head: bytes, *, total_bytes: int | None = None) -> dict:
     offset = sidx[2] + box_len + parsed["first_offset"]
     ts = parsed["timescale"]
     segments = []
+    #: ⚠️ **累计时刻要用原始 tick 累加，不能拿四舍五入后的 `dur_s` 加**（2026-10-04，devlog/324）：
+    #: 音频段长 5.0155s 会被写成 5.016（每段多 0.0005s），531 段就累计偏晚 **0.26s**
+    #: （实测 tfdt：表说 2663.50s、真实 2663.24s）⇒ 前端"取下一段"的判据会永远算回刚取过的那一段
+    #: ⇒ 缓冲不长、播放 3 秒就饿住（真机"一直转圈"）。所以每段**同时**下发精确起点 `t`。
+    ticks = 0
     for i, e in enumerate(parsed["entries"]):
         end = offset + e["size"] - 1
         segments.append({"i": i, "start": offset, "end": end,
+                         "t": round(ticks / ts, 3),          # 精确起点（不累计四舍五入）
                          "dur_s": round(e["dur"] / ts, 3), "sap": e["sap"]})
         offset = end + 1
+        ticks += e["dur"]
     return {
         "init": {"start": 0, "end": init_end},
         "sid": {"start": sidx[2], "end": sidx[2] + box_len - 1},
         "timescale": ts,
         "segments": segments,
         "duration_s": round(sum(s["dur_s"] for s in segments), 2),
+        "duration_exact_s": round(ticks / ts, 3),      # 精确总长（同上：别累计四舍五入）
         "total_bytes": total_bytes,
         "covers_total": (total_bytes is None or offset == total_bytes),
         "box_types": types[:8],

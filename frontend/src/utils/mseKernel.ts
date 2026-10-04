@@ -45,6 +45,15 @@ export interface SegmentInfo extends SegmentRange {
   i: number
   dur_s: number
   sap: boolean
+  /**
+   * **精确起点（秒）**：后端按原始 tick 累加得出（`devlog/324`）。
+   *
+   * ⚠️ 缺了它就只能拿 `dur_s` 累加，而那是**四舍五入过**的值（音频 5.0155 → 5.016，每段多
+   * 0.0005s；531 段累计偏晚 **0.26s**，实测 tfdt 2663.24s vs 表 2663.50s）⇒
+   * "缓冲末尾之后该取哪一段"永远算回**刚取过**的那一段 ⇒ 泵反复重取、缓冲不长、
+   * 播几秒就饿住。老后端不带这个字段，所以它可选、缺了退回累加。
+   */
+  t?: number
 }
 
 export interface StreamTable {
@@ -162,12 +171,18 @@ export function kernelSupported(s: KernelStreams | null | undefined): { ok: bool
   return { ok: true, why: '' }
 }
 
-/** 每段的起始时刻（秒）；表只有 54 条，直接算，不做缓存复杂度。 */
+/**
+ * 每段的起始时刻（秒）。
+ *
+ * ⚠️ **优先用后端给的精确起点 `t`**（`devlog/324`）：拿 `dur_s` 累加是**四舍五入过的**，
+ * 音频每段多算 0.0005s ⇒ 531 段累计偏晚 0.26s ⇒ "该取下一段"会一直算回刚取过的那一段
+ * （真机：同一段连取 3 次、缓冲不长、播 3 秒就转圈）。没有 `t`（老后端/旧夹具）时才退回累加。
+ */
 export function segmentStarts(table: StreamTable): number[] {
   const out: number[] = []
   let t = 0
   for (const s of table.segments) {
-    out.push(t)
+    out.push(typeof s.t === 'number' ? s.t : t)
     t += s.dur_s
   }
   return out
@@ -197,11 +212,15 @@ export function segmentIndexAt(table: StreamTable, time: number): number {
  * ⇒ 用"开头 > time"判会**跳过第 N+1 段**，泵隔一段取一段、缓冲里每隔 5 秒一个洞
  * ⇒ 播放到洞口就饿住、补上、再撞下一个洞（实测就是这么"走走停停"的）。
  * 顺带：`remove()` 把某段切掉一半时（淘汰），这条判据也会正确地要求把它补回来。
+ *
+ * ⚠️ **"这一段的结尾"要取下一段的起点**（`devlog/324`）：段表里 `starts[i] + dur_s` 是**两个
+ * 四舍五入值相加**，与真实边界能差出零点几秒；有精确起点时用 `starts[i+1]` 才是真边界。
  */
 export function nextSegmentAfter(table: StreamTable, time: number): number {
   const starts = segmentStarts(table)
   for (let i = 0; i < starts.length; i += 1) {
-    if (starts[i] + table.segments[i].dur_s > time + 1e-3) return i
+    const end = i + 1 < starts.length ? starts[i + 1] : starts[i] + table.segments[i].dur_s
+    if (end > time + 1e-3) return i
   }
   return table.segments.length
 }
@@ -475,7 +494,8 @@ export class MseKernel {
   }
 
   private onUpdateEnd(tr: Track): void {
-    const wasInit = tr.pending === -1
+    const wasPending = tr.pending
+    const wasInit = wasPending === -1
     tr.busy = false
     tr.pending = null
     tr.retry = 0

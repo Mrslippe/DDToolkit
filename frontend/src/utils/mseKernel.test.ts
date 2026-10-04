@@ -507,6 +507,82 @@ describe('mseKernel · seek（先取段，再设时间）', () => {
   })
 })
 
+describe('mseKernel · 段表时刻的舍入误差不许把续播卡住（devlog/324）', () => {
+  /**
+   * 真机现场（15:56，`BV1esa36qEPX`，76 分钟）：音频段表 `dur_s` 是四舍五入的
+   * （5.0155 → 5.016，每段多算 0.0005s，531 段累计偏晚 **0.26s**；实测 tfdt：
+   * 表说 2663.50s、真实 2663.24s。视频轨段长正好 5.000s ⇒ 不偏 ⇒ 真机上**只有音频轨坏**）。
+   * 后果：`nextSegmentAfter(table, 缓冲末尾)` 永远算回**刚取过的那一段** ⇒ 反复重取、
+   * 缓冲不长 ⇒ "缓冲 3s 开始播、然后又一直转圈"。
+   *
+   * 修法：后端下发**精确起点 `t`**（按原始 tick 累加，不累计舍入值），前端优先用它、
+   * 并且拿**下一段的起点**当这一段的结尾。
+   */
+  const N = 12
+  const REAL_DUR = 4.99            // 真实段长（tick 精度）
+  const ROUNDED_DUR = 5.0          // 表里被四舍五入写成的值（每段多 0.01）
+
+  function driftTable(kind: 'video' | 'audio', withExact: boolean): StreamTable {
+    return {
+      url: `https://cn-x.bilivideo.com/${kind === 'video' ? 'v' : 'a'}.m4s`,
+      urls: [`https://cn-x.bilivideo.com/${kind === 'video' ? 'v' : 'a'}.m4s`],
+      mime: `${kind}/mp4; codecs="x"`, kind, init: { start: 0, end: INIT_END },
+      segments: Array.from({ length: N }, (_, i) => ({
+        i, start: SEG0_START + i * SEG_BYTES, end: SEG0_START + (i + 1) * SEG_BYTES - 1,
+        dur_s: ROUNDED_DUR, sap: true,
+        ...(withExact ? { t: Number((i * REAL_DUR).toFixed(3)) } : {}),
+      })),
+      duration_s: N * ROUNDED_DUR,
+    }
+  }
+
+  async function run(withExact: boolean) {
+    const ms = new FakeMediaSource(0)
+    const el = fakeEl(ms.buffers)
+    const logs: string[] = []
+    const calls: SegmentRange[] = []
+    const kernel = new MseKernel(el as unknown as HTMLVideoElement, {
+      createMediaSource: () => ms as unknown as MediaSource,
+      createObjectURL: () => 'blob:test',
+      revokeObjectURL: () => { /* 忽略 */ },
+      // 取段替身：**按真实段长**编码时间区间（"表 vs 现实"的差就出在这里）
+      fetchRange: vi.fn(async (_u: string, r: SegmentRange) => {
+        calls.push(r)
+        const size = r.end - r.start + 1
+        if (r.start === 0) return encodeRange(0, 0, size)
+        const i = Math.floor((r.start - SEG0_START) / SEG_BYTES)
+        const t = i * REAL_DUR
+        return encodeRange(t, t + REAL_DUR, size)
+      }),
+      log: (l) => { logs.push(l) },
+      seekGiveUpMs: 60_000,
+    })
+    const audio = driftTable('audio', withExact)
+    kernel.load({ video: driftTable('video', withExact), audio, duration_s: N * ROUNDED_DUR })
+    await flush(20)
+    const audioSb = ms.buffers.find((b) => b.mime.startsWith('audio'))!
+    kernel.seekTo(20)
+    await flush(60)
+    const spans = audioSb.ranges
+    return {
+      end: spans.length ? spans[spans.length - 1][1] : 0,
+      distinct: new Set(calls.filter((r) => r.start !== 0).map((r) => r.start)).size,
+      logs,
+    }
+  }
+
+  it('带精确起点 `t` ⇒ 续播往前走（不许反复取同一段）', async () => {
+    const r = await run(true)
+    expect(r.end, `续播只到 ${r.end}s（目标 20s）：${r.logs.join(' | ')}`).toBeGreaterThan(30)
+    expect(r.distinct, '反复取同一段 = 每次都算回"刚取过的那段"').toBeGreaterThan(3)
+  })
+
+  it('**没有** `t`（老后端）⇒ 退回累加，现象可复现（这就是真机那条路径）', async () => {
+    const r = await run(false)
+    expect(r.end, '老后端还能往前走？那这条判据就没在测该测的东西').toBeLessThan(30)
+  })
+})
+
 describe('mseKernel · "同一段连取两次"不许把一条轨永久冻死（devlog/323）', () => {
   /**
    * 真机现场（15:45:19，76 分钟那条视频）：

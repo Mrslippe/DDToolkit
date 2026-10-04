@@ -74,11 +74,37 @@ def test_segment_table_maps_time_to_bytes():
     assert first["start"] == 36 + 912 + len(sidx)                 # 紧跟 sidx
     assert first["end"] - first["start"] + 1 == 1_569_861
     assert first["dur_s"] == 5.0 and first["sap"] is True
+    assert first["t"] == 0.0                                     # 精确起点（`devlog/324`）
     # 逐段相接、最后一段正好到文件末尾
     assert t["segments"][1]["start"] == first["end"] + 1
     assert t["segments"][-1]["end"] + 1 == total
     assert t["covers_total"] is True
     assert t["duration_s"] == 20.0
+
+
+def test_segment_starts_do_not_accumulate_rounding():
+    """**每段的精确起点不能拿四舍五入后的 `dur_s` 累加**（2026-10-04，devlog/324）。
+
+    真机事故：音频段长 5.0155s 被写成 5.016（每段多 0.0005s），531 段累计偏晚 **0.26s**
+    （实测 tfdt：表说 2663.50s、真实 2663.24s）⇒ 前端"缓冲末尾之后该取哪一段"永远算回
+    刚取过的那一段 ⇒ 反复重取、缓冲不长、播 3 秒就饿住（用户："一直卡住转圈"）。
+
+    判据：`t` 必须按**原始 tick 累加**得出 —— 上面那条（4 × 80000/16000 = 正好 5s）看不出来，
+    这里用**除不尽**的段长（80010 ticks / 16000 = 5.000625s ⇒ 写成 5.001）。
+    """
+    ftyp = _box("ftyp", b"iso5" + b"\x00" * 24)
+    moov = _box("moov", b"\x00" * 904)
+    entries = [(1_000, 80_010)] * 3                              # 每段 5.000625s
+    sidx = _box("sidx", _sidx_body(timescale=16000, entries=entries))
+    t = seg.segment_table(ftyp + moov + sidx)
+
+    assert [s["dur_s"] for s in t["segments"]] == [5.001] * 3, "夹具前提：四舍五入确实发生了"
+    # 累加 5.001 会得到 0 / 5.001 / 10.002（偏晚）；精确累加是 5.000625 的整数倍
+    assert [s["t"] for s in t["segments"]] == [0.0, 5.001, 10.001], \
+        "精确起点被四舍五入的 dur_s 污染了 —— 前端又会算回刚取过的那一段"
+    exact = [round(i * 80_010 / 16000, 3) for i in range(3)]
+    assert [s["t"] for s in t["segments"]] == exact
+    assert t["duration_exact_s"] == round(3 * 80_010 / 16000, 3)  # 精确总长也要给
 
 
 def test_segment_table_says_so_when_there_is_no_sidx():
