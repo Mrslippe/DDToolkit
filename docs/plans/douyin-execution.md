@@ -195,7 +195,12 @@ expires: 2027-01-31
 > 而 `user_profile` 的令牌桶（0.2/s）刚被上一次花掉 ⇒ 我们没发请求。平台什么都没说。
 > 已作为一条小修进 `docs/TODO.md` §1（`identity_limit.throttled` 只接在帖子循环上）。
 >
-> **仍未验的**：抖音**视频**能不能播（`douyinvod.com` 那条 Referer 策略是猜的，只验过图文帖）；
+> **抖音视频已补验（2026-10-05 真机，`devlog/336` §六）**：`play_addr` 的两条 douyinvod 镜像里，
+> `v26-web` **裸请求与只带 UA 都 403**、带站内 Referer 才 206；`v11-weba` 三种都 206 ⇒ **保留站内 Referer**；
+> 第三条镜像是 `www.douyin.com/aweme/v1/play/` 的 **302 跳板**，**故意不进白名单**（真 CDN 已在里面）。
+> 经 `/video-proxy` 实测 **206 video/mp4**（Range 直通）。
+>
+> **仍未验的**：
 > 以及你在**自己的数据目录**里配 cookie + UA + 打开开关（本批用的是临时目录）。
 
 ## 三、判据（每批都要能反向验证）

@@ -229,12 +229,28 @@ def test_host_policy_is_per_cdn_not_one_size_fits_all():
         "https://www.bilibili.com/"
     assert video_proxy.policy_for("sns-video-v4.xhscdn.com") == {}, \
         "小红书带了 Referer 会 403 ⇒ 策略必须是「什么都不加」"
-    # 抖音（devlog/335）：⚠️ **未实测**（只接了线，没播过真机的抖音视频）——
-    # 先按"带站内 Referer + 浏览器 UA"处理；真机若播不了，第一件事是换成 `{}` 再试，
-    # 并把实测结论补进 `video_proxy.py` 的那张表。
-    douyin = video_proxy.policy_for("v11-weba.douyinvod.com")
-    assert douyin.get("Referer") == "https://www.douyin.com/" and "User-Agent" in douyin
+    # 抖音（devlog/336 §六，2026-10-05 真机实测）：同一批 play_addr 的两个镜像要求不同 ——
+    # `v26-web` 裸请求与只带 UA 都 **403**，带站内 Referer 才 206；`v11-weba` 三种都 206。
+    # 所以**保留**站内 Referer（对 v11 无害、对 v26 是必需）。
+    for host in ("v11-weba.douyinvod.com", "v26-web.douyinvod.com"):
+        douyin = video_proxy.policy_for(host)
+        assert douyin.get("Referer") == "https://www.douyin.com/", \
+            f"{host} 不带站内 Referer 会 403（实测）"
+        assert "User-Agent" in douyin
     assert video_proxy.policy_for("unknown.example") == {}
+
+
+def test_the_douyin_redirector_is_deliberately_not_allowed():
+    """`www.douyin.com/aweme/v1/play/` 那条镜像**故意不在白名单里**（devlog/336 §六）。
+
+    实测它只是个 **302 跳板**（Location → `v26-web.douyinvod.com`），而前两条 douyinvod 镜像
+    已能 206 直出。放它进来 = 让代理去打任意 douyin.com 路径，只为省一次沿链换源 ⇒ 不放。
+    这条判据钉的是**这个决定**：哪天有人"顺手"把 douyin.com 加进 `ALLOWED_HOSTS`，它会红。
+    """
+    redirector = "https://www.douyin.com/aweme/v1/play/?video_id=v0d00fg10000dauk6b7og65r6bak25hg"
+    assert not video_proxy.is_allowed_url(redirector), \
+        "302 跳板不该进视频白名单（真 CDN 是 douyinvod.com，已在里面）"
+    assert video_proxy.is_allowed_url("https://v26-web.douyinvod.com/1cbd/x/video.mp4")
 
 
 def test_proxy_applies_host_policy_and_still_strips_browser_headers(client, monkeypatch):

@@ -49,17 +49,28 @@ ALLOWED_HOSTS: tuple[str, ...] = (
     "bilivideo.cn",            # B站 mcdn/P2P 镜像（xy*.mcdn.bilivideo.cn）
     "weibocdn.com",            # 微博视频 CDN（f.video.weibocdn.com）
     "sinaimg.cn",              # 微博图床（gif 转的 mp4 也叫这个域）
-    "douyinvod.com",           # 抖音视频 CDN（v11-weba.douyinvod.com / v26-web.douyinvod.com）
+    "douyinvod.com",           # 抖音视频 CDN（v11-weba / v26-web.douyinvod.com）
 )
 
-#: **按主机分请求头**（2026-10-03 实测：两家要求正好相反）
+#: ⚠️ **故意不放进来**：抖音 `play_addr.url_list` 的第三条镜像是
+#: `https://www.douyin.com/aweme/v1/play/?video_id=…` —— 实测（2026-10-05）它**只是个 302 跳板**
+#: （裸请求/带 UA/带 Referer 都一样跳，Location 指向 `v26-web.douyinvod.com`），而前两条
+#: `douyinvod.com` 的镜像已能 206 直出。把 `douyin.com` 加进白名单等于让代理去打**任意**
+#: douyin.com 路径，收益只是"少一次沿链换源" ⇒ 不加；播放器拿到 400 会自己换下一条源。
+#: （判据：`tests/test_video_proxy.py::test_the_douyin_redirector_is_deliberately_not_allowed`）
+
+#: **按主机分请求头**（实测：三家要求各不相同）
 #:
-#: | CDN | 不带 Referer | 带 `Referer: bilibili.com` |
-#: |---|---|---|
-#: | `bilivideo.com` | **403** | 206 ✓ |
-#: | `xhscdn.com` | 206 ✓ | **403** |
+#: | CDN | 不带 Referer | 带 `Referer: bilibili.com` | 实测日 |
+#: |---|---|---|---|
+#: | `bilivideo.com` | **403** | 206 ✓ | 2026-10-03 |
+#: | `xhscdn.com` | 206 ✓ | **403** | 2026-10-03 |
+#: | `douyinvod.com`（`v26-web.*`） | **403**（只带 UA 也 403） | **206 ✓** | 2026-10-05 |
+#: | `douyinvod.com`（`v11-weba.*`） | 206 ✓ | 206 ✓ | 2026-10-05 |
 #:
-#: 所以这里是一张**策略表**，不是一刀切。
+#: 所以这里是一张**策略表**，不是一刀切。抖音那一行是 `devlog/336` §六 的真机实测：
+#: 同一批 `play_addr.url_list` 里两个镜像，`v26-web` **必须有站内 Referer**（裸的与只带 UA 的都 403），
+#: `v11-weba` 无所谓 ⇒ **保留站内 Referer**（对 v11 无害，对 v26 是必需）。
 HOST_POLICY: tuple[tuple[str, dict[str, str]], ...] = (
     ("xhscdn.com", {}),
     ("bilivideo.com", {"Referer": "https://www.bilibili.com/", "User-Agent": UA_CHROME}),
@@ -68,10 +79,7 @@ HOST_POLICY: tuple[tuple[str, dict[str, str]], ...] = (
     # 带 `Referer: https://weibo.com/` → 206 ⇒ 与 B站 同款策略
     ("weibocdn.com", {"Referer": "https://weibo.com/", "User-Agent": UA_CHROME}),
     ("sinaimg.cn", {"Referer": "https://weibo.com/", "User-Agent": UA_CHROME}),
-    # 抖音（devlog/335）：⚠️ **未实测**（D3 只接线，没播过真机的抖音视频）。
-    # 先按"带站内 Referer + 浏览器 UA"处理：抖音的视频地址本身是**限时签名** URL，
-    # Referer 可有可无都可能 403 —— 真机若播不了，第一件事是把这里换成 `{}` 再试一次，
-    # 并把实测结论补进上面那张表（别猜着写）。
+    # 抖音（实测 2026-10-05，devlog/336 §六）：见上表 —— `v26-web` 不带 Referer 直接 403
     ("douyinvod.com", {"Referer": "https://www.douyin.com/", "User-Agent": UA_CHROME}),
 )
 
