@@ -407,6 +407,12 @@ class XiaohongshuPlatform(BasePlatform):
                            "code": body.get("code"), "msg": body.get("msg")}
         # cookie 失效是"身份级"事件：调用方（核心循环）见到失败就停这一轮，
         # 不再需要适配器去清什么内部游标 —— 分页状态已经不住在这里了
+        if kind == "cookie_invalid":
+            # ⚠️ **失效这一刻是唯一能拿到"真实寿命"的时刻**（平台不给标称寿命、`status()` 又
+            #    刻意不探活）⇒ 在这里报一次"活了 N 天"（`devlog/330`；进程内只报一次）
+            from app.services.xhs_auth import xhs_auth_manager
+
+            xhs_auth_manager.note_invalid(str(body.get("msg") or f"HTTP {resp.status_code}"))
 
     # ── 身份级限速（调研 §5.3.1，devlog/237）─────────────────────────────
     # 粒度是 **(身份, 端点)**：身份是**我们这份 cookie**（不是被查的 uid）——

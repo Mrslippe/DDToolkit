@@ -371,6 +371,8 @@ interface Track {
   lastDiscardLogAt: number
   /** "追加了但缓冲没变"的日志节流（`devlog/326`） */
   lastNoGrowLogAt: number
+  /** 泵"什么都没做"的日志节流（`devlog/330` 的静默路径审计） */
+  lastStallNoteAt: number
   /** 实测吞吐（bytes/s）的加权均值；`0` = 还没量到（`devlog/328` 的 ABR 用它） */
   bw: number
   /** 连续几段"喂不饱这一档"；喂够了就清零 */
@@ -412,6 +414,8 @@ export class MseKernel {
   /** 淘汰日志的聚合（2s 一行、带次数，见 `evict`） */
   private evictCount = 0
   private evictLoggedAt = 0
+  /** 泵"什么都没做"的日志节流（`devlog/330` 的静默路径审计） */
+  private lastStallNoteAt = 0
   private onSourceOpen = () => this.open()
 
   constructor(el: HTMLVideoElement, deps: KernelDeps = {}) {
@@ -440,7 +444,7 @@ export class MseKernel {
         pending: null, inflight: null, seq: 0, lastIdx: -2, repeat: 0,
         spanEnd: 0, fetchBaseline: -1, noProgress: 0, coolUntil: 0, warnedStall: false,
         retry: 0, mirror: 0, quotaHits: 0, opSince: 0, stuckHits: 0, warnedRepeat: false,
-        lastFailLogAt: 0, lastDiscardLogAt: 0, lastNoGrowLogAt: 0,
+        lastFailLogAt: 0, lastDiscardLogAt: 0, lastNoGrowLogAt: 0, lastStallNoteAt: 0,
         bw: 0, slowStreak: 0, lastLinkNoticeAt: 0,
       }))
     this.startedAt = Date.now()
@@ -872,6 +876,19 @@ export class MseKernel {
     }))
   }
 
+  /**
+   * 泵"什么都不做"时把原因写一行（同一条原因 5s 内最多一条）。
+   *
+   * 为什么值得单独一个方法：内核里有若干"安静地 return"的分支，它们**不是错误**，
+   * 但一旦长期停在那儿，从日志上完全看不出发生了什么（前三轮真机排查都在这一格上耗过）。
+   */
+  private noteStalled(why: string): void {
+    const now = Date.now()
+    if (now - this.lastStallNoteAt < 5000) return
+    this.lastStallNoteAt = now
+    this.deps.log?.(`[media] 泵停手：${why}`)
+  }
+
   /** 取回来了但"已经没人要"（拖拽换代 / 被中止）也要留痕；`devlog/325` */
   private noteDiscard(tr: Track, why: string): void {
     const now = Date.now()
@@ -909,7 +926,12 @@ export class MseKernel {
 
   private async append(tr: Track, idx: number): Promise<void> {
     const sb = tr.sb
-    if (!sb || this.dead || !this.streams) return
+    if (this.dead || !this.streams) return          // 销毁/未就绪：安静退出是对的
+    if (!sb) {
+      // 这条轨还没有 SourceBuffer（不该发生，但发生时此前是**完全静默**的）
+      this.noteStalled(`${tr.kind} 轨没有 SourceBuffer`)
+      return
+    }
     /**
      * 同一段连着取第二次 ⇒ 记一笔（`pump` 用它设上限：泵**不许无限转**）。
      *
@@ -1028,7 +1050,18 @@ export class MseKernel {
    * `WANT_AHEAD`；③ 都够了就顺手淘汰。
    */
   private pump(): void {
-    if (this.dead || this.fatal || !this.ms || this.ms.readyState !== 'open') return
+    if (this.dead || this.fatal) return
+    /**
+     * ⚠️ **"泵什么都不做"的原因也必须留痕**（`devlog/330` 的静默路径审计）。
+     *
+     * 前三轮真机排查的共同教训：内核里有好几处"安静地 return"，出问题时日志一片空白、
+     * 只能靠猜。`MediaSource` 一旦不是 `open`（比如 blob 源被摘掉/被别处替换），
+     * 泵就**永远**不再取数 —— 而此前这里一个字都不写。
+     */
+    if (!this.ms || this.ms.readyState !== 'open') {
+      this.noteStalled(`MediaSource 不可用（readyState=${this.ms?.readyState ?? '没有'}）`)
+      return
+    }
     const seek = this.pendingSeek
     for (const tr of this.tracks) {
       if (tr.busy || tr.pending != null) {

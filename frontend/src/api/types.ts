@@ -790,6 +790,10 @@ export interface AuthStatus {
   configured?: boolean
   /** 还缺哪些必需键，如 `['a1']`（小红书；齐了就是空数组） */
   missing?: string[]
+  /** 这条 cookie 什么时候粘进来的（ISO 串；小红书。平台不给标称寿命 ⇒ 只能记起点） */
+  set_at?: string
+  /** 粘进来多少天了（`null` = 没记过起点） */
+  age_days?: number | null
   /** 给用户看的整句说明（缺键时后端已经写好了，前端直接显示） */
   note?: string
 }

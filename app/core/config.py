@@ -56,6 +56,9 @@ class Settings:
     #  调研 §2.8 只提 `web_session`，那条口径要按实测修正）。
     # ⚠️ 同一账号不允许多个网页端同时登录 —— 用户自己在浏览器登录会把这边的会话踢掉。
     XHS_COOKIE: str = os.getenv("XHS_COOKIE", "")
+    #: 这条 cookie 是什么时候粘进来的（ISO 串，由 `xhs_auth.apply_cookie` 写入）。
+    #: 平台**不给**标称寿命（实测 API 响应里没有 `Set-Cookie`）⇒ 只能靠它算"活了多久"（devlog/330）
+    XHS_COOKIE_SET_AT: str = os.getenv("XHS_COOKIE_SET_AT", "")
 
     # 调度器
     # ⚠️ R14a（devlog/091）：带「可热更」注释的键会被 `Settings.__getattribute__`

@@ -38,9 +38,35 @@ def test_apply_cookie_saves_and_reports_ready(monkeypatch):
 
     ok, why = auth.apply_cookie(f"  {GOOD}  ")     # 两侧空白要 trim
     assert ok is True and why == ""
-    assert saved == [{"XHS_COOKIE": GOOD}]
+    # 落盘两份：cookie 本身 + **粘贴时刻**（平台不给标称寿命 ⇒ 只能记起点，devlog/330）
+    assert len(saved) == 1 and saved[0]["XHS_COOKIE"] == GOOD
+    assert saved[0]["XHS_COOKIE_SET_AT"], "粘贴时刻必须一起落盘（否则算不出'活了多久'）"
     st = auth.status()
-    assert st["logged_in"] is True and st["missing"] == [] and st["note"] == ""
+    assert st["logged_in"] is True and st["missing"] == []
+    # 有起点 ⇒ note 如实说"已配置 N 天"；没起点（老数据）才留空
+    assert st["set_at"] == saved[0]["XHS_COOKIE_SET_AT"]
+    assert st["age_days"] is not None and st["note"].startswith("已配置")
+
+
+def test_note_invalid_reports_lifetime_once(monkeypatch, caplog):
+    """失效那一刻报**一次**"它活了多久"（`devlog/330`）。
+
+    为什么要它：平台不给标称寿命（实测 API 响应里没有 `Set-Cookie`、cookie 自带的 `ets`
+    是个陈旧值），而 `status()` 刻意不探活 ⇒ 唯一能拿到真实寿命的时刻就是失效这一刻。
+    只报一次：失效会连续发生很多次（每个请求一次）。
+    """
+    import logging
+
+    monkeypatch.setattr(X, "save_env_keys", lambda d: None)
+    auth = X.XhsAuth()
+    auth.apply_cookie(GOOD)
+    auth.set_at = "2026-09-27T12:00:00"          # 假装 7 天前粘的
+    with caplog.at_level(logging.WARNING, logger="app.services.xhs_auth"):
+        auth.note_invalid("账号未登录")
+        auth.note_invalid("账号未登录")           # 第二次不该再报
+    hits = [r.message for r in caplog.records if "已失效" in str(r.message)]
+    assert len(hits) == 1, f"失效只该报一次：{hits}"
+    assert "活了" in hits[0] and "设置 → 登录 → 小红书" in hits[0], hits[0]
 
 
 def test_endpoint_saves_and_rejects(monkeypatch):
@@ -65,7 +91,8 @@ def test_endpoint_saves_and_rejects(monkeypatch):
 
     body = save_xhs_cookie({"cookie": GOOD})
     assert body["status"] == "saved" and body["logged_in"] is True
-    assert saved == [{"XHS_COOKIE": GOOD}]
+    assert len(saved) == 1 and saved[0]["XHS_COOKIE"] == GOOD
+    assert saved[0]["XHS_COOKIE_SET_AT"]
 
 
 def test_status_without_cookie_says_what_is_missing(monkeypatch):

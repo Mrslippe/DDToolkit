@@ -837,6 +837,25 @@ describe('mseKernel · 卡住看门狗（devlog/322）', () => {
   })
 })
 
+describe('mseKernel · 静默路径审计（devlog/330）', () => {
+  it('`MediaSource` 不是 open ⇒ 泵停手必须**说一句**（此前完全静默）', async () => {
+    /**
+     * 前三轮真机排查的共同教训：内核里有几处"安静地 return"，出问题时日志一片空白。
+     * `MediaSource` 一旦不是 `open`（blob 源被摘掉/被别处替换），泵就**永远**不再取数 ——
+     * 而此前这里一个字都不写，只能靠猜。
+     */
+    const { kernel, ms, logs } = await boot()
+    ms.readyState = 'closed'                 // 模拟"源没了"
+    kernel.seekTo(30)
+    await flush(10)
+
+    const line = logs.find((l) => l.includes('泵停手'))
+    expect(line, `泵停手必须留痕：${logs.join(' | ')}`).toBeTruthy()
+    expect(line).toContain('MediaSource')
+    expect(line).toContain('closed')
+  })
+})
+
 describe('mseKernel · 配额与失败', () => {
   it('取数**不推进**（缓冲不涨）⇒ 报一次 + 刹车：不许刷爆日志/CDN', async () => {
     // 起因（`devlog/314`）：真机上报「出错时日志里 info 爆发式增长」= 取数在打转。

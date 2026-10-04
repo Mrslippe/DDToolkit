@@ -46,10 +46,28 @@ class XhsAuth:
 
     def __init__(self) -> None:
         self.cookie: str = getattr(settings, "XHS_COOKIE", "")
+        #: 这条 cookie 是什么时候粘进来的（`devlog/330`）。有它才能回答"它活了多久" ——
+        #: 平台**不给**任何标称寿命（实测：API 响应里没有 `Set-Cookie`，cookie 自带的 `ets`
+        #: 是个陈旧值），所以只能记下起点、失效时算差值。
+        self.set_at: str = getattr(settings, "XHS_COOKIE_SET_AT", "")
+        #: 本次进程里已经报过"失效"没有（失效会连续发生很多次，只该报一次）
+        self._reported_invalid = False
 
     @property
     def is_configured(self) -> bool:
         return not missing_keys(self.cookie)
+
+    def age_days(self) -> float | None:
+        """这条 cookie 粘进来多久了（天）；没记过起点 ⇒ `None`。"""
+        if not self.set_at:
+            return None
+        try:
+            from datetime import datetime
+
+            t0 = datetime.fromisoformat(self.set_at)
+        except ValueError:
+            return None
+        return max(0.0, (datetime.now() - t0).total_seconds() / 86400.0)
 
     def status(self) -> dict:
         """给 UI 的登录态。
@@ -57,17 +75,25 @@ class XhsAuth:
         ⚠️ 这里**不做**"真实有效性探测"：小红书没有免签名的探活端点（B 站/微博那两条路
         都要签名），硬探只会白挨一次风控。所以状态口径是"**配置齐了**"，
         真实失效由抓取时的 `classify_http() == 'cookie_invalid'` 反映（会清游标 + 记
-        `last_error`），那时用户重新粘一次即可。
+        `last_error`、并调 `note_invalid()` 报一句"活了多久"），那时用户重新粘一次即可。
         """
         miss = missing_keys(self.cookie)
+        age = self.age_days()
+        note = ""
+        if miss:
+            note = (f"cookie 缺少 {'、'.join(miss)} —— 小红书至少要 a1 与 web_session 两件"
+                    f"（缺 a1 时签名器会直接报 Missing 'a1' in cookies）")
+        elif age is not None:
+            # 平台不给标称寿命 ⇒ 至少把"起点 + 已用多久"如实说出来（devlog/330）
+            note = f"已配置 {age:.1f} 天（{self.set_at[:10]} 粘贴）"
         return {
             "logged_in": not miss,
             "needs_login": bool(miss),
             "configured": bool(self.cookie),
             "missing": miss,
-            "note": ("" if not miss else
-                     f"cookie 缺少 {'、'.join(miss)} —— 小红书至少要 a1 与 web_session 两件"
-                     f"（缺 a1 时签名器会直接报 Missing 'a1' in cookies）"),
+            "set_at": self.set_at,
+            "age_days": age,
+            "note": note,
         }
 
     def apply_cookie(self, cookie: str) -> tuple[bool, str]:
@@ -79,14 +105,35 @@ class XhsAuth:
         if miss:
             return False, (f"cookie 缺少 {'、'.join(miss)} —— 从浏览器复制整条 Cookie 头，"
                            f"至少要含 a1 与 web_session")
+        from datetime import datetime
+
         self.cookie = cookie
-        save_env_keys({"XHS_COOKIE": cookie})
-        logger.info("小红书 cookie 已保存（%d 个键）", len(cookie_keys(cookie)))
+        self.set_at = datetime.now().isoformat(timespec="seconds")
+        self._reported_invalid = False          # 新粘的这条重新开始算
+        save_env_keys({"XHS_COOKIE": cookie, "XHS_COOKIE_SET_AT": self.set_at})
+        logger.info("小红书 cookie 已保存（%d 个键，起点 %s）",
+                    len(cookie_keys(cookie)), self.set_at)
         return True, ""
+
+    def note_invalid(self, why: str = "") -> None:
+        """抓取时确认这条 cookie 已失效 ⇒ **报一次"它活了多久"**（`devlog/330`）。
+
+        为什么要它：平台不告诉你标称寿命，`status()` 又刻意不做探活（见上）⇒
+        唯一能拿到"真实寿命"的时刻就是**失效的那一刻**。只报一次：失效会连续发生很多次。
+        """
+        if self._reported_invalid:
+            return
+        self._reported_invalid = True
+        age = self.age_days()
+        lived = f"活了 {age:.1f} 天" if age is not None else "（没记过粘贴时刻，算不出活了多久）"
+        logger.warning("小红书 cookie 已失效：%s%s。到「设置 → 登录 → 小红书」重新粘一次"
+                       "（整条 Cookie，至少含 a1 与 web_session）",
+                       lived, f"（{why}）" if why else "")
 
     def clear(self) -> None:
         self.cookie = ""
-        save_env_keys({"XHS_COOKIE": ""})
+        self.set_at = ""
+        save_env_keys({"XHS_COOKIE": "", "XHS_COOKIE_SET_AT": ""})
 
 
 xhs_auth_manager = XhsAuth()
