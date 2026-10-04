@@ -296,6 +296,8 @@ interface Track {
   opSince: number
   /** 这条轨"卡住"报过几次（第一次只收手 + 记一行，第二次认输） */
   stuckHits: number
+  /** "同一段连取两次仍没落地"这件事报过没有（`devlog/323`：这条**不许静默**） */
+  warnedRepeat: boolean
 }
 
 /**
@@ -358,7 +360,7 @@ export class MseKernel {
         table: table as StreamTable, kind, sb: null, busy: false, initDone: false,
         pending: null, inflight: null, seq: 0, lastIdx: -2, repeat: 0,
         spanEnd: 0, fetchBaseline: -1, noProgress: 0, coolUntil: 0, warnedStall: false,
-        retry: 0, mirror: 0, quotaHits: 0, opSince: 0, stuckHits: 0,
+        retry: 0, mirror: 0, quotaHits: 0, opSince: 0, stuckHits: 0, warnedRepeat: false,
       }))
     this.startedAt = Date.now()
     this.ms.addEventListener('sourceopen', this.onSourceOpen)
@@ -384,6 +386,14 @@ export class MseKernel {
       tr.noProgress = 0
       tr.coolUntil = 0
       tr.fetchBaseline = -1
+      /**
+       * ⚠️ **"同一段连取两次"的记账也必须作废**（`devlog/323`）：它是"这一次判据是不是退化了"
+       * 的记账，换了目标就不再成立。漏掉这一条 = 一条轨可能被**永久**冻死：
+       * 真机上音频轨 `重复=2` 之后再没取过一个段，而跳转一直等到收手（无日志、无恢复）。
+       */
+      tr.repeat = 0
+      tr.lastIdx = -2
+      tr.warnedRepeat = false
       // 目标变了 ⇒ 正在取的那一段没意义了（abort 掉，别白等一个 1.5MB）
       if (tr.inflight && tr.pending !== segmentIndexAt(tr.table, t)) this.abortInflight(tr)
     }
@@ -486,6 +496,7 @@ export class MseKernel {
         tr.noProgress = 0
         tr.warnedStall = false
         tr.stuckHits = 0                 // 有进展 ⇒ "卡住"记账作废（devlog/322）
+        tr.repeat = 0                    // 有进展 ⇒ "同一段连取两次"的记账也作废（devlog/323）
       } else {
         tr.noProgress += 1
       }
@@ -664,6 +675,11 @@ export class MseKernel {
       if (tr.pending != null) this.abortInflight(tr)
       else { tr.busy = false; try { tr.sb?.abort() } catch { /* 实现不支持 */ } }
       tr.opSince = 0
+      // ⚠️ 连"同一段连取两次"的记账一起作废（`devlog/323`）：不清的话，这次重试对那条轨
+      //    等于**什么都没发生**（泵还是会以 `repeat >= 2` 为由拒绝取数）—— 真机就是这样白等 10s。
+      tr.repeat = 0
+      tr.lastIdx = -2
+      tr.warnedRepeat = false
       return
     }
     if (!tr.stuckHits) {
@@ -722,9 +738,18 @@ export class MseKernel {
   private async append(tr: Track, idx: number): Promise<void> {
     const sb = tr.sb
     if (!sb || this.dead || !this.streams) return
-    // 同一段连着取第二次 ⇒ 记一笔（`pump` 用它设上限：泵**不许无限转**）
-    if (tr.lastIdx === idx) tr.repeat += 1
-    else { tr.lastIdx = idx; tr.repeat = 0 }
+    /**
+     * 同一段连着取第二次 ⇒ 记一笔（`pump` 用它设上限：泵**不许无限转**）。
+     *
+     * ⚠️ **init（`idx=-1`）不参与这个记账**（`devlog/323`，长视频真机事故的根因）：
+     * 跳转期间 init 被 abort 重取是正常事，而 `lastIdx/repeat` 是给**媒体段**防打转用的 ——
+     * 混在一起时，一次 init 重试就能把某条轨的媒体取数**永久冻住**
+     * （真机：`audio[重复=2]` ⇒ 之后再也不为它取一个段、一行日志都没有，整个跳转等到天荒地老）。
+     */
+    if (idx >= 0) {
+      if (tr.lastIdx === idx) tr.repeat += 1
+      else { tr.lastIdx = idx; tr.repeat = 0 }
+    }
     const seg = idx < 0 ? tr.table.init : tr.table.segments[idx]
     const urls = (tr.table.urls ?? []).filter(Boolean)
     if (!urls.length) urls.push(tr.table.url)
@@ -853,8 +878,17 @@ export class MseKernel {
         // ⚠️ 两条兜底，都是为了"泵**永远不许**无限转"（挂死的用例比红的用例难查得多）：
         //    ① 这条轨已到尾（音轨比视频短）⇒ 别再 append 最后一段；
         //    ② 同一段连取两次还是盖不上 ⇒ 当它到头了。
+        // ⚠️ 但②**不许静默**（`devlog/323`）：真机上它把音频轨冻死过 —— 说一句，然后交给
+        //    跳转收手那条路去判"认输"（`seekDetail` 里那个 `重复=` 就是它）。
         const want = segmentIndexAt(tr.table, target)
-        if (want >= 0 && !this.tailDone(tr, target) && tr.repeat < 2) void this.append(tr, want)
+        if (want >= 0 && !this.tailDone(tr, target)) {
+          if (tr.repeat < 2) void this.append(tr, want)
+          else if (!tr.warnedRepeat) {
+            tr.warnedRepeat = true
+            this.deps.log?.(`[media] ${tr.kind} 段 ${want} 连取 ${tr.repeat + 1} 次仍没落地`
+                            + `（本轨缓冲停在 ${this.spanText(tr)}）—— 本轨不再重取`)
+          }
+        }
         continue
       }
       if (ahead >= WANT_AHEAD) continue
