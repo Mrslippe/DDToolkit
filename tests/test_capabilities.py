@@ -68,9 +68,10 @@ def test_snapshot_reports_limits_per_login_state():
     assert "fetch_posts" not in limited2, "登录后内容抓取必须解除限制"
     assert "weibo_content" in limited2, "微博未登录时仍应受限（微博匿名不可用）"
 
-    # 三家的登录态**各算各的**（devlog/228 的口径，含 10-04 补上的小红书）
-    both = C.snapshot(bili_logged_in=True, weibo_logged_in=True, xhs_logged_in=True)
-    assert both["limited"] == [], f"三家都就绪后不该还有受限项：{both['limited']}"
+    # 四家的登录态**各算各的**（devlog/228 的口径，含 10-04 补上的小红书、devlog/334 的抖音）
+    all_ready = C.snapshot(bili_logged_in=True, weibo_logged_in=True, xhs_logged_in=True,
+                           douyin_logged_in=True)
+    assert all_ready["limited"] == [], f"四家都就绪后不该还有受限项：{all_ready['limited']}"
 
 
 def test_snapshot_rows_carry_state_and_note():
@@ -199,4 +200,34 @@ def test_snapshot_reports_xiaohongshu_cookie_state(monkeypatch):
 
     monkeypatch.setattr(xhs_auth_manager, "cookie", "a1=1900abcdef; web_session=xyz")
     snap2 = C.snapshot(bili_logged_in=True, weibo_logged_in=True)
-    assert snap2["xiaohongshu_logged_in"] is True and snap2["limited"] == []
+    assert snap2["xiaohongshu_logged_in"] is True
+    # ⚠️ 这里原先断言 `limited == []` —— 每接一家新平台它就红一次（抖音进来时正是如此）。
+    #    改成只断言"小红书那一项不在受限里"：这条用例管的是小红书，别家的状态不归它管。
+    assert [r for r in snap2["limited"] if r["id"] == "xhs_content"] == []
+
+
+def test_content_fetch_gate_and_snapshot_know_douyin(monkeypatch):
+    """抖音（devlog/334）：闸门与快照都要**显式表态**，不能落到"未知平台"那句开发者话术。
+
+    判据与小红书那条同款：缺 Cookie ⇒ 拒绝**且说清怎么补救**；配齐 ⇒ 放行。
+    """
+    from app.services.douyin_auth import douyin_auth_manager
+
+    monkeypatch.setattr(douyin_auth_manager, "cookie", "")
+    allowed, why = C.content_fetch_allowed("douyin")
+    assert allowed is False and "未知平台" not in why
+    assert "uifid" in why and "设置" in why, f"拒绝理由要能照着做：{why}"
+    snap = C.snapshot(bili_logged_in=True, weibo_logged_in=True)
+    assert snap["douyin_logged_in"] is False
+    assert next(r for r in snap["features"] if r["id"] == "douyin_content")["state"] == C.REQUIRES_LOGIN
+
+    monkeypatch.setattr(douyin_auth_manager, "cookie",
+                        "UIFID=abc; s_v_web_id=verify_x; ttwid=1%7Cy")
+    assert C.content_fetch_allowed("douyin") == (True, ""), "配齐了还挡着 ⇒ 抖音永远抓不到"
+    snap2 = C.snapshot(bili_logged_in=True, weibo_logged_in=True)
+    assert snap2["douyin_logged_in"] is True
+    assert [r for r in snap2["limited"] if r["id"] == "douyin_content"] == []
+
+    # 只配一半（缺 uifid 时签名器直接报错）⇒ 仍然如实拒绝
+    monkeypatch.setattr(douyin_auth_manager, "cookie", "s_v_web_id=verify_x; ttwid=1%7Cy")
+    assert C.content_fetch_allowed("douyin")[0] is False

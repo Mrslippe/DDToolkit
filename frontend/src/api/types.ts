@@ -772,28 +772,31 @@ export interface VtuberEvent {
   created_at: string | null
 }
 
-/** 有登录这条路的平台（`/auth/{platform}/...` 只认这三个；第 4 阶段 ④，devlog/235） */
-export type AuthPlatform = 'bilibili' | 'weibo' | 'xiaohongshu'
+/** 有登录这条路的平台（`/auth/{platform}/...`；第 4 阶段 ④，devlog/235、334） */
+export type AuthPlatform = 'bilibili' | 'weibo' | 'xiaohongshu' | 'douyin'
 
 /** GET /auth/{platform}/status：平台登录态
  *
- * ⚠️ 后三个字段**只有小红书**会给：它走「粘贴 cookie」（没有可用的扫码接口，见 devlog/233），
- * 且**不做真实有效性探测**（没有免签名的探活端点，硬探只会白挨一次风控）⇒ 状态口径是
- * "配置齐了没"。真实失效由抓取侧报出来（`cookie_invalid`），那时用户重新粘一次即可。
+ * ⚠️ 后几个字段**只有粘贴 cookie 的两家**（小红书 / 抖音）会给：它们没有可用的扫码接口
+ * （见 devlog/233、334），且**不做真实有效性探测**（没有免签名的探活端点，硬探只会白挨一次风控）
+ * ⇒ 状态口径是"配置齐了没"。真实失效由抓取侧报出来（`cookie_invalid`；⚠️ 抖音的常见形态是
+ * **HTTP 200 + 空体**，不是 401/403 —— devlog/333），那时用户重新粘一次即可。
  */
 export interface AuthStatus {
   logged_in: boolean
   needs_login: boolean
   uid: string | null
   name: string | null
-  /** 有没有存过 cookie（小红书） */
+  /** 有没有存过 cookie（小红书 / 抖音） */
   configured?: boolean
-  /** 还缺哪些必需键，如 `['a1']`（小红书；齐了就是空数组） */
+  /** 还缺哪些必需键，如 `['a1']`（齐了就是空数组） */
   missing?: string[]
-  /** 这条 cookie 什么时候粘进来的（ISO 串；小红书。平台不给标称寿命 ⇒ 只能记起点） */
+  /** 这条 cookie 什么时候粘进来的（ISO 串；平台不给标称寿命 ⇒ 只能记起点） */
   set_at?: string
   /** 粘进来多少天了（`null` = 没记过起点） */
   age_days?: number | null
+  /** 抖音：UA 存过没有（`a_bogus` 会把 UA 算进签名，填错的样子是静默空数据） */
+  ua_configured?: boolean
   /** 给用户看的整句说明（缺键时后端已经写好了，前端直接显示） */
   note?: string
 }
@@ -802,6 +805,9 @@ export interface AuthStatus {
 export interface XhsCookieSaved extends AuthStatus {
   status: string
 }
+
+/** POST /auth/douyin/cookie 的返回：同上（多一个 `ua_configured`，见 AuthStatus） */
+export type DouyinCookieSaved = XhsCookieSaved
 
 /** POST /auth/{platform}/qr/start */
 export interface QrStartResult {

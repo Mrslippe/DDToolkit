@@ -93,8 +93,7 @@ expires: 2027-01-31
 > ⇒ **D2 第 1 条的四类响应按此收紧**：`ok` = `status_code=0` **且** `aweme_list` 非空；
 > **`200 + 空体`归 `signature_invalid`/`risk_control`**，绝不许当成"这个 V 没作品"（调研 §四-5 的形态，已有实证）。
 
-### D2 适配器 + 四类响应 + 身份级限速（1.5 天）
-1. `app/services/platforms/douyin.py`<!-- 未建 -->（照 `PLATFORMS.md §3` 的骨架）：
+### D2 适配器 + 四类响应 + 身份级限速（1.5 天）1. `app/services/platforms/douyin.py`<!-- 未建 -->（照 `PLATFORMS.md §3` 的骨架）：
    - **身份两段式**：`unique_id`(可变抖音号) / `sec_user_id` → `sec_user_id`
      （经 `profile/other`，它同时返回 `uid` 与 `sec_uid`；`unique_id` 走搜索，**要登录**）；
    - `fetch_post_page`：**cursor 语义**（`max_cursor`），`has_more` 是整数 `1/0` 不是布尔；
@@ -114,14 +113,43 @@ expires: 2027-01-31
 3. **判据**：适配器单测（httpx mock：字段映射 / cursor 传递 / `has_more` 1-0 / 字符串 id 不变形）
    + **对照用例**："不存在的帖子 ⇒ business_error，身份健康度不变"（这条是 §5.3.1 点名的坑）。
 
+> ### ✅ D2 结果（2026-10-04，`devlog/334`）
+>
+> `platforms/douyin.py` + `signing.py::DouyinSigner` + **vendored 签名**（`platforms/vendor/dtksign/`，
+> Apache-2.0，blob SHA 比对 + 只改一行 import + sha256 判据）+ `douyin_auth.py` +
+> 路由 `POST /auth/douyin/cookie` + capabilities 四家化 + 前端（登录 Tab 收 UA、
+> 平台名/分组/主页链接、添加账号与收录按钮）**都已落地**；`pytest` 1147 全绿、`vitest` 941 全绿。
+>
+> **与计划的偏差（三处，都是被真机/框架逼出来的）**：
+>
+> 1. **四类响应的判据照 D1 收紧**：`ok` = `status_code=0` **且**结构在；**200 + 空体 ⇒
+>    `signature_invalid`**（不是 ok、不是 business_error）；`aweme_detail: null` ⇒ `not_found`
+>    ⇒ 业务失败**不冷却身份**（与 DTK 不同：它把空 `aweme_detail` 判风控 —— 见 `douyin.py` 注释）。
+> 2. **端点名必须带平台特征**：`ENDPOINT_RATE` 的键是**全局**的 ⇒ 抖音从
+>    `detail` 改成 `aweme_detail`（`detail` 是 B 站详情抓取在用的名字，撞上就把 B 站限速了；
+>    已立为不变量 38 + 一条两两不相交的判据）。
+> 3. **`unique_id`（抖音号）本刀没接**：它要搜索接口（要登录 + 签名），
+>    D1 没验证过任何搜索端点 ⇒ 认不出输入形态时**响亮失败**（`unsupported_input` +
+>    一句"粘主页链接"），不猜、不静默播别人的号。要接它得先补一次 spike（endpoint + 参数 + 403 形态）。
+> 4. **发请求前的结构自检要分级，不能当硬闸门**：`structure_error` 对**自己刚签出来的**签名
+>    有约 **1/300** 的误报（解码器的已知歧义）⇒ "这根本不是签名"才硬停，其余重签几次后照发 +
+>    warning（平台才是权威）。当硬闸门就是每 300 次静默少发一发（本批自己踩的坑，`devlog/334` §三之二）。
+>
+> 另外**把 D3 的两件事提前做了**（它们的判据是红的，不做就没法提交）：
+> `IMG_PROXY_ALLOWED_HOSTS` + CSP `img-src` 补抖音图床（`douyinpic.com` / `douyinstatic.com`）
+> 与逐条用例。**剩下真属 D3/D4 的**：媒体固化实测、`/video-proxy` 的 `douyinvod.com` 白名单、
+> `EXTERNAL_HOSTS`、`DOUYIN_ENABLED` 默认关、真机端到端。
+
 ### D3 固化 / 媒体 / 前端 / 壳层（1 天）
+
 1. **媒体固化自动生效**（`assets`/`media_pin` 是平台无关的：按 `body_json` 里的图/视频 URL 走）——
-   只需把抖音图床域名加进 `IMG_PROXY_ALLOWED_HOSTS` 与 CSP `img-src`；
+   ✅ 图床域名与 CSP 已随 D2 落地；**待做**：真机上验一次固化链路；
 2. 视频走 `/video-proxy` 的 host 白名单（`douyinvod.com` 等），**不做**抖音播放内核（不在本方案）；
 3. 前端：`PLATFORM_LABEL` / `typeGroupsFor` / `accountHomeUrl`、添加账号弹窗、登录卡（粘贴 cookie，
-   与小红书同款）、`frontend/src-tauri/src/lib.rs` 的 `EXTERNAL_HOSTS` 加 `douyin.com` 等；
+   与小红书同款）✅ **已随 D2 落地**；**待做**：`frontend/src-tauri/src/lib.rs` 的 `EXTERNAL_HOSTS`
+   加 `douyin.com` 等；
 4. **默认总开关关着**（设置里 `DOUYIN_ENABLED=False`）：与"风险自担"一致的保守默认，
-   用户显式打开才抓。
+   用户显式打开才抓。**待做**（当前只要配了 cookie 就会抓 —— 这一步是 D3 的收口）。
 
 ### D4 收尾（0.5 天）
 真机端到端一次（一个存量 V 的抖音账号：抓一页 → 落库 → 图片固化 → 详情页能看），

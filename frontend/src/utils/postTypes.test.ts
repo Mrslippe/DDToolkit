@@ -100,6 +100,7 @@ describe('PLATFORM_LABEL — 平台显示名', () => {
     expect(PLATFORM_LABEL.bilibili).toBe('B站')
     expect(PLATFORM_LABEL.weibo).toBe('微博')
     expect(PLATFORM_LABEL.xiaohongshu).toBe('小红书')   // 第 4 阶段 ④，devlog/231
+    expect(PLATFORM_LABEL.douyin).toBe('抖音')          // 第二刀，devlog/334
   })
 
   it('平台英文名：小红书是 **rednote**，不是库里的标识键', async () => {
@@ -109,7 +110,11 @@ describe('PLATFORM_LABEL — 平台显示名', () => {
     expect(platformEn('xiaohongshu')).toBe('rednote')
     expect(PLATFORM_EN.xiaohongshu).not.toBe('xiaohongshu')
     expect(platformEn('bilibili'), '本来就显示英文的照旧').toBe('bilibili')
-    expect(platformEn('douyin'), '未知平台原样回显标识键，不装懂').toBe('douyin')
+    expect(platformEn('douyin'), '抖音的英文名就是 douyin（devlog/334）').toBe('douyin')
+    // ⚠️ 未知平台的样本**别用真实平台名**：这条以前拿 douyin 当"未知"，
+    //    抖音一接进来它就悄悄变成了在测已知平台（后端同款坑，见 `test_platform_branches.py`）。
+    expect(platformEn('definitely-not-a-platform'), '未知平台原样回显标识键，不装懂')
+      .toBe('definitely-not-a-platform')
     expect(platformEn(null)).toBe('平台')
   })
 
@@ -142,11 +147,19 @@ describe('PLATFORM_LABEL — 平台显示名', () => {
     expect(offenders, '平台标识键必须过映射（PLATFORM_LABEL / platformEn）').toEqual([])
   })
 
-  it('收录的平台与后端注册表一致（新增平台要同时补这里与 platforms/registry）', () => {
-    // ⚠️ 这条以前写死 `['bilibili','weibo']`；2026-09-27 加了小红书 ⇒ 改成"与真源对齐"的写法，
-    //    免得每接一个平台都要手改一次（真源在 `app/services/platforms/registry.py`）。
-    expect(Object.keys(PLATFORM_LABEL).sort())
-      .toEqual(['bilibili', 'weibo', 'xiaohongshu'])
+  it('收录的平台与后端注册表一致（真源是 platforms/registry.py，读它而不是抄一份）', async () => {
+    // ⚠️ 这条以前写死 `['bilibili','weibo']`；2026-09-27 加小红书时改成手抄的数组，
+    //    2026-10-04 加抖音时又红了一次 ⇒ 现在**直接读后端注册表**（那条注释一直说真源在那边，
+    //    这次真去读了）。后端加平台而前端漏了展示名 ⇒ 这条红；反之亦然。
+    const { readFileSync } = await import('node:fs')
+    const path = await import('node:path')
+    const registryPath = path.resolve(
+      path.dirname(new URL(import.meta.url).pathname.slice(1)), '../../../app/services/platforms/registry.py')
+    const source = readFileSync(registryPath, 'utf-8')
+    const block = source.slice(source.indexOf('_REGISTRY'), source.indexOf('}', source.indexOf('_REGISTRY')))
+    const backend = [...block.matchAll(/"([a-z_]+)":/g)].map((m) => m[1]).sort()
+    expect(backend.length).toBeGreaterThan(2)
+    expect(Object.keys(PLATFORM_LABEL).sort()).toEqual(backend)
   })
 
   it('未知平台没有条目 —— 调用方取到 undefined（既有行为，刻意不加回退）', () => {

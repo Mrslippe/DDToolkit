@@ -36,6 +36,7 @@ Verdict = Literal["match", "mismatch", "inconclusive", "skipped"]
 
 DEFAULT_TTL = 600.0     # 调研 §3.4.1：每端点每 600s 抽一次
 SHADOW_KEY = "xhs.sign"  # 小红书签名器那条抽样 key（签名头与端点无关，一个 key 够）
+SHADOW_KEY_DOUYIN = "douyin.sign"   # 抖音（devlog/334）：同一套机制，键分开
 
 
 @dataclass(frozen=True)
@@ -147,4 +148,49 @@ def xhs_stable_constants(headers: dict) -> dict:
     out["x-s.tail.hexish"] = bool(tail) and all(c in _HEXISH for c in tail.lower())
     common = str(headers.get("x-s-common") or "")
     out["x-s-common.len.bucket"] = len(common) // 20      # 档位而不是精确长度
+    return out
+
+
+# ── 抖音：可比常量怎么摘（D2，devlog/334）──────────────────────────────
+
+#: 一次抖音签名的 query 里**必须**有的六个参数（顺序也是平台的）
+_DOUYIN_PARAMS = ("a_bogus", "verifyFp", "fp", "uifid", "timestamp", "x-secsdk-web-signature")
+#: 三个头（`x-tt-argus` 不在签名器里，它是常量 `"1"`，比了也没信息）
+_DOUYIN_HEADERS = ("uifid", "x-secsdk-web-signature", "x-secsdk-web-expire")
+
+
+def douyin_stable_constants(shape: dict) -> dict:
+    """从一次抖音签名里摘**可比常量**（`{}` = 比不了 ⇒ 未比对）。
+
+    ⚠️ **不比字节**：两次签名的 `a_bogus` 一定不同（里面是随机噪声与时钟），
+    比字节会把每次都报成不一致。比的是**两次是否同样自洽**：
+
+    | 常量 | 抓住什么 |
+    |---|---|
+    | 六个参数 / 三个头在不在 | 结构回归（改版后少了一个）|
+    | `a_bogus` 过不过 `structure_error()` | **格式自带的校验和**：噪声展开有 bug 时它时好时坏 ⇒ 两次比对现形 |
+    | `a_bogus` 长度档位 | 几何/版本块结构变了 |
+    | secsdk 是不是 32 位十六进制 | 那一层从 md5 换成别的算法 |
+
+    ⚠️ **抓不到"整体失效"**（两次坏得一样 ⇒ 比出来是"一致"）：那一条由签名器在**发请求前**
+    的 `structure_error()` 自检负责（不过就 `SignerUnavailable`，一个字节都不发）。
+    """
+    if not shape:
+        return {}
+    out: dict = {}
+    for name in _DOUYIN_PARAMS:
+        out[f"has:{name}"] = bool(shape.get(name))
+    for name in _DOUYIN_HEADERS:
+        out[f"has:h:{name}"] = bool(shape.get(f"h:{name}"))
+    if not all(out[f"has:{n}"] for n in ("a_bogus", "uifid", "x-secsdk-web-signature")):
+        # 三个核心都不全 ⇒ 没什么可比的（`NullSigner` 一类的半个签名器）
+        return {}
+    # 延迟 import：本模块的定位是**纯逻辑**，不该把 vendored 的算法拽进 import 图
+    from app.services.platforms.vendor.dtksign import structure_error
+
+    bogus = str(shape.get("a_bogus") or "")
+    out["a_bogus.problem"] = structure_error(bogus) or "none"
+    out["a_bogus.len.bucket"] = len(bogus) // 20
+    signature = str(shape.get("x-secsdk-web-signature") or "")
+    out["secsdk.hexish32"] = len(signature) == 32 and all(c in _HEXISH for c in signature.lower())
     return out

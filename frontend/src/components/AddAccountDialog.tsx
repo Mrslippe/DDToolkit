@@ -19,15 +19,23 @@ import FloatPill from './common/FloatPill'
 import { api } from '../api/api'
 import type { Account } from '../api/types'
 import { PLATFORM_LABEL } from '../utils/postTypes'
-import { XHS_UID_HINT, XHS_UID_PLACEHOLDER, parseXhsUid } from '../utils/platformLogin'
+import {
+  DOUYIN_UID_HINT,
+  DOUYIN_UID_PLACEHOLDER,
+  XHS_UID_HINT,
+  XHS_UID_PLACEHOLDER,
+  parseDouyinUid,
+  parseXhsUid,
+} from '../utils/platformLogin'
 
 /** 可添加的平台（顺序即下拉顺序）。加平台时改这里一处 —— 界面从它派生。 */
-const ACCOUNT_PLATFORMS = ['bilibili', 'weibo', 'xiaohongshu'] as const
+const ACCOUNT_PLATFORMS = ['bilibili', 'weibo', 'xiaohongshu', 'douyin'] as const
 
 const UID_PLACEHOLDER: Record<string, string> = {
   bilibili: 'B 站 UID（数字）',
   weibo: '微博 UID（数字，如 3669102477）',
   xiaohongshu: XHS_UID_PLACEHOLDER,
+  douyin: DOUYIN_UID_PLACEHOLDER,
 }
 
 interface Props {
@@ -43,9 +51,10 @@ interface Props {
  * 添加平台账号（P8-B：从 PostsPage 抽成组件 —— card 视图的 hover「+」与
  * 「档案设置」窗口都要用它，避免两份几乎相同的表单）。
  *
- * 小红书（第 4 阶段 ④ 第三刀-4，devlog/235）：它**没有可用的搜索接口**，只能由用户给出 uid；
- * 而用户手上多半是主页链接 ⇒ 提交前用 `parseXhsUid` 摘一次，摘不到就当场提示，
- * 不把整条链接发给后端（那样只会换来一个看不懂的 404）。
+ * 小红书 / 抖音（第 4 阶段 ④，devlog/235、334）：两家都**没有可用的搜索接口**，只能由用户给出
+ * uid；而用户手上多半是主页链接 ⇒ 提交前用 `parseXhsUid` / `parseDouyinUid` 摘一次，
+ * 摘不到就当场提示，不把整条链接发给后端（那样只会换来一个看不懂的 404）。
+ * ⚠️ 抖音**认不出纯抖音号**（那要搜索接口，本版没接）—— 所以它的提示语里点名"粘主页链接"。
  */
 export default function AddAccountDialog({
   open,
@@ -60,9 +69,10 @@ export default function AddAccountDialog({
   const [adding, setAdding] = useState(false)
 
   const isXhs = platform === 'xiaohongshu'
-  /** 真正要提交的 uid：小红书允许粘链接，其余平台原样（改前行为） */
-  const finalUid = isXhs ? parseXhsUid(uid) : uid.trim()
-  const uidUnparsed = isXhs && !!uid.trim() && !finalUid
+  const isDouyin = platform === 'douyin'
+  /** 真正要提交的 uid：两家"粘链接"的平台先摘一次，其余平台原样（改前行为） */
+  const finalUid = isXhs ? parseXhsUid(uid) : isDouyin ? parseDouyinUid(uid) : uid.trim()
+  const uidUnparsed = (isXhs || isDouyin) && !!uid.trim() && !finalUid
 
   useEffect(() => {
     if (!open) {
@@ -84,8 +94,8 @@ export default function AddAccountDialog({
         ...(name.trim() ? { display_name: name.trim() } : {}),
       })
       toast.success(
-        isXhs
-          ? '账号已添加，正在抓取账号信息与最新动态…（小红书要配好 Cookie 才抓得到）'
+        isXhs || isDouyin
+          ? `账号已添加，正在抓取账号信息与最新动态…（${PLATFORM_LABEL[platform]}要配好 Cookie 才抓得到）`
           : '账号已添加，正在抓取账号信息与最新动态…',
       )
       onAdded(acc, platform, u)
@@ -125,11 +135,13 @@ export default function AddAccountDialog({
             placeholder={UID_PLACEHOLDER[platform] ?? 'UID'}
             className="h-9 w-full border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
           />
-          {isXhs && (
+          {(isXhs || isDouyin) && (
             <p
               className={`text-xs leading-relaxed ${uidUnparsed ? 'text-red-500' : 'text-muted-foreground'}`}
             >
-              {uidUnparsed ? `没从这段文本里认出 uid —— ${XHS_UID_HINT}` : XHS_UID_HINT}
+              {uidUnparsed
+                ? `没从这段文本里认出 uid —— ${isDouyin ? DOUYIN_UID_HINT : XHS_UID_HINT}`
+                : (isDouyin ? DOUYIN_UID_HINT : XHS_UID_HINT)}
             </p>
           )}
           <input

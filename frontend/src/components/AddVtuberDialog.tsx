@@ -23,7 +23,7 @@ import OverlayScroll from './OverlayScroll'
 import ProxyImage from './common/ProxyImage'
 import { useCapabilities } from '../hooks/useCapabilities'
 import { FETCH_POSTS, isLoginRequired, limitText } from '../utils/capabilities'
-import { XHS_UID_HINT, parseXhsUid } from '../utils/platformLogin'
+import { DOUYIN_UID_HINT, XHS_UID_HINT, parseDouyinUid, parseXhsUid } from '../utils/platformLogin'
 import './../styles/posts.css'
 
 interface Props {
@@ -197,12 +197,40 @@ export default function AddVtuberDialog({ open, onOpenChange, onAdded }: Props) 
     }
   }
 
+  /**
+   * 抖音收录（第 4 阶段 ④ 第二刀，devlog/334）。
+   *
+   * 与小红书同款：**没有搜索接口可用**（抖音号要搜索、搜索要登录+签名），所以只有"按
+   * `sec_user_id` 收录"这一条路。⚠️ 抖音的 uid 形态是 `MS4wLjABAAAA…`（不是数字）⇒
+   * `parseDouyinUid` 认不出纯抖音号，认不出时这个钮**禁用**（点了只会换来 404/503）。
+   */
+  const adoptDouyin = async () => {
+    const uid = parseDouyinUid(kw)
+    if (!uid) {
+      toast.error(`没认出抖音 sec_user_id —— ${DOUYIN_UID_HINT}`)
+      return
+    }
+    setAdoptingKey(`douyin:${uid}`)
+    try {
+      const v = await api.adoptVtuber('douyin', uid, undefined, 'douyin')
+      toast.success(`已收录「${v.name}」，正在抓取账号信息与最新动态…`)
+      onAdded()
+      onOpenChange(false)
+    } catch (e) {
+      toast.error(`收录失败：${(e as Error).message}`)
+    } finally {
+      setAdoptingKey(null)
+    }
+  }
+
   const rows = mergeCandidates(local, bili ? biliToCandidates(bili.items) : [])
   const isUid = inputLooksLikeUid(kw)
   const busy = adoptingKey !== null
   const q = kw.trim()
   /** 输入里能不能认出一个小红书 uid（认不出 ⇒ 那个钮禁用：点了只会 404 白跑一趟） */
   const xhsUid = parseXhsUid(q)
+  /** 抖音同理（它连纯抖音号都认不出 —— 那要搜索接口，devlog/334） */
+  const douyinUid = parseDouyinUid(q)
   /** 未登录时"收录后抓不到内容"的提示（搜/收录本身照常） */
   const contentBlocked = isLoginRequired(caps, FETCH_POSTS)
 
@@ -331,6 +359,27 @@ export default function AddVtuberDialog({ open, onOpenChange, onAdded }: Props) 
               <UserPlus className="size-3.5" />
             )}
             小红书 uid
+          </button>
+          {/* 抖音同理：没有可用的搜索接口，只有"按 sec_user_id 收录"这一条路，
+              而且它**认不出纯抖音号**（那要搜索接口）⇒ 认不出时禁用 */}
+          <button
+            type="button"
+            className="av-xhs-btn"
+            data-douyin-adopt="1"
+            disabled={!q || busy || !douyinUid}
+            onClick={() => void adoptDouyin()}
+            title={
+              douyinUid
+                ? `收录抖音 sec_user_id ${douyinUid}`
+                : '抖音只能按 sec_user_id 收录：把主页链接粘进输入框（抖音号解析不了）'
+            }
+          >
+            {adoptingKey?.startsWith('douyin:') ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <UserPlus className="size-3.5" />
+            )}
+            抖音 uid
           </button>
         </div>
 

@@ -196,6 +196,30 @@ def test_bilibili_endpoints_are_not_rate_limited():
             assert bp.admit_endpoint(ep) is True, f"{ep} 被限速了"
 
 
+def test_endpoint_names_do_not_collide_across_platforms():
+    """⚠️ 限速表的键是**全局**的（`Ledger._bucket` 只按 endpoint 查它）⇒ 两个平台**不能重名**。
+
+    2026-10-04 接抖音时踩过：给它写了 `"detail": 0.12`，而 B 站详情抓取用的正是 `detail`
+    （`bilibili_posts.py` 的 `admit_endpoint("detail")`）⇒ **抖音的限速把 B 站拖慢了**，
+    两条用例当场红。这条判据把这个坑变成机器能查的：各平台的端点名必须两两不相交。
+    """
+    from app.services.platforms import xiaohongshu, douyin
+
+    groups = {
+        "bilibili": set(bp.BILI_ENDPOINTS),
+        "xiaohongshu": {"user_posted", "otherinfo", "feed"},
+        "douyin": {douyin.ENDPOINT_POSTS, douyin.ENDPOINT_PROFILE, douyin.ENDPOINT_DETAIL},
+    }
+    names = list(groups)
+    for i, left in enumerate(names):
+        for right in names[i + 1:]:
+            overlap = groups[left] & groups[right]
+            assert not overlap, f"{left} 与 {right} 共用了端点名 {overlap} —— 限速会串台"
+    # 抖音那三个端点**必须**在表里（计划 §D0-3：单身份 ≤0.12 req/s；少写一个 = 那个端点不限速）。
+    # ⚠️ 反过来不成立：端点没进表 = 不限速，是**允许**的（小红书详情 `feed` 就是如此）。
+    assert groups["douyin"] <= set(il.ENDPOINT_RATE), "抖音端点没进限速表"
+
+
 def test_business_errors_do_not_feed_the_breaker():
     """⚠️ 核心安全性质：**业务失败不进样本** —— 否则一堆"号注销了"会把端点判成故障。"""
     il.LEDGER.reset()

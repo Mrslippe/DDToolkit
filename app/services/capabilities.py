@@ -38,6 +38,7 @@ from dataclasses import asdict, dataclass
 
 from app.services.auth import auth_manager
 from app.services import wbi
+from app.services.douyin_auth import douyin_auth_manager
 from app.services.weibo_auth import weibo_auth_manager
 from app.services.xhs_auth import xhs_auth_manager
 
@@ -125,19 +126,33 @@ FEATURES: tuple[Feature, ...] = (
                  "且图床地址是限时签名（库内 181 个 URL 签于 10-03 00:50，10-04 13:54 全部 403），"
                  "2026-10-04",
     ),
+    Feature(
+        id="douyin_content", label="抖音内容（作品列表 / 详情重取）", platform="douyin",
+        anon_state=REQUIRES_LOGIN,
+        anon_note="抖音接口要签名，签名绑在 cookie 的 `uifid` 上（`verifyFp` 要用 `s_v_web_id` 原值）："
+                  "没配置 Cookie 时我们**不发起**请求。补救：设置 → 登录 → 抖音，"
+                  "粘贴浏览器里的整条 Cookie **以及那个浏览器的 `navigator.userAgent`**"
+                  "（UA 会被算进签名，填错的样子是静默空数据）",
+        login_note="已配置 Cookie：作品列表与详情重取可用",
+        evidence="D1 真机 14 发（`devlog/333`）：游客身份下 `a_bogus` 缺失或值写错 ⇒ "
+                 "**HTTP 200 + 0 字节空体**（不是 403）；登录 jar 则完全不校验签名；"
+                 "未配 Cookie 时适配器一个字节都不发（`services/platforms/douyin.py`），2026-10-04",
+    ),
 )
 
 
-def _login_states(bili: bool, weibo: bool, xhs: bool = False) -> dict[str, bool]:
+def _login_states(bili: bool, weibo: bool, xhs: bool = False,
+                  douyin: bool = False) -> dict[str, bool]:
     """平台 → 该平台的登录态。**唯一真源**：新增平台必须在这里加一条。
 
     `tests/test_platform_branches.py::test_login_state_mapping_covers_every_feature_platform`
     盯着它：`FEATURES` 里出现而这里没有的平台会判红（逼人表态，而不是悄悄读成别家）。
     """
-    return {"bilibili": bili, "weibo": weibo, "xiaohongshu": xhs}
+    return {"bilibili": bili, "weibo": weibo, "xiaohongshu": xhs, "douyin": douyin}
 
 
-def _logged_in(platform: str | None, bili: bool, weibo: bool, xhs: bool = False) -> bool:
+def _logged_in(platform: str | None, bili: bool, weibo: bool, xhs: bool = False,
+               douyin: bool = False) -> bool:
     """`FEATURES` 里那一项依赖的登录态是否就绪。
 
     ⚠️ 2026-09-27（devlog/228）：以前是 `return bili if platform == "bilibili" else weibo`
@@ -147,21 +162,24 @@ def _logged_in(platform: str | None, bili: bool, weibo: bool, xhs: bool = False)
     """
     if platform is None:
         return True
-    return _login_states(bili, weibo, xhs).get(platform, False)
+    return _login_states(bili, weibo, xhs, douyin).get(platform, False)
 
 
 def snapshot(bili_logged_in: bool | None = None, weibo_logged_in: bool | None = None,
-             xhs_logged_in: bool | None = None) -> dict:
-    """当前能力快照（给 `GET /capabilities`）。三个登录态参数只为可测性，默认读真实状态。"""
+             xhs_logged_in: bool | None = None,
+             douyin_logged_in: bool | None = None) -> dict:
+    """当前能力快照（给 `GET /capabilities`）。登录态参数只为可测性，默认读真实状态。"""
     bili = auth_manager.is_logged_in if bili_logged_in is None else bili_logged_in
     weibo = ((weibo_auth_manager.is_logged_in and not weibo_auth_manager.needs_login)
              if weibo_logged_in is None else weibo_logged_in)
     xhs = xhs_auth_manager.is_configured if xhs_logged_in is None else xhs_logged_in
+    douyin = (douyin_auth_manager.is_configured if douyin_logged_in is None
+              else douyin_logged_in)
 
     items: list[dict] = []
     limited: list[dict] = []
     for f in FEATURES:
-        ready = _logged_in(f.platform, bili, weibo, xhs)
+        ready = _logged_in(f.platform, bili, weibo, xhs, douyin)
         state = FULL if ready else f.anon_state
         note = (f.login_note or f.anon_note) if ready else f.anon_note
         row = {**asdict(f), "state": state, "note": note}
@@ -172,6 +190,7 @@ def snapshot(bili_logged_in: bool | None = None, weibo_logged_in: bool | None = 
         "bilibili_logged_in": bili,
         "weibo_logged_in": weibo,
         "xiaohongshu_logged_in": xhs,
+        "douyin_logged_in": douyin,
         "wbi": wbi.wbi_status(),
         "features": items,
         "limited": limited,
@@ -193,6 +212,7 @@ PROBE_MAP: dict[str, tuple[str, ...]] = {
     "archive_views": (),
     "weibo_content": (),             # 微博匿名实测在 capabilities 的 evidence 里，不在本矩阵
     "xhs_content": (),               # 小红书不在 B 站矩阵里（Cookie 口径见 xhs_auth.status）
+    "douyin_content": (),            # 抖音同理（Cookie + UA 口径见 douyin_auth.status）
 }
 
 
@@ -219,6 +239,14 @@ XHS_CONTENT_REASON = (
     "签名器会直接报 Missing 'a1'。补救：设置 → 登录 → 小红书，粘贴浏览器里的整条 Cookie"
 )
 
+#: 抖音（devlog/334）：与小红书同一口径的闸门 —— 签名绑在 cookie 的 `uifid` 上，
+#: 没配就没得签；而"没签名硬发"的代价是**静默空数据**（200 + 0 字节，D1 实测）。
+DOUYIN_CONTENT_REASON = (
+    "抖音内容需要 Cookie（uifid / s_v_web_id / ttwid）与那个浏览器的 User-Agent："
+    "没配置时我们**不发起**请求。补救：设置 → 登录 → 抖音，粘贴浏览器里的整条 Cookie "
+    "连同 `navigator.userAgent`"
+)
+
 UNKNOWN_PLATFORM_REASON = (
     "未知平台：内容抓取**没有**在这里表态（新增平台要在 "
     "`app/services/capabilities.py::content_fetch_allowed` 里显式决定匿名能不能抓）"
@@ -226,12 +254,13 @@ UNKNOWN_PLATFORM_REASON = (
 
 
 def _content_fetch_allowed_with(
-    platform: str, *, bili=None, weibo=None, xhs=None,
+    platform: str, *, bili=None, weibo=None, xhs=None, douyin=None,
 ) -> tuple[bool, str]:
     """`content_fetch_allowed` 的**可注入版本**（用例注入假登录态；生产走下面那个）。"""
     bili = auth_manager if bili is None else bili
     weibo = weibo_auth_manager if weibo is None else weibo
     xhs = xhs_auth_manager if xhs is None else xhs
+    douyin = douyin_auth_manager if douyin is None else douyin
     if platform == "bilibili":
         if bili.is_logged_in:
             return True, ""
@@ -244,6 +273,10 @@ def _content_fetch_allowed_with(
         if xhs.is_configured:
             return True, ""
         return False, XHS_CONTENT_REASON
+    if platform == "douyin":
+        if douyin.is_configured:
+            return True, ""
+        return False, DOUYIN_CONTENT_REASON
     return False, UNKNOWN_PLATFORM_REASON
 
 

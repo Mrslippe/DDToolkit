@@ -146,7 +146,7 @@ flowchart LR
     判据 `tests/test_messages.py`（19 条，含跨线程发布与"循环重建后仍能发"）。
 
 
-## 3. 全部不变量的索引（37 条）
+## 3. 全部不变量的索引（38 条）
 
 > 本表由 `docs/plans/` 之外的构建脚本按归属生成，**不是手抄**；
 > 要改归属就改归属表本身。跨模块的那 7 条在本文件 §2，其余在各自模块文档。
@@ -190,6 +190,7 @@ flowchart LR
 | 35 | 跨线程往事件循环里送东西：`queue.Queue` 中转 + `call_soon_threadsafe` 唤醒，不许 | `docs/backend/ARCHITECTURE.md` |
 | 36 | 同一份数据不许有两个渲染器（R46，devlog/249）：图片一律走 | `docs/backend/ASSETS.md` |
 | 37 | 远端资源要"抓一次、长期用"（L1，devlog/257）：头像/封面这类小、不变、反复要的 | `docs/backend/ASSETS.md` |
+| 38 | `ENDPOINT_RATE` 的键是**全局**的（devlog/334）：两个平台不许共用端点名，否则限速串台 | `docs/backend/FETCH-PIPELINE.md` |
 
 ## 4. 扩展点
 

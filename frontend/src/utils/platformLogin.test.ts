@@ -3,17 +3,22 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 import {
+  DOUYIN_COOKIE_STEPS,
+  DOUYIN_UID_HINT,
+  DOUYIN_UID_PLACEHOLDER,
   LOGIN_TABS,
   XHS_COOKIE_STEPS,
   XHS_UID_HINT,
   XHS_UID_PLACEHOLDER,
+  cookieLoginSpec,
   loginMode,
+  parseDouyinUid,
   parseXhsUid,
 } from './platformLogin'
 import { PLATFORM_LABEL } from './postTypes'
 
 /**
- * 小红书接入的**前端接线**（第 4 阶段 ④ 第三刀-4，devlog/235）。
+ * 平台接入的**前端接线**（小红书 = 第 4 阶段 ④ 第三刀-4，devlog/235；抖音 = 第二刀，devlog/334）。
  *
  * 这一批改的全是界面，最怕的不是"写错了"，而是**写漏了一处**：
  * 加平台时容易只改一个入口，另外两个还写着旧的平台清单 —— 界面上完全看不出来
@@ -56,22 +61,25 @@ describe('② 平台清单：登录浮窗与 PLATFORM_LABEL 必须同批', () =>
     expect(LOGIN_TABS.map((t) => t.platform).sort()).toEqual(Object.keys(PLATFORM_LABEL).sort())
   })
 
-  it('顺序即界面顺序：B 站 / 微博 / 小红书', () => {
-    expect(LOGIN_TABS.map((t) => t.platform)).toEqual(['bilibili', 'weibo', 'xiaohongshu'])
+  it('顺序即界面顺序：B 站 / 微博 / 小红书 / 抖音', () => {
+    expect(LOGIN_TABS.map((t) => t.platform))
+      .toEqual(['bilibili', 'weibo', 'xiaohongshu', 'douyin'])
   })
 
   it('每个 Tab 都有显示名', () => {
     for (const t of LOGIN_TABS) expect(t.label.trim()).not.toBe('')
   })
 
-  it('小红书是**唯一**的粘贴型（cookie）平台；扫码型不受影响', () => {
+  it('粘贴型（cookie）平台是小红书与抖音；扫码型不受影响', () => {
     expect(LOGIN_TABS.filter((t) => t.mode === 'cookie').map((t) => t.platform))
-      .toEqual(['xiaohongshu'])
+      .toEqual(['xiaohongshu', 'douyin'])
     expect(loginMode('bilibili')).toBe('qr')
     expect(loginMode('weibo')).toBe('qr')
     expect(loginMode('xiaohongshu')).toBe('cookie')
-    // 清单外/未知平台按扫码走（原有两条路的行为不能被改掉）
-    expect(loginMode('douyin')).toBe('qr')
+    expect(loginMode('douyin')).toBe('cookie')
+    // 清单外/未知平台按扫码走（原有两条路的行为不能被改掉）。
+    // ⚠️ 样本别用真实平台名 —— 这条以前拿 douyin 当"未知"，它接进来之后就在骗自己了。
+    expect(loginMode('definitely-not-a-platform')).toBe('qr')
   })
 
   it('粘贴说明里点名了两个必需键（缺 a1 时签名器永远签不出名）', () => {
@@ -80,9 +88,30 @@ describe('② 平台清单：登录浮窗与 PLATFORM_LABEL 必须同批', () =>
     expect(text).toContain('web_session')
   })
 
+  it('抖音那份说明要点名 uifid / s_v_web_id 与 UA（UA 会被算进签名，devlog/334）', () => {
+    const text = DOUYIN_COOKIE_STEPS.join(' ')
+    expect(text).toContain('uifid')
+    expect(text).toContain('s_v_web_id')
+    expect(text).toContain('user-agent')
+    const spec = cookieLoginSpec('douyin')
+    expect(spec.ua, '抖音那条路要收 UA —— 少收它的后果是静默空数据').toBeTruthy()
+    expect(spec.placeholder).toContain('uifid')
+    expect(cookieLoginSpec('xiaohongshu').ua, '小红书不需要 UA 框').toBeUndefined()
+  })
+
   it('uid 提示告诉用户 uid 在主页链接里的位置', () => {
     expect(XHS_UID_HINT).toContain('/user/profile/')
     expect(XHS_UID_PLACEHOLDER).toContain('主页链接')
+    expect(DOUYIN_UID_HINT).toContain('/user/')
+    expect(DOUYIN_UID_PLACEHOLDER).toContain('主页链接')
+  })
+
+  it('parseDouyinUid：链接能摘、裸抖音号摘不出来（它要搜索接口）', () => {
+    const sec = 'MS4wLjABAAAAYbIZRpNPRPJ28dxKRyqtmQXtxN5EC_uAfePn3mPehcQ'
+    expect(parseDouyinUid(`https://www.douyin.com/user/${sec}?tab=post`)).toBe(sec)
+    expect(parseDouyinUid(`看看 ${sec} 的主页`)).toBe(sec)
+    expect(parseDouyinUid('1234567890'), '抖音号解析不了 ⇒ 摘不出来，别当 uid 发出去').toBe('')
+    expect(parseDouyinUid('')).toBe('')
   })
 })
 
@@ -94,6 +123,10 @@ describe('③ 三个入口都接上了（源码级扫一遍，行为层由 ui_pr
     // 粘贴型平台不能落到二维码那一路（它没有 QR 接口）
     expect(src).toContain('loginMode(platform)')
     expect(src).toContain('saveXhsCookie')
+    // 抖音（devlog/334）：保存走它自己的接口，且**带 UA**（签名会算进去）
+    expect(src).toContain('saveDouyinCookie')
+    expect(src).toContain('cookieLoginSpec')
+    expect(src).toContain('data-douyin-ua')
   })
 
   it('顶栏登录入口的悬停文案也带上小红书（同样是硬编码漏改过的位置）', () => {

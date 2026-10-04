@@ -1480,6 +1480,16 @@ class AdoptRequest(BaseModel):
     source: str | None = None
 
 
+#: 「没有搜索接口」的平台 → 展示名：收录时**只能按 uid**，拿 uid 去问一次主页信息做复核
+#: （小红书 devlog/234，抖音 devlog/334）。这张表就是那条分支的唯一真源。
+_VERIFY_BY_PROFILE: dict[str, str] = {"xiaohongshu": "小红书", "douyin": "抖音"}
+#: 上面两家"缺凭据时该去粘什么"的一句话（503 的补救指引）
+_VERIFY_BY_PROFILE_HINT: dict[str, str] = {
+    "xiaohongshu": "至少要有 a1 与 web_session",
+    "douyin": "整条 Cookie（uifid / s_v_web_id / ttwid）与那个浏览器的 User-Agent",
+}
+
+
 # 后台任务强引用集合（v0.9.4）：
 # `asyncio.create_task()` 的返回值若无人引用，任务可能在执行中被 GC 回收
 # ——Python 文档明确警告（"Save a reference to the result of this function"）。
@@ -1671,29 +1681,34 @@ async def adopt_vtuber(data: AdoptRequest, background: BackgroundTasks,
     if hit:
         name = hit["name"]
         source = "pool"
-    elif data.source == "xiaohongshu":
-        # 小红书（第 4 阶段 ④ 第三刀-3，devlog/234）：它**没有**可用的搜索接口
-        # （搜索要 `xsec_token`，见调研 §2.4）⇒ 直接拿 uid 去问「主页信息」，
+    elif data.source in _VERIFY_BY_PROFILE:
+        # 小红书（第 4 阶段 ④ 第三刀-3，devlog/234）/ 抖音（第二刀，devlog/334）：
+        # 两家都**没有**可用的搜索接口（搜索要登录 + 签名）⇒ 直接拿 uid 去问「主页信息」，
         # 既复核了"这个人真的存在"，又拿到规范名（与 B 站那条的复核纪律一致）。
-        if data.platform != "xiaohongshu":
-            raise HTTPException(400, "source='xiaohongshu' 时 platform 必须也是 xiaohongshu")
-        pf = registry.get_fetcher("xiaohongshu")
+        if data.platform != data.source:
+            raise HTTPException(400, f"source='{data.source}' 时 platform 必须也是 {data.source}")
+        pf = registry.get_fetcher(data.source)
         info = await pf.fetch_user_info(str(data.platform_uid)) if pf else None
         if not info or not info.get("name"):
-            kind = (getattr(pf, "last_error", None) or {}).get("kind")
+            label = _VERIFY_BY_PROFILE[data.source]
+            err = getattr(pf, "last_error", None) or {}
+            kind = err.get("kind")
             if kind == "cookie_invalid":
-                raise HTTPException(503, "小红书 cookie 没配或已失效 —— 先在登录里粘贴"
-                                         "（至少要有 a1 与 web_session）")
-            if kind == "risk_control":
-                raise HTTPException(503, "小红书正在风控冷却，稍后再试")
-            raise HTTPException(404, "该 uid 在小红书查不到，未收录")
+                raise HTTPException(503, f"{label} Cookie 没配或已失效 —— 先在登录里粘贴"
+                                         f"（{_VERIFY_BY_PROFILE_HINT[data.source]}）")
+            if kind in ("risk_control", "captcha"):
+                raise HTTPException(503, f"{label}正在风控冷却，稍后再试")
+            if kind == "unsupported_input":
+                # 输入形态我们解析不了（例：抖音号要搜索接口）⇒ 400 并把"该粘什么"说清楚
+                raise HTTPException(400, err.get("msg") or f"没认出{label} uid")
+            raise HTTPException(404, f"该 uid 在{label}查不到，未收录")
         name = info["name"]
-        source = "xiaohongshu"
+        source = data.source
     else:
         if data.source != "bilibili":
             raise HTTPException(404, "候选池中不存在该 platform_uid；"
                                      "请用「搜索 B 站」（source='bilibili'）"
-                                     "或「小红书 uid」（source='xiaohongshu'）收录")
+                                     "或「小红书 / 抖音 uid」（source='xiaohongshu' / 'douyin'）收录")
         if data.platform != "bilibili":
             raise HTTPException(400, "池外收录目前只支持 bilibili")
         verified = await bili_search_svc.exact_user(str(data.platform_uid))

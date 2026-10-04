@@ -141,7 +141,7 @@ retire-when: HTTP 层换框架，或路由整体重排
 
 | 方法 + 路径 | 说明 |
 |---|---|
-| GET `/capabilities` | 本机能力矩阵：`features`（三态 `full`/`degraded`/`requires_login` + 用户说明 + 实测依据）/ `limited` / `wbi` / `measured_at` / 三家的登录态（`bilibili_logged_in` / `weibo_logged_in` / **`xiaohongshu_logged_in`** = Cookie 配齐没有）。前端据此**标注**受限功能而不是隐藏（devlog/086；小红书那条 2026-10-04 才补上，`devlog/321`） |
+| GET `/capabilities` | 本机能力矩阵：`features`（三态 `full`/`degraded`/`requires_login` + 用户说明 + 实测依据）/ `limited` / `wbi` / `measured_at` / **四家**的登录态（`bilibili_logged_in` / `weibo_logged_in` / `xiaohongshu_logged_in` / **`douyin_logged_in`** = Cookie 配齐没有）。前端据此**标注**受限功能而不是隐藏（devlog/086；小红书那条 2026-10-04 才补上，`devlog/321`；抖音 `devlog/334`） |
 | GET/POST `/vtuber/fetch` | 手动全量抓账号信息；自动档在跑时**抢占**，仅另一个手动任务在跑才 skipped |
 | GET/POST `/vtuber/{id}/fetch` | 抓单个 V 账号信息（同样可抢占自动档） |
 | POST `/vtuber/fetch-posts?name=&platform=&video_pages=&dynamics_pages=&full=` | 按名字抓帖子（-1 全量；`full=true` 后台执行）；**抓前先跑归档规则**。内容接口 → 未登录 **403** |
@@ -173,8 +173,9 @@ retire-when: HTTP 层换框架，或路由整体重排
 |---|---|
 | POST `/auth/{platform}/qr/start` | 生成二维码会话。bilibili 返回 `{qr_id, url}`；weibo 返回 `{qr_id, image}`（data URL）。同平台旧会话作废 |
 | GET `/auth/{platform}/qr/check?qr_id=` | 轮询状态机：`waiting / scanned / confirmed / expired / failed`；`confirmed` 时完成登录并持久化凭据；TTL 180s |
-| GET `/auth/{platform}/status` | `{logged_in, needs_login, uid, name}`；B 站走内存维护结果，**微博做真实有效性探测**（结果缓存 60s），**小红书只报"配齐了没"**（另带 `configured/missing/note`；没有免签名的探活端点，不做探测） |
+| GET `/auth/{platform}/status` | `{logged_in, needs_login, uid, name}`；B 站走内存维护结果，**微博做真实有效性探测**（结果缓存 60s），**小红书/抖音只报"配齐了没"**（另带 `configured/missing/note`；两家都没有免签名的探活端点，不做探测。抖音另带 `ua_configured`，**不回显 UA 全文**） |
 | POST `/auth/xiaohongshu/cookie` | **粘贴 cookie**（body `{"cookie": "a1=…; web_session=…"}`）。⚠️ 先校验再落盘：缺 `a1`/`web_session` ⇒ **400 且不写 `.env`**；成功回 `{status:"saved", ...status()}`（devlog/233） |
+| POST `/auth/douyin/cookie` | **粘贴 cookie + UA**（body `{"cookie": "uifid=…; s_v_web_id=…; ttwid=…", "user_agent": "…"}`；`user_agent` 可省但**强烈建议给**）。⚠️ 先校验再落盘：缺 `s_v_web_id`/`uifid`(或 `UIFID_TEMP`)/`ttwid` ⇒ **400 且不写 `.env`**。UA 是凭据的一部分：`a_bogus` 会把它算进签名，给错的样子是**静默空数据**（HTTP 200 + 0 字节，devlog/333/334）|
 
 - 实现分发：bilibili → `app/services/auth.py`（SESSDATA 管理、心跳 + `refresh_token` 续期，
   `run_maintenance()` 由 lifespan 起协程）；weibo → `app/services/weibo_auth.py`（Session v2 扫码）；

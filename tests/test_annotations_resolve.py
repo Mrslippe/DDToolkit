@@ -80,7 +80,12 @@ def test_every_app_annotation_resolves():
     """每个模块的注解都要能在**自己的模块命名空间**里算出来。"""
     eager, exempt = _eager_modules()
     assert eager, "一个待检查模块都没有，像是枚举坏了"
-    assert len(exempt) < len(eager), f"豁免太多（{len(exempt)}），判据快空转了"
+    # ⚠️ 这里原先断言 `len(exempt) < len(eager)`（"豁免不能比受检还多"）。2026-10-04 接抖音时
+    #    它红了：新加的模块（适配器/登录态，以及 vendored 的三个签名文件）**全都带**那行
+    #    `from __future__ import annotations` ⇒ 豁免数自然超过受检数，而判据本身并没有空转。
+    #    改成给**受检模块**一个绝对下限：这才真正对应"判据别空转"，且不会因为
+    #    "多写了几个规范模块"而红。豁免的正当性由 `_eager_modules` 的构造保证（带那行才进豁免）。
+    assert len(eager) >= 20, f"待检查模块太少（{len(eager)}），判据快空转了"
 
     bad: list[str] = []
     checked = 0

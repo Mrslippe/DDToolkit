@@ -60,6 +60,16 @@ class Settings:
     #: 平台**不给**标称寿命（实测 API 响应里没有 `Set-Cookie`）⇒ 只能靠它算"活了多久"（devlog/330）
     XHS_COOKIE_SET_AT: str = os.getenv("XHS_COOKIE_SET_AT", "")
 
+    # 抖音（第 4 阶段 ④ 第二刀，devlog/334）：**整条 Cookie 头**（同源导出的那份，
+    # 至少要有 `uifid`(或 `UIFID_TEMP`) + `s_v_web_id` + `ttwid`）。
+    DOUYIN_COOKIE: str = os.getenv("DOUYIN_COOKIE", "")
+    #: 粘进来的时刻（口径同 `XHS_COOKIE_SET_AT`）
+    DOUYIN_COOKIE_SET_AT: str = os.getenv("DOUYIN_COOKIE_SET_AT", "")
+    #: ⚠️ **必须是你导出 cookie 那个浏览器的 `navigator.userAgent`**：`a_bogus` 会把 UA
+    #: 算进签名，不一致的后果是**静默的**（HTTP 200 + 0 字节空体，`devlog/333`）。
+    #: 留空 ⇒ 用 `core/useragent.py` 的 `UA_EDGE`（只在"cookie 也是它导的"时才自洽）。
+    DOUYIN_UA: str = os.getenv("DOUYIN_UA", "")
+
     # 调度器
     # ⚠️ R14a（devlog/091）：带「可热更」注释的键会被 `Settings.__getattribute__`
     # 拦一道 —— 读的时候先问 `app/core/runtime_settings.py` 的覆盖层。
@@ -227,7 +237,9 @@ class Settings:
         "IMG_PROXY_ALLOWED_HOSTS",
         # 小红书（xhscdn / ci.xiaohongshu.com）是第 4 阶段 ④ 加的（devlog/231）：
         # 不加它，笔记封面走图片代理会被拒 ⇒ 列表里全是破图
-        "hdslb.com,sinaimg.cn,wbcdn.cn,xhscdn.com,ci.xiaohongshu.com")
+        # 抖音（douyinpic / douyinstatic）同理（devlog/334）：真机回包里的图与封面走这两家
+        "hdslb.com,sinaimg.cn,wbcdn.cn,xhscdn.com,ci.xiaohongshu.com,"
+        "douyinpic.com,douyinstatic.com")
     IMG_CACHE_DIR: str = str(DATA_DIR / "static" / "img-cache")
     # 图片磁盘缓存的**容量上限**（R22，2026-09-16）：原来只管时间（TTL 7 天）不管体积，
     # 实测开发档就到 101.7MB / 271 文件，而它是数据目录里涨得最快的一块。

@@ -11,7 +11,7 @@ import {
 } from '@/components/ui/dialog'
 import { api } from '../api/api'
 import type { AuthStatus, AuthPlatform, QrStartResult } from '../api/types'
-import { LOGIN_TABS, XHS_COOKIE_STEPS, loginMode } from '../utils/platformLogin'
+import { LOGIN_TABS, cookieLoginSpec, loginMode } from '../utils/platformLogin'
 
 type Platform = AuthPlatform
 
@@ -40,16 +40,18 @@ interface Props {
  */
 export default function LoginDialog({ open, onOpenChange }: Props) {
   const [platform, setPlatform] = useState<Platform>('bilibili')
-  const [statuses, setStatuses] = useState<Record<Platform, AuthStatus | null>>({
-    bilibili: null,
-    weibo: null,
-    xiaohongshu: null,
-  })
+  // Tab 清单是单一事实来源 ⇒ 状态表也从它派生（写死三家的那次，加平台就得回来改这里）
+  const emptyStatuses = () =>
+    Object.fromEntries(LOGIN_TABS.map((t) => [t.platform, null])) as
+      Record<Platform, AuthStatus | null>
+  const [statuses, setStatuses] = useState<Record<Platform, AuthStatus | null>>(emptyStatuses)
   const [qr, setQr] = useState<QrStartResult | null>(null)
   const [phase, setPhase] = useState<Phase>('generating')
   const [detail, setDetail] = useState('')
-  /** 小红书：粘贴框内容 / 保存中 / 保存失败的原文 / 「重新粘贴」是否展开 */
+  /** 粘贴型平台（小红书 / 抖音）：粘贴框内容 / 保存中 / 保存失败的原文 / 「重新粘贴」是否展开 */
   const [cookie, setCookie] = useState('')
+  /** 抖音：UA（签名会把它算进去 —— 与 cookie 必须同源） */
+  const [userAgent, setUserAgent] = useState('')
   const [saving, setSaving] = useState(false)
   const [cookieErr, setCookieErr] = useState('')
   const [pasting, setPasting] = useState(false)
@@ -104,18 +106,24 @@ export default function LoginDialog({ open, onOpenChange }: Props) {
     }
   }
 
-  /** 保存小红书 cookie；成功后用后端返回的登录态刷新本 Tab（不再多发一次 status） */
+  /** 保存粘贴型平台的凭据；成功后用后端返回的登录态刷新本 Tab（不再多发一次 status）
+   *
+   *  ⚠️ 抖音多一个 UA：它会被算进签名（`a_bogus` 的第三个摘要），而填错的样子是**静默空数据**
+   *     ⇒ 一起存，别让它躺在默认值里（devlog/334）。 */
   const saveCookie = async () => {
     const text = cookie.trim()
     if (!text || saving) return
     setSaving(true)
     setCookieErr('')
     try {
-      const s = await api.saveXhsCookie(text)
-      setStatuses((prev) => ({ ...prev, xiaohongshu: s }))
+      const s = platform === 'douyin'
+        ? await api.saveDouyinCookie(text, userAgent.trim())
+        : await api.saveXhsCookie(text)
+      setStatuses((prev) => ({ ...prev, [platform]: s }))
       setCookie('')
+      setUserAgent('')
       setPasting(false)
-      toast.success('小红书 cookie 已保存')
+      toast.success(`${LOGIN_TABS.find((t) => t.platform === platform)?.label ?? ''} cookie 已保存`)
     } catch (e) {
       // 400 的 detail 直接可显示（"cookie 缺少 a1 —— …"），别吞成"保存失败"
       setCookieErr((e as Error).message)
@@ -194,10 +202,13 @@ export default function LoginDialog({ open, onOpenChange }: Props) {
   // （如微博 Cookie 过期但旧值仍在），若用 cur.logged_in 判定，点了「重新登录」
   // 后二维码会被「已登录」分支挡住——后端 QR 已在生成，界面上却始终看不到码（2026-09 修复）。
   const showLoggedIn = phase === 'confirmed'
-  /** 当前 Tab 是不是「粘贴 cookie」那一路（小红书） */
+  /** 当前 Tab 是不是「粘贴 cookie」那一路（小红书 / 抖音） */
   const isCookie = loginMode(platform) === 'cookie'
-  /** 小红书：没配过、或点了「重新粘贴」时展开输入框 */
+  /** 该平台的粘贴文案与输入框（抖音多一个 UA 框） */
+  const spec = cookieLoginSpec(platform)
+  /** 粘贴型平台：没配过、或点了「重新粘贴」时展开输入框 */
   const showPasteBox = !cur?.logged_in || pasting
+  const readyToSave = Boolean(cookie.trim()) && (!spec.ua || Boolean(userAgent.trim()))
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -248,7 +259,7 @@ export default function LoginDialog({ open, onOpenChange }: Props) {
             showPasteBox ? (
               <div className="flex w-full flex-col gap-2">
                 <ol className="list-decimal space-y-1 pl-4 text-xs leading-relaxed text-muted-foreground">
-                  {XHS_COOKIE_STEPS.map((s) => (
+                  {spec.steps.map((s) => (
                     <li key={s}>{s}</li>
                   ))}
                 </ol>
@@ -257,9 +268,28 @@ export default function LoginDialog({ open, onOpenChange }: Props) {
                   onChange={(e) => setCookie(e.target.value)}
                   rows={4}
                   spellCheck={false}
-                  placeholder="a1=…; web_session=…（整条 Cookie）"
+                  placeholder={spec.placeholder}
                   className="w-full resize-none border border-input bg-background px-2 py-1.5 font-mono text-[11px] leading-relaxed outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
                 />
+                {spec.ua && (
+                  <>
+                    <label className="text-xs font-medium text-muted-foreground">
+                      {spec.ua.label}
+                    </label>
+                    <textarea
+                      value={userAgent}
+                      onChange={(e) => setUserAgent(e.target.value)}
+                      rows={2}
+                      spellCheck={false}
+                      placeholder={spec.ua.placeholder}
+                      data-douyin-ua="1"
+                      className="w-full resize-none border border-input bg-background px-2 py-1.5 font-mono text-[11px] leading-relaxed outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                    />
+                    <p className="text-[11px] leading-relaxed text-muted-foreground">
+                      {spec.ua.hint}
+                    </p>
+                  </>
+                )}
                 {(cookieErr || cur?.note) && (
                   <p className="text-xs leading-relaxed text-red-500" data-xhs-cookie-error="1">
                     {cookieErr || cur?.note}
@@ -267,7 +297,7 @@ export default function LoginDialog({ open, onOpenChange }: Props) {
                 )}
                 <button
                   type="button"
-                  disabled={!cookie.trim() || saving}
+                  disabled={!readyToSave || saving}
                   onClick={() => void saveCookie()}
                   className="flex items-center justify-center gap-1.5 rounded-lg border border-border py-1.5 text-sm text-muted-foreground transition-colors hover:bg-[var(--sel-bg-hover)] disabled:opacity-50"
                 >
@@ -279,9 +309,7 @@ export default function LoginDialog({ open, onOpenChange }: Props) {
               <div className="flex flex-col items-center gap-2 text-center">
                 <p className="text-sm font-medium text-green-600">已配置</p>
                 <p className="text-xs leading-relaxed text-muted-foreground">
-                  小红书 Cookie 在本机 —— 它没有免签名的探活接口，
-                  <b className="font-medium text-foreground">是否还有效要等抓取时才知道</b>
-                  ；那时重新粘一次即可。
+                  {spec.savedNote}
                 </p>
                 <button
                   type="button"

@@ -13,6 +13,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 
 from app.services.auth import auth_manager
+from app.services.douyin_auth import douyin_auth_manager
 from app.services.weibo_auth import weibo_auth_manager
 from app.services.xhs_auth import xhs_auth_manager
 
@@ -20,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-_PLATFORMS = {"bilibili", "weibo", "xiaohongshu"}
+_PLATFORMS = {"bilibili", "weibo", "xiaohongshu", "douyin"}
 _QR_TTL = 180  # 二维码有效期（秒）
 
 # 活跃扫码会话：qr_id → {"platform", "impl", "deadline"}
@@ -113,6 +114,10 @@ async def auth_status(platform: str):
         # ⚠️ 它**不做**真实有效性探测：没有免签名的探活端点，硬探只会白挨一次风控
         #    （见 `services/xhs_auth.py::status` 的说明）。
         return xhs_auth_manager.status()
+    if platform == "douyin":
+        # 同小红书：不做探活（探活也要签名）。真实失效由抓取侧的响应分类反映
+        # —— ⚠️ 抖音的失效形态常是 **200 + 空体**，不是 401/403（devlog/333）。
+        return douyin_auth_manager.status()
     valid = await weibo_auth_manager.check_valid()
     return {
         "logged_in": valid,
@@ -137,3 +142,22 @@ def save_xhs_cookie(payload: dict):
     if not ok:
         raise HTTPException(400, why)
     return {"status": "saved", **xhs_auth_manager.status()}
+
+
+# ── 抖音：**粘贴 cookie + UA**（第 4 阶段 ④ 第二刀，devlog/334）──────────────
+# 为什么连 UA 一起收：`a_bogus` 把 UA 算进签名，而 UA 填错的症状是**静默的**
+# （HTTP 200 + 0 字节空体，devlog/333）⇒ 让它跟 cookie 一起进来，别躺在默认值里。
+
+@router.post("/douyin/cookie")
+def save_douyin_cookie(payload: dict):
+    """保存抖音 cookie（body: `{"cookie": "uifid=…; s_v_web_id=…; ttwid=…", "user_agent": "…"}`）。
+
+    `user_agent` 可选：不给就沿用上次存的那份（或 `core/useragent.py` 的默认 Edge UA），
+    但那只有在"cookie 也是同一个浏览器导的"时才自洽。
+    """
+    body = payload or {}
+    ok, why = douyin_auth_manager.apply_cookie(str(body.get("cookie") or ""),
+                                              str(body.get("user_agent") or ""))
+    if not ok:
+        raise HTTPException(400, why)
+    return {"status": "saved", **douyin_auth_manager.status()}

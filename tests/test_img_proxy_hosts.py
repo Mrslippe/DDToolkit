@@ -35,6 +35,12 @@ PLATFORM_IMAGE_URLS: dict[str, tuple[str, ...]] = {
         "https://sns-img-qc.xhscdn.com/abc123?imageView2/2/w/1080/format/webp",
         "https://ci.xiaohongshu.com/abc123.jpg",
     ),
+    "douyin": (
+        # 真机回包（devlog/333 的 D1 spike）：图文帖的图与封面走 douyinpic，
+        # 视频封面/静态资源走 douyinstatic
+        "https://p3-pc-sign.douyinpic.com/tos-cn-i-0813/abc~tplv-dy-aweme-images:q75.webp",
+        "https://sf11-cdn-tos.douyinstatic.com/obj/tos-cn-ve-2774/cover.jpeg",
+    ),
 }
 
 # 平台 → 期望的 Referer（微博图床有防盗链；没有它 ⇒ 403 ⇒ 破图）
@@ -42,6 +48,10 @@ PLATFORM_REFERER: dict[str, str | None] = {
     "bilibili": "https://www.bilibili.com/",
     "weibo": "https://weibo.com/",
     "xiaohongshu": None,
+    # 抖音：图床地址是**限时签名** URL（`p*-pc-sign.douyinpic.com`），不需要防盗链 Referer。
+    # ⚠️ 这条**没有真机验过**（没单独试过带/不带 Referer 拉图）：先按不带头处理，
+    #    真破图了在这里加 `https://www.douyin.com/` 即可（`_referer_for` 一处）
+    "douyin": None,
 }
 
 

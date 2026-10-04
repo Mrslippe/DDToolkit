@@ -45,11 +45,20 @@ export const TYPE_GROUPS_XHS: TypeGroup[] = [
   { key: 'video', label: '视频', types: ['video'] },
 ]
 
+/** 抖音（第 4 阶段 ④ 第二刀，devlog/334）：作品只有"图文 / 视频"两档 ——
+ *  适配器按 `images` 在不在判（真机实测图文帖也带 `video`，`duration=0`，
+ *  照 `video` 判会把图文记成视频）。 */
+export const TYPE_GROUPS_DOUYIN: TypeGroup[] = [
+  { key: 'image', label: '图文', types: ['image'] },
+  { key: 'video', label: '视频', types: ['video'] },
+]
+
 /** 按当前账号平台取分类分组（零计数组仍不显示，由调用方过滤）。
  *  未知/未选账号平台一律按 B 站处理（B 站是主平台，见 `PRIMARY_PLATFORM_ORDER`）。 */
 export function typeGroupsFor(platform: string | undefined): TypeGroup[] {
   if (platform === 'weibo') return TYPE_GROUPS_WEIBO
   if (platform === 'xiaohongshu') return TYPE_GROUPS_XHS
+  if (platform === 'douyin') return TYPE_GROUPS_DOUYIN
   return TYPE_GROUPS_BILIBILI
 }
 
@@ -57,7 +66,7 @@ export function typeGroupsFor(platform: string | undefined): TypeGroup[] {
  *  未收录平台会得到 `undefined`（渲染为空）。这是既有行为，本批次**只搬不改**，
  *  不要顺手给它加"原样回显"的回退（那会改变未知平台上的展示）。 */
 export const PLATFORM_LABEL: Record<string, string> = {
-  bilibili: 'B站', weibo: '微博', xiaohongshu: '小红书',
+  bilibili: 'B站', weibo: '微博', xiaohongshu: '小红书', douyin: '抖音',
 }
 
 /**
@@ -72,6 +81,7 @@ export const PLATFORM_EN: Record<string, string> = {
   bilibili: 'bilibili',
   weibo: 'weibo',
   xiaohongshu: 'rednote',
+  douyin: 'douyin',
 }
 
 /** 平台英文名（空值 → 「平台」，未知平台 → 标识键原样） */
@@ -100,6 +110,7 @@ export function accountHomeUrl(a: {
   if (a.platform === 'bilibili') return `https://space.bilibili.com/${a.platform_uid}`
   if (a.platform === 'weibo') return `https://weibo.com/u/${a.platform_uid}`
   if (a.platform === 'xiaohongshu') return `https://www.xiaohongshu.com/user/profile/${a.platform_uid}`
+  if (a.platform === 'douyin') return `https://www.douyin.com/user/${a.platform_uid}`
   return null
 }
 

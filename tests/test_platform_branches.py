@@ -74,6 +74,19 @@ class _XhsAuth:
         self.is_configured = configured
 
 
+class _CookieAuth:
+    """抖音同款：`is_configured`（`douyin_auth.status`）。"""
+
+    def __init__(self, configured: bool):
+        self.is_configured = configured
+
+
+#: "肯定没接的平台"样本。⚠️ **别用真实平台名**：这条样本已经被咬过两次 ——
+#: 2026-10-04 先是 `xiaohongshu`（devlog/320），抖音接进来时又是 `douyin` 撞上同一处。
+#: 用永远不会成为平台的名字，这一条就不会每接一家红一次。
+_UNKNOWN_PLATFORM = "definitely-not-a-platform"
+
+
 def test_content_fetch_gate_is_per_platform():
     """B 的判据：**只有微博登录**时，微博内容抓取必须放行、B 站必须拦住。"""
     allowed, why = C._content_fetch_allowed_with(
@@ -82,13 +95,9 @@ def test_content_fetch_gate_is_per_platform():
     allowed, why = C._content_fetch_allowed_with(
         "bilibili", bili=_Auth(False), weibo=_Auth(True))
     assert allowed is False and "B 站" in why
-    # 未知平台：保守拒绝，且原因要说清"没表态"。
-    # ⚠️ 2026-10-04（devlog/320）：这里以前拿 **xiaohongshu** 当"未知平台"的样本 ——
-    #    它其实早就是已接入平台（有 fetcher、有登录卡、库里有帖），于是那句"未知平台"
-    #    被真的端到端撞上了（详情重取对小红书永远 403，用户日志里两条）。样本换成
-    #    **真的没接**的平台，小红书另按自己的 Cookie 口径断言。
+    # 未知平台：保守拒绝，且原因要说清"没表态"（样本见 `_UNKNOWN_PLATFORM` 的注释）。
     allowed, why = C._content_fetch_allowed_with(
-        "douyin", bili=_Auth(True), weibo=_Auth(True), xhs=_XhsAuth(True))
+        _UNKNOWN_PLATFORM, bili=_Auth(True), weibo=_Auth(True), xhs=_XhsAuth(True))
     assert allowed is False and "没有" in why
 
     # 小红书：**只看自己的 Cookie**（与 B 站/微博登录态无关）
@@ -98,6 +107,14 @@ def test_content_fetch_gate_is_per_platform():
     allowed, why = C._content_fetch_allowed_with(
         "xiaohongshu", bili=_Auth(True), weibo=_Auth(True), xhs=_XhsAuth(False))
     assert allowed is False and "Cookie" in why, f"没配 Cookie 要如实说清：{why}"
+
+    # 抖音（devlog/334）：同款口径 —— 只看自己的 Cookie
+    assert C._content_fetch_allowed_with(
+        "douyin", bili=_Auth(False), weibo=_Auth(False), douyin=_CookieAuth(True))[0] is True, \
+        "抖音配了 Cookie 却还被别家的登录态拦着"
+    allowed, why = C._content_fetch_allowed_with(
+        "douyin", bili=_Auth(True), weibo=_Auth(True), douyin=_CookieAuth(False))
+    assert allowed is False and "uifid" in why, f"没配 Cookie 要如实说清：{why}"
 
 
 def test_require_content_fetch_uses_the_requested_platform(monkeypatch):

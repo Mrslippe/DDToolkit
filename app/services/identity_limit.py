@@ -83,18 +83,28 @@ _STATUS_RISK = frozenset({403, 412, 418, 429, 461, 471})
 _STATUS_NETWORK = frozenset({500, 502, 503, 504, 520, 521, 522, 524})
 _RISK_WORDS = ("risk", "风控", "频繁", "限流", "too many", "rate limit", "captcha", "验证码")
 
-# 平台**诊断**分类 → 四类。小红的六分类（devlog/230）走这张表。
+# 平台**诊断**分类 → 四类。小红书的六分类（devlog/230）与抖音的那套（devlog/334）走这张表。
 _KIND_TO_OUTCOME: dict[str, Outcome] = {
     "ok": "ok",
     "business_error": "business_error",
     "risk_control": "risk_control",
-    # 下面三个都是"我们这侧坏了"：cookie 没了 / 签名不对 / 网关头缺失。
+    # `not_found`：帖子/账号没了（抖音 `status_code=0` + 空 `aweme_detail`）。是**业务事实**，
+    # 与"这个身份可疑"无关 ⇒ 归业务失败（不冷却、退令牌）。见 `douyin.py` 的分类表。
+    "not_found": "business_error",
+    # `unsupported_input`：用户给的输入形态我们解析不了（例：抖音号要搜索接口）。
+    # 也是业务侧的事（他不会因为重试就好了），**不该**扣身份健康度。
+    "unsupported_input": "business_error",
+    # 验证码挑战：停止条件（计划 §四-2 立即停）。它确实是"平台在拦我们" ⇒ 按风控算。
+    "captcha": "risk_control",
+    # 下面这几个都是"我们这侧坏了"：cookie 没了 / 签名不对 / 网关头缺失 / 签名器不可用。
     # ⚠️ 归 network_error 而不是 business_error 的理由：它对**身份**没有任何信息量，
     #    不该让身份健康度掉分；也不该像风控那样扣住令牌不放。可见性由适配器的
     #    `last_error`（一等状态）承担 —— 不是靠这里分类。
     "cookie_invalid": "network_error",
     "signature_invalid": "network_error",
     "gateway_missing": "network_error",
+    "argus_missing": "network_error",
+    "signer_unavailable": "network_error",
     # 上游/网关 5xx：与身份无关，退令牌、不计样本（devlog/237 新加的诊断类）
     "server_error": "network_error",
 }
@@ -261,9 +271,22 @@ class Bucket:
 #    等于给**任何**新接线的端点偷偷加一层全局限速 —— B 站接熔断时会被它顺手拖慢，
 #    而 B 站的节奏已经由 R27/R28/R30 调好了。要限速就**显式**写进这张表：
 #    这样"谁被限速"永远是一行可查的配置，而不是一个兜底默认值。
+#
+# ⚠️⚠️ **这张表的键是全局的**（不分平台）：`Ledger._bucket` 只拿 endpoint 查它，而
+#    `(身份, 端点)` 才是令牌桶的键。所以**两个平台不能共用同一个端点名** ——
+#    2026-10-04 抖音接进来时就踩了：给它写了 `"detail": 0.12`，而 B 站的详情抓取
+#    （`bilibili_posts.py` 的 `admit_endpoint("detail")`）用的正是这个名字 ⇒
+#    **抖音的限速把 B 站的详情抓取一起拖慢了**（两条用例当场红：B 站端点不得被限速、
+#    置顶帖刷新）。现在抖音那三行都带自己的前缀，并且
+#    `tests/test_outcome_and_breaker.py` 有一条**两两不相交**的判据盯着这件事。
 ENDPOINT_RATE: dict[str, float] = {
     "user_posted": 0.12,    # 小红书笔记流：≈8.3s 一次（调研 §5.3.1 的 author_posts 同档）
     "otherinfo": 0.2,       # 小红书账号信息：5s 一次
+    # 抖音（devlog/334）：口径与计划 §D0-3 一致 —— 单身份 ≤0.12 req/s，串行。
+    # 名字**带平台特征**，免得再撞上 B 站/小红书的同名端点（见上面那两行警告）。
+    "aweme_posts": 0.12,    # 作品流（`/aweme/v1/web/aweme/post/`）
+    "user_profile": 0.2,    # 账号信息（`/aweme/v1/web/user/profile/other/`）
+    "aweme_detail": 0.12,   # 单条作品详情（enrich）
 }
 
 

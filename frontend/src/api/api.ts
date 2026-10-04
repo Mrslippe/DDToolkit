@@ -1,4 +1,4 @@
-import type { Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliPlayInfo, BiliSearchResult, BiliSegments, Capabilities, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, NoticesResponse, PoolItem, Post, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyVtuber, AssetsInfo, AssetsPruneResult, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, XhsCookieSaved } from './types'
+import type { Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliPlayInfo, BiliSearchResult, BiliSegments, Capabilities, DouyinCookieSaved, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, NoticesResponse, PoolItem, Post, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyVtuber, AssetsInfo, AssetsPruneResult, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, XhsCookieSaved } from './types'
 import { ApiError, ApiShapeError } from './errors'
 import { HOST_HEADER, myHost } from '../utils/hostIdentity'
 import {
@@ -570,7 +570,7 @@ export const api = {
    *  `source='xiaohongshu'` = 小红书 uid 来源（它没有可用搜索接口，devlog/234）：
    *  后端拿 uid 实查**主页信息**复核，没配 cookie ⇒ 503、上游没有 ⇒ 404。 */
   adoptVtuber: (platform: string, platformUid: string, faction?: string,
-                source?: 'pool' | 'bilibili' | 'xiaohongshu') =>
+                source?: 'pool' | 'bilibili' | 'xiaohongshu' | 'douyin') =>
     request<VTuber>('/vtuber/adopt', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -630,6 +630,16 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cookie }),
+    }),
+
+  /** 保存抖音 cookie + UA（**粘贴**那条路，devlog/334）。
+   *  ⚠️ UA 必须与 cookie 来自**同一个浏览器会话**：`a_bogus` 把 UA 算进签名，填错的样子是
+   *  **静默空数据**（HTTP 200 + 0 字节），不是报错。校验不过同样 400 且不落盘。 */
+  saveDouyinCookie: (cookie: string, userAgent = '') =>
+    request<DouyinCookieSaved>('/auth/douyin/cookie', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cookie, user_agent: userAgent }),
     }),
 
   // ── 应用设置（R14a，devlog/091）─────────────────────────────────────
