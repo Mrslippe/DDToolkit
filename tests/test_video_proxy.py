@@ -194,9 +194,13 @@ def test_video_proxy_reports_upstream_error_as_is(client, monkeypatch):
     ("https://upos-sz-estgoss.bilivideo.com/upgcxcode/a.m4s", True),
     ("https://cn-gddg-ct-01-12.bilivideo.com/v.m4s", True),      # B站媒体 CDN（2026-10-03 加）
     ("https://upos-sz-mirrorcos.bilivideo.com/upgcxcode/x.m4s", True),
+    # 抖音（第 4 阶段 ④ 第二刀，devlog/335）：真机回包里的视频地址走这两家子域
+    ("https://v11-weba.douyinvod.com/abc/video.mp4", True),
+    ("https://v26-web.douyinvod.com/abc/video.mp4", True),
     ("https://evilxhscdn.com/a.mp4", False),      # 后缀伪装
     ("https://xhscdn.com.evil.com/a.mp4", False),  # 前缀伪装
     ("https://bilivideo.com.evil.com/a.mp4", False),
+    ("https://douyinvod.com.evil.com/a.mp4", False),
     ("file:///etc/passwd", False),
     ("", False),
 ])
@@ -225,6 +229,11 @@ def test_host_policy_is_per_cdn_not_one_size_fits_all():
         "https://www.bilibili.com/"
     assert video_proxy.policy_for("sns-video-v4.xhscdn.com") == {}, \
         "小红书带了 Referer 会 403 ⇒ 策略必须是「什么都不加」"
+    # 抖音（devlog/335）：⚠️ **未实测**（只接了线，没播过真机的抖音视频）——
+    # 先按"带站内 Referer + 浏览器 UA"处理；真机若播不了，第一件事是换成 `{}` 再试，
+    # 并把实测结论补进 `video_proxy.py` 的那张表。
+    douyin = video_proxy.policy_for("v11-weba.douyinvod.com")
+    assert douyin.get("Referer") == "https://www.douyin.com/" and "User-Agent" in douyin
     assert video_proxy.policy_for("unknown.example") == {}
 
 

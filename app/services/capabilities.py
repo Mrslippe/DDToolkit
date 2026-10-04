@@ -132,11 +132,13 @@ FEATURES: tuple[Feature, ...] = (
         anon_note="抖音接口要签名，签名绑在 cookie 的 `uifid` 上（`verifyFp` 要用 `s_v_web_id` 原值）："
                   "没配置 Cookie 时我们**不发起**请求。补救：设置 → 登录 → 抖音，"
                   "粘贴浏览器里的整条 Cookie **以及那个浏览器的 `navigator.userAgent`**"
-                  "（UA 会被算进签名，填错的样子是静默空数据）",
+                  "（UA 会被算进签名，填错的样子是静默空数据）。"
+                  "另外它还有一个**默认关着的总开关**（设置 → 抓取设置 → 平台抓取）",
         login_note="已配置 Cookie：作品列表与详情重取可用",
         evidence="D1 真机 14 发（`devlog/333`）：游客身份下 `a_bogus` 缺失或值写错 ⇒ "
                  "**HTTP 200 + 0 字节空体**（不是 403）；登录 jar 则完全不校验签名；"
-                 "未配 Cookie 时适配器一个字节都不发（`services/platforms/douyin.py`），2026-10-04",
+                 "未配 Cookie / 总开关关着时适配器一个字节都不发（`services/platforms/douyin.py`），"
+                 "2026-10-04",
     ),
 )
 
@@ -175,13 +177,20 @@ def snapshot(bili_logged_in: bool | None = None, weibo_logged_in: bool | None = 
     xhs = xhs_auth_manager.is_configured if xhs_logged_in is None else xhs_logged_in
     douyin = (douyin_auth_manager.is_configured if douyin_logged_in is None
               else douyin_logged_in)
+    douyin_enabled = _douyin_enabled()
 
     items: list[dict] = []
     limited: list[dict] = []
     for f in FEATURES:
         ready = _logged_in(f.platform, bili, weibo, xhs, douyin)
+        if f.platform == "douyin" and not douyin_enabled:
+            # 总开关关着 ⇒ **如实说"是我们关的"**，而不是让它显示成"没登录"
+            # （用户照着"去登录"做一万次也不会生效 —— devlog/335）
+            ready = False
+            note = DOUYIN_DISABLED_REASON
+        else:
+            note = (f.login_note or f.anon_note) if ready else f.anon_note
         state = FULL if ready else f.anon_state
-        note = (f.login_note or f.anon_note) if ready else f.anon_note
         row = {**asdict(f), "state": state, "note": note}
         items.append(row)
         if state != FULL:
@@ -191,6 +200,8 @@ def snapshot(bili_logged_in: bool | None = None, weibo_logged_in: bool | None = 
         "weibo_logged_in": weibo,
         "xiaohongshu_logged_in": xhs,
         "douyin_logged_in": douyin,
+        #: 抖音总开关（默认 False）。前端据此把"未启用"与"未登录"分开说
+        "douyin_enabled": douyin_enabled,
         "wbi": wbi.wbi_status(),
         "features": items,
         "limited": limited,
@@ -247,6 +258,13 @@ DOUYIN_CONTENT_REASON = (
     "连同 `navigator.userAgent`"
 )
 
+#: 抖音的**总开关**（2026-10-04，devlog/335）：默认关，与"风险自担"那套定性的保守落法一致。
+#: ⚠️ 这条闸门与"没配 cookie"是**两件事**：配了凭据也不等于要在后台一直抓。
+DOUYIN_DISABLED_REASON = (
+    "抖音抓取默认关闭：抖音的用户协议禁止自动化采集，风险落在你自己的账号上 —— "
+    "确认知情后再打开「设置 → 抓取设置 → 平台抓取 → 启用抖音抓取」。关着时一个请求都不发"
+)
+
 UNKNOWN_PLATFORM_REASON = (
     "未知平台：内容抓取**没有**在这里表态（新增平台要在 "
     "`app/services/capabilities.py::content_fetch_allowed` 里显式决定匿名能不能抓）"
@@ -254,13 +272,15 @@ UNKNOWN_PLATFORM_REASON = (
 
 
 def _content_fetch_allowed_with(
-    platform: str, *, bili=None, weibo=None, xhs=None, douyin=None,
+    platform: str, *, bili=None, weibo=None, xhs=None, douyin=None, douyin_enabled=None,
 ) -> tuple[bool, str]:
     """`content_fetch_allowed` 的**可注入版本**（用例注入假登录态；生产走下面那个）。"""
     bili = auth_manager if bili is None else bili
     weibo = weibo_auth_manager if weibo is None else weibo
     xhs = xhs_auth_manager if xhs is None else xhs
     douyin = douyin_auth_manager if douyin is None else douyin
+    if douyin_enabled is None:
+        douyin_enabled = _douyin_enabled()
     if platform == "bilibili":
         if bili.is_logged_in:
             return True, ""
@@ -274,10 +294,24 @@ def _content_fetch_allowed_with(
             return True, ""
         return False, XHS_CONTENT_REASON
     if platform == "douyin":
+        # ⚠️ 两道闸门**顺序有意**：先报"总开关关着"（那是用户能立刻做的一件事），
+        # 再说"cookie 没配" —— 反过来会让人以为配了 cookie 就能抓（devlog/335）。
+        if not douyin_enabled:
+            return False, DOUYIN_DISABLED_REASON
         if douyin.is_configured:
             return True, ""
         return False, DOUYIN_CONTENT_REASON
     return False, UNKNOWN_PLATFORM_REASON
+
+
+def _douyin_enabled() -> bool:
+    """抖音总开关（设置里可热更；读不到就当**关**）。"""
+    from app.core import runtime_settings
+
+    try:
+        return bool(runtime_settings.get("DOUYIN_ENABLED"))
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def content_fetch_allowed(platform: str = "bilibili") -> tuple[bool, str]:

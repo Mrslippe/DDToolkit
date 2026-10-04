@@ -205,6 +205,16 @@ def steps(tier: str) -> list[tuple[str, list[str], str]]:
                       "--vtuber", "15", "--seed-accounts", "8"],
          "版式不变量（三档 × 10 帧，实测 36s）"),
     )
+    # ⚠️ **设置窗口那个模式也要跑**（2026-10-04，devlog/335）：`--app-settings` 判的是
+    #    设置窗口的结构契约（导航项数 / 页内小组与顺序 / 关键项与高级集 / 草稿与越界）。
+    #    此前它**不在门禁里**，于是 `devlog/319` 把「媒体固化」拆成独立分组之后，
+    #    它红了一整天没人知道（文档也一起漂了：实际 5 项、三处文档写着 4 项）。
+    #    "门禁没覆盖的模式等于没有门禁" —— 这一条只多花 ~20s。
+    s.append(
+        ("ui_probe --app-settings", [PY, "scripts/ui_probe.py", "--app-settings",
+                                     "--width", "1440"],
+         "设置窗口结构契约（导航/小组/关键项/草稿，实测 ~20s）"),
+    )
     if tier == "full":
         # dev_check 自带 eslint + vitest + pytest + 语法扫描 + 后端冒烟 ⇒ 别再单跑一遍
         s.append(("dev_check", [PY, "scripts/dev_check.py"],

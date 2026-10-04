@@ -91,6 +91,29 @@ def _pf(**kw) -> DouyinPlatform:
     return DouyinPlatform(**kw)
 
 
+@pytest.fixture(autouse=True)
+def _douyin_on(monkeypatch):
+    """本文件默认把**总开关打开**（生产默认是关的，见 `test_disabled_switch_*`）。
+
+    ⚠️ 打的是 `runtime_settings.get`（**真读路径**），不是把 `DouyinPlatform._enabled` 换成常量 ——
+    否则"开关到底怎么读"这段代码在本文件里一次都不会被执行。
+    """
+    from app.core import runtime_settings
+
+    real = runtime_settings.get
+    monkeypatch.setattr(runtime_settings, "get",
+                        lambda key: True if key == "DOUYIN_ENABLED" else real(key))
+
+
+def _switch(monkeypatch, value: bool) -> None:
+    """把总开关钉成 `value`（同一处真读路径）。"""
+    from app.core import runtime_settings
+
+    real = runtime_settings.get
+    monkeypatch.setattr(runtime_settings, "get",
+                        lambda key: value if key == "DOUYIN_ENABLED" else real(key))
+
+
 def _cookies() -> dict[str, str]:
     return douyin._cookies_of(COOKIE)
 
@@ -307,7 +330,7 @@ def test_items_map_fields_and_ids_stay_strings():
 
     video = parse_aweme(VIDEO_AWEME, SEC_UID)
     assert video["type"] == "video" and video["platform_post_id"] == "7689696714844174446"
-    assert json.loads(video["body_json"])["duration_ms"] == 15000
+    assert json.loads(video["body_json"])["video"]["duration_s"] == 15.0
 
 
 def test_aweme_id_survives_a_json_round_trip():
@@ -317,6 +340,29 @@ def test_aweme_id_survives_a_json_round_trip():
     assert again["platform_post_id"] == AWEME_ID == "7692759522204795110"
     assert isinstance(again["platform_post_id"], str)
     assert str(json.loads(item["raw_json"])["aweme_id"]) == AWEME_ID
+
+
+def test_body_json_speaks_the_shared_contract():
+    """`body_json` 是**跨模块契约**：媒体固化按它取对象、卡片按它显时长。
+
+    这条直接调 `assets._media_urls`（而不是自己再解析一遍 JSON）—— 那才是真读者。
+    写错的样子是**静默**的：抖音视频永远不被固化、卡片上没有时长角标（devlog/335）。
+    """
+    from app.services import assets
+
+    image = json.loads(parse_aweme(IMAGE_AWEME, SEC_UID)["body_json"])
+    assert assets._media_urls(json.dumps(image), video=False) == \
+        ["https://p3-pc-sign.douyinpic.com/a.jpg"], "图文帖的图必须能被固化器看见"
+    assert image["video"] is None or not image["video"].get("url"), "图文帖没有可固化的视频"
+
+    video_item = parse_aweme(VIDEO_AWEME, SEC_UID)
+    body = json.loads(video_item["body_json"])
+    assert assets._media_urls(video_item["body_json"], video=True) == \
+        ["https://v11-weba.douyinvod.com/v.mp4"], "视频必须能被固化器看见"
+    assert body["video"]["url"] == "https://v11-weba.douyinvod.com/v.mp4"
+    assert isinstance(body["video"]["fallbacks"], list), "fallback 链要是列表（前端沿链换源）"
+    # 抖音给的是**毫秒**，合同要的是**秒**（`PostBodyJson.video.duration_s` / `PostCard`）
+    assert body["video"]["duration_s"] == 15.0 and body["duration_sec"] == 15.0
 
 
 def test_user_info_mapping():
@@ -423,6 +469,46 @@ def test_bare_douyin_handle_is_unsupported_and_sends_nothing():
     assert asyncio.run(pf.fetch_user_info("1234567890", client=client)) is None
     assert client.calls == [] and pf.last_error["kind"] == "unsupported_input"
     assert identity_limit.outcome_for_kind("unsupported_input") == "business_error"
+
+
+# ── 总开关（DOUYIN_ENABLED，默认关；devlog/335）────────────────────────
+
+def test_disabled_switch_sends_nothing_on_every_path(monkeypatch):
+    """总开关关着 ⇒ **三条路都一个字节都不发**（不是"抓了不用"）。
+
+    它必须在 `_admit` 这个唯一入口上：账号信息 / 作品 / 详情都要过它，
+    将来加端点也漏不掉。反面对照：上面的用例（开关打开）都真的发了请求。
+    """
+    _switch(monkeypatch, False)
+    client = FakeClient([FakeResp(payload={"status_code": 0, "aweme_list": [IMAGE_AWEME]})])
+    pf = _pf()
+    assert asyncio.run(pf.fetch_post_page(SEC_UID, None, client=client)) is None
+    assert asyncio.run(pf.fetch_user_info(SEC_UID, client=client)) is None
+    assert asyncio.run(pf.fetch_post_detail(AWEME_ID, client=client)) is None
+    assert asyncio.run(pf.enrich(parse_aweme(IMAGE_AWEME, SEC_UID), client=client)) is False
+    assert client.calls == [], "开关关着时不许有任何请求"
+    assert pf.last_error["kind"] == "douyin_disabled"
+    assert "设置" in pf.last_error["msg"], "要说清去哪打开"
+    assert identity_limit.outcome_for_kind("douyin_disabled") == "network_error"
+
+
+def test_switch_is_read_per_call_not_cached(monkeypatch):
+    """开关是**可热更**的：打开之后下一轮就生效，不需要重启工具（这是"默认关"能被接受的前提）。"""
+    _switch(monkeypatch, False)
+    client = FakeClient([FakeResp(payload={"status_code": 0, "aweme_list": [IMAGE_AWEME]})])
+    pf = _pf()
+    assert asyncio.run(pf.fetch_post_page(SEC_UID, None, client=client)) is None
+    _switch(monkeypatch, True)
+    assert asyncio.run(pf.fetch_post_page(SEC_UID, None, client=client)) is not None
+    assert len(client.calls) == 1
+
+
+def test_switch_default_is_off():
+    """默认值必须是**关**（合规口径：配了凭据 ≠ 要在后台一直抓）。"""
+    from app.core import runtime_settings
+
+    assert runtime_settings.default_of("DOUYIN_ENABLED") is False
+    assert runtime_settings.spec("DOUYIN_ENABLED").kind == "bool"
 
 
 def test_user_profile_request_is_signed():

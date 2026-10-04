@@ -859,6 +859,14 @@ export interface Capabilities {
   weibo_logged_in: boolean
   /** 小红书：**Cookie 配齐了没有**（a1 + web_session，不是"探测过有效"，见 `xhs_auth.status`） */
   xiaohongshu_logged_in: boolean
+  /** 抖音：Cookie 配齐了没有（uifid / s_v_web_id / ttwid） */
+  douyin_logged_in: boolean
+  /**
+   * 抖音**总开关**（默认 false，devlog/335）。与 `douyin_logged_in` 是**两件事**：
+   * 配了凭据 ≠ 已启用。`douyin_content` 那一条受限时，note 会分别说清是"没配 Cookie"
+   * 还是"开关没开" —— 后者去登录一万次也不会生效。
+   */
+  douyin_enabled: boolean
   /** WBI 密钥状态；`anonymous=true` 表示密钥来自匿名 nav（未登录也能搜） */
   wbi: { cached: boolean; anonymous: boolean | null }
   features: CapabilityFeature[]

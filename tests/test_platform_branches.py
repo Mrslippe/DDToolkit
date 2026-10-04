@@ -109,12 +109,19 @@ def test_content_fetch_gate_is_per_platform():
     assert allowed is False and "Cookie" in why, f"没配 Cookie 要如实说清：{why}"
 
     # 抖音（devlog/334）：同款口径 —— 只看自己的 Cookie
+    # ⚠️ 它还多一道**总开关**（默认关，devlog/335）⇒ 这里显式打开，专测"凭据那一道"
     assert C._content_fetch_allowed_with(
-        "douyin", bili=_Auth(False), weibo=_Auth(False), douyin=_CookieAuth(True))[0] is True, \
-        "抖音配了 Cookie 却还被别家的登录态拦着"
+        "douyin", bili=_Auth(False), weibo=_Auth(False), douyin=_CookieAuth(True),
+        douyin_enabled=True)[0] is True, "抖音配了 Cookie 却还被别家的登录态拦着"
     allowed, why = C._content_fetch_allowed_with(
-        "douyin", bili=_Auth(True), weibo=_Auth(True), douyin=_CookieAuth(False))
+        "douyin", bili=_Auth(True), weibo=_Auth(True), douyin=_CookieAuth(False),
+        douyin_enabled=True)
     assert allowed is False and "uifid" in why, f"没配 Cookie 要如实说清：{why}"
+    # 总开关关着时**先报开关**（让人能立刻做对一件事），而不是让人去登录
+    allowed, why = C._content_fetch_allowed_with(
+        "douyin", bili=_Auth(True), weibo=_Auth(True), douyin=_CookieAuth(True),
+        douyin_enabled=False)
+    assert allowed is False and "关闭" in why and "登录" not in why
 
 
 def test_require_content_fetch_uses_the_requested_platform(monkeypatch):

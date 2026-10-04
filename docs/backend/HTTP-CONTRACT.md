@@ -141,7 +141,7 @@ retire-when: HTTP 层换框架，或路由整体重排
 
 | 方法 + 路径 | 说明 |
 |---|---|
-| GET `/capabilities` | 本机能力矩阵：`features`（三态 `full`/`degraded`/`requires_login` + 用户说明 + 实测依据）/ `limited` / `wbi` / `measured_at` / **四家**的登录态（`bilibili_logged_in` / `weibo_logged_in` / `xiaohongshu_logged_in` / **`douyin_logged_in`** = Cookie 配齐没有）。前端据此**标注**受限功能而不是隐藏（devlog/086；小红书那条 2026-10-04 才补上，`devlog/321`；抖音 `devlog/334`） |
+| GET `/capabilities` | 本机能力矩阵：`features`（三态 `full`/`degraded`/`requires_login` + 用户说明 + 实测依据）/ `limited` / `wbi` / `measured_at` / **四家**的登录态（`bilibili_logged_in` / `weibo_logged_in` / `xiaohongshu_logged_in` / `douyin_logged_in` = Cookie 配齐没有）**+ 抖音总开关 `douyin_enabled`**（默认 false；与登录态**分开报** —— 关着时 `douyin_content` 的 note 指向设置里的开关，而不是让人去登录）。前端据此**标注**受限功能而不是隐藏（devlog/086；小红书那条 2026-10-04 才补上，`devlog/321`；抖音 `devlog/334/335`） |
 | GET/POST `/vtuber/fetch` | 手动全量抓账号信息；自动档在跑时**抢占**，仅另一个手动任务在跑才 skipped |
 | GET/POST `/vtuber/{id}/fetch` | 抓单个 V 账号信息（同样可抢占自动档） |
 | POST `/vtuber/fetch-posts?name=&platform=&video_pages=&dynamics_pages=&full=` | 按名字抓帖子（-1 全量；`full=true` 后台执行）；**抓前先跑归档规则**。内容接口 → 未登录 **403** |

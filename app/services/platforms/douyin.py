@@ -288,6 +288,42 @@ def _video_url(aweme: dict) -> Optional[str]:
     return _first_url(video.get("play_addr"))
 
 
+def _video_block(aweme: dict) -> Optional[dict]:
+    """`body_json.video` —— **形状与小红书一致**：`{url, fallbacks, width, height, duration_s}`。
+
+    ⚠️ 这是**跨模块契约**，两处会读它，写错都是**静默**的（devlog/335）：
+
+    | 读者 | 读什么 | 写错的症状 |
+    |---|---|---|
+    | `assets._media_urls(body_json, video=True)` | `video.url` + `fallbacks` | 抖音视频**永远不被固化**（盘上没文件，没人报错）|
+    | `frontend` 的 `PostBodyJson.video` / `PostCard` | `video.fallbacks` / `duration_sec` | 播放器没有备用源、卡片上没有时长角标 |
+
+    所以这里把 `play_addr.url_list` 整条当 fallback 链交出去（抖音给多条镜像，正好是它要的），
+    并把毫秒**换算成秒**（`duration_s` 的合同单位就是秒）。
+    """
+    video = aweme.get("video") if isinstance(aweme.get("video"), dict) else {}
+    play = video.get("play_addr") if isinstance(video.get("play_addr"), dict) else {}
+    urls = [u for u in (play.get("url_list") or []) if isinstance(u, str) and u.strip()]
+    duration_s = _duration_seconds(video.get("duration") or aweme.get("duration"))
+    if not urls and duration_s is None:
+        return None
+    return {
+        "url": urls[0] if urls else "",
+        "fallbacks": urls[1:],
+        "width": video.get("width"),
+        "height": video.get("height"),
+        "duration_s": duration_s,
+    }
+
+
+def _duration_seconds(value: Any) -> Optional[float]:
+    """抖音给的是**毫秒**，合同要的是**秒**（`PostBodyJson.video.duration_s`）。"""
+    ms = _int_or_none(value)
+    if not ms or ms <= 0:
+        return None
+    return round(ms / 1000.0, 1)
+
+
 def is_image_post(aweme: dict) -> bool:
     """图文帖判据：**看 `images` 在不在**，不看 `video` —— D1 实测图文帖也带 `video`
     （`duration=0`、`ratio=default`），照 `video` 判会把图文记成视频。"""
@@ -321,8 +357,8 @@ def parse_aweme(aweme: dict, uid: str) -> dict:
     aweme_id = str(aweme.get("aweme_id") or aweme.get("aweme_id_str") or "")
     stats = aweme.get("statistics") if isinstance(aweme.get("statistics"), dict) else {}
     desc = str(aweme.get("desc") or "")
-    video = aweme.get("video") if isinstance(aweme.get("video"), dict) else {}
     images = _images(aweme)
+    video = _video_block(aweme)
     kind = "image" if is_image_post(aweme) else "video"
     # 抖音只有 `desc`：标题取**第一行**（列表里 `desc` 常常是一整段带话题的文案），摘要取全文
     title = desc.splitlines()[0].strip()[:120] if desc.strip() else None
@@ -337,8 +373,10 @@ def parse_aweme(aweme: dict, uid: str) -> dict:
         "cover_url": _cover_url(aweme) or (images[0]["url"] if images else None),
         "permalink": f"{BASE}/{'note' if kind == 'image' else 'video'}/{aweme_id}",
         "body_json": json.dumps({"desc": desc, "images": images,
-                                 "video_url": _video_url(aweme),
-                                 "duration_ms": _int_or_none(video.get("duration")),
+                                 # 形状见 `_video_block`（媒体固化与前端都读它）
+                                 "video": video,
+                                 # 卡片时长角标（`PostCard` 读顶层 `duration_sec`，**秒**）
+                                 "duration_sec": (video or {}).get("duration_s"),
                                  "tags": [str(t.get("hashtag_name")) for t in
                                           (aweme.get("text_extra") or [])
                                           if isinstance(t, dict) and t.get("hashtag_name")]},
@@ -471,6 +509,13 @@ class DouyinPlatform(BasePlatform):
         return identity_limit.identity_key(self.platform, self._cookie_header())
 
     def _admit(self, uid: str, endpoint: str) -> bool:
+        if not self._enabled():
+            # **总开关关着 ⇒ 一个字节都不发**（devlog/335）。放在 `_admit` 这个唯一入口上：
+            # 账号信息 / 作品 / 详情三条路都要过它，将来加端点也漏不掉。
+            self.last_error = {"kind": "douyin_disabled",
+                               "msg": "抖音抓取默认关闭（设置 → 抓取设置 → 平台抓取里显式打开）"}
+            logger.info("抖音总开关关着，本次不发请求（设置 → 抓取设置 → 平台抓取）")
+            return False
         d = self._ledger.acquire(self._identity(), endpoint)
         if d.allowed:
             return True
@@ -478,6 +523,20 @@ class DouyinPlatform(BasePlatform):
                            "reason": d.reason, "retry_after": round(d.retry_after, 2)}
         logger.info("抖音 %s 本轮不发（%s，还需 %.1fs）", endpoint, d.reason, d.retry_after)
         return False
+
+    def _enabled(self) -> bool:
+        """总开关（`DOUYIN_ENABLED`，默认 **False**）。
+
+        ⚠️ 读的是**设置**（可热更）而不是构造参数：用户在设置里打开之后**不必重启**，
+        下一轮就生效 —— 这也是"默认关"能被用户接受的前提（否则每次都要重启一次工具）。
+        """
+        try:
+            from app.core import runtime_settings
+
+            return bool(runtime_settings.get("DOUYIN_ENABLED"))
+        except Exception:  # noqa: BLE001 —— 设置层坏了不该变成"默认开"
+            logger.warning("读 DOUYIN_ENABLED 失败，按**关**处理")
+            return False
 
     def _observe(self, uid: str, endpoint: str, outcome: identity_limit.Outcome) -> None:
         self._ledger.record(self._identity(), endpoint, outcome, target=str(uid))

@@ -122,8 +122,17 @@ scheduler 统一消费框架：
    （漏一处的症状是**静默破图**，`tests/test_img_proxy_hosts.py` 会红）。
 7. **前端**：`utils/postTypes.ts` 的 `PLATFORM_LABEL` / `PLATFORM_EN` / `typeGroupsFor` /
    `accountHomeUrl`，添加账号弹窗与「添加 VTuber」的收录按钮（没有搜索接口的平台只能按 uid 收录）。
-8. **测试**：适配器单测（假 client + **真签名器**）+ 四类响应那两条（业务失败不冷却 /
-   200+空体不算成功）+ 闸门与 `has_more`/cursor 判据；跑 `pytest` 与 `vitest` 全绿。
+   ⚠️ 还要加**三处壳层/媒体白名单**，漏一处的症状都是**静默**的：
+   图片代理 `IMG_PROXY_ALLOWED_HOSTS` + CSP `img-src`（破图）、`/video-proxy` 的
+   `ALLOWED_HOSTS`/`HOST_POLICY`（视频播不了）、Rust 侧 `EXTERNAL_HOSTS`（"打开主页"失败）。
+8. **合规总开关**（抖音 `DOUYIN_ENABLED`，默认 **False**，devlog/335）：协议禁止自动化采集的平台，
+   "配了凭据"**不等于**"要在后台一直抓" ⇒ 加一个用户可见的热更开关，并且**双保险**：
+   `_admit` 这个唯一入口上硬闸（关着一个字节都不发）+ `capabilities` 闸门（理由指向设置里的开关，
+   而不是让人去登录）。
+9. **测试**：适配器单测（假 client + **真签名器**）+ 四类响应那两条（业务失败不冷却 /
+   200+空体不算成功）+ 闸门与 `has_more`/cursor 判据 + **`body_json` 契约**（直接调
+   `assets._media_urls`，别自己再解析一遍 —— 形状写错是静默的）+ 总开关关着时零请求；
+   跑 `pytest` 与 `vitest` 全绿。
 
 ```python
 class DouyinPlatform(BasePlatform):          # 真实形状见 app/services/platforms/douyin.py

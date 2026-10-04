@@ -56,7 +56,7 @@ def test_probe_map_covers_every_feature():
 
 # ── 快照：四种登录组合 ────────────────────────────────────────────────
 
-def test_snapshot_reports_limits_per_login_state():
+def test_snapshot_reports_limits_per_login_state(monkeypatch):
     anon = C.snapshot(bili_logged_in=False, weibo_logged_in=False)
     limited = {x["id"] for x in anon["limited"]}
     assert {"fetch_posts", "weibo_content"} <= limited, "未登录时内容抓取必须标受限"
@@ -69,6 +69,8 @@ def test_snapshot_reports_limits_per_login_state():
     assert "weibo_content" in limited2, "微博未登录时仍应受限（微博匿名不可用）"
 
     # 四家的登录态**各算各的**（devlog/228 的口径，含 10-04 补上的小红书、devlog/334 的抖音）
+    # ⚠️ 抖音还多一道**总开关**（默认关，devlog/335）⇒ 要它"不受限"得把两道都打开
+    monkeypatch.setattr(C, "_douyin_enabled", lambda: True)
     all_ready = C.snapshot(bili_logged_in=True, weibo_logged_in=True, xhs_logged_in=True,
                            douyin_logged_in=True)
     assert all_ready["limited"] == [], f"四家都就绪后不该还有受限项：{all_ready['limited']}"
@@ -207,12 +209,13 @@ def test_snapshot_reports_xiaohongshu_cookie_state(monkeypatch):
 
 
 def test_content_fetch_gate_and_snapshot_know_douyin(monkeypatch):
-    """抖音（devlog/334）：闸门与快照都要**显式表态**，不能落到"未知平台"那句开发者话术。
+    """抖音（devlog/334/335）：闸门与快照都要**显式表态**，不能落到"未知平台"那句开发者话术。
 
-    判据与小红书那条同款：缺 Cookie ⇒ 拒绝**且说清怎么补救**；配齐 ⇒ 放行。
+    判据与小红书那条同款：缺 Cookie ⇒ 拒绝**且说清怎么补救**；配齐 + 总开关打开 ⇒ 放行。
     """
     from app.services.douyin_auth import douyin_auth_manager
 
+    monkeypatch.setattr(C, "_douyin_enabled", lambda: True)      # 总开关单列在下面那条用例
     monkeypatch.setattr(douyin_auth_manager, "cookie", "")
     allowed, why = C.content_fetch_allowed("douyin")
     assert allowed is False and "未知平台" not in why
@@ -225,9 +228,34 @@ def test_content_fetch_gate_and_snapshot_know_douyin(monkeypatch):
                         "UIFID=abc; s_v_web_id=verify_x; ttwid=1%7Cy")
     assert C.content_fetch_allowed("douyin") == (True, ""), "配齐了还挡着 ⇒ 抖音永远抓不到"
     snap2 = C.snapshot(bili_logged_in=True, weibo_logged_in=True)
-    assert snap2["douyin_logged_in"] is True
+    assert snap2["douyin_logged_in"] is True and snap2["douyin_enabled"] is True
     assert [r for r in snap2["limited"] if r["id"] == "douyin_content"] == []
 
     # 只配一半（缺 uifid 时签名器直接报错）⇒ 仍然如实拒绝
     monkeypatch.setattr(douyin_auth_manager, "cookie", "s_v_web_id=verify_x; ttwid=1%7Cy")
     assert C.content_fetch_allowed("douyin")[0] is False
+
+
+def test_douyin_master_switch_is_a_second_gate(monkeypatch):
+    """总开关（默认关，devlog/335）与"没配 cookie"是**两件事**，且顺序有意。
+
+    配好凭据但开关关着 ⇒ 仍然拒绝，理由必须指向**设置里的开关**（而不是让人去登录 ——
+    照着做一万次也不会生效）。开关打开后同一份凭据立刻放行（可热更）。
+    """
+    from app.services.douyin_auth import douyin_auth_manager
+
+    monkeypatch.setattr(douyin_auth_manager, "cookie",
+                        "UIFID=abc; s_v_web_id=verify_x; ttwid=1%7Cy")
+    monkeypatch.setattr(C, "_douyin_enabled", lambda: False)
+    allowed, why = C.content_fetch_allowed("douyin")
+    assert allowed is False, "开关关着却放行 ⇒ 一个请求都不该发的承诺是假的"
+    assert "关闭" in why and "设置" in why and "登录" not in why, f"理由指错了地方：{why}"
+
+    snap = C.snapshot(bili_logged_in=True, weibo_logged_in=True)
+    assert snap["douyin_enabled"] is False and snap["douyin_logged_in"] is True, \
+        "两个状态要分开报：配了凭据 ≠ 已启用"
+    row = next(r for r in snap["features"] if r["id"] == "douyin_content")
+    assert row["state"] == C.REQUIRES_LOGIN and "默认关闭" in row["note"]
+
+    monkeypatch.setattr(C, "_douyin_enabled", lambda: True)
+    assert C.content_fetch_allowed("douyin") == (True, "")

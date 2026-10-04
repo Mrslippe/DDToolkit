@@ -117,6 +117,8 @@ def test_defaults_are_the_values_from_before_the_overlay():
         "MEDIA_PIN_ENABLED": True, "MEDIA_PIN_MAX_AGE_DAYS": 30.0,
         "MEDIA_PIN_VIDEO": False, "MEDIA_PIN_CLEAN_ARCHIVED": True,
         "MEDIA_PIN_PER_ROUND": 20, "MEDIA_PIN_MB_PER_ROUND": 24.0,
+        # 抖音总开关（devlog/335）：**默认 False** —— 配了凭据 ≠ 要在后台一直抓
+        "DOUYIN_ENABLED": False,
     }
     assert {k: s.default for k, s in rs.SPECS.items()} == expect
     # 没覆盖时，property 读到的就是默认值（证明接线正确，而不是"恰好相等"）
@@ -339,6 +341,9 @@ def test_vital_settings_are_visible_and_tuning_knobs_are_advanced():
         "FIRST_SCREEN_DYNAMICS_LIMIT",
         # 数据源（3 个开关：总闸 + 两个上游）——它们是"要不要用这个源"的决策，不该藏
         "EXTERNAL_ENABLED", "EXTERNAL_ZEROROKU_ENABLED", "EXTERNAL_DANMAKUS_ENABLED",
+        # 平台抓取（devlog/335）：抖音总开关。**默认关**且必须让用户自己看到 ——
+        # 它是"要不要碰这家平台"的决策（协议禁止自动化采集），藏进高级等于替他默认同意
+        "DOUYIN_ENABLED",
         # 媒体固化（devlog/319）：这四项都会**明显影响本地磁盘**（固化本身 / 时间窗 /
         # 要不要连视频 / 归档后清不清）⇒ 必须是用户看得见的决策，不能藏在高级里
         "MEDIA_PIN_ENABLED", "MEDIA_PIN_MAX_AGE_DAYS",

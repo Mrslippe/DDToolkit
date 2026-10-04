@@ -94,6 +94,9 @@ _KIND_TO_OUTCOME: dict[str, Outcome] = {
     # `unsupported_input`：用户给的输入形态我们解析不了（例：抖音号要搜索接口）。
     # 也是业务侧的事（他不会因为重试就好了），**不该**扣身份健康度。
     "unsupported_input": "business_error",
+    # 总开关关着（抖音 `DOUYIN_ENABLED`，devlog/335）：是**我们自己**没开，与上游无关
+    # ⇒ 退令牌、不计样本（与 cookie/签名那一类同归"我们这侧"）。
+    "douyin_disabled": "network_error",
     # 验证码挑战：停止条件（计划 §四-2 立即停）。它确实是"平台在拦我们" ⇒ 按风控算。
     "captcha": "risk_control",
     # 下面这几个都是"我们这侧坏了"：cookie 没了 / 签名不对 / 网关头缺失 / 签名器不可用。

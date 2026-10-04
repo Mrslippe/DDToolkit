@@ -1214,6 +1214,10 @@ const EXTERNAL_HOSTS: &[&str] = &[
     // 小红书（第 4 阶段 ④，devlog/231）：主页是 www.xiaohongshu.com/user/profile/{uid}
     "xiaohongshu.com",
     "www.xiaohongshu.com",
+    // 抖音（第 4 阶段 ④ 第二刀，devlog/335）：主页 www.douyin.com/user/{sec_user_id}，
+    // 帖子页 /video/{id} 与 /note/{id}
+    "douyin.com",
+    "www.douyin.com",
 ];
 
 /// 校验一个外部 URL：**返回它的小写主机名**，或给用户看的原因。

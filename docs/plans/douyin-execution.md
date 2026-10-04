@@ -155,6 +155,24 @@ expires: 2027-01-31
 真机端到端一次（一个存量 V 的抖音账号：抓一页 → 落库 → 图片固化 → 详情页能看），
 文档（`PLATFORMS` §3 改成"已落地"、`ASSETS`、`HTTP-CONTRACT`、`PERF` 基线）+ devlog。
 
+> ### ✅ D3 结果（2026-10-04，`devlog/335`）
+>
+> 1. **媒体链路三处一起改**：`IMG_PROXY_ALLOWED_HOSTS` + CSP `img-src`（D2 已做）+
+>    `/video-proxy` 的 `ALLOWED_HOSTS`/`HOST_POLICY` 加 `douyinvod.com`；Rust 侧
+>    `EXTERNAL_HOSTS` 加 `douyin.com`。⚠️ 抖音视频那条 `HOST_POLICY`（带不带站内 Referer）
+>    **是猜的、没实测** —— 写在代码注释与用例里，真机若播不了先换成 `{}` 再试。
+> 2. **总开关落地**：`DOUYIN_ENABLED`（默认 **False**，可热更）+ 适配器 `_admit` 硬闸
+>    （关着一个字节都不发）+ `capabilities` 闸门与两态说明（"没配 Cookie" vs "开关没开"）。
+> 3. **顺手修了一处存量漂移**：设置导航自 `devlog/319`（媒体固化独立成组）起实际是 **5 项**，
+>    而 `ui_probe --app-settings` 与 README/UI-MAP/GLOSSARY 还写着 4 项 ⇒ 那个探针模式
+>    **自那时起一直是红的**（`gate --tier a` 只跑默认模式的 ui_probe，没覆盖到）。三处文档 + 探针已同批改正。
+> 4. **两个静默契约坑**（见 `devlog/335` §二）：`body_json` 的视频形状与顶层 `duration_sec`
+>    —— 写错既不报错也不破图，只是"视频永远不固化、卡片没有时长"。已补一条**直接调
+>    `assets._media_urls`** 的判据。
+>
+> **仍属 D4 的**：真机端到端一次（含**图片固化**与**详情页渲染**）、抖音视频能否播放
+> （上面那条 Referer 策略）、`PERF` 基线、以及用户侧动作（配 cookie + UA、打开总开关）。
+
 ## 三、判据（每批都要能反向验证）
 
 | 判据 | 反向验证 |

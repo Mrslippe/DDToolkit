@@ -13,6 +13,8 @@ export const FETCH_POSTS = 'fetch_posts'
 export const WEIBO_CONTENT = 'weibo_content'
 /** 小红书内容的 feature id（2026-10-04 补：以前矩阵里根本没有这一条，devlog/320） */
 export const XHS_CONTENT = 'xhs_content'
+/** 抖音内容的 feature id（devlog/334/335）—— 它多一道**默认关着的总开关** */
+export const DOUYIN_CONTENT = 'douyin_content'
 
 /** 取某条限制（没有 = 该功能当前完整可用） */
 export function limitOf(caps: Capabilities | null, id: string): CapabilityLimit | null {

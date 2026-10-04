@@ -49,6 +49,7 @@ ALLOWED_HOSTS: tuple[str, ...] = (
     "bilivideo.cn",            # B站 mcdn/P2P 镜像（xy*.mcdn.bilivideo.cn）
     "weibocdn.com",            # 微博视频 CDN（f.video.weibocdn.com）
     "sinaimg.cn",              # 微博图床（gif 转的 mp4 也叫这个域）
+    "douyinvod.com",           # 抖音视频 CDN（v11-weba.douyinvod.com / v26-web.douyinvod.com）
 )
 
 #: **按主机分请求头**（2026-10-03 实测：两家要求正好相反）
@@ -67,6 +68,11 @@ HOST_POLICY: tuple[tuple[str, dict[str, str]], ...] = (
     # 带 `Referer: https://weibo.com/` → 206 ⇒ 与 B站 同款策略
     ("weibocdn.com", {"Referer": "https://weibo.com/", "User-Agent": UA_CHROME}),
     ("sinaimg.cn", {"Referer": "https://weibo.com/", "User-Agent": UA_CHROME}),
+    # 抖音（devlog/335）：⚠️ **未实测**（D3 只接线，没播过真机的抖音视频）。
+    # 先按"带站内 Referer + 浏览器 UA"处理：抖音的视频地址本身是**限时签名** URL，
+    # Referer 可有可无都可能 403 —— 真机若播不了，第一件事是把这里换成 `{}` 再试一次，
+    # 并把实测结论补进上面那张表（别猜着写）。
+    ("douyinvod.com", {"Referer": "https://www.douyin.com/", "User-Agent": UA_CHROME}),
 )
 
 _UPSTREAM_TIMEOUT = 30.0

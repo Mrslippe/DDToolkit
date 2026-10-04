@@ -69,6 +69,11 @@ class Settings:
     #: 算进签名，不一致的后果是**静默的**（HTTP 200 + 0 字节空体，`devlog/333`）。
     #: 留空 ⇒ 用 `core/useragent.py` 的 `UA_EDGE`（只在"cookie 也是它导的"时才自洽）。
     DOUYIN_UA: str = os.getenv("DOUYIN_UA", "")
+    #: **总开关，默认关**（`devlog/335`）。默认关是"风险自担"那套定性的保守落法：
+    #: 抖音协议明文禁止自动化采集（`docs/plans/douyin-execution.md` §0），所以"配了凭据"
+    #: **不等于**"要在后台一直抓"—— 用户得在设置里显式打开。关着时适配器**一个字节都不发**
+    #: （`DouyinPlatform._admit`），不是"抓了但不用"。
+    DOUYIN_ENABLED: bool = False
 
     # 调度器
     # ⚠️ R14a（devlog/091）：带「可热更」注释的键会被 `Settings.__getattribute__`

@@ -28,6 +28,9 @@ const anonCaps = (): Capabilities => ({
   bilibili_logged_in: false,
   weibo_logged_in: false,
   xiaohongshu_logged_in: false,
+  douyin_logged_in: false,
+  // 抖音总开关默认关（devlog/335）—— 与"没登录"分开报
+  douyin_enabled: false,
   wbi: { cached: true, anonymous: true },
   features: [
     feature({ id: 'browse_local', label: '浏览与搜索已归档内容', state: 'full' }),

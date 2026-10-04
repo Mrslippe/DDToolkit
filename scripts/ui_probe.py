@@ -2673,16 +2673,19 @@ def main() -> int:
                         failures.append(f"@{w} app-settings: 别的分类的字段仍在 DOM 里"
                                         f"（{aps.get('otherPaneRowsHidden')} 个）—— "
                                         f"分页应当是「只渲染当前页」")
-                    if aps.get("navCount") != 4:
+                    if aps.get("navCount") != 5:
                         failures.append(f"@{w} app-settings: 导航是 {aps.get('navCount')} 项，"
-                                        f"应为 4 项（外观 / 抓取设置 / 数据源 / 关于）——"
-                                        f"R21 的用户口径是「可选项太多、设置很杂」")
+                                        f"应为 5 项（外观 / 抓取设置 / 数据源 / 媒体固化 / 关于）——"
+                                        f"R21 的用户口径是「可选项太多、设置很杂」；"
+                                        f"⚠️ 这里与 `docs/GLOSSARY.md` 的设置行、README §功能 三处要同批")
                     # ── 页内小组 + 「高级（默认收起）」（R21，devlog/100）──────
                     # 判据分三层：① 小组标题的顺序（结构契约）
                     #             ② 可见字段必须**恰好**等于后端非高级集（界面不自作主张）
                     #             ③ 折叠默认收起（DOM 里一行都没有）→ 展开后恰好是后端高级集
+                    # ⚠️ 加小组时**要一起改这里**（「平台抓取」是 devlog/335 加的合规总开关）——
+                    #    这条判据的用意正是"新增一组必须是有意识的决定"，不是"永远只有 5 组"。
                     want_sections = ["风控与节流", "开播信息抓取", "定期动态轮询",
-                                     "每日定时任务", "收录首屏"]
+                                     "每日定时任务", "收录首屏", "平台抓取"]
                     if aps.get("sectionsOnFetch") != want_sections:
                         failures.append(f"@{w} app-settings: 页内小组是 "
                                         f"{aps.get('sectionsOnFetch')}，应为 {want_sections}"

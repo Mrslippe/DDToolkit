@@ -129,6 +129,13 @@ prune(kind, max_bytes, dry_run=True)    # 按 LRU 淘汰**未 pin 且未被引�
 （没有副本的位置是空串，前端按**索引**对齐，不靠 URL 匹配）；`video_local` 是那条视频的副本。
 键在 Python 侧算、一次 `lookup_keys` 查完全页（判据 `tests/test_media_pin.py` 的语句计数那条）。
 
+> ⚠️ **`body_json` 的形状是跨平台契约**（`assets._media_urls` 是唯一读者，2026-10-04 devlog/335）：
+> 图片取 `images[].url`，视频取 **`video.url` + `video.fallbacks[]`**。
+> **新平台适配器必须按这个形状写** —— 写错的样子是**静默**的：
+> 抖音第一版写了扁平的 `video_url` ⇒ 它的视频永远不会被固化（盘上没文件、日志没话说），
+> 前端卡片/播放器也拿不到 fallback 链。`tests/test_platform_douyin.py` 里有一条
+> **直接调 `_media_urls`** 的判据盯着新平台（比"再解析一遍 JSON"更真）。
+
 正文媒体用两个新 kind：`post_image` / `post_video`（`KINDS` 里加了它们，
 `/settings/assets` 的读数与设置页的"清理未使用"自动覆盖到）。两条与封面**不同**的口径：
 
