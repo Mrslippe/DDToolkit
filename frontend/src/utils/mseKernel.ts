@@ -111,6 +111,20 @@ const SLOW_SEGMENT_BYTES_PER_S = 300_000
  */
 const STALL_TRIES = 3
 const STALL_BACKOFF_MS = 2000
+/**
+ * **一次操作卡多久算"卡住"**（2026-10-04，devlog/322；长视频真机事故）。
+ *
+ * 用户报「40min+ 投稿点进度条跳转 ⇒ 一直加载」。现场：段表覆盖完整（918 段 / 4587s）、
+ * 代理侧每一发 Range 都是 206 且首字节 30–90ms，但**音频轨从开播第 0.2 秒之后再没发过一次取数**，
+ * 于是目标位置永远只有视频、没有音频 ⇒ 元素的缓冲交集为空 ⇒ 转圈到天荒地老。
+ *
+ * ⇒ 一条轨**卡在某个操作上**（取数不回执 / append 不 `updateend`）必须有人管：
+ * 到点记一行现场并把这个操作收掉；再一个窗口还卡着就认输（调用方退回渐进式，
+ * 而渐进式在长视频上只是"跳转后追赶一下"，比"永远转圈"好得多）。
+ */
+export const STUCK_OP_MS = 6000
+/** 跳转"一条轨都没取到数据"时**允许重试几次**（每次重新开一个等待窗口，见 `pump` 的收手分支） */
+export const SEEK_GIVEUP_RETRIES = 1
 
 /** 宿主有没有 MSE（**先问它再决定要不要去后端取段表** —— 没 MSE 时那张表纯属白跑一趟）。 */
 export function mseAvailable(): boolean {
@@ -208,6 +222,10 @@ export interface KernelDeps {
   revokeObjectURL?: (url: string) => void
   /** seek **彻底落不了地**时的收手时间（默认 `SEEK_GIVEUP_MS`；用例用它把等待压成 0） */
   seekGiveUpMs?: number
+  /** "一条轨都没取到"时重试几次（默认 `SEEK_GIVEUP_RETRIES`；用例把它压成 0/1） */
+  seekGiveUpRetries?: number
+  /** 一次操作卡多久算卡住（默认 `STUCK_OP_MS`；用例把它压小，别真等 6 秒） */
+  stuckOpMs?: number
 }
 
 /**
@@ -274,6 +292,10 @@ interface Track {
   /** 镜像链游标：换一条就 +1（取不到时轮换，不回后端） */
   mirror: number
   quotaHits: number
+  /** 当前这个操作（取数/append）是什么时候开始的（`0` = 手上没有操作）—— 卡住看门狗用它 */
+  opSince: number
+  /** 这条轨"卡住"报过几次（第一次只收手 + 记一行，第二次认输） */
+  stuckHits: number
 }
 
 /**
@@ -298,6 +320,8 @@ export class MseKernel {
   private pendingSeek: number | null = null
   /** 这次 seek 是什么时候提的（攒缓冲别超过 `SEEK_CUSHION_MAX_MS`） */
   private seekStartedAt = 0
+  /** 这次 seek "一条轨都没数据"重试过几次（见 `pump` 的收手分支） */
+  private seekRetries = 0
   private fatal = false
   private ended = false
   private dead = false
@@ -334,7 +358,7 @@ export class MseKernel {
         table: table as StreamTable, kind, sb: null, busy: false, initDone: false,
         pending: null, inflight: null, seq: 0, lastIdx: -2, repeat: 0,
         spanEnd: 0, fetchBaseline: -1, noProgress: 0, coolUntil: 0, warnedStall: false,
-        retry: 0, mirror: 0, quotaHits: 0,
+        retry: 0, mirror: 0, quotaHits: 0, opSince: 0, stuckHits: 0,
       }))
     this.startedAt = Date.now()
     this.ms.addEventListener('sourceopen', this.onSourceOpen)
@@ -354,6 +378,7 @@ export class MseKernel {
     const t = Math.min(Math.max(0, time), dur > 0 ? dur - 0.05 : time)
     this.pendingSeek = t
     this.seekStartedAt = Date.now()
+    this.seekRetries = 0
     for (const tr of this.tracks) {
       // 换了目标 ⇒ 上一处的"无进展"记账作废、刹车也解除（新位置值得重新试一次）
       tr.noProgress = 0
@@ -460,6 +485,7 @@ export class MseKernel {
       if (grew) {
         tr.noProgress = 0
         tr.warnedStall = false
+        tr.stuckHits = 0                 // 有进展 ⇒ "卡住"记账作废（devlog/322）
       } else {
         tr.noProgress += 1
       }
@@ -621,6 +647,71 @@ export class MseKernel {
    * 目标、连续可用缓冲、这条轨自己的区间、以及卡在哪一步（`pending`/`busy`）。
    * 有了它，不用再靠猜：是"段取来了却落不到目标位置"，还是"缓冲根本没涨"。
    */
+  /**
+   * **一条轨卡住了**：把现场写一行，然后把这个操作收掉（`devlog/322`）。
+   *
+   * 为什么要它：长视频真机上出现过"音频轨从开播之后再没发过取数"，而泵**没有任何一行日志**
+   * 说得出为什么 —— 没有现场就只能猜（这批之前正是这么过了好几轮）。现在三个数定格现场：
+   * 手上是什么操作、这条轨缓冲到哪、段表多大 + 目标在第几段。
+   *
+   * 收手两次还卡 ⇒ 认输（`fail`），调用方退回渐进式 —— 长视频上渐进式只是"跳转后追赶一下"，
+   * 而"永远转圈"是用户视角里最糟的失败形态。
+   *
+   * `force=true`：换跳转目标时的主动收手（不算"卡住"，不记账）。
+   */
+  private unstick(tr: Track, waitedMs: number, force = false): void {
+    if (force) {
+      if (tr.pending != null) this.abortInflight(tr)
+      else { tr.busy = false; try { tr.sb?.abort() } catch { /* 实现不支持 */ } }
+      tr.opSince = 0
+      return
+    }
+    if (!tr.stuckHits) {
+      this.deps.log?.(`[media] ${tr.kind} 轨卡住 ${(waitedMs / 1000).toFixed(1)}s：`
+                      + `手上=${tr.pending != null ? `取段 ${tr.pending}` : 'append'} `
+                      + `区间=${this.spanText(tr)} 表=${tr.table.segments.length}段/`
+                      + `${tr.table.duration_s.toFixed(0)}s 目标=${this.target().toFixed(1)}s`)
+    }
+    tr.stuckHits += 1
+    tr.opSince = 0
+    if (tr.stuckHits > 1) {
+      this.fail(`${tr.kind} 轨连续卡住（取数与 append 都不回执，缓冲停在 ${this.spanText(tr)}）`)
+      return
+    }
+    if (tr.pending != null) this.abortInflight(tr)       // 取数：abort 掉，泵会换镜像/重试
+    else {
+      // append：`SourceBuffer.abort()` 会补一次 `updateend`（规范如此）⇒ `busy` 能放开
+      try { tr.sb?.abort() } catch { /* 某些实现没有 abort：那就等第二个窗口判死 */ }
+    }
+    this.pump()
+  }
+
+  /** 一条轨的缓冲区间（诊断用，别在别处拿它当判据 —— 那是 `aheadFor` 的活） */
+  private spanText(tr: Track): string {
+    const s = this.trackSpan(tr)
+    return s ? `${s.start.toFixed(1)}–${s.end.toFixed(1)}s` : '无'
+  }
+
+  private target(): number {
+    return this.pendingSeek ?? this.el.currentTime
+  }
+
+  /**
+   * 跳转收手时的**每轨现场**（一行装下）。
+   *
+   * 这一行是给下一次真机复现准备的 —— 长视频那次的全部结论（哪条轨没数据、
+   * 它是不是卡在操作上、段表覆盖到哪、目标该落第几段）都要能从这一行读出来。
+   */
+  private seekDetail(seek: number): string {
+    return this.tracks.map((tr) => {
+      const want = segmentIndexAt(tr.table, seek)
+      return `${tr.kind}[可用=${this.aheadFor(tr, seek).toFixed(1)}s 区间=${this.spanText(tr)}`
+        + ` 手上=${tr.pending != null ? `取${tr.pending}` : tr.busy ? 'append' : '-'}`
+        + ` 该取=${want}/${tr.table.segments.length} 重试=${tr.retry} 重复=${tr.repeat}`
+        + ` 无进展=${tr.noProgress}]`
+    }).join(' ')
+  }
+
   private stallLine(tr: Track): string {
     const target = this.pendingSeek ?? this.el.currentTime
     return `[media] 泵无进展(${tr.kind}) 目标=${target.toFixed(1)}s 可用=${this.aheadFor(tr, target).toFixed(1)}s`
@@ -726,7 +817,16 @@ export class MseKernel {
     if (this.dead || this.fatal || !this.ms || this.ms.readyState !== 'open') return
     const seek = this.pendingSeek
     for (const tr of this.tracks) {
-      if (tr.busy || tr.pending != null) continue
+      if (tr.busy || tr.pending != null) {
+        // **卡住看门狗**（devlog/322）：手上这个操作迟迟不回执 ⇒ 收手，别让泵静默空转
+        const now0 = Date.now()
+        if (!tr.opSince) tr.opSince = now0
+        if (now0 - tr.opSince > (this.deps.stuckOpMs ?? STUCK_OP_MS)) {
+          this.unstick(tr, now0 - tr.opSince)
+        }
+        continue
+      }
+      tr.opSince = 0
       if (!tr.initDone) { void this.append(tr, -1); continue }
       // **没进展就刹车**（见 `STALL_TRIES`）：否则"判据退化 ⇒ 一直取同一段"会把 CDN 与日志打爆
       const now = Date.now()
@@ -768,12 +868,34 @@ export class MseKernel {
       const waited = Date.now() - this.seekStartedAt
       const ready = this.seekReady(seek)
       const giveUp = this.deps.seekGiveUpMs ?? SEEK_GIVEUP_MS
-      // 到点还没到位 ⇒ 收手（把播放点挪过去，浏览器会夹到最近的已缓冲位置）
+      // 到点还没到位 ⇒ 收手
       if (!ready && waited < giveUp) return
       if (!ready) {
-        this.deps.log?.(`[media] 跳转 ${seek.toFixed(1)}s 等了 ${(waited / 1000).toFixed(0)}s 仍无数据`
-                        + ' —— 先把播放点挪过去（别让界面一直转圈）')
-      } else {
+        /**
+         * **等着的时候一条轨都没覆盖目标 ⇒ 不许把播放点挪进洞里**（`devlog/322`，长视频真机事故）。
+         *
+         * ⚠️ 先纠正一个曾经想当然的判据：`!ready` 的定义就是"**每条轨**都没覆盖目标"，
+         * 所以这里**不可能**"还有数据可放"（老代码那句"先把播放点挪过去"在下到这个分支时
+         * 只是把时间设到没数据的地方 —— 元素停在等数据状态，界面转圈照旧，而内核不再重试
+         * ⇒ 用户看到的就是**永远转圈**）。两档：
+         *   · 还有重试额度：把两条轨卡住的操作收掉，重开一个等待窗口；
+         *   · 重试也没用：**如实认输**（`fail` ⇒ 调用方退回渐进式；长视频上渐进式只是
+         *     "跳转后追赶一下"，而"永远转圈"是用户视角里最糟的失败形态）。
+         */
+        const detail = this.seekDetail(seek)
+        if (this.seekRetries < (this.deps.seekGiveUpRetries ?? SEEK_GIVEUP_RETRIES)) {
+          this.seekRetries += 1
+          this.deps.log?.(`[media] 跳转 ${seek.toFixed(1)}s 等了 ${(waited / 1000).toFixed(0)}s `
+                          + `仍**一条轨都没有数据**（${detail}）—— 收手重试 ${this.seekRetries} 次`)
+          for (const tr of this.tracks) this.unstick(tr, 0, true)
+          this.seekStartedAt = Date.now()
+          this.pump()
+          return
+        }
+        this.fail(`跳转 ${seek.toFixed(0)}s 反复取不到数据（${detail}）`)
+        return
+      }
+      if (ready) {
         /**
          * **攒够再落地**（`SEEK_CUSHION`）：只有目标那一段（5s）就走，接下来必然是
          * "放 5 秒停 3 秒"的循环。攒不够也**不能无限等**（真机网络最差时一段要 4.8 秒），
@@ -791,6 +913,7 @@ export class MseKernel {
         }
       }
       this.pendingSeek = null
+      this.seekRetries = 0
       this.el.currentTime = seek
       this.deps.onSeekApplied?.(seek)
       this.report()

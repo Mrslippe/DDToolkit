@@ -467,27 +467,85 @@ describe('mseKernel · seek（先取段，再设时间）', () => {
     expect(f.calls.length, `反复取同几段 = 已经被删了又取：${f.calls.length}`).toBeLessThan(40)
   })
 
-  it('seek 彻底落不了地（数据一直不来）⇒ **到点收手**，别让界面永远转圈', async () => {
-    // 正常路径走不到这里（取数**失败**会熔断退渐进式；这里模拟的是"取数一直不回来"）。
-    // 留这条是因为"永远转圈"是用户视角里最糟的失败形态 —— 到点把播放点挪过去
-    // （浏览器会夹到最近的已缓冲位置）并记一行，至少还能操作。
+  it('seek **一条轨都没数据** ⇒ 收手重试，仍没有就认输（**不许把播放点挪进洞里**）', async () => {
+    /**
+     * 2026-10-04 真机（`devlog/322`，40min+ 投稿点进度条）：老行为是"到点把播放点挪过去"，
+     * 但目标处**本来就没数据**（`!ready` 的定义就是"每条轨都没覆盖目标"）⇒ 设 `currentTime`
+     * 只是把时间扔进洞里：元素停在等数据状态、界面转圈照旧，而内核不再重试
+     * ⇒ 用户看到的就是"一直加载"。新口径：**没数据就不假装** —— 重试一次，还不行就 `fail`
+     * （调用方退回渐进式；长视频上渐进式只是"跳转后追赶一下"）。
+     */
     const ms = new FakeMediaSource(0)
     const el = fakeEl(ms.buffers)
     const onSeekApplied = vi.fn()
+    const onFatal = vi.fn()
+    const logs: string[] = []
     const kernel = new MseKernel(el as unknown as HTMLVideoElement, {
       createMediaSource: () => ms as unknown as MediaSource,
       createObjectURL: () => 'blob:test',
       revokeObjectURL: () => { /* 忽略 */ },
-      // ⚠️ **永不 resolve 也不理会 abort**：这正是"界面一直转圈"的那种卡
-      fetchRange: vi.fn(() => new Promise<ArrayBuffer>(() => { /* 挂着 */ })),
-      onSeekApplied,
-      seekGiveUpMs: 0,                            // 把 10 秒压成 0（用例不真等）
+      // 只有 init 给得出；**一个段都不给** ⇒ 目标处（以及任何地方）都没有数据
+      fetchRange: vi.fn(async (_u: string, r: SegmentRange) =>
+        (r.start === 0 ? encodeRange(0, 0, r.end - r.start + 1)
+          : new Promise<ArrayBuffer>(() => { /* 挂着 */ }))),
+      onSeekApplied, onFatal,
+      log: (l) => { logs.push(l) },
+      seekGiveUpMs: 0,
     })
     kernel.load(STREAMS)
     await flush(10)
     kernel.seekTo(30)
     await flush(20)
-    expect(onSeekApplied, '到点还不收手 ⇒ 用户永远看着转圈').toHaveBeenCalledWith(30)
+
+    expect(onSeekApplied, '把播放点挪到一个没有数据的位置 = 还是转圈').not.toHaveBeenCalled()
+    expect(el.currentTime, '认输时也不许把播放点设到没数据的地方').not.toBe(30)
+    expect(onFatal, '取不到数据就要如实认输（退渐进式），不是静默转圈').toHaveBeenCalled()
+    const detail = logs.find((l) => l.includes('仍**一条轨都没有数据**'))
+    expect(detail, `重试时要说清现场：${logs.join(' | ')}`).toBeTruthy()
+    expect(detail).toContain('该取=')
+    expect(detail).toContain('区间=无')
+  })
+})
+
+describe('mseKernel · 卡住看门狗（devlog/322）', () => {
+  /** 卡住的假 SourceBuffer：`appendBuffer`/`remove` 之后**永不回执** `updateend`。 */
+  function wedgeAll(ms: FakeMediaSource) {
+    for (const b of ms.buffers) {
+      b.appendBuffer = function (this: FakeSourceBuffer) { this.updating = true }
+      b.remove = function (this: FakeSourceBuffer) { this.updating = true }
+    }
+  }
+
+  it('一条轨卡在操作上 ⇒ 先记一行现场并收手；收不掉就认输（不许静默空转）', async () => {
+    // 起因：长视频真机上"音频轨从开播之后再没发过取数"，而泵**一行日志都没有** ⇒ 只能猜。
+    const ms = new FakeMediaSource(0)
+    const f = fetcher(0)
+    const el = fakeEl(ms.buffers)
+    const onFatal = vi.fn()
+    const logs: string[] = []
+    const kernel = new MseKernel(el as unknown as HTMLVideoElement, {
+      createMediaSource: () => ms as unknown as MediaSource,
+      createObjectURL: () => 'blob:test',
+      revokeObjectURL: () => { /* 忽略 */ },
+      fetchRange: f.fn,
+      onFatal,
+      log: (l) => { logs.push(l) },
+      stuckOpMs: 30,                      // 用例里把 6 秒压成 30 毫秒
+      seekGiveUpMs: 60_000,               // 让"跳转收手"别抢在看门狗前面（这条测的是看门狗）
+    })
+    kernel.load(STREAMS)
+    await flush(20)                       // init 正常走完
+    const before = logs.length
+    wedgeAll(ms)                          // 此后每一次 append 都不回执
+    kernel.seekTo(30)
+    await new Promise((r) => setTimeout(r, 1400))   // 两个看门狗窗口 + 泵的节拍（400ms）
+    await flush(20)
+
+    const stuck = logs.slice(before).filter((l) => l.includes('轨卡住'))
+    expect(stuck.length, `卡住必须留一行现场：${logs.slice(before).join(' | ')}`).toBeGreaterThan(0)
+    expect(stuck[0]).toContain('手上=')
+    expect(stuck[0]).toContain('表=')
+    expect(onFatal, '收不掉就得认输（退渐进式），不能一直空转').toHaveBeenCalled()
   })
 })
 
