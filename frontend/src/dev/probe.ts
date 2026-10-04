@@ -2977,6 +2977,11 @@ export async function runUiProbe(): Promise<void> {
       result.limitCount = dlg?.querySelectorAll('.cap-limits-item').length ?? -1
       result.limitIds = [...(dlg?.querySelectorAll('[data-limit-id]') || [])]
         .map((n) => n.getAttribute('data-limit-id'))
+      // 状态 → 角标说法的**实测映射**（devlog/338）：抖音总开关关着时必须是「未启用」，
+      // 不能写成「需要登录」—— 后者会让用户以为 Cookie 没生效而去反复重粘。
+      result.limitBadges = [...(dlg?.querySelectorAll('[data-limit-state]') || [])]
+        .map((n) => `${n.getAttribute('data-limit-state')}=${(n.textContent || '').trim()}`)
+      result.hasSwitchOffHint = !!dlg?.querySelector('[data-cap-only-switch-off]')
       result.hasLoginCta = !!dlg?.querySelector('.cap-limits-foot .float-pill')
       result.loginCtaText = (dlg?.querySelector('.cap-limits-foot .float-pill')?.textContent || '').trim()
       // R21 批 3：页脚按钮必须是浮片（斜切白卡那套），且主操作带 `.on`。

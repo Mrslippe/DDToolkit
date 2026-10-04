@@ -25,6 +25,7 @@ import FloatPill from './common/FloatPill'
 import { api } from '../api/api'
 import type { AppSettings, AssetsInfo, AssetsPruneResult, SettingSpec, StorageInfo } from '../api/types'
 import { usePrefs } from '../hooks/usePrefs'
+import { refreshCapabilities } from '../hooks/useCapabilities'
 import { formatBytes } from '../utils/format'
 import {
   checkForUpdate, deleteOldDataDir, hasPendingUpdate, installUpdate, isDesktopShell,
@@ -392,6 +393,9 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
     try {
       const res = await api.saveAppSettings(buildPayload(dirtyKeys, draft))
       await reload()
+      // ⚠️ 有些设置键**会改变能力矩阵**（今天只有 `DOUYIN_ENABLED`，devlog/338）⇒
+      // 保存后让顶栏那个「N 项受限」重取一次，否则用户打开开关了还看到「未启用」。
+      refreshCapabilities()
       const n = res.changed.length
       toast.success(`已保存 ${n} 项设置 · 下一轮生效`)
       onPill?.(`设置已保存 · ${n} 项`)
@@ -411,6 +415,7 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
       const res = await api.resetAppSettings()
       await theme.reload()
       await reload()
+      refreshCapabilities()      // 恢复默认可能把总开关也一起关回去 ⇒ 能力矩阵要重取
       toast.success(`已恢复默认（${res.changed.length} 项）`)
       onPill?.('设置已恢复默认')
     } catch (e) {

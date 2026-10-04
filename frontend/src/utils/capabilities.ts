@@ -5,7 +5,7 @@
  * 比如把 `degraded` 当成可用（用户点了才发现不行）、把限制说成"功能不可用"（其实能用）。
  * 组件只负责渲染，判定都在这儿，可以脱离 DOM 测。
  */
-import type { Capabilities, CapabilityFeature, CapabilityLimit } from '../api/types'
+import type { Capabilities, CapabilityFeature, CapabilityLimit, CapabilityState } from '../api/types'
 
 /** 内容抓取的 feature id（投稿 + 动态）—— 全项目只认这一个字符串 */
 export const FETCH_POSTS = 'fetch_posts'
@@ -36,6 +36,26 @@ export function isLoginRequired(caps: Capabilities | null, id: string): boolean 
 /** 该功能当前是"能用但打折" */
 export function isDegraded(caps: Capabilities | null, id: string): boolean {
   return limitOf(caps, id)?.state === 'degraded'
+}
+
+/** 该功能是**被我们自己的总开关关了**（`disabled`，devlog/338）——
+ *  ⚠️ 与 `isLoginRequired` 分开：这条的补救动作是"去设置里打开"，不是"去登录"。 */
+export function isDisabled(caps: Capabilities | null, id: string): boolean {
+  return limitOf(caps, id)?.state === 'disabled'
+}
+
+/**
+ * 受限项的**角标**：状态 → 文案 + 样式类（纯逻辑，有单测）。
+ *
+ * ⚠️ 为什么状态要分家（2026-10-05 用户真机反馈，devlog/338）：抖音总开关关着时，
+ * 角标写着「需要登录」，用户的结论是"我粘的 Cookie 没生效"，于是反复重粘 ——
+ * 而真正该做的是去设置里打开开关。**补救动作不同，说法就必须不同。**
+ * 认不出的状态按 `degraded` 兜底（宁少说，不误导）。
+ */
+export function limitBadge(state: CapabilityState): { text: string; cls: string } {
+  if (state === 'requires_login') return { text: '需要登录', cls: 'req' }
+  if (state === 'disabled') return { text: '未启用', cls: 'dis' }
+  return { text: '部分受限', cls: 'deg' }
 }
 
 /** 顶栏一行话：没有限制时返回空串（调用方据此决定要不要渲染入口） */

@@ -42,11 +42,15 @@ from app.services.douyin_auth import douyin_auth_manager
 from app.services.weibo_auth import weibo_auth_manager
 from app.services.xhs_auth import xhs_auth_manager
 
-# 三态（前端按它渲染角标；不要新增第四种而不更新前端）
+# 四态（前端按它渲染角标；新增/改动都要同步前端，见 `frontend/src/api/types.ts`）
 FULL = "full"                      # 完整可用（与登录态无差别）
 DEGRADED = "degraded"              # 能用，但**完整性或稳定性打折**（note 里说清打在哪）
 REQUIRES_LOGIN = "requires_login"  # 必须登录（平台限制，不是我们没实现）
-STATES = (FULL, DEGRADED, REQUIRES_LOGIN)
+#: **我们自己把它关了**（有总开关的平台，如抖音 `DOUYIN_ENABLED`，devlog/338）。
+#: ⚠️ 与 `requires_login` 分开：两者的**补救动作完全不同** —— 一个是去粘 Cookie，
+#: 一个是去设置里打开开关。混用会让用户"粘了 Cookie 还看到『需要登录』"，以为没生效。
+DISABLED = "disabled"
+STATES = (FULL, DEGRADED, REQUIRES_LOGIN, DISABLED)
 
 
 @dataclass(frozen=True)
@@ -167,6 +171,18 @@ def _logged_in(platform: str | None, bili: bool, weibo: bool, xhs: bool = False,
     return _login_states(bili, weibo, xhs, douyin).get(platform, False)
 
 
+def _disabled_reason(platform: str | None) -> str | None:
+    """这个平台是不是**被我们自己的总开关关了**？是就给一句"去哪打开"。
+
+    今天只有抖音有总开关（`DOUYIN_ENABLED`，devlog/335）；将来再加一家，这里加一条。
+    ⚠️ 状态要给 `DISABLED` 而不是 `requires_login` —— 用户看到「需要登录」会去重新粘 Cookie，
+    而真正该做的是打开开关（devlog/338 的真实反馈）。
+    """
+    if platform == "douyin" and not _douyin_enabled():
+        return DOUYIN_DISABLED_REASON
+    return None
+
+
 def snapshot(bili_logged_in: bool | None = None, weibo_logged_in: bool | None = None,
              xhs_logged_in: bool | None = None,
              douyin_logged_in: bool | None = None) -> dict:
@@ -183,14 +199,16 @@ def snapshot(bili_logged_in: bool | None = None, weibo_logged_in: bool | None = 
     limited: list[dict] = []
     for f in FEATURES:
         ready = _logged_in(f.platform, bili, weibo, xhs, douyin)
-        if f.platform == "douyin" and not douyin_enabled:
-            # 总开关关着 ⇒ **如实说"是我们关的"**，而不是让它显示成"没登录"
-            # （用户照着"去登录"做一万次也不会生效 —— devlog/335）
+        switched_off = _disabled_reason(f.platform)
+        if switched_off:
+            # **总开关关着 ⇒ `disabled`，不是 `requires_login`**（devlog/338）：
+            # 如实说"是我们关的"，补救动作是去设置里打开 —— 而不是让人去重新粘 Cookie。
             ready = False
-            note = DOUYIN_DISABLED_REASON
+            state = DISABLED
+            note = switched_off
         else:
+            state = FULL if ready else f.anon_state
             note = (f.login_note or f.anon_note) if ready else f.anon_note
-        state = FULL if ready else f.anon_state
         row = {**asdict(f), "state": state, "note": note}
         items.append(row)
         if state != FULL:

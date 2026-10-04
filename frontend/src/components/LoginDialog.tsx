@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/dialog'
 import { api } from '../api/api'
 import type { AuthStatus, AuthPlatform, QrStartResult } from '../api/types'
+import { refreshCapabilities } from '../hooks/useCapabilities'
 import { LOGIN_TABS, cookieLoginSpec, loginMode } from '../utils/platformLogin'
 
 type Platform = AuthPlatform
@@ -123,6 +124,10 @@ export default function LoginDialog({ open, onOpenChange }: Props) {
       setCookie('')
       setUserAgent('')
       setPasting(false)
+      // ⚠️ 能力矩阵**要立刻重取**（devlog/338）：登录态变了而顶栏那个「N 项受限」不刷新的话，
+      // 用户刚粘完 Cookie 还看到"需要登录"，会以为没生效 —— 与扫码那条路同一个理由
+      // （见 `hooks/useCapabilities.ts` 的设计取舍）。
+      refreshCapabilities()
       toast.success(`${LOGIN_TABS.find((t) => t.platform === platform)?.label ?? ''} cookie 已保存`)
     } catch (e) {
       // 400 的 detail 直接可显示（"cookie 缺少 a1 —— …"），别吞成"保存失败"

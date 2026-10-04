@@ -824,11 +824,14 @@ export interface QrCheckResult {
 
 // ── 能力矩阵（GET /capabilities，devlog/086）──────────────────────────
 //
-// 三态：`full` 完整可用 · `degraded` 能用但完整性/稳定性打折 · `requires_login` 平台限制。
+// **四态**（2026-10-05 加第四态，devlog/338）：
+// `full` 完整可用 · `degraded` 能用但完整性/稳定性打折 · `requires_login` 平台限制（去粘 Cookie）
+// · `disabled` **我们自己把它关了**（有总开关的平台，如抖音；补救动作是去设置里打开开关）。
+// ⚠️ 后两者**不能混**：用户看到「需要登录」会去重新粘 Cookie，而真正该做的是打开开关。
 // 关键口径：**未登录不等于不可用** —— 本地浏览、检索、粉丝数、直播状态、第三方历史都能用；
 // 只有"抓投稿/动态"这类内容接口被平台按 IP 拦（匿名 412），所以那些点必须**标注**而不是隐藏。
 
-export type CapabilityState = 'full' | 'degraded' | 'requires_login'
+export type CapabilityState = 'full' | 'degraded' | 'requires_login' | 'disabled'
 
 export interface CapabilityFeature {
   id: string

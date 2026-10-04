@@ -3281,6 +3281,16 @@ img.hero-avatar {
 
 .cap-limits-dialog {
   max-width: 560px;
+  /* 三段式：整窗不超过视口，正文自己滚（页脚必须留在视口里，devlog/338）。
+     60px×2 = 上下留白，够 `top-50%` 居中时两头都不贴边。 */
+  max-height: calc(100vh - 120px);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.cap-limits-body {
+  min-height: 0;          /* grid 子项默认 `min-height:auto` ⇒ 不给它 0 就撑破父级 */
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .cap-limits-sec + .cap-limits-sec {
@@ -3349,6 +3359,12 @@ img.hero-avatar {
   background: var(--c-rail-active-bg);
 }
 
+/* 「未启用」（我们自己把它关了，devlog/338）：与「部分受限」同一个底色 —— 这里**刻意不再分色**，
+   区分靠文字（补救动作不同才要不同说法，颜色再分一层只会让色板变脏）。 */
+.cap-limits-label em.dis {
+  background: var(--c-rail-active-bg);
+}
+
 .cap-limits-note {
   font-size: 11.5px;
   line-height: 1.6;
@@ -3361,6 +3377,15 @@ img.hero-avatar {
 }
 
 /* 能力说明窗的「去登录」（R21 批 3）：自绘的 `.cap-login-cta` 已删 —— 改用浮片 `.float-pill.on` */
+
+/* 页脚改说"去设置"时的提示（devlog/338）：受限项全是开关关着 ⇒ 不给登录按钮，
+   因为点进去也没有用；这句话替代按钮的位置。 */
+.cap-limits-hint {
+  font-size: 11.5px;
+  line-height: 1.6;
+  text-align: right;
+  color: var(--c-text-sub);
+}
 
 .vd-settings-foot {
   flex: none;

@@ -8,7 +8,13 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import type { Capabilities } from '../api/types'
-import { availableSummary, loginActionLabel, limitsSummary } from '../utils/capabilities'
+import {
+  availableSummary,
+  isDisabled,
+  limitBadge,
+  loginActionLabel,
+  limitsSummary,
+} from '../utils/capabilities'
 
 interface Props {
   caps: Capabilities | null
@@ -35,6 +41,14 @@ export default function CapabilityLimits({ caps, onLogin }: Props) {
 
   const canDo = availableSummary(caps)
 
+  // 说明窗的标题/正文按**受限的成因**分岔（devlog/338）：被我们自己的开关关掉的项
+  // 与"没登录"不是一回事 —— 已登录的用户打开这个窗，看到的必须是"去打开开关"，
+  // 而不是"未登录也能用大部分功能"（那句话会让他回头去重粘 Cookie）。
+  const hasSwitchOff = (caps?.limited ?? []).some((l) => l.state === 'disabled')
+  // 有没有**登录能解决**的受限项（决定页脚给不给"去登录"）
+  const hasLoginLimit = (caps?.limited ?? []).some((l) => !isDisabled(caps, l.id))
+  const loginCta = loginActionLabel(caps)
+
   return (
     <>
       <button
@@ -49,55 +63,76 @@ export default function CapabilityLimits({ caps, onLogin }: Props) {
       </button>
 
       <Dialog open={open} onOpenChange={setOpen}>
+        {/* ⚠️ 三段式（页头 / 可滚的正文 / 页脚）**不是审美问题**（devlog/338）：
+            `DialogContent` 是 `fixed top-50%` 垂直居中且**没有** max-height ⇒ 内容一长，
+            页脚（「去登录」/「去设置」）就被推出视口 —— 探针量到的是"点不着"
+            （`elementFromPoint` 落在视口外 ⇒ null），用户侧则是"看不到补救入口"。 */}
         <DialogContent className="cap-limits-dialog max-w-lg">
           <DialogHeader>
-            <DialogTitle>未登录时的能力范围</DialogTitle>
+            <DialogTitle>{hasSwitchOff ? '能力范围与受限项' : '未登录时的能力范围'}</DialogTitle>
             <DialogDescription>
-              未登录也能用大部分功能；只有需要写平台内容的那几项要登录。
-              下面每条都写了原因和登录后的变化（实测于 {caps?.measured_at ?? '—'}）。
+              {hasSwitchOff
+                ? '下面标「未启用」的是我们自己的抓取开关关着（不是登录问题，粘 Cookie 不会改变它）；'
+                  + '其余才与登录有关。每条都写了原因和补救办法。'
+                : '未登录也能用大部分功能；只有需要写平台内容的那几项要登录。'
+                  + '下面每条都写了原因和登录后的变化。'}
+              {`（实测于 ${caps?.measured_at ?? '—'}）`}
             </DialogDescription>
           </DialogHeader>
 
-          {canDo.length > 0 && (
+          <div className="cap-limits-body">
+            {canDo.length > 0 && (
+              <section className="cap-limits-sec">
+                <h4 className="cap-limits-title">现在可以正常使用</h4>
+                <ul className="cap-limits-list">
+                  {canDo.map((label) => (
+                    <li key={label} className="cap-limits-ok">{label}</li>
+                  ))}
+                </ul>
+              </section>
+            )}
+
             <section className="cap-limits-sec">
-              <h4 className="cap-limits-title">现在可以正常使用</h4>
+              <h4 className="cap-limits-title">受限（{caps?.limited.length ?? 0}）</h4>
               <ul className="cap-limits-list">
-                {canDo.map((label) => (
-                  <li key={label} className="cap-limits-ok">{label}</li>
+                {caps?.limited.map((l) => (
+                  <li key={l.id} className="cap-limits-item" data-limit-id={l.id}>
+                    <span className="cap-limits-label">
+                      {l.label}
+                      {/* 角标按状态分三种说法（devlog/338 的真实反馈）：把"没登录"与"我们自己关了"
+                          混成一句「需要登录」，用户就会去反复重粘 Cookie 而问题不在那儿。
+                          `data-limit-state` 供 UI 探针把"状态→说法"钉在 DOM 上（不是看截图猜）。 */}
+                      <em className={limitBadge(l.state).cls} data-limit-state={l.state}>
+                        {limitBadge(l.state).text}
+                      </em>
+                    </span>
+                    <span className="cap-limits-note">{l.note}</span>
+                  </li>
                 ))}
               </ul>
             </section>
-          )}
-
-          <section className="cap-limits-sec">
-            <h4 className="cap-limits-title">受限（{caps?.limited.length ?? 0}）</h4>
-            <ul className="cap-limits-list">
-              {caps?.limited.map((l) => (
-                <li key={l.id} className="cap-limits-item" data-limit-id={l.id}>
-                  <span className="cap-limits-label">
-                    {l.label}
-                    <em className={l.state === 'requires_login' ? 'req' : 'deg'}>
-                      {l.state === 'requires_login' ? '需要登录' : '部分受限'}
-                    </em>
-                  </span>
-                  <span className="cap-limits-note">{l.note}</span>
-                </li>
-              ))}
-            </ul>
-          </section>
+          </div>
 
           <div className="cap-limits-foot">
-            {/* R21 批 3：页脚统一浮片（原来那个 `.cap-login-cta` 自绘副本已删） */}
-            <button
-              type="button"
-              className="float-pill float-pill--md float-pill--text on"
-              onClick={() => {
-                setOpen(false)
-                onLogin()
-              }}
-            >
-              {loginActionLabel(caps)}
-            </button>
+            {/* R21 批 3：页脚统一浮片（原来那个 `.cap-login-cta` 自绘副本已删）。
+                ⚠️ 「全是开关关着」时**不给登录按钮**（devlog/338）：能点的话用户就会去点，
+                   而那条路的补救动作在设置里 —— 指错门比不给门更费时间。 */}
+            {hasLoginLimit ? (
+              <button
+                type="button"
+                className="float-pill float-pill--md float-pill--text on"
+                onClick={() => {
+                  setOpen(false)
+                  onLogin()
+                }}
+              >
+                {loginCta}
+              </button>
+            ) : (
+              <span className="cap-limits-hint" data-cap-only-switch-off="1">
+                这些项与登录无关：去「设置 → 抓取设置 → 平台抓取」打开对应开关
+              </span>
+            )}
           </div>
         </DialogContent>
       </Dialog>

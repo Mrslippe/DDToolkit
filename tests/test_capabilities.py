@@ -255,7 +255,15 @@ def test_douyin_master_switch_is_a_second_gate(monkeypatch):
     assert snap["douyin_enabled"] is False and snap["douyin_logged_in"] is True, \
         "两个状态要分开报：配了凭据 ≠ 已启用"
     row = next(r for r in snap["features"] if r["id"] == "douyin_content")
-    assert row["state"] == C.REQUIRES_LOGIN and "默认关闭" in row["note"]
+    # ⚠️ 状态是 **`disabled`**，不是 `requires_login`（devlog/338 的用户真机反馈）：
+    #    角标写「需要登录」会让人去反复重粘 Cookie，而该做的是去设置里打开开关。
+    assert row["state"] == C.DISABLED and row["state"] != C.REQUIRES_LOGIN
+    assert "默认关闭" in row["note"] and "设置" in row["note"]
+    assert next(l for l in snap["limited"] if l["id"] == "douyin_content")["state"] == C.DISABLED
 
     monkeypatch.setattr(C, "_douyin_enabled", lambda: True)
     assert C.content_fetch_allowed("douyin") == (True, "")
+    # 开关打开、但凭据没配 ⇒ 这时才是真正的 `requires_login`（两种状态不能混）
+    monkeypatch.setattr(douyin_auth_manager, "cookie", "")
+    assert next(r for r in C.snapshot(bili_logged_in=True, weibo_logged_in=True)["features"]
+                if r["id"] == "douyin_content")["state"] == C.REQUIRES_LOGIN

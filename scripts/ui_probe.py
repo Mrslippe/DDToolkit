@@ -4996,6 +4996,7 @@ def main() -> int:
             print(f"  说明窗={cp.get('hasLimitsDialog')} 能用项={cp.get('canDoCount')} "
                   f"受限项={cp.get('limitCount')} {cp.get('limitIds')} "
                   f"去登录={cp.get('hasLoginCta')} {cp.get('loginCtaText')!r}")
+            print(f"  受限角标={cp.get('limitBadges')} 全关提示={cp.get('hasSwitchOffHint')}")
             print(f"  添加 V：浮窗={cp.get('addVDialogOpened')} 受限提示={cp.get('addVHasLimitHint')} "
                   f"仍能搜出={cp.get('addVRows')} 行（可点 {cp.get('addVEnabledRows')}）")
             print(f"  批量浮窗={cp.get('batchDialogOpened')} "
@@ -5025,6 +5026,29 @@ def main() -> int:
                         failures.append(f"@{w} capabilities: 受限项里没有 fetch_posts：{ids}")
                     if not cp.get("hasLoginCta"):
                         failures.append(f"@{w} capabilities: 说明窗没有「去登录」入口")
+                    # 状态 → 角标说法（devlog/338）：`requires_login` 必须写「需要登录」、
+                    # `disabled`（我们自己的开关关着）必须写「未启用」——
+                    # 两者混用会让用户拿着有效 Cookie 反复重粘。
+                    badges = [str(b) for b in (cp.get("limitBadges") or [])]
+                    if not badges:
+                        failures.append(f"@{w} capabilities: 受限项没标状态角标"
+                                        f"（探针量不到 data-limit-state）")
+                    for b in badges:
+                        st, _, text = b.partition("=")
+                        want = {"requires_login": "需要登录", "disabled": "未启用",
+                                "degraded": "部分受限"}.get(st)
+                        if want and text != want:
+                            failures.append(f"@{w} capabilities: 状态 {st} 的角标写成「{text}」"
+                                            f"（应为「{want}」）")
+                    # 「未启用」项在设置里补救 ⇒ 全是未启用时不该给「去登录」按钮
+                    # （还有别的"登录能解决"的受限项时按钮照给，所以按"全是"判）
+                    all_disabled = bool(badges) and all(b.startswith("disabled=") for b in badges)
+                    if all_disabled and cp.get("hasLoginCta"):
+                        failures.append(f"@{w} capabilities: 受限项全是「未启用」却仍给「去登录」"
+                                        f"按钮（补救动作在设置里，指错门比不给门更费时间）")
+                    if all_disabled and not cp.get("hasSwitchOffHint"):
+                        failures.append(f"@{w} capabilities: 没有登录入口时也没说"
+                                        f"「去设置里打开」（页脚空着 = 死路）")
                     # R21 批 3：页脚统一浮片（主操作「去登录」还要带 `.on`）
                     if "float-pill" not in (cp.get("footPill") or ""):
                         failures.append(f"@{w} capabilities: 说明窗页脚不是浮片 —— "
