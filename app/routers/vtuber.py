@@ -1140,6 +1140,81 @@ def list_posts(platform: str, platform_uid: str, db: Session = Depends(get_db)):
     return _post_outs(db, list(PostRepo(db).by_uid(platform, platform_uid)))
 
 
+#: 同一帖两次重取的最小间隔（秒）。图床地址是**限时**的，重取只能拿"当下这一份"，
+#: 调太频除了给上游添麻烦没有任何收益 —— 所以这里如实 429，而不是"随便点"。
+REFRESH_MEDIA_MIN_GAP = 30.0
+_refresh_at: dict[int, float] = {}
+
+
+@router.post("/posts/{post_id}/refresh-media")
+async def refresh_post_media(post_id: int, db: Session = Depends(get_db)):
+    """**重取这一帖的媒体地址**（2026-10-04，devlog/320；计划批次 3）。
+
+    什么时候用：本地没有固化副本、而远端图床地址**签名过期**（小红书实测不到一天就 403），
+    详情页四级回落全失败时的**备选路径**。前端只在"确实一张都画不出来"时调一次。
+
+    口径：
+    - 走**平台自己的详情补全**（`BasePlatform.enrich`：小红书 `feed`、微博详情），
+      所以签名头/风控/节流都在平台层，这里不另造一套；
+    - **未登录 ⇒ 如实 403**（内容接口的能力闸门，与抓取同一条）；
+    - 平台没有详情补全（如 B 站视频帖）⇒ **409**（别假装重取了）；
+    - 同一帖 `REFRESH_MEDIA_MIN_GAP` 秒内再来 ⇒ **429**（并说明为什么）；
+    - 写回**只动媒体相关的列**（封面/正文/raw/stats）：标题与发布时间是另一件事，
+      顺手改会让"列表顺序突然变了"这类现象更难解释；
+    - 拿到新地址后**立刻固化一次**（否则几小时后又过期，用户下次打开还是灰的）。
+    """
+    import time
+
+    from app.services import capabilities
+    from app.services import media_pin
+    from app.services.platforms import registry
+    from app.services.platforms.base import BasePlatform
+
+    post = PostRepo(db).get(post_id)
+    if post is None:
+        raise HTTPException(404, f"Post id={post_id} 不存在")
+    allowed, why = capabilities.content_fetch_allowed(post.platform)
+    if not allowed:
+        raise HTTPException(403, why or "当前未登录，无法重取媒体")
+    fetcher = registry.get_fetcher(post.platform)
+    if fetcher is None or type(fetcher).enrich is BasePlatform.enrich:
+        raise HTTPException(409, f"{post.platform} 的帖子没有可重取的媒体详情"
+                                 f"（B 站视频帖的封面/播放地址在播放时另行取流）")
+    now = time.monotonic()
+    left = REFRESH_MEDIA_MIN_GAP - (now - _refresh_at.get(post_id, 0.0))
+    if left > 0:
+        raise HTTPException(429, f"刚重取过，{left:.0f} 秒后再试"
+                                 f"（图床地址是限时的，重取太频只会白跑一趟）")
+    _refresh_at[post_id] = now
+
+    # 把库里的行**还原成抓取时的 item 形状**再交给平台层（它自己知道 raw_json 里有什么）
+    item = {"platform": post.platform, "platform_uid": post.platform_uid,
+            "platform_post_id": post.platform_post_id, "type": post.type,
+            "title": post.title, "summary": post.summary, "cover_url": post.cover_url,
+            "permalink": post.permalink, "body_json": post.body_json,
+            "stats_json": post.stats_json, "raw_json": post.raw_json}
+    try:
+        ok = await fetcher.enrich(item)
+    except Exception as e:                     # noqa: BLE001 —— 上游千奇百怪，如实回一句话
+        logger.warning(f"重取媒体失败 post#{post_id}: {type(e).__name__}: {e}")
+        raise HTTPException(502, f"重取失败：{type(e).__name__}") from e
+    if not ok:
+        err = getattr(fetcher, "last_error", None) or {}
+        raise HTTPException(502, "没能取到新的媒体地址"
+                                 + (f"：{err.get('message') or err.get('kind')}" if err else ""))
+    for col in ("cover_url", "body_json", "raw_json", "stats_json"):
+        if item.get(col):
+            setattr(post, col, item[col])
+    db.commit()
+    try:
+        pinned = await media_pin.pin_post_media(db, post)
+    except Exception as e:                     # noqa: BLE001 —— 固化失败不该让"重取"这件事失败
+        logger.warning(f"重取后固化失败 post#{post_id}: {type(e).__name__}: {e}")
+        db.rollback()
+        pinned = {"reason": "固化失败（见日志）"}
+    return {"ok": True, "pinned": pinned, "post": _post_outs(db, [post])[0]}
+
+
 @router.get("/posts/{platform}/{platform_uid}/paginated", response_model=PostPage)
 def list_posts_paginated(
     platform: str,

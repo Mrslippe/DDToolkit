@@ -867,7 +867,7 @@ border-white/25 + bg-black/60 + backdrop-blur，左右键同效，单图隐藏�
 点击遮罩空白区 = 关查看器（不伤详情窗）。**开/关均有动画**（posts.css：出场
 `.image-viewer-img` 微缩放+淡入、`.image-viewer-veil` 淡入；关闭组件 `closing` 态 +
 `image-viewer-closing` 类驱动 200ms 微缩淡出+遮罩渐隐，到点才卸载；
-reduced-motion 禁用）。图片加载同一混合策略（直连→代理→失败占位）。
+reduced-motion 禁用）。图片加载同一混合策略（直连→代理→**本地副本**→占位，`ViewerImage.local` 由详情窗按索引挂上，devlog/319）。
 
 ### B3. 直播场次详情弹窗（`<LiveCalendar>` 内部，2026-09-07 用户定案）
 
@@ -1079,6 +1079,8 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→�
 - **头像 / 签名的取值口径（R33，devlog/135）**：**卡片与左栏必须同源** —— 头像 `utils/avatarSource.ts::resolveAvatarSources`（`{src, local}`：`vtubers.avatar` → B 站缓存 → 任一缓存 → B 站 URL → 任一 URL；`local` 是后端派生的本地副本），签名 `utils/signSource.ts::resolveSign`（`sign_override` → 来源账号 → 主账号）。左栏此前各写了一份"只看平台字段"的取值 ⇒ 档案设置改完看着像没生效；护栏 = 单测 + `ui_probe --profile-sync`（断言左栏**实际渲染**值 + 无 override 的对照组）。
   ⚠️ **A0（devlog/255）**：`ProxyImage` 的回落链现在是四级 **直连 → 代理 → 本地（`fallbackSrc`）→ 占位** —— 远端 URL 会死（实测某 V 选中微博头像的签名只活 ~3h，过期 21h 后只靠 `/img-proxy` 缓存续命），而盘上那份一直在。
   ⚠️ **每一级都挂 `data-self-healing="1"`（devlog/318）**：这条链上**每一步失败都是设计的正常一环**，而 `bootDiag` 只对带这个标记的资源失败"只记账、不弹面板"。少了它，一个小红书笔记详情里 7 张签名过期的图（直连+代理各失败一次）会被算成 14 次系统性故障 ⇒ 弹一份 14 条 `[resource]` 的报告（用户 2026-10-04 报的就是这个）。同一批还把资源失败的计数从"全局"改成"按主机"、条目里只写主机名（稳定 ⇒ 能去重），见 `utils/problemReport.ts::reportResourceFailure`。
+  ⚠️ **四级状态在组件内，所以"换图必须换 `key`"（devlog/320）**：`stage` 是 `useState`，沿用实例时它停在 `failed` 上会**连 `<img>` 都不渲染** ⇒ 后到的新地址/新副本永远进不来。调用方一律把图源写进 `key`（详情页图片项 = `url + local`、封面 = `cover_url`）；这条在"打开时重取"上是真会走到的路径（重取常见结果就是 URL 没变、顺手固化的副本到位）。
+  ⚠️ **`onAllFailed`（devlog/320）**：四级**真的**走完时才回调一次（中间级不算，见 `failedRef`）。详情页用它触发**打开时重取** —— `POST /posts/{id}/refresh-media`，**一帖只调一次**（`refreshedRef`），回来的是**新的一整帖**，就地替换这一帖的渲染、不动父级列表；重取失败只记一行 `clientLog`，界面照旧占位（不弹错）。换帖（`post.id` 变）就丢掉那份补丁。
   ⚠️ **L1（devlog/257）**：`avatar_local` 的**来源**换成轻资产索引（`local_assets` 按**稳定键**命中 ⇒ 盘上那份；账本行/账号路径降为兜底）——**渲染链与字段名都没变**，所以本条只多了一个来源顺序。
   ⚠️ **R46（devlog/249）：同源有两条，取值同源 ≠ 渲染同源。** 渲染也只剩一条路 —— 图片一律 `common/ProxyImage`，代理主机规则只在 `utils/imageHost.ts`（结构判据 `utils/avatarRender.test.ts`）。此前 hero 走 `ProxyImage`、左栏还是 radix `Avatar` 的裸 `<img>` ⇒ 微博头像在右栏正常、左栏被防盗链 403 打成灰底首字。
   ⚠️ **为可测性挂的两个属性别删**：`.vtuber-item[data-src]` / `.hero[data-avatar-src]` = **解析出来的源 URL**（口径）；`ProxyImage` 输出节点上的 `data-render-src` = **首帧决定用的 src**（接线，回落到占位也在）。探针 `--profile-sync` 比的是后者 —— 只比 `data-src` 量不出 R46（出事时两边一模一样）。

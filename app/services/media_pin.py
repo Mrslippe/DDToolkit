@@ -55,49 +55,36 @@ def _media_age_cutoff(days: float):
     return assets._now() - timedelta(days=d)
 
 
-async def pin_account_media(db: Session, acc: Account,
-                            client: httpx.AsyncClient | None = None) -> dict:
-    """把这个账号**未归档、且在时间窗内**的帖子媒体固化到本地。
+def _wanted_for_post(post_id: int, body_json: str | None, *, video: bool
+                     ) -> list[tuple[int, str, list[str]]]:
+    """一个帖子的工作项：图片逐张，视频是**镜像链**（一个工作项）。"""
+    out: list[tuple[int, str, list[str]]] = []
+    for u in assets._media_urls(body_json, video=False):
+        out.append((post_id, assets.KIND_POST_IMAGE, [u]))
+    if video:
+        chain = assets._media_urls(body_json, video=True)
+        if chain:
+            out.append((post_id, assets.KIND_POST_VIDEO, chain))
+    return out
 
-    返回 `{images, videos, skipped, bytes, reason?}`（给日志与用例看，不写库）。
-    `reason` 非空 = 整轮没跑（开关关着 / 没有候选），**不是错误**。
-    """
-    out = {"images": 0, "videos": 0, "skipped": 0, "bytes": 0, "reason": ""}
-    if not bool(getattr(settings, "MEDIA_PIN_ENABLED", True)):
-        out["reason"] = "开关关着"
-        return out
 
+def _caps() -> tuple[int, int, bool]:
+    """当前的三条上限/开关：`(每轮份数, 每轮字节, 是否固化视频)`。"""
     per_round = int(getattr(settings, "MEDIA_PIN_PER_ROUND", DEFAULT_PER_ROUND) or DEFAULT_PER_ROUND)
     mb_round = float(getattr(settings, "MEDIA_PIN_MB_PER_ROUND", DEFAULT_MB_PER_ROUND)
                      or DEFAULT_MB_PER_ROUND)
-    max_bytes = int(mb_round * 1024 * 1024)
-    want_video = bool(getattr(settings, "MEDIA_PIN_VIDEO", False))
-    cutoff = _media_age_cutoff(getattr(settings, "MEDIA_PIN_MAX_AGE_DAYS", 30.0))
+    return per_round, int(mb_round * 1024 * 1024), bool(getattr(settings, "MEDIA_PIN_VIDEO", False))
 
-    q = (db.query(Post.id, Post.body_json)
-         .filter(Post.platform == acc.platform,
-                 Post.platform_uid == str(acc.platform_uid),
-                 Post.is_archived == False,                     # noqa: E712 —— SQLAlchemy 需要 ==
-                 Post.body_json.isnot(None)))
-    if cutoff is not None:
-        # `published_at` 是 naive UTC 字符串（库内口径），与 `assets._now()` 同源
-        q = q.filter(Post.published_at >= cutoff.isoformat(sep=" "))
-    rows = q.order_by(Post.published_at.desc(), Post.id.desc()).limit(per_round * _CANDIDATE_FACTOR).all()
-    if not rows:
-        out["reason"] = "没有候选帖（都归档了 / 都在时间窗之外）"
+
+async def _pin_items(db: Session, wanted: list[tuple[int, str, list[str]]], *,
+                     per_round: int, max_bytes: int,
+                     client: httpx.AsyncClient | None) -> dict:
+    """把工作项逐份固化（**唯一**干活的循环：账号轮与单帖重取共用）。"""
+    out = {"images": 0, "videos": 0, "skipped": 0, "bytes": 0, "reason": ""}
+    if not wanted:
+        out["reason"] = "没有需要固化的媒体"
         return out
-
     # 先把这一轮要碰的键**一次查完**（命中就跳过 ⇒ 不发请求）
-    # 工作项 = `(post_id, kind, [候选 URL…])`：图片只有一个候选，视频是**镜像链**（按序试，
-    # **只固化第一条成功的** —— 镜像装的是同一份视频，各存一份纯属浪费盘）。
-    wanted: list[tuple[int, str, list[str]]] = []
-    for post_id, body in rows:
-        for u in assets._media_urls(body, video=False):
-            wanted.append((post_id, assets.KIND_POST_IMAGE, [u]))
-        if want_video:
-            chain = assets._media_urls(body, video=True)
-            if chain:
-                wanted.append((post_id, assets.KIND_POST_VIDEO, chain))
     by_key: dict[tuple[str, str], object] = {}
     for kind in assets.MEDIA_KINDS:
         keys = [assets.key_of(u) for _p, k, us in wanted if k == kind for u in us]
@@ -150,6 +137,58 @@ async def pin_account_media(db: Session, acc: Account,
     finally:
         if own and client is not None:
             await client.aclose()
+    return out
+
+
+async def pin_post_media(db: Session, post: Post,
+                         client: httpx.AsyncClient | None = None) -> dict:
+    """只固化**这一帖**的媒体（`devlog/320`）：打开详情重取到新地址之后顺手做一次。
+
+    为什么单独要它：重取拿到的又是**限时地址**，不立刻固化的话，过几小时再打开还是灰的。
+    ⚠️ 这里**不看** `MEDIA_PIN_MAX_AGE_DAYS` 时间窗：那个窗是"批量轮该扫多老的帖"的成本闸，
+    而这一帖是用户**这会儿正打开着**的（手动重取 = 明确的意图），拿时间窗挡它只会让人莫名其妙。
+    """
+    out = {"images": 0, "videos": 0, "skipped": 0, "bytes": 0, "reason": ""}
+    if not bool(getattr(settings, "MEDIA_PIN_ENABLED", True)):
+        out["reason"] = "开关关着"
+        return out
+    per_round, max_bytes, want_video = _caps()
+    wanted = _wanted_for_post(post.id, post.body_json, video=want_video)
+    return await _pin_items(db, wanted, per_round=per_round, max_bytes=max_bytes, client=client)
+
+
+async def pin_account_media(db: Session, acc: Account,
+                            client: httpx.AsyncClient | None = None) -> dict:
+    """把这个账号**未归档、且在时间窗内**的帖子媒体固化到本地。
+
+    返回 `{images, videos, skipped, bytes, reason?}`（给日志与用例看，不写库）。
+    `reason` 非空 = 整轮没跑（开关关着 / 没有候选），**不是错误**。
+    """
+    out = {"images": 0, "videos": 0, "skipped": 0, "bytes": 0, "reason": ""}
+    if not bool(getattr(settings, "MEDIA_PIN_ENABLED", True)):
+        out["reason"] = "开关关着"
+        return out
+
+    per_round, max_bytes, want_video = _caps()
+    cutoff = _media_age_cutoff(getattr(settings, "MEDIA_PIN_MAX_AGE_DAYS", 30.0))
+
+    q = (db.query(Post.id, Post.body_json)
+         .filter(Post.platform == acc.platform,
+                 Post.platform_uid == str(acc.platform_uid),
+                 Post.is_archived == False,                     # noqa: E712 —— SQLAlchemy 需要 ==
+                 Post.body_json.isnot(None)))
+    if cutoff is not None:
+        # `published_at` 是 naive UTC 字符串（库内口径），与 `assets._now()` 同源
+        q = q.filter(Post.published_at >= cutoff.isoformat(sep=" "))
+    rows = q.order_by(Post.published_at.desc(), Post.id.desc()).limit(per_round * _CANDIDATE_FACTOR).all()
+    if not rows:
+        out["reason"] = "没有候选帖（都归档了 / 都在时间窗之外）"
+        return out
+
+    wanted: list[tuple[int, str, list[str]]] = []
+    for post_id, body in rows:
+        wanted.extend(_wanted_for_post(post_id, body, video=want_video))
+    out = await _pin_items(db, wanted, per_round=per_round, max_bytes=max_bytes, client=client)
     if out["images"] or out["videos"]:
         logger.info(f"媒体固化：账号 {acc.platform}:{acc.platform_uid} 本轮新增 "
                     f"{out['images']} 图 / {out['videos']} 视频（{out['bytes'] / 1048576:.1f}MB）")

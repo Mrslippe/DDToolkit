@@ -301,7 +301,21 @@ def test_download_failure_does_not_break_the_round(db, data_dir):
     assert len(_files(data_dir, assets.KIND_POST_IMAGE)) == 1
 
 
-# ── ⑦ 契约（同序同长 + 批量）──────────────────────────────────────────
+def test_pin_post_media_pins_only_that_post(db, data_dir):
+    """单帖固化（重取之后顺手做的那一步）：只碰这一帖，且**命中就零请求**。"""
+    acc = _mk_acc(db)
+    p1 = _mk_post(db, acc, "p1", images=["https://x.hdslb.com/1.jpg"])
+    _mk_post(db, acc, "p2", images=["https://x.hdslb.com/2.jpg"])
+    client = _CountingClient()
+
+    out = asyncio.run(mp.pin_post_media(db, p1, client=client))
+    assert out["images"] == 1
+    assert client.calls == ["https://x.hdslb.com/1.jpg"], "只该碰这一帖的媒体"
+
+    client.calls.clear()
+    assert asyncio.run(mp.pin_post_media(db, p1, client=client))["images"] == 0
+    assert client.calls == [], "已经固化过还发请求 = 稳定键命中没生效"
+
 
 def test_post_outs_carry_images_local_in_order(db):
     """⑦ `images_local` 与 `body_json.images` **同序同长**（没有副本的位置是空串）。"""

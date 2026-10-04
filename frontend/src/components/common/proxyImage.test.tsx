@@ -116,3 +116,57 @@ describe('ProxyImage 的四级回落（A0）', () => {
     expect(host.textContent).toContain('占位')
   })
 })
+
+/**
+ * `onAllFailed`（2026-10-04，devlog/320）：**四级真的走完**时才通知调用方一次。
+ *
+ * 详情页拿它触发"打开时重取"（图床签名过期只能回源重签）。判据是两件事：
+ * ① 中间级不算（直连失败转代理是设计好的一环，报了就会把上游打爆）；
+ * ② 同一张图只报一次（浏览器对同一个坏 src 会重复报错，而"再重取一次"没有意义）。
+ */
+describe('ProxyImage · 全失败回调 onAllFailed', () => {
+  it('中间级**不**回调；四级走完才回调一次', () => {
+    const onAllFailed = vi.fn()
+    render({ src: 'https://i0.hdslb.com/a.jpg', onAllFailed, fallback: <span>占位</span> })
+    void fail()                                    // 直连 → 代理
+    expect(onAllFailed, '代理那一跳还没试呢').not.toHaveBeenCalled()
+    void fail()                                    // 代理 → 占位
+    expect(onAllFailed).toHaveBeenCalledTimes(1)
+  })
+
+  it('有本地副本时也不回调（本地兜住了就不算"全失败"）', () => {
+    const onAllFailed = vi.fn()
+    render({
+      src: 'https://i0.hdslb.com/a.jpg',
+      fallbackSrc: 'http://127.0.0.1:9/static/a_local.jpg',
+      onAllFailed, fallback: <span>占位</span>,
+    })
+    void fail()                                    // 直连 → 代理
+    void fail()                                    // 代理 → 本地
+    expect(onAllFailed).not.toHaveBeenCalled()
+    expect(stage()).toBe('local')
+  })
+
+  it('本地也没兜住 ⇒ 回调一次；再失败（浏览器会重复报同一个 src）也只算一次', () => {
+    const onAllFailed = vi.fn()
+    render({
+      src: 'https://i0.hdslb.com/a.jpg',
+      fallbackSrc: 'http://127.0.0.1:9/static/a_local.jpg',
+      onAllFailed, fallback: <span>占位</span>,
+    })
+    void fail()                                    // 直连 → 代理
+    void fail()                                    // 代理 → 本地
+    void fail()                                    // 本地 → 占位
+    expect(onAllFailed).toHaveBeenCalledTimes(1)
+    // 已经落到占位了：就算再来一次 error（不可能，但状态机不许因此重复上报）
+    void fail()
+    expect(onAllFailed).toHaveBeenCalledTimes(1)
+  })
+
+  it('没给 onAllFailed 也不炸（可选回调，别的调用方不需要它）', () => {
+    render({ src: 'https://i0.hdslb.com/a.jpg', fallback: <span>占位</span> })
+    void fail()
+    expect(() => fail()).not.toThrow()
+    expect(host.textContent).toContain('占位')
+  })
+})

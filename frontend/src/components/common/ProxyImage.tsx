@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Image as ImageIcon } from 'lucide-react'
 import { normalizeImageUrl } from '../../utils/format'
 import { initialImageSrc, needsProxyFromStart, proxiedImageSrc } from '../../utils/imageHost'
@@ -31,6 +31,14 @@ interface Props {
   fallbackClassName?: string
   /** 透传原生 draggable（灯箱大图置 false 防拖拽选中） */
   draggable?: boolean
+  /**
+   * **四级全失败**时叫一次（2026-10-04，devlog/320）。
+   *
+   * 调用方据此决定"还能做点什么"——详情页用它触发**打开时重取**（图床签名过期时
+   * 远端与本地都没有 ⇒ 只能回源重新签发一次）。⚠️ 只在**真正落到 failed 那一级**时调，
+   * 中间几级（直连失败转代理之类）不算 —— 那些是设计好的正常一环。
+   */
+  onAllFailed?: () => void
 }
 
 /**
@@ -62,6 +70,7 @@ export default function ProxyImage({
   fallback,
   fallbackClassName,
   draggable,
+  onAllFailed,
 }: Props) {
   const direct = src ? normalizeImageUrl(src) : undefined
   const proxy = proxiedImageSrc(src)
@@ -84,6 +93,20 @@ export default function ProxyImage({
   /** 失败一级往下走：直连 → 代理 → **本地**（有才走）→ 占位 */
   const nextStage = (s: Stage): Stage =>
     s === 'direct' ? 'proxy' : s === 'proxy' ? (local ? 'local' : 'failed') : 'failed'
+  /**
+   * 往下走一级；**走到头就通知调用方**（`onAllFailed`，见 prop 注释）。
+   * 用 ref 保证同一次失败只报一次（`onError` 在重渲染后可能再触发一次 —— 浏览器对同一个
+   * 坏 src 会重复报错，而"再重取一次"没有意义）。
+   */
+  const failedRef = useRef(false)
+  const advance = () => {
+    const next = nextStage(stage)
+    if (next === 'failed' && !failedRef.current) {
+      failedRef.current = true
+      onAllFailed?.()
+    }
+    setStage(next)
+  }
 
   if (!current) {
     if (fallback !== undefined) {
@@ -138,7 +161,7 @@ export default function ProxyImage({
       loading="lazy"
       draggable={draggable}
       data-src-stage={stage}
-      onError={() => setStage(nextStage(stage))}
+      onError={advance}
     />
   )
 }

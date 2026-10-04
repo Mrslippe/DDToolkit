@@ -124,6 +124,7 @@ retire-when: HTTP 层换框架，或路由整体重排
 | GET `/posts/{platform}/{uid}/stats` | 统计概览 |
 | POST `/posts` | 建帖；三元组重复 409 |
 | PUT `/post/{post_id}` / DELETE `/post/{post_id}` | 更帖 / 删帖；404 |
+| POST `/posts/{post_id}/refresh-media` | **重取这一帖的媒体地址**（devlog/320，批次 3）：本地没有固化副本而远端图床签名过期时的备选路径（详情页四级回落全失败时**一帖只调一次**）。走平台自己的详情补全（`BasePlatform.enrich`），写回**只动 `cover_url`/`body_json`/`raw_json`/`stats_json`**（标题/发布时间不动 ⇒ 列表顺序不因重取而变），随后顺手固化一次。如实分级：404 帖不存在 / **403 未登录**（内容接口闸门）/ **409 平台没有详情补全**（如 B站视频帖）/ **429 同帖 30s 内重来**（图床地址限时，重取太频只会白跑）/ 502 上游失败。响应 `{ok, pinned, post}`——`post` 是最新的一整帖，前端直接就地替换 |
 
 **播放（B站取流，C1+C2，devlog/289）**
 

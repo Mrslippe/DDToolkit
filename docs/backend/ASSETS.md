@@ -137,6 +137,18 @@ prune(kind, max_bytes, dry_run=True)    # 按 LRU 淘汰**未 pin 且未被引�
   "清空未 pin 且未被引用的"（`services/media_pin.clean_archived` 只是加上开关与报告）；
 - 默认容量上限是 `None`（不限）—— 回收靠"归档就清"，不是靠容量 LRU。
 
+**本地没有副本时怎么办：打开时重取（2026-10-04，`devlog/320`，`docs/backend/HTTP-CONTRACT.md` §帖子）**
+
+图床 URL 是平台**限时签发**的（`docs/GLOSSARY.md` 那条实测），盘上没副本就只能回源重签：
+`POST /posts/{post_id}/refresh-media` 走平台自己的详情补全（`BasePlatform.enrich`），
+**只写回媒体相关的列**（`cover_url`/`body_json`/`raw_json`/`stats_json`）并顺手固化一次；
+未登录 403 / 没详情 409 / 同帖 30s 内 429 / 上游失败 502，全部如实分类。
+前端在 `ProxyImage` **四级全失败**时回调一次（一帖只调一次 `refreshedRef`），用回来的整帖就地替换。
+
+⚠️ **两条容易踩的**：① 重取与固化**都不许**碰 `title`/`published_at`（列表顺序不因重取而变，
+用例钉住）；② `ProxyImage` 的四级状态在组件内 ⇒ 调用方必须把图源写进 `key`（`url + local`、
+封面 `cover_url`），否则新地址/新副本进不到那个已停在 `failed` 的实例（同样有反向验证过的用例）。
+
 ---
 
 ## 4. 头像这条链怎么接（C 的落地形态）

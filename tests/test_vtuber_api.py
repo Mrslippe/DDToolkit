@@ -1822,6 +1822,146 @@ def test_bili_play_route_rejects_non_video_posts(client):
     assert client.get(f"/bili/play/{_bili_video_post(bvid='')}").status_code == 400
 
 
+# ── 打开时重取媒体（批次 3，devlog/320）─────────────────────────────────────
+
+def _install_fake_fetcher(monkeypatch, *, platform="xiaohongshu", enrich=None):
+    """把注册表里的平台 fetcher 换成可控替身（判据打在**注册表**这条路上，见 DEV-LOOP §6）。"""
+    from app.services.platforms import registry
+
+    class _Fake:
+        last_error = None
+
+        async def enrich(self, item, client=None):
+            return await enrich(item) if enrich else False
+
+    fake = _Fake()
+    monkeypatch.setattr(registry, "get_fetcher", lambda pf: fake if pf == platform else None)
+    return fake
+
+
+def test_refresh_media_route_updates_urls_and_pins(monkeypatch, client):
+    """重取成功后：**库里换成新地址** + 顺手固化 + 回包带新的 `images_local`。
+
+    为什么判据要连"库里也换了"一起看：只返回不落库 ⇒ 下次打开还是旧地址；
+    只落库不返回 ⇒ 详情页手里那份还是旧的，用户看不到变化。
+    """
+    import json
+    import tempfile
+    from pathlib import Path
+
+    from app.routers.vtuber import _refresh_at
+    from app.services import assets, capabilities
+
+    _refresh_at.clear()
+    monkeypatch.setattr(capabilities, "content_fetch_allowed", lambda pf="x": (True, ""))
+    monkeypatch.setattr(assets, "data_root", lambda: Path(tempfile.mkdtemp(prefix="ddtk-rf-")))
+
+    old_img = "https://sns-webpic-qc.xhscdn.com/202610030051/old/notes_pre_post/o!nd_dft.webp"
+    new_img = "https://sns-webpic-qc.xhscdn.com/202610041200/new/notes_pre_post/n!nd_dft.webp"
+
+    async def _enrich(item):
+        item["body_json"] = json.dumps({"text": "正文", "images": [{"url": new_img}]},
+                                       ensure_ascii=False)
+        item["cover_url"] = new_img
+        # 平台顺手带回来的**非媒体**字段：写回时不许动（列表顺序不因重取而变）
+        item["title"] = "重取之后的标题"
+        item["published_at"] = datetime(2030, 1, 1)
+        return True
+
+    _install_fake_fetcher(monkeypatch, enrich=_enrich)
+
+    # 固化那一步会**真的**去下图（重取拿到的又是限时地址）⇒ 这里换成假客户端，
+    # 否则用例的结果取决于外网（图床过期就 403，判据变成"看运气"）。
+    class _FakeImgClient:
+        def __init__(self):
+            self.calls: list[str] = []
+
+        async def get(self, url: str):
+            self.calls.append(url)
+            return type("R", (), {"status_code": 200, "content": b"IMG"})()
+
+        async def aclose(self) -> None:
+            pass
+
+    fake_img = _FakeImgClient()
+    import app.core.http as core_http
+    monkeypatch.setattr(core_http, "new_async_client", lambda *a, **k: fake_img)
+
+    db = TestingSession()
+    try:
+        p = Post(platform="xiaohongshu", platform_uid="u-rf", platform_post_id="n1",
+                 type="note", title="原标题", published_at=datetime(2026, 10, 3, 12, 0),
+                 cover_url=old_img,
+                 body_json=json.dumps({"text": "正文", "images": [{"url": old_img}]},
+                                      ensure_ascii=False))
+        db.add(p)
+        db.commit()
+        pid = p.id
+    finally:
+        db.close()
+
+    r = client.post(f"/posts/{pid}/refresh-media")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is True and body["pinned"]["images"] == 1
+    assert body["post"]["cover_url"] == new_img
+    assert new_img in body["post"]["body_json"]
+    assert body["post"]["images_local"] and body["post"]["images_local"][0], \
+        "重取之后没固化 ⇒ 几小时后又过期，用户下次打开还是灰的"
+
+    db = TestingSession()
+    try:
+        row = db.query(Post).filter(Post.id == pid).one()
+        assert new_img in (row.body_json or ""), "库里没换 ⇒ 下次打开还是灰的"
+        assert row.title == "原标题", "重取顺手把标题也改了 —— 列表顺序/显示会莫名其妙地变"
+        assert row.published_at == datetime(2026, 10, 3, 12, 0), \
+            "重取改了发布时间 ⇒ 列表排序会跳"
+    finally:
+        db.close()
+    # 节流闸门：紧接着再来一次 ⇒ 429（并说明"为什么"）
+    r2 = client.post(f"/posts/{pid}/refresh-media")
+    assert r2.status_code == 429, r2.text
+    assert "秒后再试" in r2.json()["detail"]
+
+
+def test_refresh_media_route_is_honest_about_what_it_cannot_do(monkeypatch, client):
+    """三类如实拒绝：帖不存在 **404** / 未登录 **403** / 平台没有详情补全 **409**。"""
+    from app.routers.vtuber import _refresh_at
+    from app.services import capabilities
+
+    _refresh_at.clear()
+    assert client.post("/posts/999999/refresh-media").status_code == 404
+
+    monkeypatch.setattr(capabilities, "content_fetch_allowed",
+                        lambda pf="x": (False, "未登录：内容接口需要登录"))
+    db = TestingSession()
+    try:
+        p = Post(platform="xiaohongshu", platform_uid="u-rf2", platform_post_id="n2",
+                 type="note", published_at=datetime.now())
+        db.add(p)
+        db.commit()
+        pid = p.id
+    finally:
+        db.close()
+    r = client.post(f"/posts/{pid}/refresh-media")
+    assert r.status_code == 403 and "未登录" in r.json()["detail"]
+
+    monkeypatch.setattr(capabilities, "content_fetch_allowed", lambda pf="x": (True, ""))
+    _install_fake_fetcher(monkeypatch, platform="bilibili")   # 替身没重写 enrich ⇒ 走基类默认
+    db = TestingSession()
+    try:
+        p2 = Post(platform="bilibili", platform_uid="u-rf3", platform_post_id="BV1",
+                  type="video", published_at=datetime.now())
+        db.add(p2)
+        db.commit()
+        pid2 = p2.id
+    finally:
+        db.close()
+    r2 = client.post(f"/posts/{pid2}/refresh-media")
+    assert r2.status_code in (409, 502), r2.text
+    assert "可重取" in r2.json()["detail"] or "没能取到" in r2.json()["detail"]
+
+
 # ── B站段表端点（S2，devlog/312）──────────────────────────────────────────────
 
 def test_bili_segments_route_forwards_qn_and_returns_both_tables(monkeypatch, client):

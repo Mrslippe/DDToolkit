@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   Calendar,
   ChevronDown,
@@ -24,7 +24,7 @@ import {
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
 import type { Post } from '../api/types'
-import { resolveAsset } from '../api/api'
+import { resolveAsset, api } from '../api/api'
 import {
   formatCount,
   formatDateTime,
@@ -173,7 +173,37 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
   // 期间渲染最后一次的帖子内容（post 已随父级保留，此 ref 兜底防 null）
   const lastPostRef = useRef<Post | null>(post)
   if (post) lastPostRef.current = post
-  const shown = post ?? lastPostRef.current
+  /**
+   * **重取回来的那份**（devlog/320）：媒体四级回落全失败时向上游要一次新地址
+   * （图床签名过期只能重新签发），拿到之后就地替换这一帖，不劳烦父级刷新列表。
+   * ⚠️ 换了帖（`post.id` 变了）就把它丢掉 —— 否则会拿上一条的地址渲染下一条。
+   * ⚠️ 这几个 hook 必须在下面那个 `if (!shown) return null` **之前**（hooks 不许条件调用）。
+   */
+  const [patched, setPatched] = useState<{ id: number; post: Post } | null>(null)
+  const refreshedRef = useRef(new Set<number>())
+  const shown = (patched && patched.id === post?.id ? patched.post : null)
+    ?? post ?? lastPostRef.current
+  const shownId = shown?.id ?? 0
+
+  /**
+   * **打开时重取**（用户口径里的"备选项"）：本地没有副本、远端又已过期（四级全失败）时，
+   * 向上游重新要一次媒体地址 —— 图床签名是平台签发的限时地址，只有重取才能拿到新的。
+   *
+   * 三条纪律：① **一帖只试一次**（`refreshedRef`，否则 N 张坏图会把上游打爆）；
+   * ② 失败**不打扰用户**（详情页照旧显示占位，只记一行诊断）；
+   * ③ 回来的是**新的一整帖**（端点里已经顺手固化过），直接替换渲染。
+   */
+  const onMediaDead = useCallback(() => {
+    if (!shownId || refreshedRef.current.has(shownId)) return
+    refreshedRef.current.add(shownId)
+    void api.refreshMedia(shownId)
+      .then((r) => { if (r?.post) setPatched({ id: shownId, post: r.post }) })
+      .catch((e: Error) => {
+        void api.clientLog(`[media] 重取媒体失败 post#${shownId}：${e?.message ?? e}`)
+          .catch(() => { /* 诊断失败无所谓 */ })
+      })
+  }, [shownId])
+
   if (!shown) return null
 
   const body = parseBody(shown.body_json)
@@ -301,9 +331,14 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
             <button type="button" className="block w-full cursor-zoom-in"
               onClick={() => setViewer({ list: coverList, index: 0 })}>
               <ProxyImage
+                /* 换图必须换 key 才能重置四级状态（本组件的约定）：重取回来换了封面 URL，
+                   不换 key 的话那个实例还停在 failed 那一级 ⇒ 新地址也画不出（devlog/320） */
+                key={shown.cover_url}
                 src={shown.cover_url}
                 /* 封面本地副本兜底（devlog/319）：远端图床签名过期后 403，盘上那份还在 */
                 fallbackSrc={shown.cover_local ? resolveAsset(shown.cover_local) : undefined}
+                /* 全失败 ⇒ 试一次"打开时重取"（devlog/320） */
+                onAllFailed={onMediaDead}
                 alt="封面"
                 className="w-full rounded-lg object-contain"
                 style={{ maxHeight: 320 }}
@@ -354,11 +389,13 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
               <SectionTitle>图片（{images.length}）</SectionTitle>
               <div className="mt-2 flex flex-wrap gap-2">
                 {images.map((img, i) => (
-                  <button key={`${img.url}-${i}`} type="button" className="cursor-zoom-in"
+                  <button key={`${img.url}-${img.local ?? ''}-${i}`} type="button" className="cursor-zoom-in"
                     onClick={() => setViewer({ list: images, index: i })}>
                     <ProxyImage src={img.url} width={120} height={120}
                       /* 本地副本兜底（devlog/319）：远端签名过期 ⇒ 画盘上那份，而不是灰块 */
                       fallbackSrc={img.local}
+                      /* 全失败 ⇒ 试一次"打开时重取"（devlog/320） */
+                      onAllFailed={onMediaDead}
                       style={{ objectFit: 'cover', borderRadius: 6 }} />
                   </button>
                 ))}

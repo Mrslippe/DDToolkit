@@ -1,4 +1,4 @@
-import type { Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliPlayInfo, BiliSearchResult, BiliSegments, Capabilities, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, NoticesResponse, PoolItem, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyVtuber, AssetsInfo, AssetsPruneResult, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, XhsCookieSaved } from './types'
+import type { Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliPlayInfo, BiliSearchResult, BiliSegments, Capabilities, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, NoticesResponse, PoolItem, Post, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyVtuber, AssetsInfo, AssetsPruneResult, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, XhsCookieSaved } from './types'
 import { ApiError, ApiShapeError } from './errors'
 import { HOST_HEADER, myHost } from '../utils/hostIdentity'
 import {
@@ -691,6 +691,17 @@ export const api = {
 
   /** 偏好值 + 允许取值 + 当前能力说明（说明由后端下发，界面不自己编） */
   getPrefs: () => request<Prefs>('/settings/prefs'),
+
+  /**
+   * **重取这一帖的媒体地址**（devlog/320）：图床签名过期、本地又没有固化副本时的备选路径。
+   *
+   * 后端会走平台自己的详情补全拿新地址、写回库里，并**顺手固化一次**；
+   * 同一帖 30 秒内重复调用会被 429 挡住（地址是限时的，重取太频只是白跑）。
+   * ⚠️ 前端只在"一张都画不出来"时调一次（`PostDetailDrawer`）。
+   */
+  refreshMedia: (postId: number) =>
+    request<{ ok: boolean; pinned: Record<string, unknown>; post: Post }>(
+      `/posts/${postId}/refresh-media`, { method: 'POST' }),
   /**
    * 诊断包（批次 16，devlog/207）：用户"把这份发给开发者"。
    * 后端拼好纯文本返回（**不含凭据**），前端只负责复制/展示。
