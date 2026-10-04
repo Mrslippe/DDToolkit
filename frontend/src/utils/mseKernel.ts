@@ -317,6 +317,9 @@ interface Track {
   stuckHits: number
   /** "同一段连取两次仍没落地"这件事报过没有（`devlog/323`：这条**不许静默**） */
   warnedRepeat: boolean
+  /** 取数失败/结果作废的日志节流（同一轨每秒最多一条，`devlog/325`） */
+  lastFailLogAt: number
+  lastDiscardLogAt: number
 }
 
 /**
@@ -380,6 +383,7 @@ export class MseKernel {
         pending: null, inflight: null, seq: 0, lastIdx: -2, repeat: 0,
         spanEnd: 0, fetchBaseline: -1, noProgress: 0, coolUntil: 0, warnedStall: false,
         retry: 0, mirror: 0, quotaHits: 0, opSince: 0, stuckHits: 0, warnedRepeat: false,
+        lastFailLogAt: 0, lastDiscardLogAt: 0,
       }))
     this.startedAt = Date.now()
     this.ms.addEventListener('sourceopen', this.onSourceOpen)
@@ -728,6 +732,25 @@ export class MseKernel {
     return s ? `${s.start.toFixed(1)}–${s.end.toFixed(1)}s` : '无'
   }
 
+  /** 取数失败留痕（同一轨每秒最多一条，免得刷屏）；`devlog/325` */
+  private noteFetchFail(tr: Track, idx: number, e: unknown): void {
+    const now = Date.now()
+    if (now - tr.lastFailLogAt < 1000) return
+    tr.lastFailLogAt = now
+    const seg = idx >= 0 ? tr.table.segments[idx] : tr.table.init
+    const range = seg ? `bytes=${seg.start}-${seg.end}` : '?'
+    this.deps.log?.(`[media] ${tr.kind} 段 ${idx} 取数失败（${String(e)}）`
+                    + `${range} 重试=${tr.retry} 镜像=${tr.mirror} 表=${tr.table.segments.length}段`)
+  }
+
+  /** 取回来了但"已经没人要"（拖拽换代 / 被中止）也要留痕；`devlog/325` */
+  private noteDiscard(tr: Track, why: string): void {
+    const now = Date.now()
+    if (now - tr.lastDiscardLogAt < 1000) return
+    tr.lastDiscardLogAt = now
+    this.deps.log?.(`[media] ${tr.kind} ${why}（区间=${this.spanText(tr)}）`)
+  }
+
   private target(): number {
     return this.pendingSeek ?? this.el.currentTime
   }
@@ -789,16 +812,29 @@ export class MseKernel {
        * ⚠️ **代数变了就闭嘴**（`devlog/312` 的连续拖拽）：拖拽时前一个目标的取数会晚回来，
        * 若照着它继续 append，就会把**旧位置的数据**塞进新位置的计划里 ——
        * 轻则白取一次，重则和当前那次操作撞成 `InvalidStateError`（假 SB 会当场抛出来）。
+       *
+       * ⚠️ 但**"闭嘴"必须留痕**（`devlog/325`）：真机上出现过"三次取数一发都没到代理、
+       * 日志里一个字都没有" —— 正是这里和下面那条 AbortError 分支把它吞了的。
+       * 现在每次作废都记一行（同一轨每秒最多一条，不刷屏）。
        */
-      if (this.dead || tr.seq !== my) return
+      if (this.dead || tr.seq !== my) {
+        this.noteDiscard(tr, `取段 ${idx} 的结果作废（代数变了：${tr.seq}≠${my}）`)
+        return
+      }
       tr.inflight = null
       if ((e as { name?: string })?.name === 'AbortError' && tr.pending !== idx) {
         tr.pending = null
+        this.noteDiscard(tr, `取段 ${idx} 被中止（目标已换）`)
         this.pump()
         return
       }
       tr.pending = null
       tr.retry += 1
+      /**
+       * ⚠️ **取数失败一律留痕**（`devlog/325`）：原实现只有"镜像 >1 且还有下一条"时才写日志，
+       * 单镜像或镜像用尽时**完全静默**（真机那三次就是在这一格里消失的）。
+       */
+      this.noteFetchFail(tr, idx, e)
       if (urls.length > 1 && tr.mirror + 1 < urls.length) {
         tr.mirror += 1
         this.deps.log?.(`[media] ${tr.kind} 段 ${idx} 取不到（${String(e)}），换镜像 ${tr.mirror}`)
@@ -905,8 +941,18 @@ export class MseKernel {
           if (tr.repeat < 2) void this.append(tr, want)
           else if (!tr.warnedRepeat) {
             tr.warnedRepeat = true
-            this.deps.log?.(`[media] ${tr.kind} 段 ${want} 连取 ${tr.repeat + 1} 次仍没落地`
-                            + `（本轨缓冲停在 ${this.spanText(tr)}）—— 本轨不再重取`)
+            const seg = tr.table.segments[want]
+            this.deps.log?.(`[media] ${tr.kind} 段 ${want}（bytes=${seg?.start}-${seg?.end}）`
+                            + `连取 ${tr.repeat + 1} 次仍没落地（本轨缓冲停在 ${this.spanText(tr)}）`
+                            + `—— 这条路给不出这个位置的数据，改用渐进式`)
+            /**
+             * ⚠️ **不许停在这里装死**（`devlog/325`）：真机上这一停就是"画面冻住、声音还在放"
+             * （音频轨自己有数据 ⇒ 元素继续走时钟），而且**再也不会自愈**（这条轨此后不再取数）。
+             * MSE 给不出这个位置的数据 = 这条路对它不成立 ⇒ 如实认输，让调用方退渐进式
+             * （浏览器自己的解复用器能把这一段放出来）。
+             */
+            this.fail(`${tr.kind} 段 ${want} 连取 ${tr.repeat + 1} 次都落不了地`
+                      + `（bytes=${seg?.start}-${seg?.end}）`)
           }
         }
         continue

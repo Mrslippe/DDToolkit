@@ -591,18 +591,20 @@ describe('mseKernel · "同一段连取两次"不许把一条轨永久冻死（d
    * `repeat` 只在"取了**不同**的段"时才清零 ⇒ 一旦撞上 2，这条轨就永久拒绝取数。
    */
 
-  it('守卫触发时**必须说一句**（不许静默），并且换了跳转目标就能重取', async () => {
+  it('守卫触发时**必须说一句**，并且**如实认输**（不许装死让画面冻着）', async () => {
     // 假 SourceBuffer 只冻结 **audio** 轨：append 照常成功但**缓冲不涨**
     // ⇒ 泵会反复要同一段（`ahead` 一直是 0）⇒ `repeat` 涨到 2 ⇒ 撞上守卫。
     const ms = new FakeMediaSource(0)
     const f = fetcher(0)
     const el = fakeEl(ms.buffers)
     const logs: string[] = []
+    const onFatal = vi.fn()
     const kernel = new MseKernel(el as unknown as HTMLVideoElement, {
       createMediaSource: () => ms as unknown as MediaSource,
       createObjectURL: () => 'blob:test',
       revokeObjectURL: () => { /* 忽略 */ },
       fetchRange: f.fn,
+      onFatal,
       log: (l) => { logs.push(l) },
       seekGiveUpMs: 60_000,               // 让收手别抢在前面（这条测的是守卫本身）
     })
@@ -620,22 +622,49 @@ describe('mseKernel · "同一段连取两次"不许把一条轨永久冻死（d
     const guard = logs.filter((l) => l.includes('仍没落地'))
     expect(guard.length, `守卫触发必须留一行：${logs.join(' | ')}`).toBeTruthy()
     expect(guard[0]).toContain('audio')
-    // ⚠️ 只数**音频轨**的取数：视频轨一直好好的，拿总数会把"音频被冻死"掩盖掉。
-    const audioCalls = () => f.calls.filter((c) => c.url.includes('/a.m4s'))
-    const audioBefore = audioCalls().length
-    expect(f.calls.length, '冻住之后就不该再无脑重取（防打转）').toBeLessThan(before + 10)
+    expect(guard[0]).toContain('bytes=')     // 现场要能看出取的是哪一段
+    // ⚠️ 老行为是"本轨不再重取"就停在那儿 —— 真机上那等于**画面冻住、声音还在放**，
+    //    而且永远不自愈（`devlog/325`）。现在：MSE 给不出这个位置 ⇒ 如实认输、退渐进式。
+    expect(onFatal, '取不动就退渐进式，不许把画面冻在那里').toHaveBeenCalled()
+    const audioCalls = f.calls.filter((c) => c.url.includes('/a.m4s')).length
+    expect(audioCalls, '认输之后不该再无脑重取').toBeLessThan(before + 10)
+  })
+})
 
-    // 换了目标 ⇒ 记账作废 ⇒ 这条轨必须**重新**开始取数（真机上就是这里被永久冻死的）。
-    // 目标取 35s：音频轨此刻只有 [0,15)，所以它**必须**去取新段才能覆盖目标。
-    audioSb.freeze = false
-    kernel.seekTo(35)
-    await flush(40)
+describe('mseKernel · 取数失败一律留痕（devlog/325）', () => {
+  it('单镜像取不到也必须写一行（原实现只有"还有下一条镜像"时才写）', async () => {
+    /**
+     * 真机现场：`video 段 565 连取 3 次仍没落地`，而**代理侧一发请求都没有** ——
+     * 因为取数在本地就抛了，而 `append()` 的 catch 只在"镜像 >1 且还有下一条"时写日志，
+     * 单镜像时**完全静默**：三次失败一个字都没有，只能靠猜。
+     */
+    const ms = new FakeMediaSource(0)
+    const el = fakeEl(ms.buffers)
+    const logs: string[] = []
+    // ⚠️ 两条轨都要有表（只有视频走 MSE 会被内核拒绝：那会退回"两个钟"）
+    const singleVideo = { ...table('video'), urls: ['https://cn-x.bilivideo.com/v.m4s'] }
+    const kernel = new MseKernel(el as unknown as HTMLVideoElement, {
+      createMediaSource: () => ms as unknown as MediaSource,
+      createObjectURL: () => 'blob:test',
+      revokeObjectURL: () => { /* 忽略 */ },
+      // init 给得出（内核要能起来），之后**视频轨**每一段都抛
+      // （就像 `Range` 校验不通过那样：上游忽略 Range 回了 200）
+      fetchRange: vi.fn(async (u: string, r: SegmentRange) => {
+        if (r.start === 0) return encodeRange(0, 0, r.end - r.start + 1)
+        if (u.includes('/v.m4s')) throw new RangeError('上游没按 Range 给：status=200')
+        const i = Math.floor((r.start - SEG0_START) / SEG_BYTES)
+        return encodeRange(i * SEG_DUR, (i + 1) * SEG_DUR, r.end - r.start + 1)
+      }),
+      log: (l) => { logs.push(l) },
+      seekGiveUpMs: 60_000,
+    })
+    kernel.load({ video: singleVideo, audio: table('audio'), duration_s: SEG_COUNT * SEG_DUR })
+    await flush(20)
 
-    expect(audioCalls().length, '换了目标还不为音频轨取数 = 这条轨被永久冻死')
-      .toBeGreaterThan(audioBefore)
-    expect(audioSb.ranges.some(([s, e]) => s <= 35 && 35 < e),
-           `音频轨的目标段没落地：${JSON.stringify(audioSb.ranges)}`).toBe(true)
-    expect(kernel.bufferedAhead(), '换了目标之后该能落地').toBeGreaterThan(0)
+    const fails = logs.filter((l) => l.includes('取数失败'))
+    expect(fails.length, `取数失败必须留痕：${logs.join(' | ')}`).toBeGreaterThan(0)
+    expect(fails[0]).toContain('bytes=')         // 要能看出取的是哪一段
+    expect(fails[0]).toContain('Range')          // 要说清是什么错
   })
 })
 
