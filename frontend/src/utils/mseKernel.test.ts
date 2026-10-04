@@ -632,6 +632,24 @@ describe('mseKernel · "同一段连取两次"不许把一条轨永久冻死（d
 })
 
 describe('mseKernel · 取数失败一律留痕（devlog/325）', () => {
+  it('**追加了但缓冲没变**也要留一行（带全部区间与 duration）', async () => {
+    /**
+     * 真机最后一格（`devlog/326`）：段 716 的字节完全正确（moof 1904 + mdat 463722，
+     * 偏移/长度/tfdt 全对）、代理 206、`appendBuffer` 也没抛错 —— 但缓冲一点都不长。
+     * 这一格原先**没有任何日志**（"取数失败"不覆盖它），于是"谁把数据吃了"无从判断。
+     */
+    const { kernel, ms, logs } = await boot()
+    await flush(20)                                  // 让 init 两轨都落地（否则先冻住的是 init）
+    for (const b of ms.buffers) b.freeze = true      // 追加照常"成功"，但缓冲不涨
+    kernel.seekTo(30)
+    await flush(40)
+
+    const line = logs.find((l) => l.includes('缓冲没变') && !l.includes('追加段 -1'))
+    expect(line, `追加后没变化必须留痕：${logs.join(' | ')}`).toBeTruthy()
+    expect(line).toContain('区间=[')
+    expect(line).toContain('duration=')
+  })
+
   it('单镜像取不到也必须写一行（原实现只有"还有下一条镜像"时才写）', async () => {
     /**
      * 真机现场：`video 段 565 连取 3 次仍没落地`，而**代理侧一发请求都没有** ——

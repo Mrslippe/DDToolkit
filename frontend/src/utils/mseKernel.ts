@@ -320,6 +320,8 @@ interface Track {
   /** 取数失败/结果作废的日志节流（同一轨每秒最多一条，`devlog/325`） */
   lastFailLogAt: number
   lastDiscardLogAt: number
+  /** "追加了但缓冲没变"的日志节流（`devlog/326`） */
+  lastNoGrowLogAt: number
 }
 
 /**
@@ -383,7 +385,7 @@ export class MseKernel {
         pending: null, inflight: null, seq: 0, lastIdx: -2, repeat: 0,
         spanEnd: 0, fetchBaseline: -1, noProgress: 0, coolUntil: 0, warnedStall: false,
         retry: 0, mirror: 0, quotaHits: 0, opSince: 0, stuckHits: 0, warnedRepeat: false,
-        lastFailLogAt: 0, lastDiscardLogAt: 0,
+        lastFailLogAt: 0, lastDiscardLogAt: 0, lastNoGrowLogAt: 0,
       }))
     this.startedAt = Date.now()
     this.ms.addEventListener('sourceopen', this.onSourceOpen)
@@ -523,6 +525,27 @@ export class MseKernel {
         tr.repeat = 0                    // 有进展 ⇒ "同一段连取两次"的记账也作废（devlog/323）
       } else {
         tr.noProgress += 1
+        /**
+         * ⚠️ **"追加了但缓冲没变"必须留痕**（`devlog/326`，长视频真机事故的最后一格）。
+         *
+         * 现场：段 716 的字节**完全正确**（moof 1904 + mdat 463722 = 表里那一段，偏移/长度/tfdt
+         * 全对）、代理侧 206、`appendBuffer` 也没抛错 —— 但缓冲一点都不长，于是泵重取三次、
+         * 守卫触发、退渐进式。**这一格原先没有任何日志**（`取数失败` 不覆盖它），
+         * 而它才是"到底谁把数据吃了"的唯一线索。所以这里把三条判据一起写下来：
+         * 这次追加的是哪一段、这条轨**全部**缓冲区间、以及 `MediaSource.duration`
+         * （时长被人为调小时，Chromium 会**静默丢掉**超出部分的帧）。
+         *
+         * ⚠️ **init（`-1`）不算**：init 本来就不产生区间，记它只会把真正那一行挤掉（节流）。
+         */
+        const now = Date.now()
+        if (typeof wasPending === 'number' && wasPending >= 0
+            && now - tr.lastNoGrowLogAt > 1000) {
+          tr.lastNoGrowLogAt = now
+          this.deps.log?.(`[media] ${tr.kind} 追加段 ${wasPending} 后**缓冲没变**：`
+                          + `区间=${this.rangesText(tr)} 目标=${this.target().toFixed(1)}s`
+                          + ` duration=${this.ms?.duration ?? '?'}`
+                          + ` 时长表=${tr.table.duration_s.toFixed(1)}s 无进展=${tr.noProgress}`)
+        }
       }
     }
     this.maybeEnd()
@@ -732,6 +755,27 @@ export class MseKernel {
     return s ? `${s.start.toFixed(1)}–${s.end.toFixed(1)}s` : '无'
   }
 
+  /**
+   * 这条轨**全部**缓冲区间（最多列 3 段 + 总数）。
+   *
+   * ⚠️ 只有 `spanText`（首段起点–末段终点）是不够的（`devlog/326`）：真机上它显示
+   * `0.0–3585.0s`，看着"覆盖了目标 3584.5s"，实际那是**首段起点与末段终点**——
+   * 末段可能只是一小截尾巴（`[3584.9, 3585.0)`），目标在洞里。诊断必须看得见"洞"。
+   */
+  private rangesText(tr: Track): string {
+    const b = tr.sb?.buffered
+    if (!b || !b.length) return '无'
+    const out: string[] = []
+    try {
+      for (let i = 0; i < Math.min(b.length, 3); i += 1) {
+        out.push(`${b.start(i).toFixed(1)}–${b.end(i).toFixed(1)}`)
+      }
+      return `[${out.join(', ')}${b.length > 3 ? `, …` : ''}]×${b.length}`
+    } catch {
+      return '读不到'
+    }
+  }
+
   /** 取数失败留痕（同一轨每秒最多一条，免得刷屏）；`devlog/325` */
   private noteFetchFail(tr: Track, idx: number, e: unknown): void {
     const now = Date.now()
@@ -877,6 +921,9 @@ export class MseKernel {
       tr.pending = null
       if (isQuotaError(e)) {
         tr.quotaHits += 1
+        // ⚠️ 配额这条路原先也是**静默**的（前三次只在心里记一笔）；`devlog/326`：要说出来
+        this.deps.log?.(`[media] ${tr.kind} 配额不足第 ${tr.quotaHits} 次（先淘汰再重试）`
+                        + ` 区间=${this.rangesText(tr)} duration=${this.ms?.duration ?? '?'}`)
         if (tr.quotaHits > 3) { this.fail(`${tr.kind} 配额反复不足（淘汰也救不回来）`); return }
         this.evict(tr, true)
       } else {
@@ -943,7 +990,8 @@ export class MseKernel {
             tr.warnedRepeat = true
             const seg = tr.table.segments[want]
             this.deps.log?.(`[media] ${tr.kind} 段 ${want}（bytes=${seg?.start}-${seg?.end}）`
-                            + `连取 ${tr.repeat + 1} 次仍没落地（本轨缓冲停在 ${this.spanText(tr)}）`
+                            + `连取 ${tr.repeat + 1} 次仍没落地（区间=${this.rangesText(tr)}`
+                            + ` 目标=${target.toFixed(1)}s duration=${this.ms?.duration ?? '?'}）`
                             + `—— 这条路给不出这个位置的数据，改用渐进式`)
             /**
              * ⚠️ **不许停在这里装死**（`devlog/325`）：真机上这一停就是"画面冻住、声音还在放"
