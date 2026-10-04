@@ -173,6 +173,31 @@ expires: 2027-01-31
 > **仍属 D4 的**：真机端到端一次（含**图片固化**与**详情页渲染**）、抖音视频能否播放
 > （上面那条 Referer 策略）、`PERF` 基线、以及用户侧动作（配 cookie + UA、打开总开关）。
 
+> ### ✅ D4 结果（2026-10-05 真机，`devlog/336`）
+>
+> 两个脚本、**同一个临时数据目录**（`%TEMP%\ddt-d4`，你的开发库一个字节没动）、凭据只走子进程环境变量：
+>
+> | 验到的事 | 实测 |
+> |---|---|
+> | 开关**关着**时抓取被闸门挡住 | `POST /vtuber/fetch-posts?platform=douyin` → **403**，理由指到「设置 → 抓取设置 → 平台抓取」|
+> | 打开总开关（热更、不重启） | `PUT /settings {"DOUYIN_ENABLED": true}` → capabilities 立刻 `douyin_enabled=True`、抖音内容不再受限 |
+> | **收录**该账号（真发一次主页信息） | `POST /vtuber/adopt`(source=douyin) → **201**，名字来自服务端「Sulli」，0.6s |
+> | 首屏抓取落库 | 2 条（`FIRST_SCREEN_DYNAMICS_LIMIT` **按设计**只入库最新几条）|
+> | 字段与形状 | 首条 `#7692759522204795110` type=image；`body_json` 是共享契约形状；`published_at` naive UTC |
+> | **图片固化** | 2/2 条有本地副本，共 4 张；`/settings/assets` 的 `post_image` rows=4 files=4 **1.16MB** |
+> | **详情页能看** | `GET /static/assets/post_image/p1_543169b3.webp` → **200 image/webp 616KB**；两个帖子读取端点都 200 |
+> | **一页 20 条**（适配器层补一刀） | 20 条、`has_more=True`、游标 `1789041422000`、类型 `{图文 7, 视频 13}`、id 全字符串、20/20 有封面、时间全解析 |
+>
+> **两条如实说明**：
+> ① 端到端那条走的是**收录首屏**路径（`limit_latest`），所以"落了 2 条"是设计，不是抓取失败；
+> 增量语义（`stop_on_existing`）又让"再抓一次"天然 0 新增 ⇒ **"一页 20 条"改在适配器层单独验**（1 个请求）。
+> ② 日志里那句 `[douyin] 账号 Sulli … 0 成功, 1 失败` 是**自节流**：收录后台紧接着又问了一次账号信息，
+> 而 `user_profile` 的令牌桶（0.2/s）刚被上一次花掉 ⇒ 我们没发请求。平台什么都没说。
+> 已作为一条小修进 `docs/TODO.md` §1（`identity_limit.throttled` 只接在帖子循环上）。
+>
+> **仍未验的**：抖音**视频**能不能播（`douyinvod.com` 那条 Referer 策略是猜的，只验过图文帖）；
+> 以及你在**自己的数据目录**里配 cookie + UA + 打开开关（本批用的是临时目录）。
+
 ## 三、判据（每批都要能反向验证）
 
 | 判据 | 反向验证 |
