@@ -6249,7 +6249,11 @@ img.hero-avatar {
   border: 1px solid rgba(255, 255, 255, .14); box-shadow: 0 6px 18px rgba(0, 0, 0, .4);
   opacity: 0; pointer-events: none; transition: opacity .14s ease;
 }
-.vp-volwrap:hover .vp-volpop, .vp-volwrap:focus-within .vp-volpop { opacity: 1; pointer-events: auto; }
+/* ⚠️ 这里**不能**用 `:focus-within`（2026-10-04，devlog/316）：鼠标点一下滑杆，range 就拿到了焦点，
+   而它会一直保持到"点别处"为止 ⇒ 用户报的「点完音量滑杆移开鼠标，浮窗不缩回去，
+   得点空白处才收」。改成 `:has(:focus-visible)`：键盘 Tab 过来仍然常开，
+   而**鼠标点击不算 focus-visible** ⇒ 移开就收（hover 那条照旧）。 */
+.vp-volwrap:hover .vp-volpop, .vp-volwrap:has(:focus-visible) .vp-volpop { opacity: 1; pointer-events: auto; }
 /* 竖直滑杆：**去掉原生描边**（appearance:none），自绘细轨 + 白色圆钮 */
 .vp-vol {
   appearance: none; -webkit-appearance: none;

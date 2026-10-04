@@ -170,6 +170,63 @@ const BOTTOM_HOT_ZONE = 72
  * 给"显示"一个最短时长，短于它的回血**不收起**，看起来才是一个稳定的"正在缓冲"。
  */
 const MIN_SPIN_MS = 450
+/**
+ * 浮层"离开后多久才真的收起"（清晰度 / 倍速，2026-10-04 devlog/316）。
+ *
+ * 按钮与浮层之间有几像素的缝，指针穿过去时 `mouseleave` **先到** —— 没有宽限就会
+ * "刚移开就没了、够不着菜单"（音量浮窗当初就是被这条咬过，它靠 CSS 里一块看不见的"桥"绕开）。
+ */
+const HOVER_GRACE_MS = 140
+
+/**
+ * **悬停触发的浮层**（清晰度 / 倍速共用一套，devlog/316）。
+ *
+ * 用户口径：「清晰度、倍速的按钮上拉栏并不是 hover 触发，而是点击触发，这会让控制逻辑不统一，
+ * 全部改为 hover 触发」——音量那处本来就是 hover（纯 CSS），所以这里是**把三处统一到同一套**。
+ *
+ * 三条口径：
+ * - **鼠标：hover 开、移开关**（点击不改变状态 —— 它由 hover 决定，避免"点一下反而关掉"）；
+ * - **没有 hover 的输入方式仍要能用**：键盘 Enter/Space、触屏点按 ⇒ 走"钉住"语义
+ *   （点开之后移开鼠标不关，再点一次/选中一项才关）；判据是"此刻有没有 hover"；
+ * - 宽限 `HOVER_GRACE_MS` 见上。
+ */
+function useHoverMenu() {
+  const [open, setOpen] = useState(false)
+  const hovered = useRef(false)
+  const pinned = useRef(false)
+  const timer = useRef(0)
+  const cancel = useCallback(() => {
+    window.clearTimeout(timer.current)
+    timer.current = 0
+  }, [])
+  const enter = useCallback(() => {
+    hovered.current = true
+    cancel()
+    setOpen(true)
+  }, [cancel])
+  const leave = useCallback(() => {
+    hovered.current = false
+    if (pinned.current) return                 // 键盘/触屏钉住的，移开鼠标不关
+    cancel()
+    timer.current = window.setTimeout(() => {
+      if (!hovered.current && !pinned.current) setOpen(false)
+    }, HOVER_GRACE_MS)
+  }, [cancel])
+  /** 点击：**只在没有 hover 时**才切（鼠标点击交给 hover；键盘/触屏走这条） */
+  const toggle = useCallback(() => {
+    if (hovered.current) return
+    pinned.current = !pinned.current
+    setOpen(pinned.current)
+  }, [])
+  const close = useCallback(() => {
+    pinned.current = false
+    hovered.current = false
+    cancel()
+    setOpen(false)
+  }, [cancel])
+  useEffect(() => cancel, [cancel])
+  return { open, enter, leave, toggle, close }
+}
 
 function fmt(t: number): string {
   if (!Number.isFinite(t) || t < 0) t = 0
@@ -226,9 +283,9 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
   const [cur, setCur] = useState(0)
   const [dur, setDur] = useState(0)
   const [buf, setBuf] = useState(0)
-  const [rateOpen, setRateOpen] = useState(false)
-  /** 清晰度菜单（B站；默认关） */
-  const [qualityOpen, setQualityOpen] = useState(false)
+  /** 倍速 / 清晰度浮层：**hover 触发**（devlog/316；键盘与触屏走点击，见 `useHoverMenu`） */
+  const rateMenu = useHoverMenu()
+  const qualityMenu = useHoverMenu()
   const [fs, setFs] = useState(false)
   const [idle, setIdle] = useState(false)
   /** 进度条 hover 预览（图二那颗时间气泡） */
@@ -904,6 +961,8 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
     else if (e.key === 'ArrowDown') { e.preventDefault(); setPlayerPrefs({ volume: prefs.volume - 0.05 }) }
     else if (k === 'm') { e.preventDefault(); setPlayerPrefs({ muted: !prefs.muted }) }
     else if (k === 'f') { e.preventDefault(); toggleFs() }
+    // 浮层（hover 触发的那两个）—— 键盘钉住之后要能收起来（devlog/316）
+    else if (k === 'escape') { qualityMenu.close(); rateMenu.close() }
   }
 
   if (dead || !src) {
@@ -1105,12 +1164,16 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
 
         <div className="vp-rate">
           {qualities && qualities.length > 0 && (
-            <div className="vp-rate">
+            /* 清晰度这一组**自己**是 hover 区（不能挂在外面那个 `.vp-rate` 上：
+               那样指针划过倍速也会把清晰度菜单带出来）—— devlog/316 */
+            <div className="vp-rate" data-vp-menu="quality"
+                 onMouseEnter={qualityMenu.enter} onMouseLeave={qualityMenu.leave}>
               <button type="button" className="vp-btn vp-btn--text"
-                      aria-label="清晰度" onClick={() => setQualityOpen((v) => !v)}>
+                      aria-label="清晰度" aria-haspopup="true" aria-expanded={qualityMenu.open}
+                      onClick={qualityMenu.toggle}>
                 {qualities.find((q) => q.id === qualityId)?.label ?? '清晰度'}
               </button>
-              {qualityOpen && (
+              {qualityMenu.open && (
                 <div className="vp-menu vp-menu--quality">
                   {qualities.map((q) => (
                     <button key={q.id} type="button" disabled={q.disabled}
@@ -1119,7 +1182,7 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
                                一换行菜单就变成窄高条，"1×"也会被挤下去 */
                             aria-label={q.note ? `${q.label}（${q.note}，不可选）` : q.label}
                             className={`vp-menu-item${q.id === qualityId ? ' is-on' : ''}`}
-                            onClick={() => { onPickQuality?.(q.id); setQualityOpen(false) }}>
+                            onClick={() => { onPickQuality?.(q.id); qualityMenu.close() }}>
                       {q.label}
                       {/* 「需大会员」用**一颗小图标**表示（文字太占宽、又把行撑换行了）；
                           无障碍名走 `title` + `aria-label`，信息不丢 */}
@@ -1132,21 +1195,26 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
               )}
             </div>
           )}
-          <button type="button" className="vp-btn vp-btn--text"
-                  aria-label="倍速" onClick={() => setRateOpen((v) => !v)}>
-            {prefs.rate}×
-          </button>
-          {rateOpen && (
-            <div className="vp-menu">
-              {PLAYBACK_RATES.map((r) => (
-                <button key={r} type="button"
-                        className={`vp-menu-item${r === prefs.rate ? ' is-on' : ''}`}
-                        onClick={() => { setPlayerPrefs({ rate: r }); setRateOpen(false) }}>
-                  {r}×
-                </button>
-              ))}
-            </div>
-          )}
+          {/* 倍速这一组同理：按钮 + 菜单包在**同一个** hover 区里，指针移进菜单不会断 */}
+          <div className="vp-rate" data-vp-menu="rate"
+               onMouseEnter={rateMenu.enter} onMouseLeave={rateMenu.leave}>
+            <button type="button" className="vp-btn vp-btn--text"
+                    aria-label="倍速" aria-haspopup="true" aria-expanded={rateMenu.open}
+                    onClick={rateMenu.toggle}>
+              {prefs.rate}×
+            </button>
+            {rateMenu.open && (
+              <div className="vp-menu">
+                {PLAYBACK_RATES.map((r) => (
+                  <button key={r} type="button"
+                          className={`vp-menu-item${r === prefs.rate ? ' is-on' : ''}`}
+                          onClick={() => { setPlayerPrefs({ rate: r }); rateMenu.close() }}>
+                    {r}×
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="vp-volwrap">
