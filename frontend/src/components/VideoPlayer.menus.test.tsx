@@ -50,8 +50,10 @@ const pointer = (el: Element, on: boolean) =>
   el.dispatchEvent(new MouseEvent(on ? 'mouseover' : 'mouseout',
                                    { bubbles: true, relatedTarget: document.body }))
 
-/** 等过宽限期（`HOVER_GRACE_MS` 140ms） */
-const afterGrace = () => act(async () => { await new Promise((r) => setTimeout(r, 220)) })
+/** 等过宽限期（`HOVER_GRACE_MS` 180ms） */
+const afterGrace = () => act(async () => { await new Promise((r) => setTimeout(r, 260)) })
+/** 等过呼出延时（`HOVER_OPEN_MS` 240ms）—— **扫过不弹**就是靠它 */
+const afterOpenDelay = () => act(async () => { await new Promise((r) => setTimeout(r, 320)) })
 
 const render = (props: Record<string, unknown> = {}) => {
   act(() => root.render(
@@ -63,17 +65,32 @@ const menu = (name: 'rate' | 'quality') => host.querySelector<HTMLElement>(
   `[data-vp-menu="${name}"] .vp-menu`)
 
 describe('VideoPlayer · 浮层由 hover 触发（与音量同一套）', () => {
-  it('倍速：指针移上去就出菜单，移开一会儿就收起', async () => {
+  it('倍速：指针停上去一会儿才出菜单，移开一会儿就收起', async () => {
     render()
     const group = host.querySelector<HTMLElement>('[data-vp-menu="rate"]')!
     expect(menu('rate'), '一开始不该有').toBeNull()
 
     await act(async () => { pointer(group, true); await Promise.resolve() })
-    expect(menu('rate'), 'hover 要能直接拉出来（不是只有点击才行）').not.toBeNull()
+    expect(menu('rate'), '刚移上去就弹 = 鼠标扫过也会呼出（用户不要这个）').toBeNull()
+    await afterOpenDelay()
+    expect(menu('rate'), 'hover 要能拉出来（不是只有点击才行）').not.toBeNull()
 
     await act(async () => { pointer(group, false); await Promise.resolve() })
     await afterGrace()
     expect(menu('rate'), '移开该自动收起（不用点别处）').toBeNull()
+  })
+
+  it('**扫过不弹**：hover 不到延时就走，菜单一次都不出现', async () => {
+    render()
+    const group = host.querySelector<HTMLElement>('[data-vp-menu="rate"]')!
+    await act(async () => {
+      pointer(group, true)
+      await new Promise((r) => setTimeout(r, 80))     // 远小于 240ms
+      pointer(group, false)
+      await Promise.resolve()
+    })
+    await afterOpenDelay()
+    expect(menu('rate'), '鼠标顺路划过也弹出来 ⇒ 用户明确否掉的那种').toBeNull()
   })
 
   it('清晰度：同样是 hover；划过倍速**不会**把清晰度菜单带出来', async () => {
@@ -82,12 +99,14 @@ describe('VideoPlayer · 浮层由 hover 触发（与音量同一套）', () => 
     const r = host.querySelector<HTMLElement>('[data-vp-menu="rate"]')!
 
     await act(async () => { pointer(q, true); await Promise.resolve() })
+    await afterOpenDelay()
     expect(menu('quality')).not.toBeNull()
     expect(menu('rate'), '两组各管各的 hover 区').toBeNull()
 
     await act(async () => { pointer(q, false); pointer(r, true); await Promise.resolve() })
     await afterGrace()
     expect(menu('quality'), '移开后要收').toBeNull()
+    await afterOpenDelay()
     expect(menu('rate')).not.toBeNull()
   })
 
@@ -95,10 +114,12 @@ describe('VideoPlayer · 浮层由 hover 触发（与音量同一套）', () => 
     render()
     const group = host.querySelector<HTMLElement>('[data-vp-menu="rate"]')!
     await act(async () => { pointer(group, true); await Promise.resolve() })
-    // 穿过缝隙：先 leave（在宽限内）再 enter —— 菜单不能消失
+    await afterOpenDelay()
+    expect(menu('rate')).not.toBeNull()
+    // 穿过缝隙：先 leave（还在宽限内）再 enter —— 菜单不能消失
     await act(async () => {
       pointer(group, false)
-      await new Promise((r) => setTimeout(r, 40))
+      await new Promise((r) => setTimeout(r, 60))
       pointer(group, true)
       await Promise.resolve()
     })
@@ -126,6 +147,7 @@ describe('VideoPlayer · 浮层由 hover 触发（与音量同一套）', () => 
     render({ onPickQuality: onPick })
     const group = host.querySelector<HTMLElement>('[data-vp-menu="quality"]')!
     await act(async () => { pointer(group, true); await Promise.resolve() })
+    await afterOpenDelay()
 
     const items = host.querySelectorAll<HTMLButtonElement>('.vp-menu-item')
     await act(async () => { items[1].click(); await Promise.resolve() })

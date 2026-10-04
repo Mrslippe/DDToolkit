@@ -159,10 +159,14 @@ describe('VideoPlayer · 清晰度菜单', () => {
     const fourK = items.find((i) => i.textContent?.includes('4K'))!
     // 文字里**不再**出现"（需大会员）"；信息改走 title/aria-label，可访问性不丢
     expect(fourK.textContent, '档位名旁边不该再挂着那串文字').toBe('4K')
-    expect(fourK.querySelector('.vp-crown'), '要有一颗表示大会员的小图标').toBeTruthy()
+    expect(fourK.querySelector('.vp-vip'), '要有一颗表示大会员的小图标（圆圈里一个「大」，devlog/317）')
+      .toBeTruthy()
     expect(fourK.getAttribute('aria-label')).toContain('需大会员')
-    expect(fourK.querySelector('.vp-crown')!.getAttribute('aria-hidden'), '图标别再念一遍')
+    expect(fourK.querySelector('.vp-vip')!.getAttribute('aria-hidden'), '图标别再念一遍')
       .toBe('true')
+    // 自绘的圆圈 + 「大」（三笔）：不是图标字体的王冠，也不依赖字体
+    expect(fourK.querySelector('.vp-vip circle'), '圆圈').toBeTruthy()
+    expect(fourK.querySelectorAll('.vp-vip path').length, '「大」= 一 + 丿 + 捺').toBe(3)
 
     // jsdom 不做布局 ⇒ "不换行"只能在真 CSS 里钉
     const css = readFileSync(resolve(__dirname, '../styles/posts.css'), 'utf8')

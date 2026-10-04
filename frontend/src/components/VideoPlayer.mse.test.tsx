@@ -27,20 +27,20 @@ const INIT_END = 947
 const SEG0 = 948
 const SEG_BYTES = 1000
 
-function streams(prefix = 'v'): KernelStreams {
+function streams(prefix = 'v', count = SEG_COUNT): KernelStreams {
   const seg = (kind: 'video' | 'audio') => ({
     url: `https://cn-x.bilivideo.com/${prefix}.m4s`,
     urls: [`https://cn-x.bilivideo.com/${prefix}.m4s`],
     mime: `${kind}/mp4; codecs="x"`,
     kind,
     init: { start: 0, end: INIT_END },
-    segments: Array.from({ length: SEG_COUNT }, (_, i) => ({
+    segments: Array.from({ length: count }, (_, i) => ({
       i, start: SEG0 + i * SEG_BYTES, end: SEG0 + (i + 1) * SEG_BYTES - 1,
       dur_s: SEG_DUR, sap: true,
     })),
-    duration_s: SEG_COUNT * SEG_DUR,
+    duration_s: count * SEG_DUR,
   })
-  return { video: seg('video'), audio: seg('audio'), duration_s: SEG_COUNT * SEG_DUR }
+  return { video: seg('video'), audio: seg('audio'), duration_s: count * SEG_DUR }
 }
 
 const DASH = {
@@ -302,6 +302,75 @@ describe('VideoPlayer · MSE 内核（默认内核）', () => {
     })
     expect(v.currentTime, '位置要承接（同一份媒体、同一条时间轴）').toBeCloseTo(12, 0)
     play.mockRestore()
+  })
+
+  it('跳转**先暂停**（不让旧内容继续放），目标段落地后自动接着放（devlog/317）', async () => {
+    stubFetch()
+    await act(async () => {
+      // 200 秒的表：起播只缓冲前 20 秒 ⇒ 跳到 80%（160s）**必须去取段**，
+      // 于是"目标段在路上"这段窗口可观察（8 段的表整片都在缓冲里，点了立刻落地，测不到）
+      root.render(<VideoPlayer video={{ url: DASH.video }} dash={DASH} segments={streams('v', 40)} />)
+      await flush(30)
+    })
+    const v = host.querySelector('video') as HTMLVideoElement
+    // 摆好"正在播"：jsdom 不维护 `paused`，按这条用例的需要在实例上钉一个可变值
+    let paused = true
+    Object.defineProperty(v, 'paused', { get: () => paused, configurable: true })
+    const calls: string[] = []
+    v.pause = () => { paused = true; calls.push('pause') }
+    v.play = () => { paused = false; calls.push('play'); return Promise.resolve() }
+    await act(async () => {
+      void v.play()                               // 真的在播 ⇒ `paused=false`（组件据此判断要不要先停）
+      v.dispatchEvent(new Event('play'))
+      await Promise.resolve()
+    })
+    calls.length = 0
+
+    const bar = host.querySelector<HTMLDivElement>('.vp-progress')!
+    bar.getBoundingClientRect = () => ({ left: 0, width: 100, top: 0, height: 16,
+      right: 100, bottom: 16, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+    // ⚠️ 用**同步** act 派发点击、并在里面立刻断言：取段替身是微任务完成的，
+    //    只要 `await` 一次整条链就跑完了 ⇒ "目标段还在路上"那一段窗口必须同步看
+    //    （异步 act 里断言会看到"已经落地并复播"，测不到用户报的那条）。
+    act(() => {
+      bar.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 80 }))
+    })
+    // MSE 下目标段还在路上（几百毫秒到几秒）——这段时间**不许**继续放旧内容
+    expect(calls, '点完跳转还在放 = 用户看到的那条').toContain('pause')
+    expect(paused).toBe(true)
+
+    await act(async () => { await flush(60) })     // 等目标段落地
+    expect(v.currentTime).toBeCloseTo(160, 0)
+    expect(calls, '落地后要接着放（否则跳完停在那儿）').toContain('play')
+    expect(paused).toBe(false)
+  })
+
+  it('播完 ⇒ 中央"重新播放"，点击回到 0 并接着放（devlog/317）', async () => {
+    stubFetch()
+    await act(async () => {
+      root.render(<VideoPlayer video={{ url: DASH.video }} dash={DASH} segments={streams()} />)
+      await flush(30)
+    })
+    const v = host.querySelector('video') as HTMLVideoElement
+    let paused = true
+    Object.defineProperty(v, 'paused', { get: () => paused, configurable: true })
+    v.pause = () => { paused = true }
+    v.play = () => { paused = false; return Promise.resolve() }
+
+    await act(async () => {
+      v.dispatchEvent(new Event('ended'))
+      await Promise.resolve()
+    })
+    const replay = host.querySelector<HTMLButtonElement>('.vp-replay')!
+    expect(replay, '播完要有"重新播放"').toBeTruthy()
+    expect(host.querySelectorAll('.vp-bigplay:not(.vp-replay)').length,
+           '两颗大键会叠在正中').toBe(0)
+
+    await act(async () => { replay.click(); await flush(30) })
+    expect(v.currentTime, '从头开始').toBeCloseTo(0, 1)
+    expect(paused, '点了要真的放起来').toBe(false)
+    expect(host.querySelector('.vp-replay'), '点了之后要收起').toBeNull()
+    expect(host.querySelector('.vp-spin'), '落地了就别再转圈').toBeNull()
   })
 
   it('**拖拽松手要提交跳转**（MSE 下拖拽期间只动界面，松手走 settleAudio = 什么都没发生）', async () => {

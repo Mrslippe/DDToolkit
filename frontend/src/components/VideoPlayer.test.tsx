@@ -134,6 +134,74 @@ describe('VideoPlayer', () => {
     expect(host.querySelector('.vp-time')?.textContent).toContain('/00:30')
   })
 
+  it('跳转期间**先暂停**，到位后再接着放（用户口径，devlog/317）', async () => {
+    // 「点击进度条跳转的时候先暂停视频，直到跳转完成后再开始播放，现在的情况是点击跳转后
+    //   依旧会接着播放原先的内容直到跳转完成后再开始播放跳转之后的内容」
+    render()
+    const v = el()
+    Object.defineProperty(v, 'duration', { value: 30, configurable: true })
+    // 让"还在 seek"这件事可观察：jsdom 不实现 `seeking`，就按这条用例的需要固定成 true
+    Object.defineProperty(v, 'seeking', { value: true, configurable: true })
+    // ⚠️ 实例级桩 play/pause + 可变的 `paused`：这个文件在 beforeEach 里把原型上的两个方法
+    //    换成了裸 `vi.fn()`（**不**维护 `paused`），只派发事件的话 `el.paused` 还是 true，
+    //    组件就会短路掉"跳转先暂停"（那样测的是夹具不是组件）。
+    let paused = true
+    const calls: string[] = []
+    Object.defineProperty(v, 'paused', { get: () => paused, configurable: true })
+    v.pause = () => { paused = true; calls.push('pause') }
+    v.play = () => { paused = false; calls.push('play'); return Promise.resolve() }
+    await act(async () => {
+      v.dispatchEvent(new Event('loadedmetadata'))
+      void v.play()                               // 用户在播（意图 = 播）
+      v.dispatchEvent(new Event('play'))
+      await Promise.resolve()
+    })
+    calls.length = 0
+
+    const bar = host.querySelector<HTMLDivElement>('.vp-progress')!
+    bar.getBoundingClientRect = () => ({ left: 0, width: 100, top: 0, height: 16,
+      right: 100, bottom: 16, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+    await act(async () => {
+      bar.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 50 }))
+      await Promise.resolve()
+    })
+    expect(calls, '点了跳转还在放旧内容 ⇒ 用户看到的那条').toContain('pause')
+    expect(paused, '暂停要真的落在元素上').toBe(true)
+
+    await act(async () => {
+      v.dispatchEvent(new Event('seeked'))        // 到位 ⇒ 接着放
+      await Promise.resolve()
+    })
+    expect(calls, '到位后不接着放 = 跳完停在那儿').toContain('play')
+    expect(paused).toBe(false)
+  })
+
+  it('播完 ⇒ 冻结在尾帧 + 中央"重新播放"，点击从头播（devlog/317）', async () => {
+    render()
+    const v = el()
+    Object.defineProperty(v, 'duration', { value: 30, configurable: true })
+    await act(async () => {
+      v.dispatchEvent(new Event('loadedmetadata'))
+      v.dispatchEvent(new Event('ended'))
+      await Promise.resolve()
+    })
+    const replay = host.querySelector<HTMLButtonElement>('.vp-replay')!
+    expect(replay, '播完要有"重新播放"').toBeTruthy()
+    expect(replay.getAttribute('aria-label')).toBe('重新播放')
+    // ⚠️ 别用 `button[aria-label="播放"]` 判"大播放键还在不在"：底栏那颗播放键的
+    //    无障碍名也是"播放"（这一批踩到）。要判的是**中央那一颗**。
+    expect(host.querySelectorAll('.vp-bigplay:not(.vp-replay)').length,
+           '两颗大键都在正中 ⇒ 会叠在一起').toBe(0)
+
+    v.currentTime = 30
+    const plays = vi.mocked(HTMLMediaElement.prototype.play)
+    plays.mockClear()
+    await act(async () => { replay.click(); await Promise.resolve() })
+    expect(v.currentTime, '从头播').toBe(0)
+    expect(plays).toHaveBeenCalled()
+    expect(host.querySelector('.vp-replay'), '点了之后要收起').toBeNull()
+  })
+
   it('进度条 hover ⇒ 出时间气泡（图二），默认是细线、hover 才变粗', async () => {
     render()
     const v = el()

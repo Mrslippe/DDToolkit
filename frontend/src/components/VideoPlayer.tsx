@@ -28,8 +28,8 @@
  */
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import {
-  Crown, ExternalLink, Loader2, Maximize, Minimize, Pause, Play, PictureInPicture2,
-  Volume1, Volume2, VolumeX,
+  ExternalLink, Loader2, Maximize, Minimize, Pause, Play, PictureInPicture2,
+  RotateCcw, Volume1, Volume2, VolumeX,
 } from 'lucide-react'
 
 import { api, videoProxyUrl } from '../api/api'
@@ -171,12 +171,19 @@ const BOTTOM_HOT_ZONE = 72
  */
 const MIN_SPIN_MS = 450
 /**
- * 浮层"离开后多久才真的收起"（清晰度 / 倍速，2026-10-04 devlog/316）。
+ * 浮层"要 hover 多久才弹出"（2026-10-04，devlog/317）。
+ *
+ * 用户口径：「控件 hover 触发的时间拉长一点，以防鼠标扫过就呼出上拉栏」——
+ * 鼠标从画面上扫到右下角的全屏键时，会**顺路**划过倍速/清晰度，没有延时就会弹一下再收。
+ */
+const HOVER_OPEN_MS = 240
+/**
+ * 浮层"离开后多久才真的收起"（清晰度 / 倍速，devlog/316）。
  *
  * 按钮与浮层之间有几像素的缝，指针穿过去时 `mouseleave` **先到** —— 没有宽限就会
  * "刚移开就没了、够不着菜单"（音量浮窗当初就是被这条咬过，它靠 CSS 里一块看不见的"桥"绕开）。
  */
-const HOVER_GRACE_MS = 140
+const HOVER_GRACE_MS = 180
 
 /**
  * **悬停触发的浮层**（清晰度 / 倍速共用一套，devlog/316）。
@@ -184,34 +191,42 @@ const HOVER_GRACE_MS = 140
  * 用户口径：「清晰度、倍速的按钮上拉栏并不是 hover 触发，而是点击触发，这会让控制逻辑不统一，
  * 全部改为 hover 触发」——音量那处本来就是 hover（纯 CSS），所以这里是**把三处统一到同一套**。
  *
- * 三条口径：
+ * 四条口径：
  * - **鼠标：hover 开、移开关**（点击不改变状态 —— 它由 hover 决定，避免"点一下反而关掉"）；
+ * - **开有延时**（`HOVER_OPEN_MS`）、**关有宽限**（`HOVER_GRACE_MS`）：扫过不弹、穿缝不断；
  * - **没有 hover 的输入方式仍要能用**：键盘 Enter/Space、触屏点按 ⇒ 走"钉住"语义
  *   （点开之后移开鼠标不关，再点一次/选中一项才关）；判据是"此刻有没有 hover"；
- * - 宽限 `HOVER_GRACE_MS` 见上。
+ * - 已经开着的浮层被再次 hover 时**不再等延时**（否则移开再移回来会有 240ms 的迟滞）。
  */
 function useHoverMenu() {
   const [open, setOpen] = useState(false)
   const hovered = useRef(false)
   const pinned = useRef(false)
-  const timer = useRef(0)
+  const openTimer = useRef(0)
+  const closeTimer = useRef(0)
   const cancel = useCallback(() => {
-    window.clearTimeout(timer.current)
-    timer.current = 0
+    window.clearTimeout(openTimer.current)
+    window.clearTimeout(closeTimer.current)
+    openTimer.current = 0
+    closeTimer.current = 0
   }, [])
   const enter = useCallback(() => {
     hovered.current = true
-    cancel()
-    setOpen(true)
-  }, [cancel])
+    window.clearTimeout(closeTimer.current)
+    window.clearTimeout(openTimer.current)
+    openTimer.current = window.setTimeout(() => {
+      if (hovered.current) setOpen(true)
+    }, HOVER_OPEN_MS)
+  }, [])
   const leave = useCallback(() => {
     hovered.current = false
-    if (pinned.current) return                 // 键盘/触屏钉住的，移开鼠标不关
-    cancel()
-    timer.current = window.setTimeout(() => {
+    window.clearTimeout(openTimer.current)      // 还没弹出来就离开 ⇒ 干脆不弹
+    if (pinned.current) return                  // 键盘/触屏钉住的，移开鼠标不关
+    window.clearTimeout(closeTimer.current)
+    closeTimer.current = window.setTimeout(() => {
       if (!hovered.current && !pinned.current) setOpen(false)
     }, HOVER_GRACE_MS)
-  }, [cancel])
+  }, [])
   /** 点击：**只在没有 hover 时**才切（鼠标点击交给 hover；键盘/触屏走这条） */
   const toggle = useCallback(() => {
     if (hovered.current) return
@@ -226,6 +241,28 @@ function useHoverMenu() {
   }, [cancel])
   useEffect(() => cancel, [cancel])
   return { open, enter, leave, toggle, close }
+}
+
+/**
+ * 「需大会员」的小图标：**圆圈里一个「大」**（2026-10-04 用户口径 + 参考图，`devlog/317`）。
+ *
+ * 为什么不用图标字体/文字：这是 12px 的小徽标，自绘笔画既不受字体影响、也不会有基线偏移；
+ * 圆圈用 `currentColor` 描边，跟着档位名一起变淡（disabled 那档 `.vp-menu-item:disabled` 的
+ * `opacity` 会同时压暗它）。
+ * 无障碍名由档位的 `title` + `aria-label` 承担，所以这里 `aria-hidden`（图标不再念一遍）。
+ */
+function VipBadge({ note }: { note: string }) {
+  return (
+    <svg className="vp-vip" viewBox="0 0 16 16" aria-hidden="true" data-vp-note={note}
+         fill="none" stroke="currentColor" strokeWidth="1.3"
+         strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="8" cy="8" r="6.3" />
+      {/* 大 = 一 + 人（三笔），按 12px 下的可辨性调过粗细与角度 */}
+      <path d="M5.1 6.5h5.8" />
+      <path d="M8 4.9 5.3 11.4" />
+      <path d="M8 6.5l2.7 4.9" />
+    </svg>
+  )
 }
 
 function fmt(t: number): string {
@@ -287,6 +324,12 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
   const rateMenu = useHoverMenu()
   const qualityMenu = useHoverMenu()
   const [fs, setFs] = useState(false)
+  /**
+   * **播完了**（`devlog/317`）：画面冻结在尾帧 + 中央一颗"重新播放"。
+   *
+   * 用户口径：「视频播放完后冻结在尾帧，显示重新播放的图标，点击后从头开始播放」。
+   */
+  const [ended, setEnded] = useState(false)
   const [idle, setIdle] = useState(false)
   /** 进度条 hover 预览（图二那颗时间气泡） */
   const [hover, setHover] = useState<{ x: number; t: number } | null>(null)
@@ -386,7 +429,16 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
         onKernelFallbackRef.current?.(why)
       },
       onProgress: (end) => setBuf(end),
-      onSeekApplied: (t) => { mseTargetRef.current = null; setCur(t); setMseSeeking(false) },
+      onSeekApplied: (t) => {
+        mseTargetRef.current = null
+        setCur(t)
+        setMseSeeking(false)
+        // 跳转期间是我们主动暂停的 ⇒ 落地后接着放（用户口径，devlog/317）
+        const el = videoRef.current
+        if (el && el.paused && wantPlayRef.current) {
+          void el.play().catch(() => { /* 策略拒绝：保持暂停，让用户再点一下 */ })
+        }
+      },
       // 慢段/换镜像/淘汰各一行：真机"卡不卡"要和代理那边的 `[视频代理]` 行对得上
       log: (line) => { void api.clientLog(line).catch(() => { /* 同上 */ }) },
     })
@@ -541,6 +593,7 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
     const onPlay = () => {
       wantPlayRef.current = true
       setPlaying(true)
+      setEnded(false)                  // 又开始放了 ⇒ 尾帧那张"重新播放"必须收掉（devlog/317）
       if (el.readyState < 3) showSpin()
     }
     /* ⚠️ 暂停要把音轨一起带走（devlog/299）：暂停可能来自**画中画小窗的按钮**、
@@ -617,6 +670,12 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
       }
     }
     const onCanPlay = () => endSpin()
+    /** 原生 `ended`（渐进式一定有；MSE 那边靠 `onTime` 那条兜底，见注释） */
+    const onEnded = () => {
+      wantPlayRef.current = false
+      setPlaying(false)
+      setEnded(true)
+    }
     const onTime = () => {
       /**
        * ⚠️ **等跳转落地期间不要用元素的 `currentTime` 覆盖界面**（devlog/312）：
@@ -637,10 +696,26 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
       // `playing` 在闭包里可能已经旧了 ⇒ 用函数式更新（值没变时 React 会跳过重渲染）。
       // ⚠️ 缓冲按住期间元素是暂停的，但**语义上仍在播** —— 不能拿 `el.paused` 直接覆盖，
       //    否则每一拍都把界面按回"暂停"（用户看到的 ▶/⏸ 闪动，devlog/302）。
+      // ⚠️ **跳转期间我们也会主动暂停**（devlog/317，用户口径"先暂停、跳完再播"）——
+      //    同样属于"语义上仍在播"，否则这场暂停会被和解成"用户按了暂停"，
+      //    底栏图标翻成 ▶、`wantPlay` 也没了（跳完就再也不放）。
       const holding = holdRef.current.active
-      const want = holding ? true : !el.paused
+      const seeking = mseTargetRef.current != null || seekRef.current.settling
+      const want = (holding || seeking) ? true : !el.paused
       setPlaying((prev) => (prev === want ? prev : want))
       if (!el.paused) startAudio()
+      /**
+       * **到尾且停着 = 播完了**（`devlog/317`）。
+       *
+       * 为什么不只信 `ended` 事件：① MSE 那边没有 `endOfStream()`（`devlog/314`，调了会把 seek 打死），
+       * 某些实现下 `ended` 不一定发；② "位置到尾 + 没在播 + 不是我们按住的 + 没在等跳转"是**硬事实**，
+       * 拿它兜底不会误报（按住/跳转两种我们自己的暂停都排除了）。
+       */
+      if (Number.isFinite(el.duration) && el.duration > 0
+          && el.currentTime >= el.duration - 0.35 && el.paused && !el.seeking
+          && !holding && mseTargetRef.current == null) {
+        setEnded(true)
+      }
     }
     const onMeta = () => {
       setDur(el.duration || 0)
@@ -680,6 +755,7 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
     el.addEventListener('loadedmetadata', onMeta)
     el.addEventListener('progress', onProg)
     el.addEventListener('volumechange', onVolumeChange)
+    el.addEventListener('ended', onEnded)
     /* 按住的看门狗：每 200ms 看一次"缓冲够了没"，带**死锁兜底**（暂停时浏览器不会自己继续拉缓冲）。
        "这一下暂停是谁按的"由 `hold.selfAt` 的时间窗判定（见 `onPause`），不在这里清标记 ——
        曾经的"按拍清标记"写法会被**晚到的** `pause` 事件骗过去（devlog/303）。 */
@@ -708,6 +784,7 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
       el.removeEventListener('loadedmetadata', onMeta)
       el.removeEventListener('progress', onProg)
       el.removeEventListener('volumechange', onVolumeChange)
+      el.removeEventListener('ended', onEnded)
       window.clearInterval(holdWatch)
     }
   }, [src, dualTrack, bufferedAhead])
@@ -817,30 +894,41 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
    */
   const wantPlayRef = useRef(false)
 
-  /** 收尾：视频轨到位后把音轨对齐（必要时复播）。**幂等**，并带兜底定时器（见下）。 */
+  /**
+   * 收尾：视频轨到位后把音轨对齐（必要时复播），并**把视频轨自己接回去**
+   * （跳转期间是我们主动 `pause` 的，见 `pauseForSeek`）。**幂等**，带兜底定时器。
+   */
   const settleAudio = useCallback(() => {
     const el = videoRef.current
+    if (!el) return
     const a = audioRef.current
-    if (!el || !a) return
     let done = false
     let timer = 0
     const apply = () => {
       if (done) return
       done = true
       window.clearTimeout(timer)
-      a.currentTime = el.currentTime
-      /**
-       * ⚠️ **画面还没真的在放就不要起音轨**（devlog/304）。
-       *
-       * 用户报的"卡在一帧……然后卡顿播放一会后同步"里，"过一会才同步"就是这一段造成的：
-       * seek 到位时元素可能还在等数据（暂停着、画面冻住），原来这里照着"意图"就把音轨放出去了
-       * ⇒ 声音先跑、画面还冻着 ⇒ 要等漂移纠正慢慢拉回来。现在只**对齐**，起播交给
-       * `onPlaying → startAudio()`（那一刻画面确实在出帧）。
-       */
-      if (!el.paused) {
-        if (seekRef.current.wasPlaying || wantPlayRef.current) {
+      if (a) {
+        a.currentTime = el.currentTime
+        /**
+         * ⚠️ **画面还没真的在放就不要起音轨**（devlog/304）。
+         *
+         * 用户报的"卡在一帧……然后卡顿播放一会后同步"里，"过一会才同步"就是这一段造成的：
+         * seek 到位时元素可能还在等数据（暂停着、画面冻住），原来这里照着"意图"就把音轨放出去了
+         * ⇒ 声音先跑、画面还冻着 ⇒ 要等漂移纠正慢慢拉回来。现在只**对齐**，起播交给
+         * `onPlaying → startAudio()`（那一刻画面确实在出帧）。
+         */
+        if (!el.paused && (seekRef.current.wasPlaying || wantPlayRef.current)) {
           void a.play().catch(() => { /* 策略拒绝：保持暂停 */ })
         }
+      }
+      /**
+       * **视频轨也要接回去**（devlog/317）：跳转期间是我们主动 `pause` 的
+       * （用户口径"先暂停，跳完再播"），不接回来就变成"跳完停在那儿"。
+       * 没有独立音轨的单文件档（小红书/微博）同样走这条路。
+       */
+      if (el.paused && wantPlayRef.current) {
+        void el.play().catch(() => { /* 策略拒绝：保持暂停，让用户再点一下 */ })
       }
       seekRef.current.settling = false
     }
@@ -851,6 +939,25 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
     } else {
       apply()
     }
+  }, [])
+
+  /**
+   * **跳转期间先停住**（2026-10-04 用户口径，`devlog/317`）。
+   *
+   * 「点击进度条跳转的时候先暂停视频，直到跳转完成后再开始播放，现在的情况是点击跳转后
+   * 依旧会接着播放原先的内容直到跳转完成后再开始播放跳转之后的内容」。
+   *
+   * 两道口径：
+   * - **仍然按"我们在播"记**（`holdRef.selfAt`）—— 否则 `onPause` 会把这次暂停当成"用户按的"
+   *   而把意图翻成暂停，跳转完成就再也起不来了（`devlog/302` 的同一个坑）；
+   * - 于是界面保持"在播 + 转圈"（不是 "⏸"），跳转落地后由 `onSeekApplied`/`seeked` 接着放。
+   */
+  const pauseForSeek = useCallback((el: HTMLVideoElement) => {
+    if (el.paused) return
+    holdRef.current.selfAt = Date.now()
+    holdRef.current.active = false          // 这不是"缓冲按住"，只是"跳转期间先别放"
+    el.pause()
+    audioRef.current?.pause()
   }, [])
 
   /**
@@ -879,23 +986,26 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
       if (live) { setCur(target); return }
       mseTargetRef.current = target
       setMseSeeking(true)
+      setEnded(false)                       // 从尾帧跳走 ⇒ 收掉"重新播放"（devlog/317）
+      pauseForSeek(el)                      // ★ 跳转期间先停住（不让旧内容继续放，devlog/317）
       startProbe(el, 'seek', target)
       kernel.seekTo(target)
       setCur(target)
       return
     }
     const a = audioRef.current
-    if (a && !seekRef.current.settling) {          // 进入一次 seek：先让音轨停下
+    if (!seekRef.current.settling) {               // 进入一次 seek：先让音轨停下
       seekRef.current.settling = true
       seekRef.current.wasPlaying = wantPlayRef.current || !el.paused
-      a.pause()
+      a?.pause()
       // 诊断窗口从**按下那一刻**开始（用户感知的"卡住"就是从这时算的）
       startProbe(el, 'seek', target)
     }
+    if (!live) pauseForSeek(el)
     el.currentTime = target
     setCur(el.currentTime)
     if (!live) settleAudio()
-  }, [settleAudio, startProbe])
+  }, [settleAudio, startProbe, pauseForSeek])
 
   /**
    * 拖拽的**最后一次落点**（0–1）与"刚刚提交过"的时刻。
@@ -929,6 +1039,30 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
   }, [])
 
   /**
+   * **重新播放**（devlog/317）：从头开始 —— 尾帧那张卡片点一下就回到 0 并接着放。
+   *
+   * ⚠️ MSE 下必须走 `kernel.seekTo(0)`：播到末尾时开头那几段**可能已经被淘汰**
+   * （`KEEP_BEHIND=25s`），直接 `play()` 会让元素停在没有数据的 0 秒上；交给内核取第 0 段才稳。
+   * 渐进式则直接写 `currentTime`（浏览器自己会取数）。
+   */
+  const replay = useCallback(() => {
+    const el = videoRef.current
+    if (!el) return
+    setEnded(false)
+    const kernel = mseRef.current
+    if (kernel) {
+      mseTargetRef.current = 0
+      setMseSeeking(true)
+      startProbe(el, 'replay', 0)
+      kernel.seekTo(0)
+    } else {
+      try { el.currentTime = 0 } catch { /* 元素已卸载：交给下面的 play 自己处理 */ }
+    }
+    setCur(0)
+    startPlayback()
+  }, [startPlayback, startProbe])
+
+  /**
    * 快进/快退 `delta` 秒（方向键）。MSE 下也必须走 `kernel.seekTo()` —— 直接写
    * `el.currentTime` 会落在没有缓冲的地方，被浏览器夹回去（"按了没反应"）。
    */
@@ -938,6 +1072,8 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
     const kernel = mseRef.current
     const total = kernel ? kernel.duration() : el.duration || 0
     const target = Math.min(Math.max(0, (el.currentTime || 0) + delta), total || 0)
+    setEnded(false)
+    pauseForSeek(el)                     // 与点进度条同一套：跳转期间先停住（devlog/317）
     if (kernel) {
       mseTargetRef.current = target
       setMseSeeking(true)
@@ -946,8 +1082,9 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
       setCur(target)
     } else {
       el.currentTime = target
+      settleAudio()                      // 到位后把元素接回去（MSE 那边由 `onSeekApplied` 接）
     }
-  }, [startProbe])
+  }, [startProbe, pauseForSeek, settleAudio])
 
   // 快捷键：只在控件区域内接管（不抢抽屉的 Esc / 滚动）
   const onKey = (e: React.KeyboardEvent) => {
@@ -1059,9 +1196,18 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
         />
       )}
 
-      {!playing && !loading && !buffering && !mseSeeking && (
+      {!playing && !loading && !buffering && !mseSeeking && !ended && (
         <button type="button" className="vp-bigplay" aria-label="播放" onClick={toggle}>
           <Play className="size-7" />
+        </button>
+      )}
+
+      {/* **播完了**：画面冻在尾帧，中央给一颗"重新播放"（用户口径，devlog/317）。
+          与上面那颗大播放键**互斥**（`ended` 时只出这一颗），否则两颗会叠在正中间。 */}
+      {ended && !loading && (
+        <button type="button" className="vp-bigplay vp-replay" aria-label="重新播放" onClick={replay}>
+          <RotateCcw className="size-6" aria-hidden="true" />
+          <span className="vp-replay-label">重新播放</span>
         </button>
       )}
 
@@ -1186,9 +1332,7 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
                       {q.label}
                       {/* 「需大会员」用**一颗小图标**表示（文字太占宽、又把行撑换行了）；
                           无障碍名走 `title` + `aria-label`，信息不丢 */}
-                      {q.note && (
-                        <Crown className="vp-crown" aria-hidden="true" data-vp-note={q.note} />
-                      )}
+                      {q.note && <VipBadge note={q.note} />}
                     </button>
                   ))}
                 </div>
