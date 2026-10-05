@@ -1832,7 +1832,36 @@ export async function runUiProbe(): Promise<void> {
     const toolbarShown = document.querySelector('.view-toolbar')?.getAttribute('data-shown') ?? null
     const entry = document.querySelector<HTMLElement>('[data-thirdparty-entry]')
     const entryBox = entry?.getBoundingClientRect() ?? null
-    entry?.click()
+    // ⚠️ **用户实测报的那一条**（2026-10-05）：「图标没办法 hover 触发，只能跟上方工具栏一起
+    //    下拉」——根因是右上组那个 `div` 没挂 `toolsRef` ⇒ 热区只有中央切换条那一个矩形。
+    //    这条判据就照用户的动作走一遍：记住图标所在的位置 → 移出去等工具条收回 →
+    //    **只把指针移到图标那个点**（中央那条完全没碰到）→ 工具条与图标必须自己回来。
+    let revealByIcon: string | null = null
+    if (panel && entryBox) {
+      const awayY = (sw?.top ?? 0) + 400
+      panel.dispatchEvent(new MouseEvent('mousemove', {
+        clientX: entryBox.left - 300, clientY: awayY, bubbles: true }))
+      await sleep(1100)                     // grace 900ms + 淡出
+      const hidden = document.querySelector('.view-toolbar')?.getAttribute('data-shown')
+      panel.dispatchEvent(new MouseEvent('mousemove', {
+        clientX: entryBox.left + entryBox.width / 2,
+        clientY: entryBox.top + entryBox.height / 2, bubbles: true }))
+      await sleep(500)                      // dwell 140ms + 淡入
+      const back = document.querySelector('.view-toolbar')?.getAttribute('data-shown')
+      const shownAgain = document.querySelector<HTMLElement>('[data-thirdparty-entry]')
+      const box2 = shownAgain?.getBoundingClientRect() ?? null
+      revealByIcon = `收回到 ${hidden} → 只移到图标处 → ${back}`
+        + `（图标可见=${!!box2 && box2.width > 0}）`
+      // 收尾：把工具条重新唤出来，后面的点击才点得着
+      if (back !== '1') {
+        if (sw) {
+          panel.dispatchEvent(new MouseEvent('mousemove', {
+            clientX: sw.left + sw.width / 2, clientY: sw.top + sw.height / 2, bubbles: true }))
+          await sleep(500)
+        }
+      }
+    }
+    document.querySelector<HTMLElement>('[data-thirdparty-entry]')?.click()
     await sleep(900)                       // 拉一次现状（本机后端，够快）
     const tp = document.querySelector<HTMLElement>('[data-thirdparty-dialog]')
     const thirdparty = {
@@ -1849,6 +1878,8 @@ export async function runUiProbe(): Promise<void> {
         return { cls: entry.className, opacity: cs.opacity, pointerEvents: cs.pointerEvents,
                  radius: cs.borderRadius }
       })() : null,
+      /** 「只把指针移到图标那个点，工具条与图标要自己回来」（用户实测报的那条） */
+      revealByIcon,
       opened: !!tp,
       blocks: tp ? tp.querySelectorAll('[data-thirdparty-account]').length : -1,
       hasRefresh: !!tp?.querySelector('[data-thirdparty-refresh]'),

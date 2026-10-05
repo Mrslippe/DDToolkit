@@ -603,7 +603,12 @@ return (
             reveal 状态）**全部照抄** —— 各写一套的下场就是两处慢慢漂
             （当年"背景工具组自带一套定时器"就与工具条错拍过，见 `.bg-tools` 的注释）。 */}
         {scene.view === 'archive' && vtuber && (
-          <div className="bg-tools">
+          /* ⚠️ `ref={toolsRef}` **不能省**（2026-10-05 用户实测报的："图标没办法 hover 触发，
+             只能跟上方工具栏一起下拉"）：工具条的热区是 `[switchRef, toolsRef]` 两个矩形
+             （见 `useToolbarVisibility`），右上组不挂 ref 就等于**右边没有热区** ——
+             指针移到图标那个位置不算"进热区"，只有中央切换条能召唤。
+             卡片视图那一支一直挂着它，所以那边一直是对的。 */
+          <div className="bg-tools" ref={toolsRef}>
             <FloatPill
               size="md"
               shape="icon"

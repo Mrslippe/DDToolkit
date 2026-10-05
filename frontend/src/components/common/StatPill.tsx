@@ -1,15 +1,19 @@
 import pillBilibili from '../../assets/pills/bilibili.png'
 import pillWeibo from '../../assets/pills/weibo.png'
 import pillRednote from '../../assets/pills/rednote.png'
+import pillDouyin from '../../assets/pills/douyin.png'
 import { formatCount } from '../../utils/format'
 
-/** 平台药丸图像底：按平台映射 docs/design/pills 资产；未知平台回退粉/珊瑚色底。
- *  ⚠️ 小红书用 **rednote** 品牌图（2026-10-03 用户提供的新图，替换旧图）——
- *  平台**标识键**仍是 `xiaohongshu`（库里的值，改它要做数据迁移），对外英文名以图为准。 */
+/** 平台药丸图像底：按平台映射 `assets/pills` 资产（源图在 `docs/design/pills/`，
+ *  两处逐字节相同 —— 2026-10-05 核对过四张）；未知平台回退粉/珊瑚色底。
+ *  ⚠️ 小红书用 **rednote** 品牌图（平台**标识键**仍是 `xiaohongshu`：那是库里的值，
+ *  改它要做数据迁移；对外英文名以图为准）。2026-10-05 用户重做了 rednote / douyin 两张，
+ *  这里同步替换并补上此前**没有映射**的抖音（它原先一直走粉/珊瑚色底）。 */
 const PILL_BG: Record<string, string> = {
   bilibili: pillBilibili,
   weibo: pillWeibo,
   xiaohongshu: pillRednote,
+  douyin: pillDouyin,
 }
 
 interface Props {

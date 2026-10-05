@@ -3341,6 +3341,7 @@ def main() -> int:
                 print(f"  钮：存在={tp.get('entryExists')} 工具条={tp.get('toolbarShown')!r} "
                       f"可见={tp.get('entryVisible')} 盒={tp.get('entryBox')}")
                 print(f"      样式={tp.get('entryStyle')}")
+                print(f"      只 hover 右侧图标处唤出：{tp.get('revealByIcon')}")
                 print(f"  窗：打开={tp.get('opened')} 账号块={tp.get('blocks')} "
                       f"补拉钮={tp.get('hasRefresh')}（禁用={tp.get('refreshDisabled')}）")
                 print(f"  数据源={tp.get('sources')!r} 第三方场次行={tp.get('liveRows')}")
@@ -3355,6 +3356,12 @@ def main() -> int:
                 elif not tp.get("entryVisible"):
                     bad.append(f"@{w} 第三方数据：入口钮在工具条显形时仍不可见（盒="
                                f"{tp.get('entryBox')}）")
+                elif "→ 1" not in str(tp.get("revealByIcon") or ""):
+                    # 用户 2026-10-05 实测：「图标没办法 hover 触发，只能跟上方工具栏一起下拉」
+                    # ——右上组不挂热区 ref 时就是这样。判据：**只**把指针移到图标那个点，
+                    # 工具条与图标必须自己回来（中央切换条完全没碰到）。
+                    bad.append(f"@{w} 第三方数据：只把指针移到右侧图标处呼不出工具条 —— "
+                               f"{tp.get('revealByIcon')!r}（热区少了右上组那一个矩形？）")
                 elif not tp.get("opened"):
                     bad.append(f"@{w} 第三方数据：点了入口钮但小窗没开")
                 elif not tp.get("hasRefresh"):
