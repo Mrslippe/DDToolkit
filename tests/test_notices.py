@@ -157,7 +157,7 @@ def _get(client, status: dict) -> dict:
 # ── ① 字段契约 ─────────────────────────────────────────────────────────
 
 ALLOWED_KEYS = {"id", "kind", "text", "value", "detail", "source", "sticky",
-                "expiresAt", "createdAt", "form", "action"}
+                "expiresAt", "createdAt", "form", "read", "action"}
 
 #: 三形态（`docs/design/notices/channel-and-layering.md` §2.2）—— 与 `kind` **正交**：
 #: `kind` 管长相（字形/点色）、`form` 管行为（活多久、怎么消失）。两者今天恰好一一对应是巧合。
@@ -616,6 +616,44 @@ def test_ack_batch_is_one_round_trip(client, db):
     # 批量里的空串被忽略（不让垃圾进集合）
     client.post("/vtuber/notices/ack", json={"ids": ["  ", "report-9"]})
     assert N.read_ids(db) == ["report-9", "report-3", "report-1", "report-2"]
+
+
+def test_read_mode_is_explicit_and_states_are_not_ackable(client, db):
+    """⑥‴ **已读方式**是显式口径（L4），且**状态类不许进已读集合**。
+
+    两条判据守两个不同的错法：
+    ① `read` 字段按形态给出（`notice`→auto / `action`→confirm / `state`→auto）——
+       前端与后端都按它决定"要不要用户确认"，少一个键就等于把语义藏在 `form` 里；
+    ② **稳定的状态 id 一旦进已读集合，同一条状态再次成立时会被误判成已读** ——
+       症状最阴：再次被限流时界面什么都不显示。所以 ack 那两个口都要拒收。
+    """
+    body = _get(client, _status(
+        acc_running=True, ext_running=True, ext_auto=False,
+        rate={"active": True, "reason": "412", "seconds_left": 30}))
+    N.note_run("post", 21, witnessed=True)
+    N.record_message("完成")
+    body = _get(client, _status(
+        acc_running=True, ext_running=True, ext_auto=False,
+        post_result={"seq": 21, "kind": "full_all", "stored": 1, "skipped": 0, "issues": []},
+        rate={"active": True, "reason": "412", "seconds_left": 30}))
+    by_form = {n["id"]: (n["form"], n["read"]) for n in body["notices"]}
+    assert by_form["progress-account"] == ("state", N.READ_AUTO)
+    assert by_form["rate-limit"] == ("state", N.READ_AUTO)
+    assert by_form["report-21"] == ("action", N.READ_CONFIRM)
+    assert by_form["msg-1" if "msg-1" in by_form else next(
+        k for k in by_form if k.startswith("msg-"))][1] == N.READ_AUTO
+
+    # ② 状态类 id：单条与批量两个口都拒收（幂等返回，不写盘）
+    assert client.post("/vtuber/notices/ack", json={"id": "rate-limit"}).json()["acked"] == []
+    assert client.post("/vtuber/notices/ack", json={"id": "progress-account"}).json()["acked"] == []
+    got = client.post("/vtuber/notices/ack",
+                      json={"ids": ["rate-limit", "login-expired", "report-21"]}).json()["acked"]
+    assert got == ["report-21"], "批量口只该收下处置类那条"
+    assert N.read_ids(db) == ["report-21"]
+    # 反向对照：状态**没有**被写进去 ⇒ 再次限流时它照样出得来
+    again = _get(client, _status(rate={"active": True, "reason": "412", "seconds_left": 20}))
+    assert any(n["id"] == "rate-limit" for n in again["notices"]), \
+        "状态类被误写进已读集合 ⇒ 再次限流时界面什么都不显示"
 
 
 def test_route_serves_notices(client):

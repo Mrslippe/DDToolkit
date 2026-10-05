@@ -125,14 +125,27 @@ describe('同级合并（胶囊上那句）', () => {
     expect(capsuleText(list, NOW)).toContain('帖子抓取中')
   })
 
-  it('一键已读只针对「需要处理」组', () => {
+  it('一键已读只针对「需要处理」组，且只收 `read=confirm` 的那些（L4）', () => {
     const list = [
-      n({ id: 'report-1', kind: 'report', form: 'action', text: '全量完成' }),
+      n({ id: 'report-1', kind: 'report', form: 'action', read: 'confirm', text: '全量完成' }),
       n({ id: 'progress-post', form: 'state', text: '帖子抓取中' }),
       n({ id: 'live-1', kind: 'alert', form: 'notice', text: 'A 开播了' }),
     ]
     expect(todoIds(list, NOW)).toEqual(['report-1'])
     expect(todoIds([n({ id: 'p', form: 'state' })], NOW)).toEqual([])
+  })
+
+  it('⚠️ 状态类**即使被误放进 todo 组也不许一键已读**（L4 的第二道防线）', () => {
+    // 后端把稳定 id 的状态放进已读集合的后果很阴：同一条状态**再次成立**时会被误判成已读
+    //（症状：再次被限流却什么都不显示）。所以前端按 `read` 而不是 `form` 筛。
+    const sneaky = n({ id: 'rate-limit', kind: 'alert', form: 'action', read: 'auto',
+                       text: '上游限流：冷却中' })
+    expect(todoIds([sneaky], NOW)).toEqual([])
+  })
+
+  it('缺 `read` 字段（老后端）时按 `form === action` 兜底', () => {
+    const legacy = n({ id: 'report-9', kind: 'report', form: 'action', text: '全量完成' })
+    expect(todoIds([legacy], NOW)).toEqual(['report-9'])
   })
 })
 

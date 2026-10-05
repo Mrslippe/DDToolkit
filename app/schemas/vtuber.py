@@ -222,6 +222,11 @@ class NoticeOut(BaseModel):
       `action` 需要用户决定。**持续时间与已读方式都由它推导**（不再手写五种时长）；
     - `createdAt`：条目**创建时刻**（服务端毫秒口径）—— 面板要显示"3 分钟前"，
       而 `expiresAt` 只能表达"什么时候没了"。老后端没有它 ⇒ 前端不显示相对时间（不猜）。
+    - `read`（L4）：**已读方式**，`auto` = 到点自己消失（不需要用户确认）·
+      `confirm` = 只能用户确认（落 `app_meta` 的已读集合）。
+      ⚠️ 它与 `form` 的关系**不是推导出来的，是显式写下的**（见 `services/notices` 里
+      `_read_mode` 的注释）：状态类是"事实变了"（既不是自动已读、也不该被用户 ack 掉），
+      处置类是"用户看过了"。把两件事塞进一个字段，下一个平台接入时一定有人推错。
     """
     id: str
     kind: str                     # alert | progress | report | message（**视觉**：字形与点色）
@@ -233,6 +238,7 @@ class NoticeOut(BaseModel):
     expiresAt: int | None = None  # 毫秒（**服务端 `now` 口径**，见响应的 `now`）
     createdAt: int | None = None  # 毫秒（服务端 `now` 口径）；None = 老后端/算不出来
     form: str | None = None       # state | notice | action
+    read: str = "auto"            # auto | confirm —— **已读方式的显式口径**（见下）
     action: dict | None = None    # {label, kind}
 
 

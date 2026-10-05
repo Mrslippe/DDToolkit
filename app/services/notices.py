@@ -56,6 +56,15 @@ FORM_STATE = "state"      # 现在有什么在发生（进度 / 冷却 / 登录�
 FORM_NOTICE = "notice"    # 刚刚发生了什么（开播 / 同步完成 / 新版本）：有 TTL，自动已读
 FORM_ACTION = "action"    # 需要用户决定（完成报告）：常驻到用户确认
 
+#: **已读方式**（L4，设计案 §3.1）。两条语义不同的东西，不能共用一个字段：
+#: - `READ_AUTO`：到点自己消失 —— "已经过去了"，不需要谁确认（告知类、以及**状态类**）；
+#: - `READ_CONFIRM`：只能用户确认（落 `app_meta` 的已读集合）—— "你得看一眼"。
+#: ⚠️ **状态类的 read 是 auto 但含义与告知类不同**：它消失是**事实变了**（任务结束了），
+#: 不是"用户看过了"。所以它**既不进已读集合、也不该被「一键已读」清掉**
+#: （清掉之后同一条状态再次成立——例如再次限流——会被集合里的旧 id 误判成已读）。
+READ_AUTO = "auto"
+READ_CONFIRM = "confirm"
+
 #: 瞬时消息的展示时长：前端 `utils/noticeStream.ts::PILL_MS`（= `notificationHub.EVENT_TTL_MS`）。
 #: ⚠️ L1（2026-10-05）从 4000 提到 6000（设计案 §3.1「告知类默认时长」）——
 #: **三处必须同值**（这里 / `PILL_MS` / `EVENT_TTL_MS`），改一处不改另两处会让"同一条消息
@@ -179,8 +188,16 @@ def ack_notice(db: Session, notice_id: str) -> list[str]:
 
     为什么必须落库：今天「知道了」只 `setDoneReport(null)` 清内存 ⇒ 刷新 / 深休眠重建
     之后**报告原地复活**（目标架构 §2.3 要修的就是这条）。
+
+    ⚠️ **状态类不许 ack**（L4）：`rate-limit` / `login-expired` / `progress-*` 的 id 是
+    **稳定**的，一旦进了已读集合，同一条状态**再次成立**时会被 `_report_notices` 那类
+    过滤误判成"用户看过了"（症状：再次被限流却什么都不显示）。所以这里直接拒收 ——
+    前端也不该给状态类发 ack（它消失是事实变了，不是用户点了什么）。
     """
     nid = (notice_id or "").strip()
+    if is_state_id(nid):
+        logger.info(f"忽略对状态类条目的已读请求（id={nid}）：它消失是事实变了，不是用户看过了")
+        return read_ids(db)
     ids = read_ids(db)
     if not nid or nid in ids:
         return ids
@@ -189,14 +206,35 @@ def ack_notice(db: Session, notice_id: str) -> list[str]:
     return ids
 
 
+#: 状态类条目的 id（**稳定 id** ⇒ 不能进已读集合，见 `ack_notice`）。
+#: `progress-*` 与 `report-*` 都是稳定 id，但语义相反：前者是状态（不许 ack）、
+#: 后者是处置（**必须** ack）。这张表只列"不许 ack"的那些。
+_STATE_IDS = ("rate-limit", "login-expired")
+_STATE_PREFIXES = ("progress-", "pushed-progress")
+
+
+def is_state_id(notice_id: str) -> bool:
+    """这个 id 是不是**状态类**（不许被 ack 掉）？"""
+    nid = (notice_id or "").strip()
+    return nid in _STATE_IDS or nid.startswith(_STATE_PREFIXES)
+
+
 def ack_notices(db: Session, notice_ids: list[str]) -> list[str]:
     """一次记多条已读（面板的「一键已读」，L1）。
 
     为什么要有批量口：前端循环发 N 次单条 ack 会出现"清到一半失败、面板半干净"的中间态，
     而用户看到的是一次点击。整批一次写盘，幂等与上限口径与单条那条**逐字相同**。
+
+    ⚠️ 状态类 id 在这一层就被滤掉（L4，同 `ack_notice`）—— 「一键已读」清的是
+    「需要处理」那一组，而组里只可能有处置类；这条过滤是**第二道防线**
+    （前端传错了、或将来有人把状态类塞进那一组时，别静默写进已读集合）。
     """
     ids = read_ids(db)
-    fresh = [str(x).strip() for x in (notice_ids or []) if str(x).strip()]
+    fresh = [str(x).strip() for x in (notice_ids or [])
+             if str(x).strip() and not is_state_id(str(x))]
+    skipped = len([x for x in (notice_ids or []) if str(x).strip()]) - len(fresh)
+    if skipped:
+        logger.info(f"批量已读跳过了 {skipped} 条状态类条目（它们不是'用户看过了'）")
     add = [x for x in fresh if x not in ids]
     if not add:
         return ids
@@ -334,6 +372,21 @@ def _ring_notices(now_ms: int) -> list[dict]:
     return out
 
 
+def _read_mode(form: str) -> str:
+    """形态 → 已读方式（L4）。**显式写下来**，不从 `form` 隐式推导：
+
+    - `notice`（告知）→ `auto`：到点自己消失（"已经过去了"）；
+    - `action`（处置）→ `confirm`：只能用户确认（落 `app_meta`）；
+    - `state`（状态）→ `auto`，**但含义与告知不同**：它消失是"事实变了"，不是"用户看过了"
+      ⇒ 它不进已读集合、也不该被「一键已读」清掉（清了之后同一条状态再次成立会被误判成已读）。
+
+    为什么不做成 `form == "action"` 那种一行推导：两者今天一一对应是**巧合** ——
+    "要不要用户确认"与"这是什么形态"是两个问题（将来完全可能出现"需要确认的状态"或
+    "自动过期的处置"）。把它写成一张表，接下一个平台的人就有一处可改、也看得见语义。
+    """
+    return READ_CONFIRM if form == FORM_ACTION else READ_AUTO
+
+
 def _normalize(n: dict) -> dict:
     """把一条通知补齐成**完整键集合**（缺的填 None/False）。
 
@@ -346,8 +399,9 @@ def _normalize(n: dict) -> dict:
     """
     out = {"id": n["id"], "kind": n["kind"], "text": n["text"], "value": None,
            "detail": None, "source": None, "sticky": False, "expiresAt": None,
-           "createdAt": None, "form": FORM_STATE, "action": None}
+           "createdAt": None, "form": FORM_STATE, "read": READ_AUTO, "action": None}
     out.update(n)
+    out["read"] = _read_mode(out["form"])
     return out
 
 

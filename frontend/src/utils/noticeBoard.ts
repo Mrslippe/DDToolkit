@@ -144,10 +144,20 @@ export function capsuleText(list: Notice[], now: number): string {
   return s ? s.headline : ''
 }
 
-/** 面板里"某一组有没有可一键已读的东西"（只有 todo 组有「一键已读」） */
+/**
+ * 面板里"某一组有没有可一键已读的东西"（只有 todo 组有「一键已读」）。
+ *
+ * ⚠️ 判据是 **`read === 'confirm'`**（L4），不是 `form === 'action'`：
+ * "要不要用户确认"与"这是什么形态"是两个问题，今天一一对应是巧合 ——
+ * 按 `form` 筛会在"将来出现需要确认的状态"时把状态类一起清掉（清掉之后同一条状态
+ * 再次成立会被已读集合误判，见 `services/notices.ack_notice`）。
+ * 缺 `read` 字段时按 `form` 兜底（老后端没有这个键），且只认 `action`。
+ */
 export function todoIds(list: Notice[], now: number): string[] {
   const s = sectionNotices(list, now).find((x) => x.group === 'todo')
-  return s ? s.items.map((n) => n.id) : []
+  if (!s) return []
+  return s.items.filter((n) => (n.read ? n.read === 'confirm' : n.form === 'action'))
+    .map((n) => n.id)
 }
 
 // ── 相对时间 ────────────────────────────────────────────────────────────
