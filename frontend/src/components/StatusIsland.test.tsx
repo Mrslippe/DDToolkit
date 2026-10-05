@@ -30,6 +30,11 @@ beforeEach(() => {
   root = createRoot(host)
   // 面板走 portal 挂到 body，宿主容器不需要额外准备
   vi.useFakeTimers()
+  // ⚠️ **把系统时间也钉在 `NOW`**（2026-10-05 修）：组件的"秒表"是
+  // `Math.max(nowProp, Date.now())`。不钉的话 `Date.now()` 是**真实**时间（≈1.79e12），
+  // 而测试里的通知锚在 `NOW`（1.7e12）⇒ 每个条目一上来就被体检判成**已过期**，
+  // 于是"退场中间态"永远看不到（那条用例就是因此红的）。
+  vi.setSystemTime(NOW)
 })
 
 afterEach(() => {
@@ -70,12 +75,14 @@ function openPanel() {
 }
 
 describe('面板的三组分区', () => {
-  it('三形态各进各组，顺序固定（正在进行 → 需要处理 → 最近）', () => {
+  it('三形态各进各组，顺序固定（最近 → 需要处理 → 正在进行）', () => {
     render([message(), progress(), report()])
     const panel = openPanel()
     expect(panel).toBeTruthy()
     const groups = [...panel!.querySelectorAll('.si-sec')].map((s) => s.getAttribute('data-group'))
-    expect(groups).toEqual(['doing', 'todo', 'recent'])
+    // ⚠️ 用户 2026-10-05 把「最近」提到最顶（"这些通知是最实时的信息"）——
+    //    这条顺序与 `noticeBoard.GROUP_ORDER` 必须一致（改一处不改另一处会红）
+    expect(groups).toEqual(['recent', 'todo', 'doing'])
     // 每一组里那条正是对应形态
     const items = (g: string) =>
       [...panel!.querySelectorAll(`.si-sec[data-group="${g}"] .si-item`)]
@@ -190,36 +197,77 @@ describe('倒计时（只给会自动消失的条目）', () => {
 })
 
 describe('一键已读与自动已读的退场', () => {
-  it('「全部已读」只长在「需要处理」那组，动作是 `ack-all`', () => {
+  it('「全部已读」在**面板右上角**（头部），清的范围见 `ackAllIds`', () => {
     const onAction = render([message(), report()])
     const panel = openPanel()
     const btns = [...panel!.querySelectorAll('[data-ack-all]')]
     expect(btns).toHaveLength(1)
-    expect(btns[0].closest('.si-sec')?.getAttribute('data-group')).toBe('todo')
+    // 位置：面板头部（原来长在「需要处理」组标题右侧、并且只在有 todo 时才出现）
+    expect(btns[0].closest('.si-panel-head')).toBeTruthy()
     act(() => { (btns[0] as HTMLElement).click() })
     expect(onAction).toHaveBeenCalledWith('ack-all', expect.anything())
-    // ⚠️ 载荷**必须是 `todoIds` 算出来的那批 id**（不是空、也不是随手一个）——
-    //    宿主 `TopBar` 拿它去 ack；只断言"被调用过"会漏掉"传了个空数组"这种实现。
-    const payload = onAction.mock.calls[0]?.[1] as unknown as { id?: string } | undefined
-    expect(payload?.id).toBe('report-1')
-    // 「最近」组没有这个按钮
-    expect(panel!.querySelector('.si-sec[data-group="recent"] [data-ack-all]')).toBeNull()
+    // 组标题里**不再**有它（挪走了，不许两处都在）
+    expect(panel!.querySelector('.si-sec-title [data-ack-all]')).toBeNull()
   })
 
-  it('过期的条目：先挂 `is-out` 滑出，动画放完才从 DOM 摘掉', () => {
+  it('「全部已读」只在**真有可清的**才渲染（只有状态类时不给死按钮）', () => {
+    render([progress()])
+    const panel = openPanel()
+    expect(panel!.querySelector('[data-ack-all]')).toBeNull()
+  })
+
+  it('点条目正文 = 已读（动作 `dismiss`），状态类**不可点**', () => {
+    const onAction = render([message(), progress()])
+    const panel = openPanel()!
+    const rows = [...panel.querySelectorAll<HTMLElement>('.si-item')]
+    // 告知类那条可点（`can-ack`）
+    const m = rows.find((r) => r.getAttribute('data-form') === 'notice')!
+    expect(m.classList.contains('can-ack')).toBe(true)
+    act(() => { m.click() })
+    expect(onAction).toHaveBeenCalledWith('dismiss', expect.objectContaining({ id: 'msg-1' }))
+    // 状态类那条不可点（它消失应当是事实变了，不是"用户看过了"）
+    const p = rows.find((r) => r.getAttribute('data-form') === 'state')!
+    expect(p.classList.contains('can-ack')).toBe(false)
+    act(() => { p.click() })
+    expect(onAction).toHaveBeenCalledTimes(1)
+  })
+
+  it('点**动作按钮**只执行动作、不把通知标已读（stopPropagation）', () => {
+    const onAction = render([report()])
+    const panel = openPanel()!
+    const btn = panel.querySelector<HTMLElement>('.si-item-action')!
+    act(() => { btn.click() })
+    expect(onAction).toHaveBeenCalledWith('open-report', expect.anything())
+    // 只有动作那一次调用 —— 没有跟着一条 `dismiss`
+    expect(onAction.mock.calls.map((c) => c[0])).toEqual(['open-report'])
+  })
+
+  it('过期的条目：先挂 `is-out` 滑出，动画放完才从 DOM 摘掉（且**留在原组**里）', () => {
     render([message({ createdAt: NOW, expiresAt: NOW + 1000 }), report()])
     const panel = openPanel()
     expect(panel!.querySelectorAll('.si-item')).toHaveLength(2)
     // ⚠️ 只推进到"秒表刚跳过 TTL"那一刻（1s）—— 推多了会把 220ms 的**移除定时器**也一起
     //    放掉，于是中间态永远看不到（第一版推 1100ms 就是这么假红的）。
-    act(() => { vi.advanceTimersByTime(1050) })
-    // 这一拍它已经不该算"活着"（不在 `.si-sec` 里），但仍在 DOM 里播退场动画
-    expect(panel!.querySelectorAll('.si-sec .si-item')).toHaveLength(1)
-    const leaving = panel!.querySelector('.si-list-leaving .si-item.is-out')
-    expect(leaving).toBeTruthy()
+    act(() => { vi.advanceTimersByTime(1020) })
+    // 这一拍它已经不该算"活着"（`.si-sec .si-item:not(.is-out)` 里只剩另一条），
+    // 但仍在 DOM 里播退场动画，**而且还在它原来那个组里**（不再跳到列表最下面）
+    const alive = panel!.querySelectorAll('.si-sec .si-item:not(.is-out)').length
+    expect(alive).toBe(1)
+    const out = panel!.querySelector<HTMLElement>('.si-item.is-out')
+    expect(out).toBeTruthy()
+    // **它就是刚过期的那条**（不是别的行）
+    expect(out!.getAttribute('data-notice-id')).toBe('msg-1')
+    // 且**钉在原来的位置**（`top` 由 FLIP 的快照给）：这条是"从它的位置滑出去"的判据 ——
+    // 挂到别的容器里、或位置被重排，都会让它看起来"跳走了"。
+    // ⚠️ 不断言它属于哪个 `.si-sec`：那条路径由"这一组是否还在渲染"决定（整组只剩它时会被
+    //    兜底容器接住），那是实现细节，不是用户能感知的事实。
+    expect(out!.style.position).toBe('absolute')
+    expect(out!.style.top).not.toBe('')
+    // ⚠️ 时间窗很窄：**必须在 1000ms（秒表判过期）之后、1220ms（移除定时器）之前**采样。
+    //    1050 也够，但 1020 留的余量大（本机 CI 上跑得过密时 1050 偶尔会踩到移除那一拍）。
     // 动画放完 ⇒ 真正移除
     act(() => { vi.advanceTimersByTime(400) })
-    expect(panel!.querySelector('.si-list-leaving')).toBeNull()
+    expect(panel!.querySelector('.si-item.is-out')).toBeNull()
   })
 })
 
@@ -238,8 +286,9 @@ describe('胶囊文案', () => {
   it('`data-headline-group` / `data-section-counts` 暴露"这句话来自哪一组"', () => {
     render([message(), progress(), report()])
     const cap = host.querySelector('.si-island')!
-    expect(cap.getAttribute('data-headline-group')).toBe('doing')
-    expect(cap.getAttribute('data-section-counts')).toBe('doing:1,todo:1,recent:1')
+    // 顺序变了（最近在最顶）⇒ 胶囊那句话现在来自 `recent`
+    expect(cap.getAttribute('data-headline-group')).toBe('recent')
+    expect(cap.getAttribute('data-section-counts')).toBe('recent:1,todo:1,doing:1')
   })
 })
 
@@ -259,9 +308,9 @@ describe('已读路径（源码级结构判据）', () => {
     expect(src).toContain('const ackIds = (ids: string[])')
     // 本地那份必须被过滤（否则 sticky 的本地条目永远删不掉）
     expect(src).toMatch(/setLocalNotices\(\(prev\) => \{\s*const kept = prev\.filter\(\(n\) => !ids\.includes\(n\.id\)\)/)
-    // 单条（dismiss）与整组（ack-all）都不许再各写一遍过滤逻辑
+    // 单条（dismiss / 点条目）与整组（ack-all）都不许再各写一遍过滤逻辑
     expect(src).toContain('ackIds([notice.id])')
-    expect(src).toMatch(/const ids = todoIds\(notices, now\)[\s\S]{0,80}ackIds\(ids\)/)
+    expect(src).toMatch(/const ids = ackAllIds\(notices, now\)[\s\S]{0,80}ackIds\(ids\)/)
     // 「服务端那份」仍要真的发请求（本地 id 不许发给后端：会污染服务端已读集合）
     expect(src).toContain('api.ackNotices(serverIds)')
     expect(src).toContain('.some((n) => n.id === id)')

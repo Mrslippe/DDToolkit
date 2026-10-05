@@ -455,6 +455,25 @@
   align-items: flex-start;
   gap: 8px;
   padding: 7px 12px;
+  /* ⚠️ FLIP 的"顶上来"要靠这条过渡（见 `StatusIsland.tsx` 的 `playFlip`）：
+     它**只对 transform 生效**，所以不会与布局打架；退场那条自己带 `animation`
+     （`.si-item.is-out`），两者互不覆盖。 */
+  transition: transform var(--motion-base) var(--ease-emphasized);
+}
+
+/* 可点已读的条目（`form !== 'state'`）：给一个"能点"的暗示 + 悬停反馈。
+   状态类**不可点**（它消失应当是事实变了，不是用户看过）—— 它们的指针保持默认。 */
+.si-item.can-ack {
+  cursor: pointer;
+}
+
+.si-item.can-ack:hover {
+  background: var(--sel-bg-hover, rgba(15, 23, 42, 0.04));
+}
+
+/* 已读退场期间不再接受点击（否则连点会在动画里再触发一次已读） */
+.si-item.is-out {
+  pointer-events: none;
 }
 
 .si-item + .si-item {
@@ -622,8 +641,8 @@
   opacity: 1;
 }
 
-/* 自动已读的退场：**向左滑出 + 淡出**，下一条靠 `max-height` 收起补位
-   （用户 2026-10-05 选定方案 A；时长与 StatusIsland 的 `ITEM_EXIT_MS` 同值，
+/* 自动已读的退场：**向左滑出 + 淡出**，下一条靠 FLIP 顶上来
+   （用户 2026-10-05 选定方案；时长与 StatusIsland 的 `ITEM_EXIT_MS` 同值，
    ⚠️ 改一处必须改另一处）。 */
 .si-item.is-out {
   animation: si-item-out 220ms var(--ease-exit) both;
@@ -641,9 +660,22 @@
   }
 }
 
-/* 正在滑出的那几条单独一列：它们**不参与判据**（`.si-item` 的条数按活着的算） */
-.si-list-leaving {
-  padding-top: 0;
+/* 面板右上角的「全部已读」（2026-10-05：取代原来那句"能力矩阵"来源提示）。
+   做成小号描边胶囊，与条目里的动作按钮（`.si-item-action`）同一族观感。 */
+.si-panel-ack {
+  flex: none;
+  padding: 2px 9px;
+  border: 1px solid var(--c-primary);
+  border-radius: 999px;
+  background: var(--c-bg-card);
+  color: var(--c-primary-deep);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.si-panel-ack:hover {
+  background: var(--sel-bg);
 }
 
 .si-empty {

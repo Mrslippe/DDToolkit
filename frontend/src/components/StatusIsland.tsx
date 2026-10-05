@@ -7,11 +7,12 @@ import type { Notice, NoticeActionKind } from '../utils/notificationHub'
 import { KIND_GLYPH, isLive } from '../utils/notificationHub'
 import type { NoticeGroup } from '../utils/noticeBoard'
 import {
+  ackAllIds,
   countdownFraction,
   discFraction,
+  groupOf,
   relTimeFor,
   sectionNotices,
-  todoIds,
 } from '../utils/noticeBoard'
 import { IDLE_CAROUSEL_ENABLED, IDLE_TICK_MS, pickIdle } from '../utils/idleQuotes'
 import { isShellHidden } from '../utils/shellLifecycle'
@@ -141,6 +142,106 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
   const hidden = useShellHidden()
 
   /**
+   * **FLIP**（First-Last-Invert-Play）：条目消失后让其余条目**有缓动地**顶上来
+   * （用户 2026-10-05：「不要生硬地顶上来」，且要**与滑出同时**发生）。
+   *
+   * 为什么必须用 FLIP（而不是给 `.si-item` 挂个 `transition` 就完事）：
+   * 浏览器**不会**为"块级元素因为兄弟被删除而改变位置"做动画（那是一次普通重排）。
+   * FLIP 的做法：① 改 DOM **前**记下每条的位置（`snapshotRects`）；② 改完把每条
+   * **瞬时**挪回旧位置（反向 transform）；③ 下一帧撤掉 ⇒ CSS 过渡平滑送到新位置。
+   * 全程只用 `transform`，不碰布局属性。
+   *
+   * ⚠️ **退场那条必须"浮"起来**（`floatPos` + `lockH`）：它若照旧占着流内位置，
+   * 下面的条目**要等它 220ms 动画放完**才可能上移 —— 那就成了"先滑完再顶上来"
+   * （用户明确不要那个）。浮起来 ⇒ 流内位置当场空出，剩下的条目**同时**开始上移。
+   */
+  const flipRef = useRef<Map<string, DOMRect> | null>(null)
+  /** 退场条目"浮"起来要用的坐标（id → 容器内 top / 自身高度） */
+  const [floatPos, setFloatPos] = useState<Record<string, { top: number; h: number }>>({})
+  /** 退场期间锁住的滚动体高度（不然浮起来的那条一走，容器会先塌一下） */
+  const [lockH, setLockH] = useState<number | null>(null)
+
+  /**
+   * **退场副本**：`leaving` 的行留在列表里播完动画才真删（否则 CSS 过渡没有机会播）。
+   *
+   * ⚠️ 这两个 state 需要在 FLIP 的 effect **之前**声明（它要读 `rows`）；
+   *    真正的"过期判定"在下面那条体检 effect 里 —— 这里只放声明。
+   */
+  const [rows, setRows] = useState<Row[]>([])
+  const liveIds = notices.map((n) => n.id).join('|')
+
+  const snapshotRects = (): Map<string, DOMRect> => {
+    const map = new Map<string, DOMRect>()
+    panelRef.current?.querySelectorAll<HTMLElement>('.si-item[data-notice-id]')
+      .forEach((el) => {
+        const id = el.getAttribute('data-notice-id')
+        if (id) map.set(id, el.getBoundingClientRect())
+      })
+    return map
+  }
+
+  // ⚠️ **故意不给依赖数组**（与上面那条"每次渲染都量一次"是同一个理由）：
+  //    FLIP 要的就是"每次布局变化都拍一次照再补位"。加 `[]` 会让它只跑一次，
+  //    加具体依赖会漏掉"最后一条被清掉"这类变化。
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => {
+    const before = flipRef.current
+    flipRef.current = null
+    const root = panelRef.current
+    if (!before || !root) return
+    const frames: number[] = []
+    const floats: Record<string, { top: number; h: number }> = {}
+    root.querySelectorAll<HTMLElement>('.si-item[data-notice-id]').forEach((el) => {
+      const id = el.getAttribute('data-notice-id') || ''
+      const old = before.get(id)
+      if (!old) return
+      const cur = el.getBoundingClientRect()
+      if (el.classList.contains('is-out')) {
+        // 退场中的那条：**脱离文档流、钉在原来的位置**（这样剩下的条目能立刻上移）
+        const list = el.parentElement
+        const listTop = list ? list.getBoundingClientRect().top : cur.top
+        floats[id] = { top: cur.top - listTop, h: cur.height }
+        return
+      }
+      const dy = old.top - cur.top
+      if (Math.abs(dy) < 0.5) return
+      el.style.transition = 'none'
+      el.style.transform = `translateY(${dy}px)`
+      frames.push(requestAnimationFrame(() => {
+        el.style.transition = ''
+        el.style.transform = ''
+      }))
+    })
+    if (Object.keys(floats).length) {
+      const sc = root.querySelector<HTMLElement>('.si-list')
+      setFloatPos(floats)
+      setLockH((prev) => prev ?? sc?.offsetHeight ?? null)
+    }
+    return () => frames.forEach(cancelAnimationFrame)
+  })
+
+  /**
+   * ⚠️ **浮起来的坐标单独用一个 `useEffect` 补**（2026-10-05 实测）：
+   * `useLayoutEffect` 里 `setState` 会被 React 排到**下一次渲染**才落地，而那一次渲染
+   * 可能落在"退场动画已经快放完"之后（单测里跑得过密时就是这样：`vitest run` 全量跑时
+   * 那条用例红过一次，而单独跑绿）。`useEffect` 在提交后立刻排，落地更早也更稳；
+   * FLIP 的 transform 那部分留在 `useLayoutEffect` 里（它必须绘制前生效，否则会闪一帧）。
+   */
+  useEffect(() => {
+    const root = panelRef.current
+    if (!root) return
+    // 给**已经挂上 `.is-out`** 但还没有浮动坐标的行补上（幂等：已有坐标的不动）
+    const need: Record<string, { top: number; h: number }> = {}
+    root.querySelectorAll<HTMLElement>('.si-item.is-out[data-notice-id]').forEach((el) => {
+      const id = el.getAttribute('data-notice-id') || ''
+      if (!id || floatPos[id]) return
+      const list = el.parentElement
+      const listTop = list ? list.getBoundingClientRect().top : 0
+      need[id] = { top: el.getBoundingClientRect().top - listTop, h: el.offsetHeight }
+    })
+    if (Object.keys(need).length) setFloatPos((prev) => ({ ...need, ...prev }))
+  }, [rows, floatPos])
+  /**
    * **自己的秒表**（L1，2026-10-05）：过期与相对时间都由它驱动。
    *
    * ⚠️ 为什么不能只靠宿主传进来的 `now`：宿主的 `now` 只在**它自己重渲染**时更新，
@@ -167,10 +268,13 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
   //    不改变 `notices` —— 挂在上面的 effect 一辈子不会为它跑（第一版就是这么写的，
   //    症状是条目**永远留在 rows 里**、滑出动画只在"服务端撤条目"时才播）。
   // ⚠️ 判据（`.si-item` 的条数）仍按**活着的**条目算 —— 探针不看动画中间态。
-  const [rows, setRows] = useState<Row[]>([])
-  const liveIds = notices.map((n) => n.id).join('|')
+  //（`rows` / `liveIds` 的**声明**为了 FLIP 读得到，已经上移到那段 effect 之前）
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    // ⚠️ **先拍照再改 DOM**（FLIP）：退场中的条目会继续占位、其余条目的位置会变，
+    //    而"下方顶上来"要补的是**旧位置**。用 `useLayoutEffect` + 同一帧里改 DOM，
+    //    所以这次量到的就是改动前的布局（`useEffect` 太晚，那时已经重排完了）。
+    flipRef.current = snapshotRects()
     setRows((prev) => {
       const incoming = new Map(notices.map((n) => [n.id, n]))
       const next: Row[] = []
@@ -201,7 +305,10 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
    *  `StatusIsland.test.tsx` 那条"先挂 is-out 再摘掉"抓出来）。
    *  这与"`useEffect` 里 setState 要防抖"是同一类坑，只是它长得像纯粹的数据变换。
    */
-  useEffect(() => {
+  useLayoutEffect(() => {
+    // ⚠️ `??=` 而不是 `=`：两个 effect（列表变化 / 时间体检）在同一帧里都跑，
+    //    第二个若覆盖第一个的拍照，就会拿"已经改过一次"的布局去算位移（抖动来源）。
+    flipRef.current ??= snapshotRects()
     setRows((prev) => {
       let changed = false
       const next = prev.map((r): Row => {
@@ -215,6 +322,8 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
     if (!rows.some((r) => r.leaving)) return
     const t = window.setTimeout(() => {
       setRows((prev) => prev.filter((r) => !r.leaving))
+      setFloatPos({})
+      setLockH(null)
     }, ITEM_EXIT_MS)
     return () => window.clearTimeout(t)
   }, [rows])
@@ -385,7 +494,6 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
     const t = window.setTimeout(() => setCountPopped(false), 0)   // ② 下一拍撤掉 ⇒ --motion-fast 弹出
     return () => window.clearTimeout(t)
   }, [notices.length])
-  const href = primary?.source ?? ''
 
   /** 胶囊左侧：会自动消失时给一个剩余比例（画环），否则保持原来的实心点 */
   const disc = discFraction(primary, now)
@@ -394,13 +502,24 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
   const renderRow = (n: Row) => {
     const frac = countdownFraction(n, now)
     const relFor = relTimeFor(n, now)
+    const canAck = n.form !== 'state'          // 状态类不给点已读（见 `ackAllIds` 的注释）
+    const float = n.leaving ? floatPos[n.id] : undefined
     return (
       <li
         key={n.id}
-        className={`si-item${n.leaving ? ' is-out' : ''}`}
+        className={`si-item${n.leaving ? ' is-out' : ''}${canAck ? ' can-ack' : ''}`}
         data-kind={n.kind}
         data-form={n.form ?? 'state'}
+        data-notice-id={n.id}
         data-left={frac === null ? undefined : frac.toFixed(3)}
+        /* 退场那条**浮**在原来的位置（`position:absolute`）—— 它的流内位置当场空出，
+           剩下的条目因此能**同时**开始上移（用户要的并行；不浮就得等它滑完）。 */
+        style={float ? { position: 'absolute', left: 0, right: 0, top: float.top,
+                         height: float.h } : undefined}
+        /* 单击正文/空白 = 已读（用户 2026-10-05）。
+           ⚠️ 动作按钮**不算**已读（它自己 `stopPropagation`）：那是"我要去看一眼"，
+           顺手把通知消掉会让人回头找不到（例如受限项要反复对照）。 */
+        onClick={canAck && !n.leaving ? () => onAction('dismiss', n) : undefined}
       >
         <span className={`si-item-icon k-${n.kind}`}>{iconFor(n)}</span>
         <span className="si-item-main">
@@ -426,7 +545,10 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
           <button
             type="button"
             className="si-item-action"
-            onClick={() => onAction(n.action!.kind, n)}
+            onClick={(ev) => {
+              ev.stopPropagation()             // 动作与"已读"分开（见上面 `onClick` 的注释）
+              onAction(n.action!.kind, n)
+            }}
           >
             {n.action.label}
           </button>
@@ -442,14 +564,46 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
     )
   }
 
-  const rowsById = new Map(rows.map((r) => [r.id, r]))
-  const todo = todoIds(notices, now)
-  /** 正在退场（已过期、动画还没放完）的条目 —— 它们**不参与判据**。
+  /**
+   * 正在退场（已过期/已已读、动画还没放完）的条目 —— 它们**不参与判据**。
    *
-   *  ⚠️ 判据只能是 `r.leaving`，**不能**再叠一个 `!notices.some(...)`：
-   *  `notices` 那份列表**不过滤过期**（过滤发生在渲染时）⇒ 刚过期的那条**仍在 `notices` 里**，
-   *  叠了那个条件就永远筛不出东西，退场动画一帧都看不到（第一版就是这么写的）。 */
+   * ⚠️ 判据只能是 `r.leaving`，**不能**再叠一个 `!notices.some(...)`：
+   * `notices` 那份列表**不过滤过期**（过滤发生在渲染时）⇒ 刚过期的那条**仍在 `notices` 里**，
+   * 叠了那个条件就永远筛不出东西，退场动画一帧都看不到（第一版就是这么写的）。
+   */
   const leaving = rows.filter((r) => r.leaving)
+
+  /**
+   * 把某一组渲染成 `<li>` 列表，**退场中的条目留在它原来的位置**（用户 2026-10-05）。   *
+   * 为什么不再单独挂到 `.si-list-leaving`：那会让退场条目**跳到整列最下面**
+   * （它是另一个 `<ul>`），观感是"这条跑到别处去了"。留在原位才是"从这条的位置滑出去"，
+   * 也才谈得上"下面的条目顶上来"。
+   *
+   * ⚠️⚠️ **必须传"这一组该显示哪些"进来**（由 `groupRows` 统一算），**不能**在这里
+   * 用 `groupOf` 现算：一条告知类过期后就不再是 `live`，于是**它的组可能整组都不渲染**
+   * （例如"最近"只剩它一条）——那时这一组的一次 `renderGroup` 都不会发生，
+   * 退场那条**直接消失**（没有滑出动画）。本批实测就撞在这里：
+   * `test ... 先挂 is-out 滑出` 红了，DOM 里连 `.si-item.is-out` 都没有。
+   */
+  const renderRows = (rowsToDraw: Row[]) =>
+    rowsToDraw.map((n) => renderRow(rowsById.get(n.id) ?? n))
+
+  /** 这一组要画的条目：活着的 + **本组里正在退场的**（退场的按 `leaving` 里的原组归属） */
+  const groupRows = (s: { items: Notice[]; group: string }): Row[] => {
+    const live = new Set(s.items.map((n) => n.id))
+    const gone = leaving.filter((r) => groupOf(r) === s.group && !live.has(r.id))
+    return [...s.items, ...gone]
+  }
+
+  /** 退场条目里**没有任何一组认领**的那些（例如它那组本来就只有它）：兜底渲染，
+   *  否则它会静默消失（同一个坑的另一半）。 */
+  const orphans = ((): Row[] => {
+    const claimed = new Set(sections.flatMap((s) => groupRows(s).map((r) => r.id)))
+    return leaving.filter((r) => !claimed.has(r.id))
+  })()
+
+  const rowsById = new Map(rows.map((r) => [r.id, r]))
+  const ackAll = ackAllIds(notices, now)
   const showEmpty = sections.length === 0 && leaving.length === 0
 
   return (
@@ -539,7 +693,21 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
           >
             <div className="si-panel-head">
               <span className="si-panel-title">通知（{notices.length}）</span>
-              <span className="si-panel-hint">{href}</span>
+              {/* 右上角原来是"能力矩阵"那句来源提示（`href`）—— 用户 2026-10-05 让位给
+                  「全部已读」：那行字只是说"这句话是谁说的"，而面板里**每条都自带来源标注**
+                  （`.si-item-meta` 的「注意 · 能力矩阵 · …」），重复且占着最顺手的位置。
+                  按钮清的范围见 `ackAllIds`：**会自动过期的 + 需要处理的**，「正在进行」不动。 */}
+              {ackAll.length > 0 && (
+                <button
+                  type="button"
+                  className="si-panel-ack"
+                  data-ack-all="1"
+                  title="把「最近」与「需要处理」里的一次都清掉（正在进行的那些不动）"
+                  onClick={() => onAction('ack-all' as NoticeActionKind, notices[0])}
+                >
+                  全部已读
+                </button>
+              )}
             </div>
             <OverlayScroll className="si-panel-scroll">
               {showEmpty
@@ -550,37 +718,31 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
                       <section className="si-sec" data-group={s.group} key={s.group}>
                         <h4 className="si-sec-title">
                           {s.label}（{s.items.length}）
-                          {/* 一键已读**只清「需要处理」**（L1 §10）：语义最窄、最不易误点；
-                              「最近」里的告知类本来就会自己过期，不需要也没必要手动清。 */}
-                          {s.group === 'todo' && todo.length > 0 && (
-                            <button
-                              type="button"
-                              className="si-sec-action"
-                              data-ack-all="1"
-                              /* 动作交给宿主（`TopBar.onIslandAction`）→ 它一次把 `todoIds`
-                                 发成一个批量 ack（一次写盘，不会"清到一半"） */
-                              onClick={() => onAction('ack-all' as NoticeActionKind, s.items[0])}
-                            >
-                              全部已读
-                            </button>
-                          )}
                         </h4>
-                        <ul className="si-list">
-                          {s.items.map((n) => renderRow(rowsById.get(n.id) ?? n))}
+                        <ul className="si-list"
+                            style={lockH !== null && groupRows(s).some((n) => n.leaving)
+                              ? { position: 'relative', height: lockH, overflow: 'hidden' }
+                              : { position: 'relative' }}>
+                          {/* 退场中的条目**留在原位置**（见 `groupRows`）——
+                              "从这条的位置滑出去"+"下面的顶上来"两件事都靠它 */}
+                          {renderRows(groupRows(s))}
                         </ul>
                       </section>
                     ))}
-                    {/* 正在滑出的条目：不参与判据（`.si-item` 计数按活着的算），只为动画留在 DOM 里 */}
-                    {leaving.length > 0 && (
-                      <ul className="si-list si-list-leaving" aria-hidden="true">
-                        {leaving.map((r) => renderRow(r))}
+                    {/* 该组整组都没了、但那条还在退场的兜底（否则它会静默消失） */}
+                    {orphans.length > 0 && (
+                      <ul className="si-list" style={{ position: 'relative' }}
+                          data-orphan-leaving="1">
+                        {renderRows(orphans)}
                       </ul>
                     )}
                   </div>
                 )}
             </OverlayScroll>
             <div className="si-panel-foot">
-              <span className="si-panel-order">今天：正在发生的事优先，其次是等你处理的，最后是刚过去的</span>
+              <span className="si-panel-order">
+                最近发生的在最上面 · 点一条即可已读（向左滑出）
+              </span>
             </div>
           </div>,
           document.body,

@@ -25,15 +25,22 @@ import { isLive } from './notificationHub'
 /** 三个形态（与后端 `services/notices.py` 的 `FORM_*` 逐字对齐） */
 export type NoticeForm = 'state' | 'notice' | 'action'
 
-/** 面板里的三组（顺序即显示顺序） */
-export type NoticeGroup = 'doing' | 'todo' | 'recent'
+/** 面板里的三组（顺序即显示顺序）
+ *
+ * ⚠️ **`recent` 在最前**（用户 2026-10-05 定）：「这些通知是最实时的信息，提到最顶部」。
+ * 于是三组的读法是「**刚发生的 → 要你处理的 → 正在进行的**」：由上到下从"新"到"持续"。
+ * 连带一处行为变化：胶囊上那句话（`capsuleText` / `pickHeadline` 取**第一组的第一条**）
+ * 现在会优先显示**最近发生的事**（开播等），而不是状态类的进度 —— 这正是"最实时"的代价与收益，
+ * 记在 `devlog/348` 里（改顺序的人要知道这一条是被有意改掉的）。
+ */
+export type NoticeGroup = 'recent' | 'todo' | 'doing'
 
-export const GROUP_ORDER: readonly NoticeGroup[] = ['doing', 'todo', 'recent']
+export const GROUP_ORDER: readonly NoticeGroup[] = ['recent', 'todo', 'doing']
 
 export const GROUP_LABEL: Record<NoticeGroup, string> = {
-  doing: '正在进行',
-  todo: '需要处理',
   recent: '最近',
+  todo: '需要处理',
+  doing: '正在进行',
 }
 
 /**
@@ -86,7 +93,7 @@ export interface NoticeSection {
 /** 按形态分组 + 组内排序（`now` 用来滤掉过期条目） */
 export function sectionNotices(list: Notice[], now: number): NoticeSection[] {
   const live = list.filter((n) => isLive(n, now))
-  const buckets: Record<NoticeGroup, Notice[]> = { doing: [], todo: [], recent: [] }
+  const buckets: Record<NoticeGroup, Notice[]> = { recent: [], todo: [], doing: [] }
   for (const n of live) buckets[groupOf(n)].push(n)
   return GROUP_ORDER
     .map((group) => {
@@ -132,7 +139,7 @@ function mergeProgressKinds(items: Notice[]): string {
   return `${[...new Set(names)].join('·')} 抓取中`
 }
 
-/** 胶囊显示哪一组的哪一条：**分组优先**（doing > todo > recent），组内取排好的第一条 */
+/** 胶囊显示哪一组的哪一条：**分组优先**（现在是 recent > todo > doing），组内取排好的第一条 */
 export function pickHeadline(list: Notice[], now: number): Notice | null {
   const sections = sectionNotices(list, now)
   return sections[0]?.items[0] ?? null
@@ -145,7 +152,24 @@ export function capsuleText(list: Notice[], now: number): string {
 }
 
 /**
- * 面板里"某一组有没有可一键已读的东西"（只有 todo 组有「一键已读」）。
+ * 面板右上角「全部已读」清哪些（2026-10-05 用户定）。
+ *
+ * 口径：**会自动过期的（告知类）+ 需要处理的（处置类）**，「正在进行」那组**不动**。
+ *
+ * 为什么状态类不给清：`state` 的消失应当是**事实变了**（任务结束 / 冷却结束 / 重新登录），
+ * 而不是"用户看过了"。把它们 ack 掉有两个后果：① 后端会拒收（`notices.ack_notice` 的
+ * 第二道防线就是这么写的）；② 即使清掉，下一轮轮询也会把它们带回来 —— 于是"点了没反应"
+ * 的观感会重新出现（用户上一轮报的正是这个）。
+ */
+export function ackAllIds(list: Notice[], now: number): string[] {
+  return sectionNotices(list, now)
+    .filter((s) => s.group !== 'doing')
+    .flatMap((s) => s.items)
+    .map((n) => n.id)
+}
+
+/**
+ * 面板里"某一组有没有可一键已读的东西"（只有 todo 组有「全部已读」）。
  *
  * ⚠️ 判据是 **`read === 'confirm'`**（L4），不是 `form === 'action'`：
  * "要不要用户确认"与"这是什么形态"是两个问题，今天一一对应是巧合 ——

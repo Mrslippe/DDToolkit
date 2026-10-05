@@ -23,7 +23,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -322,8 +322,15 @@ def test_stats_counts_files_bytes_and_reports_dead_rows(db, data_dir):
 # 判据的关键是**节流**：老的才核对，新的不碰（否则等于把主要收益还回去）。
 
 def _age(db, row, days: int):
-    """把一份副本改成 N 天前登记的（`verify` 以 `created_at` 为节流基准）。"""
-    row.created_at = datetime(2026, 9, 29, 12, 0, 0) - timedelta(days=days)
+    """把一份副本改成 N 天前登记的（`verify` 以 `created_at` 为节流基准）。
+
+    ⚠️ **基准必须是"现在"**（2026-10-05 修）：原来写死 `datetime(2026, 9, 29, 12, 0)`，
+    于是这个"几天前"是**相对于那个固定日期**算的 —— 跑到 10-06 之后，`days=1` 的那份
+    距"现在"已经 ≥8 天，越过了默认的 7 天窗口 ⇒ `test_verify_skips_fresh_and_checks_old`
+    **从那天起恒定红**（不是回归：把改动 stash 掉一样红；本仓把它叫"定时炸弹式判据"）。
+    现在按真实当前时间往回推，**哪一天跑都对**。
+    """
+    row.created_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
     db.commit()
     return row
 

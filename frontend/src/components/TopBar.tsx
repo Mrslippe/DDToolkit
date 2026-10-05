@@ -33,7 +33,7 @@ import { isShellHidden } from '../utils/shellLifecycle'
 import { closeIntent, parseCloseAction, type CloseAction } from '../utils/shellState'
 import type { Notice, NoticeActionKind } from '../utils/notificationHub'
 import { EVENT_TTL_MS, messageNotice } from '../utils/notificationHub'
-import { todoIds } from '../utils/noticeBoard'
+import { ackAllIds } from '../utils/noticeBoard'
 import { useNotices } from '../utils/noticeStream'
 import { api } from '../api/api'
 import type { AccountSnapshot, AuthStatus, FetchStatus, PostFetchStatus } from '../api/types'
@@ -503,11 +503,14 @@ export default function TopBar() {
       return
     }
     if (kind === 'ack-all') {
-      // 「一键已读」（L1）：一次清掉「需要处理」整组。
+      // 「全部已读」（L1 起、2026-10-05 改范围与位置）：**会自动过期的 + 需要处理的**，
+      // 「正在进行」那组不动（状态类的消失应当是事实变了，不是"用户看过了"）。
+      // ⚠️ 用 `ackAllIds` 而不是 `todoIds`：范围由面板那侧定（面板右上角那个按钮清什么，
+      //    与这里必须**同一口径** —— 否则"按钮说全清了、实际只清了一半"）。
       // ⚠️ **一次请求**而不是循环单条：循环会出现"清到一半失败、面板半干净"的中间态，
       //    而用户看到的是一次点击（`api.ackNotices` 就为这个加的）。
       // ⚠️ 走 `ackIds`：它同时清**本地那份**（用户实测的"点了没反应"就是漏了这一半）。
-      const ids = todoIds(notices, now)
+      const ids = ackAllIds(notices, now)
       if (!ids.length) return
       ackIds(ids)
       return

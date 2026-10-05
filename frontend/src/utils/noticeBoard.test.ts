@@ -3,6 +3,7 @@ import type { Notice } from './notificationHub'
 import { EVENT_TTL_MS, LIVE_NOTICE_MS, liveNotice, messageNotice } from './notificationHub'
 import { PILL_MS } from './noticeStream'
 import {
+  ackAllIds,
   capsuleText,
   countdownFraction,
   discFraction,
@@ -48,13 +49,13 @@ describe('形态 → 分组', () => {
 })
 
 describe('分组与排序', () => {
-  it('只出有内容的组，顺序固定 doing → todo → recent', () => {
+  it('只出有内容的组，顺序固定 recent → todo → doing（最近在最上，用户 2026-10-05 定）', () => {
     const list = [
       n({ id: 'r', form: 'notice', kind: 'message', text: '同步完成' }),
       n({ id: 'd', form: 'state', text: '帖子抓取中' }),
       n({ id: 't', form: 'action', kind: 'report', text: '全量完成' }),
     ]
-    expect(sectionNotices(list, NOW).map((s) => s.group)).toEqual(['doing', 'todo', 'recent'])
+    expect(sectionNotices(list, NOW).map((s) => s.group)).toEqual(['recent', 'todo', 'doing'])
   })
 
   it('过期的条目**不进任何组**（面板里不会留一条已经没了的通知）', () => {
@@ -116,16 +117,34 @@ describe('同级合并（胶囊上那句）', () => {
     ])).toBe('2 项状态 · 上游限流：冷却中')
   })
 
-  it('胶囊取**最高优先那组**的合并句，不是所有条目的第一条', () => {
+  it('胶囊取**最靠前那组**（现在是「最近」）的合并句，不是所有条目的第一条', () => {
+    // ⚠️ 这条**是被有意改掉的旧行为**（用户 2026-10-05 把"最近"提到最顶）：
+    //    原来做正面的进度会占胶囊，现在**刚发生的事**（开播/回执）优先 —— 那正是"最实时"的含义。
     const list = [
       n({ id: 'msg-1', kind: 'message', form: 'notice', text: '设置已保存', createdAt: NOW }),
       n({ id: 'progress-post', form: 'state', text: '帖子抓取中 - 明前奶绿 - 3/11' }),
     ]
-    expect(pickHeadline(list, NOW)?.id).toBe('progress-post')
-    expect(capsuleText(list, NOW)).toContain('帖子抓取中')
+    expect(pickHeadline(list, NOW)?.id).toBe('msg-1')
+    expect(capsuleText(list, NOW)).toContain('设置已保存')
+    // 反过来：只有状态时，胶囊照旧显示状态（"现在有什么在跑"是它的看家职责）
+    const onlyState = [n({ id: 'progress-post', form: 'state', text: '帖子抓取中' })]
+    expect(pickHeadline(onlyState, NOW)?.id).toBe('progress-post')
   })
 
-  it('一键已读只针对「需要处理」组，且只收 `read=confirm` 的那些（L4）', () => {
+  it('一键已读（`ackAllIds`）：清「会自动过期的 + 需要处理的」，「正在进行」不动', () => {
+    const list = [
+      n({ id: 'report-1', kind: 'report', form: 'action', read: 'confirm', text: '全量完成' }),
+      n({ id: 'progress-post', form: 'state', text: '帖子抓取中' }),
+      n({ id: 'rate-limit', kind: 'alert', form: 'state', text: '上游限流：冷却中' }),
+      n({ id: 'live-1', kind: 'alert', form: 'notice', text: 'A 开播了' }),
+      n({ id: 'msg-1', kind: 'message', form: 'notice', text: '设置已保存' }),
+    ]
+    expect(ackAllIds(list, NOW).sort()).toEqual(['live-1', 'msg-1', 'report-1'])
+    // 只有状态时不返回任何 id（面板那个按钮会因此不渲染 —— 点了也没用就别给）
+    expect(ackAllIds([n({ id: 'p', form: 'state' })], NOW)).toEqual([])
+  })
+
+  it('「需要处理」组自己的一键已读（`todoIds`）仍是 `read=confirm` 那些（L4）', () => {
     const list = [
       n({ id: 'report-1', kind: 'report', form: 'action', read: 'confirm', text: '全量完成' }),
       n({ id: 'progress-post', form: 'state', text: '帖子抓取中' }),
