@@ -10,6 +10,7 @@ import {
   GROUP_LABEL,
   GROUP_ORDER,
   ackAllIds,
+  compareInGroup,
   countdownFraction,
   discFraction,
   groupOf,
@@ -42,6 +43,15 @@ const PANEL_W = 340
 
 /** 自动已读的滑出动画时长（ms）—— 必须与 `status-island.css` 的 `.si-item.is-out` 同值 */
 const ITEM_EXIT_MS = 220
+
+/**
+ * 「一次有好几条同时退场」时，**逐条放行**的间隔（ms）—— 用户 2026-10-05 选定 70ms。
+ *
+ * 5 条约 0.35s，看起来是"从上往下扫过去"而不是"排着队等"（120ms 那档被否掉了太慢，
+ * 严格串行 220ms/条 要 1.1s 更慢）。范围也由用户定：**凡是同时多条退场都按这个节奏**
+ * （不只「全部已读」）—— TTL 同一拍到点的几条、服务端一次撤多条，也一条一条走。
+ */
+const ACK_STAGGER_MS = 70
 
 /**
  * 面板条目的**图标**：优先按**来源**选，认不出来才退回按 `kind` 选（2026-10-05 用户反馈）。
@@ -98,6 +108,8 @@ const KIND_LABEL: Record<string, string> = {
  * 现在几何**跟着行走**（行删了，几何自然没意义），循环在结构上不可能发生。
  */
 type Row = Notice & {
+  /** **排队中**：已经不再"活着"，但还留在原位等人放它走（用户 2026-10-05 的"逐条滑出"） */
+  queued?: boolean
   leaving?: boolean
   /** 退场那一刻冻结的容器内 top（`position:absolute` 用它钉在原位） */
   exitTop?: number
@@ -111,6 +123,20 @@ interface Geom {
   relTop: number
   /** 边框盒高度 */
   h: number
+}
+
+/**
+ * 退场队列的**放行顺序**：**从上到下**（组序 `GROUP_ORDER` + 组内 `compareInGroup`）。
+ *
+ * ⚠️ 与 `drawnGroups` 必须用**同一把尺子**（同一个 `compareInGroup`）：不一致的话
+ * "第二条滑出去的"可能是屏幕上第三条，观感立刻就散了。
+ * ⚠️ 是模块级纯函数而不是组件内的闭包：泵那条 effect 声明在渲染体里那些 `const` 之前，
+ * 放在组件里会变成"先用后定义"（能跑，但读起来像有坑）。
+ */
+function queueOrder(rows: Row[]): Row[] {
+  return GROUP_ORDER.flatMap((g) => rows
+    .filter((r) => r.queued && groupOf(r) === g)
+    .sort(compareInGroup))
 }
 
 /**
@@ -193,6 +219,29 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
   const liveIds = notices.map((n) => n.id).join('|')
 
   /**
+   * 三拨人（都只由 `rows` 派生，声明放在最前面：下面几条 effect 都要读它们）：
+   * - `queued`：不再活着、还在原位排队等放行；
+   * - `leaving`：正在滑出（浮起来了，不参与判据）；
+   * - `exiting`：**面板里还要画的"已经不活着"的那些** = 上面两拨 + **刚被撤下/刚过期、
+   *   这一拍还没被标记的**（那一拍是渲染先跑、effect 后跑留下的缝）。
+   *
+   * ⚠️ 判据只能是本地标记（`r.leaving` / `r.queued`），**不能**再叠一个 `!notices.some(...)`：
+   * `notices` 那份列表**不过滤过期**（过滤发生在渲染时）⇒ 刚过期的那条**仍在 `notices` 里**，
+   * 叠了那个条件就永远筛不出东西，退场动画一帧都看不到（第一版就是这么写的）。
+   * ⚠️⚠️ 但**渲染**必须用 `exiting` 这个更宽的判据，而且两条来源都要认：
+   * ① **被撤下**（点已读 / 服务端撤条目）—— 这种条目可能"还很新"（`isLive` 仍为真）；
+   * ② **到点过期** —— 这种条目**还在 `notices` 里**（那份不过滤过期，过滤只在渲染时发生）。
+   * 只看其中一条就会漏：漏了① 时，点「全部已读」的那一拍 `drawnGroups` 直接空掉 ⇒
+   * **面板当拍卸载**，那串逐条滑出根本来不及播；漏了② 时，条目会有一拍不在 DOM 里，
+   * 于是 FLIP 的布局快照缺了它 ⇒ 放行时量不到位置（`FREEZE msg-1 false`，只淡出、不滑出）。
+   */
+  /** `notices` 里还有哪些 id（"被撤下"与"过期"是两件事，见上面 `exiting`） */
+  const noticeIds = new Set(notices.map((n) => n.id))
+  const exiting = rows.filter((r) => r.queued || r.leaving
+    || !noticeIds.has(r.id)          // 被撤下（已读 / 服务端撤条目）—— 它可能**还很"新"**
+    || !isLive(r, now))              // 到点过期 —— 它**还在 `notices` 里**（那份不过滤过期）
+
+  /**
    * 单条的几何：`relTop` = 它那个 `.si-list` 内的**布局**坐标（FLIP 的"顶上来"与退场浮起来都用它）、
    * `h` = 高度（浮起来时要占原来那么高）。
    *
@@ -226,6 +275,10 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
   const geomRef = useRef<Map<string, Geom>>(new Map())
   /** 同一份快照的"这一拍内可读"副本（判退场的 effect 跑在 FLIP 之后，见 `freezeExit`） */
   const prevGeomRef = useRef<Map<string, Geom>>(new Map())
+  /** 退场队列泵的计时器句柄（**跨提交保留**：见那条 effect 的注释，重排一次就等于永不推进） */
+  const pumpRef = useRef<number | null>(null)
+  /** 已经开滑的那几条各自的"移除表"（各算各的 220ms，见泵里的注释） */
+  const removalTimers = useRef<Set<number>>(new Set())
 
   /**
    * 一条通知**正要退场**时，把它"钉住"要用的几何（`position:absolute` 的 top / height）。
@@ -309,7 +362,7 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
   // ── 自动已读的**退场**动画（L1 §10）────────────────────────────────────
   // 为什么不能直接渲染 `sections`：条目一过期就从列表里消失，React 立刻把它从 DOM 摘掉，
   // 于是 CSS 过渡**永远没有机会播**（"滑出"变成"啪一下没了"）。
-  // 做法：本地留一份正在退场的副本，动画放完（`ITEM_EXIT_MS`）再真正移除。
+  // 做法：本地留一份副本，动画放完（`ITEM_EXIT_MS`）再真正移除。
   //
   // ⚠️ **过期判定必须自己按时间做**（不能用 `notices` 的变化当触发器）：
   //    `useNotices` 那份列表**不过滤过期**（过滤发生在渲染时），所以"到点了"这件事
@@ -317,31 +370,34 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
   //    症状是条目**永远留在 rows 里**、滑出动画只在"服务端撤条目"时才播）。
   // ⚠️ 判据（`.si-item` 的条数）仍按**活着的**条目算 —— 探针不看动画中间态。
   //（`rows` / `liveIds` 的**声明**为了 FLIP 读得到，已经上移到那段 effect 之前）
+  //
+  // ── 三态：活着 → **排队（`queued`）** → 退场（`leaving`）（用户 2026-10-05）──────
+  // 用户：「全部已读的效果应该是从上到下一条一条逐个滑出，而不是现在这样一下全部滑出
+  // 然后瞬间顶上去」。所以"不再活着"与"开始滑出"**拆成两件事**：
+  //   ① 不再活着 ⇒ 进**队列**（人还留在原位、照常渲染，只是不再参与"活着"的判据）；
+  //   ② 队列按**从上到下**的顺序、每 `ACK_STAGGER_MS` 放一条出去开始滑。
+  // 为什么必须留在原位排队、而不能"先标记退场、只是把动画延后"：退场那条是
+  // `position:absolute`（流内位置当场空出）⇒ 一次全标就是"整块瞬间塌上去"，
+  // 那正是用户不要的观感。留在流里排队，下面那几条才会**跟着每一条的离开逐段上移**。
 
   useLayoutEffect(() => {
-    // ⚠️ **退场几何要在改状态之前就算好**（`freezeExit` 读 DOM 快照）：
-    //    `setRows` 的更新函数必须是**纯**的（React 可能重复调用它），DOM 读取不能塞进去。
-    const incoming = new Map(notices.map((n) => [n.id, n]))
-    const exits = new Map<string, Partial<Row>>()
-    for (const r of rows) {
-      if (!r.leaving && !incoming.has(r.id)) exits.set(r.id, freezeExit(r))   // 服务端撤了 ⇒ 滑出
-    }
     setRows((prev) => {
       const fresh = new Map(notices.map((n) => [n.id, n]))
       const next: Row[] = []
       for (const r of prev) {
         const hit = fresh.get(r.id)
-        if (hit) { next.push({ ...hit, leaving: false }); fresh.delete(r.id) }
-        else if (!r.leaving) next.push({ ...r, leaving: true, ...exits.get(r.id) })
-        else next.push(r)                                           // 已在滑出：留着等定时器
+        // 又活过来了（例如同 id 的服务端条目回到列表）：队列/退场标记一起撤掉
+        if (hit) { next.push({ ...hit, queued: false, leaving: false }); fresh.delete(r.id) }
+        else if (!r.queued && !r.leaving) next.push({ ...r, queued: true })  // 服务端撤了 ⇒ 排队
+        else next.push(r)                                                   // 已在队列/滑出：不动
       }
-      for (const n of fresh.values()) next.push({ ...n, leaving: false })
+      for (const n of fresh.values()) next.push({ ...n, queued: false, leaving: false })
       return next
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveIds])
 
-  /** 定时体检：**过期**（TTL 到点）的条目在这里被判出局并开始滑出。
+  /** 定时体检：**过期**（TTL 到点）的条目在这里被判出局、进队列。
    *
    *  ⚠️ **不能只在面板打开时跑**（第一版就是这么写的，被探针 `messages` 抓出来）：
    *  面板关着时新来的条目也要进 `rows`（否则它下次打开面板时缺一条），
@@ -357,33 +413,67 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
    *  这与"`useEffect` 里 setState 要防抖"是同一类坑，只是它长得像纯粹的数据变换。
    */
   useLayoutEffect(() => {
-    // 同 `[liveIds]` 那条：几何在改状态**之前**算（`setRows` 的更新函数要保持纯）
-    const exits = new Map<string, Partial<Row>>()
-    for (const r of rows) {
-      if (!r.leaving && !isLive(r, now)) exits.set(r.id, freezeExit(r))
-    }
-    if (exits.size === 0) return
     setRows((prev) => {
       let changed = false
       const next = prev.map((r): Row => {
-        const ex = exits.get(r.id)
-        if (!ex || r.leaving) return r
+        if (r.queued || r.leaving || isLive(r, now)) return r
         changed = true
-        return { ...r, leaving: true, ...ex }
+        return { ...r, queued: true }        // 到点 ⇒ 排队（等队首那条先走）
       })
       return changed ? next : prev
     })
-    // ⚠️ `rows` 也在依赖里（它只用来**预先**算几何，判据仍走上面的 `prev`）：
-    //    标完退场后 rows 会变 ⇒ 这一条再跑一次，但那时 `exits` 已经是空的 ⇒ 立刻返回，
-    //    不会自激（"没有真变化就 `return prev`"这条防抖仍然成立）。
   }, [now, rows])
-  useEffect(() => {
-    if (!rows.some((r) => r.leaving)) return
-    const t = window.setTimeout(() => {
-      setRows((prev) => prev.filter((r) => !r.leaving))
-    }, ITEM_EXIT_MS)
-    return () => window.clearTimeout(t)
+
+  /**
+   * **退场队列的泵**：每 `ACK_STAGGER_MS` 放**队首（看得见的最上面那条）**出去开始滑。
+   *
+   * 为什么队首是"最上面那条"而不是"最先到期的"：用户要的观感是
+   * 「从上到下一条一条逐个滑出」—— 与眼睛看到的顺序一致才不会觉得是乱的。
+   *
+   * ⚠️ `queueOrder` 的顺序口径与 `drawnGroups` **同一把尺子**（组序 + `compareInGroup`），
+   *    否则"第二条滑的"可能是屏幕上第三条（观感立刻就散了）。
+   * ⚠️ 队首**不计延迟**（没人正在滑时当拍就走）：点单条已读必须跟手，
+   *    这里多一个 70ms 的等待用户立刻能感觉到。
+   *
+   * ⚠️⚠️ **计时器要跨提交活着**（2026-10-05 实测踩到）：本 effect 依赖 `rows`，而排队期间
+   *    `rows` 每几十毫秒就变一次（`setCountPopped`、空闲轮播取时钟、上一条开始滑……）——
+   *    若照常规写法"每次重跑都 `clearTimeout` 再排一个新的"，那么只要提交比 70ms 密，
+   *    **队首永远轮不到**（实测日志：`PUMP wait 70 m2` → `PUMP cancel m2` → `wait m3` → …）。
+   *    所以：已经排好就直接返回（不重排），只在"队列空/刚放行一条"时才重新起表。
+   */
+  useLayoutEffect(() => {
+    if (pumpRef.current != null) return                    // 已经排好了 —— 别把它取消掉
+    const queue = queueOrder(rows)
+    if (queue.length === 0) return
+    const first = queue[0]
+    const start = () => {
+      pumpRef.current = null
+      // ⚠️ 几何在**真正开始滑的那一刻**量（`freezeExit` 读上一次提交的布局快照）：
+      //    排队期间它会被前面的条目往上顶，量到的是它**当下**的位置 ——
+      //    正是"从它现在的位置滑出去"。
+      const geom = freezeExit(first)
+      setRows((prev) => prev.map((r) => (r.id === first.id
+        ? { ...r, queued: false, leaving: true, ...geom } : r)))
+      // ⚠️ **每一条自己的移除表**（而不是一条共享的）：队列逐条放行时，共享表会被
+      //    后面的放行一次次重排（`rows` 每 70ms 变一次）⇒ 表越推越晚、先滑完的那几条
+      //    一直留在 DOM 里。各算各的才与"它自己那 220ms"对齐。
+      //    ⚠️ 过滤条件带上 `leaving`：万一这条又活过来了（同 id 回到 `notices`），不许把它删掉。
+      const t = window.setTimeout(() => {
+        removalTimers.current.delete(t)
+        setRows((prev) => prev.filter((r) => r.id !== first.id || !r.leaving))
+      }, ITEM_EXIT_MS)
+      removalTimers.current.add(t)
+    }
+    if (!rows.some((r) => r.leaving)) { start(); return }   // 没人正在滑 ⇒ 当拍就走
+    pumpRef.current = window.setTimeout(start, ACK_STAGGER_MS)
   }, [rows])
+
+  /** 卸载时收掉泵与各条的移除表（不然它们会在组件没了之后还去 `setRows`） */
+  useEffect(() => () => {
+    if (pumpRef.current != null) window.clearTimeout(pumpRef.current)
+    removalTimers.current.forEach((t) => window.clearTimeout(t))
+    removalTimers.current.clear()
+  }, [])
 
   // 空闲轮播的时钟：**只在空闲时走**（有事发生时立刻停表，省掉一个无谓的定时器；
   // 也让"语录正在轮播"不可能和"有通知亮着"同时出现在屏幕上）。
@@ -487,13 +577,17 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
-  // 条目清空（例如瞬时消息过期后没有别的事）→ 面板自己收起，别留个空面板
+  // 条目清空（例如瞬时消息过期后没有别的事）→ 面板自己收起，别留个空面板。
+  // ⚠️ **排队中/正在滑的那几条也算"还有东西"**（2026-10-05）：不算的话，点「全部已读」
+  //    把最后几条清掉时面板会**当场消失**，用户根本看不到那串逐条滑出（他要的正是这个观感）。
+  //    判据用 `exiting`（而不是 queued/leaving 两个标记）：被撤下的那一拍标记还没打上，
+  //    只看标记会在那一拍就收起面板。
   useEffect(() => {
-    if (open && !primary) {
+    if (open && !primary && exiting.length === 0) {
       setOpen(false)
       setPinned(false)
     }
-  }, [open, primary])
+  }, [open, primary, exiting.length])
 
   /** 空闲轮播取词（有事故态时用主条目文案；`lit` 时不参与渲染） */
   const idle = pickIdle(idleTick)
@@ -628,16 +722,7 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
   }
 
   /**
-   * 正在退场（已过期/已已读、动画还没放完）的条目 —— 它们**不参与判据**。
-   *
-   * ⚠️ 判据只能是 `r.leaving`，**不能**再叠一个 `!notices.some(...)`：
-   * `notices` 那份列表**不过滤过期**（过滤发生在渲染时）⇒ 刚过期的那条**仍在 `notices` 里**，
-   * 叠了那个条件就永远筛不出东西，退场动画一帧都看不到（第一版就是这么写的）。
-   */
-  const leaving = rows.filter((r) => r.leaving)
-
-  /**
-   * 把某一组渲染成 `<li>` 列表，**退场中的条目留在它原来的位置**（用户 2026-10-05）。
+   * 把某一组渲染成 `<li>` 列表，**排队/退场中的条目留在它原来的位置**（用户 2026-10-05）。
    *
    * 为什么不再单独挂到 `.si-list-leaving`：那会让退场条目**跳到整列最下面**
    * （它是另一个 `<ul>`），观感是"这条跑到别处去了"。留在原位才是"从这条的位置滑出去"，
@@ -656,17 +741,27 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
    * ⚠️ 补成"**同一组、同一个 `<ul>`**"而不是另挂一个兜底容器（2026-10-05 修）：退场条目浮起来
    * 用的坐标（`exitTop`）**是相对它原来那个 `<ul>` 量的**，换个容器就整体错位
    * （整组只剩它一条时最明显 —— 兜底容器在面板最下面）。
+   *
+   * ⚠️ 三拨人（活着的 / 排队中 / 正在滑）**必须按同一把尺子重排**（`compareInGroup`）：
+   * 排队与滑出的那几条已经**不是 live**、不再参与 `sectionNotices` 的排序，若不重排就会掉到
+   * 组末尾 —— 观感是"点了全部已读，下面几条先跳个位置才开始滑"。这把尺子与
+   * `sectionNotices` 用的是同一个导出函数（改一处即两处，不许各写一份）。
    */
   const drawnGroups = GROUP_ORDER
     .map((group) => {
       const s = sections.find((x) => x.group === group)
       const live: Row[] = s ? s.items : []
       const liveIds = new Set(live.map((n) => n.id))
-      // 本组里正在退场的（按 `leaving` 里的原组归属，插在活着的后面）
-      const gone = leaving.filter((r) => groupOf(r) === group && !liveIds.has(r.id))
-      return { group, label: s?.label ?? GROUP_LABEL[group], rows: [...live, ...gone] }
+      const mine = exiting.filter((r) => groupOf(r) === group && !liveIds.has(r.id))
+      const rows = [...live, ...mine].sort(compareInGroup)
+      return { group, label: s?.label ?? GROUP_LABEL[group], rows }
     })
     .filter((s) => s.rows.length > 0)
+
+  /**
+   * 退场队列的**放行顺序**：从上到下（组序 + 组内 `compareInGroup`）—— 与 `drawnGroups` 同尺。
+   * 泵（上面那条 effect）取它的第 0 条。
+   */
 
   const rowsById = new Map(rows.map((r) => [r.id, r]))
   const ackAll = ackAllIds(notices, now)
@@ -745,7 +840,10 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
         {lit && <ChevronDown className="si-chevron size-[12px]" />}
       </span>
 
-      {open && pos && primary &&
+      {/* ⚠️ 挂载条件里那条 `primary` 不能单独用（2026-10-05）：点「全部已读」之后一条 live 都不剩，
+          而**排队/正在滑的那几条还要播完**（用户要的"逐条滑出"）—— 只看 `primary` 会让面板
+          当拍卸载，动画一帧都看不到。`showEmpty` 才是"真的没东西可画"。 */}
+      {open && pos && (primary || !showEmpty) &&
         createPortal(
           <div
             ref={panelRef}

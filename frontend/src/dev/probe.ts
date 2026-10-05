@@ -2952,6 +2952,13 @@ export async function runUiProbe(): Promise<void> {
       result.ackAllBeforeIds = before
       result.ackAllDoingBefore = doingBefore
       ackBtn.click()
+      // ⑩ **逐条**（用户 2026-10-05：「从上到下一条一条逐个滑出，而不是一下全部滑出」）：
+      //    点完这一拍只该走掉**最上面那几条**（队列每 70ms 放一条），不是全走。
+      await sleep(120)
+      result.ackAllBatch = before.length
+      result.ackAllOutAt120 = [...document.querySelectorAll('.si-panel .si-item.is-out')]
+        .map((n) => n.getAttribute('data-notice-id'))
+        .filter((id) => !!id && before.includes(id))
       const cleared = await waitFor(() => before.every((id) => {
         const el = document.querySelector(`.si-panel .si-item[data-notice-id="${id}"]`)
         return !el || el.classList.contains('is-out')

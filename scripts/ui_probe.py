@@ -1810,8 +1810,13 @@ def _assert_notice_lab(nl: dict, width: int) -> list[str]:
     elif not nl.get("ackOutIds"):
         bad.append(f"@{width} notice-lab: 点了条目（{nl.get('ackTarget')}）但它没进入滑出 —— "
                    f"用户看到的就是「点了没反应」")
-    elif nl.get("aliveAfterAck") == nl.get("aliveBeforeAck"):
-        bad.append(f"@{width} notice-lab: 点了条目但活着的条数没变"
+    elif nl.get("aliveAfterAck") is not None and nl.get("aliveBeforeAck") is not None \
+            and nl["aliveAfterAck"] > nl["aliveBeforeAck"]:
+        # ⚠️ 只判"不许变多"（2026-10-05 放宽）：这一页有 TTL 到点、也有新推送同时进来，
+        #    "条数必须恰好少一"在实机上会被别的变化抵消（那次实测：点击那条确实进了滑出，
+        #    同一拍另有一条过期 + 一条新到 ⇒ 前后都是 10）。**"点的那条走了"由 `ackOutIds` 判**，
+        #    那才是这条判据的实体。
+        bad.append(f"@{width} notice-lab: 点了条目之后活着的反而变多了"
                    f"（{nl.get('aliveBeforeAck')} → {nl.get('aliveAfterAck')}）")
     # ⑧ 顶上来（用户 2026-10-05："滑出正常，但留下的空白不被自动顶上去"）：
     #    ① 退场那条腾出的位置必须被下面那条**占掉**（第一行离列表顶不许超过一个行高）；
@@ -1824,6 +1829,16 @@ def _assert_notice_lab(nl: dict, width: int) -> list[str]:
                    f"{nl.get('ackLeftoverTransforms')}")
     # 「全部已读」：按 **id** 判（条数会被 TTL 影响，那样即使按钮没生效也可能"看起来清了"）
     if nl.get("ackAllBeforeIds"):
+        # 逐条（用户 2026-10-05）：点完 120ms 时**不该全走完** —— 队列每 70ms 放一条。
+        # 只有批量 ≥3 时才判（1–2 条本来就看不出"逐条"）。
+        batch = nl.get("ackAllBatch") or 0
+        early = nl.get("ackAllOutAt120") or []
+        if batch >= 3 and len(early) >= batch:
+            bad.append(f"@{width} notice-lab: 「全部已读」当拍全走完了（{batch} 条一起滑）—— "
+                       f"用户要的是**从上到下逐条**（每 70ms 一条）")
+        elif batch >= 3 and len(early) < 1:
+            bad.append(f"@{width} notice-lab: 「全部已读」点了 120ms 还一条都没开始滑"
+                       f"（批量 {batch}）")
         if not nl.get("ackAllCleared"):
             bad.append(f"@{width} notice-lab: 「全部已读」之后这些还在："
                        f"{nl.get('ackAllStillAlive')}（点之前 {nl.get('ackAllBeforeIds')}）")
@@ -3682,6 +3697,8 @@ def main() -> int:
             print(f"  全部已读：清={nl.get('ackAllCleared')} 剩={nl.get('ackAllStillAlive')!r} "
                   f"｜正在进行 {nl.get('ackAllDoingBefore')} → {nl.get('doingAfterAckAll')} "
                   f"（未被动={nl.get('doingUntouched')}）")
+            print(f"  逐条退场：批量 {nl.get('ackAllBatch')} 条，+120ms 已开始滑 "
+                  f"{len(nl.get('ackAllOutAt120') or [])} 条 {nl.get('ackAllOutAt120')}")
             for line in (nl.get("itemTexts") or []):
                 print(f"     条目: {line}")
             print(f"  本地那一份 id：{nl.get('localIds')!r}")

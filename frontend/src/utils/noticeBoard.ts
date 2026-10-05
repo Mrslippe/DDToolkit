@@ -90,6 +90,19 @@ export interface NoticeSection {
   headline: string
 }
 
+/**
+ * **组内排序的比较器**（`sectionNotices` 与"正在退场的那几条"同用，`devlog/351`）。
+ *
+ * ⚠️ 为什么必须导出成一处：逐条退场（用户 2026-10-05：一条一条从上往下滑）时，面板里要画的是
+ * **活着的 + 排队中的 + 正在滑的**三拨混在一起，而排队/滑出的那几条已经**不是 live**、
+ * 不再参与 `sectionNotices` 的排序 ⇒ 若不按同一把尺子重排，它们会掉到组末尾
+ * （观感：点了「全部已读」，下面几条**跳了个位置**才开始滑）。
+ * 判据与 `sectionNotices` 逐字相同：**档位**（`tierOf`）相同再看**新的在前**。
+ */
+export function compareInGroup(a: Notice, b: Notice): number {
+  return tierOf(a) - tierOf(b) || (b.createdAt ?? 0) - (a.createdAt ?? 0)
+}
+
 /** 按形态分组 + 组内排序（`now` 用来滤掉过期条目） */
 export function sectionNotices(list: Notice[], now: number): NoticeSection[] {
   const live = list.filter((n) => isLive(n, now))
@@ -97,10 +110,7 @@ export function sectionNotices(list: Notice[], now: number): NoticeSection[] {
   for (const n of live) buckets[groupOf(n)].push(n)
   return GROUP_ORDER
     .map((group) => {
-      // 档位相同的按**新的在前**（同级里用户最关心刚发生的）
-      const items = buckets[group]
-        .slice()
-        .sort((a, b) => tierOf(a) - tierOf(b) || (b.createdAt ?? 0) - (a.createdAt ?? 0))
+      const items = buckets[group].slice().sort(compareInGroup)
       return { group, label: GROUP_LABEL[group], items, headline: headlineOf(items) }
     })
     .filter((s) => s.items.length > 0)

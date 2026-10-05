@@ -349,6 +349,59 @@ describe('一键已读与自动已读的退场', () => {
     expect(new Set(ids).size).toBe(ids.length)
   })
 
+  it('「全部已读」多条 ⇒ **从上到下逐条**滑出（70ms 一条），不是一下全走', () => {
+    // 用户 2026-10-05：「全部已读的效果应该是从上到下一条一条逐个滑出，而不是现在这样
+    // 一下全部滑出然后瞬间顶上去」。所以"不再活着"与"开始滑出"是两件事：
+    // 先全体进**队列**（人还留在原位照常显示），再由泵每 `ACK_STAGGER_MS` 放一条出去。
+    // ⚠️ 屏幕上的次序是**新的在最上面**（`compareInGroup`）：所以 m1 最新、排在第一位。
+    const onAction = render([
+      message({ id: 'm1', text: '第一条', createdAt: NOW }),
+      message({ id: 'm2', text: '第二条', createdAt: NOW - 1000 }),
+      message({ id: 'm3', text: '第三条', createdAt: NOW - 2000 }),
+    ])
+    const panel = openPanel()!
+    const outs = () => [...panel.querySelectorAll<HTMLElement>('.si-item.is-out')]
+      .map((n) => n.getAttribute('data-notice-id'))
+    const ids = () => [...panel.querySelectorAll<HTMLElement>('.si-item')]
+      .map((n) => n.getAttribute('data-notice-id'))
+    expect(ids(), '前提：最上面是最新那条').toEqual(['m1', 'm2', 'm3'])
+
+    act(() => { panel.querySelector<HTMLElement>('[data-ack-all]')!.click() })
+    expect(onAction).toHaveBeenCalledWith('ack-all', expect.anything())
+    // 面板侧：点完这一拍还什么都看不出来（真正的移除在 TopBar 那一半，这里补一次重渲染模拟）
+    act(() => root.render(<StatusIsland notices={[]} onAction={onAction} now={NOW} />))
+    // ① 条数不变、只有**最上面那条**在滑（其余在排队：还在原位、还没 `is-out`）
+    expect(ids(), '排队的那几条不许当场消失').toEqual(['m1', 'm2', 'm3'])
+    expect(outs(), '第一条（最上面）先走').toEqual(['m1'])
+    // ② 每 70ms 放一条：第二条（+70）、第三条（+140）
+    act(() => { vi.advanceTimersByTime(70) })
+    expect(outs()).toEqual(['m1', 'm2'])
+    act(() => { vi.advanceTimersByTime(70) })
+    expect(outs()).toEqual(['m1', 'm2', 'm3'])
+    // ③ 220ms 后陆续真删（各条从**它自己开始滑**那一刻算）；清空后面板自己收起
+    act(() => { vi.advanceTimersByTime(900) })
+    // ⚠️ 查**活文档**里的：面板这时已经卸载，`panel` 那个引用是脱离文档的旧节点
+    //    （从它身上数子节点会数到卸载前的样子）
+    expect(document.querySelectorAll('.si-panel .si-item')).toHaveLength(0)
+    expect(document.querySelector('.si-panel')).toBeNull()
+  })
+
+  it('队列期间**面板不许消失**（否则那串逐条滑出根本看不到）', () => {
+    // 「全部已读」把最后几条清掉时，`sections` 会变成空 ⇒ 原来那两条"没内容就收起/不挂载"
+    // 的判据会让面板**当拍卸载**（pin 着也照收）—— 逐条动画一帧都看不到。
+    const onAction = render([message({ id: 'm1' }), message({ id: 'm2', createdAt: NOW - 1 })])
+    const panel = openPanel()!
+    act(() => { panel.querySelector<HTMLElement>('[data-ack-all]')!.click() })
+    // 模拟 TopBar 那一半：通知从 `notices` 里撤掉（组件侧只剩排队/退场副本）
+    act(() => root.render(<StatusIsland notices={[]} onAction={onAction} now={NOW} />))
+    expect(document.querySelector('.si-panel'), '面板不该当拍就没').toBeTruthy()
+    act(() => { vi.advanceTimersByTime(150) })
+    expect(document.querySelector('.si-panel'), '动画放完前面板还得在').toBeTruthy()
+    // 队列清空 ⇒ 才允许收起（这里没有别的通知了）
+    act(() => { vi.advanceTimersByTime(1200) })
+    expect(document.querySelector('.si-panel')).toBeNull()
+  })
+
   it('补位的反向位移**不留跨帧状态**（同步 FLIP —— 用户报的"空白不被顶上来"）', () => {
     // 用户 2026-10-05："点击已读之后虽然向左滑出是正常的，但留下的空白不会被自动顶上去"。
     // 实测（探针 `--notice-lab`）根因**不是没重排**，而是补位用的反向位移**卡在了 DOM 上**：

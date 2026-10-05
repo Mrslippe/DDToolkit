@@ -5,6 +5,7 @@ import { PILL_MS } from './noticeStream'
 import {
   ackAllIds,
   capsuleText,
+  compareInGroup,
   countdownFraction,
   discFraction,
   groupOf,
@@ -251,6 +252,27 @@ describe('时长口径（一处定义，三处同值）', () => {
     expect(live.expiresAt).toBe(NOW + LIVE_NOTICE_MS)
     expect(LIVE_NOTICE_MS).toBe(120_000)
     expect(countdownFraction(live, NOW + 60_000)).toBeCloseTo(0.5)
+  })
+})
+
+describe('组内排序的比较器（`sectionNotices` 与"逐条退场"同用）', () => {
+  it('同档按新的在前 —— 屏幕上最上面就是最新那条（逐条滑出也从它开始）', () => {
+    const older = n({ id: 'a', form: 'notice', kind: 'message', createdAt: NOW - 5000 })
+    const newer = n({ id: 'b', form: 'notice', kind: 'message', createdAt: NOW })
+    expect([older, newer].sort(compareInGroup).map((x) => x.id)).toEqual(['b', 'a'])
+    // 档位优先于时间：告警（live）排在任何告知类前面，哪怕后者更新
+    const alert = n({ id: 'live-1', form: 'notice', kind: 'alert', createdAt: NOW - 60_000 })
+    expect([newer, alert].sort(compareInGroup).map((x) => x.id)).toEqual(['live-1', 'b'])
+  })
+
+  it('与 `sectionNotices` 的顺序**逐字一致**（两处必须是同一把尺子）', () => {
+    const list = [
+      n({ id: 'x1', form: 'notice', kind: 'message', createdAt: NOW - 9000 }),
+      n({ id: 'x2', form: 'notice', kind: 'alert', createdAt: NOW - 9000 }),
+      n({ id: 'x3', form: 'notice', kind: 'message', createdAt: NOW - 1000 }),
+    ]
+    const section = sectionNotices(list, NOW).find((s) => s.group === 'recent')!
+    expect(section.items.map((x) => x.id)).toEqual([...list].sort(compareInGroup).map((x) => x.id))
   })
 })
 
