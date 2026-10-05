@@ -945,32 +945,44 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
                             )}
                           </dd>
                         </dl>
-                        {storage.backups.length > 0 && (
-                          <p className="aps-note" data-storage="migration-backups">
-                            升级前的自动备份：{storage.backups.map((b) => b.name).join('、')}
-                            （在 <code>{storage.backup_dir}</code>；程序只保留最近几份，
-                            确认新版本没问题后可以自己删）
-                          </p>
-                        )}
-                        {storage.stale_backups.length > 0 && (
-                          <p className="aps-note" data-storage="stale">
-                            另有手工备份 {storage.stale_backups.map((b) => b.name).join('、')}
-                            （{formatBytes(storage.stale_backups.reduce((n, b) => n + b.bytes, 0))}）——
-                            它不是程序生成的，确认没用可以自己删掉。
-                          </p>
+                        {/* 备注**只在按钮行之前**，且**只说一遍**（用户 2026-10-06：
+                            「末尾的小字提醒太多太杂而且重复了，精简……让按钮行作为这一栏的收尾」）。
+                            改前的样子：三条 note 在按钮行**前后各渲染了一份**（同一段 JSX 写了两遍）
+                            ⇒ 用户看到的正是截图里那两坨重复小字。
+                            现在：备份说明并成一行、文件名收进「查看文件」折叠（details），
+                            数据目录/旧目录各一行 —— 动作行仍然是这一段的**最后一个元素**。 */}
+                        {(storage.backups.length > 0 || storage.stale_backups.length > 0) && (
+                          <div className="aps-note aps-note--fold" data-storage="backups-note">
+                            <span>
+                              备份：升级前自动留最近几份
+                              {storage.stale_backups.length > 0 && (
+                                <> · 另有手工备份 {formatBytes(
+                                  storage.stale_backups.reduce((n, b) => n + b.bytes, 0))}</>
+                              )}
+                              ——确认新版本没问题后可自行删除
+                            </span>
+                            <details>
+                              <summary>
+                                查看文件（{storage.backups.length + storage.stale_backups.length}）
+                              </summary>
+                              <span className="aps-mono">
+                                {[...storage.backups, ...storage.stale_backups]
+                                  .map((b) => b.name).join('、')}
+                              </span>
+                              <span className="aps-note--dim">在 {storage.backup_dir}</span>
+                            </details>
+                          </div>
                         )}
                         {shellDir && (
                           <p className="aps-note" data-dir-source={shellDir.source}>
-                            数据目录来源：
-                            {DIR_SOURCE_LABEL[shellDir.source] ?? shellDir.source}
-                            {shellDir.portable
-                              && '（便携/自定义安装：把整个文件夹搬走即可，应用内不迁移）'}
+                            数据目录：{DIR_SOURCE_LABEL[shellDir.source] ?? shellDir.source}
+                            {shellDir.portable && '（便携版：整个文件夹搬走即可）'}
                           </p>
                         )}
                         {oldDir && (
                           <p className="aps-note" data-old-dir={oldDir}>
                             旧目录仍保留：<span className="aps-mono">{oldDir}</span>
-                            {' '}（确认新目录一切正常后，用下面的「删除旧目录」删掉）
+                            {' '}（确认新目录正常后用下面的「删除旧目录」）
                           </p>
                         )}
                         {shellDir?.pointerUnusable && (
@@ -978,7 +990,10 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
                             迁移记录不可用，当前已回退默认目录：{shellDir.pointerUnusable}
                           </p>
                         )}
-                        {/* 动作行**放在整段最后**（用户 2026-09-19：「把那三个按钮（放）这一项的末尾」） */}
+                        {/* 动作行**必须是整段的最后一个元素**（用户 2026-09-19 的口径，
+                            2026-10-06 再次点名）—— 判据在 `ui_probe.py` 与
+                            `AppSettingsDialog.storage.test.tsx`（后者专门造出"有备份/有旧目录"
+                            那种数据，因为探针的数据目录里没有备份，那条判据在真机上会空转）。 */}
                         <div className="aps-storage-actions">
                           {/* 轻资产清理（L2）：**先预览再确认**（预览与实际同一份计算） */}
                           <FloatPill
@@ -1029,32 +1044,6 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
                             </FloatPill>
                           )}
                         </div>
-                        {storage.stale_backups.length > 0 && (
-                          <p className="aps-note" data-storage="stale">
-                            另有手工备份 {storage.stale_backups.map((b) => b.name).join('、')}
-                            （{formatBytes(storage.stale_backups.reduce((n, b) => n + b.bytes, 0))}）——
-                            它不是程序生成的，确认没用可以自己删掉。
-                          </p>
-                        )}
-                        {shellDir && (
-                          <p className="aps-note" data-dir-source={shellDir.source}>
-                            数据目录来源：
-                            {DIR_SOURCE_LABEL[shellDir.source] ?? shellDir.source}
-                            {shellDir.portable
-                              && '（便携/自定义安装：把整个文件夹搬走即可，应用内不迁移）'}
-                          </p>
-                        )}
-                        {oldDir && (
-                          <p className="aps-note" data-old-dir={oldDir}>
-                            旧目录仍保留：<span className="aps-mono">{oldDir}</span>
-                            {' '}（确认新目录一切正常后，用上面的「删除旧目录」删掉）
-                          </p>
-                        )}
-                        {shellDir?.pointerUnusable && (
-                          <p className="aps-field-error" data-dir-fallback="1">
-                            迁移记录不可用，当前已回退默认目录：{shellDir.pointerUnusable}
-                          </p>
-                        )}
                       </>
                     ) : (
                       <p className="aps-note">读取中…</p>

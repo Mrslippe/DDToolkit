@@ -4427,6 +4427,16 @@ def main() -> int:
                     print(f"  滚动靶：{tb.get('scrollerInfo')}")
                     print(f"  滚动：前={_sh(again)} 下滚后={_sh(sd)}(dir={tb.get('scrollDir')!r})"
                           f" 上滚后={_sh(su)}(dir={tb.get('scrollDirUp')!r}) 离开回来={_sh(back)}")
+                    # ⚠️ **"DOM 里有几个 `.view-toolbar`"**（2026-10-06 加的诊断）：
+                    #    `snap()` 用 `querySelector` 只拿第一个；场景切换期间新旧两棵同时在册时，
+                    #    量到的可能是**退场那棵** ⇒ "下滚没让位"会是**尺子**报的红，不是产品的。
+                    for _tag, _s in (("rest", rest), ("前", again), ("下滚后", sd), ("上滚后", su)):
+                        if (_s.get("bars") or 1) > 1:
+                            print(f"  ⚠️ {_tag} 那一刻 DOM 里有 {_s['bars']} 个 .view-toolbar"
+                                  f"（量到的可能不是活着那棵）")
+                        if _s.get("panelSame") is False:
+                            print(f"  ⚠️ {_tag} 那一刻**面板节点换过了**（挂载时那个已不在 DOM 里）"
+                                  f"—— `MutationObserver` 绑在旧节点上 ⇒ 下滚信号会静默失效")
                     # ⚠️ **前提检查**：方向的写入只发生在 rAF 里，而虚拟时间下 rAF 几乎
                     #    不被服务（devlog/219 §四）⇒ 探针靠 dev 钩子 `__ddtoolkitOsSync`
                     #    把排帧那一步显式顶掉。钩子不在 = 这一读是在赌排帧运气

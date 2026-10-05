@@ -76,6 +76,21 @@ def test_rust_step_is_in_the_plan_for_tier_a():
         f"A 档步骤里没有 cargo 步骤：{names}"
 
 
+def test_toolbar_probe_step_is_in_the_plan_for_tier_a():
+    """A 档的步骤表里必须真的有 `ui_probe --toolbar` —— 它刚刚才证明自己会烂。
+
+    2026-10-06（`devlog/367`）：这个模式此前**只在人手跑**，顺手一跑发现**红了很久**
+    （滚动靶挑到了内容面板外面 ⇒ 判"下滚没让位"）。本仓同款教训已有三次
+    （`--app-settings` 红一整天 / `--notice-lab` / `--first-run`）：
+    **门禁没覆盖的模式等于没有门禁**。
+
+    反向验证：把 `steps()` 里那条 `ui_probe --toolbar` 删掉 ⇒ 本用例红。
+    """
+    names = [n for n, _c, _d in G.steps("a")]
+    assert any("--toolbar" in n for n in names), \
+        f"A 档步骤里没有工具条探针：{names}"
+
+
 def test_dependency_lock_files_are_tier_a():
     """依赖来源（`pyproject.toml` / `uv.lock`）必须落 A 档。
 

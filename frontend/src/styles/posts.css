@@ -5769,6 +5769,37 @@ img.hero-avatar {
   color: var(--c-text-sub);
 }
 
+/* 「存储占用」里的可折叠备注（2026-10-06）：备份文件名一长串会把这一栏撑成小字墙，
+   收进 `details` 折叠 —— **默认收起**，要看再点开（信息还在，只是不占版面）。 */
+.aps-note--fold {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.aps-note--fold > details > summary {
+  cursor: pointer;
+  color: var(--c-text-sub);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  width: fit-content;
+}
+
+.aps-note--fold > details > summary:hover {
+  color: var(--c-text);
+}
+
+.aps-note--fold > details > .aps-mono {
+  display: block;
+  margin-top: 2px;
+  word-break: break-all;
+}
+
+.aps-note--dim {
+  display: block;
+  opacity: 0.85;
+}
+
 .aps-row-ctl {
   display: flex;
   justify-content: flex-end;

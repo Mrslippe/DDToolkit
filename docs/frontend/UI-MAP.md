@@ -384,7 +384,7 @@ keyframes 只会重启**）。
 | 开关 | `.aps-switch`（`data-value` / `role="switch"`）> `i`（滑块）+ 状态文字 | **R21 批 2 用户口径**："稍大一点的药丸内嵌滑块，但是**不要外框背景**，同时添加一点浮片视觉" ⇒ 去掉原来那层"描边 + 灰底的胶囊壳"（`padding` / `border` 全 0），滑块本体 22×12 → **32×18**（圆点 14，行程 14px），底色 `--c-bg-card` + `inset` 发丝线 + **`--pill-shadow`**（与 `.float-pill` 同族的浮片质感），`.on` 时底色换主色；状态文字「开 / 关」留在滑块右侧 |
 | 页内小组 | `.aps-section[data-aps-section="<小组名>"]` + `.aps-section-head` | **R21**：字段按**用途**分小组（风控与节流 / 开播信息抓取 / 定期动态轮询 / 每日定时任务 / 收录首屏），顺序 = 后端声明序。**只有一组时不渲染标题**（页标题已经说明白了）。分组与折叠的内容**全部来自后端** `specs[].section` / `.advanced`，界面不写死 —— 见 §A2-a 口径 ⑤ |
 | 高级折叠 | `.aps-fold[data-aps-advanced="closed\|open"]` + `.aps-fold-head`（`data-testid="aps-advanced-toggle"`）+ `.aps-fold-body` | **R21**：调优类字段收进页尾「高级设置（N 项）」，**默认收起 = 不渲染**（不是渲染后隐藏 —— 收起时 DOM 里一行都没有，探针据此判）；展开后与正文用**同一套** `renderRow`；**换页自动收回**（每页各自的默认态） |
-| 关于页 | `.aps-info` + `.aps-readonly-item` + **`.aps-storage`（R22-B）** + **`.aps-update`（R23b）** | 只读信息（版本/数据目录/库/端口/迁移 head/日志/PID）+ 10 条只读项**逐条带理由**（`.aps-readonly-why`）；**存储占用面板**：数据库 / 图片缓存（带上限）/ **轻资产副本**（L2，devlog/260：`data-storage="assets"`，带「N 份 · M 份已固定 · K 份索引有盘上没有」）/ 日志 / 迁移备份 / 合计 / 磁盘剩余（`data-storage="…"`、偏低时挂 `.aps-storage-warn`「空间偏紧」）+ 手工备份提示 + 动作行「清理图片缓存」「整理数据库」「**清理未使用的轻资产**」（`data-testid="aps-prune-assets"`，**先 dry-run 预览 → 确认框**再真删，`aps-prune-assets-confirm`）+ 迁移入口（`data-testid="aps-migrate"`，仅桌面端且非便携）+ 数据目录来源（`data-dir-source`）；**应用更新面板**（`data-testid="aps-update"`）：当前版本 · 检查更新（`aps-update-check`）/ 下载并重启安装（`aps-update-install`）/ 打开发布页 · 状态标记 `data-update="available\|latest\|error"` · 说明限高 160px（`.aps-update-notes`）· **浏览器环境只显示"更新只在桌面端可用"、不出按钮** |
+| 关于页 | `.aps-info` + `.aps-readonly-item` + **`.aps-storage`（R22-B）** + **`.aps-update`（R23b）** | 只读信息（版本/数据目录/库/端口/迁移 head/日志/PID）+ 10 条只读项**逐条带理由**（`.aps-readonly-why`）；**存储占用面板**：数据库 / 图片缓存（带上限）/ **轻资产副本**（L2，devlog/260：`data-storage="assets"`，带「N 份 · M 份已固定 · K 份索引有盘上没有」）/ 日志 / 迁移备份 / 合计 / 磁盘剩余（`data-storage="…"`、偏低时挂 `.aps-storage-warn`「空间偏紧」）+ 手工备份提示 + 动作行「清理图片缓存」「整理数据库」「**清理未使用的轻资产**」（`data-testid="aps-prune-assets"`，**先 dry-run 预览 → 确认框**再真删，`aps-prune-assets-confirm`）+ 迁移入口（`data-testid="aps-migrate"`，仅桌面端且非便携）+ 数据目录来源（`data-dir-source`）；⚠️ **小字只留一份、且动作行必须是这一段的最后一个元素**（`devlog/367`，用户 2026-10-06：「末尾的小字提醒太多太杂而且重复了，精简……让按钮行作为这一栏的收尾」）：备份说明并成一行（`data-storage="backups-note"`），文件名收进 `.aps-note--fold` 的 `details`「查看文件（N）」，改前那**两份重复渲染**（同一段 JSX 在动作行前后各一份）已删；判据 = `AppSettingsDialog.storage.test.tsx`（专造"有备份/有旧目录"的数据，因为 `ui_probe` 的数据目录里没有备份 ⇒ 它那条"动作行最后"会空转）；**应用更新面板**（`data-testid="aps-update"`）：当前版本 · 检查更新（`aps-update-check`）/ 下载并重启安装（`aps-update-install`）/ 打开发布页 · 状态标记 `data-update="available\|latest\|error"` · 说明限高 160px（`.aps-update-notes`）· **浏览器环境只显示"更新只在桌面端可用"、不出按钮** |
 
 **五条口径**：① 范围/单位/生效时机**全部来自后端** `GET /settings`；② 可热更与只读分开摆、
 只读区逐条写理由；③ 写路径唯一 —— `PUT /settings`，前端只做提前提示；
@@ -689,7 +689,7 @@ keyframes 只会重启**）。
 |---|---|
 | **主指示器** | **内容本身** —— 卡片 / 列表 / 牌堆 / 画布四者形态差异极大，不需要控件告诉你 |
 | **按需指示器** | 工具条可见时的选中块（`.view-switch-thumb`）—— 控件只在"你正在找切换入口"那一刻回答"我在哪" |
-| **反馈** | 冷启动首挂 + 深休眠唤醒时**闪现 1.2s**（见下） |
+| **反馈** | 冷启动首挂 + **左栏换 V** + 深休眠唤醒时**闪现 1.2s**（见下） |
 
 | 状态 | 触发 | 表现 |
 |---|---|---|
@@ -697,7 +697,12 @@ keyframes 只会重启**）。
 | `shown` | 指针**移动进入**热区并停留 **≥140ms** | `--motion-fast` 淡入 + 轻微下移 |
 | → `rest` | 指针离开 **+900ms grace** | 收回 |
 | `pinned` | **Tab 聚焦**（`:focus-within`，纯 CSS，不经 state） | 显形 |
-| `flash` | 冷启动首挂 / 深休眠唤醒 | `shown` 1.2s → `rest` |
+| `flash` | 冷启动首挂 / **换 V**（`flashKey` 变） / 深休眠唤醒 | `shown` 1.2s → `rest` |
+
+⚠️ **换 V 也闪**（`devlog/367`，用户 2026-10-06 口径）：「在左栏中切换 v 的时候，右栏顶部工具条
+**自动下拉一次**，目的是**标识工具栏的存在**」。实现是按 **V 的 id 记账**（`useToolbarVisibility`
+的 `flashKey`，模块级 `flashedForKey`）：**换 V 必闪**、**同一个 V 内的重挂不闪**
+（不传 `flashKey` 的调用方退回旧的"本会话只闪一次"）。
 
 **四个设计决定各自的理由**：
 

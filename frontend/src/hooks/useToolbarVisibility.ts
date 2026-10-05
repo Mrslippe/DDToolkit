@@ -30,13 +30,13 @@ import { inHotZone } from '../utils/toolbarZone'
 const BAR_DWELL_MS = 140
 /** 离开热区后多久收回：**复用现成拍子**（原 `.bg-tools` 的 900ms）。 */
 const BAR_GRACE_MS = 900
-/** 冷启动 / 深休眠唤醒的闪现时长。 */
+/** 冷启动 / 切 V / 深休眠唤醒的闪现时长。 */
 const BAR_FLASH_MS = 1200
 /** 热区外扩：条与右上组各自的 rect 各向外 8px —— 够得到，又不把内容控件圈进来。 */
 const BAR_ZONE_PAD = 8
 
-/** 本会话是否已经"闪现"过（**模块级**，见文件头约束 1）。 */
-let flashedThisSession = false
+/** 上一次"为了哪个 V 闪过"（**模块级**，见文件头约束 1）。`null` = 本会话还没闪过。 */
+let flashedForKey: string | null = null
 
 interface Args {
   /** 面板根（`MutationObserver` 挂它、`subtree: true` 覆盖后续挂进来的滚动体） */
@@ -46,10 +46,15 @@ interface Args {
   toolsRef: RefObject<HTMLElement | null>
   /** 深休眠唤醒（R18 带回了上次视图）⇒ 再闪一次；由页面在恢复路径里置位 */
   restoredRef: RefObject<boolean>
+  /**
+   * 换它 = 闪一次（用户 2026-10-06：「在左栏中切换 v 的时候，右栏顶部工具条自动下拉一次，
+   * 目的是标识工具栏的存在」）。传 V 的 id；同一个 id 内的重挂**不**闪。
+   */
+  flashKey?: string | number | null
 }
 
 export function useToolbarVisibility({
-  panelRef, switchRef, toolsRef, restoredRef,
+  panelRef, switchRef, toolsRef, restoredRef, flashKey = null,
 }: Args) {
   const [barShown, setBarShown] = useState(false)
   const dwellTimer = useRef<number>()
@@ -125,16 +130,21 @@ export function useToolbarVisibility({
     }
   }
 
-  // 冷启动首挂 / 深休眠唤醒 → 闪现一次。
+  // 冷启动首挂 / **换 V** / 深休眠唤醒 → 闪现一次。
   // 「完全隐藏」的唯一代价是新用户不知道切换器在哪 —— 用一次性闪现付掉；
+  // 换 V 也闪，是因为用户 2026-10-06 的口径就是"切 V 时标识工具栏的存在"；
   // 唤醒那次额外闪，是因为 R18 把上次视图带回来了，那一刻最需要知道"我在哪个视图"。
   //
   // ⚠️ **"要不要闪"必须在渲染期决定一次，不能放进 effect 里判断**（见文件头约束 2）。
-  //    ⇒ `flashedThisSession` 只用来**决定**；effect 只负责**装定时器**，可重复执行。
+  //    ⇒ `flashedForKey` 只用来**决定**；effect 只负责**装定时器**，可重复执行。
   const wantFlashRef = useRef<boolean | null>(null)
   if (wantFlashRef.current === null) {
-    wantFlashRef.current = !flashedThisSession || restoredRef.current
-    flashedThisSession = true
+    const key = flashKey == null ? null : String(flashKey)
+    wantFlashRef.current = key === null
+      ? (flashedForKey === null || restoredRef.current)   // 没给 key：退回"本会话只闪一次"
+      : (key !== flashedForKey || restoredRef.current)     // 给了 key：换 V 必闪
+    if (key !== null) flashedForKey = key
+    else flashedForKey = flashedForKey ?? ''
   }
   useEffect(() => {
     if (!wantFlashRef.current) return

@@ -188,6 +188,9 @@ export default function PostsPage() {
   const toolsRef = useRef<HTMLDivElement | null>(null)
   const { barShown, onPanelMouseMove } = useToolbarVisibility({
     panelRef, switchRef, toolsRef, restoredRef,
+    // 切 V → 工具条闪现一次（用户 2026-10-06：「在左栏中切换 v 的时候，右栏顶部工具条
+    // 自动下拉一次，目的是标识工具栏的存在」）。传 V 的 id ⇒ 同一个 V 内的重挂不闪。
+    flashKey: vtuberId,
   })
 
   // 时间下拉的点外关闭 / Esc 双通道自 P10-A 起下沉到 `PostFilterPop`（同款实现，

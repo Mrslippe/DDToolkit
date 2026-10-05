@@ -58,7 +58,7 @@ afterEach(() => {
 /** 渲染一个最小宿主，并拿到 hook 最新一次返回值（`latest`） */
 let latest: { barShown: boolean; onPanelMouseMove: (e: { clientX: number; clientY: number }) => void }
 
-async function mount(): Promise<HTMLElement> {
+async function mount(opts: { restored?: boolean; flashKey?: string | number | null } = {}): Promise<HTMLElement> {
   vi.resetModules()
   const { useToolbarVisibility } = await import('./useToolbarVisibility')
   const { useRef } = await import('react')
@@ -70,10 +70,36 @@ async function mount(): Promise<HTMLElement> {
     const switchRef = useRef<HTMLElement | null>(switchEl)
     const toolsRef = useRef<HTMLElement | null>(toolsEl)
     const restoredRef = useRef(restored)
-    latest = useToolbarVisibility({ panelRef, switchRef, toolsRef, restoredRef })
+    latest = useToolbarVisibility({
+      panelRef, switchRef, toolsRef, restoredRef,
+      flashKey: opts.flashKey === undefined ? null : opts.flashKey,
+    })
     return <div id="probe-shown" data-shown={latest.barShown ? '1' : '0'} />
   }
-  act(() => { root.render(<Harness />) })
+  act(() => { root.render(<Harness restored={opts.restored} />) })
+  return panel
+}
+
+/**
+ * 重挂一个宿主（**不** `resetModules` ⇒ 模块级"上次为哪个 V 闪过"留着）——
+ * `flashKey` 用它模拟"切 V"。
+ */
+async function remount(flashKey: string | number | null): Promise<HTMLElement> {
+  act(() => root.unmount())
+  root = createRoot(host)
+  const { useToolbarVisibility } = await import('./useToolbarVisibility')
+  const { useRef } = await import('react')
+  const panel = document.createElement('div')
+  document.body.append(panel)
+  function Again() {
+    const panelRef = useRef<HTMLElement | null>(panel)
+    const switchRef = useRef<HTMLElement | null>(switchEl)
+    const toolsRef = useRef<HTMLElement | null>(toolsEl)
+    const restoredRef = useRef(false)
+    latest = useToolbarVisibility({ panelRef, switchRef, toolsRef, restoredRef, flashKey })
+    return <div id="probe-shown" data-shown={latest.barShown ? '1' : '0'} />
+  }
+  act(() => { root.render(<Again />) })
   return panel
 }
 
@@ -93,9 +119,9 @@ async function setScrollDir(el: HTMLElement, value: string) {
   })
 }
 
-describe('① 冷启动闪现一次（模块级标记，切 V 重挂不再闪）', () => {
+describe('① 冷启动闪一次；**换 V 再闪**（用户 2026-10-06 口径）', () => {
   it('首挂闪 1200ms 后自动收回', async () => {
-    await mount()
+    await mount({ flashKey: 1 })
     expect(shown(), '首挂该立刻闪').toBe(true)
 
     advance(BAR_FLASH_MS - 1)
@@ -104,29 +130,35 @@ describe('① 冷启动闪现一次（模块级标记，切 V 重挂不再闪）
     expect(shown(), '闪现该在 1200ms 时收回').toBe(false)
   })
 
-  it('**同一会话内再次挂载不再闪**（切 V 重挂是常态，闪一次就够）', async () => {
-    await mount()
+  it('**同一个 V 内重挂不再闪**（重挂不等于切 V，闪多了就是噪音）', async () => {
+    await mount({ flashKey: 1 })
     advance(BAR_FLASH_MS)
     expect(shown()).toBe(false)
 
-    // 重挂（不 resetModules ⇒ 模块级标记还留着）
-    act(() => root.unmount())
-    root = createRoot(host)
-    const { useToolbarVisibility } = await import('./useToolbarVisibility')
-    const { useRef } = await import('react')
-    const panel2 = document.createElement('div')
-    document.body.append(panel2)
-    function Again() {
-      const panelRef = useRef<HTMLElement | null>(panel2)
-      const switchRef = useRef<HTMLElement | null>(switchEl)
-      const toolsRef = useRef<HTMLElement | null>(toolsEl)
-      const restoredRef = useRef(false)
-      latest = useToolbarVisibility({ panelRef, switchRef, toolsRef, restoredRef })
-      return <div id="probe-shown" data-shown={latest.barShown ? '1' : '0'} />
-    }
-    act(() => { root.render(<Again />) })
+    await remount(1)
+    expect(shown(), '同一个 V 里重挂不该再闪').toBe(false)
+  })
 
-    expect(shown(), '第二次挂载不该再闪现（否则每次切 V 都闪一下 = 噪音）').toBe(false)
+  it('**换 V 就再闪一次**（用户：「在左栏中切换 v 的时候，右栏顶部工具条自动下拉一次，目的是标识工具栏的存在」）', async () => {
+    await mount({ flashKey: 1 })
+    advance(BAR_FLASH_MS)
+    expect(shown()).toBe(false)
+
+    await remount(2)                                  // 切到另一个 V
+    expect(shown(), '切 V 没有闪现 ⇒ 用户又不知道工具条在哪了').toBe(true)
+    advance(BAR_FLASH_MS)
+    expect(shown(), '同样要自动收回（不是常驻）').toBe(false)
+
+    await remount(3)                                  // 再切一个
+    expect(shown()).toBe(true)
+  })
+
+  it('没给 `flashKey` 时退回"本会话只闪一次"（老行为，不传 key 的调用方不受影响）', async () => {
+    await mount()
+    advance(BAR_FLASH_MS)
+    expect(shown()).toBe(false)
+    await remount(null)
+    expect(shown()).toBe(false)
   })
 })
 

@@ -3306,6 +3306,8 @@ export async function runUiProbe(): Promise<void> {
     document.head.appendChild(kill)
     const barEl = () => document.querySelector<HTMLElement>('.view-switch')
     const panelEl = () => document.querySelector<HTMLElement>('.posts-panel')
+    /** 挂载那一刻的面板节点 —— 用来判"滚动的那个视图换掉了面板节点没有"（见 `snap().panelSame`） */
+    const panel0 = { el: null as HTMLElement | null }
     const bodyEl = () => document.querySelector<HTMLElement>('.view-body')
     const snap = () => {
       const b = barEl()
@@ -3316,6 +3318,15 @@ export async function runUiProbe(): Promise<void> {
         opacity: b ? Math.round((parseFloat(getComputedStyle(b).opacity) || 0) * 100) / 100 : null,
         pe: b ? getComputedStyle(b).pointerEvents : null,
         bodyH: body ? Math.round(body.getBoundingClientRect().height) : null,
+        /** ⚠️ **DOM 里有几个 `.view-toolbar`** —— 场景切换期间新旧两棵可能同时在册，
+         *  而 `querySelector` 只拿第一个 ⇒ 量到的可能是**退场那棵**（"尺子"问题：
+         *  2026-10-06 排查"下滚没让位"时加的诊断字段）。 */
+        bars: document.querySelectorAll('.view-toolbar').length,
+        /** ⚠️ **面板节点还是不是挂载时那一个**：`useToolbarVisibility` 的
+         *  `MutationObserver` 是**挂载时**绑在 `panelRef.current` 上的，
+         *  节点一换它就盯着一棵**已摘下来的树** ⇒ 下滚信号静默失效。
+         *  （2026-10-06 排查"下滚没让位"时加的诊断字段。） */
+        panelSame: panelEl() === panel0.el,
       }
     }
     /** ⚠️ 判定**完全靠 mousemove**（工具条 `pointer-events:none`，收不到 mouseenter）——
@@ -3327,6 +3338,7 @@ export async function runUiProbe(): Promise<void> {
     }
     const t0 = performance.now()
     while (!barEl() && performance.now() - t0 < 8000) await sleep(100)
+    if (panel0.el === null) panel0.el = panelEl()      // 记下挂载时的面板节点（见 snap）
     if (!barEl()) {
       result.missing = true
     } else {
@@ -3366,7 +3378,12 @@ export async function runUiProbe(): Promise<void> {
       //       实测（2026-09-25）：卡片页两个滚动体**都不可滚** ⇒ 这条判据天然空转。
       //       ⇒ 先在**当前视图**里挑可滚量最大的；一个都没有就**切到列表视图**再挑
       //       （列表页帖子多，必然可滚）—— 空转不是通过，探针要自己把前提造出来。
-      const pickScroller = () => [...document.querySelectorAll<HTMLElement>('.os-scroll')]
+      //    ⚠️⚠️ **必须在 `.posts-panel` 里面挑**（2026-10-06 修）：工具条的
+      //       `MutationObserver` 绑的是 `.posts-panel` 那棵子树，而**侧栏（V 列表）也是
+      //       一个 `.os-scroll`**，全文档挑最大可滚量 ⇒ 常常挑到侧栏 ⇒ 滚它**本来就**
+      //       不该让工具条让位 ⇒ 判据报"没立即让位"是**尺子**的红（实测 `inPanel=false`，
+      //       同一份代码再跑一次还可能挑中面板内那个 ⇒ 看着像产品 flake）。
+      const pickScroller = () => [...document.querySelectorAll<HTMLElement>('.posts-panel .os-scroll')]
         .map((el) => ({ el, room: el.scrollHeight - el.clientHeight }))
         .filter((x) => x.room > 120)
         .sort((a, b) => b.room - a.room)[0]
@@ -3377,11 +3394,15 @@ export async function runUiProbe(): Promise<void> {
         picked = pickScroller()
       }
       const scroller = picked?.el
-      result.scrollerCount = document.querySelectorAll('.os-scroll').length
+      result.scrollerCount = document.querySelectorAll('.posts-panel .os-scroll').length
       result.scrollerFound = !!scroller
       if (scroller) {
         result.scrollerInfo =
           `${scroller.className.replace(/\s+/g, '.')} 可滚 ${scroller.scrollHeight - scroller.clientHeight}px`
+          // ⚠️ **它在不在内容面板里**：`useToolbarVisibility` 的观察者绑在 `.posts-panel` 上，
+          //    挑到面板外面的滚动体（**侧栏**也是一个 `.os-scroll`！）⇒ 下滚信号根本到不了
+          //    状态机，"没让位"就是**尺子**报的红（2026-10-06 排查时加的诊断字段）。
+          + ` inPanel=${!!scroller.closest('.posts-panel')}`
         // 先重新呼出（④⑤ 结束时它是 shown 的，但保险起见显式来一次）
         move(r.left + r.width / 2, r.top + r.height / 2)
         await sleep(400)
