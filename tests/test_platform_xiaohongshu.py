@@ -16,6 +16,7 @@ from app.core.database import Base
 from app.models.vtuber import Account, Post, VTuber
 from app.services import identity_limit
 from app.services import scheduler as sch
+from app.services import xhs_auth as X
 from app.services.platforms import registry, xiaohongshu
 from app.services.platforms.signing import NullSigner, SignerUnavailable
 from app.services.platforms.xiaohongshu import XiaohongshuPlatform, classify_http
@@ -147,12 +148,53 @@ def test_failures_are_classified():
     # ⚠️ devlog/237 改口径：5xx 是**上游故障**，不是"这个帖子有问题"
     assert classify_http(500, msg="boom") == "server_error"
     assert classify_http(502, msg="") == "server_error"
+    # ⚠️ devlog/353：**HTTP 200 不等于成功** —— 小红书把业务错误也放在 200 里。
+    #    实测（2026-10-05 cookie 失效那一刻）三个端点全回 `code=-100 登录已过期` + 200，
+    #    而原来的第一句 `if status == 200: return "ok"` 把它判成 ok ⇒ 失效永远沉默。
+    assert classify_http(200, code=-100, msg="登录已过期") == "cookie_invalid"
+    assert classify_http(200, code=-101) == "cookie_invalid"        # 只给码、没有文案
+    assert classify_http(200, code=-915, msg="业务参数错误") == "business_error"
+    assert classify_http(200, msg="success") == "business_error"    # 走到这里 = success 为假
 
     pf = _pf(signer=FakeSigner())
     client = FakeClient([FakeResp(status=403, payload={"success": False, "code": -101,
                                                        "msg": "登录已过期"})])
     assert asyncio.run(pf.fetch_post_page("u1", None, client=client)) is None
     assert pf.last_error["kind"] == "cookie_invalid"
+
+
+def test_expired_cookie_is_reported_not_silent(monkeypatch):
+    """⑤′ 实测到失效要**报出来**（`devlog/353`）：写日志 + 把 `invalidated` 置上。
+
+    为什么单钉它：这条链的两端各错过一次 —— ①`classify_http` 把 `200 + code=-100` 判成 ok
+    （上面那条用例钉住）；②就算判对了，状态也只有日志、界面照旧写"已配置 Cookie"。
+    这里钉的是"确实报了、确实置了标记"，而"界面怎么显示"由 `test_capabilities` 钉。
+
+    ⚠️ **必须打桩 `save_env_keys`**（同 `tests/test_xhs_auth.py` 的做法）：`apply_cookie()`
+    会真的写 `.env` —— 2026-10-05 这条用例的第一版忘了打桩，于是把测试字符串
+    `a1=new; web_session=new` 写进了**仓库根那份 `.env`**（把用户的真实 cookie 冲掉了，
+    还连带让"没有 cookie"的几条用例变红）。测试不许碰用户的真实文件。
+    """
+    from app.services.xhs_auth import xhs_auth_manager
+
+    saved: list[dict] = []
+    monkeypatch.setattr(X, "save_env_keys", lambda d: saved.append(d))
+    monkeypatch.setattr(xhs_auth_manager, "cookie", "a1=abc; web_session=xyz")
+    monkeypatch.setattr(xhs_auth_manager, "set_at", "2026-10-02T20:43:00")
+    pf = _pf(signer=FakeSigner())
+    client = FakeClient([FakeResp(status=200, payload={"success": False, "code": -100,
+                                                       "msg": "登录已过期"})])
+    assert asyncio.run(pf.fetch_post_page("u1", None, client=client)) is None
+    assert pf.last_error["kind"] == "cookie_invalid"
+    assert xhs_auth_manager.invalidated is True, "实测失效必须置标记（界面据此改口径）"
+    st = xhs_auth_manager.status()
+    assert st["logged_in"] is False and st["needs_login"] is True
+    assert "过期" in st["note"] and "重新粘" in st["note"]
+    # 重新粘一条 ⇒ 标记清掉（用户照做之后必须恢复可用）；写入被打了桩，不碰真实 .env
+    ok, why = xhs_auth_manager.apply_cookie("a1=new; web_session=new")
+    assert ok, why
+    assert saved and "XHS_COOKIE" in saved[-1]
+    assert xhs_auth_manager.status()["logged_in"] is True
 
 
 def test_no_cookie_means_no_request_at_all(_isolate_identity_ledger):

@@ -208,6 +208,25 @@ def test_snapshot_reports_xiaohongshu_cookie_state(monkeypatch):
     assert [r for r in snap2["limited"] if r["id"] == "xhs_content"] == []
 
 
+def test_snapshot_reports_expired_xhs_cookie(monkeypatch):
+    """配齐但**实测已失效**的 cookie 要如实进受限项（`devlog/353`）。
+
+    这条修的是一个"看着像在工作"的状态：`status()` 不做探活（小红书没有免签名的探活端点），
+    所以"配齐了"曾经等于"可用" —— 直到抓取时拿到 `HTTP 200 + code=-100 登录已过期`。
+    拿到这个证据之后矩阵必须改口，否则用户只能自己发现"什么东西都抓不到"。
+    """
+    from app.services.xhs_auth import xhs_auth_manager
+
+    monkeypatch.setattr(xhs_auth_manager, "cookie", "a1=1900abcdef; web_session=xyz")
+    monkeypatch.setattr(xhs_auth_manager, "invalidated", True)
+    snap = C.snapshot(bili_logged_in=True, weibo_logged_in=True)
+    assert snap["xiaohongshu_logged_in"] is False
+    xhs = next(r for r in snap["features"] if r["id"] == "xhs_content")
+    assert xhs["state"] == C.REQUIRES_LOGIN
+    assert any(r["id"] == "xhs_content" for r in snap["limited"]), \
+        "失效的小红书 cookie 必须出现在受限项里（用户从那儿知道要重新粘）"
+
+
 def test_content_fetch_gate_and_snapshot_know_douyin(monkeypatch):
     """抖音（devlog/334/335）：闸门与快照都要**显式表态**，不能落到"未知平台"那句开发者话术。
 

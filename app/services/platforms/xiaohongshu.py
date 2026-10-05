@@ -305,18 +305,26 @@ def parse_user_info(data: dict, uid: str) -> dict:
     }
 
 
+#: 「HTTP 200 + 业务错误码」里**已知**的登录类码。
+#: 实测（2026-10-05，cookie 失效那一刻）：`POST /api/sns/web/v1/feed` 与 `/user_posted`、
+#: 用户信息三个端点**全都是** `{"success": false, "code": -100, "msg": "登录已过期"}`，
+#: 而 HTTP 状态码是 **200** —— 关键词兜底之外再按码认一次，免得 msg 换语言/为空时漏判。
+_LOGIN_CODES = (-100, -101)
+
+
 def classify_http(status: int, code: Any = None, msg: str = "") -> str:
     """把一次失败的响应分成**可排查的几类**（调研 §1.3 第 3 条：会话被风控要成为一等状态）。
 
-    ⚠️ 这是**初版**：关键词规则来自调研里的描述（cookie 失效 / 签名失效 / 网关头缺失 / 风控），
-    真机拿到真实响应后要按平台返回的 `code` 校准 —— 别把它当"已验证的码表"。
+    ⚠️ **HTTP 200 不等于成功**（2026-10-05 修，`devlog/353`）：小红书把业务错误也放在 200 里
+    （`code=-100 登录已过期` 就是实测那一条）。原来的第一句是 `if status == 200: return "ok"`
+    ⇒ 失效被判成 `ok`：`note_invalid()`（报"cookie 活了多久"、提示重新粘）**从来没被调用过**，
+    能力矩阵也照旧显示"已配置 Cookie" —— 用户只能自己发现"抓不到东西"。
+    所以判序改成：**先看 5xx / 风控 / 签名 / 登录**，最后才轮到"200 且没有任何失败信号 = ok"。
 
     这几类是**诊断**口径（给排查看），策略口径是 `identity_limit` 的四分类
     （映射表在那边；devlog/237 接的线）。
     """
     text = f"{code if code is not None else ''} {msg}".lower()
-    if status == 200:
-        return "ok"
     if status >= 500:
         # 上游/网关故障：**不是**业务失败（devlog/237 前它被归进 business_error，
         # 于是"上游挂了"会被算成"这个帖子有问题"——两件事的处置完全不同）
@@ -325,12 +333,16 @@ def classify_http(status: int, code: Any = None, msg: str = "") -> str:
         return "risk_control"
     if any(k in text for k in ("sign", "签名", "verify", "x-s")):
         return "signature_invalid"
-    if any(k in text for k in ("login", "登录", "session", "未登录", "web_session")):
+    if code in _LOGIN_CODES or any(
+            k in text for k in ("login", "登录", "session", "未登录", "web_session", "过期")):
         return "cookie_invalid"
     if status == 403 and any(k in text for k in ("gateway", "header", "missing")):
         return "gateway_missing"
     if status == 403:
         return "risk_control"      # 403 兜底：按最坏情况算（宁可多冷却，不可误判为业务失败）
+    if status == 200 and code is None and not msg:
+        return "ok"
+    # 200 但带着业务码/失败文案（`success: false` 才会走到这里）⇒ 业务错，不是 ok
     return "business_error"
 
 

@@ -73,6 +73,51 @@ def _no_ambient_login(monkeypatch):
     monkeypatch.setattr(auth_manager, "bili_jct", "")
     monkeypatch.setattr(weibo_auth_manager, "cookie", "")
     monkeypatch.setattr(weibo_auth_manager, "_valid", False)
+    # ⚠️ 小红书 / 抖音也要一起清（2026-10-05，`devlog/353`）：上面那句注释说的"开发机上恰好
+    #    登录着会悄悄改变测试行为"对这两家同样成立，而它们的 cookie 就在**仓库根那份 `.env`**
+    #    里。实测代价：一条考"没有 cookie 就不发请求"的用例，因为本机 `.env` 里配着小红书
+    #    cookie 而拿到了真 cookie ⇒ 判据失效（那次还顺带把仓库 `.env` 写坏了，见下一条夹具）。
+    from app.services.douyin_auth import douyin_auth_manager
+    from app.services.xhs_auth import xhs_auth_manager
+
+    monkeypatch.setattr(xhs_auth_manager, "cookie", "")
+    monkeypatch.setattr(douyin_auth_manager, "cookie", "")
+
+
+@pytest.fixture(autouse=True)
+def _env_writes_go_to_a_temp_file(monkeypatch, tmp_path):
+    """**测试进程写 `.env` 一律写到临时文件**，绝不碰用户那份（2026-10-05 加，`devlog/353`）。
+
+    来由是一次真事故：一条新用例直接调了生产的 `xhs_auth.apply_cookie()`（没像同文件的
+    邻居那样打桩 `save_env_keys`），而 `env_store.ENV_PATH` 在测试进程里**就是仓库根
+    `.env`** ⇒ 测试字符串被真的写进去、把用户那条真 cookie 冲掉，还让"没有 cookie"的
+    几条用例一起变红。
+
+    做法是**改路径**而不是替换函数：`save_env_keys` 的行为（原子写、去重、reload）照旧是真的，
+    只是落点换成了临时文件。这样"要断言 .env 真被写对了"的用例（`test_services` 里那几条）
+    仍然考的是真实现 —— 第一版写成"替换成记账替身"，当场就把其中一条考红的
+    （它断言 `BILI_SESSDATA=new-sess` 在文件里）。
+    要自己指定落点的用例照旧 `monkeypatch.setattr(env_store, "ENV_PATH", …)`（函数级覆盖得住）。
+    """
+    from app.services import env_store
+
+    monkeypatch.setattr(env_store, "ENV_PATH", tmp_path / ".env")
+
+
+@pytest.fixture(autouse=True)
+def _isolate_xhs_invalid_flag(monkeypatch):
+    """小红书「实测已失效」标记（`xhs_auth_manager.invalidated`）不许跨用例串台。
+
+    它是**进程内**状态，由抓取失败时的 `note_invalid()` 置上（`devlog/353`）。
+    而 `tests/test_platform_xiaohongshu.py` 里那条"cookie 失效"的用例会**真的**把它点上，
+    于是后面考"配置齐了就可用"的用例（`test_capabilities`）就红了 —— 这正是
+    "跨用例串味"的老形态（同类先例：`_isolate_identity_ledger`、`_isolate_rate_limit_state`）。
+    用 `monkeypatch` ⇒ 每个用例结束后自动还原。
+    """
+    from app.services.xhs_auth import xhs_auth_manager
+
+    monkeypatch.setattr(xhs_auth_manager, "invalidated", False)
+    monkeypatch.setattr(xhs_auth_manager, "_reported_invalid", False)
 
 
 # ── S1：给测试里的 TestClient 统一带上会话 token（devlog/202）────────────────

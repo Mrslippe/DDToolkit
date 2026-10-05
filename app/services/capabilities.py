@@ -190,7 +190,12 @@ def snapshot(bili_logged_in: bool | None = None, weibo_logged_in: bool | None = 
     bili = auth_manager.is_logged_in if bili_logged_in is None else bili_logged_in
     weibo = ((weibo_auth_manager.is_logged_in and not weibo_auth_manager.needs_login)
              if weibo_logged_in is None else weibo_logged_in)
-    xhs = xhs_auth_manager.is_configured if xhs_logged_in is None else xhs_logged_in
+    # ⚠️ 小红书的"就绪"= **配置齐了 且 没被实测判失效**（2026-10-05，`devlog/353`）：
+    #    只读 `is_configured` 时，一条已经过期的 cookie 会让矩阵继续写"已配置 Cookie"，
+    #    用户只能自己发现"抓不到东西"（那次实测：详情/列表/用户信息三个端点全回
+    #    `HTTP 200 + code=-100 登录已过期`，而界面一个字都没说）。
+    xhs = ((xhs_auth_manager.is_configured and not xhs_auth_manager.invalidated)
+           if xhs_logged_in is None else xhs_logged_in)
     douyin = (douyin_auth_manager.is_configured if douyin_logged_in is None
               else douyin_logged_in)
     douyin_enabled = _douyin_enabled()
