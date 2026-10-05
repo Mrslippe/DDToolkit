@@ -136,11 +136,29 @@ describe('面板的三组分区', () => {
     expect(texts).toContain('账号信息抓取中 - 七海 - 1/2')
   })
 
-  it('空组不渲染（只有消息时不该出现「正在进行（0）」）', () => {
+  it('三组标题**常驻**（空组显示（0））—— 用户 2026-10-05：标题突然消失太突兀、也打断节奏', () => {
+    // 原来是"空组不渲染"（L1 的清爽口径）。用户实测后改成常驻：
+    // 「栏目头标题……所有条目都已读了就会直接消失，但是直接消失太突兀了也会让连续已读的节奏卡顿，
+    //  我觉得直接就别消失了，常驻标题头」——空组样式不做区分（用户选的口径）。
     render([message()])
     const panel = openPanel()
     const groups = [...panel!.querySelectorAll('.si-sec')].map((s) => s.getAttribute('data-group'))
-    expect(groups).toEqual(['recent'])
+    expect(groups).toEqual(['recent', 'todo', 'doing'])
+    const titles = [...panel!.querySelectorAll('.si-sec-title')].map((t) => t.textContent)
+    expect(titles).toEqual(['最近（1）', '需要处理（0）', '正在进行（0）'])
+  })
+
+  it('条目**逐条走掉**的那一段里，组标题一直在（不许跟着跳/消失）', () => {
+    // 常驻的另一半意义：连续已读时布局稳定。这条钉的是"读到最后一条"那一刻标题还在
+    const onAction = render([message({ id: 'only-1' }), progress()])
+    const panel = openPanel()!
+    act(() => panel.querySelector<HTMLElement>('.si-item.can-ack')!.click())
+    act(() => root.render(<StatusIsland notices={[progress()]} onAction={onAction} now={NOW} />))
+    const titles = () => [...document.querySelectorAll('.si-sec-title')].map((t) => t.textContent)
+    expect(titles(), '退场那条还在屏幕上，计数不许掉到 0').toEqual(['最近（1）', '需要处理（0）', '正在进行（1）'])
+    act(() => { vi.advanceTimersByTime(400) })
+    expect(titles(), '它真走了之后，标题仍要在（只是变成（0））')
+      .toEqual(['最近（0）', '需要处理（0）', '正在进行（1）'])
   })
 })
 

@@ -686,12 +686,9 @@
   background: var(--sel-bg);
 }
 
-.si-empty {
-  margin: 0;
-  padding: 14px 12px;
-  font-size: 11.5px;
-  color: var(--c-text-sub);
-}
+/* ⚠️ 原来的 `.si-empty`（"现在没有需要你知道的事"）已随三组标题常驻一起**删除**（2026-10-05）：
+   空的表现就是三个（0），而"真的什么都没有"时面板根本不挂载 —— 那条样式没有消费者了。
+   删掉而不是留着：留着下次有人会以为"面板可能空着"，再照着它写一条到不了的分支。 */
 
 .si-panel-foot {
   padding: 6px 12px 8px;

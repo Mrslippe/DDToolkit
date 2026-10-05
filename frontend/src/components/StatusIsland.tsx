@@ -732,7 +732,13 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
     rowsToDraw.map((n) => renderRow(rowsById.get(n.id) ?? n))
 
   /**
-   * 面板里**要画的组**（按 `GROUP_ORDER`，与胶囊上的读法同序）。
+   * 面板里**要画的组**：**三组标题常驻**（用户 2026-10-05 第二次反馈）。
+   *
+   * 原来那版是"空组不渲染"（L1 的清爽口径），但用户实测下来两个问题：
+   * 「栏目头标题……所有条目都已读了就会直接消失，但是直接消失太突兀了也会让连续已读的节奏卡顿，
+   * 我觉得直接就别消失了，常驻标题头」⇒ 改成**恒画三组**，空的那组就是「最近（0）」，
+   * 样式不做区分（用户选的口径：不引入第二种样子）。
+   * 这也顺手补齐了另一件事：条目一条条退出时，**组头不会跟着跳/消失**（布局稳定）。
    *
    * ⚠️ 不能直接 `sections.map`：一条告知类过期后就不再 `isLive`，于是**它那组可能整组都不在
    * `sections` 里** —— 那一组一次都不会渲染，退场那条**直接消失**（没有滑出动画）。
@@ -747,25 +753,24 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
    * 组末尾 —— 观感是"点了全部已读，下面几条先跳个位置才开始滑"。这把尺子与
    * `sectionNotices` 用的是同一个导出函数（改一处即两处，不许各写一份）。
    */
-  const drawnGroups = GROUP_ORDER
-    .map((group) => {
-      const s = sections.find((x) => x.group === group)
-      const live: Row[] = s ? s.items : []
-      const liveIds = new Set(live.map((n) => n.id))
-      const mine = exiting.filter((r) => groupOf(r) === group && !liveIds.has(r.id))
-      const rows = [...live, ...mine].sort(compareInGroup)
-      return { group, label: s?.label ?? GROUP_LABEL[group], rows }
-    })
-    .filter((s) => s.rows.length > 0)
-
-  /**
-   * 退场队列的**放行顺序**：从上到下（组序 + 组内 `compareInGroup`）—— 与 `drawnGroups` 同尺。
-   * 泵（上面那条 effect）取它的第 0 条。
-   */
+  const drawnGroups = GROUP_ORDER.map((group) => {
+    const s = sections.find((x) => x.group === group)
+    const live: Row[] = s ? s.items : []
+    const liveIds = new Set(live.map((n) => n.id))
+    const mine = exiting.filter((r) => groupOf(r) === group && !liveIds.has(r.id))
+    const rows = [...live, ...mine].sort(compareInGroup)
+    return { group, label: s?.label ?? GROUP_LABEL[group], rows }
+  })
 
   const rowsById = new Map(rows.map((r) => [r.id, r]))
   const ackAll = ackAllIds(notices, now)
-  const showEmpty = drawnGroups.length === 0
+  /**
+   * 面板**是不是真的没东西可画了**（连正在滑的都没有）。
+   *
+   * ⚠️ 判据不能再是"`drawnGroups` 空"（三组标题现在恒在）。它就是"面板要不要挂载"的闸门：
+   * 清空最后几条时**必须等那串逐条滑完**再收（`devlog/351` 的教训）。
+   */
+  const showEmpty = !primary && exiting.length === 0
 
   return (
     <>
@@ -840,10 +845,10 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
         {lit && <ChevronDown className="si-chevron size-[12px]" />}
       </span>
 
-      {/* ⚠️ 挂载条件里那条 `primary` 不能单独用（2026-10-05）：点「全部已读」之后一条 live 都不剩，
+      {/* ⚠️ 挂载条件：`primary || !showEmpty`（2026-10-05）—— 点「全部已读」之后一条 live 都不剩，
           而**排队/正在滑的那几条还要播完**（用户要的"逐条滑出"）—— 只看 `primary` 会让面板
-          当拍卸载，动画一帧都看不到。`showEmpty` 才是"真的没东西可画"。 */}
-      {open && pos && (primary || !showEmpty) &&
+          当拍卸载，动画一帧都看不到。`showEmpty` 才是"真的连正在滑的都没有了"。 */}
+      {open && pos && !showEmpty &&
         createPortal(
           <div
             ref={panelRef}
@@ -874,25 +879,25 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
               )}
             </div>
             <OverlayScroll className="si-panel-scroll">
-              {showEmpty
-                ? <p className="si-empty">现在没有需要你知道的事</p>
-                : (
-                  <div className="si-secs">
-                    {drawnGroups.map((s) => (
-                      <section className="si-sec" data-group={s.group} key={s.group}>
-                        <h4 className="si-sec-title">
-                          {/* 计数按**画出来的**条数（= 活着的 + 正在滑出的）：退场那 220ms 里
-                              它还在屏幕上，写 `s.items.length` 会显示"最近（0）"而下面明明有一条。 */}
-                          {s.label}（{s.rows.length}）
-                        </h4>
-                        {/* ⚠️ `position: relative` 是退场条目浮起来用的坐标系（`exitTop` 相对它量） */}
-                        <ul className="si-list" style={{ position: 'relative' }}>
-                          {renderRows(s.rows)}
-                        </ul>
-                      </section>
-                    ))}
-                  </div>
-                )}
+              {/* ⚠️ 这里**没有**"现在没有需要你知道的事"那条空态分支了（2026-10-05）：
+                  三组标题常驻 ⇒ "空"的表现就是三个（0），而**真的什么都没有**时面板根本不会挂载
+                  （见上面 `!showEmpty` 那道闸门）—— 那条分支成了永远到不了的死代码。
+                  段落样式 `.si-empty` 随之删除（CSS 里也删了，别留没人用的类）。 */}
+              <div className="si-secs">
+                {drawnGroups.map((s) => (
+                  <section className="si-sec" data-group={s.group} key={s.group}>
+                    <h4 className="si-sec-title">
+                      {/* 计数按**画出来的**条数（= 活着的 + 排队中 + 正在滑出的）：队列/退场那几百毫秒里
+                          它们还在屏幕上，写 `s.items.length` 会显示"最近（0）"而下面明明有一条。 */}
+                      {s.label}（{s.rows.length}）
+                    </h4>
+                    {/* ⚠️ `position: relative` 是退场条目浮起来用的坐标系（`exitTop` 相对它量） */}
+                    <ul className="si-list" style={{ position: 'relative' }}>
+                      {renderRows(s.rows)}
+                    </ul>
+                  </section>
+                ))}
+              </div>
             </OverlayScroll>
             <div className="si-panel-foot">
               <span className="si-panel-order">

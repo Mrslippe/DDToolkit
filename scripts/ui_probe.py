@@ -3924,17 +3924,23 @@ def main() -> int:
                     gnames = [g.split(":")[0] for g in groups]
                     if not groups:
                         failures.append(f"@{w} status-island: 面板没有分组（量不到 .si-sec）"
-                                        f"—— 「正在进行 / 需要处理 / 最近」是 L1 的核心改动")
+                                        f"—— 「最近 / 需要处理 / 正在进行」是 L1 的核心改动")
                     else:
-                        order = [g for g in ("doing", "todo", "recent") if g in gnames]
-                        if gnames != order:
+                        # ⚠️ 两条口径都改过，别再照抄旧注释：
+                        # ① 顺序：**最近在最顶**（用户 2026-10-05 提顶，`devlog/348`）——
+                        #    这里原来写的是 `doing, todo, recent`（提顶之前的顺序，早就不成立了）；
+                        # ② **三组标题常驻**（用户 2026-10-05 第二次反馈，`devlog/352`）：
+                        #    "全读掉就消失太突兀、也打断连续已读的节奏" ⇒ 空组显示（0）**是正常的**，
+                        #    原来那条"空组不该渲染"的判据正好反过来。
+                        if gnames != ["recent", "todo", "doing"]:
                             failures.append(f"@{w} status-island: 分组顺序是 {gnames}，"
-                                            f"应为 {order}（正在进行 → 需要处理 → 最近）")
+                                            f"应为 ['recent', 'todo', 'doing']"
+                                            f"（最近 → 需要处理 → 正在进行，且三组常驻）")
                         for g in groups:
                             name, _, cnt = g.partition(":")
-                            if not cnt.isdigit() or int(cnt) < 1:
-                                failures.append(f"@{w} status-island: 「{name}」组是空组"
-                                                f"（空组不该渲染）")
+                            if not cnt.isdigit():
+                                failures.append(f"@{w} status-island: 「{name}」组的条数不是数字"
+                                                f"（实得 {g!r}）—— 组头是常驻的，计数必须给出来")
                     # 相对时间：meta 行必须**多出一段**（来源 + 时间）—— 探针只能判"有没有"，
                     # 文案粒度由 `noticeBoard.test.ts` 钉住。
                     meta = str(si.get("panelMetaText") or "")
