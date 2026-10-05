@@ -88,6 +88,17 @@ describe('mergeNotices — 本地覆盖 vs 服务端列表', () => {
     expect(mergeNotices(own, server).map((x) => x.id)).toEqual(['msg-1780000000001'])
   })
 
+  it('⚠️ 客户端自己的事实（`local-` 前缀）**不让位**（L3）', () => {
+    // 服务端收到的那条 message 是**另一个**动作的回执，与"磁盘快满/发现新版本"毫无关系。
+    // 按 kind 让位会把客户端的事实一起顶掉 —— 它们原先走 `pillMessage`（不进这份列表）
+    // 才没暴露这个缺口。
+    const own = [n({ id: 'local-low-space', text: '磁盘可用空间不足 5GB' }),
+                 n({ id: 'local-update', text: '发现新版本 v1.0.3' })]
+    const server = [n({ id: 'msg-1780000000009', text: '帖子抓取完成' })]
+    expect(mergeNotices(own, server).map((x) => x.id))
+      .toEqual(['local-low-space', 'local-update', 'msg-1780000000009'])
+  })
+
   it('开播告警两边同一个 id ⇒ 只留一条（本地那份优先：它带的是推送那一刻的文案）', () => {
     const own = [n({ id: 'live-7', kind: 'alert', text: '自己算的' })]
     const server = [n({ id: 'live-7', kind: 'alert', text: '服务端那份' })]

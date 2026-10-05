@@ -11,8 +11,9 @@ import { EVENTS, emit } from '../utils/appEvents'
  * - **延迟 15 秒**再查：启动那几秒要留给后端就绪与首屏渲染，别抢带宽；
  * - **失败只写 console**：连不上 github 在国内是常态，为它弹提示只会让人烦；
  *   手动点「检查更新」时才会把失败原因显示出来；
- * - 发现新版本时**只发一条状态岛瞬时消息**（复用现成通道），真正的下载/安装留在关于页
- *   —— 更新是"用户决定"的事，不该自己动手；
+ * - 发现新版本时**只发一条通知**（L3：改走 `noticeAlert` —— 进**通知面板**的"最近"分组，
+ *   有相对时间、能回看；原先走 `pillMessage` 只是胶囊上闪一下）。
+ *   真正的下载/安装留在关于页 —— 更新是"用户决定"的事，不该自己动手；
  * - **便携版照常查**（知道有新版本有用），只是关于页不给自我更新入口。
  */
 const DELAY_MS = 15000
@@ -26,7 +27,9 @@ export function useUpdateCheck(enabled: boolean): void {
         try {
           const info = await checkForUpdate()
           if (!alive || !info) return
-          emit(EVENTS.pillMessage, {
+          emit(EVENTS.noticeAlert, {
+            id: 'local-update',
+            source: '更新',
             text: `发现新版本 v${info.version} —— 设置 → 关于 可查看并更新`,
           })
         } catch (e) {

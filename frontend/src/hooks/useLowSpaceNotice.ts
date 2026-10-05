@@ -8,8 +8,9 @@ import { EVENTS, emit } from '../utils/appEvents'
  * 用户口径（2026-09-16）：**状态岛提醒一次 + 关于页显示**，阈值默认 5GB、不做成设置项。
  *
  * 三条克制：
- * - 复用现成的瞬时消息通道（`ddtoolkit:pill-message` → 状态岛的 `messageNotice`），
- *   **不新造通知类型** —— 磁盘满不是"新的一类信息"；
+ * - L3（`devlog/343`）：改走 `noticeAlert` ⇒ 进**通知面板**的「最近」分组（有相对时间、
+ *   能回看），不再是胶囊上闪一下就没；关**关于页**那条常驻提示照旧（`aps-storage` 的
+ *   「空间偏紧」红字），所以这条通知过期也不等于用户再也查不到；
  * - **同一台机器 3 天内只提一次**：这是个持续状态，每次启动都喊一遍只会让人讨厌；
  * - 拿不到数据就静默 —— 这条提醒本身不值得打扰任何人。
  */
@@ -29,7 +30,9 @@ export function useLowSpaceNotice(enabled: boolean): void {
         localStorage.setItem(WARNED_KEY, String(Date.now()))
         const gb = Math.round(st.low_space_threshold_bytes / 1073741824)
         const usedMb = Math.round(st.total_bytes / 1048576)
-        emit(EVENTS.pillMessage, {
+        emit(EVENTS.noticeAlert, {
+          id: 'local-low-space',
+          source: '磁盘',
           text: `磁盘可用空间不足 ${gb}GB（数据目录已占 ${usedMb}MB）`
             + '—— 设置 → 关于 可查看占用并清理',
         })

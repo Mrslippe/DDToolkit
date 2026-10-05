@@ -20,8 +20,20 @@ import type { FetchIdleKind } from './fetchIdle'
 /** 事件名（唯一真源）。老的常量（`FETCH_IDLE_EVENT` / `VTUBER_UPDATED_EVENT`）现在是这里的
  *  **再导出**，避免第二份字面量。 */
 export const EVENTS = {
-  /** 顶栏胶囊提示（`utils/pill.ts` 是主入口） */
+  /** 顶栏胶囊提示（`utils/pill.ts` 是主入口）
+   *
+   *  ⚠️ **L3 起它的定位收窄为"命令结果"**（`docs/design/notices/channel-and-layering.md` §2.1）：
+   *  只服务"用户刚点了一下，我告诉他成没成"。**"事后该知道"的事实**（发现新版本、
+   *  磁盘快满…）走 `noticeAlert` —— 那条进通知面板，会留痕、有相对时间。
+   *  判据一句话：**它是不是某个用户动作的即时回执**？不是就别用这个事件。 */
   pillMessage: 'ddtoolkit:pill-message',
+  /** 客户端自己发现的事实（L3）：进状态岛的**通知面板**（进"最近"分组），不是胶囊一次性提示。
+   *
+   *  为什么单独一条而不是复用 `pillMessage`：两者**生命周期语义不同** ——
+   *  命令回执读完即弃（6s 后没人再关心），而"磁盘快满/有新版本"是**事实**，
+   *  用户可能过一会儿才回来看（面板里留痕 + 相对时间"3 分钟前"）。
+   *  收口在 `TopBar`（它把它变成一条 `extraLocal` 条目，与 server 那份一起走 `useNotices`）。 */
+  noticeAlert: 'ddtoolkit:notice-alert',
   /** 数据变了（侧栏列表重拉） */
   dataChanged: 'ddtoolkit:data-changed',
   /** 抓取任务跑完（kind 口径见 `utils/fetchIdle.ts`） */
@@ -72,6 +84,8 @@ export interface LiveEdgePayload {
 /** 名字 → payload。`undefined` = 该事件不带 detail（老代码派发的是裸 `Event`）。 */
 export interface AppEventMap {
   'ddtoolkit:pill-message': { text: string }
+  /** 客户端自己发现的**事实**（L3）：`{id, text}` —— `id` 让宿主能去重/更新同一条 */
+  'ddtoolkit:notice-alert': { id: string; text: string; source?: string }
   'ddtoolkit:data-changed': undefined
   'ddtoolkit:fetch-idle': { kinds: FetchIdleKind[] }
   'ddtoolkit:account-progress': AccountSnapshot[]
@@ -90,6 +104,7 @@ export type AppEventName = keyof AppEventMap
 /** 冻结的名单（用例逐条钉住 —— 改名要么同时改这里与用例，要么红） */
 export const APP_EVENT_NAMES: readonly AppEventName[] = [
   'ddtoolkit:pill-message',
+  'ddtoolkit:notice-alert',
   'ddtoolkit:data-changed',
   'ddtoolkit:fetch-idle',
   'ddtoolkit:account-progress',

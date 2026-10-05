@@ -26,12 +26,13 @@ import { setFetchBusy } from '../fetchBusy'
 import { isFirstRun } from '../bootState'
 import { dispatchFetchIdle, type FetchIdleKind } from '../utils/fetchIdle'
 import { withoutAlreadyPushedPosts } from '../utils/messageBus'
-import { EVENTS, emit } from '../utils/appEvents'
+import { EVENTS, emit, on } from '../utils/appEvents'
 import { useCapabilities, refreshCapabilities } from '../hooks/useCapabilities'
 import { hideToTray, quitApp } from '../utils/shellBridge'
 import { isShellHidden } from '../utils/shellLifecycle'
 import { closeIntent, parseCloseAction, type CloseAction } from '../utils/shellState'
 import type { Notice, NoticeActionKind } from '../utils/notificationHub'
+import { EVENT_TTL_MS, messageNotice } from '../utils/notificationHub'
 import { todoIds } from '../utils/noticeBoard'
 import { useNotices } from '../utils/noticeStream'
 import { api } from '../api/api'
@@ -370,9 +371,45 @@ export default function TopBar() {
   // （`GET /vtuber/notices`），这里只做"服务端列表 + 本地覆盖"的合并（`useNotices`）。
   // 本地覆盖只剩服务端不知道的三类：推送来的进度/瞬时消息、dev 注入的自检条目、
   // 客户端自己的事实（磁盘快满 / 发现新版本 —— 它们走 `pillMessage`）。
-  /** dev-only：探针注入的条目（生产构建里恒为空 —— 见下面 `__ddtoolkitSeedReport`） */
-  const [devNotices, setDevNotices] = useState<Notice[]>([])
-  const notices = useNotices(now, { server: serverNotices, extraLocal: devNotices })
+  /**
+   * dev-only：探针注入的条目（生产构建里恒为空 —— 见下面 `__ddtoolkitSeedReport`）
+   *
+   * 同时也是**客户端自己发现的**事实的落点（L3，`devlog/343`）：
+   * `ddtoolkit:notice-alert`（发现新版本 / 磁盘快满）在这里变成一条本地条目，
+   * 与 server 那份一起走 `useNotices` ⇒ 进**通知面板**的「最近」分组。
+   * ⚠️ 它们的 id 以 `local-` 开头：`mergeNotices` 只让 server 顶掉**非 local** 的 message
+   * 条目（服务端不认识客户端自己的事实，不该把它顶掉）。
+   */
+  const [localNotices, setLocalNotices] = useState<Notice[]>([])
+  const notices = useNotices(now, { server: serverNotices, extraLocal: localNotices })
+
+  useEffect(() => on(EVENTS.noticeAlert, (d) => {
+    const text = (d?.text || '').trim()
+    if (!text) return
+    const id = d.id || `local-${Date.now()}`
+    // 同 id 覆盖（"3 天只提一次"那种钩子重复触发时不该堆两条）。
+    // ⚠️ **合并进 `localNotices` 而不是各记一份**：顶栏只吃一个 `extraLocal`，
+    // 而 dev 注入的报告也走它（那份由 `__ddtoolkitSeedReport` 管）—— 两个来源共用一个列表时
+    // 谁 `set` 覆盖谁都会丢条目，所以两边都按 id 做**合并**。
+    setLocalNotices((prev) => [
+      ...prev.filter((n) => n.id !== id),
+      messageNotice(text, Date.now(), EVENT_TTL_MS, id, d.source),
+    ])
+  }), [])
+
+  // 本地条目的**过期清理**（L3）：服务端那份由轮询带回来（自然消失），本地这份没有兜底 ——
+  // 不清的话 `notices` 会越堆越多（虽然界面按 `expiresAt` 过滤，列表本身仍在长）。
+  useEffect(() => {
+    if (localNotices.length === 0) return
+    const t = window.setInterval(() => {
+      const at = Date.now()
+      setLocalNotices((prev) => {
+        const next = prev.filter((n) => (n.expiresAt ?? Infinity) > at)
+        return next.length === prev.length ? prev : next
+      })
+    }, 1000)
+    return () => window.clearInterval(t)
+  }, [localNotices.length])
 
   /**
    * dev-only（L1）：把**当前这一份合并后的通知列表**暴露给探针。
@@ -511,15 +548,23 @@ export default function TopBar() {
     //    这样「查看详情」/「知道了」走的是同一条接线。
     w.__ddtoolkitSeedReport = (r) => {
       setDoneReport(r as NonNullable<PostFetchStatus['last_result']> | null)
-      if (!r) { setDevNotices([]); return }
-      const issues = r.issues ?? []
-      setDevNotices([{
-        id: `report-${r.seq}`, kind: 'report', sticky: true, source: '完成报告',
-        text: `全量帖子抓取完成 · 存储 ${r.stored ?? 0} · 跳过 ${r.skipped ?? 0}`,
-        detail: r.video_missing ? `视频可能缺 ${r.video_missing} 条`
-          : issues.length ? `${issues.length} 处中断（${issues[0].stop_reason}）` : undefined,
-        action: { label: '查看详情', kind: 'open-report' },
-      }])
+      // ⚠️ 按 **id 合并/移除**（L3）：`localNotices` 现在同时装着客户端自己的事实
+      //    （发现新版本/磁盘快满，来自 `noticeAlert`）—— 整表 `set([])` 会把它们一起清掉。
+      //    注入用 `report-<seq>`、清理只删这一条。
+      const seedId = r ? `report-${r.seq}` : null
+      const issues = r?.issues ?? []
+      setLocalNotices((prev) => {
+        const kept = prev.filter((n) => !n.id.startsWith('report-'))
+        if (!r) return kept
+        return [...kept, {
+          id: seedId!, kind: 'report' as const, sticky: true, source: '完成报告',
+          form: 'action' as const,
+          text: `全量帖子抓取完成 · 存储 ${r.stored ?? 0} · 跳过 ${r.skipped ?? 0}`,
+          detail: r.video_missing ? `视频可能缺 ${r.video_missing} 条`
+            : issues.length ? `${issues.length} 处中断（${issues[0].stop_reason}）` : undefined,
+          action: { label: '查看详情', kind: 'open-report' as const },
+        }]
+      })
     }
     return () => {
       delete w.__ddtoolkitSeedReport

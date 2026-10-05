@@ -14,7 +14,7 @@ import { FETCH_IDLE_EVENT } from './fetchIdle'
 import { VTUBER_UPDATED_EVENT } from './vtuberList'
 
 describe('① 事件名是契约：逐个钉住（改名会让探针静默失效）', () => {
-  it('名单与 `EVENTS` 表完全一致，且就是这 9 个（`kick-poll` 已随 M5-2b 退役）', () => {
+  it('名单与 `EVENTS` 表完全一致，且就是这 10 个（`kick-poll` 已随 M5-2b 退役）', () => {
     expect([...APP_EVENT_NAMES].sort()).toEqual([...Object.values(EVENTS)].sort())
     expect([...APP_EVENT_NAMES].sort()).toEqual([
       'ddtoolkit:account-progress',
@@ -23,10 +23,19 @@ describe('① 事件名是契约：逐个钉住（改名会让探针静默失效
       'ddtoolkit:fetch-idle',
       'ddtoolkit:live-edge',
       'ddtoolkit:message',
+      'ddtoolkit:notice-alert',   // L3：客户端自己发现的事实（进通知面板，不是一次性提示）
       'ddtoolkit:pill-message',
       'ddtoolkit:progress',
       'ddtoolkit:vtuber-updated',
     ])
+  })
+
+  it('`pillMessage` 与 `noticeAlert` 是**两种东西**（L3）：命令回执 vs 事后该知道的事实', () => {
+    // 判据一句话：它是不是某个用户动作的即时回执？不是 ⇒ 走 `noticeAlert`。
+    // 这条用用例把两个名字钉在一起 —— 删掉任何一个都会让别的调用点静默失效。
+    expect(EVENTS.pillMessage).toBe('ddtoolkit:pill-message')
+    expect(EVENTS.noticeAlert).toBe('ddtoolkit:notice-alert')
+    expect(EVENTS.pillMessage).not.toBe(EVENTS.noticeAlert)
   })
 
   it('老常量（`FETCH_IDLE_EVENT` / `VTUBER_UPDATED_EVENT`）就是表里的同一个字面量', () => {

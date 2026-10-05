@@ -240,14 +240,19 @@ export function liveNotice(opts: {
   }
 }
 
-/** 瞬时消息（`ddtoolkit:pill-message`）：ttl 后自动消失 */
-export function messageNotice(text: string, now: number, ttlMs: number): Notice {
+/** 瞬时消息（`ddtoolkit:pill-message`）：ttl 后自动消失
+ *
+ *  `id` / `source` 可覆盖（L3，`devlog/343`）：客户端自己发现的事实（发现新版本、磁盘快满）
+ *  需要**稳定 id**（同一条不重复堆）与自己的来源标注（面板里写「磁盘」而不是「操作结果」）。
+ */
+export function messageNotice(text: string, now: number, ttlMs: number,
+                              id?: string, source?: string): Notice {
   return {
-    id: `msg-${now}`,
+    id: id ?? `msg-${now}`,
     kind: 'message',
     form: 'notice',
     text,
-    source: '操作结果',
+    source: source ?? '操作结果',
     createdAt: now,
     expiresAt: now + ttlMs,
   }

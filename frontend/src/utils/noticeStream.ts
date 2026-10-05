@@ -106,7 +106,11 @@ export function mergeNotices(local: Notice[], server: Notice[] | null): Notice[]
       : n.kind === 'progress' && (srvTasks.has('progress-post') || srvTasks.has('progress-account'))
   const srvHasMessage = srv.some((n) => n.kind === 'message')
   const kept = local.filter((n) => !(
-    (n.kind === 'progress' && handOver(n)) || (n.kind === 'message' && srvHasMessage)
+    // ⚠️ **客户端自己的事实（`local-` 前缀）不让位**（L3，`devlog/343`）：服务端收到的那条
+    // `message` 是**另一个**动作的回执，与"磁盘快满/发现新版本"毫无关系 ——
+    // 按 kind 让位会把客户端的事实一起顶掉（原先靠它们走 `pillMessage` 才没暴露）。
+    (n.kind === 'message' && srvHasMessage && !n.id.startsWith('local-'))
+    || (n.kind === 'progress' && handOver(n))
   ))
   // 服务端那条与本地这条**同 id 时去重**（本地优先）：本地带的是推送那一刻的文案/到达时刻
   const ids = new Set(kept.map((n) => n.id))
