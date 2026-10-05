@@ -160,12 +160,36 @@ def test_every_protected_route_is_covered_by_the_decision_function(token):
 
 
 def test_public_whitelist_is_exactly_what_we_intend(token):
-    """公开白名单**必须只有**这四类 —— 多一个都是没注意到（少一个则是功能坏）。
+    """公开白名单**必须只有**这几类 —— 多一个都是没注意到（少一个则是功能坏）。
 
     反向验证：往 `PUBLIC_PREFIXES` 里塞 `"/vtuber"` ⇒ 红。
+
+    ⚠️ 2026-10-06（E1）加了 **`POST /auth/import`**：浏览器扩展推凭据的入口。
+    它公开的理由不是"它无害"，而是"**它的凭证自带**"——扩展拿不到应用 token，
+    所以端点自己校验配对 token + 只接受回环 + 连续失败节流。
+    下一条用例专门证明"放行 ≠ 不设防"。
     """
     assert api_auth.PUBLIC_PREFIXES == ("/healthz", "/static/")
-    assert api_auth.PUBLIC_EXACT == {("GET", "/img-proxy"), ("GET", "/video-proxy")}
+    assert api_auth.PUBLIC_EXACT == {
+        ("GET", "/img-proxy"), ("GET", "/video-proxy"), ("POST", "/auth/import"),
+    }
+
+
+def test_import_path_is_whitelisted_but_method_limited(token):
+    """`POST /auth/import` 在**中间件那层**是公开的，但**只公开 POST**。
+
+    ⚠️ 这里**只判"资格"**（`is_public` 纯函数 + 方法限死），**不真发请求**：
+    本文件的客户端**不该依赖任何业务表**（见 `client` 夹具的注释 —— 这条端点的配对校验要读
+    `app_meta`，在没建表的进程里会 500）。"端点自己有没有门"由 `tests/test_auth_import.py`
+    判（那边有真正的库夹具）—— 特别是"无/错配对 token ⇒ 401"，与本条是**两条不同的判据**。
+
+    反向验证：把 `("POST", "/auth/import")` 从 `PUBLIC_EXACT` 删掉 ⇒ 扩展侧整片 401；
+    把它写成前缀或放宽成 GET ⇒ 下面第二条红。
+    """
+    assert api_auth.is_public("POST", "/auth/import") is True
+    assert api_auth.is_public("GET", "/auth/import") is False, \
+        "只公开 POST（写凭据）；把读也放开会让「看看现在存着什么」这种请求裸奔"
+    assert api_auth.is_authorized("POST", "/auth/import", None)[0] is True
 
 
 def test_header_less_media_endpoints_are_public(token):

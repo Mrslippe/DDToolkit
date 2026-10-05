@@ -57,7 +57,7 @@ expires: 2026-12-31
 
 | 只能机器判 | 只能真机判（写进手工清单，必须真跑） |
 |---|---|
-| `pytest`：`/auth/import` 的 401（无/错配对 token）· 403（非回环）· 400（缺键**且 `.env` 字节未变**）· 200（落盘 + 回执**只给键名不给值**）· 429（尝试过密）· 响应无 `access-control-allow-origin`；`/healthz` 加字段后既有键不变 | **`chrome.cookies` 真的读得到 HttpOnly**（`SESSDATA`/`web_session`）——这是整个方案的前提 |
+| `pytest`：`/auth/import` 的 401（无/错配对 token）· 403（非回环）· 400（缺键**且 `.env` 字节未变**）· 200（落盘 + 回执**只给键名不给值**）· 429（尝试过密）；`/healthz` 加字段后既有键不变 | **`chrome.cookies` 真的读得到 HttpOnly**（`SESSDATA`/`web_session`）——这是整个方案的前提 |
 | `node --test extension/test/*.test.mjs`：cookie 拼接顺序、端口候选顺序、回执/缺键文案、平台 URL 表 | **扩展页面的 fetch 打到 `http://127.0.0.1:8765` 不被 CORS 拦**（`host_permissions` 生效）——**P1 第一件要实测的事**，不通就停下（§5）|
 | `cargo test`：端口候选表的挑选与回退策略 | Chrome 与 Edge **各装一次**都能跑（同一份代码）|
 | `vitest` + 探针：设置窗新区块（打码/显示/复制/重置确认）+ 既有 4 个 Tab 与凭据说明仍在 | **微博同步后浏览器里仍登录着**（见 §3.3 的坑）|
@@ -77,6 +77,11 @@ expires: 2026-12-31
 2. 端点内校验**配对 token**（§3.2）+ `client.host` 是回环。`is_loopback(host)` 做成纯函数（好测）。
 3. **不进 `CORS_ORIGINS`** —— 普通网页发不出去（设计案 §3.3 第③条）。⚠️ 但**扩展自己**的 fetch
    走的是 `host_permissions` 的特权通道，**不受 CORS 约束** —— 这条是浏览器行为，**P1 第一件实测**（§2.3）。
+
+> ⚠️ **2026-10-06 修正（E1 落地时读到的现况）**：本仓的 CORS 默认是 `"*"`，而且那是**有意**的
+> （`devlog/201`《CORS 不是主防线》—— 拿不到 token 的网页即使读到响应也只是 401）。
+> 所以**不要**给 `/auth/import` 写"响应里没有 `access-control-allow-origin`"这种判据
+> （它必红），也不要为了扩展去动 CORS。这条端点的防线是**配对 token + 回环 + 节流**。
 
 ⚠️ 判据要**故意用错 token 建客户端**（`tests/test_api_auth.py` 的既有写法，`devlog/292`）：
 防的是"以后有人把 `/auth/import` 从前缀白名单里放宽成 `startswith('/auth/')`"。

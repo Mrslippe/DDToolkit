@@ -49,6 +49,22 @@ retire-when: 认证方式换掉扫码，或风控策略整体重做
 
 10. **凭据只落本机** `DATA_DIR/.env`（原子替换），不进仓库、不上传；
 
+10b. **凭据进来只有两条路，且都"先校验后落盘"**（E1，2026-10-06）：① 扫码（B 站/微博）；
+    ② **凭据导入**（`POST /auth/import`：浏览器扩展推来的整条 cookie，四平台同一个入口）。
+    四条纪律：· **校验不过不落盘**（`.env` 一个字节都不改）；· 需要探活的平台
+    （B 站 `nav` / 微博 `profile/info`）在**上游明确说未登录**时还要**还原内存**里的旧凭据
+    （不许拿一条过期的冲掉好凭据）；· 上游**连不上**（网络问题）时**照样保存**但如实回
+    `verified=false`（今天的手抄路径根本不校验 ⇒ 网络抖一下就拒收是倒退）；·
+    回执**只给键名与数量，绝不回显 cookie 值**。判据：`tests/test_auth_import.py`。
+
+10c. **配对令牌是"扩展灌凭据"的独立钥匙**（E1）：`app_meta` 的 `pairing.token`，
+    `secrets.token_urlsafe(32)`，**持久**（重启不变，只有 `POST /auth/pairing/reset` 才换），
+    走独立头 `X-DDToolkit-Pair`。它与 S1 的应用 token（`X-DDToolkit-Token`）**是两把钥匙，
+    不许互相冒充** —— 扩展只需要"写一次凭据"的权限，不该拿到整机 API 的钥匙。
+    `POST /auth/import` 因此是**公开路径**（中间件放行、凭证自带），端点自己再加
+    **回环来源**与**失败节流**（60 秒内失败 ≥10 次 ⇒ 429）。判据见 `tests/test_api_auth.py`
+    的 `test_import_endpoint_is_guarded_even_though_it_is_public`（**故意用错 token** 建客户端）。
+
 23. **未登录 ≠ 不可用，但内容抓取必须登录**（2026-09-15，devlog/086）：
     匿名 `nav` **也下发 `wbi_img`**（WBI 密钥不随登录态变）⇒ 检索/账号信息/粉丝数/直播状态
     未登录都能用；而**空间内容接口**（`arc/search`、动态 `feed/space`）匿名会被平台

@@ -162,6 +162,44 @@ class WeiboAuth:
         })
         logger.info(f"微博登录态已保存 (uid={self.uid or '-'})")
 
+    async def apply_cookie_checked(self, cookie: str) -> tuple[bool, str, bool]:
+        """`(接不接受, 原因, 有没有真的验过)` —— 给 `POST /auth/import` 用（E1，2026-10-06）。
+
+        **为什么不能直接复用 `apply_cookie()`**：它把 `_valid` 直接置 True 就落盘 ——
+        对**扫码**那条路是对的（刚刚走完登录握手），对**扩展推来的**那条是错的：
+        浏览器里那条 cookie 可能早就过期，而"存进去了、UI 显示已登录、抓取全失败"
+        正是最难排查的形态。所以这里补上真正的探活（`_probe_once`），失败**还原内存、
+        一个字节都不落盘**；网络异常则保存但如实说"没验成"（口径同 B 站，见
+        `services/cookie_import.py` 模块 docstring 第 3 条）。
+        """
+        from app.services.cookie_parse import parse_cookie_header
+
+        cookie = (cookie or "").strip()
+        if not cookie:
+            return False, "cookie 是空的", False
+        if not parse_cookie_header(cookie).get("SUB"):
+            return False, ("cookie 缺少 SUB —— 从浏览器复制整条 Cookie 头"
+                           "（F12 → Network → 任意 weibo.com 请求 → Request Headers；"
+                           "注意必须是 **PC 域** weibo.com 的那条）"), False
+
+        snapshot = (self.cookie, self.uid, self.name, self._valid, self._checked_at)
+        self.cookie = cookie
+        self._valid = None                       # 强制重新探（不吃 60s 缓存）
+        self._checked_at = 0.0
+        try:
+            ok = await self._probe_once()
+        except Exception as e:                   # 网络/上游异常 ⇒ 保存但报"没验成"
+            self.apply_cookie(cookie)
+            logger.warning("微博 cookie 已保存，但探活没跑成：%s: %s", type(e).__name__, e)
+            return True, f"已保存，但这次没能连上游验证（{type(e).__name__}）", False
+        if ok:
+            self.apply_cookie(cookie)            # 复用既有落盘路径（含 `_valid = True`）
+            logger.info("微博 cookie 已保存并验证有效")
+            return True, "已保存，并已确认登录态有效", True
+        self.cookie, self.uid, self.name, self._valid, self._checked_at = snapshot
+        logger.warning("微博 cookie 探活未通过（上游 ok=-100）⇒ 不落盘、内存还原")
+        return False, "上游说这条 cookie 未登录（SUB 可能已过期，重新登录后再同步一次）", False
+
     def begin_login(self) -> "WeiboLoginSession":
         return WeiboLoginSession(self)
 

@@ -57,7 +57,18 @@ TOKEN_HEADER = "X-DDToolkit-Token"
 PUBLIC_PREFIXES = ("/healthz", "/static/")
 # 公开的**单个路径 + 方法**组合（`/img-proxy`、`/video-proxy` 只在 GET 上公开：
 # 它们没有写语义，但把方法限死可以让"以后给它加个 POST"自动落进要鉴权的那一侧）
-PUBLIC_EXACT = {("GET", "/img-proxy"), ("GET", "/video-proxy")}
+PUBLIC_EXACT = {
+    ("GET", "/img-proxy"), ("GET", "/video-proxy"),
+    # 浏览器扩展推凭据的入口（E1，2026-10-06）。**为什么它敢公开**：
+    #   · 扩展拿不到 `X-DDToolkit-Token`（那是 Tauri 每次启动生成、只给自家前端的整机钥匙），
+    #     所以它用**另一把**只对这一个端点有效的钥匙（`X-DDToolkit-Pair`，见 `services/pairing.py`），
+    #     校验写在**端点里**（中间件放行 ≠ 不设防）；
+    #   · 端点自己还要求来源是回环、并对连续失败节流（429）；
+    #   · 它**只写不读**：没有"查一下现在存着什么"的能力，回执只给键名不给值。
+    # ⚠️ 方法**限死 POST**：将来给这个路径加 GET（例如"看看上次同步了什么"）会自动落进
+    #    要鉴权的那一侧 —— 那正是这里把方法写进 key 的原因。
+    ("POST", "/auth/import"),
+}
 
 # 前端在没有 token 时会看到一串 401；把这一句做成常量，测试与文档都引用它
 MISSING_TOKEN_DETAIL = "缺少或无效的访问令牌（本机应用启动时生成）"

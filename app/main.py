@@ -33,6 +33,10 @@ _t0 = time.monotonic()
 # /healthz 首次返回 first_run=true 时写入，前端据此自动弹登录浮窗。
 FIRST_RUN_MARKER = settings.DATA_DIR / ".first-run-done"
 
+#: `/healthz` 里回给浏览器扩展的**应用标识**（E1，2026-10-06）：扩展依次探
+#: `8765–8769`，只认这一个值。改它等于让所有已装扩展认不出应用（所以写成常量、只此一处）。
+APP_IDENTIFIER = "ddtoolkit"
+
 
 def _perf(step: str) -> None:
     logger.info(f"[perf] {step} +{int((time.monotonic() - _t0) * 1000)}ms")
@@ -508,6 +512,12 @@ def healthz():
     ⚠️ 这是**唯一**能在"还没拿到 token"时把启动期故障带出去的通路（启动幕就是在轮询
     这个端点），所以"迁移失败要告诉用户"必须走这里，而不是某个要鉴权的端点。
     形如 `{"status": "failed", "error": …, "quarantined": …, "backup": {…}}`。
+
+    附带 `app`（E1，2026-10-06）：**给浏览器扩展认领端口用的应用标识**。
+    桌面壳改成优先绑固定区间（8765–8769）之后，扩展依次探这些端口，
+    靠这个字段认出"这是 DDToolkit"（端口不是身份，配对 token 才是 —— 见
+    `docs/plans/browser-extension-cookie-sync-execution.md` §3.4）。
+    ⚠️ 只**加**字段，不动既有键：启动幕在轮询它，且它是"没 token 时唯一能带出启动故障的通路"。
     """
     first_run = not FIRST_RUN_MARKER.exists()
     if first_run:
@@ -517,5 +527,5 @@ def healthz():
             )
         except OSError as e:
             logger.warning(f"首次启动标记写入失败: {e}")
-    return {"ok": True, "version": settings.VERSION, "first_run": first_run,
-            "migration": migration_state()}
+    return {"ok": True, "app": APP_IDENTIFIER, "version": settings.VERSION,
+            "first_run": first_run, "migration": migration_state()}

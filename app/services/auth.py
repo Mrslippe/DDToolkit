@@ -258,12 +258,16 @@ class BilibiliAuth:
                     merged[name] = val
         return merged
 
-    def _apply_cookies(self, extracted: dict[str, str]) -> bool:
-        """写入内存并落盘；返回是否有变化。
+    def _apply_cookies(self, extracted: dict[str, str], *, persist: bool = True) -> bool:
+        """写入内存（默认**同时**落盘）；返回是否有变化。
 
         R26：设备号有两个来源名（`bvuid3` = 登录响应的老名字 / `buvid3` = web API 的规范名），
         两者映射到**同一个属性**。这里**先应用老名字、后应用规范名**，让"同时出现时规范名赢"
         成为确定行为 —— 否则结果取决于 Set-Cookie 的先后顺序（实测过这种脆弱点）。
+
+        ⚠️ `persist=False`（2026-10-06，E1）：给"**先试后落盘**"那条路用 ——
+        扩展推来的 cookie 要先探活（`nav`）、确认有效才写 `.env`。
+        旧的两条调用路径（扫码 / `_update_from_response`）保持默认值，行为一字不变。
         """
         changed = False
         order = {"bvuid3": 0}          # 老名字排在前面
@@ -273,9 +277,49 @@ class BilibiliAuth:
                 setattr(self, attr, val)
                 changed = True
                 logger.info(f"Cookie 已更新: {key}={val[:20]}...")
-        if changed:
+        if changed and persist:
             self._save_to_env()
         return changed
+
+    # ── 浏览器扩展推来的整条 cookie（E1，2026-10-06）────────────────────
+
+    async def apply_cookie_checked(self, cookie: str) -> tuple[bool, str, bool]:
+        """`(接不接受, 原因, 有没有真的验过)` —— 给 `POST /auth/import` 用。
+
+        与扫码路径的区别：**扫码已经过一遍登录握手**（`complete()` 里 nav 验过），
+        而扩展推来的是一条**来路不明**的 cookie ⇒ 必须"先试后落盘"：
+        临时写进内存 → 打一次 `nav` → 有效才 `_save_to_env()`；
+        **上游明确说未登录就还原内存、`.env` 一个字节都不动**（不许拿过期的冲掉好凭据）。
+
+        ⚠️ 第三种结局是**网络问题**（探活抛异常）：这时**照样保存**，但第三位返回 `False`
+        表示"没验成"。理由见 `services/cookie_import.py` 的模块 docstring 第 3 条 ——
+        今天的手抄路径根本不校验，网络抖一下就拒收是倒退；但也不许假装验过了。
+        """
+        from app.services.cookie_parse import parse_cookie_header
+
+        parsed = parse_cookie_header(cookie)
+        miss = [k for k in ("SESSDATA", "bili_jct") if not parsed.get(k)]
+        if miss:
+            return False, (f"cookie 缺少 {'、'.join(miss)} —— 从浏览器复制整条 Cookie 头"
+                           f"（F12 → Network → 任意 api.bilibili.com 请求 → Request Headers）"), False
+
+        # 快照：只还原 cookie 类属性（`uname`/`_needs_login` 由探活自己维护，不属于凭据）
+        snapshot = {attr: getattr(self, attr) for attr in _ATTR_MAP.values()}
+        self._apply_cookies(parsed, persist=False)
+        try:
+            ok = await self.check_session()
+        except Exception as e:                       # 网络/上游异常 ⇒ 保存但报"没验成"
+            self._save_to_env()
+            logger.warning("B 站 cookie 已保存，但探活没跑成：%s: %s", type(e).__name__, e)
+            return True, f"已保存，但这次没能连上游验证（{type(e).__name__}）", False
+        if ok:
+            self._save_to_env()
+            logger.info("B 站 cookie 已保存并验证有效")
+            return True, "已保存，并已确认登录态有效", True
+        for attr, val in snapshot.items():
+            setattr(self, attr, val)
+        logger.warning("B 站 cookie 探活未通过（上游说未登录）⇒ 不落盘、内存还原")
+        return False, "上游说这条 cookie 未登录（SESSDATA 可能已过期，重新登录后再同步一次）", False
 
     def _update_from_response(
         self, response: httpx.Response | None = None, jar: httpx.Cookies | None = None

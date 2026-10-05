@@ -120,6 +120,39 @@ def _isolate_xhs_invalid_flag(monkeypatch):
     monkeypatch.setattr(xhs_auth_manager, "_reported_invalid", False)
 
 
+# 凭据类 settings 属性（`save_env_keys` 会 setattr 回写它们，见下一条夹具）
+_CREDENTIAL_SETTINGS = (
+    "BILI_SESSDATA", "BILI_BIJI_JCT", "BILI_DEDE_USER_ID", "BILI_BUVID_3",
+    "BILI_BUVID_4", "BILI_REFRESH_TOKEN",
+    "WEIBO_COOKIE", "WEIBO_UID", "WEIBO_NAME",
+    "XHS_COOKIE", "XHS_COOKIE_SET_AT",
+    "DOUYIN_COOKIE", "DOUYIN_COOKIE_SET_AT", "DOUYIN_UA",
+)
+
+
+@pytest.fixture(autouse=True)
+def _credential_settings_survive_env_writes():
+    """**跑过"真的落盘"的用例之后，把凭据类 `settings` 属性还回去**（2026-10-06，E1）。
+
+    来由：扩展导入那批用例走的是**真实**的落盘路径（`xhs_auth.apply_cookie` /
+    `douyin_auth.apply_cookie` / 新写的 `apply_cookie_checked`），而
+    `env_store.save_env_keys()` 除了写文件，还会 `load_dotenv(override=True)` +
+    `setattr(settings, key, value)`。`settings` 是**类属性** ⇒ 值会留在类上，
+    **下一个测试文件**就带着"某个用例编的假凭据"跑：实测 `tests/test_auth_import.py`
+    跑在 `tests/test_platform_douyin.py` 前面时，后者两条用例红在"应该是零请求却发了请求 /
+    失败分类不是预期那一种"（与 `_api_token_for_test_client` 尾部那句还原同一个道理）。
+
+    ⚠️ 断言的**行为**（`.env` 文件写没写对）不受影响 —— 那是文件，用例自己看的是临时路径。
+    这里只把"用例污染了进程级配置"这件事收干净。
+    """
+    from app.core.config import settings
+
+    before = {k: getattr(settings, k, None) for k in _CREDENTIAL_SETTINGS}
+    yield
+    for key, value in before.items():
+        setattr(settings, key, value)
+
+
 # ── S1：给测试里的 TestClient 统一带上会话 token（devlog/202）────────────────
 #
 # 为什么放在 conftest：S1 起**没配 token 就是 401**（收口后不再有"没配就放行"那一态），

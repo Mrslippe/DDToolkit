@@ -10,8 +10,12 @@ import time
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
 
+from app.core.database import get_db
+from app.services import cookie_import, pairing
 from app.services.auth import auth_manager
 from app.services.douyin_auth import douyin_auth_manager
 from app.services.weibo_auth import weibo_auth_manager
@@ -161,3 +165,72 @@ def save_douyin_cookie(payload: dict):
     if not ok:
         raise HTTPException(400, why)
     return {"status": "saved", **douyin_auth_manager.status()}
+
+
+# ── 浏览器扩展：配对凭证 + 一键导入（E1，2026-10-06）──────────────────────────
+#
+# 为什么要有这一组（用户的痛点）：B 站/微博今天只能扫码，小红书/抖音要手抄整条 Cookie
+# （抖音还要手抄 UA），而**抄漏了键在导入那一刻不报**、要等抓取才炸。扩展一键同步
+# 解决的正是这件事；本组的三个端点就是它的应用侧。
+#
+# ⚠️ 安全形状（细节见 `services/pairing.py` 与 `services/cookie_import.py`）：
+#   · `GET /auth/pairing` 与 `POST /auth/pairing/reset` **要应用 token**（它们给的就是钥匙本身）；
+#   · `POST /auth/import` 是**公开路径**（`api_auth.PUBLIC_EXACT` 里那一条）——
+#     扩展拿不到应用 token，所以凭证校验挪进端点：**配对 token + 回环 + 失败节流**。
+
+@router.get("/pairing")
+def pairing_status(db: Session = Depends(get_db)):
+    """给「设置 → 登录 → 浏览器扩展」那一栏用：当前配对 token。
+
+    ⚠️ **没有就生成一个**（幂等）：打开那一栏就该有东西可复制，而不是先点一次「生成」。
+    ⚠️ 返回值**只**该出现在那个界面与用户的粘贴板里 —— 不进日志、不进通知、不进诊断。
+    """
+    return {"token": pairing.current_token(db)}
+
+
+@router.post("/pairing/reset")
+def pairing_reset(db: Session = Depends(get_db)):
+    """换一把新的配对 token（旧值**立即失效**）。用户点「重置」时调用。"""
+    return {"token": pairing.reset_token(db)}
+
+
+@router.post("/import")
+async def import_cookie(request: Request, payload: dict, db: Session = Depends(get_db)):
+    """**浏览器扩展推凭据的入口**（body: `{platform, cookie, ua?}` + 头 `X-DDToolkit-Pair`）。
+
+    三层门（顺序有意）：
+      ① 回环来源（端口可扫 ⇒ 挡的是"同网段的另一台机器"）；
+      ② 失败节流（公开端点不许是无限次数的猜谜机）；
+      ③ 配对 token（与应用 token **分开**的另一把钥匙）。
+
+    回执**成功与失败同一形状**（`services/cookie_import.ImportReceipt`）：扩展侧一套解析；
+    失败是 400 而不是 500 —— "缺键/过期"是**正常的业务结果**，用户要看到的是"缺哪个"。
+    """
+    host = request.client.host if request.client else None
+    if not cookie_import.is_loopback(host):
+        logger.warning("拒绝非回环来源的凭据导入：%s", host)
+        raise HTTPException(403, "只接受来自本机（127.0.0.1）的导入")
+
+    if pairing.is_throttled():
+        # 不给"再试一次"的暗示：冷却窗口是 60s（`pairing.WINDOW_SECONDS`）
+        raise HTTPException(429, "配对失败次数过多，请等一分钟再试")
+
+    if not pairing.verify(db, request.headers.get(cookie_import.PAIR_HEADER)):
+        pairing.note_failure()
+        # ⚠️ 日志只说"失败了几次"，**绝不回显 token**（连长度都不写 —— 同 `api_auth` 的口径）
+        logger.warning("凭据导入的配对 token 不对（本窗口内第 %d 次）",
+                       pairing.recent_failures())
+        raise HTTPException(401, "配对 token 不对 —— 到「设置 → 登录 → 浏览器扩展」复制当前那一条")
+
+    body = payload or {}
+    receipt = await cookie_import.apply(
+        str(body.get("platform") or "").strip(),
+        str(body.get("cookie") or ""),
+        str(body.get("ua") or body.get("user_agent") or ""),
+    )
+    pairing.note_success()
+    if not receipt.ok:
+        return JSONResponse(status_code=400, content=receipt.as_dict())
+    logger.info("扩展导入凭据：%s（%d 个键，%d 个可用键，verified=%s）",
+                receipt.platform, receipt.cookie_keys, len(receipt.keys), receipt.verified)
+    return receipt.as_dict()
