@@ -3,7 +3,15 @@ import { createPortal } from 'react-dom'
 import { AlertTriangle, CheckCircle2, ChevronDown, Loader2 } from 'lucide-react'
 import OverlayScroll from './OverlayScroll'
 import type { Notice, NoticeActionKind } from '../utils/notificationHub'
-import { KIND_GLYPH, KIND_PRIORITY, pickPrimary } from '../utils/notificationHub'
+import { KIND_GLYPH, isLive } from '../utils/notificationHub'
+import type { NoticeGroup } from '../utils/noticeBoard'
+import {
+  countdownFraction,
+  discFraction,
+  relTimeFor,
+  sectionNotices,
+  todoIds,
+} from '../utils/noticeBoard'
 import { IDLE_CAROUSEL_ENABLED, IDLE_TICK_MS, pickIdle } from '../utils/idleQuotes'
 import { isShellHidden } from '../utils/shellLifecycle'
 import { useShellHidden } from '../hooks/useShellHidden'
@@ -28,6 +36,9 @@ const PANEL_GAP = 6
 /** 面板宽（顶栏宿主。小窗宿主的 400 已随小窗一起退役） */
 const PANEL_W = 340
 
+/** 自动已读的滑出动画时长（ms）—— 必须与 `status-island.css` 的 `.si-item.is-out` 同值 */
+const ITEM_EXIT_MS = 220
+
 const KIND_ICON: Record<string, React.ReactNode> = {
   alert: <AlertTriangle className="size-[13px]" />,
   progress: <Loader2 className="size-[13px] animate-spin" />,
@@ -42,6 +53,9 @@ const KIND_LABEL: Record<string, string> = {
   message: '提示',
 }
 
+/** 已在播放退场动画的条目（`leaving` = 是否正在滑出） */
+type Row = Notice & { leaving?: boolean }
+
 /**
  * 顶栏「状态岛」（R12a，devlog/089）：把原来三套并存的顶栏信息收成**一个控件**。
  *
@@ -49,20 +63,31 @@ const KIND_LABEL: Record<string, string> = {
  * `expand`（面板：全部条目 + 动作）· 空闲时**没有容器**（用户 2026-09-10：
  * 频繁轮询不必占顶栏 —— 那条规则的判定在 `utils/notificationHub.ts` 里，有反向用例）。
  *
+ * ## L1（2026-10-05，`docs/design/notices/channel-and-layering.md`）改了四件事
+ *
+ * 1. **面板分三组**（正在进行 / 需要处理 / 最近）：把"状态"与"事件"从**一条队列**改成
+ *    **两个列表** —— 于是"报告顶掉进度""两场开播只显示一场"这类抢位问题从根上不存在；
+ * 2. **胶囊文案 = 最高优先那组的合并句**（`noticeBoard.sectionNotices` 的 `headline`）：
+ *    多个任务同时跑显示「帖子·账号 抓取中 - 3/11」，而不是只显示其中一个；
+ * 3. **倒计时可视化**：会自动消失的条目在面板里有一条**从右往左消退的细条**，
+ *    胶囊左侧的圆点多一圈**从 12 点顺时针消退的环**（都只在 `notice` 形态上有，见 §10）；
+ * 4. **一键已读**（只清「需要处理」组）与**自动已读的滑出动画**。
+ *
  * 空闲轮播（R12b，用户期望③）：没事发生时文案按 `IDLE_TICK_MS` 在
  * 「状态文案 + 语录」之间轮转。**自己的定时器**，只在空闲（无条目）时开：
  * 挂到抓取轮询上会让轮播的可见性随轮询间隔漂移（甚至停住）。
  *
  * ⚠️ DOM 契约（探针 `ui_probe --status-island` 直接查）：
  *   `.si-island`（`.on` = 有事发生）· `.si-dot` · `.si-text` · `.si-count`
- *   `.si-panel` / `.si-item[data-kind]` / `.si-item-action` / `.si-empty`
+ *   `.si-panel` / `.si-sec[data-group]` / `.si-item[data-kind]` / `.si-item-action` / `.si-empty`
+ *   `.si-item-bar`（倒计时细条，`data-left` = 剩余比例）· `.si-ring`（胶囊圆环，`data-left`）
  *   空闲态的 `data-idle-index` / `data-idle-size` / `data-idle-pool`：轮播当前第几格 /
  *   池子多大 / 池子内容（`|` 分隔）。探针只能看 DOM，靠这三个属性断言"取到的词出自池子、
  *   索引在池内、并且真的在往前走"；语录里不含 `|` 由单测钉住（否则分隔编码会被打乱）。
- * 面板用 **portal + fixed 定位**（顶栏容器 overflow:hidden 会裁掉内联面板）；
- * 位置在打开时按 island 的矩形算一次，滚动/缩放时重算。
+ *   面板用 **portal + fixed 定位**（顶栏容器 overflow:hidden 会裁掉内联面板）；
+ *   位置在打开时按 island 的矩形算一次，滚动/缩放时重算。
  */
-export default function StatusIsland({ notices, onAction, now }: Props) {
+export default function StatusIsland({ notices, onAction, now: nowProp }: Props) {
   const [open, setOpen] = useState(false)
   /**
    * 「钉住」（R39-C，用户 2026-09-19：「改为鼠标 hover 就呼出，离开就收起」）：
@@ -74,10 +99,94 @@ export default function StatusIsland({ notices, onAction, now }: Props) {
   const panelRef = useRef<HTMLDivElement | null>(null)
   const hoverTimer = useRef<number | null>(null)
   const [pos, setPos] = useState<{ left: number; top: number; width: number } | null>(null)
-  const primary = pickPrimary(notices, now)
+  const [tick, setTick] = useState(0)
+  const now = tick === 0 ? nowProp : Math.max(nowProp, Date.now())
+  const sections = sectionNotices(notices, now)
+  const primary = sections[0]?.items[0] ?? null
+  const headline = sections[0]?.headline ?? ''
   const lit = !!primary
+  const hasExpiring = notices.some((n) => n.expiresAt !== undefined && n.expiresAt !== null)
   /** 隐藏到托盘（R18）：轮播停表 */
   const hidden = useShellHidden()
+
+  /**
+   * **自己的秒表**（L1，2026-10-05）：过期与相对时间都由它驱动。
+   *
+   * ⚠️ 为什么不能只靠宿主传进来的 `now`：宿主的 `now` 只在**它自己重渲染**时更新，
+   * 而它只在两种情况下重渲染 —— 轮询回来（闲时 **10s** 一次）或别处的状态变化。
+   * 于是"6 秒后自动已读"会变成"最多 10 秒后才消失"（探针 `--status-island` 实测抓到：
+   * TTL 过后又等了 6.6s 仍然亮着），面板里那句"3 分钟前"也会一跳一跳地停住。
+   *
+   * 只在**有会自动过期的条目**或**面板开着**时走 —— 空闲态有它自己的轮播时钟
+   * （`IDLE_TICK_MS`），两个定时器不会同时开。
+   */
+  useEffect(() => {
+    if (!open && !hasExpiring) return
+    const t = window.setInterval(() => setTick((x) => x + 1), 1000)
+    return () => window.clearInterval(t)
+  }, [open, hasExpiring])
+
+  // ── 自动已读的**退场**动画（L1 §10）────────────────────────────────────
+  // 为什么不能直接渲染 `sections`：条目一过期就从列表里消失，React 立刻把它从 DOM 摘掉，
+  // 于是 CSS 过渡**永远没有机会播**（"滑出"变成"啪一下没了"）。
+  // 做法：本地留一份正在退场的副本，动画放完（`ITEM_EXIT_MS`）再真正移除。
+  //
+  // ⚠️ **过期判定必须自己按时间做**（不能用 `notices` 的变化当触发器）：
+  //    `useNotices` 那份列表**不过滤过期**（过滤发生在渲染时），所以"到点了"这件事
+  //    不改变 `notices` —— 挂在上面的 effect 一辈子不会为它跑（第一版就是这么写的，
+  //    症状是条目**永远留在 rows 里**、滑出动画只在"服务端撤条目"时才播）。
+  // ⚠️ 判据（`.si-item` 的条数）仍按**活着的**条目算 —— 探针不看动画中间态。
+  const [rows, setRows] = useState<Row[]>([])
+  const liveIds = notices.map((n) => n.id).join('|')
+
+  useEffect(() => {
+    setRows((prev) => {
+      const incoming = new Map(notices.map((n) => [n.id, n]))
+      const next: Row[] = []
+      for (const r of prev) {
+        const fresh = incoming.get(r.id)
+        if (fresh) { next.push({ ...fresh, leaving: false }); incoming.delete(r.id) }
+        else if (!r.leaving) next.push({ ...r, leaving: true })      // 服务端撤了 ⇒ 滑出
+        else next.push(r)                                           // 已在滑出：留着等定时器
+      }
+      for (const n of incoming.values()) next.push({ ...n, leaving: false })
+      return next
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveIds])
+
+  /** 定时体检：**过期**（TTL 到点）的条目在这里被判出局并开始滑出。
+   *
+   *  ⚠️ **不能只在面板打开时跑**（第一版就是这么写的，被探针 `messages` 抓出来）：
+   *  面板关着时新来的条目也要进 `rows`（否则它下次打开面板时缺一条），
+   *  而过期的条目也要被判出局（否则 `rows` 会一直长）。
+   *
+   *  ⚠️ 用组件的 `now`（而不是裸 `Date.now()`）并把它放进依赖：判据（`isLive`）与渲染
+   *  用同一条时间轴，不会出现"定时器到点了但 `now` 还没更新"的错位。
+   *
+   *  ⚠️⚠️ **没有真变化时必须返回同一个引用**（`return prev`）：`now` 每个 tick 都变
+   *  （它是 `Math.max(nowProp, Date.now())`），无条件 `map` 会产出一个新数组 ⇒ effect 之间
+   *  互相触发、无限重渲染，**退场动画一帧都看不到**（第一版就是这样，被
+   *  `StatusIsland.test.tsx` 那条"先挂 is-out 再摘掉"抓出来）。
+   *  这与"`useEffect` 里 setState 要防抖"是同一类坑，只是它长得像纯粹的数据变换。
+   */
+  useEffect(() => {
+    setRows((prev) => {
+      let changed = false
+      const next = prev.map((r): Row => {
+        if (!r.leaving && !isLive(r, now)) { changed = true; return { ...r, leaving: true } }
+        return r
+      })
+      return changed ? next : prev
+    })
+  }, [now])
+  useEffect(() => {
+    if (!rows.some((r) => r.leaving)) return
+    const t = window.setTimeout(() => {
+      setRows((prev) => prev.filter((r) => !r.leaving))
+    }, ITEM_EXIT_MS)
+    return () => window.clearTimeout(t)
+  }, [rows])
 
   // 空闲轮播的时钟：**只在空闲时走**（有事发生时立刻停表，省掉一个无谓的定时器；
   // 也让"语录正在轮播"不可能和"有通知亮着"同时出现在屏幕上）。
@@ -191,7 +300,7 @@ export default function StatusIsland({ notices, onAction, now }: Props) {
 
   /** 空闲轮播取词（有事故态时用主条目文案；`lit` 时不参与渲染） */
   const idle = pickIdle(idleTick)
-  const text = primary?.text ?? idle.text
+  const text = lit ? headline : idle.text
 
   // ── R38 批 4「打断 / 重定向」：文案切换走状态机 ──────────────────────────
   // 原来 `.si-text` 挂 `key={text}` ⇒ 文案一变就**重挂载** ⇒ CSS `@keyframes` **从头重放**
@@ -247,6 +356,71 @@ export default function StatusIsland({ notices, onAction, now }: Props) {
   }, [notices.length])
   const href = primary?.source ?? ''
 
+  /** 胶囊左侧：会自动消失时给一个剩余比例（画环），否则保持原来的实心点 */
+  const disc = discFraction(primary, now)
+
+  /** 面板里每一条的渲染（`leaving` 的走滑出动画） */
+  const renderRow = (n: Row) => {
+    const frac = countdownFraction(n, now)
+    const relFor = relTimeFor(n, now)
+    return (
+      <li
+        key={n.id}
+        className={`si-item${n.leaving ? ' is-out' : ''}`}
+        data-kind={n.kind}
+        data-form={n.form ?? 'state'}
+        data-left={frac === null ? undefined : frac.toFixed(3)}
+      >
+        <span className={`si-item-icon k-${n.kind}`}>{KIND_ICON[n.kind]}</span>
+        <span className="si-item-main">
+          {/* 正文与活数据槽**同一行**（`.si-item-line` 是那一行的 flex 容器）：
+              风控倒计时这类"同一句话、只有数字在变"的值放 `value` ——
+              文案不动、数字刷新，所以它**不参与排序**，也不会让条目跳位。
+              此前只渲染 `text` ⇒ 后端那条 `value="47s"` 会整个丢掉（M5-2b）。 */}
+          <span className="si-item-line">
+            <span className="si-item-text">{n.text}</span>
+            {n.value && <span className="si-item-value">{n.value}</span>}
+          </span>
+          {n.detail && <span className="si-item-detail">{n.detail}</span>}
+          <span className="si-item-meta">
+            {KIND_LABEL[n.kind]}
+            {n.source ? ` · ${n.source}` : ''}
+            {/* L1：相对时间（缺失就不显示 —— 老后端没给 createdAt 时不许糊一个"刚刚"）。
+                ⚠️ 分隔符也要一起省：写死 ` · ${''}` 会留一个光秃秃的间隔号。 */}
+            {relFor ? ` · ${relFor}` : ''}
+            {n.sticky ? ' · 常驻' : ''}
+          </span>
+        </span>
+        {n.action && (
+          <button
+            type="button"
+            className="si-item-action"
+            onClick={() => onAction(n.action!.kind, n)}
+          >
+            {n.action.label}
+          </button>
+        )}
+        {/* 自动已读的倒数细条（L1 §10）：**只在会自己消失的条目上**。
+            从右端往左消退 —— `scaleX` 而不是 `width`（不触发布局，也免得整行重排）。 */}
+        {frac !== null && (
+          <span className="si-item-bar" aria-hidden="true">
+            <i style={{ transform: `scaleX(${frac.toFixed(3)})` }} />
+          </span>
+        )}
+      </li>
+    )
+  }
+
+  const rowsById = new Map(rows.map((r) => [r.id, r]))
+  const todo = todoIds(notices, now)
+  /** 正在退场（已过期、动画还没放完）的条目 —— 它们**不参与判据**。
+   *
+   *  ⚠️ 判据只能是 `r.leaving`，**不能**再叠一个 `!notices.some(...)`：
+   *  `notices` 那份列表**不过滤过期**（过滤发生在渲染时）⇒ 刚过期的那条**仍在 `notices` 里**，
+   *  叠了那个条件就永远筛不出东西，退场动画一帧都看不到（第一版就是这么写的）。 */
+  const leaving = rows.filter((r) => r.leaving)
+  const showEmpty = sections.length === 0 && leaving.length === 0
+
   return (
     <>
       <span
@@ -261,7 +435,12 @@ export default function StatusIsland({ notices, onAction, now }: Props) {
         /* R19：轮播开关的**当前状态**（探针据此断言"现在到底是开着还是关着" ——
            开关与断言分处两地，改一处不改另一处就会红，省得悄悄开了/关了没人知道） */
         data-idle-carousel={lit ? undefined : (IDLE_CAROUSEL_ENABLED ? 'on' : 'off')}
-        title={lit ? `${text}（点击查看全部通知）` : text}
+        /* L1：胶囊上那句话来自哪一组 / 那一组有几条（探针据此断言"合并过了"） */
+        data-headline-group={lit ? sections[0]?.group : undefined}
+        data-section-counts={lit
+          ? sections.map((s) => `${s.group}:${s.items.length}`).join(',')
+          : undefined}
+        title={lit ? `${headline}（点击查看全部通知）` : text}
         onPointerEnter={hoverIn}
         onPointerLeave={hoverOut}
         onClick={() => {
@@ -283,8 +462,24 @@ export default function StatusIsland({ notices, onAction, now }: Props) {
           }
         }}
       >
-        <i className={`si-dot${primary?.kind === 'progress' ? ' busy'
-          : primary?.kind === 'alert' ? ' warn' : lit ? ' ok' : ''}`} />
+        {/* 左侧指示器（L1）：**会自动消失**的条目画一圈"还剩多少时间"的环
+            （从 12 点顺时针消退），内芯仍是原来那个状态点 —— 老用户不会认不出它。
+            没有 TTL 的条目（进度/冷却/报告）保持实心点：它们不会自己走，画环就是骗人。 */}
+        <span className="si-disc">
+          {disc !== null && (
+            <svg className="si-ring" viewBox="0 0 20 20" aria-hidden="true"
+                 data-left={disc.toFixed(3)}>
+              <circle className="si-ring-track" cx="10" cy="10" r="8" />
+              <circle
+                className="si-ring-arc" cx="10" cy="10" r="8"
+                strokeDasharray={`${(disc * 50.265).toFixed(2)} 50.265`}
+                transform="rotate(-90 10 10)"
+              />
+            </svg>
+          )}
+          <i className={`si-dot${primary?.kind === 'progress' ? ' busy'
+            : primary?.kind === 'alert' ? ' warn' : lit ? ' ok' : ''}`} />
+        </span>
         {/* 类型字形（D1 内容契约）：点表达**紧迫度**、字形表达**类型**。
             为什么必须有它：`report` 与 `message` 的点色在产品里判定相同（都是 `ok`），
             而胶囊原先不渲染任何图标 ⇒ "全量抓取完成"与"已复制诊断信息"长得一模一样。
@@ -316,44 +511,45 @@ export default function StatusIsland({ notices, onAction, now }: Props) {
               <span className="si-panel-hint">{href}</span>
             </div>
             <OverlayScroll className="si-panel-scroll">
-              <ul className="si-list">
-                {notices.map((n) => (
-                  <li key={n.id} className="si-item" data-kind={n.kind}>
-                    <span className={`si-item-icon k-${n.kind}`}>{KIND_ICON[n.kind]}</span>
-                    <span className="si-item-main">
-                      {/* 正文与活数据槽**同一行**（`.si-item-line` 是那一行的 flex 容器）：
-                          风控倒计时这类"同一句话、只有数字在变"的值放 `value` ——
-                          文案不动、数字刷新，所以它**不参与排序**，也不会让条目跳位。
-                          此前只渲染 `text` ⇒ 后端那条 `value="47s"` 会整个丢掉（M5-2b）。 */}
-                      <span className="si-item-line">
-                        <span className="si-item-text">{n.text}</span>
-                        {n.value && <span className="si-item-value">{n.value}</span>}
-                      </span>
-                      {n.detail && <span className="si-item-detail">{n.detail}</span>}
-                      <span className="si-item-meta">
-                        {KIND_LABEL[n.kind]}
-                        {n.source ? ` · ${n.source}` : ''}
-                        {n.sticky ? ' · 常驻' : ''}
-                      </span>
-                    </span>
-                    {n.action && (
-                      <button
-                        type="button"
-                        className="si-item-action"
-                        onClick={() => onAction(n.action!.kind, n)}
-                      >
-                        {n.action.label}
-                      </button>
+              {showEmpty
+                ? <p className="si-empty">现在没有需要你知道的事</p>
+                : (
+                  <div className="si-secs">
+                    {sections.map((s) => (
+                      <section className="si-sec" data-group={s.group} key={s.group}>
+                        <h4 className="si-sec-title">
+                          {s.label}（{s.items.length}）
+                          {/* 一键已读**只清「需要处理」**（L1 §10）：语义最窄、最不易误点；
+                              「最近」里的告知类本来就会自己过期，不需要也没必要手动清。 */}
+                          {s.group === 'todo' && todo.length > 0 && (
+                            <button
+                              type="button"
+                              className="si-sec-action"
+                              data-ack-all="1"
+                              /* 动作交给宿主（`TopBar.onIslandAction`）→ 它一次把 `todoIds`
+                                 发成一个批量 ack（一次写盘，不会"清到一半"） */
+                              onClick={() => onAction('ack-all' as NoticeActionKind, s.items[0])}
+                            >
+                              全部已读
+                            </button>
+                          )}
+                        </h4>
+                        <ul className="si-list">
+                          {s.items.map((n) => renderRow(rowsById.get(n.id) ?? n))}
+                        </ul>
+                      </section>
+                    ))}
+                    {/* 正在滑出的条目：不参与判据（`.si-item` 计数按活着的算），只为动画留在 DOM 里 */}
+                    {leaving.length > 0 && (
+                      <ul className="si-list si-list-leaving" aria-hidden="true">
+                        {leaving.map((r) => renderRow(r))}
+                      </ul>
                     )}
-                  </li>
-                ))}
-              </ul>
+                  </div>
+                )}
             </OverlayScroll>
             <div className="si-panel-foot">
-              <span className="si-panel-order">
-                优先级：{Object.entries(KIND_PRIORITY).sort((a, b) => b[1] - a[1])
-                  .map(([k]) => KIND_LABEL[k]).join(' > ')}
-              </span>
+              <span className="si-panel-order">今天：正在发生的事优先，其次是等你处理的，最后是刚过去的</span>
             </div>
           </div>,
           document.body,
@@ -361,3 +557,5 @@ export default function StatusIsland({ notices, onAction, now }: Props) {
     </>
   )
 }
+
+export type { NoticeGroup }

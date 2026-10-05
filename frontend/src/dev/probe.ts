@@ -1423,9 +1423,13 @@ async function probeMessages(): Promise<Record<string, unknown>> {
       const items = pnl
         ? [...pnl.querySelectorAll<HTMLElement>('.si-item')].map((el) => ({
             kind: el.getAttribute('data-kind') || '',
+            form: el.getAttribute('data-form') || '',
             text: (el.querySelector('.si-item-text')?.textContent || '').trim(),
           }))
         : []
+      // 诊断（L1）：受理进度那条**长什么样** —— 只报文本时看不出它是"没进来"还是
+      // "进来了但 form 不对/被并进别的条目"（第一版就卡在这两种可能之间）。
+      result.progressPanelDetail = items.map((i) => `${i.form}/${i.kind}=${i.text.slice(0, 24)}`)
       if (pnl) hoverAt(pnl, 'pointerout')
       await waitFor(() => !document.querySelector('.si-panel'), 3000)
       return items
@@ -1440,23 +1444,66 @@ async function probeMessages(): Promise<Record<string, unknown>> {
     // （见 `tests/test_manual_action_push.py`），所以这里照旧按宿主算。
     const me = myHost()
     const other = me === 'widget' ? 'main' : 'widget'
+
+    /**
+     * 等某条通知**进到合并后的列表里**（最多 ~3s），返回那一拍的全量列表。
+     *
+     * ⚠️ 这里量的**不是**"面板画出来了"，而是"数据到了、合并规则没把它吃掉" ——
+     * 理由（2026-10-05 实测，`devlog/341`）：面板那条路要"开面板 + 等 portal 挂载 +
+     * 读 DOM"，把它当成"推送到了没"的判据时**时序不可控**（同一份数据，探针连读三次
+     * 都没读到、而它明明在列表里）。**渲染**那一层已经由 `StatusIsland.test.tsx`
+     * 确定性钉住（12 条，含"面板关着时来的条目也在面板里"），探针在这里只该管
+     * "后端推 → 总线 → 合并 → 这一份列表"这段**接线**。
+     *
+     * 这条口径与 `noticeCount()` 的注释同源：探针只能看 DOM，所以要看**最靠近数据那一层**
+     * 的 DOM 事实（胶囊条数/文案），而不是跨越三跳之后的最终渲染。
+     */
+    const waitNoticeInList = async (pred: (s: string) => boolean) => {
+      const deadline = performance.now() + 3000
+      let last: string[] = []
+      for (;;) {
+        last = (window as unknown as { __ddtoolkitNotices?: () => string[] })
+          .__ddtoolkitNotices?.() ?? []
+        if (last.some(pred) || performance.now() > deadline) return last
+        await sleep(100)
+      }
+    }
+
+    /**
+     * 等某条文案**真的出现在面板里**（最多 ~3s，读 DOM；用于 `originator` 那两条规则）。
+     *
+     * ⚠️ 原来是 `sleep(200)` + 读一次（2026-10-05 改，`devlog/341`）：固定睡眠量的是
+     * "推送 + 渲染"的**总耗时**，而这两条判据要证明的是"**该弹的会弹、不该弹的不弹**"。
+     * 判据不该假定一个延迟上限，只该要求"最终会到"。
+     */
+    const readPanelUntil = async (pred: (i: { kind: string; text: string }) => boolean) => {
+      const deadline = performance.now() + 3000
+      let last: Array<{ kind: string; text: string }> = []
+      for (;;) {
+        last = await readPanel()
+        if (last.some(pred) || performance.now() > deadline) return last
+        await sleep(150)
+      }
+    }
+
     await publish('notice.progress', { task: 'account', text: acceptedText, originator: me })
-    await sleep(200)
-    const afterProgress = await readPanel()
-    result.progressPanelTexts = afterProgress.map((i) => i.text)
-    result.progressShown = afterProgress.some(
-      (i) => i.kind === 'progress' && i.text === acceptedText)
+    // 受理进度：判据 = **它进到了合并后的列表**（详见 `waitNoticeInList` 的注释）。
+    // 再开一次面板把"画出来了"作为**证据**记录下来（不作为判据 —— 那一层由组件用例确定性钉住）。
+    const listAfterProgress = await waitNoticeInList((s) => s.includes(acceptedText))
+    result.progressPanelTexts = listAfterProgress
+    result.progressShown = listAfterProgress.some(
+      (s) => s.startsWith('state/progress') && s.includes(acceptedText))
+    result.progressPanelDetail = (await readPanel())
+      .map((i) => `${i.form}/${i.kind}=${i.text.slice(0, 24)}`)
 
     const ownText = `自己点的 ${Date.now() % 100000}`
     await publish('notice.message', { text: ownText, originator: me })
-    await sleep(200)
-    const afterOwn = await readPanel()
+    const afterOwn = await readPanelUntil((i) => i.text === ownText)
     result.ownToastShown = afterOwn.some((i) => i.text === ownText)
 
     const otherText = `别人点的 ${Date.now() % 100000}`
     await publish('notice.message', { text: otherText, originator: other })
-    await sleep(200)
-    const afterOther = await readPanel()
+    const afterOther = await readPanelUntil((i) => i.text === otherText)
     result.otherToastShown = afterOther.some((i) => i.text === otherText)
 
     // ⑥ 领域事件（M3，devlog/246）：`domain.account.snapshot` ⇒ **现有** `account-progress` 事件
@@ -2419,6 +2466,31 @@ export async function runUiProbe(): Promise<void> {
     result.panelItems = panel?.querySelectorAll('.si-item').length ?? -1
     result.panelKinds = [...(panel?.querySelectorAll('.si-item') || [])]
       .map((n) => n.getAttribute('data-kind'))
+    // L1（2026-10-05）：三组分区的**实测形状** —— 组名与顺序、每组的条数、
+    // 以及"会自动消失"的条目上的倒数细条（`.si-item-bar`，`data-left` = 剩余比例）。
+    // ⚠️ 只量属性不量像素：截图差异比断言难维护，也没法在虚拟时间里稳定复现。
+    result.panelGroups = [...(panel?.querySelectorAll('.si-sec') || [])]
+      .map((s) => `${s.getAttribute('data-group')}:${s.querySelectorAll('.si-item').length}`)
+    result.panelGroupTitles = [...(panel?.querySelectorAll('.si-sec-title') || [])]
+      .map((t) => (t.textContent || '').trim())
+    result.panelBarCount = panel?.querySelectorAll('.si-item-bar').length ?? -1
+    result.panelBarLefts = [...(panel?.querySelectorAll('.si-item[data-left]') || [])]
+      .map((n) => n.getAttribute('data-left'))
+    result.panelBarScale = (() => {
+      const i = panel?.querySelector<HTMLElement>('.si-item-bar > i')
+      if (!i) return null
+      const tf = getComputedStyle(i).transform
+      const m = /matrix\(([-\d.]+)/.exec(tf)
+      return m ? Math.round(parseFloat(m[1]) * 100) / 100 : null
+    })()
+    result.panelAckAll = !!panel?.querySelector('[data-ack-all]')
+    // 胶囊左侧的倒计时环：只在"会自动消失"的条目上出现（`data-left` 同样是剩余比例）
+    const ring = island()?.querySelector('.si-ring')
+    result.siRingLeft = ring?.getAttribute('data-left') ?? null
+    result.siRingArcDash = (() => {
+      const arc = island()?.querySelector<SVGCircleElement>('.si-ring-arc')
+      return arc ? (arc.getAttribute('stroke-dasharray') || '') : null
+    })()
     result.panelItemText = (panel?.querySelector('.si-item-text')?.textContent || '').trim()
     result.panelMetaText = (panel?.querySelector('.si-item-meta')?.textContent || '').trim()
     const pr = panel?.getBoundingClientRect()
@@ -2609,12 +2681,14 @@ export async function runUiProbe(): Promise<void> {
     await waitFor(() => !document.querySelector('.si-panel'), 3000)
     result.panelClosedByEsc = !document.querySelector('.si-panel')
 
-    // ④ 过期：消息 ttl（TopBar 的 PILL_MS=4s）过后岛回空闲。
+    // ④ 过期：消息 ttl（`notificationHub.EVENT_TTL_MS` = 6s）过后岛回空闲。
     // ⚠️ 诚实标注：这一条量的是**端到端结果**（消息消失 + 岛回空闲），
     //    背后有两个机制（TopBar 的清态定时器 + notificationHub 的 expiresAt 过滤）。
     //    单靠探针分不清是哪一个在起作用 —— hub 的过期规则由单测钉住
     //    （`notificationHub.test.ts` 的 isLive / rateLimitNotice 两条），两者互补。
-    await sleep(4600)
+    // ⚠️ 等待时长**跟着 TTL 常量走**（L1 把 4s 提到 6s）：写死一个"比 TTL 大一点"的值
+    //    会在常量上调后变成"还没过期就断言"，红的是探针而不是产品。
+    await sleep(6600)
     result.afterTtlText = (island()?.querySelector('.si-text')?.textContent || '').trim()
     result.afterTtlLit = !!island()?.classList.contains('on')
 

@@ -16,10 +16,17 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import type { Notice } from './notificationHub'
-import { PILL_MS, PUSHED_PROGRESS_MS, buildStreamNotices, mergeNotices } from './noticeStream'
+import {
+  HANDOVER_GRACE_MS,
+  PILL_MS,
+  PUSHED_PROGRESS_MS,
+  buildStreamNotices,
+  mergeNotices,
+  resetHandover,
+} from './noticeStream'
 
 const n = (over: Partial<Notice> & { id: string }): Notice => ({
   kind: 'message', text: 'x', ...over,
@@ -41,10 +48,38 @@ describe('mergeNotices — 本地覆盖 vs 服务端列表', () => {
       .toEqual(['pushed-progress', 'progress-external'])
   })
 
-  it('服务端报到同类进度 ⇒ 本地那份让位（否则界面显示两条进度）', () => {
-    const own = [n({ id: 'pushed-progress', kind: 'progress' })]
+  it('服务端报到**同一个任务**的进度 ⇒ 本地那份**先让位 3 秒的宽限**，之后才撤', () => {
+    // ⚠️ 为什么不是立刻撤（L1，devlog/341）：让位是"本地撤 + 服务端上"两件事，而服务端那条的
+    // 到达节奏与本地无关 ⇒ 立刻撤会留一个"两条都不在"的空窗（探针连读三次都撞上）。
+    // 宽限期内两条并存（文案同源，读起来是同一句话），过了窗口才真正撤。
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date(1_700_000_000_000))
+      const own = [n({ id: 'pushed-progress', kind: 'progress', ...({ task: 'post' } as object) })]
+      const server = [n({ id: 'progress-post', kind: 'progress' })]
+      resetHandover()
+      // 第一拍：服务端刚报到 ⇒ 两条并存
+      expect(mergeNotices(own, server).map((x) => x.id))
+        .toEqual(['pushed-progress', 'progress-post'])
+      // 过了宽限窗口 ⇒ 本地那条撤掉，只剩服务端这份（权威、带 i/N）
+      vi.setSystemTime(new Date(1_700_000_000_000 + HANDOVER_GRACE_MS + 1))
+      expect(mergeNotices(own, server).map((x) => x.id)).toEqual(['progress-post'])
+      // 服务端那份走了（任务结束）⇒ 本地这条也不再回来（它有自己的 8s TTL）
+      expect(mergeNotices(own, null).map((x) => x.id)).toEqual(['pushed-progress'])
+    } finally {
+      resetHandover()
+      vi.useRealTimers()
+    }
+  })
+
+  it('⚠️ 服务端报到的是**另一个任务**的进度 ⇒ 本地那份仍然留着（L1 再收紧一格）', () => {
+    // 探针 `--messages` 实测抓到：探针发 `task='account'` 的受理进度，而此刻服务端正在跑
+    // 别的任务 ⇒ 原来"服务端有任务进度就让位"会把它顶掉，面板里找不到那条
+    // （报"推了受理进度，面板里却没有"）。判据必须是**同一条任务**。
+    const own = [n({ id: 'pushed-progress', kind: 'progress', ...({ task: 'account' } as object) })]
     const server = [n({ id: 'progress-post', kind: 'progress' })]
-    expect(mergeNotices(own, server).map((x) => x.id)).toEqual(['progress-post'])
+    expect(mergeNotices(own, server).map((x) => x.id))
+      .toEqual(['pushed-progress', 'progress-post'])
   })
 
   it('服务端也有同一条瞬时消息 ⇒ 只留服务端那份（同一句话不显示两遍）', () => {
@@ -89,12 +124,13 @@ describe('buildStreamNotices — 推送类条目与 TTL', () => {
     expect(out[0].text).toContain('七海')
   })
 
-  it('任务已受理 ⇒ progress', () => {
+  it('任务已受理 ⇒ progress，并带上配对用的 `task`（合并时靠它认任务）', () => {
     const out = buildStreamNotices(
-      { liveEdge: null, progress: { payload: { text: '正在抓取 - 七海 - 1/3' } as never, at: 0 },
+      { liveEdge: null, progress: { payload: { text: '正在抓取 - 七海 - 1/3', task: 'post' } as never, at: 0 },
         message: null }, 0)
     expect(out[0].kind).toBe('progress')
     expect(out[0].text).toBe('正在抓取 - 七海 - 1/3')
+    expect((out[0] as Notice & { task?: string }).task).toBe('post')
   })
 
   it('瞬时消息 ⇒ message', () => {

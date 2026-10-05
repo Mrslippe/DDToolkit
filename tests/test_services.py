@@ -1727,10 +1727,16 @@ def test_external_task_status_and_done_seq():
     base_seq = sch._status["external"]["seq"]
 
     sch.external_task_started("adopt:22", "永雏塔菲 的历史数据")
-    assert sch.get_fetch_status()["external"] == {
+    # L1（2026-10-05）加的两个键：`auto`（本次是不是自动档发起 —— 自动档不产生顶栏条目）
+    # 与 `started_at`（状态开始成立的时刻 —— 面板要显示"进行中 N 分钟"）。
+    # 判据从"整块相等"改成"这几项相等"：多出来的键本身就是判据的一部分（下面显式断言）。
+    ext = sch.get_fetch_status()["external"]
+    assert {k: ext[k] for k in ("running", "label", "last_label", "seq")} == {
         "running": True, "label": "永雏塔菲 的历史数据",
         "last_label": None, "seq": base_seq,
     }
+    assert ext["auto"] is True, "没显式声明就按自动档（忘了说时的表现是'安静'，不是'永久占位'）"
+    assert isinstance(ext["started_at"], int) and ext["started_at"] > 0
 
     sch.external_task_started("daily", "第三方数据日批次")
     assert sch._status["external"]["label"] == "永雏塔菲 的历史数据、第三方数据日批次"

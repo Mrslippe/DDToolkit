@@ -75,6 +75,36 @@ def client():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_scheduler_state():
+    """把**调度器的进程内状态**在每个用例前后围起来（2026-10-05 踩到）。
+
+    为什么需要：`_external_labels` 是模块级的"谁在跑"登记表，而本文件里有用例会调
+    `external_task_started/​finished`。它留下的 token 会让**别的文件**里"跑完该复位"的断言
+    （`test_services.py` 两条）红 —— 症状是"单独跑绿、全量跑红"，最难查的那一类。
+
+    判据不许依赖"别的用例干不干净"：这里按值存一份、用完还原（不是清空 —— 清空同样会
+    改掉别人留下的现场）。
+
+    ⚠️ **`_external_done_seq` 也要还原**（第一版漏了它）：它是模块级的完成序号计数器，
+    本文件调一次 `external_task_finished` 就把它 +1 ⇒ `test_services` 里那条
+    "`seq == base_seq + 1`"会变成 `3 == 1`。计数器类状态比字典更阴 ——
+    它**看不出被改过**，只在别人的差值断言里现形。
+    """
+    from app.services import scheduler as sch
+
+    saved_labels = dict(sch._external_labels)
+    saved_seq = sch._external_done_seq
+    saved_ext = dict(sch._status["external"])
+    saved_running = (sch._status["account"].get("running"), sch._status["post"].get("running"))
+    yield
+    sch._external_labels.clear()
+    sch._external_labels.update(saved_labels)
+    sch._external_done_seq = saved_seq
+    sch._status["external"].update(saved_ext)
+    sch._status["account"]["running"], sch._status["post"]["running"] = saved_running
+
+
+@pytest.fixture(autouse=True)
 def _pin_login_state(monkeypatch):
     """把"登录态"钉成**已登录**，让每条用例与运行环境无关。
 
@@ -91,7 +121,9 @@ def _pin_login_state(monkeypatch):
 
 
 def _status(*, post_running=False, post_auto=False, acc_running=False, acc_auto=False,
-            rate=None, post_result=None, acc_result=None) -> dict:
+            rate=None, post_result=None, acc_result=None,
+            ext_running=False, ext_auto=False, ext_started=None,
+            acc_started=None) -> dict:
     # 帖子轮的 `last_result` 默认按**全量**造（`REPORT_KINDS` 只对全量出报告）——
     # 想验"别的轮次不出报告"的用例自己显式传 `kind`。
     if post_result is not None:
@@ -99,11 +131,13 @@ def _status(*, post_running=False, post_auto=False, acc_running=False, acc_auto=
     return {
         "account": {"running": acc_running, "auto": acc_auto, "task": "account",
                     "current": "七海", "index": 2, "total": 5,
+                    "started_at": acc_started,
                     "last_result": acc_result},
         "post": {"running": post_running, "auto": post_auto, "task": "full",
-                 "vtuber_name": "七海", "index": 1, "total": 3,
+                 "vtuber_name": "七海", "index": 1, "total": 3, "started_at": None,
                  "last_result": post_result},
-        "external": {"running": False, "label": None},
+        "external": {"running": ext_running, "label": "第三方数据日批次", "seq": 0,
+                     "auto": ext_auto, "started_at": ext_started},
         "manual_running": post_running or acc_running,
         "rate_limit": rate,
         "breaker": {},
@@ -123,7 +157,11 @@ def _get(client, status: dict) -> dict:
 # ── ① 字段契约 ─────────────────────────────────────────────────────────
 
 ALLOWED_KEYS = {"id", "kind", "text", "value", "detail", "source", "sticky",
-                "expiresAt", "action"}
+                "expiresAt", "createdAt", "form", "action"}
+
+#: 三形态（`docs/design/notices/channel-and-layering.md` §2.2）—— 与 `kind` **正交**：
+#: `kind` 管长相（字形/点色）、`form` 管行为（活多久、怎么消失）。两者今天恰好一一对应是巧合。
+ALLOWED_FORMS = {"state", "notice", "action"}
 
 
 def test_contract_keys_exact(client):
@@ -141,6 +179,37 @@ def test_contract_keys_exact(client):
         # 三个必备键：没有 id 就无法 ack / 去重，没有 kind 就排不了序，没有 text 就画不出
         assert {"id", "kind", "text"} <= set(n)
         assert n["kind"] in {"alert", "progress", "report", "message"}
+        # L1：形态必须显式给出（前端按它分组/推导时长），且不许是没见过的值
+        assert n["form"] in ALLOWED_FORMS, f"未知形态 {n['form']!r}"
+
+
+def test_every_notice_carries_a_created_at(client, monkeypatch):
+    """①″ **每条**通知都要有 `createdAt`（面板要显示"3 分钟前"）。
+
+    为什么单列一条：`createdAt` 是"每条都要有"的字段，而它的**来源按形态各不相同**
+    （状态=开始时刻 / 告知=记录时刻 / 处置=收尾时刻）—— 新增一类通知时最容易漏的就是它，
+    漏了的症状是面板上那一行**安静地没有时间**（不报错、不红）。
+    """
+    monkeypatch.setattr(N, "_now_ms", lambda: 1_700_000_000_000)
+    N.record_message("抓取完成")
+    N.record_live_edge({"account_id": 3, "name": "七海", "live_title": "歌回"})
+    N.note_run("post", 4, witnessed=True)
+    body = _get(client, _status(
+        acc_running=True, acc_started=1_699_999_000_000, ext_running=True, ext_auto=False,
+        post_result={"seq": 4, "kind": "full_all", "stored": 1, "skipped": 0, "issues": [],
+                     "finished_at": 1_699_999_500_000},
+        rate={"active": True, "reason": "412", "seconds_left": 47, "window_seconds": 300}))
+    missing = [n["id"] for n in body["notices"] if not n.get("createdAt")]
+    assert missing == [], f"这些条目没有 createdAt（面板上会安静地没有时间）：{missing}"
+    # 状态类：用**状态开始**的时刻，不是 now（否则"进行中"永远显示"刚刚"）
+    acc = next(n for n in body["notices"] if n["id"] == "progress-account")
+    assert acc["createdAt"] == 1_699_999_000_000
+    # 处置类：用报告收尾时刻
+    rep = next(n for n in body["notices"] if n["kind"] == "report")
+    assert rep["createdAt"] == 1_699_999_500_000
+    # 告知类：用记录时刻（== 钉死的 now）
+    live = next(n for n in body["notices"] if n["id"] == "live-3")
+    assert live["createdAt"] == 1_700_000_000_000
 
 
 def test_manual_running_is_carried_with_the_notices(client):
@@ -227,6 +296,71 @@ def test_auto_schedules_produce_no_progress(client):
     assert [n for n in body["notices"] if n["kind"] == "progress"] == []
 
 
+def test_auto_external_task_produces_no_progress(client):
+    """④″ **第三方同步的自动批次同样不产生条目**（L1 修的洞，`devlog/341`）。
+
+    原先 `_progress_notices` 对 `post`/`account` 查了 `auto`，而 `external` 状态里
+    **根本没有这个字段** ⇒ 收录回填 / 每日批次 / 启动补抓都会产生一条常驻进度，
+    而它们**没有终局**：一条"正在同步…"会把胶囊一直占着。
+    判据直接打在"自动档不出条目 / 手动档照样出"这一对反差上（只测前者会让函数退化成 `return []`）。
+    """
+    auto = _get(client, _status(ext_running=True, ext_auto=True))
+    assert [n for n in auto["notices"] if n["id"] == "progress-external"] == [], \
+        "自动批次占了顶栏 ⇒ 胶囊会被一条没有终局的进度一直占着"
+
+    manual = _get(client, _status(ext_running=True, ext_auto=False))
+    ext = [n for n in manual["notices"] if n["id"] == "progress-external"]
+    assert len(ext) == 1 and ext[0]["form"] == "state"
+    assert ext[0]["text"] == "正在同步第三方数据日批次"
+
+
+def test_external_task_started_defaults_to_auto(monkeypatch):
+    """④‴ 调度器那侧：`external_task_started` **默认 auto=True**（保守）。
+
+    默认值的方向是判据的一部分：新加一条外部链路时忘了声明，表现应该是"安静"，
+    而不是"永久占位"。只有"用户刚点了按钮、必须立刻看到反馈"才显式传 `auto=False`。
+
+    ⚠️ **必须自己清 `_external_labels`**（2026-10-05 实测踩到）：它是模块级的
+    "谁在跑"登记表，而全量跑时**别的用例可能留了 token 在里面** —— 那时
+    `external_task_finished` 不会走到"全部结束"那一支（`running` 仍为真），
+    于是这条用例单独跑绿、全量跑红（连带把 `test_services` 里两条"跑完该复位"的也带红）。
+    判据不许依赖"别的用例干不干净"。
+    """
+    from app.services import scheduler as sch
+
+    saved = dict(sch._external_labels)
+    sch._external_labels.clear()
+    try:
+        sch._status["external"].update({"running": False, "auto": False, "started_at": None})
+        sch.external_task_started("unit-test-auto", "某自动批次")
+        assert sch._status["external"]["auto"] is True
+        assert sch._status["external"]["started_at"], \
+            "状态类条目没有开始时刻 ⇒ 面板显示不了'进行中 N 分钟'"
+        sch.external_task_finished("unit-test-auto")
+        assert sch._status["external"]["auto"] is False          # 收尾复位，别留给下一次
+        assert sch._status["external"]["started_at"] is None
+        assert sch._status["external"]["running"] is False
+
+        sch.external_task_started("unit-test-manual", "用户点的同步", auto=False)
+        assert sch._status["external"]["auto"] is False
+        sch.external_task_finished("unit-test-manual")
+    finally:
+        # 恢复现场（把别的用例留下的 token 还回去）—— 不清的话后面"跑完该复位"的用例会红
+        sch._external_labels.clear()
+        sch._external_labels.update(saved)
+        sch._status["external"]["running"] = bool(saved)
+        sch._status["external"]["auto"] = False
+        sch._status["external"]["started_at"] = None
+
+
+def test_account_progress_records_started_at(client):
+    """④⁗ 账号流在 `running` 变真的那一处记 `started_at`（面板"进行中 N 分钟"的来源）。"""
+    from app.services import scheduler as sch
+
+    assert "started_at" in sch._status["account"] and "started_at" in sch._status["post"], \
+        "状态字典里没有 started_at 这个键 ⇒ 前端永远拿不到开始时刻"
+
+
 def test_manual_account_progress_text(client):
     """④′ 手动抓取的进度文案 = `任务名 - V名 - i/N`（与前端同格式）。"""
     body = _get(client, _status(acc_running=True))
@@ -305,8 +439,36 @@ def test_ack_is_idempotent_and_persisted(client, db):
 
 
 def test_ack_rejects_empty_id(client):
-    """⑥′ 空 id 是 422（前端不许发空——否则会往已读集合里塞垃圾）。"""
+    """⑥′ 空请求是 422（前端不许发空——否则会往已读集合里塞垃圾）。
+
+    ⚠️ 判据从"`id: ""` 被 Pydantic 拦下"改成"**两者都空**才 422"（L1 加批量 `ids` 之后）：
+    `id: ""` + `ids: []` 仍然是 422，但错误来源是路由里那句显式判断（Pydantic 不再限制
+    `id` 的最小长度 —— 否则"只给 ids"的批量调用会被它拦掉）。
+    """
     assert client.post("/vtuber/notices/ack", json={"id": ""}).status_code == 422
+    assert client.post("/vtuber/notices/ack", json={"ids": []}).status_code == 422
+    assert client.post("/vtuber/notices/ack", json={}).status_code == 422
+
+
+def test_ack_batch_is_one_round_trip(client, db):
+    """⑥″ 批量已读（「一键已读」，L1）：一次请求清一组，且**幂等**、去重、不覆盖旧的。
+
+    为什么必须有批量口：前端循环发 N 次单条会出现"清到一半失败、面板半干净"的中间态，
+    而用户看到的是一次点击。
+    """
+    r = client.post("/vtuber/notices/ack", json={"ids": ["report-1", "report-2", "report-2"]})
+    assert r.status_code == 200
+    assert r.json()["acked"] == ["report-1", "report-2"], "同一批里重复的 id 不该占两格"
+    # 再发一批：新的排在前面，旧的**不丢**
+    r2 = client.post("/vtuber/notices/ack", json={"ids": ["report-3"]})
+    assert r2.json()["acked"] == ["report-3", "report-1", "report-2"]
+    # 幂等：重发同一批，集合不变
+    r3 = client.post("/vtuber/notices/ack", json={"ids": ["report-1", "report-2"]})
+    assert r3.json()["acked"] == ["report-3", "report-1", "report-2"]
+    assert N.read_ids(db) == ["report-3", "report-1", "report-2"]
+    # 批量里的空串被忽略（不让垃圾进集合）
+    client.post("/vtuber/notices/ack", json={"ids": ["  ", "report-9"]})
+    assert N.read_ids(db) == ["report-9", "report-3", "report-1", "report-2"]
 
 
 def test_route_serves_notices(client):

@@ -32,14 +32,36 @@ import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api/api'
 import { EVENTS, on } from './appEvents'
 import type { LiveEdgePayload, PushedProgressPayload } from './appEvents'
-import { liveNotice, messageNotice } from './notificationHub'
+import { liveNotice, messageNotice, EVENT_TTL_MS } from './notificationHub'
 import type { Notice } from './notificationHub'
 import { startMessageBus } from './messageBus'
 
-/** 操作结果覆盖态的展示时长（两个宿主共用；服务端那份 `MSG_TTL_MS` 与它同值） */
-export const PILL_MS = 4000
+/** 操作结果覆盖态的展示时长（两个宿主共用；服务端那份 `MSG_TTL_MS` 与它同值）
+ *
+ *  ⚠️ L1（2026-10-05）：值从 4000 提到 6000（`EVENT_TTL_MS`，设计案 §3.1）——
+ *  告知类的默认时长。三处必须同值：这里、后端 `notices.MSG_TTL_MS`、以及
+ *  `notificationHub.EVENT_TTL_MS`（有用例对账，别只改一处）。 */
+export const PILL_MS = EVENT_TTL_MS
 /** 推送来的「任务已受理」进度条目的兜底 TTL：任务快到"没有任何一轮轮询看见它"时自己过期 */
 export const PUSHED_PROGRESS_MS = 8000
+
+/**
+ * 服务端进度到达后，本地那条「受理进度」**再多留这么久**（L1）。
+ *
+ * 为什么需要：`mergeNotices` 的让位是"本地撤 + 服务端上"两件事，而服务端那条的**到达节奏**
+ * 与本地这条无关 ⇒ 存在"本地已撤、服务端还没进列表"的空窗（`devlog/341` 里探针连读三次
+ * 都撞在空窗上）。3 秒的并存窗口把空窗糊掉，而两条的文案同源（`compose_task_text`），
+ * 叠在一起看是同一句话，不会误导。
+ */
+export const HANDOVER_GRACE_MS = 3000
+
+/** 最近一次"服务端报了进度"的时刻（模块级：本模块只服务一个宿主；见 `mergeNotices`） */
+let handedOverAt: number | null = null
+
+/** 清掉让位宽限窗口（**单测用**：模块级状态跨用例串味会让"先并存再撤"那条时绿时红） */
+export function resetHandover(): void {
+  handedOverAt = null
+}
 
 /**
  * 把**本地覆盖**与**服务端列表**合一份给状态岛。
@@ -54,12 +76,39 @@ export function mergeNotices(local: Notice[], server: Notice[] | null): Notice[]
   // 写成"服务端只要有 progress 就让位"时，**外部同步**那条（`progress-external`，与手动动作
   // 无关，且常常一直在跑）会把本地进度一起顶掉 ⇒ 点按钮的人又得等 3–10s 轮询（M2 的收益没了）。
   // 旧口径（TopBar 的 `status.manual_running` 一变真就清 `pushedProgress`）也是这个粒度。
-  const srvHasTaskProgress = srv.some(
-    (n) => n.kind === 'progress' && (n.id === 'progress-post' || n.id === 'progress-account'))
+  //
+  // ⚠️ L1（2026-10-05，`devlog/341`）**再收紧一格**：上面的判据是"服务端**有没有**
+  // 任务进度"，而不是"有没有**这一条**的进度"。探针 `--messages` 实测抓到过后果：
+  // 探针发一条 `task='account'` 的受理进度，而此刻服务端正在跑**另一个**任务
+  // （收录回填/第三方同步）⇒ 本地那条被无辜顶掉，面板里找不到它
+  // （报"推了受理进度，面板里却没有"）。⇒ 现在**按 id 配对**：本地 `pushed-progress`
+  // 带着它自己的 `task`，只有服务端出现**同一个任务**的进度条目时才让位。
+  //
+  // ⚠️ 让位那一下**不许闪**：服务端轮询一到，本地这条立刻消失、服务端那条在同一次渲染里
+  // 出现 —— 顺序上没问题（`[...kept, ...srv]`），但**服务端的进度条目有自己的到达节奏**，
+  // 于是存在"本地已撤、服务端还没进列表"的空窗（`devlog/341` 里探针连读三次都撞在空窗上）。
+  // 滚动窗口实现的"见过服务端 3 秒内不撤本地"就是为它：两条并存最多 3 秒（文案同源），
+  // 而"永远不撤"会让本地那条赖着不走（8s TTL 到了才消失）。
+  const now = Date.now()
+  const localInFlight = local.some((n) => n.id === 'pushed-progress')
+  const srvHasProgress = srv.some((n) => n.kind === 'progress')
+  if (localInFlight && srvHasProgress) {
+    // ⚠️ **只在进入让位那一刻记时间**（`??=`）：每拍都刷新会让宽限窗口**永远不会到点**
+    //（窗口从"最后一次调用"起算 ⇒ 每 ≤3s 调一次就永远宽限下去），第一版就是这么写的。
+    handedOverAt ??= now
+  }
+  if (!localInFlight) handedOverAt = null     // 本地那条走了 ⇒ 窗口复位，下一次重新计
+  const justHanded = handedOverAt !== null && now - handedOverAt < HANDOVER_GRACE_MS
+  const srvTasks = new Set(srv.filter((n) => n.kind === 'progress').map((n) => n.id))
+  const handOver = (n: Notice) =>
+    n.id === 'pushed-progress'
+      ? !justHanded && srvTasks.has(`progress-${(n as Notice & { task?: string }).task ?? ''}`)
+      : n.kind === 'progress' && (srvTasks.has('progress-post') || srvTasks.has('progress-account'))
   const srvHasMessage = srv.some((n) => n.kind === 'message')
   const kept = local.filter((n) => !(
-    (n.kind === 'progress' && srvHasTaskProgress) || (n.kind === 'message' && srvHasMessage)
+    (n.kind === 'progress' && handOver(n)) || (n.kind === 'message' && srvHasMessage)
   ))
+  // 服务端那条与本地这条**同 id 时去重**（本地优先）：本地带的是推送那一刻的文案/到达时刻
   const ids = new Set(kept.map((n) => n.id))
   return [...kept, ...srv.filter((n) => !ids.has(n.id))]
 }
@@ -90,10 +139,15 @@ export function buildStreamNotices(src: StreamNoticeSource, now: number): Notice
   }
   if (progress) {
     list.push({
-      id: 'pushed-progress', kind: 'progress', source: '任务进度',
+      id: 'pushed-progress', kind: 'progress', form: 'state', source: '任务进度',
       text: progress.payload.text,
+      // `task` 是**配对用**的机器字段（`account`/`post`/`update`…）：`mergeNotices` 靠它认出
+      // "服务端这份进度是不是同一条任务的"，从而只让**同一个任务**的服务端进度顶掉本地的
+      // （L1 收紧，见 `mergeNotices` 的注释）。它不进 UI。
+      ...({ task: progress.payload.task || '' } as object),
+      createdAt: progress.at,
       expiresAt: progress.at + PUSHED_PROGRESS_MS,
-    })
+    } as Notice)
   }
   if (message) {
     list.push(messageNotice(message.text, message.at, PILL_MS))

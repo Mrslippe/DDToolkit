@@ -215,15 +215,24 @@ class NoticeOut(BaseModel):
     字段与前端 `utils/notificationHub.ts::Notice` **逐字对齐** —— 少一个键前端就画不出来，
     所以 `tests/test_notices.py` 有一条**键集合**契约用例盯着（反向验证：删字段 ⇒ 当场红）。
     `value` 是 M5 新增的"活数据"槽位（倒计时/进度独立成槽，自己刷新而不重排文案）。
+
+    L1（`docs/design/notices/channel-and-layering.md`，2026-10-05）再加两个字段：
+
+    - `form`（三形态）：`state` 现在有什么在发生 · `notice` 刚发生了什么（会自动已读）·
+      `action` 需要用户决定。**持续时间与已读方式都由它推导**（不再手写五种时长）；
+    - `createdAt`：条目**创建时刻**（服务端毫秒口径）—— 面板要显示"3 分钟前"，
+      而 `expiresAt` 只能表达"什么时候没了"。老后端没有它 ⇒ 前端不显示相对时间（不猜）。
     """
     id: str
-    kind: str                     # alert | progress | report | message
+    kind: str                     # alert | progress | report | message（**视觉**：字形与点色）
     text: str
     value: str | None = None      # 活数据（如风控倒计时 "47s"）
     detail: str | None = None
     source: str | None = None
     sticky: bool = False
     expiresAt: int | None = None  # 毫秒（**服务端 `now` 口径**，见响应的 `now`）
+    createdAt: int | None = None  # 毫秒（服务端 `now` 口径）；None = 老后端/算不出来
+    form: str | None = None       # state | notice | action
     action: dict | None = None    # {label, kind}
 
 
@@ -243,8 +252,14 @@ class NoticesOut(BaseModel):
 
 
 class NoticeAckIn(BaseModel):
-    """`POST /vtuber/notices/ack` 的请求体（记一条通知已读）。"""
-    id: str = Field(min_length=1, max_length=120)
+    """`POST /vtuber/notices/ack` 的请求体：记**一条**或**一批**通知已读。
+
+    `ids` 是 L1（2026-10-05）加的：面板的「一键已读」要一次清掉「需要处理」整组 ——
+    让前端循环发 N 次单条 ack 会出现"清到一半失败、面板半干净"的中间态。
+    两个字段都给了以 `ids` 为准（`id` 是既有调用方的兼容面）。
+    """
+    id: str = Field(default="", max_length=120)
+    ids: list[str] = Field(default_factory=list, max_length=100)
 
 
 class NoticeAckOut(BaseModel):

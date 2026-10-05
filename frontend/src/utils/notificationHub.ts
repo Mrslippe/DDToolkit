@@ -15,8 +15,10 @@
 
 export type NoticeKind = 'alert' | 'progress' | 'report' | 'message'
 
-/** 面板里的动作（由渲染层映射到具体回调） */
-export type NoticeActionKind = 'open-report' | 'open-limits' | 'login' | 'dismiss'
+/** 面板里的动作（由渲染层映射到具体回调）
+ *
+ *  `ack-all`（L1）：「一键已读」—— 只清「需要处理」那一组（面板里那一组标题右侧的按钮）。 */
+export type NoticeActionKind = 'open-report' | 'open-limits' | 'login' | 'dismiss' | 'ack-all'
 
 export interface NoticeAction {
   label: string
@@ -33,6 +35,21 @@ export interface Notice {
    * M5-2 切换供数方时，`text` 保持稳定、只有 `value` 在跳。
    */
   value?: string
+  /**
+   * **形态**（L1，2026-10-05）：`state` 现在有什么在发生 / `notice` 刚刚发生了什么 /
+   * `action` 需要用户决定。分组、时长、已读方式都由它推导（`utils/noticeBoard.ts`）。
+   *
+   * ⚠️ 与 `kind` **正交**：`kind` 管长相（字形/点色），`form` 管行为。别拿 `kind` 推 `form`：
+   * 两者今天恰好一一对应是巧合（报告曾是 alert、进度也曾经要和报告抢胶囊）。
+   * 老后端没有这个字段 ⇒ 当 `state` 处理（保守：状态不自动消失、不自动已读）。
+   */
+  form?: 'state' | 'notice' | 'action'
+  /**
+   * 条目**创建时刻**（ms，服务端 `now` 口径）—— 面板要显示"3 分钟前"。
+   * 状态类给的是"状态开始成立"的时刻（读作"进行中 N 分钟"）。
+   * ⚠️ 缺失时**不显示相对时间**（`noticeBoard.relTime` 返回空串），不许用渲染时刻糊一个。
+   */
+  createdAt?: number
   /** 面板里的补充说明（可选） */
   detail?: string
   /** 来源标注（面板里显示，如「风控冷却」「登录态」），让用户知道话是谁说的 */
@@ -187,8 +204,22 @@ export function reportNotice(opts: {
  * ⚠️ **必须带 TTL，不能 sticky**：alert 的优先级（4）高于 progress（3），常驻就等于
  * "开播过的那次会一直压住顶栏的任务进度"。取 2 分钟：够用户看见并决定，又不长期占位。
  * ⚠️ 面板里的顺序仍由 `pickPrimary` 决定：同一时刻多条 alert 取**最新**那条。
+ *
+ * L1（2026-10-05）：它是**告知类里唯一带时窗的**（`form='notice'` + 2 分钟）——
+ * 胶囊与面板都会为它画倒计时（`noticeBoard.countdownFraction`）。
  */
 export const LIVE_NOTICE_MS = 2 * 60_000
+
+/**
+ * **告知类**的默认展示时长（L1，设计案 §3.1）："已同步完成 / 发现新版本"这种
+ * **过期无损失**的消息，读到就行；有时窗的（开播、磁盘快满）另给 `LIVE_NOTICE_MS`。
+ *
+ * 为什么从 4s 提到 6s：4s 的可见性其实很低 —— toast 在顶部居中且同屏 3 条，
+ * 胶囊上又常常被进度占着；"看到它"需要一次主动的视线移动。6s 是"足够被看到、
+ * 又不至于赖着不走"的折中，仍短于空闲轮询（10s），所以不会积压。
+ * ⚠️ 后端 `services/notices.MSG_TTL_MS` 与 `noticeStream.PILL_MS` 必须同值（有用例对账）。
+ */
+export const EVENT_TTL_MS = 6_000
 
 export function liveNotice(opts: {
   id: string
@@ -200,9 +231,11 @@ export function liveNotice(opts: {
   return {
     id: opts.id,
     kind: 'alert',
+    form: 'notice',
     text: `${opts.name} 开播了`,
     detail: opts.title || undefined,
     source: '开播',
+    createdAt: opts.now,
     expiresAt: opts.now + (opts.ttlMs ?? LIVE_NOTICE_MS),
   }
 }
@@ -212,8 +245,10 @@ export function messageNotice(text: string, now: number, ttlMs: number): Notice 
   return {
     id: `msg-${now}`,
     kind: 'message',
+    form: 'notice',
     text,
     source: '操作结果',
+    createdAt: now,
     expiresAt: now + ttlMs,
   }
 }

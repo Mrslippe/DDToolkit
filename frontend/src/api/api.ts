@@ -304,6 +304,17 @@ export const api = {
       body: JSON.stringify({ id }),
     }),
 
+  /** 一次记**一批**已读（「一键已读」，L1）——整批一次写盘。
+   *
+   *  为什么不循环调上面那个：N 次请求会出现"清到一半失败、面板半干净"的中间态，
+   *  而用户看到的是一次点击。批量口在服务端也是**一次**写 `app_meta`。 */
+  ackNotices: (ids: string[]) =>
+    request<{ acked: string[] }>('/vtuber/notices/ack', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    }),
+
   /** 单个 VTuber —— **带运行时校验** */
   getVtuber: (id: number) => request<VTuber>(`/vtuber/${id}`, undefined, validateVtuber),
 

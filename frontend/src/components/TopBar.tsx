@@ -32,6 +32,7 @@ import { hideToTray, quitApp } from '../utils/shellBridge'
 import { isShellHidden } from '../utils/shellLifecycle'
 import { closeIntent, parseCloseAction, type CloseAction } from '../utils/shellState'
 import type { Notice, NoticeActionKind } from '../utils/notificationHub'
+import { todoIds } from '../utils/noticeBoard'
 import { useNotices } from '../utils/noticeStream'
 import { api } from '../api/api'
 import type { AccountSnapshot, AuthStatus, FetchStatus, PostFetchStatus } from '../api/types'
@@ -373,6 +374,21 @@ export default function TopBar() {
   const [devNotices, setDevNotices] = useState<Notice[]>([])
   const notices = useNotices(now, { server: serverNotices, extraLocal: devNotices })
 
+  /**
+   * dev-only（L1）：把**当前这一份合并后的通知列表**暴露给探针。
+   *
+   * 为什么需要：探针只能看 DOM，于是"面板里没有这条"分不清是"推送没到这个 hook"
+   * 还是"到了但没画出来" —— 而这两者的修法完全不同（查总线 vs 查渲染）。
+   * 生产构建里 `import.meta.env.DEV` 为 false ⇒ 摇掉。
+   */
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    const w = window as unknown as { __ddtoolkitNotices?: () => string[] }
+    w.__ddtoolkitNotices = () => notices.map(
+      (x) => `${x.form ?? '?'}/${x.kind}:${x.text.slice(0, 20)}`)
+    return () => { delete w.__ddtoolkitNotices }
+  }, [notices])
+
   // ⑥ R29：把风控冷却同步到**托盘**（收进托盘后没人看界面，状态岛也就看不见了）。
   // 可见时吃上面这条 2s 轮询；隐藏时 hook 内自带 60s 心跳（详见 useTrayStatus 注释）。
   useTrayStatus(status?.rate_limit)
@@ -404,6 +420,17 @@ export default function TopBar() {
     if (kind === 'login') { setLoginOpen(true); return }
     if (kind === 'dismiss') {
       ackNotice(notice)
+      return
+    }
+    if (kind === 'ack-all') {
+      // 「一键已读」（L1）：一次清掉「需要处理」整组。
+      // ⚠️ **一次请求**而不是循环单条：循环会出现"清到一半失败、面板半干净"的中间态，
+      //    而用户看到的是一次点击（`api.ackNotices` 就为这个加的）。
+      const ids = todoIds(notices, now)
+      if (!ids.length) return
+      void api.ackNotices(ids).then((r) => {
+        setServerNotices((prev) => (prev ? prev.filter((x) => !r.acked.includes(x.id)) : prev))
+      }).catch(() => { /* 后端不可达：下一条轮询会把它带回来，不打断用户 */ })
       return
     }
     // 'open-limits' 暂未接线：能力受限仍由顶栏那个**独立入口**承担

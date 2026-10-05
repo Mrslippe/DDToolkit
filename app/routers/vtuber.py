@@ -313,12 +313,20 @@ def get_notices(db: Session = Depends(get_db)):
 
 @router.post("/vtuber/notices/ack", response_model=NoticeAckOut)
 def ack_notice(data: NoticeAckIn, db: Session = Depends(get_db)):
-    """记一条通知**已读**（M5-1，devlog/253）。
+    """记通知**已读**（M5-1，devlog/253；L1 起支持**一批**）。
 
     修的是"刷新 / 深休眠重建之后完成报告**原地复活**"——今天前端只 `setDoneReport(null)`
     清内存。已读集合落 `app_meta`（那正是为"进程外要记住的少量状态"建的表，见其模型注释）。
     **幂等**：同一个 id 记两次结果一样（判据在 `tests/test_notices.py`）。
+
+    ⚠️ 空请求（既没 `id` 也没 `ids`）⇒ **422**：前端不许发空，否则会往已读集合里塞垃圾，
+    而且"点了没反应"这种 bug 会被静默吞掉（原先靠 `id: min_length=1` 表达，改成批量后
+    那道约束落在这一句判断上）。
     """
+    if not (data.id or "").strip() and not data.ids:
+        raise HTTPException(422, "ack 至少要给一个 id（单条用 `id`，批量用 `ids`）")
+    if data.ids:
+        return NoticeAckOut(acked=notices_service.ack_notices(db, data.ids))
     return NoticeAckOut(acked=notices_service.ack_notice(db, data.id))
 
 

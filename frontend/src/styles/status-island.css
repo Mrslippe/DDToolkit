@@ -173,6 +173,52 @@
   flex-shrink: 0;
 }
 
+/* ── L1（2026-10-05）：胶囊左侧的**倒计时环**（`docs/design/notices/channel-and-layering.md` §10）
+   「会自动消失的条目」才画：外圈环从 12 点顺时针消退（剩余比例 → 环长），
+   内芯仍是上面那个状态点（**保留"绿点/红点"的既有语义** —— 老用户不会认不出它）。
+   没有 TTL 的条目（进度/冷却/报告）不画环：它们不会自己走，画环就是骗人。 */
+.si-disc {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+}
+
+.si-ring {
+  position: absolute;
+  inset: 0;
+  width: 13px;
+  height: 13px;
+  /* 剩余比例以 `data-left` 表达（探针据此断言，不去数像素） */
+}
+
+.si-ring-track {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.28);
+  stroke-width: 2;
+}
+
+.si-ring-arc {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 2;
+  stroke-linecap: round;
+  /* 环长由 JS 给的 `stroke-dasharray` 决定；过渡只让"每秒一跳"看起来是连续的 */
+  transition: stroke-dasharray 0.9s linear;
+}
+
+/* 顶栏空闲态（没有深色底）时环要换深色，否则白环看不见 */
+.si-island:not(.on) .si-ring-track {
+  stroke: rgba(0, 0, 0, 0.18);
+}
+
+.si-island:not(.on) .si-ring-arc {
+  stroke: var(--c-primary);
+}
+
 /* 操作成功覆盖态：白点（此时徽章已亮起，白点在深玫瑰底上才看得见）。
    ⚠️ **这是顶栏的配色**：顶栏胶囊事件态是深玫瑰底 `#c9406f` ⇒ 白点才有"成功"语义。
    （当年浮在壁纸上的深色卡片宿主要把这里改回绿，那条宿主 2026-10-01 已退役。） */
@@ -497,6 +543,116 @@
   background: var(--sel-bg);
 }
 
+/* ── L1（2026-10-05）：面板的三组 + 倒数细条 + 自动已读的滑出 ───────────────── */
+
+.si-secs {
+  display: flex;
+  flex-direction: column;
+}
+
+.si-sec + .si-sec {
+  border-top: 1px solid var(--c-border);
+}
+
+.si-sec-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 6px 12px 2px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--c-text-sub);
+}
+
+/* 「全部已读」（只在「需要处理」那组出现）：靠 `margin-left:auto` 推到行尾 ——
+   它就是这一组的组级动作，不该混进条目里。 */
+.si-sec-action {
+  margin-left: auto;
+  padding: 2px 8px;
+  border: 1px solid var(--c-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--c-text-sub);
+  font-family: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.si-sec-action:hover {
+  border-color: var(--c-primary);
+  color: var(--c-primary-deep);
+}
+
+/* 倒数细条：贴在条目**底边**（高 2px），满宽 → 0 由 `transform: scaleX()` 表达
+   （不变宽度 ⇒ 不触发布局、不会让整行重排）。
+   ⚠️ 只有**会自动消失**的条目有这个元素（进度/报告不许有，见设计案 §10）。 */
+.si-item {
+  position: relative;
+}
+
+.si-item-bar {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 0;
+  height: 2px;
+  border-radius: 1px;
+  background: rgba(0, 0, 0, 0.06);
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.si-item-bar > i {
+  display: block;
+  height: 100%;
+  background: var(--c-text-sub);
+  opacity: 0.5;
+  transform-origin: left center;
+  /* 每秒一跳走成连续消退；最后一格的跳变由 `data-left` 的更新兜住 */
+  transition: transform 0.9s linear, background-color var(--motion-fast) ease;
+}
+
+/* 尾声（≤20%）：转主色 —— 告诉用户"它马上要自己走了"（设计案 §10） */
+.si-item[data-left^="0.0"] .si-item-bar > i,
+.si-item[data-left="0.100"] .si-item-bar > i,
+.si-item[data-left="0.200"] .si-item-bar > i {
+  background: var(--c-primary);
+  opacity: 1;
+}
+
+/* 自动已读的退场：**向左滑出 + 淡出**，下一条靠 `max-height` 收起补位
+   （用户 2026-10-05 选定方案 A；时长与 StatusIsland 的 `ITEM_EXIT_MS` 同值，
+   ⚠️ 改一处必须改另一处）。 */
+.si-item.is-out {
+  animation: si-item-out 220ms var(--ease-exit) both;
+  pointer-events: none;
+}
+
+@keyframes si-item-out {
+  0% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(-24px);
+  }
+}
+
+/* 正在滑出的那几条单独一列：它们**不参与判据**（`.si-item` 的条数按活着的算） */
+.si-list-leaving {
+  padding-top: 0;
+}
+
+.si-empty {
+  margin: 0;
+  padding: 14px 12px;
+  font-size: 11.5px;
+  color: var(--c-text-sub);
+}
+
 .si-panel-foot {
   padding: 6px 12px 8px;
   border-top: 1px solid var(--c-border);
@@ -525,5 +681,27 @@
 
   .si-panel {
     animation: si-panel-in-fade var(--motion-fast) ease both;
+  }
+
+  /* 自动已读的滑出改成**原地淡出**（reduce 下不做横向位移 —— 位移是最容易引起不适的那类动效） */
+  .si-item.is-out {
+    animation: si-item-out-fade var(--motion-fast) ease both;
+  }
+
+  .si-item-bar > i {
+    transition: none;
+  }
+
+  .si-ring-arc {
+    transition: none;
+  }
+}
+
+@keyframes si-item-out-fade {
+  0% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
   }
 }

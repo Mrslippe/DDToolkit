@@ -120,18 +120,30 @@ _status_lock = threading.RLock()
 # + `index/total`（进度），顶栏据此拼「动态更新中 - 明前奶绿 - 1/11」。
 _status: dict = {
     "account": {"running": False, "current": None, "index": 0, "total": 0,
-                "task": None, "vtuber_name": None,
+                "task": None, "vtuber_name": None, "started_at": None,
                 "recent": []},   # 最近完成的账号字段快照，供前端就地增量刷新侧栏
     "post": {"running": False, "target": None, "task": None, "vtuber_name": None,
-             "index": 0, "total": 0},
+             "index": 0, "total": 0, "started_at": None},
     # 外部第三方数据任务（收录回填 / 每日批次）：running/label 供顶栏胶囊展示，
     # seq 每次完成自增——前端据此发 fetch-idle 让档案卡片刷新（v0.9.4）
-    "external": {"running": False, "label": None, "last_label": None, "seq": 0},
+    # `auto`：本次是不是定时档/后台自己发起的（L1：自动批次不产生顶栏条目，见 `external_task_started`）
+    # `started_at`：状态**开始成立**的时刻（ms）—— 面板要靠它显示"进行中 3 分钟"
+    "external": {"running": False, "label": None, "last_label": None, "seq": 0,
+                 "auto": False, "started_at": None},
 }
 
 # 外部任务登记表：token → 展示文案（并发时合并显示；全部结束才置 running=False）
 _external_labels: dict[str, str] = {}
 _external_done_seq = 0
+
+
+def _now_ms() -> int:
+    """当前毫秒时间戳（与 `services/notices._now_ms` 同口径）。
+
+    为什么单独一个：状态类的 `started_at` 与通知的 `createdAt` 必须是**同一个时间轴**，
+    前端拿它算"进行中 3 分钟"；写成 `time.time() * 1000` 散落各处迟早出现两种取整口径。
+    """
+    return int(time.time() * 1000)
 
 
 def _status_snapshot() -> dict:
@@ -151,15 +163,24 @@ def _status_snapshot() -> dict:
         }
 
 
-def external_task_started(token: str, label: str) -> None:
-    """外部数据任务进入运行态：顶栏状态胶囊展示进度。
+def external_task_started(token: str, label: str, *, auto: bool = True) -> None:
+    """外部数据任务进入运行态。
 
     token 用于并发去重（如 `adopt:22` / `daily` / `weekly`），label 是给用户看的文案。
+
+    `auto`（2026-10-05，L1）：**这次是不是定时档/后台自己发起的**。
+    ⚠️ 顶栏那条「自动节拍不占顶栏」的口径（2026-09-10 用户）原先只对账号流/帖子流生效，
+    而 `external` 状态里**根本没有这个字段** ⇒ 收录回填、每日批次、启动补抓全都产生
+    常驻进度条目，一条没有终局的进度会把胶囊一直占着。
+    默认 `True`（**保守**）：新加一条外部链路时忘了说，它的表现是"安静"而不是"永久占位"。
+    只有"用户刚点了按钮、必须立刻看到反馈"的那条路才显式传 `auto=False`。
     """
     with _status_lock:
         _external_labels[token] = label
         _status["external"]["running"] = True
+        _status["external"]["auto"] = bool(auto)
         _status["external"]["label"] = "、".join(dict.fromkeys(_external_labels.values()))
+        _status["external"]["started_at"] = _now_ms()
 
 
 def external_task_finished(token: str) -> None:
@@ -174,6 +195,9 @@ def external_task_finished(token: str) -> None:
         _status["external"]["running"] = bool(_external_labels)
         _status["external"]["label"] = (
             "、".join(dict.fromkeys(_external_labels.values())) or None)
+        if not _external_labels:
+            _status["external"]["auto"] = False
+            _status["external"]["started_at"] = None
 
 
 def _push_account_snapshot(acc) -> None:
@@ -328,6 +352,9 @@ def _set_post_last_result(seq: int, kind: str, label: str,
         "videos": videos, "dynamics": dynamics,
         "stored": stored, "skipped": skipped,
         "issues": issues, "video_missing": video_missing,
+        # 报告条目的 `createdAt`（L1）：完成报告在面板里要显示"12 分钟前"。
+        # 放在收尾这一处（四个调用点的唯一收口），与 `seq` 同源，不会各写一份时间。
+        "finished_at": _now_ms(),
     }
     _status["post"]["last_result"] = payload
     message_hub.HUB.publish(message_hub.MSG_POSTS_CHANGED, payload)
@@ -1012,6 +1039,7 @@ async def async_fetch_accounts(account_ids: list[int], *, label: str = "指定�
     _fetch_running = True
     _fetch_scope = "single"
     _status["account"]["running"] = True
+    _status["account"]["started_at"] = _now_ms()
     _status["account"]["task"] = "account"   # P8-C：顶栏文案「账号信息抓取中」
     _status["account"]["recent"] = []   # 每轮自包含：清空上一任务的快照
     result = FetchResult()
@@ -1125,6 +1153,7 @@ async def async_fetch_and_update(auto: bool = False) -> FetchResult:
     _fetch_running = True
     _fetch_scope = "full"
     _status["account"]["running"] = True
+    _status["account"]["started_at"] = _now_ms()
     _status["account"]["task"] = "account"   # P8-C：顶栏文案「账号信息抓取中」
     _status["account"]["recent"] = []   # 每轮自包含：清空上一任务的快照
     result = FetchResult()
@@ -1788,6 +1817,7 @@ async def _auto_yield_account_with(commit) -> None:
         _fetch_running = True
         _fetch_scope = saved_scope   # 手动任务会把 scope 改成 single，让位返回时恢复
         _status["account"]["running"] = True
+        _status["account"]["started_at"] = _now_ms()
     logger.info("定时账号任务已让位给手动任务，继续执行")
 
 
@@ -1820,6 +1850,7 @@ async def _auto_yield_post_with(commit) -> None:
         _auto_post_active.set()
         _post_fetch_running = True
         _status["post"]["running"] = True
+        _status["post"]["started_at"] = _now_ms()
     logger.info("定时帖子任务已让位给手动任务，继续执行")
 
 
@@ -2652,6 +2683,7 @@ async def async_fetch_posts(platform: str, uid: str, video_pages: int, dynamics_
 
     _post_fetch_running = True
     _status["post"]["running"] = True
+    _status["post"]["started_at"] = _now_ms()
     # P8-C：单账号快速抓取（无 i/N 进度）
     _set_post_progress("quick", None, 1, 1)
     res_seq = _next_result_seq()
@@ -2729,6 +2761,7 @@ async def async_fetch_first_screen(account_id: int) -> PostFetchResult:
 
     _post_fetch_running = True
     _status["post"]["running"] = True
+    _status["post"]["started_at"] = _now_ms()
     res_seq = _next_result_seq()
     db: Session = SessionLocal()
     client = new_async_client(15.0)
@@ -2787,6 +2820,7 @@ async def async_fetch_all_posts() -> dict:
 
     _post_fetch_running = True
     _status["post"]["running"] = True
+    _status["post"]["started_at"] = _now_ms()
     res_seq = _next_result_seq()
     total = {"videos": 0, "dynamics": 0, "stored": 0, "skipped": 0}
     details = []
@@ -2887,6 +2921,7 @@ async def async_fetch_vtuber_posts(name: str, platform: str = "bilibili") -> dic
 
     _post_fetch_running = True
     _status["post"]["running"] = True
+    _status["post"]["started_at"] = _now_ms()
     res_seq = _next_result_seq()
     total = {"videos": 0, "dynamics": 0, "stored": 0, "skipped": 0}
     details = []
@@ -3009,6 +3044,7 @@ async def async_update_unarchived_posts(name: str | None = None) -> dict:
 
     _post_fetch_running = True
     _status["post"]["running"] = True
+    _status["post"]["started_at"] = _now_ms()
     res_seq = _next_result_seq()
     db: Session = SessionLocal()
     client = new_async_client(15.0)
@@ -3364,6 +3400,7 @@ async def run_latest_dynamics_sweep() -> dict:
     _auto_post_active.set()
     _post_fetch_running = True
     _status["post"]["running"] = True
+    _status["post"]["started_at"] = _now_ms()
     db: Session = SessionLocal()
     client = new_async_client(15.0)
     sessions: dict[str, Session] = {}

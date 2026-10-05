@@ -47,8 +47,20 @@ logger = logging.getLogger(__name__)
 
 # ── 口径常量（与前端逐字对齐；M5-2 切换后**以后端这份为准**）──────────────
 KIND_PRIORITY = {"alert": 4, "progress": 3, "report": 2, "message": 1}
-# 瞬时消息的展示时长：前端 `utils/noticeStream.ts::PILL_MS`
-MSG_TTL_MS = 4000
+
+#: **三形态**（L1，`docs/design/notices/channel-and-layering.md` §2.2，2026-10-05）。
+#: 与 `kind` 正交：`kind` 管**长相**（字形/点色），`form` 管**行为**（活多久、怎么消失、能不能被顶掉）。
+#: ⚠️ 不要用 `kind` 推 `form`：两者今天恰好一一对应，但那是巧合 ——
+#: 报告曾是 `alert`（风控冷却）也曾经要和 `progress` 抢胶囊，混着用会在下一次改口径时静默出错。
+FORM_STATE = "state"      # 现在有什么在发生（进度 / 冷却 / 登录失效）：跟事实同寿命，不倒数
+FORM_NOTICE = "notice"    # 刚刚发生了什么（开播 / 同步完成 / 新版本）：有 TTL，自动已读
+FORM_ACTION = "action"    # 需要用户决定（完成报告）：常驻到用户确认
+
+#: 瞬时消息的展示时长：前端 `utils/noticeStream.ts::PILL_MS`（= `notificationHub.EVENT_TTL_MS`）。
+#: ⚠️ L1（2026-10-05）从 4000 提到 6000（设计案 §3.1「告知类默认时长」）——
+#: **三处必须同值**（这里 / `PILL_MS` / `EVENT_TTL_MS`），改一处不改另两处会让"同一条消息
+#: 在两扇窗里活的时间不一样"（`tests/test_notices.py` 有对账用例）。
+MSG_TTL_MS = 6000
 # 开播告警的展示时长：前端 `utils/notificationHub.ts::LIVE_NOTICE_MS`
 LIVE_TTL_MS = 2 * 60_000
 # 已读集合的上限（防 `app_meta` 那条 JSON 无限长）
@@ -172,6 +184,23 @@ def ack_notice(db: Session, notice_id: str) -> list[str]:
     return ids
 
 
+def ack_notices(db: Session, notice_ids: list[str]) -> list[str]:
+    """一次记多条已读（面板的「一键已读」，L1）。
+
+    为什么要有批量口：前端循环发 N 次单条 ack 会出现"清到一半失败、面板半干净"的中间态，
+    而用户看到的是一次点击。整批一次写盘，幂等与上限口径与单条那条**逐字相同**。
+    """
+    ids = read_ids(db)
+    fresh = [str(x).strip() for x in (notice_ids or []) if str(x).strip()]
+    add = [x for x in fresh if x not in ids]
+    if not add:
+        return ids
+    # 新来的排在前面（与单条那条同序），**去重后再截断**（同一批里重复给同一个 id 不该占两格）
+    ids = list(dict.fromkeys([*add, *ids]))[:READ_LIMIT]
+    AppMetaRepo(db).set(READ_KEY, json.dumps(ids, ensure_ascii=False))
+    return ids
+
+
 # ── 汇总（读路径；纯函数式：只看传进来的事实 + 进程内小账本 + 已读集合）──────
 
 def compose_task_text(task_label: str, who: str | None = None,
@@ -185,7 +214,7 @@ def compose_task_text(task_label: str, who: str | None = None,
     return " - ".join(parts)
 
 
-def _progress_notices(status: dict) -> list[dict]:
+def _progress_notices(status: dict, now_ms: int) -> list[dict]:
     out: list[dict] = []
     for key, label_key in (("post", "task"), ("account", "task")):
         st = status.get(key) or {}
@@ -194,16 +223,25 @@ def _progress_notices(status: dict) -> list[dict]:
         task = st.get(label_key) or ("quick" if key == "post" else "account")
         who = st.get("vtuber_name") or st.get("target") or st.get("current")
         out.append({
-            "id": f"progress-{key}", "kind": "progress",
+            "id": f"progress-{key}", "kind": "progress", "form": FORM_STATE,
             "text": compose_task_text(TASK_TEXT.get(task, "抓取中"), who,
                                       st.get("index"), st.get("total")),
             "source": "任务进度",
+            # 状态类的 `createdAt` = **状态开始成立**的时刻（面板显示"进行中 3 分钟"）。
+            # 缺 `started_at`（老调度器/单测造的 status）⇒ 退回 now，不猜。
+            "createdAt": int(st.get("started_at") or now_ms),
         })
     ext = status.get("external") or {}
-    if ext.get("running"):
+    # ⚠️ L1 修（2026-10-05）：这里原先**不看 auto** —— 而"自动节拍不占顶栏"是全局口径。
+    #    收录回填 / 每日批次由定时档发起（auto=True）却照样产生常驻进度条目，
+    #    一条没有终局的进度会把胶囊一直占着（正是 devlog/089 那条口径要消掉的形态）。
+    #    漏的原因很具体：`external` 状态里当时根本没有 `auto` 字段，判据无从写起 —— 现在调度器补上了。
+    if ext.get("running") and not ext.get("auto"):
         out.append({
-            "id": "progress-external", "kind": "progress", "source": "第三方同步",
+            "id": "progress-external", "kind": "progress", "form": FORM_STATE,
+            "source": "第三方同步",
             "text": f"正在同步{ext.get('label') or '第三方数据'}",
+            "createdAt": int(ext.get("started_at") or now_ms),
         })
     return out
 
@@ -214,29 +252,36 @@ def _rate_limit_notice(status: dict, now_ms: int) -> dict | None:
         return None
     secs = max(0, round(float(rl.get("seconds_left") or 0)))
     return {
-        "id": "rate-limit", "kind": "alert", "text": "上游限流：冷却中",
+        "id": "rate-limit", "kind": "alert", "form": FORM_STATE,
+        "text": "上游限流：冷却中",
         # `value` = 活数据（目标架构 §2.2 新增槽位）：倒计时自己刷新，**不重排文案**
         "value": f"{secs}s",
         "detail": (rl.get("reason") or None),
         "source": "风控冷却",
         "expiresAt": now_ms + secs * 1000,
+        # 冷却**开始**的时刻 = 现在 + 还要等多久 − 整段窗口（`window_seconds` 有就给）
+        "createdAt": now_ms - max(0, int(float(rl.get("window_seconds") or 0)) - secs) * 1000,
     }
 
 
-def _login_notice() -> dict | None:
+def _login_notice(now_ms: int) -> dict | None:
     from app.services.auth import auth_manager       # 局部导入：避免启动期循环
 
     if not auth_manager.needs_login():
         return None
     return {
-        "id": "login-expired", "kind": "alert", "text": "B 站登录已失效",
+        "id": "login-expired", "kind": "alert", "form": FORM_STATE,
+        "text": "B 站登录已失效",
         "detail": "抓取会跳过需要登录的部分；重新扫码后自动恢复",
         "source": "登录态", "sticky": True,
         "action": {"label": "去登录", "kind": "login"},
+        # 登录失效没有"开始时刻"可查（会话什么时候过期平台不说）⇒ 用 now，
+        # 面板上它显示"刚刚"，语义是"我们刚发现"
+        "createdAt": now_ms,
     }
 
 
-def _report_notices(status: dict, acked: set[str]) -> list[dict]:
+def _report_notices(status: dict, acked: set[str], now_ms: int) -> list[dict]:
     """完成报告：**只在"有人看着它跑完"时出**（见文件头「目睹才报」）+ 已读的不再出。
 
     ⚠️ **还要只对"全量"轮出**（`REPORT_KINDS`）—— 与前端旧口径逐字一致（`TopBar` 只对
@@ -263,10 +308,12 @@ def _report_notices(status: dict, acked: set[str]) -> list[dict]:
     elif issues:
         detail = f"{len(issues)} 处中断（{issues[0].get('stop_reason')}）"
     return [{
-        "id": nid, "kind": "report",
+        "id": nid, "kind": "report", "form": FORM_ACTION,
         "text": f"全量帖子抓取完成 · 存储 {res.get('stored') or 0} · 跳过 {res.get('skipped') or 0}",
         "detail": detail, "source": "完成报告", "sticky": True,
         "action": {"label": "查看详情", "kind": "open-report"},
+        # 报告是**处置类**：`createdAt` = 报告生成时刻（那轮的收尾时间，查不到就用 now）
+        "createdAt": int(res.get("finished_at") or now_ms),
     }]
 
 
@@ -277,7 +324,8 @@ def _ring_notices(now_ms: int) -> list[dict]:
             ttl = LIVE_TTL_MS if item["kind"] == "alert" else MSG_TTL_MS
             if at + ttl <= now_ms:
                 continue                        # 到点自己消失（**起算点是记录时刻**）
-            out.append({**item, "expiresAt": at + ttl})
+            out.append({**item, "form": FORM_NOTICE,
+                        "expiresAt": at + ttl, "createdAt": int(at)})
     return out
 
 
@@ -287,10 +335,13 @@ def _normalize(n: dict) -> dict:
     为什么必须补齐：契约用例断的是"键集合"，而 `NoticeOut` 只在**走 HTTP 时**才补默认值
     —— 直接调 `build_notices` 的那条路径会出现"少一个键"的假象，两种路径的契约就分叉了。
     补齐之后，**任何**消费方拿到的形状都一样（前端 `Notice` 的字段全集）。
+
+    `form` 兜底成 `state`：拿不到形态时**宁可说"它是个状态"**（状态不自动消失、
+    不参与自动已读），也不要猜成 `notice` 把一条处置类信息悄悄读掉。
     """
     out = {"id": n["id"], "kind": n["kind"], "text": n["text"], "value": None,
            "detail": None, "source": None, "sticky": False, "expiresAt": None,
-           "action": None}
+           "createdAt": None, "form": FORM_STATE, "action": None}
     out.update(n)
     return out
 
@@ -310,14 +361,14 @@ def build_notices(db: Session, *, status: dict | None = None,
     acked = set(read_ids(db))
 
     notices: list[dict] = []
-    notices += _progress_notices(st)
+    notices += _progress_notices(st, now)
     rl = _rate_limit_notice(st, now)
     if rl:
         notices.append(rl)
-    lg = _login_notice()
+    lg = _login_notice(now)
     if lg:
         notices.append(lg)
-    notices += _report_notices(st, acked)
+    notices += _report_notices(st, acked, now)
     notices += _ring_notices(now)
 
     notices = [_normalize(n) for n in notices]

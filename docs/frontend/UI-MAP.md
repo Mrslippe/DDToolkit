@@ -155,7 +155,22 @@ retire-when: 前端视觉体系整体重做，或组件索引改成机器生成
 
 DOM 契约（探针 `ui_probe --status-island` 直接查）：`.si-island`（`.on` = 有事发生）· `.si-dot`
 （`.warn` = 红）· `.si-text` · `.si-count` · `.si-chevron` · `.si-panel`（`data-pinned` = 点击钉住）·
-`.si-item[data-kind]` · `.si-item-meta`（含来源标注）· `.si-item-action`。
+`.si-item[data-kind]` · `.si-item-meta`（含来源标注与**相对时间**）· `.si-item-action`。
+
+**L1 通知规则层（2026-10-05，`devlog/341`；设计案 `docs/design/notices/channel-and-layering.md`）**：
+
+| 名称 | 属性 / 类名 | 说明 |
+|---|---|---|
+| 三形态 | `Notice.form`（= `.si-item[data-form]`） | `state` 正在发生 / `notice` 刚发生（自动已读）/ `action` 需要你决定。**与 `kind` 正交**（`kind` 管长相、`form` 管行为） |
+| 面板分组 | `.si-sec[data-group]` + `.si-sec-title` | 三组固定顺序 `doing` → `todo` → `recent`（正在进行 / 需要处理 / 最近）；**空组不渲染** |
+| 组内排序 | `noticeBoard.tierOf` | 判据是「过期会不会丢信息 / 要不要动手」，不是 `kind`；同档按新的在前 |
+| 胶囊合并句 | `.si-island[data-headline-group]` / `[data-section-counts]` | 同级**合并**而不是只显示最新那条（`帖子·账号 抓取中 - 3/11`、`2 场开播 · A、B`） |
+| 相对时间 | `.si-item-meta` 第三段 | `刚刚 / N 秒前 / N 分钟前 / N 小时前 / N 天前 / 日期`；状态类读作「进行中 N 分钟」。**缺 `createdAt` 就不显示**（不许糊"刚刚"） |
+| 倒计时细条 | `.si-item-bar > i`（父级 `.si-item[data-left]`） | 只给**会自动消失**的条目；`scaleX` = 剩余比例，末段转主色 |
+| 胶囊倒计时环 | `.si-ring` / `.si-ring-arc`（`[data-left]`） | 圆点外圈从 12 点顺时针消退；内芯仍是原状态点。无 TTL 的条目**不画** |
+| 自动已读退场 | `.si-item.is-out` | 向左滑出 + 淡出 220ms；退场副本在 `.si-list-leaving` 里，**不参与探针判据** |
+| 一键已读 | `.si-sec-action[data-ack-all]` | 只在「需要处理」组标题右侧；走 `POST /vtuber/notices/ack` 的 **`ids` 批量口**（一次写盘） |
+| 秒表 | ——（组件内部） | 过期与相对时间由 `StatusIsland` 自己的 1s tick 驱动（宿主的 `now` 闲时 10s 才更新一次 ⇒ 6s 的 TTL 最坏拖到 10s） |
 
 **呼出与收起（R39-C，用户 2026-09-19：「改为鼠标 hover 就呼出，离开就收起，并且下拉栏居中」）**：
 

@@ -3516,10 +3516,15 @@ def main() -> int:
                 print(f"  ④ 开播边沿：发布 {ms.get('publish3Status')!r} → 事件 "
                       f"{ms.get('liveEventCount')!r} 次；面板 alert 条目="
                       f"{ms.get('liveAlertItems')!r}（进去了={ms.get('liveShown')}）")
-                print(f"  ⑤ 手动动作：受理进度进了面板={ms.get('progressShown')}"
+                print(f"  ⑤ 手动动作：受理进度进了通知列表={ms.get('progressShown')}"
                       f"（{ms.get('progressPanelTexts')!r}）；"
                       f"自家完成弹了={ms.get('ownToastShown')}（应为 False）· "
                       f"别人完成弹了={ms.get('otherToastShown')}（应为 True）")
+                # 证据（不作判据，失败也不报）：面板里那一刻实际有哪几条 —— 渲染那一层由
+                # `StatusIsland.test.tsx` 确定性钉住（含"面板关着时来的条目也在面板里"），
+                # 这里只把现场记下来便于排查。
+                if (ms.get("progressPanelDetail")):
+                    print(f"     面板实到条目：{ms.get('progressPanelDetail')!r}")
                 print(f"  ⑥ 账号快照（M3）：页面收到 account-progress "
                       f"{ms.get('snapshotCount')!r} 条（进去了={ms.get('snapshotShown')}）")
                 print(f"  ⑦ 帖子抓完（M3c）：页面收到 fetch-idle "
@@ -3576,6 +3581,10 @@ def main() -> int:
             print(f"  chevron：transform={si.get('chevronTransform')!r} "
                   f"过渡={si.get('chevronTransitionMs')}ms")
             print(f"  ttl 到期后：文案={si.get('afterTtlText')!r} 亮起={si.get('afterTtlLit')}")
+            print(f"  分组={si.get('panelGroups')} 标题={si.get('panelGroupTitles')}")
+            print(f"  倒计时：细条={si.get('panelBarCount')} 剩余={si.get('panelBarLefts')} "
+                  f"scaleX={si.get('panelBarScale')} ｜ 胶囊环={si.get('siRingLeft')} "
+                  f"弧长={si.get('siRingArcDash')!r}")
             if not si:
                 failures.append(f"@{w} status-island: 没量到状态岛段（探针未跑完？）")
             else:
@@ -3729,6 +3738,65 @@ def main() -> int:
                     if " · " not in (si.get("panelMetaText") or ""):
                         failures.append(f"@{w} status-island: 条目没有来源标注"
                                         f"（实得 {si.get('panelMetaText')!r}）")
+                    # ── L1（2026-10-05）：三组分区 / 相对时间 / 倒计时（`devlog/341`）──────
+                    # 判据取**属性**而不是像素：`data-group` / `data-left` 是产品写出来的事实，
+                    # 量像素只能证明"某个地方有东西"，证明不了"它代表剩余时间"。
+                    groups = [str(g) for g in (si.get("panelGroups") or [])]
+                    gnames = [g.split(":")[0] for g in groups]
+                    if not groups:
+                        failures.append(f"@{w} status-island: 面板没有分组（量不到 .si-sec）"
+                                        f"—— 「正在进行 / 需要处理 / 最近」是 L1 的核心改动")
+                    else:
+                        order = [g for g in ("doing", "todo", "recent") if g in gnames]
+                        if gnames != order:
+                            failures.append(f"@{w} status-island: 分组顺序是 {gnames}，"
+                                            f"应为 {order}（正在进行 → 需要处理 → 最近）")
+                        for g in groups:
+                            name, _, cnt = g.partition(":")
+                            if not cnt.isdigit() or int(cnt) < 1:
+                                failures.append(f"@{w} status-island: 「{name}」组是空组"
+                                                f"（空组不该渲染）")
+                    # 相对时间：meta 行必须**多出一段**（来源 + 时间）—— 探针只能判"有没有"，
+                    # 文案粒度由 `noticeBoard.test.ts` 钉住。
+                    meta = str(si.get("panelMetaText") or "")
+                    if meta.count(" · ") < 2:
+                        failures.append(f"@{w} status-island: 条目 meta 行没有相对时间"
+                                        f"（实得 {meta!r}）—— 用户看不出这是多久以前的事")
+                    # 倒数细条：本次采样里岛上是**一条会自动过期的消息** ⇒ 必须恰好有一条细条，
+                    # 且 `data-left` 是个 (0,1] 的数、`scaleX` 与它一致。
+                    if si.get("panelBarCount") != 1:
+                        failures.append(f"@{w} status-island: 会自动过期的条目应恰好有一条倒计时细条，"
+                                        f"实得 {si.get('panelBarCount')} 条")
+                    lefts = [str(x) for x in (si.get("panelBarLefts") or [])]
+                    if not lefts:
+                        failures.append(f"@{w} status-island: 条目上没有 data-left"
+                                        f"（探针据此判倒计时进度，没有它只能去数像素）")
+                    else:
+                        try:
+                            v = float(lefts[0])
+                        except ValueError:
+                            v = -1.0
+                        if not (0.0 <= v <= 1.0):
+                            failures.append(f"@{w} status-island: 倒计时剩余比例 {lefts[0]!r} 不在 [0,1]")
+                    scale = si.get("panelBarScale")
+                    if scale is None:
+                        failures.append(f"@{w} status-island: 细条没有 scaleX（细条没渲染？）")
+                    elif lefts and abs(float(scale) - float(lefts[0])) > 0.02:
+                        failures.append(f"@{w} status-island: 细条的 scaleX={scale} 与 data-left="
+                                        f"{lefts[0]} 不一致（视觉在说另一件事）")
+                    # 胶囊左侧的倒计时环：本次是通知类消息（有 TTL）⇒ 必须画环
+                    if si.get("siRingLeft") is None:
+                        failures.append(f"@{w} status-island: 胶囊上没有倒计时环"
+                                        f"（会自动消失的条目才画，本次正是一条消息）")
+                    else:
+                        ring_left = float(si.get("siRingLeft"))
+                        if not (0.0 <= ring_left <= 1.0):
+                            failures.append(f"@{w} status-island: 胶囊环的 data-left="
+                                            f"{si.get('siRingLeft')!r} 不在 [0,1]")
+                        dash = str(si.get("siRingArcDash") or "")
+                        if not dash or float(dash.split()[0]) <= 0:
+                            failures.append(f"@{w} status-island: 胶囊环的弧长为 0（看起来会是个空环）"
+                                            f"：{dash!r}")
                     # 入场动画（R12b 用户期望②）：按 `prefers-reduced-motion` 判分支。
                     # 探针只认**计算后样式**（CSS 文件里写了不算数，得真挂到面板上）。
                     want = "si-panel-in-fade" if si.get("motionReduced") else "si-panel-in"

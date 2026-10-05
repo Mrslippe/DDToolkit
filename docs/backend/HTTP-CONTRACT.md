@@ -75,8 +75,8 @@ retire-when: HTTP 层换框架，或路由整体重排
 | PUT `/vtuber/{vtuber_id}/profile-cards` | **整版保存**卡片布局；格位越界 / `card_key` 重复 / 超过 50 张 → 422（**不静默夹取**）；V 不存在 404（f006，R37-P2） |
 | GET `/vtuber/{vtuber_id}/former-values` | 曾用名 / 曾用签名（各最多 5 条、最近优先、按值去重，含平台标注；f004）。**当前未接入 UI**（devlog/075：归「账号信息历史快照」，先不展示） |
 | GET `/vtuber/{vtuber_id}/avatars` | **历次头像可选项**（新的在前）+ `current_url`（当前用的那张，后端推导）；账本为空时用账号现值兜底（`id`/`first_seen_at` 为 null）；V 不存在 404（f008，R47，devlog/249）。只读 —— 记账在抓取侧 |
-| GET `/vtuber/notices` | **通知汇总**（M5-1，devlog/253）：`{now, notices[]}`，**已按优先级排序**；`now` = 服务端毫秒（ttl 判定基准）。⚠️ 路径必须注册在 `/vtuber/{vtuber_id}` **之前**（否则被 int 参数捕获 ⇒ 422） |
-| POST `/vtuber/notices/ack` | 记一条通知**已读**（`{id}` → 落 `app_meta` 的 `notices.acked`，上限 50）；**幂等**；空 id 422。修的是"刷新/深休眠重建后完成报告复活" |
+| GET `/vtuber/notices` | **通知汇总**（M5-1，devlog/253）：`{now, notices[]}`，**已按优先级排序**；`now` = 服务端毫秒（ttl 判定基准）。每条含 `id/kind/text/value/detail/source/sticky/expiresAt/action` + **L1（`devlog/341`）新增 `form`（`state`/`notice`/`action`）与 `createdAt`**（服务端毫秒；面板据此显示"3 分钟前"，缺失则前端不显示相对时间）。⚠️ 路径必须注册在 `/vtuber/{vtuber_id}` **之前**（否则被 int 参数捕获 ⇒ 422） |
+| POST `/vtuber/notices/ack` | 记通知**已读**（落 `app_meta` 的 `notices.acked`，上限 50）；**幂等**；**两者都空 ⇒ 422**。单条用 `{id}`，**批量用 `{ids: [...]}`**（L1：面板的「一键已读」一次清「需要处理」整组 —— 循环发 N 次会出现"清到一半失败、面板半干净"的中间态）。修的是"刷新/深休眠重建后完成报告复活" |
 | POST `/vtuber/{vtuber_id}/background` | 上传自定义背景（jpeg/png/webp/gif，≤10MB，否则 415/413）；**类型按文件头判、限额流式读取、临时文件原子 rename、提交成功后才删旧文件**（`services/vtuber_background.py`，M3b devlog/214）；时间戳后缀防缓存 |
 | DELETE `/vtuber/{vtuber_id}/background` | 清除背景回退头像铺底 |
 | DELETE `/vtuber/{vtuber_id}` | 解除订阅：`purge_vtuber()` 清 posts + 5 张子表 + 活动条目 + 曾用值 + **卡片布局（f006）**，再级联删 V+accounts；外键挡下 → 409 |
