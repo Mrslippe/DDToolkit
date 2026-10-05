@@ -59,17 +59,21 @@ expires: 2026-12-31
 
 ### 3.1 应用侧（新增，约 1 个端点 + 1 个配对界面）
 
-- `POST /auth/import`：body `{platform, cookie, ua?, token}`；**只允许来自 127.0.0.1**；
-  校验 `token`（见 3.3）；**复用各平台已有的校验器**：
-  - bilibili：`auth_manager` 那套（`SESSDATA`/`bili_jct`）；
-  - weibo：`weibo_auth_manager`；
+- `POST /auth/import`：body `{platform, cookie, ua?}` + 头 **`X-DDToolkit-Pair`**；
+  **只允许来自 127.0.0.1**（⚠️ 2026-10-06 定：配对 token **走独立头**，不放进 body —— 与
+  `X-DDToolkit-Token` 是两把不同的钥匙，混在一个位置迟早有人拿错；见执行方案 §3.2）；
+  校验配对 token（见 3.3）；**复用各平台已有的校验器**：
+  - bilibili：`auth_manager` 那套（`SESSDATA`/`bili_jct`）——⚠️ 现在**只有扫码入口**，
+    要补一个公开的 `apply_cookie(cookie_str)`（执行方案 §3.3）；
+  - weibo：`weibo_auth_manager`（⚠️ 现有 `apply_cookie` **不校验**，要补探活）；
   - xiaohongshu：`xhs_auth_manager.apply_cookie()`（**已实现"先校验 `a1`+`web_session` 再落盘"**）；
   - douyin：`douyin_auth_manager.apply_cookie()`（含 `ua_configured`）。
   ⇒ 前端那三个"粘贴框"的校验逻辑**一行都不用重写**，扩展推来的就是同一个入口。
-- 回执：`{ok, platform, keys: [...], missing: [...], note}` —— 缺键时**如实说缺哪个**
-  （扩展侧直接显示，用户不用猜）。
-- 配对：设置 → 登录里加一栏「浏览器扩展」，显示**本次配对 token**（应用启动时随机生成，
-  写在 `app_meta`/内存里）+「复制」按钮；扩展那边粘一次就记住了。
+- 回执：`{ok, platform, keys: [...], missing: [...], note}` —— **只给键名与"缺哪个"，绝不回显值**；
+  缺键时**如实说缺哪个**（扩展侧直接显示，用户不用猜）。
+- 配对：设置 → 登录里加一栏「浏览器扩展」，显示**配对 token** +「复制」+「重置配对」。
+  ⚠️ 2026-10-06 用户拍板：token **持久化在数据目录**（`app_meta`，重启不变，直到点「重置配对」）——
+  不是原方案的"每次启动随机"（那会逼用户每开一次应用就重贴一次）。
 
 ### 3.2 扩展侧（MV3）
 
@@ -89,16 +93,16 @@ expires: 2026-12-31
 
 - **popup**：四行（B站 / 微博 / 小红书 / 抖音），每行显示"当前读到的键 / 长度 / 上次同步时间"，
   一枚「同步到 DDToolkit」；
-- **读 cookie**：`chrome.cookies.getAll({ domain })` 逐个平台取（`bilibili.com` 要同时取
-  `.bilibili.com` 与 `bilibili.com` 两种 domain 写法；拿 `.xiaohongshu.com` 同理）；
+- **读 cookie**：⚠️ 2026-10-06 定成**按目标 URL 取**（`chrome.cookies.getAll({url})`，每个平台一张 URL 表，
+  按返回顺序拼 `name=value; …`）—— 理由：我们要的就是"浏览器发给那个平台的那条 Cookie 头"，
+  而 `{url}` 的返回顺序**就是**发送顺序；按 `{domain}` 拿再自己猜排序是另一套语义（见执行方案 §3.5）；
 - **UA**：抖音需要"那个浏览器的 UA" ⇒ 直接 `navigator.userAgent`（**必须取自扩展所在的浏览器**，
   这正是手抄最容易错的地方）；
 - **POST**：`fetch('http://127.0.0.1:<port>/auth/import', {method:'POST', body})`；
   端口从哪来：**应用把端口写进一个众所周知的文件**？不行（扩展读不到文件）。
-  两条可行路：
-  - **固定端口候选表**（如 8765/8766/8767）：扩展依次试 `/healthz`（回一个应用标识）⇒ 找到就记住
-    （推荐：零配置，且 `127.0.0.1` 上抢端口的成本很低）；
-  - 用户在扩展里手填端口（最笨但最稳，作为兜底）。
+  ⚠️ 2026-10-06 用户拍板：**直接做自动发现** —— 桌面壳改成**优先绑固定区间 `8765–8769`**（全占用才退回随机），
+  `/healthz` 带一个应用标识，扩展依次探候选端口并**用配对 token 认领**（端口不是身份、token 才是）；
+  手填端口只作为兜底留在扩展设置里（见执行方案 §3.4）。
 - **不注入任何页面脚本**（不需要 content script）⇒ 不碰页面 DOM、不申请 `scripting`/`tabs`，
   扩展权限面越小越好（只碰 cookie + 回环 HTTP）。
 
@@ -116,24 +120,27 @@ expires: 2026-12-31
 
 | 阶段 | 内容 | 产出 |
 |---|---|---|
-| P1（最小可用） | 应用侧 `/auth/import` + 配对 token + 设置里的「浏览器扩展」栏；扩展 popup 四个平台 + 手动填端口 | 一键同步四个平台（含抖音 UA）|
-| P2 | 端口自动发现（候选表 + `/healthz` 标识）、上次同步时间、缺键提示 | 零配置 |
+| P1（最小可用） | 应用侧 `/auth/import` + 配对 token + 设置里的「浏览器扩展」栏；扩展 popup 四个平台 + 端口自动发现 | 一键同步四个平台（含抖音 UA），零配置 |
+| P2 | 上次同步时间、缺键提示、扩展设置里的手填端口兜底 | 更好用 |
 | P3（可选） | 过期提醒：应用侧 cookie 失效时（例如 `devlog/353` 那条小红书判定）发一条通知，点它直接开扩展 popup；扩展侧"该平台当前没登录"预检 | 闭环 |
 | P4（可选） | 商店上架（Edge Add-ons / Chrome Web Store）、图标与隐私说明（`cookies` 权限必须写用途）| 分发 |
 
-## 5. 需要用户后续拍板的点（实现前再确认）
+> ⚠️ **2026-10-06 起"怎么做"不在这份文档里**：分批、判据、停止条件、已知缺口见
+> **`docs/plans/browser-extension-cookie-sync-execution.md`**（本文只留"为什么这样设计"）。
 
-1. **端口**：走 P1 的"手填"还是直接做 P2 的"自动发现"（我建议直接 P2，成本差不多）；
-2. **token 展示**：放「设置 → 登录」新一栏，还是放「关于」页（我建议前者，与粘贴框同屏）；
-3. **抖音 UA**：要不要顺手把 `sec-ch-ua` 那几项也存下（现在只存 UA；实测签名只吃 UA，
-   但如果哪天平台开始看 client hints，这里是个已知缺口）；
-4. **同步范围**：是否需要"一次同步全部四个平台"的按钮（否则默认一个一个来）。
+## 5. 待拍板的点 —— **已于 2026-10-06 拍完**（留档）
+
+1. **端口** ⇒ **自动发现**（壳优先绑 `8765–8769`，扩展探 `/healthz` 认领，`§3.2` 已同步）；
+2. **token 展示** ⇒ 「**设置 → 登录**」新一栏（与粘贴框同屏）；
+3. **抖音 client hints** ⇒ **先不存** `sec-ch-ua`，作为已知缺口记在执行方案 §9；
+4. **同步范围** ⇒ popup 要**「同步全部四个平台」**（逐平台回执，一个失败不影响其余）。
 
 ## 6. 与现状的接口（实现时按这些名字写，别新造）
 
 - 凭据落盘：`app/services/env_store.py::save_env_keys`
-- 三个平台的校验/落盘入口：`services/auth.py`（bili）、`services/weibo_auth.py`、
-  `services/xhs_auth.py::apply_cookie`、`services/douyin_auth.py::apply_cookie`
+- 四个平台的校验/落盘入口：`services/auth.py`（bili，**要新增 `apply_cookie`**）、
+  `services/weibo_auth.py`（**补校验**）、`services/xhs_auth.py::apply_cookie`、
+  `services/douyin_auth.py::apply_cookie`
 - 端点风格与鉴权：`app/routers/auth.py`（现有 `POST /auth/{platform}/cookie` 就是同族，
   新增的 `/auth/import` 应当是**它们的批量化**，不是另一套语义）
-- 设置界面：`frontend/src/components/LoginDialog.tsx`（三个 Tab 的粘贴框就在这里）
+- 设置界面：`frontend/src/components/LoginDialog.tsx`（四个 Tab 的粘贴框就在这里，新栏加在它下方）
