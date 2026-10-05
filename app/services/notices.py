@@ -169,6 +169,43 @@ def reset_state() -> None:
         _witness.clear()
 
 
+def drop_ring(notice_ids: list[str] | tuple[str, ...] | set[str]) -> list[str]:
+    """把用户**点掉的那几条**从环形缓冲里摘掉，返回真的摘掉了哪些 id。
+
+    为什么环里这一份必须**真的删**、而不是像完成报告那样靠"已读集合"过滤（2026-10-05 修）：
+
+    ① **id 的寿命不一样**：`msg-<ms>` 是一次性事件的 id，而 `live-<account_id>` 是
+       **按账号稳定**的。若靠已读集合过滤，用户点掉一次开播 ⇒ 那个账号**下次开播**
+       会被同一条历史已读一起吞掉（"再次开播却什么都不显示"）——
+       与 `is_state_id` 那里防的是同一类 bug，只是它藏在"已读"这个词里不容易看见；
+    ② 环里的条目**没有别的消费者**：用户点"已读"的语义就是"这条别给我看了"，
+       删掉它就是这句话最准确的表达（到点过期走的也是同一条移除路径）。
+
+    于是 `msg-*` / `live-*` 这类 id **不写进已读集合**（那会白占 `READ_LIMIT` 的格子、
+    把真正需要持久化的处置类挤出去），"已读"就落在"删掉"这个动作上。
+    """
+    want = {str(x).strip() for x in notice_ids if str(x).strip()}
+    if not want:
+        return []
+    with _LOCK:
+        kept = [(item, at) for item, at in _ring if str(item.get("id") or "") not in want]
+        dropped = [str(item.get("id")) for item, _ in _ring
+                   if str(item.get("id") or "") in want]
+        if dropped:
+            _ring.clear()
+            _ring.extend(kept)
+    return dropped
+
+
+def _acked_reply(persisted: list[str], dropped: list[str]) -> list[str]:
+    """接口回给前端的"这些现在都不该再显示了"：**落库的 + 从环里删掉的**（去重、保序）。
+
+    前端拿它立刻 `filter` 掉本地那一份（点完就滑出，不必等下一条轮询）——
+    少算了"删掉的"那一半，观感就是用户报的"点了没反应"。
+    """
+    return list(dict.fromkeys([*dropped, *persisted]))
+
+
 # ── 已读（唯一落库的那部分）────────────────────────────────────────────
 
 def read_ids(db: Session) -> list[str]:
@@ -184,7 +221,7 @@ def read_ids(db: Session) -> list[str]:
 
 
 def ack_notice(db: Session, notice_id: str) -> list[str]:
-    """记一条通知已读（**幂等**：同一个 id 记两次结果一样）。返回记完之后的已读集合。
+    """记一条通知已读（**幂等**：同一个 id 记两次结果一样）。返回**已受理**的 id 列表。
 
     为什么必须落库：今天「知道了」只 `setDoneReport(null)` 清内存 ⇒ 刷新 / 深休眠重建
     之后**报告原地复活**（目标架构 §2.3 要修的就是这条）。
@@ -193,8 +230,16 @@ def ack_notice(db: Session, notice_id: str) -> list[str]:
     **稳定**的，一旦进了已读集合，同一条状态**再次成立**时会被 `_report_notices` 那类
     过滤误判成"用户看过了"（症状：再次被限流却什么都不显示）。所以这里直接拒收 ——
     前端也不该给状态类发 ack（它消失是事实变了，不是用户点了什么）。
+
+    ⚠️ **环里的条目（瞬时消息 / 开播边沿）走"删掉"而不是"落库"**（2026-10-05 修，
+    用户报的"点了已读没反应"就是它）：理由见 `drop_ring`（`live-<account>` 是按账号
+    **稳定**的 id，落库会吞掉这个账号**下一次**开播）。
     """
     nid = (notice_id or "").strip()
+    if is_ring_id(nid):
+        # 环里的：删掉就是已读。**不管这一拍它在不在环里都回给前端** —— 这个 id 已经
+        # 不可能再出现（要么刚被删掉、要么本来就过期了），前端照它过滤掉本地那份。
+        return _acked_reply(read_ids(db), [*drop_ring([nid]), nid])
     if is_state_id(nid):
         logger.info(f"忽略对状态类条目的已读请求（id={nid}）：它消失是事实变了，不是用户看过了")
         return read_ids(db)
@@ -219,29 +264,46 @@ def is_state_id(notice_id: str) -> bool:
     return nid in _STATE_IDS or nid.startswith(_STATE_PREFIXES)
 
 
+#: 环形缓冲里那两类条目的 id 前缀（`record_message` / `record_live_edge` 各一个）。
+#: ⚠️ 这两类**不进已读集合**：它们是**进程内**事件的 id（`live-<account_id>` 还是按账号
+#: 稳定的）⇒ 记成已读会让"这个账号下次开播"被当成看过。用户的"已读"落在**删掉**这个动作上
+#: （`drop_ring`）。与 `_STATE_PREFIXES` 同一写法：把"哪些 id 属于哪一类"收成一处可见的表。
+_RING_PREFIXES = ("msg-", "live-")
+
+
+def is_ring_id(notice_id: str) -> bool:
+    """这个 id 是不是**环里**那两类（瞬时消息 / 开播边沿）？"""
+    return (notice_id or "").strip().startswith(_RING_PREFIXES)
+
+
 def ack_notices(db: Session, notice_ids: list[str]) -> list[str]:
-    """一次记多条已读（面板的「一键已读」，L1）。
+    """一次记多条已读（面板的「一键已读」，L1）。返回**已受理**的 id 列表。
 
     为什么要有批量口：前端循环发 N 次单条 ack 会出现"清到一半失败、面板半干净"的中间态，
     而用户看到的是一次点击。整批一次写盘，幂等与上限口径与单条那条**逐字相同**。
 
     ⚠️ 状态类 id 在这一层就被滤掉（L4，同 `ack_notice`）—— 「一键已读」清的是
-    「需要处理」那一组，而组里只可能有处置类；这条过滤是**第二道防线**
-    （前端传错了、或将来有人把状态类塞进那一组时，别静默写进已读集合）。
+    「最近」+「需要处理」两组（`ackAllIds`），状态类只在「正在进行」里；这条过滤是
+    **第二道防线**（前端传错了、或将来有人把状态类塞进那一组时，别静默写进已读集合）。
+
+    ⚠️ 环里的条目（`msg-*` / `live-*`）**从环里删掉、不落库**（与单条那条同一口径，
+    理由见 `drop_ring`）：用户点「全部已读」时「最近」那一组常常正是这些，
+    少了这一半就又是"点了没反应"（这一条正是 2026-10-05 用户报的那句话）。
     """
-    ids = read_ids(db)
-    fresh = [str(x).strip() for x in (notice_ids or [])
-             if str(x).strip() and not is_state_id(str(x))]
-    skipped = len([x for x in (notice_ids or []) if str(x).strip()]) - len(fresh)
+    clean = [str(x).strip() for x in (notice_ids or []) if str(x).strip()]
+    ring = [x for x in clean if is_ring_id(x)]
+    drop_ring(ring)                       # 删掉就是已读（回给前端的那份见下面 `_acked_reply`）
+    fresh = [x for x in clean if not is_state_id(x) and not is_ring_id(x)]
+    skipped = len(clean) - len(fresh) - len(ring)
     if skipped:
         logger.info(f"批量已读跳过了 {skipped} 条状态类条目（它们不是'用户看过了'）")
+    ids = read_ids(db)
     add = [x for x in fresh if x not in ids]
-    if not add:
-        return ids
-    # 新来的排在前面（与单条那条同序），**去重后再截断**（同一批里重复给同一个 id 不该占两格）
-    ids = list(dict.fromkeys([*add, *ids]))[:READ_LIMIT]
-    AppMetaRepo(db).set(READ_KEY, json.dumps(ids, ensure_ascii=False))
-    return ids
+    if add:
+        # 新来的排在前面（与单条那条同序），**去重后再截断**（同一批里重复给同一个 id 不该占两格）
+        ids = list(dict.fromkeys([*add, *ids]))[:READ_LIMIT]
+        AppMetaRepo(db).set(READ_KEY, json.dumps(ids, ensure_ascii=False))
+    return _acked_reply(ids, ring)
 
 
 # ── 汇总（读路径；纯函数式：只看传进来的事实 + 进程内小账本 + 已读集合）──────

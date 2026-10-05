@@ -269,6 +269,52 @@ describe('一键已读与自动已读的退场', () => {
     act(() => { vi.advanceTimersByTime(400) })
     expect(panel!.querySelector('.si-item.is-out')).toBeNull()
   })
+
+  it('退场期间**每一拍的 `now` 都在走**也不会自激重渲染（用户报的白屏：`Maximum update depth exceeded`）', () => {
+    // 这条钉的是用户 2026-10-05 的报错："点「批量全部」→ 面板白屏 + Maximum update depth exceeded"。
+    // 成因：退场条目"浮起来"的坐标放在**共享 state**（`floatPos`）里，由一条依赖 `[now]` 的
+    // effect 每拍重算一次 ⇒ `setFloatPos(新对象)` → 重渲染（`now` 又变了）→ 再算 → 互相点火；
+    // 修法是几何**在状态转换那一拍冻结、跟着行走**（`Row.exitTop`），链子从根上断开。
+    //
+    // ⚠️ 为什么不用上面那条用例的写法：`vi.setSystemTime(NOW)` 把 `Date.now()` **钉死了**，
+    //    于是每拍算出来的 `now` 都一样、那条 effect 根本不会重复跑 —— 真实运行时
+    //    `Date.now()` 每毫秒都在走，所以这里**故意让每次 `Date.now()` 都往前跳 1 秒**。
+    //    这正是"单测全绿、实机白屏"的那道缝。
+    let clock = NOW
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => (clock += 1000))
+    try {
+      render([message({ expiresAt: NOW + 1 }), report()])
+      expect(openPanel()).toBeTruthy()
+      // 秒表走一格 ⇒ `now` 越过 TTL（判它退场）**且**这一拍的 `now` 与上一拍不同（点火条件）
+      act(() => { vi.advanceTimersByTime(1020) })
+      const outs = document.querySelectorAll('.si-panel .si-item.is-out')
+      expect(outs.length, '到期那条应当在滑出').toBe(1)
+      // 再推几拍（每拍 `now` 都不同）—— 自激会在这个窗口里把 React 打爆（抛错即本用例失败）
+      for (let i = 0; i < 5; i += 1) act(() => { vi.advanceTimersByTime(1000) })
+      expect(document.querySelectorAll('.si-panel .si-item.is-out').length).toBeLessThanOrEqual(1)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('条目**快速连着来**时不重复、不丢（每一条恰好一个 `.si-item`）', () => {
+    // 用户报的"通知快速进入的时候条目一直重复堆叠"：退场那条浮起来时若坐标被反复重算，
+    // 兄弟条目会被反向 transform 越补越偏（看起来像叠在一起）。判据取**条数 + id 唯一**。
+    const base = (n: number) => ({
+      id: `burst-${n}`, kind: 'message', form: 'notice', source: '操作结果',
+      text: `第 ${n} 条`, createdAt: NOW, expiresAt: NOW + 600_000,
+    } as Notice)
+    let list: Notice[] = [base(1)]
+    render(list)
+    const panel = openPanel()!
+    for (let n = 2; n <= 6; n += 1) {
+      list = [...list, base(n)]
+      act(() => root.render(<StatusIsland notices={list} onAction={vi.fn()} now={NOW} />))
+    }
+    const ids = [...panel.querySelectorAll('.si-item')].map((n) => n.getAttribute('data-notice-id'))
+    expect(ids).toEqual(['burst-1', 'burst-2', 'burst-3', 'burst-4', 'burst-5', 'burst-6'])
+    expect(new Set(ids).size).toBe(ids.length)
+  })
 })
 
 describe('胶囊文案', () => {
@@ -314,5 +360,17 @@ describe('已读路径（源码级结构判据）', () => {
     // 「服务端那份」仍要真的发请求（本地 id 不许发给后端：会污染服务端已读集合）
     expect(src).toContain('api.ackNotices(serverIds)')
     expect(src).toContain('.some((n) => n.id === id)')
+  })
+
+  it('已读还要盖住**推送流**那一份（第三份，2026-10-05 探针抓到）', () => {
+    // 面板里的条目有三个来源：本地那份、服务端那份、**推送流那份**
+    // （`useNotices` 里的 `liveEdge` / `message`：`live-<account_id>` / `msg-<ms>`）。
+    // 前两份 `ackIds` 都清了，第三份没有 —— 症状是"刚推来的开播告警点一下纹丝不动"
+    // （探针 `--notice-lab` 实测：点了 `live-9001`，一个 `.is-out` 都没有）。
+    // 这里钉的是**结构**：`ackIds` 必须往 `ackedIds` 里记一笔，而渲染用的是过滤后的那份；
+    // 寿命规则（什么时候忘）在 `noticeBoard.pruneAcked`，那里有 3 条纯函数用例。
+    expect(src).toContain('setAckedIds')
+    expect(src).toMatch(/merged\.filter\(\(n\) => !ackedIds\.includes\(n\.id\)\)/)
+    expect(src).toContain('pruneAcked(prev, merged.map((n) => n.id))')
   })
 })

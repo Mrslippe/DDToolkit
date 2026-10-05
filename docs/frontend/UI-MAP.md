@@ -162,14 +162,15 @@ DOM 契约（探针 `ui_probe --status-island` 直接查）：`.si-island`（`.o
 | 名称 | 属性 / 类名 | 说明 |
 |---|---|---|
 | 三形态 | `Notice.form`（= `.si-item[data-form]`） | `state` 正在发生 / `notice` 刚发生（自动已读）/ `action` 需要你决定。**与 `kind` 正交**（`kind` 管长相、`form` 管行为） |
-| 面板分组 | `.si-sec[data-group]` + `.si-sec-title` | 三组固定顺序 `doing` → `todo` → `recent`（正在进行 / 需要处理 / 最近）；**空组不渲染** |
+| 面板分组 | `.si-sec[data-group]` + `.si-sec-title` | 三组固定顺序 **`recent` → `todo` → `doing`**（最近 / 需要处理 / 正在进行；用户 2026-10-05 把「最近」提到最顶，「这些通知是最实时的信息」）。**空组不渲染**，但**只剩退场条目**的那一组会留到滑出播完（否则那条会静默消失，`drawnGroups`） |
 | 组内排序 | `noticeBoard.tierOf` | 判据是「过期会不会丢信息 / 要不要动手」，不是 `kind`；同档按新的在前 |
 | 胶囊合并句 | `.si-island[data-headline-group]` / `[data-section-counts]` | 同级**合并**而不是只显示最新那条（`帖子·账号 抓取中 - 3/11`、`2 场开播 · A、B`） |
 | 相对时间 | `.si-item-meta` 第三段 | `刚刚 / N 秒前 / N 分钟前 / N 小时前 / N 天前 / 日期`；状态类读作「进行中 N 分钟」。**缺 `createdAt` 就不显示**（不许糊"刚刚"） |
 | 倒计时细条 | `.si-item-bar > i`（父级 `.si-item[data-left]`） | 只给**会自动消失**的条目；`scaleX` = 剩余比例，末段转主色 |
 | 胶囊倒计时环 | `.si-ring` / `.si-ring-arc`（`[data-left]`） | 圆点外圈从 12 点顺时针消退；内芯仍是原状态点。无 TTL 的条目**不画** |
-| 自动已读退场 | `.si-item.is-out` | 向左滑出 + 淡出 220ms；退场副本在 `.si-list-leaving` 里，**不参与探针判据** |
-| 一键已读 | `.si-sec-action[data-ack-all]` | 只在「需要处理」组标题右侧；走 `POST /vtuber/notices/ack` 的 **`ids` 批量口**（一次写盘） |
+| 自动已读退场 | `.si-item.is-out` | 向左滑出 + 淡出 220ms。退场那条**留在原来那一组**里并**浮起来**（`position:absolute` + 退场那一刻**冻结**的 `top`/`height`）⇒ 流内位置当场空出，其余条目**同时**上移（FLIP 只补 transform 的缓动）。**不参与探针判据** |
+| 一键已读 | `.si-panel-ack[data-ack-all]` | 在**面板右上角**（2026-10-05 取代原来那句来源提示，`.si-sec-action` 那个位置已退役）；清「最近」+「需要处理」两组、**「正在进行」不动**（`noticeBoard.ackAllIds`）；走 `POST /vtuber/notices/ack` 的 **`ids` 批量口**（一次写盘） |
+| 已读盖住的**三个来源** | ——（`TopBar.ackIds` / `ackedIds`） | 条目有三个来源，点一条即已读要把三份都盖住：本地那份就地过滤、服务端那份走 `ack` 接口、**推送流那份**（`live-<account_id>` / `msg-<ms>`）靠 `ackedIds` 盖住（它真消失后由 `noticeBoard.pruneAcked` 忘掉）。⚠️ 后端对**环里**那两类是**删掉**而不是记已读（`notices.drop_ring`：`live-<account>` 按账号稳定，记已读会吞掉这个账号下次开播） |
 | 秒表 | ——（组件内部） | 过期与相对时间由 `StatusIsland` 自己的 1s tick 驱动（宿主的 `now` 闲时 10s 才更新一次 ⇒ 6s 的 TTL 最坏拖到 10s） |
 
 **通知样式调测页**（`?notice-lab`，dev-only，2026-10-05 `devlog/345`）：`dev/NoticeLab.tsx` + `styles/notice-lab.css`，

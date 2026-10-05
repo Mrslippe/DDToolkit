@@ -184,6 +184,30 @@ export function todoIds(list: Notice[], now: number): string[] {
     .map((n) => n.id)
 }
 
+/**
+ * 「本机刚点掉」那张表里**该忘掉**哪些（返回还留着的；没变化时**返回同一个引用**）。
+ *
+ * （2026-10-05，`devlog/349`：点一条通知 = 已读，而面板里的条目有两个来源 ——
+ * 轮询到的服务端列表与**推送流**。推送流那一份没有"服务端已读集合"可依，
+ * 只能本机记一张表把它盖住，于是这张表的**寿命**就成了正确性问题。）
+ *
+ * - **忘早了**：那条又冒出来（"点了没反应"的另一种样子：先消失、下一拍又回来）；
+ * - **不忘 / 忘晚了**：**稳定 id** 的同类事件被历史已读一起吞掉 —— 典型是开播告警，
+ *   `live-<account_id>` 是按账号稳定的 id，用户点掉一次之后那个账号**下次开播**
+ *   就再也不显示了。这与后端 `notices.drop_ring` 防的是同一类 bug。
+ *
+ * 所以判据只有一条：**它在"活的条目"里真的没了之后，才忘**。
+ *
+ * ⚠️ 没有变化时返回**同一个数组**（调用方拿它 `setState`）：这是本文件与
+ * `StatusIsland` 都踩过的那个坑 —— 每拍返回新数组 = 每拍都触发一次重渲染。
+ */
+export function pruneAcked(acked: string[], alive: Iterable<string>): string[] {
+  if (acked.length === 0) return acked
+  const live = alive instanceof Set ? alive : new Set(alive)
+  const kept = acked.filter((id) => live.has(id))
+  return kept.length === acked.length ? acked : kept
+}
+
 // ── 相对时间 ────────────────────────────────────────────────────────────
 
 const MIN = 60_000

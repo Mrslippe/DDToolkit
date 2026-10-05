@@ -2731,6 +2731,25 @@ export async function runUiProbe(): Promise<void> {
   //    它守的是"调测工具自己坏了 ⇒ 用户以为产品坏了"。
   if (mode === 'notice-lab') {
     const result: Record<string, unknown> = {}
+    // ⚠️ **抓页面自己的报错**（2026-10-05 加）：这一页会真的点「批量全部」—— 那正是用户
+    //    报白屏的那个动作（`Maximum update depth exceeded`）。不抓的话探针只看得到
+    //    "面板里少了几条"，看不出是**组件炸了**，于是这条探针在用户白屏的那版上是全绿的。
+    //    只报不判：判据在 `ui_probe.py`（哪些算致命写在那边的注释里）。
+    const pageErrors: string[] = []
+    const origConsoleError = console.error
+    console.error = (...args: unknown[]) => {
+      pageErrors.push(args.map(
+        (a) => (a instanceof Error ? `${a.name}: ${a.message}` : String(a))).join(' '))
+      origConsoleError.apply(console, args as never[])
+    }
+    const onWindowError = (e: ErrorEvent) => {
+      pageErrors.push(`window.onerror: ${e.message}`)
+    }
+    const onRejection = (e: PromiseRejectionEvent) => {
+      pageErrors.push(`unhandledrejection: ${String(e.reason)}`)
+    }
+    window.addEventListener('error', onWindowError)
+    window.addEventListener('unhandledrejection', onRejection)
     /** 每个模式各自定义 `waitFor`（本文件的老写法：`?probe=xxx` 段是自包含的） */
     const waitFor = async (fn: () => unknown, ms = 6000) => {
       const t0 = performance.now()
@@ -2792,6 +2811,11 @@ export async function runUiProbe(): Promise<void> {
       const key = row.getAttribute('data-lab-row') || '?'
       ;(row.querySelector('.nl-fire') as HTMLElement | null)?.click()
       await sleep(900)                      // 推送往返 + 渲染（虚拟时间下够）
+      // ⚠️ **读内容前先把面板开回来**（2026-10-05 修）：上面那次「清注入」会把通知清空，
+      //    而面板有一条"没内容就自己收起"的规则 ⇒ 之后每一步面板都是**关着**的，
+      //    于是"面板里有没有这一条"永远读到 0、判据只剩"胶囊亮没亮"（那一条太弱了 ——
+      //    用户报的正是"点了没内容"，而它在旧写法下照样全 Y）。
+      if (!one('.si-panel')) cap()?.click()
       const texts = [...document.querySelectorAll('.si-panel .si-item-text')]
         .map((t) => (t.textContent || '').trim())
       const litNow = !!one('.si-island')?.classList.contains('on')
@@ -2801,8 +2825,70 @@ export async function runUiProbe(): Promise<void> {
       // 所以每条点之前记一次长度，点之后比它大才算这一条的功劳
     }
     result.perRow = perRow
-    result.hasAckAll = !!panel?.querySelector('[data-ack-all]')
-    result.metaHasRelative = [...(panel?.querySelectorAll('.si-item-meta') || [])]
+    // ⚠️ 从这里起一律读**活的**面板（`one('.si-panel')`），不许再用上面捕获的 `panel` ——
+    //    面板中途被卸载过，那个元素已经**脱离文档**，从它身上读出来的是一份旧快照
+    //    （`hasAckAll` 就因此长期恒为 true，看着像在断言，其实什么都没看）。
+    if (!one('.si-panel')) cap()?.click()
+    const panelNow = await waitFor(() => one('.si-panel')) as HTMLElement | null
+    result.panelAliveForAck = !!panelNow
+    // ⑥ **点一条 = 已读**（用户 2026-10-05："点击已读功能并没有实现"）：真点一下，看它是否
+    //    进入向左滑出（`.is-out`）且**活着的条数少一条**。
+    //    ⚠️ 这一条量的是**产品行为**（这条探针整体守的是"调测工具自己坏了"，这里是有意的例外）——
+    //    放在这一页是因为它正好凑齐三种形态，而用户就是在这一页点的。
+    const aliveCount = () => all('.si-panel .si-item:not(.is-out)').length
+    const target = all('.si-panel .si-item.can-ack:not(.is-out)')[0] as HTMLElement | undefined
+    result.ackTarget = target?.getAttribute('data-notice-id') ?? null
+    result.ackableBefore = all('.si-panel .si-item.can-ack:not(.is-out)').length
+    result.aliveBeforeAck = aliveCount()
+    if (target) {
+      target.click()
+      await sleep(80)              // 退场动画 220ms —— 这一拍它必须还在（`.is-out`）
+      result.ackOutIds = all('.si-panel .si-item.is-out').map((n) => n.getAttribute('data-notice-id'))
+      result.aliveAfterAck = aliveCount()
+    } else {
+      result.ackOutIds = null
+      result.aliveAfterAck = null
+    }
+    // ⑦ 「全部已读」：清「最近」+「需要处理」两组的，「正在进行」一条都不许动。
+    //    判据按 **id 逐个**对（不按条数）：条数会因为 TTL 到点而减小，那样即使按钮没生效也可能"看起来清了"。
+    const ackBtn = one('.si-panel [data-ack-all]')
+    result.hasAckAll = !!ackBtn
+    if (ackBtn) {
+      const idsOf = (groups: string[]) =>
+        all('.si-panel .si-sec')
+          .filter((s) => groups.includes(s.getAttribute('data-group') || ''))
+          .flatMap((s) => [...s.querySelectorAll('.si-item:not(.is-out)')]
+            .map((n) => n.getAttribute('data-notice-id') || ''))
+      const before = idsOf(['recent', 'todo'])
+      const doingBefore = idsOf(['doing'])
+      result.ackAllBeforeIds = before
+      result.ackAllDoingBefore = doingBefore
+      ackBtn.click()
+      const cleared = await waitFor(() => before.every((id) => {
+        const el = document.querySelector(`.si-panel .si-item[data-notice-id="${id}"]`)
+        return !el || el.classList.contains('is-out')
+      }), 3000)
+      result.ackAllCleared = !!cleared
+      const stillAlive = before.filter((id) => {
+        const el = document.querySelector(`.si-panel .si-item[data-notice-id="${id}"]`)
+        return el && !el.classList.contains('is-out')
+      })
+      result.ackAllStillAlive = stillAlive
+      result.groupsAfterAckAll = all('.si-panel .si-sec').map(
+        (s) => `${s.getAttribute('data-group')}:${s.querySelectorAll('.si-item:not(.is-out)').length}`)
+      const doingAfter = idsOf(['doing'])
+      result.doingAfterAckAll = doingAfter.length
+      result.doingUntouched = doingBefore.every((id) => !stillAlive.includes(id))
+        && doingAfter.length >= doingBefore.length
+    } else {
+      result.ackAllBeforeIds = null
+      result.ackAllCleared = null
+      result.ackAllStillAlive = null
+      result.groupsAfterAckAll = null
+      result.doingAfterAckAll = null
+      result.doingUntouched = null
+    }
+    result.metaHasRelative = [...(one('.si-panel')?.querySelectorAll('.si-item-meta') || [])]
       .map((m) => (m.textContent || '').trim())
     // 调测页自己的日志：**每一行为什么失败**都写在这里（`fire()` 逐行兜异常）——
     // 探针带上它，红的时候不用再跑一次去猜
@@ -2811,6 +2897,13 @@ export async function runUiProbe(): Promise<void> {
     const lw = window as unknown as { __ddtoolkitLocalNotices?: () => string[] }
     result.localIds = lw.__ddtoolkitLocalNotices?.() ?? null
     result.labTrace = (window as unknown as { __labTrace?: string[] }).__labTrace ?? null
+    // 收工：把 console.error 还回去（不还的话后面别的探针段也会被记进来），
+    // 报**前 5 条**就够归因了（再多是同一个错的重复刷屏）
+    console.error = origConsoleError
+    window.removeEventListener('error', onWindowError)
+    window.removeEventListener('unhandledrejection', onRejection)
+    result.pageErrors = pageErrors.slice(0, 5)
+    result.pageErrorCount = pageErrors.length
     const pre = document.createElement('pre')
     pre.id = 'ui-probe'
     pre.textContent = JSON.stringify({ mode: 'notice-lab', views: [], degraded,

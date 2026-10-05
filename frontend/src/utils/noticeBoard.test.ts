@@ -10,6 +10,7 @@ import {
   groupOf,
   headlineOf,
   pickHeadline,
+  pruneAcked,
   relTime,
   relTimeFor,
   sectionNotices,
@@ -250,5 +251,33 @@ describe('时长口径（一处定义，三处同值）', () => {
     expect(live.expiresAt).toBe(NOW + LIVE_NOTICE_MS)
     expect(LIVE_NOTICE_MS).toBe(120_000)
     expect(countdownFraction(live, NOW + 60_000)).toBeCloseTo(0.5)
+  })
+})
+
+/**
+ * 「本机刚点掉」那张表的寿命（`devlog/349`）。
+ *
+ * 这一组是**两个反面**：忘早了那条又冒出来；不忘则**稳定 id** 的同类事件被一起吞掉
+ * （开播告警 `live-<account_id>` 就是按账号稳定的）—— 后者最阴：用户点过一次之后，
+ * 那个账号**下次开播**再也不显示了。
+ */
+describe('已读表的寿命（点掉的 id 什么时候忘）', () => {
+  it('还在活着的列表里 ⇒ 记着（否则点完下一拍又冒出来）', () => {
+    expect(pruneAcked(['live-1', 'msg-2'], ['live-1', 'report-9'])).toEqual(['live-1'])
+  })
+
+  it('列表里真的没了 ⇒ 忘掉（否则同一账号**下次开播**被历史已读吞掉）', () => {
+    // 先是点掉那一刻：它还在列表里 ⇒ 记着
+    expect(pruneAcked(['live-9'], ['live-9'])).toEqual(['live-9'])
+    // 之后它从两个来源里都消失了（服务端删掉 + 推送那份过期）⇒ 这一拍就忘
+    expect(pruneAcked(['live-9'], ['progress-post'])).toEqual([])
+    // 再次开播（**同一个 id**）：表里已经没有它了 ⇒ 照常显示
+    expect(pruneAcked([], ['live-9'])).toEqual([])
+  })
+
+  it('没有变化时返回**同一个数组**（调用方拿它 setState —— 新数组会自激成无限重渲染）', () => {
+    const acked = ['a', 'b']
+    expect(pruneAcked(acked, ['a', 'b', 'c'])).toBe(acked)
+    expect(pruneAcked([], ['a'])).toEqual([])
   })
 })

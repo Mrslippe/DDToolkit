@@ -33,7 +33,7 @@ import { isShellHidden } from '../utils/shellLifecycle'
 import { closeIntent, parseCloseAction, type CloseAction } from '../utils/shellState'
 import type { Notice, NoticeActionKind } from '../utils/notificationHub'
 import { EVENT_TTL_MS, messageNotice } from '../utils/notificationHub'
-import { ackAllIds } from '../utils/noticeBoard'
+import { ackAllIds, pruneAcked } from '../utils/noticeBoard'
 import { useNotices } from '../utils/noticeStream'
 import { api } from '../api/api'
 import type { AccountSnapshot, AuthStatus, FetchStatus, PostFetchStatus } from '../api/types'
@@ -397,7 +397,32 @@ export default function TopBar() {
    * 条目（服务端不认识客户端自己的事实，不该把它顶掉）。
    */
   const [localNotices, setLocalNotices] = useState<Notice[]>([])
-  const notices = useNotices(now, { server: serverNotices, extraLocal: localNotices })
+  const merged = useNotices(now, { server: serverNotices, extraLocal: localNotices })
+
+  /**
+   * **本机刚点掉的那些 id**（用户 2026-10-05 报的"点击已读没反应"的**另一半**，`devlog/349`）。
+   *
+   * 面板里的条目有**三个来源**：本地那份（`localNotices`，dev 注入 / 客户端自己的事实）、
+   * 轮询得到的服务端列表（`serverNotices`）、以及**推送流**（`useNotices` 里的
+   * `liveEdge` / `message` / `progress`）。`ackIds` 只清了前两份：**推送流那一份没人清** ——
+   * 于是刚推来的开播告警点一下纹丝不动（`live-<account_id>` 与 `msg-<ms>` 都是推送流的 id），
+   * 探针 `--notice-lab` 抓到的正是这一条（点了 `live-9001`，`is-out` 一个都没有）。
+   *
+   * ⚠️ **两半都要修**：这里只是"本机立刻不显示"，服务端环里那份也必须真的删
+   * （`notices.drop_ring`），否则下一次轮询又把它带回来 —— 半修的样子就是"闪一下又回来"。
+   *
+   * ⚠️ **什么时候忘掉一条**：它在**合并后的列表里真的没了**之后（下面的 effect）。
+   * 忘了才不会把"同一个账号**下次**开播"（id 相同：`live-<account_id>`）一起吞掉 ——
+   * 与后端 `drop_ring` 里防的是同一类 bug（稳定 id 不许被历史已读吃掉）。
+   */
+  const [ackedIds, setAckedIds] = useState<string[]>([])
+  useEffect(() => {
+    // `pruneAcked` 在没有变化时返回**同一个数组** ⇒ 这里不会自激（同 `StatusIsland` 的教训）
+    setAckedIds((prev) => pruneAcked(prev, merged.map((n) => n.id)))
+  }, [merged])
+  const notices = ackedIds.length === 0
+    ? merged
+    : merged.filter((n) => !ackedIds.includes(n.id))
 
   useEffect(() => on(EVENTS.noticeAlert, (d) => {
     const text = (d?.text || '').trim()
@@ -536,6 +561,9 @@ export default function TopBar() {
    */
   const ackIds = (ids: string[]) => {
     if (!ids.length) return
+    // 推送流那一份（服务端列表里没有、本地列表里也没有的那些 id）靠这张表过滤，
+    // 见 `ackedIds` 的注释：少了它，"刚推来的开播"点了没反应。
+    setAckedIds((prev) => [...new Set([...ids, ...prev])].slice(0, 50))
     setLocalNotices((prev) => {
       const kept = prev.filter((n) => !ids.includes(n.id))
       return kept.length === prev.length ? prev : kept

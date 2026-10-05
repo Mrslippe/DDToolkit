@@ -7,6 +7,8 @@ import type { Notice, NoticeActionKind } from '../utils/notificationHub'
 import { KIND_GLYPH, isLive } from '../utils/notificationHub'
 import type { NoticeGroup } from '../utils/noticeBoard'
 import {
+  GROUP_LABEL,
+  GROUP_ORDER,
   ackAllIds,
   countdownFraction,
   discFraction,
@@ -85,8 +87,31 @@ const KIND_LABEL: Record<string, string> = {
   message: '提示',
 }
 
-/** 已在播放退场动画的条目（`leaving` = 是否正在滑出） */
-type Row = Notice & { leaving?: boolean }
+/** 已在播放退场动画的条目（`leaving` = 是否正在滑出）
+ *
+ * ⚠️ `exitTop` / `exitH` 是**退场那一刻冻结的几何**（2026-10-05 修，`devlog/349`）：
+ * 条目一开始退场就 `position:absolute` 钉在原位，而那个位置**必须在状态转换的那一拍
+ * 量一次就冻住**。先前把它们放在一个**共享的 `floatPos` state** 里、由一条 effect 每帧补算
+ * —— 那条链（`setFloatPos` → 重渲染 → 布局变 → 再补算）会互相点火，最终 React 报
+ * **`Maximum update depth exceeded`**（用户实测：点「批量全部」直接白屏）；
+ * 而且共享表在编排变化时会指向错位 ⇒ 条目上下跳。
+ * 现在几何**跟着行走**（行删了，几何自然没意义），循环在结构上不可能发生。
+ */
+type Row = Notice & {
+  leaving?: boolean
+  /** 退场那一刻冻结的容器内 top（`position:absolute` 用它钉在原位） */
+  exitTop?: number
+  /** 退场那一刻冻结的高度（浮起来的那条仍要占原来那么高，否则文字会重排/换行） */
+  exitH?: number
+}
+
+/** 一行的**布局几何**（`geomOf` 产出，见那里的注释：必须 transform-free） */
+interface Geom {
+  /** 它那个 `.si-list` 内的纵坐标（**滚动无关**，也不受面板整体移动影响） */
+  relTop: number
+  /** 边框盒高度 */
+  h: number
+}
 
 /**
  * 顶栏「状态岛」（R12a，devlog/089）：把原来三套并存的顶栏信息收成**一个控件**。
@@ -147,20 +172,17 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
    *
    * 为什么必须用 FLIP（而不是给 `.si-item` 挂个 `transition` 就完事）：
    * 浏览器**不会**为"块级元素因为兄弟被删除而改变位置"做动画（那是一次普通重排）。
-   * FLIP 的做法：① 改 DOM **前**记下每条的位置（`snapshotRects`）；② 改完把每条
-   * **瞬时**挪回旧位置（反向 transform）；③ 下一帧撤掉 ⇒ CSS 过渡平滑送到新位置。
-   * 全程只用 `transform`，不碰布局属性。
+   * FLIP 的做法：① 每次提交后记下每条的布局（`snapshotGeom` → `geomRef`）；
+   * ② 下一拍 DOM 变完，把每条**瞬时**挪回旧位置（反向 transform）；③ 下一帧撤掉
+   * ⇒ CSS 过渡平滑送到新位置。全程只用 `transform`，不碰布局属性。
    *
-   * ⚠️ **退场那条必须"浮"起来**（`floatPos` + `lockH`）：它若照旧占着流内位置，
-   * 下面的条目**要等它 220ms 动画放完**才可能上移 —— 那就成了"先滑完再顶上来"
-   * （用户明确不要那个）。浮起来 ⇒ 流内位置当场空出，剩下的条目**同时**开始上移。
+   * ⚠️ **退场那条必须"浮"起来**：它若照旧占着流内位置，下面的条目**要等它 220ms 动画
+   * 放完**才可能上移 —— 那就成了"先滑完再顶上来"（用户明确不要那个）。浮起来 ⇒
+   * 流内位置当场空出，剩下的条目**同时**开始上移。
+   * ⚠️ 浮动坐标**跟着行走**（`Row.exitTop` / `exitH`，在状态转换那一拍量一次就冻住）——
+   * 不放进共享 state。上一版就是那样：`setFloatPos` → 重渲染 → 布局变 → 再补算，
+   * 互相点火到 React 报 `Maximum update depth exceeded`（用户点「批量全部」直接白屏）。
    */
-  const flipRef = useRef<Map<string, DOMRect> | null>(null)
-  /** 退场条目"浮"起来要用的坐标（id → 容器内 top / 自身高度） */
-  const [floatPos, setFloatPos] = useState<Record<string, { top: number; h: number }>>({})
-  /** 退场期间锁住的滚动体高度（不然浮起来的那条一走，容器会先塌一下） */
-  const [lockH, setLockH] = useState<number | null>(null)
-
   /**
    * **退场副本**：`leaving` 的行留在列表里播完动画才真删（否则 CSS 过渡没有机会播）。
    *
@@ -170,77 +192,96 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
   const [rows, setRows] = useState<Row[]>([])
   const liveIds = notices.map((n) => n.id).join('|')
 
-  const snapshotRects = (): Map<string, DOMRect> => {
-    const map = new Map<string, DOMRect>()
+  /**
+   * 单条的几何（**transform-free**）：
+   * - `relTop`：它那个 `.si-list` 内的坐标 —— FLIP 的"顶上来"与退场浮起来都用它。
+   *   为什么不用视口坐标：面板自己也会动（`place()` 量到真实高度后翻到上方、窗口缩放），
+   *   那些位移**不是条目在列表里动了**，用视口坐标去补会把整个面板的内容也拖着"缓动"过去。
+   * - `h`：边框盒高度（浮起来时要占原来那么高）。
+   *
+   * ⚠️⚠️ `getBoundingClientRect()` **包含**我们自己刚挂上去的反向 `translateY`（FLIP 的中间态）。
+   * 不把它减掉，下一拍就会把"上一步的位移"当成布局差再补一次 ⇒ 来回放大，
+   * 表现就是**条目上下跳 / 叠在一起**（用户 2026-10-05 报的正是这个：
+   * "通知快速进入的时候条目一直重复堆叠"）。所以位移量另存 `data-flip-y`，量的时候减掉。
+   */
+  const geomOf = (el: HTMLElement): Geom => {
+    const r = el.getBoundingClientRect()
+    const dy = Number.parseFloat(el.dataset.flipY || '0') || 0
+    const lr = el.closest<HTMLElement>('.si-list')?.getBoundingClientRect()
+    return { relTop: lr ? r.top - lr.top - dy : 0, h: r.height }
+  }
+
+  const snapshotGeom = (): Map<string, Geom> => {
+    const map = new Map<string, Geom>()
     panelRef.current?.querySelectorAll<HTMLElement>('.si-item[data-notice-id]')
       .forEach((el) => {
         const id = el.getAttribute('data-notice-id')
-        if (id) map.set(id, el.getBoundingClientRect())
+        if (id) map.set(id, geomOf(el))
       })
     return map
   }
 
-  // ⚠️ **故意不给依赖数组**（与上面那条"每次渲染都量一次"是同一个理由）：
-  //    FLIP 要的就是"每次布局变化都拍一次照再补位"。加 `[]` 会让它只跑一次，
-  //    加具体依赖会漏掉"最后一条被清掉"这类变化。
+  /** 上一次提交结束时的布局（每拍由 FLIP 那条 effect 刷新）—— 退场几何**只能**从这里取 */
+  const geomRef = useRef<Map<string, Geom>>(new Map())
+  /** 同一份快照的"这一拍内可读"副本（判退场的 effect 跑在 FLIP 之后，见 `freezeExit`） */
+  const prevGeomRef = useRef<Map<string, Geom>>(new Map())
+
+  /**
+   * 一条通知**正要退场**时，把它"钉住"要用的几何（`position:absolute` 的 top / height）。
+   *
+   * ⚠️ 为什么必须在**判退场的那一拍**就冻住、而且只能从快照取：
+   * 两条退场路径**当下都量不到它**——
+   * ① TTL 到点：`sectionNotices` 过滤的是 `isLive`，这一拍的 DOM 里**已经没有它了**；
+   * ② 服务端撤条目：`notices` 一变，它同样不在 `sections` 里。
+   * 唯一还留着它坐标的地方是**上一次提交的布局快照**（`prevGeomRef`）——
+   * 那正好就是"它原来待着的位置"，也就是用户要的"从它的位置滑出去"。
+   */
+  const freezeExit = (n: Notice): Partial<Row> => {
+    const g = prevGeomRef.current.get(n.id)
+    return g ? { exitTop: Math.round(g.relTop), exitH: Math.round(g.h) } : {}
+  }
+
+  // ⚠️ **故意不给依赖数组**：FLIP 要的就是"每次布局变化都拍一次照再补位"。
+  //    加 `[]` 会让它只跑一次，加具体依赖会漏掉"最后一条被清掉"这类变化。
+  //    同时它**每拍都刷新 `geomRef`** —— 那张快照既是下一拍的"旧位置"，
+  //    也是判退场时唯一还能拿到那条坐标的地方（见 `freezeExit`）。
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useLayoutEffect(() => {
-    const before = flipRef.current
-    flipRef.current = null
+    // `before` = 上一次提交结束时的布局。先把它交给 `prevGeomRef`：本 effect 末尾
+    // 就会用**这一拍**的布局覆盖 `geomRef`，而判退场的 effect 跑在它后面（同一拍），
+    // 那时它要的仍是"退场前"那份（`freezeExit` 的注释里有完整理由）。
+    const before = geomRef.current
+    prevGeomRef.current = before
     const root = panelRef.current
-    if (!before || !root) return
+    if (!root) {
+      // 面板没挂载（收起了）⇒ 快照清空：不清的话下次打开会拿"上一次那个面板"的坐标去补位，
+      // 条目会先被拽到旧位置再飘回来。
+      geomRef.current = new Map()
+      return
+    }
     const frames: number[] = []
-    const floats: Record<string, { top: number; h: number }> = {}
     root.querySelectorAll<HTMLElement>('.si-item[data-notice-id]').forEach((el) => {
-      const id = el.getAttribute('data-notice-id') || ''
-      const old = before.get(id)
+      // 退场那条**已经**脱离文档流并由 `exitTop` 钉住了（见 `renderRow`）：
+      // 它不需要补位，补了反而会和冻结坐标打架 ⇒ 直接跳过。
+      if (el.classList.contains('is-out')) return
+      const old = before.get(el.getAttribute('data-notice-id') || '')
       if (!old) return
-      const cur = el.getBoundingClientRect()
-      if (el.classList.contains('is-out')) {
-        // 退场中的那条：**脱离文档流、钉在原来的位置**（这样剩下的条目能立刻上移）
-        const list = el.parentElement
-        const listTop = list ? list.getBoundingClientRect().top : cur.top
-        floats[id] = { top: cur.top - listTop, h: cur.height }
-        return
-      }
-      const dy = old.top - cur.top
+      const dy = old.relTop - geomOf(el).relTop
       if (Math.abs(dy) < 0.5) return
       el.style.transition = 'none'
       el.style.transform = `translateY(${dy}px)`
+      el.dataset.flipY = String(dy)      // 量的时候要减掉它，否则下一拍重复补（见 `geomOf`）
       frames.push(requestAnimationFrame(() => {
         el.style.transition = ''
         el.style.transform = ''
+        delete el.dataset.flipY
       }))
     })
-    if (Object.keys(floats).length) {
-      const sc = root.querySelector<HTMLElement>('.si-list')
-      setFloatPos(floats)
-      setLockH((prev) => prev ?? sc?.offsetHeight ?? null)
-    }
+    // ⚠️ 快照**必须在补位之后**拍：此时 DOM 已是这一拍的最终布局（补位用的是 transform，
+    //    与布局无关，`geomOf` 会把它减掉）。
+    geomRef.current = snapshotGeom()
     return () => frames.forEach(cancelAnimationFrame)
   })
-
-  /**
-   * ⚠️ **浮起来的坐标单独用一个 `useEffect` 补**（2026-10-05 实测）：
-   * `useLayoutEffect` 里 `setState` 会被 React 排到**下一次渲染**才落地，而那一次渲染
-   * 可能落在"退场动画已经快放完"之后（单测里跑得过密时就是这样：`vitest run` 全量跑时
-   * 那条用例红过一次，而单独跑绿）。`useEffect` 在提交后立刻排，落地更早也更稳；
-   * FLIP 的 transform 那部分留在 `useLayoutEffect` 里（它必须绘制前生效，否则会闪一帧）。
-   */
-  useEffect(() => {
-    const root = panelRef.current
-    if (!root) return
-    // 给**已经挂上 `.is-out`** 但还没有浮动坐标的行补上（幂等：已有坐标的不动）
-    const need: Record<string, { top: number; h: number }> = {}
-    root.querySelectorAll<HTMLElement>('.si-item.is-out[data-notice-id]').forEach((el) => {
-      const id = el.getAttribute('data-notice-id') || ''
-      if (!id || floatPos[id]) return
-      const list = el.parentElement
-      const listTop = list ? list.getBoundingClientRect().top : 0
-      need[id] = { top: el.getBoundingClientRect().top - listTop, h: el.offsetHeight }
-    })
-    if (Object.keys(need).length) setFloatPos((prev) => ({ ...need, ...prev }))
-  }, [rows, floatPos])
   /**
    * **自己的秒表**（L1，2026-10-05）：过期与相对时间都由它驱动。
    *
@@ -271,20 +312,23 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
   //（`rows` / `liveIds` 的**声明**为了 FLIP 读得到，已经上移到那段 effect 之前）
 
   useLayoutEffect(() => {
-    // ⚠️ **先拍照再改 DOM**（FLIP）：退场中的条目会继续占位、其余条目的位置会变，
-    //    而"下方顶上来"要补的是**旧位置**。用 `useLayoutEffect` + 同一帧里改 DOM，
-    //    所以这次量到的就是改动前的布局（`useEffect` 太晚，那时已经重排完了）。
-    flipRef.current = snapshotRects()
+    // ⚠️ **退场几何要在改状态之前就算好**（`freezeExit` 读 DOM 快照）：
+    //    `setRows` 的更新函数必须是**纯**的（React 可能重复调用它），DOM 读取不能塞进去。
+    const incoming = new Map(notices.map((n) => [n.id, n]))
+    const exits = new Map<string, Partial<Row>>()
+    for (const r of rows) {
+      if (!r.leaving && !incoming.has(r.id)) exits.set(r.id, freezeExit(r))   // 服务端撤了 ⇒ 滑出
+    }
     setRows((prev) => {
-      const incoming = new Map(notices.map((n) => [n.id, n]))
+      const fresh = new Map(notices.map((n) => [n.id, n]))
       const next: Row[] = []
       for (const r of prev) {
-        const fresh = incoming.get(r.id)
-        if (fresh) { next.push({ ...fresh, leaving: false }); incoming.delete(r.id) }
-        else if (!r.leaving) next.push({ ...r, leaving: true })      // 服务端撤了 ⇒ 滑出
+        const hit = fresh.get(r.id)
+        if (hit) { next.push({ ...hit, leaving: false }); fresh.delete(r.id) }
+        else if (!r.leaving) next.push({ ...r, leaving: true, ...exits.get(r.id) })
         else next.push(r)                                           // 已在滑出：留着等定时器
       }
-      for (const n of incoming.values()) next.push({ ...n, leaving: false })
+      for (const n of fresh.values()) next.push({ ...n, leaving: false })
       return next
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -306,24 +350,30 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
    *  这与"`useEffect` 里 setState 要防抖"是同一类坑，只是它长得像纯粹的数据变换。
    */
   useLayoutEffect(() => {
-    // ⚠️ `??=` 而不是 `=`：两个 effect（列表变化 / 时间体检）在同一帧里都跑，
-    //    第二个若覆盖第一个的拍照，就会拿"已经改过一次"的布局去算位移（抖动来源）。
-    flipRef.current ??= snapshotRects()
+    // 同 `[liveIds]` 那条：几何在改状态**之前**算（`setRows` 的更新函数要保持纯）
+    const exits = new Map<string, Partial<Row>>()
+    for (const r of rows) {
+      if (!r.leaving && !isLive(r, now)) exits.set(r.id, freezeExit(r))
+    }
+    if (exits.size === 0) return
     setRows((prev) => {
       let changed = false
       const next = prev.map((r): Row => {
-        if (!r.leaving && !isLive(r, now)) { changed = true; return { ...r, leaving: true } }
-        return r
+        const ex = exits.get(r.id)
+        if (!ex || r.leaving) return r
+        changed = true
+        return { ...r, leaving: true, ...ex }
       })
       return changed ? next : prev
     })
-  }, [now])
+    // ⚠️ `rows` 也在依赖里（它只用来**预先**算几何，判据仍走上面的 `prev`）：
+    //    标完退场后 rows 会变 ⇒ 这一条再跑一次，但那时 `exits` 已经是空的 ⇒ 立刻返回，
+    //    不会自激（"没有真变化就 `return prev`"这条防抖仍然成立）。
+  }, [now, rows])
   useEffect(() => {
     if (!rows.some((r) => r.leaving)) return
     const t = window.setTimeout(() => {
       setRows((prev) => prev.filter((r) => !r.leaving))
-      setFloatPos({})
-      setLockH(null)
     }, ITEM_EXIT_MS)
     return () => window.clearTimeout(t)
   }, [rows])
@@ -503,7 +553,10 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
     const frac = countdownFraction(n, now)
     const relFor = relTimeFor(n, now)
     const canAck = n.form !== 'state'          // 状态类不给点已读（见 `ackAllIds` 的注释）
-    const float = n.leaving ? floatPos[n.id] : undefined
+    const float = n.leaving && n.exitTop !== undefined
+      ? { position: 'absolute' as const, left: 0, right: 0,
+          top: n.exitTop, height: n.exitH }
+      : undefined
     return (
       <li
         key={n.id}
@@ -513,9 +566,12 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
         data-notice-id={n.id}
         data-left={frac === null ? undefined : frac.toFixed(3)}
         /* 退场那条**浮**在原来的位置（`position:absolute`）—— 它的流内位置当场空出，
-           剩下的条目因此能**同时**开始上移（用户要的并行；不浮就得等它滑完）。 */
-        style={float ? { position: 'absolute', left: 0, right: 0, top: float.top,
-                         height: float.h } : undefined}
+           剩下的条目因此能**同时**开始上移（用户要的并行；不浮就得等它滑完）。
+           ⚠️ 坐标是**退场那一刻冻住的**（`Row.exitTop` / `exitH`，见 `freezeExit`），
+           不是每帧现算的 —— 现算那版（共享 `floatPos` state）会自激成无限重渲染。
+           ⚠️ 量不到坐标时（快照里没有它，例如面板刚打开就退场）**就留在流内**：
+           位置不完美，但白屏 / 错位 / 无限循环都不会发生。 */
+        style={float}
         /* 单击正文/空白 = 已读（用户 2026-10-05）。
            ⚠️ 动作按钮**不算**已读（它自己 `stopPropagation`）：那是"我要去看一眼"，
            顺手把通知消掉会让人回头找不到（例如受限项要反复对照）。 */
@@ -574,37 +630,40 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
   const leaving = rows.filter((r) => r.leaving)
 
   /**
-   * 把某一组渲染成 `<li>` 列表，**退场中的条目留在它原来的位置**（用户 2026-10-05）。   *
+   * 把某一组渲染成 `<li>` 列表，**退场中的条目留在它原来的位置**（用户 2026-10-05）。
+   *
    * 为什么不再单独挂到 `.si-list-leaving`：那会让退场条目**跳到整列最下面**
    * （它是另一个 `<ul>`），观感是"这条跑到别处去了"。留在原位才是"从这条的位置滑出去"，
    * 也才谈得上"下面的条目顶上来"。
-   *
-   * ⚠️⚠️ **必须传"这一组该显示哪些"进来**（由 `groupRows` 统一算），**不能**在这里
-   * 用 `groupOf` 现算：一条告知类过期后就不再是 `live`，于是**它的组可能整组都不渲染**
-   * （例如"最近"只剩它一条）——那时这一组的一次 `renderGroup` 都不会发生，
-   * 退场那条**直接消失**（没有滑出动画）。本批实测就撞在这里：
-   * `test ... 先挂 is-out 滑出` 红了，DOM 里连 `.si-item.is-out` 都没有。
    */
   const renderRows = (rowsToDraw: Row[]) =>
     rowsToDraw.map((n) => renderRow(rowsById.get(n.id) ?? n))
 
-  /** 这一组要画的条目：活着的 + **本组里正在退场的**（退场的按 `leaving` 里的原组归属） */
-  const groupRows = (s: { items: Notice[]; group: string }): Row[] => {
-    const live = new Set(s.items.map((n) => n.id))
-    const gone = leaving.filter((r) => groupOf(r) === s.group && !live.has(r.id))
-    return [...s.items, ...gone]
-  }
-
-  /** 退场条目里**没有任何一组认领**的那些（例如它那组本来就只有它）：兜底渲染，
-   *  否则它会静默消失（同一个坑的另一半）。 */
-  const orphans = ((): Row[] => {
-    const claimed = new Set(sections.flatMap((s) => groupRows(s).map((r) => r.id)))
-    return leaving.filter((r) => !claimed.has(r.id))
-  })()
+  /**
+   * 面板里**要画的组**（按 `GROUP_ORDER`，与胶囊上的读法同序）。
+   *
+   * ⚠️ 不能直接 `sections.map`：一条告知类过期后就不再 `isLive`，于是**它那组可能整组都不在
+   * `sections` 里** —— 那一组一次都不会渲染，退场那条**直接消失**（没有滑出动画）。
+   * 第一版撞在这里（用例红过一次，DOM 里连 `.si-item.is-out` 都没有）。
+   *
+   * ⚠️ 补成"**同一组、同一个 `<ul>`**"而不是另挂一个兜底容器（2026-10-05 修）：退场条目浮起来
+   * 用的坐标（`exitTop`）**是相对它原来那个 `<ul>` 量的**，换个容器就整体错位
+   * （整组只剩它一条时最明显 —— 兜底容器在面板最下面）。
+   */
+  const drawnGroups = GROUP_ORDER
+    .map((group) => {
+      const s = sections.find((x) => x.group === group)
+      const live: Row[] = s ? s.items : []
+      const liveIds = new Set(live.map((n) => n.id))
+      // 本组里正在退场的（按 `leaving` 里的原组归属，插在活着的后面）
+      const gone = leaving.filter((r) => groupOf(r) === group && !liveIds.has(r.id))
+      return { group, label: s?.label ?? GROUP_LABEL[group], rows: [...live, ...gone] }
+    })
+    .filter((s) => s.rows.length > 0)
 
   const rowsById = new Map(rows.map((r) => [r.id, r]))
   const ackAll = ackAllIds(notices, now)
-  const showEmpty = sections.length === 0 && leaving.length === 0
+  const showEmpty = drawnGroups.length === 0
 
   return (
     <>
@@ -714,28 +773,19 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
                 ? <p className="si-empty">现在没有需要你知道的事</p>
                 : (
                   <div className="si-secs">
-                    {sections.map((s) => (
+                    {drawnGroups.map((s) => (
                       <section className="si-sec" data-group={s.group} key={s.group}>
                         <h4 className="si-sec-title">
-                          {s.label}（{s.items.length}）
+                          {/* 计数按**画出来的**条数（= 活着的 + 正在滑出的）：退场那 220ms 里
+                              它还在屏幕上，写 `s.items.length` 会显示"最近（0）"而下面明明有一条。 */}
+                          {s.label}（{s.rows.length}）
                         </h4>
-                        <ul className="si-list"
-                            style={lockH !== null && groupRows(s).some((n) => n.leaving)
-                              ? { position: 'relative', height: lockH, overflow: 'hidden' }
-                              : { position: 'relative' }}>
-                          {/* 退场中的条目**留在原位置**（见 `groupRows`）——
-                              "从这条的位置滑出去"+"下面的顶上来"两件事都靠它 */}
-                          {renderRows(groupRows(s))}
+                        {/* ⚠️ `position: relative` 是退场条目浮起来用的坐标系（`exitTop` 相对它量） */}
+                        <ul className="si-list" style={{ position: 'relative' }}>
+                          {renderRows(s.rows)}
                         </ul>
                       </section>
                     ))}
-                    {/* 该组整组都没了、但那条还在退场的兜底（否则它会静默消失） */}
-                    {orphans.length > 0 && (
-                      <ul className="si-list" style={{ position: 'relative' }}
-                          data-orphan-leaving="1">
-                        {renderRows(orphans)}
-                      </ul>
-                    )}
                   </div>
                 )}
             </OverlayScroll>

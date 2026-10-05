@@ -721,3 +721,45 @@ def test_login_expired_is_sticky_alert(client, monkeypatch):
     assert lg["kind"] == "alert" and lg["sticky"] is True
     assert lg["action"] == {"label": "去登录", "kind": "login"}
     assert lg["expiresAt"] is None, "常驻条不该有过期时刻"
+
+
+def test_ack_drops_ring_notices_and_leaves_no_residue(client, db, monkeypatch):
+    """⑧ 点掉"环里的"条目 = **真的删掉它**（2026-10-05 修，用户报的"点了已读没反应"）。
+
+    环（`_ring`）装的是瞬时消息与开播边沿，它们此前**完全不看已读集合** ⇒ 用户点"已读"
+    之后它照样在面板里待到 TTL 到点（6s / 2min），观感就是"点了没反应"。
+
+    两条判据，第二条是**这次修法的关键**（它决定了"删掉"而不是"记已读"）：
+
+    ① 消息（`msg-<ms>`，一次性 id）：ack 之后不再出现，且**不写进已读集合** ——
+       让 6 秒寿命的瞬时 id 去挤 `READ_LIMIT` 的格子会把真正要落库的处置类顶出去；
+    ② 开播边沿（`live-<account_id>`，**按账号稳定**的 id）：ack 之后那个账号**下次开播
+       照样要出现**。若改用"记进已读集合再过滤"的写法，这个断言就会红 ——
+       那正是 `is_state_id` 那里防的同一类 bug（稳定 id 进已读 = 未来的同类事件被吞）。
+    """
+    monkeypatch.setattr(N, "_now_ms", lambda: 1_700_000_000_000)
+    N.record_message("抓取完成")
+    N.record_live_edge({"account_id": 5, "name": "七海", "live_title": "歌回"})
+    ids = [n["id"] for n in N.build_notices(_Session(), status=_status(),
+                                            now_ms=1_700_000_000_000)["notices"]]
+    msg_id = next(i for i in ids if i.startswith("msg-"))
+    assert "live-5" in ids
+
+    # ① 单条口（点面板里某一条走的就是它）
+    assert client.post("/vtuber/notices/ack", json={"id": msg_id}).json()["acked"] == [msg_id]
+    left = [n["id"] for n in N.build_notices(_Session(), status=_status(),
+                                             now_ms=1_700_000_000_000)["notices"]]
+    assert msg_id not in left, "点掉了却还在（用户看到的就是「点了没反应」）"
+    assert N.read_ids(db) == [], "瞬时消息的 id 不该进已读集合"
+
+    # ② 批量口（面板「全部已读」走的就是它）+ 开播边沿
+    assert client.post("/vtuber/notices/ack", json={"ids": ["live-5"]}).json()["acked"] == ["live-5"]
+    left = [n["id"] for n in N.build_notices(_Session(), status=_status(),
+                                             now_ms=1_700_000_000_000)["notices"]]
+    assert "live-5" not in left
+    assert N.read_ids(db) == [], "开播 id 是按账号稳定的，落库会吞掉下一次开播"
+    # 反向对照：同一个账号**再次开播** ⇒ 必须重新出现
+    N.record_live_edge({"account_id": 5, "name": "七海", "live_title": "第二次"})
+    again = [n["id"] for n in N.build_notices(_Session(), status=_status(),
+                                              now_ms=1_700_000_000_000)["notices"]]
+    assert "live-5" in again, "同一个账号下次开播被上一次的已读吞掉了"

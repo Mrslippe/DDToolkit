@@ -1799,9 +1799,48 @@ def _assert_notice_lab(nl: dict, width: int) -> list[str]:
                        f"（实得 {labels}）")
     if not nl.get("hasAckAll"):
         bad.append(f"@{width} notice-lab: 「需要处理」组没有「全部已读」")
+    # 点一条 = 已读（2026-10-05 用户："点击已读功能并没有实现"）。
+    # 判据：点下去那条**当拍**进入 `.is-out`，且"活着的"少一条 —— 少了这两条里任何一条，
+    # 用户看到的就是"点了没反应"（正是他报的那句话）。
+    if not nl.get("panelAliveForAck"):
+        bad.append(f"@{width} notice-lab: 逐条验完面板是关着的 —— 下面的已读判据都测不到东西"
+                   f"（探针自己要先把它开回来）")
+    elif (nl.get("ackableBefore") or 0) < 1:
+        bad.append(f"@{width} notice-lab: 面板里没有可点已读的条目（`can-ack` 一条都没有）")
+    elif not nl.get("ackOutIds"):
+        bad.append(f"@{width} notice-lab: 点了条目（{nl.get('ackTarget')}）但它没进入滑出 —— "
+                   f"用户看到的就是「点了没反应」")
+    elif nl.get("aliveAfterAck") == nl.get("aliveBeforeAck"):
+        bad.append(f"@{width} notice-lab: 点了条目但活着的条数没变"
+                   f"（{nl.get('aliveBeforeAck')} → {nl.get('aliveAfterAck')}）")
+    # 「全部已读」：按 **id** 判（条数会被 TTL 影响，那样即使按钮没生效也可能"看起来清了"）
+    if nl.get("ackAllBeforeIds"):
+        if not nl.get("ackAllCleared"):
+            bad.append(f"@{width} notice-lab: 「全部已读」之后这些还在："
+                       f"{nl.get('ackAllStillAlive')}（点之前 {nl.get('ackAllBeforeIds')}）")
+        if nl.get("doingUntouched") is False:
+            bad.append(f"@{width} notice-lab: 「全部已读」动了「正在进行」"
+                       f"（{nl.get('ackAllDoingBefore')} → {nl.get('doingAfterAckAll')}）")
+        if (nl.get("doingAfterAckAll") or 0) < 1:
+            bad.append(f"@{width} notice-lab: 「全部已读」把「正在进行」清空了 —— "
+                       f"状态类只能由事实变化撤下")
     rel = nl.get("metaHasRelative") or []
     if not any(" · " in r for r in rel):
         bad.append(f"@{width} notice-lab: 条目 meta 行没有相对时间")
+    # ⚠️ **页面自己炸了**（2026-10-05 加）：用户报的 `Maximum update depth exceeded`
+    #    （点「批量全部」直接白屏）在这条探针上曾经是**全绿**的 —— 它只数 DOM，
+    #    数不到"组件已经进无限重渲染、树被卸载"。凡是**未捕获异常**或 React 的
+    #    渲染期报错都算致命：那种状态下"少了某条"根本不是样式问题。
+    for err in nl.get("pageErrors") or []:
+        text = str(err)
+        fatal = (
+            text.startswith("window.onerror:")
+            or "Maximum update depth exceeded" in text
+            or "The above error occurred in" in text
+            or "Uncaught " in text
+        )
+        if fatal:
+            bad.append(f"@{width} notice-lab: 页面报错 —— {text[:160]}")
     return bad
 
 
@@ -3621,9 +3660,15 @@ def main() -> int:
             print(f"  倒计时细条={nl.get('barCount')} 条（带 data-left 的种类="
                   f"{nl.get('withCountdown')}）")
             print(f"  动作按钮={nl.get('actionLabels')} 一键已读={nl.get('hasAckAll')}")
+            print(f"  点一条已读：目标={nl.get('ackTarget')!r} 滑出={nl.get('ackOutIds')!r} "
+                  f"活着 {nl.get('aliveBeforeAck')} → {nl.get('aliveAfterAck')}")
+            print(f"  全部已读：清={nl.get('ackAllCleared')} 剩={nl.get('ackAllStillAlive')!r} "
+                  f"｜正在进行 {nl.get('ackAllDoingBefore')} → {nl.get('doingAfterAckAll')} "
+                  f"（未被动={nl.get('doingUntouched')}）")
             for line in (nl.get("itemTexts") or []):
                 print(f"     条目: {line}")
             print(f"  本地那一份 id：{nl.get('localIds')!r}")
+            print(f"  页面报错：{nl.get('pageErrorCount')} 条 {nl.get('pageErrors')!r}")
             print(f"  逐条验（key=成/否(面板条数)）：{nl.get('perRow')!r}")
             for line in (nl.get("labTrace") or []):
                 print(f"     trace: {line}")
