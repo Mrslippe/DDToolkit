@@ -180,12 +180,13 @@ def save_douyin_cookie(payload: dict):
 
 @router.get("/pairing")
 def pairing_status(db: Session = Depends(get_db)):
-    """给「设置 → 登录 → 浏览器扩展」那一栏用：当前配对 token。
+    """给「设置 → 登录 → 浏览器扩展」那一栏用：当前配对 token + **上次同步**摘要。
 
     ⚠️ **没有就生成一个**（幂等）：打开那一栏就该有东西可复制，而不是先点一次「生成」。
     ⚠️ 返回值**只**该出现在那个界面与用户的粘贴板里 —— 不进日志、不进通知、不进诊断。
+    `last_sync` 里只有键名与计数（`services/pairing.note_sync` 保证不落 cookie 值）。
     """
-    return {"token": pairing.current_token(db)}
+    return {"token": pairing.current_token(db), "last_sync": pairing.last_sync(db)}
 
 
 @router.post("/pairing/reset")
@@ -231,6 +232,10 @@ async def import_cookie(request: Request, payload: dict, db: Session = Depends(g
     pairing.note_success()
     if not receipt.ok:
         return JSONResponse(status_code=400, content=receipt.as_dict())
+    pairing.note_sync(db, platform=receipt.platform,
+                      label=cookie_import.PLATFORM_LABELS.get(receipt.platform, receipt.platform),
+                      keys=receipt.keys, cookie_keys=receipt.cookie_keys,
+                      verified=receipt.verified)
     logger.info("扩展导入凭据：%s（%d 个键，%d 个可用键，verified=%s）",
                 receipt.platform, receipt.cookie_keys, len(receipt.keys), receipt.verified)
     return receipt.as_dict()

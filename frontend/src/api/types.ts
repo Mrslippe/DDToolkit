@@ -809,6 +809,27 @@ export interface XhsCookieSaved extends AuthStatus {
 /** POST /auth/douyin/cookie 的返回：同上（多一个 `ua_configured`，见 AuthStatus） */
 export type DouyinCookieSaved = XhsCookieSaved
 
+/** 上一次成功导入的凭据摘要（E1/E3；**只有键名与计数，没有 cookie 值**） */
+export interface PairingLastSync {
+  platform: string
+  /** 平台显示名（后端给，界面别自己再维护一张表） */
+  label: string
+  keys: string[]
+  cookie_keys: number
+  /** 上游确认过登录态吗（`false` = 保存了但没验成：网络问题，或该平台不做在线探活） */
+  verified: boolean
+  /** 毫秒时间戳 */
+  at: number
+}
+
+/** GET /auth/pairing：给「设置 → 登录 → 浏览器扩展」那一栏用 */
+export interface PairingInfo {
+  /** 配对 token（只该出现在这个界面与用户的粘贴板里） */
+  token: string
+  /** 从没同步过 ⇒ `null`（界面据此不显示那一行） */
+  last_sync: PairingLastSync | null
+}
+
 /** POST /auth/{platform}/qr/start */
 export interface QrStartResult {
   qr_id: string

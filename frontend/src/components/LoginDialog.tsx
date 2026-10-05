@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Loader2, RefreshCw } from 'lucide-react'
+import { Check, Copy, Loader2, RefreshCw } from 'lucide-react'
 import QRCode from 'react-qr-code'
 import { toast } from 'sonner'
 import {
@@ -10,9 +10,10 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { api } from '../api/api'
-import type { AuthStatus, AuthPlatform, QrStartResult } from '../api/types'
+import type { AuthStatus, AuthPlatform, PairingInfo, QrStartResult } from '../api/types'
 import { refreshCapabilities } from '../hooks/useCapabilities'
 import { LOGIN_TABS, cookieLoginSpec, loginMode } from '../utils/platformLogin'
+import { relTime } from '../utils/noticeBoard'
 
 type Platform = AuthPlatform
 
@@ -58,6 +59,16 @@ export default function LoginDialog({ open, onOpenChange }: Props) {
   const [pasting, setPasting] = useState(false)
   const genSeq = useRef(0)
 
+  // ── 浏览器扩展（E3，2026-10-06）─────────────────────────────────────────
+  // 用户口径：一键同步四个平台 cookie 的扩展，配一次长期有效。这一栏是它的**应用侧入口**：
+  // 显示配对 token（默认打码）+「复制」+「重置配对」+「上次同步」（自证扩展真的说过话）。
+  // ⚠️ token 是凭据：**默认打码**、只有点「显示」才进 DOM 文本；复制走剪贴板。
+  const [ext, setExt] = useState<PairingInfo | null>(null)
+  const [extShown, setExtShown] = useState(false)
+  const [extCopied, setExtCopied] = useState(false)
+  const [extConfirmReset, setExtConfirmReset] = useState(false)
+  const [extBusy, setExtBusy] = useState(false)
+
   // 打开时加载各平台登录态
   useEffect(() => {
     if (!open) return
@@ -87,6 +98,48 @@ export default function LoginDialog({ open, onOpenChange }: Props) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
+
+  /** 取配对信息（打开浮窗时一次）。失败**不弹错**：那一栏显示"读不到"即可 ——
+   *  它是"顺便看一眼"的信息，不该拦住登录这件事本身。 */
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    setExtShown(false)
+    setExtCopied(false)
+    setExtConfirmReset(false)
+    void api.getPairing()
+      .then((info) => { if (!cancelled) setExt(info) })
+      .catch(() => { if (!cancelled) setExt(null) })
+    return () => { cancelled = true }
+  }, [open])
+
+  const copyToken = async () => {
+    if (!ext?.token) return
+    try {
+      await navigator.clipboard.writeText(ext.token)
+      setExtCopied(true)
+      window.setTimeout(() => setExtCopied(false), 1500)
+    } catch {
+      // 剪贴板被拒（无权限 / 非安全上下文）：**把 token 显示出来**让用户手抄，
+      // 比"点了没反应"好。不弹 toast 是因为这一栏本来就看得见。
+      setExtShown(true)
+    }
+  }
+
+  const resetToken = async () => {
+    setExtBusy(true)
+    try {
+      const info = await api.resetPairing()
+      setExt(info)
+      setExtConfirmReset(false)
+      setExtShown(true)          // 刚换的这把要看得见（用户得去扩展里重贴）
+      toast.success('配对 token 已重置 —— 扩展那边要重新贴一次')
+    } catch (e) {
+      toast.error(`重置失败：${(e as Error).message}`)
+    } finally {
+      setExtBusy(false)
+    }
+  }
 
   const start = async (p: Platform) => {
     // 防呆：粘贴型平台没有二维码可生成（调用点包括「重新登录」）
@@ -369,6 +422,103 @@ export default function LoginDialog({ open, onOpenChange }: Props) {
                 </button>
               )}
             </>
+          )}
+        </div>
+
+        {/* ── 浏览器扩展（E3）：一键同步四个平台 cookie ──────────────────────
+            这是扩展的**应用侧入口**：配对 token（默认打码）+ 复制 + 重置 + 上次同步。
+            ⚠️ 三条口径：
+              · token 默认**打码**（凭据不该一开窗就摊在屏幕上），点「显示」才进 DOM；
+              · 「重置配对」要**二次确认**（点错了扩展当场失效，用户得回去重贴）；
+              · 「上次同步」只显示**键名与时间**（后端不落值，这里也没有值可显示）。 */}
+        <div className="rounded-lg border border-border px-3 py-2 text-xs" data-ext-pairing="1">
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-medium text-foreground">浏览器扩展</span>
+            {ext?.last_sync ? (
+              <span className="text-[11px] text-muted-foreground" data-ext-last-sync={ext.last_sync.platform}>
+                上次同步：{ext.last_sync.label} · {relTime(ext.last_sync.at, Date.now()) || '刚刚'}
+                {ext.last_sync.verified ? '' : '（未在线验证）'}
+              </span>
+            ) : (
+              <span className="text-[11px] text-muted-foreground">还没有同步过</span>
+            )}
+          </div>
+
+          {ext?.token ? (
+            <>
+              <div className="mt-1.5 flex items-center gap-1.5">
+                <code
+                  data-ext-token={extShown ? 'shown' : 'masked'}
+                  className="min-w-0 flex-1 truncate rounded bg-[var(--sel-bg-hover)] px-1.5 py-1 font-mono text-[11px]"
+                >
+                  {extShown ? ext.token : '•'.repeat(Math.min(ext.token.length, 32))}
+                </code>
+                <button
+                  type="button"
+                  data-ext-toggle="1"
+                  className="shrink-0 rounded border border-border px-1.5 py-1 text-[11px] text-muted-foreground hover:bg-[var(--sel-bg-hover)]"
+                  onClick={() => setExtShown((v) => !v)}
+                >
+                  {extShown ? '隐藏' : '显示'}
+                </button>
+                <button
+                  type="button"
+                  data-ext-copy="1"
+                  className="flex shrink-0 items-center gap-1 rounded border border-border px-1.5 py-1 text-[11px] text-muted-foreground hover:bg-[var(--sel-bg-hover)]"
+                  onClick={() => void copyToken()}
+                >
+                  {extCopied ? <Check className="size-3" /> : <Copy className="size-3" />}
+                  {extCopied ? '已复制' : '复制'}
+                </button>
+              </div>
+              <p className="mt-1.5 leading-relaxed text-[11px] text-muted-foreground">
+                装好扩展后把这条 token 贴进去一次即可（重启应用不用重贴）。
+                扩展的装法与验收步骤见仓库 <code className="rounded bg-background/70 px-1">extension/README.md</code>。
+              </p>
+              <div className="mt-1.5 flex items-center gap-2">
+                {extConfirmReset ? (
+                  <>
+                    <span className="text-[11px] text-red-500">重置后扩展要重新贴一次，确定？</span>
+                    <button
+                      type="button"
+                      data-ext-reset-confirm="1"
+                      disabled={extBusy}
+                      className="rounded border border-red-400 px-1.5 py-0.5 text-[11px] text-red-500 hover:bg-red-500/10 disabled:opacity-50"
+                      onClick={() => void resetToken()}
+                    >
+                      {extBusy ? '重置中…' : '确定重置'}
+                    </button>
+                    <button
+                      type="button"
+                      data-ext-reset-cancel="1"
+                      className="rounded border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-[var(--sel-bg-hover)]"
+                      onClick={() => setExtConfirmReset(false)}
+                    >
+                      取消
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    data-ext-reset="1"
+                    className="text-[11px] text-muted-foreground underline-offset-2 hover:text-primary hover:underline"
+                    onClick={() => setExtConfirmReset(true)}
+                  >
+                    重置配对
+                  </button>
+                )}
+              </div>
+              {ext.last_sync && ext.last_sync.keys.length > 0 && (
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  上次写入的键：{ext.last_sync.keys.join('、')}
+                  （整条 cookie 共 {ext.last_sync.cookie_keys} 个键）
+                </p>
+              )}
+            </>
+          ) : (
+            <p className="mt-1.5 leading-relaxed text-muted-foreground">
+              读不到配对信息（后端没起来？）。扩展装好之后可以在那里手填 token。
+            </p>
           )}
         </div>
       </DialogContent>

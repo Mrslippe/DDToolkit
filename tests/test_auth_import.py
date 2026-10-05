@@ -408,6 +408,40 @@ def test_pairing_survives_a_new_session(client, pair_token):
         db.close()
 
 
+# ── 「上次同步」（E3 里那一栏要能自证"扩展真的说过话"）────────────────────────
+
+def test_last_sync_is_recorded_with_key_names_only(client, pair_token):
+    """成功导入之后 `GET /auth/pairing` 带上「上次同步」——**只有键名与计数，没有值**。"""
+    secret = "XHS-SECRET-MUST-NOT-LEAK"
+    r = _post(client, "xiaohongshu", f"a1={secret}; web_session=w-secret", token=pair_token)
+    assert r.status_code == 200, r.text
+
+    info = client.get("/auth/pairing").json()
+    last = info.get("last_sync")
+    assert last and last["platform"] == "xiaohongshu", info
+    assert last["label"] == "小红书"
+    assert set(last["keys"]) >= {"a1", "web_session"}
+    assert last["cookie_keys"] == 2
+    assert isinstance(last["at"], int) and last["at"] > 0
+    # ⚠️ 记录里**不许**有任何 cookie 值（它会被界面显示出来）
+    assert secret not in str(info), "「上次同步」里带了 cookie 值"
+
+
+def test_failed_import_does_not_record_a_sync(client, pair_token, monkeypatch):
+    """校验没过 ≠ 同步过：失败那条不许写「上次同步」（否则界面会谎报"上次同步"）。"""
+    async def bad():
+        return False
+
+    monkeypatch.setattr(weibo_auth_manager, "_probe_once", bad, raising=True)
+    assert _post(client, "weibo", "SUB=dead", token=pair_token).status_code == 400
+    assert client.get("/auth/pairing").json()["last_sync"] is None
+
+
+def test_last_sync_is_none_before_any_import(client, pair_token):
+    """从没同步过 ⇒ `last_sync` 是 `None`（界面据此不显示那一行，而不是显示 1970 年）。"""
+    assert client.get("/auth/pairing").json()["last_sync"] is None
+
+
 # ── /healthz 的认领标识（E2 的扩展靠它认领端口）──────────────────────────────
 
 def test_healthz_advertises_the_app_identifier(client):

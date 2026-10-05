@@ -91,10 +91,29 @@ retire-when: 前端视觉体系整体重做，或组件索引改成机器生成
 | ├ 最大化/还原 | `.topbar-win-btn`（`Square`/`Copy` 20px） | `toggleMaximize()`；`onResized→isMaximized` 同步图标；title 切换「最大化/还原」 |
 | └ 关闭 | `.topbar-win-btn.close`（`X` 30px） | busy 时 AlertDialog 二次确认；hover **酒红 `#8e2334`** |
 | 普通钮 hover | `.topbar-win-btn` | **浅粉 `#ffbccb`** |
-| 登录入口 | `.topbar-login-btn`（`LogIn` 16px） | 与窗口钮同规格 46×40；B站会话过期时右上角 8px 红点徽章（`.topbar-login-badge`）；打开 `<LoginDialog>` |
+| 登录入口 | `.topbar-login-btn`（`LogIn` 16px） | 与窗口钮同规格 46×40；B站会话过期时右上角 8px 红点徽章（`.topbar-login-badge`）；打开 `<LoginDialog>`。⚠️ 那个浮窗底部现在还有**「浏览器扩展」栏**（见下）|
+
+#### A1.0-b 登录浮窗里的「浏览器扩展」栏（E3，2026-10-06）
+
+`<LoginDialog>`（`.topbar-login-btn` 打开；首启自动弹）底部新加一块，DOM 契约
+`[data-ext-pairing="1"]` —— 它是**浏览器扩展唯一的应用侧入口**（探针 `--first-run` 判它在不在）：
+
+| 元素 | 属性 | 说明 |
+|---|---|---|
+| 栏本身 | `[data-ext-pairing="1"]` | 与平台 Tab **并列追加**（不是替换）：Tab 与「凭据仅保存在本机」都照旧 |
+| 配对 token | `[data-ext-token="masked"｜"shown"]` | **默认打码**（`•`×min(len,32)）：凭据不该一开窗就摊在屏幕上，也不该进截图。点「显示」才进 DOM 文本 |
+| ├ 显示/隐藏 | `[data-ext-toggle="1"]` | 来回切 |
+| └ 复制 | `[data-ext-copy="1"]` | 写剪贴板；**被拒时退化成"显示"**（不是"点了没反应"）|
+| 上次同步 | `[data-ext-last-sync="<platform>"]` | 平台 + 相对时间（`noticeBoard.relTime`）+ 「未在线验证」（小红书/抖音不做探活时如实标）；**从没同步过 ⇒ 这句改成"还没有同步过"** |
+| 重置配对 | `[data-ext-reset="1"]` → `[data-ext-reset-confirm="1"]` / `[data-ext-reset-cancel="1"]` | **二次确认**（点错了扩展当场失效，用户得回去重贴）；重置后自动「显示」新 token |
+| 上次写入的键 | 无属性（纯文本行） | 键名 + 「整条 cookie 共 N 个键」——**只有键名，没有值**（后端 `pairing.note_sync` 只落键名/计数）|
+| 装法指引 | 纯文本 | 指向仓库 `extension/README.md`（不在界面里写长文）|
+
+⚠️ 数据来自 `GET /auth/pairing`（**要应用 token**）；读不到时这一栏说"读不到配对信息"而不是空白或崩。
+判据：`LoginDialog.pairing.test.tsx`（9 条：打码/复制/退化/二次确认/取消/上次同步/从没同步过/读不到/既有 Tab 仍在）
++ 探针 `ui_probe --first-run`（**已进 A 档门禁**）。
 
 #### A1.1 状态行「展示什么」的策略（2026-09-10 用户：频繁的动态轮询不必占顶栏）
-
 **原则**：状态行是**用户动作的进度显示器**——只展示「有起点、有终点、用户能预期」的任务。
 **自动节拍**（定时档发起、跑完立刻排下一轮、没有终局）一律静默：它长期占着顶栏会让人
 分不清「卡住了」还是「常态在跑」，还会把操作结果覆盖态（`pill-message`）一直挤掉。

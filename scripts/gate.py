@@ -224,6 +224,15 @@ def steps(tier: str) -> list[tuple[str, list[str], str]]:
                                    "--width", "1440"],
          "通知样式调测页（每类按钮 / 批量 / 三组与倒计时，实测 ~35s）"),
     )
+    # ⚠️ **首启那一档也进门禁**（2026-10-06，E3）：`--first-run` 是**唯一**读**登录浮窗** DOM 的
+    #    模式（`_assert_first_run`：四个平台 Tab / 「凭据仅保存在本机」/ 「浏览器扩展」那一栏）。
+    #    登录浮窗正是用户贴凭据的地方，而它此前只在人手跑时被看过 ——
+    #    "门禁没覆盖的模式等于没有门禁"（同 `--app-settings`、`--notice-lab` 两条的教训）。
+    s.append(
+        ("ui_probe --first-run", [PY, "scripts/ui_probe.py", "--first-run",
+                                  "--width", "1440"],
+         "首启登录浮窗（四平台 Tab / 凭据说明 / 浏览器扩展栏，实测 ~15s）"),
+    )
     if tier == "full":
         # dev_check 自带 eslint + vitest + pytest + 语法扫描 + 后端冒烟 ⇒ 别再单跑一遍
         s.append(("dev_check", [PY, "scripts/dev_check.py"],

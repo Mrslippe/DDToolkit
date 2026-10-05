@@ -2300,18 +2300,24 @@ def _calendar_signature(cal: dict | None) -> str | None:
 
 
 def _assert_first_run(dom_file: Path) -> list[str]:
-    """首启行为：登录浮窗自动出现，且带「凭据仅保存在本机」说明 + 三个平台 Tab。"""
+    """首启行为：登录浮窗自动出现，且带「凭据仅保存在本机」说明 + **四个**平台 Tab + 扩展那一栏。"""
     text = dom_file.read_text(encoding="utf-8", errors="replace")
     bad: list[str] = []
     if 'role="dialog"' not in text:
         bad.append("首启登录浮窗未自动弹出（?firstRun=1 下应打开）")
     if "仅保存在本机" not in text:
         bad.append("登录浮窗缺少「凭据仅保存在本机」说明文本")
-    # 小红书（第 4 阶段 ④，devlog/235）：Tab 清单是数据驱动的，漏了平台在界面上只表现为
-    # "少一个 Tab"——登录浮窗是**首启唯一自动弹出的窗**，在这里钉住最省事。
-    for p in ("bilibili", "weibo", "xiaohongshu"):
+    # 平台清单是数据驱动的（`utils/platformLogin.ts`），漏了平台在界面上只表现为"少一个 Tab"
+    # —— 登录浮窗是**首启唯一自动弹出的窗**，在这里钉住最省事。
+    # ⚠️ 2026-10-06 补上 `douyin`：它进清单时这里没跟上（"抖音没有 Tab"这一整类漏了几个月）。
+    for p in ("bilibili", "weibo", "xiaohongshu", "douyin"):
         if f'data-auth-tab="{p}"' not in text:
             bad.append(f"登录浮窗没有 {p} Tab（平台清单漏了这一处）")
+    # 浏览器扩展那一栏（E3，2026-10-06）：配对 token / 重置 / 上次同步都在它里面。
+    # 为什么在这里判：它是**扩展唯一的应用侧入口**，而首启浮窗是它最常被看到的地方 ——
+    # 整块消失时界面不会报错，只会"用户找不到该贴哪条 token"。
+    if 'data-ext-pairing="1"' not in text:
+        bad.append("登录浮窗没有「浏览器扩展」那一栏（配对 token 没地方可看）")
     return bad
 
 

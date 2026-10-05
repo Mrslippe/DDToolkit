@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import hmac
+import json
 import logging
 import secrets
 import threading
@@ -39,6 +40,9 @@ logger = logging.getLogger(__name__)
 
 #: `app_meta` 里的键（改它 = 老用户的配对失效，所以带上模块名前缀）
 PAIR_KEY = "pairing.token"
+
+#: 上一次成功导入的凭据（给「设置 → 登录 → 浏览器扩展」那一栏显示"上次同步"）
+SYNC_KEY = "pairing.last_sync"
 
 #: 节流：窗口内允许的失败次数（第 `MAX_FAILURES + 1` 次起拒绝）
 MAX_FAILURES = 10
@@ -88,6 +92,36 @@ def verify(db: Session, presented: str | None) -> bool:
     if not expected or not presented:
         return False
     return hmac.compare_digest(presented, expected)
+
+
+# ── 「上次同步」（E3：设置里那一栏要能自证"扩展真的说过话"）────────────────────
+
+def note_sync(db: Session, *, platform: str, label: str, keys: list[str],
+              cookie_keys: int, verified: bool) -> None:
+    """记一次**成功**的导入（只有键名与计数 —— **绝不落 cookie 值**）。"""
+    AppMetaRepo(db).set(SYNC_KEY, json.dumps({
+        "platform": platform,
+        "label": label,
+        "keys": list(keys),
+        "cookie_keys": int(cookie_keys),
+        "verified": bool(verified),
+        "at": int(time.time() * 1000),
+    }, ensure_ascii=False))
+    logger.info("已记下扩展的上次同步：%s（%d 个可用键，verified=%s）",
+                platform, len(keys), verified)
+
+
+def last_sync(db: Session) -> dict | None:
+    """上一次成功导入的摘要；没同步过 / 记录坏了都返回 `None`（界面据此不显示那一行）。"""
+    raw = AppMetaRepo(db).get(SYNC_KEY)
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        logger.warning("「上次同步」的记录解析失败（忽略；界面只是少一行）")
+        return None
+    return data if isinstance(data, dict) else None
 
 
 # ── 失败节流（进程内；重启即清空 —— 它挡的是"此刻正在猜"，不是"历史上有过失败"）────

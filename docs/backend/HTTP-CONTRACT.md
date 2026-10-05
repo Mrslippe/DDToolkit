@@ -176,7 +176,7 @@ retire-when: HTTP 层换框架，或路由整体重排
 | GET `/auth/{platform}/status` | `{logged_in, needs_login, uid, name}`；B 站走内存维护结果，**微博做真实有效性探测**（结果缓存 60s），**小红书/抖音只报"配齐了没"**（另带 `configured/missing/note`；两家都没有免签名的探活端点，不做探测。抖音另带 `ua_configured`，**不回显 UA 全文**） |
 | POST `/auth/xiaohongshu/cookie` | **粘贴 cookie**（body `{"cookie": "a1=…; web_session=…"}`）。⚠️ 先校验再落盘：缺 `a1`/`web_session` ⇒ **400 且不写 `.env`**；成功回 `{status:"saved", ...status()}`（devlog/233） |
 | POST `/auth/douyin/cookie` | **粘贴 cookie + UA**（body `{"cookie": "uifid=…; s_v_web_id=…; ttwid=…", "user_agent": "…"}`；`user_agent` 可省但**强烈建议给**）。⚠️ 先校验再落盘：缺 `s_v_web_id`/`uifid`(或 `UIFID_TEMP`)/`ttwid` ⇒ **400 且不写 `.env`**。UA 是凭据的一部分：`a_bogus` 会把它算进签名，给错的样子是**静默空数据**（HTTP 200 + 0 字节，devlog/333/334）|
-| GET `/auth/pairing` | **浏览器扩展的配对 token**（E1）：`{token}`。⚠️ 要应用 token（它给的就是钥匙本身）；**没有就生成一个**（幂等）；落 `app_meta` 的 `pairing.token`，**重启不变**，只有 `/pairing/reset` 才换。值不进日志/通知/诊断 |
+| GET `/auth/pairing` | **浏览器扩展的配对 token**（E1）：`{token, last_sync}`。⚠️ 要应用 token（它给的就是钥匙本身）；**没有就生成一个**（幂等）；落 `app_meta` 的 `pairing.token`，**重启不变**，只有 `/pairing/reset` 才换。值不进日志/通知/诊断。`last_sync`（E3）= 上一次**成功**导入的摘要 `{platform, label, keys, cookie_keys, verified, at}`（**只有键名与计数，没有 cookie 值**；从没同步过是 `null`；失败的那次不记）|
 | POST `/auth/pairing/reset` | 换一把新的配对 token（旧值**立即失效**）：`{token}` |
 | POST `/auth/import` | **浏览器扩展推凭据的入口**（E1）：body `{platform, cookie, ua?}` + 头 **`X-DDToolkit-Pair`**。三层门：**回环来源**（否则 403）· **失败节流**（60s 内失败 ≥10 次 ⇒ 429）· **配对 token**（否则 401，与应用 token 分开的两把钥匙）。回执成功与失败**同一形状**：`{ok, platform, label, keys, missing, cookie_keys, verified, note}`（失败是 **400** 而不是 500 —— "缺键/过期"是正常业务结果）；`keys` **只给键名不给值**。校验：B 站/微博**先探活再落盘**（上游说未登录 ⇒ 不落盘且内存还原；网络异常 ⇒ 照样保存但 `verified=false`），小红书/抖音走各自既有的键校验（`verified=false`） |
 
