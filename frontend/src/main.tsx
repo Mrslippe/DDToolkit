@@ -330,3 +330,18 @@ if (import.meta.env.DEV && new URLSearchParams(window.location.search).has('prob
 if (import.meta.env.DEV && new URLSearchParams(window.location.search).has('firstRun')) {
   markFirstRun()
 }
+
+// 通知样式调测页（?notice-lab，2026-10-05）：每类消息一个按钮，点一下走**真实路径**产生一条
+// 通知（见 `dev/NoticeLab.tsx` 的"路径诚实说明"）。用户口径：「方便我检查所有种类的消息通知样式」。
+// ⚠️ `?probe=notice-lab` 也要挂它 —— 探针模式需要调测页与探针**同时在场**
+// （探针负责点与量，调测页负责产生那些消息）。生产构建里 `import.meta.env.DEV` 为 false ⇒ 摇掉。
+if (import.meta.env.DEV) {
+  const q = new URLSearchParams(window.location.search)
+  if (q.has('notice-lab') || q.get('probe') === 'notice-lab') {
+    const host = document.createElement('div')
+    host.id = 'notice-lab-host'
+    document.body.appendChild(host)
+    void import('./dev/NoticeLab').then((m) =>
+      ReactDOM.createRoot(host).render(<m.default />))
+  }
+}

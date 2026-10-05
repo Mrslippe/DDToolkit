@@ -215,6 +215,15 @@ def steps(tier: str) -> list[tuple[str, list[str], str]]:
                                      "--width", "1440"],
          "设置窗口结构契约（导航/小组/关键项/草稿，实测 ~20s）"),
     )
+    # ⚠️ **通知调测页也在门禁里**（2026-10-05，devlog/345）：它是用户**唯一**能逐类看通知样式的
+    #    入口，而"调测工具坏了"会被当成"产品坏了" —— 更要紧的是，这个模式在本批里**真的抓到了
+    #    两个 bug**（注入口被 effect 重建 / 注入按前缀清全场），而那两条只有跑它才看得见。
+    #    "门禁没覆盖的模式等于没有门禁"（同 `--app-settings` 那条的教训）。
+    s.append(
+        ("ui_probe --notice-lab", [PY, "scripts/ui_probe.py", "--notice-lab",
+                                   "--width", "1440"],
+         "通知样式调测页（每类按钮 / 批量 / 三组与倒计时，实测 ~35s）"),
+    )
     if tier == "full":
         # dev_check 自带 eslint + vitest + pytest + 语法扫描 + 后端冒烟 ⇒ 别再单跑一遍
         s.append(("dev_check", [PY, "scripts/dev_check.py"],

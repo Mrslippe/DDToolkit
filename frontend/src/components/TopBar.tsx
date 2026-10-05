@@ -58,6 +58,20 @@ const POLL_RETRY_MS = 500 // 在途冲突时的重排间隔（轮询链自愈，
 const isTauri = '__TAURI_INTERNALS__' in window
 
 /**
+ * dev-only 诊断：把"本地通知列表的每一次变化"记进 `window.__labTrace`。
+ *
+ * 为什么需要它（2026-10-05 实测）：排查"注入的条目没出现在面板里"时，
+ * **"没注入"与"注入后被谁清掉了"是两种完全不同的错**，而只看最终列表分不出来 ——
+ * 这个 trace 让每一步都留痕（模块级函数，两个 effect 都要用）。
+ * 生产构建里没有调用点（`import.meta.env.DEV` 为 false）⇒ 一起被摇掉。
+ */
+function traceLocalNotices(line: string): void {
+  if (!import.meta.env.DEV) return
+  const w = window as unknown as { __labTrace?: string[] }
+  w.__labTrace = [...(w.__labTrace ?? []), line].slice(-40)
+}
+
+/**
  * 「静默任务」判定：定时档发起的**自动节拍**不占顶栏。
  *
  * 判据用后端给的事实（`auto`：本次是否由综合档发起），而不是任务名——同一个
@@ -98,6 +112,8 @@ export default function TopBar() {
   const [loginOpen, setLoginOpen] = useState(false)
   /** 能力矩阵（未登录时哪些受限）——顶栏入口 + 各浮窗提示共用（devlog/086） */
   const { caps } = useCapabilities()
+  /** 能力说明窗的开关（受控）：顶栏那个入口与通知面板的 `open-limits` 动作共用它 */
+  const [limitsOpen, setLimitsOpen] = useState(false)
   const [auths, setAuths] = useState<{ bili: AuthStatus | null; weibo: AuthStatus | null }>({
     bili: null,
     weibo: null,
@@ -412,6 +428,33 @@ export default function TopBar() {
   }, [localNotices.length])
 
   /**
+   * **能力受限 → 一条状态通知**（L4 补：`open-limits` 的接线）。
+   *
+   * 为什么值得有：受限项原先只在顶栏那个独立入口里（`.topbar-limits`），而用户是**在通知面板
+   * 里**发现"有东西不能用"的（例如刚收录一个抖音账号却抓不到内容）。这条条目把两处连起来 ——
+   * 面板里直接给一个「查看受限项」，点开就是**同一个**能力说明窗。
+   *
+   * 三条口径：
+   * - `form: 'state'`：它是"现在受限"的状态，**不是事件** —— 所以不倒数、不自动已读，
+   *   受限消失（登录了/开关开了）它就消失；
+   * - `sticky: true`：没有 TTL —— 受限是持续状态，让它自己过期等于骗用户；
+   * - id 固定（`cap-limits`）：受限项数量变了只更新同一条，不堆一串。
+   */
+  useEffect(() => {
+    const n = caps?.limited.length ?? 0
+    setLocalNotices((prev) => {
+      const kept = prev.filter((x) => x.id !== 'cap-limits')
+      if (n === 0) return kept.length === prev.length ? prev : kept
+      return [...kept, {
+        id: 'cap-limits', kind: 'alert' as const, form: 'state' as const,
+        source: '能力矩阵', sticky: true, createdAt: Date.now(),
+        text: `有 ${n} 项功能当前受限`,
+        action: { label: '查看受限项', kind: 'open-limits' as const },
+      }]
+    })
+  }, [caps])
+
+  /**
    * dev-only（L1）：把**当前这一份合并后的通知列表**暴露给探针。
    *
    * 为什么需要：探针只能看 DOM，于是"面板里没有这条"分不清是"推送没到这个 hook"
@@ -470,8 +513,13 @@ export default function TopBar() {
       }).catch(() => { /* 后端不可达：下一条轮询会把它带回来，不打断用户 */ })
       return
     }
-    // 'open-limits' 暂未接线：能力受限仍由顶栏那个**独立入口**承担
-    // （工具 vs 通知的分工，见 devlog/089）；类型里保留它是给后续批次用
+    if (kind === 'open-limits') {
+      // 「查看受限项」：把顶栏那个**能力说明窗**叫出来（同一个窗，不新画一个 —— L4 补接线）。
+      // 受限项本来就是"工具"（顶栏那个独立入口承担），这里只是给通知面板一条**直达**的路：
+      // 用户在通知里读到"有 3 项功能受限"时，下一步动作就是去看是哪三项。
+      setLimitsOpen(true)
+      return
+    }
   }
 
   /** 把一条通知记成已读（落库）。失败只记日志 —— 界面已经把它收起来了，别弹错误打断用户。 */
@@ -571,6 +619,65 @@ export default function TopBar() {
     }
   }, [])
 
+  /**
+   * dev-only（通知调测页 `?notice-lab`）：**注入任意条目**（`null` = 清掉注入的那批）。
+   *
+   * 与 `__ddtoolkitSeedReport` 同一层（都进 `localNotices`），但更通用：
+   * 有些类别**只能注入**才看得到（风控冷却要等平台真限流、登录失效要等会话过期、
+   * 能力受限要看当前矩阵）—— 而它们的长相（活数据槽 / 常驻 / 动作按钮）是用户要检查的东西。
+   * 走的是与真实条目**同一个渲染分支**（`extraLocal` → `useNotices`），不是另画一套。
+   *
+   * ⚠️ **按 id 合并，不是整批替换**（第一版写成替换，结果调测页里"登录失效"刚注入就被下一条
+   * 覆盖掉 —— 探针报"面板里没有「去登录」"）。同一批里重复给同一个 id 按"后来的赢"。
+   */
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    const w = window as unknown as {
+      __ddtoolkitSeedNotices?: (list: Notice[] | null) => void
+    }
+    /** 注入诊断（dev-only）：每次本地列表变化都记一行 —— 让"谁把谁清掉了"可查 */
+    ;(window as unknown as { __labTrace?: string[] }).__labTrace = []
+    w.__ddtoolkitSeedNotices = (list) => {
+      setLocalNotices((prev) => {
+        if (!list) {
+          // `null` = 清掉**注入的那批**（调测页的「清注入」）
+          const kept = prev.filter((n) => !n.id.startsWith('lab-'))
+          traceLocalNotices(`clear: ${prev.length}→${kept.length}`)
+          return kept.length === prev.length ? prev : kept
+        }
+        const added = list.map((n) => ({ ...n, id: `lab-${n.id}` }))
+        // ⚠️ **只顶掉同 id 的那几条**（第一版把 `lab-` 前缀的**全部**清掉再接新的 ⇒
+        //    调测页一条一条注进来时，每次注入都把上一条挤掉 —— trace 看得很清楚：
+        //    `seed(lab-login-expired): 3→3` 那一行的内容从 `lab-rate-limit` 变成了
+        //    `lab-login-expired`。前缀的含义是"这批是注入的"，不是"这批互相替换"）
+        const ids = new Set(added.map((n) => n.id))
+        const next = [...prev.filter((n) => !ids.has(n.id)), ...added]
+        traceLocalNotices(`seed(${added.map((n) => n.id).join(',')}): `
+                          + `${prev.length}→${next.length} [${next.map((n) => n.id).join('|')}]`)
+        return next
+      })
+    }
+    return () => { delete w.__ddtoolkitSeedNotices }
+    // ⚠️ **依赖必须为空**（第一版把 `localNotices` 放进来，踩了一个很隐蔽的坑）：
+    // 注入会改 `localNotices` ⇒ 这个 effect 重跑 ⇒ cleanup 把 `__ddtoolkitSeedNotices`
+    // 删掉再装一个新的。而**调测页在挂载时就把那个函数引用抓走了**，于是它手上那个
+    // 是被删掉的旧引用、往一个已经不存在的口子里注 —— 症状是"注入了、日志也说注入了，
+    // 但列表里没有"（`__labTrace` 里只有第一条）。挂载一次、卸载时清理，就够了。
+  }, [])
+
+  /**
+   * 诊断口（dev）：把**本地那一份**的 id 暴露给探针 —— `__ddtoolkitNotices` 给的是**合并后**的，
+   * 排查"注进去了没"时要看的是这一份（分离"没注入"与"被合并规则吃掉"）。这一条**可以**
+   * 依赖 `localNotices`（它是个纯读函数，重建无害）。
+   */
+  useEffect(() => {
+    if (!import.meta.env.DEV) return
+    const w2 = window as unknown as { __ddtoolkitLocalNotices?: () => string[] }
+    w2.__ddtoolkitLocalNotices = () => localNotices.map((x) => x.id)
+    traceLocalNotices(`render: [${localNotices.map((x) => x.id).join('|')}]`)
+    return () => { delete w2.__ddtoolkitLocalNotices }
+  }, [localNotices])
+
   // 最大化状态跟踪：onResized 触发时重查 isMaximized，切换 还原/最大化 图标
   const isMax = useIsMaximized()
 
@@ -600,8 +707,15 @@ export default function TopBar() {
 
       {/* 登录入口：B 站会话过期时红点徽章提示扫码 */}
       <div className="topbar-login">
-        {/* 未登录/受限时的能力入口（devlog/086；全可用时不渲染） */}
-        <CapabilityLimits caps={caps} onLogin={() => setLoginOpen(true)} />
+        {/* 未登录/受限时的能力入口（devlog/086；全可用时不渲染）。
+            ⚠️ 受控（`open` / `onOpenChange`）：通知面板那条 `open-limits` 动作要打开
+            **同一个**窗 —— 所以状态提到这里（L4 补，见 `onIslandAction`）。 */}
+        <CapabilityLimits
+          caps={caps}
+          onLogin={() => setLoginOpen(true)}
+          open={limitsOpen}
+          onOpenChange={setLimitsOpen}
+        />
         <button
           className="topbar-login-btn"
           title={

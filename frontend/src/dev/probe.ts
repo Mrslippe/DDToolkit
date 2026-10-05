@@ -1214,6 +1214,18 @@ async function sampleTopbar() {
     pillText: text,
     /** 容器是否亮起（玫瑰徽章 = 「有事发生」） */
     pillOn: pill ? pill.classList.contains('on') : null,
+    /**
+     * 胶囊上那句话**代表哪一组**（L1 加的属性）：`doing` = 状态（进度/冷却/登录失效/能力受限）、
+     * `todo` = 需要处理、`recent` = 告知（开播/新版本/客户端事实）。
+     *
+     * ⚠️ 为什么必须有它（2026-10-05，devlog/345）：`_assert_topbar` 原来只能靠**文案**判
+     * "自动节拍是不是占了顶栏"，而本批之后**真实在看直播的 V 开播**也会让容器亮起
+     * （L2 把开播同时记进服务端汇总 ⇒ 它成了一条真实通知）。那**不是**违规 ——
+     * 判据得知道"亮起的原因是哪一类"，否则每次真有 V 开播都会假红
+     * （2026-10-03 撞过一次同款，当时的结论是"判据本身没坏，别急着改代码"；
+     * 现在有了这一位，判据可以**精确**判，不必再靠"重跑一次碰运气"）。
+     */
+    pillGroup: pill?.getAttribute('data-headline-group') ?? null,
     accountRunning: !!st?.account?.running,
     accountAuto: st?.account?.auto === true,
     postRunning: !!st?.post?.running,
@@ -2696,6 +2708,86 @@ export async function runUiProbe(): Promise<void> {
     pre.id = 'ui-probe'
     pre.textContent = JSON.stringify({ mode: 'status-island', views: [], degraded,
                                        statusIsland: result })
+    document.body.appendChild(pre)
+    document.title = 'UI_PROBE_DONE'
+    return
+  }
+
+  // 通知样式调测页（`?probe=notice-lab`，2026-10-05）：
+  // 它给用户一个"每类消息点一下"的面板（`dev/NoticeLab.tsx`）。探针在这里量的是
+  // **面板本身可不可用 + 点完之后三类关键样式有没有真的出现**：
+  //   ① 每类一个按钮（缺哪类 = 用户看不到那种样式）；
+  //   ② 「批量全部」之后：胶囊亮起 + 计数 > 1；
+  //   ③ 面板里三组都在（doing / todo / recent）、细条恰好给"会自动消失的"那些、
+  //      「需要处理」组有「全部已读」、动作按钮（去登录 / 查看受限项 / 查看详情）都在。
+  // ⚠️ 这条**不是**产品行为的判据（那些在 `--status-island` 与组件用例里），
+  //    它守的是"调测工具自己坏了 ⇒ 用户以为产品坏了"。
+  if (mode === 'notice-lab') {
+    const result: Record<string, unknown> = {}
+    /** 每个模式各自定义 `waitFor`（本文件的老写法：`?probe=xxx` 段是自包含的） */
+    const waitFor = async (fn: () => unknown, ms = 6000) => {
+      const t0 = performance.now()
+      for (;;) {
+        const v = fn()
+        if (v) return v
+        if (performance.now() - t0 > ms) return null
+        await sleep(100)
+      }
+    }
+    const one = (sel: string) => document.querySelector(sel) as HTMLElement | null
+    const all = (sel: string) => [...document.querySelectorAll(sel)] as HTMLElement[]
+    const cap = () => one('.si-island')
+    const capText = () => (cap()?.querySelector('.si-text')?.textContent || '').trim()
+    const rows = () => all('.nl-row')
+    result.rowCount = rows().length
+    result.rowLabels = rows().map(
+      (r) => (r.querySelector('.nl-fire')?.textContent || '').trim())
+    result.rowKinds = rows().map((r) => (r.querySelector('.nl-how')?.textContent || '').trim())
+    result.hasPanel = !!one('[data-notice-lab="1"]')
+    result.hasBatch = all('.nl-btn')
+      .some((b) => (b.textContent || '').includes('批量全部'))
+
+    // 批量触发（每个之间 `NoticeLab` 自己会停 250ms，这里等久一点）
+    all('.nl-btn').find((b) => (b.textContent || '').includes('批量全部'))?.click()
+    await waitFor(() => !!cap()?.classList.contains('on'))
+    await sleep(4200)           // 让 11 条依次发完（每条 250ms + 网络往返）
+    result.litText = capText()
+    result.lit = !!cap()?.classList.contains('on')
+
+    cap()?.click()
+    const panel = await waitFor(() => one('.si-panel')) as HTMLElement | null
+    result.panelOpened = !!panel
+    result.groups = [...(panel?.querySelectorAll('.si-sec') || [])]
+      .map((s) => `${s.getAttribute('data-group')}:${s.querySelectorAll('.si-item').length}`)
+    result.itemCount = panel?.querySelectorAll('.si-item').length ?? -1
+    result.barCount = panel?.querySelectorAll('.si-item-bar').length ?? -1
+    // 有倒计时的条目 vs 没有的：`data-left` 属性是产品写的进度（不是我们去数像素）
+    result.withCountdown = [...(panel?.querySelectorAll('.si-item[data-left]') || [])]
+      .map((n) => n.getAttribute('data-kind'))
+    result.actionLabels = [...(panel?.querySelectorAll('.si-item-action') || [])]
+      .map((b) => (b.textContent || '').trim())
+    // 每条**正文 + 它自己的动作**（红的时候能一眼看出是"哪条没渲染"还是"按钮没挂"）
+    result.itemTexts = [...(panel?.querySelectorAll('.si-item') || [])]
+      .map((li) => {
+        const t = (li.querySelector('.si-item-text')?.textContent || '').trim()
+        const a = (li.querySelector('.si-item-action')?.textContent || '').trim()
+        const st = li.getAttribute('data-form') || '?'
+        return `${st}|${t.slice(0, 18)}|${a}`
+      })
+    result.hasAckAll = !!panel?.querySelector('[data-ack-all]')
+    result.metaHasRelative = [...(panel?.querySelectorAll('.si-item-meta') || [])]
+      .map((m) => (m.textContent || '').trim())
+    // 调测页自己的日志：**每一行为什么失败**都写在这里（`fire()` 逐行兜异常）——
+    // 探针带上它，红的时候不用再跑一次去猜
+    result.labLog = [...document.querySelectorAll('[data-lab-log] > div')]
+      .map((d) => (d.textContent || '').trim()).slice(0, 20)
+    const lw = window as unknown as { __ddtoolkitLocalNotices?: () => string[] }
+    result.localIds = lw.__ddtoolkitLocalNotices?.() ?? null
+    result.labTrace = (window as unknown as { __labTrace?: string[] }).__labTrace ?? null
+    const pre = document.createElement('pre')
+    pre.id = 'ui-probe'
+    pre.textContent = JSON.stringify({ mode: 'notice-lab', views: [], degraded,
+                                       noticeLab: result })
     document.body.appendChild(pre)
     document.title = 'UI_PROBE_DONE'
     return

@@ -20,6 +20,10 @@ interface Props {
   caps: Capabilities | null
   /** 打开登录浮窗（顶栏已有，复用它） */
   onLogin: () => void
+  /** 受控打开（L4 补：通知面板里那条「查看受限项」要能把这个窗叫出来）。
+   *  不传 = 自持状态（顶栏那个按钮的老用法）。 */
+  open?: boolean
+  onOpenChange?: (v: boolean) => void
 }
 
 /**
@@ -33,9 +37,20 @@ interface Props {
  *
  * ⚠️ DOM 契约（UI 探针 `--capabilities` 直接查）：按钮 `.topbar-limits`、
  * 计数 `.topbar-limits-count`、说明窗 `.cap-limits-dialog`、「去登录」`.cap-login-cta`。
+ *
+ * ⚠️ 受控口（`open` / `onOpenChange`）：通知面板里那条 `open-limits` 动作也要打开**同一个**
+ * 窗 —— 所以状态得能被外部驱动。默认仍是自持（不传就是老行为），两条路共用一份渲染，
+ * 不新画一个副本（复述即负债）。
  */
-export default function CapabilityLimits({ caps, onLogin }: Props) {
-  const [open, setOpen] = useState(false)
+export default function CapabilityLimits({ caps, onLogin, open: openProp,
+                                          onOpenChange }: Props) {
+  const [openSelf, setOpenSelf] = useState(false)
+  const controlled = openProp !== undefined
+  const open = controlled ? openProp : openSelf
+  const setOpen = (v: boolean) => {
+    if (!controlled) setOpenSelf(v)
+    onOpenChange?.(v)
+  }
   const summary = limitsSummary(caps)
   if (!summary) return null
 

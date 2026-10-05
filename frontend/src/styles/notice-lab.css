@@ -1,0 +1,139 @@
+/**
+ * 通知样式调测页（`?notice-lab`，`src/dev/NoticeLab.tsx`）的样式。
+ *
+ * 独立的文件而不是塞进 `layout.css`：这一整块**只在 dev 下挂载**（生产构建里
+ * `import.meta.env.DEV` 为 false ⇒ 那段 import 被摇掉），跟产品样式混在一起会让
+ * "这堆类名是产品的一部分吗"变得要查一遍。
+ *
+ * 面板放在**右下角**：不挡顶栏（要看的正是顶栏那条胶囊）、不挡通知面板（它从胶囊往下弹）。
+ */
+
+.nl-fab {
+  position: fixed;
+  right: 14px;
+  bottom: 14px;
+  z-index: 60;
+  padding: 6px 12px;
+  border: 1px solid var(--c-border);
+  border-radius: 999px;
+  background: var(--c-bg-card);
+  color: var(--c-text-main);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: var(--shadow-dialog);
+}
+
+.nl-panel {
+  position: fixed;
+  right: 14px;
+  bottom: 14px;
+  z-index: 60;
+  width: 420px;
+  max-height: 62vh;
+  overflow-y: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--c-border);
+  border-radius: 12px;
+  background: var(--c-bg-card);
+  color: var(--c-text-main);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  box-shadow: var(--shadow-dialog);
+}
+
+.nl-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.nl-hint {
+  color: var(--c-text-sub);
+  font-size: 11px;
+}
+
+.nl-btn {
+  padding: 3px 9px;
+  border: 1px solid var(--c-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--c-text-main);
+  font-family: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.nl-btn:hover {
+  border-color: var(--c-primary);
+  color: var(--c-primary-deep);
+}
+
+.nl-head .nl-btn:first-of-type {
+  margin-left: auto;
+}
+
+.nl-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.nl-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 触发按钮占固定宽度：一排按钮左对齐，扫起来快（调测页的可用性也是可用性） */
+.nl-fire {
+  flex: none;
+  width: 232px;
+  text-align: left;
+}
+
+.nl-how {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  background: var(--c-rail-active-bg);
+}
+
+/* 「真实」= 走的是生产同一条路径；「注入」= 只能造（真触发要等真机事件）——
+   颜色刻意同底：区分靠文字（与受限角标同一条口径，见 `posts.css` 的 `em.dis`）*/
+.nl-how-真实,
+.nl-how-半真实,
+.nl-how-注入 {
+  background: var(--c-rail-active-bg);
+}
+
+.nl-expect {
+  color: var(--c-text-sub);
+  font-size: 10.5px;
+}
+
+.nl-log {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--c-border);
+  max-height: 120px;
+  overflow-y: auto;
+  color: var(--c-text-sub);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.nl-note {
+  margin: 8px 0 0;
+  padding-top: 6px;
+  border-top: 1px dashed var(--c-border);
+  color: var(--c-text-sub);
+  font-size: 10.5px;
+}

@@ -172,6 +172,14 @@ DOM 契约（探针 `ui_probe --status-island` 直接查）：`.si-island`（`.o
 | 一键已读 | `.si-sec-action[data-ack-all]` | 只在「需要处理」组标题右侧；走 `POST /vtuber/notices/ack` 的 **`ids` 批量口**（一次写盘） |
 | 秒表 | ——（组件内部） | 过期与相对时间由 `StatusIsland` 自己的 1s tick 驱动（宿主的 `now` 闲时 10s 才更新一次 ⇒ 6s 的 TTL 最坏拖到 10s） |
 
+**通知样式调测页**（`?notice-lab`，dev-only，2026-10-05 `devlog/345`）：`dev/NoticeLab.tsx` + `styles/notice-lab.css`，
+右下角浮板，**11 类消息各一个按钮** + 「批量全部」；每行标注产生方式（真实 / 半真实 / 注入，
+见该文件头的"路径诚实说明"）。它同时是**新事件与新条目的唯一可视化验收入口** ——
+`ui_probe --notice-lab` 守着"每类都有一个按钮、批量后三组与倒计时都出来"，并**在 A 档门禁里**。
+⚠️ 它暴露了两个 dev 钩子：`window.__ddtoolkitSeedNotices(list)`（注入任意条目，`null` 清注入的那批）
+与 `window.__ddtoolkitLocalNotices()`（把**本地那一份** id 列出来，用于分离"没注入"与"被合并规则吃掉"）；
+另有 `window.__labTrace`（本地列表每次变化留一行）。三者都只在 `import.meta.env.DEV` 下存在。
+
 **呼出与收起（R39-C，用户 2026-09-19：「改为鼠标 hover 就呼出，离开就收起，并且下拉栏居中」）**：
 
 | 通道 | 口径 |

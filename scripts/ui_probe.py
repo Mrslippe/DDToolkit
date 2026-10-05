@@ -534,6 +534,9 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
             "polish": data.get("polish"),
             "reservations": data.get("reservations"),
             "statusIsland": data.get("statusIsland"),
+            # 通知样式调测页（`?probe=notice-lab`，2026-10-05）
+            # ⚠️ 白名单不登记 = 静默丢掉（本文件已踩过一次，见上面那条注释）
+            "noticeLab": data.get("noticeLab"),
             "toolbar": data.get("toolbar"),
             # R45-E4：日历格子 hover 悬浮窗那一段（`?probe=cell-pop`）——
             # ⚠️ 白名单不登记=静默丢掉，页面明明写了脚本侧只拿到 None（本文件已踩过一次）
@@ -562,6 +565,7 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
     return {"mode": None, "views": data, "topbar": None, "calendar": None,
             "settings": None, "scene": None, "addv": None, "capabilities": None,
             "polish": None, "reservations": None, "statusIsland": None,
+            "noticeLab": None,
             "appSettings": None, "filterPill": None, "traySuspend": None,
             "closeAsk": None, "switchPerf": None, "profileSync": None,
             "pinned": None, "board": None, "motionCards": None, "deck": None,
@@ -1757,6 +1761,50 @@ def _assert(views: list[dict], width: int) -> list[str]:
     return bad
 
 
+def _assert_notice_lab(nl: dict, width: int) -> list[str]:
+    """通知样式调测页（`?probe=notice-lab`，2026-10-05）的判据。
+
+    守的是"**调测工具自己坏了** ⇒ 用户以为产品坏了"：
+    按钮少了某类 = 那种样式永远没人看过；批量后三组没出来 = 面板其实不工作。
+    """
+    bad: list[str] = []
+    if not nl.get("hasPanel"):
+        bad.append(f"@{width} notice-lab: 调测页没挂上（`?notice-lab` 那段没生效？）")
+        return bad
+    if (nl.get("rowCount") or 0) < 11:
+        bad.append(f"@{width} notice-lab: 只有 {nl.get('rowCount')} 类按钮 —— "
+                   f"少的那几类用户永远看不到（每类都该有一个）")
+    if not nl.get("hasBatch"):
+        bad.append(f"@{width} notice-lab: 没有「批量全部」按钮（看并存观感要靠它）")
+    if not nl.get("lit"):
+        bad.append(f"@{width} notice-lab: 批量发完胶囊没亮 —— 那些消息一条都没到？")
+    groups = [str(g).split(":")[0] for g in (nl.get("groups") or [])]
+    if "doing" not in groups:
+        bad.append(f"@{width} notice-lab: 面板里没有「正在进行」组（进度/冷却/登录失效那些）")
+    if "recent" not in groups:
+        bad.append(f"@{width} notice-lab: 面板里没有「最近」组（告知类：开播/新版本/磁盘）")
+    if "todo" not in groups:
+        bad.append(f"@{width} notice-lab: 面板里没有「需要处理」组（完成报告）")
+    # 倒计时：告知类必须有、状态类必须没有（"只给会自动消失的条目"）
+    if (nl.get("barCount") or 0) < 1:
+        bad.append(f"@{width} notice-lab: 一条倒计时细条都没有 —— 告知类应当有")
+    kinds = set(nl.get("withCountdown") or [])
+    if "progress" in kinds:
+        bad.append(f"@{width} notice-lab: 进度类也画了倒计时"
+                   f"（它会误导成「任务会自己消失」）")
+    labels = nl.get("actionLabels") or []
+    for want in ("去登录", "查看受限项", "查看详情"):
+        if want not in labels:
+            bad.append(f"@{width} notice-lab: 面板里没有「{want}」动作按钮"
+                       f"（实得 {labels}）")
+    if not nl.get("hasAckAll"):
+        bad.append(f"@{width} notice-lab: 「需要处理」组没有「全部已读」")
+    rel = nl.get("metaHasRelative") or []
+    if not any(" · " in r for r in rel):
+        bad.append(f"@{width} notice-lab: 条目 meta 行没有相对时间")
+    return bad
+
+
 def _assert_topbar(tb: dict | None, width: int) -> list[str]:
     """顶栏展示策略（2026-09-10 用户：频繁的动态轮询不必占顶栏）。
 
@@ -1771,6 +1819,11 @@ def _assert_topbar(tb: dict | None, width: int) -> list[str]:
     探针起后端后这个任务**往往正在跑**，而旧口径只看 post/account 两位 —— 于是三档宽度
     一起报"只有自动节拍在跑却亮起了事件容器"（把外部同步误当成自动节拍占顶栏）。
     采样已带 `externalRunning`，这里按"能否归因"跳过。
+
+    ⚠️ **只有"状态组"占顶栏才算违规**（2026-10-05 修，devlog/345）：L2 之后开播告警
+    同时进服务端汇总 ⇒ **真实在看直播的 V 开播**也会让容器亮起，那**不是**自动节拍占顶栏
+    （2026-10-03 撞过一次同款假红）。采样带 `pillGroup`，只有 `doing`（状态：进度/冷却/
+    登录失效/能力受限）才是"任务占了顶栏"；`recent` / `todo` 是**通知**，按设计就该亮。
     """
     if not tb or not tb.get("ok"):
         return []
@@ -1787,7 +1840,9 @@ def _assert_topbar(tb: dict | None, width: int) -> list[str]:
         return []
     bad: list[str] = []
     text = tb.get("pillText") or ""
-    if tb.get("pillOn"):
+    # 亮起的原因是不是"状态"？不是（`recent`/`todo`/空）⇒ 那是通知，按设计要亮，别判违规
+    group = tb.get("pillGroup")
+    if tb.get("pillOn") and group == "doing":
         bad.append(f"@{width} 顶栏：只有自动节拍在跑却亮起了事件容器（text={text!r}）")
     if "轮询" in text or "账号信息抓取中" in text:
         bad.append(f"@{width} 顶栏：自动节拍占了状态文案（{text!r}）")
@@ -2268,6 +2323,13 @@ def main() -> int:
         action="store_true",
         help="只跑一档宽度：顶栏状态岛（R12a，devlog/089）—— 空闲无容器 / 瞬时消息点亮 / "
              "点开面板条目可命中且不挤动右栏 / Esc 收起 / ttl 到期自动回空闲",
+    )
+    ap.add_argument(
+        "--notice-lab",
+        action="store_true",
+        help="只跑一档宽度：**通知样式调测页**（`?notice-lab`，2026-10-05）—— "
+             "每类消息一个按钮（批量触发）→ 断言三组都出来 / 倒计时只给会自动消失的 / "
+             "三个动作按钮与「全部已读」都在。⚠️ 它守的是**调测工具自己**（工具坏了会被当成产品坏了）",
     )
     ap.add_argument(
         "--deck",
@@ -3535,6 +3597,43 @@ def main() -> int:
                 print("   -", b)
             if not rows:
                 print("  [ok] 推送通道：合成消息经 SSE 回到页面，桥把它变成了应用事件")
+            return 1 if failures else 0
+
+        if args.notice_lab:
+            # 通知样式调测页（`?probe=notice-lab`，2026-10-05）：用户要的是"能自己看所有样式"，
+            # 而**工具本身坏了**会被当成"产品坏了" ⇒ 这条守调测页的可用性 + 三类关键样式真的出现。
+            # ⚠️ 它不是产品行为的判据（那些在 `--status-island` 与组件用例里）。
+            w = widths[0]
+            url = f"http://localhost:{vite_port}{route}?probe=notice-lab"
+            print(f"[probe] notice-lab @{w} → {url}")
+            res = _run_probe(edge, url, w, args.height, WORK, "notice-lab")
+            nl = ((res or {}).get("noticeLab") or {})
+            if res and not nl:
+                print(f"  [!] 探针 mode={res.get('mode')!r} 键={sorted(res.keys())}"
+                      f"（新字段需要在 _run_probe 的白名单里登记）")
+            print(f"  调测页：面板={nl.get('hasPanel')} 按钮={nl.get('rowCount')} "
+                  f"批量钮={nl.get('hasBatch')}")
+            for label, how in zip(nl.get("rowLabels") or [], nl.get("rowKinds") or []):
+                print(f"     · [{how}] {label}")
+            print(f"  批量后胶囊：亮起={nl.get('lit')} 文案={nl.get('litText')!r}")
+            print(f"  面板：打开={nl.get('panelOpened')} 条目={nl.get('itemCount')} "
+                  f"分组={nl.get('groups')}")
+            print(f"  倒计时细条={nl.get('barCount')} 条（带 data-left 的种类="
+                  f"{nl.get('withCountdown')}）")
+            print(f"  动作按钮={nl.get('actionLabels')} 一键已读={nl.get('hasAckAll')}")
+            for line in (nl.get("itemTexts") or []):
+                print(f"     条目: {line}")
+            print(f"  本地那一份 id：{nl.get('localIds')!r}")
+            for line in (nl.get("labTrace") or []):
+                print(f"     trace: {line}")
+            for line in (nl.get("labLog") or []):
+                print(f"     log: {line}")
+            rows = _assert_notice_lab(nl, w)
+            failures.extend(rows)
+            for b in rows:
+                print("   -", b)
+            if not rows:
+                print("  [ok] 通知调测页：每类一个按钮，批量后三组与倒计时都出来了")
             return 1 if failures else 0
 
         if args.status_island:
