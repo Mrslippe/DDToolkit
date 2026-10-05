@@ -534,6 +534,10 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
             "polish": data.get("polish"),
             "reservations": data.get("reservations"),
             "statusIsland": data.get("statusIsland"),
+            # 「第三方数据」入口与小窗（`?probe=archive` 里顺带采，2026-10-05 devlog/354）
+            # ⚠️ 白名单不登记 = 静默丢掉：这一条第一次就踩了（页面明明写了 `thirdparty`，
+            #    脚本侧只拿到 None，输出成"探针没跑到？"，看着像探针坏了）
+            "thirdparty": data.get("thirdparty"),
             # 通知样式调测页（`?probe=notice-lab`，2026-10-05）
             # ⚠️ 白名单不登记 = 静默丢掉（本文件已踩过一次，见上面那条注释）
             "noticeLab": data.get("noticeLab"),
@@ -1905,8 +1909,16 @@ def _assert_topbar(tb: dict | None, width: int) -> list[str]:
     text = tb.get("pillText") or ""
     # 亮起的原因是不是"状态"？不是（`recent`/`todo`/空）⇒ 那是通知，按设计要亮，别判违规
     group = tb.get("pillGroup")
-    if tb.get("pillOn") and group == "doing":
-        bad.append(f"@{width} 顶栏：只有自动节拍在跑却亮起了事件容器（text={text!r}）")
+    # ⚠️ **常驻事实不算"任务占了顶栏"**（2026-10-05，devlog/354）：
+    #    这一条守的是"没有任务在跑时，自动节拍不该把容器点亮"。而 `doing` 组里除了任务
+    #    还有**用户必须看见的常驻事实** —— 例如小红书 cookie 失效 ⇒「有 1 项功能当前受限」。
+    #    它按设计就该一直亮着（用户得从那儿知道去重新登录）。分不清两者的话，
+    #    "把失效报出来"这个修复反而会把这条判据弄红 —— 那不是它想守的东西。
+    #    判据取**通知 id**（`[data-headline-id]`，产品为可测性挂的属性），不靠文案匹配。
+    STANDING_FACTS = {"cap-limits", "login-expired"}
+    if tb.get("pillOn") and group == "doing" and tb.get("pillId") not in STANDING_FACTS:
+        bad.append(f"@{width} 顶栏：只有自动节拍在跑却亮起了事件容器"
+                   f"（text={text!r} id={tb.get('pillId')!r}）")
     if "轮询" in text or "账号信息抓取中" in text:
         bad.append(f"@{width} 顶栏：自动节拍占了状态文案（{text!r}）")
     return bad
@@ -3317,6 +3329,37 @@ def main() -> int:
             # 原来无论拿到什么都 return 0（审计 2026-09-11），
             # 于是「日历根本没渲染」与「日历渲染正常」在退出码上无法区分。
             bad = _assert_probe_integrity(res or {}, w, archive=True)
+
+            # ── 「第三方数据」入口与小窗（2026-10-05，`devlog/354`）───────────────
+            # 用户：「当前如果历史第三方数据丢失了就没法获取了，例如恬豆发芽了 9.28-10.2
+            # 的直播记录」⇒ 数据视图右上角那枚悬停钮要真的能开、开的窗里要真的有东西。
+            tp = (res or {}).get("thirdparty") or {}
+            print("\n=== 第三方数据入口（数据视图右上角）===")
+            if not tp:
+                print("  [!] 没量到 thirdparty 段（探针没跑到？）")
+            else:
+                print(f"  钮：存在={tp.get('hasButton')} 悬停前={tp.get('beforeOn')!r} "
+                      f"悬停后={tp.get('afterOn')!r}")
+                print(f"  窗：打开={tp.get('opened')} 账号块={tp.get('blocks')} "
+                      f"补拉钮={tp.get('hasRefresh')}（禁用={tp.get('refreshDisabled')}）")
+                print(f"  数据源={tp.get('sources')!r} 第三方场次行={tp.get('liveRows')}")
+                for line in (tp.get("rowTexts") or []):
+                    print(f"    {line}")
+                if not tp.get("hasButton"):
+                    bad.append(f"@{w} 第三方数据：数据视图右上角没有那枚入口钮"
+                               f"（用户要的「历史数据丢了自己补」就没入口）")
+                elif tp.get("beforeOn") != "0" or tp.get("afterOn") != "1":
+                    bad.append(f"@{w} 第三方数据：入口钮的悬停显隐不对"
+                               f"（悬停前={tp.get('beforeOn')!r} 悬停后={tp.get('afterOn')!r}；"
+                               f"应当是静止隐藏、悬停出现）")
+                elif not tp.get("opened"):
+                    bad.append(f"@{w} 第三方数据：点了入口钮但小窗没开")
+                elif not tp.get("hasRefresh"):
+                    bad.append(f"@{w} 第三方数据：小窗里没有「补拉」按钮")
+                elif tp.get("error"):
+                    bad.append(f"@{w} 第三方数据：小窗读现状失败 —— {tp.get('error')}")
+                elif not tp.get("rowTexts"):
+                    bad.append(f"@{w} 第三方数据：小窗里一条现状都没渲染出来")
 
             # ── R36：连采两格（上游未到位 / 到位），断言弹窗高度零变化 ──────────
             # 用户报的是「上游数据没抓取下来时右列卡片高度固定，防止数据一抓到窗口

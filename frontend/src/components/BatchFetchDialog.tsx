@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Archive, Newspaper, RefreshCw, Users } from 'lucide-react'
+import { Archive, CloudDownload, Newspaper, RefreshCw, Users } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   Dialog,
@@ -57,6 +57,19 @@ const ACTIONS: BatchAction[] = [
     icon: <Archive className="size-5" />,
     run: () => api.batchArchive(30),
     keepOpen: true,
+  },
+  {
+    // 2026-10-05（用户）：「当前如果历史第三方数据丢失了就没法获取了，例如恬豆发芽了
+    // 9.28-10.2 的直播记录」——第三方数据（zeroroku 粉丝历史/礼物日、danmakus 直播场次）
+    // 原先只靠每日批次入库，失败或丢数据之后没有任何手动入口。这一项就是那个入口。
+    // ⚠️ 与上面几项不同：它**打的是第三方站点**、不占抓取那两把锁，所以只有
+    // "另一个第三方任务在跑"才会被拒（后端 409 的原文会原样弹给用户）。
+    // 上游一次返回全部历史 ⇒ 不需要选日期："补 9.28–10.2" 就是拉一次全量（幂等 upsert）。
+    key: 'externals',
+    label: '拉取第三方数据',
+    desc: '所有 B 站账号的粉丝历史 / 直播场次 / 礼物日（历史丢了的也能补回来，全量幂等）',
+    icon: <CloudDownload className="size-5" />,
+    run: () => api.batchFetchExternals(),
   },
 ]
 

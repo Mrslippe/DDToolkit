@@ -25,6 +25,8 @@ const WITH_FOOT = [
   'AppSettingsDialog.tsx',
   'CapabilityLimits.tsx',
   'CloseActionDialog.tsx',
+  // 「第三方数据」小窗（2026-10-05，devlog/354）：页脚一枚「补拉这个 V 的第三方数据」
+  'ThirdpartyDataDialog.tsx',
   'VtuberSettingsDialog.tsx',
 ]
 

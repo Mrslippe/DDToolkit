@@ -1233,6 +1233,11 @@ async function sampleTopbar() {
      * 现在有了这一位，判据可以**精确**判，不必再靠"重跑一次碰运气"）。
      */
     pillGroup: pill?.getAttribute('data-headline-group') ?? null,
+    /** 亮起的是**哪一条**（2026-10-05，`devlog/354`）：`pillGroup` 只分到"组"，
+     *  而"组"里既有"任务占顶栏"（要红）也有"**常驻事实**"（按设计就该亮着，例如
+     *  小红书 cookie 失效 ⇒「有 1 项功能当前受限」）。没有这一位，判据分不出两者，
+     *  于是修好"失效要报出来"之后反而把这条判据弄红了 —— 那不是它想守的东西。 */
+    pillId: pill?.getAttribute('data-headline-id') ?? null,
     accountRunning: !!st?.account?.running,
     accountAuto: st?.account?.auto === true,
     postRunning: !!st?.post?.running,
@@ -1800,6 +1805,41 @@ export async function runUiProbe(): Promise<void> {
     }
     // 第二格：到位态（与第一格同一把尺子；两格高度必须零变化 —— R36 的判据）
     const settledSample = sampleDialog()
+    // ── 数据视图右上角那枚「第三方数据」钮 + 它打开的小窗（2026-10-05，`devlog/354`）────
+    // 用户原话：「当前如果历史第三方数据丢失了就没法获取了」——所以这条链路要真机走一遍：
+    // **悬停才出现**（与右缘圆点同一套显隐）→ 点开 → 三块现状与按钮都在。
+    // ⚠️ 先点掉场次详情弹窗（它盖在上面），再派发 pointerover/pointerout 模拟悬停
+    //    （探针没有真实指针；`DataDeck` 的 `dotsOn` 挂的是 React 的 onPointerEnter）。
+    const closeBtn = document.querySelector<HTMLElement>('.lc-dlg [aria-label="Close"], .lc-dlg button[type="button"]')
+    closeBtn?.click()
+    await sleep(300)
+    const deck = document.querySelector<HTMLElement>('[data-deck]')
+    const cornerBefore = document.querySelector('[data-deck-corner]')?.getAttribute('data-on') ?? null
+    if (deck) {
+      deck.dispatchEvent(new PointerEvent('pointerover', { bubbles: true, cancelable: true }))
+      deck.dispatchEvent(new PointerEvent('pointerenter', { bubbles: false, cancelable: true }))
+    }
+    await sleep(120)
+    const corner = document.querySelector<HTMLElement>('[data-deck-corner]')
+    const cornerAfter = corner?.getAttribute('data-on') ?? null
+    corner?.click()
+    await sleep(900)                       // 拉一次现状（本机后端，够快）
+    const tp = document.querySelector<HTMLElement>('[data-thirdparty-dialog]')
+    const thirdparty = {
+      hasButton: !!corner,
+      beforeOn: cornerBefore,
+      afterOn: cornerAfter,
+      opened: !!tp,
+      blocks: tp ? tp.querySelectorAll('[data-thirdparty-account]').length : -1,
+      hasRefresh: !!tp?.querySelector('[data-thirdparty-refresh]'),
+      refreshDisabled: !!tp?.querySelector<HTMLButtonElement>('[data-thirdparty-refresh]')?.disabled,
+      sources: tp?.querySelector('[data-thirdparty-sources]')?.textContent?.trim() ?? null,
+      liveRows: [...(tp?.querySelectorAll('[data-thirdparty-live]') || [])]
+        .map((n) => n.getAttribute('data-thirdparty-live')),
+      rowTexts: [...(tp?.querySelectorAll('.tp-rows > li') || [])]
+        .map((li) => (li.textContent || '').replace(/\s+/g, ' ').trim()).slice(0, 8),
+      error: tp?.querySelector('[data-thirdparty-error]')?.textContent?.trim() ?? null,
+    }
     const pre = document.createElement('pre')
     pre.id = 'ui-probe'
     pre.textContent = JSON.stringify({
@@ -1814,6 +1854,7 @@ export async function runUiProbe(): Promise<void> {
         pendingSample,
         settledSample,
       },
+      thirdparty,
     })
     document.body.appendChild(pre)
     document.title = 'UI_PROBE_DONE'

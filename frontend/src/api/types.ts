@@ -894,6 +894,50 @@ export interface UpcomingReservation {
   rid: string | null
 }
 
+// ── 第三方数据现状（GET /vtuber/{id}/thirdparty，2026-10-05 devlog/354）─────
+//
+// 键集合与后端 `services/externals/overview.py` 的返回**逐字对齐**（pytest 里有一条
+// 契约用例钉住后端那一侧）。前端照它渲染"有多少 / 最新到哪天"，缺键就是界面上一格空白。
+
+/** 一块数据：条数 + 首/末（`first_at`/`last_at` 可能是 ISO 日期或时刻，原样显示） */
+export interface ThirdpartyBlock {
+  rows: number
+  first_at: string | null
+  last_at: string | null
+}
+
+/** 一个 B 站账号的第三方数据（第三方与本工具直采**分开报**，别把两个数混起来看） */
+export interface ThirdpartyAccount {
+  account_id: number
+  platform_uid: string | null
+  display_name: string | null
+  /** 粉丝历史（zeroroku，第三方） */
+  fan_history: ThirdpartyBlock
+  /** 粉丝历史（self，本工具每次抓取自己记的） */
+  fan_history_local: ThirdpartyBlock
+  /** 直播场次（danmakus，第三方） */
+  live_sessions: ThirdpartyBlock
+  /** 直播场次（feed，B 站实时） */
+  live_sessions_feed: ThirdpartyBlock
+  /** 直播礼物日聚合（zeroroku） */
+  gift_days: ThirdpartyBlock
+}
+
+export interface ThirdpartySourceState {
+  name: string
+  /** 三层开关的实际结果（总开关 / 按源 / 类内）；false ⇒ 点了按钮也一条都不发 */
+  enabled: boolean
+  jobs: { kind: string; label: string; interval: string }[]
+}
+
+export interface ThirdpartyOverview {
+  vtuber_id: number
+  thirdparty_accounts: ThirdpartyAccount[]
+  sources: ThirdpartySourceState[]
+  /** 现在有没有第三方任务在跑（在跑时按钮该禁用） */
+  running: boolean
+}
+
 // ── 应用设置（GET/PUT /settings，R14a devlog/091）─────────────────────
 //
 // 后端把「范围 / 单位 / 生效时机 / 说明」一起下发（`runtime_settings.SPECS`），

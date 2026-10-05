@@ -1772,6 +1772,119 @@ async def batch_fetch_accounts(background: BackgroundTasks):
     return {"status": "started"}
 
 
+# ── 第三方数据（粉丝历史 / 直播场次 / 礼物日）：现状 + 手动拉取 ──────────────
+# 2026-10-05（用户）：「批量任务里加一个拉取第三方数据的选项，当前如果历史第三方数据
+# 丢失了就没法获取了，例如恬豆发芽了 9.28-10.2 的直播记录」。
+#
+# 为什么需要它：第三方数据的入库**只有两条自动路径**（每日批次 / 收录回填），
+# 而它们都会失败（danmakus 的 WAF 拦、上游抖动）或被清掉（归档/重装/手动删库）——
+# 那时界面上既看不出缺了什么，也没有任何手动入口，只能等下一次定时任务（`devlog/275`）。
+# 上游那两个端点**一次返回全部历史**（channel 全量场次、粉丝历史 2023 至今），
+# 所以"补一段缺口"不需要日期参数：拉一次就是全量幂等 upsert
+# （`(account_id, live_id)` / `(account_id, source, 日期)` 去重）。
+#
+# 与手动抓取（账号/帖子）的关系：**不占那两把锁**、可以并行（同收录回填的口径），
+# 所以这里的 409 只针对"另一个第三方任务已经在跑"—— 避免同时打第三方站点。
+
+def _external_running() -> bool:
+    """第三方数据任务在跑吗。"""
+    st = get_fetch_status()
+    return bool((st.get("external") or {}).get("running"))
+
+
+async def _refresh_thirdparty(account_ids: list[int] | None, label: str, token: str) -> None:
+    """后台跑一次第三方数据拉取（`account_ids=None` = 全量）。
+
+    与收录回填（`_backfill_adopted_history`）**同一条实现**，只差三处：
+    ① `auto=False` —— 这是用户点的按钮，进度必须立刻可见（那条口径见
+    `scheduler.external_task_started` 的注释）；
+    ② 结束时报一条**完成回执**（走 `_note_manual_done`，进通知面板）；
+    ③ 摘要带"新增 N 条"，否则用户点完不知道到底补到了没有。
+    """
+    sched = _sched()
+    sched.external_task_started(token, label, auto=False)
+    logger.info(f"第三方数据拉取开始：{label}（账号 {account_ids or '全部'}）")
+    stored = skipped = 0
+    failed: list[str] = []
+    try:
+        from app.services.externals.runner import run_external_interval
+
+        results = await run_external_interval("daily", account_ids=account_ids)
+        for r in results:
+            stored += int(r.get("stored") or 0)
+            skipped += int(r.get("skipped") or 0)
+            if r.get("error"):
+                failed.append(f"{r.get('label') or r.get('kind')}：{r['error']}")
+        logger.info(f"第三方数据拉取完成：{label} 新增 {stored}，跳过 {skipped}"
+                    + (f"，失败 {failed}" if failed else ""))
+        if not results:
+            # 一个源都没跑 = 总开关/按源开关关着。**别说成"新增 0 条"**（那是"拉到了但没有新数据"）
+            _note_manual_done("第三方数据没有可跑的任务：设置 → 抓取设置里那一项可能关着", "")
+        elif failed and stored == 0:
+            _note_manual_done(f"第三方数据拉取失败：{'；'.join(failed[:2])}", "")
+        else:
+            tail = f"（{len(failed)} 项失败：{failed[0]}）" if failed else ""
+            _note_manual_done(f"第三方数据拉取完成 · 新增 {stored} 条{tail}", "")
+    except Exception as e:      # 拉取失败不影响别的功能，但**必须留痕**
+        logger.warning(f"第三方数据拉取失败：{label} {type(e).__name__}: {e}")
+        _note_manual_done(f"第三方数据拉取失败：{type(e).__name__}", "")
+    finally:
+        sched.external_task_finished(token)
+
+
+@router.get("/vtuber/{vtuber_id}/thirdparty")
+def thirdparty_overview(vtuber_id: int, db: Session = Depends(get_db)):
+    """这个 V 的第三方数据现状（条数 + 最新日期 + 两个源开没开）。
+
+    界面拿它渲染「第三方数据」小窗：**对着缺口一眼能看出最新日期停在哪**，
+    这也是那个「重新拉取」按钮的前提（不知道有什么，就不知道要不要补）。
+    """
+    if VTuberRepo(db).get(vtuber_id) is None:
+        raise HTTPException(404, f"VTuber id={vtuber_id} 不存在")
+    from app.services.externals.overview import overview, sources_state
+
+    return {**overview(db, vtuber_id), "sources": sources_state(),
+            "running": _external_running()}
+
+
+@router.post("/vtuber/{vtuber_id}/thirdparty/refresh")
+async def thirdparty_refresh(vtuber_id: int, background: BackgroundTasks,
+                             db: Session = Depends(get_db)):
+    """**手动补这个 V 的第三方数据**（后台执行，进度见顶栏胶囊）。
+
+    按账号白名单只打这个 V 的 B 站账号（通常 1 个）—— 与收录回填同一口径，
+    避免为一条记录全量扫一遍第三方站点。
+    """
+    v = VTuberRepo(db).get(vtuber_id)
+    if v is None:
+        raise HTTPException(404, f"VTuber id={vtuber_id} 不存在")
+    if _external_running():
+        raise HTTPException(409, "已有第三方数据任务在跑，等它跑完再试")
+    ids = [a.id for a in db.query(Account).filter(
+        Account.vtuber_id == vtuber_id, Account.platform == "bilibili").all()]
+    if not ids:
+        raise HTTPException(400, "这个 V 没有 bilibili 账号 —— 第三方数据是按 B 站账号拉的")
+    # ⚠️ `add_task(可调用对象, 参数…)` —— **不能**写成 `add_task(_refresh_thirdparty(…))`：
+    #    那样是"现在就把协程建出来"再交给 starlette，它在后台线程里 call 一个协程对象
+    #    ⇒ `TypeError: the first argument must be callable`（本批第一次就踩了，
+    #    两条用例当场红；库里别处的 `add_task(_adopt_background, …)` 是正确形状）。
+    background.add_task(_refresh_thirdparty, ids, f"{v.name} 的第三方数据", f"manual:{vtuber_id}")
+    return {"status": "started", "accounts": ids}
+
+
+@router.post("/vtuber/batch/fetch-externals")
+async def batch_fetch_externals(background: BackgroundTasks):
+    """批量任务：**全量**拉一次第三方数据（所有 B 站账号）—— 与每日批次同口径。
+
+    ⚠️ 与上面那个单 V 版共用 `_refresh_thirdparty`：两处的开关、报错、回执口径必须一致
+    （这也是"批量任务里那一项"与"某个 V 的补拉"能放在同一份文档里讲的原因）。
+    """
+    if _external_running():
+        raise HTTPException(409, "已有第三方数据任务在跑，等它跑完再试")
+    background.add_task(_refresh_thirdparty, None, "第三方数据（全量）", "manual:all")
+    return {"status": "started"}
+
+
 @router.post("/vtuber/batch/fetch-all-posts")
 async def batch_fetch_all_posts(background: BackgroundTasks):
     _require_content_fetch()

@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import {
   AlignJustify,
   BarChart3,
+  CloudDownload,
   Fingerprint,
   LayoutGrid,
   Settings2,
@@ -31,6 +32,7 @@ import { useSceneTransition } from '../hooks/useSceneTransition'
 import { noteCurrentView } from '../utils/shellState'
 import PostDetailDrawer from '../components/PostDetailDrawer'
 import AddAccountDialog from '../components/AddAccountDialog'
+import ThirdpartyDataDialog from '../components/ThirdpartyDataDialog'
 import VtuberSettingsDialog from '../components/VtuberSettingsDialog'
 import LiveCalendar from '../components/LiveCalendar'
 import DataDeck from '../components/DataDeck'
@@ -110,6 +112,9 @@ export default function PostsPage() {
   const [addAccountOpen, setAddAccountOpen] = useState(false)
   // 档案设置窗口（P8-B：背景/名称/企划/设定/头像/签名/账号管理）
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // 「第三方数据」小窗（2026-10-05，devlog/354）：数据视图右上角那枚悬停钮打开它。
+  // 用户原话：「当前如果历史第三方数据丢失了就没法获取了」—— 这个窗既报现状也补拉。
+  const [thirdpartyOpen, setThirdpartyOpen] = useState(false)
   const fetchBusy = useFetchBusy()
   const busyTip = '已有抓取任务进行中，请稍后再试'
   // 视图：cards=展示页（默认）/ list=帖子列表页 / archive=数据视图 / profile=档案视图（卡片画布）
@@ -718,6 +723,14 @@ return (
             keys={['live-calendar', 'fan-chart']}
             labels={DECK_LABELS}
             persistKey={String(vtuber.id)}
+            /* 右上角那枚悬停钮 → 「第三方数据」小窗（2026-10-05，devlog/354）。
+               放这儿是用户指定的位置：仿卡片视图右上角那种图标，而不是新立一排按钮。 */
+            cornerAction={{
+              label: '第三方数据',
+              title: '第三方数据（粉丝历史 / 直播场次 / 礼物日）—— 看现状、缺了就补拉',
+              icon: <CloudDownload className="size-4" />,
+              onClick: () => setThirdpartyOpen(true),
+            }}
           >
             {/* 2026-09-06：archive 逐步重建（用户主导），第一步 = 直播日历卡（Frame10612 规格）
                 R13：`vtuberId` 给日历取"该 V 的未来预约"（预约是 V 级数据，跨账号共用） */}
@@ -810,6 +823,17 @@ return (
         vtuberName={vtuber?.name}
         onAdded={handleAccountAdded}
       />
+
+      {/* 「第三方数据」小窗（数据视图右上角那枚钮打开；2026-10-05，devlog/354）。
+          ⚠️ 只在有 V 时挂载：它按 vtuberId 拉数据，`null` 会让弹窗一开就报错。 */}
+      {vtuber && (
+        <ThirdpartyDataDialog
+          open={thirdpartyOpen}
+          onOpenChange={setThirdpartyOpen}
+          vtuberId={vtuber.id}
+          name={vtuber.name}
+        />
+      )}
 
       <VtuberSettingsDialog
         open={settingsOpen}

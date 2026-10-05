@@ -788,6 +788,10 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
         data-idle-carousel={lit ? undefined : (IDLE_CAROUSEL_ENABLED ? 'on' : 'off')}
         /* L1：胶囊上那句话来自哪一组 / 那一组有几条（探针据此断言"合并过了"） */
         data-headline-group={lit ? sections[0]?.group : undefined}
+        /* 胶囊上那句话**是哪一条**（2026-10-05，`devlog/354`）：探针要靠它区分
+           "任务占了顶栏"（要红）与"常驻事实亮着"（按设计，用户得能看见）——
+           例如小红书 cookie 失效 ⇒「有 1 项功能当前受限」，那条**就该一直亮着**。 */
+        data-headline-id={lit && primary ? primary.id : undefined}
         data-section-counts={lit
           ? sections.map((s) => `${s.group}:${s.items.length}`).join(',')
           : undefined}

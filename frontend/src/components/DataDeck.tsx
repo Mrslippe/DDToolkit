@@ -41,6 +41,10 @@ interface Props {
   /** 当前索引变化时回调（R45-B）—— 让外部（页面标题）知道"现在看的是哪张卡"。
    *  原来 `index` 是纯内部 state，外面看不到。 */
   onIndexChange?: (index: number) => void
+  /** 右上角那枚**悬停才出现**的动作钮（2026-10-05，`devlog/354`）。
+   *  与右缘圆点同一套显隐口径（`dotsOn`：滚轮/键盘/悬停亮、静止时不占视觉）——
+   *  数据视图没有自己的工具条，而"这个 V 的第三方数据"需要一个入口。 */
+  cornerAction?: { label: string; title: string; icon: ReactNode; onClick: () => void }
   children: ReactNode[]
 }
 
@@ -48,7 +52,8 @@ const clampIdx = (i: number, n: number) => (i < 0 ? 0 : i > n - 1 ? n - 1 : i)
 /** 循环取模（R40b：用户要求"滚动做成循环"）—— 末张向下回首张、首张向上回末张 */
 const wrapIdx = (i: number, n: number) => ((i % n) + n) % n
 
-export default function DataDeck({ keys, labels, persistKey, onIndexChange, children }: Props) {
+export default function DataDeck({ keys, labels, persistKey, onIndexChange, cornerAction,
+                                  children }: Props) {
   const count = children.length
   const storeKey = `ddtoolkit.deck.${persistKey}`
   const [index, setIndex] = useState(() => {
@@ -221,6 +226,22 @@ export default function DataDeck({ keys, labels, persistKey, onIndexChange, chil
           )
         })}
       </div>
+      {/* 右上角那枚动作钮（`cornerAction`）：与圆点同一套显隐口径（`dotsOn`），
+          静止时**不占视觉、不吃指针**。⚠️ 它是"数据视图 → 这个 V 的第三方数据"的入口
+          （2026-10-05 用户指定放这儿：仿卡片视图右上角那种图标）。 */}
+      {cornerAction && (
+        <button
+          type="button"
+          className="deck-corner float-pill float-pill--icon"
+          data-deck-corner="1"
+          data-on={dotsOn ? '1' : '0'}
+          title={cornerAction.title}
+          aria-label={cornerAction.label}
+          onClick={cornerAction.onClick}
+        >
+          {cornerAction.icon}
+        </button>
+      )}
       {/* 右缘竖排圆点：一次只看一张时，"还有几张 / 我在第几张"必须有出口。
           静止时**完全隐藏**（opacity 0 + 不吃指针），滚轮/键盘/点圆点后亮 1.4s、鼠标悬停期间常显。 */}
       <div className="deck-dots" role="tablist" aria-label="卡片位置"

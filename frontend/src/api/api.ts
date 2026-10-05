@@ -1,4 +1,4 @@
-import type { Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliPlayInfo, BiliSearchResult, BiliSegments, Capabilities, DouyinCookieSaved, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, NoticesResponse, PoolItem, Post, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyVtuber, AssetsInfo, AssetsPruneResult, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, XhsCookieSaved } from './types'
+import type { Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliPlayInfo, BiliSearchResult, BiliSegments, Capabilities, DouyinCookieSaved, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, NoticesResponse, PoolItem, Post, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyOverview, ThirdpartyVtuber, AssetsInfo, AssetsPruneResult, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, XhsCookieSaved } from './types'
 import { ApiError, ApiShapeError } from './errors'
 import { HOST_HEADER, myHost } from '../utils/hostIdentity'
 import {
@@ -616,6 +616,23 @@ export const api = {
     request<{ status: string; archived: number }>(`/vtuber/batch/archive?days=${days}`, {
       method: 'POST',
     }),
+
+  // ── 第三方数据（粉丝历史 / 直播场次 / 礼物日）──────────────────────
+  // 2026-10-05（用户）：「历史第三方数据丢失了就没法获取了」——这两个接口就是那个入口。
+  // 上游**一次返回全部历史**，所以"补一段缺口"不需要日期参数（全量幂等 upsert）。
+
+  /** 某个 V 的第三方数据现状（条数 + 最新日期 + 两个源开没开） */
+  thirdpartyOverview: (vtuberId: number) =>
+    request<ThirdpartyOverview>(`/vtuber/${vtuberId}/thirdparty`),
+
+  /** 只补**这一个 V** 的第三方数据（后台执行，进度见顶栏胶囊） */
+  refreshThirdparty: (vtuberId: number) =>
+    request<{ status: string; accounts: number[] }>(
+      `/vtuber/${vtuberId}/thirdparty/refresh`, { method: 'POST' }),
+
+  /** **全量**拉一次第三方数据（所有 B 站账号，与每日批次同口径） */
+  batchFetchExternals: () =>
+    request<{ status: string }>('/vtuber/batch/fetch-externals', { method: 'POST' }),
 
   // ── 登录（B 站 / 微博扫码；小红书粘贴 cookie）──────────────────────
 
