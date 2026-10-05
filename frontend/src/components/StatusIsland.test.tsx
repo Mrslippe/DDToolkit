@@ -40,10 +40,43 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount())
   host.remove()
+  vi.restoreAllMocks()      // 假布局（`stubLayout`）必须还回去，否则串到后面的用例
   vi.useRealTimers()
 })
 
 const NOW = 1_700_000_000_000
+
+/**
+ * **假布局**（`devlog/350`）：jsdom 不做排版，所有 `getBoundingClientRect()` 都是 0
+ * ⇒ FLIP 的位移 `dy` 恒为 0 ⇒ "补位"那条路径一步都走不到。
+ *
+ * 口径照真实结构写：`.si-list` 内边距 6px、行高固定 40；**退场的行不占流内位置**
+ * （它 `position:absolute`，位置由冻结的 `style.top` 给），活着的行按在流内的次序排。
+ *
+ * ⚠️ 钉的是 **`offsetTop` / `offsetHeight`**（布局值）而不是 `getBoundingClientRect()`：
+ * 组件读的就是这两个，而它们的意义正是"transform 无关" —— 用 rect 会被**正在跑的过渡**
+ * 骗到（2026-10-05 的真根因，见 `geomOf` 的注释）。
+ * `flushed` 记下**强制样式计算那一下**（读 `offsetHeight` 时）各条目身上挂着的内联位移 ——
+ * 同步 FLIP 的**起点**就是靠这一下落实的（少了它，补位退化成"啪一下跳上去"）。
+ */
+const ROW_H = 40
+const LIST_PAD = 6
+function stubLayout(flushed: string[] = []) {
+  vi.spyOn(HTMLElement.prototype, 'offsetTop', 'get').mockImplementation(function (this: HTMLElement) {
+    if (this.classList.contains('is-out')) {
+      return Number.parseFloat(this.style.top || '0') || 0      // 浮起来的那条：位置由它自己给
+    }
+    if (this.classList.contains('si-item')) {
+      const live = [...(this.closest('.si-list')?.querySelectorAll('.si-item:not(.is-out)') ?? [])]
+      return LIST_PAD + Math.max(0, live.indexOf(this)) * ROW_H
+    }
+    return 0
+  })
+  vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+    flushed.push(this.style.transform)
+    return this.classList.contains('si-item') ? ROW_H : 0
+  })
+}
 
 const progress = (over: Partial<Notice> = {}): Notice => ({
   id: 'pushed-progress', kind: 'progress', form: 'state', source: '任务进度',
@@ -315,6 +348,38 @@ describe('一键已读与自动已读的退场', () => {
     expect(ids).toEqual(['burst-1', 'burst-2', 'burst-3', 'burst-4', 'burst-5', 'burst-6'])
     expect(new Set(ids).size).toBe(ids.length)
   })
+
+  it('补位的反向位移**不留跨帧状态**（同步 FLIP —— 用户报的"空白不被顶上来"）', () => {
+    // 用户 2026-10-05："点击已读之后虽然向左滑出是正常的，但留下的空白不会被自动顶上去"。
+    // 实测（探针 `--notice-lab`）根因**不是没重排**，而是补位用的反向位移**卡在了 DOM 上**：
+    // 它靠"下一帧"（rAF）撤，而点已读会在几毫秒内再来一次提交（本地状态一拍、`ack` 回来的
+    // 那一拍）⇒ 那个 rAF 被取消 ⇒ 位移与 `transition:none` 留在元素上，那一行停在旧位置。
+    // 更糟的是"量位置"会撞上这份位移，于是得靠 `data-flip-y` 记账去减 —— 记账一旦对不上
+    // 就正负翻转、越补越偏（探针实测同一条 +80ms 是 `+139.5px`、+680ms 变成 `-139.5px`）。
+    // 现在补位是**同步**做完的：挂位移 → 强制一次样式计算 → 当场撤掉，不留任何跨帧状态。
+    // ⚠️ 必须给**假布局**：jsdom 里 rect 全是 0 ⇒ `dy` 恒为 0 ⇒ 这条路径一步都走不到。
+    const flushed: string[] = []
+    stubLayout(flushed)
+    const a = message({ id: 'a', text: '第一条' })
+    const b = message({ id: 'b', text: '第二条', createdAt: NOW })
+    act(() => root.render(<StatusIsland notices={[a, b]} onAction={vi.fn()} now={NOW} />))
+    const panel = openPanel()!
+    const rowB = () => panel.querySelector<HTMLElement>('.si-item[data-notice-id="b"]')!
+
+    // 点 a = 已读 ⇒ 父组件把它撤下（这里直接重渲染模拟），b 要**从第 2 行补到第 1 行**
+    act(() => root.render(<StatusIsland notices={[b]} onAction={vi.fn()} now={NOW} />))
+    // 补位**真的发生过**：强制样式计算那一下，元素身上挂着 +40px 的反向位移（= 过渡的起点）
+    expect(flushed.some((t) => t.includes(`translateY(${ROW_H}px)`)),
+           `强制刷新的那一下应当挂着 +${ROW_H}px 的反向位移（补位的起点），实得 ${flushed}`).toBe(true)
+    // 而且**当拍就撤干净**（不留跨帧状态 ⇒ 下一拍再提交也不会卡住）
+    expect(rowB().style.transform, '反向位移不许留在 DOM 上').toBe('')
+    expect(rowB().style.transition).toBe('')
+
+    // 同一帧里再来一次提交（真实场景 = `ack` 响应到达）：位置照旧、没有残留
+    act(() => root.render(<StatusIsland notices={[b]} onAction={vi.fn()} now={NOW + 1} />))
+    expect(rowB().style.transform).toBe('')
+    expect(rowB().style.transition).toBe('')
+  })
 })
 
 describe('胶囊文案', () => {
@@ -365,12 +430,48 @@ describe('已读路径（源码级结构判据）', () => {
   it('已读还要盖住**推送流**那一份（第三份，2026-10-05 探针抓到）', () => {
     // 面板里的条目有三个来源：本地那份、服务端那份、**推送流那份**
     // （`useNotices` 里的 `liveEdge` / `message`：`live-<account_id>` / `msg-<ms>`）。
-    // 前两份 `ackIds` 都清了，第三份没有 —— 症状是"刚推来的开播告警点一下纹丝不动"
+    // 前两份 `ackIds` 都清了，第三份没有 —— 症状是"刚推来的开播公告点一下纹丝不动"
     // （探针 `--notice-lab` 实测：点了 `live-9001`，一个 `.is-out` 都没有）。
     // 这里钉的是**结构**：`ackIds` 必须往 `ackedIds` 里记一笔，而渲染用的是过滤后的那份；
     // 寿命规则（什么时候忘）在 `noticeBoard.pruneAcked`，那里有 3 条纯函数用例。
     expect(src).toContain('setAckedIds')
     expect(src).toMatch(/merged\.filter\(\(n\) => !ackedIds\.includes\(n\.id\)\)/)
     expect(src).toContain('pruneAcked(prev, merged.map((n) => n.id))')
+  })
+})
+
+/**
+ * 源码级：**补位（"顶上来"）量的是布局，不是视觉**（`devlog/350`）。
+ *
+ * 为什么必须钉在源码这一层：这条错的形态在 jsdom 里**复现不出来** —— 它要的是
+ * "过渡正在跑"这个真实浏览器的中间态。而它的代价很具体（用户 2026-10-05 报的那句
+ * "滑出正常，但留下的空白不会被自动顶上去"）：
+ * `getBoundingClientRect()` 给的是**视觉**位置，包含正在跑的过渡的中间值
+ * ⇒ 每拍（秒表 / 轮询回来的重渲染）拍一次快照，量到的都是"它还在下面"，
+ * 下一拍再补一次 ⇒ **过渡反复重启，那一条永远到不了位**（探针实测：布局 `offsetTop=6`
+ * 而 rect 报 76，差值恰好是退场那条的高度，+680ms 依旧）。
+ */
+describe('补位的量法（源码级结构判据）', () => {
+  const src = readFileSync(
+    join(__dirname, '..', 'components', 'StatusIsland.tsx'), 'utf8')
+
+  it('`geomOf` 读 `offsetTop`/`offsetHeight`，且**不许**回头去读 rect', () => {
+    expect(src).toMatch(/const geomOf = \(el: HTMLElement\): Geom => \(\{ relTop: el\.offsetTop/)
+    // 反向：`geomOf` 所在的这一段里不许出现 `getBoundingClientRect`
+    const seg = src.slice(src.indexOf('const geomOf'), src.indexOf('const snapshotGeom'))
+    expect(seg).not.toContain('getBoundingClientRect')
+  })
+
+  it('补位是**同步**做完的（挂位移 → 强制一次样式计算 → 当场撤掉），不留跨帧状态', () => {
+    // 为什么不用 rAF：位移跨帧存在时，①"几毫秒内连着两次提交"会把 rAF 取消、位移永久卡住；
+    // ②任何一次量位置都可能撞上它。同步做法的这三步必须都在，且顺序不能换。
+    expect(src).toMatch(/el\.style\.transition = 'none'\s*\n\s*el\.style\.transform = `translateY\(\$\{dy\}px\)`\s*\n\s*void el\.offsetHeight\s*\n\s*el\.style\.transition = ''\s*\n\s*el\.style\.transform = ''/)
+    // 补位这一段里**不许有跨帧的帧回调**（本文件别处 `place()` 用 rAF 是另一回事，只查这一段）
+    const flipBlock = src.slice(src.indexOf('// ── **同步 FLIP**'),
+                                src.indexOf('geomRef.current = snapshotGeom()'))
+    expect(flipBlock.length, '没找到那段补位代码（判据自己失效了）').toBeGreaterThan(100)
+    // 查的是**调用**（注释里提到那套老写法是刻意的说明，不算数）
+    expect(flipBlock).not.toMatch(/requestAnimationFrame\(/)
+    expect(flipBlock).not.toMatch(/cancelAnimationFrame\(/)
   })
 })

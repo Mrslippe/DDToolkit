@@ -1813,6 +1813,15 @@ def _assert_notice_lab(nl: dict, width: int) -> list[str]:
     elif nl.get("aliveAfterAck") == nl.get("aliveBeforeAck"):
         bad.append(f"@{width} notice-lab: 点了条目但活着的条数没变"
                    f"（{nl.get('aliveBeforeAck')} → {nl.get('aliveAfterAck')}）")
+    # ⑧ 顶上来（用户 2026-10-05："滑出正常，但留下的空白不被自动顶上去"）：
+    #    ① 退场那条腾出的位置必须被下面那条**占掉**（第一行离列表顶不许超过一个行高）；
+    #    ② 补位用的内联 `translateY` 必须**擦干净** —— 卡在 DOM 上就是"永久错位"的样子。
+    for v in nl.get("ackGapViolations") or []:
+        bad.append(f"@{width} notice-lab: 点已读后留下空位没被顶上 —— {v}"
+                   f"（几何 {nl.get('ackGeomAfter')}）")
+    if nl.get("ackLeftoverTransforms"):
+        bad.append(f"@{width} notice-lab: 补位的内联位移没擦掉（下一拍会永久错位）："
+                   f"{nl.get('ackLeftoverTransforms')}")
     # 「全部已读」：按 **id** 判（条数会被 TTL 影响，那样即使按钮没生效也可能"看起来清了"）
     if nl.get("ackAllBeforeIds"):
         if not nl.get("ackAllCleared"):
@@ -3662,6 +3671,14 @@ def main() -> int:
             print(f"  动作按钮={nl.get('actionLabels')} 一键已读={nl.get('hasAckAll')}")
             print(f"  点一条已读：目标={nl.get('ackTarget')!r} 滑出={nl.get('ackOutIds')!r} "
                   f"活着 {nl.get('aliveBeforeAck')} → {nl.get('aliveAfterAck')}")
+            print(f"  顶上来（视觉，含过渡中间值）：+80ms={nl.get('ackGeomAt80')}")
+            print(f"                                +680ms={nl.get('ackGeomAfter')}")
+            print(f"          布局（判据用的就是它）=空位 {nl.get('ackTopGaps')} "
+                  f"｜残留位移={nl.get('ackLeftoverTransforms')!r}")
+            print(f"          动画自检：{nl.get('motionSelfTest')}")
+            print(f"          空位那一行身上的动画：{nl.get('ackGapRowAnims')!r}")
+            for line in (nl.get("ackListDump") or []):
+                print(f"          列表: {line}")
             print(f"  全部已读：清={nl.get('ackAllCleared')} 剩={nl.get('ackAllStillAlive')!r} "
                   f"｜正在进行 {nl.get('ackAllDoingBefore')} → {nl.get('doingAfterAckAll')} "
                   f"（未被动={nl.get('doingUntouched')}）")

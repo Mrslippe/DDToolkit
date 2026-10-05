@@ -2845,9 +2845,97 @@ export async function runUiProbe(): Promise<void> {
       await sleep(80)              // 退场动画 220ms —— 这一拍它必须还在（`.is-out`）
       result.ackOutIds = all('.si-panel .si-item.is-out').map((n) => n.getAttribute('data-notice-id'))
       result.aliveAfterAck = aliveCount()
+      // ⑧ **其余的条目真的顶上来了吗**（用户 2026-10-05："滑出正常，但留下的空白不被自动顶上去"）。
+      //    判据不能只看"少了一条"，要看**几何**：退场那条腾出的位置有没有被下面那条占掉。
+      //    采样按**分组**读（`rel` 是相对各自 `.si-list` 的，跨组比大小没有意义）+
+      //    **内联位移**（补位留下的 `translateY` 一旦跨帧残留就会永久错位）。
+      //    ⚠️ 这是**视觉**位置（含过渡中间值）——只看打印出来的时间线用；**判据**在下面用 `offsetTop`。
+      const geom = () => all('.si-panel .si-sec').map((sec) => {
+        const rows = [...sec.querySelectorAll<HTMLElement>('.si-item')].map((el) => {
+          const list = el.closest<HTMLElement>('.si-list')
+          const rel = list
+            ? Math.round(el.getBoundingClientRect().top - list.getBoundingClientRect().top)
+            : -1
+          const out = el.classList.contains('is-out') ? '(out)' : ''
+          const tf = el.style.transform ? `!${el.style.transform}` : ''
+          return `${el.getAttribute('data-notice-id')}@${rel}${out}${tf}`
+        })
+        return `${sec.getAttribute('data-group')}[${sec.querySelectorAll('.si-list').length}]:`
+          + (rows.join(' ') || '—')
+      })
+      result.ackGeomAt80 = geom()
+      // ⚠️ **探针环境到底跑不跑过渡**（2026-10-05 加）：补位是"从旧位置过渡到新位置"，
+      //    而无头浏览器不推进动画时，读到的永远是**起点** —— 那时"空位没被顶上"是**探针的
+      //    假象**，不是产品问题。自己造一个元素试一次，把这件事变成可判的事实。
+      const selfTest = document.createElement('div')
+      selfTest.style.cssText = 'position:fixed;left:0;top:0;width:4px;height:4px;opacity:0.01;'
+        + 'pointer-events:none;transform:translateY(0px);transition:transform 200ms linear'
+      document.body.appendChild(selfTest)
+      void selfTest.offsetHeight
+      selfTest.style.transform = 'translateY(100px)'
+      await sleep(120)
+      const mid = getComputedStyle(selfTest).transform
+      await sleep(300)
+      const end = getComputedStyle(selfTest).transform
+      selfTest.remove()
+      result.motionSelfTest = `+120ms=${mid} +420ms=${end}（` +
+        (end.includes('100') ? '过渡有推进 ✓' : '过渡没推进 ⇒ 探针环境不渲染动画') + '）'
+      // 那个"没顶上来"的条目身上**到底有没有在跑的过渡**（有 = 动画在做，没 = 真卡住）
+      const gapRow = all('.si-panel .si-list')
+        .map((l) => l.querySelector<HTMLElement>('.si-item:not(.is-out)'))
+        .find((el) => !!el && el.getBoundingClientRect().top
+          - (el.closest('.si-list')?.getBoundingClientRect().top ?? 0) > el.offsetHeight + 6)
+      result.ackGapRowAnims = gapRow
+        ? gapRow.getAnimations().map((a) => {
+            const t = a as Animation & { transitionProperty?: string }
+            return `${t.transitionProperty ?? a.constructor.name}:${a.playState}`
+              + `@${Math.round(Number(a.currentTime) || 0)}ms`
+          })
+        : null
+      await sleep(600)             // 退场动画（220ms）放完 + 补位过渡（--motion-base）跑完
+      result.ackGeomAfter = geom()
+      result.ackLeftoverTransforms = all('.si-panel .si-item')
+        .filter((el) => el.style.transform || el.style.transition)
+        .map((el) => `${el.getAttribute('data-notice-id')}|tf=${el.style.transform}`
+          + `|tr=${el.style.transition}`)
+      // ⑨ **原始布局**（`offsetTop` 与 transform 无关、`rel` 与它一比就知道有没有位移在骗人）：
+      //    诊断"空位到底是谁占着"要看列表的**子节点**（可能有个不该在流里的东西）。
+      result.ackListDump = all('.si-panel .si-list').map((list) => {
+        const cs = getComputedStyle(list)
+        const kids = [...list.children].map((k) => {
+          const el = k as HTMLElement
+          return `${el.tagName.toLowerCase()}.${el.className.replace(/\s+/g, '.')}`
+            + `|offTop=${el.offsetTop}|offH=${el.offsetHeight}`
+            + `|pos=${el.style.position || '-'}|tf=${el.style.transform || '-'}`
+        })
+        return `padding=${cs.paddingTop}/${cs.paddingBottom} pos=${cs.position}`
+          + ` scrollTop=${list.scrollTop} h=${list.offsetHeight} kids=[${kids.join(' ; ')}]`
+      })
+      // 每张列表里**第一条活着的**条目离列表顶有多远：留了一个整行高的空位就是"没顶上来"。
+      // ⚠️ 用 **`offsetTop`**（布局值）而不是 rect：rect 含**正在跑的过渡的中间值**，
+      //    而无头环境根本不推进过渡（见上面的自检）⇒ 用 rect 会在探针里恒定假红。
+      //    这与组件侧 `geomOf` 用 `offsetTop` 是同一条教训（`devlog/350`）。
+      result.ackTopGaps = all('.si-panel .si-list').map((list) => {
+        const first = list.querySelector<HTMLElement>('.si-item:not(.is-out)')
+        return first ? `rel=${first.offsetTop}/h=${first.offsetHeight}` : null
+      })
+      // 空位判据：第一行的**布局**顶端必须落在它自己的高度之内（列表内边距 6px + 行高）
+      result.ackGapViolations = all('.si-panel .si-list').flatMap((list) => {
+        const first = list.querySelector<HTMLElement>('.si-item:not(.is-out)')
+        if (!first) return []
+        return first.offsetTop > Math.max(12, first.offsetHeight)
+          ? [`${list.parentElement?.getAttribute('data-group')}`
+            + `:第一行离顶 ${first.offsetTop}px > 行高 ${first.offsetHeight}px`]
+          : []
+      })
     } else {
       result.ackOutIds = null
       result.aliveAfterAck = null
+      result.ackGeomAt80 = null
+      result.ackGeomAfter = null
+      result.ackLeftoverTransforms = null
+      result.ackTopGaps = null
+      result.ackGapViolations = null
     }
     // ⑦ 「全部已读」：清「最近」+「需要处理」两组的，「正在进行」一条都不许动。
     //    判据按 **id 逐个**对（不按条数）：条数会因为 TTL 到点而减小，那样即使按钮没生效也可能"看起来清了"。

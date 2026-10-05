@@ -193,23 +193,24 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
   const liveIds = notices.map((n) => n.id).join('|')
 
   /**
-   * 单条的几何（**transform-free**）：
-   * - `relTop`：它那个 `.si-list` 内的坐标 —— FLIP 的"顶上来"与退场浮起来都用它。
-   *   为什么不用视口坐标：面板自己也会动（`place()` 量到真实高度后翻到上方、窗口缩放），
-   *   那些位移**不是条目在列表里动了**，用视口坐标去补会把整个面板的内容也拖着"缓动"过去。
-   * - `h`：边框盒高度（浮起来时要占原来那么高）。
+   * 单条的几何：`relTop` = 它那个 `.si-list` 内的**布局**坐标（FLIP 的"顶上来"与退场浮起来都用它）、
+   * `h` = 高度（浮起来时要占原来那么高）。
    *
-   * ⚠️⚠️ `getBoundingClientRect()` **包含**我们自己刚挂上去的反向 `translateY`（FLIP 的中间态）。
-   * 不把它减掉，下一拍就会把"上一步的位移"当成布局差再补一次 ⇒ 来回放大，
-   * 表现就是**条目上下跳 / 叠在一起**（用户 2026-10-05 报的正是这个：
-   * "通知快速进入的时候条目一直重复堆叠"）。所以位移量另存 `data-flip-y`，量的时候减掉。
+   * ⚠️⚠️ **必须读 `offsetTop` / `offsetHeight`，不能读 `getBoundingClientRect()`**
+   * （2026-10-05 实测踩到，用户报的"空白不被自动顶上去"的**真根因**）：
+   * `getBoundingClientRect()` 给的是**视觉**位置 —— 它**包含正在跑的那次过渡的中间值**。
+   * 而"补位"正是靠过渡做的：撤掉内联位移之后，元素在 `--motion-base` 那段时间里
+   * 视觉上还在半路上（内联 `style.transform` 已经是空的，所以从 DOM 上看不出任何异常）。
+   * 于是每隔一拍（`now` 秒表 / 轮询回来的重渲染）拍一次快照，量到的都是"它还在下面 70px"，
+   * 下一拍就再补 70px ⇒ **过渡反复重启，那一条永远到不了位**（探针 `--notice-lab` 实测：
+   * `offsetTop=6` 而 rect 给 76，差值恰好是退场那条的高度；+680ms 仍是 76）。
+   * `offsetTop` / `offsetHeight` 是**布局**值，与 transform 无关 ⇒ 量到的永远是"该在哪"，
+   * 补位一次到位、不会被自己的动画骗到。
+   *
+   * 为什么不用视口坐标：面板自己也会动（`place()` 量到真实高度后翻到上方、窗口缩放），
+   * 那些位移**不是条目在列表里动了**，用视口坐标去补会把整个面板的内容也拖着"缓动"过去。
    */
-  const geomOf = (el: HTMLElement): Geom => {
-    const r = el.getBoundingClientRect()
-    const dy = Number.parseFloat(el.dataset.flipY || '0') || 0
-    const lr = el.closest<HTMLElement>('.si-list')?.getBoundingClientRect()
-    return { relTop: lr ? r.top - lr.top - dy : 0, h: r.height }
-  }
+  const geomOf = (el: HTMLElement): Geom => ({ relTop: el.offsetTop, h: el.offsetHeight })
 
   const snapshotGeom = (): Map<string, Geom> => {
     const map = new Map<string, Geom>()
@@ -259,7 +260,6 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
       geomRef.current = new Map()
       return
     }
-    const frames: number[] = []
     root.querySelectorAll<HTMLElement>('.si-item[data-notice-id]').forEach((el) => {
       // 退场那条**已经**脱离文档流并由 `exitTop` 钉住了（见 `renderRow`）：
       // 它不需要补位，补了反而会和冻结坐标打架 ⇒ 直接跳过。
@@ -268,19 +268,26 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
       if (!old) return
       const dy = old.relTop - geomOf(el).relTop
       if (Math.abs(dy) < 0.5) return
+      // ── **同步 FLIP**（2026-10-05 第二版）────────────────────────────────
+      // ① 关掉过渡、瞬时挪回旧位置；② **强制一次样式计算**（读 `offsetHeight`）——
+      //    这一步是全部关键：它让"反向位移"成为**已计算的样式**，也就是过渡的起点；
+      // ③ 当场恢复过渡并撤掉位移 ⇒ 浏览器从旧位置**平滑**送到新位置。
+      //
+      // ⚠️ 为什么不用"下一帧再撤"（`requestAnimationFrame`）那套经典写法：
+      //    位移会在 DOM 上**跨帧存在**，于是①点已读那种"几毫秒内连着两次提交"会把 rAF
+      //    取消掉，位移**永久卡住**（用户报的"滑出正常，但留下的空白不被自动顶上去"）；
+      //    ②任何一次"量位置"都可能撞上这份位移，得靠 `data-flip-y` 记账去减 ——
+      //    记账一旦对不上就正负翻转、条目越补越偏（探针实测：同一条在 +80ms 是
+      //    `translateY(139.5px)`、+680ms 变成 `-139.5px`）。同步做法**不留任何跨帧状态**，
+      //    这两类问题从结构上不存在。
       el.style.transition = 'none'
       el.style.transform = `translateY(${dy}px)`
-      el.dataset.flipY = String(dy)      // 量的时候要减掉它，否则下一拍重复补（见 `geomOf`）
-      frames.push(requestAnimationFrame(() => {
-        el.style.transition = ''
-        el.style.transform = ''
-        delete el.dataset.flipY
-      }))
+      void el.offsetHeight
+      el.style.transition = ''
+      el.style.transform = ''
     })
-    // ⚠️ 快照**必须在补位之后**拍：此时 DOM 已是这一拍的最终布局（补位用的是 transform，
-    //    与布局无关，`geomOf` 会把它减掉）。
+    // 快照在**补位之后**拍：此时每条的位移都已经撤掉，量到的就是这一拍的最终布局。
     geomRef.current = snapshotGeom()
-    return () => frames.forEach(cancelAnimationFrame)
   })
   /**
    * **自己的秒表**（L1，2026-10-05）：过期与相对时间都由它驱动。
