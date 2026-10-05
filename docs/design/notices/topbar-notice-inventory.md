@@ -12,6 +12,8 @@ verified: 2026-10-05
 > 8 类条目 + 5 类事实）、`frontend/src/utils/notificationHub.ts`（条目模型与判定）、
 > `frontend/src/utils/noticeStream.ts`（取数/合并/TTL）、`frontend/src/components/StatusIsland.tsx`
 > （渲染），以及全仓 `toast.` 的真实调用（**56 处，13 个文件**；另有 2 处只是注释里提到这个名字）。
+>
+> ➡️ **改造方案见 `docs/design/notices/channel-and-layering.md`**（2026-10-05）：本文是它的输入。
 
 ## 1. 四个呈现面（同一份信息，四种"出现在哪"）
 
