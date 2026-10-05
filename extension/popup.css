@@ -1,0 +1,136 @@
+/* DDToolkit 凭据同步 popup（E4）。样式刻意与应用的浅色浮片同族：白卡 + 发丝边 + 12px 圆角。 */
+:root {
+  --bg: #ffffff;
+  --fg: #1f2937;
+  --sub: #6b7280;
+  --line: #e5e7eb;
+  --accent: #ec407a;
+  --hover: #f7f7f9;
+  --ok: #16a34a;
+  --warn: #d97706;
+  --bad: #dc2626;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  width: 320px;
+  margin: 0;
+  padding: 10px 12px 12px;
+  background: var(--bg);
+  color: var(--fg);
+  font: 13px/1.5 "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+header b { font-size: 13px; }
+
+button {
+  font: inherit;
+  font-size: 12px;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+button:hover { background: var(--hover); }
+button:disabled { opacity: 0.5; cursor: default; }
+
+#sync-all {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+#sync-all:hover { filter: brightness(0.95); }
+
+.conn {
+  margin: 0 0 8px;
+  font-size: 11.5px;
+  color: var(--sub);
+}
+
+.conn[data-conn="ok"] { color: var(--ok); }
+.conn[data-conn="bad"] { color: var(--bad); }
+
+.rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.row {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 6px 8px;
+}
+
+.row-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.row-name { font-weight: 600; }
+
+.row-meta {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--sub);
+  word-break: break-all;
+}
+
+.row-note { margin-top: 2px; font-size: 11px; }
+.row-note[data-tone="ok"] { color: var(--ok); }
+.row-note[data-tone="warn"] { color: var(--warn); }
+.row-note[data-tone="bad"] { color: var(--bad); }
+
+.settings { margin-top: 10px; font-size: 12px; }
+.settings summary { cursor: pointer; color: var(--sub); }
+.settings label { display: block; margin: 8px 0 0; color: var(--sub); }
+
+.settings input {
+  display: block;
+  width: 100%;
+  margin-top: 3px;
+  padding: 4px 6px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.btns { display: flex; gap: 6px; margin-top: 8px; }
+
+.hint { margin: 8px 0 0; font-size: 11px; color: var(--sub); }
+.hint code {
+  padding: 0 3px;
+  background: var(--hover);
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.log {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: var(--sub);
+  white-space: pre-wrap;
+  max-height: 76px;
+  overflow-y: auto;
+}

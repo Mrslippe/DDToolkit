@@ -40,7 +40,17 @@ flowchart TB
   S --> DB[("SQLite vtuber.db（WAL）<br/>数据表 / alembic 迁移链")]
   S --> FS["DATA_DIR/static：头像 / 自定义背景 / 图片代理缓存 / 轻资产长期副本"]
   HTTP --> UI["前端 Vite + React（只读渲染 + 轮询 fetch-status）"]
+  X["浏览器扩展 extension/（Edge/Chrome，第四个宿主）"] -->|"POST /auth/import + 配对 token"| HTTP
 ```
+
+> **第四个宿主：浏览器扩展**（E1–E4，2026-10-06）：它不参与渲染，只做一件事 ——
+> 把浏览器里**已登录**的四个平台 Cookie（含 HttpOnly）推给本机后端（`POST /auth/import`，
+> 凭证是独立于应用 token 的**配对令牌**）。端口靠"壳优先绑 `8765–8769` + `/healthz` 的
+> `app` 标识 + 配对 token"认领。装配方：`extension/`（零构建）、
+> `app/services/{pairing,cookie_import}.py`、`app/routers/auth.py`、
+> `frontend/src/components/LoginDialog.tsx`（配对界面）。
+> 方案 `docs/design/browser-extension-cookie-sync.md`、执行方案
+> `docs/plans/browser-extension-cookie-sync-execution.md`。
 
 | 并发单元 | 载体 | 职责 | 是否占抓取锁 |
 |---|---|---|---|

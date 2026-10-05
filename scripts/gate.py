@@ -189,6 +189,12 @@ def steps(tier: str) -> list[tuple[str, list[str], str]]:
         #    "只有 CI 会红的东西"要么补进门禁、要么写清为什么不在门禁里 —— 这一步只花 1s。
         ("syntax", [PY, "scripts/dev_check.py", "--syntax-only"],
          "全仓 Python 语法（实测 ~1s）"),
+        # 浏览器扩展的**纯逻辑**（E4，2026-10-06）：`node --test`，~0.3s。
+        # 为什么放进**通用**步骤（三档都跑）：扩展是第四个宿主，它的逻辑与后端有三处必须对齐
+        # （必需键 / 端口候选 / 应用标识），而这一条几乎不花时间。
+        # ⚠️ 用 glob（Node 自己展开）：以后加 `extension/test/*.test.mjs` 会自动进范围。
+        ("extension logic", ["node", "--test", "extension/test/*.test.mjs"],
+         "扩展纯逻辑（拼接/缺键/端口/回执，实测 <1s）"),
     ]
     if tier in ("a", "full"):
         # Rust 壳（devlog/197）。**只在 A 档跑**：改了 `app/` 也跑它是不必要的重复，
@@ -233,6 +239,14 @@ def steps(tier: str) -> list[tuple[str, list[str], str]]:
                                   "--width", "1440"],
          "首启登录浮窗（四平台 Tab / 凭据说明 / 浏览器扩展栏，实测 ~15s）"),
     )
+    if tier == "a":
+        # 扩展链路的**端到端冒烟**（E4，2026-10-06）：临时数据目录起后端，复刻扩展的请求序列
+        # （认领 → 配对 → 四平台导入 → 回执不泄值 → `.env` 落盘）。~10s。
+        # 为什么只在 A 档：它会起后端并写 `.env`（临时目录）⇒ 与 pytest 同一条"碰 app/"的理由。
+        s.append(
+            ("extension smoke", [PY, "scripts/extension_smoke.py"],
+             "扩展链路端到端（认领/配对/四平台导入，实测 ~2s）"),
+        )
     if tier == "full":
         # dev_check 自带 eslint + vitest + pytest + 语法扫描 + 后端冒烟 ⇒ 别再单跑一遍
         s.append(("dev_check", [PY, "scripts/dev_check.py"],

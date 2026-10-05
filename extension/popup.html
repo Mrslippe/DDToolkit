@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>DDToolkit 凭据同步</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <b>DDToolkit 凭据同步</b>
+    <button id="sync-all" type="button" data-sync-all="1">同步全部四个平台</button>
+  </header>
+
+  <p id="conn" class="conn" data-conn="unknown">正在找本机的 DDToolkit…</p>
+
+  <ul id="rows" class="rows"></ul>
+
+  <details class="settings">
+    <summary>设置</summary>
+    <label>应用端口
+      <input id="port" type="number" inputmode="numeric" min="1" max="65535" placeholder="自动探测">
+    </label>
+    <label>配对 token
+      <input id="token" type="password" spellcheck="false" placeholder="从应用「设置 → 登录 → 浏览器扩展」复制">
+    </label>
+    <div class="btns">
+      <button id="rediscover" type="button">重新探测</button>
+      <button id="save" type="button">保存</button>
+    </div>
+    <p class="hint">
+      装法与验收步骤见仓库 <code>extension/README.md</code>。
+      这里只把凭据发给 <code>127.0.0.1</code> 上的 DDToolkit，不落任何别处。
+    </p>
+  </details>
+
+  <p id="log" class="log" data-ext-log="1"></p>
+  <script type="module" src="src/popup.js"></script>
+</body>
+</html>
