@@ -192,6 +192,22 @@ def main() -> int:
         if status != 401:
             bad.append(f"错的配对 token 却是 {status}（应当 401）")
         print(f"  ⑥ 错 token：HTTP {status}")
+
+        # ⑦ **浏览器缺的键由"应用已有那份"补上**（2026-10-06 用户现场的形状）：
+        #    浏览器里 `a1` 是页面 JS 铸的、可能压根没有；应用里上次粘的那份有 ⇒ 合并后照样成功，
+        #    且回执要**如实**说 `a1` 不是这次从浏览器读到的。
+        status, merged = _post(port, "/auth/import",
+                               {"platform": "xiaohongshu", "cookie": "web_session=smoke-2nd"},
+                               {PAIR_HEADER: token})
+        print(f"  ⑦ 只推 web_session：HTTP {status} from_stored={merged.get('from_stored')!r} "
+              f"keys={merged.get('keys')!r}")
+        if status != 200 or merged.get("from_stored") != ["a1"]:
+            bad.append(f"浏览器缺 a1 时没有用应用里那份补上：{status} {merged}")
+        env_text2 = (data / ".env").read_text(encoding="utf-8")
+        if "a1=smoke-a1-value" not in env_text2 or "web_session=smoke-2nd" not in env_text2:
+            bad.append("合并没保住 a1 / 没换成新的 web_session")
+        if "web_session=smoke-session-value" in env_text2:
+            bad.append("合并后旧的 web_session 还在（应当被浏览器那份覆盖）")
     finally:
         be.terminate()
         try:

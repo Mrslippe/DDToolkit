@@ -88,15 +88,22 @@ async function readCookie(platform) {
   let merged = mergeCookies(...lists);
   if (missingKeys(platform.key, cookieHeaderFrom(merged)).length) {
     // `partitionKey.topLevelSite` 要的是**站点**（scheme + 可注册域）：API 主机（api.xxx.com）
-    // 的 origin 不是站点 ⇒ 两种写法都试一遍，谁成算谁。
+    // 的 origin 不是站点 ⇒ 两种写法都试。⚠️ `hasCrossSiteAncestor` 也要各试一次：
+    // 省略它时只匹 `false`，而第三方登录框里铸的指纹 cookie 正是 `true` 那一类
+    // （用户 2026-10-06 的诊断：`a1` / `s_v_web_id` 两处都读不到，这两个都是页面 JS 铸的）。
     const sites = platform.domain
       ? [...new Set(platform.urls.map((u) => new URL(u).origin)), `https://${platform.domain}`]
       : [];
     for (const url of platform.urls) {
       for (const site of sites) {
-        try {
-          lists.push(await chrome.cookies.getAll({ url, partitionKey: { topLevelSite: site } }));
-        } catch { /* 这个 Chrome 版本不认识 partitionKey（或该 site 不合法）：跳过 */ }
+        for (const crossAncestor of [false, true]) {
+          try {
+            lists.push(await chrome.cookies.getAll({
+              url,
+              partitionKey: { topLevelSite: site, hasCrossSiteAncestor: crossAncestor },
+            }));
+          } catch { /* 这个 Chrome 版本不认识 partitionKey（或该 site 不合法）：跳过 */ }
+        }
       }
     }
     merged = mergeCookies(...lists);
@@ -128,9 +135,13 @@ function render() {
     btn.dataset.sync = p.key;
     btn.textContent = '同步';
     const busy = !!state[p.key].busy;
-    btn.disabled = busy || !st.cookie || miss.length > 0;
+    // ⚠️ **缺键也允许点**（2026-10-06 改）：浏览器里那两类指纹 cookie（小红书 `a1`、
+    //    抖音 `s_v_web_id`）是**页面 JS 铸的**，可能被清/没铸过；而应用里那份可能正好有 ⇒
+    //    **后端会把"浏览器读到的键"与"应用已有那份"合并**（只增不删），缺什么由它说了算。
+    //    这里只要求"读到过东西"——否则连合并的机会都没有。回执会如实说哪个键来自应用已有那份。
+    btn.disabled = busy || !st.cookie;
     btn.title = !st.cookie ? '这个浏览器里还没登录（或没访问过该站点）'
-      : miss.length ? `缺 ${miss.join('、')} —— 先去浏览器里登录`
+      : miss.length ? `浏览器里缺 ${miss.join('、')} —— 应用里若已有会用它补上，可以直接点`
         : `把 ${keys.join('、')} 写入 DDToolkit`;
     btn.addEventListener('click', () => void syncOne(p));
     top.append(name, btn);
@@ -138,7 +149,7 @@ function render() {
     const meta = document.createElement('div');
     meta.className = 'row-meta';
     meta.textContent = st.cookie
-      ? `整条 ${total} 个键${miss.length ? ` · 缺 ${miss.join('、')}（看下面「设置 → 诊断」）` : ''}`
+      ? `整条 ${total} 个键${miss.length ? ` · 浏览器里缺 ${miss.join('、')}（应用里已有会补上）` : ''}`
       : '（浏览器里没登录这个平台）';
 
     li.append(top, meta);

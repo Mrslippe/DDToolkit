@@ -115,14 +115,21 @@ export function mergeCookies(...lists) {
   return out;
 }
 
-/** 给诊断用：`name @ domain path` + 几个关键标志（**只有键名与出处，没有值**） */
+/**
+ * 给诊断用：`name @ domain path len=N` + 几个关键标志（**只有键名/出处/长度，没有值**）。
+ *
+ * ⚠️ **长度是有用信息、且不是秘密**（应用自己的文档就是这么描述 cookie 的，
+ * 例如"`a1` 长度 52 字符"）—— 2026-10-06 那次排查里，正是靠"某个新名字长度对不对得上"
+ * 才能判断平台是不是把指纹 cookie 改了名。**值一个字都不进这里。**
+ */
 export function describeCookie(c) {
   const flags = [
     c.httpOnly ? 'HttpOnly' : '',
     c.session ? '会话' : '',
     c.partitionKey ? '分区' : '',
   ].filter(Boolean).join('/');
-  return `${c.name} @ ${c.domain || '?'}${c.path || '/'}${flags ? ` [${flags}]` : ''}`;
+  const len = (c.value ?? '').length;
+  return `${c.name} @ ${c.domain || '?'}${c.path || '/'} len=${len}${flags ? ` [${flags}]` : ''}`;
 }
 
 /** 平台 key → 定义（找不到返回 undefined：调用方必须处理，别静默用错平台） */
@@ -214,9 +221,13 @@ export function receiptLine(receipt) {
   }
   const keys = (receipt.keys || []).join('、');
   const tail = receipt.verified ? '已验证登录态' : '未在线验证';
-  return `${label}：已同步 ${keys || '（没有可用键）'}（整条 ${receipt.cookie_keys ?? '?'} 个键，${tail}）`;
+  // 浏览器里读不到、由"应用已有那份"补上的键 —— **如实说出来**（用户要知道哪个键不是这次的）
+  const borrowed = (receipt.from_stored || []).length
+    ? `；${receipt.from_stored.join('、')} 来自应用里已有那份`
+    : '';
+  return `${label}：已同步 ${keys || '（没有可用键）'}（整条 ${receipt.cookie_keys ?? '?'} 个键，`
+    + `${tail}）${borrowed}`;
 }
-
 /**
  * 依次探候选端口，找"这是 DDToolkit"的那一个。
  *

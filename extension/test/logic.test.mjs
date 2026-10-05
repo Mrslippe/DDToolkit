@@ -93,6 +93,11 @@ test('回执文案：成功（已验/未验）与失败各一句人话', () => {
   assert.match(receiptLine({
     ok: true, platform: 'douyin', label: '抖音', keys: ['ttwid'], cookie_keys: 3, verified: false,
   }), /未在线验证/);
+  // 浏览器里读不到、由"应用已有那份"补上的键要**如实说出来**
+  assert.match(receiptLine({
+    ok: true, platform: 'xiaohongshu', label: '小红书', keys: ['a1', 'web_session'],
+    cookie_keys: 4, verified: false, from_stored: ['a1'],
+  }), /；a1 来自应用里已有那份$/);
   assert.match(receiptLine({
     ok: false, platform: 'xiaohongshu', label: '小红书', missing: ['a1'],
     note: 'cookie 缺少 a1 —— 从浏览器复制整条 Cookie 头',
@@ -180,12 +185,13 @@ test('每行灰掉的那类问题：只读一个 URL 会漏掉指纹键（用户
   assert.ok(platformOf('douyin').urls.length >= 3);
 });
 
-test('诊断行：只给键名/出处/标志，**不带值**', () => {
+test('诊断行：只给键名/出处/长度/标志，**不带值**', () => {
   const line = describeCookie({
-    name: 'a1', value: 'SECRET', domain: '.xiaohongshu.com', path: '/',
+    name: 'a1', value: 'SECRET-0123456789', domain: '.xiaohongshu.com', path: '/',
     httpOnly: true, session: false, partitionKey: { topLevelSite: 'https://www.douyin.com' },
   });
-  assert.equal(line, 'a1 @ .xiaohongshu.com/ [HttpOnly/分区]');
+  // 长度**有用**（判断"平台是不是把指纹 cookie 改了名"靠它），且不是秘密
+  assert.equal(line, 'a1 @ .xiaohongshu.com/ len=17 [HttpOnly/分区]');
   assert.ok(!line.includes('SECRET'), '诊断行里带了 cookie 值');
 });
 

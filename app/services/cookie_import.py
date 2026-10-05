@@ -73,6 +73,9 @@ class ImportReceipt:
     cookie_keys: int = 0
     #: 上游**确认过**登录态吗（`false` 而 `ok=true` ⇒ 保存了但没验成，`note` 里说明）
     verified: bool = False
+    #: **哪几个有用的键不是这次从浏览器读到的**，而是从"应用里已有那份"补上的
+    #: （浏览器里那两类指纹 cookie 是页面 JS 铸的，可能压根没有 —— 见 `merge_cookie_strings`）
+    from_stored: list[str] = field(default_factory=list)
     #: 给人看的一句话（失败原因 / 成功备注）
     note: str = ""
 
@@ -85,6 +88,7 @@ class ImportReceipt:
             "missing": self.missing,
             "cookie_keys": self.cookie_keys,
             "verified": self.verified,
+            "from_stored": self.from_stored,
             "note": self.note,
         }
 
@@ -109,6 +113,48 @@ def _used_keys(platform: str, cookie: str) -> list[str]:
     return [k for k in USED_KEYS.get(platform, ()) if k in names]
 
 
+def stored_cookie(platform: str) -> str:
+    """应用**现在存着**的那条 cookie（各平台自己的入口；没配过就是空串）。
+
+    用它做"补齐"的来源，见 `merge_cookie_strings` 的说明。
+    """
+    if platform == "bilibili":
+        return auth_manager.cookie_str
+    if platform == "weibo":
+        return weibo_auth_manager.cookie
+    if platform == "xiaohongshu":
+        return xhs_auth_manager.cookie
+    return douyin_auth_manager.cookie
+
+
+def merge_cookie_strings(browser: str, stored: str) -> tuple[str, list[str]]:
+    """**浏览器读到的键优先，应用里已有而这次没读到的键保留**。
+
+    为什么需要它（2026-10-06 用户实测）：浏览器里那两类 cookie 是**页面 JS 铸的**
+    （小红书 `a1`、抖音 `s_v_web_id`），会被清、会过期、也可能压根没铸过；而**登录凭证**
+    （`web_session` / `sessionid` / `SESSDATA`）在。只按"浏览器这一条"判缺键，
+    这些平台上就永远同步不了 —— 而应用里那份可能正好有那个指纹键（用户上次手抄的）。
+
+    三条口径：
+    - **同名以浏览器为准**（新的那份更新）；
+    - **只增不删**（既有 cookie 里浏览器这次没给的键一个都不动 —— 与设计案 §3.3
+      "只写不删"同一条），所以这次同步**不会把应用里能用的凭据弄坏**；
+    - 返回"哪些键来自应用已有"（`from_stored`），回执与界面**如实说出来**
+      （用户要知道"这个键不是这次从浏览器读到的"）。
+
+    ⚠️ 顺序：先应用已有的键、再浏览器新给的键；同名已在前面出现过 ⇒ 只更新值不换位置。
+    """
+    from app.services.cookie_parse import parse_cookie_header
+
+    stored_map = parse_cookie_header(stored)
+    browser_map = parse_cookie_header(browser)
+    merged: dict[str, str] = dict(stored_map)
+    merged.update(browser_map)                       # 浏览器优先
+    parts = [f"{k}={v}" for k, v in merged.items()]
+    from_stored = [k for k in stored_map if k not in browser_map]
+    return "; ".join(parts), from_stored
+
+
 def _missing_required(platform: str, cookie: str) -> list[str]:
     """缺的必需键 —— **各平台自己的权威**（见模块 docstring 第 1 条）。"""
     if platform == "xiaohongshu":
@@ -127,7 +173,11 @@ def _reject(platform: str, cookie: str, why: str,
 
 
 async def apply(platform: str, cookie: str, ua: str = "") -> ImportReceipt:
-    """校验并落盘一条凭据；返回回执（**不抛异常** —— 失败也是一种回执）。"""
+    """校验并落盘一条凭据；返回回执（**不抛异常** —— 失败也是一种回执）。
+
+    流程：**先与"应用里已有那条"合并**（浏览器读到的键优先、已有键保留，理由见
+    `merge_cookie_strings`）→ 判缺键 → 交该平台自己的入口校验/落盘。
+    """
     cookie = (cookie or "").strip()
     if platform not in PLATFORM_LABELS:
         return ImportReceipt(ok=False, platform=platform,
@@ -136,27 +186,34 @@ async def apply(platform: str, cookie: str, ua: str = "") -> ImportReceipt:
     if not cookie:
         return _reject(platform, cookie, "cookie 是空的")
 
-    missing = _missing_required(platform, cookie)
+    merged, from_stored = merge_cookie_strings(cookie, stored_cookie(platform))
+    missing = _missing_required(platform, merged)
     if missing:
-        return _reject(platform, cookie,
-                       f"cookie 缺少 {'、'.join(missing)} —— 从浏览器复制**整条** Cookie 头",
-                       missing)
+        note = f"cookie 缺少 {'、'.join(missing)} —— 从浏览器复制**整条** Cookie 头"
+        # 如实区分两种"补不上"：应用里根本没有这份 cookie，还是**有但它也缺这个键**
+        note += ("（应用里已有的那份也没能补上）" if stored_cookie(platform)
+                 else "（应用里现在没有这个平台的 cookie 可以补）")
+        return _reject(platform, merged, note, missing)
 
     if platform == "bilibili":
-        ok, why, verified = await auth_manager.apply_cookie_checked(cookie)
+        ok, why, verified = await auth_manager.apply_cookie_checked(merged)
     elif platform == "weibo":
-        ok, why, verified = await weibo_auth_manager.apply_cookie_checked(cookie)
+        ok, why, verified = await weibo_auth_manager.apply_cookie_checked(merged)
     elif platform == "xiaohongshu":
-        ok, why = xhs_auth_manager.apply_cookie(cookie)
+        ok, why = xhs_auth_manager.apply_cookie(merged)
         verified = False
         why = why or "已保存（这个平台只校验必需的键，不做在线探活）"
     else:                                    # douyin
-        ok, why = douyin_auth_manager.apply_cookie(cookie, ua)
+        ok, why = douyin_auth_manager.apply_cookie(merged, ua)
         verified = False
         why = why or "已保存（这个平台只校验必需的键，不做在线探活）"
 
     if not ok:
-        return _reject(platform, cookie, why or "校验没过", missing)
-    return ImportReceipt(ok=True, platform=platform, keys=_used_keys(platform, cookie),
-                         missing=[], cookie_keys=len(cookie_key_names(cookie)),
-                         verified=verified, note=why)
+        return _reject(platform, merged, why or "校验没过", missing)
+
+    # 哪几个**有用**的键不是浏览器给的（回执单独一个字段，界面据此如实标注）
+    used_names = {u.lower() for u in USED_KEYS.get(platform, ())}
+    from_stored_used = [k for k in from_stored if k.lower() in used_names]
+    return ImportReceipt(ok=True, platform=platform, keys=_used_keys(platform, merged),
+                         missing=[], cookie_keys=len(cookie_key_names(merged)),
+                         verified=verified, from_stored=from_stored_used, note=why)

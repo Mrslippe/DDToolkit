@@ -442,6 +442,81 @@ def test_last_sync_is_none_before_any_import(client, pair_token):
     assert client.get("/auth/pairing").json()["last_sync"] is None
 
 
+# ── 合并：浏览器缺的键可以从"应用已有那份"补上（2026-10-06 用户实测的形状）──────
+
+def test_browser_missing_key_is_filled_from_the_stored_cookie(client, pair_token):
+    """**用户现场**：浏览器里只有 `web_session`（`a1` 是页面 JS 铸的，库里没有），
+    而应用里那份有 `a1` ⇒ 合并后照样能同步，并**如实说 `a1` 不是这次从浏览器读到的**。
+
+    反向验证：把 `merge_cookie_strings` 换成"直接用浏览器那条" ⇒ 本条红（会 400）。
+    """
+    # 应用里已经有一条（含 a1）
+    assert _post(client, "xiaohongshu", "a1=old-a1-value; web_session=old-session",
+                 token=pair_token).status_code == 200
+
+    # 这次浏览器只给 web_session（a1 读不到）
+    r = _post(client, "xiaohongshu", "web_session=new-session", token=pair_token)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is True
+    assert body["from_stored"] == ["a1"], body
+    # 落盘的是**合并后**的串：a1 保住、web_session 用新的
+    env = _env_bytes().decode("utf-8")
+    assert "a1=old-a1-value" in env
+    assert "web_session=new-session" in env
+
+
+def test_merge_is_add_only_never_drops_existing_keys(client, pair_token):
+    """**只增不删**（设计案 §3.3）：浏览器这次没给的键一个都不许丢。
+
+    反向验证：把合并写成"以浏览器那条为准" ⇒ 本条红（`webId` 会消失）。
+    """
+    assert _post(client, "xiaohongshu", "a1=a1-value; webId=web-id-value; web_session=s1",
+                 token=pair_token).status_code == 200
+    assert _post(client, "xiaohongshu", "web_session=s2", token=pair_token).status_code == 200
+    env = _env_bytes().decode("utf-8")
+    for want in ("a1=a1-value", "webId=web-id-value", "web_session=s2"):
+        assert want in env, f"合并把 {want!r} 弄丢了"
+
+
+def test_merge_prefers_the_browser_value_on_name_clash(client, pair_token):
+    """同名以**浏览器为准**（新的一份更新）—— 别让旧的覆盖刚读到的。"""
+    assert _post(client, "xiaohongshu", "a1=old; web_session=old-session",
+                 token=pair_token).status_code == 200
+    assert _post(client, "xiaohongshu", "a1=new; web_session=new-session",
+                 token=pair_token).status_code == 200
+    env = _env_bytes().decode("utf-8")
+    assert "a1=new" in env and "a1=old" not in env
+
+
+def test_still_rejects_when_neither_side_has_the_key(client, pair_token):
+    """两边都没有 ⇒ 照样 400 且不落盘（合并不是"永远放行"）。
+
+    两种"补不上"要**分开报**：应用里根本没有这份 cookie / 有但它也缺这个键
+    （"什么都不说"与"说了但没说清"在排查时差别很大）。
+    """
+    before = _env_bytes()
+    r = _post(client, "xiaohongshu", "web_session=only-this", token=pair_token)
+    assert r.status_code == 400, r.text
+    assert r.json()["missing"] == ["a1"]
+    assert "没有这个平台的 cookie 可以补" in r.json()["note"], r.json()
+    assert _env_bytes() == before
+
+    # 应用里**有**一份（但同样缺 a1）⇒ 另一句
+    assert _post(client, "xiaohongshu", "web_session=first", token=pair_token) \
+        .status_code == 400, "第一次就没有 a1 ⇒ 不该落盘"
+    assert _env_bytes() == before
+
+
+def test_merge_does_not_leak_stored_values_into_the_receipt(client, pair_token):
+    """回执里不许出现**应用已有那份**的值（合并后更容易漏 —— 顺手钉一条）。"""
+    secret = "STORED-SECRET-MUST-NOT-LEAK"
+    assert _post(client, "xiaohongshu", f"a1={secret}; web_session=s1",
+                 token=pair_token).status_code == 200
+    body = _post(client, "xiaohongshu", "web_session=s2", token=pair_token).json()
+    assert secret not in str(body), "回执回显了应用已有那份的 cookie 值"
+
+
 # ── /healthz 的认领标识（E2 的扩展靠它认领端口）──────────────────────────────
 
 def test_healthz_advertises_the_app_identifier(client):
