@@ -57,6 +57,21 @@ const PAGE_SIZE = 20
  *  archive = **数据视图**（直播日历 / 粉丝趋势）） */
 type AppView = 'cards' | 'list' | 'archive' | 'profile'
 
+/**
+ * **档案视图的开关**（2026-10-05 用户：「档案视图暂时隐藏起来，因为目前还没开发完」）。
+ *
+ * ⚠️ 是**隐藏**不是删除：组件、样式、类型全留着，想放出来把这里改成 `true` 即可。
+ * ⚠️ 收口在**一处**：视图钮的渲染、以及"从外面回来的视图"（`sessionStorage` 的
+ * 深休眠恢复 / `?view=` 深链接）都要过 `allowView()` —— 只藏按钮而留着旧入口，
+ * 就是"藏起来了但还进得去"的假隐藏（用户下次深休眠唤醒会莫名回到档案视图）。
+ */
+const PROFILE_VIEW_ENABLED = false
+
+/** 外部带回来的视图 → 实际可用的视图（见 `PROFILE_VIEW_ENABLED`）。 */
+function allowView(v: AppView): AppView {
+  return v === 'profile' && !PROFILE_VIEW_ENABLED ? 'cards' : v
+}
+
 /** 归档过滤类型（all / unarchived / archived）随 P10-A 的筛选弹窗一起搬到
  *  `components/PostFilterPop.tsx`（弹窗是它的唯一编辑入口，类型与 UI 同处）。 */
 
@@ -131,7 +146,9 @@ export default function PostsPage() {
         restoredRef.current = true
       }
       if (want === 'cards' || want === 'list' || want === 'archive' || want === 'profile') {
-        return want
+        // ⚠️ 过 `allowView()`：档案视图隐藏期间，"上次停在档案视图"必须落回展示页
+        //    （见 `PROFILE_VIEW_ENABLED` —— 只藏按钮不改这里就是假隐藏）
+        return allowView(want)
       }
     } catch {
       /* sessionStorage 不可用：按默认视图 */
@@ -576,7 +593,11 @@ export default function PostsPage() {
   //    结果：本文件少 4 个 state（pillOrder/dragIdx/pressTimer/dragMoved）。
 
 return (
-    <div className="posts-panel" ref={panelRef} onMouseMove={onPanelMouseMove}>
+    <div className="posts-panel" ref={panelRef} onMouseMove={onPanelMouseMove}
+         /* 背景明暗档挂在**面板根**上（不是 `.hero`）：list / archive 两个视图的左上角大标题
+            （`.page-title`）也在面板里、也压在背景图上，要跟着一起切（用户 2026-10-05）。
+            CSS 侧统一按 `.posts-panel[data-ink=…]` 写。 */
+         data-ink={inkTone ?? undefined}>
       {/* 右栏永久背景：自定义背景(custom 全图清晰) 优先，否则头像铺底 + 渐变纱罩；
           key=背景 src → 换装淡入不瞬跳 */}
       {backdropSrc && (
@@ -676,14 +697,22 @@ return (
           >
             <BarChart3 className="size-[18px]" />
           </button>
-          <button
-            type="button"
-            className={`view-btn ${view === 'profile' ? 'on' : 'off'}`}
-            title="档案视图（卡片画布）"
-            onClick={() => setView('profile')}
-          >
-            <Fingerprint className="size-[18px]" />
-          </button>
+          {/* 档案视图**暂时隐藏**（2026-10-05 用户：「档案视图暂时隐藏起来，因为目前还没开发完」）。
+              ⚠️ 是**隐藏**不是删除：`ProfileBoardView`、`AppView` 里的 `'profile'`、样式全留着，
+              要放出来只改下面这个开关 + 上面那个 `PROFILE_VIEW_ENABLED` 的判断。
+              ⚠️ 同时**必须挡住两条旧入口**（否则"藏了按钮但还进得去"= 假隐藏）：
+              ① `sessionStorage` 里存的"上次视图"（深休眠唤醒会带回来）；
+              ② `?view=profile` 这类深链接 —— 两条都在 `PROFILE_VIEW_ENABLED` 那里收口。 */}
+          {PROFILE_VIEW_ENABLED && (
+            <button
+              type="button"
+              className={`view-btn ${view === 'profile' ? 'on' : 'off'}`}
+              title="档案视图（卡片画布）"
+              onClick={() => setView('profile')}
+            >
+              <Fingerprint className="size-[18px]" />
+            </button>
+          )}
           {/* 2026-09-08（用户）：移除未接线的「动态视图」占位图标——避免点了没反应的假入口 */}
         </div>
       </div>
@@ -756,8 +785,6 @@ return (
             isLive={isLive}
             onAddAccount={() => setAddAccountOpen(true)}
             onOpenSettings={() => setSettingsOpen(true)}
-            /* 背景明暗 → 「未开播」标签与签名的字色（`data-ink`；量不到传 null ⇒ CSS 不选那条规则） */
-            inkTone={inkTone}
           />
         )}
 

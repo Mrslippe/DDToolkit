@@ -24,11 +24,11 @@ python scripts/ui_probe.py --cell-pop                 # 日历格 hover 悬浮�
 python scripts/ui_probe.py --vtuber 15 --messages     # 推送通道端到端（M0b，devlog/242）—— 三档主流程也跑它，这条是单跑定位用
 ```
 ⚠️ 需要完整权限（Vite 的 esbuild 与无头浏览器在受限沙箱会失败）；失败时保留 `_ui_probe_tmp/`（DOM dump + 截图 profile）供定位。`--shot*` 系列**只截图、不参与断言** —— 布局不变量只管「在不在框里」，配色/密度这类还得看图。
-它自动：复制开发数据目录 → 起后端 → 起 Vite → 无头浏览器加载 `/vtubers/<id>?probe=1`（`frontend/src/dev/probe.ts` 依次切四个视图、在列表页跑一遍筛选弹窗全链路（开 → 预设 → 确认 → 重置 → Esc）、再点一次「投稿」筛选，共八段测量），断言八组不变量（**每条断言的"为什么"都写在 `ui_probe.py` / `probe.ts` 的对应注释里**）：
+它自动：复制开发数据目录 → 起后端 → 起 Vite → 无头浏览器加载 `/vtubers/<id>?probe=1`（`frontend/src/dev/probe.ts` 依次切视图、在列表页跑一遍筛选弹窗全链路（开 → 预设 → 确认 → 重置 → Esc）、再点一次「投稿」筛选，默认共**九段**测量 —— 档案视图隐藏期间少一段，见下），断言八组不变量（**每条断言的"为什么"都写在 `ui_probe.py` / `probe.ts` 的对应注释里**）：
 
 | 不变量 | 含义 |
 |---|---|
-| **探针完整性** | **「跑通了」必须等于「量到了」**：量测段数须等于契约序列（`EXPECTED_TAGS`，八段）· 不得量到空置页（`empty`）· 页面自报的 `degraded`（视图钮点不中 / 投稿 chip 缺失 / 无视图光条）一律判失败。反例：`_first_vtuber` 一失败路由就落到 `/`，探针只 emit 一段 `empty`、**所有卡片与筛选断言静默空转，脚本照旧打印 `[ok]` 退出 0**（2026-09-11 静态审计点出的假通过路径） |
+| **探针完整性** | **「跑通了」必须等于「量到了」**：量测段数须等于契约序列（`EXPECTED_TAGS`，十条）**减去按设计隐藏的视图** · 不得量到空置页（`empty`）· 页面自报的 `degraded`（视图钮点不中 / 投稿 chip 缺失 / 无视图光条）一律判失败。⚠️ **"少一段"与"探针漏了一段"必须分得开**（2026-10-05，`devlog/356`）：档案视图被 `PROFILE_VIEW_ENABLED=false` 暂时隐藏 ⇒ 探针把**实际渲染的视图钮枚数**（`viewBtnCount`）与**这一轮打算量的帧**（`viewsExpected`）一起报回来，脚本按钮数算该要求哪几帧（**不抄产品里那个开关**，视图放出来时判据自己跟上）；钮数 < 4 时 `viewsExpected` 里也不许出现 `profile`。同理 `_assert_board` / `--board` 在视图藏着时**明示跳过**（`[注]` / `[SKIP]`）而不是静默返回空 —— 静默才是真坑，"没人跑 = 不存在"。反例：`_first_vtuber` 一失败路由就落到 `/`，探针只 emit 一段 `empty`、**所有卡片与筛选断言静默空转，脚本照旧打印 `[ok]` 退出 0**（2026-09-11 静态审计点出的假通过路径） |
 | `scrollbarPx == [0,0]` | 文档层永不出现滚动条（窗口级滚动条 = 内容宽度跳 12px 的根源） |
 | 无可见出窗 / 无容器横向溢出 / 无原生滚动条 | 没有元素越过窗口左右缘（被 `overflow:hidden` 裁掉的折叠组不算）· `overflow-x:auto/scroll` 容器不得 `scrollWidth > clientWidth`（白名单 `.type-chips` 有意横滚）· 滚动容器统一 OverlayScroll |
 | 列表卡片列宽契约 | `.list-inner` ≤ 900px · 卡片铺满该列且等宽 · 封面恒 220 且不被左缘裁切（2026-09-08 事故固化：OverlayScroll 插层让 `.list-scroll > .list-inner` 静默失效，列宽随内容在 566～1350px 之间乱跳）。**列宽量测已与「列表里有没有帖子」解耦**（`measure().contract` 常驻）—— 旧写法把守卫写在 `cards` 非空分支里，列表一空断言就失效 |

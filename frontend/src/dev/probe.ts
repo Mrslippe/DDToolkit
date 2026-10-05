@@ -22,12 +22,26 @@ interface ProbeView {
   title: string
 }
 
-const VIEWS: ProbeView[] = [
+const ALL_VIEWS: ProbeView[] = [
   { key: 'archive', title: '数据视图' },
   { key: 'cards', title: '展示页' },
   { key: 'list', title: '帖子列表' },
   { key: 'profile', title: '档案视图' },
 ]
+
+/**
+ * 这一轮实际要走的视图：**按"视图钮真的在不在"过滤**（2026-10-05）。
+ *
+ * 来由：`profile`（档案视图）被 `PostsPage` 的 `PROFILE_VIEW_ENABLED` 暂时隐藏了
+ * （用户：「还没开发完」）—— 探针若照旧去点它，`clickView` 会失败、`degraded` 里多一条
+ * `view:profile`，而那是**按设计**隐藏的，不是产品坏了。
+ * ⚠️ 判据取**实际的按钮数**而不是抄一份 `PROFILE_VIEW_ENABLED`：视图重新放出来时探针
+ * 自己就跟上了（两处各写一份开关，迟早漂）。
+ */
+function activeViews(): ProbeView[] {
+  const n = document.querySelectorAll('.view-btn').length
+  return n >= ALL_VIEWS.length ? ALL_VIEWS : ALL_VIEWS.filter((v) => v.key !== 'profile')
+}
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -1199,25 +1213,35 @@ async function probeFilterPop(out: unknown[]): Promise<void> {
 /** 顶栏展示策略采样（2026-09-10）：把「后端事实」与「顶栏实际渲染」一起记下来，
  *  由 `scripts/ui_probe.py` 断言蕴含关系（自动节拍不得占顶栏）。 */
 async function sampleBackdropInk() {
-  const hero = document.querySelector<HTMLElement>('.hero')
-  const backdrop = document.querySelector<HTMLElement>('.hero-backdrop')
-  if (!hero || !backdrop) return null
+  // ⚠️ **载体是 `.posts-panel`，不是 `.hero`**（2026-10-05 修）：`data-ink` 原来挂在卡片根
+  //    `.hero` 上，第三条需求（「list / archive 左上角大标题也跟着切」）之后挂到了**面板根**
+  //    （`PostsPage.tsx` 的 `.posts-panel`，CSS 也统一按 `.posts-panel[data-ink=…]` 写）。
+  //    探针原来只往 `.hero` 上挂 ⇒ 三处颜色一个都不动，门禁把"尺子挂错了地方"报成
+  //    "字色没跟着变"（三档各 2 条假红就是这么来的）。
+  const panel = document.querySelector<HTMLElement>('.posts-panel')
+  if (!panel) return null
+  // 卡片视图才有 hero；列表/档案视图只有左上角大标题 —— 逐处记存在性，判据在脚本侧按视图要求
   const colorOf = (el: HTMLElement | null) => (el ? getComputedStyle(el).color : null)
+  const title = () => document.querySelector<HTMLElement>('.page-title')
   const sign = () => document.querySelector<HTMLElement>('.hero-sign')
   // ⚠️ 取 **`.live-tag`（两态都算）**：原来写 `.live-tag.off`，遇到"直播中"的 V 就量到 null
   //    ⇒ 判据把"元素不存在"当成"颜色没跟着变"（2026-10-05 门禁里就是这么假红的）。
   //    用户的口径本来就要求**两态**都随底图切（`.live` 原本写死黑字，深底上同样看不见）。
   const tag = () => document.querySelector<HTMLElement>('.live-tag')
+  const name = () => document.querySelector<HTMLElement>('.hero-name')
   const read = () => {
     const bd = document.querySelector<HTMLElement>('.hero-backdrop')
     const custom = !!bd?.classList.contains('custom')
-    const url = (getComputedStyle(bd as HTMLElement).backgroundImage.match(/url\("?(.+?)"?\)/) ?? [])[1] ?? null
+    // ⚠️ `bd` 可能为 null（这个 V 没有背景图）⇒ 不能直接 `getComputedStyle(bd)`（会抛）
+    const url = bd
+      ? (getComputedStyle(bd).backgroundImage.match(/url\("?(.+?)"?\)/) ?? [])[1] ?? null
+      : null
     return { custom, url }
   }
 
   // ① 先照实记一遍现场（可能是头像铺底态）
   const first = read()
-  const heroBefore = hero.getAttribute('data-ink')
+  const inkBefore = panel.getAttribute('data-ink')
 
   // ② **探针自己造一张深色背景传上去**（2026-10-05）：不这么做，"自定义背景 ⇒ 换浅字"
   //    这条链路在这台机器的数据目录里根本没有样本，判据会**空转成假绿**。
@@ -1256,24 +1280,30 @@ async function sampleBackdropInk() {
     const m = await measureBackdropTone(now.url)
     measured = m ? { tone: m.tone, luminance: m.luminance } : null
   }
-  const before = { sign: colorOf(sign()), tag: colorOf(tag()), ink: hero.getAttribute('data-ink') }
+  const before = {
+    sign: colorOf(sign()), tag: colorOf(tag()), name: colorOf(name()),
+    title: colorOf(title()), ink: inkBefore,
+  }
 
   // ④ 手动挂上两档 → 量 CSS 有没有照做（与这张图本身深浅无关）。
   //    ⚠️ **两档都要量**：第二版（用户："名字、开播胶囊文字、签名统一修改亮暗"）之后，
   //    `light` 那一档也必须把三处**变暗** —— 只验 dark 会漏掉"亮底仍是灰字"那个洞。
-  const name = () => document.querySelector<HTMLElement>('.hero-name')
+  const groups = { hero: !!name() || !!sign() || !!tag(), title: !!title() }
+  /** 逐处记「这一帧真的有它吗」（比按组粗判更准）：`.hero-sign` 在没签名的 V 上不渲染，
+   *  按组判会把"元素不存在"当成"颜色没跟着变"（`.live-tag.off` 那次假红就是这么来的）。 */
+  const els = { name: !!name(), sign: !!sign(), tag: !!tag(), title: !!title() }
   const snap = () => ({
-    name: colorOf(name()), sign: colorOf(sign()), tag: colorOf(tag()),
+    name: colorOf(name()), sign: colorOf(sign()), tag: colorOf(tag()), title: colorOf(title()),
     nameShadow: name() ? getComputedStyle(name()!).textShadow : null,
   })
-  hero.setAttribute('data-ink', 'dark')
+  panel.setAttribute('data-ink', 'dark')
   await sleep(60)
   const afterDark = snap()
-  hero.setAttribute('data-ink', 'light')
+  panel.setAttribute('data-ink', 'light')
   await sleep(60)
   const afterLight = snap()
-  if (heroBefore) hero.setAttribute('data-ink', heroBefore)
-  else hero.removeAttribute('data-ink')
+  if (inkBefore) panel.setAttribute('data-ink', inkBefore)
+  else panel.removeAttribute('data-ink')
 
   // ⑤ 收尾：删掉探针传的那张，数据目录回到原样（不留痕）
   if (uploaded && vid) {
@@ -1292,6 +1322,11 @@ async function sampleBackdropInk() {
     measuredTone: measured?.tone ?? null,
     measuredLuminance: measured?.luminance ?? null,
     inkAttr: before.ink,
+    /** 这一帧上真的有哪几组元素（hero 三处 / 左上角大标题）——
+     *  判据按视图要求"该有的必须有"，避免元素没渲染时判据静默空转 */
+    groups,
+    /** 逐处存在性（见 `els`）：判据只对**真的在**的那几处要求颜色 */
+    els,
     colorBefore: before,
     colorAfterDark: afterDark,
     colorAfterLight: afterLight,
@@ -4595,10 +4630,13 @@ export async function runUiProbe(): Promise<void> {
     }
 
     // ① 视图切换：默认停在「展示页」，所以从「帖子列表」开始循环一圈（最后回到展示页）
+    //    ⚠️ `档案卡`（profile）那一档**按按钮数过滤**：它被 `PROFILE_VIEW_ENABLED` 暂时隐藏
+    //    （用户：「还没开发完」），照旧去点会多报一条 `view:档案卡` 的 degraded —— 那是按设计。
+    const hasProfile = viewBtns().length >= 4
     const VIEW_TARGETS: Array<{ idx: number; name: string; sel: string }> = [
       { idx: 1, name: '帖子列表', sel: '.post-grid, .posts-placeholder' },
       { idx: 2, name: '档案', sel: '.live-calendar' },
-      { idx: 3, name: '档案卡', sel: '.empty-state' },
+      ...(hasProfile ? [{ idx: 3, name: '档案卡', sel: '.empty-state' }] : []),
       { idx: 0, name: '展示页', sel: '.hero' },
     ]
     const views: Array<{ target: string; ms: number }> = []
@@ -5729,6 +5767,9 @@ export async function runUiProbe(): Promise<void> {
       .find((b) => (b.title || '').startsWith('档案视图'))
     viewBtn?.click()
     result.viewFound = !!viewBtn
+    // 视图钮实际几枚（3 = 档案视图被 `PROFILE_VIEW_ENABLED` 按设计藏了）：
+    // 脚本据此把"按设计藏了"和"钮坏了"分开，不再把前者报成红的（2026-10-05）
+    result.viewBtnCount = document.querySelectorAll('.view-btn').length
     await waitFor(() => boardEl())
     result.before = snapshot()
     result.cols = boardEl()?.getAttribute('data-board-cols') ?? null
@@ -5894,6 +5935,14 @@ export async function runUiProbe(): Promise<void> {
     return
   }
 
+  // 视图钮**实际渲染了几枚** + 这一轮**打算走哪几帧**（2026-10-05）。
+  // 为什么必须报出去：档案视图被 `PROFILE_VIEW_ENABLED` 暂时隐藏了（用户：「还没开发完」），
+  // 于是"少了 profile 那一帧"既可能是**按设计隐藏**、也可能是**探针把视图漏了**——
+  // 只报 `views` 的话这两件事在脚本侧长得一模一样。把「钮数」和「打算量的帧」都给出去，
+  // 脚本就能自己算该要求哪几帧（判据不抄产品里的那个开关，见 `activeViews()`）。
+  const viewBtnCount = document.querySelectorAll('.view-btn').length
+  const viewsExpected = activeViews().map((v) => v.key)
+
   if (!document.querySelector('.view-btn')) {
     // 走到这里 = 页面上没有视图光条。两种可能，都不能当「量过了」：
     //  ① 路由落在 `/`（没有选中 VTuber，通常是 `_first_vtuber` 失败）；
@@ -5902,7 +5951,7 @@ export async function runUiProbe(): Promise<void> {
     degraded.push('no-view-btn')
     out.push(measure('empty'))
   } else {
-    for (const v of VIEWS) {
+    for (const v of activeViews()) {
       if (!clickView(v.title)) degraded.push(`view:${v.key}`)
       await sleep(900) // 场景入场 0.22s + 数据到位
       out.push({ ...measure(v.key), backdropInk: await sampleBackdropInk() })
@@ -5931,6 +5980,42 @@ export async function runUiProbe(): Promise<void> {
           degraded.push('chip:投稿')
         }
       }
+    }
+
+    // 批量任务浮窗的几何（2026-10-05，devlog/356）：用户截图报「选项超出了窗口」——
+    // 这条判"内容有没有溢出白卡"（`scrollWidth > clientWidth` 或某一行右缘超过卡片右缘）。
+    // 放在默认三档里 ⇒ **进门禁**（原来只有 `?probe=capabilities` 会打开这个浮窗，而那条不在 A 档）。
+    document.querySelector<HTMLElement>('.list-pull-btn')?.click()
+    await sleep(900)                     // 浮窗是本地渲染，这一拍足够
+    {
+      const box = (el?: HTMLElement | null) => {
+        if (!el) return null
+        const r = el.getBoundingClientRect()
+        return { x: Math.round(r.left), y: Math.round(r.top),
+                 w: Math.round(r.width), h: Math.round(r.height),
+                 right: Math.round(r.right) }
+      }
+      const dlg = document.querySelector<HTMLElement>('[role="dialog"]')
+      const rows = [...document.querySelectorAll<HTMLElement>('[data-batch-action]')]
+      // ⚠️ 挂在**最后一个视图**那份结果上，不新推一个 view：`views` 里的 tag 会被
+      //    布局判据当成"视图"去查 `--toolbar-gap-<view>`（第一次推 `batch-dialog` 就因此
+      //    多报了一条"没映射它 —— 留白判据会静默空转"）。
+      const slot = out[out.length - 1] as Record<string, unknown> | undefined
+      if (slot) {
+        slot.batchDialog = {
+          rect: box(dlg),
+          rowCount: rows.length,
+          /** 内容比可视区宽出来的像素（> 0 = 溢出） */
+          overflowX: dlg ? dlg.scrollWidth - dlg.clientWidth : null,
+          /** 最右那一行的右缘 vs 卡片右缘（差值 > 1 = 顶出去了） */
+          rowRightMax: rows.length
+            ? Math.max(...rows.map((r) => Math.round(r.getBoundingClientRect().right))) : null,
+          dialogRight: dlg ? Math.round(dlg.getBoundingClientRect().right) : null,
+          rows: rows.map((r) => box(r)),
+        }
+      }
+      dlg?.querySelector<HTMLElement>('[data-slot="dialog-close"]')?.click()
+      await sleep(250)
     }
   }
 
@@ -5967,7 +6052,8 @@ export async function runUiProbe(): Promise<void> {
   // 推送通道端到端（M0b，devlog/242）：**放在主流程里**，这样三档宽度的门禁顺带守着它 ——
   // 只做一个 `--messages` 专用模式的话，那条判据会变成"没人跑 = 不存在"。
   const messages = await probeMessages()
-  pre.textContent = JSON.stringify({ mode: 'main', views: out, topbar, shell, auth, degraded, messages })
+  pre.textContent = JSON.stringify({ mode: 'main', views: out, topbar, shell, auth, degraded,
+                                     messages, viewBtnCount, viewsExpected })
   document.body.appendChild(pre)
   document.title = 'UI_PROBE_DONE'
 }

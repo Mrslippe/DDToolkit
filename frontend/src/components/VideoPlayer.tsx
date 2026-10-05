@@ -173,6 +173,17 @@ const HOLD_AT = 0.5
 const RESUME_AT = 2.0
 const DEADLOCK_MS = 1200
 const HOLD_POLL_MS = 200
+
+/**
+ * 按住右方向键试听的**倍速**与**触发门槛**（2026-10-05 用户口径，`devlog/356`）：
+ * 按住超过 `HOLD_TRIGGER_MS` 才加速（短按仍然是快进 5 秒），松手立刻恢复用户选的倍速。
+ *
+ * ⚠️ 倍速**不写进 `playerPrefs`**：它是"按住时临时听一下"，不是用户的偏好 ——
+ * 写进去会让底栏那个倍速文字跟着变、并且下次打开还以为用户选了 3×（用户明确说了
+ * "只在播放器里展示倍速图标，状态行不需要收到这些消息"）。
+ */
+const HOLD_SPEED = 3
+const HOLD_TRIGGER_MS = 250
 /** 全屏时贴着下边缘是想**呼出**控件，不是"离开"（用户口径，devlog/301） */
 const BOTTOM_HOT_ZONE = 72
 /**
@@ -567,6 +578,10 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
       const v = videoRef.current
       if (v) applyPlayerPrefs(v)
     }
+    // ⚠️ **按住加速期间要把倍速改回来**（2026-10-05）：`applyPlayerPrefs` 用的是**持久化**的
+    //    `prefs.rate`，而这条 effect 的依赖里有 `prefs` —— 按住 3× 时只要有任何偏好变化
+    //    （例如顺手按↑调音量），它就会把倍速拉回 1×（"按住加速忽然失效"）。
+    applyEffectiveRate()
   }, [prefs, src, dualTrack])
 
   /**
@@ -589,7 +604,7 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
       // （不经过我们的 `toggle`）。那时音轨若还在放，漂移会立刻超过阈值 ⇒ 每秒把它拽回
       // 冻结的画面时间 ⇒ 同一小段被反复重放。暂停的事由 `pause` 监听负责（它会停音轨）。
       if (!v || !a || v.paused || a.paused || !Number.isFinite(a.currentTime)) return
-      const { snap, rate } = driftAction(a.currentTime - v.currentTime, prefs.rate)
+      const { snap, rate } = driftAction(a.currentTime - v.currentTime, rateRef.current)
       if (snap) a.currentTime = v.currentTime
       a.playbackRate = rate
     }, 1000)
@@ -1169,6 +1184,78 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
     }
   }, [startProbe, pauseForSeek, settleAudio])
 
+  /**
+   * **按住右方向键 = 3× 试听**（2026-10-05 用户；`devlog/356`）。
+   *
+   * 用户口径（问过两问）：**按住超过 250ms ⇒ 3×，松手恢复原速**；**短按（<250ms）仍然是
+   * 快进 5 秒**（右键原本就是 `seekBy(5)`，两件事共存）；显示**只在播放器里**给一枚角标，
+   * 不动底栏那个倍速文字、也不改持久化的偏好。
+   *
+   * 三个坑（都在下面就地注释）：
+   *  ① **`e.repeat`**：长按会连续发 keydown，不在第一下起表就会不停重置定时器 ⇒ 永远触发不了；
+   *  ② **漂移纠正那条 interval 每 10 秒会写 `a.playbackRate = prefs.rate`** ⇒ 必须让它用
+   *     `effectiveRate`，否则按住不到一秒就被拉回原速；
+   *  ③ **松手可能收不到**（焦点移走 / 窗口失焦）⇒ 挂窗口级 keyup + blur 兜底，不留"卡在 3×"。
+   */
+  const [holdSpeed, setHoldSpeed] = useState(false)
+  const holdTimer = useRef<number | null>(null)
+  /** 当前**有效**倍速：按住期间是 3×，否则是用户选的 `prefs.rate` */
+  const effectiveRate = holdSpeed ? HOLD_SPEED : prefs.rate
+  const rateRef = useRef(effectiveRate)
+  rateRef.current = effectiveRate
+
+  const applyEffectiveRate = () => {
+    const v = videoRef.current
+    const a = audioRef.current
+    if (v) v.playbackRate = rateRef.current
+    if (a) a.playbackRate = rateRef.current
+  }
+
+  useEffect(() => {
+    applyEffectiveRate()
+  }, [effectiveRate, dualTrack])
+
+  const beginHold = () => {
+    if (holdTimer.current != null) return
+    holdTimer.current = window.setTimeout(() => {
+      holdTimer.current = null
+      setHoldSpeed(true)
+    }, HOLD_TRIGGER_MS)
+  }
+
+  /** 松手：返回 `'tap'`（没到 250ms，调用方去快进）/ `'hold'`（刚结束加速） */
+  const endHold = (): 'tap' | 'hold' | 'none' => {
+    if (holdTimer.current != null) {
+      window.clearTimeout(holdTimer.current)
+      holdTimer.current = null
+      return 'tap'
+    }
+    if (holdSpeed) {
+      setHoldSpeed(false)
+      return 'hold'
+    }
+    return 'none'
+  }
+
+  /** ③ 的兜底：按住期间盯窗口的 keyup / blur（焦点跑了也要把倍速还回去） */
+  useEffect(() => {
+    if (!holdSpeed) return
+    const stop = () => {
+      if (holdTimer.current != null) {
+        window.clearTimeout(holdTimer.current)
+        holdTimer.current = null
+      }
+      setHoldSpeed(false)
+    }
+    const onUp = (e: KeyboardEvent) => { if (e.key === 'ArrowRight') stop() }
+    window.addEventListener('keyup', onUp)
+    window.addEventListener('blur', stop)
+    return () => {
+      window.removeEventListener('keyup', onUp)
+      window.removeEventListener('blur', stop)
+    }
+  }, [holdSpeed])
+
   // 快捷键：只在控件区域内接管（不抢抽屉的 Esc / 滚动）
   const onKey = (e: React.KeyboardEvent) => {
     const el = videoRef.current
@@ -1176,13 +1263,24 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
     const k = e.key.toLowerCase()
     if (k === ' ' || k === 'k') { e.preventDefault(); toggle() }
     else if (e.key === 'ArrowLeft') { e.preventDefault(); seekBy(-5) }
-    else if (e.key === 'ArrowRight') { e.preventDefault(); seekBy(5) }
+    else if (e.key === 'ArrowRight') {
+      e.preventDefault()
+      if (e.repeat) return          // ① 长按的重复事件不再重置定时器
+      beginHold()
+    }
     else if (e.key === 'ArrowUp') { e.preventDefault(); setPlayerPrefs({ volume: prefs.volume + 0.05, muted: false }) }
     else if (e.key === 'ArrowDown') { e.preventDefault(); setPlayerPrefs({ volume: prefs.volume - 0.05 }) }
     else if (k === 'm') { e.preventDefault(); setPlayerPrefs({ muted: !prefs.muted }) }
     else if (k === 'f') { e.preventDefault(); toggleFs() }
     // 浮层（hover 触发的那两个）—— 键盘钉住之后要能收起来（devlog/316）
     else if (k === 'escape') { qualityMenu.close(); rateMenu.close() }
+  }
+
+  /** 松手：短按补上"快进 5 秒"，长按只负责把倍速还回去（见上面 §1 的口径） */
+  const onKeyUp = (e: React.KeyboardEvent) => {
+    if (e.key !== 'ArrowRight') return
+    e.preventDefault()
+    if (endHold() === 'tap') seekBy(5)
   }
 
   if (dead || !src) {
@@ -1215,6 +1313,7 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
       data-vp-state={playing ? 'playing' : 'paused'}
       tabIndex={0}
       onKeyDown={onKey}
+      onKeyUp={onKeyUp}
       onMouseMove={(e) => {
         // 贴下边缘 = 想呼出控件（全屏时最常见）：当"钉住"处理
         nearBottomRef.current = nearBottom(e.clientY)
@@ -1305,6 +1404,15 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
         <div className="vp-spin" role="status" aria-label="正在缓冲">
           <Loader2 className="vp-spin-icon" aria-hidden="true" />
         </div>
+      )}
+
+      {/* 按住右方向键的**倍速角标**（2026-10-05 用户口径）：只在播放器里给这一枚，
+          底栏那个倍速文字与 `playerPrefs` 都**不动**（"状态行不需要收到这些消息"）。
+          `data-hold-rate` 是给探针/用例的抓手（量"按住时有没有真加速 + 有没有显示"）。 */}
+      {holdSpeed && (
+        <span className="vp-hold-rate" data-hold-rate={HOLD_SPEED}>
+          {HOLD_SPEED}×
+        </span>
       )}
 
       {/* 底栏：指针压在上面时**永不收起**（用户口径的另一半），离开后重新开始计时 */}

@@ -118,7 +118,13 @@ export default function BatchFetchDialog({ open, onOpenChange }: Props) {
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex flex-col gap-2">
+        {/* ⚠️ `min-w-0` **不能省**（2026-10-05，`devlog/356`）：用户截图报「选项超出了窗口」，
+            真机量到卡片 497px 而选项行右缘超出 **40px**。根因是**两件事凑一起**：
+            ① 每行说明用了 `truncate`（= `white-space: nowrap`）⇒ 那一列的**最小宽度 = 整句文字**；
+            ② `DialogContent` 是 grid，grid 子项默认 `min-width: auto` ⇒ 列可以被撑到最小宽度以上，
+               `max-w-md` 只约束卡片、拦不住这一列。`min-w-0` 把"能不能缩"这件事重新交给 flex/grid。
+            （门禁里有判据：`ui_probe` 量 `scrollWidth - clientWidth` 与"行右缘 vs 卡片右缘"。） */}
+        <div className="flex min-w-0 flex-col gap-2">
           {ACTIONS.map((a) => {
             const needsLogin = blockedIds.has(a.key)
             const busyBlocked = fetchBusy && a.key !== 'archive'

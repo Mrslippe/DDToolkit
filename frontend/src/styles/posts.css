@@ -859,65 +859,77 @@ img.hero-avatar {
    两档都**同时**作用在三处；没挂 `data-ink`（头像铺底态 / 量不到）⇒ 走各元素的原样式。
    ⚠️ 名字这一处是**第二版才纳入**的：第一版按用户当时的口径只改标签与签名，实测下来
       "名字黑、签名白"的割裂更难看，所以统一。 */
-.hero[data-ink='dark'] .hero-name {
+.posts-panel[data-ink='dark'] .hero-name {
   color: #ffffff;
   text-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
 }
 
-.hero[data-ink='light'] .hero-name {
+.posts-panel[data-ink='light'] .hero-name {
   color: #101828;
   text-shadow: 0 1px 3px rgba(255, 255, 255, 0.5);
 }
 
-.hero[data-ink='dark'] .live-tag.off {
+.posts-panel[data-ink='dark'] .live-tag.off {
   background: rgba(15, 23, 42, 0.34);
   border-color: rgba(255, 255, 255, 0.55);
   color: rgba(255, 255, 255, 0.94);
 }
 
-.hero[data-ink='light'] .live-tag.off {
+.posts-panel[data-ink='light'] .live-tag.off {
   background: rgba(255, 255, 255, 0.42);
   border-color: rgba(16, 24, 40, 0.32);
   color: rgba(16, 24, 40, 0.9);
 }
 
 /* 直播中那一态也要一起切：它原本写死黑字，深色背景上同样看不见 */
-.hero[data-ink='dark'] .live-tag.live {
+.posts-panel[data-ink='dark'] .live-tag.live {
   background: rgba(225, 68, 68, 0.3);
   border-color: rgba(255, 255, 255, 0.5);
   color: #ffffff;
 }
 
-.hero[data-ink='light'] .live-tag.live {
+.posts-panel[data-ink='light'] .live-tag.live {
   color: #101828;
 }
 
-.hero[data-ink='dark'] .live-tag.off .live-dot {
+.posts-panel[data-ink='dark'] .live-tag.off .live-dot {
   background: #cfd8e3;
 }
 
-.hero[data-ink='light'] .live-tag.off .live-dot {
+.posts-panel[data-ink='light'] .live-tag.off .live-dot {
   background: #64748b;
 }
 
-.hero[data-ink='dark'] .live-tag.clickable.off:hover {
+.posts-panel[data-ink='dark'] .live-tag.clickable.off:hover {
   border-color: rgba(255, 255, 255, 0.8);
 }
 
-.hero[data-ink='light'] .live-tag.clickable.off:hover {
+.posts-panel[data-ink='light'] .live-tag.clickable.off:hover {
   border-color: rgba(16, 24, 40, 0.55);
 }
 
 /* 浅字在深底图上仍可能压到"深色图里恰好偏亮的那一块" ⇒ 补一层暗投影兜底；
    暗字同理补一层极淡的亮投影。与名字那条 `text-shadow` 同族，只是更实一点。 */
-.hero[data-ink='dark'] .hero-sign {
+.posts-panel[data-ink='dark'] .hero-sign {
   color: rgba(255, 255, 255, 0.94);
   text-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
 }
 
-.hero[data-ink='light'] .hero-sign {
+.posts-panel[data-ink='light'] .hero-sign {
   color: rgba(16, 24, 40, 0.92);
   text-shadow: 0 1px 3px rgba(255, 255, 255, 0.45);
+}
+
+/* 左上角那行**大标题占位**（`.page-title`：list =「帖子列表」/ archive =「数据卡片」）
+   也跟着切（用户 2026-10-05 第三条：「list 视图和 archive 视图左上角的大标题也跟随背景图
+   明暗程度来修改明暗」）—— 它同样压在背景图上，深底图上原来的 `--c-text-main` 会糊。
+   与上面三处**同一个 `data-ink`**（一把尺子），但不加投影：20px/600 的占位字压一层投影显脏。 */
+.posts-panel[data-ink='dark'] .page-title {
+  color: rgba(255, 255, 255, 0.94);
+}
+
+.posts-panel[data-ink='light'] .page-title {
+  color: #101828;
 }
 
 /* 平台粉丝展示（1.2.4）：宽适应内容，不定数徽章集纵向居中排列，集间隔 10 */
@@ -6473,6 +6485,19 @@ img.hero-avatar {
 .vp-spin-icon { width: 26px; height: 26px; animation: vp-spin .9s linear infinite; }
 @keyframes vp-spin { to { transform: rotate(360deg); } }
 @keyframes vp-pulse { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
+
+/* 按住右方向键的**倍速角标**（2026-10-05，devlog/356）：与 `.vp-spin` 同一族玻璃片，
+   但靠右上角、小一号 —— 它是"临时状态"，不该跟"正在缓冲"抢中央那个位置。 */
+.vp-hold-rate {
+  position: absolute; right: 12px; top: 12px; z-index: 6;
+  padding: 3px 9px; border-radius: 8px;
+  background: rgba(15, 23, 42, .72); color: #fff;
+  border: 1px solid rgba(255, 255, 255, .22);
+  font-size: 12.5px; font-weight: 600; line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;            /* 纯展示：不许挡住右上角那块画面 */
+  text-shadow: 0 1px 3px rgba(0, 0, 0, .5);
+}
 /* reduced-motion：**别把转圈整个去掉**（那就成了"卡住了"）—— 换成呼吸式明暗，仍是"在动" */
 @media (prefers-reduced-motion: reduce) {
   .vp-spin-icon { animation: vp-pulse 1.4s ease-in-out infinite; }

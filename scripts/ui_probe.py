@@ -563,6 +563,11 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
             # 推送通道端到端（M0b，devlog/242）：`?probe=1` 主流程与 `?probe=messages` 都产出它。
             # 同样：白名单不登记 = 静默丢掉（本文件已踩过一次）
             "messages": data.get("messages"),
+            # 视图钮实际枚数 + 探针这一轮打算走哪几帧（2026-10-05）：档案视图被
+            # `PROFILE_VIEW_ENABLED` 暂时隐藏 ⇒ 脚本要能区分「按设计少一帧」与「探针漏了一帧」。
+            # ⚠️ 白名单不登记 = 静默丢掉（本文件已踩过一次，见上面那条注释）
+            "viewBtnCount": data.get("viewBtnCount"),
+            "viewsExpected": data.get("viewsExpected") or [],
             "degraded": data.get("degraded") or [],
             "dom": dom_file,
         }
@@ -573,7 +578,8 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
             "appSettings": None, "filterPill": None, "traySuspend": None,
             "closeAsk": None, "switchPerf": None, "profileSync": None,
             "pinned": None, "board": None, "motionCards": None, "deck": None,
-            "messages": None, "degraded": [], "dom": dom_file}
+            "messages": None, "viewBtnCount": None, "viewsExpected": [],
+            "degraded": [], "dom": dom_file}
 
 
 # ── 展示页 hero 药丸签名（P2 分层收敛 A 批次的位级回归护栏）─────────────
@@ -652,7 +658,7 @@ def _run_shot(edge: str, url: str, width: int, height: int, out_png: Path) -> No
 H_SCROLL_ALLOWLIST = ("type-chips",)
 
 
-def _assert_board(views: list[dict], width: int) -> list[str]:
+def _assert_board(views: list[dict], width: int, profile_expected: bool = True) -> list[str]:
     """档案视图（R37-P1，devlog/141）的卡片画布对账。
 
     判据四条（都是"算错了也看着能忍"的那类）：
@@ -670,10 +676,21 @@ def _assert_board(views: list[dict], width: int) -> list[str]:
       ⑦ **内容不裁切**：卡片高度 ≥ 自己默认行数时，正文不得溢出（溢出 = 内容静默消失）；
       ⑧ **各卡的"生动件"到位**：纪念日 hero 只在真有数字时出现（没有就**不许**有）、
          大事记有时间线（脊线 + 每行一个圆点 + 每行一枚 chip）、优质投稿每行一枚播放 chip。
+
+    ⚠️ `profile_expected=False`（2026-10-05）：档案视图被 `PROFILE_VIEW_ENABLED` **按设计**
+       藏起来了（用户：「暂时隐藏起来，因为目前还没开发完」）⇒ 这一档**够不着**画布。
+       这里返回一条**明示的跳过说明**（不是静默 `[]`）—— 静默返回才是真坑：
+       那一整套几何判据会退化成"没人跑 = 不存在"。视觉/几何的证据改由两侧承担：
+       ① 前端单测（`frontend/src/components/**` 的画布用例）；② 把视图放出来后本档自动接着验，
+       另有 `python scripts/ui_probe.py --board` 专门跑拖拽→几何→落库那条链。
     """
     bad: list[str] = []
     v = next((x for x in views if x.get("tag") == "profile"), None)
     if v is None:
+        if not profile_expected:
+            print("  [注] 档案视图按设计隐藏（`PROFILE_VIEW_ENABLED=False`，视图钮 3 枚）"
+                  "⇒ 卡片画布的几何判据本档够不着；视图放出来后这一档自动接着验")
+            return []
         return [f"@{width} board: 探针没量到 profile 视图（视图枚举改了？）"]
     board = v.get("board")
     if not board:
@@ -1766,50 +1783,89 @@ def _assert(views: list[dict], width: int) -> list[str]:
         if bi:
             # 「背景明暗 → 字色」（2026-10-05，devlog/355）：先打印再判 ——
             # 不打印的话"量到了没有"只能靠红不红去猜（探针里那类"看着过了其实空转"的坑）。
-            print(f"  [{v.get('tag')}] 背景明暗→字色：自定义背景="
+            vt = v.get("tag")
+            groups = bi.get("groups") or {}
+            els = bi.get("els") or {}
+            print(f"  [{vt}] 背景明暗→字色：自定义背景="
                   f"{bi.get('hasCustomBg')}（探针自建={bi.get('probeUploadedBg')!r}）"
                   f" 量得={bi.get('measuredTone')!r} 亮度={bi.get('measuredLuminance')}"
-                  f" data-ink={bi.get('inkAttr')!r}")
-            print(f"     签名色 {bi.get('colorBefore', {}).get('sign')} → 挂 dark 后 "
-                  f"{bi.get('colorAfterDark', {}).get('sign')} → 挂 light 后 "
-                  f"{bi.get('colorAfterLight', {}).get('sign')}")
-            print(f"     名字色 → dark {bi.get('colorAfterDark', {}).get('name')} ／ "
-                  f"light {bi.get('colorAfterLight', {}).get('name')} ｜ "
-                  f"标签色 → dark {bi.get('colorAfterDark', {}).get('tag')} ／ "
-                  f"light {bi.get('colorAfterLight', {}).get('tag')}")
+                  f" data-ink={bi.get('inkAttr')!r} 元素组={groups}")
+            dark_c, light_c = bi.get("colorAfterDark") or {}, bi.get("colorAfterLight") or {}
+            print(f"     名字/签名/标签 → dark {dark_c.get('name')} / {dark_c.get('sign')} / "
+                  f"{dark_c.get('tag')} ｜ light {light_c.get('name')} / {light_c.get('sign')} / "
+                  f"{light_c.get('tag')}")
+            print(f"     左上角大标题 → dark {dark_c.get('title')} ／ light {light_c.get('title')}")
+            # 这一帧**必须有哪几处**：卡片视图压在底图上的是名字与开播胶囊（hero 三处；
+            # 签名可选 —— 没签名的 V 不渲染它）；list / archive 两帧没有 hero，压着底图的是
+            # 左上角大标题（用户 2026-10-05 第三条要求的对象）。
+            # ⚠️ 「该有的那处没渲染」必须报红 —— 否则判据在这一帧就是空的，而空转长得像通过。
+            for key, what in (("name", "名字"), ("sign", "签名"), ("tag", "开播胶囊"),
+                              ("title", "左上角大标题")):
+                req = (key in ("name", "tag")) if vt == "cards" else (key == "title")
+                if req and not els.get(key):
+                    bad.append(f"@{width} {vt}: 背景明暗判据要量{what}（`{key}`），但这一帧上"
+                               f"没渲染它 —— 本帧这条判据会静默空转")
             if bi.get("hasCustomBg"):
                 # ⚠️ 「量不出明暗」在这一层**不判红**（2026-10-05 实测）：探针跑在**虚拟时间**
                 # 下，图片加载永远不完成（本仓老坑：`ProxyImage` 在探针里也会回落成占位），
                 # canvas 那条链路同理量不到 —— 判红就是把"环境限制"记成"产品坏了"。
-                # 这里只判**能判的两件**：①量到了就必须挂上对应档；②挂上"深"档后 CSS 真的换浅色
-                # （下面两条，那两条在真机上是有效的）。
+                # 这里只判**能判的**：①量到了就必须挂上对应档；②两档下 CSS 真的换了字色。
                 if bi.get("measuredTone") in ("dark", "light") \
                         and bi.get("inkAttr") != bi.get("measuredTone"):
-                    bad.append(f"@{width} cards: 量到 {bi.get('measuredTone')!r} 但卡片上没挂对应的 "
+                    bad.append(f"@{width} {vt}: 量到 {bi.get('measuredTone')!r} 但面板上没挂对应的 "
                                f"data-ink（实得 {bi.get('inkAttr')!r}）—— 字色不会跟着变")
                 if bi.get("inkAttr") and bi.get("measuredTone") is None:
                     print("      （量不到像素：探针虚拟时间下图片不加载 —— 属环境限制，"
                           "机制判据在 backdropTone.test.ts 的打桩用例里）")
-                sign_dark = str(bi.get("colorAfterDark", {}).get("sign") or "")
-                if "255, 255, 255" not in sign_dark:
-                    bad.append(f"@{width} cards: data-ink=dark 时签名仍是 {sign_dark!r}"
-                               f"（应当是浅色）")
-                tag_dark = str(bi.get("colorAfterDark", {}).get("tag") or "")
-                if "255, 255, 255" not in tag_dark:
-                    bad.append(f"@{width} cards: data-ink=dark 时「未开播」标签仍是 {tag_dark!r}")
-                # 亮底那一档：三处（名字 / 开播胶囊 / 签名）必须**一起变暗**
+                # 「深底 ⇒ 亮字」（用户第一张截图：「灰字在深色背景下还是不清楚」）：
+                # 名字 / 开播胶囊 / 签名 / 左上角大标题 —— **这一帧上真的在**的那几处一起换。
+                for what, key, present in (("名字", "name", els.get("name")),
+                                           ("签名", "sign", els.get("sign")),
+                                           ("开播胶囊", "tag", els.get("tag")),
+                                           ("左上角大标题", "title", els.get("title"))):
+                    if not present:
+                        continue
+                    val = str(dark_c.get(key) or "")
+                    if "255, 255, 255" not in val:
+                        bad.append(f"@{width} {vt}: data-ink=dark 时{what}仍是 {val!r}"
+                                   f"（应当是浅色）")
+                # 亮底那一档：同样这几处必须**一起变暗**
                 # （用户 2026-10-05 第二张截图：「七海的这张还是不明显……统一修改亮暗」）
-                light = bi.get("colorAfterLight", {}) or {}
-                for what, want_darker in (("名字", "name"), ("签名", "sign"), ("未开播标签", "tag")):
-                    val = str(light.get(want_darker) or "")
+                for what, key, present in (("名字", "name", els.get("name")),
+                                           ("签名", "sign", els.get("sign")),
+                                           ("开播胶囊", "tag", els.get("tag")),
+                                           ("左上角大标题", "title", els.get("title"))):
+                    if not present:
+                        continue
+                    val = str(light_c.get(key) or "")
                     # 深的判定：取颜色里最大的那个通道值 —— "16, 24, 40" ⇒ 40；白字/灰字都会 > 100
                     nums = [int(n) for n in re.findall(r"\d+", val)[:3]] or [255]
                     if max(nums) > 100:
-                        bad.append(f"@{width} cards: data-ink=light 时{what}仍是 {val!r}"
+                        bad.append(f"@{width} {vt}: data-ink=light 时{what}仍是 {val!r}"
                                    f"（亮底该用暗字 —— 灰字压在偏亮的底上就是「不明显」）")
             elif bi.get("inkAttr"):
-                bad.append(f"@{width} cards: 没有自定义背景却挂了 data-ink="
+                bad.append(f"@{width} {vt}: 没有自定义背景却挂了 data-ink="
                            f"{bi.get('inkAttr')!r}（头像铺底态不该换字色）")
+
+        bd = v.get("batchDialog")
+        if bd:
+            # 批量任务浮窗：**内容不许溢出白卡**（用户 2026-10-05 截图：「选项超出了窗口」）
+            print(f"  [{v.get('tag')}] 批量任务浮窗：卡片={bd.get('rect')} "
+                  f"行数={bd.get('rowCount')} 横向溢出={bd.get('overflowX')}px "
+                  f"行右缘最大={bd.get('rowRightMax')} 卡片右缘={bd.get('dialogRight')}")
+            if bd.get("rect") is None:
+                bad.append(f"@{width} batch-dialog: 点了「拉取」但浮窗没打开")
+            elif (bd.get("overflowX") or 0) > 1:
+                bad.append(f"@{width} batch-dialog: 内容比卡片宽 {bd.get('overflowX')}px"
+                           f"（会被裁 / 顶出去）")
+            elif (bd.get("rowRightMax") and bd.get("dialogRight")
+                  and bd["rowRightMax"] > bd["dialogRight"] + 1):
+                bad.append(f"@{width} batch-dialog: 选项行右缘 {bd['rowRightMax']} 超过了"
+                           f"卡片右缘 {bd['dialogRight']}（超出 "
+                           f"{bd['rowRightMax'] - bd['dialogRight']}px）")
+            if (bd.get("rowCount") or 0) < 5:
+                bad.append(f"@{width} batch-dialog: 只有 {bd.get('rowCount')} 项"
+                           f"（应当 5 项：账号 / 帖子 / 更新 / 归档 / 第三方数据）")
     return bad
 
 
@@ -2075,6 +2131,21 @@ EXPECTED_TAGS = [
     "list-video", "profile",
 ]
 
+#: **暂时隐藏的视图**（2026-10-05）：档案视图被 `PROFILE_VIEW_ENABLED=False` 收起来了
+#: （用户：「档案视图暂时隐藏起来，因为目前还没开发完」）⇒ 页面上只有 3 枚视图钮，
+#: `profile` 那一帧**按设计**不存在。
+#:
+#: ⚠️ 判据**不抄产品里那个开关**，而是看**探针报回来的视图钮枚数**（`viewBtnCount`，页面实测）：
+#: 视图重新放出来时判据自己就跟上，不会出现"两处各写一份开关、迟早漂"。
+#: 少一帧与"探针把这帧漏了"必须能分开 —— 所以钮数 < 4 时才允许缺 `profile`，
+#: 且此时 `viewsExpected`（探针自报的打算量的帧）里也不许出现它。
+HIDDEN_VIEWS = {"profile"}
+
+
+def _profile_hidden(res: dict) -> bool:
+    """档案视图现在是不是**按设计**藏着（看实际渲染的视图钮枚数）。"""
+    return (res.get("viewBtnCount") or 0) < 4
+
 
 def _assert_probe_integrity(res: dict, width: int, archive: bool = False) -> list[str]:
     """探针自证「确实按契约量到了」——防的最是「跑通了但什么都没测」。
@@ -2107,9 +2178,29 @@ def _assert_probe_integrity(res: dict, width: int, archive: bool = False) -> lis
             f"@{width} {tag}: 量到空置页（没有选中 VTuber）—— 布局断言全部空转。"
             "检查开发数据目录里是否有 V、以及路由是否取到了 id"
         )
-    missing = [t for t in EXPECTED_TAGS if t not in tags]
+    n_btn = res.get("viewBtnCount")
+    if n_btn is None:
+        # 老版探针不带这个字段（白名单没登记就会是 None）⇒ 必须报出来，不能当"没有隐藏视图"
+        bad.append(f"@{width} {tag}: 探针没报视图钮枚数（`viewBtnCount`）—— "
+                   "「按设计隐藏的视图」与「探针漏量了一帧」分不开")
+        want = list(EXPECTED_TAGS)
+    elif n_btn < 4:
+        want = [t for t in EXPECTED_TAGS if t not in HIDDEN_VIEWS]
+        # 自报的打算量的帧里也不许出现按设计藏起来的那几帧
+        leaked = [t for t in (res.get("viewsExpected") or []) if t in HIDDEN_VIEWS]
+        if leaked:
+            bad.append(f"@{width} {tag}: 视图钮只有 {n_btn} 枚，探针却打算量 {leaked}"
+                       f"（那几帧按设计不存在 —— 判据该跟着钮数走）")
+    else:
+        want = list(EXPECTED_TAGS)
+    missing = [t for t in want if t not in tags]
     if missing:
         bad.append(f"@{width} {tag}: 缺少量测段 {missing}（实得 {tags}）")
+    if tags != ["empty"]:
+        unexpected = [t for t in tags if t not in EXPECTED_TAGS]
+        if unexpected:
+            bad.append(f"@{width} {tag}: 多出未登记的帧 {unexpected}（视图枚举改了？"
+                       f"登记进 EXPECTED_TAGS 再放行）")
     return bad
 
 
@@ -5054,7 +5145,15 @@ def main() -> int:
                     b, a = before[key], after.get(key, {})
                     print(f"    {key}: ({b.get('col')},{b.get('row')}) → "
                           f"({a.get('col')},{a.get('row')}) 高 {b.get('hpx')}→{a.get('hpx')}")
-                if not bd.get("viewFound"):
+                if not bd.get("viewFound") and (bd.get("viewBtnCount") or 0) < 4:
+                    # 档案视图按设计藏着 ⇒ 这个模式**没有对象可量**。既不能报红（不是产品坏了），
+                    # 也不能悄悄报绿（那这套拖拽/落库判据就退化成"没人跑 = 不存在"）——
+                    # 明说跳过，并把"什么时候会重新生效"写清楚（2026-10-05）。
+                    print(f"  [SKIP] @{w} board: 档案视图按设计隐藏"
+                          f"（`PROFILE_VIEW_ENABLED=False`，视图钮 {bd.get('viewBtnCount')} 枚）"
+                          f"⇒ 拖拽→几何→落库这条链本档无对象可量。"
+                          f"把视图放出来后直接重跑本档即可")
+                elif not bd.get("viewFound"):
                     failures.append(f"@{w} board: 点不中「档案视图」视图钮")
                 elif bd.get("editBtnDisabled"):
                     failures.append(f"@{w} board: 宽窗下「编辑布局」被禁用了"
@@ -5764,7 +5863,7 @@ def main() -> int:
                 continue
             bad = _assert_probe_integrity(res, w)
             bad += _assert(res["views"], w)
-            bad += _assert_board(res["views"], w)
+            bad += _assert_board(res["views"], w, profile_expected=not _profile_hidden(res))
             bad += _assert_topbar(res.get("topbar"), w)
             # 推送通道端到端（M0b，devlog/242）：**主流程里也跑** —— 只在专用模式里判的话，
             # 那条判据就是"没人跑 = 不存在"（本仓对"写给人做的检查"的一贯态度）。
