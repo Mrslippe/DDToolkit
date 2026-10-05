@@ -11,6 +11,8 @@
  */
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import StatusIsland from './StatusIsland'
@@ -125,6 +127,43 @@ describe('相对时间', () => {
   })
 })
 
+describe('条目图标按**来源**分（用户 2026-10-05：四条 alert 顶着同一个 ⚠）', () => {
+  /** 图标在 DOM 里是 lucide 的 `<svg class="lucide-xxx">` —— 用它的类名当"哪个图标"的证据 */
+  const iconClassOf = (panel: HTMLElement, idx: number) => {
+    const svg = panel.querySelectorAll('.si-item')[idx]?.querySelector('svg')
+    return [...(svg?.classList ?? [])].find((c) => c.startsWith('lucide-')) ?? null
+  }
+
+  it('开播 / 登录失效 / 能力受限 / 风控冷却**四个图标互不相同**', () => {
+    render([
+      // 这四条的真实形态：`kind` 全是 alert（所以点色一样），靠**来源**区分
+      { ...message(), id: 'live-1', kind: 'alert', form: 'notice', source: '开播',
+        text: '调测用V 开播了' } as never,
+      { ...progress(), id: 'login-expired', kind: 'alert', form: 'state', source: '登录态',
+        text: 'B 站登录已失效', sticky: true } as never,
+      { ...progress(), id: 'cap-limits', kind: 'alert', form: 'state', source: '能力矩阵',
+        text: '有 3 项功能当前受限', sticky: true } as never,
+      { ...progress(), id: 'rate-limit', kind: 'alert', form: 'state', source: '风控冷却',
+        text: '上游限流：冷却中', value: '47s' } as never,
+    ])
+    const panel = openPanel()!
+    const icons = [0, 1, 2, 3].map((i) => iconClassOf(panel, i))
+    expect(icons.every(Boolean), `有条目没渲染出图标：${icons}`).toBe(true)
+    // 四个必须两两不同 —— 相同就等于"没区分"（这条就是用户报的那个毛病）
+    expect(new Set(icons).size, `四个来源的图标重复了：${icons}`).toBe(4)
+    // 且开播**不许**再用警示三角（用户点名的那一条：开播不是警告）
+    const live = icons[0]
+    expect(live).not.toContain('triangle-alert')
+  })
+
+  it('认不出来的来源退回 `kind` 那套（不会出现空白图标）', () => {
+    render([{ ...progress(), kind: 'alert', form: 'state', source: '将来某新来源',
+              text: '未知来源的告警' } as never])
+    const panel = openPanel()!
+    expect(iconClassOf(panel, 0)).toContain('triangle-alert')   // 退回 alert 的图标
+  })
+})
+
 describe('倒计时（只给会自动消失的条目）', () => {
   it('告知类有细条，且 `data-left` 与 `scaleX` 一致', () => {
     render([message({ createdAt: NOW, expiresAt: NOW + 6000 })])
@@ -159,6 +198,10 @@ describe('一键已读与自动已读的退场', () => {
     expect(btns[0].closest('.si-sec')?.getAttribute('data-group')).toBe('todo')
     act(() => { (btns[0] as HTMLElement).click() })
     expect(onAction).toHaveBeenCalledWith('ack-all', expect.anything())
+    // ⚠️ 载荷**必须是 `todoIds` 算出来的那批 id**（不是空、也不是随手一个）——
+    //    宿主 `TopBar` 拿它去 ack；只断言"被调用过"会漏掉"传了个空数组"这种实现。
+    const payload = onAction.mock.calls[0]?.[1] as unknown as { id?: string } | undefined
+    expect(payload?.id).toBe('report-1')
     // 「最近」组没有这个按钮
     expect(panel!.querySelector('.si-sec[data-group="recent"] [data-ack-all]')).toBeNull()
   })
@@ -197,5 +240,30 @@ describe('胶囊文案', () => {
     const cap = host.querySelector('.si-island')!
     expect(cap.getAttribute('data-headline-group')).toBe('doing')
     expect(cap.getAttribute('data-section-counts')).toBe('doing:1,todo:1,recent:1')
+  })
+})
+
+/**
+ * 源码级：**已读要同时清服务端那份与本地那份**（2026-10-05 用户实测的 bug，`devlog/347`）。
+ *
+ * 为什么用源码级：这条 bug 是"少清了一半" —— 本地条目（客户端事实 / dev 注入 / 调测页造的）
+ * 不在 `serverNotices` 里，只过滤它会**点了等于没点**，而它们常驻（`sticky`）⇒ 永远删不掉。
+ * 要渲染级复现得把整个 `TopBar`（路由 + api + capabilities + 轮询链）搭起来，
+ * 收益不抵成本；这里钉的是"两条路都走了 `ackIds`"这个**结构**事实。
+ */
+describe('已读路径（源码级结构判据）', () => {
+  const src = readFileSync(
+    join(__dirname, '..', 'components', 'TopBar.tsx'), 'utf8')
+
+  it('存在一个同时清本地与服务端的 `ackIds`，且两条入口都走它', () => {
+    expect(src).toContain('const ackIds = (ids: string[])')
+    // 本地那份必须被过滤（否则 sticky 的本地条目永远删不掉）
+    expect(src).toMatch(/setLocalNotices\(\(prev\) => \{\s*const kept = prev\.filter\(\(n\) => !ids\.includes\(n\.id\)\)/)
+    // 单条（dismiss）与整组（ack-all）都不许再各写一遍过滤逻辑
+    expect(src).toContain('ackIds([notice.id])')
+    expect(src).toMatch(/const ids = todoIds\(notices, now\)[\s\S]{0,80}ackIds\(ids\)/)
+    // 「服务端那份」仍要真的发请求（本地 id 不许发给后端：会污染服务端已读集合）
+    expect(src).toContain('api.ackNotices(serverIds)')
+    expect(src).toContain('.some((n) => n.id === id)')
   })
 })

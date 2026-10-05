@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { AlertTriangle, CheckCircle2, ChevronDown, Loader2 } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, ChevronDown, Gauge, Hourglass, KeyRound,
+         Loader2, Radio } from 'lucide-react'
 import OverlayScroll from './OverlayScroll'
 import type { Notice, NoticeActionKind } from '../utils/notificationHub'
 import { KIND_GLYPH, isLive } from '../utils/notificationHub'
@@ -39,11 +40,41 @@ const PANEL_W = 340
 /** 自动已读的滑出动画时长（ms）—— 必须与 `status-island.css` 的 `.si-item.is-out` 同值 */
 const ITEM_EXIT_MS = 220
 
+/**
+ * 面板条目的**图标**：优先按**来源**选，认不出来才退回按 `kind` 选（2026-10-05 用户反馈）。
+ *
+ * 为什么必须分来源：`kind` 只有四种（alert/progress/report/message），而**开播 / 登录失效 /
+ * 能力受限 / 风控冷却**全都是 `alert` ⇒ 面板里四个不同的东西顶着一模一样的 ⚠。
+ * 用户的评价很准：「警告图标不适合开播」—— 开播是**好事**，用警示三角是在说错话。
+ *
+ * 口径：
+ * - **`source` 是后端给的字符串**（`services/notices.py` 里的 `"开播"` / `"登录态"` /
+ *   `"能力矩阵"` / `"风控冷却"` …），这里只做"标签 → 图标"的映射，**不改契约**；
+ * - 认不出来（如将来新增一类）⇒ 退回 `kind` 那套（组件原来的行为），不会出现空白图标；
+ * - ⚠️ 这张表**不是**"画得像"的问题：图标是**在同一屏里区分四条 alert 的唯一手段**
+ *   （点色相同、都是 alert），所以每一类都得不一样。
+ */
 const KIND_ICON: Record<string, React.ReactNode> = {
   alert: <AlertTriangle className="size-[13px]" />,
   progress: <Loader2 className="size-[13px] animate-spin" />,
   report: <CheckCircle2 className="size-[13px]" />,
   message: <CheckCircle2 className="size-[13px]" />,
+}
+
+/** 来源 → 图标（认不出来就 `undefined`，调用方退回 `KIND_ICON[kind]`） */
+const SOURCE_ICON: Record<string, React.ReactNode> = {
+  // 开播是**好消息**：用"广播信号"而不是警示三角（用户 2026-10-05 点名这一条）
+  开播: <Radio className="size-[13px]" />,
+  // 登录失效是可修的凭据问题：用钥匙（顶栏那个登录入口也是"钥匙"语义）
+  登录态: <KeyRound className="size-[13px]" />,
+  // 能力受限是"范围被限制"：用仪表盘（比"锁"少一点责备感，且它说的是"打了折"）
+  能力矩阵: <Gauge className="size-[13px]" />,
+  // 风控冷却等的就是时间：用沙漏（配合右侧那个每秒刷新的倒计时 `value`）
+  风控冷却: <Hourglass className="size-[13px]" />,
+}
+
+function iconFor(n: { kind: string; source?: string }): React.ReactNode {
+  return (n.source && SOURCE_ICON[n.source]) || KIND_ICON[n.kind] || KIND_ICON.alert
 }
 
 const KIND_LABEL: Record<string, string> = {
@@ -371,7 +402,7 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
         data-form={n.form ?? 'state'}
         data-left={frac === null ? undefined : frac.toFixed(3)}
       >
-        <span className={`si-item-icon k-${n.kind}`}>{KIND_ICON[n.kind]}</span>
+        <span className={`si-item-icon k-${n.kind}`}>{iconFor(n)}</span>
         <span className="si-item-main">
           {/* 正文与活数据槽**同一行**（`.si-item-line` 是那一行的 flex 容器）：
               风控倒计时这类"同一句话、只有数字在变"的值放 `value` ——

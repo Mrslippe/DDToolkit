@@ -506,11 +506,10 @@ export default function TopBar() {
       // 「一键已读」（L1）：一次清掉「需要处理」整组。
       // ⚠️ **一次请求**而不是循环单条：循环会出现"清到一半失败、面板半干净"的中间态，
       //    而用户看到的是一次点击（`api.ackNotices` 就为这个加的）。
+      // ⚠️ 走 `ackIds`：它同时清**本地那份**（用户实测的"点了没反应"就是漏了这一半）。
       const ids = todoIds(notices, now)
       if (!ids.length) return
-      void api.ackNotices(ids).then((r) => {
-        setServerNotices((prev) => (prev ? prev.filter((x) => !r.acked.includes(x.id)) : prev))
-      }).catch(() => { /* 后端不可达：下一条轮询会把它带回来，不打断用户 */ })
+      ackIds(ids)
       return
     }
     if (kind === 'open-limits') {
@@ -522,13 +521,34 @@ export default function TopBar() {
     }
   }
 
-  /** 把一条通知记成已读（落库）。失败只记日志 —— 界面已经把它收起来了，别弹错误打断用户。 */
-  const ackNotice = (notice?: Notice) => {
-    if (!notice?.id) return
-    void api.ackNotice(notice.id).then((r) => {
+  /**
+   * 把一批 id 记成已读：**服务端那份走接口、本地那份只就地删**（2026-10-05 修，`devlog/347`）。
+   *
+   * ⚠️ 为什么必须分开（用户实测："全部已读点了没反应 / 进了详情它还在"）：
+   * 原来两条路都只 `setServerNotices(filter(...))` —— 而**本地条目**（客户端自己的事实、
+   * dev 注入的报告、以及**通知调测页造的那些**）根本不在 `serverNotices` 里，于是点了等于没点。
+   * 更糟的是它们**常驻**：`cap-limits` 那条是 sticky，`report-*` 也是 sticky ⇒ 永远删不掉。
+   *
+   * 本地 id **不发给后端**：那会把客户端自己的名字写进服务端的已读集合里（污染 + 白占上限）。
+   */
+  const ackIds = (ids: string[]) => {
+    if (!ids.length) return
+    setLocalNotices((prev) => {
+      const kept = prev.filter((n) => !ids.includes(n.id))
+      return kept.length === prev.length ? prev : kept
+    })
+    const serverIds = ids.filter((id) => (serverNotices ?? []).some((n) => n.id === id))
+    if (!serverIds.length) return
+    void api.ackNotices(serverIds).then((r) => {
       // 已读集合回来了 ⇒ 本地立刻按它过滤，不必等下一条轮询（点完就消失才跟手）
       setServerNotices((prev) => (prev ? prev.filter((x) => !r.acked.includes(x.id)) : prev))
     }).catch(() => { /* 后端不可达：下一条轮询会把它带回来，不打断用户 */ })
+  }
+
+  /** 把一条通知记成已读（落库）。失败只记日志 —— 界面已经把它收起来了，别弹错误打断用户。 */
+  const ackNotice = (notice?: Notice) => {
+    if (!notice?.id) return
+    ackIds([notice.id])
   }
 
   const handleMinimize = () => void tauriWindow().then((w) => w.minimize())
@@ -770,11 +790,15 @@ export default function TopBar() {
 
       {/* 全量抓取完成报告（R12a 起：**不再自动弹**，改为状态岛里一条常驻条目 +
           「查看详情」打开这个对话框 —— 用户口径是"把顶栏信息收成一个控件"）。
-          对话框本身保持原样：仅「知道了」可关闭（AlertDialog 不响应外部点击/ESC）。 */}
+          对话框本身保持原样：仅「知道了」可关闭（AlertDialog 不响应外部点击/ESC）。
+          ⚠️ 「知道了」**要同时 ack 那条通知**（2026-10-05 修）：报告是 `form: 'action'` /
+          常驻条目，只 `setDoneReport(null)` 是删不掉的 —— 界面那一份还在（本地注入的尤其明显：
+          调测页造的报告点完「知道了」原地不动）。id 与后端同格式 `report-<seq>`。 */}
       <AlertDialog
         open={reportOpen && doneReport !== null}
         onOpenChange={(o) => {
           if (!o) {
+            if (doneReport) ackIds([`report-${doneReport.seq}`])
             setReportOpen(false)
             setDoneReport(null)
           }
@@ -804,6 +828,8 @@ export default function TopBar() {
           <AlertDialogFooter>
             <AlertDialogAction
               onClick={() => {
+                // 与 `onOpenChange` 同一条口径：**「知道了」= 记成已读**（本地那份也一起清）
+                if (doneReport) ackIds([`report-${doneReport.seq}`])
                 setReportOpen(false)
                 setDoneReport(null)
               }}
