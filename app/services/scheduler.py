@@ -146,6 +146,34 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
+#: 任务名（`status[*]["task"]` 的取值 → 给人看的中文）。
+#: ⚠️ **这份是真源**，`services/notices` 里那份是它的**逐字副本**（两份都要，见那边的注释：
+#: `notices` 不能 import 本模块 —— 本模块顶层 import 了它，反过来就是循环）。
+#: 两份漂了会怎样：推送说「全量抓取中」、轮询说「帖子抓取中」—— 同一条进度两种说法。
+#: `tests/test_notices.py::test_task_text_tables_match` 逐字对账（反向验证：改一份 ⇒ 当场红）。
+TASK_TEXT = {
+    "account": "账号信息抓取中",
+    "dynamic": "动态轮询中",
+    "update": "动态更新中",
+    "full": "全量抓取中",
+    "quick": "帖子抓取中",
+    "adopt": "首屏抓取中",
+}
+
+#: 进度推送的最小间隔（L2，设计案 §8.1）：首次/收尾必发，中途同值去重 + 最少隔这么久一条。
+#: ⚠️ 500ms 的依据是**读起来像在动**（i/N 每 0.5s 跳一次），不是性能 ——
+#: 一轮最多十几条（= 账号数），后端 publish 只做 append + 入队。
+PROGRESS_PUSH_MS = 500
+
+# (任务 key → (上次发出的文案, 上次发出的时刻 ms))：节流与同值去重共用一本账
+_progress_sent: dict[str, tuple[str, int]] = {}
+
+
+def reset_progress_push_state() -> None:
+    """清空进度推送的节流账本（**单测用**：跨用例串味会让"同值不发"那条时绿时红）。"""
+    _progress_sent.clear()
+
+
 def _status_snapshot() -> dict:
     """**锁内深拷贝**的一份自洽状态（读路径唯一入口）。
 
@@ -259,12 +287,69 @@ def _vtuber_name_of(acc: Account) -> str | None:
         return None
 
 
+def _progress_text(key: str) -> str:
+    """当前进度那一句话（与 `services/notices.compose_task_text` 同格式、同一份 `TASK_TEXT`）。
+
+    抽出来的理由：L2 起这句话有**两个消费者** —— 轮询那份（`notices._progress_notices`）与
+    推送那份（`_push_progress`）。各拼一次就会出现"推送说 A、轮询说 B"（两条进度文案不一致，
+    而它们本该是同一条）。
+    """
+    st = _status.get(key) or {}
+    task = st.get("task") or ("quick" if key == "post" else "account")
+    who = st.get("vtuber_name") or st.get("target") or st.get("current")
+    parts = [TASK_TEXT.get(task, "抓取中")]
+    if who:
+        parts.append(str(who))
+    index, total = st.get("index"), st.get("total")
+    if total and total > 0:
+        parts.append(f"{index or 0}/{total}")
+    return " - ".join(parts)
+
+
+def _push_progress(key: str, *, force: bool = False) -> None:
+    """把某条流的进度**推**给界面（L2，M2 的同一套通道：`notice.progress`）。
+
+    ## 为什么值得推（而不是等下一条轮询）
+
+    顶栏那句「帖子抓取中 - V名 - 3/11」原来只在**轮询 tick** 上更新 —— 闲时 **10s** 一跳，
+    而一轮任务常常只有几秒 ⇒ 用户看到的进度会**从 1/11 直接跳到结束**（设计案 §1.2 的
+    "持续可查"要修的正是这条）。
+
+    ## 三条硬规则（比节流窗口更重要，设计案 §8.1）
+
+    1. **同值去重**：文案没变就不发（重复发同一条 = 白唤醒前端，还会把面板里的到达时刻刷新）；
+    2. **首次与收尾必发**（`force=True`）：收尾那条漏了，界面会**停在 `3/11`**；
+    3. **丢了也不影响正确性**：推送只让界面跟手，**事实真源仍是轮询那一份**
+       （`get_fetch_status`）—— 节流把中间几条全吃掉，界面也不会错，只会晚 ≤ 一个轮询周期。
+
+    节流窗口 `PROGRESS_PUSH_MS`（500ms）的依据是"读起来像在动"，不是性能。
+    """
+    text = _progress_text(key)
+    now = _now_ms()
+    prev = _progress_sent.get(key)
+    if prev and prev[0] == text and not force:
+        return                                   # 规则 1：同值去重
+    if prev and not force and now - prev[1] < PROGRESS_PUSH_MS:
+        return                                   # 规则 2 的另一半：节流窗口内不发
+    _progress_sent[key] = (text, now)
+    message_hub.HUB.publish(message_hub.MSG_NOTICE_PROGRESS, {
+        "task": "post" if key == "post" else "account",
+        "text": text,
+        # 空 originator = "不是某个窗口点的" ⇒ 所有宿主都播（与收录首屏那条同一个口径）
+        "originator": "",
+    })
+
+
 def _set_account_progress(current: str | None, index: int, total: int,
-                          *, vtuber_name: str | None = None) -> None:
+                          *, vtuber_name: str | None = None,
+                          push: bool = False, force: bool = False) -> None:
     """账号流进度（顶栏胶囊：任务 - V名 - i/N）。
 
     `current` 是过程性文案（平台名/账号名），`vtuber_name` 是 P8-C 新增的结构化字段
     ——顶栏优先显示 V 名，缺省才退回 current。
+
+    `push`（L2）：写完之后**顺手推一条**给界面（`_push_progress`）。默认 `False` 是刻意的 ——
+    重置/收尾那一类调用不该推（那时任务已经不在跑了，推一条"抓取中"是假话）。
     """
     st = _status["account"]
     st["current"] = current
@@ -272,6 +357,8 @@ def _set_account_progress(current: str | None, index: int, total: int,
     st["total"] = total
     if vtuber_name is not None:
         st["vtuber_name"] = vtuber_name
+    if push:
+        _push_progress("account", force=force)
 
 
 def _set_account_vtuber(name: str | None) -> None:
@@ -284,17 +371,25 @@ def _reset_account_status() -> None:
     _status["account"]["task"] = None
     _status["account"]["vtuber_name"] = None
     _status["account"]["running"] = False
+    _progress_sent.pop("account", None)          # 节流账本随任务一起清（下次从头算）
 
 
 def _set_post_target(target: str | None) -> None:
     _status["post"]["target"] = target
 
 
-def _set_post_progress(task: str, vtuber_name: str | None, index: int, total: int) -> None:
+def _set_post_progress(task: str, vtuber_name: str | None, index: int, total: int,
+                       *, push: bool = True) -> None:
     """帖子流进度（P8-C）：任务名 + V 名 + i/N，供顶栏拼「动态更新中 - 明前奶绿 - 1/11」。
 
     旧字段 `target` 语义混用（单V=uid / 按账号=昵称 / 动态流=平台名拼接），
     这里统一成结构化三元组；`_set_post_target` 保留给无进度信息的路径。
+
+    `push`（L2）默认 **True**：**手动**那些调用点（帖子/全量/更新/首屏/单账号）都该让界面跟手。
+    ⚠️ **自动节拍那条必须显式 `push=False`**（`async_fetch_dynamics` 的 worker）——
+    "自动节拍不占顶栏"是全局口径，而默认值只能有一个方向：默认 False 会让新加的手动路径
+    悄悄不推（症状是"点了没反应"），默认 True 会让漏掉的自动路径悄悄占顶栏
+    （症状是"顶栏永远亮着"）—— 前者更容易被发现，所以选 True + 在自动那条显式关闭。
     """
     st = _status["post"]
     st["task"] = task
@@ -302,6 +397,8 @@ def _set_post_progress(task: str, vtuber_name: str | None, index: int, total: in
     st["index"] = index
     st["total"] = total
     st["target"] = vtuber_name or st.get("target")
+    if push:
+        _push_progress("post")
 
 
 def _reset_post_status() -> None:
@@ -312,6 +409,7 @@ def _reset_post_status() -> None:
     st["index"] = 0
     st["total"] = 0
     st["running"] = False
+    _progress_sent.pop("post", None)             # 节流账本随任务一起清（同账号流那条）
 
 
 # 任务完成序号：每轮任务开始时自增，前端凭 seq 区分「新的完成汇总」与旧结果
@@ -329,6 +427,8 @@ def _set_account_last_result(seq: int, label: str, success: int, failed: int, sk
         "seq": seq, "label": label,
         "success": success, "failed": failed, "skipped": skipped,
     }
+    # L2：这一轮结束了 ⇒ 节流账本清掉（下一轮的第一条进度必须发得出去，见 `_push_progress` 规则 2）
+    _progress_sent.pop("account", None)
     # M5-1（devlog/253）：「目睹才报」的"谁在看" = 推送通道当时有没有订阅者。
     # ⚠️ `subscriber_count` 是 **property**（`hub.subscriber_count`，不加括号）——
     #    第一版写成 `subscriber_count()`，全套 `test_services` 直接 `TypeError`；
@@ -358,6 +458,8 @@ def _set_post_last_result(seq: int, kind: str, label: str,
     }
     _status["post"]["last_result"] = payload
     message_hub.HUB.publish(message_hub.MSG_POSTS_CHANGED, payload)
+    # L2：这一轮结束了 ⇒ 节流账本清掉（下一轮的第一条进度必须发得出去）
+    _progress_sent.pop("post", None)
     # M5-1（devlog/253）：完成报告的"目睹"标记 —— 与 `_set_account_last_result` 同款
     # （`subscriber_count` 是 property，别加括号）。
     notices_service.note_run("post", seq,
@@ -1014,7 +1116,7 @@ def _manual_interval(fast: bool) -> float:
 
 
 async def async_fetch_accounts(account_ids: list[int], *, label: str = "指定账号",
-                               fast: bool = True) -> FetchResult:
+                               fast: bool = True, auto: bool = False) -> FetchResult:
     """按账号 id 精确抓取账号信息（手动优先，v0.9.4）。
 
     - `fast=True`（收录 / 加账号 / 单 V 抓取）：**每个账号抓完立即 commit + 推送
@@ -1063,8 +1165,13 @@ async def async_fetch_accounts(account_ids: list[int], *, label: str = "指定�
         idx = 0
         while idx < len(accounts):
             acc = accounts[idx]
+            # L2：`push=not auto` —— 每个账号**开始**时推一条（节流账本已经处理了突发：
+            # 这个调用点是"准备抓第 i 个"，天然分散在每轮网络往返之间；同一句重复也不发）。
+            # ⚠️ **自动档不推**：`async_fetch_accounts` 也被综合档用（`auto=True`），
+            # 而"自动节拍不占顶栏"是 2026-09-10 的用户口径 —— 第一版漏了这个门，
+            # 探针当场抓到（`@1280 顶栏：只有自动节拍在跑却亮起了事件容器，text='动态轮询中 - … - 9/14'`）。
             _set_account_progress(acc.display_name or str(acc.platform_uid), idx + 1, len(accounts),
-                                  vtuber_name=_vtuber_name_of(acc))
+                                  vtuber_name=_vtuber_name_of(acc), push=not auto)
             pending_avatar: list[str] | None = [] if fast else None
             ok = await _fetch_one_account(acc, db, client=client,
                                           pending_avatar=pending_avatar)
@@ -1235,7 +1342,9 @@ async def async_fetch_and_update(auto: bool = False) -> FetchResult:
                     )
 
         def on_progress(done: int, total: int, ready: list[str]) -> None:
-            _set_account_progress("、".join(ready), done, total)
+            # L2：平台的**轮末**汇报（`done/total`）—— 只在手动档推（自动档不占顶栏，
+            # 见 `notices._progress_notices` 的同一条口径；推了也没人看，还白唤醒前端）。
+            _set_account_progress("、".join(ready), done, total, push=not auto)
 
         rounds = await _run_platform_rounds(
             groups, worker,
@@ -1308,7 +1417,6 @@ async def async_fetch_vtuber(vtuber_id: int) -> FetchResult:
         logger.warning(f"VTuber#{vtuber_id} 没有可抓取的账号")
         return FetchResult(details=["该 VTuber 没有可抓取的账号"])
     return await async_fetch_accounts(ids, label=f"VTuber#{vtuber_id}", fast=True)
-
 
 # ── 调度生命周期（R1，批次 6，devlog/211）───────────────────────────────
 
@@ -1743,7 +1851,9 @@ def _drain_pending_fetches() -> None:
     logger.info(f"补抓排队账号：账号信息 {len(accounts)} 个，首屏内容 {len(first)} 个")
     if accounts:
         try:
-            runtime.run(async_fetch_accounts(accounts, label="排队账号", fast=True))
+            # `auto=True`（不推进度）：这些是**上一轮抢不到锁而排队**的账号，用户的动作早就结束了
+            # —— 此刻推一条「账号信息抓取中」会让人以为"我没点它，它自己在跑"。
+            runtime.run(async_fetch_accounts(accounts, label="排队账号", fast=True, auto=True))
         except Exception as e:
             logger.error(f"补抓排队账号失败: {e}", exc_info=True)
     for aid in first:
@@ -3359,6 +3469,16 @@ async def live_sweep_core(db: Session, client: httpx.AsyncClient | None = None) 
                             "live_title": acc.live_title or "",
                             "live_url": acc.live_url or "",
                         })
+                        # ⚠️ **还要记进通知汇总**（L2，2026-10-05）：`record_live_edge` 此前
+                        # **一个调用点都没有**（写了但没人调），于是开播告警只活在推送那一路上 ——
+                        # 推送断线/重连窗口里，`GET /vtuber/notices` 那份权威列表里**根本没有它**
+                        # （设计案里"开播走推送"要补的就是这条）。补上之后两条路都有：
+                        # 推送负责"立刻看到"，汇总负责"断线也还在"（2 分钟后自己过期）。
+                        notices_service.record_live_edge({
+                            "account_id": acc.id,
+                            "name": acc.display_name or str(acc.platform_uid or ""),
+                            "live_title": acc.live_title or "",
+                        })
                     _push_account_snapshot(acc)
                     result.success += 1
                 await asyncio.sleep(random.uniform(settings.STARTUP_LIVE_INTERVAL_MIN,
@@ -3447,8 +3567,12 @@ async def run_latest_dynamics_sweep() -> dict:
             logger.info(f"[{pf}] 动态 {v.name} ({acc.platform_uid}) ...")
             # P8-C：顶栏「动态轮询中 - {V名}·{平台} - 已处理/总数」
             # （多名单并行时只写 V 名看不出是哪条名单在跑）
+            # ⚠️ `push=False`：**这是自动节拍**（动态流一轮接一轮、没有终局）——
+            # "自动节拍不占顶栏"是 2026-09-10 的用户口径，写进状态可以（轮询那份会自己过滤
+            # `auto`），但**不能推**：推了就是"顶栏永远亮着一条动态轮询中"
+            # （第一版漏了这个门，探针当场抓到，devlog/342）。
             _set_post_progress("dynamic", f"{v.name}·{pf}",
-                               progress["done"], progress["total"])
+                               progress["done"], progress["total"], push=False)
             try:
                 r = await _fetch_posts_for_account(
                     local, 0, 1, s, client=client,
@@ -3475,10 +3599,11 @@ async def run_latest_dynamics_sweep() -> dict:
 
         def on_progress(done: int, total_n: int, ready: list[str]) -> None:
             # P8-C：轮次开始前汇报「已处理/总数」；V 名由上面 worker 在真正开抓时写入
+            # ⚠️ `push=False`：同 worker 那条 —— 自动节拍不推（只有状态会用轮询那份过滤掉）
             progress["done"], progress["total"] = done, total_n
             _set_post_progress("dynamic",
                                _status["post"].get("vtuber_name"),
-                               done, total_n)
+                               done, total_n, push=False)
 
         rounds = await _run_platform_rounds(
             groups, worker_with_pacing,

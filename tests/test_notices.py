@@ -353,12 +353,159 @@ def test_external_task_started_defaults_to_auto(monkeypatch):
         sch._status["external"]["started_at"] = None
 
 
+def test_task_text_tables_match(client):
+    """④⁗⁗ 任务名两张表**逐字对齐**（L2）：`scheduler.TASK_TEXT` 是真源，`notices.TASK_TEXT` 是副本。
+
+    为什么必须是副本而不是共享：`scheduler` 顶层 import 本模块（`notices_service`），
+    所以 `notices` 顶层不能 import 它（循环）—— 而进度推送在上游、轮询文案在下游，
+    两边都要这张表。漂了的症状很具体：**同一条任务两种说法**（推送说「全量抓取中」、
+    轮询说「帖子抓取中」），而它们在前端是同一条进度条目。
+    """
+    from app.services import scheduler as sch
+
+    assert N.TASK_TEXT == sch.TASK_TEXT, "两张任务名表漂了 ⇒ 同一条进度会有两种说法"
+    # 反向验证的支点：新增任务名时**两份都要加**（只加一份 ⇒ 上面那条当场红）
+    assert set(N.TASK_TEXT) == set(sch.TASK_TEXT)
+
+
+def test_live_edge_is_recorded_into_the_ring(client):
+    """④⁗⁗′ 开播告警**两条路都有**（L2）：推送（谁在线谁立刻看到）+ 汇总（断线也还在）。
+
+    ⚠️ 这条修的是一个**写了但没人调**的洞：`notices.record_live_edge` 此前**一个调用点都没有**
+    （只有本文件的用例在调），于是开播告警只活在推送那一路上 —— 推送断线/重连窗口里，
+    `GET /vtuber/notices` 这份权威列表里根本没有它。调度器现在在发 `domain.live.edge` 的**同一处**
+    也调它（判据就是这条：同一份事实、两条出口）。
+    """
+    N.reset_state()
+    N.record_live_edge({"account_id": 5, "name": "七海", "live_title": "歌回"})
+    body = _get(client, _status())
+    live = next((n for n in body["notices"] if n["id"] == "live-5"), None)
+    assert live is not None, "记进环形缓冲的开播告警没出现在汇总列表里"
+    assert live["form"] == "notice" and live["source"] == "开播"
+    assert live["createdAt"] and live["expiresAt"] == live["createdAt"] + N.LIVE_TTL_MS
+
+
+def test_scheduler_wires_live_edge_into_the_ring():
+    """④⁗⁗″ 接线：调度器发 `domain.live.edge` 的**同一处**也要记进通知汇总（L2）。
+
+    为什么用源码级判据：那段代码在 T0 直播轮询的深处（真机才跑得到），而漏掉的症状是
+    "推送断了就再也看不到那条开播"——**静默**且只在断线时出现。源码级判据钉住"两个出口
+    挨着写在一起"，比造一整套假数据库去跑 T0 划算（与 `devlog/338` 对保存路径的手法一致）。
+    """
+    import pathlib
+
+    src = pathlib.Path(__file__).resolve().parents[1] / "app" / "services" / "scheduler.py"
+    code = src.read_text(encoding="utf-8")
+    i = code.find("MSG_LIVE_EDGE, {")
+    assert i > 0, "找不到开播边沿的发布点"
+    seg = code[i:i + 2000]
+    assert "record_live_edge" in seg, \
+        "发 `domain.live.edge` 的地方没有同时记进通知汇总 ⇒ 推送断线时那条开播就没了"
+
+
 def test_account_progress_records_started_at(client):
     """④⁗ 账号流在 `running` 变真的那一处记 `started_at`（面板"进行中 N 分钟"的来源）。"""
     from app.services import scheduler as sch
 
     assert "started_at" in sch._status["account"] and "started_at" in sch._status["post"], \
         "状态字典里没有 started_at 这个键 ⇒ 前端永远拿不到开始时刻"
+
+
+# ── ④-补：进度**推送**（L2）──────────────────────────────────────────────
+
+class _RecordingHub:
+    """记下每一次 publish 的替身（形状照真身：`subscriber_count` 是 property）。"""
+
+    subscriber_count = 1
+
+    def __init__(self):
+        self.sent: list[tuple[str, dict]] = []
+
+    def publish(self, type_: str, payload: dict) -> int:
+        self.sent.append((type_, payload))
+        return len(self.sent)
+
+    def progress_texts(self) -> list[str]:
+        from app.services import messages as M
+
+        return [p["text"] for t, p in self.sent if t == M.MSG_NOTICE_PROGRESS]
+
+
+def _scheduler_with_recorder(monkeypatch) -> _RecordingHub:
+    from app.services import scheduler as sch
+
+    hub = _RecordingHub()
+    monkeypatch.setattr(sch.message_hub, "HUB", hub)
+    sch.reset_progress_push_state()
+    return hub
+
+
+def test_progress_is_pushed_with_same_text_deduped(monkeypatch):
+    """L2：进度**推**给界面（不再只等 3–10s 轮询），且**同值不发第二遍**。
+
+    判据的三段对照（缺一段这条就退化成"发了就行"）：
+    ① 第一次一定发；② 文案没变**不发**（重复发 = 白唤醒前端，还会刷新面板里的到达时刻）；
+    ③ 文案变了**且过了窗口**要发（否则界面停在旧数字上）。
+    ②③ 的窗口本身由下面 `..._throttle_window_and_force` 用注入时钟钉死。
+    """
+    from app.services import scheduler as sch
+
+    hub = _scheduler_with_recorder(monkeypatch)
+    clock = {"t": 1_700_000_000_000}
+    monkeypatch.setattr(sch, "_now_ms", lambda: clock["t"])
+    try:
+        sch._set_post_progress("full", "七海", 1, 3)          # ①
+        assert hub.progress_texts() == ["全量抓取中 - 七海 - 1/3"]
+        sch._set_post_progress("full", "七海", 1, 3)          # ② 同值
+        assert len(hub.progress_texts()) == 1, "同值又发了一遍 ⇒ 前端会被无谓唤醒"
+        clock["t"] += 600
+        sch._set_post_progress("full", "七海", 2, 3)          # ③ 变了 + 过窗口
+        assert hub.progress_texts() == ["全量抓取中 - 七海 - 1/3", "全量抓取中 - 七海 - 2/3"]
+    finally:
+        sch._reset_post_status()
+
+
+def test_progress_throttle_window_and_force(monkeypatch):
+    """L2 节流：500ms 内不发第二条，但**收尾/首次必发**（`force=True`）。
+
+    ⚠️ 时钟注入（与 `expiresAt` 两条同款理由）：拿真实 `_now_ms()` 断言"隔了 400ms 没发"
+    会时绿时红 —— 测试机忙一点就真的过 500ms 了。
+    """
+    from app.services import scheduler as sch
+
+    hub = _scheduler_with_recorder(monkeypatch)
+    clock = {"t": 1_700_000_000_000}
+    monkeypatch.setattr(sch, "_now_ms", lambda: clock["t"])
+    try:
+        sch._set_post_progress("full", "七海", 1, 5)          # ① 第一条：发
+        assert hub.progress_texts() == ["全量抓取中 - 七海 - 1/5"]
+        clock["t"] += 400
+        sch._set_post_progress("full", "七海", 2, 5)          # ② 窗口内、文案变了：不发
+        assert len(hub.progress_texts()) == 1, "节流窗口内发了 ⇒ 500ms 这档形同虚设"
+        clock["t"] += 200                                     # 累计 600ms > 500ms
+        sch._set_post_progress("full", "七海", 3, 5)          # ③ 过了窗口：发
+        assert hub.progress_texts()[-1] == "全量抓取中 - 七海 - 3/5"
+        # ④ force（首次/收尾那种"必须发"）：即使刚发过、同值也发
+        sch._push_progress("post", force=True)
+        assert len(hub.progress_texts()) == 3
+    finally:
+        sch._reset_post_status()
+
+
+def test_progress_push_state_is_cleared_between_rounds(monkeypatch):
+    """L2：一轮结束后节流账本要清 —— 否则**下一轮的第一条进度会被上一轮的账本挡掉**
+    （症状：第二次抓取时界面一直不动，直到第一条过了窗口）。"""
+    from app.services import scheduler as sch
+
+    hub = _scheduler_with_recorder(monkeypatch)
+    try:
+        sch._set_post_progress("full", "七海", 1, 3)
+        assert len(hub.progress_texts()) == 1
+        sch._set_post_last_result(1, "full_all", "七海", 1, 0, 1, 0, [], None)   # 收尾（清账本）
+        sch._set_post_progress("full", "七海", 1, 3)          # 下一轮同样的第一条
+        assert len(hub.progress_texts()) == 2, "收尾没清账本 ⇒ 下一轮的第一条被同值去重挡掉"
+    finally:
+        sch._reset_post_status()
 
 
 def test_manual_account_progress_text(client):

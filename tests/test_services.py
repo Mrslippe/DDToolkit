@@ -1688,7 +1688,11 @@ def test_fetch_accounts_queues_when_manual_holder(monkeypatch):
     # 锁空闲后心跳消费队列
     fetched: list[list[int]] = []
 
-    async def fake_fetch_accounts(ids, *, label="指定账号", fast=True):
+    # ⚠️ 替身要**照抄真身的签名**（`**kw` 收下 `auto=` 这类新增关键字）：
+    # 2026-10-05 加 `auto` 参数时，这个替身因为签名窄一格直接 `TypeError`，
+    # 而错误被 `_drain_pending_fetches` 的 try/except 吞成一行日志 ⇒ 判据红在
+    # "队列没被消费"上，看不出真因（本仓第三次记这条）。
+    async def fake_fetch_accounts(ids, *, label="指定账号", fast=True, **kw):
         fetched.append(list(ids))
         return sch.FetchResult(success=len(ids))
 

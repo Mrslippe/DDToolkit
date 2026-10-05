@@ -70,7 +70,12 @@ RING_MAX = 20
 #: 出**常驻报告**的轮次类型（其余是瞬时胶囊）：与前端旧口径一致（`TopBar` 只对全量开报告框）
 REPORT_KINDS = ("full_all", "full_vtuber")
 
-# 任务名（与前端 `TopBar.TASK_TEXT` 同表；后端供数后**这份是真源**）
+# 任务名：**与 `services/scheduler.TASK_TEXT` 逐字对齐**（L2）。
+# ⚠️ 为什么是**副本**而不是 import 那一份：本模块顶层 import 了 `scheduler.get_fetch_status`
+# 吗？没有 —— 那是**函数内局部 import**（为了避开循环）。而 `scheduler` 顶层 import 了本模块，
+# 所以这里**不能**顶层 import 它。两份漂了的症状很具体：推送那条进度说「全量抓取中」、
+# 轮询那条说「帖子抓取中」（同一条任务两种说法）。
+# ⇒ 对账落在 `tests/test_notices.py::test_task_text_tables_match`（反向验证：改一份当场红）。
 TASK_TEXT = {
     "account": "账号信息抓取中",
     "dynamic": "动态轮询中",

@@ -102,14 +102,25 @@ retire-when: scheduler.py 被拆分，或抓取链路整体重写
 
 ### 3.3 进度状态 & 结果
 
-- `_status["account"]`：`running/current/index/total/recent[≤100]` + `last_result{seq,...}`；
-- `_status["post"]`：`running/target` + `last_result{kind, stored, skipped, issues, video_missing}`；
-- `_status["external"]`（v0.9.4）：`running/label/last_label/seq` —— 外部第三方数据任务
+- `_status["account"]`：`running/started_at/current/index/total/recent[≤100]` + `last_result{seq,...}`；
+- `_status["post"]`：`running/started_at/target` + `last_result{kind, stored, skipped, issues, video_missing, finished_at}`；
+- `_status["external"]`（v0.9.4）：`running/auto/label/last_label/seq/started_at` —— 外部第三方数据任务
   （收录回填、每日/周批次）的进度；`seq` 每次结束自增，前端据此发 `fetch-idle`，
   让档案视图的粉丝趋势/直播日历卡片自动重拉（否则停在该视图的用户看不到新数据）；
+  ⚠️ **`auto` 决定它占不占顶栏**（L1，`devlog/341`）：自动批次（默认）**不产生**进度条目 ——
+  它们没有终局，一条"正在同步…"会把胶囊一直占着；`started_at` 是状态**开始成立**的时刻
+  （面板要显示"进行中 N 分钟"）。
 - 前端经 `GET /vtuber/fetch-status` 每 ~2s（空闲 10s）轮询；`recent` 增长驱动侧栏就地合并；
   外部任务运行期间状态胶囊显示「正在同步{label}」，完成后弹一条
   「{last_label}同步完成」并触发刷新。
+- ⚠️ **进度有两条出口，别只改一条**（L2，`devlog/342`）：`_set_post_progress` /
+  `_set_account_progress` 写完状态会**顺手推一条** `notice.progress`（顶栏不必等 3–10s 轮询），
+  而 `get_fetch_status()` 那份仍是**事实真源**（推送丢了界面也不会错，只会晚一个轮询周期）。
+  节流 `PROGRESS_PUSH_MS=500ms` + 同值去重；**`push` 默认 True，自动节拍那几条路径必须
+  显式 `push=False`** —— "自动节拍不占顶栏"原先靠轮询那份过滤 `auto`，而推送会绕过那道过滤
+  （探针 `_assert_topbar` 专门守这条，漏了就是"顶栏永远亮着一条动态轮询中"）。
+  轮询与推送说同一句话：任务名两张表（`scheduler.TASK_TEXT` 与 `notices.TASK_TEXT` 副本）
+  有逐字对账用例。
 
 ### 3.4 风控状态隔离（ContextVar）
 
