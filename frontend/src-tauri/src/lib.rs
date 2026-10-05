@@ -1418,11 +1418,18 @@ mod winjob {
     }
 }
 
+/// dev 模式下给后端的**固定**开发 token（后端据此挂 dev-only 合成钩子、前端据此过鉴权）。
+///
+/// ⚠️ 三处必须同值（`tests/test_dev_token.py` 有结构扫描钉着）：
+/// ① 这里（Rust 注入给后端）；② `frontend/vite.config.ts` 的 `define` 默认值（给前端）；
+/// ③ `app/core/config.py::DEV_API_TOKEN` 读的那个环境变量名。真源清单见 `scripts/dev_token.py`。
+#[cfg(debug_assertions)]
+const DEV_API_TOKEN: &str = "dsh-ui-probe-dev-token";
+
 /// 启动后端并接管其输出流；返回子进程句柄。
 /// - release：onedir 后端目录（Tauri resources 打包，免 onefile 解压开销）
 /// - debug：直接跑 `python backend_main.py` —— 改后端零打包、日志直出终端
-fn spawn_backend(
-    app: &tauri::AppHandle,
+fn spawn_backend(    app: &tauri::AppHandle,
     port: u16,
     data_dir: &std::path::Path,
     api_token: &str,
@@ -1492,6 +1499,15 @@ fn spawn_backend(
                 // S1（devlog/201）：与 release 分支**同一个**注入点 —— 少一处就是
                 // "开发态没有门、生产才有"，而那正是最难发现的不一致。
                 .env("DDTOOLKIT_API_TOKEN", api_token)
+                // ⚠️ **dev 专用**：开 `DDTOOLKIT_DEV_API_TOKEN` ⇒ 后端把 **dev-only 的合成钩子**
+                // （`POST /messages/_debug/publish`，见 `routers/messages.include_debug_routes`）
+                // 挂上路由表。没有它会怎样（2026-10-05 用户实测）：通知调测页里那几条
+                // **走推送**的类别（进度 / 开播 / 回执）一律 404 —— 而探针自己有这个变量、
+                // 所以 `ui_probe --notice-lab` 永远绿，"只有人的窗口里坏"。
+                // ⚠️ 只在 `debug_assertions` 分支（本块就是）：发布版根本没有这一段。
+                // 值必须与前端那份一致 —— `vite.config.ts` 的 define 默认值就是它
+                // （`scripts/dev_token.py` 与 `tests/test_dev_token.py` 钉着三处同值）。
+                .env("DDTOOLKIT_DEV_API_TOKEN", DEV_API_TOKEN)
                 // 强制子进程 UTF-8 输出，避免管道模式下回退 GBK 导致终端乱码
                 .env("PYTHONUTF8", "1")
                 .env("PYTHONIOENCODING", "utf-8")

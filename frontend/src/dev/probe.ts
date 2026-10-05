@@ -846,6 +846,13 @@ function measure(tag: string) {
       // `max-height:50vh; overflow:auto` —— 一条竖滚动条按设计就该有。
       // 不排掉它，这条判据就变成「跑这轮时恰好有 3 张图没加载出来」的抛硬币（R48，devlog/251）。
       .filter((n) => !n.closest('#problem-report'))
+      // ⚠️ **同理排除「通知调测页」**（`?notice-lab` / `VITE_NOTICE_LAB=1`，2026-10-05）：
+      // 它是 dev-only 工具、不是产品界面，而它**故意**是个可滚面板（`overflow-y:auto`，
+      // 内容多时按设计出滚动条）。而且它可能**因为一个环境变量**而出现在**任何**探针模式里
+      //（用户在 `.env.local` 里开了它，而探针跑的是同一个 Vite）—— 那会让"任何容器不得横向
+      // 溢出"这条判据开始报 `DIV.nl-panel nativeBar=12x0`（本批实测撞到，三档宽度红一片）。
+      // 排除它的口径与上面 `#problem-report` **完全一致**：诊断工具不该被当成被测界面。
+      .filter((n) => !n.closest('#notice-lab-host'))
       .filter((n) => {
         const cs = getComputedStyle(n)
         return /(auto|scroll|hidden)/.test(cs.overflowX + cs.overflowY)

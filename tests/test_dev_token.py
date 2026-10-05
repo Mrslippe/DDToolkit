@@ -66,6 +66,32 @@ def test_dev_token_names_match_the_backend_truth():
         f"`{dev_token.PROD_ENV}` 不是 config.py 读的那个变量名"
 
 
+def test_desktop_dev_shell_passes_the_dev_token_too():
+    """**Rust 壳起后端时也要给 dev token**（2026-10-05 加，`devlog/346`）。
+
+    这条是补一个**真的漏了**的调用方：`npm run tauri:dev` 起的那条路原先只注入
+    `DDTOOLKIT_API_TOKEN`，而 `DDTOOLKIT_DEV_API_TOKEN` **只在探针/脚本里被设过**
+    —— 于是后端不挂 dev-only 的合成钩子（`routers/messages.include_debug_routes`），
+    症状是**应用窗口里**"通知调测页那几条走推送的类别点了 404"，而
+    `ui_probe --notice-lab` **永远绿**（探针自己设了那个变量）。
+    这正是 `scripts/dev_token.py` 开头那条教训的第四次：**加了门禁就要把所有开发态调用方过一遍**。
+
+    判据是"壳里真的出现了 `.env("<ENV>", …)` 且值同源" —— 只找字符串会漏（本文件第一条
+    已经踩过"只留 import 也照样绿"）。反向验证：把 `lib.rs` 里那行 `.env(...)` 删掉 ⇒ 红。
+    """
+    lib = (ROOT / "frontend" / "src-tauri" / "src" / "lib.rs").read_text(encoding="utf-8")
+    assert f'.env("{dev_token.ENV}"' in lib, (
+        f"`frontend/src-tauri/src/lib.rs` 起后端时没有注入 `{dev_token.ENV}` ⇒ "
+        f"dev-only 的合成钩子不挂路由表（应用窗口里那几条走推送的类别会 404），"
+        f"而探针自己设了它、永远绿 —— 只有人的窗口里坏。"
+    )
+    # 值同源：壳里那个常量必须就是 dev_token.DEV_TOKEN
+    m = re.search(r'const DEV_API_TOKEN: &str = "([^"]+)"', lib)
+    assert m, "lib.rs 里找不到 `DEV_API_TOKEN` 常量（值必须与 dev_token.DEV_TOKEN 同源）"
+    assert m.group(1) == dev_token.DEV_TOKEN, \
+        f"lib.rs 的 DEV_API_TOKEN={m.group(1)!r} ≠ dev_token.DEV_TOKEN={dev_token.DEV_TOKEN!r}"
+
+
 # ── ② 覆盖：谁起后端，谁就得给后端 token ────────────────────────────────────
 
 def _scripts_that_start_a_backend_server() -> list[Path]:
