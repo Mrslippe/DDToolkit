@@ -1,5 +1,10 @@
 # 环境变量 / 凭证文件
 .env
+# Vite 本地环境覆盖（2026-10-05）：`frontend/.env.local` 用来开本地开关
+# （如 `VITE_NOTICE_LAB=1` → 通知调测页，见 `main.tsx`）—— **本地文件，绝不入库**。
+# ⚠️ 只写 `.env` 挡不住它：`.env` 是精确匹配，`.env.local` / `.env.development.local` 都不在其中。
+.env.local
+.env.*.local
 
 # Python
 __pycache__/

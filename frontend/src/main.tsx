@@ -333,11 +333,22 @@ if (import.meta.env.DEV && new URLSearchParams(window.location.search).has('firs
 
 // 通知样式调测页（?notice-lab，2026-10-05）：每类消息一个按钮，点一下走**真实路径**产生一条
 // 通知（见 `dev/NoticeLab.tsx` 的"路径诚实说明"）。用户口径：「方便我检查所有种类的消息通知样式」。
-// ⚠️ `?probe=notice-lab` 也要挂它 —— 探针模式需要调测页与探针**同时在场**
-// （探针负责点与量，调测页负责产生那些消息）。生产构建里 `import.meta.env.DEV` 为 false ⇒ 摇掉。
+//
+// 三个触发口径，覆盖三种"我怎么打开它"：
+//   ① `?notice-lab`（浏览器标签页：有地址栏，直接拼）
+//   ② `?probe=notice-lab`（探针模式：调测页与探针**同时在场**，探针负责点与量）
+//   ③ `VITE_NOTICE_LAB=1`（**没有地址栏的那个窗口** —— `npm run tauri dev` 起的应用窗口
+//      加载的是固定的 `devUrl`，加不了查询串）。用法：仓库根或 `frontend/.env.local` 写一行
+//      `VITE_NOTICE_LAB=1`，然后刷新窗口（Vite 改 env 文件会自己重启，刷新即可）。
+//      验证完把那行删掉/改 0 —— 它是本地文件，不进仓库（`.gitignore` 已覆盖 `.env*` 之外？
+//      见 `frontend/.env.local` 的说明：`*.local` 一律被 git 忽略）。
+// 生产构建里 `import.meta.env.DEV` 为 false ⇒ 整段被摇掉。
 if (import.meta.env.DEV) {
   const q = new URLSearchParams(window.location.search)
-  if (q.has('notice-lab') || q.get('probe') === 'notice-lab') {
+  const wantLab = q.has('notice-lab') || q.get('probe') === 'notice-lab'
+    || import.meta.env.VITE_NOTICE_LAB === '1'
+  // 探针模式下**必须**挂（它要点里面的按钮）；`?notice-lab` 与 env 开关同理
+  if (wantLab) {
     const host = document.createElement('div')
     host.id = 'notice-lab-host'
     document.body.appendChild(host)
