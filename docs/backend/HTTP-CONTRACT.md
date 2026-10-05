@@ -239,6 +239,12 @@ retire-when: HTTP 层换框架，或路由整体重排
 | POST `/settings/reset` | 全部恢复默认（删掉 `app_meta` 里所有 `settings.*` 行） |
 | GET `/settings/prefs` | 界面偏好（R14b：`theme`）+ 允许取值 + **当前能力说明**（"深色主题尚未实现…"由后端下发，界面不自己编） |
 | PUT `/settings/prefs` | 偏好部分更新（枚举白名单在后端：`light|system`；`dark` 现在还写不进来 → 400）。存 `app_meta` 的 `prefs.` 命名空间；库里存了白名单外的值 → 记 warning 并按默认值处理（**不覆盖用户数据、不让窗口打不开**） |
+| GET `/settings/agreement` | **用户协议闸门状态**（2026-10-06，`devlog/369`）：`{required, accepted, accepted_at, needed}` —— `required` = 应用版本（`settings.VERSION`），`needed = accepted != required`。前端在启动时取一次，`needed` 为真就**盖住整个应用**直到同意 |
+| POST `/settings/agreement` | 记下"这一版已同意"：`{"version": "1.1.0"}`。**版本号必须正好是当次要求的那个**，否则 **400 且不改状态**（拿别的号来 = 想绕过闸门）；成功写 `app_meta` 的 `legal.accepted_version` / `legal.accepted_at` 并回新的状态。**幂等**（重复同意只刷新时刻） |
+
+- **协议闸门与 `/healthz` 分开**：那个是"能不能连上"的探活（探针与扩展高频打），
+  这个是"要不要弹闸门"的状态 —— 合并会让探活多背一次库读。要同意的版本 = 应用版本，
+  所以**每次版本变化都会再弹一次**（"第一次启动或者更新至这个版本时"）；同意状态跟数据目录走。
 
 - **可热更 vs 只读的边界**由 `app/core/runtime_settings.py::SPECS` 定义（16+3=19 个键）；
   只读项写在同文件 `READONLY_NOTES` 里，界面照实列出"为什么不给改"；

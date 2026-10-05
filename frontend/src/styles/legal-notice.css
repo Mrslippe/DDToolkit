@@ -1,0 +1,98 @@
+/* 用户协议闸门（2026-10-06，用户口径：「阅读完同意才可以关闭窗口」）。
+   设计：**全屏不透明遮罩 + 居中白卡 + 可滚动正文 + 只有一颗同意钮**。
+   ⚠️ 遮罩**不透明**（`--c-bg-page` 级别的实底）—— 半透明会让人觉得"下面还能点"，
+      而这层的意思恰恰是"下面现在不给你用"。所以也没做入场缩放那套花活。 */
+
+.legal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90;                    /* 高于设置窗（50）/ 详情抽屉（40）/ 提示条（60） */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--c-bg-page);
+}
+
+.legal-card {
+  display: flex;
+  flex-direction: column;
+  width: min(720px, 100%);
+  max-height: 100%;
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius-window, 12px);
+  background: var(--c-bg-card, #fff);
+  box-shadow: var(--shadow-dialog);
+  outline: none;
+}
+
+.legal-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 20px 10px;
+  border-bottom: 1px solid var(--c-border);
+}
+
+.legal-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--c-text);
+}
+
+.legal-version {
+  flex: none;
+  font-size: 12px;
+  color: var(--c-text-sub);
+}
+
+/* 正文自己滚：长文不该把按钮顶出屏幕（按钮必须**一直在**） */
+.legal-body {
+  overflow: auto;
+  padding: 14px 20px;
+  font-size: 13px;
+  line-height: 1.75;
+  color: var(--c-text);
+}
+
+.legal-lead {
+  margin-bottom: 12px;
+  color: var(--c-text-sub);
+}
+
+.legal-section + .legal-section {
+  margin-top: 14px;
+}
+
+.legal-section-title {
+  margin-bottom: 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.legal-p + .legal-p {
+  margin-top: 6px;
+}
+
+.legal-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 12px 20px 16px;
+  border-top: 1px solid var(--c-border);
+}
+
+.legal-hint {
+  margin-right: auto;
+  font-size: 12px;
+  color: var(--c-text-sub);
+}
+
+.legal-error {
+  flex-basis: 100%;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--c-danger, #d1435b);
+}

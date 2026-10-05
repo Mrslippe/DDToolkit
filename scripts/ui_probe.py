@@ -18,6 +18,7 @@ import os
 import re
 import shutil
 import socket
+import sqlite3
 import subprocess
 import sys
 import time
@@ -372,6 +373,49 @@ def _seed_reservation(data: Path, vtuber_id: int) -> str:
     finally:
         con.close()
     return title
+
+
+def _seed_legal_accepted(data: Path) -> bool:
+    """把"已同意当版协议"写进**副本**库 —— 否则协议闸门会把每个探针模式都挡在门外。
+
+    协议闸门（`devlog/369`）是"没同意就盖住整个应用"，而探针用的是从**真库**拷来的副本：
+    发版前真库里本来就没有这一行（用户还没同意过 1.1.0）⇒ 不种的话下面每一档
+    （`ui_probe` / `--app-settings` / `--notice-lab` / `--toolbar`）都会卡在协议页上，
+    看着像"产品全坏了"。**`--first-run` 不种** —— 那一档要验的正是"闸门会弹"。
+    """
+    db = data / "vtuber.db"
+    if not db.exists():
+        return False
+    version = _app_version()
+    con = sqlite3.connect(db)
+    try:
+        for key, value in (("legal.accepted_version", version),
+                           ("legal.accepted_at", "2026-01-01T00:00:00+00:00")):
+            con.execute(
+                "INSERT INTO app_meta (key, value, updated_at) VALUES (?, ?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value, _now()))
+        con.commit()
+    finally:
+        con.close()
+    return True
+
+
+def _now() -> str:
+    """`updated_at` 用的 naive UTC 字符串（与库内约定一致）"""
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _app_version() -> str:
+    """应用版本（**不能在探针里写死**：发版一改，种进去的"已同意版本"就对不上了 ⇒
+    闸门会在所有模式里弹出来）。直接读 `app/core/config.py` 里那一行
+    （它是 `Settings` 的类属性：`VERSION: str = "x.y.z"`，所以**不能锚在行首**）。"""
+    m = re.search(r'^\s*VERSION\s*:\s*str\s*=\s*"([^"]+)"',
+                  (ROOT / "app" / "core" / "config.py").read_text(encoding="utf-8"), re.M)
+    if not m:
+        raise SystemExit("[probe] 读不到 VERSION（app/core/config.py）—— 协议闸门那一档会假失败")
+    return m.group(1)
 
 
 def _seed_accounts(data: Path, vtuber_id: int, want: int) -> dict:
@@ -2300,9 +2344,23 @@ def _calendar_signature(cal: dict | None) -> str | None:
 
 
 def _assert_first_run(dom_file: Path) -> list[str]:
-    """首启行为：登录浮窗自动出现，且带「凭据仅保存在本机」说明 + **四个**平台 Tab + 扩展那一栏。"""
+    """首启行为：**协议闸门先盖住**，其下才是登录浮窗（「凭据仅保存在本机」+ 四个平台 Tab + 扩展栏）。
+
+    ⚠️ 协议闸门（`devlog/369`）加进来之后，首启这一档要**同时**验两件事：
+    ① 闸门真的弹了（空数据目录 ⇒ `needed=true`）—— 用户口径「第一次启动应用……阅读完同意
+       才可以关闭窗口」；② 闸门之下登录浮窗照常挂载（同意之后立刻就能看到它，不必等刷新）。
+    两件事都是"整块消失时界面不报错"的那类 —— 只有探针看得见。
+    """
     text = dom_file.read_text(encoding="utf-8", errors="replace")
     bad: list[str] = []
+    # ① 协议闸门
+    if 'data-legal="1"' not in text:
+        bad.append("首启没有弹用户协议闸门（空数据目录下 `needed` 应为 true）")
+    if "我已知悉并同意" not in text:
+        bad.append("协议闸门没有「我已知悉并同意」那颗钮 —— 那用户就没有出路了")
+    if "责任自负" not in text:
+        bad.append("协议正文里没有「责任自负」那一段（用户点名的「后果由用户承担」）")
+    # ② 闸门之下的登录浮窗
     if 'role="dialog"' not in text:
         bad.append("首启登录浮窗未自动弹出（?firstRun=1 下应打开）")
     if "仅保存在本机" not in text:
@@ -2860,6 +2918,13 @@ def main() -> int:
             if seeded_anniv:
                 print(f"[probe] 已种纪念日：生日 {seeded_anniv['birthday']!r}"
                       f"、出道 {seeded_anniv['debut']!r}（副本 DB，非真库）")
+
+        # 协议闸门（devlog/369）：**非 first-run 的模式一律先种成"已同意"** ——
+        # 否则闸门会盖住整个应用，下面每一档都量不到东西（看着像产品全坏了）。
+        if not args.first_run:
+            if _seed_legal_accepted(data):
+                print(f"[probe] 已种协议同意：legal.accepted_version={_app_version()!r}"
+                      f"（副本 DB，非真库）")
 
         if args.app_settings:
             # 应用设置（R14a，devlog/091）：这一条是**会写盘的探针** —— 它真的改设置、

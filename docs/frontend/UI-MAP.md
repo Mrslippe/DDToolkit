@@ -1064,7 +1064,22 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→**
 | **头部驻留** | 详情类二级窗口 = **面板 = 头部驻留区（flex:none · 下缘发丝分隔）＋ 内容 OverlayScroll（flex:1）**——「标题……X」（含场次多场 tabs）钉顶不随内容滚动；滚动条只在内容区悬浮，**不覆盖标题与关闭钮**（2026-09-07 user 定案；已接入：帖子详情 `pd-head`、场次详情 `lc-dlg-head-zone`；短表单弹窗内容不溢出，不强制） |
 | Tooltip | **黑玻璃胶囊**：`rgba(15,23,42,.78)` 底白字 r999（radix tooltip 与词云提示 `lc-dlg-cloud-tip` 同源） |
 | 选中态 | 两原则：① 分类色体系元件（类型胶囊/选项）用**本体色** + 600/内描边；② 其它选择件激活 = **`--c-primary-deep` 底白字 600**（month 旧浅粉底粉字、tab 旧 accent 底均已改）；hover 统一 `--sel-bg-hover` |
-| z-index 档位 | 30 锚定浮窗（filter/time）→ 40 日历月份浮窗 → 50 radix（Dialog/Alert/Select/Tooltip）→ 56 hover 场次浮层 → 60 主弹窗遮罩 → 62 弹窗内下拉 → 70 词云提示 → 200 灯箱 |
+| z-index 档位 | 30 锚定浮窗（filter/time）→ 40 日历月份浮窗 → 50 radix（Dialog/Alert/Select/Tooltip）→ 56 hover 场次浮层 → 60 主弹窗遮罩 → 62 弹窗内下拉 → 70 词云提示 → **90 用户协议闸门** → 200 灯箱 |
+
+### 用户协议闸门（2026-10-06，`devlog/369`）
+
+`.legal-overlay` + `.legal-card`（`components/LegalNotice.tsx` + `styles/legal-notice.css`，
+在 `App.tsx` 里挂、**故意放在 `ErrorBoundary` 之外**）：`GET /settings/agreement` 说
+`needed=true` 时**盖住整个应用**，直到点「我已知悉并同意」。
+
+- **不透明**全屏遮罩（`background: var(--c-bg-page)`，**不是**半透明 —— 半透明会让人觉得
+  "下面还能点"，而这层的意思恰恰是"下面现在不给你用"）；居中白卡 `min(720px, 100%)`；
+- **关不掉**：没有关闭钮、Esc 无效、点遮罩无效、**没有第二个按钮**（用户口径
+  「阅读完同意才可以关闭窗口」；要退就关整个应用窗口，下次启动还会弹）；
+- 正文**自己滚**（`.legal-body` 限高 + `overflow:auto`）：按钮必须一直在，不能被长文顶出屏幕；
+- 四段正文 = 组件里的 `SECTIONS` 常量（这是什么 / 你的数据在本机 / 风险 / 责任自负）；
+- 同意失败**留在原地并如实说**（`[data-legal-error]`），绝不"先放行再说"；
+- 启动取状态带**有上限的重试**（5s × 12）：那几秒后端可能还没起来，宁可晚几秒弹。
 
 ### 现状清单（维度 × 面板）
 

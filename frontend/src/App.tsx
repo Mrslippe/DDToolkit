@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Route, Routes, useNavigate } from 'react-router-dom'
 import TopBar from './components/TopBar'
 import IconRail from './components/IconRail'
@@ -6,6 +6,9 @@ import VtuberSidebar from './components/VtuberSidebar'
 import EmptyState from './pages/EmptyState'
 import PostsPage from './pages/PostsPage'
 import ErrorBoundary from './components/ErrorBoundary'
+import LegalNotice from './components/LegalNotice'
+import { api } from './api/api'
+import type { AgreementState } from './api/types'
 import { useIsMaximized } from './hooks/useIsMaximized'
 import { clearShellState, loadShellState, shouldRestoreFromTray } from './utils/shellState'
 import './styles/layout.css'
@@ -44,6 +47,32 @@ export default function App() {
     if (saved) navigate(saved.route, { replace: true })
   }, [navigate])
 
+  /**
+   * **用户协议闸门**（2026-10-06，用户口径）：「第一次启动应用或者更新至这个版本时，都要阅读
+   * 一个用户协议或者公告……阅读完同意才可以关闭窗口」。判定在后端（要同意的版本 = 应用版本，
+   * 同意状态存 `app_meta`）—— 这里只做两件事：**启动时问一次**、**needed 就挡住整个应用**。
+   *
+   * ⚠️ 取不到时**不放行也不报错**：启动那几秒后端可能还没起来（壳会先显示揭幕幕），
+   *    所以带一个**有上限的轮询**（最多 ~1 分钟）。宁可晚几秒弹，也不假装"读过协议了"。
+   */
+  const [agreement, setAgreement] = useState<AgreementState | null>(null)
+  useEffect(() => {
+    let alive = true
+    let tries = 0
+    let timer: number | undefined
+    const ask = async () => {
+      try {
+        const got = await api.getAgreement()
+        if (alive) setAgreement(got)
+      } catch {
+        tries += 1
+        if (alive && tries < 12) timer = window.setTimeout(() => void ask(), 5000)
+      }
+    }
+    void ask()
+    return () => { alive = false; window.clearTimeout(timer) }
+  }, [])
+
   return (
     <div className="app-shell">
       <ErrorBoundary>
@@ -60,6 +89,12 @@ export default function App() {
           </main>
         </div>
       </ErrorBoundary>
+      {/* ⚠️ **闸门放在 ErrorBoundary 之外**：壳层炸了也要先能读到协议（它不该被别人的错误吞掉） */}
+      {agreement?.needed && (
+        <LegalNotice version={agreement.required}
+                     onAccepted={() => setAgreement({ ...agreement, needed: false,
+                                                      accepted: agreement.required })} />
+      )}
     </div>
   )
 }

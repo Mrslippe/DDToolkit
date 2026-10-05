@@ -280,6 +280,38 @@ def get_storage():
     return _storage_payload()
 
 
+# ── 用户协议 / 免责声明（2026-10-06）──────────────────────────────────────
+# 用户口径：「第一次启动应用或者更新至这个版本时，都要阅读一个用户协议或者公告……
+# 阅读完同意才可以关闭窗口」。判定与落盘在 `services/legal_notice.py`（那里有口径三条）。
+# ⚠️ 与 `/healthz` 的分工：那个是"能不能连上"的探活，这个是"要不要弹闸门"的状态 ——
+#    放一起会让探活多背一次库读（探针与扩展都高频打它）。
+
+
+class AgreementIn(BaseModel):
+    """同意请求：只带版本号（正文在前端那份组件里，见 `services/legal_notice.py` 末尾的说明）。"""
+
+    version: str = Field(min_length=1, max_length=32)
+
+
+@router.get("/agreement")
+def get_agreement(db: Session = Depends(get_db)):
+    """当前要不要弹协议闸门（`needed=true` ⇒ 前端必须挡住界面直到同意）。"""
+    from app.services import legal_notice
+
+    return legal_notice.state(db)
+
+
+@router.post("/agreement")
+def accept_agreement(payload: AgreementIn, db: Session = Depends(get_db)):
+    """记下"这一版已同意"。版本号必须**正好是当次要求的那个**（拿别的号来一律 400）。"""
+    from app.services import legal_notice
+
+    try:
+        return legal_notice.accept(db, payload.version)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+
+
 @router.get("/diagnostics")
 def get_diagnostics():
     """诊断包（批次 16，devlog/207）：用户"一键拿到一份能发给开发者的东西"。

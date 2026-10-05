@@ -1,4 +1,5 @@
-import type { Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliPlayInfo, BiliSearchResult, BiliSegments, Capabilities, DouyinCookieSaved, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, NoticesResponse, PairingInfo, PoolItem, Post, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyOverview, ThirdpartyVtuber, AssetsInfo, AssetsPruneResult, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, XhsCookieSaved } from './types'
+import type {
+  AgreementState, Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliPlayInfo, BiliSearchResult, BiliSegments, Capabilities, DouyinCookieSaved, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, NoticesResponse, PairingInfo, PoolItem, Post, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyOverview, ThirdpartyVtuber, AssetsInfo, AssetsPruneResult, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, XhsCookieSaved } from './types'
 import { ApiError, ApiShapeError } from './errors'
 import { HOST_HEADER, myHost } from '../utils/hostIdentity'
 import {
@@ -696,6 +697,16 @@ export const api = {
   /** 占用体检：库 / 图片缓存 / 日志 / 其余 + 磁盘剩余 + 遗留备份。
       后端要**真扫目录**，所以只在「关于」页打开时取一次，别拿它轮询。 */
   getStorage: () => request<StorageInfo>('/settings/storage'),
+
+  // ── 用户协议闸门（2026-10-06）────────────────────────────────────────
+  /** 要不要弹协议闸门（`needed=true` ⇒ 前端挡住界面直到同意）。启动时**只取一次**。 */
+  getAgreement: () => request<AgreementState>('/settings/agreement'),
+
+  /** 记下"这一版已同意"（版本号必须与后端要求的那个一致，否则 400） */
+  acceptAgreement: (version: string) =>
+    request<AgreementState>('/settings/agreement', {
+      method: 'POST', body: JSON.stringify({ version }),
+    }),
 
   /** 清空图片缓存（用户主动点；口径是全清，缓存可再生） */
   pruneImgCache: () => request<StorageActionResult>('/settings/storage/prune-cache',
