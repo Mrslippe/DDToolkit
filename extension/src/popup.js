@@ -11,7 +11,7 @@
  */
 import {
   PLATFORMS, PAIR_HEADER, cookieHeaderFrom, missingKeys, usedKeys, discoverPort,
-  postImport, receiptLine, statusHint, PORT_CANDIDATES,
+  postImport, receiptLine, statusHint, PORT_CANDIDATES, mergeCookies, describeCookie,
 } from './logic.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -23,7 +23,7 @@ function say(text) {
 }
 
 /** 每个平台的连接态与上次同步态（只活在内存里） */
-const state = Object.fromEntries(PLATFORMS.map((p) => [p.key, { cookie: '', note: '', tone: '' }]));
+const state = Object.fromEntries(PLATFORMS.map((p) => [p.key, { cookie: '', note: '', tone: '', seen: [] }]));
 
 async function loadSettings() {
   const got = await chrome.storage.local.get(['port', 'token']);
@@ -65,10 +65,44 @@ async function ensurePort({ port, token }, { force = false } = {}) {
   return found;
 }
 
-/** 读一个平台在那个浏览器里的 cookie（含 HttpOnly —— 这正是本方案必须是扩展的原因） */
+/**
+ * 读一个平台在那个浏览器里的 cookie（含 HttpOnly —— 这正是本方案必须是扩展的原因）。
+ *
+ * **三趟读，取并集**（2026-10-06 用户实测：只读一个 URL 时小红书的 `a1`、抖音的
+ * `s_v_web_id` 读不到 ⇒ 那一行永远是灰的）：
+ *   ① 该平台列的那组 URL（主站 + API 网关）—— 最接近"浏览器真正会发的那条头"；
+ *   ② **域扫描** `getAll({domain})`（覆盖子域与别的 path）；
+ *   ③ 还缺必需键时，再带 `partitionKey` 读一趟 —— Chrome 默认**不返回分区 cookie**（CHIPS），
+ *      而抖音那种第三方嵌入的指纹 cookie 正好可能是分区的。读不到就跳过（老版本没有这个字段）。
+ *
+ * ⚠️ 全程**只记名字/域/路径**（`describeCookie`），值只进内存里那一条串。
+ */
 async function readCookie(platform) {
-  const cookies = await chrome.cookies.getAll({ url: platform.url });
-  return cookieHeaderFrom(cookies);
+  const lists = [];
+  for (const url of platform.urls) {
+    try { lists.push(await chrome.cookies.getAll({ url })); } catch { /* 权限/URL 不合法：跳过 */ }
+  }
+  if (platform.domain) {
+    try { lists.push(await chrome.cookies.getAll({ domain: platform.domain })); } catch { /* 同上 */ }
+  }
+  let merged = mergeCookies(...lists);
+  if (missingKeys(platform.key, cookieHeaderFrom(merged)).length) {
+    // `partitionKey.topLevelSite` 要的是**站点**（scheme + 可注册域）：API 主机（api.xxx.com）
+    // 的 origin 不是站点 ⇒ 两种写法都试一遍，谁成算谁。
+    const sites = platform.domain
+      ? [...new Set(platform.urls.map((u) => new URL(u).origin)), `https://${platform.domain}`]
+      : [];
+    for (const url of platform.urls) {
+      for (const site of sites) {
+        try {
+          lists.push(await chrome.cookies.getAll({ url, partitionKey: { topLevelSite: site } }));
+        } catch { /* 这个 Chrome 版本不认识 partitionKey（或该 site 不合法）：跳过 */ }
+      }
+    }
+    merged = mergeCookies(...lists);
+  }
+  state[platform.key].seen = merged.map(describeCookie);
+  return cookieHeaderFrom(merged);
 }
 
 /** 画一行（键数/长度/回执） */
@@ -104,7 +138,7 @@ function render() {
     const meta = document.createElement('div');
     meta.className = 'row-meta';
     meta.textContent = st.cookie
-      ? `整条 ${total} 个键${miss.length ? ` · 缺 ${miss.join('、')}` : ''}`
+      ? `整条 ${total} 个键${miss.length ? ` · 缺 ${miss.join('、')}（看下面「设置 → 诊断」）` : ''}`
       : '（浏览器里没登录这个平台）';
 
     li.append(top, meta);
@@ -117,6 +151,19 @@ function render() {
     }
     ul.append(li);
   }
+  renderDiag();
+}
+
+/** 诊断清单：每个平台读到了哪些键（**只有键名与出处**）—— 缺键时用户自己就能看出在哪一步 */
+function renderDiag() {
+  const el = $('#diag');
+  el.textContent = PLATFORMS.map((p) => {
+    const seen = state[p.key].seen || [];
+    const miss = missingKeys(p.key, state[p.key].cookie);
+    const head = `${p.label}：读到 ${seen.length} 条`
+      + (miss.length ? `，缺 ${miss.join('、')}` : '（必需键齐了）');
+    return [head, ...seen.map((s) => `    ${s}`)].join('\n');
+  }).join('\n');
 }
 
 /** 同步一个平台 */
@@ -192,20 +239,29 @@ async function syncAll() {
 /** 进来先读 cookie（不改任何东西），并把端口/token 读出来 */
 async function boot() {
   const settings = await loadSettings();
+  await rereadCookies();
+  await ensurePort(settings);
+}
+
+/** 重新读一遍四个平台的 cookie（用户在别处刚登录完、或想复看诊断时点它） */
+async function rereadCookies() {
   for (const p of PLATFORMS) {
+    state[p.key].note = '';
+    state[p.key].tone = '';
     try {
       state[p.key].cookie = await readCookie(p);
     } catch (e) {
+      state[p.key].cookie = '';
       state[p.key].note = `读 cookie 失败：${(e && e.message) || e}`;
       state[p.key].tone = 'bad';
     }
   }
   render();
-  await ensurePort(settings);
 }
 
 $('#sync-all').addEventListener('click', () => void syncAll());
 $('#save').addEventListener('click', () => void saveSettings());
+$('#reread').addEventListener('click', () => void rereadCookies());
 $('#rediscover').addEventListener('click', async () => {
   const s = await saveSettings();
   await ensurePort(s, { force: true });
@@ -213,7 +269,10 @@ $('#rediscover').addEventListener('click', async () => {
 void boot();
 
 // 供排查用：`chrome-extension://<id>/popup.html` 的控制台里 `__ddtoolkitExt()` 看当前状态
+// （`seen` 是"读到了哪些 cookie"的清单：只有键名/域/路径，**没有值**）
 globalThis.__ddtoolkitExt = () => ({
   pairHeader: PAIR_HEADER,
-  state: Object.fromEntries(Object.entries(state).map(([k, v]) => [k, { keys: usedKeys(k, v.cookie), note: v.note }])),
+  state: Object.fromEntries(Object.entries(state).map(([k, v]) => [k, {
+    keys: usedKeys(k, v.cookie), note: v.note, seen: v.seen,
+  }])),
 });

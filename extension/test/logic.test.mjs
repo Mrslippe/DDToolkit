@@ -17,7 +17,7 @@ import { dirname, join } from 'node:path';
 import {
   APP_IDENTIFIER, PAIR_HEADER, PORT_CANDIDATES, PLATFORMS, platformOf,
   cookieHeaderFrom, cookieKeys, missingKeys, usedKeys, importBody,
-  receiptLine, statusHint, discoverPort, postImport,
+  receiptLine, statusHint, discoverPort, postImport, mergeCookies, describeCookie,
 } from '../src/logic.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -58,6 +58,17 @@ test('缺键判定：抖音的 uifid 认两种写法（UIFID_TEMP 也算）', ()
   assert.deepEqual(missingKeys('douyin', `${base}; uifid=u`), []);
   assert.deepEqual(missingKeys('douyin', `${base}; UIFID_TEMP=u`), []);
   assert.deepEqual(missingKeys('douyin', 's_v_web_id=v'), ['ttwid', 'uifid 或 UIFID_TEMP']);
+});
+
+test('键名匹配**不区分大小写**（与后端 `cookie_keys()` 同一把尺子）', () => {
+  // 后端把键名 lower() 之后再比（`douyin_auth.REQUIRED_ANY` 列的就是小写）⇒
+  // 扩展若按原样大小写比，会出现"扩展说缺、后端其实认"的**假灰按钮**
+  assert.deepEqual(missingKeys('douyin', 'S_V_WEB_ID=v; TTWID=t; UIFID=u'), []);
+  assert.deepEqual(missingKeys('douyin', 's_v_web_id=v; ttwid=t; uifid_temp=u'), []);
+  assert.deepEqual(missingKeys('xiaohongshu', 'A1=a; WEB_SESSION=w'), []);
+  // 显示仍用扩展侧那份规范拼写（别把用户浏览器里的怪大小写显示出来）
+  assert.deepEqual(usedKeys('douyin', 'S_V_WEB_ID=v; TTWID=t; UIFID=u'),
+    ['uifid', 's_v_web_id', 'ttwid']);
 });
 
 test('不认识的平台 ⇒ 判空（调用方必须自己处理，不许静默当成某个平台）', () => {
@@ -137,8 +148,48 @@ test('POST：带配对 token 头、超时后抛（由调用方转成人话）', 
   assert.deepEqual(JSON.parse(seen.init.body), { platform: 'weibo', cookie: 'SUB=x' });
 });
 
-/** 清单对账（见文件头）：扩展侧的必需键 / 目标 URL / 应用标识必须与后端一致 */
-test('清单对账：与后端源码逐项一致（改了后端没改扩展 ⇒ 这条红）', () => {
+test('多趟读的并集：按 name+path+domain 去重，**先到的赢**', () => {
+  const urlPass = [
+    { name: 'a1', value: 'from-url', domain: '.xiaohongshu.com', path: '/' },
+    { name: 'web_session', value: 's', domain: '.xiaohongshu.com', path: '/' },
+  ];
+  const domainPass = [
+    { name: 'a1', value: 'from-domain', domain: '.xiaohongshu.com', path: '/' },  // 重复 ⇒ 丢掉
+    { name: 'webId', value: 'w', domain: '.xiaohongshu.com', path: '/' },          // 新的 ⇒ 收下
+  ];
+  const merged = mergeCookies(urlPass, domainPass);
+  assert.equal(merged.length, 3);
+  assert.equal(cookieHeaderFrom(merged), 'a1=from-url; web_session=s; webId=w');
+});
+
+test('每行灰掉的那类问题：只读一个 URL 会漏掉指纹键（用户 2026-10-06 实测）', () => {
+  // 用户截图：只读 `www.xiaohongshu.com/explore` 时 `a1` 不见了、抖音的 `s_v_web_id` 也是
+  // ⇒ 每个平台必须列**一组** URL（含 API 网关）+ 一次域扫描，缺一不可
+  for (const key of ['xiaohongshu', 'douyin', 'bilibili', 'weibo']) {
+    const p = platformOf(key);
+    assert.ok(Array.isArray(p.urls) && p.urls.length >= 2, `${key} 只配了一个 URL（会漏指纹键）`);
+    for (const u of p.urls) assert.match(u, /^https:\/\//, `${key} 的 URL 必须是 https：${u}`);
+    assert.ok(p.domain && !p.domain.startsWith('.'), `${key} 缺域扫描用的 domain`);
+    // 域扫描的域必须能覆盖它列的 URL（否则那一趟白读）
+    for (const u of p.urls) {
+      assert.ok(new URL(u).hostname.endsWith(p.domain), `${u} 不在 ${p.domain} 下`);
+    }
+  }
+  // 小红书必须读 API 网关那一侧（`a1` 常只在那里可见）；抖音要覆盖不止一个页面
+  assert.ok(platformOf('xiaohongshu').urls.some((u) => u.includes('edith.xiaohongshu.com')));
+  assert.ok(platformOf('douyin').urls.length >= 3);
+});
+
+test('诊断行：只给键名/出处/标志，**不带值**', () => {
+  const line = describeCookie({
+    name: 'a1', value: 'SECRET', domain: '.xiaohongshu.com', path: '/',
+    httpOnly: true, session: false, partitionKey: { topLevelSite: 'https://www.douyin.com' },
+  });
+  assert.equal(line, 'a1 @ .xiaohongshu.com/ [HttpOnly/分区]');
+  assert.ok(!line.includes('SECRET'), '诊断行里带了 cookie 值');
+});
+
+/** 清单对账（见文件头）：扩展侧的必需键 / 目标 URL / 应用标识必须与后端一致 */test('清单对账：与后端源码逐项一致（改了后端没改扩展 ⇒ 这条红）', () => {
   const logic = readFileSync(join(ROOT, 'extension', 'src', 'logic.js'), 'utf8');
   const backend = readFileSync(join(ROOT, 'app', 'services', 'cookie_import.py'), 'utf8');
   const mainPy = readFileSync(join(ROOT, 'app', 'main.py'), 'utf8');
@@ -184,9 +235,10 @@ test('清单对账：与后端源码逐项一致（改了后端没改扩展 ⇒ 
   // 抖音的"两写法"那一组也要在后端存在
   assert.ok(dy.includes('UIFID_TEMP'), '抖音后端的 uifid 备用名（UIFID_TEMP）不见了');
 
-  // ⑥ 微博那张 URL 必须是 PC 域（m 站不认 SUB，实测）
-  assert.ok(platformOf('weibo').url.startsWith('https://weibo.com'),
-    '微博的目标 URL 必须是 PC 域 weibo.com');
+  // ⑥ 微博那些 URL 必须是 PC 域（m 站不认 SUB，实测）
+  const weiboUrls = platformOf('weibo').urls;
+  assert.ok(weiboUrls.every((u) => u.startsWith('https://weibo.com')),
+    `微博的目标 URL 必须是 PC 域 weibo.com：${weiboUrls}`);
 
   // ⑦ 扩展侧不许偷偷 import chrome.*（这个文件是纯逻辑，要能在 node 里跑）
   //    ⚠️ 只看**代码行**：注释里提到 `chrome.cookies`（解释"为什么必须是扩展"）不算违规。

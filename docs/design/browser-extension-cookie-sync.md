@@ -94,8 +94,10 @@ expires: 2026-12-31
 - **popup**：四行（B站 / 微博 / 小红书 / 抖音），每行显示"当前读到的键 / 长度 / 上次同步时间"，
   一枚「同步到 DDToolkit」；
 - **读 cookie**：⚠️ 2026-10-06 定成**按目标 URL 取**（`chrome.cookies.getAll({url})`，每个平台一张 URL 表，
-  按返回顺序拼 `name=value; …`）—— 理由：我们要的就是"浏览器发给那个平台的那条 Cookie 头"，
-  而 `{url}` 的返回顺序**就是**发送顺序；按 `{domain}` 拿再自己猜排序是另一套语义（见执行方案 §3.5）；
+  按返回顺序拼 `name=value; …`）—— 理由：我们要的就是"浏览器发给那个平台的那条 Cookie 头"。
+  ⚠️ **同日用户实测后修正：一个 URL 不够** —— 只读 `www.` 那一侧时小红书的 `a1`、抖音的
+  `s_v_web_id` 读不到 ⇒ 现在每个平台读**一组** URL（含 `edith.xiaohongshu.com` 这类 API 网关）
+  **并加一次域扫描**，缺键时再带 `partitionKey` 读一趟（分区 cookie）。细节见执行方案 §3.5；
 - **UA**：抖音需要"那个浏览器的 UA" ⇒ 直接 `navigator.userAgent`（**必须取自扩展所在的浏览器**，
   这正是手抄最容易错的地方）；
 - **POST**：`fetch('http://127.0.0.1:<port>/auth/import', {method:'POST', body})`；

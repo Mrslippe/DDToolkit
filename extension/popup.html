@@ -24,6 +24,7 @@
       <input id="token" type="password" spellcheck="false" placeholder="从应用「设置 → 登录 → 浏览器扩展」复制">
     </label>
     <div class="btns">
+      <button id="reread" type="button">重新读一次 cookie</button>
       <button id="rediscover" type="button">重新探测</button>
       <button id="save" type="button">保存</button>
     </div>
@@ -31,6 +32,14 @@
       装法与验收步骤见仓库 <code>extension/README.md</code>。
       这里只把凭据发给 <code>127.0.0.1</code> 上的 DDToolkit，不落任何别处。
     </p>
+    <details class="diag">
+      <summary>诊断：这次读到了哪些 cookie（**只有键名与出处，没有值**）</summary>
+      <pre id="diag" data-ext-diag="1"></pre>
+      <p class="hint">
+        某一行灰着不动的看这里：<b>缺哪个键、键在不在浏览器里</b>都在这份清单里。
+        清单里没有那个键 ⇒ 是浏览器里真没有（先去那个平台登录/刷新一次）；有的话把它那一行发我。
+      </p>
+    </details>
   </details>
 
   <p id="log" class="log" data-ext-log="1"></p>

@@ -145,9 +145,8 @@ expires: 2026-12-31
 
 | 决定 | 口径 |
 |---|---|
-| 怎么读 | 每个平台一张**目标 URL 表**，对每个 URL `chrome.cookies.getAll({url})`，并把结果**按返回顺序**拼成 `name=value; …` |
-| 为什么 | 我们要的就是"浏览器发给那个平台的那条 Cookie 头"。`getAll({url})` 返回的顺序**就是**发送顺序（同名前缀更长的在后），按 `{domain}` 拿再自己猜排序是另一套语义 |
-| URL 表 | bilibili `https://api.bilibili.com/x/web-interface/nav` · weibo `https://weibo.com/` · xiaohongshu `https://www.xiaohongshu.com/explore` · douyin `https://www.douyin.com/` |
+| 读法 | ⚠️ **2026-10-06（用户实测后修正）**：**一个 URL 不够** —— 只读 `www.` 那一侧时小红书的 `a1`、抖音的 `s_v_web_id` 读不到（那一行的同步按钮只能是灰的）。现在是**三趟取并集**：① 每个平台一组 URL（主站 + API 网关，如 `edith.xiaohongshu.com`）；② `getAll({domain})` 域扫描（覆盖子域与别的 path）；③ 还缺必需键时带 `partitionKey` 再读一趟（Chrome 默认不返回**分区 cookie**/CHIPS）。按 `name + path + domain` 去重、先到的赢；判键名**不区分大小写**（与后端同一把尺子）|
+| URL 表（+ 域扫描） | bilibili `api.bilibili.com/x/web-interface/nav` + `www.bilibili.com/` · weibo `weibo.com/` · xiaohongshu `www.xiaohongshu.com/explore` + **`edith.xiaohongshu.com/`** · douyin `www.douyin.com/` + `/discover` + `/user/self` |
 | 去重 | **不按 name 去重**（同名不同 path 由平台自己处理）；多个 URL 的结果并集后再按 name+path 去重 |
 | UA | douyin 额外带 `navigator.userAgent`（**扩展所在浏览器的**，这正是手抄最容易错的地方）|
 

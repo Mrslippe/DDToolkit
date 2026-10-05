@@ -28,12 +28,23 @@ export const PAIR_HEADER = 'X-DDToolkit-Pair';
  */
 export const PORT_CANDIDATES = [8765, 8766, 8767, 8768, 8769];
 
-/** 四个平台：目标 URL / 必需键 / 回执里显示哪些键 / 是否需要 UA */
+/**
+ * 四个平台：读哪些 URL（+ 域扫描）/ 必需键 / 回执里显示哪些键 / 是否需要 UA。
+ *
+ * ⚠️ **一个 URL 不够**（2026-10-06 用户实测踩到）：只读 `www.` 那一侧时，小红书的 `a1`、
+ * 抖音的 `s_v_web_id` **读不到** ⇒ 那一行的同步按钮只能是灰的（用户看到的正是这个）。
+ * ⇒ 每个平台列**一组** URL（主站 + API 网关 + 首页），再额外做一次**域扫描**
+ * （`getAll({domain})` 覆盖子域），最后 `mergeCookies()` 取并集。
+ */
 export const PLATFORMS = [
   {
     key: 'bilibili',
     label: 'B 站',
-    url: 'https://api.bilibili.com/x/web-interface/nav',
+    urls: [
+      'https://api.bilibili.com/x/web-interface/nav',
+      'https://www.bilibili.com/',
+    ],
+    domain: 'bilibili.com',
     required: ['SESSDATA', 'bili_jct'],
     used: ['SESSDATA', 'bili_jct', 'DedeUserID', 'buvid3', 'buvid4'],
     needsUa: false,
@@ -42,7 +53,8 @@ export const PLATFORMS = [
     key: 'weibo',
     label: '微博',
     // ⚠️ PC 域：`WEIBO_COOKIE` 只在 weibo.com 有效（`services/platforms/weibo.py` 实测）
-    url: 'https://weibo.com/',
+    urls: ['https://weibo.com/', 'https://weibo.com/newlogin'],
+    domain: 'weibo.com',
     required: ['SUB'],
     used: ['SUB', 'SUBP', 'SSOLoginState', 'ALF'],
     needsUa: false,
@@ -50,7 +62,14 @@ export const PLATFORMS = [
   {
     key: 'xiaohongshu',
     label: '小红书',
-    url: 'https://www.xiaohongshu.com/explore',
+    // `edith.xiaohongshu.com` 是**主力业务 API 网关**（`docs/design/xhs-douyin-research.md` §2.1）：
+    // `a1` 是签名强制输入，实测它常常只在这一侧可见 ⇒ 两个 host 都要读
+    urls: [
+      'https://www.xiaohongshu.com/explore',
+      'https://edith.xiaohongshu.com/',
+      'https://www.xiaohongshu.com/',
+    ],
+    domain: 'xiaohongshu.com',
     required: ['a1', 'web_session'],
     used: ['a1', 'web_session', 'webId'],
     needsUa: false,
@@ -58,7 +77,13 @@ export const PLATFORMS = [
   {
     key: 'douyin',
     label: '抖音',
-    url: 'https://www.douyin.com/',
+    // `s_v_web_id` 要同时充当 `verifyFp`/`fp`，实测它不在 `www.douyin.com/` 这一条上
+    urls: [
+      'https://www.douyin.com/',
+      'https://www.douyin.com/discover',
+      'https://www.douyin.com/user/self',
+    ],
+    domain: 'douyin.com',
     // `uifid` 与 `UIFID_TEMP` 是同一个位置的两写法（后端 `missing_keys` 也认两种）
     required: ['s_v_web_id', 'ttwid'],
     requiredAny: [['uifid', 'UIFID_TEMP']],
@@ -67,6 +92,38 @@ export const PLATFORMS = [
     needsUa: true,
   },
 ];
+
+/**
+ * 把多趟读回来的 cookie **并成一份**（按 `name + path` 去重，**先到的赢**）。
+ *
+ * 为什么要多趟：`getAll({url})` 只给"会发给那个 URL 的那些"，而同一家的指纹 cookie
+ * 可能挂在别的 host/path 上（2026-10-06 用户实测：只读 `www.` 时小红书的 `a1`、
+ * 抖音的 `s_v_web_id` 都读不到，那一行的同步按钮只能是灰的）。
+ */
+export function mergeCookies(...lists) {
+  const seen = new Set();
+  const out = [];
+  for (const list of lists) {
+    for (const c of list || []) {
+      if (!c || !c.name) continue;
+      const id = `${c.name}\u0000${c.path || '/'}\u0000${c.domain || ''}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push(c);
+    }
+  }
+  return out;
+}
+
+/** 给诊断用：`name @ domain path` + 几个关键标志（**只有键名与出处，没有值**） */
+export function describeCookie(c) {
+  const flags = [
+    c.httpOnly ? 'HttpOnly' : '',
+    c.session ? '会话' : '',
+    c.partitionKey ? '分区' : '',
+  ].filter(Boolean).join('/');
+  return `${c.name} @ ${c.domain || '?'}${c.path || '/'}${flags ? ` [${flags}]` : ''}`;
+}
 
 /** 平台 key → 定义（找不到返回 undefined：调用方必须处理，别静默用错平台） */
 export function platformOf(key) {
@@ -93,7 +150,7 @@ export function cookieHeaderFrom(cookies) {
   return parts.join('; ');
 }
 
-/** 这条 cookie 串里有哪些键（保序） */
+/** 这条 cookie 串里有哪些键（保序，**原样大小写** —— 显示用） */
 export function cookieKeys(cookie) {
   return (cookie || '')
     .split(';')
@@ -104,27 +161,38 @@ export function cookieKeys(cookie) {
 }
 
 /**
+ * 判定用的键集合：**一律小写**。
+ *
+ * ⚠️ 与后端**同一把尺子**：`douyin_auth.cookie_keys()` 就是 `lower()` 之后比的
+ * （`REQUIRED_ANY` 里列的是 `uifid_temp`/`uifidtemp`）。扩展若按原样大小写比，
+ * 会出现"扩展说缺、后端其实认"的假灰按钮 —— 那是两边判据分叉，正是本仓最忌讳的形态。
+ */
+function lowerSet(cookie) {
+  return new Set(cookieKeys(cookie).map((k) => k.toLowerCase()));
+}
+
+/**
  * 缺哪些必需键（与后端的判定一致 —— 缺了就**不要**发请求，界面直接说缺哪个）。
  *
- * ⚠️ 顺序：先普通必需键，再 `requiredAny` 的每一组（组内任一即可）。
+ * ⚠️ 顺序：先普通必需键，再 `requiredAny` 的每一组（组内任一即可）；比较**不区分大小写**。
  */
 export function missingKeys(platformKey, cookie) {
   const p = platformOf(platformKey);
   if (!p) return [];
-  const have = new Set(cookieKeys(cookie));
-  const miss = (p.required || []).filter((k) => !have.has(k));
+  const have = lowerSet(cookie);
+  const miss = (p.required || []).filter((k) => !have.has(k.toLowerCase()));
   for (const group of p.requiredAny || []) {
-    if (!group.some((k) => have.has(k))) miss.push(group.join(' 或 '));
+    if (!group.some((k) => have.has(k.toLowerCase()))) miss.push(group.join(' 或 '));
   }
   return miss;
 }
 
-/** 回执里显示"这次用到了哪些键"（只给键名，**绝不带值**） */
+/** 回执里显示"这次用到了哪些键"（只给键名，**绝不带值**；显示用扩展侧那份规范拼写） */
 export function usedKeys(platformKey, cookie) {
   const p = platformOf(platformKey);
   if (!p) return [];
-  const have = new Set(cookieKeys(cookie));
-  return (p.used || []).filter((k) => have.has(k));
+  const have = lowerSet(cookie);
+  return (p.used || []).filter((k) => have.has(k.toLowerCase()));
 }
 
 /** `POST /auth/import` 的请求体（字段名与后端 `routers/auth.py::import_cookie` 对齐） */
