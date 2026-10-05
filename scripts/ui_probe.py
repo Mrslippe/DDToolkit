@@ -1771,9 +1771,12 @@ def _assert(views: list[dict], width: int) -> list[str]:
                   f" 量得={bi.get('measuredTone')!r} 亮度={bi.get('measuredLuminance')}"
                   f" data-ink={bi.get('inkAttr')!r}")
             print(f"     签名色 {bi.get('colorBefore', {}).get('sign')} → 挂 dark 后 "
-                  f"{bi.get('colorAfterDark', {}).get('sign')} ｜ "
-                  f"标签色 {bi.get('colorBefore', {}).get('tag')} → "
-                  f"{bi.get('colorAfterDark', {}).get('tag')}")
+                  f"{bi.get('colorAfterDark', {}).get('sign')} → 挂 light 后 "
+                  f"{bi.get('colorAfterLight', {}).get('sign')}")
+            print(f"     名字色 → dark {bi.get('colorAfterDark', {}).get('name')} ／ "
+                  f"light {bi.get('colorAfterLight', {}).get('name')} ｜ "
+                  f"标签色 → dark {bi.get('colorAfterDark', {}).get('tag')} ／ "
+                  f"light {bi.get('colorAfterLight', {}).get('tag')}")
             if bi.get("hasCustomBg"):
                 # ⚠️ 「量不出明暗」在这一层**不判红**（2026-10-05 实测）：探针跑在**虚拟时间**
                 # 下，图片加载永远不完成（本仓老坑：`ProxyImage` 在探针里也会回落成占位），
@@ -1794,6 +1797,16 @@ def _assert(views: list[dict], width: int) -> list[str]:
                 tag_dark = str(bi.get("colorAfterDark", {}).get("tag") or "")
                 if "255, 255, 255" not in tag_dark:
                     bad.append(f"@{width} cards: data-ink=dark 时「未开播」标签仍是 {tag_dark!r}")
+                # 亮底那一档：三处（名字 / 开播胶囊 / 签名）必须**一起变暗**
+                # （用户 2026-10-05 第二张截图：「七海的这张还是不明显……统一修改亮暗」）
+                light = bi.get("colorAfterLight", {}) or {}
+                for what, want_darker in (("名字", "name"), ("签名", "sign"), ("未开播标签", "tag")):
+                    val = str(light.get(want_darker) or "")
+                    # 深的判定：取颜色里最大的那个通道值 —— "16, 24, 40" ⇒ 40；白字/灰字都会 > 100
+                    nums = [int(n) for n in re.findall(r"\d+", val)[:3]] or [255]
+                    if max(nums) > 100:
+                        bad.append(f"@{width} cards: data-ink=light 时{what}仍是 {val!r}"
+                                   f"（亮底该用暗字 —— 灰字压在偏亮的底上就是「不明显」）")
             elif bi.get("inkAttr"):
                 bad.append(f"@{width} cards: 没有自定义背景却挂了 data-ink="
                            f"{bi.get('inkAttr')!r}（头像铺底态不该换字色）")

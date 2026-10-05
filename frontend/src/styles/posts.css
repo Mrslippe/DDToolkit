@@ -846,34 +846,78 @@ img.hero-avatar {
   overflow: hidden;
 }
 
-/* ── 背景明暗 → 字色（2026-10-05，devlog/355）──────────────────────────────
+/* ── 背景明暗 → 字色（2026-10-05，devlog/355 + 追加）────────────────────────
    用户（截图圈出「未开播」标签与签名）：「（这两处）的颜色随着底图颜色来变化以提升醒目度，
    因为当前灰字在深色背景下还是不清楚」。
-   口径：**只对自定义背景**（`.hero-backdrop.custom`，图不透明）量中间那条横带的亮度，
-   算出 `data-ink="dark"`（这一带是深色的）⇒ 把这两处换成浅字。
-   头像铺底态、以及量不到时**不挂这个属性** ⇒ 走下面的原样式（灰色）。
-   ⚠️ 名字（`.hero-name`）**不参与**：用户明确只要这两处（它 57px 粗体 + 投影本来能认）。
-   ⚠️ 判"深"的阈值与纱罩白度在 `frontend/src/utils/backdropTone.ts`；改 CSS 的纱罩 alpha
-      时记得回去改那个 `VEIL_ALPHA_MID`（两处是同一件事的两半）。 */
+   追加（同一天，第二张截图）：「七海的这张还是不明显……另外将名字、开播胶囊文字、签名
+   统一修改亮暗吧」⇒ ①**亮底那一档也要动**（原来亮底保持灰字，而灰字压在"恰好偏亮的那一块"
+   上一样看不清）；②三处（名字 / 开播胶囊 / 签名）**一起**切，不再各写一套。
+
+   两档的语义（`frontend/src/utils/backdropTone.ts` 量出来挂 `data-ink`）：
+     `dark`  = 这一带是深色的 ⇒ **亮字**（白 + 暗投影）
+     `light` = 这一带是浅色的 ⇒ **暗字**（近黑 + 极淡的亮投影，压住底图上偏亮的杂块）
+   两档都**同时**作用在三处；没挂 `data-ink`（头像铺底态 / 量不到）⇒ 走各元素的原样式。
+   ⚠️ 名字这一处是**第二版才纳入**的：第一版按用户当时的口径只改标签与签名，实测下来
+      "名字黑、签名白"的割裂更难看，所以统一。 */
+.hero[data-ink='dark'] .hero-name {
+  color: #ffffff;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
+}
+
+.hero[data-ink='light'] .hero-name {
+  color: #101828;
+  text-shadow: 0 1px 3px rgba(255, 255, 255, 0.5);
+}
+
 .hero[data-ink='dark'] .live-tag.off {
   background: rgba(15, 23, 42, 0.34);
   border-color: rgba(255, 255, 255, 0.55);
   color: rgba(255, 255, 255, 0.94);
 }
 
+.hero[data-ink='light'] .live-tag.off {
+  background: rgba(255, 255, 255, 0.42);
+  border-color: rgba(16, 24, 40, 0.32);
+  color: rgba(16, 24, 40, 0.9);
+}
+
+/* 直播中那一态也要一起切：它原本写死黑字，深色背景上同样看不见 */
+.hero[data-ink='dark'] .live-tag.live {
+  background: rgba(225, 68, 68, 0.3);
+  border-color: rgba(255, 255, 255, 0.5);
+  color: #ffffff;
+}
+
+.hero[data-ink='light'] .live-tag.live {
+  color: #101828;
+}
+
 .hero[data-ink='dark'] .live-tag.off .live-dot {
   background: #cfd8e3;
+}
+
+.hero[data-ink='light'] .live-tag.off .live-dot {
+  background: #64748b;
 }
 
 .hero[data-ink='dark'] .live-tag.clickable.off:hover {
   border-color: rgba(255, 255, 255, 0.8);
 }
 
-/* 浅字在深底图上仍可能压到"深色图里恰好偏亮的那一块" ⇒ 补一层暗投影兜底。
-   与名字那条 `text-shadow: 0 2px 4px rgba(0,0,0,.25)` 同族，只是更实一点。 */
+.hero[data-ink='light'] .live-tag.clickable.off:hover {
+  border-color: rgba(16, 24, 40, 0.55);
+}
+
+/* 浅字在深底图上仍可能压到"深色图里恰好偏亮的那一块" ⇒ 补一层暗投影兜底；
+   暗字同理补一层极淡的亮投影。与名字那条 `text-shadow` 同族，只是更实一点。 */
 .hero[data-ink='dark'] .hero-sign {
   color: rgba(255, 255, 255, 0.94);
   text-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+
+.hero[data-ink='light'] .hero-sign {
+  color: rgba(16, 24, 40, 0.92);
+  text-shadow: 0 1px 3px rgba(255, 255, 255, 0.45);
 }
 
 /* 平台粉丝展示（1.2.4）：宽适应内容，不定数徽章集纵向居中排列，集间隔 10 */

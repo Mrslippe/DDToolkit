@@ -1204,7 +1204,10 @@ async function sampleBackdropInk() {
   if (!hero || !backdrop) return null
   const colorOf = (el: HTMLElement | null) => (el ? getComputedStyle(el).color : null)
   const sign = () => document.querySelector<HTMLElement>('.hero-sign')
-  const tag = () => document.querySelector<HTMLElement>('.live-tag.off')
+  // ⚠️ 取 **`.live-tag`（两态都算）**：原来写 `.live-tag.off`，遇到"直播中"的 V 就量到 null
+  //    ⇒ 判据把"元素不存在"当成"颜色没跟着变"（2026-10-05 门禁里就是这么假红的）。
+  //    用户的口径本来就要求**两态**都随底图切（`.live` 原本写死黑字，深底上同样看不见）。
+  const tag = () => document.querySelector<HTMLElement>('.live-tag')
   const read = () => {
     const bd = document.querySelector<HTMLElement>('.hero-backdrop')
     const custom = !!bd?.classList.contains('custom')
@@ -1255,10 +1258,20 @@ async function sampleBackdropInk() {
   }
   const before = { sign: colorOf(sign()), tag: colorOf(tag()), ink: hero.getAttribute('data-ink') }
 
-  // ④ 手动挂上"深"档 → 量 CSS 有没有照做（与这张图本身深浅无关）
+  // ④ 手动挂上两档 → 量 CSS 有没有照做（与这张图本身深浅无关）。
+  //    ⚠️ **两档都要量**：第二版（用户："名字、开播胶囊文字、签名统一修改亮暗"）之后，
+  //    `light` 那一档也必须把三处**变暗** —— 只验 dark 会漏掉"亮底仍是灰字"那个洞。
+  const name = () => document.querySelector<HTMLElement>('.hero-name')
+  const snap = () => ({
+    name: colorOf(name()), sign: colorOf(sign()), tag: colorOf(tag()),
+    nameShadow: name() ? getComputedStyle(name()!).textShadow : null,
+  })
   hero.setAttribute('data-ink', 'dark')
   await sleep(60)
-  const afterDark = { sign: colorOf(sign()), tag: colorOf(tag()) }
+  const afterDark = snap()
+  hero.setAttribute('data-ink', 'light')
+  await sleep(60)
+  const afterLight = snap()
   if (heroBefore) hero.setAttribute('data-ink', heroBefore)
   else hero.removeAttribute('data-ink')
 
@@ -1281,6 +1294,7 @@ async function sampleBackdropInk() {
     inkAttr: before.ink,
     colorBefore: before,
     colorAfterDark: afterDark,
+    colorAfterLight: afterLight,
   }
 }
 
