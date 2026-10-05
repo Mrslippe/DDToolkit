@@ -1805,30 +1805,50 @@ export async function runUiProbe(): Promise<void> {
     }
     // 第二格：到位态（与第一格同一把尺子；两格高度必须零变化 —— R36 的判据）
     const settledSample = sampleDialog()
-    // ── 数据视图右上角那枚「第三方数据」钮 + 它打开的小窗（2026-10-05，`devlog/354`）────
-    // 用户原话：「当前如果历史第三方数据丢失了就没法获取了」——所以这条链路要真机走一遍：
-    // **悬停才出现**（与右缘圆点同一套显隐）→ 点开 → 三块现状与按钮都在。
-    // ⚠️ 先点掉场次详情弹窗（它盖在上面），再派发 pointerover/pointerout 模拟悬停
-    //    （探针没有真实指针；`DataDeck` 的 `dotsOn` 挂的是 React 的 onPointerEnter）。
+    // ── 「第三方数据」入口 + 它打开的小窗（2026-10-05，`devlog/354`）────────────────
+    // 用户原话：「当前如果历史第三方数据丢失了就没法获取了」；位置口径是
+    // 「参考 card 视图的右上角图标的位置和大小以及样式」⇒ 入口就是**工具条右上组**
+    // 那枚浮片（`.bg-tools > .bg-set[data-thirdparty-entry]`），与卡片视图的
+    // 「档案设置」同一组 class —— 所以这里也照卡片视图的呼出通路走：先派发 `mousemove`
+    // 把工具条唤出来（它是 `pointer-events:none`，收不到 hover，只能按指针位置判），
+    // 再点那枚钮。
     const closeBtn = document.querySelector<HTMLElement>('.lc-dlg [aria-label="Close"], .lc-dlg button[type="button"]')
     closeBtn?.click()
     await sleep(300)
-    const deck = document.querySelector<HTMLElement>('[data-deck]')
-    const cornerBefore = document.querySelector('[data-deck-corner]')?.getAttribute('data-on') ?? null
-    if (deck) {
-      deck.dispatchEvent(new PointerEvent('pointerover', { bubbles: true, cancelable: true }))
-      deck.dispatchEvent(new PointerEvent('pointerenter', { bubbles: false, cancelable: true }))
+    const panel = document.querySelector<HTMLElement>('.posts-panel')
+    const sw = document.querySelector<HTMLElement>('.view-switch')?.getBoundingClientRect()
+    let entryBefore: string | null = null
+    if (panel && sw) {
+      // ① rest 态：先移出热区（真派发一次 mousemove 到页面中部），量"入口在不在"
+      panel.dispatchEvent(new MouseEvent('mousemove', {
+        clientX: sw.left + sw.width / 2, clientY: 400, bubbles: true }))
+      await sleep(500)
+      entryBefore = document.querySelector('[data-thirdparty-entry]') ? 'exists' : null
+      // ② 呼出工具条（与卡片视图截图/`--toolbar` 模式同一条通路）
+      panel.dispatchEvent(new MouseEvent('mousemove', {
+        clientX: sw.left + sw.width / 2, clientY: sw.top + sw.height / 2, bubbles: true }))
+      await sleep(500)                 // dwell(140ms) + 淡入
     }
-    await sleep(120)
-    const corner = document.querySelector<HTMLElement>('[data-deck-corner]')
-    const cornerAfter = corner?.getAttribute('data-on') ?? null
-    corner?.click()
+    const toolbarShown = document.querySelector('.view-toolbar')?.getAttribute('data-shown') ?? null
+    const entry = document.querySelector<HTMLElement>('[data-thirdparty-entry]')
+    const entryBox = entry?.getBoundingClientRect() ?? null
+    entry?.click()
     await sleep(900)                       // 拉一次现状（本机后端，够快）
     const tp = document.querySelector<HTMLElement>('[data-thirdparty-dialog]')
     const thirdparty = {
-      hasButton: !!corner,
-      beforeOn: cornerBefore,
-      afterOn: cornerAfter,
+      entryExists: !!entry,
+      restEntry: entryBefore,              // 静止时那枚钮在不在 DOM（在，但不可见 —— 见下 `entryVisible`）
+      toolbarShown,
+      entryVisible: entryBox ? (entryBox.width > 0 && entryBox.height > 0) : false,
+      entryBox: entryBox ? { x: Math.round(entryBox.left), y: Math.round(entryBox.top),
+                             w: Math.round(entryBox.width), h: Math.round(entryBox.height) } : null,
+      /** 与卡片视图那枚「档案设置」的**同一把尺子**（用户要求"位置/大小/样式照它"）：
+       *  两者都取 `.bg-set` 的盒 + 计算样式，探针侧比一比就知道有没有漂。 */
+      entryStyle: entry ? (() => {
+        const cs = getComputedStyle(entry)
+        return { cls: entry.className, opacity: cs.opacity, pointerEvents: cs.pointerEvents,
+                 radius: cs.borderRadius }
+      })() : null,
       opened: !!tp,
       blocks: tp ? tp.querySelectorAll('[data-thirdparty-account]').length : -1,
       hasRefresh: !!tp?.querySelector('[data-thirdparty-refresh]'),

@@ -3334,24 +3334,27 @@ def main() -> int:
             # 用户：「当前如果历史第三方数据丢失了就没法获取了，例如恬豆发芽了 9.28-10.2
             # 的直播记录」⇒ 数据视图右上角那枚悬停钮要真的能开、开的窗里要真的有东西。
             tp = (res or {}).get("thirdparty") or {}
-            print("\n=== 第三方数据入口（数据视图右上角）===")
+            print("\n=== 第三方数据入口（数据视图 · 工具条右上角）===")
             if not tp:
                 print("  [!] 没量到 thirdparty 段（探针没跑到？）")
             else:
-                print(f"  钮：存在={tp.get('hasButton')} 悬停前={tp.get('beforeOn')!r} "
-                      f"悬停后={tp.get('afterOn')!r}")
+                print(f"  钮：存在={tp.get('entryExists')} 工具条={tp.get('toolbarShown')!r} "
+                      f"可见={tp.get('entryVisible')} 盒={tp.get('entryBox')}")
+                print(f"      样式={tp.get('entryStyle')}")
                 print(f"  窗：打开={tp.get('opened')} 账号块={tp.get('blocks')} "
                       f"补拉钮={tp.get('hasRefresh')}（禁用={tp.get('refreshDisabled')}）")
                 print(f"  数据源={tp.get('sources')!r} 第三方场次行={tp.get('liveRows')}")
                 for line in (tp.get("rowTexts") or []):
                     print(f"    {line}")
-                if not tp.get("hasButton"):
-                    bad.append(f"@{w} 第三方数据：数据视图右上角没有那枚入口钮"
+                if not tp.get("entryExists"):
+                    bad.append(f"@{w} 第三方数据：数据视图的工具条右上角没有那枚入口钮"
                                f"（用户要的「历史数据丢了自己补」就没入口）")
-                elif tp.get("beforeOn") != "0" or tp.get("afterOn") != "1":
-                    bad.append(f"@{w} 第三方数据：入口钮的悬停显隐不对"
-                               f"（悬停前={tp.get('beforeOn')!r} 悬停后={tp.get('afterOn')!r}；"
-                               f"应当是静止隐藏、悬停出现）")
+                elif tp.get("toolbarShown") != "1":
+                    bad.append(f"@{w} 第三方数据：工具条没被呼出（data-shown="
+                               f"{tp.get('toolbarShown')!r}）—— 入口跟着它显隐，量不到就是白量")
+                elif not tp.get("entryVisible"):
+                    bad.append(f"@{w} 第三方数据：入口钮在工具条显形时仍不可见（盒="
+                               f"{tp.get('entryBox')}）")
                 elif not tp.get("opened"):
                     bad.append(f"@{w} 第三方数据：点了入口钮但小窗没开")
                 elif not tp.get("hasRefresh"):
@@ -3360,6 +3363,11 @@ def main() -> int:
                     bad.append(f"@{w} 第三方数据：小窗读现状失败 —— {tp.get('error')}")
                 elif not tp.get("rowTexts"):
                     bad.append(f"@{w} 第三方数据：小窗里一条现状都没渲染出来")
+                # 与卡片视图那枚「档案设置」**同一组 class**（用户要求位置/尺寸/样式照它）
+                elif "bg-set" not in str((tp.get("entryStyle") or {}).get("cls") or ""):
+                    bad.append(f"@{w} 第三方数据：入口钮不是工具条右上组那套样式"
+                               f"（cls={((tp.get('entryStyle') or {}).get('cls'))!r}；"
+                               f"应当带 `bg-set`，与卡片视图的「档案设置」同款）")
 
             # ── R36：连采两格（上游未到位 / 到位），断言弹窗高度零变化 ──────────
             # 用户报的是「上游数据没抓取下来时右列卡片高度固定，防止数据一抓到窗口

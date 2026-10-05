@@ -595,6 +595,27 @@ return (
             </FloatPill>
           </div>
         )}
+        {/* 数据视图的右上角那枚 =「第三方数据」入口（2026-10-05，`devlog/354`）。
+            用户先指定"放数据视图右上角"，看了卡片视图的截图之后又补了一句
+            「参考 card 视图的右上角图标的位置和大小以及样式」⇒ 直接**复用同一组 class**：
+            位置（`.bg-tools`：absolute right 12 / top 14）、尺寸（`FloatPill size="md"`
+            + `.bg-set` 宽 32 + 图标 `size-5`）、显隐（`.view-toolbar[data-shown]` 那一个
+            reveal 状态）**全部照抄** —— 各写一套的下场就是两处慢慢漂
+            （当年"背景工具组自带一套定时器"就与工具条错拍过，见 `.bg-tools` 的注释）。 */}
+        {scene.view === 'archive' && vtuber && (
+          <div className="bg-tools">
+            <FloatPill
+              size="md"
+              shape="icon"
+              className="bg-set"
+              data-thirdparty-entry="1"
+              title="第三方数据（粉丝历史 / 直播场次 / 礼物日）—— 看现状、缺了就补拉"
+              onClick={() => setThirdpartyOpen(true)}
+            >
+              <CloudDownload className="size-5" />
+            </FloatPill>
+          </div>
+        )}
         {/* 视图切换条（2026-09-08 用户定序：卡片 → 列表 → 数据视图 → 档案视图，
             四个视图同级、共享同一状态机与数据，切换不重取）
             R37-P1（2026-09-17）：命名按用户口径改定 —— 「档案（直播日历 / 粉丝趋势）」→
@@ -723,14 +744,6 @@ return (
             keys={['live-calendar', 'fan-chart']}
             labels={DECK_LABELS}
             persistKey={String(vtuber.id)}
-            /* 右上角那枚悬停钮 → 「第三方数据」小窗（2026-10-05，devlog/354）。
-               放这儿是用户指定的位置：仿卡片视图右上角那种图标，而不是新立一排按钮。 */
-            cornerAction={{
-              label: '第三方数据',
-              title: '第三方数据（粉丝历史 / 直播场次 / 礼物日）—— 看现状、缺了就补拉',
-              icon: <CloudDownload className="size-4" />,
-              onClick: () => setThirdpartyOpen(true),
-            }}
           >
             {/* 2026-09-06：archive 逐步重建（用户主导），第一步 = 直播日历卡（Frame10612 规格）
                 R13：`vtuberId` 给日历取"该 V 的未来预约"（预约是 V 级数据，跨账号共用） */}

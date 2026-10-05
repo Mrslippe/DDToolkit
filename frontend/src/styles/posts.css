@@ -6405,27 +6405,11 @@ img.hero-avatar {
   border: 1px solid rgba(255, 255, 255, .18);
 }
 
-/* ── 数据视图右上角那枚「第三方数据」钮 + 它打开的小窗（2026-10-05，devlog/354）────────
-
-   钮的显隐口径**与右缘圆点同一套**（`DataDeck` 的 `dotsOn`）：静止时不占视觉、不吃指针，
-   滚轮/键盘/悬停才亮 —— 数据视图没有自己的工具条，凭空立一排常驻按钮会跟"一次只看一张卡"
-   的克制语气打架。`.float-pill` 的斜切白卡/焦点环照旧来自 layout.css（只补定位与显隐）。 */
-.deck-corner {
-  position: absolute;
-  right: 10px;
-  top: 10px;
-  z-index: 3;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity var(--motion-fast) var(--ease-standard);
-}
-.deck-corner[data-on="1"] {
-  opacity: 1;
-  pointer-events: auto;
-}
-@media (prefers-reduced-motion: reduce) {
-  .deck-corner { transition: none; }
-}
+/* ── 「第三方数据」小窗（2026-10-05，devlog/354）──────────────────────────────
+   ⚠️ 入口钮**没有自己的样式**：它就是工具条右上组里的浮片（`.bg-tools` + `.bg-set`），
+   与卡片视图那枚「档案设置」同一组 class —— 位置/尺寸/显隐全走那一套。
+   原先给牌堆单独写过一套 `.deck-corner`（悬停才亮），用户看过卡片视图的截图之后要求
+   「参考 card 视图的右上角图标的位置和大小以及样式」⇒ 那套已删，别再各写一份。 */
 
 /* 小窗本体：宽度跟着内容，别用 Tailwind 的 max-w-*（那会把"数据源"那行挤断） */
 .tp-dialog { max-width: 520px; }
