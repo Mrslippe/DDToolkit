@@ -14,6 +14,7 @@
 import { api, authFetch, getApiBase } from '../api/api'
 import { myHost } from '../utils/hostIdentity'
 import { setShellHidden } from '../utils/shellLifecycle'
+import { measureBackdropTone } from '../utils/backdropTone'
 
 interface ProbeView {
   key: string
@@ -1197,7 +1198,94 @@ async function probeFilterPop(out: unknown[]): Promise<void> {
 
 /** 顶栏展示策略采样（2026-09-10）：把「后端事实」与「顶栏实际渲染」一起记下来，
  *  由 `scripts/ui_probe.py` 断言蕴含关系（自动节拍不得占顶栏）。 */
-async function sampleTopbar() {
+async function sampleBackdropInk() {
+  const hero = document.querySelector<HTMLElement>('.hero')
+  const backdrop = document.querySelector<HTMLElement>('.hero-backdrop')
+  if (!hero || !backdrop) return null
+  const colorOf = (el: HTMLElement | null) => (el ? getComputedStyle(el).color : null)
+  const sign = () => document.querySelector<HTMLElement>('.hero-sign')
+  const tag = () => document.querySelector<HTMLElement>('.live-tag.off')
+  const read = () => {
+    const bd = document.querySelector<HTMLElement>('.hero-backdrop')
+    const custom = !!bd?.classList.contains('custom')
+    const url = (getComputedStyle(bd as HTMLElement).backgroundImage.match(/url\("?(.+?)"?\)/) ?? [])[1] ?? null
+    return { custom, url }
+  }
+
+  // ① 先照实记一遍现场（可能是头像铺底态）
+  const first = read()
+  const heroBefore = hero.getAttribute('data-ink')
+
+  // ② **探针自己造一张深色背景传上去**（2026-10-05）：不这么做，"自定义背景 ⇒ 换浅字"
+  //    这条链路在这台机器的数据目录里根本没有样本，判据会**空转成假绿**。
+  //    只动探针自己那份数据目录（`ui_probe.py` 起的后端指向临时目录），最后会删掉。
+  let uploaded: 'dark' | null = null
+  let measured: { tone: string; luminance: number } | null = null
+  const vid = Number((location.pathname.match(/\/vtubers\/(\d+)/) ?? [])[1] ?? 0)
+  if (!first.custom && vid) {
+    try {
+      const cv = document.createElement('canvas')
+      cv.width = 64
+      cv.height = 64
+      const ctx = cv.getContext('2d')!
+      ctx.fillStyle = '#101322'          // 深蓝黑：合成纱罩后仍在"深"这一档
+      ctx.fillRect(0, 0, 64, 64)
+      const blob: Blob | null = await new Promise((res) => cv.toBlob((b) => res(b), 'image/png'))
+      if (blob) {
+        const fd = new FormData()
+        fd.append('file', blob, 'probe-dark.png')
+        const r = await authFetch(`${(import.meta.env.VITE_API_BASE as string | undefined) ?? '/api'}`
+          + `/vtuber/${vid}/background`, { method: 'POST', body: fd })
+        if (r.ok) {
+          uploaded = 'dark'
+          await sleep(900)               // 背景换装 + `inkTone` 那次测量落地
+        }
+      }
+    } catch { /* 上传失败就回到"没样本"这条路，脚本按 hasCustomBg 判 */ }
+  }
+
+  // ③ 量一次真图（真 CORS / 真解码 / 真 canvas）。
+  //    ⚠️ **铺的是头像也照量**：界面策略只在自定义背景下用它（见 `utils/backdropTone.ts`），
+  //    但"浏览器到底能不能读这张跨源图的像素"是**机制**问题 —— 用头像那条真 URL 一样能验，
+  //    而且是这台机器上唯一稳定存在的样本（探针自己传的背景不经过页面状态，见上面注释）。
+  const now = read()
+  if (now.url) {
+    const m = await measureBackdropTone(now.url)
+    measured = m ? { tone: m.tone, luminance: m.luminance } : null
+  }
+  const before = { sign: colorOf(sign()), tag: colorOf(tag()), ink: hero.getAttribute('data-ink') }
+
+  // ④ 手动挂上"深"档 → 量 CSS 有没有照做（与这张图本身深浅无关）
+  hero.setAttribute('data-ink', 'dark')
+  await sleep(60)
+  const afterDark = { sign: colorOf(sign()), tag: colorOf(tag()) }
+  if (heroBefore) hero.setAttribute('data-ink', heroBefore)
+  else hero.removeAttribute('data-ink')
+
+  // ⑤ 收尾：删掉探针传的那张，数据目录回到原样（不留痕）
+  if (uploaded && vid) {
+    try {
+      await authFetch(`${(import.meta.env.VITE_API_BASE as string | undefined) ?? '/api'}`
+        + `/vtuber/${vid}/background`, { method: 'DELETE' })
+      await sleep(400)
+    } catch { /* 删不掉最多留一张图，不影响判据 */ }
+  }
+
+  return {
+    hasCustomBg: before.ink !== undefined && now.custom,
+    customBgAtStart: first.custom,
+    probeUploadedBg: uploaded,
+    url: now.url ? now.url.slice(0, 80) : null,
+    measuredTone: measured?.tone ?? null,
+    measuredLuminance: measured?.luminance ?? null,
+    inkAttr: before.ink,
+    colorBefore: before,
+    colorAfterDark: afterDark,
+  }
+}
+
+/** 顶栏展示策略采样（2026-09-10）：把「后端事实」与「顶栏实际渲染」一起记下来，
+ *  由 `scripts/ui_probe.py` 断言蕴含关系（自动节拍不得占顶栏）。 */async function sampleTopbar() {
   const pill = document.querySelector('.topbar-status')
   const text = (pill?.textContent || '').trim()
   let st: {
@@ -5803,7 +5891,7 @@ export async function runUiProbe(): Promise<void> {
     for (const v of VIEWS) {
       if (!clickView(v.title)) degraded.push(`view:${v.key}`)
       await sleep(900) // 场景入场 0.22s + 数据到位
-      out.push(measure(v.key))
+      out.push({ ...measure(v.key), backdropInk: await sampleBackdropInk() })
       if (v.key === 'list') {
         // 顶部渐隐（R39-D）的**正向**分支：滚下去之后必须挂上 mask。
         // 不滚就永远只测到 `data-scrolled=0` 那一半 —— 那是"看着有、其实没接上"的温床。

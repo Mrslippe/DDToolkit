@@ -487,7 +487,8 @@ keyframes 只会重启**）。
 | 名称 | 类名 | 说明 |
 |---|---|---|
 | 面板 | `.posts-panel` | `height:100%`，flex column，`overflow:hidden`（裁剪模糊边界） |
-| 背景层 | `.hero-backdrop(.custom)` | 常驻：**自定义背景优先**（`background_path` → `/static/custom_bg/...`，`.custom` 全图清晰 opacity 1 + **P8-1 起纱罩 alpha 减半**，见 `.hero-backdrop.custom::after`），否则头像铺底（0.18+原纱罩）；`key=src` 换装淡入 |
+| 背景层 | `.hero-backdrop(.custom)` | 常驻：**自定义背景优先**（`background_path` → `/static/custom_bg/...`，`.custom` 全图清晰 opacity 1 + 纱罩 alpha 减半两次，见 `.hero-backdrop.custom::after`），否则头像铺底（0.18+原纱罩）；`key=src` 换装淡入。⚠️ 2026-10-05（`devlog/355`）：两个状态的纱罩 alpha **各降一半**（有效白度 96%→82% 降为 60%→48%；custom 68%→52% 降为 44%→27%），四个 alpha 是唯一旋钮 |
+| 字色随底图明暗 | `.hero[data-ink="dark"]`（`PostsPage` 量完背景再挂；**量不到不挂**） | 2026-10-05（用户截图圈出「未开播」+ 签名）：「灰字在深色背景下还是不清楚」⇒ 自定义背景**中间那条横带**的亮度（`utils/backdropTone.ts`，canvas 采样 + 白纱罩 α=0.35）低于阈值 ⇒ `data-ink="dark"` ⇒ `.live-tag.off` 与 `.hero-sign` 换浅字（+ 暗投影兜底）。⚠️ **只对自定义背景**：头像铺底态是 .18 透明叠白底，拿头像原图量会得出相反结论。**名字不参与**（用户指定只要这两处）|
 | 工具条 | `.view-toolbar` | **R45 起是 overlay**：`position:absolute; inset:0 0 auto 0; height:0; pointer-events:none` —— **不占布局**（这样"隐藏"才真的把空间还给内容），且整条**不吃指针**（若吃，顶 66px 内滚轮不滚列表、卡片顶部点不着）。显隐由 `data-shown` 驱动、键盘聚焦走 `:focus-within`（见下方「工具条显隐状态机」）。卡片页右上角挂 `.bg-tools`（档案设置浮片，`right:12px; top:14px` 与条同轴；**与工具条同一套显隐**；无清除钮） |
 
 **视图切换条**（`.view-switch` / `.view-btn` / `.view-switch-thumb`）

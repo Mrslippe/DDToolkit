@@ -43,6 +43,9 @@ interface Props {
   onAddAccount: () => void
   /** 打开「档案设置」（R45-C：药丸溢出时的出口 —— 它的「已订阅账号」节列全部账号） */
   onOpenSettings: () => void
+  /** 背景明暗档（2026-10-05，`devlog/355`）：`dark` = 这一带是深色的 ⇒ 「未开播」标签与签名改用浅字。
+   *  `null`/`undefined` = 没量到（或没有自定义背景）⇒ 保持原来的固定灰字。 */
+  inkTone?: 'dark' | 'light' | null
 }
 
 /** 打开外链（R7 + S3-B，devlog/208）：走 `shellBridge.openExternal`
@@ -81,6 +84,7 @@ export default function HeroCardsView({
   isLive,
   onAddAccount,
   onOpenSettings,
+  inkTone,
 }: Props) {
   // ── P8-B：平台药丸的点击开主页 + 长按拖动重排 ────────────────────────
   // 顺序是服务端事实（accounts.sort_order，拖拽后 PUT 落库）；拖拽期间先用本地
@@ -193,7 +197,7 @@ export default function HeroCardsView({
       {/* `data-avatar-src` = 解析出来的头像 URL，**为可测性存在**（devlog/135，同 `.stat-sets[data-hover]`）：
           探针跑在虚拟时间下，`ProxyImage` 的 `<img>` 可能已经回落到 fallback 占位，
           直接读 img 会量成 None；挂在 `.hero` 上既不影响布局，也能直接断言"卡片用的是哪张图"。 */}
-      <div className="hero" data-avatar-src={avatarSrc ?? ''}>
+      <div className="hero" data-avatar-src={avatarSrc ?? ''} data-ink={inkTone ?? undefined}>
         {/* 头像走 ProxyImage 三态链（R1，2026-09-13）：
             档案设置里选的 `vtubers.avatar` 是**远端 URL**，此前是裸 `<img>`：
             既没 https 归一化、也没有 `/img-proxy` 兜底 → 图床 403 就回落成

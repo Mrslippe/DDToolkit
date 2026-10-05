@@ -1762,6 +1762,41 @@ def _assert(views: list[dict], width: int) -> list[str]:
         bad += _assert_filter_pop(v, width)
         bad += _assert_filter_chain(v, width)
         bad += _assert_layout(v, width)
+        bi = v.get("backdropInk")
+        if bi:
+            # 「背景明暗 → 字色」（2026-10-05，devlog/355）：先打印再判 ——
+            # 不打印的话"量到了没有"只能靠红不红去猜（探针里那类"看着过了其实空转"的坑）。
+            print(f"  [{v.get('tag')}] 背景明暗→字色：自定义背景="
+                  f"{bi.get('hasCustomBg')}（探针自建={bi.get('probeUploadedBg')!r}）"
+                  f" 量得={bi.get('measuredTone')!r} 亮度={bi.get('measuredLuminance')}"
+                  f" data-ink={bi.get('inkAttr')!r}")
+            print(f"     签名色 {bi.get('colorBefore', {}).get('sign')} → 挂 dark 后 "
+                  f"{bi.get('colorAfterDark', {}).get('sign')} ｜ "
+                  f"标签色 {bi.get('colorBefore', {}).get('tag')} → "
+                  f"{bi.get('colorAfterDark', {}).get('tag')}")
+            if bi.get("hasCustomBg"):
+                # ⚠️ 「量不出明暗」在这一层**不判红**（2026-10-05 实测）：探针跑在**虚拟时间**
+                # 下，图片加载永远不完成（本仓老坑：`ProxyImage` 在探针里也会回落成占位），
+                # canvas 那条链路同理量不到 —— 判红就是把"环境限制"记成"产品坏了"。
+                # 这里只判**能判的两件**：①量到了就必须挂上对应档；②挂上"深"档后 CSS 真的换浅色
+                # （下面两条，那两条在真机上是有效的）。
+                if bi.get("measuredTone") in ("dark", "light") \
+                        and bi.get("inkAttr") != bi.get("measuredTone"):
+                    bad.append(f"@{width} cards: 量到 {bi.get('measuredTone')!r} 但卡片上没挂对应的 "
+                               f"data-ink（实得 {bi.get('inkAttr')!r}）—— 字色不会跟着变")
+                if bi.get("inkAttr") and bi.get("measuredTone") is None:
+                    print("      （量不到像素：探针虚拟时间下图片不加载 —— 属环境限制，"
+                          "机制判据在 backdropTone.test.ts 的打桩用例里）")
+                sign_dark = str(bi.get("colorAfterDark", {}).get("sign") or "")
+                if "255, 255, 255" not in sign_dark:
+                    bad.append(f"@{width} cards: data-ink=dark 时签名仍是 {sign_dark!r}"
+                               f"（应当是浅色）")
+                tag_dark = str(bi.get("colorAfterDark", {}).get("tag") or "")
+                if "255, 255, 255" not in tag_dark:
+                    bad.append(f"@{width} cards: data-ink=dark 时「未开播」标签仍是 {tag_dark!r}")
+            elif bi.get("inkAttr"):
+                bad.append(f"@{width} cards: 没有自定义背景却挂了 data-ink="
+                           f"{bi.get('inkAttr')!r}（头像铺底态不该换字色）")
     return bad
 
 

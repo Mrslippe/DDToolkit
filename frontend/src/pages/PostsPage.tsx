@@ -19,6 +19,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { api, resolveAsset } from '../api/api'
+import { measureBackdropTone, type InkTone } from '../utils/backdropTone'
 import { useFetchBusy } from '../fetchBusy'
 import type { Account, Post, PostStats, VTuber } from '../api/types'
 import { mergeVtuberSnapshots } from '../utils/accountSnapshots'
@@ -513,6 +514,23 @@ export default function PostsPage() {
     : undefined
   const backdropSrc = customBg ?? avatarSrc ?? lastAvatarRef.current
 
+  /**
+   * 自定义背景是深是浅 → 「未开播」标签与签名用深字还是浅字（2026-10-05，`devlog/355`）。
+   *
+   * 用户：「（红框里的）元素的颜色随着底图颜色来变化以提升醒目度，因为当前灰字在深色背景下
+   * 还是不清楚」。**只对自定义背景量**：没上传背景时铺的是头像，而头像是 `.18` 透明叠在
+   * 白底面板上 ⇒ 那一带几乎是白的，拿头像原图去量会得出相反结论（见 `utils/backdropTone.ts`）。
+   * 量不到（跨源被拦 / 解码失败）就保持现在的字色 —— 不猜。
+   */
+  const [inkTone, setInkTone] = useState<InkTone | null>(null)
+  useEffect(() => {
+    if (!customBg) { setInkTone(null); return }
+    let cancelled = false
+    void measureBackdropTone(customBg).then((r) => {
+      if (!cancelled) setInkTone(r?.tone ?? null)
+    })
+    return () => { cancelled = true }
+  }, [customBg])
   // 背景的上传/清除已迁入「档案设置」窗口（P8-B）；此处只保留背景层渲染所需的取值
   // 直播徽标只读 B 站账号：直播状态仅存在于 bilibili，且属 VTuber 整体事实——
   // 不跟随列表页所选账号。否则在列表里切到微博再回卡片页，徽标会从
@@ -738,6 +756,8 @@ return (
             isLive={isLive}
             onAddAccount={() => setAddAccountOpen(true)}
             onOpenSettings={() => setSettingsOpen(true)}
+            /* 背景明暗 → 「未开播」标签与签名的字色（`data-ink`；量不到传 null ⇒ CSS 不选那条规则） */
+            inkTone={inkTone}
           />
         )}
 
