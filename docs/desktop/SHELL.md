@@ -99,6 +99,18 @@ retire-when: 桌面壳换掉 Tauri，或改成多进程模型
     - 判据（`cargo test`）：注册表 ↔ 准入表**双向对账**、每条命令都调了 guard（扫源码）、
       危险/动数据的命令 main-only、未知命令默认拒。
 
+30b. **后端端口：优先固定区间 `8765–8769`，全被占才回退随机**（E2，2026-10-06）：
+    `lib.rs::pick_backend_port(&PREFERRED_PORTS)`。**为什么改掉纯随机**（原先 `127.0.0.1:0`）：
+    浏览器扩展读不到文件、也扫不完 65536 个端口，它只能"依次探几个候选"，
+    再靠 `/healthz` 的 `app` 标识 + 配对 token **认领**（见
+    `docs/plans/browser-extension-cookie-sync-execution.md` §3.4）。
+    ⚠️ 三条纪律：① **端口不是身份** —— 区间里坐着的可能是另一个实例（dev + 打包版同时开），
+    认身份靠 `/healthz` 的标识与配对 token；② **抢不到不许 panic**（回退随机即可：
+    功能一切照旧，只是扩展探测不到、要用户手填端口）；③ **探针继续用随机端口**
+    （`scripts/ui_probe.py` 会与正在运行的应用同时存在，来抢区间就是"两个实例互挤"）。
+    判据（`cargo test`）：候选区间连续且在高位 · 第一个可用就被选中 · 被占则跳下一个（**真的 bind 占住**）·
+    全被占 ⇒ 回退随机且不 panic。
+
 30. **外链只走 `open_external`，主机有白名单**（S3-B，devlog/208）：
     `lib.rs::external_url_host` 只认 `https`、主机必须**精确等于** `EXTERNAL_HOSTS` 里的一条
     （先转小写 —— 大写不算绕过，而 `bilibili.com.evil.com` / `bilibili.com.` / `%62ilibili.com`

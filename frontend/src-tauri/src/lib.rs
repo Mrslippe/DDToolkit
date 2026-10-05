@@ -1342,6 +1342,33 @@ fn resolve_dev_python(project_root: &std::path::Path) -> std::path::PathBuf {
     }
 }
 
+/// 后端端口的候选区间（E2，2026-10-06）：浏览器扩展要认领它，所以**优先绑固定端口**。
+///
+/// 为什么不能继续纯随机（`127.0.0.1:0`）：扩展读不到文件、也扫不完 65536 个端口，
+/// 它只能"依次探几个候选"。区间取 8765–8769：高位、不与常见开发服务器（3000/5173/8000/
+/// 8080）冲突，且 `127.0.0.1` 上抢这五个端口的成本极低。
+///
+/// ⚠️ **只给桌面壳**（与 `npm run dev`）用：`scripts/ui_probe.py` **故意继续用随机端口** ——
+/// 它会与正在运行的应用同时存在，来抢区间就是"两个实例互挤"。
+const PREFERRED_PORTS: [u16; 5] = [8765, 8766, 8767, 8768, 8769];
+
+/// 挑一个后端端口：**先按候选区间试**，全被占才回退到随机空闲端口。
+///
+/// ⚠️ 端口**不是身份**：区间里坐着的可能是另一个实例（dev + 打包版同时开）。
+/// 认身份靠 `/healthz` 的应用标识 + 配对 token（见
+/// `docs/plans/browser-extension-cookie-sync-execution.md` §3.4），所以这里
+/// "抢到就用"是安全的 —— 但**不许**在抢不到时 panic（回退随机即可，功能不受影响，
+/// 只是扩展探测不到、要用户手填端口）。
+fn pick_backend_port(candidates: &[u16]) -> u16 {
+    for port in candidates {
+        if std::net::TcpListener::bind(("127.0.0.1", *port)).is_ok() {
+            return *port;
+        }
+    }
+    free_port()
+}
+
+/// 真随机空闲端口（`127.0.0.1:0`）—— 回退路径与探针脚本用。
 fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0")
         .expect("绑定空闲端口失败")
@@ -1611,7 +1638,9 @@ pub fn run() {
                 // 随后的显示流程冲掉（角变回方的）。改在 `present_window`（显示之后）设。
             }
 
-            let port = free_port();
+            // E2（2026-10-06）：**优先固定端口区间**（8765–8769），全被占才回退随机 ——
+            // 浏览器扩展靠"/healthz 的 app 标识 + 配对 token"认领它（见 `pick_backend_port`）。
+            let port = pick_backend_port(&PREFERRED_PORTS);
             // S1（devlog/201）：**每次启动生成一个 token**，注入 sidecar，并存进壳状态
             // 供 `get_api_token` 命令读取。只存内存：重启即换新（前端也重新取）。
             let api_token = new_api_token()?;
@@ -1848,8 +1877,71 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// **系统圆角的能力探测判据**（R34，devlog/136）：只看圆角那次调用的 HRESULT。
-    /// 判错的代价很直观 —— 把"不支持"当"支持"⇒ Win10 用户拿到一扇**裸方角**窗口
+    /// **后端端口策略**（E2，2026-10-06）：浏览器扩展认领端口的依据。
+    ///
+    /// 判错的代价很具体：候选区间被占了一个就 panic ⇒ 用户**开第二个实例直接崩**；
+    /// 全被占时不回退 ⇒ 同样崩。所以三条都要判，而且**用可注入的候选表**测
+    /// （不去赌 8765 在这台机器上闲不闲）。
+    #[test]
+    fn backend_port_prefers_the_candidate_range_and_falls_back() {
+        // ① 区间内第一个可用 ⇒ 用它（这里用一组高位冷门端口当"区间"，避免与真应用抢）
+        let pool = [49321u16, 49322, 49323];
+        assert_eq!(pick_backend_port(&pool), 49321);
+
+        // ② 第一个被占 ⇒ 用第二个（**真的占住它**，不是打桩）
+        let held = std::net::TcpListener::bind(("127.0.0.1", 49322)).unwrap();
+        assert_eq!(pick_backend_port(&pool[1..]), 49323, "被占的端口不该被选中");
+        drop(held);
+
+        // ③ 全被占 ⇒ 回退随机端口且**不 panic**（这正是"开了好几个实例"那一态）
+        let a = std::net::TcpListener::bind(("127.0.0.1", 49324)).unwrap();
+        let b = std::net::TcpListener::bind(("127.0.0.1", 49325)).unwrap();
+        let got = pick_backend_port(&[49324, 49325]);
+        assert_ne!(got, 49324);
+        assert_ne!(got, 49325);
+        assert!(got > 0, "回退路径必须给出一个可用端口");
+        drop((a, b));
+    }
+
+    /// 候选区间本身：**五个、连续、且都落在高位**（改了它等于让已装的扩展认不出应用）。
+    #[test]
+    fn preferred_ports_stay_a_small_high_band() {
+        assert_eq!(PREFERRED_PORTS.len(), 5, "扩展按候选表逐个探，数量变了要同步文档与扩展");
+        assert_eq!(PREFERRED_PORTS[0], 8765);
+        for (i, p) in PREFERRED_PORTS.iter().enumerate() {
+            assert_eq!(*p, 8765 + i as u16, "候选端口必须连续（扩展按区间探）");
+            assert!(*p > 1024, "不要用特权端口（{p}）");
+        }
+    }
+
+    /// **启动时真的用了候选区间**（源码级判据，同"每条命令都要调 guard"那条的口径）。
+    ///
+    /// 为什么必须有它：上面两条测的是 `pick_backend_port` **函数本身** ——
+    /// 把 setup 里的调用改回 `free_port()`（纯随机）时它们**照样全绿**，
+    /// 而扩展就永远探测不到应用了。这条是唯一能钉住"接线"的判据。
+    ///
+    /// ⚠️ 抠的是**中间那一段**（`set_background_color` 之后、`new_api_token` 之前），
+    /// 不是全文 `contains` —— 全文搜会被**本测试自己**里那两个字面量满足（自指假绿）。
+    /// 反向验证：把 setup 里那行改成 `free_port()` ⇒ 本条红（实测过）。
+    #[test]
+    fn setup_actually_uses_the_candidate_ports() {
+        let src = include_str!("lib.rs");
+        let seg = src
+            .split("let _ = w.set_background_color(Some(tauri::window::Color(0, 0, 0, 0)));")
+            .nth(1)
+            .and_then(|rest| rest.split("let api_token = new_api_token()?;").next())
+            .expect("找不到 setup 里取端口那一段（锚点改了？）");
+        assert!(
+            seg.contains("pick_backend_port(&PREFERRED_PORTS)"),
+            "启动流程没有走候选区间（扩展只能靠手填端口了）"
+        );
+        assert!(
+            !seg.contains("free_port()"),
+            "启动流程绕过了候选区间直接取随机端口"
+        );
+    }
+
+    /// **系统圆角的能力探测判据**（R34，devlog/136）：只看圆角那次调用的 HRESULT。    /// 判错的代价很直观 —— 把"不支持"当"支持"⇒ Win10 用户拿到一扇**裸方角**窗口
     /// （CSS 半径被归零、系统又不画）；把"支持"当"不支持"⇒ 只是没吃到系统圆角，无害。
     #[test]
     fn dwm_corners_ok_is_decided_by_the_corner_hresult_only() {
