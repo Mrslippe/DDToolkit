@@ -123,6 +123,13 @@ retire-when: 前端视觉体系整体重做，或组件索引改成机器生成
 
 ### A1-a. 顶栏状态岛 `<StatusIsland>`（components/StatusIsland.tsx，2026-09-15 R12a devlog/089）
 
+> **通知的现状清点另有一份**（用户 2026-10-05「改造顶栏通知逻辑」的第一步）：
+> `docs/design/notices/topbar-notice-inventory.md` —— 逐条列出**当前**有哪些通知、
+> 分别走哪个呈现面（胶囊 / 面板 / toast / 报告对话框）、持续多久、优先级与压制关系。
+> 本节讲的是**控件结构**；那一份讲"现在到底有多少种通知"。
+> ⚠️ 下面「七类信息源」那段是 devlog/089 的**历史口径**：M5-1/M5-2b 起汇总已搬到后端
+> （`GET /vtuber/notices`，`services/notices.py`），前端只做"服务端列表 + 本地覆盖"的合并。
+
 顶栏中部（`.topbar-status` 胶囊外观不变）。**改造前是"三套并存"**：轮询算出的任务胶囊 +
 `ddtoolkit:pill-message` 瞬时覆写 + 全量抓取完成的 AlertDialog；风控冷却**只在日志里**。
 现在统一成「一个控件 + 一份判定」：
