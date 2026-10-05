@@ -49,6 +49,13 @@ interface Props {
   onClose: () => void
 }
 
+/**
+ * 重取失败的**那句提示是给谁看的**（devlog/363）：图床与播放地址是同一个端点
+ * （`POST /posts/{id}/refresh-media`），但"图片没能加载"和"视频没能加载"是两件事，
+ * 提示里写错主语用户就会去找错地方（去翻图，其实是播放地址过期）。
+ */
+type MediaKind = 'image' | 'video'
+
 /** 图片列表去重（同 URL 只留一张）。
  *  2026-09-09 用户反馈：只有一张图的帖子，点封面进查看器会显示「两张」——
  *  微博抓取把 images[0] 同时写进了 cover_url（见 platforms/weibo.py），
@@ -192,19 +199,29 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
    * 三条纪律：① **一帖只试一次**（`refreshedRef`，否则 N 张坏图会把上游打爆）；
    * ② 失败**要说一句**（`hint`：403 的原文就是"去哪儿配 Cookie"，只写日志等于让用户对着灰块猜）；
    * ③ 回来的是**新的一整帖**（端点里已经顺手固化过），直接替换渲染。
+   *
+   * ⚠️ **视频那条路同样归这里管**（`devlog/363`）：抖音/小红书的**播放地址也是限时签名**
+   * （实测 8 小时后 CDN 一律 403），而视频不会被固化 ⇒ 第二天打开必然播不了。
+   * 以前只有图片接了这条重取，视频全失败就只是"报一条 + 给个在浏览器打开"，用户没法知道
+   * "重取一次就好"。`kind` 就是用来把提示语的主语说对的（图 / 视频）。
    */
-  const [hint, setHint] = useState<{ id: number; text: string } | null>(null)
-  const onMediaDead = useCallback(() => {
+  const [hint, setHint] = useState<{ id: number; text: string; kind: MediaKind } | null>(null)
+  const onMediaDead = useCallback((kind: MediaKind = 'image') => {
     if (!shownId || refreshedRef.current.has(shownId)) return
     refreshedRef.current.add(shownId)
     void api.refreshMedia(shownId)
       .then((r) => { if (r?.post) setPatched({ id: shownId, post: r.post }) })
       .catch((e: Error) => {
-        setHint({ id: shownId, text: e?.message || String(e) })
+        setHint({ id: shownId, text: e?.message || String(e), kind })
         void api.clientLog(`[media] 重取媒体失败 post#${shownId}：${e?.message ?? e}`)
           .catch(() => { /* 诊断失败无所谓 */ })
       })
   }, [shownId])
+  /**
+   * 视频那条要用**固定身份**的回调（`devlog/363`）：`VideoPlayer` 的重取请求挂在
+   * `useEffect(..., [onAllFailed])` 上，内联箭头每渲染都是新函数 ⇒ 会变成"每渲染报一次"。
+   */
+  const onVideoDead = useCallback(() => onMediaDead('video'), [onMediaDead])
 
   if (!shown) return null
 
@@ -325,7 +342,12 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
               "在浏览器打开"的兜底）。 */}
           {body.video?.url ? (
             <VideoPlayer video={body.video} poster={shown.cover_url}
-                         permalink={shown.permalink} />
+                         permalink={shown.permalink}
+                         /* 地址是**限时签名**的（抖音实测 8 小时后 403，devlog/363）⇒
+                            全部源都失败时试一次"重取媒体地址"。
+                            ⚠️ B 站不走这条：`refresh-media` 对没有详情补全的平台如实 409
+                            （B 站的取流是另一条路 —— `BiliVideo` 按需取流 + `onFallback`）。 */
+                         onAllFailed={shown.platform === 'bilibili' ? undefined : onVideoDead} />
           ) : shown.platform === 'bilibili' && body.bvid ? (
             <BiliVideo postId={shown.id} poster={shown.cover_url}
                        permalink={shown.permalink} />
@@ -409,7 +431,7 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
               只写日志等于让用户对着灰块猜；这条只在**真的试过重取且失败**时出现 */}
           {hint && hint.id === shownId && (
             <p className="mt-2 text-xs text-muted-foreground" data-media-hint="1">
-              图片没能加载，重取也没成功：{hint.text}
+              {hint.kind === 'video' ? '视频' : '图片'}没能加载，重取也没成功：{hint.text}
             </p>
           )}
 

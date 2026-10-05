@@ -3,7 +3,8 @@
  * 自绘播放器（devlog/283）的判据。要点：
  * - **不许退回原生控件**（`controls` 属性一出现，皮肤就白做了）；
  * - **音量全局共用**（用户口径：别一个响一个轻）；
- * - 播放/暂停、进度点选、倍速、fallback 链（含真失败才报错）。
+ * - 播放/暂停、进度点选、倍速、fallback 链（含真失败才报错）；
+ * - 全失败后的**重取**与"换地址归零"（devlog/363，见文件末尾那组）。
  */
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -349,5 +350,62 @@ describe('VideoPlayer', () => {
     //    （真机报告里同一条 ×6，把原因淹了）。反向验证：把 effect 里的判断挪回渲染 ⇒ 红。
     expect(reportEntries().filter((r) => r.where === '视频播放').length,
            '同一条失败报告刷屏了').toBe(1)
+  })
+})
+
+/**
+ * **全失败之后的重取**（devlog/363，2026-10-06 用户实机报障）。
+ *
+ * 用户口径：「星瞳official 抖音这一帖，点开详情视频全部播放源都失败（含本机代理）」。
+ * 真因是抖音的播放地址是**限时签名**的（`l=20261005191106…` = 签发时刻）——库里那条是
+ * 入库当天签的，实测 8 小时后 CDN 一律 403；视频**不会被固化**（盘上没文件），
+ * 所以第二天打开必然播不了。图床那条路早就接了"全失败 ⇒ 重取一次"（devlog/320），
+ * 视频这条一直没接 ⇒ 用户只能看到一个死掉的播放器和"在浏览器打开"，无从知道重取就好。
+ *
+ * 这里判两件事：① 真的全试过才叫 `onAllFailed`（只叫一次，且不抢 `onFallback`）；
+ * ② **换了地址就把序号与判死状态归零** —— 调用方重取回来是**原地换 prop**，不换 key。
+ */
+describe('VideoPlayer · 全失败后的重取（devlog/363）', () => {
+  /** 把这一档的候选一条条打死（打到组件换成兜底卡为止） */
+  async function killAll() {
+    for (let i = 0; i < 8; i += 1) {
+      const v = el()
+      if (!v) break
+      await act(async () => { v.dispatchEvent(new Event('error')); await Promise.resolve() })
+    }
+  }
+
+  it('全部源都失败 ⇒ 叫一次 `onAllFailed`（调用方据此重取地址）', async () => {
+    const onAllFailed = vi.fn()
+    render({ onAllFailed })
+    await killAll()
+    expect(host.querySelector('.vp-dead'), '前置：这一轮确实全失败了').toBeTruthy()
+    expect(onAllFailed, '没叫 ⇒ 播放地址过期后永远没人去重取').toHaveBeenCalledTimes(1)
+  })
+
+  it('给了 `onFallback`（B站 DASH→durl）⇒ **不叫** `onAllFailed`（换内核优先）', async () => {
+    const onAllFailed = vi.fn()
+    const onFallback = vi.fn()
+    render({ onAllFailed, onFallback })
+    await killAll()
+    expect(onFallback, '前置：该交给调用方换内核').toHaveBeenCalled()
+    expect(onAllFailed, 'DASH 挂了不等于"平台地址过期"，重取会白跑一趟').not.toHaveBeenCalled()
+  })
+
+  it('**换了地址就归零**：重取回来的新地址能直接播，不继承上一轮的判死与镜像序号', async () => {
+    render()
+    await killAll()
+    expect(host.querySelector('.vp-dead')).toBeTruthy()
+    const before = reportEntries().filter((r) => r.where === '视频播放').length
+
+    // 调用方重取回来：**原地换 prop**（`PostDetailDrawer` 收到新帖就 `setPatched`，
+    // 既不换 key 也不重新挂载），而且新候选往往**更少**（抖音详情常常只剩 `play_addr`）
+    await act(async () => { render({ video: { url: 'http://v2/new.mp4' } }) })
+
+    expect(host.querySelector('.vp-dead'), '换了新地址却还停在"播不了"兜底卡').toBeNull()
+    expect(el()?.getAttribute('src'), '新地址要从第一面镜像重新试').toBe('http://v2/new.mp4')
+    // 归零要是写在 effect 里，新地址会先按旧序号渲染一帧（那一帧就是兜底卡 + 一条假报告）
+    expect(reportEntries().filter((r) => r.where === '视频播放').length,
+           '换地址那一帧误报了一条"全部播放源都失败"').toBe(before)
   })
 })

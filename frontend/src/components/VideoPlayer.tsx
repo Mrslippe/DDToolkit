@@ -100,6 +100,20 @@ interface Props {
    */
   onFallback?: () => void
   /**
+   * **全部源都失败**（连本机代理那条也失败）时叫一次，由调用方决定要不要**重取媒体地址**。
+   *
+   * 为什么需要它（2026-10-06 用户实机报障）：抖音的播放地址是**限时签名地址**
+   * （`l=20261005191106…` = 签发时刻），实测**存了 8 小时后 CDN 一律 403**；
+   * 而这一帖的地址是入库那天签的 ⇒ 第二天点开必然播不了，界面只报"全部播放源都失败"，
+   * 用户完全没法知道"是地址过期、重取一次就好"。
+   * 图床那条路早就这么干了（`PostDetailDrawer.onMediaDead` ⇒ `POST /posts/{id}/refresh-media`），
+   * 视频这条**一直没接**。
+   *
+   * ⚠️ 调用方必须**自己保证只重取一次**（`onMediaDead` 里的 `refreshedRef` 就是干这个的）——
+   * 这个回调只保证"这一轮真的全失败了"，不保证不重复。
+   */
+  onAllFailed?: () => void
+  /**
    * 地址就绪后**直接开始播**（2026-10-03 用户口径：「点击中央播放键后并没有开始播放，
    * 只是显示了播放器界面，改为直接开始播放」）。
    *
@@ -299,7 +313,7 @@ function fmt(t: number): string {
 export default function VideoPlayer({ video, poster, permalink, dash, qualities, qualityId,
                                       onPickQuality, pages, currentPage, onPickPage,
                                       onFallback, autoPlay, loading,
-                                      segments, onKernelFallback }: Props) {
+                                      segments, onKernelFallback, onAllFailed }: Props) {
   const prefs = useSyncExternalStore(subscribePlayerPrefs, playerPrefs)
   /**
    * 内核选择（**订阅**：设置里切一下、或 MSE 当场熔断，界面立刻换路径，不用重开）。
@@ -562,6 +576,36 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
   const audioSrc = dualTrack && dashAudioUrls.length
     ? videoProxyUrl(dashAudioUrls[Math.min(aidx, dashAudioUrls.length - 1)])
     : null
+
+  /**
+   * **媒体指纹**（devlog/363）：这一轮**全部候选地址**拼成的 key —— 换了地址就换 key。
+   *
+   * 为什么必须有它（2026-10-06 用户实机报障的**第二层**）：`idx`/`dead` 是组件里的持久状态，
+   * 而"重取媒体地址"回来时调用方是**原地换 prop**（`PostDetailDrawer` 拿到新帖就 `setPatched`，
+   * 既不换 key 也不重新挂载）⇒ 上一轮留下的"已经烧到第 2 面镜像 / 已经判死"会**原样留给
+   * 新地址**：新地址明明能用，界面却还停在"这个视频在当前环境里播不了"。
+   * 更隐蔽的一层：重取回来的候选往往**更少**（抖音详情里常常只剩 `play_addr` 一条 + 它的
+   * 本机代理镜像），而 `idx` 还停在 2 ⇒ `src === undefined` ⇒ 直接走兜底卡（连 `<video>`
+   * 都没挂上），看起来就是"重取了照样播不了"。
+   *
+   * ⚠️ 这里是**渲染期归零**（React 官方的 "adjusting state when props change"），不是 `useEffect`：
+   * 用 effect 的话新地址会先按旧序号渲染一帧 —— 那一帧正好是兜底卡，还会顺手报一条
+   * "全部播放源都失败"的**假**报告（effect 在提交后才跑），下一帧才修好。
+   *
+   * ⚠️ 指纹**只能由 prop 里的地址算**，绝不能用 `src`/`audioSrc`（它们自己依赖 `idx`/`aidx`）：
+   * 否则"换下一条镜像"就会改指纹 ⇒ 归零把刚换上的序号又抹回 0（DASH 双元素那条镜像链用例
+   * 当场抓到：音轨失败换成 `audioFallbacks[0]` 之后又被弹回原地址，同一条反复报错）。
+   */
+  const mediaKey = isDash
+    ? [...dashVideoUrls, '\u0000', ...dashAudioUrls].join('\u0000')
+    : direct.join('\u0000')
+  const [lastMediaKey, setLastMediaKey] = useState(mediaKey)
+  if (lastMediaKey !== mediaKey) {
+    setLastMediaKey(mediaKey)
+    setIdx(0)
+    setAidx(0)
+    setDead(false)
+  }
 
   /** 全局偏好下发给**真正出声的那个元素**（DASH 双元素 = 音轨；MSE/单文件 = 视频元素自身） */
 
@@ -908,8 +952,12 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
     if (dead || !src) {
       reportUserError('视频播放', `全部播放源都失败（含本机代理）：${src ?? video.url}`,
                       { kind: 'resource' })
+      // **真的全试过**才值得让调用方去重取地址（devlog/363）。`!src` 是"这一档压根没有地址"，
+      // 那是数据问题 —— 而且这条路径下调用方早在渲染 `<VideoPlayer>` 之前就把过关了
+      // （`body.video?.url` 为真才会走到这里）。
+      if (dead) onAllFailed?.()
     }
-  }, [dead, src, video.url])
+  }, [dead, src, video.url, onAllFailed])
 
   /**
    * 起播（`toggle` 与 `autoPlay` 共用一份，别写两遍 —— 两处漂移就会出现"点了能响、自动播不响"）。

@@ -259,3 +259,123 @@ describe('详情页 · 打开时重取（devlog/320）', () => {
     expect(hasSrc(NEW_REMOTE), '上一条重取来的地址漏到下一条了').toBe(false)
   })
 })
+
+/**
+ * **视频那条路也走重取**（2026-10-06 用户实机报障，devlog/363）。
+ *
+ * 抖音的播放地址（`v3-web.douyinvod.com/…?l=20261005191106…`）是**限时签名**的：
+ * 实测存过夜之后 CDN 一律 403（带不带 Referer 都一样），而重取详情拿到的**新签发**地址
+ * 带 `Referer: https://www.douyin.com/` 就 206。视频不像图片那样有本地副本
+ * （`assets._media_urls` 里抖音视频**永远不固化**），所以"重取"是唯一出路 ——
+ * 以前只有图片接了这条链，视频全失败就只是报一条 + 给个"在浏览器打开"。
+ *
+ * 与图片同一条纪律（一帖一次），另一条是**主语要说对**：提示语写"图片没能加载"，
+ * 用户就会去翻图，而真正过期的是播放地址。
+ */
+describe('详情页 · 视频地址过期 ⇒ 重取（devlog/363）', () => {
+  const OLD_V = 'https://v3-web.douyinvod.com/20261005191106/aaa/video.mp4'
+  const NEW_V = 'https://v3-web.douyinvod.com/20261006035329/bbb/video.mp4'
+  const videoPost = (extra: Partial<Post> = {}) => post({
+    platform: 'douyin', type: 'video',
+    body_json: JSON.stringify({ desc: '正文', video: { url: OLD_V } }),
+    ...extra,
+  })
+  const refetchedVideo = (url: string) => videoPost({
+    body_json: JSON.stringify({ desc: '正文', video: { url } }),
+  })
+  const vid = () => document.body.querySelector('video')
+  /**
+   * 把播放器的候选一条条打死（打到换成"播不了"兜底卡为止）。
+   *
+   * ⚠️ 每轮都要**重新看一次 DOM 里还有没有 `<video>`**：React 换 `src` 时**复用同一个
+   * 元素**（不是重新挂载），所以"同一个引用"不等于"同一条地址"；打到判死之后组件才换成兜底卡。
+   */
+  const killVideo = async () => {
+    for (let i = 0; i < 6; i += 1) {
+      const v = vid()
+      if (!v) break
+      await act(async () => { v.dispatchEvent(new Event('error')); await Promise.resolve() })
+      if (document.body.querySelector('.vp-dead')) break
+    }
+  }
+  /**
+   * **手动控制重取什么时候回来**：真实网络有往返，不能让"重取回包"挤在同一轮微任务里
+   * （那样 `setPatched` 会在我们还没烧完旧链时就把新地址换上，测的就不是用户看到的那条路）。
+   */
+  const pendingRefresh: Array<(v: unknown) => void> = []
+  const deferRefresh = () => refreshMedia.mockImplementation(
+    () => new Promise((res) => { pendingRefresh.push(res as never) }))
+  const answerRefresh = async (r: unknown) => {
+    pendingRefresh.shift()!(r)
+    await settle()
+  }
+
+  beforeEach(() => { pendingRefresh.length = 0 })
+
+  it('全部源都失败 ⇒ 重取一次，并把**新签发**的播放地址换上（不用重开抽屉）', async () => {
+    deferRefresh()
+    act(() => root.render(<PostDetailDrawer post={videoPost()} open onClose={() => {}} />))
+
+    await killVideo()
+    expect(refreshMedia, '视频全失败没人去重取 ⇒ 用户只能看到一个死掉的播放器')
+      .toHaveBeenCalledWith(1)
+    expect(document.body.querySelector('.vp-dead'), '前置：重取回来之前确实没得播').toBeTruthy()
+
+    await answerRefresh({ ok: true, pinned: 0, post: refetchedVideo(NEW_V) })
+
+    expect(vid()?.getAttribute('src'), '重取回来的新地址没换上 —— 那"重取"就白做了')
+      .toBe(NEW_V)
+    expect(document.body.querySelector('.vp-dead')).toBeNull()
+  })
+
+  it('新地址也失败 ⇒ **不再重取第二次**（一帖一次，别把上游打爆）', async () => {
+    deferRefresh()
+    act(() => root.render(<PostDetailDrawer post={videoPost()} open onClose={() => {}} />))
+
+    await killVideo()
+    await answerRefresh({ ok: true, pinned: 0, post: refetchedVideo(NEW_V) })
+    await killVideo()                             // 换上来的新地址也挂（上游又签了个坏地址）
+
+    expect(refreshMedia).toHaveBeenCalledTimes(1)
+    expect(pendingRefresh.length, '第二次请求发出来了').toBe(0)
+  })
+
+  it('重取失败 ⇒ 提示语的**主语是"视频"**（写"图片"用户就会去翻图）', async () => {
+    refreshMedia.mockRejectedValue(new Error('当前未登录，无法重取媒体（去 设置 → 登录）'))
+    act(() => root.render(<PostDetailDrawer post={videoPost()} open onClose={() => {}} />))
+
+    await killVideo()
+    await settle()
+
+    const hint = document.body.querySelector('[data-media-hint]')
+    expect(hint?.textContent, '重取失败的原因没露出来').toContain('未登录')
+    expect(hint?.textContent, '提示语主语说错了 —— 过期的是播放地址，不是图片')
+      .toContain('视频')
+    expect(clientLog).toHaveBeenCalled()
+  })
+
+  it('图片那条**照旧说"图片"**（默认主语没被视频带偏）', async () => {
+    refreshMedia.mockRejectedValue(new Error('小红书内容需要 Cookie'))
+    act(() => root.render(
+      <PostDetailDrawer post={post({ images_local: [''] })} open onClose={() => {}} />))
+    failOnce()
+    failOnce()
+    await settle()
+    const hint = document.body.querySelector('[data-media-hint]')
+    expect(hint?.textContent).toContain('图片')
+    expect(hint?.textContent).not.toContain('视频')
+  })
+
+  it('B 站视频**不**走这条重取（端点对没有详情补全的平台如实 409）', async () => {
+    // B 站的取流是另一条路（`BiliVideo` 按需取流 + `onFallback` 回落 durl）；
+    // 在这里发一次只会拿到 409 的请求，还会给用户挂一句莫名其妙的红字。
+    act(() => root.render(
+      <PostDetailDrawer post={videoPost({ platform: 'bilibili' })} open onClose={() => {}} />))
+
+    await killVideo()
+    await settle()
+
+    expect(refreshMedia, 'B 站这条路上发了必然 409 的请求').not.toHaveBeenCalled()
+    expect(document.body.querySelector('.vp-dead'), '兜底卡照旧（给"在浏览器打开"）').toBeTruthy()
+  })
+})
