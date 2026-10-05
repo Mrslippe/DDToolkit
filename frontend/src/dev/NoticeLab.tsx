@@ -268,6 +268,33 @@ export default function NoticeLab() {
         say(s); return s
       },
     },
+    {
+      key: 'server-state',
+      label: '⑫ 服务端形态的状态条目（没有 TTL）',
+      how: '注入',
+      expect: 'doing 组 · **一直留着**（不是闪一下就走）· 与别的条目并存时计数对得上',
+      run: () => {
+        /**
+         * ⚠️ **这一条必须按服务端的原样注入，不许套 `LAB_TTL_MS`**（2026-10-06，`devlog/357`）。
+         *
+         * 用户报的现场：点了「全量拉取第三方数据」，面板里**没有**那条「正在同步…」，
+         * 计数却是 `通知（2）`。根因是 `GET /vtuber/notices` 回来的进度条目带着
+         * **`"expiresAt": null`**（后端契约 `NoticeOut.expiresAt: int | None`），
+         * 而 `isLive` 原来只认 `undefined` ⇒ 它被判成"已过期"：面板不画它、计数却还数着它；
+         * 它只以"正在退场"的身份闪 ~220ms（所以肉眼与探针都容易漏）。
+         *
+         * ④⑤ 之所以没抓到：它们走 `seed([...], LAB_TTL_MS)` —— **给了数字 TTL**，
+         * 于是永远"活着"。这里刻意不套 TTL、并显式写 `expiresAt: null`，
+         * 形状与真实响应逐字一致（探针 `--notice-lab` 专门点这一条并等退场队列跑完再看）。
+         */
+        seed([{
+          id: 'progress-external-lab', kind: 'progress', form: 'state', source: '第三方同步',
+          text: '正在同步第三方数据（全量）', sticky: false, expiresAt: null,
+          createdAt: now(),
+        }])
+        say('注入服务端形态的进度（expiresAt: null —— 与真实响应一致）')
+      },
+    },
   ]
 
   /** 触发一行（**逐行兜异常**）。 */

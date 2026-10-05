@@ -32,7 +32,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api/api'
 import { EVENTS, on } from './appEvents'
 import type { LiveEdgePayload, PushedProgressPayload } from './appEvents'
-import { liveNotice, messageNotice, EVENT_TTL_MS } from './notificationHub'
+import { liveNotice, messageNotice, EVENT_TTL_MS, isLive } from './notificationHub'
 import type { Notice } from './notificationHub'
 import { startMessageBus } from './messageBus'
 
@@ -156,7 +156,10 @@ export function buildStreamNotices(src: StreamNoticeSource, now: number): Notice
   if (message) {
     list.push(messageNotice(message.text, message.at, PILL_MS))
   }
-  return list.filter((n) => n.expiresAt === undefined || n.expiresAt > now)
+  // ⚠️ 过期判定走**同一个** `isLive`（2026-10-06，`devlog/357`）：这里原来自己写了一份
+  //    `expiresAt === undefined || > now` —— 而 JSON 的 `null` 不是 `undefined`，
+  //    两份判据一旦分叉，症状就是"清单里有、屏幕上没有"。一条判据只留一处。
+  return list.filter((n) => isLive(n, now))
 }
 
 /**

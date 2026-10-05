@@ -4,7 +4,7 @@ import { AlertTriangle, CheckCircle2, ChevronDown, Gauge, Hourglass, KeyRound,
          Loader2, Radio } from 'lucide-react'
 import OverlayScroll from './OverlayScroll'
 import type { Notice, NoticeActionKind } from '../utils/notificationHub'
-import { KIND_GLYPH, isLive } from '../utils/notificationHub'
+import { KIND_GLYPH, expiresAtOf, isLive } from '../utils/notificationHub'
 import type { NoticeGroup } from '../utils/noticeBoard'
 import {
   GROUP_LABEL,
@@ -188,7 +188,8 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
   const primary = sections[0]?.items[0] ?? null
   const headline = sections[0]?.headline ?? ''
   const lit = !!primary
-  const hasExpiring = notices.some((n) => n.expiresAt !== undefined && n.expiresAt !== null)
+  /** 有没有"会自己消失"的条目（决定要不要跑秒表）—— 走 `expiresAtOf`，别自己比 null */
+  const hasExpiring = notices.some((n) => expiresAtOf(n) !== null)
   /** 隐藏到托盘（R18）：轮播停表 */
   const hidden = useShellHidden()
 
@@ -411,8 +412,20 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
    *  互相触发、无限重渲染，**退场动画一帧都看不到**（第一版就是这样，被
    *  `StatusIsland.test.tsx` 那条"先挂 is-out 再摘掉"抓出来）。
    *  这与"`useEffect` 里 setState 要防抖"是同一类坑，只是它长得像纯粹的数据变换。
+   *
+   *  ⚠️⚠️⚠️ **`return prev` 还不够**（2026-10-06，`devlog/357`）：`now` 是**墙上时钟**派生的
+   *  （`Math.max(nowProp, Date.now())`）⇒ 只要两次渲染之间过了 1ms，依赖就变了、这条 effect
+   *  就会再跑一次，**再调一次 `setRows`**。而"在 commit 阶段调度更新"这件事本身
+   *  会被 React 计进 `nestedUpdateCount` —— 攒够 50 次就 `Maximum update depth exceeded`，
+   *  **即使每次 updater 都返回同一个引用**（bail-out 也救不了）。
+   *  探针跑在**虚拟时间**下（时钟随每一拍往前跳）时这条环必炸：
+   *  `ui_probe --notice-lab` 实测 600+ 次渲染、整棵树被 `ErrorBoundary` 重建。
+   *  ⇒ 修法：**先自己判"有没有要改的"，没有就一次 `setState` 都不调**。
    */
   useLayoutEffect(() => {
+    // 过期判定先在这里做一遍（下面那个 updater 里还会做，两处必须是同一条 `isLive`）
+    const stale = rows.some((r) => !r.queued && !r.leaving && !isLive(r, now))
+    if (!stale) return                       // 没东西到点 ⇒ 不碰状态（别拿 bail-out 当刹车）
     setRows((prev) => {
       let changed = false
       const next = prev.map((r): Row => {
@@ -632,19 +645,10 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
   //
   // ⚠️ 元素**保持挂载**（去掉原来的 `key={notices.length}`）—— 那正是重放的原因。
   // 可重定向：中途再变计数只是再复位一次，不会排队。
-  const [countPopped, setCountPopped] = useState(false)
-  const countRef = useRef(notices.length)
-  // ⚠️ **必须是 `useLayoutEffect`（绘制前），不能是 `useEffect`**：
-  //    新数字先以**全尺寸**画一帧、下一拍才缩到 0.6 再弹出 ⇒ 屏幕上会看到
-  //    "新数字闪一下 → 又缩回去 → 再弹出来"。`useLayoutEffect` 在浏览器绘制前跑完，
-  //    把这一步藏掉（这也是它与"帧边界"那套说法的实际差别所在）。
-  useLayoutEffect(() => {
-    if (countRef.current === notices.length) return
-    countRef.current = notices.length
-    setCountPopped(true)                            // ① 瞬时缩到 0.6（`is-out` 的时长是 0s）
-    const t = window.setTimeout(() => setCountPopped(false), 0)   // ② 下一拍撤掉 ⇒ --motion-fast 弹出
-    return () => window.clearTimeout(t)
-  }, [notices.length])
+  //
+  // ⚠️ 这一块从"依赖 `notices.length`"到"依赖 `shownCount`"来回改过一次（2026-10-06，
+  //    `devlog/357`）：`shownCount` 含 `now` ⇒ 每渲染都可能变 ⇒ 布局 effect 里 setState
+  //    自激（26 条用例一起红是 TDZ，探针那次是无限更新）。**触发只能用输入派生的量**。
 
   /** 胶囊左侧：会自动消失时给一个剩余比例（画环），否则保持原来的实心点 */
   const disc = discFraction(primary, now)
@@ -765,6 +769,42 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
   const rowsById = new Map(rows.map((r) => [r.id, r]))
   const ackAll = ackAllIds(notices, now)
   /**
+   * **计数 = 画出来的条数**（2026-10-06，`devlog/357`）。
+   *
+   * 用户现场：`通知（2）` 而屏幕上只有 1 条（点完全量拉取第三方数据之后）。
+   * 两处计数原先都写 `notices.length` —— 那是**合并后的原始数组**，
+   * 里面有"已经过期、等下一轮轮询才消失"的条目，也有（修好 `isLive` 之前）
+   * 被误判过期而不画的服务端状态条目 ⇒ 数字与眼睛对不上。
+   * 现在统一取 `drawnGroups` 的行数（活着的 + 排队/正在滑出的 ——
+   * 后者还在屏幕上，所以必须算，见组标题那条注释）。
+   */
+  const shownCount = drawnGroups.reduce((sum, g) => sum + g.rows.length, 0)
+  /**
+   * 徽章"弹一下"的**触发器**：`notices.length`（**只由输入决定，与时间无关**）。
+   *
+   * ⚠️⚠️ **不许换成 `shownCount` 或"活着的条数"**（2026-10-06 实测踩到两次，`devlog/357`）：
+   * 它们都含 `now`（`exiting` 按 `isLive(r, now)` 判、`liveNotices` 同理），而 `now` 是
+   * `Math.max(nowProp, Date.now())` —— **每渲染一次就可能往前走一格**。
+   * 于是"渲染 → 依赖变了 → 布局 effect 里 setState → 再渲染 → 依赖又变了"，
+   * 直接 `Maximum update depth exceeded`（`ui_probe --notice-lab` 抓到：整棵树被
+   * `ErrorBoundary` 重建，顶栏连它的 dev 口一起消失，后面读什么都是空）。
+   * 探针跑在**虚拟时间**下，这条环尤其致命（时钟随渲染飞速前进）。
+   * 计数**显示**用 `shownCount`（那是渲染，不进依赖），这里只负责"变没变过"。
+   */
+  const [countPopped, setCountPopped] = useState(false)
+  const countRef = useRef(notices.length)
+  // ⚠️ **必须是 `useLayoutEffect`（绘制前），不能是 `useEffect`**：
+  //    新数字先以**全尺寸**画一帧、下一拍才缩到 0.6 再弹出 ⇒ 屏幕上会看到
+  //    "新数字闪一下 → 又缩回去 → 再弹出来"。`useLayoutEffect` 在浏览器绘制前跑完，
+  //    把这一步藏掉（这也是它与"帧边界"那套说法的实际差别所在）。
+  useLayoutEffect(() => {
+    if (countRef.current === notices.length) return
+    countRef.current = notices.length
+    setCountPopped(true)                            // ① 瞬时缩到 0.6（`is-out` 的时长是 0s）
+    const t = window.setTimeout(() => setCountPopped(false), 0)   // ② 下一拍撤掉 ⇒ --motion-fast 弹出
+    return () => window.clearTimeout(t)
+  }, [notices.length])
+  /**
    * 面板**是不是真的没东西可画了**（连正在滑的都没有）。
    *
    * ⚠️ 判据不能再是"`drawnGroups` 空"（三组标题现在恒在）。它就是"面板要不要挂载"的闸门：
@@ -844,8 +884,8 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
         {/* 活数据槽（D1）：倒计时 / 进度单独一格 —— 它每秒刷新，但**不重排文案**
             （拼进 `text` 里会让整句走一次淡入淡出，用户看到的是"每秒闪一下"）。 */}
         {lit && primary!.value && <span className="si-value">{primary!.value}</span>}
-        {lit && notices.length > 1 &&
-          <span className={`si-count${countPopped ? ' is-out' : ''}`}>{notices.length}</span>}
+        {lit && shownCount > 1 &&
+          <span className={`si-count${countPopped ? ' is-out' : ''}`}>{shownCount}</span>}
         {lit && <ChevronDown className="si-chevron size-[12px]" />}
       </span>
 
@@ -865,7 +905,7 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
             onPointerLeave={hoverOut}
           >
             <div className="si-panel-head">
-              <span className="si-panel-title">通知（{notices.length}）</span>
+              <span className="si-panel-title">通知（{shownCount}）</span>
               {/* 右上角原来是"能力矩阵"那句来源提示（`href`）—— 用户 2026-10-05 让位给
                   「全部已读」：那行字只是说"这句话是谁说的"，而面板里**每条都自带来源标注**
                   （`.si-item-meta` 的「注意 · 能力矩阵 · …」），重复且占着最顺手的位置。

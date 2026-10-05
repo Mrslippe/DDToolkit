@@ -3168,6 +3168,15 @@ export async function runUiProbe(): Promise<void> {
     }
     // ⑦ 「全部已读」：清「最近」+「需要处理」两组的，「正在进行」一条都不许动。
     //    判据按 **id 逐个**对（不按条数）：条数会因为 TTL 到点而减小，那样即使按钮没生效也可能"看起来清了"。
+    //
+    // ⚠️ **点之前先把「正在进行」里那条会被 TTL 带走的刷新一遍**（2026-10-06，`devlog/357`）：
+    //    ④⑤ 推的 `pushed-progress` 真身寿命只有 **8 秒**（`PUSHED_PROGRESS_MS`），
+    //    而这一轮跑完上面那段要十几秒 ⇒ 它常常正好在"全部已读"这几拍里自己过期，
+    //    于是下面那条"「正在进行」不许变少"的判据**红在产品没坏的地方**
+    //    （实测：7 → 6，掉的那条就是它）。重发一次让它的 8 秒从此刻起算。
+    const refreshDoing = all('.nl-row').find((r) => r.getAttribute('data-lab-row') === 'progress-post')
+    ;(refreshDoing?.querySelector('.nl-fire') as HTMLElement | null)?.click()
+    await sleep(400)
     const ackBtn = one('.si-panel [data-ack-all]')
     result.hasAckAll = !!ackBtn
     if (ackBtn) {
@@ -3214,6 +3223,46 @@ export async function runUiProbe(): Promise<void> {
     }
     result.metaHasRelative = [...(one('.si-panel')?.querySelectorAll('.si-item-meta') || [])]
       .map((m) => (m.textContent || '').trim())
+    /**
+     * ⑬ **服务端形态的状态条目要留得住，且计数 = 画出来的条数**（2026-10-06，`devlog/357`）。
+     *
+     * 用户现场：点了「全量拉取第三方数据」，面板里没有那条「正在同步…」，计数却写 2。
+     * 根因是服务端那份的 `"expiresAt": null` 被 `isLive` 判成"已过期"（`null !== undefined`）。
+     *
+     * ⚠️ 判据的**难点在时机**：被判过期的条目**不是完全不画** —— 它会以"正在退场"的
+     * 身份在列表里闪 ~220ms（`exiting` 那一路）。所以"点完立刻读"会**假绿**，
+     * 必须**等退场队列跑完**（220ms 滑出 + 70ms/条起排）再读它还在不在。
+     * 这一条同时量"计数对不对得上"（原来数 `notices.length`，含已过期/没画的）。
+     */
+    all('.nl-btn').find((b) => (b.textContent || '').includes('清注入'))?.click()
+    await sleep(400)
+    const srvRow = all('.nl-row').find((r) => r.getAttribute('data-lab-row') === 'server-state')
+    result.serverStateRowFound = !!srvRow
+    const wHook = window as unknown as {
+      __ddtoolkitNotices?: () => string[]
+    }
+    ;(srvRow?.querySelector('.nl-fire') as HTMLElement | null)?.click()
+    // ⚠️ **顺序**（第一版就错在这）：种子要等 React 真的提交完，胶囊才会亮；
+    //    胶囊不亮时 `cap().click()` 是**空操作**（`StatusIsland` 的 onClick 第一行
+    //    `if (!lit) return`）⇒ 面板根本不会开，后面读到的永远是 `[]`
+    //    （症状极具误导性：看着像"条目被滤掉了"，其实是"尺子没打开"）。
+    await waitFor(() => one('.si-island')?.classList.contains('on'))
+    if (!one('.si-panel')) cap()?.click()
+    await waitFor(() => one('.si-panel'))
+    await sleep(900)                     // 退场队列（220ms + 70ms/条）早跑完 —— 幽灵行会在这之前消失
+    const srvPanel = one('.si-panel')
+    const srvRows: string[] = [...(srvPanel?.querySelectorAll(
+      '.si-sec[data-group="doing"] .si-item:not(.is-out) .si-item-text') || [])]
+      .map((t) => (t.textContent || '').trim())
+    result.serverStateRows = srvRows
+    result.serverStateStayed = srvRows.some((t) => t.includes('第三方数据'))
+    result.serverStateTitleCount = Number(
+      ((srvPanel?.querySelector('.si-panel-title')?.textContent || '').match(/（(\d+)）/) ?? [])[1] ?? -1)
+    result.serverStateDrawnRows = srvPanel?.querySelectorAll('.si-sec .si-item:not(.is-out)').length ?? -1
+    result.serverStateBadge = Number(
+      (cap()?.querySelector('.si-count')?.textContent || '').trim() || -1)
+    // 合并后的那份列表（`TopBar` 的 dev 口）：红了能一眼分清"没进列表"与"进了没画"
+    result.serverStateList = wHook.__ddtoolkitNotices?.() ?? null
     // 调测页自己的日志：**每一行为什么失败**都写在这里（`fire()` 逐行兜异常）——
     // 探针带上它，红的时候不用再跑一次去猜
     result.labLog = [...document.querySelectorAll('[data-lab-log] > div')]

@@ -1879,7 +1879,7 @@ def _assert_notice_lab(nl: dict, width: int) -> list[str]:
     if not nl.get("hasPanel"):
         bad.append(f"@{width} notice-lab: 调测页没挂上（`?notice-lab` 那段没生效？）")
         return bad
-    if (nl.get("rowCount") or 0) < 11:
+    if (nl.get("rowCount") or 0) < 12:
         bad.append(f"@{width} notice-lab: 只有 {nl.get('rowCount')} 类按钮 —— "
                    f"少的那几类用户永远看不到（每类都该有一个）")
     if not nl.get("hasBatch"):
@@ -1959,6 +1959,29 @@ def _assert_notice_lab(nl: dict, width: int) -> list[str]:
     rel = nl.get("metaHasRelative") or []
     if not any(" · " in r for r in rel):
         bad.append(f"@{width} notice-lab: 条目 meta 行没有相对时间")
+    # ⑬ **服务端形态的状态条目要留得住，且计数 = 画出来的条数**（2026-10-06，`devlog/357`）。
+    #
+    # 用户现场：点了「全量拉取第三方数据」，面板里没有那条「正在同步…」，计数却写 2。
+    # 根因：`GET /vtuber/notices` 那份的 `expiresAt` 是 JSON `null`，
+    # 而前端只认 `undefined` ⇒ 被判成"已过期"：不画它、计数却还数着它。
+    #
+    # ⚠️ 这两条的实体分别是「**等退场队列跑完**它还在」与「计数 == 画出来的行数」：
+    #    只判"点完看得见"会假绿 —— 被判过期的那条会以"正在退场"的身份闪 ~220ms。
+    if not nl.get("serverStateRowFound"):
+        bad.append(f"@{width} notice-lab: 调测页没有「服务端形态的状态条目」那一行"
+                   f"（新增行忘了加按钮？）")
+    elif not nl.get("serverStateStayed"):
+        bad.append(f"@{width} notice-lab: 服务端形态的进度（`expiresAt: null`）在 doing 组里"
+                   f"**留不住** —— 实得 {nl.get('serverStateRows')}。"
+                   f"它被判成了「已过期」：面板不画它、计数却还数着它")
+    title_count = nl.get("serverStateTitleCount")
+    drawn = nl.get("serverStateDrawnRows")
+    if title_count is not None and drawn is not None and title_count != drawn:
+        bad.append(f"@{width} notice-lab: 「通知（{title_count}）」与画出来的 {drawn} 行对不上"
+                   f"（计数不许含已经不画的条目）")
+    badge = nl.get("serverStateBadge")
+    if drawn is not None and badge is not None and badge > 0 and badge != drawn:
+        bad.append(f"@{width} notice-lab: 胶囊徽章 {badge} 与画出来的 {drawn} 行对不上")
     # ⚠️ **页面自己炸了**（2026-10-05 加）：用户报的 `Maximum update depth exceeded`
     #    （点「批量全部」直接白屏）在这条探针上曾经是**全绿**的 —— 它只数 DOM，
     #    数不到"组件已经进无限重渲染、树被卸载"。凡是**未捕获异常**或 React 的
@@ -3899,6 +3922,11 @@ def main() -> int:
             for line in (nl.get("itemTexts") or []):
                 print(f"     条目: {line}")
             print(f"  本地那一份 id：{nl.get('localIds')!r}")
+            print(f"  服务端形态那条：行在={nl.get('serverStateRowFound')} "
+                  f"留得住={nl.get('serverStateStayed')} 实得={nl.get('serverStateRows')!r}"
+                  f" ｜ 标题计数={nl.get('serverStateTitleCount')} 画出的行="
+                  f"{nl.get('serverStateDrawnRows')} 徽章={nl.get('serverStateBadge')}")
+            print(f"      合并后的列表={nl.get('serverStateList')!r}")
             print(f"  页面报错：{nl.get('pageErrorCount')} 条 {nl.get('pageErrors')!r}")
             print(f"  逐条验（key=成/否(面板条数)）：{nl.get('perRow')!r}")
             for line in (nl.get("labTrace") or []):

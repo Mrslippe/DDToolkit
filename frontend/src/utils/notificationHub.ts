@@ -63,8 +63,17 @@ export interface Notice {
   source?: string
   /** 常驻：不因时间过期，只能被来源撤回或用户确认 */
   sticky?: boolean
-  /** 过期时刻（ms，`Date.now()` 口径）；未设 = 不过期 */
-  expiresAt?: number
+  /**
+   * 过期时刻（ms，`Date.now()` 口径）；**`null` / 未设 = 不过期**。
+   *
+   * ⚠️ 两种"没有过期时刻"的写法都要认（2026-10-06，`devlog/357`）：
+   * 后端契约是 `NoticeOut.expiresAt: int | None`，**None 会序列化成 JSON `null`**
+   * （键还在、值是 null），而"老后端没这个键"才是 `undefined`。
+   * 只判 `undefined` 的写法把服务端每一条没有 TTL 的状态条目（三个进度条目都是）
+   * 判成"已过期"⇒ 面板里看不见、计数却还数着它 —— 用户报的正是这个。
+   * 读它请一律走 `expiresAtOf()`，别自己写比较。
+   */
+  expiresAt?: number | null
   action?: NoticeAction
 }
 
@@ -101,10 +110,26 @@ export const KIND_GLYPH: Record<NoticeKind, string> = {
   message: '✦',
 }
 
+/**
+ * 这一条的**过期时刻**（ms）；`null` = 它不会自己消失。
+ *
+ * ⚠️ 存在的理由只有一个：**JSON 的 `null` 不是 `undefined`**
+ * （2026-10-06，`devlog/357`）。服务端 `expiresAt` 是 `int | None`，
+ * 没有 TTL 的条目（三个进度条目 / 常驻状态）回来的是 `"expiresAt": null`——
+ * 而 `null === undefined` 为假、`null > now` 也是假，于是"有没有过期时刻"这件事
+ * 被当成"已经过期"，条目在面板里消失、计数却还数着它。
+ * 脏值（`NaN` / `Infinity`）同理按"不过期"处理：宁可多显示一条，不许静默吞掉。
+ */
+export function expiresAtOf(n: Notice): number | null {
+  const t = n.expiresAt
+  return typeof t === 'number' && Number.isFinite(t) ? t : null
+}
+
 /** 是否还该显示（非 sticky 且过期的条目自动淡出） */
 export function isLive(n: Notice, now: number): boolean {
   if (n.sticky) return true
-  return n.expiresAt === undefined || n.expiresAt > now
+  const at = expiresAtOf(n)
+  return at === null || at > now
 }
 
 export function liveNotices(list: Notice[], now: number): Notice[] {

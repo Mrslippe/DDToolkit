@@ -20,7 +20,7 @@
  * 记成已读会在"同一条状态再次成立"时误判（例如再次限流）。
  */
 import type { Notice } from './notificationHub'
-import { isLive } from './notificationHub'
+import { expiresAtOf, isLive } from './notificationHub'
 
 /** 三个形态（与后端 `services/notices.py` 的 `FORM_*` 逐字对齐） */
 export type NoticeForm = 'state' | 'notice' | 'action'
@@ -264,11 +264,12 @@ export function relTimeFor(n: Notice, now: number): string {
  */
 export function countdownFraction(n: Notice, now: number): number | null {
   if (n.form !== 'notice') return null
-  if (n.expiresAt === undefined || n.expiresAt === null) return null
+  const expiresAt = expiresAtOf(n)
+  if (expiresAt === null) return null
   if (!n.createdAt) return null
-  const span = n.expiresAt - n.createdAt
+  const span = expiresAt - n.createdAt
   if (span <= 0) return null
-  const left = n.expiresAt - now
+  const left = expiresAt - now
   if (left <= 0) return 0
   return Math.min(1, left / span)
 }

@@ -22,7 +22,14 @@ python scripts/ui_probe.py --hero-print --vtuber 15   # 建基线；重构后带
 python scripts/ui_probe.py --status-island            # 顶栏状态岛（R12a，devlog/089、090）
 python scripts/ui_probe.py --cell-pop                 # 日历格 hover 悬浮窗 —— §6.9 / §6.11 的判据命令（devlog/186、188）
 python scripts/ui_probe.py --vtuber 15 --messages     # 推送通道端到端（M0b，devlog/242）—— 三档主流程也跑它，这条是单跑定位用
+python scripts/ui_probe.py --notice-lab               # 通知样式调测页（devlog/345、357）—— 每类一个按钮 + 批量 + 三组与倒计时
 ```
+⚠️ `--notice-lab` 有一条判据专门点 **⑫「服务端形态的状态条目（没有 TTL）」**（`devlog/357`）：
+`GET /vtuber/notices` 回来的进度条目带 **`"expiresAt": null`**，而"没有过期时刻"曾被前端
+只按 `undefined` 判 ⇒ 那条被判成"已过期"，**面板不画它、计数却还数着它**。
+⚠️ 这条判据的难点在**时机**：被判过期的条目不是完全不画 —— 它会以"正在退场"的身份
+在列表里闪 ~220ms（`exiting` 那一路）⇒ "点完立刻读"会**假绿**，必须**等退场队列跑完**
+再读它还在不在；同一条还量"`通知（N）` == 画出来的行数"。
 ⚠️ 需要完整权限（Vite 的 esbuild 与无头浏览器在受限沙箱会失败）；失败时保留 `_ui_probe_tmp/`（DOM dump + 截图 profile）供定位。`--shot*` 系列**只截图、不参与断言** —— 布局不变量只管「在不在框里」，配色/密度这类还得看图。
 它自动：复制开发数据目录 → 起后端 → 起 Vite → 无头浏览器加载 `/vtubers/<id>?probe=1`（`frontend/src/dev/probe.ts` 依次切视图、在列表页跑一遍筛选弹窗全链路（开 → 预设 → 确认 → 重置 → Esc）、再点一次「投稿」筛选，默认共**九段**测量 —— 档案视图隐藏期间少一段，见下），断言八组不变量（**每条断言的"为什么"都写在 `ui_probe.py` / `probe.ts` 的对应注释里**）：
 

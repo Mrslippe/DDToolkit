@@ -32,7 +32,7 @@ import { hideToTray, quitApp } from '../utils/shellBridge'
 import { isShellHidden } from '../utils/shellLifecycle'
 import { closeIntent, parseCloseAction, type CloseAction } from '../utils/shellState'
 import type { Notice, NoticeActionKind } from '../utils/notificationHub'
-import { EVENT_TTL_MS, messageNotice } from '../utils/notificationHub'
+import { EVENT_TTL_MS, expiresAtOf, messageNotice } from '../utils/notificationHub'
 import { ackAllIds, pruneAcked } from '../utils/noticeBoard'
 import { useNotices } from '../utils/noticeStream'
 import { api } from '../api/api'
@@ -445,7 +445,9 @@ export default function TopBar() {
     const t = window.setInterval(() => {
       const at = Date.now()
       setLocalNotices((prev) => {
-        const next = prev.filter((n) => (n.expiresAt ?? Infinity) > at)
+        // 过期判定走 `expiresAtOf`（`null` = 不过期）—— 别在这里再写一遍比较，
+        // 这条判据只需要一处（2026-10-06，`devlog/357`：分叉的那两份就是 bug 本身）
+        const next = prev.filter((n) => (expiresAtOf(n) ?? Infinity) > at)
         return next.length === prev.length ? prev : next
       })
     }, 1000)

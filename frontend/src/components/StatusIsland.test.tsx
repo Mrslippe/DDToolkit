@@ -162,6 +162,108 @@ describe('面板的三组分区', () => {
   })
 })
 
+/**
+ * 「服务端那条没有 TTL 的状态」在面板里必须看得见，且**计数 = 画出来的条数**
+ * （2026-10-06，`devlog/357`；用户现场：点了「全量拉取第三方数据」，
+ * 面板里没有那条「正在同步…」，计数却写着 2）。
+ *
+ * 两个毛病各自都要判：① `expiresAt: null` 被判成"已过期" ⇒ 条目被滤掉；
+ * ② `通知（N）` 与 `.si-count` 数的是**原始数组**（含已过期的）⇒ 与屏幕上的条数不一致。
+ */
+describe('服务端状态条目的可见性与计数（`expiresAt: null`）', () => {
+  /** 与 `GET /vtuber/notices` 回来的形状逐字一致（实测原始响应见 `devlog/357`） */
+  const serverProgress = (over: Partial<Notice> = {}): Notice => ({
+    id: 'progress-external', kind: 'progress', form: 'state', source: '第三方同步',
+    text: '正在同步第三方数据（全量）', sticky: false,
+    expiresAt: null, createdAt: NOW - 60_000, ...over,
+  } as Notice)
+  /** 本机那条常驻的「有 N 项功能当前受限」（`TopBar` 里造，sticky = 没有 TTL） */
+  const capLimits = (over: Partial<Notice> = {}): Notice => ({
+    id: 'cap-limits', kind: 'alert', form: 'state', source: '能力矩阵', sticky: true,
+    text: '有 1 项功能当前受限', createdAt: NOW - 120_000, ...over,
+  } as Notice)
+
+  const panelCount = () => {
+    const t = document.querySelector('.si-panel-title')?.textContent || ''
+    return Number((t.match(/（(\d+)）/) ?? [])[1] ?? NaN)
+  }
+  const drawnRows = () => document.querySelectorAll('.si-sec .si-item').length
+  /**
+   * 让退场队列跑完（220ms 滑出 + 70ms 起排）：**"幽灵行"与"活着的行"必须分得开**。
+   *
+   * ⚠️ 这条是这一批的关键（2026-10-06）：`expiresAt: null` 被判成"已过期"时，
+   * 条目**并不是完全不画** —— 它会以"正在退场"的身份在列表里闪一下（`exiting` 那一路），
+   * 200~300ms 后被泵清掉。所以只断言"打开面板时看得见"会**假绿**，
+   * 必须等队列跑完再看它还在不在（用户截图里那一条就是已经闪没了的样子）。
+   */
+  const settle = () => act(() => { vi.advanceTimersByTime(1000) })
+
+  it('「正在同步第三方数据」要**留在**「正在进行」里（用户截图里正是它没了）', () => {
+    render([capLimits(), serverProgress()])
+    const panel = openPanel()!
+    settle()
+    const rows = [...panel.querySelectorAll('.si-sec[data-group="doing"] .si-item')]
+      .filter((el) => !el.classList.contains('is-out'))
+    expect(rows.map((el) => el.querySelector('.si-item-text')?.textContent))
+      .toContain('正在同步第三方数据（全量）')
+  })
+
+  it('面板标题与胶囊徽章的计数 = **画出来的**条数（两条就写 2，且真的画 2 行）', () => {
+    render([capLimits(), serverProgress()])
+    openPanel()
+    settle()
+    expect(drawnRows()).toBe(2)
+    expect(panelCount()).toBe(2)
+    expect(host.querySelector('.si-count')?.textContent).toBe('2')
+  })
+
+  it('列表里还剩一条**已经过期**的（轮询还没换掉）⇒ 计数不许把它算进去', () => {
+    // 服务端那份到点后要等下一轮轮询才消失，这中间"数了但没画"就是用户看到的 2 vs 1
+    render([
+      capLimits(),
+      serverProgress(),
+      message({ id: 'msg-gone', expiresAt: NOW - 1 }),      // 已过期
+    ])
+    openPanel()
+    settle()
+    expect(drawnRows()).toBe(2)
+    expect(panelCount(), '过期的条目不在屏幕上，就不该在计数里').toBe(2)
+    expect(host.querySelector('.si-count')?.textContent).toBe('2')
+  })
+})
+
+/**
+ * 源码级：**「定时体检」那条 effect 在没有条目到点时不调度任何更新**（2026-10-06，`devlog/357`）。
+ *
+ * 为什么必须钉在源码这一层：这条错的形态在 jsdom 里**复现不出来** ——
+ * 旧写法 `setRows(prev => prev)` 的 updater 返回同一个引用，React 直接 bail-out、
+ * **不产生新的 commit**，于是"每提交一次就再调度一次"这个环在 jsdom 里第二步就断了。
+ * 而真机上它不断：`now` 是 `Math.max(nowProp, Date.now())`，只要两次渲染之间过了 1ms
+ * 依赖就变、effect 就再跑、**再调一次 `setRows`** —— 而"在 commit 阶段调度更新"这件事
+ * 本身会被 React 计进 `nestedUpdateCount`，攒够 50 次就 `Maximum update depth exceeded`
+ * （`ui_probe --notice-lab` 实测：600+ 次渲染、整棵树被 `ErrorBoundary` 重建，
+ * 顶栏连它的 dev 口一起消失 ⇒ 后面读什么都是空）。
+ *
+ * 所以这里钉的是**结构**：先自己算"有没有到点的"，没有就 `return`，一次都不调。
+ * 反向判据在探针那边（`--notice-lab` 抓页面报错），两边一起才算够。
+ */
+describe('体检那条 effect 不许每拍都调度更新（源码级结构判据）', () => {
+  const src = readFileSync(
+    join(__dirname, '..', 'components', 'StatusIsland.tsx'), 'utf8')
+  const block = src.slice(src.indexOf('const stale = rows.some'),
+                          src.indexOf('}, [now, rows])'))
+
+  it('先判 `stale`，没有就 `return`，**然后**才 setRows', () => {
+    expect(block.length, '没找到那段体检代码（判据自己失效了）').toBeGreaterThan(80)
+    expect(block).toMatch(/const stale = rows\.some\(\(r\) => !r\.queued && !r\.leaving && !isLive\(r, now\)\)/)
+    const guard = block.indexOf('if (!stale) return')
+    const call = block.indexOf('setRows(')
+    expect(guard, '少了"没东西到点就早退"那道闸').toBeGreaterThan(-1)
+    expect(call, '这段里没有 setRows（判据自己失效了）').toBeGreaterThan(-1)
+    expect(guard, '早退必须在 setRows **之前**').toBeLessThan(call)
+  })
+})
+
 describe('相对时间', () => {
   it('状态类读作「进行中 N」，告知类读作「N 前」（就挂在 meta 行上）', () => {
     render([progress(), message()])

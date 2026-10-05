@@ -74,6 +74,43 @@ describe('过期', () => {
   })
 })
 
+/**
+ * 「没有过期时刻」在**服务端那份**里是 `null`，不是 `undefined`（2026-10-06，devlog/357）。
+ *
+ * 用户报的现场：点了「全量拉取第三方数据」，面板里**没有**那条「正在同步…」，
+ * 而计数写着 `通知（2）`（画出来的只有 1 条）。
+ * 真因就在这一格：后端 `NoticeOut.expiresAt: int | None` 把 None 序列化成 **JSON `null`**，
+ * 而 `isLive` 原来只认 `undefined`（`null === undefined` 为假、`null > now` 也是假）
+ * ⇒ 服务端每一条**没有 TTL 的状态条目**（三个进度条目都是）被判成"已过期"：
+ * 面板把它滤掉，而 `.si-count` / `通知（N）` 数的还是原始数组长度。
+ *
+ * ⚠️ 判据必须**照着真实 JSON 的键写**（`expiresAt: null`），不能用 `undefined`
+ * —— 后者是"没这个键"，那是另一回事（老后端）。
+ */
+describe('服务端那份的空过期时刻（JSON `null`，不是 `undefined`）', () => {
+  const serverState = (over: Partial<Notice> = {}): Notice => ({
+    id: 'progress-external', kind: 'progress', form: 'state', source: '第三方同步',
+    text: '正在同步第三方数据（全量）', sticky: false,
+    // 与 `GET /vtuber/notices` 回来的一模一样（实测原始响应见 devlog/357）
+    expiresAt: null, createdAt: 1_000, ...over,
+  })
+
+  it('`expiresAt: null` = 没有过期时刻 ⇒ **一直算活着**', () => {
+    expect(isLive(serverState(), 10 ** 12)).toBe(true)
+    expect(liveNotices([serverState()], 10 ** 12)).toHaveLength(1)
+  })
+
+  it('真给了数字就照数字判（null 那一档不许把 TTL 一起放行）', () => {
+    expect(isLive(serverState({ expiresAt: 2_000 }), 1_999)).toBe(true)
+    expect(isLive(serverState({ expiresAt: 2_000 }), 2_001)).toBe(false)
+  })
+
+  it('`NaN` / `Infinity` 这类脏值也不许判成"已过期"（宁可多显示，不许静默吞掉）', () => {
+    expect(isLive(serverState({ expiresAt: Number.NaN }), 10 ** 12)).toBe(true)
+    expect(isLive(serverState({ expiresAt: Number.POSITIVE_INFINITY }), 10 ** 12)).toBe(true)
+  })
+})
+
 describe('进度条目：自动节拍不占顶栏（2026-09-10 用户口径）', () => {
   it('auto=true（动态流/自动账号流）直接不产生条目', () => {
     expect(progressNotice({ id: 'p', running: true, auto: true, text: '动态轮询中 - V - 1/7' }))

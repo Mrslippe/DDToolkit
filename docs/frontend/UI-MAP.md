@@ -136,7 +136,7 @@ retire-when: 前端视觉体系整体重做，或组件索引改成机器生成
 
 | 层 | 位置 | 职责 |
 |---|---|---|
-| 判定（纯逻辑，12 条单测） | `utils/notificationHub.ts` | 条目模型、**优先级 `alert>progress>report>message`**、过期（`expiresAt` / `sticky`）、命名规则 |
+| 判定（纯逻辑，12 条单测） | `utils/notificationHub.ts` | 条目模型、**优先级 `alert>progress>report>message`**、过期（`expiresAt` / `sticky`）、命名规则。⚠️ **"没有过期时刻"有两种写法**（`devlog/357`）：服务端契约 `NoticeOut.expiresAt: int | None` 把 None 序列化成 **JSON `null`**（键在、值为 null），老后端才是"没这个键"。判过期一律走 **`expiresAtOf()`**（`null`/`undefined`/`NaN`/`Infinity` 都算"不会自己消失"）—— 只判 `undefined` 的写法会把服务端每条没有 TTL 的状态条目（三个进度条目都是）判成"已过期"：面板不画它、计数却还数着它 |
 | 空闲内容（纯逻辑，15 条单测） | `utils/idleQuotes.ts` | 空闲轮播池（第 0 格 = 状态文案，后接语录）、取模选格、`registerIdleProvider` 扩展点 |
 | 渲染 | `components/StatusIsland.tsx` | 四态 `idle`（绿点 + 空闲轮播文案，**无容器**）· `pill`（一条主文案 + 图标 + 计数）· `expand`（portal + fixed 面板）· 空闲轮播（R12b） |
 
@@ -156,6 +156,11 @@ retire-when: 前端视觉体系整体重做，或组件索引改成机器生成
 DOM 契约（探针 `ui_probe --status-island` 直接查）：`.si-island`（`.on` = 有事发生）· `.si-dot`
 （`.warn` = 红）· `.si-text` · `.si-count` · `.si-chevron` · `.si-panel`（`data-pinned` = 点击钉住）·
 `.si-item[data-kind]` · `.si-item-meta`（含来源标注与**相对时间**）· `.si-item-action`。
+⚠️ **`通知（N）` 与 `.si-count` 数的是"画出来的行数"**（活着的 + 排队/正在滑出的），
+不是合并后的原始数组（2026-10-06，`devlog/357`：原来数 `notices.length`，含"已过期等下一轮轮询"
+与"被判过期而不画"的条目 ⇒ 用户看到 `通知（2）` 而屏幕上只有 1 条）。徽章"弹一下"的触发器
+仍然是 **`notices.length`**（只由输入决定）—— 换成任何含 `now` 的量都会把布局 effect 点成
+`Maximum update depth exceeded`。
 
 **L1 通知规则层（2026-10-05，`devlog/341`；设计案 `docs/design/notices/channel-and-layering.md`）**：
 

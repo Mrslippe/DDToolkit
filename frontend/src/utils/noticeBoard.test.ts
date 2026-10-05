@@ -85,6 +85,26 @@ describe('分组与排序', () => {
     const items = sectionNotices([old, recent], NOW)[0].items
     expect(items.map((x) => x.id)).toEqual(['n', 'o'])
   })
+
+  /**
+   * 服务端那条「正在同步第三方数据」要真的进 `doing`（2026-10-06，`devlog/357`）。
+   *
+   * 用户现场：点了「全量拉取第三方数据」，面板里只有「有 1 项功能当前受限」，
+   * 计数却是 `通知（2）`。后端**确实**在报这条（实测原始响应），
+   * 但它的 `expiresAt` 是 JSON `null` ⇒ 被 `isLive` 当成"已过期"滤掉了。
+   * 这条从"分组"这一层再钉一次：**没有 TTL 的状态条目必须出现在「正在进行」里**。
+   */
+  it('服务端形态的状态条目（`expiresAt: null`）进「正在进行」，不被当成过期', () => {
+    const server = n({
+      id: 'progress-external', kind: 'progress', form: 'state', source: '第三方同步',
+      text: '正在同步第三方数据（全量）', sticky: false,
+      expiresAt: null, createdAt: NOW - 1000,
+    })
+    const secs = sectionNotices([server], NOW)
+    expect(secs.map((s) => s.group)).toEqual(['doing'])
+    expect(secs[0].items.map((x) => x.id)).toEqual(['progress-external'])
+    expect(capsuleText([server], NOW)).toBe('正在同步第三方数据（全量）')
+  })
 })
 
 describe('同级合并（胶囊上那句）', () => {

@@ -284,15 +284,17 @@ Windows，Linux 腿只做与平台无关的。**注释里的命令会让文本�
 - ⚠️ **跨层新参数必须有跨层判据**（2026-10-03 加，devlog/292）：前端发 `?fallback=true`、
   而路由签名里没这个参数 ⇒ **FastAPI 静默忽略未知查询参数**，"DASH 播不动 → 回落 durl"
   取回来的还是 DASH（还会无限重取）。服务层用例当时是绿的，因为它直接调
-  `play_info(durl_fallback=True)`，**绕过了路由**。规矩：新加一个"前端发、后端收"的参数，
-  判据要打在**路由层**（发了什么 → 服务收到什么），服务层那条只证明"参数本身有用"。
+  `play_info(durl_fallback=True)`，**绕过了路由**。⇒ 判据要打在**路由层**（发了什么 → 收到什么），
+  服务层那条只证明"参数本身有用"。
 - ⚠️ **`vi.mock` 漏符号的报错长得像"产品行为变了"**（2026-10-04 加，devlog/312；同类第 3 次）：
   mock 一个模块时必须导出被测代码用到的**每一个**符号（已栽三次：`api.clientLog`、两个代理 URL、
   这次的 `authFetch`）。最阴的症状：内核取段拿到"没有这个导出"⇒ **按设计**自动回退到另一条内核，
-  断言失败在"src 不是 blob"上，看代码怎么都对。对策：① 先读那句原文
-  （vitest 直接说 `No "xxx" export is defined on the mock`），别顺着断言猜；
-  ② 回退路径要有**自己的**用例，让"回退被误触发"与"回退真的成立"分得开。
+  断言失败在"src 不是 blob"上，看代码怎么都对。对策：① 先读那句原文（vitest 直接说
+  `No "xxx" export is defined on the mock`），别顺着断言猜；② 回退路径要有**自己的**用例。
 - ⚠️ **"清理"与"React 刚提交的 DOM"抢同一个属性时，清理必须先比对**（2026-10-04 加，devlog/312）：
   提交顺序是"DOM 变更 → effect 清理"⇒ 清理里无脑 `el.removeAttribute('src')` 会擦掉**父组件刚换上的
   新地址**，症状是"点了播放没反应"。规矩：清理只回收**自己设的那个值**（`if (el.src === myUrl) …`）——
   任何"命令式接管过的 DOM 属性"（`src`/`className`/样式）都算。
+- ⚠️⚠️ **`useLayoutEffect` 里 setState：依赖别含"墙上时钟派生"的量**（2026-10-06 加，`devlog/357`）：
+  `now` 过 1ms 就变 ⇒ effect 又跑、又调一次 setState；`nestedUpdateCount` 攒够 50 次即 `Maximum update depth exceeded` —— **`return prev` 的 bail-out 救不了** ⇒ 先判"有没有要改的"，没有就一次都不调。
+  这类错 jsdom 复现不出来（bail-out 不产生 commit）⇒ 判据落**源码级结构**或**探针的页面报错**。
