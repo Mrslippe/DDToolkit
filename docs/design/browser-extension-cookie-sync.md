@@ -101,11 +101,18 @@ expires: 2026-12-31
   ⚠️ **2026-10-06 晚再修正（`devlog/364`）：以上三趟都可能空手而归** —— 用户把 DevTools 里
   那条真 Cookie 头抄下来，里面有 `a1` / `s_v_web_id`，而扩展三趟加起来只有 4 / 22 条
   ⇒ host、path、分区这三件事**平台自己说了算**，靠"猜它挂哪儿"永远会漏。
-  定稿读法是**加一趟全量读**做主力：`getAll({})`（+ `getAll({partitionKey:{}})` 拿任意分区）
-  **再按域过滤**（`logic.js::cookiesForDomain`：只留 `domain == 平台域` 或 `*.平台域`，
+  加一趟全量读 `getAll({})`（+ `getAll({partitionKey:{}})` 拿任意分区）**再按域过滤**
+  （`logic.js::cookiesForDomain`：只留 `domain == 平台域` 或 `*.平台域`，
   **后缀必须是完整标签** ⇒ `evildouyin.com` / `douyin.com.evil.com` 不算）。
   ⚠️ 这一趟是**唯一"一次拿到整库"**的动作 ⇒ 过滤是硬安全阀（有用例专门盯泄漏），
-  且每趟的**条数与报错**都要进诊断（读不到时要能说出是哪一趟空手而归）。细节见执行方案 §3.5；
+  且每趟的**条数与报错**都要进诊断（读不到时要能说出是哪一趟空手而归）。
+  ⚠️ **2026-10-06 深夜定稿（`devlog/365`）：全量读也没解决，真凶在权限那一层** ——
+  cookies API 的可见性**由 host permission 的 scheme 决定**：只写 `https://*.<域>/*` 时
+  **读不到非 Secure 的 cookie**（MDN 那张权限表：`http://*.example.com/` 能读非 Secure 的、
+  读不到 Secure 的；`*://*.example.com/` 两种都能读），而平台页面 JS 铸的指纹键多是非 Secure
+  ⇒ 连 `getAll({})` 都看不见它们。定稿：**`*://*.{域}/*` + `*://{域}/*`（四平台各两条）**
+  ＋一趟**按名取**（`get({url, name})`，只问必需键与会用到的键，`logic.js::byNamePlan`）
+  ＋诊断里加 `[非Secure]` 标志与逐个键的"能不能问到"。细节见执行方案 §3.5；
 - **UA**：抖音需要"那个浏览器的 UA" ⇒ 直接 `navigator.userAgent`（**必须取自扩展所在的浏览器**，
   这正是手抄最容易错的地方）；
 - **POST**：`fetch('http://127.0.0.1:<port>/auth/import', {method:'POST', body})`；

@@ -18,7 +18,7 @@ import {
   APP_IDENTIFIER, PAIR_HEADER, PORT_CANDIDATES, PLATFORMS, platformOf,
   cookieHeaderFrom, cookieKeys, missingKeys, usedKeys, importBody,
   receiptLine, statusHint, discoverPort, postImport, mergeCookies, describeCookie,
-  cookiesForDomain,
+  cookiesForDomain, byNamePlan,
 } from '../src/logic.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -223,24 +223,62 @@ test('全量读的**泄漏闸**：长得像的域一律不算（读全量 = 别�
   }
 });
 
-test('接线：popup 真的读了全量、按域过滤、并给每一趟记账（纯逻辑再好，不接上也白搭）', () => {
+test('接线：popup 真的读了全量、按域过滤、按名取、并给每一趟记账（纯逻辑再好，不接上也白搭）', () => {
   // MV3 那半截在 CI 里驱动不了 ⇒ 至少把"接线本身"钉住（与 `src-tauri` 那条源码级判据同款）。
   // 反向验证：把全量那一趟删掉 ⇒ 这条红，且用户那边会退回到"DevTools 有、扩展读不到"。
   const popup = readFileSync(join(ROOT, 'extension', 'src', 'popup.js'), 'utf8');
   assert.match(popup, /chrome\.cookies\.getAll\(\{\}\)/, '没读全量：又回到"平台挂哪儿由它说了算"');
   assert.match(popup, /cookiesForDomain\(/, '缺按域过滤这道安全阀');
+  assert.match(popup, /chrome\.cookies\.get\(\{\s*url,\s*name\s*\}\)/,
+    '没按名取（缺键时"能不能问到"就没有答案）');
+  assert.match(popup, /byNamePlan\(/, '按名取没有用那张计划表');
   assert.match(popup, /partitionKey:\s*\{\s*\}/, '没读分区那一格（CHIPS）');
   assert.match(popup, /passes\[label\]/, '每一趟没记账 ⇒ 读不到时诊断说不出是哪一趟');
+});
+
+test('按名取的问法：只问必需键 + 会用到的键，且每个键都拿该平台的每个 URL 去问', () => {
+  const xhs = platformOf('xiaohongshu');
+  const plan = byNamePlan(xhs);
+  const names = [...new Set(plan.map((p) => p.name))];
+  assert.deepEqual(names, ['a1', 'web_session', 'webId']);
+  // 每个键 × 每个 URL（host-only 的 cookie 只有"问对 host"才拿得到）
+  assert.equal(plan.length, names.length * xhs.urls.length);
+  for (const { url } of plan) assert.ok(xhs.urls.includes(url));
+  // 没有 required/used 的平台定义不该炸
+  assert.deepEqual(byNamePlan(null), []);
+  assert.deepEqual(byNamePlan({ urls: ['https://x/'] }), []);
 });
 
 test('诊断行：只给键名/出处/长度/标志，**不带值**', () => {
   const line = describeCookie({
     name: 'a1', value: 'SECRET-0123456789', domain: '.xiaohongshu.com', path: '/',
-    httpOnly: true, session: false, partitionKey: { topLevelSite: 'https://www.douyin.com' },
+    httpOnly: true, secure: true, session: false,
+    partitionKey: { topLevelSite: 'https://www.douyin.com' },
   });
   // 长度**有用**（判断"平台是不是把指纹 cookie 改了名"靠它），且不是秘密
   assert.equal(line, 'a1 @ .xiaohongshu.com/ len=17 [HttpOnly/分区]');
   assert.ok(!line.includes('SECRET'), '诊断行里带了 cookie 值');
+  // ⚠️ **非 Secure 必须显形**（2026-10-06）：host permission 只写 `https://` 时这类 cookie
+  //    对扩展根本不可见 —— 少了这个标志，那一轮排查就只能靠猜（真机上就是这么卡住的）
+  const insecure = describeCookie({
+    name: 's_v_web_id', value: 'v', domain: '.douyin.com', path: '/', secure: false,
+  });
+  assert.equal(insecure, 's_v_web_id @ .douyin.com/ len=1 [非Secure]');
+});
+
+test('清单对账（权限）：四个平台的 host permission 必须是 `*://` + 裸域', () => {
+  // 真凶就在这一行（2026-10-06）：`https://*.<域>/*` **读不到非 Secure 的 cookie**，
+  // 而平台页面 JS 铸的指纹键正好多是非 Secure ⇒ `getAll({})` 也看不见它们。
+  // 反向验证：把 manifest 改回 https-only ⇒ 这条红。
+  const manifest = JSON.parse(readFileSync(join(ROOT, 'extension', 'manifest.json'), 'utf8'));
+  const perms = manifest.host_permissions || [];
+  for (const domain of ['bilibili.com', 'weibo.com', 'xiaohongshu.com', 'douyin.com']) {
+    assert.ok(perms.includes(`*://*.${domain}/*`), `${domain} 缺 scheme 通配的子域权限`);
+    assert.ok(perms.includes(`*://${domain}/*`), `${domain} 缺 scheme 通配的裸域权限`);
+  }
+  assert.ok(perms.includes('http://127.0.0.1/*'), '推给本机后端那条路的权限不许动');
+  assert.ok(perms.every((p) => p.startsWith('*://') || p === 'http://127.0.0.1/*'),
+    `出现了写死 scheme 的平台权限（就是这次踩的那个坑）：${perms.filter((p) => !p.startsWith('*://') && p !== 'http://127.0.0.1/*')}`);
 });
 
 /** 清单对账（见文件头）：扩展侧的必需键 / 目标 URL / 应用标识必须与后端一致 */test('清单对账：与后端源码逐项一致（改了后端没改扩展 ⇒ 这条红）', () => {

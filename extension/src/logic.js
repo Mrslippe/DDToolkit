@@ -149,6 +149,9 @@ export function describeCookie(c) {
   const flags = [
     c.httpOnly ? 'HttpOnly' : '',
     c.session ? '会话' : '',
+    // ⚠️ **非 Secure 是要紧事**（2026-10-06）：host permission 只写 `https://` 时，
+    //    这类 cookie 对扩展**根本不可见**（见 `byNamePlan` 的说明）⇒ 诊断里必须能一眼看出
+    !c.secure ? '非Secure' : '',
     c.partitionKey ? '分区' : '',
   ].filter(Boolean).join('/');
   const len = (c.value ?? '').length;
@@ -158,6 +161,26 @@ export function describeCookie(c) {
 /** 平台 key → 定义（找不到返回 undefined：调用方必须处理，别静默用错平台） */
 export function platformOf(key) {
   return PLATFORMS.find((p) => p.key === key);
+}
+
+/**
+ * **"按名取"那一趟要问哪些 `(url, name)`**（纯函数，可测）。
+ *
+ * 为什么还要这一趟（2026-10-06 真机实测的根因）：cookies API 的可见性**由 host permission 的
+ * scheme 决定** —— 只写 `https://*.<域>/*` 时**读不到非 Secure 的 cookie**
+ * （MDN 的 cookies 权限表正读：`http://*.example.com/` 能读非 Secure 的、读不到 Secure 的；
+ * `*://*.example.com/` 两种都能读）。而平台那些**页面 JS 铸的指纹键**（小红书 `a1`、
+ * 抖音 `s_v_web_id`）正好多是非 Secure ⇒ 整库读（`getAll({})`）也照样看不见它们。
+ *
+ * `cookies.get({url, name})` 是最小面积的一问（只问我们要用的那几个键），
+ * 顺带给诊断留下"这个键到底能不能问到"的答案。
+ */
+export function byNamePlan(platform) {
+  if (!platform) return [];
+  const names = [...new Set([...(platform.required || []), ...(platform.used || [])])];
+  const out = [];
+  for (const name of names) for (const url of platform.urls || []) out.push({ url, name });
+  return out;
 }
 
 /**

@@ -145,7 +145,7 @@ expires: 2026-12-31
 
 | 决定 | 口径 |
 |---|---|
-| 读法 | ⚠️ **2026-10-06（用户实测后修正）**：**一个 URL 不够** —— 只读 `www.` 那一侧时小红书的 `a1`、抖音的 `s_v_web_id` 读不到（那一行的同步按钮只能是灰的）。现在是**四趟取并集**：① 每个平台一组 URL（主站 + API 网关，如 `edith.xiaohongshu.com`）；② `getAll({domain})` 域扫描（覆盖子域与别的 path）；③ **全量读** `getAll({})` + `getAll({partitionKey:{}})` 再按域过滤（`logic.js::cookiesForDomain`）—— 用户 DevTools 里那条真头有 `a1` / `s_v_web_id`，而前三趟读不到（host/path/分区是平台自己说了算），所以**全量读是主力**、过滤是硬安全阀；④ 还缺必需键时带 `partitionKey` 再读一趟（Chrome 默认不返回**分区 cookie**/CHIPS）。按 `name + path + domain` 去重、先到的赢；判键名**不区分大小写**（与后端同一把尺子）。每一趟的条数与报错都进诊断（`devlog/364`）|
+| 读法 | ⚠️ **2026-10-06（用户实测后修正）**：**一个 URL 不够** —— 只读 `www.` 那一侧时小红书的 `a1`、抖音的 `s_v_web_id` 读不到（那一行的同步按钮只能是灰的）。**五趟取并集**：① 每个平台一组 URL（主站 + API 网关，如 `edith.xiaohongshu.com`）；② `getAll({domain})` 域扫描；③ **全量读** `getAll({})` + `getAll({partitionKey:{}})` 再按域过滤（`logic.js::cookiesForDomain`，过滤是硬安全阀）；④ **按名取** `get({url, name})`（`byNamePlan`：只问必需键与会用到的键）—— **真凶就在权限这一层**：host permission 只写 `https://` 时**读不到非 Secure 的 cookie**，而 `a1` / `s_v_web_id` 正好多是非 Secure ⇒ 连 `getAll({})` 都看不见（MDN 权限表正读）；定稿 manifest 用 **`*://*.{域}/*` + `*://{域}/*`**；⑤ 还缺必需键时带 `partitionKey` 再读一趟（分区 cookie/CHIPS）。按 `name + path + domain` 去重、先到的赢；判键名**不区分大小写**（与后端同一把尺子）。每趟的条数与报错都进诊断，`describeCookie` 带 `[非Secure]` 标志（`devlog/364`/`365`）|
 | URL 表（+ 域扫描） | bilibili `api.bilibili.com/x/web-interface/nav` + `www.bilibili.com/` · weibo `weibo.com/` · xiaohongshu `www.xiaohongshu.com/explore` + **`edith.xiaohongshu.com/`** · douyin `www.douyin.com/` + `/discover` + `/user/self` |
 | 去重 | **不按 name 去重**（同名不同 path 由平台自己处理）；多个 URL 的结果并集后再按 name+path 去重 |
 | UA | douyin 额外带 `navigator.userAgent`（**扩展所在浏览器的**，这正是手抄最容易错的地方）|

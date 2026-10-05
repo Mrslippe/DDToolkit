@@ -12,7 +12,7 @@
 import {
   PLATFORMS, PAIR_HEADER, cookieHeaderFrom, missingKeys, usedKeys, discoverPort,
   postImport, receiptLine, statusHint, PORT_CANDIDATES, mergeCookies, describeCookie,
-  cookiesForDomain,
+  cookiesForDomain, byNamePlan,
 } from './logic.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -25,7 +25,7 @@ function say(text) {
 
 /** 每个平台的连接态与上次同步态（只活在内存里） */
 const state = Object.fromEntries(PLATFORMS.map((p) => [p.key, {
-  cookie: '', note: '', tone: '', seen: [], passes: null,
+  cookie: '', note: '', tone: '', seen: [], passes: null, byname: {},
 }]));
 
 async function loadSettings() {
@@ -79,6 +79,10 @@ async function ensurePort({ port, token }, { force = false } = {}) {
  *      前两趟各自带着 URL / path 的语义，而**平台把指纹 cookie 挂在哪个 host、哪条 path、
  *      哪一格分区，是它自己说了算**（2026-10-06：用户 DevTools 里明明看得见 `a1` /
  *      `s_v_web_id`，扩展那两趟就是读不到）⇒ 干脆把整个 cookie 库拿出来自己筛；
+ *   ④ **按名取** `get({url, name})`（`byNamePlan`：只问必需键与会用到的键）——
+ *      **这一趟是 2026-10-06 的真凶所在**：cookies API 的可见性由 host permission 的 scheme
+ *      决定，`https://` 权限**读不到非 Secure 的 cookie**（见 `logic.js::byNamePlan`）。
+ *      manifest 已改成 `*://`（两种 scheme + 裸域），这一趟同时兼作"到底能不能问到"的判据；
  *   ③ 还缺必需键时，再带 `partitionKey` 读一趟 —— Chrome 默认**不返回分区 cookie**（CHIPS）；
  *      读不到就跳过（老版本没有这个字段）。
  *
@@ -88,7 +92,7 @@ async function ensurePort({ port, token }, { force = false } = {}) {
  */
 async function readCookie(platform) {
   const lists = [];
-  const passes = { url: 0, domain: 0, all: 0, part: 0, errors: [] };
+  const passes = { url: 0, domain: 0, all: 0, part: 0, byname: 0, errors: [] };
   /** 跑一趟、记账。**单趟失败不能把整行弄空** —— 能不能用由最后拼出来那条串说了算。 */
   const take = async (label, fn) => {
     try {
@@ -108,6 +112,36 @@ async function readCookie(platform) {
     await take('part', async () =>
       cookiesForDomain(await chrome.cookies.getAll({ partitionKey: {} }), platform.domain));
   }
+
+  /**
+   * ④ **按名取**：只问我们要用的那几个键（`get({url, name})`）。
+   *
+   * ⚠️ 这一趟是 2026-10-06 那个"整库只有 4/22 条"的真凶所在：cookies API 的可见性由
+   * **host permission 的 scheme** 决定 —— 只写 `https://*.<域>/*` 时**读不到非 Secure 的
+   * cookie**，而平台页面 JS 铸的指纹键（`a1` / `s_v_web_id`）多是非 Secure ⇒ 连
+   * `getAll({})` 都看不见它们。manifest 已改成 `*://`；这一趟既补读，也把"能不能问到"
+   * 逐个键记进诊断（下一轮再出问题就不用猜了）。
+   */
+  const byName = {};
+  const byNameCookies = [];
+  for (const { url, name } of byNamePlan(platform)) {
+    if (byName[name]) continue;                 // 这个键已经在别的 URL 上问到了
+    try {
+      const got = await chrome.cookies.get({ url, name });
+      if (got) {
+        byName[name] = `${got.domain || '?'}${got.path || '/'}`;
+        byNameCookies.push(got);
+      }
+    } catch (e) {
+      passes.errors.push(`按名取 ${name}: ${(e && e.message) || e}`);
+    }
+  }
+  if (byNameCookies.length) {
+    passes.byname += byNameCookies.length;
+    lists.push(byNameCookies);
+  }
+  state[platform.key].byname = byName;
+
   let merged = mergeCookies(...lists);
   if (missingKeys(platform.key, cookieHeaderFrom(merged)).length) {
     // `partitionKey.topLevelSite` 要的是**站点**（scheme + 可注册域）：API 主机（api.xxx.com）
@@ -191,17 +225,23 @@ function render() {
 function renderDiag() {
   const el = $('#diag');
   el.textContent = PLATFORMS.map((p) => {
-    const seen = state[p.key].seen || [];
-    const miss = missingKeys(p.key, state[p.key].cookie);
+    const st = state[p.key];
+    const seen = st.seen || [];
+    const miss = missingKeys(p.key, st.cookie);
     // 每一趟各读到几条（读不到时要能看出是"哪一趟空手而归"，见 readCookie）
-    const ps = state[p.key].passes;
+    const ps = st.passes;
     const brk = ps
-      ? `（URL ${ps.url} · 域扫 ${ps.domain} · 全量 ${ps.all} · 分区 ${ps.part}`
+      ? `（URL ${ps.url} · 域扫 ${ps.domain} · 全量 ${ps.all} · 按名 ${ps.byname} · 分区 ${ps.part}`
         + (ps.errors.length ? ` · ⚠️ ${ps.errors.join('；')}` : '') + '）'
       : '';
     const head = `${p.label}：读到 ${seen.length} 条${brk}`
       + (miss.length ? `，缺 ${miss.join('、')}` : '（必需键齐了）');
-    return [head, ...seen.map((s) => `    ${s}`)].join('\n');
+    // 「按名取」逐个键的答案：**缺的键到底能不能问到**（可见性由 host permission 的 scheme 决定）
+    const asked = Object.keys(st.byname || {});
+    const askLine = asked.length
+      ? [`    按名取：` + asked.map((n) => `${n}=有@${st.byname[n]}`).join(' ')]
+      : [];
+    return [head, ...askLine, ...seen.map((s) => `    ${s}`)].join('\n');
   }).join('\n');
 }
 
@@ -313,5 +353,6 @@ globalThis.__ddtoolkitExt = () => ({
   pairHeader: PAIR_HEADER,
   state: Object.fromEntries(Object.entries(state).map(([k, v]) => [k, {
     keys: usedKeys(k, v.cookie), note: v.note, seen: v.seen, passes: v.passes,
+    byname: Object.keys(v.byname || {}),
   }])),
 });

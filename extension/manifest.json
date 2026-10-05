@@ -5,10 +5,14 @@
   "description": "把浏览器里已登录的 B 站 / 微博 / 小红书 / 抖音 Cookie 一键同步到本机的 DDToolkit（只走 127.0.0.1）。",
   "permissions": ["cookies", "storage"],
   "host_permissions": [
-    "https://*.bilibili.com/*",
-    "https://*.weibo.com/*",
-    "https://*.xiaohongshu.com/*",
-    "https://*.douyin.com/*",
+    "*://*.bilibili.com/*",
+    "*://bilibili.com/*",
+    "*://*.weibo.com/*",
+    "*://weibo.com/*",
+    "*://*.xiaohongshu.com/*",
+    "*://xiaohongshu.com/*",
+    "*://*.douyin.com/*",
+    "*://douyin.com/*",
     "http://127.0.0.1/*"
   ],
   "action": {
