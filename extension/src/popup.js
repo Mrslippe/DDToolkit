@@ -12,6 +12,7 @@
 import {
   PLATFORMS, PAIR_HEADER, cookieHeaderFrom, missingKeys, usedKeys, discoverPort,
   postImport, receiptLine, statusHint, PORT_CANDIDATES, mergeCookies, describeCookie,
+  cookiesForDomain,
 } from './logic.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -23,7 +24,9 @@ function say(text) {
 }
 
 /** 每个平台的连接态与上次同步态（只活在内存里） */
-const state = Object.fromEntries(PLATFORMS.map((p) => [p.key, { cookie: '', note: '', tone: '', seen: [] }]));
+const state = Object.fromEntries(PLATFORMS.map((p) => [p.key, {
+  cookie: '', note: '', tone: '', seen: [], passes: null,
+}]));
 
 async function loadSettings() {
   const got = await chrome.storage.local.get(['port', 'token']);
@@ -68,22 +71,42 @@ async function ensurePort({ port, token }, { force = false } = {}) {
 /**
  * 读一个平台在那个浏览器里的 cookie（含 HttpOnly —— 这正是本方案必须是扩展的原因）。
  *
- * **三趟读，取并集**（2026-10-06 用户实测：只读一个 URL 时小红书的 `a1`、抖音的
- * `s_v_web_id` 读不到 ⇒ 那一行永远是灰的）：
- *   ① 该平台列的那组 URL（主站 + API 网关）—— 最接近"浏览器真正会发的那条头"；
+ * **四趟读，取并集**：
+ *   ① 该平台列的那组 URL（主站 + API 网关）—— 最接近"浏览器真正会发的那条头"，**排在最前**：
+ *      并集按"先到的赢"去重，所以这一趟决定成串的顺序；
  *   ② **域扫描** `getAll({domain})`（覆盖子域与别的 path）；
- *   ③ 还缺必需键时，再带 `partitionKey` 读一趟 —— Chrome 默认**不返回分区 cookie**（CHIPS），
- *      而抖音那种第三方嵌入的指纹 cookie 正好可能是分区的。读不到就跳过（老版本没有这个字段）。
+ *   ⓿ **全量读** `getAll({})` + `getAll({partitionKey:{}})`，再按域过滤（`cookiesForDomain`）——
+ *      前两趟各自带着 URL / path 的语义，而**平台把指纹 cookie 挂在哪个 host、哪条 path、
+ *      哪一格分区，是它自己说了算**（2026-10-06：用户 DevTools 里明明看得见 `a1` /
+ *      `s_v_web_id`，扩展那两趟就是读不到）⇒ 干脆把整个 cookie 库拿出来自己筛；
+ *   ③ 还缺必需键时，再带 `partitionKey` 读一趟 —— Chrome 默认**不返回分区 cookie**（CHIPS）；
+ *      读不到就跳过（老版本没有这个字段）。
  *
  * ⚠️ 全程**只记名字/域/路径**（`describeCookie`），值只进内存里那一条串。
+ * ⚠️ 每一趟的**条数与报错**都留在 `state[key].passes` 里给诊断看 —— 读不到时要能说出
+ *    "是哪一趟空手而归 / 哪一趟被浏览器拒了"，而不是只给一个总数（上一轮就是卡在这儿）。
  */
 async function readCookie(platform) {
   const lists = [];
-  for (const url of platform.urls) {
-    try { lists.push(await chrome.cookies.getAll({ url })); } catch { /* 权限/URL 不合法：跳过 */ }
-  }
+  const passes = { url: 0, domain: 0, all: 0, part: 0, errors: [] };
+  /** 跑一趟、记账。**单趟失败不能把整行弄空** —— 能不能用由最后拼出来那条串说了算。 */
+  const take = async (label, fn) => {
+    try {
+      const got = (await fn()) || [];
+      passes[label] += got.length;
+      lists.push(got);
+    } catch (e) {
+      passes.errors.push(`${label}: ${(e && e.message) || e}`);
+    }
+  };
+
+  for (const url of platform.urls) await take('url', () => chrome.cookies.getAll({ url }));
   if (platform.domain) {
-    try { lists.push(await chrome.cookies.getAll({ domain: platform.domain })); } catch { /* 同上 */ }
+    await take('domain', () => chrome.cookies.getAll({ domain: platform.domain }));
+    await take('all', async () =>
+      cookiesForDomain(await chrome.cookies.getAll({}), platform.domain));
+    await take('part', async () =>
+      cookiesForDomain(await chrome.cookies.getAll({ partitionKey: {} }), platform.domain));
   }
   let merged = mergeCookies(...lists);
   if (missingKeys(platform.key, cookieHeaderFrom(merged)).length) {
@@ -97,18 +120,17 @@ async function readCookie(platform) {
     for (const url of platform.urls) {
       for (const site of sites) {
         for (const crossAncestor of [false, true]) {
-          try {
-            lists.push(await chrome.cookies.getAll({
-              url,
-              partitionKey: { topLevelSite: site, hasCrossSiteAncestor: crossAncestor },
-            }));
-          } catch { /* 这个 Chrome 版本不认识 partitionKey（或该 site 不合法）：跳过 */ }
+          await take('part', () => chrome.cookies.getAll({
+            url,
+            partitionKey: { topLevelSite: site, hasCrossSiteAncestor: crossAncestor },
+          }));
         }
       }
     }
     merged = mergeCookies(...lists);
   }
   state[platform.key].seen = merged.map(describeCookie);
+  state[platform.key].passes = passes;
   return cookieHeaderFrom(merged);
 }
 
@@ -171,7 +193,13 @@ function renderDiag() {
   el.textContent = PLATFORMS.map((p) => {
     const seen = state[p.key].seen || [];
     const miss = missingKeys(p.key, state[p.key].cookie);
-    const head = `${p.label}：读到 ${seen.length} 条`
+    // 每一趟各读到几条（读不到时要能看出是"哪一趟空手而归"，见 readCookie）
+    const ps = state[p.key].passes;
+    const brk = ps
+      ? `（URL ${ps.url} · 域扫 ${ps.domain} · 全量 ${ps.all} · 分区 ${ps.part}`
+        + (ps.errors.length ? ` · ⚠️ ${ps.errors.join('；')}` : '') + '）'
+      : '';
+    const head = `${p.label}：读到 ${seen.length} 条${brk}`
       + (miss.length ? `，缺 ${miss.join('、')}` : '（必需键齐了）');
     return [head, ...seen.map((s) => `    ${s}`)].join('\n');
   }).join('\n');
@@ -284,6 +312,6 @@ void boot();
 globalThis.__ddtoolkitExt = () => ({
   pairHeader: PAIR_HEADER,
   state: Object.fromEntries(Object.entries(state).map(([k, v]) => [k, {
-    keys: usedKeys(k, v.cookie), note: v.note, seen: v.seen,
+    keys: usedKeys(k, v.cookie), note: v.note, seen: v.seen, passes: v.passes,
   }])),
 });

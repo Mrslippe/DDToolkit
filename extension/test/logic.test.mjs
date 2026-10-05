@@ -18,6 +18,7 @@ import {
   APP_IDENTIFIER, PAIR_HEADER, PORT_CANDIDATES, PLATFORMS, platformOf,
   cookieHeaderFrom, cookieKeys, missingKeys, usedKeys, importBody,
   receiptLine, statusHint, discoverPort, postImport, mergeCookies, describeCookie,
+  cookiesForDomain,
 } from '../src/logic.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -183,6 +184,53 @@ test('每行灰掉的那类问题：只读一个 URL 会漏掉指纹键（用户
   // 小红书必须读 API 网关那一侧（`a1` 常只在那里可见）；抖音要覆盖不止一个页面
   assert.ok(platformOf('xiaohongshu').urls.some((u) => u.includes('edith.xiaohongshu.com')));
   assert.ok(platformOf('douyin').urls.length >= 3);
+});
+
+test('全量读的按域过滤：**只留这一家的**（含子域、含不带点的写法）', () => {
+  const jar = [
+    { name: 'a1', value: 'x', domain: '.xiaohongshu.com', path: '/' },
+    { name: 'webId', value: 'w', domain: 'xiaohongshu.com', path: '/' },        // 不带点
+    { name: 'hidden', value: 'h', domain: 'edith.xiaohongshu.com', path: '/api' },
+    { name: 'S_V_WEB_ID', value: 'v', domain: 'www.douyin.com', path: '/' },    // 别人家
+    { name: 'SUB', value: 's', domain: '.weibo.com', path: '/' },
+    { name: 'SESSDATA', value: 'b', domain: '.bilibili.com', path: '/' },
+  ];
+  const got = cookiesForDomain(jar, 'xiaohongshu.com');
+  assert.deepEqual(got.map((c) => c.name), ['a1', 'webId', 'hidden']);
+  // 大小写不该影响判定（Chrome 给的域是小写，但别指望）
+  assert.deepEqual(cookiesForDomain(jar, 'XiaoHongShu.com').map((c) => c.name),
+    ['a1', 'webId', 'hidden']);
+  assert.deepEqual(cookiesForDomain(jar, ''), []);
+  assert.deepEqual(cookiesForDomain(null, 'xiaohongshu.com'), []);
+});
+
+test('全量读的**泄漏闸**：长得像的域一律不算（读全量 = 别人家的 cookie 也在手里）', () => {
+  // 读全量是这个方案里唯一"一次拿到整库"的动作 ⇒ 过滤写松一格就会把别家的凭据
+  // 拼进这一条请求里（`.env` 里落一份别人的 cookie）。后缀必须**是完整标签**：
+  const jar = [
+    { name: 'right', value: '1', domain: 'douyin.com', path: '/' },
+    { name: 'right2', value: '1', domain: '.www.douyin.com', path: '/' },
+    { name: 'evil1', value: '1', domain: 'evildouyin.com', path: '/' },
+    { name: 'evil2', value: '1', domain: 'douyin.com.evil.com', path: '/' },
+    { name: 'evil3', value: '1', domain: 'notdouyin.com', path: '/' },
+    { name: 'evil4', value: '1', domain: 'douyin.com.cn', path: '/' },
+  ];
+  assert.deepEqual(cookiesForDomain(jar, 'douyin.com').map((c) => c.name), ['right', 'right2']);
+  // 拼出来的头里也不许出现它们（这条是"同步一条、脏一条"的最后一道）
+  const header = cookieHeaderFrom(cookiesForDomain(jar, 'douyin.com'));
+  for (const bad of ['evil1', 'evil2', 'evil3', 'evil4']) {
+    assert.ok(!header.includes(bad), `别的域的 cookie 混进这一条了：${bad}`);
+  }
+});
+
+test('接线：popup 真的读了全量、按域过滤、并给每一趟记账（纯逻辑再好，不接上也白搭）', () => {
+  // MV3 那半截在 CI 里驱动不了 ⇒ 至少把"接线本身"钉住（与 `src-tauri` 那条源码级判据同款）。
+  // 反向验证：把全量那一趟删掉 ⇒ 这条红，且用户那边会退回到"DevTools 有、扩展读不到"。
+  const popup = readFileSync(join(ROOT, 'extension', 'src', 'popup.js'), 'utf8');
+  assert.match(popup, /chrome\.cookies\.getAll\(\{\}\)/, '没读全量：又回到"平台挂哪儿由它说了算"');
+  assert.match(popup, /cookiesForDomain\(/, '缺按域过滤这道安全阀');
+  assert.match(popup, /partitionKey:\s*\{\s*\}/, '没读分区那一格（CHIPS）');
+  assert.match(popup, /passes\[label\]/, '每一趟没记账 ⇒ 读不到时诊断说不出是哪一趟');
 });
 
 test('诊断行：只给键名/出处/长度/标志，**不带值**', () => {

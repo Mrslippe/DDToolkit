@@ -116,6 +116,29 @@ export function mergeCookies(...lists) {
 }
 
 /**
+ * **全量读**回来的那一大堆里，哪些属于这个平台（**纯函数：这是"读全量"唯一的安全阀**）。
+ *
+ * 为什么要读全量（2026-10-06 用户实测）：`getAll({url})` 只给"会发给那条 URL 的"，
+ * `getAll({domain})` 只给"那个域筛得出来的"，而平台把指纹 cookie 挂在哪个 host / 哪条 path /
+ * 哪一格分区（CHIPS）**是它自己说了算** —— 结果就是：用户对着 DevTools 明明看得见
+ * `a1` / `s_v_web_id`，扩展却读不到，那两行同步永远是灰的。
+ * `getAll({})` 不看 URL、不看 path，一次把整个 cookie 库拿出来，绕开所有这些语义坑。
+ *
+ * ⚠️ **读全量 = 别人家的 cookie 也躺在同一只手里** ⇒ 这条过滤是硬安全阀：
+ * ① 只留 `domain == 平台域` 或 `*.平台域`，**后缀必须是完整的标签** —— `evildouyin.com`、
+ *    `douyin.com.evil.com`、`notxiaohongshu.com` 一律不算（有用例盯着这条）；
+ * ② 返回**新数组**，调用方立刻并进那个平台那一份，别处不许留引用。
+ */
+export function cookiesForDomain(allCookies, domain) {
+  const want = String(domain || '').toLowerCase().replace(/^\./, '');
+  if (!want) return [];
+  return (allCookies || []).filter((c) => {
+    const got = String((c && c.domain) || '').toLowerCase().replace(/^\./, '');
+    return got === want || got.endsWith(`.${want}`);
+  });
+}
+
+/**
  * 给诊断用：`name @ domain path len=N` + 几个关键标志（**只有键名/出处/长度，没有值**）。
  *
  * ⚠️ **长度是有用信息、且不是秘密**（应用自己的文档就是这么描述 cookie 的，
