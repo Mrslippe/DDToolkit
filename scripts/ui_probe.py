@@ -3624,6 +3624,7 @@ def main() -> int:
             for line in (nl.get("itemTexts") or []):
                 print(f"     条目: {line}")
             print(f"  本地那一份 id：{nl.get('localIds')!r}")
+            print(f"  逐条验（key=成/否(面板条数)）：{nl.get('perRow')!r}")
             for line in (nl.get("labTrace") or []):
                 print(f"     trace: {line}")
             for line in (nl.get("labLog") or []):

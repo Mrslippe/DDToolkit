@@ -25,7 +25,7 @@
  * 这不是偷懒：报告那条的渲染分支与真实路径**同一个**（走 `extraLocal` 那一层，
  * 与 `__ddtoolkitSeedReport` 早就这么做，见 `TopBar` 的注释）。
  */
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { authFetch } from '../api/api'
 import { EVENTS, emit } from '../utils/appEvents'
 import type { Notice } from '../utils/notificationHub'
@@ -54,6 +54,8 @@ async function publish(type: string, payload: Record<string, unknown>): Promise<
 }
 
 interface Row {
+  /** 稳定 key（DOM 上写 `data-lab-row`）：探针/排查脚本按它点某一条、也便于人读日志 */
+  key: string
   /** 按钮文案 */
   label: string
   /** 产生方式（面板上标出来，免得把"注入"当成"真实触发"） */
@@ -68,27 +70,62 @@ export default function NoticeLab() {
   const [log, setLog] = useState<string[]>([])
   const say = (s: string) => setLog((prev) => [s, ...prev].slice(0, 40))
 
-  /** 注入一组条目（`TopBar` 的 dev 口，与 `__ddtoolkitSeedReport` 同一层） */
-  const seed = (list: Notice[] | null) => {
+  /**
+   * 调测页的条目**停留久一点**（用户 2026-10-05 反馈"④⑤⑥⑪ 点了没内容"之后加的）。
+   *
+   * 为什么必须改：那四条的真实寿命是 **8s**（推送来的进度兜底）/ **6s**（toast）/ 2 分钟（开播）。
+   * 点一下、再把鼠标移到胶囊上、面板弹出来 —— 8 秒已经过去了：**条目刚好在你看到之前过期**，
+   * 于是"点了没反应"。而产品的 TTL 是**对的**（进度本来就该 8 秒兜底、回执就该 6 秒），
+   * **不该为了调测去改它** ⇒ 改的是这里：调测页产生的条目一律按 `LAB_TTL_MS` 注入，
+   * 好让你有时间看。真机计时想看的话，第 ④⑤条旁边写了它真实活多久。
+   *
+   * ⚠️ 这层 TTL 只作用于**调测页产生的条目**（产品路径一个字没动）。
+   */
+  const LAB_TTL_MS = 120_000
+
+  /** 注入一组条目（`TopBar` 的 dev 口，与 `__ddtoolkitSeedReport` 同一层）
+   *
+   *  `ttlMs` 给了就把 `expiresAt` 换成它（上面那条注释的理由）；不给 = 保留原样。 */
+  const seed = (list: Notice[] | null, ttlMs?: number) => {
     const w = window as unknown as {
       __ddtoolkitSeedNotices?: (n: Notice[] | null) => void
     }
     if (!w.__ddtoolkitSeedNotices) { say('注入口不在（生产构建？）'); return }
-    w.__ddtoolkitSeedNotices(list)
+    const now0 = Date.now()
+    w.__ddtoolkitSeedNotices(list?.map((n) => (
+      ttlMs ? { ...n, createdAt: n.createdAt ?? now0, expiresAt: now0 + ttlMs } : n
+    )) ?? null)
     // 记一行：调测页自己说"我注了哪条" —— 它和面板里实际出现的条目对不上时，
     // 一眼就能看出是"没注进去"还是"注进去又被清了"（本次就是靠它定位到 hook 被重建）
     say(`已注入 ${list ? list.map((n) => n.id).join(',') : '(clear)'}`)
   }
 
+  /**
+   * 面板**自动钉住**（同上）：不这么做的话，点一下之后还得先 hover 胶囊、等 120ms 才弹面板 ——
+   * 而 ①①③ 那些条目 6 秒就没了。调测页的存在意义就是"点完立刻看到"。
+   */
+  useEffect(() => {
+    if (!open) return
+    const t = window.setTimeout(() => {
+      const cap = document.querySelector<HTMLElement>('.si-island')
+      if (!cap) return
+      cap.dispatchEvent(new PointerEvent('pointerover', { bubbles: true }))
+      window.setTimeout(() => cap.click(), 160)
+    }, 400)
+    return () => window.clearTimeout(t)
+  }, [open])
+
   const now = () => Date.now()
 
   const rows: Row[] = [
     {
+      key: 'pill',
       label: '① 命令回执（toast）',
       how: '真实', expect: '顶部居中 toast，4s',
       run: () => { emit(EVENTS.pillMessage, { text: '设置已保存 · 3 项' }); say('pillMessage') },
     },
     {
+      key: 'alert',
       label: '② 客户端事实（面板「最近」）',
       how: '真实', expect: 'recent 组 · 6s 倒计时细条 + 胶囊环',
       run: () => {
@@ -100,6 +137,7 @@ export default function NoticeLab() {
       },
     },
     {
+      key: 'disk',
       label: '③ 磁盘快满（面板「最近」）',
       how: '真实', expect: 'recent 组 · 源「磁盘」',
       run: () => {
@@ -111,37 +149,54 @@ export default function NoticeLab() {
       },
     },
     {
+      key: 'progress-post',
       label: '④ 手动任务受理进度（胶囊+doing 组）',
-      how: '真实', expect: 'doing 组 · **无倒计时**（它不会自己走）',
+      how: '真实', expect: 'doing 组 · 无倒计时 · 真实寿命 8s（这里按 LAB_TTL 留 2 分钟）',
       run: async () => {
         const s = await publish('notice.progress', {
           task: 'post', text: '全量抓取中 - 调测V - 3/11', originator: '',
         })
+        // 真实那条 8s 后会自己过期（进度本来就不该赖着）—— 调测页再注入一份**同文案**的长命版，
+        // 好让你有时间看样式。分两条：上面那条验的是"路径通不通"，这条验的是"长什么样"。
+        seed([{
+          id: 'progress-post-demo', kind: 'progress', form: 'state', source: '任务进度',
+          text: '全量抓取中 - 调测V - 3/11', createdAt: now(),
+        }], LAB_TTL_MS)
         say(s); return s
       },
     },
     {
+      key: 'progress-account',
       label: '⑤ 账号流进度（胶囊+doing 组）',
-      how: '真实', expect: 'doing 组 · 与④**合并**成一句',
+      how: '真实', expect: 'doing 组 · 与④**合并**成一句 · 真实寿命 8s',
       run: async () => {
         const s = await publish('notice.progress', {
           task: 'account', text: '账号信息抓取中 - 调测V - 1/2', originator: '',
         })
+        seed([{
+          id: 'progress-account-demo', kind: 'progress', form: 'state', source: '任务进度',
+          text: '账号信息抓取中 - 调测V - 1/2', createdAt: now(),
+        }], LAB_TTL_MS)
         say(s); return s
       },
     },
     {
+      key: 'live',
       label: '⑥ 开播告警（有时窗的告知）',
-      how: '真实', expect: 'recent 组 · **2 分钟**倒计时 · 胶囊上合并成「N 场开播」',
+      how: '真实', expect: 'recent 组 · 2 分钟倒计时 · 胶囊上合并成「N 场开播」',
       run: async () => {
         const s = await publish('domain.live.edge', {
           vtuber_id: 1, account_id: 9001, platform: 'bilibili', platform_uid: '9001',
           name: '调测用V', live_title: '【调测】歌回', live_url: '',
         })
+        // ⚠️ 这条**不能**再注入一份：它的 id 是 `live-<account_id>`，与服务端环形缓冲那条同 id
+        //    ⇒ 注入会把真正那条顶掉（`mergeNotices` 按 id 去重、本地优先），于是你看到的是
+        //    "我造的那条"而不是"路径真的通了"。它本来就有 2 分钟 TTL，够看。
         say(s); return s
       },
     },
     {
+      key: 'rate-limit',
       label: '⑦ 风控冷却（状态类 + 活数据槽）',
       how: '注入', expect: 'doing 组 · 文案右侧 `value` 槽每秒刷新 · 剩余时间递减',
       run: () => {
@@ -155,6 +210,7 @@ export default function NoticeLab() {
       },
     },
     {
+      key: 'login',
       label: '⑧ 登录失效（常驻 + 动作按钮）',
       how: '注入', expect: 'doing 组 · 常驻 · 「去登录」按钮',
       run: () => {
@@ -168,6 +224,7 @@ export default function NoticeLab() {
       },
     },
     {
+      key: 'caps',
       label: '⑨ 能力受限（状态 + 「查看受限项」）',
       how: '注入', expect: 'doing 组 · 常驻 · 点按钮打开受限项列表',
       run: () => {
@@ -180,6 +237,7 @@ export default function NoticeLab() {
       },
     },
     {
+      key: 'report',
       label: '⑩ 完成报告（处置类 + 一键已读）',
       how: '注入', expect: 'todo 组 · 常驻 · 组标题右侧出现「全部已读」',
       run: () => {
@@ -194,10 +252,19 @@ export default function NoticeLab() {
       },
     },
     {
-      label: '⑪ 推送来的完成回执（toast）',
-      how: '半真实', expect: '顶部 toast（**别的宿主**点的才弹；空 originator 也弹）',
+      key: 'message',
+      label: '⑪ 推送来的完成回执（toast + 面板「最近」）',
+      how: '半真实',
+      expect: '顶部 toast（6s）+ 面板 recent 留痕（这里按 LAB_TTL 留 2 分钟）',
       run: async () => {
-        const s = await publish('notice.message', { text: '帖子抓取完成 · 存储 7 · 跳过 1' })
+        const text = '帖子抓取完成 · 存储 7 · 跳过 1'
+        const s = await publish('notice.message', { text })
+        // 同 ④⑤：真实那条是 **toast**（6s 就没），而它同时在面板「最近」里留痕 ——
+        // 注入一份长命的，好让你看清"面板里它长什么样"（toast 那一份由真实路径产生）
+        seed([{
+          id: 'pushed-message-demo', kind: 'message', form: 'notice', source: '操作结果',
+          text, createdAt: now(),
+        }], LAB_TTL_MS)
         say(s); return s
       },
     },
@@ -250,7 +317,7 @@ export default function NoticeLab() {
       </div>
       <ul className="nl-list">
         {rows.map((r) => (
-          <li key={r.label} className="nl-row">
+          <li key={r.label} className="nl-row" data-lab-row={r.key}>
             <button type="button" className="nl-btn nl-fire" onClick={() => void fire(r)}>
               {r.label}
             </button>

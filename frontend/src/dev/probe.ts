@@ -2774,6 +2774,26 @@ export async function runUiProbe(): Promise<void> {
         const st = li.getAttribute('data-form') || '?'
         return `${st}|${t.slice(0, 18)}|${a}`
       })
+    // ⑤-b **逐条**验（2026-10-05 用户报"④⑤⑥⑪ 点了没内容"之后加的）：
+    // 批量一次打 11 类，混在一起时"少了某条"很难归因（TTL 短的会被 TTL 长的盖住观察窗口）。
+    // 这一轮清掉注入项、逐条点、每条点完立刻读面板 —— **哪一条没进去一目了然**。
+    // ⚠️ 它同时是"每一类都能单独复现"的判据（用户就是一条一条点的）。
+    const perRow: string[] = []
+    all('.nl-btn').find((b) => (b.textContent || '').includes('清注入'))?.click()
+    await sleep(300)
+    for (const row of all('.nl-row')) {
+      const key = row.getAttribute('data-lab-row') || '?'
+      ;(row.querySelector('.nl-fire') as HTMLElement | null)?.click()
+      await sleep(900)                      // 推送往返 + 渲染（虚拟时间下够）
+      const texts = [...document.querySelectorAll('.si-panel .si-item-text')]
+        .map((t) => (t.textContent || '').trim())
+      const litNow = !!one('.si-island')?.classList.contains('on')
+      const shown = texts.length > 0 || litNow
+      perRow.push(`${key}=${shown ? 'Y' : 'N'}(${texts.length})`)
+      // 面板是钉住的：这里不关，下一条会累加 —— 那正好看"并存"；但要能区分"新来的"
+      // 所以每条点之前记一次长度，点之后比它大才算这一条的功劳
+    }
+    result.perRow = perRow
     result.hasAckAll = !!panel?.querySelector('[data-ack-all]')
     result.metaHasRelative = [...(panel?.querySelectorAll('.si-item-meta') || [])]
       .map((m) => (m.textContent || '').trim())
