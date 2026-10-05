@@ -10,7 +10,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
@@ -279,6 +279,22 @@ test('清单对账（权限）：四个平台的 host permission 必须是 `*://
   assert.ok(perms.includes('http://127.0.0.1/*'), '推给本机后端那条路的权限不许动');
   assert.ok(perms.every((p) => p.startsWith('*://') || p === 'http://127.0.0.1/*'),
     `出现了写死 scheme 的平台权限（就是这次踩的那个坑）：${perms.filter((p) => !p.startsWith('*://') && p !== 'http://127.0.0.1/*')}`);
+});
+
+test('图标：manifest 声明的四档都要真的在盘上（少一个 = 工具栏空白格）', () => {
+  // 2026-10-06：图标是同一批用 `scripts/make_icons.py` 从 `docs/design/svg/LOGO.svg` 生成的
+  // （≤32 实心猫头 / ≥48 线稿猫 + 「同步」徽章）。manifest 里写错路径**不会报错** ——
+  // 症状只是浏览器画一个空白/默认图标，所以这条判据必须存在。
+  const manifest = JSON.parse(readFileSync(join(ROOT, 'extension', 'manifest.json'), 'utf8'));
+  const icons = manifest.icons || {};
+  const actionIcons = (manifest.action || {}).default_icon || {};
+  for (const size of ['16', '32', '48', '128']) {
+    assert.ok(icons[size], `manifest.icons 缺 ${size}`);
+    assert.ok(actionIcons[size], `action.default_icon 缺 ${size}`);
+    assert.equal(actionIcons[size], icons[size], `${size} 两处写的路径不一致`);
+    assert.ok(existsSync(join(ROOT, 'extension', icons[size])),
+      `manifest 指向的图标不在盘上：${icons[size]}（跑 scripts/make_icons.py 生成）`);
+  }
 });
 
 /** 清单对账（见文件头）：扩展侧的必需键 / 目标 URL / 应用标识必须与后端一致 */test('清单对账：与后端源码逐项一致（改了后端没改扩展 ⇒ 这条红）', () => {

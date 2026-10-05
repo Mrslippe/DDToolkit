@@ -63,6 +63,22 @@
 
 用法: python scripts/make_icons.py [--verify]
       --verify 额外打印 16/24/32/48 层的 ASCII 预览（无图形界面时自检用）
+
+扩展图标（2026-10-06 加）
+------------------------
+同一份源、同一次运行顺带产出 `extension/icons/{16,32,48,128}.png`（浏览器扩展的工具栏 /
+扩展管理页 / 商店要用四档）。设计上有**两套**，理由是小尺寸的物理限制（见下）：
+
+| 档 | 画法 | 为什么 |
+|---|---|---|
+| **16 / 32** | **实心白猫头**（主稿第 1 条子路径填白 + 两点粉眼） | 线稿在 16px 下描边不足 1px、胡须只有 2px 长 —— 糊成一团灰雾；实心块面保住"有耳朵的猫"这个识别特征 |
+| **48 / 128** | 线稿猫（缩到 84%、往左上让位）+ 右下角**白色「同步」徽章**（深一档粉的圆底 + ↻） | 这一档像素够，能把"这个扩展是**同步/抓取**用的"这层意思画出来（用户 2026-10-06：「根据小工具的特征加点元素」） |
+
+⚠️ 依赖 **`pillow`**（`uv pip install pillow`）—— 它**不在 `uv.lock` 里**：这只是开发机上
+生成图标用的工具依赖，运行时不碰 PIL。
+⚠️ **它一次重写全部产物**（桌面 + 扩展）：换一台机器 / 换一个 Pillow 版本，`icon.icns` 与个别
+PNG 会重算出**字节不同**的结果（实测 2026-10-06：只有这两个变了）⇒ 跑完
+`git status --short` 看一眼，**只提交你要动的那几个**（别把无关的图标 churn 混进提交里）。
 """
 from __future__ import annotations
 
@@ -80,8 +96,13 @@ SVG = ROOT / "docs" / "design" / "svg" / "LOGO.svg"
 SMALL_SVG = ROOT / "docs" / "design" / "svg" / "LOGO-small.svg"
 SMALL_PNG = ROOT / "docs" / "design" / "png" / "LOGO-small.png"
 OUT = ROOT / "frontend" / "src-tauri" / "icons"
+#: 扩展图标（2026-10-06）：与桌面图标**同一份源**，同一次 `make_icons` 里顺带产出
+EXT_OUT = ROOT / "extension" / "icons"
+EXT_SIZES = (16, 32, 48, 128)
 
 BG = (255, 162, 180, 255)      # 品牌粉 --c-primary #ffa2b4
+#: 徽章圆底：比品牌粉**深一档**（白 ↻ 压在上面才分得开；用同一色会糊在一起）
+DEEP = (255, 122, 148, 255)
 FG = (255, 255, 255, 255)
 RADIUS_RATIO = 0.22            # 圆角半径 / 边长（旧图标观感）
 LOGO_H_RATIO = 0.60            # LOGO 视觉外接框高 / 边长（旧图标观感）
@@ -360,6 +381,71 @@ def make_icon(size: int, small_art: Art | None = None, use_small: bool = True) -
     return Image.alpha_composite(base, layer)
 
 
+# ── 扩展图标（浏览器工具栏 / 扩展管理页 / 商店，2026-10-06）────────────
+def _filled_head(size: int) -> Image.Image:
+    """小尺寸专用：把主稿的**头部轮廓那条子路径填成白色**（+ 两点粉眼）。
+
+    16px 下"线稿 + 胡须"物理上放不下（一根胡须只有 2px 长、1px 宽，抗锯齿直接抹平），
+    而**实心块面**能保住"有耳朵的猫"这个识别特征 —— 与各平台"小图追求识别"的规范同一条。
+    """
+    n = size * _supersample(size) * 4          # 块面用更高超采样：边缘要干净
+    img = Image.new("RGBA", (n, n), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    head = LOGO.shapes[0]                      # 0 = 头部轮廓（见 `Art.load` 的 `eyes` 注释）
+    scale = min(0.66 * n / (LOGO.h + LOGO.stroke), 0.80 * n / (LOGO.w + LOGO.stroke))
+    cx = cy = n / 2
+    pts = [(cx + (p[0] - LOGO.cx) * scale, cy + (p[1] - LOGO.cy) * scale) for p in head.pts]
+    draw.polygon(pts, fill=FG)
+    for ex, ey in LOGO.eyes:                   # 点眼用品牌粉（挖空感）
+        px_, py_ = cx + (ex - LOGO.cx) * scale, cy + (ey - LOGO.cy) * scale
+        r = max(1.0, scale * LOGO.stroke * 0.42)
+        draw.ellipse([px_ - r, py_ - r, px_ + r, py_ + r], fill=BG)
+    return img.resize((size, size), Image.LANCZOS)
+
+
+def _sync_badge(size: int) -> Image.Image:
+    """右下角那枚「同步」元素：**白色 ⇄**（上箭头朝左、下箭头朝右）。
+
+    试过两版都不行，记在这里免得再走：
+    ① 「深粉圆底 + 白 ↻」——128px 下圆弧 + 箭头糊成一个"锁孔"，而且多一个圆盘像是**第二个图标**；
+    ② 细一点的 ↻ 仍然像钥匙孔（圆弧天生像环）。
+    ⇄ 的好处：四笔直线，18px 下也认得出，且"两次传输"的语义正好是"浏览器 → 应用"。
+    贴在右下角、**不加底盘**（免得抢猫的主体），猫缩到 84% 往左上让位。
+    """
+    n = size * _supersample(size) * 4
+    img = Image.new("RGBA", (n, n), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    w = max(2, round(n * 0.055))               # 线宽 ≈ 5.5% 边长
+    box = n * 0.30                             # 元素占右下角这一块（边长 30%）
+    x0, y0 = n - box - n * 0.10, n - box - n * 0.10
+    y_top, y_bot = y0 + box * 0.26, y0 + box * 0.74
+    head = box * 0.30                          # 箭头长
+    for y, leftward in ((y_top, True), (y_bot, False)):
+        if leftward:
+            draw.line([(x0 + box, y), (x0 + head * 0.6, y)], fill=FG, width=w)
+            draw.polygon([(x0, y), (x0 + head, y - head * 0.52),
+                          (x0 + head, y + head * 0.52)], fill=FG)
+        else:
+            draw.line([(x0, y), (x0 + box - head * 0.6, y)], fill=FG, width=w)
+            draw.polygon([(x0 + box, y), (x0 + box - head, y - head * 0.52),
+                          (x0 + box - head, y + head * 0.52)], fill=FG)
+    return img.resize((size, size), Image.LANCZOS)
+
+
+def make_ext_icon(size: int) -> Image.Image:
+    """扩展图标：≤32 实心猫头 / ≥48 线稿猫 + 「同步」徽章（理由见模块 docstring 的表）。"""
+    base = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    ImageDraw.Draw(base).rounded_rectangle(
+        (0, 0, size - 1, size - 1), radius=max(2, round(size * RADIUS_RATIO)), fill=BG)
+    if size <= 32:
+        return Image.alpha_composite(base, _filled_head(size))
+    cat = make_icon(size)                      # 线稿猫（含自己的粉底，缩完再贴上去）
+    small = max(1, round(size * 0.84))
+    cat = cat.resize((small, small), Image.LANCZOS)
+    base.alpha_composite(cat, (-round(size * 0.03), -round(size * 0.06)))
+    return Image.alpha_composite(base, _sync_badge(size))
+
+
 # ── 落盘 ──────────────────────────────────────────────────────────────
 def _dib(im: Image.Image) -> bytes:
     """ICO 内的 DIB（BITMAPINFOHEADER + XOR + AND）；<64px 用它兼容性最好。"""
@@ -447,6 +533,13 @@ def main() -> None:
         print("[icons] icon.icns 1024（macOS）")
     except Exception as e:  # PIL 的 ICNS 插件对尺寸有要求，失败不影响 Windows 打包
         print(f"[icons] icon.icns 跳过：{e}")
+
+    # 扩展图标（同一份源；浏览器要四档，见模块 docstring 的设计表）
+    EXT_OUT.mkdir(parents=True, exist_ok=True)
+    for size in EXT_SIZES:
+        make_ext_icon(size).save(EXT_OUT / f"{size}.png", format="PNG", optimize=True)
+    print(f"[icons] extension/icons/ {', '.join(f'{s}.png' for s in EXT_SIZES)}"
+          f"（≤32 实心猫头 / ≥48 线稿猫 + 同步徽章）")
 
     if "--verify" in sys.argv:
         print("\n=== ASCII 自检（# 白 / . 粉 / + 抗锯齿）===")

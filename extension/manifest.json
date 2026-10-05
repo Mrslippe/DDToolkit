@@ -4,6 +4,12 @@
   "version": "0.1.0",
   "description": "把浏览器里已登录的 B 站 / 微博 / 小红书 / 抖音 Cookie 一键同步到本机的 DDToolkit（只走 127.0.0.1）。",
   "permissions": ["cookies", "storage"],
+  "icons": {
+    "16": "icons/16.png",
+    "32": "icons/32.png",
+    "48": "icons/48.png",
+    "128": "icons/128.png"
+  },
   "host_permissions": [
     "*://*.bilibili.com/*",
     "*://bilibili.com/*",
@@ -17,7 +23,13 @@
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "DDToolkit 凭据同步"
+    "default_title": "DDToolkit 凭据同步",
+    "default_icon": {
+      "16": "icons/16.png",
+      "32": "icons/32.png",
+      "48": "icons/48.png",
+      "128": "icons/128.png"
+    }
   },
   "minimum_chrome_version": "116"
 }

@@ -156,7 +156,7 @@ expires: 2026-12-31
 |---|---|
 | 位置 | 仓库根 `extension/`（与 `frontend/`、`scripts/` 平级；它是**第四个宿主**，同 `OVERVIEW.md` 的"宿主"口径）|
 | 构建 | **零构建**：`manifest.json` + `popup.html` + `popup.css` + `src/*.js`（原生 ES module，`type="module"`）|
-| 图标 | ⚠️ **2026-10-06（E4）落地时没做**：`manifest.json` 不写 `icons`（也不放假占位图），工具栏显示默认图标；上架（P4）前再补 |
+| 图标 | ✅ **2026-10-06 补上**：`icons/{16,32,48,128}.png` 由 `scripts/make_icons.py` 从 `docs/design/svg/LOGO.svg` **同一份源**生成（≤32 实心猫头 / ≥48 线稿猫 + 白色 ⇄）；`manifest.icons` 与 `action.default_icon` 都写全，`node --test` 有一条"四档都要在盘上"的判据 |
 | 纯逻辑 | `extension/src/logic.js`（cookie 拼接 / 端口候选顺序 / 回执与缺键文案 / 平台 URL 表）**不 import 任何 `chrome.*`** ⇒ 能被 `node --test` 直接跑 |
 | 稳定 id | `manifest.json` 里放 `key`（固定 dev id），扩展页面 URL 才是确定的 —— 自动化与排查都靠它。⚠️ **2026-10-06（E4）实测后搁置**：生成一对合法 SPKI 需要工具链，而 P1 没有"自动化驱动 popup"的需求（真机验收走手工清单）⇒ 先不写 `key`，缺口记在 `extension/README.md`；真要自动化时再补 |
 | 存储 | `chrome.storage.local` **只放端口与配对 token**；cookie **只在内存**里过一手，随用随弃 |
