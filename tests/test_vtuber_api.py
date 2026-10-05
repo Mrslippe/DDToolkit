@@ -1998,6 +1998,87 @@ def test_refresh_media_gate_knows_xiaohongshu(monkeypatch, client):
     assert "没能取到新的媒体地址" in r2.json()["detail"]
 
 
+def test_refresh_media_waits_out_our_own_throttle(monkeypatch, client):
+    """撞上**我们自己的令牌桶**时要排队等，而不是立刻 502（`devlog/366`，真机现场）。
+
+    2026-10-06 的真机日志：`前端 [media] 重取媒体失败 post#5100：没能取到新的媒体地址：
+    identity_throttled` —— 用户连着点开两条抖音视频，第二条撞上 `aweme_detail` 的
+    0.12/s（≈8.3s 一发）⇒ 以前直接失败，而其实**再等几秒就成**；失败还被前端记成
+    "这一帖试过了" ⇒ 关掉再打开也不重试，视频就永久废了。
+
+    判据三条：① 说"还需 3s"就等它、再试一次（**第二次成功 ⇒ 200**）；
+    ② 上游真出错（风控/网络）**不重试**（只发一次）；③ 等不完（预算用尽）⇒ 502 且
+    说清"这是我们自己的限速"，别让用户去查 cookie。
+    """
+    import asyncio
+    import json
+
+    from app.routers import vtuber as vt
+    from app.routers.vtuber import _refresh_at
+    from app.services import capabilities
+
+    monkeypatch.setattr(capabilities, "content_fetch_allowed", lambda pf="x": (True, ""))
+
+    db = TestingSession()
+    try:
+        p = Post(platform="douyin", platform_uid="u-thr", platform_post_id="v1",
+                 type="video", body_json='{"video": {"url": "https://old/1.mp4"}}')
+        db.add(p)
+        db.commit()
+        pid = p.id
+    finally:
+        db.close()
+
+    # ① 第一次"没排上"（说还需 1s），第二次成功 ⇒ 端点自己排队，最后 200
+    calls = {"n": 0}
+    fake = _install_fake_fetcher(monkeypatch, platform="douyin")
+
+    async def _enrich(item):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            fake.last_error = {"kind": "identity_throttled", "retry_after": 0.01,
+                               "msg": "本轮没发（自己的节奏：bucket，还需 0.0s）"}
+            return False
+        fake.last_error = None
+        item["body_json"] = json.dumps({"video": {"url": "https://new/2.mp4"}})
+        return True
+
+    monkeypatch.setattr(fake, "enrich", _enrich)
+    _refresh_at.clear()
+    r = client.post(f"/posts/{pid}/refresh-media")
+    assert r.status_code == 200, r.text
+    assert calls["n"] == 2, "没为重取排队（撞上自己的令牌桶就放弃了）"
+    assert "https://new/2.mp4" in r.json()["post"]["body_json"]
+
+    # ② 上游真出错（风控）⇒ 不重试（只发一次，立刻 502）
+    calls["n"] = 0
+    fake2 = _install_fake_fetcher(monkeypatch, platform="douyin")
+
+    async def _risk(item):
+        calls["n"] += 1
+        fake2.last_error = {"kind": "risk_control", "msg": "验证码挑战"}
+        return False
+
+    monkeypatch.setattr(fake2, "enrich", _risk)
+    _refresh_at.clear()
+    r2 = client.post(f"/posts/{pid}/refresh-media")
+    assert r2.status_code == 502 and calls["n"] == 1, "风控属于「等也没用」，重试只是更慢地失败"
+
+    # ③ 一直排不上 ⇒ 502，且**说清是我们自己的限速**（别让用户去查 cookie/开关）
+    fake3 = _install_fake_fetcher(monkeypatch, platform="douyin")
+
+    async def _always(item):
+        fake3.last_error = {"kind": "identity_throttled", "retry_after": 99.0,
+                            "msg": "本轮没发（自己的节奏：bucket，还需 99.0s）"}
+        return False
+
+    monkeypatch.setattr(fake3, "enrich", _always)
+    _refresh_at.clear()
+    r3 = client.post(f"/posts/{pid}/refresh-media")
+    assert r3.status_code == 502, r3.text
+    assert "自己的限速" in r3.json()["detail"], r3.json()["detail"]
+
+
 def test_refresh_media_route_is_honest_about_what_it_cannot_do(monkeypatch, client):
     """三类如实拒绝：帖不存在 **404** / 未登录 **403** / 平台没有详情补全 **409**。"""
     from app.routers.vtuber import _refresh_at

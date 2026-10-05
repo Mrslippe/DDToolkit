@@ -98,6 +98,36 @@ const refetched = (url: string, extra: Partial<Post> = {}) => post({
   ...extra,
 })
 
+// ── 视频那条路要用的几个小工具（两个 describe 共用）─────────────────────────
+const vid = () => document.body.querySelector('video')
+/**
+ * 把播放器的候选一条条打死（打到换成"播不了"兜底卡为止）。
+ *
+ * ⚠️ 每轮都要**重新看一次 DOM 里还有没有 `<video>`**：React 换 `src` 时**复用同一个
+ * 元素**（不是重新挂载），所以"同一个引用"不等于"同一条地址"；打到判死之后组件才换成兜底卡。
+ */
+const killVideo = async () => {
+  for (let i = 0; i < 6; i += 1) {
+    const v = vid()
+    if (!v) break
+    await act(async () => { v.dispatchEvent(new Event('error')); await Promise.resolve() })
+    if (document.body.querySelector('.vp-dead')) break
+  }
+}
+/**
+ * **手动控制重取什么时候回来**：真实网络有往返，不能让"重取回包"挤在同一轮微任务里
+ * （那样 `setPatched` 会在我们还没烧完旧链时就把新地址换上，测的就不是用户看到的那条路）。
+ */
+const pendingRefresh: Array<(v: unknown) => void> = []
+const deferRefresh = () => refreshMedia.mockImplementation(
+  () => new Promise((res) => { pendingRefresh.push(res as never) }))
+const answerRefresh = async (r: unknown) => {
+  pendingRefresh.shift()!(r)
+  await settle()
+}
+
+beforeEach(() => { pendingRefresh.length = 0 })
+
 describe('详情页 · 媒体本地兜底（devlog/319）', () => {
   it('远端两跳都失败 ⇒ 画出**本地副本**（而不是灰块）', () => {
     act(() => root.render(
@@ -283,34 +313,6 @@ describe('详情页 · 视频地址过期 ⇒ 重取（devlog/363）', () => {
   const refetchedVideo = (url: string) => videoPost({
     body_json: JSON.stringify({ desc: '正文', video: { url } }),
   })
-  const vid = () => document.body.querySelector('video')
-  /**
-   * 把播放器的候选一条条打死（打到换成"播不了"兜底卡为止）。
-   *
-   * ⚠️ 每轮都要**重新看一次 DOM 里还有没有 `<video>`**：React 换 `src` 时**复用同一个
-   * 元素**（不是重新挂载），所以"同一个引用"不等于"同一条地址"；打到判死之后组件才换成兜底卡。
-   */
-  const killVideo = async () => {
-    for (let i = 0; i < 6; i += 1) {
-      const v = vid()
-      if (!v) break
-      await act(async () => { v.dispatchEvent(new Event('error')); await Promise.resolve() })
-      if (document.body.querySelector('.vp-dead')) break
-    }
-  }
-  /**
-   * **手动控制重取什么时候回来**：真实网络有往返，不能让"重取回包"挤在同一轮微任务里
-   * （那样 `setPatched` 会在我们还没烧完旧链时就把新地址换上，测的就不是用户看到的那条路）。
-   */
-  const pendingRefresh: Array<(v: unknown) => void> = []
-  const deferRefresh = () => refreshMedia.mockImplementation(
-    () => new Promise((res) => { pendingRefresh.push(res as never) }))
-  const answerRefresh = async (r: unknown) => {
-    pendingRefresh.shift()!(r)
-    await settle()
-  }
-
-  beforeEach(() => { pendingRefresh.length = 0 })
 
   it('全部源都失败 ⇒ 重取一次，并把**新签发**的播放地址换上（不用重开抽屉）', async () => {
     deferRefresh()
@@ -377,5 +379,74 @@ describe('详情页 · 视频地址过期 ⇒ 重取（devlog/363）', () => {
 
     expect(refreshMedia, 'B 站这条路上发了必然 409 的请求').not.toHaveBeenCalled()
     expect(document.body.querySelector('.vp-dead'), '兜底卡照旧（给"在浏览器打开"）').toBeTruthy()
+  })
+})
+
+/**
+ * **"一帖只试一次"不能变成"这一帖永远没救"**（2026-10-06 真机，`devlog/366`）。
+ *
+ * 真机现场：用户点开一条抖音视频，前端**确实**打了 `refresh-media`（后端日志里有那行
+ * `前端 [media] 重取媒体失败 post#5100：… identity_throttled`），失败原因是撞上了
+ * **我们自己的**抖音令牌桶（`aweme_detail` 0.12/s ≈8.3s 一发）。而失败之后前端把这一帖
+ * 记成"试过了" ⇒ 关掉再打开也不重试 ⇒ 那条视频永久废掉。
+ *
+ * 三条出口各有判据：① 正在重取时要说一句（后端可能在排队等限速，别让用户以为没反应）；
+ * ② 失败那行给一颗「再试一次」（点了就真的再发一次）；③ 关掉抽屉会清掉那份记忆。
+ */
+describe('详情页 · 重取失败之后还能再试（devlog/366）', () => {
+  const OLD_V = 'https://v3-web.douyinvod.com/20261005145109/aaa/video.mp4'
+  const NEW_V = 'https://v3-web.douyinvod.com/20261006041525/bbb/video.mp4'
+  const videoPost = () => post({
+    platform: 'douyin', type: 'video',
+    body_json: JSON.stringify({ desc: '正文', video: { url: OLD_V } }),
+  })
+  const refetchedVideo = () => post({
+    platform: 'douyin', type: 'video',
+    body_json: JSON.stringify({ desc: '正文', video: { url: NEW_V } }),
+  })
+
+  it('正在重取时给一句话（后端可能正在为我们自己的限速排队，别让用户以为没反应）', async () => {
+    deferRefresh()
+    act(() => root.render(<PostDetailDrawer post={videoPost()} open onClose={() => {}} />))
+    await killVideo()
+    expect(document.body.querySelector('[data-media-refreshing]')?.textContent,
+           '正在重取却一声不吭 —— 用户只会以为又坏了').toContain('正在重取')
+    await answerRefresh({ ok: true, pinned: 0, post: refetchedVideo() })
+    expect(document.body.querySelector('[data-media-refreshing]'), '重取回来了还挂着"正在重取"')
+      .toBeNull()
+  })
+
+  it('失败那行的「再试一次」真的再发一次（不受"一帖一次"限制）', async () => {
+    refreshMedia.mockRejectedValue(new Error('没能取到新的媒体地址：…（**我们自己的限速**）'))
+    act(() => root.render(<PostDetailDrawer post={videoPost()} open onClose={() => {}} />))
+    await killVideo()
+    await settle()
+    expect(refreshMedia).toHaveBeenCalledTimes(1)
+    const btn = document.body.querySelector<HTMLButtonElement>('[data-media-retry]')
+    expect(btn, '失败那行没有出口 —— 用户只能关掉重开').toBeTruthy()
+
+    refreshMedia.mockResolvedValue({ ok: true, pinned: 0, post: refetchedVideo() })
+    await act(async () => { btn!.click(); await Promise.resolve() })
+    await settle()
+    expect(refreshMedia, '点了「再试一次」却没有再发').toHaveBeenCalledTimes(2)
+    expect(vid()?.getAttribute('src'), '再试一次拿回来的新地址没换上').toBe(NEW_V)
+  })
+
+  it('关掉抽屉（再打开）会清掉"试过了"的记忆 ⇒ 还能再试一次', async () => {
+    refreshMedia.mockRejectedValue(new Error('没能取到新的媒体地址：… identity_throttled'))
+    const view = (open: boolean) => (
+      <PostDetailDrawer post={videoPost()} open={open} onClose={() => {}} />)
+    act(() => root.render(view(true)))
+    await killVideo()
+    await settle()
+    expect(refreshMedia).toHaveBeenCalledTimes(1)
+
+    // 关掉再打开（同一个抽屉实例、同一个帖：真机上就是这样连点两次的）
+    act(() => root.render(view(false)))
+    act(() => root.render(view(true)))
+    await killVideo()
+    await settle()
+    expect(refreshMedia, '关掉再打开也不重试 ⇒ 这条视频永久废掉（真机现场）')
+      .toHaveBeenCalledTimes(2)
   })
 })

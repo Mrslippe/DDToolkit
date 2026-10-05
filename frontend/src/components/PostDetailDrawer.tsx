@@ -204,11 +204,20 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
    * （实测 8 小时后 CDN 一律 403），而视频不会被固化 ⇒ 第二天打开必然播不了。
    * 以前只有图片接了这条重取，视频全失败就只是"报一条 + 给个在浏览器打开"，用户没法知道
    * "重取一次就好"。`kind` 就是用来把提示语的主语说对的（图 / 视频）。
+   *
+   * ⚠️ **"一帖只试一次"不能变成"这一帖永远没救"**（`devlog/366`，真机现场）：那条纪律是防
+   * N 张坏图打出 N 个请求，但**失败了也把帖记成"试过"**会让用户彻底卡住（真机上第一次重取
+   * 撞上我们自己的抖音限速 ⇒ 之后关掉再打开也不再重试）。所以现在有两条出口：
+   * ① **关掉抽屉就清掉这份记忆**（下次点开还能再试）；② 提示那行给一颗「再试一次」。
    */
   const [hint, setHint] = useState<{ id: number; text: string; kind: MediaKind } | null>(null)
+  /** 正在重取的那一帖（**让用户知道"在等"**，见 `devlog/366`：排队等限速可能好几秒） */
+  const [refreshing, setRefreshing] = useState<{ id: number; kind: MediaKind } | null>(null)
   const onMediaDead = useCallback((kind: MediaKind = 'image') => {
     if (!shownId || refreshedRef.current.has(shownId)) return
     refreshedRef.current.add(shownId)
+    setRefreshing({ id: shownId, kind })
+    setHint(null)
     void api.refreshMedia(shownId)
       .then((r) => { if (r?.post) setPatched({ id: shownId, post: r.post }) })
       .catch((e: Error) => {
@@ -216,12 +225,30 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
         void api.clientLog(`[media] 重取媒体失败 post#${shownId}：${e?.message ?? e}`)
           .catch(() => { /* 诊断失败无所谓 */ })
       })
+      .finally(() => {
+        setRefreshing((cur) => (cur && cur.id === shownId ? null : cur))
+      })
   }, [shownId])
   /**
    * 视频那条要用**固定身份**的回调（`devlog/363`）：`VideoPlayer` 的重取请求挂在
    * `useEffect(..., [onAllFailed])` 上，内联箭头每渲染都是新函数 ⇒ 会变成"每渲染报一次"。
    */
   const onVideoDead = useCallback(() => onMediaDead('video'), [onMediaDead])
+  /** 关掉抽屉 = 这一轮看完了 ⇒ 忘掉"试过哪些帖"（下次点开还能再试一次，见上面那条 ⚠️） */
+  useEffect(() => {
+    if (!open) {
+      refreshedRef.current.clear()
+      setRefreshing(null)
+    }
+  }, [open])
+  /** 提示那行的「再试一次」：明确允许对**这一帖**再来一次（不受"一帖一次"限制） */
+  const retryMedia = useCallback(() => {
+    if (!shownId) return
+    refreshedRef.current.delete(shownId)
+    const kind = hint?.kind ?? 'image'
+    setHint(null)
+    onMediaDead(kind)
+  }, [shownId, hint?.kind, onMediaDead])
 
   if (!shown) return null
 
@@ -429,9 +456,21 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
 
           {/* 重取失败的那句话（403 的原文就是"去哪儿配 Cookie"）——
               只写日志等于让用户对着灰块猜；这条只在**真的试过重取且失败**时出现 */}
+          {refreshing?.id === shownId && (
+            <p className="mt-2 text-xs text-muted-foreground" data-media-refreshing="1">
+              正在重取{refreshing.kind === 'video' ? '播放' : '图片'}地址…（有时要等几秒：
+              抓取有自己的节奏，额度得排队）
+            </p>
+          )}
           {hint && hint.id === shownId && (
             <p className="mt-2 text-xs text-muted-foreground" data-media-hint="1">
               {hint.kind === 'video' ? '视频' : '图片'}没能加载，重取也没成功：{hint.text}
+              {' '}
+              <button type="button" data-media-retry="1"
+                      className="underline underline-offset-2 hover:text-foreground"
+                      onClick={retryMedia}>
+                再试一次
+              </button>
             </p>
           )}
 

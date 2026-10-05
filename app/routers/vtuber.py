@@ -1161,6 +1161,38 @@ def list_posts(platform: str, platform_uid: str, db: Session = Depends(get_db)):
 REFRESH_MEDIA_MIN_GAP = 30.0
 _refresh_at: dict[int, float] = {}
 
+#: 用户主动重取时，愿意为**我们自己的节奏**等多久（秒）。
+#: 抖音 `aweme_detail` 是 0.12/s（≈8.3s 一发，见 `identity_limit.ENDPOINT_RATE`）——
+#: 连着点开两条视频就会撞上自己的令牌桶。以前直接 502「identity_throttled」，
+#: 用户看到的是"重取也没成功"（2026-10-06 真机：post#5100 就是这么废掉的）。
+REFRESH_MEDIA_WAIT_MAX = 12.0
+
+
+async def _enrich_allowing_own_pace(fetcher, item: dict) -> bool:
+    """`fetcher.enrich(item)`；**只为我们自己的节奏排队**，上游真出错一律不重试。
+
+    - 挡路的若是 `identity_throttled`（令牌桶说"还得等 N 秒"）⇒ 等它、再试一次；
+      总预算 `REFRESH_MEDIA_WAIT_MAX`（额度**照算**：等 = 按配置的节奏来，不是绕开限速）；
+    - 风控 / 网络 / 业务失败**立刻返回 False** —— 那类等多久都没用，只会更慢地失败。
+    """
+    import asyncio
+
+    spent = 0.0
+    while True:
+        if await fetcher.enrich(item):
+            return True
+        err = getattr(fetcher, "last_error", None) or {}
+        if err.get("kind") != "identity_throttled":
+            return False
+        try:
+            wait = float(err.get("retry_after") or 0.0)
+        except (TypeError, ValueError):
+            wait = 0.0
+        if wait <= 0 or spent + wait > REFRESH_MEDIA_WAIT_MAX:
+            return False
+        await asyncio.sleep(min(wait + 0.2, REFRESH_MEDIA_WAIT_MAX - spent))
+        spent += wait
+
 
 @router.post("/posts/{post_id}/refresh-media")
 async def refresh_post_media(post_id: int, db: Session = Depends(get_db)):
@@ -1175,6 +1207,9 @@ async def refresh_post_media(post_id: int, db: Session = Depends(get_db)):
     - **未登录 ⇒ 如实 403**（内容接口的能力闸门，与抓取同一条）；
     - 平台没有详情补全（如 B 站视频帖）⇒ **409**（别假装重取了）；
     - 同一帖 `REFRESH_MEDIA_MIN_GAP` 秒内再来 ⇒ **429**（并说明为什么）；
+    - 撞上**我们自己的令牌桶**（`identity_limit`，抖音详情 0.12/s ≈8.3s 一发）⇒
+      **排队等它**（`REFRESH_MEDIA_WAIT_MAX` 秒封顶）而不是立刻 502 —— 用户主动点开一帖，
+      等几秒是合理的；额度照算，只是把"拒绝"换成"排队"（2026-10-06 真机现场）；
     - 写回**只动媒体相关的列**（封面/正文/raw/stats）：标题与发布时间是另一件事，
       顺手改会让"列表顺序突然变了"这类现象更难解释；
     - 拿到新地址后**立刻固化一次**（否则几小时后又过期，用户下次打开还是灰的）。
@@ -1210,12 +1245,17 @@ async def refresh_post_media(post_id: int, db: Session = Depends(get_db)):
             "permalink": post.permalink, "body_json": post.body_json,
             "stats_json": post.stats_json, "raw_json": post.raw_json}
     try:
-        ok = await fetcher.enrich(item)
+        ok = await _enrich_allowing_own_pace(fetcher, item)
     except Exception as e:                     # noqa: BLE001 —— 上游千奇百怪，如实回一句话
         logger.warning(f"重取媒体失败 post#{post_id}: {type(e).__name__}: {e}")
         raise HTTPException(502, f"重取失败：{type(e).__name__}") from e
     if not ok:
         err = getattr(fetcher, "last_error", None) or {}
+        if err.get("kind") == "identity_throttled":
+            # 如实说清"这是我们自己的限速，不是平台拒绝" —— 否则用户会去查 cookie/开关
+            raise HTTPException(
+                502, f"没能取到新的媒体地址：为不打乱抓取节奏，等了 {REFRESH_MEDIA_WAIT_MAX:.0f} 秒"
+                     f"也没排上（**我们自己的限速**，不是平台拒绝）—— 过一会儿再试一次就好")
         raise HTTPException(502, "没能取到新的媒体地址"
                                  + (f"：{err.get('message') or err.get('kind')}" if err else ""))
     for col in ("cover_url", "body_json", "raw_json", "stats_json"):
