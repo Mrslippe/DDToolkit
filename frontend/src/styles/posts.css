@@ -6519,6 +6519,21 @@ img.hero-avatar {
 .vp:fullscreen .vp-bigplay,
 .vp:fullscreen .vp-spin { backdrop-filter: none; }
 
+/* 进出全屏的那段过渡（2026-10-07，`devlog/412`）。
+   HTML 全屏是**一帧内**完成的（元素进/出 top layer，尺寸不参与过渡）⇒ "满屏 ↔ 卡片"
+   一直是**硬切**，用户口径「全屏回到小窗有点生硬」。给它一个 `view-transition-name`，
+   浏览器就会把切换前后的两张快照 **morph + 交叉淡入**（触发那一侧在
+   `VideoPlayer.toggleFs`，且只在 `document.startViewTransition` 存在时才会走到）。
+   ⚠️ 名字必须**全局唯一**：同一时刻只该有一个 `.vp` 在渲染（没有就退化成硬切，不会报错）。
+   ⚠️ `prefers-reduced-motion` 下时长归零 —— "减少动态"要的就是**没有这段过渡**。 */
+.vp { view-transition-name: vp-player; }
+::view-transition-old(vp-player),
+::view-transition-new(vp-player) { animation-duration: .22s; }
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(vp-player),
+  ::view-transition-new(vp-player) { animation-duration: 0s; }
+}
+
 /* ⚠️ **这里原有两条"全屏时撤图层"的规则，已按 B2 定案还原**（2026-10-07，`devlog/409`）：
      ① `html[data-video-fs] .hero-backdrop { display:none }`（`devlog/381`）；
      ② `html[data-video-fs] .app-shell/.app-body/.posts-panel > :not(:has(.vp)) { display:none }`

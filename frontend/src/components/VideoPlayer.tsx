@@ -1175,11 +1175,34 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
     seekTo(ratio, false)
   }, [seekTo])
 
+  /**
+   * 进出全屏。⚠️ 外面包一层 **View Transitions**（2026-10-07，`devlog/412`）。
+   *
+   * 为什么要它：HTML 全屏是**一帧内**完成的（元素进/出 top layer，尺寸不参与过渡），
+   * 所以"满屏 → 卡片"一直是**硬切** —— 用户口径：「全屏回到小窗有点生硬」。
+   * View Transitions 正好是为这件事设计的：给元素一个 `view-transition-name`
+   * （见 `posts.css`），浏览器就会把"切换前的快照"和"切换后的快照"**morph + 交叉淡入**。
+   *
+   * ⚠️ 两条边界：
+   * ① **API 不存在就直接切**（旧宿主、jsdom）——这是纯装饰，缺了不许影响功能；
+   * ② 回调**必须把 `requestFullscreen()/exitFullscreen()` 的 Promise 交出去**：
+   *    这个 API 会等回调返回的 Promise 落定之后才截"新状态"的快照；不交出去
+   *    就会在窗口还没变尺寸时截到一张**和旧状态一样**的快照（等于没有过渡）。
+   */
   const toggleFs = useCallback(() => {
     const node = wrapRef.current
     if (!node) return
-    if (document.fullscreenElement) void document.exitFullscreen()
-    else void node.requestFullscreen?.().catch(() => { /* 宿主不允许就静默 */ })
+    const run = () => (document.fullscreenElement
+      ? document.exitFullscreen()
+      : (node.requestFullscreen?.() ?? Promise.resolve()))
+    const vt = (document as unknown as {
+      startViewTransition?: (cb: () => Promise<unknown>) => unknown
+    }).startViewTransition
+    if (typeof vt !== 'function') {
+      void run().catch(() => { /* 宿主不允许就静默 */ })
+      return
+    }
+    vt.call(document, () => run().catch(() => { /* 同上 */ }))
   }, [])
 
   const togglePip = useCallback(() => {

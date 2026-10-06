@@ -183,6 +183,29 @@ describe('播放器键盘：指针移入接管、移出交回', () => {
     }
   })
 
+  it('★ 进出全屏走 **View Transitions**（没有这个 API 就照旧直接切）（devlog/412）', async () => {
+    // 用户口径「全屏回到小窗有点生硬」：HTML 全屏本身是一帧内完成的 ⇒ 一直是硬切。
+    // 有 `startViewTransition` 就必须用它（浏览器做 morph + 交叉淡入），否则等于没修。
+    const seen: Array<() => unknown> = []
+    const startViewTransition = vi.fn((cb: () => unknown) => { seen.push(cb); return {} })
+    ;(document as unknown as { startViewTransition?: unknown }).startViewTransition = startViewTransition
+    try {
+      const v = render()
+      hover(true)
+      key('f')
+      expect(startViewTransition, '有 API 就该用它').toHaveBeenCalledTimes(1)
+      // ⚠️ **回调必须真的把 `requestFullscreen()` 交出去**：这个 API 等回调的 Promise 落定
+      //    之后才截"新状态"快照 —— 回调里什么都不做的话会截到一张和旧状态一样的快照，
+      //    表现是"过渡跑了但什么都没变"（比硬切更糟）。所以这里要**手动跑一次回调**。
+      expect(seen, '回调要交给浏览器（jsdom 不会自己跑）').toHaveLength(1)
+      await act(async () => { await seen[0]() })
+      expect(reqFs, '回调里得真的去切全屏').toHaveBeenCalled()
+      void v
+    } finally {
+      delete (document as unknown as { startViewTransition?: unknown }).startViewTransition
+    }
+  })
+
   it('进/出全屏**不重建 `<video>`**（重建 = 硬件解码器要重新初始化）', () => {
     // 有人把"全屏丢帧"归到 React 生命周期上（全屏时组件重挂载 ⇒ 解码器重建 ⇒ 50~100ms 空窗，
     // 30fps 只有 33ms 预算 ⇒ 必丢帧）。我们的口径是：全屏是**容器**全屏（`requestFullscreen()`
