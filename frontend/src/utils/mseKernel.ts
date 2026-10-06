@@ -78,7 +78,13 @@ export interface KernelStreams {
   duration_s?: number
 }
 
-/** 前方目标缓冲（秒）：比 hls.js 的 30s 小 —— 这里量的是"够不够稳"，不是"要不要开播" */
+/**
+ * 前方目标缓冲（秒）：比 hls.js 的 30s 小 —— 这里量的是"够不够稳"，不是"要不要开播"。
+ *
+ * ⚠️ B2 实验只动了泵的节拍（见 `TICK_MS`），这几个窗口常量**没动** ——
+ * "一次灌够、然后长时间不灌"那条路要改 `WANT_AHEAD`，而它被 6 条判据硬编码依赖
+ * （`mseKernel.test.ts` 里的 20s/30s/50s 期望值），得连判据一起改，不能盲改。
+ */
 export const WANT_AHEAD = 20
 /** 当前位置**之后**留多久不淘汰（回拖一小段不用重取） */
 export const KEEP_BEHIND = 25
@@ -104,8 +110,22 @@ const SEEK_CUSHION_MAX_MS = 2500
  * **浏览器自己会夹到最近的已缓冲位置**，同时记一行，别静默。
  */
 export const SEEK_GIVEUP_MS = 10_000
-/** 泵的空转节拍：`updateend` 之外再踢一脚，免得事件丢了就永远停住 */
-const TICK_MS = 400
+/** 泵的空转节拍：`updateend` 之外再踢一脚，免得事件丢了就永远停住。
+ *
+ * ⚠️ **B2 实验（2026-10-07，`devlog/390`）**：400 → **2000**。
+ * 真机上抓到的形状是"**取数据/灌数据时**每秒稳定丢 ~4 帧、播放已缓冲区域时一帧不丢"
+ * （缓冲全程 17~29 秒 ⇒ 不是数据不够，是"灌"这件事本身在打扰呈现）。
+ * 这个节拍决定**多久取一段、append 一次** —— 调慢 = 更大块、更少次。
+ * 读实验结果的注意点：
+ *   · 丢帧率明显下降 ⇒ 方向对，下一步改成**攒批再灌**（一次 append 多段，而不是拉长间隔）；
+ *   · 若 `饿住`/`卡帧` 冒出来（段比这个节拍短就会喂不饱）⇒ 说明这一档调过头了，
+ *     那时要的是"快取 + 攒着一次灌"，不是"慢取"。
+ */
+const TICK_MS = 2000
+/** 节拍可被测试改成小值（单测用假时钟/微任务推进，2000ms 会把每条判据拖慢几十秒）；
+ *  ⚠️ **只有测试该动它** —— 生产里这个值就是 `TICK_MS`。 */
+let tickMs = TICK_MS
+export function setTickMsForTest(ms: number): void { tickMs = ms }
 const MAX_RETRY = 3
 const FETCH_TIMEOUT_MS = 20_000
 /** 段取数慢到这个程度就记一行（撑不住实时码率会表现为"低帧率"） */
@@ -452,7 +472,7 @@ export class MseKernel {
     const mkUrl = this.deps.createObjectURL ?? ((m: MediaSource) => URL.createObjectURL(m))
     this.objectUrl = mkUrl(this.ms)
     this.el.src = this.objectUrl
-    this.tick = window.setInterval(() => this.pump(), TICK_MS)
+    this.tick = window.setInterval(() => this.pump(), tickMs)
     // 有的宿主 `sourceopen` 在 addEventListener 之前就发过了 ⇒ 直接试一次
     if (this.ms.readyState === 'open') this.open()
     return true

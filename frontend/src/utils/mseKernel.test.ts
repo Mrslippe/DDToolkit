@@ -14,8 +14,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   KEEP_BEHIND, MAX_BUFFER, MseKernel, WANT_AHEAD, kernelSupported, mimeSupported,
-  nextSegmentAfter, segmentIndexAt, type SegmentRange, type StreamTable,
+  nextSegmentAfter, segmentIndexAt, setTickMsForTest, type SegmentRange, type StreamTable,
 } from './mseKernel'
+
+/* B2 实验（devlog/390）把生产节拍调成了 2000ms；单测按假时钟/微任务推进，
+   2000ms 会把每条判据拖慢几十秒 ⇒ 这里压回原来的 400ms。 */
+setTickMsForTest(400)
 
 const SEG_DUR = 5
 const SEG_COUNT = 8
