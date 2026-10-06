@@ -16,13 +16,17 @@
  * 两个模式各只动一个变量：
  *
  * - **`size`**：走真全屏（①③ 与全屏态相同），只把画面钉回 `678x381` ⇒ **只动 ②**。
- *   流畅 ⇒ 元凶是"铺到 1:1"；照旧卡 ⇒ ② 出局。
- * - **`pseudo`**：**不走全屏 API**（① 变），但布局、尺寸、不透明表面都照全屏做 ⇒ **只动 ①**。
- *   照旧卡 ⇒ 元凶是"全屏 API / 全屏窗口"；流畅 ⇒ ① 出局，与 `size` 一格合起来即可定死 ②/③。
+ *   流畅 ⇒ 元凶是"铺到 1:1"；照旧卡 ⇒ ② 出局。**已跑：卡 ⇒ ② 出局**（`devlog/400`）。
+ * - **`surface`**：走真全屏、画面照常铺满，**但保留透明的窗口底色**（不调 `set_surface_opaque`）
+ *   ⇒ **只动 ③**。流畅 ⇒ 元凶是"窗口底色"；照旧卡 ⇒ ③ 出局、只剩 ①。
+ * - **`pseudo`**：**不走全屏 API**（① 变），但布局、尺寸、底色照全屏做 ⇒ 只动 ①。
+ *   ⚠️ **这一格至今没成功跑起来**（`devlog/400`）：`position: fixed` 被祖先里的
+ *   transform/contain 困住，画面**一次都没被放大过**（实测 `尺寸=1920x1080→718x392`），
+ *   于是它量到的只是"窗口态"。修它要先查清 `.vp` 的祖先链 —— 等 ① 真的成了嫌疑再做。
  *
  * ## 怎么开
  *
- * `$env:VITE_VP_FS_MODE='size'; npm run tauri:dev`（或 `pseudo`）—— 与
+ * `$env:VITE_VP_FS_MODE='size'; npm run tauri:dev`（或 `surface`）—— 与
  * `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` 同一套路：**不用改代码、不用重编**（`PROBE.md` §6.22）。
  * 也认 `localStorage.ddtoolkit.vpFsMode`（开着 devtools 时更方便）。
  *
@@ -30,12 +34,12 @@
  * ⚠️ `pseudo` 下 **Esc 退不出来**（没有真全屏可退）—— 再按一次 `f`。这条要写进用法说明，
  *    否则用户会以为"按 Esc 没反应 = 播放器坏了"。
  */
-export type VpFsMode = 'off' | 'size' | 'pseudo'
+export type VpFsMode = 'off' | 'size' | 'pseudo' | 'surface'
 
 /** `localStorage` 里的键名（开着 devtools 时手写这一条也能开）。 */
 export const VP_FS_MODE_KEY = 'ddtoolkit.vpFsMode'
 
-const VALID: readonly string[] = ['size', 'pseudo']
+const VALID: readonly string[] = ['size', 'pseudo', 'surface']
 
 function fromLocalStorage(): string | null {
   try {

@@ -216,6 +216,33 @@ describe('播放器键盘：指针移入接管、移出交回', () => {
     }
   })
 
+  it('★ 诊断模式 `surface`：真全屏 + 铺满，但**保留透明底色**（devlog/400）', async () => {
+    // `size` 已证明"画面铺到 1:1"不是元凶 ⇒ 剩下「全屏 API」与「窗口底色」，这一格只动后者。
+    localStorage.setItem(VP_FS_MODE_KEY, 'surface')
+    try {
+      surfaceMock.mockClear()
+      const v = render()
+      hover(true)
+      key('f')
+      expect(reqFs, 'surface 模式动的不是全屏 API').toHaveBeenCalled()
+      // `requestFullscreen` 在 jsdom 里是桩、不会真的切全屏 ⇒ 照既有那条用例的办法伪造状态
+      act(() => {
+        Object.defineProperty(document, 'fullscreenElement', { configurable: true, value: vp() })
+        document.dispatchEvent(new Event('fullscreenchange'))
+      })
+      expect(surfaceMock, '⚠️ 刻意不切不透明 —— 那正是它要拆掉的那个变量').not.toHaveBeenCalledWith(true)
+      expect(document.documentElement.dataset.videoFs, '布局照全屏做').toBe('1')
+      await waitForLog('全屏表面=保持透明')
+      void v
+      act(() => {
+        Object.defineProperty(document, 'fullscreenElement', { configurable: true, value: null })
+        document.dispatchEvent(new Event('fullscreenchange'))
+      })
+    } finally {
+      localStorage.removeItem(VP_FS_MODE_KEY)
+    }
+  })
+
   it('全屏时**不靠指针也接管**（全屏下鼠标可能停着不动）', () => {
     const v = render()
     // 直接伪造"已进全屏"：`requestFullscreen` 在 jsdom 里是桩、不会真的切全屏，

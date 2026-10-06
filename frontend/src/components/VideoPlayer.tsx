@@ -970,9 +970,12 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
     document.documentElement.dataset.vpFsMode = fsMode
     if (!fsModeLogged) {
       fsModeLogged = true
-      void api.clientLog(`[video] 全屏诊断模式=${fsMode}` + (fsMode === 'pseudo'
-        ? '（不走全屏 API；布局/尺寸/表面照全屏做 ⇒ 只动"全屏 API"这一个变量；Esc 退不出来，再按 f）'
-        : '（真全屏，只把画面钉回 678x381 ⇒ 只动"显示尺寸"这一个变量）'))
+      const why: Record<string, string> = {
+        size: '（真全屏，只把画面钉回 678x381 ⇒ 只动"显示尺寸"）',
+        surface: '（真全屏 + 铺满，但**保留透明的窗口底色** ⇒ 只动"窗口底色"）',
+        pseudo: '（不走全屏 API ⇒ 只动"全屏 API"；⚠️ 这一格的 CSS 至今没生效过，见 devlog/400）',
+      }
+      void api.clientLog(`[video] 全屏诊断模式=${fsMode}${why[fsMode] ?? ''}`)
         .catch(() => { /* 日志发不出去就算了 */ })
     }
     return () => { delete document.documentElement.dataset.vpFsMode }
@@ -993,12 +996,20 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
     const root = document.documentElement
     if (fsOn) {
       root.dataset.videoFs = '1'
-      void setSurfaceOpaque(true).then((ok) => {
-        // ⚠️ **必须留痕**（`devlog/382`）：这条命令是后加的，跑在旧壳上会直接失败 ——
-        // 那样"还是卡"就说明不了任何问题（前端第一版把错误静默吞了）。
-        void api.clientLog(`[video] 全屏表面=${ok ? '不透明' : '失败（旧壳没有 set_surface_opaque？）'}`)
+      /* 诊断模式 `surface`（`devlog/400`）：**刻意保留透明底色** —— 只动"窗口底色"这一个变量。
+         `size` 那一格已经证明"画面铺到 1:1"不是元凶，剩下 ①全屏 API 与 ③窗口底色，
+         这一格就是分它们的那一刀。 */
+      if (fsMode === 'surface') {
+        void api.clientLog('[video] 全屏表面=保持透明（诊断模式 surface）')
           .catch(() => { /* 日志发不出去就算了 */ })
-      })
+      } else {
+        void setSurfaceOpaque(true).then((ok) => {
+          // ⚠️ **必须留痕**（`devlog/382`）：这条命令是后加的，跑在旧壳上会直接失败 ——
+          // 那样"还是卡"就说明不了任何问题（前端第一版把错误静默吞了）。
+          void api.clientLog(`[video] 全屏表面=${ok ? '不透明' : '失败（旧壳没有 set_surface_opaque？）'}`)
+            .catch(() => { /* 日志发不出去就算了 */ })
+        })
+      }
     } else {
       delete root.dataset.videoFs
       void setSurfaceOpaque(false)
@@ -1008,7 +1019,7 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
       delete document.documentElement.dataset.videoFs
       void setSurfaceOpaque(false)
     }
-  }, [fsOn])
+  }, [fsOn, fsMode])
 
   /**
    * 真播不了才报一条（`data-self-healing` 只管中间那几步）。
