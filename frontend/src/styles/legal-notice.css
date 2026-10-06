@@ -56,9 +56,14 @@
   color: var(--c-text);
 }
 
+/* 首部「重要提示」：正式协议都把它单独框出来（免责/责任限制先点到明面上） */
 .legal-lead {
-  margin-bottom: 12px;
-  color: var(--c-text-sub);
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--c-primary);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--c-primary) 8%, transparent);
+  color: var(--c-text);
 }
 
 .legal-section + .legal-section {

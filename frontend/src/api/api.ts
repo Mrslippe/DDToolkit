@@ -227,7 +227,12 @@ async function request<T>(path: string, init?: RequestInit,
     let detail = `${resp.status} ${resp.statusText}`
     try {
       const body = await resp.json()
-      if (body?.detail) detail = String(body.detail)
+      // ⚠️ **`detail` 不一定是字符串**：FastAPI 的 422（校验失败）给的是一整个**数组**，
+      //    而 `String([{...}])` = `[object Object]` —— 界面上就成了"没能记录同意：
+      //    [object Object]"，用户与排查者都看不出发生了什么（2026-10-06 真机事故）。
+      //    非字符串一律 JSON 化：宁可长一点，也要能读到 `msg`。
+      if (typeof body?.detail === 'string') detail = body.detail
+      else if (body?.detail) detail = JSON.stringify(body.detail)
     } catch {
       /* 非 JSON 响应，保留默认信息 */
     }
@@ -705,7 +710,14 @@ export const api = {
   /** 记下"这一版已同意"（版本号必须与后端要求的那个一致，否则 400） */
   acceptAgreement: (version: string) =>
     request<AgreementState>('/settings/agreement', {
-      method: 'POST', body: JSON.stringify({ version }),
+      method: 'POST',
+      // ⚠️ **必须显式带这个头**（2026-10-06 真机事故）：`fetch` 传字符串 body 时
+      //    默认 `Content-Type: text/plain;charset=UTF-8`，而 FastAPI 只在该头是
+      //    `application/json` 时才按 JSON 解析 body ⇒ 少了它一律 **422**
+      //    （`detail` 还是个数组 ⇒ 界面显示成 `[object Object]`，用户看到的是
+      //    "点了同意进不去"）。仓里所有带 body 的 POST/PUT 都写了这一行，别漏。
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ version }),
     }),
 
   /** 清空图片缓存（用户主动点；口径是全清，缓存可再生） */

@@ -51,16 +51,22 @@ const modal = () => document.body.querySelector('[data-legal="1"]')
 const agreeBtn = () => document.body.querySelector<HTMLElement>('[data-testid="legal-agree"]')!
 
 describe('LegalNotice · 首启/换版本的协议闸门', () => {
-  it('正文四段都在，版本号来自 props（后端那份，不是写死在组件里）', async () => {
+  it('正式协议的骨架都在（首部重要提示 + 十二节），版本号来自 props', async () => {
     await render('1.2.3')
     const text = modal()?.textContent || ''
-    for (const t of ['一、这是什么', '二、你的数据在本机', '三、风险（请务必读完）', '四、责任自负']) {
+    for (const t of ['一、协议的接受与变更', '二、定义', '三、许可范围与使用限制',
+                     '四、用户的权利、义务与承诺', '五、本软件的功能与边界',
+                     '六、第三方平台、内容与风险提示', '七、数据、隐私与本地存储',
+                     '八、知识产权', '九、免责声明与责任限制', '十、协议的终止',
+                     '十一、法律适用与争议解决', '十二、其他条款']) {
       expect(text, `缺了「${t}」`).toContain(t)
     }
+    expect(text).toContain('重要提示')
     expect(text).toContain('v1.2.3')
-    // 用户点名要有的三层意思：功能简介 / 风险 / 后果自负
-    expect(text).toContain('账号')
-    expect(text).toContain('由你自行承担')
+    // 用户点名要有的三层意思：这是干什么的 / 风险 / 后果自负
+    expect(text).toContain('公开可见')
+    expect(text).toContain('账号被限制或封禁')
+    expect(text).toContain('责任自负')
   })
 
   it('**关不掉**：没有关闭钮，Esc 与点遮罩都不放行', async () => {
