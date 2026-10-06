@@ -23,7 +23,7 @@ import { resetPlayerPrefs } from '../utils/playerPrefs'
 vi.mock('../utils/shellBridge', () => ({ openExternal: () => Promise.resolve(),
   // B2（devlog/381）：进/出全屏时会调它切窗口表面；jsdom 里没有壳，给个空实现
   setSurfaceOpaque: () => Promise.resolve(true),
-  surfaceState: () => 'unknown' }))
+  surfaceState: () => 'unknown', surfaceEverOpaque: () => false }))
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true

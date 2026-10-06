@@ -167,6 +167,7 @@ export async function setSurfaceOpaque(on: boolean): Promise<boolean> {
   try {
     await invoke('set_surface_opaque', { on })
     surface = on ? 'opaque' : 'transparent'
+    if (on) everOpaque = true
     return true
   } catch {
     // 切不动本身不该让播放出错，但**必须留痕**（旧壳没有这条命令、或 WebView2 拒绝）
@@ -178,9 +179,23 @@ export async function setSurfaceOpaque(on: boolean): Promise<boolean> {
 /** 播放器要求的窗口表面状态：`unknown`（还没调过）/ `opaque` / `transparent` / `failed`。 */
 let surface: 'unknown' | 'opaque' | 'transparent' | 'failed' = 'unknown'
 
+/** 本次运行里**成功切到过**不透明吗（粘性，只置位不复位）。
+ *
+ * 为什么需要：诊断行是在**窗口结束时**写的，而那时用户往往已经退出全屏 ⇒
+ * `surfaceState()` 只剩 `transparent`，读日志的人无法判断"这一条到底是带着不透明表面跑的、
+ * 还是压根没生效"（`devlog/383` 就被这个坑过一次）。粘性标记回答的是正确的问题：
+ * **这一个窗口期间有没有不透明过**。
+ */
+let everOpaque = false
+
 /** 给诊断行用（`playbackProbe`）：这一格能区分"生效了但不够"与"压根没生效"。 */
 export function surfaceState(): string {
   return surface
+}
+
+/** 给诊断行用：本窗口期间**不透明过**吗（见 `everOpaque`）。 */
+export function surfaceEverOpaque(): boolean {
+  return everOpaque
 }
 
 /**

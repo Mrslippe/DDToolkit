@@ -656,11 +656,21 @@ fn open_extension_dir(window: tauri::Window) -> Result<String, String> {
     Ok(dir.to_string_lossy().to_string())
 }
 
+/// 壳的不透明底色（B2，2026-10-06，`devlog/383`）。
+///
+/// 与 `frontend/src/styles/tokens.css` 的 `--c-bg-page` 同值（近白 `#fffbfb`）——
+/// 窗口从"分层透明"改成不透明之后，这就是窗口自己的底，也是 `main.tsx` 挂
+/// `html.shell-settled` 之前那一帧的兜底色。**主题改底色时这里要跟着改。**
+const SHELL_BG: tauri::utils::config::Color = tauri::utils::config::Color(255, 251, 251, 255);
+
 /// 把**窗口表面切成不透明**（播放器全屏时用，退出全屏还原）。
 ///
 /// ## 为什么需要它（2026-10-06，`devlog/381`）——"成熟播放器都有自己的不透明表面"
 ///
-/// 我们的窗口是 `transparent: true`（这是壳的既定视觉：修掉四角白边 / 配合 DWM 圆角，
+/// 我们的窗口是 `transparent: false`（B2，2026-10-06，`devlog/383`）：窗口本身**不透明**，
+/// 底色 [`SHELL_BG`]。这一刀是 B2 的最后一招，理由见 `devlog/383` 与下面的"落地"。
+///
+/// 历史（`transparent: true` 时期）：那是壳的既定视觉（修掉四角白边 / 配合 DWM 圆角，
 /// 见 `layout.css` 顶部那段注释）。但**透明表面会让 WebView2 把整页放进 alpha 合成路径**：
 /// 视频层因此拿不到硬件覆盖层（overlay），每一帧都要由 GPU 采样 + 混合后再和桌面合成。
 /// 小窗时这笔账看不出来，**全屏**（1080p 铺满整块面板、面板还是 240Hz）就压垮了 ——
@@ -673,8 +683,13 @@ fn open_extension_dir(window: tauri::Window) -> Result<String, String> {
 /// ## 落地
 ///
 /// 一行：[`WebView2` 的 `DefaultBackgroundColor`]（wry 的 `set_background_color`）。
-/// `Some(黑)` = 不透明；`None` = 回到透明（壳的默认）。**只在全屏期间切**，
-/// 退出（或组件卸载）必须还原 —— 否则等于为了播放把壳的视觉永久改掉。
+/// `Some(黑)` = 不透明；`false` 分支 = 回到壳底色 [`SHELL_BG`]。
+///
+/// ⚠️ **这一刀治不了 B2**（2026-10-06，`devlog/382`/`383` 的实测结论）：它只改 **WebView**
+/// 的背景色，**碰不到 Win32 窗口的分层（layered）属性** —— Chromium 关闭视频 overlay 提升的
+/// 判据是**窗口级**透明。所以"全屏期间切不透明"上线后丢帧率**一字未改**
+/// （7.2% / 9.6%，与切之前同档）。真正的开关是 `tauri.conf.json` 的 `transparent: false`。
+/// 保留它是因为全屏时黑底仍是对的（`object-fit: contain` 的留边要黑，不随主题走）。
 ///
 /// [`WebView2` 的 `DefaultBackgroundColor`]: https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2controller#put_defaultbackgroundcolor
 #[tauri::command]
@@ -692,7 +707,9 @@ fn set_surface_opaque(window: tauri::Window, on: bool) -> Result<(), String> {
     w.set_background_color(if on {
         Some(tauri::utils::config::Color(0, 0, 0, 255))
     } else {
-        None
+        // 退出全屏还原成**壳底色**（不是 `None`）：`transparent: false` 之后 `None` 会退回
+        // WebView 的出厂白，揭幕前那一帧会闪白（`layout.css` 的近白兜底就是为这个存在的）。
+        Some(SHELL_BG)
     })
     .map_err(|e| format!("切窗口表面失败：{e}"))
 }
@@ -1009,10 +1026,11 @@ fn rebuild_main_window(app: &tauri::AppHandle) -> tauri::Result<tauri::WebviewWi
     .min_inner_size(960.0, 600.0)
     .center()
     .decorations(false)
-    .transparent(true)
-    // 与 tauri.conf.json 那份**等价**（含四角白边的修复）：WebView 背景必须透明，
-    // 否则 CSS 圆角的抗锯齿像素会跟白底混出白边（devlog/135）
-    .background_color(tauri::window::Color(0, 0, 0, 0))
+    .transparent(false)
+    // 与 tauri.conf.json 那份**等价**（B2，2026-10-06，`devlog/383`）：窗口不透明 + 壳底色
+    // `SHELL_BG`。⚠️ 两份**必须同步改** —— 只改 conf 的话，深休眠唤醒重建的窗口会退回
+    // 分层透明，B2 又回来（而且只在"睡过一觉之后"复现，最难查）。
+    .background_color(tauri::window::Color(SHELL_BG.0, SHELL_BG.1, SHELL_BG.2, SHELL_BG.3))
     .visible(false)
     .skip_taskbar(false)
     .build()?;
@@ -1773,24 +1791,34 @@ pub fn run() {
         .setup(|app| {
             perf("setup 开始");
 
-            // 四角白边（2026-09-17，devlog/135）：`transparent(true)` 只让**窗口**透明，
-            // WebView 自己的背景仍是**白色** —— CSS 那 4px 圆角的抗锯齿像素会跟它混出 1~2px 白边
-            // （实测量到的正是"底色往白混"：rail `#4B5A6F` → 边缘 `#727B8A`；
-            //   先把 DWM 的圆角/描边关掉复测，数值一字不变 ⇒ 与 DWM 无关）。
-            // `set_background_color` 会**同时**设窗口与 WebView 两层（Tauri 2.11），
+            // 窗口底色（2026-09-17，devlog/135 → B2 改写，2026-10-06，devlog/383）：
+            // 曾经这里是 `Color(0,0,0,0)` —— `transparent(true)` 只让**窗口**透明，WebView
+            // 自己的背景仍是白色，CSS 圆角的抗锯齿像素会跟它混出 1~2px 白边。R34（devlog/136）
+            // 让 Windows 自己画圆角之后，白边只剩 Win10 那条 CSS 兜底路径会走到，**不再是这里的主要理由**。
+            //
+            // B2 把窗口改成**不透明**（`transparent: false`）+ 近白底色 `SHELL_BG`：
+            // 分层透明会让 WebView2 把整页放进 alpha 合成路径，视频层拿不到硬件 overlay，
+            // 全屏 30fps × 240Hz 就丢帧（实测 7~10%，见 devlog/382/383）。底色与
+            // `--c-bg-page` 同值，所以揭幕前那一帧仍是近白，观感与 `layout.css` 的兜底一致。
             // 这一步在窗口 show 之前跑（`visible: false`，等前端 present_window），看不到闪烁。
             if let Some(w) = app.get_webview_window("main") {
-                // ⚠️ **B2 实验开关**（2026-10-06，`devlog/382`）：`DDTOOLKIT_OPAQUE_WINDOW=1`
-                //    让窗口表面**从一开始就不透明**（等价于"永久去掉 alpha 合成"那一刀）。
-                //    它回答的是："透明表面本身是不是全屏卡顿的根因" —— 默认**关**，
-                //    因为透明是既定视觉（上一段注释里的四角白边就是为它服务的）。
-                //    用法：`$env:DDTOOLKIT_OPAQUE_WINDOW=1; npm run tauri:dev`（下次启动生效）。
-                let alpha = if std::env::var("DDTOOLKIT_OPAQUE_WINDOW").is_ok() { 255 } else { 0 };
-                if alpha == 255 {
-                    println!("[ddtoolkit] 实验：窗口表面从一开始就不透明\
-                              （DDTOOLKIT_OPAQUE_WINDOW=1；四角/圆角观感会变）");
+                // ⚠️ **B2 逃生开关**（2026-10-06，`devlog/383`）：让 WebView 自己**不出底色**。
+                //    它**不能**把窗口变回分层透明（`transparent` 是构建期配置），只能用来判断
+                //    "某个观感差异是不是这层底色造成的"。默认**不透明**。
+                let alpha = if std::env::var("DDTOOLKIT_TRANSPARENT_WINDOW").is_ok() {
+                    0
+                } else {
+                    255
+                };
+                if alpha == 0 {
+                    println!("[ddtoolkit] 逃生：窗口底色切回透明（DDTOOLKIT_TRANSPARENT_WINDOW=1）");
+                } else {
+                    // 启动期一行，用来在日志里**辨认壳的构建**（B2 的窗口级改动在 JS 侧看不见）
+                    println!("[ddtoolkit] 窗口底色=近白不透明（B2，devlog/383）");
                 }
-                let _ = w.set_background_color(Some(tauri::window::Color(0, 0, 0, alpha)));
+                let _ = w.set_background_color(Some(tauri::window::Color(
+                    SHELL_BG.0, SHELL_BG.1, SHELL_BG.2, alpha,
+                )));
                 // ⚠️ 系统圆角**不在这里设**：窗口还是 visible:false，实测设了会被
                 // 随后的显示流程冲掉（角变回方的）。改在 `present_window`（显示之后）设。
             }
@@ -2080,8 +2108,8 @@ mod tests {
     /// ⚠️ 抠的是**中间那一段**（`set_background_color` 之后、`new_api_token` 之前），
     /// 不是全文 `contains` —— 全文搜会被**本测试自己**里那两个字面量满足（自指假绿）。
     /// ⚠️ 锚点**只取函数名、不带参数**（2026-10-06，`devlog/382`）：那一行的参数会随实验开关
-    /// 变化（加了 `DDTOOLKIT_OPAQUE_WINDOW` 之后不再是固定的 `Color(0,0,0,0)`），
-    /// 写死整行就会被一次无关改动打断 —— 判据的锚点要选"语义稳定"的那一段。
+    /// 变化（`DDTOOLKIT_OPAQUE_WINDOW` → `DDTOOLKIT_TRANSPARENT_WINDOW`，`Color(0,0,0,0)`
+    /// → `SHELL_BG`），写死整行就会被一次无关改动打断 —— 判据的锚点要选"语义稳定"的那一段。
     /// 反向验证：把 setup 里那行改成 `free_port()` ⇒ 本条红（实测过）。
     #[test]
     fn setup_actually_uses_the_candidate_ports() {

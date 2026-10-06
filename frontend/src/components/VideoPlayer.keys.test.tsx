@@ -30,7 +30,7 @@ vi.mock('../utils/shellBridge', () => ({
   openExternal: () => Promise.resolve(),
   // B2（devlog/381/382）：进/出全屏时会调它切窗口表面；jsdom 里没有壳，用桩记录
   setSurfaceOpaque: (...a: unknown[]) => surfaceMock(...a),
-  surfaceState: () => 'opaque',
+  surfaceState: () => 'opaque', surfaceEverOpaque: () => true,
 }))
 
 vi.mock('../api/api', async (orig) => {
