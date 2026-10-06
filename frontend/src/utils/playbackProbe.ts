@@ -59,6 +59,9 @@ interface Sample {
   anims?: number | null
   /** 这一秒是不是处在**元素全屏**（`document.fullscreenElement`）。 */
   fs?: boolean
+  /** 这一秒里页面自绘（rAF）**最长的一次间隔**（ms）——`devlog/386`：
+   *  用来分辨"合成器整页卡了一下"与"只有视频那一拍被推迟"：前者页面自绘也会跟着停。 */
+  rafMaxMs?: number
 }
 
 export interface PlaybackWindow {
@@ -182,7 +185,14 @@ export function runningAnimations(): { count: number; names: string[] } {
       const meta = a as unknown as { animationName?: string; transitionProperty?: string }
       const name = meta.animationName ?? meta.transitionProperty ?? 'anim'
       const target = (a.effect as KeyframeEffect | null)?.target as Element | null
-      const cls = target?.className ? `.${String(target.className).split(/\s+/)[0]}` : ''
+      /* ⚠️ SVG 元素的 `className` 是 `SVGAnimatedString` 对象（`String()` 出来是 "[object …]"）——
+         第一版日志里就出现了 `vp-spin@svg.[object`。字符串拿不到就退回 `class` 属性。 */
+      const rawCls = target
+        ? (typeof (target as { className?: unknown }).className === 'string'
+            ? (target as { className: string }).className
+            : target.getAttribute?.('class') ?? '')
+        : ''
+      const cls = rawCls ? `.${rawCls.trim().split(/\s+/)[0]}` : ''
       const one = `${name}@${target ? target.tagName.toLowerCase() : '?'}${cls}`
       if (!names.includes(one)) names.push(one)
     }
@@ -211,6 +221,24 @@ export function longTasks(w: PlaybackWindow): { count: number; maxMs: number } |
 export function animatingSeconds(w: PlaybackWindow): number | null {
   if (!w.samples.some((s) => s.anims != null)) return null
   return w.samples.filter((s) => (s.anims ?? 0) > 0).length
+}
+
+/** 整窗页面自绘的最长间隔（ms）；量不到 = null。 */
+export function pageMaxGapMs(w: PlaybackWindow): number | null {
+  const vals = w.samples.map((s) => s.rafMaxMs).filter((v): v is number => v != null)
+  if (!vals.length) return null
+  return Math.max(...vals)
+}
+
+/** 视频源尺寸 → 元素显示尺寸（`1920x1080→2560x1440`）；量不到 = `?`。 */
+function sizeLabel(el: HTMLMediaElement): string {
+  const vw = (el as HTMLVideoElement).videoWidth
+  const vh = (el as HTMLVideoElement).videoHeight
+  const rect = typeof el.getBoundingClientRect === 'function' ? el.getBoundingClientRect() : null
+  const w = Math.round(rect?.width ?? 0)
+  const h = Math.round(rect?.height ?? 0)
+  if (!vw || !vh) return '?'
+  return `${vw}x${vh}→${w && h ? `${w}x${h}` : '?'}`
 }
 
 /**
@@ -434,6 +462,7 @@ export function summarize(w: PlaybackWindow, el: HTMLMediaElement, now: number):
   const pres = presentedFps(w)
   const dec = decodedFps(w)
   const page = pageFps(w)
+  const pageMax = pageMaxGapMs(w)
   const jud = windowJudder(w)
   const period = judderPeriod(allIntervals(w))
   const lt = longTasks(w)
@@ -468,6 +497,11 @@ export function summarize(w: PlaybackWindow, el: HTMLMediaElement, now: number):
     `提交=${fps.toFixed(1)}fps`,
     `呈现=${pres == null ? '量不到' : `${pres.toFixed(1)}fps`}`,
     `页面=${page == null ? '量不到' : `${page.toFixed(1)}fps`}`,
+    /* 页面自绘最长一次间隔（devlog/386）：与丢帧合看能分开"合成器整页卡"与"只有视频被推迟" */
+    `页面峰=${pageMax == null ? '量不到' : `${(pageMax / 1000).toFixed(2)}s`}`,
+    /* 视频源尺寸 → 元素实际显示尺寸（devlog/386）：全屏与窗口的**放大倍数**差别在这一格。
+       `getBoundingClientRect` 在 jsdom 里恒为 0 ⇒ 量不到就写 `?`。 */
+    `尺寸=${sizeLabel(el)}`,
     `最长停顿=${w.pres.supported ? `${(w.pres.maxGapMs / 1000).toFixed(2)}s` : '量不到'}`,
     `停顿次数=${w.pres.gaps.length}`,
     /* 抖动（devlog/384）：用户症状的**直读口径** —— "一下一下地慢"是节拍被拖住，不是停住。
@@ -515,6 +549,8 @@ export function curveLine(w: PlaybackWindow, max = 15): string | null {
     return `${s.t}s:${s.fps}fps/${s.ahead == null ? '×' : s.ahead.toFixed(1)}`
       + `${s.advanced ? '' : '*'}${d ? `丢${d}` : ''}${j ? `抖${j}` : ''}`
       + `${s.longTasks ? `长${s.longTasks}` : ''}`
+      /* 这一秒页面自绘最长间隔（>40ms 才算"整页卡了一下"）：与 `丢N` 同秒出现 ⇒ 合成器整页卡 */
+      + `${(s.rafMaxMs ?? 0) > 40 ? `页${Math.round(s.rafMaxMs ?? 0)}` : ''}`
   }
   const items: string[] = []
   for (const s of w.samples.slice(0, max)) {
@@ -523,7 +559,7 @@ export function curveLine(w: PlaybackWindow, max = 15): string | null {
     if (items.join(' ').length > 300) break
   }
   return `[video] 曲线(${w.reason}) ${items.join(' ')}${w.samples.length > items.length ? ' …' : ''}`
-    + ' （`*`=没前进 丢=丢帧 抖=抖动 长=长任务）'
+    + ' （`*`=没前进 丢=丢帧 抖=抖动 长=长任务 页=整页卡顿ms）'
 }
 
 export interface ProbeHandle {
@@ -551,6 +587,8 @@ export function watchPlayback(el: HTMLVideoElement, reason: string, targetS?: nu
   let lastMediaTime: number | null = null
   let rafCount = 0
   let rafSampled = 0
+  let lastRafAt = 0
+  let pendingRafMax = 0
   let tick = 0
   /** 这一秒里攒的原料（采样时倒进 `Sample`，然后清空）。 */
   let pendingIntervals: number[] = []
@@ -586,7 +624,15 @@ export function watchPlayback(el: HTMLVideoElement, reason: string, targetS?: nu
   let rafHandle = 0
   const onRaf = () => {
     rafCount += 1
-    if (performance.now() - w.startedAt < RAF_WINDOW_MS) {
+    const now = performance.now()
+    /* 页面自绘的**最长间隔**（devlog/386）：`页面=` 只有均值，看不出"整页卡了一下"。
+       丢帧与它会合看：两者同时出现 ⇒ 合成器整页卡；只有视频丢 ⇒ 视频那条路自己的事。 */
+    if (lastRafAt) {
+      const gap = now - lastRafAt
+      if (gap > pendingRafMax) pendingRafMax = gap
+    }
+    lastRafAt = now
+    if (now - w.startedAt < RAF_WINDOW_MS) {
       rafHandle = window.requestAnimationFrame(onRaf)
     } else {
       rafHandle = 0
@@ -671,9 +717,11 @@ export function watchPlayback(el: HTMLVideoElement, reason: string, targetS?: nu
                      ahead, advanced, hidden, focused,
                      readyState: el.readyState, seeking: el.seeking,
                      dropped: dropDelta, intervals: pendingIntervals,
-                     longTasks: pendingLongTasks, anims: anim.count, fs: isFullscreen() })
+                     longTasks: pendingLongTasks, anims: anim.count, fs: isFullscreen(),
+                     rafMaxMs: pendingRafMax || undefined })
     pendingIntervals = []
     pendingLongTasks = 0
+    pendingRafMax = 0
   }
   const timer = window.setInterval(sample, SAMPLE_MS)
   const stop = () => {

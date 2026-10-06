@@ -42,6 +42,7 @@ function smp(t: number, o: {
   ahead?: number | null; advanced?: boolean; hidden?: boolean; focused?: boolean
   readyState?: number; seeking?: boolean
   dropped?: number; intervals?: number[]; longTasks?: number; anims?: number | null; fs?: boolean
+  rafMaxMs?: number
 } = {}) {
   return { t, fps: 30, decoded: 30 as number | null, presented: 30 as number | null,
            pageFps: 60 as number | null, ahead: 8 as number | null,
@@ -355,13 +356,17 @@ describe('playbackProbe · 抖动与逐秒分布（devlog/384）', () => {
       effect: { target: el } as unknown as KeyframeEffect,
     }
     const finished = { playState: 'finished', animationName: 'rise-in', effect: { target: el } }
+    // SVG 元素：`className` 是对象（`SVGAnimatedString`）⇒ 必须退回 `class` 属性取类名
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+    svg.setAttribute('class', 'vp-spin ring')
+    const svgAnim = { playState: 'running', animationName: 'spin', effect: { target: svg } }
     const doc = document as unknown as { getAnimations?: () => unknown[] }
     const before = doc.getAnimations
-    doc.getAnimations = () => [running, finished]
+    doc.getAnimations = () => [running, finished, svgAnim]
     try {
       const got = runningAnimations()
-      expect(got.count).toBe(1)
-      expect(got.names).toEqual(['pulse@div.si-dot'])
+      expect(got.count).toBe(2)
+      expect(got.names).toEqual(['pulse@div.si-dot', 'spin@svg.vp-spin'])
     } finally {
       if (before) doc.getAnimations = before
       else delete doc.getAnimations
@@ -434,6 +439,29 @@ describe('playbackProbe · 抖动与逐秒分布（devlog/384）', () => {
     w.samples.push(smp(1, { fs: false }))
     w.everFullscreen = true                       // 监听器置的位（进/出在同一秒内）
     expect(summarize(w, el, performance.now())).toContain('全屏=0/1秒(曾)')
+  })
+
+  it('页面自绘最长间隔 + 视频尺寸：与丢帧同秒出现才能说"合成器整页卡"', () => {
+    const el = makeEl()
+    const w = openWindow(el, 'start')
+    w.samples.push(smp(1, { dropped: 2, rafMaxMs: 55 }))     // 页面也卡了一下
+    w.samples.push(smp(2, { dropped: 2, rafMaxMs: 12 }))     // 页面没卡，只有视频丢
+    w.samples.push(smp(3, { dropped: 2 }))                   // 凑够 5 帧丢帧 ⇒ 曲线会出
+    const line = summarize(w, el, performance.now())
+    expect(line).toContain('页面峰=0.06s')
+    const curve = curveLine(w)!
+    expect(curve, '卡的那一秒要标出来').toContain('页55')
+    expect(curve, '12ms 的那一秒不许标（45ms 以下不算整页卡；图例里那个"页"字不算）')
+      .not.toContain('页12')
+    // 尺寸：源尺寸 → 元素显示尺寸；量不到就 `?`（jsdom 里 `videoWidth` 是 undefined）
+    expect(line).toContain('尺寸=?')
+    const sized = makeEl() as unknown as HTMLVideoElement & { videoWidth: number; videoHeight: number }
+    sized.videoWidth = 1920
+    sized.videoHeight = 1080
+    ;(sized as unknown as { getBoundingClientRect: () => { width: number; height: number } })
+      .getBoundingClientRect = () => ({ width: 2560, height: 1440 })
+    expect(summarize(openWindow(sized, 'start'), sized, performance.now()))
+      .toContain('尺寸=1920x1080→2560x1440')
   })
 
   it('汇总行**不超过 400 字**（接口硬限制，超了整行被丢）', () => {
