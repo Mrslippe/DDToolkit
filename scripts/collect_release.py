@@ -23,6 +23,8 @@ ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "frontend"
 RELEASE = FRONTEND / "src-tauri" / "target" / "release"
 BACKEND_SRC = FRONTEND / "src-tauri" / "binaries" / "backend"
+#: 构建期暂存的扩展（`scripts/stage_extension.py`；真源是仓库根的 `extension/`）
+EXTENSION_SRC = FRONTEND / "src-tauri" / "extension"
 
 OUT_DIR = ROOT / "dist-release"
 ZIP_NAME = "DDtoolkit-portable-win64.zip"
@@ -132,6 +134,14 @@ def _portable(work: Path) -> Path:
 
     shutil.copy2(app_exe, work / app_exe.name)
     shutil.copytree(BACKEND_SRC, work / "binaries" / "backend")
+    # 浏览器扩展（2026-10-06）：构建期由 `npm run stage:extension` 暂存到 src-tauri/extension
+    # —— **就是被打进安装包的那一份**，便携版放同一份 ⇒ 两条分发路上的扩展逐字节相同。
+    # 落点 `DDtoolkit\extension\`：用户把它填进 `edge://extensions` 的"加载解压缩的扩展"即可。
+    if not (EXTENSION_SRC / "manifest.json").is_file():
+        raise SystemExit(
+            f"[release] 未找到扩展暂存目录 {EXTENSION_SRC} —— 先跑 npm run stage:extension"
+            f"（或整条 npm run tauri:build）")
+    shutil.copytree(EXTENSION_SRC, work / "extension")
 
     zip_path = OUT_DIR / ZIP_NAME
     if zip_path.exists():

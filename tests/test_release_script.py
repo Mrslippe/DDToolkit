@@ -182,6 +182,31 @@ def test_classify_nsis_against_real_installer_script_if_present():
     assert flattened == 0, f"真实安装脚本里有 {flattened} 行把后端目录打平了（devlog/036 形态）"
 
 
+def test_classify_nsis_extension_counts_target_paths_only():
+    """扩展随包的行数：只认 `/oname=extension\\…`（源路径里也有 extension，别按源判）。"""
+    lines = [
+        r'File /a "/oname=extension\manifest.json" "E:\x\src-tauri\extension\manifest.json"',
+        r'File /a "/oname=extension\src\popup.js" "E:\x\src-tauri\extension\src\popup.js"',
+        # 反例：只在**源**路径里出现 extension（目标不在安装目录的 extension 下）⇒ 不算
+        r'File /a "/oname=binaries\backend\x.dll" "E:\x\src-tauri\extension\x.dll"',
+        r'File /a "/oname=binaries\backend\_internal\a.dll" "E:\x\backend\_internal\a.dll"',
+    ]
+    assert R.classify_nsis_extension(lines) == 2
+    assert R.classify_nsis_extension([]) == 0
+
+
+def test_classify_nsis_extension_against_real_installer_script_if_present():
+    """真实构建产物里必须真的有扩展行 —— 这条判据的意义就是"装完目录里到底有没有扩展"。"""
+    nsi = (Path(__file__).resolve().parent.parent / "frontend" / "src-tauri" /
+           "target" / "release" / "nsis" / "x64" / "installer.nsi")
+    if not nsi.exists():
+        pytest.skip("本机没有 tauri 构建产物（installer.nsi），跳过真实文件校验")
+    lines = nsi.read_text(encoding="utf-8", errors="replace").splitlines()
+    assert R.classify_nsis_extension(lines) > 0, \
+        "真实安装脚本里没有 extension\\ 的行 —— 要么这份产物是加扩展之前的旧构建" \
+        "（重新跑一次 npm run tauri:build），要么打包真没带上扩展、或判据的路径形态漂了"
+
+
 # ── 发布说明与资产预期 ───────────────────────────────────────────────
 
 def test_notes_problems_flags_short_and_placeholder():

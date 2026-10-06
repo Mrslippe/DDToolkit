@@ -107,10 +107,15 @@ retire-when: 前端视觉体系整体重做，或组件索引改成机器生成
 | 上次同步 | `[data-ext-last-sync="<platform>"]` | 平台 + 相对时间（`noticeBoard.relTime`）+ 「未在线验证」（小红书/抖音不做探活时如实标）；**从没同步过 ⇒ 这句改成"还没有同步过"** |
 | 重置配对 | `[data-ext-reset="1"]` → `[data-ext-reset-confirm="1"]` / `[data-ext-reset-cancel="1"]` | **二次确认**（点错了扩展当场失效，用户得回去重贴）；重置后自动「显示」新 token |
 | 上次写入的键 | 无属性（纯文本行） | 键名 + 「整条 cookie 共 N 个键」——**只有键名，没有值**（后端 `pairing.note_sync` 只落键名/计数）|
-| 装法指引 | 纯文本 | 指向仓库 `extension/README.md`（不在界面里写长文）|
+| 扩展目录 | `[data-ext-dir="path"｜"unknown"]` | **E5（2026-10-06）**：装完扩展就在程序目录里（直装版 `<安装目录>\extension\`、便携版 `DDtoolkit\extension\`，构建期打进产物）⇒ 这一行把**绝对路径**摆出来给用户复制进浏览器的「加载解压缩的扩展」 |
+| ├ 路径 | `[data-ext-dir-path="1"｜"0"]` | 等宽字体 + `truncate`（完整路径在 `title` 里）；拿不到路径（浏览器/探针）时退化成一句说明 |
+| └ 打开目录 | `[data-ext-open-dir="1"]` | 走壳命令 `open_extension_dir`（**路径由 Rust 解析**，前端传不了路径）；`unknown` 态下**不渲染**（不给一个点了没反应的按钮）|
+| 装法三步 | 纯文本 | `edge://extensions` / `chrome://extensions` → 开发人员模式 → 加载解压缩的扩展 → 选上面那个目录 |
 
 ⚠️ 数据来自 `GET /auth/pairing`（**要应用 token**）；读不到时这一栏说"读不到配对信息"而不是空白或崩。
-判据：`LoginDialog.pairing.test.tsx`（9 条：打码/复制/退化/二次确认/取消/上次同步/从没同步过/读不到/既有 Tab 仍在）
+扩展目录那一行走**壳命令**（浏览器里为 `unknown`，非桌面端渲染不出路径也不渲染按钮）。
+判据：`LoginDialog.pairing.test.tsx`（12 条：打码/复制/退化/二次确认/取消/上次同步/从没同步过/读不到/既有 Tab 仍在
+/ **目录行显示绝对路径 + 打开目录** / **拿不到路径时只说说明** / 打开被拒不崩）
 + 探针 `ui_probe --first-run`（**已进 A 档门禁**）。
 
 #### A1.1 状态行「展示什么」的策略（2026-09-10 用户：频繁的动态轮询不必占顶栏）

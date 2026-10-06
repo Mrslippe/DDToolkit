@@ -2379,6 +2379,11 @@ def _assert_first_run(dom_file: Path) -> list[str]:
     # 整块消失时界面不会报错，只会"用户找不到该贴哪条 token"。
     if 'data-ext-pairing="1"' not in text:
         bad.append("登录浮窗没有「浏览器扩展」那一栏（配对 token 没地方可看）")
+    # 扩展目录那一行（2026-10-06，用户口径「构建时直接打包进包体」）：直装/便携版里
+    # `extension/` 随包发出去，界面得把**路径**摆出来 —— 少了它的症状不是报错，而是
+    # "新用户只能去 clone 仓库"。探针跑在浏览器里（拿不到壳的路径）⇒ 只要求这一行**在**。
+    if "data-ext-dir=" not in text:
+        bad.append("登录浮窗没有「扩展目录」那一行（新用户拿不到扩展在哪儿的路径）")
     return bad
 
 

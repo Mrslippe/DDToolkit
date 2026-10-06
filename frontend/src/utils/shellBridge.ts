@@ -124,6 +124,32 @@ export async function openDataDir(): Promise<string> {
 }
 
 /**
+ * 扩展目录（E5，2026-10-06）：**装完就在程序目录里** ——
+ * 直装版 `<安装目录>\extension\`、便携版 `DDtoolkit\extension\`（构建期打进产物）。
+ *
+ * 用户口径：「构建的时候直接打包进包体中，这样直装版也直接在文件目录中就有拓展」——
+ * 于是新用户不必 clone 仓库：界面把路径显示出来，点「打开目录」就是资源管理器里那个文件夹，
+ * 填进 `edge://extensions` 的「加载解压缩的扩展」即可（浏览器只认"商店"或"本地目录"两种来源）。
+ *
+ * 浏览器/探针环境返回 `null`（那边没有"程序目录"这回事）—— 界面据此只显示一句说明，
+ * 不显示一个点了没反应的按钮。
+ */
+export async function extensionDir(): Promise<string | null> {
+  if (!isTauri) return null
+  try {
+    return await invoke<string>('extension_dir')
+  } catch {
+    return null
+  }
+}
+
+/** 在资源管理器里打开**扩展目录**；路径同样由 Rust 侧解析（前端传不了路径）。 */
+export async function openExtensionDir(): Promise<string> {
+  if (!isTauri) throw new Error('只有桌面端才能打开扩展目录')
+  return await invoke<string>('open_extension_dir')
+}
+
+/**
  * 迁移数据目录（系统文件夹选择框 → 规划 → 停后端 → 复制 → 校验 → 写指针 → 新目录启动并探活；
  * 任何一步失败都会回滚并用**原目录**重启，旧目录全程不动）。
  *

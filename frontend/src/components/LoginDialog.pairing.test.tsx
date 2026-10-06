@@ -30,6 +30,9 @@ const statusMock = vi.fn()
 const pairingMock = vi.fn()
 const resetMock = vi.fn()
 const writeTextMock = vi.fn()
+// 扩展目录（E5）：路径来自壳（`shellBridge`），浏览器里是 null。
+const extDirMock = vi.fn()
+const openExtDirMock = vi.fn()
 
 vi.mock('../api/api', () => ({
   api: {
@@ -39,6 +42,11 @@ vi.mock('../api/api', () => ({
     getPairing: (...a: unknown[]) => pairingMock(...a),
     resetPairing: (...a: unknown[]) => resetMock(...a),
   },
+}))
+
+vi.mock('../utils/shellBridge', () => ({
+  extensionDir: (...a: unknown[]) => extDirMock(...a),
+  openExtensionDir: (...a: unknown[]) => openExtDirMock(...a),
 }))
 
 // `platformLogin` 的文案表照旧走真实现（它有自己的用例）；这里只关心这一栏。
@@ -53,6 +61,8 @@ beforeEach(() => {
     { logged_in: false, needs_login: true, uid: null, name: null })
   pairingMock.mockReset().mockResolvedValue(PAIRING)
   resetMock.mockReset().mockResolvedValue({ ...PAIRING, token: 'FRESH-TOKEN-abcdefghijklmnop' })
+  extDirMock.mockReset().mockResolvedValue('C:\\DDtoolkit\\extension')
+  openExtDirMock.mockReset().mockResolvedValue('C:\\DDtoolkit\\extension')
   writeTextMock.mockReset().mockResolvedValue(undefined)
   Object.defineProperty(navigator, 'clipboard', {
     configurable: true,
@@ -154,5 +164,39 @@ describe('浏览器扩展那一栏', () => {
       expect(document.querySelector(`[data-auth-tab="${p}"]`)).toBeTruthy()
     }
     expect(document.body.textContent).toContain('仅保存在本机')
+  })
+
+  // ── 扩展目录那一行（E5，2026-10-06）──────────────────────────────────
+  // 用户口径：「构建的时候直接打包进包体，这样直装版也直接在文件目录中就有拓展」。
+  // 于是用户拿到的**第一份**装法说明就在这一行里（而不是"去 clone 仓库"）。
+
+  it('壳给了路径 ⇒ 显示**绝对路径** + 「打开目录」', async () => {
+    extDirMock.mockResolvedValue('C:\\Program Files\\DDtoolkit\\extension')
+    await render()
+    const row = byData('ext-dir')!
+    expect(row.getAttribute('data-ext-dir')).toBe('path')
+    expect(byData('ext-dir-path')!.textContent).toContain('DDtoolkit\\extension')
+    expect(row.textContent).toContain('edge://extensions')   // 装法三步就在这一行里
+    expect(row.textContent).toContain('开发人员模式')
+
+    await act(async () => { byData('ext-open-dir')!.click() })
+    expect(openExtDirMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('拿不到路径（浏览器/探针）⇒ 只说一句说明，**不显示**点了没反应的按钮', async () => {
+    extDirMock.mockResolvedValue(null)
+    await render()
+    expect(byData('ext-dir')!.getAttribute('data-ext-dir')).toBe('unknown')
+    expect(byData('ext-open-dir')).toBeNull()
+    expect(byData('ext-dir')!.textContent).toContain('extension')
+  })
+
+  it('「打开目录」被拒（没有资源管理器）⇒ 不静默：调用过、界面不崩', async () => {
+    extDirMock.mockResolvedValue('C:\\DDtoolkit\\extension')
+    openExtDirMock.mockRejectedValue(new Error('只有桌面端才能打开扩展目录'))
+    await render()
+    await act(async () => { byData('ext-open-dir')!.click() })
+    expect(openExtDirMock).toHaveBeenCalled()
+    expect(byData('ext-dir')!.getAttribute('data-ext-dir')).toBe('path')
   })
 })

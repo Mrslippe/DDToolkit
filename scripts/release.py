@@ -173,6 +173,19 @@ def classify_nsis(lines: list[str]) -> tuple[int, int]:
     return kept, flattened
 
 
+def classify_nsis_extension(lines: list[str]) -> int:
+    """NSIS 安装脚本里"把扩展带进安装目录"的行数（0 ⇒ 装完目录里没有扩展）。
+
+    真实行形状（与 `classify_nsis` 同一套读法）：
+
+        File /a "/oname=extension\\manifest.json" "E:\\…\\src-tauri\\extension\\manifest.json"
+
+    判据只认**目标路径**（`/oname=extension\\`）—— 源路径里同样有 `extension` 这个词，
+    按源判会把"只是碰巧从那个目录读文件"也算成带进去了。
+    """
+    return sum(1 for line in lines if "/oname=extension\\" in line)
+
+
 def notes_problems(text: str) -> list[str]:
     """发布说明的最低要求（缺了就别发：Release 页会是一片空白）。"""
     bad: list[str] = []
@@ -526,7 +539,8 @@ def step_verify(ctx: Ctx) -> None:
     # NSIS：后端目录被"打平"过（devlog/036），装了起不来
     nsi = TAURI / "target" / "release" / "nsis" / "x64" / "installer.nsi"
     if nsi.exists():
-        kept, flattened = classify_nsis(nsi.read_text(encoding="utf-8", errors="replace").splitlines())
+        nsi_lines = nsi.read_text(encoding="utf-8", errors="replace").splitlines()
+        kept, flattened = classify_nsis(nsi_lines)
         ctx.results["nsis"] = {"kept": kept, "flattened": flattened}
         print(f"  {OK if flattened == 0 and kept else FAIL} NSIS 布局: "
               f"保留 _internal 的行={kept}，被打平的行={flattened}（必须 0）")
@@ -535,10 +549,19 @@ def step_verify(ctx: Ctx) -> None:
                             f"检查 tauri.conf.json 的 bundle.resources 是否被改成 map 形式")
         if not kept:
             problems.append("NSIS 安装脚本里没有任何 _internal 行 —— 形态不对")
+        # 扩展随包（2026-10-06）：用户口径是"装完在文件目录里就有扩展"。
+        # ⚠️ 少了它的症状**不是报错**，而是"新用户只能去 clone 仓库" —— 只有这里看得见。
+        ext_rows = classify_nsis_extension(nsi_lines)
+        ctx.results["nsis_extension"] = ext_rows
+        print(f"  {OK if ext_rows else FAIL} 安装包里的扩展: {ext_rows} 行（含 "
+              f"`oname=extension\\manifest.json`）")
+        if not ext_rows:
+            problems.append("NSIS 安装脚本里没有 extension\\ 的行 —— 装了也没有扩展"
+                            "（先确认 npm run stage:extension 跑过、且 bundle.resources 里有 extension/**/*）")
     else:
         ctx.warn(f"没找到 {nsi.relative_to(ROOT)}（跳过后端布局校验）")
 
-    # 便携 zip 结构：顶层 DDtoolkit/ + 主程序 + 后端 _internal
+    # 便携 zip 结构：顶层 DDtoolkit/ + 主程序 + 后端 _internal + **扩展**
     zip_path = DIST / "DDtoolkit-portable-win64.zip"
     if zip_path.exists():
         import zipfile
@@ -547,14 +570,18 @@ def step_verify(ctx: Ctx) -> None:
         has_exe = any(n.endswith("DDtoolkit/ddtoolkit.exe") or n.endswith("DDtoolkit/DDtoolkit.exe")
                       for n in names)
         has_internal = any("/binaries/backend/_internal/" in n for n in names)
+        has_extension = any(n.endswith("DDtoolkit/extension/manifest.json") for n in names)
         ctx.results["portable"] = {"entries": len(names), "has_exe": has_exe,
-                                   "has_internal": has_internal}
-        print(f"  {OK if has_exe and has_internal else FAIL} 便携包: {len(names)} 条目、"
-              f"主程序={has_exe}、_internal={has_internal}")
+                                   "has_internal": has_internal, "has_extension": has_extension}
+        print(f"  {OK if has_exe and has_internal and has_extension else FAIL} 便携包: "
+              f"{len(names)} 条目、主程序={has_exe}、_internal={has_internal}、扩展={has_extension}")
         if not has_exe:
             problems.append("便携包里没有主程序 ddtoolkit.exe")
         if not has_internal:
             problems.append("便携包里没有 binaries/backend/_internal/（后端目录形态不对）")
+        if not has_extension:
+            problems.append("便携包里没有 extension/manifest.json —— 解压后没有扩展可用"
+                            "（先跑 npm run stage:extension）")
 
     # 主程序版本号（devlog/082 手工查过这条，现在固定下来）
     exe = TAURI / "target" / "release" / "ddtoolkit.exe"

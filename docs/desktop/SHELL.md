@@ -111,6 +111,20 @@ retire-when: 桌面壳换掉 Tauri，或改成多进程模型
     判据（`cargo test`）：候选区间连续且在高位 · 第一个可用就被选中 · 被占则跳下一个（**真的 bind 占住**）·
     全被占 ⇒ 回退随机且不 panic。
 
+30c. **扩展目录由壳解析，随包发出去**（E5，2026-10-06）：`lib.rs::extension_dir` /
+    `open_extension_dir`。用户口径是「构建的时候直接打包进包体中，这样直装版也直接在文件目录中
+    就有拓展」⇒ 产物里有 `extension\`（暂存 + `bundle.resources`，见 `docs/ops/RELEASE.md` §3），
+    壳负责把**路径**给出来（设置 → 登录 → 浏览器扩展 那一栏 + 「打开目录」）。
+    - ⚠️ **与 `open_data_dir` 同一口径：路径由壳自己解析，前端传不了路径** —— 否则那两条命令
+      就等于"页面可以打开任意目录"。候选顺序是 `resource_dir()/extension`（直装版）→
+      主程序同级 `extension/`（便携版/布局差异）→ dev 的仓库根（`npm run tauri:dev`）。
+    - ⚠️ **"像不像一份扩展"的判据是 `manifest.json` 在不在，不是"目录存不存在"**：
+      dev 下 `resource_dir()` 指向 `target/debug`，那里可能留着同名空目录 ⇒
+      用户照着填进浏览器却加载不了（那种"给了个空目录"的形态最难查）。
+    - 判据（`cargo test`）：候选顺序 · 空目录不算扩展 · 暂存过来的那份是 MV3 + 四档图标齐
+      （没暂存过就跳过，别让 `cargo test` 依赖一次构建）；另加注册表/准入表对账（不变量 29）
+      与前端 vitest、探针 `--first-run`。
+
 30. **外链只走 `open_external`，主机有白名单**（S3-B，devlog/208）：
     `lib.rs::external_url_host` 只认 `https`、主机必须**精确等于** `EXTERNAL_HOSTS` 里的一条
     （先转小写 —— 大写不算绕过，而 `bilibili.com.evil.com` / `bilibili.com.` / `%62ilibili.com`

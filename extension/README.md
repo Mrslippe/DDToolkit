@@ -10,8 +10,13 @@
 
 ## 装（一次性）
 
+> **装完应用就已经有这份扩展了**（2026-10-06 起）：直装版在 `<安装目录>\extension\`、
+> 便携版在 `DDtoolkit\extension\` —— 应用里「设置 → 登录 → 浏览器扩展」那一栏会**把路径显示出来**，
+> 点「打开目录」直接跳到它，**不用 clone 仓库**。从源码跑的话，本仓库的 `extension/` 就是同一份
+> （构建期由 `scripts/stage_extension.py` 暂存进 `src-tauri/`，再随 `bundle.resources` 进安装包与便携 zip）。
+
 1. 打开 `edge://extensions`（或 `chrome://extensions`）→ 打开「开发人员模式」；
-2. 点「加载解压缩的扩展」→ 选**本仓库的 `extension/` 目录**（那个有 `manifest.json` 的目录）；
+2. 点「加载解压缩的扩展」→ 选 **应用目录里的 `extension\`**（那个有 `manifest.json` 的目录）；
 3. 打开应用 →「设置 → 登录 → 浏览器扩展」→ 点「复制」；
 4. 点扩展图标 →「设置」→ 把 token 粘进「配对 token」→「保存」。
    （端口会**自动探测**：应用优先绑 `8765–8769`，扩展依次探并用 `/healthz` 的

@@ -14,6 +14,7 @@ import type { AuthStatus, AuthPlatform, PairingInfo, QrStartResult } from '../ap
 import { refreshCapabilities } from '../hooks/useCapabilities'
 import { LOGIN_TABS, cookieLoginSpec, loginMode } from '../utils/platformLogin'
 import { relTime } from '../utils/noticeBoard'
+import { extensionDir, openExtensionDir } from '../utils/shellBridge'
 
 type Platform = AuthPlatform
 
@@ -68,6 +69,10 @@ export default function LoginDialog({ open, onOpenChange }: Props) {
   const [extCopied, setExtCopied] = useState(false)
   const [extConfirmReset, setExtConfirmReset] = useState(false)
   const [extBusy, setExtBusy] = useState(false)
+  // 扩展目录（E5，2026-10-06）：装完就在程序目录里（构建期打进产物），这里把路径摆出来。
+  // 浏览器/探针环境拿到 null ⇒ 只显示一句说明（见渲染处），不给一个点了没反应的按钮。
+  const [extDir, setExtDir] = useState<string | null>(null)
+  const [extDirBusy, setExtDirBusy] = useState(false)
 
   // 打开时加载各平台登录态
   useEffect(() => {
@@ -110,8 +115,22 @@ export default function LoginDialog({ open, onOpenChange }: Props) {
     void api.getPairing()
       .then((info) => { if (!cancelled) setExt(info) })
       .catch(() => { if (!cancelled) setExt(null) })
+    // 扩展目录同理：这是"告诉你扩展在哪儿"的顺手信息（拿不到就说拿不到，不拦登录）。
+    void extensionDir().then((d) => { if (!cancelled) setExtDir(d) })
     return () => { cancelled = true }
   }, [open])
+
+  /** 在资源管理器里打开扩展目录（路径由 Rust 侧解析）。 */
+  const openExtDir = async () => {
+    setExtDirBusy(true)
+    try {
+      setExtDir(await openExtensionDir())
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e))
+    } finally {
+      setExtDirBusy(false)
+    }
+  }
 
   const copyToken = async () => {
     if (!ext?.token) return
@@ -444,6 +463,44 @@ export default function LoginDialog({ open, onOpenChange }: Props) {
             )}
           </div>
 
+          {/* 扩展目录（E5，2026-10-06）：装完就在程序目录里（构建期把 `extension/` 打进产物）
+              —— 直装版 `<安装目录>\extension\`、便携版 `DDtoolkit\extension\`。
+              为什么摆在这里：浏览器只认"商店"或"本地目录 + 开发人员模式"两种来源，应用没法
+              替用户装；把路径 + 一个「打开目录」显示出来，新用户就不必去 clone 仓库。
+              ⚠️ 浏览器/探针环境拿不到路径（`extensionDir()` 返回 null）⇒ 只显示一句说明，
+              不显示一个点了没反应的按钮（探针按 `data-ext-dir` 断言这一行在不在）。 */}
+          <div
+            className="mt-1.5 rounded border border-border/70 px-1.5 py-1"
+            data-ext-dir={extDir ? 'path' : 'unknown'}
+          >
+            <div className="flex items-center gap-1.5">
+              <span className="shrink-0 text-[11px] text-muted-foreground">扩展目录</span>
+              <code
+                data-ext-dir-path={extDir ? '1' : '0'}
+                title={extDir ?? undefined}
+                className="min-w-0 flex-1 truncate rounded bg-[var(--sel-bg-hover)] px-1.5 py-1 font-mono text-[11px]"
+              >
+                {extDir ?? '随应用一起安装：程序目录里的 extension\\ 子目录'}
+              </code>
+              {extDir && (
+                <button
+                  type="button"
+                  data-ext-open-dir="1"
+                  disabled={extDirBusy}
+                  className="shrink-0 rounded border border-border px-1.5 py-1 text-[11px] text-muted-foreground hover:bg-[var(--sel-bg-hover)] disabled:opacity-50"
+                  onClick={() => void openExtDir()}
+                >
+                  打开目录
+                </button>
+              )}
+            </div>
+            <p className="mt-1 leading-relaxed text-[11px] text-muted-foreground">
+              装法：浏览器打开 <code className="rounded bg-background/70 px-1">edge://extensions</code>
+              （Chrome 是 <code className="rounded bg-background/70 px-1">chrome://extensions</code>）→
+              打开「开发人员模式」→「加载解压缩的扩展」→ 选上面这个目录 → 把下面的 token 贴进扩展设置。
+            </p>
+          </div>
+
           {ext?.token ? (
             <>
               <div className="mt-1.5 flex items-center gap-1.5">
@@ -473,7 +530,7 @@ export default function LoginDialog({ open, onOpenChange }: Props) {
               </div>
               <p className="mt-1.5 leading-relaxed text-[11px] text-muted-foreground">
                 装好扩展后把这条 token 贴进去一次即可（重启应用不用重贴）。
-                扩展的装法与验收步骤见仓库 <code className="rounded bg-background/70 px-1">extension/README.md</code>。
+                扩展的排查与验收步骤见扩展目录里的 <code className="rounded bg-background/70 px-1">README.md</code>。
               </p>
               <div className="mt-1.5 flex items-center gap-2">
                 {extConfirmReset ? (

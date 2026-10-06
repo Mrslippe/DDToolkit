@@ -83,6 +83,8 @@ pytest-cache-files-*/
 frontend/src-tauri/target/
 frontend/src-tauri/binaries/
 frontend/src-tauri/gen/
+# 构建期从仓库根 extension/ 暂存过来的扩展（给 tauri build 打进产物；真源在 extension/）
+frontend/src-tauri/extension/
 /dist-portable/
 /dist-release/
 # 非开源分发资产（商用/试用字体原始文件，替换为开源子集后仅本地备份）

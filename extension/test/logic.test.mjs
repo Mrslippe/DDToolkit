@@ -374,3 +374,24 @@ test('图标：与**桌面图标逐字节相同**（用户 2026-10-06：「还�
     .join('\n');
   assert.ok(!/chrome\./.test(codeLines), 'logic.js 的代码里出现了 chrome.*（纯逻辑层不许依赖浏览器 API）');
 });
+
+test('打包接线：扩展随应用一起发（tauri:build 先暂存，resources 里带上它）', () => {
+  // 用户口径（2026-10-06）：「可以在构建的时候直接打包进包体中吗，这样直装版也直接在文件
+  // 目录中就有拓展」。这条判据守的就是那句承诺的三个接线点 —— 任何一处断了，症状都是
+  // **装完目录里没有扩展**（不报错，只是新用户只能去 clone 仓库）。
+  const pkg = JSON.parse(readFileSync(join(ROOT, 'frontend', 'package.json'), 'utf8'));
+  assert.match(pkg.scripts['tauri:build'], /stage:extension/,
+    'tauri:build 没有先跑 stage:extension ⇒ 打出来的产物里不会有扩展');
+  assert.ok(pkg.scripts['stage:extension'], 'package.json 里 stage:extension 脚本不存在');
+
+  const conf = JSON.parse(
+    readFileSync(join(ROOT, 'frontend', 'src-tauri', 'tauri.conf.json'), 'utf8'));
+  assert.ok(Array.isArray(conf.bundle.resources),
+    'bundle.resources 必须是数组形式 —— map + glob 会把目录摊平（devlog/036 的形态）');
+  assert.ok(conf.bundle.resources.some((p) => p.startsWith('extension/')),
+    `资源清单里没有 extension/**/*：${JSON.stringify(conf.bundle.resources)}`);
+
+  const stage = readFileSync(join(ROOT, 'scripts', 'stage_extension.py'), 'utf8');
+  assert.match(stage, /manifest\.json/, '暂存脚本的白名单里没有 manifest.json');
+  assert.ok(!/ITEMS = \([^)]*"test"/.test(stage), 'test/ 不该进产物白名单');
+});

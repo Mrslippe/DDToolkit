@@ -558,6 +558,104 @@ fn open_data_dir(window: tauri::Window, state: State<'_, DataDirState>) -> Resul
     Ok(dir.to_string_lossy().to_string())
 }
 
+// ── 浏览器扩展目录（E5，2026-10-06）──────────────────────────────────────
+//
+// 用户口径：「可以在构建的时候直接打包进包体中吗，这样直装版也直接在文件目录中就有拓展」。
+// 产物里的落点：直装版 `<安装目录>\extension\…`、便携版 `DDtoolkit\extension\…`
+// （`scripts/stage_extension.py` 构建期暂存 → `tauri.conf.json` 的 `bundle.resources`
+// 里那条 `extension/**/*`；**数组形式**，改 map 会把目录摊平，见 devlog/036）。
+//
+// 为什么还要这两条命令：浏览器只接受"商店"或"本地目录 + 开发人员模式"两种来源，
+// 应用没法替用户装；能帮的是把**路径**摆到他眼前（设置 → 登录 → 浏览器扩展 那一栏），
+// 并给一个"打开目录"的出口。⚠️ 与 `open_data_dir` 同一口径：**路径由壳自己解析**，
+// 前端传不了路径 ⇒ 这两条命令不可能被用来打开任意目录。
+
+/// 扩展目录的候选路径（与后端目录同一套思路：resource_dir 与主程序同级都试一遍）。
+///
+/// 提取成纯函数是为了能测：三种来源的**优先级**（资源目录 → 主程序同级 → dev 仓库根）
+/// 是这里唯一的不变量，而它错了的症状是"点了打开目录，开出来的是别的地方".
+fn extension_dir_candidates(
+    resource_dir: Option<std::path::PathBuf>,
+    exe_dir: Option<std::path::PathBuf>,
+    dev_root: Option<std::path::PathBuf>,
+) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    if let Some(r) = resource_dir {
+        out.push(r.join("extension"));
+    }
+    if let Some(d) = exe_dir {
+        out.push(d.join("extension"));
+    }
+    if let Some(p) = dev_root {
+        out.push(p.join("extension"));
+    }
+    out
+}
+
+/// 挑出"真的像一份扩展"的那个目录 —— 判据是里面有 `manifest.json`。
+///
+/// ⚠️ 不能只判"目录存在"：`resource_dir()` 在 dev 下指向 `target/debug`，那里可能有同名的空目录
+/// （或者上一次构建的残留）；而"给了个空目录"的症状是**用户照着填进浏览器却加载不了**。
+fn pick_extension_dir(candidates: &[std::path::PathBuf]) -> Option<std::path::PathBuf> {
+    candidates
+        .iter()
+        .find(|d| d.join("manifest.json").is_file())
+        .cloned()
+}
+
+/// 壳自己解析扩展目录（前端拿不到路径参数）。
+fn resolve_extension_dir(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
+    let resource_dir = app.path().resource_dir().ok();
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+    // dev（`npm run tauri:dev`）没有资源目录，扩展就在仓库根 —— 与后端目录同一套回退思路。
+    #[cfg(debug_assertions)]
+    let dev_root = Some(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(2)
+            .expect("定位项目根失败")
+            .to_path_buf(),
+    );
+    #[cfg(not(debug_assertions))]
+    let dev_root: Option<std::path::PathBuf> = None;
+
+    let candidates = extension_dir_candidates(resource_dir, exe_dir, dev_root);
+    pick_extension_dir(&candidates).ok_or_else(|| {
+        format!(
+            "没找到扩展目录（找过：{}）—— 打包版请确认安装目录里有 extension\\manifest.json",
+            candidates
+                .iter()
+                .map(|c| c.display().to_string())
+                .collect::<Vec<_>>()
+                .join("、")
+        )
+    })
+}
+
+/// 扩展目录的绝对路径（给界面上那一行显示 + 让用户复制进浏览器的"加载解压缩的扩展"）。
+#[tauri::command]
+fn extension_dir(window: tauri::Window) -> Result<String, String> {
+    if !guard_window(&window, "extension_dir") {
+        return Err("该窗口无权调用 extension_dir".to_string());
+    }
+
+    Ok(resolve_extension_dir(window.app_handle())?.to_string_lossy().to_string())
+}
+
+/// 在资源管理器里打开**扩展目录**（用户不用自己去安装目录里翻）。
+#[tauri::command]
+fn open_extension_dir(window: tauri::Window) -> Result<String, String> {
+    if !guard_window(&window, "open_extension_dir") {
+        return Err("该窗口无权调用 open_extension_dir".to_string());
+    }
+
+    let dir = resolve_extension_dir(window.app_handle())?;
+    shell_open(&dir)?;
+    Ok(dir.to_string_lossy().to_string())
+}
+
 /// 打开发布页（R23b）：连不上 GitHub 时的兜底出口。
 ///
 /// 为什么直接调 Windows API 而不是插件：前端没装 `@tauri-apps/plugin-shell` 的 JS 包；
@@ -1145,6 +1243,9 @@ const COMMAND_ACL: &[&str] = &[
     "quit_app",
     "storage_info",
     "open_data_dir",
+    // 扩展目录（E5）：只读路径 + 打开目录，与 open_data_dir 同口径（路径由壳解析）
+    "extension_dir",
+    "open_extension_dir",
     "open_external",
     "open_release_page",
     "probe_local_proxy",
@@ -1595,6 +1696,8 @@ pub fn run() {
             get_backend_port,
             get_api_token,
             open_data_dir,
+            extension_dir,
+            open_extension_dir,
             open_external,
             present_window,
             hide_to_tray,
@@ -2405,6 +2508,7 @@ mod tests {
             "set_process_proxy",
             "open_external", // 外链白名单的入口
             "open_data_dir",
+            "open_extension_dir", // 扩展目录：打开的是壳自己解析出来的那个目录
         ] {
             assert!(command_allowed(cmd, "main"), "{cmd} 应当允许主窗口");
             assert!(!command_allowed(cmd, "evil"), "{cmd} 不该允许未知窗口");
@@ -2506,6 +2610,68 @@ mod tests {
                    "通配基线被改了 —— 收窄窗口作用域要走一次真机验收，别静默改");
         let vm: serde_json::Value = serde_json::from_str(CAP_MAIN).unwrap();
         assert_eq!(vm["windows"][0].as_str(), Some("main"), "main.json 的作用域应当是主窗口");
+    }
+
+    // ── 扩展目录（E5，2026-10-06）────────────────────────────────────────
+    //
+    // 契约：装完产物里就有一份能直接"加载解压缩"的扩展（安装版 `<安装目录>\extension\`、
+    // 便携版 `DDtoolkit\extension\`），壳负责把**路径**给出来。判据落在三处：
+    // ① 候选顺序；② "像不像一份扩展"靠 manifest.json 而不是"目录在不在"；
+    // ③ 真的暂存过时，那份得是 MV3 + 四档图标齐（构建期暂存的哨兵）。
+
+    #[test]
+    fn extension_dir_candidates_are_ordered_resources_then_exe_then_dev() {
+        let got = extension_dir_candidates(
+            Some(std::path::PathBuf::from("R")),
+            Some(std::path::PathBuf::from("E")),
+            Some(std::path::PathBuf::from("D")),
+        );
+        let want: Vec<std::path::PathBuf> = ["R", "E", "D"]
+            .iter()
+            .map(|s| std::path::PathBuf::from(s).join("extension"))
+            .collect();
+        assert_eq!(got, want, "资源目录 → 主程序同级 → dev 仓库根，顺序错了会打开别的地方");
+        // 缺哪一档就少哪一档：dev 没有资源目录、便携版可能两条都试 —— 都不许 panic
+        assert!(extension_dir_candidates(None, None, None).is_empty());
+        assert_eq!(extension_dir_candidates(None, Some("E".into()), None).len(), 1);
+    }
+
+    #[test]
+    fn pick_extension_dir_requires_a_manifest() {
+        // ⚠️ 只判"目录存在"不够：dev 下 `resource_dir()` 指向 `target/debug`，
+        // 那里可能留着同名的空目录 ⇒ 用户照着填进浏览器却加载不了。
+        let tmp = crate::testtmp::TempRoot::new("ddtk-ext", "pick");
+        let empty = tmp.to_path_buf().join("extension");
+        std::fs::create_dir_all(&empty).unwrap();
+        assert!(pick_extension_dir(std::slice::from_ref(&empty)).is_none(), "空目录不算扩展");
+
+        let real = tmp.to_path_buf().join("real").join("extension");
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::write(real.join("manifest.json"), "{}").unwrap();
+        let got = pick_extension_dir(&[empty, real.clone()]).expect("应当挑到有 manifest 的那个");
+        assert_eq!(got, real);
+        // 反向验证：把那个 manifest.json 删掉 ⇒ 本用例红（挑到 None）。
+    }
+
+    #[test]
+    fn the_staged_extension_is_a_loadable_one_when_present() {
+        // 构建期暂存（`scripts/stage_extension.py`）坏了的话，症状是"装完目录里那份扩展
+        // 浏览器不认"。没暂存过就跳过 —— 别让 `cargo test` 依赖一次构建。
+        let staged = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("extension");
+        if !staged.join("manifest.json").is_file() {
+            return;
+        }
+        let body = std::fs::read_to_string(staged.join("manifest.json")).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(&body).expect("暂存来的 manifest.json 不是合法 JSON");
+        assert_eq!(v["manifest_version"], 3, "暂存来的扩展不是 MV3");
+        assert!(v["icons"].is_object() && v["action"]["default_icon"].is_object(),
+                "暂存来的扩展没声明图标（工具栏会是一格空白）");
+        for size in ["16", "32", "48", "128"] {
+            assert!(staged.join("icons").join(format!("{size}.png")).is_file(),
+                    "暂存的扩展缺 icons/{size}.png");
+        }
+        assert!(!staged.join("test").exists(), "test/ 不该进产物（白名单里没有它）");
     }
 
     #[test]

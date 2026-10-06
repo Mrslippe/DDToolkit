@@ -191,11 +191,24 @@ Select-String frontend/src-tauri/target/release/nsis/x64/installer.nsi `
 > `release.py verify` 现在自动跑这两条，并把行数打进报告。
 
 > ⚠️ **资源打包契约（勿改回）**：`tauri.conf.json` 的 `bundle.resources` 必须用
-> **数组形式** `["binaries/backend/**/*"]`。改成 map + glob 形式
+> **数组形式** `["binaries/backend/**/*", "extension/**/*"]`。改成 map + glob 形式
 > （`{"binaries/backend/**/*": "binaries/backend/"}`）会让 tauri-utils 按
 > `dest.join(file_name())` 处理——**只保留文件名**，把后端 onedir 的 `_internal/`
 > 摊平，装完 exe 起不来、启动幕永久卡住（便携 zip 直接打包构建产物，不受影响，
 > 所以只有直装版会坏）。
+
+**浏览器扩展随包（2026-10-06）**：用户口径是「构建的时候直接打包进包体中，这样直装版也直接在
+文件目录中就有拓展」⇒ 两条分发路都必须带上它：
+
+| 环节 | 谁做的 | 判据（`release.py verify` 会量） |
+|---|---|---|
+| 暂存 | `npm run tauri:build` 先跑 `stage:extension`（`scripts/stage_extension.py`：把仓库根 `extension/` 的白名单条目拷进 `frontend/src-tauri/extension/`，**已 gitignore**） | `extension/test/logic.test.mjs` 的结构判据盯着这条接线 |
+| 直装版 | `bundle.resources` 里的 `extension/**/*` | NSIS 脚本里 `oname=extension\…` 的行数 > 0（`classify_nsis_extension`，真文件上验过） |
+| 便携版 | `collect_release.py::_portable` 把 `src-tauri/extension/` 拷进 `DDtoolkit\extension\` | 便携 zip 里必须有 `DDtoolkit/extension/manifest.json` |
+| 指路 | 壳的 `extension_dir` / `open_extension_dir` 命令 → 设置 → 登录 → 浏览器扩展 那一栏显示路径 + 「打开目录」 | `cargo test`（候选顺序 / 必须有 `manifest.json`）+ vitest + 探针 `--first-run` |
+
+> ⚠️ 少了任何一处**都不会报错**，症状是"新用户只能去 clone 仓库"——所以四处都是机器判据。
+> 扩展的 `test/` 不进产物（白名单只认 `manifest.json` / `src` / `icons` / `README.md`）。
 
 > ⚠️ 构建环境注意：`npm run release` 需在**完整权限**下执行（PyInstaller/esbuild/cargo/makensis 子进程在受限沙箱会 EPERM）。
 

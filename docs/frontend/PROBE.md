@@ -52,6 +52,9 @@ python scripts/ui_probe.py --notice-lab               # 通知样式调测页（
 > （同意后立刻能看到，不必刷新）—— 两件事都只有探针看得见。**其余所有模式**反过来要在副本库里
 > 先种一行"已同意当版"（`_seed_legal_accepted`，版本号从 `app/core/config.py` 读、不许写死）：
 > 闸门是"盖住整个应用"，不种的话每一档都会卡在协议页上，看着像产品全坏了。
+> ⚠️ **2026-10-06 起它还要验扩展那一栏里的「扩展目录」行**（`data-ext-dir=`，E5）：直装/便携版把
+> `extension/` 打进产物，登录浮窗负责把**路径**摆出来（新用户不必去 clone 仓库）。探针跑在浏览器
+> 里、拿不到壳的路径 ⇒ 只要求那一行**在**（`data-ext-dir="unknown"` 是合法形态，见 UI-MAP A1.0-b）。
 ⚠️ **虚拟时间的三条硬事实**（探针所有动画/几何断言都建在它上面，devlog/147、150、151）：① **CSS 过渡不推进** —— `getAnimations()` 里过渡是 `running` 但 `currentTime` 恒为 0，`getComputedStyle().transform` 永远停在**过渡起点**，所以动画类断言只能判「我们**提交了什么**」（读 `element.style.transform` 内联值）与「过渡**有没有登记**」（读 `transition-duration`）；想看动画真怎么走用调测页 0.25× 慢放，别指望 computed。② **rAF 几乎不被服务**（实测 400ms 里只被叫 **0–1 次**）⇒ 自动滚动的循环是 **rAF + 定时器双驱动**（真机靠 rAF 跟帧率、探针靠定时器可观测，两者共用一个 8ms 闸门防两倍速）。③ **图片加载永远完不成** ⇒ 图片类断言读**为可测性挂上的属性**（**别当冗余删掉**）：`.vtuber-item[data-src]` / `.hero[data-avatar-src]` 是**解析出来的源 URL**（口径），`ProxyImage` 输出节点上的 `data-render-src` 是**首帧决定用的 src**（接线，回落到占位也还在）。
 > ⚠️ **R46（devlog/249）补充：别只比"解析出来的 URL"**。radix `AvatarImage` 只在**加载成功**后才挂 `<img>`（虚拟时间下永远不挂）⇒ 左栏头像长期只能读 `data-src`；而 `data-src` 相同**不代表渲染相同** —— 微博图床那张，右栏 hero 走 `/img-proxy` 拿得到、左栏裸 `<img>` 直连被 403 打成灰底首字，出事时**两边的 `data-src` 一模一样**。R46 把左栏也换成 `ProxyImage`（img 立即挂载、决策挂 `data-render-src`）之后，`--profile-sync` 才能比出这条差异。**推论：一条判据只比"数据"不比"渲染"时，先问一句"这两个渲染点是不是同一段代码"**。
 ⇒ 推论：**量"有没有生效"就掐掉动画/过渡，量"动画对不对"才让它开着**。量 chevron 之前**必须先注入 `transition:none !important`**（且读过渡时长要在注入之前），否则虚拟时间会把 `transition: transform .2s` 冻在中途、读到的是**过渡进度**而不是"规则有没有生效" —— 2026-09-15 因此得到过一条**时绿时红**的判据（同一天两次跑，一次 `matrix(-1,…)`、一次 `matrix(1,…)`）。
