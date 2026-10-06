@@ -1820,28 +1820,19 @@ pub fn run() {
             // 自己的背景仍是白色，CSS 圆角的抗锯齿像素会跟它混出 1~2px 白边。R34（devlog/136）
             // 让 Windows 自己画圆角之后，白边只剩 Win10 那条 CSS 兜底路径会走到，**不再是这里的主要理由**。
             //
-            // B2 把窗口改成**不透明**（`transparent: false`）+ 近白底色 `SHELL_BG`：
-            // 分层透明会让 WebView2 把整页放进 alpha 合成路径，视频层拿不到硬件 overlay，
-            // 全屏 30fps × 240Hz 就丢帧（实测 7~10%，见 devlog/382/383）。底色与
-            // `--c-bg-page` 同值，所以揭幕前那一帧仍是近白，观感与 `layout.css` 的兜底一致。
+            // ⚠️⚠️ **B2 改这一处所依据的假设已经被证伪**（2026-10-07，`devlog/402`/`404`）：
+            // 当时的理由是"分层透明 ⇒ 整页走 alpha 合成 ⇒ 视频层拿不到硬件 overlay ⇒ 全屏丢帧"，
+            // 但拆变量测下来「窗口底色透明/不透明」**对丢帧毫无影响**（`surface` 格：铺满 + 透明底
+            // 照样 10.2%）；元凶是**硬件视频解码**，已由 `additionalBrowserArgs` 那一刀解决。
+            // ⇒ 这一处（连同 `transparent: false` 与另外三处底色）**只是还没还原**，
+            //    不是"因为它有效所以留着"。还原顺序见 `devlog/406` 的 #7（要先跑一轮真机 A/B）。
+            // 底色与 `--c-bg-page` 同值，所以揭幕前那一帧仍是近白，观感与 `layout.css` 的兜底一致。
             // 这一步在窗口 show 之前跑（`visible: false`，等前端 present_window），看不到闪烁。
             if let Some(w) = app.get_webview_window("main") {
-                // ⚠️ **B2 逃生开关**（2026-10-06，`devlog/383`）：让 WebView 自己**不出底色**。
-                //    它**不能**把窗口变回分层透明（`transparent` 是构建期配置），只能用来判断
-                //    "某个观感差异是不是这层底色造成的"。默认**不透明**。
-                let alpha = if std::env::var("DDTOOLKIT_TRANSPARENT_WINDOW").is_ok() {
-                    0
-                } else {
-                    255
-                };
-                if alpha == 0 {
-                    println!("[ddtoolkit] 逃生：窗口底色切回透明（DDTOOLKIT_TRANSPARENT_WINDOW=1）");
-                } else {
-                    // 启动期一行，用来在日志里**辨认壳的构建**（B2 的窗口级改动在 JS 侧看不见）
-                    println!("[ddtoolkit] 窗口底色=近白不透明（B2，devlog/383）");
-                }
+                // 启动期一行，用来在日志里**辨认壳的构建**（B2 的窗口级改动在 JS 侧看不见）
+                println!("[ddtoolkit] 窗口底色=近白不透明（B2，devlog/383）");
                 let _ = w.set_background_color(Some(tauri::window::Color(
-                    SHELL_BG.0, SHELL_BG.1, SHELL_BG.2, alpha,
+                    SHELL_BG.0, SHELL_BG.1, SHELL_BG.2, 255,
                 )));
                 // ⚠️ 系统圆角**不在这里设**：窗口还是 visible:false，实测设了会被
                 // 随后的显示流程冲掉（角变回方的）。改在 `present_window`（显示之后）设。
