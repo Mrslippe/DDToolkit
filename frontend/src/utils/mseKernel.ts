@@ -112,7 +112,7 @@ const SEEK_CUSHION_MAX_MS = 2500
 export const SEEK_GIVEUP_MS = 10_000
 /** 泵的空转节拍：`updateend` 之外再踢一脚，免得事件丢了就永远停住。
  *
- * ⚠️ **B2 实验（2026-10-07，`devlog/390`）**：400 → **2000**。
+ * ⚠️ B2 实验 B/C（泵节拍 2000、攒批 3 段）**已回退到基线** —— 两次都无收益（`devlog/393`）。
  * 真机上抓到的形状是"**取数据/灌数据时**每秒稳定丢 ~4 帧、播放已缓冲区域时一帧不丢"
  * （缓冲全程 17~29 秒 ⇒ 不是数据不够，是"灌"这件事本身在打扰呈现）。
  * 这个节拍决定**多久取一段、append 一次** —— 调慢 = 更大块、更少次。
@@ -121,34 +121,8 @@ export const SEEK_GIVEUP_MS = 10_000
  *   · 若 `饿住`/`卡帧` 冒出来（段比这个节拍短就会喂不饱）⇒ 说明这一档调过头了，
  *     那时要的是"快取 + 攒着一次灌"，不是"慢取"。
  */
-const TICK_MS = 2000
+const TICK_MS = 400
 
-/**
- * 一次取**几段**、并只 `appendBuffer` 一次（B2 实验 C，2026-10-07，`devlog/392`）。
- *
- * 依据：`devlog/390` 把病灶夹到"取数据/灌数据时每秒稳定丢 ~4 帧、播已缓冲区域一帧不丢"，
- * 而 `devlog/391` 把泵的节拍从 400ms 调到 2000ms（取+灌的次数降到 1/5）后，
- * 丢帧 **13% → 4.8%**、用户体感"卡顿间隔变长" ⇒ **每做一次"取+灌"就打搅一次呈现**。
- *
- * 所以这里顺着同一个机制再降一个量级：段的字节范围本来就是连续的，
- * 一次请求取 K 段、拼成的仍是合法的 fMP4 串 ⇒ 一次 append 顶 K 次。
- * 读结果：
- *   · 丢帧继续明显下降（趋近 0）⇒ 机制坐实，这就是**修法**；
- *   · 停在 4.8% 附近不动 ⇒ 打扰不在"取/灌"的次数上，回到本地代理的投递形状那条。
- * ⚠️ 副作用（可接受，先看机制）：起播/seek 后的填充粒度变粗，段长 × K 才会推进一次缓冲。
- */
-const BATCH_SEGMENTS = 3
-
-/** 把 `idx` 起连续 `BATCH_SEGMENTS` 段的字节范围并成**一个**区间（越界就取到表尾）。 */
-export function batchRange(segs: SegmentRange[], idx: number): SegmentRange {
-  const first = segs[idx]
-  const last = segs[Math.min(idx + BATCH_SEGMENTS - 1, segs.length - 1)]
-  return last && last !== first ? { ...first, end: last.end } : first
-}
-/** 节拍可被测试改成小值（单测用假时钟/微任务推进，2000ms 会把每条判据拖慢几十秒）；
- *  ⚠️ **只有测试该动它** —— 生产里这个值就是 `TICK_MS`。 */
-let tickMs = TICK_MS
-export function setTickMsForTest(ms: number): void { tickMs = ms }
 const MAX_RETRY = 3
 const FETCH_TIMEOUT_MS = 20_000
 /** 段取数慢到这个程度就记一行（撑不住实时码率会表现为"低帧率"） */
@@ -495,7 +469,7 @@ export class MseKernel {
     const mkUrl = this.deps.createObjectURL ?? ((m: MediaSource) => URL.createObjectURL(m))
     this.objectUrl = mkUrl(this.ms)
     this.el.src = this.objectUrl
-    this.tick = window.setInterval(() => this.pump(), tickMs)
+    this.tick = window.setInterval(() => this.pump(), TICK_MS)
     // 有的宿主 `sourceopen` 在 addEventListener 之前就发过了 ⇒ 直接试一次
     if (this.ms.readyState === 'open') this.open()
     return true
@@ -987,7 +961,7 @@ export class MseKernel {
       if (tr.lastIdx === idx) tr.repeat += 1
       else { tr.lastIdx = idx; tr.repeat = 0 }
     }
-    const seg = idx < 0 ? tr.table.init : batchRange(tr.table.segments, idx)
+    const seg = idx < 0 ? tr.table.init : tr.table.segments[idx]
     const urls = (tr.table.urls ?? []).filter(Boolean)
     if (!urls.length) urls.push(tr.table.url)
     const url = urls[Math.min(tr.mirror, urls.length - 1)]

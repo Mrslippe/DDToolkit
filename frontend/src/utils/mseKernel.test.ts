@@ -14,12 +14,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   KEEP_BEHIND, MAX_BUFFER, MseKernel, WANT_AHEAD, kernelSupported, mimeSupported,
-  nextSegmentAfter, segmentIndexAt, setTickMsForTest, batchRange, type SegmentRange, type StreamTable,
+  nextSegmentAfter, segmentIndexAt, type SegmentRange, type StreamTable,
 } from './mseKernel'
-
-/* B2 实验（devlog/390）把生产节拍调成了 2000ms；单测按假时钟/微任务推进，
-   2000ms 会把每条判据拖慢几十秒 ⇒ 这里压回原来的 400ms。 */
-setTickMsForTest(400)
 
 const SEG_DUR = 5
 const SEG_COUNT = 8
@@ -1030,21 +1026,5 @@ describe('mseKernel · 收尾', () => {
     const kernel = new MseKernel(el as unknown as HTMLVideoElement, { onFatal })
     expect(kernel.load(STREAMS)).toBe(false)
     expect(onFatal).toHaveBeenCalledTimes(1)
-  })
-})
-
-/* B2 实验 C（devlog/392）：一次取 K 段、只 append 一次 —— 判据钉住"并区间"这件事本身。 */
-describe('mseKernel · 攒批取段（devlog/392）', () => {
-  const segs = Array.from({ length: 5 }, (_, i) => ({
-    i, start: 1000 + i * 100, end: 1000 + (i + 1) * 100 - 1, dur_s: 1, sap: true,
-  }))
-
-  it('从第 i 段起并成**一个**连续字节区间（取到第 i+K-1 段）', () => {
-    expect(batchRange(segs, 0)).toMatchObject({ start: 1000, end: 1299 })
-    expect(batchRange(segs, 1)).toMatchObject({ start: 1100, end: 1399 })
-  })
-
-  it('**表尾要夹住**（不许越界造出一个不存在的区间）', () => {
-    expect(batchRange(segs, 4)).toMatchObject({ start: 1400, end: 1499 })
   })
 })
