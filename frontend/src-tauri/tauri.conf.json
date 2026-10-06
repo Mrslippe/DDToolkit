@@ -20,7 +20,7 @@
         "minHeight": 600,
         "center": true,
         "decorations": false,
-        "transparent": false,
+        "transparent": true,
         "visible": false,
         "additionalBrowserArgs": "--disable-accelerated-video-decode --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required"
       }

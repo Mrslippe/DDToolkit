@@ -656,13 +656,6 @@ fn open_extension_dir(window: tauri::Window) -> Result<String, String> {
     Ok(dir.to_string_lossy().to_string())
 }
 
-/// 壳的不透明底色（B2，2026-10-06，`devlog/383`）。
-///
-/// 与 `frontend/src/styles/tokens.css` 的 `--c-bg-page` 同值（近白 `#fffbfb`）——
-/// 窗口从"分层透明"改成不透明之后，这就是窗口自己的底，也是 `main.tsx` 挂
-/// `html.shell-settled` 之前那一帧的兜底色。**主题改底色时这里要跟着改。**
-const SHELL_BG: tauri::utils::config::Color = tauri::utils::config::Color(255, 251, 251, 255);
-
 /// **启动 WebView2 时给 Chromium 的额外参数**（B2 定案那一刀，2026-10-07，`devlog/404`）。
 ///
 /// `--disable-accelerated-video-decode` = **关掉硬件视频解码**。B2（全屏播放每秒稳定丢 ~4 帧）
@@ -997,11 +990,15 @@ fn rebuild_main_window(app: &tauri::AppHandle) -> tauri::Result<tauri::WebviewWi
     .min_inner_size(960.0, 600.0)
     .center()
     .decorations(false)
-    .transparent(false)
-    // 与 tauri.conf.json 那份**等价**（B2，2026-10-06，`devlog/383`）：窗口不透明 + 壳底色
-    // `SHELL_BG`。⚠️ 两份**必须同步改** —— 只改 conf 的话，深休眠唤醒重建的窗口会退回
-    // 分层透明，B2 又回来（而且只在"睡过一觉之后"复现，最难查）。
-    .background_color(tauri::window::Color(SHELL_BG.0, SHELL_BG.1, SHELL_BG.2, SHELL_BG.3))
+    .transparent(true)
+    // 与 tauri.conf.json 那份**必须一致**（R33，`devlog/135`）：窗口分层透明 +
+    // WebView 底色**全透明** `Color(0,0,0,0)` —— 四角白边的第一层就是它。
+    // ⚠️ 只改 conf 的话，深休眠唤醒重建的窗口会**丢掉透明**（而这个形状只在"睡过一觉之后"
+    //    才复现，最难查）。
+    // ⚠️ B2 期间这里一度是 `.transparent(false)` + 近白 `SHELL_BG`（`devlog/383`，理由是
+    //    "透明 ⇒ 拿不到硬件 overlay ⇒ 全屏丢帧"）——**那条假设已被证伪**（`devlog/402`/`404`：
+    //    元凶是硬件视频解码），故随定案一并还原（`devlog/411`）。
+    .background_color(tauri::window::Color(0, 0, 0, 0))
     // ⚠️ 与 `tauri.conf.json` 的 `additionalBrowserArgs` **必须一致**（B2，`devlog/404`）：
     //    初始窗口走配置，唤醒重建走这里 —— 只改一处 ⇒ B2 会在"睡过一觉之后"复发。
     //    `browser_args_match_tauri_conf` 那条判据盯着这件事。
@@ -1763,25 +1760,21 @@ pub fn run() {
         .setup(|app| {
             perf("setup 开始");
 
-            // 窗口底色（2026-09-17，devlog/135 → B2 改写，2026-10-06，devlog/383）：
-            // 曾经这里是 `Color(0,0,0,0)` —— `transparent(true)` 只让**窗口**透明，WebView
+            // 窗口底色（2026-09-17，`devlog/135`；B2 期间短暂改过，2026-10-07 还原，`devlog/411`）：
+            // `Color(0,0,0,0)` = 全透明 —— `transparent(true)` 只让**窗口**透明，WebView
             // 自己的背景仍是白色，CSS 圆角的抗锯齿像素会跟它混出 1~2px 白边。R34（devlog/136）
-            // 让 Windows 自己画圆角之后，白边只剩 Win10 那条 CSS 兜底路径会走到，**不再是这里的主要理由**。
+            // 让 Windows 自己画圆角之后，白边只剩 Win10 那条 CSS 兜底路径会走到。
             //
-            // ⚠️⚠️ **B2 改这一处所依据的假设已经被证伪**（2026-10-07，`devlog/402`/`404`）：
-            // 当时的理由是"分层透明 ⇒ 整页走 alpha 合成 ⇒ 视频层拿不到硬件 overlay ⇒ 全屏丢帧"，
-            // 但拆变量测下来「窗口底色透明/不透明」**对丢帧毫无影响**（`surface` 格：铺满 + 透明底
-            // 照样 10.2%）；元凶是**硬件视频解码**，已由 `additionalBrowserArgs` 那一刀解决。
-            // ⇒ 这一处（连同 `transparent: false` 与另外三处底色）**只是还没还原**，
-            //    不是"因为它有效所以留着"。还原顺序见 `devlog/406` 的 #7（要先跑一轮真机 A/B）。
-            // 底色与 `--c-bg-page` 同值，所以揭幕前那一帧仍是近白，观感与 `layout.css` 的兜底一致。
+            // ⚠️ B2 期间这里一度是近白不透明 `SHELL_BG`（`devlog/383`），理由是"分层透明 ⇒
+            // 整页走 alpha 合成 ⇒ 视频层拿不到硬件 overlay ⇒ 全屏丢帧"。**那条假设已被证伪**：
+            // 拆变量测下来「窗口底色透明/不透明」**对丢帧毫无影响**（`surface` 格：铺满 + 透明底
+            // 照样 10.2%），元凶是**硬件视频解码**（`devlog/402`/`404`，已由 `additionalBrowserArgs`
+            // 解决）⇒ 这一处连同 `transparent` 一起还原成 B2 之前的原状（`devlog/406` 的 #7）。
             // 这一步在窗口 show 之前跑（`visible: false`，等前端 present_window），看不到闪烁。
             if let Some(w) = app.get_webview_window("main") {
                 // 启动期一行，用来在日志里**辨认壳的构建**（B2 的窗口级改动在 JS 侧看不见）
-                println!("[ddtoolkit] 窗口底色=近白不透明（B2，devlog/383）");
-                let _ = w.set_background_color(Some(tauri::window::Color(
-                    SHELL_BG.0, SHELL_BG.1, SHELL_BG.2, 255,
-                )));
+                println!("[ddtoolkit] 窗口底色=分层透明（transparent: true，devlog/411 还原）");
+                let _ = w.set_background_color(Some(tauri::window::Color(0, 0, 0, 0)));
                 // ⚠️ 系统圆角**不在这里设**：窗口还是 visible:false，实测设了会被
                 // 随后的显示流程冲掉（角变回方的）。改在 `present_window`（显示之后）设。
             }
@@ -2095,8 +2088,9 @@ mod tests {
     /// ⚠️ 抠的是**中间那一段**（`set_background_color` 之后、`new_api_token` 之前），
     /// 不是全文 `contains` —— 全文搜会被**本测试自己**里那两个字面量满足（自指假绿）。
     /// ⚠️ 锚点**只取函数名、不带参数**（2026-10-06，`devlog/382`）：那一行的参数会随实验开关
-    /// 变化（`DDTOOLKIT_OPAQUE_WINDOW` → `DDTOOLKIT_TRANSPARENT_WINDOW`，`Color(0,0,0,0)`
-    /// → `SHELL_BG`），写死整行就会被一次无关改动打断 —— 判据的锚点要选"语义稳定"的那一段。
+    /// 变化（B2 期间是 `DDTOOLKIT_OPAQUE_WINDOW` → `DDTOOLKIT_TRANSPARENT_WINDOW`，`Color(0,0,0,0)`
+    /// → 近白不透明 —— 那两个开关与那个常量都已随 B2 定案还原，见 `devlog/406`/`411`），
+    /// 写死整行就会被一次无关改动打断 —— 判据的锚点要选"语义稳定"的那一段。
     /// 反向验证：把 setup 里那行改成 `free_port()` ⇒ 本条红（实测过）。
     #[test]
     fn setup_actually_uses_the_candidate_ports() {

@@ -327,7 +327,7 @@ B2 到第十六轮已经稳定复现「**进全屏 → 2~3 秒后每秒丢 4 帧
 |---|---|---|
 | ① 全屏 API / 全屏窗口 | 无 | `requestFullscreen()` |
 | ② 显示尺寸 | `678x381`（`.vp-video{max-height:60vh}`） | `1920x1080`（1:1） |
-| ③ WebView 底色 | `transparent` | `不透明`（曾是 `set_surface_opaque`，**已随定案还原**） |
+| ③ WebView 底色 | `transparent` | `不透明`（曾是 `set_surface_opaque`，**已随定案还原**；窗口级的 `transparent` 也已还原，`devlog/410`/`411`） |
 
 ⇒ 当时的做法是**做一个只动一个变量的临时诊断开关**（`size` / `surface` / `pseudo` 三档，
 走 `VITE_VP_FS_MODE` 或 `localStorage`，默认 `off`）。**它已按计划删掉**（`devlog/406`/`407`）——
