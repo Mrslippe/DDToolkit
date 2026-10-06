@@ -229,6 +229,33 @@ describe('播放器键盘：指针移入接管、移出交回', () => {
     root = createRoot(host)                                  // 交回给 afterEach 的 unmount
   })
 
+  it('进/出全屏**不重建 `<video>`**（重建 = 硬件解码器要重新初始化）', () => {
+    // 有人把"全屏丢帧"归到 React 生命周期上（全屏时组件重挂载 ⇒ 解码器重建 ⇒ 50~100ms 空窗，
+    // 30fps 只有 33ms 预算 ⇒ 必丢帧）。我们的口径是：全屏是**容器**全屏（`requestFullscreen()`
+    // 打在 `.vp` 上），`<video>` 没有 `key`、不随全屏换树 ⇒ DOM 节点必须是**同一个对象**。
+    // 判据用节点身份 + `load()` 没被调过：重建过就会换一个元素，这一条会红。
+    const loadSpy = vi.spyOn(HTMLMediaElement.prototype, 'load')
+    render()
+    const before = el()
+    expect(before, '播放器里必须有 video').toBeTruthy()
+    expect(vp().contains(before)).toBe(true)
+
+    act(() => {
+      Object.defineProperty(document, 'fullscreenElement', { configurable: true, value: vp() })
+      document.dispatchEvent(new Event('fullscreenchange'))
+    })
+    expect(el(), '进全屏不许换元素').toBe(before)
+    expect(loadSpy, '也不许重新 load（那等于重建解码器）').not.toHaveBeenCalled()
+
+    act(() => {
+      Object.defineProperty(document, 'fullscreenElement', { configurable: true, value: null })
+      document.dispatchEvent(new Event('fullscreenchange'))
+    })
+    expect(el(), '退出全屏同样不许换元素').toBe(before)
+    expect(loadSpy).not.toHaveBeenCalled()
+    loadSpy.mockRestore()
+  })
+
   it('正在输入框里打字 ⇒ 不抢键（哪怕指针还在播放器上）', () => {
     const v = render()
     hover(true)

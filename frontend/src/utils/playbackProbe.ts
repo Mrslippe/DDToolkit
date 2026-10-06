@@ -44,6 +44,21 @@ interface Sample {
   readyState: number
   /** 这一秒里元素是不是处在 `seeking` */
   seeking: boolean
+  /** 这一秒里**新丢**了多少帧（`droppedVideoFrames` 增量，`devlog/384`）。
+   *  单看窗口总数的"丢帧 34/469"看不出**分布在哪儿**：均匀漏 2 帧/秒与某 1 秒崩 30 帧
+   *  指向完全相反的修法（前者 = 呈现路径吞吐不够；后者 = 某一刻解码器/码率被重建）。 */
+  dropped?: number
+  /** 这一秒里 rVFC 相邻回调的间隔（ms）。抖动**不在采样时判** —— 判据要拿整窗的中位数当基准，
+   *  所以这里只存原料，`summarize` 时用 `judderStats` 统一判（纯函数，可单测）。 */
+  intervals?: number[]
+  /** 这一秒里**超过 50ms 的主线程任务**个数（`PerformanceObserver('longtask')`）——
+   *  用来排掉"是我们自己的 JS 把主线程堵住了"这条线（量不到 = 省略）。 */
+  longTasks?: number
+  /** 这一秒有没有**正在跑的 CSS 动画/过渡**（`document.getAnimations().length`）；
+   *  量不到 = null。全屏时页面里还有东西在动 ⇒ 合成器永远闲不下来（B2 的一条假设）。 */
+  anims?: number | null
+  /** 这一秒是不是处在**元素全屏**（`document.fullscreenElement`）。 */
+  fs?: boolean
 }
 
 export interface PlaybackWindow {
@@ -57,8 +72,15 @@ export interface PlaybackWindow {
    * 为什么值得单记一格：用户报的"播放一下一下地慢"只在**全屏**复现（非全屏/小窗都顺、
    * B 站本身也顺），而全屏与窗口态的差别全在**合成**那一侧 —— 日志里没有这一格时，
    * 同一段视频的两组数（全屏 / 非全屏）根本对不上账。
+   *
+   * ⚠️ `devlog/384` 补：这一格第一版只在**开局**与**报告**两拍取 —— 用户"先窗口播 20 秒、
+   * 再点全屏 5 秒"时两拍都是"不在全屏"，整段全屏时间被记成 `全屏=0`（`表面=` 上一批
+   * 就是这么骗过我的）。现在靠 `fullscreenchange` 监听把它变成**整窗粘性**的，
+   * 并且按秒采样出 `全屏=N/M秒`（`Sample.fs`）—— 既能说"进过"，也能说"进了多久"。
    */
   fullscreen?: boolean
+  /** 见上：整窗只要进过全屏就置位（`fullscreenchange` 监听负责）。 */
+  everFullscreen?: boolean
   startedAt: number
   baseFrames: number
   baseDropped: number
@@ -69,13 +91,98 @@ export interface PlaybackWindow {
   readyMs: number | null
   samples: Sample[]
   /** **呈现**侧（`requestVideoFrameCallback`）：见 `summarize` 的"判定" */
-  pres: { supported: boolean; maxGapMs: number; gaps: number[] }
+  pres: { supported: boolean; maxGapMs: number; gaps: number[]; repeats: number }
+  /** 整窗最长的一次主线程长任务（ms）；量不到 = null */
+  longTaskMaxMs?: number | null
 }
 
 const WINDOW_MS = 30_000
 const SAMPLE_MS = 1_000
 /** 低于后段的这个比例就认为"开头确实差"，多报一行每秒曲线 */
 const DIP_RATIO = 0.7
+/**
+ * 丢帧**也要**触发每秒曲线（2026-10-06，`devlog/384`）。
+ *
+ * 为什么：B2 的日志里唯一异常就是丢帧（5~10%），而曲线只在"有低谷/卡顿"时才附一行 ——
+ * 于是**丢帧那一轮反而一行曲线都没有**，"帧是均匀漏掉的、还是某一刻崩的"根本看不出来。
+ * 这两个假设指向完全相反的修法（前者 = 呈现路径吞吐不够；后者 = 某一刻解码器/码率被重建）。
+ */
+const DROP_MIN_FRAMES = 5
+/** 判定里"丢帧算不算问题"的比例（3%）。 */
+const DROP_VERDICT_RATIO = 0.03
+/** 抖动/长任务触发曲线的次数门槛。 */
+const BAD_SECONDS_TRIGGER = 3
+
+/**
+ * 抖动（2026-10-06，`devlog/384`）——**用户说的"一下一下地慢"就是它**。
+ *
+ * 口径：以 rVFC 相邻回调间隔的**中位数**为基准（30fps ≈ 33.3ms、60fps ≈ 16.7ms，
+ * 不写死帧率），超过 `max(中位数 × 1.35, 中位数 + 6ms)` 就算"这一拍被拖住"。
+ *
+ * ⚠️ 用中位数而不是最小值：合成器重复呈现同一帧时会出现 ~8ms 的小间隔，拿最小值当基准
+ * 会把整窗都判成抖动。⚠️ 与 `>100ms` 的 `gaps`（停顿）是**两件事**：停顿 = 画面不动了，
+ * 抖动 = 画面在动但节拍被拖住 —— 真机上"停顿次数=0 而用户说卡"就落在后者，
+ * 那正是 B2 里探针**量不到症状**的原因。
+ */
+export function judderStats(intervals: number[]): { count: number; maxMs: number } {
+  if (intervals.length < 8) return { count: 0, maxMs: 0 }   // 样本太少不判（开局那几帧间隔不准）
+  const sorted = [...intervals].sort((a, b) => a - b)
+  const median = sorted[sorted.length >> 1]
+  const limit = Math.max(median * 1.35, median + 6)
+  const bad = intervals.filter((g) => g > limit)
+  return { count: bad.length, maxMs: bad.length ? Math.max(...bad) : 0 }
+}
+
+/** 整窗的 rVFC 间隔（按秒分片存的，这里拼回来）。 */
+function allIntervals(w: PlaybackWindow): number[] {
+  return w.samples.flatMap((s) => s.intervals ?? [])
+}
+
+/** 整窗抖动（判据口径见 `judderStats`）。 */
+export function windowJudder(w: PlaybackWindow): { count: number; maxMs: number } {
+  return judderStats(allIntervals(w))
+}
+
+/** 整窗主线程长任务（个数 / 最长 ms）；量不到 = null。 */
+export function longTasks(w: PlaybackWindow): { count: number; maxMs: number } | null {
+  if (!w.samples.some((s) => s.longTasks != null)) return null
+  const count = w.samples.reduce((n, s) => n + (s.longTasks ?? 0), 0)
+  return { count, maxMs: Math.round(w.longTaskMaxMs ?? 0) }
+}
+
+/** 整窗**有东西在动**的秒数（CSS 动画/过渡在跑）；量不到 = null。 */
+export function animatingSeconds(w: PlaybackWindow): number | null {
+  if (!w.samples.some((s) => s.anims != null)) return null
+  return w.samples.filter((s) => (s.anims ?? 0) > 0).length
+}
+
+/**
+ * 环境能不能**硬件解码**这一档（`MediaCapabilities.decodingInfo().powerEfficient`）。
+ *
+ * ⚠️ 这是**能力**查询，不是"刚才真的走了硬解" —— 后者页面里查不到（要 CDP 的 Media 域）。
+ * 为什么值得记：B2 排查时有人把矛头指向"WebView2 的解码器（VDAVideoDecoder）比 Chrome 的
+ * D3D11VideoDecoder 差"，而 Edge 与 WebView2 是**同一个内核**、同一套媒体栈 ——
+ * 若这里答"无"，才轮到解码器这条线；答"有"就把这条线也关掉。
+ */
+let hwDecode: '有' | '无' | '未知' = '未知'
+
+async function probeHwDecode(el: HTMLVideoElement): Promise<void> {
+  const mc = (navigator as Navigator & { mediaCapabilities?: MediaCapabilities }).mediaCapabilities
+  if (!mc?.decodingInfo) return
+  try {
+    const info = await mc.decodingInfo({
+      type: 'media-source',
+      video: {
+        contentType: 'video/mp4; codecs="avc1.640028"',
+        width: el.videoWidth || 1920,
+        height: el.videoHeight || 1080,
+        bitrate: 4_000_000,
+        framerate: 30,
+      },
+    })
+    hwDecode = info.powerEfficient ? '有' : '无'
+  } catch { /* 量不到就保持"未知"，不编 */ }
+}
 
 /**
  * 帧计数**三段口径**（`devlog/310`）—— 卡在哪一段直接决定"该往哪儿修"：
@@ -111,9 +218,10 @@ export function openWindow(el: HTMLVideoElement, reason: string, targetS?: numbe
            baseDropped: dropped, baseDecoded: decoded, waiting: 0, minAhead: null,
            readyMs: null, samples: [],
            /* 进全屏这件事可能发生在窗口**开始之后**（点全屏键那一下），所以这里只记"开局"，
-              报告那一拍再取一次（`summarize` 里 `w.fullscreen || 现在全屏`）—— 两个都要看。 */
-           fullscreen: isFullscreen(),
-           pres: { supported: false, maxGapMs: 0, gaps: [] } }
+              报告那一拍再取一次（`summarize` 里取并集）—— 加上按秒的 `Sample.fs`，
+              "进过没有"与"进了多久"就都有了（`devlog/384`）。 */
+           fullscreen: isFullscreen(), everFullscreen: isFullscreen(),
+           pres: { supported: false, maxGapMs: 0, gaps: [], repeats: 0 } }
 }
 
 /** 现在是不是全屏（`document` 在非浏览器环境里没有 `fullscreenElement`）。 */
@@ -233,6 +341,16 @@ export function verdict(w: PlaybackWindow, decodedFps: number): string {
   if (!w.pres.supported) return '正常(呈现量不到)'
   const presBad = (pres != null && decodedFps != null && decodedFps >= 5 && pres < decodedFps * 0.7)
   if (presBad || w.pres.maxGapMs >= 500) return '呈现受限(合成节拍)'
+  /* 丢帧/抖动（devlog/384）：三段都正常、也没停住，但**帧在漏 / 节拍被拖住** ——
+     这正是 B2 的形状（解码=提交=30fps、停顿 0 次，而用户就是看着卡）。
+     不给它一句判定的话，日志读起来像"一切正常"，与用户的体验正好相反。 */
+  const gained = w.samples.reduce((n, s) => n + s.fps, 0)
+  const dropped = w.samples.reduce((n, s) => n + (s.dropped ?? 0), 0)
+  const ratio = gained > 0 ? dropped / gained : 0
+  const jud = windowJudder(w).count
+  if (ratio >= DROP_VERDICT_RATIO && jud >= BAD_SECONDS_TRIGGER) return '呈现受限(丢帧+抖动)'
+  if (ratio >= DROP_VERDICT_RATIO) return `呈现受限(丢帧${Math.round(ratio * 100)}%)`
+  if (jud >= BAD_SECONDS_TRIGGER) return `呈现受限(抖动${jud}次)`
   return '正常'
 }
 
@@ -248,19 +366,29 @@ export function summarize(w: PlaybackWindow, el: HTMLMediaElement, now: number):
   const pres = presentedFps(w)
   const dec = decodedFps(w)
   const page = pageFps(w)
+  const jud = windowJudder(w)
+  const lt = longTasks(w)
+  const anim = animatingSeconds(w)
+  const fsSec = w.samples.filter((s) => s.fs).length
+  const fsEver = Boolean(w.everFullscreen || w.fullscreen || isFullscreen())
   return [
     `[video] ${w.reason}${w.targetS != null ? `→${w.targetS.toFixed(1)}s` : ''}`,
     /* 哪个内核（devlog/312）：旧内核的病（seek 后解码追赶）和新内核的效果必须能对账 */
     ...(w.kernel ? [`内核=${w.kernel}`] : []),
-    /* 全屏与否（2026-10-06，devlog/379）：只在全屏复现的卡顿，靠这一格才能把两组数对上账。
-       `w.fullscreen` 是开局那一拍记的，这里再取一次当时的状态 —— 点全屏键通常发生在
-       窗口开始之后（两者取或，任一为真就标真）。 */
-    `全屏=${w.fullscreen || isFullscreen() ? 1 : 0}`,
+    /* 全屏与否（2026-10-06，devlog/379；devlog/384 改成按秒）：
+       `全屏=15/16秒` = 这一窗里有多少秒处在元素全屏 —— 既能说"进过"，也能说"进了多久"；
+       没有采样（测试、或开局即结束）时退回原来的 1/0；`(曾)` = 采样缝里进过全屏
+       （进/出在同一秒内），按秒数是 0 但**确实进过**，别让它被读成"没进过"。 */
+    `全屏=${w.samples.length
+      ? `${fsSec}/${w.samples.length}秒${fsEver && fsSec === 0 ? '(曾)' : ''}`
+      : `${fsEver ? 1 : 0}`}`,
     /* 窗口表面（devlog/382，`devlog/383` 改正口径）：`曾不透明` = 这个窗口期间**成功切到过**
        不透明表面。第一版记的是"写日志那一刻"的状态，而日志是在窗口结束时写的 —— 那时多半
        已经退出全屏，于是每一行都显示 `transparent`，根本读不出那一轮到底带没带不透明表面。
        `failed` = 跑在旧壳上（命令不存在），那一轮的数**不能**用来判断那一刀有没有用。 */
     `表面=${surfaceEverOpaque() ? '曾不透明' : surfaceState()}`,
+    /* 硬解**能力**（devlog/384）：`无` 才轮到"WebView2 的解码器比 Chrome 差"那条线。 */
+    `硬解=${hwDecode}`,
     `判定=${verdict(w, fps)}`,
     `窗口=${elapsed.toFixed(1)}s`,
     `起播=${w.readyMs == null ? '未出画' : `${(w.readyMs / 1000).toFixed(1)}s`}`,
@@ -273,6 +401,15 @@ export function summarize(w: PlaybackWindow, el: HTMLMediaElement, now: number):
     `页面=${page == null ? '量不到' : `${page.toFixed(1)}fps`}`,
     `最长停顿=${w.pres.supported ? `${(w.pres.maxGapMs / 1000).toFixed(2)}s` : '量不到'}`,
     `停顿次数=${w.pres.gaps.length}`,
+    /* 抖动（devlog/384）：用户症状的**直读口径** —— "一下一下地慢"是节拍被拖住，不是停住。 */
+    `抖动=${jud.count}次`,
+    `抖峰=${(jud.maxMs / 1000).toFixed(2)}s`,
+    `重复帧=${w.pres.repeats}`,
+    /* 主线程长任务（devlog/384）：把"是我们自己的 JS 堵住了"这条线排掉。 */
+    `长任务=${lt == null ? '量不到' : `${lt.count}次`}`,
+    `长任务峰=${lt == null ? '量不到' : `${(lt.maxMs / 1000).toFixed(2)}s`}`,
+    /* 全屏时页面里还有东西在动吗（devlog/384）：合成器闲不下来的一条硬假设。 */
+    `动画=${anim == null ? '量不到' : `${anim}秒`}`,
     `前3秒=${head == null ? '-' : head.toFixed(1)}`,
     `后段=${later == null ? '-' : later.toFixed(1)}`,
     `卡帧=${stalledSeconds(w)}s`,        // currentTime 没动 ⇒ 数据没到
@@ -280,22 +417,39 @@ export function summarize(w: PlaybackWindow, el: HTMLMediaElement, now: number):
     `提交停=${submitStallSeconds(w)}s`,   // 解出来了却没交给合成器（第二段）
     `隐藏=${hiddenSeconds(w)}s`,         // 浏览器判页面不可见（切走/遮挡/最小化）
     `失焦=${unfocusedSeconds(w)}s`,
-    `丢帧=${droppedGained}/${gained}`,
+    `丢帧=${droppedGained}/${gained}${gained ? `(${((droppedGained / gained) * 100).toFixed(1)}%)` : ''}`,
     `末缓冲=${aheadOf(el)?.toFixed(1) ?? '?'}s`,
   ].join(' ')
 }
 
-/** 每秒曲线（只在确实有低谷/卡顿时附一行，避免把日志刷满）。 */
+/** 每秒曲线（只在确实有低谷/卡顿/丢帧/抖动/长任务时附一行，避免把日志刷满）。 */
 export function curveLine(w: PlaybackWindow, max = 15): string | null {
   const head = avgFps(w, 0, 3)
   const later = avgFps(w, 3, 1e9)
   const dip = head != null && later != null && later > 0 && head < later * DIP_RATIO
+  const drops = w.samples.reduce((n, s) => n + (s.dropped ?? 0), 0)
+  const jud = windowJudder(w).count
+  const lt = longTasks(w)?.count ?? 0
+  /* `devlog/384`：丢帧/抖动/长任务**也要**触发曲线 —— 否则"帧在漏但没停"的那一轮
+     一行曲线都没有，而"漏在哪儿、按什么节拍漏"正是要看的。 */
   const bad = stalledSeconds(w) >= 2 || idleSeconds(w) >= 2
+    || drops >= DROP_MIN_FRAMES || jud >= BAD_SECONDS_TRIGGER || lt >= BAD_SECONDS_TRIGGER
   if (!dip && !bad) return null
-  const items = w.samples.slice(0, max).map(
-    (s) => `${s.t}s:${s.fps}fps/${s.ahead == null ? '×' : s.ahead.toFixed(1)}${s.advanced ? '' : '*'}`)
-  return `[video] 曲线(${w.reason}) ${items.join(' ')}${w.samples.length > max ? ' …' : ''}`
-    + ' （`*` = 该秒 currentTime 没前进）'
+  const one = (s: Sample) => {
+    const d = s.dropped ?? 0
+    const j = judderStats(s.intervals ?? []).count
+    return `${s.t}s:${s.fps}fps/${s.ahead == null ? '×' : s.ahead.toFixed(1)}`
+      + `${s.advanced ? '' : '*'}${d ? `丢${d}` : ''}${j ? `抖${j}` : ''}`
+      + `${s.longTasks ? `长${s.longTasks}` : ''}`
+  }
+  const items: string[] = []
+  for (const s of w.samples.slice(0, max)) {
+    items.push(one(s))
+    /* 单行 ≤400 字是接口的硬限制（`api.clientLog`）⇒ 到顶就不再往里塞，宁可少几秒 */
+    if (items.join(' ').length > 300) break
+  }
+  return `[video] 曲线(${w.reason}) ${items.join(' ')}${w.samples.length > items.length ? ' …' : ''}`
+    + ' （`*`=没前进 丢=丢帧 抖=抖动 长=长任务）'
 }
 
 export interface ProbeHandle {
@@ -315,13 +469,43 @@ export function watchPlayback(el: HTMLVideoElement, reason: string, targetS?: nu
   let alive = true
   let lastFrames = w.baseFrames
   let lastDecoded = w.baseDecoded ?? 0
+  let lastDropped = w.baseDropped
   let lastPresented = 0
   let lastPresentedSampled = 0
   let lastCur = el.currentTime
   let lastPresentedAt = 0
+  let lastMediaTime: number | null = null
   let rafCount = 0
   let rafSampled = 0
   let tick = 0
+  /** 这一秒里攒的原料（采样时倒进 `Sample`，然后清空）。 */
+  let pendingIntervals: number[] = []
+  let pendingLongTasks = 0
+
+  /* 整窗粘性（devlog/384）：`fullscreenchange` 只有进/出两拍会响，但**报告那一拍可能已经退出**
+     全屏 —— 只看开局与报告两拍会把"中途进过全屏"整段记成 `全屏=0`（`表面=` 上一批就是这么
+     骗过我的）。按秒的 `Sample.fs` 再补上"进了多久"。 */
+  const onFsChange = () => { if (isFullscreen()) w.everFullscreen = true }
+  if (typeof document !== 'undefined') document.addEventListener('fullscreenchange', onFsChange)
+  w.everFullscreen = Boolean(w.everFullscreen || isFullscreen())
+
+  /** 环境能不能硬解（`devlog/384`）：一次就够，写完就一直在行里。 */
+  void probeHwDecode(el)
+
+  /* 主线程长任务（`devlog/384`）：把"是我们自己的 JS 堵住了"这条线排掉 ——
+     浏览器不支持 `longtask`（jsdom、部分 WebView 版本）时静默留白，不编数。 */
+  let longObserver: PerformanceObserver | null = null
+  try {
+    if (typeof PerformanceObserver === 'function') {
+      longObserver = new PerformanceObserver((list) => {
+        for (const e of list.getEntries()) {
+          pendingLongTasks += 1
+          w.longTaskMaxMs = Math.max(w.longTaskMaxMs ?? 0, e.duration)
+        }
+      })
+      longObserver.observe({ entryTypes: ['longtask'] })
+    }
+  } catch { longObserver = null }
 
   // 整页自绘节拍（rAF）：与"视频呈现"对照，能分开"整页卡"与"只有视频卡"
   let rafHandle = 0
@@ -339,7 +523,7 @@ export function watchPlayback(el: HTMLVideoElement, reason: string, targetS?: nu
   }).requestVideoFrameCallback?.bind(el)
   if (rvfc) {
     w.pres.supported = true
-    const onFrame = (now: number, meta: { presentedFrames?: number }) => {
+    const onFrame = (now: number, meta: { presentedFrames?: number; mediaTime?: number }) => {
       if (!alive) return
       // ⚠️ 用**回调自带的 `now`**（浏览器给的呈现时刻），不用 `performance.now()`：
       //    前者才是"这一帧什么时候上的屏"，而且它可注入 ⇒ 单测能确定性地造出"卡 1.2 秒"
@@ -349,8 +533,19 @@ export function watchPlayback(el: HTMLVideoElement, reason: string, targetS?: nu
         if (gap > w.pres.maxGapMs) w.pres.maxGapMs = gap
         // 只留"看得见的卡顿"（>100ms ≈ 掉了 3 帧以上），最多 20 条免得涨内存
         if (gap > 100 && w.pres.gaps.length < 20) w.pres.gaps.push(Math.round(gap))
+        /* 抖动（devlog/384）：原料按秒攒着，判据（中位数基准）在 `summarize` 里算 ——
+           "画面在动、节拍被拖住"与">100ms 的停顿"是两件事，用户说的"一下一下地慢"是前者。 */
+        if (gap > 0) pendingIntervals.push(gap)
       }
       lastPresentedAt = t
+      /* 重复帧（devlog/384）：同一个 `mediaTime` 又来一次 = 这一帧被**重复呈现**了，
+         视觉上就是"顿一下"。与抖动互为交叉验证（抖动看间隔、重复看内容）。 */
+      if (typeof meta?.mediaTime === 'number') {
+        if (lastMediaTime != null && Math.abs(meta.mediaTime - lastMediaTime) < 1e-6) {
+          w.pres.repeats += 1
+        }
+        lastMediaTime = meta.mediaTime
+      }
       if (typeof meta?.presentedFrames === 'number') lastPresented = meta.presentedFrames
       rvfc(onFrame)
     }
@@ -359,11 +554,14 @@ export function watchPlayback(el: HTMLVideoElement, reason: string, targetS?: nu
 
   const sample = () => {
     tick += 1
-    const { frames, decoded } = frameStats(el)
+    const { frames, decoded, dropped } = frameStats(el)
     const fps = Math.max(0, frames - lastFrames)
     lastFrames = frames
     const decDelta = decoded == null ? null : Math.max(0, decoded - lastDecoded)
     if (decoded != null) lastDecoded = decoded
+    /* 丢帧**按秒**（devlog/384）：窗口总数看不出"均匀漏"还是"某一刻崩"，而这两者修法相反 */
+    const dropDelta = Math.max(0, dropped - lastDropped)
+    lastDropped = dropped
     const advanced = el.currentTime - lastCur >= 0.2
     lastCur = el.currentTime
     const ahead = aheadOf(el)
@@ -378,9 +576,17 @@ export function watchPlayback(el: HTMLVideoElement, reason: string, targetS?: nu
     // 真机三次复现的画面停摆就落在这条上（devlog/309）
     const hidden = typeof document !== 'undefined' && document.visibilityState === 'hidden'
     const focused = typeof document === 'undefined' || document.hasFocus()
+    /* 全屏时页面里**还有东西在动**吗（devlog/384）：`getAnimations()` 会把正在跑的 CSS
+       动画与过渡都列出来。全屏里若有东西一直在动，合成器就永远闲不下来 —— 这是 B2 的一条硬假设。 */
+    const anims = typeof document !== 'undefined' && typeof document.getAnimations === 'function'
+      ? document.getAnimations().length : null
     w.samples.push({ t: tick, fps, decoded: decDelta, presented: presDelta, pageFps: pageDelta,
                      ahead, advanced, hidden, focused,
-                     readyState: el.readyState, seeking: el.seeking })
+                     readyState: el.readyState, seeking: el.seeking,
+                     dropped: dropDelta, intervals: pendingIntervals,
+                     longTasks: pendingLongTasks, anims, fs: isFullscreen() })
+    pendingIntervals = []
+    pendingLongTasks = 0
   }
   const timer = window.setInterval(sample, SAMPLE_MS)
   const stop = () => {
@@ -388,6 +594,8 @@ export function watchPlayback(el: HTMLVideoElement, reason: string, targetS?: nu
     window.clearInterval(timer)
     window.clearTimeout(windowTimer)
     if (rafHandle) window.cancelAnimationFrame(rafHandle)
+    longObserver?.disconnect()
+    if (typeof document !== 'undefined') document.removeEventListener('fullscreenchange', onFsChange)
   }
   const post = () => {
     // 什么都没采到（挂载就被卸载）就别留垃圾行

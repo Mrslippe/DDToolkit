@@ -14,8 +14,8 @@ vi.mock('../api/api', () => ({
 }))
 
 import {
-  aheadOf, curveLine, decoderStallSeconds, frameStats, hiddenSeconds, idleSeconds, openWindow,
-  stalledSeconds, submitStallSeconds, summarize, verdict, watchPlayback,
+  aheadOf, curveLine, decoderStallSeconds, frameStats, hiddenSeconds, idleSeconds, judderStats,
+  openWindow, stalledSeconds, submitStallSeconds, summarize, verdict, watchPlayback,
 } from './playbackProbe'
 
 class FakeMedia {
@@ -40,6 +40,7 @@ function smp(t: number, o: {
   fps?: number; decoded?: number | null; presented?: number | null; pageFps?: number | null
   ahead?: number | null; advanced?: boolean; hidden?: boolean; focused?: boolean
   readyState?: number; seeking?: boolean
+  dropped?: number; intervals?: number[]; longTasks?: number; anims?: number | null; fs?: boolean
 } = {}) {
   return { t, fps: 30, decoded: 30 as number | null, presented: 30 as number | null,
            pageFps: 60 as number | null, ahead: 8 as number | null,
@@ -294,5 +295,120 @@ describe('playbackProbe', () => {
     const el = makeEl()
     watchPlayback(el, 'start').finish()
     expect(clientLog).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * B2 第四轮（`devlog/384`）：**让下一轮日志自己说话**。
+ *
+ * 前三轮拿到的都是"窗口汇总"：唯一异常是丢帧 5~10%，而"帧在漏但没停住"（停顿 0 次）
+ * 与用户的症状（"一下一下地慢"）对不上 —— 探针量的是**停顿**，用户说的是**节拍**。
+ * 这一批补的正是缺的那几个口径：抖动/重复帧、丢帧的**逐秒**分布、主线程长任务、
+ * 全屏页面里还有没有东西在动。
+ */
+describe('playbackProbe · 抖动与逐秒分布（devlog/384）', () => {
+  it('`judderStats`：以**中位数**为基准，均匀 33ms 不算抖动', () => {
+    const even = Array.from({ length: 30 }, () => 33.3)
+    expect(judderStats(even)).toEqual({ count: 0, maxMs: 0 })
+    // 抽掉一拍（66ms ≈ 漏了一帧）就算一次
+    const one = [...even.slice(0, 10), 66, ...even.slice(11)]
+    expect(judderStats(one).count).toBe(1)
+    expect(judderStats(one).maxMs).toBe(66)
+  })
+
+  it('`judderStats`：**重复呈现**（一堆 8ms 小间隔）不许被整窗判成抖动', () => {
+    // 这是"拿最小间隔当基准"那版会踩的坑：合成器重复呈现同一帧会出现 8ms 间隔，
+    // 用最小值当基准 ⇒ 33ms 的正常帧全被算成"超基准 4 倍"。中位数基准把它挡在门外。
+    const dup = [...Array.from({ length: 20 }, () => 8.3), ...Array.from({ length: 20 }, () => 33.3)]
+    expect(judderStats(dup).count, '一半是重复呈现，另一半是正常节拍 ⇒ 没有抖动').toBe(0)
+  })
+
+  it('`judderStats`：样本太少（开局那几帧间隔不准）不判', () => {
+    expect(judderStats([200, 200, 200])).toEqual({ count: 0, maxMs: 0 })
+  })
+
+  it('丢帧**按秒**分布 + 判定给一句"丢帧N%"，曲线也带上每秒的丢帧数', () => {
+    const el = makeEl()
+    const w = openWindow(el, 'start')
+    // 前 5 秒匀速漏一点（每秒丢 1 帧），第 6 秒崩一下（丢 20 帧）
+    for (let t = 1; t <= 5; t += 1) w.samples.push(smp(t, { dropped: 1 }))
+    w.samples.push(smp(6, { dropped: 20, fps: 12 }))
+    w.pres.supported = true
+    const line = summarize(w, el, performance.now())
+    expect(line, '判定要把它说出来，否则这行读起来像"一切正常"').toContain('判定=呈现受限(丢帧')
+    const curve = curveLine(w)
+    expect(curve, '帧在漏就要出曲线（第一版只在"低谷/卡顿"时出 ⇒ 丢帧那一轮一行都没有）')
+      .toContain('曲线')
+    expect(curve, '崩的那一秒要能看见').toContain('丢20')
+    expect(curve).toContain('丢1')
+  })
+
+  it('长任务/动画：量得到就报，量不到就写"量不到"（不编 0）', () => {
+    const el = makeEl()
+    const w = openWindow(el, 'start')
+    w.samples.push(smp(1, { longTasks: 2, anims: 3 }))
+    w.samples.push(smp(2, { longTasks: 1, anims: 0 }))
+    const line = summarize(w, el, performance.now())
+    expect(line).toContain('长任务=3次')
+    expect(line).toContain('动画=1秒')          // 只有第 1 秒有东西在动
+
+    const blank = openWindow(el, 'start')
+    blank.samples.push(smp(1, { longTasks: undefined, anims: null }))
+    const blankLine = summarize(blank, el, performance.now())
+    expect(blankLine, 'jsdom/旧壳里量不到就别编').toContain('长任务=量不到')
+    expect(blankLine).toContain('动画=量不到')
+  })
+
+  it('全屏按秒记：`全屏=N/M秒` —— "进过没有"与"进了多久"都要能读出来', () => {
+    const el = makeEl()
+    const w = openWindow(el, 'start')
+    w.samples.push(smp(1, { fs: false }))
+    w.samples.push(smp(2, { fs: true }))
+    w.samples.push(smp(3, { fs: true }))
+    expect(summarize(w, el, performance.now())).toContain('全屏=2/3秒')
+    // 没有采样时退回 1/0（测试与"开局即结束"那条路）
+    expect(summarize(openWindow(el, 'start'), el, performance.now())).toContain('全屏=0')
+  })
+
+  it('中途进全屏、报告前又退出 ⇒ 整窗粘性仍记着（`fullscreenchange` 监听）', async () => {
+    // ⚠️ 这一条**故意一次采样都不推进**：进/出全屏都发生在采样缝里 ⇒ 按秒的 `Sample.fs`
+    //    一帧都没记到，唯一能证明"进过"的就是那个粘性位。第一版写成了"进全屏 → 采样 → 退出"
+    //    （反向验证时发现：去掉监听器它照样绿 —— 那种写法钉的其实是按秒采样，不是监听器）。
+    const el = makeEl()
+    const h = watchPlayback(el, 'start')
+    const vp = document.createElement('div')
+    Object.defineProperty(document, 'fullscreenElement', { configurable: true, value: vp })
+    document.dispatchEvent(new Event('fullscreenchange'))
+    Object.defineProperty(document, 'fullscreenElement', { configurable: true, value: null })
+    document.dispatchEvent(new Event('fullscreenchange'))
+    h.noteWaiting()                     // 有内容才写行
+    h.finish()
+    const line = String(clientLog.mock.calls[0][0])
+    expect(line, '开局与报告两拍都不在全屏，只有粘性位记得住').toContain('全屏=1')
+  })
+
+  it('进/出全屏都落在同一秒里 ⇒ 按秒数是 0，但要标 `(曾)`', () => {
+    const el = makeEl()
+    const w = openWindow(el, 'start')
+    w.samples.push(smp(1, { fs: false }))
+    w.everFullscreen = true                       // 监听器置的位（进/出在同一秒内）
+    expect(summarize(w, el, performance.now())).toContain('全屏=0/1秒(曾)')
+  })
+
+  it('汇总行**不超过 400 字**（接口硬限制，超了整行被丢）', () => {
+    const el = makeEl()
+    el.setFrames(500, 40)
+    const w = openWindow(el, 'seek', 123.4, 'MSE')
+    for (let t = 1; t <= 30; t += 1) {
+      w.samples.push(smp(t, { fps: 5, decoded: 0, presented: 0, pageFps: 0, ahead: 0,
+                              dropped: 5, longTasks: 3, anims: 2, fs: true }))
+    }
+    w.pres.supported = true
+    w.pres.maxGapMs = 1200
+    w.pres.gaps.push(1200)
+    w.pres.repeats = 99
+    w.longTaskMaxMs = 250
+    const line = summarize(w, el, performance.now())
+    expect(line.length, `实得 ${line.length} 字：${line}`).toBeLessThanOrEqual(400)
   })
 })
