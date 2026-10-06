@@ -172,7 +172,7 @@ Windows 桌面应用，数据全部在本地 SQLite 里，不经过任何服务�
 ```
 ├─ app/               后端源码（FastAPI 分层）
 │  ├─ routers/        HTTP 路由层（vtuber / auth / img_proxy / settings；计数口径见 `docs/backend/HTTP-CONTRACT.md` §1）
-│  ├─ repositories/   SQL 访问层（11 个仓库类，ORM 不泄漏到路由）
+│  ├─ repositories/   SQL 访问层（13 个仓库类，ORM 不泄漏到路由）
 │  ├─ models/         SQLAlchemy ORM（14 张表：vtubers / accounts / posts / 快照 / 场次 / app_meta / 曾用值 / 头像账本 / 轻资产索引 / 卡片布局 …）
 │  ├─ schemas/        Pydantic 输入输出模型
 │  ├─ services/       抓取调度（T0–T4 分层）、平台接入、第三方源、认证、WBI、类型引擎、数据库维护
@@ -249,7 +249,7 @@ Rust 子进程由 [Job Object 看门狗](frontend/src-tauri/src/lib.rs) 管理�
 | `docs/backend/DATA-MODEL.md` | 表结构 · 13 个 Repository（含每方法的"提交"归属）· HTTP 路由计数（三种数法见该文 §3） |
 | `docs/backend-fetch-pipeline.md` | 抓取链路详解（频率 / API 清单 / 风控判定 / 节流测算） |
 | `docs/frontend/ARCHITECTURE.md` | 前端分层、数据流与 hooks |
-| `docs/UI-MAP.md` | 界面与路由映射（类名 / 设计令牌 / 动效） |
+| `docs/frontend/UI-MAP.md` | 界面与路由映射（类名 / 设计令牌 / 动效） |
 | `docs/DEV-LOOP.md` | 本地开发与机器验证（dev_check / ui_probe / 探针模式） |
 | `docs/RELEASE.md` | 打包与发布流程（签名密钥、产物校验） |
 | `docs/backend/PLATFORMS.md` | 接入新平台的扩展指南 |
@@ -262,10 +262,13 @@ Rust 子进程由 [Job Object 看门狗](frontend/src-tauri/src/lib.rs) 管理�
 桌面小窗（顶栏状态岛的独立浮窗形态）在设计时参考了下面几个开源项目的**做法与取舍**。
 **只借鉴设计思路，没有复制代码** —— 各项目的许可与版权归其作者所有：
 
+> ⚠️ **那条线已于 2026-10-03 放弃**（小窗本身不做，为什么见 `devlog/274`）。
+> 这份致敬保留：**参考过什么是历史事实**，与那个功能还在不在无关。
+
 | 项目 | 技术栈 | 参考了什么 |
 |---|---|---|
 | [LuckyIsland](https://github.com/thisxiaoyuQAQ/LuckyIsland) | Tauri 2 + React | **主要参考**。①「一个窗口一个 HTML 入口」的多入口拆分（我们据此把主窗口与小窗拆成两份入口，小窗因此不再加载整站 JS/CSS）；②窗口状态机（隐藏 / 胶囊 / 紧凑 / 展开）与**以"当前顶边中心"为锚**的 resize 思路 —— 避免展开时横向跳动 |
-| [FocuSD](https://github.com/zzliu93-debug/FocuSD) | Tauri + React | **反向对照**：它走"单个固定大窗口"路线来规避 resize 抖动。我们最终没采用，但正因为它，才确定了本项目小窗要**收窄形态梯度**（见 `docs/TODO.md` §1.2） |
+| [FocuSD](https://github.com/zzliu93-debug/FocuSD) | Tauri + React | **反向对照**：它走"单个固定大窗口"路线来规避 resize 抖动。我们最终没采用，但正因为它，才确定了本项目小窗要**收窄形态梯度**（当时的取舍记录见 `devlog/274` 与其前因 `270`–`273`） |
 | [RustyIsland](https://github.com/iamdhakrey/RustyIsland) | Rust (Tauri) + React | 无边框、置顶、透明背景悬浮挂件的窗口配置组合 |
 | [TokenNote](https://github.com/imw61/tokennote) | Tauri 2 + React | 桌面悬浮窗做「轻量概览」的信息密度取舍 |
 
@@ -300,3 +303,9 @@ Rust 子进程由 [Job Object 看门狗](frontend/src-tauri/src/lib.rs) 管理�
 **主要第三方库**（详见各包许可文件）：FastAPI / SQLAlchemy / Alembic（MIT）、Tauri v2（MIT / Apache-2.0）、
 React（MIT）、ECharts（Apache-2.0）、Radix UI（MIT）、Tailwind CSS（MIT）、Vite / TypeScript（MIT / Apache-2.0）、
 Windows 打包依赖 PyInstaller（GPLv2 + PyInstaller 例外）。
+
+**随仓库分发的第三方源码**：抖音签名实现（`app/services/platforms/vendor/dtksign/`）来自
+[Douyin_TikTok_Download_API](https://github.com/Evil0ctal/Douyin_TikTok_Download_API)，
+**Apache-2.0**（版权行 `Copyright 2021-2026 Evil0ctal and contributors`）。改动面、上游 commit 与
+逐文件哈希记在同目录 `NOTICE.md`（`tests/test_platform_douyin.py` 钉着哈希），
+许可原文与上游 NOTICE 也随该目录一起分发。
