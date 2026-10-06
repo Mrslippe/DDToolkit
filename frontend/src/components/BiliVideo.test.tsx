@@ -183,7 +183,9 @@ describe('BiliVideo', () => {
 
     // 位置与旋转必须在**真 CSS** 里（jsdom 不做布局，只能查声明）
     const css = readFileSync(resolve(__dirname, '../styles/posts.css'), 'utf8')
-    const box = css.match(/\.vp-spin \{[^}]*\}/)?.[0] ?? ''
+    // ⚠️ 必须**锚在行首**：不锚的话 `.vp:fullscreen .vp-spin { … }` 这种后代规则会抢先匹配
+    //    （2026-10-06 实测：加了一条全屏降本规则，这条判据当场红 —— 而基础规则一个字没改）。
+    const box = css.match(/^\.vp-spin \{[^}]*\}/m)?.[0] ?? ''
     expect(box, '.vp-spin 要绝对定位（居中靠它）').toContain('position: absolute')
     expect(box, '要居中').toContain('translate(-50%, -50%)')
     expect(css, '转起来靠 keyframes').toContain('@keyframes vp-spin')

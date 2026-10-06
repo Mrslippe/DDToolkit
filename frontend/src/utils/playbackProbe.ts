@@ -50,6 +50,14 @@ export interface PlaybackWindow {
   targetS?: number
   /** 这次窗口是哪个内核在放（`MSE` / `渐进`，devlog/312）。**空 = 没记**（老调用方）。 */
   kernel?: string
+  /**
+   * 这次窗口里有没有进过全屏（2026-10-06，`devlog/379`）。
+   *
+   * 为什么值得单记一格：用户报的"播放一下一下地慢"只在**全屏**复现（非全屏/小窗都顺、
+   * B 站本身也顺），而全屏与窗口态的差别全在**合成**那一侧 —— 日志里没有这一格时，
+   * 同一段视频的两组数（全屏 / 非全屏）根本对不上账。
+   */
+  fullscreen?: boolean
   startedAt: number
   baseFrames: number
   baseDropped: number
@@ -101,7 +109,15 @@ export function openWindow(el: HTMLVideoElement, reason: string, targetS?: numbe
   return { reason, targetS, kernel, startedAt: performance.now(), baseFrames: frames,
            baseDropped: dropped, baseDecoded: decoded, waiting: 0, minAhead: null,
            readyMs: null, samples: [],
+           /* 进全屏这件事可能发生在窗口**开始之后**（点全屏键那一下），所以这里只记"开局"，
+              报告那一拍再取一次（`summarize` 里 `w.fullscreen || 现在全屏`）—— 两个都要看。 */
+           fullscreen: isFullscreen(),
            pres: { supported: false, maxGapMs: 0, gaps: [] } }
+}
+
+/** 现在是不是全屏（`document` 在非浏览器环境里没有 `fullscreenElement`）。 */
+function isFullscreen(): boolean {
+  return typeof document !== 'undefined' && Boolean(document.fullscreenElement)
 }
 
 /** 当前位置前方还有多少秒缓冲（不在任何缓冲区间 ⇒ null）。 */
@@ -235,6 +251,10 @@ export function summarize(w: PlaybackWindow, el: HTMLMediaElement, now: number):
     `[video] ${w.reason}${w.targetS != null ? `→${w.targetS.toFixed(1)}s` : ''}`,
     /* 哪个内核（devlog/312）：旧内核的病（seek 后解码追赶）和新内核的效果必须能对账 */
     ...(w.kernel ? [`内核=${w.kernel}`] : []),
+    /* 全屏与否（2026-10-06，devlog/379）：只在全屏复现的卡顿，靠这一格才能把两组数对上账。
+       `w.fullscreen` 是开局那一拍记的，这里再取一次当时的状态 —— 点全屏键通常发生在
+       窗口开始之后（两者取或，任一为真就标真）。 */
+    `全屏=${w.fullscreen || isFullscreen() ? 1 : 0}`,
     `判定=${verdict(w, fps)}`,
     `窗口=${elapsed.toFixed(1)}s`,
     `起播=${w.readyMs == null ? '未出画' : `${(w.readyMs / 1000).toFixed(1)}s`}`,

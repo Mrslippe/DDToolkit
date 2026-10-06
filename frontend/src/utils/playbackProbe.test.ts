@@ -252,6 +252,24 @@ describe('playbackProbe', () => {
     }
   })
 
+  it('全屏标记：只在全屏复现的卡顿靠这一格对账（2026-10-06，devlog/379）', () => {
+    // 用户报的"播放一下一下地慢"只在**全屏**复现（非全屏/小窗都顺）—— 日志里没有这一格时，
+    // 同一段视频的全屏/非全屏两组数根本对不上账。窗口开局记一次，报告那一拍再看一眼当前状态。
+    const el = makeEl()
+    const w = openWindow(el, 'seek', 10, 'MSE')
+    w.fullscreen = true
+    expect(summarize(w, el, performance.now())).toContain('全屏=1')
+    // 没记过、当前也不在全屏 ⇒ 0（jsdom 里 `document.fullscreenElement` 恒为 null）
+    expect(summarize(openWindow(el, 'seek'), el, performance.now())).toContain('全屏=0')
+    // 开局没记、但**报告时**已在全屏（点全屏键发生在窗口开始之后）⇒ 也算 1
+    Object.defineProperty(document, 'fullscreenElement', { configurable: true, value: el })
+    try {
+      expect(summarize(openWindow(el, 'seek'), el, performance.now())).toContain('全屏=1')
+    } finally {
+      Object.defineProperty(document, 'fullscreenElement', { configurable: true, value: null })
+    }
+  })
+
   it('`finish()` **先报再停**（关抽屉那几次也要留下证据），`cancel()` 才丢弃', async () => {
     const el = makeEl()
     const a = watchPlayback(el, 'seek', 10)

@@ -1,4 +1,4 @@
-﻿/* ── 帖子面板（右栏）：档案页式布局（Frame41301）──
+/* ── 帖子面板（右栏）：档案页式布局（Frame41301）──
    结构：全屏模糊背景 + 滚动内容层（工具条 / hero / 帖子流） */
 
 .posts-panel {
@@ -6501,10 +6501,23 @@ img.hero-avatar {
 .vp-volpop::after {
   content: ''; position: absolute; left: 0; right: 0; bottom: -14px; height: 14px;
 }
-.vp:fullscreen { display: flex; align-items: center; justify-content: center; background: #000; }
+/* ⚠️ 全屏必须**复位圆角与裁剪**（2026-10-06，devlog/379）：`.vp` 的 `border-radius: 8px` +
+   `overflow: hidden` 是卡片观感，但全屏时它让视频层**每帧都要过一次圆角遮罩**，
+   更要命的是**阻止浏览器把视频提升到硬件覆盖层**（Chromium 的 overlay 路径不接受被裁剪/圆角的层）。
+   用户实测的复现口径非常明确：**B 站本身不卡、应用内不全屏不卡、小窗不卡、全屏卡**，
+   面板还是 240Hz ⇒ 这笔合成本账只在全屏时压垮。 */
+.vp:fullscreen {
+  display: flex; align-items: center; justify-content: center; background: #000;
+  border-radius: 0;
+}
 .vp:fullscreen .vp-video {
   width: 100%; height: 100%; max-height: none; object-fit: contain;
 }
+/* 全屏时压在视频上的玻璃片**一律去掉 backdrop-filter**：它会让合成器每帧重新采样背景，
+   而全屏（大面积）正是这笔账最贵的时候 —— 空闲态的播放键本来就看不见，去掉毫无损失；
+   缓冲转圈只在小面积、且那几百毫秒里画面本来也不动。 */
+.vp:fullscreen .vp-bigplay,
+.vp:fullscreen .vp-spin { backdrop-filter: none; }
 .vp-progress::before, .vp-progress-buf, .vp-progress-fill {
   top: 50%; transform: translateY(-50%);
 }

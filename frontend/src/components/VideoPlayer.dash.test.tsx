@@ -268,12 +268,14 @@ describe('VideoPlayer · 自动起播与底栏排布（devlog/295）', () => {
 
   it('底栏永远一行：进度条可缩（`min-width: 0`）+ 按钮不换行', () => {
     const css = readFileSync(resolve(__dirname, '../styles/posts.css'), 'utf8')
-    const bar = css.match(/\.vp-bar \{[^}]*\}/)?.[0] ?? ''
+    // ⚠️ 三条都**锚在行首**：`\.vp-bar \{` 不锚的话，任何 `.vp:fullscreen .vp-bar { … }`
+    //    这类后代规则都会抢先匹配（2026-10-06 实测过同类：`.vp-spin` 那条判据就是这么红的）。
+    const bar = css.match(/^\.vp-bar \{[^}]*\}/m)?.[0] ?? ''
     expect(bar, '底栏要显式 nowrap').toContain('nowrap')
-    const prog = css.match(/\.vp-progress \{[^}]*\}/)?.[0] ?? ''
+    const prog = css.match(/^\.vp-progress \{[^}]*\}/m)?.[0] ?? ''
     expect(prog, 'flex 项默认 min-width:auto ⇒ 档位名带空格时会把底栏撑溢出')
       .toContain('min-width: 0')
-    const btn = css.match(/\.vp-btn \{[^}]*\}/)?.[0] ?? ''
+    const btn = css.match(/^\.vp-btn \{[^}]*\}/m)?.[0] ?? ''
     expect(btn).toContain('flex: none')
   })
 
