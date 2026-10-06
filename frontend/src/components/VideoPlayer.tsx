@@ -37,10 +37,6 @@ import { normalizeImageUrl } from '../utils/format'
 import { openExternalFromHref } from '../utils/externalLinkGuard'
 import { setSurfaceOpaque } from '../utils/shellBridge'
 import { watchPlayback } from '../utils/playbackProbe'
-import { readVpFsMode, type VpFsMode } from '../utils/vpFsMode'
-
-/** 全屏诊断模式**每次页面只报一行**（免得每开一个视频刷一条）——见 `utils/vpFsMode.ts` */
-let fsModeLogged = false
 import { reportUserError } from '../utils/problemReport'
 import { MseKernel, kernelSupported, type KernelStreams } from '../utils/mseKernel'
 import type { BiliPage } from '../api/types'
@@ -401,16 +397,6 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
   const qualityMenu = useHoverMenu()
   const pageMenu = useHoverMenu()
   const [fs, setFs] = useState(false)
-  /**
-   * **全屏诊断开关**（2026-10-07，`devlog/399`）：把"进全屏"一次翻的三个变量（全屏 API /
-   * 显示尺寸 / 窗口底色）拆成可分辨的两格。⚠️ 默认 `off` ⇒ 生产行为一字不变；
-   * 用法与取舍见 `utils/vpFsMode.ts`。这一格查完就删。
-   */
-  const [fsMode] = useState<VpFsMode>(() => readVpFsMode())
-  /** `pseudo` 模式的"假全屏"：不走全屏 API，状态自己记（Esc 退不出来，再按一次 `f`） */
-  const [pseudoFs, setPseudoFs] = useState(false)
-  /** 界面上"现在该按全屏的样子显示吗" —— 真实全屏状态与假全屏的统一口径 */
-  const fsOn = fsMode === 'pseudo' ? pseudoFs : fs
   /**
    * **播完了**（`devlog/317`）：画面冻结在尾帧 + 中央一颗"重新播放"。
    *
@@ -961,27 +947,6 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
   }, [])
 
   /**
-   * **诊断开关的痕迹**（2026-10-07，`devlog/399`）：挂在 `<html>` 上给 CSS 用，
-   * 并且**把口径写进日志** —— 否则事后从日志里分不清这一轮跑的是哪个模式，
-   * 那比不量还坏（会把"模式没生效"读成"这条不是病因"）。
-   */
-  useEffect(() => {
-    if (fsMode === 'off') return
-    document.documentElement.dataset.vpFsMode = fsMode
-    if (!fsModeLogged) {
-      fsModeLogged = true
-      const why: Record<string, string> = {
-        size: '（真全屏，只把画面钉回 678x381 ⇒ 只动"显示尺寸"）',
-        surface: '（真全屏 + 铺满，但**保留透明的窗口底色** ⇒ 只动"窗口底色"）',
-        pseudo: '（不走全屏 API ⇒ 只动"全屏 API"；⚠️ 这一格的 CSS 至今没生效过，见 devlog/400）',
-      }
-      void api.clientLog(`[video] 全屏诊断模式=${fsMode}${why[fsMode] ?? ''}`)
-        .catch(() => { /* 日志发不出去就算了 */ })
-    }
-    return () => { delete document.documentElement.dataset.vpFsMode }
-  }, [fsMode])
-
-  /**
    * **全屏期间给一个不透明表面，并把页面自己的背景层摘掉**（2026-10-06，`devlog/381`）。
    *
    * 对照成熟播放器：YouTube / B 站网页播放器跑在**不透明**页面里（视频层能被提升到硬件覆盖层，
@@ -994,22 +959,14 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
    */
   useEffect(() => {
     const root = document.documentElement
-    if (fsOn) {
+    if (fs) {
       root.dataset.videoFs = '1'
-      /* 诊断模式 `surface`（`devlog/400`）：**刻意保留透明底色** —— 只动"窗口底色"这一个变量。
-         `size` 那一格已经证明"画面铺到 1:1"不是元凶，剩下 ①全屏 API 与 ③窗口底色，
-         这一格就是分它们的那一刀。 */
-      if (fsMode === 'surface') {
-        void api.clientLog('[video] 全屏表面=保持透明（诊断模式 surface）')
+      void setSurfaceOpaque(true).then((ok) => {
+        // ⚠️ **必须留痕**（`devlog/382`）：这条命令是后加的，跑在旧壳上会直接失败 ——
+        // 那样"还是卡"就说明不了任何问题（前端第一版把错误静默吞了）。
+        void api.clientLog(`[video] 全屏表面=${ok ? '不透明' : '失败（旧壳没有 set_surface_opaque？）'}`)
           .catch(() => { /* 日志发不出去就算了 */ })
-      } else {
-        void setSurfaceOpaque(true).then((ok) => {
-          // ⚠️ **必须留痕**（`devlog/382`）：这条命令是后加的，跑在旧壳上会直接失败 ——
-          // 那样"还是卡"就说明不了任何问题（前端第一版把错误静默吞了）。
-          void api.clientLog(`[video] 全屏表面=${ok ? '不透明' : '失败（旧壳没有 set_surface_opaque？）'}`)
-            .catch(() => { /* 日志发不出去就算了 */ })
-        })
-      }
+      })
     } else {
       delete root.dataset.videoFs
       void setSurfaceOpaque(false)
@@ -1019,7 +976,7 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
       delete document.documentElement.dataset.videoFs
       void setSurfaceOpaque(false)
     }
-  }, [fsOn, fsMode])
+  }, [fs])
 
   /**
    * 真播不了才报一条（`data-self-healing` 只管中间那几步）。
@@ -1254,12 +1211,9 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
   const toggleFs = useCallback(() => {
     const node = wrapRef.current
     if (!node) return
-    /* 诊断模式 `pseudo`（`devlog/399`）：**刻意不走全屏 API**，只把布局/尺寸/表面
-       照全屏做 —— 用来判定"元凶到底是全屏 API 还是尺寸/底色"。默认 `off` 时这一段不生效。 */
-    if (fsMode === 'pseudo') { setPseudoFs((v) => !v); return }
     if (document.fullscreenElement) void document.exitFullscreen()
     else void node.requestFullscreen?.().catch(() => { /* 宿主不允许就静默 */ })
-  }, [fsMode])
+  }, [])
 
   const togglePip = useCallback(() => {
     const el = videoRef.current as (HTMLVideoElement & {
@@ -1432,7 +1386,7 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
   const [hovering, setHovering] = useState(false)
 
   useEffect(() => {
-    if (!hovering && !fsOn) return
+    if (!hovering && !fs) return
     /** 打字时不抢键（抽屉里还有别的输入框，比如改签名） */
     const typing = (t: EventTarget | null): boolean => {
       const el = t as HTMLElement | null
@@ -1448,7 +1402,7 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
       document.removeEventListener('keydown', down)
       document.removeEventListener('keyup', up)
     }
-  }, [hovering, fsOn])
+  }, [hovering, fs])
 
   if (dead || !src) {
     return (
@@ -1786,8 +1740,8 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
             <PictureInPicture2 className="size-4" />
           </button>
         )}
-        <button type="button" tabIndex={-1} className="vp-btn" aria-label={fsOn ? '退出全屏' : '全屏'} onClick={toggleFs}>
-          {fsOn ? <Minimize className="size-4" /> : <Maximize className="size-4" />}
+        <button type="button" tabIndex={-1} className="vp-btn" aria-label={fs ? '退出全屏' : '全屏'} onClick={toggleFs}>
+          {fs ? <Minimize className="size-4" /> : <Maximize className="size-4" />}
         </button>
       </div>
     </div>

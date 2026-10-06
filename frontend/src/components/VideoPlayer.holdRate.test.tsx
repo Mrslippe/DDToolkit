@@ -83,11 +83,9 @@ describe('按住右方向键 = 3×（结构判据）', () => {
     expect(src).toMatch(/holdSpeed && \([\s\S]{0,200}className="vp-hold-rate"[\s\S]{0,120}data-hold-rate=/)
   })
 
-  it('⑦ 键盘由"指针移入"接管（`devlog/380`）：document 那对监听受 `hovering || fsOn` 约束', () => {
+  it('⑦ 键盘由"指针移入"接管（`devlog/380`）：document 那对监听受 `hovering || fs` 约束', () => {
     // 这条需求的反向侧：**不能**无条件挂 document 监听（否则指针在别处时方向键也被吞掉）
-    // ⚠️ `fs` → `fsOn`（2026-10-07，`devlog/399`）：全屏诊断开关引入 `fsOn`（真实全屏或
-    //    `pseudo` 假全屏）后，这个门用的就是它 —— 约束本身没变，只是口径变宽了一格。
-    expect(src).toContain('if (!hovering && !fsOn) return')
+    expect(src).toContain('if (!hovering && !fs) return')
     expect(src).toContain("document.addEventListener('keydown', down)")
     // 打字时不抢
     expect(src).toContain("el.tagName === 'INPUT'")

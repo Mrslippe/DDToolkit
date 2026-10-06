@@ -20,7 +20,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import VideoPlayer from './VideoPlayer'
 import { playerPrefs, resetPlayerPrefs } from '../utils/playerPrefs'
-import { VP_FS_MODE_KEY } from '../utils/vpFsMode'
 
 /** 切窗口表面（不透明/透明）的调用记录 —— 下面"全屏那一对"断言要用。 */
 const surfaceMock = vi.fn((..._a: unknown[]) => Promise.resolve(true))
@@ -175,72 +174,6 @@ describe('播放器键盘：指针移入接管、移出交回', () => {
     hover(true)
     key('f')
     expect(reqFs).toHaveBeenCalled()
-  })
-
-  it('★ 诊断模式 `pseudo`：按 f **不走全屏 API**，但布局/尺寸/底色照全屏做（devlog/399）', async () => {
-    // 进全屏一次翻了三个变量（全屏 API / 显示尺寸 / 窗口底色），这一格只动"全屏 API"：
-    // 若这样也卡 ⇒ 元凶是全屏窗口本身；若流畅 ⇒ 全屏 API 出局，剩下尺寸/底色。
-    // ⚠️ 用 `localStorage` 开（不是 `vi.stubEnv`）：`import.meta.env` 在 Vite 里是**启动时定死的
-    //    常量对象**，`stubEnv` 到不了它 —— 而 localStorage 这条正是真实生效的那条链。
-    localStorage.setItem(VP_FS_MODE_KEY, 'pseudo')
-    try {
-      render()
-      hover(true)
-      key('f')
-      expect(reqFs, 'pseudo 刻意不调 requestFullscreen —— 那正是它要拆掉的那个变量')
-        .not.toHaveBeenCalled()
-      expect(document.documentElement.dataset.vpFsMode).toBe('pseudo')
-      expect(document.documentElement.dataset.videoFs, '布局与底色必须和真全屏一样').toBe('1')
-      expect(surfaceMock).toHaveBeenCalledWith(true)
-      // ⚠️ 口径必须落进日志：否则事后分不清这一轮跑的是哪个模式（比不量还坏）
-      await waitForLog('全屏诊断模式=pseudo')
-
-      key('f')          // 再按一次退出（`pseudo` 下 Esc 退不出来 —— 没有真全屏可退）
-      expect(document.documentElement.dataset.videoFs).toBeUndefined()
-      expect(surfaceMock).toHaveBeenLastCalledWith(false)
-    } finally {
-      localStorage.removeItem(VP_FS_MODE_KEY)
-    }
-  })
-
-  it('`size` 模式**照旧走真全屏**（它只把画面钉回窗口态那么大，见 posts.css）', () => {
-    localStorage.setItem(VP_FS_MODE_KEY, 'size')
-    try {
-      render()
-      hover(true)
-      key('f')
-      expect(reqFs, 'size 模式动的是"显示尺寸"，全屏 API 必须照走').toHaveBeenCalled()
-      expect(document.documentElement.dataset.vpFsMode).toBe('size')
-    } finally {
-      localStorage.removeItem(VP_FS_MODE_KEY)
-    }
-  })
-
-  it('★ 诊断模式 `surface`：真全屏 + 铺满，但**保留透明底色**（devlog/400）', async () => {
-    // `size` 已证明"画面铺到 1:1"不是元凶 ⇒ 剩下「全屏 API」与「窗口底色」，这一格只动后者。
-    localStorage.setItem(VP_FS_MODE_KEY, 'surface')
-    try {
-      surfaceMock.mockClear()
-      const v = render()
-      hover(true)
-      key('f')
-      expect(reqFs, 'surface 模式动的不是全屏 API').toHaveBeenCalled()
-      // `requestFullscreen` 在 jsdom 里是桩、不会真的切全屏 ⇒ 照既有那条用例的办法伪造状态
-      act(() => {
-        Object.defineProperty(document, 'fullscreenElement', { configurable: true, value: vp() })
-        document.dispatchEvent(new Event('fullscreenchange'))
-      })
-      expect(surfaceMock, '⚠️ 刻意不切不透明 —— 那正是它要拆掉的那个变量').not.toHaveBeenCalledWith(true)
-      expect(document.documentElement.dataset.videoFs, '布局照全屏做').toBe('1')
-      await waitForLog('全屏表面=保持透明')
-      void v
-      act(() => {
-        Object.defineProperty(document, 'fullscreenElement', { configurable: true, value: null })
-        document.dispatchEvent(new Event('fullscreenchange'))
-      })
-    } finally {
-      localStorage.removeItem(VP_FS_MODE_KEY)
-    }
   })
 
   it('全屏时**不靠指针也接管**（全屏下鼠标可能停着不动）', () => {
