@@ -297,6 +297,21 @@ test('图标：manifest 声明的四档都要真的在盘上（少一个 = 工�
   }
 });
 
+test('图标：与**桌面图标逐字节相同**（用户 2026-10-06：「还是直接用项目 LOGO 吧」）', () => {
+  // 为什么不只是"存在就算"：曾经有两版"加点元素"（小尺寸实心猫头 / 右下角 ⇄），
+  // 都是**在品牌标识上叠私货** —— 同一台机器上扩展与桌面两张脸。现在两者共用同一个
+  // `make_icon(size)`，所以能直接按字节比。桌面侧没有 16/48 的 PNG（它们在 `icon.ico` 里）
+  // ⇒ 只比两边都有的那两档；16/48 仍由上面的"在盘上"兜住。
+  const pairs = [['32.png', '32x32.png'], ['128.png', '128x128.png']];
+  for (const [ext, desk] of pairs) {
+    const a = readFileSync(join(ROOT, 'extension', 'icons', ext));
+    const b = readFileSync(join(ROOT, 'frontend', 'src-tauri', 'icons', desk));
+    assert.ok(a.equals(b),
+      `extension/icons/${ext} 与 frontend/src-tauri/icons/${desk} 不一致 —— `
+      + '扩展图标要跟桌面图标一模一样（改图标 = 改 LOGO.svg 再重跑 make_icons.py）');
+  }
+});
+
 /** 清单对账（见文件头）：扩展侧的必需键 / 目标 URL / 应用标识必须与后端一致 */test('清单对账：与后端源码逐项一致（改了后端没改扩展 ⇒ 这条红）', () => {
   const logic = readFileSync(join(ROOT, 'extension', 'src', 'logic.js'), 'utf8');
   const backend = readFileSync(join(ROOT, 'app', 'services', 'cookie_import.py'), 'utf8');
