@@ -100,6 +100,9 @@ export interface PlaybackWindow {
   /** 整窗见过的**在跑**的动画签名（`name@元素`，最多 3 个）——`devlog/385`：
    *  `动画=N秒` 只说"有几秒在动"，说不出**是什么在动**；不知道是什么就没法关掉它。 */
   animNames?: string[]
+  /** 整窗**最大**的视频显示尺寸（CSS px）——`devlog/387`：报告那一拍元素往往已经卸掉，
+   *  现场量 `getBoundingClientRect()` 只会得到 `?`。采样时记，才能读"放大到多大"。 */
+  maxDisp?: { w: number; h: number }
 }
 
 const WINDOW_MS = 30_000
@@ -118,6 +121,9 @@ const DROP_MIN_FRAMES = 5
 const DROP_VERDICT_RATIO = 0.03
 /** 抖动/长任务触发曲线的次数门槛。 */
 const BAD_SECONDS_TRIGGER = 3
+/** 被顶掉的窗口**采到这么多秒**就留一行（标 `(顶掉)`）——见 `cancel`。
+ *  用采样数而不是墙钟：采样由 1 秒定时器产生，判据在假时钟下也确定（单测直接钉得住）。 */
+const CANCEL_REPORT_SAMPLES = 5
 
 /**
  * 抖动（2026-10-06，`devlog/384`）——**用户说的"一下一下地慢"就是它**。
@@ -230,15 +236,16 @@ export function pageMaxGapMs(w: PlaybackWindow): number | null {
   return Math.max(...vals)
 }
 
-/** 视频源尺寸 → 元素显示尺寸（`1920x1080→2560x1440`）；量不到 = `?`。 */
-function sizeLabel(el: HTMLMediaElement): string {
+/** 视频源尺寸 → 元素**最大**显示尺寸（`1920x1080→2560x1440`）；量不到 = `?`。
+ *
+ * ⚠️ 显示尺寸取**采样期间见过的最大值**（`w.maxDisp`），不是报告那一刻现场量的：
+ * 日志是在窗口结束时写的，那时元素往往已经卸掉 ⇒ 现场量只会得到 `?`（真机就是这么发生的）。 */
+function sizeLabel(el: HTMLMediaElement, w?: PlaybackWindow): string {
   const vw = (el as HTMLVideoElement).videoWidth
   const vh = (el as HTMLVideoElement).videoHeight
-  const rect = typeof el.getBoundingClientRect === 'function' ? el.getBoundingClientRect() : null
-  const w = Math.round(rect?.width ?? 0)
-  const h = Math.round(rect?.height ?? 0)
+  const disp = w?.maxDisp
   if (!vw || !vh) return '?'
-  return `${vw}x${vh}→${w && h ? `${w}x${h}` : '?'}`
+  return `${vw}x${vh}→${disp ? `${disp.w}x${disp.h}` : '?'}`
 }
 
 /**
@@ -260,7 +267,7 @@ const RAF_WINDOW_MS = 10_000
  * D3D11VideoDecoder 差"，而 Edge 与 WebView2 是**同一个内核**、同一套媒体栈 ——
  * 若这里答"无"，才轮到解码器这条线；答"有"就把这条线也关掉。
  */
-let hwDecode: '有' | '无' | '未知' = '未知'
+let hwDecode: '有' | '无' | '不支持' | '未知' = '未知'
 
 async function probeHwDecode(el: HTMLVideoElement): Promise<void> {
   const mc = (navigator as Navigator & { mediaCapabilities?: MediaCapabilities }).mediaCapabilities
@@ -276,7 +283,7 @@ async function probeHwDecode(el: HTMLVideoElement): Promise<void> {
         framerate: 30,
       },
     })
-    hwDecode = info.powerEfficient ? '有' : '无'
+    hwDecode = !info.supported ? '不支持' : (info.powerEfficient ? '有' : '无')
   } catch { /* 量不到就保持"未知"，不编 */ }
 }
 
@@ -499,9 +506,13 @@ export function summarize(w: PlaybackWindow, el: HTMLMediaElement, now: number):
     `页面=${page == null ? '量不到' : `${page.toFixed(1)}fps`}`,
     /* 页面自绘最长一次间隔（devlog/386）：与丢帧合看能分开"合成器整页卡"与"只有视频被推迟" */
     `页面峰=${pageMax == null ? '量不到' : `${(pageMax / 1000).toFixed(2)}s`}`,
-    /* 视频源尺寸 → 元素实际显示尺寸（devlog/386）：全屏与窗口的**放大倍数**差别在这一格。
-       `getBoundingClientRect` 在 jsdom 里恒为 0 ⇒ 量不到就写 `?`。 */
-    `尺寸=${sizeLabel(el)}`,
+    /* 视频源尺寸 → 元素实际显示尺寸（devlog/386；devlog/387 改成取采样期间的最大值）：
+       全屏与窗口的**放大倍数**差别在这一格。 */
+    `尺寸=${sizeLabel(el, w)}`,
+    /* 设备像素比（devlog/387）：`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` 一旦设了
+       `--force-device-scale-factor`，整台机器的渲染比例就变了（而且会**顺带**把 wry 的默认参数
+       整串顶掉）—— 排查时若忘了它会一路污染后面的每一组数。写进日志，一眼能看出来。 */
+    `dpr=${typeof devicePixelRatio === 'number' ? devicePixelRatio : '?'}`,
     `最长停顿=${w.pres.supported ? `${(w.pres.maxGapMs / 1000).toFixed(2)}s` : '量不到'}`,
     `停顿次数=${w.pres.gaps.length}`,
     /* 抖动（devlog/384）：用户症状的**直读口径** —— "一下一下地慢"是节拍被拖住，不是停住。
@@ -713,6 +724,14 @@ export function watchPlayback(el: HTMLVideoElement, reason: string, targetS?: nu
       for (const n of anim.names) if (!known.includes(n) && known.length < 3) known.push(n)
       w.animNames = known
     }
+    /* 显示尺寸取**采样期间的最大值**（devlog/387）：报告那一拍元素通常已经卸掉，现场量是 0 */
+    const rect = typeof el.getBoundingClientRect === 'function' ? el.getBoundingClientRect() : null
+    if (rect && rect.width > 0 && rect.height > 0) {
+      const cur = w.maxDisp ?? { w: 0, h: 0 }
+      if (rect.width * rect.height > cur.w * cur.h) {
+        w.maxDisp = { w: Math.round(rect.width), h: Math.round(rect.height) }
+      }
+    }
     w.samples.push({ t: tick, fps, decoded: decDelta, presented: presDelta, pageFps: pageDelta,
                      ahead, advanced, hidden, focused,
                      readyState: el.readyState, seeking: el.seeking,
@@ -732,10 +751,10 @@ export function watchPlayback(el: HTMLVideoElement, reason: string, targetS?: nu
     longObserver?.disconnect()
     if (typeof document !== 'undefined') document.removeEventListener('fullscreenchange', onFsChange)
   }
-  const post = () => {
+  const post = (tag?: string) => {
     // 什么都没采到（挂载就被卸载）就别留垃圾行
     if (!w.samples.length && !w.waiting) return
-    void api.clientLog(summarize(w, el, performance.now()))
+    void api.clientLog(`${summarize(w, el, performance.now())}${tag ?? ''}`)
       .catch(() => { /* 诊断上报失败就算了，绝不影响播放 */ })
     const curve = curveLine(w)
     if (curve) void api.clientLog(curve).catch(() => { /* 同上 */ })
@@ -750,6 +769,17 @@ export function watchPlayback(el: HTMLVideoElement, reason: string, targetS?: nu
     },
     noteReady: () => { if (w.readyMs == null) w.readyMs = performance.now() - w.startedAt },
     finish: () => { if (alive) { stop(); post() } },
-    cancel: () => stop(),
+    /**
+     * 被新窗口顶掉（连续拖拽只留最后一次）。
+     *
+     * ⚠️ `devlog/387`：**播够久的那种"顶掉"不许把证据一起丢掉**。真机上就有过一次 ——
+     * 用户跑了三次，其中**唯一不卡的那一次**恰好被下一秒的新窗口顶掉，日志里只剩"另外两次卡"，
+     * 而"不卡的那次到底哪一格不一样"正是最值钱的信息。现在跑满 5 秒就留一行（标 `(顶掉)`），
+     * 只有拖拽那种秒级的碎窗口才真的丢弃。
+     */
+    cancel: () => {
+      if (w.samples.length >= CANCEL_REPORT_SAMPLES) post(' (顶掉)')
+      stop()
+    },
   }
 }

@@ -453,15 +453,37 @@ describe('playbackProbe · 抖动与逐秒分布（devlog/384）', () => {
     expect(curve, '卡的那一秒要标出来').toContain('页55')
     expect(curve, '12ms 的那一秒不许标（45ms 以下不算整页卡；图例里那个"页"字不算）')
       .not.toContain('页12')
-    // 尺寸：源尺寸 → 元素显示尺寸；量不到就 `?`（jsdom 里 `videoWidth` 是 undefined）
+    // 尺寸：源尺寸 → **采样期间的最大显示尺寸**（报告那一拍元素通常已经卸掉，现场量是 0）
     expect(line).toContain('尺寸=?')
     const sized = makeEl() as unknown as HTMLVideoElement & { videoWidth: number; videoHeight: number }
     sized.videoWidth = 1920
     sized.videoHeight = 1080
-    ;(sized as unknown as { getBoundingClientRect: () => { width: number; height: number } })
-      .getBoundingClientRect = () => ({ width: 2560, height: 1440 })
+    const sw = openWindow(sized, 'start')
+    sw.maxDisp = { w: 2560, h: 1440 }
+    expect(summarize(sw, sized, performance.now())).toContain('尺寸=1920x1080→2560x1440')
+    // 没采到过显示尺寸 ⇒ `→?`（不许编一个数）
     expect(summarize(openWindow(sized, 'start'), sized, performance.now()))
-      .toContain('尺寸=1920x1080→2560x1440')
+      .toContain('尺寸=1920x1080→?')
+  })
+
+  it('被顶掉的长窗口要**留证据**（标 `(顶掉)`），碎窗口才丢（devlog/387）', async () => {
+    // 真机教训：用户跑了三次，**唯一不卡的那一次**恰好被下一秒的新窗口顶掉 ⇒ 日志只剩"另外两次卡"。
+    const el = makeEl()
+    const long = watchPlayback(el, 'start')
+    long.noteWaiting()
+    await vi.advanceTimersByTimeAsync(6_000)      // 跑满 5 秒
+    long.cancel()
+    const lines = clientLog.mock.calls.map(([l]) => String(l))
+    expect(lines[0], '播够久的窗口被顶掉也要留一行').toContain('(顶掉)')
+    expect(lines.slice(1).every((l) => l.includes('[video] 曲线')),
+      '后面只许跟曲线行（汇总只有一行）').toBe(true)
+
+    clientLog.mockClear()
+    const short = watchPlayback(el, 'seek', 10)
+    short.noteWaiting()
+    await vi.advanceTimersByTimeAsync(1_000)      // 拖拽那种秒级碎窗口
+    short.cancel()
+    expect(clientLog, '碎窗口照旧丢弃（否则拖一次能刷十行）').not.toHaveBeenCalled()
   })
 
   it('汇总行**不超过 400 字**（接口硬限制，超了整行被丢）', () => {
