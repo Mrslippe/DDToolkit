@@ -656,6 +656,47 @@ fn open_extension_dir(window: tauri::Window) -> Result<String, String> {
     Ok(dir.to_string_lossy().to_string())
 }
 
+/// 把**窗口表面切成不透明**（播放器全屏时用，退出全屏还原）。
+///
+/// ## 为什么需要它（2026-10-06，`devlog/381`）——"成熟播放器都有自己的不透明表面"
+///
+/// 我们的窗口是 `transparent: true`（这是壳的既定视觉：修掉四角白边 / 配合 DWM 圆角，
+/// 见 `layout.css` 顶部那段注释）。但**透明表面会让 WebView2 把整页放进 alpha 合成路径**：
+/// 视频层因此拿不到硬件覆盖层（overlay），每一帧都要由 GPU 采样 + 混合后再和桌面合成。
+/// 小窗时这笔账看不出来，**全屏**（1080p 铺满整块面板、面板还是 240Hz）就压垮了 ——
+/// 用户实测口径正是：**B 站不卡 · 应用内非全屏不卡 · 小窗不卡 · 全屏卡**。
+///
+/// 对照成熟播放器：YouTube / B 站网页播放器跑在**不透明**的页面里（视频层能被提升到
+/// overlay，控件层在播放时完全撤掉）；mpv / VLC / PotPlayer 更是直接占一个**不透明全屏
+/// 表面**、视频走独立的 D3D 交换链。我们没有那条路，能对齐的只有"全屏期间给一个不透明表面"。
+///
+/// ## 落地
+///
+/// 一行：[`WebView2` 的 `DefaultBackgroundColor`]（wry 的 `set_background_color`）。
+/// `Some(黑)` = 不透明；`None` = 回到透明（壳的默认）。**只在全屏期间切**，
+/// 退出（或组件卸载）必须还原 —— 否则等于为了播放把壳的视觉永久改掉。
+///
+/// [`WebView2` 的 `DefaultBackgroundColor`]: https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2controller#put_defaultbackgroundcolor
+#[tauri::command]
+fn set_surface_opaque(window: tauri::Window, on: bool) -> Result<(), String> {
+    if !guard_window(&window, "set_surface_opaque") {
+        return Err("该窗口无权调用 set_surface_opaque".to_string());
+    }
+
+    let w = window
+        .app_handle()
+        .get_webview_window(window.label())
+        .ok_or_else(|| "找不到这个窗口的 webview".to_string())?;
+    // ⚠️ 用**不透明黑**而不是"页面底色"：全屏里露出来的只有视频周围那一圈（object-fit: contain
+    // 的留边），黑边是所有播放器的共同选择，也不会因为主题切换而变化。
+    w.set_background_color(if on {
+        Some(tauri::utils::config::Color(0, 0, 0, 255))
+    } else {
+        None
+    })
+    .map_err(|e| format!("切窗口表面失败：{e}"))
+}
+
 /// 打开发布页（R23b）：连不上 GitHub 时的兜底出口。
 ///
 /// 为什么直接调 Windows API 而不是插件：前端没装 `@tauri-apps/plugin-shell` 的 JS 包；
@@ -1246,6 +1287,8 @@ const COMMAND_ACL: &[&str] = &[
     // 扩展目录（E5）：只读路径 + 打开目录，与 open_data_dir 同口径（路径由壳解析）
     "extension_dir",
     "open_extension_dir",
+    // 播放器全屏时的窗口表面（B2）：只切"透明/不透明"，不接受别的参数
+    "set_surface_opaque",
     "open_external",
     "open_release_page",
     "probe_local_proxy",
@@ -1698,6 +1741,7 @@ pub fn run() {
             open_data_dir,
             extension_dir,
             open_extension_dir,
+            set_surface_opaque,
             open_external,
             present_window,
             hide_to_tray,

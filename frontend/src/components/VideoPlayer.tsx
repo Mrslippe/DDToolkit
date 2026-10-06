@@ -35,6 +35,7 @@ import {
 import { api, videoProxyUrl } from '../api/api'
 import { normalizeImageUrl } from '../utils/format'
 import { openExternalFromHref } from '../utils/externalLinkGuard'
+import { setSurfaceOpaque } from '../utils/shellBridge'
 import { watchPlayback } from '../utils/playbackProbe'
 import { reportUserError } from '../utils/problemReport'
 import { MseKernel, kernelSupported, type KernelStreams } from '../utils/mseKernel'
@@ -944,6 +945,33 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
     document.addEventListener('fullscreenchange', onFs)
     return () => document.removeEventListener('fullscreenchange', onFs)
   }, [])
+
+  /**
+   * **全屏期间给一个不透明表面，并把页面自己的背景层摘掉**（2026-10-06，`devlog/381`）。
+   *
+   * 对照成熟播放器：YouTube / B 站网页播放器跑在**不透明**页面里（视频层能被提升到硬件覆盖层，
+   * 控件层播放时整块撤掉），mpv / VLC / PotPlayer 直接占一个不透明全屏表面 + 独立交换链。
+   * 我们原本两样都没有：窗口 `transparent: true`（整页走 alpha 合成、视频拿不到 overlay）+
+   * 面板背景层（`.hero-backdrop` 图片与纱罩）在全屏时仍留在合成树里 ——
+   * 用户实测正是"**只有全屏卡**"（非全屏、小窗都顺）。
+   *
+   * ⚠️ 退出/卸载必须还原：透明是壳的既定视觉（四角白边那件事），不能为播放永久改掉。
+   */
+  useEffect(() => {
+    const root = document.documentElement
+    if (fs) {
+      root.dataset.videoFs = '1'
+      void setSurfaceOpaque(true)
+    } else {
+      delete root.dataset.videoFs
+      void setSurfaceOpaque(false)
+    }
+    return () => {
+      // 卸载（关掉详情窗）时也要还回去 —— 否则"看过一次全屏"之后窗口就一直是不透明的
+      delete document.documentElement.dataset.videoFs
+      void setSurfaceOpaque(false)
+    }
+  }, [fs])
 
   /**
    * 真播不了才报一条（`data-self-healing` 只管中间那几步）。

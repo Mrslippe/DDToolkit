@@ -21,7 +21,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import VideoPlayer from './VideoPlayer'
 import { playerPrefs, resetPlayerPrefs } from '../utils/playerPrefs'
 
-vi.mock('../utils/shellBridge', () => ({ openExternal: () => Promise.resolve() }))
+/** 切窗口表面（不透明/透明）的调用记录 —— 下面"全屏那一对"断言要用。 */
+const surfaceMock = vi.fn((..._a: unknown[]) => Promise.resolve())
+
+vi.mock('../utils/shellBridge', () => ({
+  openExternal: () => Promise.resolve(),
+  // B2（devlog/381）：进/出全屏时会调它切窗口表面；jsdom 里没有壳，用桩记录
+  setSurfaceOpaque: (...a: unknown[]) => surfaceMock(...a),
+}))
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true
@@ -170,6 +177,35 @@ describe('播放器键盘：指针移入接管、移出交回', () => {
         document.dispatchEvent(new Event('fullscreenchange'))
       })
     }
+  })
+
+  it('全屏给一个**不透明表面**、并撤掉页面自己的背景层（`devlog/381`）', () => {
+    // 对照成熟播放器：全屏播放时除了视频什么都不留在合成树里，窗口表面也得是不透明的
+    // （透明表面会让 WebView2 走 alpha 合成、视频拿不到硬件覆盖层 —— 用户实测"只有全屏卡"）。
+    surfaceMock.mockClear()
+    render()
+    expect(surfaceMock).toHaveBeenCalledWith(false)          // 初始：保持壳的透明
+    expect(document.documentElement.dataset.videoFs).toBeUndefined()
+
+    act(() => {
+      Object.defineProperty(document, 'fullscreenElement', { configurable: true, value: vp() })
+      document.dispatchEvent(new Event('fullscreenchange'))
+    })
+    expect(surfaceMock).toHaveBeenCalledWith(true)
+    expect(document.documentElement.dataset.videoFs, 'CSS 靠它撤掉 .hero-backdrop').toBe('1')
+
+    act(() => {
+      Object.defineProperty(document, 'fullscreenElement', { configurable: true, value: null })
+      document.dispatchEvent(new Event('fullscreenchange'))
+    })
+    expect(surfaceMock).toHaveBeenLastCalledWith(false)
+    expect(document.documentElement.dataset.videoFs, '退出全屏必须还原').toBeUndefined()
+
+    // 卸载（关掉详情窗）也要还原 —— 否则"看过一次全屏"之后窗口一直是不透明的
+    surfaceMock.mockClear()
+    act(() => root.unmount())
+    expect(surfaceMock).toHaveBeenCalledWith(false)
+    root = createRoot(host)                                  // 交回给 afterEach 的 unmount
   })
 
   it('正在输入框里打字 ⇒ 不抢键（哪怕指针还在播放器上）', () => {

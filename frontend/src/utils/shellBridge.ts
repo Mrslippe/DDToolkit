@@ -150,6 +150,25 @@ export async function openExtensionDir(): Promise<string> {
 }
 
 /**
+ * 视频全屏时把**窗口表面切成不透明**（`devlog/381`）——"成熟播放器都有自己的不透明表面"。
+ *
+ * 为什么：壳的窗口是 `transparent: true`（既定视觉：四角白边 / DWM 圆角），而**透明表面会让
+ * WebView2 把整页放进 alpha 合成路径**：视频层拿不到硬件覆盖层，每一帧都要 GPU 采样 + 混合
+ * 之后再和桌面合成。小窗看不出这笔账，**全屏**（1080p 铺满、面板 240Hz）就压垮了 ——
+ * 用户实测口径正是：**B 站不卡 · 应用内非全屏不卡 · 小窗不卡 · 全屏卡**。
+ *
+ * ⚠️ 只在全屏期间开，退出（或组件卸载）必须还原；浏览器/探针里没有壳，静默退化。
+ */
+export async function setSurfaceOpaque(on: boolean): Promise<void> {
+  if (!isTauri) return
+  try {
+    await invoke('set_surface_opaque', { on })
+  } catch {
+    /* 切不动就算了：这只是"更快的一条路"，不该让播放本身出错 */
+  }
+}
+
+/**
  * 迁移数据目录（系统文件夹选择框 → 规划 → 停后端 → 复制 → 校验 → 写指针 → 新目录启动并探活；
  * 任何一步失败都会回滚并用**原目录**重启，旧目录全程不动）。
  *

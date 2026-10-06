@@ -30,4 +30,12 @@ describe('背景层：CSS 契约', () => {
     const frames = css.slice(css.indexOf('@keyframes backdrop-out'))
     expect(frames).toContain('var(--backdrop-opacity)')
   })
+
+  it('有视频在全屏时背景层整个撤掉（`devlog/381`：给全屏留一个干净的不透明表面）', () => {
+    // 配套壳侧的 `set_surface_opaque`：那颗属性让 WebView2 不再走 alpha 合成，这条保证
+    // 没有别的图层陪着一起画。⚠️ 类挂在 `<html>` 上（组件进/出全屏时增删 `data-video-fs`）。
+    const rule = css.slice(css.indexOf('html[data-video-fs]'))
+    expect(rule.slice(0, 120), '要有一条把 .hero-backdrop 撤掉的规则')
+      .toMatch(/html\[data-video-fs\]\s+\.hero-backdrop\s*\{[^}]*display:\s*none/)
+  })
 })

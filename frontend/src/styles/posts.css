@@ -6518,6 +6518,13 @@ img.hero-avatar {
    缓冲转圈只在小面积、且那几百毫秒里画面本来也不动。 */
 .vp:fullscreen .vp-bigplay,
 .vp:fullscreen .vp-spin { backdrop-filter: none; }
+
+/* 有视频在全屏 ⇒ **页面自己的背景层整个撤掉**（2026-10-06，`devlog/381`）。
+   对照成熟播放器：全屏播放时除了视频什么都别留在合成树里（YouTube 连控件都整块撤）。
+   这条是"窗口表面不透明"（`set_surface_opaque`）的配套：那颗属性让 WebView2 不再走 alpha
+   合成，这条则保证没有别的图层陪着一起画 —— 两层都做了才等于"一个干净的不透明表面"。
+   ⚠️ 类挂在 `<html>` 上（`data-video-fs`），由播放器进入/退出全屏时增删。 */
+html[data-video-fs] .hero-backdrop { display: none; }
 .vp-progress::before, .vp-progress-buf, .vp-progress-fill {
   top: 50%; transform: translateY(-50%);
 }
