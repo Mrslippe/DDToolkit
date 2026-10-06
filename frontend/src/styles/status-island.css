@@ -455,9 +455,13 @@
   align-items: flex-start;
   gap: 8px;
   padding: 7px 12px;
-  /* ⚠️ FLIP 的"顶上来"要靠这条过渡（见 `StatusIsland.tsx` 的 `playFlip`）：
-     它**只对 transform 生效**，所以不会与布局打架；退场那条自己带 `animation`
-     （`.si-item.is-out`），两者互不覆盖。 */
+  /* ⚠️ FLIP 的"顶上来"要靠这条过渡（见 `StatusIsland.tsx` 的 FLIP 那条 effect）：
+     它**只对 transform 生效**，所以不会与布局打架。
+     ⚠️ **退场动画走的是另一个属性**（`.si-item.is-sliding` 的 `animation` 动 `translate`，
+     见下面 `si-item-out`）—— 这不是绕远：两个属性在 CSS 里是**合成**关系
+     （`translate` 排在 `transform` 之前，两者都是纯平移 ⇒ 相加），
+     所以"正在滑出的那条"**同时**还能被 FLIP 补位。若动画也动 `transform`，
+     动画在层叠里**压过内联样式** ⇒ FLIP 写进去的位移被吃掉、那条会当场跳一行。 */
   transition: transform var(--motion-base) var(--ease-emphasized);
 }
 
@@ -471,7 +475,11 @@
   background: var(--sel-bg-hover, rgba(15, 23, 42, 0.04));
 }
 
-/* 已读退场期间不再接受点击（否则连点会在动画里再触发一次已读） */
+/* 已读退场期间不再接受点击（否则连点会在动画里再触发一次已读）。
+   ⚠️ 选择器要**两个都列**：`.is-sliding` 是"正在滑出"（放行起一直在），
+   `.is-out` 是"已让位"（浮起来那条 **也** 挂着 `.is-sliding`，两个类同时在场是组件侧的
+   硬要求；这里把 `.is-out` 也写上只是让"浮起来的那条不可点"不依赖那个前提）。 */
+.si-item.is-sliding,
 .si-item.is-out {
   pointer-events: none;
 }
@@ -641,30 +649,42 @@
   opacity: 1;
 }
 
-/* 自动已读的退场：**向左滑出 + 渐隐**，下一条靠 FLIP 顶上来
-   （用户 2026-10-05 选定方案；时长与 StatusIsland 的 `ITEM_EXIT_MS` 同值，
-   ⚠️ 改一处必须改另一处）。
+/* 自动已读的退场：**向左滑出 + 渐隐**，下一条靠 FLIP 顶上来。
+   时长与 StatusIsland 的 `ITEM_EXIT_MS` 同值，⚠️ 改一处必须改另一处。
    ⚠️ 渐隐**前重后轻**（用户 2026-10-05 第二次反馈）：位移仍走满 220ms，但**不透明度在
-   前 40%（≈90ms）就归零** —— 因为下面那条是**同时**往上顶的，两者必然会重叠一小段；
+   前 40%（≈90ms）就归零** —— 因为下面那条很快就要往上顶了，两者必然会重叠一小段；
    整段线性淡出的话，重叠时那条还半不透明地压在新条目上（用户截图里就是那个观感）。
-   ⚠️ 只写 `opacity`、不写 `transform` 的那个关键帧：CSS 是**按属性各自插值**的，
-   `transform` 只在 0%/100% 出现 ⇒ 位移照旧全程走完（写了反而会把位移也压到 40% 处）。 */
-.si-item.is-out {
+   ⚠️ 只写 `opacity`、不写 `translate` 的那个关键帧：CSS 是**按属性各自插值**的，
+   `translate` 只在 0%/100% 出现 ⇒ 位移照旧全程走完（写了反而会把位移也压到 40% 处）。 */
+.si-item.is-sliding {
   animation: si-item-out 220ms var(--ease-exit) both;
-  pointer-events: none;
+}
+
+/* **让位**（2026-10-06，用户口径反转："滑出 60%–80% 之后下面的条目再顶上去"）：
+   `.is-out` 这件事**只做定位** —— 脱离文档流、把流内位置交出去，下面那些条目就是在
+   加上这个类的那一拍开始上移的（`StatusIsland.EXIT_YIELD_MS`）。
+   ⚠️ 冻结的 `top`/`height` 仍由内联样式给（**每行自己的数据**，CSS 里写不了）。
+   ⚠️⚠️ **这里绝不能再写 `animation`**：动画挂在 `.is-sliding` 上，从 `sliding` 切到
+   `leaving` 时元素**同时**挂着两个类、动画的计算值一个字节都没变 ⇒ 不会重播。
+   把动画搬回 `.is-out`（或两边都写）就是"重新挂一次同名动画"⇒ 从头播一遍，
+   视觉上那条会**往回跳一下**再滑出去。判据见 `StatusIsland.test.tsx`（读真 CSS 那条）。 */
+.si-item.is-out {
+  position: absolute;
+  left: 0;
+  right: 0;
 }
 
 @keyframes si-item-out {
   0% {
     opacity: 1;
-    transform: translateX(0);
+    translate: 0;
   }
   40% {
     opacity: 0;
   }
   100% {
     opacity: 0;
-    transform: translateX(-24px);
+    translate: -24px;
   }
 }
 
@@ -720,8 +740,9 @@
     animation: si-panel-in-fade var(--motion-fast) ease both;
   }
 
-  /* 自动已读的滑出改成**原地淡出**（reduce 下不做横向位移 —— 位移是最容易引起不适的那类动效） */
-  .si-item.is-out {
+  /* 自动已读的滑出改成**原地淡出**（reduce 下不做横向位移 —— 位移是最容易引起不适的那类动效）。
+     ⚠️ 挂在 `.is-sliding`（与上面那条同因：让位那一刻不许换动画）。 */
+  .si-item.is-sliding {
     animation: si-item-out-fade var(--motion-fast) ease both;
   }
 

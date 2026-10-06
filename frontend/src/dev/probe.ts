@@ -3061,38 +3061,102 @@ export async function runUiProbe(): Promise<void> {
     const panelNow = await waitFor(() => one('.si-panel')) as HTMLElement | null
     result.panelAliveForAck = !!panelNow
     // ⑥ **点一条 = 已读**（用户 2026-10-05："点击已读功能并没有实现"）：真点一下，看它是否
-    //    进入向左滑出（`.is-out`）且**活着的条数少一条**。
+    //    进入退场（开始滑出）且**活着的条数没有变多**。
     //    ⚠️ 这一条量的是**产品行为**（这条探针整体守的是"调测工具自己坏了"，这里是有意的例外）——
     //    放在这一页是因为它正好凑齐三种形态，而用户就是在这一页点的。
-    const aliveCount = () => all('.si-panel .si-item:not(.is-out)').length
-    const target = all('.si-panel .si-item.can-ack:not(.is-out)')[0] as HTMLElement | undefined
+    //
+    // ⚠️⚠️ **"正在退场"是两个阶段**（2026-10-06，用户口径反转：
+    //    「让上一条已读滑出 **60%–80%** 之后，下面的条目再顶上去」）：
+    //      · `is-sliding`：已放行、动画在跑，**人还在流内占着位置**（放行起就有，一直挂到移除）；
+    //      · `is-out`：**让位**了（`position:absolute` 浮起来），下面那些条目从这一刻才开始上移。
+    //    所以"点完 80ms 它进入退场了吗"必须按**并集**判：新口径下 +80ms 时它**一定还没有**
+    //    `.is-out`（让位在 65%×220 ≈ 143ms）—— 只认 `.is-out` 会把"已经在滑"读成
+    //    "点了没反应"（正是用户报过的那句话），那是最坏的一种假红。
+    const isExiting = (el: HTMLElement) =>
+      el.classList.contains('is-sliding') || el.classList.contains('is-out')
+    const aliveRows = () => all('.si-panel .si-item').filter((el) => !isExiting(el))
+    const exitingRows = () => all('.si-panel .si-item').filter(isExiting)
+    const idOf = (el: HTMLElement) => el.getAttribute('data-notice-id')
+    const aliveCount = () => aliveRows().length
+    const ackables = aliveRows().filter((el) => el.classList.contains('can-ack'))
+    // ⚠️ 优先挑**它下面还有一条**的（新口径要量"下面那条什么时候才被顶上来"）；
+    //    整页都找不着就退回第一条 —— 那两条时序判据会自己记 null 空过，不制造假失败。
+    const target = (ackables.find((el) => el.nextElementSibling?.classList.contains('si-item'))
+      ?? ackables[0]) as HTMLElement | undefined
     result.ackTarget = target?.getAttribute('data-notice-id') ?? null
-    result.ackableBefore = all('.si-panel .si-item.can-ack:not(.is-out)').length
+    result.ackableBefore = ackables.length
     result.aliveBeforeAck = aliveCount()
     if (target) {
-      target.click()
-      await sleep(80)              // 退场动画 220ms —— 这一拍它必须还在（`.is-out`）
-      result.ackOutIds = all('.si-panel .si-item.is-out').map((n) => n.getAttribute('data-notice-id'))
-      result.aliveAfterAck = aliveCount()
-      // ⑧ **其余的条目真的顶上来了吗**（用户 2026-10-05："滑出正常，但留下的空白不被自动顶上去"）。
-      //    判据不能只看"少了一条"，要看**几何**：退场那条腾出的位置有没有被下面那条占掉。
-      //    采样按**分组**读（`rel` 是相对各自 `.si-list` 的，跨组比大小没有意义）+
-      //    **内联位移**（补位留下的 `translateY` 一旦跨帧残留就会永久错位）。
-      //    ⚠️ 这是**视觉**位置（含过渡中间值）——只看打印出来的时间线用；**判据**在下面用 `offsetTop`。
+      /**
+       * 视觉几何（含过渡中间值）：按**分组**读（`rel` 是相对各自 `.si-list` 的，
+       * 跨组比大小没有意义）+ **内联位移**（补位留下的 `translateY` 一旦跨帧残留就会永久错位）。
+       * ⚠️ 这是**视觉**位置（含正在跑的过渡的中间值）—— 只看打印出来的时间线用；
+       * **判据**在下面用 `offsetTop`（布局值）。
+       */
       const geom = () => all('.si-panel .si-sec').map((sec) => {
         const rows = [...sec.querySelectorAll<HTMLElement>('.si-item')].map((el) => {
           const list = el.closest<HTMLElement>('.si-list')
           const rel = list
             ? Math.round(el.getBoundingClientRect().top - list.getBoundingClientRect().top)
             : -1
-          const out = el.classList.contains('is-out') ? '(out)' : ''
+          const out = el.classList.contains('is-out') ? '(out)'
+            : el.classList.contains('is-sliding') ? '(slide)' : ''
           const tf = el.style.transform ? `!${el.style.transform}` : ''
           return `${el.getAttribute('data-notice-id')}@${rel}${out}${tf}`
         })
         return `${sec.getAttribute('data-group')}[${sec.querySelectorAll('.si-list').length}]:`
           + (rows.join(' ') || '—')
       })
+      /** 紧挨着它的下一条（同一个 `.si-list` 里的兄弟）：让位之后它必须往上走一整行 */
+      const below = target.nextElementSibling as HTMLElement | null
+      const hasBelow = !!below && below.classList.contains('si-item')
+      result.ackTargetHasBelow = hasBelow
+      result.ackTargetHeight = target.offsetHeight
+      result.ackBelowTopBefore = hasBelow ? below!.offsetTop : null
+      target.click()
+      // ① **+80ms**（在 60% 那一侧：0.6×220 = 132ms）—— 这一拍它只该"在滑"，
+      //    **不该**让位，下面那条也**一动没动**。
+      await sleep(80)
+      result.ackSlidingAt80 = all('.si-panel .si-item.is-sliding').map(idOf)
+      result.ackYieldedAt80 = all('.si-panel .si-item.is-out').map(idOf)
+      // `position` 是"让位"在真实浏览器里的**最终判据**（`.si-item.is-out` 那条 CSS）：
+      // 基态是 `relative`（给倒数细条当坐标系），让位后才是 `absolute`。
+      result.ackTargetPositionAt80 = getComputedStyle(target).position
+      // 这一拍**除它之外**还有谁在退场：有别人也在退场时，"下面那条为什么没动"就说不清了
+      // ⇒ 下面的几何判据空过（写在 `ui_probe.py` 的注释里）。
+      // ⚠️ 判据只对**它上面**那些退场行敏感（下面那条的位置只会被"它上方有行离开文档流"影响），
+      //    所以这里只挑**同一个 `.si-list` 里、排在它下面那条之前**的 —— 别处（别的组、或者
+      //    它下面）也在退场时不该放弃这条判据（第一版就是这么写的，实测那一页**总**有别的行
+      //    在过期 ⇒ 这条最强的判据一次都没真跑过，看着还挺绿）。
+      result.ackExitingOthersAt80 = exitingRows().filter((el) => el !== target).map(idOf)
+      const listOf = (el: HTMLElement) => el.closest('.si-list')
+      const precedes = (a: HTMLElement, b: HTMLElement) =>
+        !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
+      const exitingAbove = hasBelow
+        ? exitingRows().filter((el) => el !== target
+          && listOf(el) === listOf(target) && precedes(el, below!))
+        : []
+      result.ackExitingAboveAt80 = exitingAbove.map(idOf)
+      result.ackBelowTopAt80 = hasBelow && below!.isConnected ? below!.offsetTop : null
+      // 旧字段名保住（判据现在是**并集**：滑出中或已让位都算"进了退场"）
+      result.ackOutIds = exitingRows().map(idOf)
+      result.aliveAfterAck = aliveCount()
       result.ackGeomAt80 = geom()
+      // ② **+200ms**（越过 65%×220 ≈ 143ms）：让位已经发生 —— 它脱离文档流、下面那条上移了。
+      //    ⚠️ 与 ① 的差就是这次口径反转的全部内容：**同一件事在两个时刻的形态不同**。
+      await sleep(120)
+      result.ackYieldedAt200 = all('.si-panel .si-item.is-out').map(idOf)
+      result.ackTargetPositionAt200 = getComputedStyle(target).position
+      result.ackBelowTopAt200 = hasBelow && below!.isConnected ? below!.offsetTop : null
+      /**
+       * "下面那条"那两条时序判据**到底判没判**（量不到 ≠ 通过）。
+       * 三种取值：`judged`（真判了）/ `no-below`（它下面没有兄弟，量不到）/
+       * `others-exiting`（同一列表里它上方还有别的行在退场 ⇒ "没动"说不清，空过）。
+       * ⚠️ 空过必须**看得见**：第一版只按"全局有没有别的行在退场"跳过，
+       * 而那一页总有别的行在过期 ⇒ 这条最强的判据一次都没跑，输出上却和"通过"长得一样。
+       */
+      result.ackBelowJudge = !hasBelow ? 'no-below'
+        : exitingAbove.length > 0 ? 'others-exiting' : 'judged'
       // ⚠️ **探针环境到底跑不跑过渡**（2026-10-05 加）：补位是"从旧位置过渡到新位置"，
       //    而无头浏览器不推进动画时，读到的永远是**起点** —— 那时"空位没被顶上"是**探针的
       //    假象**，不是产品问题。自己造一个元素试一次，把这件事变成可判的事实。
@@ -3111,7 +3175,7 @@ export async function runUiProbe(): Promise<void> {
         (end.includes('100') ? '过渡有推进 ✓' : '过渡没推进 ⇒ 探针环境不渲染动画') + '）'
       // 那个"没顶上来"的条目身上**到底有没有在跑的过渡**（有 = 动画在做，没 = 真卡住）
       const gapRow = all('.si-panel .si-list')
-        .map((l) => l.querySelector<HTMLElement>('.si-item:not(.is-out)'))
+        .map((l) => l.querySelector<HTMLElement>('.si-item:not(.is-out):not(.is-sliding)'))
         .find((el) => !!el && el.getBoundingClientRect().top
           - (el.closest('.si-list')?.getBoundingClientRect().top ?? 0) > el.offsetHeight + 6)
       result.ackGapRowAnims = gapRow
@@ -3140,17 +3204,22 @@ export async function runUiProbe(): Promise<void> {
         return `padding=${cs.paddingTop}/${cs.paddingBottom} pos=${cs.position}`
           + ` scrollTop=${list.scrollTop} h=${list.offsetHeight} kids=[${kids.join(' ; ')}]`
       })
-      // 每张列表里**第一条活着的**条目离列表顶有多远：留了一个整行高的空位就是"没顶上来"。
+      // ⑧ **其余的条目真的顶上来了吗**（用户 2026-10-05："滑出正常，但留下的空白不被自动顶上去"）。
+      //    判据不能只看"少了一条"，要看**几何**：退场那条腾出的位置有没有被下面那条占掉。
+      //    每张列表里**第一条活着的**条目离列表顶有多远：留了一个整行高的空位就是"没顶上来"。
       // ⚠️ 用 **`offsetTop`**（布局值）而不是 rect：rect 含**正在跑的过渡的中间值**，
       //    而无头环境根本不推进过渡（见上面的自检）⇒ 用 rect 会在探针里恒定假红。
       //    这与组件侧 `geomOf` 用 `offsetTop` 是同一条教训（`devlog/350`）。
+      // ⚠️ "活着的"要把**退场的两相都排除**（2026-10-06）：滑出中那条虽然还在流内、
+      //    但它是**正在走**的，把它当"第一行"就会把一个正常中间态读成"空位没被顶上"。
+      const aliveSel = '.si-item:not(.is-out):not(.is-sliding)'
       result.ackTopGaps = all('.si-panel .si-list').map((list) => {
-        const first = list.querySelector<HTMLElement>('.si-item:not(.is-out)')
+        const first = list.querySelector<HTMLElement>(aliveSel)
         return first ? `rel=${first.offsetTop}/h=${first.offsetHeight}` : null
       })
       // 空位判据：第一行的**布局**顶端必须落在它自己的高度之内（列表内边距 6px + 行高）
       result.ackGapViolations = all('.si-panel .si-list').flatMap((list) => {
-        const first = list.querySelector<HTMLElement>('.si-item:not(.is-out)')
+        const first = list.querySelector<HTMLElement>(aliveSel)
         if (!first) return []
         return first.offsetTop > Math.max(12, first.offsetHeight)
           ? [`${list.parentElement?.getAttribute('data-group')}`
@@ -3160,6 +3229,19 @@ export async function runUiProbe(): Promise<void> {
     } else {
       result.ackOutIds = null
       result.aliveAfterAck = null
+      result.ackTargetHasBelow = null
+      result.ackTargetHeight = null
+      result.ackBelowTopBefore = null
+      result.ackSlidingAt80 = null
+      result.ackYieldedAt80 = null
+      result.ackTargetPositionAt80 = null
+      result.ackExitingOthersAt80 = null
+      result.ackExitingAboveAt80 = null
+      result.ackBelowTopAt80 = null
+      result.ackYieldedAt200 = null
+      result.ackTargetPositionAt200 = null
+      result.ackBelowTopAt200 = null
+      result.ackBelowJudge = null
       result.ackGeomAt80 = null
       result.ackGeomAfter = null
       result.ackLeftoverTransforms = null
@@ -3183,7 +3265,8 @@ export async function runUiProbe(): Promise<void> {
       const idsOf = (groups: string[]) =>
         all('.si-panel .si-sec')
           .filter((s) => groups.includes(s.getAttribute('data-group') || ''))
-          .flatMap((s) => [...s.querySelectorAll('.si-item:not(.is-out)')]
+          // "还算在场的" = 排除**两个退场相**（滑出中 / 已让位）
+          .flatMap((s) => [...s.querySelectorAll('.si-item:not(.is-out):not(.is-sliding)')]
             .map((n) => n.getAttribute('data-notice-id') || ''))
       const before = idsOf(['recent', 'todo'])
       const doingBefore = idsOf(['doing'])
@@ -3192,29 +3275,38 @@ export async function runUiProbe(): Promise<void> {
       ackBtn.click()
       // ⑩ **逐条**（用户 2026-10-05：「从上到下一条一条逐个滑出，而不是一下全部滑出」）：
       //    点完这一拍只该走掉**最上面那几条**（队列每 70ms 放一条），不是全走。
+      //    ⚠️ "走掉"= **开始滑**（`is-sliding`，2026-10-06 起放行只到这一步），
+      //    而**不是**让位（`is-out`）：让位要等 65%×220 ≈ 143ms，+120ms 时**一条都还没让位**。
+      //    只数 `.is-out` 会把"已经在逐条滑"读成"点了没反应"。
       await sleep(120)
       result.ackAllBatch = before.length
-      result.ackAllOutAt120 = [...document.querySelectorAll('.si-panel .si-item.is-out')]
-        .map((n) => n.getAttribute('data-notice-id'))
-        .filter((id) => !!id && before.includes(id))
+      const inBefore = (els: HTMLElement[]) =>
+        els.map((n) => n.getAttribute('data-notice-id'))
+          .filter((id): id is string => !!id && before.includes(id))
+      result.ackAllStartedAt120 = inBefore(all('.si-panel .si-item.is-sliding'))
+      result.ackAllYieldedAt120 = inBefore(all('.si-panel .si-item.is-out'))
       const cleared = await waitFor(() => before.every((id) => {
         const el = document.querySelector(`.si-panel .si-item[data-notice-id="${id}"]`)
-        return !el || el.classList.contains('is-out')
+        // "已经不是活着的了" = 进了退场的**任一相**（在滑 / 已让位）
+        return !el || el.classList.contains('is-sliding') || el.classList.contains('is-out')
       }), 3000)
       result.ackAllCleared = !!cleared
       const stillAlive = before.filter((id) => {
         const el = document.querySelector(`.si-panel .si-item[data-notice-id="${id}"]`)
-        return el && !el.classList.contains('is-out')
+        return el && !el.classList.contains('is-sliding') && !el.classList.contains('is-out')
       })
       result.ackAllStillAlive = stillAlive
       result.groupsAfterAckAll = all('.si-panel .si-sec').map(
-        (s) => `${s.getAttribute('data-group')}:${s.querySelectorAll('.si-item:not(.is-out)').length}`)
+        (s) => `${s.getAttribute('data-group')}:`
+          + `${s.querySelectorAll('.si-item:not(.is-out):not(.is-sliding)').length}`)
       const doingAfter = idsOf(['doing'])
       result.doingAfterAckAll = doingAfter.length
       result.doingUntouched = doingBefore.every((id) => !stillAlive.includes(id))
         && doingAfter.length >= doingBefore.length
     } else {
       result.ackAllBeforeIds = null
+      result.ackAllStartedAt120 = null
+      result.ackAllYieldedAt120 = null
       result.ackAllCleared = null
       result.ackAllStillAlive = null
       result.groupsAfterAckAll = null
@@ -3252,13 +3344,14 @@ export async function runUiProbe(): Promise<void> {
     await sleep(900)                     // 退场队列（220ms + 70ms/条）早跑完 —— 幽灵行会在这之前消失
     const srvPanel = one('.si-panel')
     const srvRows: string[] = [...(srvPanel?.querySelectorAll(
-      '.si-sec[data-group="doing"] .si-item:not(.is-out) .si-item-text') || [])]
+      '.si-sec[data-group="doing"] .si-item:not(.is-out):not(.is-sliding) .si-item-text') || [])]
       .map((t) => (t.textContent || '').trim())
     result.serverStateRows = srvRows
     result.serverStateStayed = srvRows.some((t) => t.includes('第三方数据'))
     result.serverStateTitleCount = Number(
       ((srvPanel?.querySelector('.si-panel-title')?.textContent || '').match(/（(\d+)）/) ?? [])[1] ?? -1)
-    result.serverStateDrawnRows = srvPanel?.querySelectorAll('.si-sec .si-item:not(.is-out)').length ?? -1
+    result.serverStateDrawnRows =
+      srvPanel?.querySelectorAll('.si-sec .si-item:not(.is-out):not(.is-sliding)').length ?? -1
     result.serverStateBadge = Number(
       (cap()?.querySelector('.si-count')?.textContent || '').trim() || -1)
     // 合并后的那份列表（`TopBar` 的 dev 口）：红了能一眼分清"没进列表"与"进了没画"

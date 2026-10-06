@@ -1955,15 +1955,19 @@ def _assert_notice_lab(nl: dict, width: int) -> list[str]:
     if not nl.get("hasAckAll"):
         bad.append(f"@{width} notice-lab: 「需要处理」组没有「全部已读」")
     # 点一条 = 已读（2026-10-05 用户："点击已读功能并没有实现"）。
-    # 判据：点下去那条**当拍**进入 `.is-out`，且"活着的"少一条 —— 少了这两条里任何一条，
+    # 判据：点下去那条**当拍进入退场**，且"活着的"没变多 —— 少了这两条里任何一条，
     # 用户看到的就是"点了没反应"（正是他报的那句话）。
+    #
+    # ⚠️ **"进入退场"是两个相**（2026-10-06，用户口径反转：「让上一条已读滑出 60%–80%
+    # 之后，下面的条目再顶上去」）：`is-sliding`（在流内滑，位置还占着）→ `is-out`（让位浮起来）。
+    # `ackOutIds` 取的是**并集**（探针里那个字段名保住了，语义写在这儿）。
     if not nl.get("panelAliveForAck"):
         bad.append(f"@{width} notice-lab: 逐条验完面板是关着的 —— 下面的已读判据都测不到东西"
                    f"（探针自己要先把它开回来）")
     elif (nl.get("ackableBefore") or 0) < 1:
         bad.append(f"@{width} notice-lab: 面板里没有可点已读的条目（`can-ack` 一条都没有）")
     elif not nl.get("ackOutIds"):
-        bad.append(f"@{width} notice-lab: 点了条目（{nl.get('ackTarget')}）但它没进入滑出 —— "
+        bad.append(f"@{width} notice-lab: 点了条目（{nl.get('ackTarget')}）但它没进入退场 —— "
                    f"用户看到的就是「点了没反应」")
     elif nl.get("aliveAfterAck") is not None and nl.get("aliveBeforeAck") is not None \
             and nl["aliveAfterAck"] > nl["aliveBeforeAck"]:
@@ -1973,6 +1977,55 @@ def _assert_notice_lab(nl: dict, width: int) -> list[str]:
         #    那才是这条判据的实体。
         bad.append(f"@{width} notice-lab: 点了条目之后活着的反而变多了"
                    f"（{nl.get('aliveBeforeAck')} → {nl.get('aliveAfterAck')}）")
+    # ⑧-b **让位时机**（2026-10-06 新口径，这条是它在**真浏览器**里的判据）：
+    #    +80ms（< 60%×220 = 132ms）时它**只该在滑**、**还占着**流内位置（`position` 仍是基态的
+    #    `relative`），下面那条**一动没动**；越过 65%×220 ≈ 143ms（这里采 +200ms）之后它才
+    #    脱离文档流（`absolute`）、下面那条才上移。
+    #    ⚠️ 只判"最终顶上来了"（`ackGapViolations`）**区分不出**两种口径 —— 老口径也满足它，
+    #    真正钉住新口径的是**这两个时刻的形态差**。
+    #    ⚠️ 下面那条的几何只在"**它上方**没有别的行也在退场"时才判（`ackBelowJudge`
+    #    与 `ackExitingAboveAt80`）：同一列表里别处、或者它**下面**也在退场/过期时，
+    #    "下面那条没动"跟这条口径无关。跳过**必须看得见**（`ackBelowJudge` 会打印
+    #    `no-below` / `others-exiting`），别把"没判"混成"判过了" —— 第一版按"全局有没有
+    #    别的行在退场"跳，而那一页总有行在过期 ⇒ 这条最强的判据一次都没跑，输出上却和通过一样。
+    target_id = nl.get("ackTarget")
+    if target_id and nl.get("ackOutIds"):
+        if target_id not in (nl.get("ackSlidingAt80") or []):
+            bad.append(f"@{width} notice-lab: 点了 {target_id} 之后 +80ms 它没在滑出"
+                       f"（`is-sliding` 实得 {nl.get('ackSlidingAt80')}）—— "
+                       f"放行 = 开始滑，这一步是用户点下去该立刻看到的反馈")
+        if target_id in (nl.get("ackYieldedAt80") or []):
+            bad.append(f"@{width} notice-lab: +80ms 就让位了（`is-out` 实得 "
+                       f"{nl.get('ackYieldedAt80')}）—— 用户 2026-10-06 要的是"
+                       f"**滑出 60%–80% 之后**下面的条目才顶上来")
+        if nl.get("ackTargetPositionAt80") == "absolute":
+            bad.append(f"@{width} notice-lab: +80ms 那条已经 `position:absolute` 了"
+                       f"（`.is-out` 的定位生效太早）—— 它的流内位置当场空出，"
+                       f"下面那些条目会跟着**当拍**上移")
+        if target_id not in (nl.get("ackYieldedAt200") or []):
+            bad.append(f"@{width} notice-lab: 到 +200ms 它还没让位（`is-out` 实得 "
+                       f"{nl.get('ackYieldedAt200')}）—— 空位会一直占着、下面那条永远顶不上来")
+        if nl.get("ackTargetPositionAt200") != "absolute":
+            bad.append(f"@{width} notice-lab: +200ms 让位那条不是 `position:absolute`"
+                       f"（实得 {nl.get('ackTargetPositionAt200')}）—— `.is-item.is-out` 的定位没生效")
+        if nl.get("ackBelowJudge") == "judged":
+            before_top = nl.get("ackBelowTopBefore")
+            at80 = nl.get("ackBelowTopAt80")
+            at200 = nl.get("ackBelowTopAt200")
+            row_h = nl.get("ackTargetHeight") or 0
+            if None not in (before_top, at80, at200):
+                if at80 < before_top - 1:
+                    bad.append(f"@{width} notice-lab: 还没让位（+80ms）下面那条就上移了"
+                               f"（{before_top} → {at80}）—— 用户要的是**先滑 60%–80%**"
+                               f"（让位时刻那条判据在另一侧）")
+                if at200 > before_top - max(4, row_h * 0.5):
+                    bad.append(f"@{width} notice-lab: 让位之后（+200ms）下面那条没顶上来"
+                               f"（{before_top} → {at200}，被让位那条高 {row_h}）")
+        elif nl.get("ackBelowJudge") == "no-below" and (nl.get("ackableBefore") or 0) > 1:
+            # 面板里明明还有别的可点条目，却挑了一条底下没兄弟的 ⇒ 这条判据白跑（选靶问题）
+            bad.append(f"@{width} notice-lab: 挑的靶（{target_id}）下面没有兄弟 ⇒ "
+                       f"「下面那条什么时候顶上来」这条判据空过"
+                       f"（可点条目 {nl.get('ackableBefore')} 条，本该挑得到）")
     # ⑧ 顶上来（用户 2026-10-05："滑出正常，但留下的空白不被自动顶上去"）：
     #    ① 退场那条腾出的位置必须被下面那条**占掉**（第一行离列表顶不许超过一个行高）；
     #    ② 补位用的内联 `translateY` 必须**擦干净** —— 卡在 DOM 上就是"永久错位"的样子。
@@ -1986,14 +2039,21 @@ def _assert_notice_lab(nl: dict, width: int) -> list[str]:
     if nl.get("ackAllBeforeIds"):
         # 逐条（用户 2026-10-05）：点完 120ms 时**不该全走完** —— 队列每 70ms 放一条。
         # 只有批量 ≥3 时才判（1–2 条本来就看不出"逐条"）。
+        # ⚠️ "走掉"= **开始滑**（`is-sliding`），不是让位（`is-out`，2026-10-06 起要等
+        #   放行后 65%×220 ≈ 143ms）—— 只数 `.is-out` 会把"已经在逐条滑"读成"没反应"。
         batch = nl.get("ackAllBatch") or 0
-        early = nl.get("ackAllOutAt120") or []
+        early = nl.get("ackAllStartedAt120") or []
+        yielded = nl.get("ackAllYieldedAt120") or []
         if batch >= 3 and len(early) >= batch:
             bad.append(f"@{width} notice-lab: 「全部已读」当拍全走完了（{batch} 条一起滑）—— "
                        f"用户要的是**从上到下逐条**（每 70ms 一条）")
         elif batch >= 3 and len(early) < 1:
             bad.append(f"@{width} notice-lab: 「全部已读」点了 120ms 还一条都没开始滑"
                        f"（批量 {batch}）")
+        if yielded:
+            # +120ms < 143ms ⇒ 这一拍**一条都不该让位**（让位了就是"当拍腾位置"的老口径回来了）
+            bad.append(f"@{width} notice-lab: 「全部已读」+120ms 就有条目让位了（`is-out` 实得 "
+                       f"{yielded}）—— 用户 2026-10-06：先滑 60%–80% 再让下面的条目顶上来")
         if not nl.get("ackAllCleared"):
             bad.append(f"@{width} notice-lab: 「全部已读」之后这些还在："
                        f"{nl.get('ackAllStillAlive')}（点之前 {nl.get('ackAllBeforeIds')}）")
@@ -3996,10 +4056,21 @@ def main() -> int:
             print(f"  倒计时细条={nl.get('barCount')} 条（带 data-left 的种类="
                   f"{nl.get('withCountdown')}）")
             print(f"  动作按钮={nl.get('actionLabels')} 一键已读={nl.get('hasAckAll')}")
-            print(f"  点一条已读：目标={nl.get('ackTarget')!r} 滑出={nl.get('ackOutIds')!r} "
+            print(f"  点一条已读：目标={nl.get('ackTarget')!r} 退场={nl.get('ackOutIds')!r} "
                   f"活着 {nl.get('aliveBeforeAck')} → {nl.get('aliveAfterAck')}")
+            # 让位时机（2026-10-06 新口径：先滑 60%–80%，下面的条目再顶上来）
+            print(f"  +80ms：在滑={nl.get('ackSlidingAt80')!r} 已让位={nl.get('ackYieldedAt80')!r} "
+                  f"position={nl.get('ackTargetPositionAt80')!r}"
+                  f" ｜ 同拍别人在退场={nl.get('ackExitingOthersAt80')!r}")
+            print(f"  +200ms：已让位={nl.get('ackYieldedAt200')!r} "
+                  f"position={nl.get('ackTargetPositionAt200')!r}")
+            print(f"  下面那条（布局 offsetTop）：让位前={nl.get('ackBelowTopBefore')} "
+                  f"+80ms={nl.get('ackBelowTopAt80')} +200ms={nl.get('ackBelowTopAt200')}"
+                  f" ｜ 被让位那条高={nl.get('ackTargetHeight')} "
+                  f"（判没判={nl.get('ackBelowJudge')!r}：judged / no-below / others-exiting；"
+                  f"同一列表里它上方还在退场的={nl.get('ackExitingAboveAt80')!r}）")
             print(f"  顶上来（视觉，含过渡中间值）：+80ms={nl.get('ackGeomAt80')}")
-            print(f"                                +680ms={nl.get('ackGeomAfter')}")
+            print(f"                               收尾={nl.get('ackGeomAfter')}")
             print(f"          布局（判据用的就是它）=空位 {nl.get('ackTopGaps')} "
                   f"｜残留位移={nl.get('ackLeftoverTransforms')!r}")
             print(f"          动画自检：{nl.get('motionSelfTest')}")
@@ -4010,7 +4081,9 @@ def main() -> int:
                   f"｜正在进行 {nl.get('ackAllDoingBefore')} → {nl.get('doingAfterAckAll')} "
                   f"（未被动={nl.get('doingUntouched')}）")
             print(f"  逐条退场：批量 {nl.get('ackAllBatch')} 条，+120ms 已开始滑 "
-                  f"{len(nl.get('ackAllOutAt120') or [])} 条 {nl.get('ackAllOutAt120')}")
+                  f"{len(nl.get('ackAllStartedAt120') or [])} 条 {nl.get('ackAllStartedAt120')}"
+                  f"｜已让位 {nl.get('ackAllYieldedAt120')!r}"
+                  f"（+120ms 应**一条都没让位**，让位在 143ms）")
             for line in (nl.get("itemTexts") or []):
                 print(f"     条目: {line}")
             print(f"  本地那一份 id：{nl.get('localIds')!r}")

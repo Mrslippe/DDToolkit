@@ -43,12 +43,17 @@ def _raw(mid: int, uname: str, **kw) -> dict:
 # ── 纯函数 ────────────────────────────────────────────────────────────
 
 def test_looks_like_uid_only_for_pure_digits_of_reasonable_length():
-    """数字分流判据：纯数字且 5~12 位才当 UID（B 站早期 uid 有 5~6 位的）。"""
+    """数字分流判据：纯数字且 5~20 位才当 UID（B 站早期 5~6 位、新账号 16 位）。"""
     assert bili_search.looks_like_uid("1265680561") is True
     assert bili_search.looks_like_uid("896830") is True        # 早期 6 位
+    # ⚠️ 16 位是 B 站新 mid 的常态（2026-10-06 实测：用户库里第三方索引 2206/9141 条是 16 位）——
+    #    这里以前的上界是 12 位，把这些**全部**判成 bad_uid，症状是"小体量 UP 加不进去"
+    #    且 adopt 把它报成 404「B 站查不到这个 UID」（devlog/378）。
+    assert bili_search.looks_like_uid("3537112928356578") is True
     assert bili_search.looks_like_uid("1234") is False         # 太短 → 更可能是名字里的数字
     assert bili_search.looks_like_uid("塔菲") is False
     assert bili_search.looks_like_uid("1265680561a") is False
+    assert bili_search.looks_like_uid("1" * 21) is False       # 上界仍在（20 位以上显然不是 mid）
     assert bili_search.looks_like_uid("") is False
 
 

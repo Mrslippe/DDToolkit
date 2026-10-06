@@ -50,21 +50,28 @@ const NOW = 1_700_000_000_000
  * **假布局**（`devlog/350`）：jsdom 不做排版，所有 `getBoundingClientRect()` 都是 0
  * ⇒ FLIP 的位移 `dy` 恒为 0 ⇒ "补位"那条路径一步都走不到。
  *
- * 口径照真实结构写：`.si-list` 内边距 6px、行高固定 40；**退场的行不占流内位置**
- * （它 `position:absolute`，位置由冻结的 `style.top` 给），活着的行按在流内的次序排。
+ * 口径照真实结构写：`.si-list` 内边距 6px、行高固定 40；**已让位的行不占流内位置**
+ * （`.is-out`：`position:absolute`，位置由冻结的 `style.top` 给），
+ * **还在流内的行**（活着 / 排队 / **滑出中**）按在流内的次序排。
+ * ⚠️ "滑出中"（`.is-sliding`）**占位**是 2026-10-06 那条新口径的核心（用户：
+ * 「让上一条已读滑出 60%–80% 之后，下面的条目再顶上去」）—— 所以这条假布局的
+ * `:not(.is-out)` 判据一个字都不用改：它描述的正是"谁还占着流内位置"。
  *
  * ⚠️ 钉的是 **`offsetTop` / `offsetHeight`**（布局值）而不是 `getBoundingClientRect()`：
  * 组件读的就是这两个，而它们的意义正是"transform 无关" —— 用 rect 会被**正在跑的过渡**
  * 骗到（2026-10-05 的真根因，见 `geomOf` 的注释）。
  * `flushed` 记下**强制样式计算那一下**（读 `offsetHeight` 时）各条目身上挂着的内联位移 ——
  * 同步 FLIP 的**起点**就是靠这一下落实的（少了它，补位退化成"啪一下跳上去"）。
+ *
+ * `trace`（可选，2026-10-06 加）：同一时刻**逐行**记 `id|sliding=…|tf=…` ——
+ * 用来判"补位到底补到了谁"（滑出中的那条也必须被补，见那条用例）。
  */
 const ROW_H = 40
 const LIST_PAD = 6
-function stubLayout(flushed: string[] = []) {
+function stubLayout(flushed: string[] = [], trace?: string[]) {
   vi.spyOn(HTMLElement.prototype, 'offsetTop', 'get').mockImplementation(function (this: HTMLElement) {
     if (this.classList.contains('is-out')) {
-      return Number.parseFloat(this.style.top || '0') || 0      // 浮起来的那条：位置由它自己给
+      return Number.parseFloat(this.style.top || '0') || 0      // 让位的那条：位置由它自己给
     }
     if (this.classList.contains('si-item')) {
       const live = [...(this.closest('.si-list')?.querySelectorAll('.si-item:not(.is-out)') ?? [])]
@@ -74,6 +81,11 @@ function stubLayout(flushed: string[] = []) {
   })
   vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
     flushed.push(this.style.transform)
+    if (trace && this.classList.contains('si-item')) {
+      trace.push(`${this.getAttribute('data-notice-id')}`
+        + `|sliding=${this.classList.contains('is-sliding')}`
+        + `|out=${this.classList.contains('is-out')}|tf=${this.style.transform}`)
+    }
     return this.classList.contains('si-item') ? ROW_H : 0
   })
 }
@@ -255,7 +267,10 @@ describe('体检那条 effect 不许每拍都调度更新（源码级结构判�
 
   it('先判 `stale`，没有就 `return`，**然后**才 setRows', () => {
     expect(block.length, '没找到那段体检代码（判据自己失效了）').toBeGreaterThan(80)
-    expect(block).toMatch(/const stale = rows\.some\(\(r\) => !r\.queued && !r\.leaving && !isLive\(r, now\)\)/)
+    // ⚠️ 三个标记都要在里面（2026-10-06 加了 `sliding`）：漏了它，正在滑的那条会被
+    //    再标一次 `queued` ⇒ 同一条被放行两次（滑一半重新开始滑）
+    expect(block).toMatch(
+      /const stale = rows\.some\(\(r\) => !r\.queued && !r\.sliding && !r\.leaving && !isLive\(r, now\)\)/)
     const guard = block.indexOf('if (!stale) return')
     const call = block.indexOf('setRows(')
     expect(guard, '少了"没东西到点就早退"那道闸').toBeGreaterThan(-1)
@@ -395,29 +410,39 @@ describe('一键已读与自动已读的退场', () => {
     expect(onAction.mock.calls.map((c) => c[0])).toEqual(['open-report'])
   })
 
-  it('过期的条目：先挂 `is-out` 滑出，动画放完才从 DOM 摘掉（且**留在原组**里）', () => {
+  it('过期的条目：先 `is-sliding` **在流内**滑出，65% 后才让位，动画放完才从 DOM 摘掉（且**留在原组**里）', () => {
+    // ⚠️ 口径 2026-10-06 改过（用户：「让上一条已读滑出 60%–80% 之后，下面的条目再顶上去」）：
+    //    它**不再**在退场的第一拍就浮起来 —— 先 `is-sliding`（在流内、位置还占着），
+    //    滑到 `EXIT_YIELD_MS`（65%×220 ≈ 143ms）才 `is-out`（浮起来、让出位置）。
+    stubLayout()
     render([message({ createdAt: NOW, expiresAt: NOW + 1000 }), report()])
     const panel = openPanel()
     expect(panel!.querySelectorAll('.si-item')).toHaveLength(2)
     // ⚠️ 只推进到"秒表刚跳过 TTL"那一刻（1s）—— 推多了会把 220ms 的**移除定时器**也一起
     //    放掉，于是中间态永远看不到（第一版推 1100ms 就是这么假红的）。
     act(() => { vi.advanceTimersByTime(1020) })
-    // 这一拍它已经不该算"活着"（`.si-sec .si-item:not(.is-out)` 里只剩另一条），
-    // 但仍在 DOM 里播退场动画，**而且还在它原来那个组里**（不再跳到列表最下面）
-    const alive = panel!.querySelectorAll('.si-sec .si-item:not(.is-out)').length
-    expect(alive).toBe(1)
-    const out = panel!.querySelector<HTMLElement>('.si-item.is-out')
-    expect(out).toBeTruthy()
-    // **它就是刚过期的那条**（不是别的行）
-    expect(out!.getAttribute('data-notice-id')).toBe('msg-1')
-    // 且**钉在原来的位置**（`top` 由 FLIP 的快照给）：这条是"从它的位置滑出去"的判据 ——
-    // 挂到别的容器里、或位置被重排，都会让它看起来"跳走了"。
-    // ⚠️ 不断言它属于哪个 `.si-sec`：那条路径由"这一组是否还在渲染"决定（整组只剩它时会被
-    //    兜底容器接住），那是实现细节，不是用户能感知的事实。
-    expect(out!.style.position).toBe('absolute')
-    expect(out!.style.top).not.toBe('')
-    // ⚠️ 时间窗很窄：**必须在 1000ms（秒表判过期）之后、1220ms（移除定时器）之前**采样。
-    //    1050 也够，但 1020 留的余量大（本机 CI 上跑得过密时 1050 偶尔会踩到移除那一拍）。
+    const row = panel!.querySelector<HTMLElement>('.si-item[data-notice-id="msg-1"]')!
+    expect(row.classList.contains('is-sliding'), '这一拍它已经在滑出').toBe(true)
+    expect(row.classList.contains('is-out'), '但**还没让位**（才滑了 20/220ms）').toBe(false)
+    // ⚠️ 判据不能跨组比 `offsetTop`（`message` 在 recent、`report` 在 todo，
+    //    各是各自 `.si-list` 里的第一行、量出来都是 6）—— 数"还在流里的行数"才对得上：
+    //    让位前**两条都占位**（滑出中那条仍然占着），让位后只剩一条。
+    const inFlow = () => panel!.querySelectorAll('.si-sec .si-item:not(.is-out)').length
+    expect(inFlow(), '让位前：滑出中那条**仍占着**流内位置').toBe(2)
+    // 滑到 65%（≈143ms）⇒ 让位：两个类**同时在场**（动画仍挂在 `is-sliding` 上，不许被重挂）
+    // ⚠️ 推 **160ms** 而不是 143：上面那次 `advanceTimersByTime(1020)` 里，秒表那一拍的状态
+    //    更新是**在这一批走完**（时钟已经停在 1020）才被 React 冲掉的 ⇒ 让位表实际从 1020 起算、
+    //    到期时刻是 **1163**。推 140 会差 3ms 落在"还没到"上（实测踩到：`.is-out` 死活不出现）。
+    //    上限是移除表（放行后 220ms ⇒ 1240），160 两边都留了余量。
+    act(() => { vi.advanceTimersByTime(160) })
+    expect(row.classList.contains('is-sliding'), '让位那一拍 `.is-sliding` 不许被摘掉').toBe(true)
+    expect(row.classList.contains('is-out')).toBe(true)
+    // 冻结的几何：`top` 是**内联**给的（`position`/`left`/`right` 在 CSS 的 `.si-item.is-out` 里，
+    // jsdom 不加载真 CSS ⇒ 这里只能判内联那一半，另一半由下面的 CSS 结构判据钉）
+    expect(row.style.top).not.toBe('')
+    expect(inFlow(), '让位后：流内只剩另一条').toBe(1)
+    // 而且**它还在原来那个组里**（不再跳到别处；整组只剩它时也不会被兜底容器接走）
+    expect(row.closest('.si-sec')?.getAttribute('data-group')).toBe('recent')
     // 动画放完 ⇒ 真正移除
     act(() => { vi.advanceTimersByTime(400) })
     expect(panel!.querySelector('.si-item.is-out')).toBeNull()
@@ -440,11 +465,13 @@ describe('一键已读与自动已读的退场', () => {
       expect(openPanel()).toBeTruthy()
       // 秒表走一格 ⇒ `now` 越过 TTL（判它退场）**且**这一拍的 `now` 与上一拍不同（点火条件）
       act(() => { vi.advanceTimersByTime(1020) })
-      const outs = document.querySelectorAll('.si-panel .si-item.is-out')
+      // ⚠️ 判据取 `.is-sliding`（**两个阶段都有它**）：这让位那条仍挂着它，
+      //    所以这一条对"退场处于哪一相"不敏感 —— 它要钉的是"在退场、且没被自激打爆"。
+      const outs = document.querySelectorAll('.si-panel .si-item.is-sliding')
       expect(outs.length, '到期那条应当在滑出').toBe(1)
       // 再推几拍（每拍 `now` 都不同）—— 自激会在这个窗口里把 React 打爆（抛错即本用例失败）
       for (let i = 0; i < 5; i += 1) act(() => { vi.advanceTimersByTime(1000) })
-      expect(document.querySelectorAll('.si-panel .si-item.is-out').length).toBeLessThanOrEqual(1)
+      expect(document.querySelectorAll('.si-panel .si-item.is-sliding').length).toBeLessThanOrEqual(1)
     } finally {
       spy.mockRestore()
     }
@@ -480,7 +507,10 @@ describe('一键已读与自动已读的退场', () => {
       message({ id: 'm3', text: '第三条', createdAt: NOW - 2000 }),
     ])
     const panel = openPanel()!
-    const outs = () => [...panel.querySelectorAll<HTMLElement>('.si-item.is-out')]
+    // ⚠️ "已经走掉"的判据取 **`.is-sliding`**（2026-10-06 起放行 = 开始滑、**还没**让位）：
+    //    两个阶段（滑出中 / 已让位）都挂着这个类，所以"放行了几条"它说了算；
+    //    只看 `.is-out` 会读到"一条都没走"（让位要等 65%×220 ≈ 143ms）。
+    const outs = () => [...panel.querySelectorAll<HTMLElement>('.si-item.is-sliding')]
       .map((n) => n.getAttribute('data-notice-id'))
     const ids = () => [...panel.querySelectorAll<HTMLElement>('.si-item')]
       .map((n) => n.getAttribute('data-notice-id'))
@@ -490,7 +520,7 @@ describe('一键已读与自动已读的退场', () => {
     expect(onAction).toHaveBeenCalledWith('ack-all', expect.anything())
     // 面板侧：点完这一拍还什么都看不出来（真正的移除在 TopBar 那一半，这里补一次重渲染模拟）
     act(() => root.render(<StatusIsland notices={[]} onAction={onAction} now={NOW} />))
-    // ① 条数不变、只有**最上面那条**在滑（其余在排队：还在原位、还没 `is-out`）
+    // ① 条数不变、只有**最上面那条**在滑（其余在排队：还在原位、连 `is-sliding` 都没有）
     expect(ids(), '排队的那几条不许当场消失').toEqual(['m1', 'm2', 'm3'])
     expect(outs(), '第一条（最上面）先走').toEqual(['m1'])
     // ② 每 70ms 放一条：第二条（+70）、第三条（+140）
@@ -534,13 +564,23 @@ describe('一键已读与自动已读的退场', () => {
     const flushed: string[] = []
     stubLayout(flushed)
     const a = message({ id: 'a', text: '第一条' })
-    const b = message({ id: 'b', text: '第二条', createdAt: NOW })
+    // ⚠️ `createdAt` **必须错开**（原来这里 a 与 b 同为 `NOW`）：两条的排序键相等时，
+    //    `drawnGroups` 的 `[...live, ...mine]` 会把"已退场那条"排到活着的后面 ⇒
+    //    撤下 a 的那一拍**两行会换位**（都走 FLIP 的缓动），量到的 +40px 就成了"换位"，
+    //    而不是这条用例要钉的"a 走了 ⇒ b 顶上来"。（这版是老用例留下来的坑：
+    //    老口径下 a 当拍就浮起来、跳过 FLIP，所以那个换位看不见 —— 见最终报告的遗留点。）
+    const b = message({ id: 'b', text: '第二条', createdAt: NOW - 1000 })
     act(() => root.render(<StatusIsland notices={[a, b]} onAction={vi.fn()} now={NOW} />))
     const panel = openPanel()!
     const rowB = () => panel.querySelector<HTMLElement>('.si-item[data-notice-id="b"]')!
 
-    // 点 a = 已读 ⇒ 父组件把它撤下（这里直接重渲染模拟），b 要**从第 2 行补到第 1 行**
+    // 点 a = 已读 ⇒ 父组件把它撤下（这里直接重渲染模拟），b 稍后要从第 2 行补到第 1 行。
+    // ⚠️ **补位发生在让位那一刻**（2026-10-06 起 = 放行后 `EXIT_YIELD_MS` ≈ 143ms），
+    //    不再像老口径那样"撤下的当拍就顶上来" —— 所以这里必须先走完那 143ms。
     act(() => root.render(<StatusIsland notices={[b]} onAction={vi.fn()} now={NOW} />))
+    expect(flushed, '还没让位 ⇒ 这时**不该**有补位（用户 2026-10-06：先滑 65% 再顶）')
+      .not.toContain(`translateY(${ROW_H}px)`)
+    act(() => { vi.advanceTimersByTime(150) })      // 越过 143ms 的让位时刻
     // 补位**真的发生过**：强制样式计算那一下，元素身上挂着 +40px 的反向位移（= 过渡的起点）
     expect(flushed.some((t) => t.includes(`translateY(${ROW_H}px)`)),
            `强制刷新的那一下应当挂着 +${ROW_H}px 的反向位移（补位的起点），实得 ${flushed}`).toBe(true)
@@ -552,6 +592,142 @@ describe('一键已读与自动已读的退场', () => {
     act(() => root.render(<StatusIsland notices={[b]} onAction={vi.fn()} now={NOW + 1} />))
     expect(rowB().style.transform).toBe('')
     expect(rowB().style.transition).toBe('')
+  })
+})
+
+/**
+ * **让位时机**（用户 2026-10-06 的口径反转）：
+ * 「让上一条已读滑出 **60%–80%** 之后，下面的条目再顶上去」。
+ *
+ * 老口径（2026-10-05）是"退场那条**当场**浮起来 ⇒ 流内位置立刻空出、下面的条目**同时**上移"。
+ * 新口径把"腾出位置"推到滑出动画走了 `EXIT_YIELD_AT`（65% ≈ 143ms）那一刻。
+ * 判据直接钉**那个时间窗**：+80ms（< 60%×220 = 132ms）时下面那条**一动没动**；
+ * +160ms（> 143ms）时它已经顶上来了。
+ */
+describe('让位时机（2026-10-06：先滑 60%–80%，下面的条目再顶上来）', () => {
+  it('+80ms 下面那条**还没**上移；+160ms 才上移（且让位那条**两个类同时在场**）', () => {
+    stubLayout()
+    const b = message({ id: 'b', text: '第二条', createdAt: NOW - 1000 })
+    const onAction = render([message({ id: 'a', text: '第一条' }), b])
+    const panel = openPanel()!
+    const row = (id: string) =>
+      panel.querySelector<HTMLElement>(`.si-item[data-notice-id="${id}"]`)!
+    // 前提：a 在上、b 在下，各占一行
+    expect([row('a').offsetTop, row('b').offsetTop]).toEqual([LIST_PAD, LIST_PAD + ROW_H])
+
+    // 点 a = 已读 ⇒ 父组件把它撤下（这里直接重渲染模拟）
+    act(() => root.render(<StatusIsland notices={[b]} onAction={onAction} now={NOW} />))
+    expect(row('a').classList.contains('is-sliding'), '放行 = 开始滑（人还在流内）').toBe(true)
+    expect(row('a').classList.contains('is-out'), '放行**不**让位').toBe(false)
+    expect(row('b').offsetTop, '刚放行时下面那条当然还在原位').toBe(LIST_PAD + ROW_H)
+
+    act(() => { vi.advanceTimersByTime(80) })     // 80ms < 0.6×220 = 132ms
+    expect(row('a').classList.contains('is-out'), '+80ms 还不该让位').toBe(false)
+    expect(row('b').offsetTop, '+80ms：下面那条**还在原位**（这条就是新口径本身）')
+      .toBe(LIST_PAD + ROW_H)
+
+    act(() => { vi.advanceTimersByTime(80) })     // 累计 160ms > 143ms（0.65×220）
+    expect(row('b').offsetTop, '+160ms：让位已发生 ⇒ 下面那条顶上来').toBe(LIST_PAD)
+    // 让位那一刻**两个类同时在场**：`.is-sliding` 管动画、`.is-out` 管定位。
+    // 少了 `.is-sliding` 就等于"把动画重新挂了一次"⇒ 从头播，视觉上那条会往回跳一下。
+    expect(row('a').classList.contains('is-sliding'), '让位不许摘掉动画那个类').toBe(true)
+    expect(row('a').classList.contains('is-out')).toBe(true)
+    // 冻结的几何由**内联**给（`top`/`height` 是每行自己的数据）；`position`/`left`/`right`
+    // 在真 CSS 里（jsdom 不加载它）—— 那一半由下面那条读真 CSS 的判据钉。
+    expect(row('a').style.top).not.toBe('')
+  })
+
+  it('**滑出中的那条也要被补位**（它上面那条让位时，它不许当场跳一行）', () => {
+    // ⚠️ 这条钉的是一个**刻意不做**的跳过：`.is-out` 要被 FLIP 跳过（它已脱离文档流），
+    //    但 `.is-sliding` **必须补** —— 上面那条让位时它在**布局**上会被顶上去一整行，
+    //    不给它缓动它就当场跳一行（逐条退场时第三条最明显：它刚开滑、还几乎不透明）。
+    //    老写法跳它的理由是"动画占着 `transform`、补位写进去也会被动画覆盖"——
+    //    那个前提现在不成立：退场动画走**独立变换属性 `translate`**（见 CSS），
+    //    `transform` 空着给 FLIP，两者在 CSS 里是**合成**关系而不是互相覆盖。
+    const trace: string[] = []
+    stubLayout([], trace)
+    const onAction = render([
+      message({ id: 'm1', text: '第一条' }),
+      message({ id: 'm2', text: '第二条', createdAt: NOW - 1000 }),
+      message({ id: 'm3', text: '第三条', createdAt: NOW - 2000 }),
+    ])
+    const panel = openPanel()!
+    act(() => { panel.querySelector<HTMLElement>('[data-ack-all]')!.click() })
+    act(() => root.render(<StatusIsland notices={[]} onAction={onAction} now={NOW} />))
+    act(() => { vi.advanceTimersByTime(70) })     // m2 放行
+    act(() => { vi.advanceTimersByTime(70) })     // m3 放行（t = 140）
+    trace.length = 0
+    act(() => { vi.advanceTimersByTime(6) })      // t = 146：m1 让位 ⇒ 这一拍必须补 m2/m3
+    const slid = trace.filter(
+      (t) => t.includes('sliding=true') && t.includes(`translateY(${ROW_H}px)`))
+    expect(slid.length, `滑出中的条目没被补位（下一拍会当场跳一行）：${trace.join(' / ')}`)
+      .toBeGreaterThan(0)
+  })
+})
+
+/**
+ * 源码级：**让位那一刻动画不许被重新挂上**（读**真** `status-island.css`）。
+ *
+ * 为什么必须钉在源码这一层：jsdom 不加载 CSS、更不跑动画，"动画有没有从头重播"在
+ * 组件用例里**根本测不到**（能测到的只有"两个类同时在场"，那是它的**必要条件**）。
+ * 而这条错的形态是**会真发生的**：`.is-out` 在让位那一刻才加上，只要它（或它那条规则）
+ * 也声明了 `animation`，"同名动画被重新计算"就可能从 0% 重来 —— 视觉上那条滑到一半
+ * **往回跳一下**再滑出去（用户对这类跳动极敏感，2026-10-05 那批全是这种反馈）。
+ *
+ * 判据取"动画挂在哪个选择器上"：**唯一那条主退场动画必须在 `.is-sliding` 上**
+ * （放行起一直在的那个类），而 `.is-out` 的每条规则里**都不许**出现 `animation`。
+ */
+describe('退场动画不重启（读真 `status-island.css` 的结构判据）', () => {
+  const css = readFileSync(
+    join(__dirname, '..', 'styles', 'status-island.css'), 'utf8')
+    // ⚠️ **先去注释**：注释里什么字都有（含逗号），留着它们会把"选择器"读成一整段散文，
+    //    于是 `rulesFor()` 永远匹配不上真规则 —— 判据退化成"什么都没查"（第一版就是这样：
+    //    `.is-out` 那条 `position:absolute` 死活找不着，其实规则一直在）
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+  /** 真 CSS 的规则块（`selector { body }`；`@media` 里的嵌套规则按同一条抓，
+   *  因为 `[^{}]+` 跨不过 `{`） */
+  const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+    .map((m) => ({ selector: m[1].trim().replace(/\s+/g, ' '), body: m[2] }))
+  const rulesFor = (sel: string) =>
+    rules.filter((r) => r.selector.split(',').map((s) => s.trim()).includes(sel))
+  /** `@keyframes <name> { … }` 的块体（按大括号配对取，不受缩进/换行影响） */
+  const keyframesBody = (name: string) => {
+    const start = css.indexOf(`@keyframes ${name} {`)
+    expect(start, `CSS 里找不到 \`@keyframes ${name}\`（判据自己失效了）`).toBeGreaterThan(-1)
+    let depth = 0
+    for (let i = css.indexOf('{', start); i < css.length; i += 1) {
+      if (css[i] === '{') depth += 1
+      else if (css[i] === '}') {
+        depth -= 1
+        if (depth === 0) return css.slice(start, i + 1)
+      }
+    }
+    throw new Error(`@keyframes ${name} 的大括号没配对`)
+  }
+
+  it('动画只在 `.is-sliding` 上；`.is-out` 的规则里**不许**有 animation', () => {
+    const anim = rules.filter((r) => /animation:\s*si-item-out\s/.test(r.body))
+    expect(anim, '主退场动画（`si-item-out`）应当恰好有一条声明').toHaveLength(1)
+    expect(anim[0].selector).toContain('.si-item.is-sliding')
+    const out = rulesFor('.si-item.is-out')
+    expect(out.length, 'CSS 里没有 `.si-item.is-out` 规则（判据自己失效了）').toBeGreaterThan(0)
+    for (const r of out) {
+      expect(r.body, `让位那条规则带了 animation ⇒ 动画会从头重播（${r.selector}）`)
+        .not.toContain('animation')
+    }
+    expect(out.some((r) => /position:\s*absolute/.test(r.body)),
+           '`.is-out` 必须负责"脱离文档流"（这一句就是"让位"本身）').toBe(true)
+  })
+
+  it('退场动画动 **`translate`**，不许动 `transform`（`transform` 是留给 FLIP 的）', () => {
+    // 理由：动画在层叠里**压过内联样式** ⇒ 动画占着 `transform` 时，FLIP 给"正在滑出的那条"
+    // 写的补位位移会被吃掉（它就会当场跳一行，见上一条用例）。
+    // 两个属性是**合成**关系：`translate` 排在 `transform` 之前，且都是纯平移 ⇒ 相加。
+    const kf = keyframesBody('si-item-out')
+    expect(kf).toContain('translate: -24px')
+    expect(kf, '关键帧动了 transform ⇒ 滑出中的条目补不了位').not.toContain('transform')
+    expect(keyframesBody('si-item-out-fade'), 'reduce 那一档只淡出，不许有位移')
+      .not.toContain('translate')
   })
 })
 

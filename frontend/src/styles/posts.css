@@ -1,4 +1,4 @@
-/* ── 帖子面板（右栏）：档案页式布局（Frame41301）──
+﻿/* ── 帖子面板（右栏）：档案页式布局（Frame41301）──
    结构：全屏模糊背景 + 滚动内容层（工具条 / hero / 帖子流） */
 
 .posts-panel {
@@ -20,10 +20,24 @@
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
-  opacity: 0.18;
+  /* ⚠️ 不透明度必须**只在这一处**定义成变量：`is-prev` 的淡出关键帧要读它
+     （`.custom` 是 1、头像铺底是 0.18），写死两份就会在自定义背景上"先跳到 0.18 再淡出"。 */
+  --backdrop-opacity: 0.18;
+  opacity: var(--backdrop-opacity);
   pointer-events: none;
-  /* 换装淡入：key=头像 src，随场景切换淡入新纱罩（关键帧在 layout.css） */
-  animation: backdrop-in 0.25s ease-out backwards;
+}
+
+/* 交叉淡入（2026-10-06，devlog/378）：换图时**旧层留在上面淡出**、新层已经垫在下面 ——
+   原先单层 + `key=src` 的做法会让旧层当场消失、新层从 0 淡入，中间那一帧露出面板底色
+   （用户看到的"闪白：100% → 0 → 100%"）。时长与 `BackdropCrossfade.BACKDROP_FADE_MS` 同值。 */
+.hero-backdrop.is-prev {
+  z-index: 1;
+  animation: backdrop-out 250ms ease-out forwards;
+}
+
+@keyframes backdrop-out {
+  from { opacity: var(--backdrop-opacity); }
+  to   { opacity: 0; }
 }
 
 .hero-backdrop::after {
@@ -44,7 +58,7 @@
 
 /* 自定义背景：全图清晰显示（opacity 1），纱罩 ::after 保留保文字可读 */
 .hero-backdrop.custom {
-  opacity: 1;
+  --backdrop-opacity: 1;
 }
 
 /* P8-1（2026-09-10 用户）：自定义背景是用户自己选的图，再压一层厚纱罩就发白看不清。

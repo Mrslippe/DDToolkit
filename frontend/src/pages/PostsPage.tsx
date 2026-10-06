@@ -41,6 +41,7 @@ import FanTrendChart from '../components/FanTrendChart'
 // R40：数据视图改用 DataDeck（不再用 OverlayScroll 包那一页 —— 一次只看一张卡，没有页面滚动）
 import FloatPill from '../components/common/FloatPill'
 import StateBlock from '../components/common/StateBlock'
+import { BackdropCrossfade } from '../components/common/BackdropCrossfade'
 import HeroCardsView from '../components/posts/HeroCardsView'
 import ListHeaderActions from '../components/posts/ListHeaderActions'
 import PostListView from '../components/posts/PostListView'
@@ -601,15 +602,10 @@ return (
             （`.page-title`）也在面板里、也压在背景图上，要跟着一起切（用户 2026-10-05）。
             CSS 侧统一按 `.posts-panel[data-ink=…]` 写。 */
          data-ink={inkTone ?? undefined}>
-      {/* 右栏永久背景：自定义背景(custom 全图清晰) 优先，否则头像铺底 + 渐变纱罩；
-          key=背景 src → 换装淡入不瞬跳 */}
-      {backdropSrc && (
-        <div
-          key={backdropSrc}
-          className={`hero-backdrop${customBg ? ' custom' : ''}`}
-          style={{ backgroundImage: `url(${backdropSrc})` }}
-        />
-      )}
+      {/* 右栏永久背景：自定义背景(custom 全图清晰) 优先，否则头像铺底 + 渐变纱罩。
+          ⚠️ 换图走 `BackdropCrossfade`（双层交叉淡入）—— 原先这里是单层 + `key={backdropSrc}`，
+          换 V 时旧层当场卸载、新层从 0 淡入 ⇒ 中间那一帧露出面板底色（用户报的"切 V 闪白"）。 */}
+      {backdropSrc && <BackdropCrossfade src={backdropSrc} custom={!!customBg} />}
 
       {/* 页面工具条（R45）：**覆盖**在内容之上、**按需出现**、不占布局。
           · `data-shown` 驱动显隐；键盘聚焦由 CSS `:focus-within` 兜（见 posts.css）

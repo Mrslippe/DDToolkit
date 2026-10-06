@@ -25,12 +25,16 @@ const bili = (over: Partial<BiliSearchItem> = {}): BiliSearchItem => ({
 })
 
 describe('输入分流：UID vs 名称', () => {
-  it('纯数字且 5~12 位才走 UID 直查（与后端同口径）', () => {
+  it('纯数字且 5~20 位才走 UID 直查（与后端同口径）', () => {
     expect(inputLooksLikeUid('1265680561')).toBe(true)
     expect(inputLooksLikeUid(' 896830 ')).toBe(true)     // 早期 6 位 uid + 首尾空格
+    // ⚠️ 16 位是 B 站新 mid 的常态（devlog/378）：卡在 12 位会让这类 uid 退化成关键词搜索，
+    //    而搜索接口搜不到 uid ⇒ 用户看到的是"搜不到这个人"。
+    expect(inputLooksLikeUid('3537112928356578')).toBe(true)
     expect(inputLooksLikeUid('1234')).toBe(false)        // 太短：更像名字里的数字
     expect(inputLooksLikeUid('塔菲')).toBe(false)
     expect(inputLooksLikeUid('1265680561a')).toBe(false)
+    expect(inputLooksLikeUid('1'.repeat(21))).toBe(false) // 上界仍在
     expect(inputLooksLikeUid('')).toBe(false)
   })
 })

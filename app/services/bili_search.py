@@ -94,11 +94,18 @@ class SearchResult:
 def looks_like_uid(kw: str) -> bool:
     """纯数字且 ≥5 位 → 按 UID 直查。
 
-    为什么是 5 位：B 站早期 uid 有 5~6 位的（如 896830）；再短的数字更可能是
+    为什么是 5 位下界：B 站早期 uid 有 5~6 位的（如 896830）；再短的数字更可能是
     名字里带数字（"1234"），按名称搜更合理。
+
+    ⚠️ **上界为什么要放到 20**（2026-10-06 用户实测）：B 站现在会给新账号发 **16 位 mid**
+    （例：`3537112928356578`）—— 用户库里的第三方索引 9141 条中有 **2206 条**是这种长度。
+    原先的上界 12 位把这些**全部**挡在门外：`exact_user` 直接回 `bad_uid`，
+    而 `/vtuber/adopt` 把 `bad_uid` 归到 404「B 站查不到这个 UID」——
+    症状是"小体量 UP 加不进去"，且提示完全指错方向（`devlog/378`）。
+    下界不变、上界只留一个"显然不是 uid"的护栏（B 站 mid 是 64 位整数，20 位够宽松）。
     """
     kw = (kw or "").strip()
-    return kw.isdigit() and 5 <= len(kw) <= 12
+    return kw.isdigit() and 5 <= len(kw) <= 20
 
 
 def strip_highlight(s: str | None) -> str:
@@ -290,7 +297,7 @@ async def exact_user(uid: str, client: httpx.AsyncClient | None = None) -> Searc
     """按 UID 精确取人（`acc/info` + `relation/stat`；搜索接口搜不到 uid，必须直查）。"""
     uid = (uid or "").strip()
     if not looks_like_uid(uid):
-        return SearchResult(error="bad_uid", hint="UID 必须是 5~12 位数字")
+        return SearchResult(error="bad_uid", hint="UID 必须是 5~20 位数字")
     hit = _cache_get(f"uid:{uid}", 1)
     if hit is not None:
         return SearchResult(items=hit[0], page=1, exact=True, cached=True)

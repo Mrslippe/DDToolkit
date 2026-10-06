@@ -36,10 +36,16 @@ export interface AddCandidate {
   exact?: boolean
 }
 
-/** 输入是否应走 UID 直查（与后端 `bili_search.looks_like_uid` 同口径） */
+/**
+ * 输入是否应走 UID 直查（与后端 `bili_search.looks_like_uid` 同口径）。
+ *
+ * ⚠️ 上界必须跟着后端一起放宽（2026-10-06，`devlog/378`）：B 站新账号是 **16 位 mid**
+ * （例 `3537112928356578`）。这里卡在 12 位时，16 位输入会被当成**关键词**去搜 ——
+ * 而 B 站搜索接口搜不到 uid ⇒ 界面上表现为"这个名字搜不到任何结果"。
+ */
 export function inputLooksLikeUid(kw: string): boolean {
   const s = (kw || '').trim()
-  return /^\d{5,12}$/.test(s)
+  return /^\d{5,20}$/.test(s)
 }
 
 function keyOf(platform: string, uid: string | number): string {

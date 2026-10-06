@@ -41,7 +41,8 @@ const PANEL_GAP = 6
 /** 面板宽（顶栏宿主。小窗宿主的 400 已随小窗一起退役） */
 const PANEL_W = 340
 
-/** 自动已读的滑出动画时长（ms）—— 必须与 `status-island.css` 的 `.si-item.is-out` 同值 */
+/** 自动已读的滑出动画时长（ms）—— 必须与 `status-island.css` 的 `.si-item.is-sliding` 同值
+ * （动画挂在 **`.is-sliding`** 上，不是 `.is-out`：见 `EXIT_YIELD_MS` 那段注释） */
 const ITEM_EXIT_MS = 220
 
 /**
@@ -52,6 +53,34 @@ const ITEM_EXIT_MS = 220
  * （不只「全部已读」）—— TTL 同一拍到点的几条、服务端一次撤多条，也一条一条走。
  */
 const ACK_STAGGER_MS = 70
+
+/**
+ * 退场那条**滑到几成才让出流内位置**（用户 2026-10-06 新口径的原话：
+ * 「让上一条已读滑出 **60%–80%** 之后，下面的条目再顶上去」）。
+ *
+ * ⚠️ 这是一次**口径反转**（2026-10-05 的老口径是"退场那条必须当场浮起来、下面的条目
+ * **同时**上移"，理由是"不浮就得等它滑完才顶上"）。用户看过实际效果之后要的是**错开**：
+ * 先让它滑，滑过大半、快到看不着了，再让下面那条顶上来 —— 两个动作在时间上分开，
+ * 眼睛才跟得上"是这一条走了、那一条顶上来了"。
+ * 取区间中点偏下（0.65×220 ≈ 143ms）：不透明度在 40%（≈90ms）就归零，所以让位发生时
+ * 那条**已经看不见了**，顶上来的是"一块刚空出来的位置"而不是"一条正在消失的条目"。
+ */
+const EXIT_YIELD_AT = 0.65
+
+/**
+ * **让位时刻**（放行后多少 ms 那条才 `position:absolute` 浮起来、把流内位置交出去）。
+ * 由 `ITEM_EXIT_MS` 推出来，不许各写一份（改一处即两处）。
+ *
+ * ⚠️⚠️ **总时长不变**：移除表仍按**放行那一刻**起算 `ITEM_EXIT_MS`
+ * ⇒ 让位只是把"腾出位置"这一步往后挪，条目在屏幕上待多久一个字没改。
+ *
+ * ⚠️ **动画绝不能在这一拍重启**：从 `sliding` 切到 `leaving` 时，元素上新增的只有
+ * `.is-out`（= 定位），而**动画一直挂在 `.is-sliding` 上** —— 计算值的 `animation-name`
+ * 没变，浏览器就不会重新播放。若把动画一起挪到 `.is-out`（老写法）就会**从头再播一次**：
+ * 那条会"往回跳一下"再滑出去。判据见 `StatusIsland.test.tsx`
+ * （「两个类同时在场」+ 读真 CSS 的结构判据）。
+ */
+const EXIT_YIELD_MS = Math.round(ITEM_EXIT_MS * EXIT_YIELD_AT)
 
 /**
  * 面板条目的**图标**：优先按**来源**选，认不出来才退回按 `kind` 选（2026-10-05 用户反馈）。
@@ -97,10 +126,18 @@ const KIND_LABEL: Record<string, string> = {
   message: '提示',
 }
 
-/** 已在播放退场动画的条目（`leaving` = 是否正在滑出）
+/**
+ * **退场四态**（2026-10-06；三态那版是 `devlog/351`）：
+ * `queued`（不再活着、留在原位排队等放行）→ **`sliding`（在流内播滑出动画，**还占着**流内位置）**
+ * → `leaving`（浮起来 = 交出流内位置，下面的条目这时才开始上移）→ 从 `rows` 里移除。
  *
- * ⚠️ `exitTop` / `exitH` 是**退场那一刻冻结的几何**（2026-10-05 修，`devlog/349`）：
- * 条目一开始退场就 `position:absolute` 钉在原位，而那个位置**必须在状态转换的那一拍
+ * ⚠️ 两个标记**同时在场**才是 `leaving`（`sliding` 从放行起一直挂到移除）：动画挂
+ * `.is-sliding`、定位挂 `.is-out`，切的那一刻动画的计算值不变 ⇒ 不重启（见 `EXIT_YIELD_MS`）。
+ *
+ * ⚠️ `exitTop` / `exitH` 是**让位那一刻冻结的几何**（2026-10-05 修，`devlog/349`；
+ * 2026-10-06 起冻结时刻从"放行"挪到"让位"—— 它在流内多待了 65% 的时间，位置可能被
+ * 上面让位的行顶上来，放行时就冻会把它**钉在旧位置**上 ⇒ 浮起来那一下往下跳）：
+ * 条目一让位就 `position:absolute` 钉在原位，而那个位置**必须在状态转换的那一拍
  * 量一次就冻住**。先前把它们放在一个**共享的 `floatPos` state** 里、由一条 effect 每帧补算
  * —— 那条链（`setFloatPos` → 重渲染 → 布局变 → 再补算）会互相点火，最终 React 报
  * **`Maximum update depth exceeded`**（用户实测：点「批量全部」直接白屏）；
@@ -110,10 +147,13 @@ const KIND_LABEL: Record<string, string> = {
 type Row = Notice & {
   /** **排队中**：已经不再"活着"，但还留在原位等人放它走（用户 2026-10-05 的"逐条滑出"） */
   queued?: boolean
+  /** **滑出中**：放行了，动画在跑，但**仍在流内占位**（让位前的那 65%，用户 2026-10-06） */
+  sliding?: boolean
+  /** **已让位**：浮起来了（`position:absolute`），流内位置交给下面的条目 */
   leaving?: boolean
-  /** 退场那一刻冻结的容器内 top（`position:absolute` 用它钉在原位） */
+  /** 让位那一刻冻结的容器内 top（`position:absolute` 用它钉在原位） */
   exitTop?: number
-  /** 退场那一刻冻结的高度（浮起来的那条仍要占原来那么高，否则文字会重排/换行） */
+  /** 让位那一刻冻结的高度（浮起来的那条仍要占原来那么高，否则文字会重排/换行） */
   exitH?: number
 }
 
@@ -195,7 +235,7 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
 
   /**
    * **FLIP**（First-Last-Invert-Play）：条目消失后让其余条目**有缓动地**顶上来
-   * （用户 2026-10-05：「不要生硬地顶上来」，且要**与滑出同时**发生）。
+   * （用户 2026-10-05：「不要生硬地顶上来」）。
    *
    * 为什么必须用 FLIP（而不是给 `.si-item` 挂个 `transition` 就完事）：
    * 浏览器**不会**为"块级元素因为兄弟被删除而改变位置"做动画（那是一次普通重排）。
@@ -203,10 +243,11 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
    * ② 下一拍 DOM 变完，把每条**瞬时**挪回旧位置（反向 transform）；③ 下一帧撤掉
    * ⇒ CSS 过渡平滑送到新位置。全程只用 `transform`，不碰布局属性。
    *
-   * ⚠️ **退场那条必须"浮"起来**：它若照旧占着流内位置，下面的条目**要等它 220ms 动画
-   * 放完**才可能上移 —— 那就成了"先滑完再顶上来"（用户明确不要那个）。浮起来 ⇒
-   * 流内位置当场空出，剩下的条目**同时**开始上移。
-   * ⚠️ 浮动坐标**跟着行走**（`Row.exitTop` / `exitH`，在状态转换那一拍量一次就冻住）——
+   * ⚠️ **让位是"晚一拍"的**（用户 2026-10-06 口径反转，见 `EXIT_YIELD_MS`）：
+   * 退场那条先**留在流内**把滑出动画播到 65%，**那时**才浮起来 —— 下面那些条目是
+   * 在**那一刻**才上移的（FLIP 的起点也就是那一刻）。
+   * 老口径（2026-10-05）是"当场浮起来 ⇒ 剩下的条目**同时**开始上移"，已被用户否掉。
+   * ⚠️ 浮动坐标**跟着行走**（`Row.exitTop` / `exitH`，在**让位那一拍**量一次就冻住）——
    * 不放进共享 state。上一版就是那样：`setFloatPos` → 重渲染 → 布局变 → 再补算，
    * 互相点火到 React 报 `Maximum update depth exceeded`（用户点「批量全部」直接白屏）。
    */
@@ -220,15 +261,16 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
   const liveIds = notices.map((n) => n.id).join('|')
 
   /**
-   * 三拨人（都只由 `rows` 派生，声明放在最前面：下面几条 effect 都要读它们）：
+   * 四拨人（都只由 `rows` 派生，声明放在最前面：下面几条 effect 都要读它们）：
    * - `queued`：不再活着、还在原位排队等放行；
-   * - `leaving`：正在滑出（浮起来了，不参与判据）；
-   * - `exiting`：**面板里还要画的"已经不活着"的那些** = 上面两拨 + **刚被撤下/刚过期、
+   * - `sliding`：放行了、正在流内滑出（**位置还占着**，见 `EXIT_YIELD_MS`）；
+   * - `leaving`：让位了（浮起来，流内位置已交出）；
+   * - `exiting`：**面板里还要画的"已经不活着"的那些** = 上面三拨 + **刚被撤下/刚过期、
    *   这一拍还没被标记的**（那一拍是渲染先跑、effect 后跑留下的缝）。
    *
-   * ⚠️ 判据只能是本地标记（`r.leaving` / `r.queued`），**不能**再叠一个 `!notices.some(...)`：
-   * `notices` 那份列表**不过滤过期**（过滤发生在渲染时）⇒ 刚过期的那条**仍在 `notices` 里**，
-   * 叠了那个条件就永远筛不出东西，退场动画一帧都看不到（第一版就是这么写的）。
+   * ⚠️ 判据只能是本地标记（`r.queued` / `r.sliding` / `r.leaving`），**不能**再叠一个
+   * `!notices.some(...)`：`notices` 那份列表**不过滤过期**（过滤发生在渲染时）⇒ 刚过期的那条
+   * **仍在 `notices` 里**，叠了那个条件就永远筛不出东西，退场动画一帧都看不到（第一版就是这么写的）。
    * ⚠️⚠️ 但**渲染**必须用 `exiting` 这个更宽的判据，而且两条来源都要认：
    * ① **被撤下**（点已读 / 服务端撤条目）—— 这种条目可能"还很新"（`isLive` 仍为真）；
    * ② **到点过期** —— 这种条目**还在 `notices` 里**（那份不过滤过期，过滤只在渲染时发生）。
@@ -238,7 +280,7 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
    */
   /** `notices` 里还有哪些 id（"被撤下"与"过期"是两件事，见上面 `exiting`） */
   const noticeIds = new Set(notices.map((n) => n.id))
-  const exiting = rows.filter((r) => r.queued || r.leaving
+  const exiting = rows.filter((r) => r.queued || r.sliding || r.leaving
     || !noticeIds.has(r.id)          // 被撤下（已读 / 服务端撤条目）—— 它可能**还很"新"**
     || !isLive(r, now))              // 到点过期 —— 它**还在 `notices` 里**（那份不过滤过期）
 
@@ -272,41 +314,42 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
     return map
   }
 
-  /** 上一次提交结束时的布局（每拍由 FLIP 那条 effect 刷新）—— 退场几何**只能**从这里取 */
+  /** 上一次提交结束时的布局（每拍由 FLIP 那条 effect 刷新）—— 让位几何**只能**从这里取 */
   const geomRef = useRef<Map<string, Geom>>(new Map())
-  /** 同一份快照的"这一拍内可读"副本（判退场的 effect 跑在 FLIP 之后，见 `freezeExit`） */
-  const prevGeomRef = useRef<Map<string, Geom>>(new Map())
   /** 退场队列泵的计时器句柄（**跨提交保留**：见那条 effect 的注释，重排一次就等于永不推进） */
   const pumpRef = useRef<number | null>(null)
+  /** 已经放行的那几条各自的"**让位表**"（放行后 `EXIT_YIELD_MS` 才浮起来；每人一个，别共享） */
+  const yieldTimers = useRef<Set<number>>(new Set())
   /** 已经开滑的那几条各自的"移除表"（各算各的 220ms，见泵里的注释） */
   const removalTimers = useRef<Set<number>>(new Set())
 
   /**
-   * 一条通知**正要退场**时，把它"钉住"要用的几何（`position:absolute` 的 top / height）。
+   * 一条通知**正要让位**时，把它"钉住"要用的几何（`position:absolute` 的 top / height）。
    *
-   * ⚠️ 为什么必须在**判退场的那一拍**就冻住、而且只能从快照取：
-   * 两条退场路径**当下都量不到它**——
-   * ① TTL 到点：`sectionNotices` 过滤的是 `isLive`，这一拍的 DOM 里**已经没有它了**；
-   * ② 服务端撤条目：`notices` 一变，它同样不在 `sections` 里。
-   * 唯一还留着它坐标的地方是**上一次提交的布局快照**（`prevGeomRef`）——
-   * 那正好就是"它原来待着的位置"，也就是用户要的"从它的位置滑出去"。
+   * ⚠️ 冻结时刻是**让位那一拍**（不是放行那一拍，2026-10-06 改）：它在流内多待了
+   * `EXIT_YIELD_MS`（65% 的时长），这段时间里**上面的行可能先让位** ⇒ 它自己会被顶上去。
+   * 放行时就冻的话，浮起来那一下会**跳回旧位置**（往下跳一整行）。
+   *
+   * ⚠️ 为什么只能从快照取：让位是 `setTimeout` 里发生的（不在提交里），此刻 DOM 上
+   * 量的当然是"现在"，但那条的 `offsetTop` 会**含正在跑的补位过渡吗**？不会 ——
+   * `geomOf` 用的是**布局**值（见那里的注释），与 transform 无关。
+   * 取 `geomRef`（上一次提交结束时的快照）而不是现量，是为了与 FLIP 的"旧位置"**同一把尺子**：
+   * 这份快照就是下面那些条目此刻的布局，量出来与它一致，浮起来那一下才不跳。
+   * 量不到（快照里没它，例如面板就没开着）⇒ 交回 `{}`：那条**留在流内**，
+   * 位置不完美，但白屏 / 错位 / 无限循环都不会发生。
    */
   const freezeExit = (n: Notice): Partial<Row> => {
-    const g = prevGeomRef.current.get(n.id)
+    const g = geomRef.current.get(n.id)
     return g ? { exitTop: Math.round(g.relTop), exitH: Math.round(g.h) } : {}
   }
 
   // ⚠️ **故意不给依赖数组**：FLIP 要的就是"每次布局变化都拍一次照再补位"。
   //    加 `[]` 会让它只跑一次，加具体依赖会漏掉"最后一条被清掉"这类变化。
   //    同时它**每拍都刷新 `geomRef`** —— 那张快照既是下一拍的"旧位置"，
-  //    也是判退场时唯一还能拿到那条坐标的地方（见 `freezeExit`）。
+  //    也是让位那一拍唯一还能拿到那条坐标的地方（见 `freezeExit`）。
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useLayoutEffect(() => {
-    // `before` = 上一次提交结束时的布局。先把它交给 `prevGeomRef`：本 effect 末尾
-    // 就会用**这一拍**的布局覆盖 `geomRef`，而判退场的 effect 跑在它后面（同一拍），
-    // 那时它要的仍是"退场前"那份（`freezeExit` 的注释里有完整理由）。
     const before = geomRef.current
-    prevGeomRef.current = before
     const root = panelRef.current
     if (!root) {
       // 面板没挂载（收起了）⇒ 快照清空：不清的话下次打开会拿"上一次那个面板"的坐标去补位，
@@ -315,9 +358,17 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
       return
     }
     root.querySelectorAll<HTMLElement>('.si-item[data-notice-id]').forEach((el) => {
-      // 退场那条**已经**脱离文档流并由 `exitTop` 钉住了（见 `renderRow`）：
+      // 已让位那条**已经**脱离文档流并由 `exitTop` 钉住了（见 `renderRow`）：
       // 它不需要补位，补了反而会和冻结坐标打架 ⇒ 直接跳过。
       if (el.classList.contains('is-out')) return
+      // ⚠️⚠️ **`.is-sliding`（还没让位、正在流内滑出的那条）恰恰相反：它必须被补位**
+      // （2026-10-06 实测踩到）：它上面那条让位时，它在**布局**上会被顶上去一整行，
+      // 而这一下若不给它缓动，它就**当场跳一行**（逐条退场时第三条最明显 ——
+      // 它刚开滑、还几乎不透明，跳一下看得清清楚楚）。
+      // 老写法跳它的理由是"动画占着 `transform`，补位写进去也会被动画覆盖"——
+      // 那个前提现在**不成立**了：退场动画走的是**独立变换属性 `translate`**
+      // （见 `status-island.css` 的 `si-item-out`），`transform` 空着给 FLIP，
+      // 两者在 CSS 里是**合成**关系而不是互相覆盖。改成跳它反而会把这个跳变请回来。
       const old = before.get(el.getAttribute('data-notice-id') || '')
       if (!old) return
       const dy = old.relTop - geomOf(el).relTop
@@ -372,13 +423,15 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
   // ⚠️ 判据（`.si-item` 的条数）仍按**活着的**条目算 —— 探针不看动画中间态。
   //（`rows` / `liveIds` 的**声明**为了 FLIP 读得到，已经上移到那段 effect 之前）
   //
-  // ── 三态：活着 → **排队（`queued`）** → 退场（`leaving`）（用户 2026-10-05）──────
-  // 用户：「全部已读的效果应该是从上到下一条一条逐个滑出，而不是现在这样一下全部滑出
-  // 然后瞬间顶上去」。所以"不再活着"与"开始滑出"**拆成两件事**：
+  // ── 四态：活着 → **排队（`queued`）** → **滑出（`sliding`）** → 让位（`leaving`）──────
+  // 前两态是用户 2026-10-05 的口径：「全部已读的效果应该是从上到下一条一条逐个滑出，
+  // 而不是现在这样一下全部滑出然后瞬间顶上去」。所以"不再活着"与"开始滑出"**拆成两件事**：
   //   ① 不再活着 ⇒ 进**队列**（人还留在原位、照常渲染，只是不再参与"活着"的判据）；
   //   ② 队列按**从上到下**的顺序、每 `ACK_STAGGER_MS` 放一条出去开始滑。
-  // 为什么必须留在原位排队、而不能"先标记退场、只是把动画延后"：退场那条是
-  // `position:absolute`（流内位置当场空出）⇒ 一次全标就是"整块瞬间塌上去"，
+  // 后两态是用户 2026-10-06 的口径反转：「让上一条已读滑出 60%–80% 之后，下面的条目再顶上去」
+  // ⇒ 放行只是**开始滑**（人仍在流内、位置还占着），滑到 `EXIT_YIELD_AT` 才让位（见 `EXIT_YIELD_MS`）。
+  // 为什么必须留在原位排队、而不能"先标记退场、只是把动画延后"：退场那条**让位之后**是
+  // `position:absolute`（流内位置从那一刻空出）⇒ 一次全标就是"整块瞬间塌上去"，
   // 那正是用户不要的观感。留在流里排队，下面那几条才会**跟着每一条的离开逐段上移**。
 
   useLayoutEffect(() => {
@@ -387,12 +440,13 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
       const next: Row[] = []
       for (const r of prev) {
         const hit = fresh.get(r.id)
-        // 又活过来了（例如同 id 的服务端条目回到列表）：队列/退场标记一起撤掉
-        if (hit) { next.push({ ...hit, queued: false, leaving: false }); fresh.delete(r.id) }
-        else if (!r.queued && !r.leaving) next.push({ ...r, queued: true })  // 服务端撤了 ⇒ 排队
-        else next.push(r)                                                   // 已在队列/滑出：不动
+        // 又活过来了（例如同 id 的服务端条目回到列表）：队列/滑出/让位标记**一起**撤掉
+        // （三个都要撤：`sliding` 是"动画在跑"的判据，留着它这条就永远不再参与体检）
+        if (hit) { next.push({ ...hit, queued: false, sliding: false, leaving: false }); fresh.delete(r.id) }
+        else if (!r.queued && !r.sliding && !r.leaving) next.push({ ...r, queued: true })  // 服务端撤了 ⇒ 排队
+        else next.push(r)                                                   // 已在队列/滑出/让位：不动
       }
-      for (const n of fresh.values()) next.push({ ...n, queued: false, leaving: false })
+      for (const n of fresh.values()) next.push({ ...n, queued: false, sliding: false, leaving: false })
       return next
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -424,12 +478,14 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
    */
   useLayoutEffect(() => {
     // 过期判定先在这里做一遍（下面那个 updater 里还会做，两处必须是同一条 `isLive`）
-    const stale = rows.some((r) => !r.queued && !r.leaving && !isLive(r, now))
+    // ⚠️ `sliding`（正在滑出、还没让位）也要排除：它**已经不在队列里**了，
+    //    不排除就会被再标一次 `queued` ⇒ 同一条被放行两次（滑一半重新开始滑）。
+    const stale = rows.some((r) => !r.queued && !r.sliding && !r.leaving && !isLive(r, now))
     if (!stale) return                       // 没东西到点 ⇒ 不碰状态（别拿 bail-out 当刹车）
     setRows((prev) => {
       let changed = false
       const next = prev.map((r): Row => {
-        if (r.queued || r.leaving || isLive(r, now)) return r
+        if (r.queued || r.sliding || r.leaving || isLive(r, now)) return r
         changed = true
         return { ...r, queued: true }        // 到点 ⇒ 排队（等队首那条先走）
       })
@@ -461,29 +517,47 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
     const first = queue[0]
     const start = () => {
       pumpRef.current = null
-      // ⚠️ 几何在**真正开始滑的那一刻**量（`freezeExit` 读上一次提交的布局快照）：
-      //    排队期间它会被前面的条目往上顶，量到的是它**当下**的位置 ——
-      //    正是"从它现在的位置滑出去"。
-      const geom = freezeExit(first)
+      // ① 放行 = **只开始滑**（`sliding`）：人还留在流里、位置还占着，
+      //    **不冻几何**（见 `freezeExit`：它在流内还要待 `EXIT_YIELD_MS`，
+      //    这段时间里可能被上面让位的行顶上去 ⇒ 现在冻下来的坐标会偏）。
       setRows((prev) => prev.map((r) => (r.id === first.id
-        ? { ...r, queued: false, leaving: true, ...geom } : r)))
+        ? { ...r, queued: false, sliding: true } : r)))
+      // ② **让位表**（每条各自一个，见下一条注释）：滑到 `EXIT_YIELD_AT` 才浮起来
+      //    —— 那一刻几何才冻（读 `geomRef` 的**布局**快照），下面那些条目也是**那一刻**
+      //    才开始上移（用户 2026-10-06 的口径）。
+      //    ⚠️ 条件带 `r.sliding`：万一这条又活过来了（同 id 回到 `notices`，
+      //    上面那条 effect 会把三个标记都撤掉），不许再把它浮起来。
+      const y = window.setTimeout(() => {
+        yieldTimers.current.delete(y)
+        const geom = freezeExit(first)
+        setRows((prev) => prev.map((r) => (r.id === first.id && r.sliding
+          ? { ...r, leaving: true, ...geom } : r)))
+      }, EXIT_YIELD_MS)
+      yieldTimers.current.add(y)
+      // ③ **移除表**（同样每条一个）：**总时长不变** —— 仍从**放行**那一刻起算
+      //    `ITEM_EXIT_MS`（让位只是把"腾出位置"往后挪，不延长它待在屏幕上的时间）。
       // ⚠️ **每一条自己的移除表**（而不是一条共享的）：队列逐条放行时，共享表会被
       //    后面的放行一次次重排（`rows` 每 70ms 变一次）⇒ 表越推越晚、先滑完的那几条
       //    一直留在 DOM 里。各算各的才与"它自己那 220ms"对齐。
-      //    ⚠️ 过滤条件带上 `leaving`：万一这条又活过来了（同 id 回到 `notices`），不许把它删掉。
+      //    ⚠️ 过滤条件带上 `sliding`/`leaving`：万一这条又活过来了，不许把它删掉。
       const t = window.setTimeout(() => {
         removalTimers.current.delete(t)
-        setRows((prev) => prev.filter((r) => r.id !== first.id || !r.leaving))
+        setRows((prev) => prev.filter((r) => r.id !== first.id || (!r.sliding && !r.leaving)))
       }, ITEM_EXIT_MS)
       removalTimers.current.add(t)
     }
-    if (!rows.some((r) => r.leaving)) { start(); return }   // 没人正在滑 ⇒ 当拍就走
+    // ⚠️ 判据必须**带上 `sliding`**（2026-10-06）：放行后那条在 `EXIT_YIELD_MS` 里一直是
+    //    `sliding` 而不是 `leaving`，只看 `leaving` 的话这条 effect 会判定"没人正在滑"
+    //    ⇒ 队列里剩下的每一条都**当拍**跟着走，70ms 的逐条节奏整个没了。
+    if (!rows.some((r) => r.sliding || r.leaving)) { start(); return }   // 没人正在滑 ⇒ 当拍就走
     pumpRef.current = window.setTimeout(start, ACK_STAGGER_MS)
   }, [rows])
 
-  /** 卸载时收掉泵与各条的移除表（不然它们会在组件没了之后还去 `setRows`） */
+  /** 卸载时收掉泵、各条的让位表与移除表（不然它们会在组件没了之后还去 `setRows`） */
   useEffect(() => () => {
     if (pumpRef.current != null) window.clearTimeout(pumpRef.current)
+    yieldTimers.current.forEach((t) => window.clearTimeout(t))
+    yieldTimers.current.clear()
     removalTimers.current.forEach((t) => window.clearTimeout(t))
     removalTimers.current.clear()
   }, [])
@@ -653,34 +727,43 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
   /** 胶囊左侧：会自动消失时给一个剩余比例（画环），否则保持原来的实心点 */
   const disc = discFraction(primary, now)
 
-  /** 面板里每一条的渲染（`leaving` 的走滑出动画） */
+  /** 面板里每一条的渲染（`sliding` 走滑出动画；`leaving` 才是浮起来的那条） */
   const renderRow = (n: Row) => {
     const frac = countdownFraction(n, now)
     const relFor = relTimeFor(n, now)
     const canAck = n.form !== 'state'          // 状态类不给点已读（见 `ackAllIds` 的注释）
+    /**
+     * **让位**（`leaving` + 几何已冻）：脱离文档流、钉在冻结坐标上。
+     *
+     * ⚠️ `position` / `left` / `right` 在 CSS 的 **`.si-item.is-out`** 里（"让位"这件事的
+     * 唯一落点），这里只给**每条自己的数据** `top` / `height`（冻结值，CSS 里写不了）。
+     * 这么分是因为**类名与动画必须错开**：动画挂在 `.is-sliding`（放行起一直在），
+     * `.is-out` 只在让位那一刻加上 ⇒ 这一拍动画的**计算值没变**，不会重新播放
+     * （见 `EXIT_YIELD_MS` 的注释；两个类同时在场是硬要求）。
+     *
+     * ⚠️ 量不到坐标时（快照里没有它，例如面板当时没开着）**就留在流内**（连 `is-out` 都不加）：
+     * 位置不完美，但白屏 / 错位 / 跳到别处都不会发生。
+     */
     const float = n.leaving && n.exitTop !== undefined
-      ? { position: 'absolute' as const, left: 0, right: 0,
-          top: n.exitTop, height: n.exitH }
+      ? { top: n.exitTop, height: n.exitH }
       : undefined
     return (
       <li
         key={n.id}
-        className={`si-item${n.leaving ? ' is-out' : ''}${canAck ? ' can-ack' : ''}`}
+        className={`si-item${n.sliding ? ' is-sliding' : ''}`
+          + `${n.leaving && n.exitTop !== undefined ? ' is-out' : ''}`
+          + `${canAck ? ' can-ack' : ''}`}
         data-kind={n.kind}
         data-form={n.form ?? 'state'}
         data-notice-id={n.id}
         data-left={frac === null ? undefined : frac.toFixed(3)}
-        /* 退场那条**浮**在原来的位置（`position:absolute`）—— 它的流内位置当场空出，
-           剩下的条目因此能**同时**开始上移（用户要的并行；不浮就得等它滑完）。
-           ⚠️ 坐标是**退场那一刻冻住的**（`Row.exitTop` / `exitH`，见 `freezeExit`），
-           不是每帧现算的 —— 现算那版（共享 `floatPos` state）会自激成无限重渲染。
-           ⚠️ 量不到坐标时（快照里没有它，例如面板刚打开就退场）**就留在流内**：
-           位置不完美，但白屏 / 错位 / 无限循环都不会发生。 */
         style={float}
         /* 单击正文/空白 = 已读（用户 2026-10-05）。
            ⚠️ 动作按钮**不算**已读（它自己 `stopPropagation`）：那是"我要去看一眼"，
-           顺手把通知消掉会让人回头找不到（例如受限项要反复对照）。 */
-        onClick={canAck && !n.leaving ? () => onAction('dismiss', n) : undefined}
+           顺手把通知消掉会让人回头找不到（例如受限项要反复对照）。
+           ⚠️ `sliding` 起就不再接受点击（与 CSS 的 `pointer-events:none` 同一口径）：
+           否则"滑出中再点一下"会在动画里又触发一次已读。 */
+        onClick={canAck && !n.sliding && !n.leaving ? () => onAction('dismiss', n) : undefined}
       >
         <span className={`si-item-icon k-${n.kind}`}>{iconFor(n)}</span>
         <span className="si-item-main">
@@ -726,7 +809,7 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
   }
 
   /**
-   * 把某一组渲染成 `<li>` 列表，**排队/退场中的条目留在它原来的位置**（用户 2026-10-05）。
+   * 把某一组渲染成 `<li>` 列表，**排队/滑出/让位中的条目留在它原来的位置**（用户 2026-10-05）。
    *
    * 为什么不再单独挂到 `.si-list-leaving`：那会让退场条目**跳到整列最下面**
    * （它是另一个 `<ul>`），观感是"这条跑到别处去了"。留在原位才是"从这条的位置滑出去"，
@@ -752,8 +835,8 @@ export default function StatusIsland({ notices, onAction, now: nowProp }: Props)
    * 用的坐标（`exitTop`）**是相对它原来那个 `<ul>` 量的**，换个容器就整体错位
    * （整组只剩它一条时最明显 —— 兜底容器在面板最下面）。
    *
-   * ⚠️ 三拨人（活着的 / 排队中 / 正在滑）**必须按同一把尺子重排**（`compareInGroup`）：
-   * 排队与滑出的那几条已经**不是 live**、不再参与 `sectionNotices` 的排序，若不重排就会掉到
+   * ⚠️ 四拨人（活着的 / 排队中 / 滑出中 / 已让位）**必须按同一把尺子重排**（`compareInGroup`）：
+   * 后面三拨已经**不是 live**、不再参与 `sectionNotices` 的排序，若不重排就会掉到
    * 组末尾 —— 观感是"点了全部已读，下面几条先跳个位置才开始滑"。这把尺子与
    * `sectionNotices` 用的是同一个导出函数（改一处即两处，不许各写一份）。
    */
