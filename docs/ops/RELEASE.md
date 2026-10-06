@@ -210,8 +210,7 @@ Select-String frontend/src-tauri/target/release/nsis/x64/installer.nsi `
 > ⚠️ 少了任何一处**都不会报错**，症状是"新用户只能去 clone 仓库"——所以四处都是机器判据。
 > 扩展的 `test/` 不进产物（白名单只认 `manifest.json` / `src` / `icons` / `README.md`）。
 
-> ⚠️ **暂存目录是 `frontend/src-tauri/extension/`**（构建期产生、已 gitignore ⇒ **干净 clone 上不存在**）
-> <!-- 未建 -->
+> ⚠️ **暂存目录是 `frontend/src-tauri/extension/`**（构建期产生、已 gitignore ⇒ **干净 clone 上不存在**）<!-- 未建 -->
 > —— 于是 `cargo test` / `cargo build` 在干净 clone 上会红在
 > `glob pattern extension/**/* path not found or didn't match any files.`
 > （与 `binaries/backend/**/*` 同一个坑，`devlog/199` 记过第一次）：
