@@ -285,3 +285,23 @@ def test_remote_has_tag_distinguishes_absent_from_unknown(monkeypatch):
     monkeypatch.setattr(R, "git", lambda *a, **k: R0(128, ""))
     assert R.remote_has_tag("v1.0.2") is None
     assert R.remote_has_tag("") is None      # 没版本号时别去问网络
+
+
+def test_build_env_check_asks_about_the_group_it_needs():
+    """后端打包前的"环境与锁文件一致吗"必须**连 `build` 组一起问**。
+
+    2026-10-06（v1.1.0 发布前）实测踩到：`scripts/release.py` 的 preflight 先查
+    `python -m PyInstaller --version`（PyInstaller 住在 `build` 组里），而
+    `scripts/build_backend.py` 的一致性复核跑的是**不带 `--group`** 的
+    `uv sync --frozen --dry-run`（默认只有 `dev` 组）⇒ 装好 PyInstaller 的发布机上
+    它会回 `Would uninstall …pyinstaller…`，把"环境准备好了"判成"环境漂移"，两条判据
+    互相打架、发布卡在那一步（要么删掉 PyInstaller 过复核，然后 preflight 又红）。
+
+    这条断言读源文件（同 `tests/test_gate.py` 的结构判据套路）：
+    `--dry-run` 所在的那一次调用里必须同时出现 `--group` 与 `build`。
+    """
+    root = Path(__file__).resolve().parent.parent
+    src = (root / "scripts" / "build_backend.py").read_text(encoding="utf-8")
+    call = next(ln for ln in src.splitlines() if '"--dry-run"' in ln)
+    assert '"--group"' in call and '"build"' in call, \
+        f"一致性复核没带 build 组 —— 发布机上会与 preflight 打架：{call.strip()}"

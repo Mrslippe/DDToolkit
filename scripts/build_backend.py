@@ -95,7 +95,14 @@ def _assert_locked_environment() -> None:
         print("[build] 提示：环境里找不到 uv，跳过「环境与锁文件一致」的复核"
               "（prefix 已确认是 .venv；如需复核请把 uv 放上 PATH）")
     else:
-        r = subprocess.run([*uv, "sync", "--frozen", "--dry-run"],
+        # ⚠️ **必须带 `--group build`**（2026-10-06 v1.1.0 发布前实测踩到）：`uv sync` 默认
+        # 只装 `dev` 组，而本脚本自己要用 PyInstaller（在 `build` 组里）、`release.py` 的
+        # preflight 也先查 `python -m PyInstaller --version` ⇒ **发布机上装好 build 组是常态**。
+        # 少问这一个组，`--dry-run` 就会回一句 `Would uninstall …pyinstaller…`（"- pkg" 行），
+        # 于是"环境准备好了"反被判成"环境与锁文件不一致"，两条判据互相打架、发布必停。
+        # 判据：复核命令与"本脚本真正需要的组"必须是同一个集合（用例
+        # `tests/test_release_script.py::test_build_env_check_asks_about_the_group_it_needs`）。
+        r = subprocess.run([*uv, "sync", "--frozen", "--dry-run", "--group", "build"],
                            cwd=ROOT, capture_output=True, text=True,
                            encoding="utf-8", errors="replace")
         if r.returncode != 0:
@@ -111,7 +118,7 @@ def _assert_locked_environment() -> None:
             raise SystemExit(
                 "[build] 环境与 uv.lock 不一致（下面这些包会被增删）：\n"
                 + "\n".join("        " + d for d in drift)
-                + "\n        修复：uv sync")
+                + "\n        修复：uv sync --group build")
 
     # PyInstaller 住在 `build` 依赖组里，而 **`uv sync` 默认只装 `dev`** —— 所以
     # "刚 sync 完"的开发机通常没有它。这里**按锁文件自动补装那一个组**，而不是让人记住
