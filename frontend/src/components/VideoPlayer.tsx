@@ -198,6 +198,13 @@ const HOLD_POLL_MS = 200
  */
 const HOLD_SPEED = 3
 const HOLD_TRIGGER_MS = 250
+
+/**
+ * 快捷键处理只要键盘事件里的这三样 —— 抽成结构类型是为了让**同一个实现**同时服务
+ * React 的 `onKeyDown`（`React.KeyboardEvent`）与 `document` 上的原生监听
+ * （`KeyboardEvent`）；两者在这三个成员上完全一致。
+ */
+type KeyLike = { key: string; repeat: boolean; preventDefault: () => void }
 /** 全屏时贴着下边缘是想**呼出**控件，不是"离开"（用户口径，devlog/301） */
 const BOTTOM_HOT_ZONE = 72
 /**
@@ -1304,8 +1311,15 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
     }
   }, [holdSpeed])
 
-  // 快捷键：只在控件区域内接管（不抢抽屉的 Esc / 滚动）
-  const onKey = (e: React.KeyboardEvent) => {
+  /**
+   * 快捷键的**唯一一份实现**，两个入口共用：容器上的 React `onKeyDown/Up`，以及
+   * "指针在播放器里 / 全屏时"挂到 `document` 上的那一对。
+   *
+   * ⚠️ 为什么必须有第二个入口（用户 2026-10-06 实测）：「点击播放按钮之后方向键仍没法控制进度」
+   * —— 那颗大播放键在开播后就被**卸载**了，焦点随之掉回 `<body>`，容器上的 `onKeyDown`
+   * 从此再也收不到事件。所以按键改由"**指针在不在播放器里**"来接管，而不是靠焦点。
+   */
+  const handleKey = (e: KeyLike) => {
     const el = videoRef.current
     if (!el) return
     const k = e.key.toLowerCase()
@@ -1325,11 +1339,37 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
   }
 
   /** 松手：短按补上"快进 5 秒"，长按只负责把倍速还回去（见上面 §1 的口径） */
-  const onKeyUp = (e: React.KeyboardEvent) => {
+  const handleKeyUp = (e: KeyLike) => {
     if (e.key !== 'ArrowRight') return
     e.preventDefault()
     if (endHold() === 'tap') seekBy(5)
   }
+
+  /** 最新的那两个处理函数：document 那对监听经由它调用 ⇒ 依赖数组不必塞十几个闭包 */
+  const keyRef = useRef({ down: handleKey, up: handleKeyUp })
+  keyRef.current = { down: handleKey, up: handleKeyUp }
+
+  /** 指针在不在播放器里（用户 2026-10-06 口径：**移入就接管键盘、移出交回页面**） */
+  const [hovering, setHovering] = useState(false)
+
+  useEffect(() => {
+    if (!hovering && !fs) return
+    /** 打字时不抢键（抽屉里还有别的输入框，比如改签名） */
+    const typing = (t: EventTarget | null): boolean => {
+      const el = t as HTMLElement | null
+      if (!el || !el.tagName) return false
+      return el.isContentEditable
+        || el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT'
+    }
+    const down = (e: KeyboardEvent) => { if (!typing(e.target)) keyRef.current.down(e) }
+    const up = (e: KeyboardEvent) => { if (!typing(e.target)) keyRef.current.up(e) }
+    document.addEventListener('keydown', down)
+    document.addEventListener('keyup', up)
+    return () => {
+      document.removeEventListener('keydown', down)
+      document.removeEventListener('keyup', up)
+    }
+  }, [hovering, fs])
 
   if (dead || !src) {
     return (
@@ -1359,9 +1399,13 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
       className={`vp${idle && playing ? ' is-idle' : ''}`}
       data-self-healing="1"
       data-vp-state={playing ? 'playing' : 'paused'}
-      tabIndex={0}
-      onKeyDown={onKey}
-      onKeyUp={onKeyUp}
+      /* ⚠️ `tabIndex={-1}`：用户 2026-10-06 口径「播放器中禁用 tab 焦点」（见文件里
+         `handleKey` 的注释 —— 键盘改由"指针移入"接管，不再依赖焦点）。 */
+      tabIndex={-1}
+      onKeyDown={handleKey}
+      onKeyUp={handleKeyUp}
+      onPointerEnter={() => setHovering(true)}
+      onPointerLeave={() => setHovering(false)}
       onMouseMove={(e) => {
         // 贴下边缘 = 想呼出控件（全屏时最常见）：当"钉住"处理
         nearBottomRef.current = nearBottom(e.clientY)
@@ -1427,7 +1471,7 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
       )}
 
       {!playing && !loading && !buffering && !mseSeeking && !ended && (
-        <button type="button" className="vp-bigplay" aria-label="播放" onClick={toggle}>
+        <button type="button" tabIndex={-1} className="vp-bigplay" aria-label="播放" onClick={toggle}>
           <Play className="size-7" />
         </button>
       )}
@@ -1435,7 +1479,7 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
       {/* **播完了**：画面冻在尾帧，中央给一颗"重新播放"（用户口径，devlog/317）。
           与上面那颗大播放键**互斥**（`ended` 时只出这一颗），否则两颗会叠在正中间。 */}
       {ended && !loading && (
-        <button type="button" className="vp-bigplay vp-replay" aria-label="重新播放" onClick={replay}>
+        <button type="button" tabIndex={-1} className="vp-bigplay vp-replay" aria-label="重新播放" onClick={replay}>
           <RotateCcw className="size-6" aria-hidden="true" />
           <span className="vp-replay-label">重新播放</span>
         </button>
@@ -1469,7 +1513,7 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
         onMouseEnter={() => { hoverBarRef.current = true; setIdle(false); window.clearTimeout(idleTimer.current) }}
         onMouseLeave={() => { hoverBarRef.current = false; bumpControls() }}
       >
-        <button type="button" className="vp-btn" aria-label={playing ? '暂停' : '播放'} onClick={toggle}>
+        <button type="button" tabIndex={-1} className="vp-btn" aria-label={playing ? '暂停' : '播放'} onClick={toggle}>
           {/* 在播 + 缓冲 ⇒ 按键位置显示转圈（不是 ⏸ 也不是 ▶）：
               成熟播放器都这么表示"没停，只是在等数据"，也让图标不再来回闪（devlog/302） */}
           {playing && (buffering || mseSeeking)
@@ -1555,7 +1599,7 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
           {pages && pages.length > 1 && (
             <div className="vp-rate" data-vp-menu="page"
                  onMouseEnter={pageMenu.enter} onMouseLeave={pageMenu.leave}>
-              <button type="button" className="vp-btn vp-btn--text"
+              <button type="button" tabIndex={-1} className="vp-btn vp-btn--text"
                       aria-label="分P" aria-haspopup="true" aria-expanded={pageMenu.open}
                       onClick={pageMenu.toggle}>
                 P{currentPage ?? 1}
@@ -1563,7 +1607,7 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
               {pageMenu.open && (
                 <div className="vp-menu vp-menu--page">
                   {pages.map((p) => (
-                    <button key={p.cid} type="button"
+                    <button key={p.cid} type="button" tabIndex={-1}
                             className={`vp-menu-item${p.page === (currentPage ?? 1) ? ' is-on' : ''}`}
                             title={p.part}
                             onClick={() => {
@@ -1586,7 +1630,7 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
                那样指针划过倍速也会把清晰度菜单带出来）—— devlog/316 */
             <div className="vp-rate" data-vp-menu="quality"
                  onMouseEnter={qualityMenu.enter} onMouseLeave={qualityMenu.leave}>
-              <button type="button" className="vp-btn vp-btn--text"
+              <button type="button" tabIndex={-1} className="vp-btn vp-btn--text"
                       aria-label="清晰度" aria-haspopup="true" aria-expanded={qualityMenu.open}
                       onClick={qualityMenu.toggle}>
                 {qualities.find((q) => q.id === qualityId)?.label ?? '清晰度'}
@@ -1597,7 +1641,7 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
                       用户看到画质掉了得知道为什么，也知道可以自己点回原档 */}
                   {autoNote && <div className="vp-menu-note" data-vp-autonote="1">{autoNote}</div>}
                   {qualities.map((q) => (
-                    <button key={q.id} type="button" disabled={q.disabled}
+                    <button key={q.id} type="button" tabIndex={-1} disabled={q.disabled}
                             title={q.note}
                             /* 档位名（含"高清 1080P"里那个空格）**不许换行**（用户 2026-10-03）：
                                一换行菜单就变成窄高条，"1×"也会被挤下去 */
@@ -1622,7 +1666,7 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
           {/* 倍速这一组同理：按钮 + 菜单包在**同一个** hover 区里，指针移进菜单不会断 */}
           <div className="vp-rate" data-vp-menu="rate"
                onMouseEnter={rateMenu.enter} onMouseLeave={rateMenu.leave}>
-            <button type="button" className="vp-btn vp-btn--text"
+            <button type="button" tabIndex={-1} className="vp-btn vp-btn--text"
                     aria-label="倍速" aria-haspopup="true" aria-expanded={rateMenu.open}
                     onClick={rateMenu.toggle}>
               {prefs.rate}×
@@ -1630,7 +1674,7 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
             {rateMenu.open && (
               <div className="vp-menu">
                 {PLAYBACK_RATES.map((r) => (
-                  <button key={r} type="button"
+                  <button key={r} type="button" tabIndex={-1}
                           className={`vp-menu-item${r === prefs.rate ? ' is-on' : ''}`}
                           onClick={() => { setPlayerPrefs({ rate: r }); rateMenu.close() }}>
                     {r}×
@@ -1642,7 +1686,7 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
         </div>
 
         <div className="vp-volwrap">
-          <button type="button" className="vp-btn" data-vol-level={volLevel}
+          <button type="button" tabIndex={-1} className="vp-btn" data-vol-level={volLevel}
                   aria-label={prefs.muted ? '取消静音' : '静音'}
                   onClick={() => setPlayerPrefs({ muted: !prefs.muted })}>
             {volLevel === 'mute' ? <VolumeX className="size-4" />
@@ -1659,11 +1703,11 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
           </div>
         </div>
         {pipOk && (
-          <button type="button" className="vp-btn" aria-label="画中画" onClick={togglePip}>
+          <button type="button" tabIndex={-1} className="vp-btn" aria-label="画中画" onClick={togglePip}>
             <PictureInPicture2 className="size-4" />
           </button>
         )}
-        <button type="button" className="vp-btn" aria-label={fs ? '退出全屏' : '全屏'} onClick={toggleFs}>
+        <button type="button" tabIndex={-1} className="vp-btn" aria-label={fs ? '退出全屏' : '全屏'} onClick={toggleFs}>
           {fs ? <Minimize className="size-4" /> : <Maximize className="size-4" />}
         </button>
       </div>
