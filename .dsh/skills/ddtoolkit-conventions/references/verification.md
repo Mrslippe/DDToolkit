@@ -43,3 +43,14 @@
 2. **路由的三种数法**（装饰器 / `app.routes` 对象 / 方法×路径）：那三个数是**测量值**，会随批次漂 ——
    口径表与当前值见 `docs/backend/HTTP-CONTRACT.md` §1
    （只有「装饰器」那一种有门禁，另两种要人肉重数，复核命令也在那节）。
+3. **本地绿 ≠ CI 绿：平台相关 / 依赖真实耗时的判据要单独想一遍**（2026-10-06，`devlog/377`）。
+   CI 红过两条，都不是产品坏了：
+   - `new URL(import.meta.url).pathname.slice(1)` 是 **Windows 专有**写法（那里 pathname 形如
+     `/C:/…`，slice(1) 正好去掉多余的前导斜杠）；Linux 上它把 `/home/runner/work/…` 变成
+     相对路径，`path.resolve` 再拿 cwd 一拼 ⇒ `<cwd>/home/runner/work/…`（ENOENT）。
+     正确写法：`path.dirname(fileURLToPath(import.meta.url))`。
+   - `flush(n)` 这类"给 n 轮宏任务"的等待**两端耗时不同**（Windows/jsdom 每轮≈4ms、
+     CI 的 Node≈1ms）⇒ 拿它去等**真实耗时**（"连取 3 段"）的判据本地绿、CI 红。
+     **等条件（带预算）而不是等圈数**。
+   判据落在 `postTypes.test.ts`（全仓扫描这类写法）与 `mseKernel.test.ts`（`waitUntil`）里；
+   写新判据时问一句：**换到另一个平台 / 更慢的机器还成立吗？**

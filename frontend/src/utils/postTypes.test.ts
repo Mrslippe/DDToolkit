@@ -123,7 +123,13 @@ describe('PLATFORM_LABEL — 平台显示名', () => {
     // 这条扫源码而不是靠人记得：要展示平台就过 `PLATFORM_LABEL` / `platformEn`。
     const { readdirSync, readFileSync } = await import('node:fs')
     const path = await import('node:path')
-    const root = path.resolve(path.dirname(new URL(import.meta.url).pathname.slice(1)), '..')
+    // ⚠️ 取本文件路径必须用 `fileURLToPath`：`new URL(import.meta.url).pathname.slice(1)`
+    //    是 **Windows 专有写法**（那里 pathname 形如 `/C:/…`，slice(1) 正好去掉多余的前导斜杠）。
+    //    Linux 上 pathname 就是 `/home/runner/work/…`，slice(1) 把它变成**相对路径**，
+    //    `path.resolve` 再拿 cwd 一拼 ⇒ `<cwd>/home/runner/work/…`（2026-10-06 CI 实测 ENOENT，
+    //    本地 Windows 全绿）。判据见本文件最后一条用例。
+    const { fileURLToPath } = await import('node:url')
+    const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
     const offenders: string[] = []
     // 只认**当作文本子节点直接渲染**的 `>{a.platform}` —— 那正是用户截图里那种露法。
     // ⚠️ 不扫模板串插值：`${a.platform}` 在**拼身份键 / 拼 URL** 时是正常用法
@@ -153,8 +159,9 @@ describe('PLATFORM_LABEL — 平台显示名', () => {
     //    这次真去读了）。后端加平台而前端漏了展示名 ⇒ 这条红；反之亦然。
     const { readFileSync } = await import('node:fs')
     const path = await import('node:path')
+    const { fileURLToPath } = await import('node:url')
     const registryPath = path.resolve(
-      path.dirname(new URL(import.meta.url).pathname.slice(1)), '../../../app/services/platforms/registry.py')
+      path.dirname(fileURLToPath(import.meta.url)), '../../../app/services/platforms/registry.py')
     const source = readFileSync(registryPath, 'utf-8')
     const block = source.slice(source.indexOf('_REGISTRY'), source.indexOf('}', source.indexOf('_REGISTRY')))
     const backend = [...block.matchAll(/"([a-z_]+)":/g)].map((m) => m[1]).sort()
@@ -164,6 +171,38 @@ describe('PLATFORM_LABEL — 平台显示名', () => {
 
   it('未知平台没有条目 —— 调用方取到 undefined（既有行为，刻意不加回退）', () => {
     expect(PLATFORM_LABEL.youtube).toBeUndefined()
+  })
+
+  it('测试自己不许用 `.pathname.slice(1)` 拼路径（那是 Windows 专有写法）', async () => {
+    // 2026-10-06 CI 实测：`new URL(import.meta.url).pathname.slice(1)` 在 Linux 上把
+    // `/home/runner/work/…` 变成相对路径，`path.resolve` 再拼 cwd ⇒
+    // `<cwd>/home/runner/work/…`，两条读仓库文件的用例直接 ENOENT（**本地 Windows 全绿**）。
+    // 正确写法：`path.dirname(fileURLToPath(import.meta.url))`。
+    // 判据扫全仓测试文件 —— 这类"只在另一个平台红"的写法，靠人在 Windows 上自查是抓不到的。
+    const { readdirSync, readFileSync } = await import('node:fs')
+    const path = await import('node:path')
+    const { fileURLToPath } = await import('node:url')
+    const src = path.dirname(fileURLToPath(import.meta.url))
+    const offenders: string[] = []
+    const walk = (dir: string): void => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name)
+        if (e.isDirectory()) { walk(p); continue }
+        if (!/\.test\.tsx?$/.test(e.name)) continue
+        // ⚠️ 跳过**本文件**：下面那条正则的字面量本身就得写出这个写法（否则它没法找它）。
+        if (path.resolve(p) === path.resolve(fileURLToPath(import.meta.url))) continue
+        readFileSync(p, 'utf-8').split('\n').forEach((line, i) => {
+          const t = line.trim()
+          if (t.startsWith('*') || t.startsWith('//') || t.startsWith('/*')) return
+          if (/\.pathname\.slice\(1\)/.test(line)) {
+            offenders.push(`${path.relative(src, p)}:${i + 1}`)
+          }
+        })
+      }
+    }
+    walk(src)
+    expect(offenders, '取本文件路径请用 fileURLToPath（pathname.slice(1) 只在 Windows 上对）')
+      .toEqual([])
   })
 })
 

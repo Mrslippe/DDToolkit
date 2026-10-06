@@ -691,21 +691,40 @@ describe('mseKernel · 链路喂不喂得饱（ABR 的事实来源，devlog/328�
     return { ...t, bandwidth }
   }
 
+  /**
+   * 等到条件成立（或超时）—— **别再用"固定圈数"等真实耗时**。
+   *
+   * 2026-10-06 CI 实测（Ubuntu 红）：`flush(n)` 是"给 n 轮宏任务"，不是 n 毫秒 ——
+   * 每轮的 `setTimeout(0)` 在 Windows/jsdom 上被钳到约 4ms（60 轮 ≈ 240ms，够取 3 段），
+   * 在 CI 的 Node 上接近 1ms（60 轮 ≈ 60ms，只取到 2 段）⇒ "连续 3 段都喂不饱才报"这条
+   * 判据在本地永远绿、在 CI 永远红。**判据要等条件，不要等圈数**（同 `docs/DEV-LOOP.md`
+   * 那条"等网络不能用 sleep 的毫秒数"）。
+   */
+  async function waitUntil(cond: () => boolean, budgetMs = 5000): Promise<boolean> {
+    const t0 = Date.now()
+    while (Date.now() - t0 < budgetMs) {
+      if (cond()) return true
+      await flush(2)
+    }
+    return cond()
+  }
+
   async function run(opts: { bandwidth: number; delayMs: number }) {
     const ms = new FakeMediaSource(0)
     const el = fakeEl(ms.buffers)
     const onLinkSlow = vi.fn()
+    const fetchRange = vi.fn(async (_u: string, r: SegmentRange) => {
+      if (opts.delayMs) await new Promise((res) => setTimeout(res, opts.delayMs))
+      const size = r.end - r.start + 1
+      if (r.start === 0) return encodeRange(0, 0, size)
+      const i = Math.floor((r.start - SEG0_START) / SEG_BYTES)
+      return encodeRange(i * SEG_DUR, (i + 1) * SEG_DUR, size)
+    })
     const kernel = new MseKernel(el as unknown as HTMLVideoElement, {
       createMediaSource: () => ms as unknown as MediaSource,
       createObjectURL: () => 'blob:test',
       revokeObjectURL: () => { /* 忽略 */ },
-      fetchRange: vi.fn(async (_u: string, r: SegmentRange) => {
-        if (opts.delayMs) await new Promise((res) => setTimeout(res, opts.delayMs))
-        const size = r.end - r.start + 1
-        if (r.start === 0) return encodeRange(0, 0, size)
-        const i = Math.floor((r.start - SEG0_START) / SEG_BYTES)
-        return encodeRange(i * SEG_DUR, (i + 1) * SEG_DUR, size)
-      }),
+      fetchRange,
       onLinkSlow,
       log: () => { /* 静音 */ },
       seekGiveUpMs: 60_000,
@@ -713,14 +732,22 @@ describe('mseKernel · 链路喂不喂得饱（ABR 的事实来源，devlog/328�
     kernel.load({ video: bwTable('video', opts.bandwidth),
                   audio: bwTable('audio', opts.bandwidth),
                   duration_s: SEG_COUNT * SEG_DUR })
-    await flush(60)
-    return { kernel, onLinkSlow }
+    await flush(4)                       // 让泵起来；后面的判据都自己等条件
+    /** 视频轨真的**量过**多少段（初始化那一发 `start===0` 不算样本）。 */
+    const videoSegments = () => fetchRange.mock.calls
+      .filter(([u, r]) => String(u).includes('/v.m4s') && (r as SegmentRange).start !== 0).length
+    const stats = () => kernel.linkStats().map(
+      (s) => `${s.kind} 实测 ${Math.round(s.bytesPerSec)}B/s vs 需要 ${Math.round(s.neededBytesPerSec)}B/s`)
+      .join(' · ')
+    return { kernel, onLinkSlow, videoSegments, stats }
   }
 
   it('连续几段都低于这一档码率 ⇒ 报一次事实（带实测与需要两个数）', async () => {
     // 段只有 1000B、每段等 25ms ⇒ 实测 ≈40KB/s；而这一档写着 2Mbps（=250KB/s）
-    const { onLinkSlow } = await run({ bandwidth: 2_000_000, delayMs: 25 })
-    expect(onLinkSlow, '喂不饱就必须报（否则播放器没法降档）').toHaveBeenCalled()
+    const { onLinkSlow, videoSegments, stats } = await run({ bandwidth: 2_000_000, delayMs: 25 })
+    const fired = await waitUntil(() => onLinkSlow.mock.calls.length > 0)
+    expect(fired, `喂不饱就必须报（否则播放器没法降档）；已取 ${videoSegments()} 段：${stats()}`)
+      .toBe(true)
     const info = onLinkSlow.mock.calls[0][0] as { kind: string; bytesPerSec: number;
                                                   neededBytesPerSec: number }
     expect(info.neededBytesPerSec).toBe(250_000)          // 2Mbps / 8
@@ -729,14 +756,19 @@ describe('mseKernel · 链路喂不喂得饱（ABR 的事实来源，devlog/328�
   })
 
   it('链路喂得饱 ⇒ **一次都不报**（别让画质无谓地掉）', async () => {
-    // 同一档 2Mbps，但每段 1000B 几乎不耗时 ⇒ 实测远高于 250KB/s
-    const { onLinkSlow } = await run({ bandwidth: 2_000_000, delayMs: 0 })
-    expect(onLinkSlow).not.toHaveBeenCalled()
+    // 同一档 2Mbps，但每段 1000B 几乎不耗时 ⇒ 实测远高于 250KB/s（耗时被 `Math.max(ms,1)` 兜底）
+    const { onLinkSlow, videoSegments, stats } = await run({ bandwidth: 2_000_000, delayMs: 0 })
+    // ⚠️ 先给它**足够的机会**再断言"没报"：样本不足时"没报"是没有意义的（空转的绿）
+    await waitUntil(() => videoSegments() >= 4)
+    expect(videoSegments(), '这条判据要求真的量过几段').toBeGreaterThanOrEqual(3)
+    expect(onLinkSlow, `喂得饱就不该报：${stats()}`).not.toHaveBeenCalled()
   })
 
   it('段表没给码率 ⇒ 不猜（老后端照旧能播）', async () => {
-    const { onLinkSlow } = await run({ bandwidth: 0, delayMs: 25 })
-    expect(onLinkSlow).not.toHaveBeenCalled()
+    const { onLinkSlow, videoSegments, stats } = await run({ bandwidth: 0, delayMs: 25 })
+    await waitUntil(() => videoSegments() >= 4)
+    expect(videoSegments(), '这条判据要求真的量过几段').toBeGreaterThanOrEqual(3)
+    expect(onLinkSlow, `没给码率就不该报：${stats()}`).not.toHaveBeenCalled()
   })
 })
 
