@@ -230,8 +230,10 @@ npm run release --prefix frontend
 
 # 分步（改其一后只跑对应步）
 npm run build:backend   --prefix frontend   # ① 后端 → PyInstaller onedir
-npm run tauri:build     --prefix frontend   # ② 前端构建 + Rust release + NSIS 安装包
-npm run collect:release --prefix frontend   # ③ 聚合产物到 dist-release/
+npm run stage:extension --prefix frontend   # ② 浏览器扩展 → src-tauri/extension/（打进产物的那一份；
+                                            #     `tauri:build` 里已自动跑它，单独 `cargo test` 前可手动补）
+npm run tauri:build     --prefix frontend   # ③ 前端构建 + Rust release + NSIS 安装包
+npm run collect:release --prefix frontend   # ④ 聚合产物到 dist-release/
 ```
 
 产物：`DDtoolkit_<版本>_x64-setup.exe`（NSIS 安装包）、`DDtoolkit-portable-win64.zip`（便携版）、

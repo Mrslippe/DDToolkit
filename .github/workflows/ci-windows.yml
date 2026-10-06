@@ -11,6 +11,12 @@
 #    实测确认：放**任意一个占位文件**进去就能过（**不需要**真跑 PyInstaller、
 #    **也不需要**前端 `dist/`）⇒ 所以下面第一步就是造占位文件。
 #    `gen/` 不需要入库：build.rs 会自己重建（同一批实测）。
+# ⚠️ **2026-10-06 起有第二个同样的坑**（devlog/375 的"扩展随包"）：`bundle.resources`
+#    多了一条 `extension/**/*`，而它的来源同样是**构建期暂存 + gitignore**
+#    （`scripts/stage_extension.py` 把仓库根 `extension/` 拷进 `src-tauri/extension/`）
+#    ⇒ 干净 clone 上同样要造占位文件，否则红在
+#        glob pattern extension/**/* path not found or didn't match any files.
+#    两个 glob 一个都不能少 —— 这类"少一个占位就整条腿红"的坑，症状与代码毫无关系。
 
 name: CI (Windows)
 
@@ -50,12 +56,16 @@ jobs:
 
       # 见文件头：没有这一步 cargo 连编译都过不去。**注意是文件不是目录** ——
       # glob `**/*` 要匹配到"东西"，空目录不算。
-      - name: 为 cargo 造 sidecar 占位文件
+      # 两个资源 glob（`binaries/backend/**/*` 与 `extension/**/*`）各要一个占位文件。
+      - name: 为 cargo 造 sidecar / 扩展占位文件
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path frontend/src-tauri/binaries/backend | Out-Null
           Set-Content -Path frontend/src-tauri/binaries/backend/ddtoolkit-backend.exe `
                       -Value 'ci placeholder' -Encoding ascii
+          New-Item -ItemType Directory -Force -Path frontend/src-tauri/extension | Out-Null
+          Set-Content -Path frontend/src-tauri/extension/manifest.json `
+                      -Value '{ "manifest_version": 3 }' -Encoding ascii -NoNewline
 
       - name: Rust 单测（含 junction 危险路径矩阵）
         working-directory: frontend/src-tauri

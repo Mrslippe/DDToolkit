@@ -551,12 +551,16 @@ def step_verify(ctx: Ctx) -> None:
             problems.append("NSIS 安装脚本里没有任何 _internal 行 —— 形态不对")
         # 扩展随包（2026-10-06）：用户口径是"装完在文件目录里就有扩展"。
         # ⚠️ 少了它的症状**不是报错**，而是"新用户只能去 clone 仓库" —— 只有这里看得见。
+        # ⚠️ 判据必须**点名 manifest.json**：CI / 干净 clone 上为了喂饱资源 glob 会放一个
+        #    只含 manifest 的占位文件（见 `.github/workflows/ci-windows.yml` 头部），
+        #    只数"有多少行"会让"整份扩展没打进去、只剩占位"也过审。
         ext_rows = classify_nsis_extension(nsi_lines)
-        ctx.results["nsis_extension"] = ext_rows
-        print(f"  {OK if ext_rows else FAIL} 安装包里的扩展: {ext_rows} 行（含 "
-              f"`oname=extension\\manifest.json`）")
-        if not ext_rows:
-            problems.append("NSIS 安装脚本里没有 extension\\ 的行 —— 装了也没有扩展"
+        has_ext_manifest = any("/oname=extension\\manifest.json" in ln for ln in nsi_lines)
+        ctx.results["nsis_extension"] = {"rows": ext_rows, "manifest": has_ext_manifest}
+        print(f"  {OK if has_ext_manifest else FAIL} 安装包里的扩展: {ext_rows} 行、"
+              f"manifest.json {'在' if has_ext_manifest else '**不在**'}")
+        if not has_ext_manifest:
+            problems.append("NSIS 安装脚本里没有 extension\\manifest.json —— 装了也没有扩展"
                             "（先确认 npm run stage:extension 跑过、且 bundle.resources 里有 extension/**/*）")
     else:
         ctx.warn(f"没找到 {nsi.relative_to(ROOT)}（跳过后端布局校验）")

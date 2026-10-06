@@ -202,13 +202,21 @@ Select-String frontend/src-tauri/target/release/nsis/x64/installer.nsi `
 
 | 环节 | 谁做的 | 判据（`release.py verify` 会量） |
 |---|---|---|
-| 暂存 | `npm run tauri:build` 先跑 `stage:extension`（`scripts/stage_extension.py`：把仓库根 `extension/` 的白名单条目拷进 `frontend/src-tauri/extension/`，**已 gitignore**） | `extension/test/logic.test.mjs` 的结构判据盯着这条接线 |
-| 直装版 | `bundle.resources` 里的 `extension/**/*` | NSIS 脚本里 `oname=extension\…` 的行数 > 0（`classify_nsis_extension`，真文件上验过） |
-| 便携版 | `collect_release.py::_portable` 把 `src-tauri/extension/` 拷进 `DDtoolkit\extension\` | 便携 zip 里必须有 `DDtoolkit/extension/manifest.json` |
+| 暂存 | `npm run tauri:build` 先跑 `stage:extension`（`scripts/stage_extension.py` 把仓库根 `extension/` 的白名单条目拷进暂存目录） | `extension/test/logic.test.mjs` 的结构判据盯着这条接线 |
+| 直装版 | `bundle.resources` 里的 `extension/**/*` | NSIS 脚本里**必须有点名 `extension\manifest.json` 的行**（`classify_nsis_extension`，真文件上验过；只数行数会让"只剩占位文件"也过审） |
+| 便携版 | `collect_release.py::_portable` 把暂存目录拷进 `DDtoolkit\extension\` | 便携 zip 里必须有 `DDtoolkit/extension/manifest.json` |
 | 指路 | 壳的 `extension_dir` / `open_extension_dir` 命令 → 设置 → 登录 → 浏览器扩展 那一栏显示路径 + 「打开目录」 | `cargo test`（候选顺序 / 必须有 `manifest.json`）+ vitest + 探针 `--first-run` |
 
 > ⚠️ 少了任何一处**都不会报错**，症状是"新用户只能去 clone 仓库"——所以四处都是机器判据。
 > 扩展的 `test/` 不进产物（白名单只认 `manifest.json` / `src` / `icons` / `README.md`）。
+
+> ⚠️ **暂存目录是 `frontend/src-tauri/extension/`**（构建期产生、已 gitignore ⇒ **干净 clone 上不存在**）
+> <!-- 未建 -->
+> —— 于是 `cargo test` / `cargo build` 在干净 clone 上会红在
+> `glob pattern extension/**/* path not found or didn't match any files.`
+> （与 `binaries/backend/**/*` 同一个坑，`devlog/199` 记过第一次）：
+> CI 靠 `.github/workflows/ci-windows.yml` 第一步那两个占位文件过关，
+> 本机则跑一次 `npm run stage:extension` 或任意一次构建即可。
 
 > ⚠️ 构建环境注意：`npm run release` 需在**完整权限**下执行（PyInstaller/esbuild/cargo/makensis 子进程在受限沙箱会 EPERM）。
 

@@ -2657,8 +2657,12 @@ mod tests {
     fn the_staged_extension_is_a_loadable_one_when_present() {
         // 构建期暂存（`scripts/stage_extension.py`）坏了的话，症状是"装完目录里那份扩展
         // 浏览器不认"。没暂存过就跳过 —— 别让 `cargo test` 依赖一次构建。
+        //
+        // ⚠️ 判据是 **`icons/16.png` 在不在**，不是 `manifest.json`：CI 为了让
+        // `extension/**/*` 这个资源 glob 匹配得到，会放一个**只含 manifest 的占位文件**
+        // （坑记在 `.github/workflows/ci-windows.yml` 头部），那不算"暂存过的扩展"。
         let staged = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("extension");
-        if !staged.join("manifest.json").is_file() {
+        if !staged.join("icons").join("16.png").is_file() {
             return;
         }
         let body = std::fs::read_to_string(staged.join("manifest.json")).unwrap();

@@ -205,6 +205,10 @@ def test_classify_nsis_extension_against_real_installer_script_if_present():
     assert R.classify_nsis_extension(lines) > 0, \
         "真实安装脚本里没有 extension\\ 的行 —— 要么这份产物是加扩展之前的旧构建" \
         "（重新跑一次 npm run tauri:build），要么打包真没带上扩展、或判据的路径形态漂了"
+    # ⚠️ 还得点名 manifest.json：只数行数的话，"整份扩展没打进去、只剩一个喂 glob 的占位文件"
+    #    也能过审 —— 而那正是 CI 在干净 clone 上放的东西（见 ci-windows.yml 头部）。
+    assert any("/oname=extension\\manifest.json" in ln for ln in lines), \
+        "真实安装脚本里没有 extension\\manifest.json —— 产物里那份扩展不是真的"
 
 
 # ── 发布说明与资产预期 ───────────────────────────────────────────────
