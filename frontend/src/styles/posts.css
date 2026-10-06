@@ -6535,6 +6535,28 @@ html[data-video-fs] .hero-backdrop { display: none; }
 html[data-video-fs] .app-shell > :not(:has(.vp)),
 html[data-video-fs] .app-body > :not(:has(.vp)),
 html[data-video-fs] .posts-panel > :not(:has(.vp)) { display: none; }
+
+/* ⚠️ **B2 诊断开关**（2026-10-07，`devlog/399`）：只在 `VITE_VP_FS_MODE` 设了才生效
+   （默认 `off` ⇒ 生产行为一字不变；口径与用法见 `frontend/src/utils/vpFsMode.ts`）。
+   目的：把"进全屏"一次翻的三个变量（全屏 API / 显示尺寸 / 窗口底色）拆成可分辨的两格。
+   这一格查完就把这两块连 `utils/vpFsMode.ts` 一起删掉。 */
+html[data-vp-fs-mode='size'] .vp:fullscreen .vp-video {
+  /* 真全屏（API 与底色都跟全屏态一样），只把画面钉回窗口态那么大
+     —— `devlog/398` 实测窗口态是 `尺寸=1920x1080→678x381`。
+     ⇒ 只动"显示尺寸"这一个变量：这样也卡 ⇒ 尺寸出局。 */
+  width: 678px; height: 381px; max-height: 381px; flex: none;
+}
+html[data-vp-fs-mode='pseudo'][data-video-fs] .vp {
+  /* **不走全屏 API**，但布局/尺寸/底色照全屏做（`data-video-fs` 播放器已挂上、
+     窗口表面也已切成不透明）⇒ 只动"全屏 API / 全屏窗口"这一个变量。 */
+  position: fixed; inset: 0; z-index: 9999; border-radius: 0;
+  display: flex; align-items: center; justify-content: center; background: #000;
+}
+html[data-vp-fs-mode='pseudo'][data-video-fs] .vp .vp-video {
+  width: 100%; height: 100%; max-height: none; object-fit: contain;
+}
+html[data-vp-fs-mode='pseudo'][data-video-fs] .vp .vp-bigplay,
+html[data-vp-fs-mode='pseudo'][data-video-fs] .vp .vp-spin { backdrop-filter: none; }
 .vp-progress::before, .vp-progress-buf, .vp-progress-fill {
   top: 50%; transform: translateY(-50%);
 }
