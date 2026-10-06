@@ -268,6 +268,25 @@ def npm_cmd() -> list[str]:
 
 # ── 步骤实现 ─────────────────────────────────────────────────────────
 
+def signing_key_problems(env: dict | None = None) -> list[str]:
+    """构建应用内更新载体需要签名私钥 —— **preflight 就该拦，别等构建跑完再报**。
+
+    为什么加它（2026-10-06 v1.1.0 实测）：`tauri:build` 一路跑到最后（PyInstaller + cargo
+    release + NSIS 安装包都已产出，约 7 分钟）才因为
+    `A public key has been found, but no private key` 失败 —— 整段构建白等，
+    而这件事在**开跑前**就能问清楚。真源与喂法见 `docs/ops/RELEASE.md` §3.1：
+    私钥给的是**内容**（不是路径），密码**不能为空**（PowerShell 里 `$env:X = ''`
+    其实是删掉变量，会被 CLI 当成"没提供"）。
+    """
+    e = os.environ if env is None else env
+    bad: list[str] = []
+    if not (e.get("TAURI_SIGNING_PRIVATE_KEY") or "").strip():
+        bad.append("缺 TAURI_SIGNING_PRIVATE_KEY（私钥**内容**，不是路径）")
+    if not (e.get("TAURI_SIGNING_PRIVATE_KEY_PASSWORD") or "").strip():
+        bad.append("缺 TAURI_SIGNING_PRIVATE_KEY_PASSWORD（密码不能为空）")
+    return bad
+
+
 def step_preflight(ctx: Ctx) -> None:
     a = ctx.args
     print(f"  版本: {a.version}   分支: {a.branch}   平台: {sys.platform}")
@@ -334,6 +353,14 @@ def step_preflight(ctx: Ctx) -> None:
             if r.returncode != 0:
                 raise Fail(f"构建工具链缺失: {name}（{r.stdout or ''}）")
             print(f"  {OK} {name}: {(r.stdout or '').strip().splitlines()[0]}")
+
+        # 构建还要**签名私钥**（应用内更新载体没签名 = 更新静默失效）——
+        # 这是一条"开跑前就能问、却曾被留到 7 分钟后才炸"的检查（2026-10-06 实测）。
+        key_bad = signing_key_problems()
+        if key_bad:
+            raise Fail("构建需要更新签名私钥（否则 tauri:build 会在最后一步失败）："
+                       + "；".join(key_bad) + "　喂法见 docs/ops/RELEASE.md §3.1")
+        print(f"  {OK} 更新签名私钥: 已提供（长度 {len(os.environ.get('TAURI_SIGNING_PRIVATE_KEY', ''))}）")
 
     # ⑦ 网络：只要计划里有 push/release，就先确认能连上 GitHub
     if {"push", "release"} & set(plan):

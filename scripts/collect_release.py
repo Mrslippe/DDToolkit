@@ -45,6 +45,21 @@ def _version() -> str:
     return str(data["version"])
 
 
+def pick_setups(setups: list[Path], version: str) -> tuple[list[Path], list[Path]]:
+    """把 NSIS 产物按**本次版本**分拣：(要收的, 跳过的)。
+
+    为什么必须分拣（2026-10-06 v1.1.0 实测踩到）：`tauri build` 的产物目录**不会自己清理**，
+    上一次的 `DDtoolkit_<旧版本>_x64-setup.exe` 还躺在里面 ⇒ 原先这里 `glob("*.exe")` 全收，
+    旧安装包被复制进 `dist-release/`，紧接着 `release.py` 的 verify 判"旧版本产物残留"，
+    **停在整个发布的最后一公里**（那次白等一整段构建）。判据：
+    `tests/test_release_script.py::test_collect_release_keeps_only_this_versions_setup`。
+    """
+    want = f"DDtoolkit_{version}_x64-setup.exe"
+    keep = [s for s in setups if s.name == want]
+    skipped = [s for s in setups if s.name != want]
+    return keep, skipped
+
+
 def latest_json(version: str, notes: str, signature: str, zip_name: str,
                 pub_date: str | None = None, repo: str = REPO) -> dict:
     """生成 updater 的清单（纯函数，便于用例覆盖 —— 它的字段名写错更新就会静默失效）。
@@ -154,6 +169,10 @@ def main() -> None:
     # NSIS 安装包（tauri build 产物）
     nsis_dir = RELEASE / "bundle" / "nsis"
     setups = sorted(nsis_dir.glob("*.exe")) if nsis_dir.exists() and not args.portable_only else []
+    setups, stale = pick_setups(setups, _version())
+    for s in stale:
+        print(f"[release] WARN: 跳过非本次版本的安装包 {s.name}"
+              f"（tauri 产物目录不自清，删不删由你定：{nsis_dir}）")
     if setups:
         for s in setups:
             dst = OUT_DIR / s.name

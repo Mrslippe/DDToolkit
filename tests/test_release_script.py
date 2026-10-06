@@ -330,3 +330,39 @@ def test_token_never_leaks_into_printed_commands(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert secret not in out, f"token 被回显了：{out}"
     assert "***" in out, out
+
+
+def test_preflight_requires_the_updater_signing_key():
+    """构建要签名私钥 —— 这件事必须在 preflight 就拦，而不是构建 7 分钟之后。
+
+    2026-10-06 v1.1.0 实测：`tauri:build` 跑到最后（PyInstaller + cargo release + NSIS
+    安装包都已产出）才报 `A public key has been found, but no private key`，整段构建白等。
+    真源与喂法：`docs/ops/RELEASE.md` §3.1（私钥给**内容**、密码不能为空）。
+    """
+    assert len(R.signing_key_problems({})) == 2
+    ok = {"TAURI_SIGNING_PRIVATE_KEY": "untrusted comment: minisign encrypted secret key",
+          "TAURI_SIGNING_PRIVATE_KEY_PASSWORD": "32-random-chars"}
+    assert R.signing_key_problems(ok) == []
+    # 空串 = 没提供（PowerShell 里 `$env:X = ''` 其实是删掉变量，CLI 也这么看）
+    assert R.signing_key_problems({**ok, "TAURI_SIGNING_PRIVATE_KEY_PASSWORD": ""}) != []
+    # preflight 的 build 分支必须真的调用这条判据（只有函数没有调用 = 白写）
+    src = (Path(__file__).resolve().parent.parent / "scripts" / "release.py").read_text(encoding="utf-8")
+    assert "signing_key_problems()" in src
+
+
+def test_collect_release_keeps_only_this_versions_setup(tmp_path):
+    """NSIS 产物目录不自清 ⇒ 上次的安装包必须被分拣出去。
+
+    2026-10-06 v1.1.0 实测踩到：`tauri build` 的产物目录里躺着 1.0.2 的安装包，
+    `collect:release` 全收 ⇒ `dist-release/` 里出现旧包 ⇒ verify 判"旧版本产物残留"，
+    发布停在最后一公里。
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+    import collect_release as C  # noqa: E402
+
+    setups = [tmp_path / "DDtoolkit_1.0.2_x64-setup.exe",
+              tmp_path / "DDtoolkit_1.1.0_x64-setup.exe"]
+    keep, skipped = C.pick_setups(setups, "1.1.0")
+    assert [p.name for p in keep] == ["DDtoolkit_1.1.0_x64-setup.exe"]
+    assert [p.name for p in skipped] == ["DDtoolkit_1.0.2_x64-setup.exe"]
+    assert C.pick_setups([], "1.1.0") == ([], [])
