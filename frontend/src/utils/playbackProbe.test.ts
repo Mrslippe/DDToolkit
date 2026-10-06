@@ -486,6 +486,20 @@ describe('playbackProbe · 抖动与逐秒分布（devlog/384）', () => {
     expect(clientLog, '碎窗口照旧丢弃（否则拖一次能刷十行）').not.toHaveBeenCalled()
   })
 
+  it('连续播放要接着测（`续`）—— 只测前 30 秒就永远看不到"40 秒后自己变好"（devlog/389）', async () => {
+    const el = makeEl()
+    const h = watchPlayback(el, 'start')
+    h.noteWaiting()
+    await vi.advanceTimersByTimeAsync(30_500)
+    const first = clientLog.mock.calls.map(([l]) => String(l)).filter((l) => !l.includes('曲线'))
+    expect(first.length, '第 30 秒要报第一段').toBe(1)
+    await vi.advanceTimersByTimeAsync(30_500)
+    const all = clientLog.mock.calls.map(([l]) => String(l)).filter((l) => !l.includes('曲线'))
+    expect(all.length, '第二个 30 秒也要报（同一次播放的后半段）').toBe(2)
+    expect(all[1], '接着测的窗口要能一眼认出来').toContain('[video] 续')
+    h.finish()
+  })
+
   it('汇总行**不超过 400 字**（接口硬限制，超了整行被丢）', () => {
     const el = makeEl()
     el.setFrames(500, 40)

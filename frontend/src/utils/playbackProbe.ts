@@ -124,6 +124,10 @@ const BAD_SECONDS_TRIGGER = 3
 /** 被顶掉的窗口**采到这么多秒**就留一行（标 `(顶掉)`）——见 `cancel`。
  *  用采样数而不是墙钟：采样由 1 秒定时器产生，判据在假时钟下也确定（单测直接钉得住）。 */
 const CANCEL_REPORT_SAMPLES = 5
+/** 连续窗口：一次连续播放最多接着测这么多个 30 秒窗口（`devlog/389`）。 */
+const MAX_CHAIN = 6
+/** 接着测的窗口，`reason` 用这个（一眼能看出"这是同一次播放的后半段"）。 */
+const CHAIN_REASON = '续'
 
 /**
  * 抖动（2026-10-06，`devlog/384`）——**用户说的"一下一下地慢"就是它**。
@@ -586,7 +590,7 @@ export interface ProbeHandle {
 
 export function watchPlayback(el: HTMLVideoElement, reason: string, targetS?: number,
                               kernel?: string): ProbeHandle {
-  const w = openWindow(el, reason, targetS, kernel)
+  let w = openWindow(el, reason, targetS, kernel)
   let alive = true
   let lastFrames = w.baseFrames
   let lastDecoded = w.baseDecoded ?? 0
@@ -604,6 +608,27 @@ export function watchPlayback(el: HTMLVideoElement, reason: string, targetS?: nu
   /** 这一秒里攒的原料（采样时倒进 `Sample`，然后清空）。 */
   let pendingIntervals: number[] = []
   let pendingLongTasks = 0
+
+  /**
+   * 开下一个连续窗口时，把"窗口内增量"的基准重新对到当前读数上（`devlog/389`）。
+   *
+   * 为什么要有连续窗口：一次连续播放**只测前 30 秒**的话，"40 秒之后自己变好"这种事永远看不到 ——
+   * 而真机上"拖了进度条就不卡了"很可能只是**时间**的功劳（拖的时候已经播了一会儿）。
+   */
+  const rebase = () => {
+    lastFrames = w.baseFrames
+    lastDecoded = w.baseDecoded ?? 0
+    lastDropped = w.baseDropped
+    lastPresented = 0
+    lastPresentedSampled = 0
+    lastCur = el.currentTime
+    lastPresentedAt = 0
+    lastMediaTime = null
+    pendingIntervals = []
+    pendingLongTasks = 0
+    pendingRafMax = 0
+    tick = 0
+  }
 
   /* 整窗粘性（devlog/384）：`fullscreenchange` 只有进/出两拍会响，但**报告那一拍可能已经退出**
      全屏 —— 只看开局与报告两拍会把"中途进过全屏"整段记成 `全屏=0`（`表面=` 上一批就是这么
@@ -759,7 +784,23 @@ export function watchPlayback(el: HTMLVideoElement, reason: string, targetS?: nu
     const curve = curveLine(w)
     if (curve) void api.clientLog(curve).catch(() => { /* 同上 */ })
   }
-  const windowTimer = window.setTimeout(() => { if (alive) { stop(); post() } }, WINDOW_MS)
+  /** 已经接着开了几个窗口（连续播放时用；见 `armWindow`）。 */
+  let chain = 0
+  let windowTimer = 0
+  const armWindow = () => {
+    windowTimer = window.setTimeout(() => {
+      if (!alive) return
+      post()
+      chain += 1
+      /* 连续窗口（`devlog/389`）：真机上"拖了进度条就不卡了"很可能只是**时间**的功劳 ——
+         一次连续播放只测前 30 秒，就永远看不到"40 秒之后自己变好"这种事。 */
+      if (chain >= MAX_CHAIN || el.paused === true || el.ended === true) { stop(); return }
+      w = openWindow(el, CHAIN_REASON, undefined, kernel)
+      rebase()
+      armWindow()
+    }, WINDOW_MS)
+  }
+  armWindow()
 
   return {
     noteWaiting: () => { w.waiting += 1 },
