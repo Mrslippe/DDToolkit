@@ -128,6 +128,13 @@ const CANCEL_REPORT_SAMPLES = 5
 const MAX_CHAIN = 6
 /** 接着测的窗口，`reason` 用这个（一眼能看出"这是同一次播放的后半段"）。 */
 const CHAIN_REASON = '续'
+/**
+ * **一个窗口里最多写几行"转折"**（见 `noteTurn`）。
+ *
+ * 为什么要有上限：判据是"这一秒有没有新丢的帧"，一秒一跳的抖动会连着翻面；
+ * 真机正常一轮只有几次，给 20 是"绝不够用也绝刷不满"的量级。
+ */
+const MAX_TURNS = 20
 
 /**
  * 抖动（2026-10-06，`devlog/384`）——**用户说的"一下一下地慢"就是它**。
@@ -541,6 +548,10 @@ export function summarize(w: PlaybackWindow, el: HTMLMediaElement, now: number):
     `隐藏=${hiddenSeconds(w)}s`,         // 浏览器判页面不可见（切走/遮挡/最小化）
     `失焦=${unfocusedSeconds(w)}s`,
     `丢帧=${droppedGained}/${gained}${gained ? `(${((droppedGained / gained) * 100).toFixed(1)}%)` : ''}`,
+    /* 播放点（2026-10-07，`devlog/396`）：**"这一窗测的是哪一段"必须一眼看得见**。
+       B2 第十二轮整轮都在拿 `[media] 淘汰` 行的 `keepFrom+25` 反推播放点，才知道
+       "0.0% 那窗"和"13% 那窗"其实覆盖同一个位置 —— 有这一格就不用绕。 */
+    `位置=${el.currentTime.toFixed(1)}s`,
     `末缓冲=${aheadOf(el)?.toFixed(1) ?? '?'}s`,
   ].join(' ')
 }
@@ -716,6 +727,42 @@ export function watchPlayback(el: HTMLVideoElement, reason: string, targetS?: nu
     rvfc(onFrame)
   }
 
+  /**
+   * **丢帧率翻面的那一拍，当场写一行**（2026-10-07，`devlog/396`）。
+   *
+   * 为什么值得单开一行：B2 卡顿排查里最贵的信息一直是"**是哪一下翻的**"。摘要行与每秒曲线
+   * 都只在**窗口结束时**写，而窗口是 30 秒、曲线还只印前 15 秒 —— 翻转只要落在窗口中间，
+   * 就只剩一个总数，看不出是谁干的。真机实测（`devlog/395`）：同一个动作在不同会话里
+   * 结论相反，正是因为翻面发生在窗口中间，**两边都没看见它**。
+   *
+   * 口径：以**秒**为单位看"这一秒有没有新丢的帧"，从"没丢"翻到"丢"、或反过来，都写一行。
+   * 行里带 `位置/缓冲/全屏/元素状态` 与**当前窗口的第几秒**，拿到日志就能和
+   * `[media] 跳转 … 落地` / `[media] 淘汰 …` 的时间戳对上账。
+   *
+   * ⚠️ 判据刻意做成 1 秒粒度（不做"连续两秒才算翻"）：真机上坏状态的每秒丢帧数是稳定的
+   * （4/s 或 0/s），噪声本来就少；而**延迟一秒可能正好把"动作"和"翻面"错开**，那正是要看的。
+   * ⚠️ 第一个采样只记基准、不写行（否则每一窗都会以一行假的"转折"开头）。
+   * ⚠️ **不在 `rebase()` 里重置**：连续窗口是同一次播放，翻面若正好落在窗口接缝上，
+   * 上一窗最后一秒的状态就是唯一能判它的依据。
+   */
+  let wasDropping: boolean | null = null
+  let turns = 0
+  const noteTurn = (dropping: boolean, dropDelta: number, fps: number) => {
+    if (wasDropping === null) { wasDropping = dropping; return }
+    if (dropping === wasDropping) return
+    wasDropping = dropping
+    if (turns >= MAX_TURNS) return
+    turns += 1
+    const ahead = aheadOf(el)
+    void api.clientLog(`[video] 转折 →${dropping ? '坏' : '好'} 位置=${el.currentTime.toFixed(1)}s `
+                       + `缓冲=${ahead == null ? '?' : ahead.toFixed(1)}s `
+                       + `全屏=${isFullscreen() ? '是' : '否'} `
+                       + `元素=${el.readyState}/${el.seeking ? 'seek中' : '停'}`
+                       + `/${el.paused ? '暂停' : '播'} 窗=${w.reason}第${tick}秒 `
+                       + `丢=${dropDelta}/s 帧=${fps}/s`)
+      .catch(() => { /* 诊断上报失败就算了，绝不影响播放 */ })
+  }
+
   const sample = () => {
     tick += 1
     const { frames, decoded, dropped } = frameStats(el)
@@ -726,6 +773,7 @@ export function watchPlayback(el: HTMLVideoElement, reason: string, targetS?: nu
     /* 丢帧**按秒**（devlog/384）：窗口总数看不出"均匀漏"还是"某一刻崩"，而这两者修法相反 */
     const dropDelta = Math.max(0, dropped - lastDropped)
     lastDropped = dropped
+    noteTurn(dropDelta > 0, dropDelta, fps)
     const advanced = el.currentTime - lastCur >= 0.2
     lastCur = el.currentTime
     const ahead = aheadOf(el)

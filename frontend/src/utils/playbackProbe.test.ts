@@ -517,3 +517,62 @@ describe('playbackProbe · 抖动与逐秒分布（devlog/384）', () => {
     expect(line.length, `实得 ${line.length} 字：${line}`).toBeLessThanOrEqual(400)
   })
 })
+
+describe('playbackProbe · 转折行与播放点（devlog/396）', () => {
+  const lines = () => clientLog.mock.calls.map(([l]) => String(l))
+
+  it('丢帧率**翻面的那一拍**要当场写一行 —— 窗口结束才写就永远看不出是哪一下翻的', async () => {
+    const el = makeEl()
+    el.currentTime = 12.5
+    el.buffered = ranges(0, 40)
+    const h = watchPlayback(el, 'start')
+
+    el.setFrames(30, 0)                              // 第 1 秒：顺
+    await vi.advanceTimersByTimeAsync(1_000)
+    el.setFrames(60, 0)                              // 第 2 秒：顺
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(lines().filter((l) => l.includes('转折')), '一直顺 ⇒ 不该有转折行').toHaveLength(0)
+
+    el.currentTime = 13.5
+    el.setFrames(90, 4)                              // 第 3 秒：开始丢
+    await vi.advanceTimersByTimeAsync(1_000)
+    const bad = lines().filter((l) => l.includes('转折'))
+    expect(bad, '开始丢 ⇒ 当场一行（不等窗口结束）').toHaveLength(1)
+    expect(bad[0]).toContain('[video] 转折 →坏')
+    expect(bad[0], '是哪一下翻的 ⇒ 必须带播放点').toContain('位置=13.5s')
+    expect(bad[0]).toContain('缓冲=26.5s')
+    expect(bad[0], '要能和 [media] 那几行对时间戳').toContain('窗=start第3秒')
+    expect(bad[0]).toContain('丢=4/s')
+
+    el.currentTime = 14.5
+    el.setFrames(120, 4)                             // 第 4 秒：又不丢了
+    await vi.advanceTimersByTimeAsync(1_000)
+    const all = lines().filter((l) => l.includes('转折'))
+    expect(all, '翻回好也要一行').toHaveLength(2)
+    expect(all[1]).toContain('[video] 转折 →好')
+    h.finish()
+  })
+
+  it('转折行有上限：一秒一跳的抖动不许刷满日志，也**不能一次都不写**', async () => {
+    const el = makeEl()
+    el.buffered = ranges(0, 40)
+    const h = watchPlayback(el, 'start')
+    let dropped = 0
+    for (let i = 0; i < 30; i += 1) {
+      dropped += i % 2 === 0 ? 2 : 0
+      el.setFrames((i + 1) * 30, dropped)
+      await vi.advanceTimersByTimeAsync(1_000)
+    }
+    // ⚠️ 反面判据要配正对照：只断言"≤ 上限"的话，写成"一行都不写"也会绿
+    expect(lines().filter((l) => l.includes('转折')).length, '29 次翻面只留上限那么多').toBe(20)
+    h.finish()
+  })
+
+  it('摘要行带 `位置=`：这一窗测的是哪一段必须一眼看得见', () => {
+    const el = makeEl()
+    el.currentTime = 128.7
+    const w = openWindow(el, 'start')
+    w.samples.push(smp(1))
+    expect(summarize(w, el, w.startedAt + 1_000)).toContain('位置=128.7s')
+  })
+})
