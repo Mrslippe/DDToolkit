@@ -135,6 +135,23 @@ const CHAIN_REASON = '续'
  * 真机正常一轮只有几次，给 20 是"绝不够用也绝刷不满"的量级。
  */
 const MAX_TURNS = 20
+/**
+ * 汇总行的硬上限：后端 `ClientLogIn.line` 是 `max_length=400`，**超一个字整行 422 丢掉**
+ * —— 而 `api.clientLog` 的 `.catch()` 会把它咽掉，日志里只表现为"这一窗没有摘要行"。
+ *
+ * ⚠️ 2026-10-07（`devlog/397`）：三次复现里 6 个窗**少了 3 个摘要**，就是撞在这里。
+ * 原先只靠一条"最坏情况 ≤400"的判据兜底，而那条判据的"最坏情况"**没带 `动画名=`** ——
+ * 它是全行唯一**长度不封顶**的字段（CSS 类名可以任意长，最多 3 个 `name@选择器`）。
+ */
+const MAX_LINE = 400
+/**
+ * 超长时**按这个顺序丢字段**（先丢最不关键的），丢掉几个写进行尾 `截=N`。
+ *
+ * ⚠️ **静默丢字段比行长更坏**：这一行的用途就是"事后从日志里读出到底发生了什么"，
+ * 少一个字段还能读，整行没有就什么都读不出。所以宁可丢可选项，也要保住
+ * `内核/全屏/判定/丢帧/位置/末缓冲` 这些主判据（用例里钉住了"关键字段不许被丢"）。
+ */
+const DROPPABLE = ['动画名=', '动画=', '重复帧=', '页面峰=', '长任务峰=', '抖峰=', '抖间隔=']
 
 /**
  * 抖动（2026-10-06，`devlog/384`）——**用户说的"一下一下地慢"就是它**。
@@ -487,7 +504,7 @@ export function summarize(w: PlaybackWindow, el: HTMLMediaElement, now: number):
   const anim = animatingSeconds(w)
   const fsSec = w.samples.filter((s) => s.fs).length
   const fsEver = Boolean(w.everFullscreen || w.fullscreen || isFullscreen())
-  return [
+  const fields = [
     `[video] ${w.reason}${w.targetS != null ? `→${w.targetS.toFixed(1)}s` : ''}`,
     /* 哪个内核（devlog/312）：旧内核的病（seek 后解码追赶）和新内核的效果必须能对账 */
     ...(w.kernel ? [`内核=${w.kernel}`] : []),
@@ -553,7 +570,26 @@ export function summarize(w: PlaybackWindow, el: HTMLMediaElement, now: number):
        "0.0% 那窗"和"13% 那窗"其实覆盖同一个位置 —— 有这一格就不用绕。 */
     `位置=${el.currentTime.toFixed(1)}s`,
     `末缓冲=${aheadOf(el)?.toFixed(1) ?? '?'}s`,
-  ].join(' ')
+  ]
+  /**
+   * **超长就地处理**（`devlog/397`）：丢可选项、并写明丢了几个。
+   *
+   * 为什么不直接截断：截断会**从行尾切**，切掉的正好是 `位置=`/`末缓冲=`（主判据）；
+   * 而可选项（`动画名=` 最长且最不关键）丢了对读日志几乎无损。
+   */
+  let line = fields.join(' ')
+  if (line.length > MAX_LINE) {
+    let dropped = 0
+    for (const p of DROPPABLE) {
+      if (line.length + 8 <= MAX_LINE) break
+      const i = fields.findIndex((f) => f.startsWith(p))
+      if (i >= 0) { fields.splice(i, 1); dropped += 1; line = fields.join(' ') }
+    }
+    line = dropped ? `${line} 截=${dropped}` : line
+    // 兜底：可选项全丢完还超（不该发生）——**宁可截断也不能整行丢掉**
+    if (line.length > MAX_LINE) line = line.slice(0, MAX_LINE)
+  }
+  return line
 }
 
 /** 每秒曲线（只在确实有低谷/卡顿/丢帧/抖动/长任务时附一行，避免把日志刷满）。 */

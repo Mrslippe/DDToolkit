@@ -503,6 +503,7 @@ describe('playbackProbe · 抖动与逐秒分布（devlog/384）', () => {
   it('汇总行**不超过 400 字**（接口硬限制，超了整行被丢）', () => {
     const el = makeEl()
     el.setFrames(500, 40)
+    el.currentTime = 1234.5
     const w = openWindow(el, 'seek', 123.4, 'MSE')
     for (let t = 1; t <= 30; t += 1) {
       w.samples.push(smp(t, { fps: 5, decoded: 0, presented: 0, pageFps: 0, ahead: 0,
@@ -513,8 +514,34 @@ describe('playbackProbe · 抖动与逐秒分布（devlog/384）', () => {
     w.pres.gaps.push(1200)
     w.pres.repeats = 99
     w.longTaskMaxMs = 250
+    w.maxDisp = { w: 2560, h: 1440 }
+    /* ⚠️ **真正的最坏情况里必须有 `动画名=`**（2026-10-07，`devlog/397`）：它是唯一**长度不封顶**
+       的字段（3 个 `name@选择器`），而这条判据原先没带它 —— 于是"最坏情况"其实没测到最坏，
+       真机上带 3 个长类名的窗**真的超了 400**，被后端 `max_length=400` 判 422 **静默丢掉**
+       （`api.clientLog` 的 `.catch()` 把它咽了）。 */
+    w.animNames = ['vp-spin@svg.lucide', 'rise-in-page@header.topbar',
+                   'rise-in-item@article.post-card']
     const line = summarize(w, el, performance.now())
     expect(line.length, `实得 ${line.length} 字：${line}`).toBeLessThanOrEqual(400)
+  })
+
+  it('★ 类名特别长时：**丢字段也要把这一行留住**，并写明丢了几个（`截=N`）', () => {
+    const el = makeEl()
+    el.currentTime = 1234.5
+    el.setFrames(500, 40)
+    const w = openWindow(el, 'seek', 123.4, 'MSE')
+    for (let t = 1; t <= 30; t += 1) w.samples.push(smp(t, { dropped: 5, anims: 2, fs: true }))
+    /* ⚠️ CSS 类名**长度不封顶**（`动画名=` 是唯一能把这行顶过 400 的字段）。真机上带 3 个长类名的
+       窗就是**整行 422 丢掉**：`api.clientLog` 的 `.catch()` 咽掉错误，日志里只表现为
+       "这一窗没有摘要行" —— 三次复现里 6 个窗少了 3 个（`devlog/397`）。 */
+    w.animNames = ['x'.repeat(200), 'y'.repeat(200), 'z'.repeat(200)]
+    const line = summarize(w, el, performance.now())
+    expect(line.length, `实得 ${line.length} 字：${line.slice(0, 60)}…`).toBeLessThanOrEqual(400)
+    expect(line, '丢过字段必须说出来（静默丢字段比行长更坏）').toContain('截=')
+    // ⚠️ 反面判据配正对照：光断言"≤400"的话，**把整行删空**也会绿
+    expect(line, '关键字段一个都不许被丢').toContain('丢帧=')
+    expect(line).toContain('位置=')
+    expect(line).toContain('全屏=')
   })
 })
 
