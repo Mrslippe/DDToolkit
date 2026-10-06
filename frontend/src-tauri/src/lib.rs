@@ -685,55 +685,6 @@ const VP_BROWSER_ARGS: &str = "--disable-accelerated-video-decode \
 
 /// 把**窗口表面切成不透明**（播放器全屏时用，退出全屏还原）。
 ///
-/// ## 为什么需要它（2026-10-06，`devlog/381`）——"成熟播放器都有自己的不透明表面"
-///
-/// 我们的窗口是 `transparent: false`（B2，2026-10-06，`devlog/383`）：窗口本身**不透明**，
-/// 底色 [`SHELL_BG`]。这一刀是 B2 的最后一招，理由见 `devlog/383` 与下面的"落地"。
-///
-/// 历史（`transparent: true` 时期）：那是壳的既定视觉（修掉四角白边 / 配合 DWM 圆角，
-/// 见 `layout.css` 顶部那段注释）。但**透明表面会让 WebView2 把整页放进 alpha 合成路径**：
-/// 视频层因此拿不到硬件覆盖层（overlay），每一帧都要由 GPU 采样 + 混合后再和桌面合成。
-/// 小窗时这笔账看不出来，**全屏**（1080p 铺满整块面板、面板还是 240Hz）就压垮了 ——
-/// 用户实测口径正是：**B 站不卡 · 应用内非全屏不卡 · 小窗不卡 · 全屏卡**。
-///
-/// 对照成熟播放器：YouTube / B 站网页播放器跑在**不透明**的页面里（视频层能被提升到
-/// overlay，控件层在播放时完全撤掉）；mpv / VLC / PotPlayer 更是直接占一个**不透明全屏
-/// 表面**、视频走独立的 D3D 交换链。我们没有那条路，能对齐的只有"全屏期间给一个不透明表面"。
-///
-/// ## 落地
-///
-/// 一行：[`WebView2` 的 `DefaultBackgroundColor`]（wry 的 `set_background_color`）。
-/// `Some(黑)` = 不透明；`false` 分支 = 回到壳底色 [`SHELL_BG`]。
-///
-/// ⚠️ **这一刀治不了 B2**（2026-10-06，`devlog/382`/`383` 的实测结论）：它只改 **WebView**
-/// 的背景色，**碰不到 Win32 窗口的分层（layered）属性** —— Chromium 关闭视频 overlay 提升的
-/// 判据是**窗口级**透明。所以"全屏期间切不透明"上线后丢帧率**一字未改**
-/// （7.2% / 9.6%，与切之前同档）。真正的开关是 `tauri.conf.json` 的 `transparent: false`。
-/// 保留它是因为全屏时黑底仍是对的（`object-fit: contain` 的留边要黑，不随主题走）。
-///
-/// [`WebView2` 的 `DefaultBackgroundColor`]: https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2controller#put_defaultbackgroundcolor
-#[tauri::command]
-fn set_surface_opaque(window: tauri::Window, on: bool) -> Result<(), String> {
-    if !guard_window(&window, "set_surface_opaque") {
-        return Err("该窗口无权调用 set_surface_opaque".to_string());
-    }
-
-    let w = window
-        .app_handle()
-        .get_webview_window(window.label())
-        .ok_or_else(|| "找不到这个窗口的 webview".to_string())?;
-    // ⚠️ 用**不透明黑**而不是"页面底色"：全屏里露出来的只有视频周围那一圈（object-fit: contain
-    // 的留边），黑边是所有播放器的共同选择，也不会因为主题切换而变化。
-    w.set_background_color(if on {
-        Some(tauri::utils::config::Color(0, 0, 0, 255))
-    } else {
-        // 退出全屏还原成**壳底色**（不是 `None`）：`transparent: false` 之后 `None` 会退回
-        // WebView 的出厂白，揭幕前那一帧会闪白（`layout.css` 的近白兜底就是为这个存在的）。
-        Some(SHELL_BG)
-    })
-    .map_err(|e| format!("切窗口表面失败：{e}"))
-}
-
 /// 打开发布页（R23b）：连不上 GitHub 时的兜底出口。
 ///
 /// 为什么直接调 Windows API 而不是插件：前端没装 `@tauri-apps/plugin-shell` 的 JS 包；
@@ -1329,8 +1280,6 @@ const COMMAND_ACL: &[&str] = &[
     // 扩展目录（E5）：只读路径 + 打开目录，与 open_data_dir 同口径（路径由壳解析）
     "extension_dir",
     "open_extension_dir",
-    // 播放器全屏时的窗口表面（B2）：只切"透明/不透明"，不接受别的参数
-    "set_surface_opaque",
     "open_external",
     "open_release_page",
     "probe_local_proxy",
@@ -1783,7 +1732,6 @@ pub fn run() {
             open_data_dir,
             extension_dir,
             open_extension_dir,
-            set_surface_opaque,
             open_external,
             present_window,
             hide_to_tray,

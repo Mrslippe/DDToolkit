@@ -263,8 +263,10 @@ describe('playbackProbe', () => {
     w.fullscreen = true
     const line = summarize(w, el, performance.now())
     expect(line).toContain('全屏=1')
-    // `表面=`：区分"全屏降本那一刀生效了"与"跑在旧壳上（命令不存在、静默失败）"（devlog/382）
-    expect(line, '表面那一格必须在（否则无法判断降本那一刀有没有生效）').toMatch(/表面=\S+/)
+    // ⚠️ 原来这里断言 `表面=`（"全屏降本那一刀生效了"与"跑在旧壳上"要分得开，`devlog/382`）。
+    //    那一整套随 B2 定案**还原掉了**（2026-10-07，`devlog/410`）：窗口底色与丢帧无关，
+    //    元凶是硬件视频解码 ⇒ 没有可量的东西了。这里改成断言它**不许再出现**
+    //    （免得有人照着老日志把这一格又加回来）。
     // 没记过、当前也不在全屏 ⇒ 0（jsdom 里 `document.fullscreenElement` 恒为 null）
     expect(summarize(openWindow(el, 'seek'), el, performance.now())).toContain('全屏=0')
     // 开局没记、但**报告时**已在全屏（点全屏键发生在窗口开始之后）⇒ 也算 1

@@ -150,55 +150,6 @@ export async function openExtensionDir(): Promise<string> {
 }
 
 /**
- * 视频全屏时把**窗口表面切成不透明**（`devlog/381`）——"成熟播放器都有自己的不透明表面"。
- *
- * 为什么：壳的窗口是 `transparent: true`（既定视觉：四角白边 / DWM 圆角），而**透明表面会让
- * WebView2 把整页放进 alpha 合成路径**：视频层拿不到硬件覆盖层，每一帧都要 GPU 采样 + 混合
- * 之后再和桌面合成。小窗看不出这笔账，**全屏**（1080p 铺满、面板 240Hz）就压垮了 ——
- * 用户实测口径正是：**B 站不卡 · 应用内非全屏不卡 · 小窗不卡 · 全屏卡**。
- *
- * ⚠️ 只在全屏期间开，退出（或组件卸载）必须还原；浏览器/探针里没有壳，静默退化。
- * ⚠️⚠️ **必须有可验证痕迹**（`devlog/382`）：这条命令是**后加的**，跑在改动前启动的旧壳上会
- * 直接失败。第一版把它包在 `catch {}` 里静默吞掉，于是"到底测的是哪个状态"完全查不出来 ——
- * 现在成功/失败都进 `surface` 这个模块状态，调用方会把它写进客户端日志与播放诊断行。
- */
-export async function setSurfaceOpaque(on: boolean): Promise<boolean> {
-  if (!isTauri) return false
-  try {
-    await invoke('set_surface_opaque', { on })
-    surface = on ? 'opaque' : 'transparent'
-    if (on) everOpaque = true
-    return true
-  } catch {
-    // 切不动本身不该让播放出错，但**必须留痕**（旧壳没有这条命令、或 WebView2 拒绝）
-    surface = 'failed'
-    return false
-  }
-}
-
-/** 播放器要求的窗口表面状态：`unknown`（还没调过）/ `opaque` / `transparent` / `failed`。 */
-let surface: 'unknown' | 'opaque' | 'transparent' | 'failed' = 'unknown'
-
-/** 本次运行里**成功切到过**不透明吗（粘性，只置位不复位）。
- *
- * 为什么需要：诊断行是在**窗口结束时**写的，而那时用户往往已经退出全屏 ⇒
- * `surfaceState()` 只剩 `transparent`，读日志的人无法判断"这一条到底是带着不透明表面跑的、
- * 还是压根没生效"（`devlog/383` 就被这个坑过一次）。粘性标记回答的是正确的问题：
- * **这一个窗口期间有没有不透明过**。
- */
-let everOpaque = false
-
-/** 给诊断行用（`playbackProbe`）：这一格能区分"生效了但不够"与"压根没生效"。 */
-export function surfaceState(): string {
-  return surface
-}
-
-/** 给诊断行用：本窗口期间**不透明过**吗（见 `everOpaque`）。 */
-export function surfaceEverOpaque(): boolean {
-  return everOpaque
-}
-
-/**
  * 迁移数据目录（系统文件夹选择框 → 规划 → 停后端 → 复制 → 校验 → 写指针 → 新目录启动并探活；
  * 任何一步失败都会回滚并用**原目录**重启，旧目录全程不动）。
  *

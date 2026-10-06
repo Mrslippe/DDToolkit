@@ -18,7 +18,6 @@
  * 窗口 30 秒；**卸载时把已采到的先报出去**（不再丢弃）。
  */
 import { api } from '../api/api'
-import { surfaceEverOpaque, surfaceState } from './shellBridge'
 
 interface Sample {
   /** 第几秒（1 起） */
@@ -515,11 +514,10 @@ export function summarize(w: PlaybackWindow, el: HTMLMediaElement, now: number):
     `全屏=${w.samples.length
       ? `${fsSec}/${w.samples.length}秒${fsEver && fsSec === 0 ? '(曾)' : ''}`
       : `${fsEver ? 1 : 0}`}`,
-    /* 窗口表面（devlog/382，`devlog/383` 改正口径）：`曾不透明` = 这个窗口期间**成功切到过**
-       不透明表面。第一版记的是"写日志那一刻"的状态，而日志是在窗口结束时写的 —— 那时多半
-       已经退出全屏，于是每一行都显示 `transparent`，根本读不出那一轮到底带没带不透明表面。
-       `failed` = 跑在旧壳上（命令不存在），那一轮的数**不能**用来判断那一刀有没有用。 */
-    `表面=${surfaceEverOpaque() ? '曾不透明' : surfaceState()}`,
+    /* ⚠️ 原来这里有一格 `表面=`（`曾不透明`）—— 量的是"全屏期间窗口表面切成过不透明吗"
+       （`devlog/381`~`383`）。那一整套**随 B2 定案还原掉了**（2026-10-07，`devlog/410`）：
+       窗口底色与丢帧无关，元凶是硬件视频解码。⇒ 没有可量的东西了，这一格一并删除。
+       （口径留在这里而不是直接删干净：下一轮读老日志的人会看到 `表面=` 这一格。） */
     /* 硬解**能力**（devlog/384）：`无` 才轮到"WebView2 的解码器比 Chrome 差"那条线。 */
     `硬解=${hwDecode}`,
     `判定=${verdict(w, fps)}`,
