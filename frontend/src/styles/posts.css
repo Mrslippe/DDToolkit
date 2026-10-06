@@ -6519,22 +6519,17 @@ img.hero-avatar {
 .vp:fullscreen .vp-bigplay,
 .vp:fullscreen .vp-spin { backdrop-filter: none; }
 
-/* 有视频在全屏 ⇒ **页面自己的背景层整个撤掉**（2026-10-06，`devlog/381`）。
-   对照成熟播放器：全屏播放时除了视频什么都别留在合成树里（YouTube 连控件都整块撤）。
-   这条是"窗口表面不透明"（`set_surface_opaque`）的配套：那颗属性让 WebView2 不再走 alpha
-   合成，这条则保证没有别的图层陪着一起画 —— 两层都做了才等于"一个干净的不透明表面"。
-   ⚠️ 类挂在 `<html>` 上（`data-video-fs`），由播放器进入/退出全屏时增删。 */
-html[data-video-fs] .hero-backdrop { display: none; }
-
-/* ⚠️ **B2 实验（`devlog/382`）：全屏播放时把"页面上除播放器之外的东西"整个卸载**。
-   用 `display:none`（而不是靠全屏黑底挡着 —— 那只是"看不见"，图层**仍在合成树里**），
-   保留的只有播放器那条祖先链（`:has(.vp)`）。目的：判定"合成层太多 ⇒ 视频拿不到硬件覆盖层"
-   这条根因 —— 成熟播放器全屏时屏幕上**只有视频**，我们此前一直不是。
-   ⚠️ 这是**实验开关**：若它一开就顺，就把"播放时卸载外壳"做成正式口径；若不顺，
-   说明瓶颈不在我们自己的图层上（那就要往窗口/驱动那条线走）。 */
-html[data-video-fs] .app-shell > :not(:has(.vp)),
-html[data-video-fs] .app-body > :not(:has(.vp)),
-html[data-video-fs] .posts-panel > :not(:has(.vp)) { display: none; }
+/* ⚠️ **这里原有两条"全屏时撤图层"的规则，已按 B2 定案还原**（2026-10-07，`devlog/409`）：
+     ① `html[data-video-fs] .hero-backdrop { display:none }`（`devlog/381`）；
+     ② `html[data-video-fs] .app-shell/.app-body/.posts-panel > :not(:has(.vp)) { display:none }`
+        （`devlog/382`，"全屏时页面上只留视频"）。
+   两条的理由都是"给全屏留一个干净的不透明表面 / 别让别的图层陪着一起画"，而拆变量测下来
+   **窗口底色与图层次数对丢帧毫无影响**（`devlog/402`/`404`：元凶是硬件视频解码）。
+   ⇒ 全屏时页面其余部分回到"**留在合成树里、被全屏元素挡住**"的原状：`:fullscreen` 走
+   top layer，背后任何东西都透不出来（观感一字不变），而进出全屏**不再触发整页重排**。
+   **别当成漏了再补回来**，全貌见 `devlog/406` 的还原清单。
+   ⚠️ 顺带：`data-video-fs` 这个属性现在**已经没有 CSS 消费者**了（播放器还在挂它 ——
+   那部分属于清单的 #3，跟"不透明表面"整组一起定）。 */
 .vp-progress::before, .vp-progress-buf, .vp-progress-fill {
   top: 50%; transform: translateY(-50%);
 }

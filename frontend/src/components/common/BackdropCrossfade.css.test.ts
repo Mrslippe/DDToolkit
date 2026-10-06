@@ -31,11 +31,13 @@ describe('背景层：CSS 契约', () => {
     expect(frames).toContain('var(--backdrop-opacity)')
   })
 
-  it('有视频在全屏时背景层整个撤掉（`devlog/381`：给全屏留一个干净的不透明表面）', () => {
-    // 配套壳侧的 `set_surface_opaque`：那颗属性让 WebView2 不再走 alpha 合成，这条保证
-    // 没有别的图层陪着一起画。⚠️ 类挂在 `<html>` 上（组件进/出全屏时增删 `data-video-fs`）。
-    const rule = css.slice(css.indexOf('html[data-video-fs]'))
-    expect(rule.slice(0, 120), '要有一条把 .hero-backdrop 撤掉的规则')
-      .toMatch(/html\[data-video-fs\]\s+\.hero-backdrop\s*\{[^}]*display:\s*none/)
-  })
+  /**
+   * ⚠️ **原来这里有一条判据**："有视频在全屏时背景层整个撤掉"（`devlog/381`）。
+   *
+   * 它随 B2 定案一起删掉了（2026-10-07，`devlog/409`）：那条规则的理由是
+   * "全屏给合成器留一个干净的不透明表面"，而拆变量测下来**窗口底色/图层次数与丢帧无关**
+   * （`devlog/402`/`404`，元凶是硬件视频解码）。⇒ 规则与判据一起还原，
+   * 全屏时背景层回到"留在合成树里、被全屏黑底挡住"的原状。
+   * 别把它当成"漏了"再补回来 —— 全貌见 `devlog/406` 的还原清单。
+   */
 })
