@@ -158,14 +158,29 @@ export async function openExtensionDir(): Promise<string> {
  * 用户实测口径正是：**B 站不卡 · 应用内非全屏不卡 · 小窗不卡 · 全屏卡**。
  *
  * ⚠️ 只在全屏期间开，退出（或组件卸载）必须还原；浏览器/探针里没有壳，静默退化。
+ * ⚠️⚠️ **必须有可验证痕迹**（`devlog/382`）：这条命令是**后加的**，跑在改动前启动的旧壳上会
+ * 直接失败。第一版把它包在 `catch {}` 里静默吞掉，于是"到底测的是哪个状态"完全查不出来 ——
+ * 现在成功/失败都进 `surface` 这个模块状态，调用方会把它写进客户端日志与播放诊断行。
  */
-export async function setSurfaceOpaque(on: boolean): Promise<void> {
-  if (!isTauri) return
+export async function setSurfaceOpaque(on: boolean): Promise<boolean> {
+  if (!isTauri) return false
   try {
     await invoke('set_surface_opaque', { on })
+    surface = on ? 'opaque' : 'transparent'
+    return true
   } catch {
-    /* 切不动就算了：这只是"更快的一条路"，不该让播放本身出错 */
+    // 切不动本身不该让播放出错，但**必须留痕**（旧壳没有这条命令、或 WebView2 拒绝）
+    surface = 'failed'
+    return false
   }
+}
+
+/** 播放器要求的窗口表面状态：`unknown`（还没调过）/ `opaque` / `transparent` / `failed`。 */
+let surface: 'unknown' | 'opaque' | 'transparent' | 'failed' = 'unknown'
+
+/** 给诊断行用（`playbackProbe`）：这一格能区分"生效了但不够"与"压根没生效"。 */
+export function surfaceState(): string {
+  return surface
 }
 
 /**

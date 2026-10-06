@@ -6525,6 +6525,16 @@ img.hero-avatar {
    合成，这条则保证没有别的图层陪着一起画 —— 两层都做了才等于"一个干净的不透明表面"。
    ⚠️ 类挂在 `<html>` 上（`data-video-fs`），由播放器进入/退出全屏时增删。 */
 html[data-video-fs] .hero-backdrop { display: none; }
+
+/* ⚠️ **B2 实验（`devlog/382`）：全屏播放时把"页面上除播放器之外的东西"整个卸载**。
+   用 `display:none`（而不是靠全屏黑底挡着 —— 那只是"看不见"，图层**仍在合成树里**），
+   保留的只有播放器那条祖先链（`:has(.vp)`）。目的：判定"合成层太多 ⇒ 视频拿不到硬件覆盖层"
+   这条根因 —— 成熟播放器全屏时屏幕上**只有视频**，我们此前一直不是。
+   ⚠️ 这是**实验开关**：若它一开就顺，就把"播放时卸载外壳"做成正式口径；若不顺，
+   说明瓶颈不在我们自己的图层上（那就要往窗口/驱动那条线走）。 */
+html[data-video-fs] .app-shell > :not(:has(.vp)),
+html[data-video-fs] .app-body > :not(:has(.vp)),
+html[data-video-fs] .posts-panel > :not(:has(.vp)) { display: none; }
 .vp-progress::before, .vp-progress-buf, .vp-progress-fill {
   top: 50%; transform: translateY(-50%);
 }

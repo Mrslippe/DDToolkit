@@ -961,7 +961,12 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
     const root = document.documentElement
     if (fs) {
       root.dataset.videoFs = '1'
-      void setSurfaceOpaque(true)
+      void setSurfaceOpaque(true).then((ok) => {
+        // ⚠️ **必须留痕**（`devlog/382`）：这条命令是后加的，跑在旧壳上会直接失败 ——
+        // 那样"还是卡"就说明不了任何问题（前端第一版把错误静默吞了）。
+        void api.clientLog(`[video] 全屏表面=${ok ? '不透明' : '失败（旧壳没有 set_surface_opaque？）'}`)
+          .catch(() => { /* 日志发不出去就算了 */ })
+      })
     } else {
       delete root.dataset.videoFs
       void setSurfaceOpaque(false)

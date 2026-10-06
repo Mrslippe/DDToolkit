@@ -1780,7 +1780,17 @@ pub fn run() {
             // `set_background_color` 会**同时**设窗口与 WebView 两层（Tauri 2.11），
             // 这一步在窗口 show 之前跑（`visible: false`，等前端 present_window），看不到闪烁。
             if let Some(w) = app.get_webview_window("main") {
-                let _ = w.set_background_color(Some(tauri::window::Color(0, 0, 0, 0)));
+                // ⚠️ **B2 实验开关**（2026-10-06，`devlog/382`）：`DDTOOLKIT_OPAQUE_WINDOW=1`
+                //    让窗口表面**从一开始就不透明**（等价于"永久去掉 alpha 合成"那一刀）。
+                //    它回答的是："透明表面本身是不是全屏卡顿的根因" —— 默认**关**，
+                //    因为透明是既定视觉（上一段注释里的四角白边就是为它服务的）。
+                //    用法：`$env:DDTOOLKIT_OPAQUE_WINDOW=1; npm run tauri:dev`（下次启动生效）。
+                let alpha = if std::env::var("DDTOOLKIT_OPAQUE_WINDOW").is_ok() { 255 } else { 0 };
+                if alpha == 255 {
+                    println!("[ddtoolkit] 实验：窗口表面从一开始就不透明\
+                              （DDTOOLKIT_OPAQUE_WINDOW=1；四角/圆角观感会变）");
+                }
+                let _ = w.set_background_color(Some(tauri::window::Color(0, 0, 0, alpha)));
                 // ⚠️ 系统圆角**不在这里设**：窗口还是 visible:false，实测设了会被
                 // 随后的显示流程冲掉（角变回方的）。改在 `present_window`（显示之后）设。
             }
@@ -2069,15 +2079,22 @@ mod tests {
     ///
     /// ⚠️ 抠的是**中间那一段**（`set_background_color` 之后、`new_api_token` 之前），
     /// 不是全文 `contains` —— 全文搜会被**本测试自己**里那两个字面量满足（自指假绿）。
+    /// ⚠️ 锚点**只取函数名、不带参数**（2026-10-06，`devlog/382`）：那一行的参数会随实验开关
+    /// 变化（加了 `DDTOOLKIT_OPAQUE_WINDOW` 之后不再是固定的 `Color(0,0,0,0)`），
+    /// 写死整行就会被一次无关改动打断 —— 判据的锚点要选"语义稳定"的那一段。
     /// 反向验证：把 setup 里那行改成 `free_port()` ⇒ 本条红（实测过）。
     #[test]
     fn setup_actually_uses_the_candidate_ports() {
         let src = include_str!("lib.rs");
-        let seg = src
-            .split("let _ = w.set_background_color(Some(tauri::window::Color(0, 0, 0, 0)));")
-            .nth(1)
-            .and_then(|rest| rest.split("let api_token = new_api_token()?;").next())
-            .expect("找不到 setup 里取端口那一段（锚点改了？）");
+        // ⚠️ 判据的窗口 = **setup 开头到取 token 那一行**（`devlog/382` 收紧）：
+        //    · 不能全文搜 —— 本测试自己就含那两个词（自指假绿）；
+        //    · 不能拿 `set_background_color` 当起点 —— 那个词在 setup 的**注释里**也出现
+        //      （"它会同时设窗口与 WebView 两层"），换锚点那次就是这么假红的。
+        let setup = src.split(".setup(|app| {").nth(1).expect("找不到 setup（锚点改了？）");
+        let seg = setup
+            .split("let api_token = new_api_token()?;")
+            .next()
+            .expect("找不到取 token 那一行（锚点改了？）");
         assert!(
             seg.contains("pick_backend_port(&PREFERRED_PORTS)"),
             "启动流程没有走候选区间（扩展只能靠手填端口了）"

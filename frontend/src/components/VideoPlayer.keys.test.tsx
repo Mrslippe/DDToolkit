@@ -22,13 +22,22 @@ import VideoPlayer from './VideoPlayer'
 import { playerPrefs, resetPlayerPrefs } from '../utils/playerPrefs'
 
 /** 切窗口表面（不透明/透明）的调用记录 —— 下面"全屏那一对"断言要用。 */
-const surfaceMock = vi.fn((..._a: unknown[]) => Promise.resolve())
+const surfaceMock = vi.fn((..._a: unknown[]) => Promise.resolve(true))
+/** 客户端诊断日志（`api.clientLog`）的调用记录 —— "全屏表面"那条痕迹要有判据。 */
+const logMock = vi.fn((..._a: unknown[]) => Promise.resolve({ ok: true, dropped: false }))
 
 vi.mock('../utils/shellBridge', () => ({
   openExternal: () => Promise.resolve(),
-  // B2（devlog/381）：进/出全屏时会调它切窗口表面；jsdom 里没有壳，用桩记录
+  // B2（devlog/381/382）：进/出全屏时会调它切窗口表面；jsdom 里没有壳，用桩记录
   setSurfaceOpaque: (...a: unknown[]) => surfaceMock(...a),
+  surfaceState: () => 'opaque',
 }))
+
+vi.mock('../api/api', async (orig) => {
+  // 只换掉 clientLog（诊断痕迹），其余 api 保持真实现 —— 免得播放器别的调用撞上 undefined
+  const real = await orig<typeof import('../api/api')>()
+  return { ...real, api: { ...real.api, clientLog: (...a: unknown[]) => logMock(...a) } }
+})
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean })
   .IS_REACT_ACT_ENVIRONMENT = true
@@ -66,6 +75,15 @@ function render() {
 
 const el = () => host.querySelector('video') as HTMLVideoElement
 const vp = () => host.querySelector('.vp') as HTMLElement
+
+/** 等到某条诊断日志被记下来（`api.clientLog` 在 `.then` 里发，得放一拍微任务）。 */
+async function waitForLog(needle: string) {
+  for (let i = 0; i < 5; i += 1) {
+    if (logMock.mock.calls.some(([l]) => String(l).includes(needle))) return
+    await act(async () => { await Promise.resolve() })
+  }
+  throw new Error(`没等到诊断日志：${needle}；实得 ${JSON.stringify(logMock.mock.calls)}`)
+}
 
 /**
  * 指针进/出播放器。
@@ -179,7 +197,7 @@ describe('播放器键盘：指针移入接管、移出交回', () => {
     }
   })
 
-  it('全屏给一个**不透明表面**、并撤掉页面自己的背景层（`devlog/381`）', () => {
+  it('全屏给一个**不透明表面**、并撤掉页面自己的背景层（`devlog/381`）', async () => {
     // 对照成熟播放器：全屏播放时除了视频什么都不留在合成树里，窗口表面也得是不透明的
     // （透明表面会让 WebView2 走 alpha 合成、视频拿不到硬件覆盖层 —— 用户实测"只有全屏卡"）。
     surfaceMock.mockClear()
@@ -193,6 +211,9 @@ describe('播放器键盘：指针移入接管、移出交回', () => {
     })
     expect(surfaceMock).toHaveBeenCalledWith(true)
     expect(document.documentElement.dataset.videoFs, 'CSS 靠它撤掉 .hero-backdrop').toBe('1')
+    // ⚠️ **可验证痕迹**（`devlog/382`）：这条命令是后加的，旧壳上会静默失败 ——
+    //    所以进全屏必须往客户端日志写一行"表面=…"，否则下一轮"还是卡"无从判断。
+    await waitForLog('全屏表面=不透明')
 
     act(() => {
       Object.defineProperty(document, 'fullscreenElement', { configurable: true, value: null })

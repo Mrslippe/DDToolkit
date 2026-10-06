@@ -18,6 +18,7 @@
  * 窗口 30 秒；**卸载时把已采到的先报出去**（不再丢弃）。
  */
 import { api } from '../api/api'
+import { surfaceState } from './shellBridge'
 
 interface Sample {
   /** 第几秒（1 起） */
@@ -255,6 +256,9 @@ export function summarize(w: PlaybackWindow, el: HTMLMediaElement, now: number):
        `w.fullscreen` 是开局那一拍记的，这里再取一次当时的状态 —— 点全屏键通常发生在
        窗口开始之后（两者取或，任一为真就标真）。 */
     `全屏=${w.fullscreen || isFullscreen() ? 1 : 0}`,
+    /* 窗口表面（devlog/382）：`不透明` = 全屏降本那一刀**真的生效了**；`failed` = 跑在旧壳上
+       （命令不存在），那一轮的数**不能**用来判断那一刀有没有用。 */
+    `表面=${surfaceState()}`,
     `判定=${verdict(w, fps)}`,
     `窗口=${elapsed.toFixed(1)}s`,
     `起播=${w.readyMs == null ? '未出画' : `${(w.readyMs / 1000).toFixed(1)}s`}`,
