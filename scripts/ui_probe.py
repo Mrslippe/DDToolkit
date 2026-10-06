@@ -386,7 +386,7 @@ def _seed_legal_accepted(data: Path) -> bool:
     db = data / "vtuber.db"
     if not db.exists():
         return False
-    version = _app_version()
+    version = _notice_version()
     con = sqlite3.connect(db)
     try:
         for key, value in (("legal.accepted_version", version),
@@ -407,14 +407,17 @@ def _now() -> str:
     return datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _app_version() -> str:
-    """应用版本（**不能在探针里写死**：发版一改，种进去的"已同意版本"就对不上了 ⇒
-    闸门会在所有模式里弹出来）。直接读 `app/core/config.py` 里那一行
-    （它是 `Settings` 的类属性：`VERSION: str = "x.y.z"`，所以**不能锚在行首**）。"""
-    m = re.search(r'^\s*VERSION\s*:\s*str\s*=\s*"([^"]+)"',
-                  (ROOT / "app" / "core" / "config.py").read_text(encoding="utf-8"), re.M)
+def _notice_version() -> str:
+    """**声明**版本（= `app/services/legal_notice.py` 的 `NOTICE_VERSION`）。
+
+    ⚠️ **不是应用版本**（用户 2026-10-06 第二次拍板：应用版本变了不再要求确认，
+    只有声明正文更新才重弹）。种错这一个值 ⇒ 协议闸门会盖住**每一档**探针，
+    看着像"产品全坏了"。同样**不许写死**：直接读那一行。
+    """
+    m = re.search(r'^NOTICE_VERSION\s*=\s*"([^"]+)"',
+                  (ROOT / "app" / "services" / "legal_notice.py").read_text(encoding="utf-8"), re.M)
     if not m:
-        raise SystemExit("[probe] 读不到 VERSION（app/core/config.py）—— 协议闸门那一档会假失败")
+        raise SystemExit("[probe] 读不到 NOTICE_VERSION —— 协议闸门那一档会假失败")
     return m.group(1)
 
 
@@ -2923,7 +2926,7 @@ def main() -> int:
         # 否则闸门会盖住整个应用，下面每一档都量不到东西（看着像产品全坏了）。
         if not args.first_run:
             if _seed_legal_accepted(data):
-                print(f"[probe] 已种协议同意：legal.accepted_version={_app_version()!r}"
+                print(f"[probe] 已种协议同意：legal.accepted_version={_notice_version()!r}"
                       f"（副本 DB，非真库）")
 
         if args.app_settings:
@@ -3200,6 +3203,19 @@ def main() -> int:
                     if len(heads) < 3:
                         failures.append(f"@{w} app-settings: 关于页只有 {len(heads)} 个小节标题"
                                         f"（{heads}）—— 运行信息 / 存储占用 / 应用更新 三段都要有头")
+                    # 用户协议那一栏（2026-10-06 用户口径）：栏 + 「查看全文」 + 状态属性，
+                    # 三条都要在 —— 整块没了界面不报错，只是"用户找不到协议在哪看"。
+                    legal = aps.get("aboutLegal") or {}
+                    if not legal.get("section"):
+                        failures.append(f"@{w} app-settings: 关于页没有「用户协议」那一栏"
+                                        f"（`[data-testid=aps-legal]`）")
+                    elif not legal.get("viewBtn"):
+                        failures.append(f"@{w} app-settings: 「用户协议」那一栏没有「查看全文」钮"
+                                        f"（`[data-testid=aps-legal-view]`）")
+                    if legal.get("section") and legal.get("state") not in ("accepted", "pending"):
+                        failures.append(f"@{w} app-settings: 用户协议那一栏没有"
+                                        f"`[data-legal-state]`（读到 {legal.get('state')!r}）"
+                                        f"—— 「同意到哪一版」必须能一眼看到")
                     order = aps.get("aboutStorageOrder") or []
                     if order:
                         want = ["aps-section-head", "aps-info", "aps-info"]

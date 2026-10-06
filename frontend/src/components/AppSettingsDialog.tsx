@@ -22,8 +22,11 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import FloatPill from './common/FloatPill'
+import LegalNotice, { formatAcceptedAt } from './LegalNotice'
 import { api } from '../api/api'
-import type { AppSettings, AssetsInfo, AssetsPruneResult, SettingSpec, StorageInfo } from '../api/types'
+import type {
+  AgreementState, AppSettings, AssetsInfo, AssetsPruneResult, SettingSpec, StorageInfo,
+} from '../api/types'
 import { usePrefs } from '../hooks/usePrefs'
 import { refreshCapabilities } from '../hooks/useCapabilities'
 import { formatBytes } from '../utils/format'
@@ -194,6 +197,17 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
   const [oldDirId, setOldDirId] = useState<string | null>(null)
   /** 删旧目录的二次确认框（**不可逆操作，原先单击即删**） */
   const [confirmDelOpen, setConfirmDelOpen] = useState(false)
+  /** 用户协议（2026-10-06）：关于页那一栏的状态 + 「查看全文」那个只读弹窗 */
+  const [agreement, setAgreement] = useState<AgreementState | null>(null)
+  const [legalOpen, setLegalOpen] = useState(false)
+  useEffect(() => {
+    if (!open || active !== ABOUT_ID || agreement) return
+    let alive = true
+    void api.getAgreement()
+      .then((got) => { if (alive) setAgreement(got) })
+      .catch(() => undefined)
+    return () => { alive = false }
+  }, [open, active, agreement])
   useEffect(() => {
     if (!open || active !== ABOUT_ID) return
     let alive = true
@@ -1050,6 +1064,29 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
                     )}
                   </section>
 
+                  {/* 用户协议（2026-10-06 用户口径：「在设置中的关于项里面添加一栏用户协议，
+                      给一个按钮来点击查看」）：只读一栏 + 一颗「查看全文」。
+                      ⚠️ 这里**不做同意动作** —— 闸门只出现在启动时（要同意请重启或走闸门）；
+                      这一栏的作用是"随时能翻出来看"，顺带告诉他/她当前同意到哪一版。 */}
+                  <section className="aps-section" data-testid="aps-legal">
+                    <h4 className="aps-section-head">用户协议</h4>
+                    <p className="aps-note" data-legal-state={agreement?.needed ? 'pending' : 'accepted'}>
+                      《DDToolkit 使用须知与免责声明》（MIT License）——
+                      {agreement
+                        ? (agreement.needed
+                          ? `当前声明版本 ${agreement.required}「尚未同意」（下次启动会要求阅读）`
+                          : `当前声明版本 ${agreement.required}，`
+                            + `您已于 ${formatAcceptedAt(agreement.accepted_at)} 同意`)
+                        : '读取中…'}
+                    </p>
+                    <div className="aps-storage-actions">
+                      <FloatPill size="md" shape="text" data-testid="aps-legal-view"
+                                 disabled={!agreement} onClick={() => setLegalOpen(true)}>
+                        查看全文
+                      </FloatPill>
+                    </div>
+                  </section>
+
                   {/* 只读项（R39-B）：原来裸挂在小节流之外（没有标题），
                       看着像"关于页还没结束又来了几行" —— 给它一个头，与前三段同构 */}
                   <section className="aps-section" data-testid="aps-readonly">
@@ -1110,6 +1147,15 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
         </div>
       </DialogContent>
     </Dialog>
+
+    {/* 用户协议全文（只读查看，`variant="view"`）：从「关于 → 用户协议 → 查看全文」打开。
+        ⚠️ 它**不写任何东西**（同意只发生在启动闸门那一处）—— 所以这里可以随便关。 */}
+    {legalOpen && agreement && (
+      <LegalNotice variant="view" version={agreement.required}
+                   appVersion={agreement.app_version}
+                   acceptedAt={agreement.accepted_at}
+                   onClose={() => setLegalOpen(false)} />
+    )}
 
     {/* 删旧目录的二次确认（devlog/198）——
         这是**全应用唯一一处不可逆操作**：没有回收站、没有撤销。

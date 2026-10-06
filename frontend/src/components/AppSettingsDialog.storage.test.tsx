@@ -23,6 +23,12 @@ vi.mock('../api/api', () => ({
     appSettings: (...a: unknown[]) => appSettings(...a),
     getStorage: (...a: unknown[]) => getStorage(...a),
     getAssets: (...a: unknown[]) => getAssets(...a),
+    // 「用户协议」那一栏（2026-10-06）也住在关于页：本文件测的是存储占用，
+    // 但组件会一并取协议状态 ⇒ 这个替身必须有（否则整个关于页渲染不出来）。
+    getAgreement: () => Promise.resolve({
+      required: '2026-10-06', accepted: '2026-10-06', accepted_at: null,
+      needed: false, app_version: '1.1.0',
+    }),
   },
 }))
 vi.mock('../utils/shellBridge', () => ({

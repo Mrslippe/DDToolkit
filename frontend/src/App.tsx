@@ -92,6 +92,7 @@ export default function App() {
       {/* ⚠️ **闸门放在 ErrorBoundary 之外**：壳层炸了也要先能读到协议（它不该被别人的错误吞掉） */}
       {agreement?.needed && (
         <LegalNotice version={agreement.required}
+                     appVersion={agreement.app_version}
                      onAccepted={() => setAgreement({ ...agreement, needed: false,
                                                       accepted: agreement.required })} />
       )}

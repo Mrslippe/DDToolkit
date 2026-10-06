@@ -186,10 +186,21 @@ const LEAD = '**重要提示**：本软件以 **MIT License** 开源，'
   + '以 MIT 许可证为准）。'
 
 interface Props {
-  /** 后端报的"要同意的版本" */
+  /** 后端报的"要同意的**声明版本**"（`/settings/agreement` 的 `required`；不是应用版本） */
   version: string
+  /** 应用版本（只用于显示，来自同一个响应；**与要不要弹无关**） */
+  appVersion?: string
+  /**
+   * `gate`（默认）= 启动闸门：关不掉，只能点同意；
+   * `view` = 只读查看（设置 → 关于 → 用户协议）：可以关，不写任何东西。
+   */
+  variant?: 'gate' | 'view'
+  /** `view` 模式下显示"已于何时同意"（`accepted_at`） */
+  acceptedAt?: string | null
   /** 同意成功（父级据此放行） */
-  onAccepted: () => void
+  onAccepted?: () => void
+  /** `view` 模式的关闭回调（闸门模式**不传** —— 那种模式没有出口） */
+  onClose?: () => void
 }
 
 /** 极简 `**加粗**` 渲染（正文常量里只有这一种标记；为它上 `dangerouslySetInnerHTML` 不值得） */
@@ -197,10 +208,13 @@ function rich(text: string) {
   return text.split('**').map((part, i) => (i % 2 ? <strong key={i}>{part}</strong> : part))
 }
 
-export default function LegalNotice({ version, onAccepted }: Props) {
+export default function LegalNotice({
+  version, appVersion, variant = 'gate', acceptedAt, onAccepted, onClose,
+}: Props) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const cardRef = useRef<HTMLDivElement | null>(null)
+  const view = variant === 'view'
 
   // 打开时把焦点收进来（键盘用户落在闸门上，而不是应用里那些点不着的控件上）
   useEffect(() => { cardRef.current?.focus() }, [])
@@ -210,7 +224,7 @@ export default function LegalNotice({ version, onAccepted }: Props) {
     setError(null)
     try {
       const got = await api.acceptAgreement(version)
-      if (got?.needed === false) onAccepted()
+      if (got?.needed === false) onAccepted?.()
       else setError('后端没有记下这次同意，请再试一次')
     } catch (e) {
       setError((e as Error)?.message || String(e))
@@ -220,17 +234,25 @@ export default function LegalNotice({ version, onAccepted }: Props) {
   }
 
   return (
-    <div className="legal-overlay" data-legal="1"
-         /* ⚠️ 关不掉：Esc / 点遮罩 / 关窗钮**都没有**（用户口径"阅读完同意才可以关闭窗口"）。
-            下面这三个 handler 只是把事件吃掉，免得穿透到应用里去。 */
-         onKeyDown={(e) => { if (e.key === 'Escape') e.preventDefault() }}
+    <div className="legal-overlay" data-legal="1" data-legal-variant={variant}
+         /* ⚠️ **闸门关不掉**（用户口径"阅读完同意才可以关闭窗口"）：Esc / 点遮罩都没有；
+            **查看模式**（设置 → 关于 → 用户协议）反过来必须能关 —— 那时它只是一篇只读文档。
+            两种模式都吃掉冒泡，免得事件穿透到应用里去。 */
+         onKeyDown={(e) => {
+           if (e.key !== 'Escape') return
+           e.preventDefault()
+           if (view) onClose?.()
+         }}
          onClick={(e) => e.stopPropagation()}>
       <div className="legal-card" ref={cardRef} tabIndex={-1} role="dialog" aria-modal="true"
            aria-labelledby="legal-title">
         <div className="legal-head">
           <h2 id="legal-title" className="legal-title">DDToolkit 使用须知与免责声明</h2>
-          <span className="legal-version">
-            MIT License · 版本 v{version} · 自 2026-10-06 起生效
+          <span className="legal-version" data-legal-version="1">
+            {/* ⚠️ 声明版本**从后端来**（`/settings/agreement` 的 `required`）——
+                正文在前端、版本在后端，只有一处真源（有用例盯着别在前端写死日期） */}
+            声明版本 {version}（自该日起生效）
+            {appVersion ? ` · 应用 v${appVersion}` : ''}
           </span>
         </div>
         <div className="legal-body">
@@ -246,15 +268,42 @@ export default function LegalNotice({ version, onAccepted }: Props) {
         </div>
         <div className="legal-foot">
           {error && <p className="legal-error" data-legal-error="1">没能记录同意：{error}</p>}
-          <p className="legal-hint">
-            同意后会记住这一版；下次版本更新时会再请您阅读一遍。
-          </p>
-          <FloatPill size="md" shape="text" data-testid="legal-agree"
-                     disabled={busy} onClick={() => void agree()}>
-            {busy ? '正在记录…' : '我已知悉并同意'}
-          </FloatPill>
+          {view ? (
+            <>
+              <p className="legal-hint" data-legal-status={acceptedAt ? 'accepted' : 'pending'}>
+                {acceptedAt
+                  ? `您已于 ${formatAcceptedAt(acceptedAt)} 同意本声明版本。`
+                  : '您还没有同意过本声明版本。'}
+              </p>
+              <FloatPill size="md" shape="text" data-testid="legal-close"
+                         onClick={() => onClose?.()}>
+                关闭
+              </FloatPill>
+            </>
+          ) : (
+            <>
+              <p className="legal-hint">
+                同意后会记住这一声明版本；**只有声明内容更新时**才会再请您阅读一遍。
+              </p>
+              <FloatPill size="md" shape="text" data-testid="legal-agree"
+                         disabled={busy} onClick={() => void agree()}>
+                {busy ? '正在记录…' : '我已知悉并同意'}
+              </FloatPill>
+            </>
+          )}
         </div>
       </div>
     </div>
   )
+}
+
+/** `accepted_at`（ISO8601）→ 本地可读；解析不了就原样显示（诊断时别丢信息）。
+ *  导出给设置页那一栏复用（"已于何时同意"两处要显示同一件事，别写两份格式化） */
+export function formatAcceptedAt(iso: string | null | undefined): string {
+  if (!iso) return ''
+  const t = new Date(iso)
+  if (Number.isNaN(t.getTime())) return iso
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${t.getFullYear()}-${p(t.getMonth() + 1)}-${p(t.getDate())} `
+    + `${p(t.getHours())}:${p(t.getMinutes())}`
 }

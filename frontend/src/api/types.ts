@@ -1063,14 +1063,16 @@ export interface AppSettings {
 
 /** 用户协议闸门的状态（2026-10-06）：判定在后端（`services/legal_notice.py`） */
 export interface AgreementState {
-  /** 要同意的版本（= 应用版本；换版本就会再弹一次） */
+  /** 要同意的**声明版本**（= 生效日期；**不是应用版本** —— 应用版本变了不再打扰老用户） */
   required: string
-  /** 已同意的版本（null = 从没同意过） */
+  /** 已同意的声明版本（null = 从没同意过） */
   accepted: string | null
   /** 同意时刻（ISO8601，UTC；留痕用） */
   accepted_at: string | null
   /** 现在要不要弹（`accepted !== required`） */
   needed: boolean
+  /** 应用版本（界面显示用；与"要不要弹"无关） */
+  app_version: string
 }
 
 export interface AppSettingsSaved {

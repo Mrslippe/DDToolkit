@@ -63,7 +63,8 @@ describe('LegalNotice · 首启/换版本的协议闸门', () => {
       expect(text, `缺了「${t}」`).toContain(t)
     }
     expect(text).toContain('重要提示')
-    expect(text).toContain('v1.2.3')
+    // ⚠️ 声明版本**从后端来**（不是应用版本，也不在前端写死）：头部显示的就是它
+    expect(text).toContain('声明版本 1.2.3')
     // 开源软件该有的四件事：许可名 · AS IS · 只做学习研究 · 商标归权利人
     expect(text).toContain('MIT')
     expect(text).toContain('AS IS')
@@ -104,5 +105,37 @@ describe('LegalNotice · 首启/换版本的协议闸门', () => {
     expect(accepted, '没记成就放行了 —— 那等于假装读过协议').toBe(0)
     expect(modal()).toBeTruthy()
     expect(document.body.querySelector('[data-legal-error]')?.textContent).toContain('后端没起来')
+  })
+
+  it('`variant="view"`（设置里那份）**能关、且不写库** —— 它只是只读文档', async () => {
+    let closed = 0
+    await act(async () => {
+      root.render(
+        <LegalNotice variant="view" version="2026-10-06" appVersion="1.1.0"
+                     acceptedAt="2026-10-06T05:32:30+00:00" onClose={() => { closed += 1 }} />)
+      await Promise.resolve()
+    })
+    const box = modal()!
+    expect(box.getAttribute('data-legal-variant')).toBe('view')
+    expect(document.body.querySelector('[data-testid="legal-agree"]'),
+           '查看模式不该有同意钮').toBeNull()
+    expect(box.querySelector('[data-legal-status]')?.getAttribute('data-legal-status'))
+      .toBe('accepted')
+    expect(box.textContent).toContain('已于')
+    expect(box.textContent).toContain('应用 v1.1.0')
+
+    // Esc 能关（闸门模式下 Esc 是无效的，见上一条）
+    await act(async () => {
+      box.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      await Promise.resolve()
+    })
+    expect(closed, '查看模式 Esc 没关掉').toBe(1)
+
+    await act(async () => {
+      document.body.querySelector<HTMLElement>('[data-testid="legal-close"]')!.click()
+      await Promise.resolve()
+    })
+    expect(closed).toBe(2)
+    expect(acceptAgreement, '查看全文竟然写了库').not.toHaveBeenCalled()
   })
 })

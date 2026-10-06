@@ -4328,6 +4328,14 @@ export async function runUiProbe(): Promise<void> {
       result.aboutInfoButtons = dlg.querySelectorAll('.aps-info button, .aps-note button').length
       result.aboutSectionHeads = [...dlg.querySelectorAll('.aps-section-head')]
         .map((n) => text(n))
+      /** 「用户协议」那一栏（2026-10-06 用户口径：「在设置中的关于项里面添加一栏用户协议，
+       *  给一个按钮来点击查看」）：**栏在 + 那颗钮在 + 状态属性在**，三条都要量到 ——
+       *  整块消失时界面不报错，只会"用户找不到协议在哪看"。 */
+      result.aboutLegal = {
+        section: !!dlg.querySelector('[data-testid="aps-legal"]'),
+        viewBtn: !!dlg.querySelector('[data-testid="aps-legal-view"]'),
+        state: dlg.querySelector('[data-legal-state]')?.getAttribute('data-legal-state') ?? null,
+      }
       const storageSec = dlg.querySelector<HTMLElement>('[data-testid="aps-storage"]')
       result.aboutStorageOrder = storageSec
         ? [...storageSec.children].map((n) => (n.className || '').split(' ')[0])
