@@ -663,6 +663,26 @@ fn open_extension_dir(window: tauri::Window) -> Result<String, String> {
 /// `html.shell-settled` 之前那一帧的兜底色。**主题改底色时这里要跟着改。**
 const SHELL_BG: tauri::utils::config::Color = tauri::utils::config::Color(255, 251, 251, 255);
 
+/// **启动 WebView2 时给 Chromium 的额外参数**（B2 定案那一刀，2026-10-07，`devlog/404`）。
+///
+/// `--disable-accelerated-video-decode` = **关掉硬件视频解码**。B2（全屏播放每秒稳定丢 ~4 帧）
+/// 排查二十多轮后定案：**元凶就是硬件解码那条路** —— 全屏 10~13% → 加上这一条之后
+/// `丢帧=0/864(0.0%)`。⚠️ 别把它和 `--disable-direct-composition` 搞混：后者也有效，
+/// 但那只是因为顺手把 GPU 视频路径一起关了（`devlog/403`/`404` 的三条对照）。
+///
+/// ⚠️ **另外两条不是我们想要的，是 wry 的默认参数，必须自己拼回来**：这个参数在 wry 里是
+/// `unwrap_or_else`（`wry-0.55.1/src/webview2/mod.rs:294`）——**给了一整串就整串替换**，
+/// 不给才用默认。漏掉 `--autoplay-policy=…` 的症状是"点开视频不自动播了"，
+/// 与"播放器坏了"长得一样、极难归因（`PROBE.md` §6.22 就是这么踩出来的）。
+///
+/// ⚠️⚠️ **这份字符串有第二处宿主**：`tauri.conf.json` 的 `app.windows[].additionalBrowserArgs`。
+/// 初始窗口由**配置**建，深休眠唤醒重建的那条走 [`rebuild_main_window`] ——
+/// **只改一处 ⇒ 唤醒重建后 flag 丢了、B2 会在"睡过一觉之后"复发**（同下面 `background_color`
+/// 那条注释的坑；而且这个形状最难查：刚启动时一切正常）。⇒ 有一条判据盯着两边一致。
+const VP_BROWSER_ARGS: &str = "--disable-accelerated-video-decode \
+     --disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection \
+     --autoplay-policy=no-user-gesture-required";
+
 /// 把**窗口表面切成不透明**（播放器全屏时用，退出全屏还原）。
 ///
 /// ## 为什么需要它（2026-10-06，`devlog/381`）——"成熟播放器都有自己的不透明表面"
@@ -1031,6 +1051,10 @@ fn rebuild_main_window(app: &tauri::AppHandle) -> tauri::Result<tauri::WebviewWi
     // `SHELL_BG`。⚠️ 两份**必须同步改** —— 只改 conf 的话，深休眠唤醒重建的窗口会退回
     // 分层透明，B2 又回来（而且只在"睡过一觉之后"复现，最难查）。
     .background_color(tauri::window::Color(SHELL_BG.0, SHELL_BG.1, SHELL_BG.2, SHELL_BG.3))
+    // ⚠️ 与 `tauri.conf.json` 的 `additionalBrowserArgs` **必须一致**（B2，`devlog/404`）：
+    //    初始窗口走配置，唤醒重建走这里 —— 只改一处 ⇒ B2 会在"睡过一觉之后"复发。
+    //    `browser_args_match_tauri_conf` 那条判据盯着这件事。
+    .additional_browser_args(VP_BROWSER_ARGS)
     .visible(false)
     .skip_taskbar(false)
     .build()?;
@@ -2036,6 +2060,30 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **启动参数必须在两处宿主里一模一样**（B2，2026-10-07，`devlog/404`）。
+    ///
+    /// 为什么值得一条判据：`additionalBrowserArgs` 有两份宿主 —— 初始窗口走
+    /// `tauri.conf.json`，深休眠唤醒重建走 [`rebuild_main_window`]。只改一处的症状是
+    /// **"睡过一觉之后 B2 复发"**：刚启动时一切正常，所以几乎不可能靠手测发现；
+    /// 而这条规则光靠注释提醒，正是本仓反复栽过的"写给人做的检查 = 不会做的检查"。
+    #[test]
+    fn browser_args_match_tauri_conf() {
+        let conf = std::fs::read_to_string(
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json"),
+        )
+        .expect("读不到 tauri.conf.json");
+        assert!(
+            conf.contains("\"additionalBrowserArgs\""),
+            "tauri.conf.json 里没有 additionalBrowserArgs 这一格 —— \
+             初始窗口就拿不到关硬件解码那一刀，全屏丢帧会原样回来"
+        );
+        assert!(
+            conf.contains(VP_BROWSER_ARGS),
+            "tauri.conf.json 的 additionalBrowserArgs 与 lib.rs 的 VP_BROWSER_ARGS 不一致：\n\
+             conf 与 rebuild_main_window 两条建窗路径必须给同一串参数"
+        );
+    }
 
     /// **dev 用哪个解释器**：`.venv` 在就用它，不在才回退 `python`（devlog/276）。
     /// 判错的代价很具体：回退到系统解释器时，只装在 venv 里的可选依赖（`xhshow`）
