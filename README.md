@@ -6,7 +6,7 @@
 帖子被删了也有据可查，粉丝曲线不会因为平台改版而断档，直播日历一眼看清哪天播了、播了多久。
 Windows 桌面应用，数据全部在本地 SQLite 里，不经过任何服务器。
 
-![Version](https://img.shields.io/badge/version-1.0.2-ffa2b4)
+![Version](https://img.shields.io/badge/version-1.1.0-ffa2b4)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-4b5a6f)
 
