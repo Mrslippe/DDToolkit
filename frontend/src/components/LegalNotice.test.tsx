@@ -51,21 +51,27 @@ const modal = () => document.body.querySelector('[data-legal="1"]')
 const agreeBtn = () => document.body.querySelector<HTMLElement>('[data-testid="legal-agree"]')!
 
 describe('LegalNotice · 首启/换版本的协议闸门', () => {
-  it('正式协议的骨架都在（首部重要提示 + 十二节），版本号来自 props', async () => {
+  it('开源口径的骨架都在（MIT / AS IS / 学习用途 / 商标 / 移除请求），版本号来自 props', async () => {
     await render('1.2.3')
     const text = modal()?.textContent || ''
-    for (const t of ['一、协议的接受与变更', '二、定义', '三、许可范围与使用限制',
-                     '四、用户的权利、义务与承诺', '五、本软件的功能与边界',
-                     '六、第三方平台、内容与风险提示', '七、数据、隐私与本地存储',
-                     '八、知识产权', '九、免责声明与责任限制', '十、协议的终止',
-                     '十一、法律适用与争议解决', '十二、其他条款']) {
+    for (const t of ['一、开源许可与本须知的效力', '二、定义', '三、许可授予（MIT 许可证要点）',
+                     '四、使用范围与社区期待', '五、账号与凭据风险', '六、第三方平台与商标',
+                     '七、内容、知识产权与移除请求', '八、数据、隐私与本地存储',
+                     '九、免责声明（无担保）', '十、责任限制与责任自负',
+                     '十一、分发、修改与贡献', '十二、须知的变更与终止',
+                     '十三、法律适用、争议解决与联系方式']) {
       expect(text, `缺了「${t}」`).toContain(t)
     }
     expect(text).toContain('重要提示')
     expect(text).toContain('v1.2.3')
-    // 用户点名要有的三层意思：这是干什么的 / 风险 / 后果自负
-    expect(text).toContain('公开可见')
-    expect(text).toContain('账号被限制或封禁')
+    // 开源软件该有的四件事：许可名 · AS IS · 只做学习研究 · 商标归权利人
+    expect(text).toContain('MIT')
+    expect(text).toContain('AS IS')
+    expect(text).toContain('学习与研究')
+    expect(text).toContain('商标')
+    // 免责/责任限制要真的引到 MIT 那两句的要点，并且有"移除请求"这条出口
+    expect(text).toContain('适销性')
+    expect(text).toContain('移除')
     expect(text).toContain('责任自负')
   })
 
