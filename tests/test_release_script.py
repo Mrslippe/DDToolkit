@@ -305,3 +305,28 @@ def test_build_env_check_asks_about_the_group_it_needs():
     call = next(ln for ln in src.splitlines() if '"--dry-run"' in ln)
     assert '"--group"' in call and '"build"' in call, \
         f"一致性复核没带 build 组 —— 发布机上会与 preflight 打架：{call.strip()}"
+
+
+def test_token_never_leaks_into_printed_commands(monkeypatch, capsys):
+    """token 只从环境变量进，**绝不从任何输出里出去**。
+
+    2026-10-06 准备 v1.1.0 时实测发现：`push_with_retry` 走 token 时把
+    `https://x-access-token:<token>@github.com/…` 拼进命令行参数，而 `run()` 会把命令
+    原样打印 ⇒ 发布日志、终端回滚、"把报错粘给我看"三条路都会把 token 带出去
+    （`docs/ops/RELEASE.md` §6.4：进过日志即视为泄露）。
+
+    判据分两半：① `redact_secrets()` 对任意字符串生效；② **真的跑一条会把 secret
+    原样打印出来的命令**，`run()` 的 `$ 回显` 里不能出现它 —— 只测①会漏掉"忘了在
+    回显上调用它"这种错（本仓最常见的错法就是判据与实现各测一半）。
+    """
+    secret = "ghp_secret_value_123"
+    monkeypatch.setenv("GITHUB_TOKEN", secret)
+    url = f"https://x-access-token:{secret}@github.com/x/y.git"
+    assert secret not in R.redact_secrets(f"fatal: could not read from {url}")
+    assert "***" in R.redact_secrets(url)
+
+    # 用解释器自己打印那段文本（跨平台、不碰网络）：argv 里带着 secret，回显必须已抹掉
+    R.run([sys.executable, "-c", f"print({url!r})"], capture=True)
+    out = capsys.readouterr().out
+    assert secret not in out, f"token 被回显了：{out}"
+    assert "***" in out, out

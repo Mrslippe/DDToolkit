@@ -219,11 +219,29 @@ class Ctx:
         print(f"  {WARN} {msg}")
 
 
+def redact_secrets(text: str) -> str:
+    """把凭据从**任何要打印或返回给人看的字符串**里抹掉。
+
+    为什么必须有（2026-10-06 准备 v1.1.0 时实测发现）：`push_with_retry` 走 token 时会把
+    `https://x-access-token:<token>@github.com/…` 拼进**命令行参数**，而 `run()` 会把命令
+    原样打印 —— 发布日志、终端回滚、以及"把报错粘给我看"这三条路都会把 token 带出去；
+    git 自己的 stderr 也可能回显那个带凭据的 URL。这正是 `docs/ops/RELEASE.md` §6.4
+    "token 进过日志即视为泄露"要防的形态（原文只说"走环境变量"，没管回显）。
+    口径：**token 只从环境变量进，绝不从任何输出里出去**。
+    """
+    out = text or ""
+    for name in ("GITHUB_TOKEN", "DDTOOLKIT_GITHUB_TOKEN"):
+        token = os.environ.get(name) or ""
+        if token:
+            out = out.replace(token, "***")
+    return out
+
+
 def run(cmd: list[str], cwd: Path = ROOT, capture: bool = False,
         env: dict | None = None, check: bool = False) -> subprocess.CompletedProcess:
     """跑一个子进程。`capture=False` 时输出**实时透传**（构建/测试日志不吞）。"""
     printable = " ".join(str(c) for c in cmd)
-    print(f"  $ {printable}" + ("" if cwd == ROOT else f"   (cwd={cwd})"))
+    print(f"  $ {redact_secrets(printable)}" + ("" if cwd == ROOT else f"   (cwd={cwd})"))
     return subprocess.run(
         cmd, cwd=cwd, env=env, check=check,
         stdout=subprocess.PIPE if capture else None,
@@ -740,10 +758,11 @@ def push_with_retry(refs: list[str]) -> tuple[bool, str]:
         for attempt in (1, 2):
             r = run([*base, *net, "push", url, *refs], capture=True)
             head = (r.stdout or "").strip().splitlines()
-            tail = head[-1] if head else ""
+            # ⚠️ 只把**抹掉凭据之后**的 tail 交给上层（git 失败时常把带凭据的 URL 原样回显）
+            tail = redact_secrets(head[-1]) if head else ""
             if r.returncode == 0:
                 return True, f"{label}（第 {attempt} 次）{tail}"
-            log.append(f"{label} 第 {attempt} 次失败: {tail or r.returncode}")
+            log.append(redact_secrets(f"{label} 第 {attempt} 次失败: {tail or r.returncode}"))
             time.sleep(4)
     return False, "\n".join(log)
 
