@@ -88,37 +88,12 @@ def _assert_locked_environment() -> None:
             f"        修复：      uv sync\n"
             f"        然后用：    {expected / 'Scripts' / 'python.exe'} scripts/build_backend.py")
 
-    # 环境对了还不够：**锁文件必须没被本地改动偷偷绕过**（例如有人手 pip install 了别的版本）。
-    # 用 `uv sync --frozen --dry-run` 问一句"这个环境与锁文件一致吗"，不一致就停。
+    # ⚠️ **顺序很重要：先把 build 组补上，再问"环境与锁文件一致吗"**（2026-10-06 CI 实测）。
+    #
+    # 一致性复核问的是 **dev + build**（见下），所以"环境里还没有 build 组"必须**先**解决掉，
+    # 否则复核会把 `+ pyinstaller…` 当成漂移、在补装代码之前就停下 —— 而那台机器上
+    # `uv sync` 从没装过 build 组，这是**完全正常的状态**（CI 的 Windows 腿就是这样红的）。
     uv = _find_uv()
-    if uv is None:
-        print("[build] 提示：环境里找不到 uv，跳过「环境与锁文件一致」的复核"
-              "（prefix 已确认是 .venv；如需复核请把 uv 放上 PATH）")
-    else:
-        # ⚠️ **必须带 `--group build`**（2026-10-06 v1.1.0 发布前实测踩到）：`uv sync` 默认
-        # 只装 `dev` 组，而本脚本自己要用 PyInstaller（在 `build` 组里）、`release.py` 的
-        # preflight 也先查 `python -m PyInstaller --version` ⇒ **发布机上装好 build 组是常态**。
-        # 少问这一个组，`--dry-run` 就会回一句 `Would uninstall …pyinstaller…`（"- pkg" 行），
-        # 于是"环境准备好了"反被判成"环境与锁文件不一致"，两条判据互相打架、发布必停。
-        # 判据：复核命令与"本脚本真正需要的组"必须是同一个集合（用例
-        # `tests/test_release_script.py::test_build_env_check_asks_about_the_group_it_needs`）。
-        r = subprocess.run([*uv, "sync", "--frozen", "--dry-run", "--group", "build"],
-                           cwd=ROOT, capture_output=True, text=True,
-                           encoding="utf-8", errors="replace")
-        if r.returncode != 0:
-            raise SystemExit(
-                "[build] `uv sync --frozen --dry-run` 失败 —— 锁文件与环境或平台不匹配：\n"
-                + (r.stdout or "") + (r.stderr or ""))
-        # uv 把"需要装/卸什么"打在 stderr（进度类输出也走 stderr），所以判据取两者的并集：
-        # 出现 `+ pkg` 或 `- pkg` 就说明环境与锁文件不一致。
-        combined = (r.stdout or "") + (r.stderr or "")
-        drift = [ln.strip() for ln in combined.splitlines()
-                 if ln.strip().startswith(("+ ", "- "))]
-        if drift:
-            raise SystemExit(
-                "[build] 环境与 uv.lock 不一致（下面这些包会被增删）：\n"
-                + "\n".join("        " + d for d in drift)
-                + "\n        修复：uv sync --group build")
 
     # PyInstaller 住在 `build` 依赖组里，而 **`uv sync` 默认只装 `dev`** —— 所以
     # "刚 sync 完"的开发机通常没有它。这里**按锁文件自动补装那一个组**，而不是让人记住
@@ -140,6 +115,36 @@ def _assert_locked_environment() -> None:
                           capture_output=True).returncode != 0:
             raise SystemExit(
                 "[build] 补装后仍导入不到 PyInstaller —— 锁文件里没有它？查 pyproject.toml 的 build 组。")
+
+    # 环境对了还不够：**锁文件必须没被本地改动偷偷绕过**（例如有人手 pip install 了别的版本）。
+    # 用 `uv sync --frozen --dry-run` 问一句"这个环境与锁文件一致吗"，不一致就停。
+    if uv is None:
+        print("[build] 提示：环境里找不到 uv，跳过「环境与锁文件一致」的复核"
+              "（prefix 已确认是 .venv；如需复核请把 uv 放上 PATH）")
+    else:
+        # ⚠️ **必须带 `--group build`**（2026-10-06 v1.1.0 发布前实测踩到）：`uv sync` 默认
+        # 只装 `dev` 组，而本脚本自己要用 PyInstaller（在 `build` 组里）⇒ 发布机上装好
+        # build 组是常态。少问这一个组，`--dry-run` 就会回一句 `Would uninstall …pyinstaller…`
+        # （"- pkg" 行），于是"环境准备好了"反被判成"环境与锁文件不一致"，两条判据互相打架。
+        # 判据：复核命令与"本脚本真正需要的组"必须是同一个集合（用例
+        # `tests/test_release_script.py::test_build_env_check_asks_about_the_group_it_needs`）。
+        r = subprocess.run([*uv, "sync", "--frozen", "--dry-run", "--group", "build"],
+                           cwd=ROOT, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace")
+        if r.returncode != 0:
+            raise SystemExit(
+                "[build] `uv sync --frozen --dry-run` 失败 —— 锁文件与环境或平台不匹配：\n"
+                + (r.stdout or "") + (r.stderr or ""))
+        # uv 把"需要装/卸什么"打在 stderr（进度类输出也走 stderr），所以判据取两者的并集：
+        # 出现 `+ pkg` 或 `- pkg` 就说明环境与锁文件不一致。
+        combined = (r.stdout or "") + (r.stderr or "")
+        drift = [ln.strip() for ln in combined.splitlines()
+                 if ln.strip().startswith(("+ ", "- "))]
+        if drift:
+            raise SystemExit(
+                "[build] 环境与 uv.lock 不一致（下面这些包会被增删）：\n"
+                + "\n".join("        " + d for d in drift)
+                + "\n        修复：uv sync --group build")
 
 
 # uvicorn 运行时按字符串动态导入 loop/protocol 实现，需显式声明

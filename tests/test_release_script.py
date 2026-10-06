@@ -327,13 +327,18 @@ def test_build_env_check_asks_about_the_group_it_needs():
     互相打架、发布卡在那一步（要么删掉 PyInstaller 过复核，然后 preflight 又红）。
 
     这条断言读源文件（同 `tests/test_gate.py` 的结构判据套路）：
-    `--dry-run` 所在的那一次调用里必须同时出现 `--group` 与 `build`。
+    ① `--dry-run` 所在的那一次调用里必须同时出现 `--group` 与 `build`；
+    ② **补装 build 组的代码必须排在复核之前** —— 顺序反了同样会红，而且是另一种红法：
+    CI 的 Windows 腿从没装过 build 组（那是**正常状态**），复核会把它读成
+    `+ pyinstaller…` 漂移、在补装代码之前就停（2026-10-06 实测，本文件这条判据是后补的）。
     """
     root = Path(__file__).resolve().parent.parent
     src = (root / "scripts" / "build_backend.py").read_text(encoding="utf-8")
     call = next(ln for ln in src.splitlines() if '"--dry-run"' in ln)
     assert '"--group"' in call and '"build"' in call, \
         f"一致性复核没带 build 组 —— 发布机上会与 preflight 打架：{call.strip()}"
+    assert src.index("import PyInstaller") < src.index('"--dry-run"'), \
+        "补装 build 组的代码排在一致性复核之后 —— 没装过 build 组的机器会被判成环境漂移"
 
 
 def test_token_never_leaks_into_printed_commands(monkeypatch, capsys):
