@@ -94,6 +94,9 @@ export interface PlaybackWindow {
   pres: { supported: boolean; maxGapMs: number; gaps: number[]; repeats: number }
   /** 整窗最长的一次主线程长任务（ms）；量不到 = null */
   longTaskMaxMs?: number | null
+  /** 整窗见过的**在跑**的动画签名（`name@元素`，最多 3 个）——`devlog/385`：
+   *  `动画=N秒` 只说"有几秒在动"，说不出**是什么在动**；不知道是什么就没法关掉它。 */
+  animNames?: string[]
 }
 
 const WINDOW_MS = 30_000
@@ -126,11 +129,65 @@ const BAD_SECONDS_TRIGGER = 3
  */
 export function judderStats(intervals: number[]): { count: number; maxMs: number } {
   if (intervals.length < 8) return { count: 0, maxMs: 0 }   // 样本太少不判（开局那几帧间隔不准）
-  const sorted = [...intervals].sort((a, b) => a - b)
-  const median = sorted[sorted.length >> 1]
-  const limit = Math.max(median * 1.35, median + 6)
+  const limit = judderLimit(intervals)
   const bad = intervals.filter((g) => g > limit)
   return { count: bad.length, maxMs: bad.length ? Math.max(...bad) : 0 }
+}
+
+/** 抖动的判定上限（ms）；样本太少 = Infinity（不判）。 */
+function judderLimit(intervals: number[]): number {
+  if (intervals.length < 8) return Infinity
+  const sorted = [...intervals].sort((a, b) => a - b)
+  const median = sorted[sorted.length >> 1]
+  return Math.max(median * 1.35, median + 6)
+}
+
+/**
+ * 两次**抖动之间**隔了多久（中位数，秒）—— 用来分辨"周期性"与"随机"（2026-10-06，`devlog/385`）。
+ *
+ * 为什么值得单出一格：真机日志里丢帧是**每秒正好 2 帧**（30fps 的 6.7%，连续 15 秒一模一样），
+ * 这不是调度噪声的形状。周期性 ⇒ 有人在按固定节拍打扰（我们的 MSE 泵是 400ms 一跳）；
+ * 随机 ⇒ 合成器的截止时间竞争。两者的修法完全不同。
+ */
+export function judderPeriod(intervals: number[]): number | null {
+  const limit = judderLimit(intervals)
+  if (!Number.isFinite(limit)) return null
+  const idx: number[] = []
+  intervals.forEach((g, i) => { if (g > limit) idx.push(i) })
+  if (idx.length < 3) return null
+  const spans: number[] = []
+  for (let k = 1; k < idx.length; k += 1) {
+    // 两次抖动之间的**时间** = 中间那些间隔的和（从抖动的下一拍算到下一次抖动）
+    let sum = 0
+    for (let i = idx[k - 1] + 1; i <= idx[k]; i += 1) sum += intervals[i]
+    spans.push(sum)
+  }
+  spans.sort((a, b) => a - b)
+  return spans[spans.length >> 1] / 1000
+}
+
+/** 整窗"在跑"的动画签名（`name@元素`，最多 3 个）——见 `PlaybackWindow.animNames`。 */
+export function runningAnimations(): { count: number; names: string[] } {
+  if (typeof document === 'undefined' || typeof document.getAnimations !== 'function') {
+    return { count: 0, names: [] }
+  }
+  const names: string[] = []
+  let count = 0
+  for (const a of document.getAnimations()) {
+    /* ⚠️ 只认 `running`：`getAnimations()` 会把 `fill: forwards` 那种**早已跑完但还在生效**
+       的动画也列出来（第一版就是这么把"每秒都在动"报成 30/30 秒的 —— 假阳性）。 */
+    if (a.playState !== 'running') continue
+    count += 1
+    if (names.length < 3) {
+      const meta = a as unknown as { animationName?: string; transitionProperty?: string }
+      const name = meta.animationName ?? meta.transitionProperty ?? 'anim'
+      const target = (a.effect as KeyframeEffect | null)?.target as Element | null
+      const cls = target?.className ? `.${String(target.className).split(/\s+/)[0]}` : ''
+      const one = `${name}@${target ? target.tagName.toLowerCase() : '?'}${cls}`
+      if (!names.includes(one)) names.push(one)
+    }
+  }
+  return { count, names }
 }
 
 /** 整窗的 rVFC 间隔（按秒分片存的，这里拼回来）。 */
@@ -155,6 +212,17 @@ export function animatingSeconds(w: PlaybackWindow): number | null {
   if (!w.samples.some((s) => s.anims != null)) return null
   return w.samples.filter((s) => (s.anims ?? 0) > 0).length
 }
+
+/**
+ * rAF（整页自绘节拍）**只采前 10 秒**（2026-10-06，`devlog/385`）。
+ *
+ * 为什么：探针自己的 rAF 循环会把合成器按在显示刷新率上跑 —— 而"合成器忙着画整页、
+ * 于是视频那一拍被推迟"正是我们要查的东西。它可能**自己就是**那 2 帧/秒的来源。
+ * 只跑前 10 秒 ⇒ 同一个窗口里天然留出**对照组**：对着每秒曲线比 1~10s 与 11~30s 的 `丢N`，
+ * 一样 ⇒ 与探针无关；后 20 秒明显变干净 ⇒ 探针自己造成的（先修尺子，再谈症状）。
+ * 代价：`页面=` 这一格只代表前 10 秒。
+ */
+const RAF_WINDOW_MS = 10_000
 
 /**
  * 环境能不能**硬件解码**这一档（`MediaCapabilities.decodingInfo().powerEfficient`）。
@@ -367,6 +435,7 @@ export function summarize(w: PlaybackWindow, el: HTMLMediaElement, now: number):
   const dec = decodedFps(w)
   const page = pageFps(w)
   const jud = windowJudder(w)
+  const period = judderPeriod(allIntervals(w))
   const lt = longTasks(w)
   const anim = animatingSeconds(w)
   const fsSec = w.samples.filter((s) => s.fs).length
@@ -401,15 +470,20 @@ export function summarize(w: PlaybackWindow, el: HTMLMediaElement, now: number):
     `页面=${page == null ? '量不到' : `${page.toFixed(1)}fps`}`,
     `最长停顿=${w.pres.supported ? `${(w.pres.maxGapMs / 1000).toFixed(2)}s` : '量不到'}`,
     `停顿次数=${w.pres.gaps.length}`,
-    /* 抖动（devlog/384）：用户症状的**直读口径** —— "一下一下地慢"是节拍被拖住，不是停住。 */
+    /* 抖动（devlog/384）：用户症状的**直读口径** —— "一下一下地慢"是节拍被拖住，不是停住。
+       `抖间隔`（devlog/385）= 两次抖动之间隔多久：周期性 ⇒ 有人按固定节拍打扰（MSE 泵 400ms
+       一跳）；随机 ⇒ 合成器截止时间竞争。真机那条"每秒正好 2 帧"就是靠它才能定性。 */
     `抖动=${jud.count}次`,
     `抖峰=${(jud.maxMs / 1000).toFixed(2)}s`,
+    `抖间隔=${(period == null ? '不规律' : `${period.toFixed(2)}s`)}`,
     `重复帧=${w.pres.repeats}`,
     /* 主线程长任务（devlog/384）：把"是我们自己的 JS 堵住了"这条线排掉。 */
     `长任务=${lt == null ? '量不到' : `${lt.count}次`}`,
     `长任务峰=${lt == null ? '量不到' : `${(lt.maxMs / 1000).toFixed(2)}s`}`,
-    /* 全屏时页面里还有东西在动吗（devlog/384）：合成器闲不下来的一条硬假设。 */
+    /* 全屏时页面里还有东西在动吗（devlog/384）：合成器闲不下来的一条硬假设；
+       `动画名`（devlog/385）是**谁**在动 —— 不知道是谁就没法关掉它。 */
     `动画=${anim == null ? '量不到' : `${anim}秒`}`,
+    ...(w.animNames?.length ? [`动画名=${w.animNames.join(',')}`] : []),
     `前3秒=${head == null ? '-' : head.toFixed(1)}`,
     `后段=${later == null ? '-' : later.toFixed(1)}`,
     `卡帧=${stalledSeconds(w)}s`,        // currentTime 没动 ⇒ 数据没到
@@ -507,9 +581,17 @@ export function watchPlayback(el: HTMLVideoElement, reason: string, targetS?: nu
     }
   } catch { longObserver = null }
 
-  // 整页自绘节拍（rAF）：与"视频呈现"对照，能分开"整页卡"与"只有视频卡"
+  // 整页自绘节拍（rAF）：与"视频呈现"对照，能分开"整页卡"与"只有视频卡"。
+  // ⚠️ 只跑前 10 秒（`RAF_WINDOW_MS`）：它自己会给合成器加负载，而后 20 秒当对照组。
   let rafHandle = 0
-  const onRaf = () => { rafCount += 1; rafHandle = window.requestAnimationFrame(onRaf) }
+  const onRaf = () => {
+    rafCount += 1
+    if (performance.now() - w.startedAt < RAF_WINDOW_MS) {
+      rafHandle = window.requestAnimationFrame(onRaf)
+    } else {
+      rafHandle = 0
+    }
+  }
   if (typeof window.requestAnimationFrame === 'function') rafHandle = window.requestAnimationFrame(onRaf)
 
   /**
@@ -576,15 +658,20 @@ export function watchPlayback(el: HTMLVideoElement, reason: string, targetS?: nu
     // 真机三次复现的画面停摆就落在这条上（devlog/309）
     const hidden = typeof document !== 'undefined' && document.visibilityState === 'hidden'
     const focused = typeof document === 'undefined' || document.hasFocus()
-    /* 全屏时页面里**还有东西在动**吗（devlog/384）：`getAnimations()` 会把正在跑的 CSS
-       动画与过渡都列出来。全屏里若有东西一直在动，合成器就永远闲不下来 —— 这是 B2 的一条硬假设。 */
-    const anims = typeof document !== 'undefined' && typeof document.getAnimations === 'function'
-      ? document.getAnimations().length : null
+    /* 全屏时页面里**还有东西在动**吗（devlog/384）：全屏里若有东西一直在动，合成器就永远
+       闲不下来 —— 这是 B2 的一条硬假设。⚠️ 只认 `playState === 'running'`（见
+       `runningAnimations`），并且把**是谁在动**也记下来（不知道是什么就没法关掉它）。 */
+    const anim = runningAnimations()
+    if (anim.names.length) {
+      const known = w.animNames ?? []
+      for (const n of anim.names) if (!known.includes(n) && known.length < 3) known.push(n)
+      w.animNames = known
+    }
     w.samples.push({ t: tick, fps, decoded: decDelta, presented: presDelta, pageFps: pageDelta,
                      ahead, advanced, hidden, focused,
                      readyState: el.readyState, seeking: el.seeking,
                      dropped: dropDelta, intervals: pendingIntervals,
-                     longTasks: pendingLongTasks, anims, fs: isFullscreen() })
+                     longTasks: pendingLongTasks, anims: anim.count, fs: isFullscreen() })
     pendingIntervals = []
     pendingLongTasks = 0
   }

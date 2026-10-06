@@ -14,8 +14,9 @@ vi.mock('../api/api', () => ({
 }))
 
 import {
-  aheadOf, curveLine, decoderStallSeconds, frameStats, hiddenSeconds, idleSeconds, judderStats,
-  openWindow, stalledSeconds, submitStallSeconds, summarize, verdict, watchPlayback,
+  aheadOf, curveLine, decoderStallSeconds, frameStats, hiddenSeconds, idleSeconds, judderPeriod,
+  judderStats, openWindow, runningAnimations, stalledSeconds, submitStallSeconds, summarize,
+  verdict, watchPlayback,
 } from './playbackProbe'
 
 class FakeMedia {
@@ -325,6 +326,46 @@ describe('playbackProbe · 抖动与逐秒分布（devlog/384）', () => {
 
   it('`judderStats`：样本太少（开局那几帧间隔不准）不判', () => {
     expect(judderStats([200, 200, 200])).toEqual({ count: 0, maxMs: 0 })
+  })
+
+  it('`judderPeriod`：**周期性**打扰与随机打扰要分得开', () => {
+    // 每秒 30 拍、每 15 拍被拖一次 ⇒ 两次抖动之间约 0.5 秒（真机日志是"每秒正好 2 帧"）
+    const periodic: number[] = []
+    for (let i = 1; i <= 90; i += 1) periodic.push(i % 15 === 0 ? 60 : 33.3)
+    expect(judderPeriod(periodic)).toBeCloseTo(0.5, 1)
+    // 抖动太少（<3 次）⇒ 不给数（说"不规律"比编一个中位数诚实）
+    expect(judderPeriod([33.3, 33.3, 60, 33.3, 33.3, 33.3, 33.3, 33.3])).toBeNull()
+    // 而且这一格必须**真的进汇总行**（只测纯函数的话，接线断了也没人发现）。
+    // 只断言"是一个 0.xx 秒的数"：跨秒边界的间隔会让中位数在 0.50~0.55 之间飘，写死就会假红。
+    const el = makeEl()
+    const w = openWindow(el, 'start')
+    const chunk = periodic.slice(0, 30)
+    for (let i = 0; i < 3; i += 1) w.samples.push(smp(i + 1, { intervals: chunk }))
+    expect(summarize(w, el, performance.now())).toMatch(/抖间隔=0\.\d\ds/)
+  })
+
+  it('`runningAnimations`：只认**在跑**的，跑完但 `fill: forwards` 还挂着的**不算**', () => {
+    // 真机踩坑：`getAnimations()` 会把早已跑完、但靠 `fill: forwards` 仍"生效"的动画列出来 ——
+    // 第一版因此把日志写成"每秒都在动（30/30 秒）"，那是**假阳性**，差点让我去追一个不存在的动画。
+    const el = document.createElement('div')
+    el.className = 'si-dot live'
+    const running = {
+      playState: 'running',
+      animationName: 'pulse',
+      effect: { target: el } as unknown as KeyframeEffect,
+    }
+    const finished = { playState: 'finished', animationName: 'rise-in', effect: { target: el } }
+    const doc = document as unknown as { getAnimations?: () => unknown[] }
+    const before = doc.getAnimations
+    doc.getAnimations = () => [running, finished]
+    try {
+      const got = runningAnimations()
+      expect(got.count).toBe(1)
+      expect(got.names).toEqual(['pulse@div.si-dot'])
+    } finally {
+      if (before) doc.getAnimations = before
+      else delete doc.getAnimations
+    }
   })
 
   it('丢帧**按秒**分布 + 判定给一句"丢帧N%"，曲线也带上每秒的丢帧数', () => {
