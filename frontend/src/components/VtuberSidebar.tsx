@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Download, Plus, Search } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Download, Plus, Search } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
 import AddVtuberDialog from './AddVtuberDialog'
 import BatchFetchDialog from './BatchFetchDialog'
@@ -21,6 +21,7 @@ import {
   applyVisibleOrder, DRAG_CANCEL_PX, DRAG_HOLD_MS, moveItem,
 } from '../utils/vtuberReorder'
 import { EVENTS, on } from '../utils/appEvents'
+import { exitSolo, useSolo } from '../utils/soloMode'
 import './../styles/layout.css'
 
 /** 把抓取完成的账号快照就地合并进侧栏数据（按 bilibili platform_uid 匹配） */
@@ -41,7 +42,43 @@ function isLive(v: VTuber): boolean {
  * 视觉参照 MomoTalk：零圆角零描边，发丝分隔线，选中=左缘主色竖条+浅粉底。
  * 过滤与排序均为纯前端计算；`/` 键聚焦搜索框。
  */
-export default function VtuberSidebar() {
+/**
+ * 左栏的**外壳**：单推模式（需求 6，`devlog/429`）时**整栏收起** + 左缘一个**常态隐藏的拉手**。
+ *
+ * ⚠️ 三处 `return`（加载中 / 加载失败 / 正常）**共用它** —— 只在正常态收起的话，
+ * 进单推的那一瞬间（列表还没回来）左栏会照样占着宽度，看着像"没生效"。
+ * ⚠️ 列表**内容不变**（用户口径）：收起只是把这一栏的宽度让出去，展开后还是原来那些 V。
+ */
+function SidebarFrame({ solo, collapsed, onTogglePeek, children }: {
+  solo: { id: number } | null
+  collapsed: boolean
+  onTogglePeek: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <div className="sidebar-shell" data-collapsed={collapsed ? '1' : undefined}>
+      {children}
+      {/* 拉手：只在**单推模式**下存在（平时这一栏本来就常驻，不需要拉手）。
+          收起时它贴着内容左缘（`left: 100%`，此时栏宽为 0），展开时贴栏的右缘 ⇒ 同一套定位。 */}
+      {solo && (
+        <button
+          type="button"
+          className="solo-rail-handle"
+          data-testid="solo-rail-handle"
+          aria-label={collapsed ? '展开 V 列表' : '收起 V 列表'}
+          aria-expanded={!collapsed}
+          onClick={onTogglePeek}
+        >
+          {collapsed
+            ? <ChevronRight className="h-3.5 w-3.5" />
+            : <ChevronLeft className="h-3.5 w-3.5" />}
+        </button>
+      )}
+    </div>
+  )
+}
+
+function VtuberSidebarInner() {
   const [vtubers, setVtubers] = useState<VTuber[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -59,6 +96,7 @@ export default function VtuberSidebar() {
     setSortKey(k)
     saveVtuberSortKey(k)
   }, [])
+
 
   // ── 按住拖动重排（需求 4，2026-10-07，`devlog/415`）────────────────────
   /** 正在拖的那条（`null` = 没在拖）—— 也是"拖拽态"的唯一真源（CSS 与点击都看它） */
@@ -100,6 +138,18 @@ export default function VtuberSidebar() {
 
   const navigate = useNavigate()
   const location = useLocation()
+
+  /* 单推模式（需求 6，`devlog/429`）：两条兜底 ——
+     ① 单推的那个 V **被解绑了** ⇒ 自动退出（否则模式指向一个不存在的 V，内容区卡在空态）；
+        ⚠️ 必须等列表**非空**再判，否则"还没加载完"会被当成"这个 V 没了"；
+     ② 冷启动时路由是 `/`（单推那份状态是持久的）⇒ 把内容带到那个 V 上。 */
+  const solo = useSolo()
+  useEffect(() => {
+    if (solo && vtubers.length > 0 && !vtubers.some((v) => v.id === solo.id)) exitSolo()
+  }, [solo, vtubers])
+  useEffect(() => {
+    if (solo && !matchPath('/vtubers/:id', location.pathname)) navigate(`/vtubers/${solo.id}`)
+  }, [solo, location.pathname, navigate])
   const searchRef = useRef<HTMLInputElement>(null)
 
   const load = useCallback(() => {
@@ -547,3 +597,21 @@ const VtuberItem = memo(function VtuberItem({ vtuber, index, active, onSelect,
     </div>
   )
 })
+
+
+/**
+ * 导出的是**外壳 + 内层**的组合：外壳管单推的收起与拉手，内层就是原来的左栏（一行没动）。
+ * `peek` 是"临时展开一眼"——它不是退出单推（退出只能点工具栏那枚按钮）。
+ */
+export default function VtuberSidebar() {
+  const solo = useSolo()
+  const [peek, setPeek] = useState(false)
+  // 换 V / 退出单推 ⇒ 把"临时展开"收回去（下次进来仍然是从收起态开始）
+  useEffect(() => { setPeek(false) }, [solo?.id])
+  return (
+    <SidebarFrame solo={solo} collapsed={Boolean(solo) && !peek}
+                  onTogglePeek={() => setPeek((p) => !p)}>
+      <VtuberSidebarInner />
+    </SidebarFrame>
+  )
+}

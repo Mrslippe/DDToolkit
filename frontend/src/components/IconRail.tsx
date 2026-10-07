@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import { useNavigate, useLocation, matchPath } from 'react-router-dom'
-import { FileText, Settings } from 'lucide-react'
+import { FileText, Focus, Settings } from 'lucide-react'
 import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import AppSettingsDialog from './AppSettingsDialog'
+import { enterSolo, exitSolo, useSolo } from '../utils/soloMode'
 import './../styles/layout.css'
 
 /**
@@ -17,17 +18,38 @@ import './../styles/layout.css'
  * 只保留已接真实行为的「帖子浏览」；后续功能落地时再加回，避免点了没反应的假入口。
  * 2026-09-15（R14a，devlog/091）：底端加回**齿轮**——设置界面真的落地了，
  * 所以才允许它出现（口径：占位图标不许有，已接线的入口必须有）。
+ * 2026-10-07（需求 6，devlog/429）：齿轮**上方**加「单推」——用户指定的位置
+ * （「放在最左侧工具栏底部，设置图标上方」）。它是**切换钮**：进去一次、再点一次退出。
  */
 export default function IconRail() {
   const navigate = useNavigate()
   const location = useLocation()
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const solo = useSolo()
 
   // 帖子入口高亮：当前应用唯一界面即「侧栏+内容主栏」，路由恒匹配；
   // 未来新增页面时此判断自动收窄
   const postsActive =
     matchPath('/', location.pathname) !== null ||
     matchPath('/vtubers/:id', location.pathname) !== null
+
+  /** 当前路由上的 V（没选中任何 V 时是 null ⇒ 单推没对象，按钮禁用） */
+  const routedId = matchPath('/vtubers/:id', location.pathname)?.params.id
+  const canEnter = Boolean(routedId)
+
+  const toggleSolo = () => {
+    if (solo) {
+      // 退出：回进入前那条路由（`exitSolo` 把那份还给我们；坏值 ⇒ `/`）
+      const prev = exitSolo()
+      navigate(prev?.prevRoute ?? '/')
+      return
+    }
+    if (routedId) enterSolo(Number(routedId), location.pathname)
+  }
+
+  const soloTitle = solo
+    ? '退出单推（回到进入前的位置）'
+    : canEnter ? '单推模式：只留这一个 V' : '先选一个 V 再进单推'
 
   return (
     <nav className="icon-rail">
@@ -38,7 +60,9 @@ export default function IconRail() {
               type="button"
               className={`icon-rail-btn${postsActive ? ' active' : ''}`}
               aria-label="帖子浏览"
-              onClick={() => navigate('/')}
+              /* 单推时 `/` 没有内容（只有"选一个 V"的空态）⇒ 直接去单推那个 V，
+                 免得点了被下面的重定向弹回来（看着像"按钮坏了"） */
+              onClick={() => navigate(solo ? `/vtubers/${solo.id}` : '/')}
             >
               <FileText className="h-[18px] w-[14px]" />
             </button>
@@ -48,8 +72,25 @@ export default function IconRail() {
       </div>
 
       {/* 底端：设置（R14a）。放在 rail 底部而不是顶部，是为了让"打开设置"与
-          "切换内容视图"在位置上就分开 —— 前者是低频、全局的动作 */}
+          "切换内容视图"在位置上就分开 —— 前者是低频、全局的动作。
+          单推钮紧挨齿轮上方（用户指定），同属"低频、全局"。 */}
       <div className="icon-rail-group icon-rail-bottom">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              className={`icon-rail-btn${solo ? ' active' : ''}`}
+              aria-label={solo ? '退出单推' : '单推模式'}
+              aria-pressed={Boolean(solo)}
+              data-testid="solo-toggle"
+              disabled={!solo && !canEnter}
+              onClick={toggleSolo}
+            >
+              <Focus className="h-[18px] w-[18px]" />
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="right">{soloTitle}</TooltipContent>
+        </Tooltip>
         <Tooltip>
           <TooltipTrigger asChild>
             <button

@@ -349,7 +349,7 @@ keyframes 只会重启**）。
 |---|---|---|
 | 图标栏 | `.icon-rail` | 宽 `--rail-width:50px`，底色 `--c-rail:#4b5a6f` |
 | 顶部组 | `.icon-rail-group`（首）÷ spacer | 功能入口 |
-| 底部组 | `.icon-rail-bottom`（`margin-top:auto`） | 贴栏底；**2026-09-15（R14a）起放齿轮** |
+| 底部组 | `.icon-rail-bottom`（`margin-top:auto`） | 贴栏底；**2026-09-15（R14a）起放齿轮**；**2026-10-07（需求 6，`devlog/429`）齿轮上方加「单推」切换钮**（`.icon-rail-btn` + `aria-pressed` + `data-testid="solo-toggle"`，`Focus` 图标）—— 用户指定位置「最左侧工具栏底部，设置图标上方」；⚠️ **没选中 V 时禁用**（单推总得有个对象），单推中再点一次退出并回到进入前的路由 |
 | 单元格 | `.icon-rail-btn` | **通栏 50×50** 贴合；未选中整钮 `opacity:.6`，hover `.85` |
 | 选中单元格 | `.icon-rail-btn.active` | **实底 `--c-rail-active-bg:#647489` + 全亮** |
 | 图标 | 顶部组：`FileText`(14×18)；底部：`Settings`(18×18) | 视觉尺寸对应设计稿 ×0.63 取整 |
@@ -451,7 +451,7 @@ keyframes 只会重启**）。
 
 | 名称 | 类名 | 说明 |
 |---|---|---|
-| 外壳 | `.sidebar-shell` | 宽 `--sidebar-width:492px`，**flex column**；承载 `--c-bg-list` 底 + 右缘发丝边 |
+| 外壳 | `.sidebar-shell`（+ `.solo-rail-handle`） | 宽 `--sidebar-width:492px`，**flex column**；承载 `--c-bg-list` 底 + 右缘发丝边。★**单推模式**（需求 6，`devlog/429`）：`[data-collapsed="1"]` ⇒ **宽度收成 0**（用户口径「左栏整个收起」，但**列表内容不变**）、子元素逐个藏（**拉手除外**）；`.solo-rail-handle` 是**常态隐藏**（`opacity:0`）但**始终可命中**的拉手（⚠️ 用 `visibility`/`pointer-events` 藏就再也点不开），悬停/键盘聚焦现身，**只临时展开一眼**（不是退出单推）；展开态常驻半透明 |
 | 工具行 | `.list-toolbar` | 吸顶行（高 51px，padding `10px 32px`，居中，`z-index:5`），**不随列表滚动** |
 | 列表滚动区 | `<OverlayScroll className="sidebar-list">` | **覆盖式滚动条**（F 节标准）；滚动体 `.sidebar-list .os-scroll` flex column |
 | 原生条隐藏 | — | `.sidebar`/`.sidebar-sb*` 规则已随迁移删除 |
