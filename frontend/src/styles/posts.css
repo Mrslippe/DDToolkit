@@ -2712,29 +2712,22 @@ img.hero-avatar {
   flex: 1;
 }
 
-.vd-bg-row {
+/* 背景区竖排：**预览框占满整幅宽**，按钮排在它下面（2026-10-07 用户要求，`devlog/422`） */
+.vd-bg-col {
   display: flex;
-  align-items: center;
-  gap: 12px;
-  /* 取景那句引导靠 `flex-basis:100%` 独占一行；顺带让按钮在窄弹窗里优雅换行 */
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 10px;
 }
 
-/* 取景的引导句：只在"还没调过"时出现（`devlog/421`）—— 抓手光标对键盘/触控用户不存在 */
-.vd-focus-tip {
-  flex-basis: 100%;
-  font-size: 11px;
-  line-height: 1.4;
-  color: var(--c-text-sub);
-}
-
-/* 背景预览 = **取景操作面**（需求 7 / V1b-4）：拖 = 平移、滚轮 = 缩放（滑杆已撤）。
+/* 背景预览 = **取景操作面**（需求 7，V1b-4 `devlog/421`）：拖 = 平移、滚轮 = 缩放（没有滑杆）。
    ⚠️ 取景三件套必须挂在**内层** `.vd-bg-focus` 上：`transform: scale()` 会把边框和圆角
    一起放大 —— 挂外层会让 1px 描边变成 2px、框还会长到邻居身上。 */
 .vd-bg-preview {
-  width: 132px;
-  height: 74px;
-  border-radius: 6px;
+  position: relative;      /* 内层与角上那个「重置取景」的包含块 */
+  width: 100%;             /* ★ 填满可用宽度（有 CSS 契约用例钉着，见 .css.test.ts） */
+  aspect-ratio: 16 / 9;    /* 高度跟着宽度走；`max-height` 只是超宽弹窗的兜底 */
+  max-height: 260px;
+  border-radius: 8px;
   border: 1px solid var(--c-border);
   background-color: var(--sel-bg-hover);
   display: flex;
@@ -2742,9 +2735,7 @@ img.hero-avatar {
   justify-content: center;
   font-size: 11px;
   color: var(--c-text-sub);
-  position: relative;      /* 内层的包含块 */
   overflow: hidden;        /* 放大后裁掉溢出的那部分 */
-  flex-shrink: 0;
 }
 
 /* 可拖动时才给抓手与手势：没背景图（"头像铺底"）时这些都不该出现 */
@@ -2767,17 +2758,40 @@ img.hero-avatar {
   /* 取景三件套由 `focusStyle()` 内联给（位置 + 缩放 + **与位置同源的支点**，`devlog/420`） */
 }
 
-/* 滚轮缩放的读数（不是滑杆）：只在真放大时露出来，1× 时看不见 */
+/* 框内的「重置取景」（用户要求撤掉滑杆后，它从按钮排搬到这里）：
+   ⚠️ 组件里必须在它自己的 `pointerdown` 上 `stopPropagation`，否则按一下会顺手起一次拖拽 */
+.vd-focus-reset {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 2;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+/* 右下角的缩放读数（**不是滑杆**）：只在真放大时露出来，1× 时看不见 */
 .vd-focus-zoom {
   position: absolute;
-  right: 4px;
-  bottom: 3px;
-  padding: 0 4px;
+  right: 6px;
+  bottom: 6px;
+  padding: 0 5px;
   border-radius: 3px;
   background: rgba(15, 23, 42, 0.55);
   color: #fff;
-  font-size: 10px;
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+/* 左下角的一次性引导（有取景后就不出现）：抓手光标对键盘/触控用户不存在 */
+.vd-focus-hint {
+  position: absolute;
+  left: 6px;
+  bottom: 6px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(15, 23, 42, 0.55);
+  color: #fff;
+  font-size: 11px;
   pointer-events: none;
 }
 

@@ -579,9 +579,9 @@ export default function VtuberSettingsDialog({
           <OverlayScroll className="vd-settings-scroll">
             <div className="vd-section">
               <h4 className="vd-section-title">背景</h4>
-              <div className="vd-bg-row">
-                {/* 需求 7：**预览框本身就是取景操作面**（拖 = 平移、滚轮 = 缩放，`devlog/421`）。
-                    没背景图时退回静态的"头像铺底"—— 那时也没什么可取景的。 */}
+              <div className="vd-bg-col">
+                {/* 需求 7：**预览框本身就是取景操作面**（拖 = 平移、滚轮 = 缩放，`devlog/421`），
+                    并**占满整幅宽**（`devlog/422`）。没背景图时退回静态的"头像铺底"。 */}
                 {bg && vtuber ? (
                   <BackgroundFocusEditor
                     vtuber={vtuber}

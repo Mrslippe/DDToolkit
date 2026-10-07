@@ -46,11 +46,12 @@ import type { VTuber } from '../api/types'
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const V_ID = 7
-const BOX_W = 132
-const BOX_H = 74
-/** `cover` 下图的渲染尺寸：132×176 ⇒ 横向溢出 0、纵向溢出 102。 */
-const IMG_W = 132
-const IMG_H = 176
+/** 预览框现在**占满整幅宽**（16:9 ⇒ 460×258.75），所以拖拽换算按这个尺寸来。 */
+const BOX_W = 460
+const BOX_H = 258.75
+/** `cover` 下图的渲染尺寸 = 900×1200 × (460/900) ⇒ 460×613.33（横向没余量、纵向溢出 354.58）。 */
+const IMG_W = 460
+const IMG_H = 1200 * (BOX_W / 900)
 
 function mkVTuber(over: Partial<VTuber> = {}): VTuber {
   return { id: V_ID, name: '柚子', background_focus: null, ...over } as VTuber
@@ -144,19 +145,18 @@ afterEach(() => {
 })
 
 describe('BackgroundFocusEditor', () => {
-  it('★ 1:1 跟手：图渲染成 132×176、scale=2 ⇒ 往右拖 30px，锚点正好减 30/132', async () => {
+  it('★ 1:1 跟手：图渲染成 460×613、scale=2 ⇒ 往右拖 30px，锚点正好减 30/460', async () => {
     await mount({ background_focus: '{"x":0.5,"y":0.5,"scale":2}' })
     await drag(30, 0)
     expect(setBackgroundFocus).toHaveBeenCalledTimes(1)
-    // 横向溢出 = 2×132 − 132 = 132 ⇒ Δx = −30/132
+    // 横向溢出 = 2×460 − 460 = 460 ⇒ Δx = −30/460
     expect(lastFocus().x).toBeCloseTo(0.5 - 30 / IMG_W, 6)
     expect(lastFocus().scale, '拖拽不许改缩放').toBe(2)
     expect(setBackgroundFocus.mock.calls[0][0]).toBe(V_ID)
     // ★ 三件套：位置、缩放、**支点同源**（百分比限两位小数）
-    const pos = img().style.backgroundPosition
-    expect(pos.startsWith('27.27%')).toBe(true)
+    expect(img().style.backgroundPosition).toBe('43.48% 50%')
     expect(img().style.transform).toBe('scale(2)')
-    expect(img().style.transformOrigin, '支点必须跟着锚点走').toBe(pos)
+    expect(img().style.transformOrigin, '支点必须跟着锚点走').toBe('43.48% 50%')
     expect(badge()!.textContent, '放大时才有读数').toBe('200%')
   })
 
@@ -164,7 +164,7 @@ describe('BackgroundFocusEditor', () => {
     await mount({ background_focus: null })
     await drag(30, 30)
     expect(lastFocus().x, '横向没有可挪的余量').toBe(0.5)
-    // 纵向溢出 = 176 − 74 = 102 ⇒ Δy = −30/102
+    // 纵向溢出 = 613.33 − 258.75 = 354.58 ⇒ Δy = −30/354.58
     expect(lastFocus().y).toBeCloseTo(0.5 - 30 / (IMG_H - BOX_H), 6)
     expect(lastFocus().scale).toBe(1)
     expect(img().style.transform, 'scale=1 ⇒ 不生成变换').toBe('')
@@ -205,9 +205,22 @@ describe('BackgroundFocusEditor', () => {
 
   it('★ 引导句：还没调过时给一句（抓手光标对键盘/触控用户不存在），调过就不再出现', async () => {
     await mount({ background_focus: null })
-    expect(host.querySelector('.vd-focus-tip')?.textContent).toContain('拖动预览图平移')
+    expect(host.querySelector('.vd-focus-hint')?.textContent).toContain('拖动平移')
     await mount({ background_focus: '{"x":0.5,"y":0.5,"scale":1}' })
-    expect(host.querySelector('.vd-focus-tip'), '已经有取景 ⇒ 不用再教').toBeNull()
+    expect(host.querySelector('.vd-focus-hint'), '已经有取景 ⇒ 不用再教').toBeNull()
+  })
+
+  it('★ 重置钮在框内：它自己的 pointerdown 必须被吃掉（否则按一下会顺手起一次拖拽）', async () => {
+    await mount({ background_focus: '{"x":0.2,"y":0.2,"scale":2}' })
+    const btn = resetBtn()
+    await act(async () => {
+      btn.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, clientX: 100, clientY: 50 }))
+      box().dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX: 140, clientY: 50 }))
+      box().dispatchEvent(new MouseEvent('pointerup', { bubbles: true, clientX: 140, clientY: 50 }))
+      await Promise.resolve()
+    })
+    expect(setBackgroundFocus, '按的是重置钮，不该起拖拽').not.toHaveBeenCalled()
+    expect(img().style.backgroundPosition, '也不许动取景').toBe('20% 20%')
   })
 
   it('★ 死区：点一下不算取景 —— 不发请求、也不动', async () => {

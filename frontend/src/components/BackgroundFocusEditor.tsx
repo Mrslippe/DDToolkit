@@ -247,40 +247,38 @@ export default function BackgroundFocusEditor({ vtuber, src, onSaved, onPill }: 
   const zoomed = focus.scale > FOCUS_MIN_SCALE
 
   return (
-    <>
+    <div
+      ref={boxRef}
+      className="vd-bg-preview is-fit"
+      data-testid="focus-box"
+      role="group"
+      tabIndex={0}
+      aria-label="背景取景：拖动平移、滚轮缩放（方向键微调）"
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+      onKeyDown={(e) => {
+        const step = KEY_STEP * (e.shiftKey ? 5 : 1)
+        const dirs: Record<string, [number, number]> = {
+          ArrowLeft: [-step, 0],
+          ArrowRight: [step, 0],
+          ArrowUp: [0, -step],
+          ArrowDown: [0, step],
+        }
+        const hit = dirs[e.key]
+        if (!hit) return
+        e.preventDefault()
+        nudge(hit[0], hit[1])
+      }}
+    >
       <div
-        ref={boxRef}
-        className="vd-bg-preview is-fit"
-        data-testid="focus-box"
-        role="group"
-        tabIndex={0}
-        aria-label="背景取景：拖动平移、滚轮缩放（方向键微调）"
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerCancel={onPointerUp}
-        onKeyDown={(e) => {
-          const step = KEY_STEP * (e.shiftKey ? 5 : 1)
-          const dirs: Record<string, [number, number]> = {
-            ArrowLeft: [-step, 0],
-            ArrowRight: [step, 0],
-            ArrowUp: [0, -step],
-            ArrowDown: [0, step],
-          }
-          const hit = dirs[e.key]
-          if (!hit) return
-          e.preventDefault()
-          nudge(hit[0], hit[1])
-        }}
-      >
-        <div
-          className="vd-bg-focus"
-          data-testid="focus-img"
-          style={{ backgroundImage: `url(${src})`, ...style }}
-        />
-        {/* 读数不是滑杆：只在真放大时露出来 */}
-        {zoomed && <span className="vd-focus-zoom">{Math.round(focus.scale * 100)}%</span>}
-      </div>
+        className="vd-bg-focus"
+        data-testid="focus-img"
+        style={{ backgroundImage: `url(${src})`, ...style }}
+      />
+      {/* 重置钮**在框内**（用户撤掉滑杆后它从按钮排搬进来）：
+          ⚠️ 必须自己吃掉 pointerdown，否则按一下会顺手起一次拖拽 */}
       <Button
         variant="outline"
         size="sm"
@@ -288,15 +286,17 @@ export default function BackgroundFocusEditor({ vtuber, src, onSaved, onPill }: 
         title="重置取景"
         aria-label="重置取景"
         disabled={!vtuber.background_focus || busy}
+        onPointerDown={(e) => e.stopPropagation()}
         onClick={() => void reset()}
       >
         <RotateCcw className="size-4" />
       </Button>
-      {/* 抓手光标只有鼠标用户看得见，键盘/触控用户看不出"这里能操作" ⇒ 没取景时给一句引导，
-          调过之后就不再出现（`flex-basis:100%` 让它自己占一行，不挤按钮） */}
+      {/* 读数不是滑杆：只在真放大时露出来 */}
+      {zoomed && <span className="vd-focus-zoom">{Math.round(focus.scale * 100)}%</span>}
+      {/* 抓手光标只有鼠标用户看得见，键盘/触控用户看不出"这里能操作" ⇒ 没取景时给一句引导 */}
       {!vtuber.background_focus && (
-        <span className="vd-focus-tip">取景：拖动预览图平移，滚轮缩放（方向键微调）</span>
+        <span className="vd-focus-hint">拖动平移 · 滚轮缩放 · 方向键微调</span>
       )}
-    </>
+    </div>
   )
 }
