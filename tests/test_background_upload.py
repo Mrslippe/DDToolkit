@@ -105,6 +105,51 @@ def _upload(client, vid, data, content_type, name="bg.bin"):
                        files={"file": (name, data, content_type)})
 
 
+def test_background_focus_roundtrip_and_clear(client):
+    """需求 7（f011，`devlog/417`）：取景可存可清，**清除不动背景图**。
+
+    ⚠️ 存的是**归一化**值（0..1 的比例 + 倍数），不是像素 —— 窗口尺寸/DPR 变了取景不该跟着跑。
+    ⚠️⚠️ "不动背景图"这半条必须**先真的传一张背景**当正对照：两边都是 `None` 的话，
+    "没碰它"与"把它清成 None"在断言上**分不出来** —— 第一版就是这么假绿的
+    （把 `clear_background_focus` 改成顺手清掉 `background_path`，用例照样全绿）。
+    `DEV-LOOP` §5「"没发生 X"这类断言必须配正对照」说的就是这个。
+    """
+    import json
+
+    vid = _mk_v()
+    assert client.get(f"/vtuber/{vid}").json()["background_focus"] is None
+
+    r = client.put(f"/vtuber/{vid}/background-focus",
+                   json={"x": 0.25, "y": 0.75, "scale": 1.5})
+    assert r.status_code == 200
+    raw = r.json()["background_focus"]
+    assert isinstance(raw, str), "这一层给 JSON 原文（同 profile_cards.config_json 的口径）"
+    assert json.loads(raw) == {"x": 0.25, "y": 0.75, "scale": 1.5}
+    assert client.get(f"/vtuber/{vid}").json()["background_focus"] == raw
+
+    # ★ 正对照：真的传一张背景上去（走真实那条 upload 路）
+    keep = _upload(client, vid, PNG, "image/png").json()["background_path"]
+    assert keep and _db_path(vid) == keep
+
+    assert client.delete(f"/vtuber/{vid}/background-focus").status_code == 200
+    after = client.get(f"/vtuber/{vid}").json()
+    assert after["background_focus"] is None
+    assert after["background_path"] == keep, "清除取景**不该碰背景图**（那是 /background 的事）"
+
+
+def test_background_focus_rejects_out_of_range(client):
+    """越界 ⇒ 422：存进去只会让前端算出一张跑出视野的图 —— 那是"看起来坏了"不是"报错了"。"""
+    vid = _mk_v()
+    for bad in ({"x": 1.5, "y": 0.5, "scale": 1.0}, {"x": 0.5, "y": -0.1, "scale": 1.0},
+                {"x": 0.5, "y": 0.5, "scale": 0.5}, {"x": 0.5, "y": 0.5, "scale": 9.0}):
+        assert client.put(f"/vtuber/{vid}/background-focus", json=bad).status_code == 422, bad
+    assert client.put("/vtuber/999999/background-focus",
+                      json={"x": 0.0, "y": 0.0, "scale": 1.0}).status_code == 404
+    # ⚠️ 边界值本身**合法**（0 与 1、1 与 3 都在定义域上）—— 别把"越界"写成"靠边就拒"
+    assert client.put(f"/vtuber/{vid}/background-focus",
+                      json={"x": 0.0, "y": 1.0, "scale": 3.0}).status_code == 200
+
+
 def _files(data_dir: Path) -> list[str]:
     d = data_dir / "static" / "custom_bg"
     return sorted(p.name for p in d.iterdir()) if d.exists() else []

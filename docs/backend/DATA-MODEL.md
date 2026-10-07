@@ -65,6 +65,8 @@ erDiagram
 | `setting` | TEXT | 角色设定 |
 | `avatar` | TEXT | 默认头像 URL |
 | `background_path` | TEXT | 卡片页自定义背景，`static/custom_bg/` 相对路径（d002） |
+| `background_focus` | TEXT | 背景**取景**（需求 7，f011）：JSON `{"x":0..1,"y":0..1,"scale":1..3}`，NULL = 原样铺。⚠️ **归一化存**（比例不是像素）—— 窗口尺寸/DPR 变了取景不该跟着跑 |
+| `background_video_path` | TEXT | 背景**视频**（需求 9，f011）：`static/custom_bg/` 相对路径，NULL = 只有静态图。与 `background_path` 同款口径（**只取文件名**，不许越出目录） |
 | `notes` | TEXT | 备注 |
 | `sign_override` | TEXT | 手改的签名（**覆盖**，f004）。不写 `accounts.sign`；清空 = 撤销覆盖 |
 | `sign_source_account_id` | INTEGER | 卡片签名跟随哪个账号（**无外键**，f004）；NULL = 主账号，指向不存在的 id 时回落主账号 |
@@ -327,7 +329,8 @@ session 收口**（先写文件、再写索引行，见 `docs/backend/ASSETS.md 
 | `f007` event_kind_emoji | `vtuber_events` 加 `kind`（NOT NULL 默认 `event`，**回填既有行**）+ `emoji`（可空）+ 索引 `ix_vtuber_events_vtuber_kind`；⚠️ **SQLite 不支持 `ALTER COLUMN` ⇒ 走 `batch_alter_table`**（R42-A，devlog/162） |
 | `f008` avatar_history | 建 `vtuber_avatar_history`（历次头像账本；唯一键 `(vtuber_id, avatar_url)`，**挂 vtubers/accounts 两个外键 ⇒ purge 必清**）（R47，devlog/249） |
 | `f009` local_assets | 建 `local_assets`（轻资产长期储存索引；唯一键 `(kind, key)`，**不挂外键 ⇒ 不进 purge**）（L1，devlog/257） |
-| `f010` vtuber_order | `vtubers.sort_order`（NOT NULL 默认 0；左栏自定义顺序，需求 4/5，devlog/413） = **当前 head** |
+| `f010` vtuber_order | `vtubers.sort_order`（NOT NULL 默认 0；左栏自定义顺序，需求 4/5，devlog/413） |
+| `f011` background_focus_and_video | `vtubers.background_focus`（取景 JSON）+ `vtubers.background_video_path`（背景视频，需求 7/9，devlog/417） = **当前 head** |
 
 **纪律**：新增迁移后必须同步 `app/main.py` 的 `MIGRATION_HEAD`（`tests/test_services.py`
 断言与 alembic head 一致），否则冷启动快路径会把旧库误判为已最新。启动迁移四形态：

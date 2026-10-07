@@ -217,7 +217,7 @@ budget: 300
 
 | 术语 | 含义 | 代码位置 | 关联 |
 |---|---|---|---|
-| **迁移链 / MIGRATION_HEAD** | alembic `a001→f010`（23 个版本） | `alembic/versions/`、`app/main.py::MIGRATION_HEAD` | 同步纪律 = 不变量 3（`docs/backend/ARCHITECTURE.md` §6）；测试断言一致 |
+| **迁移链 / MIGRATION_HEAD** | alembic `a001→f011`（24 个版本） | `alembic/versions/`、`app/main.py::MIGRATION_HEAD` | 同步纪律 = 不变量 3（`docs/backend/ARCHITECTURE.md` §6）；测试断言一致 |
 | **一键发布 / release.py** | 十步发布编排：预检→版本同步→门禁→打版→产物校验→提交/tag→推送→Release→报告 | `scripts/release.py`；手册 `docs/ops/RELEASE.md`；上传 `scripts/upload_release_assets.py`（幂等） | 守卫：工作树脏/notes 缺失/版本不递增/NSIS 打平/**文档漂移**/tag 冲突 → 停；`--dry-run`、`--from <步骤>` 续跑；推完自动对齐本地 `origin/<分支>` tracking ref（按 URL 推送不会自动更新它） |
 | **端到端上游冒烟 / smoke_upstream** | 数据目录副本 + 真后端 + 真上游，跑"只有真环境才暴露"的链路（B 站检索 / uid 直查 / 池外收录 / 场次上游） | `scripts/smoke_upstream.py`（`--cold` = 空数据目录 + 清空凭据）；`dev_check.py --upstream` | `--capture` 顺带刷新真实 fixtures；skip 必须打印原因，不冒充通过 |
 | **真实 fixtures** | 真上游回包 / 真 `installer.nsi` 片段 / 真索引条目 —— 判据的"真形状"依据 | `tests/fixtures/`（`smoke_upstream.py --capture` 生成；专栏 HTML 真拉自 `x/article/view`）；用例 `tests/test_real_fixtures.py` | 「新判据至少一条用例吃真实数据」= 不变量 22（`docs/backend/ARCHITECTURE.md` §6） |

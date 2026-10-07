@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 from datetime import date, datetime, timedelta, timezone
 
@@ -6,7 +7,7 @@ from pathlib import Path
 
 from fastapi import (APIRouter, BackgroundTasks, Depends, File, Header, HTTPException,
                      Query, UploadFile, status)
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -414,6 +415,49 @@ async def set_vtuber_background(
     db.refresh(v)
     if old_name and old_name != Path(rel).name:
         remove_background(custom_dir, old_name)     # 只有新背景真的生效了才删旧的
+    return _vtuber_out(db, v)
+
+
+class BackgroundFocusIn(BaseModel):
+    """背景取景（需求 7）：**归一化**比例 + 缩放倍数。
+
+    三个字段都**有边界**（越界 Pydantic 直接 422）：越界值存进去只会让前端算出一张
+    跑出视野的图 —— 那是"看起来坏了"，不是"报错了"，所以要在入口挡住。
+    """
+    x: float = Field(ge=0, le=1)
+    y: float = Field(ge=0, le=1)
+    scale: float = Field(ge=1, le=3)
+
+
+@router.put("/vtuber/{vtuber_id}/background-focus", response_model=VTuberOut)
+def set_background_focus(vtuber_id: int, data: BackgroundFocusIn,
+                         db: Session = Depends(get_db)):
+    """保存背景取景（平移 + 缩放；**每个 V 各一份**，需求 7）。
+
+    ⚠️ 存**归一化**值（0..1 的比例 + 倍数）而不是像素：窗口尺寸/DPR 变了取景不该跟着跑。
+    存的是 **JSON 原文**（同 `profile_cards.config_json` 的口径，这一层不做二次建模）。
+    """
+    v = VTuberRepo(db).get(vtuber_id)
+    if not v:
+        raise HTTPException(404, f"VTuber id={vtuber_id} 不存在")
+    v.background_focus = json.dumps({"x": data.x, "y": data.y, "scale": data.scale})
+    db.add(v)
+    db.commit()
+    db.refresh(v)
+    return _vtuber_out(db, v)
+
+
+@router.delete("/vtuber/{vtuber_id}/background-focus", response_model=VTuberOut)
+def clear_background_focus(vtuber_id: int, db: Session = Depends(get_db)):
+    """清除背景取景 ⇒ 回到"原样铺满"。⚠️ **不动背景图本身**（那要走 `/background`）。"""
+    v = VTuberRepo(db).get(vtuber_id)
+    if not v:
+        raise HTTPException(404, f"VTuber id={vtuber_id} 不存在")
+    if v.background_focus is not None:
+        v.background_focus = None
+        db.add(v)
+        db.commit()
+        db.refresh(v)
     return _vtuber_out(db, v)
 
 

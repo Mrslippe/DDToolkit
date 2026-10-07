@@ -292,8 +292,8 @@ def test_get_settings_exposes_specs_and_readonly_info(client):
     # "设置页展示的 head 与代码里声明的那个一致"，两边都引同一个常量就等于什么都没断。
     # 加迁移时要顺手改这一行 —— 它会红，这是设计如此
     # （f008：R47 历次头像，devlog/249；f009：L1 轻资产索引，devlog/257；
-    #   f010：左栏自定义排序，devlog/413）。
-    assert info["migration_head"] == "f010"
+    #   f010：左栏自定义排序，devlog/413；f011：背景取景 + 背景视频，devlog/417）。
+    assert info["migration_head"] == "f011"
     assert info["data_dir"] and info["database"]
     assert body["readonly"] and all(r.get("why") for r in body["readonly"])
 

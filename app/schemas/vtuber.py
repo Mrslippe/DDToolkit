@@ -120,6 +120,12 @@ class VTuberOut(BaseModel):
     # 回落到盘上那份（`ProxyImage.fallbackSrc`）。**不加库列**：由 `local_avatar_map()` 现查。
     avatar_local: str | None = None
     background_path: str | None = None
+    #: 背景**取景**（需求 7，f011）：**JSON 原文**（`{"x":0..1,"y":0..1,"scale":1..3}`），
+    #: 前端自己解析 —— 同 `profile_cards.config_json` 的口径，这一层不做二次建模。
+    #: ⚠️ 前端遇到坏 JSON 必须退回"原样铺满"，不许白屏（这一格是可以被手工改坏的）。
+    background_focus: str | None = None
+    #: 背景**视频**（需求 9，f011）：`static/custom_bg/` 相对路径，NULL = 只有静态图。
+    background_video_path: str | None = None
     notes: str | None = None
     # 签名来源与覆盖（2026-09-13，devlog/074）：卡片签名 = override → 来源账号 → 主账号
     sign_override: str | None = None

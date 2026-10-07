@@ -25,6 +25,12 @@ class VTuber(Base):
     setting = Column(Text, nullable=True)              # 角色设定
     avatar = Column(String, nullable=True)             # 默认头像 URL
     background_path = Column(String, nullable=True)    # 卡片页自定义背景（static/ 相对路径）
+    #: 背景**取景**（需求 7，f011）：JSON `{"x":0..1,"y":0..1,"scale":1..3}`，NULL = 原样铺。
+    #: ⚠️ **归一化存**（比例，不是像素）—— 窗口尺寸/DPR 变了取景不该跟着跑。
+    background_focus = Column(Text, nullable=True)
+    #: 背景**视频**（需求 9，f011）：`static/custom_bg/` 相对路径，NULL = 只有静态图。
+    #: 与 `background_path` 同款口径（只取文件名，不许越出目录）。
+    background_video_path = Column(String, nullable=True)
     notes = Column(Text, nullable=True)
     # 签名来源与覆盖（2026-09-13，devlog/074）：卡片签名 = sign_override → 来源账号 → 主账号。
     # 两个字段都**不动** `accounts.sign`：平台签名是平台的事实，只读；
