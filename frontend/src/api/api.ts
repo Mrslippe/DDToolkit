@@ -368,6 +368,21 @@ export const api = {
   clearBackgroundVideo: (id: number) =>
     request<VTuber>(`/vtuber/${id}/background-video`, { method: 'DELETE' }),
 
+  /**
+   * 保存**视频**的取景（需求 9 补丁，f012，`devlog/426`）。请求体与 `setBackgroundFocus`
+   * **同一个形状**，但存的是另一列 —— 用户口径"视频的取景和图片的取景分开"。
+   */
+  setBackgroundVideoFocus: (vtuberId: number, focus: { x: number; y: number; scale: number }) =>
+    request<VTuber>(`/vtuber/${vtuberId}/background-video-focus`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(focus),
+    }),
+
+  /** 清除**视频**的取景（视频回到原样铺）。⚠️ **不动视频文件、也不动图片那份取景**。 */
+  clearBackgroundVideoFocus: (vtuberId: number) =>
+    request<VTuber>(`/vtuber/${vtuberId}/background-video-focus`, { method: 'DELETE' }),
+
   /** 解除订阅：删除 VTuber（连带删其账号与全部帖子记录） */
   deleteVtuber: (id: number) => request<void>(`/vtuber/${id}`, { method: 'DELETE' }),
 

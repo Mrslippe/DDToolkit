@@ -614,6 +614,7 @@ export default function VtuberSettingsDialog({
                   <BackgroundFocusEditor
                     vtuber={vtuber}
                     src={bg}
+                    videoSrc={bgVideo}
                     onSaved={onSaved}
                     onPill={onPill}
                   />

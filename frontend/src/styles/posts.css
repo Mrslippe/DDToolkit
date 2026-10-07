@@ -2789,6 +2789,26 @@ img.hero-avatar {
   background: rgba(255, 255, 255, 0.9);
 }
 
+/* 左上角的"现在调的是谁"切换钮（图片取景 / 视频取景，需求 9 补丁 `devlog/427`） */
+.vd-focus-switch {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 2;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+/* 预览里的**视频**层（调视频取景时）：与真实图层同款铺满；首帧就绪前透明（先看图） */
+.vd-bg-video {
+  object-fit: cover;
+  object-position: center;
+  transition: opacity 160ms ease-out;
+}
+
+.vd-bg-video[data-ready='0'] {
+  opacity: 0;
+}
+
 /* 右下角的缩放读数（**不是滑杆**）：只在真放大时露出来，1× 时看不见 */
 .vd-focus-zoom {
   position: absolute;

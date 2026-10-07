@@ -21,11 +21,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const setBackgroundFocus = vi.fn()
 const clearBackgroundFocus = vi.fn()
+const setBackgroundVideoFocus = vi.fn()
+const clearBackgroundVideoFocus = vi.fn()
 
 vi.mock('../api/api', () => ({
   api: {
     setBackgroundFocus: (...a: unknown[]) => setBackgroundFocus(...a),
     clearBackgroundFocus: (...a: unknown[]) => clearBackgroundFocus(...a),
+    setBackgroundVideoFocus: (...a: unknown[]) => setBackgroundVideoFocus(...a),
+    clearBackgroundVideoFocus: (...a: unknown[]) => clearBackgroundVideoFocus(...a),
   },
 }))
 vi.mock('sonner', () => ({ toast: { success: () => {}, error: () => {} } }))
@@ -77,10 +81,11 @@ function stubRect(el: HTMLElement) {
     ({ width: BOX_W, height: BOX_H, top: 0, left: 0, right: BOX_W, bottom: BOX_H, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
 }
 
-async function mount(over: Partial<VTuber> = {}) {
+async function mount(over: Partial<VTuber> = {}, videoSrc: string | null = null) {
   await act(async () => {
     root.render(
-      <BackgroundFocusEditor vtuber={mkVTuber(over)} src="/static/custom_bg/a.webp" onSaved={onSaved} />,
+      <BackgroundFocusEditor vtuber={mkVTuber(over)} src="/static/custom_bg/a.webp"
+                             videoSrc={videoSrc} onSaved={onSaved} />,
     )
     await Promise.resolve()
   })
@@ -129,6 +134,8 @@ const lastFocus = () => {
 beforeEach(() => {
   setBackgroundFocus.mockReset().mockResolvedValue(mkVTuber())
   clearBackgroundFocus.mockReset().mockResolvedValue(mkVTuber())
+  setBackgroundVideoFocus.mockReset().mockResolvedValue(mkVTuber())
+  clearBackgroundVideoFocus.mockReset().mockResolvedValue(mkVTuber())
   savedResult = undefined
   host = document.createElement('div')
   document.body.append(host)
@@ -300,5 +307,62 @@ describe('BackgroundFocusEditor', () => {
     })
     await flushTimers()
     expect(lastFocus().y).toBeCloseTo(0.4, 6)
+  })
+
+  // ── 需求 9 补丁：两份取景 + 一个切换钮 + 视频首帧预览（devlog/427）──────
+
+  const switchBtn = () => [...host.querySelectorAll<HTMLButtonElement>('.vd-focus-switch')][0]
+  const previewVideo = () => host.querySelector<HTMLVideoElement>('[data-testid="focus-video"]')
+
+  it('★ 切换钮只在**两样都有**时出现；且默认调图片', async () => {
+    await mount({ background_focus: null })
+    expect(switchBtn(), '只有图 ⇒ 没什么可切').toBeUndefined()
+    await mount({ background_focus: null }, '/static/custom_bg/a.mp4')
+    expect(switchBtn()?.textContent, '默认调的是图片').toContain('图片取景')
+    expect(previewVideo(), '调图片时视频**收起来**（真实投放里它盖住图）').toBeNull()
+  })
+
+  it('★ 切到视频 ⇒ 预览换成视频**首帧**（`#t=` + 不 autoplay），存的是**另一份**', async () => {
+    await mount(
+      { background_focus: '{"x":0.2,"y":0.2,"scale":2}',
+        background_video_focus: '{"x":0.8,"y":0.9,"scale":1.5}' },
+      '/static/custom_bg/a.mp4',
+    )
+    await act(async () => { switchBtn().click() })
+    const v = previewVideo()!
+    expect(v.getAttribute('src'), '停在第一帧的媒体片段').toContain('#t=0.001')
+    expect(v.preload).toBe('auto')
+    expect(v.muted).toBe(true)
+    expect(v.autoplay, '⚠️ 首帧预览不是"播放"').toBe(false)
+    expect(v.paused, '不许自己播起来').toBe(true)
+    // 预览用的是**视频那份**（0.8/0.9/1.5），不是图片那份
+    expect(v.style.objectPosition).toBe('80% 90%')
+    expect(v.style.transform).toBe('scale(1.5)')
+    expect(img().style.backgroundPosition, '图那份原样不动').toBe('20% 20%')
+    // 视频的原始尺寸由元数据给（jsdom 里 `videoWidth` 默认 0 ⇒ 必须显式喂一次）
+    Object.defineProperty(v, 'videoWidth', { configurable: true, value: 900 })
+    Object.defineProperty(v, 'videoHeight', { configurable: true, value: 1200 })
+    await act(async () => { v.dispatchEvent(new Event('loadedmetadata')) })
+    // 拖动 ⇒ 存到视频那个端点，图片端点一次都不许被打
+    await drag(30, 0)
+    expect(setBackgroundVideoFocus, '打到视频那份').toHaveBeenCalledTimes(1)
+    expect(setBackgroundFocus, '⚠️ 动视频取景不该碰图片取景').not.toHaveBeenCalled()
+    // 溢出 = scale·imgW − 框宽 = 1.5×460 − 460 = 230 ⇒ Δx = −30/230（图片那条用例是同样的算法）
+    expect(setBackgroundVideoFocus.mock.calls[0][1].x).toBeCloseTo(0.8 - 30 / (IMG_W * 0.5), 6)
+  })
+
+  it('★ 「重置取景」打的是**当前那一份**（切到视频 ⇒ 清视频取景）', async () => {
+    await mount(
+      { background_focus: '{"x":0.2,"y":0.2,"scale":2}', background_video_focus: '{"x":0.8,"y":0.9,"scale":1.5}' },
+      '/static/custom_bg/a.mp4',
+    )
+    await act(async () => { switchBtn().click() })
+    await act(async () => {
+      resetBtn().click()
+      await Promise.resolve()
+    })
+    expect(clearBackgroundVideoFocus).toHaveBeenCalledWith(V_ID)
+    expect(clearBackgroundFocus, '⚠️ 清视频取景不该碰图片取景').not.toHaveBeenCalled()
+    expect(previewVideo()!.style.objectPosition, '立刻回到居中').toBe('50% 50%')
   })
 })

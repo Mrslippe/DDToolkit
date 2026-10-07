@@ -547,6 +547,13 @@ export default function PostsPage() {
     () => (customBg || customVideo ? parseBackgroundFocus(vtuber?.background_focus) : null),
     [customBg, customVideo, vtuber?.background_focus],
   )
+  /* **视频**的取景是**另一份**（需求 9 补丁，`devlog/426`）：图那份只管图，视频那份只管视频。
+     ⚠️ 视频没有独立取景时**不回落**到图那份 —— 用户口径就是"分开"，回落会让"重置视频取景"
+     看起来没生效（值变了但画面不变）。 */
+  const videoFocus = useMemo(
+    () => (customVideo ? parseBackgroundFocus(vtuber?.background_video_focus) : null),
+    [customVideo, vtuber?.background_video_focus],
+  )
 
   /**
    * 自定义背景是深是浅 → 「未开播」标签与签名用深字还是浅字（2026-10-05，`devlog/355`）。
@@ -624,6 +631,7 @@ return (
           custom={!!customBg || !!customVideo}
           focus={bgFocus}
           videoSrc={customVideo}
+          videoFocus={videoFocus}
         />
       )}
 

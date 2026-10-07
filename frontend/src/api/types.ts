@@ -47,6 +47,11 @@ export interface VTuber {
   background_focus: string | null
   /** 需求 9（f011）：背景**视频**的 `static/` 相对路径；NULL = 只有静态图。 */
   background_video_path: string | null
+  /**
+   * **视频**的取景（需求 9 补丁，f012，`devlog/426`）：与 `background_focus` 形状逐字相同的
+   * JSON 原文，但是**另一份** —— 两份互不相干（各调各的）。
+   */
+  background_video_focus: string | null
   notes: string | null
   /**
    * 签名来源与覆盖（2026-09-13，devlog/074）：卡片签名 =

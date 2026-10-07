@@ -57,6 +57,8 @@ interface Layer {
   focus: BackgroundFocus | null
   /** 这一层**自己的**背景视频（同上：换 V 时旧层不该被换成新 V 的视频） */
   videoSrc: string | null
+  /** 这一层**自己的**视频取景（需求 9 补丁：两份取景分开存，`devlog/426`） */
+  videoFocus: BackgroundFocus | null
 }
 
 /**
@@ -115,14 +117,17 @@ function BackdropVideo({ src, focus }: { src: string; focus: BackgroundFocus | n
   )
 }
 
-export function BackdropCrossfade({ src, custom, focus, videoSrc }: {
+export function BackdropCrossfade({ src, custom, focus, videoSrc, videoFocus }: {
   src: string | null; custom: boolean; focus?: BackgroundFocus | null; videoSrc?: string | null
+  /** **视频**的取景（与 `focus` 是两份，见 `devlog/426`）；省略 = 跟图片那份无关 */
+  videoFocus?: BackgroundFocus | null
 }) {
   const [layers, setLayers] = useState<Layer[]>(
     // ⚠️ **首层也要快照取景与视频**（V1b-3 抓到：这里原先是写死的 `null`，于是"页面加载后的第一次换 V"
     //    会让正在淡出的那层退回居中，图在三帧里跳一下）。后面新建的层用 ref（见下）。
     () => (src
-      ? [{ src, out: false, first: true, focus: focus ?? null, videoSrc: videoSrc ?? null }]
+      ? [{ src, out: false, first: true, focus: focus ?? null, videoSrc: videoSrc ?? null,
+           videoFocus: videoFocus ?? null }]
       : []))
   /** 淡出层的清理计时器（按 src 记，避免快速连点时互相清掉）。 */
   const timers = useRef(new Map<string, number>())
@@ -132,9 +137,13 @@ export function BackdropCrossfade({ src, custom, focus, videoSrc }: {
   /** 视频同上：新层拿"这一刻"的视频地址，旧层继续放自己那一段。 */
   const videoRef = useRef<string | null>(videoSrc ?? null)
   videoRef.current = videoSrc ?? null
+  /** 视频的取景同上（两份取景各自快照 —— 记住"旧层放自己那一段"这条对取景同样成立）。 */
+  const videoFocusRef = useRef<BackgroundFocus | null>(videoFocus ?? null)
+  videoFocusRef.current = videoFocus ?? null
   /** 当前层的取景（归一成 `| null`，好和 `Layer.focus` 对上）。 */
   const nowFocus: BackgroundFocus | null = focus ?? null
   const nowVideo: string | null = videoSrc ?? null
+  const nowVideoFocus: BackgroundFocus | null = videoFocus ?? null
 
   useEffect(() => {
     if (!src) return
@@ -151,7 +160,7 @@ export function BackdropCrossfade({ src, custom, focus, videoSrc }: {
           ? prev
           : [...alive.map((l) => ({ ...l, out: true })),
              { src, out: false, first: alive.length === 0, focus: focusRef.current,
-               videoSrc: videoRef.current }]
+               videoSrc: videoRef.current, videoFocus: videoFocusRef.current }]
       })
       // 旧层淡完就把它摘掉（不摘会一直压在新层上面，虽然它已经全透明）
       const t = window.setTimeout(() => {
@@ -176,6 +185,7 @@ export function BackdropCrossfade({ src, custom, focus, videoSrc }: {
       {layers.map((l) => {
         const f = l.out ? l.focus : nowFocus
         const v = l.out ? l.videoSrc : nowVideo
+        const vf = l.out ? l.videoFocus : nowVideoFocus
         return (
           <div
             key={l.src}
@@ -193,7 +203,7 @@ export function BackdropCrossfade({ src, custom, focus, videoSrc }: {
           >
             {/* 背景视频（需求 9）：盖在这一层的图上面；图就是它的 poster 与降级兜底。
                 ⚠️ 与取景同理 —— 旧层放**自己**那一段，不许被新 V 的视频换掉。 */}
-            {v && <BackdropVideo src={v} focus={f} />}
+            {v && <BackdropVideo src={v} focus={vf} />}
           </div>
         )
       })}

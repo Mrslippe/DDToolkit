@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
-import { RotateCcw } from 'lucide-react'
+import { Film, ImageIcon, RotateCcw } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { api } from '../api/api'
@@ -11,6 +11,7 @@ import {
   FOCUS_MIN_SCALE,
   clampFocus,
   coverScale,
+  focusObjectStyle,
   focusStyle,
   panDelta,
   parseBackgroundFocus,
@@ -18,26 +19,31 @@ import {
 } from '../utils/backgroundFocus'
 
 /**
- * 背景取景（需求 7 / `devlog/419`→`420`→`421`）。
+ * 背景取景（需求 7 图片取景 / 需求 9 视频取景；`devlog/419`→`420`→`421`→`422`→`427`）。
  *
- * ## 做法：**预览框本身就是操作面**（V1b-4，用户要求）
+ * ## 做法：**预览框本身就是操作面**
  *
- * 「档案设置」里那个 132×74 的背景预览直接可操作 —— **拖 = 平移**（图跟着指针走，1:1）、
- * **滚轮 = 缩放**、方向键微调（Shift ×5）、旁边一个「重置取景」图标钮。
- * ⚠️ **没有滑杆**（用户明确要求撤掉）：它曾经单独占一行、和预览各显示一遍同一件事。
+ * 132... 整幅宽的预览框上：**拖 = 平移**、**滚轮 = 缩放**、方向键微调（Shift ×5）、
+ * 右上角「重置取景」。⚠️ **没有滑杆**（用户明确要求撤掉）。
  *
- * 存的是**图片锚点**（`x=0` 看左边缘、`x=1` 看右边缘）⇒ 你钉的那条线换窗口宽度也不动；
- * 几何全在 `utils/backgroundFocus.ts`。
+ * ## 两份取景，一个按钮切换（用户口径 2026-10-07，`devlog/426`/`427`）
+ *
+ * 图片与视频**各存一份**取景（`background_focus` / `background_video_focus`），
+ * 左上角那个按钮切换"现在调的是谁"。三条口径：
+ * 1. **调视频时预览用视频首帧**（`#t=0.001` + `preload="auto"` + **不 autoplay**）——
+ *    取景要看的就是"画面被怎么裁"，拿图当预览等于骗人；
+ * 2. **调图片时把视频收起来**：真实投放里视频是**盖住图**的，不收起来就没法看你在调的图
+ *    （图仍然垫在下面当 poster，与真实图层的结构一致）；
+ * 3. **两份互不回落**：视频没有独立取景时**不**借用图那份 —— 借了的话"重置视频取景"
+ *    看起来没生效（值变了画面不变）。
  *
  * ## 五个不显然的坑（都在下面标了 ⚠️）
  *
  * 1. **滚轮必须挂原生非被动监听**：React 的 `onWheel` 是 passive 的，`preventDefault()` 无效
- *    ⇒ 弹窗内容体一边缩放一边跟着滚。`addEventListener('wheel', h, { passive: false })` 才行。
- * 2. **滚轮步长按 delta 指数映射**，不是"一格 ×1.1"：触控板一次滑动会发几十个事件，
- *    按事件乘会瞬间顶到 3×（鼠标一格 ≈ +16%）。
- * 3. **拖拽按"溢出量"换算**（`panDelta`）：竖图铺在宽框里**横向没有余量 ⇒ 拖了不动是正确结果**，
- *    纵向照挪；没余量的轴返回 0，不许除出个巨大跳变。
- * 4. **取景三件套挂在内层**：`transform: scale()` 会连边框圆角一起放大，挂外层框就长到邻居身上。
+ *    ⇒ 弹窗内容体一边缩放一边跟着滚。
+ * 2. **滚轮步长按 delta 指数映射**，不是"一格 ×1.1"：触控板一次滑动会发几十个事件。
+ * 3. **拖拽按"溢出量"换算**（`panDelta`）：竖图铺在宽框里**横向没有余量 ⇒ 拖了不动是正确结果**。
+ * 4. **取景三件套挂在内层**：`transform: scale()` 会连边框圆角一起放大。
  * 5. **松手/滚停才发请求**（260ms 防抖）+ **关窗兜底**补发最后一格（与弹窗里 `commitSign` 同套路）。
  */
 const PAN_DEAD_PX = 3
@@ -49,11 +55,17 @@ const WHEEL_RATE = 0.0015
 const LINE_TO_PX = 33
 /** 保存防抖 —— 一次拖动/一段滚轮只打一发 PUT。 */
 const COMMIT_DEBOUNCE_MS = 260
+/** 首帧预览：媒体片段 `#t=` 让浏览器直接停在第一帧，不播。 */
+const FIRST_FRAME_T = 0.001
+
+type Target = 'image' | 'video'
 
 interface Props {
   vtuber: VTuber
   /** 已 `resolveAsset` 过的背景图 URL（没背景就不渲染本组件）。 */
   src: string
+  /** 已 `resolveAsset` 过的背景视频 URL（没视频时为空 ⇒ 不显示切换钮）。 */
+  videoSrc?: string | null
   onSaved: (v: VTuber) => void
   onPill?: (msg: string) => void
 }
@@ -61,7 +73,7 @@ interface Props {
 interface DragState {
   px: number
   py: number
-  /** 预览框尺寸 + 图片在 `scale=1` 时的渲染尺寸（拖拽换算全用它们） */
+  /** 预览框尺寸 + 媒体在 `scale=1` 时的渲染尺寸（拖拽换算全用它们） */
   w: number
   h: number
   imgW: number
@@ -77,26 +89,40 @@ function snapScale(v: number): number {
   return Math.abs(c - FOCUS_MIN_SCALE) < 0.005 ? FOCUS_MIN_SCALE : c
 }
 
-export default function BackgroundFocusEditor({ vtuber, src, onSaved, onPill }: Props) {
-  const [focus, setFocus] = useState<BackgroundFocus>(
-    () => parseBackgroundFocus(vtuber.background_focus) ?? FOCUS_CENTER,
+export default function BackgroundFocusEditor({ vtuber, src, videoSrc, onSaved, onPill }: Props) {
+  const hasVideo = Boolean(videoSrc)
+  const [target, setTarget] = useState<Target>('image')
+  /** 当前调的那一份（存库里的原文；两份各取各的，不回落）。 */
+  const storedOf = useCallback(
+    (t: Target) => (t === 'image' ? vtuber.background_focus : vtuber.background_video_focus),
+    [vtuber.background_focus, vtuber.background_video_focus],
   )
+  const [focus, setFocus] = useState<BackgroundFocus>(() => {
+    const raw = vtuber.background_focus ?? vtuber.background_video_focus
+    return parseBackgroundFocus(raw) ?? FOCUS_CENTER
+  })
   const [busy, setBusy] = useState(false)
-  /** 图片原始尺寸（拖拽换算要用：`cover` 倍数 = max(框/图)，没它就不知道哪条轴有余量） */
+  /** 当前媒体的原始尺寸（拖拽要用：`cover` 倍数 = max(框/媒体)） */
   const [nat, setNat] = useState<{ w: number; h: number } | null>(null)
+  /** 视频首帧是否已经能显示（`loadeddata` 之前先看图，与真实投放的 `data-ready` 同思路） */
+  const [frameReady, setFrameReady] = useState(false)
   const boxRef = useRef<HTMLDivElement | null>(null)
   const dragRef = useRef<DragState | null>(null)
   const timerRef = useRef<number | null>(null)
   const pendingRef = useRef<BackgroundFocus | null>(null)
 
-  // 换了 V / 别处改了库里的值 ⇒ 预览跟着走。
-  // 自己存进去的和本地这份一样 ⇒ 不跳（`onSaved` 回来的 `background_focus` 就是刚 PUT 的值）。
+  // 换 V / 换了目标 / 别处改了库里的值 ⇒ 本地这份跟着走。
+  // ⚠️ 依赖里必须带 `target`：切到视频时要**重新读视频那份**，否则你会拿着图的取景去改视频。
   useEffect(() => {
-    setFocus(parseBackgroundFocus(vtuber.background_focus) ?? FOCUS_CENTER)
-  }, [vtuber.id, vtuber.background_focus])
+    setFocus(parseBackgroundFocus(storedOf(target)) ?? FOCUS_CENTER)
+  }, [target, storedOf])
 
-  // 图片原始尺寸：拖拽要知道"这条轴有没有可挪的余量"
+  // 图片的原始尺寸（视频那份由 `<video>` 的 `onLoadedMetadata` 给）
   useEffect(() => {
+    if (target !== 'image') {
+      setNat(null)
+      return
+    }
     let cancelled = false
     const img = new Image()
     img.onload = () => {
@@ -104,7 +130,9 @@ export default function BackgroundFocusEditor({ vtuber, src, onSaved, onPill }: 
     }
     img.src = src
     return () => { cancelled = true }
-  }, [src])
+  }, [target, src])
+
+  useEffect(() => { setFrameReady(false) }, [target, videoSrc])
 
   const commit = useCallback(
     async (next: BackgroundFocus) => {
@@ -112,16 +140,19 @@ export default function BackgroundFocusEditor({ vtuber, src, onSaved, onPill }: 
       setFocus(c) // 乐观：先跟手，不等往返
       setBusy(true)
       try {
-        onSaved(await api.setBackgroundFocus(vtuber.id, c))
+        const updated = target === 'video'
+          ? await api.setBackgroundVideoFocus(vtuber.id, c)
+          : await api.setBackgroundFocus(vtuber.id, c)
+        onSaved(updated)
       } catch (e) {
         toast.error(`保存取景失败：${(e as Error).message}`)
         // 回滚到库里那份（`vtuber` 还是旧的 ⇒ 这正是"上一版"）
-        setFocus(parseBackgroundFocus(vtuber.background_focus) ?? FOCUS_CENTER)
+        setFocus(parseBackgroundFocus(storedOf(target)) ?? FOCUS_CENTER)
       } finally {
         setBusy(false)
       }
     },
-    [vtuber.id, vtuber.background_focus, onSaved],
+    [target, vtuber.id, storedOf, onSaved],
   )
 
   const scheduleCommit = useCallback(
@@ -178,16 +209,15 @@ export default function BackgroundFocusEditor({ vtuber, src, onSaved, onPill }: 
     const h = r.height || 1
     const k = nat ? coverScale(nat, { w, h }) : 1
     const base = clampFocus(focus)
+    // ⚠️ 媒体原始尺寸**量不到**时按"正好铺满"算（`videoWidth` 在元数据之前是 0、图也可能还没 load 完）：
+    //    0 会让 `imgW` 变 0 ⇒ 分母退化成框宽 ⇒ 拖拽方向**反了**，而且是静默的。
+    const natW = nat && nat.w > 0 ? nat.w : w
+    const natH = nat && nat.h > 0 ? nat.h : h
     dragRef.current = {
-      px: e.clientX,
-      py: e.clientY,
-      w,
-      h,
-      imgW: (nat?.w ?? w) * k,
-      imgH: (nat?.h ?? h) * k,
-      base,
-      armed: false,
-      last: base,
+      px: e.clientX, py: e.clientY, w, h,
+      imgW: natW * k,
+      imgH: natH * k,
+      base, armed: false, last: base,
     }
     try {
       e.currentTarget.setPointerCapture(e.pointerId)
@@ -226,7 +256,7 @@ export default function BackgroundFocusEditor({ vtuber, src, onSaved, onPill }: 
     if (d?.armed) void commit(d.last)
   }
 
-  /** 方向键：与拖拽**同一个模型**（箭头推的是**图**）—— `aria-label` 里写明了。 */
+  /** 方向键：与拖拽**同一个模型**（箭头推的是**画面**）—— `aria-label` 里写明了。 */
   const nudge = (dx: number, dy: number) => {
     const base = clampFocus(focus)
     scheduleCommit({ scale: base.scale, x: base.x - dx, y: base.y - dy })
@@ -235,16 +265,26 @@ export default function BackgroundFocusEditor({ vtuber, src, onSaved, onPill }: 
   const reset = async () => {
     setFocus(FOCUS_CENTER)
     try {
-      onSaved(await api.clearBackgroundFocus(vtuber.id))
-      onPill?.('已重置取景')
+      const updated = target === 'video'
+        ? await api.clearBackgroundVideoFocus(vtuber.id)
+        : await api.clearBackgroundFocus(vtuber.id)
+      onSaved(updated)
+      onPill?.(target === 'video' ? '已重置视频取景' : '已重置取景')
     } catch (e) {
       toast.error(`重置取景失败：${(e as Error).message}`)
-      setFocus(parseBackgroundFocus(vtuber.background_focus) ?? FOCUS_CENTER)
+      setFocus(parseBackgroundFocus(storedOf(target)) ?? FOCUS_CENTER)
     }
   }
 
-  const style = focusStyle(focus)
   const zoomed = focus.scale > FOCUS_MIN_SCALE
+  const storedActive = storedOf(target)
+  /** 没在调的那一份按**库里的值**画（切过去之前它不该跟着本地这份动）。 */
+  const idleImageStyle = focusStyle(
+    target === 'image' ? focus : (parseBackgroundFocus(vtuber.background_focus) ?? null),
+  )
+  const videoStyle = focusObjectStyle(
+    target === 'video' ? focus : (parseBackgroundFocus(vtuber.background_video_focus) ?? null),
+  )
 
   return (
     <div
@@ -253,7 +293,11 @@ export default function BackgroundFocusEditor({ vtuber, src, onSaved, onPill }: 
       data-testid="focus-box"
       role="group"
       tabIndex={0}
-      aria-label="背景取景：拖动平移、滚轮缩放（方向键微调）"
+      aria-label={
+        target === 'video'
+          ? '背景视频取景：拖动平移、滚轮缩放（方向键微调）'
+          : '背景图取景：拖动平移、滚轮缩放（方向键微调）'
+      }
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -272,20 +316,61 @@ export default function BackgroundFocusEditor({ vtuber, src, onSaved, onPill }: 
         nudge(hit[0], hit[1])
       }}
     >
+      {/* 图始终垫在下面（它就是视频的 poster 与降级兜底，与真实图层同构） */}
       <div
         className="vd-bg-focus"
         data-testid="focus-img"
-        style={{ backgroundImage: `url(${src})`, ...style }}
+        style={{ backgroundImage: `url(${src})`, ...idleImageStyle }}
       />
-      {/* 重置钮**在框内**（用户撤掉滑杆后它从按钮排搬进来）：
-          ⚠️ 必须自己吃掉 pointerdown，否则按一下会顺手起一次拖拽 */}
+      {/* ★ 调视频时预览用**视频首帧**：`#t=` 让浏览器停在第一帧、**不 autoplay**；
+          `loadeddata` 之前不显示（先看图），与真实投放的 `data-ready` 同一个思路。
+          ⚠️ 调图片时**整个收起** —— 真实投放里视频盖住图，不收起来就没法看你在调什么。 */}
+      {target === 'video' && videoSrc && (
+        <video
+          className="vd-bg-focus vd-bg-video"
+          data-testid="focus-video"
+          data-ready={frameReady ? '1' : '0'}
+          src={`${videoSrc}#t=${FIRST_FRAME_T}`}
+          style={videoStyle}
+          preload="auto"
+          muted
+          playsInline
+          onLoadedMetadata={(e) => {
+            const el = e.currentTarget
+            setNat({ w: el.videoWidth, h: el.videoHeight })
+          }}
+          onLoadedData={(e) => {
+            // 兜底：某些内核不会因为 `#t=` 就停住，显式对齐一次并确保是暂停的
+            const el = e.currentTarget
+            try { el.currentTime = FIRST_FRAME_T } catch { /* 内核不给设就算了 */ }
+            el.pause()
+            setFrameReady(true)
+          }}
+          onError={() => setFrameReady(false)}
+        />
+      )}
+      {/* 左上角：切换"现在调的是谁"（只有两样都有才需要切） */}
+      {hasVideo && (
+        <Button
+          variant="outline"
+          size="sm"
+          className="vd-focus-switch"
+          title={target === 'image' ? '现在调的是**图片**取景，点它改调视频' : '现在调的是**视频**取景，点它改调图片'}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={() => setTarget((t) => (t === 'image' ? 'video' : 'image'))}
+        >
+          {target === 'image' ? <ImageIcon className="size-4" /> : <Film className="size-4" />}
+          {target === 'image' ? '图片取景' : '视频取景'}
+        </Button>
+      )}
+      {/* 右上角：重置（调的是当前那一份） */}
       <Button
         variant="outline"
         size="sm"
         className="vd-focus-reset"
-        title="重置取景"
-        aria-label="重置取景"
-        disabled={!vtuber.background_focus || busy}
+        title={target === 'video' ? '重置视频取景' : '重置取景'}
+        aria-label={target === 'video' ? '重置视频取景' : '重置取景'}
+        disabled={!storedActive || busy}
         onPointerDown={(e) => e.stopPropagation()}
         onClick={() => void reset()}
       >
@@ -293,8 +378,8 @@ export default function BackgroundFocusEditor({ vtuber, src, onSaved, onPill }: 
       </Button>
       {/* 读数不是滑杆：只在真放大时露出来 */}
       {zoomed && <span className="vd-focus-zoom">{Math.round(focus.scale * 100)}%</span>}
-      {/* 抓手光标只有鼠标用户看得见，键盘/触控用户看不出"这里能操作" ⇒ 没取景时给一句引导 */}
-      {!vtuber.background_focus && (
+      {/* 抓手光标只有鼠标用户看得见 ⇒ 没取景时给一句引导 */}
+      {!storedActive && (
         <span className="vd-focus-hint">拖动平移 · 滚轮缩放 · 方向键微调</span>
       )}
     </div>

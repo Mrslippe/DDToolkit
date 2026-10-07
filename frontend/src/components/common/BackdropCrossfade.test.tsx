@@ -183,18 +183,33 @@ describe('背景层：换图不闪白', () => {
     expect(video()!.dataset.ready, 'canplay 之后才显出来').toBe('1')
   })
 
-  it('★ 取景对视频同样生效，且走的是 `object-position` 那一套（不是 background-position）', async () => {
+  it('★ 两份取景各管各的：图层走 `focus`（background-position），视频走 `videoFocus`（object-position）', async () => {
+    await act(async () => {
+      root.render(
+        <BackdropCrossfade src="https://x/a.jpg" custom focus={{ x: 0.3, y: 0.35, scale: 2 }}
+                           videoSrc="/v/a.mp4" videoFocus={{ x: 0.8, y: 0.1, scale: 1.5 }} />,
+      )
+    })
+    const st = video()!.style
+    expect(st.objectPosition, '视频用**自己**那份（不是图的）').toBe('80% 10%')
+    expect(st.transform).toBe('scale(1.5)')
+    expect(st.transformOrigin, '支点与锚点同源').toBe('80% 10%')
+    const layer = byKind('first')[0]
+    expect(layer.style.backgroundPosition, '图层用图片那份').toBe('30% 35%')
+    expect(layer.style.transform).toBe('scale(2)')
+  })
+
+  it('★ 视频没有独立取景时**不回落**到图片那份（回落会让"重置视频取景"看起来没生效）', async () => {
     await act(async () => {
       root.render(
         <BackdropCrossfade src="https://x/a.jpg" custom focus={{ x: 0.3, y: 0.35, scale: 2 }}
                            videoSrc="/v/a.mp4" />,
       )
     })
-    const st = video()!.style
-    expect(st.objectPosition).toBe('30% 35%')
-    expect(st.transform).toBe('scale(2)')
-    expect(st.transformOrigin, '支点与锚点同源').toBe('30% 35%')
-    // 图层自己那份走 background-position —— 两者都在，别互相顶掉
+    // 不给内联值 ⇒ 用样式表里的 `object-position: center`（居中），而不是借图片的 30%/35%
+    expect(video()!.style.objectPosition, '不借图片的锚点').toBe('')
+    expect(video()!.style.transform, '也不借图片的 2 倍').toBe('')
+    // 正对照：图层自己那份**确实**是 30%/35% —— 否则上面两条"空"说明不了任何事
     expect(byKind('first')[0].style.backgroundPosition).toBe('30% 35%')
   })
 
