@@ -95,12 +95,13 @@ describe('单推：全收起后的延时淡出', () => {
     // ⚠️ 第五版（devlog/435）：让位/回来带上**位移**（下滑退场 / 上滑进场），过渡时长与
     //    滑动距离是两个 CSS 旋钮（--solo-hide-ms / --solo-hide-shift）。
     const idle = P(".app-shell[data-solo='1'][data-idle] .posts-panel[data-view='cards'] > :not(.hero-backdrop)")
-    expect(idle, '渐隐').toMatch(/opacity:\s*0/)
+    expect(idle, '★渐隐的**深浅**是旋钮（此前写死 0 ⇒ 改 --solo-dim 毫无效果，devlog/443）')
+      .toMatch(/opacity:\s*var\(--solo-dim\)/)
     expect(idle, '★下滑退场（margin-top：hero 的入场动画是 transform，会抢掉它）').toMatch(/margin-top:\s*var\(--solo-hide-shift\)/)
     expect(idle, '过渡时长是旋钮').toMatch(/transition:[^;]*var\(--solo-hide-ms\)/)
     // ⚠️⚠️ 必须 `!important`：页面级容器挂着 `rise-in-page` 入场动画，
     // 而 `animation` 的优先级**高于**普通声明 ⇒ 不加就是"位移生效、渐隐不生效"（`devlog/438`）
-    expect(idle, '要压过入场动画').toMatch(/opacity:\s*0\s*!important/)
+    expect(idle, '要压过入场动画').toMatch(/opacity:\s*var\(--solo-dim\)\s*!important/)
     expect(idle).toMatch(/margin-top:[^;]*!important/)
     // 回来那条（默认态）：上滑 + 渐显，同样要压过动画
     const back = P(".app-shell[data-solo='1'] .posts-panel[data-view='cards'] > :not(.hero-backdrop)")
@@ -123,6 +124,11 @@ describe('单推：全收起后的延时淡出', () => {
     const root = layout.slice(layout.indexOf(':root {'))
     expect(root.slice(0, root.indexOf('}')), '滑动距离旋钮').toMatch(/--solo-hide-shift:\s*\d+px/)
     expect(root.slice(0, root.indexOf('}')), '过渡时长旋钮').toMatch(/--solo-hide-ms:\s*\d+ms/)
+    // ★ 第三个旋钮：**淡出的深浅**（`devlog/443`）。它与上面两条不同 —— 上面两条一直有接线，
+    // `--solo-dim` 只在 `:root` 里定义、**没有任何规则引用** ⇒ 改它等于没改（真正生效的是写死的 0）。
+    // 所以这一组要**成对**断言：旋钮有定义 ＋ 让位那条真的用它（后者在上面那条用例里）。
+    expect(root.slice(0, root.indexOf('}')), '不透明度旋钮（0 = 完全让出背景）')
+      .toMatch(/--solo-dim:\s*[\d.]+/)
   })
   it('★ 唤出的工具栏/顶栏必须压过**左栏与面板里的浮层**（关系式：层级 > `.view-toolbar`）', () => {
     const rail = bodyWith(layout, '.icon-rail', 'z-index')

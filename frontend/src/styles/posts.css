@@ -43,14 +43,15 @@
    ⚠️ 只在 **cards 视图**：别的视图没有 hero，内容淡掉就只剩一张背景，没有意义（`data-view` 由
    `PostsPage` 挂上）。
    ⚠️ 背景层本身**不淡**（`.hero-backdrop` 被排除）—— 要的正是"背景图完全显现"。
-   ⚠️ 唤出顶栏/工具栏时**立刻恢复**：那两条贴边窄带与被唤出的元素都在 `.app-shell` 下，
-   用 `~` 兄弟选择器把两个变量拨回原值（`transition-delay: 0` ⇒ 不跟着延时）。 */
+   ⚠️ ~~唤出时用 `~` 兄弟选择器把变量拨回原值~~ —— 那套"贴边窄带"已经撤掉（`devlog/433`），
+   现在**只有 `data-idle` 一个键**：唤出靠移动鼠标 ⇒ 闲置计时器本来就重置了，不需要额外规则。
+   本块的三个旋钮都在 `layout.css` 的 `:root`（`--solo-dim` / `--solo-hide-shift` / `--solo-hide-ms`）。 */
 /* 让位：**下滑 + 渐隐**（用户口径 2026-10-07，`devlog/435`）。
    ⚠️ 让位/回来**只由 `data-idle` 决定**（鼠标停一会儿 ⇒ 让位；一动 ⇒ 回来）。
    别再把它挂到 `data-peek` 上：那个属性在"贴边唤出两栏"时才有值，
    挂上去会让"停止不动"与"停在中间"分不开（`devlog/434` 就是这么把自动隐藏弄没的）。 */
 .app-shell[data-solo='1'][data-idle] .posts-panel[data-view='cards'] > :not(.hero-backdrop) {
-  opacity: 0 !important;
+  opacity: var(--solo-dim) !important;   /* 旋钮；此前写死 0，`--solo-dim` 改了不起作用（devlog/443） */
   margin-top: var(--solo-hide-shift) !important;
   transition: opacity var(--solo-hide-ms) var(--solo-ease, ease),
               margin-top var(--solo-hide-ms) var(--solo-ease, ease) !important;
