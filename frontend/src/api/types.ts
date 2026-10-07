@@ -49,6 +49,9 @@ export interface VTuber {
    */
   sign_override: string | null
   sign_source_account_id: number | null
+  /** 需求 4/5（f010）：**左栏自定义顺序**。`/vtuber/list` 就是按它（同序号退回 id）给的，
+   *  "自定义"那一档**原样用它**；其余五档是前端纯函数排序（`utils/vtuberSort.ts`）。 */
+  sort_order: number
   created_at: string | null
   updated_at: string | null
   accounts: Account[]

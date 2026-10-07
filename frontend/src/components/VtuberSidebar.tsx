@@ -13,6 +13,10 @@ import { mergeVtuberSnapshots } from '../utils/accountSnapshots'
 import { resolveAvatarSources } from '../utils/avatarSource'
 import { resolveSign } from '../utils/signSource'
 import { applyVtuberUpdate } from '../utils/vtuberList'
+import {
+  loadVtuberSortKey, saveVtuberSortKey, sortVtubers, VTUBER_SORT_KEYS, VTUBER_SORT_LABEL,
+  type VtuberSortKey,
+} from '../utils/vtuberSort'
 import { EVENTS, on } from '../utils/appEvents'
 import './../styles/layout.css'
 
@@ -27,16 +31,6 @@ function biliAccount(v: VTuber) {
 
 function isLive(v: VTuber): boolean {
   return (biliAccount(v)?.live_status ?? 0) === 1
-}
-
-/** 排序模式循环：默认（导入顺序）→ 粉丝数↓ → 名称拼音。
- *  本轮排序按钮从工具栏移除，逻辑保留——后续并入筛选下拉展开的浮窗。 */
-export const SORT_CYCLE = ['default', 'followers', 'name'] as const
-export type SortKey = (typeof SORT_CYCLE)[number]
-export const SORT_LABEL: Record<SortKey, string> = {
-  default: '默认',
-  followers: '粉丝数',
-  name: '名称',
 }
 
 /**
@@ -56,8 +50,12 @@ export default function VtuberSidebar() {
   const [filters, setFilters] = useState<FilterState>(EMPTY_FILTERS)
   const [filterOpen, setFilterOpen] = useState(false)
   const filterWrapRef = useRef<HTMLDivElement>(null)
-  // 排序逻辑保留（后续接入筛选浮窗）；当前恒为默认顺序
-  const [sortKey] = useState<SortKey>('default')
+  // 排序（需求 5，`devlog/414`）：六档，落在筛选浮窗里；偏好与 `playerPrefs` 同套路走 localStorage
+  const [sortKey, setSortKey] = useState<VtuberSortKey>(() => loadVtuberSortKey())
+  const pickSort = useCallback((k: VtuberSortKey) => {
+    setSortKey(k)
+    saveVtuberSortKey(k)
+  }, [])
   const [addOpen, setAddOpen] = useState(false)
   const [batchOpen, setBatchOpen] = useState(false)
 
@@ -144,14 +142,9 @@ export default function VtuberSidebar() {
           (biliAccount(v)?.sign ?? '').toLowerCase().includes(kw),
       )
     }
-    if (sortKey === 'followers') {
-      list = [...list].sort(
-        (a, b) => (biliAccount(b)?.followers_count ?? -1) - (biliAccount(a)?.followers_count ?? -1),
-      )
-    } else if (sortKey === 'name') {
-      list = [...list].sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'))
-    }
-    return list
+    // ⚠️ 排序在**筛选之后**做（顺序不能反：`custom` 是"后端给的顺序原样"，
+    //    先排会把它按别的键打乱；而 `default`/`name` 等本来就与筛选无关）
+    return sortVtubers(list, sortKey)
   }, [vtubers, query, filters, sortKey])
 
   // 筛选弹窗选项：平台 / 企划从已载数据动态提取（企划剔除空值）
@@ -163,8 +156,9 @@ export default function VtuberSidebar() {
     () => [...new Set(vtubers.map((v) => v.faction).filter((f): f is string => !!f))],
     [vtubers],
   )
-  const filterActive =
-    filters.live.length > 0 || filters.platform.length > 0 || filters.faction.length > 0
+  const filterCount =
+    filters.live.length + filters.platform.length + filters.faction.length
+  const filterActive = filterCount > 0
 
   // 组内多选切换（即时生效，无应用钮）
   const toggleFilter = useCallback((group: keyof FilterState, value: string) => {
@@ -250,10 +244,10 @@ export default function VtuberSidebar() {
             shape="text"
             active={filterActive}
             className="list-filter-btn"
-            title="组合筛选（状态 / 平台 / 企划）"
+            title="筛选（状态 / 平台 / 企划）与排序"
             onClick={() => setFilterOpen((o) => !o)}
           >
-            默认
+            {filterCount > 0 ? `筛选 · ${filterCount}` : VTUBER_SORT_LABEL[sortKey]}
             <svg
               className="pill-caret"
               viewBox="0 0 6.63232 6.63232"
@@ -331,6 +325,21 @@ export default function VtuberSidebar() {
                   </div>
                 </div>
               )}
+              <div className="pop-group">
+                <span className="pop-label">排序</span>
+                <div className="pop-chips">
+                  {VTUBER_SORT_KEYS.map((k) => (
+                    <button
+                      key={k}
+                      type="button"
+                      className={`filter-chip${sortKey === k ? ' on' : ''}`}
+                      onClick={() => pickSort(k)}
+                    >
+                      {VTUBER_SORT_LABEL[k]}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <div className="pop-actions">
                 <button type="button" onClick={() => setFilters(EMPTY_FILTERS)}>
                   重置
