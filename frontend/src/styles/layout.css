@@ -598,11 +598,22 @@ html.window-maximized body {
   --solo-dim: 0;                                   /* 让位后页面元素的不透明度（用户口径：**降到 0**） */
   --solo-hide-shift: 40px;   /* 让位时界面元素**下滑**多远（回来时上滑同样的距离） */
   --solo-hide-ms: 1000ms;     /* 让位/回来的过渡时长（用户要求"更明显一点"） */
+  /* 正常模式：左栏收起/展开**自己的**时长（用户口径 2026-10-07，`devlog/444`）。
+     它属于"两态切换"，不是单推那段编排的一部分；走 `--motion-scale` 慢放倍率
+     （与 `--motion-*` 一致 —— 调测页要能看清这一段）。 */
+  --sidebar-toggle-ms: calc(180ms * var(--motion-scale));
   /* ⚠️ “等多久才让位”**不在 CSS 里**：它是 `utils/soloPeek.ts` 的 `SOLO_IDLE_MS`
      （闲置计时器）—— 判定"鼠标停多久了"CSS 表达不了，两处各留一份就会叠成双倍等待。 */
 }
 
-.sidebar-shell,
+/* ⚠️ 左栏与另两层**不吃同一颗旋钮**（`devlog/444`，用户口径："正常模式下左栏收起的速度和
+   `--solo-step` 解耦"）：左栏在正常模式也要动（手动收起/展开）⇒ 吃它自己的
+   `--sidebar-toggle-ms`；工具栏/顶栏**只在单推里动** ⇒ 直接吃单推那一对。
+   单推第①段（左栏自己收起）再在下面钉回 `--solo-step` ⇒ 三段仍同一节奏。 */
+.sidebar-shell {
+  transition: margin-left var(--sidebar-toggle-ms) var(--ease-standard);
+}
+
 .icon-rail,
 .topbar {
   transition: margin-left var(--solo-step) var(--solo-ease),
@@ -620,6 +631,12 @@ html.window-maximized body {
 .app-shell[data-solo='1'] .sidebar-shell {
   margin-left: calc(-1 * var(--sidebar-width));
   transition-delay: 0ms;
+  /* ⚠️ **钉回单推的节奏**（用户 2026-10-07 选 A）：第①段仍按 `--solo-step`，
+     三段同一节奏；正常模式那颗 `--sidebar-toggle-ms` 只管正常模式。
+     ⚠️ 退出单推时 `data-solo` **已经摘掉**，那一下读的是基础规则 ⇒ 左栏回去时跟
+     `--sidebar-toggle-ms` 走（纯 CSS 钉不住，见 `devlog/444` 的取舍记录）。 */
+  transition-duration: var(--solo-step);
+  transition-timing-function: var(--solo-ease);
 }
 
 /* ② 接着左侧工具栏 */
