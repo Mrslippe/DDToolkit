@@ -1,0 +1,362 @@
+<!doctype html>
+<!--
+  背景随窗口宽度的漂移 —— 四栏对比示例稿（2026-10-07，配合 devlog/419 之后的那次决策）
+
+  ⚠️ 规矩（docs/README.md §design/）：示例稿一律放 docs/design/<主题>/<名字>.html，
+     不参与构建、不许被 src/ 引用。这份是**独立页面**，双击即开，无依赖、无网络。
+  ⚠️ 换算与真机一致：面板 = 窗口宽度 − 左栏。两张复现截图的面板 ≈ 716×750 与 1336×750。
+     页面里所有几何按**模拟尺寸**算，再乘一个**恒定**的显示比例 k=0.32
+     ⇒ 拖动宽度滑杆 = 真机上拖窗口宽度（面板变宽，其余 1:1）。
+  ⚠️ 「现状」栏跑的是应用现在的**真公式**（cover + 居中 + 溢出百分比平移 + 绕中心 scale），
+     它那一组存储值是在 716 这一档反解出来的 ⇒ 换宽度就漂，这正是要复现的现象。
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>背景随窗口宽度的漂移 · 四栏对比</title>
+<style>
+  :root{
+    --ink:#1b2430; --ink-sub:#5b6b80; --line:#d8e0ea; --card:#fff; --bg:#eef2f7;
+    --accent:#fc7079; --good:#2f9e6b; --warn:#d9822b;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:18px 20px 40px;background:var(--bg);color:var(--ink);
+       font:13px/1.6 "Microsoft YaHei UI","PingFang SC","Segoe UI",system-ui,sans-serif}
+  h1{margin:0 0 4px;font-size:17px}
+  h2{margin:0;font-size:13px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  code{background:#eef2f7;border-radius:3px;padding:0 4px;font-family:Consolas,monospace}
+  .lead{margin:0 0 12px;color:var(--ink-sub);max-width:1080px}
+  .lead b{color:var(--ink)}
+  .controls{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;
+            padding:10px 12px;background:var(--card);border:1px solid var(--line);border-radius:8px;margin-bottom:8px}
+  .controls label{display:flex;align-items:center;gap:6px;color:var(--ink-sub);white-space:nowrap}
+  .controls input[type=range]{width:140px;accent-color:var(--accent)}
+  .controls output{color:var(--ink);font-variant-numeric:tabular-nums;min-width:38px;text-align:right}
+  .presets{display:flex;gap:8px;align-items:center;color:var(--ink-sub);margin-bottom:14px;flex-wrap:wrap}
+  .presets button{font:inherit;padding:3px 9px;border:1px solid var(--line);background:var(--card);
+                  border-radius:999px;cursor:pointer;color:var(--ink)}
+  .presets button:hover{border-color:var(--accent);color:var(--accent)}
+  main{display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px 12px;
+        width:486px;box-shadow:0 1px 2px rgba(16,24,40,.05)}
+  .tag{font-size:11px;font-weight:400;color:#fff;background:var(--ink-sub);border-radius:999px;padding:1px 7px}
+  .tag.ok{background:var(--good)} .tag.warn{background:var(--warn)}
+  .vp{position:relative;height:250px;margin:8px 0;border:1px solid var(--line);border-radius:6px;
+      background:repeating-conic-gradient(#f6f8fb 0% 25%,#eef2f7 0% 50%) 0 0/16px 16px;overflow:hidden;display:flex}
+  /* 模拟面板：显示尺寸 = 模拟尺寸 × k（k 恒定）⇒ 拖宽度滑杆等价于拖真窗口 */
+  .panel{position:relative;flex:none;margin:auto;overflow:hidden;background:#0b1220}
+  .layer{position:absolute;display:block;object-fit:fill}
+  .veil{inset:0;background:rgba(255,255,255,.42)}                 /* 仿卡片页那层纱罩 */
+  .fill{filter:blur(22px) saturate(1.06);transform:scale(1.14)}   /* 花边：同图虚化放大，免得模糊露边 */
+  .panelgrid{position:absolute;inset:0;pointer-events:none;
+    background:linear-gradient(to right,rgba(27,36,48,.10) 1px,transparent 1px) 0 0/10% 100%,
+               linear-gradient(to bottom,rgba(27,36,48,.10) 1px,transparent 1px) 0 0/100% 10%}
+  .anchor{position:absolute;left:0;right:0;border-top:1px dashed rgba(252,112,121,.95);pointer-events:none}
+  .anchor i{position:absolute;left:4px;top:-15px;font-size:10px;font-style:normal;color:var(--accent);
+            background:rgba(255,255,255,.86);border-radius:3px;padding:0 3px}
+  /* 锚点**实际**落在哪一行：虚线 = 你设的目标（各栏同一条），实线 = 真的落点 */
+  .anchor.real{border-top-style:solid;border-top-width:2px;border-top-color:var(--good)}
+  .anchor.real i{left:auto;right:4px;color:#fff;background:var(--good)}
+  .anchor.real.drift{border-top-color:var(--warn)} .anchor.real.drift i{background:var(--warn)}
+  .hero{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+        gap:6px;color:#101828;text-align:center;padding:0 8px}
+  .hero .av{width:56px;height:56px;border-radius:50%;background:#fff;border:2px solid #fff;
+            box-shadow:0 2px 10px rgba(15,23,42,.18)}
+  .hero .nm{font-size:19px;font-weight:700;letter-spacing:.5px;text-shadow:0 1px 2px rgba(255,255,255,.7)}
+  .hero .sg{font-size:11px;color:#3d4b60;max-width:92%;text-shadow:0 1px 2px rgba(255,255,255,.7)}
+  .hero .pl{margin-top:2px;font-size:11px;background:var(--accent);color:#fff;border-radius:3px;padding:1px 8px}
+  .read{margin:0;padding:0;list-style:none;display:grid;grid-template-columns:1fr 1fr;gap:2px 12px;font-size:12px}
+  .read b{font-variant-numeric:tabular-nums}
+  .drift{color:var(--warn)} .stable{color:var(--good)}
+  .note{margin:6px 0 0;color:var(--ink-sub);font-size:12px;border-top:1px dashed var(--line);padding-top:6px}
+  .note b{color:var(--ink)}
+  .hint{color:var(--ink-sub);font-size:12px}
+</style>
+</head>
+<body>
+
+<h1>背景随窗口宽度的漂移 · 四栏对比</h1>
+<p class="lead">
+  面板 ≈ 窗口宽度 − 左栏；你那两张图的面板约 <b>716×750</b> 与 <b>1336×750</b>（高度没变，宽度变了 1.9 倍）。
+  拖下面的<b>面板宽度</b>滑杆，四栏一起变。看两件事：<b>缩放倍数</b>变不变、<b>锚点（脸）在屏幕上的行</b>漂不漂。
+  四栏用同一张图、同一个锚点，<b>只差缩放规则</b>；「现状」栏跑的是应用现在的真公式，它那组存储值是在 716 反解出来的。
+</p>
+
+<div class="controls">
+  <label>面板宽度 <input type="range" id="w" min="520" max="1400" step="1" value="716"><output id="wo">716</output>px</label>
+  <label>锚点 X <input type="range" id="fx" min="0" max="1" step="0.01" value="0.5"><output id="fxo">0.50</output></label>
+  <label>锚点 Y <input type="range" id="fy" min="0" max="1" step="0.01" value="0.35"><output id="fyo">0.35</output></label>
+  <label>A·缩放 <input type="range" id="sa" min="1" max="2.5" step="0.05" value="1"><output id="sao">1.00</output></label>
+  <label>B·封顶 <input type="range" id="cb" min="1" max="2" step="0.05" value="1.3"><output id="cbo">1.30</output></label>
+  <label><input type="checkbox" id="grid" checked> 网格与锚点线</label>
+  <label><input type="checkbox" id="old" checked> 现状栏带"调过的取景"</label>
+  <label>换图：<input type="file" id="file" accept="image/*"></label>
+</div>
+<div class="presets">
+  预设：
+  <button data-w="558">558（1100 窗口的默认档）</button>
+  <button data-w="716">716（截图 1）</button>
+  <button data-w="958">958</button>
+  <button data-w="1336">1336（截图 2）</button>
+  <span class="hint">显示比例固定 k=0.32（只影响这里画多大，不影响结论）；"相对 716"那一行是漂移量。</span>
+</div>
+
+<main id="cards"></main>
+
+<script>
+/* ================= 常量 ================= */
+const SIM_H = 750;        // 面板高度（真机上 ≈ 窗口高度）
+const K = 0.32;           // 恒定显示比例：拖宽度滑杆 = 真机上拖窗口宽度
+const REF_W = 716;        // "参照档"：现状栏那组存储值就是按这一档反解的
+const OLD_SCALE = 1.3;    // 现状栏的缩放（旧口径下必须 >1 才谈得上平移，这就是那个"自动抬到 120%"的由来）
+
+/* ================= 四种缩放规则 =================
+ * 全部在**图片坐标**里换算：
+ *   k    = 缩放倍数（1 图片像素 → k 面板像素）
+ *   fx/fy= 取景锚点：0 = 贴图片左/上边缘，1 = 贴右/下边缘（与 CSS object-position 同向）
+ * 可见源区域 = 面板尺寸 ÷ k（占图片的百分比）。锚点屏幕位置 = 锚点落在面板的第几行。
+ */
+function coverOf(W, H, iw, ih) { return Math.max(W / iw, H / ih); }
+function lockOf(H, ih) { return H / ih; }
+
+/** A/B/C 共用的"居中 + 按锚点平移到边界" */
+function place(k, W, H, iw, ih, fx, fy) {
+  const imgW = iw * k, imgH = ih * k;
+  const overX = Math.max(0, imgW - W), overY = Math.max(0, imgH - H);
+  const left = (W - imgW) / 2 - overX * (fx - 0.5);
+  const top = (H - imgH) / 2 - overY * (fy - 0.5);
+  return { k, imgW, imgH, left, top, overX, overY };
+}
+
+function solve(kind, W, H, iw, ih, fx, fy, sA, capB, oldOn) {
+  const cover = coverOf(W, H, iw, ih), lockH = lockOf(H, ih);
+  let g;
+  if (kind === 'A') g = place(lockH * sA, W, H, iw, ih, fx, fy);
+  else if (kind === 'B') g = place(Math.min(cover, capB * lockH), W, H, iw, ih, fx, fy);
+  else if (kind === 'C') g = place(cover, W, H, iw, ih, fx, fy);
+  else {
+    /* 现状：background-size:cover + background-position:center，再对**容器盒子**
+       施加 translate((0.5-x)(s-1)·100%, …) scale(s)（绕盒子中心）—— 就是应用现在的公式。
+       ⚠️ 这组 (x, y) 是**在 REF_W 那一档反解**出来的：同一个数字换宽度就落到别处。 */
+    const b = place(cover, W, H, iw, ih, 0.5, 0.5);        // 居中铺满的那一层
+    if (!oldOn) {
+      g = b;
+    } else {
+      const s = OLD_SCALE;
+      const W0 = REF_W, c0 = coverOf(W0, H, iw, ih), b0 = place(c0, W0, H, iw, ih, 0.5, 0.5);
+      // 在 REF_W 下反解 dy：让图片上 fy 那一点正好落在面板的 fy 行
+      const baseY0 = b0.top + fy * b0.imgH;
+      const dyPx = fy * H - H / 2 - (baseY0 - H / 2) * s;
+      const dyPct = (dyPx / H) * 100;
+      const yOld = Math.min(1, Math.max(0, 0.5 - dyPct / ((s - 1) * 100)));
+      const dxPct = (0.5 - 0.5) * (s - 1) * 100;           // x 取 0.5：横向不额外推
+      const k = cover * s;
+      g = {
+        k, imgW: iw * k, imgH: ih * k,
+        left: W / 2 + (b.left - W / 2) * s + (dxPct / 100) * W,
+        top: H / 2 + (b.top - H / 2) * s + (dyPct / 100) * H,
+        stored: { x: 0.5, y: Number(yOld.toFixed(3)), scale: s },
+      };
+      g.overX = Math.max(0, g.imgW - W); g.overY = Math.max(0, g.imgH - H);
+    }
+  }
+  const cf = coverOf(W, H, iw, ih);
+  return Object.assign(g, {
+    cover, lockH,
+    fillLeft: (W - iw * cf) / 2, fillTop: (H - ih * cf) / 2, fillW: iw * cf, fillH: ih * cf,
+    coverFracW: Math.max(0, W - g.imgW) / W,                       // 两侧花边占宽度比例
+    visW: W / g.imgW, visH: H / g.imgH,                            // 可见源区域（占图片）
+    anchorX: (g.left + fx * g.imgW) / W,                           // 锚点落在面板的哪一列/行
+    anchorY: (g.top + fy * g.imgH) / H,
+  });
+}
+
+/* ================= 内置示意立绘（3:4，脸在 32% 高处，带标尺与角标） ================= */
+function demoImage() {
+  const w = 900, h = 1200;
+  const ruler = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9].map((p) => {
+    const y = Math.round(h * p);
+    return `<line x1="0" y1="${y}" x2="46" y2="${y}" stroke="#fff" stroke-opacity=".55" stroke-width="3"/>
+            <text x="54" y="${y + 10}" font-size="26" fill="#fff" fill-opacity=".8">${Math.round(p * 100)}%</text>`;
+  }).join('');
+  const corner = (t, x, y) => `<text x="${x}" y="${y}" font-size="52" font-weight="700" fill="#fff" fill-opacity=".5">${t}</text>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#bfe3ff"/><stop offset=".55" stop-color="#8ec8ef"/><stop offset="1" stop-color="#5b9bcd"/>
+    </linearGradient>
+    <radialGradient id="glow" cx=".5" cy=".3" r=".62">
+      <stop offset="0" stop-color="#fff" stop-opacity=".8"/><stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="${w}" height="${h}" fill="url(#sky)"/>
+  <rect width="${w}" height="${h}" fill="url(#glow)"/>
+  <g opacity=".92">
+    <ellipse cx="450" cy="700" rx="205" ry="330" fill="#f7e9ee"/>
+    <ellipse cx="450" cy="700" rx="205" ry="330" fill="none" stroke="#e3c6d1" stroke-width="5"/>
+    <circle cx="450" cy="384" r="122" fill="#fdf2f5" stroke="#e3c6d1" stroke-width="6"/>
+    <path d="M328 384 q122 -196 244 0 q-26 -132 -122 -132 q-96 0 -122 132z" fill="#cdd8f0"/>
+    <circle cx="408" cy="392" r="13" fill="#586a8d"/><circle cx="492" cy="392" r="13" fill="#586a8d"/>
+    <path d="M418 442 q32 26 64 0" stroke="#d98aa0" stroke-width="9" fill="none" stroke-linecap="round"/>
+    <path d="M300 620 q-70 150 -30 300" stroke="#f7e9ee" stroke-width="52" fill="none" stroke-linecap="round"/>
+    <path d="M600 620 q70 150 30 300" stroke="#f7e9ee" stroke-width="52" fill="none" stroke-linecap="round"/>
+    <path d="M370 1010 q80 60 160 0 l30 130 q-110 40 -220 0z" fill="#b9c6e6"/>
+  </g>
+  <g opacity=".55">${ruler}</g>
+  ${corner('A', 26, 74)}${corner('B', w - 68, 74)}${corner('C', 26, h - 34)}${corner('D', w - 68, h - 34)}
+  <text x="450" y="1174" text-anchor="middle" font-size="30" fill="#fff" fill-opacity=".85">示意立绘 900×1200（3:4）· 脸在 32% 高处</text>
+</svg>`;
+  return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+}
+
+/* ================= 四栏 ================= */
+const SCHEMES = [
+  { id: 'now', title: '现状 · cover + 居中 +「溢出百分比」取景', tag: '会漂', tagCls: 'warn',
+    note: '跑的是应用现在的真公式。存下来的是"溢出量的百分之几"，而<strong>溢出量本身随宽高比变</strong> ⇒ 同一组数字换宽度就落到别的行（归一化救不了这一层）。' },
+  { id: 'C', title: 'C · cover + 图片锚点', tag: '对齐守恒', tagCls: 'warn',
+    note: '保持铺满，只把取景换成<strong>图片锚点</strong>（= CSS <code>object-position</code> 语义，浏览器原生支持）⇒ 锚点永远落在你设的那一行；<strong>但缩放仍随宽度变</strong>。' },
+  { id: 'B', title: 'B · 封顶 cover + 花边', tag: '折中', tagCls: 'ok',
+    note: '放大幅度封顶到"铺满高度 × 封顶值"，再宽就上虚化花边 ⇒ 宽度带来的放大被砍掉大半；<strong>窄窗口时与现状完全一致</strong>（没到顶就不用花边）。' },
+  { id: 'A', title: 'A · 锁高度 + 花边', tag: '构图钉死', tagCls: 'ok',
+    note: '缩放<strong>只跟高度走</strong>（A·缩放滑杆），两侧用同图虚化铺满 ⇒ 人物大小与位置<strong>永不随宽度变</strong>。代价：宽窗口下两侧是副本，主图不再铺满。' },
+];
+
+const state = { W: 716, fx: 0.5, fy: 0.35, sA: 1, capB: 1.3, grid: true, oldOn: true, src: demoImage(), iw: 900, ih: 1200 };
+
+// 宽度可以从地址栏给：?w=1336（方便对着某一档讨论 / 截图）
+{
+  const q = new URLSearchParams(location.search);
+  const w = Number(q.get('w'));
+  if (Number.isFinite(w) && w >= 520 && w <= 1400) state.W = Math.round(w);
+}
+
+const cardsEl = document.getElementById('cards');
+const refs = {};
+for (const s of SCHEMES) {
+  const card = document.createElement('section');
+  card.className = 'card';
+  card.innerHTML = `
+    <h2>${s.title}<span class="tag ${s.tagCls}">${s.tag}</span></h2>
+    <div class="vp">
+      <div class="panel">
+        <img class="layer fill" alt="">
+        <img class="layer sharp" alt="">
+        <div class="layer veil"></div>
+        <div class="panelgrid"></div>
+        <div class="anchor"><i></i></div>
+        <div class="anchor real"><i></i></div>
+        <div class="hero">
+          <div class="av"></div>
+          <div class="nm">梨安不迷路</div>
+          <div class="sg">温柔的“高智商”美女。</div>
+          <div class="pl">B 站 · 21.9 万</div>
+        </div>
+      </div>
+    </div>
+    <ul class="read">
+      <li>缩放 <b class="r-k"></b></li>
+      <li>锚点屏幕位置 <b class="r-a"></b></li>
+      <li>可见源区域 <b class="r-v"></b></li>
+      <li>两侧花边 <b class="r-f"></b></li>
+      <li style="grid-column:1/-1">相对 716：<b class="r-d"></b> <span class="hint r-s"></span></li>
+    </ul>
+    <p class="note">${s.note}</p>`;
+  cardsEl.append(card);
+  refs[s.id] = {
+    panel: card.querySelector('.panel'),
+    fill: card.querySelector('.fill'),
+    sharp: card.querySelector('.sharp'),
+    grid: card.querySelector('.panelgrid'),
+    anchor: card.querySelector('.anchor'),
+    anchorLabel: card.querySelector('.anchor i'),
+    real: card.querySelector('.anchor.real'),
+    realLabel: card.querySelector('.anchor.real i'),
+    rk: card.querySelector('.r-k'), ra: card.querySelector('.r-a'), rv: card.querySelector('.r-v'),
+    rf: card.querySelector('.r-f'), rd: card.querySelector('.r-d'), rs: card.querySelector('.r-s'),
+  };
+}
+
+/* ================= 渲染 ================= */
+const pct = (v) => (v * 100).toFixed(0) + '%';
+const args = () => [state.W, SIM_H, state.iw, state.ih, state.fx, state.fy, state.sA, state.capB, state.oldOn];
+
+function render() {
+  const [W, H] = args();
+  const dispW = W * K, dispH = H * K;
+  for (const s of SCHEMES) {
+    const r = refs[s.id];
+    const g = solve(s.id, ...args());
+    const g0 = solve(s.id, REF_W, H, state.iw, state.ih, state.fx, state.fy, state.sA, state.capB, state.oldOn);
+
+    r.panel.style.width = dispW + 'px';
+    r.panel.style.height = dispH + 'px';
+    for (const el of [r.fill, r.sharp]) el.src = state.src;
+    // 锐利层
+    r.sharp.style.width = g.imgW * K + 'px';
+    r.sharp.style.height = g.imgH * K + 'px';
+    r.sharp.style.left = g.left * K + 'px';
+    r.sharp.style.top = g.top * K + 'px';
+    // 花边层：永远按"铺满面板"来，才不会在锐利层不够宽时露出棋盘格
+    r.fill.style.width = g.fillW * K + 'px';
+    r.fill.style.height = g.fillH * K + 'px';
+    r.fill.style.left = g.fillLeft * K + 'px';
+    r.fill.style.top = g.fillTop * K + 'px';
+    r.fill.style.display = g.coverFracW > 0.002 ? 'block' : 'none';
+
+    r.grid.style.display = state.grid ? 'block' : 'none';
+    r.anchor.style.display = r.real.style.display = state.grid ? 'block' : 'none';
+    r.anchor.style.top = state.fy * dispH + 'px';
+    r.anchorLabel.textContent = '目标 ' + pct(state.fy);
+    r.real.style.top = g.anchorY * dispH + 'px';
+    r.realLabel.textContent = '实际 ' + pct(g.anchorY);
+    r.real.className = 'anchor real' + (Math.abs(g.anchorY - state.fy) > 0.015 ? ' drift' : '');
+
+    const kRel = g.k / g.lockH, kRel0 = g0.k / g0.lockH;
+    const dK = kRel / kRel0 - 1, dA = (g.anchorY - g0.anchorY) * 100;
+    r.rk.textContent = kRel.toFixed(2) + '× 铺满高度';
+    r.ra.textContent = pct(g.anchorX) + ' / ' + pct(g.anchorY);
+    r.rv.textContent = pct(g.visW) + ' × ' + pct(g.visH) + ' 图片';
+    r.rf.textContent = pct(g.coverFracW) + (g.stored ? '' : '');
+    r.rd.textContent = '缩放 ' + (dK >= 0 ? '+' : '') + Math.round(dK * 100) + '% · 锚点 ' +
+                       (dA >= 0 ? '+' : '') + dA.toFixed(0) + ' pt';
+    const drift = Math.abs(dK) > 0.02 || Math.abs(dA) > 1.5;
+    r.rd.className = 'r-d ' + (drift ? 'drift' : 'stable');
+    r.rs.textContent = s.id === 'now' && g.stored
+      ? `（旧口径存的是 ${JSON.stringify(g.stored)} —— 只在 716 那一档对得上）` : '';
+    // 顶部读数
+  }
+  document.getElementById('wo').textContent = W;
+  document.getElementById('fxo').textContent = state.fx.toFixed(2);
+  document.getElementById('fyo').textContent = state.fy.toFixed(2);
+  document.getElementById('sao').textContent = state.sA.toFixed(2);
+  document.getElementById('cbo').textContent = state.capB.toFixed(2);
+}
+
+/* ================= 接线 ================= */
+const bind = (id, key) => {
+  const el = document.getElementById(id);
+  el.addEventListener('input', () => { state[key] = Number(el.value); render(); });
+  return el;
+};
+const wEl = bind('w', 'W');
+wEl.value = String(state.W);
+bind('fx', 'fx'); bind('fy', 'fy'); bind('sa', 'sA'); bind('cb', 'capB');
+document.getElementById('grid').addEventListener('change', (e) => { state.grid = e.target.checked; render(); });
+document.getElementById('old').addEventListener('change', (e) => { state.oldOn = e.target.checked; render(); });
+for (const b of document.querySelectorAll('.presets button')) {
+  b.addEventListener('click', () => { wEl.value = b.dataset.w; state.W = Number(b.dataset.w); render(); });
+}
+document.getElementById('file').addEventListener('change', (e) => {
+  const f = e.target.files?.[0];
+  if (!f) return;
+  const url = URL.createObjectURL(f);
+  const img = new Image();
+  img.onload = () => { state.src = url; state.iw = img.naturalWidth; state.ih = img.naturalHeight; render(); };
+  img.src = url;
+});
+
+render();
+</script>
+</body>
+</html>
