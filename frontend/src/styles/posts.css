@@ -71,6 +71,23 @@
               margin-top var(--solo-hide-ms) var(--solo-ease, ease) !important;
 }
 
+/* 背景**纱罩**跟着一起渐隐/渐显（用户口径 2026-10-07：「和界面元素的入退场匹配」，`devlog/440`）。
+   ⚠️ 这两条我在 `devlog/438` 里**当成死规则误删过**（当时以为纱罩整体撤掉了）——
+   结果界面元素让位了、纱罩还压在背景图上（用户立刻发现："背景遮罩又不会渐隐渐显了"）。
+   ⚠️ 匹配的含义：**同一个 `data-idle` 键 + 同一套时长与曲线**（`--solo-hide-ms` / `--solo-ease`）——
+   纱罩没有"位移"那一半（它是一层颜色，滑不动），只有透明度。
+   ⚠️ 不加 `!important`：`::after` 上没有别的动画在写 `opacity`（`backdrop-out` 动的是**图层**的
+   `opacity`，父层的透明度与它相乘，互不干扰）。 */
+.app-shell[data-solo='1'][data-idle] .posts-panel[data-view='cards'] .hero-backdrop::after {
+  opacity: 0;
+  transition: opacity var(--solo-hide-ms) var(--solo-ease, ease);
+}
+
+.app-shell[data-solo='1'] .posts-panel[data-view='cards'] .hero-backdrop::after {
+  opacity: 1;
+  transition: opacity var(--solo-hide-ms) var(--solo-ease, ease);
+}
+
 .hero-backdrop-video {
   position: absolute;
   inset: 0;

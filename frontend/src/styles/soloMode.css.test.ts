@@ -105,8 +105,9 @@ describe('单推：全收起后的延时淡出', () => {
     expect(back).toMatch(/margin-top:\s*0\s*!important/)
     expect(back).toMatch(/opacity:\s*1\s*!important/)
     // 纱罩 = 一层**平的 12% 白**（用户口径："还是加上遮罩吧，透明度改为 12%"，`devlog/438`）
-    const veil = posts.slice(posts.indexOf('.hero-backdrop::after {'))
-    expect(veil.slice(0, 220), '纱罩回来了，而且是 12%').toMatch(/rgba\(255,\s*255,\s*255,\s*0?\.12\)/)
+    // ⚠️ 行首锚定：`indexOf('.hero-backdrop::after {')` 会先命中 solo 那条（它也含这个子串）
+    const base = posts.slice(posts.indexOf("\n.hero-backdrop::after {"))
+    expect(base.slice(0, 220), '纱罩回来了，而且是 12%').toMatch(/rgba\(255,\s*255,\s*255,\s*0?\.12\)/)
   })
   it('★ 恢复只由 `data-idle` 决定：**不许**再把面板内容挂到 `data-peek` 上', () => {
     // 上一版（`devlog/434`）就是把它挂在 `data-peek` 上，而那个属性默认就有值 ⇒ 自动隐藏没了
@@ -141,4 +142,21 @@ describe('单推：全收起后的延时淡出', () => {
   it('★ 纱罩**只有一处真源**（`.custom` 那份单独的要删掉，否则改了一处没用）', () => {
     expect(posts, '⚠️ `.custom::after` 又是一份独立的纱罩 ⇒ 用户在自定义背景上看不到改动')
       .not.toContain('.hero-backdrop.custom::after')
+  })
+
+  it('★ 纱罩跟着界面元素一起渐隐/渐显，且**同一套时长与曲线**（形状：`--solo-hide-ms` + `--solo-ease`）', () => {
+    // ⚠️ 这两条在 `devlog/438` 被误删过（当时以为纱罩整体撤掉了）⇒ 元素让位了、纱罩还压着背景图
+    const veilIdle = P(".app-shell[data-solo='1'][data-idle] .posts-panel[data-view='cards'] .hero-backdrop::after")
+    const veilBack = P(".app-shell[data-solo='1'] .posts-panel[data-view='cards'] .hero-backdrop::after")
+    expect(veilIdle, '让位 ⇒ 纱罩渐隐到 0').toMatch(/opacity:\s*0/)
+    expect(veilBack, '回来 ⇒ 纱罩渐显回 1').toMatch(/opacity:\s*1/)
+    // ★"匹配"就是这两样：同一个旋钮 --solo-hide-ms、同一条曲线 --solo-ease
+    for (const [name, body] of [['让位', veilIdle], ['回来', veilBack]] as const) {
+      expect(body, `${name}那条要用同一套时长`).toMatch(/transition:[^;]*var\(--solo-hide-ms\)/)
+      expect(body, `${name}那条要用同一条曲线`).toMatch(/var\(--solo-ease/)
+    }
+    // 正对照：界面元素那条也是同一套（否则"匹配"无从谈起）
+    const content = P(".app-shell[data-solo='1'][data-idle] .posts-panel[data-view='cards'] > :not(.hero-backdrop)")
+    expect(content).toMatch(/transition:[^;]*var\(--solo-hide-ms\)/)
+    expect(content).toMatch(/var\(--solo-ease/)
   })})
