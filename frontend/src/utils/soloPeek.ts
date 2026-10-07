@@ -100,6 +100,15 @@ export function useSoloPeek(enabled: boolean): SoloPeek {
 export const SOLO_IDLE_MS = 2400
 
 /**
+ * 多小的移动**不算**"动"（px）。
+ *
+ * ⚠️ 少了它，"停着不动"很难触发：触控板上搭着一根手指、或高 DPI 鼠标的传感器抖动，
+ * 都会持续发 1px 级的 `mousemove` ⇒ 闲置计时被无限重置 ⇒
+ * **用户实测"让位没生效"**（`devlog/436`）。死区之后"真的挪了鼠标"才算数。
+ */
+export const SOLO_IDLE_EPS_PX = 6
+
+/**
  * 指针**静止**了多久（`devlog/434`）——"界面元素自动隐藏"的真正依据。
  *
  * ⚠️ 为什么不是"指针在中间那块"：用户要的是**自动**隐藏 —— 鼠标停一会儿就只剩背景图、
@@ -115,7 +124,15 @@ export function useSoloIdle(enabled: boolean, delayMs: number = SOLO_IDLE_MS): b
       return
     }
     let timer = window.setTimeout(() => setIdle(true), delayMs)
-    const onMove = () => {
+    // 死区：只有"真的挪了"才重置计时（触控板搭手指/传感器抖动会一直发 1px 级的 mousemove）
+    let lastX = Number.NaN
+    let lastY = Number.NaN
+    const onMove = (e: MouseEvent) => {
+      const moved = !Number.isFinite(lastX)
+        || Math.abs(e.clientX - lastX) + Math.abs(e.clientY - lastY) >= SOLO_IDLE_EPS_PX
+      lastX = e.clientX
+      lastY = e.clientY
+      if (!moved) return
       setIdle(false)
       window.clearTimeout(timer)
       timer = window.setTimeout(() => setIdle(true), delayMs)
