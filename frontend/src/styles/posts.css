@@ -37,7 +37,7 @@
   background-repeat: no-repeat;
 }
 
-/* ── 单推：全收起之后**延时淡出**，让背景图完全显现（需求 6 视觉版，`devlog/430`）────────
+/* ── 单推：全收起之后**延时淡出**，让背景图完全显现（需求 6 视觉版，`devlog/431`）────────
    用户口径：「全部收起之后如果当时位于 card 视图，那么一段时间之后就降低页面元素的透明度和
    背景图白色遮罩的透明度，让背景图完全显现出来」。
    ⚠️ 只在 **cards 视图**：别的视图没有 hero，内容淡掉就只剩一张背景，没有意义（`data-view` 由
@@ -49,7 +49,7 @@
 /* 让位：**下滑 + 渐隐**（用户口径 2026-10-07，`devlog/435`）。
    ⚠️ 让位/回来**只由 `data-idle` 决定**（鼠标停一会儿 ⇒ 让位；一动 ⇒ 回来）。
    别再把它挂到 `data-peek` 上：那个属性在"贴边唤出两栏"时才有值，
-   挂上去会让"停止不动"与"停在中间"分不开（`devlog/434` 就是这么把自动隐藏弄没的）。 */
+   挂上去会让"停止不动"与"停在中间"分不开（`devlog/435` 就是这么把自动隐藏弄没的）。 */
 .app-shell[data-solo='1'][data-idle] .posts-panel[data-view='cards'] > :not(.hero-backdrop) {
   opacity: var(--solo-dim) !important;   /* 旋钮；此前写死 0，`--solo-dim` 改了不起作用（devlog/443） */
   margin-top: var(--solo-hide-shift) !important;

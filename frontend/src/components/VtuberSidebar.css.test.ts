@@ -1,5 +1,5 @@
 /**
- * 左栏"收起 + 常态隐藏的拉手"的 **CSS 契约**（需求 6，`devlog/429`；视觉版 `devlog/430`）。
+ * 左栏"收起 + 常态隐藏的拉手"的 **CSS 契约**（需求 6，`devlog/429`；视觉版 `devlog/431`）。
  *
  * 为什么必须是 CSS 判据：**jsdom 没有布局也没有过渡** —— 把 `margin-left` 删掉、把拉手改成
  * `visibility: hidden`，组件用例照样全绿（`data-collapsed` 还在、按钮还在），

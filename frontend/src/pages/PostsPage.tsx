@@ -622,7 +622,7 @@ return (
             （`.page-title`）也在面板里、也压在背景图上，要跟着一起切（用户 2026-10-05）。
             CSS 侧统一按 `.posts-panel[data-ink=…]` 写。 */
          data-ink={inkTone ?? undefined}
-         /* 当前视图挂成属性：单推"全收起后延时淡出"只在 cards 视图生效（`devlog/430`） */
+         /* 当前视图挂成属性：单推"全收起后延时淡出"只在 cards 视图生效（`devlog/431`） */
          data-view={scene.view}>
       {/* 右栏永久背景：自定义背景(custom 全图清晰) 优先，否则头像铺底 + 渐变纱罩。
           ⚠️ 换图走 `BackdropCrossfade`（双层交叉淡入）—— 原先这里是单层 + `key={backdropSrc}`，

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * 闲置判定（`devlog/434` 起用它决定"界面元素让位"）：鼠标停一会儿 ⇒ `true`；一动 ⇒ `false` 并重新计时。
+ * 闲置判定（`devlog/435` 起用它决定"界面元素让位"）：鼠标停一会儿 ⇒ `true`；一动 ⇒ `false` 并重新计时。
  *
  * ⚠️ 这一条此前**没有判据**（只有 `peekZoneAt`/`useSoloPeek` 有），而用户实测"让位没生效" ——
  * 先把"它到底会不会变 true"钉住，再谈 CSS。
