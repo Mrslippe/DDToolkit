@@ -94,15 +94,19 @@ describe('单推：全收起后的延时淡出', () => {
     //    滑动距离是两个 CSS 旋钮（--solo-hide-ms / --solo-hide-shift）。
     const idle = P(".app-shell[data-solo='1'][data-idle] .posts-panel[data-view='cards'] > :not(.hero-backdrop)")
     expect(idle, '渐隐').toMatch(/opacity:\s*0/)
-    expect(idle, '★下滑退场（用 margin-top：hero 的入场动画是 transform，会压掉它）').toMatch(/margin-top:\s*var\(--solo-hide-shift\)/)
+    expect(idle, '★下滑退场（margin-top：hero 的入场动画是 transform，会抢掉它）').toMatch(/margin-top:\s*var\(--solo-hide-shift\)/)
     expect(idle, '过渡时长是旋钮').toMatch(/transition:[^;]*var\(--solo-hide-ms\)/)
-    // 回来那条（默认态）：上滑 + 渐显
+    // ⚠️⚠️ 必须 `!important`：页面级容器挂着 `rise-in-page` 入场动画，
+    // 而 `animation` 的优先级**高于**普通声明 ⇒ 不加就是"位移生效、渐隐不生效"（`devlog/438`）
+    expect(idle, '要压过入场动画').toMatch(/opacity:\s*0\s*!important/)
+    expect(idle).toMatch(/margin-top:[^;]*!important/)
+    // 回来那条（默认态）：上滑 + 渐显，同样要压过动画
     const back = P(".app-shell[data-solo='1'] .posts-panel[data-view='cards'] > :not(.hero-backdrop)")
-    expect(back).toMatch(/margin-top:\s*0/)
-    expect(back).toMatch(/opacity:\s*1/)
-    // 纱罩**已整体撤掉**（用户要求，devlog/437）⇒ 不该再有按状态开关它的规则
-    expect(posts, '纱罩撤掉了').toContain('.hero-backdrop::after {')
-    expect(posts.slice(posts.indexOf('.hero-backdrop::after {')).slice(0, 200)).toMatch(/display:\s*none/)
+    expect(back).toMatch(/margin-top:\s*0\s*!important/)
+    expect(back).toMatch(/opacity:\s*1\s*!important/)
+    // 纱罩 = 一层**平的 12% 白**（用户口径："还是加上遮罩吧，透明度改为 12%"，`devlog/438`）
+    const veil = posts.slice(posts.indexOf('.hero-backdrop::after {'))
+    expect(veil.slice(0, 220), '纱罩回来了，而且是 12%').toMatch(/rgba\(255,\s*255,\s*255,\s*0?\.12\)/)
   })
   it('★ 恢复只由 `data-idle` 决定：**不许**再把面板内容挂到 `data-peek` 上', () => {
     // 上一版（`devlog/434`）就是把它挂在 `data-peek` 上，而那个属性默认就有值 ⇒ 自动隐藏没了

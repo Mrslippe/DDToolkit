@@ -48,23 +48,24 @@
 /* 让位：**下滑 + 渐隐**（用户口径 2026-10-07，`devlog/435`）。
    ⚠️ 让位/回来**只由 `data-idle` 决定**（鼠标停一会儿 ⇒ 让位；一动 ⇒ 回来）。
    别再把它挂到 `data-peek` 上：那个属性在"贴边唤出两栏"时才有值，
-   挂上去会让"停止不动"与"停在中间"分不开（`devlog/434` 就是这么把自动隐藏弄没的）。 */
+   挂上去会让"停止不动"与"停在中间"分不开（`devlog/434` 就是这么把自动隐藏弄没的）。
+   ⚠️⚠️ 这两条**必须 `!important`**（`devlog/438`）：页面级容器都挂着 `rise-in-page` 入场动画，
+   而 CSS 里 **`animation` 的优先级高于普通声明** —— 不加就是"位移生效、渐隐不生效"
+   （`transform` 那半边上一版靠改用 `margin-top` 躲过去了，`opacity` 躲不过）。
+   `!important` 是**唯一**能压过动画的普通写法（规范里重要声明的优先级高于动画）。 */
 .app-shell[data-solo='1'][data-idle] .posts-panel[data-view='cards'] > :not(.hero-backdrop) {
-  opacity: 0;
-  /* ⚠️ 位移用 `margin-top` 而**不是** `transform`：hero/视图自带 `rise-in-page` 入场动画
-     （也是 transform），而 `animation` 的优先级**高于**普通声明 ⇒ 我们的位移会被它压掉
-     （用户报"工具栏动了、hero 没动"，`devlog/437`）。margin 不与动画抢同一个属性。 */
-  margin-top: var(--solo-hide-shift);
+  opacity: 0 !important;
+  margin-top: var(--solo-hide-shift) !important;
   transition: opacity var(--solo-hide-ms) var(--solo-ease, ease),
-              margin-top var(--solo-hide-ms) var(--solo-ease, ease);
+              margin-top var(--solo-hide-ms) var(--solo-ease, ease) !important;
 }
 
 /* 回来：**上滑 + 渐显**（同一个过渡，方向天然相反） */
 .app-shell[data-solo='1'] .posts-panel[data-view='cards'] > :not(.hero-backdrop) {
-  opacity: 1;
-  margin-top: 0;
+  opacity: 1 !important;
+  margin-top: 0 !important;
   transition: opacity var(--solo-hide-ms) var(--solo-ease, ease),
-              margin-top var(--solo-hide-ms) var(--solo-ease, ease);
+              margin-top var(--solo-hide-ms) var(--solo-ease, ease) !important;
 }
 
 .hero-backdrop-video {
@@ -97,29 +98,17 @@
   to   { opacity: 0; }
 }
 
-/* ⚠️ 白色纱罩**已按用户要求撤掉**（2026-10-07，`devlog/437`：「直接撤掉」）——
-   原来的 `linear-gradient` 四个 alpha（0.28 / 0.36 / 0.45 / 0.18，`.custom` 那组是另一半）
-   曾在 `devlog/355` 调过两轮；要恢复就把 `display: none` 换成那套 alpha。
-   ⚠️ **副作用（真机要看一眼）**：`utils/backdropTone.ts` 判"字色随底图明暗"时**假定有一层
-   α=0.25 的白纱罩** ⇒ 现在实际渲染没有它，深色底图上可能把字判成近黑字而不够清楚。
-   真机上若发现看不清，把那个假定值改成 0 即可（一处常量）。 */
+/* 白色纱罩 = **一层 12% 的白**（用户口径 2026-10-07：「还是加上遮罩吧，透明度改为 12%」，
+   `devlog/438`）。早先那版是四段 alpha 的渐变（0.28/0.36/0.45/0.18，`devlog/355` 调过两轮），
+   用户觉得丑 ⇒ 先撤掉、再改回这条**平的 12%**：比原来淡得多，又给深色底图留了一点底。
+   ⚠️ `utils/backdropTone.ts` 判"字色随底图明暗"时**假定有一层 α=0.25 的白纱罩** ——
+   现在是 0.12，若真机上发现深色底图上的字不够清楚，把那处常量改成 0.12。 */
 .hero-backdrop::after {
-  display: none;
-}
-.hero-backdrop-old-veil {
   content: '';
   position: absolute;
   inset: 0;
-  /* ⚠️ 这四个 alpha 是**唯一旋钮**（下面 `.custom` 是同一组的另一半）。
-     2026-10-05（用户）：「右栏背景上的白色遮罩再调低一点」+ 选「两层都调 / 降约一半」
-     ⇒ 每个 alpha 各乘 0.5（0.55→0.28、0.72→0.36、0.9→0.45、0.35→0.18）。
-     两层的**有效白度**（1−(1−线性)(1−径向)，上缘→下缘）：
-       头像铺底态（本块）：96%→82% 降为 **60%→48%**
-       自定义背景态（下一块）：68%→52% 降为 **44%→27%**
-     再调就照这个口径改这四个数，并在 devlog 里记一次。 */
-  background:
-    linear-gradient(180deg, rgba(255, 251, 251, 0.28), rgba(255, 238, 242, 0.36)),
-    radial-gradient(120% 90% at 50% 0%, rgba(255, 251, 251, 0.45), rgba(255, 251, 251, 0.18));
+  background: rgba(255, 255, 255, 0.12);
+  pointer-events: none;
 }
 
 /* 自定义背景：全图清晰显示（opacity 1），纱罩 ::after 保留保文字可读 */
