@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 /**
- * 背景取景的纯逻辑（需求 7，`devlog/418`）。
+ * 背景取景的纯逻辑（需求 7，`devlog/418`；方向口径是 V1b-2 定的，`devlog/419`）。
  *
- * 最值钱的两条判据：
+ * 最值钱的三条判据：
  * ① **坏 JSON ⇒ 原样铺**（不抛、不白屏）—— 这一格是能被手工改坏的；
- * ② **平移范围被缩放倍数卡住** ⇒ 在任何 x/y 上都**露不出边**（取景不是"把图挪开"）。
+ * ② **平移范围被缩放倍数卡住** ⇒ 在任何 x/y 上都**露不出边**（取景不是"把图挪开"）；
+ * ③ **方向与 `object-position` 同向**（x=1 ⇒ 看右边缘）—— 有了拖拽才有外部判据的一条。
  */
 import { describe, expect, it } from 'vitest'
 
@@ -65,9 +66,22 @@ describe('backgroundFocus', () => {
       }
       // 边界上：恰好顶到边（不是"永远差一点"，那等于没取到边）
       const edge = decompose(focusTransform({ x: 1, y: 0, scale })!)
-      expect(edge.dx).toBeCloseTo(limit, 6)
-      expect(edge.dy).toBeCloseTo(-limit, 6)
+      expect(edge.dx).toBeCloseTo(-limit, 6)
+      expect(edge.dy).toBeCloseTo(limit, 6)
     }
+  })
+
+  it('★ 方向：`x`/`y` 与 `object-position` 同向（x=1 ⇒ 看到图片右边缘）', () => {
+    // 验算模型（s=2、`transform-origin` 默认 center）：缩放后图占 [-W/2, 3W/2]，
+    // x=1 ⇒ dx=-50% ⇒ 挪成 [-W, W] ⇒ 窗口 [0,W] 落在缩放图的右半 = **原图右半** ✓
+    // ⚠️ V1b-1 是反的（往右拖反而看到左半张）—— 那批没有交互，符号没人能证伪。
+    const right = decompose(focusTransform({ x: 1, y: 0.5, scale: 2 })!)
+    const left = decompose(focusTransform({ x: 0, y: 0.5, scale: 2 })!)
+    expect(right.dx, 'x=1 要把图往**左**推（露右半张）').toBeLessThan(0)
+    expect(left.dx, 'x=0 要把图往**右**推（露左半张）').toBeGreaterThan(0)
+    // 上下同理：y=0 看上边缘 ⇒ 图往下推；y=1 看下边缘 ⇒ 图往上推
+    expect(decompose(focusTransform({ x: 0.5, y: 0, scale: 2 })!).dy).toBeGreaterThan(0)
+    expect(decompose(focusTransform({ x: 0.5, y: 1, scale: 2 })!).dy).toBeLessThan(0)
   })
 
   it('⚠️ 顺序必须是 `translate(...) scale(...)` —— 反过来同样的 x 会跑到不同地方', () => {

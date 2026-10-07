@@ -21,6 +21,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import FloatPill from './common/FloatPill'
+import BackgroundFocusEditor from './BackgroundFocusEditor'
 import { api, resolveAsset } from '../api/api'
 import type { Account, VTuber, VTuberAvatars } from '../api/types'
 import { PLATFORM_LABEL, platformEn } from '../utils/postTypes'
@@ -610,6 +611,15 @@ export default function VtuberSettingsDialog({
                   </Button>
                 </div>
               </div>
+              {/* 需求 7：取景（平移 + 缩放）—— 只有真有背景图时才谈得上取景 */}
+              {bg && vtuber && (
+                <BackgroundFocusEditor
+                  vtuber={vtuber}
+                  src={bg}
+                  onSaved={onSaved}
+                  onPill={onPill}
+                />
+              )}
               <input
                 ref={fileRef}
                 type="file"

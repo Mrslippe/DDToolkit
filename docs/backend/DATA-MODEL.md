@@ -65,7 +65,7 @@ erDiagram
 | `setting` | TEXT | 角色设定 |
 | `avatar` | TEXT | 默认头像 URL |
 | `background_path` | TEXT | 卡片页自定义背景，`static/custom_bg/` 相对路径（d002） |
-| `background_focus` | TEXT | 背景**取景**（需求 7，f011）：JSON `{"x":0..1,"y":0..1,"scale":1..3}`，NULL = 原样铺。⚠️ **归一化存**（比例不是像素）—— 窗口尺寸/DPR 变了取景不该跟着跑 |
+| `background_focus` | TEXT | 背景**取景**（需求 7，f011）：JSON `{"x":0..1,"y":0..1,"scale":1..3}`，NULL = 原样铺。⚠️ **归一化存**（比例不是像素）—— 窗口尺寸/DPR 变了取景不该跟着跑。★ **方向与 CSS `object-position` 同向**（V1b-2 定案，`devlog/419`）：`x=0` 看图片左边缘、`x=1` 看右边缘（`y` 同理，0 = 上边缘）；几何 `translate((0.5-x)·(s-1)·100%, …) scale(s)`，见 `frontend/src/utils/backgroundFocus.ts` |
 | `background_video_path` | TEXT | 背景**视频**（需求 9，f011）：`static/custom_bg/` 相对路径，NULL = 只有静态图。与 `background_path` 同款口径（**只取文件名**，不许越出目录） |
 | `notes` | TEXT | 备注 |
 | `sign_override` | TEXT | 手改的签名（**覆盖**，f004）。不写 `accounts.sign`；清空 = 撤销覆盖 |

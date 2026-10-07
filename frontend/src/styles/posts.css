@@ -2740,6 +2740,81 @@ img.hero-avatar {
   gap: 8px;
 }
 
+/* 背景取景（需求 7 / V1b-2）：预览面**本身就是操作面** —— 拖它 = 平移，滑杆 = 缩放。 */
+.vd-focus {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.vd-focus-stage {
+  position: relative;
+  height: 132px;
+  border-radius: 8px;
+  border: 1px solid var(--c-border);
+  background-color: var(--sel-bg-hover);
+  overflow: hidden;          /* 放大后溢出的部分必须裁掉，否则会盖到下面的控件上 */
+  cursor: grab;
+  touch-action: none;        /* ⚠️ 少了它：触屏/触控板拖拽会被当成滚动，浏览器直接掐断 pointer 序列 */
+  user-select: none;
+}
+
+.vd-focus-stage:active {
+  cursor: grabbing;
+}
+
+.vd-focus-stage:focus-visible {
+  outline: 2px solid var(--c-accent, #fc7079);
+  outline-offset: 2px;
+}
+
+.vd-focus-img {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+  /* ⚠️ 几何必须与卡片页的 `.hero-backdrop` 一致：`transform-origin` 保持默认的 center，
+     `translate` 的百分比按**未缩放**的盒子算。换了 origin，同一份取景就会整体偏。 */
+}
+
+.vd-focus-hint {
+  position: absolute;
+  left: 8px;
+  bottom: 6px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(15, 23, 42, 0.55);
+  color: #fff;
+  font-size: 11px;
+  pointer-events: none;
+}
+
+.vd-focus-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.vd-focus-label {
+  font-size: 12px;
+  color: var(--c-text-sub);
+}
+
+.vd-focus-range {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--c-accent, #fc7079);
+}
+
+.vd-focus-pct {
+  width: 40px;
+  text-align: right;
+  font-size: 12px;
+  color: var(--c-text-sub);
+  font-variant-numeric: tabular-nums;   /* 拖动时数字不跳 */
+}
+
 .vd-avatar-row {
   display: flex;
   align-items: center;

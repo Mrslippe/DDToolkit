@@ -9,10 +9,22 @@
  *
  * ```
  * 元素宽 W、缩放 s ⇒ 溢出总量 (s-1)·W、左右各一半 ⇒ 平移上限 (s-1)/2·W
- * 取 x∈[0,1]（0.5 = 居中）⇒ translateX = (x-0.5)·(s-1)·100%   ← 恰好在边界上
+ * 取 x∈[0,1]（0.5 = 居中）⇒ translateX = (0.5-x)·(s-1)·100%   ← 恰好在边界上
  * ```
  *
  * ⇒ **永远露不出边**（用户要的是"取景"，不是"把图挪开让底色露出来"）。
+ *
+ * ## 方向口径（V1b-2 定案，`devlog/419`）
+ *
+ * `x`/`y` = **取景点在图片上的归一化位置**，**与 CSS `object-position` 同向**：
+ * `x=0` 看到图片左边缘、`x=1` 看到右边缘（`y` 同理，0 = 上边缘）。
+ * 所以公式里的符号是 **`(0.5-x)`**：`x` 越大 ⇒ 图**往左**推 ⇒ 露出的正是右半张。
+ *
+ * 验算（s=2、x=1、`transform-origin` 默认 center）：缩放后图占 [-W/2, 3W/2]，
+ * `dx = -50%` ⇒ 挪成 [-W, W] ⇒ 窗口 [0,W] 里看到的正是缩放图的右半 = 原图右半 ✓。
+ *
+ * ⚠️ V1b-1 写的是 `(x-0.5)`（**反的**）：那一批只有"存/取/套用"，没有交互，
+ *    符号没人能证伪；V1b-2 一上手拖拽就露馅（往右拖反而看到左半张）。
  *
  * ## 口径
  *
@@ -90,7 +102,7 @@ export function focusTransform(f: BackgroundFocus | null): string | undefined {
   if (!f) return undefined
   const c = clampFocus(f)
   if (c.scale === 1) return undefined
-  const dx = (c.x - 0.5) * (c.scale - 1) * 100
-  const dy = (c.y - 0.5) * (c.scale - 1) * 100
+  const dx = (0.5 - c.x) * (c.scale - 1) * 100
+  const dy = (0.5 - c.y) * (c.scale - 1) * 100
   return `translate(${dx}%, ${dy}%) scale(${c.scale})`
 }

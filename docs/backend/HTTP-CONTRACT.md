@@ -79,7 +79,7 @@ retire-when: HTTP 层换框架，或路由整体重排
 | POST `/vtuber/notices/ack` | 记通知**已读**（落 `app_meta` 的 `notices.acked`，上限 50）；**幂等**；**两者都空 ⇒ 422**。单条用 `{id}`，**批量用 `{ids: [...]}`**（L1：面板的「一键已读」一次清「需要处理」整组）。⚠️ **状态类 id（`rate-limit`/`login-expired`/`progress-*`）一律拒收**（L4）：它们 id 稳定，一旦进已读集合，同一条状态**再次成立**时会被误判成已读（症状：再次限流却什么都不显示）。修的是"刷新/深休眠重建后完成报告复活" |
 | POST `/vtuber/{vtuber_id}/background` | 上传自定义背景（jpeg/png/webp/gif，≤10MB，否则 415/413）；**类型按文件头判、限额流式读取、临时文件原子 rename、提交成功后才删旧文件**（`services/vtuber_background.py`，M3b devlog/214）；时间戳后缀防缓存 |
 | DELETE `/vtuber/{vtuber_id}/background` | 清除背景回退头像铺底 |
-| PUT `/vtuber/{vtuber_id}/background-focus` | 保存背景**取景**（需求 7，f011）：`{x:0..1, y:0..1, scale:1..3}`，**归一化**存；越界 ⇒ 422 |
+| PUT `/vtuber/{vtuber_id}/background-focus` | 保存背景**取景**（需求 7，f011）：`{x:0..1, y:0..1, scale:1..3}`，**归一化**存；越界 ⇒ 422。★ 方向与 CSS `object-position` 同向（`x=1` ⇒ 看图片右边缘，`devlog/419`） |
 | DELETE `/vtuber/{vtuber_id}/background-focus` | 清除取景 ⇒ 原样铺满。⚠️ **不动背景图本身**（那是上面那条 DELETE 的事） |
 | DELETE `/vtuber/{vtuber_id}` | 解除订阅：`purge_vtuber()` 清 posts + 5 张子表 + 活动条目 + 曾用值 + **卡片布局（f006）**，再级联删 V+accounts；外键挡下 → 409 |
 
