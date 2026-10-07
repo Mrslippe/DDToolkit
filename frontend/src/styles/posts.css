@@ -48,11 +48,7 @@
 /* 让位：**下滑 + 渐隐**（用户口径 2026-10-07，`devlog/435`）。
    ⚠️ 让位/回来**只由 `data-idle` 决定**（鼠标停一会儿 ⇒ 让位；一动 ⇒ 回来）。
    别再把它挂到 `data-peek` 上：那个属性在"贴边唤出两栏"时才有值，
-   挂上去会让"停止不动"与"停在中间"分不开（`devlog/434` 就是这么把自动隐藏弄没的）。
-   ⚠️⚠️ 这两条**必须 `!important`**（`devlog/438`）：页面级容器都挂着 `rise-in-page` 入场动画，
-   而 CSS 里 **`animation` 的优先级高于普通声明** —— 不加就是"位移生效、渐隐不生效"
-   （`transform` 那半边上一版靠改用 `margin-top` 躲过去了，`opacity` 躲不过）。
-   `!important` 是**唯一**能压过动画的普通写法（规范里重要声明的优先级高于动画）。 */
+   挂上去会让"停止不动"与"停在中间"分不开（`devlog/434` 就是这么把自动隐藏弄没的）。 */
 .app-shell[data-solo='1'][data-idle] .posts-panel[data-view='cards'] > :not(.hero-backdrop) {
   opacity: 0 !important;
   margin-top: var(--solo-hide-shift) !important;
@@ -60,8 +56,15 @@
               margin-top var(--solo-hide-ms) var(--solo-ease, ease) !important;
 }
 
-/* 回来：**上滑 + 渐显**（同一个过渡，方向天然相反） */
+/* 回来：**上滑 + 渐显**（同一个过渡，方向天然相反）。
+   ⚠️⚠️ `animation-fill-mode: backwards` 是**真正的原因**那一条（`devlog/439`）：
+   `.view-body` 挂着 `animation: scene-in .22s … **both**` —— `both` 含 `forwards` 填充 ⇒
+   动画结束后**永久把 `opacity` / `transform` 钉在末帧值上**（不是优先级问题，是动画还占着属性）。
+   于是：位移靠 `margin-top` 躲过去了（动画不动 margin）✓，`opacity` 躲不过 ⇒ **永不渐隐**；
+   "回来"那条同样被钉 ⇒ 看不出位移。只有工具栏（无动画）从头就听话。
+   ⚠️ 别改成 `animation: none`：那会把"切视图的入场"一起干掉。 */
 .app-shell[data-solo='1'] .posts-panel[data-view='cards'] > :not(.hero-backdrop) {
+  animation-fill-mode: backwards !important;
   opacity: 1 !important;
   margin-top: 0 !important;
   transition: opacity var(--solo-hide-ms) var(--solo-ease, ease),
@@ -117,14 +120,11 @@
 }
 
 /* P8-1（2026-09-10 用户）：自定义背景是用户自己选的图，再压一层厚纱罩就发白看不清。
-   只在 .custom 下把 ::after 的 alpha 降到约一半（头像铺底态保持原值，避免正文吃字）。
-   ⚠️ 2026-10-05：这两块**又各降了一半**（用户"降约一半/两层都调"）——
-   头像铺底那块不再保持原值，两层的比例关系照旧（custom ≈ 默认的一半）。 */
-.hero-backdrop.custom::after {
-  background:
-    linear-gradient(180deg, rgba(255, 251, 251, 0.14), rgba(255, 238, 242, 0.24)),
-    radial-gradient(120% 90% at 50% 0%, rgba(255, 251, 251, 0.28), rgba(255, 251, 251, 0.06));
-}
+   ⚠️ 2026-10-07（`devlog/439`）：**这一条整段删掉了** —— 它是"纱罩有两份真源"的来源：
+   用户看到的自定义背景走的是**这一条**（旧的四段渐变），而我上一版把 12% 写在了基础规则上
+   ⇒ 用户那边一个像素都没变（"还是加上遮罩吧"改了等于没改）。现在**只有一条**：
+   基础 `.hero-backdrop::after { background: rgba(255,255,255,.12) }`，两种状态共用。
+   ⚠️ 别再为 `.custom` 加回单独一份 —— 要改就改那**一处**的 alpha。 */
 
 /* 页面工具条**右上组**（R45 起并入工具条的统一显隐；原「背景工具组」自带一套）。
    位置与 `.view-switch` **同轴**：条 top 6 + 高 46 ⇒ 中线 29；浮片 30 高 ⇒ top 14。

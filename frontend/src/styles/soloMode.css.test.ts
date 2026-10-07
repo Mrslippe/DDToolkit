@@ -125,4 +125,20 @@ describe('单推：全收起后的延时淡出', () => {
     const rail = L(".app-shell[data-solo='1'] .icon-rail")
     expect(rail, '不压在上面 ⇒ 用户看到的是左栏的白底（"左工具栏是一片白色"）').toMatch(/z-index:\s*\d/)
     expect(rail, '要能盖住同层的兄弟').toMatch(/position:\s*relative/)
+  })
+
+  it('★★ 真原因：`.view-body` 的 `scene-in` 是 `both` 填充 ⇒ 单推里必须改成 `backwards`', () => {
+    // `both` 含 `forwards` ⇒ 动画结束后**永久钉住** opacity/transform（不是优先级问题）
+    // ⇒ 位移靠 margin-top 躲过去了、opacity 躲不过（"永不渐隐"），"回来"那条同样被钉。
+    const fix = P(".app-shell[data-solo='1'] .posts-panel[data-view='cards'] > :not(.hero-backdrop)")
+    expect(fix, '填充方式改成 backwards（入场照播、播完不占属性）').toMatch(/animation-fill-mode:\s*backwards/)
+    expect(fix, '⚠️ 别改成 animation: none（会把切视图的入场一起干掉）').not.toMatch(/animation:\s*none/)
+    // 正对照：那条 both 的入场动画**确实**还在（否则上面这条没有意义）
+    expect(posts).toContain('animation: scene-in')
+    expect(posts).toMatch(/scene-in[^;]*both/)
+  })
+
+  it('★ 纱罩**只有一处真源**（`.custom` 那份单独的要删掉，否则改了一处没用）', () => {
+    expect(posts, '⚠️ `.custom::after` 又是一份独立的纱罩 ⇒ 用户在自定义背景上看不到改动')
+      .not.toContain('.hero-backdrop.custom::after')
   })})
