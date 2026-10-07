@@ -27,6 +27,9 @@ class VTuber(Base):
     background_path = Column(String, nullable=True)    # 卡片页自定义背景（static/ 相对路径）
     #: 背景**取景**（需求 7，f011）：JSON `{"x":0..1,"y":0..1,"scale":1..3}`，NULL = 原样铺。
     #: ⚠️ **归一化存**（比例，不是像素）—— 窗口尺寸/DPR 变了取景不该跟着跑。
+    #: ★ `x`/`y` 是**图片锚点**（V1b-3 定案，`devlog/420`）：图上那一点落在取景框的同一比例位置，
+    #:   与 CSS `object-position` 同向（0 = 看左/上边缘）。后端只存不算，几何在
+    #:   `frontend/src/utils/backgroundFocus.ts`。
     background_focus = Column(Text, nullable=True)
     #: 背景**视频**（需求 9，f011）：`static/custom_bg/` 相对路径，NULL = 只有静态图。
     #: 与 `background_path` 同款口径（只取文件名，不许越出目录）。

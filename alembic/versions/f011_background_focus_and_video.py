@@ -13,6 +13,8 @@ Create Date: 2026-10-07
 新增：
 - vtubers.background_focus       TEXT NULL —— 取景，JSON `{"x":0..1,"y":0..1,"scale":1..3}`
   ⚠️ **归一化存**（0..1 的比例，不是像素）：窗口尺寸/DPR 变了取景不该跟着跑。
+  ★ `x`/`y` 的**语义**后来定成"**图片锚点**"（V1b-3，`devlog/420`，与 CSS `object-position` 同向：
+  0 = 看左/上边缘）；形状没变（仍是 0..1 与 1..3），所以这一版迁移不用改。
 - vtubers.background_video_path  TEXT NULL —— `static/custom_bg/` 相对路径（与 `background_path`
   同款口径：**只取文件名**，不许越出目录 —— 见 `app/services/vtuber_background.py` 头部那三条不变量）
 """

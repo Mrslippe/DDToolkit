@@ -419,10 +419,14 @@ async def set_vtuber_background(
 
 
 class BackgroundFocusIn(BaseModel):
-    """背景取景（需求 7）：**归一化**比例 + 缩放倍数。
+    """背景取景（需求 7）：**归一化**的图片锚点 + 缩放倍数。
 
     三个字段都**有边界**（越界 Pydantic 直接 422）：越界值存进去只会让前端算出一张
     跑出视野的图 —— 那是"看起来坏了"，不是"报错了"，所以要在入口挡住。
+
+    ★ `x`/`y` 是**图片锚点**（V1b-3 定案，`devlog/420`）：图上那一点落在取景框的同一比例位置，
+    与 CSS `object-position` 同向（`x=0` 看左边缘、`x=1` 看右边缘）。`[0,1]` 这个范围同时保证
+    "任何 `scale ≥ 1` 都不露底色"。后端只存不算，几何在前端。
     """
     x: float = Field(ge=0, le=1)
     y: float = Field(ge=0, le=1)
@@ -432,9 +436,10 @@ class BackgroundFocusIn(BaseModel):
 @router.put("/vtuber/{vtuber_id}/background-focus", response_model=VTuberOut)
 def set_background_focus(vtuber_id: int, data: BackgroundFocusIn,
                          db: Session = Depends(get_db)):
-    """保存背景取景（平移 + 缩放；**每个 V 各一份**，需求 7）。
+    """保存背景取景（图片锚点 + 缩放；**每个 V 各一份**，需求 7）。
 
-    ⚠️ 存**归一化**值（0..1 的比例 + 倍数）而不是像素：窗口尺寸/DPR 变了取景不该跟着跑。
+    ⚠️ 存**归一化**值（0..1 的比例 + 倍数）而不是像素：窗口尺寸/DPR 变了取景不该跟着跑
+    （锚点语义下这条更强：锚点落在框的第 `x`/`y` 比例处，**与窗口宽度、与缩放都无关**）。
     存的是 **JSON 原文**（同 `profile_cards.config_json` 的口径，这一层不做二次建模）。
     """
     v = VTuberRepo(db).get(vtuber_id)

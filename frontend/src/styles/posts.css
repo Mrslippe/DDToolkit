@@ -2750,7 +2750,13 @@ img.hero-avatar {
 
 .vd-focus-stage {
   position: relative;
+  /* 高度写死、宽度由 `aspect-ratio` 推（比例从真背景层量来，见组件注释坑 2）——
+     ⚠️ 两件套缺一不可：`align-self` 让它**别被 flex 拉伸**（拉伸成整幅宽 = 比例失效、
+     预览替你撒谎），`width: auto` 才让 `aspect-ratio` 有决定权。 */
   height: 132px;
+  width: auto;
+  max-width: 100%;
+  align-self: flex-start;
   border-radius: 8px;
   border: 1px solid var(--c-border);
   background-color: var(--sel-bg-hover);
@@ -2774,8 +2780,8 @@ img.hero-avatar {
   inset: 0;
   background-size: cover;
   background-position: center;
-  /* ⚠️ 几何必须与卡片页的 `.hero-backdrop` 一致：`transform-origin` 保持默认的 center，
-     `translate` 的百分比按**未缩放**的盒子算。换了 origin，同一份取景就会整体偏。 */
+  /* ⚠️ 取景三件套由 `focusStyle()` 内联给（`background-position` + `transform` + `transform-origin`）：
+     位置决定"盖上哪一块"、`transform-origin` 必须与它同源，否则一放大锚点就漂（`devlog/420`）。 */
 }
 
 .vd-focus-hint {

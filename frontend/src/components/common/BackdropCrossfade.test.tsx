@@ -128,4 +128,31 @@ describe('背景层：换图不闪白', () => {
     expect(layers()).toHaveLength(2)         // a（淡出中）+ c
     expect(byKind('cur')[0].style.backgroundImage).toContain('c.jpg')
   })
+
+  it('★ 取景是**三件套**：位置 + 缩放 + 支点一起挂，支点与位置同源（devlog/420）', async () => {
+    await act(async () => {
+      root.render(<BackdropCrossfade src="https://x/a.jpg" custom focus={{ x: 0.3, y: 0.35, scale: 2 }} />)
+    })
+    const el = byKind('first')[0]
+    // ⚠️ 少了 transformOrigin ⇒ 缩放绕中心走，锚点当场漂 —— 所以这一条必须在这里也钉住
+    expect(el.style.backgroundPosition).toBe('30% 35%')
+    expect(el.style.transform).toBe('scale(2)')
+    expect(el.style.transformOrigin).toBe(el.style.backgroundPosition)
+  })
+
+  it('★ 正在淡出的那一层**跟自己的取景**（换 V 的 250ms 里旧图不许被新 V 的取景变换一下）', async () => {
+    await act(async () => {
+      root.render(<BackdropCrossfade src="https://x/a.jpg" custom focus={{ x: 0.1, y: 0.1, scale: 1 }} />)
+    })
+    await act(async () => {
+      root.render(<BackdropCrossfade src="https://x/b.jpg" custom focus={{ x: 0.9, y: 0.9, scale: 3 }} />)
+    })
+    await loadLatest()
+    const prev = byKind('prev')[0]
+    const cur = byKind('cur')[0]
+    expect(prev.style.backgroundPosition, '旧层还是旧取景').toBe('10% 10%')
+    expect(prev.style.transform, '旧层不该被放大 3 倍').toBe('')
+    expect(cur.style.backgroundPosition).toBe('90% 90%')
+    expect(cur.style.transform).toBe('scale(3)')
+  })
 })

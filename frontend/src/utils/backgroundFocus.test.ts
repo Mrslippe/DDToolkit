@@ -1,45 +1,138 @@
 // @vitest-environment jsdom
 /**
- * 背景取景的纯逻辑（需求 7，`devlog/418`；方向口径是 V1b-2 定的，`devlog/419`）。
+ * 背景取景的纯逻辑（需求 7；口径 2026-10-07 由用户选 C 定案，`devlog/420`）。
  *
- * 最值钱的三条判据：
+ * 值钱的判据（每条都能被改坏，所以每条都钉住）：
  * ① **坏 JSON ⇒ 原样铺**（不抛、不白屏）—— 这一格是能被手工改坏的；
- * ② **平移范围被缩放倍数卡住** ⇒ 在任何 x/y 上都**露不出边**（取景不是"把图挪开"）；
- * ③ **方向与 `object-position` 同向**（x=1 ⇒ 看右边缘）—— 有了拖拽才有外部判据的一条。
+ * ② ★**锚点守恒**：锚点永远落在取景框的第 `x`/`y` 比例处，**与窗口宽度无关、与缩放倍数无关**；
+ * ③ ★**任何 x/y 都不露边**（`scale ≥ 1`、`x,y∈[0,1]` ⇒ 图片始终盖住整框）；
+ * ④ ★**拖拽 1:1**：拖 100px 之后，图上那个点真的在屏幕上挪了 100px。
+ *
+ * ⚠️ ②④ 判的是 **CSS 语义的模型**（`cover` + `background-position` + 绕锚点的 `scale`），
+ *    不是我们自己的某个表达式 —— 所以它们能证伪"支点写错了/符号反了"，而不是自我循环。
+ *    这个模型也写在下面 `screenX/screenY` 里，②④ 都基于它。
  */
 import { describe, expect, it } from 'vitest'
 
 import {
-  clampFocus, FOCUS_CENTER, focusTransform, parseBackgroundFocus, serializeBackgroundFocus,
-  type BackgroundFocus,
+  clampFocus, coverScale, FOCUS_CENTER, focusStyle, panDelta, parseBackgroundFocus,
+  serializeBackgroundFocus, type BackgroundFocus,
 } from './backgroundFocus'
 
-/** 从 `translate(a%, b%) scale(s)` 里抠出三个数。 */
-function decompose(t: string) {
-  const m = /translate\((-?[\d.]+)%, (-?[\d.]+)%\) scale\(([\d.]+)\)/.exec(t)
-  expect(m, `transform 形状变了：${t}`).toBeTruthy()
-  return { dx: Number(m![1]), dy: Number(m![2]), s: Number(m![3]) }
+/** CSS 语义：`cover` + `background-position: x% y%` + 绕 `(x%, y%)` 的 `scale(s)`。 */
+function screenX(x: number, s: number, u: number, box: { w: number; h: number }, nat: { w: number; h: number }) {
+  const k = coverScale(nat, box)
+  return x * box.w + s * k * (u - x * nat.w)
+}
+function screenY(y: number, s: number, u: number, box: { w: number; h: number }, nat: { w: number; h: number }) {
+  const k = coverScale(nat, box)
+  return y * box.h + s * k * (u - y * nat.h)
+}
+/** 错的支点（绕中心缩放）—— 只用来证明判据②不是恒等式。 */
+function screenXCenterOrigin(x: number, s: number, u: number, box: { w: number; h: number }, nat: { w: number; h: number }) {
+  const k = coverScale(nat, box)
+  const px = x * (box.w - k * nat.w) + k * u
+  return box.w / 2 + s * (px - box.w / 2)
 }
 
+const NAT = { w: 900, h: 1200 }                       // 3:4 竖图
+const BOXES = [{ w: 716, h: 750 }, { w: 1336, h: 750 }, { w: 558, h: 750 }, { w: 900, h: 600 }]
+const XS = [0, 0.25, 0.5, 0.75, 1]
+const SS = [1, 1.2, 1.5, 2, 3]
+
 describe('backgroundFocus', () => {
-  it('看不出效果的取景 ⇒ **连 transform 都不生成**（恒等变换只会让 DOM 多一个属性）', () => {
-    expect(focusTransform(null)).toBeUndefined()
-    expect(focusTransform(FOCUS_CENTER)).toBeUndefined()
-    expect(focusTransform({ x: 1, y: 0, scale: 1 }), 'scale=1 时 x/y 无效果').toBeUndefined()
-    // ⚠️ 但"居中 + 放大"**不是**这种情况：translate 是 0，scale 本身有效果
-    expect(focusTransform({ x: 0.5, y: 0.5, scale: 2 })).toBe('translate(0%, 0%) scale(2)')
+  it('没有取景 ⇒ **一个属性都不生成**（样式表里的默认值就是"居中 + 不缩放"）', () => {
+    expect(focusStyle(null)).toEqual({})
   })
 
-  it('解析**不把"等价于居中"的值折成 null**（x/y 是用户存下来的意图，调大缩放时要还在）', () => {
-    expect(parseBackgroundFocus(serializeBackgroundFocus(FOCUS_CENTER))).toEqual(FOCUS_CENTER)
-    expect(parseBackgroundFocus('{"x":1}')).toEqual({ x: 1, y: 0.5, scale: 1 })
+  it('喂给 CSS 的百分比**限两位小数**（拖一下就是 28.57142857142857%，内联样式里难看且没法判）', () => {
+    expect(focusStyle({ x: 1 / 3, y: 0.5, scale: 1 }).backgroundPosition).toBe('33.33% 50%')
+    expect(focusStyle({ x: 0.123456, y: 0.987654, scale: 2 }).transformOrigin).toBe('12.35% 98.77%')
+    // 但**库里那份**不许被这个收敛动到（否则每次拖拽都会把取景改一点点）
+    expect(JSON.parse(serializeBackgroundFocus({ x: 1 / 3, y: 0.5, scale: 1 })).x).toBeCloseTo(1 / 3, 12)
   })
 
-  it('★ 坏 JSON / 缺字段 ⇒ 退回「原样铺」，**绝不抛**', () => {
+  it('★ 三件套：`scale>1` 时位置、缩放、支点**一起**出现，且支点与锚点**同源**', () => {
+    const st = focusStyle({ x: 0.3, y: 0.35, scale: 2 })
+    expect(st.backgroundPosition).toBe('30% 35%')
+    expect(st.transform).toBe('scale(2)')
+    // 这一条是"放大后锚点不漂"的全部秘密：支点必须是锚点，不是 50% 50%
+    expect(st.transformOrigin, '支点必须与 background-position 同源').toBe(st.backgroundPosition)
+  })
+
+  it('`scale=1` ⇒ 只给位置（**位置照给**：此时纵横仍可能有溢出，取景是有用的）', () => {
+    expect(focusStyle(FOCUS_CENTER)).toEqual({ backgroundPosition: '50% 50%' })
+    expect(focusStyle({ x: 1, y: 0, scale: 1 })).toEqual({ backgroundPosition: '100% 0%' })
+  })
+
+  it('★ 锚点守恒：同一组取景，换窗口宽度、换缩放倍数，锚点都落在**同一比例位置**', () => {
+    for (const x of XS) {
+      for (const y of XS) {
+        for (const s of SS) {
+          for (const box of BOXES) {
+            const ax = screenX(x, s, x * NAT.w, box, NAT) / box.w
+            const ay = screenY(y, s, y * NAT.h, box, NAT) / box.h
+            expect(ax, `x=${x} s=${s} box=${box.w}x${box.h} 锚点横向漂了`).toBeCloseTo(x, 9)
+            expect(ay, `y=${y} s=${s} box=${box.w}x${box.h} 锚点纵向漂了`).toBeCloseTo(y, 9)
+          }
+        }
+      }
+    }
+    // 反面：支点若用中心（写错成 50% 50%），锚点立刻漂 —— 证明上面那条不是恒等式
+    const bad = screenXCenterOrigin(0, 2, 0, { w: 1336, h: 750 }, NAT) / 1336
+    expect(bad, '绕中心缩放时 x=0 的锚点会漂到别处，所以②是有内容的').not.toBeCloseTo(0, 3)
+  })
+
+  it('★ 永不露边：`x,y∈[0,1]` + `scale ≥ 1` ⇒ 图片始终盖满取景框', () => {
+    for (const box of BOXES) {
+      for (const s of SS) {
+        for (const x of XS) {
+          // 左缘 ≤ 0 且 右缘 ≥ W
+          expect(screenX(x, s, 0, box, NAT), `x=${x} s=${s} 左边露了`).toBeLessThanOrEqual(1e-9)
+          expect(screenX(x, s, NAT.w, box, NAT), `x=${x} s=${s} 右边露了`).toBeGreaterThanOrEqual(box.w - 1e-9)
+        }
+        for (const y of XS) {
+          expect(screenY(y, s, 0, box, NAT)).toBeLessThanOrEqual(1e-9)
+          expect(screenY(y, s, NAT.h, box, NAT)).toBeGreaterThanOrEqual(box.h - 1e-9)
+        }
+      }
+    }
+  })
+
+  it('★ 拖拽 1:1：按 `panDelta` 挪完之后，图上那个点真的在屏幕上挪了那么多像素', () => {
+    const box = { w: 800, h: 750 }                    // 900 宽的竖图铺在 800 宽的框里 ⇒ 横向由宽度驱动
+    const k = coverScale(NAT, box)
+    const imgW = NAT.w * k, imgH = NAT.h * k
+    for (const s of [1.5, 2, 3]) {
+      const dPx = 60
+      const dx = panDelta(dPx, box.w, imgW, s)
+      const before = screenX(0.5, s, 0.5 * NAT.w, box, NAT)
+      const after = screenX(0.5 + dx, s, 0.5 * NAT.w, box, NAT)
+      expect(after - before, `s=${s} 拖 ${dPx}px 没挪够`).toBeCloseTo(dPx, 6)
+      expect(dx, '往右拖 ⇒ 图往右 ⇒ 锚点变小').toBeLessThan(0)
+      // 纵向同理
+      const dy = panDelta(dPx, box.h, imgH, s)
+      const by = screenY(0.5, s, 0.5 * NAT.h, box, NAT)
+      expect(screenY(0.5 + dy, s, 0.5 * NAT.h, box, NAT) - by).toBeCloseTo(dPx, 6)
+    }
+  })
+
+  it('这条轴正好铺满（没有余量）⇒ 挪不动，返回 0 而不是无穷跳变', () => {
+    const box = { w: 716, h: 750 }
+    const k = coverScale(NAT, box)
+    const imgW = NAT.w * k                          // 宽度驱动 ⇒ 横向恰好 = 框宽
+    expect(imgW).toBeCloseTo(box.w, 6)
+    expect(panDelta(50, box.w, imgW, 1), '横轴没余量').toBe(0)
+    // 余量只有 0.4px（浮点误差级别）也当没有 —— 否则 50/0.4 = 125，锚点一跳到底
+    expect(panDelta(50, box.w, imgW * 0.9995, 1), '余量不到 1px 也当没有').toBe(0)
+    // 但纵向照挪（竖图铺在横框里，纵向必然有溢出）
+    expect(panDelta(50, box.h, NAT.h * k, 1)).not.toBe(0)
+  })
+
+  it('坏 JSON / 缺字段 ⇒ 退回「原样铺」，**绝不抛**', () => {
     for (const bad of ['', '{', 'null', '[]', '"x"', '{"x":', 'not json at all', '42']) {
       expect(parseBackgroundFocus(bad), `坏值：${bad}`).toBeNull()
     }
-    // 缺字段：按居中补
     expect(parseBackgroundFocus('{"scale":2}')).toEqual({ x: 0.5, y: 0.5, scale: 2 })
     expect(parseBackgroundFocus(null)).toBeNull()
     expect(parseBackgroundFocus(undefined)).toBeNull()
@@ -54,42 +147,20 @@ describe('backgroundFocus', () => {
   it('越界一律**夹住**（交互里夹住比报错合适；后端那边是 422，两端各管一段）', () => {
     expect(clampFocus({ x: -1, y: 9, scale: 99 })).toEqual({ x: 0, y: 1, scale: 3 })
     expect(clampFocus({ x: 2, y: -2, scale: 0.1 })).toEqual({ x: 1, y: 0, scale: 1 })
+    // 夹住之后再套样式，仍然是合法 CSS（不许出现 -50% / 900%）
+    expect(focusStyle({ x: -1, y: 9, scale: 99 })).toEqual({
+      backgroundPosition: '0% 100%', transform: 'scale(3)', transformOrigin: '0% 100%',
+    })
   })
 
-  it('★ 平移范围被缩放倍数卡住 —— 任何取值都**露不出边**', () => {
-    for (const scale of [1.4, 2, 3]) {          // ⚠️ scale=1 不在此列：那时压根不生成 transform
-      const limit = (scale - 1) * 50          // 半溢出，换算成"占元素宽度的百分比"
-      for (const x of [0, 0.25, 0.5, 0.75, 1]) {
-        const { dx, dy } = decompose(focusTransform({ x, y: x, scale })!)
-        expect(Math.abs(dx), `scale=${scale} x=${x} 不该越过半边溢出`).toBeLessThanOrEqual(limit + 1e-9)
-        expect(Math.abs(dy)).toBeLessThanOrEqual(limit + 1e-9)
-      }
-      // 边界上：恰好顶到边（不是"永远差一点"，那等于没取到边）
-      const edge = decompose(focusTransform({ x: 1, y: 0, scale })!)
-      expect(edge.dx).toBeCloseTo(-limit, 6)
-      expect(edge.dy).toBeCloseTo(limit, 6)
-    }
+  it('`coverScale` 取两条轴的较大者（量不到图片尺寸时退回 1，不许 NaN 传下去）', () => {
+    expect(coverScale({ w: 900, h: 1200 }, { w: 716, h: 750 })).toBeCloseTo(716 / 900, 9)
+    expect(coverScale({ w: 900, h: 1200 }, { w: 400, h: 750 })).toBeCloseTo(750 / 1200, 9)
+    expect(coverScale({ w: 0, h: 0 }, { w: 400, h: 750 })).toBe(1)
   })
 
-  it('★ 方向：`x`/`y` 与 `object-position` 同向（x=1 ⇒ 看到图片右边缘）', () => {
-    // 验算模型（s=2、`transform-origin` 默认 center）：缩放后图占 [-W/2, 3W/2]，
-    // x=1 ⇒ dx=-50% ⇒ 挪成 [-W, W] ⇒ 窗口 [0,W] 落在缩放图的右半 = **原图右半** ✓
-    // ⚠️ V1b-1 是反的（往右拖反而看到左半张）—— 那批没有交互，符号没人能证伪。
-    const right = decompose(focusTransform({ x: 1, y: 0.5, scale: 2 })!)
-    const left = decompose(focusTransform({ x: 0, y: 0.5, scale: 2 })!)
-    expect(right.dx, 'x=1 要把图往**左**推（露右半张）').toBeLessThan(0)
-    expect(left.dx, 'x=0 要把图往**右**推（露左半张）').toBeGreaterThan(0)
-    // 上下同理：y=0 看上边缘 ⇒ 图往下推；y=1 看下边缘 ⇒ 图往上推
-    expect(decompose(focusTransform({ x: 0.5, y: 0, scale: 2 })!).dy).toBeGreaterThan(0)
-    expect(decompose(focusTransform({ x: 0.5, y: 1, scale: 2 })!).dy).toBeLessThan(0)
-  })
-
-  it('⚠️ 顺序必须是 `translate(...) scale(...)` —— 反过来同样的 x 会跑到不同地方', () => {
-    const t = focusTransform({ x: 1, y: 0.5, scale: 2 })!
-    expect(t.indexOf('translate')).toBeLessThan(t.indexOf('scale'))
-  })
-
-  it('scale=1 时**不生成**任何变换（此时本来就没有溢出可挪）', () => {
-    expect(focusTransform({ x: 0, y: 1, scale: 1 })).toBeUndefined()
+  it('缩放上下限与后端同值（1..3）', () => {
+    expect(clampFocus({ x: 0.5, y: 0.5, scale: 0 }).scale).toBe(1)
+    expect(clampFocus({ x: 0.5, y: 0.5, scale: 9 }).scale).toBe(3)
   })
 })

@@ -1,37 +1,41 @@
 /**
- * 背景取景（需求 7，2026-10-07，`devlog/418`）：把库里那串 JSON 变成一个 CSS `transform`。
+ * 背景取景（需求 7）：把库里那串 JSON 变成一组 CSS 属性。
  *
- * ## 为什么用 `transform` 而不是 `background-position`
+ * ## 口径（2026-10-07 用户看完 `docs/design/background-fit/resize-drift.html` 后定：选 C）
  *
- * 背景层是 `.hero-backdrop`（`background-size: cover` + `background-position: center`）。
- * 用 `background-position` 平移**得先让图比容器大**，而"大多少"取决于**图片宽高比**与容器宽高比 ——
- * CSS 里拿不到（`cover` 没法乘一个倍数）。`transform` 不用知道这些，而且平移范围**天然被缩放倍数卡住**：
+ * `x`/`y` = **图片锚点**：图片上 `(x, y)` 那一点，落在取景框的同一比例位置。
+ * 与 CSS `object-position` / `background-position` **完全同向**：`x=0` 看左边缘、`x=1` 看右边缘
+ * （`y` 同理，0 = 上边缘）。`scale` 是 1..3 的倍数，1 = 原样铺。
+ *
+ * ## 三件套必须一起出现（`focusStyle` 就是为此而存在）
  *
  * ```
- * 元素宽 W、缩放 s ⇒ 溢出总量 (s-1)·W、左右各一半 ⇒ 平移上限 (s-1)/2·W
- * 取 x∈[0,1]（0.5 = 居中）⇒ translateX = (0.5-x)·(s-1)·100%   ← 恰好在边界上
+ * background-size: cover          ← CSS 里写死（铺满，永不露底色）
+ * background-position: x% y%      ← 锚点：决定"盖上哪一块"
+ * transform: scale(s)             ← 缩放
+ * transform-origin: x% y%         ← ⚠️ 支点必须与锚点同源，否则一放大锚点就漂
  * ```
  *
- * ⇒ **永远露不出边**（用户要的是"取景"，不是"把图挪开让底色露出来"）。
+ * 为什么这样"对齐守恒"（把元素盒设成 `[0,W]×[0,H]`，`cover` 倍数 `k`，图片原始宽 `iw`，
+ * 图片坐标 `u` 处的像素在**未缩放**时画在 `x·(W − k·iw) + k·u`）：
  *
- * ## 方向口径（V1b-2 定案，`devlog/419`）
+ * ```
+ * screen_x(u) = x·W + s·k·(u − x·iw)
+ * ⇒ 取 u = x·iw（锚点本身）⇒ screen_x = x·W
+ * ```
  *
- * `x`/`y` = **取景点在图片上的归一化位置**，**与 CSS `object-position` 同向**：
- * `x=0` 看到图片左边缘、`x=1` 看到右边缘（`y` 同理，0 = 上边缘）。
- * 所以公式里的符号是 **`(0.5-x)`**：`x` 越大 ⇒ 图**往左**推 ⇒ 露出的正是右半张。
+ * ⇒ **锚点永远落在取景框的第 `x` 列，与窗口宽度无关、与缩放倍数也无关**。
+ * 这正是「窗口拉宽时人物会变大、但你钉的那条线不动」——`cover` 的放大是几何必然，
+ * 而锚点守恒是我们能给的保证（对比：旧口径存的是"溢出量的百分之几"，而溢出量本身随宽高比变，
+ * 所以同一组数字换宽度就落到别处。见 `devlog/420`）。
  *
- * 验算（s=2、x=1、`transform-origin` 默认 center）：缩放后图占 [-W/2, 3W/2]，
- * `dx = -50%` ⇒ 挪成 [-W, W] ⇒ 窗口 [0,W] 里看到的正是缩放图的右半 = 原图右半 ✓。
+ * 两条附带的好性质（都用例钉着）：
+ * - `x`/`y ∈ [0,1]` ⇒ **任何 `scale ≥ 1` 都不露边**：`x=0` 时支点就在图片左缘、放大后左缘仍在框内；
+ * - `scale = 1` 时**取景依然有效**（纵/横哪条轴有溢出就能挪哪条）——旧口径下 `scale=1` 是个死值，
+ *   当初还得靠"拖动时自动抬到 120%"绕过（`devlog/419`），现在那个权宜之计已经不需要了。
  *
- * ⚠️ V1b-1 写的是 `(x-0.5)`（**反的**）：那一批只有"存/取/套用"，没有交互，
- *    符号没人能证伪；V1b-2 一上手拖拽就露馅（往右拖反而看到左半张）。
- *
- * ## 口径
- *
- * - `x`/`y` 是 **0..1 的比例**（不是像素）：窗口尺寸/DPR 变了取景不该跟着跑（与库里的口径一致）；
- * - `scale` 是 **1..3 的倍数**，1 = 原样铺（`transform` 整个不生成，DOM 保持干净）；
- * - ⚠️ **坏 JSON 必须退回"原样铺"**（`null`），不许白屏 —— 这一格是能被手工改坏的
- *   （`VTuberOut.background_focus` 给的是 JSON 原文，见 `app/schemas/vtuber.py`）。
+ * ⚠️ 坏 JSON 必须退回"原样铺"（`null` ⇒ 一个属性都不生成），不许白屏 ——
+ *    这一格是能被手工改坏的（`VTuberOut.background_focus` 给的是 JSON 原文，见 `app/schemas/vtuber.py`）。
  */
 export interface BackgroundFocus {
   x: number
@@ -44,6 +48,13 @@ export const FOCUS_CENTER: BackgroundFocus = { x: 0.5, y: 0.5, scale: 1 }
 /** 与后端 `BackgroundFocusIn` 的三个边界一致（越界在那个入口就被 422 挡住了）。 */
 export const FOCUS_MIN_SCALE = 1
 export const FOCUS_MAX_SCALE = 3
+
+/** `focusStyle` 的产物：**要么三件套齐全、要么一个都没有**（部分应用 = 锚点在放大后漂）。 */
+export interface FocusStyle {
+  backgroundPosition?: string
+  transform?: string
+  transformOrigin?: string
+}
 
 function num(v: unknown, fallback: number): number {
   const n = typeof v === 'number' ? v : Number(v)
@@ -70,8 +81,7 @@ export function parseBackgroundFocus(raw: string | null | undefined): Background
     const d = JSON.parse(raw) as Partial<BackgroundFocus>
     if (!d || typeof d !== 'object' || Array.isArray(d)) return null
     // ⚠️ 这里**不把"等价于居中"的值折成 null**：x/y 是用户存下来的意图
-    //    （scale=1 时它看不出效果，但等他调大缩放就该还在那儿）。折成 null 会把这个意图吃掉。
-    //    "看不出效果就不生成 transform"是 `focusTransform` 的事。
+    //    （scale=1 时它照样管用 —— 见文件头"两条附带的好性质"）。折成 null 会把这个意图吃掉。
     return clampFocus({
       x: num(d.x, FOCUS_CENTER.x),
       y: num(d.y, FOCUS_CENTER.y),
@@ -89,20 +99,47 @@ export function serializeBackgroundFocus(f: BackgroundFocus): string {
 }
 
 /**
- * 取景对应的 `transform`。
- *
- * ⚠️ **看不出效果的取景返回 `undefined`**（连属性都不生成）：`scale === 1` 时本来就**没有溢出**
- * ⇒ `dx`/`dy` 恒为 0 ⇒ 一个恒等变换除了让 DOM 多一个属性之外什么都不做。
- * （注意"居中 + 放大"**不是**这种情况：那时 `translate` 确实是 0，但 `scale` 本身有效果。）
- *
- * ⚠️ 顺序是 `translate(...) scale(...)`：**先缩放、后平移**。反过来会先平移再放大，
- * 位移被一起放大 ⇒ 同样的 `x` 在不同 `scale` 下跑到不同的地方（拖到哪儿就不对了）。
+ * 百分比串：**限两位小数** —— 拖一下就是 `28.57142857142857%`，内联样式里既难看、
+ * 判据里也得跟着写一长串浮点（库里那份不受影响，只有喂给 CSS 的这一份被收敛）。
  */
-export function focusTransform(f: BackgroundFocus | null): string | undefined {
-  if (!f) return undefined
+function pctStr(v: number): string {
+  return `${Math.round(v * 10000) / 100}%`
+}
+
+/** 取景的 CSS 三件套。`null` ⇒ 空对象（用样式表里的默认值：居中、不缩放）。 */
+export function focusStyle(f: BackgroundFocus | null): FocusStyle {
+  if (!f) return {}
   const c = clampFocus(f)
-  if (c.scale === 1) return undefined
-  const dx = (0.5 - c.x) * (c.scale - 1) * 100
-  const dy = (0.5 - c.y) * (c.scale - 1) * 100
-  return `translate(${dx}%, ${dy}%) scale(${c.scale})`
+  const pos = `${pctStr(c.x)} ${pctStr(c.y)}`
+  if (c.scale === FOCUS_MIN_SCALE) {
+    // ⚠️ 位置**照给**：`scale=1` 时纵向（或横向）往往还有溢出，取景是有用的
+    return { backgroundPosition: pos }
+  }
+  return { backgroundPosition: pos, transform: `scale(${c.scale})`, transformOrigin: pos }
+}
+
+/**
+ * `cover` 的缩放倍数：图片（原始 `nat`）要铺满 `box` 需要放大多少。
+ * 取景的**渲染**不需要它（`cover` / 百分比全是 CSS 自己算的）；
+ * 只有**拖拽**需要 —— 拖 100px 到底该把锚点挪多少，取决于溢出量。
+ */
+export function coverScale(nat: { w: number; h: number }, box: { w: number; h: number }): number {
+  if (nat.w <= 0 || nat.h <= 0) return 1
+  return Math.max(box.w / nat.w, box.h / nat.h)
+}
+
+/**
+ * 拖拽换算：屏幕上挪 `dPx` 像素 ⇒ 锚点该挪多少。
+ *
+ * 推导（见文件头）：`screen_x(u) = x·W + s·k·(u − x·iw)` ⇒ `d(screen_x)/dx = W − s·k·iw`
+ * ⇒ `Δx = dPx / (W − s·k·iw)`。分母就是**负的溢出量**，所以往右拖（`dPx > 0`）得到负的 `Δx`
+ * ⇒ 图跟着指针往右走 ✓。
+ *
+ * ⚠️ 分母趋零（这条轴正好铺满、没余量可挪）时返回 0：不挪比"挪出一个巨大跳变"好 ——
+ *    竖图铺在宽面板里，横向本来就没有可挪的余地，这是**正确**的结果而不是失灵。
+ */
+export function panDelta(dPx: number, boxPx: number, imgPx: number, scale: number): number {
+  const denom = boxPx - scale * imgPx
+  if (!Number.isFinite(denom) || Math.abs(denom) < 1) return 0
+  return dPx / denom
 }
