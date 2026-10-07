@@ -17,6 +17,9 @@ import {
   loadVtuberSortKey, saveVtuberSortKey, sortVtubers, VTUBER_SORT_KEYS, VTUBER_SORT_LABEL,
   type VtuberSortKey,
 } from '../utils/vtuberSort'
+import {
+  applyVisibleOrder, DRAG_CANCEL_PX, DRAG_HOLD_MS, moveItem,
+} from '../utils/vtuberReorder'
 import { EVENTS, on } from '../utils/appEvents'
 import './../styles/layout.css'
 
@@ -56,6 +59,42 @@ export default function VtuberSidebar() {
     setSortKey(k)
     saveVtuberSortKey(k)
   }, [])
+
+  // ── 按住拖动重排（需求 4，2026-10-07，`devlog/415`）────────────────────
+  /** 正在拖的那条（`null` = 没在拖）—— 也是"拖拽态"的唯一真源（CSS 与点击都看它） */
+  const [dragId, setDragId] = useState<number | null>(null)
+  /** "按住"判定：350ms 内指针挪超 `DRAG_CANCEL_PX` 就当滚动/框选，取消 */
+  const holdRef = useRef<{ x: number; y: number; timer: number } | null>(null)
+  /** 拖拽期间要读**当前**可见顺序（闭包里的 `filtered` 是旧值） */
+  const visibleRef = useRef<VTuber[]>([])
+
+  const beginHold = useCallback((id: number, e: React.PointerEvent) => {
+    if (e.button !== 0) return
+    const x = e.clientX
+    const y = e.clientY
+    const stop = () => {
+      const h = holdRef.current
+      if (h) window.clearTimeout(h.timer)
+      holdRef.current = null
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', stop)
+    }
+    const onMove = (ev: PointerEvent) => {
+      if (Math.hypot(ev.clientX - x, ev.clientY - y) > DRAG_CANCEL_PX) stop()
+    }
+    holdRef.current = {
+      x, y,
+      timer: window.setTimeout(() => {
+        stop()
+        /* ⚠️ **任何档位下拖一下就生效**（用户 2026-10-07 拍板）：进拖拽态的同一拍切到"自定义"。
+           否则用户在"粉丝数"档下拖半天没反应，只会以为坏了。 */
+        pickSort('custom')
+        setDragId(id)
+      }, DRAG_HOLD_MS),
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', stop)
+  }, [pickSort])
   const [addOpen, setAddOpen] = useState(false)
   const [batchOpen, setBatchOpen] = useState(false)
 
@@ -74,6 +113,44 @@ export default function VtuberSidebar() {
   useEffect(() => {
     load()
   }, [load])
+
+  /** 拖拽结束：把**当前可见顺序**整条交给后端（没显示的那些由后端原地不动） */
+  const commitDrag = useCallback(() => {
+    const order = visibleRef.current.map((v) => v.id)
+    setDragId(null)
+    if (order.length === 0) return
+    void api.reorderVtubers(order).catch(() => {
+      /* 落库失败 ⇒ 拉回服务端顺序（乐观渲染到此为止）。⚠️ **不许静默**：
+         这里吞的是"拖了但没保存"，下一轮用户会说"拖完刷新就变回去了" —— 所以重拉即还原。 */
+      load()
+    })
+  }, [load])
+
+  useEffect(() => {
+    if (dragId == null) return
+    const onMove = (ev: PointerEvent) => {
+      const hit = document.elementFromPoint(ev.clientX, ev.clientY)
+        ?.closest('[data-vtuber-id]') as HTMLElement | null
+      const to = Number(hit?.dataset.index ?? NaN)
+      if (!Number.isFinite(to)) return
+      const cur = visibleRef.current
+      const from = cur.findIndex((v) => v.id === dragId)
+      if (from < 0 || from === to) return
+      const next = moveItem(cur, from, to)
+      /* 乐观渲染：把"可见那几条的新顺序"**填回**完整列表 —— 与后端 `VTuberRepo.reorder`
+         同一套语义（两边算得不一样的话，落库后再拉一次列表顺序会当场跳一下）。 */
+      setVtubers((alls) => applyVisibleOrder(alls, next.map((v) => v.id)))
+    }
+    const onUp = () => commitDrag()
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+    window.addEventListener('pointercancel', onUp)
+    return () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      window.removeEventListener('pointercancel', onUp)
+    }
+  }, [dragId, commitDrag])
 
   // 抓取任务结束（TopBar 轮询发现 running→空闲边沿）后自动刷新列表数据
   useEffect(() => {
@@ -146,6 +223,9 @@ export default function VtuberSidebar() {
     //    先排会把它按别的键打乱；而 `default`/`name` 等本来就与筛选无关）
     return sortVtubers(list, sortKey)
   }, [vtubers, query, filters, sortKey])
+
+  /* 拖拽期间要读"当前"可见顺序 ⇒ 每帧同步进 ref（`filtered` 在闭包里永远是旧值） */
+  useEffect(() => { visibleRef.current = filtered }, [filtered])
 
   // 筛选弹窗选项：平台 / 企划从已载数据动态提取（企划剔除空值）
   const platformOptions = useMemo(
@@ -360,7 +440,7 @@ export default function VtuberSidebar() {
       </div>
 
       {/* 列表滚动区：覆盖式滚动条（不占宽 + 自动隐藏，UI-MAP F 节标准） */}
-      <OverlayScroll className="sidebar-list">
+      <OverlayScroll className={`sidebar-list${dragId != null ? ' is-dragging' : ''}`}>
       {vtubers.length === 0 && (
         <div className="sidebar-tip">暂无 VTuber，请先在后端导入名单（vtubers.csv flag=1）</div>
       )}
@@ -381,6 +461,8 @@ export default function VtuberSidebar() {
               index={i}
               active={matched !== null && Number(matched.params.id) === v.id}
               onSelect={handleSelect}
+              dragging={dragId === v.id}
+              onHoldStart={beginHold}
             />
           ))}
         </div>
@@ -396,13 +478,18 @@ export default function VtuberSidebar() {
 
 interface VtuberItemProps {
   vtuber: VTuber
-  /** 列表内序号：驱动依次入场动画（--rise-i） */
+  /** 列表内序号：驱动依次入场动画（--rise-i）；**也是拖拽落点的判据**（`data-index`） */
   index: number
   active: boolean
   onSelect: (id: number) => void
+  /** 正在被拖（`devlog/415`） */
+  dragging?: boolean
+  /** 指针按下 ⇒ 交给父级判"按住"（350ms 不动才算拖） */
+  onHoldStart?: (id: number, e: React.PointerEvent) => void
 }
 
-const VtuberItem = memo(function VtuberItem({ vtuber, index, active, onSelect }: VtuberItemProps) {
+const VtuberItem = memo(function VtuberItem({ vtuber, index, active, onSelect,
+                                               dragging = false, onHoldStart }: VtuberItemProps) {
   const bili = biliAccount(vtuber)
   // 头像/签名与卡片**同一条链**（devlog/135）：用户在档案设置里换过的头像与签名，
   // 左栏必须跟着变 —— 此前左栏各写了一份"只看平台字段"的取值，于是设置看着像没生效。
@@ -416,9 +503,14 @@ const VtuberItem = memo(function VtuberItem({ vtuber, index, active, onSelect }:
 
   return (
     <div
-      className={`vtuber-item anim-rise${active ? ' active' : ''}`}
+      className={`vtuber-item anim-rise${active ? ' active' : ''}${dragging ? ' dragging' : ''}`}
       style={{ '--rise-i': index } as React.CSSProperties}
       onClick={() => onSelect(vtuber.id)}
+      onPointerDown={(e) => onHoldStart?.(vtuber.id, e)}
+      /* 拖拽落点靠这两个属性（`elementFromPoint` → `closest('[data-vtuber-id]')` → `data-index`）：
+         与平台徽章那套同一个办法（`devlog/048`），不手算几何 */
+      data-index={index}
+      data-vtuber-id={vtuber.id}
       /* `data-src` 是**为可测性存在**的（devlog/135，同 `.stat-sets[data-hover]` 的先例）：
           探针跑在虚拟时间下，图片加载不会完成 ⇒ "左栏头像跟没跟档案设置"就量不到。
           这里把**解析出来的 src（口径）**挂在行上；**渲染出来的 src（接线）**由

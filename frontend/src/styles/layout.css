@@ -919,6 +919,21 @@ html.window-maximized body {
   background: var(--sel-bg-hover);
 }
 
+/* 按住拖动重排（需求 4，`devlog/415`）：**被拖的那条**给一个"拿起来了"的样子。
+   ⚠️ 只做观感，不做几何动画 —— 拖动时列表是**逐格换位**（换到哪一格，那条就落到哪一格），
+   所以这里不需要 transform 跟随指针；真要"跟手"得把整列做成 absolute 重排，
+   那与"按住才拖"（350ms）的交互不搭，收益也小。 */
+.vtuber-item.dragging {
+  background: var(--sel-bg);
+  opacity: 0.55;
+  cursor: grabbing;
+}
+/* 拖拽期间**全列表**都别触发 hover 高亮（否则指针掠过谁谁亮，像在选）
+   + 关掉文字选中，免得按住时把名字拖成蓝色选区 */
+.sidebar-list.is-dragging .vtuber-item { cursor: grabbing; user-select: none; }
+.sidebar-list.is-dragging .vtuber-item:hover { background: transparent; }
+.sidebar-list.is-dragging .vtuber-item.active:hover { background: var(--sel-bg); }
+
 .vtuber-item.active {
   background: var(--sel-bg);
 }
