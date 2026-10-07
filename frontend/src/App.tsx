@@ -3,7 +3,7 @@ import { Route, Routes, useNavigate } from 'react-router-dom'
 import TopBar from './components/TopBar'
 import IconRail from './components/IconRail'
 import { useSolo } from './utils/soloMode'
-import { useSoloPeek } from './utils/soloPeek'
+import { useSoloIdle, useSoloPeek } from './utils/soloPeek'
 import VtuberSidebar from './components/VtuberSidebar'
 import EmptyState from './pages/EmptyState'
 import PostsPage from './pages/PostsPage'
@@ -87,11 +87,17 @@ export default function App() {
    * 免得指针一移进去就掉出薄条、栏又从手底下消失。
    */
   const peek = useSoloPeek(Boolean(solo))
+  /* 界面元素的**自动隐藏**（`devlog/434`）：鼠标停一会儿就让位给背景图、一动就回来。
+     ⚠️ 上一版把"恢复"键在 `data-peek` 上，而它恒有值（默认 `center`）⇒ 恢复规则一直生效、
+     **自动隐藏直接没了**（用户报的第 2 条）。现在 `data-peek` 只在真的唤出两栏时才有值，
+     "让位"交给闲置状态决定。 */
+  const idle = useSoloIdle(Boolean(solo))
 
   return (
-    /* 单推模式的标记挂在这里：三段收起动画与 hover 唤出全走 CSS（`devlog/430`/`433`） */
+    /* 单推模式的标记挂在这里：三段收起、空闲让位与 hover 唤出全走 CSS（`devlog/430`/`434`） */
     <div className="app-shell" data-solo={solo ? '1' : undefined}
-         data-peek={solo ? peek : undefined}>
+         data-peek={solo && peek !== 'center' ? peek : undefined}
+         data-idle={solo && idle ? '1' : undefined}>
       {/* ⚠️ 两条**贴边窄带**：尺寸 = 被唤出的元素自身（顶栏高 / 工具栏宽），
           悬到它们所在的整片区域就唤出。唤出期间它们 `pointer-events: none` 让位（CSS 里）。 */}
       <ErrorBoundary>

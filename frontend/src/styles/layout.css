@@ -585,7 +585,8 @@ html.window-maximized body {
   --solo-step: 260ms;                              /* 每一段的时长（三段共 780ms） */
   --solo-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
   --solo-dim: 0;                                   /* 全收起后页面元素的不透明度（用户口径 2026-10-07：**降到 0**，hover 唤出才恢复） */
-  --solo-fade-delay: 2.4s;                         /* "一段时间之后"才淡出 */
+  /* ⚠️ “等多久才让位”**不在 CSS 里**：它是 `utils/soloPeek.ts` 的 `SOLO_IDLE_MS`
+     （闲置计时器）—— 判定"鼠标停多久了"CSS 表达不了，两处各留一份就会叠成双倍等待。 */
 }
 
 .sidebar-shell,

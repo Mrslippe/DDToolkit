@@ -45,10 +45,10 @@
    ⚠️ 背景层本身**不淡**（`.hero-backdrop` 被排除）—— 要的正是"背景图完全显现"。
    ⚠️ 唤出顶栏/工具栏时**立刻恢复**：那两条贴边窄带与被唤出的元素都在 `.app-shell` 下，
    用 `~` 兄弟选择器把两个变量拨回原值（`transition-delay: 0` ⇒ 不跟着延时）。 */
-.app-shell[data-solo='1'] .posts-panel[data-view='cards'] {
+.app-shell[data-solo='1'][data-idle] .posts-panel[data-view='cards'] {
   --solo-a-content: var(--solo-dim);
   --solo-a-veil: 0;
-  --solo-a-delay: var(--solo-fade-delay);
+  --solo-a-delay: 0ms;   /* ⚠️ 等待由 `SOLO_IDLE_MS` 的闲置计时器负责，这里别再叠一层延时 */
 }
 
 /* 唤出任一区（data-peek）⇒ 立刻恢复可读（延时归零） */
@@ -66,13 +66,13 @@
   transition: none;
 }
 
-.app-shell[data-solo='1'] .posts-panel[data-view='cards'] > :not(.hero-backdrop) {
+.app-shell[data-solo='1'][data-idle] .posts-panel[data-view='cards'] > :not(.hero-backdrop) {
   opacity: var(--solo-a-content);
   transition: opacity 520ms var(--solo-ease, ease) var(--solo-a-delay);
 }
 
 /* 白色纱罩（`.hero-backdrop::after`）在淡出态撤掉 ⇒ 背景图"完全显现" */
-.app-shell[data-solo='1'] .posts-panel[data-view='cards'] .hero-backdrop::after {
+.app-shell[data-solo='1'][data-idle] .posts-panel[data-view='cards'] .hero-backdrop::after {
   opacity: var(--solo-a-veil);
   transition: opacity 520ms var(--solo-ease, ease) var(--solo-a-delay);
 }

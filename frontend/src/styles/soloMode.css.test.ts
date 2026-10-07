@@ -87,17 +87,18 @@ describe('单推：分段收起与 hover 唤出', () => {
 })
 
 describe('单推：全收起后的延时淡出', () => {
-  it('★ 只在 **cards 视图**（`data-view`）+ 延时（"一段时间之后"）', () => {
-    const base = P(".app-shell[data-solo='1'] .posts-panel[data-view='cards']")
+  it('★ 让位只在 **cards 视图** + **闲置**（`data-idle`）时才发生，且不动背景层', () => {
+    // ⚠️ 第四版（devlog/434）：让位依据从 "`data-peek` 恒有值" 改成**闲置计时器** ——
+    //    上一版 data-peek 默认就有值 ⇒ 恢复规则一直生效 ⇒ **自动隐藏直接没了**。
+    const base = P(".app-shell[data-solo='1'][data-idle] .posts-panel[data-view='cards']")
     expect(base, '淡出量').toMatch(/--solo-a-content:\s*var\(--solo-dim\)/)
     expect(base, '纱罩撤到 0 ⇒ 背景图完全显现').toMatch(/--solo-a-veil:\s*0/)
-    expect(base, '延时').toMatch(/--solo-a-delay:\s*var\(--solo-fade-delay\)/)
+    expect(base, '等待由 `SOLO_IDLE_MS` 负责，这里不许再叠延时').toMatch(/--solo-a-delay:\s*0ms/)
     // 页面元素读这两个变量；⚠️ 背景层被排除（要的正是"背景图显现"）
-    const dim = P(".app-shell[data-solo='1'] .posts-panel[data-view='cards'] > :not(.hero-backdrop)")
+    const dim = P(".app-shell[data-solo='1'][data-idle] .posts-panel[data-view='cards'] > :not(.hero-backdrop)")
     expect(dim).toMatch(/opacity:\s*var\(--solo-a-content\)/)
-    expect(dim).toMatch(/transition:[^;]*var\(--solo-a-delay\)/)
     // 纱罩那条也读变量
-    const veil = posts.slice(posts.indexOf(".app-shell[data-solo='1'] .posts-panel[data-view='cards'] .hero-backdrop::after"))
+    const veil = posts.slice(posts.indexOf(".app-shell[data-solo='1'][data-idle] .posts-panel[data-view='cards'] .hero-backdrop::after"))
     expect(veil.slice(0, 300)).toMatch(/opacity:\s*var\(--solo-a-veil\)/)
   })
 

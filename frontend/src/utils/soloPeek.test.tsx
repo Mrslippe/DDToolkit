@@ -26,7 +26,9 @@ describe('唤出区：按坐标判定', () => {
     expect(at(400, 3), '贴上缘').toBe('top')
     expect(at(400, 40), '离上缘远了 ⇒ 中间区').toBe('center')
     expect(at(3, 400), '贴左缘那条薄条').toBe('left')
-    expect(at(30, 400), '⚠️ 没唤出时只有 8px 薄条（三个区不许重叠 ⇒ 触发条必须窄）').toBe('center')
+    expect(at(30, 400), '左缘整宽（用户是在"工具栏本该在的那块"里扫的）').toBe('left')
+    expect(at(50, 400), '刚好顶到工具栏宽').toBe('left')
+    expect(at(51, 400), '超出工具栏宽 ⇒ 中间区').toBe('center')
     expect(at(3, 3), '左上角：顶栏优先').toBe('top')
     expect(at(400, 400), '中间那块 = 界面元素区').toBe('center')
     expect(at(0, 0)).toBe('top')
@@ -37,8 +39,8 @@ describe('唤出区：按坐标判定', () => {
     expect(at(400, 40, 'center'), '没唤出时 y=40 不算顶栏').toBe('center')
     expect(at(400, 40, 'top'), '唤出后 y=40 仍在顶栏区里').toBe('top')
     expect(at(400, 47, 'top'), '超出顶栏高度就出去').toBe('center')
-    // 工具栏：没唤出时只有 8px；唤出后整个 50px 宽都算它的
-    expect(at(30, 400, 'center'), '没唤出时 x=30 不算工具栏').toBe('center')
+    // 工具栏：**没唤出时就已经是整宽**（左缘触发区 = 工具栏宽，见上一条）
+    expect(at(30, 400, 'center'), '没唤出时也算工具栏区').toBe('left')
     expect(at(30, 400, 'left'), '唤出后 x=30 仍在工具栏区里').toBe('left')
     expect(at(55, 400, 'left'), '超出工具栏宽度就出去').toBe('center')
     // ⚠️ 顶栏"长大"不妨碍左缘（y 已经超出顶栏高度）

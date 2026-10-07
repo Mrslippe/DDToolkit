@@ -33,8 +33,9 @@ import { useEffect, useState } from 'react'
 
 export type SoloPeek = 'top' | 'left' | 'center'
 
-/** 没唤出时贴着边缘的**触发厚度**（薄条；唤出后才长到那一栏自身的大小） */
-export const PEEK_TRIGGER_PX = 8
+/** 上缘那条**触发厚度**（薄条；唤出后才长到顶栏自身那么高）。
+ *  ⚠️ 故意比顶栏矮得多：面板顶部还有一条"工具条唤出区"，两条一样高就会一起蹦。 */
+export const PEEK_TRIGGER_PX = 12
 
 /** 缺少 CSS 变量时的兜底（真值在 `layout.css` 的 `:root`）。 */
 const FALLBACK_RAIL_W = 50
@@ -51,7 +52,9 @@ export interface PeekMetrics {
 
 export function peekZoneAt(x: number, y: number, m: PeekMetrics): SoloPeek {
   const topLimit = m.current === 'top' ? m.topH : PEEK_TRIGGER_PX
-  const leftLimit = m.current === 'left' ? m.railW : PEEK_TRIGGER_PX
+  /* ⚠️ 左缘**整宽**（不是薄条）：用户是把鼠标移到"工具栏本该在的那 50px"里的 ——
+     薄条会把那一大片判成"中间区" ⇒ 什么都不唤出，那块就还是内容（用户报的"白色一片"）。 */
+  const leftLimit = m.railW
   // ⚠️ 顺序即优先级：上缘那条压过左缘那条（左上角那一小块归顶栏）
   if (y <= topLimit) return 'top'
   if (x <= leftLimit) return 'left'
@@ -91,4 +94,37 @@ export function useSoloPeek(enabled: boolean): SoloPeek {
     return () => window.removeEventListener('mousemove', onMove)
   }, [enabled])
   return peek
+}
+
+/** 多久没动鼠标算"闲置"（界面元素该让位给背景图了）。 */
+export const SOLO_IDLE_MS = 2400
+
+/**
+ * 指针**静止**了多久（`devlog/434`）——"界面元素自动隐藏"的真正依据。
+ *
+ * ⚠️ 为什么不是"指针在中间那块"：用户要的是**自动**隐藏 —— 鼠标停一会儿就只剩背景图、
+ * 一动就回来（屏保那套）。用"指针在哪个区"表达这件事时，"没动"与"动了但停在中间"分不开；
+ * 而且上一版让 `data-peek` 恒有值（默认 `center`），恢复规则于是一直生效 ⇒
+ * **自动隐藏直接没了**（用户报的第 2 条）。
+ */
+export function useSoloIdle(enabled: boolean, delayMs: number = SOLO_IDLE_MS): boolean {
+  const [idle, setIdle] = useState(false)
+  useEffect(() => {
+    if (!enabled) {
+      setIdle(false)
+      return
+    }
+    let timer = window.setTimeout(() => setIdle(true), delayMs)
+    const onMove = () => {
+      setIdle(false)
+      window.clearTimeout(timer)
+      timer = window.setTimeout(() => setIdle(true), delayMs)
+    }
+    window.addEventListener('mousemove', onMove)
+    return () => {
+      window.clearTimeout(timer)
+      window.removeEventListener('mousemove', onMove)
+    }
+  }, [enabled, delayMs])
+  return idle
 }
