@@ -42,6 +42,7 @@ import FanTrendChart from '../components/FanTrendChart'
 import FloatPill from '../components/common/FloatPill'
 import StateBlock from '../components/common/StateBlock'
 import { BackdropCrossfade } from '../components/common/BackdropCrossfade'
+import { parseBackgroundFocus } from '../utils/backgroundFocus'
 import HeroCardsView from '../components/posts/HeroCardsView'
 import ListHeaderActions from '../components/posts/ListHeaderActions'
 import PostListView from '../components/posts/PostListView'
@@ -534,6 +535,13 @@ export default function PostsPage() {
     ? resolveAsset(vtuber.background_path)
     : undefined
   const backdropSrc = customBg ?? avatarSrc ?? lastAvatarRef.current
+  /* 背景取景（需求 7，`devlog/418`）：库里存的是 JSON 原文，坏值一律退回"原样铺"。
+     ⚠️ 取景**只对自定义背景有意义**：头像铺底那张是按 0.18 不透明度当纹理用的，
+     给它加取景只会把脸挪出画面（而且用户也没地方调它）。 */
+  const bgFocus = useMemo(
+    () => (customBg ? parseBackgroundFocus(vtuber?.background_focus) : null),
+    [customBg, vtuber?.background_focus],
+  )
 
   /**
    * 自定义背景是深是浅 → 「未开播」标签与签名用深字还是浅字（2026-10-05，`devlog/355`）。
@@ -605,7 +613,7 @@ return (
       {/* 右栏永久背景：自定义背景(custom 全图清晰) 优先，否则头像铺底 + 渐变纱罩。
           ⚠️ 换图走 `BackdropCrossfade`（双层交叉淡入）—— 原先这里是单层 + `key={backdropSrc}`，
           换 V 时旧层当场卸载、新层从 0 淡入 ⇒ 中间那一帧露出面板底色（用户报的"切 V 闪白"）。 */}
-      {backdropSrc && <BackdropCrossfade src={backdropSrc} custom={!!customBg} />}
+      {backdropSrc && <BackdropCrossfade src={backdropSrc} custom={!!customBg} focus={bgFocus} />}
 
       {/* 页面工具条（R45）：**覆盖**在内容之上、**按需出现**、不占布局。
           · `data-shown` 驱动显隐；键盘聚焦由 CSS `:focus-within` 兜（见 posts.css）

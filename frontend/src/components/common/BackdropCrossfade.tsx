@@ -26,6 +26,8 @@
  */
 import { useEffect, useRef, useState } from 'react'
 
+import { focusTransform, type BackgroundFocus } from '../../utils/backgroundFocus'
+
 /** 交叉淡出的时长（ms）—— 与 `posts.css` 的 `backdrop-out` 关键帧保持一致（有用例钉着）。 */
 export const BACKDROP_FADE_MS = 250
 
@@ -35,12 +37,22 @@ interface Layer {
   out: boolean
   /** 面板上的第一层：不做淡入动画，直接全不透明 */
   first: boolean
+  /** 这一层**自己的**取景（生成那一刻的值；见渲染处那段注释） */
+  focus: BackgroundFocus | null
 }
 
-export function BackdropCrossfade({ src, custom }: { src: string | null; custom: boolean }) {
-  const [layers, setLayers] = useState<Layer[]>(() => (src ? [{ src, out: false, first: true }] : []))
+export function BackdropCrossfade({ src, custom, focus }: {
+  src: string | null; custom: boolean; focus?: BackgroundFocus | null
+}) {
+  const [layers, setLayers] = useState<Layer[]>(
+    () => (src ? [{ src, out: false, first: true, focus: null }] : []))
   /** 淡出层的清理计时器（按 src 记，避免快速连点时互相清掉）。 */
   const timers = useRef(new Map<string, number>())
+  /** 生成新层时要快照一份当前取景 —— 从 `focus` 直接读会把它写进 effect 依赖，触发多余的重跑。 */
+  const focusRef = useRef<BackgroundFocus | null>(focus ?? null)
+  focusRef.current = focus ?? null
+  /** 当前层的取景（归一成 `| null`，好和 `Layer.focus` 对上）。 */
+  const nowFocus: BackgroundFocus | null = focus ?? null
 
   useEffect(() => {
     if (!src) return
@@ -55,7 +67,8 @@ export function BackdropCrossfade({ src, custom }: { src: string | null; custom:
         // 新层在下（out=false）、旧层在上（out=true）；没有旧层时它就是第一层
         return src === alive[0]?.src && prev.length === 1 && !prev[0].out
           ? prev
-          : [...alive.map((l) => ({ ...l, out: true })), { src, out: false, first: alive.length === 0 }]
+          : [...alive.map((l) => ({ ...l, out: true })),
+             { src, out: false, first: alive.length === 0, focus: focusRef.current }]
       })
       // 旧层淡完就把它摘掉（不摘会一直压在新层上面，虽然它已经全透明）
       const t = window.setTimeout(() => {
@@ -82,7 +95,13 @@ export function BackdropCrossfade({ src, custom }: { src: string | null; custom:
           key={l.src}
           data-backdrop={l.out ? 'prev' : l.first ? 'first' : 'cur'}
           className={`hero-backdrop${custom ? ' custom' : ''}${l.out ? ' is-prev' : ''}`}
-          style={{ backgroundImage: `url(${l.src})` }}
+          /* 取景（需求 7）：⚠️ **正在淡出的那一层跟自己的图走** —— 若让它读实时的 `focus`，
+             换 V 的那 250ms 里旧图会被按新 V 的取景变换一次（看着像旧图跳了一下）。
+             当前层则读实时值 ⇒ 在设置里调取景时**右边背景当场跟着动**（不用重开）。 */
+          style={{
+            backgroundImage: `url(${l.src})`,
+            transform: focusTransform(l.out ? l.focus : nowFocus),
+          }}
         />
       ))}
     </>

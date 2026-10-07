@@ -324,6 +324,23 @@ export const api = {
   /** 单个 VTuber —— **带运行时校验** */
   getVtuber: (id: number) => request<VTuber>(`/vtuber/${id}`, undefined, validateVtuber),
 
+  /**
+   * 需求 7（f011）：保存**背景取景**（平移 + 缩放；每个 V 各一份）。
+   *
+   * ⚠️ 传**归一化**值（`x`/`y` 0..1、`scale` 1..3）—— 窗口尺寸/DPR 变了取景不该跟着跑。
+   * 越界后端直接 422（`backgroundFocus.ts` 的 `clampFocus` 在交互侧先夹一道）。
+   */
+  setBackgroundFocus: (vtuberId: number, focus: { x: number; y: number; scale: number }) =>
+    request<VTuber>(`/vtuber/${vtuberId}/background-focus`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(focus),
+    }),
+
+  /** 需求 7：清除取景 ⇒ 原样铺满。⚠️ **不动背景图本身**（那是 `clearBackground` 的事）。 */
+  clearBackgroundFocus: (vtuberId: number) =>
+    request<VTuber>(`/vtuber/${vtuberId}/background-focus`, { method: 'DELETE' }),
+
   /** 上传卡片页自定义背景，返回更新后的 VTuber（含 background_path） */
   uploadBackground: (id: number, file: File) => {
     const form = new FormData()

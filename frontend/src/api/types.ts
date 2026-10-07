@@ -41,6 +41,12 @@ export interface VTuber {
    */
   avatar_local?: string | null
   background_path: string | null
+  /** 需求 7（f011）：背景**取景**的 **JSON 原文**（`{"x":0..1,"y":0..1,"scale":1..3}`）。
+   *  ⚠️ 解析与容错在 `utils/backgroundFocus.ts::parseBackgroundFocus` —— **坏值退回"原样铺"**，
+   *  界面不许因为这一格是手工改坏的而崩。 */
+  background_focus: string | null
+  /** 需求 9（f011）：背景**视频**的 `static/` 相对路径；NULL = 只有静态图。 */
+  background_video_path: string | null
   notes: string | null
   /**
    * 签名来源与覆盖（2026-09-13，devlog/074）：卡片签名 =
