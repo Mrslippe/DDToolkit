@@ -66,7 +66,7 @@ erDiagram
 | `avatar` | TEXT | 默认头像 URL |
 | `background_path` | TEXT | 卡片页自定义背景，`static/custom_bg/` 相对路径（d002） |
 | `background_focus` | TEXT | 背景**取景**（需求 7，f011）：JSON `{"x":0..1,"y":0..1,"scale":1..3}`，NULL = 原样铺。⚠️ **归一化存**（比例不是像素）—— 窗口尺寸/DPR 变了取景不该跟着跑。★ `x`/`y` 是**图片锚点**（V1b-3 定案，`devlog/420`）：图上那一点落在取景框的**同一比例位置**，与 CSS `object-position` 同向（0 = 看左/上边缘）；`[0,1]` 这个范围同时保证"任何 `scale ≥ 1` 都不露底色"。⇒ 锚点位置**与窗口宽度、与缩放都无关**（旧口径是"溢出量的百分之几"，而溢出量随宽高比变，所以同一组数字换宽度就漂 —— 已废）。几何见 `frontend/src/utils/backgroundFocus.ts` |
-| `background_video_path` | TEXT | 背景**视频**（需求 9，f011）：`static/custom_bg/` 相对路径，NULL = 只有静态图。与 `background_path` 同款口径（**只取文件名**，不许越出目录） |
+| `background_video_path` | TEXT | 背景**视频**（需求 9，f011）：`static/custom_bg/` 相对路径，NULL = 只有静态图。与 `background_path` 同款口径（**只取文件名**，不许越出目录）。⚠️ 上传侧（`devlog/423`）：mp4/webm、≤50MB、按文件头判类型；文件名前缀 `_bgv_` 把它与背景图区分开 —— 两者**互不相干**（图是视频的 poster 与降级兜底，谁都不删谁） |
 | `notes` | TEXT | 备注 |
 | `sign_override` | TEXT | 手改的签名（**覆盖**，f004）。不写 `accounts.sign`；清空 = 撤销覆盖 |
 | `sign_source_account_id` | INTEGER | 卡片签名跟随哪个账号（**无外键**，f004）；NULL = 主账号，指向不存在的 id 时回落主账号 |

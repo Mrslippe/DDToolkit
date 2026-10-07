@@ -353,3 +353,148 @@ def test_background_path_cannot_escape_the_directory(client, _env):
     assert bg.remove_background(_env / "static" / "custom_bg",
                                 "../../outside.txt") is False
     assert outside.exists()
+
+
+# ── 需求 9：背景**视频**（f011，devlog/423）──────────────────────────────
+#
+# 与图片那条**同一套纪律**，所以这里只判"两边不一样的地方"：
+#   ① 它认的是 mp4 家族（`ftyp` 在**第 4 字节**，不能 `startswith`）与 webm；
+#   ② 限额是 `MAX_VIDEO_BYTES`（图片那条的 5 倍）；
+#   ③ 文件名前缀 `_bgv_` ⇒ 与背景图**互不相干**（谁都不许删谁）—— 这半条必须配正对照。
+
+MP4 = b"\x00\x00\x00\x20ftypisom" + b"0" * 200      # 前 4 字节是 box 长度，`ftyp` 在第 4 字节
+WEBM = b"\x1a\x45\xdf\xa3" + b"0" * 200
+HTML = b"<!doctype html><html><body>hi</body></html>"
+
+
+def _upload_video(client, vid, data, content_type, name="bg.mp4"):
+    return client.post(f"/vtuber/{vid}/background-video",
+                       files={"file": (name, data, content_type)})
+
+
+def _db_video_path(vid: int) -> str | None:
+    db = TestingSession()
+    try:
+        return db.query(VTuber).filter(VTuber.id == vid).one().background_video_path
+    finally:
+        db.close()
+
+
+def _custom_dir(data_dir: Path) -> Path:
+    return data_dir / "static" / "custom_bg"
+
+
+def test_sniff_video_reads_ftyp_at_offset_4():
+    """`ftyp` 在**第 4 字节**（前 4 字节是 box 长度）—— 写成 `startswith(b"ftyp")` 会全判成不认。"""
+    assert bg.sniff_video(MP4) == "mp4"
+    assert bg.sniff_video(WEBM) == "webm"
+    assert bg.sniff_video(PNG) is None, "图片不该被当成视频"
+    assert bg.sniff_video(HTML) is None
+    assert bg.sniff_video(b"ftyp" + b"0" * 40) is None, "第 0 字节的 ftyp 不是 mp4"
+
+
+def test_background_video_roundtrip_replace_and_clear(client, _env):
+    """存/换/清，且**全程不碰背景图**（需求 9 的核心口径）。"""
+    vid = _mk_v()
+    assert client.get(f"/vtuber/{vid}").json()["background_video_path"] is None
+
+    # ★ 正对照：先真传一张背景图 —— 否则"没碰它"与"把它清成 None"分不出来
+    keep_img = _seed_background(client, vid)
+
+    r = _upload_video(client, vid, MP4, "video/mp4")
+    assert r.status_code == 200
+    first = r.json()["background_video_path"]
+    assert first and first.endswith(".mp4") and "_bgv_" in first
+    assert _db_video_path(vid) == first
+    assert (_env / first).exists(), "文件要真的落盘"
+    assert r.json()["background_path"] == keep_img, "传视频不该碰背景图"
+    assert client.get(f"/vtuber/{vid}").json()["background_video_path"] == first
+
+    # 换一个（webm）：新文件在、旧文件被删、图还在
+    r2 = _upload_video(client, vid, WEBM, "video/webm", "bg.webm")
+    second = r2.json()["background_video_path"]
+    assert second.endswith(".webm") and second != first
+    assert (_env / second).exists()
+    assert not (_env / first).exists(), "换了视频要把旧文件删掉"
+    assert r2.json()["background_path"] == keep_img
+
+    # 再传一张图：**视频不受影响**（反方向也要有正对照）
+    _upload(client, vid, JPEG, "image/jpeg", "new.jpg")
+    assert _db_video_path(vid) == second, "传图不该碰背景视频"
+
+    # 清除视频：字段清空、文件删掉、图仍在
+    r3 = client.delete(f"/vtuber/{vid}/background-video")
+    assert r3.status_code == 200
+    assert r3.json()["background_video_path"] is None
+    assert not (_env / second).exists()
+    assert r3.json()["background_path"] is not None, "清视频**不该碰背景图**"
+    assert _files(_env) == [Path(r3.json()["background_path"]).name], \
+        f"目录里只该剩那张图：{_files(_env)}"
+
+
+def test_background_video_rejects_non_video_and_mismatch(client, _env):
+    """网页伪装成 mp4 ⇒ 415；真 PNG 声明成 mp4 ⇒ 415（吵闹的失败），且一个文件都不留。"""
+    vid = _mk_v()
+    assert _upload_video(client, vid, HTML, "video/mp4", "x.mp4").status_code == 415
+    assert _upload_video(client, vid, PNG, "video/mp4", "x.mp4").status_code == 415
+    assert _files(_env) == [], f"被拒的上传留下了文件：{_files(_env)}"
+
+
+def test_background_video_accepts_an_unknown_declaration(client, _env):
+    """声明不认识（octet-stream）但内容是真 mp4 ⇒ 收（与图片那条同口径：声明只是提示）。"""
+    vid = _mk_v()
+    r = _upload_video(client, vid, MP4, "application/octet-stream")
+    assert r.status_code == 200 and r.json()["background_video_path"].endswith(".mp4")
+
+
+def test_background_video_oversized_is_rejected(client, _env, monkeypatch):
+    """超限 ⇒ 413，且**不留文件、不动旧值**。
+
+    ⚠️ 把闸门调小来测（真造 50MB 太慢）：`save_background_video` 在**调用时**读这个常量，
+    所以 monkeypatch 模块属性是有效的。
+    """
+    vid = _mk_v()
+    old = _upload_video(client, vid, MP4, "video/mp4").json()["background_video_path"]
+    monkeypatch.setattr(bg, "MAX_VIDEO_BYTES", 1024)
+    r = _upload_video(client, vid, MP4 + b"0" * 2048, "video/mp4", "big.mp4")
+    assert r.status_code == 413
+    assert _db_video_path(vid) == old, "被拒的上传不该改库里的值"
+    assert (_env / old).exists(), "旧视频必须原样还在"
+    assert _files(_env) == [Path(old).name], f"不该留临时文件：{_files(_env)}"
+
+
+def test_background_video_partial_write_leaves_no_temp_file(client, _env, monkeypatch):
+    """写一半炸掉 ⇒ 视频的临时文件（`.uploading.video`）不许留在目录里。"""
+    vid = _mk_v()
+    old = _upload_video(client, vid, MP4, "video/mp4").json()["background_video_path"]
+
+    class _HalfWriter:
+        def __init__(self, path):
+            self._fh = path.open("wb")
+
+        def write(self, data):
+            self._fh.write(data[:8])
+            raise OSError("磁盘满了")
+
+        def close(self):
+            self._fh.close()
+
+    monkeypatch.setattr(bg, "_open_for_write", _HalfWriter)
+    with pytest.raises(OSError):
+        asyncio.run(bg.save_background_video(vid, _FakeUpload(MP4), _custom_dir(_env)))
+    monkeypatch.undo()
+    assert _files(_env) == [Path(old).name], f"留了渣：{_files(_env)}"
+
+
+class _FakeUpload:
+    """给直调 service 的用例用（走路由时是 FastAPI 的 `UploadFile`）。"""
+
+    def __init__(self, data: bytes, content_type: str = "video/mp4"):
+        self._data = data
+        self.content_type = content_type
+        self._pos = 0
+
+    async def read(self, n: int) -> bytes:
+        chunk = self._data[self._pos:self._pos + n]
+        self._pos += len(chunk)
+        return chunk

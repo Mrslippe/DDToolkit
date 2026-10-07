@@ -418,6 +418,51 @@ async def set_vtuber_background(
     return _vtuber_out(db, v)
 
 
+@router.post("/vtuber/{vtuber_id}/background-video", response_model=VTuberOut)
+async def set_vtuber_background_video(
+    vtuber_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    """上传卡片页背景**视频**（需求 9，f011，`devlog/423`）。
+
+    与图片那条**同一套纪律**（真源见 `app/services/vtuber_background.py` 头部三条不变量）：
+    限额流式读取 + 按文件头判类型 + 临时文件原子 rename，**新视频提交成功之后**才删旧视频。
+
+    ⚠️ **不动背景图**：图是视频的 poster 与降级兜底（解码失败/还没加载完就退回图片），
+    两者各自独立 —— 传视频不该顺手清掉图，反之亦然。
+    """
+    from app.services.vtuber_background import (
+        BackgroundTooLarge, BackgroundUnsupported, remove_background, save_background_video,
+    )
+
+    v = VTuberRepo(db).get(vtuber_id)
+    if not v:
+        raise HTTPException(404, f"VTuber id={vtuber_id} 不存在")
+    custom_dir = settings.DATA_DIR / "static" / "custom_bg"
+    old_name = Path(v.background_video_path).name if v.background_video_path else None
+    try:
+        rel = await save_background_video(vtuber_id, file, custom_dir)
+    except BackgroundTooLarge:
+        raise HTTPException(413, "视频超过 50MB 限制") from None
+    except BackgroundUnsupported as e:
+        raise HTTPException(415, f"仅支持 mp4 / webm 视频（{e}）") from None
+
+    v.background_video_path = rel
+    db.add(v)
+    try:
+        db.commit()
+    except Exception:
+        # 提交失败 ⇒ 刚写好的那份是孤儿：删掉它；旧视频（文件 + DB 值）一动没动
+        db.rollback()
+        remove_background(custom_dir, rel)
+        raise
+    db.refresh(v)
+    if old_name and old_name != Path(rel).name:
+        remove_background(custom_dir, old_name)     # 只有新视频真的生效了才删旧的
+    return _vtuber_out(db, v)
+
+
 class BackgroundFocusIn(BaseModel):
     """背景取景（需求 7）：**归一化**的图片锚点 + 缩放倍数。
 
@@ -478,6 +523,24 @@ def clear_vtuber_background(vtuber_id: int, db: Session = Depends(get_db)):
         custom_dir = settings.DATA_DIR / "static" / "custom_bg"
         remove_background(custom_dir, v.background_path)
         v.background_path = None
+        db.add(v)
+        db.commit()
+        db.refresh(v)
+    return _vtuber_out(db, v)
+
+
+@router.delete("/vtuber/{vtuber_id}/background-video", response_model=VTuberOut)
+def clear_vtuber_background_video(vtuber_id: int, db: Session = Depends(get_db)):
+    """清除背景视频（需求 9）。⚠️ **不动背景图**（与 `clear_vtuber_background` 对称）。"""
+    from app.services.vtuber_background import remove_background
+
+    v = VTuberRepo(db).get(vtuber_id)
+    if not v:
+        raise HTTPException(404, f"VTuber id={vtuber_id} 不存在")
+    if v.background_video_path:
+        custom_dir = settings.DATA_DIR / "static" / "custom_bg"
+        remove_background(custom_dir, v.background_video_path)
+        v.background_video_path = None
         db.add(v)
         db.commit()
         db.refresh(v)
