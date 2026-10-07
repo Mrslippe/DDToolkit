@@ -191,17 +191,20 @@ export function BackdropCrossfade({ src, custom, focus, videoSrc, videoFocus }: 
             key={l.src}
             data-backdrop={l.out ? 'prev' : l.first ? 'first' : 'cur'}
             className={`hero-backdrop${custom ? ' custom' : ''}${l.out ? ' is-prev' : ''}`}
-            /* 取景（需求 7）：⚠️ **正在淡出的那一层跟自己的图走** —— 若让它读实时的 `focus`，
-               换 V 的那 250ms 里旧图会被按新 V 的取景变换一次（看着像旧图跳了一下）。
-               当前层则读实时值 ⇒ 在设置里调取景时**右边背景当场跟着动**（不用重开）。
-               ⚠️ 取景是**三件套**（位置 + 缩放 + 支点），必须整组来自 `focusStyle` ——
-               少给 `transform-origin` 会让"放大后锚点不漂"这条保证当场失效（`devlog/420`）。 */
-            style={{
-              backgroundImage: `url(${l.src})`,
-              ...focusStyle(f),
-            }}
           >
-            {/* 背景视频（需求 9）：盖在这一层的图上面；图就是它的 poster 与降级兜底。
+            {/* 背景**图**：取景（需求 7）挂**这一层**，不挂外层 —— ⚠️ `transform: scale()`
+                会连**子元素一起放大**，而视频就是子元素（2026-10-07 用户报"调图的缩放把视频
+                一起放大了"，`devlog/428`）。图在外层、视频在里层时两者才真正互不相干：
+                `background-position` 只动背景图，`transform` 却会带走整棵子树 —— 当初就漏了这一条。
+                ⚠️ 正在淡出的那一层**跟自己的图走**：读实时的 `focus` 会让旧图被按新 V 的取景
+                变换一次（看着像旧图跳了一下）；当前层读实时值 ⇒ 调取景时右边**当场跟着动**。
+                ⚠️ 三件套必须整组来自 `focusStyle`（位置 + 缩放 + 与位置同源的支点）。 */}
+            <div
+              className="hero-backdrop-img"
+              data-testid="backdrop-img"
+              style={{ backgroundImage: `url(${l.src})`, ...focusStyle(f) }}
+            />
+            {/* 背景视频（需求 9）：与图**并列**（不是嵌在图里），自己那份取景走 `object-position`。
                 ⚠️ 与取景同理 —— 旧层放**自己**那一段，不许被新 V 的视频换掉。 */}
             {v && <BackdropVideo src={v} focus={vf} />}
           </div>

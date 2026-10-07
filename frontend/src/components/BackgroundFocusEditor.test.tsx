@@ -314,21 +314,21 @@ describe('BackgroundFocusEditor', () => {
   const switchBtn = () => [...host.querySelectorAll<HTMLButtonElement>('.vd-focus-switch')][0]
   const previewVideo = () => host.querySelector<HTMLVideoElement>('[data-testid="focus-video"]')
 
-  it('★ 切换钮只在**两样都有**时出现；且默认调图片', async () => {
+  it('★ 有视频 ⇒ **默认调视频**（视频是盖在图上、观众看得见的那层）；只有图 ⇒ 没有可切的', async () => {
     await mount({ background_focus: null })
     expect(switchBtn(), '只有图 ⇒ 没什么可切').toBeUndefined()
+    expect(previewVideo(), '没视频就只可能是图').toBeNull()
     await mount({ background_focus: null }, '/static/custom_bg/a.mp4')
-    expect(switchBtn()?.textContent, '默认调的是图片').toContain('图片取景')
-    expect(previewVideo(), '调图片时视频**收起来**（真实投放里它盖住图）').toBeNull()
+    expect(switchBtn()?.textContent, '⚠️ 有视频时默认调**视频**（用户口径）').toContain('视频取景')
+    expect(previewVideo(), '默认就该是视频首帧').not.toBeNull()
   })
 
-  it('★ 切到视频 ⇒ 预览换成视频**首帧**（`#t=` + 不 autoplay），存的是**另一份**', async () => {
+  it('★ 视频首帧预览 + 拖动只动视频那份；点切换钮 ⇒ 回到图片取景（视频收起来）', async () => {
     await mount(
       { background_focus: '{"x":0.2,"y":0.2,"scale":2}',
         background_video_focus: '{"x":0.8,"y":0.9,"scale":1.5}' },
       '/static/custom_bg/a.mp4',
     )
-    await act(async () => { switchBtn().click() })
     const v = previewVideo()!
     expect(v.getAttribute('src'), '停在第一帧的媒体片段').toContain('#t=0.001')
     expect(v.preload).toBe('auto')
@@ -349,14 +349,19 @@ describe('BackgroundFocusEditor', () => {
     expect(setBackgroundFocus, '⚠️ 动视频取景不该碰图片取景').not.toHaveBeenCalled()
     // 溢出 = scale·imgW − 框宽 = 1.5×460 − 460 = 230 ⇒ Δx = −30/230（图片那条用例是同样的算法）
     expect(setBackgroundVideoFocus.mock.calls[0][1].x).toBeCloseTo(0.8 - 30 / (IMG_W * 0.5), 6)
+    // 点切换钮 ⇒ 改调图片，视频收起（真实投放里它盖住图，不收就没法调）
+    await act(async () => { switchBtn().click() })
+    expect(switchBtn()?.textContent).toContain('图片取景')
+    expect(previewVideo(), '调图片时视频整个收起来').toBeNull()
+    expect(img().style.backgroundPosition).toBe('20% 20%')
   })
 
-  it('★ 「重置取景」打的是**当前那一份**（切到视频 ⇒ 清视频取景）', async () => {
+  it('★ 「重置取景」打的是**当前那一份**（默认视频 ⇒ 清视频；切到图片 ⇒ 清图片）', async () => {
     await mount(
       { background_focus: '{"x":0.2,"y":0.2,"scale":2}', background_video_focus: '{"x":0.8,"y":0.9,"scale":1.5}' },
       '/static/custom_bg/a.mp4',
     )
-    await act(async () => { switchBtn().click() })
+    // 默认目标是视频
     await act(async () => {
       resetBtn().click()
       await Promise.resolve()
@@ -364,5 +369,14 @@ describe('BackgroundFocusEditor', () => {
     expect(clearBackgroundVideoFocus).toHaveBeenCalledWith(V_ID)
     expect(clearBackgroundFocus, '⚠️ 清视频取景不该碰图片取景').not.toHaveBeenCalled()
     expect(previewVideo()!.style.objectPosition, '立刻回到居中').toBe('50% 50%')
+    // 切到图片 ⇒ 清的是图片那份
+    await act(async () => { switchBtn().click() })
+    await act(async () => {
+      resetBtn().click()
+      await Promise.resolve()
+    })
+    expect(clearBackgroundFocus).toHaveBeenCalledWith(V_ID)
+    expect(clearBackgroundVideoFocus, '还是只被叫过一次').toHaveBeenCalledTimes(1)
+    expect(img().style.backgroundPosition, '图片那份也回到居中').toBe('50% 50%')
   })
 })

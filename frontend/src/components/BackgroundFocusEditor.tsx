@@ -91,14 +91,25 @@ function snapScale(v: number): number {
 
 export default function BackgroundFocusEditor({ vtuber, src, videoSrc, onSaved, onPill }: Props) {
   const hasVideo = Boolean(videoSrc)
-  const [target, setTarget] = useState<Target>('image')
+  /* ★ 有视频就**默认调视频**（用户口径 2026-10-07，`devlog/428`）：视频是**盖在图上**的那一层，
+     观众看到的就是它 —— 进来先调看得见的那一层，图的取景点左上角切过去。
+     ⚠️ 只有"两样都有"时才这样；没视频就只能调图。 */
+  const [target, setTarget] = useState<Target>(() => (videoSrc ? 'video' : 'image'))
+  /** 视频是**后传**上来的（弹窗开着的时候）⇒ 跟着切过去：那一刻的意图就是"调这段视频"。 */
+  const hadVideo = useRef(Boolean(videoSrc))
+  useEffect(() => {
+    if (videoSrc && !hadVideo.current) setTarget('video')
+    hadVideo.current = Boolean(videoSrc)
+  }, [videoSrc])
   /** 当前调的那一份（存库里的原文；两份各取各的，不回落）。 */
   const storedOf = useCallback(
     (t: Target) => (t === 'image' ? vtuber.background_focus : vtuber.background_video_focus),
     [vtuber.background_focus, vtuber.background_video_focus],
   )
   const [focus, setFocus] = useState<BackgroundFocus>(() => {
-    const raw = vtuber.background_focus ?? vtuber.background_video_focus
+    const raw = videoSrc
+      ? (vtuber.background_video_focus ?? vtuber.background_focus)
+      : (vtuber.background_focus ?? vtuber.background_video_focus)
     return parseBackgroundFocus(raw) ?? FOCUS_CENTER
   })
   const [busy, setBusy] = useState(false)

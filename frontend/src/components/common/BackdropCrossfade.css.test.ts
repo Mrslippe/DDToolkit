@@ -42,6 +42,18 @@ describe('背景层：CSS 契约', () => {
     expect(dim.slice(0, dim.indexOf('}'))).toMatch(/opacity:\s*0/)
   })
 
+  it('★ 图在**内层** `.hero-backdrop-img`（取景变换挂它，不挂外层 —— 否则会连视频一起放大）', () => {
+    const rule = css.slice(css.indexOf('.hero-backdrop-img {'))
+    const body = rule.slice(0, rule.indexOf('}'))
+    expect(body, '内层要铺满整层').toMatch(/position:\s*absolute/)
+    expect(body).toMatch(/inset:\s*0/)
+    expect(body, '铺满方式与原来一致').toMatch(/background-size:\s*cover/)
+    // ⚠️ 外层**不许**再带 background-size：图已经不在它身上了（留着会让人以为图还在外层）
+    const outer = css.slice(css.indexOf('.hero-backdrop {'))
+    const outerBody = outer.slice(0, outer.indexOf('}'))
+    expect(outerBody).not.toMatch(/background-size/)
+  })
+
   /**
    * ⚠️ **原来这里有一条判据**："有视频在全屏时背景层整个撤掉"（`devlog/381`）。
    *

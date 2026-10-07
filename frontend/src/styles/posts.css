@@ -17,14 +17,24 @@
   position: absolute;
   inset: 0;
   z-index: 0;
-  background-size: cover;
-  background-position: center;
-  background-repeat: no-repeat;
   /* ⚠️ 不透明度必须**只在这一处**定义成变量：`is-prev` 的淡出关键帧要读它
      （`.custom` 是 1、头像铺底是 0.18），写死两份就会在自定义背景上"先跳到 0.18 再淡出"。 */
   --backdrop-opacity: 0.18;
   opacity: var(--backdrop-opacity);
   pointer-events: none;
+}
+
+/* 背景**图**层 —— ⚠️ 它是**独立的内层**，不是图层的背景（2026-10-07 用户报的 bug，`devlog/428`）：
+   取景的 `transform: scale()` 会**连子元素一起放大**，而视频正是子元素 ⇒ 调图的缩放会把视频
+   一起放大（用户原话「调整图片位置会影响视频位置」）。把图挪进内层、视频留作兄弟节点，
+   两者就**结构上**再也不可能互相影响（与设置页预览同一套结构）。
+   `background-position` 只动背景图、不影响子元素；但 `transform` 会 —— 这就是当初漏掉的那一条。 */
+.hero-backdrop-img {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
 }
 
 /* 背景**视频**层（需求 9，devlog/424）：盖在同层那张图上面，图就是它的 poster 与降级兜底。

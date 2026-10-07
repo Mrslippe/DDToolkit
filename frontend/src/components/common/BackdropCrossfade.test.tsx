@@ -39,6 +39,8 @@ let root: Root
 
 const layers = () => Array.from(document.querySelectorAll<HTMLElement>('[data-backdrop]'))
 const byKind = (kind: string) => layers().filter((el) => el.dataset.backdrop === kind)
+/** 图层里的**图**是**内层**（取景变换挂它、不挂外层的 .hero-backdrop）—— devlog/428。 */
+const imgLayerOf = (el: HTMLElement) => el.querySelector<HTMLElement>('.hero-backdrop-img')!
 
 async function render(src: string | null, custom = false) {
   await act(async () => { root.render(<BackdropCrossfade src={src} custom={custom} />) })
@@ -97,7 +99,7 @@ describe('背景层：换图不闪白', () => {
     expect(prev[0].className, '淡出层要挂 is-prev（CSS 靠它 z-index:1 + backdrop-out）')
       .toContain('is-prev')
     expect(cur[0].className).not.toContain('is-prev')
-    expect(cur[0].style.backgroundImage).toContain('b.jpg')
+    expect(imgLayerOf(cur[0]).style.backgroundImage).toContain('b.jpg')
   })
 
   it('淡出结束（250ms）后旧层被摘掉，只剩当前层', async () => {
@@ -129,14 +131,14 @@ describe('背景层：换图不闪白', () => {
     await render('https://x/c.jpg')          // b 还没 load 就被 c 取代
     await loadLatest()
     expect(layers()).toHaveLength(2)         // a（淡出中）+ c
-    expect(byKind('cur')[0].style.backgroundImage).toContain('c.jpg')
+    expect(imgLayerOf(byKind('cur')[0]).style.backgroundImage).toContain('c.jpg')
   })
 
   it('★ 取景是**三件套**：位置 + 缩放 + 支点一起挂，支点与位置同源（devlog/420）', async () => {
     await act(async () => {
       root.render(<BackdropCrossfade src="https://x/a.jpg" custom focus={{ x: 0.3, y: 0.35, scale: 2 }} />)
     })
-    const el = byKind('first')[0]
+    const el = imgLayerOf(byKind('first')[0])
     // ⚠️ 少了 transformOrigin ⇒ 缩放绕中心走，锚点当场漂 —— 所以这一条必须在这里也钉住
     expect(el.style.backgroundPosition).toBe('30% 35%')
     expect(el.style.transform).toBe('scale(2)')
@@ -153,10 +155,10 @@ describe('背景层：换图不闪白', () => {
     await loadLatest()
     const prev = byKind('prev')[0]
     const cur = byKind('cur')[0]
-    expect(prev.style.backgroundPosition, '旧层还是旧取景').toBe('10% 10%')
-    expect(prev.style.transform, '旧层不该被放大 3 倍').toBe('')
-    expect(cur.style.backgroundPosition).toBe('90% 90%')
-    expect(cur.style.transform).toBe('scale(3)')
+    expect(imgLayerOf(prev).style.backgroundPosition, '旧层还是旧取景').toBe('10% 10%')
+    expect(imgLayerOf(prev).style.transform, '旧层不该被放大 3 倍').toBe('')
+    expect(imgLayerOf(cur).style.backgroundPosition).toBe('90% 90%')
+    expect(imgLayerOf(cur).style.transform).toBe('scale(3)')
   })
 
   // ── 需求 9：背景视频（devlog/424）────────────────────────────────────
@@ -173,7 +175,7 @@ describe('背景层：换图不闪白', () => {
     expect(v, '视频要渲染出来（否则永远等不到 canplay）').toBeTruthy()
     expect(v.getAttribute('src')).toBe('/v/a.mp4')
     expect(v.dataset.ready, '还没 canplay ⇒ 透明，先看图').toBe('0')
-    expect(byKind('first')[0].style.backgroundImage, '图仍在（它就是 poster 与兜底）')
+    expect(imgLayerOf(byKind('first')[0]).style.backgroundImage, '图仍在（它就是 poster 与兜底）')
       .toContain('a.jpg')
     // ⚠️ 自动播放必须同时 muted：Chromium 会拦掉"有声的 autoplay"
     expect(v.muted, 'autoplay 的前提是 muted').toBe(true)
@@ -194,8 +196,10 @@ describe('背景层：换图不闪白', () => {
     expect(st.objectPosition, '视频用**自己**那份（不是图的）').toBe('80% 10%')
     expect(st.transform).toBe('scale(1.5)')
     expect(st.transformOrigin, '支点与锚点同源').toBe('80% 10%')
-    const layer = byKind('first')[0]
-    expect(layer.style.backgroundPosition, '图层用图片那份').toBe('30% 35%')
+    // ★ 用户报的那个 bug：取景变换**不许挂在外层**（	ransform 会连子元素一起放大 ⇒ 视频被一起放大）
+    expect(byKind('first')[0].style.transform, '变换挂外层会把视频一起放大').toBe('')
+    const layer = imgLayerOf(byKind('first')[0])
+    expect(layer.style.backgroundPosition, '图那层用图片那份').toBe('30% 35%')
     expect(layer.style.transform).toBe('scale(2)')
   })
 
@@ -210,7 +214,7 @@ describe('背景层：换图不闪白', () => {
     expect(video()!.style.objectPosition, '不借图片的锚点').toBe('')
     expect(video()!.style.transform, '也不借图片的 2 倍').toBe('')
     // 正对照：图层自己那份**确实**是 30%/35% —— 否则上面两条"空"说明不了任何事
-    expect(byKind('first')[0].style.backgroundPosition).toBe('30% 35%')
+    expect(imgLayerOf(byKind('first')[0]).style.backgroundPosition).toBe('30% 35%')
   })
 
   it('★ 播不了 ⇒ 视频撤掉、**图还在**（收下"存得进、播不了"的文件也不至于变黑）', async () => {
@@ -219,7 +223,7 @@ describe('背景层：换图不闪白', () => {
     })
     await act(async () => { video()!.dispatchEvent(new Event('error')) })
     expect(video(), '出错的视频元素要撤掉').toBeNull()
-    expect(byKind('first')[0].style.backgroundImage, '背景层照旧是那张图').toContain('a.jpg')
+    expect(imgLayerOf(byKind('first')[0]).style.backgroundImage, '背景层照旧是那张图').toContain('a.jpg')
   })
 
   it('★ 正在淡出的那一层放**自己那一段视频**（换 V 时旧背景不许被换成新 V 的）', async () => {
