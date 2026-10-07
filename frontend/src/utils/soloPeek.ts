@@ -97,7 +97,7 @@ export function useSoloPeek(enabled: boolean): SoloPeek {
 }
 
 /** 多久没动鼠标算"闲置"（界面元素该让位给背景图了）。用户 2026-10-07：**5 秒**。 */
-export const SOLO_IDLE_MS = 5000
+export const SOLO_IDLE_MS = 3000
 
 /**
  * 多小的移动**不算**"动"（px）。
@@ -106,7 +106,7 @@ export const SOLO_IDLE_MS = 5000
  * 都会持续发 1px 级的 `mousemove` ⇒ 闲置计时被无限重置 ⇒
  * **用户实测"让位没生效"**（`devlog/436`）。死区之后"真的挪了鼠标"才算数。
  */
-export const SOLO_IDLE_EPS_PX = 6
+export const SOLO_IDLE_EPS_PX = 3
 
 /**
  * 指针**静止**了多久（`devlog/434`）——"界面元素自动隐藏"的真正依据。

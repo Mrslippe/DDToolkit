@@ -593,7 +593,7 @@ html.window-maximized body {
    ⚠️ 顺序靠 `transition-delay` 表达（**不写 JS 状态机**）：进入按 `--solo-step` 递增，
       退出**倒着来**（顶栏先回、工具栏、最后左栏）。 */
 :root {
-  --solo-step: 260ms;                              /* 每一段的时长（三段共 780ms） */
+  --solo-step: 780ms;                              /* 每一段的时长（三段依次 +1 段 ⇒ 总时长 = 3 × 此值） */
   --solo-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
   --solo-dim: 0;                                   /* 让位后页面元素的不透明度（用户口径：**降到 0**） */
   --solo-hide-shift: 40px;   /* 让位时界面元素**下滑**多远（回来时上滑同样的距离） */
@@ -601,7 +601,7 @@ html.window-maximized body {
   /* 正常模式：左栏收起/展开**自己的**时长（用户口径 2026-10-07，`devlog/444`）。
      它属于"两态切换"，不是单推那段编排的一部分；走 `--motion-scale` 慢放倍率
      （与 `--motion-*` 一致 —— 调测页要能看清这一段）。 */
-  --sidebar-toggle-ms: calc(180ms * var(--motion-scale));
+  --sidebar-toggle-ms: calc(260ms * var(--motion-scale));
   /* ⚠️ “等多久才让位”**不在 CSS 里**：它是 `utils/soloPeek.ts` 的 `SOLO_IDLE_MS`
      （闲置计时器）—— 判定"鼠标停多久了"CSS 表达不了，两处各留一份就会叠成双倍等待。 */
 }

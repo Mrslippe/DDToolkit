@@ -60,7 +60,7 @@ describe('useSoloIdle', () => {
     expect(shown()).toBe('1')
   })
 
-  it('★ **抖动不算动**（死区 6px）：触控板搭手指 / 传感器抖动不该把计时一直顶回去', async () => {
+  it('★ **抖动不算动**（`SOLO_IDLE_EPS_PX` 那颗死区旋钮）：触控板搭手指 / 传感器抖动不该把计时一直顶回去', async () => {
     await act(async () => { root.render(<Probe enabled ms={100} />) })
     await move(100, 100)          // 第一次算"动"（还没有基准）
     // 之后每 10ms 抖 1px —— 真机上这就是"停着不动"的样子
