@@ -18,32 +18,37 @@ import {
 } from '../utils/backgroundFocus'
 
 /**
- * 背景取景编辑器（需求 7 / V1b-2，`devlog/419`；**口径换成"图片锚点"是 V1b-3，`devlog/420`**）。
+ * 背景取景（需求 7 / `devlog/419`→`420`→`421`）。
  *
- * ## 交互口径（用户看完 `docs/design/background-fit/resize-drift.html` 后选 C）
+ * ## 做法：**预览框本身就是操作面**（V1b-4，用户要求）
  *
- * - **直接操作**：按住预览图拖 = **图跟着指针走**（1:1）；滑杆 = 缩放 1..3 倍；方向键平移（Shift ×5）；
- * - 「重置取景」= 删掉记录（**不动背景图本身**，那是「清除」的事）；
- * - 存的是**图片锚点**：`x=0` 看左边缘、`x=1` 看右边缘 ⇒ 你钉的那条线**换窗口宽度也不动**。
+ * 「档案设置」里那个 132×74 的背景预览直接可操作 —— **拖 = 平移**（图跟着指针走，1:1）、
+ * **滚轮 = 缩放**、方向键微调（Shift ×5）、旁边一个「重置取景」图标钮。
+ * ⚠️ **没有滑杆**（用户明确要求撤掉）：它曾经单独占一行、和预览各显示一遍同一件事。
  *
- * ## 四个不显然的坑（都在下面标了 ⚠️）
+ * 存的是**图片锚点**（`x=0` 看左边缘、`x=1` 看右边缘）⇒ 你钉的那条线换窗口宽度也不动；
+ * 几何全在 `utils/backgroundFocus.ts`。
  *
- * 1. **拖拽要按"溢出量"换算**（`panDelta`）：竖图铺在宽面板里，**横向根本没有可挪的余量**
- *    ⇒ 横着拖不动是**正确**结果，不是坏了；纵向照挪。
- *    ⚠️ 这一条也让 V1b-2 那个"拖动时自动抬到 120%"的权宜之计**不再需要**（它当初是为了绕开
- *    "`scale=1` 时平移在数学上无处可去"）。
- * 2. **预览的比例要照着真背景层量**（`getBoundingClientRect`）：`cover` 的裁切量取决于容器宽高比，
- *    预览框比例不对 ⇒ 你在预览里调好的构图到卡片页上不是那个样子。
- * 3. **松手才发请求**：拖拽在 `pointerup` 提交、滑杆 260ms 防抖 —— 一次拖动只打一发 PUT。
- * 4. **关窗兜底**：防抖窗口内关窗会把最后一格丢掉，卸载时补发一次（与弹窗里 `commitSign` 同一套路）。
+ * ## 五个不显然的坑（都在下面标了 ⚠️）
+ *
+ * 1. **滚轮必须挂原生非被动监听**：React 的 `onWheel` 是 passive 的，`preventDefault()` 无效
+ *    ⇒ 弹窗内容体一边缩放一边跟着滚。`addEventListener('wheel', h, { passive: false })` 才行。
+ * 2. **滚轮步长按 delta 指数映射**，不是"一格 ×1.1"：触控板一次滑动会发几十个事件，
+ *    按事件乘会瞬间顶到 3×（鼠标一格 ≈ +16%）。
+ * 3. **拖拽按"溢出量"换算**（`panDelta`）：竖图铺在宽框里**横向没有余量 ⇒ 拖了不动是正确结果**，
+ *    纵向照挪；没余量的轴返回 0，不许除出个巨大跳变。
+ * 4. **取景三件套挂在内层**：`transform: scale()` 会连边框圆角一起放大，挂外层框就长到邻居身上。
+ * 5. **松手/滚停才发请求**（260ms 防抖）+ **关窗兜底**补发最后一格（与弹窗里 `commitSign` 同套路）。
  */
 const PAN_DEAD_PX = 3
 /** 方向键一步的锚点位移（比例）。 */
 const KEY_STEP = 0.02
-/** 滑杆防抖 —— 一次滑动只打一发。 */
+/** 滚轮的指数映射系数：鼠标一格（deltaY≈±100）≈ ±16%。 */
+const WHEEL_RATE = 0.0015
+/** 行模式的 deltaY（Firefox）大约是这个数量级的 px 当量。 */
+const LINE_TO_PX = 33
+/** 保存防抖 —— 一次拖动/一段滚轮只打一发 PUT。 */
 const COMMIT_DEBOUNCE_MS = 260
-/** 量不到真背景层时，预览框退回这个比例（≈ 卡片页常见形态）。 */
-const FALLBACK_ASPECT = 16 / 9
 
 interface Props {
   vtuber: VTuber
@@ -77,9 +82,9 @@ export default function BackgroundFocusEditor({ vtuber, src, onSaved, onPill }: 
     () => parseBackgroundFocus(vtuber.background_focus) ?? FOCUS_CENTER,
   )
   const [busy, setBusy] = useState(false)
-  /** 图片原始尺寸（拖拽换算要用；`cover` 的倍数 = max(框/图)） */
+  /** 图片原始尺寸（拖拽换算要用：`cover` 倍数 = max(框/图)，没它就不知道哪条轴有余量） */
   const [nat, setNat] = useState<{ w: number; h: number } | null>(null)
-  const [aspect, setAspect] = useState(FALLBACK_ASPECT)
+  const boxRef = useRef<HTMLDivElement | null>(null)
   const dragRef = useRef<DragState | null>(null)
   const timerRef = useRef<number | null>(null)
   const pendingRef = useRef<BackgroundFocus | null>(null)
@@ -89,13 +94,6 @@ export default function BackgroundFocusEditor({ vtuber, src, onSaved, onPill }: 
   useEffect(() => {
     setFocus(parseBackgroundFocus(vtuber.background_focus) ?? FOCUS_CENTER)
   }, [vtuber.id, vtuber.background_focus])
-
-  // ⚠️ 坑 2：照真背景层的比例来预览。量不到（比如视图里没有 hero）就退回常见比例。
-  useEffect(() => {
-    const el = document.querySelector('.hero-backdrop')
-    const r = el?.getBoundingClientRect()
-    if (r && r.width > 0 && r.height > 0) setAspect(r.width / r.height)
-  }, [])
 
   // 图片原始尺寸：拖拽要知道"这条轴有没有可挪的余量"
   useEffect(() => {
@@ -142,7 +140,7 @@ export default function BackgroundFocusEditor({ vtuber, src, onSaved, onPill }: 
     [commit],
   )
 
-  // ⚠️ 坑 4：关窗兜底。用 ref 拿"最新那一格"，不能靠 effect 的闭包（它只在挂载时跑一次）。
+  // ⚠️ 坑 5：关窗兜底。用 ref 拿"最新那一格"，不能靠 effect 的闭包（它只在挂载时跑一次）。
   const flushRef = useRef<() => void>(() => {})
   flushRef.current = () => {
     if (timerRef.current !== null) {
@@ -155,11 +153,31 @@ export default function BackgroundFocusEditor({ vtuber, src, onSaved, onPill }: 
   }
   useEffect(() => () => flushRef.current(), [])
 
+  // ⚠️ 坑 1+2：滚轮。监听器只挂一次 ⇒ 用 ref 读最新的 state / 调度函数（闭包里的会是旧的）。
+  const focusRef = useRef(focus)
+  focusRef.current = focus
+  const scheduleRef = useRef(scheduleCommit)
+  scheduleRef.current = scheduleCommit
+  useEffect(() => {
+    const el = boxRef.current
+    if (!el) return
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault()   // 拦住"一边缩放一边滚弹窗"（被动监听做不到这件事）
+      const dy = e.deltaY * (e.deltaMode === 1 ? LINE_TO_PX : 1)
+      const cur = focusRef.current
+      // 指数映射：向上滚（deltaY < 0）放大
+      scheduleRef.current({ ...cur, scale: snapScale(cur.scale * Math.exp(-dy * WHEEL_RATE)) })
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [])
+
   const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     const r = e.currentTarget.getBoundingClientRect()
     const w = r.width || 1 // jsdom / 隐藏容器里量出来是 0，别让它变成 Infinity
     const h = r.height || 1
     const k = nat ? coverScale(nat, { w, h }) : 1
+    const base = clampFocus(focus)
     dragRef.current = {
       px: e.clientX,
       py: e.clientY,
@@ -167,9 +185,9 @@ export default function BackgroundFocusEditor({ vtuber, src, onSaved, onPill }: 
       h,
       imgW: (nat?.w ?? w) * k,
       imgH: (nat?.h ?? h) * k,
-      base: clampFocus(focus),
+      base,
       armed: false,
-      last: clampFocus(focus),
+      last: base,
     }
     try {
       e.currentTarget.setPointerCapture(e.pointerId)
@@ -187,7 +205,7 @@ export default function BackgroundFocusEditor({ vtuber, src, onSaved, onPill }: 
       if (Math.abs(dx) < PAN_DEAD_PX && Math.abs(dy) < PAN_DEAD_PX) return // 死区：点心一下不算取景
       d.armed = true
     }
-    // ⚠️ 坑 1：换算按"溢出量"来 —— `panDelta` 在没余量的那条轴上返回 0（横着拖不动是正确结果）
+    // ⚠️ 坑 3：换算按"溢出量"来 —— `panDelta` 在没余量的那条轴上返回 0
     d.last = clampFocus({
       scale: d.base.scale,
       x: d.base.x + panDelta(dx, d.w, d.imgW, d.base.scale),
@@ -204,7 +222,7 @@ export default function BackgroundFocusEditor({ vtuber, src, onSaved, onPill }: 
     } catch {
       /* 同 down */
     }
-    // ⚠️ 坑 3：松手才发请求（`d.last` 而不是 state —— 事件闭包里的 state 可能差一帧）
+    // ⚠️ 坑 5：松手才发请求（`d.last` 而不是 state —— 事件闭包里的 state 可能差一帧）
     if (d?.armed) void commit(d.last)
   }
 
@@ -226,16 +244,17 @@ export default function BackgroundFocusEditor({ vtuber, src, onSaved, onPill }: 
   }
 
   const style = focusStyle(focus)
-  const canPan = nat !== null   // 量到图片尺寸才知道哪条轴挪得动
+  const zoomed = focus.scale > FOCUS_MIN_SCALE
 
   return (
-    <div className="vd-focus">
+    <>
       <div
-        className="vd-focus-stage"
-        style={{ aspectRatio: String(aspect) }}
+        ref={boxRef}
+        className="vd-bg-preview is-fit"
+        data-testid="focus-box"
         role="group"
         tabIndex={0}
-        aria-label="背景取景：拖动或按方向键平移图片"
+        aria-label="背景取景：拖动平移、滚轮缩放（方向键微调）"
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
@@ -255,36 +274,29 @@ export default function BackgroundFocusEditor({ vtuber, src, onSaved, onPill }: 
         }}
       >
         <div
-          className="vd-focus-img"
+          className="vd-bg-focus"
           data-testid="focus-img"
           style={{ backgroundImage: `url(${src})`, ...style }}
         />
-        {canPan && <span className="vd-focus-hint">拖动取景</span>}
+        {/* 读数不是滑杆：只在真放大时露出来 */}
+        {zoomed && <span className="vd-focus-zoom">{Math.round(focus.scale * 100)}%</span>}
       </div>
-      <div className="vd-focus-bar">
-        <span className="vd-focus-label">缩放</span>
-        <input
-          type="range"
-          className="vd-focus-range"
-          min={FOCUS_MIN_SCALE}
-          max={FOCUS_MAX_SCALE}
-          step={0.01}
-          value={focus.scale}
-          aria-label="背景缩放"
-          // ⚠️ 这里**不能** `disabled={busy}`：拖滑杆时防抖一提交就 busy，滑杆会在手底下被禁掉
-          onChange={(e) => scheduleCommit({ ...focus, scale: snapScale(Number(e.target.value)) })}
-        />
-        <span className="vd-focus-pct">{Math.round(focus.scale * 100)}%</span>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={!vtuber.background_focus || busy}
-          onClick={() => void reset()}
-        >
-          <RotateCcw className="size-4" />
-          重置取景
-        </Button>
-      </div>
-    </div>
+      <Button
+        variant="outline"
+        size="sm"
+        className="vd-focus-reset"
+        title="重置取景"
+        aria-label="重置取景"
+        disabled={!vtuber.background_focus || busy}
+        onClick={() => void reset()}
+      >
+        <RotateCcw className="size-4" />
+      </Button>
+      {/* 抓手光标只有鼠标用户看得见，键盘/触控用户看不出"这里能操作" ⇒ 没取景时给一句引导，
+          调过之后就不再出现（`flex-basis:100%` 让它自己占一行，不挤按钮） */}
+      {!vtuber.background_focus && (
+        <span className="vd-focus-tip">取景：拖动预览图平移，滚轮缩放（方向键微调）</span>
+      )}
+    </>
   )
 }

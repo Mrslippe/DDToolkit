@@ -580,12 +580,20 @@ export default function VtuberSettingsDialog({
             <div className="vd-section">
               <h4 className="vd-section-title">背景</h4>
               <div className="vd-bg-row">
-                <div
-                  className="vd-bg-preview"
-                  style={bg ? { backgroundImage: `url(${bg})` } : undefined}
-                >
-                  {!bg && <span>头像铺底</span>}
-                </div>
+                {/* 需求 7：**预览框本身就是取景操作面**（拖 = 平移、滚轮 = 缩放，`devlog/421`）。
+                    没背景图时退回静态的"头像铺底"—— 那时也没什么可取景的。 */}
+                {bg && vtuber ? (
+                  <BackgroundFocusEditor
+                    vtuber={vtuber}
+                    src={bg}
+                    onSaved={onSaved}
+                    onPill={onPill}
+                  />
+                ) : (
+                  <div className="vd-bg-preview">
+                    <span>头像铺底</span>
+                  </div>
+                )}
                 <div className="vd-bg-actions">
                   <Button
                     variant="outline"
@@ -611,15 +619,6 @@ export default function VtuberSettingsDialog({
                   </Button>
                 </div>
               </div>
-              {/* 需求 7：取景（平移 + 缩放）—— 只有真有背景图时才谈得上取景 */}
-              {bg && vtuber && (
-                <BackgroundFocusEditor
-                  vtuber={vtuber}
-                  src={bg}
-                  onSaved={onSaved}
-                  onPill={onPill}
-                />
-              )}
               <input
                 ref={fileRef}
                 type="file"

@@ -2716,109 +2716,75 @@ img.hero-avatar {
   display: flex;
   align-items: center;
   gap: 12px;
+  /* 取景那句引导靠 `flex-basis:100%` 独占一行；顺带让按钮在窄弹窗里优雅换行 */
+  flex-wrap: wrap;
 }
 
+/* 取景的引导句：只在"还没调过"时出现（`devlog/421`）—— 抓手光标对键盘/触控用户不存在 */
+.vd-focus-tip {
+  flex-basis: 100%;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--c-text-sub);
+}
+
+/* 背景预览 = **取景操作面**（需求 7 / V1b-4）：拖 = 平移、滚轮 = 缩放（滑杆已撤）。
+   ⚠️ 取景三件套必须挂在**内层** `.vd-bg-focus` 上：`transform: scale()` 会把边框和圆角
+   一起放大 —— 挂外层会让 1px 描边变成 2px、框还会长到邻居身上。 */
 .vd-bg-preview {
   width: 132px;
   height: 74px;
   border-radius: 6px;
   border: 1px solid var(--c-border);
   background-color: var(--sel-bg-hover);
-  background-size: cover;
-  background-position: center;
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 11px;
   color: var(--c-text-sub);
+  position: relative;      /* 内层的包含块 */
+  overflow: hidden;        /* 放大后裁掉溢出的那部分 */
   flex-shrink: 0;
+}
+
+/* 可拖动时才给抓手与手势：没背景图（"头像铺底"）时这些都不该出现 */
+.vd-bg-preview.is-fit {
+  cursor: grab;
+  touch-action: none;      /* ⚠️ 少了它：触屏/触控板拖拽会被当成滚动，pointer 序列被掐断 */
+  user-select: none;
+}
+.vd-bg-preview.is-fit:active { cursor: grabbing; }
+.vd-bg-preview.is-fit:focus-visible {
+  outline: 2px solid var(--c-accent, #fc7079);
+  outline-offset: 2px;
+}
+
+.vd-bg-focus {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+  /* 取景三件套由 `focusStyle()` 内联给（位置 + 缩放 + **与位置同源的支点**，`devlog/420`） */
+}
+
+/* 滚轮缩放的读数（不是滑杆）：只在真放大时露出来，1× 时看不见 */
+.vd-focus-zoom {
+  position: absolute;
+  right: 4px;
+  bottom: 3px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgba(15, 23, 42, 0.55);
+  color: #fff;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
 }
 
 .vd-bg-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-}
-
-/* 背景取景（需求 7 / V1b-2）：预览面**本身就是操作面** —— 拖它 = 平移，滑杆 = 缩放。 */
-.vd-focus {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 10px;
-}
-
-.vd-focus-stage {
-  position: relative;
-  /* 高度写死、宽度由 `aspect-ratio` 推（比例从真背景层量来，见组件注释坑 2）——
-     ⚠️ 两件套缺一不可：`align-self` 让它**别被 flex 拉伸**（拉伸成整幅宽 = 比例失效、
-     预览替你撒谎），`width: auto` 才让 `aspect-ratio` 有决定权。 */
-  height: 132px;
-  width: auto;
-  max-width: 100%;
-  align-self: flex-start;
-  border-radius: 8px;
-  border: 1px solid var(--c-border);
-  background-color: var(--sel-bg-hover);
-  overflow: hidden;          /* 放大后溢出的部分必须裁掉，否则会盖到下面的控件上 */
-  cursor: grab;
-  touch-action: none;        /* ⚠️ 少了它：触屏/触控板拖拽会被当成滚动，浏览器直接掐断 pointer 序列 */
-  user-select: none;
-}
-
-.vd-focus-stage:active {
-  cursor: grabbing;
-}
-
-.vd-focus-stage:focus-visible {
-  outline: 2px solid var(--c-accent, #fc7079);
-  outline-offset: 2px;
-}
-
-.vd-focus-img {
-  position: absolute;
-  inset: 0;
-  background-size: cover;
-  background-position: center;
-  /* ⚠️ 取景三件套由 `focusStyle()` 内联给（`background-position` + `transform` + `transform-origin`）：
-     位置决定"盖上哪一块"、`transform-origin` 必须与它同源，否则一放大锚点就漂（`devlog/420`）。 */
-}
-
-.vd-focus-hint {
-  position: absolute;
-  left: 8px;
-  bottom: 6px;
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: rgba(15, 23, 42, 0.55);
-  color: #fff;
-  font-size: 11px;
-  pointer-events: none;
-}
-
-.vd-focus-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.vd-focus-label {
-  font-size: 12px;
-  color: var(--c-text-sub);
-}
-
-.vd-focus-range {
-  flex: 1;
-  min-width: 0;
-  accent-color: var(--c-accent, #fc7079);
-}
-
-.vd-focus-pct {
-  width: 40px;
-  text-align: right;
-  font-size: 12px;
-  color: var(--c-text-sub);
-  font-variant-numeric: tabular-nums;   /* 拖动时数字不跳 */
 }
 
 .vd-avatar-row {
