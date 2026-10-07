@@ -87,33 +87,38 @@ describe('单推：分段收起与 hover 唤出', () => {
 })
 
 describe('单推：全收起后的延时淡出', () => {
-  it('★ 让位只在 **cards 视图** + **闲置**（`data-idle`）时才发生，且不动背景层', () => {
-    // ⚠️ 第四版（devlog/434）：让位依据从 "`data-peek` 恒有值" 改成**闲置计时器** ——
+  it('★ 让位 = 只在 cards 视图 + 闲置（data-idle）：界面元素**下滑 + 渐隐**、纱罩**渐隐**', () => {
+    // ⚠️ 第四版（devlog/434）：让位依据从 "data-peek 恒有值" 改成**闲置计时器** ——
     //    上一版 data-peek 默认就有值 ⇒ 恢复规则一直生效 ⇒ **自动隐藏直接没了**。
-    const base = P(".app-shell[data-solo='1'][data-idle] .posts-panel[data-view='cards']")
-    expect(base, '淡出量').toMatch(/--solo-a-content:\s*var\(--solo-dim\)/)
-    expect(base, '纱罩撤到 0 ⇒ 背景图完全显现').toMatch(/--solo-a-veil:\s*0/)
-    expect(base, '等待由 `SOLO_IDLE_MS` 负责，这里不许再叠延时').toMatch(/--solo-a-delay:\s*0ms/)
-    // 页面元素读这两个变量；⚠️ 背景层被排除（要的正是"背景图显现"）
-    const dim = P(".app-shell[data-solo='1'][data-idle] .posts-panel[data-view='cards'] > :not(.hero-backdrop)")
-    expect(dim).toMatch(/opacity:\s*var\(--solo-a-content\)/)
-    // 纱罩那条也读变量
+    // ⚠️ 第五版（devlog/435）：让位/回来带上**位移**（下滑退场 / 上滑进场），过渡时长与
+    //    滑动距离是两个 CSS 旋钮（--solo-hide-ms / --solo-hide-shift）。
+    const idle = P(".app-shell[data-solo='1'][data-idle] .posts-panel[data-view='cards'] > :not(.hero-backdrop)")
+    expect(idle, '渐隐').toMatch(/opacity:\s*0/)
+    expect(idle, '★下滑退场').toMatch(/transform:\s*translateY\(var\(--solo-hide-shift\)\)/)
+    expect(idle, '过渡时长是旋钮').toMatch(/transition:[^;]*var\(--solo-hide-ms\)/)
+    // 回来那条（默认态）：上滑 + 渐显
+    const back = P(".app-shell[data-solo='1'] .posts-panel[data-view='cards'] > :not(.hero-backdrop)")
+    expect(back).toMatch(/transform:\s*translateY\(0\)/)
+    expect(back).toMatch(/opacity:\s*1/)
+    // 纱罩：让位渐隐 ⇒ 背景图完全显现
     const veil = posts.slice(posts.indexOf(".app-shell[data-solo='1'][data-idle] .posts-panel[data-view='cards'] .hero-backdrop::after"))
-    expect(veil.slice(0, 300)).toMatch(/opacity:\s*var\(--solo-a-veil\)/)
+    expect(veil.slice(0, 260)).toMatch(/opacity:\s*0/)
+  })
+  it('★ 恢复只由 `data-idle` 决定：**不许**再把面板内容挂到 `data-peek` 上', () => {
+    // 上一版（`devlog/434`）就是把它挂在 `data-peek` 上，而那个属性默认就有值 ⇒ 自动隐藏没了
+    expect(posts, '`data-peek` 只管两栏，不该出现在面板内容的选择器里')
+      .not.toContain("[data-peek] .posts-panel")
+    // 正对照：让位那条**确实**在（否则上面那句"不含"什么都证明不了）
+    expect(posts).toContain("[data-idle] .posts-panel[data-view='cards']")
   })
 
-  it('★ 唤出任一区（`data-peek`）⇒ **立刻恢复**（两个变量拨回 1、延时归零）', () => {
-    const restore = P(".app-shell[data-solo='1'][data-peek] .posts-panel[data-view='cards']")
-    expect(restore).toMatch(/--solo-a-content:\s*1/)
-    expect(restore).toMatch(/--solo-a-veil:\s*1/)
-    expect(restore).toMatch(/--solo-a-delay:\s*0ms/)
-    // ⚠️ 别再退回那四条 `:hover` 兄弟选择器
-    expect(posts, '别退回 :hover 兄弟选择器').not.toContain('.solo-hover-top:hover ~ .app-body')
-  })
-
-  it('★ 淡到 **0**（用户口径 2026-10-07："界面元素透明度降到 0"）', () => {
+  it('★ 让位/回来带**位移**（下滑退场、上滑进场），时长与距离都是旋钮', () => {
     const root = layout.slice(layout.indexOf(':root {'))
-    expect(root.slice(0, root.indexOf('}')), '全收起后内容完全让位给背景图')
-      .toMatch(/--solo-dim:\s*0;/)
+    expect(root.slice(0, root.indexOf('}')), '滑动距离旋钮').toMatch(/--solo-hide-shift:\s*\d+px/)
+    expect(root.slice(0, root.indexOf('}')), '过渡时长旋钮').toMatch(/--solo-hide-ms:\s*\d+ms/)
   })
-})
+  it('★ 唤出的工具栏必须**压在左栏上面**（左栏也是负外边距藏起来的，它的白底会横跨到 [0,50]）', () => {
+    const rail = L(".app-shell[data-solo='1'] .icon-rail")
+    expect(rail, '不压在上面 ⇒ 用户看到的是左栏的白底（"左工具栏是一片白色"）').toMatch(/z-index:\s*\d/)
+    expect(rail, '要能盖住同层的兄弟').toMatch(/position:\s*relative/)
+  })})

@@ -45,36 +45,34 @@
    ⚠️ 背景层本身**不淡**（`.hero-backdrop` 被排除）—— 要的正是"背景图完全显现"。
    ⚠️ 唤出顶栏/工具栏时**立刻恢复**：那两条贴边窄带与被唤出的元素都在 `.app-shell` 下，
    用 `~` 兄弟选择器把两个变量拨回原值（`transition-delay: 0` ⇒ 不跟着延时）。 */
-.app-shell[data-solo='1'][data-idle] .posts-panel[data-view='cards'] {
-  --solo-a-content: var(--solo-dim);
-  --solo-a-veil: 0;
-  --solo-a-delay: 0ms;   /* ⚠️ 等待由 `SOLO_IDLE_MS` 的闲置计时器负责，这里别再叠一层延时 */
-}
-
-/* 唤出任一区（data-peek）⇒ 立刻恢复可读（延时归零） */
-.app-shell[data-solo='1'][data-peek] .posts-panel[data-view='cards'] {
-  --solo-a-content: 1;
-  --solo-a-veil: 1;
-  --solo-a-delay: 0ms;
-}
-
-/* ⚠️ 恢复要**瞬时**：这一段是"鼠标扫过"级别的高频切换，带过渡的话每次都要重绘整块面板
-   —— 用户实测"快速闪动 + 卡顿"的来源之一（`devlog/433`）。只保留"全收起后那一次淡出"
-   的过渡（它有 2.4s 延时，不跟着鼠标抖）。 */
-.app-shell[data-solo='1'][data-peek] .posts-panel[data-view='cards'] > :not(.hero-backdrop),
-.app-shell[data-solo='1'][data-peek] .posts-panel[data-view='cards'] .hero-backdrop::after {
-  transition: none;
-}
-
+/* 让位：**下滑 + 渐隐**（用户口径 2026-10-07，`devlog/435`）。
+   ⚠️ 让位/回来**只由 `data-idle` 决定**（鼠标停一会儿 ⇒ 让位；一动 ⇒ 回来）。
+   别再把它挂到 `data-peek` 上：那个属性在"贴边唤出两栏"时才有值，
+   挂上去会让"停止不动"与"停在中间"分不开（`devlog/434` 就是这么把自动隐藏弄没的）。 */
 .app-shell[data-solo='1'][data-idle] .posts-panel[data-view='cards'] > :not(.hero-backdrop) {
-  opacity: var(--solo-a-content);
-  transition: opacity 520ms var(--solo-ease, ease) var(--solo-a-delay);
+  opacity: 0;
+  transform: translateY(var(--solo-hide-shift));
+  transition: opacity var(--solo-hide-ms) var(--solo-ease, ease),
+              transform var(--solo-hide-ms) var(--solo-ease, ease);
 }
 
-/* 白色纱罩（`.hero-backdrop::after`）在淡出态撤掉 ⇒ 背景图"完全显现" */
+/* 回来：**上滑 + 渐显**（同一个过渡，方向天然相反） */
+.app-shell[data-solo='1'] .posts-panel[data-view='cards'] > :not(.hero-backdrop) {
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity var(--solo-hide-ms) var(--solo-ease, ease),
+              transform var(--solo-hide-ms) var(--solo-ease, ease);
+}
+
+/* 白色纱罩（`.hero-backdrop::after`）：让位时**渐隐**（背景图完全显现）、回来时**渐显** */
 .app-shell[data-solo='1'][data-idle] .posts-panel[data-view='cards'] .hero-backdrop::after {
-  opacity: var(--solo-a-veil);
-  transition: opacity 520ms var(--solo-ease, ease) var(--solo-a-delay);
+  opacity: 0;
+  transition: opacity var(--solo-hide-ms) var(--solo-ease, ease);
+}
+
+.app-shell[data-solo='1'] .posts-panel[data-view='cards'] .hero-backdrop::after {
+  opacity: 1;
+  transition: opacity var(--solo-hide-ms) var(--solo-ease, ease);
 }
 /* 背景**视频**层（需求 9，devlog/424）：盖在同层那张图上面，图就是它的 poster 与降级兜底。
    ⚠️ 必须 `object-fit: cover`（与图的 `background-size: cover` 同款铺满）；

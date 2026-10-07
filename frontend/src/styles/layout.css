@@ -584,7 +584,9 @@ html.window-maximized body {
 :root {
   --solo-step: 260ms;                              /* 每一段的时长（三段共 780ms） */
   --solo-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
-  --solo-dim: 0;                                   /* 全收起后页面元素的不透明度（用户口径 2026-10-07：**降到 0**，hover 唤出才恢复） */
+  --solo-dim: 0;                                   /* 让位后页面元素的不透明度（用户口径：**降到 0**） */
+  --solo-hide-shift: 26px;   /* 让位时界面元素**下滑**多远（回来时上滑同样的距离） */
+  --solo-hide-ms: 560ms;     /* 让位/回来的过渡时长（用户要求"更明显一点"） */
   /* ⚠️ “等多久才让位”**不在 CSS 里**：它是 `utils/soloPeek.ts` 的 `SOLO_IDLE_MS`
      （闲置计时器）—— 判定"鼠标停多久了"CSS 表达不了，两处各留一份就会叠成双倍等待。 */
 }
@@ -611,6 +613,11 @@ html.window-maximized body {
 .app-shell[data-solo='1'] .icon-rail {
   margin-left: calc(-1 * var(--rail-width));
   transition-delay: var(--solo-step);
+  /* ⚠️ 唤出时它必须**压在左栏上面**（`devlog/435`）：左栏也是负外边距"藏"起来的，
+     它的盒子其实横跨 `[-W+50, 50]`，唤出工具栏后那 50px 露出来的就是**左栏的白底**
+     —— 用户看到的"左工具栏是一片白色"就是这个（工具栏确实回来了，只是被它盖住）。 */
+  position: relative;
+  z-index: 2;
 }
 
 /* ③ 最后顶栏 */
