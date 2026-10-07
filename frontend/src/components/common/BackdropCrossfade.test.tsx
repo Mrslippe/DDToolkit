@@ -18,6 +18,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { EVENTS, emit } from '../../utils/appEvents'
 import { BACKDROP_FADE_MS, BackdropCrossfade } from './BackdropCrossfade'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean })
@@ -58,6 +59,8 @@ beforeEach(() => {
   root = createRoot(host)
   FakeImage.pending = []
   vi.stubGlobal('Image', FakeImage)
+  // ⚠️ `lastPlayerPlaying` 是**模块级**的粘性位：不复位的话上一条用例的"正在播"会漏给下一条
+  emit(EVENTS.playerPlaying, { playing: false })
 })
 afterEach(() => {
   act(() => root.unmount())
@@ -223,5 +226,68 @@ describe('背景层：换图不闪白', () => {
       root.render(<BackdropCrossfade src="https://x/a.jpg" custom />)
     })
     expect(video()).toBeNull()
+  })
+
+  // ── 需求 9：播放器一播就让位（devlog/425）────────────────────────────
+  it('★ 播放器一播 ⇒ 背景视频 `pause()`；播放器停 ⇒ 恢复 `play()`', async () => {
+    await act(async () => {
+      root.render(<BackdropCrossfade src="https://x/a.jpg" custom videoSrc="/v/a.mp4" />)
+    })
+    // 影子里那份 `paused`（`test/setup.ts` 的桩给的）既能断言状态、也能断言调用
+    const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause')
+    const play = vi.spyOn(HTMLMediaElement.prototype, 'play')
+    await act(async () => { emit(EVENTS.playerPlaying, { playing: true }) })
+    expect(pause, '同一个 GPU 不该同时解两路视频').toHaveBeenCalledTimes(1)
+    expect(video()!.paused, '要真的停在暂停态').toBe(true)
+    await act(async () => { emit(EVENTS.playerPlaying, { playing: false }) })
+    expect(play, '播放器关了要接着放').toHaveBeenCalledTimes(1)
+    expect(video()!.paused).toBe(false)
+    pause.mockRestore()
+    play.mockRestore()
+  })
+
+  it('★ 恢复播放被拒（自动播放策略）⇒ 吞掉，不许抛出去', async () => {
+    await act(async () => {
+      root.render(<BackdropCrossfade src="https://x/a.jpg" custom videoSrc="/v/a.mp4" />)
+    })
+    const el = video()!
+    el.pause = vi.fn()
+    // 真机上 `play()` 返回 Promise，可能被拒；这里就喂一个 rejected
+    el.play = vi.fn(() => Promise.reject(new Error('NotAllowedError'))) as unknown as HTMLVideoElement['play']
+    await act(async () => {
+      expect(() => emit(EVENTS.playerPlaying, { playing: false })).not.toThrow()
+      await Promise.resolve()
+    })
+  })
+
+  it('★ 换层时若播放器正在播 ⇒ **新挂**的视频立刻让位（它错过了那一次事件）', async () => {
+    await act(async () => {
+      root.render(<BackdropCrossfade src="https://x/a.jpg" custom videoSrc="/v/a.mp4" />)
+    })
+    // 旧层的视频还挂着 ⇒ 它把"最近值"记了下来（这正是那条粘性记忆的覆盖面）
+    await act(async () => { emit(EVENTS.playerPlaying, { playing: true }) })
+    // ⚠️ 必须在换层**之前**装桩：新元素的 `pause()` 发生在挂载的同一个 commit 里
+    const pause = vi.spyOn(HTMLMediaElement.prototype, 'pause')
+    await act(async () => {
+      root.render(<BackdropCrossfade src="https://x/b.jpg" custom videoSrc="/v/b.mp4" />)
+    })
+    await loadLatest()
+    const curV = byKind('cur')[0].querySelector<HTMLVideoElement>('.hero-backdrop-video')!
+    expect(pause, '新元素默认会自己起播 ⇒ 挂上就得按最近状态停住').toHaveBeenCalled()
+    expect(curV.paused, '停在暂停态').toBe(true)
+    pause.mockRestore()
+  })
+
+  it('★ 卸载要退订（否则监听方永远挂在 `window` 上）', async () => {
+    const remove = vi.spyOn(window, 'removeEventListener')
+    await act(async () => {
+      root.render(<BackdropCrossfade src="https://x/a.jpg" custom videoSrc="/v/a.mp4" />)
+    })
+    await act(async () => { root.unmount() })
+    expect(
+      remove.mock.calls.some(([name]) => name === EVENTS.playerPlaying),
+      '`on()` 返回的退订函数必须被调用',
+    ).toBe(true)
+    remove.mockRestore()
   })
 })

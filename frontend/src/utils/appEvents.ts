@@ -50,6 +50,8 @@ export const EVENTS = {
   liveEdge: 'ddtoolkit:live-edge',
   /** 手动任务开始（M2，devlog/244）：后端推 `notice.progress` ⇒ 点按钮的人**立刻**看到进度 */
   progress: 'ddtoolkit:progress',
+  /** 播放器开始/停止播放（需求 9，devlog/425）：背景视频据此**让位**（同一个 GPU 不该抢两次解码） */
+  playerPlaying: 'ddtoolkit:player-playing',
 } as const
 
 /**
@@ -97,6 +99,8 @@ export interface AppEventMap {
   'ddtoolkit:live-edge': LiveEdgePayload
   /** 手动任务开始（抢在轮询前面的那一份进度） */
   'ddtoolkit:progress': PushedProgressPayload
+  /** 播放器**真的在播**吗（需求 9）：`{playing}` —— 由播放器的状态机派发，不是裸媒体事件 */
+  'ddtoolkit:player-playing': { playing: boolean }
 }
 
 export type AppEventName = keyof AppEventMap
@@ -113,6 +117,7 @@ export const APP_EVENT_NAMES: readonly AppEventName[] = [
   'ddtoolkit:message',
   'ddtoolkit:live-edge',
   'ddtoolkit:progress',
+  'ddtoolkit:player-playing',
 ]
 
 /** 默认宿主：`window`（调用时取，不在模块加载时取 —— 单测跑在 node 环境时没有 `window`） */

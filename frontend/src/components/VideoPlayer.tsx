@@ -33,6 +33,7 @@ import {
 } from 'lucide-react'
 
 import { api, videoProxyUrl } from '../api/api'
+import { EVENTS, emit } from '../utils/appEvents'
 import { normalizeImageUrl } from '../utils/format'
 import { openExternalFromHref } from '../utils/externalLinkGuard'
 import { watchPlayback } from '../utils/playbackProbe'
@@ -388,6 +389,24 @@ export default function VideoPlayer({ video, poster, permalink, dash, qualities,
   const [aidx, setAidx] = useState(0)
   const [dead, setDead] = useState(false)
   const [playing, setPlaying] = useState(false)
+
+  /**
+   * 需求 9（`devlog/425`）：把"播放器真的在播吗"广播出去 ⇒ 卡片页的背景视频**让位**。
+   *
+   * ⚠️ 派发的源头是**这个状态机**，不是 `<video>` 的裸 `play`/`pause` 事件：
+   *   后者在"为了缓冲按住""seek 期间静默"这类内部动作里也会响（`devlog/303`），
+   *   背景视频就会跟着一顿一顿地闪。状态机已经把这些消化过了。
+   * ⚠️ **卸载时要补一条"停了"**：否则关掉播放器后，背景视频**永远停在暂停上**
+   *   （那个 pause 是播放器发的，播放器没了就没人再发 play）。
+   */
+  const playingRef = useRef(playing)
+  playingRef.current = playing
+  useEffect(() => {
+    emit(EVENTS.playerPlaying, { playing })
+  }, [playing])
+  useEffect(() => () => {
+    if (playingRef.current) emit(EVENTS.playerPlaying, { playing: false })
+  }, [])
   const [cur, setCur] = useState(0)
   const [dur, setDur] = useState(0)
   const [buf, setBuf] = useState(0)

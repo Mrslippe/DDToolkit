@@ -14,7 +14,7 @@ import { FETCH_IDLE_EVENT } from './fetchIdle'
 import { VTUBER_UPDATED_EVENT } from './vtuberList'
 
 describe('① 事件名是契约：逐个钉住（改名会让探针静默失效）', () => {
-  it('名单与 `EVENTS` 表完全一致，且就是这 10 个（`kick-poll` 已随 M5-2b 退役）', () => {
+  it('名单与 `EVENTS` 表完全一致，且就是这 11 个（`kick-poll` 已随 M5-2b 退役）', () => {
     expect([...APP_EVENT_NAMES].sort()).toEqual([...Object.values(EVENTS)].sort())
     expect([...APP_EVENT_NAMES].sort()).toEqual([
       'ddtoolkit:account-progress',
@@ -25,6 +25,7 @@ describe('① 事件名是契约：逐个钉住（改名会让探针静默失效
       'ddtoolkit:message',
       'ddtoolkit:notice-alert',   // L3：客户端自己发现的事实（进通知面板，不是一次性提示）
       'ddtoolkit:pill-message',
+      'ddtoolkit:player-playing', // 需求 9：背景视频据此让位（devlog/425）
       'ddtoolkit:progress',
       'ddtoolkit:vtuber-updated',
     ])

@@ -26,10 +26,26 @@
  */
 import { useEffect, useRef, useState } from 'react'
 
+import { EVENTS, on } from '../../utils/appEvents'
 import { focusObjectStyle, focusStyle, type BackgroundFocus } from '../../utils/backgroundFocus'
 
 /** 交叉淡出的时长（ms）—— 与 `posts.css` 的 `backdrop-out` 关键帧保持一致（有用例钉着）。 */
 export const BACKDROP_FADE_MS = 250
+
+/**
+ * "播放器现在在播吗"的**粘性**记忆（模块级）。
+ *
+ * 为什么需要它：交叉淡入会**新挂**一个 `<video>`（新层），而新元素默认自己起播 ——
+ * 若此刻播放器正在播，那一段背景就又抢上解码了。事件是"变化时通知"，
+ * 新挂的元素错过了那一次通知 ⇒ 这里记一份最近值，挂载时先按它对齐一次。
+ *
+ * ⚠️ **它由订阅回调写入**，所以覆盖面是"当时还挂着一个背景视频"的那些时刻 ——
+ *    换层/换 V 正是如此（旧层的视频还在）✓。
+ *    不覆盖的一条：**播放器已经在播时，用户新传一段视频**（那一刻没有任何监听方，
+ *    这个值还是旧的）⇒ 新视频会自己播起来，直到播放器下一次 play/pause 变化才让位。
+ *    真要补，就得把它挪成一个独立的小 store（播放器写、背景读）—— 那时再说。
+ */
+let lastPlayerPlaying = false
 
 interface Layer {
   src: string
@@ -53,19 +69,38 @@ interface Layer {
  * 2. **播不了就退回图片**：`onError` ⇒ 这一层不再渲染视频（图还在，面板照样有背景）——
  *    收下"存得进、播不了"的文件也不至于变成一块黑；
  * 3. **取景同样生效**，但走的是 `object-position` 那一套（`focusObjectStyle`）：
- *    `<video>` 没有背景图，`background-position` 对它**毫无作用**。
+ *    `<video>` 没有背景图，`background-position` 对它**毫无作用**；
+ * 4. **播放器一播就让位**（需求 9，`devlog/425`）：同一个 GPU 不该同时解两路视频 ——
+ *    收到 `playerPlaying` 就 `pause()`，播放器停了再 `play()` 回来
+ *    （⚠️ 恢复播放要吞掉 rejection：自动播放策略可能拒它，拒了就保持暂停，不该报错）。
  */
 function BackdropVideo({ src, focus }: { src: string; focus: BackgroundFocus | null }) {
   const [ready, setReady] = useState(false)
   const [failed, setFailed] = useState(false)
+  const elRef = useRef<HTMLVideoElement | null>(null)
   // 换片（同一个挂载点换了 src）时重置状态，否则上一段的 ready 会漏到新片上
   useEffect(() => {
     setReady(false)
     setFailed(false)
   }, [src])
+  useEffect(() => {
+    const obey = (playing: boolean) => {
+      const el = elRef.current
+      if (!el) return
+      if (playing) el.pause()
+      // ⚠️ `?.` 是给 jsdom 的桩留的（`test/setup.ts` 里 `play()` 的返回值不保证是 Promise）
+      else void el.play()?.catch(() => { /* 被自动播放策略拒 ⇒ 保持暂停即可 */ })
+    }
+    obey(lastPlayerPlaying)      // 挂载时先按"最近一次"对齐（新挂的元素错过了那一次事件）
+    return on(EVENTS.playerPlaying, ({ playing }) => {
+      lastPlayerPlaying = playing
+      obey(playing)
+    })
+  }, [])
   if (failed) return null
   return (
     <video
+      ref={elRef}
       className="hero-backdrop-video"
       data-ready={ready ? '1' : '0'}
       src={src}
