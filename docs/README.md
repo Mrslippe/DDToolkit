@@ -21,7 +21,7 @@ budget: 60
 | `desktop/` | Tauri 壳（Rust 侧） |
 | `ops/` | 发布与运维 |
 | `plans/` | 批次执行方案 —— **落地后必须删除或并入模块文档** |
-| `design/` | 设计资产 + 带日期的专题调研（过期不误导，故不放顶层） |
+| `design/` | 设计资产 + 带日期的专题调研（过期不误导，故不放顶层）。**专题子目录**（`pills/` `status-island/` `widget-preview/` `vtuber-sidebar/` …）里放该类东西的**一切**：调研 md + 截图 png + **`.html` 示例稿**。<br>⚠️ **示例稿一律放这儿**（2026-10-07 用户口径）：`docs/design/<主题>/<名字>.html`；它是**给人看的静态稿，不是产品代码** —— 不参与构建、不进任何门禁，所以**不许**被 `src/` 引用。线上实现永远在 `frontend/src/`，示例稿里请写清它对应哪条规则（同 `widget-preview/direction.html` 那两件的先例） |
 | `releases/` `reference/` `tools/` `diagrams/` | 归档、外部存档与生成物 |
 
 > ⚠️ **子目录正在迁移中**（2026-09-30 起按批次搬）。迁移完成前，尚未搬走的文档

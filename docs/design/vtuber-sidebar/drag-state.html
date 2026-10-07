@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<!--
+  左栏「按住拖动重排」的拖动态示例稿（2026-10-07）。
+
+  ⚠️ **这是示例稿，不是产品代码** —— 不参与构建、不进任何门禁。线上实现是
+  `frontend/src/styles/layout.css` 里的 `.vtuber-item.dragging`（= 下面的 **B**：
+  纯投影 + `scale(1.03)`；拿起用 `--ease-pop`、松手用 `--ease-standard`）。
+
+  怎么看：按住任意一条 350ms 再拖（与线上同一套交互，点一下不会进拖动）。
+  顶部按钮切五种候选：A 现状（纯虚化，已被否）/ **B ★定版** / C 只有内环 /
+  D 虚线外框 / E 环+投影+轻微虚化。数值全是线上真值
+  （`--sel-bg:#fff0f3`、`--sel-bar:#c9406f`、行 76px、头像 58px、发丝分隔线）。
+--><html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>DDToolkit · 左栏拖动重排：拖动态对比</title>
+<style>
+  /* 与线上同源的令牌（tokens.css 实值） */
+  :root{
+    --c-primary:#ffa2b4; --c-primary-deep:#c9406f; --c-accent:#fc7079;
+    --c-bg-page:#fffbfb; --c-text-main:#4b5a6b; --c-text-sub:#5b6c7e;
+    --c-border:rgba(210,216,222,.55);
+    --sel-bg:#fff0f3; --sel-bg-hover:#fff7f9; --sel-bar:var(--c-primary-deep);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--c-bg-page);color:var(--c-text-main);
+       font:14px/1.5 "Microsoft YaHei",system-ui,sans-serif}
+  .wrap{display:flex;gap:28px;padding:24px 28px;align-items:flex-start;flex-wrap:wrap}
+  .col{width:330px}
+  .col h2{margin:0 0 4px;font-size:15px;font-weight:600;color:#000}
+  .col p{margin:0 0 10px;font-size:12px;color:var(--c-text-sub);min-height:52px}
+  .col.on h2::after{content:" ← 当前选择";color:var(--c-accent);font-weight:400}
+  .tip{width:100%;padding:10px 14px;border:1px solid var(--c-border);border-radius:8px;
+       background:#fff;font-size:12.5px;color:var(--c-text-sub)}
+
+  /* ── 与线上一致的列表外壳 ── */
+  .sidebar-list{
+    border:1px solid var(--c-border);border-radius:8px;background:#fff;overflow:hidden;
+    display:flex;flex-direction:column;
+  }
+  .vtuber-item{
+    position:relative;display:flex;align-items:center;gap:12px;height:76px;flex-shrink:0;
+    padding:6px 0 6px 26px;background:transparent;cursor:pointer;
+    /* ⚠️ transform/box-shadow 的过渡**必须留在基础规则上**：松手是"摘掉 .dragging"，
+       而过渡取自**变化后**的样式 —— 只写在 .dragging 里的话回弹会当场跳回去。 */
+    transition:background-color .12s ease,
+               transform .18s cubic-bezier(.22,1,.36,1),
+               box-shadow .18s cubic-bezier(.22,1,.36,1);
+    border-bottom:1px solid var(--c-border);   /* 发丝分隔线（线上由相邻行共边，这里为看得清各留一条） */
+  }
+  .vtuber-item:last-child{border-bottom:0}
+  .vtuber-item:hover{background:var(--sel-bg-hover)}
+  .vtuber-item.active{background:var(--sel-bg)}
+  .vtuber-item.active::before{
+    content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--sel-bar);
+  }
+  .vtuber-avatar{width:58px;height:58px;flex-shrink:0;border-radius:8px;object-fit:cover}
+  .vtuber-name-row{display:flex;align-items:center;gap:8px}
+  .vtuber-name{font-size:18px;font-weight:500;color:#000;white-space:nowrap}
+  .vtuber-sign{font-size:12.5px;color:var(--c-text-sub);margin-top:3px;
+               max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .live-badge{font-size:10.5px;line-height:1;padding:3px 6px;border-radius:999px;
+              background:var(--c-accent);color:#fff;flex:none}
+
+  /* ⚠️ 拖拽期间全列表：不触发 hover 高亮 + 关掉文字选中（线上已有） */
+  .sidebar-list.is-dragging .vtuber-item{cursor:grabbing;user-select:none}
+  .sidebar-list.is-dragging .vtuber-item:hover{background:transparent}
+  .sidebar-list.is-dragging .vtuber-item.active:hover{background:var(--sel-bg)}
+
+  /* ═══ 四种「拖动中」的样式，靠 body[data-v] 切 ═══ */
+
+  /* A · 现状：整行虚化 */
+  body[data-v="a"] .vtuber-item.dragging{background:var(--sel-bg);opacity:.55;cursor:grabbing}
+
+  /* B · ★ 定版（用户 2026-10-07 选）：纯投影 + 略微放大，拿起/松手都有缓动 */
+  body[data-v="b"] .vtuber-item.dragging{
+    transform:scale(1.03);transform-origin:left center;cursor:grabbing;z-index:1;
+    box-shadow:0 6px 16px rgba(15,23,42,.16);
+    /* 拿起 = `--ease-pop`（本仓唯一允许过冲的那条）；松手用基础规则里的 standard */
+    transition:transform .18s cubic-bezier(.2,1.5,.4,1),
+               box-shadow .18s cubic-bezier(.2,1.5,.4,1);
+  }
+
+  /* C · 只加内环、不加投影（用来判断投影到底有没有用） */
+  body[data-v="c"] .vtuber-item.dragging{
+    background:var(--sel-bg);cursor:grabbing;
+    box-shadow:inset 0 0 0 1.5px var(--c-primary-deep);
+  }
+
+  /* D · 虚线外框（描边语言，与本仓「无描边」的基调相冲，列出来做对照） */
+  body[data-v="d"] .vtuber-item.dragging{
+    background:var(--sel-bg);cursor:grabbing;
+    outline:2px dashed var(--c-primary-deep);outline-offset:-2px;
+  }
+
+  /* E · 环 + 投影 + 轻微虚化（想同时"抬起"和"半透明"时） */
+  body[data-v="e"] .vtuber-item.dragging{
+    background:var(--sel-bg);cursor:grabbing;z-index:1;opacity:.82;
+    box-shadow:inset 0 0 0 1.5px var(--c-primary-deep), 0 6px 16px rgba(15,23,42,.12);
+  }
+
+  .bar{position:sticky;top:0;z-index:9;background:var(--c-bg-page);
+       border-bottom:1px solid var(--c-border);padding:12px 28px;display:flex;gap:8px;align-items:center}
+  .bar button{font:13px/1 inherit;padding:8px 12px;border-radius:8px;border:1px solid var(--c-border);
+              background:#fff;cursor:pointer}
+  .bar button.on{border-color:var(--c-primary-deep);box-shadow:inset 0 0 0 1.5px var(--c-primary-deep);
+                 color:var(--c-primary-deep);font-weight:600}
+</style>
+</head>
+<body data-v="b">
+
+<div class="bar">
+  <strong style="font-size:13px;margin-right:6px">拖动中样式：</strong>
+  <button data-set="a">A · 现状（纯虚化）</button>
+  <button data-set="b">B · ★ 纯投影 + 放大（定版）</button>
+  <button data-set="c">C · 只有内环</button>
+  <button data-set="d">D · 虚线外框</button>
+  <button data-set="e">E · 环+投影+轻微虚化</button>
+</div>
+
+<div class="wrap">
+  <div class="tip">
+    <b>怎么玩：</b>在任意一条上<b>按住 350ms 再拖</b>（与线上一致；只点一下不会进拖动）。
+    指针扫过别的行时，被拖的那条会<b>逐格换位</b>——这正是线上实现的行为。
+    每条列表里<b>第二条是"选中"态</b>（左缘 3px 竖条），把选中的那条拖起来看看两套语言会不会打架。
+  </div>
+
+  <div class="col" id="colA"><h2>A · 现状</h2>
+    <p><code>opacity:.55</code> + 浅粉底。整行变淡 ⇒ 读起来像<b>"禁用"</b>；头像和名字一起被弄淡。</p>
+    <div class="sidebar-list"></div></div>
+
+  <div class="col" id="colB"><h2>B · ★ 定版：纯投影 + 略微放大</h2>
+    <p><code>scale(1.03)</code>（<code>transform-origin:left</code>，免得左缘竖条被裁）
+       + <code>0 6px 16px</code> 投影 + <code>z-index:1</code>。<b>拿起</b>用过冲缓动
+       <code>--ease-pop</code>，<b>松手</b>回落到 <code>--ease-standard</code>。<b>内容一点不淡。</b></p>
+    <div class="sidebar-list"></div></div>
+
+  <div class="col" id="colC"><h2>C · 只有内环</h2>
+    <p>去掉投影。用来判断<b>投影到底有没有用</b>——如果 C 和 B 看起来差不多，那投影就该省掉。</p>
+    <div class="sidebar-list"></div></div>
+
+  <div class="col" id="colD"><h2>D · 虚线外框</h2>
+    <p>呼应"把这一格框出来"。⚠️ 但本仓的基调是<b>零圆角零描边</b>（发丝线 + 底色承担形状），
+       虚线框是<b>新造一种视觉词汇</b>。</p>
+    <div class="sidebar-list"></div></div>
+
+  <div class="col" id="colE"><h2>E · 环 + 投影 + 轻微虚化</h2>
+    <p>想同时"抬起"和"半透明"时的折中。<code>opacity:.82</code> 比现状轻得多——
+       用来判断<b>"虚化"这件事本身值不值得留</b>。</p>
+    <div class="sidebar-list"></div></div>
+</div>
+
+<script>
+const NAMES = [
+  ['明前奶绿', '今天也要开开心心', true],
+  ['七海Nana7mi', '鲨鱼不发威', false],
+  ['阿梓从小就很可爱', '阿梓喵～', false],
+  ['波波', '晚上八点见', true],
+  ['嘉然今天吃什么', '今天吃嘉心糖', false],
+  ['贝拉kira', '芭蕾舞者', false],
+];
+const AVATAR = (n) => 'data:image/svg+xml;utf8,' + encodeURIComponent(
+  `<svg xmlns="http://www.w3.org/2000/svg" width="58" height="58">
+     <rect width="58" height="58" fill="#ffd9e2"/>
+     <text x="29" y="37" font-size="22" text-anchor="middle" fill="#c9406f"
+           font-family="Microsoft YaHei">${n[0]}</text></svg>`);
+
+document.querySelectorAll('.sidebar-list').forEach((list) => {
+  list.innerHTML = NAMES.map(([name, sign, live], i) => `
+    <div class="vtuber-item${i === 1 ? ' active' : ''}">
+      <img class="vtuber-avatar" src="${AVATAR(name)}" alt="">
+      <div>
+        <div class="vtuber-name-row">
+          <span class="vtuber-name">${name}</span>
+          ${live ? '<span class="live-badge">直播中</span>' : ''}
+        </div>
+        <div class="vtuber-sign">${sign}</div>
+      </div>
+    </div>`).join('');
+});
+
+/* ── 与线上同一套交互：按住 350ms 才算拖；指针挪超 6px 取消；落点靠 elementFromPoint ── */
+const HOLD_MS = 350, CANCEL_PX = 6;
+let dragEl = null;
+
+document.addEventListener('pointerdown', (e) => {
+  const item = e.target.closest('.vtuber-item');
+  if (!item || e.button !== 0) return;
+  const x = e.clientX, y = e.clientY;
+  const stop = () => {
+    clearTimeout(timer);
+    window.removeEventListener('pointermove', pre);
+    window.removeEventListener('pointerup', stop);
+  };
+  const pre = (ev) => { if (Math.hypot(ev.clientX - x, ev.clientY - y) > CANCEL_PX) stop(); };
+  const timer = setTimeout(() => { stop(); start(item); }, HOLD_MS);
+  window.addEventListener('pointermove', pre);
+  window.addEventListener('pointerup', stop);
+});
+
+function start(item) {
+  dragEl = item;
+  item.classList.add('dragging');
+  item.closest('.sidebar-list').classList.add('is-dragging');
+  window.addEventListener('pointermove', onMove);
+  window.addEventListener('pointerup', onUp);
+  window.addEventListener('pointercancel', onUp);
+}
+
+function onMove(ev) {
+  if (!dragEl) return;
+  const list = dragEl.closest('.sidebar-list');
+  const hit = document.elementFromPoint(ev.clientX, ev.clientY)?.closest('.vtuber-item');
+  if (!hit || hit === dragEl || hit.parentElement !== list) return;
+  // 逐格换位：被拖那条插到目标格的位置上（线上就是这么算 `from`/`to` 再 moveItem 的）
+  const kids = [...list.children];
+  if (kids.indexOf(hit) > kids.indexOf(dragEl)) hit.after(dragEl); else hit.before(dragEl);
+}
+
+function onUp() {
+  if (dragEl) {
+    dragEl.classList.remove('dragging');
+    dragEl.closest('.sidebar-list')?.classList.remove('is-dragging');
+  }
+  dragEl = null;
+  window.removeEventListener('pointermove', onMove);
+  window.removeEventListener('pointerup', onUp);
+  window.removeEventListener('pointercancel', onUp);
+}
+
+/* 变体切换 */
+const LABEL = { a: 'A · 现状（纯虚化）', b: 'B · 内环 + 投影（推荐）', c: 'C · 只有内环',
+                d: 'D · 虚线外框', e: 'E · 环+投影+轻微虚化' };
+document.querySelectorAll('.bar button').forEach((b) => {
+  b.addEventListener('click', () => {
+    document.body.dataset.v = b.dataset.set;
+    document.querySelectorAll('.bar button').forEach((x) => x.classList.toggle('on', x === b));
+    document.querySelectorAll('.col').forEach((c) => c.classList.remove('on'));
+    document.getElementById('col' + b.dataset.set.toUpperCase()).classList.add('on');
+  });
+});
+document.querySelector('.bar button[data-set="b"]').click();
+</script>
+</body>
+</html>
