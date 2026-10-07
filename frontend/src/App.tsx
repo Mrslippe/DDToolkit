@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { Route, Routes, useNavigate } from 'react-router-dom'
 import TopBar from './components/TopBar'
 import IconRail from './components/IconRail'
-import { peekZone, useSolo } from './utils/soloMode'
+import { useSolo } from './utils/soloMode'
+import { useSoloPeek } from './utils/soloPeek'
 import VtuberSidebar from './components/VtuberSidebar'
 import EmptyState from './pages/EmptyState'
 import PostsPage from './pages/PostsPage'
@@ -76,33 +77,23 @@ export default function App() {
 
   const solo = useSolo()
   /**
-   * 单推的 hover 唤出（`devlog/432`）：**事件委托 + 一个状态**，而不是 CSS 的 `:hover` 兄弟选择器。
+   * 单推的 hover 唤出（按**坐标**判定，`devlog/433`）。
    *
-   * 为什么换掉那个写法：贴边窄带与"被唤出的工具栏"是两个元素，只靠 `:hover` 时鼠标一移到
-   * 唤出来的工具栏上就掉出 hover（工具栏在窄带**上面**）⇒ **用户实测左侧唤不出来**；
-   * 而且 jsdom 里 hover 根本测不到（判据只能靠 CSS 字符串）。现在窄带与 `.topbar` /
-   * `.icon-rail` **算同一个区**，进出都用 `peekZone` 重算 —— 能单测、也能真机推理。
+   * 前两版分别用 CSS `:hover` 与"指针落在哪个元素上"——都栽在同一件事上：
+   * 唤出**会改变布局**（工具栏回来把内容推走）⇒ 指针下的元素跟着变 ⇒ 状态来回翻
+   * （用户报的"界面元素快速闪动 + 卡顿"），而且左侧工具栏干脆唤不出来。
+   * 现在 `mousemove` 只看 `clientX/clientY`：**与遮挡、层级、布局位移全都无关**，
+   * 判定逻辑在 `utils/soloPeek.ts`（有单测）。唤出后那个区会"长大"到该栏自身的大小，
+   * 免得指针一移进去就掉出薄条、栏又从手底下消失。
    */
-  const [peek, setPeek] = useState<'top' | 'left' | 'none'>('none')
-  const onPeek = (e: React.PointerEvent) => {
-    if (solo) setPeek(peekZone(e.target as Element))
-  }
-  const onPeekOut = (e: React.PointerEvent) => {
-    if (solo) setPeek(peekZone(e.relatedTarget as Element | null))
-  }
-  // 退出单推 ⇒ 唤出状态一起清掉（否则下次进来会带着上次的唤出态）
-  useEffect(() => { if (!solo) setPeek('none') }, [solo])
+  const peek = useSoloPeek(Boolean(solo))
 
   return (
-    /* 单推模式的标记挂在这里：三段收起动画与 hover 唤出全走 CSS（`devlog/430`/`432`） */
+    /* 单推模式的标记挂在这里：三段收起动画与 hover 唤出全走 CSS（`devlog/430`/`433`） */
     <div className="app-shell" data-solo={solo ? '1' : undefined}
-         data-peek={peek === 'none' ? undefined : peek}
-         onPointerOver={onPeek}
-         onPointerOut={onPeekOut}>
+         data-peek={solo ? peek : undefined}>
       {/* ⚠️ 两条**贴边窄带**：尺寸 = 被唤出的元素自身（顶栏高 / 工具栏宽），
           悬到它们所在的整片区域就唤出。唤出期间它们 `pointer-events: none` 让位（CSS 里）。 */}
-      <div className="solo-hover solo-hover-top" aria-hidden="true" />
-      <div className="solo-hover solo-hover-left" aria-hidden="true" />
       <ErrorBoundary>
         <TopBar />
         <div className="app-body">

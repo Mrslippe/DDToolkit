@@ -58,6 +58,14 @@
   --solo-a-delay: 0ms;
 }
 
+/* ⚠️ 恢复要**瞬时**：这一段是"鼠标扫过"级别的高频切换，带过渡的话每次都要重绘整块面板
+   —— 用户实测"快速闪动 + 卡顿"的来源之一（`devlog/433`）。只保留"全收起后那一次淡出"
+   的过渡（它有 2.4s 延时，不跟着鼠标抖）。 */
+.app-shell[data-solo='1'][data-peek] .posts-panel[data-view='cards'] > :not(.hero-backdrop),
+.app-shell[data-solo='1'][data-peek] .posts-panel[data-view='cards'] .hero-backdrop::after {
+  transition: none;
+}
+
 .app-shell[data-solo='1'] .posts-panel[data-view='cards'] > :not(.hero-backdrop) {
   opacity: var(--solo-a-content);
   transition: opacity 520ms var(--solo-ease, ease) var(--solo-a-delay);

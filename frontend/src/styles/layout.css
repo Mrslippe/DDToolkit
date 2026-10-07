@@ -618,25 +618,11 @@ html.window-maximized body {
   transition-delay: calc(2 * var(--solo-step));
 }
 
-/* ④ 唤出：贴边的两条窄带（在 `App.tsx` 里位于 `.app-shell` 开头，靠 `~` 兄弟选择器生效）。
-   ⚠️ 唤出必须把 `transition-delay` 归零 —— 否则那几段延时会让"唤出"慢半拍。 */
-.solo-hover {
-  position: fixed;
-  z-index: 60;
-  display: none;
-  pointer-events: none;
-}
-
-.app-shell[data-solo='1'] .solo-hover {
-  display: block;
-  pointer-events: auto;
-}
-
-.solo-hover-top { top: 0; left: 0; right: 0; height: var(--topbar-height); }
-.solo-hover-left { top: 0; bottom: 0; left: 0; width: var(--rail-width); }
-
-/* 唤出：data-peek 由 App.tsx 的事件委托给（**不用** :hover 的兄弟选择器 ——
-   devlog/432：那样"从窄带移到唤出来的工具栏上"会立刻掉出 hover，用户实测唤不出来）。 */
+/* ④ 唤出（data-peek）：坐标判定（utils/soloPeek.ts，devlog/433）——
+   ⚠️ 不再有"贴边窄带"那种覆盖层：它会挡住内容的点击，还得靠 pointer-events 来回让位，
+   而且判定依赖"指针在哪个元素上"⇒ 唤出引起的**布局位移**会让状态来回翻（用户报的闪动）。
+   ⚠️ 唤出后那个区会"长大"到该栏自身的大小（判定在 JS 里），所以这里只要把位移归零 +
+   把 	ransition-delay 归零（否则收起那几段延时会让唤出慢半拍）。 */
 .app-shell[data-solo='1'][data-peek='top'] .topbar {
   margin-top: 0;
   transition-delay: 0ms;
@@ -646,14 +632,6 @@ html.window-maximized body {
   margin-left: 0;
   transition-delay: 0ms;
 }
-
-/* ⚠️ 唤出期间**窄带必须让位**：它俩尺寸就是被唤出元素那么大、又压在更上层，
-   不让位的话顶栏那些按钮（账号切换器、通知、窗口控制）全点不着。 */
-.app-shell[data-solo='1'][data-peek='top'] .solo-hover-top,
-.app-shell[data-solo='1'][data-peek='left'] .solo-hover-left {
-  pointer-events: none;
-}
-
 /* 列表滚动区（OverlayScroll）：scroll 权交付滚动体，仅参与 flex 高度分配 */
 .sidebar-list {
   flex: 1;

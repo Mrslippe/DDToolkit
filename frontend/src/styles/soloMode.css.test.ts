@@ -71,21 +71,18 @@ describe('单推：分段收起与 hover 唤出', () => {
       .toMatch(/transition-delay:\s*calc\(2\s*\*\s*var\(--solo-step\)\)/)
   })
 
-  it('★ hover 唤出：窄带**尺寸 = 被唤出的元素自身**，唤出走 `data-peek`（**不用** `:hover` 兄弟选择器）', () => {
-    expect(layout, '贴边窄带要有').toContain('.solo-hover-top {')
-    expect(layout).toContain('.solo-hover-left {')
-    // ★ 用户口径 2026-10-07：触发宽度加宽到元素自身
-    expect(L('.solo-hover-top'), '顶栏那条 = 顶栏高').toMatch(/height:\s*var\(--topbar-height\)/)
-    expect(L('.solo-hover-left'), '工具栏那条 = 工具栏宽').toMatch(/width:\s*var\(--rail-width\)/)
-    // ⚠️ 唤出**不能**用 `:hover` 兄弟选择器（鼠标移到唤出来的元素上会掉出 hover ⇒ 用户实测唤不出来）
-    expect(layout, '别再退回 :hover 兄弟选择器').not.toContain('.solo-hover-top:hover ~')
-    expect(L(".app-shell[data-solo='1'][data-peek='top'] .topbar"))
+  it('★ 唤出：坐标判定（`data-peek`）—— 不许再有"贴边窄带"覆盖层，也不许退回 `:hover` 兄弟选择器', () => {
+    // ⚠️ 第三版（devlog/433）：窄带覆盖层会挡内容点击、还得靠 pointer-events 来回让位，
+    //    而"指针在哪个元素上"这套判定会被**唤出引起的布局位移**反复触发（用户报的闪动）。
+    //    现在判定在 `utils/soloPeek.ts`（按 clientX/Y，有单测），CSS 只认属性。
+    expect(layout, '窄带覆盖层必须撤掉').not.toContain('.solo-hover')
+    expect(layout, '也别退回 :hover 兄弟选择器').not.toContain('.solo-hover-top:hover ~')
+    expect(L(".app-shell[data-solo='1'][data-peek='top'] .topbar"), '唤出顶栏：位移归零')
       .toMatch(/margin-top:\s*0/)
+    expect(L(".app-shell[data-solo='1'][data-peek='top'] .topbar"), '且延时归零（别慢半拍）')
+      .toMatch(/transition-delay:\s*0ms/)
     expect(L(".app-shell[data-solo='1'][data-peek='left'] .icon-rail"))
       .toMatch(/margin-left:\s*0/)
-    // 唤出期间窄带让位（否则顶栏那些按钮点不着）
-    expect(L(".app-shell[data-solo='1'][data-peek='top'] .solo-hover-top"))
-      .toMatch(/pointer-events:\s*none/)
   })
 })
 

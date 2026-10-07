@@ -75,24 +75,6 @@ function write(next: SoloState | null): void {
   for (const f of subs) f()
 }
 
-/** 唤出区（顶栏 / 左侧工具栏）。`none` = 都不在。 */
-export type SoloPeek = 'top' | 'left' | 'none'
-
-/**
- * 指针在哪个唤出区里（`devlog/432`）。
- *
- * 为什么要这个纯函数：唤出**不能只靠 CSS 的 `~` 兄弟选择器** ——
- * 那样"从窄带移到唤出来的工具栏上"会立刻掉出 hover（工具栏在窄带的**上面**），
- * 而且 jsdom 里根本测不到 hover（用户实测：左侧工具栏唤不出来）。
- * 现在改成"事件委托 + 一个状态"：窄带与**被唤出的元素自身**都算同一个区。
- */
-export function peekZone(el: Element | null | undefined): SoloPeek {
-  if (!el || typeof el.closest !== 'function') return 'none'
-  if (el.closest('.topbar') || el.closest('.solo-hover-top')) return 'top'
-  if (el.closest('.icon-rail') || el.closest('.solo-hover-left')) return 'left'
-  return 'none'
-}
-
 export function soloState(): SoloState | null {
   return state
 }

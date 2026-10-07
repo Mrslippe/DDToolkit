@@ -10,7 +10,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
-  enterSolo, exitSolo, parseSolo, peekZone, serializeSolo, SOLO_KEY, soloState, subscribeSolo,
+  enterSolo, exitSolo, parseSolo, serializeSolo, SOLO_KEY, soloState, subscribeSolo,
 } from './soloMode'
 
 beforeEach(() => {
@@ -67,36 +67,5 @@ describe('单推模式', () => {
     off()
     enterSolo(8, '/')
     expect(seen, '退订之后不该再被叫').toHaveBeenCalledTimes(2)
-  })
-})
-
-describe('唤出区判定（devlog/432）', () => {
-  const mk = (cls: string, inner?: string) => {
-    const outer = document.createElement('div')
-    outer.className = cls
-    if (inner) {
-      const child = document.createElement('span')
-      child.className = inner
-      outer.append(child)
-    }
-    return outer
-  }
-
-  it('★ 窄带与"被唤出的元素自身"算**同一个区**（鼠标从窄带移到唤出来的工具栏上不许掉出去）', () => {
-    expect(peekZone(mk('solo-hover-top'))).toBe('top')
-    expect(peekZone(mk('solo-hover-left'))).toBe('left')
-    // 被唤出的元素自身（以及它里面的任意子节点）
-    expect(peekZone(mk('topbar'))).toBe('top')
-    expect(peekZone(mk('topbar', 'topbar-caps'))).toBe('top')
-    expect(peekZone(mk('icon-rail'))).toBe('left')
-    expect(peekZone(mk('icon-rail', 'icon-rail-btn'))).toBe('left')
-  })
-
-  it('其它地方（内容区、空、非元素）⇒ `none`（不该因为划过内容就把顶栏叫出来）', () => {
-    expect(peekZone(mk('posts-panel'))).toBe('none')
-    expect(peekZone(mk('sidebar-shell'))).toBe('none')
-    expect(peekZone(null)).toBe('none')
-    expect(peekZone(undefined)).toBe('none')
-    expect(peekZone({} as unknown as Element)).toBe('none')
   })
 })
