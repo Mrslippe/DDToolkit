@@ -51,33 +51,22 @@
    挂上去会让"停止不动"与"停在中间"分不开（`devlog/434` 就是这么把自动隐藏弄没的）。 */
 .app-shell[data-solo='1'][data-idle] .posts-panel[data-view='cards'] > :not(.hero-backdrop) {
   opacity: 0;
-  transform: translateY(var(--solo-hide-shift));
+  /* ⚠️ 位移用 `margin-top` 而**不是** `transform`：hero/视图自带 `rise-in-page` 入场动画
+     （也是 transform），而 `animation` 的优先级**高于**普通声明 ⇒ 我们的位移会被它压掉
+     （用户报"工具栏动了、hero 没动"，`devlog/437`）。margin 不与动画抢同一个属性。 */
+  margin-top: var(--solo-hide-shift);
   transition: opacity var(--solo-hide-ms) var(--solo-ease, ease),
-              transform var(--solo-hide-ms) var(--solo-ease, ease);
+              margin-top var(--solo-hide-ms) var(--solo-ease, ease);
 }
 
 /* 回来：**上滑 + 渐显**（同一个过渡，方向天然相反） */
 .app-shell[data-solo='1'] .posts-panel[data-view='cards'] > :not(.hero-backdrop) {
   opacity: 1;
-  transform: translateY(0);
+  margin-top: 0;
   transition: opacity var(--solo-hide-ms) var(--solo-ease, ease),
-              transform var(--solo-hide-ms) var(--solo-ease, ease);
+              margin-top var(--solo-hide-ms) var(--solo-ease, ease);
 }
 
-/* 白色纱罩（`.hero-backdrop::after`）：让位时**渐隐**（背景图完全显现）、回来时**渐显** */
-.app-shell[data-solo='1'][data-idle] .posts-panel[data-view='cards'] .hero-backdrop::after {
-  opacity: 0;
-  transition: opacity var(--solo-hide-ms) var(--solo-ease, ease);
-}
-
-.app-shell[data-solo='1'] .posts-panel[data-view='cards'] .hero-backdrop::after {
-  opacity: 1;
-  transition: opacity var(--solo-hide-ms) var(--solo-ease, ease);
-}
-/* 背景**视频**层（需求 9，devlog/424）：盖在同层那张图上面，图就是它的 poster 与降级兜底。
-   ⚠️ 必须 `object-fit: cover`（与图的 `background-size: cover` 同款铺满）；
-   取景三件套由 `focusObjectStyle()` 内联给 —— 走的是 `object-position`，
-   对 `<video>` 而言 `background-position` **毫无作用**（症状：取景只在图上有、视频永远居中）。 */
 .hero-backdrop-video {
   position: absolute;
   inset: 0;
@@ -108,7 +97,16 @@
   to   { opacity: 0; }
 }
 
+/* ⚠️ 白色纱罩**已按用户要求撤掉**（2026-10-07，`devlog/437`：「直接撤掉」）——
+   原来的 `linear-gradient` 四个 alpha（0.28 / 0.36 / 0.45 / 0.18，`.custom` 那组是另一半）
+   曾在 `devlog/355` 调过两轮；要恢复就把 `display: none` 换成那套 alpha。
+   ⚠️ **副作用（真机要看一眼）**：`utils/backdropTone.ts` 判"字色随底图明暗"时**假定有一层
+   α=0.25 的白纱罩** ⇒ 现在实际渲染没有它，深色底图上可能把字判成近黑字而不够清楚。
+   真机上若发现看不清，把那个假定值改成 0 即可（一处常量）。 */
 .hero-backdrop::after {
+  display: none;
+}
+.hero-backdrop-old-veil {
   content: '';
   position: absolute;
   inset: 0;
