@@ -37,6 +37,39 @@
   background-repeat: no-repeat;
 }
 
+/* ── 单推：全收起之后**延时淡出**，让背景图完全显现（需求 6 视觉版，`devlog/430`）────────
+   用户口径：「全部收起之后如果当时位于 card 视图，那么一段时间之后就降低页面元素的透明度和
+   背景图白色遮罩的透明度，让背景图完全显现出来」。
+   ⚠️ 只在 **cards 视图**：别的视图没有 hero，内容淡掉就只剩一张背景，没有意义（`data-view` 由
+   `PostsPage` 挂上）。
+   ⚠️ 背景层本身**不淡**（`.hero-backdrop` 被排除）—— 要的正是"背景图完全显现"。
+   ⚠️ 唤出顶栏/工具栏时**立刻恢复**：那两条贴边窄带与被唤出的元素都在 `.app-shell` 下，
+   用 `~` 兄弟选择器把两个变量拨回原值（`transition-delay: 0` ⇒ 不跟着延时）。 */
+.app-shell[data-solo='1'] .posts-panel[data-view='cards'] {
+  --solo-a-content: var(--solo-dim);
+  --solo-a-veil: 0;
+  --solo-a-delay: var(--solo-fade-delay);
+}
+
+.app-shell[data-solo='1'] .solo-hover-top:hover ~ .app-body .posts-panel[data-view='cards'],
+.app-shell[data-solo='1'] .solo-hover-left:hover ~ .app-body .posts-panel[data-view='cards'],
+.app-shell[data-solo='1'] .topbar:hover ~ .app-body .posts-panel[data-view='cards'],
+.app-shell[data-solo='1'] .icon-rail:hover ~ .app-main .posts-panel[data-view='cards'] {
+  --solo-a-content: 1;
+  --solo-a-veil: 1;
+  --solo-a-delay: 0ms;
+}
+
+.app-shell[data-solo='1'] .posts-panel[data-view='cards'] > :not(.hero-backdrop) {
+  opacity: var(--solo-a-content);
+  transition: opacity 520ms var(--solo-ease, ease) var(--solo-a-delay);
+}
+
+/* 白色纱罩（`.hero-backdrop::after`）在淡出态撤掉 ⇒ 背景图"完全显现" */
+.app-shell[data-solo='1'] .posts-panel[data-view='cards'] .hero-backdrop::after {
+  opacity: var(--solo-a-veil);
+  transition: opacity 520ms var(--solo-ease, ease) var(--solo-a-delay);
+}
 /* 背景**视频**层（需求 9，devlog/424）：盖在同层那张图上面，图就是它的 poster 与降级兜底。
    ⚠️ 必须 `object-fit: cover`（与图的 `background-size: cover` 同款铺满）；
    取景三件套由 `focusObjectStyle()` 内联给 —— 走的是 `object-position`，

@@ -35,6 +35,7 @@ vi.mock('../api/api', async (orig) => {
 
 import VtuberSidebar from './VtuberSidebar'
 import { enterSolo, exitSolo } from '../utils/soloMode'
+import { railCollapsed, setRailCollapsed } from '../utils/railCollapsed'
 
 ;(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -63,6 +64,7 @@ async function render() {
 beforeEach(() => {
   localStorage.clear()
   exitSolo()
+  setRailCollapsed(false)
   listVtubers.mockReset().mockResolvedValue([V7, V9])
   host = document.createElement('div')
   document.body.append(host)
@@ -76,41 +78,46 @@ afterEach(() => {
   exitSolo()
 })
 
-describe('左栏：单推时的收起与拉手', () => {
-  it('不在单推 ⇒ 不收起、也没有拉手', async () => {
+describe('左栏：收起与拉手（常驻功能）', () => {
+  it('★ 拉手**常驻**（不在单推里也在，用户口径"收起展开是常驻功能"），但不收起时不显示为收起态', async () => {
     await render()
+    expect(handle(), '常驻功能 ⇒ 平时也有拉手').not.toBeNull()
+    expect(handle()!.getAttribute('aria-label')).toBe('收起 V 列表')
     expect(shell().dataset.collapsed).toBeUndefined()
-    expect(handle(), '平时这一栏常驻，不需要拉手').toBeNull()
   })
 
-  it('★ 进单推 ⇒ 整栏 `data-collapsed="1"` + 拉手出现（文案是"展开"）', async () => {
+  it('★ 不在单推里点拉手 ⇒ 收起这一栏，且**记进偏好**（跨启动还在）', async () => {
+    await render()
+    await act(async () => { handle()!.click(); await Promise.resolve() })
+    expect(shell().dataset.collapsed).toBe('1')
+    expect(railCollapsed(), '偏好要落盘').toBe(true)
+    await act(async () => { handle()!.click(); await Promise.resolve() })
+    expect(shell().dataset.collapsed).toBeUndefined()
+    expect(railCollapsed()).toBe(false)
+  })
+
+  it('★ 进单推 ⇒ 整栏 `data-collapsed="1"` + 拉手文案是"展开"，但**偏好不动**（退出回原样）', async () => {
     enterSolo(7, '/vtubers/7')
     await render()
-    expect(shell().dataset.collapsed, '宽度由 CSS 收成 0').toBe('1')
+    expect(shell().dataset.collapsed, '单推强制收起').toBe('1')
     expect(handle()!.getAttribute('aria-label')).toBe('展开 V 列表')
-    expect(handle()!.getAttribute('aria-expanded')).toBe('false')
+    expect(railCollapsed(), '⚠️ 单推不改用户偏好 —— 退出才能"回到进入前的状态"').toBe(false)
   })
 
-  it('★ 拉手只是**临时展开**：收起标记消失、文案翻转，**列表内容一个字没变**', async () => {
+  it('★ 单推里点拉手只是**临时展开**：收起标记消失、**列表内容一个字没变**，退出后回到用户偏好', async () => {
     enterSolo(7, '/vtubers/7')
     await render()
     const before = names()
     expect(before.join('|'), '正对照：列表里确实有两个 V').toContain('柚子')
     await act(async () => { handle()!.click(); await Promise.resolve() })
-    expect(shell().dataset.collapsed, '展开').toBeUndefined()
+    expect(shell().dataset.collapsed, '临时展开').toBeUndefined()
     expect(handle()!.getAttribute('aria-label')).toBe('收起 V 列表')
     expect(names(), '⚠️ 用户口径：v 列表不变化').toEqual(before)
-    // 再点一次收回去
     await act(async () => { handle()!.click(); await Promise.resolve() })
     expect(shell().dataset.collapsed).toBe('1')
-  })
-
-  it('★ 退出单推 ⇒ 收起标记与拉手一起消失（状态不留痕）', async () => {
-    enterSolo(7, '/vtubers/7')
-    await render()
-    expect(handle()).not.toBeNull()
+    // 退出单推 ⇒ 回到"用户自己的偏好"（这里没手动收起过 ⇒ 展开）
     await act(async () => { exitSolo(); await Promise.resolve() })
     expect(shell().dataset.collapsed).toBeUndefined()
-    expect(handle()).toBeNull()
+    expect(handle(), '拉手是常驻功能 ⇒ 还在').not.toBeNull()
   })
 })

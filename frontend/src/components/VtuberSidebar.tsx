@@ -22,6 +22,7 @@ import {
 } from '../utils/vtuberReorder'
 import { EVENTS, on } from '../utils/appEvents'
 import { exitSolo, useSolo } from '../utils/soloMode'
+import { toggleRailCollapsed, useRailCollapsed } from '../utils/railCollapsed'
 import './../styles/layout.css'
 
 /** 把抓取完成的账号快照就地合并进侧栏数据（按 bilibili platform_uid 匹配） */
@@ -49,8 +50,7 @@ function isLive(v: VTuber): boolean {
  * 进单推的那一瞬间（列表还没回来）左栏会照样占着宽度，看着像"没生效"。
  * ⚠️ 列表**内容不变**（用户口径）：收起只是把这一栏的宽度让出去，展开后还是原来那些 V。
  */
-function SidebarFrame({ solo, collapsed, onTogglePeek, children }: {
-  solo: { id: number } | null
+function SidebarFrame({ collapsed, onTogglePeek, children }: {
   collapsed: boolean
   onTogglePeek: () => void
   children: React.ReactNode
@@ -60,20 +60,22 @@ function SidebarFrame({ solo, collapsed, onTogglePeek, children }: {
       {children}
       {/* 拉手：只在**单推模式**下存在（平时这一栏本来就常驻，不需要拉手）。
           收起时它贴着内容左缘（`left: 100%`，此时栏宽为 0），展开时贴栏的右缘 ⇒ 同一套定位。 */}
-      {solo && (
-        <button
-          type="button"
-          className="solo-rail-handle"
-          data-testid="solo-rail-handle"
-          aria-label={collapsed ? '展开 V 列表' : '收起 V 列表'}
-          aria-expanded={!collapsed}
-          onClick={onTogglePeek}
-        >
-          {collapsed
-            ? <ChevronRight className="h-3.5 w-3.5" />
-            : <ChevronLeft className="h-3.5 w-3.5" />}
-        </button>
-      )}
+      {/* 拉手：**常驻**（用户口径「收起展开是常驻功能」——不再只在单推里存在）。
+          ⚠️ 它是**常态隐藏**的：`opacity: 0`，鼠标悬到那条窄边（或键盘 Tab 到它）才现身。
+          收起时它贴着内容左缘（`left: 100%`，此时这一栏已被负外边距推出视口），
+          展开时贴栏的右缘 ⇒ 同一套定位，两种状态都在"内容区的左边缘"上。 */}
+      <button
+        type="button"
+        className="solo-rail-handle"
+        data-testid="solo-rail-handle"
+        aria-label={collapsed ? '展开 V 列表' : '收起 V 列表'}
+        aria-expanded={!collapsed}
+        onClick={onTogglePeek}
+      >
+        {collapsed
+          ? <ChevronRight className="h-3.5 w-3.5" />
+          : <ChevronLeft className="h-3.5 w-3.5" />}
+      </button>
     </div>
   )
 }
@@ -605,12 +607,16 @@ const VtuberItem = memo(function VtuberItem({ vtuber, index, active, onSelect,
  */
 export default function VtuberSidebar() {
   const solo = useSolo()
+  const manual = useRailCollapsed()
   const [peek, setPeek] = useState(false)
   // 换 V / 退出单推 ⇒ 把"临时展开"收回去（下次进来仍然是从收起态开始）
   useEffect(() => { setPeek(false) }, [solo?.id])
+  /* 收起 = **单推强制** ∨ **用户自己收起过**；`peek` 是"临时看一眼"（单推里点拉手）。
+     ⚠️ 单推**不改** `manual` —— 退出后回到用户自己的偏好（`devlog/429` 的"退出回到进入前"）。 */
+  const collapsed = !peek && (Boolean(solo) || manual)
   return (
-    <SidebarFrame solo={solo} collapsed={Boolean(solo) && !peek}
-                  onTogglePeek={() => setPeek((p) => !p)}>
+    <SidebarFrame collapsed={collapsed}
+                  onTogglePeek={() => (solo ? setPeek((p) => !p) : toggleRailCollapsed())}>
       <VtuberSidebarInner />
     </SidebarFrame>
   )

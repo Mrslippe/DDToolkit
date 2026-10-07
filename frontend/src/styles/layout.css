@@ -525,16 +525,14 @@ html.window-maximized body {
   border-right: 1px solid var(--c-border);
 }
 
-/* 单推模式：**整栏收起**（需求 6，devlog/429）—— 宽度让给内容，列表内容不变。
-   ⚠️ 用 `width: 0` + 隐藏子元素，而不是 `display: none`：拉手是这一栏的子元素，
-   整栏没了拉手也没了（而"常态隐藏的拉手"正是用户要的）。 */
+/* 收起：**负外边距**把它整栏推出视口（需求 6，devlog/429；手法在 430 从 `width: 0` 换成这个
+   —— 只有外边距/位移能**动画**，而用户要的是"先左栏向左收起，然后…"那套分段动画）。
+   ⚠️ 子元素**一个都不藏**：这一栏原样住在 DOM 里（"v 列表不变化"这条顺带更稳），
+   拉手也跟着它一起移出去 —— 它的定位是 `left: 100%`（= 这一栏的右缘），
+   推出视口后右缘正好落在内容区左边缘 ⇒ **两种状态下拉手都在同一条边**上。
+   ⚠️ `data-collapsed` 现在由 JS 合成（单推强制 ∨ 用户手动），见 `utils/railCollapsed.ts`。 */
 .sidebar-shell[data-collapsed='1'] {
-  width: 0;
-  border-right: 0;
-}
-
-.sidebar-shell[data-collapsed='1'] > :not(.solo-rail-handle) {
-  display: none;
+  margin-left: calc(-1 * var(--sidebar-width));
 }
 
 /* 拉手：常态**看不见**（收起时贴内容左缘，`opacity: 0` 但仍可命中 —— 悬到那条窄边就现身）。
@@ -566,13 +564,87 @@ html.window-maximized body {
   opacity: 1;
 }
 
-/* 展开态（拉手在栏的右缘）常驻半透明 —— 否则"怎么收回去了"没人找得到 */
-.sidebar-shell:not([data-collapsed='1']) .solo-rail-handle {
-  opacity: 0.45;
+/* ⚠️ **两种状态下都常态隐藏**（用户口径 2026-10-07："不管展开还是收起状态下提手都自动隐藏，
+   之后鼠标 hover 到那个区域才显示"）—— 展开态**不再**常驻半透明，只有 hover/键盘聚焦才现身。
+   命中区靠 `::after` 向外扩一圈（否则 15px 宽的隐形条很难扫到）。 */
+.solo-rail-handle::after {
+  content: '';
+  position: absolute;
+  inset: -10px -8px;
 }
 
-.sidebar-shell:not([data-collapsed='1']) .solo-rail-handle:hover {
-  opacity: 1;
+/* ── 单推模式的视觉（需求 6 视觉版，2026-10-07 用户口径，`devlog/430`）────────────────
+   ① 左栏收起展开是**常驻功能**，拉手在**两种状态下都常态隐藏**，hover 到那条窄边才现身；
+   ② 进单推 = **固定顺序**的收起动画：左栏 → 左侧工具栏 → 顶栏（各有缓动曲线）；
+   ③ 全收起后（再等一会儿）页面元素淡出、白纱罩撤掉，让背景图完全显现（只在 cards 视图，
+      规则写在 `posts.css` —— 那里才有面板的类名）；
+   ④ 单推中顶栏与工具栏可**鼠标 hover 唤出**（贴边的两条窄带）。
+   ⚠️ 顺序靠 `transition-delay` 表达（**不写 JS 状态机**）：进入按 `--solo-step` 递增，
+      退出**倒着来**（顶栏先回、工具栏、最后左栏）。 */
+:root {
+  --solo-step: 260ms;                              /* 每一段的时长（三段共 780ms） */
+  --solo-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --solo-dim: 0.12;                                /* 全收起后页面元素的不透明度 */
+  --solo-fade-delay: 2.4s;                         /* "一段时间之后"才淡出 */
+}
+
+.sidebar-shell,
+.icon-rail,
+.topbar {
+  transition: margin-left var(--solo-step) var(--solo-ease),
+              margin-top var(--solo-step) var(--solo-ease);
+}
+
+/* 退出：倒着来（顶栏 → 工具栏 → 左栏） */
+.topbar { transition-delay: 0ms; }
+.icon-rail { transition-delay: var(--solo-step); }
+.sidebar-shell { transition-delay: calc(2 * var(--solo-step)); }
+
+/* ① 左栏向左收起 */
+.app-shell[data-solo='1'] .sidebar-shell {
+  margin-left: calc(-1 * var(--sidebar-width));
+  transition-delay: 0ms;
+}
+
+/* ② 接着左侧工具栏 */
+.app-shell[data-solo='1'] .icon-rail {
+  margin-left: calc(-1 * var(--rail-width));
+  transition-delay: var(--solo-step);
+}
+
+/* ③ 最后顶栏 */
+.app-shell[data-solo='1'] .topbar {
+  margin-top: calc(-1 * var(--topbar-height));
+  transition-delay: calc(2 * var(--solo-step));
+}
+
+/* ④ 唤出：贴边的两条窄带（在 `App.tsx` 里位于 `.app-shell` 开头，靠 `~` 兄弟选择器生效）。
+   ⚠️ 唤出必须把 `transition-delay` 归零 —— 否则那几段延时会让"唤出"慢半拍。 */
+.solo-hover {
+  position: fixed;
+  z-index: 60;
+  display: none;
+  pointer-events: none;
+}
+
+.app-shell[data-solo='1'] .solo-hover {
+  display: block;
+  pointer-events: auto;
+}
+
+.solo-hover-top { top: 0; left: 0; right: 0; height: 10px; }
+.solo-hover-left { top: 0; bottom: 0; left: 0; width: 10px; }
+
+.app-shell[data-solo='1'] .solo-hover-top:hover ~ .topbar,
+.app-shell[data-solo='1'] .topbar:hover {
+  margin-top: 0;
+  transition-delay: 0ms;
+}
+
+.app-shell[data-solo='1'] .solo-hover-left:hover ~ .app-body .icon-rail,
+.app-shell[data-solo='1'] .icon-rail:hover {
+  margin-left: 0;
+  transition-delay: 0ms;
 }
 
 /* 列表滚动区（OverlayScroll）：scroll 权交付滚动体，仅参与 flex 高度分配 */

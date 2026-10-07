@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Route, Routes, useNavigate } from 'react-router-dom'
 import TopBar from './components/TopBar'
 import IconRail from './components/IconRail'
+import { useSolo } from './utils/soloMode'
 import VtuberSidebar from './components/VtuberSidebar'
 import EmptyState from './pages/EmptyState'
 import PostsPage from './pages/PostsPage'
@@ -73,8 +74,15 @@ export default function App() {
     return () => { alive = false; window.clearTimeout(timer) }
   }, [])
 
+  const solo = useSolo()
+
   return (
-    <div className="app-shell">
+    /* 单推模式的标记挂在这里：三段收起动画与"hover 唤出"全走 CSS（`devlog/430`） */
+    <div className="app-shell" data-solo={solo ? '1' : undefined}>
+      {/* ⚠️ 这两条**贴边窄带**必须排在被唤出的元素**之前**：唤出靠 `~` 兄弟选择器
+          （`.solo-hover-top:hover ~ .topbar`），放到后面就选不中了。 */}
+      <div className="solo-hover solo-hover-top" aria-hidden="true" />
+      <div className="solo-hover solo-hover-left" aria-hidden="true" />
       <ErrorBoundary>
         <TopBar />
         <div className="app-body">
