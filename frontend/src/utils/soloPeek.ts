@@ -96,8 +96,8 @@ export function useSoloPeek(enabled: boolean): SoloPeek {
   return peek
 }
 
-/** 多久没动鼠标算"闲置"（界面元素该让位给背景图了）。 */
-export const SOLO_IDLE_MS = 2400
+/** 多久没动鼠标算"闲置"（界面元素该让位给背景图了）。用户 2026-10-07：**5 秒**。 */
+export const SOLO_IDLE_MS = 5000
 
 /**
  * 多小的移动**不算**"动"（px）。

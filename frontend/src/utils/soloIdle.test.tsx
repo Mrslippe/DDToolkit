@@ -46,15 +46,15 @@ afterEach(() => {
 
 describe('useSoloIdle', () => {
   it('★ 停够时间 ⇒ 闲置；**一动就回来并重新计时**', async () => {
-    await act(async () => { root.render(<Probe enabled ms={2400} />) })
+    await act(async () => { root.render(<Probe enabled ms={5000} />) })
     expect(shown(), '刚进来还没闲置').toBe('0')
-    await advance(2399)
+    await advance(4999)
     expect(shown(), '差 1ms 还不算').toBe('0')
     await advance(2)
-    expect(shown(), '够 2.4s ⇒ 闲置').toBe('1')
+    expect(shown(), '够 5s ⇒ 闲置').toBe('1')
     await move()
     expect(shown(), '一动立刻退出闲置').toBe('0')
-    await advance(2399)
+    await advance(4999)
     expect(shown(), '计时重新开始').toBe('0')
     await advance(2)
     expect(shown()).toBe('1')

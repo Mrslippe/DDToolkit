@@ -347,7 +347,7 @@ keyframes 只会重启**）。
 
 | 名称 | 类名 | 说明 |
 |---|---|---|
-| 图标栏 | `.icon-rail` | 宽 `--rail-width:50px`，底色 `--c-rail:#4b5a6f`。★**单推的沉浸视觉**（需求 6 视觉版，`devlog/431`）：进单推 = **固定顺序**的分段收起 —— **左栏(0) → 工具栏(1 段) → 顶栏(2 段)**，每段 `--solo-step:260ms` + `--solo-ease`，**退出倒着来**（全部靠 `transition-delay`，没有 JS 状态机）；单推中贴边两条窄带（`.solo-hover-top`/`.solo-hover-left`，10px）hover 即**唤出**（⚠️ 窄带必须排在被唤出元素**之前**，靠 `~` 生效；⚠️ 唤出要把 `transition-delay` 归零）；全收起后再等 `--solo-fade-delay:2.4s` ⇒ **只在 cards 视图**（`.posts-panel[data-view="cards"]`）把页面元素淡到 `--solo-dim:0.12`、白纱罩撤到 0（**背景层本身不动**），唤出时立刻恢复 |
+| 图标栏 | `.icon-rail` | 宽 `--rail-width:50px`，底色 `--c-rail:#4b5a6f`。★**单推的沉浸视觉**（需求 6 视觉版，`devlog/431`）：进单推 = **固定顺序**的分段收起 —— **左栏(0) → 工具栏(1 段) → 顶栏(2 段)**，每段 `--solo-step:260ms` + `--solo-ease`，**退出倒着来**（全部靠 `transition-delay`，没有 JS 状态机）；单推中贴边两条窄带（`.solo-hover-top`/`.solo-hover-left`，10px）hover 即**唤出**（⚠️ 窄带必须排在被唤出元素**之前**，靠 `~` 生效；⚠️ 唤出要把 `transition-delay` 归零）；全收起后再等 `--solo-fade-delay:5s（= SOLO_IDLE_MS，改的是那个常量）` ⇒ **只在 cards 视图**（`.posts-panel[data-view="cards"]`）把页面元素淡到 `--solo-dim:0.12`、白纱罩撤到 0（**背景层本身不动**），唤出时立刻恢复 |
 | 顶部组 | `.icon-rail-group`（首）÷ spacer | 功能入口 |
 | 底部组 | `.icon-rail-bottom`（`margin-top:auto`） | 贴栏底；**2026-09-15（R14a）起放齿轮**；**2026-10-07（需求 6，`devlog/429`）齿轮上方加「单推」切换钮**（`.icon-rail-btn` + `aria-pressed` + `data-testid="solo-toggle"`，`Focus` 图标）—— 用户指定位置「最左侧工具栏底部，设置图标上方」；⚠️ **没选中 V 时禁用**（单推总得有个对象），单推中再点一次退出并回到进入前的路由 |
 | 单元格 | `.icon-rail-btn` | **通栏 50×50** 贴合；未选中整钮 `opacity:.6`，hover `.85` |
