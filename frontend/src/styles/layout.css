@@ -584,7 +584,7 @@ html.window-maximized body {
 :root {
   --solo-step: 260ms;                              /* 每一段的时长（三段共 780ms） */
   --solo-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
-  --solo-dim: 0.12;                                /* 全收起后页面元素的不透明度 */
+  --solo-dim: 0;                                   /* 全收起后页面元素的不透明度（用户口径 2026-10-07：**降到 0**，hover 唤出才恢复） */
   --solo-fade-delay: 2.4s;                         /* "一段时间之后"才淡出 */
 }
 
@@ -632,19 +632,26 @@ html.window-maximized body {
   pointer-events: auto;
 }
 
-.solo-hover-top { top: 0; left: 0; right: 0; height: 10px; }
-.solo-hover-left { top: 0; bottom: 0; left: 0; width: 10px; }
+.solo-hover-top { top: 0; left: 0; right: 0; height: var(--topbar-height); }
+.solo-hover-left { top: 0; bottom: 0; left: 0; width: var(--rail-width); }
 
-.app-shell[data-solo='1'] .solo-hover-top:hover ~ .topbar,
-.app-shell[data-solo='1'] .topbar:hover {
+/* 唤出：data-peek 由 App.tsx 的事件委托给（**不用** :hover 的兄弟选择器 ——
+   devlog/432：那样"从窄带移到唤出来的工具栏上"会立刻掉出 hover，用户实测唤不出来）。 */
+.app-shell[data-solo='1'][data-peek='top'] .topbar {
   margin-top: 0;
   transition-delay: 0ms;
 }
 
-.app-shell[data-solo='1'] .solo-hover-left:hover ~ .app-body .icon-rail,
-.app-shell[data-solo='1'] .icon-rail:hover {
+.app-shell[data-solo='1'][data-peek='left'] .icon-rail {
   margin-left: 0;
   transition-delay: 0ms;
+}
+
+/* ⚠️ 唤出期间**窄带必须让位**：它俩尺寸就是被唤出元素那么大、又压在更上层，
+   不让位的话顶栏那些按钮（账号切换器、通知、窗口控制）全点不着。 */
+.app-shell[data-solo='1'][data-peek='top'] .solo-hover-top,
+.app-shell[data-solo='1'][data-peek='left'] .solo-hover-left {
+  pointer-events: none;
 }
 
 /* 列表滚动区（OverlayScroll）：scroll 权交付滚动体，仅参与 flex 高度分配 */

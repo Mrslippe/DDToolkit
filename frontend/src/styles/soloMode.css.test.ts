@@ -71,18 +71,21 @@ describe('单推：分段收起与 hover 唤出', () => {
       .toMatch(/transition-delay:\s*calc\(2\s*\*\s*var\(--solo-step\)\)/)
   })
 
-  it('★ hover 唤出：贴边两条带 + 被唤出元素自身 hover 都保持，且**延时归零**', () => {
+  it('★ hover 唤出：窄带**尺寸 = 被唤出的元素自身**，唤出走 `data-peek`（**不用** `:hover` 兄弟选择器）', () => {
     expect(layout, '贴边窄带要有').toContain('.solo-hover-top {')
     expect(layout).toContain('.solo-hover-left {')
-    for (const sel of [".app-shell[data-solo='1'] .solo-hover-top:hover ~ .topbar",
-                       ".app-shell[data-solo='1'] .topbar:hover",
-                       ".app-shell[data-solo='1'] .solo-hover-left:hover ~ .app-body .icon-rail",
-                       ".app-shell[data-solo='1'] .icon-rail:hover"]) {
-      expect(layout, `${sel} 要在`).toContain(sel)
-    }
-    // 唤出组里必须把 delay 归零（否则收起那几段延时会让唤出慢半拍）
-    const summon = layout.slice(layout.indexOf(".app-shell[data-solo='1'] .solo-hover-top:hover"))
-    expect(summon.slice(0, 600)).toMatch(/transition-delay:\s*0ms/)
+    // ★ 用户口径 2026-10-07：触发宽度加宽到元素自身
+    expect(L('.solo-hover-top'), '顶栏那条 = 顶栏高').toMatch(/height:\s*var\(--topbar-height\)/)
+    expect(L('.solo-hover-left'), '工具栏那条 = 工具栏宽').toMatch(/width:\s*var\(--rail-width\)/)
+    // ⚠️ 唤出**不能**用 `:hover` 兄弟选择器（鼠标移到唤出来的元素上会掉出 hover ⇒ 用户实测唤不出来）
+    expect(layout, '别再退回 :hover 兄弟选择器').not.toContain('.solo-hover-top:hover ~')
+    expect(L(".app-shell[data-solo='1'][data-peek='top'] .topbar"))
+      .toMatch(/margin-top:\s*0/)
+    expect(L(".app-shell[data-solo='1'][data-peek='left'] .icon-rail"))
+      .toMatch(/margin-left:\s*0/)
+    // 唤出期间窄带让位（否则顶栏那些按钮点不着）
+    expect(L(".app-shell[data-solo='1'][data-peek='top'] .solo-hover-top"))
+      .toMatch(/pointer-events:\s*none/)
   })
 })
 
@@ -101,17 +104,18 @@ describe('单推：全收起后的延时淡出', () => {
     expect(veil.slice(0, 300)).toMatch(/opacity:\s*var\(--solo-a-veil\)/)
   })
 
-  it('★ 唤出时**立刻恢复**（4 条选择器把两个变量拨回 1、延时归零）', () => {
-    const i = posts.indexOf(".app-shell[data-solo='1'] .solo-hover-top:hover ~ .app-body .posts-panel")
-    expect(i, '唤出恢复那条要在').toBeGreaterThan(0)
-    const restore = posts.slice(i, posts.indexOf('}', i))
+  it('★ 唤出任一区（`data-peek`）⇒ **立刻恢复**（两个变量拨回 1、延时归零）', () => {
+    const restore = P(".app-shell[data-solo='1'][data-peek] .posts-panel[data-view='cards']")
     expect(restore).toMatch(/--solo-a-content:\s*1/)
     expect(restore).toMatch(/--solo-a-veil:\s*1/)
     expect(restore).toMatch(/--solo-a-delay:\s*0ms/)
-    // 四条都要在（顶栏带 / 左带 / 顶栏自身 / 工具栏自身）
-    for (const frag of ['.solo-hover-left:hover ~ .app-body', '.topbar:hover ~ .app-body',
-                        '.icon-rail:hover ~ .app-main']) {
-      expect(posts.slice(i, i + 900), `${frag} 要在恢复组里`).toContain(frag)
-    }
+    // ⚠️ 别再退回那四条 `:hover` 兄弟选择器
+    expect(posts, '别退回 :hover 兄弟选择器').not.toContain('.solo-hover-top:hover ~ .app-body')
+  })
+
+  it('★ 淡到 **0**（用户口径 2026-10-07："界面元素透明度降到 0"）', () => {
+    const root = layout.slice(layout.indexOf(':root {'))
+    expect(root.slice(0, root.indexOf('}')), '全收起后内容完全让位给背景图')
+      .toMatch(/--solo-dim:\s*0;/)
   })
 })

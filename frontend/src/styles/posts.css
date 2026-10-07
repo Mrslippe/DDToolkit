@@ -51,10 +51,8 @@
   --solo-a-delay: var(--solo-fade-delay);
 }
 
-.app-shell[data-solo='1'] .solo-hover-top:hover ~ .app-body .posts-panel[data-view='cards'],
-.app-shell[data-solo='1'] .solo-hover-left:hover ~ .app-body .posts-panel[data-view='cards'],
-.app-shell[data-solo='1'] .topbar:hover ~ .app-body .posts-panel[data-view='cards'],
-.app-shell[data-solo='1'] .icon-rail:hover ~ .app-main .posts-panel[data-view='cards'] {
+/* 唤出任一区（data-peek）⇒ 立刻恢复可读（延时归零） */
+.app-shell[data-solo='1'][data-peek] .posts-panel[data-view='cards'] {
   --solo-a-content: 1;
   --solo-a-veil: 1;
   --solo-a-delay: 0ms;
