@@ -23,7 +23,39 @@ class VTuberRepo:
         self.db = db
 
     def all(self) -> list[VTuber]:
-        return self.db.query(VTuber).options(joinedload(VTuber.accounts)).all()
+        """全部 V，按**左栏自定义顺序**（`sort_order` 升序，同序号退回 id；需求 4/5）。"""
+        return (self.db.query(VTuber).options(joinedload(VTuber.accounts))
+                .order_by(VTuber.sort_order.asc(), VTuber.id.asc()).all())
+
+    def reorder(self, vtuber_ids: list[int]) -> list[VTuber]:
+        """按传入 id 的**新顺序**重排左栏（需求 4/5 的拖拽落库）。
+
+        ⚠️⚠️ **语义与 [`AccountRepo.reorder`] 不同，别互相"统一"掉。**
+        账号那套是"未列出的**排在其后**"；左栏是**可以带着筛选拖**的 —— 用户只看得见一部分，
+        拖的也只是那一部分，所以这里做的是：
+
+        > **把传进来的 id 按新顺序，填回它们原本占的那些位置。**
+
+        位置集合不变、只换内容 ⇒ **没传进来的 V 原地不动**（相对次序与绝对位置都不变）。
+        拿账号那套算法来做这件事，会把所有被筛掉的 V 一次性推到队尾（`devlog/413` 记了这条口径）。
+
+        传**全部** id 也走同一条路（那时"位置"就是全体），所以调用方不需要分两种情况。
+        """
+        ordered = self.all()
+        by_id = {v.id: v for v in ordered}
+        want = list(vtuber_ids)
+        if len(set(want)) != len(want):
+            raise ValueError("id 有重复 —— 这是一次口径错误的提交，不猜语义")
+        unknown = [i for i in want if i not in by_id]
+        if unknown:
+            raise ValueError(f"不存在的 id：{unknown[:5]}")
+        slots = [i for i, v in enumerate(ordered) if v.id in set(want)]
+        for slot, vid in zip(slots, want):
+            ordered[slot] = by_id[vid]
+        for idx, v in enumerate(ordered):
+            v.sort_order = idx
+        self.db.commit()
+        return ordered
 
     def get(self, id: int) -> VTuber | None:
         return self.db.query(VTuber).options(joinedload(VTuber.accounts)).filter(VTuber.id == id).first()

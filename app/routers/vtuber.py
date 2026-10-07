@@ -538,6 +538,31 @@ class AccountOrderRequest(BaseModel):
     account_ids: list[int]
 
 
+class VtuberOrderRequest(BaseModel):
+    """左栏拖拽重排的提交体（按新顺序给出 vtuber id）。
+
+    ⚠️ 可以只给**一部分** —— 带筛选拖动时给的就是"当前可见的那几条"，
+    没给的**原地不动**（见 `VTuberRepo.reorder` 的 docstring）。
+    """
+    vtuber_ids: list[int]
+
+
+@router.put("/vtuber-order", response_model=list[VTuberOut])
+def set_vtuber_order(data: VtuberOrderRequest, db: Session = Depends(get_db)):
+    """重排左栏虚拟主播顺序（需求 4/5 拖拽落库）。
+
+    ⚠️ 语义与 `PUT /vtuber/{id}/account-order` **不同**：那边"未列出的排在其后"，
+    这边是"**把传进来的填回原位**"（用户 2026-10-07 拍板：筛选下拖动只换可见那几条的相对位置）。
+    返回重排后的完整列表（与 `/vtuber/list` 同形，含 `avatar_local` 派生字段）。
+    """
+    try:
+        vtubers = VTuberRepo(db).reorder(data.vtuber_ids)
+    except ValueError as e:
+        # 口径错误的提交要**当场说清**（重复 id / 不存在的 id），不猜一个语义静默乱序
+        raise HTTPException(400, str(e)) from e
+    return _vtuber_outs(db, vtubers)
+
+
 @router.get("/vtuber/{vtuber_id}/avatars", response_model=VTuberAvatarsOut)
 def vtuber_avatars(vtuber_id: int, db: Session = Depends(get_db)):
     """该 V 的**历次头像**可选项 + 当前用的是哪张（R47，devlog/249）。

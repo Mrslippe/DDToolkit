@@ -133,6 +133,7 @@ budget: 300
 | **曾用值 / vtuber_field_history** | V **在平台上曾经用过的**昵称/签名（按账号记账，抓取覆盖前入库；手改不入账） | `vtuber_field_history`；`services/vtuber_history.py::record_field_change()` | f004；**取代字段锁定**（快照表不含昵称/签名，不记账即永久丢失）；⚠️ 展示暂缓（devlog/075：归入「账号信息历史快照」） |
 | **字段锁定 / locked_fields** | ~~用户手改的账号字段抓取时不覆盖~~ **已退役**（f004 删除该列）：改为"允许覆盖 + 记曾用值" | `accounts.locked_fields`（已删）；`scheduler._field_locked()` 恒 False 垫片 | v0.9.7 引入、devlog/074 退役 |
 | **账号排序 / sort_order** | 平台徽章展示顺序（拖拽落库） | `accounts.sort_order`；`PUT /vtuber/{id}/account-order` | v0.9.7 |
+| **左栏排序 / vtuber sort_order** | 左栏虚拟主播的自定义顺序（拖拽落库）。⚠️ 与上一行**语义不同**：左栏可以**带筛选拖**，所以是"把传进来的**填回原位**"、没传的原地不动（不是"排在其后"） | `vtubers.sort_order`；`VTuberRepo.reorder()`；`PUT /vtuber-order` | f010，需求 4/5，devlog/413 |
 | **档案设置窗口** | 背景/名称/企划/设定/头像/签名/账号管理（承接原 profile 视图） | `components/VtuberSettingsDialog.tsx` | v0.9.7，devlog/048 |
 | **平台适配器** | `fetch_user_info` / `fetch_post_page` / `enrich` 三方法 | `services/platforms/base.py`、`registry.py`、`{bilibili,weibo,xiaohongshu}.py` | 接新平台只加一行注册；**翻页是不透明 cursor**（`fetch_post_page(uid, cursor) → {items, has_more, next_cursor}`，核心不解析它 —— devlog/238） |
 | **抓取模式** | 全量 / 快速 / 增量 / 最新 N 条 / 仅动态 / 收录首屏 | `_fetch_posts_core(video_pages, dynamics_pages, include_videos, stop_on_existing, limit_latest)` | 见 `backend-fetch-pipeline.md` §5.2 |
@@ -216,7 +217,7 @@ budget: 300
 
 | 术语 | 含义 | 代码位置 | 关联 |
 |---|---|---|---|
-| **迁移链 / MIGRATION_HEAD** | alembic `a001→f009`（22 个版本） | `alembic/versions/`、`app/main.py::MIGRATION_HEAD` | 同步纪律 = 不变量 3（`docs/backend/ARCHITECTURE.md` §6）；测试断言一致 |
+| **迁移链 / MIGRATION_HEAD** | alembic `a001→f010`（23 个版本） | `alembic/versions/`、`app/main.py::MIGRATION_HEAD` | 同步纪律 = 不变量 3（`docs/backend/ARCHITECTURE.md` §6）；测试断言一致 |
 | **一键发布 / release.py** | 十步发布编排：预检→版本同步→门禁→打版→产物校验→提交/tag→推送→Release→报告 | `scripts/release.py`；手册 `docs/ops/RELEASE.md`；上传 `scripts/upload_release_assets.py`（幂等） | 守卫：工作树脏/notes 缺失/版本不递增/NSIS 打平/**文档漂移**/tag 冲突 → 停；`--dry-run`、`--from <步骤>` 续跑；推完自动对齐本地 `origin/<分支>` tracking ref（按 URL 推送不会自动更新它） |
 | **端到端上游冒烟 / smoke_upstream** | 数据目录副本 + 真后端 + 真上游，跑"只有真环境才暴露"的链路（B 站检索 / uid 直查 / 池外收录 / 场次上游） | `scripts/smoke_upstream.py`（`--cold` = 空数据目录 + 清空凭据）；`dev_check.py --upstream` | `--capture` 顺带刷新真实 fixtures；skip 必须打印原因，不冒充通过 |
 | **真实 fixtures** | 真上游回包 / 真 `installer.nsi` 片段 / 真索引条目 —— 判据的"真形状"依据 | `tests/fixtures/`（`smoke_upstream.py --capture` 生成；专栏 HTML 真拉自 `x/article/view`）；用例 `tests/test_real_fixtures.py` | 「新判据至少一条用例吃真实数据」= 不变量 22（`docs/backend/ARCHITECTURE.md` §6） |

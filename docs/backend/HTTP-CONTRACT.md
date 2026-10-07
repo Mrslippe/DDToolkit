@@ -89,6 +89,7 @@ retire-when: HTTP 层换框架，或路由整体重排
 | POST `/vtuber/{id}/accounts` | 建账号；(platform, platform_uid) 重复 409；成功后**只抓该新账号的账号信息 + 首屏内容**（v0.9.4：`async_fetch_accounts(fast=True)` + `async_fetch_first_screen`，不再重抓该 V 全部账号） |
 | PUT `/account/{account_id}` | 更新账号；唯一冲突 409。**不记曾用值**（手改 ≠ 平台上曾经用过的，devlog/075）；字段锁定已退役（f004） |
 | PUT `/vtuber/{id}/account-order` | 平台徽章拖拽重排：批量写 `accounts.sort_order`（v0.9.7） |
+| PUT `/vtuber-order` | **左栏**拖拽重排：批量写 `vtubers.sort_order`（需求 4/5，f010）。⚠️ 语义与上面那条**不同**：可以只给**一部分** id（带筛选时就是可见的那几条），**没给的原地不动**（"填回原位"，不是"排在其后"）；重复/不存在的 id ⇒ 400 |
 | DELETE `/account/{account_id}` | 删账号 + `purge_account()` 清理帖子与 5 张子表（卡片布局按 V 挂，不经这条） |
 | GET `/account/{id}/stat-snapshots?limit=` | 统计快照历史（默认 100，上限 1000，时间倒序，UTC 补时区） |
 | GET `/account/{id}/gift-days?limit=` | 礼物日聚合 |

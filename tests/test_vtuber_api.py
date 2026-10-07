@@ -673,6 +673,46 @@ def test_account_order_endpoint(client, monkeypatch):
                       json={"account_ids": []}).status_code == 404
 
 
+def test_vtuber_order_endpoint_full_and_subset(client):
+    """需求 4/5（f010，`devlog/413`）：左栏拖拽重排落库 —— **给全量**与**给一部分**都走同一条路。
+
+    ⚠️ 这里钉的是本批唯一需要想清楚的口径（用户 2026-10-07 拍板）：
+    **筛选下拖动只换可见那几条的相对位置，没显示的原地不动** ——
+    即"把传进来的 id 按新顺序**填回它们原本占的那些位置**"。
+    拿账号那套"未列出的排在其后"来做，第 ② 段会红（那正是它要防的）。
+    """
+    ids = [client.post("/vtuber", json={"name": f"排序V{i}"}).json()["id"]
+           for i in range(5)]
+    assert [v["id"] for v in client.get("/vtuber/list").json()] == ids
+
+    # ① 全量：按新顺序整体重排
+    r = client.put("/vtuber-order",
+                   json={"vtuber_ids": [ids[4], ids[0], ids[2], ids[1], ids[3]]})
+    assert r.status_code == 200
+    assert [v["id"] for v in r.json()] == [ids[4], ids[0], ids[2], ids[1], ids[3]]
+    assert [v["sort_order"] for v in r.json()] == [0, 1, 2, 3, 4]
+
+    # ② ★ 子集（= 带筛选拖动）：只动 ids[1..3]（它们原本占第 3/4/5 位），
+    #    ids[4] 与 ids[0] 必须**原地不动**
+    r = client.put("/vtuber-order", json={"vtuber_ids": [ids[3], ids[1], ids[2]]})
+    assert r.status_code == 200
+    got = [v["id"] for v in r.json()]
+    assert got == [ids[4], ids[0], ids[3], ids[1], ids[2]], \
+        "没传进来的必须原地不动 —— 这一条就是「筛选下拖动」的口径（推到队尾就错了）"
+    assert [v["id"] for v in client.get("/vtuber/list").json()] == got
+
+
+def test_vtuber_order_rejects_bad_payload(client):
+    """重复 id / 不存在的 id ⇒ 400：这是一次**口径错误**的提交，不猜语义静默乱序。"""
+    ids = [client.post("/vtuber", json={"name": f"坏序V{i}"}).json()["id"] for i in range(2)]
+    assert client.put("/vtuber-order",
+                      json={"vtuber_ids": [ids[0], ids[0]]}).status_code == 400
+    assert client.put("/vtuber-order",
+                      json={"vtuber_ids": [ids[0], 999999]}).status_code == 400
+    # ⚠️ 空数组**合法**：带筛选且筛完为空时前端不该为此报错（什么都不动）
+    assert client.put("/vtuber-order", json={"vtuber_ids": []}).status_code == 200
+
+
 def test_former_values_roundtrip(client, monkeypatch):
     """2026-09-13（devlog/075 改口径）：曾用值只由**抓取覆盖**产生，手改不入账。
 

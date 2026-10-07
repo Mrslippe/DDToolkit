@@ -31,6 +31,10 @@ class VTuber(Base):
     # 手改的内容落在 `sign_override`（清空 = 撤销覆盖，回到跟随来源账号）。
     sign_override = Column(Text, nullable=True)
     sign_source_account_id = Column(Integer, nullable=True)
+    #: 左栏自定义顺序（需求 4/5，迁移 f010）：升序，缺省 0 时退回 id 序。
+    #: ⚠️ 语义与 `accounts.sort_order` **不同**：那边是"未列出的排其后"，
+    #: 这边是"把传进来的填回原位"（左栏可以带筛选拖）—— 见 `VTuberRepo.reorder`。
+    sort_order = Column(Integer, nullable=False, default=0, server_default="0")
     created_at = Column(DateTime, default=_now)
     updated_at = Column(DateTime, default=_now, onupdate=_now)
 

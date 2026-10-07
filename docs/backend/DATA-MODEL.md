@@ -68,6 +68,7 @@ erDiagram
 | `notes` | TEXT | 备注 |
 | `sign_override` | TEXT | 手改的签名（**覆盖**，f004）。不写 `accounts.sign`；清空 = 撤销覆盖 |
 | `sign_source_account_id` | INTEGER | 卡片签名跟随哪个账号（**无外键**，f004）；NULL = 主账号，指向不存在的 id 时回落主账号 |
+| `sort_order` | INTEGER | NOT NULL 默认 0：**左栏自定义顺序**（f010）。⚠️ 语义与 `accounts.sort_order` **不同**：那边"未列出的排其后"，这边"把传进来的**填回原位**"（左栏可带筛选拖） |
 | `created_at` / `updated_at` | DATETIME | UTC now |
 
 #### `accounts` — 各平台账号
@@ -325,7 +326,8 @@ session 收口**（先写文件、再写索引行，见 `docs/backend/ASSETS.md 
 | `f006` profile_cards | 建 `profile_cards`（档案视图卡片布局；唯一键 `(vtuber_id, card_key)`，**挂 vtubers 外键 ⇒ purge 必清**）（R37-P2，devlog/142） |
 | `f007` event_kind_emoji | `vtuber_events` 加 `kind`（NOT NULL 默认 `event`，**回填既有行**）+ `emoji`（可空）+ 索引 `ix_vtuber_events_vtuber_kind`；⚠️ **SQLite 不支持 `ALTER COLUMN` ⇒ 走 `batch_alter_table`**（R42-A，devlog/162） |
 | `f008` avatar_history | 建 `vtuber_avatar_history`（历次头像账本；唯一键 `(vtuber_id, avatar_url)`，**挂 vtubers/accounts 两个外键 ⇒ purge 必清**）（R47，devlog/249） |
-| `f009` local_assets | 建 `local_assets`（轻资产长期储存索引；唯一键 `(kind, key)`，**不挂外键 ⇒ 不进 purge**）（L1，devlog/257） = **当前 head** |
+| `f009` local_assets | 建 `local_assets`（轻资产长期储存索引；唯一键 `(kind, key)`，**不挂外键 ⇒ 不进 purge**）（L1，devlog/257） |
+| `f010` vtuber_order | `vtubers.sort_order`（NOT NULL 默认 0；左栏自定义顺序，需求 4/5，devlog/413） = **当前 head** |
 
 **纪律**：新增迁移后必须同步 `app/main.py` 的 `MIGRATION_HEAD`（`tests/test_services.py`
 断言与 alembic head 一致），否则冷启动快路径会把旧库误判为已最新。启动迁移四形态：

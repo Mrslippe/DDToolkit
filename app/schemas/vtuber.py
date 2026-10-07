@@ -126,6 +126,9 @@ class VTuberOut(BaseModel):
     sign_source_account_id: int | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    # 需求 4/5（f010）：左栏自定义顺序。前端"自定义"那一档直接读它；
+    # 其余五档（名称/粉丝数/…）是**前端纯函数**排序，与这个字段无关。
+    sort_order: int = 0
     accounts: list[AccountOut] = []
 
 
