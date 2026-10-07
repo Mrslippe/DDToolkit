@@ -124,10 +124,32 @@ describe('单推：全收起后的延时淡出', () => {
     expect(root.slice(0, root.indexOf('}')), '滑动距离旋钮').toMatch(/--solo-hide-shift:\s*\d+px/)
     expect(root.slice(0, root.indexOf('}')), '过渡时长旋钮').toMatch(/--solo-hide-ms:\s*\d+ms/)
   })
-  it('★ 唤出的工具栏必须**压在左栏上面**（左栏也是负外边距藏起来的，它的白底会横跨到 [0,50]）', () => {
+  it('★ 唤出的工具栏/顶栏必须压过**左栏与面板里的浮层**（关系式：层级 > `.view-toolbar`）', () => {
     const rail = bodyWith(layout, '.icon-rail', 'z-index')
-    expect(rail, '不压在上面 ⇒ 用户看到的是左栏的白底（"左工具栏是一片白色"）').toMatch(/z-index:\s*\d/)
     expect(rail, '要能盖住同层的兄弟').toMatch(/position:\s*relative/)
+    // ⚠️ 两条都是踩过的坑：
+    // ① 左栏负外边距藏起来后盒子横跨到 [0,50]、DOM 又在后面 ⇒ 白底盖住工具栏；
+    // ② 单推里面板从 0,0 起，而 `.view-toolbar` 是 `absolute; top:0; z-index:3`
+    //    ⇒ 不给外壳层级就会**盖住工具栏/顶栏的按钮**（用户"左上角的按钮被顶掉了"）。
+    // 所以判据写成**关系**（外壳 > 面板浮层），而不是写死某个数字。
+    const zOf = (body: string) => Number(/^\s*z-index:\s*(\d+)/m.exec(body)![1])
+    /** 同名选择器可能有好几条（`.topbar` 就有多条）⇒ 取**含 z-index 的那些里的最大值**。 */
+    const maxZ = (selector: string) => {
+      const re = new RegExp(`^\\s*${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*[,{]`, 'gm')
+      let best = 0
+      for (const m of layout.matchAll(re)) {
+        const brace = layout.indexOf('{', m.index)
+        const body = layout.slice(brace, layout.indexOf('}', brace))
+        const z = /^\s*z-index:\s*(\d+)/m.exec(body)   // ⚠️ 行首锚定：注释里也写着 z-index:3
+        if (z) best = Math.max(best, Number(z[1]))
+      }
+      return best
+    }
+    const overlay = Number(/^\s*z-index:\s*(\d+)/m.exec(P('.view-toolbar'))![1])
+    expect(overlay, '正对照：面板浮层的层级确实是 3').toBe(3)
+    expect(maxZ('.icon-rail'), '工具栏要压过面板浮层').toBeGreaterThan(overlay)
+    expect(maxZ('.topbar'), '顶栏同理').toBeGreaterThan(overlay)
+    expect(zOf(rail), '（顺带：取到的那条本身也要有层级）').toBeGreaterThan(0)
   })
 
   it('★★ 真原因：`.view-body` 的 `scene-in` 是 `both` 填充 ⇒ 单推里必须改成 `backwards`', () => {

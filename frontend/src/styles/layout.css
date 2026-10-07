@@ -263,6 +263,11 @@ html.window-maximized body {
 
 .topbar {
   position: relative;
+  /* ⚠️ 外壳两层必须**高于面板里的浮层**（`devlog/442`）：单推时面板从 `0,0` 起，
+     而面板顶部那条工具条 `.view-toolbar` 是 `position:absolute; top:0; z-index:3`
+     —— 不给外壳层级的话，唤出的顶栏/工具栏会被它**盖住按钮**
+     （用户看到的"左上角的按钮被顶掉了"）。它是 3，这里取 10 留余量。 */
+  z-index: 10;
   display: flex;
   align-items: center;
   height: var(--topbar-height);
@@ -470,7 +475,7 @@ html.window-maximized body {
      上一版只给单推加了 z-index ⇒ **正常模式手动收起左栏时工具栏也被盖住**
      （用户报"收起左栏时左工具栏也被收起了"）。这里不能加作用域。 */
   position: relative;
-  z-index: 2;
+  z-index: 10;   /* 高于面板里的浮层（`.view-toolbar` 是 3），见 `devlog/442` */
 }
 
 .icon-rail-group {
