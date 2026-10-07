@@ -82,7 +82,9 @@ retire-when: HTTP 层换框架，或路由整体重排
 | POST `/vtuber/{vtuber_id}/background-video` | 上传背景**视频**（需求 9，f011，`devlog/423`）：mp4/webm，≤50MB，否则 415/413；与图片那条**同纪律**（按文件头判类型、限额流式读取、原子 rename、提交成功后才删旧视频）。★ **不动背景图**（图是视频的 poster 与降级兜底）；文件名前缀 `_bgv_` 与背景图区分 |
 | DELETE `/vtuber/{vtuber_id}/background-video` | 清除背景视频。⚠️ **不动背景图本身**（与上面那条 DELETE 对称） |
 | PUT `/vtuber/{vtuber_id}/background-focus` | 保存背景**取景**（需求 7，f011）：`{x:0..1, y:0..1, scale:1..3}`，**归一化**存；越界 ⇒ 422。★ `x`/`y` 是**图片锚点**（V1b-3，`devlog/420`）：与 CSS `object-position` 同向（`x=1` ⇒ 看图片右边缘），锚点位置与窗口宽度、与缩放都无关 |
-| DELETE `/vtuber/{vtuber_id}/background-focus` | 清除取景 ⇒ 原样铺满。⚠️ **不动背景图本身**（那是上面那条 DELETE 的事） |
+| DELETE `/vtuber/{vtuber_id}/background-focus` | 清除取景 ⇒ 原样铺满。⚠️ **不动背景图本身**（那是上面那条 DELETE 的事），也**不动视频那份取景**（两份分开存） |
+| PUT `/vtuber/{vtuber_id}/background-video-focus` | 保存**视频**的取景（需求 9 补丁，f012，`devlog/426`）：请求体与上面那条**同一个模型**（`{x:0..1, y:0..1, scale:1..3}`，越界 ⇒ 422），存**另一列** —— 用户口径"视频的取景和图片的取景**分开**，用一个按钮切换" |
+| DELETE `/vtuber/{vtuber_id}/background-video-focus` | 清除视频的取景（视频回到原样铺）。⚠️ **不动视频文件、也不动图片那份取景** |
 | DELETE `/vtuber/{vtuber_id}` | 解除订阅：`purge_vtuber()` 清 posts + 5 张子表 + 活动条目 + 曾用值 + **卡片布局（f006）**，再级联删 V+accounts；外键挡下 → 409 |
 
 **Account**

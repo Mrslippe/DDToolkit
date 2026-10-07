@@ -499,12 +499,46 @@ def set_background_focus(vtuber_id: int, data: BackgroundFocusIn,
 
 @router.delete("/vtuber/{vtuber_id}/background-focus", response_model=VTuberOut)
 def clear_background_focus(vtuber_id: int, db: Session = Depends(get_db)):
-    """清除背景取景 ⇒ 回到"原样铺满"。⚠️ **不动背景图本身**（那要走 `/background`）。"""
+    """清除**图片**的取景 ⇒ 回到"原样铺满"。⚠️ **不动背景图本身**（那要走 `/background`），
+    也**不动视频那份取景**（两份各自独立，见 `devlog/426`）。"""
     v = VTuberRepo(db).get(vtuber_id)
     if not v:
         raise HTTPException(404, f"VTuber id={vtuber_id} 不存在")
     if v.background_focus is not None:
         v.background_focus = None
+        db.add(v)
+        db.commit()
+        db.refresh(v)
+    return _vtuber_out(db, v)
+
+
+@router.put("/vtuber/{vtuber_id}/background-video-focus", response_model=VTuberOut)
+def set_background_video_focus(vtuber_id: int, data: BackgroundFocusIn,
+                               db: Session = Depends(get_db)):
+    """保存**视频**的取景（需求 9 补丁，f012，`devlog/426`）。
+
+    请求体与 `/background-focus` **同一个模型**（形状与语义逐字相同：图片锚点 + 1..3 倍），
+    存在**另一列** —— 用户口径是"视频的取景和图片的取景分开"。
+    ⚠️ 两份互不相干：这里不读也不写 `background_focus`。
+    """
+    v = VTuberRepo(db).get(vtuber_id)
+    if not v:
+        raise HTTPException(404, f"VTuber id={vtuber_id} 不存在")
+    v.background_video_focus = json.dumps({"x": data.x, "y": data.y, "scale": data.scale})
+    db.add(v)
+    db.commit()
+    db.refresh(v)
+    return _vtuber_out(db, v)
+
+
+@router.delete("/vtuber/{vtuber_id}/background-video-focus", response_model=VTuberOut)
+def clear_background_video_focus(vtuber_id: int, db: Session = Depends(get_db)):
+    """清除**视频**的取景（回到视频原样铺）。⚠️ **不动视频文件、也不动图片那份取景**。"""
+    v = VTuberRepo(db).get(vtuber_id)
+    if not v:
+        raise HTTPException(404, f"VTuber id={vtuber_id} 不存在")
+    if v.background_video_focus is not None:
+        v.background_video_focus = None
         db.add(v)
         db.commit()
         db.refresh(v)

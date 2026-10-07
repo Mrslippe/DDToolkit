@@ -126,6 +126,9 @@ class VTuberOut(BaseModel):
     background_focus: str | None = None
     #: 背景**视频**（需求 9，f011）：`static/custom_bg/` 相对路径，NULL = 只有静态图。
     background_video_path: str | None = None
+    #: **视频**的取景（需求 9 补丁，f012，`devlog/426`）：**JSON 原文**，形状与 `background_focus`
+    #: 逐字相同（图片锚点 + 1..3 倍）。前端同样要能容忍坏值（退回"原样铺"）。
+    background_video_focus: str | None = None
     notes: str | None = None
     # 签名来源与覆盖（2026-09-13，devlog/074）：卡片签名 = override → 来源账号 → 主账号
     sign_override: str | None = None

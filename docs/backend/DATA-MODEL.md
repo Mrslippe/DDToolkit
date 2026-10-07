@@ -67,6 +67,7 @@ erDiagram
 | `background_path` | TEXT | 卡片页自定义背景，`static/custom_bg/` 相对路径（d002） |
 | `background_focus` | TEXT | 背景**取景**（需求 7，f011）：JSON `{"x":0..1,"y":0..1,"scale":1..3}`，NULL = 原样铺。⚠️ **归一化存**（比例不是像素）—— 窗口尺寸/DPR 变了取景不该跟着跑。★ `x`/`y` 是**图片锚点**（V1b-3 定案，`devlog/420`）：图上那一点落在取景框的**同一比例位置**，与 CSS `object-position` 同向（0 = 看左/上边缘）；`[0,1]` 这个范围同时保证"任何 `scale ≥ 1` 都不露底色"。⇒ 锚点位置**与窗口宽度、与缩放都无关**（旧口径是"溢出量的百分之几"，而溢出量随宽高比变，所以同一组数字换宽度就漂 —— 已废）。几何见 `frontend/src/utils/backgroundFocus.ts` |
 | `background_video_path` | TEXT | 背景**视频**（需求 9，f011）：`static/custom_bg/` 相对路径，NULL = 只有静态图。与 `background_path` 同款口径（**只取文件名**，不许越出目录）。⚠️ 上传侧（`devlog/423`）：mp4/webm、≤50MB、按文件头判类型；文件名前缀 `_bgv_` 把它与背景图区分开 —— 两者**互不相干**（图是视频的 poster 与降级兜底，谁都不删谁） |
+| `background_video_focus` | TEXT | **视频**的取景（需求 9 补丁，f012，`devlog/426`）：JSON `{"x":0..1,"y":0..1,"scale":1..3}`，NULL = 视频原样铺。形状与语义与 `background_focus`（图片那份）**逐字相同**（图片锚点，见上一条），但是**另一份** —— ⚠️ 两份互不相干（清一份不许碰另一份）。为什么不塞进同一个 JSON：旧值（顶层 `x/y/scale`）会被迫换个读法，猜错就是静默换构图 |
 | `notes` | TEXT | 备注 |
 | `sign_override` | TEXT | 手改的签名（**覆盖**，f004）。不写 `accounts.sign`；清空 = 撤销覆盖 |
 | `sign_source_account_id` | INTEGER | 卡片签名跟随哪个账号（**无外键**，f004）；NULL = 主账号，指向不存在的 id 时回落主账号 |
@@ -330,7 +331,8 @@ session 收口**（先写文件、再写索引行，见 `docs/backend/ASSETS.md 
 | `f008` avatar_history | 建 `vtuber_avatar_history`（历次头像账本；唯一键 `(vtuber_id, avatar_url)`，**挂 vtubers/accounts 两个外键 ⇒ purge 必清**）（R47，devlog/249） |
 | `f009` local_assets | 建 `local_assets`（轻资产长期储存索引；唯一键 `(kind, key)`，**不挂外键 ⇒ 不进 purge**）（L1，devlog/257） |
 | `f010` vtuber_order | `vtubers.sort_order`（NOT NULL 默认 0；左栏自定义顺序，需求 4/5，devlog/413） |
-| `f011` background_focus_and_video | `vtubers.background_focus`（取景 JSON）+ `vtubers.background_video_path`（背景视频，需求 7/9，devlog/417） = **当前 head** |
+| `f011` background_focus_and_video | `vtubers.background_focus`（取景 JSON）+ `vtubers.background_video_path`（背景视频，需求 7/9，devlog/417） |
+| `f012` background_video_focus | `vtubers.background_video_focus`（**视频**的取景，与图片那份分开存，需求 9 补丁，devlog/426） = **当前 head** |
 
 **纪律**：新增迁移后必须同步 `app/main.py` 的 `MIGRATION_HEAD`（`tests/test_services.py`
 断言与 alembic head 一致），否则冷启动快路径会把旧库误判为已最新。启动迁移四形态：

@@ -34,6 +34,10 @@ class VTuber(Base):
     #: 背景**视频**（需求 9，f011）：`static/custom_bg/` 相对路径，NULL = 只有静态图。
     #: 与 `background_path` 同款口径（只取文件名，不许越出目录）。
     background_video_path = Column(String, nullable=True)
+    #: 背景**视频**的取景（需求 9 补丁，f012，`devlog/426`）：形状与语义与 `background_focus`
+    #: **逐字相同**（图片锚点 + 1..3 倍），只是**另一份** —— 动图的取景不许碰视频那份，反之亦然。
+    #: 为什么另开一列而不是把它塞进同一个 JSON：`devlog/426`（旧值不该被换个读法）。
+    background_video_focus = Column(Text, nullable=True)
     notes = Column(Text, nullable=True)
     # 签名来源与覆盖（2026-09-13，devlog/074）：卡片签名 = sign_override → 来源账号 → 主账号。
     # 两个字段都**不动** `accounts.sign`：平台签名是平台的事实，只读；

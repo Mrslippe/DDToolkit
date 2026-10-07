@@ -498,3 +498,79 @@ class _FakeUpload:
         chunk = self._data[self._pos:self._pos + n]
         self._pos += len(chunk)
         return chunk
+
+# ── 需求 9 补丁：视频的取景**与图片那份分开**（f012，devlog/426）──────────
+
+def _db_video_focus(vid: int) -> str | None:
+    db = TestingSession()
+    try:
+        return db.query(VTuber).filter(VTuber.id == vid).one().background_video_focus
+    finally:
+        db.close()
+
+
+def _put_focus(client, vid, name, body):
+    """`name` = `image` / `video` ⇒ `/background-focus` 与 `/background-video-focus`。
+
+    ⚠️ 第一版写成 `background-{suffix}` 而调用方传的是 `background` ⇒ 拼出
+    `/background-background-focus`，全程 404（**看起来像路由没接上**，其实是拼串错了）。
+    """
+    path = "background-focus" if name == "image" else "background-video-focus"
+    return client.put(f"/vtuber/{vid}/{path}", json=body)
+
+
+def test_video_focus_is_a_separate_field(client, _env):
+    """两份取景**互不相干**：存一份不许动另一份，清一份也不许。
+
+    ⚠️ 两条"没碰它"的断言都**配了正对照**（两边都真的存了值）—— 否则"没碰"
+    与"顺手清成 None"在断言上分不出来（`devlog/417` 那次假绿的同一个坑）。
+    """
+    import json
+
+    vid = _mk_v()
+    # 正对照：两边都先真的存上
+    assert _put_focus(client, vid, "image", {"x": 0.2, "y": 0.3, "scale": 1.5}).status_code == 200
+    assert _put_focus(client, vid, "video", {"x": 0.8, "y": 0.9, "scale": 2.5}).status_code == 200
+    img_raw = client.get(f"/vtuber/{vid}").json()["background_focus"]
+    vid_raw = client.get(f"/vtuber/{vid}").json()["background_video_focus"]
+    assert json.loads(img_raw) == {"x": 0.2, "y": 0.3, "scale": 1.5}
+    assert json.loads(vid_raw) == {"x": 0.8, "y": 0.9, "scale": 2.5}
+    assert img_raw != vid_raw
+
+    # 清视频那份 ⇒ 图片那份原样在（正对照：它不是 None）
+    assert client.delete(f"/vtuber/{vid}/background-video-focus").status_code == 200
+    after = client.get(f"/vtuber/{vid}").json()
+    assert after["background_video_focus"] is None
+    assert after["background_focus"] == img_raw, "清视频取景不该碰图片取景"
+
+    # 反向：清图片那份 ⇒ 不影响视频（再存一次视频取景当正对照）
+    assert _put_focus(client, vid, "video", {"x": 0.1, "y": 0.1, "scale": 1.0}).status_code == 200
+    keep_video = client.get(f"/vtuber/{vid}").json()["background_video_focus"]
+    assert client.delete(f"/vtuber/{vid}/background-focus").status_code == 200
+    after2 = client.get(f"/vtuber/{vid}").json()
+    assert after2["background_focus"] is None
+    assert after2["background_video_focus"] == keep_video, "清图片取景不该碰视频取景"
+
+
+def test_video_focus_rejects_out_of_range_and_missing_v(client):
+    """与图片那条同一个模型 ⇒ 同样的 422 / 404（别各写一套边界）。"""
+    vid = _mk_v()
+    for bad in ({"x": 1.5, "y": 0.5, "scale": 1.0}, {"x": 0.5, "y": -0.1, "scale": 1.0},
+                {"x": 0.5, "y": 0.5, "scale": 0.5}, {"x": 0.5, "y": 0.5, "scale": 9.0}):
+        assert _put_focus(client, vid, "video", bad).status_code == 422, bad
+    assert _put_focus(client, 999999, "video", {"x": 0, "y": 0, "scale": 1}).status_code == 404
+    assert client.delete("/vtuber/999999/background-video-focus").status_code == 404
+    # 边界值合法（0 与 1、1 与 3 都在定义域上）
+    r = _put_focus(client, vid, "video", {"x": 0, "y": 1, "scale": 3})
+    assert r.status_code == 200 and r.json()["background_video_focus"] is not None
+
+
+def test_video_focus_survives_video_reupload(client, _env):
+    """传新视频**不重置**视频取景 —— 与图片那条同口径（图也不会因为换图丢取景）。"""
+    vid = _mk_v()
+    _upload_video(client, vid, MP4, "video/mp4")
+    _put_focus(client, vid, "video", {"x": 0.4, "y": 0.6, "scale": 2.0})
+    keep = _db_video_focus(vid)
+    r = _upload_video(client, vid, WEBM, "video/webm", "bg.webm")
+    assert r.status_code == 200
+    assert _db_video_focus(vid) == keep, "换视频不该把取景清掉（要清是「重置取景」的事）"
