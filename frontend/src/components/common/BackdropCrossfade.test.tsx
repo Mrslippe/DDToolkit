@@ -155,4 +155,73 @@ describe('背景层：换图不闪白', () => {
     expect(cur.style.backgroundPosition).toBe('90% 90%')
     expect(cur.style.transform).toBe('scale(3)')
   })
+
+  // ── 需求 9：背景视频（devlog/424）────────────────────────────────────
+  const video = () => document.querySelector<HTMLVideoElement>('.hero-backdrop-video')
+  const loadVideo = async (el: HTMLElement | null) => {
+    await act(async () => { el?.dispatchEvent(new Event('canplay')) })
+  }
+
+  it('★ 视频盖在同一层的图上，**首帧就绪之前整层透明**（图就是它的 poster，不许闪黑）', async () => {
+    await act(async () => {
+      root.render(<BackdropCrossfade src="https://x/a.jpg" custom videoSrc="/v/a.mp4" />)
+    })
+    const v = video()!
+    expect(v, '视频要渲染出来（否则永远等不到 canplay）').toBeTruthy()
+    expect(v.getAttribute('src')).toBe('/v/a.mp4')
+    expect(v.dataset.ready, '还没 canplay ⇒ 透明，先看图').toBe('0')
+    expect(byKind('first')[0].style.backgroundImage, '图仍在（它就是 poster 与兜底）')
+      .toContain('a.jpg')
+    // ⚠️ 自动播放必须同时 muted：Chromium 会拦掉"有声的 autoplay"
+    expect(v.muted, 'autoplay 的前提是 muted').toBe(true)
+    expect(v.loop).toBe(true)
+    expect(v.autoplay).toBe(true)
+    await loadVideo(v)
+    expect(video()!.dataset.ready, 'canplay 之后才显出来').toBe('1')
+  })
+
+  it('★ 取景对视频同样生效，且走的是 `object-position` 那一套（不是 background-position）', async () => {
+    await act(async () => {
+      root.render(
+        <BackdropCrossfade src="https://x/a.jpg" custom focus={{ x: 0.3, y: 0.35, scale: 2 }}
+                           videoSrc="/v/a.mp4" />,
+      )
+    })
+    const st = video()!.style
+    expect(st.objectPosition).toBe('30% 35%')
+    expect(st.transform).toBe('scale(2)')
+    expect(st.transformOrigin, '支点与锚点同源').toBe('30% 35%')
+    // 图层自己那份走 background-position —— 两者都在，别互相顶掉
+    expect(byKind('first')[0].style.backgroundPosition).toBe('30% 35%')
+  })
+
+  it('★ 播不了 ⇒ 视频撤掉、**图还在**（收下"存得进、播不了"的文件也不至于变黑）', async () => {
+    await act(async () => {
+      root.render(<BackdropCrossfade src="https://x/a.jpg" custom videoSrc="/v/bad.mp4" />)
+    })
+    await act(async () => { video()!.dispatchEvent(new Event('error')) })
+    expect(video(), '出错的视频元素要撤掉').toBeNull()
+    expect(byKind('first')[0].style.backgroundImage, '背景层照旧是那张图').toContain('a.jpg')
+  })
+
+  it('★ 正在淡出的那一层放**自己那一段视频**（换 V 时旧背景不许被换成新 V 的）', async () => {
+    await act(async () => {
+      root.render(<BackdropCrossfade src="https://x/a.jpg" custom videoSrc="/v/a.mp4" />)
+    })
+    await act(async () => {
+      root.render(<BackdropCrossfade src="https://x/b.jpg" custom videoSrc="/v/b.mp4" />)
+    })
+    await loadLatest()
+    const prevV = byKind('prev')[0].querySelector<HTMLVideoElement>('.hero-backdrop-video')
+    const curV = byKind('cur')[0].querySelector<HTMLVideoElement>('.hero-backdrop-video')
+    expect(prevV!.getAttribute('src')).toBe('/v/a.mp4')
+    expect(curV!.getAttribute('src'), '当前层换成新的').toBe('/v/b.mp4')
+  })
+
+  it('没有视频时**一个 `<video>` 都不渲染**（图片背景照常）', async () => {
+    await act(async () => {
+      root.render(<BackdropCrossfade src="https://x/a.jpg" custom />)
+    })
+    expect(video()).toBeNull()
+  })
 })

@@ -26,7 +26,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 
-import { focusStyle, type BackgroundFocus } from '../../utils/backgroundFocus'
+import { focusObjectStyle, focusStyle, type BackgroundFocus } from '../../utils/backgroundFocus'
 
 /** 交叉淡出的时长（ms）—— 与 `posts.css` 的 `backdrop-out` 关键帧保持一致（有用例钉着）。 */
 export const BACKDROP_FADE_MS = 250
@@ -39,22 +39,67 @@ interface Layer {
   first: boolean
   /** 这一层**自己的**取景（生成那一刻的值；见渲染处那段注释） */
   focus: BackgroundFocus | null
+  /** 这一层**自己的**背景视频（同上：换 V 时旧层不该被换成新 V 的视频） */
+  videoSrc: string | null
 }
 
-export function BackdropCrossfade({ src, custom, focus }: {
-  src: string | null; custom: boolean; focus?: BackgroundFocus | null
+/**
+ * 背景**视频**层（需求 9，`devlog/424`）。
+ *
+ * 三条口径：
+ * 1. **图是 poster 与降级兜底**：视频就盖在同层那张图上面，加载完（`canplay`）之前
+ *    `data-ready="0"` ⇒ CSS 让它 `opacity: 0`，于是观众先看到图、再平滑换成视频，
+ *    不会闪一帧黑；
+ * 2. **播不了就退回图片**：`onError` ⇒ 这一层不再渲染视频（图还在，面板照样有背景）——
+ *    收下"存得进、播不了"的文件也不至于变成一块黑；
+ * 3. **取景同样生效**，但走的是 `object-position` 那一套（`focusObjectStyle`）：
+ *    `<video>` 没有背景图，`background-position` 对它**毫无作用**。
+ */
+function BackdropVideo({ src, focus }: { src: string; focus: BackgroundFocus | null }) {
+  const [ready, setReady] = useState(false)
+  const [failed, setFailed] = useState(false)
+  // 换片（同一个挂载点换了 src）时重置状态，否则上一段的 ready 会漏到新片上
+  useEffect(() => {
+    setReady(false)
+    setFailed(false)
+  }, [src])
+  if (failed) return null
+  return (
+    <video
+      className="hero-backdrop-video"
+      data-ready={ready ? '1' : '0'}
+      src={src}
+      style={focusObjectStyle(focus)}
+      autoPlay
+      muted
+      loop
+      playsInline
+      onCanPlay={() => setReady(true)}
+      onError={() => setFailed(true)}
+    />
+  )
+}
+
+export function BackdropCrossfade({ src, custom, focus, videoSrc }: {
+  src: string | null; custom: boolean; focus?: BackgroundFocus | null; videoSrc?: string | null
 }) {
   const [layers, setLayers] = useState<Layer[]>(
-    // ⚠️ **首层也要快照取景**（V1b-3 抓到：这里原先是写死的 `null`，于是"页面加载后的第一次换 V"
-    //    会让正在淡出的那层退回居中，图在三帧里跳一下）。后面新建的层用 `focusRef`（见下）。
-    () => (src ? [{ src, out: false, first: true, focus: focus ?? null }] : []))
+    // ⚠️ **首层也要快照取景与视频**（V1b-3 抓到：这里原先是写死的 `null`，于是"页面加载后的第一次换 V"
+    //    会让正在淡出的那层退回居中，图在三帧里跳一下）。后面新建的层用 ref（见下）。
+    () => (src
+      ? [{ src, out: false, first: true, focus: focus ?? null, videoSrc: videoSrc ?? null }]
+      : []))
   /** 淡出层的清理计时器（按 src 记，避免快速连点时互相清掉）。 */
   const timers = useRef(new Map<string, number>())
   /** 生成新层时要快照一份当前取景 —— 从 `focus` 直接读会把它写进 effect 依赖，触发多余的重跑。 */
   const focusRef = useRef<BackgroundFocus | null>(focus ?? null)
   focusRef.current = focus ?? null
+  /** 视频同上：新层拿"这一刻"的视频地址，旧层继续放自己那一段。 */
+  const videoRef = useRef<string | null>(videoSrc ?? null)
+  videoRef.current = videoSrc ?? null
   /** 当前层的取景（归一成 `| null`，好和 `Layer.focus` 对上）。 */
   const nowFocus: BackgroundFocus | null = focus ?? null
+  const nowVideo: string | null = videoSrc ?? null
 
   useEffect(() => {
     if (!src) return
@@ -70,7 +115,8 @@ export function BackdropCrossfade({ src, custom, focus }: {
         return src === alive[0]?.src && prev.length === 1 && !prev[0].out
           ? prev
           : [...alive.map((l) => ({ ...l, out: true })),
-             { src, out: false, first: alive.length === 0, focus: focusRef.current }]
+             { src, out: false, first: alive.length === 0, focus: focusRef.current,
+               videoSrc: videoRef.current }]
       })
       // 旧层淡完就把它摘掉（不摘会一直压在新层上面，虽然它已经全透明）
       const t = window.setTimeout(() => {
@@ -92,22 +138,30 @@ export function BackdropCrossfade({ src, custom, focus }: {
 
   return (
     <>
-      {layers.map((l) => (
-        <div
-          key={l.src}
-          data-backdrop={l.out ? 'prev' : l.first ? 'first' : 'cur'}
-          className={`hero-backdrop${custom ? ' custom' : ''}${l.out ? ' is-prev' : ''}`}
-          /* 取景（需求 7）：⚠️ **正在淡出的那一层跟自己的图走** —— 若让它读实时的 `focus`，
-             换 V 的那 250ms 里旧图会被按新 V 的取景变换一次（看着像旧图跳了一下）。
-             当前层则读实时值 ⇒ 在设置里调取景时**右边背景当场跟着动**（不用重开）。
-             ⚠️ 取景是**三件套**（位置 + 缩放 + 支点），必须整组来自 `focusStyle` ——
-             少给 `transform-origin` 会让"放大后锚点不漂"这条保证当场失效（`devlog/420`）。 */
-          style={{
-            backgroundImage: `url(${l.src})`,
-            ...focusStyle(l.out ? l.focus : nowFocus),
-          }}
-        />
-      ))}
+      {layers.map((l) => {
+        const f = l.out ? l.focus : nowFocus
+        const v = l.out ? l.videoSrc : nowVideo
+        return (
+          <div
+            key={l.src}
+            data-backdrop={l.out ? 'prev' : l.first ? 'first' : 'cur'}
+            className={`hero-backdrop${custom ? ' custom' : ''}${l.out ? ' is-prev' : ''}`}
+            /* 取景（需求 7）：⚠️ **正在淡出的那一层跟自己的图走** —— 若让它读实时的 `focus`，
+               换 V 的那 250ms 里旧图会被按新 V 的取景变换一次（看着像旧图跳了一下）。
+               当前层则读实时值 ⇒ 在设置里调取景时**右边背景当场跟着动**（不用重开）。
+               ⚠️ 取景是**三件套**（位置 + 缩放 + 支点），必须整组来自 `focusStyle` ——
+               少给 `transform-origin` 会让"放大后锚点不漂"这条保证当场失效（`devlog/420`）。 */
+            style={{
+              backgroundImage: `url(${l.src})`,
+              ...focusStyle(f),
+            }}
+          >
+            {/* 背景视频（需求 9）：盖在这一层的图上面；图就是它的 poster 与降级兜底。
+                ⚠️ 与取景同理 —— 旧层放**自己**那一段，不许被新 V 的视频换掉。 */}
+            {v && <BackdropVideo src={v} focus={f} />}
+          </div>
+        )
+      })}
     </>
   )
 }

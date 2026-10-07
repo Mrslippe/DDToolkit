@@ -31,6 +31,17 @@ describe('背景层：CSS 契约', () => {
     expect(frames).toContain('var(--backdrop-opacity)')
   })
 
+  it('★ 背景视频层：`cover` 铺满 + **首帧就绪前透明**（`data-ready="0"`）', () => {
+    // 少 `object-fit: cover` ⇒ 视频按原始尺寸贴在左上角；少那条 `[data-ready='0']{opacity:0}`
+    // ⇒ 首帧出来之前先闪一帧黑（图明明已经在下面了）。
+    const rule = css.slice(css.indexOf('.hero-backdrop-video {'))
+    const body = rule.slice(0, rule.indexOf('}'))
+    expect(body).toMatch(/object-fit:\s*cover/)
+    expect(css, '就绪前的透明必须由属性选择器压住').toContain(".hero-backdrop-video[data-ready='0']")
+    const dim = css.slice(css.indexOf(".hero-backdrop-video[data-ready='0']"))
+    expect(dim.slice(0, dim.indexOf('}'))).toMatch(/opacity:\s*0/)
+  })
+
   /**
    * ⚠️ **原来这里有一条判据**："有视频在全屏时背景层整个撤掉"（`devlog/381`）。
    *

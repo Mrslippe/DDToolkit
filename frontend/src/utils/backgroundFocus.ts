@@ -56,6 +56,13 @@ export interface FocusStyle {
   transformOrigin?: string
 }
 
+/** 同样的三件套，给**替换元素**（`<video>` / `<img>`）用：锚点走 `object-position`。 */
+export interface FocusObjectStyle {
+  objectPosition?: string
+  transform?: string
+  transformOrigin?: string
+}
+
 function num(v: unknown, fallback: number): number {
   const n = typeof v === 'number' ? v : Number(v)
   return Number.isFinite(n) ? n : fallback
@@ -106,16 +113,38 @@ function pctStr(v: number): string {
   return `${Math.round(v * 10000) / 100}%`
 }
 
-/** 取景的 CSS 三件套。`null` ⇒ 空对象（用样式表里的默认值：居中、不缩放）。 */
-export function focusStyle(f: BackgroundFocus | null): FocusStyle {
-  if (!f) return {}
+/** 取景的公共部分：锚点串 + 缩放（`scale=1` 时为 `null` ⇒ 连变换都不生成）。 */
+function parts(f: BackgroundFocus | null): { pos: string; scale: number | null } | null {
+  if (!f) return null
   const c = clampFocus(f)
   const pos = `${pctStr(c.x)} ${pctStr(c.y)}`
-  if (c.scale === FOCUS_MIN_SCALE) {
-    // ⚠️ 位置**照给**：`scale=1` 时纵向（或横向）往往还有溢出，取景是有用的
-    return { backgroundPosition: pos }
-  }
-  return { backgroundPosition: pos, transform: `scale(${c.scale})`, transformOrigin: pos }
+  return { pos, scale: c.scale === FOCUS_MIN_SCALE ? null : c.scale }
+}
+
+/** 取景的 CSS 三件套（**背景图**：锚点走 `background-position`）。`null` ⇒ 空对象。 */
+export function focusStyle(f: BackgroundFocus | null): FocusStyle {
+  const p = parts(f)
+  if (!p) return {}
+  // ⚠️ 位置**照给**：`scale=1` 时纵向（或横向）往往还有溢出，取景是有用的
+  if (p.scale === null) return { backgroundPosition: p.pos }
+  return { backgroundPosition: p.pos, transform: `scale(${p.scale})`, transformOrigin: p.pos }
+}
+
+/**
+ * 取景的 CSS 三件套（**替换元素**：`<video>` / `<img>`，锚点走 `object-position`）。
+ *
+ * 与 `focusStyle` 的几何**完全同构**：`object-fit: cover` + `object-position: x% y%` 与
+ * `background-size: cover` + `background-position: x% y%` 是同一套"把内容的 x% 对齐到盒子的 x%"语义，
+ * 再绕同一个 `transform-origin` 缩放 ⇒ 锚点守恒那套推导原样成立（见文件头）。
+ *
+ * ⚠️ 别拿 `focusStyle` 去喂 `<video>`：`background-position` 对替换内容**一点作用都没有**
+ * （视频没有背景图），症状是"取景只在图片上生效、视频永远居中"。
+ */
+export function focusObjectStyle(f: BackgroundFocus | null): FocusObjectStyle {
+  const p = parts(f)
+  if (!p) return {}
+  if (p.scale === null) return { objectPosition: p.pos }
+  return { objectPosition: p.pos, transform: `scale(${p.scale})`, transformOrigin: p.pos }
 }
 
 /**

@@ -535,12 +535,17 @@ export default function PostsPage() {
     ? resolveAsset(vtuber.background_path)
     : undefined
   const backdropSrc = customBg ?? avatarSrc ?? lastAvatarRef.current
+  /* 背景**视频**（需求 9，`devlog/424`）：与图**各自独立**（图是视频的 poster 与降级兜底），
+     所以只要有视频就渲染，哪怕这个 V 没传图。 */
+  const customVideo = vtuber?.background_video_path
+    ? resolveAsset(vtuber.background_video_path)
+    : undefined
   /* 背景取景（需求 7，`devlog/418`）：库里存的是 JSON 原文，坏值一律退回"原样铺"。
-     ⚠️ 取景**只对自定义背景有意义**：头像铺底那张是按 0.18 不透明度当纹理用的，
+     ⚠️ 取景**只对"自定义背景"有意义**（图或视频）：头像铺底那张是按 0.18 不透明度当纹理用的，
      给它加取景只会把脸挪出画面（而且用户也没地方调它）。 */
   const bgFocus = useMemo(
-    () => (customBg ? parseBackgroundFocus(vtuber?.background_focus) : null),
-    [customBg, vtuber?.background_focus],
+    () => (customBg || customVideo ? parseBackgroundFocus(vtuber?.background_focus) : null),
+    [customBg, customVideo, vtuber?.background_focus],
   )
 
   /**
@@ -613,7 +618,14 @@ return (
       {/* 右栏永久背景：自定义背景(custom 全图清晰) 优先，否则头像铺底 + 渐变纱罩。
           ⚠️ 换图走 `BackdropCrossfade`（双层交叉淡入）—— 原先这里是单层 + `key={backdropSrc}`，
           换 V 时旧层当场卸载、新层从 0 淡入 ⇒ 中间那一帧露出面板底色（用户报的"切 V 闪白"）。 */}
-      {backdropSrc && <BackdropCrossfade src={backdropSrc} custom={!!customBg} focus={bgFocus} />}
+      {backdropSrc && (
+        <BackdropCrossfade
+          src={backdropSrc}
+          custom={!!customBg || !!customVideo}
+          focus={bgFocus}
+          videoSrc={customVideo}
+        />
+      )}
 
       {/* 页面工具条（R45）：**覆盖**在内容之上、**按需出现**、不占布局。
           · `data-shown` 驱动显隐；键盘聚焦由 CSS `:focus-within` 兜（见 posts.css）

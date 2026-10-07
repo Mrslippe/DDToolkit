@@ -15,8 +15,8 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  clampFocus, coverScale, FOCUS_CENTER, focusStyle, panDelta, parseBackgroundFocus,
-  serializeBackgroundFocus, type BackgroundFocus,
+  clampFocus, coverScale, FOCUS_CENTER, focusObjectStyle, focusStyle, panDelta,
+  parseBackgroundFocus, serializeBackgroundFocus, type BackgroundFocus,
 } from './backgroundFocus'
 
 /** CSS 语义：`cover` + `background-position: x% y%` + 绕 `(x%, y%)` 的 `scale(s)`。 */
@@ -50,6 +50,19 @@ describe('backgroundFocus', () => {
     expect(focusStyle({ x: 0.123456, y: 0.987654, scale: 2 }).transformOrigin).toBe('12.35% 98.77%')
     // 但**库里那份**不许被这个收敛动到（否则每次拖拽都会把取景改一点点）
     expect(JSON.parse(serializeBackgroundFocus({ x: 1 / 3, y: 0.5, scale: 1 })).x).toBeCloseTo(1 / 3, 12)
+  })
+
+  it('★ 替换元素那一版（`<video>`/`<img>`）：三件套齐全、支点同源，键名换成 `objectPosition`', () => {
+    expect(focusObjectStyle(null)).toEqual({})
+    expect(focusObjectStyle({ x: 0.3, y: 0.35, scale: 1 })).toEqual({ objectPosition: '30% 35%' })
+    const st = focusObjectStyle({ x: 0.3, y: 0.35, scale: 2 })
+    expect(st.objectPosition).toBe('30% 35%')
+    expect(st.transform).toBe('scale(2)')
+    expect(st.transformOrigin, '支点必须与锚点同源').toBe(st.objectPosition)
+    // ⚠️ 两个函数**不能互换**：对 `<video>` 而言 `background-position` 毫无作用
+    //    （症状：取景只在图上有、视频永远居中）—— 键名不同就是这条的机器判据
+    expect(Object.keys(focusObjectStyle({ x: 0.3, y: 0.35, scale: 2 })).sort())
+      .toEqual(['objectPosition', 'transform', 'transformOrigin'])
   })
 
   it('★ 三件套：`scale>1` 时位置、缩放、支点**一起**出现，且支点与锚点**同源**', () => {

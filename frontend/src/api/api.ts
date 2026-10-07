@@ -352,6 +352,22 @@ export const api = {
   clearBackground: (id: number) =>
     request<VTuber>(`/vtuber/${id}/background`, { method: 'DELETE' }),
 
+  /**
+   * 上传背景**视频**（需求 9，f011，`devlog/424`）：mp4 / webm，≤50MB。
+   *
+   * ⚠️ 与背景图**各自独立**：图是视频的 poster 与降级兜底，传视频**不会**动图；
+   * 后端按文件头判类型（改扩展名没用），超限 413、类型不对 415。
+   */
+  uploadBackgroundVideo: (id: number, file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return request<VTuber>(`/vtuber/${id}/background-video`, { method: 'POST', body: form })
+  },
+
+  /** 清除背景视频。⚠️ **不动背景图本身**（那是 `clearBackground` 的事）。 */
+  clearBackgroundVideo: (id: number) =>
+    request<VTuber>(`/vtuber/${id}/background-video`, { method: 'DELETE' }),
+
   /** 解除订阅：删除 VTuber（连带删其账号与全部帖子记录） */
   deleteVtuber: (id: number) => request<void>(`/vtuber/${id}`, { method: 'DELETE' }),
 

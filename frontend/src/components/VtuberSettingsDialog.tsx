@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
-import { History, ImagePlus, Loader2, Trash2, UserPlus } from 'lucide-react'
+import { Film, History, ImagePlus, Loader2, Trash2, UserPlus } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   Dialog,
@@ -156,6 +156,7 @@ export default function VtuberSettingsDialog({
   const [avatarBook, setAvatarBook] = useState<VTuberAvatars | null>(null)
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [videoUploading, setVideoUploading] = useState(false)
   const [addOpen, setAddOpen] = useState(false)
   const [delTarget, setDelTarget] = useState<Account | null>(null)
   /** 「账号信息历史」弹窗的目标账号（R9，devlog/080） */
@@ -227,6 +228,7 @@ export default function VtuberSettingsDialog({
     })
   }, [])
   const fileRef = useRef<HTMLInputElement>(null)
+  const videoRef = useRef<HTMLInputElement>(null)
 
   const hero = useMemo(() => {
     if (!vtuber) return undefined
@@ -406,6 +408,31 @@ export default function VtuberSettingsDialog({
     }
   }
 
+  /** 需求 9：背景视频（`devlog/424`）。⚠️ 与背景图**各自独立** —— 图是视频的 poster 与降级兜底。 */
+  const uploadBackgroundVideo = async (file: File) => {
+    if (!vtuber) return
+    setVideoUploading(true)
+    try {
+      const updated = await api.uploadBackgroundVideo(vtuber.id, file)
+      onSaved(updated)
+      onPill?.('背景视频已更新')
+    } catch (e) {
+      toast.error(`视频上传失败：${(e as Error).message}`)
+    } finally {
+      setVideoUploading(false)
+    }
+  }
+
+  const clearBackgroundVideo = async () => {
+    if (!vtuber) return
+    try {
+      onSaved(await api.clearBackgroundVideo(vtuber.id))
+      onPill?.('已移除背景视频')
+    } catch (e) {
+      toast.error(`移除视频失败：${(e as Error).message}`)
+    }
+  }
+
   // 关窗兜底：Esc 关窗时输入框可能没触发 blur（焦点元素被卸载不派发 blur）
   const flushRef = useRef(commitSign)
   flushRef.current = commitSign
@@ -505,6 +532,7 @@ export default function VtuberSettingsDialog({
   }
 
   const bg = resolveAsset(vtuber?.background_path ?? null)
+  const bgVideo = resolveAsset(vtuber?.background_video_path ?? null)
   /** 历次头像可选项（R47，devlog/249）：账本为空时后端用**账号现值**兜底 ⇒
    *  列表不会比"只列账号头像"的旧版更短（升级后尚未抓取也不会变空）。 */
   const avatarVersions = avatarBook?.versions ?? []
@@ -615,8 +643,29 @@ export default function VtuberSettingsDialog({
                     onClick={clearBackground}
                   >
                     <Trash2 className="size-4" />
-                    清除
+                    清除背景图
                   </Button>
+                  {/* 需求 9：背景视频。⚠️ 与背景图**各自独立** —— 图是视频的首帧与降级兜底 */}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={videoUploading}
+                    title="mp4 / webm，≤50MB；图片会作为首帧与降级兜底"
+                    onClick={() => videoRef.current?.click()}
+                  >
+                    {videoUploading ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : (
+                      <Film className="size-4" />
+                    )}
+                    {bgVideo ? '更换视频' : '选择背景视频'}
+                  </Button>
+                  {bgVideo && (
+                    <Button variant="outline" size="sm" onClick={clearBackgroundVideo}>
+                      <Trash2 className="size-4" />
+                      移除视频
+                    </Button>
+                  )}
                 </div>
               </div>
               <input
@@ -628,6 +677,17 @@ export default function VtuberSettingsDialog({
                   const f = e.target.files?.[0]
                   e.target.value = ''
                   if (f) void uploadBackground(f)
+                }}
+              />
+              <input
+                ref={videoRef}
+                type="file"
+                accept="video/mp4,video/webm"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0]
+                  e.target.value = ''
+                  if (f) void uploadBackgroundVideo(f)
                 }}
               />
             </div>
