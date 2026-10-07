@@ -63,12 +63,14 @@ describe('单推：分段收起与 hover 唤出', () => {
     expect(L(".app-shell[data-solo='1'] .topbar")).toMatch(/margin-top:\s*calc\(-1\s*\*\s*var\(--topbar-height\)\)/)
   })
 
-  it('★ 退出倒着来：顶栏(0) → 工具栏(1) → 左栏(2)', () => {
-    // ⚠️ 这三个选择器在"入场动画"那段也出现过 ⇒ 挑**含 `transition-delay` 的那一条**
+  it('★ 退出倒着来：顶栏(0) → 工具栏(1)；**左栏没有基础延时**（那会拖住正常模式的手动收起）', () => {
+    // ⚠️ 这两个选择器在"入场动画"那段也出现过 ⇒ 挑**含 `transition-delay` 的那一条**
     expect(bodyWith(layout, '.topbar', 'transition-delay'), '顶栏先回').toMatch(/transition-delay:\s*0ms/)
     expect(bodyWith(layout, '.icon-rail', 'transition-delay')).toMatch(/transition-delay:\s*var\(--solo-step\)/)
-    expect(bodyWith(layout, '.sidebar-shell', 'transition-delay'))
-      .toMatch(/transition-delay:\s*calc\(2\s*\*\s*var\(--solo-step\)\)/)
+    // ⚠️ 左栏**故意没有**基础延时（`devlog/441`）：正常模式手动收起左栏会先干等 520ms
+    expect(layout, '左栏不该有基础 transition-delay').not.toMatch(/^\.sidebar-shell \{[^}]*transition-delay/m)
+    // 正对照：单推里那条**进场**延时确实在（0ms ⇒ 左栏总是第一个动）
+    expect(L(".app-shell[data-solo='1'] .sidebar-shell")).toMatch(/transition-delay:\s*0ms/)
   })
 
   it('★ 唤出：坐标判定（`data-peek`）—— 不许再有"贴边窄带"覆盖层，也不许退回 `:hover` 兄弟选择器', () => {
@@ -123,7 +125,7 @@ describe('单推：全收起后的延时淡出', () => {
     expect(root.slice(0, root.indexOf('}')), '过渡时长旋钮').toMatch(/--solo-hide-ms:\s*\d+ms/)
   })
   it('★ 唤出的工具栏必须**压在左栏上面**（左栏也是负外边距藏起来的，它的白底会横跨到 [0,50]）', () => {
-    const rail = L(".app-shell[data-solo='1'] .icon-rail")
+    const rail = bodyWith(layout, '.icon-rail', 'z-index')
     expect(rail, '不压在上面 ⇒ 用户看到的是左栏的白底（"左工具栏是一片白色"）').toMatch(/z-index:\s*\d/)
     expect(rail, '要能盖住同层的兄弟').toMatch(/position:\s*relative/)
   })
@@ -159,4 +161,10 @@ describe('单推：全收起后的延时淡出', () => {
     const content = P(".app-shell[data-solo='1'][data-idle] .posts-panel[data-view='cards'] > :not(.hero-backdrop)")
     expect(content).toMatch(/transition:[^;]*var\(--solo-hide-ms\)/)
     expect(content).toMatch(/var\(--solo-ease/)
+  })
+
+  it('★ 左栏**不许**带基础 transition-delay（那会拖住正常模式的手动收起）', () => {
+    // 退出单推的次序只该管单推；写进基础规则 ⇒ 正常模式手动收起左栏先干等 520ms（`2 × --solo-step`）
+    expect(layout, '⚠️ 基础规则里不该有 .sidebar-shell 的 transition-delay')
+      .not.toMatch(/^\.sidebar-shell \{[^}]*transition-delay/m)
   })})

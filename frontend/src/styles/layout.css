@@ -465,6 +465,12 @@ html.window-maximized body {
   flex-direction: column;
   align-items: stretch;
   background: var(--c-rail);
+  /* ⚠️ **无条件**压在左栏上面（`devlog/441`）：左栏"收起来"用的是**负外边距** ⇒
+     它的盒子仍然横跨 `[-W+50, 50]`，又在 DOM 里靠后 ⇒ 会**盖住工具栏的 [0,50]**。
+     上一版只给单推加了 z-index ⇒ **正常模式手动收起左栏时工具栏也被盖住**
+     （用户报"收起左栏时左工具栏也被收起了"）。这里不能加作用域。 */
+  position: relative;
+  z-index: 2;
 }
 
 .icon-rail-group {
@@ -585,8 +591,8 @@ html.window-maximized body {
   --solo-step: 260ms;                              /* 每一段的时长（三段共 780ms） */
   --solo-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
   --solo-dim: 0;                                   /* 让位后页面元素的不透明度（用户口径：**降到 0**） */
-  --solo-hide-shift: 26px;   /* 让位时界面元素**下滑**多远（回来时上滑同样的距离） */
-  --solo-hide-ms: 560ms;     /* 让位/回来的过渡时长（用户要求"更明显一点"） */
+  --solo-hide-shift: 40px;   /* 让位时界面元素**下滑**多远（回来时上滑同样的距离） */
+  --solo-hide-ms: 1000ms;     /* 让位/回来的过渡时长（用户要求"更明显一点"） */
   /* ⚠️ “等多久才让位”**不在 CSS 里**：它是 `utils/soloPeek.ts` 的 `SOLO_IDLE_MS`
      （闲置计时器）—— 判定"鼠标停多久了"CSS 表达不了，两处各留一份就会叠成双倍等待。 */
 }
@@ -598,10 +604,12 @@ html.window-maximized body {
               margin-top var(--solo-step) var(--solo-ease);
 }
 
-/* 退出：倒着来（顶栏 → 工具栏 → 左栏） */
+/* 退出单推：倒着来（顶栏 → 工具栏）。
+   ⚠️ **别给 `.sidebar-shell` 也排一段基础延时**（`devlog/441`）：那是"退出单推"的次序，
+   但它对**正常模式同样生效** —— 用户手动收起左栏要先干等 520ms（`2 × --solo-step`），
+   实测就是"明显感觉到收起和展开有延迟"。左栏的**进场**延时本来就是 0，去掉两边都不吃亏。 */
 .topbar { transition-delay: 0ms; }
 .icon-rail { transition-delay: var(--solo-step); }
-.sidebar-shell { transition-delay: calc(2 * var(--solo-step)); }
 
 /* ① 左栏向左收起 */
 .app-shell[data-solo='1'] .sidebar-shell {
@@ -613,11 +621,7 @@ html.window-maximized body {
 .app-shell[data-solo='1'] .icon-rail {
   margin-left: calc(-1 * var(--rail-width));
   transition-delay: var(--solo-step);
-  /* ⚠️ 唤出时它必须**压在左栏上面**（`devlog/435`）：左栏也是负外边距"藏"起来的，
-     它的盒子其实横跨 `[-W+50, 50]`，唤出工具栏后那 50px 露出来的就是**左栏的白底**
-     —— 用户看到的"左工具栏是一片白色"就是这个（工具栏确实回来了，只是被它盖住）。 */
-  position: relative;
-  z-index: 2;
+  /* （压在左栏上面那条 `z-index` 已提到基础 `.icon-rail` 规则里 —— 正常模式同样需要，`devlog/441`） */
 }
 
 /* ③ 最后顶栏 */
