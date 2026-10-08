@@ -49,6 +49,13 @@ function isLive(v: VTuber): boolean {
  * ⚠️ 三处 `return`（加载中 / 加载失败 / 正常）**共用它** —— 只在正常态收起的话，
  * 进单推的那一瞬间（列表还没回来）左栏会照样占着宽度，看着像"没生效"。
  * ⚠️ 列表**内容不变**（用户口径）：收起只是把这一栏的宽度让出去，展开后还是原来那些 V。
+ *
+ * ⚠️⚠️ **`.sidebar-shell` 只允许有这一个主人**（2026-10-08 用户报"最下面那条 V 被挡住、
+ * 滚轮不动、滚动条也不出现"，`devlog/448`）：内层从前也渲染了一层同名的外壳 ⇒ 外壳套外壳，
+ * 而内层作为 flex item 会**继承 `.sidebar-shell` 的 `flex-shrink: 0`**（那条本是给横向宽度用的）
+ * ⇒ 高度**不收缩、被内容撑开** ⇒ `.os-scroll` 的 `scrollHeight` 恒等于 `clientHeight`：
+ * 滚轮无效、拇指不出现、条目溢出到窗口外被裁掉。
+ * 所以内层（`VtuberSidebarInner`）只返回**片段** —— 滚动体必须是这一层的**直接子元素**。
  */
 function SidebarFrame({ collapsed, onTogglePeek, children }: {
   collapsed: boolean
@@ -327,34 +334,30 @@ function VtuberSidebarInner() {
 
   if (loading) {
     return (
-      <div className="sidebar-shell">
-        <OverlayScroll className="sidebar-list">
-          {Array.from({ length: 6 }, (_, i) => (
-            <div key={i} className="flex items-center gap-3 p-2.5">
-              <Skeleton className="size-10 shrink-0 rounded-full" />
-              <div className="flex-1 space-y-2">
-                <Skeleton className="h-3.5 w-3/5" />
-                <Skeleton className="h-3 w-4/5" />
-              </div>
+      <OverlayScroll className="sidebar-list">
+        {Array.from({ length: 6 }, (_, i) => (
+          <div key={i} className="flex items-center gap-3 p-2.5">
+            <Skeleton className="size-10 shrink-0 rounded-full" />
+            <div className="flex-1 space-y-2">
+              <Skeleton className="h-3.5 w-3/5" />
+              <Skeleton className="h-3 w-4/5" />
             </div>
-          ))}
-        </OverlayScroll>
-      </div>
+          </div>
+        ))}
+      </OverlayScroll>
     )
   }
 
   if (error) {
     return (
-      <div className="sidebar-shell">
-        <OverlayScroll className="sidebar-list">
-          <div className="sidebar-tip">加载失败：{error}</div>
-        </OverlayScroll>
-      </div>
+      <OverlayScroll className="sidebar-list">
+        <div className="sidebar-tip">加载失败：{error}</div>
+      </OverlayScroll>
     )
   }
 
   return (
-    <div className="sidebar-shell">
+    <>
       <div className="list-toolbar">
         <FloatPill shape="icon" className="list-add-btn" title="添加 VTuber" onClick={() => setAddOpen(true)}>
           <Plus className="size-4" />
@@ -524,7 +527,7 @@ function VtuberSidebarInner() {
 
       <AddVtuberDialog open={addOpen} onOpenChange={setAddOpen} onAdded={load} />
       <BatchFetchDialog open={batchOpen} onOpenChange={setBatchOpen} />
-    </div>
+    </>
   )
 }
 

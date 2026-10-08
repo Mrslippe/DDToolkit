@@ -161,6 +161,42 @@ describe('背景层：换图不闪白', () => {
     expect(imgLayerOf(cur).style.transform).toBe('scale(3)')
   })
 
+  it('★ 正在淡出的那一层**跟自己的 `custom`** —— 换 V 时旧层不许当场跳到另一个不透明度（devlog/448）', async () => {
+    // ① 自定义背景（`--backdrop-opacity: 1`）→ 头像铺底（0.18）：旧层若读到实时的 `custom=false`
+    //    就会在换的那一瞬间从 1 打到 0.18（"先跳到 0.18 再淡出"，用户看到一次明暗闪动）。
+    await act(async () => {
+      root.render(<BackdropCrossfade src="https://x/a.jpg" custom />)
+    })
+    await act(async () => {
+      root.render(<BackdropCrossfade src="https://x/b.jpg" custom={false} />)
+    })
+    await loadLatest()
+    expect(byKind('prev')[0].className, '旧层必须还带着自己那份 custom').toContain('custom')
+    expect(byKind('cur')[0].className, '新层是头像铺底').not.toContain('custom')
+  })
+
+  it('★ 反方向也一样（0.18 → 1）：旧层不许突然变亮（devlog/448）', async () => {
+    await act(async () => {
+      root.render(<BackdropCrossfade src="https://x/a.jpg" custom={false} />)
+    })
+    await act(async () => {
+      root.render(<BackdropCrossfade src="https://x/b.jpg" custom />)
+    })
+    await loadLatest()
+    expect(byKind('prev')[0].className, '旧层是头像铺底那份').not.toContain('custom')
+    expect(byKind('cur')[0].className).toContain('custom')
+  })
+
+  it('正对照：**当前层**吃实时的 `custom`（给当前 V 换成自定义背景 ⇒ 当场生效，不用等换 V）', async () => {
+    await act(async () => {
+      root.render(<BackdropCrossfade src="https://x/a.jpg" custom={false} />)
+    })
+    await act(async () => {
+      root.render(<BackdropCrossfade src="https://x/a.jpg" custom />)
+    })
+    expect(byKind('first')[0].className, 'src 没变、只有 custom 变 ⇒ 当前层要当场跟上').toContain('custom')
+  })
+
   // ── 需求 9：背景视频（devlog/424）────────────────────────────────────
   const video = () => document.querySelector<HTMLVideoElement>('.hero-backdrop-video')
   const loadVideo = async (el: HTMLElement | null) => {

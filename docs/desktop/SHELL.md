@@ -134,6 +134,12 @@ retire-when: 桌面壳换掉 Tauri，或改成多进程模型
       末端无 `$`**（计划 §2.17 实测）。留着它 = 新命令只是"多了一条更严的路"。
     - ⚠️ **接新平台（抖音/小红书）时要同时加 `EXTERNAL_HOSTS`**：否则「打开主页」会失败 ——
       但**不会静默**（命令返回中文原因、前端 toast 出来）。
+    - ⚠️ **名单要覆盖"应用自己会产出的链接"**（2026-10-08，`devlog/448`）：用户点帖子详情的
+      「打开原文」被拒（`t.bilibili.com` 不在名单里），而微博那条 `m.weibo.cn/detail/{id}`
+      **同样是坏的**（名单里只有 `weibo.com`）。链接是后端各平台 permalink 构造器拼的、
+      名单是手写的 ⇒ **两边没有任何机器联系**，只靠"记得同时加"必然漏。
+      ⇒ **机器判据**：`tests/test_external_link_hosts.py` 拿 `fetcher._dynamic_url` 的**实际产出**
+      与各平台模块源码里的链接主机**对账**（故意不认 `api.`/`passport.` 这类接口域名）。
     - 前端**不复制那张表**（`shellBridge.openExternal` 只负责转发与抛出原因）：跨语言两份真源必漂。
     - ⚠️ capability 的**通配基线刻意保留**（`default.json` 的 `windows: ["*"]`）：**按 label 硬拆
       一旦猜错就是 devlog/175 那种"IPC 通道坏掉"**，而"显式 label 能否命中**运行时创建**的窗口"

@@ -59,6 +59,16 @@ interface Layer {
   videoSrc: string | null
   /** 这一层**自己的**视频取景（需求 9 补丁：两份取景分开存，`devlog/426`） */
   videoFocus: BackgroundFocus | null
+  /**
+   * 这一层**自己的**"是不是自定义背景"（2026-10-08，`devlog/448`）。
+   *
+   * ⚠️ 它决定 `--backdrop-opacity`（自定义 1 / 头像铺底 0.18），而淡出关键帧
+   * `backdrop-out` 的 `from` 读的正是这个变量 ⇒ 旧层必须留着**自己**那份：
+   * 否则"自定义背景的 V → 头像铺底的 V"会在换的那一瞬间把旧层从 1 打到 0.18
+   * （用户看到的是一次明暗闪动，业界俗称"先跳到 0.18 再淡出"）；
+   * 反方向（0.18 → 1）则是一次**变亮**的闪。同一个坑 `focus` 与视频各自踩过一遍。
+   */
+  custom: boolean
 }
 
 /**
@@ -127,7 +137,7 @@ export function BackdropCrossfade({ src, custom, focus, videoSrc, videoFocus }: 
     //    会让正在淡出的那层退回居中，图在三帧里跳一下）。后面新建的层用 ref（见下）。
     () => (src
       ? [{ src, out: false, first: true, focus: focus ?? null, videoSrc: videoSrc ?? null,
-           videoFocus: videoFocus ?? null }]
+           videoFocus: videoFocus ?? null, custom }]
       : []))
   /** 淡出层的清理计时器（按 src 记，避免快速连点时互相清掉）。 */
   const timers = useRef(new Map<string, number>())
@@ -140,6 +150,9 @@ export function BackdropCrossfade({ src, custom, focus, videoSrc, videoFocus }: 
   /** 视频的取景同上（两份取景各自快照 —— 记住"旧层放自己那一段"这条对取景同样成立）。 */
   const videoFocusRef = useRef<BackgroundFocus | null>(videoFocus ?? null)
   videoFocusRef.current = videoFocus ?? null
+  /** "是不是自定义背景"同上（决定不透明度 ⇒ 旧层必须留自己那份，见 `Layer.custom`）。 */
+  const customRef = useRef(custom)
+  customRef.current = custom
   /** 当前层的取景（归一成 `| null`，好和 `Layer.focus` 对上）。 */
   const nowFocus: BackgroundFocus | null = focus ?? null
   const nowVideo: string | null = videoSrc ?? null
@@ -160,7 +173,8 @@ export function BackdropCrossfade({ src, custom, focus, videoSrc, videoFocus }: 
           ? prev
           : [...alive.map((l) => ({ ...l, out: true })),
              { src, out: false, first: alive.length === 0, focus: focusRef.current,
-               videoSrc: videoRef.current, videoFocus: videoFocusRef.current }]
+               videoSrc: videoRef.current, videoFocus: videoFocusRef.current,
+               custom: customRef.current }]
       })
       // 旧层淡完就把它摘掉（不摘会一直压在新层上面，虽然它已经全透明）
       const t = window.setTimeout(() => {
@@ -186,11 +200,15 @@ export function BackdropCrossfade({ src, custom, focus, videoSrc, videoFocus }: 
         const f = l.out ? l.focus : nowFocus
         const v = l.out ? l.videoSrc : nowVideo
         const vf = l.out ? l.videoFocus : nowVideoFocus
+        // ⚠️ 同样：**正在淡出的那一层跟自己的 `custom`**（它决定 `--backdrop-opacity`，
+        //    而淡出关键帧的起点读的就是它）。读实时值 ⇒ 换 V 的那一下旧层会"跳"到另一个
+        //    不透明度再淡出 —— 用户看到的就是一次明暗闪动（`devlog/448`）。
+        const c = l.out ? l.custom : custom
         return (
           <div
             key={l.src}
             data-backdrop={l.out ? 'prev' : l.first ? 'first' : 'cur'}
-            className={`hero-backdrop${custom ? ' custom' : ''}${l.out ? ' is-prev' : ''}`}
+            className={`hero-backdrop${c ? ' custom' : ''}${l.out ? ' is-prev' : ''}`}
           >
             {/* 背景**图**：取景（需求 7）挂**这一层**，不挂外层 —— ⚠️ `transform: scale()`
                 会连**子元素一起放大**，而视频就是子元素（2026-10-07 用户报"调图的缩放把视频

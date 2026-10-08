@@ -1336,13 +1336,25 @@ fn data_dir_of(app: &tauri::AppHandle) -> Result<std::path::PathBuf, String> {
 ///
 /// ⚠️ 接入新平台（抖音/小红书）时要**同时**加这里 —— 否则"打开主页"会失败并提示原因
 /// （前端会把原因显示出来，不静默）。这条纪律见 `docs/desktop/SHELL.md 不变量 29。
+///
+/// ⚠️ **"名单里有什么"由应用自己产出的链接决定**（2026-10-08，`devlog/448`）：
+/// 用户点了帖子详情里的「打开原文」⇒ 报「这个主机不在允许打开的名单里：t.bilibili.com」——
+/// 名单是手工维护的，而链接是后端各平台的 permalink 构造器拼的，两边**没有任何机器联系**。
+/// 那次补齐的两个：
+/// - `t.bilibili.com` —— B 站**动态**的原文链接（`fetcher._dynamic_url`，视频/专栏走 `www`）；
+/// - `m.weibo.cn` —— 微博**详情**的原文链接（`platforms/weibo.py` 的 `/detail/{id}`，
+///   而名单里原先只有 `weibo.com` / `www.weibo.com` ⇒ 微博的「打开原文」同样是坏的）。
+/// ⇒ 现在有机器判据：`tests/test_external_link_hosts.py` 拿各平台模块里出现的链接主机
+/// 和 `_dynamic_url` 的实际产出**对账**，少一条就红。
 const EXTERNAL_HOSTS: &[&str] = &[
     "bilibili.com",
     "www.bilibili.com",
     "space.bilibili.com",
     "live.bilibili.com",
+    "t.bilibili.com",
     "weibo.com",
     "www.weibo.com",
+    "m.weibo.cn",
     // 小红书（第 4 阶段 ④，devlog/231）：主页是 www.xiaohongshu.com/user/profile/{uid}
     "xiaohongshu.com",
     "www.xiaohongshu.com",
@@ -2619,6 +2631,14 @@ mod tests {
             // 小红书（第 4 阶段 ④，devlog/231）：主页链接必须放行，否则「打开主页」失败
             "https://www.xiaohongshu.com/user/profile/65f0c0ffee1234567890abcd",
             "https://xiaohongshu.com/explore/abc",
+            // ⚠️ 下面这几条是**帖子详情里「打开原文」的真实形状**（2026-10-08，`devlog/448`）：
+            // 用户点的 B 站动态原文链接就是 t.bilibili.com ⇒ 少这一条时点一下只会弹错误报告。
+            "https://t.bilibili.com/1256111632951541782",
+            // 微博详情（`platforms/weibo.py` 的 `/detail/{id}`）—— 名单里原先只有 weibo.com，
+            // 所以微博的「打开原文」也是坏的（同一类漏项）。
+            "https://m.weibo.cn/detail/5012345678901234",
+            // 抖音帖子上游给的是 v.douyin.com 之外还有 www 的 /video 与 /note
+            "https://www.douyin.com/video/7300000000000000000",
             "HTTPS://BILIBILI.COM/x", // 大写不算绕过：规范化后就是同一个主机
             "  https://bilibili.com  ", // 两侧空白 trim 掉
         ] {
