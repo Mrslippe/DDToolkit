@@ -1,5 +1,5 @@
 import type {
-  AgreementState, Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliPlayInfo, BiliSearchResult, BiliSegments, Capabilities, DouyinCookieSaved, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveGiftDay, LiveSession, LiveSessionDetail, LiveUpstream, NoticesResponse, PairingInfo, PoolItem, Post, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyOverview, ThirdpartyVtuber, AssetsInfo, AssetsPruneResult, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, XhsCookieSaved } from './types'
+  AgreementState, Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliPlayInfo, BiliSearchResult, BiliSegments, Capabilities, DouyinCookieSaved, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveGiftDay, LiveSession, LiveSessionDetail, LiveSessionWriteIn, LiveUpstream, NoticesResponse, PairingInfo, PoolItem, Post, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyOverview, ThirdpartyVtuber, AssetsInfo, AssetsPruneResult, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, XhsCookieSaved } from './types'
 import { ApiError, ApiShapeError } from './errors'
 import { HOST_HEADER, myHost } from '../utils/hostIdentity'
 import {
@@ -533,6 +533,49 @@ export const api = {
   clearLiveSessionCategory: (accountId: number, liveId: string) =>
     request<void>(
       `/account/${accountId}/live-sessions/${encodeURIComponent(liveId)}/category`,
+      { method: 'DELETE' },
+    ),
+
+  /**
+   * 手动记录一场直播（B2，devlog/454）：时间 + 可选标题 + 可选录播地址。
+   *
+   * `start_at`/`end_at` 传 **ISO 8601 字符串**：
+   * - 带偏移（`toISOString()`）→ 服务端按偏移换算；
+   * - 不带偏移（`datetime-local` 原样）→ 服务端按**本机本地时区**解释。
+   *   本组件统一走后者（用户填的就是墙上时间，见 ManualSessionDialog）。
+   *
+   * 时段与已有场次重叠 → 409，`ApiError.detail` 是一句**点名撞上哪一场**的中文，
+   * 调用方应把它原样展示（别换成"保存失败"）。
+   */
+  createManualLiveSession: (accountId: number, data: LiveSessionWriteIn) =>
+    request<LiveSessionDetail>(`/account/${accountId}/live-sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    }),
+
+  /**
+   * 局部更新场次（B2）：**手动记录的**可改时间/标题/录播地址，自动抓来的只能补录播地址
+   * （服务端 400 + 中文原因）。
+   *
+   * ⚠️ 只传要改的字段 —— 服务端按 `exclude_unset` 语义处理：
+   * `end_at: null` = **清空结束时间**（改回"进行中"）。
+   * `vod_url: ''` = 清空录播地址。
+   */
+  updateLiveSession: (accountId: number, liveId: string, data: LiveSessionWriteIn) =>
+    request<LiveSessionDetail>(
+      `/account/${accountId}/live-sessions/${encodeURIComponent(liveId)}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      },
+    ),
+
+  /** 删除**手动记录**的场次（B2）；自动抓来的删不掉（下一次同步会放回来，服务端 400） */
+  deleteLiveSession: (accountId: number, liveId: string) =>
+    request<{ deleted: boolean; live_id: string }>(
+      `/account/${accountId}/live-sessions/${encodeURIComponent(liveId)}`,
       { method: 'DELETE' },
     ),
 

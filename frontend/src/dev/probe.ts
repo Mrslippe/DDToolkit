@@ -4474,7 +4474,14 @@ export async function runUiProbe(): Promise<void> {
       const darkCard = dlg.querySelector<HTMLButtonElement>('[data-theme-option="dark"]')
       result.themeDarkDisabled = !!darkCard?.disabled
       result.themeDarkNote = text(darkCard?.querySelector('.aps-theme-note')) || null
+      // ⚠️ **先滚进视野再量**（2026-10-08，B2 批顺手修）：切页不重置 `.aps-pane-scroll` 的
+      //    滚动位置，而本步紧跟在「关于」（只读项 11 + 信息行 14）后面 —— 留在那个偏移上时
+      //    主题卡被裁在视口外，`getBoundingClientRect` 照样给坐标、`elementFromPoint` 却
+      //    命中不到，于是假报「『跟随系统』卡片点不着」（这条在 B2 之前就红着）。
+      //    与 ③d 步进条那条是**同一个坑**，处理方式也照抄。
       const optSystem = dlg.querySelector<HTMLElement>('[data-theme-option="system"]')
+      optSystem?.scrollIntoView({ block: 'center' })
+      await sleep(220)
       const orr = rectOf(optSystem)
       result.themeSystemHit = !!(optSystem && orr &&
         hits(optSystem, orr.left + orr.width / 2, orr.top + orr.height / 2))

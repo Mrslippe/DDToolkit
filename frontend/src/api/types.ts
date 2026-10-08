@@ -272,6 +272,14 @@ export interface LiveSession {
   danmakus_count?: number | null
   /** 场次封面（详情弹窗左列封面图） */
   cover_url?: string | null
+  /** 录播地址（B2，f013）：**唯一形态** `https://www.bilibili.com/video/BV…[?p=N]`。
+   *  服务端规范化后才入库（裸 BV 号/分享链接/移动端域名都收敛到这一种），
+   *  所以在界面上它**一定点得开**（主机在壳的白名单里）。 */
+  vod_url?: string | null
+  /** 这一场是否含"用户手动记录"成分（服务端按 `source` 分词判定）。
+   *  ⚠️ 别在前端自己拆 `source`：它同时决定界面上给不给"编辑时间/标题/删除"，
+   *  而服务端是照这个标记放行的（两边各写一遍 = 迟早不一致）。 */
+  manual?: boolean
   /** 中断续播并段数（v2 合并，1=单场；>1 表示该场为多次断开续播） */
   segment_count?: number
   /** 类型 key（服务端推断：game/chat/watch/upload/song/fitness/radio/collab/special/live） */
@@ -367,6 +375,23 @@ export interface LiveEvent {
  */
 export interface LiveSessionDetail extends LiveSession {
   analysis?: LiveAnalysisInfo | null
+}
+
+/** 手动记录/编辑场次的请求体（B2，devlog/454）。
+ *
+ * - 创建：`start_at` 必填，其余可选；
+ * - 编辑（PATCH）：**只放要改的字段**（服务端 `exclude_unset` 语义）；
+ *   `end_at: null` = 清空结束时间（改回"进行中"），`vod_url: ''` = 清空录播地址。
+ *
+ * ⚠️ 时间字段传的是 **`datetime-local` 的原样字符串**（`2026-10-08T20:30`，不带时区）——
+ * 服务端按**本机本地时区**解释。别在这里 `new Date(...).toISOString()`：那会先把用户填的
+ * 墙上时间按浏览器时区折成 UTC，服务端再折算一次，非 UTC 机器上会**偏掉一个时差**。
+ */
+export interface LiveSessionWriteIn {
+  start_at?: string
+  end_at?: string | null
+  title?: string | null
+  vod_url?: string | null
 }
 
 /** 场次详情里「必须打第三方」的那两格：弹幕词云 + 直播动态（devlog/063）。

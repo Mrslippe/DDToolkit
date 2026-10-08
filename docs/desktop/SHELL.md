@@ -140,6 +140,10 @@ retire-when: 桌面壳换掉 Tauri，或改成多进程模型
       名单是手写的 ⇒ **两边没有任何机器联系**，只靠"记得同时加"必然漏。
       ⇒ **机器判据**：`tests/test_external_link_hosts.py` 拿 `fetcher._dynamic_url` 的**实际产出**
       与各平台模块源码里的链接主机**对账**（故意不认 `api.`/`passport.` 这类接口域名）。
+      2026-10-08（B2，`devlog/454`）加了**第三条**：手动填的**录播地址**由
+      `app/domain/live_manual.py::normalize_vod` 收敛成 `https://www.bilibili.com/video/BV…`
+      ——**用户填什么都行，入库前收口**（`b23.tv` 短链 / `http:` / 非 B 站主机明确拒），
+      而那条判据就是拿它**跑一遍**看产出主机在不在名单里（改 `VOD_CANONICAL` 而没同步名单 ⇒ 红）。
     - 前端**不复制那张表**（`shellBridge.openExternal` 只负责转发与抛出原因）：跨语言两份真源必漂。
     - ⚠️ capability 的**通配基线刻意保留**（`default.json` 的 `windows: ["*"]`）：**按 label 硬拆
       一旦猜错就是 devlog/175 那种"IPC 通道坏掉"**，而"显式 label 能否命中**运行时创建**的窗口"

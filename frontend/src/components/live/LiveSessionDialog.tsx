@@ -31,7 +31,7 @@
  * 打开即可读。
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, X } from 'lucide-react'
+import { ChevronDown, Pencil, X } from 'lucide-react'
 
 import type { LiveDanmakuInfo, LiveEvent, LiveMetrics, LiveSession, LiveSessionDetail } from '../../api/types'
 import { api } from '../../api/api'
@@ -49,6 +49,7 @@ import {
   fmtDur, fmtMoney, fmtTime, isFreshSession, keyOf,
 } from './liveCalendarFmt'
 import { glanceCapsules } from './sessionGlance'
+import { vodLabel } from './manualSessionForm'
 
 /** 上游指标行（顺序即展示顺序）。**恒定四行**是 R36 的前提：未到位时按同尺寸骨架占位，
  *  到位后原位换成真值 —— 行数一样，弹窗高度才不变（`在线排名` 另有保留位，见 CSS）。 */
@@ -81,6 +82,9 @@ interface Props {
   /** 上游取数**按需现查**补到了这一场的 danmakus 行（`session_changed`）→
    *  父组件应重取一次详情：补进来的行带着弹幕数/收益/峰值/数据源（devlog/275） */
   onSessionChanged?: () => void
+  /** 打开「手动记录/编辑」弹窗（B2）：手动场次可改时间/标题/录播地址，自动场次只能补录播地址。
+   *  传 `LiveSession`（不是详情）：写端点的目标只有 id + 这四项，多给没有意义。 */
+  onEditSession?: (s: LiveSession) => void
 }
 
 export default function LiveSessionDialog({
@@ -93,6 +97,7 @@ export default function LiveSessionDialog({
   onPickCategory,
   accountId,
   onSessionChanged,
+  onEditSession,
 }: Props) {
   /**
    * 关闭动画期间继续渲染的那一份详情（Q2 批次 14，devlog/217）。
@@ -312,7 +317,25 @@ export default function LiveSessionDialog({
               {s.category_from === 'override' && (
                 <span className="lc-pop-corr">已校正</span>
               )}
+              {/* 手动记录的场次标一下来源（B2）：用户下次看到它要能想起"这条是我自己填的"——
+                  它不会随抓取更新，也不会被删掉后自己回来。 */}
+              {s.manual && (
+                <span className="lc-pop-manual">手动记录</span>
+              )}
             </div>
+            {/* 「手动记录/编辑」入口（B2）：手动场次 = 编辑这一场；自动场次 = 补录播地址。
+                标题随 `s.manual` 变（服务端算的标记，前端不自己拆 `source`）。 */}
+            {onEditSession && (
+              <button
+                type="button"
+                className="lc-dlg-edit"
+                title={s.manual ? '编辑这一场' : '补录播地址'}
+                aria-label={s.manual ? '编辑这一场' : '补录播地址'}
+                onClick={() => onEditSession(s)}
+              >
+                <Pencil className="size-3.5" />
+              </button>
+            )}
             <DialogClose asChild>
               <button type="button" className="lc-dlg-close" aria-label="关闭">
                 <X className="size-4" />
@@ -454,6 +477,29 @@ export default function LiveSessionDialog({
                 </div>
               )}
               <div className="lc-dlg-row"><dt>数据源</dt><dd>{srcs.join(' + ')}</dd></div>
+              {/* 录播地址（B2）：服务端入库前已规范成白名单内的形态 ⇒ 这个 `<a>` 一定点得开
+                  （点击由全局外链守卫接管 → `openExternal`，见 utils/externalLinkGuard.ts）。
+                  **恒定占一行**：没有时给入口而不是把行删掉（弹窗高度不随数据变，R36 的老账）。 */}
+              <div className="lc-dlg-row">
+                <dt>录播</dt>
+                <dd>
+                  {s.vod_url ? (
+                    <a className="lc-dlg-vod" href={s.vod_url} title={s.vod_url}>
+                      {vodLabel(s.vod_url)}
+                    </a>
+                  ) : (
+                    <>
+                      <span className="lc-dlg-note">未填写</span>
+                      {onEditSession && (
+                        <button type="button" className="lc-dlg-cloud-build"
+                                onClick={() => onEditSession(s)}>
+                          补录播地址
+                        </button>
+                      )}
+                    </>
+                  )}
+                </dd>
+              </div>
             </dl>
           </section>
         </div>

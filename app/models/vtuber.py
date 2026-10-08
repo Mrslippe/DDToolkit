@@ -179,10 +179,13 @@ class AccountStatSnapshot(Base):
 class LiveSession(Base):
     """直播场次（v0.9.x 内容管道 M1：danmakus 固定化场次为主源）。
 
-    - source：danmakus（历史全量）/ feed（M3，B站 live_rcmd 场次）
+    - source：danmakus（历史全量）/ feed（M3，B站 live_rcmd 场次）/
+      **manual（用户在日历上手动补的一场，B2，devlog/454）**
     - self 快照推导场次**不落本表**（读取时合并，见 LiveSessionRepo.merged）
-    - live_id：平台级场次唯一键（danmakus uuid / B站 live_id）
+    - live_id：平台级场次唯一键（danmakus uuid / B站 live_id / 手动行的 `manual:<uuid>`）
     - total_income：danmakus totalIncome（元，含礼物/SC/上舰口径为站点定义）
+    - vod_url：录播地址（f013；唯一形态 `https://www.bilibili.com/video/BV…`，
+      规范化与理由见 `app/domain/live_manual.py`）
     - raw_json：原始场次数据保真（档案定位）
     """
     __tablename__ = "live_sessions"
@@ -203,6 +206,7 @@ class LiveSession(Base):
     parent_area_name = Column(String, nullable=True)
     area_name = Column(String, nullable=True)
     cover_url = Column(String, nullable=True)
+    vod_url = Column(String, nullable=True)
     total_income = Column(Float, nullable=True)
     max_online_count = Column(Integer, nullable=True)
     danmakus_count = Column(Integer, nullable=True)

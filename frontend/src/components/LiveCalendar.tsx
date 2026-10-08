@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react'
+import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Plus } from 'lucide-react'
 import type { LiveSession, UpcomingReservation } from '../api/types'
 import { api } from '../api/api'
 import OverlayScroll from './OverlayScroll'
@@ -19,6 +19,8 @@ import type { PopState } from './live/useLiveSessions'
 import { useReservations } from './live/useReservations'
 // 场次详情弹窗（含词云与破泡状态）已搬到 components/live/LiveSessionDialog
 import LiveSessionDialog from './live/LiveSessionDialog'
+// 手动记录/编辑一场（B2，devlog/454）：日历工具栏的「+」与详情弹窗的铅笔共用同一个表单
+import ManualSessionDialog from './live/ManualSessionDialog'
 
 interface Props {
   /** 账号 id（null=无账号，显示空态）；切换账号自动重拉。
@@ -98,6 +100,16 @@ const LiveCalendar = memo(function LiveCalendar(
   /** 未来预约（R13）：V 级数据，独立于场次取数（见 useReservations 顶部说明） */
   const reservations = useReservations(vtuberId, refreshTick)
 
+  /**
+   * 手动记录/编辑弹窗（B2，devlog/454）。
+   *
+   * `target === null` = 新建（工具栏的「+」），非空 = 编辑那一场（详情弹窗的铅笔）。
+   * 用一个状态装"弹窗开着没 + 目标是哪一场"，而不是两个布尔 —— 两处入口共用同一个表单，
+   * 拆成两个状态就会出现"开着但不知道在编辑谁"的中间态。
+   */
+  const [manualOpen, setManualOpen] = useState(false)
+  const [manualTarget, setManualTarget] = useState<LiveSession | null>(null)
+
   const resvByDay = useMemo(() => groupReservationsByDay(reservations), [reservations])
 
   const byDay = useMemo(() => {
@@ -172,6 +184,39 @@ const LiveCalendar = memo(function LiveCalendar(
     setNavDir(popYear * 12 + m >= ym.y * 12 + ym.m ? 1 : -1)
     setYm({ y: popYear, m })
     setMonthPopOpen(false)
+  }
+
+  /** 打开手动记录弹窗：`target=null` 新建（工具栏「+」），非空 = 编辑那一场（详情弹窗铅笔） */
+  const openManual = (target: LiveSession | null) => {
+    setManualTarget(target)
+    setManualOpen(true)
+  }
+
+  /**
+   * 保存成功后的收口（B2）。
+   *
+   * 三件事都必须做，少一件用户就会以为"没保存上"：
+   * ① 关弹窗 + 重拉列表（日历上立刻出现/更新那一格）；
+   * ② **把日历翻到它所在的月份** —— 补的是上个月/下个月时，留在当前月会看不见任何变化；
+   * ③ 详情弹窗开着的话刷新它（否则那份数据还是改之前的：标题/录播地址对不上）。
+   */
+  const onManualSaved = (saved: LiveSession) => {
+    setManualOpen(false)
+    reload()
+    const d = new Date(saved.start_at)
+    if (!Number.isNaN(d.getTime()) && (d.getFullYear() !== ym.y || d.getMonth() !== ym.m)) {
+      setNavDir(d.getFullYear() * 12 + d.getMonth() >= ym.y * 12 + ym.m ? 1 : -1)
+      setYm({ y: d.getFullYear(), m: d.getMonth() })
+    }
+    const lid = detail?.sessions[detail.idx]?.live_id
+    if (lid && manualTarget) void reloadDetail(lid)
+  }
+
+  /** 删除成功：那一场没了 ⇒ 关掉正看着它的详情弹窗（留着会是一份看得见却已不存在的数据） */
+  const onManualDeleted = () => {
+    setManualOpen(false)
+    setDetail(null)
+    reload()
   }
 
   const openCellPop = (c: DayCell, e: ReactMouseEvent<HTMLDivElement>) => {
@@ -457,6 +502,12 @@ const LiveCalendar = memo(function LiveCalendar(
           <FloatPill shape="icon" title="下个月" onClick={() => moveMonth(1)}>
             <ChevronsRight className="lc-nav-icon" />
           </FloatPill>
+          {/* 手动记录入口（B2，devlog/454）。用户 2026-09-08 说过入口「不明确」——
+              那时确实**没有**手动入口（场次全靠自动回填/同步）；这一条补上那个缺口：
+              收录不到的场次（平台没留记录、当时没开工具）在这里手填。 */}
+          <FloatPill shape="icon" title="手动记录一场直播" onClick={() => openManual(null)}>
+            <Plus className="lc-nav-icon" />
+          </FloatPill>
 
           {/* 月份选择浮窗：年切换 + 12 月宫格 */}
           {monthPopOpen && (
@@ -539,6 +590,16 @@ const LiveCalendar = memo(function LiveCalendar(
           const lid = detail?.sessions[detail.idx]?.live_id
           if (lid) void reloadDetail(lid)
         }}
+        onEditSession={(s) => openManual(s)}
+      />
+      {/* 手动记录/编辑（B2）：两处入口（工具栏「+」/ 详情弹窗铅笔）共用这一个实例 */}
+      <ManualSessionDialog
+        open={manualOpen}
+        accountId={accountId}
+        session={manualTarget}
+        onClose={() => setManualOpen(false)}
+        onSaved={onManualSaved}
+        onDeleted={onManualDeleted}
       />
     </div>
   )

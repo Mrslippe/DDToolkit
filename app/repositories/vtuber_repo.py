@@ -2,11 +2,13 @@ import json
 import logging
 import re
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.live_status import is_live
+from app.domain.live_manual import sessions_overlap
 from app.models.vtuber import (VTuber, Account, Post, AccountStatSnapshot,
                                LiveGiftDay, ThirdpartyVtuber, VtuberEvent,
                                LiveSession, LiveCategoryOverride, AppMeta,
@@ -359,7 +361,14 @@ def _num(v, cast):
 
 
 # 多源合并时主数据优先级（danmakus 字段最全 → feed 秒级开播 → self 观测兜底）
-_SOURCE_PRIORITY = {"danmakus": 3, "feed": 2, "self": 1}
+_SOURCE_PRIORITY = {"danmakus": 4, "feed": 3, "manual": 2, "self": 1}
+# ⚠️ manual 排在 feed **之下**、self **之上**，两个方向各有理由：
+# - 低于 danmakus/feed：对外 id 要取"能拿去问上游的那个真 id"。手动行的 id 是本工具
+#   自己造的 `manual-…`，让它在合并组里赢，会让这一场的详情/弹幕端点拿假 id 去问上游；
+# - 高于 self：self 是虚拟场次（没有 id，`ids.get(s)` 为空），这条只决定
+#   `source` 标签的先后（`manual+self` 而不是 `self+manual`）——而**并列会让标签随
+#   集合迭代序变化**（`sorted` 稳定，但 `srcs` 是 set：并列 = 不确定的展示）。
+# 数值整体 +1 是 2026-10-08（B2）为 manual 腾位置；相对顺序与之前逐字一致。
 # 分组内「各源各自看到的 live_id」暂存键：合并收尾时按源优先级选定**唯一对外 id**，
 # 返回前弹出（不进 API 载荷）。
 # 为什么必须显式定权：danmakus 行的 id 是它自己的 uuid，feed 行是 B 站数字 live_id，
@@ -475,6 +484,77 @@ class LiveSessionRepo:
         """
         return self._upsert(account_id, live_id, "feed", fields)
 
+    # ── 写入（用户在日历上手动记录，B2 / devlog/454） ──
+
+    @staticmethod
+    def manual_live_id() -> str:
+        """手动场次的对外 id：`manual-<uuid4 hex>`（`source` 与 id 前缀一致，日志里一眼可辨）。
+
+        ⚠️ **不是** None，也**不是**空串：库里 `(account_id, live_id)` 唯一，而
+        分类校正（`live_category_overrides.live_id`）、详情/上游/词云端点**全都以 live_id 为键** ——
+        手动行没有 id 就等于"用户补的这一场既不能改分类，也点不开详情"。
+        """
+        return f"manual-{uuid4().hex}"
+
+    def create_manual(self, account_id: int, *, platform: str, start_at: datetime,
+                      end_at: datetime | None, title: str | None,
+                      vod_url: str | None) -> LiveSession:
+        """新增一条手动场次（提交）。`platform` 由调用方传入（同 `upsert_danmakus`：仓库层不替平台做决定）。"""
+        row = LiveSession(account_id=account_id, platform=platform, source="manual",
+                          live_id=self.manual_live_id(), title=title,
+                          start_at=start_at, end_at=end_at, vod_url=vod_url)
+        self.db.add(row)
+        self.db.commit()
+        self.db.refresh(row)
+        return row
+
+    def get_row(self, account_id: int, live_id: str) -> LiveSession | None:
+        """按对外 id 取**表内行**（None = 表里没有 ⇒ 那是 self 快照推导的虚拟场次，不可改）。"""
+        return (self.db.query(LiveSession)
+                .filter(LiveSession.account_id == account_id,
+                        LiveSession.live_id == live_id)
+                .first())
+
+    def update_row(self, row: LiveSession, fields: dict) -> LiveSession:
+        """局部更新一行（提交）；`fields` 由路由层用 `exclude_unset` 语义给出。"""
+        for k, v in fields.items():
+            setattr(row, k, v)
+        self.db.commit()
+        self.db.refresh(row)
+        return row
+
+    def delete_row(self, row: LiveSession) -> None:
+        """删除一行（提交）。级联清掉该场的分类校正 —— 不删的话它是一份**悬空校正**：
+        场次没了、校正还在，用户下次在同一个 live_id 上（不可能）或导出数据里看到幽灵记录。"""
+        LiveCategoryOverrideRepo(self.db).delete(row.account_id, row.live_id or "")
+        self.db.delete(row)
+        self.db.commit()
+
+    def overlapping(self, account_id: int, start_at: datetime,
+                    end_at: datetime | None, *,
+                    exclude_live_id: str | None = None) -> dict | None:
+        """这段时间是否**已经有场次**（冲突提示用）：返回撞上的那一场，None = 没有。
+
+        判据走 `merged()` 而不是直接查表：日历上**看得见的**场次 = 表内 ∪ self 快照推导，
+        而"重复记一场本工具已经观测到的直播"正是这个入口最容易发生的事
+        （只查表会放过它，用户却在日历上看到两条几乎一样的记录）。
+
+        ⚠️ **只拦"表内真有记录"的时段**（`live_id` 非空）。纯 self 快照推导的场次
+        （没有 id）**不算冲突**：手动行随后会被并进那个 self 组（`merged()` 是"快照并进组"），
+        日历上仍然只有一条，而这一条从此有了标题/录播地址 —— 正是用户要的结果；
+        拦下它会让"给自动观测到的场次补录播地址"变成一件做不到的事。
+
+        `exclude_live_id`：改自己那一条时要把自己排除掉（否则每次保存都撞上自己）。
+        """
+        for s in self.merged(account_id):
+            if not s.get("live_id"):
+                continue
+            if exclude_live_id and s.get("live_id") == exclude_live_id:
+                continue
+            if sessions_overlap(start_at, end_at, s["start_at"], s.get("end_at")):
+                return s
+        return None
+
     # ── 读取 ──
 
     def list_by_account(self, account_id: int) -> list[LiveSession]:
@@ -583,6 +663,7 @@ class LiveSessionRepo:
             return
         if how == "dup":
             old_start = g["start_at"]
+            old_vod = g.get("vod_url")
             # 弹幕更丰富记录为主字段（标题/分区/收益/弹幕数/峰值）
             if (row.danmakus_count or 0) > (g.get("danmakus_count") or 0):
                 g.update(self._row_dict(row))
@@ -599,6 +680,9 @@ class LiveSessionRepo:
                 g["live_id"] = row.live_id
             if row.cover_url and not g["cover_url"]:
                 g["cover_url"] = row.cover_url
+            # 录播地址是**用户手填**的：上面的 `g.update(...)` 会把没有它的那一侧的
+            # `vod_url=None` 覆盖上来 ⇒ 合并一次就丢。这里显式兜底（同 `_merge_row_into_group`）。
+            g["vod_url"] = g.get("vod_url") or old_vod
             g["start_at"] = min(g["start_at"], old_start)   # 时间取并集（不翻倍收益）
             if row.end_at and (g.get("end_at") is None or row.end_at > g["end_at"]):
                 g["end_at"] = row.end_at
@@ -703,12 +787,20 @@ class LiveSessionRepo:
         return d, {"self"}, "self"
 
     def _merge_row_into_group(self, grp: tuple[dict, set[str], str], row: LiveSession) -> None:
-        """表内行并入分组：主数据优先（danmakus > feed），低优仅补缺失字段。"""
+        """表内行并入分组：主数据优先（danmakus > feed），低优仅补缺失字段。
+
+        ⚠️ 2026-10-08（B2 批次顺手抓到，见 devlog/454）：这里原来有一句
+        `grp[2] = row.source`（升级组的"主源"标记）—— 而 `grp` 是**元组**，
+        执行到就是 `TypeError: 'tuple' object does not support item assignment`，
+        也就是**打开日历直接 500**。此前没暴露是因为它只在 `room` 分支（双源同 room 同场）
+        且后面的行优先级更高时才会走到，而那个槽位（第三个元素）**全仓没有任何读者**。
+        已删除（想恢复"记主源"这件事，得先把 `groups` 改成可变容器）。
+        """
         g, srcs, primary = grp
         srcs.add(row.source)
         g.setdefault(_SRC_IDS_KEY, {})[row.source] = row.live_id
+        old_vod = g.get("vod_url")
         if _SOURCE_PRIORITY.get(row.source, 0) > _SOURCE_PRIORITY.get(primary, 0):
-            grp[2] = row.source
             g.update(self._row_dict(row))       # 高优主字段整体替换（含 start/end/标题/分区）
         else:
             if row.title and not g["live_title"]:
@@ -724,6 +816,9 @@ class LiveSessionRepo:
             if row.end_at and not g["end_at"]:
                 g["end_at"] = row.end_at
                 self._apply_duration(g)
+        # 手动补的录播地址**只增不减**（`g.update` 那条路会用 None 冲掉它）：
+        # 这是全表唯一一个"用户手写、没有任何自动源会重新给出来"的字段。
+        g["vod_url"] = g.get("vod_url") or old_vod
         g["source"] = self._join_sources(srcs)
 
     def _merge_snap_into_group(self, grp: tuple[dict, set[str], str], snap: dict) -> None:
@@ -775,6 +870,9 @@ class LiveSessionRepo:
             "danmakus_count": row.danmakus_count,
             "segment_count": 1,
             "cover_url": row.cover_url,
+            # 手动补的录播地址（f013）：进合并组，但合并规则**不许把它冲成 None**
+            # （`_row_dict` 整体替换时 `vod_url` 会是 None，见 _merge_row_into_group 的兜底）
+            "vod_url": row.vod_url,
         }
 
     def _snap_dict(self, snap: dict) -> dict:
@@ -793,6 +891,7 @@ class LiveSessionRepo:
             "danmakus_count": None,
             "segment_count": 1,
             "cover_url": None,
+            "vod_url": None,          # self 快照推导场次没有录播地址（虚拟场次，无 id 可挂）
         }
 
 

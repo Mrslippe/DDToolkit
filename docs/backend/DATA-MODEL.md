@@ -142,13 +142,14 @@ erDiagram
 |---|---|---|
 | `id` | INTEGER | PK |
 | `account_id` | INTEGER | NOT NULL，FK → accounts.id |
-| `platform` / `source` | TEXT | `danmakus`（第三方历史/同步）/ `feed`（B 站动态直播卡片） |
-| `live_id` | TEXT | 平台级场次 key；**UNIQUE(account_id, live_id)** |
+| `platform` / `source` | TEXT | `danmakus`（第三方历史/同步）/ `feed`（B 站动态直播卡片）/ **`manual`（用户在日历上手动补的一场，B2 `devlog/454`）** |
+| `live_id` | TEXT | 平台级场次 key；**UNIQUE(account_id, live_id)**；手动行是自造的 `manual-<uuid4>`（没有它这一场不能分类、点不开详情） |
 | `title` / `room_id` / `cover_url` | TEXT | 标题 / 房间 / 封面 |
-| `start_at` / `end_at` | DATETIME | 起止（`end_at` 由快照或次日 danmakus 补全） |
+| `start_at` / `end_at` | DATETIME | 起止（`end_at` 由快照或次日 danmakus 补全）；**用户填的时间经 `app/domain/live_manual.py::to_utc_naive` 落库** —— 带偏移的按偏移换算，不带偏移的（`datetime-local`）按本机时区解释（不变量 1） |
 | `parent_area_name` / `area_name` | TEXT | 分区 |
 | `total_income` | FLOAT | danmakus 收益（元） |
 | `max_online_count` / `danmakus_count` | INTEGER | 峰值人气 / 弹幕数 |
+| `vod_url` | TEXT | **录播地址**（f013，B2 `devlog/454`）：唯一入库形态 `https://www.bilibili.com/video/BV…[?p=N]`，规范化 + 拒绝理由见 `app/domain/live_manual.py::normalize_vod`（`b23.tv` / `http:` / 非 B 站主机都拒 —— 壳的白名单只放行 https + 精确主机）。**唯一没有自动源的用户手填列** ⇒ 合并里只增不减（不变量 39） |
 | `raw_json` | TEXT | 原始场次数据保真 |
 | `created_at` / `updated_at` | DATETIME | UTC now |
 
@@ -332,7 +333,8 @@ session 收口**（先写文件、再写索引行，见 `docs/backend/ASSETS.md 
 | `f009` local_assets | 建 `local_assets`（轻资产长期储存索引；唯一键 `(kind, key)`，**不挂外键 ⇒ 不进 purge**）（L1，devlog/257） |
 | `f010` vtuber_order | `vtubers.sort_order`（NOT NULL 默认 0；左栏自定义顺序，需求 4/5，devlog/413） |
 | `f011` background_focus_and_video | `vtubers.background_focus`（取景 JSON）+ `vtubers.background_video_path`（背景视频，需求 7/9，devlog/417） |
-| `f012` background_video_focus | `vtubers.background_video_focus`（**视频**的取景，与图片那份分开存，需求 9 补丁，devlog/426） = **当前 head** |
+| `f012` background_video_focus | `vtubers.background_video_focus`（**视频**的取景，与图片那份分开存，需求 9 补丁，devlog/426） |
+| `f013` live_session_vod | `live_sessions.vod_url`（场次录播地址；手动记录场次 `source='manual'` 不需要新列，需求 2/2.1，devlog/454） = **当前 head** |
 
 **纪律**：新增迁移后必须同步 `app/main.py` 的 `MIGRATION_HEAD`（`tests/test_services.py`
 断言与 alembic head 一致），否则冷启动快路径会把旧库误判为已最新。启动迁移四形态：

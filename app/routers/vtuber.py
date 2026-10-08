@@ -13,6 +13,8 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.database import get_db
+from app.domain.live_manual import (VodUrlError, is_manual_source, normalize_vod,
+                                    to_utc_naive)
 from app.models.vtuber import EVENT_KINDS, VTuber, Post, Account
 from app.repositories.vtuber_repo import (
     VTuberRepo, AccountRepo, PostRepo, AccountStatSnapshotRepo,
@@ -25,6 +27,7 @@ from app.schemas.vtuber import (
     PostOut, PostCreate, PostUpdate, PostPage, PostStats,
     AccountStatSnapshotOut, LiveGiftDayOut, ThirdpartyVtuberOut,
     FanTrendPoint, LiveSessionOut, LiveCategoryOut, LiveSessionDetailOut,
+    LiveSessionManualIn, LiveSessionUpdateIn, LiveSessionDeleteOut,
     VtuberEventOut, VtuberEventCreate, VtuberEventUpdate, FutureReservationOut,
     ProfileCardOut, ProfileLayoutIn,
     FormerValueOut, VTuberFormerValuesOut,
@@ -810,6 +813,41 @@ def _live_infer_ctx(db: Session, account_id: int):
     return account, vtuber, [e.event_date for e in events], overrides
 
 
+def _infer_session(s: dict, *, vtuber, event_dates, overrides, sessions,
+                   live_id) -> tuple[str, str]:
+    """场次类型推断（v2 信号栈）：override > series > title > learned > area > date > fallback。
+
+    **一处实现、三处调用**（列表 / 详情 / 写回执）：这三条路的推断输入是同一样东西，
+    各写一遍的后果不是"重复"，是**同一条记录在两个端点上分类不同**。
+    系列聚类与词库依赖整个账号的场次集合，所以按请求算一次、传进来（别在循环里算）。
+    """
+    series_categories = plan_series(sessions, overrides)
+    learned = build_learned(overrides, sessions)
+    return infer_category(
+        s["live_title"], s.get("area_name"), s.get("parent_area_name"),
+        s["start_at"],
+        birthday=vtuber.birthday if vtuber else None,
+        debut_date=vtuber.debut_date if vtuber else None,
+        event_dates=event_dates,
+        live_id=live_id, overrides=overrides,
+        series_categories=series_categories, learned=learned,
+    )
+
+
+def _session_payload(s: dict, account_id: int, category: str,
+                     category_from: str) -> dict:
+    """场次响应的公共载荷（列表 / 详情 / 写回执三个端点共用）。
+
+    `manual` 在这里**算一次**（域层纯函数 `is_manual_source`）：
+    让前端自己按 `+` 拆 `source` 的话，「哪些场次能改时间、哪些能删」这条规则
+    就有了两份实现，而两份实现漂移时**什么都不红**（服务端照样该拒就拒，
+    用户只会看到按钮点了报错）。
+    """
+    return {"account_id": account_id, **s,
+            "category": category, "category_from": category_from,
+            "manual": is_manual_source(s.get("source"))}
+
+
 @router.get("/account/{account_id}/live-sessions", response_model=list[LiveSessionOut])
 def live_sessions(account_id: int, db: Session = Depends(get_db)):
     """直播场次（v0.9.x 内容管道 M1 主源 + v2 多信号类型推断）。
@@ -824,21 +862,13 @@ def live_sessions(account_id: int, db: Session = Depends(get_db)):
     if not account:
         raise HTTPException(404, f"Account id={account_id} 不存在")
     sessions = LiveSessionRepo(db).merged(account_id)
-    series_categories = plan_series(sessions, overrides)
-    learned = build_learned(overrides, sessions)
     out = []
     for s in sessions:
-        category, category_from = infer_category(
-            s["live_title"], s.get("area_name"), s.get("parent_area_name"),
-            s["start_at"],
-            birthday=vtuber.birthday if vtuber else None,
-            debut_date=vtuber.debut_date if vtuber else None,
-            event_dates=event_dates,
-            live_id=s.get("live_id"), overrides=overrides,
-            series_categories=series_categories, learned=learned,
-        )
-        out.append(LiveSessionOut(account_id=account_id, **s,
-                                  category=category, category_from=category_from))
+        category, category_from = _infer_session(
+            s, vtuber=vtuber, event_dates=event_dates, overrides=overrides,
+            sessions=sessions, live_id=s.get("live_id"))
+        out.append(LiveSessionOut(**_session_payload(s, account_id,
+                                                    category, category_from)))
     return out
 
 
@@ -897,19 +927,171 @@ def live_session_detail(account_id: int, live_id: str,
     sessions = LiveSessionRepo(db).merged(account_id, with_ids=True)
     s = _pick_live_session(db, account_id, live_id, sessions)
     s.pop("src_live_ids", None)      # 只用于定位，不回给前端
-    series_categories = plan_series(sessions, overrides)
-    learned = build_learned(overrides, sessions)
-    category, category_from = infer_category(
-        s["live_title"], s.get("area_name"), s.get("parent_area_name"),
-        s["start_at"],
-        birthday=vtuber.birthday if vtuber else None,
-        debut_date=vtuber.debut_date if vtuber else None,
-        event_dates=event_dates,
-        live_id=live_id, overrides=overrides,
-        series_categories=series_categories, learned=learned,
-    )
-    return LiveSessionDetailOut(account_id=account_id, **s,
-                                category=category, category_from=category_from)
+    category, category_from = _infer_session(
+        s, vtuber=vtuber, event_dates=event_dates, overrides=overrides,
+        sessions=sessions, live_id=live_id)
+    return LiveSessionDetailOut(**_session_payload(s, account_id,
+                                                  category, category_from))
+
+
+# ── 手动记录场次（B2，devlog/454） ──────────────────────────────────
+
+def _conflict_message(hit: dict) -> str:
+    """409 的中文原因：**说清撞上哪一场 + 下一步怎么做**。
+
+    为什么不是一句"时间冲突"：这个入口的失败九成是用户想给**已有的**那一场补信息，
+    而"改哪一条"是他自己才知道的事 —— 把那一场的标题/时间段/来源摆出来他才判得了。
+    """
+    start = hit["start_at"].strftime("%m-%d %H:%M")
+    end = hit.get("end_at")
+    span = f"{start}–{end.strftime('%H:%M')}" if end else f"{start} 起"
+    who = hit.get("live_title") or "（无标题）"
+    return (f"这段时间已有场次：{who} {span}"
+            f"（来源 {hit.get('source')}，live_id={hit.get('live_id')}）。"
+            "同一时间一个 V 只可能有一场直播 —— 如果就是这一场，请直接编辑它"
+            "（可补录播地址）；确实是另一场的话，把时间改成不重叠再存")
+
+
+def _manual_detail(db: Session, account_id: int, live_id: str) -> LiveSessionDetailOut:
+    """写操作的**回执**：按合并后的视图重算一遍（与详情端点同链路）。
+
+    为什么不把刚写的那一行直接回给前端：手动行会被并进相邻场次（`dup`/`restart`/
+    self 快照并入），此时它在日历上是**另一个 live_id**（更高优先级的源赢）——
+    回执要是拿着一个日历上不存在的 id，前端下一步"编辑我刚存的那条"必然 404。
+    """
+    account, vtuber, event_dates, overrides = _live_infer_ctx(db, account_id)
+    sessions = LiveSessionRepo(db).merged(account_id, with_ids=True)
+    s = dict(_pick_live_session(db, account_id, live_id, sessions))
+    s.pop("src_live_ids", None)
+    category, category_from = _infer_session(
+        s, vtuber=vtuber, event_dates=event_dates, overrides=overrides,
+        sessions=sessions, live_id=live_id)
+    return LiveSessionDetailOut(**_session_payload(s, account_id,
+                                                  category, category_from))
+
+
+def _manual_inputs(data) -> tuple[datetime, datetime | None, str | None, str | None]:
+    """写端点的入参统一处理：时间归一 + 标题清洗 + 录播地址规范化（错误 → 422 中文原因）。
+
+    ⚠️ 校验放在**路由层**而不是 Pydantic 校验器里：`HTTPException(422, "…")` 的
+    `detail` 是一句能照着改的中文，而 Pydantic 的 422 是一串结构（前端 `api.ts`
+    只能把它 `JSON.stringify` 出来给用户看）。
+    """
+    start = to_utc_naive(data.start_at) if data.start_at is not None else None
+    end = to_utc_naive(data.end_at) if data.end_at is not None else None
+    title = (data.title or "").strip() or None
+    if title and len(title) > 80:
+        raise HTTPException(422, f"标题最长 80 字（现在是 {len(title)} 字）")
+    try:
+        vod = normalize_vod(data.vod_url)
+    except VodUrlError as e:
+        raise HTTPException(422, str(e))
+    return start, end, title, vod
+
+
+def _check_span(start: datetime, end: datetime | None) -> None:
+    """结束时间必须晚于开始时间（相等也不行：0 分钟的场次是填错了，不是"很短"）。"""
+    if end is not None and end <= start:
+        raise HTTPException(422, "结束时间要晚于开始时间")
+
+
+@router.post("/account/{account_id}/live-sessions",
+             response_model=LiveSessionDetailOut,
+             status_code=status.HTTP_201_CREATED)
+def create_manual_live_session(account_id: int, data: LiveSessionManualIn,
+                               db: Session = Depends(get_db)):
+    """手动记录一场直播（B2，devlog/454）：时间 + 可选标题 + 可选录播地址。
+
+    **冲突口径**（`LiveSessionRepo.overlapping`）：只有**表内已有记录**的时段才拦（409）。
+    只有 self 快照（本工具轮询观测到的）的时段**放行** —— 手动行随后会被并进那个 self 组
+    （`merged()` 把快照并进组），日历上仍然是一条，而这一条从此有了 id/标题/录播地址，
+    正是用户想要的结果。拦下它反而会让"给自动观测到的场次补录播地址"变成做不到的事。
+    """
+    account = AccountRepo(db).get(account_id)
+    if not account:
+        raise HTTPException(404, f"Account id={account_id} 不存在")
+    start, end, title, vod = _manual_inputs(data)
+    _check_span(start, end)
+    repo = LiveSessionRepo(db)
+    hit = repo.overlapping(account_id, start, end)
+    if hit:
+        raise HTTPException(409, _conflict_message(hit))
+    row = repo.create_manual(account_id, platform=account.platform,
+                             start_at=start, end_at=end, title=title, vod_url=vod)
+    return _manual_detail(db, account_id, row.live_id)
+
+
+@router.patch("/account/{account_id}/live-sessions/{live_id}",
+              response_model=LiveSessionDetailOut)
+def update_live_session(account_id: int, live_id: str, data: LiveSessionUpdateIn,
+                        db: Session = Depends(get_db)):
+    """编辑场次（B2）：**手动记录的**可改时间/标题/录播地址；**自动抓来的只能补录播地址**。
+
+    为什么自动抓来的不许改时间/标题：那两样下一次同步就会被平台数据覆盖回去
+    （`LiveSessionRepo._upsert` 每次都用非空值刷新），用户会看到"我改的又变回去了"。
+    录播地址反过来 —— 它**没有任何自动源**，只有用户手上有，所以谁都改得。
+
+    `vod_url: ""` = 清空（`exclude_unset` 语义：显式传才算数）。
+    """
+    if not AccountRepo(db).get(account_id):
+        raise HTTPException(404, f"Account id={account_id} 不存在")
+    repo = LiveSessionRepo(db)
+    row = repo.get_row(account_id, live_id)
+    if row is None:
+        raise HTTPException(404, f"场次 live_id={live_id} 不在表内（自动推导的场次没有 id，不能编辑）")
+    fields = data.model_dump(exclude_unset=True)
+    if not fields:
+        raise HTTPException(422, "没有要更新的字段")
+    if row.source != "manual" and set(fields) - {"vod_url"}:
+        raise HTTPException(
+            400, f"这一场是自动抓取的（来源 {row.source}），只能补录播地址 —— "
+                 "时间/标题来自平台，改了下次同步会被覆盖回去")
+    apply: dict = {}
+    if "start_at" in fields or "end_at" in fields or "title" in fields or "vod_url" in fields:
+        start, end, title, vod = _manual_inputs(data)
+        if "start_at" in fields:
+            apply["start_at"] = start
+        if "end_at" in fields:
+            apply["end_at"] = end          # 显式 null = 清空（改回"进行中"）
+        if "title" in fields:
+            apply["title"] = title
+        if "vod_url" in fields:
+            apply["vod_url"] = vod         # "" → None（清空用户填的链接）
+    new_start = apply.get("start_at", row.start_at)
+    new_end = apply.get("end_at", row.end_at) if "end_at" in fields else row.end_at
+    _check_span(new_start, new_end)
+    if "start_at" in apply or "end_at" in apply:
+        hit = repo.overlapping(account_id, new_start, new_end, exclude_live_id=live_id)
+        if hit:
+            raise HTTPException(409, _conflict_message(hit))
+    repo.update_row(row, apply)
+    return _manual_detail(db, account_id, live_id)
+
+
+@router.delete("/account/{account_id}/live-sessions/{live_id}",
+               response_model=LiveSessionDeleteOut)
+def delete_live_session(account_id: int, live_id: str, db: Session = Depends(get_db)):
+    """删除**手动记录**的场次（B2）。
+
+    两条口径：
+
+    - **自动抓来的不给删**（400）：下一次同步会把它放回来 ——「删了又回来」比
+      「不许删」更像故障，用户会以为删除功能坏了；
+    - 删掉的只是**手动那一行**：如果这段时间本工具也观测到了直播，它会退回成
+      自动场次（日历上还在，只是没有标题/录播地址了）。
+
+    该场的分类校正一并清掉（`LiveSessionRepo.delete_row`）：留着就是一份悬空记录。
+    """
+    if not AccountRepo(db).get(account_id):
+        raise HTTPException(404, f"Account id={account_id} 不存在")
+    repo = LiveSessionRepo(db)
+    row = repo.get_row(account_id, live_id)
+    if row is None:
+        raise HTTPException(404, f"场次 live_id={live_id} 不在表内（自动推导的场次没有 id，不能删除）")
+    if row.source != "manual":
+        raise HTTPException(400, f"只能删除手动记录的场次（这一条来源是 {row.source}）")
+    repo.delete_row(row)
+    return LiveSessionDeleteOut(deleted=True, live_id=live_id)
 
 
 @router.get("/account/{account_id}/live-sessions/{live_id}/upstream",

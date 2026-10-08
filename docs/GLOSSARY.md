@@ -36,7 +36,8 @@ budget: 300
 | **转发 / repost** | 转发的他人动态（`type=repost`，`body_json.origin`） | `fetcher._extract_origin` | `scripts/repair_repost_origin.py` |
 | **专栏 / article** | B 站 cv 长文（`type=article`，Quill Delta 富文本） | `fetcher.fetch_article_detail`；`_delta_to_plain_text` | `RichText` 渲染 |
 | **直播卡片 / live_rcmd** | 动态流里的开播卡片，**不入 posts**，转存 `live_sessions` | `fetcher._is_live_rcmd/_map_live_rcmd`；`scheduler._route_live_item` | 见「直播场次」 |
-| **直播场次 / live session** | 一次开播（标题/起止/分区/收益/弹幕数），三源合一 | `models/vtuber.py::LiveSession`；`LiveSessionRepo.merged()` | danmakus + feed + self 快照 |
+| **直播场次 / live session** | 一次开播（标题/起止/分区/收益/弹幕数/录播地址），多源合一 | `models/vtuber.py::LiveSession`；`LiveSessionRepo.merged()` | danmakus + feed + **manual（用户手填）** + self 快照 |
+| **手动记录 / manual 场次**（B2，devlog/454） | 用户在日历上补的一场：时间 + 可选标题 + 可选**录播地址**；`source='manual'`，id 是自造的 `manual-<uuid4>` | 端点 `POST/PATCH/DELETE /account/{id}/live-sessions[/{live_id}]`；纯口径 `app/domain/live_manual.py`；界面 `components/live/ManualSessionDialog.tsx` | 只有它**可改时间/可删**（自动抓来的只能补录播地址）；录播地址在合并里只增不减（不变量 39） |
 | **直播状态三态 / live_status** | **0 未开播 / 1 直播中 / 2 轮播**（房间里循环放录像）—— 判"是不是在播"**只认 1**：轮播既不该触发开播通知，也代表上一场已经结束 | `app/core/live_status.py`（单一真源）；消费方 `scheduler.live_sweep_core`（开播边沿）、`AccountStatSnapshotRepo.live_sessions`（自观测场次）、前端 `utils/accountHistory.ts::liveStatusLabel` | 2026-10-02（devlog/276）：原先多处当布尔用 ⇒ 恬豆发芽了两次 `0→2` 各推一条「开播了」，顶栏胶囊挂着一条**从未发生**的开播；自观测场次也只认 0 收场 ⇒ `1→2→1` 被并成一场（明前奶绿那场时长跨天） |
 | **统计快照 / snapshot** | 账号粉丝数/直播状态时间序列（涨粉趋势、场次推导的数据源） | `models/vtuber.py::AccountStatSnapshot`；`scheduler._record_stat_snapshot` | T0 直播跳变也写一条 |
 | **礼物日聚合 / gift day** | 第三方日粒度礼物/大航海/SC 金额 | `models/vtuber.py::LiveGiftDay`；`externals/zeroroku.py` | 金额存字符串保精度 |
@@ -217,7 +218,7 @@ budget: 300
 
 | 术语 | 含义 | 代码位置 | 关联 |
 |---|---|---|---|
-| **迁移链 / MIGRATION_HEAD** | alembic `a001→f012`（25 个版本） | `alembic/versions/`、`app/main.py::MIGRATION_HEAD` | 同步纪律 = 不变量 3（`docs/backend/ARCHITECTURE.md` §6）；测试断言一致 |
+| **迁移链 / MIGRATION_HEAD** | alembic `a001→f013`（26 个版本） | `alembic/versions/`、`app/main.py::MIGRATION_HEAD` | 同步纪律 = 不变量 3（`docs/backend/ARCHITECTURE.md` §6）；测试断言一致 |
 | **一键发布 / release.py** | 十步发布编排：预检→版本同步→门禁→打版→产物校验→提交/tag→推送→Release→报告 | `scripts/release.py`；手册 `docs/ops/RELEASE.md`；上传 `scripts/upload_release_assets.py`（幂等） | 守卫：工作树脏/notes 缺失/版本不递增/NSIS 打平/**文档漂移**/tag 冲突 → 停；`--dry-run`、`--from <步骤>` 续跑；推完自动对齐本地 `origin/<分支>` tracking ref（按 URL 推送不会自动更新它） |
 | **端到端上游冒烟 / smoke_upstream** | 数据目录副本 + 真后端 + 真上游，跑"只有真环境才暴露"的链路（B 站检索 / uid 直查 / 池外收录 / 场次上游） | `scripts/smoke_upstream.py`（`--cold` = 空数据目录 + 清空凭据）；`dev_check.py --upstream` | `--capture` 顺带刷新真实 fixtures；skip 必须打印原因，不冒充通过 |
 | **真实 fixtures** | 真上游回包 / 真 `installer.nsi` 片段 / 真索引条目 —— 判据的"真形状"依据 | `tests/fixtures/`（`smoke_upstream.py --capture` 生成；专栏 HTML 真拉自 `x/article/view`）；用例 `tests/test_real_fixtures.py` | 「新判据至少一条用例吃真实数据」= 不变量 22（`docs/backend/ARCHITECTURE.md` §6） |

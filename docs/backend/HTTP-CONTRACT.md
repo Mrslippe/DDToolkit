@@ -111,6 +111,9 @@ retire-when: HTTP 层换框架，或路由整体重排
 | GET `/account/{id}/live-sessions/{live_id}/wordcloud` | 按需自建词云（v3 原始弹幕 + jieba 分词；**用户点按钮才调**，不落库，devlog/061） |
 | PUT `/account/{id}/live-sessions/{live_id}/category` | 手工校正分类（反哺词库） |
 | DELETE `/account/{id}/live-sessions/{live_id}/category` | 取消校正 |
+| POST `/account/{id}/live-sessions` | **手动记录一场**（B2，devlog/454）：体 `{start_at, end_at?, title?, vod_url?}` ⇒ **201** + 合并后的场次详情。时段与**表内已有记录**重叠 ⇒ **409**（`detail` 是一句点名撞上哪一场的中文）；录播地址不合格 / 结束早于开始 / 标题超 80 字 ⇒ **422** + 中文原因；账号不存在 ⇒ 404。只有 self 快照的时段**放行**（合并会把快照并进这一组） |
+| PATCH `/account/{id}/live-sessions/{live_id}` | 编辑场次（B2）：只传要改的字段（`exclude_unset`；`end_at: null` = 清空改回"进行中"，`vod_url: ""` = 清空录播）。**自动抓来的场次只允许 `vod_url`** ⇒ 其余字段 **400**（下次同步会覆盖回去）；不在表内（self 推导的虚拟场次）⇒ **404**；空体 ⇒ 422 |
+| DELETE `/account/{id}/live-sessions/{live_id}` | 删除**手动记录**的场次（B2）⇒ `{deleted, live_id}`；自动抓来的 ⇒ **400**（下次同步会放回来）；不在表内 ⇒ 404。同时清掉该场的分类校正（不留悬空记录） |
 
 **活动 / 预约 / 第三方索引**
 

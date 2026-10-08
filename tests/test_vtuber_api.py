@@ -45,7 +45,7 @@ from app.core.database import Base, get_db
 from app.models.vtuber import (VTuber, Account, Post, AccountStatSnapshot,
                                LiveSession, LiveCategoryOverride, LiveGiftDay,
                                VtuberEvent, VtuberFieldHistory)
-from app.repositories.vtuber_repo import AccountStatSnapshotRepo
+from app.repositories.vtuber_repo import AccountStatSnapshotRepo, LiveSessionRepo
 
 
 def override_get_db():
@@ -1275,6 +1275,278 @@ def test_live_sessions_endpoint_merged(client):
     assert s["category_from"] == "title"
     # 账号不存在 → 404
     assert client.get("/account/99999/live-sessions").status_code == 404
+
+
+# ── 手动记录场次（B2，devlog/454：需求 2 / 2.1） ─────────────────────
+
+_VOD = "https://www.bilibili.com/video/BV1xx411c7mD"
+
+
+def _mk_vtuber_account(client, uid="123"):
+    vid = client.post("/vtuber", json={"name": "测试", "birthday": "09-07"}).json()["id"]
+    aid = client.post(f"/vtuber/{vid}/accounts",
+                      json={"platform": "bilibili", "platform_uid": uid}).json()["id"]
+    return vid, aid
+
+
+def _add_row(aid, live_id="uuid-a", *, source="danmakus", title="深夜杂谈",
+             start=datetime(2026, 10, 8, 12, 0), end=datetime(2026, 10, 8, 14, 0),
+             **kw):
+    """直接塞一条表内场次（naive UTC，与库内口径一致）。"""
+    db = TestingSession()
+    db.add(LiveSession(account_id=aid, source=source, live_id=live_id, title=title,
+                       start_at=start, end_at=end, **kw))
+    db.commit()
+    db.close()
+
+
+def test_manual_live_session_create_and_list(client):
+    """① 手动补一场：进日历列表、带 `manual` 标记、录播地址是**规范形态**、时间是 UTC。"""
+    _, aid = _mk_vtuber_account(client)
+    resp = client.post(f"/account/{aid}/live-sessions", json={
+        "start_at": "2026-10-08T20:30:00+08:00",
+        "end_at": "2026-10-08T22:00:00+08:00",
+        "title": " 深夜歌回 ",
+        "vod_url": "BV1xx411c7mD",
+    })
+    assert resp.status_code == 201, resp.text
+    d = resp.json()
+    assert d["source"] == "manual" and d["manual"] is True
+    assert d["live_id"].startswith("manual-")
+    assert d["live_title"] == "深夜歌回"                      # 首尾空白清掉
+    assert d["vod_url"] == _VOD                               # 裸 BV 号 → 可点开的外链
+    assert d["start_at"].startswith("2026-10-08T12:30:00")    # +08:00 → UTC
+    assert d["duration_minutes"] == 90
+    assert d["category_from"] != ""                           # 走的是同一条推断链路
+
+    lst = client.get(f"/account/{aid}/live-sessions").json()
+    assert len(lst) == 1
+    assert lst[0]["manual"] is True and lst[0]["vod_url"] == _VOD
+    assert lst[0]["live_id"] == d["live_id"]
+
+    db = TestingSession()
+    row = db.query(LiveSession).filter(LiveSession.account_id == aid).one()
+    db.close()
+    assert row.start_at == datetime(2026, 10, 8, 12, 30)      # 库里是 naive UTC
+    assert row.source == "manual" and row.vod_url == _VOD
+
+
+def test_manual_live_session_conflict_with_existing_row(client):
+    """② 表内已有记录占着的时段 → 409，原因里**点名撞上哪一场**，且什么都没写进去。"""
+    _, aid = _mk_vtuber_account(client)
+    _add_row(aid, "uuid-a", title="深夜杂谈",
+             start=datetime(2026, 10, 8, 12, 0), end=datetime(2026, 10, 8, 14, 0))
+
+    resp = client.post(f"/account/{aid}/live-sessions", json={
+        "start_at": "2026-10-08T21:00:00+08:00",       # = 13:00Z，落在 12:00–14:00Z 里
+        "end_at": "2026-10-08T23:00:00+08:00",
+    })
+    assert resp.status_code == 409
+    detail = resp.json()["detail"]
+    assert "深夜杂谈" in detail and "live_id=uuid-a" in detail
+    assert "编辑它" in detail                                  # 说清下一步怎么做
+
+    db = TestingSession()
+    assert db.query(LiveSession).filter(LiveSession.account_id == aid).count() == 1
+    db.close()
+
+    # 相邻但**不**重叠 → 放行（端点相等才算撞，见 sessions_overlap 的口径）
+    ok = client.post(f"/account/{aid}/live-sessions", json={
+        "start_at": "2026-10-08T18:00:00+08:00",       # = 10:00–11:00Z
+        "end_at": "2026-10-08T19:00:00+08:00"})
+    assert ok.status_code == 201, ok.text
+
+
+def test_manual_over_self_snapshot_merges_into_one(client):
+    """③ 只有 self 快照（本工具观测到）的时段**不算冲突**：手填的那条会与它并成一条。
+
+    这条路径的存在理由：self 场次没有 id，改不了也删不掉 —— 这是"给自动观测到的场次
+    补上标题/录播地址"唯一做得到的入口。若把 self 重叠也判成冲突，这件事就做不成了。
+    """
+    _, aid = _mk_vtuber_account(client)
+    db = TestingSession()
+    repo = AccountStatSnapshotRepo(db)
+    repo.add(aid, 1000, 1, "深夜歌回", captured_at=datetime(2026, 10, 8, 12, 0))
+    repo.add(aid, 1000, 0, None, captured_at=datetime(2026, 10, 8, 14, 0))
+    db.commit()          # ⚠️ `add` 只 flush 前不 commit（调用方收口）—— 漏了这行快照会被回滚掉
+    db.close()
+
+    resp = client.post(f"/account/{aid}/live-sessions", json={
+        "start_at": "2026-10-08T20:00:00+08:00", "end_at": "2026-10-08T22:00:00+08:00",
+        "title": "深夜歌回", "vod_url": "BV1xx411c7mD"})
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["live_id"].startswith("manual-")
+
+    lst = client.get(f"/account/{aid}/live-sessions").json()
+    assert len(lst) == 1                                       # 并成一条，日历上不重复
+    assert lst[0]["source"] == "manual+self"
+    assert lst[0]["manual"] is True and lst[0]["vod_url"] == _VOD
+    assert lst[0]["live_title"] == "深夜歌回"
+
+
+def test_manual_vod_survives_room_merge(client):
+    """④ 手动行与自动行**并成一条**时，用户填的录播地址不许被冲掉。
+
+    动机（真会发生的静默数据丢失）：合并的高优分支是 `g.update(_row_dict(row))`，
+    而自动行的 `vod_url` 是 None —— 整体替换会把用户手填的地址抹成空。
+    这条用 `room` 分支（同 room_id 的双源同场）触发 `_merge_row_into_group`。
+    """
+    _, aid = _mk_vtuber_account(client)
+    r = client.post(f"/account/{aid}/live-sessions", json={
+        "start_at": "2026-10-08T20:00:00+08:00", "end_at": "2026-10-08T22:00:00+08:00",
+        "title": "歌回", "vod_url": "BV1xx411c7mD"})
+    assert r.status_code == 201, r.text
+    db = TestingSession()
+    row = db.query(LiveSession).filter(LiveSession.account_id == aid).one()
+    row.room_id = "12345"                                      # 手动入口不收 room_id，测试补上
+    db.commit()
+    LiveSessionRepo(db).upsert_feed(aid, "999", {
+        "title": "歌回", "room_id": "12345",
+        "start_at": datetime(2026, 10, 8, 12, 5), "end_at": datetime(2026, 10, 8, 14, 0),
+        "danmakus_count": 500})
+    db.commit()
+    db.close()
+
+    lst = client.get(f"/account/{aid}/live-sessions").json()
+    assert len(lst) == 1
+    assert lst[0]["source"] == "feed+manual"                   # feed 优先级更高（对外 id 用真 id）
+    assert lst[0]["manual"] is True
+    assert lst[0]["vod_url"] == _VOD                           # ← 反例：None（被合并冲掉）
+
+
+def test_manual_vod_survives_dup_merge(client):
+    """④b 同上，但走 `dup` 分支（时间重叠 + 同标题骨架）——另一处 `g.update(_row_dict)`。"""
+    _, aid = _mk_vtuber_account(client)
+    r = client.post(f"/account/{aid}/live-sessions", json={
+        "start_at": "2026-10-08T20:00:00+08:00", "end_at": "2026-10-08T22:00:00+08:00",
+        "title": "歌回", "vod_url": "BV1xx411c7mD"})
+    assert r.status_code == 201, r.text
+    db = TestingSession()
+    LiveSessionRepo(db).upsert_feed(aid, "999", {
+        "title": "歌回",                                  # 同骨架 + 时间重叠 ⇒ dup
+        "start_at": datetime(2026, 10, 8, 12, 5), "end_at": datetime(2026, 10, 8, 14, 0),
+        "danmakus_count": 500})
+    db.commit()
+    db.close()
+
+    lst = client.get(f"/account/{aid}/live-sessions").json()
+    assert len(lst) == 1 and lst[0]["manual"] is True
+    assert lst[0]["vod_url"] == _VOD
+
+
+def test_update_manual_session_fields(client):
+    """⑤ 手动场次可改标题/录播地址、可清空录播；空 body → 422；改到冲突时段 → 409。"""
+    _, aid = _mk_vtuber_account(client)
+    live_id = client.post(f"/account/{aid}/live-sessions", json={
+        "start_at": "2026-10-08T20:00:00+08:00", "end_at": "2026-10-08T22:00:00+08:00",
+        "title": "歌回", "vod_url": "BV1xx411c7mD"}).json()["live_id"]
+
+    d = client.patch(f"/account/{aid}/live-sessions/{live_id}",
+                     json={"title": " 改过的标题 ", "vod_url": ""}).json()
+    assert d["live_title"] == "改过的标题" and d["vod_url"] is None     # "" = 清空
+    assert d["manual"] is True
+
+    db = TestingSession()
+    assert db.query(LiveSession).filter(LiveSession.account_id == aid).one().vod_url is None
+    db.close()
+
+    assert client.patch(f"/account/{aid}/live-sessions/{live_id}", json={}).status_code == 422
+    # 改结束时间：显式 null = 改回"进行中"
+    d = client.patch(f"/account/{aid}/live-sessions/{live_id}",
+                     json={"end_at": None}).json()
+    assert d["end_at"] is None and d["duration_minutes"] is None
+
+    _add_row(aid, "uuid-b", start=datetime(2026, 10, 9, 12, 0),
+             end=datetime(2026, 10, 9, 14, 0))
+    hit = client.patch(f"/account/{aid}/live-sessions/{live_id}",
+                       json={"start_at": "2026-10-09T20:00:00+08:00",
+                             "end_at": "2026-10-09T22:00:00+08:00"})
+    assert hit.status_code == 409 and "uuid-b" in hit.json()["detail"]
+
+
+def test_update_auto_row_only_allows_vod(client):
+    """⑥ 自动抓来的场次：改标题/时间 → 400（下次同步会被覆盖回去）；补录播地址 → 200。"""
+    _, aid = _mk_vtuber_account(client)
+    _add_row(aid, "uuid-a")
+
+    bad = client.patch(f"/account/{aid}/live-sessions/uuid-a", json={"title": "我改的"})
+    assert bad.status_code == 400 and "只能补录播地址" in bad.json()["detail"]
+
+    ok = client.patch(f"/account/{aid}/live-sessions/uuid-a",
+                      json={"vod_url": "https://www.bilibili.com/video/BV1xx411c7mD?p=2"})
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["vod_url"] == _VOD + "?p=2"
+    assert ok.json()["manual"] is False                        # 没变成手动场次
+
+    db = TestingSession()
+    assert db.query(LiveSession).filter(LiveSession.account_id == aid).one().vod_url == _VOD + "?p=2"
+    db.close()
+
+
+def test_delete_manual_session(client):
+    """⑦ 删除只对手动场次开放，并级联清掉分类校正；自动行 400、虚拟场次 404。"""
+    _, aid = _mk_vtuber_account(client)
+    live_id = client.post(f"/account/{aid}/live-sessions", json={
+        "start_at": "2026-10-08T20:00:00+08:00", "end_at": "2026-10-08T22:00:00+08:00",
+        "title": "歌回"}).json()["live_id"]
+    assert client.put(f"/account/{aid}/live-sessions/{live_id}/category",
+                      json={"category": "song"}).status_code in (200, 204)
+
+    r = client.delete(f"/account/{aid}/live-sessions/{live_id}")
+    assert r.status_code == 200 and r.json() == {"deleted": True, "live_id": live_id}
+    assert client.get(f"/account/{aid}/live-sessions").json() == []
+
+    db = TestingSession()
+    assert db.query(LiveSession).filter(LiveSession.account_id == aid).count() == 0
+    assert db.query(LiveCategoryOverride).filter(
+        LiveCategoryOverride.account_id == aid).count() == 0   # 不留悬空校正
+    db.close()
+
+    _add_row(aid, "uuid-a")
+    assert client.delete(f"/account/{aid}/live-sessions/uuid-a").status_code == 400
+    # 虚拟场次（self 推导的）在表里没有行 → 404（不是 500，也不是静默成功）
+    assert client.delete(f"/account/{aid}/live-sessions/self-xyz").status_code == 404
+    assert client.delete("/account/99999/live-sessions/x").status_code == 404
+
+
+def test_manual_session_rejects_bad_input(client):
+    """⑧ 不合格输入给**一句中文 422**（不是 500，也不是给机器看的结构）。"""
+    _, aid = _mk_vtuber_account(client)
+    base = {"start_at": "2026-10-08T20:00:00+08:00"}
+
+    bad = client.post(f"/account/{aid}/live-sessions",
+                      json={**base, "vod_url": "https://b23.tv/abc123"})
+    assert bad.status_code == 422 and "短链" in bad.json()["detail"]
+
+    span = client.post(f"/account/{aid}/live-sessions", json={
+        "start_at": "2026-10-08T20:00:00+08:00", "end_at": "2026-10-08T19:00:00+08:00"})
+    assert span.status_code == 422 and "结束时间" in span.json()["detail"]
+
+    long_title = client.post(f"/account/{aid}/live-sessions",
+                             json={**base, "title": "标" * 81})
+    assert long_title.status_code == 422 and "80 字" in long_title.json()["detail"]
+
+    assert client.post("/account/99999/live-sessions", json=base).status_code == 404
+    # 什么都没写进去（失败不留半条记录）
+    db = TestingSession()
+    assert db.query(LiveSession).filter(LiveSession.account_id == aid).count() == 0
+    db.close()
+
+
+def test_manual_naive_datetime_is_read_as_local_wall_clock(client):
+    """⑨ 不带偏移的时间（`datetime-local` 的产物）按**本地时区**解释并原样显示回来。
+
+    ⚠️ 本条的强度取决于运行机器的时区：在 UTC 机器上它**恒真**（真空）。
+    所以"当成 UTC 存"这个具体错法由 `tests/test_live_manual.py` 里那条
+    **注入 +08:00** 的用例杀死（与时区无关）；这里守的是"这条链路确实调了那个函数"。
+    """
+    _, aid = _mk_vtuber_account(client)
+    d = client.post(f"/account/{aid}/live-sessions",
+                    json={"start_at": "2026-10-08T20:30", "end_at": "2026-10-08T22:00"}
+                    ).json()
+    shown = datetime.fromisoformat(d["start_at"]).astimezone()   # 前端就是这样显示的
+    assert (shown.year, shown.month, shown.day, shown.hour, shown.minute) == \
+        (2026, 10, 8, 20, 30)
 
 
 # ── 直播分类校正（v0.9.x 类型引擎 v2 第⑦信号） ─────────────────────

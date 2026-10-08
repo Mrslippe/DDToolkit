@@ -40,6 +40,9 @@ LINK_SOURCES = (
     "app/services/platforms/xiaohongshu.py",
     "app/services/platforms/douyin.py",
     "app/services/platforms/bilibili_posts.py",
+    # 手动填的录播地址（B2，`devlog/454`）：用户贴什么都行，但**入库前**会被收敛成
+    # 这里的 `VOD_CANONICAL`，所以它和上面的平台模块一样是"链接产出者"。
+    "app/domain/live_manual.py",
 )
 
 #: 用户可见链接的主机形状（**不含 api./passport.** 这类接口域名）
@@ -119,3 +122,26 @@ def test_user_facing_hosts_in_sources_are_allowlisted():
     assert {"t.bilibili.com", "m.weibo.cn"} <= scanned, (
         f"扫描器没扫到已知的两个主机 ⇒ 正则坏了（扫到的是 {sorted(scanned)}）"
     )
+
+
+def test_manual_vod_urls_are_allowlisted():
+    """③ 手动填的录播地址（B2，`devlog/454`）**产出**的主机必须在白名单里。
+
+    这一条与 ①/② 的区别：①② 扫的是"源码里写了什么链接"，这里问的是
+    "**跑一遍**规范化之后到底产出什么" —— `normalize_vod` 会把用户的各种形态
+    （裸 BV 号 / 移动端域名 / 带跟踪参数的分享链接）收敛成一个固定主机，
+    白名单那边只认精确主机，所以两边必须由**机器**对账：
+    改 `VOD_CANONICAL`（比如改成 `m.bilibili.com` 或 `b23.tv`）而没同步白名单 ⇒ 这条红，
+    而不是等用户点了「打开录播」才发现打不开。
+    """
+    from app.domain.live_manual import normalize_vod
+
+    allowed = _allowlist()
+    cases = ["BV1xx411c7mD", "https://m.bilibili.com/video/BV1xx411c7mD?p=3"]
+    for raw in cases:
+        url = normalize_vod(raw)
+        host = urlsplit(url).hostname or ""
+        assert host in allowed, (
+            f"{raw!r} 规范化成 {url}，主机 {host!r} 不在 `EXTERNAL_HOSTS` 里 "
+            f"⇒ 用户点「打开录播」会弹「这个主机不在允许打开的名单里」"
+        )

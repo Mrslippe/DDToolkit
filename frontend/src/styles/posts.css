@@ -4613,6 +4613,40 @@ img.hero-avatar {
   color: var(--c-accent);
 }
 
+/* 「手动记录」标记（B2，devlog/454）：与「已校正」同规格同位置 —— 两者都是"这一行的
+   某个字段被用户改过"的提示，配色也共用强调色（不再新造一种颜色）。 */
+.lc-pop-manual {
+  flex: none;
+  font-size: 10px;
+  color: var(--c-accent);
+}
+
+/* 详情弹窗头部的「编辑/补录播地址」铅笔（B2）：与关闭按钮同尺寸同悬停配方，
+   放在它左边 —— 头部驻留区只有这两个按钮，位置固定不随内容滚动。 */
+.lc-dlg-edit {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  color: var(--c-text-sub);
+}
+
+.lc-dlg-edit:hover {
+  background: rgba(15, 23, 42, 0.05);
+  color: var(--c-text-main);
+}
+
+/* 「录播」行的链接（B2）：地址已由服务端规范成白名单内形态 ⇒ 这里只管可读性
+   （BV 号当文字、完整地址进 title，长链接不把行撑开）。 */
+.lc-dlg-vod {
+  color: var(--c-primary-deep);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 /* ── 场次详情弹窗（user 2026-09-07：点击日期格 → 独立弹窗；重构参考图布局）──
    头部（胶囊+标题+日期副行+关闭）→ 两栏主体（左 200px 封面图+状态徽章 ｜
    右直播信息行式卡片）→ 满宽「弹幕信息」「内容分析」卡片；
@@ -5258,6 +5292,13 @@ img.hero-avatar {
   animation: lc-dlg-pop-out 0.16s cubic-bezier(0.55, 0, 0.55, 0.2) both;
 }
 
+/* 手动记录/编辑弹窗的退场（B2）：与 `.lc-dlg` **分两条写**，不合并选择器 ——
+   `LiveSessionDialog.test.tsx` 用 `\.lc-dlg\[data-state='closed'\]\s*\{[^}]*animation:`
+   查上面那条声明，合并成 `A,\nB {` 之后那个正则就匹配不到了（会假红）。 */
+.lc-ms[data-state='closed'] {
+  animation: lc-dlg-pop-out 0.16s cubic-bezier(0.55, 0, 0.55, 0.2) both;
+}
+
 @keyframes lc-dlg-fade {
   from { opacity: 0; }
   to { opacity: 1; }
@@ -5281,6 +5322,7 @@ img.hero-avatar {
 /* reduced-motion：退场也压到一帧（与 .image-viewer-closing 同款口径） */
 @media (prefers-reduced-motion: reduce) {
   .lc-dlg[data-state='closed'],
+  .lc-ms[data-state='closed'],
   .lc-dlg-backdrop[data-state='closed'] {
     animation-duration: 0.01ms;
   }
@@ -6828,3 +6870,134 @@ img.hero-avatar {
   margin-top: 4px;
 }
 .tp-foot-note { font-size: 11.5px; color: var(--c-text-sub); }
+
+/* ── 手动记录/编辑场次弹窗（B2，devlog/454）─────────────────────────────
+   与场次详情弹窗共用遮罩（`.lc-dlg-backdrop`）与浮片族配色；面板宽度**定死**
+   而不是跟内容走 —— `datetime-local` 的宽度由浏览器决定，跟内容走会随输入抖动。
+   层级：同一遮罩 z=60，面板 z=61；两个弹窗同时开时靠 DOM 顺序（后渲染的在上），
+   这与 Radix 自己的做法一致（`.lc-dlg` 的注释说明了同一件事）。 */
+.lc-ms {
+  position: relative;
+  z-index: 61;
+  width: 420px;
+  max-width: calc(100vw - 32px);
+  display: flex;
+  flex-direction: column;
+  border-radius: 12px;
+  background: var(--c-bg-card);
+  border: 1px solid var(--c-border);
+  box-shadow: var(--shadow-dialog);
+  animation: lc-dlg-pop 0.2s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.lc-ms-head {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 16px 18px 12px;
+  border-bottom: 1px solid var(--c-border);
+}
+
+.lc-ms-title { font-size: 15px; font-weight: 600; color: var(--c-text-main); }
+
+.lc-ms-sub { font-size: 11.5px; color: var(--c-text-sub); }
+
+.lc-ms-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 18px 6px;
+}
+
+.lc-ms-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* 标签定宽 44px：四个输入框左缘对齐（时间/标题/录播混排时不对齐最显乱） */
+.lc-ms-label {
+  flex: none;
+  width: 44px;
+  font-size: 12.5px;
+  color: var(--c-text-sub);
+}
+
+.lc-ms-input {
+  flex: 1 1 180px;
+  min-width: 0;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  background: #fff;
+  font-size: 12.5px;
+  color: var(--c-text-main);
+}
+
+/* 聚焦态用项目统一的焦点环令牌（`--focus-ring` = 2px 主色）——
+   `tests/test_focus_contract.py` 会红在"焦点规则里出现散落色"，而 `outline: none`
+   更是直接把键盘焦点环抹掉（14a 那条契约盯的就是这件事）。 */
+.lc-ms-input:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.lc-ms-input:disabled {
+  background: #f4f2f3;
+  color: var(--c-text-sub);
+  cursor: default;
+}
+
+.lc-ms-hint { flex: 1 1 100%; padding-left: 54px; font-size: 11px; color: var(--c-text-sub); opacity: .85; }
+
+/* 自动抓取场次的说明 + 服务端 409/422 的中文原因：两者都是"要用户读一句话"，
+   同一档视觉（不抢焦点、但看得见） */
+.lc-ms-note { margin: 0; font-size: 11.5px; line-height: 16px; color: var(--c-text-sub); }
+
+.lc-ms-error {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 16px;
+  color: #b3352f;
+}
+
+.lc-ms-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px 14px;
+}
+
+.lc-ms-spacer { flex: 1; }
+
+.lc-ms-del-confirm { display: inline-flex; align-items: center; gap: 8px; }
+
+.lc-ms-btn {
+  height: 28px;
+  padding: 0 14px;
+  border: 1px solid var(--c-border);
+  border-radius: 999px;
+  background: #fff;
+  font-size: 12.5px;
+  color: var(--c-text-main);
+}
+
+.lc-ms-btn:hover:not(:disabled) { background: #f7f5f6; }
+
+.lc-ms-btn:disabled { opacity: .55; cursor: default; }
+
+.lc-ms-btn.primary {
+  border-color: transparent;
+  background: var(--c-primary-deep);
+  color: #fff;
+}
+
+.lc-ms-btn.primary:hover:not(:disabled) { background: var(--c-primary); }
+
+.lc-ms-btn.danger { border-color: transparent; background: var(--sel-bg); color: #b3352f; }
+
+.lc-ms-btn.danger:hover:not(:disabled) { background: var(--sel-bg-hover); }

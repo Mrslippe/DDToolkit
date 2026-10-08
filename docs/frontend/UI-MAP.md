@@ -881,9 +881,9 @@ keyframes 只会重启**）。
 | 名称 | 类名 | 说明 |
 |---|---|---|
 | 视图容器 | `<OverlayScroll className="archive-view">` | **根** = `flex:1;min-height:0`；滚动体 `.archive-view .os-scroll` = column 居中 gap 14 padding `16px 20px 24px` |
-| 直播日历 | `<LiveCalendar>` `.live-calendar` | **卡 870×631 · 4px 圆角 · `--pill-shadow`**（定宽上限 870：拉宽不变；恒高 631、不参与 column 压缩）。结构：标题行（`直播日历` 16.5/600 + 空月 note）→ 导航行（月 nav 浮片三连 + 当月类型统计胶囊）→ 星期表头 → 6 行 ×7 列月历。详见 B3 |
+| 直播日历 | `<LiveCalendar>` `.live-calendar` | **卡 870×631 · 4px 圆角 · `--pill-shadow`**（定宽上限 870：拉宽不变；恒高 631、不参与 column 压缩）。结构：标题行（`直播日历` 16.5/600 + 空月 note）→ 导航行（月 nav 浮片**四连**：上月 / 月份 / 下月 / **「+」手动记录**〔B2，`devlog/454`〕 + 当月类型统计胶囊）→ 星期表头 → 6 行 ×7 列月历。详见 B3（详情弹窗，含「录播」行）、B4（手动记录弹窗） |
 | └ **未来预约标记**（R13，2026-09-15，devlog/088） | `.lc-cell.has-resv` / `[data-resv-count]` / `.lc-resv-time` / `.lc-resv-title` / `.lc-resv-mini` / 浮层 `.lc-resv-badge`、`.lc-resv-item` | 来自**动态里的直播预约**（服务端 `future_reservations` 解析 `body_json.reservation`）。口径：① **不改九类色系** —— 只在格子左缘加一道强调粉竖条 + 文案用粉；② **无场次但有预约的日子徽章是「预约」**（不是待定/休息：报待定等于把"确定会开播"这条已知信息藏起来）；③ 格内计数槽放**预约人数**（不重复"预约"二字）；④ 已有场次的日子预约压成一行小字 `.lc-resv-mini`（不与场次争主位）；⑤ hover 浮层顶部单列预约块（`.lc-pop-head` 抬头显示 `N 场 · M 预约`），**只有预约没有场次的日子也能 hover 查看**。护栏：`ui_probe --reservations`（脚本往数据副本里**种一条明天的预约**，断言格子徽章/时刻/人数/标题 + 浮层条目） |
-| 粉丝趋势 | `<FanTrendChart>` `.fan-chart` | **卡 870×460 · 4px 圆角 · `--pill-shadow`**；标题 16.5/600 同 `lc-title` 规格。**ECharts 6.1 架构**（canvas 全程自绘，React 只负责卡片壳与头部控制）。详见 B4 |
+| 粉丝趋势 | `<FanTrendChart>` `.fan-chart` | **卡 870×460 · 4px 圆角 · `--pill-shadow`**；标题 16.5/600 同 `lc-title` 规格。**ECharts 6.1 架构**（canvas 全程自绘，React 只负责卡片壳与头部控制）。详见 B5 |
 
 #### B1.4 profile 视图（档案视图 / R37-P1 起：卡片画布）
 > 🔵 **R37-P1（2026-09-17，devlog/141）起本视图 = 卡片画布**，占位页已撤。
@@ -1005,7 +1005,30 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→**
 | 直播动态 | `.lc-dlg-evts` | 满宽区卡：**B 组事件**（type 7=直播中止·灰点 / 8=直播继续·粉点，`send_date` HH:MM）+ **A 组在线峰值高光**（`metrics.peaks` 前 3，「N 人在线」，金点）；空=「暂无动态数据」。**R36 起内容套 `.lc-dlg-slot--evts`（`min-height:150px`）**，未到位 = 三行骨架（点 + 两条 `.lc-skel`） |
 | 内容分析 | `.lc-dlg-sec--full` | 预留区块：`analysis.summary` 有值显示，否则「接口已预留（内容分析服务接入后展示）」——**接口字段已就位，服务未接入** |
 
-### B4. 粉丝趋势卡 `<FanTrendChart>`（components/FanTrendChart.tsx）
+**B3 的 B2 增量（2026-10-08，`devlog/454`）**：手动记录的场次与录播地址。
+
+| 位置 | 类名 | 说明 |
+|---|---|---|
+| 头部标记 | `.lc-pop-manual` | 与「已校正」（`.lc-pop-corr`）同规格同位置（10px + `--c-accent`）：`manual===true` 时显示「手动记录」——判据是**服务端算的** `manual` 字段（前端不自己拆 `source` 组合串） |
+| 头部按钮 | `.lc-dlg-edit` | 铅笔，26×26 r8，与关闭钮同配方、在它左侧（`title`：手动场次「编辑这一场」/ 自动场次「补录播地址」）⇒ 打开 B4 弹窗 |
+| 右列「录播」行 | `.lc-dlg-row` + `.lc-dlg-vod` | 紧接「数据源」行，**恒定占一行**：有值 ⇒ `<a>`（BV 号当文字、完整地址进 `title`；点击由全局外链守卫接管 → `openExternal`，主机已由服务端规范化保证在白名单内）；无值 ⇒ 「未填写」+「补录播地址」按钮（`.lc-dlg-cloud-build` 配方） |
+
+### B4. 手动记录 / 编辑场次弹窗（`components/live/ManualSessionDialog.tsx`，2026-10-08 B2 `devlog/454`）
+
+两处入口共用**同一个实例**：日历工具栏的「+」（`新建`，默认今天 20:00–22:00）与详情弹窗的铅笔（`编辑`）。
+DOM 与类名：`ManualSessionDialog.test.tsx` 钉住「只提交改过的字段」「时间原样提交」「自动行只可改录播」等 9 条。
+
+| 区域 | 类名 | 说明 |
+|---|---|---|
+| 面板根 | `.lc-ms`（Radix `DialogContent`） | **420px 定宽**（`max-width calc(100vw-32px)`）、r12、白底 + 发丝边 + `--shadow-dialog`、**z-61**；复用详情弹窗的遮罩类 `.lc-dlg-backdrop`（同为 z-60）；入场 `lc-dlg-pop` 0.2s / 退场 `lc-dlg-pop-out` 0.16s（`[data-state='closed']`，与 `.lc-dlg` **分两条写** —— 合并选择器会让 `LiveSessionDialog.test.tsx` 的 CSS 正则假红） |
+| 头部 | `.lc-ms-head` / `.lc-ms-title` / `.lc-ms-sub` | 标题 15px/600（「手动记录一场直播」/「编辑场次」）+ 副行 11.5px；`DialogTitle`/`DialogDescription` 关联 |
+| 表单 | `.lc-ms-body` / `.lc-ms-row` / `.lc-ms-label` / `.lc-ms-input` / `.lc-ms-hint` | 四行：开始 / 结束 / 标题 / 录播；标签定宽 44px（四个输入框左缘对齐）；时间用 `datetime-local`（**原样提交**，服务端按本机时区解释）；结束留空 = 进行中；标题 `maxLength=80`（与服务端 422 同口径）；提示行在输入框下方占满一行 |
+| 可编辑性 | `autoOnly` | 服务端 `manual===false`（自动抓来的）⇒ 开始/结束/标题 `disabled` + `.lc-ms-note` 说明「只能补录播地址，时间和标题来自平台」；**不渲染删除钮** |
+| 焦点 | `.lc-ms-input:focus-visible` | `outline: var(--focus-ring)`（`tests/test_focus_contract.py` 会红在散落色 / `outline: none`） |
+| 失败提示 | `.lc-ms-error`（`role=alert`） | 409/422 的 `detail` **原文照显**（点名撞上哪一场的中文），不换成「保存失败」 |
+| 动作行 | `.lc-ms-actions` / `.lc-ms-btn`（`.primary` / `.danger`） | 左=删除（仅手动场次，**两步确认**：`.lc-ms-del-confirm`，不用 `window.confirm`）· 右=取消 / 保存（无改动时 `disabled`） |
+
+### B5. 粉丝趋势卡 `<FanTrendChart>`（components/FanTrendChart.tsx）
 
 | 名称 | 类名 | 说明 |
 |---|---|---|

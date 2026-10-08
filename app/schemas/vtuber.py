@@ -453,6 +453,9 @@ class LiveSessionOut(BaseModel):
     分区（parent_area_name/area_name）、收益（total_income）、峰值在线
     （max_online_count）、弹幕数（danmakus_count）、类型推断（category/
     category_from，服务端读取时计算不落库）。
+    B2 新增（2026-10-08）：`vod_url`（录播地址）/ `manual`（含用户手动记录成分）——
+    两个都是**给人看和给人点**的字段，`manual` 由服务端按 `source` 分词判定
+    （`app/domain/live_manual.py::is_manual_source`），前端不再自己拆字符串。
     """
     account_id: int
     start_at: datetime
@@ -470,6 +473,8 @@ class LiveSessionOut(BaseModel):
     max_online_count: int | None = None
     danmakus_count: int | None = None
     cover_url: str | None = None                # 场次封面（详情弹窗左列封面图）
+    vod_url: str | None = None                  # 录播地址（f013；唯一形态 https://www.bilibili.com/video/BV…）
+    manual: bool = False                        # 这一场含"用户手动记录"成分（source 分词判定，服务端算）
     segment_count: int = 1                      # 中断续播并段数（v2 合并，1=单场）
     category: str = "live"                      # game/chat/watch/upload/song/fitness/radio/collab/special/live
     category_from: str = "fallback"             # override/series/title/learned/area/date/fallback
@@ -485,6 +490,46 @@ class LiveCategoryOut(BaseModel):
     """直播分类校正结果（v0.9.x 类型引擎 v2：PUT/DELETE 响应用）。"""
     category: str
     category_from: str = "override"
+
+
+class LiveSessionManualIn(BaseModel):
+    """手动记录一场直播（B2，devlog/454）：`POST /account/{id}/live-sessions` 入参。
+
+    用户口径（2026-10-08）：「日历上能手动补一场（时间/标题）+ 存录播地址」。
+
+    - `start_at`/`end_at`：ISO 8601。**带偏移**（`…+08:00`）按偏移换算；**不带偏移**
+      （`<input type="datetime-local">` 的产物）按**本机本地时区**解释 ——
+      换算规则与理由见 `app/domain/live_manual.py::to_utc_naive`；
+    - `end_at` 省略 = 未知/进行中（与自动场次同一口径，`None` 不是 0）；
+    - `vod_url`：BV 号或 B 站视频链接，服务端规范化后入库（不合格 → 422 + 中文原因）。
+    """
+
+    start_at: datetime
+    end_at: datetime | None = None
+    title: str | None = None
+    vod_url: str | None = None
+
+
+class LiveSessionUpdateIn(BaseModel):
+    """局部更新场次（PATCH）：只改传进来的字段（`exclude_unset`，同 `VtuberEventUpdate`）。
+
+    ⚠️ 显式传 `end_at: null` = **清空结束时间**（改回"进行中"），与"没传"是两件事 ——
+    所以路由层用 `model_dump(exclude_unset=True)` 而不是 `exclude_none`。
+
+    `vod_url: ""` = 清空录播地址（用户删掉自己填的链接）。**只有手动记录的场次**
+    能改时间/标题，自动抓来的场次只允许补录播地址（见路由层 400 的两个分支）。
+    """
+
+    start_at: datetime | None = None
+    end_at: datetime | None = None
+    title: str | None = None
+    vod_url: str | None = None
+
+
+class LiveSessionDeleteOut(BaseModel):
+    """删除手动场次的回执（`deleted=false` 不会出现：删不掉就是 404/400）。"""
+    deleted: bool
+    live_id: str
 
 
 class LiveWordOut(BaseModel):
