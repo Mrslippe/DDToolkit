@@ -179,7 +179,7 @@ expires: 2027-01-31
 >
 > | 验到的事 | 实测 |
 > |---|---|
-> | 开关**关着**时抓取被闸门挡住 | `POST /vtuber/fetch-posts?platform=douyin` → **403**，理由指到「设置 → 抓取设置 → 平台抓取」|
+> | 开关**关着**时抓取被闸门挡住 | `POST /vtuber/fetch-posts?platform=douyin` → **403**，理由指到「设置 → 数据源 → 平台抓取」|
 > | 打开总开关（热更、不重启） | `PUT /settings {"DOUYIN_ENABLED": true}` → capabilities 立刻 `douyin_enabled=True`、抖音内容不再受限 |
 > | **收录**该账号（真发一次主页信息） | `POST /vtuber/adopt`(source=douyin) → **201**，名字来自服务端「Sulli」，0.6s |
 > | 首屏抓取落库 | 2 条（`FIRST_SCREEN_DYNAMICS_LIMIT` **按设计**只入库最新几条）|
@@ -207,7 +207,7 @@ expires: 2027-01-31
 >
 > | 问题 | 真因 | 处置 |
 > |---|---|---|
-> | ② 抓不到数据 | **总开关从来没开过**：`.env` 里 cookie/UA 都在（说明粘贴成功），而 `app_meta` 里**没有** `settings.DOUYIN_ENABLED` ⇒ 用默认 `False`，日志逐轮写着「总开关关着，本次不发请求」 | 不是 bug（`devlog/335` 定的合规闸门）；**要在「设置 → 抓取设置 → 平台抓取」显式打开**，之后下一轮就会填上 |
+> | ② 抓不到数据 | **总开关从来没开过**：`.env` 里 cookie/UA 都在（说明粘贴成功），而 `app_meta` 里**没有** `settings.DOUYIN_ENABLED` ⇒ 用默认 `False`，日志逐轮写着「总开关关着，本次不发请求」 | 不是 bug（`devlog/335` 定的合规闸门）；**要在「设置 → 数据源 → 平台抓取」显式打开**，之后下一轮就会填上 |
 > | ① 角标说"需要登录" | 能力矩阵把"我们自己关了"报成了 `requires_login`（**对的文案配错的状态**）⇒ 刚粘完 Cookie 的用户必然以为没生效 | 新增第四态 `disabled` + 角标「**未启用**」；受限项全是 `disabled` 时页脚不给「去登录」；两条保存路径补 `refreshCapabilities()`（`devlog/338`） |
 >
 > **仍然只差你侧两个动作**：配 cookie + UA（已完成）、**打开抖音总开关**（未做）。

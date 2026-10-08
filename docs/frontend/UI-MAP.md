@@ -409,11 +409,16 @@ keyframes 只会重启**）。
 `QUIET_HOURS_START` / `QUIET_HOURS_END`（本地整点，`END <= START` 按跨午夜算，两者相同 = 不生效）·
 `QUIET_HOURS_DYNAMICS_MIN_SECONDS`（静默期动态间隔下限，收在「高级」）。
 
-**devlog/335 新增的一组**：「抓取设置 → **平台抓取**」（第 6 个页内小组），目前只有一项
-`DOUYIN_ENABLED`（**默认关**的合规总开关）。它同样是数据驱动的 —— 界面没有任何改动，
-只是后端 `SPECS` 多了一条 `section="平台抓取"` 的 `Spec`，导航/小组/开关自动出现；
-受限说明走 `GET /capabilities` 的 `douyin_content`：关着时 `state = disabled`、`note` 指向
-**设置里的开关**（而不是"去登录抖音"）。⚠️ **`disabled` 与 `requires_login` 是两种说法**
+**devlog/335 新增、devlog/451 泛化的一组**：「**数据源 → 平台抓取**」，现在是**四颗**开关
+（`BILIBILI_ENABLED` / `WEIBO_ENABLED` / `XIAOHONGSHU_ENABLED` 默认**开**，
+`DOUYIN_ENABLED` 默认**关**的合规总开关）。用户口径（需求 9）：开关放在**数据源**那一项里、
+**只影响是否启动抓取**、关掉后自动与手动都拦、手动触发时给提示。
+它同样是数据驱动的 —— 界面没有任何改动，只是后端 `SPECS` 多了几条 `section="平台抓取"`
+的 `Spec`，导航/小组/开关自动出现；受限说明走 `GET /capabilities` 的 `*_content`：
+关着时 `state = disabled`、`note` 指向**设置里的开关**（而不是"去登录"）。
+⚠️ 真源是 `services/platform_switches.py`（手动闸门 / 能力矩阵 / 自动档共用同一份），
+**提示里的设置路径从 `Spec.group`/`section` 拼出来**（`settings_path()`）——别再写第二份字面量。
+⚠️ **`disabled` 与 `requires_login` 是两种说法**
 （`devlog/338` 的用户真机反馈）：顶栏说明窗里前者的角标写「**未启用**」、后者写「需要登录」——
 混用会让刚粘完 Cookie 的用户以为没生效而去反复重粘。若受限项**全是** `disabled`，页脚
 **不给「去登录」按钮**（点进去也没用），换成 `.cap-limits-hint` 那句"去设置里打开"。

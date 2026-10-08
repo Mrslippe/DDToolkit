@@ -573,7 +573,16 @@ def platform_accounts_of(accounts: list[Account], platform: str) -> list[Account
     （`POST /vtuber/fetch-posts?platform=weibo` 与 `/vtuber/batch/*`）会**静默跳过所有账号**，
     返回"什么都没有"，看起来像"这个 V 没内容"。平台自己知道自己的 uid 长什么样，
     这里只负责"有 uid"。
+
+    ⚠️ 2026-10-08（`devlog/451`）：这里是**自动档唯一的按平台闸门** —— 平台总开关关着就
+    直接返回空表（一个请求都不发）。手动档走另一条路（`_require_content_fetch` 会回 403 并说清原因），
+    两条路都问 `services/platform_switches.py` 同一份真源。
     """
+    from app.services import platform_switches
+
+    if not platform_switches.enabled(platform):
+        logger.debug("平台 %s 的抓取开关关着 ⇒ 本次不挑账号", platform)
+        return []
     return [a for a in accounts if a.platform == platform and (a.platform_uid or "").strip()]
 
 
@@ -605,7 +614,7 @@ def _account_fail_text() -> str:
     if kind in ("signature_invalid", "signer_unavailable", "argus_missing"):
         return "签名不可用（我们这侧没发请求，见日志）"
     if kind == "douyin_disabled":
-        return "抖音总开关关着（设置 → 抓取设置 → 平台抓取）"
+        return "抖音总开关关着（设置 → 数据源 → 平台抓取）"
     if kind == "identity_throttled":
         # 走到这里说明调用方没按"跳过"处理（正常路径会记 skipped，见 `_throttle_note`）
         return "本轮没发（自己的节奏，稍后自动重试）"

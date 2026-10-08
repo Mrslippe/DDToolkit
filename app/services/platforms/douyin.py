@@ -512,8 +512,8 @@ class DouyinPlatform(BasePlatform):
             # **总开关关着 ⇒ 一个字节都不发**（devlog/335）。放在 `_admit` 这个唯一入口上：
             # 账号信息 / 作品 / 详情三条路都要过它，将来加端点也漏不掉。
             self._note("douyin_disabled",
-                       msg="抖音抓取默认关闭（设置 → 抓取设置 → 平台抓取里显式打开）")
-            logger.info("抖音总开关关着，本次不发请求（设置 → 抓取设置 → 平台抓取）")
+                       msg="抖音抓取默认关闭（设置 → 数据源 → 平台抓取里显式打开）")
+            logger.info("抖音总开关关着，本次不发请求（设置 → 数据源 → 平台抓取）")
             return False
         d = self._ledger.acquire(self._identity(), endpoint)
         if d.allowed:

@@ -182,12 +182,27 @@ def _specs() -> list[Spec]:
              "同上，必须是这个区间的上限；与下限相等就是固定间隔",
              section="收录首屏", advanced=True),
 
-        # ══ 抓取设置 · 平台抓取（2026-10-04，devlog/335）═══════════════════
-        # 为什么单独一个 section、为什么默认关：抖音协议**明文禁止**自动化采集
-        # （`docs/plans/douyin-execution.md` §0 的定性），所以"配了 cookie"不等于"要在后台一直抓"。
-        # 关着时适配器一个字节都不发（不是"抓了不用"）。
+        # ══ 数据源 · 平台抓取（2026-10-04 建，2026-10-08 泛化成每平台一颗，devlog/335/451）═══
+        # 用户口径（需求 9）：「在设置中把平台抓取功能的开关做出来，放在**数据源**那一项里」，
+        # 且「开关只影响是否启动抓取」——关掉后自动档与手动档都拦，已抓到的数据照常看。
+        # 真源 = `services/platform_switches.py`（手动端点 / 能力矩阵 / 自动档共用同一份）。
+        # ⚠️ 抖音为什么默认关：抖音协议**明文禁止**自动化采集（`docs/plans/douyin-execution.md` §0），
+        # 所以"配了 cookie"不等于"要在后台一直抓"。其余三家默认开（它们是既有行为）。
+        Spec("BILIBILI_ENABLED", "bool", True, None, None,
+             "启用 B 站抓取", "", NAV_SOURCES, hot,
+             "关掉后 B 站的自动轮询与手动抓取都不发请求（帖子、动态、账号信息都一样）；"
+             "已经抓到的内容照常浏览",
+             section="平台抓取"),
+        Spec("WEIBO_ENABLED", "bool", True, None, None,
+             "启用微博抓取", "", NAV_SOURCES, hot,
+             "关掉后微博的自动轮询与手动抓取都不发请求；已经抓到的内容照常浏览",
+             section="平台抓取"),
+        Spec("XIAOHONGSHU_ENABLED", "bool", True, None, None,
+             "启用小红书抓取", "", NAV_SOURCES, hot,
+             "关掉后小红书的自动轮询与手动抓取都不发请求；已经抓到的内容照常浏览",
+             section="平台抓取"),
         Spec("DOUYIN_ENABLED", "bool", False, None, None,
-             "启用抖音抓取", "", g, hot,
+             "启用抖音抓取", "", NAV_SOURCES, hot,
              "默认关。抖音的用户协议禁止自动化采集，风险落在你自己的账号上 —— "
              "确认知情、并在「登录 → 抖音」里配好 Cookie 之后再打开。"
              "关着时抖音的抓取一个请求都不发（账号信息 / 作品 / 详情都一样）",

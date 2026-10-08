@@ -137,7 +137,7 @@ FEATURES: tuple[Feature, ...] = (
                   "没配置 Cookie 时我们**不发起**请求。补救：设置 → 登录 → 抖音，"
                   "粘贴浏览器里的整条 Cookie **以及那个浏览器的 `navigator.userAgent`**"
                   "（UA 会被算进签名，填错的样子是静默空数据）。"
-                  "另外它还有一个**默认关着的总开关**（设置 → 抓取设置 → 平台抓取）",
+                  "另外它还有一个**默认关着的总开关**（设置 → 数据源 → 平台抓取）",
         login_note="已配置 Cookie：作品列表与详情重取可用",
         evidence="D1 真机 14 发（`devlog/333`）：游客身份下 `a_bogus` 缺失或值写错 ⇒ "
                  "**HTTP 200 + 0 字节空体**（不是 403）；登录 jar 则完全不校验签名；"
@@ -174,13 +174,14 @@ def _logged_in(platform: str | None, bili: bool, weibo: bool, xhs: bool = False,
 def _disabled_reason(platform: str | None) -> str | None:
     """这个平台是不是**被我们自己的总开关关了**？是就给一句"去哪打开"。
 
-    今天只有抖音有总开关（`DOUYIN_ENABLED`，devlog/335）；将来再加一家，这里加一条。
+    ⚠️ 2026-10-08（`devlog/451`）：从"只有抖音"泛化成**每平台一颗开关**，
+    真源搬到 `services/platform_switches.py`（手动端点/能力矩阵/自动档共用同一份）。
     ⚠️ 状态要给 `DISABLED` 而不是 `requires_login` —— 用户看到「需要登录」会去重新粘 Cookie，
     而真正该做的是打开开关（devlog/338 的真实反馈）。
     """
-    if platform == "douyin" and not _douyin_enabled():
-        return DOUYIN_DISABLED_REASON
-    return None
+    from app.services import platform_switches
+
+    return platform_switches.disabled_reason(platform)
 
 
 def snapshot(bili_logged_in: bool | None = None, weibo_logged_in: bool | None = None,
@@ -281,12 +282,9 @@ DOUYIN_CONTENT_REASON = (
     "连同 `navigator.userAgent`"
 )
 
-#: 抖音的**总开关**（2026-10-04，devlog/335）：默认关，与"风险自担"那套定性的保守落法一致。
-#: ⚠️ 这条闸门与"没配 cookie"是**两件事**：配了凭据也不等于要在后台一直抓。
-DOUYIN_DISABLED_REASON = (
-    "抖音抓取默认关闭：抖音的用户协议禁止自动化采集，风险落在你自己的账号上 —— "
-    "确认知情后再打开「设置 → 抓取设置 → 平台抓取 → 启用抖音抓取」。关着时一个请求都不发"
-)
+#: 平台**总开关**的文案真源已搬到 `services/platform_switches.py::disabled_reason`
+#: （2026-10-08，`devlog/451`：从那时的"只有抖音一条"泛化成每平台一颗开关）。
+#: ⚠️ 别在这里再写一份"去哪打开"的话 —— 那份路径要在设置分组改名时一起改，两份必漂。
 
 UNKNOWN_PLATFORM_REASON = (
     "未知平台：内容抓取**没有**在这里表态（新增平台要在 "
@@ -298,12 +296,20 @@ def _content_fetch_allowed_with(
     platform: str, *, bili=None, weibo=None, xhs=None, douyin=None, douyin_enabled=None,
 ) -> tuple[bool, str]:
     """`content_fetch_allowed` 的**可注入版本**（用例注入假登录态；生产走下面那个）。"""
+    from app.services import platform_switches
+
     bili = auth_manager if bili is None else bili
     weibo = weibo_auth_manager if weibo is None else weibo
     xhs = xhs_auth_manager if xhs is None else xhs
     douyin = douyin_auth_manager if douyin is None else douyin
-    if douyin_enabled is None:
-        douyin_enabled = _douyin_enabled()
+    # ⚠️ **总开关排在最前、且对每个平台都问**（2026-10-08，`devlog/451`）：
+    #    关着时"我们一个请求都不发"，比"你没登录"更是用户此刻要处理的那件事；
+    #    顺序反了会让人以为"配好登录就能抓"（抖音当年就是这个教训，`devlog/335`）。
+    #    `douyin_enabled` 这个注入参数保留给既有用例（不传就走真源）。
+    switched_off = (platform_switches.disabled_reason(platform) if douyin_enabled is None
+                    else (None if douyin_enabled else platform_switches.disabled_reason("douyin")))
+    if switched_off:
+        return False, switched_off
     if platform == "bilibili":
         if bili.is_logged_in:
             return True, ""
@@ -317,10 +323,6 @@ def _content_fetch_allowed_with(
             return True, ""
         return False, XHS_CONTENT_REASON
     if platform == "douyin":
-        # ⚠️ 两道闸门**顺序有意**：先报"总开关关着"（那是用户能立刻做的一件事），
-        # 再说"cookie 没配" —— 反过来会让人以为配了 cookie 就能抓（devlog/335）。
-        if not douyin_enabled:
-            return False, DOUYIN_DISABLED_REASON
         if douyin.is_configured:
             return True, ""
         return False, DOUYIN_CONTENT_REASON
@@ -328,13 +330,14 @@ def _content_fetch_allowed_with(
 
 
 def _douyin_enabled() -> bool:
-    """抖音总开关（设置里可热更；读不到就当**关**）。"""
-    from app.core import runtime_settings
+    """抖音总开关（兼容入口：真源在 `services/platform_switches.py`）。
 
-    try:
-        return bool(runtime_settings.get("DOUYIN_ENABLED"))
-    except Exception:  # noqa: BLE001
-        return False
+    ⚠️ 名字与语义都保留（既有用例 monkeypatch 的就是它），但它现在只是转发 ——
+    新增平台**不要再往这里加分支**，改 `platform_switches.SWITCH_KEYS`。
+    """
+    from app.services import platform_switches
+
+    return platform_switches.enabled("douyin")
 
 
 def content_fetch_allowed(platform: str = "bilibili") -> tuple[bool, str]:

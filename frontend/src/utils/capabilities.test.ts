@@ -50,7 +50,7 @@ const anonCaps = (): Capabilities => ({
     // 抖音：已登录但总开关关着 —— state 是 disabled，不是 requires_login（devlog/338）
     feature({ id: DOUYIN_CONTENT, label: '抖音内容', platform: 'douyin',
               anon_state: 'requires_login', state: 'disabled',
-              note: '抖音抓取总开关关着（设置 → 抓取设置 → 平台抓取）' }),
+              note: '抖音抓取总开关关着（设置 → 数据源 → 平台抓取）' }),
   ],
   limited: [
     { id: 'account_info', label: '账号信息', state: 'degraded', note: '会被间歇性风控' },
@@ -59,7 +59,7 @@ const anonCaps = (): Capabilities => ({
     { id: XHS_CONTENT, label: '小红书内容', state: 'requires_login',
       note: '没配置 Cookie ⇒ 详情里的图也没法重取' },
     { id: DOUYIN_CONTENT, label: '抖音内容', state: 'disabled',
-      note: '抖音抓取总开关关着（设置 → 抓取设置 → 平台抓取）' },
+      note: '抖音抓取总开关关着（设置 → 数据源 → 平台抓取）' },
   ],
   measured_at: '2026-09-15',
 })
@@ -210,6 +210,6 @@ describe('能力说明窗的布局契约', () => {
     expect(s).toContain('hasLoginLimit ? (')
     expect(s).toContain('data-cap-only-switch-off="1"')
     // 提示文案必须给出**去哪**（只说"未启用"等于死路）
-    expect(s).toMatch(/设置 → 抓取设置 → 平台抓取/)
+    expect(s).toMatch(/设置 → 数据源 → 平台抓取/)
   })
 })

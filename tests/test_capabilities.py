@@ -21,6 +21,21 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
+
+def _douyin_switch(monkeypatch, on: bool):
+    """把**抖音**那颗平台开关设成开 / 关（真源 = `services/platform_switches.py`）。
+
+    ⚠️ 2026-10-08（`devlog/451`）：总开关从"只有抖音那一个 `C._douyin_enabled`"泛化成
+    **每平台一颗**、真源搬到 `platform_switches`。那时旧写法
+    `monkeypatch.setattr(C, "_douyin_enabled", ...)` 会**静默失效**（那个函数现在只是转发）
+    —— 判据会变成"patch 了但没生效"，而失败信息还是老样子，很容易误判成产品坏了。
+    """
+    from app.services import platform_switches
+
+    real = platform_switches.enabled
+    monkeypatch.setattr(platform_switches, "enabled",
+                        lambda platform: (on if platform == "douyin" else real(platform)))
+
 from app.services import capabilities as C  # noqa: E402
 
 MATRIX = ROOT / "tests" / "fixtures" / "capability_matrix.json"
@@ -70,7 +85,7 @@ def test_snapshot_reports_limits_per_login_state(monkeypatch):
 
     # 四家的登录态**各算各的**（devlog/228 的口径，含 10-04 补上的小红书、devlog/334 的抖音）
     # ⚠️ 抖音还多一道**总开关**（默认关，devlog/335）⇒ 要它"不受限"得把两道都打开
-    monkeypatch.setattr(C, "_douyin_enabled", lambda: True)
+    _douyin_switch(monkeypatch, True)
     all_ready = C.snapshot(bili_logged_in=True, weibo_logged_in=True, xhs_logged_in=True,
                            douyin_logged_in=True)
     assert all_ready["limited"] == [], f"四家都就绪后不该还有受限项：{all_ready['limited']}"
@@ -234,7 +249,7 @@ def test_content_fetch_gate_and_snapshot_know_douyin(monkeypatch):
     """
     from app.services.douyin_auth import douyin_auth_manager
 
-    monkeypatch.setattr(C, "_douyin_enabled", lambda: True)      # 总开关单列在下面那条用例
+    _douyin_switch(monkeypatch, True)      # 总开关单列在下面那条用例
     monkeypatch.setattr(douyin_auth_manager, "cookie", "")
     allowed, why = C.content_fetch_allowed("douyin")
     assert allowed is False and "未知平台" not in why
@@ -265,7 +280,7 @@ def test_douyin_master_switch_is_a_second_gate(monkeypatch):
 
     monkeypatch.setattr(douyin_auth_manager, "cookie",
                         "UIFID=abc; s_v_web_id=verify_x; ttwid=1%7Cy")
-    monkeypatch.setattr(C, "_douyin_enabled", lambda: False)
+    _douyin_switch(monkeypatch, False)
     allowed, why = C.content_fetch_allowed("douyin")
     assert allowed is False, "开关关着却放行 ⇒ 一个请求都不该发的承诺是假的"
     assert "关闭" in why and "设置" in why and "登录" not in why, f"理由指错了地方：{why}"
@@ -280,7 +295,7 @@ def test_douyin_master_switch_is_a_second_gate(monkeypatch):
     assert "默认关闭" in row["note"] and "设置" in row["note"]
     assert next(l for l in snap["limited"] if l["id"] == "douyin_content")["state"] == C.DISABLED
 
-    monkeypatch.setattr(C, "_douyin_enabled", lambda: True)
+    _douyin_switch(monkeypatch, True)
     assert C.content_fetch_allowed("douyin") == (True, "")
     # 开关打开、但凭据没配 ⇒ 这时才是真正的 `requires_login`（两种状态不能混）
     monkeypatch.setattr(douyin_auth_manager, "cookie", "")

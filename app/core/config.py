@@ -74,6 +74,13 @@ class Settings:
     #: **不等于**"要在后台一直抓"—— 用户得在设置里显式打开。关着时适配器**一个字节都不发**
     #: （`DouyinPlatform._admit`），不是"抓了但不用"。
     DOUYIN_ENABLED: bool = False
+    #: **每平台一颗抓取总开关**（需求 9，2026-10-08，`devlog/451`）：关掉后自动轮询与手动抓取
+    #: 都不发请求（真源 `services/platform_switches.py`），已抓到的内容照常浏览。
+    #: ⚠️ 这三家默认**开**（它们是既有行为；默认关等于把用户已有的功能关掉）；
+    #: 抖音那颗默认关的理由见上一条。
+    BILIBILI_ENABLED: bool = True
+    WEIBO_ENABLED: bool = True
+    XIAOHONGSHU_ENABLED: bool = True
 
     # 调度器
     # ⚠️ R14a（devlog/091）：带「可热更」注释的键会被 `Settings.__getattribute__`

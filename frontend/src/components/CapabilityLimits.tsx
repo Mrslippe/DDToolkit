@@ -145,7 +145,7 @@ export default function CapabilityLimits({ caps, onLogin, open: openProp,
               </button>
             ) : (
               <span className="cap-limits-hint" data-cap-only-switch-off="1">
-                这些项与登录无关：去「设置 → 抓取设置 → 平台抓取」打开对应开关
+                这些项与登录无关：去「设置 → 数据源 → 平台抓取」打开对应开关
               </span>
             )}
           </div>

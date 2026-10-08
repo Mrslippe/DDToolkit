@@ -119,6 +119,9 @@ def test_defaults_are_the_values_from_before_the_overlay():
         "MEDIA_PIN_PER_ROUND": 20, "MEDIA_PIN_MB_PER_ROUND": 24.0,
         # 抖音总开关（devlog/335）：**默认 False** —— 配了凭据 ≠ 要在后台一直抓
         "DOUYIN_ENABLED": False,
+        # 每平台一颗抓取开关（需求 9，devlog/451）：这三家默认**开**（既有行为，
+        # 默认关等于把用户已有的功能关掉）；抖音那颗见上一条
+        "BILIBILI_ENABLED": True, "WEIBO_ENABLED": True, "XIAOHONGSHU_ENABLED": True,
     }
     assert {k: s.default for k, s in rs.SPECS.items()} == expect
     # 没覆盖时，property 读到的就是默认值（证明接线正确，而不是"恰好相等"）
@@ -345,6 +348,10 @@ def test_vital_settings_are_visible_and_tuning_knobs_are_advanced():
         # 平台抓取（devlog/335）：抖音总开关。**默认关**且必须让用户自己看到 ——
         # 它是"要不要碰这家平台"的决策（协议禁止自动化采集），藏进高级等于替他默认同意
         "DOUYIN_ENABLED",
+        # 每平台一颗抓取开关（需求 9，devlog/451）：用户口径就是"在设置里把平台抓取开关做出来，
+        # 放在数据源那一项" ⇒ 四颗都必须是**看得见**的决策（不藏高级）——
+        # 它决定"要不要抓这一家"，用户随时可能想关掉一家
+        "BILIBILI_ENABLED", "WEIBO_ENABLED", "XIAOHONGSHU_ENABLED",
         # 媒体固化（devlog/319）：这四项都会**明显影响本地磁盘**（固化本身 / 时间窗 /
         # 要不要连视频 / 归档后清不清）⇒ 必须是用户看得见的决策，不能藏在高级里
         "MEDIA_PIN_ENABLED", "MEDIA_PIN_MAX_AGE_DAYS",
