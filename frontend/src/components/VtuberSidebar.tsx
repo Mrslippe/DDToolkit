@@ -21,7 +21,8 @@ import {
   applyVisibleOrder, DRAG_CANCEL_PX, DRAG_HOLD_MS, moveItem,
 } from '../utils/vtuberReorder'
 import { EVENTS, on } from '../utils/appEvents'
-import { exitSolo, useSolo } from '../utils/soloMode'
+import { enterSolo, exitSolo, useSolo } from '../utils/soloMode'
+import { nextStreak, type ClickStreak } from '../utils/soloGesture'
 import { toggleRailCollapsed, useRailCollapsed } from '../utils/railCollapsed'
 import './../styles/layout.css'
 
@@ -44,50 +45,57 @@ function isLive(v: VTuber): boolean {
  * 过滤与排序均为纯前端计算；`/` 键聚焦搜索框。
  */
 /**
- * 左栏的**外壳**：单推模式（需求 6，`devlog/429`）时**整栏收起** + 左缘一个**常态隐藏的拉手**。
+ * 导出的是**外壳 + 内层**的组合：外壳管单推的收起与拉手，内层就是原来的左栏。
  *
- * ⚠️ 三处 `return`（加载中 / 加载失败 / 正常）**共用它** —— 只在正常态收起的话，
- * 进单推的那一瞬间（列表还没回来）左栏会照样占着宽度，看着像"没生效"。
- * ⚠️ 列表**内容不变**（用户口径）：收起只是把这一栏的宽度让出去，展开后还是原来那些 V。
- *
- * ⚠️⚠️ **`.sidebar-shell` 只允许有这一个主人**（2026-10-08 用户报"最下面那条 V 被挡住、
+ * ⚠️⚠️ **`.sidebar-shell` 只允许有这一个主人**（2026-10-08 用户报"左栏最后一条被挡住、
  * 滚轮不动、滚动条也不出现"，`devlog/448`）：内层从前也渲染了一层同名的外壳 ⇒ 外壳套外壳，
  * 而内层作为 flex item 会**继承 `.sidebar-shell` 的 `flex-shrink: 0`**（那条本是给横向宽度用的）
- * ⇒ 高度**不收缩、被内容撑开** ⇒ `.os-scroll` 的 `scrollHeight` 恒等于 `clientHeight`：
- * 滚轮无效、拇指不出现、条目溢出到窗口外被裁掉。
+ * ⇒ 高度**不收缩、被内容撑开** ⇒ `.os-scroll` 的 `scrollHeight` 永远等于 `clientHeight`：
+ * 滚轮无效、拇指不出现、条目直接溢出到窗口外被裁掉。
  * 所以内层（`VtuberSidebarInner`）只返回**片段** —— 滚动体必须是这一层的**直接子元素**。
+ *
+ * **单推的入口**（需求 1，2026-10-08 新口径，`devlog/450`）：不在工具栏那枚按钮上，而是
+ * 「把某个 V 拖到左栏首位 + 在它上面 3 秒内连点 10 次」——手势在 `VtuberItem` 里，
+ * 计数在 `utils/soloGesture.ts`（纯状态机）；判定要把这一栏交给路由上的那个 V。
+ * 那枚按钮**只在单推模式下显示**，只用来退出。
  */
-function SidebarFrame({ collapsed, onTogglePeek, children }: {
+function SidebarFrame({ collapsed, showHandle, onTogglePeek, children }: {
   collapsed: boolean
+  /** 拉手要不要渲染 —— ⚠️ **单推模式下不渲染**（用户 2026-10-08 口径：需求 1.1） */
+  showHandle: boolean
   onTogglePeek: () => void
   children: React.ReactNode
 }) {
   return (
     <div className="sidebar-shell" data-collapsed={collapsed ? '1' : undefined}>
       {children}
-      {/* 拉手：只在**单推模式**下存在（平时这一栏本来就常驻，不需要拉手）。
-          收起时它贴着内容左缘（`left: 100%`，此时栏宽为 0），展开时贴栏的右缘 ⇒ 同一套定位。 */}
-      {/* 拉手：**常驻**（用户口径「收起展开是常驻功能」——不再只在单推里存在）。
+      {/* 拉手：**常驻功能**（用户口径「收起展开是常驻功能」——不再只在单推里存在），
+          但**单推模式下不渲染**（需求 1.1：单推里整栏本来就收走了，提手是多余的）。
           ⚠️ 它是**常态隐藏**的：`opacity: 0`，鼠标悬到那条窄边（或键盘 Tab 到它）才现身。
           收起时它贴着内容左缘（`left: 100%`，此时这一栏已被负外边距推出视口），
           展开时贴栏的右缘 ⇒ 同一套定位，两种状态都在"内容区的左边缘"上。 */}
-      <button
-        type="button"
-        className="solo-rail-handle"
-        data-testid="solo-rail-handle"
-        aria-label={collapsed ? '展开 V 列表' : '收起 V 列表'}
-        aria-expanded={!collapsed}
-        onClick={onTogglePeek}
-      >
-        {collapsed
-          ? <ChevronRight className="h-3.5 w-3.5" />
-          : <ChevronLeft className="h-3.5 w-3.5" />}
-      </button>
+      {showHandle && (
+        <button
+          type="button"
+          className="solo-rail-handle"
+          data-testid="solo-rail-handle"
+          aria-label={collapsed ? '展开 V 列表' : '收起 V 列表'}
+          aria-expanded={!collapsed}
+          onClick={onTogglePeek}
+        >
+          {collapsed
+            ? <ChevronRight className="h-3.5 w-3.5" />
+            : <ChevronLeft className="h-3.5 w-3.5" />}
+        </button>
+      )}
     </div>
   )
 }
 
-function VtuberSidebarInner() {
+function VtuberSidebarInner({ onSoloGesture }: {
+  /** 连点手势命中 ⇒ 交给外壳进单推（`devlog/450`） */
+  onSoloGesture?: (id: number) => void
+} = {}) {
   const [vtubers, setVtubers] = useState<VTuber[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -516,6 +524,7 @@ function VtuberSidebarInner() {
               index={i}
               active={matched !== null && Number(matched.params.id) === v.id}
               onSelect={handleSelect}
+              onSoloGesture={onSoloGesture}
               dragging={dragId === v.id}
               onHoldStart={beginHold}
             />
@@ -541,10 +550,13 @@ interface VtuberItemProps {
   dragging?: boolean
   /** 指针按下 ⇒ 交给父级判"按住"（350ms 不动才算拖） */
   onHoldStart?: (id: number, e: React.PointerEvent) => void
+  /** 连点手势命中（**只在首位生效**）⇒ 进单推（需求 1，`devlog/450`） */
+  onSoloGesture?: (id: number) => void
 }
 
 const VtuberItem = memo(function VtuberItem({ vtuber, index, active, onSelect,
-                                               dragging = false, onHoldStart }: VtuberItemProps) {
+                                               dragging = false, onHoldStart,
+                                               onSoloGesture }: VtuberItemProps) {
   const bili = biliAccount(vtuber)
   // 头像/签名与卡片**同一条链**（devlog/135）：用户在档案设置里换过的头像与签名，
   // 左栏必须跟着变 —— 此前左栏各写了一份"只看平台字段"的取值，于是设置看着像没生效。
@@ -556,11 +568,30 @@ const VtuberItem = memo(function VtuberItem({ vtuber, index, active, onSelect,
   const sign = resolveSign(vtuber, vtuber.accounts).text || null
   const isLiveNow = (bili?.live_status ?? 0) === 1
 
+  /* ── 连点进单推（需求 1，2026-10-08 用户口径，`devlog/450`）─────────────────
+     口径：先把 V **拖到左栏首位**，然后在**那一条**上 3 秒内连点 10 次 ⇒ 进单推。
+     ⚠️ 只在**首位**（`index === 0`）计数 —— 别的条目照旧"点一下就进详情"，不多一次判断；
+     ⚠️ 计数是**每个条目实例**各一份（`useRef`），换 V 的关键字变化不会把它带到别人身上；
+     ⚠️ 命中那一次**不再走 `onSelect`**：进单推本来就会把位置带到这个 V（外壳里做），
+        再走一次导航只是多余的（也会让 `prevRoute` 变得不确定）。 */
+  const streakRef = useRef<ClickStreak | null>(null)
+  const handleClick = () => {
+    if (index === 0 && onSoloGesture) {
+      const { streak, hit } = nextStreak(streakRef.current, Date.now())
+      streakRef.current = hit ? null : streak
+      if (hit) {
+        onSoloGesture(vtuber.id)
+        return
+      }
+    }
+    onSelect(vtuber.id)
+  }
+
   return (
     <div
       className={`vtuber-item anim-rise${active ? ' active' : ''}${dragging ? ' dragging' : ''}`}
       style={{ '--rise-i': index } as React.CSSProperties}
-      onClick={() => onSelect(vtuber.id)}
+      onClick={handleClick}
       onPointerDown={(e) => onHoldStart?.(vtuber.id, e)}
       /* 拖拽落点靠这两个属性（`elementFromPoint` → `closest('[data-vtuber-id]')` → `data-index`）：
          与平台徽章那套同一个办法（`devlog/048`），不手算几何 */
@@ -611,16 +642,24 @@ const VtuberItem = memo(function VtuberItem({ vtuber, index, active, onSelect,
 export default function VtuberSidebar() {
   const solo = useSolo()
   const manual = useRailCollapsed()
+  const location = useLocation()
+  const navigate = useNavigate()
   const [peek, setPeek] = useState(false)
   // 换 V / 退出单推 ⇒ 把"临时展开"收回去（下次进来仍然是从收起态开始）
   useEffect(() => { setPeek(false) }, [solo?.id])
   /* 收起 = **单推强制** ∨ **用户自己收起过**；`peek` 是"临时看一眼"（单推里点拉手）。
      ⚠️ 单推**不改** `manual` —— 退出后回到用户自己的偏好（`devlog/429` 的"退出回到进入前"）。 */
   const collapsed = !peek && (Boolean(solo) || manual)
+  /** 连点手势命中 ⇒ 进单推：对象是**那一条**，`prevRoute` 记当前位置（退出时回得来）。 */
+  const enterSoloByGesture = useCallback((id: number) => {
+    enterSolo(id, location.pathname)
+    navigate(`/vtubers/${id}`)
+  }, [location.pathname, navigate])
   return (
     <SidebarFrame collapsed={collapsed}
+                  showHandle={!solo}
                   onTogglePeek={() => (solo ? setPeek((p) => !p) : toggleRailCollapsed())}>
-      <VtuberSidebarInner />
+      <VtuberSidebarInner onSoloGesture={enterSoloByGesture} />
     </SidebarFrame>
   )
 }

@@ -7,7 +7,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import AppSettingsDialog from './AppSettingsDialog'
-import { enterSolo, exitSolo, useSolo } from '../utils/soloMode'
+import { exitSolo, useSolo } from '../utils/soloMode'
 import './../styles/layout.css'
 
 /**
@@ -33,23 +33,13 @@ export default function IconRail() {
     matchPath('/', location.pathname) !== null ||
     matchPath('/vtubers/:id', location.pathname) !== null
 
-  /** 当前路由上的 V（没选中任何 V 时是 null ⇒ 单推没对象，按钮禁用） */
-  const routedId = matchPath('/vtubers/:id', location.pathname)?.params.id
-  const canEnter = Boolean(routedId)
-
+  /** 这枚按钮现在**只负责退出**（进入 = 左栏首位连点 10 次，见 `VtuberSidebar`）。 */
   const toggleSolo = () => {
-    if (solo) {
-      // 退出：回进入前那条路由（`exitSolo` 把那份还给我们；坏值 ⇒ `/`）
-      const prev = exitSolo()
-      navigate(prev?.prevRoute ?? '/')
-      return
-    }
-    if (routedId) enterSolo(Number(routedId), location.pathname)
+    const prev = exitSolo()
+    navigate(prev?.prevRoute ?? '/')
   }
 
-  const soloTitle = solo
-    ? '退出单推（回到进入前的位置）'
-    : canEnter ? '单推模式：只留这一个 V' : '先选一个 V 再进单推'
+  const soloTitle = '退出单推（回到进入前的位置）'
 
   return (
     <nav className="icon-rail">
@@ -73,24 +63,28 @@ export default function IconRail() {
 
       {/* 底端：设置（R14a）。放在 rail 底部而不是顶部，是为了让"打开设置"与
           "切换内容视图"在位置上就分开 —— 前者是低频、全局的动作。
-          单推钮紧挨齿轮上方（用户指定），同属"低频、全局"。 */}
+          单推钮紧挨齿轮上方（用户指定），同属"低频、全局"。
+          ⚠️ **只在单推模式下渲染**（需求 1，2026-10-08 用户口径，`devlog/450`）：
+          **进入**单推改成"拖到左栏首位 + 3 秒内连点 10 次"（见 `VtuberSidebar`），
+          这枚按钮从此**只负责退出**；正常模式下它不该出现在工具栏上。 */}
       <div className="icon-rail-group icon-rail-bottom">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              className={`icon-rail-btn${solo ? ' active' : ''}`}
-              aria-label={solo ? '退出单推' : '单推模式'}
-              aria-pressed={Boolean(solo)}
-              data-testid="solo-toggle"
-              disabled={!solo && !canEnter}
-              onClick={toggleSolo}
-            >
-              <Focus className="h-[18px] w-[18px]" />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="right">{soloTitle}</TooltipContent>
-        </Tooltip>
+        {solo && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                className="icon-rail-btn active"
+                aria-label="退出单推"
+                aria-pressed
+                data-testid="solo-toggle"
+                onClick={toggleSolo}
+              >
+                <Focus className="h-[18px] w-[18px]" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">{soloTitle}</TooltipContent>
+          </Tooltip>
+        )}
         <Tooltip>
           <TooltipTrigger asChild>
             <button
