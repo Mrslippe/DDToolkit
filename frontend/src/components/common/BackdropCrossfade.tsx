@@ -197,13 +197,18 @@ export function BackdropCrossfade({ src, custom, focus, videoSrc, videoFocus }: 
   return (
     <>
       {layers.map((l) => {
-        const f = l.out ? l.focus : nowFocus
-        const v = l.out ? l.videoSrc : nowVideo
-        const vf = l.out ? l.videoFocus : nowVideoFocus
-        // ⚠️ 同样：**正在淡出的那一层跟自己的 `custom`**（它决定 `--backdrop-opacity`，
-        //    而淡出关键帧的起点读的就是它）。读实时值 ⇒ 换 V 的那一下旧层会"跳"到另一个
-        //    不透明度再淡出 —— 用户看到的就是一次明暗闪动（`devlog/448`）。
-        const c = l.out ? l.custom : custom
+        /* ⚠️ **只有"代表当前 props 的 src"的那一层才吃实时值**（2026-10-08 用户报的第三个现象：
+           切 V 时"目标背景第一帧位置明显更左，然后才回到原位"，`devlog/449`）。
+           原先判的是 `l.out`（只有正在淡出的那层才用快照），漏掉了**换 V 途中的"当前层"**：
+           新图还在预加载、旧图仍是 `!out` 的那一小段里，旧图已经在吃**新 V** 的
+           `focus`/`videoSrc`/`custom` ⇒ 位置/不透明度当场跳一次，等真正的目标图到位才落回自己的位置。
+           `src` 一变，旧层就不再"代表 props" ⇒ 它必须跟自己的快照走。
+           `src` 没变时（用户就在调当前 V 的取景）照样吃实时值 ⇒ "右边当场跟着动"那条口径不变。 */
+        const isCurrent = !l.out && l.src === src
+        const f = isCurrent ? nowFocus : l.focus
+        const v = isCurrent ? nowVideo : l.videoSrc
+        const vf = isCurrent ? nowVideoFocus : l.videoFocus
+        const c = isCurrent ? custom : l.custom
         return (
           <div
             key={l.src}

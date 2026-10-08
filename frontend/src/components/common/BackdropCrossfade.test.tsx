@@ -197,6 +197,29 @@ describe('背景层：换图不闪白', () => {
     expect(byKind('first')[0].className, 'src 没变、只有 custom 变 ⇒ 当前层要当场跟上').toContain('custom')
   })
 
+  it('★ 换 V 途中**当前那层也不许被新 V 的取景重新变换**（用户 2026-10-08 报"第一帧位置更左"，`devlog/449`）', async () => {
+    // 新图还在预加载 ⇒ 旧图仍是 `!out` 的当前层；此时 props 的 focus 已经是**新 V** 的。
+    // 旧图必须跟**自己**那份走，否则换 V 的那一下它会先按新取景跳一次、再等新图到位。
+    await act(async () => {
+      root.render(<BackdropCrossfade src="https://x/a.jpg" custom focus={{ x: 0.1, y: 0.1, scale: 1 }} />)
+    })
+    // 切到 b（新 V 的取景是 0.9/0.9/2）—— **不**让预加载完成，停在"旧图还在当值"的那一帧
+    await act(async () => {
+      root.render(<BackdropCrossfade src="https://x/b.jpg" custom focus={{ x: 0.9, y: 0.9, scale: 2 }} />)
+    })
+    expect(byKind('first')[0], '还没有新层：旧层仍在场').toBeTruthy()
+    expect(imgLayerOf(byKind('first')[0]).style.backgroundPosition,
+      '旧层不许被新 V 的取景变换（那正是"第一帧位置更左"）').toBe('10% 10%')
+    expect(imgLayerOf(byKind('first')[0]).style.transform, '也不许被新 V 的缩放带走').toBe('')
+
+    // 正对照：**src 没变**时当前层照样吃实时取景（"调取景时右边当场跟着动"那条口径）
+    await act(async () => {
+      root.render(<BackdropCrossfade src="https://x/a.jpg" custom focus={{ x: 0.4, y: 0.4, scale: 1 }} />)
+    })
+    expect(imgLayerOf(byKind('first')[0]).style.backgroundPosition,
+      '同一个 src 上改取景 ⇒ 当场生效（不许被上面的收紧误伤）').toBe('40% 40%')
+  })
+
   // ── 需求 9：背景视频（devlog/424）────────────────────────────────────
   const video = () => document.querySelector<HTMLVideoElement>('.hero-backdrop-video')
   const loadVideo = async (el: HTMLElement | null) => {
