@@ -29,7 +29,10 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
+import threading
+import time
 from collections import Counter
 from typing import Callable, Iterable, Protocol
 
@@ -40,6 +43,15 @@ DEFAULT_ENGINE = "jieba"
 MIN_TOKEN_LEN = 2          # 单字噪声太多（"的/了/我"），词云里没有信息量
 MIN_COUNT = 2              # 只出现一次的词不进词云
 TOP_N = 40                 # 与上游 top40 对齐（前端 MosaicCloud 也按 40 设计）
+
+#: 词典**空闲多久后释放**（秒）。留 10 分钟：低于它的连续使用（连着看几场词云）不该
+#: 反复重建词典（一次 0.7s），而放着不用时那 56MB 该还回去。
+#: `DDTOOLKIT_TOKENIZER_IDLE_SEC` 可覆盖 —— 探针/真机验收要把等待压到几秒才量得到；
+#: 设 0（或负数）＝ **关掉这个机制**（词典加载后就常驻，回到 R24 之前的形态）。
+try:
+    TOKENIZER_IDLE_SEC = float(os.environ.get("DDTOOLKIT_TOKENIZER_IDLE_SEC") or 600.0)
+except ValueError:      # 环境变量写坏了：按默认走，不为一个笔误把词云弄坏
+    TOKENIZER_IDLE_SEC = 600.0
 
 # 虚词/语气词/弹幕高频无信息词。**刻意保守**：只放"几乎不可能有信息量"的，
 # 拿不准的一律保留（宁可词云里多一个"哈哈"，也不要误杀真词）。
@@ -80,6 +92,13 @@ class JiebaTokenizer:
     ⚠️ **R24 起不再在启动时预热**（devlog/117）：那本词典常驻约 56MB，只换来"首次少等 0.7s"，
     内存吃紧的机器上不划算 ⇒ 首次真正用到时才建（一次 0.7s，走线程）。
     `warmup()` 保留着：想自己预热的调用方（例如将来做成可选设置）可以直接用。
+
+    ⚠️ **空闲到 `TOKENIZER_IDLE_SEC` 之后把那本词典交还**（`devlog/447`）：不预热只解决了
+    "没人用词云时不要占"，没解决"**用过一次之后永远占着**" —— 实测看一场直播的词云，
+    之后 56MB 就一直挂着。现在每次用完记一笔时间戳，并**重新武装一个一次性定时器**；
+    到点仍没人用 ⇒ 把 `dt.FREQ`（60 万条词频，就是那 56MB）置空并让 `initialized=False`
+    （jieba 的 `check_initialized()` 会在下次 `cut` 时自动重建）。
+    **释放不是降级**：下次仍然走 jieba（只是多等一次 0.7s），不会退回正则分词。
     """
 
     name = "jieba"
@@ -87,20 +106,40 @@ class JiebaTokenizer:
     def __init__(self) -> None:
         self._impl = None
         self._extra_words: list[str] = []
+        # 曾经灌进去过的词：释放后重建词典时要**重灌**（否则主播名又被切碎，见 devlog/447）
+        self._applied_words: set[str] = set()
+        self._last_used = 0.0
+        self._releases = 0
+        self._in_flight = 0          # 正在切词的调用数：>0 时**绝不许**释放（见 `release()`）
+        self._timer: threading.Timer | None = None
+        self._lock = threading.RLock()
+
+    # ── 加载 / 使用 ───────────────────────────────────────────────
 
     def _load(self):
         if self._impl is None:
             import jieba  # 延迟导入：不让 jieba 进冷启动关键路径
             self._impl = jieba
-            for w in self._extra_words:
-                jieba.add_word(w)
+        dt = self._impl.dt
+        if not getattr(dt, "initialized", False):
+            self._impl.initialize()
+            for w in list(self._applied_words) + self._extra_words:
+                self._impl.add_word(w)
             self._extra_words.clear()
+            logger.info("分词词典已就绪（%d 个自定义词）", len(self._applied_words))
+            self._touch()            # 建词典也是一次"使用" ⇒ 该重新计时/武装定时器
         return self._impl
+
+    @property
+    def loaded(self) -> bool:
+        """前缀词典现在在不在内存里（`FREQ` 建好了且没被释放）。"""
+        return self._impl is not None and bool(getattr(self._impl.dt, "initialized", False))
 
     def warmup(self) -> None:
         """预热词典（启动期调用一次；失败只记日志，不影响抓取）。"""
         try:
             self._load().lcut("预热")
+            self._touch()
         except Exception as e:  # pragma: no cover - 依赖缺失/词典损坏
             logger.warning(f"jieba 预热失败（词云将退回正则分词）: {type(e).__name__}: {e}")
 
@@ -109,14 +148,128 @@ class JiebaTokenizer:
         words = [w for w in words if w]
         if not words:
             return
-        if self._impl is None:
+        self._applied_words.update(words)
+        if self._impl is None or not self.loaded:
             self._extra_words.extend(words)      # 还没加载：先攒着，加载时统一灌
             return
         for w in words:
             self._impl.add_word(w)
+        self._touch()
 
     def cut(self, text: str) -> Iterable[str]:
-        return self._load().lcut(text)
+        """切一段文本。
+
+        ⚠️ **开始之前就标"在用"**（`_in_flight` + 刷 `_last_used`），结束再标一次：
+        否则会出现这样一个真实窗口 —— 定时器在 T+600s 醒来时，某个请求**刚好**开始切词
+        （它还没走到结尾那次 `_touch`），`release()` 就把 `FREQ` 抽空了，
+        而这次 `lcut` 已经过了 `check_initialized()` ⇒ **不报错、但把整句切成单字**（静默的错误结果）。
+        """
+        with self._lock:
+            self._in_flight += 1
+            self._last_used = time.monotonic()
+        try:
+            return self._load().lcut(text)
+        finally:
+            with self._lock:
+                self._in_flight -= 1
+                self._last_used = time.monotonic()
+            self._arm_timer()
+
+    # ── 空闲释放（`devlog/447`）────────────────────────────────────
+
+    def release(self) -> bool:
+        """把那本前缀词典交还解释器。返回**是否真的释放了**（没加载 ⇒ False）。
+
+        ⚠️ 只置空 jieba 的 `dt.FREQ` / `total` / `initialized`，**不动 `_impl`**：
+        jieba 模块本身很小，留着下次不必再 import；`dictionary` 路径也留着，
+        `initialize()` 会照它重建。
+        """
+        impl = self._impl
+        if impl is None:
+            return False
+        dt = impl.dt
+        with self._lock:
+            if not getattr(dt, "initialized", False):
+                return False
+            if self._in_flight > 0:
+                # 正有人切到一半（切完还会再武装定时器）⇒ 这次什么都不做。
+                # ⚠️ 少了这一条，那条路径的后果是**静默的错误分词**（不抛错），见 `cut()` 的注释。
+                logger.debug("分词词典正被使用（%d 个调用在途），本次不释放", self._in_flight)
+                return False
+            idle = time.monotonic() - self._last_used if self._last_used else 0.0
+            dt.FREQ = {}          # ← 那 56MB 就是它；置空后 initialize() 会重建
+            dt.total = 0
+            dt.initialized = False
+            tag_tab = getattr(dt, "user_word_tag_tab", None)
+            if isinstance(tag_tab, dict):
+                tag_tab.clear()
+            self._last_used = 0.0
+            self._releases += 1
+        logger.info("分词词典已释放（空闲 %.0fs，第 %d 次）：交还约 56MB，"
+                    "下次用词云时重建一次（~0.7s）", idle, self._releases)
+        return True
+
+    def release_if_idle(self, now: float | None = None,
+                        idle_sec: float | None = None) -> bool:
+        """超时且**此刻确实没人用** ⇒ 释放；否则什么都不做（返回是否释放）。
+
+        判据纯粹是"上一次使用到现在有多久"，所以可以注入 `now` 做确定性用例。
+        """
+        limit = TOKENIZER_IDLE_SEC if idle_sec is None else idle_sec
+        if limit <= 0:                       # 关掉这个机制
+            return False
+        with self._lock:
+            if not self.loaded or not self._last_used:
+                return False
+            if (time.monotonic() if now is None else now) - self._last_used < limit:
+                return False
+        return self.release()
+
+    def cancel_timer(self) -> None:
+        """撤掉待发的定时器（关闭/测试用）。"""
+        with self._lock:
+            if self._timer is not None:
+                self._timer.cancel()
+                self._timer = None
+
+    def _touch(self) -> None:
+        """记一次"刚被用过" + 武装定时器（给 `add_words` / `warmup` 这类非 `cut` 路径用）。"""
+        with self._lock:
+            self._last_used = time.monotonic()
+        self._arm_timer()
+
+    def _arm_timer(self) -> None:
+        """把"到点看一眼"的定时器（重新）武装。
+
+        ⚠️ 每次使用都**重排**它（`cancel` + 新建）：所以"连着看几场词云"期间它永远
+        不会到点，也就不会有人在这种时候把词典抽走。`TOKENIZER_IDLE_SEC <= 0` ⇒ 不武装。
+        """
+        if TOKENIZER_IDLE_SEC <= 0:
+            return
+        with self._lock:
+            self.cancel_timer()
+            t = threading.Timer(TOKENIZER_IDLE_SEC, self._on_idle)
+            t.daemon = True
+            self._timer = t
+            t.start()
+
+    def _on_idle(self) -> None:
+        """定时器到点：再确认一次真的空闲（期间可能又有人用了）。"""
+        try:
+            self.release_if_idle()
+        except Exception as e:  # pragma: no cover - 释放失败不该影响任何请求
+            logger.warning(f"分词词典释放失败（忽略）: {type(e).__name__}: {e}")
+
+    def state(self) -> dict:
+        """给探针/日志读的状态（**不含**词典内容）。"""
+        return {
+            "engine": self.name,
+            "loaded": self.loaded,
+            "idle_sec": TOKENIZER_IDLE_SEC,
+            "idle_for": round(time.monotonic() - self._last_used, 1) if self._last_used else None,
+            "releases": self._releases,
+            "custom_words": len(self._applied_words),
+        }
 
 
 class RegexTokenizer:
@@ -162,6 +315,29 @@ def get_tokenizer(engine: str | None = None) -> Tokenizer:
             logger.warning(f"分词引擎 {name} 加载失败（{type(e).__name__}），退回 regex")
             return TOKENIZERS["regex"]
     return tk
+
+
+def tokenizer_state() -> dict:
+    """分词器的可观测状态（探针 / 诊断用）：词典在不在、空闲多久、释放过几次。
+
+    ⚠️ 只报**状态**，不报词典内容（60 万条词频，回给界面没有意义）。
+    """
+    out: dict = {}
+    for name, tk in TOKENIZERS.items():
+        out[name] = tk.state() if isinstance(tk, JiebaTokenizer) else {"engine": name}
+    return out
+
+
+def release_idle_tokenizers(now: float | None = None) -> list[str]:
+    """把**空闲超时**的分词器的词典交还（返回真的释放了的那几个引擎名）。
+
+    给"周期性维护"用（也可以被测试直接用假时钟驱动）：`TOKENIZER_IDLE_SEC <= 0`
+    时它永远返回空 —— 那个开关就是"关掉这个机制"。
+    """
+    return [
+        name for name, tk in TOKENIZERS.items()
+        if isinstance(tk, JiebaTokenizer) and tk.release_if_idle(now)
+    ]
 
 
 def normalize_token(token: str) -> str:

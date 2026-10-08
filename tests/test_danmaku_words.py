@@ -306,6 +306,156 @@ def test_cache_evicts_when_full(monkeypatch):
     assert len(danmaku_cloud._CACHE) <= 2
 
 
+# ── 词典空闲释放（`devlog/447`，TODO §1「词云词典空闲卸载」）──────────────
+#
+# 为什么要有这一组：R24/T2（`devlog/117`）只解决了"**没人用词云时不要占**那 56MB"
+# （取消启动预热），没解决"**用过一次之后永远占着**" —— 看一场直播的词云，之后那本
+# 前缀词典就一直挂在进程里。这一组钉住三件事：到点真的释放、释放不是降级、
+# 自定义词不会因为释放而丢。
+
+def _fresh_tokenizer():
+    """新起一个分词器（**不碰**全局那份 `TOKENIZERS["jieba"]`，免得影响别的用例）。"""
+    from app.services.danmaku_words import JiebaTokenizer
+
+    tk = JiebaTokenizer()
+    tk.cut("预热")                     # 真把词典建起来（0.7s 一次，用例里只做一次）
+    return tk
+
+
+def test_idle_release_really_frees_the_prefix_dict():
+    """★ 超时 ⇒ `FREQ` 真的空掉、`initialized` 落下；**没超时不许动**（正对照）。"""
+    tk = _fresh_tokenizer()
+    assert tk.loaded is True
+    assert len(tk._impl.dt.FREQ) > 100_000, "前缀词典应当真的建起来了（60 万条量级）"
+
+    # 正对照：刚用过（now = 上一次使用那一刻）⇒ 什么都不做。
+    # 少了这一条，"释放了"与"永远释放"分不开。
+    assert tk.release_if_idle(now=tk._last_used, idle_sec=600) is False
+    assert tk.loaded is True
+
+    assert tk.release_if_idle(now=tk._last_used + 601, idle_sec=600) is True
+    assert tk.loaded is False
+    assert len(tk._impl.dt.FREQ) == 0, "那 56MB 就是 FREQ，必须真的空掉"
+    tk.cancel_timer()
+
+
+def test_release_is_not_a_downgrade_to_regex():
+    """★ 释放后**下次仍然走 jieba**（只是多等一次重建），结果与释放前逐字一致。"""
+    tk = _fresh_tokenizer()
+    before = list(tk.cut("喵喵机长真棒，今天也很可爱"))
+    assert tk.release_if_idle(now=tk._last_used + 601, idle_sec=600) is True
+    after = list(tk.cut("喵喵机长真棒，今天也很可爱"))
+    assert tk.loaded is True, "再用一次应当把词典重建起来"
+    assert after == before, "重建后结果必须一致（否则用户会看到词云变了）"
+    tk.cancel_timer()
+
+
+def test_release_keeps_custom_words():
+    """★ 释放会丢掉 `add_word` 灌进去的词 ⇒ 重建时必须**重灌**（否则主播名又被切碎）。"""
+    tk = _fresh_tokenizer()
+    tk.add_words(["喵喵机长"])
+    assert "喵喵机长" in list(tk.cut("喵喵机长真棒"))
+
+    assert tk.release_if_idle(now=tk._last_used + 601, idle_sec=600) is True
+    assert "喵喵机长" in list(tk.cut("喵喵机长真棒")), \
+        "重灌失败 ⇒ 主播名会被切成『机长』（vtuber.py 里那条注释说的就是这个）"
+    tk.cancel_timer()
+
+
+def test_release_before_load_is_a_noop():
+    """没加载过 ⇒ `release()` 返回 False（不报错）；连着放两次，第二次也是 False。"""
+    from app.services.danmaku_words import JiebaTokenizer
+
+    tk = JiebaTokenizer()
+    assert tk.release() is False
+    tk.cut("预热")
+    assert tk.release() is True
+    assert tk.release() is False
+
+
+def test_idle_zero_disables_the_mechanism(monkeypatch):
+    """`TOKENIZER_IDLE_SEC = 0` ⇒ **永不释放**（这颗旋钮就是"关掉这个机制"）。"""
+    from app.services import danmaku_words as dw
+
+    monkeypatch.setattr(dw, "TOKENIZER_IDLE_SEC", 0.0)
+    tk = _fresh_tokenizer()
+    assert tk.release_if_idle(now=tk._last_used + 10_000) is False
+    assert tk.loaded is True
+    assert dw.release_idle_tokenizers() == []
+
+
+def test_timer_drives_the_release_and_rearms_on_use(monkeypatch):
+    """定时器（真驱动）也能到点释放；**再用一次会重新武装**。
+
+    用 0.05s 的阈值把等待压到毫秒级（真机默认 10 分钟）—— 这是驱动层的唯一一条用例，
+    状态机本身的判据都在上面那几条（注入假时钟，不受调度影响）。
+    """
+    import time as _time
+
+    from app.services import danmaku_words as dw
+
+    monkeypatch.setattr(dw, "TOKENIZER_IDLE_SEC", 0.05)
+    tk = _fresh_tokenizer()
+    assert tk.loaded is True
+    _time.sleep(0.6)
+    assert tk.loaded is False, "到点应当被定时器释放"
+    tk.cut("再来一次")
+    assert tk.loaded is True, "再用一次应当重建"
+    tk.cancel_timer()
+
+
+def test_release_refuses_while_a_cut_is_in_flight(monkeypatch):
+    """★ **切词途中绝不许释放**（真并发窗口，不是理论问题）。
+
+    时序：定时器在 T+600s 醒来 → 某个请求**刚好**开始切词（还没走到结尾那次刷新）⇒
+    若此时把 `FREQ` 抽空，这次 `lcut` 已经过了 `check_initialized()` ⇒
+    **不抛错、但整句被切成单字**（静默的错误结果，用户看到的是"词云全变成单字"）。
+    这里把那一次 `lcut` 卡在事件上，期间尝试释放 —— 必须拒绝。
+    """
+    import threading
+
+    tk = _fresh_tokenizer()
+    entered = threading.Event()
+    unblock = threading.Event()
+    real_lcut = tk._impl.lcut
+
+    def slow_lcut(text):
+        entered.set()
+        unblock.wait(5)
+        return real_lcut(text)
+
+    monkeypatch.setattr(tk._impl, "lcut", slow_lcut)
+    th = threading.Thread(target=lambda: list(tk.cut("在途的一次切词")))
+    th.start()
+    assert entered.wait(5), "那次 cut 应当已经进到 lcut 里"
+
+    # 期间"空闲"时间怎么算都不该放行（阈值给 0 都拒 —— 判的是"有人在用"）
+    assert tk.release_if_idle(now=tk._last_used + 10_000, idle_sec=600) is False
+    assert tk.release() is False
+    assert tk.loaded is True
+
+    unblock.set()
+    th.join(10)
+    assert tk._in_flight == 0, "切完要把在途计数还回去"
+    assert tk.loaded is True
+    tk.cancel_timer()
+
+
+def test_tokenizer_state_is_observable():
+    """状态可观测（探针读的就是它）：loaded / idle_sec / releases / 自定义词数。"""
+    from app.services.danmaku_words import JiebaTokenizer, tokenizer_state
+
+    tk = JiebaTokenizer()
+    assert tk.state()["loaded"] is False
+    tk.cut("预热")
+    tk.add_words(["某主播"])
+    tk.release()
+    st = tk.state()
+    assert st["loaded"] is False and st["releases"] == 1 and st["custom_words"] == 1
+    assert "jieba" in tokenizer_state()
+    tk.cancel_timer()
+
+
 # ── 真实网络（离线自动跳过） ──────────────────────────────────────────
 
 def test_fetch_raw_danmakus_against_live_endpoint():
