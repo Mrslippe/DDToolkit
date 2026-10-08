@@ -18,6 +18,8 @@ from app.core.database import engine, Base
 from app.routers import vtuber, img_proxy, auth, video_proxy
 from app.routers import settings as settings_router
 from app.routers import messages as messages_router
+# 小红书探活循环（`devlog/453`）：模块很轻（只 import 登录态），不拖冷启动
+from app.services import xhs_probe
 
 # --- 日志 ---
 # 双通道（轮转文件 + 控制台）配置在 `app/core/logging_setup.py`：
@@ -414,11 +416,18 @@ async def lifespan(app: FastAPI):
     # 想要老行为的话，在调用点恢复 `asyncio.create_task(_warm_tokenizer())` 即可。
     _perf("调度器+auth 就绪")
 
+    # 小红书登录态**每日一次轻量探活**（需求 3，2026-10-08，devlog/453）：
+    # 原先只在"抓取失败时"才发现失效（`xhs_auth.status()` 里那条"不做探活"的口径），
+    # 而失效主因是服务端吊销 + 多端互踢 ⇒ 用户不主动抓就永远不知道。
+    # ⚠️ 一天一个请求（只探活、不刷活），且**只有"会话被收回"才置失效**。
+    xhs_probe_task = asyncio.create_task(xhs_probe.run_forever())
+
     yield
     logger.info("关闭中...")
     auth_task.cancel()
     wbi_task.cancel()
-    for task in (auth_task, wbi_task):
+    xhs_probe_task.cancel()
+    for task in (auth_task, wbi_task, xhs_probe_task):
         try:
             await task
         except asyncio.CancelledError:

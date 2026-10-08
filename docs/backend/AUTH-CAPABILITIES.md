@@ -60,6 +60,24 @@ retire-when: 认证方式换掉扫码，或风控策略整体重做
     `verified=false`（今天的手抄路径根本不校验 ⇒ 网络抖一下就拒收是倒退）；·
     回执**只给键名与数量，绝不回显 cookie 值**。判据：`tests/test_auth_import.py`。
 
+10d. **小红书：每日一次轻量探活，且只有"会话被收回"才算失效**（需求 3，2026-10-08，`devlog/453`）。
+    背景：小红书的失效主因是**服务端吊销 + 多端互踢**（同账号在别处/手机 App 登录会把 web 端顶掉），
+    `web_session` 又没有 refresh 端点 —— 原先"只在抓取失败时才发现"意味着**用户不主动抓就永远不知道**。
+    现在 `services/xhs_probe.py` 一天探一次（**一个**签名请求，复用适配器已证实的
+    `user/otherinfo` 形状），并把结果归成五类：
+    | 归因 | 触发 | 置 `invalidated`？ | 用户该做什么 |
+    |---|---|---|---|
+    | `session_kicked` | 适配器 `cookie_invalid`（`code=-100 登录已过期`） | **是** | 重新粘整条 Cookie |
+    | `challenge` | `captcha` / `risk_control` | **否** | 去浏览器过验证码（cookie 可能还好） |
+    | `our_fault` | `signature_invalid` / `signer_unavailable` | **否** | 看日志（一个请求都没发） |
+    | `network` | 网络/自节流 | **否** | 等下一轮（**别重粘**） |
+    | `skipped` | 没配 Cookie / 库里没有小红书账号 | **否** | —— |
+    ⚠️ **只有第一类置失效**是这条纪律的核心：后三类下 cookie 可能完全没问题，
+    提示成"登录已过期"会让用户白忙（`devlog/338` 的同型教训）。
+    ⚠️ **只探活、不刷活**：没有任何证据表明高频保活能延长会话，而它本身就是风控面；
+    **不自动登录、不过验证码**（灰色自动化，且多端互踢会踢掉用户手机端）。
+    判据：`tests/test_xhs_probe.py`（+`tests/test_xhs_auth.py`）。
+
 10c. **配对令牌是"扩展灌凭据"的独立钥匙**（E1）：`app_meta` 的 `pairing.token`，
     `secrets.token_urlsafe(32)`，**持久**（重启不变，只有 `POST /auth/pairing/reset` 才换），
     走独立头 `X-DDToolkit-Pair`。它与 S1 的应用 token（`X-DDToolkit-Token`）**是两把钥匙，

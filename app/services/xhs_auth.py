@@ -58,6 +58,10 @@ class XhsAuth:
         #: ⚠️ 进程内状态：重启后回到"按配置判断"（用户没重新粘就可能再报一次 —— 这是可接受的，
         #:    宁可多报一次，也不要让"过期"永远沉默）。
         self.invalidated = False
+        #: 探活给出的**具体原因**（`services/xhs_probe.py` 写；`status()` 优先用它）。
+        #: 四种归因里只有"会话被收回"才会置 `invalidated`，但无论哪种都记在这里 ⇒
+        #: 用户看到的是"被踢了/要验证码/网络不通"，而不是笼统一句"登录已过期"。
+        self.probe_note = ""
 
     @property
     def is_configured(self) -> bool:
@@ -78,10 +82,11 @@ class XhsAuth:
     def status(self) -> dict:
         """给 UI 的登录态。
 
-        ⚠️ 这里**不做**"真实有效性探测"：小红书没有免签名的探活端点（B 站/微博那两条路
-        都要签名），硬探只会白挨一次风控。所以状态口径是"**配置齐了**"，
-        真实失效由抓取时的 `classify_http() == 'cookie_invalid'` 反映（会记
-        `last_error`、并调 `note_invalid()` 报一句"活了多久"），那时用户重新粘一次即可。
+        ⚠️ **2026-10-08（`devlog/453`）起这里会读探活结果**：`services/xhs_probe.py`
+        每日一次轻量探活（一个签名请求），归因比"抓到失败"细得多 —— 区分
+        「会话被平台收回」「平台要验证码/风控」「我们自己的签名坏了」「网络不通/被限流」，
+        并且**只有第一种**才置 `invalidated`（后三种下 cookie 可能完全没问题，让人去重粘是白忙）。
+        探活没跑过时仍然只有"配置齐了"这一个信息（那正是本函数保守的默认）。
 
         ⚠️ 2026-10-05（`devlog/353`）：`invalidated` 一旦置上就**如实报**「登录已过期」——
         此前 `classify_http` 把 `HTTP 200 + code=-100 登录已过期` 判成 `ok`，
@@ -95,8 +100,11 @@ class XhsAuth:
                     f"（缺 a1 时签名器会直接报 Missing 'a1' in cookies）")
         elif self.invalidated:
             lived = f"（这条活了 {age:.1f} 天）" if age is not None else ""
-            note = ("登录已过期 —— 抓取时平台回了「登录已过期」，到「设置 → 登录 → 小红书」"
-                    f"重新粘一次整条 Cookie{lived}")
+            # ⚠️ 探活给过**具体原因**就用它（"会话被收回"与"要验证码"是两件事、该做的也不同）；
+            #    没有探活记录时退回本函数原来那句（"抓取时才发现"那条路的信息量）。
+            note = self.probe_note or (
+                "登录已过期 —— 抓取时平台回了「登录已过期」，到「设置 → 登录 → 小红书」"
+                f"重新粘一次整条 Cookie{lived}")
         elif age is not None:
             # 平台不给标称寿命 ⇒ 至少把"起点 + 已用多久"如实说出来（devlog/330）
             note = f"已配置 {age:.1f} 天（{self.set_at[:10]} 粘贴）"
@@ -126,6 +134,7 @@ class XhsAuth:
         self.set_at = datetime.now().isoformat(timespec="seconds")
         self._reported_invalid = False          # 新粘的这条重新开始算
         self.invalidated = False                # 失效标记一并清掉（`devlog/353`）
+        self.probe_note = ""                    # 上一条的探活结论也作废（否则会显示旧原因）
         save_env_keys({"XHS_COOKIE": cookie, "XHS_COOKIE_SET_AT": self.set_at})
         logger.info("小红书 cookie 已保存（%d 个键，起点 %s）",
                     len(cookie_keys(cookie)), self.set_at)
