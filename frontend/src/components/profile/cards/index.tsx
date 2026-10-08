@@ -7,11 +7,12 @@
  * R37-P4a（`docs/design-archive-cards.md` §3）：每种卡片必须给出贴纸角标的**图标 + 色调**，
  * 缺一个 `registerCardKind` 当场抛错 —— 所以"加了卡片但没有角标"这种半成品进不来。
  */
-import { Cake, Flag, Shuffle } from 'lucide-react'
+import { Cake, Coins, Flag, Shuffle } from 'lucide-react'
 
 import { registerCardKind } from '../cardRegistry'
 import AnniversaryCard from './AnniversaryCard'
 import EventsCard from './EventsCard'
+import GiftDaysCard from './GiftDaysCard'
 import TopPostsCard from './TopPostsCard'
 
 registerCardKind({
@@ -41,4 +42,16 @@ registerCardKind({
   icon: Flag,
   tone: 'navy',
   render: (ctx) => <EventsCard {...ctx} />,
+})
+
+// 需求 5（2026-10-08，devlog/452）：数据**早就在库里**（`live_gift_days`，zeroroku 日聚合），
+// 此前只在「第三方数据」小窗里当表格列 ⇒ 这张卡把它画出来（每日礼物/舰长/SC 堆叠柱 + 汇总）。
+// 加这张卡同样只写了 `utils/giftTrend.ts` + `GiftDaysCard.tsx` + 这一行，**视图一行没改**。
+registerCardKind({
+  kind: 'gift-days',
+  title: '直播收益',
+  defaultSize: { w: 7, h: 3 },
+  icon: Coins,
+  tone: 'gray',
+  render: (ctx) => <GiftDaysCard {...ctx} />,
 })

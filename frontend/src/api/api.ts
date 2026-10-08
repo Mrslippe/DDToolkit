@@ -1,5 +1,5 @@
 import type {
-  AgreementState, Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliPlayInfo, BiliSearchResult, BiliSegments, Capabilities, DouyinCookieSaved, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveSession, LiveSessionDetail, LiveUpstream, NoticesResponse, PairingInfo, PoolItem, Post, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyOverview, ThirdpartyVtuber, AssetsInfo, AssetsPruneResult, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, XhsCookieSaved } from './types'
+  AgreementState, Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliPlayInfo, BiliSearchResult, BiliSegments, Capabilities, DouyinCookieSaved, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveGiftDay, LiveSession, LiveSessionDetail, LiveUpstream, NoticesResponse, PairingInfo, PoolItem, Post, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyOverview, ThirdpartyVtuber, AssetsInfo, AssetsPruneResult, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, XhsCookieSaved } from './types'
 import { ApiError, ApiShapeError } from './errors'
 import { HOST_HEADER, myHost } from '../utils/hostIdentity'
 import {
@@ -451,6 +451,11 @@ export const api = {
   /** 粉丝趋势点序列（服务端按天分桶降采样） */
   fanTrend: (accountId: number) =>
     request<FanTrendPoint[]>(`/account/${accountId}/fan-trend`),
+
+  /** 直播礼物**日聚合**（zeroroku；金额是原始字符串，口径见 `utils/giftTrend`）。
+   *  `limit=0` = 全给（后端默认）。档案视图的「直播收益」卡用它画每日柱。 */
+  listLiveGiftDays: (accountId: number, limit = 0) =>
+    request<LiveGiftDay[]>(`/account/${accountId}/gift-days?limit=${limit}`),
 
   /** 账号信息快照（粉丝数/直播状态时间序列，时间倒序）。R9：账号信息历史弹窗用 */
   statSnapshots: (accountId: number, limit = 60) =>

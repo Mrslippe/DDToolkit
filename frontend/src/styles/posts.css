@@ -2193,6 +2193,21 @@ img.hero-avatar {
 .tl-add { margin-top: 2px; }
 .tl-hint { margin: 0; color: var(--c-text-sub); font-size: 11px; }
 
+/* ── 「直播收益」卡（需求 5，2026-10-08，devlog/452）────────────────────────
+   堆叠柱：礼物 / 舰长 / SC 三段（构成一眼看得出）。柱用 SVG 画（卡片是 DOM 卡，
+   canvas 图表是面板级的 `FanTrendChart` 那一档）：`preserveAspectRatio="none"` 让
+   宽度随卡片自适应，高度锁 48 个 viewBox 单位 —— 所以**别给 svg 写死 height**。 */
+.gt { display: flex; flex-direction: column; gap: 6px; }
+.gt-skel { display: block; height: 48px; border-radius: var(--pcard-radius-inner, 8px); }
+.gt-svg { width: 100%; height: 48px; display: block; }
+.gt-seg { shape-rendering: crispEdges; }
+/* 三段用同族三色（浅粉 / 浅蓝 / 浅黄），与 `CLOUD_COLORS` 的浅色系同源观感 */
+.gt-gift { fill: var(--c-primary); }
+.gt-guard { fill: #7fb3d5; }
+.gt-sc { fill: #ffd166; }
+.gt-sum { margin: 0; color: var(--c-text-sub); font-size: 11px; }
+.gt-sum b { color: var(--c-text-main); font-weight: 600; }
+
 /* 视图级滚动容器（2026-09-07 覆盖式滚动条 OverlayScroll）：
    原生条隐藏不占宽 + 拇指自动隐藏；滚动体接管布局（列布局/间距/内边距） */
 .archive-view {

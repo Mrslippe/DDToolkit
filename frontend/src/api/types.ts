@@ -227,6 +227,27 @@ export interface FanTrendPoint {
   source: string
 }
 
+/**
+ * 直播礼物**日聚合**（`GET /account/{id}/gift-days`，来源 zeroroku，`devlog/451` 起接进档案视图）。
+ *
+ * ⚠️ 金额是**原始字符串**（后端为保精度直接存上游给的字符串，`LiveGiftDayOut`）：
+ * 可能是 `"1234.56"`、`"1,234"`、空串或 `null` ⇒ 一律经 `utils/giftTrend.amountToNumber` 解析，
+ * **不要在组件里 `Number(...)`**（`""` 会变成 `0`，把"没有数据"画成"当天 0 元"）。
+ */
+export interface LiveGiftDay {
+  id: number
+  account_id: number
+  source: string
+  /** ISO 日期串（`YYYY-MM-DD`，按**本地**日理解） */
+  gift_date: string
+  gift_amount: string | null
+  guard_amount: string | null
+  sc_amount: string | null
+  total_amount: string | null
+  room_id: string | null
+  created_at: string | null
+}
+
 /** 直播场次（v0.9.x 内容管道：danmakus 主源 + self 快照 ±90min 合并；
  *  旧字段语义不变，M1+ 新增 source/category/分区/收益等） */
 export interface LiveSession {
