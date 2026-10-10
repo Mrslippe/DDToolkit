@@ -96,6 +96,22 @@ retire-when: 认证方式换掉扫码，或风控策略整体重做
     而不是"试了失败"（那会白耗配额并弄脏 IP）。能力边界由
     `scripts/capability_matrix.py` 两态实测，落 `tests/fixtures/capability_matrix.json`。
 
+10e. **B 站 web 凭据是"四件套"，缺一件就续不了期**（2026-10-08，`devlog/455`）：
+    `SESSDATA` + `bili_jct` + `DedeUserID` + **`DedeUserID__ckMd5`**
+    （bilibili-API-collect「API 认证与鉴权 · Cookie 方式（web 端）」）。
+    | 事实 | 后果 |
+    |---|---|
+    | 只要有 `SESSDATA`+`bili_jct` 就能 `nav` 通过、抓取照跑 | 所以**不能按缺件拒收**（`REQUIRED_KEYS["bilibili"]` 保持两件） |
+    | **缺 `__ckMd5` ⇒ `cookie/info` 不下发 `refresh_token`**（实测 `code=0` 但没有令牌） | 「记住我」续期**永远武装不上**；SESSDATA 一到期只能重新登录 |
+    | 标称寿命约 1 个月（官方文档），实际会因改密码/风控/多端登录提前失效 | 只能**提醒**，不能拿它当判定（真实判定只有 `nav` 的 `isLogin`） |
+    落点：`_ATTR_MAP` 认下第四件（**在这之前粘进来会被静默丢掉**）、`cookie_str()` 有值才发、
+    `apply_cookie_checked` 的成功回执里如实说「缺件 ⇒ 到期只能重登」（**不拒收**）、
+    扫码成功/导入成功盖 `BILI_COOKIE_SET_AT`（**内部续期刷新不盖**——它量的是"这个登录用了多久"）。
+    失效时日志与状态接口都带上「（这条活了 N 天）」，`notices._login_notice` 在 ≥
+    `SESSDATA_WARN_DAYS`（25/30 天）时给一条**可 ack 的 warn**「B 站登录已 N 天，可能随时过期」，
+    而**已失效时只出 alert**（不叠那句自相矛盾的"快过期了"）。
+    判据：`tests/test_auth.py` 的 6 条（含"刷新不许重盖起点"那条）+ `tests/test_notices.py` 的 4 条。
+
 
 ## 未登录能力边界怎么验
 

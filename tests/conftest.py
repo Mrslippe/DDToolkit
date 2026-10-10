@@ -124,6 +124,9 @@ def _isolate_xhs_invalid_flag(monkeypatch):
 _CREDENTIAL_SETTINGS = (
     "BILI_SESSDATA", "BILI_BIJI_JCT", "BILI_DEDE_USER_ID", "BILI_BUVID_3",
     "BILI_BUVID_4", "BILI_REFRESH_TOKEN",
+    # 2026-10-08（devlog/455）：web 四件套的第四件 + 这套凭据的起点 —— 都是会被
+    # `_save_to_env()` 写回 `settings` 的键，漏登记就会污染后面的用例
+    "BILI_DEDE_USER_ID_CKMD5", "BILI_COOKIE_SET_AT",
     "WEIBO_COOKIE", "WEIBO_UID", "WEIBO_NAME",
     "XHS_COOKIE", "XHS_COOKIE_SET_AT",
     "DOUYIN_COOKIE", "DOUYIN_COOKIE_SET_AT", "DOUYIN_UA",

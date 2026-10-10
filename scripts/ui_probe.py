@@ -593,6 +593,15 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
             # ⚠️ 白名单不登记=静默丢掉，页面明明写了脚本侧只拿到 None（本文件已踩过一次）
             "cellPop": data.get("cellPop"),
             "appSettings": data.get("appSettings"),
+            # 对话框横向溢出（2026-10-08）：`first-run` 与 `capabilities` 两档都采
+            # ⚠️ 白名单不登记 = 静默丢掉（本文件已踩过两次，见上面那两条注释）
+            "dialogs": data.get("dialogs"),
+            "dialogsCanary": data.get("dialogsCanary"),
+            "dialogOverflow": data.get("dialogOverflow"),
+            "loginDialogOverflow": data.get("loginDialogOverflow"),
+            "loginDialogOverflowCanary": data.get("loginDialogOverflowCanary"),
+            "loginDialogOpened": data.get("loginDialogOpened"),
+            "loginTab": data.get("loginTab"),
             "filterPill": data.get("filterPill"),
             "traySuspend": data.get("traySuspend"),
             "closeAsk": data.get("closeAsk"),
@@ -2406,6 +2415,77 @@ def _calendar_signature(cal: dict | None) -> str | None:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+#: 探针量到的弹窗 → 给人看的名字（`probe.ts::measureDialogs` 的 `which`）
+_WHICH_LABEL = {"login": "登录浮窗", "legal": "协议闸门",
+                "cap-limits": "受限说明窗", "other": "其它弹窗"}
+
+
+def _dialog_overflow_failures(dialogs: object, where: str) -> list[str]:
+    """对话框横向溢出 → 失败清单（空 = 没有溢出）。
+
+    用户 2026-10-08 报「登录详情页面文字宽度超出了窗口」—— 这类毛病的**共同点**是
+    "只有文案长到某个程度才出现"，所以判据必须量渲染后的几何，不能靠读代码。
+
+    判两件事，缺一不可：
+    ① **面板自身** `scrollWidth - clientWidth`（内容把面板撑宽了，出横向滚动条）；
+    ② **最深一层肇事元素**为空 —— 面板不宽但仍可能有元素被推到窗外（`overflow: visible`
+       的父容器不会把它算进 `scrollWidth`），用户看到的正是这一种"文字超出了窗口"。
+    """
+    if not isinstance(dialogs, list) or not dialogs:
+        return [f"{where}: 没量到对话框几何（probe.ts 的 measureDialogs 没跑到？—— "
+                f"那「文字顶出窗口」就没有任何判据了）"]
+    bad: list[str] = []
+    for d in dialogs:
+        if not isinstance(d, dict):
+            continue
+        over = int(d.get("overflowX") or 0)
+        off = [o for o in (d.get("offenders") or []) if isinstance(o, dict)]
+        if over <= 1 and not off:
+            continue
+        who = _WHICH_LABEL.get(str(d.get("which")), "其它弹窗")
+        detail = "；".join(
+            f"{o.get('tag')}[{(o.get('cls') or '')[:48]}]「{(o.get('text') or '')[:22]}」"
+            f"裁掉 {o.get('clip')}px / 顶出 {o.get('out')}px"
+            for o in off[:4]) or "（没有最深层元素，只有面板自身溢出）"
+        bad.append(f"{where}: {who}有横向溢出：面板溢出 {over}px；肇事元素：{detail}"
+                   f"（根因通常是缺 `min-w-0` / `break-words`，或 flex 子项被内容撑开）")
+    return bad
+
+
+def _fmt_dialog_overflow(dialogs: object) -> str:
+    """一行速览（给人看的）：每窗的宽度、溢出像素、肇事元素个数。"""
+    if not isinstance(dialogs, list) or not dialogs:
+        return "（没量到）"
+    parts = []
+    for d in dialogs:
+        if not isinstance(d, dict):
+            continue
+        w = (d.get("rect") or {}).get("w")
+        parts.append(f"{_WHICH_LABEL.get(str(d.get('which')), '其它')} {w}px"
+                     f" 溢出 {d.get('overflowX')}px"
+                     f" 肇事 {len(d.get('offenders') or [])} 个")
+    return " ｜ ".join(parts) or "（没量到）"
+
+
+def _probe_json(text: str) -> dict | None:
+    """从落盘 DOM 里取 `<pre id="ui-probe">` 那段 JSON（取不到 → None）。
+
+    ⚠️ 必须**反转义实体**：DOM 序列化会把文本里的 `&`/`<`/`>`/`"` 写成实体，
+    直接 `json.loads` 会在含这些字符的类名/文案上失败（`--first-run` 那档此前只做
+    字符串包含判断，所以从没碰到这个问题）。
+    """
+    m = re.search(r'<pre id="ui-probe">(.*?)</pre>', text, re.S)
+    if not m:
+        return None
+    raw = (m.group(1).replace("&lt;", "<").replace("&gt;", ">")
+           .replace("&quot;", '"').replace("&#39;", "'").replace("&amp;", "&"))
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def _assert_first_run(dom_file: Path) -> list[str]:
     """首启行为：**协议闸门先盖住**，其下才是登录浮窗（「凭据仅保存在本机」+ 四个平台 Tab + 扩展栏）。
 
@@ -2413,6 +2493,10 @@ def _assert_first_run(dom_file: Path) -> list[str]:
     ① 闸门真的弹了（空数据目录 ⇒ `needed=true`）—— 用户口径「第一次启动应用……阅读完同意
        才可以关闭窗口」；② 闸门之下登录浮窗照常挂载（同意之后立刻就能看到它，不必等刷新）。
     两件事都是"整块消失时界面不报错"的那类 —— 只有探针看得见。
+
+    ③ 横向溢出（2026-10-08 用户报「登录详情页面文字宽度超出了窗口」）：登录浮窗是本档
+    **唯一**会自动弹出的窗，所以"文字顶出窗口"这类只在特定文案长度下才出现的毛病，
+    在这里量最省事（量的是**最深一层**肇事元素，见 `probe.ts` 的 `measureDialogs`）。
     """
     text = dom_file.read_text(encoding="utf-8", errors="replace")
     bad: list[str] = []
@@ -2444,6 +2528,12 @@ def _assert_first_run(dom_file: Path) -> list[str]:
     # "新用户只能去 clone 仓库"。探针跑在浏览器里（拿不到壳的路径）⇒ 只要求这一行**在**。
     if "data-ext-dir=" not in text:
         bad.append("登录浮窗没有「扩展目录」那一行（新用户拿不到扩展在哪儿的路径）")
+    # ③ 横向溢出：文字不许顶出窗口（用户 2026-10-08 报的那条）
+    info = _probe_json(text) or {}
+    bad += _dialog_overflow_failures(info.get("dialogs"), "首启")
+    # 正对照：塞一条必然放不下的长文本 ⇒ 面板必须靠**折行**吃下它（缺 `overflow-wrap` 时
+    # 实测把 512px 的面板撑到 2512px、标题顶出 1999px，与用户报的"文字超出窗口"同型）
+    bad += _dialog_overflow_failures(info.get("dialogsCanary"), "首启（长文本注入）")
     return bad
 
 
@@ -5661,6 +5751,25 @@ def main() -> int:
                   f"受限项={cp.get('limitCount')} {cp.get('limitIds')} "
                   f"去登录={cp.get('hasLoginCta')} {cp.get('loginCtaText')!r}")
             print(f"  受限角标={cp.get('limitBadges')} 全关提示={cp.get('hasSwitchOffHint')}")
+            print(f"  说明窗溢出={_fmt_dialog_overflow(cp.get('dialogOverflow'))}")
+            for bad in _dialog_overflow_failures(cp.get("dialogOverflow"), f"@{w} capabilities"):
+                failures.append(bad)
+            if cp.get("loginDialogOpened"):
+                print(f"  登录浮窗溢出={_fmt_dialog_overflow(cp.get('loginDialogOverflow'))}"
+                      f"（先溢出的是 {cp.get('loginTab')!r} Tab）")
+                for bad in _dialog_overflow_failures(
+                        cp.get("loginDialogOverflow"), f"@{w} capabilities · 登录浮窗"):
+                    failures.append(bad)
+                # 正对照：塞一条必然放不下的长文本 ⇒ 面板必须靠**折行**吃下它
+                print(f"  登录浮窗溢出（注入 300 字长串）="
+                      f"{_fmt_dialog_overflow(cp.get('loginDialogOverflowCanary'))}")
+                for bad in _dialog_overflow_failures(
+                        cp.get("loginDialogOverflowCanary"),
+                        f"@{w} capabilities · 登录浮窗（长文本注入）"):
+                    failures.append(bad)
+            else:
+                failures.append(f"@{w} capabilities: 顶栏登录钮没把登录浮窗叫出来"
+                                f"（那这条溢出轨就量不到真实文案）")
             print(f"  添加 V：浮窗={cp.get('addVDialogOpened')} 受限提示={cp.get('addVHasLimitHint')} "
                   f"仍能搜出={cp.get('addVRows')} 行（可点 {cp.get('addVEnabledRows')}）")
             print(f"  批量浮窗={cp.get('batchDialogOpened')} "

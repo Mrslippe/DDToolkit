@@ -763,3 +763,60 @@ def test_ack_drops_ring_notices_and_leaves_no_residue(client, db, monkeypatch):
     again = [n["id"] for n in N.build_notices(_Session(), status=_status(),
                                               now_ms=1_700_000_000_000)["notices"]]
     assert "live-5" in again, "同一个账号下次开播被上一次的已读吞掉了"
+
+
+# ── B 站登录临期提醒（2026-10-08，devlog/455） ──────────────────────────
+#
+# 为什么要有这一条：B 站 web 会话的标称寿命约一个月，而**过期是突然的** ——
+# 失效后"需要登录才能抓"的那部分会静默停下（用户 2026-10-08 就是这么发现的）。
+# 提醒的判据只认 `auth_manager.set_at`（用户侧新登录盖的章），**不拿 .env 的最后写入时间顶替**：
+# 内部续期也会写 .env，那样算出来的年龄永远从零开始。
+
+def _pin_bili_age(monkeypatch, days: float | None, *, needs_login: bool = False):
+    from datetime import datetime, timedelta
+
+    from app.services import auth as auth_mod
+
+    mgr = auth_mod.auth_manager
+    monkeypatch.setattr(mgr, "needs_login", lambda: needs_login, raising=False)
+    monkeypatch.setattr(
+        mgr, "set_at",
+        "" if days is None else (datetime.now() - timedelta(days=days)).isoformat(timespec="seconds"),
+        raising=False)
+
+
+def test_login_aging_warns_before_expiry(client, monkeypatch):
+    """登录了 26 天（还没失效）⇒ **warn + 「去登录」**，可 ack（不是状态类）。"""
+    _pin_bili_age(monkeypatch, 26.2)
+    body = _get(client, _status())
+    aging = [n for n in body["notices"] if n["id"] == "login-aging"]
+    assert len(aging) == 1, "26 天的登录该有临期提醒（否则过期那天用户只会觉得「抓取怎么不动了」）"
+    n = aging[0]
+    assert n["kind"] == "warn" and n["form"] == "action" and n["sticky"] is False
+    assert "26" in n["text"] and "过期" in n["text"]
+    assert n["action"] == {"label": "去登录", "kind": "login"}
+    # 它是**可 ack 的处置类**：状态类 id 名单里不许有它（有就永远关不掉）
+    assert "login-aging" not in N._STATE_IDS
+
+
+def test_login_aging_is_quiet_before_threshold(client, monkeypatch):
+    """24 天 ⇒ 什么都不说（提醒早了就是噪音，还会训练用户忽略它）。"""
+    _pin_bili_age(monkeypatch, 24.0)
+    ids = [n["id"] for n in _get(client, _status())["notices"]]
+    assert "login-aging" not in ids
+
+
+def test_login_aging_boundary_is_the_constant(client, monkeypatch):
+    """边界就是常量本身（25 天整 ⇒ 提醒）—— 防止有人把阈值改成"差不多"的魔数。"""
+    from app.services.auth import SESSDATA_WARN_DAYS
+
+    _pin_bili_age(monkeypatch, float(SESSDATA_WARN_DAYS))
+    ids = [n["id"] for n in _get(client, _status())["notices"]]
+    assert "login-aging" in ids
+
+
+def test_login_expired_replaces_aging(client, monkeypatch):
+    """已失效 ⇒ 只出 alert（一条就够）；别再叠一条"快过期了"（两句自相矛盾的话）。"""
+    _pin_bili_age(monkeypatch, 40.0, needs_login=True)
+    ids = [n["id"] for n in _get(client, _status())["notices"]]
+    assert "login-expired" in ids and "login-aging" not in ids

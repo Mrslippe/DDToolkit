@@ -370,20 +370,36 @@ def _rate_limit_notice(status: dict, now_ms: int) -> dict | None:
 
 
 def _login_notice(now_ms: int) -> dict | None:
-    from app.services.auth import auth_manager       # 局部导入：避免启动期循环
+    from app.services.auth import (SESSDATA_NOMINAL_DAYS, SESSDATA_WARN_DAYS,
+                                   auth_manager)      # 局部导入：避免启动期循环
 
-    if not auth_manager.needs_login():
-        return None
-    return {
-        "id": "login-expired", "kind": "alert", "form": FORM_STATE,
-        "text": "B 站登录已失效",
-        "detail": "抓取会跳过需要登录的部分；重新扫码后自动恢复",
-        "source": "登录态", "sticky": True,
-        "action": {"label": "去登录", "kind": "login"},
-        # 登录失效没有"开始时刻"可查（会话什么时候过期平台不说）⇒ 用 now，
-        # 面板上它显示"刚刚"，语义是"我们刚发现"
-        "createdAt": now_ms,
-    }
+    if auth_manager.needs_login():
+        return {
+            "id": "login-expired", "kind": "alert", "form": FORM_STATE,
+            "text": "B 站登录已失效",
+            "detail": "抓取会跳过需要登录的部分；重新扫码后自动恢复",
+            "source": "登录态", "sticky": True,
+            "action": {"label": "去登录", "kind": "login"},
+            # 登录失效没有"开始时刻"可查（会话什么时候过期平台不说）⇒ 用 now，
+            # 面板上它显示"刚刚"，语义是"我们刚发现"
+            "createdAt": now_ms,
+        }
+    # 临期提醒（2026-10-08，`devlog/455`）：B 站 web 会话标称寿命约一个月，而**过期是突然的**
+    # —— 与其等它失效后抓取静默少一半，不如在到点前说一句"抽空重登一次"。
+    # 判据只认 `set_at`（用户侧新登录/新导入时盖的章），**不拿".env 最后写入时间"顶替**：
+    # 内部续期刷新也会写 .env，那样算出来的"用了多久"永远从零开始。
+    age = auth_manager.age_days()
+    if age is not None and age >= SESSDATA_WARN_DAYS:
+        return {
+            "id": "login-aging", "kind": "warn", "form": FORM_ACTION,
+            "text": f"B 站登录已 {age:.0f} 天，可能随时过期",
+            "detail": (f"平台给的标称寿命约 {SESSDATA_NOMINAL_DAYS} 天；过期后需要登录才能抓的"
+                       f"部分会静默停下，抽空重登一次最省事"),
+            "source": "登录态", "sticky": False,
+            "action": {"label": "去登录", "kind": "login"},
+            "createdAt": now_ms,
+        }
+    return None
 
 
 def _report_notices(status: dict, acked: set[str], now_ms: int) -> list[dict]:

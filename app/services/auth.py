@@ -6,6 +6,7 @@ BilibiliLoginSession.start/poll/complete 三步，替代旧终端 ASCII 二维�
 import asyncio
 import logging
 import re
+from datetime import datetime
 from typing import Optional
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -34,6 +35,12 @@ _ATTR_MAP = {
     "SESSDATA": "sessdata",
     "bili_jct": "bili_jct",
     "DedeUserID": "dede_user_id",
+    # ⚠️ web 端 cookie 鉴权是**四件套**：SESSDATA / bili_jct / DedeUserID / `DedeUserID__ckMd5`
+    #    （bilibili-API-collect「API 认证与鉴权 · Cookie 方式（web 端）」）。
+    #    2026-10-08 之前这里**没有**它 ⇒ 用户粘整条 cookie 时它被静默丢掉，而缺它的后果是
+    #    `passport-login/web/cookie/info` **不下发** `refresh_token`（实测 `code=0` 但没有令牌）
+    #    ⇒ 「记住我」续期永远武装不上，SESSDATA 一到期就只能重新登录（用户报的那件事）。
+    "DedeUserID__ckMd5": "dede_user_id_ckmd5",
     # ⚠️ 设备号有**两个名字**，两个都要认（R26，devlog/126 真机实测）：
     #   · `bvuid3` = B 站**登录/SSO 响应**里用的名字（本仓库原先只认它，值也确实抓到了）；
     #   · `buvid3` = **web API 认的名字**（首次访问主站时由服务端 `Set-Cookie: buvid3=…` 下发）。
@@ -44,6 +51,14 @@ _ATTR_MAP = {
     "buvid3": "buvid3",
     "buvid4": "buvid4",
 }
+
+#: B 站 web 会话的标称寿命（天）—— 官方文档口径「Token 有效期为 1 月」
+#: （bilibili-API-collect：`SESSDATA` 一个月，改密码或过期失效）。
+#: ⚠️ 这是**标称值**，实测会因风控/多端登录提前失效 ⇒ 只用它做"快到期了"的**提醒**，
+#: 绝不用它替代真实判定（真实判定只有 `nav` 的 `isLogin`）。
+SESSDATA_NOMINAL_DAYS = 30
+#: 提前多少天开始提醒（留出"你哪天有空重登一次"的余量）
+SESSDATA_WARN_DAYS = 25
 
 # 设备指纹下发端点（公开免鉴权；浏览器首次访问主站时也走它，与登录态无关）
 SPI_URL = "https://api.bilibili.com/x/frontend/finger/spi"
@@ -125,14 +140,62 @@ class BilibiliAuth:
         self.sessdata: str = settings.BILI_SESSDATA
         self.bili_jct: str = settings.BILI_BIJI_JCT
         self.dede_user_id: str = settings.BILI_DEDE_USER_ID
+        self.dede_user_id_ckmd5: str = getattr(settings, "BILI_DEDE_USER_ID_CKMD5", "")
         self.buvid3: str = settings.BILI_BUVID_3
         self.buvid4: str = settings.BILI_BUVID_4
         self.refresh_token: str = settings.BILI_REFRESH_TOKEN
+        #: 这套凭据什么时候到手的（ISO 串）—— 失效时用它说"活了 N 天"、临期前用它提醒
+        #: （2026-10-08，`devlog/455`；口径与 `xhs_auth.set_at` 一致）
+        self.set_at: str = getattr(settings, "BILI_COOKIE_SET_AT", "")
         self.uname: str = ""            # 昵称（登录后 nav 回填，供登录态展示）
         self._needs_login: bool = not self.is_logged_in
 
     def needs_login(self) -> bool:
         return self._needs_login
+
+    def age_days(self) -> float | None:
+        """这套登录用了多久（天）；没记过起点 / 串坏了 ⇒ `None`（不猜）。
+
+        ⚠️ 与"`.env` 最后写入时间"**不是**一回事：内部续期刷新会写 `.env` 但不改这个戳，
+        因为要量的是"这个登录活了多久"（`XHS_COOKIE_SET_AT` 同口径）。
+        """
+        if not self.set_at:
+            return None
+        try:
+            t0 = datetime.fromisoformat(self.set_at)
+        except ValueError:
+            return None
+        return max(0.0, (datetime.now() - t0).total_seconds() / 86400.0)
+
+    def _stamp_login(self) -> None:
+        """记下"这套凭据是刚拿到的"。**只在用户侧的新登录/新导入时调**（见 `check_session` 的说明）。"""
+        self.set_at = datetime.now().isoformat(timespec="seconds")
+
+    def _lived_note(self) -> str:
+        """「（这条活了 N 天）」——失效时的如实补充；没起点就什么都不说。"""
+        age = self.age_days()
+        return f"（这条活了 {age:.1f} 天）" if age is not None else ""
+
+    def _saved_note(self) -> str:
+        """保存成功后的那句话；**缺 `__ckMd5` 时如实说清"续期指望不上"**。
+
+        为什么不干脆拒绝缺件的 cookie：它**能正常用**（nav 通过、抓取照跑），只是到期后
+        续不上。拒收等于把一个可用的凭据挡在门外；而什么都不说，用户就会以为"配好了就能
+        一直用下去"—— 2026-10-08 那次失效正是因为没人知道这一点（`devlog/455`）。
+        """
+        note = "已保存，并已确认登录态有效"
+        if not self.dede_user_id_ckmd5:
+            note += ("；但这条里没有 DedeUserID__ckMd5 ⇒ 平台不会下发续期令牌，"
+                     "到期后只能重新登录（复制整条 Cookie 时把它一起带上）")
+        return note
+
+    def can_auto_renew(self) -> bool:
+        """续期有没有戏：**要有 `refresh_token`**（平台只对"记住我"的会话下发它）。
+
+        ⚠️ 这是给用户看的判断，不是"能不能继续用"：`__ckMd5` 缺失时 `cookie/info` 不会给
+        续期令牌（2026-10-08 实测），而 `refresh_token` 是我们唯一能自己续期的路。
+        """
+        return bool(self.refresh_token)
 
     # ── cookie / headers ──────────────────────────────────────────
 
@@ -143,11 +206,15 @@ class BilibiliAuth:
         ⚠️ 设备号必须叫 **`buvid3`**（R26，devlog/126）：这里原先写的是 `bvuid3` ——
         那是登录响应里的名字，web API 不认，等于**每次都没带设备指纹**。
         值为空的那条会被下面过滤掉（发 `buvid3=` 空值比不发更可疑）。
+
+        ⚠️ `DedeUserID__ckMd5` 是 web 四件套之一（2026-10-08 补，`devlog/455`）：少了它
+        `cookie/info` 不给续期令牌 —— 有值才发，没有就照旧（不能编一个）。
         """
         parts = [
             f"SESSDATA={self.sessdata}",
             f"bili_jct={self.bili_jct}",
             f"DedeUserID={self.dede_user_id}",
+            f"DedeUserID__ckMd5={self.dede_user_id_ckmd5}",
             f"buvid3={self.buvid3}",
             f"buvid4={self.buvid4}",
         ]
@@ -209,9 +276,13 @@ class BilibiliAuth:
             "BILI_SESSDATA": self.sessdata,
             "BILI_BIJI_JCT": self.bili_jct,
             "BILI_DEDE_USER_ID": self.dede_user_id,
+            # web 四件套的第四件（缺它平台不给续期令牌，见 `_ATTR_MAP` 的说明）
+            "BILI_DEDE_USER_ID_CKMD5": self.dede_user_id_ckmd5,
             "BILI_BUVID_3": self.buvid3,
             "BILI_BUVID_4": self.buvid4,
             "BILI_REFRESH_TOKEN": self.refresh_token,
+            # 这套凭据的起点（失效时能说"活了 N 天"、临期前能提醒）
+            "BILI_COOKIE_SET_AT": self.set_at,
         }
         save_env_keys(values)
 
@@ -313,9 +384,10 @@ class BilibiliAuth:
             logger.warning("B 站 cookie 已保存，但探活没跑成：%s: %s", type(e).__name__, e)
             return True, f"已保存，但这次没能连上游验证（{type(e).__name__}）", False
         if ok:
+            self._stamp_login()                      # 用户侧新导入 ⇒ 记起点（见 _stamp_login）
             self._save_to_env()
             logger.info("B 站 cookie 已保存并验证有效")
-            return True, "已保存，并已确认登录态有效", True
+            return True, self._saved_note(), True
         for attr, val in snapshot.items():
             setattr(self, attr, val)
         logger.warning("B 站 cookie 探活未通过（上游说未登录）⇒ 不落盘、内存还原")
@@ -437,8 +509,13 @@ class BilibiliAuth:
                     self._needs_login = False
                     logger.info("Session 续期成功")
                 else:
+                    # ⚠️ 失效这一句要**带上活了多久**（2026-10-08，`devlog/455`）：用户报
+                    # "登录怎么失效了"时，日志里原来只有一句"会话无效" —— 没有起点就分不清
+                    # "刚配两天就挂"（可疑：风控/多端踢）与"用满一个月自然到期"（正常）。
                     self._needs_login = True
-                    logger.warning("会话无效，等待前端扫码登录...")
+                    logger.warning(f"会话无效，等待前端扫码登录...{self._lived_note()}"
+                                   f"；续期手段={'有 refresh_token' if self.can_auto_renew() else '无'}"
+                                   f"（缺 DedeUserID__ckMd5 时平台不会下发续期令牌）")
 
                 logger.info("Auth 维护周期完成，30 分钟后下一次检查")
                 await asyncio.sleep(1800)
@@ -555,11 +632,18 @@ class BilibiliLoginSession:
         if not auth.sessdata:
             return False, "未能获取到登录凭据，请重试"
 
+        # ⚠️ 先盖起点再落盘（2026-10-08，`devlog/455`）：这是**用户侧新登录**的两个入口之一
+        # （另一个是扩展导入）—— `set_at` 量的就是"这套登录从什么时候开始用"。
+        auth._stamp_login()
         auth._save_to_env()
         _clear_wbi_cache()
         auth._needs_login = False
 
         logger.info(f"二维码登录成功 (mid={auth.dede_user_id})")
+        if not auth.dede_user_id_ckmd5:
+            # 如实说一句：少了它平台不给续期令牌 ⇒ 到期只能重登（用户 2026-10-08 报的那件事）
+            logger.warning("这次登录的凭据里没有 DedeUserID__ckMd5 —— 平台不会下发续期令牌，"
+                           "到期后需要重新登录")
         return True, auth.dede_user_id
 
     async def close(self) -> None:

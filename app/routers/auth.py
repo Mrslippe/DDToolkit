@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.services import cookie_import, pairing
-from app.services.auth import auth_manager
+from app.services.auth import SESSDATA_WARN_DAYS, auth_manager
 from app.services.douyin_auth import douyin_auth_manager
 from app.services.weibo_auth import weibo_auth_manager
 from app.services.xhs_auth import xhs_auth_manager
@@ -108,11 +108,29 @@ async def auth_status(platform: str):
     if platform not in _PLATFORMS:
         raise HTTPException(404, "不支持的平台")
     if platform == "bilibili":
+        # 与小红书/抖音同口径地给出**起点与活了多久**（2026-10-08，`devlog/455`）：
+        # 用户问"登录怎么失效了"时，`note` 里那句「已配置 N 天」就是唯一能分辨
+        # "刚配两天就挂（风控/多端踢）"与"用满一个月自然到期"的信息。
+        age = auth_manager.age_days()
+        if auth_manager.needs_login():
+            note = ("B 站登录已失效" + auth_manager._lived_note()
+                    + "；重新扫码或重新粘贴整条 Cookie 即可恢复")
+            if not auth_manager.dede_user_id_ckmd5:
+                note += "（缺 DedeUserID__ckMd5 ⇒ 平台不会下发续期令牌）"
+        elif age is not None:
+            note = f"已登录 {age:.1f} 天（{auth_manager.set_at[:10]} 起）"
+            if age >= SESSDATA_WARN_DAYS:
+                note += "—— 已接近平台标称寿命（约 1 个月），建议抽空重登一次"
+        else:
+            note = ""
         return {
             "logged_in": auth_manager.is_logged_in,
             "needs_login": auth_manager.needs_login(),
             "uid": auth_manager.dede_user_id or None,
             "name": auth_manager.uname or None,
+            "set_at": auth_manager.set_at or "",
+            "age_days": age,
+            "note": note,
         }
     if platform == "xiaohongshu":
         # ⚠️ 它**不做**真实有效性探测：没有免签名的探活端点，硬探只会白挨一次风控

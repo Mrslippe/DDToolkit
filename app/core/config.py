@@ -44,6 +44,17 @@ class Settings:
     BILI_BUVID_3: str = os.getenv("BILI_BUVID_3", "")
     BILI_BUVID_4: str = os.getenv("BILI_BUVID_4", "")
     BILI_REFRESH_TOKEN: str = os.getenv("BILI_REFRESH_TOKEN", "")
+    #: `DedeUserID__ckMd5`（mid 的 md5 校验值）—— web 端 cookie 鉴权的四件套之一
+    #: （`SESSDATA` / `bili_jct` / `DedeUserID` / 它，见 bilibili-API-collect 的 API 认证页）。
+    #: ⚠️ **2026-10-08 之前本应用不认识这个键**（`_ATTR_MAP` 里没有 ⇒ 粘进来也会被丢掉），
+    #: 而缺它时平台**不会**在 `cookie/info` 里下发续期令牌 ⇒ 「记住我」续期从来没生效过
+    #: （用户 2026-10-08 报"B 站登录失效"，日志里正是 `cookie/info 无 refresh_token` + 之后
+    #: 的 `-101`，见 `devlog/455`）。
+    BILI_DEDE_USER_ID_CKMD5: str = os.getenv("BILI_DEDE_USER_ID_CKMD5", "")
+    #: 这套凭据是什么时候到手的（ISO 串，口径同 `XHS_COOKIE_SET_AT`）—— 只在**用户侧**
+    #: 的新登录/新导入时盖章（扫码成功、扩展导入验过），内部续期刷新**不**盖：
+    #: 它量的是"这个登录用了多久"，不是"最后一次写 .env 是什么时候"。
+    BILI_COOKIE_SET_AT: str = os.getenv("BILI_COOKIE_SET_AT", "")
 
     # 微博 API（扫码登录后写入：SUB/SUBP/SSOLoginState/M_WEIBOCN_PARAMS 组合串；
     # 未登录时为空。UID/昵称供登录态展示）

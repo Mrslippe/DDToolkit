@@ -1760,10 +1760,85 @@ export async function runUiProbe(): Promise<void> {
   //
   // 首启要验的不是布局不变量，而是「登录浮窗自动弹出 + 带凭据说明」，由脚本在
   // 落盘的 DOM 上断言（`_assert_first_run`）。所以这里显式声明 mode，不产 views。
+  /**
+   * 对话框横向溢出测量（2026-10-08，用户报「登录详情页面文字宽度超出了窗口」）。
+   *
+   * 量两件事：① 面板自己的 `scrollWidth - clientWidth`；② **最深一层**的溢出元素
+   * （带类名 / 文本片段 / 裁掉多少 / 顶出多少）。
+   *
+   * 为什么只列"最深一层"：孩子溢出时每个祖先都跟着"溢出"，直接把 `querySelectorAll('*')`
+   * 的结果摊出来是一串噪声（几十条，真正的肇事者在最里面）。判据要能一眼指出**修哪里**。
+   * 两种溢出都要抓：元素内容比自己宽（`scrollWidth`，即被 `overflow:hidden` 裁掉了），
+   * 以及元素右缘顶出对话框（`rect.right`，即整个被推到窗外）。
+   *
+   * 两处调用：`first-run`（登录浮窗，空数据目录下唯一自动弹出的窗）与 `capabilities`
+   * （受限说明窗，带**真实**数据 —— 用户看到的文案长度只有这里才复现得出来）。
+   */
+  const measureDialogs = () => {
+    const out: Record<string, unknown>[] = []
+    for (const dlg of document.querySelectorAll<HTMLElement>('[role="dialog"]')) {
+      const dr = dlg.getBoundingClientRect()
+      const cand = [...dlg.querySelectorAll<HTMLElement>('*')].filter((el) => {
+        const r = el.getBoundingClientRect()
+        // ⚠️ 两条**故意的/无伤大雅**的裁切不算溢出（否则这条判据一出生就是红的，然后没人看它）：
+        //   · `.sr-only`（Tailwind 屏幕阅读器专用）：天生 1×1 + `overflow:hidden`；
+        //   · 亚像素抖动：实测 `float-pill` 里的中文比盒子宽 **2–3px**（字体度量取整，
+        //     居中文字两端各削 ~1.5px，肉眼不可见）⇒ 阈值取 4px。
+        //     **4px 不是"调到绿为止"**：真正的"文字超出窗口"是几十像素量级（一个 URL/token
+        //     放不下），两者差一个数量级；这条仪器本身也做过注入验证（塞一条长 token ⇒ 当场报出来）。
+        if (el.closest('.sr-only')) return false
+        if (r.width <= 2 || r.height <= 2) return false
+        return el.scrollWidth > el.clientWidth + 4 || r.right > dr.right + 1
+          || r.left < dr.left - 1
+      })
+      const deep = cand.filter((el) => !cand.some((o) => o !== el && el.contains(o)))
+      out.push({
+        which: dlg.querySelector('[data-auth-tab]') ? 'login'
+          : dlg.querySelector('[data-legal]') ? 'legal'
+            : dlg.classList.contains('cap-limits-dialog') ? 'cap-limits' : 'other',
+        rect: { x: Math.round(dr.left), y: Math.round(dr.top),
+                w: Math.round(dr.width), h: Math.round(dr.height) },
+        overflowX: dlg.scrollWidth - dlg.clientWidth,
+        offenders: deep.slice(0, 12).map((el) => {
+          const r = el.getBoundingClientRect()
+          return {
+            tag: el.tagName.toLowerCase(),
+            cls: (el.getAttribute('class') || '').slice(0, 90),
+            data: el.getAttributeNames().filter((n) => n.startsWith('data-')).join(' '),
+            text: (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 60),
+            w: Math.round(r.width),
+            clip: el.scrollWidth - el.clientWidth,
+            out: Math.round(r.right - dr.right),
+          }
+        }),
+      })
+    }
+    return out
+  }
+
   if (mode === 'first-run') {
+    /**
+     * 登录浮窗的横向溢出（2026-10-08，用户报「登录详情页面文字宽度超出了窗口」）。
+     *
+     * 两条：
+     * ① 真机上这一屏的几何（`dialogs`）；
+     * ② **正对照**（`dialogsCanary`）：注入一条 300 字不可断串再量 —— 能不能吃下长文本
+     *    是 **CSS 的性质**，与具体文案无关，所以用必然放不下的串把这条性质钉死
+     *    （实测：没有 `overflow-wrap` 时它把 512px 的面板撑到 2512px，标题顶出 1999px）。
+     *    注入的节点量完即摘掉，不参与任何其它测量。
+     */
+    const dlg = document.querySelector<HTMLElement>('[role="dialog"]:has([data-auth-tab])')
+    const canary = document.createElement('span')
+    canary.setAttribute('data-overflow-canary', '1')
+    canary.textContent = 'x'.repeat(300)
+    dlg?.appendChild(canary)
+    const canaryDialogs = dlg ? measureDialogs() : null
+    canary.remove()
     const pre = document.createElement('pre')
     pre.id = 'ui-probe'
-    pre.textContent = JSON.stringify({ mode: 'first-run', views: [], degraded })
+    pre.textContent = JSON.stringify({ mode: 'first-run', views: [], degraded,
+                                       dialogs: measureDialogs(),
+                                       dialogsCanary: canaryDialogs })
     document.body.appendChild(pre)
     document.title = 'UI_PROBE_DONE'
     return
@@ -3750,6 +3825,9 @@ export async function runUiProbe(): Promise<void> {
       result.limitCount = dlg?.querySelectorAll('.cap-limits-item').length ?? -1
       result.limitIds = [...(dlg?.querySelectorAll('[data-limit-id]') || [])]
         .map((n) => n.getAttribute('data-limit-id'))
+      // 说明窗的横向溢出（2026-10-08，用户报「文字宽度超出窗口」）：这里的文案长度只有
+      // **真实数据**（受限项 + 后端给的 note + 平台名）才复现得出来，首启那一档是空的。
+      result.dialogOverflow = measureDialogs()
       // 状态 → 角标说法的**实测映射**（devlog/338）：抖音总开关关着时必须是「未启用」，
       // 不能写成「需要登录」—— 后者会让用户以为 Cookie 没生效而去反复重粘。
       result.limitBadges = [...(dlg?.querySelectorAll('[data-limit-state]') || [])]
@@ -3805,6 +3883,59 @@ export async function runUiProbe(): Promise<void> {
     batchClose?.click()
     await sleep(250)
     result.batchClosed = !document.querySelector('[data-batch-action]')
+
+    /**
+     * 登录浮窗的横向溢出（2026-10-08，用户报「登录详情页面文字宽度超出了窗口」）。
+     *
+     * ⚠️ 为什么不在 `first-run` 那一档量就够：那边跑在**空数据目录**上，各平台状态是
+     * "未配置"，而用户看到的溢出只在**有真实数据**时出现（已登录的昵称 / 失效说明 note /
+     * 上次同步 / 扩展目录……）。本档跑在真机数据目录的**副本**上 ⇒ 文案长度是真的。
+     * 入口就用说明窗自己的「登录 B 站 / 微博」（它调的就是顶栏那颗 `onLogin`）。
+     */
+    {
+      // 入口 = 顶栏那颗登录钮 `.topbar-login-btn`
+      // ⚠️ 别用 `.topbar-login button`：那个容器里**第一颗**是「未登录 · N 项受限」的能力钮
+      //    （`querySelector` 会拿到它，点了只会再开一次说明窗 —— 本探针第一版就这么假红过）。
+      document.querySelector<HTMLElement>('.topbar-login-btn')?.click()
+      const loginDlg = await waitFor(
+        () => document.querySelector('[role="dialog"] [data-auth-tab]'), 4000)
+      result.loginDialogOpened = !!loginDlg
+      // 四个 Tab 都点一遍：微博/小红书/抖音 各自的说明文本不一样，而溢出的常常只有其中一个
+      const tabs = [...document.querySelectorAll<HTMLElement>('[data-auth-tab]')]
+      for (const t of tabs) {
+        t.click()
+        await sleep(160)
+        const one = measureDialogs().find((d) => d.which === 'login')
+        const off = (one?.offenders as unknown[]) || []
+        if (off.length || Number(one?.overflowX ?? 0) > 1) {
+          result.loginTab = t.getAttribute('data-auth-tab')
+          break
+        }
+      }
+      result.loginDialogOverflow = measureDialogs()
+
+      /**
+       * **正对照**：往浮窗里塞一条"最坏情况"的长文本（不可断的 ASCII 串，如长 token /
+       * 长 URL / 一坨没有空格的错误原文），再量一次。
+       *
+       * 为什么必须有这一条：真机数据里"刚好放不下"的那段文案我复现不出来（用户报的那一屏
+       * 可能来自某个平台的长昵称/长错误原文），而**能不能换行/断词是 CSS 的性质**，
+       * 与具体文案无关 —— 用一条必然放不下的串就能把这条性质钉死：
+       * 没有 `overflow-wrap` 时它把面板撑宽（判据红），有就乖乖折行。
+       * 注入的节点量完即摘掉，**不参与**后面任何测量。
+       */
+      {
+        const dlg = document.querySelector<HTMLElement>('[role="dialog"]:has([data-auth-tab])')
+        const canary = document.createElement('span')
+        canary.setAttribute('data-overflow-canary', '1')
+        canary.textContent = 'x'.repeat(300)
+        dlg?.appendChild(canary)
+        result.loginDialogOverflowCanary = measureDialogs()
+        canary.remove()
+      }
+      document.querySelector<HTMLElement>('[role="dialog"] [data-slot="dialog-close"]')?.click()
+      await sleep(250)
+    }
 
     const pre = document.createElement('pre')
     pre.id = 'ui-probe'

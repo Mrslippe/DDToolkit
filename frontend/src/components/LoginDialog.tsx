@@ -289,7 +289,16 @@ export default function LoginDialog({ open, onOpenChange }: Props) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-sm">
+      {/* ⚠️ `[overflow-wrap:anywhere]` 是**这一屏的硬要求**（2026-10-08，用户报「登录详情页面
+          文字宽度超出了窗口」）：浮窗里会出现不可断的长串 —— 失败的原文、长路径、扩展 token、
+          平台返回的 JSON 片段。默认 `overflow-wrap: normal` 时它们把面板**撑到窗口之外**
+          （探针实测：注入 300 字长串 ⇒ 512px 的面板变 2512px、连标题都顶出 1999px）。
+          为什么用 `anywhere` 而不是 `break-word`：只有它同时**压缩 min-content 宽度**，
+          让 auto 宽度的容器真的能缩下来（`break-word` 只允许断行、不改变固有宽度）。
+          判据在 `scripts/ui_probe.py`：`--first-run`（**进 A 档门禁**）与 `--capabilities`
+          都会先量真实几何、再注入一条 300 字长串量第二遍（正对照），见
+          `probe.ts::measureDialogs`。 */}
+      <DialogContent className="max-w-sm [overflow-wrap:anywhere]">
         <DialogHeader>
           <DialogTitle>账号登录</DialogTitle>
           <DialogDescription>
@@ -406,6 +415,14 @@ export default function LoginDialog({ open, onOpenChange }: Props) {
               <p className="text-xs text-muted-foreground">
                 {cur?.name || cur?.uid || '凭据有效'}
               </p>
+              {/* 登录态的**具体说明**（2026-10-08，`devlog/455`）：B 站现在会给出
+                  「已登录 N 天（… 起）」与临期提醒 —— 在这之前扫码型平台**一个字都不显示**
+                  （`cur.note` 只在粘贴框那一支里渲染过），于是"这条还能用多久"用户只能猜。 */}
+              {cur?.note && (
+                <p className="text-[11px] leading-relaxed text-muted-foreground" data-auth-note="1">
+                  {cur.note}
+                </p>
+              )}
               <button
                 type="button"
                 className="flex items-center gap-1.5 text-xs text-muted-foreground underline-offset-2 hover:text-primary hover:underline"
@@ -431,6 +448,13 @@ export default function LoginDialog({ open, onOpenChange }: Props) {
                 {phase === 'expired' && '二维码已过期'}
                 {phase === 'failed' && (detail || '操作失败')}
               </p>
+              {/* 还没登录时的状态说明（含"上次那条活了多久/为什么失效"）—— 只在不是失败态时显示，
+                  失败态上面那句 `detail` 才是主角（两句话叠在一起会互相抢注意力）。 */}
+              {phase !== 'failed' && cur?.note && (
+                <p className="text-[11px] leading-relaxed text-muted-foreground" data-auth-note="1">
+                  {cur.note}
+                </p>
+              )}
               {(phase === 'expired' || phase === 'failed') && (
                 <button
                   type="button"

@@ -669,3 +669,142 @@ def test_bili_complete_calls_ensure_device_ids(monkeypatch):
     ok, _ = asyncio.run(sess.complete({"data": {"url": cb}}))
     asyncio.run(sess.close())
     assert ok is True and calls == [1]
+
+
+# ── B 站登录寿命：web 四件套 + 起点 + 「活了多久」（2026-10-08，devlog/455） ──
+#
+# 起因（用户 2026-10-08 报「我的 B 站登录失效了」）：`_ATTR_MAP` 里**没有**
+# `DedeUserID__ckMd5`（web cookie 鉴权的四件套之一）⇒ 用户粘整条 cookie 时它被静默丢掉，
+# 而缺它的后果是 `passport-login/web/cookie/info` **不下发** `refresh_token`（实测 code=0
+# 但没有令牌）⇒ 「记住我」续期永远武装不上，SESSDATA 一到期就只能重新登录。
+# 这一组钉住：认下第四件、把"起点"盖章、以及**别把刷新当成新登录**。
+
+def test_bili_ckmd5_is_sent_and_omitted_when_absent():
+    """有就发、没有就不发（**不编一个**）；别的键一个都不受影响。"""
+    from app.services.auth import BilibiliAuth
+
+    a = BilibiliAuth()
+    a.sessdata, a.bili_jct, a.dede_user_id = "S", "J", "1062902765"
+    a.buvid3, a.buvid4 = "B3", "B4"
+    a.dede_user_id_ckmd5 = ""
+    assert "DedeUserID__ckMd5" not in a.cookie_str
+    assert "SESSDATA=S" in a.cookie_str and "DedeUserID=1062902765" in a.cookie_str
+    a.dede_user_id_ckmd5 = "MD5VALUE"
+    assert "DedeUserID__ckMd5=MD5VALUE" in a.cookie_str
+
+
+def test_bili_ckmd5_is_recognized_when_pasted(monkeypatch):
+    """**这条就是那个 bug 的判据**：缺映射时用户粘的整条 cookie 里这一件会被静默丢掉。"""
+    from app.services import auth as am
+
+    saved: dict = {}
+    monkeypatch.setattr(am, "save_env_keys", lambda values: saved.update(values))
+    a = am.BilibiliAuth()
+    changed = a._apply_cookies({"DedeUserID__ckMd5": "ABC123", "SESSDATA": "S"})
+    assert changed is True
+    assert a.dede_user_id_ckmd5 == "ABC123"
+    assert saved["BILI_DEDE_USER_ID_CKMD5"] == "ABC123"
+
+
+def test_bili_qr_login_stamps_the_start_time(monkeypatch):
+    """扫码成功要盖「起点」章 —— 「活了 N 天」与临期提醒都靠它。"""
+    from app.services import auth as am
+    from app.services.auth import BilibiliAuth
+
+    saved: dict = {}
+    monkeypatch.setattr(am, "save_env_keys", lambda values: saved.update(values))
+
+    cb = ("https://passport.biligame.com/crossDomain?DedeUserID=1062902765"
+          "&SESSDATA=deadbeef%2C1789000000%2Cabc&bili_jct=JCT123")
+    sess = _bili_session(_bili_handler(None))
+    sess.auth = BilibiliAuth()
+    sess.auth.sessdata = sess.auth.bili_jct = sess.auth.dede_user_id = ""
+    sess.auth.buvid3 = sess.auth.buvid4 = "already-there"   # 别让它去联网领设备号
+
+    ok, _ = asyncio.run(sess.complete({"data": {"url": cb}}))
+    asyncio.run(sess.close())
+
+    assert ok is True
+    assert sess.auth.set_at, "扫码成功必须盖起点章（否则失效时说不出「活了多久」）"
+    assert saved.get("BILI_COOKIE_SET_AT") == sess.auth.set_at
+
+
+def test_bili_refresh_does_not_restamp(monkeypatch):
+    """内部刷新**不**盖起点章：它量的是"这个登录用了多久"，不是"最后一次写 .env 是什么时候"。
+
+    ⚠️ 反例（本用例要杀的那种改法）：把 `_stamp_login()` 挪进 `_apply_cookies()` ——
+    那样每次续期刷新都会把年龄清零，临期提醒**永远不会触发**（而且看起来一切正常）。
+    """
+    import httpx
+
+    from app.services import auth as am
+
+    monkeypatch.setattr(am, "save_env_keys", lambda values: None)
+    a = am.BilibiliAuth()
+    a.set_at = "2026-09-01T00:00:00"
+    resp = httpx.Response(200, headers=[
+        ("set-cookie", "SESSDATA=NEW; Domain=.bilibili.com; Path=/")],
+        request=httpx.Request("GET", "https://api.bilibili.com/x"))
+    a._update_from_response(resp)
+    assert a.sessdata == "NEW", "正对照：cookie 确实被刷新了"
+    assert a.set_at == "2026-09-01T00:00:00"
+
+
+def test_bili_age_days_parsing():
+    """没起点 / 串坏了 ⇒ `None`（不猜）；未来时间夹到 0（不返回负数）。"""
+    from datetime import datetime, timedelta
+
+    from app.services.auth import BilibiliAuth
+
+    a = BilibiliAuth()
+    a.set_at = ""
+    assert a.age_days() is None
+    a.set_at = "不是时间"
+    assert a.age_days() is None
+    a.set_at = (datetime.now() - timedelta(days=3)).isoformat(timespec="seconds")
+    assert 2.9 < a.age_days() < 3.1
+    a.set_at = (datetime.now() + timedelta(days=1)).isoformat(timespec="seconds")
+    assert a.age_days() == 0.0
+    assert a._lived_note() == "（这条活了 0.0 天）"      # 有起点就说，哪怕夹到 0
+
+
+def test_bili_saved_note_tells_about_missing_ckmd5():
+    """缺第四件时**如实说清"续期指望不上"** —— 但**不拒收**（它照样能用，只是到期续不了）。"""
+    from app.services.auth import BilibiliAuth
+
+    a = BilibiliAuth()
+    a.dede_user_id_ckmd5 = ""
+    assert "DedeUserID__ckMd5" in a._saved_note()
+    a.dede_user_id_ckmd5 = "X"
+    assert "DedeUserID__ckMd5" not in a._saved_note()
+    a.refresh_token = ""
+    assert a.can_auto_renew() is False
+    a.refresh_token = "RT"
+    assert a.can_auto_renew() is True
+
+
+def test_bili_status_endpoint_reports_age_and_expiry(monkeypatch):
+    """`/auth/{platform}/status` 的 B 站分支：**如实给出起点/活了多久/失效原因**。
+
+    在这之前 B 站那支只回四个键（`logged_in/needs_login/uid/name`）—— 用户问"登录怎么失效了"
+    时，界面上一个字都没有；小红书/抖音早就有 `note` 与 `age_days` 了。
+    """
+    import asyncio
+
+    from app.services import auth as am
+
+    mgr = am.auth_manager
+    monkeypatch.setattr(am.BilibiliAuth, "dede_user_id_ckmd5", "", raising=False)
+    monkeypatch.setattr(mgr, "dede_user_id_ckmd5", "", raising=False)
+    monkeypatch.setattr(mgr, "_needs_login", False, raising=False)
+    monkeypatch.setattr(mgr, "set_at", "2026-09-01T00:00:00", raising=False)
+
+    body = asyncio.run(arouter.auth_status("bilibili"))
+    assert body["set_at"] == "2026-09-01T00:00:00"
+    assert body["age_days"] is not None and body["age_days"] > 25
+    assert "已登录" in body["note"] and "接近平台标称寿命" in body["note"]
+
+    # 失效态：说清"已失效"与**缺第四件**（那是续不上的原因）
+    monkeypatch.setattr(mgr, "_needs_login", True, raising=False)
+    body = asyncio.run(arouter.auth_status("bilibili"))
+    assert "已失效" in body["note"] and "DedeUserID__ckMd5" in body["note"]
