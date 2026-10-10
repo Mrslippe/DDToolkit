@@ -2539,3 +2539,54 @@ def test_vtuber_without_group_keeps_null(client):
     vid = client.post("/vtuber", json={"name": "无企划"}).json()["id"]
     body = next(v for v in client.get("/vtuber/list").json() if v["id"] == vid)
     assert body["group_name"] is None and body["group_uuid"] is None
+
+# ── 类型推断的复杂度（2026-10-10，devlog/459） ──────────────────────────
+#
+# ⚠️ 这一条是**性能回归的判据**：B2 那批把系列聚类/反哺词库挪进了 per-场次的辅助函数，
+# 于是**每场都重聚类一次全量**（O(n²)）—— 真机 1,256 场的账号实测 **80ms → 8,150ms**，
+# 用户看到的是"数据视图的卡片加载很久 + 之后切换界面卡"（CPU 全烧在这个请求上，
+# 而前端每轮 fetch-idle 都会再发一次）。判据就是"每请求只算一次"这件事本身。
+
+def _count_basis_calls(monkeypatch) -> dict:
+    """把 `plan_series`/`build_learned` 换成计数桩（**不许**顺带改行为）。"""
+    from app.routers import vtuber as R
+
+    calls = {"plan": 0, "learned": 0}
+    real_plan, real_learned = R.plan_series, R.build_learned
+
+    def plan(sessions, overrides):
+        calls["plan"] += 1
+        return real_plan(sessions, overrides)
+
+    def learned(overrides, sessions):
+        calls["learned"] += 1
+        return real_learned(overrides, sessions)
+
+    monkeypatch.setattr(R, "plan_series", plan)
+    monkeypatch.setattr(R, "build_learned", learned)
+    return calls
+
+
+def test_infer_basis_is_computed_once_per_request(client, monkeypatch):
+    """★复杂度判据：**聚类/词库每请求算一次**，不许逐场次重算（O(n²) 回归）。"""
+    _, aid = _mk_vtuber_account(client)
+    db = TestingSession()
+    for i in range(5):                     # 5 场 ⇒ 逐场次重算的话计数会是 5
+        db.add(LiveSession(account_id=aid, source="danmakus", live_id=f"u{i}",
+                           title=f"晚上好 第{i}期",
+                           start_at=datetime(2026, 9, 1 + i, 12, 0),
+                           end_at=datetime(2026, 9, 1 + i, 14, 0)))
+    db.commit()
+    db.close()
+
+    calls = _count_basis_calls(monkeypatch)
+    r = client.get(f"/account/{aid}/live-sessions")
+    assert r.status_code == 200 and len(r.json()) == 5, "正对照：5 场都返回了"
+    assert calls == {"plan": 1, "learned": 1}, (
+        f"聚类/词库被算了 {calls} 次 —— 每场次算一次就是 O(n²)："
+        f"真机 1,256 场的账号从 ~80ms 变成 ~8,150ms（devlog/459）")
+
+    # 详情端点同样只算一次（它是弹窗打开时的第一次请求）
+    calls = _count_basis_calls(monkeypatch)
+    assert client.get(f"/account/{aid}/live-sessions/u0").status_code == 200
+    assert calls == {"plan": 1, "learned": 1}, f"详情端点：{calls}"

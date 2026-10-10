@@ -814,16 +814,26 @@ def _live_infer_ctx(db: Session, account_id: int):
     return account, vtuber, [e.event_date for e in events], overrides
 
 
-def _infer_session(s: dict, *, vtuber, event_dates, overrides, sessions,
+def _infer_basis(sessions: list[dict], overrides: dict) -> tuple[dict, dict]:
+    """类型推断的**公共输入**：系列聚类 + 反哺词库（两者都依赖**整个账号的场次集合**）。
+
+    ⚠️ **每请求算一次，绝不许放进逐场次的循环里**（2026-10-10，`devlog/459`）：
+    B2 那批把这两件事挪进了 per-场次的辅助函数，于是 1,256 场的账号从 ~80ms 变成 ~8,150ms
+    （O(n²)：每场都重聚类一次全量）—— 用户看到的是"数据视图的卡片加载很久 + 之后切换界面卡"
+    （CPU 全烧在这个请求上，而前端每轮 `fetch-idle` 都会再发一次）。
+    判据：`tests/test_vtuber_api.py::test_infer_basis_is_computed_once_per_request`。
+    """
+    return plan_series(sessions, overrides), build_learned(overrides, sessions)
+
+
+def _infer_session(s: dict, *, vtuber, event_dates, overrides, basis,
                    live_id) -> tuple[str, str]:
     """场次类型推断（v2 信号栈）：override > series > title > learned > area > date > fallback。
 
-    **一处实现、三处调用**（列表 / 详情 / 写回执）：这三条路的推断输入是同一样东西，
-    各写一遍的后果不是"重复"，是**同一条记录在两个端点上分类不同**。
-    系列聚类与词库依赖整个账号的场次集合，所以按请求算一次、传进来（别在循环里算）。
+    `basis` 是 `_infer_basis(sessions, overrides)` 的结果 —— **由调用方在循环外算好传进来**，
+    本函数不做任何全量计算（否则就是上面那条 O(n²)）。
     """
-    series_categories = plan_series(sessions, overrides)
-    learned = build_learned(overrides, sessions)
+    series_categories, learned = basis
     return infer_category(
         s["live_title"], s.get("area_name"), s.get("parent_area_name"),
         s["start_at"],
@@ -863,11 +873,12 @@ def live_sessions(account_id: int, db: Session = Depends(get_db)):
     if not account:
         raise HTTPException(404, f"Account id={account_id} 不存在")
     sessions = LiveSessionRepo(db).merged(account_id)
+    basis = _infer_basis(sessions, overrides)      # ⚠️ 循环外算一次（见 `_infer_basis`）
     out = []
     for s in sessions:
         category, category_from = _infer_session(
             s, vtuber=vtuber, event_dates=event_dates, overrides=overrides,
-            sessions=sessions, live_id=s.get("live_id"))
+            basis=basis, live_id=s.get("live_id"))
         out.append(LiveSessionOut(**_session_payload(s, account_id,
                                                     category, category_from)))
     return out
@@ -930,7 +941,7 @@ def live_session_detail(account_id: int, live_id: str,
     s.pop("src_live_ids", None)      # 只用于定位，不回给前端
     category, category_from = _infer_session(
         s, vtuber=vtuber, event_dates=event_dates, overrides=overrides,
-        sessions=sessions, live_id=live_id)
+        basis=_infer_basis(sessions, overrides), live_id=live_id)
     return LiveSessionDetailOut(**_session_payload(s, account_id,
                                                   category, category_from))
 
@@ -966,7 +977,7 @@ def _manual_detail(db: Session, account_id: int, live_id: str) -> LiveSessionDet
     s.pop("src_live_ids", None)
     category, category_from = _infer_session(
         s, vtuber=vtuber, event_dates=event_dates, overrides=overrides,
-        sessions=sessions, live_id=live_id)
+        basis=_infer_basis(sessions, overrides), live_id=live_id)
     return LiveSessionDetailOut(**_session_payload(s, account_id,
                                                   category, category_from))
 
