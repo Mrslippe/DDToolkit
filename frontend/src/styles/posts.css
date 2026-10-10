@@ -3484,6 +3484,17 @@ img.hero-avatar {
   text-overflow: ellipsis;
 }
 
+/* 「他还在 Twitter / YouTube」（2026-10-08 C2）：与 `.av-group` 同档的次要信息，
+   比 UID 弱一档但比无关噪声强 —— 用户靠它分辨同名小号。
+   ⚠️ 不可点（那些主机不在外链白名单里），所以只做文字，不给 hover 下划线。 */
+.av-elsewhere {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--c-text-sub);
+  opacity: .9;
+}
+
 .av-num {
   flex: none;
   font-variant-numeric: tabular-nums;

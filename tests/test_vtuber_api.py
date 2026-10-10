@@ -2501,3 +2501,41 @@ def test_bili_segments_route_rejects_non_video_posts(client):
     assert client.get(f"/bili/segments/{_bili_video_post(platform='weibo', bvid='BV1')}"
                       ).status_code == 400
     assert client.get(f"/bili/segments/{_bili_video_post(bvid='')}").status_code == 400
+
+
+# ── 企划归属（需求 6，B3，devlog/457） ────────────────────────────────
+
+def test_adopt_fills_group_from_the_pool_snapshot(client):
+    """收录当场就把企划填上（吃**真实快照**里那条带企划的行）。
+
+    ⚠️ 为什么要吃真实数据：造一条假池子的话，"新列没从快照接进来"这种错法照样绿
+    （`vtubers.group_name` 一直是 NULL，而断言只看"没报错"）。
+    """
+    import csv
+    from pathlib import Path
+
+    from app.core.config import PROJECT_ROOT
+
+    rows = list(csv.DictReader((Path(PROJECT_ROOT) / "vtubers.csv")
+                               .open(newline="", encoding="utf-8")))
+    sample = next(r for r in rows if r["group_name"] and r["platform"] == "bilibili")
+
+    r = client.post("/vtuber/adopt", json={"platform": "bilibili",
+                                           "platform_uid": sample["platform_uid"],
+                                           "source": "pool"})
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["name"] == sample["vtuber_name"]
+    assert body["group_name"] == sample["group_name"], "收录时没把企划填上（池内路径手边就有）"
+    assert body["group_uuid"] == sample["group_uuid"]
+
+    # 列表端点也要带（左栏徽章读的是它）
+    listed = next(v for v in client.get("/vtuber/list").json() if v["id"] == body["id"])
+    assert listed["group_name"] == sample["group_name"]
+
+
+def test_vtuber_without_group_keeps_null(client):
+    """没有企划的 V **两个字段都是 null**（界面据此不渲染空壳）。"""
+    vid = client.post("/vtuber", json={"name": "无企划"}).json()["id"]
+    body = next(v for v in client.get("/vtuber/list").json() if v["id"] == vid)
+    assert body["group_name"] is None and body["group_uuid"] is None

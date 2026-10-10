@@ -1146,11 +1146,45 @@ html.window-maximized body {
   user-select: none;
 }
 
-/* 企划标识槽位（原阵营位）：每行最右侧 60px 区域，紧贴右缘，暂空置（后续挂载图片资源） */
+/* 企划徽章槽位（原阵营位）：每行最右侧 54px 区域，紧贴右缘。
+   2026-10-08（需求 6，B3，`devlog/457`）起**真的挂东西了** —— 规则见下面三条。 */
 .vtuber-emblem {
   width: 54px;
   height: 100%;
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+/* ⚠️ 三条口径（少一条都会出问题）：
+   ① **没企划的 V 不渲染这个块**（组件里条件渲染）—— 留空槽会让名字与右缘之间多一截空白；
+   ② 窄栏（收起态 `.sidebar-shell[data-collapsed]`）**整块隐藏**：那里宽度只够头像 + 名字，
+      徽章会把名字挤没（用户口径「窄栏时不挤掉名字」）；
+   ③ 文字胶囊**必须 max-width + 省略号**：库里最长的企划名 20 多个字符，
+      没有它会把整行撑宽（同 `devlog/456` 那类溢出的老账）。 */
+.vtuber-emblem-icon {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+}
+
+.vtuber-emblem-text {
+  max-width: 54px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: 6px;
+  background: var(--sel-bg);
+  color: var(--c-primary-deep);
+  user-select: none;
+}
+
+.sidebar-shell[data-collapsed] .vtuber-emblem {
+  display: none;
 }
 
 .vtuber-name-row {

@@ -82,7 +82,7 @@ async def _warm_tokenizer() -> None:
 # ── 统一 schema 管理（alembic 迁移链为准） ──────────────────────────────
 
 # 迁移链最新版本。新加迁移时必须同步更新（tests 会断言与 alembic head 一致）。
-MIGRATION_HEAD = "f013"
+MIGRATION_HEAD = "f014"
 
 
 def _alembic_config():
@@ -422,6 +422,19 @@ async def lifespan(app: FastAPI):
     # ⚠️ 一天一个请求（只探活、不刷活），且**只有"会话被收回"才置失效**。
     xhs_probe_task = asyncio.create_task(xhs_probe.run_forever())
 
+    # 企划归属回填（需求 6，B3，2026-10-08，devlog/457）：**不出网**、幂等、只填空。
+    # 为什么放在启动链上：随包候选池快照里就有企划（1,633 条），而**已收录的 V** 是历次
+    # adopt 建出来的、那时还没有这两列 ⇒ 不补一次的话，老用户看到的是"一个徽章都没有"，
+    # 得等到下一次周级索引刷新。放在这里代价是几十次字典查找（实测 V 数量级很小）。
+    # ⚠️ 失败只记日志：企划是锦上添花，不该挡住启动。
+    try:
+        from app.core.database import SessionLocal
+        from app.services import groups
+
+        with SessionLocal() as _db:
+            groups.backfill_groups(_db)
+    except Exception as e:
+        logger.warning(f"企划回填跳过（不影响启动）: {type(e).__name__}: {e}")
     yield
     logger.info("关闭中...")
     auth_task.cancel()

@@ -52,6 +52,13 @@ export interface VTuber {
    * JSON 原文，但是**另一份** —— 两份互不相干（各调各的）。
    */
   background_video_focus: string | null
+  /**
+   * **企划归属**（需求 6，f014，B3，`devlog/457`）：左栏条目右端的徽章吃这两个字段。
+   * `group_uuid` 是 vdb 的稳定 UUID（跨源对齐用）；来自本地索引那份没有它 ⇒ 可为 null。
+   * 没有企划的 V 两个都是 null —— 界面**不渲染空壳**。
+   */
+  group_name?: string | null
+  group_uuid?: string | null
   notes: string | null
   /**
    * 签名来源与覆盖（2026-09-13，devlog/074）：卡片签名 =
@@ -127,8 +134,13 @@ export interface PoolItem {
   platform: string
   platform_uid: string
   origin?: 'pool' | 'index'
-  /** 企划 / 公会（只有 index 来源有） */
+  /** 企划 / 公会（index 来源来自 danmakus 索引；pool 来源来自随包快照，2026-10-08 C2 起也有） */
   group?: string
+  /** vdb 的稳定身份（跨平台同一人同一个；pool 来源才有） */
+  uuid?: string
+  /** 跨平台账号，`platform:id` 用 `|` 连起来（**只用于展示**：那些平台抓不了，
+   *  也不进检索池 —— 进了只会造出点不动的搜索结果） */
+  extra?: string
 }
 
 /** 一条 B 站检索结果（`GET /vtuber/bili/search`） */

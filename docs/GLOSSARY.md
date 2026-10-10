@@ -20,7 +20,9 @@ budget: 300
 
 | 术语 | 含义 | 代码位置 | 关联 |
 |---|---|---|---|
-| **VTuber / 主播本体** | 平台无关的主播实体（名字/阵营/生日/出道日/设定/头像/自定义背景） | `app/models/vtuber.py::VTuber`；`VTuberRepo` | 一个 V 挂多个 `accounts` |
+| **VTuber / 主播本体** | 平台无关的主播实体（名字/阵营/生日/出道日/设定/头像/自定义背景/**企划**） | `app/models/vtuber.py::VTuber`；`VTuberRepo` | 一个 V 挂多个 `accounts` |
+| **企划归属 / group**（需求 6，B3，`devlog/457`） | 这个 V 属于哪个企划/公会（`VirtuaReal` / `NIJISANJI` / `虚研社`…）—— 左栏名字右边的徽章显示它 | `vtubers.group_name` / `group_uuid`（f014）；解析与回填 `services/groups.py`；界面 `utils/groupBadge.ts` + `.vtuber-emblem` | 数据源：**vdb.vtbs.moe**（随包候选池快照，唯一同时给企划名与稳定 UUID）→ 本地 `thirdparty_vtubers` 兜底；**B 站官方没有这个字段**；写入**只填空、不覆盖** |
+| **候选池 / pool**（需求 7，C2，`devlog/457`） | 随包的 VTuber 名册快照 `vtubers.csv`（约 9.6k 行），「添加 V」里搜人的本地来源 | `scripts/discover_vtubers.py` 生成；`app/services/pool.py` 读取与检索；`vtubers.meta.json` 是它的体检 | 主源 **vdb.vtbs.moe `list.json`**（**应用运行时不访问**）；跨平台账号只在 `extra_accounts` 里**展示**，不进检索池 |
 | **账号 / account** | V 在某平台的账号（昵称/签名/头像/粉丝数/直播字段） | `models/vtuber.py::Account`；`AccountRepo`；`services/platforms/` | 唯一键 `(platform, platform_uid)` |
 | **主账号 / primary account** | 每个 V 按 `PRIMARY_PLATFORM_ORDER`（bilibili > weibo）取的首个账号 | `scheduler._primary_accounts()` | **只用于第三方历史回填**（动态流已改为全部账号，见「动态名单」） |
 | **动态名单 / dynamics lane** | 动态流按平台分组的账号名单：**库里所有 V 的所有平台账号**各占一格；名单之间并行、**名单内部串行**，名单内间隔自适应摊平（R7，devlog/078） | `scheduler._dynamics_lanes()` / `_active_dynamics_lanes()` / `_lane_gap()` | 微博未登录时整条 weibo 名单跳过 |
@@ -218,7 +220,7 @@ budget: 300
 
 | 术语 | 含义 | 代码位置 | 关联 |
 |---|---|---|---|
-| **迁移链 / MIGRATION_HEAD** | alembic `a001→f013`（26 个版本） | `alembic/versions/`、`app/main.py::MIGRATION_HEAD` | 同步纪律 = 不变量 3（`docs/backend/ARCHITECTURE.md` §6）；测试断言一致 |
+| **迁移链 / MIGRATION_HEAD** | alembic `a001→f014`（27 个版本） | `alembic/versions/`、`app/main.py::MIGRATION_HEAD` | 同步纪律 = 不变量 3（`docs/backend/ARCHITECTURE.md` §6）；测试断言一致 |
 | **一键发布 / release.py** | 十步发布编排：预检→版本同步→门禁→打版→产物校验→提交/tag→推送→Release→报告 | `scripts/release.py`；手册 `docs/ops/RELEASE.md`；上传 `scripts/upload_release_assets.py`（幂等） | 守卫：工作树脏/notes 缺失/版本不递增/NSIS 打平/**文档漂移**/tag 冲突 → 停；`--dry-run`、`--from <步骤>` 续跑；推完自动对齐本地 `origin/<分支>` tracking ref（按 URL 推送不会自动更新它） |
 | **端到端上游冒烟 / smoke_upstream** | 数据目录副本 + 真后端 + 真上游，跑"只有真环境才暴露"的链路（B 站检索 / uid 直查 / 池外收录 / 场次上游） | `scripts/smoke_upstream.py`（`--cold` = 空数据目录 + 清空凭据）；`dev_check.py --upstream` | `--capture` 顺带刷新真实 fixtures；skip 必须打印原因，不冒充通过 |
 | **真实 fixtures** | 真上游回包 / 真 `installer.nsi` 片段 / 真索引条目 —— 判据的"真形状"依据 | `tests/fixtures/`（`smoke_upstream.py --capture` 生成；专栏 HTML 真拉自 `x/article/view`）；用例 `tests/test_real_fixtures.py` | 「新判据至少一条用例吃真实数据」= 不变量 22（`docs/backend/ARCHITECTURE.md` §6） |

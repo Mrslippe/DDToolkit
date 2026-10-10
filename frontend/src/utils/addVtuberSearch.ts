@@ -29,6 +29,8 @@ export interface AddCandidate {
   followers?: number
   verified?: string
   group?: string
+  /** 「他还在 …」的展示串（喂 `extraPlatforms`；不可点，见该函数的说明） */
+  extra?: string
   avatar?: string
   isLive?: boolean
   /** 已在库里（B 站结果才需要判；本地接口已剔除） */
@@ -84,8 +86,40 @@ export function poolToCandidates(pool: PoolItem[]): AddCandidate[] {
         ? undefined
         : `「${it.name}」来自本地索引、不在候选池快照里，目前只有 B 站支持池外收录`,
       group: it.group || undefined,
+      extra: it.extra || undefined,
       inLibrary: false,
     })
+  }
+  return out
+}
+
+/** 平台名 → 展示名（`extra` 列里是 vdb 的机器名） */
+const EXTRA_LABELS: Record<string, string> = {
+  twitter: 'Twitter', youtube: 'YouTube', youtubeat: 'YouTube', weibo: '微博',
+  acfun: 'AcFun', twitch: 'Twitch', pixiv: 'Pixiv', userlocal: 'userlocal',
+  peing: 'Peing', marshmallow: 'マシュマロ', instagram: 'Instagram',
+  github: 'GitHub', booth: 'BOOTH', afdian: '爱发电', bilibili: 'B 站',
+  other: '其它',
+}
+
+/**
+ * `extra_accounts`（`platform:id|platform:id`）→ 去重后的**平台展示名**（最多 4 个）。
+ *
+ * 用途：候选行里加一句「他还在 Twitter / YouTube」—— 用户据此判断"这是不是我要找的那个人"
+ * （同名小号很多，这一句比粉丝数还管用）。
+ *
+ * ⚠️ **刻意不做成链接**：壳的外链白名单（`lib.rs::EXTERNAL_HOSTS`）只放行 B 站/微博/小红书/
+ * 抖音四个域，twitter/youtube/acfun 这些点开就是一句"这个主机不在允许打开的名单里"
+ * —— 与其给一个点了报错的入口，不如只把**事实**说出来（`title` 里带完整账号）。
+ */
+export function extraPlatforms(extra: string | null | undefined, limit = 4): string[] {
+  const out: string[] = []
+  for (const part of (extra || '').split('|')) {
+    const platform = part.split(':')[0]?.trim().toLowerCase()
+    if (!platform) continue
+    const label = EXTRA_LABELS[platform] ?? platform
+    if (!out.includes(label)) out.push(label)
+    if (out.length >= limit) break
   }
   return out
 }

@@ -297,8 +297,8 @@ def test_get_settings_exposes_specs_and_readonly_info(client):
     # （f008：R47 历次头像，devlog/249；f009：L1 轻资产索引，devlog/257；
     #   f010：左栏自定义排序，devlog/413；f011：背景取景 + 背景视频，devlog/417；
     #   f012：视频的取景（与图片那份分开），devlog/426；
-    #   f013：手动场次的录播地址（vod_url），devlog/454）。
-    assert info["migration_head"] == "f013"
+    #   f013：手动场次的录播地址（vod_url），devlog/454；#   f014：V 的企划归属 group_name/group_uuid（B3），devlog/457）。
+    assert info["migration_head"] == "f014"
     assert info["data_dir"] and info["database"]
     assert body["readonly"] and all(r.get("why") for r in body["readonly"])
 

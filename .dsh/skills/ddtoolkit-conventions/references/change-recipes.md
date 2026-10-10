@@ -12,7 +12,7 @@
 |---|---|
 | 接入新平台（抖音/小红书…） | 继承 `platforms/base.py::BasePlatform` → `platforms/registry.py` 注册 → 前端平台常量；调度器自动接管 |
 | 接入新第三方源 | 实现 `externals/base.py::ExternalSource` → `externals/__init__.py` 注册（声明 `jobs` 与周期） |
-| 新增表/列 | 新建 `alembic/versions/{fNNN}_*.py`（编号按**实际实施顺序**顺延，当前 head `f013`）→ 同步 `MIGRATION_HEAD` → 补 `models` 与 Repo → 若挂 `accounts/vtubers` 外键，**同步 `services/purge.py`** |
+| 新增表/列 | 新建 `alembic/versions/{fNNN}_*.py`（编号按**实际实施顺序**顺延，当前 head `f014`）→ 同步 `MIGRATION_HEAD` → 补 `models` 与 Repo → 若挂 `accounts/vtubers` 外键，**同步 `services/purge.py`** |
 | 用户手改的字段被抓取覆盖 | **不再需要锁定**（`accounts.locked_fields` 已随 f004 删除）：抓取照常覆盖，覆盖前把旧值写进 `services/vtuber_history.py::record_field_change()`。⚠️ 只在**平台侧覆盖前**发生（手改不入账，devlog/075） |
 | 调整抓取频率/节流 | `app/core/config.py`（T0-T4 周期、请求间隔、批量休息、风控冷却） |
 | 新增前端视图 | `docs/frontend/UI-MAP.md`（右栏视图光条 + 场景状态机） |
@@ -50,7 +50,7 @@
 
 ### C1. 加一张表 / 加一列（最常走）
 
-1. 新建 `alembic/versions/{fNNN}_*.py` —— 编号按**实际实施顺序**顺延（当前 head `f013`）；
+1. 新建 `alembic/versions/{fNNN}_*.py` —— 编号按**实际实施顺序**顺延（当前 head `f014`）；
 2. 同步 `app/main.py::MIGRATION_HEAD`（`tests/test_services.py` 断言它与 alembic head 一致，
    否则冷启动快路径会把旧库误判为已最新）；
 3. 补 ORM：`app/models/vtuber.py`（单文件 **14 表**；唯一约束/索引与迁移链一致）；

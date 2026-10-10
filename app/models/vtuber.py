@@ -48,6 +48,13 @@ class VTuber(Base):
     #: ⚠️ 语义与 `accounts.sort_order` **不同**：那边是"未列出的排其后"，
     #: 这边是"把传进来的填回原位"（左栏可以带筛选拖）—— 见 `VTuberRepo.reorder`。
     sort_order = Column(Integer, nullable=False, default=0, server_default="0")
+    #: **企划归属**（需求 6，迁移 f014，B3）：企划名 + 它的稳定 UUID（vdb 的 `group` 字段）。
+    #: 数据来自**随包候选池快照 → 本地第三方索引**（`services/groups.py`，**不出网**）；
+    #: B 站官方没有"所属企划"结构化字段（实测）⇒ 不从平台侧猜。
+    #: 写入纪律：**只填空、不覆盖**（幂等，adopt/索引刷新/启动各调一次）。
+    #: ⚠️ 一个 V 只一列（现实里只属一个企划）；真出现多企划再加关联表，这两列当"主企划"。
+    group_name = Column(Text, nullable=True)
+    group_uuid = Column(Text, nullable=True)
     created_at = Column(DateTime, default=_now)
     updated_at = Column(DateTime, default=_now, onupdate=_now)
 

@@ -36,6 +36,7 @@ from app.schemas.vtuber import (
     BiliSearchOut, BiliSearchItemOut,
 )
 from app.services import pool
+from app.services import groups
 from app.services import bili_search as bili_search_svc
 from app.services import capabilities
 from app.services.platforms import registry
@@ -2149,6 +2150,14 @@ async def adopt_vtuber(data: AdoptRequest, background: BackgroundTasks,
     db.refresh(vtuber)
     logger.info(f"收录 VTuber#{vtuber.id} 「{name}」({data.platform}:{data.platform_uid}) "
                 f"来源={source}")
+
+    # 企划归属（需求 6，B3，2026-10-08，devlog/457）：**收录当场就填**，别等下一次索引刷新
+    # —— 池内路径手边就有快照里的 `group_name`，索引路径也有 `it.group_name`。
+    # `fill_for_vtuber` 只填空、**不出网**；失败也不该挡住收录（企划只是徽章）。
+    try:
+        groups.fill_for_vtuber(db, vtuber)
+    except Exception as e:
+        logger.warning(f"收录后填企划跳过（不影响收录）: {type(e).__name__}: {e}")
 
     # 响应送达后由事件循环执行：账号信息 + 首屏内容并发，第三方历史后台补
     background.add_task(_adopt_background, vtuber.id, acc.id,

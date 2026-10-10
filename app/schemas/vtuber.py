@@ -129,6 +129,10 @@ class VTuberOut(BaseModel):
     #: **视频**的取景（需求 9 补丁，f012，`devlog/426`）：**JSON 原文**，形状与 `background_focus`
     #: 逐字相同（图片锚点 + 1..3 倍）。前端同样要能容忍坏值（退回"原样铺"）。
     background_video_focus: str | None = None
+    #: **企划归属**（需求 6，f014，B3，`devlog/457`）：左栏徽章吃这两个字段。
+    #: `group_uuid` 是 vdb 的稳定 UUID（跨源对齐用）；来自本地索引那份没有它 ⇒ 允许为 None。
+    group_name: str | None = None
+    group_uuid: str | None = None
     notes: str | None = None
     # 签名来源与覆盖（2026-09-13，devlog/074）：卡片签名 = override → 来源账号 → 主账号
     sign_override: str | None = None

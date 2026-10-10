@@ -481,7 +481,7 @@ keyframes 只会重启**）。
 | 名字 | `.vtuber-name` | **18px 纯黑 500**，`user-select:none` |
 | 直播点/标签 | `.live-badge` / `.live-dot` / `.live-label` | 紧凑直播徽标（16px 高、6px 点 + 10px 字、红 `--c-live`），仅直播中 |
 | 签名 | `.vtuber-sign` | **13px 灰（13px 行高盒）**，`user-select:none` |
-| 企划槽 | `.vtuber-emblem` | 右侧 **54px 全高**，紧贴右缘；暂空置（后续接线档案卡「企划」值） |
+| 企划徽章 | `.vtuber-emblem`（`data-group="<企划名>"`） | 右侧 **54px 全高**，紧贴右缘。**2026-10-08 接线**（需求 6 / B3，`devlog/457`）：`vtubers.group_name` 非空才渲染（**没企划不摆空壳**）；有图标素材 ⇒ `.vtuber-emblem-icon`（20×20，构建期扫 `src/assets/groups/<slug>.*`，丢文件即生效、不改代码），没有 ⇒ `.vtuber-emblem-text` 文字胶囊（11px、`--sel-bg` 底 + `--c-primary-deep` 字、`max-width:54px` + 省略号，`title="企划：…"` 给全名）。⚠️ 收起态（`.sidebar-shell[data-collapsed]`）整块 `display:none` —— 窄栏只够头像 + 名字，徽章会把名字挤没 |
 | 提示态 | `.sidebar-tip` | 加载失败 / 空池 / 无匹配文案（在滚动区内渲染） |
 
 ---

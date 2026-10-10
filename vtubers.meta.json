@@ -1,0 +1,26 @@
+{
+  "fetched_at": "2026-10-10 22:11:15",
+  "source": "https://vdb.vtbs.moe/json/list.json",
+  "vdb_timestamp": 1791542725,
+  "rows": 9627,
+  "with_group": 1633,
+  "groups": 210,
+  "with_extra": 557,
+  "followers_reused": 9331,
+  "followers_fetched": 296,
+  "skipped": {
+    "group_entries": 221,
+    "no_official_account": 284
+  },
+  "columns": [
+    "flag",
+    "vtuber_name",
+    "platform",
+    "platform_uid",
+    "follower",
+    "uuid",
+    "group_name",
+    "group_uuid",
+    "extra_accounts"
+  ]
+}

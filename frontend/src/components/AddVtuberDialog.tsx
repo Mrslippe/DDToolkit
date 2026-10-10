@@ -12,6 +12,7 @@ import { api } from '../api/api'
 import type { BiliSearchResult } from '../api/types'
 import {
   biliToCandidates,
+  extraPlatforms,
   followerLabel,
   inputLooksLikeUid,
   mergeCandidates,
@@ -271,6 +272,13 @@ export default function AddVtuberDialog({ open, onOpenChange, onAdded }: Props) 
             {row.verified && <span className="av-verified">{row.verified}</span>}
             {fans && <span className="av-num">{fans}</span>}
             {row.group && <span className="av-group">{row.group}</span>}
+            {/* 「他还在 Twitter / YouTube」——同名小号多，这一句比粉丝数还管用。
+                ⚠️ 不可点：那些主机不在外链白名单里（见 `extraPlatforms` 的说明）。 */}
+            {row.extra && (
+              <span className="av-elsewhere" title={row.extra}>
+                他还在 {extraPlatforms(row.extra).join(' / ')}
+              </span>
+            )}
             {row.isLive && <span className="av-live">直播中</span>}
             <span className="av-num">UID {row.platform_uid}</span>
           </span>

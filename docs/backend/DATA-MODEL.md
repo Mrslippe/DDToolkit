@@ -72,6 +72,7 @@ erDiagram
 | `sign_override` | TEXT | 手改的签名（**覆盖**，f004）。不写 `accounts.sign`；清空 = 撤销覆盖 |
 | `sign_source_account_id` | INTEGER | 卡片签名跟随哪个账号（**无外键**，f004）；NULL = 主账号，指向不存在的 id 时回落主账号 |
 | `sort_order` | INTEGER | NOT NULL 默认 0：**左栏自定义顺序**（f010）。⚠️ 语义与 `accounts.sort_order` **不同**：那边"未列出的排其后"，这边"把传进来的**填回原位**"（左栏可带筛选拖） |
+| `group_name` / `group_uuid` | TEXT | **企划归属**（f014，需求 6 / B3，`devlog/457`）：企划名 + 它的稳定 UUID（vdb 的 `group`）。数据来自**随包候选池快照 → 本地 `thirdparty_vtubers` 兜底**（`services/groups.py`，**不出网**）；B 站官方**没有**这个字段（实测）。写入纪律：**只填空、不覆盖**、幂等（收录时 / 索引刷新后 / 启动时各补一次） |
 | `created_at` / `updated_at` | DATETIME | UTC now |
 
 #### `accounts` — 各平台账号
@@ -334,7 +335,15 @@ session 收口**（先写文件、再写索引行，见 `docs/backend/ASSETS.md 
 | `f010` vtuber_order | `vtubers.sort_order`（NOT NULL 默认 0；左栏自定义顺序，需求 4/5，devlog/413） |
 | `f011` background_focus_and_video | `vtubers.background_focus`（取景 JSON）+ `vtubers.background_video_path`（背景视频，需求 7/9，devlog/417） |
 | `f012` background_video_focus | `vtubers.background_video_focus`（**视频**的取景，与图片那份分开存，需求 9 补丁，devlog/426） |
-| `f013` live_session_vod | `live_sessions.vod_url`（场次录播地址；手动记录场次 `source='manual'` 不需要新列，需求 2/2.1，devlog/454） = **当前 head** |
+| `f013` live_session_vod | `live_sessions.vod_url`（场次录播地址；手动记录场次 `source='manual'` 不需要新列，需求 2/2.1，devlog/454） |
+| `f014` vtuber_group | `vtubers.group_name` + `vtubers.group_uuid`（**企划归属**，需求 6 / B3，devlog/457） = **当前 head** |
+
+**候选池快照 `vtubers.csv`（随包，不在库里）**：由 `scripts/discover_vtubers.py` 从
+**vdb.vtbs.moe `list.json`** 生成（应用运行时不访问它），列 =
+`flag, vtuber_name, platform, platform_uid, follower, uuid, group_name, group_uuid, extra_accounts`
+—— 见 `app/services/pool.py` 的头注释与 `vtubers.meta.json`（拉取时刻 / 行数 / 覆盖率）。
+⚠️ **首用会把随包那份引导进 `DATA_DIR`**（`pool.seed_from_bundle()`）：运行时读的是
+数据目录那一份，此前没有任何代码做这件事 ⇒ 全新安装的候选池是空的（`devlog/457` 修）。
 
 **纪律**：新增迁移后必须同步 `app/main.py` 的 `MIGRATION_HEAD`（`tests/test_services.py`
 断言与 alembic head 一致），否则冷启动快路径会把旧库误判为已最新。启动迁移四形态：

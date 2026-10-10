@@ -24,6 +24,7 @@ import { EVENTS, on } from '../utils/appEvents'
 import { enterSolo, exitSolo, useSolo } from '../utils/soloMode'
 import { nextStreak, type ClickStreak } from '../utils/soloGesture'
 import { toggleRailCollapsed, useRailCollapsed } from '../utils/railCollapsed'
+import { groupIcon, groupLabel } from '../utils/groupBadge'
 import './../styles/layout.css'
 
 /** 把抓取完成的账号快照就地合并进侧栏数据（按 bilibili platform_uid 匹配） */
@@ -567,6 +568,9 @@ const VtuberItem = memo(function VtuberItem({ vtuber, index, active, onSelect,
   const avatarLocal = resolveAsset(avatarLocalPath)
   const sign = resolveSign(vtuber, vtuber.accounts).text || null
   const isLiveNow = (bili?.live_status ?? 0) === 1
+  // 企划徽章（B3）：名字来自库（`groups.backfill_groups` 只填空、不覆盖），图标有没有由构建期扫出来
+  const group = vtuber.group_name?.trim() || null
+  const icon = group ? groupIcon(group) : null
 
   /* ── 连点进单推（需求 1，2026-10-08 用户口径，`devlog/450`）─────────────────
      口径：先把 V **拖到左栏首位**，然后在**那一条**上 3 秒内连点 10 次 ⇒ 进单推。
@@ -628,8 +632,20 @@ const VtuberItem = memo(function VtuberItem({ vtuber, index, active, onSelect,
         </div>
         {sign && <div className="vtuber-sign">{sign}</div>}
       </div>
-      {/* 企划标识槽位（原阵营位）：预留挂载图片资源，后续接档案卡企划值 */}
-      <div className="vtuber-emblem" aria-hidden />
+      {/* 企划徽章（需求 6，B3，`devlog/457`）：这个槽位本来就是给它留的（"原阵营位"）。
+          规则是**数据驱动**的：`assets/groups/<slug>.*` 有素材就画图标，没有就显示企划名的
+          文字胶囊（超长省略、`title` 给全名）—— 加一个企划只需丢一个文件，不改代码。
+          没有企划的 V **什么都不渲染**（不摆空壳）；窄栏（收起态）由 CSS 整块隐藏，
+          免得挤掉名字。 */}
+      {group && (
+        <span className="vtuber-emblem" data-group={group} title={`企划：${group}`}>
+          {icon ? (
+            <img className="vtuber-emblem-icon" src={icon} alt="" />
+          ) : (
+            <span className="vtuber-emblem-text">{groupLabel(group)}</span>
+          )}
+        </span>
+      )}
     </div>
   )
 })
