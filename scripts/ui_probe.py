@@ -597,6 +597,7 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
             # ⚠️ 白名单不登记 = 静默丢掉（本文件已踩过两次，见上面那两条注释）
             "dialogs": data.get("dialogs"),
             "dialogsCanary": data.get("dialogsCanary"),
+            "dialogsPathCanary": data.get("dialogsPathCanary"),
             "dialogOverflow": data.get("dialogOverflow"),
             "loginDialogOverflow": data.get("loginDialogOverflow"),
             "loginDialogOverflowCanary": data.get("loginDialogOverflowCanary"),
@@ -2440,9 +2441,20 @@ def _dialog_overflow_failures(dialogs: object, where: str) -> list[str]:
             continue
         over = int(d.get("overflowX") or 0)
         off = [o for o in (d.get("offenders") or []) if isinstance(o, dict)]
-        if over <= 1 and not off:
+        kids = [c for c in (d.get("childrenOverflow") or []) if isinstance(c, dict)]
+        if over <= 1 and not off and not kids:
             continue
         who = _WHICH_LABEL.get(str(d.get("which")), "其它弹窗")
+        if kids:
+            # 子元素越出内容盒（用户 2026-10-08 截图里那条说明条：面板 510、子元素 553）
+            detail = "；".join(
+                f"{c.get('tag')}[{(c.get('cls') or '')[:40]}]「{(c.get('text') or '')[:18]}」"
+                f" 宽 {c.get('w')}（内容盒 {c.get('innerW')}）越出 {c.get('over')}px"
+                for c in kids[:4])
+            bad.append(f"{where}: {who}有子元素越出内容盒：{detail}"
+                       f"（grid/flex 子项的 `min-width:auto` + 里面有不可断的长内容时，"
+                       f"子项会溢出轨道 —— 补 `min-w-0`，或让那个长内容自己可断/可截断）")
+            continue
         detail = "；".join(
             f"{o.get('tag')}[{(o.get('cls') or '')[:48]}]「{(o.get('text') or '')[:22]}」"
             f"裁掉 {o.get('clip')}px / 顶出 {o.get('out')}px"
@@ -2534,6 +2546,9 @@ def _assert_first_run(dom_file: Path) -> list[str]:
     # 正对照：塞一条必然放不下的长文本 ⇒ 面板必须靠**折行**吃下它（缺 `overflow-wrap` 时
     # 实测把 512px 的面板撑到 2512px、标题顶出 1999px，与用户报的"文字超出窗口"同型）
     bad += _dialog_overflow_failures(info.get("dialogsCanary"), "首启（长文本注入）")
+    # 正对照 B：把「扩展目录」换成一条真实长度的长路径 —— 用户 2026-10-08 截图里真正撑破
+    # 面板的那一处（探针环境拿不到壳路径，不种就永远复现不出来）
+    bad += _dialog_overflow_failures(info.get("dialogsPathCanary"), "首启（长路径注入）")
     return bad
 
 

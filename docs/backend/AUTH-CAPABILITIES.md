@@ -112,6 +112,21 @@ retire-when: 认证方式换掉扫码，或风控策略整体重做
     而**已失效时只出 alert**（不叠那句自相矛盾的"快过期了"）。
     判据：`tests/test_auth.py` 的 6 条（含"刷新不许重盖起点"那条）+ `tests/test_notices.py` 的 4 条。
 
+10f. **"登录态"要问"能不能用"，不是"凭据在不在"**（2026-10-08，`devlog/456`）。
+    B 站是唯一一个这两件事会分岔的平台：`is_logged_in`（凭据存在性）为真、而维护循环已经
+    判它失效（`needs_login()`）—— 三处消费方原先只有微博那支带了后半条：
+    | 消费方 | 只问"凭据在不在"的后果 |
+    |---|---|
+    | `GET /auth/bilibili/status` 的 `logged_in` | 登录浮窗同时显示「B 站 · 已登录」与「B 站登录已失效」（用户 2026-10-08 的截图） |
+    | `capabilities.snapshot()` | 能力矩阵照写"完整可用"，用户看不到任何提示 |
+    | `capabilities.content_fetch_allowed()` | **最严重**：会话被吊销后闸门照样放行内容请求，而未授权的内容请求会先把平台 `-352` 激起来、再升级成不变量 23 说的 **HTTP 412（IP 级、会持续）** —— 用户日志里那 14 条 `-352 风控校验失败` 正是这个形状 |
+    ⇒ 三处统一成 `is_logged_in and not needs_login()`（口径与微博、小红书的 `and not invalidated` 对齐）；
+    凭据存在性另有 `configured` 字段（B 站 status 的返回值），前端 Tab 后缀由
+    `utils/platformLogin.ts::authTabSuffix` **一处**判定（已失效 ⇒ 「已失效」，没配过 ⇒ 无后缀）。
+    ⚠️ B 站的 `needs_login` 是**方法**（微博那个是 property）：漏括号会让条件恒假、
+    把 B 站内容抓取全部挡死 —— 判据里那条"正对照"就是为它写的。
+    判据：`tests/test_capabilities.py` 两条（闸门三态 + 矩阵两态）与 `platformLogin.test.ts` 六条。
+
 
 ## 未登录能力边界怎么验
 

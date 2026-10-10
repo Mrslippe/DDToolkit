@@ -202,13 +202,19 @@ Select-String frontend/src-tauri/target/release/nsis/x64/installer.nsi `
 
 | 环节 | 谁做的 | 判据（`release.py verify` 会量） |
 |---|---|---|
-| 暂存 | `npm run tauri:build` 先跑 `stage:extension`（`scripts/stage_extension.py` 把仓库根 `extension/` 的白名单条目拷进暂存目录） | `extension/test/logic.test.mjs` 的结构判据盯着这条接线 |
-| 直装版 | `bundle.resources` 里的 `extension/**/*` | NSIS 脚本里**必须有点名 `extension\manifest.json` 的行**（`classify_nsis_extension`，真文件上验过；只数行数会让"只剩占位文件"也过审） |
+| 暂存 | `npm run tauri:build` 先跑 `stage:extension`（`scripts/stage_extension.py` 把仓库根 `extension/` 的**白名单条目**拷进暂存目录） | `tests/test_stage_extension.py`（★**manifest 引用到的每个文件都必须在白名单里且在产物里**）+ `extension/test/logic.test.mjs` 的结构判据盯着这条接线 |
+| 直装版 | `bundle.resources` 里的 `extension/**/*` | NSIS 脚本里**必须有点名 `extension\manifest.json` 的行**（`classify_nsis_extension`，真文件上验证过；只数行数会让"只剩占位文件"也过审） |
 | 便携版 | `collect_release.py::_portable` 把暂存目录拷进 `DDtoolkit\extension\` | 便携 zip 里必须有 `DDtoolkit/extension/manifest.json` |
 | 指路 | 壳的 `extension_dir` / `open_extension_dir` 命令 → 设置 → 登录 → 浏览器扩展 那一栏显示路径 + 「打开目录」 | `cargo test`（候选顺序 / 必须有 `manifest.json`）+ vitest + 探针 `--first-run` |
 
 > ⚠️ 少了任何一处**都不会报错**，症状是"新用户只能去 clone 仓库"——所以四处都是机器判据。
-> 扩展的 `test/` 不进产物（白名单只认 `manifest.json` / `src` / `icons` / `README.md`）。
+>
+> ⚠️ **"白名单"出过一次真事故**（2026-10-08，`devlog/456`）：`ITEMS` 里漏了 `popup.html`/`popup.css`，
+> 而 `manifest.json` 的 `action.default_popup` 正指着它 ⇒ 产物（开发构建的 `target/debug/extension`、
+> 安装包里的 `<安装目录>\extension`）**没有弹窗**：用户照界面给的路径加载得起来，**点图标什么都不出来**
+> （token 输入框与「同步」按钮都在那个弹窗里）。现在 `assert_loadable()` 逐个核对 manifest 引用
+> （含弹窗 HTML 自己引用的 css/js），它自己的牙也有反例用例钉着；
+> 扩展的 `test/` 不进产物（白名单只认 `manifest.json` / `popup.html` / `popup.css` / `src` / `icons` / `README.md`）。
 
 > ⚠️ **暂存目录是 `frontend/src-tauri/extension/`**（构建期产生、已 gitignore ⇒ **干净 clone 上不存在**）<!-- 未建 -->
 > —— 于是 `cargo test` / `cargo build` 在干净 clone 上会红在

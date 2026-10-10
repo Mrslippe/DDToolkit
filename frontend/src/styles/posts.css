@@ -6890,6 +6890,14 @@ img.hero-avatar {
   animation: lc-dlg-pop 0.2s cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
+/* ⚠️ 每个块都不许比面板宽（2026-10-08，`devlog/456`）：flex/grid 子项的 `min-width:auto`
+   会让**不可断的长内容**（失败原文里的长 URL、一坨 JSON、长路径）把面板的轨道撑宽 ——
+   于是面板里**每一个块**一起溢出面板（登录浮窗就是这么坏的：那里用 Tailwind 的
+   `[&>*]:min-w-0` 表达同一条规矩，见 `frontend/src/components/LoginDialog.tsx`）。 */
+.lc-ms > * {
+  min-width: 0;
+}
+
 .lc-ms-head {
   flex: none;
   display: flex;

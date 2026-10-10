@@ -124,7 +124,12 @@ async def auth_status(platform: str):
         else:
             note = ""
         return {
-            "logged_in": auth_manager.is_logged_in,
+            # ⚠️ `logged_in` 说的是**现在能不能用**，不是"凭据还在不在"（2026-10-08，`devlog/456`）：
+            #    B 站是唯一一个"凭据在、但维护循环已判它失效"会同时成立的平台，而 Tab 标签原先
+            #    只看这一位 ⇒ 界面上同时出现「B 站 · 已登录」与「B 站登录已失效」（用户截图）。
+            #    凭据在不在另给 `configured`（口径与小红书/抖音一致）。
+            "logged_in": auth_manager.is_logged_in and not auth_manager.needs_login(),
+            "configured": auth_manager.is_logged_in,
             "needs_login": auth_manager.needs_login(),
             "uid": auth_manager.dede_user_id or None,
             "name": auth_manager.uname or None,

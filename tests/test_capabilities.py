@@ -153,17 +153,55 @@ def test_matrix_fixture_records_both_states_and_date():
 # ── 闸门 ──────────────────────────────────────────────────────────────
 
 def test_content_fetch_gate_follows_bilibili_login(monkeypatch):
+    """闸门看的是**能不能用**，不是"凭据在不在"（2026-10-08 补后半条，`devlog/456`）。
+
+    ⚠️ 这条用例原先只写"填上 sessdata/bili_jct ⇒ 放行"，而**没有钉住登录态** ——
+    于是"B 站会话已被判失效、闸门却照样放行"这件事它**永远测不出来**
+    （本机测试环境 `_needs_login` 本来就可能为真，但那一半断言当时根本不存在）。
+    现在三态都钉住：没凭据 / 凭据在但失效 / 凭据在且有效。
+    """
     from app.services.auth import auth_manager
 
     monkeypatch.setattr(auth_manager, "sessdata", "")
     monkeypatch.setattr(auth_manager, "bili_jct", "")
+    monkeypatch.setattr(auth_manager, "_needs_login", True, raising=False)
     allowed, why = C.content_fetch_allowed()
     assert allowed is False
     assert "412" in why or "登录" in why, "拒绝原因要说人话"
 
+    # 凭据在、但维护循环已经判它失效 ⇒ **依然拒绝**：放行只会让平台先 -352、
+    # 再升级成 IP 级的 412（不变量 23），用户日志里那 14 条 -352 就是这么来的
     monkeypatch.setattr(auth_manager, "sessdata", "x" * 10)
     monkeypatch.setattr(auth_manager, "bili_jct", "y" * 10)
+    allowed, why = C.content_fetch_allowed()
+    assert allowed is False, "会话已失效却放行 ⇒ 内容请求照样发出去撞风控"
+    assert "412" in why or "登录" in why
+
+    # 正对照：同一份凭据 + 会话有效 ⇒ 放行（少了它，"一律拒绝"也能过）
+    monkeypatch.setattr(auth_manager, "_needs_login", False, raising=False)
     assert C.content_fetch_allowed() == (True, "")
+
+
+def test_snapshot_reports_revoked_bilibili_as_limited(monkeypatch):
+    """矩阵与闸门同一口径（`devlog/456`）：凭据在但失效 ⇒ B 站内容项报 `requires_login`。
+
+    这条抓的是另一种"界面在骗人"：矩阵照写"完整可用"，而实际一个内容请求都拿不回来。
+    """
+    from app.services.auth import auth_manager
+
+    monkeypatch.setattr(auth_manager, "sessdata", "x" * 10)
+    monkeypatch.setattr(auth_manager, "bili_jct", "y" * 10)
+    monkeypatch.setattr(auth_manager, "_needs_login", False, raising=False)
+    snap = C.snapshot()
+    assert snap["bilibili_logged_in"] is True
+    assert "fetch_posts" not in [x["id"] for x in snap["limited"]], \
+        "会话有效时 B 站内容不该出现在受限清单里（正对照）"
+
+    monkeypatch.setattr(auth_manager, "_needs_login", True, raising=False)
+    snap = C.snapshot()
+    assert snap["bilibili_logged_in"] is False, "凭据在但失效 ⇒ 矩阵不该说它可用"
+    limited = {x["id"]: x for x in snap["limited"]}
+    assert limited.get("fetch_posts", {}).get("state") == "requires_login"
 
 
 def test_weibo_available_requires_cookie_and_no_invalid_flag(monkeypatch):

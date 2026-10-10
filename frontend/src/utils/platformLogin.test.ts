@@ -10,6 +10,7 @@ import {
   XHS_COOKIE_STEPS,
   XHS_UID_HINT,
   XHS_UID_PLACEHOLDER,
+  authTabSuffix,
   cookieLoginSpec,
   loginMode,
   parseDouyinUid,
@@ -150,5 +151,48 @@ describe('③ 三个入口都接上了（源码级扫一遍，行为层由 ui_pr
     expect(src).toContain('parseXhsUid')
     // 下拉项文案从 PLATFORM_LABEL 取（新增平台不用再抄一遍中文名）
     expect(src).toContain('PLATFORM_LABEL[p]')
+  })
+})
+
+
+describe('Tab 上的登录态后缀（authTabSuffix，2026-10-08 devlog/456）', () => {
+  const tab = (platform: 'bilibili' | 'weibo' | 'xiaohongshu' | 'douyin') =>
+    LOGIN_TABS.find((t) => t.platform === platform)!
+
+  it('★凭据在但会话已失效 ⇒ 「已失效」，不是「已登录」（用户截图里那处自相矛盾）', () => {
+    // B 站是唯一一个"凭据在、但维护循环已判它失效"会同时成立的平台：
+    // 旧写法只看 logged_in ⇒ 界面上「B 站 · 已登录」与正文「B 站登录已失效」两句打架
+    expect(authTabSuffix(tab('bilibili'),
+      { logged_in: false, configured: true, needs_login: true })).toBe(' · 已失效')
+  })
+
+  it('正对照：同一份凭据 + 会话有效 ⇒ 「已登录」', () => {
+    expect(authTabSuffix(tab('bilibili'),
+      { logged_in: true, configured: true, needs_login: false })).toBe(' · 已登录')
+  })
+
+  it('从没配过（没有凭据）⇒ 不带后缀，别说「已失效」吓人', () => {
+    expect(authTabSuffix(tab('bilibili'),
+      { logged_in: false, configured: false, needs_login: true })).toBe('')
+  })
+
+  it('粘贴型平台：配好了说「已配置」（有效与否只有抓取时才知道）', () => {
+    expect(authTabSuffix(tab('xiaohongshu'),
+      { logged_in: true, configured: true, needs_login: false })).toBe(' · 已配置')
+    // 被判失效（小红书 invalidated ⇒ logged_in false）时说「已失效」
+    expect(authTabSuffix(tab('xiaohongshu'),
+      { logged_in: false, configured: true, needs_login: true })).toBe(' · 已失效')
+  })
+
+  it('登录态还没取到时什么都不说（`null` 不是「未登录」）', () => {
+    expect(authTabSuffix(tab('weibo'), null)).toBe('')
+    expect(authTabSuffix(tab('weibo'), undefined)).toBe('')
+  })
+
+  it('老后端不带 `configured` 时退回 `logged_in`（B 站那位是 2026-10-08 才有的）', () => {
+    expect(authTabSuffix(tab('bilibili'),
+      { logged_in: false, needs_login: true })).toBe('')
+    expect(authTabSuffix(tab('bilibili'),
+      { logged_in: true, needs_login: false })).toBe(' · 已登录')
   })
 })

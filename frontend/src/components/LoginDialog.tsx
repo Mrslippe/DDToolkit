@@ -12,7 +12,7 @@ import {
 import { api } from '../api/api'
 import type { AuthStatus, AuthPlatform, PairingInfo, QrStartResult } from '../api/types'
 import { refreshCapabilities } from '../hooks/useCapabilities'
-import { LOGIN_TABS, cookieLoginSpec, loginMode } from '../utils/platformLogin'
+import { LOGIN_TABS, authTabSuffix, cookieLoginSpec, loginMode } from '../utils/platformLogin'
 import { relTime } from '../utils/noticeBoard'
 import { extensionDir, openExtensionDir } from '../utils/shellBridge'
 
@@ -295,10 +295,17 @@ export default function LoginDialog({ open, onOpenChange }: Props) {
           （探针实测：注入 300 字长串 ⇒ 512px 的面板变 2512px、连标题都顶出 1999px）。
           为什么用 `anywhere` 而不是 `break-word`：只有它同时**压缩 min-content 宽度**，
           让 auto 宽度的容器真的能缩下来（`break-word` 只允许断行、不改变固有宽度）。
-          判据在 `scripts/ui_probe.py`：`--first-run`（**进 A 档门禁**）与 `--capabilities`
-          都会先量真实几何、再注入一条 300 字长串量第二遍（正对照），见
-          `probe.ts::measureDialogs`。 */}
-      <DialogContent className="max-w-sm [overflow-wrap:anywhere]">
+
+          ⚠️ `[&>*]:min-w-0` 是**第二道**，管的是另一类（2026-10-08 用户截图的真正病根）：
+          `DialogContent` 是 `grid`，grid 子项的 `min-width:auto` ⇒ 里面只要有**不可断的长内容**，
+          **轨道**就会被撑宽，于是**面板里每一个块**一起溢出面板（实测：把「扩展目录」那行换成
+          真机的长路径 `\\?\E:\…\target\debug\extension` ⇒ 每个子元素 498px vs 内容盒 464px，
+          那条有底色的凭据说明就把 35–43px 露在遮罩上）。`min-w-0` 让子项不许比轨道宽，
+          里面那行的 `<code>` 本来就是 `min-w-0 flex-1 truncate` ⇒ 它会改成省略号截断。
+          判据：`scripts/ui_probe.py` 的 `--first-run`（**进 A 档门禁**）里有**两条正对照** ——
+          注入 300 字长串、以及把「扩展目录」种成真机长度的长路径；见 `probe.ts::measureDialogs`
+          的 `childrenOverflow`（量直接子元素 vs 面板内容盒）。 */}
+      <DialogContent className="max-w-sm [overflow-wrap:anywhere] [&>*]:min-w-0">
         <DialogHeader>
           <DialogTitle>账号登录</DialogTitle>
           <DialogDescription>
@@ -335,7 +342,9 @@ export default function LoginDialog({ open, onOpenChange }: Props) {
               }}
             >
               {t.label}
-              {statuses[t.platform]?.logged_in && (t.mode === 'cookie' ? ' · 已配置' : ' · 已登录')}
+              {/* 后缀口径见 `utils/platformLogin.ts::authTabSuffix` —— 用户 2026-10-08 的截图里
+                  「B 站 · 已登录」与正文「B 站登录已失效」是打架的（`logged_in` 只说明凭据还在）。 */}
+              {authTabSuffix(t, statuses[t.platform])}
             </button>
           ))}
         </div>

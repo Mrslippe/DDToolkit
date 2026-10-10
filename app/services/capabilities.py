@@ -188,7 +188,12 @@ def snapshot(bili_logged_in: bool | None = None, weibo_logged_in: bool | None = 
              xhs_logged_in: bool | None = None,
              douyin_logged_in: bool | None = None) -> dict:
     """当前能力快照（给 `GET /capabilities`）。登录态参数只为可测性，默认读真实状态。"""
-    bili = auth_manager.is_logged_in if bili_logged_in is None else bili_logged_in
+    # ⚠️ B 站的"就绪"= **凭据在 且 没被判失效**（2026-10-08，`devlog/456`）：原先只读
+    #    `is_logged_in`（= 凭据存在性），于是会话被平台吊销后矩阵照写"可用"，
+    #    用户看不到任何提示；而真正的代价在闸门那边（见 `content_fetch_allowed` 的注释）。
+    #    口径与微博（`and not needs_login`）、小红书（`and not invalidated`）对齐。
+    bili = ((auth_manager.is_logged_in and not auth_manager.needs_login())
+            if bili_logged_in is None else bili_logged_in)
     weibo = ((weibo_auth_manager.is_logged_in and not weibo_auth_manager.needs_login)
              if weibo_logged_in is None else weibo_logged_in)
     # ⚠️ 小红书的"就绪"= **配置齐了 且 没被实测判失效**（2026-10-05，`devlog/353`）：
@@ -311,7 +316,16 @@ def _content_fetch_allowed_with(
     if switched_off:
         return False, switched_off
     if platform == "bilibili":
-        if bili.is_logged_in:
+        # ⚠️ **必须问"能不能用"，不能只问"凭据在不在"**（2026-10-08，`devlog/456`）：
+        #    B 站是唯一一个"凭据在、但维护循环已判它失效"会同时成立的平台。原先这里只判
+        #    `is_logged_in` ⇒ 会话被吊销后闸门**照样放行内容请求**，而按不变量 23，
+        #    未授权的内容请求会先把平台 `-352` 激起来、再升级成 **HTTP 412 `request was banned`
+        #    （IP 级、会持续）**。用户 2026-10-08 的日志里那 14 条 `-352 风控校验失败` 就是
+        #    这个形状（会话 22:34 被判死，22:35 起内容请求继续发）。微博那条一直是
+        #    `and not needs_login`，B 站漏了 —— 现在对齐。
+        # ⚠️ B 站这个是**方法**（微博那个是 property）—— 漏括号会让条件恒假，
+        #    后果是"B 站内容抓取被全部挡死"（正对照那条用例当场抓到过一次）。
+        if bili.is_logged_in and not bili.needs_login():
             return True, ""
         return False, CONTENT_FETCH_REASON
     if platform == "weibo":

@@ -1778,15 +1778,54 @@ export async function runUiProbe(): Promise<void> {
     const out: Record<string, unknown>[] = []
     for (const dlg of document.querySelectorAll<HTMLElement>('[role="dialog"]')) {
       const dr = dlg.getBoundingClientRect()
+      /**
+       * 面板的**直接子元素**有没有越出面板的内容盒（用户 2026-10-08 截图：
+       * 那条浅粉色的「账号凭据…」说明比弹窗宽 43px，右边盖在暗色遮罩上）。
+       *
+       * ⚠️ 为什么必须单独量这一类：上面那两条（面板 `scrollWidth`、最深一层文字被裁）
+       * 对它是**全绿**的 —— 面板自己没被撑宽（`scrollWidth == clientWidth`），
+       * 越界的是**子元素**：`DialogContent` 是 `grid`，而 grid 子项的 `min-width:auto`
+       * 让"内容的最小宽度"大于轨道时，子项**直接溢出轨道**（不改轨道宽度）。
+       * 判据是"子元素右缘 > 面板右缘 − paddingRight"。
+       */
+      const cs = getComputedStyle(dlg)
+      const padL = parseFloat(cs.paddingLeft) || 0
+      const padR = parseFloat(cs.paddingRight) || 0
+      const innerRight = dr.right - padR
+      const innerLeft = dr.left + padL
+      const children = [...dlg.children].flatMap((el) => {
+        if (!(el instanceof HTMLElement)) return []
+        // ⚠️ **绝对定位的子元素不算**：关闭钮就是 `absolute top-4 right-4`，按设计坐在
+        //    padding 区里（它"越出内容盒"7px 是正常的）—— 不排除的话这条判据一出生就是红的。
+        const pos = getComputedStyle(el).position
+        if (pos === 'absolute' || pos === 'fixed') return []
+        const er = el.getBoundingClientRect()
+        const over = Math.round(er.right - innerRight)
+        const outLeft = Math.round(innerLeft - er.left)
+        if (over <= 1 && outLeft <= 1) return []
+        return [{
+          tag: el.tagName.toLowerCase(),
+          cls: (el.getAttribute('class') || '').slice(0, 80),
+          text: (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 40),
+          w: Math.round(er.width),
+          innerW: Math.round(innerRight - innerLeft),
+          over,
+          outLeft,
+        }]
+      })
       const cand = [...dlg.querySelectorAll<HTMLElement>('*')].filter((el) => {
         const r = el.getBoundingClientRect()
-        // ⚠️ 两条**故意的/无伤大雅**的裁切不算溢出（否则这条判据一出生就是红的，然后没人看它）：
+        // ⚠️ 三条**故意的/无伤大雅**的裁切不算溢出（否则这条判据一出生就是红的，然后没人看它）：
         //   · `.sr-only`（Tailwind 屏幕阅读器专用）：天生 1×1 + `overflow:hidden`；
+        //   · **省略号截断**（`text-overflow: ellipsis`）：那是"长内容"的**正规处置** ——
+        //     扩展目录那条 `\\?\E:\…\extension` 就是靠它 + `title` 露出全值的
+        //     （2026-10-08 修完 `min-w-0` 之后，它成了唯一还在"被裁"的元素，而它是对的）；
         //   · 亚像素抖动：实测 `float-pill` 里的中文比盒子宽 **2–3px**（字体度量取整，
         //     居中文字两端各削 ~1.5px，肉眼不可见）⇒ 阈值取 4px。
         //     **4px 不是"调到绿为止"**：真正的"文字超出窗口"是几十像素量级（一个 URL/token
         //     放不下），两者差一个数量级；这条仪器本身也做过注入验证（塞一条长 token ⇒ 当场报出来）。
         if (el.closest('.sr-only')) return false
+        if (getComputedStyle(el).textOverflow === 'ellipsis') return false
         if (r.width <= 2 || r.height <= 2) return false
         return el.scrollWidth > el.clientWidth + 4 || r.right > dr.right + 1
           || r.left < dr.left - 1
@@ -1799,6 +1838,9 @@ export async function runUiProbe(): Promise<void> {
         rect: { x: Math.round(dr.left), y: Math.round(dr.top),
                 w: Math.round(dr.width), h: Math.round(dr.height) },
         overflowX: dlg.scrollWidth - dlg.clientWidth,
+        /** 面板内容盒宽度（`rect.w - padding`）—— 子元素越界判据的分母 */
+        innerW: Math.round(innerRight - innerLeft),
+        childrenOverflow: children,
         offenders: deep.slice(0, 12).map((el) => {
           const r = el.getBoundingClientRect()
           return {
@@ -1834,11 +1876,31 @@ export async function runUiProbe(): Promise<void> {
     dlg?.appendChild(canary)
     const canaryDialogs = dlg ? measureDialogs() : null
     canary.remove()
+
+    /**
+     * **正对照 B：把「扩展目录」那行换成一条真实长度的长路径**（2026-10-08 用户截图里真正
+     * 撑破面板的那一处）。
+     *
+     * 为什么必须单独做：探针跑在浏览器里，`extensionDir()` 拿不到壳的路径 ⇒ 那一行渲染的是
+     * 短文案，于是"长路径把 grid 轨道撑宽 ⇒ 面板里每个块都溢出 43px"这件事**永远复现不出来**。
+     * 而用户截图里那行是 `\\?\E:\work\…\target\debug\extension` —— `truncate` 是
+     * `white-space: nowrap`，它让那个 grid 子项的 `min-content` = 整条路径的宽度。
+     */
+    const codeEl = dlg?.querySelector<HTMLElement>('[data-ext-dir] code')
+    const keep = codeEl?.textContent ?? null
+    if (codeEl) {
+      codeEl.textContent = '\\\\?\\E:\\work\\Project\\DDToolkit\\frontend\\src-tauri'
+        + '\\target\\debug\\extension'
+    }
+    const pathDialogs = dlg ? measureDialogs() : null
+    if (codeEl && keep !== null) codeEl.textContent = keep
+
     const pre = document.createElement('pre')
     pre.id = 'ui-probe'
     pre.textContent = JSON.stringify({ mode: 'first-run', views: [], degraded,
                                        dialogs: measureDialogs(),
-                                       dialogsCanary: canaryDialogs })
+                                       dialogsCanary: canaryDialogs,
+                                       dialogsPathCanary: pathDialogs })
     document.body.appendChild(pre)
     document.title = 'UI_PROBE_DONE'
     return

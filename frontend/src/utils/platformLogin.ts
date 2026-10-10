@@ -31,6 +31,41 @@ export function loginMode(platform: string): LoginMode {
   return LOGIN_TABS.find((t) => t.platform === platform)?.mode ?? 'qr'
 }
 
+/**
+ * Tab 上的登录态后缀（2026-10-08，`devlog/456`）。
+ *
+ * ## 为什么必须有这条规则（用户截图里的自相矛盾）
+ *
+ * 原先 Tab 只判 `logged_in` 一个位，而 **B 站的 `logged_in` 语义是"凭据还在"**、
+ * 不是"现在能用"（能不能用是维护循环里 `nav` 的结论，落在 `needs_login`）。
+ * 于是 B 站会话被平台吊销时，界面同时显示「B 站 · 已登录」**和**「B 站登录已失效」——
+ * 用户看到的就是这两句打架（截图 2026-10-08）。
+ *
+ * 现在按**能用的状态**说话，四档：
+ *
+ * | 情况 | 后缀 |
+ * |---|---|
+ * | 能用（`logged_in` 且不需要重登） | `· 已登录`（扫码型）/ `· 已配置`（粘贴型）——粘贴型"能配到"就算配上了，有效与否只有抓取时才知道（`savedNote` 已有同口径） |
+ * | 有凭据但**已被判失效**（`needs_login` + `configured`） | `· 已失效` |
+ * | 没配过（`needs_login` 但没凭据） | 无后缀 |
+ */
+export function authTabSuffix(tab: LoginTab, status: AuthStatusLike | null | undefined): string {
+  const s = status
+  if (!s) return ''
+  const configured = s.configured ?? s.logged_in
+  if (s.needs_login) return configured ? ' · 已失效' : ''
+  if (tab.mode === 'cookie') return configured ? ' · 已配置' : ''
+  return s.logged_in ? ' · 已登录' : ''
+}
+
+/** `authTabSuffix` 只关心这几位（`AuthStatus` 的子集，方便用例只造需要的字段） */
+export interface AuthStatusLike {
+  logged_in?: boolean
+  needs_login?: boolean
+  /** 凭据在不在（B 站最近才补上这位；缺省时退回 `logged_in`） */
+  configured?: boolean
+}
+
 /** 「粘贴 cookie」那一路每个平台自己的文案与输入框（devlog/235、334） */
 export interface CookieLoginSpec {
   steps: string[]
