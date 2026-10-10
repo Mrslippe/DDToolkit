@@ -18,6 +18,7 @@ import { CirclePlay, Heart, Shuffle } from 'lucide-react'
 
 import { api } from '../../../api/api'
 import type { Post } from '../../../api/types'
+import { resolveCoverSources } from '../../../utils/coverSource'
 import { formatCount, formatDateTime, postDisplayTitle } from '../../../utils/format'
 import ProxyImage from '../../common/ProxyImage'
 import type { CardContext } from '../cardRegistry'
@@ -95,29 +96,36 @@ export default function TopPostsCard({ account, onOpenPost, refreshTick }: CardC
   return (
     <div className="rp" data-card-body="top-posts">
       <div className="rp-grid" data-rp-count={picked.length}>
-        {picked.map((post) => (
-          <button type="button" className="rp-card" key={post.id}
-                  data-rp-post={post.id}
-                  title={postDisplayTitle(post)}
-                  onClick={() => onOpenPost(post)}>
-            {/* 封面：整张卡就是封面（图一的"封面更大更明显"） */}
-            {post.cover_url
-              ? <ProxyImage src={post.cover_url} className="rp-cover" />
-              : <span className="rp-cover-ph">{(post.title || '投').charAt(0)}</span>}
-            <span className="rp-scrim" aria-hidden="true" />
-            <span className="rp-type">{TYPE_LABEL[post.type] ?? post.type}</span>
-            <span className="rp-title">{postDisplayTitle(post)}</span>
-            <span className="rp-meta">
-              <span className="rp-plays">
-                {(post.stats_json && /"view"\s*:\s*\d+/.test(post.stats_json))
-                  ? <CirclePlay size={11} aria-hidden="true" />
-                  : <Heart size={11} aria-hidden="true" />}
-                {formatCount(statsOf(post))}
+        {picked.map((post) => {
+          // ⚠️ 必须走 `resolveCoverSources`（**本地优先**，`devlog/261` 的口径）：
+          //    这里原先直接读 `post.cover_url`，于是"本地有副本、远端图床被防盗链拦"
+          //    的那些帖在这张卡片上是空的，而同一个帖在列表里明明有封面
+          //    （2026-10-10 自审 F3，`devlog/461`）。
+          const cover = resolveCoverSources(post)
+          return (
+            <button type="button" className="rp-card" key={post.id}
+                    data-rp-post={post.id}
+                    title={postDisplayTitle(post)}
+                    onClick={() => onOpenPost(post)}>
+              {/* 封面：整张卡就是封面（图一的"封面更大更明显"） */}
+              {cover.src
+                ? <ProxyImage src={cover.src} fallbackSrc={cover.fallback} className="rp-cover" />
+                : <span className="rp-cover-ph">{(post.title || '投').charAt(0)}</span>}
+              <span className="rp-scrim" aria-hidden="true" />
+              <span className="rp-type">{TYPE_LABEL[post.type] ?? post.type}</span>
+              <span className="rp-title">{postDisplayTitle(post)}</span>
+              <span className="rp-meta">
+                <span className="rp-plays">
+                  {(post.stats_json && /"view"\s*:\s*\d+/.test(post.stats_json))
+                    ? <CirclePlay size={11} aria-hidden="true" />
+                    : <Heart size={11} aria-hidden="true" />}
+                  {formatCount(statsOf(post))}
+                </span>
+                <span className="rp-date">{formatDateTime(post.published_at).slice(0, 10)}</span>
               </span>
-              <span className="rp-date">{formatDateTime(post.published_at).slice(0, 10)}</span>
-            </span>
-          </button>
-        ))}
+            </button>
+          )
+        })}
       </div>
       <div className="rp-foot">
         <span className="rp-hint">{hint}</span>

@@ -24,6 +24,7 @@ import FloatPill from './common/FloatPill'
 import BackgroundFocusEditor from './BackgroundFocusEditor'
 import { api, resolveAsset } from '../api/api'
 import type { Account, VTuber, VTuberAvatars } from '../api/types'
+import { formatDate } from '../utils/format'
 import { PLATFORM_LABEL, platformEn } from '../utils/postTypes'
 import { buildSignOptions, type SignOption as SignOptionData } from '../utils/signOptions'
 import { resolveSign } from '../utils/signSource'
@@ -711,9 +712,12 @@ export default function VtuberSettingsDialog({
                   const active = currentAvatarUrl
                     ? a.url === currentAvatarUrl
                     : i === 0
-                  // 日期只用 ISO 前 10 位（与 AccountHistoryDialog 的 `changed_at` 同一写法）；
+                  // ⚠️ 日期走 `formatDate`（**本地**时区），不是 `slice(0, 10)`：
+                  // 后者拿的是 UTC 日期，而库里存的是朴素 UTC ⇒ 东八区在本地
+                  // 00:00–08:00 换的头像会被标成"前一天首次见到"
+                  // （2026-10-10 自审 F4，`devlog/461`）。
                   // 为 null = 这一项来自账号现值、账本里还没有它 ⇒ 不编一个假时间
-                  const when = a.first_seen_at ? a.first_seen_at.slice(0, 10) : null
+                  const when = a.first_seen_at ? formatDate(a.first_seen_at) : null
                   const label = PLATFORM_LABEL[a.platform ?? ''] ?? a.platform ?? '平台'
                   return (
                     <button

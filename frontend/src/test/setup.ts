@@ -49,6 +49,16 @@ if (typeof HTMLMediaElement !== 'undefined') {
   }
 }
 
+// ⚠️ jsdom 也没有 `Element.prototype.scrollIntoView`（2026-10-10 加，`devlog/461`）：
+// Radix 的 `Select` 在**打开下拉**那一刻会对当前选中项调它（把选中项滚进视野），
+// 于是"打开下拉、看看有哪些选项"这类用例会炸在
+// `TypeError: candidate?.scrollIntoView is not a function` —— 又是**与被测逻辑无关**的错
+// （要断言"某个值在选项里"，就得先能打开那个下拉）。
+// 补成空实现：jsdom 根本没有布局，滚动没有意义，也不影响任何断言。
+if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = function scrollIntoView() { /* 见上：无布局可滚 */ }
+}
+
 /** 用例可用来断言"自动起播发生了"；`vi.spyOn` 也照常可用（spy 会在用例结束后还原）。 */
 export const mediaSpies = {
   play: () => vi.spyOn(HTMLMediaElement.prototype, 'play'),

@@ -589,6 +589,12 @@ export interface UpdatePostsResult {
 
 /** GET /vtuber/fetch-status：账号信息抓取实时状态 */
 export interface AccountSnapshot {
+  /**
+   * 平台（2026-10-10 加，自审 F7，`devlog/461`）。
+   * ⚠️ **账号的身份是 `platform:platform_uid` 两半**（同 `useSelectedAccount.accountKeyOf`）——
+   * 只有 uid 时，B 站 mid 与微博 uid 都是纯数字串，撞号就会串号。
+   */
+  platform: string
   platform_uid: string
   display_name: string | null
   sign: string | null

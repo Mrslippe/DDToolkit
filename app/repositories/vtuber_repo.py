@@ -2,6 +2,7 @@ import json
 import logging
 import re
 from datetime import datetime, timedelta, timezone
+from datetime import tzinfo
 from uuid import uuid4
 
 from sqlalchemy import func, or_
@@ -257,12 +258,20 @@ class AccountStatSnapshotRepo:
             .all()
         )
 
-    def fan_trend_points(self, account_id: int) -> list[dict]:
+    def fan_trend_points(self, account_id: int, tz: tzinfo | None = None) -> list[dict]:
         """粉丝趋势点序列（P5）：按天分桶，self 取每日最后一条、zeroroku 全量点。
 
         返回按时间升序的 [{date, fans, source}]：
         - self 5min 直采高频 → 天末一条（曲线不抖动、载荷可控）
         - zeroroku 第三方回填本就日粒度（稀疏）→ 全量保留（补历史空洞）
+
+        ⚠️ **归日按本地时区**（2026-10-10 自审 F4，`devlog/461`）。`captured_at` 是
+        **朴素 UTC**（同一约定写在 `app/schemas/vtuber.py::_ser_captured_at`），
+        原先直接 `strftime("%Y-%m-%d")` 拿到的是 **UTC 日期** —— 东八区在本地
+        00:00–08:00 抓的那次会落到**前一天**的柱子上，而同一个人的直播场次是按
+        **本地**日期排的（`liveCalendarFmt.dayKeyIso` 专门为这条写了理由）。
+        `tz` 可注入**只是为了让用例不受跑测机器时区影响**（真机不传 ⇒ 本机时区）——
+        否则这条规则在 CI（UTC）上永远是绿的，等于没有判据。
         """
         rows = (
             self.db.query(AccountStatSnapshot)
@@ -276,8 +285,16 @@ class AccountStatSnapshotRepo:
         )
         daily_self: dict[str, tuple[datetime, int]] = {}   # date -> (captured_at, fans)
         points: list[dict] = []
+
+        def _local_day(dt: datetime | None) -> str:
+            """快照时刻 → **本地**日期串（朴素值按 UTC 解读，见 docstring）。"""
+            if dt is None:
+                return ""
+            aware = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+            return aware.astimezone(tz).strftime("%Y-%m-%d")
+
         for r in rows:
-            date_str = r.captured_at.strftime("%Y-%m-%d") if r.captured_at else ""
+            date_str = _local_day(r.captured_at)
             if not date_str:
                 continue
             if r.source == "self":

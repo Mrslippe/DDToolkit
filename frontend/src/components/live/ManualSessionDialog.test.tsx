@@ -121,7 +121,15 @@ afterEach(() => {
 describe('新建', () => {
   it('① 默认今天 20:00–22:00；只填开始时间就能存，空标题/空录播**不发**', async () => {
     render(null)
-    expect(input('lc-ms-start').value).toBe(`${new Date().toISOString().slice(0, 10)}T20:00`)
+    // ⚠️ **"今天"按本地时区算**（2026-10-10 自审 F4，`devlog/461`）：
+    //    这里原先写 `new Date().toISOString().slice(0, 10)`，那是 **UTC 日期** ——
+    //    组件给的是本地今天（`manualSessionForm.toLocalInput`），于是这条用例
+    //    在东八区的**每天 00:00–08:00 之间必红**（UTC 还停在前一天）。
+    //    它不是被我那次改动弄红的，是本来就按错的口径写的（那个窗口里跑才会现形）。
+    const today = new Date()
+    const p = (n: number) => String(n).padStart(2, '0')
+    const localToday = `${today.getFullYear()}-${p(today.getMonth() + 1)}-${p(today.getDate())}`
+    expect(input('lc-ms-start').value).toBe(`${localToday}T20:00`)
     expect(input('lc-ms-end').value.endsWith('T22:00')).toBe(true)
 
     await click(saveBtn())

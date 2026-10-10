@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/dialog'
 import { api } from '../api/api'
 import type { ThirdpartyAccount, ThirdpartyBlock, ThirdpartyOverview } from '../api/types'
+import { formatDate } from '../utils/format'
 import FloatPill from './common/FloatPill'
 
 interface Props {
@@ -23,7 +24,10 @@ interface Props {
 /** 一块数据的显示：`1,234 条 · 最新 2026-10-03`（没有数据时如实说"空"） */
 function blockText(b: ThirdpartyBlock | undefined): string {
   if (!b || b.rows === 0) return '空'
-  const day = (s: string | null) => (s ? s.slice(0, 10) : '—')
+  // ⚠️ 走 `formatDate` 而不是 `slice(0, 10)`：这里的字段**两种形态都有**
+  //（快照/场次是带时刻的 ISO 时间戳 ⇒ 要转本地；礼物日是纯日期串 ⇒ 原样返回），
+  // 而 `formatDate` 正是按这两条写的（2026-10-10 自审 F4，`devlog/461`）。
+  const day = (s: string | null) => (s ? formatDate(s) : '—')
   return `${b.rows} 条 · ${day(b.first_at)} → ${day(b.last_at)}`
 }
 

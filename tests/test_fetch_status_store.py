@@ -35,6 +35,7 @@ class _Acc:
     """够用的账号替身（`_push_account_snapshot` 只读这几个属性）。"""
 
     def __init__(self, uid: str) -> None:
+        self.platform = "bilibili"        # 快照载荷的身份半边（`platform:platform_uid`）
         self.platform_uid = uid
         self.display_name = f"V{uid}"
         self.sign = ""

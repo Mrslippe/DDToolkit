@@ -99,8 +99,9 @@ def test_snapshot_is_published_with_the_frontend_payload(db, _fresh_hub):
     assert len(got) == 1, f"应当恰好一条，实际 {len(got)}"
     p = got[0].payload
     # 与 `frontend/src/api/types.ts::AccountSnapshot` 逐字对应（前端 `parseSnapshot` 会校验）
-    assert set(p) == {"platform_uid", "display_name", "sign", "followers_count",
+    assert set(p) == {"platform", "platform_uid", "display_name", "sign", "followers_count",
                       "live_status", "live_title", "avatar_path"}, sorted(p)
+    assert p["platform"] == "bilibili", "身份是 `platform:platform_uid` 两半，缺一半就认错人"
     assert p["platform_uid"] == "11073"
     assert p["followers_count"] == 12345
     assert p["live_status"] == 1 and p["live_title"] == "今晚八点"

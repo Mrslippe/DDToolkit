@@ -151,6 +151,34 @@ describe('详情页 · 媒体本地兜底（devlog/319）', () => {
     expect(imgs().some((i) => i.getAttribute('src')?.startsWith('/api/static/'))).toBe(false)
   })
 
+  /**
+   * ⚠️ **封面与正文图的优先级是相反的**（2026-10-10 自审 F3，`devlog/461`）：
+   * 正文图是"远端主 + 本地兜底"（上面那几条），而**封面**按 `utils/coverSource.ts`
+   * 的口径是"**本地主 + 远端兜底**"——理由写在那个文件里：封面走的是图床，
+   * 常被防盗链拦，而盘上明明已经有一份副本。
+   *
+   * 这里原先写死 `src=cover_url`，于是"列表里有封面、点开详情是空的"。判据就是
+   * **首跳落在本地那份上**（而不是"失败两次之后才轮到它"）。
+   */
+  it('★ 封面：有本地副本时**首跳就是本地**（与正文图相反，见 coverSource.ts）', () => {
+    act(() => root.render(
+      <PostDetailDrawer post={post({ cover_url: REMOTE, cover_local: LOCAL })}
+                        open onClose={() => {}} />))
+
+    const cover = imgs().find((i) => i.getAttribute('alt') === '封面')!
+    expect(cover, '封面没渲染出来（选择器或分支变了？）').toBeTruthy()
+    expect(cover.getAttribute('src'), '首跳打远端 ⇒ 图床拦 Referer 时详情页封面是空的')
+      .toBe(`/api/${LOCAL}`)
+  })
+
+  it('封面只有远端时照样显示远端（别把没固化的帖变成空封面）', () => {
+    act(() => root.render(
+      <PostDetailDrawer post={post({ cover_url: REMOTE, cover_local: null })}
+                        open onClose={() => {}} />))
+    const cover = imgs().find((i) => i.getAttribute('alt') === '封面')!
+    expect(cover.getAttribute('src')).toContain('xhscdn')
+  })
+
   it('`images_local` 与 `images` **按索引**对齐（不是按 URL 猜）', () => {
     const second = 'http://sns-webpic-qc.xhscdn.com/202610030051/def/notes_pre_post/y!nd_dft.webp'
     const local2 = 'static/assets/post_image/p1_cafebabe.webp'

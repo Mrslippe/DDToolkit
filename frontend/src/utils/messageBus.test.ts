@@ -181,6 +181,9 @@ describe('①″ 手动动作（M2）：受理推进度、完成看 originator',
 
 describe('①‴ 账号快照（M3）：复用现有 `account-progress` 事件', () => {
   const SNAP = {
+    // ⚠️ `platform` 是 2026-10-10 起的**必需键**（自审 F7，`devlog/461`）：
+    // 账号身份是 `platform:platform_uid` 两半，只按 uid 认人会在跨平台撞号时串号。
+    platform: 'bilibili',
     platform_uid: '11073', display_name: '快照V', sign: '新签名', followers_count: 999,
     live_status: 1, live_title: '今晚八点', avatar_path: null,
   }

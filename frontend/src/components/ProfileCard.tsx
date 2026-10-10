@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { toast } from 'sonner'
 import { api } from '../api/api'
 import type { Account, ThirdpartyVtuber, VTuber } from '../api/types'
+import { vtuberGroup } from '../utils/groupBadge'
 import FloatPill from './common/FloatPill'
 
 interface Props {
@@ -22,6 +23,15 @@ interface Props {
  * 档案卡（P5，2026-09-05 修订）：企划（可编辑，选项自动建议第三方索引企划名——
  * 语义沿革：阵营=企划=公会）/ 公会（只读占位，先放着）/ 生日 / 出道日 /
  * 房间号 / 设定集（可折叠）。
+ *
+ * ⚠️ **2026-10-10 修**（自审 F1，`devlog/461`）：企划格原先是**同一屏里的第四处**独立读点 ——
+ * 它只读手填的 `faction`，而左栏徽章与筛选早就统一到 `vtuberGroup()`（手填优先 → 否则自动
+ * `group_name`）。真机 14 个 V 里有 **7 个**只有自动企划 ⇒ 左栏明明写着「四禧丸子」，
+ * 档案卡却写「未设置」（`458` 修了侧栏三处、漏了这处 —— 同一个 bug 的另一半）。
+ *
+ * 现在的取舍（用户 2026-10-10 拍板）：**显示生效值**（自动时标「（自动）」），
+ * 写路径仍然只写 `faction` —— 于是"手填"始终是那唯一一份可编辑的东西，
+ * 而"清空手填"**不会**让值消失（自动那份还在），这句话由下面那行小字说明。
  */
 const ProfileCard = memo(function ProfileCard({ vtuber, account, thirdparty }: Props) {
   const [settingOpen, setSettingOpen] = useState(false)
@@ -31,10 +41,21 @@ const ProfileCard = memo(function ProfileCard({ vtuber, account, thirdparty }: P
   // 账号/V 切换时同步外部状态（vtuber 引用随 refresh 变化）
   useEffect(() => setFaction(vtuber.faction ?? ''), [vtuber.faction])
 
-  const groups = [...new Set(
+  // 显示值：手填优先（含刚写完的乐观值），否则落回**唯一真源** `vtuberGroup()`。
+  // ⚠️ 不能只写 `vtuberGroup(vtuber)` —— 那是 props 上的旧值，乐观更新后 Select 不会动。
+  const manual = faction.trim()
+  const effective = manual || vtuberGroup(vtuber) || ''
+  const isAuto = !manual && !!effective
+
+  // 第三方索引里的企划名：**建议**用，与显示值相同时不值得再点一下
+  const suggestions = [...new Set(
     thirdparty.map((t) => t.group_name).filter((g): g is string => !!g),
   )]
-  const factionOptions = [...new Set([...(faction ? [faction] : []), ...groups])]
+  const suggestion = suggestions[0]
+  const options = [...new Set([manual, vtuberGroup(vtuber) || '', ...suggestions]
+    .filter((g): g is string => !!g))]
+  // 「采纳」= 把建议**固化成手填值**（此后它不再随候选人池刷新而变）
+  const showAdopt = !!suggestion && suggestion !== effective
 
   const handleFaction = async (value: string) => {
     const next = value === '__none__' ? '' : value
@@ -76,20 +97,23 @@ const ProfileCard = memo(function ProfileCard({ vtuber, account, thirdparty }: P
       <div className="profile-card-group-row">
         <div className="profile-card-group-col">
           <span className="profile-card-label">企划</span>
-          <Select value={faction || '__none__'} onValueChange={handleFaction} disabled={savingFaction}>
+          <Select value={effective || '__none__'} onValueChange={handleFaction} disabled={savingFaction}>
             <SelectTrigger className="h-7 w-[180px] text-xs">
               <SelectValue placeholder="未设置" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="__none__">未设置</SelectItem>
-              {factionOptions.map((f) => (
-                <SelectItem key={f} value={f}>{f}</SelectItem>
+              {options.map((f) => (
+                <SelectItem key={f} value={f}>
+                  {f === effective && isAuto ? `${f}（自动）` : f}
+                </SelectItem>
               ))}
             </SelectContent>
           </Select>
-          {groups.length > 0 && groups[0] !== faction && (
-            <FloatPill size="sm" title="从第三方索引采纳企划名" onClick={() => handleFaction(groups[0])}>
-              采纳「{groups[0]}」
+          {showAdopt && (
+            <FloatPill size="sm" title="把第三方索引里的企划名写进手填值（此后不再随池子刷新而变）"
+                       onClick={() => handleFaction(suggestion)}>
+              采纳「{suggestion}」
             </FloatPill>
           )}
         </div>
@@ -101,6 +125,12 @@ const ProfileCard = memo(function ProfileCard({ vtuber, account, thirdparty }: P
           </span>
         </div>
       </div>
+
+      {isAuto && (
+        <p className="profile-card-group-hint">
+          「（自动）」来自候选人池的检测结果；清空手填不会让它消失，选中该值即可固化为手填
+        </p>
+      )}
 
       {rows.map((r) => (
         <div key={r.label} className="profile-card-row">

@@ -25,6 +25,7 @@ import {
 } from '@/components/ui/collapsible'
 import type { Post } from '../api/types'
 import { resolveAsset, api } from '../api/api'
+import { resolveCoverSources } from '../utils/coverSource'
 import {
   formatCount,
   formatDateTime,
@@ -264,11 +265,20 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
     list.map((im, i) => (localImages[i] ? { ...im, local: localImages[i] } : im))
   const images = dedupeImages(withLocal(body.images ?? []))
   // 封面 + 正文图合并去重：单图帖封面与 images[0] 同源，去重后查看器只显示一张
+  //
+  // ⚠️ **这一份保留"远端优先"是有意的，别顺手改成 `resolveCoverSources`**：
+  //    它是给**查看器**用的列表，而查看器对正文图（主体）的口径就是
+  //    `url` 主 + `local` 兜底（`ImageViewer.tsx::ViewerImg`）—— 在里面单给封面翻优先级，
+  //    会变成"同一组图里封面本地优先、正文图远端优先"，更难解释。
+  //    **详情页那张封面本身**（下面 `ProxyImage`）已按封面口径走本地优先。
+  //    正文图缩略图那一组同理（`img.url` + `img.local` 兜底）。
   const coverList = shown.cover_url
     ? dedupeImages([{ url: shown.cover_url,
                       local: shown.cover_local ? resolveAsset(shown.cover_local) : undefined },
                     ...images])
     : images
+  // 详情页封面（本地优先，见下面 ProxyImage 处的注释）
+  const cover = resolveCoverSources(shown)
   const isHtml = typeof body.content === 'string' && /<[a-z][\s\S]*>/i.test(body.content)
 
   const statItems = [
@@ -385,9 +395,13 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
                 /* 换图必须换 key 才能重置四级状态（本组件的约定）：重取回来换了封面 URL，
                    不换 key 的话那个实例还停在 failed 那一级 ⇒ 新地址也画不出（devlog/320） */
                 key={shown.cover_url}
-                src={shown.cover_url}
-                /* 封面本地副本兜底（devlog/319）：远端图床签名过期后 403，盘上那份还在 */
-                fallbackSrc={shown.cover_local ? resolveAsset(shown.cover_local) : undefined}
+                /* ⚠️ 封面走**本地优先**（`resolveCoverSources`，`devlog/261` 的口径）：
+                   这里原先写死 `src=cover_url` + 本地兜底 ⇒ 与"封面本地优先"**反向**，
+                   于是图床被防盗链拦时"列表有封面、点开详情是空的"。
+                   （对比：正文图那一组仍走远端优先 —— 那是查看器自己的口径，
+                   见 `coverList` 上方注释；2026-10-10 自审 F3，`devlog/461`。） */
+                src={cover.src}
+                fallbackSrc={cover.fallback}
                 /* 全失败 ⇒ 试一次"打开时重取"（devlog/320） */
                 onAllFailed={onMediaDead}
                 alt="封面"

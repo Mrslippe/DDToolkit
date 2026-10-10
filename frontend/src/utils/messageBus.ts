@@ -99,11 +99,16 @@ export function withoutAlreadyPushedPosts(
 }
 
 /**
- * 账号快照的**必需键**（与后端 `scheduler._push_account_snapshot` 那七个字段逐字对应）。
+ * 账号快照的**必需键**（与后端 `scheduler._push_account_snapshot` 那几个字段逐字对应）。
  * 缺键就当成"解不出来"⇒ **不发半个事件**：半个 snapshot 合并进侧栏会留下空字段。
+ *
+ * ⚠️ `platform` 是 2026-10-10 加的（自审 F7，`devlog/461`）：账号的身份是
+ * **`platform:platform_uid` 两半**，只按 uid 认人的话，B 站 mid 与微博 uid
+ * 都是纯数字串 ⇒ 撞号时会把别人的昵称/头像/直播状态并进这个账号。
+ * 跨语言对账在 `tests/test_domain_events_push.py::test_snapshot_fields_match_the_frontend_list`。
  */
 const SNAPSHOT_FIELDS = [
-  'platform_uid', 'display_name', 'sign', 'followers_count',
+  'platform', 'platform_uid', 'display_name', 'sign', 'followers_count',
   'live_status', 'live_title', 'avatar_path',
 ] as const
 
@@ -116,6 +121,7 @@ export function parseSnapshot(
     if (!(f in payload)) return null
   }
   return {
+    platform: String(payload.platform),
     platform_uid: String(payload.platform_uid),
     display_name: (payload.display_name ?? null) as string | null,
     sign: (payload.sign ?? null) as string | null,

@@ -4,6 +4,7 @@ import {
   POST_TYPE_LABEL,
   formatBytes,
   formatCount,
+  formatDate,
   formatDateTime,
   normalizeImageUrl,
   parseBody,
@@ -210,6 +211,55 @@ describe('formatDateTime — UTC ISO → 本地 yyyy-MM-dd HH:mm', () => {
       `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ` +
       `${p(d.getHours())}:${p(d.getMinutes())}`
     expect(formatDateTime(iso)).toBe(expectLocal)
+  })
+})
+
+/**
+ * `formatDate`（2026-10-10 自审 F4，`devlog/461`）。
+ *
+ * 它存在的理由只有一个：**别再把 ISO 串 `slice(0, 10)` 当日期**——那样拿到的是
+ * **UTC 日期**，而库里存的是朴素 UTC（输出补 `+00:00`），东八区在本地 00:00–08:00
+ * 做的事（换头像、改昵称、抓一次）会被显示成**前一天**，
+ * 而同一个人的直播场次是按**本地**日期排的（同一个晚上分属两天）。
+ */
+describe('formatDate — 时间戳 → 本地 yyyy-MM-dd', () => {
+  it('按本地时区取日期（与 formatDateTime 同一份解析）', () => {
+    const iso = '2026-09-13T06:30:00+00:00'
+    const d = new Date(iso)
+    const p = (n: number) => String(n).padStart(2, '0')
+    expect(formatDate(iso)).toBe(`${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`)
+  })
+
+  it('★ 与 `slice(0, 10)` 的差别正是那条规则：UTC 深夜在东八区算**第二天**', () => {
+    // 本地（UTC+8）= 2026-09-14 07:00；`slice` 会给 2026-09-13
+    const iso = '2026-09-13T23:00:00+00:00'
+    const local = new Date(iso)
+    // 只在东半球跑时才是有意义的断言；西半球这台机器上两者本就同一天（说明清楚，别假装）
+    if (local.getTimezoneOffset() < 0) {
+      expect(formatDate(iso)).not.toBe(iso.slice(0, 10))
+    }
+    // 无论在哪台机器上：结果都必须等于"本地那一天"
+    const p = (n: number) => String(n).padStart(2, '0')
+    expect(formatDate(iso)).toBe(`${local.getFullYear()}-${p(local.getMonth() + 1)}-${p(local.getDate())}`)
+  })
+
+  it('★ 纯日期串**原样返回**（不能当瞬时算时区：负时差地区会退回前一天）', () => {
+    // `new Date("2026-09-04")` 按 UTC 午夜解析 ⇒ 在 UTC-5 上 getDate() 会是 3
+    expect(formatDate('2026-09-04')).toBe('2026-09-04')
+    expect(formatDate('2026-01-01')).toBe('2026-01-01')
+  })
+
+  it('带时刻的字符串不满足"纯日期"形态，照常走本地换算（正对照）', () => {
+    const iso = '2026-09-04T00:00:00+00:00'
+    const d = new Date(iso)
+    const p = (n: number) => String(n).padStart(2, '0')
+    expect(formatDate(iso)).toBe(`${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`)
+  })
+
+  it('空值与非法值有兜底（与 formatDateTime 同口径）', () => {
+    expect(formatDate(null)).toBe('-')
+    expect(formatDate(undefined)).toBe('-')
+    expect(formatDate('not-a-date')).toBe('not-a-date')
   })
 })
 

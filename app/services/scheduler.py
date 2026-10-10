@@ -245,6 +245,13 @@ def _push_account_snapshot(acc) -> None:
     with _status_lock:
         recent = _status["account"].setdefault("recent", [])
         snapshot = {
+            # ⚠️ `platform` 是 2026-10-10 补的（自审 F7，`devlog/461`）：**账号的身份是
+            #    `platform:platform_uid`**（前端 `useSelectedAccount.accountKeyOf` 的同一口径），
+            #    而这份载荷原先只有 uid ⇒ 消费侧只能按 uid 认人，B 站 mid 与微博 uid
+            #    都是纯数字串，撞号就会把别人的昵称/头像/直播状态并进这个账号
+            #    （左栏"直播中"、右栏"未开播"那种自相矛盾）。
+            #    真机当前没撞上，属于口径隐患 —— 但"等撞上再修"就是又一次静默串号。
+            "platform": acc.platform,
             "platform_uid": str(acc.platform_uid),
             "display_name": acc.display_name,
             "sign": acc.sign,

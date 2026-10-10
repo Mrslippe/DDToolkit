@@ -26,6 +26,7 @@ import { setFetchBusy } from '../fetchBusy'
 import { isFirstRun } from '../bootState'
 import { dispatchFetchIdle, type FetchIdleKind } from '../utils/fetchIdle'
 import { withoutAlreadyPushedPosts } from '../utils/messageBus'
+import { snapshotKey } from '../utils/accountSnapshots'
 import { EVENTS, emit, on } from '../utils/appEvents'
 import { useCapabilities, refreshCapabilities } from '../hooks/useCapabilities'
 import { hideToTray, quitApp } from '../utils/shellBridge'
@@ -218,7 +219,10 @@ export default function TopBar() {
         const recent = s.account.recent ?? []
         const freshByUid = new Map<string, AccountSnapshot>()
         for (const snap of recent) {
-          const uid = String(snap.platform_uid)
+          // ⚠️ 记账键与合并键都必须是 **`platform:platform_uid`**（2026-10-10 自审 F7，
+          //    `devlog/461`）：只按 uid 记账时，两个平台撞了号就会互相把对方的
+          //    digest 顶掉 ⇒ 每次轮询都判成"变了"、并派发一条不属于本账号的快照。
+          const uid = snapshotKey(String(snap.platform), String(snap.platform_uid))
           const digest = JSON.stringify(snap)
           if (seenByUid.current[uid] !== digest) {
             seenByUid.current[uid] = digest

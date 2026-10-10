@@ -4,7 +4,7 @@
 - live_sessions：live_status 转移推导场次（0→1→0、进行中、跨天）
 - ThirdpartyVtuberRepo.by_uid 精确查询
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import create_engine
@@ -75,6 +75,36 @@ def test_fan_trend_ignores_null_fans(db):
                                captured_at=T0, source="self"))
     db.commit()
     assert AccountStatSnapshotRepo(db).fan_trend_points(acc.id) == []
+
+
+def test_fan_trend_buckets_by_local_day_not_utc(db):
+    """归日按**本地**时区，不是 UTC（2026-10-10 自审 F4，`devlog/461`）。
+
+    `captured_at` 存的是**朴素 UTC**（同一约定写在 `_ser_captured_at`），
+    所以直接 `strftime("%Y-%m-%d")` 得到的是 UTC 日期：东八区在本地 00:00–08:00
+    抓的那次会落到**前一天**的柱子上，而同一个人的直播场次是按本地日期排的
+    （`liveCalendarFmt.dayKeyIso` 专门为这条写了理由）。
+
+    ⚠️ **`tz` 必须注入，不能靠跑测机器的时区**：CI 跑在 UTC 上，
+    真值恰恰等于错值 ⇒ 这条判据在 CI 里会永远绿（等于没有判据）。
+    这里钉 UTC+8 与 UTC-5 各一次，**两个方向都覆盖**。
+    """
+    acc = _mk_account(db)
+    east = timezone(timedelta(hours=8))
+    west = timezone(timedelta(hours=-5))
+    # UTC 2026-09-13 23:00 ⇒ 东八区 09-14 07:00（第二天）/ 西五区 09-13 18:00（同一天）
+    _snap(db, acc, datetime(2026, 9, 13, 23, 0, 0), fans=100)
+
+    east_pts = AccountStatSnapshotRepo(db).fan_trend_points(acc.id, tz=east)
+    assert east_pts == [{"date": "2026-09-14", "fans": 100, "source": "self"}], \
+        "东八区：本地已经是 09-14 了，UTC 归日会把它算成 09-13"
+
+    west_pts = AccountStatSnapshotRepo(db).fan_trend_points(acc.id, tz=west)
+    assert west_pts == [{"date": "2026-09-13", "fans": 100, "source": "self"}], \
+        "西五区：这条本来就该留在 09-13（反方向也要对）"
+
+    # 正对照：不注入 tz 时**不许抛**（真机走这条，用本机时区）
+    assert AccountStatSnapshotRepo(db).fan_trend_points(acc.id)[0]["fans"] == 100
 
 
 # ── live_sessions ───────────────────────────────────────────────────

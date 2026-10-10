@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/dialog'
 import { api } from '../api/api'
 import type { Account, AccountStatSnapshot, VTuberFormerValues } from '../api/types'
+import { formatDate, formatDateTime } from '../utils/format'
 import { PLATFORM_LABEL } from '../utils/postTypes'
 import {
   formerForAccount,
@@ -118,7 +119,7 @@ export default function AccountHistoryDialog({ open, onOpenChange, vtuberId, acc
                       {byAccount.names.map((f, i) => (
                         <span key={`n-${i}`} className="ah-former-val">
                           {f.value}
-                          {f.changed_at && <em>{f.changed_at.slice(0, 10)}</em>}
+                          {f.changed_at && <em>{formatDate(f.changed_at)}</em>}
                         </span>
                       ))}
                     </span>
@@ -131,7 +132,7 @@ export default function AccountHistoryDialog({ open, onOpenChange, vtuberId, acc
                       {byAccount.signs.map((f, i) => (
                         <span key={`s-${i}`} className="ah-former-val">
                           {f.value}
-                          {f.changed_at && <em>{f.changed_at.slice(0, 10)}</em>}
+                          {f.changed_at && <em>{formatDate(f.changed_at)}</em>}
                         </span>
                       ))}
                     </span>
@@ -164,7 +165,7 @@ export default function AccountHistoryDialog({ open, onOpenChange, vtuberId, acc
                   const v = snapshotVisibleFields(s)
                   return (
                     <li key={s.id} className="ah-snap">
-                      <span className="ah-snap-time">{s.captured_at.slice(0, 16).replace('T', ' ')}</span>
+                      <span className="ah-snap-time">{formatDateTime(s.captured_at)}</span>
                       <span className="ah-snap-main">
                         {v.followers && <b>{v.followers}</b>}
                         {v.live && <i className={s.live_status === 1 ? 'on' : ''}>{v.live}</i>}

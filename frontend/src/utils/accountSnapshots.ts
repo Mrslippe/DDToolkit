@@ -5,12 +5,29 @@ import type { Account, AccountSnapshot, VTuber } from '../api/types'
  * 侧栏与 PostsPage 右栏共用同一实现，保证「左栏直播中 / 右栏未开播」不会各读各的。
  */
 
-/** 把快照合并进单个账号（按 platform_uid 匹配）；未命中返回 null（调用方保留原引用） */
+/**
+ * 账号的**稳定身份**：`platform:platform_uid` —— 与 `useSelectedAccount.accountKeyOf`
+ * 逐字同一个口径（那边管"选的是哪个账号"，这里管"这条快照是谁的"）。
+ */
+export const snapshotKey = (platform: string, platformUid: string) =>
+  `${platform}:${platformUid}`
+
+/**
+ * 把快照合并进单个账号（按 **`platform:platform_uid`** 匹配）；未命中返回 null
+ * （调用方保留原引用）。
+ *
+ * ⚠️ **2026-10-10 修**（自审 F7，`devlog/461`）：原先只比 `platform_uid`，而 B 站 mid
+ * 与微博 uid **都是纯数字串** —— 撞号时会把另一个平台那个人的昵称/签名/头像/直播状态
+ * 并进这个账号，症状是左栏"直播中"、右栏"未开播"这种自相矛盾。
+ * 真机当前没有撞号的账号（属口径隐患），但"等撞上再修"就是又一次静默串号。
+ */
 export function mergeAccountSnapshots(
   acc: Account,
   updates: AccountSnapshot[],
 ): Account | null {
-  const hit = updates.find((u) => u.platform_uid === acc.platform_uid)
+  const hit = updates.find(
+    (u) => u.platform_uid === acc.platform_uid && u.platform === acc.platform,
+  )
   if (!hit) return null
   return {
     ...acc,

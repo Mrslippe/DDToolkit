@@ -1677,6 +1677,10 @@ async function probeMessages(): Promise<Record<string, unknown>> {
     }
     window.addEventListener('ddtoolkit:account-progress', onSnap)
     await publish('domain.account.snapshot', {
+      // ⚠️ `platform` 是**必需键**（2026-10-10 自审 F7，`devlog/461`）：前端 `parseSnapshot`
+      //    缺一个必需键就**整条丢弃**（"不发半个事件"）⇒ 探针这条链会静默判失败。
+      //    契约真源：`frontend/src/utils/messageBus.ts::SNAPSHOT_FIELDS`。
+      platform: 'bilibili',
       platform_uid: snapUid, display_name: '快照探针', sign: null, followers_count: 4242,
       live_status: 1, live_title: '探针场次', avatar_path: null,
     })

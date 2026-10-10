@@ -143,23 +143,41 @@ describe('④ applySnapshots（account-progress 增量）', () => {
   it('命中 ⇒ 合并出新对象', () => {
     render()
     act(() => { api.setSelectedAccount(acc({ display_name: '旧名', platform_uid: '100' })) })
-    const snap = { platform_uid: '100', display_name: '新名' } as AccountSnapshot
+    // ⚠️ `platform` 必给（2026-10-10 自审 F7，`devlog/461`）：认人是
+    // `platform:platform_uid` 两半，只给 uid 的"快照"命不中任何账号
+    const snap = { platform: 'bilibili', platform_uid: '100',
+                   display_name: '新名' } as AccountSnapshot
     act(() => { api.applySnapshots([snap]) })
     expect(attr('name')).toBe('新名')
+  })
+
+  it('★ 同 uid 但**平台不同** ⇒ 不合并（跨平台撞号不许串号）', () => {
+    render()
+    act(() => { api.setSelectedAccount(acc({ platform: 'bilibili', display_name: '旧名',
+                                             platform_uid: '100' })) })
+    act(() => {
+      api.applySnapshots([{ platform: 'weibo', platform_uid: '100',
+                            display_name: '微博上的另一个人' } as AccountSnapshot])
+    })
+    expect(attr('name'), '只按 uid 认人 ⇒ 微博那位的昵称会并进 B 站这个账号').toBe('旧名')
   })
 
   it('**未命中 ⇒ 引用不变**（否则依赖 accountKey 的 effect 每广播一轮就白跑）', () => {
     render()
     act(() => { api.setSelectedAccount(acc({ platform_uid: '100' })) })
     const before = lastRef
-    act(() => { api.applySnapshots([{ platform_uid: '999' } as AccountSnapshot]) })
+    act(() => {
+      api.applySnapshots([{ platform: 'bilibili', platform_uid: '999' } as AccountSnapshot])
+    })
     expect(lastRef, '未命中的增量不许换引用').toBe(before)
     expect(attr('uid')).toBe('100')
   })
 
   it('没选中账号 ⇒ 保持 null（没有可合并的对象）', () => {
     render()
-    act(() => { api.applySnapshots([{ platform_uid: '100' } as AccountSnapshot]) })
+    act(() => {
+      api.applySnapshots([{ platform: 'bilibili', platform_uid: '100' } as AccountSnapshot])
+    })
     expect(attr('null')).toBe('1')
   })
 })

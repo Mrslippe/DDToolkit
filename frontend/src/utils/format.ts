@@ -1,12 +1,44 @@
 import type { Post, PostBodyJson, PostStatsJson } from '../api/types'
 
+/** `YYYY-MM-DD` 这种**纯日期**（没有时刻）的形态 —— 见 `formatDate` 的口径说明 */
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/
+
+const pad = (n: number) => String(n).padStart(2, '0')
+
+/**
+ * 时间戳 → **本地**年月日时分（两份显示口径共用这一处解析，别再各写一遍）。
+ *
+ * ⚠️ 库里的时间列存的是**朴素 UTC**（后端序列化时补 `+00:00`，见
+ * `app/schemas/vtuber.py::_ser_captured_at`），所以"显示成本地"这件事只能靠
+ * `new Date(iso)` 的本地 getter —— 直接把 ISO 串 `slice(0, 10)` 拿到的是 **UTC 日期**
+ * （2026-10-10 自审 F4，`devlog/461`：本地 00:00–08:00 做的事会显示成前一天，
+ * 而同一个人的直播场次是按本地日期排的）。
+ */
+function localParts(iso: string | null | undefined):
+{ y: number; mo: number; d: number; h: number; mi: number } | null {
+  if (!iso) return null
+  const t = new Date(iso)
+  if (Number.isNaN(t.getTime())) return null
+  return { y: t.getFullYear(), mo: t.getMonth() + 1, d: t.getDate(),
+           h: t.getHours(), mi: t.getMinutes() }
+}
+
+/** 时间戳 → 本地 `yyyy-MM-dd`（只要日期的地方用它，别 `formatDateTime(...).slice(0, 10)`） */
+export function formatDate(iso: string | null | undefined): string {
+  // ⚠️ **纯日期原样返回**，不许当瞬时去算时区：`new Date("2026-09-04")` 按 **UTC 午夜**
+  //    解析，在负时差地区（如 UTC-5）会变成 2026-09-03 —— 那是"把平台的日期改错一天"。
+  //    礼物日（`gift_date`）就是这种字符串列。
+  if (iso && DATE_ONLY.test(iso)) return iso
+  const p = localParts(iso)
+  if (!p) return iso || '-'
+  return `${p.y}-${pad(p.mo)}-${pad(p.d)}`
+}
+
 /** UTC ISO 时间 → 本地时间显示（yyyy-MM-dd HH:mm） */
 export function formatDateTime(iso: string | null | undefined): string {
-  if (!iso) return '-'
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return iso
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+  const p = localParts(iso)
+  if (!p) return iso || '-'
+  return `${p.y}-${pad(p.mo)}-${pad(p.d)} ${pad(p.h)}:${pad(p.mi)}`
 }
 
 /** 数字 → 万/亿 缩写，**数字部分最多 4 位**（平台药丸右对齐规格）：
