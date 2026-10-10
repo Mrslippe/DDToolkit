@@ -85,4 +85,58 @@ describe('左栏企划徽章', () => {
     await mount([{ ...base, id: 9, name: '空值', group_name: '   ', group_uuid: null }])
     expect(host.querySelector('.vtuber-emblem')).toBeNull()
   })
+
+  it('手填的 `faction` 优先于自动检测的 `group_name`（用户自己写的那句最权威）', async () => {
+    await mount([{ ...base, id: 10, name: '改过的', faction: '我填的', group_name: '自动的' }])
+    const badge = host.querySelector<HTMLElement>('.vtuber-emblem')!
+    expect(badge.getAttribute('data-group')).toBe('我填的')
+  })
+})
+
+/**
+ * ⚠️ **用户 2026-10-10 报的那个 bug**：筛「四禧丸子」只出恬豆发芽了一个人，
+ * 而另外三人的徽章上明明写着四禧丸子。
+ *
+ * 根因：筛选的**选项与匹配**读 `faction`（老的手填字段），而**徽章**读 `group_name`
+ * （B3 起自动填）—— 真机库里恬豆两者都有、另外三人只有 `group_name`。
+ * 现在三处都走 `vtuberGroup()`（手填优先 → 否则自动），这一组就是它的回归判据。
+ */
+describe('左栏企划筛选（与徽章同一口径）', () => {
+  const four = [
+    { ...base, id: 18, name: '恬豆发芽了', faction: '四禧丸子', group_name: '四禧丸子' },
+    { ...base, id: 23, name: '又一充电中', faction: null, group_name: '四禧丸子' },
+    { ...base, id: 24, name: '梨安不迷路', faction: null, group_name: '四禧丸子' },
+    { ...base, id: 25, name: '沐霂是MUMU呀', faction: null, group_name: '四禧丸子' },
+    { ...base, id: 26, name: '露早', faction: null, group_name: 'EOE组合' },
+  ]
+
+  async function openFilter() {
+    const btn = host.querySelector<HTMLButtonElement>('.list-filter-btn')
+    expect(btn, '筛选入口不在（类名变了？）').toBeTruthy()
+    await act(async () => { btn!.click() })
+  }
+
+  const chip = (label: string) =>
+    [...host.querySelectorAll<HTMLButtonElement>('.filter-chip')]
+      .find((c) => c.textContent?.trim() === label)
+
+  it('★ 筛「四禧丸子」要出**四个人**（一人手填、三人靠自动企划）', async () => {
+    await mount(four)
+    expect(host.querySelectorAll('.vtuber-item').length).toBe(5)   // 正对照：五条都在
+    await openFilter()
+    const c = chip('四禧丸子')
+    expect(c, '企划选项里没有「四禧丸子」——选项和匹配必须与徽章同口径').toBeTruthy()
+    await act(async () => { c!.click() })
+    const names = [...host.querySelectorAll('.vtuber-name')].map((n) => n.textContent)
+    expect(names.slice().sort())
+      .toEqual(['恬豆发芽了', '又一充电中', '梨安不迷路', '沐霂是MUMU呀'].sort())
+    expect(names).not.toContain('露早')
+  })
+
+  it('★ 全员都只有自动企划（`faction` 全空）时，选项里照样要出现那个企划', async () => {
+    await mount(four.map((v) => ({ ...v, faction: null })))
+    await openFilter()
+    expect(chip('四禧丸子'), '选项只从 faction 提取 ⇒ 只有 group_name 的企划根本筛不了').toBeTruthy()
+    expect(chip('EOE组合')).toBeTruthy()
+  })
 })

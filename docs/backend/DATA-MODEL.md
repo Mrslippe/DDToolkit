@@ -344,6 +344,11 @@ session 收口**（先写文件、再写索引行，见 `docs/backend/ASSETS.md 
 —— 见 `app/services/pool.py` 的头注释与 `vtubers.meta.json`（拉取时刻 / 行数 / 覆盖率）。
 ⚠️ **首用会把随包那份引导进 `DATA_DIR`**（`pool.seed_from_bundle()`）：运行时读的是
 数据目录那一份，此前没有任何代码做这件事 ⇒ 全新安装的候选池是空的（`devlog/457` 修）。
+⚠️ **结构过时也会升级**（`stale_columns()`，2026-10-10，`devlog/458`）：数据目录那份
+缺随包那份有的列 ⇒ 备份成 `.bak` 再换新的；判据只看**列**、不比时间戳 ——
+那份快照允许用户自己换（`importer.py` 也读它），按 mtime 判会悄悄覆盖人家的名单。
+（真机实测过：老用户的数据目录里是 08-18 的五列文件 ⇒ 企划/uuid 两列取不到、
+池子里的企划搜不到，而日志里一个字都没有。）
 
 **纪律**：新增迁移后必须同步 `app/main.py` 的 `MIGRATION_HEAD`（`tests/test_services.py`
 断言与 alembic head 一致），否则冷启动快路径会把旧库误判为已最新。启动迁移四形态：

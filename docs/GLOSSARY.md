@@ -21,7 +21,7 @@ budget: 300
 | 术语 | 含义 | 代码位置 | 关联 |
 |---|---|---|---|
 | **VTuber / 主播本体** | 平台无关的主播实体（名字/阵营/生日/出道日/设定/头像/自定义背景/**企划**） | `app/models/vtuber.py::VTuber`；`VTuberRepo` | 一个 V 挂多个 `accounts` |
-| **企划归属 / group**（需求 6，B3，`devlog/457`） | 这个 V 属于哪个企划/公会（`VirtuaReal` / `NIJISANJI` / `虚研社`…）—— 左栏名字右边的徽章显示它 | `vtubers.group_name` / `group_uuid`（f014）；解析与回填 `services/groups.py`；界面 `utils/groupBadge.ts` + `.vtuber-emblem` | 数据源：**vdb.vtbs.moe**（随包候选池快照，唯一同时给企划名与稳定 UUID）→ 本地 `thirdparty_vtubers` 兜底；**B 站官方没有这个字段**；写入**只填空、不覆盖** |
+| **企划归属 / group**（需求 6，B3，`devlog/457`） | 这个 V 属于哪个企划/公会（`VirtuaReal` / `NIJISANJI` / `虚研社`…）—— 左栏名字右边的徽章显示它 | `vtubers.group_name` / `group_uuid`（f014）；解析与回填 `services/groups.py`；界面 `utils/groupBadge.ts` + `.vtuber-emblem` | 数据源：**vdb.vtbs.moe**（随包候选池快照，唯一同时给企划名与稳定 UUID）→ 本地 `thirdparty_vtubers` 兜底；**B 站官方没有这个字段**；写入**只填空、不覆盖**。⚠️ **展示口径 = `vtuberGroup()`**（手填 `faction` 优先 → 否则 `group_name`）：徽章、筛选选项、筛选匹配三处同一函数（`devlog/458` 修的就是「两处各读一个字段」） |
 | **候选池 / pool**（需求 7，C2，`devlog/457`） | 随包的 VTuber 名册快照 `vtubers.csv`（约 9.6k 行），「添加 V」里搜人的本地来源 | `scripts/discover_vtubers.py` 生成；`app/services/pool.py` 读取与检索；`vtubers.meta.json` 是它的体检 | 主源 **vdb.vtbs.moe `list.json`**（**应用运行时不访问**）；跨平台账号只在 `extra_accounts` 里**展示**，不进检索池 |
 | **账号 / account** | V 在某平台的账号（昵称/签名/头像/粉丝数/直播字段） | `models/vtuber.py::Account`；`AccountRepo`；`services/platforms/` | 唯一键 `(platform, platform_uid)` |
 | **主账号 / primary account** | 每个 V 按 `PRIMARY_PLATFORM_ORDER`（bilibili > weibo）取的首个账号 | `scheduler._primary_accounts()` | **只用于第三方历史回填**（动态流已改为全部账号，见「动态名单」） |

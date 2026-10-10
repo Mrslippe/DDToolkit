@@ -65,3 +65,41 @@ export function groupIcon(name: string | null | undefined): string | null {
 export function knownGroupIcons(): Record<string, string> {
   return { ...ICONS }
 }
+
+/**
+ * **一个 V 的企划**（界面上唯一的口径）：手填的 `faction` 优先，否则用自动检测的 `group_name`。
+ *
+ * ## 为什么必须有这一个函数（2026-10-10 用户报的那个 bug）
+ *
+ * 左栏同一屏上有两处"企划"，各自读了不同的字段：
+ * - **徽章**读 `group_name`（B3 起自动填，vdb 来的）；
+ * - **筛选弹窗的选项与匹配**读 `faction`（老的手填"阵营"——语义沿革里它**就是**企划）。
+ *
+ * 于是真机库出现了这一幕：`faction` 只有恬豆发芽了一人有值，另外三位
+ * （又一充电中 / 梨安不迷路 / 沐霂是MUMU呀）只有 `group_name='四禧丸子'`
+ * ⇒ **筛「四禧丸子」只出一个人，而三人的徽章上明明写着四禧丸子**。
+ *
+ * 口径：**手填优先**（用户自己写的那句最权威）→ 否则用自动检测的 → 都没有则 `null`。
+ * 徽章、筛选选项、筛选匹配三处**都调这一个函数**，不许再各读一个字段。
+ */
+export function vtuberGroup(v: {
+  faction?: string | null
+  group_name?: string | null
+} | null | undefined): string | null {
+  const manual = (v?.faction || '').trim()
+  if (manual) return manual
+  const auto = (v?.group_name || '').trim()
+  return auto || null
+}
+
+/** 一批 V 的全部企划（筛选弹窗的选项；去重 + 去掉空值，顺序按出现顺序） */
+export function vtuberGroupOptions(
+  list: { faction?: string | null; group_name?: string | null }[],
+): string[] {
+  const out: string[] = []
+  for (const v of list) {
+    const g = vtuberGroup(v)
+    if (g && !out.includes(g)) out.push(g)
+  }
+  return out
+}

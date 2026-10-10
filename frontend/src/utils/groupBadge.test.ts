@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest'
 
-import { groupIcon, groupLabel, groupSlug, knownGroupIcons } from './groupBadge'
+import { groupIcon, groupLabel, groupSlug, knownGroupIcons, vtuberGroup, vtuberGroupOptions } from './groupBadge'
 
 describe('groupSlug', () => {
   it('小写 + 空格折成连字符', () => {
@@ -60,5 +60,31 @@ describe('groupIcon', () => {
   it('图标表当前是空的（素材未制作）—— 放进来之后这条会提醒你更新用例', () => {
     const icons = knownGroupIcons()
     expect(Object.keys(icons)).toHaveLength(0)
+  })
+})
+
+
+describe('vtuberGroup：界面上唯一那份"企划"', () => {
+  it('手填优先，否则用自动检测的（用户 2026-10-10 报的"筛不出来"就出在这里）', () => {
+    expect(vtuberGroup({ faction: '我填的', group_name: '自动的' })).toBe('我填的')
+    expect(vtuberGroup({ faction: '', group_name: '自动的' })).toBe('自动的')
+    expect(vtuberGroup({ faction: null, group_name: '自动的' })).toBe('自动的')
+    expect(vtuberGroup({ faction: '   ', group_name: ' 自动的 ' })).toBe('自动的')
+  })
+
+  it('两边都没有 ⇒ null（徽章不渲染、也不进筛选选项）', () => {
+    expect(vtuberGroup({})).toBeNull()
+    expect(vtuberGroup({ faction: null, group_name: null })).toBeNull()
+    expect(vtuberGroup(null)).toBeNull()
+  })
+
+  it('选项：去重 + 丢空值 + 按出现顺序', () => {
+    expect(vtuberGroupOptions([
+      { faction: '甲', group_name: null },
+      { faction: null, group_name: '甲' },        // 与第一条去重（同一企划的两个来源）
+      { faction: null, group_name: '乙' },
+      { faction: null, group_name: null },
+      { faction: '丙', group_name: '乙' },
+    ])).toEqual(['甲', '乙', '丙'])
   })
 })

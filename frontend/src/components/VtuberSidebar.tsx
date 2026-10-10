@@ -24,7 +24,7 @@ import { EVENTS, on } from '../utils/appEvents'
 import { enterSolo, exitSolo, useSolo } from '../utils/soloMode'
 import { nextStreak, type ClickStreak } from '../utils/soloGesture'
 import { toggleRailCollapsed, useRailCollapsed } from '../utils/railCollapsed'
-import { groupIcon, groupLabel } from '../utils/groupBadge'
+import { groupIcon, groupLabel, vtuberGroup, vtuberGroupOptions } from '../utils/groupBadge'
 import './../styles/layout.css'
 
 /** 把抓取完成的账号快照就地合并进侧栏数据（按 bilibili platform_uid 匹配） */
@@ -277,8 +277,14 @@ function VtuberSidebarInner({ onSoloGesture }: {
       list = list.filter((v) => v.accounts.some((a) => filters.platform.includes(a.platform)))
     }
     if (filters.faction.length > 0) {
-      // 企划筛选激活时，无企划条目被排除（已知边界）
-      list = list.filter((v) => !!v.faction && filters.faction.includes(v.faction))
+      // 企划筛选激活时，无企划条目被排除（已知边界）。
+      // ⚠️ 判据是 **`vtuberGroup(v)`**（手填 faction 优先、否则自动检测的 group_name）——
+      //    与徽章同一个函数。只读 `v.faction` 时，只有 `group_name` 的那几位
+      //    **徽章上写着企划、筛选里却找不到**（2026-10-10 用户报的"四禧丸子只出一个人"）。
+      list = list.filter((v) => {
+        const g = vtuberGroup(v)
+        return !!g && filters.faction.includes(g)
+      })
     }
     if (kw) {
       list = list.filter(
@@ -301,7 +307,9 @@ function VtuberSidebarInner({ onSoloGesture }: {
     [vtubers],
   )
   const factionOptions = useMemo(
-    () => [...new Set(vtubers.map((v) => v.faction).filter((f): f is string => !!f))],
+    // ⚠️ 选项与匹配必须同一口径（`vtuberGroup`）：只从 `faction` 提取时，只有
+    // `group_name` 的那几个企划**根本不会出现在选项里**（更别说筛出来）—— 见该函数的说明。
+    () => vtuberGroupOptions(vtubers),
     [vtubers],
   )
   const filterCount =
@@ -568,8 +576,9 @@ const VtuberItem = memo(function VtuberItem({ vtuber, index, active, onSelect,
   const avatarLocal = resolveAsset(avatarLocalPath)
   const sign = resolveSign(vtuber, vtuber.accounts).text || null
   const isLiveNow = (bili?.live_status ?? 0) === 1
-  // 企划徽章（B3）：名字来自库（`groups.backfill_groups` 只填空、不覆盖），图标有没有由构建期扫出来
-  const group = vtuber.group_name?.trim() || null
+  // 企划徽章（B3）：`vtuberGroup` = **手填的 faction 优先，否则自动检测的 group_name**
+  // ——与筛选弹窗同一个口径（此前徽章只看 group_name、筛选只看 faction，两者会互相打架）
+  const group = vtuberGroup(vtuber)
   const icon = group ? groupIcon(group) : null
 
   /* ── 连点进单推（需求 1，2026-10-08 用户口径，`devlog/450`）─────────────────

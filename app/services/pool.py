@@ -100,14 +100,49 @@ def seed_from_bundle(force: bool = False) -> dict:
     """
     dst = Path(settings.VTUBER_LIST_FILE)
     src = bundled_path()
-    if dst.exists() and not force:
-        return {"seeded": False, "reason": "already-exists", "path": str(dst)}
     if not src.exists():
         return {"seeded": False, "reason": "bundle-missing", "path": str(dst)}
+    if dst.exists() and not force:
+        stale = stale_columns()
+        if not stale["stale"]:
+            return {"seeded": False, "reason": "already-exists", "path": str(dst)}
+        # ⚠️ 结构过时（缺随包那份有的列）⇒ 备份旧的再换新的：
+        # 只判"文件在不在"会让老用户永远停在旧快照上（2026-10-10 真机就是这个症状：
+        # 数据目录里还是 08-18 的五列文件 ⇒ 池子里的企划搜不到、group_uuid 全空）。
+        backup = dst.with_suffix(dst.suffix + ".bak")
+        shutil.copy2(dst, backup)
+        shutil.copy2(src, dst)
+        logger.info("候选池快照结构过时（缺 %s）⇒ 已换成本次随包那份，旧的备份在 %s",
+                    "、".join(stale["missing"]), backup)
+        return {"seeded": True, "reason": "stale-upgraded", "path": str(dst),
+                "missing": stale["missing"], "backup": str(backup)}
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dst)
     logger.info("候选池已从随包快照引导到数据目录：%s（%d 字节）", dst, dst.stat().st_size)
     return {"seeded": True, "reason": "ok", "path": str(dst)}
+
+
+def _columns_of(path: Path) -> list[str]:
+    """CSV 表头（读不到就当空 —— 空表头的文件会被判成"过时"，正好该换）。"""
+    try:
+        with open(path, newline="", encoding="utf-8") as f:
+            return next(csv.reader(f), [])
+    except OSError:
+        return []
+
+
+def stale_columns() -> dict:
+    """数据目录那份是不是**结构过时**（缺随包那份有的列）—— 判"该不该换"只看列，不比时间戳。
+
+    为什么不比 mtime：那份快照**允许用户自己换**（`importer.py` 也读它），按时间戳判会
+    悄悄覆盖人家的名单；而"缺列"是**代码读不出来的东西**，换掉它不会有第二种解释。
+    """
+    dst = Path(settings.VTUBER_LIST_FILE)
+    src = bundled_path()
+    if not dst.exists() or not src.exists():
+        return {"stale": False, "missing": []}
+    missing = sorted(set(_columns_of(src)) - set(_columns_of(dst)))
+    return {"stale": bool(missing), "missing": missing}
 
 
 def _pool() -> list[dict]:

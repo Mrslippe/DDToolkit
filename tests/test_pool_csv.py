@@ -242,3 +242,44 @@ def test_pick_name_survives_dirty_language_keys():
     assert m.pick_name({"name": {"default": "jp", "jp": "默认语言"}}) == "默认语言"
     assert m.pick_name({"name": {"ID(印度尼西亚)": "兜底"}}) == "兜底"
     assert m.pick_name({"name": {}}) == ""
+
+def test_old_format_snapshot_is_upgraded_with_a_backup(tmp_path, monkeypatch):
+    """数据目录里是**旧格式**快照（缺列）⇒ 换成本次随包那份，旧的留 `.bak`。
+
+    ⚠️ 这是 2026-10-10 真机实测的第二个问题：只判"文件在不在"的话，**老用户永远停在旧快照上**
+    —— 那台机器的数据目录里还是 08-18 的五列 CSV，于是池子里的企划搜不到、`group_uuid` 全空。
+    """
+    dst = tmp_path / "data" / "vtubers.csv"
+    dst.parent.mkdir(parents=True)
+    dst.write_text("flag,vtuber_name,platform,platform_uid,follower\n"
+                   "0,老条目,bilibili,999,10\n", encoding="utf-8")
+    monkeypatch.setattr(cfg.settings, "VTUBER_LIST_FILE", str(dst))
+    monkeypatch.setattr(pool, "_cache", None)
+
+    out = pool.seed_from_bundle()
+    assert out["seeded"] is True and out["reason"] == "stale-upgraded"
+    assert "group_name" in out["missing"], out
+    assert dst.read_text(encoding="utf-8").splitlines()[0] == ",".join(EXPECTED_COLUMNS), \
+        "换上的还是旧格式？"
+    backup = Path(out["backup"])
+    assert backup.exists() and "老条目" in backup.read_text(encoding="utf-8"), \
+        "换之前必须留一份旧的（用户可能自己维护过它）"
+    # 引导之后**企划真的能查到**（这才是升级的意义）
+    pool.reload_pool()
+    hit = pool.find_in_pool("bilibili", "999")
+    assert hit is None, "老那条不该出现在新快照里（换的是整份文件）"
+    assert pool.find_in_pool("bilibili", _rows()[0]["platform_uid"]) is not None
+    pool.reload_pool()
+
+
+def test_up_to_date_snapshot_is_left_alone(tmp_path, monkeypatch):
+    """列齐的那份**不许动**（用户可能自己换过名单 —— 判据只看列，不比时间戳）。"""
+    dst = tmp_path / "data" / "vtubers.csv"
+    dst.parent.mkdir(parents=True)
+    dst.write_text(",".join(EXPECTED_COLUMNS) + "\n"
+                   "0,我自己换的,bilibili,777,1,u,g,gu,\n", encoding="utf-8")
+    monkeypatch.setattr(cfg.settings, "VTUBER_LIST_FILE", str(dst))
+    out = pool.seed_from_bundle()
+    assert out == {"seeded": False, "reason": "already-exists", "path": str(dst)}
+    assert "我自己换的" in dst.read_text(encoding="utf-8")
+    assert not dst.with_suffix(dst.suffix + ".bak").exists()
