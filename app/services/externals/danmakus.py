@@ -542,4 +542,13 @@ class DanmakusSource(ExternalSource):
         db.commit()
         summary.stored = len(mapping)
         logger.info(f"danmakus vtuber_index: 整表刷新 {len(mapping)} 条")
+        # ⚠️ 索引刷新后**顺手补一次企划**（需求 6，B3，`devlog/457`）：这一份是"池快照之后
+        # 新出现的 V"唯一有企划的来源，而回填是**只填空、幂等、不出网**的（纯字典/本地查询）。
+        # 失败只记日志：企划只是徽章，不该让一次第三方同步算失败。
+        try:
+            from app.services import groups
+
+            groups.backfill_groups(db)
+        except Exception as e:
+            logger.warning(f"索引刷新后补企划跳过: {type(e).__name__}: {e}")
         return summary

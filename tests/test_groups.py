@@ -138,3 +138,20 @@ def test_backfill_uses_the_real_snapshot(db, monkeypatch):
     assert v.group_name == sample["group_name"]
     assert v.group_uuid == sample["group_uuid"]
     pool.reload_pool()
+
+
+def test_index_refresh_backfills_groups(monkeypatch):
+    """**接线判据**：danmakus 索引整表刷新后要调一次 `groups.backfill_groups`。
+
+    为什么用源码级判据（而不是跑一次同步）：这条判据要问的是"有没有接上"，
+    而"接上了但同步路径复杂到跑不起来"与"压根没接"在行为上都是"新 V 没有徽章"。
+    （同 `VtuberSidebar.drag.test.ts` 那类接线判据的先例。）
+    """
+    src = (Path(cfg.PROJECT_ROOT) / "app" / "services" / "externals" / "danmakus.py"
+           ).read_text(encoding="utf-8")
+    assert "groups.backfill_groups(db)" in src, \
+        "索引刷新后没补企划 ⇒ 池快照之后新出现的 V 永远没有徽章"
+    # 正对照：确实在 `_sync_vtuber_index` 里（不是别处随手写的一句）
+    tail = src.split("async def _sync_vtuber_index", 1)[1]
+    assert "groups.backfill_groups(db)" in tail.split("async def ", 1)[0], \
+        "补企划那句话不在索引同步函数里"
