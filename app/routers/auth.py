@@ -149,6 +149,13 @@ async def auth_status(platform: str):
     return {
         "logged_in": valid,
         "needs_login": not valid,
+        # ⚠️ **2026-10-10 补上**（自审的一致性扫描，`devlog/460`）：这里是四家平台里
+        #    唯一**没给 `configured`** 的一家，而前端 `utils/platformLogin.ts` 靠它区分
+        #    「从没配过」（无后缀）与「配过但挂了」（`· 已失效`）。缺了它，微博在
+        #    cookie 过期时 Tab 上**一个字都不说** —— 看起来像从来没配过，
+        #    正是 `devlog/456` 用户对 B 站报的那类困惑（那次只修了 B 站这一家）。
+        #    取值与 B 站分支同义：`is_logged_in` = **凭据在不在**（不是能不能用）。
+        "configured": weibo_auth_manager.is_logged_in,
         "uid": weibo_auth_manager.uid or None,
         "name": weibo_auth_manager.name or None,
     }

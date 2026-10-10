@@ -62,7 +62,11 @@ export function authTabSuffix(tab: LoginTab, status: AuthStatusLike | null | und
 export interface AuthStatusLike {
   logged_in?: boolean
   needs_login?: boolean
-  /** 凭据在不在（B 站最近才补上这位；缺省时退回 `logged_in`） */
+  /**
+   * 凭据在不在（**四家平台现在都给**：B 站 2026-10-08 `devlog/456`，
+   * 微博是最后一个 —— 2026-10-10 `devlog/460` 的自审扫描才发现它独缺这位）。
+   * 仍然保留"缺省时退回 `logged_in`"是为了老后端/老响应。
+   */
   configured?: boolean
 }
 

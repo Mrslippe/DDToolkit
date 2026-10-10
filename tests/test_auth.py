@@ -118,7 +118,12 @@ def test_auth_status_weibo_stale_cookie(client, monkeypatch):
     """Cookie 过期（存在但探测失效）：必须报未登录，前端才出现重新扫码入口。
 
     修复（2026-09）：此前 logged_in 只看 cookie 存在性，8/22 的过期 Cookie
-    让 UI 永远显示「微博·已登录」，点重新登录也不出二维码。"""
+    让 UI 永远显示「微博·已登录」，点重新登录也不出二维码。
+
+    ⚠️ `configured` 那一行是 **2026-10-10**（自审的一致性扫描，`devlog/460`）补的：
+    「配过但失效」与「从没配过」在 Tab 上都算"没登录"，只有 `configured` 能分开 ——
+    四家平台里微博原先独缺这个字段，于是它失效时 Tab 上什么都不写
+    （B 站同期写「· 已失效」）。**这条断言就是那个分歧的判据。**"""
     monkeypatch.setattr(arouter.weibo_auth_manager, "cookie", "SUB=stale-expired")
     monkeypatch.setattr(arouter.weibo_auth_manager, "uid", "1")
     monkeypatch.setattr(arouter.weibo_auth_manager, "name", "测试")
@@ -126,7 +131,19 @@ def test_auth_status_weibo_stale_cookie(client, monkeypatch):
     r = client.get("/auth/weibo/status").json()
     assert r["logged_in"] is False
     assert r["needs_login"] is True
+    assert r["configured"] is True, "凭据还在 —— 只是不能用了，Tab 该写「· 已失效」"
     assert r["uid"] == "1"
+
+
+def test_auth_status_weibo_never_configured_reports_not_configured(client, monkeypatch):
+    """正对照：**从没配过**时 `configured` 必须是 False（否则「已失效」会变成常驻文案）。"""
+    monkeypatch.setattr(arouter.weibo_auth_manager, "cookie", "")
+    monkeypatch.setattr(arouter.weibo_auth_manager, "uid", "")
+    monkeypatch.setattr(arouter.weibo_auth_manager, "name", "")
+    monkeypatch.setattr(arouter.weibo_auth_manager, "check_valid", _async(False))
+    r = client.get("/auth/weibo/status").json()
+    assert r["logged_in"] is False
+    assert r["configured"] is False
 
 
 def _async(value):

@@ -106,6 +106,40 @@ def _scripts_that_start_a_backend_server() -> list[Path]:
     return found
 
 
+#: 后端**业务**路径前缀（要 token）；公开四处（`/healthz`、`/static/`、`/img-proxy`、
+#: `/video-proxy`）是有意不鉴权的，见 `app/core/api_auth.py` 的 docstring。
+_BUSINESS_PATHS = ("/vtuber", "/account", "/posts", "/post/", "/externals", "/settings",
+                   "/auth", "/capabilities", "/messages", "/healthz")
+_PUBLIC_PATHS = ("/healthz", "/static/", "/img-proxy", "/video-proxy")
+
+
+def _scripts_that_call_the_backend() -> list[Path]:
+    """打**后端业务端点**的脚本（派生，不写名字清单）。
+
+    两个标志任一即可 —— 都要求"真的会发生一次请求"，不是"提到过某个路径"：
+      · `TestClient(`：进程内直接建客户端（`measure_endpoints.py` 用它打真机库）；
+      · `urlopen(` 且文件里出现**业务**路径（`smoke_*` / `dev_check` / `perf_report` / `ui_probe`）。
+
+    ⚠️ 业务路径要**减掉公开的那几条**：`/healthz` 同时出现在两份元组里（`_PUBLIC_PATHS`
+    才是"不鉴权"的真源），不减就会把 `shutdown_smoke.py` 这种**只 ping `/healthz`**
+    的脚本算进来 —— 判据把无关文件算进来的下一步，就是有人给它加豁免。
+
+    ⚠️ **为什么必须派生**：写死清单时，"新脚本自动受管"是假的 ——
+    `extension_smoke.py` 与 `measure_endpoints.py` 都落在旧清单外，
+    而它们正是"打后端"的脚本。判据的覆盖面会漂，这一条就是防它漂。
+    """
+    biz_only = tuple(p for p in _BUSINESS_PATHS if p not in _PUBLIC_PATHS)
+    found = []
+    for p in sorted((ROOT / "scripts").glob("*.py")):
+        text = p.read_text(encoding="utf-8", errors="replace")
+        if "TestClient(" in text:
+            found.append(p)
+            continue
+        if "urlopen(" in text and any(b in text for b in biz_only):
+            found.append(p)
+    return found
+
+
 def test_every_script_that_starts_a_backend_passes_the_dev_token():
     """起后端的脚本必须**真的把 token 并进子进程 env**（S1 之后漏一个就是整条腿 401）。
 
@@ -132,24 +166,42 @@ def test_every_script_that_starts_a_backend_passes_the_dev_token():
 
 
 def test_scripts_that_call_the_backend_send_the_header():
-    """打后端业务端点的脚本必须发 token 头（本脚本自己也覆盖 `dev_token` 的使用）。
+    """打后端业务端点的脚本必须接上开发态 token。
 
-    判据取"文件里出现过 `dev_token.headers()`"：这是脚本侧**唯一**该用的写法
-    （头名只写在 `dev_token.py` 一处）。
+    ⚠️ **2026-10-10 只改了一半：判据没动，改成派生的是"谁受这条判据管"**。
+    原先文件里写死 5 个名字，于是"新脚本自动受管"从来没成立 ——
+    `extension_smoke.py` 早就 `urlopen` 业务端点、却一直在单子外面；
+    这次新加的 `measure_endpoints.py` 同样落在外面（而它正是靠这条判据才该被管的）。
+    这正是 `dev_token.py` 开头那条教训（"加了门禁就要把所有开发态调用方过一遍"）
+    的同一个形状：**判据的覆盖面本身也会漂**。
 
-    反向验证：把 `smoke_delete.py` 里的 `dev_token.headers()` 换成手写的 `{}` ⇒ 红。
+    判据 = 文件里**真的有那句 import**（`from dev_token import …` 或 `import dev_token`）。
+    ⚠️ **不能写成 `"dev_token" in text`** —— 那是这条用例原来的写法，而它**挡不住任何东西**：
+    变异验证时把 `measure_endpoints.py` 的 import 整句删掉，用例照样绿，
+    因为文件里还有 `scripts/dev_token.py` 这种**散文提及**与 `dev_token_value` 这种**变量名**。
+    判据必须是结构（"它 import 了"），不是子串（"它提到过"）。
+    它拦的是**历史真事故**那一类：`dev_check.py` / `smoke_upstream.py` 在 S1 之后
+    **压根没接 token**，逐条 401 还被误报成"当前网络不可达"。
+    ⚠️ 它**不拦**"头名被重新写一遍"（那要靠 `dev_token.py` 做唯一真源）；
+    也不要以为这里是"用了 `headers()` 才算过" —— 判据比那宽。
+
+    反向验证：删掉 `measure_endpoints.py` 里那句 `from dev_token import (` ⇒ 红并点名它。
     """
-    for name in ("dev_check.py", "smoke_upstream.py", "smoke_delete.py", "perf_report.py",
-                 "ui_probe.py"):
-        text = (ROOT / "scripts" / name).read_text(encoding="utf-8", errors="replace")
-        assert "dev_token" in text, f"{name} 没有接开发态 token（S1 起它会 401）"
-
-
-#: 后端**业务**路径前缀（要 token）；公开四处（`/healthz`、`/static/`、`/img-proxy`、
-#: `/video-proxy`）是有意不鉴权的，见 `app/core/api_auth.py` 的 docstring。
-_BUSINESS_PATHS = ("/vtuber", "/account", "/posts", "/post/", "/externals", "/settings",
-                   "/auth", "/capabilities", "/messages", "/healthz")
-_PUBLIC_PATHS = ("/healthz", "/static/", "/img-proxy", "/video-proxy")
+    scripts = _scripts_that_call_the_backend()
+    assert len(scripts) >= 7, (
+        f"判据本身失效了 —— 只找到 {len(scripts)} 个打后端的脚本："
+        f"{[p.name for p in scripts]}"
+    )
+    imports_dev_token = re.compile(
+        r"^\s*(?:from\s+dev_token\s+import|import\s+dev_token)\b", re.M)
+    missing = [p.name for p in scripts
+               if not imports_dev_token.search(
+                   p.read_text(encoding="utf-8", errors="replace"))]
+    assert not missing, (
+        f"这些脚本打后端业务端点却没接开发态 token：{missing} —— S1 起它们会逐条 401，"
+        f"而症状看起来像数据/布局坏了（见本文件 docstring 的表）。"
+        f"修法：`from dev_token import headers`，请求带 `headers=headers()`。"
+    )
 
 
 def test_probe_backend_calls_send_the_token():
