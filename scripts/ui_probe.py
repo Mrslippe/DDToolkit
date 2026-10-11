@@ -2421,6 +2421,53 @@ _WHICH_LABEL = {"login": "登录浮窗", "legal": "协议闸门",
                 "cap-limits": "受限说明窗", "other": "其它弹窗"}
 
 
+def _type_filter_failures(cal: dict | None, width: int) -> list[str]:
+    """T4（2026-10-12）类型筛选条的端到端判据：**点一下胶囊，网格真的只剩那一类**。
+
+    为什么需要它：`utils/liveCalendarFilter.test.ts` 守的是纯函数（筛得对不对），
+    `liveTypeStats.test.ts` 守的是卡片的派生 —— 而「点胶囊 → 状态变 → 网格跟着变」这条
+    **接线**在 vitest 里够不着（挂 `LiveCalendar` 要 mock 整条取数链 + Radix）。
+    探针这里是唯一能真点一次的地方。
+
+    三条判据：
+    1. **点了就生效**：选中那一类的当月计数 N，必须等于筛后**所有格子「N 场」之和**
+       （两个数来自两条不同的代码路径 ⇒ 对得上才算接线正确）；
+    2. **筛选不许吃掉筛选空间**：点完之后**别的胶囊计数一个都不许变**
+       （它们按全量算 —— 否则用户切不回别的类型）；
+    3. **复位能回到全量**：点「全部」之后格子里的场次数回到点之前那个数。
+    """
+    f = (cal or {}).get("filter")
+    if not f:
+        # 一颗胶囊都没有（当月没场次 / 这个 V 没有场次）：不是失败，如实跳过
+        return []
+    bad: list[str] = []
+    if f.get("onAfter") != [f.get("clicked")]:
+        bad.append(f"@{width} 类型筛选：点了 `{f.get('clicked')}` 之后"
+                   f"选中的是 {f.get('onAfter')!r}（应当只有它一个）")
+    if f.get("filterAfter") != f.get("clicked"):
+        bad.append(f"@{width} 类型筛选：容器 `data-lc-type-filter` 报的是 "
+                   f"{f.get('filterAfter')!r}，与点的那一类 `{f.get('clicked')}` 不符")
+    if f.get("cellsAfter") != f.get("chipCount"):
+        bad.append(
+            f"@{width} 类型筛选：选中 `{f.get('clicked')}`（当月 {f.get('chipCount')} 场）"
+            f"之后，格子里「N 场」之和是 {f.get('cellsAfter')} —— 两个数来自不同代码路径，"
+            f"对不上说明筛选没真作用到网格上")
+    if not f.get("hasReset"):
+        bad.append(f"@{width} 类型筛选：选中之后没有「全部」复位入口 —— 用户没法取消筛选")
+    for key, before in (f.get("othersBefore") or {}).items():
+        after = (f.get("othersAfter") or {}).get(key)
+        if after != before:
+            bad.append(
+                f"@{width} 类型筛选：点了 `{f.get('clicked')}` 之后 `{key}` 的计数从 "
+                f"{before} 变成 {after} —— 计数必须按**全量**算，否则用户切不回别的类型")
+    if f.get("filterReset") != "all":
+        bad.append(f"@{width} 类型筛选：复位之后容器报的是 {f.get('filterReset')!r}（应为 `all`）")
+    if f.get("cellsReset") != f.get("cellsBefore"):
+        bad.append(f"@{width} 类型筛选：复位之后格子场次之和 {f.get('cellsReset')} "
+                   f"≠ 点之前 {f.get('cellsBefore')}")
+    return bad
+
+
 def _dialog_overflow_failures(dialogs: object, where: str) -> list[str]:
     """对话框横向溢出 → 失败清单（空 = 没有溢出）。
 
@@ -3937,6 +3984,20 @@ def main() -> int:
                 )
             elif args.calendar_expect:
                 print("  [ok] 日历格签名与基线一致")
+
+            # ── 类型筛选条的端到端判据（T4，2026-10-12）─────────────────────
+            # 放在签名**之后**：读筛选读数那一步会真点一下胶囊再复位，
+            # 而签名比的是"未筛"的现场（复位后采的，见 probe.ts 的顺序）。
+            tf = (cal or {}).get("filter")
+            if tf:
+                print(f"  类型筛选：点 `{tf.get('clicked')}`（当月 {tf.get('chipCount')} 场）"
+                      f"→ 格子场次之和 {tf.get('cellsAfter')}"
+                      f"（点前 {tf.get('cellsBefore')} / 复位后 {tf.get('cellsReset')}）")
+            tf_bad = _type_filter_failures(cal, w)
+            if tf_bad:
+                bad.extend(tf_bad)
+            elif tf:
+                print("  [ok] 类型筛选：点一下只剩那一类，别的计数不变，复位回全量")
 
             for b in bad:
                 print("   -", b)

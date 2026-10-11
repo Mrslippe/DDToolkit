@@ -1936,6 +1936,61 @@ export async function runUiProbe(): Promise<void> {
     // （2026-09-13 抽 `LiveSessionDialog` 时踩到：最近一场 0 热词，整块弹幕区没被渲染）。
     const wantDay = new URLSearchParams(window.location.search).get('day')
     const allCells = [...document.querySelectorAll<HTMLElement>('.lc-cell')]
+
+    /** T4（2026-10-12）：类型筛选条的实渲染读数 + **真点一下**看它有没有生效。
+     *
+     * 为什么必须点：`utils/liveCalendarFilter.test.ts` 守的是**纯函数**（筛得对不对），
+     * 而"点胶囊 → 状态变 → 网格跟着变"这条**接线**在 vitest 里够不着
+     * （挂 `LiveCalendar` 要 mock 掉整条取数链 + Radix）。这里的判据是：
+     * 选中那一类的**当月计数**，必须等于筛后**所有格子「N 场」之和** ——
+     * 两个数来自两条不同的代码路径（chip 的计数 / 格子的渲染），对得上才算接线正确。
+     *
+     * ⚠️ 顺带守"筛选不许吃掉筛选空间"：点完之后**别的胶囊计数一个都不许变**
+     * （它们按全量算，见 `LiveCalendar` 的 `monthStats` 说明）。 */
+    const readChips = () => [...document.querySelectorAll<HTMLElement>('[data-lc-type]')]
+      .map((n) => ({
+        key: n.getAttribute('data-lc-type') || '',
+        on: n.getAttribute('data-lc-type-on') === '1',
+        n: Number((n.querySelector('.lc-stat-num')?.textContent || '').trim()) || 0,
+      }))
+    const cellsNow = () => [...document.querySelectorAll<HTMLElement>(
+      '.lc-cell[data-lc-in-month="1"]')]
+      .map((c) => Number((c.querySelector('.lc-count')?.textContent || '').replace(/\D/g, '')) || 0)
+      .reduce((a, b) => a + b, 0)
+    const chipsBefore = readChips()
+    const filterBefore = document.querySelector('[data-lc-type-filter]')?.getAttribute('data-lc-type-filter') ?? null
+    const cellsBefore = cellsNow()
+    let filterProbe: Record<string, unknown> | null = null
+    if (chipsBefore.length) {
+      const target = chipsBefore[0]
+      const btn = document.querySelector<HTMLElement>(`[data-lc-type="${target.key}"]`)
+      btn?.click()
+      await sleep(400)
+      const after = readChips()
+      filterProbe = {
+        clicked: target.key,
+        chipCount: target.n,
+        cellsBefore,
+        cellsAfter: cellsNow(),
+        filterBefore,
+        filterAfter: document.querySelector('[data-lc-type-filter]')
+          ?.getAttribute('data-lc-type-filter') ?? null,
+        onAfter: after.filter((c) => c.on).map((c) => c.key),
+        // 别的胶囊的计数（点完之后必须与点之前逐个相同）
+        othersBefore: Object.fromEntries(chipsBefore.filter((c) => c.key !== target.key)
+          .map((c) => [c.key, c.n])),
+        othersAfter: Object.fromEntries(after.filter((c) => c.key !== target.key)
+          .map((c) => [c.key, c.n])),
+        hasReset: !!document.querySelector('[data-lc-type-reset]'),
+      }
+      // 复位：后面的断言（格子签名 / 点格子开详情）要的是**未筛**的现场
+      document.querySelector<HTMLElement>('[data-lc-type-reset]')?.click()
+      await sleep(300)
+      filterProbe.cellsReset = cellsNow()
+      filterProbe.filterReset = document.querySelector('[data-lc-type-filter]')
+        ?.getAttribute('data-lc-type-filter') ?? null
+    }
+
     const withBody = wantDay
       ? allCells.filter(
           (c) =>
@@ -2182,6 +2237,7 @@ export async function runUiProbe(): Promise<void> {
         detail,
         pendingSample,
         settledSample,
+        filter: filterProbe,
       },
       thirdparty,
     })

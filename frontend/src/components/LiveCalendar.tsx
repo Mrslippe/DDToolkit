@@ -368,6 +368,10 @@ const LiveCalendar = memo(function LiveCalendar(
       <div
         key={c.key}
         className={'lc-cell' + toneCls}
+        /* T4：日期格是否属于**当前月**（42 格里含上下月补位）。
+           ⚠️ 探针拿它把"本月场次之和"与筛选胶囊的计数对账 ——
+           不加这个标记，求和会把补位格的场次算进来，两边永远对不上。 */
+        data-lc-in-month={c.inMonth ? '1' : '0'}
         data-resv-count={c.reservations.length || undefined}
         onMouseEnter={(e) => openCellPop(c, e)}
         onMouseLeave={closeCellPop}
