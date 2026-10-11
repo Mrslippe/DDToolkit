@@ -430,8 +430,20 @@ class LiveSessionRepo:
     # ── 写入（其他数据源接入接口） ──
 
     def _upsert(self, account_id: int, live_id: str, source: str,
-                fields: dict) -> bool:
-        """按 (account_id, live_id) 幂等 upsert；返回是否新增。"""
+                fields: dict, settled: dict | None = None) -> bool:
+        """按 (account_id, live_id) 幂等 upsert；返回是否新增。
+
+        `settled`：**类型定稿结果**（`live_settle.settle_fields(...)`）。仓库层只写不算 ——
+        推断是服务层的事，本层连 import 它都不许（判据 `tests/test_dependency_direction.py`）。
+        这与 `upsert_danmakus` 那条「`platform` 必须由调用方传入」同一条纪律：
+        **仓库层不替上层做决定**。
+
+        ⚠️ 为什么两列**不混进 `fields`**：`fields` 走的是"非空值刷新"（`None` = 别动它），
+        而类型定稿的 `None` 是**有意义的最终值**（"算过，结论是没定出来"）。混在一起
+        会造成两种误判：兜底写不进去、或者每次同步都把定稿值冲成 NULL。
+        分开之后语义是唯一的：**给了 `settled` = 这一轮定稿过了，按它写（含 None）；
+        不给 = 这一轮不碰类型**。
+        """
         row = (
             self.db.query(LiveSession)
             .filter(LiveSession.account_id == account_id,
@@ -440,11 +452,14 @@ class LiveSessionRepo:
         )
         if row is None:
             self.db.add(LiveSession(account_id=account_id, live_id=live_id,
-                                    source=source, **fields))
+                                    source=source, **(settled or {}), **fields))
             return True
         for k, v in fields.items():
             if v is not None:
                 setattr(row, k, v)
+        if settled is not None:
+            row.category = settled.get("category")
+            row.category_from = settled.get("category_from")
         return False
 
     def upsert_danmakus(self, account_id: int, items: list[dict], *,
@@ -456,6 +471,9 @@ class LiveSessionRepo:
         ⚠️ **`platform` 必须由调用方传入**（M1a，devlog/213）：这里原来是写死的
         `"platform": "bilibili"` —— 仓库层替平台做了决定（`ARCHITECTURE-IMPROVEMENT-EXECUTION.md`
         §2.7 的第二条越界）。**没有默认值是有意的**：给个默认值等于把决定权又收回来。
+
+        ⚠️ 类型（f016）**由调用方定稿后放进条目的 `category`/`category_from`**，
+        本层只写不算（同上一条纪律）。缺失这两个键 = 这一轮不定稿（老调用方不受影响）。
         """
         added = updated = skipped = 0
         for it in items or []:
@@ -486,20 +504,24 @@ class LiveSessionRepo:
                 "danmakus_count": _num(it.get("danmakusCount"), int),
                 "raw_json": json.dumps(it, ensure_ascii=False, default=str),
             }
-            if self._upsert(account_id, live_id, "danmakus", fields):
+            settled = ({"category": it["category"], "category_from": it["category_from"]}
+                       if "category" in it and "category_from" in it else None)
+            if self._upsert(account_id, live_id, "danmakus", fields, settled):
                 added += 1
             else:
                 updated += 1
         self.db.commit()
         return {"added": added, "updated": updated, "skipped": skipped}
 
-    def upsert_feed(self, account_id: int, live_id: str, fields: dict) -> bool:
+    def upsert_feed(self, account_id: int, live_id: str, fields: dict,
+                    settled: dict | None = None) -> bool:
         """B站 live_rcmd 场次接入接口（M3；live_id=B站 live_id 数字串）。
 
         fields 含 title/start_at/end_at/parent_area_name/area_name/room_id/
-        cover_url 等（增量更新用 upsert_feed 可刷新字段）。
+        cover_url 等（增量更新用 upsert_feed 可刷新字段）；`settled` 是类型定稿结果
+        （**feed 是"标题/分区后到"的主力**，见 `_upsert` 那段说明）。
         """
-        return self._upsert(account_id, live_id, "feed", fields)
+        return self._upsert(account_id, live_id, "feed", fields, settled)
 
     # ── 写入（用户在日历上手动记录，B2 / devlog/454） ──
 
@@ -515,11 +537,17 @@ class LiveSessionRepo:
 
     def create_manual(self, account_id: int, *, platform: str, start_at: datetime,
                       end_at: datetime | None, title: str | None,
-                      vod_url: str | None) -> LiveSession:
-        """新增一条手动场次（提交）。`platform` 由调用方传入（同 `upsert_danmakus`：仓库层不替平台做决定）。"""
+                      vod_url: str | None,
+                      settled: dict | None = None) -> LiveSession:
+        """新增一条手动场次（提交）。`platform` 由调用方传入（同 `upsert_danmakus`：仓库层不替平台做决定）。
+
+        `settled`：类型定稿结果（`live_settle.settle_fields(...)`）—— 同样由调用方算好，
+        本层只写（见 `_upsert` 的注释）。
+        """
         row = LiveSession(account_id=account_id, platform=platform, source="manual",
                           live_id=self.manual_live_id(), title=title,
-                          start_at=start_at, end_at=end_at, vod_url=vod_url)
+                          start_at=start_at, end_at=end_at, vod_url=vod_url,
+                          **(settled or {}))
         self.db.add(row)
         self.db.commit()
         self.db.refresh(row)
@@ -532,10 +560,23 @@ class LiveSessionRepo:
                         LiveSession.live_id == live_id)
                 .first())
 
-    def update_row(self, row: LiveSession, fields: dict) -> LiveSession:
-        """局部更新一行（提交）；`fields` 由路由层用 `exclude_unset` 语义给出。"""
+    def update_row(self, row: LiveSession, fields: dict,
+                   settled: dict | None = None) -> LiveSession:
+        """局部更新一行（提交）；`fields` 由路由层用 `exclude_unset` 语义给出。
+
+        `settled`：类型定稿结果（`live_settle.settle_fields(...)`，用**变更后**的值算）。
+        ⚠️ 为什么必须重算：用户把标题从「随便播播」改成「歌回」，类型得跟着变 ——
+        否则"落库"就成了"只在第一次见面时看一眼"。重算在**路由层**做（仓库层不许 import
+        服务层，见 `_upsert` 注释），本层只写。**只动被改的这一行**，不碰历史行。
+
+        ⚠️ `settled` 传 `None` = 这一轮没重算（例如只补了录播地址）：此时**不动类型两列** ——
+        自动抓来的场次本来就只允许补 `vod_url`，重算没有新输入。
+        """
         for k, v in fields.items():
             setattr(row, k, v)
+        if settled is not None:
+            row.category = settled.get("category")
+            row.category_from = settled.get("category_from")
         self.db.commit()
         self.db.refresh(row)
         return row
@@ -681,6 +722,7 @@ class LiveSessionRepo:
         if how == "dup":
             old_start = g["start_at"]
             old_vod = g.get("vod_url")
+            old_cat = (g.get("category"), g.get("category_from"))
             # 弹幕更丰富记录为主字段（标题/分区/收益/弹幕数/峰值）
             if (row.danmakus_count or 0) > (g.get("danmakus_count") or 0):
                 g.update(self._row_dict(row))
@@ -700,6 +742,9 @@ class LiveSessionRepo:
             # 录播地址是**用户手填**的：上面的 `g.update(...)` 会把没有它的那一侧的
             # `vod_url=None` 覆盖上来 ⇒ 合并一次就丢。这里显式兜底（同 `_merge_row_into_group`）。
             g["vod_url"] = g.get("vod_url") or old_vod
+            if g.get("category") is None and old_cat[0] is not None:
+                g["category"], g["category_from"] = old_cat
+            self._keep_category(g, row)
             g["start_at"] = min(g["start_at"], old_start)   # 时间取并集（不翻倍收益）
             if row.end_at and (g.get("end_at") is None or row.end_at > g["end_at"]):
                 g["end_at"] = row.end_at
@@ -731,8 +776,21 @@ class LiveSessionRepo:
             g["live_id"] = row.live_id
         if row.cover_url and not g["cover_url"]:
             g["cover_url"] = row.cover_url
+        self._keep_category(g, row)
         srcs.add(row.source)
         g["source"] = self._join_sources(srcs)
+
+    @staticmethod
+    def _keep_category(g: dict, row: LiveSession) -> None:
+        """合并组保留**第一个非空**的落库类型（danmakus 在 feed/manual 之前被扫到）。
+
+        规则（读侧 C2）：一个合并组里可能有多行（danmakus 空标题 + feed 有标题），
+        取**优先级最高的源里非空的那个值**。⚠️ 不能只看"最高优先级源"而不看空值 ——
+        danmakus 那行为空时会让 feed 判对的结果被判成没有类型。
+        """
+        if g.get("category") is None and row.category is not None:
+            g["category"] = row.category
+            g["category_from"] = row.category_from
 
     def _find_group(self, groups, snap: dict,
                     window: timedelta) -> tuple[dict, set[str], str] | None:
@@ -817,6 +875,9 @@ class LiveSessionRepo:
         srcs.add(row.source)
         g.setdefault(_SRC_IDS_KEY, {})[row.source] = row.live_id
         old_vod = g.get("vod_url")
+        # ⚠️ 类型同 vod_url：`g.update(...)` 会用高优行的 `category=None` 把已经并进来的
+        # 低优行的类型冲掉（本工具里 danmakus 行常常先落成空标题/无类型）⇒ 先存后兜。
+        old_cat = (g.get("category"), g.get("category_from"))
         if _SOURCE_PRIORITY.get(row.source, 0) > _SOURCE_PRIORITY.get(primary, 0):
             g.update(self._row_dict(row))       # 高优主字段整体替换（含 start/end/标题/分区）
         else:
@@ -836,6 +897,9 @@ class LiveSessionRepo:
         # 手动补的录播地址**只增不减**（`g.update` 那条路会用 None 冲掉它）：
         # 这是全表唯一一个"用户手写、没有任何自动源会重新给出来"的字段。
         g["vod_url"] = g.get("vod_url") or old_vod
+        if g.get("category") is None and old_cat[0] is not None:
+            g["category"], g["category_from"] = old_cat
+        self._keep_category(g, row)
         g["source"] = self._join_sources(srcs)
 
     def _merge_snap_into_group(self, grp: tuple[dict, set[str], str], snap: dict) -> None:
@@ -890,6 +954,10 @@ class LiveSessionRepo:
             # 手动补的录播地址（f013）：进合并组，但合并规则**不许把它冲成 None**
             # （`_row_dict` 整体替换时 `vod_url` 会是 None，见 _merge_row_into_group 的兜底）
             "vod_url": row.vod_url,
+            # 类型落库（f016）：**必须进组**，否则读取侧拿不到落库值、只能现算，
+            # "写时定稿"就白做了（见 live_settle.for_group）。
+            "category": row.category,
+            "category_from": row.category_from,
         }
 
     def _snap_dict(self, snap: dict) -> dict:
@@ -909,6 +977,9 @@ class LiveSessionRepo:
             "segment_count": 1,
             "cover_url": None,
             "vod_url": None,          # self 快照推导场次没有录播地址（虚拟场次，无 id 可挂）
+            # 类型落库（f016）：虚拟场次没有行 ⇒ 没有落库值，读取时按同一口径现算
+            "category": None,
+            "category_from": None,
         }
 
 

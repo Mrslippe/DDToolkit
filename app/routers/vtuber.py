@@ -15,11 +15,14 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.domain.live_manual import (VodUrlError, is_manual_source, normalize_vod,
                                     to_utc_naive)
-from app.models.vtuber import EVENT_KINDS, VTuber, Post, Account
+from app.models.vtuber import EVENT_KINDS, VTuber, Post, Account, LiveSession
 from app.repositories.vtuber_repo import (
     VTuberRepo, AccountRepo, PostRepo, AccountStatSnapshotRepo,
     LiveGiftDayRepo, ThirdpartyVtuberRepo, VtuberEventRepo, LiveSessionRepo,
-    LiveCategoryOverrideRepo, ProfileCardRepo,
+    LiveCategoryOverrideRepo, ProfileCardRepo, _SOURCE_PRIORITY,
+)
+from app.services.live_settle import (
+    backfill_rows, for_group, normalize_stored_category, settle_fields,
 )
 from app.schemas.vtuber import (
     VTuberOut, VTuberCreate, VTuberUpdate,
@@ -42,9 +45,7 @@ from app.services import bili_search as bili_search_svc
 from app.services import capabilities
 from app.services.platforms import registry
 from app.services.purge import purge_account, purge_vtuber
-from app.services.live_type import (
-    infer_category, plan_series, build_learned, EDITABLE_CATEGORY_KEYS,
-)
+from app.services.live_type import EDITABLE_CATEGORY_KEYS
 from app.services.live_upstream import (LOOKUP_FAILED, LOOKUP_RECORDED,
                                         ensure_session_recorded,
                                         has_danmakus_source, load_live_upstream)
@@ -809,48 +810,109 @@ def fan_trend(account_id: int, db: Session = Depends(get_db)):
 
 
 def _live_infer_ctx(db: Session, account_id: int):
-    """场次推断上下文（列表端/详情端共用）：账号/vtuber/事件/校正。"""
+    """场次类型上下文（列表端/详情端共用）：账号 + 用户校正表。
+
+    ⚠️ 2026-10-12（类型落库）之后**不再有 `vtuber`/事件日**：类型改成**写时就定稿**
+    （只看这一场自己的标题/分区，见 `app/services/live_settle.py`），读取侧只剩
+    一道「用户校正」覆盖。需要 V 的端点自己取（`AccountRepo.get(...).vtuber`），
+    别把它们塞回这里 —— 那正是上一版"读取时推断"留下的尾巴。
+    """
     account = AccountRepo(db).get(account_id)
-    vtuber = account.vtuber if account else None
-    events = VtuberEventRepo(db).list_by_vtuber(vtuber.id) if vtuber else []
     overrides = LiveCategoryOverrideRepo(db).map_by_account(account_id)
-    return account, vtuber, [e.event_date for e in events], overrides
+    return account, overrides
 
 
-def _infer_basis(sessions: list[dict], overrides: dict) -> tuple[dict, dict]:
-    """类型推断的**公共输入**：系列聚类 + 反哺词库（两者都依赖**整个账号的场次集合**）。
+def _resolve_categories(db: Session, sessions: list[dict],
+                        overrides: dict) -> list[tuple[str, str]]:
+    """每个合并组的最终类型（与 `sessions` 同序）+ **惰性回填**。
 
-    ⚠️ **每请求算一次，绝不许放进逐场次的循环里**（2026-10-10，`devlog/459`）：
-    B2 那批把这两件事挪进了 per-场次的辅助函数，于是 1,256 场的账号从 ~80ms 变成 ~8,150ms
-    （O(n²)：每场都重聚类一次全量）—— 用户看到的是"数据视图的卡片加载很久 + 之后切换界面卡"
-    （CPU 全烧在这个请求上，而前端每轮 `fetch-idle` 都会再发一次）。
-    判据：`tests/test_vtuber_api.py::test_infer_basis_is_computed_once_per_request`。
+    信号栈（v3，2026-10-12 类型落库）：
+        override（用户校正）  >  落库值（写时定稿）  >  按同一口径现算  >  中性
+
+    为什么还要"现算"这一层：落库值对**没有表内行**的合并组（虚拟场次）与**尚未回填**
+    的老行是空的。现算用的函数与写路径**同一个**（`live_settle.settle`）⇒ 两条路不会跑偏。
+
+    惰性回填（用户 2026-10-12 选定）：迁移会自动跑、`scripts/backfill_*.py` 不会，
+    所以老库那批的列会一直是 NULL —— 在这里**顺手补一次**（只补代表行、只补真正的推导、
+    补过就不再补），用户不需要跑任何脚本。
     """
-    return plan_series(sessions, overrides), build_learned(overrides, sessions)
+    stored = _stored_by_live_id(db, sessions)
+    out: list[tuple[str, str]] = []
+    for s in sessions:
+        hit = _override_hit(s, overrides)
+        if hit:
+            out.append((hit, "override"))
+            continue
+        live_id = s.get("live_id")
+        out.append(for_group(s, stored.get(live_id) if live_id else None))
+    return out
 
 
-def _infer_session(s: dict, *, vtuber, event_dates, overrides, basis,
-                   live_id) -> tuple[str, str]:
-    """场次类型推断（v2 信号栈）：override > series > title > learned > area > date > fallback。
+def _override_hit(s: dict, overrides: dict) -> str | None:
+    """这一场的用户校正（按对外 id 查，**也认源 id**）。
 
-    `basis` 是 `_infer_basis(sessions, overrides)` 的结果 —— **由调用方在循环外算好传进来**，
-    本函数不做任何全量计算（否则就是上面那条 O(n²)）。
+    为什么认源 id：合并会把对外 id 定权成最高优先级源，而校正可能是在"这一场还只有
+    feed 行"的时候设的（那时它还是数字 id）。与 `_find_live_session` 同一条理由。
     """
-    series_categories, learned = basis
-    return infer_category(
-        s["live_title"], s.get("area_name"), s.get("parent_area_name"),
-        s["start_at"],
-        birthday=vtuber.birthday if vtuber else None,
-        debut_date=vtuber.debut_date if vtuber else None,
-        event_dates=event_dates,
-        live_id=live_id, overrides=overrides,
-        series_categories=series_categories, learned=learned,
-    )
+    if not overrides:
+        return None
+    live_id = s.get("live_id")
+    if live_id and live_id in overrides:
+        return overrides[live_id]
+    for src_id in (s.get("src_live_ids") or {}).values():
+        if src_id in overrides:
+            return overrides[src_id]
+    return None
+
+
+def _stored_by_live_id(db: Session, sessions: list[dict]) -> dict[str, tuple[str, str]]:
+    """合并组的代表行 → 落库的 (category, category_from)；**顺带惰性回填**。
+
+    代表行 = `_SRC_IDS_KEY` 里优先级最高的那个真源 id（与 `merged()` 定对外 id 同一条规则），
+    正是 `merged()` 里承载 `category` 的那一行。只有它能被回填（非代表行保持 NULL，
+    读的时候由代表行供值）。
+
+    ⚠️⚠️ **`sessions` 必须来自 `merged(..., with_ids=True)`**：本函数靠 `src_live_ids`
+    定位代表行，用默认的 `merged()` 会**静默**返回空表 —— 症状是"落库值明明写着，
+    界面却按现算显示"（判据 `test_stored_lookup_needs_src_live_ids` 就是钉这一条的）。
+
+    返回的是**归一过**的值（认不出来的枚举 ⇒ 中性，见 `normalize_stored_category`）：
+    调用方拿到就能直接展示，不必各自再判一次"这个 key 认不认识"。
+    """
+    picked: dict[str, LiveSession] = {}
+    for s in sessions:
+        live = {k: v for k, v in (s.get("src_live_ids") or {}).items() if v}
+        if not live:
+            continue
+        winner = max(live, key=lambda k: _SOURCE_PRIORITY.get(k, 0))
+        if winner == "self":
+            continue                      # 纯虚拟场次：没有行可挂
+        picked[live[winner]] = s
+    if not picked:
+        return {}
+    rows = (db.query(LiveSession)
+            .filter(LiveSession.live_id.in_(list(picked)))
+            .all())
+    by_live = {r.live_id: r for r in rows}
+    stats = backfill_rows(rows)
+    if stats.written:
+        db.commit()
+        logger.debug(f"类型惰性回填：{stats}")
+    out: dict[str, tuple[str, str]] = {}
+    for live_id, _s in picked.items():
+        row = by_live.get(live_id)
+        if row is not None and row.category is not None:
+            out[live_id] = normalize_stored_category(row.category, row.category_from)
+    return out
+
 
 
 def _session_payload(s: dict, account_id: int, category: str,
                      category_from: str) -> dict:
     """场次响应的公共载荷（列表 / 详情 / 写回执三个端点共用）。
+
+    ⚠️ 类型（`category`/`category_from`）的取法**不在这里**，见 `_resolve_categories`
+    （写时定稿 + 校正覆盖 + 同一口径现算）；这里只负责组装。
 
     `manual` 在这里**算一次**（域层纯函数 `is_manual_source`）：
     让前端自己按 `+` 拆 `source` 的话，「哪些场次能改时间、哪些能删」这条规则
@@ -864,27 +926,26 @@ def _session_payload(s: dict, account_id: int, category: str,
 
 @router.get("/account/{account_id}/live-sessions", response_model=list[LiveSessionOut])
 def live_sessions(account_id: int, db: Session = Depends(get_db)):
-    """直播场次（v0.9.x 内容管道 M1 主源 + v2 多信号类型推断）。
+    """直播场次（v0.9.x 内容管道 M1 主源 + 类型落库 v3，2026-10-12）。
 
     - 表内场次（danmakus 历史全量，M1 回填；feed M3 增量）
     - self 快照推导场次（5min 粒度，自观测兜底，±90min 窗口合并）
-    - 每场附带类型推断（v2 信号栈，读取时计算）：
-      override（用户校正）> series（系列聚类）> title（多词评分）>
-      learned（校正反哺词库）> area（分区）> date（纪念日）> fallback
+    - 每场附带类型：**落库值**（写这一行的时候按它自己的标题/分区定稿过）
+      ← 用户校正覆盖；没有落库值的组（虚拟场次 / 未回填的老行）按**同一口径现算**。
+      ⚠️ v2 那两个全局档（series 骨架聚类 / learned 反哺词库）已下线 ——
+      它们要看"同账号、全历史"，与"只看这一场"的落库口径冲突（见 live_settle 模块头）。
     """
-    account, vtuber, event_dates, overrides = _live_infer_ctx(db, account_id)
+    account, overrides = _live_infer_ctx(db, account_id)
     if not account:
         raise HTTPException(404, f"Account id={account_id} 不存在")
-    sessions = LiveSessionRepo(db).merged(account_id)
-    basis = _infer_basis(sessions, overrides)      # ⚠️ 循环外算一次（见 `_infer_basis`）
-    out = []
-    for s in sessions:
-        category, category_from = _infer_session(
-            s, vtuber=vtuber, event_dates=event_dates, overrides=overrides,
-            basis=basis, live_id=s.get("live_id"))
-        out.append(LiveSessionOut(**_session_payload(s, account_id,
-                                                    category, category_from)))
-    return out
+    sessions = LiveSessionRepo(db).merged(account_id, with_ids=True)
+    cats = _resolve_categories(db, sessions, overrides)
+    return [
+        LiveSessionOut(**_session_payload(
+            {k: v for k, v in s.items() if k != "src_live_ids"},
+            account_id, cat, src))
+        for s, (cat, src) in zip(sessions, cats)
+    ]
 
 
 def _find_live_session(sessions: list[dict], live_id: str) -> dict | None:
@@ -936,15 +997,15 @@ def live_session_detail(account_id: int, live_id: str,
     时间/分区/收益/分类）一起转圈，最坏 93s 才出结果。拆开后本端点必然**不发起任何
     第三方请求**，弹窗秒开，慢与失败只影响弹幕/动态那两格。
     """
-    account, vtuber, event_dates, overrides = _live_infer_ctx(db, account_id)
+    account, overrides = _live_infer_ctx(db, account_id)
     if not account:
         raise HTTPException(404, f"Account id={account_id} 不存在")
     sessions = LiveSessionRepo(db).merged(account_id, with_ids=True)
     s = _pick_live_session(db, account_id, live_id, sessions)
+    idx = next(i for i, x in enumerate(sessions) if x is s)
+    s = dict(s)
     s.pop("src_live_ids", None)      # 只用于定位，不回给前端
-    category, category_from = _infer_session(
-        s, vtuber=vtuber, event_dates=event_dates, overrides=overrides,
-        basis=_infer_basis(sessions, overrides), live_id=live_id)
+    category, category_from = _resolve_categories(db, sessions, overrides)[idx]
     return LiveSessionDetailOut(**_session_payload(s, account_id,
                                                   category, category_from))
 
@@ -974,13 +1035,13 @@ def _manual_detail(db: Session, account_id: int, live_id: str) -> LiveSessionDet
     self 快照并入），此时它在日历上是**另一个 live_id**（更高优先级的源赢）——
     回执要是拿着一个日历上不存在的 id，前端下一步"编辑我刚存的那条"必然 404。
     """
-    account, vtuber, event_dates, overrides = _live_infer_ctx(db, account_id)
+    account, overrides = _live_infer_ctx(db, account_id)
     sessions = LiveSessionRepo(db).merged(account_id, with_ids=True)
-    s = dict(_pick_live_session(db, account_id, live_id, sessions))
+    picked = _pick_live_session(db, account_id, live_id, sessions)
+    idx = next(i for i, x in enumerate(sessions) if x is picked)
+    s = dict(picked)
     s.pop("src_live_ids", None)
-    category, category_from = _infer_session(
-        s, vtuber=vtuber, event_dates=event_dates, overrides=overrides,
-        basis=_infer_basis(sessions, overrides), live_id=live_id)
+    category, category_from = _resolve_categories(db, sessions, overrides)[idx]
     return LiveSessionDetailOut(**_session_payload(s, account_id,
                                                   category, category_from))
 
@@ -1032,7 +1093,8 @@ def create_manual_live_session(account_id: int, data: LiveSessionManualIn,
     if hit:
         raise HTTPException(409, _conflict_message(hit))
     row = repo.create_manual(account_id, platform=account.platform,
-                             start_at=start, end_at=end, title=title, vod_url=vod)
+                             start_at=start, end_at=end, title=title, vod_url=vod,
+                             settled=settle_fields(title, None, None, start))
     return _manual_detail(db, account_id, row.live_id)
 
 
@@ -1062,14 +1124,19 @@ def update_live_session(account_id: int, live_id: str, data: LiveSessionUpdateIn
             400, f"这一场是自动抓取的（来源 {row.source}），只能补录播地址 —— "
                  "时间/标题来自平台，改了下次同步会被覆盖回去")
     apply: dict = {}
+    # 类型重算的输入取**变更后**的值（`apply` 优先，回落行上的现值）——
+    # 只补录播地址时 `touched` 为假 ⇒ 不重算、不动类型两列（没有新输入）。
+    touched = False
     if "start_at" in fields or "end_at" in fields or "title" in fields or "vod_url" in fields:
         start, end, title, vod = _manual_inputs(data)
         if "start_at" in fields:
             apply["start_at"] = start
+            touched = True
         if "end_at" in fields:
             apply["end_at"] = end          # 显式 null = 清空（改回"进行中"）
         if "title" in fields:
             apply["title"] = title
+            touched = True
         if "vod_url" in fields:
             apply["vod_url"] = vod         # "" → None（清空用户填的链接）
     new_start = apply.get("start_at", row.start_at)
@@ -1079,7 +1146,9 @@ def update_live_session(account_id: int, live_id: str, data: LiveSessionUpdateIn
         hit = repo.overlapping(account_id, new_start, new_end, exclude_live_id=live_id)
         if hit:
             raise HTTPException(409, _conflict_message(hit))
-    repo.update_row(row, apply)
+    repo.update_row(row, apply, settled=(
+        settle_fields(apply.get("title", row.title), row.area_name,
+                      row.parent_area_name, new_start) if touched else None))
     return _manual_detail(db, account_id, live_id)
 
 
@@ -1123,11 +1192,11 @@ async def live_session_vod_candidates(account_id: int, live_id: str,
     而其中一条发布在开播**前 3 小时**、另一条是**音声** —— 单个信号都不可信，
     必须由用户看着"发布时间/时长/为什么像"点一下确认（计划原话：误配比漏配更糟）。
     """
-    account, vtuber, _dates, _ov = _live_infer_ctx(db, account_id)
+    account, _ov = _live_infer_ctx(db, account_id)
     if not account:
         raise HTTPException(404, f"Account id={account_id} 不存在")
     s = _pick_live_session(db, account_id, live_id)
-    mids = vod_finder.default_mids(db, account, vtuber)
+    mids = vod_finder.default_mids(db, account, account.vtuber)
     extra = (mid or "").strip()
     if extra and extra not in mids:
         mids.append(extra)
@@ -1172,7 +1241,7 @@ async def live_session_upstream(account_id: int, live_id: str,
     `refresh=true`：**用户显式点重试**时带上，用来绕过"同账号 10 分钟只现查一次"的
     节流（否则点了按钮却不问上游，"重试"是句空话）。
     """
-    account, _vtuber, _event_dates, _overrides = _live_infer_ctx(db, account_id)
+    account, _overrides = _live_infer_ctx(db, account_id)
     if not account:
         raise HTTPException(404, f"Account id={account_id} 不存在")
     s = _pick_live_session(db, account_id, live_id)
@@ -1276,9 +1345,10 @@ async def live_session_wordcloud(account_id: int, live_id: str,
     分词自定义词典（2026-09-13 接线，扩展点 2）：把 **V 名 / 企划·公会 / 账号昵称**
     灌进 jieba，避免主播名被切碎（实测"喵喵机长真棒"不加词会被切成 `机长`）。
     """
-    account, vtuber, _event_dates, _overrides = _live_infer_ctx(db, account_id)
+    account, _overrides = _live_infer_ctx(db, account_id)
     if not account:
         raise HTTPException(404, f"Account id={account_id} 不存在")
+    vtuber = account.vtuber
     # 与详情/上游端点同一条定位口径（认源 id）：按需现查把 uuid 补进来之后，
     # 前端手里那份详情里的 feed id 仍要能找回同一场次（devlog/275）。
     s = _pick_live_session(db, account_id, live_id)

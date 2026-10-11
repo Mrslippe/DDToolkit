@@ -204,6 +204,8 @@ class LiveSession(Base):
     __table_args__ = (
         UniqueConstraint("account_id", "live_id", name="uq_live_sessions_account_live"),
         Index("ix_live_sessions_account_start", "account_id", "start_at"),
+        # 按类型筛（日历）/ 按类型聚合（数据视图卡片）走它；见 f016。
+        Index("ix_live_sessions_account_category", "account_id", "category"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -223,6 +225,12 @@ class LiveSession(Base):
     max_online_count = Column(Integer, nullable=True)
     danmakus_count = Column(Integer, nullable=True)
     raw_json = Column(Text, nullable=True)
+    # 类型落库（f016，2026-10-12）：**写时定稿**——写这一行时按它自己带的
+    # 标题/分区/起播时刻推一次，写进来就冻住（用户口径：新增场次不改动历史场次）。
+    # ⚠️ 只有"真正的推导"（title/area/date）才写；兜底不写 ⇒ NULL = 还没定出来，
+    # 读取时按同一口径现算（见 app/services/live_settle.py）。
+    category = Column(Text, nullable=True)
+    category_from = Column(Text, nullable=True)
     # nullable=False 与迁移链对齐（e006/e007/e004/e005 均为 NOT NULL，且无 server_default）：
     # 值由上面的 python default 提供。写成 nullable=True 会让 create_all 建库
     # （单测内存库 / 旧库桥接）与迁移建库结构不一致 —— 由

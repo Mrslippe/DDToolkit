@@ -32,7 +32,8 @@ from tenacity import (retry, retry_if_result, stop_after_attempt,
 from app.core.http import new_async_client
 from app.core.useragent import UA_CHROME
 from app.models.vtuber import Account, ThirdpartyVtuber
-from app.repositories.vtuber_repo import LiveSessionRepo
+from app.repositories.vtuber_repo import LiveSessionRepo, _ms_to_utc
+from app.services.live_settle import settle_danmakus_item
 from app.services.externals.base import (ExternalJob, ExternalJobSummary,
                                          ExternalSource, FailureBudget,
                                          INTERVAL_DAILY, INTERVAL_WEEKLY)
@@ -516,6 +517,18 @@ class DanmakusSource(ExternalSource):
             logger.warning(f"danmakus lives 账号失败 {acc.platform_uid}: {reason}")
             return {"added": 0, "updated": 0, "skipped": 1, "reason": reason}
         lives = payload.get("lives") or []
+        # 类型**写时定稿**（2026-10-12，f016）：逐场次按这一场自己的标题/分区推一次，
+        # 结果塞进每条 items 的 `category`/`category_from`，仓库层只写不算
+        # （分层理由见 `app/services/live_settle.py` 模块头）。
+        # ⚠️ 时间用平台真实起播（`startDate`，与仓库写 `start_at` 同一个转换函数）：
+        # 逐场次判据里只有 `date` 档用到时间，跨零点时观测时刻会比错日子。
+        for item in lives:
+            try:
+                start_ms = int(item.get("startDate") or 0)
+            except (TypeError, ValueError):
+                start_ms = 0
+            item.update(settle_danmakus_item(
+                item, _ms_to_utc(start_ms) if start_ms > 0 else None))
         # 平台由**调用方**给（M1a，devlog/213）：仓库层不再写死 bilibili
         res = LiveSessionRepo(db).upsert_danmakus(acc.id, lives, platform=acc.platform)
         logger.info(f"danmakus live_sessions: {acc.platform_uid} "

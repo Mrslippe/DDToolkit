@@ -46,6 +46,7 @@ from app.models.vtuber import (VTuber, Account, Post, AccountStatSnapshot,
                                LiveSession, LiveCategoryOverride, LiveGiftDay,
                                VtuberEvent, VtuberFieldHistory)
 from app.repositories.vtuber_repo import AccountStatSnapshotRepo, LiveSessionRepo
+from app.services.live_settle import settle_fields
 
 
 def override_get_db():
@@ -1704,7 +1705,7 @@ def test_live_category_override_flow(client):
     db.commit()
     db.close()
 
-    # 校正 → override 源生效（并立即反哺系列投票）
+    # 校正 → override 源生效（**只影响被点的那一场**）
     resp = client.put(f"/account/{aid}/live-sessions/uuid-a/category",
                       json={"category": "game"})
     assert resp.status_code == 200
@@ -1717,10 +1718,14 @@ def test_live_category_override_flow(client):
     by_live = {s["live_id"]: s for s in data}
     assert by_live["uuid-a"]["category"] == "game"
     assert by_live["uuid-a"]["category_from"] == "override"
-    # 同系列其他场次随校正传播（series 源）
+    assert by_live["uuid-b"]["category"] == "watch"
     assert by_live["uuid-b"]["category_from"] == "override"
-    assert by_live["uuid-c"]["category"] == "watch"
-    assert by_live["uuid-c"]["category_from"] == "series"
+    # ⚠️ **校正不再外溢**（2026-10-12 类型落库）：v2 的 `series` 传播已下线 ——
+    # 它要"同账号、全历史"地聚类，与"入库时只看这一场自己"的落库口径直接冲突
+    # （见 `app/services/live_settle.py` 模块头）。uuid-c 只按自己的标题/分区定。
+    assert by_live["uuid-c"]["category"] == "chat"
+    assert by_live["uuid-c"]["category_from"] == "area", (
+        "同骨架的邻居被校正带跑了 —— series 传播不该回来")
 
     # 非法分类 → 422（不含 live 兜底）
     assert client.put(f"/account/{aid}/live-sessions/uuid-a/category",
@@ -1728,7 +1733,7 @@ def test_live_category_override_flow(client):
     assert client.put(f"/account/{aid}/live-sessions/uuid-a/category",
                       json={"category": "live"}).status_code == 422
 
-    # 撤除 → 恢复自动推断
+    # 撤除 → 回到**落库值**（不是停在最后那次校正上）
     assert client.delete(f"/account/{aid}/live-sessions/uuid-a/category").status_code == 204
     data = client.get(f"/account/{aid}/live-sessions").json()
     by_live = {s["live_id"]: s for s in data}
@@ -2678,53 +2683,258 @@ def test_vtuber_without_group_keeps_null(client):
     body = next(v for v in client.get("/vtuber/list").json() if v["id"] == vid)
     assert body["group_name"] is None and body["group_uuid"] is None
 
-# ── 类型推断的复杂度（2026-10-10，devlog/459） ──────────────────────────
+# ── 类型落库：写时定稿 / 不回改历史 / 惰性回填（2026-10-12） ─────────────
 #
-# ⚠️ 这一条是**性能回归的判据**：B2 那批把系列聚类/反哺词库挪进了 per-场次的辅助函数，
-# 于是**每场都重聚类一次全量**（O(n²)）—— 真机 1,256 场的账号实测 **80ms → 8,150ms**，
-# 用户看到的是"数据视图的卡片加载很久 + 之后切换界面卡"（CPU 全烧在这个请求上，
-# 而前端每轮 fetch-idle 都会再发一次）。判据就是"每请求只算一次"这件事本身。
+# 用户口径：「直播场次信息在入库的时候根据其中携带的各类数据直接推断出类型，
+# 不需要再在新增场次的时候去考虑改变已经入库的历史场次类型」。
+# 这一组用例就是那句话的四条判据；实现见 `app/services/live_settle.py`。
 
-def _count_basis_calls(monkeypatch) -> dict:
-    """把 `plan_series`/`build_learned` 换成计数桩（**不许**顺带改行为）。"""
-    from app.routers import vtuber as R
-
-    calls = {"plan": 0, "learned": 0}
-    real_plan, real_learned = R.plan_series, R.build_learned
-
-    def plan(sessions, overrides):
-        calls["plan"] += 1
-        return real_plan(sessions, overrides)
-
-    def learned(overrides, sessions):
-        calls["learned"] += 1
-        return real_learned(overrides, sessions)
-
-    monkeypatch.setattr(R, "plan_series", plan)
-    monkeypatch.setattr(R, "build_learned", learned)
-    return calls
+def _mk_account(client) -> int:
+    return _mk_vtuber_account(client, uid="123")[1]
 
 
-def test_infer_basis_is_computed_once_per_request(client, monkeypatch):
-    """★复杂度判据：**聚类/词库每请求算一次**，不许逐场次重算（O(n²) 回归）。"""
-    _, aid = _mk_vtuber_account(client)
+def _dm(live_id: str, title: str, start: datetime, **kw) -> dict:
+    """danmakus `/channel lives` 数组里的元素口径（毫秒时间戳 + liveId）。"""
+    item = {"liveId": live_id, "title": title, "startDate": _ms_of(start),
+            "roomId": "", "parentArea": "虚拟主播", "area": "虚拟日常"}
+    item.update(kw)
+    return item
+
+
+def _sync_danmakus(db, aid, items: list[dict]) -> dict:
+    """跑**真正的 danmakus 写点**（`DanmakusSource.sync_account`）—— 不碰网络。
+
+    ⚠️ 为什么不直接调 `LiveSessionRepo.upsert_danmakus`：**类型定稿在服务层**
+    （仓库层只写不算，见 `app/services/live_settle.py` 的分层说明）。用仓库直接灌数据
+    等于把被测的那一段绕过去了 —— 用例会绿，而产品路径上类型还是空的。
+    """
+    import asyncio
+
+    from app.services.externals import danmakus as _dm_mod
+
+    async def fake_fetch(mid, client, *, attempts=1):
+        return {"lives": items}, None
+
+    _dm_mod.fetch_channel_checked = fake_fetch          # type: ignore[assignment]
+    acc = db.query(Account).filter_by(id=aid).one()
+    return asyncio.run(_dm_mod.DanmakusSource().sync_account(db, acc, client=None))
+
+
+def test_settle_writes_the_type_of_the_row_it_touches(client):
+    """★写时定稿：入库那一刻两列就有值（不是 NULL、不是等到下一次读）。"""
+    aid = _mk_account(client)
     db = TestingSession()
-    for i in range(5):                     # 5 场 ⇒ 逐场次重算的话计数会是 5
-        db.add(LiveSession(account_id=aid, source="danmakus", live_id=f"u{i}",
-                           title=f"晚上好 第{i}期",
-                           start_at=datetime(2026, 9, 1 + i, 12, 0),
-                           end_at=datetime(2026, 9, 1 + i, 14, 0)))
+    _sync_danmakus(db, aid, [
+        _dm("dm-1", "周六来唱歌！", datetime(2026, 9, 5, 12, 0), area="虚拟Singer"),
+    ])
+    row = db.query(LiveSession).filter_by(live_id="dm-1").one()
+    assert (row.category, row.category_from) == ("song", "title"), (
+        "写点没定稿 —— 落库口径的全部意义就是这两列在写的时候就有值")
+    db.close()
+
+
+def test_settle_does_not_touch_other_rows(client):
+    """★用户口径 2 的判据：写第二场**不许**动到第一场（含 updated_at）。"""
+    aid = _mk_account(client)
+    db = TestingSession()
+    _sync_danmakus(db, aid, [_dm("dm-1", "随便播播", datetime(2026, 9, 5, 12, 0))])
+    first = db.query(LiveSession).filter_by(live_id="dm-1").one()
+    before = (first.category, first.category_from, first.updated_at)
+    # 第二场与第一场**同骨架**：若还留着 series 那一档（全历史投票），这里会翻第一场
+    _sync_danmakus(db, aid, [_dm("dm-2", "随便播播", datetime(2026, 9, 6, 12, 0))])
+    db.expire_all()
+    first = db.query(LiveSession).filter_by(live_id="dm-1").one()
+    assert (first.category, first.category_from, first.updated_at) == before, (
+        "新增一场改动了历史行 —— 这正是用户口径 2 要禁掉的事")
+    db.close()
+
+
+def test_settle_refreshes_when_the_title_arrives_late(client):
+    """★「标题后到」：先空标题落库、后来补上 ⇒ 补的那一次连类型一起刷新。"""
+    aid = _mk_account(client)
+    db = TestingSession()
+    # ⚠️ 分区要显式给空：不然 `_dm` 的默认分区会把这一场判成「杂谈」，
+    # 这条用例就测不到"没东西可判 ⇒ NULL"了。
+    _sync_danmakus(db, aid, [
+        _dm("dm-1", "", datetime(2026, 9, 5, 12, 0), area="", parentArea=""),
+    ])
+    row = db.query(LiveSession).filter_by(live_id="dm-1").one()
+    assert row.category is None, "没标题也没分区 ⇒ 兜底不落库（NULL = 还没定出来）"
+
+    _sync_danmakus(db, aid, [
+        _dm("dm-1", "周六来唱歌！", datetime(2026, 9, 5, 12, 0)),
+    ])
+    db.expire_all()
+    row = db.query(LiveSession).filter_by(live_id="dm-1").one()
+    assert (row.category, row.category_from) == ("song", "title"), (
+        "标题补上了但类型还冻在当年 —— 只在 insert 时定稿就是这个后果")
+    db.close()
+
+
+def test_settle_merges_the_first_non_empty_category(client):
+    """★C2：danmakus 空标题 + feed 有标题 ⇒ 合并组取 feed 判出来的那个。"""
+    aid = _mk_account(client)
+    db = TestingSession()
+    _sync_danmakus(db, aid, [
+        _dm("dm-1", "", datetime(2026, 9, 5, 12, 0),
+            stopDate=_ms_of(datetime(2026, 9, 5, 14, 0))),
+    ])
+    LiveSessionRepo(db).upsert_feed(aid, "dm-1", {
+        "title": "周六来唱歌！", "start_at": datetime(2026, 9, 5, 12, 0),
+        "room_id": "999",
+    }, settle_fields("周六来唱歌！", None, None, datetime(2026, 9, 5, 12, 0)))
     db.commit()
     db.close()
 
-    calls = _count_basis_calls(monkeypatch)
-    r = client.get(f"/account/{aid}/live-sessions")
-    assert r.status_code == 200 and len(r.json()) == 5, "正对照：5 场都返回了"
-    assert calls == {"plan": 1, "learned": 1}, (
-        f"聚类/词库被算了 {calls} 次 —— 每场次算一次就是 O(n²)："
-        f"真机 1,256 场的账号从 ~80ms 变成 ~8,150ms（devlog/459）")
+    data = client.get(f"/account/{aid}/live-sessions").json()
+    assert len(data) == 1, "两行应当并成一场"
+    assert (data[0]["category"], data[0]["category_from"]) == ("song", "title"), (
+        "高优源（danmakus）那行为空时把 feed 判对的结果压成了没有类型")
 
-    # 详情端点同样只算一次（它是弹窗打开时的第一次请求）
-    calls = _count_basis_calls(monkeypatch)
-    assert client.get(f"/account/{aid}/live-sessions/u0").status_code == 200
-    assert calls == {"plan": 1, "learned": 1}, f"详情端点：{calls}"
+
+def test_lazy_backfill_fills_old_rows_once(client):
+    """★惰性回填：老行（两列 NULL）被读一次就补上；第二次读**不再写**。"""
+    aid = _mk_account(client)
+    db = TestingSession()
+    # 模拟"迁移前就存在的老行"：直接用 ORM 塞，绕过写点 ⇒ 两列都是 NULL
+    db.add(LiveSession(account_id=aid, source="danmakus", live_id="old-1",
+                       title="原神深渊", start_at=datetime(2026, 9, 5, 12, 0),
+                       end_at=datetime(2026, 9, 5, 14, 0)))
+    db.commit()
+    db.close()
+
+    data = client.get(f"/account/{aid}/live-sessions").json()
+    assert data[0]["category"] == "game"          # 正对照：读出来是对的
+    db = TestingSession()
+    row = db.query(LiveSession).filter_by(live_id="old-1").one()
+    assert (row.category, row.category_from) == ("game", "title"), "读一次没补齐"
+    stamp = row.updated_at
+    db.close()
+
+    assert client.get(f"/account/{aid}/live-sessions").status_code == 200
+    db = TestingSession()
+    row = db.query(LiveSession).filter_by(live_id="old-1").one()
+    assert row.updated_at == stamp, "第二次读又写了一遍 —— 回填必须是幂等的"
+    db.close()
+
+
+def test_lazy_backfill_leaves_fallback_rows_null(client):
+    """★兜底**不落库**：NULL 表示"还没定出来"，读取时照样显示中性。
+
+    为什么这条重要：把兜底写进列，等于给这些行盖了章 —— 以后规则变好也认不出
+    它们该重算（列不空了），统计里 `fallback` 也会和"真判过"混在一起。
+    """
+    aid = _mk_account(client)
+    db = TestingSession()
+    db.add(LiveSession(account_id=aid, source="danmakus", live_id="vague-1",
+                       title="今天", start_at=datetime(2026, 9, 5, 12, 0),
+                       area_name=None, parent_area_name=None))
+    db.commit()
+    db.close()
+
+    data = client.get(f"/account/{aid}/live-sessions").json()
+    assert (data[0]["category"], data[0]["category_from"]) == ("live", "fallback")
+    db = TestingSession()
+    row = db.query(LiveSession).filter_by(live_id="vague-1").one()
+    assert (row.category, row.category_from) == (None, None), "兜底被写进列了"
+    db.close()
+
+
+def test_unknown_stored_category_degrades_to_neutral(client):
+    """★C4：库里塞一个未知分类值 ⇒ 读数退回中性，筛选里不出现空壳。
+
+    ⚠️ 值要用**真正不存在**的枚举（`sports`）：`fitness` 今天还合法 ——
+    本批的「健身 → 助眠」在 T3，那时它才会变成"旧值"。
+    """
+    aid = _mk_account(client)
+    db = TestingSession()
+    db.add(LiveSession(account_id=aid, source="danmakus", live_id="legacy-1",
+                       title="随便播播", start_at=datetime(2026, 9, 5, 12, 0),
+                       category="sports", category_from="title"))
+    db.commit()
+    db.close()
+
+    data = client.get(f"/account/{aid}/live-sessions").json()
+    assert (data[0]["category"], data[0]["category_from"]) == ("live", "unknown"), (
+        "未知枚举被当成合法值透出去了 —— 前端筛选会多出一个没有标签的空壳")
+    # ⚠️ 落库值**没被改写**（只是读取时降级）：体系调整/规则迭代之后想恢复，数据还在原地
+    db = TestingSession()
+    row = db.query(LiveSession).filter_by(live_id="legacy-1").one()
+    assert (row.category, row.category_from) == ("sports", "title"), (
+        "读取时把库里的原值改掉了 —— 归一必须是读取口径，不是写回")
+    db.close()
+
+
+def test_override_wins_over_the_stored_value(client):
+    """★C3：校正压在落库值上面；清空 ⇒ 回到落库值。"""
+    aid = _mk_account(client)
+    db = TestingSession()
+    # 走**真正的写点**（带定稿），再确认清空校正后回到的是这个落库值
+    _sync_danmakus(db, aid, [_dm("dm-1", "原神深渊", datetime(2026, 9, 5, 12, 0))])
+    db.close()
+
+    put = client.put(f"/account/{aid}/live-sessions/dm-1/category",
+                     json={"category": "chat"})
+    assert put.status_code == 200 and put.json()["category_from"] == "override"
+    data = client.get(f"/account/{aid}/live-sessions").json()
+    assert (data[0]["category"], data[0]["category_from"]) == ("chat", "override")
+
+    assert client.delete(f"/account/{aid}/live-sessions/dm-1/category").status_code == 204
+    data = client.get(f"/account/{aid}/live-sessions").json()
+    assert (data[0]["category"], data[0]["category_from"]) == ("game", "title"), (
+        "清空校正后没回到**落库值**")
+    db = TestingSession()
+    row = db.query(LiveSession).filter_by(live_id="dm-1").one()
+    assert (row.category, row.category_from) == ("game", "title"), (
+        "落库值被校正覆盖写坏了 —— 校正必须只活在 live_category_overrides 里")
+    db.close()
+
+
+def test_stored_lookup_needs_src_live_ids(client):
+    """★★**回归**：`_stored_by_live_id` 必须拿到 `merged(with_ids=True)` 的结果。
+
+    2026-10-12 施工时真踩到：列表端点调的是默认的 `merged()`（不带 `src_live_ids`），
+    于是"找代表行"这一步**静默返回空表** —— 落库值明明写着，界面却按现算显示。
+    这个 bug 不报错、不漏日志，只有"某个场次的类型看起来没生效"这一种症状，
+    所以专门钉一条：**同样的行，带 ids 能读到落库值，不带 ids 读不到**（反向验证）。
+    """
+    from app.routers.vtuber import _stored_by_live_id
+
+    aid = _mk_account(client)
+    db = TestingSession()
+    db.add(LiveSession(account_id=aid, source="danmakus", live_id="legacy-1",
+                       title="随便播播", start_at=datetime(2026, 9, 5, 12, 0),
+                       category="sports", category_from="title"))
+    db.commit()
+    repo = LiveSessionRepo(db)
+    assert _stored_by_live_id(db, repo.merged(aid, with_ids=True)) == {
+        "legacy-1": ("live", "unknown")}, "带 src_live_ids 时反而读不到落库值"
+    assert _stored_by_live_id(db, repo.merged(aid)) == {}, (
+        "不带 ids 竟然也读到了 —— 这条用例的前提变了，去看 _stored_by_live_id 的实现")
+    db.close()
+
+
+def test_manual_session_is_settled_on_create_and_update(client):
+    """手动记录也走同一条写时定稿（新增 + 改标题）。"""
+    vid = client.post("/vtuber", json={"name": "手动"}).json()["id"]
+    aid = client.post(f"/vtuber/{vid}/accounts",
+                      json={"platform": "bilibili", "platform_uid": "9"}).json()["id"]
+    created = client.post(f"/account/{aid}/live-sessions", json={
+        "start_at": "2026-09-05T12:00:00", "end_at": "2026-09-05T14:00:00",
+        "title": "周六来唱歌！",
+    })
+    assert created.status_code in (200, 201)
+    lid = created.json()["live_id"]
+    db = TestingSession()
+    row = db.query(LiveSession).filter_by(live_id=lid).one()
+    assert (row.category, row.category_from) == ("song", "title"), "手动新增没定稿"
+    db.close()
+
+    patched = client.patch(f"/account/{aid}/live-sessions/{lid}",
+                           json={"title": "随便播播"})
+    assert patched.status_code == 200
+    db = TestingSession()
+    row = db.query(LiveSession).filter_by(live_id=lid).one()
+    assert (row.category, row.category_from) == (None, None), (
+        "改了标题却没重算（这条标题判不出东西 ⇒ 兜底 = NULL，不落库）")
+    db.close()

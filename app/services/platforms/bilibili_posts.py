@@ -48,6 +48,7 @@ from app.core import outcome as platform_outcome
 from app.models.vtuber import Account, Post
 from app.repositories.vtuber_repo import LiveSessionRepo, PostRepo
 from app.services import identity_limit
+from app.services.live_settle import settle_fields
 from app.services.auth import auth_manager
 from app.services.fetcher import (clear_rate_limit, fetch_article_detail,
                                   fetch_dynamic_detail, fetch_video_detail)
@@ -309,6 +310,7 @@ def route_live_item(db: Session, mid: int, d: dict) -> None:
         "cover_url": d.get("cover_url"),
         "start_at": start_at,
         "raw_json": d.get("raw_json"),
-    })
+    }, settle_fields((d.get("title") or "").strip() or None,
+                     body.get("area_name"), body.get("parent_area_name"), start_at))
     if added:
         logger.info(f"mid={mid} 直播场次入库 feed: live_id={live_id} title={d.get('title')!r}")
