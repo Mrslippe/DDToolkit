@@ -117,11 +117,6 @@ class PlatformHits:
     #: 该平台**只给最匹配的一条**（微博）—— 界面据此把话说准，别让人以为"就一条结果"
     best_match_only: bool = False
 
-    def as_dict(self) -> dict:
-        return {"platform": self.platform, "label": self.label, "items": self.items,
-                "error": self.error, "hint": self.hint, "skipped": self.skipped,
-                "best_match_only": self.best_match_only}
-
 
 # ── 节流与缓存（threading + 时刻表：不持有 loop-bound 原语，同 `bili_search`）──
 _gate = threading.Lock()
@@ -428,11 +423,6 @@ _SEARCHERS: dict[str, Callable[[str, int], Any]] = {
     "xiaohongshu": _search_xiaohongshu,
     "douyin": _search_douyin,
 }
-
-
-def supported_platforms() -> tuple[str, ...]:
-    """哪几家支持「按名字搜人」（= 四个开关平台，顺序与设置界面一致）。"""
-    return platform_switches.PLATFORMS
 
 
 async def search_platform(platform: str, kw: str, *, page: int = 1) -> PlatformHits:

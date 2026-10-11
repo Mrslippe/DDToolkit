@@ -142,30 +142,6 @@ def _to_candidate(mid: str, item: dict, *, start: datetime, duration: int | None
     }
 
 
-def suggest_vod_accounts(db: Session, vtuber_id: int, name: str | None,
-                         *, limit: int = 5) -> list[dict]:
-    """给一个 V 猜"可能的录播账号"（本地索引里名字带「录播/录屏/回放」的）。
-
-    这是**线索**不是结论：真机实测那 12 个 V 没有一个能在这里匹配上
-    （索引里 12 个录播号的用户名与这 12 个 V 都对不上）⇒ 界面要把这条如实说成
-    "没找到现成的录播号，去 B 站搜一个"，而不是给一堆无关的号让用户挑。
-    """
-    from app.models.vtuber import ThirdpartyVtuber
-
-    if not name:
-        return []
-    rows = (db.query(ThirdpartyVtuber)
-            .filter(ThirdpartyVtuber.platform == "bilibili",
-                    ThirdpartyVtuber.name.like(f"%{name}%"))
-            .limit(50).all())
-    out = []
-    for r in rows:
-        if any(k in (r.name or "") for k in ("录播", "录屏", "回放", "剪辑")):
-            out.append({"platform_uid": str(r.platform_uid), "name": r.name,
-                        "why": "本地索引里名字带「录播」"})
-    return out[:limit]
-
-
 def default_mids(db: Session, account: Account | None, vtuber) -> list[str]:
     """要扫哪些账号：**V 的 B 站号** + 用户指定的录播号（去重、保序）。
 

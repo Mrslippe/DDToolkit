@@ -174,19 +174,9 @@ export interface BiliSearchItem {
   in_library: boolean
 }
 
-/** `GET /vtuber/bili/search`：`error` 非空时 `items` 必为空，`hint` 是给用户看的原因 */
-export interface BiliSearchResult {
-  items: BiliSearchItem[]
-  page: number
-  total_pages: number
-  has_more: boolean
-  error: string | null
-  hint: string | null
-  exact: boolean
-  cached: boolean
-}
-
-/** 一个平台这一轮的检索结果（`GET /vtuber/users/search`，B1） */
+/**
+ * 一个平台这一轮的检索结果（`GET /vtuber/users/search`，B1）
+ */
 export interface NameSearchGroup {
   platform: string
   /** 平台展示名（后端给，别在前端再抄一份） */

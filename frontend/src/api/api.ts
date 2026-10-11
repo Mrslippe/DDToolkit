@@ -1,5 +1,5 @@
 import type {
-  AgreementState, Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliPlayInfo, BiliSearchResult, BiliSegments, Capabilities, DouyinCookieSaved, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveGiftDay, LiveSession, LiveSessionDetail, LiveSessionWriteIn, LiveUpstream, NameSearchResult, NoticesResponse, PairingInfo, PoolItem, Post, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyOverview, ThirdpartyVtuber, AssetsInfo, AssetsPruneResult, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, VodCandidatesResult, XhsCookieSaved } from './types'
+  AgreementState, Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliPlayInfo, BiliSegments, Capabilities, DouyinCookieSaved, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveGiftDay, LiveSession, LiveSessionDetail, LiveSessionWriteIn, LiveUpstream, NameSearchResult, NoticesResponse, PairingInfo, PoolItem, Post, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyOverview, ThirdpartyVtuber, AssetsInfo, AssetsPruneResult, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, VodCandidatesResult, XhsCookieSaved } from './types'
 import { ApiError, ApiShapeError } from './errors'
 import { HOST_HEADER, myHost } from '../utils/hostIdentity'
 import {
@@ -700,12 +700,6 @@ export const api = {
    *  signal 用于防抖取消在途请求（R11：返回项带 `origin` 标注来源） */
   searchPool: (kw: string, signal?: AbortSignal) =>
     request<PoolItem[]>(`/vtuber/pool/search?kw=${encodeURIComponent(kw)}`, { signal }),
-
-  /** 直接从 B 站检索（R11，devlog/083）：纯数字按 UID 精确查，其余按名称搜。
-   *  只在用户**显式触发**时调用（后端有 0.8s 串行 + 每分钟 20 次上限 + 5 分钟缓存）。 */
-  biliSearch: (kw: string, page = 1, signal?: AbortSignal) =>
-    request<BiliSearchResult>(
-      `/vtuber/bili/search?kw=${encodeURIComponent(kw)}&page=${page}`, { signal }),
 
   /**
    * **多平台按名字搜人**（B1，需求 8，`devlog/463`）：一次并发搜四家（B 站/微博/小红书/抖音），

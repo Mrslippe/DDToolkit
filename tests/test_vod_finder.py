@@ -209,22 +209,3 @@ def test_default_mids_puts_the_v_account_first_and_dedupes():
 def test_window_text_is_human_readable():
     txt = vf.window_text(T0)
     assert "2026-09-25" in txt and "开播" in txt
-
-
-def test_suggest_vod_accounts_says_nothing_when_index_has_no_match():
-    """本地索引里没有这个 V 的录播号 ⇒ 返回空（**不要**编一堆无关的号让用户挑）。"""
-    class _Q:
-        def filter(self, *a, **k):
-            return self
-
-        def limit(self, *a, **k):
-            return self
-
-        def all(self):
-            return []
-
-    class _DB:
-        def query(self, *a, **k):
-            return _Q()
-
-    assert vf.suggest_vod_accounts(_DB(), 1, "某V") == []
