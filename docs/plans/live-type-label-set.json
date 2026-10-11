@@ -1,0 +1,611 @@
+{
+ "seed": 20261012,
+ "picked": {
+  "area": [
+   {
+    "account_id": 22,
+    "live_id": "df69b230-5702-298b-8b1b-047ec20c35c4",
+    "start_at": "2026-03-23 13:18:54",
+    "title": "君死（3）/名侦探Q娃（7）",
+    "area": "独立游戏",
+    "parent_area": "单机游戏",
+    "category": "game",
+    "from": "area"
+   },
+   {
+    "account_id": 15,
+    "live_id": "0a700c9c-6bf6-4e58-a494-38fb33596110",
+    "start_at": "2026-08-26 15:02:05",
+    "title": "！",
+    "area": "主机游戏",
+    "parent_area": "单机游戏",
+    "category": "game",
+    "from": "area"
+   },
+   {
+    "account_id": 26,
+    "live_id": "2b812bc9-689b-b58f-99f1-fdcc85989bab",
+    "start_at": "2025-12-05 11:58:14.743000",
+    "title": "【2D】《江山北望》初见！！！",
+    "area": "虚拟Gamer",
+    "parent_area": "",
+    "category": "game",
+    "from": "area"
+   },
+   {
+    "account_id": 27,
+    "live_id": "f3e1f4f0-68aa-3189-a3e1-cbb184b631ba",
+    "start_at": "2025-12-27 10:33:42.712000",
+    "title": "重新职业规划！",
+    "area": "虚拟日常",
+    "parent_area": "",
+    "category": "chat",
+    "from": "area"
+   },
+   {
+    "account_id": 34,
+    "live_id": "cd3b3a78-884e-568d-8cf7-c2ea4eff9521",
+    "start_at": "2026-04-05 11:25:25",
+    "title": "【2D】御姐看新三国吐槽",
+    "area": "虚拟日常",
+    "parent_area": "虚拟主播",
+    "category": "chat",
+    "from": "area"
+   },
+   {
+    "account_id": 22,
+    "live_id": "a404d6fc-6630-4e04-b089-6d89b0f2b66c",
+    "start_at": "2026-07-28 13:01:34",
+    "title": "人森喵",
+    "area": "其他单机",
+    "parent_area": "单机游戏",
+    "category": "game",
+    "from": "area"
+   },
+   {
+    "account_id": 16,
+    "live_id": "277df3aa-032d-42ac-b8c5-92fa385d1020",
+    "start_at": "2023-07-15 11:04:00",
+    "title": "审判之眼续续续",
+    "area": "虚拟主播",
+    "parent_area": "虚拟日常",
+    "category": "chat",
+    "from": "area"
+   },
+   {
+    "account_id": 23,
+    "live_id": "2958785d-b63d-a986-8bb9-3712b505a903",
+    "start_at": "2025-07-16 04:26:05.569000",
+    "title": "我是谁",
+    "area": "虚拟日常",
+    "parent_area": "",
+    "category": "chat",
+    "from": "area"
+   },
+   {
+    "account_id": 20,
+    "live_id": "e47f9ce2-c798-8680-b484-fdcf0678ee11",
+    "start_at": "2025-12-29 11:33:16.912000",
+    "title": "试试就逝逝！",
+    "area": "虚拟日常",
+    "parent_area": "",
+    "category": "chat",
+    "from": "area"
+   },
+   {
+    "account_id": 32,
+    "live_id": "9e684a0e-c2fe-4a27-89ef-e938e0e6e08a",
+    "start_at": "2026-06-17 12:50:09",
+    "title": "【3D】不怕不怕啦！",
+    "area": "虚拟日常",
+    "parent_area": "虚拟主播",
+    "category": "chat",
+    "from": "area"
+   },
+   {
+    "account_id": 16,
+    "live_id": "883c9006-0817-ec85-b08f-cde79acf3e08",
+    "start_at": "2025-12-18 12:05:17.429000",
+    "title": "哪里有小女孩我看看！",
+    "area": "虚拟日常",
+    "parent_area": "",
+    "category": "chat",
+    "from": "area"
+   },
+   {
+    "account_id": 23,
+    "live_id": "ff8ae4c7-3554-47ab-8ebb-4b6cfb8d09dd",
+    "start_at": "2026-07-03 02:01:31",
+    "title": "早上好(*╹▽╹*)⭐",
+    "area": "虚拟日常",
+    "parent_area": "虚拟主播",
+    "category": "chat",
+    "from": "area"
+   },
+   {
+    "account_id": 29,
+    "live_id": "2399ebf6-eddd-0b85-a43b-8ca80ee2fcfd",
+    "start_at": "2025-06-21 10:38:20.784000",
+    "title": "走，去ktv",
+    "area": "虚拟日常",
+    "parent_area": "",
+    "category": "chat",
+    "from": "area"
+   },
+   {
+    "account_id": 28,
+    "live_id": "55c3806e-a00f-f885-9cc4-782a60ffd3ea",
+    "start_at": "2026-02-04 13:01:26",
+    "title": "【越狱模拟器】真的能逃出去吗！！！",
+    "area": "虚拟日常",
+    "parent_area": "",
+    "category": "chat",
+    "from": "area"
+   },
+   {
+    "account_id": 34,
+    "live_id": "ce61d1ec-2902-d888-867e-85bd092e8165",
+    "start_at": "2025-06-14 16:12:05.411000",
+    "title": "【2D】K杂。",
+    "area": "虚拟Singer",
+    "parent_area": "",
+    "category": "song",
+    "from": "area"
+   },
+   {
+    "account_id": 14,
+    "live_id": "c8445fe3-472b-1b83-af55-49d7dcff1cbf",
+    "start_at": "2025-05-01 13:23:27.861000",
+    "title": "我DRAW你GUESS",
+    "area": "虚拟Singer",
+    "parent_area": "",
+    "category": "song",
+    "from": "area"
+   },
+   {
+    "account_id": 34,
+    "live_id": "5d5d2963-0ebd-4acc-a721-82cbfa5bd91f",
+    "start_at": "2026-09-24 10:56:24",
+    "title": "【3D】二次元偶像宅驾到",
+    "area": "虚拟日常",
+    "parent_area": "虚拟主播",
+    "category": "chat",
+    "from": "area"
+   },
+   {
+    "account_id": 22,
+    "live_id": "d5f56041-fc3c-45d6-b267-b875c01d8041",
+    "start_at": "2026-07-29 12:29:45",
+    "title": "杖剑传说5/超级变色龙/桌面探索者喵1",
+    "area": "其他单机",
+    "parent_area": "单机游戏",
+    "category": "game",
+    "from": "area"
+   },
+   {
+    "account_id": 28,
+    "live_id": "a35cea1e-f136-d283-8204-b4fbb96cd40a",
+    "start_at": "2025-12-14 13:09:52.270000",
+    "title": "天才FPS少女！清纯女大战斗运输船！！",
+    "area": "虚拟日常",
+    "parent_area": "",
+    "category": "chat",
+    "from": "area"
+   },
+   {
+    "account_id": 22,
+    "live_id": "4d8cd2d3-dc39-4917-80c0-b45de2963e95",
+    "start_at": "2026-10-09 13:25:27",
+    "title": "铸剑模拟器/fx战士久留美2/寻找伪牛全结局",
+    "area": "其他单机",
+    "parent_area": "单机游戏",
+    "category": "game",
+    "from": "area"
+   }
+  ],
+  "title": [
+   {
+    "account_id": 16,
+    "live_id": "65344ec5-6718-46e1-8c34-af5851f99b30",
+    "start_at": "2023-12-08 11:59:56",
+    "title": "电台呢",
+    "area": "",
+    "parent_area": "",
+    "category": "radio",
+    "from": "title"
+   },
+   {
+    "account_id": 16,
+    "live_id": "ee5dffa8-4606-493f-99ad-c25cb69eb1c1",
+    "start_at": "2024-09-10 12:01:45",
+    "title": "读读黑神话影神图",
+    "area": "",
+    "parent_area": "",
+    "category": "game",
+    "from": "title"
+   },
+   {
+    "account_id": 23,
+    "live_id": "6cba158c-22bd-4e7e-baa5-a512cec987db",
+    "start_at": "2026-09-15 06:59:13",
+    "title": "唱歌的来咯⭐",
+    "area": "虚拟日常",
+    "parent_area": "虚拟主播",
+    "category": "song",
+    "from": "title"
+   },
+   {
+    "account_id": 26,
+    "live_id": "83856860-0302-4b8a-9ec9-27259e17998a",
+    "start_at": "2022-12-25 10:16:00",
+    "title": "【电台】冬夜小播",
+    "area": "电台",
+    "parent_area": "聊天电台",
+    "category": "radio",
+    "from": "title"
+   },
+   {
+    "account_id": 28,
+    "live_id": "391e2df3-6819-4b57-9bdf-c2362a8363c6",
+    "start_at": "2022-04-26 12:58:00",
+    "title": "【百日纪念直播】想把我唱给你听，一直",
+    "area": "",
+    "parent_area": "",
+    "category": "special",
+    "from": "title"
+   },
+   {
+    "account_id": 32,
+    "live_id": "4b9c7423-0196-4a82-adc5-1f71653dfafe",
+    "start_at": "2026-03-21 11:24:03",
+    "title": "【3D生日会】Miracle",
+    "area": "虚拟日常",
+    "parent_area": "",
+    "category": "special",
+    "from": "title"
+   },
+   {
+    "account_id": 32,
+    "live_id": "c976b0cb-a9a1-4d6e-9ae0-7c752fdc46f8",
+    "start_at": "2026-06-13 04:00:06",
+    "title": "【电台】哇哦",
+    "area": "聊天电台",
+    "parent_area": "电台",
+    "category": "radio",
+    "from": "title"
+   },
+   {
+    "account_id": 16,
+    "live_id": "eec995a2-e236-4481-8f79-c216697f3398",
+    "start_at": "2023-05-16 12:01:00",
+    "title": "【游戏】试试王国之泪",
+    "area": "虚拟主播",
+    "parent_area": "虚拟日常",
+    "category": "game",
+    "from": "title"
+   },
+   {
+    "account_id": 27,
+    "live_id": "0c75d943-23d3-47bf-9392-aab533e1e0ae",
+    "start_at": "2022-12-28 11:56:00",
+    "title": "酥酥又土味水友歌会！",
+    "area": "虚拟主播",
+    "parent_area": "虚拟主播",
+    "category": "song",
+    "from": "title"
+   },
+   {
+    "account_id": 14,
+    "live_id": "ba607d4c-0e6e-4a55-9c99-8f5b36005e6b",
+    "start_at": "2026-07-01 11:59:03",
+    "title": "水友歌回2",
+    "area": "虚拟日常",
+    "parent_area": "虚拟主播",
+    "category": "song",
+    "from": "title"
+   },
+   {
+    "account_id": 34,
+    "live_id": "4ee5d556-431c-c58b-ac06-0f10cb77e38e",
+    "start_at": "2025-11-07 04:01:56.506000",
+    "title": "【2D】午间歌杂",
+    "area": "虚拟Singer",
+    "parent_area": "",
+    "category": "song",
+    "from": "title"
+   },
+   {
+    "account_id": 14,
+    "live_id": "0b193349-85ef-aa83-a840-b0db03c71dc3",
+    "start_at": "2025-08-15 13:09:19.977000",
+    "title": "一起看吧~",
+    "area": "虚拟日常",
+    "parent_area": "",
+    "category": "watch",
+    "from": "title"
+   },
+   {
+    "account_id": 28,
+    "live_id": "145ad800-65d8-469b-be57-7ff55be7fb59",
+    "start_at": "2022-04-19 12:59:00",
+    "title": "【电台】生活中的那些小光芒",
+    "area": "",
+    "parent_area": "",
+    "category": "radio",
+    "from": "title"
+   },
+   {
+    "account_id": 14,
+    "live_id": "ea8f44b5-938a-4809-bf89-75054f2603ae",
+    "start_at": "2026-06-05 12:05:33",
+    "title": "鸣潮3.3下",
+    "area": "虚拟Gamer",
+    "parent_area": "虚拟主播",
+    "category": "game",
+    "from": "title"
+   },
+   {
+    "account_id": 33,
+    "live_id": "8d1c18da-3961-4ca3-9213-63cc6d5062c3",
+    "start_at": "2026-08-16 14:30:53",
+    "title": "联动后日谈谢礼物！",
+    "area": "虚拟日常",
+    "parent_area": "虚拟主播",
+    "category": "collab",
+    "from": "title"
+   },
+   {
+    "account_id": 23,
+    "live_id": "f7df862f-4d4d-9e81-8f3d-565f82756155",
+    "start_at": "2025-08-30 07:29:46.690000",
+    "title": "啊呜唱歌可以吗",
+    "area": "虚拟日常",
+    "parent_area": "",
+    "category": "song",
+    "from": "title"
+   },
+   {
+    "account_id": 29,
+    "live_id": "3c1fdd5e-050c-e588-98e5-2b60ae6fc45a",
+    "start_at": "2026-04-08 13:01:49",
+    "title": "唱唱歌早睡",
+    "area": "虚拟日常",
+    "parent_area": "虚拟主播",
+    "category": "song",
+    "from": "title"
+   },
+   {
+    "account_id": 14,
+    "live_id": "51e807ae-f95c-4769-ad5c-6153234e6fce",
+    "start_at": "2026-09-07 10:52:53",
+    "title": "一起看小米发布会！",
+    "area": "虚拟日常",
+    "parent_area": "虚拟主播",
+    "category": "watch",
+    "from": "title"
+   },
+   {
+    "account_id": 15,
+    "live_id": "8048c58b-194f-4add-977a-65e7a7f1e4cf",
+    "start_at": "2022-10-25 14:02:00",
+    "title": "一起看综艺《月曜夜未央》",
+    "area": "虚拟主播",
+    "parent_area": "虚拟主播",
+    "category": "watch",
+    "from": "title"
+   },
+   {
+    "account_id": 14,
+    "live_id": "a33cea21-4754-e48f-a3c8-8484eca47188",
+    "start_at": "2026-01-27 11:58:26",
+    "title": "泽音Melody一周年3D回3日后谈",
+    "area": "虚拟日常",
+    "parent_area": "虚拟主播",
+    "category": "special",
+    "from": "title"
+   }
+  ],
+  "fallback": [
+   {
+    "account_id": 15,
+    "live_id": "a713039b-84bd-425d-a29a-bfbcf168088d",
+    "start_at": "2023-02-19 17:02:00",
+    "title": "神之天平儿",
+    "area": "虚拟主播",
+    "parent_area": "TopStar",
+    "category": "live",
+    "from": "fallback"
+   },
+   {
+    "account_id": 22,
+    "live_id": "935d33c3-e386-423a-86f1-5f0c056c29d8",
+    "start_at": "2022-01-22 13:10:00",
+    "title": "data0隐藏真结局",
+    "area": "",
+    "parent_area": "",
+    "category": "live",
+    "from": "fallback"
+   },
+   {
+    "account_id": 15,
+    "live_id": "2b3d1e97-5f43-4ac2-9fe1-afec61c2a092",
+    "start_at": "2023-06-26 13:04:00",
+    "title": "昏睡FF16",
+    "area": "虚拟主播",
+    "parent_area": "TopStar",
+    "category": "live",
+    "from": "fallback"
+   },
+   {
+    "account_id": 32,
+    "live_id": "c5e223c5-28b2-4c06-bd99-8889ee3606a1",
+    "start_at": "2023-03-02 10:54:00",
+    "title": "【3D】我是你的xx",
+    "area": "虚拟主播",
+    "parent_area": "TopStar",
+    "category": "live",
+    "from": "fallback"
+   },
+   {
+    "account_id": 20,
+    "live_id": "d1b3d8bf-c7ac-4f88-a7ad-d974dd85657a",
+    "start_at": "2023-01-15 14:09:00",
+    "title": "小小的突击",
+    "area": "虚拟主播",
+    "parent_area": "虚拟主播",
+    "category": "live",
+    "from": "fallback"
+   },
+   {
+    "account_id": 26,
+    "live_id": "c09e69c6-ae91-48d3-849e-8c9c50084e3b",
+    "start_at": "2022-06-02 11:50:00",
+    "title": "【3D】重回牡丹境",
+    "area": "",
+    "parent_area": "",
+    "category": "live",
+    "from": "fallback"
+   },
+   {
+    "account_id": 22,
+    "live_id": "c1d2089e-1a04-4b20-a4ef-79672e756a67",
+    "start_at": "2022-09-24 12:09:00",
+    "title": "出过门的植物人一枚呀",
+    "area": "虚拟主播",
+    "parent_area": "虚拟主播",
+    "category": "live",
+    "from": "fallback"
+   },
+   {
+    "account_id": 22,
+    "live_id": "2c9d2306-82a4-4bc1-b7b7-1325133af820",
+    "start_at": "2022-07-22 12:05:00",
+    "title": "晚",
+    "area": "",
+    "parent_area": "",
+    "category": "live",
+    "from": "fallback"
+   },
+   {
+    "account_id": 16,
+    "live_id": "acae3cd0-c4eb-46b4-8731-0e48d181e379",
+    "start_at": "2022-10-29 11:06:00",
+    "title": "【投稿杂谈】梦境之花",
+    "area": "虚拟主播",
+    "parent_area": "虚拟主播",
+    "category": "live",
+    "from": "fallback"
+   },
+   {
+    "account_id": 26,
+    "live_id": "2d4b59ac-00f4-4aa4-be20-ab594eb64d90",
+    "start_at": "2022-07-22 11:50:00",
+    "title": "【2D】枪火重生美女双排！",
+    "area": "",
+    "parent_area": "",
+    "category": "live",
+    "from": "fallback"
+   },
+   {
+    "account_id": 15,
+    "live_id": "19d52272-6c07-47d6-b12a-62603a6cf2e9",
+    "start_at": "2022-06-02 21:58:00",
+    "title": "谢SC",
+    "area": "",
+    "parent_area": "",
+    "category": "live",
+    "from": "fallback"
+   },
+   {
+    "account_id": 15,
+    "live_id": "441a9578-6d54-4a53-a938-f460d4236800",
+    "start_at": "2021-12-06 14:07:00",
+    "title": "兔兔的作图傀儡",
+    "area": "",
+    "parent_area": "",
+    "category": "live",
+    "from": "fallback"
+   },
+   {
+    "account_id": 15,
+    "live_id": "abfa82ee-82c7-4c6b-9675-1ecf60d7c7a8",
+    "start_at": "2022-07-17 11:01:00",
+    "title": "【上舰有礼】奥比岛…奥比岛！！！",
+    "area": "",
+    "parent_area": "",
+    "category": "live",
+    "from": "fallback"
+   },
+   {
+    "account_id": 16,
+    "live_id": "94fd3b0a-aa19-4043-a3ed-24bcd1b899c8",
+    "start_at": "2024-12-25 12:57:08",
+    "title": "在这么冷的天~",
+    "area": "",
+    "parent_area": "",
+    "category": "live",
+    "from": "fallback"
+   },
+   {
+    "account_id": 28,
+    "live_id": "123cfb85-b97b-4476-ad64-4a53a7ae003f",
+    "start_at": "2022-06-10 11:03:00",
+    "title": "【家用3D】一起来玩呀！",
+    "area": "",
+    "parent_area": "",
+    "category": "live",
+    "from": "fallback"
+   },
+   {
+    "account_id": 15,
+    "live_id": "162fd772-7950-4184-a30f-e928661211ab",
+    "start_at": "2023-08-29 13:30:00",
+    "title": "看动画",
+    "area": "虚拟主播",
+    "parent_area": "TopStar",
+    "category": "live",
+    "from": "fallback"
+   },
+   {
+    "account_id": 20,
+    "live_id": "54dba7a1-cc9d-4cf0-a659-89fd5b379d9a",
+    "start_at": "2022-12-09 11:50:00",
+    "title": "【3D】约饭！4=你",
+    "area": "虚拟主播",
+    "parent_area": "3D虚拟主播",
+    "category": "live",
+    "from": "fallback"
+   },
+   {
+    "account_id": 17,
+    "live_id": "6b9e00e7-607b-4abc-b511-58f7d3dc9935",
+    "start_at": "2022-09-30 11:56:00",
+    "title": "去你家吃饭好吗？",
+    "area": "虚拟主播",
+    "parent_area": "虚拟主播",
+    "category": "live",
+    "from": "fallback"
+   },
+   {
+    "account_id": 28,
+    "live_id": "c896f8c4-23c9-40c3-8110-d5b7c619b25d",
+    "start_at": "2022-09-10 11:49:00",
+    "title": "【3D】和ONLY丸度过的第一个中秋",
+    "area": "虚拟主播",
+    "parent_area": "虚拟主播",
+    "category": "live",
+    "from": "fallback"
+   },
+   {
+    "account_id": 22,
+    "live_id": "db25553e-a7c0-467a-ba33-9473e1e8cd12",
+    "start_at": "2022-06-27 17:44:00",
+    "title": "仁一小会喵",
+    "area": "",
+    "parent_area": "",
+    "category": "live",
+    "from": "fallback"
+   }
+  ]
+ }
+}
