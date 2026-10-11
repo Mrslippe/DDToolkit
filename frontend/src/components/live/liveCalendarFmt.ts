@@ -61,6 +61,26 @@ export function keyOf(s: LiveSession): string {
 }
 
 /**
+ * **每一条 `LIVE_TYPE_ORDER` 都必须有对应色调**（T4 收尾加，2026-10-12）。
+ *
+ * 为什么需要这条：色调是**按 key 拼出来**的（`LiveCalendar` 里 `lc-tone-${key}`、
+ * 统计胶囊里 `lc-stat-pill--${key}`，T4 的「场次类型」卡横条也复用了同一套）。
+ * 于是"体系里加了一个类型、忘了加 CSS 类"**不会报错** —— 它只会让那个类型的格子
+ * 与横条**没有颜色**（透明背景），而这种缺色只有肉眼逐个品类看才发现得了。
+ *
+ * 用法：调用方把"实际存在的类名集合"传进来（jsdom 里读不到打包后的 CSS，
+ * 所以由单测**从 `styles/posts.css` 源码里正则取**，见 `liveType.test.ts`）。
+ * 返回缺的那几个（空数组 = 齐了）。
+ */
+export function missingTypeTones(
+  keys: readonly string[], toneClasses: Iterable<string>,
+): string[] {
+  const have = new Set(toneClasses)
+  return keys.filter(
+    (k) => !have.has(`lc-tone-${k}`) || !have.has(`lc-stat-pill--${k}`))
+}
+
+/**
  * 卡片右上角的**数据来源标注**（R3，2026-09-13 用户：要能看到"数据来自 danmakus"）。
  *
  * 按**实际场次的 `source` 组合标记**判定，而不是写死一句文案 —— 场次来源有三种：

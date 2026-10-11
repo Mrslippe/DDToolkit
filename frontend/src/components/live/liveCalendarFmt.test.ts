@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -9,7 +12,9 @@ import {
   fmtTime,
   isFreshSession,
   keyOf,
+  missingTypeTones,
 } from './liveCalendarFmt'
+import { LIVE_TYPE_ORDER } from '../../utils/liveType'
 
 /**
  * 直播日历的纯展示格式化（P2 分层收敛 A 批次从 `LiveCalendar.tsx` 搬出）。
@@ -174,4 +179,38 @@ describe('calendarSourceLabel — 来源标注随实际场次走', () => {
     expect(calendarSourceLabel([])).toBe('数据自动同步')
     expect(calendarSourceLabel([{ source: null }, { source: '' }])).toBe('数据自动同步')
     expect(calendarSourceLabel([{ source: ' ++ ' }])).toBe('数据自动同步')
-  })})
+  })
+})
+
+/**
+ * ★体系一致性（T4 收尾，2026-10-12）：**每一个类型 key 都要有色调类**。
+ *
+ * 为什么值得一条判据：色调是按 key **拼**出来的（`lc-tone-${key}` 挂日期格、
+ * `lc-stat-pill--${key}` 挂统计胶囊与「场次类型」卡横条）。于是"加了一个类型、
+ * 忘了加 CSS 类"**不会报错** —— 只会让那个类型**没有颜色**，而缺色只有肉眼
+ * 逐个品类看才发现得了。体系调整（健身→助眠）正是一次会碰到它的改动。
+ *
+ * ⚠️ 与 `LIVE_TYPE_ORDER` 的一致性（前后端两份顺序表）在 JS 单测里够不着 ——
+ * 那边是 Python（`live_type.TYPE_DISPLAY_ORDER`），由
+ * `tests/test_vtuber_api.py::test_live_type_stats_matches_the_calendar` 守。
+ */
+describe('missingTypeTones — 类型 key 与色调类必须齐', () => {
+  const css = readFileSync(resolve(__dirname, '../../styles/posts.css'), 'utf8')
+  const classes = new Set(
+    [...css.matchAll(/\.(lc-tone-[\w-]+|lc-stat-pill--[\w-]+)/g)].map((m) => m[1]))
+
+  it('正对照：先证明这套读法真的读到了东西（否则下面那条恒真）', () => {
+    expect(classes.has('lc-tone-song')).toBe(true)
+    expect(classes.has('lc-stat-pill--radio')).toBe(true)
+    expect(classes.size).toBeGreaterThan(10)
+  })
+
+  it('★当前体系一个都不缺（含兜底 live）', () => {
+    const keys = [...LIVE_TYPE_ORDER.map((t) => t.key), 'live']
+    expect(missingTypeTones(keys, classes)).toEqual([])
+  })
+
+  it('★反向验证：故意漏掉一个类型 ⇒ 当场点名（这条判据不是恒真的）', () => {
+    expect(missingTypeTones(['song', 'sleep'], classes)).toEqual(['sleep'])
+  })
+})

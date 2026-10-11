@@ -1,5 +1,6 @@
 import atexit
 import json
+import re
 import shutil
 import tempfile
 
@@ -2963,6 +2964,30 @@ def test_live_sessions_types_filter(client):
     # 认不出的值不报错，只是筛不出东西（体系调整期前端可能带旧值来）
     assert client.get(f"/account/{aid}/live-sessions?types=sports").json() == []
     assert client.get(f"/account/{aid}/live-sessions?types=sports").status_code == 200
+
+
+def test_frontend_type_keys_match_backend_taxonomy():
+    """★跨端体系一致性（T4 收尾，2026-10-12）：**前后端两份类型表必须同集**。
+
+    为什么要从 Python 侧读 TS 源文件：类型 key 在两处各有一份 ——
+    服务端 `app/services/live_type.py::CATEGORY_KEYS`（真源）与前端
+    `utils/liveType.ts::LiveTypeKey`（联合类型 + `LIVE_TYPE_ORDER`）。
+    漏改一边的症状**都不报错**：少一个前端 key ⇒ 那个类型的格子/徽章按未知值走兜底
+    （显示成「直播」，颜色丢失）；少一个服务端 key ⇒ 前端有一个永远命中不了的选项。
+
+    ⚠️ 体系调整（健身→助眠）正是会碰到它的改动 —— 这条判据让"改一边"当场变红。
+    """
+    from app.services.live_type import CATEGORY_KEYS
+
+    src = (Path(__file__).resolve().parent.parent
+           / "frontend" / "src" / "utils" / "liveType.ts").read_text(encoding="utf-8")
+    m = re.search(r"export type LiveTypeKey =\s*([^;]+);", src, re.S)
+    assert m, "没读到前端 LiveTypeKey 联合类型（形状变了？）"
+    fe = set(re.findall(r"'([a-z]+)'", m.group(1)))
+    assert fe, "LiveTypeKey 里一个 key 都没解析出来（正则失效，这条判据会恒真）"
+    assert fe == set(CATEGORY_KEYS), (
+        f"前后端类型表不一致：前端多出 {sorted(fe - CATEGORY_KEYS)}、"
+        f"服务端多出 {sorted(set(CATEGORY_KEYS) - fe)}")
 
 
 def test_manual_session_is_settled_on_create_and_update(client):

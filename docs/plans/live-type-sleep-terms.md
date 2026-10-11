@@ -96,7 +96,30 @@ RADIO: 电台 3.0 · asmr 3.0 · 晚安 3.0 · 伴睡 3.0 · 陪聊 3.0 · 谈�
 "28 场旧 `fitness` 逐条可解释"这条停止条件因此变成可验证的 ——
 跑一次 `check_resettle_scope.py` 就能列出它们各自的去向（换成什么、还是落回中性）。
 
-## 三、待你拍的两件事
+## 四、换体系要改的**全部**引用点（漏一处的症状各不相同）
+
+`fitness` 在仓里散在 **9 处**，而且**没有一处会因为漏改而报错** —— 症状从"没颜色"
+到"永远命中不了的选项"不等。这份清单是照着 grep 一遍一遍数出来的（`grep -n 'fitness\|健身'`）：
+
+| # | 位置 | 改什么 | 漏了会怎样 |
+|---|---|---|---|
+| 1 | `app/services/live_type.py` | `FITNESS` 常量 → `SLEEP`（**值** `"fitness"`→`"sleep"`）· `CATEGORY_KEYS` · `TITLE_TERMS` 的那组词条 · `TITLE_CATEGORY_PRIORITY` · 模块 docstring 的类目串 | 服务端认不出新值；或旧值继续被判出来 |
+| 2 | `app/services/live_type.py::AREA_RULES` | `(FITNESS, ["健身", "运动", "体育", "舞蹈"])` → 助眠那组（**分区也要换**，否则"标题不认、分区认"） | 分区那一路继续产出旧类目 |
+| 3 | `frontend/src/utils/liveType.ts` | `LiveTypeKey` 联合 · `RULES` 的正则与 label · `LIVE_TYPE_LABELS` · `LIVE_TYPE_ORDER` · 文件头注释的 9 类串 | 前端把新值当未知 → 显示成「直播」且**没有颜色** |
+| 4 | `frontend/src/styles/posts.css` | `.lc-stat-pill--fitness` → `--sleep` · `.lc-tone-fitness` 三条（底色 / 徽章 / 时间色） | 格子与横条**没有颜色**（只有肉眼逐个品类看才发现） |
+| 5 | `app/schemas/vtuber.py` | `LiveSessionOut.category` 的注释串（枚举清单） | 只是注释陈旧，无功能影响 |
+| 6 | `frontend/src/api/types.ts` | 同上（注释） | 同上 |
+| 7 | `docs/GLOSSARY.md` | 「9 类分类」那一行的类目清单 | 文档与代码漂移（`doc_check` 抓不到这种） |
+| 8 | `tests/test_vtuber_api.py` + 前端单测 | 断言里出现的 `fitness`（标注集生成器的 `VALID_TRUTH` 也在内） | 用例红（这一处**会**报错，是好事） |
+| 9 | `docs/ops/PERF.md` 等历史记录 | **不改** —— 那是当时的实测记录 | —— |
+
+⚠️ 顺带一条**已加的判据**（T4 收尾，2026-10-12）：
+`tests/test_vtuber_api.py::test_frontend_type_keys_match_backend_taxonomy` 直接读前端
+`LiveTypeKey` 联合类型，**与服务端 `CATEGORY_KEYS` 比集合相等**。只改一边当场红
+（反向验证过：把前端 `fitness` 改成 `sleep` 而服务端不动 ⇒ 差异 `['fitness','sleep']`）。
+另有一条前端单测 `missingTypeTones` 守"每个 key 都有色调类"（读 `posts.css` 正则取类名）。
+
+## 五、待你拍的两件事
 
 1. **词表**（§二的切法）：`sleep` 收 `工作音 / 晚安 / 早睡 / 助眠 / 哄睡 / 白噪音 / asmr / 音声 / 伴睡`，
    `radio` 保留 `电台 / 陪聊 / 谈心 / 朗读 / 轻音乐`。**要不要收「放松 / 治愈」**？
