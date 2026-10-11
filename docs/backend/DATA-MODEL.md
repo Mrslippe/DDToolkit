@@ -176,10 +176,12 @@ erDiagram
 | `id` | INTEGER | PK |
 | `account_id` | INTEGER | NOT NULL，FK → accounts.id |
 | `live_id` | TEXT | NOT NULL；**UNIQUE(account_id, live_id)** |
-| `category` | TEXT | 9 类之一（不含 live 兜底） |
+| `category` | TEXT | 10 类之一（不含 live 兜底；⚠️ 2026-10-12 T3 起「健身」换成「助眠」） |
 | `created_at` / `updated_at` | DATETIME | UTC now |
 
-校正既是最高优先级推断信号，也反哺该账号的词库（`live_type.build_learned`）。
+校正既是最高优先级推断信号（读取时压过落库值），也在 `series`/`learned` 两档下线前
+反哺过词库（`live_type.build_learned`）。⚠️ **2026-10-12（`devlog/467`）起那两档不再参与
+落库与读取** ⇒ 校正只影响被点的那一场。
 
 #### `vtuber_events` — 重要日期 / 活动（e005）
 

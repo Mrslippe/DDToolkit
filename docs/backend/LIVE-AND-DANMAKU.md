@@ -22,9 +22,13 @@ flowchart LR
   LS4 --> M
   M --> API["GET /account/{id}/live-sessions"]
   M --> CAL["前端直播日历"]
-  O["用户分类校正"] --> LT["live_type 9 类推断<br/>override(4.0) > 系列(≥2) > learned(2.0) > 标题/分区"]
+  O["用户分类校正"] --> LT["场次类型：<br/>写时定稿（title/area/date）<br/>读取时 override 压在最上面"]
   M --> LT
 ```
+
+> ⚠️ 2026-10-12（f016，`devlog/467`）：类型从"读取时 9 类推断"改成**写时定稿**
+> （`app/services/live_settle.py`），`series`/`learned` 两档下线（它们要看全账号历史，
+> 与"只看这一场"冲突）；2026-10-12（T3，`devlog/468`）「健身」换成「助眠」。
 
 - 表内场次（danmakus / feed / **manual**）+ self 快照推导的「虚拟场次」在**读取时**合并，
   不落表；合并窗口 90 分钟，同 `room_id` 去重，同标题中断续播并段；
