@@ -134,7 +134,13 @@ def record_message(text: str, *, source: str = "操作结果") -> None:
 
 
 def record_live_edge(payload: dict) -> None:
-    """记一条开播边沿（T0 检测到"开播了"时调用）→ alert（优先级高于 progress）。"""
+    """记一条开播边沿（T0 检测到"开播了"时调用）→ alert（优先级高于 progress）。
+
+    ⚠️ `payload["name"]` 是**账号昵称**（不是 V 名），这是有意的 ——
+    口径与理由写在发送端 `scheduler._fetch_account_one` 那段注释里
+    （用户 2026-10-11 拍板：一个 V 可能有多个账号，通知要答"哪个号开播了"）。
+    这里**不要再 join 一次 V 名**：那会让两个号开播弹出两条一模一样的通知。
+    """
     name = str(payload.get("name") or "").strip()
     account_id = payload.get("account_id")
     if not name or account_id is None:

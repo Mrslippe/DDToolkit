@@ -541,10 +541,17 @@ export default function LiveSessionDialog({
           ) : dm ? (
             <div className="lc-dlg-danmaku">
               <dl className="lc-dlg-rows">
-                {dm.total != null && (
+                {dm.danmakus_count != null && (
+                  // ⚠️ 标签写「弹幕数（上游）」而不是「弹幕总量」（2026-10-11，`devlog/462`）：
+                  //    上面那一行「弹幕数」是**库里存的**（可能还没同步到），这一行是**上游现算的**
+                  //    —— 同一个口径（各录制版本取最大）、两种新鲜度。
+                  //    这里原先显示的是上游分页信封的 `total`：那是**原始记录条数**（含重复录制），
+                  //    实测是标准数的 2.2 倍，于是同一张卡上 17,931 与 39,316 谁也说不清哪个对。
                   <div className="lc-dlg-row">
-                    <dt>弹幕总量</dt>
-                    <dd className="lc-dlg-num">{dm.total.toLocaleString('zh-CN')}</dd>
+                    <dt>弹幕数（上游）</dt>
+                    <dd className="lc-dlg-num">
+                      {dm.danmakus_count.toLocaleString('zh-CN')}
+                    </dd>
                   </div>
                 )}
                 {dm.source === 'self' && dm.text_count != null && (

@@ -352,3 +352,50 @@ describe('弹幕段：直播中 / 未收录 / 没问到 三种文案分得开', 
     expect(onSessionChanged).toHaveBeenCalledTimes(1)
   })
 })
+
+/**
+ * 弹幕数只认**标准口径**（2026-10-11，`devlog/462`）。
+ *
+ * 上游同一份响应里有三个都能叫"弹幕数"的数字，而这里原先显示的是分页信封的
+ * `total`（= **所有上传的原始记录条数**，同一句弹幕被多个录制源上传就重复计数）⇒
+ * 同一张卡上出现「弹幕数 17,931」与「弹幕总量 39,316」，差 2.2 倍且没人说得清哪个对
+ * （`devlog/460` 的 F2，用户报的就是这个）。
+ *
+ * 现在的判据：显示 `danmakus_count`（各录制版本取最大），**并且**那个原始条数
+ * 一个字符都不许出现 —— 它改名叫 `raw_record_count` 就是为了让人没法顺手拿它当弹幕数。
+ */
+describe('弹幕数：只显示标准数，原始记录条数不上界面', () => {
+  const upstream = (danmaku: Record<string, unknown>) =>
+    ({ danmaku: { top_words: [], top_keywords: [], ...danmaku }, metrics: null, events: [] })
+
+  async function renderWith(danmaku: Record<string, unknown>) {
+    const { api } = await import('../../api/api')
+    vi.mocked(api.liveSessionUpstream).mockResolvedValue(upstream(danmaku) as never)
+    render(detailOf())
+    await act(async () => { await Promise.resolve() })
+    return panel()?.textContent ?? ''
+  }
+
+  it('★ 显示标准数（各录制版本取最大），并把原始记录条数挡在界面外', async () => {
+    const text = await renderWith({
+      wc_status: 'upstream', danmakus_count: 17931, raw_record_count: 39316,
+    })
+    expect(text).toContain('弹幕数（上游）')
+    expect(text).toContain('17,931')
+    expect(text, '原始记录条数（含重复录制）被当成弹幕数显示了 —— 那正是用户看到的 2.2 倍矛盾')
+      .not.toContain('39,316')
+  })
+
+  it('标签写「弹幕数（上游）」而不是「弹幕总量」（与库里那行同口径、只是新鲜度不同）', async () => {
+    const text = await renderWith({ wc_status: 'upstream', danmakus_count: 8645 })
+    expect(text).toContain('弹幕数（上游）')
+    expect(text).not.toContain('弹幕总量')
+  })
+
+  it('标准数缺失（上游没给）⇒ 那一行不出现，不编 0', async () => {
+    const text = await renderWith({ wc_status: 'upstream', danmakus_count: null,
+                                    raw_record_count: 39316 })
+    expect(text).not.toContain('弹幕数（上游）')
+    expect(text).not.toContain('39,316')
+  })
+})

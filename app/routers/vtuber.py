@@ -1180,7 +1180,9 @@ async def live_session_upstream(account_id: int, live_id: str,
     if status not in ("upstream", "upstream_absent"):
         status = "upstream" if wc else "upstream_absent"
     danmaku = LiveDanmakuInfo(
-        total=summary.get("total"),
+        # ⚠️ 标准弹幕数（各录制版本取最大，`devlog/462`），**不是**分页信封那个 total
+        danmakus_count=summary.get("danmakus_count"),
+        raw_record_count=summary.get("raw_record_count"),
         top_keywords=[w for w, _c in wc][:40],
         top_words=[LiveWordOut(text=w, count=int(c)) for w, c in wc][:40],
         source="upstream" if status == "upstream" else None,
@@ -1260,7 +1262,9 @@ async def live_session_wordcloud(account_id: int, live_id: str,
                  "fetch_failed": "fetch_failed"}.get(status, "fetch_failed")
     words = result.get("words") or []
     return LiveDanmakuInfo(
-        total=result.get("total"),
+        # 自建路径给不出"标准弹幕数"（它数的是**参与分词的文本条数**，见下面 text_count）；
+        # `result["total"]` 是原始记录条数（含礼物/进场），照实放进 raw_record_count
+        raw_record_count=result.get("total"),
         top_keywords=[w for w, _c in words],
         top_words=[LiveWordOut(text=w, count=int(c)) for w, c in words],
         source="self" if wc_status == "self_built" else None,

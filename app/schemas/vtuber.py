@@ -543,7 +543,16 @@ class LiveWordOut(BaseModel):
 
 
 class LiveDanmakuInfo(BaseModel):
-    """弹幕信息（danmakus：总量 + 词云热词）。
+    """弹幕信息（danmakus：**标准弹幕数** + 词云热词）。
+
+    ⚠️ **2026-10-11 改名**（`devlog/462`）：这里原先叫 `total`，而上游同一份响应里有
+    **三个**都能叫"弹幕总数"的数字（分页信封 `total` / `live.danmakusCount` /
+    各录制版本的 `danmakusCount`）⇒ 界面上并排出现 17,931 与 39,316 两个数、
+    谁也说不清哪个对（`devlog/460` 的 F2）。
+    现在的口径是**唯一**一条：`danmakus_count` = 各**录制版本**里最多的那一份
+    （`danmakus.canonical_danmaku_count`），与场次行里的 `danmakus_count` 同义。
+    `raw_record_count` 是那个分页元数据（**所有上传的原始记录条数，含重复录制**），
+    **不是弹幕数**，只留作排查用，界面不许拿它当"弹幕总量"。
 
     `source` / `wc_status` 是 2026-09-13 新增（devlog/061）—— 用于在 UI 上**区分**
     三种此前混在「暂无热词数据」里的情况：
@@ -557,7 +566,8 @@ class LiveDanmakuInfo(BaseModel):
     | `live` | 本场还在直播（`end_at` 为空）——上游要等结束后才收录 | 提示"正在直播中" |
     | `fetch_failed` | 拉取失败（网络/HTTP/被 WAF 拦） | 提示"拉取失败，可重试" |
     """
-    total: int | None = None
+    danmakus_count: int | None = None          # 标准弹幕数（各录制版本取最大）
+    raw_record_count: int | None = None        # 分页 total：原始记录条数（含重复录制）
     top_keywords: list[str] = []               # 兼容字段：仅词（旧前端）
     top_words: list[LiveWordOut] = []          # 带次数的词条（气泡词云 + hover 次数）
     hot_segments: list[dict] = []              # 预留：[{start, end, count}] 高浓度片段
@@ -624,7 +634,7 @@ class LiveUpstreamOut(BaseModel):
 
     | 字段 | 内容 | 失败时 |
     |---|---|---|
-    | `danmaku` | 弹幕总量 + 上游词云（`wc_status` 区分六种情况） | `wc_status='fetch_failed'` |
+    | `danmaku` | **标准弹幕数** + 上游词云（`wc_status` 区分六种情况） | `wc_status='fetch_failed'` |
     | `metrics` | 场次级指标（观看/点赞/打赏/互动/峰值/录制版本/频道累计） | `null` |
     | `events` | 直播中断/继续时间线（type 7/8） | `[]` |
     | `session_changed` | 这次请求**按需现查**补到了该场次的 danmakus 行（devlog/275） | `false` |

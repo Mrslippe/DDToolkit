@@ -373,6 +373,9 @@ def test_live_sessions_sync_partial_failure_keeps_error_clean(db, monkeypatch):
 
 def test_parse_live_summary_wordcloud():
     from app.services.externals.danmakus import _parse_live_summary
+    # ⚠️ 入参是**分页信封**那一层（真响应里它在 `{code, message, data}` 的再里面一层）。
+    #    `versions` 那四条是 2026-10-11 从真上游抄下来的（devlog/462）：
+    #    同一场直播被 4 个用户录了，各自的弹幕数并不相同。
     payload = {"total": 39316, "pageNum": 0, "pageSize": 1, "hasMore": True,
                "data": {"channel": {"fansCount": 133596, "totalDanmakuCount": 6951279},
                         "live": {
@@ -380,14 +383,24 @@ def test_parse_live_summary_wordcloud():
                    "danmakusCount": 17931, "watchCount": 16216, "likeCount": 163579,
                    "payCount": 542, "interactionCount": 1127, "onlineRank": 250,
                    "commentCount": 0, "isFull": True, "isMerged": True,
-                   "versions": [{"userName": "本站", "isOfficial": True}],
+                   "versions": [
+                       {"live": {"danmakusCount": 17931}, "userName": "本站",
+                        "isOfficial": True, "isFull": True, "rangeDanmakusCount": 17931},
+                       {"live": {"danmakusCount": 17922}, "userName": "Mai",
+                        "isOfficial": False, "isFull": True, "rangeDanmakusCount": 17922},
+                       {"live": {"danmakusCount": 17927}, "userName": "不知道啊",
+                        "isOfficial": False, "isFull": True, "rangeDanmakusCount": 17927},
+                       {"live": {"danmakusCount": 12084}, "userName": "四时小路",
+                        "isOfficial": False, "isFull": False, "rangeDanmakusCount": 12084}],
                    "extra": {"wordCloud": {"好耶": 3195, "MELODY": 210, "x": 0},
                              "onlineRank": {"1788609741572": 135,
                                             "1788609992428": 366,
                                             "1788609729866": 118}}}}}
     s = _parse_live_summary(payload)
-    assert s["total"] == 39316
+    # ★ 标准弹幕数 = 各录制版本里最多的那一份（用户 2026-10-11 口径）
     assert s["danmakus_count"] == 17931
+    # ⚠️ 分页信封的 total 是**原始记录条数**（含重复录制），改名后照实带出来、不许当弹幕数
+    assert s["raw_record_count"] == 39316
     assert s["word_cloud"][:2] == [("好耶", 3195), ("MELODY", 210)]   # 降序且忽略 0 次
     # A 组指标
     assert s["watch_count"] == 16216 and s["like_count"] == 163579
@@ -399,6 +412,53 @@ def test_parse_live_summary_wordcloud():
     # 异常形状 → 降级空摘要（不炸）
     assert _parse_live_summary(None) is None
     assert _parse_live_summary({"data": None})["word_cloud"] == []
+
+
+def test_canonical_danmaku_count_takes_the_largest_recording():
+    """★ 标准弹幕数 = **各录制版本里最多的那一份**（2026-10-11 用户口径，`devlog/462`）。
+
+    为什么必须取最大而不是"读 `live.danmakusCount`"：那一位是**合并版**的数字，
+    实测恰好也是最大者，但**没有保证** —— 上游的合并节点可能缺、可能没算完
+    （真机有场次 `isMerged=false`）。取最大对这两种情况都成立，而"读那一位"只在
+    前者成立。下面第 ② 条就是这条规则**唯一**能杀死"直接读顶层"写法的地方。
+    """
+    from app.services.externals.danmakus import canonical_danmaku_count
+
+    # ① 实测那一场：四个录制 17931 / 17922 / 17927 / 12084 ⇒ 17931
+    assert canonical_danmaku_count({"danmakusCount": 17931, "versions": [
+        {"live": {"danmakusCount": 17931}}, {"live": {"danmakusCount": 17922}},
+        {"live": {"danmakusCount": 17927}}, {"live": {"danmakusCount": 12084}},
+    ]}) == 17931
+
+    # ② ★某个录制版本**比合并节点还多** ⇒ 必须取那个（直接读顶层会答 100）
+    assert canonical_danmaku_count({"danmakusCount": 100, "versions": [
+        {"live": {"danmakusCount": 250}}, {"live": {"danmakusCount": 240}},
+    ]}) == 250
+
+    # ③ 顺序无关（别写成"取第一条"）
+    assert canonical_danmaku_count({"versions": [
+        {"live": {"danmakusCount": 5}}, {"live": {"danmakusCount": 9}},
+        {"live": {"danmakusCount": 7}}]}) == 9
+
+    # ④ 合并节点缺失、只有版本列表 ⇒ 照样答得出来
+    assert canonical_danmaku_count({"versions": [
+        {"live": {"danmakusCount": 8123}}, {"live": {"danmakusCount": 7861}}]}) == 8123
+
+    # ⑤ 版本条目只有 `rangeDanmakusCount`（v2 的真实形状之一）⇒ 拿它兜底
+    assert canonical_danmaku_count({"versions": [{"rangeDanmakusCount": 17922}]}) == 17922
+
+    # ⑥ 某个录制源一条都没传（真机实测有 `danmakusCount: 0` 的版本）⇒ 不参与，但也不报错
+    assert canonical_danmaku_count({"danmakusCount": 8645, "versions": [
+        {"live": {"danmakusCount": 0}}, {"live": {"danmakusCount": 8123}}]}) == 8645
+
+    # ⑦ 什么都没有 ⇒ None（**不编 0**："没数据"与"零条弹幕"是两件事）
+    assert canonical_danmaku_count(None) is None
+    assert canonical_danmaku_count({}) is None
+    assert canonical_danmaku_count({"versions": []}) is None
+    # 脏形状（字符串/负数/非 dict）一律当没有
+    assert canonical_danmaku_count({"danmakusCount": "17931"}) is None
+    assert canonical_danmaku_count({"danmakusCount": -5}) is None
+    assert canonical_danmaku_count({"versions": ["x", None, 3]}) is None
 
 
 def test_parse_live_summary_reports_upstream_wordcloud_status():

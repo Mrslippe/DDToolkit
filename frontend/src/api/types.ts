@@ -329,7 +329,17 @@ export type WordCloudStatus =
 
 /** 弹幕信息（danmakus 场次级：总量 + 词云 + 来源标记） */
 export interface LiveDanmakuInfo {
-  total?: number | null
+  /**
+   * **标准弹幕数**（2026-10-11 定案，`devlog/462`）：一场直播会被多个用户录制，
+   * 取**各录制版本里最多的那一份**当标准 —— 与场次行里的 `danmakus_count` 同义。
+   * ⚠️ 别再显示下面那个 `raw_record_count` 当"弹幕总量"（它含重复录制，实测 ≈ 标准数的 2.2 倍）。
+   */
+  danmakus_count?: number | null
+  /**
+   * 上游分页信封的 `total` = **所有上传的原始记录条数**（同一句弹幕被多个录制源上传就重复计数）。
+   * **不是弹幕数**，留作排查用；界面不许拿它当"弹幕总量"。
+   */
+  raw_record_count?: number | null
   top_keywords?: string[]
   /** 带次数的词条（拼贴词云） */
   top_words?: LiveWord[]

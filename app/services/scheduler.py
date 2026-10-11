@@ -3481,6 +3481,16 @@ async def live_sweep_core(db: Session, client: httpx.AsyncClient | None = None) 
                             "account_id": acc.id,
                             "platform": acc.platform,
                             "platform_uid": str(acc.platform_uid or ""),
+                            # ⚠️ **这里给的是"账号昵称"，不是 V 名 —— 这是有意的**
+                            #    （用户 2026-10-11 拍板，devlog/462 记下这条口径）：
+                            #    一个 V 可以有**多个账号**（真机 id18 就有两个 B 站号），
+                            #    而通知要回答的是"**哪个号**开播了"；写 V 名的话两个号
+                            #    开播会弹出**两条一模一样的**通知，等于没通知。
+                            #    ⚠️ 于是通知文案里的名字与左栏条目**可能不同**
+                            #    （真机：通知「星瞳_Official 开播了」vs 左栏「星瞳official」）——
+                            #    这是两种口径，不是不一致：左栏答"这是谁"，通知答"哪个号"。
+                            #    `vtuber_id` 也在载荷里，前端要显示 V 名随时能取。
+                            #    ⇒ 别把它"修"成 V 名（`devlog/460` 的自审把它当成 F6 报过一次）。
                             "name": acc.display_name or str(acc.platform_uid or ""),
                             "live_title": acc.live_title or "",
                             "live_url": acc.live_url or "",

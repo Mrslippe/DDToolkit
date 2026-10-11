@@ -7,7 +7,7 @@
 
 它会挑库里**最近的 N 个 danmakus 场次**，逐个真打上游：
 
-1. `fetch_live_summary`  → 弹幕总量 + 上游词云（`status=upstream` / `upstream_absent`）
+1. `fetch_live_summary`  → 标准弹幕数（各录制版本取最大）+ 上游词云（`status=upstream` / `upstream_absent`）
 2. `fetch_live_events`   → 中断/继续事件（type 7/8）
 3. `--self`：再对**最新一场**跑自建路径（v3 原始弹幕 + jieba 分词）——
    **很慢**（实测 12s ~ 120s，取决于上游瞬时状态），默认不跑。

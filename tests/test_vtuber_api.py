@@ -1616,7 +1616,9 @@ def test_live_category_override_flow(client):
 # （含只依赖本地库的时间/分区/收益/分类）一起拖住，最坏 3×30s 重试 ≈ 93s 才出结果。
 
 _DETAIL_SUMMARY = {
-    "total": 39316, "danmakus_count": 17931,
+    # `raw_record_count` = 上游分页信封的 total（原始记录条数，含重复录制）；
+    # `danmakus_count` = **标准弹幕数**（各录制版本取最大，devlog/462）—— 界面只显示后者
+    "raw_record_count": 39316, "danmakus_count": 17931,
     "word_cloud": [("好耶", 3195), ("MELODY", 210)],
     "watch_count": 16216, "like_count": 163579, "pay_count": 542,
     "interaction_count": 1127, "online_rank": 250, "comment_count": 0,
@@ -1709,7 +1711,8 @@ def test_live_session_upstream_endpoint(client, monkeypatch):
     # ⚠️ 这里刻意**不给桩填 `status`** —— 端点契约是"以实际拿到的词条为准"，
     # 所以有词云就必须报 upstream（曾经盲信 summary["status"] 而报出
     # `source='upstream'` + `wc_status='upstream_absent'` 的矛盾组合）。
-    assert d["danmaku"] == {"total": 39316,
+    assert d["danmaku"] == {"danmakus_count": 17931,
+                            "raw_record_count": 39316,
                             "top_keywords": ["好耶", "MELODY"],
                             "top_words": [{"text": "好耶", "count": 3195},
                                           {"text": "MELODY", "count": 210}],
@@ -1968,7 +1971,10 @@ def test_wordcloud_endpoint_self_builds(client, monkeypatch):
     d = client.get(f"/account/{aid}/live-sessions/uuid-wc/wordcloud").json()
     assert d["wc_status"] == "self_built"
     assert d["source"] == "self"
-    assert d["total"] == 5                     # 原始记录条数（含无文本的）
+    # 自建路径给不出"标准弹幕数"（它数的是文本条数，见 text_count），
+    # 所以原始记录条数落在 raw_record_count 上 —— 别再把它当 `total`/弹幕总量（devlog/462）
+    assert d["raw_record_count"] == 5          # 原始记录条数（含无文本的）
+    assert d["danmakus_count"] is None
     assert d["text_count"] == 3                # 参与统计的文本弹幕数
     assert d["engine"] == "jieba"
     words = {w["text"]: w["count"] for w in d["top_words"]}

@@ -138,9 +138,76 @@ def _auth_headers(token: str | None) -> dict:
     return {"Token": token} if token else {}
 
 
+def canonical_danmaku_count(live: dict | None) -> int | None:
+    """一场直播的**标准弹幕数**：取所有**录制版本**里最多的那一份（用户 2026-10-11 口径）。
+
+    ## 为什么需要它（2026-10-11 实测真上游，devlog/462）
+
+    danmakus 对**同一场直播**会保存**多个用户录制**的内容（`live.versions[]`），
+    彼此略有差异；而同一份响应里还有**三个**都能被叫做"弹幕数"的数字：
+
+    | 数字 | 实测（泽音Melody 那场） | 它到底是什么 |
+    |---|---|---|
+    | 分页信封的 `total` | **39,317** | **所有上传的原始记录条数**（同一句弹幕被多个录制源上传就重复计数） |
+    | `live.danmakusCount`（合并版） | **17,931** | 合并/去重后这一场的弹幕数 |
+    | `versions[i].live.danmakusCount` | 17,931 / 17,922 / 17,927 / 12,084 | **每个录制版本各自的数** |
+
+    ⚠️ `total` 是**分页元数据**（`pageNum`/`pageSize` 就是拿它分页的，参数说明写着
+    "每页大小, 默认全部返回"），不是"这场有多少弹幕"——它 ≈ 合并数的 **2.2 倍**，
+    因为把重复录制算了进去。`devlog/460` 的 F2 正是拿它当"弹幕总量"显示，
+    于是同一张卡上出现 17,931 与 39,316 两个数、谁也说不清哪个对。
+
+    ⇒ 标准口径：**取各录制版本里最多的那一份**（用户口径）。
+    实测这条规则给出的就是那个合并值（17,931 / 8,645 都是各自的最大者），
+    而它比"直接读 `live.danmakusCount`"更稳：合并节点缺失或没算出来时，
+    仍然能从版本列表里得到答案。
+
+    取值顺序（每个候选先看 `live.danmakusCount`，再退到 `rangeDanmakusCount`）：
+    每个 `versions[i]` + 顶层那个 `live` 自己。全部非法 ⇒ `None`（**不编 0**：
+    "没数据"与"零条弹幕"是两件事）。
+    """
+    if not isinstance(live, dict):
+        return None
+
+    def _num(v) -> int | None:
+        # 只认非负整数：上游给过 `0`（某个录制源一条都没传）—— 那不该参与取最大，
+        # 但也不需要特殊处理（`max` 天然不会被 0 赢过正数）
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            return None
+        n = int(v)
+        return n if n >= 0 else None
+
+    def _from_version(v) -> int | None:
+        if not isinstance(v, dict):
+            return None
+        inner = v.get("live")
+        if isinstance(inner, dict):
+            got = _num(inner.get("danmakusCount"))
+            if got is not None:
+                return got
+        # v2 的版本条目只有 `rangeDanmakusCount`（v3 `/full` 两个都給）；
+        # 实测两者相等（17931/17922/17927/12084 逐条对上），所以它可以当兜底
+        return _num(v.get("rangeDanmakusCount"))
+
+    candidates: list[int] = []
+    for v in live.get("versions") or []:
+        got = _from_version(v)
+        if got is not None:
+            candidates.append(got)
+    top = _num(live.get("danmakusCount"))
+    if top is not None:
+        candidates.append(top)
+    return max(candidates) if candidates else None
+
+
 def _parse_live_summary(payload: dict) -> dict | None:
-    """/api/v2/live 响应 → 摘要（A 组：弹幕总量/词云 top40 + 观看/点赞/打赏/互动等
+    """/api/v2/live 响应 → 摘要（A 组：弹幕标准数/词云 top40 + 观看/点赞/打赏/互动等
     场次级指标 + 在线时间线峰值 + 录制版本/频道累计）。形状判空后解析。
+
+    ⚠️ **入参是"分页信封"那一层**（`{total, pageNum, pageSize, hasMore, data}`，
+    真响应里它在 `{code, message, data}` 里面一层）。`total` 是**分页元数据**、
+    不是弹幕数 —— 所以它在这里被改名成 `raw_record_count`（见 `canonical_danmaku_count`），
+    而"这场有多少弹幕"一律用 `danmakus_count`。
 
     `status` 字段（2026-09-13 新增，见 devlog/061）报告**上游是否还提供词云**：
     - `upstream`：拿到了 `extra.wordCloud` 且非空 → 前端直接展示；
@@ -149,11 +216,11 @@ def _parse_live_summary(payload: dict) -> dict | None:
     """
     if not isinstance(payload, dict):
         return None
-    total = payload.get("total")
+    raw_total = payload.get("total")
     try:
-        total = int(total) if total is not None else None
+        raw_total = int(raw_total) if raw_total is not None else None
     except (TypeError, ValueError):
-        total = None
+        raw_total = None
     inner = payload.get("data")
     live = None
     channel = None
@@ -164,7 +231,7 @@ def _parse_live_summary(payload: dict) -> dict | None:
         live = inner[0] if inner else None
     if not isinstance(live, dict):
         return {
-            "total": total, "danmakus_count": None, "word_cloud": [],
+            "danmakus_count": None, "raw_record_count": raw_total, "word_cloud": [],
             "has_extra": False, "status": "upstream_absent",
             "watch_count": None, "like_count": None, "pay_count": None,
             "interaction_count": None, "online_rank": None, "comment_count": None,
@@ -209,8 +276,8 @@ def _parse_live_summary(payload: dict) -> dict | None:
             })
     ch = channel if isinstance(channel, dict) else {}
     return {
-        "total": total,
-        "danmakus_count": live.get("danmakusCount"),
+        "danmakus_count": canonical_danmaku_count(live),
+        "raw_record_count": raw_total,
         "word_cloud": top[:40],
         "status": status,
         "has_extra": has_extra,
