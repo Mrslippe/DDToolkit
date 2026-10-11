@@ -105,11 +105,12 @@ retire-when: HTTP 层换框架，或路由整体重排
 
 | 方法 + 路径 | 说明 |
 |---|---|
-| GET `/account/{id}/live-sessions` | 合并场次列表（表内 ∪ 快照推导）+ 分类推断结果 |
-| GET `/account/{id}/live-sessions/{live_id}` | 场次详情：**只回本地库可推导的内容**（场次 + 分类推断 + analysis 预留），**不发起第三方请求**（2026-09-13，devlog/063） |
+| GET `/account/{id}/live-sessions` | 合并场次列表（表内 ∪ 快照推导）+ 类型。**T4（`devlog/467`）加查询参数 `types=`**（逗号分隔的类型 key）⇒ 只返回这几类；不传/空 = 全部。⚠️ 筛在**合并结果**上（不是 SQL `WHERE` —— 一场可能由 danmakus+feed 两行组成，按列筛会筛掉一半）；认不出的 key **不报错**（只是筛不出东西：体系调整期前端可能带旧值来） |
+| GET `/account/{id}/live-type-stats` | **按类型统计场次数**（T4，`devlog/467`）⇒ `{total, items:[{category,count}], classified}`。`items` 按固定展示顺序、只含非零项、兜底 `live` 永远最后；`total` = 日历上能看到的场次数，`classified` = 有落库类型的行数（差 = 规则还没定出来的那批，读取时显示中性）。⚠️ **走合并视图算，不是 `GROUP BY`** —— 后者会漏掉虚拟场次与未回填的老行，数字比日历小 |
+| GET `/account/{id}/live-sessions/{live_id}` | 场次详情：**只回本地库可推导的内容**（场次 + 类型 + analysis 预留），**不发起第三方请求**（2026-09-13，devlog/063） |
 | GET `/account/{id}/live-sessions/{live_id}/upstream` | 该场次的第三方取数：弹幕词云 + 场次指标 + 直播动态；进程内缓存 10 分钟 + **同场次单飞**（并发调用共享一轮上游，devlog/081），失败如实降级为 `fetch_failed`/`no_danmaku`（同 devlog/063） |
 | GET `/account/{id}/live-sessions/{live_id}/wordcloud` | 按需自建词云（v3 原始弹幕 + jieba 分词；**用户点按钮才调**，不落库，devlog/061） |
-| PUT `/account/{id}/live-sessions/{live_id}/category` | 手工校正分类（反哺词库） |
+| PUT `/account/{id}/live-sessions/{live_id}/category` | 手工校正分类（**只影响被点的这一场**；`series`/`learned` 两档随类型落库下线，见 `devlog/467`） |
 | DELETE `/account/{id}/live-sessions/{live_id}/category` | 取消校正 |
 | POST `/account/{id}/live-sessions` | **手动记录一场**（B2，devlog/454）：体 `{start_at, end_at?, title?, vod_url?}` ⇒ **201** + 合并后的场次详情。时段与**表内已有记录**重叠 ⇒ **409**（`detail` 是一句点名撞上哪一场的中文）；录播地址不合格 / 结束早于开始 / 标题超 80 字 ⇒ **422** + 中文原因；账号不存在 ⇒ 404。只有 self 快照的时段**放行**（合并会把快照并进这一组） |
 | PATCH `/account/{id}/live-sessions/{live_id}` | 编辑场次（B2）：只传要改的字段（`exclude_unset`；`end_at: null` = 清空改回"进行中"，`vod_url: ""` = 清空录播）。**自动抓来的场次只允许 `vod_url`** ⇒ 其余字段 **400**（下次同步会覆盖回去）；不在表内（self 推导的虚拟场次）⇒ **404**；空体 ⇒ 422 |

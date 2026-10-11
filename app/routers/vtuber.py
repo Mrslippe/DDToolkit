@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi import (APIRouter, BackgroundTasks, Depends, File, Header, HTTPException,
                      Query, UploadFile, status)
 from pydantic import BaseModel, Field
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -30,6 +31,7 @@ from app.schemas.vtuber import (
     PostOut, PostCreate, PostUpdate, PostPage, PostStats,
     AccountStatSnapshotOut, LiveGiftDayOut, ThirdpartyVtuberOut,
     FanTrendPoint, LiveSessionOut, LiveCategoryOut, LiveSessionDetailOut,
+    LiveTypeStatsOut, LiveTypeStatOut,
     LiveSessionManualIn, LiveSessionUpdateIn, LiveSessionDeleteOut,
     VtuberEventOut, VtuberEventCreate, VtuberEventUpdate, FutureReservationOut,
     ProfileCardOut, ProfileLayoutIn,
@@ -45,7 +47,7 @@ from app.services import bili_search as bili_search_svc
 from app.services import capabilities
 from app.services.platforms import registry
 from app.services.purge import purge_account, purge_vtuber
-from app.services.live_type import EDITABLE_CATEGORY_KEYS
+from app.services.live_type import EDITABLE_CATEGORY_KEYS, LIVE, TYPE_DISPLAY_ORDER
 from app.services.live_upstream import (LOOKUP_FAILED, LOOKUP_RECORDED,
                                         ensure_session_recorded,
                                         has_danmakus_source, load_live_upstream)
@@ -925,7 +927,8 @@ def _session_payload(s: dict, account_id: int, category: str,
 
 
 @router.get("/account/{account_id}/live-sessions", response_model=list[LiveSessionOut])
-def live_sessions(account_id: int, db: Session = Depends(get_db)):
+def live_sessions(account_id: int, types: str | None = None,
+                  db: Session = Depends(get_db)):
     """直播场次（v0.9.x 内容管道 M1 主源 + 类型落库 v3，2026-10-12）。
 
     - 表内场次（danmakus 历史全量，M1 回填；feed M3 增量）
@@ -934,18 +937,72 @@ def live_sessions(account_id: int, db: Session = Depends(get_db)):
       ← 用户校正覆盖；没有落库值的组（虚拟场次 / 未回填的老行）按**同一口径现算**。
       ⚠️ v2 那两个全局档（series 骨架聚类 / learned 反哺词库）已下线 ——
       它们要看"同账号、全历史"，与"只看这一场"的落库口径冲突（见 live_settle 模块头）。
+
+    `types`（T4，2026-10-12）：逗号分隔的类型 key，**只返回这几类的场次**（不传 = 全部）。
+    ⚠️ **在合并结果上筛**（不是 SQL `WHERE`）：一个合并组可能由 danmakus + feed 两行组成，
+    类型取的是组里优先级最高的非空值（C2）—— 直接按列筛会把"两行一起才构成的那一场"
+    筛掉一半。收益照旧：载荷小了，且"什么算这一类"只有服务端一份实现。
     """
     account, overrides = _live_infer_ctx(db, account_id)
     if not account:
         raise HTTPException(404, f"Account id={account_id} 不存在")
     sessions = LiveSessionRepo(db).merged(account_id, with_ids=True)
     cats = _resolve_categories(db, sessions, overrides)
-    return [
-        LiveSessionOut(**_session_payload(
+    wanted = _parse_types(types)
+    out = []
+    for s, (cat, src) in zip(sessions, cats):
+        if wanted is not None and cat not in wanted:
+            continue
+        out.append(LiveSessionOut(**_session_payload(
             {k: v for k, v in s.items() if k != "src_live_ids"},
-            account_id, cat, src))
-        for s, (cat, src) in zip(sessions, cats)
-    ]
+            account_id, cat, src)))
+    return out
+
+
+def _parse_types(types: str | None) -> set[str] | None:
+    """`types=a,b` → `{a, b}`；空/全是空白 ⇒ None（= 不筛）。
+
+    ⚠️ 认不出的值**不报错**（只是筛不出东西）：体系调整期间前端可能带着一个刚下线的
+    类型值来，422 会让整个日历红掉，而"这一类现在没有场次"才是事实。
+    """
+    if not types:
+        return None
+    got = {t.strip() for t in types.split(",") if t.strip()}
+    return got or None
+
+
+@router.get("/account/{account_id}/live-type-stats", response_model=LiveTypeStatsOut)
+def live_type_stats(account_id: int, db: Session = Depends(get_db)):
+    """按类型统计场次数（T4，2026-10-12）：数据视图「场次类型」卡片用。
+
+    ⚠️ **走合并视图 + `_resolve_categories`，不是 `GROUP BY category`**：
+    与日历同一套"生效值"口径（校正 > 落库值 > 现算）⇒ 卡片上的数字与用户数日历
+    数出来的一致。`GROUP BY` 会漏掉两类 —— 虚拟场次（没有行）与未回填的老行（NULL），
+    得出的数字比日历少，而用户没有别的办法核对哪个对。
+
+    代价：每请求一次 `merged()`（真机最忙账号 ~80ms，见 `docs/ops/PERF.md`）。
+    卡片一次会话只取一次、`fetch-idle` 不每轮打它，可以接受；"按页取数"那批落地后
+    这里可以直接读 `(account_id, category)` 索引。
+    """
+    account, overrides = _live_infer_ctx(db, account_id)
+    if not account:
+        raise HTTPException(404, f"Account id={account_id} 不存在")
+    sessions = LiveSessionRepo(db).merged(account_id, with_ids=True)
+    cats = _resolve_categories(db, sessions, overrides)
+    counter: dict[str, int] = {}
+    for cat, _src in cats:
+        counter[cat] = counter.get(cat, 0) + 1
+    # 顺序 = 前端的展示顺序（固定，免得卡片每次开都换排列）；兜底 `live` 永远排最后
+    order = [*TYPE_DISPLAY_ORDER, LIVE]
+    items = [LiveTypeStatOut(category=c, count=counter[c])
+             for c in order if counter.get(c)]
+    classified = (
+        db.query(func.count(LiveSession.id))
+        .filter(LiveSession.account_id == account_id,
+                LiveSession.category.isnot(None))
+        .scalar() or 0
+    )
+    return LiveTypeStatsOut(total=len(sessions), items=items, classified=classified)
 
 
 def _find_live_session(sessions: list[dict], live_id: str) -> dict | None:

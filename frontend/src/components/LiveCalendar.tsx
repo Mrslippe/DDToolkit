@@ -8,6 +8,7 @@ import OverlayScroll from './OverlayScroll'
 import FloatPill from './common/FloatPill'
 import StateBlock from './common/StateBlock'
 import { LIVE_TYPE_ORDER, liveTypeLabel } from '../utils/liveType'
+import { countByType, filterByTypes } from '../utils/liveCalendarFilter'
 import { cellBadge, groupReservationsByDay, reservationLine } from '../utils/reservationDays'
 // 纯展示格式化已搬到 components/live/（可 vitest 直测）；此处只保留渲染/交互常量
 import { calendarSourceLabel, dayKeyIso, fmtDur, fmtMoney, fmtMonth, fmtTime, keyOf } from './live/liveCalendarFmt'
@@ -97,9 +98,10 @@ const LiveCalendar = memo(function LiveCalendar(
   /** 取数与派生状态（月份/场次/详情/分类下拉/月份浮窗）——见 hooks 文件顶部的顺序契约说明。
    *  `now` 每次渲染现取：保持"todayKey 随渲染更新"的既有语义。 */
   const {
-    ym, setYm, sessions, loading, error, setError, navDir, setNavDir,
+    ym, setYm, sessions, allSessions, loading, error, setError, navDir, setNavDir,
     detail, setDetail, catPopOpen, setCatPopOpen, catPopRef,
-    monthPopOpen, setMonthPopOpen, popYear, setPopYear, navRef, reload, reloadDetail,
+    monthPopOpen, setMonthPopOpen, popYear, setPopYear, navRef,
+    typeFilter, setTypeFilter, reload, reloadDetail,
   } = useLiveSessions(accountId, refreshTick, now, () => setPop(null))
 
   /** 未来预约（R13）：V 级数据，独立于场次取数（见 useReservations 顶部说明） */
@@ -119,7 +121,10 @@ const LiveCalendar = memo(function LiveCalendar(
 
   const byDay = useMemo(() => {
     const m = new Map<string, LiveSession[]>()
-    for (const sess of sessions) {
+    /* ⚠️ T4（2026-10-12）：这里必须用 `allSessions`（全量）。日期格上"这一格有几场"
+       与筛选条的计数都从 `cells` 派生 —— 用筛过的集合会让**未选中类型的那一天显示成空**，
+       而用户会以为那一天真的没有直播（"筛选"看起来像"删数据"）。 */
+    for (const sess of allSessions) {
       const d = new Date(sess.start_at)
       if (Number.isNaN(d.getTime())) continue
       const k = dayKeyIso(d)
@@ -131,7 +136,7 @@ const LiveCalendar = memo(function LiveCalendar(
       list.sort((a, b) => a.start_at.localeCompare(b.start_at))
     }
     return m
-  }, [sessions])
+  }, [allSessions])
 
   const todayKey = dayKeyIso(now)
 
@@ -157,19 +162,38 @@ const LiveCalendar = memo(function LiveCalendar(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ym, byDay, resvByDay])
 
-  /** 当月类型统计（导航栏右侧统计胶囊，服务端 category 口径，仅非零项） */
-  const monthStats = useMemo(() => {
-    const counts = new Map<string, number>()
-    for (const c of cells) {
-      if (!c.inMonth) continue
-      for (const s of c.sessions) {
-        const t = keyOf(s)
-        counts.set(t, (counts.get(t) ?? 0) + 1)
-      }
-    }
-    const order = LIVE_TYPE_ORDER.map((t) => t.key)
-    return order.map((key) => ({ key, n: counts.get(key) ?? 0 })).filter((t) => t.n > 0)
-  }, [cells])
+  /** 当月类型统计（导航栏右侧统计胶囊，服务端 category 口径，仅非零项）
+   *
+   *  ⚠️ T4（2026-10-12）：统计集合来自 `cells`（由 `allSessions` 派生，**全量**）而不是
+   *  `sessions`（已筛）—— 否则选中「歌回」之后其余类型的计数会凭空消失，用户就没法再
+   *  切到别的类型了。胶囊本身现在也是**筛选按钮**（点一下只留这一类，再点取消）。
+   *  规则住在 `utils/liveCalendarFilter.ts`（纯函数、有单测）。 */
+  const monthStats = useMemo(
+    () => countByType(
+      cells.filter((c) => c.inMonth).flatMap((c) => c.sessions),
+      LIVE_TYPE_ORDER.map((t) => t.key),
+    ),
+    [cells],
+  )
+
+  /** 点一下类型胶囊 = 只留这一类；再点 = 取消（空数组 = 不筛）。
+   *  多选累加：先点「游戏」再点「观影」⇒ 两类都留（"看哪些"是他自己配的）。 */
+  const toggleType = (key: string) => {
+    setTypeFilter((prev) => (
+      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]
+    ))
+  }
+
+  /** 渲染用的日期格：按类型筛过（空的日子不出场次标记，但格子照常占位）——
+   *  网格仍是 42 格（`cells` 是几何），只是格里的场次列表换成筛过的。 */
+  const visibleCells = useMemo(() => {
+    if (!typeFilter.length) return cells
+    return cells.map((c) => ({ ...c, sessions: filterByTypes(c.sessions, typeFilter) }))
+  }, [cells, typeFilter])
+
+  /** 点了筛选但这一类本月一场都没有：说清"是筛没的"并给一条退路，
+   *  否则空网格看起来像"这个月没直播"（用户会以为数据没了）。 */
+  const filteredEmpty = typeFilter.length > 0 && !sessions.length && !loading
 
   const moveMonth = (delta: number) => {
     setMonthPopOpen(false)
@@ -542,14 +566,33 @@ const LiveCalendar = memo(function LiveCalendar(
           )}
         </div>
 
-        {/* 当月类型统计胶囊（彩色胶囊 + 计数，设计稿 frame 10_642；服务端 category 口径） */}
-        <div className="lc-stats">
-          {monthStats.map((t) => (
-            <div key={t.key} className="lc-stat">
-              <span className={`lc-stat-pill lc-stat-pill--${t.key}`}>{liveTypeLabel(t.key)}</span>
-              <span className="lc-stat-num">{t.n}</span>
-            </div>
-          ))}
+        {/* 当月类型统计胶囊（彩色胶囊 + 计数，设计稿 frame 10_642；服务端 category 口径）。
+            T4（2026-10-12）：胶囊现在也是**筛选按钮** —— 点一下只留这一类，再点取消；
+            计数始终按**全量**算（见 `monthStats` 的说明），所以选中之后别的类型照样看得见。 */}
+        <div className="lc-stats" role="group" aria-label="按类型筛选场次"
+             data-lc-type-filter={typeFilter.join(',') || 'all'}>
+          {typeFilter.length > 0 && (
+            <button type="button" className="lc-stat lc-stat-reset"
+                    data-lc-type-reset="" title="显示全部类型"
+                    onClick={() => setTypeFilter([])}>
+              <span className="lc-stat-pill lc-stat-pill--all">全部</span>
+            </button>
+          )}
+          {monthStats.map((t) => {
+            const on = typeFilter.includes(t.key)
+            return (
+              <button key={t.key} type="button"
+                      className={`lc-stat lc-stat-btn${on ? ' on' : ''}`}
+                      data-lc-type={t.key} data-lc-type-on={on ? '1' : '0'}
+                      aria-pressed={on}
+                      title={on ? `不再只看「${liveTypeLabel(t.key)}」`
+                                : `只看「${liveTypeLabel(t.key)}」`}
+                      onClick={() => toggleType(t.key)}>
+                <span className={`lc-stat-pill lc-stat-pill--${t.key}`}>{liveTypeLabel(t.key)}</span>
+                <span className="lc-stat-num">{t.n}</span>
+              </button>
+            )
+          })}
         </div>
       </div>
 
@@ -571,7 +614,14 @@ const LiveCalendar = memo(function LiveCalendar(
           <div className="lc-grid">
             {loading && sessions.length === 0 && <StateBlock kind="loading" />}
             {error && sessions.length === 0 && <StateBlock kind="error" text={error} />}
-            {sessions.length > 0 && cells.map((c) => renderCell(c))}
+            {filteredEmpty && (
+              <p className="pcard-empty" data-lc-type-empty="">
+                没有这些类型的场次 ——{' '}
+                <button type="button" className="lc-stat-reset-inline"
+                        onClick={() => setTypeFilter([])}>显示全部</button>
+              </p>
+            )}
+            {visibleCells.map((c) => renderCell(c))}
           </div>
         </div>
       </div>

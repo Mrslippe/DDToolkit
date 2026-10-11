@@ -349,10 +349,27 @@ export interface LiveSession {
   manual?: boolean
   /** 中断续播并段数（v2 合并，1=单场；>1 表示该场为多次断开续播） */
   segment_count?: number
-  /** 类型 key（服务端推断：game/chat/watch/upload/song/fitness/radio/collab/special/live） */
+  /** 类型 key（服务端定稿：game/chat/watch/upload/song/fitness/radio/collab/special/live） */
   category?: string
-  /** 类型推断来源（v2：override/series/title/learned/area/date/fallback） */
+  /** 类型来自哪一档（v3，2026-10-12 落库后：override/title/area/date/fallback/unknown）。
+   *  ⚠️ `series`/`learned` 两档已随类型落库下线（它们要看全账号历史，与"只看这一场"冲突）。 */
   category_from?: string
+}
+
+/** `GET /account/{id}/live-type-stats` 的一行（T4，2026-10-12）：按类型统计的场次数。
+ *  `category` 是**生效值**（校正 > 落库值 > 现算），与日历上显示的类型同源。 */
+export interface LiveTypeStat {
+  category: string
+  count: number
+}
+
+export interface LiveTypeStats {
+  /** 合并后的场次总数（= 日历上能看到的场次数） */
+  total: number
+  items: LiveTypeStat[]
+  /** 有落库类型的场次数。与 `total` 的差 = 还没定出来的部分（兜底不落库）——
+   *  卡片把它如实说出来，免得用户以为"少的那几百场"是丢了。 */
+  classified: number
 }
 
 /** 词云词条（词 + 出现次数，拼贴词云面积∝词频用） */

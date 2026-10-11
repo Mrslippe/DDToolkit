@@ -489,8 +489,9 @@ class LiveSessionOut(BaseModel):
     旧字段（start_at/end_at/duration_minutes/live_title）语义不变；
     M1 新增：source（danmakus/feed/self/danmakus+self）、live_id/room_id、
     分区（parent_area_name/area_name）、收益（total_income）、峰值在线
-    （max_online_count）、弹幕数（danmakus_count）、类型推断（category/
-    category_from，服务端读取时计算不落库）。
+    （max_online_count）、弹幕数（danmakus_count）、类型（category/category_from）。
+    ⚠️ 2026-10-12（f016，`devlog/467`）：类型改成**写时定稿 + 读列**（`live_sessions.category`），
+    读取侧只剩「用户校正」一道覆盖 —— 不再是"服务端读取时推断"。
     B2 新增（2026-10-08）：`vod_url`（录播地址）/ `manual`（含用户手动记录成分）——
     两个都是**给人看和给人点**的字段，`manual` 由服务端按 `source` 分词判定
     （`app/domain/live_manual.py::is_manual_source`），前端不再自己拆字符串。
@@ -515,7 +516,7 @@ class LiveSessionOut(BaseModel):
     manual: bool = False                        # 这一场含"用户手动记录"成分（source 分词判定，服务端算）
     segment_count: int = 1                      # 中断续播并段数（v2 合并，1=单场）
     category: str = "live"                      # game/chat/watch/upload/song/fitness/radio/collab/special/live
-    category_from: str = "fallback"             # override/series/title/learned/area/date/fallback
+    category_from: str = "fallback"             # override/title/area/date/fallback/unknown（series/learned 已于 2026-10-12 下线）
 
     @field_serializer("start_at", "end_at")
     def _ser_session_dt(self, v: datetime | None):
@@ -528,6 +529,26 @@ class LiveCategoryOut(BaseModel):
     """直播分类校正结果（v0.9.x 类型引擎 v2：PUT/DELETE 响应用）。"""
     category: str
     category_from: str = "override"
+
+
+class LiveTypeStatOut(BaseModel):
+    """按类型统计的一行（T4，2026-10-12，`devlog/467`）：数据视图「场次类型」卡片用。
+
+    `category` 是**生效值**（校正 > 落库值 > 同一口径现算）—— 与日历上那一格显示的类型
+    同源，所以卡片上的数字与用户数日历数出来的一致。没定出来的场次落在中性的 `live`。
+    """
+    category: str
+    count: int
+
+
+class LiveTypeStatsOut(BaseModel):
+    """`GET /account/{id}/live-type-stats` 的响应：按类型分组的场次计数。"""
+    total: int
+    items: list[LiveTypeStatOut]
+    #: 有落库类型（`category IS NOT NULL`）的场次数。与 `total` 的差 = 还没定出来的部分
+    #: （兜底不落库，见 `app/services/live_settle.py`）。卡片把它如实说出来，
+    #: 免得用户以为"少的那几百场"是丢了。
+    classified: int
 
 
 class LiveSessionManualIn(BaseModel):

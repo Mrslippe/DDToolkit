@@ -2208,6 +2208,43 @@ img.hero-avatar {
 .gt-sum { margin: 0; color: var(--c-text-sub); font-size: 11px; }
 .gt-sum b { color: var(--c-text-main); font-weight: 600; }
 
+/* ── 「场次类型」卡（T4，2026-10-12，devlog/467）────────────────────────────
+   行 + 横条（不是饼图）：这张卡要回答"各类各多少场"，饼图读不出个数。
+   横条的填充色**复用统计胶囊那套配色**（`lc-stat-pill--{key}`）——
+   于是卡片上的"杂谈"与日历胶囊上的"杂谈"是同一个颜色，用户不用学第二套图例。 */
+.lts { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.lts-skel { display: block; height: 92px; border-radius: var(--pcard-radius-inner, 8px); }
+.lts-row {
+  display: grid;
+  grid-template-columns: 50px minmax(0, 1fr) 34px 34px;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.lts-pill { min-width: 50px; height: 17px; padding: 0 8px; font-size: 12px; }
+.lts-bar {
+  display: block;
+  height: 9px;
+  border-radius: 88px;
+  background: var(--sel-bg, #f1f3f5);
+  overflow: hidden;
+  min-width: 0;
+}
+.lts-fill { display: block; height: 100%; border-radius: 88px; }
+.lts-num {
+  font-size: 13px;
+  text-align: right;
+  color: var(--c-text-main);
+  font-variant-numeric: tabular-nums;
+}
+.lts-pct {
+  font-size: 11px;
+  text-align: right;
+  color: var(--c-text-sub);
+  font-variant-numeric: tabular-nums;
+}
+.lts-note { margin: 2px 0 0; font-size: 11px; color: var(--c-text-sub); }
+
 /* 视图级滚动容器（2026-09-07 覆盖式滚动条 OverlayScroll）：
    原生条隐藏不占宽 + 拇指自动隐藏；滚动体接管布局（列布局/间距/内边距） */
 .archive-view {
@@ -4100,6 +4137,58 @@ img.hero-avatar {
   align-items: center;
   gap: 5px;
   flex: none;
+}
+
+/* T4（2026-10-12）：胶囊从"只读统计"变成**筛选按钮** —— 原来它是个 `div`，
+   现在同一条 `button` 需要把浏览器默认外观清掉才长得跟原来一模一样。 */
+.lc-stat-btn,
+.lc-stat-reset {
+  appearance: none;
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+  border-radius: 88px;
+}
+
+/* 选中态：胶囊描一圈深色 + 轻微下沉。⚠️ 不用 `opacity` 表示"没选中"——
+   那会让 9 个品类里有 8 个看起来像禁用（用户会以为不能点）。 */
+.lc-stat-btn .lc-stat-pill,
+.lc-stat-reset .lc-stat-pill {
+  outline: 2px solid transparent;
+  outline-offset: 1px;
+  transition: outline-color .12s ease;
+}
+
+.lc-stat-btn:hover .lc-stat-pill,
+.lc-stat-btn:focus-visible .lc-stat-pill {
+  outline-color: var(--c-text-sub, #727272);
+}
+
+.lc-stat-btn.on .lc-stat-pill {
+  outline-color: var(--c-text-main, #1f2328);
+}
+
+.lc-stat-btn.on .lc-stat-num {
+  font-weight: 600;
+}
+
+/* 「全部」= 中性胶囊（不占任何一个品类的颜色，免得被读成"这也是某一类"） */
+.lc-stat-pill--all {
+  background: #e5e7eb;
+  color: var(--c-text-main, #1f2328);
+}
+
+.lc-stat-reset-inline {
+  appearance: none;
+  border: 0;
+  background: none;
+  padding: 0 2px;
+  font: inherit;
+  color: var(--c-accent, #2f6feb);
+  cursor: pointer;
+  text-decoration: underline;
 }
 
 .lc-stat-pill {

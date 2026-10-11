@@ -1,5 +1,5 @@
 import type {
-  AgreementState, Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliPlayInfo, BiliSegments, Capabilities, DouyinCookieSaved, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveGiftDay, LiveSession, LiveSessionDetail, LiveSessionWriteIn, LiveUpstream, NameSearchResult, NoticesResponse, PairingInfo, PoolItem, Post, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyOverview, ThirdpartyVtuber, AssetsInfo, AssetsPruneResult, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, VodCandidatesResult, XhsCookieSaved } from './types'
+  AgreementState, Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliPlayInfo, BiliSegments, Capabilities, DouyinCookieSaved, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveGiftDay, LiveSession, LiveSessionDetail, LiveSessionWriteIn, LiveTypeStats, LiveUpstream, NameSearchResult, NoticesResponse, PairingInfo, PoolItem, Post, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyOverview, ThirdpartyVtuber, AssetsInfo, AssetsPruneResult, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, VodCandidatesResult, XhsCookieSaved } from './types'
 import { ApiError, ApiShapeError } from './errors'
 import { HOST_HEADER, myHost } from '../utils/hostIdentity'
 import {
@@ -472,9 +472,21 @@ export const api = {
   getVtuberAvatars: (vtuberId: number) =>
     request<VTuberAvatars>(`/vtuber/${vtuberId}/avatars`),
 
-  /** 直播场次（由 self 快照转移推导） */
-  liveSessions: (accountId: number) =>
-    request<LiveSession[]>(`/account/${accountId}/live-sessions`),
+  /** 直播场次（由 self 快照转移推导）
+   *
+   *  `types`（T4，2026-10-12）：只取这几类（逗号分隔的 key；空/不传 = 全部）。
+   *  口径在服务端（合并后的组上筛，见 `routers/vtuber.py::live_sessions`）——
+   *  前端不再自己实现一套"什么算这一类"。 */
+  liveSessions: (accountId: number, types?: string[]) =>
+    request<LiveSession[]>(
+      `/account/${accountId}/live-sessions`
+      + (types && types.length ? `?types=${encodeURIComponent(types.join(','))}` : ''),
+    ),
+
+  /** 按类型统计场次数（T4）：数据视图「场次类型」卡片用。
+   *  ⚠️ 与日历同源（服务端一套生效值口径）⇒ 卡片数字与用户数日历数出来的一致。 */
+  liveTypeStats: (accountId: number) =>
+    request<LiveTypeStats>(`/account/${accountId}/live-type-stats`),
 
   /** 单场次详情（详情弹窗）—— 只含本地库数据，不发起第三方请求（devlog/063） */
   liveSessionDetail: (accountId: number, liveId: string) =>

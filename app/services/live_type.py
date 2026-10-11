@@ -36,6 +36,14 @@ CATEGORY_KEYS = frozenset({GAME, CHAT, WATCH, UPLOAD, SONG,
 # 用户可校正的分类（不含 live 兜底——校正「直播」无意义）
 EDITABLE_CATEGORY_KEYS = CATEGORY_KEYS - {LIVE}
 
+#: 展示顺序（T4，2026-10-12）：按类型统计的卡片/筛选项都按它排。
+#: ⚠️ **必须与前端 `frontend/src/utils/liveType.ts::LIVE_TYPE_ORDER` 同序** ——
+#: 两边各有一份（前端要能独立渲染骨架屏），顺序漂了会让"卡片上的柱子次序"
+#: 与"筛选条里的胶囊次序"对不上，而那种错只有肉眼能发现。
+#: 兜底 `live` **不在**这个序列里（永远排最后，见 `routers/vtuber.py::live_type_stats`）。
+TYPE_DISPLAY_ORDER: tuple[str, ...] = (CHAT, GAME, WATCH, UPLOAD, SONG,
+                                       FITNESS, RADIO, COLLAB, SPECIAL)
+
 # 标题词条表：词 → 权重。
 # 权重语义：强特征词（≥2.5）单发即自信（如 歌回/杂谈/联动/观影）；
 # 泛词（1.5-2.0）只参与聚合，命中单个不自信（落到系列/分区/学习词库）。

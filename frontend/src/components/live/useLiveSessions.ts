@@ -28,7 +28,7 @@
  * 唯一的证据是 `scripts/ui_probe.py --archive --calendar-expect <sha256>`
  * （日历 42 格实渲染文本的位级比对）。**改这个文件前后都必须跑它。**
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type { LiveSession } from '../../api/types'
 import { api } from '../../api/api'
@@ -57,7 +57,12 @@ export interface UseLiveSessions {
   /** 月份游标（0-based 月） */
   ym: { y: number; m: number }
   setYm: React.Dispatch<React.SetStateAction<{ y: number; m: number }>>
+  /** **筛选后**的场次（日历网格/日期格用它） */
   sessions: LiveSession[]
+  /** 本账号**全量**场次（不受类型筛选影响）。
+   *  ⚠️ 它存在的唯一理由是筛选条的计数：用 `sessions` 算会出现"选了 A 之后 B 的计数
+   *  凭空消失"（用户没法再切到 B）。日历以外的读者别用它 —— 那会绕过筛选。 */
+  allSessions: LiveSession[]
   loading: boolean
   error: string | null
   setError: React.Dispatch<React.SetStateAction<string | null>>
@@ -77,6 +82,10 @@ export interface UseLiveSessions {
   popYear: number
   setPopYear: React.Dispatch<React.SetStateAction<number>>
   navRef: React.RefObject<HTMLDivElement>
+  /** 按类型筛选（T4，2026-10-12）：空数组 = 不筛。
+   *  ⚠️ 只按类型 key 筛（`category`），不筛别的 —— 与服务端 `types=` 同一套值。 */
+  typeFilter: string[]
+  setTypeFilter: React.Dispatch<React.SetStateAction<string[]>>
   /** 重新拉取场次列表（分类校正保存后调用） */
   reload: () => void
   /** 重新拉取某场详情（校正后让徽章/分类来源即时更新）。
@@ -98,7 +107,10 @@ export function useLiveSessions(
   onDataRefresh: () => void,
 ): UseLiveSessions {
   const [ym, setYm] = useState<{ y: number; m: number }>({ y: now.getFullYear(), m: now.getMonth() })
-  const [sessions, setSessions] = useState<LiveSession[]>([])
+  const [allSessions, setAllSessions] = useState<LiveSession[]>([])
+  /** 类型筛选（T4）：**留在这里而不是组件里**，这样 `reload()` 的口径只有一处 ——
+   *  否则"刷新之后筛选还在不在"会变成两条路径各答一次。 */
+  const [typeFilter, setTypeFilter] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -150,7 +162,7 @@ export function useLiveSessions(
     api
       .liveSessions(accountId)
       .then((s) => {
-        if (seq === loadSeq.current) setSessions(s)
+        if (seq === loadSeq.current) setAllSessions(s)
       })
       .catch((e: Error) => {
         if (seq === loadSeq.current) setError(e.message || '场次加载失败')
@@ -158,6 +170,21 @@ export function useLiveSessions(
       .finally(() => {
         if (seq === loadSeq.current) setLoading(false)
       })
+  }, [accountId])
+
+  /** 筛选在**服务端**做吗？—— 不。T4 的 `types=` 确实在服务端（`routers/vtuber.py`），
+   *  但这一页每次都要**全量**（筛选条的计数要看得见别的类型），所以这里一次取全量、
+   *  在本地按同一个 key 筛。⚠️ 判据是"筛的是什么"（类型 key，服务端定的值），
+   *  不是"在哪一行代码里筛" —— 前端不重新定义任何类型的含义。 */
+  const sessions = useMemo(() => {
+    if (!typeFilter.length) return allSessions
+    const want = new Set(typeFilter)
+    return allSessions.filter((s) => want.has(s.category ?? 'live'))
+  }, [allSessions, typeFilter])
+
+  /** 账号切换 → 清掉类型筛选（新账号的分布不同，留着会显示成"这个 V 没有场次"）。 */
+  useEffect(() => {
+    setTypeFilter([])
   }, [accountId])
 
   /** 分类校正后刷新详情：原实现是「校正完直接打详情接口再回写」，
@@ -220,9 +247,10 @@ export function useLiveSessions(
   }, [catPopOpen])
 
   return {
-    ym, setYm, sessions, loading, error, setError, navDir, setNavDir,
+    ym, setYm, sessions, allSessions, loading, error, setError, navDir, setNavDir,
     detail, setDetail, catPopOpen, setCatPopOpen, catPopRef,
-    monthPopOpen, setMonthPopOpen, popYear, setPopYear, navRef, reload, reloadDetail,
+    monthPopOpen, setMonthPopOpen, popYear, setPopYear, navRef,
+    typeFilter, setTypeFilter, reload, reloadDetail,
   }
 }
 

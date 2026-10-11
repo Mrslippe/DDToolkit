@@ -7,12 +7,13 @@
  * R37-P4a（`docs/design-archive-cards.md` §3）：每种卡片必须给出贴纸角标的**图标 + 色调**，
  * 缺一个 `registerCardKind` 当场抛错 —— 所以"加了卡片但没有角标"这种半成品进不来。
  */
-import { Cake, Coins, Flag, Shuffle } from 'lucide-react'
+import { Cake, Coins, Flag, PieChart, Shuffle } from 'lucide-react'
 
 import { registerCardKind } from '../cardRegistry'
 import AnniversaryCard from './AnniversaryCard'
 import EventsCard from './EventsCard'
 import GiftDaysCard from './GiftDaysCard'
+import LiveTypeStatsCard from './LiveTypeStatsCard'
 import TopPostsCard from './TopPostsCard'
 
 registerCardKind({
@@ -54,4 +55,16 @@ registerCardKind({
   icon: Coins,
   tone: 'gray',
   render: (ctx) => <GiftDaysCard {...ctx} />,
+})
+
+// T4（2026-10-12，devlog/467）：类型**落库**之后，「按类型统计」才第一次成为可能 ——
+// 在此之前类型是每请求现算的，库里没有这一列可聚合。
+// 加这张卡同样只写了 `utils/liveTypeStats.ts` + `LiveTypeStatsCard.tsx` + 这一行。
+registerCardKind({
+  kind: 'live-type-stats',
+  title: '场次类型',
+  defaultSize: { w: 7, h: 4 },
+  icon: PieChart,
+  tone: 'navy',
+  render: (ctx) => <LiveTypeStatsCard {...ctx} />,
 })

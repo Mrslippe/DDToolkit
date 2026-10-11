@@ -2914,6 +2914,57 @@ def test_stored_lookup_needs_src_live_ids(client):
     db.close()
 
 
+def test_live_type_stats_matches_the_calendar(client):
+    """★T4：按类型统计与日历**同源**（校正 / 虚拟场次 / 未落库行都不许算丢）。
+
+    为什么不用 `GROUP BY category`：那会漏掉虚拟场次（没有行）与未落库的老行（NULL），
+    数字比日历小，而用户没有别的办法核对哪个对。
+    """
+    aid = _mk_account(client)
+    db = TestingSession()
+    _sync_danmakus(db, aid, [
+        _dm("dm-1", "周六来唱歌！", datetime(2026, 9, 5, 12, 0)),      # song/title
+        _dm("dm-2", "原神深渊", datetime(2026, 9, 6, 12, 0)),          # game/title
+        # 判不出来 ⇒ 落库 NULL（兜底不落库），统计里算进中性 live
+        _dm("dm-3", "今天", datetime(2026, 9, 7, 12, 0), area="", parentArea=""),
+    ])
+    db.close()
+    # 校正一场：统计要跟着变（生效值口径）
+    assert client.put(f"/account/{aid}/live-sessions/dm-2/category",
+                      json={"category": "chat"}).status_code == 200
+
+    stats = client.get(f"/account/{aid}/live-type-stats").json()
+    by = {i["category"]: i["count"] for i in stats["items"]}
+    assert by == {"song": 1, "chat": 1, "live": 1}, f"统计与日历不同源：{by}"
+    assert stats["total"] == 3
+    # 落库非空只有 2 条（dm-3 判不出来 ⇒ NULL）—— 卡片要能如实说出这个差
+    assert stats["classified"] == 2, "classified 应当只数真有落库类型的行"
+    # 顺序 = 前端的展示顺序，兜底永远最后
+    assert [i["category"] for i in stats["items"]][-1] == "live"
+
+
+def test_live_sessions_types_filter(client):
+    """★T4：`types=` 在服务端筛（前端不再自己实现一套口径）。"""
+    aid = _mk_account(client)
+    db = TestingSession()
+    _sync_danmakus(db, aid, [
+        _dm("dm-1", "周六来唱歌！", datetime(2026, 9, 5, 12, 0)),      # song
+        _dm("dm-2", "原神深渊", datetime(2026, 9, 6, 12, 0)),          # game
+    ])
+    db.close()
+
+    assert len(client.get(f"/account/{aid}/live-sessions").json()) == 2
+    only = client.get(f"/account/{aid}/live-sessions?types=song").json()
+    assert [s["category"] for s in only] == ["song"]
+    both = client.get(f"/account/{aid}/live-sessions?types=song,game").json()
+    assert len(both) == 2
+    # 空/全是空白 = 不筛（不是"筛出 0 条"）
+    assert len(client.get(f"/account/{aid}/live-sessions?types=").json()) == 2
+    # 认不出的值不报错，只是筛不出东西（体系调整期前端可能带旧值来）
+    assert client.get(f"/account/{aid}/live-sessions?types=sports").json() == []
+    assert client.get(f"/account/{aid}/live-sessions?types=sports").status_code == 200
+
+
 def test_manual_session_is_settled_on_create_and_update(client):
     """手动记录也走同一条写时定稿（新增 + 改标题）。"""
     vid = client.post("/vtuber", json={"name": "手动"}).json()["id"]
