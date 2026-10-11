@@ -1,8 +1,10 @@
 """直播类型推断引擎 v2（v0.9.x 内容管道 M4+）。
 
 用户决策（2026-09-07）：维持 9 类体系（与前端徽章/统计胶囊颜色体系一致），
-推断在服务端（多信号可用：标题关键词 + danmakus 直播分区 + 纪念日锚点），
-读取时计算不落库（延续「语义纯展示，不落库」定案）。
+推断在服务端（多信号可用：标题关键词 + danmakus 直播分区 + 纪念日锚点）。
+⚠️ 2026-10-12（T3）：**「健身」换成「助眠」**（用户口径「沿用现有的 10 类，但健身删掉，
+换成助眠」）；同批类型改成**写时定稿**（`app/services/live_settle.py`），
+读取时 `series`/`learned` 两档已下线（它们要看全账号历史，与"只看这一场"冲突）。
 
 v2 多信号带权评分（user 2026-09-07 需求：虚拟日常分区万金油，
 单靠分区/首个关键词不可靠 → 标题多词评分 + 系列聚类 + 用户校正闭环）：
@@ -11,15 +13,17 @@ v2 多信号带权评分（user 2026-09-07 需求：虚拟日常分区万金油�
 1. override   用户校正（live_category_overrides，(account_id, live_id) 唯一）
 2. series     系列聚类（同账号标题骨架相同的场次组，聚合投票 + 校正投票；
                作用：一场校正 → 整系列传播；标题残缺场次按系列归类）
+               ⚠️ **2026-10-12 起不再用于落库与读取**（见 `live_settle` 模块头）
 3. title      标题多词评分（词条带权：强特征 ≥2.5 单发即自信；
                并列同分按 TITLE_CATEGORY_PRIORITY 兜底）
 4. learned    校正反哺词库（被校正标题的词条 → 该账号对应分类加权）
+               ⚠️ 同上，2026-10-12 起不再用于落库与读取
 5. area       直播分区（area_name > parent_area_name）
 6. date       纪念日锚点（生日 MM-DD / 出道日 / vtuber_events 当日 → special）
 7. fallback   live（「直播」）
 
 输出 (category, category_from)：category ∈ game/chat/watch/upload/song/
-fitness/radio/collab/special/live；category_from ∈ override/series/title/
+sleep/radio/collab/special/live；category_from ∈ override/series/title/
 learned/area/date/fallback。
 """
 from __future__ import annotations
@@ -29,10 +33,13 @@ from datetime import datetime
 
 # 分类 key（与前端 utils/liveType.ts 的 LIVE_TYPE_KEY 对齐）
 GAME, CHAT, WATCH, UPLOAD, SONG = "game", "chat", "watch", "upload", "song"
-FITNESS, RADIO, COLLAB, SPECIAL, LIVE = "fitness", "radio", "collab", "special", "live"
+# ⚠️ `SLEEP`（助眠）**取代**了原来的 `FITNESS`（健身）—— 2026-10-12 T3，用户口径
+# 「沿用现有的 10 类，但健身删掉，换成助眠」。判据：`tests/test_vtuber_api.py::
+# test_frontend_type_keys_match_backend_taxonomy`（前后端两份表必须同集）。
+SLEEP, RADIO, COLLAB, SPECIAL, LIVE = "sleep", "radio", "collab", "special", "live"
 
 CATEGORY_KEYS = frozenset({GAME, CHAT, WATCH, UPLOAD, SONG,
-                           FITNESS, RADIO, COLLAB, SPECIAL, LIVE})
+                           SLEEP, RADIO, COLLAB, SPECIAL, LIVE})
 # 用户可校正的分类（不含 live 兜底——校正「直播」无意义）
 EDITABLE_CATEGORY_KEYS = CATEGORY_KEYS - {LIVE}
 
@@ -42,7 +49,7 @@ EDITABLE_CATEGORY_KEYS = CATEGORY_KEYS - {LIVE}
 #: 与"筛选条里的胶囊次序"对不上，而那种错只有肉眼能发现。
 #: 兜底 `live` **不在**这个序列里（永远排最后，见 `routers/vtuber.py::live_type_stats`）。
 TYPE_DISPLAY_ORDER: tuple[str, ...] = (CHAT, GAME, WATCH, UPLOAD, SONG,
-                                       FITNESS, RADIO, COLLAB, SPECIAL)
+                                       SLEEP, RADIO, COLLAB, SPECIAL)
 
 # 标题词条表：词 → 权重。
 # 权重语义：强特征词（≥2.5）单发即自信（如 歌回/杂谈/联动/观影）；
@@ -67,13 +74,29 @@ TITLE_TERMS: dict[str, dict[str, float]] = {
         "联动回": 3.5, "联动": 3.0, "合作": 3.0, "嘉宾": 3.0, "连麦": 3.0, "合唱": 3.0,
         "客串": 3.0, "双人": 1.5, "三人": 1.5, "多人": 1.5,
     },
-    FITNESS: {
-        "健身": 3.0, "锻炼": 3.0, "减肥": 3.0, "瘦身": 3.0, "瑜伽": 3.0, "帕梅拉": 3.0,
-        "拉伸": 3.0, "跳操": 3.0, "运动": 2.0, "舞蹈": 2.0,
+    # ⚠️ 2026-10-12（T3）：`FITNESS` 换成了 `SLEEP`（助眠）。**只收语义确定的词** ——
+    # 真机 8,515 条有标题的场次里，明确指向助眠的词（助眠/哄睡/白噪音/ASMR/音声/伴睡/
+    # 耳骚/冥想）**一次都没出现**，也就是说这几个词是"备着"的、今天命中 0 条。
+    # ⚠️ 故意**不收**的几类（都量过，见 docs/plans/live-type-sleep-terms.md）：
+    #   · 「工作音」28 条 → 实测那批是 `【工作音】学歌（1-5）` 这类**陪伴学歌**直播，
+    #     加了它只会与 `song`（学歌回/歌回）抢票，并不会真的把它们判成助眠；
+    #   · 「晚安」6 条 / 「早睡」7 条 / 「睡」75 条 → 多数是"聊到睡"的杂谈与下播告别
+    #     （`聊一会会儿睡！`、`通宵没睡低气压碎碎念中……`），收了会把判对的场次改错。
+    # 要收哪些词是**用户过目项**（T3 的开放问题），改这一处即可。
+    SLEEP: {
+        "助眠": 3.0, "哄睡": 3.0, "白噪音": 3.0, "asmr": 3.0, "音声": 2.5,
+        "伴睡": 3.0, "耳骚": 3.0, "冥想": 2.5,
     },
     RADIO: {
-        "电台": 3.0, "asmr": 3.0, "晚安": 3.0, "伴睡": 3.0, "陪聊": 3.0, "谈心": 3.0,
-        "哄睡": 3.0, "助眠": 3.0, "朗读": 2.5, "轻音乐": 2.0,
+        # ⚠️ 2026-10-12（T3）：`asmr`/`伴睡`/`哄睡`/`助眠` 四个词**搬去了 SLEEP** ——
+        # 留在两边会让同一串标题同时命中两类、`_confident`（要求领先 1.0）判不出自信，
+        # 于是「助眠」「哄睡」这种**最该判对**的标题反而落回中性。
+        # 实测（分离前）：`score_title("助眠")` → `{sleep: 3.0, radio: 3.0}` ⇒ 兜底。
+        # 留在电台的是**节目感**那一组：电台 / 陪聊 / 谈心 / 朗读 / 轻音乐。
+        "电台": 3.0, "陪聊": 3.0, "谈心": 3.0, "朗读": 2.5, "轻音乐": 2.0,
+        # `晚安` 留在电台：真机 6 条命中里，`晚安提问箱喵`（提问箱=杂谈）、
+        # 下播告别那几条都不是助眠内容（见 docs/plans/live-type-sleep-terms.md）。
+        "晚安": 3.0,
     },
     CHAT: {
         "杂谈": 3.0, "闲聊": 3.0, "随聊": 3.0, "漫谈": 3.0, "棉花糖": 3.0, "茶话会": 3.0,
@@ -97,10 +120,10 @@ TITLE_TERMS: dict[str, dict[str, float]] = {
     },
 }
 
-# 并列同分兜底顺序（与 v1 规则顺序一致：特殊 > 歌回 > 观影 > 联动 > 健身 > 电台 >
+# 并列同分兜底顺序（与 v1 规则顺序一致：特殊 > 歌回 > 观影 > 联动 > 助眠 > 电台 >
 # 杂谈 > 游戏 > 投稿）
 TITLE_CATEGORY_PRIORITY: tuple[str, ...] = (
-    SPECIAL, SONG, WATCH, COLLAB, FITNESS, RADIO, CHAT, GAME, UPLOAD,
+    SPECIAL, SONG, WATCH, COLLAB, SLEEP, RADIO, CHAT, GAME, UPLOAD,
 )
 
 # 校正投票权重：一场校正 > 单场强词（3.0）+；可改写系列聚合但弱于多数派
@@ -116,8 +139,14 @@ AREA_RULES: list[tuple[str, list[str]]] = [
     (SONG, ["虚拟singer", "虚拟歌", "唱歌", "音乐", "演唱会", "歌舞", "唱见", "乐器"]),
     (GAME, ["虚拟gamer", "主机游戏", "单机游戏", "网络游戏", "手机游戏", "手游", "网游", "游戏"]),
     (WATCH, ["剧场", "影视", "电影", "番剧", "放映"]),
-    (FITNESS, ["健身", "运动", "体育", "舞蹈"]),
-    (RADIO, ["电台", "朗读", "助眠", "asmr"]),
+    # ⚠️ 2026-10-12（T3）：这一行原来是 `(FITNESS, ["健身", "运动", "体育", "舞蹈"])`。
+    # 健身类分区在真机上**不存在**（没有主播挂那种分区），而分区那一路的宽匹配
+    # （"运动"这个词）会把「运动」类直播拉进一个已经删掉的类目 ⇒ 直接删掉整行，
+    # 让它们落回 `CHAT` 的默认分区档（虚拟日常/日常/娱乐…）或中性兜底。
+    # 助眠那一条**从 RADIO 挪过来**（原来 `助眠`/`asmr` 挂在电台下）：分区里出现这两个词
+    # 时语义就是助眠，挂在电台下等于永远判错。
+    (SLEEP, ["助眠", "asmr", "白噪音", "哄睡"]),
+    (RADIO, ["电台", "朗读"]),
     (CHAT, ["聊天室", "知识", "虚拟日常", "日常", "生活", "娱乐", "情感", "杂谈",
             "talk", "资讯", "户外", "美食", "料理", "绘画", "画画", "手工", "才艺", "教育", "学习"]),
 ]

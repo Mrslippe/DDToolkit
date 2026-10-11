@@ -37,7 +37,10 @@ SEED = 20261012
 PER_STRATUM = 20
 
 #: 允许的真值（含 `?`，见 `--ruler` 的说明：故意放进 label 里当作「人眼也判不出」的记录）
-VALID_TRUTH = {"game", "chat", "watch", "upload", "song", "fitness",
+#: ⚠️ 2026-10-12（T3）：`fitness` 已换成 `sleep`（助眠）—— 与
+#: `app/services/live_type.py::CATEGORY_KEYS` 同集，否则 `--collect` 会把
+#: 合法真值判成"不在允许清单里"。
+VALID_TRUTH = {"game", "chat", "watch", "upload", "song", "sleep",
                "radio", "collab", "special", "live", "?"}
 
 
@@ -174,7 +177,7 @@ def generate(args) -> None:
         "| `radio` | 电台 | 电台/谈心/深夜陪聊/ASMR/哄睡（**与 `chat` 的边界：有「节目感」的算电台**） |",
         "| `collab` | 联动 | 与人联动/嘉宾/连麦/合唱 |",
         "| `special` | 特殊 | 生日/周年/出道纪念/毕业/跨年等**一次性事件** |",
-        "| `fitness` | 健身 | ⚠️ **本批要换成「助眠」** —— 见到健身类请照旧标 `fitness`，我会在 T3 一起处理 |",
+        "| `sleep` | 助眠 | 助眠/哄睡/白噪音/ASMR 这类**明确的助眠内容**（判不准就别硬套） |",
         "| `live` | 直播 | 中性兜底（**判不出来时选它**） |",
         "",
         "## 抽样与口径",

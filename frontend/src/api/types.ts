@@ -349,7 +349,8 @@ export interface LiveSession {
   manual?: boolean
   /** 中断续播并段数（v2 合并，1=单场；>1 表示该场为多次断开续播） */
   segment_count?: number
-  /** 类型 key（服务端定稿：game/chat/watch/upload/song/fitness/radio/collab/special/live） */
+  /** 类型 key（服务端定稿：game/chat/watch/upload/song/sleep/radio/collab/special/live）
+   *  ⚠️ 2026-10-12（T3）：「健身」（fitness）换成了「助眠」（sleep）。 */
   category?: string
   /** 类型来自哪一档（v3，2026-10-12 落库后：override/title/area/date/fallback/unknown）。
    *  ⚠️ `series`/`learned` 两档已随类型落库下线（它们要看全账号历史，与"只看这一场"冲突）。 */

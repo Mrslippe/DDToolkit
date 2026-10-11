@@ -2844,8 +2844,8 @@ def test_lazy_backfill_leaves_fallback_rows_null(client):
 def test_unknown_stored_category_degrades_to_neutral(client):
     """★C4：库里塞一个未知分类值 ⇒ 读数退回中性，筛选里不出现空壳。
 
-    ⚠️ 值要用**真正不存在**的枚举（`sports`）：`fitness` 今天还合法 ——
-    本批的「健身 → 助眠」在 T3，那时它才会变成"旧值"。
+    ⚠️ 值要用**真正不存在**的枚举（`sports`）：`fitness` 曾是合法值，2026-10-12（T3）
+    换成了 `sleep` —— 拿一个"曾经合法"的值当未知值测，体系一变这条用例就悄悄失去意义。
     """
     aid = _mk_account(client)
     db = TestingSession()

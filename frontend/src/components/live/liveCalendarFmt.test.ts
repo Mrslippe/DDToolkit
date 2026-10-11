@@ -202,6 +202,9 @@ describe('missingTypeTones — 类型 key 与色调类必须齐', () => {
   it('正对照：先证明这套读法真的读到了东西（否则下面那条恒真）', () => {
     expect(classes.has('lc-tone-song')).toBe(true)
     expect(classes.has('lc-stat-pill--radio')).toBe(true)
+    // T3（2026-10-12）换体系后新加的那套色调——**它也证明这类名真的在更新**
+    expect(classes.has('lc-tone-sleep')).toBe(true)
+    expect(classes.has('lc-stat-pill--sleep')).toBe(true)
     expect(classes.size).toBeGreaterThan(10)
   })
 
@@ -211,6 +214,9 @@ describe('missingTypeTones — 类型 key 与色调类必须齐', () => {
   })
 
   it('★反向验证：故意漏掉一个类型 ⇒ 当场点名（这条判据不是恒真的）', () => {
-    expect(missingTypeTones(['song', 'sleep'], classes)).toEqual(['sleep'])
+    // ⚠️ 用一个**永远不可能合法**的 key：第一版写的是 `'sleep'`，T3 真加了助眠之后
+    // 它有色调类了 ⇒ 这条反向验证**自己过期**（从"证明判据会红"变成"证明判据恒真"）。
+    // 反向验证的素材必须选不会随产品演进而变成真值的值。
+    expect(missingTypeTones(['song', 'nosuchtype'], classes)).toEqual(['nosuchtype'])
   })
 })

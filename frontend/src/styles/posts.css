@@ -4221,7 +4221,12 @@ img.hero-avatar {
 .lc-stat-pill--song    { background: #ffc9c4; }
 .lc-stat-pill--radio   { background: #dccff7; }
 .lc-stat-pill--collab  { background: #bee9ec; }
-.lc-stat-pill--fitness { background: #ffd5b8; }
+/* ⚠️ T3（2026-10-12）：「健身」→「助眠」时**色调值也改了**（暖橙 → 冷靛蓝：
+   助眠用暖橙在语义上反了）。类名跟着 key 走 —— 旧类名 `.lc-stat-pill--fitness`
+   **必须删掉而不是留着**：色调是按 key 拼出来的（`lc-stat-pill--${key}`），
+   留一个没人用的旧类不会有害，但会让"每个 key 都要有色调类"那条判据
+   （`missingTypeTones`，从 CSS 源码正则取类名）**变成恒真**。 */
+.lc-stat-pill--sleep   { background: #cbd5f5; }
 .lc-stat-pill--special {
   background: transparent;
   border: 1px solid #d8645e;
@@ -4559,7 +4564,7 @@ img.hero-avatar {
 .lc-tone-song    { background: #ffe9e9; color: #d8645e; }
 .lc-tone-radio   { background: #f1ecfb; color: #8b6fd8; }
 .lc-tone-collab  { background: #e2f5f6; color: #2fa5ad; }
-.lc-tone-fitness { background: #fff0e0; color: #e0804a; }
+.lc-tone-sleep   { background: #eef2ff; color: #4f5fc4; }
 .lc-tone-special { background: #fdecec; color: #d8645e; }
 .lc-tone-live    { background: #eef1f5; color: #64748b; }
 
@@ -4571,7 +4576,7 @@ img.hero-avatar {
 .lc-tone-song    .lc-badge { background: #ffc9c4; }
 .lc-tone-radio   .lc-badge { background: #dccff7; }
 .lc-tone-collab  .lc-badge { background: #bee9ec; }
-.lc-tone-fitness .lc-badge { background: #ffd5b8; }
+.lc-tone-sleep   .lc-badge { background: #cbd5f5; }
 .lc-tone-special .lc-badge { background: transparent; border: 1px solid #d8645e; color: #d8645e; padding: 0 3px; }
 .lc-tone-live    .lc-badge { background: #94a3b8; color: #fff; }
 
@@ -4583,7 +4588,7 @@ img.hero-avatar {
 .lc-tone-song    .lc-time { color: rgba(216, 100, 94, 0.5); }
 .lc-tone-radio   .lc-time { color: rgba(139, 111, 216, 0.5); }
 .lc-tone-collab  .lc-time { color: rgba(47, 165, 173, 0.5); }
-.lc-tone-fitness .lc-time { color: rgba(224, 136, 74, 0.5); }
+.lc-tone-sleep   .lc-time { color: rgba(79, 95, 196, 0.5); }
 .lc-tone-special .lc-time { color: rgba(216, 100, 94, 0.5); }
 .lc-tone-live    .lc-time { color: rgba(100, 116, 139, 0.5); }
 

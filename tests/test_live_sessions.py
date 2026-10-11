@@ -624,6 +624,43 @@ def test_category_area_signal(db):
     assert infer_category("歌回", area_name="主机游戏", parent_area_name="单机游戏")[0] == "song"
 
 
+# ── 助眠（T3，2026-10-12：取代「健身」）────────────────────────────
+#
+# ⚠️ 这一组守的是**词表分离**，不只是"新类目能用"：`助眠`/`哄睡`/`asmr`/`伴睡`
+# 原来挂在 `RADIO` 下，两边都留 ⇒ 同一串标题同时命中两类、`_confident`（要求领先 1.0）
+# 判不出自信 ⇒ **最该判对的标题反而落回中性**（施工时实测：`score_title("助眠")`
+# → `{sleep: 3.0, radio: 3.0}` ⇒ fallback）。所以这里既判"归助眠"，也判"不再归电台"。
+
+def test_category_sleep_replaces_fitness(db):
+    """★用户口径：沿用 10 类，但「健身」换成「助眠」。"""
+    from app.services.live_type import CATEGORY_KEYS, TYPE_DISPLAY_ORDER
+
+    assert "sleep" in CATEGORY_KEYS and "fitness" not in CATEGORY_KEYS
+    assert "sleep" in TYPE_DISPLAY_ORDER and "fitness" not in TYPE_DISPLAY_ORDER
+    # 旧的健身词条必须失效（真机那 58 条标题命中应当重新判）
+    assert infer_category("健身鹮！")[0] != "fitness"
+    assert infer_category("来运动！")[0] != "fitness"
+
+
+def test_category_sleep_words_are_confident(db):
+    """★分离之后，明确的助眠标题要**判得出来**（施工前它们全部落回兜底）。"""
+    for title in ("助眠", "哄睡向", "ASMR 白噪音", "伴睡音声", "耳骚", "冥想一下"):
+        assert infer_category(title) == ("sleep", "title"), f"{title!r} 没判成助眠"
+    # 分区那一路也认（原挂在 RADIO 下）
+    assert infer_category("", area_name="助眠", parent_area_name="虚拟主播") == ("sleep", "area")
+
+
+def test_category_radio_keeps_only_the_programme_words(db):
+    """★电台那条**不再**收助眠词：两边都留会让平分 ⇒ 兜底（反向判据）。"""
+    assert infer_category("【电台】冬夜小播")[0] == "radio"
+    assert infer_category("深夜谈心")[0] == "radio"
+    # 这几个必须走 sleep，不许被电台抢走
+    for title in ("助眠", "哄睡", "asmr", "伴睡"):
+        assert infer_category(title)[0] == "sleep", f"{title!r} 被电台抢走了"
+    # `晚安` 留在电台：真机 6 条命中都不是助眠内容（提问箱/下播告别）
+    assert infer_category("晚安")[0] == "radio"
+
+
 def test_category_date_anchor(db):
     # 生日当日（MM-DD）
     assert infer_category("", start_at=T0, birthday="09-01") == ("special", "date")
