@@ -55,6 +55,11 @@ class VTuber(Base):
     #: ⚠️ 一个 V 只一列（现实里只属一个企划）；真出现多企划再加关联表，这两列当"主企划"。
     group_name = Column(Text, nullable=True)
     group_uuid = Column(Text, nullable=True)
+    #: **录播号**（需求 2.1 / C1，迁移 f015）：用户为这个 V 指定的 B 站 mid（多个用逗号分隔）。
+    #: 为什么需要：真机实测那 12 个 V **自己都不发回放**（投稿普遍 3~5 分钟，是剪辑/翻唱）
+    #: —— 回放在"专门录播号"上，所以"用户指定一个号"是这个功能唯一能真正找到回放的入口。
+    #: ⚠️ 是**自由字符串**不是外键：录播号多半不在我们库里（用户从 B 站搜来直接用）。
+    vod_account_uid = Column(Text, nullable=True)
     created_at = Column(DateTime, default=_now)
     updated_at = Column(DateTime, default=_now, onupdate=_now)
 

@@ -162,6 +162,9 @@ class VTuberOut(BaseModel):
     #: `group_uuid` 是 vdb 的稳定 UUID（跨源对齐用）；来自本地索引那份没有它 ⇒ 允许为 None。
     group_name: str | None = None
     group_uuid: str | None = None
+    #: **录播号**（需求 2.1 / C1，f015，`devlog/464`）：用户为这个 V 指定的 B 站 mid
+    #: （多个用逗号分隔）。「找录播」会连它一起扫（V 自己多半不发回放，实测）。
+    vod_account_uid: str | None = None
     notes: str | None = None
     # 签名来源与覆盖（2026-09-13，devlog/074）：卡片签名 = override → 来源账号 → 主账号
     sign_override: str | None = None
@@ -195,6 +198,8 @@ class VTuberUpdate(BaseModel):
     # 签名来源与覆盖（2026-09-13，devlog/074）——档案设置窗口写这两个
     sign_override: str | None = None
     sign_source_account_id: int | None = None
+    #: **录播号**（f015，`devlog/464`）：`""` = 清空；多个 mid 用逗号分隔
+    vod_account_uid: str | None = None
 
 
 class FormerValueOut(BaseModel):
@@ -656,6 +661,42 @@ class LiveSessionDetailOut(LiveSessionOut):
     本响应保证**不发起任何第三方请求**（`analysis` 仍为预留字段）。
     """
     analysis: LiveAnalysisInfo | None = None
+
+
+class VodCandidateOut(BaseModel):
+    """一条**录播候选**（C1，需求 2.1，`devlog/464`）。
+
+    ⚠️ `reasons` / `cautions` 是给人看的**依据**，不是结论：界面上必须把"为什么像"摆出来，
+    因为没有任何单一信号可信（实测：时间窗内那条可能发布在开播前，也可能根本不是回放）。
+    """
+    mid: str
+    bvid: str = ""
+    title: str = ""
+    permalink: str = ""
+    published_at: datetime | None = None
+    duration_minutes: int | None = None      # 上游 `length` 解析来的分钟数（认不出 ⇒ None）
+    cover_url: str = ""
+    score: int = 0                           # 只用于**排序**
+    reasons: list[str] = []                  # 加分依据
+    cautions: list[str] = []                 # 减分依据（"时长远短"/"发布在开播前"…）
+    title_hits: list[str] = []               # 标题重合的片段
+    #: 是否落在"这一场的回放"时间窗内。**只有为真的才进候选列表**
+    #: （时间窗是硬门槛，见 `services/vod_finder.find_candidates`）
+    in_window: bool = True
+
+    @field_serializer("published_at")
+    def _ser_published_at(self, v: datetime | None):
+        if v is not None and v.tzinfo is None:
+            return v.replace(tzinfo=timezone.utc)
+        return v
+
+
+class VodCandidatesOut(BaseModel):
+    """「找录播」的响应：扫了哪些号、找的是哪段时间、候选有哪些。"""
+    mids: list[str] = []
+    window: str = ""
+    items: list[VodCandidateOut] = []
+    hint: str | None = None                  # 一条都没有时如实说为什么、下一步做什么
 
 
 class LiveUpstreamOut(BaseModel):

@@ -59,6 +59,12 @@ export interface VTuber {
    */
   group_name?: string | null
   group_uuid?: string | null
+  /**
+   * **录播号**（需求 2.1 / C1，f015，`devlog/464`）：用户为这个 V 指定的 B 站 mid，
+   * 多个用逗号分隔。「找录播」会连它一起扫 —— 实测 V 自己多半不发回放，
+   * 这个字段往往是唯一能找到回放的入口。
+   */
+  vod_account_uid?: string | null
   notes: string | null
   /**
    * 签名来源与覆盖（2026-09-13，devlog/074）：卡片签名 =
@@ -200,6 +206,38 @@ export interface NameSearchResult {
   kw: string
   page: number
   groups: NameSearchGroup[]
+}
+
+/** 一条**录播候选**（C1，需求 2.1，`devlog/464`） */
+export interface VodCandidate {
+  mid: string
+  bvid: string
+  title: string
+  permalink: string
+  published_at: string | null
+  /** 上游 `length` 解析来的分钟数（认不出 ⇒ null，**不是 0**） */
+  duration_minutes: number | null
+  cover_url: string
+  /** 只用于**排序**，不是"这就是回放"的结论 */
+  score: number
+  /** 为什么像（时长接近 / 开播后发布 / 标题重合）——界面必须摆出来 */
+  reasons: string[]
+  /** 为什么可疑（时长远短 / 发布在开播前 / 不在时间窗内） */
+  cautions: string[]
+  title_hits: string[]
+  /** 是否落在"这一场的回放"时间窗内（只有为真的才进列表） */
+  in_window: boolean
+}
+
+/** `GET /account/{id}/live-sessions/{live_id}/vod-candidates` 的响应 */
+export interface VodCandidatesResult {
+  /** 扫了哪些 B 站号（V 自己的 + 用户指定的录播号） */
+  mids: string[]
+  /** 找的是哪一段时间（人话） */
+  window: string
+  items: VodCandidate[]
+  /** 一条都没有时如实说为什么、下一步做什么 */
+  hint: string | null
 }
 
 export interface Post {

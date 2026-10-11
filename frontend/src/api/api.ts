@@ -1,5 +1,5 @@
 import type {
-  AgreementState, Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliPlayInfo, BiliSearchResult, BiliSegments, Capabilities, DouyinCookieSaved, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveGiftDay, LiveSession, LiveSessionDetail, LiveSessionWriteIn, LiveUpstream, NameSearchResult, NoticesResponse, PairingInfo, PoolItem, Post, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyOverview, ThirdpartyVtuber, AssetsInfo, AssetsPruneResult, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, XhsCookieSaved } from './types'
+  AgreementState, Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliPlayInfo, BiliSearchResult, BiliSegments, Capabilities, DouyinCookieSaved, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveGiftDay, LiveSession, LiveSessionDetail, LiveSessionWriteIn, LiveUpstream, NameSearchResult, NoticesResponse, PairingInfo, PoolItem, Post, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyOverview, ThirdpartyVtuber, AssetsInfo, AssetsPruneResult, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, VodCandidatesResult, XhsCookieSaved } from './types'
 import { ApiError, ApiShapeError } from './errors'
 import { HOST_HEADER, myHost } from '../utils/hostIdentity'
 import {
@@ -555,6 +555,19 @@ export const api = {
     }),
 
   /**
+   * **给这一场找录播**（C1，需求 2.1，`devlog/464`）：只返回候选，**不写任何东西**。
+   *
+   * 扫的账号 = 该 V 的 B 站号 + 用户指定的录播号（`vtubers.vod_account_uid`）；
+   * `mid` 可再临时加一个（用户从 B 站搜来的录播号，先试一次）。
+   * ⚠️ 真机实测：回放多半**不在 V 自己的号上**（他们发的是剪辑/翻唱），
+   * 而且当天刚播完的场次通常还没发 ⇒ 空结果很正常，`hint` 会如实说下一步做什么。
+   */
+  vodCandidates: (accountId: number, liveId: string, mid?: string) =>
+    request<VodCandidatesResult>(
+      `/account/${accountId}/live-sessions/${encodeURIComponent(liveId)}/vod-candidates`
+      + (mid ? `?mid=${encodeURIComponent(mid)}` : '')),
+
+  /**
    * 局部更新场次（B2）：**手动记录的**可改时间/标题/录播地址，自动抓来的只能补录播地址
    * （服务端 400 + 中文原因）。
    *
@@ -591,6 +604,8 @@ export const api = {
     setting?: string | null
     notes?: string | null
     birthday?: string | null
+    /** **录播号**（f015，`devlog/464`）：B 站 mid，多个用逗号分隔；`''` = 清空 */
+    vod_account_uid?: string | null
     debut_date?: string | null
     /** 签名覆盖（null = 撤销覆盖，回落到"跟随来源账号"） */
     sign_override?: string | null

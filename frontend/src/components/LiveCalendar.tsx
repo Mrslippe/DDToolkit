@@ -32,6 +32,10 @@ interface Props {
   vtuberId?: number | null
   /** 刷新信号（fetch-idle 边沿后重拉场次） */
   refreshTick?: number
+  /** 这个 V 的**录播号**（C1，f015）：不是场次上的东西，由页面从 V 列表传下来。
+   *  存完要重取 V 列表才能回显 ⇒ 页面得给 `onVodAccountSaved` 一个刷新回调。 */
+  vodAccountUid?: string | null
+  onVodAccountSaved?: (mids: string) => void | Promise<void>
 }
 
 /** 英文表头（设计稿 Frame10612 规格） */
@@ -83,7 +87,8 @@ interface DayCell {
  *     服务端缺失时前端关键词兜底。
  */
 const LiveCalendar = memo(function LiveCalendar(
-  { accountId, vtuberId = null, refreshTick = 0 }: Props,
+  { accountId, vtuberId = null, refreshTick = 0,
+    vodAccountUid = null, onVodAccountSaved }: Props,
 ) {
   const now = new Date()
   /** 场次浮层：点击格子的锚点（rect 快照）与当日数据。
@@ -591,6 +596,24 @@ const LiveCalendar = memo(function LiveCalendar(
           if (lid) void reloadDetail(lid)
         }}
         onEditSession={(s) => openManual(s)}
+        /* 「找录播」挑中一条候选（C1，devlog/464）：写路径**复用 B2 那条 PATCH**
+           （只传 vod_url），写完重取详情 —— 于是同一屏立刻看到新的录播链接。
+           ⚠️ 这里**不走** `onManualSaved`：那个函数的入参是"保存后的整场"，
+           而 PATCH 回的就是详情 —— 直接用它重取，省一次转换（也不会误翻月份）。 */
+        onPickVod={async (s, url) => {
+          if (!accountId || !s.live_id) return
+          const saved = await api.updateLiveSession(accountId, s.live_id, { vod_url: url })
+          reload()
+          await reloadDetail(saved.live_id ?? s.live_id)
+        }}
+        /* 录播号（f015）：存到 V 上（**不是**场次上）—— 它是"这个 V 的回放在哪"，
+           下一场照样用它。存完让父组件重取 V 列表（`vodAccountUid` 回显要用新值）。 */
+        vodAccountUid={vodAccountUid}
+        onSaveVodAccount={async (mids) => {
+          if (!vtuberId) return
+          await api.updateVtuber(vtuberId, { vod_account_uid: mids || null })
+          await onVodAccountSaved?.(mids)
+        }}
       />
       {/* 手动记录/编辑（B2）：两处入口（工具栏「+」/ 详情弹窗铅笔）共用这一个实例 */}
       <ManualSessionDialog

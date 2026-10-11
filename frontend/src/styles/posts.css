@@ -5122,6 +5122,101 @@ img.hero-avatar {
   cursor: default;
 }
 
+/* ── 「找录播」候选列表（C1，devlog/464）─────────────────────────────
+   它挂在「录播」那一行的**下一行**（`<dt/>` 占位对齐）：
+   候选是"给用户看着选的"，不是结论 —— 所以每条都把**依据**摆出来
+   （发布时间 + 时长 + 为什么像 + 可疑之处），不只是一个标题。 */
+.lc-vod-cand-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.lc-vod-cand-hint {
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--c-text-sub);
+}
+
+.lc-vod-cand-win {
+  color: var(--c-text-sub);
+  opacity: 0.85;
+}
+
+.lc-vod-cand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  /* ⚠️ 用 `--sel-bg`（浅粉底）而不是 `--c-rail`：后者是**深板岩**，
+     当行底会把 `--c-text-main` 的对比度打到不可读（那是给徽章配白字的） */
+  background: var(--sel-bg);
+  min-width: 0;
+}
+
+.lc-vod-cand-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.lc-vod-cand-title {
+  font-size: 12.5px;
+  color: var(--c-text-main);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lc-vod-cand-meta {
+  font-size: 11px;
+  color: var(--c-text-sub);
+}
+
+/* 可疑之处（"时长远短"/"发布在开播前"）：用**既有的** `--c-live`（全站警示色，
+   见 `.live-dot` / 场次卡片的"直播中"），别自己发明一个 `--c-warn`（它不存在）。
+   摆出来而不是藏起来 —— 藏起来就等于替用户拍板。 */
+.lc-vod-cand-warn {
+  font-size: 11px;
+  color: var(--c-live);
+}
+
+/* 录播号那一行（C1）：真机实测 V 自己多半不发回放 ⇒ 这个输入框是**主路径** */
+.lc-vod-cand-acct {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.lc-vod-acct-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--c-border);
+  border-radius: 6px;
+  background: var(--c-bg-card);
+  color: var(--c-text-main);
+  font-size: 12px;
+  font-family: inherit;
+}
+
+.lc-vod-acct-input:focus-visible {
+  outline: 2px solid var(--sel-strong);
+  outline-offset: 1px;
+}
+
+/* 这个按钮在那一行里不该再吃 margin-left（父级已经用 gap 排好了） */
+.lc-vod-cand-acct .lc-dlg-cloud-build {
+  margin-left: 0;
+  flex: none;
+}
+
 /* 说明性小字（例："· 上游未提供热词"）：比正文再弱一档，避免与数值抢注意力 */
 .lc-dlg-note {
   color: var(--c-text-sub);

@@ -96,6 +96,10 @@ export default function PostsPage() {
 
   const [vtuber, setVtuber] = useState<VTuber | null>(null)
   const [stats, setStats] = useState<PostStats | null>(null)
+  /** 录播号（C1，f015）的**本地覆盖值**：保存后立刻回显，不等下一次场景刷新。
+   *  换 V 时会被服务端值顶掉（`?? ` 左边只在本次会话有效）—— 这是有意的：
+   *  它只是个"刚存了什么"的提示，真源永远是 `vtubers.vod_account_uid`。 */
+  const [vodUidOverride, setVodUidOverride] = useState<string | null>(null)
 
   // 分页机（`posts` / `total` / `page` / `loadingMore` / `loadMoreError` + 哨兵 + 回顶）
   // 在 `hooks/usePostPagination`（M4，devlog/221）—— 它的调用点在 `scene` 之后
@@ -832,6 +836,11 @@ return (
               accountId={heroAcc?.id ?? null}
               vtuberId={vtuber.id}
               refreshTick={refreshTick}
+              /* 录播号（C1，f015）：V 级字段 —— 「找录播」要扫它，所以从这里传下去。
+                 保存后服务端有了新值，但这个页面的 `vtuber` 要等下一次场景刷新才更新
+                 ⇒ 本地记一份覆盖值，输入框立刻回显（不必为了一个字段整页重取）。 */
+              vodAccountUid={vodUidOverride ?? vtuber.vod_account_uid ?? null}
+              onVodAccountSaved={(mids) => setVodUidOverride(mids || null)}
             />
             {/* 第二步 = 粉丝趋势卡（参考图 + 项目粉系；Brush 缩放 + 默认 30 天窗口）。
                 ⚠️ 用 `trendTick` 而不是 `refreshTick`（R2 第二步，devlog/080）：

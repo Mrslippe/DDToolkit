@@ -31,9 +31,9 @@
  * 打开即可读。
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, Pencil, X } from 'lucide-react'
+import { ChevronDown, Loader2, Pencil, X } from 'lucide-react'
 
-import type { LiveDanmakuInfo, LiveEvent, LiveMetrics, LiveSession, LiveSessionDetail } from '../../api/types'
+import type { LiveDanmakuInfo, LiveEvent, LiveMetrics, LiveSession, LiveSessionDetail, VodCandidate, VodCandidatesResult } from '../../api/types'
 import { api } from '../../api/api'
 import { LIVE_TYPE_ORDER, liveTypeLabel } from '../../utils/liveType'
 import type { CloudWord } from '../../utils/wordCloudLayout'
@@ -50,6 +50,7 @@ import {
 } from './liveCalendarFmt'
 import { glanceCapsules } from './sessionGlance'
 import { vodLabel } from './manualSessionForm'
+import { formatDateTime } from '../../utils/format'
 
 /** 上游指标行（顺序即展示顺序）。**恒定四行**是 R36 的前提：未到位时按同尺寸骨架占位，
  *  到位后原位换成真值 —— 行数一样，弹窗高度才不变（`在线排名` 另有保留位，见 CSS）。 */
@@ -85,6 +86,12 @@ interface Props {
   /** 打开「手动记录/编辑」弹窗（B2）：手动场次可改时间/标题/录播地址，自动场次只能补录播地址。
    *  传 `LiveSession`（不是详情）：写端点的目标只有 id + 这四项，多给没有意义。 */
   onEditSession?: (s: LiveSession) => void
+  /** 挑中一条录播候选 → 父组件负责写 `vod_url` 并刷新（C1）。不传则不显示「找录播」。 */
+  onPickVod?: (s: LiveSession, url: string) => Promise<void> | void
+  /** 保存这个 V 的**录播号**（C1，f015）：B 站 mid，多个用逗号分隔。不传则不显示那个输入框。 */
+  onSaveVodAccount?: (mids: string) => Promise<void> | void
+  /** 当前已保存的录播号（回显用） */
+  vodAccountUid?: string | null
 }
 
 export default function LiveSessionDialog({
@@ -98,7 +105,26 @@ export default function LiveSessionDialog({
   accountId,
   onSessionChanged,
   onEditSession,
+  onPickVod,
+  onSaveVodAccount,
+  vodAccountUid = null,
 }: Props) {
+  /**
+   * 「找录播」（C1）：候选列表的本地状态。
+   *
+   * ⚠️ **连同 `live_id` 一起记账**（同下面自建词云那条）：弹窗里有一排场次页签，
+   * 不记账的话切到下一场会看到**上一场的候选** —— 点「用它」就把别人的录播写进这一场了。
+   */
+  const [vodState, setVodState] = useState<
+    (VodCandidatesResult & { liveId: string }) | null>(null)
+  const [vodBusy, setVodBusy] = useState(false)
+  /** 录播号输入框（打开面板时用已保存的值初始化；用户改了才提交） */
+  const [vodAcct, setVodAcct] = useState(vodAccountUid ?? '')
+  // 换 V / 换场次时把输入框拉回已保存的值（不跟着上一场的临时输入漂）。
+  // ⚠️ 依赖数组里**只放标量**：写成 `detail?.sessions?.[idx]?.live_id` 会被
+  //    `react-hooks/exhaustive-deps` 判成"复杂表达式"（本仓 lint 零警告）
+  const vodScope = `${vodAccountUid ?? ''}|${detail?.sessions?.[detail.idx]?.live_id ?? ''}`
+  useEffect(() => { setVodAcct(vodAccountUid ?? '') }, [vodScope, vodAccountUid])
   /**
    * 关闭动画期间继续渲染的那一份详情（Q2 批次 14，devlog/217）。
    *
@@ -233,6 +259,42 @@ export default function LiveSessionDialog({
       setBusyWc(null)
     }
   }
+  /**
+   * 「找录播」（C1，`devlog/464`）：问后端要候选（**只读**，不写任何东西）。
+   *
+   * ⚠️ 结果连同 `live_id` 一起记账：切场次后旧候选必须失效，
+   * 否则「用它」会把上一场的录播写进这一场。
+   */
+  const runFindVod = async () => {
+    const target = liveId
+    if (!target || !accountId || vodBusy) return
+    setVodBusy(true)
+    try {
+      const res = await api.vodCandidates(accountId, target)
+      setVodState({ ...res, liveId: target })
+    } catch (e) {
+      // 失败也落到明确状态（"点了没反应"比一句失败更糟）
+      setVodState({ mids: [], window: '', items: [],
+                    hint: `没问到：${(e as Error).message}`, liveId: target })
+    } finally {
+      setVodBusy(false)
+    }
+  }
+
+  /** 选中一条候选 → 交给父组件写 `vod_url`（写路径复用 B2 那条 PATCH）。
+   *  ⚠️ 名字**不能**以 `use` 开头：那会被 eslint 当成 Hook，而这个函数是在回调里调的。 */
+  const applyVod = async (c: VodCandidate) => {
+    const target = liveId
+    if (!target || !onPickVod || !s) return
+    setVodBusy(true)
+    try {
+      await onPickVod(s, c.permalink)
+      setVodState(null)                 // 写成了就收起候选（父组件会刷新详情）
+    } finally {
+      setVodBusy(false)
+    }
+  }
+
   // ⚠️ 早退必须在**所有 hook 之后**（本组件有 5 个 useState + 2 个 useEffect + useMemo）
   if (!shown || !s) return null
 
@@ -488,18 +550,77 @@ export default function LiveSessionDialog({
                       {vodLabel(s.vod_url)}
                     </a>
                   ) : (
-                    <>
-                      <span className="lc-dlg-note">未填写</span>
-                      {onEditSession && (
-                        <button type="button" className="lc-dlg-cloud-build"
-                                onClick={() => onEditSession(s)}>
-                          补录播地址
-                        </button>
-                      )}
-                    </>
+                    <span className="lc-dlg-note">未填写</span>
+                  )}
+                  {/* 「找录播」（C1）：在 V 的号 + 用户指定的录播号里按开播时间找候选。
+                      命中给**候选**、由用户点一下确认（实测单个信号都不可信：
+                      时间窗内那条可能发布在开播前，也可能是音声/剪辑）。 */}
+                  {onPickVod && (
+                    <button type="button" className="lc-dlg-cloud-build" data-find-vod="1"
+                            disabled={vodBusy}
+                            title="在 B 站按开播时间找这一场的回放（给候选，由你确认）"
+                            onClick={() => void runFindVod()}>
+                      {vodBusy ? <Loader2 className="size-3 animate-spin" /> : null}
+                      {vodBusy ? '查找中…' : '找录播'}
+                    </button>
+                  )}
+                  {!s.vod_url && onEditSession && (
+                    <button type="button" className="lc-dlg-cloud-build"
+                            onClick={() => onEditSession(s)}>
+                      手动填
+                    </button>
                   )}
                 </dd>
               </div>
+              {vodState && (
+                <div className="lc-dlg-row" data-vod-candidates="1">
+                  <dt />
+                  <dd className="lc-vod-cand-wrap">
+                    <div className="lc-vod-cand-hint">
+                      {vodState.hint || `扫了 ${vodState.mids.length} 个号：${vodState.mids.join('、')}`}
+                      {vodState.window && <span className="lc-vod-cand-win"> · {vodState.window}</span>}
+                    </div>
+                    {/* 录播号（f015）：真机实测 V 自己多半不发回放 ⇒ 这个输入框是**主路径**。
+                        先用「搜索」（B 站/全网）找一个「XX录播组」，把它的 mid 填进来再找一次。 */}
+                    {onSaveVodAccount && (
+                      <div className="lc-vod-cand-acct">
+                        <input className="lc-vod-acct-input" data-vod-account-input="1"
+                               value={vodAcct} placeholder="录播号 mid（多个用逗号分隔）"
+                               onChange={(e) => setVodAcct(e.target.value)} />
+                        <button type="button" className="lc-dlg-cloud-build"
+                                data-vod-account-save="1"
+                                disabled={vodAcct.trim() === (vodAccountUid ?? '').trim()}
+                                title="存到这个 V 上，下次「找录播」自动带上它"
+                                onClick={() => void onSaveVodAccount(vodAcct.trim())}>
+                          记住这个号
+                        </button>
+                      </div>
+                    )}
+                    {vodState.items.map((c) => (
+                      <div key={c.bvid || c.permalink} className="lc-vod-cand"
+                           data-vod-bvid={c.bvid}>
+                        <div className="lc-vod-cand-main">
+                          <span className="lc-vod-cand-title" title={c.title}>{c.title}</span>
+                          <span className="lc-vod-cand-meta">
+                            {c.published_at ? formatDateTime(c.published_at) : '时间未知'}
+                            {c.duration_minutes ? ` · ${c.duration_minutes} 分钟` : ''}
+                            {` · ${c.reasons[0] ?? '时间窗内'}`}
+                          </span>
+                          {c.cautions.length > 0 && (
+                            <span className="lc-vod-cand-warn">{c.cautions.join('；')}</span>
+                          )}
+                        </div>
+                        <button type="button" className="lc-dlg-cloud-build"
+                                data-vod-use={c.bvid}
+                                disabled={vodBusy}
+                                onClick={() => void applyVod(c)}>
+                          用它
+                        </button>
+                      </div>
+                    ))}
+                  </dd>
+                </div>
+              )}
             </dl>
           </section>
         </div>

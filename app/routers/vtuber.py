@@ -55,7 +55,9 @@ from app.services.vtuber_avatars import avatar_versions, local_avatar_map
 from app.services import assets
 from app.services import notices as notices_service
 from app.schemas.vtuber import (LiveDanmakuInfo, LiveMetricsOut, LiveEventOut,
-                                LiveWordOut, LiveUpstreamOut)
+                                LiveWordOut, LiveUpstreamOut,
+                                VodCandidateOut, VodCandidatesOut)
+from app.services import vod_finder
 from app.services.post_text import extract_post_text
 from app.services import messages as message_hub
 
@@ -1105,6 +1107,43 @@ def delete_live_session(account_id: int, live_id: str, db: Session = Depends(get
         raise HTTPException(400, f"只能删除手动记录的场次（这一条来源是 {row.source}）")
     repo.delete_row(row)
     return LiveSessionDeleteOut(deleted=True, live_id=live_id)
+
+
+@router.get("/account/{account_id}/live-sessions/{live_id}/vod-candidates",
+            response_model=VodCandidatesOut)
+async def live_session_vod_candidates(account_id: int, live_id: str,
+                                      mid: str = Query(""),
+                                      db: Session = Depends(get_db)):
+    """**给这一场找录播**（C1，需求 2.1，`devlog/464`）——只返回候选，**不写任何东西**。
+
+    扫哪些账号：该 V 的 B 站号 + 用户指定的录播号（`vtubers.vod_account_uid`）；
+    `mid=` 可以再临时加一个（用户从 B 站搜来的录播号，先用一次看看）。
+
+    ⚠️ 真机实测（2026-10-11）说明为什么这里**只给候选**：12 个 V 里 3 个在时间窗内有投稿，
+    而其中一条发布在开播**前 3 小时**、另一条是**音声** —— 单个信号都不可信，
+    必须由用户看着"发布时间/时长/为什么像"点一下确认（计划原话：误配比漏配更糟）。
+    """
+    account, vtuber, _dates, _ov = _live_infer_ctx(db, account_id)
+    if not account:
+        raise HTTPException(404, f"Account id={account_id} 不存在")
+    s = _pick_live_session(db, account_id, live_id)
+    mids = vod_finder.default_mids(db, account, vtuber)
+    extra = (mid or "").strip()
+    if extra and extra not in mids:
+        mids.append(extra)
+    if not mids:
+        return VodCandidatesOut(mids=[], window="", items=[],
+                                hint="这个 V 还没有 B 站账号，也没有指定录播号 "
+                                     "—— 先把录播号填上（在档案设置里）")
+    items = await vod_finder.find_candidates(s, mids)
+    return VodCandidatesOut(
+        mids=mids,
+        window=vod_finder.window_text(s.get("start_at")),
+        items=[VodCandidateOut(**{**it,
+                                  "published_at": it.get("published_at")}) for it in items],
+        hint=None if items else ("这些账号在开播前后都没有投稿 —— "
+                                 "可能回放在别的录播号上，把它的 mid 填进来再试"),
+    )
 
 
 @router.get("/account/{account_id}/live-sessions/{live_id}/upstream",

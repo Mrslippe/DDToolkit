@@ -418,6 +418,75 @@ def test_users_search_endpoint_accepts_platform_subset(monkeypatch, client):
     assert seen == [["bilibili", "weibo"]]
 
 
+def test_vod_candidates_endpoint_returns_scored_candidates(monkeypatch, client):
+    """`GET /account/{id}/live-sessions/{lid}/vod-candidates`（C1，`devlog/464`）。
+
+    这条钉三件事：① 扫的号 = **V 的 B 站号 + 用户指定的录播号**；
+    ② 候选**带依据**（`reasons`/`cautions`）——界面靠它让用户自己判断；
+    ③ 一条都没有时给的是**人话 hint**（"可能还没发/在别的录播号上"），不是空白。
+    """
+    import app.routers.vtuber as router_mod
+    from app.services import vod_finder
+
+    vid, aid = _mk_detail_sessions(client)
+    # 给这个 V 指定一个录播号（f015 的新字段）—— ⚠️ 这个端点是 **PUT**（不是 PATCH）
+    assert client.put(f"/vtuber/{vid}", json={"vod_account_uid": "999888"}).status_code == 200
+
+    seen: list[list[str]] = []
+
+    async def fake_find(session, mids, **kw):
+        seen.append([str(m) for m in mids])
+        assert session.get("live_title") == "深夜杂谈"
+        return [{"mid": "999888", "bvid": "BV1", "title": "深夜杂谈 回放",
+                 "permalink": "https://www.bilibili.com/video/BV1",
+                 "published_at": datetime(2026, 9, 7, 14, 0),
+                 "duration_minutes": 55, "cover_url": "",
+                 "score": 85, "reasons": ["时长接近（55 分 vs 本场 55 分）"],
+                 "cautions": [], "title_hits": ["深夜杂谈≈深夜杂谈 回放"],
+                 "in_window": True}]
+
+    monkeypatch.setattr(router_mod.vod_finder, "find_candidates", fake_find)
+    r = client.get(f"/account/{aid}/live-sessions/uuid-a/vod-candidates")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["mids"][0] == "123", "V 自己的 B 站号要排在第一"
+    assert "999888" in body["mids"], "用户指定的录播号也要扫"
+    assert seen == [body["mids"]]
+    assert body["items"][0]["bvid"] == "BV1"
+    assert body["items"][0]["reasons"] and body["items"][0]["score"] == 85
+
+    # 临时再塞一个 mid（用户从 B 站搜来的）⇒ 只影响这一次请求
+    client.get(f"/account/{aid}/live-sessions/uuid-a/vod-candidates?mid=777")
+    assert seen[-1][-1] == "777"
+
+    # 一条都没有 ⇒ 必须给一句"下一步做什么"，而不是空列表了事
+    async def empty_find(session, mids, **kw):
+        return []
+
+    monkeypatch.setattr(router_mod.vod_finder, "find_candidates", empty_find)
+    body2 = client.get(f"/account/{aid}/live-sessions/uuid-a/vod-candidates").json()
+    assert body2["items"] == [] and body2["hint"] and "录播号" in body2["hint"]
+
+
+def test_vod_candidates_never_writes_anything(monkeypatch, client):
+    """★「找录播」是**只读**的：候选由用户点一下才写（计划口径：误配比漏配更糟）。"""
+    import app.routers.vtuber as router_mod
+    vid, aid = _mk_detail_sessions(client)
+    before = client.get(f"/account/{aid}/live-sessions/uuid-a").json()["vod_url"]
+
+    async def fake_find(session, mids, **kw):
+        return [{"mid": "1", "bvid": "BV9", "title": "看起来像回放",
+                 "permalink": "https://www.bilibili.com/video/BV9",
+                 "published_at": None, "duration_minutes": 50, "cover_url": "",
+                 "score": 70, "reasons": [], "cautions": [], "title_hits": [],
+                 "in_window": True}]
+
+    monkeypatch.setattr(router_mod.vod_finder, "find_candidates", fake_find)
+    client.get(f"/account/{aid}/live-sessions/uuid-a/vod-candidates")
+    after = client.get(f"/account/{aid}/live-sessions/uuid-a").json()["vod_url"]
+    assert after == before, "找录播**不许**自己把地址写进去"
+
+
 def test_adopt_from_bilibili_requires_server_side_verification(monkeypatch, client):
     """池外收录（`source='bilibili'`）**必须服务端实查通过**才建库（R11，devlog/083）。
 
