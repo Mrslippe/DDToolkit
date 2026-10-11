@@ -73,10 +73,15 @@ class AccountStatSnapshotOut(BaseModel):
         return v
 
 
-# ── B 站检索（R11，devlog/083）─────────────────────────────────────
+# ── 在线检索（B 站 R11 devlog/083；多平台 B1 devlog/463）──────────────
 
 class BiliSearchItemOut(BaseModel):
-    """一条 B 站检索结果（`/vtuber/bili-search`）：搜索接口字段归一化后的形状。"""
+    """**统一检索条目**：一条"按名字搜到的人"（归一化后的形状）。
+
+    ⚠️ 名字留作 `BiliSearchItemOut` 是历史（它先在 `/vtuber/bili/search` 上用），
+    但**四个平台共用它**（`devlog/463` 起 `/vtuber/users/search` 也回这个形状）——
+    字段本来就没有一处是 B 站特有的，前端因此只有一条渲染路径。
+    """
     platform: str = "bilibili"
     platform_uid: str
     name: str
@@ -102,6 +107,30 @@ class BiliSearchOut(BaseModel):
     hint: str | None = None
     exact: bool = False
     cached: bool = False
+
+
+class NameSearchGroupOut(BaseModel):
+    """**一个平台**这一轮的检索结果（B1，需求 8，`devlog/463`）。
+
+    ⚠️ `skipped` 与 `error` 是两件事，界面文案也不同：
+    `skipped=True` = **用户把该平台的抓取开关关了**（一个请求都没发，不是故障）；
+    `error` 非空 = 发了但没拿到（没登录 / 风控 / 网络）。
+    """
+    platform: str
+    label: str
+    items: list[BiliSearchItemOut] = []
+    error: str | None = None
+    hint: str | None = None
+    skipped: bool = False
+    #: 该平台只回**最匹配的一条**（微博的建议型接口就是这形态）—— 界面据此把话说准
+    best_match_only: bool = False
+
+
+class NameSearchOut(BaseModel):
+    """多平台按名字搜人的响应（分组；顺序恒为设置界面里那四家的顺序）。"""
+    kw: str = ""
+    page: int = 1
+    groups: list[NameSearchGroupOut] = []
 
 
 # ── VTuber ─────────────────────────────────────────────────────────

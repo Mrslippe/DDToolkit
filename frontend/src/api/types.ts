@@ -143,7 +143,12 @@ export interface PoolItem {
   extra?: string
 }
 
-/** 一条 B 站检索结果（`GET /vtuber/bili/search`） */
+/**
+ * **统一检索条目**（`GET /vtuber/bili/search`、`GET /vtuber/users/search` 共用）。
+ *
+ * ⚠️ 名字里的 `Bili` 是历史（它先在 B 站检索上用），字段本身没有一处是 B 站特有的
+ * —— 四个平台共用同一形状，前端因此只有一条渲染路径（`devlog/463`）。
+ */
 export interface BiliSearchItem {
   platform: string
   platform_uid: string
@@ -173,6 +178,28 @@ export interface BiliSearchResult {
   hint: string | null
   exact: boolean
   cached: boolean
+}
+
+/** 一个平台这一轮的检索结果（`GET /vtuber/users/search`，B1） */
+export interface NameSearchGroup {
+  platform: string
+  /** 平台展示名（后端给，别在前端再抄一份） */
+  label: string
+  items: BiliSearchItem[]
+  /** 非空 = 发了请求但没拿到（没登录 / 风控 / 网络） */
+  error: string | null
+  hint: string | null
+  /** true = **该平台抓取开关关着**，一个请求都没发（与"失败"是两回事） */
+  skipped: boolean
+  /** true = 该平台只回最匹配的一条（微博的建议型接口） */
+  best_match_only: boolean
+}
+
+/** `GET /vtuber/users/search`：四家分组（顺序 = 设置界面里那四家的顺序） */
+export interface NameSearchResult {
+  kw: string
+  page: number
+  groups: NameSearchGroup[]
 }
 
 export interface Post {

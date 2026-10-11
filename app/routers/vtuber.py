@@ -33,9 +33,10 @@ from app.schemas.vtuber import (
     FormerValueOut, VTuberFormerValuesOut,
     VtuberAvatarVersionOut, VTuberAvatarsOut,
     NoticeOut, NoticesOut, NoticeAckIn, NoticeAckOut,
-    BiliSearchOut, BiliSearchItemOut,
+    BiliSearchOut, BiliSearchItemOut, NameSearchOut, NameSearchGroupOut,
 )
 from app.services import pool
+from app.services import name_search as name_search_svc
 from app.services import groups
 from app.services import bili_search as bili_search_svc
 from app.services import capabilities
@@ -1897,13 +1898,21 @@ class AdoptRequest(BaseModel):
     source: str | None = None
 
 
-#: 「没有搜索接口」的平台 → 展示名：收录时**只能按 uid**，拿 uid 去问一次主页信息做复核
-#: （小红书 devlog/234，抖音 devlog/334）。这张表就是那条分支的唯一真源。
-_VERIFY_BY_PROFILE: dict[str, str] = {"xiaohongshu": "小红书", "douyin": "抖音"}
-#: 上面两家"缺凭据时该去粘什么"的一句话（503 的补救指引）
+#: 「池外收录」时拿 uid 去问一次主页信息做复核的平台 → 展示名。这张表就是那条分支的唯一真源。
+#: 小红书 devlog/234、抖音 devlog/334；微博 2026-10-11（B1，`devlog/463`）—— 它有
+#: `fetch_user_info`（`/ajax/profile/info?uid=`，PC 域，SUB cookie 就够），补进这张表
+#: 之后**四家都能从搜索结果一键收录**。
+#:
+#: ⚠️ 注释里原先写的是"两家**没有**可用的搜索接口（搜索要登录 + 签名）" —— 那句
+#: 2026-10-11 已经**不成立**：四家的搜人接口都找到了（见 `services/name_search.py` 文件头）。
+#: 这条 profile 复核分支仍然有用（**建库前必须服务端实查一次**，不信请求体）。
+_VERIFY_BY_PROFILE: dict[str, str] = {"xiaohongshu": "小红书", "douyin": "抖音",
+                                      "weibo": "微博"}
+#: 上面三家"缺凭据时该去粘什么"的一句话（503 的补救指引）
 _VERIFY_BY_PROFILE_HINT: dict[str, str] = {
     "xiaohongshu": "至少要有 a1 与 web_session",
     "douyin": "整条 Cookie（uifid / s_v_web_id / ttwid）与那个浏览器的 User-Agent",
+    "weibo": "整条 Cookie（SUB 等）—— 扫码或粘贴都行",
 }
 
 
@@ -2069,6 +2078,43 @@ async def bili_search(kw: str = Query(""), page: int = Query(1, ge=1),
                for it in res.items],
         page=res.page, total_pages=res.total_pages, has_more=res.has_more,
         error=res.error, hint=res.hint, exact=res.exact, cached=res.cached,
+    )
+
+
+@router.get("/vtuber/users/search", response_model=NameSearchOut)
+async def search_users(kw: str = Query(""), page: int = Query(1, ge=1),
+                       platforms: str = Query(""), db: Session = Depends(get_db)):
+    """**多平台按名字搜人**（B1，需求 8，`devlog/463`）。
+
+    用户口径（2026-10-08）：输入名字时**同时在"已开启的平台"上做模糊检索**，
+    有结果就展示，**全都没有**才显示一行「没找到」。
+
+    - `platforms` 留空 = 四家全试（**关着的平台会被跳过、一个请求都不发**，
+      结果里带 `skipped=True` + 「去哪打开」那句）；也可以显式点名几家；
+    - 每家的接口与"踩过的坑"写在 `services/name_search.py` 的文件头；
+    - **失败不静默**：每个平台各自带 `error`/`hint`（没登录就说去登录），
+      单平台失败不影响其余（并发 gather，逐个兜异常）。
+
+    ⚠️ 路径也是**两段**（`/vtuber/users/search`）：一段式会被先注册的
+    `/vtuber/{vtuber_id}` 抢走匹配（同 `/vtuber/bili/search` 那个坑，`devlog/083` 实测）。
+    """
+    kw = (kw or "").strip()
+    wanted = [p.strip().lower() for p in (platforms or "").split(",") if p.strip()]
+    groups = await name_search_svc.search_all(kw, wanted or None, page=page)
+    existing = {
+        (a.platform, str(a.platform_uid))
+        for a in db.query(Account.platform, Account.platform_uid).all()
+    }
+    return NameSearchOut(
+        kw=kw, page=page,
+        groups=[NameSearchGroupOut(
+            platform=g.platform, label=g.label, error=g.error, hint=g.hint,
+            skipped=g.skipped, best_match_only=g.best_match_only,
+            items=[BiliSearchItemOut(**{**it,
+                                        "in_library": (it["platform"],
+                                                       str(it["platform_uid"])) in existing})
+                   for it in g.items],
+        ) for g in groups],
     )
 
 

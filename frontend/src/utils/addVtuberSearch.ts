@@ -1,16 +1,16 @@
 /**
- * 「添加 V」两个来源的合并与判定（R11，devlog/083）。
+ * 「添加 V」各来源的合并与判定（R11，devlog/083；多平台 B1，`devlog/463`）。
  *
- * 三个来源：本地 `csv 候选池` / 本地 `danmakus 索引` / **在线 B 站检索**。
+ * 来源：本地 `csv 候选池` / 本地 `danmakus 索引` / **在线检索**（B 站 + 微博 + 小红书 + 抖音）。
  * 这里只做**纯逻辑**（渲染留给 `AddVtuberDialog`），因为下面每条判错了界面都不会报错：
  *
  * - **同 uid 去重**：本地命中优先（池内名称更规范，且本地条目能直接走池内收录路径）；
- * - **已订阅**：本地接口已剔除已入库条目，但 **B 站结果是实时的**，必须按 `in_library` 置灰
+ * - **已订阅**：本地接口已剔除已入库条目，但**在线结果是实时的**，必须按 `in_library` 置灰
  *   ——标错的代价是"看着能加、点了 409"；
  * - **输入分流**：纯数字且 ≥5 位按 UID 直查（B 站搜索接口**搜不到 uid**，
  *   实测 `keyword=1265680561` → 0 条），判定必须与后端 `bili_search.looks_like_uid` 一致。
  */
-import type { BiliSearchItem, PoolItem } from '../api/types'
+import type { BiliSearchItem, NameSearchGroup, PoolItem } from '../api/types'
 
 /** 展示行（两个来源归一化后的统一形状） */
 export interface AddCandidate {
@@ -18,10 +18,10 @@ export interface AddCandidate {
   platform: string
   platform_uid: string
   name: string
-  /** 来源：pool=候选池 · index=danmakus 索引 · bilibili=在线检索 */
-  origin: 'pool' | 'index' | 'bilibili'
-  /** 收录时要带给后端的 source（本地两类都是池内路径） */
-  adoptSource: 'pool' | 'bilibili'
+  /** 来源：pool=候选池 · index=danmakus 索引 · 其余 = 平台名（在线检索命中的那个平台） */
+  origin: 'pool' | 'index' | 'bilibili' | 'weibo' | 'xiaohongshu' | 'douyin'
+  /** 收录时要带给后端的 source（本地两类都是池内路径；在线条目就是它自己的平台名） */
+  adoptSource: 'pool' | 'bilibili' | 'weibo' | 'xiaohongshu' | 'douyin'
   /** 能否收录（索引里的非 B 站条目走不了池外通道 → false，置灰并给原因） */
   adoptable: boolean
   /** 不能收录的原因（`adoptable=false` 时给 title 用） */
@@ -33,7 +33,7 @@ export interface AddCandidate {
   extra?: string
   avatar?: string
   isLive?: boolean
-  /** 已在库里（B 站结果才需要判；本地接口已剔除） */
+  /** 已在库里（在线结果才需要判；本地接口已剔除） */
   inLibrary: boolean
   exact?: boolean
 }
@@ -131,8 +131,8 @@ export function biliToCandidates(items: BiliSearchItem[]): AddCandidate[] {
     platform: it.platform,
     platform_uid: String(it.platform_uid),
     name: it.name,
-    origin: 'bilibili' as const,
-    adoptSource: 'bilibili' as const,
+    origin: it.platform as AddCandidate['origin'],
+    adoptSource: it.platform as AddCandidate['adoptSource'],
     adoptable: true,
     followers: it.followers,
     verified: it.verified || undefined,
@@ -141,6 +141,45 @@ export function biliToCandidates(items: BiliSearchItem[]): AddCandidate[] {
     inLibrary: it.in_library,
     exact: it.exact,
   }))
+}
+
+/**
+ * **多平台检索结果 → 展示行**（B1，`devlog/463`）。
+ *
+ * 平台顺序**照后端给的 `groups` 顺序**（= 设置界面里那四家的顺序），不在这里重排
+ * —— 顺序的真源只有一处（后端 `platform_switches.PLATFORMS`）。
+ *
+ * ⚠️ 四个平台**都能一键收录**：池外收录那条路（后端实查主页信息复核后才建库）
+ * 从 2026-10-11 起支持 bilibili / weibo / xiaohongshu / douyin（见 `_VERIFY_BY_PROFILE`）。
+ * 所以这里 `adoptable` 恒为真 —— 真正的"不能收录"由后端按平台能力决定（会回 4xx + 人话）。
+ */
+export function groupsToCandidates(groups: NameSearchGroup[]): AddCandidate[] {
+  return groups.flatMap((g) => biliToCandidates(g.items || []))
+}
+
+/**
+ * 全部平台**都没有结果**（⇒ 界面显示那一行「没找到」）。
+ *
+ * ⚠️ 与"还没来得及搜"、"平台关着"、"平台报错"都要分开：
+ * 后三种情况下说「没找到」都是**把系统状态的锅甩给用户**（本仓最忌讳的那类静默误导）。
+ * 所以只有"发了请求、没报错、也没被跳过、但一条都没有"才算真·没找到。
+ */
+export function allGroupsEmpty(groups: NameSearchGroup[] | null | undefined): boolean {
+  if (!groups || groups.length === 0) return false
+  return groups.every((g) => !g.items?.length && !g.error && !g.skipped)
+}
+
+/** 一个平台那一行的状态文案（纯函数，供用例钉住；null = 不必说话） */
+export function groupNote(g: NameSearchGroup): { text: string; tone: 'err' | 'muted' | 'ok' } | null {
+  if (g.skipped) return { text: g.hint || `${g.label}的抓取已关闭`, tone: 'muted' }
+  if (g.error) {
+    // ⚠️ 结论一律以后端 `hint` 为准（风控/没登录/网络各不同），前端不自己编原因
+    return { text: g.hint || `${g.label}检索没取到结果`, tone: 'err' }
+  }
+  if (!g.items?.length) return { text: `${g.label}没有匹配`, tone: 'muted' }
+  // 微博的建议型接口**只回最匹配的一条**：说清是"接口只给一条"，别让人以为"全网就一个"
+  if (g.best_match_only) return { text: `${g.label}命中 1 条（该接口只给最匹配的一个）`, tone: 'ok' }
+  return { text: `${g.label}命中 ${g.items.length} 条`, tone: 'ok' }
 }
 
 /** 合并两组展示行：本地优先（同 uid 时在线结果被丢弃），保持各自原顺序 */
@@ -156,9 +195,13 @@ export function followerLabel(n: number | undefined): string | null {
   return `${n.toLocaleString('zh-CN')} 粉`
 }
 
-/** 来源徽标文案 */
+/** 来源徽标文案（在线条目按平台给名；平台名以后端 `label` 为准，这里只兜底老路径） */
 export function originLabel(origin: AddCandidate['origin']): string {
   if (origin === 'pool') return '候选池'
   if (origin === 'index') return '索引'
-  return 'B 站'
+  if (origin === 'bilibili') return 'B 站'
+  if (origin === 'weibo') return '微博'
+  if (origin === 'xiaohongshu') return '小红书'
+  if (origin === 'douyin') return '抖音'
+  return origin
 }

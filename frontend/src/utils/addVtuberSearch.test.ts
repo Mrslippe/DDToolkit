@@ -1,13 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import {
+  allGroupsEmpty,
   biliToCandidates,
   followerLabel,
+  groupNote,
+  groupsToCandidates,
   inputLooksLikeUid,
   mergeCandidates,
   originLabel,
   poolToCandidates,
 } from './addVtuberSearch'
-import type { BiliSearchItem, PoolItem } from '../api/types'
+import type { BiliSearchItem, NameSearchGroup, PoolItem } from '../api/types'
 
 /**
  * R11（devlog/083）：添加 V 的两个来源合并判定。
@@ -104,5 +107,79 @@ describe('展示口径', () => {
     expect(originLabel('pool')).toBe('候选池')
     expect(originLabel('index')).toBe('索引')
     expect(originLabel('bilibili')).toBe('B 站')
+  })
+
+  it('来源徽标：在线检索那一档按平台给名（B1 起有四家）', () => {
+    expect(originLabel('weibo')).toBe('微博')
+    expect(originLabel('xiaohongshu')).toBe('小红书')
+    expect(originLabel('douyin')).toBe('抖音')
+  })
+})
+
+/**
+ * 多平台检索（B1，需求 8，`devlog/463`）。
+ *
+ * 这三个纯函数决定界面上最容易**说出错话**的三处：
+ * 什么时候该说「没找到」、每个平台那一行说什么、四家的结果怎么合并成行。
+ */
+describe('多平台检索结果 → 展示行与状态', () => {
+  const grp = (over: Partial<NameSearchGroup> = {}): NameSearchGroup => ({
+    platform: 'bilibili', label: 'B 站', items: [], error: null, hint: null,
+    skipped: false, best_match_only: false, ...over,
+  })
+
+  it('★ 四家的条目按**后端给的顺序**合并（前端不重排）', () => {
+    const rows = groupsToCandidates([
+      grp({ platform: 'bilibili', label: 'B 站', items: [bili()] }),
+      grp({ platform: 'weibo', label: '微博',
+            items: [bili({ platform: 'weibo', platform_uid: '7198559139', name: '微博的她' })] }),
+      grp({ platform: 'xiaohongshu', label: '小红书',
+            items: [bili({ platform: 'xiaohongshu', platform_uid: 'xhs1', name: '小红书的她' })] }),
+    ])
+    expect(rows.map((r) => r.platform)).toEqual(['bilibili', 'weibo', 'xiaohongshu'])
+    // 收录来源 = 它自己的平台名（池外通道从 B1 起四家都支持）
+    expect(rows.map((r) => r.adoptSource))
+      .toEqual(['bilibili', 'weibo', 'xiaohongshu'])
+    expect(rows.every((r) => r.adoptable)).toBe(true)
+  })
+
+  it('同 uid 跨平台**不算重复**（key 里带平台，两家的 100 是两个人）', () => {
+    const rows = groupsToCandidates([
+      grp({ items: [bili({ platform_uid: '100' })] }),
+      grp({ platform: 'weibo', label: '微博',
+            items: [bili({ platform: 'weibo', platform_uid: '100', name: '微博的' })] }),
+    ])
+    expect(rows.map((r) => r.key)).toEqual(['bilibili:100', 'weibo:100'])
+  })
+
+  it('★ 只有"发了、没报错、没被跳过、真没结果"才算没找到', () => {
+    expect(allGroupsEmpty([grp(), grp({ platform: 'weibo', label: '微博' })])).toBe(true)
+    // 关着开关 ⇒ **不许**说"没找到"（那是把用户的设置说成"没这个人"）
+    expect(allGroupsEmpty([grp({ skipped: true, hint: '已关闭' })])).toBe(false)
+    // 报错（没登录/风控）同理
+    expect(allGroupsEmpty([grp({ error: 'not_logged_in' })])).toBe(false)
+    // 还没搜过 / 空数组 ⇒ 也不是"没找到"
+    expect(allGroupsEmpty(null)).toBe(false)
+    expect(allGroupsEmpty([])).toBe(false)
+    // 有结果当然不是
+    expect(allGroupsEmpty([grp({ items: [bili()] })])).toBe(false)
+  })
+
+  it('★ 每行状态：关着 / 失败 / 没结果 / 命中几条 / 只给一条，五态分得开', () => {
+    expect(groupNote(grp({ skipped: true, hint: '「抖音」的抓取已关闭' })))
+      .toEqual({ text: '「抖音」的抓取已关闭', tone: 'muted' })
+    expect(groupNote(grp({ error: 'not_logged_in', hint: '去登录' })))
+      .toEqual({ text: '去登录', tone: 'err' })
+    // 后端没给 hint 时也不能空着（说自己那句，但仍然算"错"）
+    expect(groupNote(grp({ platform: 'weibo', label: '微博', error: 'network_error' })))
+      .toEqual({ text: '微博检索没取到结果', tone: 'err' })
+    expect(groupNote(grp({ error: null, items: [] })))
+      .toEqual({ text: 'B 站没有匹配', tone: 'muted' })
+    expect(groupNote(grp({ items: [bili(), bili({ platform_uid: '2' })] })))
+      .toEqual({ text: 'B 站命中 2 条', tone: 'ok' })
+    // 微博只回最匹配的一条：说清是**接口形态**，别让人以为"全网就一个"
+    expect(groupNote(grp({ platform: 'weibo', label: '微博', best_match_only: true,
+                           items: [bili({ platform: 'weibo' })] })))
+      .toEqual({ text: '微博命中 1 条（该接口只给最匹配的一个）', tone: 'ok' })
   })
 })

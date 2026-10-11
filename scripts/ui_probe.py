@@ -6001,10 +6001,19 @@ def main() -> int:
                                     f"（{av.get('afterClearRows')} 行）")
                 if not av.get("closed"):
                     failures.append(f"@{w} add-v: 点 X 没能关掉浮窗")
-                if av.get("biliRequestsTotal"):
-                    failures.append(f"@{w} add-v: 探针全程出现了 {av.get('biliRequestsTotal')} 次"
-                                    f" `/vtuber/bili/search` 请求 —— 本模式刻意不触发上游检索，"
-                                    f"出现即说明有非显式触发路径")
+                if av.get("biliRequestsTotal") or av.get("usersSearchRequestsTotal"):
+                    failures.append(
+                        f"@{w} add-v: 探针全程出现了 {av.get('biliRequestsTotal')} 次"
+                        f" `/vtuber/bili/search` + {av.get('usersSearchRequestsTotal')} 次"
+                        f" `/vtuber/users/search` 请求 —— 本模式刻意不触发上游检索，"
+                        f"出现即说明有非显式触发路径")
+                if av.get("keyword") and not av.get("noUpstreamOnTyping"):
+                    # ⚠️ 2026-10-11（B1）：入口从"只搜 B 站"换成"多平台"，只数旧端点会让
+                    #    这条判据空转（按钮已经改道）—— 两个端点都要数，缺一不可。
+                    failures.append(f"@{w} add-v: 敲键就打了上游检索"
+                                    f"（bili={av.get('biliRequests')} "
+                                    f"users={av.get('usersSearchRequests')}）—— "
+                                    f"上游请求只该由显式触发（回车/点搜索）产生")
                 if not failures:
                     print("  [ok] 添加 V 浮窗：本地/上游分流、行可点、UID 换档全部通过")
             for b in failures:

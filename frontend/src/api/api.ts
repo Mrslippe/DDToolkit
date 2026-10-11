@@ -1,5 +1,5 @@
 import type {
-  AgreementState, Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliPlayInfo, BiliSearchResult, BiliSegments, Capabilities, DouyinCookieSaved, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveGiftDay, LiveSession, LiveSessionDetail, LiveSessionWriteIn, LiveUpstream, NoticesResponse, PairingInfo, PoolItem, Post, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyOverview, ThirdpartyVtuber, AssetsInfo, AssetsPruneResult, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, XhsCookieSaved } from './types'
+  AgreementState, Account, AccountStatSnapshot, AppSettings, AppSettingsSaved, AuthPlatform, AuthStatus, BiliPlayInfo, BiliSearchResult, BiliSegments, Capabilities, DouyinCookieSaved, FanTrendPoint, FetchPostsResult, FetchResult, FetchStatus, LiveDanmakuInfo, LiveGiftDay, LiveSession, LiveSessionDetail, LiveSessionWriteIn, LiveUpstream, NameSearchResult, NoticesResponse, PairingInfo, PoolItem, Post, PostPage, PostStats, Prefs, PrefsSaved, ProfileCardInput, ProfileCardRow, StorageActionResult, StorageInfo, ThirdpartyOverview, ThirdpartyVtuber, AssetsInfo, AssetsPruneResult, UpcomingReservation, UpdatePostsResult, VTuber, VTuberAvatars, VTuberFormerValues, VtuberEvent, XhsCookieSaved } from './types'
 import { ApiError, ApiShapeError } from './errors'
 import { HOST_HEADER, myHost } from '../utils/hostIdentity'
 import {
@@ -692,12 +692,23 @@ export const api = {
     request<BiliSearchResult>(
       `/vtuber/bili/search?kw=${encodeURIComponent(kw)}&page=${page}`, { signal }),
 
+  /**
+   * **多平台按名字搜人**（B1，需求 8，`devlog/463`）：一次并发搜四家（B 站/微博/小红书/抖音），
+   * 按平台分组返回；**抓取开关关着的平台一个请求都不发**（结果里 `skipped=true`）。
+   * `platforms` 留空 = 全部；只在用户**显式触发**时调用（后端每平台 1s 间隔 + 5 分钟缓存）。
+   */
+  searchUsers: (kw: string, platforms?: string[], page = 1, signal?: AbortSignal) =>
+    request<NameSearchResult>(
+      `/vtuber/users/search?kw=${encodeURIComponent(kw)}&page=${page}`
+      + (platforms?.length ? `&platforms=${encodeURIComponent(platforms.join(','))}` : ''),
+      { signal }),
+
   /** 收录 VTuber（后端建库后自动调度单V账号抓取）。
    *  `source='bilibili'` = B 站直搜来源：池外条目后端会**实查 acc/info 复核**后才建库；
-   *  `source='xiaohongshu'` = 小红书 uid 来源（它没有可用搜索接口，devlog/234）：
+   *  `source='xiaohongshu'` / `'douyin'` / `'weibo'` = 按 uid 收录（`devlog/234`/`334`/`463`）：
    *  后端拿 uid 实查**主页信息**复核，没配 cookie ⇒ 503、上游没有 ⇒ 404。 */
   adoptVtuber: (platform: string, platformUid: string, faction?: string,
-                source?: 'pool' | 'bilibili' | 'xiaohongshu' | 'douyin') =>
+                source?: 'pool' | 'bilibili' | 'weibo' | 'xiaohongshu' | 'douyin') =>
     request<VTuber>('/vtuber/adopt', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

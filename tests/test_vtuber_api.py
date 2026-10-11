@@ -355,6 +355,69 @@ def test_bili_search_endpoint_maps_items_and_flags_in_library(monkeypatch, clien
     assert "限制" in body2["hint"]
 
 
+def test_users_search_endpoint_groups_hits_and_flags_in_library(monkeypatch, client):
+    """`GET /vtuber/users/search`（B1，需求 8，`devlog/463`）：分组 + `in_library` + 三种状态分离。
+
+    这条钉的是界面**说不出错话**的三件事：
+    ① 四个平台**分组**返回（顺序 = 设置界面里那四家的顺序，前端不重排）；
+    ② `in_library` 由服务端标（前端据此置灰，标错 = "看着能加、点了 409"）；
+    ③ **关着（skipped）/ 失败（error）/ 只给一条（best_match_only）** 三态各自带出来
+       —— 合成一个"空"就等于把"你关了开关"说成"没这个人"。
+    """
+    import app.routers.vtuber as router_mod
+    from app.services.name_search import PlatformHits
+
+    async def fake_all(kw, platforms=None, *, page=1):
+        # 末尾那条"路径必须可达"的请求不带 kw ⇒ 这里只对带上关键词的那次做断言
+        assert kw in ("七海", "")
+        return [
+            PlatformHits("bilibili", "B 站", items=[
+                {"platform": "bilibili", "platform_uid": "999", "name": "已订阅的"},
+                {"platform": "bilibili", "platform_uid": "61624", "name": "七海"}]),
+            PlatformHits("weibo", "微博", best_match_only=True, items=[
+                {"platform": "weibo", "platform_uid": "7198559139", "name": "七海Nana7mi"}]),
+            PlatformHits("xiaohongshu", "小红书", error="not_logged_in",
+                         hint="小红书检索要签名 + 登录态"),
+            PlatformHits("douyin", "抖音", skipped=True, hint="「抖音」的抓取已关闭（默认关闭）"),
+        ]
+
+    monkeypatch.setattr(router_mod.name_search_svc, "search_all", fake_all)
+    vid = client.post("/vtuber", json={"name": "已订阅"}).json()["id"]
+    client.post(f"/vtuber/{vid}/accounts",
+                json={"platform": "bilibili", "platform_uid": "999"})
+
+    r = client.get("/vtuber/users/search?kw=七海")
+    assert r.status_code == 200
+    body = r.json()
+    assert [g["platform"] for g in body["groups"]] == \
+        ["bilibili", "weibo", "xiaohongshu", "douyin"]
+    bili, weibo, xhs, dy = body["groups"]
+    items = {it["platform_uid"]: it for it in bili["items"]}
+    assert items["999"]["in_library"] is True          # 已入库 → 前端置灰
+    assert items["61624"]["in_library"] is False
+    assert weibo["best_match_only"] is True and weibo["error"] is None
+    assert xhs["error"] == "not_logged_in" and xhs["items"] == []
+    assert "登录" in xhs["hint"]
+    assert dy["skipped"] is True and dy["error"] is None, \
+        "关着是用户的设置、不是失败 —— 界面文案也不同"
+    # 路径**必须是两段**：一段式会被先注册的 `/vtuber/{vtuber_id}` 抢走（→ 422，devlog/083 踩过）
+    assert client.get("/vtuber/users/search").status_code == 200
+
+
+def test_users_search_endpoint_accepts_platform_subset(monkeypatch, client):
+    """`platforms=` 能点名（前端"只在某几家上搜"那条路）。"""
+    import app.routers.vtuber as router_mod
+    seen: list[list[str]] = []
+
+    async def fake_all(kw, platforms=None, *, page=1):
+        seen.append(list(platforms or []))
+        return []
+
+    monkeypatch.setattr(router_mod.name_search_svc, "search_all", fake_all)
+    assert client.get("/vtuber/users/search?kw=塔菲&platforms=bilibili,weibo").status_code == 200
+    assert seen == [["bilibili", "weibo"]]
+
+
 def test_adopt_from_bilibili_requires_server_side_verification(monkeypatch, client):
     """池外收录（`source='bilibili'`）**必须服务端实查通过**才建库（R11，devlog/083）。
 

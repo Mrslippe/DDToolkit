@@ -2426,8 +2426,12 @@ export async function runUiProbe(): Promise<void> {
         result.localSearchHappened =
           (result.poolRequestsAfterTyping as number) > (result.poolRequestsBeforeTyping as number)
         // ② 敲键**没有**打上游（决策①的机器判据）
+        //    ⚠️ 2026-10-11（B1）起入口换成 `/vtuber/users/search`（多平台），
+        //    所以**两个**都要数：只数旧的那条会让这条判据变成空转（按钮早就改道了）。
         result.biliRequests = reqs('/vtuber/bili/search')
-        result.noUpstreamOnTyping = result.biliRequests === 0
+        result.usersSearchRequests = reqs('/vtuber/users/search')
+        result.noUpstreamOnTyping =
+          result.biliRequests === 0 && result.usersSearchRequests === 0
         // 行：本地候选不该有"已订阅"（后端已剔除），因此必须都可点
         result.rowsDisabled = rows.filter((r) => r.hasAttribute('disabled')).length
         const r0 = rows[0]?.getBoundingClientRect()
@@ -2487,6 +2491,7 @@ export async function runUiProbe(): Promise<void> {
       result.closed = !document.querySelector('.av-dialog')
       // 收尾再确认一次：整个探针全程一次上游都没打（点行/点按钮都被刻意避开了）
       result.biliRequestsTotal = reqs('/vtuber/bili/search')
+      result.usersSearchRequestsTotal = reqs('/vtuber/users/search')
     }
     const pre = document.createElement('pre')
     pre.id = 'ui-probe'

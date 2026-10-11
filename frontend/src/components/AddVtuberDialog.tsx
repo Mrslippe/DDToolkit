@@ -9,11 +9,13 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { api } from '../api/api'
-import type { BiliSearchResult } from '../api/types'
+import type { NameSearchGroup } from '../api/types'
 import {
-  biliToCandidates,
+  allGroupsEmpty,
   extraPlatforms,
   followerLabel,
+  groupNote,
+  groupsToCandidates,
   inputLooksLikeUid,
   mergeCandidates,
   originLabel,
@@ -34,34 +36,50 @@ interface Props {
   onAdded: () => void
 }
 
-/** B 站检索失败时的兜底形状（客户端侧失败：请求没通/被中断） */
-function failResult(page: number, hint: string): BiliSearchResult {
-  return {
+/** 客户端侧整批失败（请求没通）→ "每个平台都失败"的形状：**逐个平台说清**，不静默 */
+function failGroups(hint: string): NameSearchGroup[] {
+  return (['bilibili', 'weibo', 'xiaohongshu', 'douyin'] as const).map((p) => ({
+    platform: p,
+    label: originLabel(p),
     items: [],
-    page,
-    total_pages: 0,
-    has_more: false,
     error: 'network_error',
     hint,
-    exact: false,
-    cached: false,
-  }
+    skipped: false,
+    best_match_only: false,
+  }))
 }
 
 /**
- * 添加 VTuber 浮窗（R11，devlog/083）。
+ * 「加载更多」：把新一页**按平台**接在后面。
+ *
+ * ⚠️ 不能整批替换（那会把第 1 页的结果丢掉），也不能用平台的"当前条数"当偏移
+ * ——偏移由 `page` 决定（后端 `offset = (page-1)*10`），所以这里只做同平台拼接。
+ * 上一页是 `error`/`skipped` 的平台保持原样（新一页若成功则用新的）。
+ */
+function appendGroups(prev: NameSearchGroup[] | null, next: NameSearchGroup[]): NameSearchGroup[] {
+  if (!prev) return next
+  const byPlatform = new Map(prev.map((g) => [g.platform, g]))
+  return next.map((g) => {
+    const old = byPlatform.get(g.platform)
+    if (!old || !old.items?.length || g.error || g.skipped) return g
+    return { ...g, items: [...old.items, ...g.items] }
+  })
+}
+
+/**
+ * 添加 VTuber 浮窗（R11，devlog/083；多平台检索 B1，需求 8，`devlog/463`）。
  *
  * **两个来源，触发方式刻意不同**：
  * - **本地候选**（`csv` 候选池 + `danmakus` 索引）：输入即防抖检索，**不打上游**；
- * - **B 站在线检索**：只在**显式触发**（回车 / 点「搜索 B 站」/ 点「加载更多」）时才请求。
- *   后端有 0.8s 串行 + 每分钟 20 次上限 + 5 分钟缓存，但把"每次敲键都打上游"省掉，
- *   风控预算才花在用户真要看的词上。
+ * - **在线检索**（B 站 + 微博 + 小红书 + 抖音）：只在**显式触发**（回车 / 点「搜索」）时才请求。
+ *   后端每平台 1s 间隔 + 5 分钟缓存，但把"每次敲键都打上游"省掉，
+ *   风控预算才花在用户真要看的词上；**抓取开关关着的平台一个请求都不发**。
  *
  * 三条与"看得见却点不动 / 点了失败"有关的约定：
  * 1. **纯数字（≥5 位）= UID 直查**（B 站搜索接口搜不到 uid，实测 `keyword=<uid>` → 0 条），
  *    按钮文案随之变成「按 UID 添加」；判定与后端 `bili_search.looks_like_uid` 同口径；
  * 2. 在线结果 `in_library=true` 的条目**置灰不可点**（点了必然 409）；
- * 3. 上游失败（风控/降级/网络）**如实展示 `hint`**，绝不退化成"没有这个人"——
+ * 3. 上游失败（风控/降级/网络/没登录）**如实展示各平台的 `hint`**，绝不退化成"没有这个人"——
  *    实测缺搜索页请求头时 B 站会 `code=0` 但静默 0 条，这种坑必须让用户看得见。
  */
 export default function AddVtuberDialog({ open, onOpenChange, onAdded }: Props) {
@@ -69,21 +87,23 @@ export default function AddVtuberDialog({ open, onOpenChange, onAdded }: Props) 
   const { caps } = useCapabilities()
   const [local, setLocal] = useState<AddCandidate[]>([])
   const [searchingLocal, setSearchingLocal] = useState(false)
-  /** B 站检索结果：null = 还没搜过（与"搜了但 0 条"是两回事，文案不同） */
-  const [bili, setBili] = useState<BiliSearchResult | null>(null)
-  const [biliLoading, setBiliLoading] = useState(false)
+  /** 在线检索结果：null = 还没搜过（与"搜了但 0 条"是两回事，文案不同） */
+  const [groups, setGroups] = useState<NameSearchGroup[] | null>(null)
+  const [searchPage, setSearchPage] = useState(1)
+  const [onlineLoading, setOnlineLoading] = useState(false)
   const [adoptingKey, setAdoptingKey] = useState<string | null>(null)
   const timerRef = useRef<number>()
-  const biliCtrl = useRef<AbortController | null>(null)
+  const onlineCtrl = useRef<AbortController | null>(null)
 
-  // 关闭时清态（含打断在途的 B 站检索：关窗后回来的结果没人要）
+  // 关闭时清态（含打断在途的在线检索：关窗后回来的结果没人要）
   useEffect(() => {
     if (!open) {
       setKw('')
       setLocal([])
-      setBili(null)
+      setGroups(null)
+      setSearchPage(1)
       setAdoptingKey(null)
-      biliCtrl.current?.abort()
+      onlineCtrl.current?.abort()
     }
   }, [open])
 
@@ -117,28 +137,26 @@ export default function AddVtuberDialog({ open, onOpenChange, onAdded }: Props) 
     }
   }, [kw, open])
 
-  /** B 站检索（显式触发；page > 1 = 加载更多，与已有结果拼接） */
-  const runBiliSearch = useCallback(
+  /** 在线检索（显式触发；page > 1 = 加载更多，按平台分别拼接） */
+  const runSearch = useCallback(
     async (page = 1) => {
       const q = kw.trim()
       if (!q) return
-      biliCtrl.current?.abort()
+      onlineCtrl.current?.abort()
       const ac = new AbortController()
-      biliCtrl.current = ac
-      setBiliLoading(true)
+      onlineCtrl.current = ac
+      setOnlineLoading(true)
       try {
-        const r = await api.biliSearch(q, page, ac.signal)
+        const r = await api.searchUsers(q, undefined, page, ac.signal)
         if (ac.signal.aborted) return
-        setBili((prev) =>
-          page > 1 && prev && !prev.error && !r.error
-            ? { ...r, items: [...prev.items, ...r.items] }
-            : r,
-        )
+        setSearchPage(page)
+        setGroups((prev) => (page > 1 ? appendGroups(prev, r.groups) : r.groups))
       } catch (e) {
         if ((e as Error).name === 'AbortError') return
-        setBili(failResult(page, `B 站检索没通：${(e as Error).message}`))
+        // 客户端侧失败（请求没通）：造一个"每个平台都失败"的形状，**不静默**
+        setGroups(prev => page > 1 ? prev : failGroups(`检索没通：${(e as Error).message}`))
       } finally {
-        if (!ac.signal.aborted) setBiliLoading(false)
+        if (!ac.signal.aborted) setOnlineLoading(false)
       }
     },
     [kw],
@@ -147,7 +165,7 @@ export default function AddVtuberDialog({ open, onOpenChange, onAdded }: Props) 
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       e.preventDefault()
-      void runBiliSearch(1)
+      void runSearch(1)
     }
   }
 
@@ -224,7 +242,7 @@ export default function AddVtuberDialog({ open, onOpenChange, onAdded }: Props) 
     }
   }
 
-  const rows = mergeCandidates(local, bili ? biliToCandidates(bili.items) : [])
+  const rows = mergeCandidates(local, groups ? groupsToCandidates(groups) : [])
   const isUid = inputLooksLikeUid(kw)
   const busy = adoptingKey !== null
   const q = kw.trim()
@@ -303,8 +321,9 @@ export default function AddVtuberDialog({ open, onOpenChange, onAdded }: Props) 
           <DialogTitle>添加 VTuber</DialogTitle>
           <DialogDescription className="av-desc">
             输入名字或 UID：本地候选（候选池 + 弹幕索引）即时匹配；
-            <b>回车</b>或点「搜索 B 站」可直接从 B 站检索收录 —— 候选池里没有的新 V 也能加。
-            小红书没有可用的搜索接口：把<b>主页链接或 uid</b>粘进来，点「小红书 uid」收录。
+            <b>回车</b>或点「搜索」会<b>同时在已开启的平台</b>（B 站 / 微博 / 小红书 / 抖音）
+            上按名字搜人，结果按平台分组、点一下就能收录 —— 名单外的新 V 也能加。
+            关掉抓取的平台不会参与检索；认不出 uid 时才用右边那两个「uid」钮。
           </DialogDescription>
         </DialogHeader>
 
@@ -326,7 +345,8 @@ export default function AddVtuberDialog({ open, onOpenChange, onAdded }: Props) 
                 title="清空"
                 onClick={() => {
                   setKw('')
-                  setBili(null)
+                  setGroups(null)      // 清空要回到"还没搜过"的空态（残留上次结果最迷惑）
+                  setSearchPage(1)
                 }}
               >
                 <X className="size-3.5" />
@@ -336,19 +356,22 @@ export default function AddVtuberDialog({ open, onOpenChange, onAdded }: Props) 
           <button
             type="button"
             className="av-bili-btn"
-            disabled={!q || biliLoading}
-            onClick={() => void runBiliSearch(1)}
-            title={isUid ? '按 UID 从 B 站精确添加' : '从 B 站搜索这个关键词'}
+            disabled={!q || onlineLoading}
+            onClick={() => void runSearch(1)}
+            title={isUid
+              ? '按 UID 从 B 站精确添加'
+              : '在已开启的平台上按名字搜人（B 站 / 微博 / 小红书 / 抖音）'}
           >
-            {biliLoading ? (
+            {onlineLoading ? (
               <Loader2 className="size-3.5 animate-spin" />
             ) : (
               <Search className="size-3.5" />
             )}
-            {isUid ? '按 UID 添加' : '搜索 B 站'}
+            {isUid ? '按 UID 添加' : '搜索'}
           </button>
-          {/* 小红书没有搜索接口 ⇒ 只有"按 uid 收录"这一条路（粘主页链接也行）。
-              输入里认不出 uid 时**禁用**：让它可点只会换来一句 404 的 toast */}
+          {/* 按 uid 收录那两条路**保留**：搜索要登录态，而"用户手上就有一条主页链接"
+              是常态 —— 认不出 uid 时禁用（点了只会换来 404 白跑一趟）。
+              2026-10-11（B1）起四家都有搜索接口了，所以按钮说明不再写"没有搜索接口"。 */}
           <button
             type="button"
             className="av-xhs-btn"
@@ -358,7 +381,7 @@ export default function AddVtuberDialog({ open, onOpenChange, onAdded }: Props) 
             title={
               xhsUid
                 ? `收录小红书 uid ${xhsUid}`
-                : '小红书只能按 uid 收录：把主页链接或 uid 粘进输入框'
+                : '按 uid 收录小红书：把主页链接或 uid 粘进输入框（也可以直接用「搜索」找）'
             }
           >
             {adoptingKey?.startsWith('xhs:') ? (
@@ -415,40 +438,44 @@ export default function AddVtuberDialog({ open, onOpenChange, onAdded }: Props) 
             </div>
           )}
 
-          {q && !searchingLocal && rows.length === 0 && !bili && (
+          {q && !searchingLocal && rows.length === 0 && !groups && (
             <div className="av-hint-row">
               本地候选没有匹配。
-              <button type="button" className="av-link" onClick={() => void runBiliSearch(1)}>
-                从 B 站搜索「{q}」
+              <button type="button" className="av-link" onClick={() => void runSearch(1)}>
+                在已开启的平台上搜索「{q}」
               </button>
             </div>
           )}
 
           {rows.map(rowButton)}
 
-          {/* B 站区块的状态：结论一律由后端 `hint` 说了算（风控/降级/网络各不同） */}
-          {bili?.error && (
-            <div className="av-hint-row err">
-              {bili.hint || 'B 站检索没取到结果'}
-              {bili.error === 'rate_limited' && '（等几秒再试）'}
-            </div>
+          {/* 在线检索的状态：**逐平台**如实说（关着 / 没登录 / 风控 / 命中几条各不同）。
+              结论一律由后端 `hint` 说了算；前端不把"没问到"说成"没有这个人"。 */}
+          {groups && allGroupsEmpty(groups) && (
+            <div className="av-hint-row" data-search-empty="1">没找到「{q}」</div>
           )}
-          {bili && !bili.error && bili.items.length === 0 && (
-            <div className="av-hint-row">{bili.hint || 'B 站没有匹配的 UP 主'}</div>
-          )}
-          {bili && !bili.error && bili.items.length > 0 && (
+          {groups?.map((g) => {
+            const note = groupNote(g)
+            if (!note) return null
+            return (
+              <div key={g.platform}
+                   className={`av-hint-row${note.tone === 'err' ? ' err' : ''}`}
+                   data-search-note={g.platform}>
+                {note.text}
+              </div>
+            )
+          })}
+          {groups && !allGroupsEmpty(groups) && (
             <div className="av-hint-row">
-              B 站命中 {bili.items.length} 条{bili.cached && '（缓存）'}
-              {bili.has_more && (
-                <button
-                  type="button"
-                  className="av-link"
-                  disabled={biliLoading}
-                  onClick={() => void runBiliSearch(bili.page + 1)}
-                >
-                  加载更多（第 {bili.page + 1} 页）
-                </button>
-              )}
+              <button
+                type="button"
+                className="av-link"
+                disabled={onlineLoading}
+                onClick={() => void runSearch(searchPage + 1)}
+                title="同一批平台上再翻一页（各平台按自己的分页走）"
+              >
+                加载更多（第 {searchPage + 1} 页）
+              </button>
             </div>
           )}
         </OverlayScroll>
