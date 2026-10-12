@@ -206,6 +206,8 @@ class LiveSession(Base):
         Index("ix_live_sessions_account_start", "account_id", "start_at"),
         # 按类型筛（日历）/ 按类型聚合（数据视图卡片）走它；见 f016。
         Index("ix_live_sessions_account_category", "account_id", "category"),
+        # 物化时按"场次"取成员行走它；见 f017。
+        Index("ix_live_sessions_account_session", "account_id", "session_key"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -227,10 +229,18 @@ class LiveSession(Base):
     raw_json = Column(Text, nullable=True)
     # 类型落库（f016，2026-10-12）：**写时定稿**——写这一行时按它自己带的
     # 标题/分区/起播时刻推一次，写进来就冻住（用户口径：新增场次不改动历史场次）。
-    # ⚠️ 只有"真正的推导"（title/area/date）才写；兜底不写 ⇒ NULL = 还没定出来，
-    # 读取时按同一口径现算（见 app/services/live_settle.py）。
+    # f017（2026-10-13）起：**兜底也落库**（写中性 `live`，`category_from='fallback'`
+    # 表示"定稿过、结论是没定出来"）⇒ 按类型聚合真的能直查索引（见 f017 与 live_settle）。
     category = Column(Text, nullable=True)
     category_from = Column(Text, nullable=True)
+    # 场次身份（f017，2026-10-13）：**合并组的锚**，只写在"代表行"上，其余行为 NULL。
+    #
+    # 为什么需要它：同一场直播可能有多行（danmakus + feed 各一行；self 快照并入时多的那些行），
+    # 而"哪些行是同一场"只有**读取时的合并规则**说了算（room/dup/interrupt/restart 四条时间判据）。
+    # 于是 `GROUP BY category` 数的是**行**、合并视图数的是**场次**（真机实测差 123 行/14 账号），
+    # 而且组内各行的类型可能不一致（实测 57/123 组——它们是不同规则版本下分别落库的）。
+    # 规则：代表行 = 组里源优先级最高的那个真源 id 对应的行（与 `merged()` 定对外 id 同一条）。
+    session_key = Column(Text, nullable=True)
     # nullable=False 与迁移链对齐（e006/e007/e004/e005 均为 NOT NULL，且无 server_default）：
     # 值由上面的 python default 提供。写成 nullable=True 会让 create_all 建库
     # （单测内存库 / 旧库桥接）与迁移建库结构不一致 —— 由

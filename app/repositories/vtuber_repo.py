@@ -982,6 +982,65 @@ class LiveSessionRepo:
             "category_from": None,
         }
 
+    # ── 场次身份物化（f017，devlog/471）──────────────────────────────
+
+    def materialize_sessions(self, account_id: int, states, rows=None) -> dict:
+        """把"这一场是谁 + 该显示什么类型"写进代表行（**本方法内部 commit**）。
+
+        `states`：`live_settle.group_states(...)` 算出来的物化目标（服务层只算不写）。
+        `rows`：可选 —— 调用方**已经装载好**的该账号全部行（`merged()` 顺手就能给）。
+        给了就不重复查一次库（读路径每请求都会调用本方法，两倍查询没必要）。
+
+        规则两条，都按**场次**而不是按行：
+
+        1. 代表行 → `session_key` + 类型两列；
+        2. 同组其余行 → 三列清空（**那条不变量是"`GROUP BY category` = 每场一次"的依据**）。
+
+        ⚠️ 为什么要清空非代表行：实测 123 个多行组里 **57 组**的两行类型**不一样**
+        （不同规则版本下分别落库的）。留着它们，按列聚合就会得出两个答案。
+
+        ⚠️ 为什么是"全账号重扫"而不是只写这一批碰到的组：增量同步往一个组里加新行时，
+        旧代表行必须被降级 —— 只写碰到的那些组会留下两个"代表"。
+
+        ⚠️ **本方法会写库**（值变了才写）：因此它所在的读端点**需要可写的库**。
+        只读打开（`mode=ro`）时这一步会失败 —— 那时按列聚合与合并视图不再等数，
+        见 `scripts/measure_endpoints.py` 头部的口径说明与 `devlog/471`。
+
+        返回计数（不返回 `MaterializeStats` 对象：仓库层不许 import 服务层，
+        见 `tests/test_dependency_direction.py`）。
+        """
+        if rows is None:
+            rows = (self.db.query(LiveSession)
+                    .filter(LiveSession.account_id == account_id).all())
+        by_live = {r.live_id: r for r in rows if r.live_id}
+        # 这一场该有的样子：行 id → (session_key, category, category_from)
+        want: dict[int, tuple[str | None, str | None, str | None]] = {}
+        for st in states:
+            row = by_live.get(st.representative_id)
+            if row is None:
+                continue
+            want[row.id] = (st.session_key, st.category, st.category_from)
+        scanned = written = representatives = cleared = 0
+        for row in rows:
+            scanned += 1
+            goal = want.get(row.id, (None, None, None))   # 缺省 = 非代表行：三列都清
+            if (row.session_key, row.category, row.category_from) == goal:
+                continue                           # 已经是对的 ⇒ 不产生写
+            row.session_key, row.category, row.category_from = goal
+            written += 1
+            if row.id in want:
+                representatives += 1
+            else:
+                cleared += 1
+        if written:
+            self.db.commit()
+        return {
+            "scanned": scanned,
+            "written": written,
+            "representatives": representatives,
+            "cleared": cleared,
+        }
+
 
 class LiveCategoryOverrideRepo:
     """直播分类用户校正（v0.9.x 类型引擎 v2 第⑦信号）。

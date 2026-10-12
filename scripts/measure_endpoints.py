@@ -16,6 +16,16 @@
    免得把"网络慢"记成"我们慢"；
 4. **非 200 一律当失败，不打数字**（见下）。
 
+## ⚠️ 只读口径在 f017 之后有个例外（2026-10-13）
+
+`/live-sessions` 与 `/live-type-stats` 在 f017 起会**顺手物化"场次身份"**
+（`session_key`，见 `devlog/471`）—— 那是**写**。所以对这两个端点，
+`mode=ro` 的库会让它 500（`attempt to write a readonly database`），
+而按列聚合也会因为没物化过而与合并视图不等数。
+
+⇒ 量这两个端点时给 **`--db` 指一份可写的副本**（真库永远别给可写的）。
+其余端点不受影响，仍按上面的只读口径量。
+
 ## ⚠️ 为什么 ④ 是必须的（2026-10-10 第一次跑就踩了）
 
 第一版忘了带 `X-DDToolkit-Token`（S1 起后端要它），于是**八个端点全 401**，
@@ -83,6 +93,13 @@ def _readonly_session(db_path: Path):
     return sessionmaker(bind=engine)
 
 
+def _readwrite_session(db_path: Path):
+    """可写引擎 ——**只给副本用**（见 `--write`；真库严禁）。"""
+    engine = create_engine(f"sqlite:///{db_path.as_posix()}",
+                           connect_args={"check_same_thread": False})
+    return sessionmaker(bind=engine)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="读端点耗时快照（真机库只读）")
     ap.add_argument("--db", default="", help="sqlite 路径（默认自动找真机数据目录）")
@@ -90,15 +107,24 @@ def main() -> int:
     ap.add_argument("--account", type=int, default=0, help="指定账号 id（默认取场次最多的那个）")
     ap.add_argument("--breakdown", action="store_true",
                     help="把 /live-sessions 那一项再拆到段（取数/聚类/推断/序列化）")
+    ap.add_argument("--write", action="store_true",
+                    help="可写打开（**只给副本**）：f017 起 /live-sessions 与 "
+                         "/live-type-stats 会顺手物化，只读库上会 500")
     args = ap.parse_args()
 
     db_path = Path(args.db) if args.db else _default_db()
     if db_path is None or not db_path.exists():
         print("找不到库（用 --db 指定，或设 DDTOOLKIT_DATA_DIR）")
         return 2
-    print(f"库：{db_path}（**只读**打开）")
+    if args.write and "--write" not in sys.argv:
+        print("--write 参数解析异常（脚本坏了，别继续）")
+        return 2
+    if args.write and not args.db:
+        print("--write 必须同时给 --db <副本路径>：**真库不给写**（本脚本的底线）")
+        return 2
+    print(f"库：{db_path}（{'**可写**（副本）' if args.write else '**只读**'}打开）")
 
-    Session = _readonly_session(db_path)
+    Session = _readwrite_session(db_path) if args.write else _readonly_session(db_path)
     probe = Session()
     if args.account:
         aid = args.account
@@ -137,6 +163,7 @@ def main() -> int:
 
     endpoints: list[tuple[str, str]] = [
         ("场次列表（数据视图的日历卡）", f"/account/{aid}/live-sessions"),
+        ("场次类型统计（数据视图的卡片）", f"/account/{aid}/live-type-stats"),
         ("场次详情（点日期格的弹窗）", f"/account/{aid}/live-sessions/{lid}"),
         ("粉丝趋势（数据视图的折线卡）", f"/account/{aid}/fan-trend"),
         ("礼物日聚合", f"/account/{aid}/gift-days"),

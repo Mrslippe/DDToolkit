@@ -151,11 +151,16 @@ erDiagram
 | `total_income` | FLOAT | danmakus 收益（元） |
 | `max_online_count` / `danmakus_count` | INTEGER | 峰值人气 / 弹幕数 |
 | `vod_url` | TEXT | **录播地址**（f013，B2 `devlog/454`）：唯一入库形态 `https://www.bilibili.com/video/BV…[?p=N]`，规范化 + 拒绝理由见 `app/domain/live_manual.py::normalize_vod`（`b23.tv` / `http:` / 非 B 站主机都拒 —— 壳的白名单只放行 https + 精确主机）。**唯一没有自动源的用户手填列** ⇒ 合并里只增不减（不变量 39） |
+| `category` / `category_from` | TEXT | **场次类型**（f016，devlog/467）：写这一行时按它自己的标题/分区定稿（用户口径：新增场次不改动历史场次）。**兜底也落库**（`'live'` + `'fallback'`，f017）⇒ 按类型聚合能直查索引；`category_from IS NULL` 才是"还没定稿"。`category_from` 取值 = `title`/`area`/`date`/`fallback`/`stored`/`unknown` |
+| `session_key` | TEXT | **场次身份 / 代表行标记**（f017，devlog/471）：`<代表行live_id>#<组锚行id>`，**只写在代表行上**，同组其余行为 NULL。用途：让按类型聚合数**场次**而不是**行**（不变量 40）。物化在读路径（惰性，值一样就不写） |
 | `raw_json` | TEXT | 原始场次数据保真 |
 | `created_at` / `updated_at` | DATETIME | UTC now |
 
-索引：`ix_live_sessions_account_start (account_id, start_at)`。
-**self 快照推导的虚拟场次不落表**，读取时由 `LiveSessionRepo.merged()` 合并。
+索引：`ix_live_sessions_account_start (account_id, start_at)` ·
+`ix_live_sessions_account_category (account_id, category)`（f016：按类型筛/聚合）·
+`ix_live_sessions_account_session (account_id, session_key)`（f017：物化时按场次取成员行）。
+**self 快照推导的虚拟场次不落表**，读取时由 `LiveSessionRepo.merged()` 合并
+（⚠️ 因此按类型统计必须**另外把虚拟场次现算加上** —— 它们没有行，SQL 天然看不见）。
 
 #### `live_gift_days` — 礼物 / 大航海 / SC 日聚合（e004）
 
@@ -338,7 +343,10 @@ session 收口**（先写文件、再写索引行，见 `docs/backend/ASSETS.md 
 | `f011` background_focus_and_video | `vtubers.background_focus`（取景 JSON）+ `vtubers.background_video_path`（背景视频，需求 7/9，devlog/417） |
 | `f012` background_video_focus | `vtubers.background_video_focus`（**视频**的取景，与图片那份分开存，需求 9 补丁，devlog/426） |
 | `f013` live_session_vod | `live_sessions.vod_url`（场次录播地址；手动记录场次 `source='manual'` 不需要新列，需求 2/2.1，devlog/454） |
-| `f014` vtuber_group | `vtubers.group_name` + `vtubers.group_uuid`（**企划归属**，需求 6 / B3，devlog/457） = **当前 head** |
+| `f014` vtuber_group | `vtubers.group_name` + `vtubers.group_uuid`（**企划归属**，需求 6 / B3，devlog/457） |
+| `f015` vtuber_vod_account | `vtubers.vod_account_uid`（用户指定的**录播账号**，需求 2.1 / C1，devlog/464） |
+| `f016` live_session_category | `live_sessions.category` + `category_from` + 索引 `ix_live_sessions_account_category`（类型落库 / 写时定稿，devlog/467） |
+| `f017` live_session_key | `live_sessions.session_key` + 索引 `ix_live_sessions_account_session`（**场次身份 / 代表行** ⇒ 按类型聚合可直查索引 + 兜底也落库，devlog/471） = **当前 head** |
 
 **候选池快照 `vtubers.csv`（随包，不在库里）**：由 `scripts/discover_vtubers.py` 从
 **vdb.vtbs.moe `list.json`** 生成（应用运行时不访问它），列 =

@@ -194,6 +194,7 @@ flowchart LR
 | 37 | 远端资源要"抓一次、长期用"（L1，devlog/257）：头像/封面这类小、不变、反复要的 | `docs/backend/ASSETS.md` |
 | 38 | `ENDPOINT_RATE` 的键是**全局**的（devlog/334）：两个平台不许共用端点名，否则限速串台 | `docs/backend/FETCH-PIPELINE.md` |
 | 39 | 用户手填的字段在多源合并里只增不减（B2，devlog/454）：`live_sessions.vod_url` 没有 | `docs/backend/LIVE-AND-DANMAKU.md` |
+| 40 | 同一场只许一个"代表行"带类型（f017，devlog/471）：`session_key`/`category` 只写在 | `docs/backend/LIVE-AND-DANMAKU.md` |
 
 ## 4. 扩展点
 
@@ -201,7 +202,7 @@ flowchart LR
 |---|---|
 | 接入新平台（抖音/小红书…） | 继承 `platforms/base.py::BasePlatform` → `platforms/registry.py` 注册 → 前端平台常量；调度器自动接管 |
 | 接入新第三方源 | 实现 `externals/base.py::ExternalSource` → `externals/__init__.py` 注册（声明 `jobs` 与周期） |
-| 新增表/列 | 新建 `alembic/versions/{fNNN}_*.py`（编号按**实际实施顺序**顺延，当前 head `f009` = `local_assets`）→ 同步 `MIGRATION_HEAD` → 补 `models` 与 Repo → 若挂 `accounts/vtubers` 外键，**同步 `services/purge.py`**（不挂外键的如 `local_assets` 不必，但要把"引用关系怎么查"写进 `services/assets.py`） |
+| 新增表/列 | 新建 `alembic/versions/{fNNN}_*.py`（编号按**实际实施顺序**顺延，当前 head 查 `python scripts/gen_doc_numbers.py --list`）→ 同步 `MIGRATION_HEAD` → 补 `models` 与 Repo → 若挂 `accounts/vtubers` 外键，**同步 `services/purge.py`**（不挂外键的如 `local_assets` 不必，但要把"引用关系怎么查"写进 `services/assets.py`） |
 | 用户手改的字段被抓取覆盖 | **不再需要锁定**（`accounts.locked_fields` 已随 f004 删除）：抓取照常覆盖，覆盖前把旧值写进 `services/vtuber_history.py::record_field_change()`。⚠️ 记录只在**平台侧覆盖前**发生（手改不入账，devlog/075）；展示暂缓 —— 归入「账号信息历史快照」那条线（§TODO R9） |
 | 调整抓取频率/节流 | `app/core/config.py`（T0-T4 周期、请求间隔、批量休息、风控冷却） |
 | 新增前端视图 | `docs/frontend/UI-MAP.md`（右栏视图光条 + 场景状态机） |

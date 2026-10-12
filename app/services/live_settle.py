@@ -21,7 +21,14 @@
 | `learned` | ❌ | 校正反哺词库同样是全账号聚合；实测贡献 0 场。代价：校正只影响被点的那一场 |
 | `area` | ✅ | B 站房间分区（实测占 47.9%，是主力） |
 | `date` | ✅ | 生日/首播日/事件当日比对。⚠️ 真机 14 个 V **有生日 0 个、有首播日 0 个** ⇒ 今天永远不命中 |
-| `fallback` | ✅（不落库） | 中性「直播」；**算出来是兜底时两列写 NULL**，理由见 `settle_fields` |
+| `fallback` | ✅ | 中性「直播」；**`category='live'` + `category_from='fallback'`**（见下） |
+
+⚠️ **兜底那条 2026-10-13 改了**（f017，`devlog/471`）：原来是"两列都写 NULL"，理由是
+"NULL 表示还没定出来"。但那样按类型聚合**永远看不见这批**（真机实测约 55% 的场次：
+合并视图 7,639 场 vs `GROUP BY category` 3,948 行），于是"类型已落库"这句话在
+**按类型查询/统计**这两个用户可见入口上一直是空头支票。现在改成**兜底也落库**：
+真实值写 category，而"定稿过没有"改由 **`category_from` 是不是 NULL** 单独回答 ——
+这个信号原来就是它（`category_from` 一直在记"哪一档定的"）。
 
 ## 分层（别把这段代码往下挪）
 
@@ -86,17 +93,31 @@ def settle_fields(title: str | None, area_name: str | None = None,
                   start_at: datetime | None = None) -> dict[str, str | None]:
     """给**写点的 `fields` 字典**用的定稿结果：`{"category": …, "category_from": …}`。
 
-    ⚠️ 兜底（`fallback`）**一律写 NULL**（不是写 "live"）："算过但没定出来"和
-    "还没跑过定稿"在库里必须是同一种状态，否则 `_resolve_categories` 没法只靠
-    "列是不是空"决定该不该现算，同一行还会随"是写点写的还是回填写的"而不同。
+    ⚠️ **兜底也写**（`category='live'` + `category_from='fallback'`，f017 改）：两列都写 NULL
+    会让按类型聚合看不见这批（真机约 55%），"按类型查询/统计"就成了空头支票。
+    "定稿过没有"由 `category_from` 单独回答（NULL = 还没定稿，读取时现算一次）。
 
     ⚠️ **`None` 是"定稿过了，结论是没定出来"**，与"不含这两个键 = 别动它"不同 ——
     仓库层按这条区分（见 `LiveSessionRepo._upsert`）。
     """
-    category, source = settle(title, area_name, parent_area_name, start_at)
-    if source == "fallback":
-        return {"category": None, "category_from": None}
+    return _settle_pair(settle(title, area_name, parent_area_name, start_at))
+
+
+def _settle_pair(settled: tuple[str, str]) -> dict[str, str | None]:
+    """`settle()` 的返回值 → 写库的两列（**唯一一处**做"兜底怎么记"这个决定）。"""
+    category, source = settled
     return {"category": category, "category_from": source}
+
+
+def apply_to_row(row: LiveSession) -> tuple[str, str]:
+    """按**表内行自己的字段**定稿并写进两列（不提交，随调用方的事务走）。
+
+    给"没有 fields 字典可塞"的两条路径用：`create_manual` / `update_row` 之后由路由层调。
+    """
+    fields = settle_fields(row.title, row.area_name, row.parent_area_name, row.start_at)
+    row.category = fields["category"]
+    row.category_from = fields["category_from"]
+    return settle(row.title, row.area_name, row.parent_area_name, row.start_at)
 
 
 def settle_danmakus_item(item: dict[str, Any],
@@ -112,17 +133,6 @@ def settle_danmakus_item(item: dict[str, Any],
                          start_at)
 
 
-def apply_to_row(row: LiveSession) -> tuple[str, str]:
-    """按**表内行自己的字段**定稿并写进两列（不提交，随调用方的事务走）。
-
-    给"没有 fields 字典可塞"的两条路径用：`create_manual` / `update_row` 之后由路由层调。
-    """
-    fields = settle_fields(row.title, row.area_name, row.parent_area_name, row.start_at)
-    row.category = fields["category"]
-    row.category_from = fields["category_from"]
-    return settle(row.title, row.area_name, row.parent_area_name, row.start_at)
-
-
 # ── 读取口径：落库列 / 现算 的选择 ───────────────────────────────
 
 def for_group(group: dict, stored: tuple[str, str] | None) -> tuple[str, str]:
@@ -131,7 +141,7 @@ def for_group(group: dict, stored: tuple[str, str] | None) -> tuple[str, str]:
     1. **有落库值就信落库值**（单行场次、以及惰性回填过的老行都走这条）；
     2. 没有落库值 ⇒ 用**同一个** `settle()` 现算（不落库）：
        - 虚拟场次（合并组里没有表内行）本来就没有列可读；
-       - 老库尚未回填的行、以及回填判定为 `fallback` 而未落库的行，也走这条。
+       - 老库尚未回填的行也走这条（f017 起"兜底"会落库，所以这条只剩"还没补"）。
 
     ⚠️ 不在这里做 `override`：那是读取侧最后一道覆盖（见 `app/routers/vtuber.py`），
     并且要按 `live_id` 查校正表，不属于"这一场自己的数据"。
@@ -142,51 +152,102 @@ def for_group(group: dict, stored: tuple[str, str] | None) -> tuple[str, str]:
                   group.get("parent_area_name"), group.get("start_at"))
 
 
-# ── 惰性回填 ─────────────────────────────────────────────────────
+# ── 场次身份（f017）：把"这一场是谁"写进代表行 ─────────────────────
+#
+# 为什么需要：合并视图数的是**场次**，SQL `GROUP BY` 数的是**行**，
+# 而"哪些行是同一场"只有读路径的四条合并判据（room/dup/interrupt/restart）说了算
+# （`LiveSessionRepo.merged()`）。本段把那些组的物化目标算出来，
+# 仓库层照着写进 `session_key` / `category`（见 `LiveSessionRepo.materialize_sessions`）。
+#
+# ⚠️ 它不改类型：类型仍然是写点定稿的那个值；本段只决定"哪一行代表这一场"。
 
-class BackfillStats:
-    """回填结果（判据用：第二次读不许再写）。"""
+class GroupState:
+    """一个合并组的物化目标（仓库层照着写）。
+
+    - `session_key`：这一场的身份（`代表行live_id#组里id最小的成员id`）；
+    - `representative_id`：代表行 = 组里**优先级最高**的源那一行（同优先级取 id 最小的）；
+    - `category` / `category_from`：这一场该显示的类型（写点定稿值；没有就现算）。
+    """
+
+    __slots__ = ("session_key", "representative_id", "category", "category_from",
+                 "member_ids")
+
+    def __init__(self, session_key: str, representative_id: str,
+                 category: str, category_from: str, member_ids: tuple[str, ...]) -> None:
+        self.session_key = session_key
+        self.representative_id = representative_id
+        self.category = category
+        self.category_from = category_from
+        self.member_ids = member_ids
+
+
+def group_states(sessions: list[dict]) -> list[GroupState]:
+    """合并视图 → 每个组的物化目标（**纯函数**，不查库）。
+
+    `sessions` 必须是 `merged(..., with_ids=True)` 的结果（需要 `src_live_ids`）；
+    每组的 `stored_category`（代表行的落库原始元组，没有就是 None）由调用方填好。
+    """
+    out: list[GroupState] = []
+    for s in sessions:
+        live = {k: v for k, v in (s.get("src_live_ids") or {}).items()
+                if v and k != "self"}
+        if not live:
+            continue                      # 纯虚拟场次：没有行可挂（不物化）
+        # 代表行 = **`merged()` 给这个组定的对外 `live_id` 那一行**（它按源优先级选，
+        # 同优先级时按成员的加入顺序取第一个）。
+        #
+        # ⚠️ 为什么不在这里自己排一遍：那条 tie-break 是 `merged()` 的实现细节
+        #    （同源两行时它取决于合并顺序），自己排就会与对外 id 分叉 ——
+        #    而读取侧是按对外 id 查落库值的。分叉的症状是"这一场的类型**静默**退回
+        #    现算/兜底"（真机上同源两行的组上踩到过：物化写了 A 行，查的是 B 行）。
+        representative = s.get("live_id")
+        if not representative or representative not in live.values():
+            representative = min(live.values())
+        anchor = min(live.values())
+        stored = s.get("stored_category")
+        # ⚠️ 认不出来的落库值**归一成中性**（约束 C4），而不是拿今天的规则重算一遍：
+        #    "这一格是旧体系留下的、今天没有含义"本身就是一条信息，重算会把它抹掉
+        #    （重算出来多半也是兜底，结果一样但读出来的 `category_from` 不同）。
+        #    归一之后写进列，按列聚合才不会统计到一个没有标签的空壳。
+        # ⚠️ `(None, None)` 也要走现算：那是"这一行还没定稿"（调用方已把这种情形折成 None，
+        #    这里再挡一次 —— 少了它 `normalize_stored_category(None)` 会把它读成 `unknown`，
+        #    而 `unknown` 的语义是"库里是个认不出来的枚举"，不是"还没定稿"）。
+        if stored is not None and stored[0] is not None:
+            category, source = normalize_stored_category(*stored)
+        else:
+            category, source = settle(s.get("live_title"), s.get("area_name"),
+                                      s.get("parent_area_name"), s.get("start_at"))
+        out.append(GroupState(
+            session_key=f"{representative}#{anchor}",
+            representative_id=representative,
+            category=category,
+            category_from=source,
+            member_ids=tuple(live.values()),
+        ))
+    return out
+
+
+# ── 惰性物化的记账 ───────────────────────────────────────────────
+#
+# ⚠️ 分层：**写库那一段在仓库层**（`LiveSessionRepo.materialize_sessions`）——
+# 它要用 `_SOURCE_PRIORITY` 选代表行、还要按批 UPDATE，而仓库不能 import 本模块，
+# 所以形状与 `settle_fields` 一样：**服务层算好，仓库照着写**。
+
+class MaterializeStats:
+    """物化结果（判据用：第二次读不许再写）。"""
 
     def __init__(self) -> None:
-        self.scanned = 0        # 扫过的行
-        self.written = 0        # 落库的行
-        self.skipped = 0        # 有值 / 算出来是兜底 ⇒ 没写
+        self.scanned = 0          # 扫过的行
+        self.written = 0          # 真写了的行（值变了才算）
+        self.representatives = 0  # 其中被标成代表行的
+        self.cleared = 0          # 其中被清成"非代表行"的
 
     def __repr__(self) -> str:  # pragma: no cover - 只为日志可读
-        return (f"BackfillStats(scanned={self.scanned}, written={self.written}, "
-                f"skipped={self.skipped})")
-
-
-def backfill_rows(rows: list[LiveSession]) -> BackfillStats:
-    """惰性回填：给 `category` 还是 NULL 的行补上定稿值（**不提交**，随请求的事务走）。
-
-    ⚠️ 只给**合并组的代表行**调用（调用方筛好再传）：同一场的非代表行保持 NULL，
-    读的时候由代表行供值。
-
-    为什么只写"真正的推导"（`title`/`area`/`date`），**不写 `fallback`**：
-    兜底是"规则没定出来"的标记，不是结论。写进去会让两件事永久化 ——
-    ① 以后规则变好也认不出这些行该重算（列不空了）；② 统计口径里 `fallback`
-    变成"库里有值"，与"从未判定"混在一起。NULL 反而是诚实的：**读取时照样显示中性**，
-    因为 `for_group` 会对没有落库值的组现算一次。
-    """
-    stats = BackfillStats()
-    for row in rows:
-        stats.scanned += 1
-        if row.category is not None:
-            stats.skipped += 1
-            continue
-        fields = settle_fields(row.title, row.area_name, row.parent_area_name,
-                               row.start_at)
-        if fields["category"] is None:
-            stats.skipped += 1
-            continue
-        row.category = fields["category"]
-        row.category_from = fields["category_from"]
-        stats.written += 1
-    return stats
+        return (f"MaterializeStats(scanned={self.scanned}, written={self.written}, "
+                f"representatives={self.representatives}, cleared={self.cleared})")
 
 
 __all__ = [
-    "BackfillStats", "apply_to_row", "backfill_rows", "for_group",
+    "GroupState", "MaterializeStats", "apply_to_row", "for_group", "group_states",
     "normalize_stored_category", "settle", "settle_danmakus_item", "settle_fields",
 ]

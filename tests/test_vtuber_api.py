@@ -2754,16 +2754,21 @@ def test_settle_does_not_touch_other_rows(client):
 
 
 def test_settle_refreshes_when_the_title_arrives_late(client):
-    """★「标题后到」：先空标题落库、后来补上 ⇒ 补的那一次连类型一起刷新。"""
+    """★「标题后到」：先空标题落库、后来补上 ⇒ 补的那一次连类型一起刷新。
+
+    ⚠️ f017 起兜底**也落库**（`category='live'` + `category_from='fallback'`）：
+    "定稿过没有"改由 `category_from` 回答，所以这条用例断的是那一对。
+    """
     aid = _mk_account(client)
     db = TestingSession()
     # ⚠️ 分区要显式给空：不然 `_dm` 的默认分区会把这一场判成「杂谈」，
-    # 这条用例就测不到"没东西可判 ⇒ NULL"了。
+    # 这条用例就测不到"没东西可判 ⇒ 兜底"了。
     _sync_danmakus(db, aid, [
         _dm("dm-1", "", datetime(2026, 9, 5, 12, 0), area="", parentArea=""),
     ])
     row = db.query(LiveSession).filter_by(live_id="dm-1").one()
-    assert row.category is None, "没标题也没分区 ⇒ 兜底不落库（NULL = 还没定出来）"
+    assert (row.category, row.category_from) == ("live", "fallback"), (
+        "没标题也没分区 ⇒ 兜底：类型落中性 live，category_from 记 fallback（f017）")
 
     _sync_danmakus(db, aid, [
         _dm("dm-1", "周六来唱歌！", datetime(2026, 9, 5, 12, 0)),
@@ -2822,11 +2827,14 @@ def test_lazy_backfill_fills_old_rows_once(client):
     db.close()
 
 
-def test_lazy_backfill_leaves_fallback_rows_null(client):
-    """★兜底**不落库**：NULL 表示"还没定出来"，读取时照样显示中性。
+def test_lazy_materialize_settles_fallback_rows(client):
+    """★兜底**也落库**（f017）：`category='live'` + `category_from='fallback'`。
 
-    为什么这条重要：把兜底写进列，等于给这些行盖了章 —— 以后规则变好也认不出
-    它们该重算（列不空了），统计里 `fallback` 也会和"真判过"混在一起。
+    为什么改（原来是两列 NULL）：NULL 让**任何 SQL 聚合都看不见这批**（真机约 55%），
+    "按类型查询/统计"就成了空头支票。现在"定稿过没有"由 `category_from` 单独回答 ——
+    它是 NULL 才是"还没定稿"，读取时按同一口径现算。
+
+    ⚠️ 这条同时钉住**幂等**：第二次读不许再写（靠"值一样就不写"，见 materialize_sessions）。
     """
     aid = _mk_account(client)
     db = TestingSession()
@@ -2840,7 +2848,16 @@ def test_lazy_backfill_leaves_fallback_rows_null(client):
     assert (data[0]["category"], data[0]["category_from"]) == ("live", "fallback")
     db = TestingSession()
     row = db.query(LiveSession).filter_by(live_id="vague-1").one()
-    assert (row.category, row.category_from) == (None, None), "兜底被写进列了"
+    assert (row.category, row.category_from) == ("live", "fallback"), (
+        "兜底没落库 ⇒ 按类型统计看不见这一场")
+    stamp = row.updated_at
+    assert row.session_key, "没有场次身份 ⇒ 按列聚合会按行数算（f017）"
+    db.close()
+
+    assert client.get(f"/account/{aid}/live-sessions").status_code == 200
+    db = TestingSession()
+    row = db.query(LiveSession).filter_by(live_id="vague-1").one()
+    assert row.updated_at == stamp, "第二次读又写了一遍 —— 物化必须是幂等的"
     db.close()
 
 
@@ -2849,6 +2866,10 @@ def test_unknown_stored_category_degrades_to_neutral(client):
 
     ⚠️ 值要用**真正不存在**的枚举（`sports`）：`fitness` 曾是合法值，2026-10-12（T3）
     换成了 `sleep` —— 拿一个"曾经合法"的值当未知值测，体系一变这条用例就悄悄失去意义。
+
+    ⚠️ f017 起**物化会把它改写成今天的结论**（`live`/`unknown`）：库里那格不再是
+    `sports` —— 否则按列聚合要把"今天没有含义的枚举"统计进去，数字与日历对不上。
+    物化仍然是**写时/读路径补数据**，不是"每次读都把库改一遍"（值一样就不写）。
     """
     aid = _mk_account(client)
     db = TestingSession()
@@ -2861,11 +2882,10 @@ def test_unknown_stored_category_degrades_to_neutral(client):
     data = client.get(f"/account/{aid}/live-sessions").json()
     assert (data[0]["category"], data[0]["category_from"]) == ("live", "unknown"), (
         "未知枚举被当成合法值透出去了 —— 前端筛选会多出一个没有标签的空壳")
-    # ⚠️ 落库值**没被改写**（只是读取时降级）：体系调整/规则迭代之后想恢复，数据还在原地
     db = TestingSession()
     row = db.query(LiveSession).filter_by(live_id="legacy-1").one()
-    assert (row.category, row.category_from) == ("sports", "title"), (
-        "读取时把库里的原值改掉了 —— 归一必须是读取口径，不是写回")
+    assert (row.category, row.category_from) == ("live", "unknown"), (
+        "物化没把库里那个今天没有含义的枚举换成中性值（按列聚合会统计到它）")
     db.close()
 
 
@@ -2911,25 +2931,28 @@ def test_stored_lookup_needs_src_live_ids(client):
                        category="sports", category_from="title"))
     db.commit()
     repo = LiveSessionRepo(db)
-    assert _stored_by_live_id(db, repo.merged(aid, with_ids=True)) == {
+    assert _stored_by_live_id(db, aid, repo.merged(aid, with_ids=True)) == {
         "legacy-1": ("live", "unknown")}, "带 src_live_ids 时反而读不到落库值"
-    assert _stored_by_live_id(db, repo.merged(aid)) == {}, (
+    assert _stored_by_live_id(db, aid, repo.merged(aid)) == {}, (
         "不带 ids 竟然也读到了 —— 这条用例的前提变了，去看 _stored_by_live_id 的实现")
     db.close()
 
 
 def test_live_type_stats_matches_the_calendar(client):
-    """★T4：按类型统计与日历**同源**（校正 / 虚拟场次 / 未落库行都不许算丢）。
+    """★T4 + f017：按类型统计与日历**逐类等数**（校正 / 虚拟场次 / 兜底行都不许算丢）。
 
-    为什么不用 `GROUP BY category`：那会漏掉虚拟场次（没有行）与未落库的老行（NULL），
-    数字比日历小，而用户没有别的办法核对哪个对。
+    ⚠️ f016 时这条只能靠"两边都走合并视图"成立；f017 起**统计侧直查索引**
+    （`_category_counts`：代表行 + 校正叠加 + 虚拟场次现算），
+    所以这条用例现在的身份是**两条路的一致性判据**，不是"同源"。
+
+    反向验证见 `test_type_index_parity_breaks_when_materialize_is_skipped`。
     """
     aid = _mk_account(client)
     db = TestingSession()
     _sync_danmakus(db, aid, [
         _dm("dm-1", "周六来唱歌！", datetime(2026, 9, 5, 12, 0)),      # song/title
         _dm("dm-2", "原神深渊", datetime(2026, 9, 6, 12, 0)),          # game/title
-        # 判不出来 ⇒ 落库 NULL（兜底不落库），统计里算进中性 live
+        # 判不出来 ⇒ 兜底落库 live/fallback（f017），统计里算进中性 live
         _dm("dm-3", "今天", datetime(2026, 9, 7, 12, 0), area="", parentArea=""),
     ])
     db.close()
@@ -2941,10 +2964,122 @@ def test_live_type_stats_matches_the_calendar(client):
     by = {i["category"]: i["count"] for i in stats["items"]}
     assert by == {"song": 1, "chat": 1, "live": 1}, f"统计与日历不同源：{by}"
     assert stats["total"] == 3
-    # 落库非空只有 2 条（dm-3 判不出来 ⇒ NULL）—— 卡片要能如实说出这个差
-    assert stats["classified"] == 2, "classified 应当只数真有落库类型的行"
+    # 落库已定稿只有 2 条（dm-3 是兜底）—— 卡片要能如实说出这个差
+    assert stats["classified"] == 2, "classified 应当只数真定稿的行（兜底不算）"
     # 顺序 = 前端的展示顺序，兜底永远最后
     assert [i["category"] for i in stats["items"]][-1] == "live"
+
+    # ★与日历**逐类**对齐（日历那一份由 /live-sessions 给出）
+    calendar: dict[str, int] = {}
+    for s in client.get(f"/account/{aid}/live-sessions").json():
+        calendar[s["category"]] = calendar.get(s["category"], 0) + 1
+    assert by == calendar, f"卡片与日历逐类不等：卡片 {by} / 日历 {calendar}"
+
+
+def test_type_index_parity_breaks_when_materialize_is_skipped(client):
+    """★★**反向验证**：把物化停掉 ⇒ 按列聚合立刻与合并视图不等。
+
+    为什么要这条：f017 的整个收益建立在"只有代表行带 `session_key`/`category`"上。
+    如果哪天有人把物化摘掉（或不再在读路径调用），`_category_counts` 会**静默**返回一堆
+    0/少算的数字 —— 没有报错、没有日志（下面这条断言就是那种状态的样子）。
+    没有这条反向验证，上面那条"等数"用例可能只是"两边都恰好空"。
+    """
+    from app.routers import vtuber as vtuber_router
+
+    aid = _mk_account(client)
+    db = TestingSession()
+    _sync_danmakus(db, aid, [
+        _dm("dm-1", "周六来唱歌！", datetime(2026, 9, 5, 12, 0)),
+        _dm("dm-2", "原神深渊", datetime(2026, 9, 6, 12, 0)),
+    ])
+    db.close()
+
+    # 正对照：正常路径下卡片有数
+    ok = client.get(f"/account/{aid}/live-type-stats").json()
+    assert {i["category"]: i["count"] for i in ok["items"]} == {"song": 1, "game": 1}
+
+    # 把两列清掉并停掉物化 ⇒ 按列聚合应当读不到东西（这就是不变量破了的症状）
+    db = TestingSession()
+    db.query(LiveSession).filter(LiveSession.account_id == aid).update(
+        {"session_key": None, "category": None, "category_from": None})
+    db.commit()
+    db.close()
+    real = vtuber_router.group_states
+    vtuber_router.group_states = lambda *a, **kw: []      # 物化写不出代表行
+    try:
+        broken = client.get(f"/account/{aid}/live-type-stats").json()
+    finally:
+        vtuber_router.group_states = real
+    assert broken["items"] == [], (
+        "物化停掉之后按列聚合竟然还有数 —— 那这条判据量不到它要防的东西")
+    # ⚠️ 而 total 仍以合并视图为准（宁可数字保守，也不给一个"看起来更少"的分布）
+    assert broken["total"] == 2
+
+
+def test_only_the_representative_row_carries_the_type(client):
+    """★★f017 的不变量（`docs/backend/LIVE-AND-DANMAKU.md` 不变量 40）：
+
+    同一场被两行记下（两个录制源的 danmakus 行，同 room + 起播差 ≤90min）时——
+    **只有代表行**带 `session_key` 与类型两列，另一行三列都是 NULL。
+
+    为什么是硬不变量：`/live-type-stats` 直查 `(account_id, category)` 索引，
+    靠 `session_key IS NOT NULL` 保证"每场只数一次"。两行都带值 ⇒ 数字偏大；
+    两行都不带 ⇒ 数字偏小（正是 f016 那 55% 的老问题）。两种都不会报错。
+
+    ⚠️ 为什么不用 danmakus + feed 各一行来构造：`_upsert` 是按 `(account_id, live_id)`
+    幂等的，同 id 的第二行会**更新**而不是新增 —— 真机里的多行组是**不同 id**
+    （两个录制源：`mel=64` 与 `mel=17937`），所以这里也照那个形状造。
+    """
+    aid = _mk_account(client)
+    db = TestingSession()
+    _sync_danmakus(db, aid, [
+        _dm("dm-a", "周六来唱歌！", datetime(2026, 9, 5, 12, 0),
+            stopDate=_ms_of(datetime(2026, 9, 5, 14, 0)), roomId=7788),
+        # 同 room、起播差 20min ⇒ room 分支并成一场（两个源各记一行）
+        _dm("dm-b", "", datetime(2026, 9, 5, 12, 20),
+            stopDate=_ms_of(datetime(2026, 9, 5, 14, 0)), roomId=7788,
+            area="", parentArea=""),
+    ])
+    db.close()
+
+    data = client.get(f"/account/{aid}/live-sessions").json()
+    assert len(data) == 1, "两行应当并成一场"
+
+    db = TestingSession()
+    rows = (db.query(LiveSession).filter(LiveSession.account_id == aid)
+            .order_by(LiveSession.id).all())
+    assert len(rows) == 2, "写点应当留下两行（同一场、两个源）"
+    reps = [r for r in rows if r.session_key]
+    others = [r for r in rows if not r.session_key]
+    assert len(reps) == 1 and len(others) == 1, (
+        f"代表行应当恰好一行：带 key 的 {len(reps)} 行 / 不带的 {len(others)} 行")
+    rep, other = reps[0], others[0]
+    # ★代表行 = **对外 id 那一行**（物化与用户看到的那一份必须是同一行）
+    assert rep.live_id == data[0]["live_id"], (
+        "物化的代表行与对外的 live_id 不是同一行 ⇒ 读取按对外 id 查不到落库值，"
+        "这一场的类型会静默退回兜底")
+    assert rep.session_key.startswith(f"{rep.live_id}#")
+    # ★这一场对外给的就是代表行那一行的定稿值
+    assert (rep.category, rep.category_from) == (data[0]["category"],
+                                                data[0]["category_from"])
+    # ★非代表行：三列全空（它就是"会被 GROUP BY 多算的那一行"）
+    assert (other.session_key, other.category, other.category_from) == (None, None, None), (
+        "非代表行也带了值 ⇒ 按列聚合会把这一场数两遍")
+    db.close()
+
+    # ★两个入口都得是"一场"（不是两场），且**分类跟着代表行**（与日历同一个答案）
+    stats = client.get(f"/account/{aid}/live-type-stats").json()
+    assert stats["total"] == 1
+    assert {i["category"]: i["count"] for i in stats["items"]} == {
+        data[0]["category"]: 1}, (
+        "按类型统计与日历给的不是同一类 —— f017 的不变量破了")
+    # ⚠️ 这条用例里两行的答案**本来就不同**（代表行是空标题那行 ⇒ 兜底），
+    #    所以卡片给的是 `live` 而不是 `song`。这不是 bug：f017 的口径是
+    #    "这一场按**代表行**的数据定稿"，而"组里哪一行的答案算数"在 f016 时代
+    #    是各端点各算一遍（列表看 `_keep_category`、统计看合并视图），
+    #    现在只有一处。要让这一场是 `song`，就把有标题的那一行做成代表行。
+    assert data[0]["category"] == "live"
+    assert data[0]["category"] == rep.category
 
 
 def test_live_sessions_types_filter(client):
@@ -3017,6 +3152,6 @@ def test_manual_session_is_settled_on_create_and_update(client):
     assert patched.status_code == 200
     db = TestingSession()
     row = db.query(LiveSession).filter_by(live_id=lid).one()
-    assert (row.category, row.category_from) == (None, None), (
-        "改了标题却没重算（这条标题判不出东西 ⇒ 兜底 = NULL，不落库）")
+    assert (row.category, row.category_from) == ("live", "fallback"), (
+        "改了标题却没重算（这条标题判不出东西 ⇒ 兜底：live + fallback，f017）")
     db.close()

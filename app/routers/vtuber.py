@@ -23,7 +23,7 @@ from app.repositories.vtuber_repo import (
     LiveCategoryOverrideRepo, ProfileCardRepo, _SOURCE_PRIORITY,
 )
 from app.services.live_settle import (
-    backfill_rows, for_group, normalize_stored_category, settle_fields,
+    for_group, group_states, normalize_stored_category, settle_fields,
 )
 from app.schemas.vtuber import (
     VTuberOut, VTuberCreate, VTuberUpdate,
@@ -824,21 +824,27 @@ def _live_infer_ctx(db: Session, account_id: int):
     return account, overrides
 
 
-def _resolve_categories(db: Session, sessions: list[dict],
-                        overrides: dict) -> list[tuple[str, str]]:
-    """每个合并组的最终类型（与 `sessions` 同序）+ **惰性回填**。
+def _resolve_categories(db: Session, account_id: int, sessions: list[dict],
+                        overrides: dict,
+                        stored: dict[str, tuple[str, str]] | None = None,
+                        ) -> list[tuple[str, str]]:
+    """每个合并组的最终类型（与 `sessions` 同序）+ **惰性回填 / 物化**。
 
     信号栈（v3，2026-10-12 类型落库）：
         override（用户校正）  >  落库值（写时定稿）  >  按同一口径现算  >  中性
 
-    为什么还要"现算"这一层：落库值对**没有表内行**的合并组（虚拟场次）与**尚未回填**
+    为什么还要"现算"这一层：落库值对**没有表内行**的合并组（虚拟场次）与**尚未补过**
     的老行是空的。现算用的函数与写路径**同一个**（`live_settle.settle`）⇒ 两条路不会跑偏。
 
-    惰性回填（用户 2026-10-12 选定）：迁移会自动跑、`scripts/backfill_*.py` 不会，
-    所以老库那批的列会一直是 NULL —— 在这里**顺手补一次**（只补代表行、只补真正的推导、
-    补过就不再补），用户不需要跑任何脚本。
+    惰性补（用户 2026-10-12 选定）：迁移会自动跑、`scripts/backfill_*.py` 不会，
+    所以老库那批的列会一直是 NULL —— 在这里**顺手补一次**（补类型 + 补"这一场是谁"，
+    见 `_stored_by_live_id`），补过就不再补，用户不需要跑任何脚本。
+
+    `stored`：调用方**已经**算过 `_stored_by_live_id` 时直接传进来 —— 同一个请求里
+    再算一遍等于把物化那趟（全账号装载 + 比对）白跑一次。
     """
-    stored = _stored_by_live_id(db, sessions)
+    if stored is None:
+        stored = _stored_by_live_id(db, account_id, sessions)
     out: list[tuple[str, str]] = []
     for s in sessions:
         hit = _override_hit(s, overrides)
@@ -867,12 +873,12 @@ def _override_hit(s: dict, overrides: dict) -> str | None:
     return None
 
 
-def _stored_by_live_id(db: Session, sessions: list[dict]) -> dict[str, tuple[str, str]]:
-    """合并组的代表行 → 落库的 (category, category_from)；**顺带惰性回填**。
+def _stored_by_live_id(db: Session, account_id: int,
+                       sessions: list[dict]) -> dict[str, tuple[str, str]]:
+    """合并组的代表行 → 落库的 (category, category_from)；**顺带惰性物化**。
 
-    代表行 = `_SRC_IDS_KEY` 里优先级最高的那个真源 id（与 `merged()` 定对外 id 同一条规则），
-    正是 `merged()` 里承载 `category` 的那一行。只有它能被回填（非代表行保持 NULL，
-    读的时候由代表行供值）。
+    代表行 = `src_live_ids` 里优先级最高的那个真源 id（与 `merged()` 定对外 id 同一条规则），
+    正是 `merged()` 里承载 `category` 的那一行。
 
     ⚠️⚠️ **`sessions` 必须来自 `merged(..., with_ids=True)`**：本函数靠 `src_live_ids`
     定位代表行，用默认的 `merged()` 会**静默**返回空表 —— 症状是"落库值明明写着，
@@ -880,33 +886,75 @@ def _stored_by_live_id(db: Session, sessions: list[dict]) -> dict[str, tuple[str
 
     返回的是**归一过**的值（认不出来的枚举 ⇒ 中性，见 `normalize_stored_category`）：
     调用方拿到就能直接展示，不必各自再判一次"这个 key 认不认识"。
+
+    ⚠️ 惰性物化（f017，2026-10-13）：光补类型不够 —— 同一场可能有多行（danmakus + feed、
+    self 快照并入），而 `GROUP BY category` 数的是**行**。所以这里顺手把
+    「这一场是谁」（`session_key` 只写在代表行上）也写进去，
+    按类型查询/统计才能直查 `(account_id, category)` 索引且与日历同一个答案。
+    规则与惰性回填一致：**补过就不再补**（值一样就不写，见 `materialize_sessions`）。
+
+    ⚠️ **同一个请求里调用多次只跑一趟**：第一趟会在每个 `s` 上留下 `stored_category`，
+    第二趟见到它就直接读出来用（少了这道闸，日历那一屏会白跑两趟物化 ——
+    全账号装载 + 逐行比对，实测在 1,400 行的账号上是几十毫秒）。
     """
-    picked: dict[str, LiveSession] = {}
-    for s in sessions:
-        live = {k: v for k, v in (s.get("src_live_ids") or {}).items() if v}
-        if not live:
-            continue
-        winner = max(live, key=lambda k: _SOURCE_PRIORITY.get(k, 0))
-        if winner == "self":
-            continue                      # 纯虚拟场次：没有行可挂
-        picked[live[winner]] = s
-    if not picked:
+    if not sessions:
         return {}
-    rows = (db.query(LiveSession)
-            .filter(LiveSession.live_id.in_(list(picked)))
-            .all())
+    if all("resolved_category" in s for s in sessions):
+        # 同一个请求里第二趟：第一趟已经把生效值写在 `s` 上了 ⇒ 直接复用。
+        # 少了这道闸，日历那一屏会白跑两趟物化（全账号装载 + 逐行比对）。
+        return {rep: s["resolved_category"] for s in sessions
+                if (rep := _representative_id(s)) is not None}
+    rows = [r for r in LiveSessionRepo(db).list_by_account(account_id) if r.live_id]
     by_live = {r.live_id: r for r in rows}
-    stats = backfill_rows(rows)
-    if stats.written:
-        db.commit()
-        logger.debug(f"类型惰性回填：{stats}")
-    out: dict[str, tuple[str, str]] = {}
-    for live_id, _s in picked.items():
-        row = by_live.get(live_id)
-        if row is not None and row.category is not None:
-            out[live_id] = normalize_stored_category(row.category, row.category_from)
+    # 代表行的落库原始值 → 交给 `group_states` 当"这一场已定稿"的依据
+    for s in sessions:
+        rep = _representative_id(s)
+        s["stored_category"] = (by_live[rep].category, by_live[rep].category_from) \
+            if rep and rep in by_live else None
+    stats, states = materialize_group_identity(db, account_id, sessions, rows=rows)
+    if stats["written"]:
+        logger.debug(f"场次身份惰性物化：{stats}")
+    # ⚠️ 输出**不能读物化之后的那些 row**（它们已经被改写了）：兜底行两列本来是 NULL，
+    #    读回来会变成 `('live', 'unknown')`（"unknown"是给"认不出来的枚举"用的标记，
+    #    不是"这一场没定稿"）。所以直接用物化目标里的那一对 —— 它才是这一场的生效值。
+    out = {st.representative_id: (st.category, st.category_from) for st in states}
+    for s in sessions:                 # 记在 `s` 上，供同请求的第二趟复用
+        rep = _representative_id(s)
+        if rep in out:
+            s["resolved_category"] = out[rep]
     return out
 
+
+def _representative_id(s: dict) -> str | None:
+    """合并组的代表行 live_id —— **`merged()` 给这个组定的对外 id**（纯虚拟场次 ⇒ None）。
+
+    ⚠️ 不要在这里自己按源优先级再排一遍：那条规则的 tie-break（同源两行时取谁）
+    是 `merged()` 的实现细节，自己排就会与对外 id 分叉 —— 而读取侧是按对外 id
+    查落库值的，分叉的症状是"这一场的类型**静默**退回现算/兜底"。
+    与 `live_settle.group_states` 用的是同一条（那边也读 `s["live_id"]`）。
+    """
+    live = {k: v for k, v in (s.get("src_live_ids") or {}).items() if v}
+    if not live:
+        return None
+    rep = s.get("live_id")
+    if rep and rep in live.values():
+        return rep
+    return None if live.get("self") else min(v for v in live.values())
+
+
+def materialize_group_identity(db: Session, account_id: int, sessions: list[dict],
+                               rows: list | None = None) -> tuple[dict, list]:
+    """把合并视图的分组结论落库（服务层算、仓库写）——**两个入口共用这一处**。
+
+    为什么共用：`/live-sessions` 与 `/live-type-stats` 都要"这一场是谁"这个结论；
+    两条路各写一份实现的话，按列聚合与日历迟早会给出两个答案。
+
+    `rows`：调用方已装载的该账号全部行（省掉仓库里那次重复查询）。
+
+    返回 `(仓库计数, 物化目标)`：目标一并回给调用方，免得它为了拿生效值再算一遍。
+    """
+    states = group_states(sessions)
+    return LiveSessionRepo(db).materialize_sessions(account_id, states, rows=rows), states
 
 
 def _session_payload(s: dict, account_id: int, category: str,
@@ -915,13 +963,18 @@ def _session_payload(s: dict, account_id: int, category: str,
 
     ⚠️ 类型（`category`/`category_from`）的取法**不在这里**，见 `_resolve_categories`
     （写时定稿 + 校正覆盖 + 同一口径现算）；这里只负责组装。
+    ⚠️ 三个内部键要滤掉（`src_live_ids` 用于定位代表行，`stored_category`/
+    `resolved_category` 是读取过程中的中间量）—— 它们不是契约的一部分。
 
     `manual` 在这里**算一次**（域层纯函数 `is_manual_source`）：
     让前端自己按 `+` 拆 `source` 的话，「哪些场次能改时间、哪些能删」这条规则
     就有了两份实现，而两份实现漂移时**什么都不红**（服务端照样该拒就拒，
     用户只会看到按钮点了报错）。
     """
-    return {"account_id": account_id, **s,
+    return {"account_id": account_id,
+            **{k: v for k, v in s.items()
+               if k not in ("src_live_ids", "stored_category",
+                            "resolved_category")},
             "category": category, "category_from": category_from,
             "manual": is_manual_source(s.get("source"))}
 
@@ -947,7 +1000,7 @@ def live_sessions(account_id: int, types: str | None = None,
     if not account:
         raise HTTPException(404, f"Account id={account_id} 不存在")
     sessions = LiveSessionRepo(db).merged(account_id, with_ids=True)
-    cats = _resolve_categories(db, sessions, overrides)
+    cats = _resolve_categories(db, account_id, sessions, overrides)
     wanted = _parse_types(types)
     out = []
     for s, (cat, src) in zip(sessions, cats):
@@ -973,36 +1026,100 @@ def _parse_types(types: str | None) -> set[str] | None:
 
 @router.get("/account/{account_id}/live-type-stats", response_model=LiveTypeStatsOut)
 def live_type_stats(account_id: int, db: Session = Depends(get_db)):
-    """按类型统计场次数（T4，2026-10-12）：数据视图「场次类型」卡片用。
+    """按类型统计场次数（T4，2026-10-12；f017 改直查索引）：数据视图「场次类型」卡片用。
 
-    ⚠️ **走合并视图 + `_resolve_categories`，不是 `GROUP BY category`**：
-    与日历同一套"生效值"口径（校正 > 落库值 > 现算）⇒ 卡片上的数字与用户数日历
-    数出来的一致。`GROUP BY` 会漏掉两类 —— 虚拟场次（没有行）与未回填的老行（NULL），
-    得出的数字比日历少，而用户没有别的办法核对哪个对。
+    ⚠️ **口径与日历一字不差，但成本从"每请求一次 merged()"降到一条索引聚合**（f017）：
+    f016 刚落地时这里只能走合并视图 —— 因为按列聚合会同时错两头
+    （兜底写 NULL ⇒ 那 55% 看不见；同一场多行 ⇒ 按行数多算）。
+    f017 把那两件事补上之后（`session_key` 只写在代表行上 + 兜底也落 `'live'`），
+    `(account_id, category)` 上的聚合与合并视图**逐类等数**
+    （真机 14 账号对照：`scripts/check_type_index_parity.py`）。
 
-    代价：每请求一次 `merged()`（真机最忙账号 ~80ms，见 `docs/ops/PERF.md`）。
-    卡片一次会话只取一次、`fetch-idle` 不每轮打它，可以接受；"按页取数"那批落地后
-    这里可以直接读 `(account_id, category)` 索引。
+    三段拼起来才是日历那个数：
+      ① 代表行的 `category`（每场一行，索引聚合）
+      ② 用户校正（override）压上去 —— 校正**不并进列**（清空校正要能回到推导值）
+      ③ 虚拟场次（self 快照推导，没有行）现算加上
+
+    `classified`（"定稿过"的场次数）**仍然按落库值算**（`category_from` 不是 `fallback`）：
+    它是"规则认出多少"的读数，与 `total` 的差就是卡片上那句"另有 N 场暂按中性显示"。
     """
     account, overrides = _live_infer_ctx(db, account_id)
     if not account:
         raise HTTPException(404, f"Account id={account_id} 不存在")
     sessions = LiveSessionRepo(db).merged(account_id, with_ids=True)
-    cats = _resolve_categories(db, sessions, overrides)
-    counter: dict[str, int] = {}
-    for cat, _src in cats:
-        counter[cat] = counter.get(cat, 0) + 1
+    counter, classified = _category_counts(db, account_id, sessions, overrides)
     # 顺序 = 前端的展示顺序（固定，免得卡片每次开都换排列）；兜底 `live` 永远排最后
     order = [*TYPE_DISPLAY_ORDER, LIVE]
     items = [LiveTypeStatOut(category=c, count=counter[c])
              for c in order if counter.get(c)]
-    classified = (
+    total = sum(counter.values())
+    if total != len(sessions):
+        # f017 的不变量：按列聚合 = 合并视图。不一致时**以合并视图为准**并如实记日志 ——
+        # 500 会把一屏数据变成一句报错，而用户真正需要的是那一屏（他也没有别的入口核对）。
+        # 判据在测试里（`test_live_type_stats_matches_the_calendar` 逐类比对 + 反向验证）。
+        logger.warning(
+            f"按类型统计与合并视图不等价：account={account_id} "
+            f"按列={total} 合并={len(sessions)}（f017 的物化可能没跑完）")
+    return LiveTypeStatsOut(total=len(sessions), items=items, classified=classified)
+
+
+def _category_counts(db: Session, account_id: int, sessions: list[dict],
+                     overrides: dict) -> tuple[dict[str, int], int]:
+    """按类型的场次计数 —— **直查 `(account_id, category)` 索引**（f017）。
+
+    返回 `(counter, classified)`。`sessions` = `merged(..., with_ids=True)`，两处用：
+    ① 触发惰性物化（`_stored_by_live_id`，与日历同一个入口 ⇒ 数字天然同源）；
+    ② 补上**虚拟场次**（self 快照推导、表里没有行 ⇒ 没有 `session_key`）。
+
+    ⚠️ 只数 `session_key IS NOT NULL` 的行（代表行）：同一场可能有多行，
+    而"哪些行是同一场"由合并规则定（物化时写进 `session_key`，见 `live_settle`）。
+    """
+    _stored_by_live_id(db, account_id, sessions)      # 顺带物化（补过就不再补）
+    rows = (
+        db.query(LiveSession.category, func.count(func.distinct(LiveSession.session_key)))
+        .filter(LiveSession.account_id == account_id,
+                LiveSession.session_key.isnot(None),
+                LiveSession.category.isnot(None))
+        .group_by(LiveSession.category)
+        .all()
+    )
+    counter: dict[str, int] = {}
+    for category, n in rows:
+        cat, _src = normalize_stored_category(category)
+        counter[cat] = counter.get(cat, 0) + int(n or 0)
+    classified = int(
         db.query(func.count(LiveSession.id))
         .filter(LiveSession.account_id == account_id,
-                LiveSession.category.isnot(None))
+                LiveSession.session_key.isnot(None),
+                LiveSession.category_from.isnot(None),
+                LiveSession.category_from != "fallback")
         .scalar() or 0
     )
-    return LiveTypeStatsOut(total=len(sessions), items=items, classified=classified)
+    # ② 虚拟场次：没有行 ⇒ 现算加上。它们一律算"定稿"（不是推导就是兜底）。
+    for s in sessions:
+        if any(v for k, v in (s.get("src_live_ids") or {}).items()
+               if v and k != "self"):
+            continue
+        cat, _src = settle(s.get("live_title"), s.get("area_name"),
+                           s.get("parent_area_name"), s.get("start_at"))
+        counter[cat] = counter.get(cat, 0) + 1
+        classified += 1
+    # ③ 用户校正：压在落库值上面（**不并进列** —— 清空校正要能回到推导值）
+    for live_id, want in (overrides or {}).items():
+        row = (db.query(LiveSession.category)
+               .filter(LiveSession.account_id == account_id,
+                       LiveSession.live_id == live_id,
+                       LiveSession.session_key.isnot(None))
+               .first())
+        if row is None:
+            # 校正指向的行不存在、或它不是这一场的代表行 —— 两条都不该发生；
+            # 如实留一条日志，别把数字悄悄算错。
+            logger.debug(f"校正未落到代表行：account={account_id} live_id={live_id}")
+            continue
+        old, _f = normalize_stored_category(row[0])
+        counter[old] = max(counter.get(old, 0) - 1, 0)
+        counter[want] = counter.get(want, 0) + 1
+    return counter, classified
 
 
 def _find_live_session(sessions: list[dict], live_id: str) -> dict | None:
@@ -1062,7 +1179,8 @@ def live_session_detail(account_id: int, live_id: str,
     idx = next(i for i, x in enumerate(sessions) if x is s)
     s = dict(s)
     s.pop("src_live_ids", None)      # 只用于定位，不回给前端
-    category, category_from = _resolve_categories(db, sessions, overrides)[idx]
+    category, category_from = _resolve_categories(db, account_id, sessions,
+                                                  overrides)[idx]
     return LiveSessionDetailOut(**_session_payload(s, account_id,
                                                   category, category_from))
 
@@ -1098,7 +1216,8 @@ def _manual_detail(db: Session, account_id: int, live_id: str) -> LiveSessionDet
     idx = next(i for i, x in enumerate(sessions) if x is picked)
     s = dict(picked)
     s.pop("src_live_ids", None)
-    category, category_from = _resolve_categories(db, sessions, overrides)[idx]
+    category, category_from = _resolve_categories(db, account_id, sessions,
+                                                  overrides)[idx]
     return LiveSessionDetailOut(**_session_payload(s, account_id,
                                                   category, category_from))
 

@@ -68,3 +68,13 @@ flowchart LR
     `tests/test_vtuber_api.py::test_manual_vod_survives_room_merge` /
     `::test_manual_vod_survives_dup_merge`；
 
+40. **同一场只许有一个"代表行"带类型**（f017，devlog/471）：`live_sessions.session_key` 与
+    `category`/`category_from` **只在代表行**（组里源优先级最高的真源那一行）上有值，
+    同组其余行三列都是 NULL。理由是"按类型查询/统计"直查 `(account_id, category)` 索引：
+    破了这条，`GROUP BY` 数的是**行**而不是**场次**（真机实测 123 行多算），
+    而两个界面都不会报错 —— 用户只会看到卡片与日历的数字不一样。
+    物化在**读路径**（`routers/vtuber.py::_stored_by_live_id` → `LiveSessionRepo.materialize_sessions`），
+    与惰性回填同一个模式：值一样就不写（幂等）。
+    判据 `scripts/check_type_index_parity.py`（真机 14 账号逐类等数 + 重复代表/孤儿值必须为 0）
+    + `tests/test_vtuber_api.py::test_live_type_stats_matches_the_calendar`；
+

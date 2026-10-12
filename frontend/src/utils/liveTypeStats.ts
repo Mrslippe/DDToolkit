@@ -43,9 +43,13 @@ export function typeBreakdown(stats: LiveTypeStats | null | undefined): TypeRow[
  * 「还有 N 场没定出来」那句说明；没有差额 ⇒ null（**不写"0 场未分类"**：那句废话会
  * 让卡片多一行，而它说的正好是"没有问题"）。
  *
- * 为什么值得写出来：兜底**不落库**（`app/services/live_settle.py` 的说明），所以库里
- * 那批 NULL 是"规则还没定出来"，读取时显示成中性的「直播」。不说明的话，用户会以为
- * 那几百场是统计丢了 —— 而它其实是这一版规则的诚实结论。
+ * 为什么值得写出来：兜底那一批（`category_from='fallback'`）是"规则没定出来"，
+ * 读取时显示成中性的「直播」。不说明的话，用户会以为那几百场是统计丢了 ——
+ * 而它其实是这一版规则的诚实结论。
+ *
+ * ⚠️ f017 起兜底**也落库**了（`category='live'` + `category_from='fallback'`），
+ * 所以"没定出来"不再等于"列是 NULL" —— 服务端的 `classified` 按 `category_from`
+ * 算，这里只管拿 `total - classified` 说人话（前端不重新定义什么叫"没定出来"）。
  */
 export function unclassifiedNote(stats: LiveTypeStats | null | undefined): string | null {
   if (!stats) return null
