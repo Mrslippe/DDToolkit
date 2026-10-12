@@ -45,7 +45,7 @@ budget: 300
 | **统计快照 / snapshot** | 账号粉丝数/直播状态时间序列（涨粉趋势、场次推导的数据源） | `models/vtuber.py::AccountStatSnapshot`；`scheduler._record_stat_snapshot` | T0 直播跳变也写一条 |
 | **礼物日聚合 / gift day** | 第三方日粒度礼物/大航海/SC 金额 | `models/vtuber.py::LiveGiftDay`；`externals/zeroroku.py` | 金额存字符串保精度 |
 | **分类校正 / override** | 用户对某场次分类的手工校正（推断最高优先级信号） | `models/vtuber.py::LiveCategoryOverride`；`LiveCategoryOverrideRepo` | 反哺词库 `live_type.build_learned` |
-| **11 类分类 / categories** | 杂谈/游戏/观影/投稿/歌回/**助眠**/电台/联动/特殊/**3D** + live 兜底 | `services/live_type.py::CATEGORY_KEYS`；`infer_category()` | 前端 `utils/liveType.ts` 同步（判据：`test_frontend_type_keys_match_backend_taxonomy`）；⚠️ 2026-10-12 两处改动：**健身 → 助眠**（T3，`devlog/468`）+ **新加 `3d`**（`devlog/469`）。`3d` 答的是"**用什么形式演**"，与"演什么"正交 ⇒ 优先级写死在 `TITLE_CATEGORY_PRIORITY`（特殊 > 3D > 歌回 > …） |
+| **11 类分类 / categories** | 杂谈/游戏/观影/投稿/歌回/**助眠**/电台/联动/特殊/**3D** + live 兜底 | `services/live_type.py::CATEGORY_KEYS`；`infer_category()` | 前端 `utils/liveType.ts` 同步（判据：`test_frontend_type_keys_match_backend_taxonomy`）；⚠️ 2026-10-12 两处改动：**健身 → 助眠**（T3，`devlog/468`）+ **新加 `3d`**（`devlog/469`）。`3d` 答的是"**用什么形式演**"，与"演什么"正交 ⇒ 用户口径「特殊 > 3D，**内容类优先**」：`TITLE_CATEGORY_PRIORITY` 里 3D **垫底**、权重与内容强词平分（3.0），冲突时内容赢 |
 | **墓碑 / tombstone** | 帖子从平台消失的删除检测（两击 + 已验证窗口） | `services/tombstone.py::apply_tombstone_scan`；`posts.deleted_detected_at` | 前端「已删」筛选/角标 |
 | **归档 / archive** | 早于 N 天的帖子不再参与抓取遍历 | `PostRepo.archive_before`；`scheduler.archive_old_posts` | `is_archived` |
 | **归档三态 / archived filter** | 列表页归档筛选：全部 / 仅未归档（`is_archived=false`）/ 仅已归档 | `PostFilterPop`（v0.9.9 P10-A 接线 `unarchived`） | 后端参数本就支持，此前前端只接了「仅已归档」 |

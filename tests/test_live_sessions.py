@@ -666,19 +666,42 @@ def test_category_radio_keeps_only_the_programme_words(db):
 def test_category_3d_form(db):
     """★新加的第 11 类：**3D 形式**（用户口径「3D 形式呈现直播的场次」）。
 
-    权重 4.0 是量出来的：真机 705 条含 `3d` 的标题里绝大多数只有这一个信号，
-    3.0 会被 `_confident`（要求领先 ≥1.0）判成不自信 ⇒ 全部落回分区/兜底，等于白加。
+    ⚠️ 口径（用户 2026-10-12 二次拍板）：「特殊 > 3D，**内容类优先**」——
+    冲突时**内容赢**，3D 只接住"判不出内容"的那些。
+    实现是**两个数配套**：权重 3.0（与内容强词平分）+ `TITLE_CATEGORY_PRIORITY` 里 3D 排最后。
     """
+    # 判不出内容 ⇒ 3D（真机这类是多数）
     assert infer_category("【3D】红豆来咯") == ("3d", "title")
-    assert infer_category("家用3d的健身鹮") == ("3d", "title")
-    # 形式归 3d（不因为带"歌回/杂谈"就落到内容类）—— 这是用户拍板的取舍
-    assert infer_category("家用3d歌回")[0] == "3d"
-    assert infer_category("3d杂谈/推子7、8")[0] == "3d"
-    # 分区那一路也认
-    assert infer_category("", area_name="虚拟主播", parent_area_name="3D虚拟主播") == ("3d", "area")
-    # ⚠️ 但**低于 special**：「3D 生日会」首先是生日（一年一次的事件）
+    assert infer_category("【3D】技能冷却中", area_name="虚拟日常") == ("3d", "title")
+    # 形式归 3D 的**分区**那一路
+    assert infer_category("走夜路", area_name="虚拟主播", parent_area_name="3D虚拟主播") \
+        == ("3d", "area")
+    # ⚠️ **内容类优先**：标题里有内容词就听内容的（这是本轮口径反转的点）
+    assert infer_category("家用3d歌回")[0] == "song"
+    assert infer_category("3d杂谈/推子7、8")[0] == "chat"
+    assert infer_category("【3D联动】拼好团3.0")[0] == "collab"
+    assert infer_category("【3D】一起看凡人day9！")[0] == "watch"
+    # 特殊仍然最高（它在所有内容类之前）
     assert infer_category("恬豆3D生日会 ！！！") == ("special", "title")
     assert infer_category("10w粉纪念~第一次家用3d！")[0] == "special"
+
+
+def test_category_3d_weight_and_priority_are_a_pair(db):
+    """★`3d` 的权重与优先级**是一对**，改一个必须想另一个（两个坑都实测过）。
+
+    4.0 ⇒ 与内容强词（3.0）差满 1.0 ⇒ `_confident` 直接判 3D 赢 ⇒ `【3D联动】` 变 3d；
+    2.5 ⇒ 差 0.5 且 2.5 正好卡在"泛词"门槛上 ⇒ 判不自信 ⇒ **连内容信号一起丢**、落回分区。
+    3.0 ⇒ 平分 ⇒ 交 `TITLE_CATEGORY_PRIORITY` 定胜负 ⇒ 内容赢、纯 3D 仍自信。
+    """
+    from app.services.live_type import TITLE_CATEGORY_PRIORITY, TITLE_TERMS, THREED
+
+    assert TITLE_TERMS[THREED]["3d"] == 3.0
+    # 3D 必须在**所有内容类之后**
+    assert TITLE_CATEGORY_PRIORITY[-1] == THREED
+    # mmd 收着备用（真机 0 命中），给 2.5 ⇒ 只有它一个信号时才判 3D
+    assert TITLE_TERMS[THREED]["mmd"] == 2.5
+    assert infer_category("MMD 直播")[0] == "3d"
+    assert infer_category("MMD歌回")[0] == "song"      # 有内容词就不给它抢
 
 
 def test_category_3d_excludes_false_friends(db):
@@ -701,19 +724,27 @@ def test_category_watch_covers_watching_videos(db):
 
 
 def test_confident_groups_ties_by_priority(db):
-    """★并列同分**算一档**（`_ranked_groups`）：`_argmax` 用优先级打破，`_confident` 也得认。
+    """★`_confident` 的三条语义（2026-10-12 两次改动后的最终形状）。
 
-    修复前 `{'watch': 3.0, 'upload': 3.0}` 的逐类相邻差是 0 < 1.0 ⇒ 判成"分歧太大" ⇒
-    **有 `TITLE_CATEGORY_PRIORITY` 也白搭**（那条优先级只在 `_argmax` 里生效）⇒ 落回中性。
+    ① **并列同分算一档**（`_ranked_groups`）：`_argmax` 用优先级打破，`_confident` 也得认；
+    ② **差 ≥1.0** ⇒ 自信（与档无关）；
+    ③ **差 <1.0 时只认"高级别档领先"** —— 这条是为「内容类优先」加的
+       （`{collab 3.0, 3d 2.5}`：差 0.5，但内容排在 3D 前面 ⇒ 判联动）。
     """
     from app.services.live_type import _confident, _ranked_groups
 
+    # ① 同分归成一档 ⇒ 自信（修复前逐类相邻差 0 < 1.0 ⇒ 判成"分歧太大" ⇒ 有优先级也白搭）
     scores = {"watch": 3.0, "upload": 3.0}
-    assert _ranked_groups(scores) == [("watch", 3.0)]     # 同分归成一档
+    assert _ranked_groups(scores) == [("watch", 3.0)]
     assert _confident(scores) is True
-    # 真正**跨档**的分歧仍然不自信（反向验证：这条修复没有把"分歧"一起放行）
-    assert _confident({"watch": 3.0, "chat": 2.5}) is False
-    # 弱词仍然不自信
+    # ② 强词领先泛词 ⇒ 自信
+    assert _confident({"watch": 3.0, "chat": 2.5}) is True
+    # ③ 内容类 vs 3D：差 0.5，但内容优先 ⇒ 自信（`【3D联动】拼好团3.0` 就是这一形状）
+    assert _confident({"collab": 3.0, "3d": 2.5}) is True
+    # ⚠️ 反向：**两个内容类**之间差 0.5 且低分那个优先级更高 ⇒ 不给方向 ⇒ 不自信
+    # （`_confident` 不是"优先级压过分数"，只在"高级别档领先"时才用它）
+    assert _confident({"watch": 2.5, "chat": 3.0}) is False
+    # 弱词单发仍不自信
     assert _confident({"watch": 2.0}) is False
 
 

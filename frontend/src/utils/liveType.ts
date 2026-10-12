@@ -24,12 +24,10 @@ export interface LiveTypeInfo {
 }
 
 /** 排序即优先级：先命中先得（特殊/歌回/观影这类特征词优先于游戏等大类）。
- *  ⚠️ `3d` 的位置与服务端 `TITLE_CATEGORY_PRIORITY` **必须一致**：
- *  **低于特殊**（「3D 生日会」首先是生日）、**高于歌回/杂谈**（「家用3d歌回」按形式归档）。 */
+ *  ⚠️ `3d` 排**最后**（与服务端 `TITLE_CATEGORY_PRIORITY` 同序）—— 用户 2026-10-12 口径：
+ *  「特殊 > 3D，**内容类优先**」⇒ 冲突时内容赢（`3d歌回` → 歌回），只有判不出内容的 3D 才归 3D。 */
 const RULES: { re: RegExp; key: LiveTypeKey; label: string }[] = [
   { re: /生日|周年|纪念|出道|庆典|庆生|新春|圣诞|跨年|新年/i, key: 'special', label: '特殊' },
-  // ⚠️ 先排除"不是 3D 直播"的用法（晕3d / 3ds），与服务端 `_THREED_EXCLUDE` 同源
-  { re: /^(?!.*(晕3d|3d晕|3ds)).*3d/i, key: '3d', label: '3D' },
   { re: /歌回|唱歌|歌会|翻唱|音乐|演唱会|开嗓|练歌/i, key: 'song', label: '歌回' },
   // ⚠️ 2026-10-12（用户修正边界）：「或者视频、投稿等主要以观看视频为主体的」⇒ 收进来
   { re: /观影|看番|追番|补番|电影|番剧|剧场|影视|一起看一部|看片|看视频|看投稿|投稿回|二创|切片/i, key: 'watch', label: '观影' },
@@ -44,6 +42,9 @@ const RULES: { re: RegExp; key: LiveTypeKey; label: string }[] = [
   { re: /杂谈|闲聊|聊天|随聊|杂谈回|漫谈/i, key: 'chat', label: '杂谈' },
   { re: /游戏|开黑|游玩|打游戏|steam|原神|崩坏|绝区|星穹|瓦罗兰特|lol|英雄联盟|minecraft|我的世界|玩|直播玩/i, key: 'game', label: '游戏' },
   { re: /投稿|剪辑|新作|作品|pv|预告|曝光|公开/i, key: 'upload', label: '投稿' },
+  // ⚠️ `3d` 垫底（内容类优先，见文件头注释）。负向先行断言排除"不是 3D 直播"的用法
+  // （晕3d / 3ds），与服务端 `_THREED_EXCLUDE` 同源。`mmd` 收着备用（真机 0 命中）。
+  { re: /^(?!.*(晕3d|3d晕|3ds)).*(3d|mmd)/i, key: '3d', label: '3D' },
 ]
 
 /** key → 中文标签（服务端 category 直接用；含兜底 live） */
