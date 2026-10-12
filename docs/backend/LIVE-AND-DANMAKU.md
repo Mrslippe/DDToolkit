@@ -80,12 +80,16 @@ flowchart LR
     `::test_manual_vod_survives_dup_merge`；
 
 40. **同一场只许有一个"代表行"带类型**（f017，devlog/471）：`live_sessions.session_key` 与
-    `category`/`category_from` **只在代表行**（组里源优先级最高的真源那一行）上有值，
-    同组其余行三列都是 NULL。理由是"按类型查询/统计"直查 `(account_id, category)` 索引：
-    破了这条，`GROUP BY` 数的是**行**而不是**场次**（真机实测 123 行多算），
+    `category`/`category_from` **只在代表行**（= `merged()` 给这个组定的对外 `live_id` 那一行）
+    上有值，同组其余行三列都是 NULL。理由是"按类型查询/统计"直查 `(account_id, category)`
+    索引：破了这条，`GROUP BY` 数的是**行**而不是**场次**（真机实测 123 行多算），
     而两个界面都不会报错 —— 用户只会看到卡片与日历的数字不一样。
-    物化在**读路径**（`routers/vtuber.py::_stored_by_live_id` → `LiveSessionRepo.materialize_sessions`），
-    与惰性回填同一个模式：值一样就不写（幂等）。
-    判据 `scripts/check_type_index_parity.py`（真机 14 账号逐类等数 + 重复代表/孤儿值必须为 0）
-    + `tests/test_vtuber_api.py::test_live_type_stats_matches_the_calendar`；
+    **补齐（物化）只许发生在启动期与写点之后**（`app/services/live_identity.py`；
+    启动期在 `app/main.py::lifespan`、写点后挂在 `danmakus.sync_account` 的批量 upsert 之后）——
+    **读端点只读**。⚠️ 第一版把它放在读路径上（`devlog/471`），代价是"第一次打开最慢"
+    （真机 `/live-sessions` 464ms 冷 vs 170ms 热），而前端恰在还没有任何场次时显示加载块
+    （`devlog/473`）。补齐幂等：值一样就不写。
+    判据 `tests/test_vtuber_api.py::test_only_the_representative_row_carries_the_type` /
+    `::test_startup_materialize_fills_old_rows_once`（含"读不写"与"第二次不写"两条）
+    + `scripts/check_type_index_parity.py`（真机逐类等数 + 重复代表/孤儿值 = 0）；
 

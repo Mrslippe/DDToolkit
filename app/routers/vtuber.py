@@ -875,10 +875,9 @@ def _override_hit(s: dict, overrides: dict) -> str | None:
 
 def _stored_by_live_id(db: Session, account_id: int,
                        sessions: list[dict]) -> dict[str, tuple[str, str]]:
-    """合并组的代表行 → 落库的 (category, category_from)；**顺带惰性物化**。
+    """合并组的代表行 → 落库的 (category, category_from)。**只读**（不写库）。
 
-    代表行 = `src_live_ids` 里优先级最高的那个真源 id（与 `merged()` 定对外 id 同一条规则），
-    正是 `merged()` 里承载 `category` 的那一行。
+    代表行 = `merged()` 给这个组定的对外 `live_id`（与 `live_settle.group_states` 同一条）。
 
     ⚠️⚠️ **`sessions` 必须来自 `merged(..., with_ids=True)`**：本函数靠 `src_live_ids`
     定位代表行，用默认的 `merged()` 会**静默**返回空表 —— 症状是"落库值明明写着，
@@ -887,41 +886,30 @@ def _stored_by_live_id(db: Session, account_id: int,
     返回的是**归一过**的值（认不出来的枚举 ⇒ 中性，见 `normalize_stored_category`）：
     调用方拿到就能直接展示，不必各自再判一次"这个 key 认不认识"。
 
-    ⚠️ 惰性物化（f017，2026-10-13）：光补类型不够 —— 同一场可能有多行（danmakus + feed、
-    self 快照并入），而 `GROUP BY category` 数的是**行**。所以这里顺手把
-    「这一场是谁」（`session_key` 只写在代表行上）也写进去，
-    按类型查询/统计才能直查 `(account_id, category)` 索引且与日历同一个答案。
-    规则与惰性回填一致：**补过就不再补**（值一样就不写，见 `materialize_sessions`）。
-
-    ⚠️ **同一个请求里调用多次只跑一趟**：第一趟会在每个 `s` 上留下 `stored_category`，
-    第二趟见到它就直接读出来用（少了这道闸，日历那一屏会白跑两趟物化 ——
-    全账号装载 + 逐行比对，实测在 1,400 行的账号上是几十毫秒）。
+    ⚠️ **读端点不写库**（2026-10-13 补，`devlog/473`）：场次身份（`session_key`）与类型的
+    补齐都搬去了**启动期**（`app/services/live_identity.py`）与**写点之后**。第一版把它们
+    放在这里"顺手补"，代价是**第一次打开最慢**（真机 `/live-sessions` 464ms 冷 vs 170ms 热），
+    而前端恰恰在还没有任何场次时显示加载块 —— 用户看得见那一下。
+    读路径现在只读：`mode=ro` 的库也能读（`scripts/measure_endpoints.py` 因此不用再 `--write`）。
     """
     if not sessions:
         return {}
-    if all("resolved_category" in s for s in sessions):
-        # 同一个请求里第二趟：第一趟已经把生效值写在 `s` 上了 ⇒ 直接复用。
-        # 少了这道闸，日历那一屏会白跑两趟物化（全账号装载 + 逐行比对）。
-        return {rep: s["resolved_category"] for s in sessions
-                if (rep := _representative_id(s)) is not None}
     rows = [r for r in LiveSessionRepo(db).list_by_account(account_id) if r.live_id]
     by_live = {r.live_id: r for r in rows}
-    # 代表行的落库原始值 → 交给 `group_states` 当"这一场已定稿"的依据
+    out: dict[str, tuple[str, str]] = {}
     for s in sessions:
         rep = _representative_id(s)
-        s["stored_category"] = (by_live[rep].category, by_live[rep].category_from) \
-            if rep and rep in by_live else None
-    stats, states = materialize_group_identity(db, account_id, sessions, rows=rows)
-    if stats["written"]:
-        logger.debug(f"场次身份惰性物化：{stats}")
-    # ⚠️ 输出**不能读物化之后的那些 row**（它们已经被改写了）：兜底行两列本来是 NULL，
-    #    读回来会变成 `('live', 'unknown')`（"unknown"是给"认不出来的枚举"用的标记，
-    #    不是"这一场没定稿"）。所以直接用物化目标里的那一对 —— 它才是这一场的生效值。
-    out = {st.representative_id: (st.category, st.category_from) for st in states}
-    for s in sessions:                 # 记在 `s` 上，供同请求的第二趟复用
-        rep = _representative_id(s)
-        if rep in out:
-            s["resolved_category"] = out[rep]
+        if not rep:
+            continue                     # 纯虚拟场次（没有表内行可挂）
+        # `stored_category` 是"这一场定稿过没有"的**权威读数**（写点/启动期补齐时算的）：
+        # 键不存在 ⇒ 这组还没装配过（例如同步刚插进来的新行）⇒ 退回读行。
+        if "stored_category" in s:
+            stored = s["stored_category"]
+        else:
+            row = by_live.get(rep)
+            stored = (row.category, row.category_from) if row is not None else None
+        if stored is not None and stored[0] is not None:
+            out[rep] = normalize_stored_category(*stored)
     return out
 
 
@@ -942,19 +930,18 @@ def _representative_id(s: dict) -> str | None:
     return None if live.get("self") else min(v for v in live.values())
 
 
-def materialize_group_identity(db: Session, account_id: int, sessions: list[dict],
-                               rows: list | None = None) -> tuple[dict, list]:
-    """把合并视图的分组结论落库（服务层算、仓库写）——**两个入口共用这一处**。
+def materialize_group_identity(db: Session, account_id: int,
+                               sessions: list[dict]) -> tuple[dict, list]:
+    """把合并视图的分组结论落库（服务层算、仓库写）——**写点之后**调它。
 
-    为什么共用：`/live-sessions` 与 `/live-type-stats` 都要"这一场是谁"这个结论；
-    两条路各写一份实现的话，按列聚合与日历迟早会给出两个答案。
+    给"刚写完这一行"的路径用：同步收尾、手动增删改之后 —— 与"写这一行就定稿这一行"
+    同一个口径（用户 2026-10-12）。⚠️ **读端点不调它**（读路径只读，见
+    `live_identity` 模块头：第一版放在读路径上，让第一次打开成了最慢的一次）。
 
-    `rows`：调用方已装载的该账号全部行（省掉仓库里那次重复查询）。
-
-    返回 `(仓库计数, 物化目标)`：目标一并回给调用方，免得它为了拿生效值再算一遍。
+    返回 `(仓库计数, 物化目标)`。
     """
     states = group_states(sessions)
-    return LiveSessionRepo(db).materialize_sessions(account_id, states, rows=rows), states
+    return LiveSessionRepo(db).materialize_sessions(account_id, states), states
 
 
 def _session_payload(s: dict, account_id: int, category: str,

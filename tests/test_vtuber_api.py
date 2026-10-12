@@ -2801,41 +2801,65 @@ def test_settle_merges_the_first_non_empty_category(client):
         "高优源（danmakus）那行为空时把 feed 判对的结果压成了没有类型")
 
 
-def test_lazy_backfill_fills_old_rows_once(client):
-    """★惰性回填：老行（两列 NULL）被读一次就补上；第二次读**不再写**。"""
+def test_startup_materialize_fills_old_rows_once(client):
+    """★场次身份/类型的补齐在**启动期**（`live_identity.materialize_all`）跑；跑第二次**不再写**。
+
+    ⚠️ 2026-10-13 改（`devlog/473`）：原来补齐挂在**读路径**上，代价是"第一次打开最慢"
+    （真机 `/live-sessions` 464ms 冷 vs 170ms 热），而前端恰在此时显示加载块。
+    现在读端点**只读**，补齐与迁移同一个时机 —— 这条用例钉的就是那两件事。
+    """
+    from app.services.live_identity import materialize_all
+
     aid = _mk_account(client)
     db = TestingSession()
-    # 模拟"迁移前就存在的老行"：直接用 ORM 塞，绕过写点 ⇒ 两列都是 NULL
+    # 模拟"迁移前就存在的老行"：直接用 ORM 塞，绕过写点 ⇒ 三列都是 NULL
     db.add(LiveSession(account_id=aid, source="danmakus", live_id="old-1",
                        title="原神深渊", start_at=datetime(2026, 9, 5, 12, 0),
                        end_at=datetime(2026, 9, 5, 14, 0)))
     db.commit()
     db.close()
 
+    # ① 读**不写**（只读口径）：读出来的类型是对的，但库里那行还是空的
     data = client.get(f"/account/{aid}/live-sessions").json()
-    assert data[0]["category"] == "game"          # 正对照：读出来是对的
+    assert data[0]["category"] == "game"          # 正对照：现算出来的值是对的
     db = TestingSession()
     row = db.query(LiveSession).filter_by(live_id="old-1").one()
-    assert (row.category, row.category_from) == ("game", "title"), "读一次没补齐"
+    assert (row.category, row.session_key) == (None, None), (
+        "读端点写库了 —— 那正是让「第一次打开最慢」的那一版")
+    db.close()
+
+    # ② 启动期补齐：一次写到位
+    db = TestingSession()
+    stats = materialize_all(db)
+    db.close()
+    assert stats["written"] >= 1
+    db = TestingSession()
+    row = db.query(LiveSession).filter_by(live_id="old-1").one()
+    assert (row.category, row.category_from) == ("game", "title"), "启动期没补齐"
+    assert row.session_key, "启动期没写场次身份（按列聚合会按行数算）"
     stamp = row.updated_at
     db.close()
 
-    assert client.get(f"/account/{aid}/live-sessions").status_code == 200
+    # ③ 幂等：再跑一次不产生新的写
+    db = TestingSession()
+    again = materialize_all(db)
+    db.close()
+    assert again["written"] == 0, "第二次补齐又写了一遍 —— 必须是幂等的"
     db = TestingSession()
     row = db.query(LiveSession).filter_by(live_id="old-1").one()
-    assert row.updated_at == stamp, "第二次读又写了一遍 —— 回填必须是幂等的"
+    assert row.updated_at == stamp
     db.close()
 
 
-def test_lazy_materialize_settles_fallback_rows(client):
-    """★兜底**也落库**（f017）：`category='live'` + `category_from='fallback'`。
+def test_startup_materialize_settles_fallback_rows(client):
+    """★兜底**也落库**（f017）：`category='live'` + `category_from='fallback'` —— 在启动期补。
 
     为什么改（原来是两列 NULL）：NULL 让**任何 SQL 聚合都看不见这批**（真机约 55%），
     "按类型查询/统计"就成了空头支票。现在"定稿过没有"由 `category_from` 单独回答 ——
     它是 NULL 才是"还没定稿"，读取时按同一口径现算。
-
-    ⚠️ 这条同时钉住**幂等**：第二次读不许再写（靠"值一样就不写"，见 materialize_sessions）。
     """
+    from app.services.live_identity import materialize_all
+
     aid = _mk_account(client)
     db = TestingSession()
     db.add(LiveSession(account_id=aid, source="danmakus", live_id="vague-1",
@@ -2846,18 +2870,15 @@ def test_lazy_materialize_settles_fallback_rows(client):
 
     data = client.get(f"/account/{aid}/live-sessions").json()
     assert (data[0]["category"], data[0]["category_from"]) == ("live", "fallback")
+
+    db = TestingSession()
+    materialize_all(db)
+    db.close()
     db = TestingSession()
     row = db.query(LiveSession).filter_by(live_id="vague-1").one()
     assert (row.category, row.category_from) == ("live", "fallback"), (
         "兜底没落库 ⇒ 按类型统计看不见这一场")
-    stamp = row.updated_at
     assert row.session_key, "没有场次身份 ⇒ 按列聚合会按行数算（f017）"
-    db.close()
-
-    assert client.get(f"/account/{aid}/live-sessions").status_code == 200
-    db = TestingSession()
-    row = db.query(LiveSession).filter_by(live_id="vague-1").one()
-    assert row.updated_at == stamp, "第二次读又写了一遍 —— 物化必须是幂等的"
     db.close()
 
 
@@ -2867,10 +2888,12 @@ def test_unknown_stored_category_degrades_to_neutral(client):
     ⚠️ 值要用**真正不存在**的枚举（`sports`）：`fitness` 曾是合法值，2026-10-12（T3）
     换成了 `sleep` —— 拿一个"曾经合法"的值当未知值测，体系一变这条用例就悄悄失去意义。
 
-    ⚠️ f017 起**物化会把它改写成今天的结论**（`live`/`unknown`）：库里那格不再是
-    `sports` —— 否则按列聚合要把"今天没有含义的枚举"统计进去，数字与日历对不上。
-    物化仍然是**写时/读路径补数据**，不是"每次读都把库改一遍"（值一样就不写）。
+    ⚠️ f017 起**启动期补齐**会把库里那个今天没有含义的枚举**归一成中性**（`live`/`unknown`）：
+    否则按列聚合要把"今天没有含义的枚举"统计进去，数字与日历对不上。
+    读端点本身仍然**只读**（这一步不在读路径上，见 `devlog/473`）。
     """
+    from app.services.live_identity import materialize_all
+
     aid = _mk_account(client)
     db = TestingSession()
     db.add(LiveSession(account_id=aid, source="danmakus", live_id="legacy-1",
@@ -2883,9 +2906,12 @@ def test_unknown_stored_category_degrades_to_neutral(client):
     assert (data[0]["category"], data[0]["category_from"]) == ("live", "unknown"), (
         "未知枚举被当成合法值透出去了 —— 前端筛选会多出一个没有标签的空壳")
     db = TestingSession()
+    materialize_all(db)
+    db.close()
+    db = TestingSession()
     row = db.query(LiveSession).filter_by(live_id="legacy-1").one()
     assert (row.category, row.category_from) == ("live", "unknown"), (
-        "物化没把库里那个今天没有含义的枚举换成中性值（按列聚合会统计到它）")
+        "补齐没把库里那个今天没有含义的枚举换成中性值（按列聚合会统计到它）")
     db.close()
 
 

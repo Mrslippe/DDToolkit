@@ -374,6 +374,22 @@ async def lifespan(app: FastAPI):
     _run_migrations()
     _perf("迁移完成")
 
+    # 场次身份补齐（f017，devlog/473）：与迁移同一个时机、同一个理由 —— 它会**写库**，
+    # 所以绝不能放在读路径上（第一版放读路径时，"第一次打开日历"成了最慢的一次：
+    # 真机 /live-sessions 464ms 冷 vs 170ms 热，而前端恰在此时显示加载块）。
+    # 幂等（值一样就不写）；失败不挡启动（读路径会按同一口径现算，只是慢一点）。
+    try:
+        from app.core.database import SessionLocal
+        from app.services.live_identity import materialize_all
+
+        with SessionLocal() as _db:
+            _stats = materialize_all(_db)
+        if _stats["written"]:
+            logger.info(f"场次身份补齐：{_stats}")
+    except Exception as e:
+        logger.warning(f"场次身份补齐跳过（不影响启动）: {type(e).__name__}: {e}")
+    _perf("场次身份补齐")
+
     # 库维护（R22）：把库切成增量 auto-vacuum，之后删数据才会真的还盘
     # （SQLite 默认只把删掉的行丢进 freelist，文件永不缩小）。
     # 带体积门槛、失败只留日志 —— 这条是"体验优化"，绝不能挡住启动。

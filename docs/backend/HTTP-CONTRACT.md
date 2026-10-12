@@ -106,7 +106,7 @@ retire-when: HTTP 层换框架，或路由整体重排
 | 方法 + 路径 | 说明 |
 |---|---|
 | GET `/account/{id}/live-sessions` | 合并场次列表（表内 ∪ 快照推导）+ 类型。**T4（`devlog/467`）加查询参数 `types=`**（逗号分隔的类型 key）⇒ 只返回这几类；不传/空 = 全部。⚠️ 筛在**合并结果**上（不是 SQL `WHERE` —— 一场可能由 danmakus+feed 两行组成，按列筛会筛掉一半）；认不出的 key **不报错**（只是筛不出东西：体系调整期前端可能带旧值来） |
-| GET `/account/{id}/live-type-stats` | **按类型统计场次数**（T4，`devlog/467`；f017 改直查索引）⇒ `{total, items:[{category,count}], classified}`。`items` 按固定展示顺序、只含非零项、兜底 `live` 永远最后；`total` = 日历上能看到的场次数，`classified` = **定稿过**的场次数（`category_from` 不是 `fallback`；差 = 规则还没定出来的那批）。⚠️ f017（`devlog/471`）起三段拼成：**代表行的 `category` 走 `(account_id, category)` 索引聚合** + 校正叠加 + **虚拟场次现算**（它们没有表内行）。与 `/live-sessions` 的分组计数**逐类等数**（真机 14 账号对照 + 反向验证）。⚠️ 它**会顺手写库**（惰性物化"场次身份"）⇒ 只读库上会 500 |
+| GET `/account/{id}/live-type-stats` | **按类型统计场次数**（T4，`devlog/467`；f017 改直查索引）⇒ `{total, items:[{category,count}], classified}`。`items` 按固定展示顺序、只含非零项、兜底 `live` 永远最后；`total` = 日历上能看到的场次数，`classified` = **定稿过**的场次数（`category_from` 不是 `fallback`；差 = 规则还没定出来的那批）。⚠️ f017（`devlog/471`）起三段拼成：**代表行的 `category` 走 `(account_id, category)` 索引聚合** + 校正叠加 + **虚拟场次现算**（它们没有表内行）。与 `/live-sessions` 的分组计数**逐类等数**（真机 14 账号对照 + 反向验证）。**读端点不写库**（身份补齐在启动期与写点之后，`devlog/473`） |
 | GET `/account/{id}/live-sessions/{live_id}` | 场次详情：**只回本地库可推导的内容**（场次 + 类型 + analysis 预留），**不发起第三方请求**（2026-09-13，devlog/063） |
 | GET `/account/{id}/live-sessions/{live_id}/upstream` | 该场次的第三方取数：弹幕词云 + 场次指标 + 直播动态；进程内缓存 10 分钟 + **同场次单飞**（并发调用共享一轮上游，devlog/081），失败如实降级为 `fetch_failed`/`no_danmaku`（同 devlog/063） |
 | GET `/account/{id}/live-sessions/{live_id}/wordcloud` | 按需自建词云（v3 原始弹幕 + jieba 分词；**用户点按钮才调**，不落库，devlog/061） |

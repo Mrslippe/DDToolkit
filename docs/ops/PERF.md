@@ -126,7 +126,7 @@ retire-when: 实测脚本换掉，或性能不再是关注点
 | 档位门禁 | `python scripts/gate.py` | A 档 **15 步**全过 / **≈259–435s**（2026-10-06 v1.1.0 发布后复测到区间上界：15 步全绿、**435s**，其中 pytest 131s —— 步数与判据都没变，慢在机器；**14 → 15 步** = 新增 `ui_probe --toolbar`（~25s，**A 档**；`devlog/367`：它此前只在人手跑，而顺手一跑发现它**红了很久**——滚动靶挑到了面板外面）；**≈300s** 这一轮 = 首启协议前那两批（`devlog/367`/`368`）（pytest 127s、vitest 50s、探针四档 40+24+24+25+24s）；**269s** 这一轮 = 重取排队那一批（pytest 125s、vitest 34s、`ui_probe` 三档 40+25+24+25s，`devlog/366`）；**271s** 这一轮 = 抖音播放地址过期自动重取那一批（pytest 115s、vitest 33s、`ui_probe` 三档 44s，`devlog/363`）；**机器波动比改动大**：同一批代码实测过 288s 与 371s，差在 pytest 那一步（111–199s）。12 → **14 步** = 新增 `extension logic`（`node --test`，~0.3s，**三档都跑**）与 `extension smoke`（复刻扩展的请求序列，实测 **2s**，A 档；`devlog/360`）。11 → **12 步** = 新增 `ui_probe --first-run`（~15–29s）：它是**唯一**读登录浮窗 DOM 的模式，而登录浮窗是用户贴凭据的地方（E3，`devlog/359`；同 `--app-settings`/`--notice-lab` 那两条"没进门禁的模式会烂掉"的教训）。12 步那轮 → **292s** = 当次 pytest 快（147→120s）；307 → **298s** = 当次 pytest 快（147→121s）；307 → **259s** = 当次 pytest 快（147→111s）+ `ui_probe` 那次三档 44s；288 → **307s** 这一轮 = 加了 6 条前端单测 + `ui_probe` 三档多了背景明暗/批量浮窗的采样（49s，pytest 147s）—— 步数没变；334 → 288s 这一轮含 `--notice-lab` 稳定在 26–30s、pytest 127s；316 → 334s 只是当次 pytest 慢（141→163s，用例数没变）；313 → 316s = `--notice-lab` 那步 +3s：点「全部已读」之后还要采一拍"逐条退场"（+120ms 只该走了前几条）（`devlog/351`）；303 → 313s = `--notice-lab` 那步 +10s：点已读之后还要采两次几何（+80ms / +680ms）并跑一次"这个环境到底推不推进过渡"的自检（`devlog/350`）；278 → 303s = `--notice-lab` 那一步自己长了 ~25s：它现在还会**真点**一条通知与「全部已读」，并按 id 逐个验（`devlog/349`）——那一页同时抓 `window.onerror`/`console.error`，白屏那种"树已经炸了但 DOM 还在"的故障从此有声；10 → 11 步 = 多了 `ui_probe --notice-lab` ~35s（`devlog/345`）；同为实测：多了 `ui_probe --app-settings` 那一步 ~20s（`devlog/335`），pytest 122s + ui_probe 80s 是两笔大头；另含 tsc、eslint、doc_check + docs_gate 两道文档门禁、全仓语法扫描、`cargo test` 与 vitest）。⚠️ **设置窗口那个探针模式以前不在门禁里** ⇒ `devlog/319` 之后它红了一整天没人知道；C 档 ≈46s。⚠️ **顶栏那条判据 2026-10-05 已精确化**（`devlog/345`）：原来靠文案判"自动节拍是不是占了顶栏"，而 L2 之后**真有 V 开播**也会让容器亮起（那条 2026-10-03 的假红根因）。现在采样带 `pillGroup`，**只有 `doing`（状态组）才算违规** —— `recent`/`todo` 是通知，按设计就该亮 |
 | CI | GitHub Actions（`.github/workflows/`，真源在那里） | 两条腿：Linux（后端 ×2 个 Python + 前端）与 Windows（Rust + 冻结后端冒烟）。**2026-09-25 已首次跑绿**（`e3499f1`）——首跑到闭环共四次红，根因见 devlog/200（其中一条是**英文 Windows 用户首启即崩**的真 bug）。此后每个推送两条腿都跑：S1（`dd1613e`）与 S1b（`eafdd73`）均全绿（2026-09-26）。⚠️ **2026-09-30 收窄了两处**（用户问"每次都跑 15–20 分钟有必要吗"）：① 两条 workflow 都加 `concurrency: cancel-in-progress`（一批里连推几个 commit 时，前面的**排队/执行全部作废**，实测有一次被取代的运行白跑了 **55.8 分钟**）；② Windows 腿加 `paths-ignore`（`**/*.md` · `docs/**` · `devlog/**`）—— 纯文档改动不跑冻结那一笔。**实测耗时**：Linux 三段 **0.5–3.6 分钟**，Windows 腿 **3.5–56 分钟**（中位数 ~15，冷缓存/排队时最坏）⇒ "15–20 分钟"说的是 Windows 那一条腿，不是整个 CI |
 | 冻结产物体积 | `python scripts/build_backend.py` 的输出 | **71.7 MB**（2026-09-25；切 `uv.lock` 前记录 118.8MB）。出包后以 `release.py --only verify` 为准 |
-| 场次列表端点 | `python scripts/measure_endpoints.py`（真机库只读；端到端 = 进进程打 HTTP，含序列化） | **118 ms**（1,258 场，账号 22，2026-10-13 f017 之后；此前 155ms）。⚠️ 同一件事**此前记成 32 ms**（`devlog/459`）—— 两个数都对，量的**不是同一段**：459 量的是「聚类 + 词库」那一截（正是出 O(n²) 的地方），本脚本量的是用户真等的那一整个响应。**同口径的修前/修后仍是 32 vs 8,860 ms（×274）**，那是回归修复的判据 |
+| 场次列表端点 | `python scripts/measure_endpoints.py`（真机库**只读**；端到端 = 进进程打 HTTP，含序列化） | **179 ms**（1,258 场，账号 22，2026-10-13 f017 全套落地后；同日早些时候量到 118ms —— 那次的副本已经被前一轮写过，属热态。⚠️ 同一件事**此前记成 32 ms**（`devlog/459`）—— 两个数都对，量的**不是同一段**：459 量的是「聚类 + 词库」那一截（正是出 O(n²) 的地方），本脚本量的是用户真等的那一整个响应。**同口径的修前/修后仍是 32 vs 8,860 ms（×274）**，那是回归修复的判据 |
 | 一把梭 | `python scripts/dev_check.py` | syntax / pytest / frontend logic / docs drift / dev backend 五项全 ok（2026-09-23 全量实跑） |
 
 > ⚠️ 探针签名（`--hero-expect` / `--calendar-expect`）**含实时数据**，只适合"改动前后短窗口对比" ——
@@ -141,23 +141,25 @@ retire-when: 实测脚本换掉，或性能不再是关注点
 
 | 端点（用户可见的那张卡） | 中位 | 说明 |
 |---|---|---|
-| `GET /account/{id}/live-sessions` | **118 ms** | 数据视图的日历卡；见下"归因" |
-| `GET /account/{id}/live-type-stats` | **92 ms**（最忙账号） | T4「场次类型」卡。f017（`devlog/471`）起**直查 `(account_id, category)` 索引**（代表行 + 校正叠加 + 虚拟场次现算）—— 从"重跑一遍合并视图"的 159ms 降到这个量级；剩下的成本是**虚拟场次仍要跑一次 `merged()`**（它们没有表内行，SQL 看不见）。⚠️ 它现在**会写库**（惰性物化"场次身份"）⇒ 只读 `mode=ro` 的库上会 500，量它要 `--write` + 副本（见 `docs/DEV-LOOP.md`） |
-| `GET /account/{id}/live-sessions/{live_id}` | 86 ms | 点日期格的详情弹窗 |
-| `GET /account/{id}/fan-trend` | 26 ms | 折线卡 |
-| `GET /account/{id}/gift-days` | 23 ms | 礼物日聚合 |
-| `GET /vtuber/pool/search` | 14 ms | 候选池检索（9.6k 行） |
-| `GET /vtuber/list` | 6 ms | 左栏（含企划） |
-| `GET /vtuber/notices` | 4 ms | 顶栏状态岛轮询 |
-| `GET /capabilities` | 3 ms | 每次开设置窗都打 |
+| `GET /account/{id}/live-sessions` | **179 ms** | 数据视图的日历卡；见下"归因" |
+| `GET /account/{id}/live-type-stats` | **129 ms**（最忙账号） | T4「场次类型」卡。f017（`devlog/471`）起**直查 `(account_id, category)` 索引**（代表行 + 校正叠加 + 虚拟场次现算）—— 从"重跑一遍合并视图"的 159ms 降下来；剩下的成本是**虚拟场次仍要跑一次 `merged()`**（它们没有表内行，SQL 看不见）。⚠️ 它**只在有变化时**由写点/启动期补齐身份（`devlog/473`）：读端点**不写库**（`mode=ro` 也能读） |
+| `GET /account/{id}/live-sessions/{live_id}` | 134 ms | 点日期格的详情弹窗 |
+| `GET /account/{id}/fan-trend` | 38 ms | 折线卡 |
+| `GET /account/{id}/gift-days` | 34 ms | 礼物日聚合 |
+| `GET /vtuber/pool/search` | 15 ms | 候选池检索（9.6k 行） |
+| `GET /vtuber/list` | 8 ms | 左栏（含企划） |
+| `GET /vtuber/notices` | 5 ms | 顶栏状态岛轮询 |
+| `GET /capabilities` | 4 ms | 每次开设置窗都打 |
 
-实测口径：账号 22（场次最多的那个，表内 1,398 行 / 合并后 1,258 场）、真机库**副本**（可写，
-见下）、本机（Ryzen 5 5600GT）、2026-10-13（f017 落地后）。**九项合计 373ms** ——
+实测口径：账号 22（场次最多的那个，表内 1,398 行 / 合并后 1,258 场）、真机库**只读**副本、
+本机（Ryzen 5 5600GT）、2026-10-13（f017 全套落地后）。**九项合计 576ms** ——
 这是"打开数据视图"那一屏串行拉卡片的量级下限。
 
-⚠️ **量法变了**（2026-10-13，f017）：`/live-sessions` 与 `/live-type-stats` 会在读路径
-**惰性物化**「场次身份」（`session_key`），那是写 —— `mode=ro` 的库上直接 500。
-所以这两个端点要在**可写副本**上量（`--db <副本> --write`），真库永远不给写。
+⚠️ **第一版为什么更慢、以及怎么修的（`devlog/473`）**：f017 最初把"场次身份补齐"放在
+**读路径**上 ⇒ 第一次打开同时要物化 + 跑合并，真机实测 `/live-sessions`
+**464ms（冷）vs 170ms（热）**，而前端恰在"还没有任何场次"时显示加载块 —— 用户看得见那一下。
+现在补齐搬去**启动期**（全库一次 1.0s，幂等再跑 0.5s）与**写点之后**，
+读端点回到纯只读：上表就是修完的数（没有冷热差）。
 
 **归因**（`--breakdown` 拆段表；`_find_group` 那一行另用 `cProfile` 定位）
 

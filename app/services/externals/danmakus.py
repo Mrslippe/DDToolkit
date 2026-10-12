@@ -531,6 +531,15 @@ class DanmakusSource(ExternalSource):
                 item, _ms_to_utc(start_ms) if start_ms > 0 else None))
         # 平台由**调用方**给（M1a，devlog/213）：仓库层不再写死 bilibili
         res = LiveSessionRepo(db).upsert_danmakus(acc.id, lives, platform=acc.platform)
+        # 场次身份顺手补齐（f017，devlog/473）：这一批可能并进/拆出合并组，而读端点
+        # **只读**（物化不能放读路径，见 `app/services/live_identity.py` 模块头）。
+        # 放在这里 = "写这一行就定稿这一行"（用户口径）的延伸。幂等、失败不影响同步结果。
+        try:
+            from app.services.live_identity import materialize_account
+
+            materialize_account(db, acc.id)
+        except Exception as e:      # noqa: BLE001 - 补齐失败只是"下次启动再补"
+            logger.warning(f"场次身份补齐失败（不影响同步）: {type(e).__name__}: {e}")
         logger.info(f"danmakus live_sessions: {acc.platform_uid} "
                     f"新增 {res['added']} 刷新 {res['updated']}")
         return {**res, "reason": None}
