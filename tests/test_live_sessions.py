@@ -616,12 +616,32 @@ def test_category_title_signal(db):
 
 
 def test_category_area_signal(db):
-    # 标题空白 → 分区兜底
+    # 标题空白 → 分区兜底（**特异分区**才给得出结论）
     assert infer_category("", area_name="主机游戏", parent_area_name="单机游戏") == ("game", "area")
     assert infer_category(None, area_name="虚拟Singer", parent_area_name="虚拟主播") == ("song", "area")
-    assert infer_category("", area_name="虚拟日常", parent_area_name="虚拟主播") == ("chat", "area")
     # 标题命中优先于分区
     assert infer_category("歌回", area_name="主机游戏", parent_area_name="单机游戏")[0] == "song"
+
+
+def test_category_generic_area_is_a_last_resort(db):
+    """★宽分区（`虚拟日常` 这类）**降权成兜底**（用户 2026-10-12 反馈，`devlog/470`）。
+
+    现场：真机 `虚拟日常` 一个分区压着 **3732 条**（占分区那一路的 92%），
+    而它其实不是"内容判据"、是"没填分区"的同义词 ⇒ 原来的"命中即返回"让**任何标题
+    都改不了它**（`【突击】继续终末地！`、`小小梦魇2` 全判成 `chat`，用户标注集抓出来的）。
+
+    现在它只给 1.5 分：**标题信号压得过它**（下一条用例），而**它自己单独也判不出自信**
+    ⇒ 没别的信号时落中性（`live`）。⚠️ 这是**有意的取舍**：那批场次从 `chat` 变 `live`，
+    因为工具确实不知道他们在播什么 —— 跟着"虚拟日常 ⇒ 杂谈"猜，才是把宽分区的名字
+    当成了内容结论。
+    """
+    assert infer_category("", area_name="虚拟日常", parent_area_name="虚拟主播") == ("live", "fallback")
+    # 标题里有内容词 ⇒ 压过宽分区（这条是用户标注集里 `area-18`/`area-20` 的回归判据）
+    assert infer_category("【突击】继续终末地！", area_name="虚拟日常") == ("game", "title")
+    assert infer_category("小小梦魇2", area_name="虚拟日常") == ("game", "title")
+    assert infer_category("【3D】即兴表演！", area_name="虚拟日常") == ("3d", "title")
+    # 正对照：**特异**分区照旧单独就能定（它真的是内容判据）
+    assert infer_category("", area_name="虚拟Gamer") == ("game", "area")
 
 
 # ── 助眠（T3，2026-10-12：取代「健身」）────────────────────────────
@@ -676,32 +696,36 @@ def test_category_3d_form(db):
     # 形式归 3D 的**分区**那一路
     assert infer_category("走夜路", area_name="虚拟主播", parent_area_name="3D虚拟主播") \
         == ("3d", "area")
-    # ⚠️ **内容类优先**：标题里有内容词就听内容的（这是本轮口径反转的点）
-    assert infer_category("家用3d歌回")[0] == "song"
-    assert infer_category("3d杂谈/推子7、8")[0] == "chat"
-    assert infer_category("【3D联动】拼好团3.0")[0] == "collab"
-    assert infer_category("【3D】一起看凡人day9！")[0] == "watch"
-    # 特殊仍然最高（它在所有内容类之前）
+    # ⚠️ **只有 `special` 能压过 3D**（用户标注集定的，`devlog/470`）：
+    # 他标 `【3D】第九届星斯卡！` 是 `special`、`【3D】即兴表演！`/`【3D】露早大评级！` 是 `3d`。
+    # ⇒ 平分时 3D 赢内容类（`3d歌回` → 3d），但**赢不了 special**。
+    assert infer_category("家用3d歌回")[0] == "3d"
+    assert infer_category("【3D联动】拼好团3.0")[0] == "3d"
     assert infer_category("恬豆3D生日会 ！！！") == ("special", "title")
     assert infer_category("10w粉纪念~第一次家用3d！")[0] == "special"
+    assert infer_category("【3D】第九届星斯卡！") == ("special", "title")
 
 
 def test_category_3d_weight_and_priority_are_a_pair(db):
-    """★`3d` 的权重与优先级**是一对**，改一个必须想另一个（两个坑都实测过）。
+    """★`3d` 的权重与优先级**是一对**，改一个必须想另一个（四轮口径都量过）。
 
-    4.0 ⇒ 与内容强词（3.0）差满 1.0 ⇒ `_confident` 直接判 3D 赢 ⇒ `【3D联动】` 变 3d；
-    2.5 ⇒ 差 0.5 且 2.5 正好卡在"泛词"门槛上 ⇒ 判不自信 ⇒ **连内容信号一起丢**、落回分区。
-    3.0 ⇒ 平分 ⇒ 交 `TITLE_CATEGORY_PRIORITY` 定胜负 ⇒ 内容赢、纯 3D 仍自信。
+    | 权重 | 结果 |
+    |---|---|
+    | 4.0 | 与内容强词（3.0）差满 1.0 ⇒ `_confident` 直接判 3D 赢 ⇒ `3d歌回` → 3d（与"特殊>3D>内容"一致，但会压过 special 的 5.0 之外的场景） |
+    | 2.5 | 差 0.5 且卡在泛词门槛 ⇒ 判不自信 ⇒ **连内容信号一起丢**、落回分区 ❌ |
+    | **3.0** | 与内容强词**平分** ⇒ 交优先级定胜负；`special` 靠优先级压过它，其余内容类让位 ✅ |
+
+    ⚠️ 最终口径（用户标注集定的，`devlog/470`）：**特殊 > 3D > 其余内容类**。
     """
     from app.services.live_type import TITLE_CATEGORY_PRIORITY, TITLE_TERMS, THREED
 
     assert TITLE_TERMS[THREED]["3d"] == 3.0
-    # 3D 必须在**所有内容类之后**
-    assert TITLE_CATEGORY_PRIORITY[-1] == THREED
+    # 3D 在 `special` 之后、**所有其它内容类之前**
+    assert TITLE_CATEGORY_PRIORITY[0] == "special"
+    assert TITLE_CATEGORY_PRIORITY[1] == THREED
     # mmd 收着备用（真机 0 命中），给 2.5 ⇒ 只有它一个信号时才判 3D
     assert TITLE_TERMS[THREED]["mmd"] == 2.5
     assert infer_category("MMD 直播")[0] == "3d"
-    assert infer_category("MMD歌回")[0] == "song"      # 有内容词就不给它抢
 
 
 def test_category_3d_excludes_false_friends(db):
@@ -739,11 +763,14 @@ def test_confident_groups_ties_by_priority(db):
     assert _confident(scores) is True
     # ② 强词领先泛词 ⇒ 自信
     assert _confident({"watch": 3.0, "chat": 2.5}) is True
-    # ③ 内容类 vs 3D：差 0.5，但内容优先 ⇒ 自信（`【3D联动】拼好团3.0` 就是这一形状）
-    assert _confident({"collab": 3.0, "3d": 2.5}) is True
-    # ⚠️ 反向：**两个内容类**之间差 0.5 且低分那个优先级更高 ⇒ 不给方向 ⇒ 不自信
-    # （`_confident` 不是"优先级压过分数"，只在"高级别档领先"时才用它）
-    assert _confident({"watch": 2.5, "chat": 3.0}) is False
+    # ③ **高级别档领先**（差 <1.0）也自信 —— 用 watch(优先级 3) 对 chat(7) 验证这条机制：
+    #    换成"低分档优先级更高"的形状则**不**自信（优先级不能压过分数）。
+    assert _confident({"watch": 2.5, "chat": 2.0}) is True
+    assert _confident({"chat": 3.0, "watch": 2.5}) is False
+    # ⚠️ 3D 现在排在内容类**之前**（用户标注集定的）⇒ `{collab 3.0, 3d 2.5}` **不**自信：
+    #    低分档（3d）优先级更高 ⇒ 优先级给不出方向 ⇒ 落分区/兜底。
+    #    （这条与"3d歌回 → 3d"不矛盾：那条是**平分**，由 `_argmax` 定胜负。）
+    assert _confident({"collab": 3.0, "3d": 2.5}) is False
     # 弱词单发仍不自信
     assert _confident({"watch": 2.0}) is False
 
@@ -776,9 +803,12 @@ def test_category_title_v2_confidence(db):
     # 强词单发即自信
     assert infer_category("周六来唱歌！") == ("song", "title")
     assert infer_category("原神深渊") == ("game", "title")
-    # 泛词/无词不自信 → 落到分区（不再先命中先得）
+    # 泛词/无词不自信 → 落到分区；⚠️ 但 `虚拟日常` 是**宽分区**（只 1.5 分）
+    # ⇒ 连它也给不出自信 ⇒ 落中性（见 `test_category_generic_area_is_a_last_resort`）
     assert infer_category("随便玩玩", area_name="虚拟日常",
-                          parent_area_name="虚拟主播") == ("chat", "area")
+                          parent_area_name="虚拟主播") == ("live", "fallback")
+    # 换成**特异**分区就判得出来（正对照：不是"分区一律失效"）
+    assert infer_category("随便玩玩", area_name="虚拟Gamer") == ("game", "area")
 
 
 def test_normalize_title_skeleton():

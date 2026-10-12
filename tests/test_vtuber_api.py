@@ -1724,8 +1724,11 @@ def test_live_category_override_flow(client):
     # ⚠️ **校正不再外溢**（2026-10-12 类型落库）：v2 的 `series` 传播已下线 ——
     # 它要"同账号、全历史"地聚类，与"入库时只看这一场自己"的落库口径直接冲突
     # （见 `app/services/live_settle.py` 模块头）。uuid-c 只按自己的标题/分区定。
-    assert by_live["uuid-c"]["category"] == "chat"
-    assert by_live["uuid-c"]["category_from"] == "area", (
+    # ⚠️ 它现在是 `live`/`fallback`：标题「晚上好」没有内容词，分区是 **`虚拟日常`**
+    # —— 那是**宽分区**（只 1.5 分，`devlog/470`）⇒ 单独给不出自信 ⇒ 落中性。
+    # （旧期望 `chat`/`area` 是"虚拟日常 ⇒ 杂谈"那套，已被用户标注集判为不可信。）
+    assert by_live["uuid-c"]["category"] == "live"
+    assert by_live["uuid-c"]["category_from"] == "fallback", (
         "同骨架的邻居被校正带跑了 —— series 传播不该回来")
 
     # 非法分类 → 422（不含 live 兜底）

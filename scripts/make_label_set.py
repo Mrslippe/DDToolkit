@@ -370,6 +370,17 @@ def ruler(args) -> None:
     from app.routers.vtuber import _resolve_categories
 
     engine = create_engine(f"sqlite:///{COPY.as_posix()}")
+    # ⚠️⚠️ **先把两列清空**（2026-10-12 踩到）：读路径的口径是
+    # 「**有落库值就用落库值** ← 没有才现算」，而副本一旦被上一次尺子跑过，
+    # 惰性回填就把**当时的规则结果**写进了列里 ⇒ 之后改规则再跑尺子，
+    # 量到的全是**库里的旧值**，新规则一条都没生效（实测：直调 `settle()` 是
+    # `game`、尺子报 `chat`，我差点按错的那个去改规则）。
+    # 清空之后尺子量的才是"**当前规则**在这份真值上的表现" —— 这也正是产品上
+    # 日同步/新写入会发生的事（老库那 8,515 行的列会在下次同步时被重判）。
+    con = sqlite3.connect(COPY)
+    con.execute("UPDATE live_sessions SET category = NULL, category_from = NULL")
+    con.commit()
+    con.close()
     db = sessionmaker(bind=engine)()
     repo = LiveSessionRepo(db)
 

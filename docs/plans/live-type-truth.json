@@ -1,0 +1,176 @@
+{
+ "seed": 20261012,
+ "source": "docs/plans/live-type-label-set.md",
+ "labels": {
+  "3d-3": {
+   "truth": "special",
+   "account_id": 26,
+   "live_id": "42933342-8413-b987-8728-0fe1e4245686",
+   "start_at": "2025-12-12 11:55:53.437000",
+   "title": "【3D】第九届星斯卡！",
+   "area": "虚拟日常",
+   "at_label_time": "3d",
+   "from_at_label_time": "title"
+  },
+  "3d-13": {
+   "truth": "3d",
+   "account_id": 34,
+   "live_id": "20fb4f24-88bf-398b-b98d-3a24edb46366",
+   "start_at": "2025-12-10 11:02:09.495000",
+   "title": "【3D】即兴表演！",
+   "area": "虚拟日常",
+   "at_label_time": "chat",
+   "from_at_label_time": "area"
+  },
+  "3d-17": {
+   "truth": "3d",
+   "account_id": 32,
+   "live_id": "a9cc66db-46ae-9d88-8f3a-5a2ba599cfc0",
+   "start_at": "2025-10-20 11:02:51.057000",
+   "title": "【3D】露早大评级！",
+   "area": "虚拟日常",
+   "at_label_time": "chat",
+   "from_at_label_time": "area"
+  },
+  "fallback-1": {
+   "truth": "watch",
+   "account_id": 16,
+   "live_id": "7b9e667a-b37d-4c20-813e-293abd6b3b17",
+   "start_at": "2023-11-19 10:58:56",
+   "title": "【视频】当毒师的下场……！",
+   "area": "",
+   "at_label_time": "live",
+   "from_at_label_time": "fallback"
+  },
+  "fallback-2": {
+   "truth": "game",
+   "account_id": 22,
+   "live_id": "45ae1157-9555-4025-81ad-b497ad5c0f89",
+   "start_at": "2022-01-11 12:24:00",
+   "title": "大表哥好玩喵",
+   "area": "",
+   "at_label_time": "live",
+   "from_at_label_time": "fallback"
+  },
+  "fallback-4": {
+   "truth": "watch",
+   "account_id": 16,
+   "live_id": "a2f58345-d438-47af-a041-e75dbe79ddd5",
+   "start_at": "2024-07-10 12:00:54",
+   "title": "康康！",
+   "area": "",
+   "at_label_time": "live",
+   "from_at_label_time": "fallback"
+  },
+  "fallback-5": {
+   "truth": "game",
+   "account_id": 27,
+   "live_id": "99f5b2a1-85a1-48bf-b9f0-90443d9e12cd",
+   "start_at": "2022-11-09 12:46:00",
+   "title": "今晚继续！底特律变人~",
+   "area": "虚拟主播",
+   "at_label_time": "live",
+   "from_at_label_time": "fallback"
+  },
+  "fallback-6": {
+   "truth": "game",
+   "account_id": 22,
+   "live_id": "ffd56715-3bf9-48be-b761-5f8f17b4c3ce",
+   "start_at": "2022-01-24 10:54:00",
+   "title": "粉丝做的I WANNA喵",
+   "area": "",
+   "at_label_time": "live",
+   "from_at_label_time": "fallback"
+  },
+  "fallback-8": {
+   "truth": "watch",
+   "account_id": 15,
+   "live_id": "23b3a4bc-fffd-4867-a467-e1d262d97ea1",
+   "start_at": "2022-12-04 13:00:00",
+   "title": "宿命回响和看了好多（追凶者也、十二怒汉）",
+   "area": "虚拟主播",
+   "at_label_time": "live",
+   "from_at_label_time": "fallback"
+  },
+  "fallback-12": {
+   "truth": "watch",
+   "account_id": 16,
+   "live_id": "6f5fdf37-a035-41f6-9d10-55acef716ca8",
+   "start_at": "2024-04-16 11:55:51",
+   "title": "我 看 大 时 代",
+   "area": "",
+   "at_label_time": "live",
+   "from_at_label_time": "fallback"
+  },
+  "fallback-13": {
+   "truth": "special",
+   "account_id": 26,
+   "live_id": "3c4318b7-e278-4ad7-a0d3-3534e04b5b9e",
+   "start_at": "2022-08-23 11:49:00",
+   "title": "【2D】新衣服发布会！",
+   "area": "",
+   "at_label_time": "live",
+   "from_at_label_time": "fallback"
+  },
+  "fallback-16": {
+   "truth": "collab",
+   "account_id": 17,
+   "live_id": "a916d6d7-cb26-41af-bac4-c51284a7fa31",
+   "start_at": "2021-11-26 11:58:00",
+   "title": "多谢款待by菜菜子 茶冷 悠亚",
+   "area": "",
+   "at_label_time": "live",
+   "from_at_label_time": "fallback"
+  },
+  "fallback-17": {
+   "truth": "game",
+   "account_id": 15,
+   "live_id": "bc2d6403-3f7e-4251-ac9b-ba9735546e98",
+   "start_at": "2022-04-19 13:39:00",
+   "title": "想玩Ib重置版",
+   "area": "",
+   "at_label_time": "live",
+   "from_at_label_time": "fallback"
+  },
+  "fallback-19": {
+   "truth": "game",
+   "account_id": 27,
+   "live_id": "87dbc562-fc1d-46bd-b56c-6a35643cd061",
+   "start_at": "2023-01-08 12:56:00",
+   "title": "底特律连续剧！",
+   "area": "虚拟主播",
+   "at_label_time": "live",
+   "from_at_label_time": "fallback"
+  },
+  "area-18": {
+   "truth": "game",
+   "account_id": 27,
+   "live_id": "41019a34-4172-c586-9dc9-8b8d7e5ceca5",
+   "start_at": "2026-03-15 01:57:23",
+   "title": "【突击】继续终末地！",
+   "area": "虚拟日常",
+   "at_label_time": "chat",
+   "from_at_label_time": "area"
+  },
+  "area-20": {
+   "truth": "game",
+   "account_id": 29,
+   "live_id": "b173c73e-0513-0180-a92c-75be9d62e2b7",
+   "start_at": "2025-09-28 10:32:17.864000",
+   "title": "小小梦魇2",
+   "area": "虚拟日常",
+   "at_label_time": "chat",
+   "from_at_label_time": "area"
+  },
+  "title-2": {
+   "truth": "song",
+   "account_id": 27,
+   "live_id": "70632eeb-f331-7f88-b646-ee71eb4364f6",
+   "start_at": "2026-01-10 13:02:33.982000",
+   "title": "新年第一唱！",
+   "area": "虚拟日常",
+   "at_label_time": "special",
+   "from_at_label_time": "title"
+  }
+ }
+}
