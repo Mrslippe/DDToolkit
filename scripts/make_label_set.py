@@ -37,10 +37,10 @@ SEED = 20261012
 PER_STRATUM = 20
 
 #: 允许的真值（含 `?`，见 `--ruler` 的说明：故意放进 label 里当作「人眼也判不出」的记录）
-#: ⚠️ 2026-10-12（T3）：`fitness` 已换成 `sleep`（助眠）—— 与
-#: `app/services/live_type.py::CATEGORY_KEYS` 同集，否则 `--collect` 会把
-#: 合法真值判成"不在允许清单里"。
-VALID_TRUTH = {"game", "chat", "watch", "upload", "song", "sleep",
+#: ⚠️ 必须与 `app/services/live_type.py::CATEGORY_KEYS` 同集 ——
+#: 2026-10-12 两次体系改动都碰过这里：健身→助眠（`devlog/468`）、新加 `3d`（`devlog/469`）。
+#: 漏改的症状是 `--collect` 把**合法真值**判成"不在允许清单里"（用户填了却收不进来）。
+VALID_TRUTH = {"game", "chat", "watch", "upload", "song", "sleep", "3d",
                "radio", "collab", "special", "live", "?"}
 
 
@@ -133,7 +133,13 @@ def generate(args) -> None:
 
     strata: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
-        if r["from"] == "fallback":
+        # ⚠️ 3D **单独一层**（2026-10-12 新加）：它是新类、真机上量最大的一类之一
+        # （389 场），而它与其他层的关系正是最需要人判的（"3d歌回"到底算歌回还是 3D）。
+        # 显式排除"不是 3D 直播"的误命中（`晕3d了谢会sc`）。
+        low = (r["title"] or "").lower()
+        if "3d" in low and not any(x in low for x in ("晕3d", "3d晕", "3ds")):
+            strata["threed"].append(r)
+        elif r["from"] == "fallback":
             strata["fallback"].append(r)
         elif r["from"] == "area":
             strata["area"].append(r)
@@ -152,47 +158,57 @@ def generate(args) -> None:
         "doc: plans/live-type-label-set",
         "class: plan",
         f"scope: T2 的人工标注集（固定种子 {SEED} 抽样；用户逐个给真值 ⇒ 形成回归集）",
-        "not-scope: 规则本身（T3 才改）；这份文件只装「人给的真值」",
+        "not-scope: 规则本身（改规则是 T3）；这份文件只装「人给的真值」",
         "expires: 2027-03-31",
         "---",
         "",
         "# 场次类型：人工标注集（T2 尺子）",
         "",
-        "> 用途：T3 要改类型规则（健身→助眠 + 打那 31.7% 未定出来的场次）。**没有这份真值，",
-        "> 规则怎么改都只能叫「换个口味」，不能叫「更准」**（方案 §5）。",
+        "> 用途：给类型规则一个**能证伪的尺子**。规则已经改过两轮（`devlog/468` 健身→助眠、",
+        "> `devlog/469` 加 `3d` + watch 扩边界），但**没有基线** ⇒ 现在只能说「换了口径」，",
+        "> 不能说「更准」。这份真值就是那个基线（方案 §5：基础规则 + 人工标注相结合）。",
         ">",
-        "> 怎么填：看每一行的**标题 + 分区**，在「你的判断」里写一个类型 key（写在最后面那张表里）。",
-        "> **拿不准就写 `?`** —— 那本身就是有用的信息（说明这一场人眼也判不出来，",
-        "> 规则判不出来不算错）。",
+        "> **怎么填**：看每一行的**标题 + 分区**，在最后一节的 `key-N = 类型` 里写一个类型 key。",
+        "> - **拿不准就写 `?`** —— 那本身有用（说明人眼也判不出来，规则判不出不算错），",
+        ">   评测时不计入吻合率、但会单独报出来；",
+        "> - ⚠️「现有判断」栏是**今天规则给出的答案**，不是提示 —— 觉得错就照实写你的；",
+        "> - **不用全填**，每层填十几条就够当尺子（但 `3d` 那层建议认真填，它是新类）。",
         "",
-        "## 类型 key（沿用现有 10 类）",
+        "## 类型 key（现在的 11 类）",
         "",
-        "| key | 标签 | 大致的判定边界 |",
+        "| key | 标签 | 判定边界 |",
         "|---|---|---|",
-        "| `chat` | 杂谈 | 聊天/陪伴/杂谈/谢 SC/看弹幕互动（**没有明确内容主体**的那种） |",
-        "| `game` | 游戏 | 主体是打游戏（含联机、练枪、通关、看游戏实况一起吐槽？→ 见说明） |",
-        "| `watch` | 观影 | 一起看番/剧/电影/综艺/特摄（**看的不是游戏**） |",
-        "| `upload` | 投稿 | 主体是看投稿/切片/评论自己的二创 |",
+        "| `chat` | 杂谈 | 聊天/陪伴/杂谈/谢 SC/看弹幕互动 —— **没有明确内容主体**的那种 |",
+        "| `game` | 游戏 | 主体是打游戏（含联机、练枪、通关、看游戏实况一起吐槽） |",
+        "| `watch` | 观影 | 一起看番/剧/电影/综艺/特摄，**或者视频、投稿等以观看视频为主体**的 |",
+        "| `upload` | 投稿 | 主体是**放自己的**新作/预告/剪辑（「看别人的投稿」归 `watch`） |",
         "| `song` | 歌回 | 唱歌/歌回/练歌/演唱会/音乐向 |",
-        "| `radio` | 电台 | 电台/谈心/深夜陪聊/ASMR/哄睡（**与 `chat` 的边界：有「节目感」的算电台**） |",
+        "| `radio` | 电台 | 电台/谈心/深夜陪聊/**在电台区开播**（与 `chat` 的边界：有「节目感」的算电台） |",
         "| `collab` | 联动 | 与人联动/嘉宾/连麦/合唱 |",
         "| `special` | 特殊 | 生日/周年/出道纪念/毕业/跨年等**一次性事件** |",
-        "| `sleep` | 助眠 | 助眠/哄睡/白噪音/ASMR 这类**明确的助眠内容**（判不准就别硬套） |",
+        "| `sleep` | 助眠 | 助眠/哄睡/白噪音/ASMR 这类**明确的助眠内容**（真机上今天 0 场） |",
+        "| `3d` | 3D | **3D 形式**呈现的直播（口径：**内容类优先** ⇒ `3d歌回` 算歌回、只有判不出内容的才归 3D） |",
         "| `live` | 直播 | 中性兜底（**判不出来时选它**） |",
         "",
         "## 抽样与口径",
         "",
         f"- 来源：真机库只读副本（{len(rows)} 场合并场次），**固定种子 {SEED}** ⇒ 可复现；",
-        "- 分层：按**现有判定档位**取（`fallback` 未定出来 / `area` 靠分区 / `title` 靠标题等）；",
-        "- 每层取了若干条，**不用全填**（填 30–40 条就够当尺子）；",
-        "- ⚠️ 「现有判断」栏是**今天规则给出的答案**，不是提示 —— 觉得它错了请照实写你的判断。",
-        "",
+        "- 分层：按**现有判定档位**取（`fallback` 未定出来 / `area` 靠分区 / `title` 靠标题）"
+        "＋**单独一层 `3d`**（新类，按标题含 3D 取，已排除「晕3d」这类误命中）；",
+        "- 每层取了一批，**不用全填**；",
+        "",""
     ]
 
-    titles = {"fallback": "第一层：未定出来（今天的 `live` 兜底）",
-              "area": "第二层：靠房间分区定的",
-              "title": "第三层：靠标题关键词定的"}
-    for name in ("fallback", "area", "title"):
+    titles = {"threed": "第一层：标题含 3D（新类的现场）",
+              "fallback": "第二层：未定出来（今天的 `live` 兜底）",
+              "area": "第三层：靠房间分区定的",
+              "title": "第四层：靠标题关键词定的"}
+    #: 层 → 页面上的 ID 前缀。⚠️ **显式写出来，不用 `name[:4]` 切**：
+    #: 切出来的 `fallback` → `fall`、`title` → `titl` 与提示里的名字**不一致**，
+    #: 用户按页面提示写 `fallback-1 = game` 会被解析器当"认不出的行"丢掉。
+    #: 这类坑的症状是"我明明填了，吻合率却没算进去"—— 很难自己发现。
+    prefixes = {"threed": "3d", "fallback": "fallback", "area": "area", "title": "title"}
+    for name in ("threed", "fallback", "area", "title"):
         got = picked.get(name) or []
         if not got:
             continue
@@ -207,21 +223,25 @@ def generate(args) -> None:
             if r["parent_area"] and r["parent_area"] != r["area"]:
                 area = f"{_clean(r['parent_area'])}/{area}"
             lines.append(
-                f"| {name[:4]}-{i} | {_clean(r['title'])} | {area} "
+                f"| {prefixes[name]}-{i} | {_clean(r['title'])} | {area} "
                 f"| `{r['category']}`（{r['from']}） |  |")
         lines.append("")
 
     lines += [
         "## 我（用户）的判断",
         "",
-        "> 把这部分回给我即可：`fallback-1 = game`、`area-3 = ?` 这样写就行。",
+        "> 按 `fallback-1 = game` 这种形状写在下面（前缀就是表格里那个 ID 的前半段：",
+        "> `3d-` / `fallback-` / `area-` / `title-`）。",
+        "> 不填的条目会被跳过；写 `?` = 人眼也判不出。",
         "",
         "```",
-        "# fallback 层",
+        "# 3D 层（新类，建议认真填）",
         "",
-        "# area 层",
+        "# 未定出来那层",
         "",
-        "# title 层",
+        "# 分区层",
+        "",
+        "# 标题层",
         "",
         "```",
         "",
@@ -254,7 +274,7 @@ def generate(args) -> None:
 
 # ── 标注解析（把用户填的那一段变成固定回归集）──────────────────────
 
-_LABEL_RE = re.compile(r"^\s*(fall|area|titl)-(\d+)\s*=\s*([A-Za-z?]+)\s*$")
+_LABEL_RE = re.compile(r"^\s*([a-z0-9]+)-(\d+)\s*=\s*([A-Za-z?0-9]+)\s*$")
 
 
 def parse_answers(md_path: Path) -> dict[str, str]:
@@ -298,10 +318,12 @@ def collect(args) -> None:
     side = json.loads(md.with_suffix(".json").read_text(encoding="utf-8"))
     picked = side["picked"]
     # id → 那一场的键（真值要靠它跟"现在的规则怎么说"对上）
+    # ⚠️ 前缀必须与 `generate()` 的 `prefixes` 表**同源**（`3d` 不是 `threed`）
+    prefixes = {"threed": "3d", "fallback": "fallback", "area": "area", "title": "title"}
     by_id: dict[str, dict] = {}
     for name, rows in picked.items():
         for i, r in enumerate(rows, 1):
-            by_id[f"{name[:4]}-{i}"] = r
+            by_id[f"{prefixes.get(name, name)}-{i}"] = r
     out: dict[str, dict] = {}
     unknown = [k for k in truth if k not in by_id]
     if unknown:
