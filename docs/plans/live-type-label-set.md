@@ -149,12 +149,33 @@ expires: 2027-03-31
 
 ```
 # 3D 层（新类，建议认真填）
+3d-3 = special
+3d-13 = 3d
+3d-17 = 3d
+
 
 # 未定出来那层
+fallback-1 = watch
+fallback-2 = game
+fallback-4 = watch
+fallback-5 = game
+fallback-6 = game
+fallback-8 = watch
+fallback-12 = watch
+fallback-13 = special
+fallback-16 = collab
+fallback-17 = game
+fallback-19 = game
 
 # 分区层
+area-18 = game
+area-20 = game
+
 
 # 标题层
+title-2 = song
+
+
 
 ```
 
@@ -168,3 +189,5 @@ expires: 2027-03-31
    区分不了「更准」与「把错换了个错法」，必须配这份固定集。
 4. ⚠️ 标 `?` 的条目不进吻合率（人眼也判不出），但会单独报出来；
    库里已不存在的场次会被跳过并说明 —— **不静默少算**（少算会让吻合率看起来更好）。
+
+
