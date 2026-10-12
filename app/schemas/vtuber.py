@@ -515,7 +515,7 @@ class LiveSessionOut(BaseModel):
     vod_url: str | None = None                  # 录播地址（f013；唯一形态 https://www.bilibili.com/video/BV…）
     manual: bool = False                        # 这一场含"用户手动记录"成分（source 分词判定，服务端算）
     segment_count: int = 1                      # 中断续播并段数（v2 合并，1=单场）
-    category: str = "live"                      # game/chat/watch/upload/song/sleep/radio/collab/special/live
+    category: str = "live"                      # game/chat/watch/upload/song/sleep/radio/collab/special/3d/live
     category_from: str = "fallback"             # override/title/area/date/fallback/unknown（series/learned 已于 2026-10-12 下线）
 
     @field_serializer("start_at", "end_at")

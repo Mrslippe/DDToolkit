@@ -661,6 +661,62 @@ def test_category_radio_keeps_only_the_programme_words(db):
     assert infer_category("晚安")[0] == "radio"
 
 
+# ── 3D 形式 + watch 边界 + 并列档（用户 2026-10-12 的三处修正）──────────
+
+def test_category_3d_form(db):
+    """★新加的第 11 类：**3D 形式**（用户口径「3D 形式呈现直播的场次」）。
+
+    权重 4.0 是量出来的：真机 705 条含 `3d` 的标题里绝大多数只有这一个信号，
+    3.0 会被 `_confident`（要求领先 ≥1.0）判成不自信 ⇒ 全部落回分区/兜底，等于白加。
+    """
+    assert infer_category("【3D】红豆来咯") == ("3d", "title")
+    assert infer_category("家用3d的健身鹮") == ("3d", "title")
+    # 形式归 3d（不因为带"歌回/杂谈"就落到内容类）—— 这是用户拍板的取舍
+    assert infer_category("家用3d歌回")[0] == "3d"
+    assert infer_category("3d杂谈/推子7、8")[0] == "3d"
+    # 分区那一路也认
+    assert infer_category("", area_name="虚拟主播", parent_area_name="3D虚拟主播") == ("3d", "area")
+    # ⚠️ 但**低于 special**：「3D 生日会」首先是生日（一年一次的事件）
+    assert infer_category("恬豆3D生日会 ！！！") == ("special", "title")
+    assert infer_category("10w粉纪念~第一次家用3d！")[0] == "special"
+
+
+def test_category_3d_excludes_false_friends(db):
+    """★`晕3d` 不是 3D 直播（真机有 `晕3d了谢会sc` 这种标题，裸 `3d` 会误伤）。"""
+    assert "3d" not in score_title("晕3d了谢会sc")
+    assert infer_category("晕3d了谢会sc")[0] != "3d"
+
+
+def test_category_watch_covers_watching_videos(db):
+    """★用户修正边界：「或者视频、投稿等主要以观看视频为主体的」都算 `watch`。
+
+    ⚠️ `投稿回`/`看投稿` 与 `upload` 的 `投稿` 必然平分 ⇒ 靠 `TITLE_CATEGORY_PRIORITY`
+    （WATCH 在 UPLOAD 之前）打破。这条同时守**并列档**那个修复（见下一条用例）。
+    """
+    assert infer_category("【看视频】很有品味的分享了很有品位的视频") == ("watch", "title")
+    assert infer_category("二创~") == ("watch", "title")
+    assert infer_category("哇哈哈边看投稿边聊天") == ("watch", "title")   # 并列 → 优先级
+    # 弱信号（切片 2.0）不足以自信 ⇒ 兜底是对的（判不准就别硬判）
+    assert infer_category("看我看自己切片【2】")[0] == "live"
+
+
+def test_confident_groups_ties_by_priority(db):
+    """★并列同分**算一档**（`_ranked_groups`）：`_argmax` 用优先级打破，`_confident` 也得认。
+
+    修复前 `{'watch': 3.0, 'upload': 3.0}` 的逐类相邻差是 0 < 1.0 ⇒ 判成"分歧太大" ⇒
+    **有 `TITLE_CATEGORY_PRIORITY` 也白搭**（那条优先级只在 `_argmax` 里生效）⇒ 落回中性。
+    """
+    from app.services.live_type import _confident, _ranked_groups
+
+    scores = {"watch": 3.0, "upload": 3.0}
+    assert _ranked_groups(scores) == [("watch", 3.0)]     # 同分归成一档
+    assert _confident(scores) is True
+    # 真正**跨档**的分歧仍然不自信（反向验证：这条修复没有把"分歧"一起放行）
+    assert _confident({"watch": 3.0, "chat": 2.5}) is False
+    # 弱词仍然不自信
+    assert _confident({"watch": 2.0}) is False
+
+
 def test_category_date_anchor(db):
     # 生日当日（MM-DD）
     assert infer_category("", start_at=T0, birthday="09-01") == ("special", "date")

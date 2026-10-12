@@ -710,9 +710,17 @@ def _run_shot(edge: str, url: str, width: int, height: int, out_png: Path) -> No
         print(f"  [warn] 截图失败：{exc}")
 
 
-# 设计上就要横向滚动的容器（白名单）：type-chips 胶囊行超宽时行内横滚
+# 设计上就要横向滚动的容器（白名单）：胶囊行超宽时行内横滚
 # （scrollbar 已隐藏），属于有意行为，不算布局缺陷。
-H_SCROLL_ALLOWLIST = ("type-chips",)
+#
+# ⚠️ `lc-stats`（2026-10-12 加入）：日历导航行右侧那排**类型筛选胶囊**。
+# 它原来最多 9 枚、在 1100px 档刚好放得下；新加第 10 类 `3d`（`devlog/469`）之后
+# 实测 client=260 / scroll=280 ⇒ 溢出 20px。它与 `type-chips` 是**同一类容器**
+# （`overflow-x:auto` + `scrollbar-width:none`，CSS 里写着"横向滚动兜底，不出滚动条"），
+# 所以按同一条先例放行 —— 而不是把第 10 枚挤小（那会改动用户已经确认过的胶囊尺寸）。
+# 判据：`tests/test_live_sessions.py` 的 10 类体系 + 前端 `missingTypeTones`
+# （每类都有色调）+ `ui_probe --archive` 的筛选端到端（点一下只剩那一类）。
+H_SCROLL_ALLOWLIST = ("type-chips", "lc-stats")
 
 
 def _assert_board(views: list[dict], width: int, profile_expected: bool = True) -> list[str]:

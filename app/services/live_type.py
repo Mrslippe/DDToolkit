@@ -36,10 +36,14 @@ GAME, CHAT, WATCH, UPLOAD, SONG = "game", "chat", "watch", "upload", "song"
 # ⚠️ `SLEEP`（助眠）**取代**了原来的 `FITNESS`（健身）—— 2026-10-12 T3，用户口径
 # 「沿用现有的 10 类，但健身删掉，换成助眠」。判据：`tests/test_vtuber_api.py::
 # test_frontend_type_keys_match_backend_taxonomy`（前后端两份表必须同集）。
+# ⚠️ `THREED`（3D）是**新加的第 11 类** —— 2026-10-12，用户口径「加一个 3D 类型，
+# 主要指 **3D 形式呈现**直播的场次」。它答的是"**用什么形式演**"，与"演什么"
+# （歌回/游戏/杂谈）正交 ⇒ 优先级要显式定（见 `TITLE_CATEGORY_PRIORITY`）。
+THREED = "3d"
 SLEEP, RADIO, COLLAB, SPECIAL, LIVE = "sleep", "radio", "collab", "special", "live"
 
 CATEGORY_KEYS = frozenset({GAME, CHAT, WATCH, UPLOAD, SONG,
-                           SLEEP, RADIO, COLLAB, SPECIAL, LIVE})
+                           THREED, SLEEP, RADIO, COLLAB, SPECIAL, LIVE})
 # 用户可校正的分类（不含 live 兜底——校正「直播」无意义）
 EDITABLE_CATEGORY_KEYS = CATEGORY_KEYS - {LIVE}
 
@@ -48,8 +52,10 @@ EDITABLE_CATEGORY_KEYS = CATEGORY_KEYS - {LIVE}
 #: 两边各有一份（前端要能独立渲染骨架屏），顺序漂了会让"卡片上的柱子次序"
 #: 与"筛选条里的胶囊次序"对不上，而那种错只有肉眼能发现。
 #: 兜底 `live` **不在**这个序列里（永远排最后，见 `routers/vtuber.py::live_type_stats`）。
+#: `3d` 排在**最后**（与 `TITLE_CATEGORY_PRIORITY` 里"形式让位于内容"相反）：
+#: 它是"特别的形式"，混在内容类目中间会让"杂谈→游戏→3D→观影"这种排法读起来没有线索。
 TYPE_DISPLAY_ORDER: tuple[str, ...] = (CHAT, GAME, WATCH, UPLOAD, SONG,
-                                       SLEEP, RADIO, COLLAB, SPECIAL)
+                                       SLEEP, RADIO, COLLAB, SPECIAL, THREED)
 
 # 标题词条表：词 → 权重。
 # 权重语义：强特征词（≥2.5）单发即自信（如 歌回/杂谈/联动/观影）；
@@ -61,6 +67,15 @@ TITLE_TERMS: dict[str, dict[str, float]] = {
         "新春": 5.0, "圣诞": 5.0, "跨年": 5.0, "新年": 5.0, "首播": 5.0, "毕业": 5.0,
         "告别": 5.0, "收官": 5.0, "终演": 5.0, "演唱会特辑": 5.0,
     },
+    # ⚠️ 2026-10-12 新加：**3D 形式**（用户口径「3D 形式呈现直播的场次」）。
+    # 权重 4.0 是量出来的：真机 705 条含 `3d` 的标题里绝大多数**只有这一个信号**
+    # （`【3D】红豆来咯`、`家用3d的健身鹮`），3.0 会被 `_confident`（要求领先 ≥1.0）
+    # 判成不自信 ⇒ 全部落回分区/兜底，等于白加。
+    # ⚠️ **刻意没有收的**：`mmd` / `模型`（单字太泛，会误伤「模型拼装」这类手工直播）、
+    # `3d眩晕` 一类**不是 3D 直播**的用法（由 `_THREED_EXCLUDE` 显式排除）。
+    THREED: {
+        "3d": 4.0,
+    },
     SONG: {
         "歌回": 3.0, "歌会": 3.0, "唱歌回": 3.0, "歌杂": 3.0, "歌单": 3.0, "翻唱": 3.0,
         "唱歌": 2.5, "开嗓": 2.5, "唱见": 2.5, "卡拉ok": 2.5, "演唱会": 2.5, "音乐": 1.5,
@@ -69,6 +84,13 @@ TITLE_TERMS: dict[str, dict[str, float]] = {
         "观影": 3.0, "看番": 3.0, "追番": 3.0, "补番": 3.0, "电影": 3.0, "番剧": 3.0,
         "影视": 3.0, "看片": 3.0, "一起看": 3.0, "追剧": 3.0, "看剧": 3.0,
         "剧场": 2.5, "综艺": 2.5, "动画": 2.0, "假面骑士": 2.5, "奥特曼": 2.5, "特摄": 2.5,
+        # ⚠️ 2026-10-12（用户修正边界）：「**或者视频、投稿等主要以观看视频为主体**的
+        # 直播内容」⇒ 把"看别人的东西"这一族收进来。实测命中：
+        # 看视频 19 · 一起看 106 · 二创 23 · 看投稿 3 · 切片 3。
+        # ⚠️ `投稿回`/`看投稿` 与 `UPLOAD` 的 `投稿`（3.0）**必然平分**，靠
+        # `TITLE_CATEGORY_PRIORITY` 里 WATCH 排在 UPLOAD 前面打破 —— 这是有意的：
+        # 「看投稿」是**看**，`upload` 留给"放自己的新作/预告"。
+        "看投稿": 3.0, "投稿回": 3.0, "看视频": 3.0, "二创": 2.5, "切片": 2.0,
     },
     COLLAB: {
         "联动回": 3.5, "联动": 3.0, "合作": 3.0, "嘉宾": 3.0, "连麦": 3.0, "合唱": 3.0,
@@ -120,11 +142,24 @@ TITLE_TERMS: dict[str, dict[str, float]] = {
     },
 }
 
-# 并列同分兜底顺序（与 v1 规则顺序一致：特殊 > 歌回 > 观影 > 联动 > 助眠 > 电台 >
-# 杂谈 > 游戏 > 投稿）
+# 并列同分兜底顺序（v1 顺序 + 2026-10-12 新加的 3D）：
+# 特殊 > **3D** > 歌回 > 观影 > 联动 > 助眠 > 电台 > 杂谈 > 游戏 > 投稿
+#
+# ⚠️ `3d` 的位置是**有意的、也是可争议的**（用户 2026-10-12 拍板"先看看效果"）：
+# 它答的是"**用什么形式演**"，与其他类目（"演什么"）正交 ⇒ 必然要与它们抢票。
+# 现在的取舍：
+#   · **低于 `special`** —— 「3D 生日会」首先是**生日**（一年一次的事件），形式是次要信息；
+#   · **高于 `song`/`game`/`watch`/`chat`** —— 「家用3d歌回」「3d杂谈」按**形式**归档
+#     （用户的诉求是"能一眼看出哪些是 3D 场次"）。
+# 真机交叠量（705 条含 3d 的标题）：special 52 · chat 17 · song 10 · game 6 · watch 4 · collab 2。
 TITLE_CATEGORY_PRIORITY: tuple[str, ...] = (
-    SPECIAL, SONG, WATCH, COLLAB, SLEEP, RADIO, CHAT, GAME, UPLOAD,
+    SPECIAL, THREED, SONG, WATCH, COLLAB, SLEEP, RADIO, CHAT, GAME, UPLOAD,
 )
+
+#: `3D` 词条的**显式排除**（子串里带这些的不算 3D 直播）。
+#: 真机实测：`晕3d了谢会sc` 这种"游戏晕 3D"会被裸 `3d` 命中 ⇒ 判成 3D 直播是错的。
+#: 另排除 `3ds`（掌机）与 `3d眩晕`。命中任一 ⇒ **整个 `3d` 词条不计票**。
+_THREED_EXCLUDE = ("晕3d", "3d晕", "3ds", "3d眩晕", "3d晕")
 
 # 校正投票权重：一场校正 > 单场强词（3.0）+；可改写系列聚合但弱于多数派
 SERIES_OVERRIDE_VOTE = 4.0
@@ -136,6 +171,10 @@ MIN_SERIES_MEMBERS = 2
 # 分区映射（子串命中；area_name 优先，其次 parent_area_name）
 # 顺序：特异分区在前（虚拟Singer→歌回），游戏/杂谈类宽匹配在后
 AREA_RULES: list[tuple[str, list[str]]] = [
+    # ⚠️ 2026-10-12：`3D虚拟主播` 排**最前**（真机 24 条）—— 分区名里直接写着 3D，
+    # 比"虚拟Singer/Gamer"这类内容分区更特异；同一条标题若同时挂 `虚拟Singer`，
+    # 由标题评分决定（`3d歌回` → 3d 因为 TITLE_CATEGORY_PRIORITY 在 song 之前）。
+    (THREED, ["3d虚拟"]),
     (SONG, ["虚拟singer", "虚拟歌", "唱歌", "音乐", "演唱会", "歌舞", "唱见", "乐器"]),
     (GAME, ["虚拟gamer", "主机游戏", "单机游戏", "网络游戏", "手机游戏", "手游", "网游", "游戏"]),
     (WATCH, ["剧场", "影视", "电影", "番剧", "放映"]),
@@ -170,6 +209,10 @@ def score_title(title: str | None) -> dict[str, float]:
         return {}
     out: dict[str, float] = {}
     for cat, terms in TITLE_TERMS.items():
+        # ⚠️ 3D 的**显式排除**（2026-10-12）：`晕3d了谢会sc` 这类被裸 `3d` 命中的标题
+        # 不是 3D 直播（那是"游戏晕 3D"）⇒ 命中 `_THREED_EXCLUDE` 时整个词条不计票。
+        if cat == THREED and any(x in t for x in _THREED_EXCLUDE):
+            continue
         spans: list[tuple[int, int, float]] = []
         for term, w in terms.items():
             idx = 0
@@ -191,30 +234,52 @@ def score_title(title: str | None) -> dict[str, float]:
     return out
 
 
-def _argmax(scores: dict[str, float]) -> str | None:
-    if not scores:
-        return None
-    best = max(scores.values())
-    cands = [c for c, w in scores.items() if w == best]
-    if len(cands) == 1:
-        return cands[0]
+def _pick(cands: list[str]) -> str:
+    """并列候选里按 `TITLE_CATEGORY_PRIORITY` 定胜负（不在表里的退回第一个）。"""
     for c in TITLE_CATEGORY_PRIORITY:
         if c in cands:
             return c
     return cands[0]
 
 
-def _confident(scores: dict[str, float]) -> bool:
-    """自信判定：强词（≥2.5）单发即自信；多词并列分歧（margin < 1.0）不自信。"""
+def _argmax(scores: dict[str, float]) -> str | None:
     if not scores:
+        return None
+    best = max(scores.values())
+    return _pick([c for c, w in scores.items() if w == best])
+
+
+def _ranked_groups(scores: dict[str, float]) -> list[tuple[str, float]]:
+    """把得分按**档**聚起来：`[(代表类目, 该档得分), …]`，从高到低。
+
+    为什么不是逐类排序：并列的两类**有 `TITLE_CATEGORY_PRIORITY` 兜底** ⇒ 它们是
+    "一档"，不是两个竞争项。⚠️ 这一条是 2026-10-12 施工时踩出来的：
+    `_argmax` 会用优先级打破平分，而 `_confident` 原来按"逐类相邻差 ≥1.0"判 ——
+    于是**有优先级也白搭**：`哇哈哈边看投稿边聊天`（watch 3.0 = upload 3.0，
+    优先级明写 watch 在前）被判成"分歧太大"⇒ 落回中性兜底。
+    """
+    by_score: dict[float, list[str]] = {}
+    for cat, w in scores.items():
+        by_score.setdefault(w, []).append(cat)
+    return [(_pick(cands), score)
+            for score, cands in sorted(by_score.items(), reverse=True)]
+
+
+def _confident(scores: dict[str, float]) -> bool:
+    """自信判定：强词（≥2.5）单发即自信；**跨档**差距 < 1.0 才叫分歧。
+
+    "跨档" = 并列同分的那些类目算一档（它们由 `TITLE_CATEGORY_PRIORITY` 定胜负，
+    不是分歧）。见 `_ranked_groups` 的说明。
+    """
+    groups = _ranked_groups(scores)
+    if not groups:
         return False
-    ranked = sorted(scores.items(), key=lambda kv: -kv[1])
-    best = ranked[0][1]
+    _top, best = groups[0]
     if best < 2.5:
         return False
-    if len(ranked) == 1:
+    if len(groups) == 1:
         return True
-    return best - ranked[1][1] >= 1.0
+    return best - groups[1][1] >= 1.0
 
 
 # ── 系列聚类 ─────────────────────────────────────────────────────

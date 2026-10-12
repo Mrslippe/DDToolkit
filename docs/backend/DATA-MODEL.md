@@ -176,7 +176,7 @@ erDiagram
 | `id` | INTEGER | PK |
 | `account_id` | INTEGER | NOT NULL，FK → accounts.id |
 | `live_id` | TEXT | NOT NULL；**UNIQUE(account_id, live_id)** |
-| `category` | TEXT | 10 类之一（不含 live 兜底；⚠️ 2026-10-12 T3 起「健身」换成「助眠」） |
+| `category` | TEXT | 11 类之一（不含 live 兜底；⚠️ 2026-10-12：T3「健身」换成「助眠」+ 新加 `3d`） |
 | `created_at` / `updated_at` | DATETIME | UTC now |
 
 校正既是最高优先级推断信号（读取时压过落库值），也在 `series`/`learned` 两档下线前

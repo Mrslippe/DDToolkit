@@ -4227,6 +4227,10 @@ img.hero-avatar {
    留一个没人用的旧类不会有害，但会让"每个 key 都要有色调类"那条判据
    （`missingTypeTones`，从 CSS 源码正则取类名）**变成恒真**。 */
 .lc-stat-pill--sleep   { background: #cbd5f5; }
+/* ⚠️ 2026-10-12 新加的 `3d`（3D 形式直播）。选亮青是**刻意避开已有的九种**：
+   它要与"歌回（粉）/游戏（蓝）/杂谈（黄）"这些**内容色**区分开 ——
+   亮青偏冷、明度比"游戏蓝"高，缩到 19px 胶囊也认得出来。 */
+.lc-stat-pill--3d      { background: #7ee7c7; }
 .lc-stat-pill--special {
   background: transparent;
   border: 1px solid #d8645e;
@@ -4565,6 +4569,9 @@ img.hero-avatar {
 .lc-tone-radio   { background: #f1ecfb; color: #8b6fd8; }
 .lc-tone-collab  { background: #e2f5f6; color: #2fa5ad; }
 .lc-tone-sleep   { background: #eef2ff; color: #4f5fc4; }
+/* ⚠️ 2026-10-12 新加：3D 形式直播。三处色值要与 `.lc-stat-pill--3d` 同族
+   （格子底色最浅 → 徽章最深 → 时间色是主色 50%）。 */
+.lc-tone-3d      { background: #effcf6; color: #1f9c74; }
 .lc-tone-special { background: #fdecec; color: #d8645e; }
 .lc-tone-live    { background: #eef1f5; color: #64748b; }
 
@@ -4577,6 +4584,7 @@ img.hero-avatar {
 .lc-tone-radio   .lc-badge { background: #dccff7; }
 .lc-tone-collab  .lc-badge { background: #bee9ec; }
 .lc-tone-sleep   .lc-badge { background: #cbd5f5; }
+.lc-tone-3d      .lc-badge { background: #7ee7c7; }
 .lc-tone-special .lc-badge { background: transparent; border: 1px solid #d8645e; color: #d8645e; padding: 0 3px; }
 .lc-tone-live    .lc-badge { background: #94a3b8; color: #fff; }
 
@@ -4589,6 +4597,7 @@ img.hero-avatar {
 .lc-tone-radio   .lc-time { color: rgba(139, 111, 216, 0.5); }
 .lc-tone-collab  .lc-time { color: rgba(47, 165, 173, 0.5); }
 .lc-tone-sleep   .lc-time { color: rgba(79, 95, 196, 0.5); }
+.lc-tone-3d      .lc-time { color: rgba(31, 156, 116, 0.5); }
 .lc-tone-special .lc-time { color: rgba(216, 100, 94, 0.5); }
 .lc-tone-live    .lc-time { color: rgba(100, 116, 139, 0.5); }
 

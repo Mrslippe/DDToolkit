@@ -2983,7 +2983,10 @@ def test_frontend_type_keys_match_backend_taxonomy():
            / "frontend" / "src" / "utils" / "liveType.ts").read_text(encoding="utf-8")
     m = re.search(r"export type LiveTypeKey =\s*([^;]+);", src, re.S)
     assert m, "没读到前端 LiveTypeKey 联合类型（形状变了？）"
-    fe = set(re.findall(r"'([a-z]+)'", m.group(1)))
+    fe = set(re.findall(r"'([0-9a-z]+)'", m.group(1)))
+    # ⚠️ 正则必须收**数字开头**的 key：2026-10-12 新加的 `3d` 就是被这条判据抓出来的
+    # —— 第一版写的是 `'([a-z]+)'`，`'3d'` 一个字符都对不上，于是报"服务端多出 ['3d']"
+    # （看着像后端错了，其实是**尺子漏了**）。这类"判据自己写窄了"的坑，症状比漏判更迷惑。
     assert fe, "LiveTypeKey 里一个 key 都没解析出来（正则失效，这条判据会恒真）"
     assert fe == set(CATEGORY_KEYS), (
         f"前后端类型表不一致：前端多出 {sorted(fe - CATEGORY_KEYS)}、"
