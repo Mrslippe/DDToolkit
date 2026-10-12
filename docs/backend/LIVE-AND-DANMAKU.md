@@ -85,11 +85,15 @@ flowchart LR
     索引：破了这条，`GROUP BY` 数的是**行**而不是**场次**（真机实测 123 行多算），
     而两个界面都不会报错 —— 用户只会看到卡片与日历的数字不一样。
     **补齐（物化）只许发生在启动期与写点之后**（`app/services/live_identity.py`；
-    启动期在 `app/main.py::lifespan`、写点后挂在 `danmakus.sync_account` 的批量 upsert 之后）——
-    **读端点只读**。⚠️ 第一版把它放在读路径上（`devlog/471`），代价是"第一次打开最慢"
-    （真机 `/live-sessions` 464ms 冷 vs 170ms 热），而前端恰在还没有任何场次时显示加载块
-    （`devlog/473`）。补齐幂等：值一样就不写。
+    启动期在 `app/main.py::lifespan`、写点后挂在 `danmakus.sync_account` 的批量 upsert 之后
+    与手动增删改的回执里）—— **读端点只读**。⚠️ 第一版把它放在读路径上（`devlog/471`），
+    代价是"第一次打开最慢"（真机 `/live-sessions` 464ms 冷 vs 170ms 热），而前端恰在还没有
+    任何场次时显示加载块（`devlog/473`）。启动期**只在有账号需要补时才扫**：每账号在 `app_meta`
+    留 `live_identity_v<n>:<account_id>` 记号，正常启动 **<1.2ms**（旧版无条件扫 485ms）；
+    **行变了的入口必须作废记号**（同步装配失败 / 手动增删改 / purge —— 漏一个的症状是
+    "永久跳过、统计少算"，两处都不报错，`devlog/475`）。补齐幂等：值一样就不写。
     判据 `tests/test_vtuber_api.py::test_only_the_representative_row_carries_the_type` /
-    `::test_startup_materialize_fills_old_rows_once`（含"读不写"与"第二次不写"两条）
+    `::test_startup_materialize_fills_old_rows_once`（含"读不写"与"第二次不写"）
+    / `::test_startup_materialize_skips_marked_accounts`（跳过 + 版本失效 + 三个作废点）
     + `scripts/check_type_index_parity.py`（真机逐类等数 + 重复代表/孤儿值 = 0）；
 

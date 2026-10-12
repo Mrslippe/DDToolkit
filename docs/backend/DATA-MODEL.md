@@ -152,7 +152,7 @@ erDiagram
 | `max_online_count` / `danmakus_count` | INTEGER | 峰值人气 / 弹幕数 |
 | `vod_url` | TEXT | **录播地址**（f013，B2 `devlog/454`）：唯一入库形态 `https://www.bilibili.com/video/BV…[?p=N]`，规范化 + 拒绝理由见 `app/domain/live_manual.py::normalize_vod`（`b23.tv` / `http:` / 非 B 站主机都拒 —— 壳的白名单只放行 https + 精确主机）。**唯一没有自动源的用户手填列** ⇒ 合并里只增不减（不变量 39） |
 | `category` / `category_from` | TEXT | **场次类型**（f016，devlog/467）：写这一行时按它自己的标题/分区定稿（用户口径：新增场次不改动历史场次）。**兜底也落库**（`'live'` + `'fallback'`，f017）⇒ 按类型聚合能直查索引；`category_from IS NULL` 才是"还没定稿"。`category_from` 取值 = `title`/`area`/`date`/`fallback`/`stored`/`unknown` |
-| `session_key` | TEXT | **场次身份 / 代表行标记**（f017，devlog/471）：`<代表行live_id>#<组里最小成员id>`，**只写在代表行上**（= `merged()` 给这个组定的对外 `live_id` 那一行），同组其余行为 NULL。用途：让按类型聚合数**场次**而不是**行**（不变量 40）。补齐时机 = **启动期 + 写点之后**（`app/services/live_identity.py`；读端点只读，`devlog/473`），幂等（值一样就不写） |
+| `session_key` | TEXT | **场次身份 / 代表行标记**（f017，devlog/471）：`<代表行live_id>#<组里最小成员id>`，**只写在代表行上**（= `merged()` 给这个组定的对外 `live_id` 那一行），同组其余行为 NULL。用途：让按类型聚合数**场次**而不是**行**（不变量 40）。补齐时机 = **启动期 + 写点之后**（`app/services/live_identity.py`；读端点只读，`devlog/473`），幂等（值一样就不写）；启动期靠 `app_meta` 的 `live_identity_v<n>:<account_id>` 记号**只扫需要补的账号**（`devlog/475`），行变了的那些入口（同步/手动增删改/purge）把记号作废 |
 | `raw_json` | TEXT | 原始场次数据保真 |
 | `created_at` / `updated_at` | DATETIME | UTC now |
 

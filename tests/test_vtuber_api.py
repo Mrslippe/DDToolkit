@@ -2851,6 +2851,101 @@ def test_startup_materialize_fills_old_rows_once(client):
     db.close()
 
 
+def test_startup_materialize_skips_marked_accounts(client):
+    """★★启动期**只在有账号需要补时才扫**（`devlog/475`）——"跳过"的前提是记号可靠。
+
+    为什么值得单钉一条：无条件扫一遍的代价是真机 **485ms**（14 账号 / 8,527 行、写 0）——
+    一次都不写却每次开应用都要付。现在每账号在 `app_meta` 留一个"已按本版算法装配过"的
+    记号，启动期只看记号 ⇒ 实测 **<1.2ms**。
+
+    而这条判据真正防的是它的反面：**该补的被跳过**（记号还在、行却变了）⇒ 症状是
+    按类型统计少算，两处都不报错。所以下面同时钉住三个"行变了就作废记号"的入口
+    （手动新增 / 手动编辑 / 手动删除）与 purge。
+    """
+    from app.services.live_identity import (
+        IDENTITY_VERSION, accounts_needing_materialize, identity_mark_key,
+        materialize_all,
+    )
+
+    aid = _mk_account(client)
+    db = TestingSession()
+    # ⚠️ 模拟"老行"：直接用 ORM 塞，绕过写点 —— 写点会**当场**装配并打记号
+    #    （`danmakus.sync_account` 收尾那一发），那样就没有"没记号"这个状态可测了。
+    db.add(LiveSession(account_id=aid, source="danmakus", live_id="dm-1",
+                       title="原神深渊", start_at=datetime(2026, 9, 5, 12, 0),
+                       end_at=datetime(2026, 9, 5, 14, 0)))
+    db.commit()
+    db.close()
+
+    # ① 没记号 ⇒ 要扫；扫完 ⇒ 记号在，且这次真的写了
+    db = TestingSession()
+    assert accounts_needing_materialize(db) == [aid], "没记号却说不用补"
+    first = materialize_all(db)
+    assert first["accounts"] == 1 and first["written"] >= 1
+    db.close()
+
+    # ② 有记号 ⇒ 跳过（不是"扫了但没写"——`accounts` 就是跳过的直接证据）
+    db = TestingSession()
+    assert accounts_needing_materialize(db) == [], "记号在却还要补"
+    again = materialize_all(db)
+    db.close()
+    assert again == {"accounts": 0, "scanned": 0, "written": 0}, (
+        "已经装配过的账号又被扫了一遍 —— 那「只在需要时才扫」就没生效")
+
+    # ③ **算法换版 ⇒ 记号作废**（记号的键里带版本号，这是它唯一的失效方式）
+    db = TestingSession()
+    from app.models.vtuber import AppMeta
+
+    # 把当前版本的记号换成上一版的（模拟"升级前的库"）——
+    # ⚠️ 两个都留着是测不出来的：当前版那个还在，账号照样算"已装配"。
+    db.query(AppMeta).filter(AppMeta.key == identity_mark_key(aid)).delete()
+    db.add(AppMeta(key=f"live_identity_v{IDENTITY_VERSION - 1}:{aid}", value="1"))
+    db.commit()
+    db.close()
+    db = TestingSession()
+    assert accounts_needing_materialize(db) == [aid], (
+        "记号的版本变了却还被当成「已装配」⇒ 换算法之后老账号会带着旧结论被跳过")
+    db.close()
+
+    # ④ 行变了 ⇒ 记号作废（手动新增 / 编辑 / 删除三条路各来一次）
+    created = client.post(f"/account/{aid}/live-sessions", json={
+        "start_at": "2026-09-08T12:00:00", "end_at": "2026-09-08T14:00:00",
+        "title": "周六来唱歌！"}).json()
+    db = TestingSession()
+    assert accounts_needing_materialize(db) == [], "手动新增后当场装配了 ⇒ 记号该在"
+    db.close()
+
+    live_id = created["live_id"]
+    assert client.patch(f"/account/{aid}/live-sessions/{live_id}",
+                        json={"title": "原神深渊"}).status_code == 200
+    db = TestingSession()
+    assert accounts_needing_materialize(db) == [], "手动编辑后当场装配了 ⇒ 记号该在"
+    db.close()
+
+    assert client.delete(f"/account/{aid}/live-sessions/{live_id}").status_code == 200
+    db = TestingSession()
+    assert accounts_needing_materialize(db) == [], "手动删除后当场装配了 ⇒ 记号该在"
+    db.close()
+
+    # ⑤ purge（解除订阅 / 删账号）也作废记号：行没了而记号还在 ⇒ 之后重新同步出
+    #    的场次行会没有身份（按类型统计少算）
+    db = TestingSession()
+    from app.models.vtuber import Account
+
+    from app.services.purge import purge_account
+
+    acc = db.query(Account).filter(Account.id == aid).one()
+    purge_account(db, acc)
+    db.commit()
+    db.close()
+    db = TestingSession()
+    from app.models.vtuber import AppMeta as _Meta
+
+    left = db.query(_Meta).filter(_Meta.key == identity_mark_key(aid)).first()
+    db.close()
+    assert left is None, "purge 没作废场次身份记号（行没了、记号还在）"
+
+
 def test_startup_materialize_settles_fallback_rows(client):
     """★兜底**也落库**（f017）：`category='live'` + `category_from='fallback'` —— 在启动期补。
 

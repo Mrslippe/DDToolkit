@@ -934,14 +934,33 @@ def materialize_group_identity(db: Session, account_id: int,
                                sessions: list[dict]) -> tuple[dict, list]:
     """把合并视图的分组结论落库（服务层算、仓库写）——**写点之后**调它。
 
-    给"刚写完这一行"的路径用：同步收尾、手动增删改之后 —— 与"写这一行就定稿这一行"
-    同一个口径（用户 2026-10-12）。⚠️ **读端点不调它**（读路径只读，见
-    `live_identity` 模块头：第一版放在读路径上，让第一次打开成了最慢的一次）。
+    给"刚写完这一行"的路径用：手动增删改之后的回执（`_manual_detail`）——
+    与"写这一行就定稿这一行"同一个口径（用户 2026-10-12）。⚠️ **读端点不调它**
+    （读路径只读，见 `live_identity` 模块头）。
+
+    ⚠️ 它顺带把这一账号的"已装配"记号**打上**（`devlog/475`）：装配过了就不必让
+    下次启动再扫一遍；这条路径失败了也不会留下假记号（调用方先 `mark_identity_dirty`）。
 
     返回 `(仓库计数, 物化目标)`。
     """
     states = group_states(sessions)
-    return LiveSessionRepo(db).materialize_sessions(account_id, states), states
+    stats = LiveSessionRepo(db).materialize_sessions(account_id, states)
+    from app.repositories.vtuber_repo import AppMetaRepo
+    from app.services.live_identity import identity_mark_key
+
+    AppMetaRepo(db).set(identity_mark_key(account_id), "1")
+    return stats, states
+
+
+def mark_identity_dirty(db: Session, account_id: int) -> None:
+    """这一账号的场次行要变了 ⇒ 把"已装配"记号作废（`devlog/475`）。
+
+    ⚠️ 顺序是**先作废、后装配**：装配失败时记号必须已经是空的，否则下次启动会**跳过**
+    这个账号（"跳过 ⇒ 永久陈旧"是本批要防的那个错法）。
+    """
+    from app.services.live_identity import mark_dirty
+
+    mark_dirty(db, account_id)
 
 
 def _session_payload(s: dict, account_id: int, category: str,
@@ -1258,6 +1277,11 @@ def create_manual_live_session(account_id: int, data: LiveSessionManualIn,
     row = repo.create_manual(account_id, platform=account.platform,
                              start_at=start, end_at=end, title=title, vod_url=vod,
                              settled=settle_fields(title, None, None, start))
+    # 行变了 ⇒ 场次身份要重算：**先作废记号、再装配**（顺序不能反 —— 装配失败时记号
+    # 必须已经是空的，否则下次启动会跳过这个账号，见 `devlog/475`）。
+    mark_identity_dirty(db, account_id)
+    materialize_group_identity(
+        db, account_id, LiveSessionRepo(db).merged(account_id, with_ids=True))
     return _manual_detail(db, account_id, row.live_id)
 
 
@@ -1312,6 +1336,9 @@ def update_live_session(account_id: int, live_id: str, data: LiveSessionUpdateIn
     repo.update_row(row, apply, settled=(
         settle_fields(apply.get("title", row.title), row.area_name,
                       row.parent_area_name, new_start) if touched else None))
+    mark_identity_dirty(db, account_id)      # 行变了 ⇒ 身份要重算（见 create 那头）
+    materialize_group_identity(
+        db, account_id, LiveSessionRepo(db).merged(account_id, with_ids=True))
     return _manual_detail(db, account_id, live_id)
 
 
@@ -1338,6 +1365,9 @@ def delete_live_session(account_id: int, live_id: str, db: Session = Depends(get
     if row.source != "manual":
         raise HTTPException(400, f"只能删除手动记录的场次（这一条来源是 {row.source}）")
     repo.delete_row(row)
+    mark_identity_dirty(db, account_id)      # 行没了 ⇒ 身份要重算（见 create 那头）
+    materialize_group_identity(
+        db, account_id, LiveSessionRepo(db).merged(account_id, with_ids=True))
     return LiveSessionDeleteOut(deleted=True, live_id=live_id)
 
 

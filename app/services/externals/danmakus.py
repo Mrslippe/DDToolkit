@@ -533,13 +533,18 @@ class DanmakusSource(ExternalSource):
         res = LiveSessionRepo(db).upsert_danmakus(acc.id, lives, platform=acc.platform)
         # 场次身份顺手补齐（f017，devlog/473）：这一批可能并进/拆出合并组，而读端点
         # **只读**（物化不能放读路径，见 `app/services/live_identity.py` 模块头）。
-        # 放在这里 = "写这一行就定稿这一行"（用户口径）的延伸。幂等、失败不影响同步结果。
-        try:
-            from app.services.live_identity import materialize_account
+        # 放在这里 = "写这一行就定稿这一行"（用户口径）的延伸。幂等；
+        # **补不成要作废记号**（`mark=False`）⇒ 下次启动还会再来，而不是"跳过 ⇒ 永久陈旧"。
+        from app.services.live_identity import materialize_account
 
+        try:
             materialize_account(db, acc.id)
         except Exception as e:      # noqa: BLE001 - 补齐失败只是"下次启动再补"
             logger.warning(f"场次身份补齐失败（不影响同步）: {type(e).__name__}: {e}")
+            try:
+                materialize_account(db, acc.id, mark=False)
+            except Exception:       # noqa: BLE001 - 连作废都失败：留日志，不挡同步
+                logger.warning("场次身份记号作废也失败了（下次启动仍会重补）")
         logger.info(f"danmakus live_sessions: {acc.platform_uid} "
                     f"新增 {res['added']} 刷新 {res['updated']}")
         return {**res, "reason": None}

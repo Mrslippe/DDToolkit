@@ -41,6 +41,12 @@ from app.repositories.vtuber_repo import (
 def purge_account(db: Session, account: Account) -> dict[str, int]:
     """清空单个账号的全部从属数据（帖子 + 各子表），不提交。"""
     counts: dict[str, int] = {}
+    # 场次身份（f017）的记号要一起作废（`devlog/475`）：行被清了，而"这一账号已装配过"
+    # 的记号还在 ⇒ 下次启动**跳过**它；万一这个账号之后又被同步出新的场次行，
+    # 那些新行就没身份了（症状是按类型统计少算，而两处都不报错）。
+    from app.services.live_identity import mark_dirty
+
+    mark_dirty(db, account.id)
     if account.platform_uid:
         counts["posts"] = PostRepo(db).delete_by_platform_uids(
             [(account.platform, account.platform_uid)]
