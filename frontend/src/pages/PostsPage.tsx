@@ -21,7 +21,7 @@ import {
 import { api, resolveAsset } from '../api/api'
 import { measureBackdropTone, type InkTone } from '../utils/backdropTone'
 import { useFetchBusy } from '../fetchBusy'
-import type { Account, Post, PostStats, VTuber } from '../api/types'
+import type { Account, LiveSession, Post, PostStats, VTuber } from '../api/types'
 import { mergeVtuberSnapshots } from '../utils/accountSnapshots'
 import { resolveAvatarSources } from '../utils/avatarSource'
 import { affectsFanTrend, onFetchIdle } from '../utils/fetchIdle'
@@ -239,6 +239,10 @@ export default function PostsPage() {
   //   ① `prefetchScene`：预取什么（新 V 本体 + list 目标时的第 1 页帖子与统计，恒以重置态拉取）；
   //   ② `commitScene` / `failScene`：提交时一次性写哪些 state、失败怎么清空。
   const seededPostsKeyRef = useRef<string | null>(null)
+  /** 数据视图那一发抢跑的场次（2026-10-13）：只当**首帧种子**，后续刷新照旧由卡片自己取。
+   *  `seededSessionsKeyRef` 保证同一个 `refreshTick` 内不被重复消费（理由见 onCommit 那头）。 */
+  const [prefetchSessions, setPrefetchSessions] = useState<LiveSession[] | null>(null)
+  const seededSessionsKeyRef = useRef<string | null>(null)
   const vtuberLoadedRef = useRef('')
   // 提交时取最新筛选值（定时器闭包可能过期）
   const filterRef = useRef({ refreshTick, typeFilter, archived, deletedOnly, searchKw, dateFrom, dateTo })
@@ -251,6 +255,10 @@ export default function PostsPage() {
     posts?: Post[]
     total?: number
     stats?: PostStats | null
+    /** 数据视图（archive）用的**场次列表**（2026-10-13）：切视图时那 150ms 退场窗口
+     *  正好够盖住这一发（实测 ~176ms），抢在窗口里完成 ⇒ 日历首帧就有场次，
+     *  不再"等动画播完才开始取数"。没赶上也不阻塞（卡片自己会取）。 */
+    sessions?: LiveSession[]
   }
 
   const prefetchScene = async (
@@ -262,7 +270,20 @@ export default function PostsPage() {
     const accounts = v.accounts.filter((a) => a.platform_uid)
     const account = accounts[0] ?? null
     const data: SceneData = { vtuber: v, account, stats: null }
-    if (!account || targetView !== 'list') return data
+    if (!account) return data
+    if (targetView === 'archive') {
+      // 场景预取抢跑那一发。⚠️ `api.liveSessions` 目前**不收 signal**（要收就得动
+      // `api.request` 这条公共通路），所以这一发不可取消 —— 与预取帖子同款取舍，
+      // 而它只多打一次读请求；晚到的结果由 hook 的 `alive()` 丢弃。
+      // 失败不阻塞（`catch` 成 undefined ⇒ 卡片自己会取）。
+      try {
+        data.sessions = await api.liveSessions(account.id)
+      } catch {
+        data.sessions = undefined
+      }
+      return data
+    }
+    if (targetView !== 'list') return data
     // 预取帖子恒以「重置态（默认筛选）」拉取：用户反馈 2026-09-05——
     // 筛选状态按 VTuber/账号隔离（切换即重置），预取若沿用旧账号残留
     // 筛选会与提交后重置态错配（种子误消费）。筛选字段不读 filterRef。
@@ -302,6 +323,22 @@ export default function PostsPage() {
       setStats(d.stats ?? null)
       setError(null)
       setPage(1)
+      // 数据视图那一发**抢跑**（2026-10-13）：预取赶在退场窗口里完成才交给卡片当首帧，
+      // 没赶上就置空（卡片自己取）。⚠️ 两条纪律：
+      //   ① 同一个 `refreshTick` 内只播种一次（播种后这个 state 会留着，下一趟本视图提交
+      //      再拿它当"新鲜数据"用一遍就是拿旧数据糊弄）；
+      //   ② **没赶上时也要把它置空** —— 否则卡片会拿到上一次留下的旧种子，
+      //      症状是"数据没更新"，而它其实只是上一趟的。
+      if (ctx.view === 'archive') {
+        const key = `${ctx.vtuberId}:${ctx.view}:${f.refreshTick}`
+        if (d.sessions && seededSessionsKeyRef.current !== key) {
+          seededSessionsKeyRef.current = key
+          setPrefetchSessions(d.sessions)
+        } else if (!d.sessions) {
+          seededSessionsKeyRef.current = null
+          setPrefetchSessions(null)
+        }
+      }
       if (ctx.view === 'list' && d.account && d.posts) {
         setPosts(d.posts)
         setTotal(d.total ?? 0)
@@ -836,6 +873,10 @@ return (
               accountId={heroAcc?.id ?? null}
               vtuberId={vtuber.id}
               refreshTick={refreshTick}
+              /* 场景预取抢跑的那一份场次（2026-10-13）：只当**首帧种子** ——
+                 卡片拿它直接渲染，不再自己打那一发（省掉"等动画播完才开始取数"）。
+                 过期/为空都不影响：卡片照旧自己取（见 `useLiveSessions` 的 seed 说明）。 */
+              seedSessions={prefetchSessions}
               /* 录播号（C1，f015）：V 级字段 —— 「找录播」要扫它，所以从这里传下去。
                  保存后服务端有了新值，但这个页面的 `vtuber` 要等下一次场景刷新才更新
                  ⇒ 本地记一份覆盖值，输入框立刻回显（不必为了一个字段整页重取）。 */

@@ -16,7 +16,8 @@
  *   也就保住"纯机器"的可测与可读；
  * - **判断与执行分开**：下一步做什么由 `utils/sceneStep.ts::planSceneStep`（纯函数）决定，
  *   本文件只把它执行成 setState / 定时器；分开的理由见那个文件（node 环境测不了 hook）；
- * - **同目标复用**：`prefetch` 只对"目标账号"发起一次；在途/已就绪都直接复用；
+ * - **同目标复用**：`prefetch` 对同一个 `(账号, 视图)` 只发起一次；在途/已就绪都直接复用
+ *   （⚠️ 视图也要进复用键：切视图时账号不变、要的数据却不同）；
  * - **快速连点**：新目标会替换 `prefetchRef`，旧请求的晚到结果由 `alive()` 丢弃
  *   （**注意：旧请求不会 abort** —— 与抽出前一致；要省配额可在 `prefetch` 里自行 abort）；
  *   并且**退场只播一次**（R31，devlog/133）—— 退场窗口内又来了新目标时，
@@ -40,6 +41,8 @@ export const EXIT_MS = 150
 
 export interface PrefetchEntry<T> {
   acc: number
+  /** 这份预取是给哪个视图准备的（切视图时 `acc` 不变、数据却不同 ⇒ 必须进复用键） */
+  view: string
   controller: AbortController
   done: boolean
   failed?: string
@@ -81,12 +84,16 @@ export function useSceneTransition<T, V extends string>({
   const cbRef = useRef({ prefetch, onCommit, onFail })
   cbRef.current = { prefetch, onCommit, onFail }
 
-  /** 启动（或复用）对 `acc` 的预取；完成/失败都会 `bumpReady` 让门控 effect 重跑 */
+  /** 启动（或复用）对 `acc` 的预取；完成/失败都会 `bumpReady` 让门控 effect 重跑。
+   *
+   *  ⚠️ 复用键是 **`(acc, view)` 而不是只 `acc`**（2026-10-13）：切视图也要预取该视图的
+   *  数据（否则那 150ms 退场窗口白白空着，卡片挂载后才开始取数 —— 用户看到的就是
+   *  "等内容"）。只按 acc 复用的话，切视图时会拿到上一轮给别的视图准备的那份。 */
   const startPrefetch = (acc: number, targetView: V) => {
     const pf = entryRef.current
-    if (pf && pf.acc === acc) return // 同目标：在途或已就绪，复用
+    if (pf && pf.acc === acc && pf.view === targetView) return // 同目标：在途或已就绪，复用
     const controller = new AbortController()
-    const entry: PrefetchEntry<T> = { acc, controller, done: false }
+    const entry: PrefetchEntry<T> = { acc, view: targetView, controller, done: false }
     entryRef.current = entry
     const alive = () => entryRef.current === entry
     const finish = () => {
@@ -117,19 +124,29 @@ export function useSceneTransition<T, V extends string>({
     if (accChanged) {
       startPrefetch(vtuberId, view)
       const pf = entryRef.current
-      ready = !!pf && pf.acc === vtuberId && pf.done
+      ready = !!pf && pf.acc === vtuberId && pf.view === view && pf.done
+    } else if (viewChanged) {
+      startPrefetch(vtuberId, view)
     }
 
     /** 提交：一次性写入预取数据（账号变化时）+ 落地目标视图 + 清退场态 */
     const commit = () => {
+      const entry = entryRef.current
+      const ctx = { vtuberId, view }
       if (accChanged) {
-        const entry = entryRef.current
-        const ctx = { vtuberId, view }
-        if (entry && entry.acc === vtuberId && entry.data !== undefined && !entry.failed) {
+        // 换 V：预取数据是前提（没有数据的场景才是真的闪帧）
+        if (entry && entry.acc === vtuberId && entry.view === view
+            && entry.data !== undefined && !entry.failed) {
           cbRef.current.onCommit(entry.data, ctx)
         } else {
           cbRef.current.onFail(entry?.failed, ctx)
         }
+      } else if (viewChanged && entry && entry.acc === vtuberId
+                 && entry.view === view && entry.done && !entry.failed
+                 && entry.data !== undefined) {
+        // 只换视图：**有就交给页面，没有就算了**（子组件自己会取，见 onCommit 的说明）——
+        // 所以这里不阻塞退场定时器，抢在 150ms 窗口里完成的那次预取才算赚到。
+        cbRef.current.onCommit(entry.data, ctx)
       }
       entryRef.current = null
       exitForRef.current = null

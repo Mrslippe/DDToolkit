@@ -105,9 +105,23 @@ export function useLiveSessions(
   /** 数据刷新后浮层锚点失效 → 由调用方关闭浮层。
    *  `pop` 承载 DOM rect、与渲染强耦合，留在组件侧；这里只发「该关了」的信号。 */
   onDataRefresh: () => void,
+  /** 场景预取抢跑的那一份场次（2026-10-13）——**只当首帧种子**。
+   *
+   *  为什么有它：切到数据视图时，那 150ms 的退场窗口（`EXIT_MS`）本来白空着，而卡片要等
+   *  挂载之后才开始取数（实测这一发中位 ~176ms）⇒ 用户看到"动画播完才慢慢出内容"。
+   *  页面在退场期间就把这一发打出去，抢在窗口里完成的话首帧直接有数据。
+   *
+   *  ⚠️ 三条纪律：
+   *  1. **只认挂载时的那一份**（`useState` 初值）—— 后续 `refreshTick` 触发的重取照旧自己打，
+   *     种子不会、也不该被反复喂进来；
+   *  2. **它只影响 `allSessions` 的初值**，不参与筛选/统计的任何判断（那些都是派生量）；
+   *  3. 种子为 `null`（没抢到 / 失败）⇒ 完全等于改动前的行为（`loading` 起来、自己取）。 */
+  seedSessions: LiveSession[] | null = null,
 ): UseLiveSessions {
   const [ym, setYm] = useState<{ y: number; m: number }>({ y: now.getFullYear(), m: now.getMonth() })
-  const [allSessions, setAllSessions] = useState<LiveSession[]>([])
+  /** 场次列表：**首帧用场景预取的种子**（有的话），否则空 —— 见参数 `seedSessions` 的说明。
+   *  ⚠️ 只取初值：`useState(seed ?? [])` 之后这个种子就不再进画面了（重取走 `reload`）。 */
+  const [allSessions, setAllSessions] = useState<LiveSession[]>(() => seedSessions ?? [])
   /** 类型筛选（T4）：**留在这里而不是组件里**，这样 `reload()` 的口径只有一处 ——
    *  否则"刷新之后筛选还在不在"会变成两条路径各答一次。 */
   const [typeFilter, setTypeFilter] = useState<string[]>([])
@@ -151,6 +165,12 @@ export function useLiveSessions(
       document.removeEventListener('keydown', onKey)
     }
   }, [monthPopOpen])
+
+  /** 已经用过种子的那个 `(账号, refreshTick)`（见参数 `seedSessions`）。
+   *  `useRef` 的初值只在挂载时求值一次 ⇒ 记的就是"首帧这一发是不是种子"。 */
+  const seededKeyRef = useRef<string | null>(
+    seedSessions && accountId != null ? `${accountId}:${refreshTick}` : null,
+  )
 
   // 场次拉取（字段 2026-09-07：只检索主账号直播信息；loadSeq 防账号切换回写）
   const loadSeq = useRef(0)
@@ -200,8 +220,16 @@ export function useLiveSessions(
   }, [accountId])
 
   useEffect(() => {
+    // 首帧那一发如果是**种子**，跳过它：种子就是几毫秒前上游给的那一份（场景预取刚打完），
+    // 再打一遍只会让同一屏发两个一模一样的请求。之后 `refreshTick` 一变照旧自己取
+    // （`fetch-idle` 每轮会 bump 它，见 `utils/fetchIdle.ts::affectsLiveCalendar`）。
+    const key = accountId != null ? `${accountId}:${refreshTick}` : null
+    if (key !== null && seededKeyRef.current === key) {
+      seededKeyRef.current = null
+      return
+    }
     reload()
-  }, [reload, refreshTick])
+  }, [reload, refreshTick, accountId])
 
   // 数据刷新后浮层锚点已失效 → 关闭（月份/账号切换同理）
   useEffect(() => {

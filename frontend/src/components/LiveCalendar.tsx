@@ -37,6 +37,9 @@ interface Props {
    *  存完要重取 V 列表才能回显 ⇒ 页面得给 `onVodAccountSaved` 一个刷新回调。 */
   vodAccountUid?: string | null
   onVodAccountSaved?: (mids: string) => void | Promise<void>
+  /** 场景预取抢跑的那一份场次（2026-10-13）—— **只当首帧种子**，见
+   *  `useLiveSessions` 的同名参数说明。为 null 时与本参数不存在完全等价。 */
+  seedSessions?: LiveSession[] | null
 }
 
 /** 英文表头（设计稿 Frame10612 规格） */
@@ -89,7 +92,7 @@ interface DayCell {
  */
 const LiveCalendar = memo(function LiveCalendar(
   { accountId, vtuberId = null, refreshTick = 0,
-    vodAccountUid = null, onVodAccountSaved }: Props,
+    vodAccountUid = null, onVodAccountSaved, seedSessions = null }: Props,
 ) {
   const now = new Date()
   /** 场次浮层：点击格子的锚点（rect 快照）与当日数据。
@@ -102,7 +105,7 @@ const LiveCalendar = memo(function LiveCalendar(
     detail, setDetail, catPopOpen, setCatPopOpen, catPopRef,
     monthPopOpen, setMonthPopOpen, popYear, setPopYear, navRef,
     typeFilter, setTypeFilter, reload, reloadDetail,
-  } = useLiveSessions(accountId, refreshTick, now, () => setPop(null))
+  } = useLiveSessions(accountId, refreshTick, now, () => setPop(null), seedSessions)
 
   /** 未来预约（R13）：V 级数据，独立于场次取数（见 useReservations 顶部说明） */
   const reservations = useReservations(vtuberId, refreshTick)
