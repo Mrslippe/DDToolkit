@@ -34,6 +34,17 @@ flowchart LR
   不落表；合并窗口 90 分钟，同 `room_id` 去重，同标题中断续播并段；
 - `end_at` 由快照/次日 danmakus 补全；收益/弹幕数来自 danmakus。
 
+> ⚠️ **2026-10-13 量过：self 快照推导的场次"落表"这件事不要做**（`devlog/472`）。
+> 真机 14 账号：快照推导 **139** 场，其中**没有表内行、需要新建行的 0 场** ——
+> 它们**全部**通过 `_find_group` 挂到了已有行上。所以那一档不是"场次来源"，
+> 而是**挂在场次上的观测事件**（补 `end_at`、偶尔补标题）。
+> 落表的收益是 `merged()` 里省掉快照推导那一截（实测 54ms → 23ms，即
+> `/live-type-stats` 92ms → 约 65ms，且只在开卡片时付一次），
+> 代价是这些行会改走**行**的合并规则（`room`/`dup`/`interrupt`/`restart`），
+> 而它们今天走的是 `_find_group` 的"区间重叠优先 + 端点容差"—— 两套判据不等价，
+> snapshot 行没有 `room_id`、标题常为空 ⇒ 一次合并就可能把原本并成一场的**拆成两场**
+> （正是 `_find_group` 当初被写出来要修的那个毛病）。**收益小、风险实**，故不做。
+
 **开播边沿的出口（M1，devlog/243）**：T0 每轮比较 `live_status` 得到 `edge` / `started`
 （"开播"方向），原先**唯一**消费者是 `note_dynamics_activity()`（把动态流恢复满速）；
 现在 `db.commit()` **之后**多一条 `message_hub.HUB.publish("domain.live.edge", …)`
