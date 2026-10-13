@@ -888,15 +888,20 @@ class ProfileLayoutIn(BaseModel):
 
 
 class FutureReservationOut(BaseModel):
-    """自动解析的未来直播预约（P7：来自 reservation 帖 desc1 文本）。
+    """未来直播预约（P7：自动解析自 reservation 帖；2026-10-13 起**也含手动记录**）。
 
-    start_at 为服务端按发布日推断的本地时刻（前端直接展示，勿再换算时区）。
+    start_at 为服务端推断的本地时刻（前端直接展示，勿再换算时区）。
+
+    ⚠️ `source`（2026-10-13）：`'feed'` = 从平台帖解析出来的；`'manual'` = 用户点日历
+    空日期格自己填的（落在 `vtuber_events`，只到日 ⇒ 服务端补当天 20:00）。
+    前端据此区分文案与可删性 —— 不区分的话，"我填的预约"会看起来像平台上抓来的。
     """
     post_id: int
     title: str
     start_at: datetime
     reserve_total: int = 0
     rid: str | None = None
+    source: str = "feed"
 
     @field_serializer("start_at")
     def _ser_res_start(self, v: datetime | None):

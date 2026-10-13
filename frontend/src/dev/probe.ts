@@ -1957,9 +1957,17 @@ export async function runUiProbe(): Promise<void> {
       '.lc-cell[data-lc-in-month="1"]')]
       .map((c) => Number((c.querySelector('.lc-count')?.textContent || '').replace(/\D/g, '')) || 0)
       .reduce((a, b) => a + b, 0)
+    /** 被**降透明度**的格子数（筛选的强调口径，2026-10-13）——
+     *  ⚠️ 它取代了"筛后格子场次之和 == 胶囊计数"那条断言：新口径下格子**不再被替换**，
+     *  场次之和恒等于未筛的值，所以那条判据在新口径下恒真（= 没牙）。 */
+    const dimmedNow = () => document.querySelectorAll(
+      '.lc-cell[data-lc-in-month="1"][data-lc-dimmed="1"]').length
+    const withSessionsNow = () => document.querySelectorAll(
+      '.lc-cell[data-lc-in-month="1"][data-lc-has-session="1"]').length
     const chipsBefore = readChips()
     const filterBefore = document.querySelector('[data-lc-type-filter]')?.getAttribute('data-lc-type-filter') ?? null
     const cellsBefore = cellsNow()
+    const withSessionsBefore = withSessionsNow()
     let filterProbe: Record<string, unknown> | null = null
     if (chipsBefore.length) {
       const target = chipsBefore[0]
@@ -1972,6 +1980,10 @@ export async function runUiProbe(): Promise<void> {
         chipCount: target.n,
         cellsBefore,
         cellsAfter: cellsNow(),
+        dimmedBefore: 0,                 // 未筛时不该有任何格子被淡化（复位后再验）
+        dimmedAfter: dimmedNow(),
+        withSessionsBefore,
+        withSessionsAfter: withSessionsNow(),
         filterBefore,
         filterAfter: document.querySelector('[data-lc-type-filter]')
           ?.getAttribute('data-lc-type-filter') ?? null,
@@ -1987,6 +1999,7 @@ export async function runUiProbe(): Promise<void> {
       document.querySelector<HTMLElement>('[data-lc-type-reset]')?.click()
       await sleep(300)
       filterProbe.cellsReset = cellsNow()
+      filterProbe.dimmedReset = dimmedNow()
       filterProbe.filterReset = document.querySelector('[data-lc-type-filter]')
         ?.getAttribute('data-lc-type-filter') ?? null
     }

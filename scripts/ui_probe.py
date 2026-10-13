@@ -2455,11 +2455,22 @@ def _type_filter_failures(cal: dict | None, width: int) -> list[str]:
     if f.get("filterAfter") != f.get("clicked"):
         bad.append(f"@{width} 类型筛选：容器 `data-lc-type-filter` 报的是 "
                    f"{f.get('filterAfter')!r}，与点的那一类 `{f.get('clicked')}` 不符")
-    if f.get("cellsAfter") != f.get("chipCount"):
+    if f.get("cellsAfter") != f.get("cellsBefore"):
         bad.append(
-            f"@{width} 类型筛选：选中 `{f.get('clicked')}`（当月 {f.get('chipCount')} 场）"
-            f"之后，格子里「N 场」之和是 {f.get('cellsAfter')} —— 两个数来自不同代码路径，"
-            f"对不上说明筛选没真作用到网格上")
+            f"@{width} 类型筛选：点 `{f.get('clicked')}` 之后格子场次之和从 "
+            f"{f.get('cellsBefore')} 变成 {f.get('cellsAfter')} —— "
+            f"新口径（2026-10-13）下筛选**不许丢弃场次**，只降那些格子的透明度")
+    if f.get("withSessionsAfter") != f.get("withSessionsBefore"):
+        bad.append(
+            f"@{width} 类型筛选：有场次的格子数从 {f.get('withSessionsBefore')} 变成 "
+            f"{f.get('withSessionsAfter')} —— 筛掉的类型不该退化成「休息」")
+    if not f.get("dimmedAfter"):
+        bad.append(
+            f"@{width} 类型筛选：选中 `{f.get('clicked')}` 之后没有任何格子被淡化 —— "
+            f"筛选既没筛掉也没强调，用户看不出选没选")
+    if f.get("dimmedReset"):
+        bad.append(
+            f"@{width} 类型筛选：复位之后还有 {f.get('dimmedReset')} 个格子是淡化的")
     if not f.get("hasReset"):
         bad.append(f"@{width} 类型筛选：选中之后没有「全部」复位入口 —— 用户没法取消筛选")
     for key, before in (f.get("othersBefore") or {}).items():

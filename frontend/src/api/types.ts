@@ -1074,6 +1074,10 @@ export interface UpcomingReservation {
   reserve_total: number
   /** 预约卡片 id（可拼直播间/动态链接；可能为空） */
   rid: string | null
+  /** 这一条从哪来（2026-10-13）：`feed` = 平台帖解析出来的；`manual` = 用户点日历
+   *  空日期格自己填的（落在 `vtuber_events`，只到日 ⇒ 服务端按当天 20:00 给时刻）。
+   *  ⚠️ 界面要区分这两者：手动那条是"我填的"，文案与可删性都不一样。 */
+  source?: 'feed' | 'manual'
 }
 
 // ── 第三方数据现状（GET /vtuber/{id}/thirdparty，2026-10-05 devlog/354）─────

@@ -28,7 +28,7 @@ import { api } from '../../api/api'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog'
 import {
   type ManualFormValues, buildManualPatch, canSubmitNew, defaultManualRange,
-  formFromSession, hasChanges,
+  defaultRangeForDay, formFromSession, hasChanges,
 } from './manualSessionForm'
 
 interface Props {
@@ -36,6 +36,9 @@ interface Props {
   accountId: number | null
   /** 要编辑的场次；`null`/`undefined` = 新建 */
   session?: LiveSession | null
+  /** 新建时的默认日期（`YYYY-MM-DD`，2026-10-13）：点日历空日期格进来时用它起算
+   *  （"我点的是那一格"，与工具栏「+」的"今天 20:00"区分开）。 */
+  newDay?: string | null
   onClose: () => void
   /** 保存成功（回执是**合并后**的那一条，父组件据此刷新列表/切换月份） */
   onSaved: (saved: LiveSessionDetail) => void
@@ -43,35 +46,35 @@ interface Props {
   onDeleted?: (liveId: string) => void
 }
 
-/** 新建模式的初值：今天 20:00–22:00（见 `defaultManualRange` 的理由） */
-function blankValues(): ManualFormValues {
-  return { title: '', ...defaultManualRange(new Date()), vod: '' }
+/** 新建模式的初值：指定日（或今天）20:00–22:00（见 `defaultManualRange` 的理由） */
+function blankValues(day?: string | null): ManualFormValues {
+  return { title: '', ...(day ? defaultRangeForDay(day) : defaultManualRange(new Date())), vod: '' }
 }
 
 export default function ManualSessionDialog({
-  open, accountId, session, onClose, onSaved, onDeleted,
+  open, accountId, session, newDay = null, onClose, onSaved, onDeleted,
 }: Props) {
   const editing = Boolean(session?.live_id)
   /** 自动抓来的场次：只能补录播地址（与服务端 400 的两个分支同一口径） */
   const autoOnly = Boolean(session) && !session?.manual
 
-  const [values, setValues] = useState<ManualFormValues>(blankValues)
+  const [values, setValues] = useState<ManualFormValues>(() => blankValues(newDay))
   /** 打开时那一份初值 —— `buildManualPatch` 只提交与它的差（不改的字段一个字都不发） */
-  const orig = useRef<ManualFormValues>(blankValues())
+  const orig = useRef<ManualFormValues>(blankValues(newDay))
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [confirmDel, setConfirmDel] = useState(false)
 
-  // 每次打开（或换一个目标场次）都从**服务端那份数据**重新起算，并清掉上一次的失败原因
+  // 每次打开（或换一个目标场次/换一天）都从**服务端那份数据**重新起算，并清掉上一次的失败原因
   useEffect(() => {
     if (!open) return
-    const v = session ? formFromSession(session) : blankValues()
+    const v = session ? formFromSession(session) : blankValues(newDay)
     setValues(v)
     orig.current = v
     setError(null)
     setBusy(false)
     setConfirmDel(false)
-  }, [open, session])
+  }, [open, session, newDay])
 
   const set = (k: keyof ManualFormValues) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setValues((v) => ({ ...v, [k]: e.target.value }))

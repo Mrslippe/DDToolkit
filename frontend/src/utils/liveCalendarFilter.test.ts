@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest'
 
-import { countByType, filterByTypes } from './liveCalendarFilter'
+import { cellMatchesTypes, countByType, dimmedKeys, filterByTypes } from './liveCalendarFilter'
 import type { LiveSession } from '../api/types'
 
 const s = (category?: string): LiveSession => ({
@@ -15,6 +15,44 @@ const s = (category?: string): LiveSession => ({
   duration_minutes: null,
   live_title: null,
   category,
+})
+
+/**
+ * 筛选的**强调**口径（2026-10-13，`devlog/476`）：用户口径是
+ * 「点胶囊后不要把它类型的场次格替换成休息，而是高亮选中的、把其他的透明度降低」。
+ *
+ * ⚠️ 为什么单钉一组：`filterByTypes` 那组断言在新口径下**依然全绿**（函数没删），
+ * 但日历已经不用它渲染了 —— 只测旧函数的话，"日历又改回替换"照样绿。
+ */
+describe('cellMatchesTypes / dimmedKeys（筛选即强调）', () => {
+  it('空选择 ⇒ 全都算命中、谁都不淡化（返回空集）', () => {
+    expect(cellMatchesTypes([s('song')], [])).toBe(true)
+    expect(dimmedKeys([{ key: '09-05', sessions: [s('song')] }], []).size).toBe(0)
+  })
+
+  it('★判据是「任意一场命中」：一天里混着两类，选了其中一类 ⇒ 这一格**保持高亮**', () => {
+    const both = [s('song'), s('game')]
+    expect(cellMatchesTypes(both, ['song'])).toBe(true)
+    expect(dimmedKeys([{ key: '09-05', sessions: both }], ['song']).size).toBe(0)
+  })
+
+  it('★一场都没命中 ⇒ 进淡化集（但场次仍然留着 —— 由调用方保证不替换）', () => {
+    const cells = [
+      { key: '09-05', sessions: [s('game')] },
+      { key: '09-06', sessions: [s('song')] },
+    ]
+    expect([...dimmedKeys(cells, ['song'])]).toEqual(['09-05'])
+  })
+
+  it('★空日子不进淡化集（它本来就没内容，降透明度反而像坏了）', () => {
+    const cells = [{ key: '09-07', sessions: [] as LiveSession[] }]
+    expect(dimmedKeys(cells, ['song']).size).toBe(0)
+  })
+
+  it('缺 `category` 的场次在两类判据里都算「直播」（与服务端 `live` 兜底同一口径）', () => {
+    expect(cellMatchesTypes([s(undefined)], ['live'])).toBe(true)
+    expect(dimmedKeys([{ key: 'x', sessions: [s(undefined)] }], ['song']).size).toBe(1)
+  })
 })
 
 describe('filterByTypes', () => {

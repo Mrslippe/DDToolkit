@@ -56,6 +56,21 @@ export function defaultManualRange(now: Date): { start: string; end: string } {
   return { start: `${day}T20:00`, end: `${day}T22:00` }
 }
 
+/**
+ * 新建时的默认时段，**指定那一天**（2026-10-13 加：点日历上的空日期格进来的）。
+ *
+ * 为什么不是"日历当前显示的那个月 + 今天"：用户点是**那一格**，他要记的就是那一天 ——
+ * 早先不跟随日历的理由（"翻页后这一格属于哪个月对用户不明确"）在**点格**这个入口上不成立：
+ * 格子上的日期数字就摆在眼前。
+ *
+ * 时段仍用 20:00–22:00（同 `defaultManualRange`：直播最常见的开播时段，改一下比从零填快）。
+ */
+export function defaultRangeForDay(dayKey: string): { start: string; end: string } {
+  const day = (dayKey || '').trim().slice(0, 10)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return defaultManualRange(new Date())
+  return { start: `${day}T20:00`, end: `${day}T22:00` }
+}
+
 /** 场次 → 表单初值（编辑模式；字段缺失就是空串，不做任何猜测） */
 export function formFromSession(s: LiveSession): ManualFormValues {
   return {

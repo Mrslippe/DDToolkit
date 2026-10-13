@@ -1356,6 +1356,22 @@ _RE_TODAY = re.compile(r"今天\s+(\d{1,2}):(\d{2})")
 _RE_TOMORROW = re.compile(r"明天\s+(\d{1,2}):(\d{2})")
 
 
+def _reservation_start_of_day(event_date: str | None) -> datetime | None:
+    """`YYYY-MM-DD` → 当天 20:00（naive 本地墙钟，与预约帖解析出来的口径一致）。
+
+    为什么不是 00:00：手动预约**只到日**（`vtuber_events.event_date` 没有时刻），
+    而 00:00 会让日历把它画成"一早的场次"，看着像数据错了。
+    20:00 与"手动记录场次"的默认时段同一条口径（直播最常见的开播时段）。
+    解析不出来 → None（调用方跳过这一条，不猜）。
+    """
+    s = (event_date or "").strip()
+    try:
+        day = datetime.strptime(s[:10], "%Y-%m-%d")
+    except (TypeError, ValueError):
+        return None
+    return day.replace(hour=20, minute=0, second=0, microsecond=0)
+
+
 def _parse_reservation_start(pub: datetime | None, desc1: str) -> datetime | None:
     """从 desc1 文本解析预约开始时刻（北京 wall-clock，服务端统一推断年份）。
 
@@ -1539,13 +1555,20 @@ class VtuberEventRepo:
 
     def future_reservations(self, vtuber_id: int, now: datetime | None = None,
                             days: int = 90) -> list[dict]:
-        """该 V 所有账号的未来直播预约（自动化，来自 reservation 帖）。
+        """该 V 所有账号的未来直播预约（**自动解析** + **手动记录**, 2026-10-13 加后者）。
 
-        - 源：posts.body_json.reservation（fetcher 已精简），旧帖缺 title →
+        - 自动那一源：posts.body_json.reservation（fetcher 已精简），旧帖缺 title →
           回退 raw_json 的 reserve.title（'直播预约|xxx' 去前缀）；
+        - **手动那一源**（用户 2026-10-13 口径：「点未来的待定日期格来记录直播预约」）：
+          `vtuber_events` 里 `kind='event'` 且日期在未来的条目 —— 手动预约**只到日、
+          没有时刻**（`event_date` 是 `YYYY-MM-DD`，见模型注释），所以按**当天 20:00**
+          落一个时刻：与"手动记录场次"的默认时段同一条口径（直播最常见的开播时段），
+          而不是 00:00（那会让日历把它画成一早的场次）；
         - 过滤：button_text == '已结束' 剔除；解析时刻 < now 剔除；
           未来超出 days 天剔除（防止陈年旧帖污染卡片）；
-        - 返回按 start_at 升序 [{post_id, title, start_at, reserve_total, rid}]。
+        - 返回按 start_at 升序 [{post_id, title, start_at, reserve_total, rid, source}]。
+          ⚠️ `source` 是 2026-10-13 加的（`'feed'` 自动 / `'manual'` 手动）：前端要能
+          区分"这条是平台帖解析出来的"还是"我自己填的"，界面文案与可删性都不一样。
         """
         now = now or datetime.now()
         uids = [
@@ -1554,8 +1577,28 @@ class VtuberEventRepo:
                 Account.platform_uid != "",
             ).all()
         ]
+        out: list[dict] = []
+        cut_off = now + timedelta(days=days)
+        # ── 手动那一源：vtuber_events（kind='event'）+ 日期在窗口内 ──
+        for ev_id, title, event_date in (
+            self.db.query(VtuberEvent.id, VtuberEvent.title, VtuberEvent.event_date)
+            .filter(VtuberEvent.vtuber_id == vtuber_id, VtuberEvent.kind == "event")
+            .all()
+        ):
+            start = _reservation_start_of_day(event_date)
+            if start is None or start < now or start > cut_off:
+                continue
+            out.append({
+                "post_id": ev_id,
+                "title": title or "直播预约",
+                "start_at": start,
+                "reserve_total": 0,
+                "rid": None,
+                "source": "manual",
+            })
         if not uids:
-            return []
+            out.sort(key=lambda x: x["start_at"])
+            return out
         rows = (
             self.db.query(Post.id, Post.platform_uid, Post.body_json, Post.raw_json,
                           Post.published_at)
@@ -1565,8 +1608,6 @@ class VtuberEventRepo:
             )
             .all()
         )
-        out: list[dict] = []
-        cut_off = now + timedelta(days=days)
         for post_id, uid, body_json, raw_json, published_at in rows:
             try:
                 r = json.loads(body_json).get("reservation") or {}
@@ -1594,6 +1635,7 @@ class VtuberEventRepo:
                 "start_at": start,
                 "reserve_total": int(r.get("reserve_total") or 0),
                 "rid": str(r["rid"]) if r.get("rid") else None,
+                "source": "feed",
             })
         out.sort(key=lambda x: x["start_at"])
         return out

@@ -8,7 +8,7 @@ import OverlayScroll from './OverlayScroll'
 import FloatPill from './common/FloatPill'
 import StateBlock from './common/StateBlock'
 import { LIVE_TYPE_ORDER, liveTypeLabel } from '../utils/liveType'
-import { countByType, filterByTypes } from '../utils/liveCalendarFilter'
+import { countByType, dimmedKeys } from '../utils/liveCalendarFilter'
 import { cellBadge, groupReservationsByDay, reservationLine } from '../utils/reservationDays'
 // 纯展示格式化已搬到 components/live/（可 vitest 直测）；此处只保留渲染/交互常量
 import { calendarSourceLabel, dayKeyIso, fmtDur, fmtMoney, fmtMonth, fmtTime, keyOf } from './live/liveCalendarFmt'
@@ -22,6 +22,7 @@ import { useReservations } from './live/useReservations'
 import LiveSessionDialog from './live/LiveSessionDialog'
 // 手动记录/编辑一场（B2，devlog/454）：日历工具栏的「+」与详情弹窗的铅笔共用同一个表单
 import ManualSessionDialog from './live/ManualSessionDialog'
+import ReservationDialog from './live/ReservationDialog'
 
 interface Props {
   /** 账号 id（null=无账号，显示空态）；切换账号自动重拉。
@@ -107,8 +108,10 @@ const LiveCalendar = memo(function LiveCalendar(
     typeFilter, setTypeFilter, reload, reloadDetail,
   } = useLiveSessions(accountId, refreshTick, now, () => setPop(null), seedSessions)
 
-  /** 未来预约（R13）：V 级数据，独立于场次取数（见 useReservations 顶部说明） */
-  const reservations = useReservations(vtuberId, refreshTick)
+  /** 未来预约（R13）：V 级数据，独立于场次取数（见 useReservations 顶部说明）。
+   *  `reload` 给"手动记了一条预约"用（2026-10-13）：刚保存完格子上要立刻出现。 */
+  const { list: reservations, reload: reloadReservations } =
+    useReservations(vtuberId, refreshTick)
 
   /**
    * 手动记录/编辑弹窗（B2，devlog/454）。
@@ -119,6 +122,11 @@ const LiveCalendar = memo(function LiveCalendar(
    */
   const [manualOpen, setManualOpen] = useState(false)
   const [manualTarget, setManualTarget] = useState<LiveSession | null>(null)
+  /** 新建时的默认日期（点空日期格进来时是那一格；工具栏「+」为 null = 今天） */
+  const [manualDay, setManualDay] = useState<string | null>(null)
+  /** 记录预约的弹窗（2026-10-13）：点未来空日期格进来 */
+  const [resvOpen, setResvOpen] = useState(false)
+  const [resvDay, setResvDay] = useState('')
 
   const resvByDay = useMemo(() => groupReservationsByDay(reservations), [reservations])
 
@@ -187,12 +195,18 @@ const LiveCalendar = memo(function LiveCalendar(
     ))
   }
 
-  /** 渲染用的日期格：按类型筛过（空的日子不出场次标记，但格子照常占位）——
-   *  网格仍是 42 格（`cells` 是几何），只是格里的场次列表换成筛过的。 */
-  const visibleCells = useMemo(() => {
-    if (!typeFilter.length) return cells
-    return cells.map((c) => ({ ...c, sessions: filterByTypes(c.sessions, typeFilter) }))
-  }, [cells, typeFilter])
+  /** 渲染用的日期格：**不再替换场次**（2026-10-13 用户口径）。
+   *
+   * 原来筛掉的类型整格变成「休息」—— 用户看到的是一张"别的日子都没直播"的假日历；
+   * 现在**保留**全部场次，只把"不含选中类型"的格子**降透明度**（`dimmed`），
+   * 且不给它 `lc-tone-*` 的强调色（在 `renderCell` 里按同一个判据决定）。
+   *
+   * 判据（`utils/liveCalendarFilter.ts::cellMatchesTypes`，纯函数、有单测）：
+   * **这一格里有任意一场命中选中的类型** ⇒ 算命中。 */
+  const dimmedCells = useMemo(
+    () => dimmedKeys(cells, typeFilter),
+    [cells, typeFilter],
+  )
 
   /** 点了筛选但这一类本月一场都没有：说清"是筛没的"并给一条退路，
    *  否则空网格看起来像"这个月没直播"（用户会以为数据没了）。 */
@@ -218,9 +232,11 @@ const LiveCalendar = memo(function LiveCalendar(
     setMonthPopOpen(false)
   }
 
-  /** 打开手动记录弹窗：`target=null` 新建（工具栏「+」），非空 = 编辑那一场（详情弹窗铅笔） */
-  const openManual = (target: LiveSession | null) => {
+  /** 打开手动记录弹窗：`target=null` 新建（工具栏「+」/ 点过去的空日期格），
+   *  非空 = 编辑那一场（详情弹窗铅笔）。`day` 只在新建时有意义。 */
+  const openManual = (target: LiveSession | null, day: string | null = null) => {
     setManualTarget(target)
+    setManualDay(target ? null : day)
     setManualOpen(true)
   }
 
@@ -249,6 +265,18 @@ const LiveCalendar = memo(function LiveCalendar(
     setManualOpen(false)
     setDetail(null)
     reload()
+  }
+
+  /** 预约保存成功（2026-10-13）：关弹窗 + **立刻重取预约** —— 格子上马上要出现那一条，
+   *  等下一轮 `refreshTick` 用户会以为没存上。若那条预约不在当前月，顺手翻过去。 */
+  const onReservationSaved = () => {
+    setResvOpen(false)
+    reloadReservations()
+    const [y, m] = resvDay.split('-').map((x) => Number(x))
+    if (Number.isFinite(y) && Number.isFinite(m) && (y !== ym.y || m - 1 !== ym.m)) {
+      setNavDir(y * 12 + (m - 1) >= ym.y * 12 + ym.m ? 1 : -1)
+      setYm({ y, m: m - 1 })
+    }
   }
 
   const openCellPop = (c: DayCell, e: ReactMouseEvent<HTMLDivElement>) => {
@@ -327,6 +355,39 @@ const LiveCalendar = memo(function LiveCalendar(
     }
   }
 
+  /**
+   * 点**空日期格**（2026-10-13，用户口径：「直接点没有直播的日期格来打开记录窗口，
+   * 也可以点未来的待定日期格来记录直播预约」）。
+   *
+   * 按日子自动分岔（用户 2026-10-13 拍板「两种都开，按日子自动区分」）：
+   *
+   * | 这一格 | 打开什么 | 写哪张表 |
+   * |---|---|---|
+   * | 有场次 | 场次详情（原行为，不动） | —— |
+   * | 有预约、没场次 | 不打开（那条预约就在格子上写着） | —— |
+   * | **今天及以后**、空 | **记录预约**（`ReservationDialog`） | `vtuber_events` |
+   * | **过去**、空 | **记录场次**（`ManualSessionDialog`，日期预填那一格） | `live_sessions` |
+   *
+   * ⚠️ 分岔判据是**这一天**（`c.key < todayKey`），不是"日历翻到哪个月"：
+   * 用户翻到上个月补记，那几格仍然是"过去"。
+   */
+  const onCellClick = (c: DayCell) => {
+    if (c.state === 'live' && c.sessions.length) {
+      openDetail(c)
+      return
+    }
+    if (c.reservations.length) return          // 有预约没场次：格子上已经写着，别抢
+    if (vtuberId == null && accountId == null) return
+    if (c.key < todayKey) {
+      setManualTarget(null)
+      setManualDay(c.key)
+      setManualOpen(true)
+      return
+    }
+    setResvDay(c.key)
+    setResvOpen(true)
+  }
+
   /** 详情弹窗内切换当日第 idx 场 */
   const switchDetailIdx = (idx: number) => {
     if (!detail || idx === detail.idx) return
@@ -349,6 +410,9 @@ const LiveCalendar = memo(function LiveCalendar(
     const toneKey = first ? keyOf(first) : null
     const resv = reservationLine(c.reservations)
     const hasSession = c.state === 'live' && !!first
+    /** 这一格含选中类型的场次吗（筛选口径 = **强调**，不是"替换成休息"）。
+     *  未筛时恒真；筛了但这一格一场没命中 ⇒ 降透明度（`dimmedCells`）。 */
+    const dimmed = dimmedCells.has(c.key)
 
     let toneCls = ''
     if (hasSession && toneKey) toneCls = ` lc-tone-${toneKey}`
@@ -356,6 +420,7 @@ const LiveCalendar = memo(function LiveCalendar(
     // 月份指示（透明度）：非本月一律 pad 淡化，与场次状态无关
     if (!c.inMonth) toneCls += ' pad'
     if (c.isToday) toneCls += ' today'
+    if (dimmed) toneCls += ' dimmed'
     // R13：有预约的格子加一枚可辨识的标记（不改九类色系，只加虚线左缘）
     if (resv) toneCls += ' has-resv'
 
@@ -375,10 +440,15 @@ const LiveCalendar = memo(function LiveCalendar(
            ⚠️ 探针拿它把"本月场次之和"与筛选胶囊的计数对账 ——
            不加这个标记，求和会把补位格的场次算进来，两边永远对不上。 */
         data-lc-in-month={c.inMonth ? '1' : '0'}
+        /* 筛选的**强调**口径（2026-10-13）：`1` = 这一格不含选中类型 ⇒ 降透明度。
+           给探针一个可断言的钩子 —— "筛选没有把别的日子变成休息"这条在屏幕上看
+           只差几格颜色，而它正是用户报的那个问题。 */
+        data-lc-dimmed={dimmed ? '1' : undefined}
+        data-lc-has-session={hasSession ? '1' : undefined}
         data-resv-count={c.reservations.length || undefined}
         onMouseEnter={(e) => openCellPop(c, e)}
         onMouseLeave={closeCellPop}
-        onClick={() => openDetail(c)}
+        onClick={() => onCellClick(c)}
       >
         <div className="lc-cell-head">
           <span className="lc-day">{c.date.getDate()}</span>
@@ -628,7 +698,7 @@ const LiveCalendar = memo(function LiveCalendar(
                         onClick={() => setTypeFilter([])}>显示全部</button>
               </p>
             )}
-            {visibleCells.map((c) => renderCell(c))}
+            {cells.map((c) => renderCell(c))}
           </div>
         </div>
       </div>
@@ -672,14 +742,24 @@ const LiveCalendar = memo(function LiveCalendar(
           await onVodAccountSaved?.(mids)
         }}
       />
-      {/* 手动记录/编辑（B2）：两处入口（工具栏「+」/ 详情弹窗铅笔）共用这一个实例 */}
+      {/* 手动记录/编辑（B2）：三处入口（工具栏「+」/ 详情弹窗铅笔 / 点过去的空日期格）
+          共用这一个实例 */}
       <ManualSessionDialog
         open={manualOpen}
         accountId={accountId}
         session={manualTarget}
+        newDay={manualDay}
         onClose={() => setManualOpen(false)}
         onSaved={onManualSaved}
         onDeleted={onManualDeleted}
+      />
+      {/* 记录预约（2026-10-13）：点**未来**的空日期格进来，写 `vtuber_events`（大事记那张表） */}
+      <ReservationDialog
+        open={resvOpen}
+        vtuberId={vtuberId ?? null}
+        dayKey={resvDay}
+        onClose={() => setResvOpen(false)}
+        onSaved={onReservationSaved}
       />
     </div>
   )

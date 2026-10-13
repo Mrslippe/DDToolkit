@@ -11,7 +11,7 @@
  * 失败**不清空**已有数据：预约是"锦上添花"的信息，上游/网络出问题时日历照常可用，
  * 只是没有预约标记（下次 `refreshTick` 会再试）。
  */
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { UpcomingReservation } from '../../api/types'
 import { api } from '../../api/api'
@@ -19,8 +19,9 @@ import { api } from '../../api/api'
 export function useReservations(
   vtuberId: number | null,
   refreshTick: number,
-): UpcomingReservation[] {
+): { list: UpcomingReservation[]; reload: () => void } {
   const [list, setList] = useState<UpcomingReservation[]>([])
+  const [tick, setTick] = useState(0)
   const aliveRef = useRef(true)
 
   useEffect(() => {
@@ -43,7 +44,11 @@ export function useReservations(
       .catch(() => {
         /* 取不到就保持现状（不清空）：日历不因预约请求失败而变空 */
       })
-  }, [vtuberId, refreshTick])
+  }, [vtuberId, refreshTick, tick])
 
-  return list
+  /** 手动记了一条预约之后立刻重取（2026-10-13）：不等下一轮 `refreshTick`
+   *  —— 用户刚点完保存，格子上必须马上出现那条预约，否则他会以为没存上。 */
+  const reload = useCallback(() => setTick((t) => t + 1), [])
+
+  return { list, reload }
 }
