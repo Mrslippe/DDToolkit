@@ -29,6 +29,14 @@ import type {
 } from '../api/types'
 import { usePrefs } from '../hooks/usePrefs'
 import { applyEmojiBigSize, clampEmojiBig } from '../utils/emojiSize'
+import { PostTextInline, seedEmojiCache } from './common/PostText'
+
+/** 后端 `/emoji/sample` 给的一枚示例表情（`devlog/487`） */
+interface SampleFace {
+  name: string
+  url: string
+  size: number
+}
 import { refreshCapabilities } from '../hooks/useCapabilities'
 import { formatBytes } from '../utils/format'
 import {
@@ -451,6 +459,34 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
     }
   }
 
+  /**
+   * 「大表情大小」的图文混排示例（2026-10-14，`devlog/487`）：两枚**真**表情（一大一小），
+   * 由后端从热好的索引里挑（`/emoji/sample`；纯内存、不出网）。
+   *
+   * 拿到之后**塞进表情缓存**（`seedEmojiCache`）再渲染 —— 这样示例与正文走同一条渲染路
+   * （ProxyImage 的 https 化/no-referrer/兜底、`size` 分档、chip 兜底全都一样），
+   * 而且顺带省掉一次 `/emoji/resolve` 请求。
+   * ⚠️ 失败/索引为空 ⇒ `demo` 保持 `null` ⇒ 不渲染示例（宁可不显示，也不画一个空框）。
+   */
+  type DemoSample = { small: SampleFace | null; large: SampleFace | null }
+  const [demo, setDemo] = useState<DemoSample | null>(null)
+  useEffect(() => {
+    let alive = true
+    void (async () => {
+      try {
+        const s = await api.emojiSample()
+        if (!alive || (!s.small && !s.large)) return
+        const seed: Record<string, { url: string; size: number | null }> = {}
+        for (const f of [s.small, s.large]) if (f) seed[f.name] = { url: f.url, size: f.size }
+        seedEmojiCache(seed)
+        setDemo({ small: s.small, large: s.large })
+      } catch {
+        /* 后端不可达 / 索引没热上：不显示示例（滑杆照常可用） */
+      }
+    })()
+    return () => { alive = false }
+  }, [])
+
   /** 关闭语义（R18）：与首次点 ✕ 的询问框写**同一份**偏好 */
   const pickCloseAction = async (next: string) => {
     setThemeError(null)
@@ -844,6 +880,23 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
                             {cur}{sp.unit ?? ''}
                           </output>
                         </div>
+                        {/* 图文混排示例（2026-10-14，用户口径：「在下方给出图文混排的示例方便
+                            用户观察」）：拖动上面那根滑杆，这里的**真表情**当场变大变小。
+                            ⚠️ 用的是与正文同一套类（`.post-emoji` / `--big`）⇒ 看到的就是发帖效果；
+                            ⚠️ 两枚表情由后端 `/emoji/sample` 从**你自己库里**挑（一大一小），
+                            索引没热上时不显示这一块（不画空框）。 */}
+                        {demo && (
+                          <div className="aps-emoji-demo" data-emoji-demo="1">
+                            <span className="demo-tag">
+                              示例（用你库里的真表情，小表情不随这里变）
+                            </span>
+                            <PostTextInline
+                              text={`今天的直播${demo.small ? `[${demo.small.name}]` : ''}`
+                                + `谢谢大家${demo.large ? `[${demo.large.name}]` : ''}`
+                                + `下次见啦${demo.small ? `[${demo.small.name}]` : ''}`}
+                            />
+                          </div>
+                        )}
                       </div>
                     )
                   })()}

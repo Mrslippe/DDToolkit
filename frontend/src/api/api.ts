@@ -931,6 +931,19 @@ export const api = {
   getPrefs: () => request<Prefs>('/settings/prefs'),
 
   /**
+   * **示例用**的两枚真表情（`devlog/487`）：从后端热好的索引里挑一大一小，纯内存、不出网。
+   *
+   * 给「设置 → 外观 → 大表情大小」的图文混排示例用；索引没热上时两个字段都是 `null`
+   * （界面据此**不显示**示例）。
+   */
+  emojiSample: () =>
+    request<{
+      names: number
+      small: { name: string; url: string; size: number } | null
+      large: { name: string; url: string; size: number } | null
+    }>('/emoji/sample'),
+
+  /**
    * 表情名 → 图片地址 + 大小（2026-10-13，用户第 5 条；大小 2026-10-14，`devlog/485`）：
    * 批量查，**查不到的不会出现在 `items` 里**（前端据此走名字 chip 兜底）。
    * `why` 非空 = 上游这次没拉到（索引空），不是致命错误。

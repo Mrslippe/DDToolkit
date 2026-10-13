@@ -55,6 +55,21 @@ export function resetEmojiCache(): void {
   inflight.clear()
 }
 
+/**
+ * 预置若干"名字 → 命中"（**给设置页的示例用**，`devlog/487`）。
+ *
+ * 设置里的示例要画**真**表情，但那里没有任何 token（前端只在渲染帖子时按需问后端）——
+ * 所以由后端 `/emoji/sample` 挑两枚，这里塞进同一个缓存。
+ * ⚠️ 为什么走缓存而不是让示例自己 `<img>`：这样示例与正文**同一条渲染路**（ProxyImage 的
+ *    https 化 + no-referrer + 兜底、`size` 分档、chip 兜底全都一致）—— 示例才代表真实效果。
+ * ⚠️ 顺带省一次请求：`fetchNames` 会跳过已在缓存里的名字（`!cache.has(n)`）。
+ */
+export function seedEmojiCache(items: Record<string, EmojiHit>): void {
+  for (const [name, hit] of Object.entries(items)) {
+    if (hit && hit.url) cache.set(name, hit)
+  }
+}
+
 /** 问一批名字（已缓存的跳过；回来的写进缓存）。失败**静默**：走 chip 兜底就是了。 */
 async function fetchNames(names: string[]): Promise<void> {
   const todo = names.filter((n) => !cache.has(n) && !asked.has(n))

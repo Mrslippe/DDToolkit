@@ -17,17 +17,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const appSettings = vi.fn()
 const getPrefs = vi.fn()
 const savePrefs = vi.fn()
+const emojiSample = vi.fn()
+const resolveEmojis = vi.fn()
 
 vi.mock('../api/api', () => ({
   api: {
     appSettings: (...a: unknown[]) => appSettings(...a),
     getPrefs: (...a: unknown[]) => getPrefs(...a),
     savePrefs: (...a: unknown[]) => savePrefs(...a),
+    emojiSample: (...a: unknown[]) => emojiSample(...a),
+    resolveEmojis: (...a: unknown[]) => resolveEmojis(...a),
     getStorage: () => Promise.resolve(null),
     getAssets: () => Promise.resolve(null),
     getAgreement: () => Promise.resolve({ required: 'v', accepted: 'v', accepted_at: null,
                                           needed: false, app_version: '1.0.0' }),
   },
+  imgProxyUrl: (src: string) => `/api/img-proxy?url=${encodeURIComponent(src)}`,
 }))
 vi.mock('../utils/shellBridge', () => ({
   isDesktopShell: () => false,
@@ -44,6 +49,7 @@ vi.mock('sonner', () => ({ toast: { success: () => {}, error: () => {} } }))
 
 import AppSettingsDialog from './AppSettingsDialog'
 import { EMOJI_BIG_DEFAULT, resetEmojiBigSize } from '../utils/emojiSize'
+import { resetEmojiCache } from './common/PostText'
 
 class NoopResizeObserver {
   observe() {}
@@ -86,8 +92,15 @@ beforeEach(() => {
   })
   getPrefs.mockReset().mockResolvedValue(PREFS_BODY)
   savePrefs.mockReset().mockResolvedValue({ ok: true, changed: [], values: {} })
+  emojiSample.mockReset().mockResolvedValue({
+    names: 2,
+    small: { name: '委屈', url: 'https://cdn/small.png', size: 1 },
+    large: { name: 'UPOWER_1_气鼓鼓', url: 'https://cdn/big.png', size: 2 },
+  })
+  resolveEmojis.mockReset()
   // ⚠️ 尺寸是**模块级**状态：不重置就会带着上一条用例的值进来
   resetEmojiBigSize()
+  resetEmojiCache()
   expect(EMOJI_BIG_DEFAULT).toBe(40)
   host = document.createElement('div')
   document.body.append(host)
@@ -153,5 +166,42 @@ describe('设置 · 外观 · 大表情大小（滑杆）', () => {
     getPrefs.mockResolvedValue({ ...PREFS_BODY, specs: [] })
     await openAppearance()
     expect(sliderIn()).toBeNull()
+  })
+})
+
+describe('设置 · 外观 · 图文混排示例（滑杆下方）', () => {
+  it('★ 示例用后端给的真表情画出来，一大一小分档（用户要"看着调"）', async () => {
+    await openAppearance()
+    const demo = document.body.querySelector('[data-emoji-demo]')
+    expect(demo, '滑杆下方没有示例').toBeTruthy()
+    const imgs = [...demo!.querySelectorAll<HTMLImageElement>('img.post-emoji')]
+    expect(imgs.length).toBe(3)                       // 小·大·小
+    expect(imgs[0].src).toBe('https://cdn/small.png')
+    expect(imgs[1].src).toBe('https://cdn/big.png')
+    expect(imgs[1].className, 'size=2 的那枚要走大档（滑杆就是调它）')
+      .toContain('post-emoji--big')
+    expect(imgs[0].className).not.toContain('--big')
+    // 示例走的是与正文同一条渲染路 ⇒ 也该带上 no-referrer（图床防盗链，devlog/484）
+    expect(imgs[1].getAttribute('referrerpolicy')).toBe('no-referrer')
+  })
+
+  it('★ 示例的表情**预置进缓存**（不再发一次 resolve 请求）', async () => {
+    await openAppearance()
+    expect(emojiSample).toHaveBeenCalled()
+    expect(resolveEmojis, '预置过还去问后端 ⇒ 每次打开设置都白跑一趟')
+      .not.toHaveBeenCalled()
+  })
+
+  it('索引没热上（后端给 null）⇒ 不显示示例（不画空框）', async () => {
+    emojiSample.mockResolvedValue({ names: 0, small: null, large: null })
+    await openAppearance()
+    expect(document.body.querySelector('[data-emoji-demo]')).toBeNull()
+  })
+
+  it('取示例失败 ⇒ 不显示示例，滑杆照旧可用', async () => {
+    emojiSample.mockRejectedValue(new Error('500'))
+    await openAppearance()
+    expect(document.body.querySelector('[data-emoji-demo]')).toBeNull()
+    expect(sliderIn(), '示例取不到不该连滑杆一起没了').toBeTruthy()
   })
 })

@@ -6698,7 +6698,10 @@ img.hero-avatar {
 /* 滑杆（2026-10-14，`post_emoji_big`：设置 → 外观里调"大表情大小"）。
    这是**第二种控件形态** —— 后端 spec 里 `kind: "range"` 才渲染，界面不写死 key。
    ⚠️ 类名刻意不叫 `aps-range`：那个名字早就被**范围提示文字**占了（见下面那组），
-   而 CSS 里同名会让"控件"和"一行小字"互相串味。 */
+   而 CSS 里同名会让"控件"和"一行小字"互相串味。
+   ⚠️ **自绘**（`appearance:none` + 轨道/钮分开画）：原生那条深灰轨 + 描边跟这套浅色界面
+   不搭（用户 2026-10-14 截图点名）。结构与 `.vp-vol` 同款，配色换成浅色界面的令牌：
+   轨道 = 浅灰实底、无描边；钮 = 主色实心圆 + 一点投影（与同页 `.aps-radio.on` 同一个粉）。 */
 .aps-range-ctl {
   display: flex;
   align-items: center;
@@ -6707,9 +6710,58 @@ img.hero-avatar {
 }
 
 .aps-range-ctl input[type='range'] {
+  appearance: none;
+  -webkit-appearance: none;
   flex: 1;
   min-width: 120px;
-  accent-color: var(--c-primary);
+  height: 18px;                 /* 给钮留出上下空间（轨道只有 6px） */
+  background: transparent;
+  border: 0;                    /* 无描边 */
+  outline: none;
+  cursor: pointer;
+}
+
+.aps-range-ctl input[type='range']::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 999px;
+  border: 0;
+  background: var(--pill-bg-hover, #eef1f5);   /* 浅灰底 */
+}
+
+.aps-range-ctl input[type='range']::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 16px;
+  height: 16px;
+  border: 0;
+  border-radius: 999px;
+  /* (18 - 6) / 2 = 6 ⇒ 钮与轨道垂直居中 */
+  margin-top: -5px;
+  background: var(--c-primary, #ffa2b4);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+}
+
+.aps-range-ctl input[type='range']::-moz-range-track {
+  height: 6px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--pill-bg-hover, #eef1f5);
+}
+
+.aps-range-ctl input[type='range']::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--c-primary, #ffa2b4);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+}
+
+/* 键盘走到这里要看得见（原生 outline 被上面的 `outline:none` 关了，得自己给） */
+.aps-range-ctl input[type='range']:focus-visible {
+  outline: 2px solid var(--c-primary, #ffa2b4);
+  outline-offset: 4px;
+  border-radius: 6px;
 }
 
 .aps-range-out {
@@ -6719,6 +6771,29 @@ img.hero-avatar {
   /* 拖动时数字宽度会跳（40 → 8 → 64）⇒ tabular-nums 让读数不抖 */
   font-variant-numeric: tabular-nums;
   color: var(--c-text-main);
+}
+
+/* 示例（图文混排）：用户要"看着调"——拖动时这里的真表情跟着变大变小。
+   用的是与正文**同一套**类（`.post-emoji` / `.post-emoji--big`），所以看到的就是发帖时的效果。 */
+.aps-emoji-demo {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--c-bg-list, #fffbfb);
+}
+
+.aps-emoji-demo .demo-tag {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 11px;
+  color: var(--c-text-sub);
+}
+
+.aps-emoji-demo .post-text {
+  font-size: 14px;
+  line-height: 20px;
+  margin: 0;
+  white-space: pre-wrap;
 }
 
 /* 范围提示与红字都占整行（在控件下面） */

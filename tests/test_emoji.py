@@ -313,6 +313,34 @@ def test_resolve_endpoint_empty_names_is_not_an_error(client):
     assert r.status_code == 200 and r.json()["count"] == 0
 
 
+def test_sample_endpoint_picks_one_of_each_size(monkeypatch, client):
+    """★ `/emoji/sample`：给设置页的示例挑一大一小（`devlog/487`）。
+
+    钉三件事：① 两类各挑一枚；② 挑的是**真表情**（有 http 地址）；
+    ③ 挑选**确定性**（名字排序后的第一枚）—— 每次打开设置看到同一对，用户才能
+    "上次调到 40 是这个效果"地复现。
+    """
+    monkeypatch.setitem(bili_emote._raw_cache, "index", {
+        "b_大表情": ("https://cdn/b.png", None, 2),
+        "a_小表情": ("https://cdn/a.png", None, 1),
+        "没有地址": ("", None, 2),          # 跳过：示例画不出来
+        "没给大小": ("https://cdn/c.png", None, None),   # 两类都不是 ⇒ 不参与
+    })
+    body = client.get("/emoji/sample").json()
+    assert body["names"] == 4
+    assert body["small"] == {"name": "a_小表情", "url": "https://cdn/a.png", "size": 1}
+    assert body["large"] == {"name": "b_大表情", "url": "https://cdn/b.png", "size": 2}
+
+
+def test_sample_endpoint_is_null_when_the_index_is_cold(monkeypatch, client):
+    """索引没热上（首启还没扫完 / 全新库）⇒ 两个字段都是 `null`。
+
+    界面据此**不显示**示例 —— 宁可不显示，也不要画一个空框（那是"坏了"的样子）。
+    """
+    monkeypatch.setitem(bili_emote._raw_cache, "index", {})
+    assert client.get("/emoji/sample").json() == {"names": 0, "small": None, "large": None}
+
+
 def test_packages_endpoint_reports_both_sources(monkeypatch, client):
     """`/emoji/packages`：诊断两级索引 + 载荷里见过的包 id + **两类大小各多少**。"""
     monkeypatch.setitem(bili_emote._raw_cache, "index", {

@@ -30,7 +30,8 @@ retire-when: HTTP 层换框架，或路由整体重排
 > ⚠️ **2026-10-13：再各 +2**（录播播放加了 `GET /bili/play-by-bvid` 与
 > `GET /bili/segments-by-bvid`，`devlog/479`），**同日晚些再 +1**（表情解析
 > `GET /emoji/resolve`，`devlog/482`），**同日晚些再 +1**（表情索引诊断
-> `GET /emoji/packages`，`devlog/483`）—— 同样只记增量。**别照抄任何一行当基线**：
+> `GET /emoji/packages`，`devlog/483`），**再 +1**（示例表情 `GET /emoji/sample`，
+> `devlog/487`）—— 同样只记增量。**别照抄任何一行当基线**：
 > 这一段的三个数已经漂过至少两次（每次都是"改的人只记增量、下一个人照抄"）。
 > 更早的版本：75/77/63（2026-09-29 M5-1 + L2）、66/—/—（批次 16）、64/70/67（R42-A）
 > —— 三种数法本来就容易漂。
@@ -151,6 +152,7 @@ retire-when: HTTP 层换框架，或路由整体重排
 | GET `/bili/play-by-bvid?bvid=&qn=&fallback=&cid=` | **按 BV 号取流**（2026-10-13，用户 3.2 录播播放 / `devlog/479`）：与 `/bili/play/{post_id}` **同一套口径**（同一个 `play_info`、同一套错误分级、同样 120s 短缓存、同样不落库），差别只有"bvid 从哪来"。为什么必须单开一条：上面那条的前提是"这条视频是一个**帖子**"（要查库把 post_id 翻成 bvid），而**录播不是帖子** —— `live_sessions.vod_url` 指向的多半是录播组发的视频，库里没有那条 post。`bvid` 收 **BV 号或链接**（与入库时同一个抠号函数 `domain/live_manual.py::bvid_of`）；抠不到 → **400 + 中文原因**（不是 500） |
 | GET `/bili/segments-by-bvid?bvid=&qn=&cid=` | **按 BV 号取段表**（同上）：与 `/bili/segments/{post_id}` 逐字一致。⚠️ 前端必须拿**与 `/bili/play-by-bvid` 同一组 `qn`/`cid`**（两条端点不同流 = 段表与地址对不上，切 P/换清晰度时尤其明显） |
 | GET `/emoji/resolve?names=a,b,c` | **表情名 → 图片地址 + 大小**（2026-10-13，用户第 5 条 / `devlog/482`；**两级解析** `devlog/483`；**两类大小** `devlog/485`）：正文里的 `[UPOWER_<uid>_贴贴]`、`[包名_石化]` 这类 token 要画成真表情。**两级**：①**第一源 = 我们自己载荷**（`posts.raw_json` 里 `rich_text_nodes[*].emoji`，离线、实测覆盖 **99.0%** 种类 / 96.8% 次数）→ ②**第二源 = 上游整表**（全局动态包 + 本机账号面板，出网、**账号相关**、实测 28%）。第一源命中就**不问上游**。⚠️ 第一源在**启动期**建索引（`warm_raw_index`：0.71s / 5,060 行，增量靠 `app_meta` 记号 ⇒ 读路径**不写库、不扫表**，`devlog/473`；索引格式带版本号 `{"v":2,…}`，读到旧格式会**全量重扫一次**）；第二源**按需**拉（只在第一源漏项时出网一次，进程内缓存 **30 分钟**，失败后 **60s** 内不重试 —— 防"上游一挂就每个请求打一次"）。响应 `{items: {token: {url, size}}, count, origin, why}`：⚠️ **查不到的条目不出现在 `items` 里**（前端据此渲染名字 chip；返回空串会让它分不清"没这个表情"与"取失败了"）。**`size` 是 B站 自己的字段**（`1` = 小表情/与文字同大小、`2` = 大表情/贴纸、`null` = 上游没给 ⇒ 按小表情画）：⚠️ 判别**不能**按"官方还是自定义"—— 走官方 `/bfs/emote/` 路径的 `[明前奶绿_灰头土脸]` 之类也是 `size=2`（实测 812 个）；第二源给同一件事（脸的 `meta.size`）。`origin` 是诊断（`payload`/`panel`）；`why` 是第二源最近一次**拉取失败**的原因（载荷全中时按设计不出网 ⇒ 那时它恒为 `null`）。上游怎么坏都**不 500**（返回已命中的 + `why`）。`names` 超过 `MAX_TOKENS`（200）**明确 400**，不悄悄截断 |
+| GET `/emoji/sample` | **示例用的一对真表情**（2026-10-14 / `devlog/487`）：给「设置 → 外观 → 大表情大小」的图文混排示例挑**一大一小**两枚，返回 `{names, small: {name,url,size}\|null, large: …｜null}`。⚠️ 从**已经热好的第一源索引**里挑（纯内存、不出网、不扫库），且**确定性**（名字排序后取第一枚）—— 每次打开设置看到同一对，用户才能"上次调到 40 是这个效果"地复现。索引没热上 ⇒ 两个字段都是 `null`，界面据此**不显示**示例（宁可不显示，也不画空框） |
 | GET `/emoji/packages` | **表情索引诊断**（2026-10-13 / `devlog/483`；两类大小 `devlog/485`）：`{payload_names, payload_packages, payload_package_ids, payload_small, payload_large, payload_size_unknown, panel_names, panel_at, panel_why}`。为什么留：载荷里的 `package_id` 是"将来要整包"时的**种子**（官方 `EmoteService/PackageDetail`、第三方快照都按包 id 查），而重扫全库要 0.7s ⇒ 扫描时顺手存下来；这个端点让那份数据**取得到**（不然就埋在内存里没人能用）。只读内存，不触上游 |
 
 **抓取 / 归档 / 候选池**

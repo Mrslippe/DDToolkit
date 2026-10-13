@@ -23,6 +23,8 @@
 - **上游失败不报错**：返回已命中的 + `why`（表情不该让正文渲染失败）。
 - 名字数量有上限（`MAX_TOKENS`）：超了直接 400 说清楚（而不是悄悄截断 —— 截断会让前端
   以为"剩下那些没表情"）。
+- **`/emoji/sample`**（`devlog/487`）：给设置页的"大表情大小"示例挑两枚**真**表情
+  （一大一小，从热好的第一源索引里按名字排序取第一枚 ⇒ 确定性）。纯内存、不出网。
 """
 from fastapi import APIRouter, HTTPException, Query
 
@@ -51,6 +53,30 @@ async def resolve_emojis(names: str = Query(..., description="逗号分隔的表
         "origin": origin,
         "why": bili_emote.panel_why(),
     }
+
+
+@router.get("/emoji/sample")
+async def emoji_sample():
+    """给「设置 → 外观 → 大表情大小」的**示例**取两枚真表情（一大一小，`devlog/487`）。
+
+    为什么要有它：那个滑杆的意义是"看着调"，而示例必须画**真的**表情 —— 尺寸不一样、
+    图片本身也不一样（官方小脸 vs 贴纸），拿占位图或假图调出来的手感是假的。
+    而前端手里没有任何表情 token（它只在渲染帖子时按需问），所以由后端从**已经热好的
+    第一源索引**里挑两枚给你：不出网、不扫库、纯内存。
+
+    ⚠️ 挑选是**确定性**的（名字排序后取第一枚）—— 每次打开设置看到的示例是同一对，
+    否则"我上次调到 40 是这个效果"就没法复现。索引没热上（首启还没扫完/全新库）⇒ 给 `null`，
+    界面据此**不显示示例**（宁可不显示，也不要画一个空框）。
+    """
+    index = bili_emote.raw_index()
+    out: dict[str, object] = {"names": len(index), "small": None, "large": None}
+    for size, key in ((1, "small"), (2, "large")):
+        for name in sorted(index):
+            url, _pkg, s = index[name]
+            if s == size and str(url).startswith("http"):
+                out[key] = {"name": name, "url": url, "size": size}
+                break
+    return out
 
 
 @router.get("/emoji/packages")
