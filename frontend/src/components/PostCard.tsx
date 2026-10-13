@@ -9,6 +9,7 @@ import {
 import type { Post } from '../api/types'
 import { formatDateTime, parseBody, parseStats, postDisplaySummary, postDisplayTitle, postTypeLabel } from '../utils/format'
 import ProxyImage from './common/ProxyImage'
+import { PostTextInline } from './common/PostText'
 import { resolveCoverSources } from '../utils/coverSource'
 import StatBadge from './StatBadge'
 import './../styles/posts.css'
@@ -68,7 +69,10 @@ const PostCard = memo(function PostCard({ post, index, onOpen }: Props) {
                       className="post-card-cover-img" />
         ) : (
           <div className="post-card-cover-paper">
-            <span className="paper-title">{title}</span>
+            {/* 纯文字封面：标题里的表情也画出来（2026-10-14，`devlog/486`）——
+                此前这里是一串 `[梨安收藏集表情包_气鼓鼓]` 原样方括号。
+                尺寸由 CSS 跟着这一处的字号走（`.paper-title .post-emoji`）。 */}
+            <span className="paper-title"><PostTextInline text={title} /></span>
           </div>
         )}
         <span className="post-card-type">{postTypeLabel(post.type)}</span>
@@ -94,7 +98,9 @@ const PostCard = memo(function PostCard({ post, index, onOpen }: Props) {
 
       <div className="post-card-body">
         <h4 className="post-card-title" title={title}>
-          {title}
+          {/* 卡片标题里的表情也画出来（2026-10-14，`devlog/486`）——
+              `title` 属性留原文（那是 hover 提示，得是能读的字符串）。 */}
+          <PostTextInline text={title} />
         </h4>
         {summary && <p className="post-card-summary">{summary}</p>}
         {/* P9-3（v0.9.6）：投稿动态的附言并入同 bvid 的投稿帖后在这里标注出来

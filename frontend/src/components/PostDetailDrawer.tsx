@@ -41,7 +41,7 @@ import DeltaRenderer from './DeltaRenderer'
 import ImageViewer, { type ViewerImage } from './ImageViewer'
 import OverlayScroll from './OverlayScroll'
 import ProxyImage from './common/ProxyImage'
-import PostText from './common/PostText'
+import PostText, { PostTextInline } from './common/PostText'
 import StatBadge from './StatBadge'
 import TypeTag from './TypeTag'
 
@@ -308,7 +308,9 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
         <div className="pd-head">
           <DialogHeader className="p-0">
             <DialogTitle className="pr-8 text-base leading-snug">
-              {postDisplayTitle(shown)}
+              {/* 详情窗标题里的表情也画出来（2026-10-14，`devlog/486`）；
+                  尺寸同样跟着这一处的字号走（`.pd-head .post-emoji`）。 */}
+              <PostTextInline text={postDisplayTitle(shown)} />
             </DialogTitle>
           </DialogHeader>
         </div>

@@ -5170,32 +5170,53 @@ img.hero-avatar {
   color: #ffb4b4;
 }
 
-/* ── 正文里的表情（2026-10-13，用户第 5 条；**两类大小** 2026-10-14，`devlog/485`）────
+/* ── 正文里的表情（2026-10-13，用户第 5 条；**两类大小** 2026-10-14，`devlog/485`/`486`）──
    有地址 ⇒ `.post-emoji`（行内图）；没有 ⇒ `.post-emoji-chip`（名字胶囊：
    `明前奶绿收藏集表情包_石化` → `石化`，"这是一枚表情，只是本机没有它"）。
 
    **两类大小用的是 B站 自己的字段**：载荷里 `emoji.size` —— `1` = 小表情（与文字同大小）、
    `2` = 大表情/贴纸（明显大于文字）。⚠️ 判别**不能**按"官方还是自定义"或"garb 还是 emote"：
    `[明前奶绿_灰头土脸]`、`[菜菜子_开心]` 走官方那条 `/bfs/emote/` 路径，却是 `size=2`（812 个）。
-   ⚠️ 尺寸与对齐**只在这两个类里**（改口径改这里，别在别处再写 px）。对齐用的是同一条规则
+   ⚠️ 尺寸与对齐**只在这几个类里**（改口径改这里，别在别处再写 px）。对齐是同一条规则
    **`vertical-align = -(尺寸/2 - 5)`** —— 让两档表情的**中心**都落在文字基线往上 5px 那一线
    （14px 正文的文字中心约在基线往上 3.5px）⇒ 小表情与大表情不会一个吊高一个沉底。
    小的一档刻意压在"不撑行高"的范围内（正文 14px/行高 20px 时 18px 是上限，见 `devlog/484`），
-   大的一档**会**把行撑高：那是设计（贴纸本来就该占地方，B站 自己也这样）。 */
+   大的一档**会**把行撑高：那是设计（贴纸本来就该占地方，B站 自己也这样）。
+   ⚠️ 大表情的尺寸是**用户偏好**（`--post-emoji-big`，设置 → 外观里的滑杆，
+   `utils/emojiSize.ts` 写这个变量）：默认 40px，改兜底值要**同时**改前端 store 与后端 PREFS。 */
 .post-emoji {
   --post-emoji-size: 15px;      /* size=1（小表情，与文字同大小） */
-  --post-emoji-align: -2.5px;   /* = -(15/2 - 5) */
   display: inline-block;
   width: var(--post-emoji-size);
   height: var(--post-emoji-size);
   margin: 0 1px;
-  vertical-align: var(--post-emoji-align);
+  /* 对齐 = -(尺寸/2 - 5)：两档表情的**中心**都落在文字基线往上 5px（14px 正文的文字中心
+     约在基线往上 3.5px）⇒ 小表情与大表情不会一个吊高一个沉底。
+     ⚠️ 写成 calc 而不是写死 px：大表情的尺寸是**用户偏好**（`--post-emoji-big`），
+     写死就会"调了尺寸但没调对齐"。 */
+  vertical-align: calc(var(--post-emoji-size) / -2 + 5px);
   object-fit: contain;
 }
 
 .post-emoji--big {
-  --post-emoji-size: 32px;      /* size=2（大表情/贴纸） */
-  --post-emoji-align: -11px;    /* = -(32/2 - 5) */
+  /* size=2（大表情/贴纸）。默认 40px，用户可在「设置 → 外观 → 大表情大小」里调
+     （`utils/emojiSize.ts` 把偏好写到这个变量上；改 CSS 里的兜底值要**同时**改那边与后端）。 */
+  --post-emoji-size: var(--post-emoji-big, 40px);
+}
+
+/* 标题 / 纯文字封面这类"一行文字"的位置：表情**跟着这一处的字号走**（`em`），不用正文那两档。
+   为什么不沿用正文尺寸：那里的字号是 14 / 16 / 20px，40px 的大表情会把两行标题撑爆、
+   把居中的封面文字挤出去 —— 而"贴纸该占地方"的前提（正文有整行空间）在这些位置不成立。 */
+.post-card-title .post-emoji,
+.paper-title .post-emoji,
+.pd-head .post-emoji {
+  --post-emoji-size: 1.15em;    /* 小表情：略大于该处文字 */
+}
+
+.post-card-title .post-emoji--big,
+.paper-title .post-emoji--big,
+.pd-head .post-emoji--big {
+  --post-emoji-size: 1.5em;     /* 大表情：明显更大，但仍在该处文字的尺度内 */
 }
 
 .post-emoji-chip {
@@ -6672,6 +6693,32 @@ img.hero-avatar {
   background: var(--c-primary);
   border-color: var(--c-primary);
   color: #fff;
+}
+
+/* 滑杆（2026-10-14，`post_emoji_big`：设置 → 外观里调"大表情大小"）。
+   这是**第二种控件形态** —— 后端 spec 里 `kind: "range"` 才渲染，界面不写死 key。
+   ⚠️ 类名刻意不叫 `aps-range`：那个名字早就被**范围提示文字**占了（见下面那组），
+   而 CSS 里同名会让"控件"和"一行小字"互相串味。 */
+.aps-range-ctl {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+
+.aps-range-ctl input[type='range'] {
+  flex: 1;
+  min-width: 120px;
+  accent-color: var(--c-primary);
+}
+
+.aps-range-out {
+  min-width: 46px;
+  text-align: right;
+  font-size: 12px;
+  /* 拖动时数字宽度会跳（40 → 8 → 64）⇒ tabular-nums 让读数不抖 */
+  font-variant-numeric: tabular-nums;
+  color: var(--c-text-main);
 }
 
 /* 范围提示与红字都占整行（在控件下面） */

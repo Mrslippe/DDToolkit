@@ -1261,6 +1261,19 @@ export interface PrefsSpec {
   key: string
   label: string
   group: string
+  /**
+   * `"radio"`（默认，缺省即此）或 `"range"`（滑杆，2026-10-14 起）。
+   *
+   * ⚠️ 滑杆那种**没有 `options`**：界面按 `min/max/step` 画，取值白名单仍由后端说了算
+   * （滑杆每一档都在白名单里 ⇒ 越界只可能来自手改请求，那边照旧 400）。
+   */
+  kind?: 'radio' | 'range'
+  /** `kind === 'range'` 时才有 */
+  min?: number
+  max?: number
+  step?: number
+  /** 单位（滑杆右侧显示，如 `px`） */
+  unit?: string
   options: PrefsOption[]
   /** 当前能力的事实说明（例如"深色主题尚未实现"）—— 由后端下发，界面照实显示 */
   note: string

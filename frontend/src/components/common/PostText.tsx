@@ -120,14 +120,23 @@ interface Props {
   className?: string
 }
 
-/** 一段帖子正文：文字原样、表情画图/给 chip（见文件头三条规则）。 */
-export default function PostText({ text, className }: Props) {
+/**
+ * 一段文字里的表情**行内渲染**（没有外层包裹）—— 给"标题 / 纯文字封面"这类**已经有自己标签**
+ * 的位置用（2026-10-14，`devlog/486`：用户要求标题与纯文字封面也画表情）。
+ *
+ * ⚠️ 为什么必须和 `PostText` 共用这一段（而不是各写一份）：聊天记录里那些"两处各渲染一遍"
+ *    最后一定会漂（本仓 R46 就是取值同源、渲染不同源）。表情的四种形态（图 / 大图 / chip /
+ *    原样）与缓存只在这里实现一次，`PostText` 与标题都走它。
+ * ⚠️ 尺寸不在这里决定：由**外层容器**的 CSS 决定（标题里跟着字号走，正文里走那两档）——
+ *    见 `posts.css` 的 `.post-card-title .post-emoji` 那一组。
+ */
+export function PostTextInline({ text }: { text: string }) {
   const segs = useMemo(() => splitEmojiText(text), [text])
   const tokens = useMemo(() => emojiTokens(text), [text])
   const images = useEmojiImages(tokens)
 
   return (
-    <p className={`post-text whitespace-pre-wrap text-sm${className ? ` ${className}` : ''}`}>
+    <>
       {segs.map((seg, i) => {
         if (seg.kind === 'text') return <span key={i}>{seg.text}</span>
         const hit = images.get(seg.token)
@@ -138,7 +147,7 @@ export default function PostText({ text, className }: Props) {
           //    不给 `fallback` 的话 ProxyImage 会渲染 120×120 的灰块，正文会被撑变形。
           //
           // ⚠️ **两类大小按 B站 自己的 `size` 字段**（2026-10-14，`devlog/485`）：
-          //    `2` = 大表情/贴纸（`.post-emoji--big`，明显大于文字；实测占本机 93% 的出现次数）；
+          //    `2` = 大表情/贴纸（`.post-emoji--big`，明显大于文字；实测占本机 83% 的出现次数）；
           //    `1`/`null` = 小表情（与文字同大小）。判别**不能**按"官方还是自定义"——
           //    `[明前奶绿_灰头土脸]` 走官方 `/bfs/emote/` 路径但 `size=2`。
           return (
@@ -163,6 +172,15 @@ export default function PostText({ text, className }: Props) {
           )
           : <span key={i}>{`[${seg.token}]`}</span>
       })}
+    </>
+  )
+}
+
+/** 一段帖子正文：文字原样、表情画图/给 chip（见文件头三条规则）。 */
+export default function PostText({ text, className }: Props) {
+  return (
+    <p className={`post-text whitespace-pre-wrap text-sm${className ? ` ${className}` : ''}`}>
+      <PostTextInline text={text} />
     </p>
   )
 }

@@ -13,6 +13,7 @@ import { api } from './api/api'
 import type { AgreementState } from './api/types'
 import { useIsMaximized } from './hooks/useIsMaximized'
 import { clearShellState, loadShellState, shouldRestoreFromTray } from './utils/shellState'
+import { useEmojiBigSize } from './utils/emojiSize'
 import './styles/layout.css'
 import './styles/status-island.css'
 
@@ -25,6 +26,9 @@ import './styles/status-island.css'
 export default function App() {
   const isMax = useIsMaximized()
   const navigate = useNavigate()
+  /* 大表情尺寸（2026-10-14，`devlog/486`）：读一次用户偏好 → 写到根元素的 CSS 变量。
+     挂在壳层**而不是**设置窗/详情页：它影响所有渲染正文的地方，必须全局一致。 */
+  useEmojiBigSize()
   // 最大化时给 html 挂 window-maximized 类，壳层圆角随之取消
   useEffect(() => {
     document.documentElement.classList.toggle('window-maximized', isMax)

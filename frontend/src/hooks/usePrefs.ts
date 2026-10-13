@@ -6,6 +6,7 @@ import {
   type ThemePref,
 } from '../utils/theme'
 import { parseCloseAction, type CloseAction } from '../utils/shellState'
+import { EMOJI_BIG_DEFAULT } from '../utils/emojiSize'
 
 /**
  * 界面偏好（R14b 起：主题；R18 起：关闭窗口语义）—— 一个 hook 管全部偏好。
@@ -26,7 +27,7 @@ export function usePrefs() {
   const [values, setValues] = useState<Record<string, string>>({
     theme: 'light', close_action: 'ask', widget_enabled: 'off',
     widget_click_through: 'off', widget_hide_fullscreen: 'on',
-    vod_player_window: 'off',
+    vod_player_window: 'off', post_emoji_big: String(EMOJI_BIG_DEFAULT),
   })
   const [specs, setSpecs] = useState<PrefsSpec[]>([])
   const [systemDark, setSystemDark] = useState(() => systemPrefersDark())
@@ -51,7 +52,7 @@ export function usePrefs() {
       setValues({
         theme: 'light', close_action: 'ask',
         widget_enabled: 'off', widget_click_through: 'off', widget_hide_fullscreen: 'on',
-        vod_player_window: 'off',
+        vod_player_window: 'off', post_emoji_big: String(EMOJI_BIG_DEFAULT),
         ...r.values,
       })
       setSpecs(r.specs ?? [])

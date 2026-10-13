@@ -28,6 +28,7 @@ import type {
   AgreementState, AppSettings, AssetsInfo, AssetsPruneResult, SettingSpec, StorageInfo,
 } from '../api/types'
 import { usePrefs } from '../hooks/usePrefs'
+import { applyEmojiBigSize, clampEmojiBig } from '../utils/emojiSize'
 import { refreshCapabilities } from '../hooks/useCapabilities'
 import { formatBytes } from '../utils/format'
 import {
@@ -470,6 +471,28 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
     }
   }
 
+  /**
+   * 大表情尺寸（2026-10-14，用户口径：默认 40px + 设置里给滑杆）。
+   *
+   * 与上面两个**不同的一点**：这个偏好不只是记下来，还要**立刻改界面**（那是它的全部意义）
+   * ——`applyEmojiBigSize` 把值写到根元素的 CSS 变量上（`utils/emojiSize.ts`）。
+   * ⚠️ 落库失败要**把尺寸也退回去**：不然界面显示 56px、重启又变回 40px，
+   *    用户会以为"设置没保存"（其实连"看着生效了"都是假的）。
+   */
+  const pickEmojiBig = async (px: number) => {
+    setThemeError(null)
+    // 退回到**控件显示的那个值**（来自偏好），而不是模块里"上一次写进去的尺寸"：
+    // 两者在"别处改过偏好"时可能不同，而用户看到的是控件那个。
+    const prev = clampEmojiBig(prefs.values.post_emoji_big)
+    applyEmojiBigSize(px)
+    try {
+      await prefs.setPref('post_emoji_big', String(clampEmojiBig(px)))
+    } catch (e) {
+      applyEmojiBigSize(prev)
+      setThemeError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
   /** 左栏键盘：↑↓ 移动（自动激活）+ Home/End（WAI-ARIA tabs 的垂直变体） */
   const onNavKey = (e: React.KeyboardEvent) => {
     const i = nav.findIndex((n) => n.id === active)
@@ -788,6 +811,42 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
                       </div>
                     </div>
                   )}
+
+                  {/* 大表情尺寸（2026-10-14，用户口径）：「大表情的大小默认为 40px，
+                      然后在设置中给一个滑杆供用户调节」。与上面那些单选同属**外观**页
+                      （不新开分组：探针逐字断言左侧 5 项）。
+                      ⚠️ 控件形态由后端下发的 `spec.kind === 'range'` 决定，界面不写死 key
+                      —— 但"读到 min/max/step"这几格必须有值，缺了就不渲染（宁可不显示，
+                      也不要画一个范围是 NaN 的滑杆）。 */}
+                  {(() => {
+                    const sp = prefs.specOf('post_emoji_big')
+                    if (!sp || sp.kind !== 'range') return null
+                    // 读数取**偏好值**（读不到就用默认 —— `clampEmojiBig` 自己会把空值回默认）
+                    const cur = clampEmojiBig(prefs.values.post_emoji_big)
+                    return (
+                      <div className="aps-row aps-row-stack" data-setting="post_emoji_big">
+                        <div className="aps-row-main">
+                          <span className="aps-label">{sp.label}</span>
+                          <span className="aps-note">{sp.note}</span>
+                        </div>
+                        <div className="aps-row-ctl aps-range-ctl">
+                          <input
+                            type="range"
+                            data-emoji-big-slider="1"
+                            aria-label={sp.label}
+                            min={sp.min}
+                            max={sp.max}
+                            step={sp.step}
+                            value={cur}
+                            onChange={(e) => void pickEmojiBig(Number(e.target.value))}
+                          />
+                          <output className="aps-range-out" data-emoji-big-out="1">
+                            {cur}{sp.unit ?? ''}
+                          </output>
+                        </div>
+                      </div>
+                    )
+                  })()}
 
                   {/* 小窗三项开关（`widget_enabled` / `_click_through` / `_hide_fullscreen`）
                       随小窗整窗退役一起删掉（2026-10-01）。后端偏好键仍在（数据层留着以后

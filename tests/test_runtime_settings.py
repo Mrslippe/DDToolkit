@@ -516,6 +516,62 @@ def test_prefs_vod_player_window_whitelist(client, db):
     assert AppMetaRepo(db).get("prefs.vod_player_window") == "off"   # 没被改脏
 
 
+def test_prefs_post_emoji_big_is_a_range(client, db):
+    """大表情尺寸（2026-10-14，用户口径：「默认为 40px，然后在设置中给一个滑杆供用户调节」）。
+
+    这条判据钉四件事：
+    ① 默认 `40`；
+    ② spec 是**滑杆形态**（`kind="range"` + min/max/step/unit）—— 界面按它画控件，
+       缺任一项前端就不渲染（宁可不显示，也不画一个范围是 NaN 的滑杆）；
+    ③ 取值落在**白名单的档位上**（越界/怪值 400，且**不改脏**）；
+    ④ 属于「外观」组（探针逐字断言设置窗左侧只有 5 项，新开分组当场红）。
+    """
+    body = client.get("/settings/prefs").json()
+    assert body["values"]["post_emoji_big"] == "40"
+    assert body["defaults"]["post_emoji_big"] == "40"
+    spec = [s for s in body["specs"] if s["key"] == "post_emoji_big"]
+    assert spec, "后端没下发这个偏好 spec"
+    sp = spec[0]
+    assert (sp["kind"], sp["min"], sp["max"], sp["step"], sp["unit"]) == \
+        ("range", 24, 64, 2, "px")
+    assert sp["group"] == "外观"
+    # 每一档都能存（滑杆的档位就是白名单）；区间外与怪值一律 400
+    for ok in ("24", "40", "64"):
+        r = client.put("/settings/prefs", json={"values": {"post_emoji_big": ok}})
+        assert r.status_code == 200, r.text
+        assert AppMetaRepo(db).get("prefs.post_emoji_big") == ok
+    for bad in ("23", "65", "41", "big", ""):
+        before = AppMetaRepo(db).get("prefs.post_emoji_big")
+        r = client.put("/settings/prefs", json={"values": {"post_emoji_big": bad}})
+        if bad == "":
+            # 空串 = 回默认（既有口径），不是错误
+            assert r.status_code == 200
+            assert AppMetaRepo(db).get("prefs.post_emoji_big") is None
+        else:
+            assert r.status_code == 400, f"{bad!r} 该被拒"
+            assert AppMetaRepo(db).get("prefs.post_emoji_big") == before, "被改脏了"
+
+
+def test_prefs_post_emoji_big_default_matches_the_frontend_fallback():
+    """前端兜底值必须与后端默认一致（跨语言契约）。
+
+    为什么单钉一条：读不到后端时前端用自己那份兜底（CSS 里也写着 40px）—— 两边一漂，
+    症状是"设置里显示 40、实际画 32"这种**只有肉眼能发现**的错。
+    """
+    import re
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parent.parent / "frontend/src/utils/emojiSize.ts"
+    text = src.read_text(encoding="utf-8")
+    assert re.search(r"EMOJI_BIG_DEFAULT\s*=\s*40", text)
+    assert re.search(r"EMOJI_BIG_MIN\s*=\s*24", text)
+    assert re.search(r"EMOJI_BIG_MAX\s*=\s*64", text)
+    assert re.search(r"EMOJI_BIG_STEP\s*=\s*2", text)
+    css = (Path(__file__).resolve().parent.parent
+           / "frontend/src/styles/posts.css").read_text(encoding="utf-8")
+    assert "var(--post-emoji-big, 40px)" in css, "CSS 兜底值也得是 40px"
+
+
 def test_user_facing_copy_has_no_markdown_markers():
     """后端下发的文案（label / unit / effect / note / why / option）是**纯文本**，
     前端原样渲染。
