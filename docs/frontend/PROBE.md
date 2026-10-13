@@ -406,3 +406,39 @@ B2 到第十六轮已经稳定复现「**进全屏 → 2~3 秒后每秒丢 4 帧
 
 ⚠️ 豁免清单再加一条：**`text-overflow: ellipsis` 不算溢出** —— 省略号截断是长内容的**正规处置**
 （扩展目录那行靠它 + `title` 露出全值）；不豁免的话，修完 `min-w-0` 反而会红在它身上。
+
+### 6.27 ⚠️ 量「它凭什么在那儿」：`position` / 父链 / `data-state`（2026-10-13 加，`devlog/476`）
+
+「日历弹窗只有遮罩、看不见小窗」那一批，前四轮判据全错 —— 因为每一轮都只量了**位置**
+（`y` / `body.scrollTop` / 遮罩盒高），而那些量各说各话。真因是 `.lc-ms` 自己写了
+`position: relative`，把 `DialogContent` 基础类里 Tailwind 的 `.fixed` 压掉了
+（**无层级样式胜 `@layer utilities`**，层叠里层级先于特异性）⇒ 面板退化成普通流的一块、
+落在满视口 `#root` 之后（首屏下方）；聚焦输入框时 Chrome 再把 `body` 滚 486px 去够它。
+
+⇒ 三条做法：
+
+1. **几何判据要带"成因"字段**：`--archive` 的 `dlgNow()` 现在把 `position`、`parent`
+   （tag/类名/位置）、`offsetParent`、`data-state`、`getAnimations()` 与**视口/`#root` 盒**
+   一起报出来。少一个就得再跑一轮 —— 这一批为此白跑了三轮。
+2. **`opacity` 必须量"终态"**：虚拟时间下入场动画冻在 `from` 帧，原始 `opacity` 恒为 **0**
+   （`.lc-dlg` 早年也这样被误判过）。判据只认 `finish()` 之后那份 `opacitySettled`
+   （`probe.ts` 的 `nodeInfo`）。⚠️ `CSSStyleDeclaration` 是**活的**：要留"推动画前"的原始
+   读数必须**当场取值**，否则两份读数一模一样（这一句也踩过一次）。
+3. **判据先对"对象身份"再对"数值"** —— 这一批里身份错了**两次**，两种都要防：
+   ① **点错了格子**："未来格"原是按**第一个空格**找的，而本月第一个空格在**过去** ⇒
+   两段判据点的是同一格、量的是同一个窗；② **量到了尸首**：`.lc-ms` 是两个窗**共用**的类名，
+   而 Radix 的 Presence 要 `animationend` 才卸载、虚拟时间下退场动画不跑完 ⇒ 关掉的那个面板
+   **一直留在 DOM 里**，`document.querySelector('.lc-ms')` 拿到的是它（`data-state=closed`、
+   终态 opacity 0），判据却报成"这个窗看不见"。
+   ⇒ 三条做法：分岔口径与产品**逐字一致**（`c.key < todayKey`）· 取节点时**只认
+   `data-state='open'`**（并报 `openCount`，≠1 直接判失败）· 身份查询**按挑中的节点**算
+   （`d.querySelector('[data-rv-date]')`，别用 `document.querySelector`，否则尸首会把
+   记录场次窗判成"开错了窗"）。配套：关窗时**分几拍 `finish()` 退场动画**把尸首送走
+   （一拍摄不完 —— React 的提交是异步的，刚点完那一拍还没有退场动画可推）。
+   ⚠️ **反向验证**（把 `.lc-ms{position:relative}` 加回去再跑）确认过：这些判据会精确报红，
+   且报的是**开着的那一个**窗。
+
+判据落地在 `scripts/ui_probe.py` 的 `_reservation_dialog_failures`（身份 / `position=fixed`
+/ 在视口内 / 终态不透明度 / `scrollY`·卡片上缘·`body.scrollTop` 不许变）；
+视觉存档 `--archive --shot-resv` 会把记录窗**开着**截一张（`_ui_probe_tmp/resv-<宽>.png`）。
+

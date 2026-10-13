@@ -2283,8 +2283,20 @@ export async function runUiProbe(): Promise<void> {
       }
     }
     const inMonth = [...document.querySelectorAll<HTMLElement>('.lc-cell[data-lc-in-month="1"]')]
+    /** 今天的日号（只与**本月**格子比大小 —— `inMonth` 已经把上下月补位滤掉了）。 */
+    const today = new Date().getDate()
+    const dayOf = (c: HTMLElement) => Number((c.querySelector('.lc-day')?.textContent || '').trim())
+    /** 「空且**未来**」那一格 ⇒ 打开**预约**窗。
+     *
+     *  ⚠️ 2026-10-13 第 4 轮修正：这里原来只判"空格"，而空格里**第一个**是过去的
+     *  （本月 1 号到昨天都空）⇒ 点到的是"过去格"，打开的是**记录场次窗**。
+     *  于是 `reservation` 那一段与 `manual` 那一段量的是**同一个弹窗**：
+     *  归档里 `isReservation=false`、`title='手动记录一场直播'` 两处都写着。
+     *  我先前据此怀疑"量到了共用类名的残留节点" —— 其实是**探针点错了格子**。
+     *  分岔口径必须与产品逐字一致（`LiveCalendar.onCellClick`：`c.key < todayKey` ⇒ 记录场次）。 */
     const emptyFuture = inMonth.find(
-      (c) => !c.getAttribute('data-lc-has-session') && !c.getAttribute('data-resv-count'),
+      (c) => !c.getAttribute('data-lc-has-session') && !c.getAttribute('data-resv-count')
+        && Number.isFinite(dayOf(c)) && dayOf(c) >= today,
     ) ?? null
     const cellPop: Record<string, unknown> | null = null
     let resvProbe: Record<string, unknown> | null = null
@@ -2300,7 +2312,17 @@ export async function runUiProbe(): Promise<void> {
      *  只判 `.lc-ms` 在不在 DOM 是不够的 —— 它在，只是**没长出来/在视口外**也一样是坏的。
      *  所以量盒 + 计算样式的 opacity/visibility + 它相对视口的位置。 */
     const dlgNow = () => {
-      const d = document.querySelector<HTMLElement>('.lc-ms')
+      const all = [...document.querySelectorAll<HTMLElement>('.lc-ms')]
+      /** ⚠️ 取**开着**的那一个，不是"第一个"（2026-10-13 反向验证踩到）。
+       *
+       *  `.lc-ms` 是**两个窗共用**的类名（预约窗 + 记录场次窗），而 Radix 的 Presence
+       *  要等 `animationend` 才卸载 —— 虚拟时间下**退场动画不跑完 ⇒ 那个已关闭的节点
+       *  一直留在 DOM 里**（`PROBE.md` 里"判关没关必须看 `data-state`"那条坑的新形态）。
+       *  按"第一个"取就会拿到**上一个窗的尸首**（`data-state=closed`、终态 opacity 0），
+       *  判据却报成"这个窗看不见"。所以：开着的排前面，`openCount` 也一并报出来。 */
+      const open = all.filter((n) => n.getAttribute('data-state') === 'open')
+      const ordered = [...open, ...all.filter((n) => n.getAttribute('data-state') !== 'open')]
+      const d = ordered[0] ?? null
       // 对照组：**场次详情窗**（`.lc-dlg`）—— 用户口径「不能让这个窗口和详情窗一样吗」。
       // 它在本仓是"能正常显示"的那一个，所以它的读数就是"正常"的基准：
       // 同一次运行里两者对比，才知道 `.lc-ms` 的异常是它自己的还是探针环境的。
@@ -2309,17 +2331,102 @@ export async function runUiProbe(): Promise<void> {
       if (!d) return null
       const r = d.getBoundingClientRect()
       const cs = getComputedStyle(d)
+      // ⚠️ `CSSStyleDeclaration` 是**活的**：`cs.opacity` 等到 return 时才取值就变成"推完动画后"
+      //    那一份了。要留"原始读数"就必须**当场取**（这一句踩过一次，读出来两份一模一样）。
+      const opacityRaw = cs.opacity
+      /** 一个节点的"它凭什么在那儿"（2026-10-13 第 4 轮）。
+       *
+       *  前三轮我量的都是"它在哪儿"，于是每轮只能解释一半：y=772 与 opacity=0 各说各话。
+       *  这一轮把**成因**一起量出来：
+       *   - `position` —— `.lc-ms` 与 `.lc-dlg` 唯一的**样式差别**就在这一条（前者写了
+       *      `position: relative`，后者一个字没写、吃 Tailwind 的 `fixed`）。posts.css 是
+       *     **无层级**样式，Tailwind v4 的 utilities 在 `@layer utilities` 里 ——
+       *     层叠里**层级先于特异性**（无层级胜分层级），所以 `.lc-ms{position:relative}`
+       *     会**压掉** `fixed`。若这条成立，它就根本不是 fixed 面板，而是普通文档流里的一块。
+       *   - `parent`/`offsetParent` —— 普通流的话它就在**父节点**（Radix 的 portal div，
+       *     `document.body` 的直接子节点）里的位置。`#root{height:100%}` ⇒ body 高 = 视口高，
+       *     portal div 排在 `#root` **之后** ⇒ 面板整块落在**首屏下方**（用户报的"看不见小窗"）。
+       *   - `animations[].currentTime` —— `opacity=0` 的另一半：入场动画若卡在第 0 帧，
+       *     计算值就是 `from{opacity:0}`。虚拟时间下动画/过渡推不推进，是本仓量过错的老坑。
+       *   - `count`/`nodes[]` —— `.lc-ms` 是**两个弹窗共用的类名**（预约窗 + 记录窗），
+       *     先开预约窗再量记录窗时，量到的可能是上一个窗还在播退场的**残留节点**。 */
+      const nodeInfo = (n: HTMLElement) => {
+        const b = n.getBoundingClientRect()
+        const s = getComputedStyle(n)
+        const par = n.parentElement
+        const anims = n.getAnimations()
+        /** 动画**冻在第 0 帧**时 `opacity` 读到的就是 `from{opacity:0}` —— 那是尺子，不是产品。
+         *  所以推完动画再读一份 `opacitySettled`（判据只认这一份，理由见文件顶 `settleTransforms`）。 */
+        const opacityRaw = s.opacity
+        for (const a of anims) { try { a.finish() } catch { /* 无限循环等不可 finish：忽略 */ } }
+        const opacitySettled = getComputedStyle(n).opacity
+        return {
+          rect: { x: Math.round(b.left), y: Math.round(b.top),
+                  w: Math.round(b.width), h: Math.round(b.height) },
+          opacity: opacityRaw,
+          opacitySettled,
+          position: s.position,
+          dataState: n.getAttribute('data-state'),
+          animName: s.animationName,
+          animState: s.animationPlayState,
+          anims: anims.map((a) => ({
+            name: (a as CSSAnimation).animationName ?? (a as unknown as { id?: string }).id ?? '?',
+            state: a.playState,
+            at: Math.round(Number(a.currentTime) || 0),
+            dur: (a.effect?.getTiming().duration ?? null),
+          })),
+          title: (n.querySelector('.lc-ms-title')?.textContent || '').trim(),
+          text: (n.textContent || '').trim().slice(0, 24),
+          firstInput: n.querySelector('input')?.getAttribute('id') ?? null,
+          parent: par ? {
+            tag: par.tagName, cls: (par.className || '').toString().slice(0, 40),
+            y: Math.round(par.getBoundingClientRect().top),
+            h: Math.round(par.getBoundingClientRect().height),
+            position: getComputedStyle(par).position,
+          } : null,
+          offsetParent: n.offsetParent
+            ? `${(n.offsetParent as HTMLElement).tagName}.`
+              + ((n.offsetParent as HTMLElement).className || '').toString().slice(0, 24)
+            : null,
+        }
+      }
+      const refOpacityRaw = ref ? getComputedStyle(ref).opacity : null
+      if (ref) {
+        for (const a of ref.getAnimations()) {
+          try { a.finish() } catch { /* 忽略 */ }
+        }
+      }
       return {
         x: Math.round(r.left), y: Math.round(r.top),
         w: Math.round(r.width), h: Math.round(r.height),
-        opacity: cs.opacity, visibility: cs.visibility, display: cs.display,
+        /** ⚠️ 只有 `nodes[0].opacitySettled` 是"看得见吗"的读数：这里是**推完动画前**的原始值，
+         *  虚拟时间下恒为 `from` 帧的 0（`.lc-dlg` 也吃过这个亏，见文件顶那条注释）。 */
+        opacity: opacityRaw, visibility: cs.visibility, display: cs.display,
+        position: cs.position,
         animationName: cs.animationName, animationPlayState: cs.animationPlayState,
         inViewport: r.bottom > 0 && r.top < window.innerHeight
           && r.right > 0 && r.left < window.innerWidth,
         title: (d.querySelector('.lc-ms-title')?.textContent || '').trim(),
+        /** 身份**按挑中的那个节点**算，不按文档查（同一次反向验证踩到）：
+         *  `document.querySelector('[data-rv-date]')` 会把"还留在 DOM 里的预约窗尸首"算进来
+         *  ⇒ 记录场次窗那一段被报成"开错了窗"（标题明明是「手动记录一场直播」）。 */
+        isReservation: !!d.querySelector('[data-rv-date]'),
+        count: all.length,
+        openCount: open.length,
+        nodes: ordered.map(nodeInfo),
+        viewport: {
+          w: window.innerWidth, h: window.innerHeight,
+          rootH: Math.round(
+            document.getElementById('root')?.getBoundingClientRect().height ?? 0),
+          rootTop: Math.round(
+            document.getElementById('root')?.getBoundingClientRect().top ?? 0),
+          bodyH: Math.round(document.body.getBoundingClientRect().height),
+        },
         refDialog: ref ? {
           y: Math.round(ro!.top), h: Math.round(ro!.height),
-          opacity: getComputedStyle(ref).opacity,
+          opacity: refOpacityRaw,
+          opacitySettled: getComputedStyle(ref).opacity,
+          position: getComputedStyle(ref).position,
           animationName: getComputedStyle(ref).animationName,
         } : null,
         overlay: (() => {
@@ -2329,6 +2436,7 @@ export async function runUiProbe(): Promise<void> {
           return {
             h: Math.round(b.height), y: Math.round(b.top),
             display: getComputedStyle(o).display,
+            position: getComputedStyle(o).position,
           }
         })(),
       }
@@ -2384,13 +2492,15 @@ export async function runUiProbe(): Promise<void> {
             document.querySelector('.live-calendar')?.getBoundingClientRect().top ?? 0),
           focus: ae ? `${ae.tagName}.${(ae.className || '').toString().slice(0, 18)}` : null,
           dlgY: Math.round(
-            document.querySelector('.lc-ms')?.getBoundingClientRect().top ?? 0),
+            document.querySelector('.lc-ms[data-state="open"]')
+              ?.getBoundingClientRect().top ?? 0),
         })
       }
       document.removeEventListener('scroll', onScroll, true)
       restore()
       const out = {
-        opened: !!document.querySelector('.lc-ms'),
+        // 「打开了」= 有**开着**的面板（不是"DOM 里有 `.lc-ms`" —— 尸首也算有）
+        opened: !!document.querySelector('.lc-ms[data-state="open"]'),
         isReservation: !!document.querySelector('[data-rv-date]'),
         dialog: dlgNow(),
         before,
@@ -2401,16 +2511,32 @@ export async function runUiProbe(): Promise<void> {
       }
       document.querySelector<HTMLElement>('.lc-ms-actions .lc-ms-btn')?.click()
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
-      await sleep(400)
+      /** ⚠️ 关掉之后**把退场动画推完**（2026-10-13）：Radix 的 Presence 靠 `animationend`
+       *  才卸载，而虚拟时间下退场动画不跑完 ⇒ 那个"已关闭"的面板**一直留在 DOM 里**，
+       *  下一段量到的就是它（反向验证实测：记录场次窗那一段量到了预约窗的尸首）。
+       *  `finish()` 让动画走到终点、`animationend` 照常派发 ⇒ Presence 才肯卸载。
+       *  ⚠️ **要分几拍试**：刚点完那一拍 React 还没提交（`data-state` 仍是 `open`），
+       *  那时没有退场动画可推 —— 一次性的 `finish()` 会空转（第一次就是这么写的）。 */
+      for (let i = 0; i < 6; i++) {
+        const closed = [...document.querySelectorAll<HTMLElement>(
+          '.lc-ms[data-state="closed"], .lc-dlg[data-state="closed"]')]
+        if (!closed.length) break
+        for (const n of closed) {
+          for (const a of n.getAnimations()) {
+            try { a.finish() } catch { /* 忽略 */ }
+          }
+        }
+        await sleep(50)
+      }
+      await sleep(120)
       return out
     }
     /** 空且**已过去**的那一格（日号 < 今天）⇒ 打开的是"记录场次"窗。
      *  ⚠️ 早先写的是"取最后一个空格"，那会选到本月末尾（未来）⇒ 打开预约窗，
      *  于是判据量错了对象（`devlog/476` 那次"记录场次窗不可见"的误报）。 */
-    const today = new Date().getDate()
     const emptyPast = inMonth.find((c) => {
       if (c.getAttribute('data-lc-has-session') || c.getAttribute('data-resv-count')) return false
-      const n = Number((c.querySelector('.lc-day')?.textContent || '').trim())
+      const n = dayOf(c)
       return Number.isFinite(n) && n < today
     }) ?? null
     // 视觉存档（`--shot-resv`）：让记录窗**开着**截一张 —— 用户报的是"看不见小窗"，

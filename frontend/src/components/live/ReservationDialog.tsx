@@ -22,7 +22,7 @@ import { useEffect, useState } from 'react'
 
 import { api } from '../../api/api'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog'
-import { noScrollAutoFocus, useFreezeBodyScroll } from './dialogScroll'
+import { noScrollAutoFocus } from './dialogScroll'
 
 interface Props {
   open: boolean
@@ -52,10 +52,9 @@ export default function ReservationDialog({
     setBusy(false)
   }, [open, dayKey])
 
-  // 冻结 body：焦点滚进视口那一下没得滚，页面不会被顶走。
-  // ⚠️ 必须走这个 hook（内部 `useLayoutEffect`）—— 用 `useEffect` 晚一拍，
-  //    那时 body 已经滚过了（`devlog/476` 实测：`body.scrollTop` 那时已是 486）。
-  useFreezeBodyScroll(open)
+  // ⚠️ 这里曾经挂着 `useFreezeBodyScroll(open)`（钉住 body 的补丁）—— 病根在
+  // `posts.css` 的 `.lc-ms`（`position: relative` 压掉了 `fixed`），已在那里修掉并实测确认，
+  // 补丁整套删除（见 `dialogScroll.ts` 的文件头）。
 
   const canSave = title.trim().length > 0 && !busy && vtuberId != null
 

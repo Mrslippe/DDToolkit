@@ -1023,12 +1023,19 @@ DOM 与类名：`ManualSessionDialog.test.tsx` 钉住「只提交改过的字段
 | 区域 | 类名 | 说明 |
 |---|---|---|
 | 面板根 | `.lc-ms`（Radix `DialogContent`） | **420px 定宽**（`max-width calc(100vw-32px)`）、r12、白底 + 发丝边 + `--shadow-dialog`、**z-61**；复用详情弹窗的遮罩类 `.lc-dlg-backdrop`（同为 z-60）；入场 `lc-dlg-pop` 0.2s / 退场 `lc-dlg-pop-out` 0.16s（`[data-state='closed']`，与 `.lc-dlg` **分两条写** —— 合并选择器会让 `LiveSessionDialog.test.tsx` 的 CSS 正则假红） |
+| 定位 | **不写 `position`**（2026-10-13，`devlog/476`） | 面板的 `fixed` 来自 `DialogContent` 基础类；`.lc-ms` 一写 `position` 就会**压掉它**（posts.css 无层级胜 `@layer utilities`）⇒ 面板掉进 portal 的普通流、落在满视口 `#root` 之后（用户报的「有遮罩没小窗」＋ Chrome 滚 `body` 去够聚焦框 = 「弹窗把页面挤上去」）。契约由 `ManualSessionDialog.test.tsx` ⑧ + 探针 `_reservation_dialog_failures` 双守 |
 | 头部 | `.lc-ms-head` / `.lc-ms-title` / `.lc-ms-sub` | 标题 15px/600（「手动记录一场直播」/「编辑场次」）+ 副行 11.5px；`DialogTitle`/`DialogDescription` 关联 |
 | 表单 | `.lc-ms-body` / `.lc-ms-row` / `.lc-ms-label` / `.lc-ms-input` / `.lc-ms-hint` | 四行：开始 / 结束 / 标题 / 录播；标签定宽 44px（四个输入框左缘对齐）；时间用 `datetime-local`（**原样提交**，服务端按本机时区解释）；结束留空 = 进行中；标题 `maxLength=80`（与服务端 422 同口径）；提示行在输入框下方占满一行 |
 | 可编辑性 | `autoOnly` | 服务端 `manual===false`（自动抓来的）⇒ 开始/结束/标题 `disabled` + `.lc-ms-note` 说明「只能补录播地址，时间和标题来自平台」；**不渲染删除钮** |
 | 焦点 | `.lc-ms-input:focus-visible` | `outline: var(--focus-ring)`（`tests/test_focus_contract.py` 会红在散落色 / `outline: none`） |
 | 失败提示 | `.lc-ms-error`（`role=alert`） | 409/422 的 `detail` **原文照显**（点名撞上哪一场的中文），不换成「保存失败」 |
 | 动作行 | `.lc-ms-actions` / `.lc-ms-btn`（`.primary` / `.danger`） | 左=删除（仅手动场次，**两步确认**：`.lc-ms-del-confirm`，不用 `window.confirm`）· 右=取消 / 保存（无改动时 `disabled`） |
+
+**同族的第二个窗**：`components/live/ReservationDialog.tsx`（2026-10-13，点**未来**空日期格进来）
+复用 `.lc-ms` / `.lc-ms-*` 全套类与上面那条定位契约（同一种弹窗不该有两套外观），字段只有
+**日期 + 标题** —— 预约只到日、写 `vtuber_events`，摆一个"填了也会被忽略"的时刻框比不摆更糟。
+入口分岔口径在 `LiveCalendar.onCellClick`（`c.key < todayKey` ⇒ 记录场次窗，否则预约窗），
+探针按**同一口径**点两格，并把"开的是哪个窗"作为断言前置项（`devlog/476`）。
 
 ### B5. 粉丝趋势卡 `<FanTrendChart>`（components/FanTrendChart.tsx）
 

@@ -2429,12 +2429,42 @@ _WHICH_LABEL = {"login": "登录浮窗", "legal": "协议闸门",
                 "cap-limits": "受限说明窗", "other": "其它弹窗"}
 
 
-def _reservation_dialog_failures(rv: object, where: str) -> list[str]:
-    """点空日期格 → 记录窗的几何判据（2026-10-13）。
+def _print_dialog_vis(rv: dict, pad: str) -> None:
+    """把"这个弹窗到底长得怎么样"一次打全（2026-10-13，`devlog/476`）。
 
-    用户报：「新建预约弹窗把页面挤上去了」。弹窗是 portal + `fixed` 居中，**不会**改布局；
-    坏的是页面被滚走了 —— 而那在屏幕上看是"卡片往上跳了一下"，从截图上分不清是弹窗太大
-    还是页面滚了。判据就量那两件：`scrollY` 与卡片上缘开合前后必须一致。
+    为什么要这么多行：这个毛病查了四轮，每轮都因为**少打一个量**而只能解释一半
+    （先是"在不在 DOM"，再是"在不在视口"，再是"body 滚没滚"，最后才量到 `position`）。
+    一次打全：盒 / 定位方式 / 原始与终态不透明度 / 动画 / 父链 / 对照窗。
+    """
+    d = rv.get("dialog") or {}
+    n0 = ((d.get("nodes") or [{}]) or [{}])[0]
+    print(f"{pad}盒 {d.get('w')}×{d.get('h')} @({d.get('x')},{d.get('y')})"
+          f" · position={d.get('position')} · 在视口内={d.get('inViewport')}"
+          f" · opacity {n0.get('opacity')} → 终态 {n0.get('opacitySettled')}"
+          f" · anim={n0.get('animName')}/{n0.get('animState')} {n0.get('anims')}"
+          f" · data-state={n0.get('dataState')}")
+    print(f"{pad}父链：{n0.get('parent')} · offsetParent={n0.get('offsetParent')}"
+          f" · 视口 {d.get('viewport')} · `.lc-ms` 节点数={d.get('count')}"
+          f"（开着 {d.get('openCount')}）")
+    print(f"{pad}对照：遮罩 {d.get('overlay')} · 详情窗(.lc-dlg) {d.get('refDialog')}")
+
+
+def _reservation_dialog_failures(rv: object, where: str, *,
+                                 want_reservation: bool) -> list[str]:
+    """点空日期格 → 记录/预约窗的判据（2026-10-13，`devlog/476`）。
+
+    两件事一起判：
+
+    1. **身份对账**：点**未来**格必须开**预约**窗、点**过去**格必须开**记录场次**窗。
+       ⚠️ 这一条是补上的：探针原来两段都点到同一个窗（归档读数里两处 `isReservation`
+       都是 `false`、标题都是「手动记录一场直播」）—— 因为"空且未来"那一格是按
+       **第一个空格**找的，而本月第一个空格在过去。于是"预约窗"那一段量的是记录窗，
+       我也因此一度怀疑"量到了共用类名的残留节点"（那是**探针点错格子**，不是产品）。
+    2. **看得见 + 不许挤页面**：盒必须在视口内、面板必须是 `fixed`、不透明度终态 ≈ 1，
+       且开合前后 `scrollY` 与卡片上缘不许变。
+       ⚠️ 不透明度只认 `opacitySettled`（把入场动画 `finish()` 之后那一份）：
+       探针跑在 `--virtual-time-budget` 下、动画冻在 `from` 帧，原始 `opacity` 恒为 0
+       —— 那是**尺子**不是产品（`.lc-dlg` 早年也这样误判过，见 `probe.ts` 顶部注释）。
     """
     if not isinstance(rv, dict) or not rv:
         return []
@@ -2444,6 +2474,12 @@ def _reservation_dialog_failures(rv: object, where: str) -> list[str]:
     if not rv.get("opened"):
         bad.append(f"@{where} 点空日期格没有打开记录窗 —— 用户点了个没反应的格子")
         return bad
+    if bool(rv.get("isReservation")) is not want_reservation:
+        bad.append(
+            f"@{where} 点的格子开错了窗：期望"
+            f"{'预约窗（未来格）' if want_reservation else '记录场次窗（过去格）'}，"
+            f"实得 isReservation={rv.get('isReservation')!r}、"
+            f"标题 {((rv.get('dialog') or {}).get('title'))!r}")
     if before.get("scrollY") != after.get("scrollY"):
         bad.append(
             f"@{where} 打开记录窗把页面滚了：scrollY {before.get('scrollY')} → "
@@ -2452,6 +2488,46 @@ def _reservation_dialog_failures(rv: object, where: str) -> list[str]:
         bad.append(
             f"@{where} 打开记录窗之后卡片上缘从 {before.get('cardTop')} 变成 "
             f"{after.get('cardTop')} —— 页面被挤动了")
+    # 面板自身的可见性（用户报的"有灰色遮罩但没看见小窗"就长这样）
+    d = rv.get("dialog") or {}
+    nodes = d.get("nodes") or []
+    first = nodes[0] if nodes else {}
+    # 「量到的是不是**这个**窗」先对账（反向验证 2026-10-13 实测踩到）：
+    # 关掉的那个面板可能还留在 DOM 里（虚拟时间下退场动画不跑完 ⇒ Radix 的 Presence 不卸载），
+    # 于是 `querySelector('.lc-ms')` 拿到的是**上一个窗的尸首**（`data-state=closed`、终态 opacity 0），
+    # 判据却会报成"这个窗看不见"。所以先看**开着的有几个**。
+    if d.get("openCount") != 1:
+        bad.append(
+            f"@{where} 记录窗：当场**开着**的 `.lc-ms` 面板有 {d.get('openCount')} 个"
+            f"（DOM 里共 {d.get('count')} 个）—— 量到的可能是上一个窗的残留节点；"
+            f"各节点：{[(n.get('dataState'), n.get('title'), n.get('rect')) for n in nodes]}")
+    if d.get("position") != "fixed":
+        bad.append(
+            f"@{where} 记录窗的面板不是 `position: fixed`（实得 {d.get('position')!r}）——"
+            f" 它会掉进 portal 的普通流里、落在满视口的 `#root` 之后（首屏下方）"
+            f"（成因：`.lc-ms` 自己写了 position ⇒ 压掉 DialogContent 的 `fixed`）")
+    if not d.get("inViewport"):
+        bad.append(
+            f"@{where} 记录窗在 DOM 里但**落在视口外**：盒 {d.get('w')}×{d.get('h')} @"
+            f"({d.get('x')},{d.get('y')}) · 视口 {d.get('viewport')} —— "
+            f"用户看到的就是「只有灰色遮罩」")
+    if not first:
+        bad.append(f"@{where} 记录窗没有可量的面板节点（`.lc-ms` 一个都没采到）")
+    else:
+        try:
+            settled = float(first.get("opacitySettled"))
+        except (TypeError, ValueError):
+            settled = -1.0
+        if settled < 0.99:
+            bad.append(
+                f"@{where} 记录窗的终态不透明度只有 {first.get('opacitySettled')!r}"
+                f"（原始读数 {first.get('opacity')!r} · 动画 {first.get('anims')}）——"
+                f" 用户看不见它")
+    # body 被滚 486px 那次是"弹窗挤页面"的真正机制：滚动量本身也要报出来
+    if after.get("bodyScrollTop") not in (0, None):
+        bad.append(
+            f"@{where} 打开记录窗之后 `body.scrollTop` = {after.get('bodyScrollTop')} ——"
+            f" 文档层本该 `overflow: hidden` 且不滚（Chrome 为把聚焦的输入框滚进视口会动它）")
     return bad
 
 
@@ -2887,6 +2963,12 @@ def main() -> int:
         "--shot-cell-pop",
         action="store_true",
         help="额外存图：`--cell-pop` 那一档截一张 hover 悬浮窗（_ui_probe_tmp/cell-pop-<宽>.png）",
+    )
+    ap.add_argument(
+        "--shot-resv",
+        action="store_true",
+        help="额外存图：`--archive` 那一档把**记录场次窗开着**截一张"
+             "（_ui_probe_tmp/resv-<宽>.png）—— 「有遮罩没小窗」这类毛病只有看图才算验过。",
     )
     ap.add_argument(
         "--messages",
@@ -3838,6 +3920,13 @@ def main() -> int:
                 arch_url += f"&day={urllib.parse.quote(args.archive_day)}"
                 print(f"[probe] archive 指定日号 = {args.archive_day}")
             res = _run_probe(edge, arch_url, w, args.height, WORK, "archive")
+            # 视觉存档（`--shot-resv`）：`keep=resv` 让探针把**记录场次窗开着**并停在那一帧
+            # （见 `probe.ts` 里那段 `keep === 'resv'`）—— "有遮罩没小窗"这类毛病，
+            # 探针能报"在视口内"，但报不了"长得对不对"，只有看图才算验过。
+            if args.shot_resv:
+                shot = WORK / f"resv-{w}.png"
+                _run_shot(edge, f"{arch_url}&keep=resv", w, args.height, shot)
+                print(f"  截图（记录场次窗开着）→ {shot}")
             cal = (res or {}).get("calendar") or {}
             print(f"\n=== 直播日历实渲染（@{w}）{cal.get('title')!r} note={cal.get('note')!r} ===")
             for c in cal.get("cells") or []:
@@ -4056,10 +4145,13 @@ def main() -> int:
             # 用户报的是"新建预约弹窗把页面挤上去了"：弹窗自身居中正常，坏的是**页面被滚了**。
             # 判据 = 开合前后 `window.scrollY` 与卡片上缘不许变。
             rv = (cal or {}).get("reservation")
-            rv_bad = _reservation_dialog_failures(rv, w)
+            rv_bad = _reservation_dialog_failures(rv, f"{w} 未来格", want_reservation=True)
             if rv:
-                print(f"  点空日期格 → 记录窗：{'打开了' if rv.get('opened') else '没打开'} · "
-                      f"本月 {rv.get('inMonth')} 格 / 候选空位 {rv.get('candidates')} · "
+                print(f"  点未来空格 → 预约窗：{'打开了' if rv.get('opened') else '没打开'}"
+                      f" · isReservation={rv.get('isReservation')} · "
+                      f"标题 {((rv.get('dialog') or {}).get('title'))!r}")
+                _print_dialog_vis(rv, "      ")
+                print(f"      本月 {rv.get('inMonth')} 格 / 候选空位 {rv.get('candidates')} · "
                       f"scrollY {rv.get('before', {}).get('scrollY')} → "
                       f"{rv.get('after', {}).get('scrollY')} · 卡片上缘 "
                       f"{rv.get('before', {}).get('cardTop')} → "
@@ -4079,14 +4171,13 @@ def main() -> int:
             # ⚠️ 2026-10-13 用户报"有灰色遮罩但没看见小窗" → 只判 `.lc-ms` 在不在 DOM
             # 是不够的：它在，却没长出来/落在视口外，也一样是坏的。所以这里连**盒**一起判。
             mp = (cal or {}).get("manual")
-            mp_bad = _reservation_dialog_failures(mp, f"{w} 过去格")
+            mp_bad = _reservation_dialog_failures(mp, f"{w} 过去格", want_reservation=False)
             md = (mp or {}).get("dialog") or {}
             if mp:
                 print(f"  点过去空格 → 记录场次窗：{'打开了' if mp.get('opened') else '没打开'}"
-                      f" · 标题 {md.get('title')!r} · 盒 {md.get('w')}×{md.get('h')} @"
-                      f"({md.get('x')},{md.get('y')}) · opacity={md.get('opacity')}"
-                      f" · anim={md.get('animationName')} · 在视口内={md.get('inViewport')}")
-                print(f"      对照：遮罩 {md.get('overlay')} · 详情窗(.lc-dlg) {md.get('refDialog')}")
+                      f" · isReservation={mp.get('isReservation')} · "
+                      f"标题 {md.get('title')!r}")
+                _print_dialog_vis(mp, "      ")
                 for fr in (mp.get("frames") or [])[:6]:
                     print(f"      +{fr.get('t')}ms：body={fr.get('body')} de={fr.get('de')}"
                           f" 卡片={fr.get('card')} dlgY={fr.get('dlgY')} 焦点={fr.get('focus')}")
@@ -4095,11 +4186,6 @@ def main() -> int:
                     for line in (wr.get("stack") or [])[:5]:
                         print(f"          {line}")
                 print(f"      marks={mp.get('marks')}")
-            if md and not (md.get("w") and md.get("h") and md.get("inViewport")):
-                mp_bad.append(
-                    f"@{w} 记录场次窗在 DOM 里但**看不见**：盒 {md.get('w')}×{md.get('h')} @"
-                    f"({md.get('x')},{md.get('y')}) · opacity={md.get('opacity')} · "
-                    f"在视口内={md.get('inViewport')} —— 用户看到的是'只有灰色遮罩'")
             if mp_bad:
                 bad.extend(mp_bad)
             if tf_bad:
@@ -6534,7 +6620,8 @@ def main() -> int:
         # ⚠️ R37-P4a 实跑踩到：加了 `--shot-board` 却忘了加进这个条件 —— 跑完全绿、图也被删了，
         # 只留一行「截图 → …」日志指向一个不存在的路径（用户要看的产物不能删）。
         if (not failures and not args.shot and not args.shot_board
-                and not args.shot_toolbar and not args.shot_cell_pop):
+                and not args.shot_toolbar and not args.shot_cell_pop
+                and not args.shot_resv):
             shutil.rmtree(WORK, ignore_errors=True)
 
 

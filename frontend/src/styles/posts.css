@@ -7120,22 +7120,26 @@ img.hero-avatar {
    而不是跟内容走 —— `datetime-local` 的宽度由浏览器决定，跟内容走会随输入抖动。
    层级：同一遮罩 z=60，面板 z=61；两个弹窗同时开时靠 DOM 顺序（后渲染的在上），
    这与 Radix 自己的做法一致（`.lc-dlg` 的注释说明了同一件事）。 */
-/* ⚠️ 弹窗位置**只由视口决定**（2026-10-13，`devlog/476`）。
-   探针分帧实测（`ui_probe --archive`）：
-     +0ms / +16ms：body.scrollTop=762 · 弹窗 y=-1（**位置是对的**）
-     +50ms 起    ：被人为钳回 body.scrollTop=0 ⇒ 遮罩坐标随之变 ⇒ 弹窗被甩到 y=761（视口外）
-   ⇒ 根因不是"页面被滚"，而是**把滚动量改回去**这件事本身：`fixed` 遮罩的居中算在
-   滚动盒上，滚动量一变、遮罩里的居中就跟着重算。
-   自己 `position: fixed` + `translate(-50%,-50%)` 之后，弹窗的坐标只跟视口走 ——
-   body 滚不滚都不影响它落在屏幕正中。（`inset`/`margin` 居中同理，但这两个属性
-   `.lc-ms` 上别处没用到，显式写出来最不容易被后来的改动破坏。） */
+/* ⚠️ **这里一个字都不许写 `position`**（2026-10-13，`devlog/476` —— 两个用户报的毛病
+   是**同一个根因**，就坏在这一条上）。
+
+   改前这里是 `position: relative`（当时只为让 `z-index: 61` 生效），而面板的
+   `position: fixed` 来自 `DialogContent` 的基础类（Tailwind 的 `.fixed`）。
+   两者**特异性相同、谁赢看层叠**：posts.css 是无层级样式，Tailwind v4 的 utilities
+   在 `@layer utilities` 里 —— 层叠顺序是 **层级先于特异性**（无层级胜分层级），
+   于是 `.lc-ms{position:relative}` **压掉了** `fixed`。
+
+   后果（同一份归档读数，视口 1100×621）：
+     · 面板不再是 fixed ⇒ 它是 Radix portal div 里的**普通流**一块，而那个 div 排在
+       `#root{height:100%}`（= 满视口高）**之后** ⇒ 面板落在首屏下方 `y=772`（视口只有 621）
+       = 用户报的「**有灰色遮罩但没看见小窗**」；
+     · Chrome 为了把表单第一个输入框（`datetime-local`）滚进视口，**把 body 滚了 486px**
+       （`body.scrollTop 0 → 486`、`#root` 卡片上缘 100 → **-386**）
+       = 用户报的「**弹窗把页面挤上去了**」。
+   `.lc-dlg`（场次详情窗）从头到尾没写过 `position`，所以它一直是好的 ——
+   用户那句「不能让这个窗口和正常的直播场次详情窗口的层级一样吗」正是这个意思。
+   `z-index` 不吃亏：`fixed` 本身就是"已定位"，61 照样生效（`.lc-dlg` 同理）。 */
 .lc-ms {
-  /* ⚠️ 与 `.lc-dlg`（场次详情窗，**能正常显示**）保持同一套做法（2026-10-13，`devlog/476`）：
-     面板自己**不定位**，居中完全交给遮罩的 flex —— 用户口径：「不能让这个窗口和正常的
-     直播场次详情窗口的层级一样吗」。我先前给 `.lc-ms` 加的 `position:fixed` +
-     `translate(-50%,-50%)` + 改动画 keyframe 是一整套自己发明的 hack，已全部撤掉。
-     两者的差别只在宽度与 `max-height`（详情窗 720×680，这个表单窗 420 自适应）。 */
-  position: relative;
   z-index: 61;
   width: 420px;
   max-width: calc(100vw - 32px);

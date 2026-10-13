@@ -229,3 +229,25 @@ describe('⑦ 退场动画的前提（与详情弹窗同一条纪律）', () => 
     ).toBe(true)
   })
 })
+
+describe('⑧ 定位契约：面板的 `fixed` 只能来自 DialogContent（2026-10-13，devlog/476）', () => {
+  it('`.lc-ms` 自己**不许**声明 `position`', () => {
+    const css = readFileSync(resolve(__dirname, '../../styles/posts.css'), 'utf8')
+    const block = /^\.lc-ms\s*\{([^}]*)\}/m.exec(css)
+    expect(block, 'posts.css 里找不到 `.lc-ms { … }` 这一块').toBeTruthy()
+    // ⚠️ 这条不是洁癖，是**实测出来的那两个毛病**：曾被写成 `position: relative`（为了让
+    //    `z-index: 61` 生效），而 posts.css 是**无层级**样式、Tailwind 的 `.fixed` 在
+    //    `@layer utilities` 里 —— 层叠里层级先于特异性 ⇒ `relative` 压掉了 `fixed`。
+    //    面板于是成了 portal div 里的普通流一块（排在满视口的 `#root` 之后 ⇒ 落在首屏下方，
+    //    "有遮罩没小窗"），Chrome 再把 body 滚 486px 去够聚焦的输入框（"弹窗把页面挤上去了"）。
+    expect(
+      /\bposition\s*:/.test(block![1]),
+      '`.lc-ms` 不许写 position —— 写了就会压掉 DialogContent 的 `fixed`（见 posts.css 那段注释）',
+    ).toBe(false)
+  })
+
+  it('DialogContent 的基础类里确实有 `fixed`（上一条的**前提**，缺了就两头落空）', () => {
+    const tsx = readFileSync(resolve(__dirname, '../ui/dialog.tsx'), 'utf8')
+    expect(tsx.includes('"fixed top-[50%]')).toBe(true)
+  })
+})

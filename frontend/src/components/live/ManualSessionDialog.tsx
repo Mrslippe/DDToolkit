@@ -30,7 +30,7 @@ import {
   type ManualFormValues, buildManualPatch, canSubmitNew, defaultManualRange,
   defaultRangeForDay, formFromSession, hasChanges,
 } from './manualSessionForm'
-import { noScrollAutoFocus, useFreezeBodyScroll } from './dialogScroll'
+import { noScrollAutoFocus } from './dialogScroll'
 
 interface Props {
   open: boolean
@@ -77,8 +77,9 @@ export default function ManualSessionDialog({
     setConfirmDel(false)
   }, [open, session, newDay])
 
-  // 冻结 body（`useLayoutEffect`）：抢在 Radix 自动聚焦那一下之前锁住，页面不会被顶走
-  useFreezeBodyScroll(open)
+  // ⚠️ 这里曾经挂着 `useFreezeBodyScroll(open)`（钉住 body 的补丁）—— 病根在
+  // `posts.css` 的 `.lc-ms`（`position: relative` 压掉了 `fixed`），已在那里修掉并实测确认，
+  // 补丁整套删除（见 `dialogScroll.ts` 的文件头）。
 
   const set = (k: keyof ManualFormValues) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setValues((v) => ({ ...v, [k]: e.target.value }))
