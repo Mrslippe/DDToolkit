@@ -23,6 +23,8 @@ import LiveSessionDialog from './live/LiveSessionDialog'
 // 手动记录/编辑一场（B2，devlog/454）：日历工具栏的「+」与详情弹窗的铅笔共用同一个表单
 import ManualSessionDialog from './live/ManualSessionDialog'
 import ReservationDialog from './live/ReservationDialog'
+import VodDialog from './live/VodDialog'
+import { openExternal } from '../utils/shellBridge'
 
 interface Props {
   /** 账号 id（null=无账号，显示空态）；切换账号自动重拉。
@@ -127,6 +129,9 @@ const LiveCalendar = memo(function LiveCalendar(
   /** 记录预约的弹窗（2026-10-13）：点未来空日期格进来 */
   const [resvOpen, setResvOpen] = useState(false)
   const [resvDay, setResvDay] = useState('')
+  /** 「添加录播」小窗（3.2）：详情弹窗封面上的 ＋ 打开它 */
+  const [vodOpen, setVodOpen] = useState(false)
+  const [vodTarget, setVodTarget] = useState<LiveSession | null>(null)
 
   const resvByDay = useMemo(() => groupReservationsByDay(reservations), [reservations])
 
@@ -238,6 +243,26 @@ const LiveCalendar = memo(function LiveCalendar(
     setManualTarget(target)
     setManualDay(target ? null : day)
     setManualOpen(true)
+  }
+
+  /** 打开「添加录播」小窗（3.2：封面上的 ＋）。 */
+  const openVodDialog = (s: LiveSession) => {
+    setVodTarget(s)
+    setVodOpen(true)
+  }
+
+  /**
+   * 播放这一场的录播（3.2：封面上的 ▶）。
+   *
+   * ⚠️ **本批暂时按老行为**（交给系统浏览器，主机白名单在 `openExternal` 里）——
+   * 删掉的那条「录播」链接原本就是这个行为，所以这一步没有回退。
+   * 应用内播放器（含"默认用无边框播放器窗口"那个设置项）是**下一批**：
+   * 它要先在后端加一条"按 BV 取流"的路由（现有 `/bili/play/{postId}` 是**按帖子 id** 的，
+   * 而录播不是帖子），再决定播放面是主窗内的浮层还是独立无边框窗口。
+   */
+  const playVod = async (s: LiveSession) => {
+    if (!s.vod_url) return
+    await openExternal(s.vod_url)
   }
 
   /**
@@ -723,19 +748,28 @@ const LiveCalendar = memo(function LiveCalendar(
           if (lid) void reloadDetail(lid)
         }}
         onEditSession={(s) => openManual(s)}
-        /* 「找录播」挑中一条候选（C1，devlog/464）：写路径**复用 B2 那条 PATCH**
-           （只传 vod_url），写完重取详情 —— 于是同一屏立刻看到新的录播链接。
-           ⚠️ 这里**不走** `onManualSaved`：那个函数的入参是"保存后的整场"，
-           而 PATCH 回的就是详情 —— 直接用它重取，省一次转换（也不会误翻月份）。 */
-        onPickVod={async (s, url) => {
-          if (!accountId || !s.live_id) return
-          const saved = await api.updateLiveSession(accountId, s.live_id, { vod_url: url })
+        /* 封面上的录播钮（用户 3.2，2026-10-13）：`＋` 开「添加录播」小窗、`▶` 打开播放器。
+           ⚠️ 小窗/播放器都由**本组件**渲染（不是详情弹窗内部）—— Radix 的 portal 按 DOM
+           顺序叠：后渲染的那个才在上面（两个面板同 z，`devlog/217` 那条口径）。 */
+        onAddVod={(s) => openVodDialog(s)}
+        onPlayVod={(s) => void playVod(s)}
+      />
+      {/* 「添加录播」小窗（3.2）：录播的**唯一入口**在封面上，所有录播操作收在这一个窗里 */}
+      <VodDialog
+        open={vodOpen}
+        accountId={accountId}
+        session={vodTarget}
+        vodAccountUid={vodAccountUid}
+        onClose={() => setVodOpen(false)}
+        /* 写完重取详情 + 日历（`reload()` 是为了"刚补的录播"在别的场次上也一致）。
+           ⚠️ 不走 `onManualSaved`：那个函数的入参是"保存后的整场"，而这里回的就是详情。 */
+        onSaved={(saved) => {
+          setVodOpen(false)
           reload()
-          await reloadDetail(saved.live_id ?? s.live_id)
+          if (saved?.live_id) void reloadDetail(saved.live_id)
         }}
         /* 录播号（f015）：存到 V 上（**不是**场次上）—— 它是"这个 V 的回放在哪"，
            下一场照样用它。存完让父组件重取 V 列表（`vodAccountUid` 回显要用新值）。 */
-        vodAccountUid={vodAccountUid}
         onSaveVodAccount={async (mids) => {
           if (!vtuberId) return
           await api.updateVtuber(vtuberId, { vod_account_uid: mids || null })
@@ -743,8 +777,7 @@ const LiveCalendar = memo(function LiveCalendar(
         }}
       />
       {/* 手动记录/编辑（B2）：三处入口（工具栏「+」/ 详情弹窗铅笔 / 点过去的空日期格）
-          共用这一个实例 */}
-      <ManualSessionDialog
+          共用这一个实例 */}      <ManualSessionDialog
         open={manualOpen}
         accountId={accountId}
         session={manualTarget}

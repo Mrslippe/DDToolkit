@@ -1013,7 +1013,28 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→**
 |---|---|---|
 | 头部标记 | `.lc-pop-manual` | 与「已校正」（`.lc-pop-corr`）同规格同位置（10px + `--c-accent`）：`manual===true` 时显示「手动记录」——判据是**服务端算的** `manual` 字段（前端不自己拆 `source` 组合串） |
 | 头部按钮 | `.lc-dlg-edit` | 铅笔，26×26 r8，与关闭钮同配方、在它左侧（`title`：手动场次「编辑这一场」/ 自动场次「补录播地址」）⇒ 打开 B4 弹窗 |
-| 右列「录播」行 | `.lc-dlg-row` + `.lc-dlg-vod` | 紧接「数据源」行，**恒定占一行**：有值 ⇒ `<a>`（BV 号当文字、完整地址进 `title`；点击由全局外链守卫接管 → `openExternal`，主机已由服务端规范化保证在白名单内）；无值 ⇒ 「未填写」+「补录播地址」按钮（`.lc-dlg-cloud-build` 配方） |
+| 封面录播钮 | `.lc-dlg-vodbtn`（`data-vod-action="add"｜"play"`） | **2026-10-13（用户 3.2）**：封面**左上角**的悬浮钮，30×30 圆形浮片。**静止 `opacity: 0`、`.lc-dlg-cover:hover` 或自身 `:focus-visible` 才显形**（只做 hover 等于把键盘用户关在门外）；无 `vod_url` ⇒ `＋` 开「添加录播」小窗（B3b），有 ⇒ `▶` 播放。两个回调都不传时**不渲染**（不摆点了没反应的图标） |
+| ~~右列「录播」行~~ | ~~`.lc-dlg-row` + `.lc-dlg-vod`~~ | **2026-10-13 退役**（用户 3.1：「录播文字行可以不需要」）—— 地址不再作为链接出现在右列，`.lc-dlg-vod` 这条 CSS 规则也一并删掉（posts.css 里留了一行墓碑注释）。原来挤在这一行里的三件事（填地址 / 找录播 / 记住录播号）全部收进 B3b 那个小窗 |
+
+### B3b. 「添加录播」小窗（`components/live/VodDialog.tsx`，2026-10-13 用户 3.1+3.2）
+
+录播的**唯一入口**是详情弹窗封面上的那枚悬浮钮；所有录播操作收在这一个窗里（面板/类名沿用
+`.lc-ms` 族 —— 与「手动记录」「记录预约」同一种窗，不该有第三套外观）。
+
+| 区域 | 类名 / 钩子 | 说明 |
+|---|---|---|
+| 地址 | `#vod-url`（`data-vod-url`） | BV 号或链接，原样提交（服务端 `normalize_vod` 规范成唯一形态并把分 P 带成 `?p=N`）；**改过才可保存** |
+| 找录播 | `[data-find-vod]` + `.lc-vod-cand-wrap` | `api.vodCandidates`（**只读**）：给候选由用户确认（单个信号都不可信：时间窗内那条可能发布在开播前，也可能是音声/剪辑）。候选行带 `data-vod-bvid`，点 `[data-vod-use]` 直接写这条 |
+| 录播号 | `[data-vod-account-input]` / `[data-vod-account-save]` | 存到 **V 上**（`vtubers.vod_account_uid`）——真机实测 V 自己多半不发回放，这个号是「找录播」的**主路径**；改过才可点 |
+| 写路径 | —— | `api.updateLiveSession(accountId, live_id, { vod_url })`（**复用 B2 那条 PATCH**，与「手动填」同一条路） |
+
+⚠️ 候选列表**连同 `live_id` 记账**：换一场之后旧候选必须消失，否则「用它」会把**上一场的录播**
+写进这一场（C1 那批踩过的静默错数据，`VodDialog.test.tsx` ⑧ 钉住）。
+⚠️ 小窗由 **`LiveCalendar`** 渲染（不是详情弹窗内部）：Radix 的 portal 按 DOM 顺序叠，
+后渲染的才在上面（`devlog/217` 那条口径 —— 与 `ManualSessionDialog` 同一个做法）。
+⚠️ **`▶` 本批暂时仍走系统浏览器**（`openExternal`）—— 删掉的那条链接原本就是这个行为，所以没有
+回退；应用内播放器要先在后端补一条"按 BV 取流"的路由（现有 `/bili/play/{post_id}` 是**按帖子 id**
+的，而录播不是帖子），属下一批（`devlog/478`）。
 
 ### B4. 手动记录 / 编辑场次弹窗（`components/live/ManualSessionDialog.tsx`，2026-10-08 B2 `devlog/454`）
 

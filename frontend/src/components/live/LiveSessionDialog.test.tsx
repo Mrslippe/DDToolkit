@@ -107,7 +107,11 @@ let root: Root
 const onClose = vi.fn()
 
 function render(detail: DetailState | null,
-                extra: { onSessionChanged?: () => void } = {}) {
+                extra: {
+                  onSessionChanged?: () => void
+                  onAddVod?: (s: LiveSession) => void
+                  onPlayVod?: (s: LiveSession) => void
+                } = {}) {
   act(() => {
     root.render(
       <LiveSessionDialog
@@ -265,6 +269,64 @@ describe('⑥ 退场动画的前提（jsdom 测不到 Presence，改成三条静
   it('弹窗组件保留"最后一次非空 detail"给关闭那一帧用', () => {
     expect(dialogSrc).toMatch(/const \[shown, setShown\] = useState<DetailState \| null>/)
     expect(dialogSrc).toMatch(/if \(detail\) setShown\(detail\)/)
+  })
+})
+
+/**
+ * 封面上的录播悬浮钮（用户 3.2，2026-10-13）+ 3.1「录播文字行可以不需要」。
+ *
+ * 四条：两态各自是什么、点了叫谁、以及**那一行确实没了**（3.1 用户点名要删的东西，
+ * 不钉住的话下次重构很容易又把它加回右列 —— 而右列一多一行，两栏高度就得重算）。
+ */
+describe('封面录播钮（3.2）与右列不再有录播行（3.1）', () => {
+  const css = readFileSync(resolve(__dirname, '../../styles/posts.css'), 'utf8')
+  const vodBtn = () => document.querySelector<HTMLButtonElement>('.lc-dlg-vodbtn')
+  // 两枚回调都要给 —— 不给就**不渲染**那枚钮（见下面第三条用例）
+  const cb = { onAddVod: vi.fn(), onPlayVod: vi.fn() }
+
+  it('★ 没有录播 ⇒ 显示「＋ 添加」；有录播 ⇒ 显示「▶ 播放」', () => {
+    render(detailOf(), cb)
+    expect(vodBtn()!.getAttribute('data-vod-action')).toBe('add')
+
+    act(() => root.unmount())
+    root = createRoot(host)
+    render({
+      key: '2026-09-04', idx: 0, loading: false, data: null,
+      sessions: [{ ...SESSION, vod_url: 'https://www.bilibili.com/video/BV1xx411c7mD' } as unknown as LiveSession],
+    }, cb)
+    expect(vodBtn()!.getAttribute('data-vod-action')).toBe('play')
+  })
+
+  it('点了各叫各的回调（＋ → 添加录播小窗；▶ → 播放）', () => {
+    const onAddVod = vi.fn()
+    const onPlayVod = vi.fn()
+    render(detailOf(), { onAddVod, onPlayVod })
+    act(() => { vodBtn()!.click() })
+    expect(onAddVod).toHaveBeenCalledTimes(1)
+    expect(onPlayVod).not.toHaveBeenCalled()
+  })
+
+  it('两个回调都不传 ⇒ 不渲染那枚钮（别摆一个点了没反应的图标）', () => {
+    render(detailOf())
+    expect(vodBtn()).toBeNull()
+  })
+
+  it('★ 右列不再有「录播」行（3.1：用户点名那一行可以不需要）', () => {
+    render(detailOf())
+    const dts = [...document.querySelectorAll('.lc-dlg-sec .lc-dlg-row dt')]
+      .map((n) => (n.textContent || '').trim())
+    expect(dts).not.toContain('录播')
+    // 地址本身也不再作为链接出现在右列（入口统一收在封面那枚钮上）
+    expect(document.querySelector('.lc-dlg-vod')).toBeNull()
+  })
+
+  it('CSS 里：静止透明、hover 显形、**键盘焦点也显形**（只做 hover 等于把键盘用户关在门外）', () => {
+    expect(/\.lc-dlg-vodbtn\s*\{[^}]*opacity:\s*0/.test(css),
+           '静止态必须透明（用户口径：鼠标离开就隐藏）').toBe(true)
+    expect(/\.lc-dlg-cover:hover\s+\.lc-dlg-vodbtn[^{]*\{[^}]*opacity:\s*1/.test(css),
+           'hover 显形那条规则不见了').toBe(true)
+    expect(/\.lc-dlg-vodbtn:focus-visible\s*\{[^}]*opacity:\s*1/.test(css),
+           '键盘焦点也要显形（`:focus-visible` 那条）').toBe(true)
   })
 })
 

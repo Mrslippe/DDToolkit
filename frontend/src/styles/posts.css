@@ -4785,13 +4785,9 @@ img.hero-avatar {
   color: var(--c-text-main);
 }
 
-/* 「录播」行的链接（B2）：地址已由服务端规范成白名单内形态 ⇒ 这里只管可读性
-   （BV 号当文字、完整地址进 title，长链接不把行撑开）。 */
-.lc-dlg-vod {
-  color: var(--c-primary-deep);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
+/* ⚠️ `.lc-dlg-vod`（右列那条「录播」链接的样式）**2026-10-13 随那一行一起退役**
+   （用户 3.1「录播文字行可以不需要」）—— 地址不再作为链接出现在右列，
+   录播入口收在封面那枚悬浮钮上（`.lc-dlg-vodbtn`，见下）。别再把这条规则加回来。 */
 
 /* ── 场次详情弹窗（user 2026-09-07：点击日期格 → 独立弹窗；重构参考图布局）──
    头部（胶囊+标题+日期副行+关闭）→ 两栏主体（左 200px 封面图+状态徽章 ｜
@@ -5112,6 +5108,51 @@ img.hero-avatar {
   font-weight: 600;
   color: rgba(251, 119, 161, 0.55);
   user-select: none;
+}
+
+/* ── 封面上的录播悬浮钮（用户 3.2，2026-10-13）──────────────────────────────
+   「把记录录播功能的前端按钮集成到场次详情页**左上方的封面上**，做成鼠标 hover 显示、
+   鼠标离开隐藏的悬浮图标；没有录播记录时显示为**添加（加号）**，点击打开添加录播小窗；
+   有录播记录时显示为**播放**，点击打开播放器播放录播」。
+
+   ⚠️ 三条都是"用户点名过、坏了会被立刻看见"的：
+   ① **hover 才显形**（`opacity` 过渡，不是 `display:none` —— 后者点不到也读不到）；
+   ② **键盘用户也要够得着**：`focus-visible` 一起显形（只做 hover 等于把键盘用户关在门外，
+      与 `tests/test_focus_contract.py` 那条"焦点必须看得见"同一口径）；
+   ③ 位置**左上角**（`left: 10px; top: 10px`），与「已结束/直播中」徽章（右下）分居两角。 */
+.lc-dlg-vodbtn {
+  position: absolute;
+  left: 10px;
+  top: 10px;
+  z-index: 2;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--c-border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--c-primary-deep);
+  box-shadow: var(--shadow-dialog);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.16s ease, background-color 0.16s ease;
+}
+
+.lc-dlg-cover:hover .lc-dlg-vodbtn,
+.lc-dlg-vodbtn:focus-visible {
+  opacity: 1;
+}
+
+.lc-dlg-vodbtn:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.lc-dlg-vodbtn:hover {
+  background: #fff;
 }
 
 /* 封面右下角状态徽章：进行中=强调粉 / 已结束=中性灰 */
