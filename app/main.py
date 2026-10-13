@@ -390,6 +390,27 @@ async def lifespan(app: FastAPI):
         logger.warning(f"场次身份补齐跳过（不影响启动）: {type(e).__name__}: {e}")
     _perf("场次身份补齐")
 
+    # 表情索引预扫（2026-10-13，用户第 5 条 / `devlog/483`）：把 `posts.raw_json` 里
+    # `rich_text_nodes[*].emoji.icon_url` 抠成 `名字 → 图床地址`。
+    # ⚠️ 为什么在启动期：全扫实测 **0.71s / 5,058 行**（取行只要 0.09s），放读路径就是
+    #    `devlog/473` 那个"第一次打开最慢"的翻版。这里按 `devlog/475` 的做法只扫**新行**
+    #    （`id > 记号`，平时 0 行）⇒ 平时近乎零成本，且**幂等**。
+    # 失败不挡启动：读路径那时只有上游那一级（功能不坏，只是解析率低）。
+    try:
+        from app.core.database import SessionLocal
+        from app.services import bili_emote
+
+        with SessionLocal() as _db:
+            _est = bili_emote.warm_raw_index(_db)
+        # 每次启动都报一行**索引进度**（不只是"扫了 n 行"）：`names=0` 就是第一源没热上
+        # —— 那时解析率会静默掉回上游那一档，光看"没扫新行"是看不出来的。
+        logger.info(f"表情索引：{_est['names']} 个名字 / {_est['packages']} 个包"
+                    + (f"（本次扫了 {_est['scanned']} 行新载荷）" if _est["scanned"]
+                       else "（无新行，用上次存下的）"))
+    except Exception as e:
+        logger.warning(f"表情索引预扫跳过（不影响启动）: {type(e).__name__}: {e}")
+    _perf("表情索引")
+
     # 库维护（R22）：把库切成增量 auto-vacuum，之后删数据才会真的还盘
     # （SQLite 默认只把删掉的行丢进 freelist，文件永不缩小）。
     # 带体积门槛、失败只留日志 —— 这条是"体验优化"，绝不能挡住启动。
