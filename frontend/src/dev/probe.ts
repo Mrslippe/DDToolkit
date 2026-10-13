@@ -2498,11 +2498,17 @@ export async function runUiProbe(): Promise<void> {
       }
       document.removeEventListener('scroll', onScroll, true)
       restore()
+      const dialogNow = dlgNow()
       const out = {
         // 「打开了」= 有**开着**的面板（不是"DOM 里有 `.lc-ms`" —— 尸首也算有）
         opened: !!document.querySelector('.lc-ms[data-state="open"]'),
-        isReservation: !!document.querySelector('[data-rv-date]'),
-        dialog: dlgNow(),
+        /** ⚠️ 身份取自**挑中的那个节点**（`dlgNow()` 按 `data-state='open'` 挑），
+         *  不能用 `document.querySelector('[data-rv-date]')` —— 后者会把"上一个窗的尸首"
+         *  算进来（实测：记录场次窗那一段被报成"开错了窗"，标题却明明是「手动记录一场直播」，
+         *  于是判据红在一个**不存在**的毛病上）。同一个坑在这一批里踩了两次，两次都是
+         *  "身份按文档查而不是按对象查"。 */
+        isReservation: Boolean(dialogNow?.isReservation),
+        dialog: dialogNow,
         before,
         after: geomNow(),
         frames,
@@ -2517,16 +2523,18 @@ export async function runUiProbe(): Promise<void> {
        *  `finish()` 让动画走到终点、`animationend` 照常派发 ⇒ Presence 才肯卸载。
        *  ⚠️ **要分几拍试**：刚点完那一拍 React 还没提交（`data-state` 仍是 `open`），
        *  那时没有退场动画可推 —— 一次性的 `finish()` 会空转（第一次就是这么写的）。 */
-      for (let i = 0; i < 6; i++) {
-        const closed = [...document.querySelectorAll<HTMLElement>(
-          '.lc-ms[data-state="closed"], .lc-dlg[data-state="closed"]')]
-        if (!closed.length) break
-        for (const n of closed) {
+      for (let i = 0; i < 8; i++) {
+        const all = [...document.querySelectorAll<HTMLElement>('.lc-ms')]
+        if (!all.length) break            // 活口与尸首都没了：干净
+        for (const n of all) {
+          if (n.getAttribute('data-state') !== 'closed') continue
           for (const a of n.getAnimations()) {
             try { a.finish() } catch { /* 忽略 */ }
           }
         }
-        await sleep(50)
+        // ⚠️ **不能**因为"这一拍还没有 closed 节点"就退出：刚点完那一拍 React 还没提交，
+        //    退场动画还没挂上 —— 要接着等它提交（实测那个尸首就是这么留下来的）。
+        await sleep(60)
       }
       await sleep(120)
       return out
