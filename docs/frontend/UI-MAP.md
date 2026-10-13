@@ -481,7 +481,7 @@ keyframes 只会重启**）。
 | 名字 | `.vtuber-name` | **18px 纯黑 500**，`user-select:none` |
 | 直播点/标签 | `.live-badge` / `.live-dot` / `.live-label` | 紧凑直播徽标（16px 高、6px 点 + 10px 字、红 `--c-live`），仅直播中 |
 | 签名 | `.vtuber-sign` | **13px 灰（13px 行高盒）**，`user-select:none` |
-| 企划徽章 | `.vtuber-emblem`（`data-group="<企划名>"`） | 右侧 **54px 全高**，紧贴右缘。**2026-10-08 接线**（需求 6 / B3，`devlog/457`）：**`vtuberGroup()`**（手填 `faction` 优先 → 否则 `group_name`，与筛选弹窗**同一个函数**；2026-10-10 之前徽章读 `group_name`、筛选读 `faction` ⇒ 同一屏两个企划，`devlog/458`）非空才渲染（**没企划不摆空壳**）；有图标素材 ⇒ `.vtuber-emblem-icon`（20×20，构建期扫 `src/assets/groups/<slug>.*`，丢文件即生效、不改代码），没有 ⇒ `.vtuber-emblem-text` 文字胶囊（11px、`--sel-bg` 底 + `--c-primary-deep` 字、`max-width:54px` + 省略号，`title="企划：…"` 给全名）。⚠️ 收起态（`.sidebar-shell[data-collapsed]`）整块 `display:none` —— 窄栏只够头像 + 名字，徽章会把名字挤没 |
+| 企划徽章 | `.vtuber-emblem`（`data-group="<企划名>"`） | 右侧 **54px 全高**，紧贴右缘。**2026-10-08 接线**（需求 6 / B3，`devlog/457`）：**`vtuberGroup()`**（手填 `faction` 优先 → 否则 `group_name`，与筛选弹窗**同一个函数**；2026-10-10 之前徽章读 `group_name`、筛选读 `faction` ⇒ 同一屏两个企划，`devlog/458`）。⚠️ **2026-10-13 起没有企划的 V 显示「个人势」**（用户口径：它也是一个企划类型）—— 所以**每一行都有徽章**，"没企划不摆空壳"那条旧规则作废；有图标素材 ⇒ `.vtuber-emblem-icon`（20×20，构建期扫 `src/assets/groups/<slug>.*`，丢文件即生效、不改代码），没有 ⇒ `.vtuber-emblem-text` 文字胶囊（11px、`--sel-bg` 底 + `--c-primary-deep` 字、`max-width:54px` + 省略号，`title="企划：…"` 给全名）。⚠️ 收起态（`.sidebar-shell[data-collapsed]`）整块 `display:none` —— 窄栏只够头像 + 名字，徽章会把名字挤没。素材清单见 `frontend/src/assets/groups/WORKLIST.md`（211 个企划名 + 个人势，按池内条数排序） |
 | 提示态 | `.sidebar-tip` | 加载失败 / 空池 / 无匹配文案（在滚动区内渲染） |
 
 ---

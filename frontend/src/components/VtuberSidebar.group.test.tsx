@@ -68,22 +68,27 @@ describe('左栏企划徽章', () => {
     expect(badge!.querySelector('img')).toBeNull()
   })
 
-  it('★ 没有企划：**什么都不渲染**（不摆空壳，否则名字与右缘之间多一截空白）', async () => {
+  it('★ 没有企划：显示「个人势」胶囊（用户 2026-10-13 新口径：它也是一个企划类型）', async () => {
     await mount([NO_GROUP])
     expect(host.querySelector('.vtuber-item')).toBeTruthy()          // 正对照：行本身在
-    expect(host.querySelector('.vtuber-emblem')).toBeNull()
+    const badge = host.querySelector<HTMLElement>('.vtuber-emblem')
+    // 改前这里是 `null`（"没企划不摆空壳"）。用户改口径之后「不属于任何企划」本身是一条信息，
+    // 而且它因此成为一枚**可筛选项**（见下面那组用例）。
+    expect(badge, '没有企划时该显示「个人势」').toBeTruthy()
+    expect(badge!.getAttribute('data-group')).toBe('个人势')
+    expect(badge!.querySelector('.vtuber-emblem-text')?.textContent).toBe('个人势')
   })
 
-  it('两种混着来也只给有企划的那一条加徽章', async () => {
+  it('两种混着来：**两条都有徽章**（一条是它的企划、一条是个人势）', async () => {
     await mount([WITH_GROUP, NO_GROUP])
-    const badges = host.querySelectorAll('.vtuber-item .vtuber-emblem')
-    expect(badges.length).toBe(1)
-    expect(badges[0].getAttribute('data-group')).toBe('VirtuaReal')
+    const badges = [...host.querySelectorAll<HTMLElement>('.vtuber-item .vtuber-emblem')]
+    expect(badges.length).toBe(2)
+    expect(badges.map((b) => b.getAttribute('data-group'))).toEqual(['VirtuaReal', '个人势'])
   })
 
-  it('企划名是空白串时也按"没有企划"处理（库里被手工改坏的那种值）', async () => {
+  it('企划名是空白串 ⇒ 也归「个人势」（库里被手工改坏的那种值）', async () => {
     await mount([{ ...base, id: 9, name: '空值', group_name: '   ', group_uuid: null }])
-    expect(host.querySelector('.vtuber-emblem')).toBeNull()
+    expect(host.querySelector('.vtuber-emblem')?.getAttribute('data-group')).toBe('个人势')
   })
 
   it('手填的 `faction` 优先于自动检测的 `group_name`（用户自己写的那句最权威）', async () => {
@@ -138,5 +143,18 @@ describe('左栏企划筛选（与徽章同一口径）', () => {
     await openFilter()
     expect(chip('四禧丸子'), '选项只从 faction 提取 ⇒ 只有 group_name 的企划根本筛不了').toBeTruthy()
     expect(chip('EOE组合')).toBeTruthy()
+  })
+
+  it('★ 「个人势」是一枚正常选项（2026-10-13）：点它筛出**所有没有企划的** V', async () => {
+    // 用户口径：「没有企划的统一用『个人势』代替，也作为一个企划类型」——
+    // 所以这一条同时钉两件事：它**在选项里**、且它**筛得出来**（不是摆设）。
+    await mount([...four, NO_GROUP, { ...base, id: 31, name: '散人二号', faction: null, group_name: '' }])
+    await openFilter()
+    const c = chip('个人势')
+    expect(c, '「个人势」没进企划选项').toBeTruthy()
+    await act(async () => { c!.click() })
+    const names = [...host.querySelectorAll('.vtuber-name')].map((n) => n.textContent)
+    // `NO_GROUP` 那条（name='散人'）与刚加的"空串企划"那条都该在里面
+    expect(names.slice().sort()).toEqual([NO_GROUP.name, '散人二号'].sort())
   })
 })

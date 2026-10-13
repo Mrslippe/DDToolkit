@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { toast } from 'sonner'
 import { api } from '../api/api'
 import type { Account, ThirdpartyVtuber, VTuber } from '../api/types'
-import { vtuberGroup } from '../utils/groupBadge'
+import { vtuberGroupField } from '../utils/groupBadge'
 import FloatPill from './common/FloatPill'
 
 interface Props {
@@ -41,10 +41,14 @@ const ProfileCard = memo(function ProfileCard({ vtuber, account, thirdparty }: P
   // 账号/V 切换时同步外部状态（vtuber 引用随 refresh 变化）
   useEffect(() => setFaction(vtuber.faction ?? ''), [vtuber.faction])
 
-  // 显示值：手填优先（含刚写完的乐观值），否则落回**唯一真源** `vtuberGroup()`。
-  // ⚠️ 不能只写 `vtuberGroup(vtuber)` —— 那是 props 上的旧值，乐观更新后 Select 不会动。
+  // 显示值：手填优先（含刚写完的乐观值），否则落回自动检测的那份 —— 用的是**字段口径**
+  // `vtuberGroupField()`（都没有 ⇒ 空串 = 「未设置」）。
+  // ⚠️ **不能**用 `vtuberGroup()`：那个是**展示口径**（没有企划时恒为「个人势」），
+  //    拿来当表单值会让"从没设过"显示成「个人势（自动）」，用户分不清两件事
+  //    （`faction=''` vs `faction='个人势'`，库里是不同的值）。
+  // ⚠️ 也不能只写 props 上那个 —— 乐观更新后 Select 不会动。
   const manual = faction.trim()
-  const effective = manual || vtuberGroup(vtuber) || ''
+  const effective = manual || vtuberGroupField(vtuber)
   const isAuto = !manual && !!effective
 
   // 第三方索引里的企划名：**建议**用，与显示值相同时不值得再点一下
@@ -52,7 +56,7 @@ const ProfileCard = memo(function ProfileCard({ vtuber, account, thirdparty }: P
     thirdparty.map((t) => t.group_name).filter((g): g is string => !!g),
   )]
   const suggestion = suggestions[0]
-  const options = [...new Set([manual, vtuberGroup(vtuber) || '', ...suggestions]
+  const options = [...new Set([manual, vtuberGroupField(vtuber), ...suggestions]
     .filter((g): g is string => !!g))]
   // 「采纳」= 把建议**固化成手填值**（此后它不再随候选人池刷新而变）
   const showAdopt = !!suggestion && suggestion !== effective

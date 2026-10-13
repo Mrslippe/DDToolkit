@@ -67,7 +67,24 @@ export function knownGroupIcons(): Record<string, string> {
 }
 
 /**
- * **一个 V 的企划**（界面上唯一的口径）：手填的 `faction` 优先，否则用自动检测的 `group_name`。
+ * **没有企划时统一算作「个人势」**（用户 2026-10-13 口径：「没有企划的统一用『个人势』代替，
+ * 也作为一个企划类型」）。
+ *
+ * 为什么是一个真实取值而不是"空"：
+ * - 徽章侧：以前 `null` ⇒ **不渲染徽章**（"没企划不摆空壳"，`devlog/457`）。用户现在要的是
+ *   **它是一个类型** —— 所以名单里绝大多数 V 会显示「个人势」胶囊，与「四禧丸子」那种是
+ *   同一档信息（"她不属于任何企划"本身就是一条信息）。
+ * - 筛选侧：它于是自然成为一枚**可筛选项**（不需要另写一条"空企划"的特殊匹配）。
+ * - 素材侧：它也要一枚图标（`assets/groups/WORKLIST.md` 的最后一行，slug = `个人势`）。
+ *
+ * ⚠️ 口径仍然只有 `vtuberGroup()` 这一处（`devlog/458` 那条）：徽章、筛选选项、筛选匹配
+ * 三处都调它 —— 别在某个调用点自己写 `|| '个人势'`。
+ */
+export const PERSONAL_GROUP = '个人势'
+
+/**
+ * **一个 V 的企划**（界面上唯一的口径）：手填的 `faction` 优先，否则用自动检测的 `group_name`，
+ * 都没有则算 **「个人势」**（2026-10-13 起；以前返回 `null` 表示"不显示徽章"）。
  *
  * ## 为什么必须有这一个函数（2026-10-10 用户报的那个 bug）
  *
@@ -79,17 +96,38 @@ export function knownGroupIcons(): Record<string, string> {
  * （又一充电中 / 梨安不迷路 / 沐霂是MUMU呀）只有 `group_name='四禧丸子'`
  * ⇒ **筛「四禧丸子」只出一个人，而三人的徽章上明明写着四禧丸子**。
  *
- * 口径：**手填优先**（用户自己写的那句最权威）→ 否则用自动检测的 → 都没有则 `null`。
+ * 口径：**手填优先**（用户自己写的那句最权威）→ 否则用自动检测的 → 都没有则 **`个人势`**。
  * 徽章、筛选选项、筛选匹配三处**都调这一个函数**，不许再各读一个字段。
  */
 export function vtuberGroup(v: {
   faction?: string | null
   group_name?: string | null
-} | null | undefined): string | null {
+} | null | undefined): string {
   const manual = (v?.faction || '').trim()
   if (manual) return manual
   const auto = (v?.group_name || '').trim()
-  return auto || null
+  return auto || PERSONAL_GROUP
+}
+
+/**
+ * **字段口径**（编辑用）：手填 `faction` 优先 → 否则自动检测的 `group_name` → **都没有则空串**。
+ *
+ * ⚠️ 与 `vtuberGroup()` 是**两个不同的问题**，别合并：
+ * - `vtuberGroup()` = "界面上她属于哪个企划" —— 恒有答案（没有就是「个人势」）；
+ * - 这一个 = "这个字段现在存的是什么" —— 空串 = **未设置**。
+ *
+ * 为什么编辑界面必须用后者（2026-10-13 改口径时测试当场抓住）：档案设置里那个企划 Select
+ * 的显示值直接取自 `vtuberGroup()` 的话，**从没设过企划的 V 会显示成「个人势（自动）」** ——
+ * 于是用户分不清"我没设过"和"我设成了个人势"，而这两件事在库里是不同的值
+ * （`faction=''` vs `faction='个人势'`）。
+ */
+export function vtuberGroupField(v: {
+  faction?: string | null
+  group_name?: string | null
+} | null | undefined): string {
+  const manual = (v?.faction || '').trim()
+  if (manual) return manual
+  return (v?.group_name || '').trim()
 }
 
 /** 一批 V 的全部企划（筛选弹窗的选项；去重 + 去掉空值，顺序按出现顺序） */

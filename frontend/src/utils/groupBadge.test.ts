@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest'
 
-import { groupIcon, groupLabel, groupSlug, knownGroupIcons, vtuberGroup, vtuberGroupOptions } from './groupBadge'
+import { PERSONAL_GROUP, groupIcon, groupLabel, groupSlug, knownGroupIcons, vtuberGroup, vtuberGroupOptions } from './groupBadge'
 
 describe('groupSlug', () => {
   it('小写 + 空格折成连字符', () => {
@@ -72,19 +72,23 @@ describe('vtuberGroup：界面上唯一那份"企划"', () => {
     expect(vtuberGroup({ faction: '   ', group_name: ' 自动的 ' })).toBe('自动的')
   })
 
-  it('两边都没有 ⇒ null（徽章不渲染、也不进筛选选项）', () => {
-    expect(vtuberGroup({})).toBeNull()
-    expect(vtuberGroup({ faction: null, group_name: null })).toBeNull()
-    expect(vtuberGroup(null)).toBeNull()
+  it('★ 两边都没有 ⇒ **「个人势」**（用户 2026-10-13：没有企划的统一用它代替，也算一个类型）', () => {
+    // 改前返回 null ⇒ 徽章不渲染、也不进筛选选项。用户改口径之后它是**一个真实取值**：
+    // 「她不属于任何企划」本身就是一条信息，而且它因此自然成为一枚可筛选项。
+    expect(vtuberGroup({})).toBe(PERSONAL_GROUP)
+    expect(vtuberGroup({ faction: null, group_name: null })).toBe('个人势')
+    expect(vtuberGroup({ faction: '  ', group_name: ' ' })).toBe('个人势')
+    expect(vtuberGroup(null)).toBe('个人势')
   })
 
-  it('选项：去重 + 丢空值 + 按出现顺序', () => {
+  it('「个人势」也能筛：它进选项、且与手填/自动两条来源去重', () => {
     expect(vtuberGroupOptions([
       { faction: '甲', group_name: null },
       { faction: null, group_name: '甲' },        // 与第一条去重（同一企划的两个来源）
       { faction: null, group_name: '乙' },
-      { faction: null, group_name: null },
+      { faction: null, group_name: null },        // ⇒ 个人势
       { faction: '丙', group_name: '乙' },
-    ])).toEqual(['甲', '乙', '丙'])
+      { faction: PERSONAL_GROUP, group_name: null },   // 手填成同一个词也只出现一次
+    ])).toEqual(['甲', '乙', '个人势', '丙'])
   })
 })

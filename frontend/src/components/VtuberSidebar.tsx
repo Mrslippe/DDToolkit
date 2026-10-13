@@ -277,14 +277,13 @@ function VtuberSidebarInner({ onSoloGesture }: {
       list = list.filter((v) => v.accounts.some((a) => filters.platform.includes(a.platform)))
     }
     if (filters.faction.length > 0) {
-      // 企划筛选激活时，无企划条目被排除（已知边界）。
-      // ⚠️ 判据是 **`vtuberGroup(v)`**（手填 faction 优先、否则自动检测的 group_name）——
-      //    与徽章同一个函数。只读 `v.faction` 时，只有 `group_name` 的那几位
-      //    **徽章上写着企划、筛选里却找不到**（2026-10-10 用户报的"四禧丸子只出一个人"）。
-      list = list.filter((v) => {
-        const g = vtuberGroup(v)
-        return !!g && filters.faction.includes(g)
-      })
+      // 企划筛选激活时：只留选中企划的条目。
+      // ⚠️ 判据是 **`vtuberGroup(v)`**（手填 faction 优先、否则自动检测的 group_name，
+      //    都没有 ⇒ 「个人势」）—— 与徽章同一个函数。只读 `v.faction` 时，只有 `group_name`
+      //    的那几位**徽章上写着企划、筛选里却找不到**（2026-10-10 用户报的"四禧丸子只出一个人"）。
+      //    ⚠️ 2026-10-13 起没有 `null` 这一档了 ⇒ 上面那句"无企划条目被排除"的已知边界随之消失：
+      //    「个人势」现在是一枚**正常选项**，它筛出来的是"所有没有企划的 V"。
+      list = list.filter((v) => filters.faction.includes(vtuberGroup(v)))
     }
     if (kw) {
       list = list.filter(
@@ -644,8 +643,10 @@ const VtuberItem = memo(function VtuberItem({ vtuber, index, active, onSelect,
       {/* 企划徽章（需求 6，B3，`devlog/457`）：这个槽位本来就是给它留的（"原阵营位"）。
           规则是**数据驱动**的：`assets/groups/<slug>.*` 有素材就画图标，没有就显示企划名的
           文字胶囊（超长省略、`title` 给全名）—— 加一个企划只需丢一个文件，不改代码。
-          没有企划的 V **什么都不渲染**（不摆空壳）；窄栏（收起态）由 CSS 整块隐藏，
-          免得挤掉名字。 */}
+          ⚠️ 2026-10-13 起**没有企划的 V 显示「个人势」**（用户口径：「没有企划的统一用
+          『个人势』代替，也作为一个企划类型」）—— `vtuberGroup()` 现在恒返回非空，
+          所以这里不再有"什么都不渲染"的分支（那个 `group &&` 留着只是防 props 缺失）。
+          窄栏（收起态）由 CSS 整块隐藏，免得挤掉名字。 */}
       {group && (
         <span className="vtuber-emblem" data-group={group} title={`企划：${group}`}>
           {icon ? (
