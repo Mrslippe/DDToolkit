@@ -974,8 +974,98 @@ fn deep_sleep_impl(app: &tauri::AppHandle) {
     println!("[ddtoolkit] 深休眠：已销毁界面释放内存（后台抓取不受影响）");
 }
 
-/// 重建主窗口。参数必须与 `tauri.conf.json` 里那份**等价**：
-/// 无边框 / 透明 / 最小尺寸 / 居中 / 先隐藏（等前端调用 present_window 再显示，
+/// 录播播放器窗的**重入闸门**（`AtomicBool`）。
+///
+/// ⚠️ 为什么必须有：`React.StrictMode` 下 effect 会跑两次（dev 模式），
+/// 而没有闸门时两次调用会**建出两个窗**（同 label 的第二个会失败，但第一个已经在了，
+/// 结果是"窗口开了、控制台多一条错"）。历史小窗那版就踩过这一条（`devlog/175`）。
+static CREATING_PLAYER: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// 打开录播播放器窗（2026-10-13，用户 3.2）。
+///
+/// ## 为什么是 `async fn`
+///
+/// ⚠️ **同步命令跑在主线程**，而"在已经有一个 webview 的进程里、于主线程同步建第二个"
+/// 实测会**卡死**（历史小窗那版就是这么卡住的，`devlog/175`-`179`）。所以建窗这件事
+/// 必须是异步命令。
+///
+/// ## 参数与主窗的关系
+///
+/// 建窗参数**逐项照抄主窗**（无边框 / 透明 / 全透明底色 / `VP_BROWSER_ARGS`）——
+/// 少一项的症状都是"播放器窗长得跟主窗不是一套"或者"视频在播放器窗里丢帧"
+/// （硬件解码那件事只认 `additionalBrowserArgs`，`devlog/404`）。
+/// 与主窗的差别只有三处：label、URL（`player.html?bvid=…&p=…`）、以及**显示**策略
+/// （主窗等 `present_window`，播放器窗直接显示 —— 它本来就是用户点出来的）。
+///
+/// ⚠️ 复用一个已有窗口：同 label 的窗还在时先 `set_focus` 并把 URL 换掉，
+/// 而不是"关掉再建"（后者在用户连点两次时会闪一下）。
+#[tauri::command]
+async fn open_player_window(
+    window: tauri::Window,
+    app: tauri::AppHandle,
+    bvid: String,
+    page: Option<u32>,
+) -> Result<(), String> {
+    if !guard_window(&window, "open_player_window") {
+        return Err("这扇窗口不能打开播放器".into());
+    }
+    // BV 号只做形状校验（真正取流时后端还会自己抠一次号）——
+    // ⚠️ 拼进 URL 前**必须**校验：这里是拿用户数据拼 URL 的唯一一处。
+    if !bvid.starts_with("BV") || bvid.len() != 12
+        || !bvid[2..].chars().all(|c| c.is_ascii_alphanumeric())
+    {
+        return Err(format!("不是合法的 BV 号：{bvid}"));
+    }
+    let mut url = format!("player.html?bvid={bvid}");
+    if let Some(p) = page {
+        if p >= 2 {
+            url.push_str(&format!("&p={p}"));
+        }
+    }
+
+    if let Some(existing) = app.get_webview_window(PLAYER_LABEL) {
+        // 已经开着（用户又点了一次 ▶，可能是另一场）：**关掉再按新地址建**。
+        // ⚠️ 为什么不 `navigate()`：那个方法要的是 `url::Url`，而这里是 app 相对路径
+        // （`player.html?…`）—— 手拼资源协议是另一套容易错的活；而这扇窗只播一段视频，
+        // 重建的代价就是一次白帧，值得用"一条显然正确的路"换。
+        let _ = existing.destroy();
+    }
+
+    if CREATING_PLAYER.swap(true, Ordering::SeqCst) {
+        return Ok(()); // 另一次调用正在建，交给它
+    }
+    let built = tauri::WebviewWindowBuilder::new(&app, PLAYER_LABEL, tauri::WebviewUrl::App(url.into()))
+        .title("DDtoolkit 录播")
+        .inner_size(1120.0, 720.0)
+        .min_inner_size(480.0, 320.0)
+        .center()
+        .decorations(false)
+        .transparent(true)
+        .background_color(tauri::window::Color(0, 0, 0, 0))
+        .additional_browser_args(VP_BROWSER_ARGS)
+        .skip_taskbar(false)
+        .build();
+    CREATING_PLAYER.store(false, Ordering::SeqCst);
+    let w = built.map_err(|e| format!("播放器窗建不起来：{e}"))?;
+    apply_dwm_corners(&w);
+    let _ = w.set_focus();
+    Ok(())
+}
+
+/// 关掉录播播放器窗（播放器页自己的 ✕ 走这条；主窗也能用它兜底）。
+#[tauri::command]
+fn close_player_window(window: tauri::Window, app: tauri::AppHandle) -> Result<(), String> {
+    if !guard_window(&window, "close_player_window") {
+        return Err("这扇窗口不能关播放器".into());
+    }
+    if let Some(w) = app.get_webview_window(PLAYER_LABEL) {
+        w.destroy().map_err(|e| format!("关播放器窗失败：{e}"))?;
+    }
+    Ok(())
+}
+
+/// 重建主窗口。参数必须与 `tauri.conf.json` 里那份**等价**：/// 无边框 / 透明 / 最小尺寸 / 居中 / 先隐藏（等前端调用 present_window 再显示，
 /// 保持"白屏闪一下"那个既有修复）。
 /// 恢复现场靠 URL 上的 `?restored=1`：前端读到标记后把路由与视图还原回去
 /// （不能直接把深链接当 URL —— 资源协议下 SPA 深链接会 404）。
@@ -1243,9 +1333,12 @@ fn get_api_token(window: tauri::Window, token: State<'_, ApiToken>) -> Result<St
 
 /// 允许读取会话 token 的窗口 label（`get_api_token` 的准入表）。
 ///
-/// ⚠️ 2026-09-26（S3-0）起**并进 `COMMAND_ACL`**：一处真源。小窗退役后调用方只剩
-/// 主窗口一种，判据见 `command_acl_*` / `every_command_guards_*` 那几条 —— 别再单独维护一份。
-const CALLER_LABELS_ALLOWED: &[&str] = &[ALLOWED_CALLER];
+/// ⚠️ 2026-09-26（S3-0）起**并进 `COMMAND_ACL`**：一处真源。判据见 `command_acl_*` /
+/// `every_command_guards_*` 那几条 —— 别再单独维护一份。
+///
+/// 2026-10-13（用户 3.2）：**播放器窗也要读 token** —— 它自己发业务请求（取流/段表都要
+/// `X-DDToolkit-Token`，后端只放行 `/healthz`、`/static/`），读不到就等于"窗口开了、播不了"。
+const CALLER_LABELS_ALLOWED: &[&str] = &[ALLOWED_CALLER, PLAYER_LABEL];
 
 // ── 命令级准入表（S3-0，devlog/208）─────────────────────────────────────
 //
@@ -1261,6 +1354,22 @@ const CALLER_LABELS_ALLOWED: &[&str] = &[ALLOWED_CALLER];
 
 /// 允许"整窗都归它"的窗口 label（主窗口）。
 const ALLOWED_CALLER: &str = "main";
+
+/// 录播播放器窗口的 label（2026-10-13，用户 3.2：「默认用应用内**无边框播放器窗口**播放」）。
+///
+/// 与主窗**同一套**建窗参数（无边框 / 透明 / 先隐藏），但是另一扇独立窗口：
+/// 它只播一段视频，不需要任何别的命令 —— 见下面 `PLAYER_COMMAND_ACL`。
+const PLAYER_LABEL: &str = "player";
+
+/// 播放器窗能调的命令（**最小面**：知道后端在哪、拿得到 token、能把自己关掉）。
+///
+/// ⚠️ 别顺手把 `open_external` 之类也放进去：这扇窗口只渲染一个播放器，
+/// 多一点能力就多一条"从播放器页发起"的越权路径（真正的外链打开在主窗那边）。
+const PLAYER_COMMAND_ACL: &[&str] = &[
+    "get_backend_port",
+    "get_api_token",
+    "close_player_window",
+];
 
 /// 允许被调用的自定义命令名单（只有 `ALLOWED_CALLER` 那一扇窗口够得着）。
 ///
@@ -1286,12 +1395,20 @@ const COMMAND_ACL: &[&str] = &[
     "migrate_data_dir",
     "delete_old_data_dir",
     "set_tray_status",
+    // 录播播放器窗（2026-10-13，用户 3.2）：
+    //  · open  —— 主窗点封面上的 ▶ 时调（**只有主窗能开**，所以它在主窗这张表里）；
+    //  · close —— 播放器页自己的 ✕ 调，所以它在下面那张 `PLAYER_COMMAND_ACL` 里也有一份。
+    "open_player_window",
+    "close_player_window",
 ];
 
 /// 这条命令允不允许这个窗口调（表里查不到 ⇒ **拒绝**）。
 fn command_allowed(command: &str, label: &str) -> bool {
     if label == ALLOWED_CALLER {
         return COMMAND_ACL.contains(&command);
+    }
+    if label == PLAYER_LABEL {
+        return PLAYER_COMMAND_ACL.contains(&command);
     }
     false
 }
@@ -1752,7 +1869,9 @@ pub fn run() {
             open_release_page,
             probe_local_proxy,
             set_process_proxy,
-            window_corners_mode
+            window_corners_mode,
+            open_player_window,
+            close_player_window
         ])
         .on_window_event(|window, event| {
             // ✕ 不再等于"退出"（R18，devlog/095）：关闭请求被拦下，改成隐藏到托盘，
@@ -1760,9 +1879,13 @@ pub fn run() {
             // 或系统注销/关机（那种情况下 `QUITTING` 不置真，但 `WindowEvent::Destroyed`
             // 之后 Tauri 仍会走 ExitRequested → 退出）。
             //
-            // 应用只有主窗口一扇，这里不再按 label 分流（小窗退役前那条"只拦主窗口"
-            // 的判断随窗口一起删了）。
+            // ⚠️ **必须按 label 分流**（2026-10-13，用户 3.2 加了播放器窗）：播放器窗点 ✕
+            // 的语义是"关掉这个播放器"，不是"把主窗藏进托盘" —— 不分流的话用户点一下播放器的
+            // ✕，主窗没了、播放器还在，怎么想都不对。
             if let WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == PLAYER_LABEL {
+                    return; // 放行：窗口自己销毁
+                }
                 if !QUITTING.load(Ordering::SeqCst) {
                     api.prevent_close();
                     hide_to_tray_impl(window.app_handle());
@@ -2611,10 +2734,41 @@ mod tests {
     fn only_expected_windows_may_read_the_token() {
         // 反向验证：把 get_api_token 从 `COMMAND_ACL` 里删掉 ⇒ 红（主窗读不到令牌）。
         assert!(command_allowed("get_api_token", "main"));
-        // ⚠️ **token 只有主窗口能读**：别的 label 一律拒绝 —— 一旦读得到，
+        // ⚠️ **token 只有主窗口与播放器窗能读**：别的 label 一律拒绝 —— 一旦读得到，
         //    等于给"任何一扇未登记的窗口"发了一张后端 API 的通行证。
         assert!(!command_allowed("get_api_token", "evil"));
-        assert_eq!(CALLER_LABELS_ALLOWED, [ALLOWED_CALLER]);
+        // 播放器窗（2026-10-13）：它自己发取流请求，**读得到**是功能前提
+        assert!(command_allowed("get_api_token", PLAYER_LABEL));
+        assert_eq!(CALLER_LABELS_ALLOWED, [ALLOWED_CALLER, PLAYER_LABEL]);
+    }
+
+    // ── 录播播放器窗（2026-10-13，`devlog/480`）──────────────────────────
+
+    #[test]
+    fn player_window_gets_only_the_three_commands_it_needs() {
+        // 三件事：知道后端端口、读会话 token、把自己关掉
+        for cmd in ["get_backend_port", "get_api_token", "close_player_window"] {
+            assert!(command_allowed(cmd, PLAYER_LABEL), "{cmd} 该允许播放器窗调");
+        }
+        // ⚠️ 反向：任何**会动用户数据或外壳状态**的命令都不许它碰
+        for cmd in ["migrate_data_dir", "delete_old_data_dir", "quit_app", "hide_to_tray",
+                    "set_tray_status", "open_external", "open_player_window"] {
+            assert!(!command_allowed(cmd, PLAYER_LABEL),
+                    "{cmd} 不该允许播放器窗调（最小权限面）");
+        }
+    }
+
+    #[test]
+    fn player_commands_are_registered_and_guarded() {
+        // 表里有、注册表里也有（漏一处 = "点了没反应"或"命令不存在"）
+        for cmd in ["open_player_window", "close_player_window"] {
+            assert!(COMMAND_ACL.contains(&cmd), "{cmd} 没进主窗准入表");
+            assert!(PLAYER_COMMAND_ACL.contains(&cmd) || cmd == "open_player_window",
+                    "{cmd} 在播放器窗那张表里的位置要写清楚");
+        }
+        // 主窗当然两条都能调
+        assert!(command_allowed("open_player_window", "main"));
+        assert!(command_allowed("close_player_window", "main"));
     }
 
     // ── S3-B：外链白名单（devlog/208）────────────────────────────────────

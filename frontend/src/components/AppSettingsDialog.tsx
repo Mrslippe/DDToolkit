@@ -460,6 +460,16 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
     }
   }
 
+  /** 录播播放位置（2026-10-13，用户 3.2）：与 `close_action` 同一套写法（乐观写 + 失败回显） */
+  const pickVodWindow = async (next: string) => {
+    setThemeError(null)
+    try {
+      await prefs.setPref('vod_player_window', next)
+    } catch (e) {
+      setThemeError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
   /** 左栏键盘：↑↓ 移动（自动激活）+ Home/End（WAI-ARIA tabs 的垂直变体） */
   const onNavKey = (e: React.KeyboardEvent) => {
     const i = nav.findIndex((n) => n.id === active)
@@ -748,6 +758,35 @@ export default function AppSettingsDialog({ open, onOpenChange, onPill }: Props)
                       本次运行中新内核出过问题（{mseOff.why}），已自动改用渐进式；
                       重开应用或在这里重新选一次就能再试。
                     </p>
+                  )}
+
+                  {/* 录播播放位置（2026-10-13，用户 3.2）：「设置里加『默认用应用内无边框
+                      播放器窗口播放』选项」。放在「视频播放」这一节里 —— 它讲的是播放行为，
+                      与主题/关闭语义同属**外观**页；**不新开分组**（探针逐字断言左侧 5 项）。
+                      ⚠️ 桌面端才有第二扇窗口 ⇒ 浏览器里选了也只会走主窗浮层（文案里说了）。 */}
+                  {prefs.specOf('vod_player_window') && (
+                    <div className="aps-row aps-row-stack" data-setting="vod_player_window">
+                      <div className="aps-row-main">
+                        <span className="aps-label">{prefs.specOf('vod_player_window')!.label}</span>
+                        <span className="aps-note">{prefs.specOf('vod_player_window')!.note}</span>
+                      </div>
+                      <div className="aps-row-ctl aps-radio-group" role="radiogroup"
+                           aria-label="录播播放位置">
+                        {prefs.specOf('vod_player_window')!.options.map((o) => (
+                          <button
+                            key={o.value}
+                            type="button"
+                            role="radio"
+                            aria-checked={prefs.values.vod_player_window === o.value}
+                            data-vod-window-option={o.value}
+                            className={`aps-radio${prefs.values.vod_player_window === o.value ? ' on' : ''}`}
+                            onClick={() => void pickVodWindow(o.value)}
+                          >
+                            {o.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   )}
 
                   {/* 小窗三项开关（`widget_enabled` / `_click_through` / `_hide_fullscreen`）

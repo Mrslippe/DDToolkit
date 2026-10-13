@@ -28,6 +28,7 @@ import VodPlayerDialog from './live/VodPlayerDialog'
 /* ⚠️ 纯函数 `vodTarget` 与本组件的 state `vodTarget`（目标场次）**同名** ——
    这里别名导入，免得读代码时把"解析地址"和"选中的那一场"看成一件事 */
 import { vodTarget as parseVodTarget } from './live/manualSessionForm'
+import { openPlayerWindow } from '../utils/shellBridge'
 
 interface Props {
   /** 账号 id（null=无账号，显示空态）；切换账号自动重拉。
@@ -260,12 +261,24 @@ const LiveCalendar = memo(function LiveCalendar(
   /**
    * 播放这一场的录播（3.2：封面上的 ▶）。
    *
-   * 2026-10-13 起**走应用内播放器**（`VodPlayerDialog` + `/bili/play-by-bvid`）；
-   * 上一批它还只是"交给系统浏览器"，因为当时没有"按 BV 取流"的路（录播不是帖子）。
-   * ⚠️ 地址里认不出 BV 号（或那一场没有录播）→ 不打开播放器（不开一个黑框在那儿转）。
+   * 走哪条路由**偏好**决定（用户 3.2：「设置里加『默认用应用内无边框播放器窗口播放』选项」）：
+   * - `vod_player_window = on` **且** 这确实是桌面端（`openPlayerWindow` 返回 true）⇒ 独立无边框窗；
+   * - 否则 ⇒ 主窗内的播放器浮层（浏览器/探针里永远走这条，因为那边没有第二扇窗）。
+   *
+   * ⚠️ 偏好**在点击那一刻现读**（`api.getPrefs()`，与顶栏点 ✕ 读 `close_action` 同一套）：
+   * 读进 state 就得管失效与竞态，而这是一次用户手势里的一次小请求。
+   * ⚠️ 地址里认不出 BV 号（或那一场没有录播）⇒ 什么都不开（不开一个黑框在那儿转）。
    */
-  const playVod = (s: LiveSession) => {
-    if (!parseVodTarget(s.vod_url)) return
+  const playVod = async (s: LiveSession) => {
+    const t = parseVodTarget(s.vod_url)
+    if (!t) return
+    let wantWindow = false
+    try {
+      wantWindow = (await api.getPrefs()).values.vod_player_window === 'on'
+    } catch {
+      /* 偏好读不到 → 按默认（主窗浮层）走，不打扰用户 */
+    }
+    if (wantWindow && await openPlayerWindow(t.bvid, t.page)) return
     setPlayerTarget(s)
     setPlayerOpen(true)
   }

@@ -20,10 +20,13 @@ import { parseCloseAction, type CloseAction } from '../utils/shellState'
  */
 export function usePrefs() {
   /** 兜底默认值。⚠️ 小窗那三项（`widget_*`）**界面已不再消费**（小窗整窗退役，
-   *  2026-10-01），但后端仍在存它们 —— 留着是**数据层的接线点**，将来重做小窗时直接读。 */
+   *  2026-10-01），但后端仍在存它们 —— 留着是**数据层的接线点**，将来重做小窗时直接读。
+   *  ⚠️ 每次加一项都要**两处**都补（这里与下面 `load()` 里那份）：漏一处会读到 `undefined`，
+   *  而症状是"开关显示成关着、其实后端是开"（后端那份是 `_load_prefs` 给的真值）。 */
   const [values, setValues] = useState<Record<string, string>>({
     theme: 'light', close_action: 'ask', widget_enabled: 'off',
     widget_click_through: 'off', widget_hide_fullscreen: 'on',
+    vod_player_window: 'off',
   })
   const [specs, setSpecs] = useState<PrefsSpec[]>([])
   const [systemDark, setSystemDark] = useState(() => systemPrefersDark())
@@ -48,6 +51,7 @@ export function usePrefs() {
       setValues({
         theme: 'light', close_action: 'ask',
         widget_enabled: 'off', widget_click_through: 'off', widget_hide_fullscreen: 'on',
+        vod_player_window: 'off',
         ...r.values,
       })
       setSpecs(r.specs ?? [])

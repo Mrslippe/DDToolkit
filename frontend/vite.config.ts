@@ -25,14 +25,16 @@ export default defineConfig({
     },
   },
   /**
-   * **只有一个入口**（2026-10-03：桌面小窗那条线整体放弃，第二个入口随之删除）。
+   * **两个入口**（2026-10-13 起）：
    *
-   * `index.html` → `src/main.tsx` 主窗口（整个应用）。
+   * - `index.html` → `src/main.tsx` 主窗口（整个应用）；
+   * - `player.html` → `src/playerMain.tsx` **录播播放器窗**（用户 3.2：无边框播放器窗口）。
+   *   只引播放器要的那几样 —— 那扇窗不需要路由/启动幕/消息通道/问题上报。
    *
-   * 历史（留着，因为"拆入口"这件事以后还会遇到）：小窗曾经走 `index.html?widget=1`
-   * 靠**运行时**判断分流，但**静态 import 拦不住** —— 整个应用（App / react-router /
-   * shadcn / ECharts / layout.css）都会被拉进那个 renderer（实测 132MB）。
-   * 后来给它开过独立入口 `widget.html` → `src/widgetMain.tsx`，两次都随小窗一起删掉。
+   * ⚠️ **为什么不能靠运行时分流**（这段历史值得留着，因为"再拆一个入口"以后还会遇到）：
+   * 小窗曾经走 `index.html?widget=1` 靠**运行时**判断，但**静态 import 拦不住** ——
+   * 整个应用（App / react-router / shadcn / ECharts / layout.css）都会被拉进那个 renderer
+   * （实测 132MB）。所以第二个入口是**唯一**正确的做法。
    * ⚠️ 哪天真要再拆入口：先自查新入口是否在蹭别处的全局 reset（`box-sizing` / `.os-*` /
    * dev token），否则症状是"独立入口里样式全乱"。
    */
@@ -40,6 +42,7 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'index.html'),
+        player: path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'player.html'),
       },
     },
   },

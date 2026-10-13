@@ -5110,6 +5110,66 @@ img.hero-avatar {
   user-select: none;
 }
 
+/* ── 录播播放器**窗**（`player.html` → `src/playerMain.tsx`，2026-10-13 用户 3.2）──
+   无边框窗没有系统标题栏 ⇒ 自己画一条可拖拽的窄条。整窗黑底（播放场景）。 */
+.pwin {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: #000;
+  color: #fff;
+}
+
+.pwin-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 8px 0 12px;
+  background: #14161a;
+  /* 无边框窗靠这条自己拖（`data-tauri-drag-region` 由壳接管） */
+  user-select: none;
+}
+
+.pwin-title {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.82);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pwin-spacer { flex: 1; }
+
+.pwin-close {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: rgba(255, 255, 255, 0.75);
+  cursor: pointer;
+}
+
+.pwin-close:hover { background: rgba(255, 255, 255, 0.14); color: #fff; }
+
+.pwin-body { flex: 1; min-height: 0; background: #000; }
+.pwin-body .vp { border-radius: 0; }
+
+.pwin-err {
+  margin: 0;
+  padding: 16px;
+  font-size: 12.5px;
+  line-height: 20px;
+  color: #ffb4b4;
+}
+
 /* ── 录播播放器（`components/live/VodPlayerDialog`，2026-10-13 用户 3.2）──────────
    面板比场次详情窗更宽（播放面要横向空间），但**同一套浮片族规格**（r12 + 发丝边 +
    `--shadow-dialog` + 同一个遮罩 `.lc-dlg-backdrop`）。 */

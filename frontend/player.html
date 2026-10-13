@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DDtoolkit 录播</title>
+    <!--
+      录播播放器窗的宿主页（2026-10-13，用户 3.2：默认用应用内**无边框播放器窗口**播放）。
+
+      ⚠️ 为什么是**独立入口**而不是 `index.html?player=1`：本仓在这件事上栽过一次
+      （`devlog/274`、`vite.config.ts` 里那段历史）—— 运行时分流**拦不住静态 import**，
+      整个应用（App / react-router / shadcn / ECharts）都会被拉进这扇窗口的 renderer
+      （实测 132MB）。这里只进 `src/playerMain.tsx`，它只引播放器需要的那几样。
+    -->
+    <style>
+      /* 首帧底色：与主窗同理（WebView2 首绘前别闪白）。播放器窗是黑底场景。 */
+      html, body { margin: 0; height: 100%; background: #000; }
+    </style>
+  </head>
+  <body>
+    <div id="player-root"></div>
+    <script type="module" src="/src/playerMain.tsx"></script>
+  </body>
+</html>

@@ -17,6 +17,15 @@ retire-when: 前端换框架，或"顶栏是唯一宿主"这条划分被取消
 | 入口 | HTML | 挂载 | 是什么 |
 |---|---|---|---|
 | 主窗 | `index.html` | `src/main.tsx` → `App.tsx` | 整个应用：顶栏 + 图标栏 + V 列表栏 + 路由驱动的右栏 |
+| 播放器窗 | `player.html` | `src/playerMain.tsx` | **录播播放器**（2026-10-13 加，用户 3.2）：Tauri 的**第二扇无边框窗**，只渲染 `BiliVideo` |
+
+> ⚠️ **播放器窗刻意只引它要的那几样**：`index.css` + `tokens.css` + `posts.css`
+> （播放器的 `.vp*`/`.bili-*` 样式住在 `posts.css` 里，拆出去要动主窗那份的层叠顺序）；
+> **JS** 侧只进 `BiliVideo` —— 不碰 `App` / react-router / shadcn / ECharts（那正是历史小窗
+> 132MB 的成因）。宿主是 `lib.rs::open_player_window`（URL `player.html?bvid=…&p=…`）；
+> 关窗走 `close_player_window`，读 token 靠 `player` label 进了 `CALLER_LABELS_ALLOWED`
+> —— 窗口清单与命令准入见 `docs/desktop/SHELL.md` 的 29 号不变量。
+> 拆入口要过的关：见本文件第 9 节那张清单（样式 / 顶层副作用 / 坐标系三件）。
 
 > ⚠️ **历史（2026-10-01 前）**：曾经有**第二个入口**（`widget.html` → `src/widgetMain.tsx`），挂载
 > **桌面状态控件** —— 另一个置顶透明 Tauri 窗口（label `widget`）。2026-10-01 用户拍板**小窗整窗退役**
@@ -113,8 +122,10 @@ V 列表栏（均常驻）；右栏由路由驱动 —— `/` 空置界面、`/v
 
 ## 7. 构建与开发工具面
 
-- **单入口**：`vite.config.ts` 不配多入口 —— 默认入口就是 `index.html` → `src/main.tsx`
-  （2026-10-01 前这里显式列出 `main` / `widget` 两个入口，随小窗退役一并删除，见 `devlog/270`）。
+- **两个入口**（2026-10-13 起）：`vite.config.ts` 的 `rollupOptions.input` 列出
+  `main`（`index.html` → `src/main.tsx`）与 `player`（`player.html` → `src/playerMain.tsx`，
+  录播播放器窗）。⚠️ 第二扇窗口**必须**走独立入口，不能靠运行时分流（见 §1 那段历史）。
+  （2026-10-01 前这里列的是 `main` / `widget`，随小窗退役一并删除，`devlog/270`。）
 - **路径别名 `@` → `frontend/src`**；生产可用 `VITE_API_BASE` 直连后端。
 - **开发代理**：`/api` → `http://127.0.0.1:8000`（剥前缀）。S1 起后端要会话 token，
   `define` 把**开发态固定 token** 编译期注入；它的默认值**必须与 `scripts/ui_probe.py` 的

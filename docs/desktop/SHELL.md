@@ -39,6 +39,29 @@ retire-when: 桌面壳换掉 Tauri，或改成多进程模型
 唤回时**重建窗口**并加载 `index.html?restored=1`（SPA 深链接在资源协议下会 404）；位置与视图从
 `localStorage` 的 `ddtoolkit.shell-state` 恢复，`?restored=1` 是**唯一的恢复开关**（普通启动不恢复）。
 
+**窗口清单（2026-10-13 起是两扇）**：
+
+| label | 谁开 | 页面 | 关掉它意味着 |
+|---|---|---|---|
+| `main` | 启动时建（`tauri.conf.json`）/ 深休眠唤醒时 `rebuild_main_window` | `index.html` | **隐藏到托盘**（`CloseRequested` 被拦下，后台照常抓） |
+| `player` | 主窗调 `open_player_window`（用户在场次封面点 ▶，且偏好 `vod_player_window=on`） | `player.html?bvid=…&p=…` | **真的关掉**（`CloseRequested` 按 label 分流，见下） |
+
+- ⚠️ **`CloseRequested` 必须按 label 分流**（`lib.rs` 的 `.on_window_event`）：不分流的话
+  用户点播放器的 ✕ 会**把主窗藏进托盘**、播放器还杵在那儿 —— 怎么想都不对。
+- ⚠️ 播放器窗的建窗参数**逐项照抄主窗**（无边框 / 透明 / 全透明底色 /
+  `VP_BROWSER_ARGS`）：少一项的症状是"两扇窗长得不是一套"或者"视频在播放器窗里丢帧"
+  （硬件解码只认 `additionalBrowserArgs`，`devlog/404`）。
+- ⚠️ `open_player_window` 必须是 **`async fn`**：同步命令跑在主线程，而"在已有 webview 的
+  进程里于主线程同步建第二个"实测会卡死（历史小窗那版就是这么卡住的，`devlog/175`-`179`）；
+  另有 `CREATING_PLAYER` 重入闸门（`React.StrictMode` 下 effect 跑两次）。
+- ⚠️ 播放器窗用**独立入口** `player.html`（`vite.config.ts` 多入口）—— 运行时分流拦不住
+  静态 import（历史小窗实测 132MB，`devlog/274`）。它自己取 token（`get_api_token` 放行了
+  `player` label），也自己关闭自己（`close_player_window`）。
+
+> **偏好开关**：`vod_player_window`（`prefs` 家族，`app/routers/settings.py`，默认 `off`）。
+> 默认关的理由：独立窗口只有桌面端有，浏览器/探针里那条路走不通 —— 默认打开等于让新装的
+> 用户先撞上一个"开了没反应"的开关。关着时走**主窗内的播放浮层**（`VodPlayerDialog`）。
+
 ## 2. 数据目录与磁盘占用（2026-09-16，R22 devlog/103）
 
 数据目录默认在 `%APPDATA%\com.ddtoolkit.app`（便携版可用 `DDTOOLKIT_DATA_DIR` 指定）。
@@ -96,8 +119,16 @@ retire-when: 桌面壳换掉 Tauri，或改成多进程模型
       创建的窗口 —— 它能调的只有六条，且后三条是组件**自己**在调的：展开就 resize / 全屏隐藏 /
       穿透；填错就是把小窗点坏，devlog/175 的形态）。小窗整窗退役后两档**合并成一个
       `ALLOWED_CALLER = "main"`**（`devlog/270`）。
+      ⚠️ **2026-10-13 又变成两档**（用户 3.2 的录播播放器窗，`devlog/480`）：主窗走
+      `COMMAND_ACL`；`PLAYER_LABEL = "player"` 那扇窗只走 **`PLAYER_COMMAND_ACL` 三条**
+      （`get_backend_port` / `get_api_token` / `close_player_window`，即"知道后端在哪、
+      拿得到令牌、能把自己关掉"）。`CALLER_LABELS_ALLOWED` 也随之放进 `player`
+      —— 它**必须**读得到 token，否则"窗口开了、播不了"（那条命令只放行
+      `/healthz`、`/static/`，取流/段表都要带 token）。
+      ⚠️ 别再往播放器窗那张表里加东西：多一点能力就是多一条从播放器页发起的越权路径。
     - 判据（`cargo test`）：注册表 ↔ 准入表**双向对账**、每条命令都调了 guard（扫源码）、
-      危险/动数据的命令 main-only、未知命令默认拒。
+      危险/动数据的命令 main-only、未知命令默认拒、**播放器窗只拿到那三条**（反向断言：
+      `migrate_data_dir`/`quit_app`/`open_external`/`open_player_window` 它都调不了）。
 
 30b. **后端端口：优先固定区间 `8765–8769`，全被占才回退随机**（E2，2026-10-06）：
     `lib.rs::pick_backend_port(&PREFERRED_PORTS)`。**为什么改掉纯随机**（原先 `127.0.0.1:0`）：

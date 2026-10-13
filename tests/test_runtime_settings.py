@@ -491,6 +491,31 @@ def test_prefs_close_action_whitelist(client, db):
     assert AppMetaRepo(db).get("prefs.close_action") == "ask"   # 没被改脏
 
 
+def test_prefs_vod_player_window_whitelist(client, db):
+    """录播播放位置（2026-10-13，用户 3.2）：默认 `off`（主窗内浮层），只认两个取值。
+
+    为什么默认 `off`：独立播放器窗只有桌面端有，而浏览器/探针里那条路走不通 ——
+    默认打开等于让新装的用户先撞上一个"开了没反应"的开关（`devlog/480`）。
+    判错代价与 `close_action` 那条同一类：写进后端不认的值 ⇒ 前端读默认值、
+    用户"明明开过"却每次都在主窗里弹。
+    """
+    body = client.get("/settings/prefs").json()
+    assert body["values"]["vod_player_window"] == "off"
+    spec = [s for s in body["specs"] if s["key"] == "vod_player_window"]
+    assert spec and [o["value"] for o in spec[0]["options"]] == ["off", "on"]
+    # 它属于「外观」组（与主题/关闭语义同一页），**不是新开一个分组** ——
+    # 探针逐字断言设置窗左侧只有 5 项（`ui_probe --app-settings`），新开组会当场红
+    assert spec[0]["group"] == "外观"
+    for ok in ("on", "off"):
+        r = client.put("/settings/prefs", json={"values": {"vod_player_window": ok}})
+        assert r.status_code == 200, r.text
+        assert r.json()["values"]["vod_player_window"] == ok
+        assert AppMetaRepo(db).get("prefs.vod_player_window") == ok
+    r = client.put("/settings/prefs", json={"values": {"vod_player_window": "maybe"}})
+    assert r.status_code == 400
+    assert AppMetaRepo(db).get("prefs.vod_player_window") == "off"   # 没被改脏
+
+
 def test_user_facing_copy_has_no_markdown_markers():
     """后端下发的文案（label / unit / effect / note / why / option）是**纯文本**，
     前端原样渲染。

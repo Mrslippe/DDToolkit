@@ -65,6 +65,36 @@ export async function openExternal(url: string): Promise<void> {
   await invoke('open_external', { url })
 }
 
+/**
+ * 打开**录播播放器窗**（2026-10-13，用户 3.2：「默认用应用内无边框播放器窗口播放」）。
+ *
+ * 返回 `false` 表示**这扇窗开不起来**（浏览器/探针环境没有第二个窗口这回事），
+ * 调用方据此退回到主窗内的播放器浮层 —— **别把"开不出来"当成错误抛给用户**：
+ * 在浏览器里打开应用是开发/探针的常态，那里本来就该有可用的播放面。
+ *
+ * ⚠️ 权限：Rust 侧的 `open_player_window` **只允许主窗调**（`COMMAND_ACL`），
+ * 而 `close_player_window` 播放器窗自己也能调（`PLAYER_COMMAND_ACL`）。
+ */
+export async function openPlayerWindow(bvid: string, page?: number): Promise<boolean> {
+  if (!isTauri) return false
+  try {
+    await invoke('open_player_window', { bvid, page: page ?? null })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** 关掉录播播放器窗（播放器页自己的 ✕ / Esc 走这条）。没有那扇窗时是空操作。 */
+export async function closePlayerWindow(): Promise<void> {
+  if (!isTauri) return
+  try {
+    await invoke('close_player_window')
+  } catch {
+    /* 忽略：关窗失败没有可做的补救，也不该弹错误 */
+  }
+}
+
 // ── 数据目录（R22-B2d，devlog/108）────────────────────────────────────
 
 export interface ShellDataDirInfo {
