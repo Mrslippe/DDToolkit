@@ -22,7 +22,7 @@ import { useEffect, useState } from 'react'
 
 import { api } from '../../api/api'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog'
-import { freezeBodyScroll, noScrollAutoFocus } from './dialogScroll'
+import { noScrollAutoFocus, useFreezeBodyScroll } from './dialogScroll'
 
 interface Props {
   open: boolean
@@ -50,9 +50,12 @@ export default function ReservationDialog({
     setDate(dayKey)
     setError(null)
     setBusy(false)
-    // 临时让 body 不可滚：焦点滚进视口那一下就不会把页面顶走（`dialogScroll.ts` 记了两次修错）
-    return freezeBodyScroll()
   }, [open, dayKey])
+
+  // 冻结 body：焦点滚进视口那一下没得滚，页面不会被顶走。
+  // ⚠️ 必须走这个 hook（内部 `useLayoutEffect`）—— 用 `useEffect` 晚一拍，
+  //    那时 body 已经滚过了（`devlog/476` 实测：`body.scrollTop` 那时已是 486）。
+  useFreezeBodyScroll(open)
 
   const canSave = title.trim().length > 0 && !busy && vtuberId != null
 

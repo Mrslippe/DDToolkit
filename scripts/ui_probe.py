@@ -4089,6 +4089,11 @@ def main() -> int:
                 for fr in (mp.get("frames") or [])[:6]:
                     print(f"      +{fr.get('t')}ms：body={fr.get('body')} de={fr.get('de')}"
                           f" 卡片={fr.get('card')} dlgY={fr.get('dlgY')} 焦点={fr.get('focus')}")
+                for wr in (mp.get("scrollWrites") or [])[:3]:
+                    print(f"      write body.scrollTop = {wr.get('v')}")
+                    for line in (wr.get("stack") or [])[:5]:
+                        print(f"          {line}")
+                print(f"      marks={mp.get('marks')}")
             if md and not (md.get("w") and md.get("h") and md.get("inViewport")):
                 mp_bad.append(
                     f"@{w} 记录场次窗在 DOM 里但**看不见**：盒 {md.get('w')}×{md.get('h')} @"

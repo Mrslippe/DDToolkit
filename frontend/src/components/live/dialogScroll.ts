@@ -34,6 +34,7 @@
  * 判据：`ui_probe --archive` 的 `_reservation_dialog_failures` ——
  * ① 卡片上缘/scrollY 开合前后一致；② 弹窗盒**必须在视口内**（两条各守一种错法）。
  */
+import { useLayoutEffect } from 'react'
 
 /**
  * 交给 Radix `DialogContent` 的 `onOpenAutoFocus`：**接管自动聚焦**。
@@ -61,38 +62,68 @@ export function noScrollAutoFocus(
 }
 
 /**
- * 打开弹窗时调用：**临时让 body 不可滚**（不改它的定位，因此不影响 `fixed` 遮罩的居中），
- * 并在**下一帧与稍后各一次**把可能已经发生的滚动量压回打开前那一刻。
+ * 打开弹窗时调用：**冻结 body**（`position: fixed` + 负 `top` 摆回原位）。
  *
- * 返回还原函数（关弹窗时调用）。
+ * 这是 body-scroll-lock 的标准做法，也是这里唯一可用的那一招：
  *
- * ⚠️ 为什么不给 body 上 `position: fixed`：那样 `fixed` 遮罩的 flex 居中会算在
- * **滚动盒**上（内容 1080 时 50% = 540）⇒ 弹窗被摆到视口外，`devlog/476` 第一版就这么错的。
- * 也不只"钉回 0"（第二版）：那只是把滚动**藏起来**，布局仍旧按滚动后的坐标算。
+ * - `body` 被固定住之后**根本不可滚** ⇒ Radix 自动聚焦那一下没得滚（源头堵住）；
+ * - 同时它仍占着原位置（负 `top` 抵消滚动量）⇒ 遮罩的 flex 居中照旧算得准。
  *
- * 判据：`ui_probe --archive`（卡片上缘与 scrollY 开合前后一致 + 弹窗盒必须在视口内）。
+ * 返回还原函数（关弹窗时调用），逐字还原原值（含原先就是 fixed 的情形）。
+ *
+ * ## ⚠️ 走错过的三条路（都真踩过，别再走）
+ *
+ * | 试过 | 结果 |
+ * |---|---|
+ * | 打开期间把 `body.scrollTop` 钉回 0 | 滚动被"藏起来"，但遮罩居中仍按滚动后的坐标算 ⇒ 弹窗被摆到 `y=761`（视口只有 621）⇒ **用户看到"只有灰色遮罩、没有小窗"** |
+ * | 给 `.lc-ms` 自己上 `position:fixed` + `translate(-50%,-50%)` | 与既有入场动画的 `transform` **打架**（动画优先，且它本来就带 8px 位移）⇒ X 轴偏 210px、Y 轴跑到 -20 |
+ * | 只接管 `onOpenAutoFocus`（`preventScroll:true`） | 有用但**不够**：滚动在点击的**同一拍**就发生了（分帧实测 +0ms 已是 762），那时弹窗还没挂载 |
+ *
+ * ⚠️ 不碰真正的滚动容器（`.os-scroll`）：日历卡在数据视图里本来就可滚，
+ * 把它一起钉死会让"弹窗开着也能滚卡"变成做不到的事。
+ * 判据：`ui_probe --archive` 的 `_reservation_dialog_failures` ——
+ * ① 卡片上缘/scrollY 开合前后一致；② 弹窗盒**必须在视口内**且大致居中（两条各守一种错法）。
  */
 export function freezeBodyScroll(): () => void {
   const el = document.body
-  const root = document.documentElement
   const saved = {
-    bodyOverflow: el.style.overflow,
-    rootOverflow: root.style.overflow,
-    y: el.scrollTop,
+    position: el.style.position,
+    top: el.style.top,
+    left: el.style.left,
+    right: el.style.right,
+    width: el.style.width,
+    overflow: el.style.overflow,
+    scrollTop: el.scrollTop,
   }
-  const clamp = () => { if (el.scrollTop !== saved.y) el.scrollTop = saved.y }
+  const y = el.scrollTop
+  el.style.position = 'fixed'
+  el.style.top = `-${y}px`
+  el.style.left = '0'
+  el.style.right = '0'
+  el.style.width = '100%'
   el.style.overflow = 'hidden'
-  root.style.overflow = 'hidden'
-  clamp()
-  const r1 = requestAnimationFrame(clamp)
-  const t1 = window.setTimeout(clamp, 50)
-  const t2 = window.setTimeout(clamp, 200)
   return () => {
-    cancelAnimationFrame(r1)
-    window.clearTimeout(t1)
-    window.clearTimeout(t2)
-    el.style.overflow = saved.bodyOverflow
-    root.style.overflow = saved.rootOverflow
-    el.scrollTop = saved.y
+    el.style.position = saved.position
+    el.style.top = saved.top
+    el.style.left = saved.left
+    el.style.right = saved.right
+    el.style.width = saved.width
+    el.style.overflow = saved.overflow
+    el.scrollTop = saved.scrollTop
   }
+}
+
+/**
+ * React 的 `useLayoutEffect` 版本：**必须用它，不能用 `useEffect`**。
+ *
+ * ⚠️ 2026-10-13 实测（`devlog/476`）：`useEffect` 跑在**浏览器绘制之后** —— 那时 Radix 的
+ * 自动聚焦已经发生、`body.scrollTop` 已经是 486，于是"冻结"记下的基准就是错的
+ * （它把已经滚过的位置当成原位，弹窗被摆到视口外）。
+ * `useLayoutEffect` 在**同一次提交、绘制之前**跑 ⇒ 抢在那一下滚动之前锁住 body。
+ */
+export function useFreezeBodyScroll(open: boolean): void {
+  useLayoutEffect(() => {
+    if (!open) return
+    return freezeBodyScroll()
+  }, [open])
 }

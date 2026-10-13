@@ -2315,6 +2315,41 @@ export async function runUiProbe(): Promise<void> {
     }
     const clickAndMeasure = async (cell: HTMLElement) => {
       const before = geomNow()
+      // ── 抓"谁把 body 滚了"（2026-10-13）────────────────────────────────
+      // 前三版都在"滚了之后想办法"（钉回 0 / position:fixed / 遮罩铺满），全错。
+      // 这次直接抓**写入 scrollTop 的那一栈** —— 不然只能继续猜。
+      const scrollWrites: unknown[] = []
+      const proto = Object.getPrototypeOf(document.body) as object
+      const desc = Object.getOwnPropertyDescriptor(proto, 'scrollTop')
+      if (desc?.set) {
+        Object.defineProperty(proto, 'scrollTop', {
+          ...desc,
+          set(this: HTMLElement, v: number) {
+            if (this === document.body && v !== 0 && scrollWrites.length < 6) {
+              const st = (new Error().stack || '').split('\n').slice(1, 7)
+                .map((s) => s.trim().replace(/^at\s+/, '').slice(0, 90))
+              scrollWrites.push({ v, stack: st })
+            }
+            desc.set!.call(this, v)
+          },
+        })
+      }
+      const restore = () => {
+        if (desc) Object.defineProperty(proto, 'scrollTop', desc)
+      }
+      // 谁先动 body？记 scroll 事件与"弹窗挂载"的相对顺序（一次抓清，别再猜）
+      const marks: unknown[] = []
+      const t0 = performance.now()
+      const onScroll = (e: Event) => {
+        if (e.target === document || e.target === document.body) {
+          marks.push({
+            what: 'scroll', at: Math.round(performance.now() - t0),
+            tgt: (e.target as Element).nodeName,
+            top: Math.round(document.body.scrollTop),
+          })
+        }
+      }
+      document.addEventListener('scroll', onScroll, true)
       cell.click()
       // 分帧采样：滚动到底是**哪一拍**发生的（打开动画里？聚焦时？）
       const frames: unknown[] = []
@@ -2332,6 +2367,8 @@ export async function runUiProbe(): Promise<void> {
             document.querySelector('.lc-ms')?.getBoundingClientRect().top ?? 0),
         })
       }
+      document.removeEventListener('scroll', onScroll, true)
+      restore()
       const out = {
         opened: !!document.querySelector('.lc-ms'),
         isReservation: !!document.querySelector('[data-rv-date]'),
@@ -2339,15 +2376,43 @@ export async function runUiProbe(): Promise<void> {
         before,
         after: geomNow(),
         frames,
+        scrollWrites,
+        marks,
       }
       document.querySelector<HTMLElement>('.lc-ms-actions .lc-ms-btn')?.click()
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
       await sleep(400)
       return out
     }
-    const emptyPast = [...inMonth].reverse().find(
-      (c) => !c.getAttribute('data-lc-has-session') && !c.getAttribute('data-resv-count'),
-    ) ?? null
+    /** 空且**已过去**的那一格（日号 < 今天）⇒ 打开的是"记录场次"窗。
+     *  ⚠️ 早先写的是"取最后一个空格"，那会选到本月末尾（未来）⇒ 打开预约窗，
+     *  于是判据量错了对象（`devlog/476` 那次"记录场次窗不可见"的误报）。 */
+    const today = new Date().getDate()
+    const emptyPast = inMonth.find((c) => {
+      if (c.getAttribute('data-lc-has-session') || c.getAttribute('data-resv-count')) return false
+      const n = Number((c.querySelector('.lc-day')?.textContent || '').trim())
+      return Number.isFinite(n) && n < today
+    }) ?? null
+    // 视觉存档（`--shot-resv`）：让记录窗**开着**截一张 —— 用户报的是"看不见小窗"，
+    // 这类毛病只有看图才算验过（探针能报"在视口内"，但报不了"长得对不对"）。
+    if (new URLSearchParams(window.location.search).get('keep') === 'resv' && emptyPast) {
+      const before = geomNow()
+      emptyPast.click()
+      await sleep(600)
+      const pre0 = document.createElement('pre')
+      pre0.id = 'ui-probe'
+      pre0.textContent = JSON.stringify({
+        mode: 'archive', views: [], degraded: null,
+        calendar: { title: '（keep=resv 存档）', cells: [], detail: null,
+                    pendingSample: null, settledSample: null, filter: null,
+                    reservation: null, manual: null, cellPop: null,
+                    keep: { before, after: geomNow(), dialog: dlgNow() } },
+        thirdparty: null,
+      })
+      document.body.appendChild(pre0)
+      document.title = 'UI_PROBE_DONE'
+      return
+    }
     if (emptyFuture) resvProbe = await clickAndMeasure(emptyFuture)
     // 过去那一格 ⇒ **记录场次**窗（同一次也量它的可见性与页面稳定性）
     let manualProbe: Record<string, unknown> | null = null

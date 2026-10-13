@@ -30,7 +30,7 @@ import {
   type ManualFormValues, buildManualPatch, canSubmitNew, defaultManualRange,
   defaultRangeForDay, formFromSession, hasChanges,
 } from './manualSessionForm'
-import { freezeBodyScroll, noScrollAutoFocus } from './dialogScroll'
+import { noScrollAutoFocus, useFreezeBodyScroll } from './dialogScroll'
 
 interface Props {
   open: boolean
@@ -75,9 +75,10 @@ export default function ManualSessionDialog({
     setError(null)
     setBusy(false)
     setConfirmDel(false)
-    // 同一个收口：临时让 body 不可滚 ⇒ 焦点滚进视口那一下不会把页面顶走（`devlog/476`）
-    return freezeBodyScroll()
   }, [open, session, newDay])
+
+  // 冻结 body（`useLayoutEffect`）：抢在 Radix 自动聚焦那一下之前锁住，页面不会被顶走
+  useFreezeBodyScroll(open)
 
   const set = (k: keyof ManualFormValues) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setValues((v) => ({ ...v, [k]: e.target.value }))
