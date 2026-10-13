@@ -1754,6 +1754,18 @@ def _bili_bvid_of(db: Session, post_id: int) -> str:
     return str(bvid)
 
 
+def _play_error_to_http(e) -> HTTPException:
+    """`PlayError.kind` → HTTP 状态（**四条取流路由共用**，别再各写一遍）。
+
+    分类口径（devlog/289）：`not_found` 404 / `forbidden` 403（充电专属等）/ `risk_control` 429 /
+    其余 502。⚠️ 抽出来的理由不是"少几行"：2026-10-13 加"按 BV 取流"那两条路由时，映射在四处
+    各写一遍 ⇒ 以后补一类 kind 必然漏掉某一条路（而漏掉的表现是"同一种失败、两条路给出不同
+    状态码"，前端按状态码分的分支就跟着错）。
+    """
+    status = {"not_found": 404, "forbidden": 403, "risk_control": 429}.get(e.kind, 502)
+    return HTTPException(status, e.message)
+
+
 @router.get("/bili/play/{post_id}")
 async def bili_play(post_id: int, qn: int | None = Query(None),
                     fallback: bool = Query(False),
@@ -1781,8 +1793,36 @@ async def bili_play(post_id: int, qn: int | None = Query(None),
     try:
         return await bili_play.play_info(bvid, qn=qn, durl_fallback=fallback, cid=cid)
     except bili_play.PlayError as e:
-        status = {"not_found": 404, "forbidden": 403, "risk_control": 429}.get(e.kind, 502)
-        raise HTTPException(status, e.message) from e
+        raise _play_error_to_http(e) from e
+
+
+@router.get("/bili/play-by-bvid")
+async def bili_play_by_bvid(bvid: str = Query(..., description="BV 号或 B 站视频链接"),
+                            qn: int | None = Query(None),
+                            fallback: bool = Query(False),
+                            cid: int | None = Query(None)):
+    """**按 BV 号**取流（2026-10-13，用户 3.2：录播播放）。
+
+    为什么单开一条：`/bili/play/{post_id}` 的前提是"这条视频是一个**帖子**"（`_bili_bvid_of`
+    要查库把 post_id 翻成 bvid）。而**录播不是帖子** —— `live_sessions.vod_url` 指向的
+    多半是录播组发的视频，我们库里根本没有那一条 post ⇒ 那条路走不通。
+    服务层本来就吃 bvid（`play_info(bvid, …)`），所以这里只是补上"入口那一层"。
+
+    - `bvid` 收**BV 号或链接**（`bvid_of` 负责抠号，与服务端入库时同一个纯函数）；
+      抠不到 → 400 且给中文原因（**不是 500**）；
+    - 其余口径与 `/bili/play/{post_id}` **逐字一致**（同一个 `play_info`、同一套错误分类、
+      同样 120s 短缓存、同样不落库）—— 差别只有"bvid 从哪来"。
+    """
+    from app.domain.live_manual import bvid_of
+    from app.services import bili_play
+
+    bv = bvid_of(bvid)
+    if not bv:
+        raise HTTPException(400, "这不是一个 B 站视频地址（要 BV 号或 /video/BV… 链接）")
+    try:
+        return await bili_play.play_info(bv, qn=qn, durl_fallback=fallback, cid=cid)
+    except bili_play.PlayError as e:
+        raise _play_error_to_http(e) from e
 
 
 @router.get("/bili/segments/{post_id}")
@@ -1814,11 +1854,38 @@ async def bili_segments(post_id: int, qn: int | None = Query(None),
         play = await bili_play.play_info(bvid, qn=qn, cid=cid)
         tables = await bili_segments.stream_tables(play)
     except bili_play.PlayError as e:
-        status = {"not_found": 404, "forbidden": 403, "risk_control": 429}.get(e.kind, 502)
-        raise HTTPException(status, e.message) from e
+        raise _play_error_to_http(e) from e
     except bili_segments.SegmentsError as e:
         raise HTTPException(502, f"{e.message}（这段流做不了 MSE，将退回渐进式）") from e
     return {"bvid": bvid, "quality": play.get("quality"),
+            "duration_s": tables["duration_s"],
+            "video": tables["video"], "audio": tables["audio"]}
+
+
+@router.get("/bili/segments-by-bvid")
+async def bili_segments_by_bvid(bvid: str = Query(..., description="BV 号或 B 站视频链接"),
+                                qn: int | None = Query(None),
+                                cid: int | None = Query(None)):
+    """**按 BV 号**取段表（2026-10-13，用户 3.2：录播播放的 MSE 内核要用它）。
+
+    与 `/bili/segments/{post_id}` 逐字一致，差别只有"bvid 从哪来"（同 `/bili/play-by-bvid`
+    的理由：录播不是帖子）。⚠️ 前端必须拿**与 `/bili/play-by-bvid` 同一组 `qn`/`cid`**，
+    否则段表与播放地址会对不上（切 P / 换清晰度时尤其明显）。
+    """
+    from app.domain.live_manual import bvid_of
+    from app.services import bili_play, bili_segments
+
+    bv = bvid_of(bvid)
+    if not bv:
+        raise HTTPException(400, "这不是一个 B 站视频地址（要 BV 号或 /video/BV… 链接）")
+    try:
+        play = await bili_play.play_info(bv, qn=qn, cid=cid)
+        tables = await bili_segments.stream_tables(play)
+    except bili_play.PlayError as e:
+        raise _play_error_to_http(e) from e
+    except bili_segments.SegmentsError as e:
+        raise HTTPException(502, f"{e.message}（这段流做不了 MSE，将退回渐进式）") from e
+    return {"bvid": bv, "quality": play.get("quality"),
             "duration_s": tables["duration_s"],
             "video": tables["video"], "audio": tables["audio"]}
 

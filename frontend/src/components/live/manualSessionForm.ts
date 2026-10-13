@@ -130,3 +130,23 @@ export function vodLabel(url: string | null | undefined): string {
   const m = /BV[0-9A-Za-z]{10}/.exec(url ?? '')
   return m ? m[0] : '打开录播'
 }
+
+/**
+ * 录播地址 → **播放器要的两个东西**（2026-10-13，用户 3.2）。
+ *
+ * `vod_url` 的形态由服务端钉死（`domain/live_manual.py` 的 `VOD_CANONICAL`：
+ * `https://www.bilibili.com/video/<bvid>[?p=N]`），这里只是把它拆成
+ * `{bvid, page}`：`bvid` 喂给 `/bili/play-by-bvid`，`page` 决定**开哪一分 P**
+ * （不拆的话多 P 录播只会播第一段 —— 与 `devlog/329` 修过的是同一类问题）。
+ *
+ * 认不出（没有 BV 号 / 不是本仓存的形态）→ `null`：调用方据此**不打开播放器**，
+ * 而不是开一个黑框在那儿转。P 号只在 `>= 2` 时才返回 —— `?p=1` 与不传是同一件事。
+ */
+export function vodTarget(url: string | null | undefined):
+  { bvid: string; page?: number } | null {
+  const m = /BV[0-9A-Za-z]{10}/.exec(url ?? '')
+  if (!m) return null
+  const p = /[?&]p=(\d+)/.exec(url ?? '')
+  const n = p ? Number(p[1]) : 0
+  return { bvid: m[0], ...(Number.isFinite(n) && n >= 2 ? { page: n } : {}) }
+}

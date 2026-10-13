@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest'
 import type { LiveSession } from '../../api/types'
 import {
   buildManualPatch, canSubmitNew, defaultManualRange, formFromSession,
-  fromLocalInput, hasChanges, toLocalInput, vodLabel,
+  fromLocalInput, hasChanges, toLocalInput, vodLabel, vodTarget,
 } from './manualSessionForm'
 
 /** 本地墙上时间 → ISO（用本地分量构造，所以断言与时区无关） */
@@ -123,5 +123,40 @@ describe('canSubmitNew / vodLabel', () => {
     expect(vodLabel('https://www.bilibili.com/video/BV1xx411c7mD?p=3')).toBe('BV1xx411c7mD')
     expect(vodLabel(null)).toBe('打开录播')
     expect(vodLabel('https://www.bilibili.com/video/av123')).toBe('打开录播')
+  })
+})
+
+/**
+ * 录播地址 → 播放器要的两样（`vodTarget`，2026-10-13 用户 3.2）。
+ *
+ * 为什么这条值得单独钉：`vod_url` 的形态是**服务端钉死的**（`VOD_CANONICAL` +
+ * `?p=N`），前端拆错一位的后果分别是"播不了"（bvid 拆错）与"多 P 录播只播第一段"
+ * （p 没拆出来，而本仓在帖子播放上修过一次同类 bug，`devlog/329`）。
+ */
+describe('vodTarget（录播地址 → bvid / 分P）', () => {
+  it('拆出 BV 号；没有 `?p=` → 不带 page（= 第 1 P）', () => {
+    expect(vodTarget('https://www.bilibili.com/video/BV1xx411c7mD'))
+      .toEqual({ bvid: 'BV1xx411c7mD' })
+  })
+
+  it('★ `?p=3` 必须拆出来（不拆 ⇒ 多 P 录播只播第一段）', () => {
+    expect(vodTarget('https://www.bilibili.com/video/BV1xx411c7mD?p=3'))
+      .toEqual({ bvid: 'BV1xx411c7mD', page: 3 })
+  })
+
+  it('`?p=1` 与不传等价（别为了一个和默认一样的值多取一次流）', () => {
+    expect(vodTarget('https://www.bilibili.com/video/BV1xx411c7mD?p=1'))
+      .toEqual({ bvid: 'BV1xx411c7mD' })
+  })
+
+  it('裸 BV 号也认（老数据/手填的形态）', () => {
+    expect(vodTarget('BV1xx411c7mD')).toEqual({ bvid: 'BV1xx411c7mD' })
+  })
+
+  it('认不出来 → null（调用方据此**不开播放器**，而不是开个黑框在那儿转）', () => {
+    expect(vodTarget(null)).toBeNull()
+    expect(vodTarget('')).toBeNull()
+    expect(vodTarget('https://www.bilibili.com/video/av123')).toBeNull()
+    expect(vodTarget('https://example.com/x.mp4')).toBeNull()
   })
 })

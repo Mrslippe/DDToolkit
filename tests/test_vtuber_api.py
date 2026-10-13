@@ -2316,6 +2316,102 @@ def test_bili_play_route_rejects_non_video_posts(client):
     assert client.get(f"/bili/play/{_bili_video_post(bvid='')}").status_code == 400
 
 
+# ── 按 BV 号取流（录播播放，2026-10-13 用户 3.2 / devlog/479）─────────────────
+
+@pytest.mark.parametrize("raw,expect_bv", [
+    ("BV1xx411c7mD", "BV1xx411c7mD"),
+    # ★ 用户填进 `vod_url` 的是**链接**（服务端规范化前就是这样进来的）⇒ 必须也认
+    ("https://www.bilibili.com/video/BV1xx411c7mD?p=2", "BV1xx411c7mD"),
+    ("  BV1xx411c7mD  ", "BV1xx411c7mD"),
+])
+def test_bili_play_by_bvid_route_accepts_bvid_or_link(monkeypatch, client, raw, expect_bv):
+    """`/bili/play-by-bvid`：**BV 号与链接都收**，抠出来的号原样接到服务层。
+
+    为什么要有这条：录播不是帖子（库里没有那条 post）⇒ `/bili/play/{post_id}` 走不通，
+    而 `live_sessions.vod_url` 存的是一条**链接**。抠号用的是入库时同一个纯函数
+    （`domain/live_manual.py::bvid_of`）—— 两边口径必须一致，否则"存进去能播、取出来播不了"。
+    """
+    import app.services.bili_play as play_svc
+
+    seen: dict = {}
+
+    async def _fake(bvid, **kw):
+        seen["bvid"] = bvid
+        seen.update(kw)
+        return {"quality": 80, "accept": [], "dash": {"video": [], "audio": []},
+                "durl": [], "expires_in": 120, "kernel": "dash"}
+
+    monkeypatch.setattr(play_svc, "play_info", _fake)
+
+    r = client.get("/bili/play-by-bvid", params={"bvid": raw, "qn": "64", "cid": "222"})
+    assert r.status_code == 200, r.text
+    assert seen.get("bvid") == expect_bv
+    assert seen.get("qn") == 64 and seen.get("cid") == 222, f"参数没接到服务上：{seen}"
+
+
+def test_bili_play_by_bvid_route_rejects_garbage(client):
+    """抠不到 BV 号 → **400 + 中文原因**（不是 500，也不是硬播一个空视频）。
+
+    反向验证：把路由里那句 `bvid_of` 判断删掉 ⇒ 服务层会拿着空串去请求上游，
+    用户看到的是"取流失败"而不是"你填的不是 B 站视频地址"。
+    """
+    r = client.get("/bili/play-by-bvid", params={"bvid": "https://example.com/a.mp4"})
+    assert r.status_code == 400
+    assert "B 站视频地址" in r.json()["detail"]
+
+
+@pytest.mark.parametrize("kind,status", [
+    ("not_found", 404), ("forbidden", 403), ("risk_control", 429), ("network", 502),
+])
+def test_bili_by_bvid_routes_share_the_error_mapping(monkeypatch, client, kind, status):
+    """两条新路由与两条老路由**共用同一套失败分类**（`_play_error_to_http`）。
+
+    ⚠️ 这条判据盯的是"四份映射各写一遍"那个坑：漏一处的表现是**同一种失败、两条路给出不同
+    状态码**，而前端按状态码分支（404 说"视频没了"、429 说"被风控了"）⇒ 用户会被指错方向。
+    """
+    import app.services.bili_play as play_svc
+
+    async def _boom(bvid, **kw):
+        raise play_svc.PlayError(f"（{kind}）", kind=kind)
+
+    monkeypatch.setattr(play_svc, "play_info", _boom)
+
+    for path in ("/bili/play-by-bvid", "/bili/segments-by-bvid"):
+        r = client.get(path, params={"bvid": "BV1xx411c7mD"})
+        assert r.status_code == status, f"{path} 的 {kind} 应回 {status}：{r.status_code}"
+        assert kind in r.json()["detail"]
+
+
+def test_bili_segments_by_bvid_route_forwards_cid(monkeypatch, client):
+    """`/bili/segments-by-bvid` 的 `cid` 也要接到服务层（与取流那条必须**同一条流**）。"""
+    import app.services.bili_play as play_svc
+    import app.services.bili_segments as seg_svc
+
+    seen: dict = {}
+
+    async def _fake_play(bvid, **kw):
+        seen["bvid"] = bvid
+        seen.update(kw)
+        return {"quality": 80, "dash": {"video": [], "audio": []}, "durl": [],
+                "expires_in": 120, "kernel": "dash"}
+
+    async def _fake_tables(play):
+        return {"video": {"mime": "video/mp4; codecs=\"x\"", "init": {"start": 0, "end": 1},
+                          "segments": [], "duration_s": 1, "urls": ["u"]},
+                "audio": {"mime": "audio/mp4; codecs=\"x\"", "init": {"start": 0, "end": 1},
+                          "segments": [], "duration_s": 1, "urls": ["u"]},
+                "duration_s": 1}
+
+    monkeypatch.setattr(play_svc, "play_info", _fake_play)
+    monkeypatch.setattr(seg_svc, "stream_tables", _fake_tables)
+
+    r = client.get("/bili/segments-by-bvid", params={"bvid": "BV1xx411c7mD", "qn": "64", "cid": "222"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["bvid"] == "BV1xx411c7mD" and "video" in body and "audio" in body
+    assert seen.get("qn") == 64 and seen.get("cid") == 222, f"cid 没接到服务上：{seen}"
+
+
 # ── 打开时重取媒体（批次 3，devlog/320）─────────────────────────────────────
 
 def _install_fake_fetcher(monkeypatch, *, platform="xiaohongshu", enrich=None):

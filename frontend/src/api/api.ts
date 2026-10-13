@@ -270,6 +270,24 @@ export interface PostListParams {
   date_to?: string
 }
 
+/**
+ * 取流/段表共用的查询串（**只写一份**）。
+ *
+ * 抽出来的理由不是"少几行"：`qn`/`fallback`/`cid` 三个参数在**四条**调用点上必须逐字一致
+ * （分P 与清晰度的口径错一个，"段表与播放地址不是同一条流"这类问题就会回来）。
+ * `leading` = 调用方已经写了 `?bvid=…`，此时前缀用 `&`。
+ */
+function biliPlayQuery(opts: { qn?: number; fallback?: boolean; cid?: number } = {},
+                      leading = false): string {
+  const q = new URLSearchParams()
+  if (opts.qn) q.set('qn', String(opts.qn))
+  if (opts.fallback) q.set('fallback', 'true')
+  // ⚠️ 段表必须与取流**同一条流**：切 P 时少这个参数就会"拿着 P1 的字节表去 P2 取段"
+  if (opts.cid) q.set('cid', String(opts.cid))
+  const qs = q.toString()
+  return qs ? `${leading ? '&' : '?'}${qs}` : ''
+}
+
 export const api = {
   /** 全部 VTuber（含嵌套 accounts）—— **带运行时校验**（字段改名当场报错，见 validate.ts） */
   listVtubers: () => request<VTuber[]>('/vtuber/list', undefined, validateVtuberList),
@@ -879,13 +897,19 @@ export const api = {
    * `qn` 是"我想要哪档"（默认最高，B站按权益回落）；`fallback` 取 durl 单 mp4（720P 封顶）。
    */
   biliPlay: (postId: number, opts: { qn?: number; fallback?: boolean; cid?: number } = {}) => {
-    const q = new URLSearchParams()
-    if (opts.qn) q.set('qn', String(opts.qn))
-    if (opts.fallback) q.set('fallback', 'true')
-    if (opts.cid) q.set('cid', String(opts.cid))     // 分P：哪一 P（devlog/329）
-    const qs = q.toString()
-    return request<BiliPlayInfo>(`/bili/play/${postId}${qs ? `?${qs}` : ''}`)
+    const qs = biliPlayQuery(opts)
+    return request<BiliPlayInfo>(`/bili/play/${postId}${qs}`)
   },
+
+  /**
+   * **按 BV 号**取流（2026-10-13，`devlog/479`）：录播播放走这条。
+   *
+   * 为什么不能复用 `biliPlay`：那条的前提是"这条视频是一个**帖子**"（后端要拿 post_id 查库
+   * 翻出 bvid）。而录播不是帖子 —— `live_sessions.vod_url` 指向的多半是录播组发的视频，
+   * 我们库里没有那一条 post。收 BV 号或链接都行（与服务端入库时同一个抠号口径）。
+   */
+  biliPlayByBvid: (bvid: string, opts: { qn?: number; fallback?: boolean; cid?: number } = {}) =>
+    request<BiliPlayInfo>(`/bili/play-by-bvid?bvid=${encodeURIComponent(bvid)}${biliPlayQuery(opts, true)}`),
 
   /**
    * B站 DASH 的**段表**（devlog/312）：MSE 内核靠它"跳到哪一秒就取哪一段"。
@@ -894,13 +918,14 @@ export const api = {
    * —— 所以这里失败不该弹错误，只该留一行诊断。
    */
   biliSegments: (postId: number, opts: { qn?: number; cid?: number } = {}) => {
-    const q = new URLSearchParams()
-    if (opts.qn) q.set('qn', String(opts.qn))
-    // ⚠️ 段表必须与取流**同一条流**：切 P 时少这个参数就会"拿着 P1 的字节表去 P2 取段"
-    if (opts.cid) q.set('cid', String(opts.cid))
-    const qs = q.toString()
-    return request<BiliSegments>(`/bili/segments/${postId}${qs ? `?${qs}` : ''}`)
+    const qs = biliPlayQuery(opts)
+    return request<BiliSegments>(`/bili/segments/${postId}${qs}`)
   },
+
+  /** **按 BV 号**取段表（2026-10-13）：与 `biliPlayByBvid` 配成一对 */
+  biliSegmentsByBvid: (bvid: string, opts: { qn?: number; cid?: number } = {}) =>
+    request<BiliSegments>(
+      `/bili/segments-by-bvid?bvid=${encodeURIComponent(bvid)}${biliPlayQuery(opts, true)}`),
 
   /** 偏好值 + 允许取值 + 当前能力说明（说明由后端下发，界面不自己编） */
   getPrefs: () => request<Prefs>('/settings/prefs'),

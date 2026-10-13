@@ -19,7 +19,7 @@
  * ⚠️ 为什么必须"各只一次"：回落本身是一次重新取流，若后端没换内核（`?fallback` 参数漏接那次
  * 就是这么坏的，见 devlog/292）就会**无限重取**。判据 `nextRetryAction` 是纯函数 ⇒ 直接测。
  */
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Loader2, Play } from 'lucide-react'
 
 import { api } from '../api/api'
@@ -50,13 +50,32 @@ export function nextRetryAction(
   return 'none'
 }
 
-interface Props {
-  postId: number
+/**
+ * 流的来源：**二选一**（`postId` 或 `bvid`）。
+ *
+ * 为什么用联合类型而不是两个可选参数：两者都缺或都给，都是"取哪条流"的歧义 ——
+ * 让 `tsc` 来拒绝，比运行时再去猜一条默认路要可靠。
+ * 录播（`live_sessions.vod_url`）走 `bvid`：它不是帖子，没有 post_id（`devlog/479`）。
+ */
+type Source =
+  | { postId: number; bvid?: undefined }
+  | { postId?: undefined; bvid: string }
+
+/** ⚠️ 必须是 `type` + 交叉，不能写成 `interface Props extends Source` ——
+ *  接口不能继承**联合类型**（会静默退化成"两个字段都不存在"，测试文件当场 tsc 报错）。 */
+type Props = Source & {
   poster?: string | null
   permalink?: string | null
+  /** 一进来就播**第几 P**（`?p=N`；不传 = 第 1 P）。
+   *
+   *  为什么需要它：录播地址里可能带分 P（`normalize_vod` 会把 `?p=3` 原样留着），
+   *  而"多 P 只播第一段"正是本仓修过一次的 bug（`devlog/329`）—— 录播这条路上不能再来一遍。
+   *  ⚠️ P 号**不等于** cid：cid 要等第一次取流拿回 `pages` 才知道，所以这里存的是 P 号，
+   *  拿到 `pages` 之后再补一次按 cid 的取流（见下面那个 effect）。 */
+  initialPage?: number
 }
 
-export default function BiliVideo({ postId, poster, permalink }: Props) {
+export default function BiliVideo({ postId, bvid, poster, permalink, initialPage }: Props) {
   const [info, setInfo] = useState<BiliPlayInfo | null>(null)
   /** 段表（MSE 内核的输入，devlog/312）：null = 走渐进式 */
   const [segments, setSegments] = useState<KernelStreams | null>(null)
@@ -97,7 +116,8 @@ export default function BiliVideo({ postId, poster, permalink }: Props) {
       return null
     }
     const race = await Promise.race([
-      api.biliSegments(postId, { qn, cid }).catch((e: Error) => {
+      (bvid ? api.biliSegmentsByBvid(bvid, { qn, cid })
+             : api.biliSegments(postId!, { qn, cid })).catch((e: Error) => {
         void api.clientLog(`[video] 段表取不到（走渐进式）：${e?.message ?? String(e)}`)
           .catch(() => { /* 诊断失败不影响播放 */ })
         return null
@@ -118,7 +138,8 @@ export default function BiliVideo({ postId, poster, permalink }: Props) {
     setErr(null)
     if (resetRetry) tried.current = { triedRefresh: false, triedFallback: false }
     try {
-      const got = await api.biliPlay(postId, opts)
+      const got = bvid ? await api.biliPlayByBvid(bvid, opts)
+                       : await api.biliPlay(postId!, opts)
       const segs = await loadSegments(got, opts.qn, opts.cid)
       // 两个 state 同一次提交（React 18 会批）：第一帧就带着内核信息上屏，不会先渐进后 MSE
       setInfo(got)
@@ -150,6 +171,26 @@ export default function BiliVideo({ postId, poster, permalink }: Props) {
       void load({ fallback: true })
     }
   }
+
+  /**
+   * 首帧落在指定分 P（`initialPage`，2026-10-13）。
+   *
+   * 为什么不是"一开始就把 cid 传进去"：cid 要先取一次流、从 `pages` 里才知道。
+   * 所以时序是：第一次取流（第 1 P）→ 拿到 `pages` → 发现不是用户要的那一 P →
+   * 按 cid **再取一次**（与用户手动切 P 完全同一条路，`qn` 也带上，别把清晰度重置）。
+   * ⚠️ 只做一次（`jumped` 闸门）：否则 `info` 一变就再跳，成了死循环。
+   */
+  const jumped = useRef(false)
+  useEffect(() => {
+    if (jumped.current || !info || !initialPage || initialPage <= 1) return
+    if ((info.page ?? 1) === initialPage) { jumped.current = true; return }
+    const target = (info.pages ?? []).find((p) => p.page === initialPage)
+    if (!target?.cid) return               // 还没拿到 pages（或那一 P 不存在）：等下一次 info
+    jumped.current = true
+    void load({ qn: info.quality || undefined, cid: target.cid })
+    // eslint 依赖：`load` 每次渲染都是新函数（它闭包了 state），进依赖会每帧重跳一次
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [info, initialPage])
 
   // ① 还没取过流：只给"播放"按钮（不预取、不自动播）
   if (!info) {

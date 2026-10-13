@@ -12,13 +12,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const biliPlay = vi.fn()
 const biliSegments = vi.fn()
+/** 按 BV 取流的两条（2026-10-13 录播播放用）：与老两条**同形状**，只是入口不同 */
+const biliPlayByBvid = vi.fn()
+const biliSegmentsByBvid = vi.fn()
 const clientLog = vi.fn((..._a: unknown[]) => Promise.resolve({ ok: true, dropped: false }))
 vi.mock('../api/api', () => ({
   api: {
     biliPlay: (...a: unknown[]) => biliPlay(...a),
+    biliPlayByBvid: (...a: unknown[]) => biliPlayByBvid(...a),
     // 段表（devlog/312）：默认内核是 MSE ⇒ 取流之后会接着要它。mock 里缺这个函数就是
     // "api.biliSegments is not a function"（与 clientLog / 两个代理 URL 同一类坑）。
     biliSegments: (...a: unknown[]) => biliSegments(...a),
+    biliSegmentsByBvid: (...a: unknown[]) => biliSegmentsByBvid(...a),
     // 播放诊断上报（devlog/306）：组件会 `api.clientLog(一行)`，mock 里缺它就会抛
     // "api.clientLog is not a function"（跟上面两个代理 URL 同一类坑）
     clientLog: (...a: unknown[]) => clientLog(...a),
@@ -61,6 +66,8 @@ let root: Root
 beforeEach(() => {
   biliPlay.mockReset()
   biliSegments.mockReset()
+  biliPlayByBvid.mockReset()
+  biliSegmentsByBvid.mockReset()
   resetVideoKernel()          // 内核开关是 localStorage 里的（跨用例会串）
   host = document.createElement('div')
   document.body.append(host)
@@ -148,6 +155,68 @@ describe('BiliVideo', () => {
 
     const second = biliPlay.mock.calls[1]
     expect(second?.[1], `切 P 没带 cid：${JSON.stringify(second)}`).toMatchObject({ cid: 222, qn: 80 })
+  })
+
+  /**
+   * 按 BV 取流（录播播放，2026-10-13 用户 3.2 / `devlog/479`）。
+   *
+   * 三条判据，盯的都是"换个入口之后老口径有没有跟着走"：
+   * ① 给了 `bvid` 就**只打** `/bili/play-by-bvid`（不许顺手再打按 postId 那条：录播不是帖子，
+   *    那条会 404，而用户会看到一句莫名其妙的"Post id=… 不存在"）；
+   * ② ★ `initialPage=3` ⇒ 拿到 `pages` 之后**按那一 P 的 cid 再取一次**
+   *    （不做的话多 P 录播只播第一段 —— 与 `devlog/329` 修过的是同一类问题）；
+   * ③ 段落表也跟着走 bvid 那条（段表与播放地址必须是**同一条流**）。
+   */
+  describe('按 BV 取流（录播）', () => {
+    const MULTI = {
+      ...INFO, bvid: 'BV1xx411c7mD',
+      pages: [{ cid: 111, page: 1, part: '第一章', duration_s: 100 },
+              { cid: 222, page: 2, part: '第二章', duration_s: 200 },
+              { cid: 333, page: 3, part: '第三章', duration_s: 300 }],
+      page: 1,
+    }
+
+    it('① 给 bvid ⇒ 只打按 BV 那条（不打按 postId 的）', async () => {
+      biliPlayByBvid.mockResolvedValue(MULTI)
+      biliSegmentsByBvid.mockResolvedValue({ bvid: 'BV1xx411c7mD', quality: 80,
+                                             duration_s: 10, video: null, audio: null })
+      act(() => root.render(<BiliVideo bvid="BV1xx411c7mD" />))
+      await act(async () => {
+        host.querySelector<HTMLButtonElement>('.vp-bigplay')!.click()
+        await Promise.resolve()
+      })
+      expect(biliPlayByBvid).toHaveBeenCalledTimes(1)
+      expect(biliPlayByBvid.mock.calls[0][0]).toBe('BV1xx411c7mD')
+      expect(biliPlay, '给 BV 时不该去打按帖子 id 的那条（录播不是帖子，会 404）')
+        .not.toHaveBeenCalled()
+    })
+
+    it('★ ② initialPage=3 ⇒ 拿到 pages 后按第 3 P 的 cid 再取一次', async () => {
+      biliPlayByBvid.mockResolvedValue(MULTI)
+      biliSegmentsByBvid.mockResolvedValue({ bvid: 'BV1xx411c7mD', quality: 80,
+                                             duration_s: 10, video: null, audio: null })
+      act(() => root.render(<BiliVideo bvid="BV1xx411c7mD" initialPage={3} />))
+      await act(async () => {
+        host.querySelector<HTMLButtonElement>('.vp-bigplay')!.click()
+        for (let i = 0; i < 4; i++) await Promise.resolve()   // 让"跳到第 3 P"那一次也跑完
+      })
+      expect(biliPlayByBvid.mock.calls.length, '该有两次：第 1 P 起手 + 跳到第 3 P')
+        .toBeGreaterThanOrEqual(2)
+      expect(biliPlayByBvid.mock.calls[1][1], '跳 P 要带那一 P 的 cid（并保住清晰度）')
+        .toMatchObject({ cid: 333, qn: 80 })
+    })
+
+    it('③ 不传 / 传 1 ⇒ 不多取一次（别为默认值白发一次请求）', async () => {
+      biliPlayByBvid.mockResolvedValue(MULTI)
+      biliSegmentsByBvid.mockResolvedValue({ bvid: 'BV1xx411c7mD', quality: 80,
+                                             duration_s: 10, video: null, audio: null })
+      act(() => root.render(<BiliVideo bvid="BV1xx411c7mD" initialPage={1} />))
+      await act(async () => {
+        host.querySelector<HTMLButtonElement>('.vp-bigplay')!.click()
+        for (let i = 0; i < 4; i++) await Promise.resolve()
+      })
+      expect(biliPlayByBvid).toHaveBeenCalledTimes(1)
+    })
   })
 
   it('失败**如实显示**后端分类的原因，不自己编文案', async () => {

@@ -27,6 +27,9 @@ retire-when: HTTP 层换框架，或路由整体重排
 > ⚠️ **2026-10-04：三个数各 +1**（S2 加了 `GET /bili/segments/{post_id}`，devlog/312）——
 > 这一批只记**增量**、没重数全量：本机用同一套数法量到的基线已经比上面这行高 2（说明中间还有别的改动
 > 没同步到这里），所以别把 78/80/66 当"重数过的值"，复核时**照本节第一条那样现数**。
+> ⚠️ **2026-10-13：再各 +2**（录播播放加了 `GET /bili/play-by-bvid` 与
+> `GET /bili/segments-by-bvid`，`devlog/479`）—— 同样只记增量。**别照抄任何一行当基线**：
+> 这一段的三个数已经漂过至少两次（每次都是"改的人只记增量、下一个人照抄"）。
 > 更早的版本：75/77/63（2026-09-29 M5-1 + L2）、66/—/—（批次 16）、64/70/67（R42-A）
 > —— 三种数法本来就容易漂。
 > ⚠️ **新增 `/vtuber/xxx` 这类"看起来不像参数"的路径时必须注册在 `/vtuber/{vtuber_id}` 之前**：
@@ -143,6 +146,8 @@ retire-when: HTTP 层换框架，或路由整体重排
 |---|---|
 | GET `/bili/play/{post_id}?qn=&fallback=&cid=` | 取播放地址：**用户点播放才调**（地址短时效 + 绑 IP ⇒ 120s 短缓存、**不落库**）。`qn` = "想要哪档"（实际档看账号权益，响应里的 `quality` 才是真给的）；`fallback=true` ⇒ 换 `fnval=1` 取 **durl 单 mp4**（720P 封顶，DASH 播不动时用）；**`cid` = 哪一 P**（`devlog/329`，不传 = 第 1 P）。响应只给前端要用的 `{quality, accept[], dash:{video[],audio[]}, durl[], expires_in, kernel, pages[], page}`——`pages` 是分P 列表（`[{cid,page,part,duration_s}]`，单P 视频为空）。⚠️ **上游 `view.duration` 是各 P 之和**，别拿它当片长；**Cookie 只在请求头**。错误如实分级：帖子不存在 404 / 非 B站帖或缺 bvid 400 / 上游 `-404` 404、`-403` 403（充电专属等）、`-352` 429 / 要的那一 P 不在该视频里 404 |
 | GET `/bili/segments/{post_id}?qn=&cid=` | **段表**（devlog/312）：MSE 内核靠它"跳到第 N 秒就取那一段"。`cid` = 哪一 P（devlog/329）——⚠️ **必须与 `/bili/play` 同一条流**（段表按 P1、地址按 P2 会退化成 devlog/327 那类"取回来落不下"）。响应 `{bvid, quality, duration_s, video:{mime,urls[],init,segments[],duration_s}, audio:{…同形…}}`——`mime` 是 `MediaSource.isTypeSupported` 要的**精确 codecs 串**（缺 codecs 时只给容器类型，前端据此判"不支持"并退渐进式），`init`/`segments[].start|end` 是**闭区间字节偏移**（直接喂 `Range`）。⚠️ 每段还带 **`t` = 精确起点（秒，按原始 tick 累加）**（`devlog/324`）：`dur_s` 是三位小数四舍五入的（音频 5.0155 → 5.016，每段多 0.0005s，531 段累计**偏晚 0.26s**）⇒ 前端若拿它累加，"缓冲末尾之后该取哪一段"会永远算回刚取过的那一段（真机"一直转圈"）；整表另有 `duration_exact_s`。两条流各取 64KB 头部解析 `ftyp/moov/sidx`（110s 缓存，跟着取流那 120s 走）。错误与 `/bili/play` 同一套分级，另加 **502**：拿不到段表（没有 `sidx` / 上游取头部失败）——前端把 502 当"这条路不成立"，**静默退回渐进式**，不打扰用户 |
+| GET `/bili/play-by-bvid?bvid=&qn=&fallback=&cid=` | **按 BV 号取流**（2026-10-13，用户 3.2 录播播放 / `devlog/479`）：与 `/bili/play/{post_id}` **同一套口径**（同一个 `play_info`、同一套错误分级、同样 120s 短缓存、同样不落库），差别只有"bvid 从哪来"。为什么必须单开一条：上面那条的前提是"这条视频是一个**帖子**"（要查库把 post_id 翻成 bvid），而**录播不是帖子** —— `live_sessions.vod_url` 指向的多半是录播组发的视频，库里没有那条 post。`bvid` 收 **BV 号或链接**（与入库时同一个抠号函数 `domain/live_manual.py::bvid_of`）；抠不到 → **400 + 中文原因**（不是 500） |
+| GET `/bili/segments-by-bvid?bvid=&qn=&cid=` | **按 BV 号取段表**（同上）：与 `/bili/segments/{post_id}` 逐字一致。⚠️ 前端必须拿**与 `/bili/play-by-bvid` 同一组 `qn`/`cid`**（两条端点不同流 = 段表与地址对不上，切 P/换清晰度时尤其明显） |
 
 **抓取 / 归档 / 候选池**
 

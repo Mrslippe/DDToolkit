@@ -1032,9 +1032,12 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→**
 写进这一场（C1 那批踩过的静默错数据，`VodDialog.test.tsx` ⑧ 钉住）。
 ⚠️ 小窗由 **`LiveCalendar`** 渲染（不是详情弹窗内部）：Radix 的 portal 按 DOM 顺序叠，
 后渲染的才在上面（`devlog/217` 那条口径 —— 与 `ManualSessionDialog` 同一个做法）。
-⚠️ **`▶` 本批暂时仍走系统浏览器**（`openExternal`）—— 删掉的那条链接原本就是这个行为，所以没有
-回退；应用内播放器要先在后端补一条"按 BV 取流"的路由（现有 `/bili/play/{post_id}` 是**按帖子 id**
-的，而录播不是帖子），属下一批（`devlog/478`）。
+⚠️ **`▶` 的应用内播放器**（2026-10-13 第二批，`devlog/479`）：`VodPlayerDialog.tsx`
+（`.vodp` 面板：`min(1100px, 100vw-64px)`、同一套浮片族规格与遮罩）+ `BiliVideo` 的
+**`bvid` 入口**（与 `postId` 二选一，联合类型由 `tsc` 保证）+ 后端 `/bili/play-by-bvid`
+（录播不是帖子，那条按 post_id 的路走不通）。地址里的 `?p=N` 拆成 `initialPage` 往下传
+（不拆的话多 P 录播只播第一段 —— 与 `devlog/329` 修过的是同一类问题）。
+面板右上角留了一条**「在浏览器打开」**的退路（真机上偶有播不动：风控/权益/内核）。
 
 ### B4. 手动记录 / 编辑场次弹窗（`components/live/ManualSessionDialog.tsx`，2026-10-08 B2 `devlog/454`）
 

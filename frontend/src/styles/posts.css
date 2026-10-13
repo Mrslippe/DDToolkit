@@ -5110,6 +5110,80 @@ img.hero-avatar {
   user-select: none;
 }
 
+/* ── 录播播放器（`components/live/VodPlayerDialog`，2026-10-13 用户 3.2）──────────
+   面板比场次详情窗更宽（播放面要横向空间），但**同一套浮片族规格**（r12 + 发丝边 +
+   `--shadow-dialog` + 同一个遮罩 `.lc-dlg-backdrop`）。 */
+.vodp {
+  width: min(1100px, calc(100vw - 64px));
+  max-height: min(820px, calc(100vh - 64px));
+  display: flex;
+  flex-direction: column;
+  border-radius: 12px;
+  background: var(--c-bg-card);
+  border: 1px solid var(--c-border);
+  box-shadow: var(--shadow-dialog);
+  z-index: 61;
+  overflow: hidden;
+  animation: lc-dlg-pop 0.2s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.vodp-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--c-border);
+}
+
+.vodp-title { font-size: 14px; font-weight: 600; color: var(--c-text-main); }
+.vodp-sub {
+  font-size: 11.5px;
+  color: var(--c-text-sub);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.vodp-spacer { flex: 1; }
+
+.vodp-lnk {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--c-border);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--c-text-main);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.vodp-lnk:hover { background: var(--pill-bg-hover); }
+
+.vodp-close {
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: none;
+  color: var(--c-text-sub);
+  cursor: pointer;
+}
+
+.vodp-close:hover { background: var(--pill-bg-hover); color: var(--c-text-main); }
+
+/* 播放面本身：黑底、按宽度铺满；`.vp-video` 自己有 `max-height: 60vh` 兜着 */
+.vodp-body { background: #000; }
+.vodp-body .vp { border-radius: 0; }
+
 /* ── 封面上的录播悬浮钮（用户 3.2，2026-10-13）──────────────────────────────
    「把记录录播功能的前端按钮集成到场次详情页**左上方的封面上**，做成鼠标 hover 显示、
    鼠标离开隐藏的悬浮图标；没有录播记录时显示为**添加（加号）**，点击打开添加录播小窗；

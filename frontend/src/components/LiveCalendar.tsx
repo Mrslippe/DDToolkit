@@ -24,7 +24,10 @@ import LiveSessionDialog from './live/LiveSessionDialog'
 import ManualSessionDialog from './live/ManualSessionDialog'
 import ReservationDialog from './live/ReservationDialog'
 import VodDialog from './live/VodDialog'
-import { openExternal } from '../utils/shellBridge'
+import VodPlayerDialog from './live/VodPlayerDialog'
+/* ⚠️ 纯函数 `vodTarget` 与本组件的 state `vodTarget`（目标场次）**同名** ——
+   这里别名导入，免得读代码时把"解析地址"和"选中的那一场"看成一件事 */
+import { vodTarget as parseVodTarget } from './live/manualSessionForm'
 
 interface Props {
   /** 账号 id（null=无账号，显示空态）；切换账号自动重拉。
@@ -132,6 +135,9 @@ const LiveCalendar = memo(function LiveCalendar(
   /** 「添加录播」小窗（3.2）：详情弹窗封面上的 ＋ 打开它 */
   const [vodOpen, setVodOpen] = useState(false)
   const [vodTarget, setVodTarget] = useState<LiveSession | null>(null)
+  /** 录播播放器（3.2）：封面上的 ▶ 打开它 */
+  const [playerOpen, setPlayerOpen] = useState(false)
+  const [playerTarget, setPlayerTarget] = useState<LiveSession | null>(null)
 
   const resvByDay = useMemo(() => groupReservationsByDay(reservations), [reservations])
 
@@ -254,15 +260,14 @@ const LiveCalendar = memo(function LiveCalendar(
   /**
    * 播放这一场的录播（3.2：封面上的 ▶）。
    *
-   * ⚠️ **本批暂时按老行为**（交给系统浏览器，主机白名单在 `openExternal` 里）——
-   * 删掉的那条「录播」链接原本就是这个行为，所以这一步没有回退。
-   * 应用内播放器（含"默认用无边框播放器窗口"那个设置项）是**下一批**：
-   * 它要先在后端加一条"按 BV 取流"的路由（现有 `/bili/play/{postId}` 是**按帖子 id** 的，
-   * 而录播不是帖子），再决定播放面是主窗内的浮层还是独立无边框窗口。
+   * 2026-10-13 起**走应用内播放器**（`VodPlayerDialog` + `/bili/play-by-bvid`）；
+   * 上一批它还只是"交给系统浏览器"，因为当时没有"按 BV 取流"的路（录播不是帖子）。
+   * ⚠️ 地址里认不出 BV 号（或那一场没有录播）→ 不打开播放器（不开一个黑框在那儿转）。
    */
-  const playVod = async (s: LiveSession) => {
-    if (!s.vod_url) return
-    await openExternal(s.vod_url)
+  const playVod = (s: LiveSession) => {
+    if (!parseVodTarget(s.vod_url)) return
+    setPlayerTarget(s)
+    setPlayerOpen(true)
   }
 
   /**
@@ -777,7 +782,8 @@ const LiveCalendar = memo(function LiveCalendar(
         }}
       />
       {/* 手动记录/编辑（B2）：三处入口（工具栏「+」/ 详情弹窗铅笔 / 点过去的空日期格）
-          共用这一个实例 */}      <ManualSessionDialog
+          共用这一个实例 */}
+      <ManualSessionDialog
         open={manualOpen}
         accountId={accountId}
         session={manualTarget}
@@ -793,6 +799,12 @@ const LiveCalendar = memo(function LiveCalendar(
         dayKey={resvDay}
         onClose={() => setResvOpen(false)}
         onSaved={onReservationSaved}
+      />
+      {/* 录播播放器（3.2）：封面上的 ▶ 打开它。取流走 `/bili/play-by-bvid`（录播不是帖子） */}
+      <VodPlayerDialog
+        open={playerOpen}
+        session={playerTarget}
+        onClose={() => setPlayerOpen(false)}
       />
     </div>
   )
