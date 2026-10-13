@@ -22,6 +22,7 @@ import { useEffect, useState } from 'react'
 
 import { api } from '../../api/api'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog'
+import { pinBodyScroll } from './dialogScroll'
 
 interface Props {
   open: boolean
@@ -49,6 +50,8 @@ export default function ReservationDialog({
     setDate(dayKey)
     setError(null)
     setBusy(false)
+    // 弹窗开着期间不许页面跳（用户报的"把页面挤上去"就是这一条，见 `dialogScroll.ts`）
+    return pinBodyScroll()
   }, [open, dayKey])
 
   const canSave = title.trim().length > 0 && !busy && vtuberId != null

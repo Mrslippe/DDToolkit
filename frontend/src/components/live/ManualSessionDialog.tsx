@@ -30,6 +30,7 @@ import {
   type ManualFormValues, buildManualPatch, canSubmitNew, defaultManualRange,
   defaultRangeForDay, formFromSession, hasChanges,
 } from './manualSessionForm'
+import { pinBodyScroll } from './dialogScroll'
 
 interface Props {
   open: boolean
@@ -74,6 +75,8 @@ export default function ManualSessionDialog({
     setError(null)
     setBusy(false)
     setConfirmDel(false)
+    // 同一个收口：弹窗开着期间不许页面跳（`devlog/476`，见 `dialogScroll.ts`）
+    return pinBodyScroll()
   }, [open, session, newDay])
 
   const set = (k: keyof ManualFormValues) => (e: React.ChangeEvent<HTMLInputElement>) =>

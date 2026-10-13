@@ -2429,6 +2429,32 @@ _WHICH_LABEL = {"login": "登录浮窗", "legal": "协议闸门",
                 "cap-limits": "受限说明窗", "other": "其它弹窗"}
 
 
+def _reservation_dialog_failures(rv: object, where: str) -> list[str]:
+    """点空日期格 → 记录窗的几何判据（2026-10-13）。
+
+    用户报：「新建预约弹窗把页面挤上去了」。弹窗是 portal + `fixed` 居中，**不会**改布局；
+    坏的是页面被滚走了 —— 而那在屏幕上看是"卡片往上跳了一下"，从截图上分不清是弹窗太大
+    还是页面滚了。判据就量那两件：`scrollY` 与卡片上缘开合前后必须一致。
+    """
+    if not isinstance(rv, dict) or not rv:
+        return []
+    bad: list[str] = []
+    before = rv.get("before") or {}
+    after = rv.get("after") or {}
+    if not rv.get("opened"):
+        bad.append(f"@{where} 点空日期格没有打开记录窗 —— 用户点了个没反应的格子")
+        return bad
+    if before.get("scrollY") != after.get("scrollY"):
+        bad.append(
+            f"@{where} 打开记录窗把页面滚了：scrollY {before.get('scrollY')} → "
+            f"{after.get('scrollY')}（弹窗是 fixed 的，不该动页面）")
+    if before.get("cardTop") != after.get("cardTop"):
+        bad.append(
+            f"@{where} 打开记录窗之后卡片上缘从 {before.get('cardTop')} 变成 "
+            f"{after.get('cardTop')} —— 页面被挤动了")
+    return bad
+
+
 def _type_filter_failures(cal: dict | None, width: int) -> list[str]:
     """T4（2026-10-12）类型筛选条的端到端判据：**点一下胶囊，网格真的只剩那一类**。
 
@@ -2464,13 +2490,26 @@ def _type_filter_failures(cal: dict | None, width: int) -> list[str]:
         bad.append(
             f"@{width} 类型筛选：有场次的格子数从 {f.get('withSessionsBefore')} 变成 "
             f"{f.get('withSessionsAfter')} —— 筛掉的类型不该退化成「休息」")
-    if not f.get("dimmedAfter"):
-        bad.append(
-            f"@{width} 类型筛选：选中 `{f.get('clicked')}` 之后没有任何格子被淡化 —— "
-            f"筛选既没筛掉也没强调，用户看不出选没选")
     if f.get("dimmedReset"):
         bad.append(
             f"@{width} 类型筛选：复位之后还有 {f.get('dimmedReset')} 个格子是淡化的")
+    # ⚠️ 不能一律要求"至少一格被淡化"：这个月**所有**有场次的日子都是这一类时，
+    #    筛它没有任何格子该淡化（真机 2026-10 正是这种：本月全是 game）。
+    #    有牙的判据是**成对**的 —— 只有当"有场次的天数 > 选中的场次数"（= 确实筛掉了一部分）
+    #    时，淡化数才必须落在严格中间；否则一格都不许淡化。
+    n_cells = f.get("withSessionsAfter") or 0
+    n_hit = f.get("chipCount") or 0
+    dimmed = f.get("dimmedAfter") or 0
+    if n_cells > n_hit:
+        if not (0 < dimmed < n_cells):
+            bad.append(
+                f"@{width} 类型筛选：有场次的格子 {n_cells} 个、其中属于选中类型 {n_hit} 个"
+                f"（确实筛掉了一部分），但被淡化的是 {dimmed} 个 —— "
+                f"两边相等说明筛选没真作用到网格上（该强调的没强调、或整月都被判成不匹配）")
+    elif dimmed:
+        bad.append(
+            f"@{width} 类型筛选：全月 {n_cells} 个有场次的日子都属于选中类型，"
+            f"却淡化了 {dimmed} 个")
     if not f.get("hasReset"):
         bad.append(f"@{width} 类型筛选：选中之后没有「全部」复位入口 —— 用户没法取消筛选")
     for key, before in (f.get("othersBefore") or {}).items():
@@ -4013,6 +4052,29 @@ def main() -> int:
                       f"→ 格子场次之和 {tf.get('cellsAfter')}"
                       f"（点前 {tf.get('cellsBefore')} / 复位后 {tf.get('cellsReset')}）")
             tf_bad = _type_filter_failures(cal, w)
+            # ── 空日期格 → 记录窗（2026-10-13）───────────────────────────────
+            # 用户报的是"新建预约弹窗把页面挤上去了"：弹窗自身居中正常，坏的是**页面被滚了**。
+            # 判据 = 开合前后 `window.scrollY` 与卡片上缘不许变。
+            rv = (cal or {}).get("reservation")
+            rv_bad = _reservation_dialog_failures(rv, w)
+            if rv:
+                print(f"  点空日期格 → 记录窗：{'打开了' if rv.get('opened') else '没打开'} · "
+                      f"本月 {rv.get('inMonth')} 格 / 候选空位 {rv.get('candidates')} · "
+                      f"scrollY {rv.get('before', {}).get('scrollY')} → "
+                      f"{rv.get('after', {}).get('scrollY')} · 卡片上缘 "
+                      f"{rv.get('before', {}).get('cardTop')} → "
+                      f"{rv.get('after', {}).get('cardTop')}")
+                print(f"      内层滚动容器：{(rv.get('before') or {}).get('scrollers')} → "
+                      f"{(rv.get('after') or {}).get('scrollers')}")
+                b = rv.get("before") or {}
+                a = rv.get("after") or {}
+                print(f"      滚动体：html {b.get('deScrollTop')}→{a.get('deScrollTop')} · "
+                      f"body {b.get('bodyScrollTop')}→{a.get('bodyScrollTop')} · "
+                      f"doc {b.get('deScrollHeight')}/{b.get('deClientHeight')} → "
+                      f"{a.get('deScrollHeight')}/{a.get('deClientHeight')} · "
+                      f"卡片高 {b.get('cardH')}→{a.get('cardH')}")
+            if rv_bad:
+                bad.extend(rv_bad)
             if tf_bad:
                 bad.extend(tf_bad)
             elif tf:

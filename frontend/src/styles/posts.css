@@ -4126,11 +4126,16 @@ img.hero-avatar {
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: none;
-  /* ⚠️ 上下各留 4px：选中/悬停/键盘焦点的描边是 `outline: 2px + offset 1px`，
-     画在**盒子外面**（每侧 3px）—— 而上面那行 `overflow-y: hidden` 会把它裁掉，
-     症状是"胶囊的黑外框上下边被切平了"（用户 2026-10-13 报的图一·红框 1）。
-     负外边距把那 8px 从行高里抵消掉 ⇒ 视觉位置与行高不变。 */
-  padding: 4px 0;
+  /* ⚠️ 四边各留 4px：选中/悬停/键盘焦点的描边是 `outline: 2px + offset 1px`，
+     画在**盒子外面**（每侧 3px）—— 而 `overflow` 两个方向都会裁：
+     上下被 `overflow-y: hidden` 切平（2026-10-13 用户报的第一处），
+     **左边被滚动容器自己的裁剪边界切掉**（同一天用户报的第二处：最左那个胶囊
+     的描边左沿缺一条）。
+     ⚠️ 横向那 4px 只能给 `padding-left`，**不能靠负 margin 抵消** —— 滚动容器里
+     负的横向 margin 会把内容往左推出去、再被裁掉，等于没留。所以左边那 4px 是
+     **实打实占位**（右缘同理不抵消）：胶囊整体右移 4px，代价可忽略，换来描边完整。
+     上下仍用负外边距抵消 ⇒ 行高与视觉位置不变。 */
+  padding: 4px 4px 4px 4px;
   margin: -4px 0;
 }
 

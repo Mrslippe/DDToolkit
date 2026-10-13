@@ -2237,6 +2237,85 @@ export async function runUiProbe(): Promise<void> {
         .map((li) => (li.textContent || '').replace(/\s+/g, ' ').trim()).slice(0, 8),
       error: tp?.querySelector('[data-thirdparty-error]')?.textContent?.trim() ?? null,
     }
+    // ── 空日期格 → 记录窗/预约窗（2026-10-13）的**几何判据** ──
+    // 用户报的是"新建预约弹窗把页面挤上去了"。这属于"探针不看就永远不知道"的那类：
+    // 弹窗本身居中正常，坏的是**底下的页面被滚了**。所以这里量开合前后的
+    // 滚动位置 + 卡片几何 + html/body 的 overflow。
+    const geomNow = () => {
+      const card = document.querySelector<HTMLElement>('.live-calendar')
+      const r = card?.getBoundingClientRect()
+      const html = getComputedStyle(document.documentElement)
+      const body = getComputedStyle(document.body)
+      // 内层滚动容器：OverlayScroll 的 `.os-scroll`（window.scrollY 是 0 却动了卡片，
+      // 说明滚的是它）。`scrollTop` only 非 0 的那个才是元凶。
+      const scrollers = [...document.querySelectorAll<HTMLElement>('.os-scroll')]
+        .map((el) => ({ cls: el.className.slice(0, 28), top: Math.round(el.scrollTop),
+                        sh: el.scrollHeight, ch: el.clientHeight }))
+        .filter((s) => s.top !== 0 || s.sh > s.ch)
+      return {
+        scrollY: Math.round(window.scrollY),
+        cardTop: r ? Math.round(r.top) : null,
+        htmlOverflow: html.overflow,
+        bodyOverflow: body.overflow,
+        active: (document.activeElement as HTMLElement | null)?.tagName ?? null,
+        scrollers,
+        // 卡片被移动却不来自滚动 ⇒ 看 transform：DataDeck 靠 translate 换卡，
+        // `.view-body` 有 scene-in 的 translateY(8px)。两个都记下来。
+        deckTransform: (() => {
+          const d = document.querySelector<HTMLElement>('.data-deck')
+          return d ? getComputedStyle(d).transform : null
+        })(),
+        viewTransform: (() => {
+          const v = document.querySelector<HTMLElement>('.view-body')
+          return v ? getComputedStyle(v).transform : null
+        })(),
+        /** ⚠️ `window.scrollY` 为 0 也可能有别的滚动体在动：`documentElement.scrollTop`
+         *  与 `body.scrollTop` 各记一份（Radix 的滚动锁会改这两个的 overflow ⇒
+         *  原来能滚的窗口变不能滚，或反过来）。 */
+        deScrollTop: Math.round(document.documentElement.scrollTop),
+        bodyScrollTop: Math.round(document.body.scrollTop),
+        deScrollHeight: document.documentElement.scrollHeight,
+        deClientHeight: document.documentElement.clientHeight,
+        cardH: (() => {
+          const c = document.querySelector<HTMLElement>('.live-calendar')
+          return c ? Math.round(c.getBoundingClientRect().height) : null
+        })(),
+      }
+    }
+    const inMonth = [...document.querySelectorAll<HTMLElement>('.lc-cell[data-lc-in-month="1"]')]
+    const emptyFuture = inMonth.find(
+      (c) => !c.getAttribute('data-lc-has-session') && !c.getAttribute('data-resv-count'),
+    ) ?? null
+    const cellPop: Record<string, unknown> | null = null
+    let resvProbe: Record<string, unknown> | null = null
+    // ⚠️ 先把上面的「第三方数据」弹窗关掉：它开着的时候我的点击会打在遮罩上
+    //    （2026-10-13 实测：记录窗"没打开"就是这个 —— 而卡片上缘也从 100 变成 -386，
+    //     那是**那个弹窗**开的期间滚的，不是本段）。
+    document.querySelector<HTMLElement>('[data-thirdparty-dialog] .lc-ms-btn')
+      ?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await sleep(500)
+    const geomBefore = geomNow()
+    if (emptyFuture) {
+      emptyFuture.click()
+      await sleep(400)
+      resvProbe = {
+        // 两个弹窗都有可能：过去 ⇒ 记录场次（`.lc-ms` 但没有 `[data-rv-date]`）；
+        // 未来 ⇒ 记录预约（有 `[data-rv-date]`）。只认后者会把前一半判成"没反应"。
+        opened: !!document.querySelector('.lc-ms'),
+        isReservation: !!document.querySelector('[data-rv-date]'),
+        before: geomBefore,
+        after: geomNow(),
+        inMonth: inMonth.length,
+        candidates: inMonth.filter(
+          (c) => !c.getAttribute('data-lc-has-session') && !c.getAttribute('data-resv-count'),
+        ).length,
+      }
+      // 关掉，别污染后面的判据
+      document.querySelector<HTMLElement>('.lc-ms-actions .lc-ms-btn')?.click()
+      await sleep(300)
+    }
+
     const pre = document.createElement('pre')
     pre.id = 'ui-probe'
     pre.textContent = JSON.stringify({
@@ -2251,6 +2330,8 @@ export async function runUiProbe(): Promise<void> {
         pendingSample,
         settledSample,
         filter: filterProbe,
+        reservation: resvProbe,
+        cellPop,
       },
       thirdparty,
     })
