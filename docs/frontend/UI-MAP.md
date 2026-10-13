@@ -941,6 +941,20 @@ P6-2 起为**居中 Dialog**（原 Sheet 右侧抽屉）`sm:max-w-[720px]`（⚠
 > （`class` 能改界面）＋ `style-src 'unsafe-inline'` 让内联样式生效。真实专栏里的 `<figure>` /
 > `<img src="//i0.hdslb.com/…">` / `width` / `<br/>` 保留 ⇒ 排版不损坏。
 > ⚠️ 本机库里目前**没有** `body_json.content` 的数据（两条 article 分别是 Delta 与纯文本）⇒ 这条路径当前看不到效果。
+>
+> **正文里的表情**（2026-10-13，用户第 5 条，`devlog/482`）：纯文本那一态走
+> `components/common/PostText.tsx`（**转发原文**那一处也走它），把 `[UPOWER_<uid>_贴贴]` /
+> `[明前奶绿收藏集表情包_石化]` 这类 token 切成片段：
+> 解析得出来 ⇒ `.post-emoji`（18×18 行内图，`alt`/`title` 带原名、`loading="lazy"`）；
+> 解析不出来且**形状像表情**（带下划线）⇒ `.post-emoji-chip`（名字胶囊，只显示最后一段：
+> `明前奶绿收藏集表情包_石化` → `石化`）；**不带下划线的（`[1P]`、`[▓▓]`）原样保留文字** ——
+> 实测那 514 次无下划线 token 多数不是表情，一律做 chip 会把正文变成一串胶囊。
+> `[话题]` 是微博话题标记（`#xxx[话题]#`），**不是表情**，必须原样留着。
+> ⚠️ 渲染走 **React 节点**，不是 `dangerouslySetInnerHTML` —— 正文是外部数据，拼 HTML 等于
+> 把转义与白名单的活重做一遍（专栏那条路已经有一份 `sanitizePlatformHtml`）。
+> 地址来自 `GET /emoji/resolve`（`app/services/bili_emote.py`：整表索引 + 30 分钟进程内缓存），
+> 前端按 100 一批**按需取**，并缓存"问过的名字"（含"上游没有它"这个结果）；
+> **实测解析率 142/501（28%）** —— 剩下的靠 chip，这是与用户确认过的兜底。
 
 ### B2.1 图片查看器 `<ImageViewer>`（components/ImageViewer.tsx）
 P6-4：从详情窗口打开图片的**独立浮层**——portal 到 body、`z-[200]` 高于详情窗（z-50）。

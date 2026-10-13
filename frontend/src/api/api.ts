@@ -931,6 +931,17 @@ export const api = {
   getPrefs: () => request<Prefs>('/settings/prefs'),
 
   /**
+   * 表情名 → 图片地址（2026-10-13，用户第 5 条）：批量查，**查不到的不会出现在 `items` 里**
+   * （前端据此走名字 chip 兜底）。`why` 非空 = 上游这次没拉到（索引空），不是致命错误。
+   *
+   * ⚠️ 一次别超过后端的上限（`bili_emote.MAX_TOKENS` = 200）：超了它会 400 说清楚，
+   * 而不是悄悄截断（`PostText` 里按 100 一批发）。
+   */
+  resolveEmojis: (names: string[]) =>
+    request<{ items: Record<string, string>; count: number; why: string | null }>(
+      `/emoji/resolve?names=${encodeURIComponent(names.join(','))}`),
+
+  /**
    * **重取这一帖的媒体地址**（devlog/320）：图床签名过期、本地又没有固化副本时的备选路径。
    *
    * 后端会走平台自己的详情补全拿新地址、写回库里，并**顺手固化一次**；

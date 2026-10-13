@@ -28,7 +28,8 @@ retire-when: HTTP 层换框架，或路由整体重排
 > 这一批只记**增量**、没重数全量：本机用同一套数法量到的基线已经比上面这行高 2（说明中间还有别的改动
 > 没同步到这里），所以别把 78/80/66 当"重数过的值"，复核时**照本节第一条那样现数**。
 > ⚠️ **2026-10-13：再各 +2**（录播播放加了 `GET /bili/play-by-bvid` 与
-> `GET /bili/segments-by-bvid`，`devlog/479`）—— 同样只记增量。**别照抄任何一行当基线**：
+> `GET /bili/segments-by-bvid`，`devlog/479`），**同日晚些再 +1**（表情解析
+> `GET /emoji/resolve`，`devlog/482`）—— 同样只记增量。**别照抄任何一行当基线**：
 > 这一段的三个数已经漂过至少两次（每次都是"改的人只记增量、下一个人照抄"）。
 > 更早的版本：75/77/63（2026-09-29 M5-1 + L2）、66/—/—（批次 16）、64/70/67（R42-A）
 > —— 三种数法本来就容易漂。
@@ -148,6 +149,7 @@ retire-when: HTTP 层换框架，或路由整体重排
 | GET `/bili/segments/{post_id}?qn=&cid=` | **段表**（devlog/312）：MSE 内核靠它"跳到第 N 秒就取那一段"。`cid` = 哪一 P（devlog/329）——⚠️ **必须与 `/bili/play` 同一条流**（段表按 P1、地址按 P2 会退化成 devlog/327 那类"取回来落不下"）。响应 `{bvid, quality, duration_s, video:{mime,urls[],init,segments[],duration_s}, audio:{…同形…}}`——`mime` 是 `MediaSource.isTypeSupported` 要的**精确 codecs 串**（缺 codecs 时只给容器类型，前端据此判"不支持"并退渐进式），`init`/`segments[].start|end` 是**闭区间字节偏移**（直接喂 `Range`）。⚠️ 每段还带 **`t` = 精确起点（秒，按原始 tick 累加）**（`devlog/324`）：`dur_s` 是三位小数四舍五入的（音频 5.0155 → 5.016，每段多 0.0005s，531 段累计**偏晚 0.26s**）⇒ 前端若拿它累加，"缓冲末尾之后该取哪一段"会永远算回刚取过的那一段（真机"一直转圈"）；整表另有 `duration_exact_s`。两条流各取 64KB 头部解析 `ftyp/moov/sidx`（110s 缓存，跟着取流那 120s 走）。错误与 `/bili/play` 同一套分级，另加 **502**：拿不到段表（没有 `sidx` / 上游取头部失败）——前端把 502 当"这条路不成立"，**静默退回渐进式**，不打扰用户 |
 | GET `/bili/play-by-bvid?bvid=&qn=&fallback=&cid=` | **按 BV 号取流**（2026-10-13，用户 3.2 录播播放 / `devlog/479`）：与 `/bili/play/{post_id}` **同一套口径**（同一个 `play_info`、同一套错误分级、同样 120s 短缓存、同样不落库），差别只有"bvid 从哪来"。为什么必须单开一条：上面那条的前提是"这条视频是一个**帖子**"（要查库把 post_id 翻成 bvid），而**录播不是帖子** —— `live_sessions.vod_url` 指向的多半是录播组发的视频，库里没有那条 post。`bvid` 收 **BV 号或链接**（与入库时同一个抠号函数 `domain/live_manual.py::bvid_of`）；抠不到 → **400 + 中文原因**（不是 500） |
 | GET `/bili/segments-by-bvid?bvid=&qn=&cid=` | **按 BV 号取段表**（同上）：与 `/bili/segments/{post_id}` 逐字一致。⚠️ 前端必须拿**与 `/bili/play-by-bvid` 同一组 `qn`/`cid`**（两条端点不同流 = 段表与地址对不上，切 P/换清晰度时尤其明显） |
+| GET `/emoji/resolve?names=a,b,c` | **表情名 → 图片地址**（2026-10-13，用户第 5 条 / `devlog/482`）：正文里的 `[UPOWER_<uid>_贴贴]`、`[包名_石化]` 这类 token 要画成真表情。**按批查**（上游给的是整表，没有"按名查"的端点 ⇒ 服务层拉一次建索引、**进程内缓存 30 分钟**）。响应 `{items: {token: url}, count, why}`：⚠️ **查不到的条目不出现在 `items` 里**（前端据此渲染名字 chip；返回空串会让它分不清"没这个表情"与"取失败了"）。上游怎么坏都**不 500**（返回空 `items` + `why`）—— 表情不该让正文渲染失败。`names` 超过 `MAX_TOKENS`（200）**明确 400**，不悄悄截断 |
 
 **抓取 / 归档 / 候选池**
 

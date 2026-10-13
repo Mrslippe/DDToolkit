@@ -20,6 +20,7 @@ budget: 300
 
 | 术语 | 含义 | 代码位置 | 关联 |
 |---|---|---|---|
+| **表情 token**（2026-10-13，`devlog/482`） | 正文里那种方括号词：`[UPOWER_<uid>_贴贴]`、`[明前奶绿收藏集表情包_石化]` —— B站动态的表情引用 | `app/services/bili_emote.py`（解析）· `frontend/src/utils/emojiText.ts`（切分）· `frontend/src/components/common/PostText.tsx`（渲染） | 真机 5,056 帖里 **6,180 次 / 501 个不同 token**；**28% 能解析出图片**（合并"全局动态包（匿名）"+"用户面板（鉴权）"，再按形状归一化去 `UPOWER_<uid>_` 前缀）。⚠️ 解析不出来的两类兜底**不一样**：带下划线的给**名字 chip**（"这是表情，本机没有它"），不带下划线的（`[1P]`）**原样保留文字**；`[话题]` 是微博话题标记，**不是表情** |
 | **VTuber / 主播本体** | 平台无关的主播实体（名字/阵营/生日/出道日/设定/头像/自定义背景/**企划**） | `app/models/vtuber.py::VTuber`；`VTuberRepo` | 一个 V 挂多个 `accounts` |
 | **企划归属 / group**（需求 6，B3，`devlog/457`） | 这个 V 属于哪个企划/公会（`VirtuaReal` / `NIJISANJI` / `虚研社`…）—— 左栏名字右边的徽章显示它 | `vtubers.group_name` / `group_uuid`（f014）；解析与回填 `services/groups.py`；界面 `utils/groupBadge.ts` + `.vtuber-emblem` | 数据源：**vdb.vtbs.moe**（随包候选池快照，唯一同时给企划名与稳定 UUID）→ 本地 `thirdparty_vtubers` 兜底；**B 站官方没有这个字段**；写入**只填空、不覆盖**。⚠️ **展示口径 = `vtuberGroup()`**（手填 `faction` 优先 → 否则 `group_name` → **都没有则「个人势」**，2026-10-13 用户口径）；**编辑口径 = `vtuberGroupField()`**（同上但空 ⇒ 空串 = 未设置）—— 两个函数并存是**故意的**：档案设置里"没设过"与"设成个人势"必须分得开（`devlog/458` 修的是"两处各读一个字段"） |
 | **个人势**（2026-10-13，`devlog/481`） | **没有企划的 V 的统一归类**（用户口径：「没有企划的统一用『个人势』代替，也作为一个企划类型」） | `utils/groupBadge.ts::PERSONAL_GROUP` | 它在界面上是一个**正常取值**：徽章显示「个人势」、筛选弹窗里有这一枚 chip（点它筛出所有没有企划的 V）、图标素材同名单（slug = `个人势`）。⚠️ 它**不是**库里的一个字段值 —— 没有企划的 V 在库里 `group_name` 仍是空 |

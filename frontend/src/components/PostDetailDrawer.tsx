@@ -41,6 +41,7 @@ import DeltaRenderer from './DeltaRenderer'
 import ImageViewer, { type ViewerImage } from './ImageViewer'
 import OverlayScroll from './OverlayScroll'
 import ProxyImage from './common/ProxyImage'
+import PostText from './common/PostText'
 import StatBadge from './StatBadge'
 import TypeTag from './TypeTag'
 
@@ -117,7 +118,7 @@ function OriginCard({ origin, onOpenImages }: {
       </div>
       <div className="space-y-2">
         {origin.title && <div className="text-sm font-medium">{origin.title}</div>}
-        {origin.text && <p className="whitespace-pre-wrap text-sm">{origin.text}</p>}
+        {origin.text && <PostText text={origin.text} />}
         {imgs.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
             {imgs.slice(0, 9).map((img, i) => (
@@ -436,7 +437,7 @@ export default function PostDetailDrawer({ post, open, onClose }: Props) {
               )}
             </div>
           ) : (
-            body.text && <p className="whitespace-pre-wrap text-sm">{body.text}</p>
+            body.text && <PostText text={body.text} />
           )}
           {!body.delta && !body.content && !body.text && shown.summary && (
             <p className="text-sm text-muted-foreground">{shown.summary}</p>

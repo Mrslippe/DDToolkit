@@ -5170,6 +5170,34 @@ img.hero-avatar {
   color: #ffb4b4;
 }
 
+/* ── 正文里的表情（2026-10-13，用户第 5 条）────────────────────────────────
+   有地址 ⇒ `.post-emoji`（行内小图，跟文字基线对齐）；没有 ⇒ `.post-emoji-chip`
+   （名字胶囊：`明前奶绿收藏集表情包_石化` → `石化`，"这是一枚表情，只是本机没有它"）。 */
+.post-emoji {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  margin: 0 1px;
+  vertical-align: -3px;      /* 与 14px 正文的基线对齐（不写会吊在半空） */
+  object-fit: contain;
+}
+
+.post-emoji-chip {
+  display: inline-block;
+  max-width: 76px;
+  margin: 0 1px;
+  padding: 0 5px;
+  border-radius: 6px;
+  background: var(--sel-bg);
+  color: var(--c-primary-deep);
+  font-size: 11.5px;
+  line-height: 17px;
+  vertical-align: -2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ── 录播播放器（`components/live/VodPlayerDialog`，2026-10-13 用户 3.2）──────────
    面板比场次详情窗更宽（播放面要横向空间），但**同一套浮片族规格**（r12 + 发丝边 +
    `--shadow-dialog` + 同一个遮罩 `.lc-dlg-backdrop`）。 */

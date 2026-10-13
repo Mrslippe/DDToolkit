@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const refreshMedia = vi.fn()
 const clientLog = vi.fn((..._a: unknown[]) => Promise.resolve({ ok: true, dropped: false }))
+const resolveEmojis = vi.fn()
 vi.mock('../api/api', () => ({
   imgProxyUrl: (s: string) => `/api/img-proxy?url=${encodeURIComponent(s)}`,
   videoProxyUrl: (s: string) => `/api/video-proxy?url=${encodeURIComponent(s)}`,
@@ -22,6 +23,8 @@ vi.mock('../api/api', () => ({
   api: {
     clientLog: (...a: unknown[]) => clientLog(...a),
     refreshMedia: (...a: unknown[]) => refreshMedia(...a),
+    // 正文里的表情（2026-10-13，用户第 5 条）：详情抽屉现在会按需问它
+    resolveEmojis: (...a: unknown[]) => resolveEmojis(...a),
   },
 }))
 vi.mock('../utils/shellBridge', () => ({ openExternal: () => Promise.resolve(),
@@ -477,5 +480,52 @@ describe('详情页 · 重取失败之后还能再试（devlog/366）', () => {
     await settle()
     expect(refreshMedia, '关掉再打开也不重试 ⇒ 这条视频永久废掉（真机现场）')
       .toHaveBeenCalledTimes(2)
+  })
+})
+
+/**
+ * 正文里的表情（2026-10-13，用户第 5 条：「帖子内容中的 `[xx表情包_aaa]` 可以被渲染出来」）。
+ *
+ * 这一条盯的是**接线**（渲染规则本身在 `common/PostText.test.tsx` 里）：详情抽屉的正文
+ * 必须走 `PostText`，而不是把 `body.text` 原样 `<p>` 出来 —— 后者会把
+ * `[UPOWER_1203217682_贴贴]` 这串方括号当文字显示给用户（改前就是这个行为）。
+ */
+describe('正文里的表情', () => {
+  beforeEach(() => {
+    resolveEmojis.mockReset().mockResolvedValue({ items: {}, count: 0, why: null })
+  })
+
+  const emojiPost = (text: string) =>
+    post({ body_json: JSON.stringify({ text }) }) as Post
+
+  it('★ 方括号 token 不再原样出现（解析不出来也要变成名字 chip）', async () => {
+    act(() => root.render(
+      <PostDetailDrawer post={emojiPost('晚安[明前奶绿收藏集表情包_石化]好梦')}
+                        open onClose={() => {}} />))
+    await settle()
+    const drawer = document.body
+    expect(drawer.textContent, '正文里还留着那串方括号 ⇒ 用户看到的还是一串看不懂的字符')
+      .not.toContain('[明前奶绿收藏集表情包_石化]')
+    expect(drawer.querySelector('.post-emoji-chip')?.textContent).toBe('石化')
+    expect(resolveEmojis, '没去问后端 ⇒ 永远不会画成真表情').toHaveBeenCalled()
+  })
+
+  it('解析得出来 ⇒ 画 `<img>`（表情图，而不是 chip）', async () => {
+    resolveEmojis.mockResolvedValue({
+      items: { UPOWER_1_贴贴: 'https://cdn/tietie.png' }, count: 1, why: null,
+    })
+    act(() => root.render(
+      <PostDetailDrawer post={emojiPost('好耶[UPOWER_1_贴贴]')} open onClose={() => {}} />))
+    await settle()
+    expect(document.body.querySelector<HTMLImageElement>('img.post-emoji')?.src)
+      .toBe('https://cdn/tietie.png')
+  })
+
+  it('不像表情的方括号（`[1P]`）保持原样 —— 正文不许变成一串胶囊', async () => {
+    act(() => root.render(
+      <PostDetailDrawer post={emojiPost('第[1P]')} open onClose={() => {}} />))
+    await settle()
+    expect(document.body.textContent).toContain('[1P]')
+    expect(document.body.querySelector('.post-emoji-chip')).toBeNull()
   })
 })
