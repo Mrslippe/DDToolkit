@@ -41,9 +41,11 @@ beforeEach(() => {
   resetEmojiCache()
   resolveEmojis.mockReset().mockResolvedValue({
     // ⚠️ 键必须与**问的那个 token** 一致：后端 `resolve()` 是按输入 token 建结果表的
-    //    （`out[tok] = url`）。第一版这里写成裸名 `贴贴`，于是 `r.items[token]` 永远取不到 ——
+    //    （`out[tok] = …`）。第一版这里写成裸名 `贴贴`，于是 `r.items[token]` 永远取不到 ——
     //    症状是"表情解析出来了却不显示"，与"上游没有它"长得一模一样。
-    items: { UPOWER_1_贴贴: 'https://cdn/tietie.png' },
+    // ⚠️ 值从 2026-10-14 起是**对象**（`{url, size}`）：`size` 是 B站 自己的大小字段
+    //    （1 = 小 / 2 = 大，`devlog/485`），老写法（直接给 URL 串）会让下面全组红。
+    items: { UPOWER_1_贴贴: { url: 'https://cdn/tietie.png', size: 2 } },
     count: 1, why: null,
   })
   host = document.createElement('div')
@@ -114,11 +116,31 @@ describe('渲染', () => {
     expect(host.querySelector('.post-emoji-chip')).toBeNull()
   })
 
+  it('★ 按 B站 的 `size` 分两类大小：2 ⇒ 大表情，1/null ⇒ 小表情', async () => {
+    // 这条盯的是"别用别的口径猜大小"：实测 `[明前奶绿_灰头土脸]` 走官方 `/bfs/emote/`
+    // 路径却是 size=2（812 个），按"官方还是自定义"判会判错。
+    resolveEmojis.mockResolvedValue({
+      items: {
+        UPOWER_1_big: { url: 'https://cdn/big.png', size: 2 },
+        UPOWER_1_small: { url: 'https://cdn/small.png', size: 1 },
+        UPOWER_1_unknown: { url: 'https://cdn/x.png', size: null },
+      },
+      count: 3, why: null,
+    })
+    render('[UPOWER_1_big][UPOWER_1_small][UPOWER_1_unknown]')
+    await settle()
+    const imgs = [...host.querySelectorAll<HTMLImageElement>('img.post-emoji')]
+    expect(imgs.length).toBe(3)
+    expect(imgs[0].className, 'size=2 必须带大表情那一档').toContain('post-emoji--big')
+    expect(imgs[1].className, 'size=1 ⇒ 小表情（不加 --big）').not.toContain('--big')
+    expect(imgs[2].className, 'size=null（上游没说）⇒ 按小表情').not.toContain('--big')
+  })
+
   it('★ 表情图走 ProxyImage：`no-referrer` + `http→https`（2026-10-14 破图的根因）', async () => {
     // 真机地址（用户报错报告里的那两条）：图床对**应用自身来源**一律 403，
     // 只有"不带 Referer"才拿得到 —— 所以这两个属性是这条路径的**功能判据**，不是样式细节。
     resolveEmojis.mockResolvedValue({
-      items: { 'UPOWER_1_贴贴': 'http://i0.hdslb.com/bfs/emote/abc.png' },
+      items: { 'UPOWER_1_贴贴': { url: 'http://i0.hdslb.com/bfs/emote/abc.png', size: 1 } },
       count: 1, why: null,
     })
     render('[UPOWER_1_贴贴]')

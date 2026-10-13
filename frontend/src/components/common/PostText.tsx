@@ -27,8 +27,14 @@ import { api } from '../../api/api'
 import { emojiChipLabel, emojiTokens, splitEmojiText } from '../../utils/emojiText'
 import ProxyImage from './ProxyImage'
 
-/** 名字 → 图片地址；`null` = **问过了，上游没有这个表情**（别再问） */
-const cache = new Map<string, string | null>()
+/** 一枚表情的解析结果：地址 + **B站 给的大小类别**（`1` 小 / `2` 大 / `null` 上游没说） */
+export interface EmojiHit {
+  url: string
+  size: number | null
+}
+
+/** 名字 → 解析结果；`null` = **问过了，两级都没有这个表情**（别再问） */
+const cache = new Map<string, EmojiHit | null>()
 /** 在途/已问过的批次（按名字记，避免同一次渲染里重复发请求） */
 const asked = new Set<string>()
 /** 正在飞的请求（并发去重：同一次打开详情 + 转发卡片可能同时要同一批） */
@@ -61,7 +67,12 @@ async function fetchNames(names: string[]): Promise<void> {
         slice.forEach((n) => asked.add(n))
         try {
           const r = await api.resolveEmojis(slice)
-          for (const n of slice) cache.set(n, r.items[n] ?? null)
+          for (const n of slice) {
+            // ⚠️ 值必须是**有地址的对象**（2026-10-14 起 `{url, size}`）：形状不对就当"没有"，
+            //    走 chip 兜底 —— 直接塞进去的话会渲染成一张**空白图**（比 chip 更难看出问题）。
+            const hit = r.items[n]
+            cache.set(n, hit && hit.url ? hit : null)
+          }
         } catch {
           for (const n of slice) cache.set(n, null)   // 取不到就按"没有"处理（chip 兜底）
         } finally {
@@ -75,12 +86,12 @@ async function fetchNames(names: string[]): Promise<void> {
 }
 
 /**
- * 给一段正文里的表情名批量取地址。返回"名字 → 地址"（还没回来的不在里面）。
+ * 给一段正文里的表情名批量取地址与大小。返回"名字 → 命中"（还没回来的不在里面）。
  *
  * ⚠️ 依赖用 `tokens.join()` 而不是数组本身：数组每次渲染都是新引用（父组件重渲染一次
  * 就重新取数，本仓在别的 hook 上踩过同一类坑）。
  */
-export function useEmojiImages(tokens: string[]): Map<string, string> {
+export function useEmojiImages(tokens: string[]): Map<string, EmojiHit> {
   const key = tokens.join(',')
   const [tick, setTick] = useState(0)
 
@@ -92,10 +103,10 @@ export function useEmojiImages(tokens: string[]): Map<string, string> {
   }, [key])
 
   return useMemo(() => {
-    const out = new Map<string, string>()
+    const out = new Map<string, EmojiHit>()
     for (const n of tokens) {
-      const url = cache.get(n)
-      if (url) out.set(n, url)
+      const hit = cache.get(n)
+      if (hit) out.set(n, hit)
     }
     return out
     // `tick` 只是"缓存变了，请重算"的信号；真正的输入是 tokens
@@ -119,17 +130,22 @@ export default function PostText({ text, className }: Props) {
     <p className={`post-text whitespace-pre-wrap text-sm${className ? ` ${className}` : ''}`}>
       {segs.map((seg, i) => {
         if (seg.kind === 'text') return <span key={i}>{seg.text}</span>
-        const url = images.get(seg.token)
-        if (url) {
+        const hit = images.get(seg.token)
+        if (hit) {
           // ⚠️ 走 ProxyImage（https 化 + no-referrer + /img-proxy 兜底），不许裸 `<img>`：
           //    裸 `<img>` 带的是应用自身来源，图床 `i0.hdslb.com` 一律 403（用户 2026-10-14 报的破图）。
           //    四级都失败时**落到 chip / 原样文字**（与"两级都没解析出来"同一个样子）——
           //    不给 `fallback` 的话 ProxyImage 会渲染 120×120 的灰块，正文会被撑变形。
+          //
+          // ⚠️ **两类大小按 B站 自己的 `size` 字段**（2026-10-14，`devlog/485`）：
+          //    `2` = 大表情/贴纸（`.post-emoji--big`，明显大于文字；实测占本机 93% 的出现次数）；
+          //    `1`/`null` = 小表情（与文字同大小）。判别**不能**按"官方还是自定义"——
+          //    `[明前奶绿_灰头土脸]` 走官方 `/bfs/emote/` 路径但 `size=2`。
           return (
             <ProxyImage
               key={i}
-              src={url}
-              className="post-emoji"
+              src={hit.url}
+              className={hit.size === 2 ? 'post-emoji post-emoji--big' : 'post-emoji'}
               alt={`[${seg.token}]`}
               title={`[${seg.token}]`}
               draggable={false}

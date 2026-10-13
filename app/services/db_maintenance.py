@@ -213,6 +213,21 @@ def ensure_incremental_autovacuum(
         raw.close()
 
 
+def _wal_path_for(engine: Engine) -> Path:
+    """这个引擎的 **WAL 文件**路径。
+
+    ⚠️ 必须按**传进来的引擎**算，不能一律用 `_database_path()`（= `DATABASE_URL` 那个库）：
+    2026-10-14 就是这里出的错 —— `checkpoint_wal(tmp_engine)` 量的是**应用主库**的 WAL，
+    于是 ①日志里的"WAL 已回收 X MB"在换库/测试场景下报的是另一个文件；
+    ②`tests/test_sqlite_concurrency.py` 那条"checkpoint 之后 WAL 该被截断"在**整仓一起跑**时
+    随机红（主库的 WAL 里有几千帧、别的连接还开着 ⇒ TRUNCATE 截不掉），而单独跑必绿
+    （那时主库 WAL 恰好是空的 ⇒ 断言 `after == 0` 空过）。**判据量错了文件**就是这么隐蔽。
+    内存库（`:memory:`）没有 WAL 文件 ⇒ 交给调用方按 0 报。
+    """
+    db = getattr(getattr(engine, "url", None), "database", None)
+    return Path(str(db) + "-wal") if db and db != ":memory:" else Path(str(_database_path()) + "-wal")
+
+
 def checkpoint_wal(engine: Engine | None = None) -> dict[str, int]:
     """把 WAL 并回主库并**截断 WAL 文件**，返回 `{"before": b, "after": b}` 字节数。
 
@@ -225,15 +240,16 @@ def checkpoint_wal(engine: Engine | None = None) -> dict[str, int]:
     否则上一次留下的胖 WAL 会一直躺在磁盘上。
     """
     eng = engine or default_engine
+    wal = _wal_path_for(eng)
     raw = eng.raw_connection()
     try:
         dbapi = getattr(raw, "driver_connection", raw)
         dbapi.isolation_level = None
         cur = dbapi.cursor()
         try:
-            before = _file_bytes(Path(str(_database_path()) + "-wal"))
+            before = _file_bytes(wal)
             cur.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            after = _file_bytes(Path(str(_database_path()) + "-wal"))
+            after = _file_bytes(wal)
             if before:
                 logger.info(
                     f"WAL 已回收：{before / 1048576:.1f}MB → {after / 1048576:.1f}MB")

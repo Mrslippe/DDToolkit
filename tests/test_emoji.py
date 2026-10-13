@@ -87,9 +87,11 @@ def test_normalize_candidates_keeps_every_useful_form():
 
 FAKE_PACKAGES = [
     {"emote": [
-        {"text": "[贴贴]", "url": "https://cdn/tietie.png"},
-        {"text": "[doge_金箍]", "url": "https://cdn/doge.png"},
+        {"text": "[贴贴]", "url": "https://cdn/tietie.png", "meta": {"size": 1}},
+        {"text": "[doge_金箍]", "url": "https://cdn/doge.png", "meta": {"size": 2}},
         {"text": "[明前奶绿收藏集表情包_石化]", "url": "https://cdn/shihua.png"},
+        {"text": "[表里给字符串]", "url": "https://cdn/str.png", "meta": {"size": "2"}},
+        {"text": "[怪值]", "url": "https://cdn/odd.png", "meta": {"size": 9}},   # 认不出 ⇒ None
         {"text": "[]", "url": "https://cdn/noname.png"},          # 空名：不进索引
         {"text": "[无地址]", "url": ""},                            # 没地址：不进索引
     ]},
@@ -99,9 +101,23 @@ FAKE_PACKAGES = [
 
 def test_build_index_strips_brackets_and_skips_junk():
     idx = bili_emote.build_index(FAKE_PACKAGES)
-    assert idx["贴贴"] == "https://cdn/tietie.png"          # 表里带方括号，我们不带
-    assert idx["doge_金箍"] == "https://cdn/doge.png"
+    assert idx["贴贴"] == ("https://cdn/tietie.png", None, 1)   # 表里带方括号，我们不带
+    assert idx["doge_金箍"][0] == "https://cdn/doge.png"
     assert "" not in idx and "无地址" not in idx
+
+
+def test_build_index_reads_meta_size_for_both_types():
+    """★ 第二源的大小取自脸的 `meta.size`（与载荷的 `size` 同义）。
+
+    ⚠️ 上游在 `type` 上实测过"有时 int 有时 str"⇒ `size` 也两种都收；
+    认不出的值给 `None`（调用方按小表情画），**不许**当成"大"。
+    """
+    idx = bili_emote.build_index(FAKE_PACKAGES)
+    assert idx["贴贴"][2] == 1
+    assert idx["doge_金箍"][2] == 2
+    assert idx["表里给字符串"][2] == 2
+    assert idx["怪值"][2] is None
+    assert idx["明前奶绿收藏集表情包_石化"][2] is None      # 没给 meta ⇒ None
 
 
 def test_resolve_maps_tokens_and_drops_unknown():
@@ -109,9 +125,9 @@ def test_resolve_maps_tokens_and_drops_unknown():
     got = bili_emote.resolve(
         ["UPOWER_1203217682_贴贴", "doge_金箍", "明前奶绿收藏集表情包_石化", "1P", "▓▓"], idx)
     assert got == {
-        "UPOWER_1203217682_贴贴": "https://cdn/tietie.png",
-        "doge_金箍": "https://cdn/doge.png",
-        "明前奶绿收藏集表情包_石化": "https://cdn/shihua.png",
+        "UPOWER_1203217682_贴贴": ("https://cdn/tietie.png", 1),
+        "doge_金箍": ("https://cdn/doge.png", 2),
+        "明前奶绿收藏集表情包_石化": ("https://cdn/shihua.png", None),
     }
     # ⚠️ 查不到的**不出现在结果里**（前端据此走名字 chip）——
     #    返回空串会让前端把"没有这个表情"当成"取失败"，两种兜底长得不一样
@@ -121,15 +137,16 @@ def test_resolve_maps_tokens_and_drops_unknown():
 # ── ③ 端点 ─────────────────────────────────────────────────────────────
 
 def test_resolve_endpoint_returns_only_hits(monkeypatch, client):
-    """只有命中的出现在 `items` 里；`origin` 说清是谁给的。"""
+    """只有命中的出现在 `items` 里；`origin` 说清是谁给的；值是 `{url, size}`。"""
     async def _resolved(tokens):
-        return {"贴贴": "https://cdn/tietie.png"}, {"贴贴": "panel"}
+        return {"贴贴": ("https://cdn/tietie.png", 2)}, {"贴贴": "panel"}
 
     monkeypatch.setattr(bili_emote, "resolve_all_async", _resolved)
     r = client.get("/emoji/resolve", params={"names": "UPOWER_1_贴贴,1P"})
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["items"] == {"贴贴": "https://cdn/tietie.png"}
+    # ⚠️ 值是**对象**（2026-10-14 起）：前端要 `size` 才能分两类大小画
+    assert body["items"] == {"贴贴": {"url": "https://cdn/tietie.png", "size": 2}}
     assert body["count"] == 1
     assert body["origin"] == {"贴贴": "panel"}
     assert body["why"] is None
@@ -160,14 +177,14 @@ def test_resolve_endpoint_prefers_payload_and_falls_back(monkeypatch, client):
         calls.append(list(tokens))
         # 真实语义：`resolve_all_async` 内部就是"先载荷、剩下的给面板"，这里照抄一份形状
         assert tokens == ["UPOWER_1_贴贴", "1P"], tokens
-        return ({"UPOWER_1_贴贴": "https://cdn/tietie.png"},
+        return ({"UPOWER_1_贴贴": ("https://cdn/tietie.png", 2)},
                 {"UPOWER_1_贴贴": "payload"})
 
     monkeypatch.setattr(bili_emote, "resolve_all_async", _resolved)
     r = client.get("/emoji/resolve", params={"names": "UPOWER_1_贴贴,1P"})
     assert r.status_code == 200
     body = r.json()
-    assert body["items"] == {"UPOWER_1_贴贴": "https://cdn/tietie.png"}
+    assert body["items"] == {"UPOWER_1_贴贴": {"url": "https://cdn/tietie.png", "size": 2}}
     assert body["origin"] == {"UPOWER_1_贴贴": "payload"}
     assert "1P" not in body["items"]          # 不是表情 ⇒ 不出现在结果里
     assert calls == [["UPOWER_1_贴贴", "1P"]]  # 一次批量调用，不是逐个查
@@ -176,12 +193,12 @@ def test_resolve_endpoint_prefers_payload_and_falls_back(monkeypatch, client):
 def test_resolve_all_takes_payload_first_and_panel_only_for_the_rest(monkeypatch):
     """`resolve_all` 本身：第一源命中就不问第二源；未命中的才落到第二源（纯函数级）。"""
     monkeypatch.setitem(bili_emote._raw_cache, "index",
-                        {"贴贴": ("https://cdn/from-payload.png", "18626")})
+                        {"贴贴": ("https://cdn/from-payload.png", "18626", 2)})
     monkeypatch.setattr(bili_emote, "_sync_panel_index",
-                        lambda: {"石化": "https://cdn/from-panel.png"})
+                        lambda: {"石化": ("https://cdn/from-panel.png", None, 1)})
     hit, origin = bili_emote.resolve_all(["UPOWER_1_贴贴", "up_石化", "1P"])
-    assert hit == {"UPOWER_1_贴贴": "https://cdn/from-payload.png",
-                   "up_石化": "https://cdn/from-panel.png"}
+    assert hit == {"UPOWER_1_贴贴": ("https://cdn/from-payload.png", 2),
+                   "up_石化": ("https://cdn/from-panel.png", 1)}
     assert origin == {"UPOWER_1_贴贴": "payload", "up_石化": "panel"}
     assert "1P" not in hit and "1P" not in origin
 
@@ -189,14 +206,14 @@ def test_resolve_all_takes_payload_first_and_panel_only_for_the_rest(monkeypatch
 def test_resolve_all_skips_panel_when_payload_covers_everything(monkeypatch):
     """第一源全中时**一次上游都不碰**（离线路径不该被网络拖慢）。"""
     monkeypatch.setitem(bili_emote._raw_cache, "index",
-                        {"贴贴": ("https://cdn/tietie.png", None)})
+                        {"贴贴": ("https://cdn/tietie.png", None, 1)})
 
     def _boom():
         raise AssertionError("载荷全中时不该读第二源")
 
     monkeypatch.setattr(bili_emote, "_sync_panel_index", _boom)
     hit, origin = bili_emote.resolve_all(["UPOWER_1_贴贴"])
-    assert hit == {"UPOWER_1_贴贴": "https://cdn/tietie.png"}
+    assert hit == {"UPOWER_1_贴贴": ("https://cdn/tietie.png", 1)}
     assert origin == {"UPOWER_1_贴贴": "payload"}
 
 
@@ -211,17 +228,18 @@ def test_resolve_endpoint_fetches_the_panel_only_when_the_payload_misses(monkeyp
 
     async def _fake_emote_index(force: bool = False):
         fetched.append(force)
-        bili_emote._cache["index"] = {"石化": "https://cdn/from-panel.png"}
+        bili_emote._cache["index"] = {"石化": ("https://cdn/from-panel.png", None, 2)}
         bili_emote._cache["at"] = 1e12          # 新鲜：同一次请求里不会拉第二遍
         return bili_emote._cache["index"], None
 
     monkeypatch.setattr(bili_emote, "emote_index", _fake_emote_index)
     monkeypatch.setitem(bili_emote._raw_cache, "index",
-                        {"贴贴": ("https://cdn/from-payload.png", None)})
+                        {"贴贴": ("https://cdn/from-payload.png", None, 1)})
 
     # ① 载荷命中了 ⇒ 不出网
     r = client.get("/emoji/resolve", params={"names": "UPOWER_1_贴贴"})
-    assert r.json()["items"] == {"UPOWER_1_贴贴": "https://cdn/from-payload.png"}
+    assert r.json()["items"] == {"UPOWER_1_贴贴": {"url": "https://cdn/from-payload.png",
+                                                  "size": 1}}
     assert r.json()["origin"] == {"UPOWER_1_贴贴": "payload"}
     assert fetched == [], "载荷全中却去拉了上游"
 
@@ -229,8 +247,9 @@ def test_resolve_endpoint_fetches_the_panel_only_when_the_payload_misses(monkeyp
     r = client.get("/emoji/resolve", params={"names": "UPOWER_1_贴贴,up_石化"})
     body = r.json()
     assert fetched == [False]
-    assert body["items"] == {"UPOWER_1_贴贴": "https://cdn/from-payload.png",
-                             "up_石化": "https://cdn/from-panel.png"}
+    assert body["items"] == {"UPOWER_1_贴贴": {"url": "https://cdn/from-payload.png",
+                                              "size": 1},
+                             "up_石化": {"url": "https://cdn/from-panel.png", "size": 2}}
     assert body["origin"] == {"UPOWER_1_贴贴": "payload", "up_石化": "panel"}
 
 
@@ -295,17 +314,20 @@ def test_resolve_endpoint_empty_names_is_not_an_error(client):
 
 
 def test_packages_endpoint_reports_both_sources(monkeypatch, client):
-    """`/emoji/packages`：诊断两级索引 + 载荷里见过的包 id（将来"整包"的种子）。"""
+    """`/emoji/packages`：诊断两级索引 + 载荷里见过的包 id + **两类大小各多少**。"""
     monkeypatch.setitem(bili_emote._raw_cache, "index", {
-        "贴贴": ("https://cdn/a.png", "18626"),
-        "石化": ("https://cdn/b.png", "18626"),
-        "闪亮": ("https://cdn/c.png", None),          # 载荷没给包 id 的也要能算
+        "贴贴": ("https://cdn/a.png", "18626", 2),
+        "石化": ("https://cdn/b.png", "18626", 2),
+        "闪亮": ("https://cdn/c.png", None, 1),
+        "没给大小": ("https://cdn/d.png", None, None),
     })
-    monkeypatch.setitem(bili_emote._cache, "index", {"石化": "https://cdn/x.png"})
+    monkeypatch.setitem(bili_emote._cache, "index", {"石化": ("https://cdn/x.png", None, 2)})
     body = client.get("/emoji/packages").json()
-    assert body["payload_names"] == 3
+    assert body["payload_names"] == 4
     assert body["payload_packages"] == 1                   # 去重
     assert body["payload_package_ids"] == ["18626"]
+    assert (body["payload_small"], body["payload_large"]) == (1, 2)
+    assert body["payload_size_unknown"] == 1
     assert body["panel_names"] == 1
 
 
@@ -329,12 +351,35 @@ def _add_post(db, pid: int, emoji: dict):
 def test_scan_payloads_reads_emoji_nodes_and_skips_junk():
     index = bili_emote.scan_payloads([
         _payload({"text": "[UPOWER_1_贴贴]", "icon_url": "https://cdn/tietie.png",
-                  "package_id": "18626"}),
+                  "package_id": "18626", "size": 2}),
         "{不是 JSON",                     # 历史遗留的坏行 ⇒ 跳过，不毁掉整个索引
         None,
         _payload({"text": "[石化]"}),      # 没有地址 ⇒ 不进索引
     ])
-    assert index == {"UPOWER_1_贴贴": ("https://cdn/tietie.png", "18626")}
+    assert index == {"UPOWER_1_贴贴": ("https://cdn/tietie.png", "18626", 2)}
+
+
+def test_scan_payloads_reads_the_size_field():
+    """★ 大小取自载荷自己的 `size`（`devlog/485`：用户问"原 json 里有没有这个字段"）。
+
+    ⚠️ 判别**不能**按"官方还是自定义"：实测 `/bfs/emote/`（官方那条路）里也有 812 个 `size=2`
+    （`[明前奶绿_灰头土脸]`、`[菜菜子_开心]`）—— 这条用例就用那种形状钉住。
+    """
+    index = bili_emote.scan_payloads([
+        _payload({"text": "[大哭]", "icon_url": "https://cdn/emote/small.png",
+                  "package_id": "1", "size": 1}),                       # 官方小表情
+        _payload({"text": "[明前奶绿_灰头土脸]", "icon_url": "https://cdn/emote/big.png",
+                  "package_id": "525", "size": 2}),                     # 官方路径但是大表情
+        _payload({"text": "[UPOWER_1_贴贴]", "icon_url": "https://cdn/garb/x.png",
+                  "size": "2"}),                                        # 字符串也收
+        _payload({"text": "[没给]", "icon_url": "https://cdn/y.png"}),   # 没有字段 ⇒ None
+        _payload({"text": "[怪值]", "icon_url": "https://cdn/z.png", "size": 7}),
+    ])
+    assert index["大哭"][2] == 1
+    assert index["明前奶绿_灰头土脸"][2] == 2
+    assert index["UPOWER_1_贴贴"][2] == 2
+    assert index["没给"][2] is None
+    assert index["怪值"][2] is None
 
 
 def test_scan_payloads_keeps_the_uid_prefix():
@@ -353,7 +398,7 @@ def test_scan_payloads_keeps_the_uid_prefix():
     # 同一个名字、**另一个 UP** 发的：不猜（前端走 chip），而不是拿 A 的图顶上
     index2 = bili_emote.scan_payloads([_payload(
         {"text": "[UPOWER_1_打call]", "icon_url": "https://cdn/a.png"})])
-    got = bili_emote.resolve(["UPOWER_2_打call"], {k: v[0] for k, v in index2.items()})
+    got = bili_emote.resolve(["UPOWER_2_打call"], index2)
     assert got == {}
 
 
@@ -369,23 +414,42 @@ def test_scan_payloads_later_row_wins():
 def test_warm_raw_index_scans_once_then_only_new_rows(db):
     """启动期热索引：第一遍扫全表，第二遍**零扫描**（幂等 —— 靠 `app_meta` 里的 marker）。"""
     _add_post(db, 1, {"text": "[贴贴]", "icon_url": "https://cdn/tietie.png",
-                      "package_id": "18626"})
+                      "package_id": "18626", "size": 2})
 
     first = bili_emote.warm_raw_index(db)
-    assert first == {"scanned": 1, "names": 1, "packages": 1, "last_id": 1}
-    assert bili_emote.raw_index() == {"贴贴": ("https://cdn/tietie.png", "18626")}
+    assert first["scanned"] == 1 and first["last_id"] == 1
+    assert (first["names"], first["packages"], first["large"], first["small"]) == (1, 1, 1, 0)
+    assert bili_emote.raw_index() == {"贴贴": ("https://cdn/tietie.png", "18626", 2)}
 
     # 没有新行 ⇒ 一行都不扫（marker 生效），但索引仍在（从 `app_meta` 里读回来的）
     bili_emote.reset_caches()
     second = bili_emote.warm_raw_index(db)
     assert second["scanned"] == 0 and second["last_id"] == 1
-    assert bili_emote.raw_index() == {"贴贴": ("https://cdn/tietie.png", "18626")}
+    assert bili_emote.raw_index() == {"贴贴": ("https://cdn/tietie.png", "18626", 2)}
 
     # 来了新行 ⇒ 只扫新的那行，且是**并集**（老的没丢）
-    _add_post(db, 2, {"text": "[石化]", "icon_url": "https://cdn/shihua.png"})
+    _add_post(db, 2, {"text": "[石化]", "icon_url": "https://cdn/shihua.png", "size": 1})
     third = bili_emote.warm_raw_index(db)
     assert third["scanned"] == 1 and third["last_id"] == 2
     assert set(bili_emote.raw_index()) == {"贴贴", "石化"}
+
+
+def test_warm_raw_index_rebuilds_a_v1_index(db):
+    """★ 老机器上 `app_meta` 里那份**旧格式**（没有 `size` 那一格）⇒ 全量重扫一次。
+
+    为什么必须有这条：升级后如果照着旧缓存用，第一源就**永远没有大小**（全按小表情画），
+    而且一声不响 —— 那正是"两类大小"这件事失效的最隐蔽方式。
+    """
+    _add_post(db, 1, {"text": "[贴贴]", "icon_url": "https://cdn/tietie.png",
+                      "package_id": "18626", "size": 2})
+    db.execute(text("INSERT INTO app_meta (key, value) VALUES ('emoji.raw_index', "
+                    "'{\"贴贴\": [\"https://cdn/old.png\", \"18626\"]}')"))
+    db.execute(text("INSERT INTO app_meta (key, value) VALUES ('emoji.scanned_upto', '1')"))
+    db.commit()
+
+    got = bili_emote.warm_raw_index(db)
+    assert got["scanned"] == 1, "旧格式必须触发一次全量重扫（marker 会被重置成 0）"
+    assert bili_emote.raw_index()["贴贴"] == ("https://cdn/tietie.png", "18626", 2)
 
 
 def test_warm_raw_index_force_rescans_everything(db):

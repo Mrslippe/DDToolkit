@@ -5170,16 +5170,32 @@ img.hero-avatar {
   color: #ffb4b4;
 }
 
-/* ── 正文里的表情（2026-10-13，用户第 5 条）────────────────────────────────
-   有地址 ⇒ `.post-emoji`（行内小图，跟文字基线对齐）；没有 ⇒ `.post-emoji-chip`
-   （名字胶囊：`明前奶绿收藏集表情包_石化` → `石化`，"这是一枚表情，只是本机没有它"）。 */
+/* ── 正文里的表情（2026-10-13，用户第 5 条；**两类大小** 2026-10-14，`devlog/485`）────
+   有地址 ⇒ `.post-emoji`（行内图）；没有 ⇒ `.post-emoji-chip`（名字胶囊：
+   `明前奶绿收藏集表情包_石化` → `石化`，"这是一枚表情，只是本机没有它"）。
+
+   **两类大小用的是 B站 自己的字段**：载荷里 `emoji.size` —— `1` = 小表情（与文字同大小）、
+   `2` = 大表情/贴纸（明显大于文字）。⚠️ 判别**不能**按"官方还是自定义"或"garb 还是 emote"：
+   `[明前奶绿_灰头土脸]`、`[菜菜子_开心]` 走官方那条 `/bfs/emote/` 路径，却是 `size=2`（812 个）。
+   ⚠️ 尺寸与对齐**只在这两个类里**（改口径改这里，别在别处再写 px）。对齐用的是同一条规则
+   **`vertical-align = -(尺寸/2 - 5)`** —— 让两档表情的**中心**都落在文字基线往上 5px 那一线
+   （14px 正文的文字中心约在基线往上 3.5px）⇒ 小表情与大表情不会一个吊高一个沉底。
+   小的一档刻意压在"不撑行高"的范围内（正文 14px/行高 20px 时 18px 是上限，见 `devlog/484`），
+   大的一档**会**把行撑高：那是设计（贴纸本来就该占地方，B站 自己也这样）。 */
 .post-emoji {
+  --post-emoji-size: 15px;      /* size=1（小表情，与文字同大小） */
+  --post-emoji-align: -2.5px;   /* = -(15/2 - 5) */
   display: inline-block;
-  width: 18px;
-  height: 18px;
+  width: var(--post-emoji-size);
+  height: var(--post-emoji-size);
   margin: 0 1px;
-  vertical-align: -3px;      /* 与 14px 正文的基线对齐（不写会吊在半空） */
+  vertical-align: var(--post-emoji-align);
   object-fit: contain;
+}
+
+.post-emoji--big {
+  --post-emoji-size: 32px;      /* size=2（大表情/贴纸） */
+  --post-emoji-align: -11px;    /* = -(32/2 - 5) */
 }
 
 .post-emoji-chip {

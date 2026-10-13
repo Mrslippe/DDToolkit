@@ -325,6 +325,13 @@ def test_data_survives_checkpoint_and_reopen(env):
         db.close()
 
     got = m.checkpoint_wal(env.engine)
+    # ⚠️ **先证明"真有东西可截"**（2026-10-14 补）：这条判据原来只断言 `after == 0`，
+    #    而 `checkpoint_wal` 当时量的是**应用主库**的 WAL（不是传进来的这个引擎）——
+    #    单独跑时主库 WAL 恰好是空的 ⇒ `before == after == 0`，**空过**；
+    #    整仓一起跑时主库 WAL 里有几千帧、别的连接还开着 ⇒ 随机红。
+    #    修完（按引擎算 WAL 路径）之后这两条都咬得住了：
+    #    真库这份 WAL 有内容（before > 0），checkpoint 之后必须被截断（after == 0）。
+    assert got["before"] > 0, "这条用例的前提是 WAL 里真有内容（否则 after==0 是空过）"
     assert got["after"] == 0, "checkpoint 之后 WAL 该被截断"
     env.engine.dispose()                    # 模拟进程重启
 

@@ -931,15 +931,22 @@ export const api = {
   getPrefs: () => request<Prefs>('/settings/prefs'),
 
   /**
-   * 表情名 → 图片地址（2026-10-13，用户第 5 条）：批量查，**查不到的不会出现在 `items` 里**
-   * （前端据此走名字 chip 兜底）。`why` 非空 = 上游这次没拉到（索引空），不是致命错误。
+   * 表情名 → 图片地址 + 大小（2026-10-13，用户第 5 条；大小 2026-10-14，`devlog/485`）：
+   * 批量查，**查不到的不会出现在 `items` 里**（前端据此走名字 chip 兜底）。
+   * `why` 非空 = 上游这次没拉到（索引空），不是致命错误。
    *
+   * ⚠️ `size` 是 **B站 自己的字段**（`1` = 小表情，与文字同大小；`2` = 大表情/贴纸）——
+   * 判别**不能**按"官方还是自定义"：`[明前奶绿_灰头土脸]` 走官方那条 `/bfs/emote/` 路径
+   * 但 `size=2`。`null` = 上游没给（按小表情画）。
    * ⚠️ 一次别超过后端的上限（`bili_emote.MAX_TOKENS` = 200）：超了它会 400 说清楚，
    * 而不是悄悄截断（`PostText` 里按 100 一批发）。
    */
   resolveEmojis: (names: string[]) =>
-    request<{ items: Record<string, string>; count: number; why: string | null }>(
-      `/emoji/resolve?names=${encodeURIComponent(names.join(','))}`),
+    request<{
+      items: Record<string, { url: string; size: number | null }>
+      count: number
+      why: string | null
+    }>(`/emoji/resolve?names=${encodeURIComponent(names.join(','))}`),
 
   /**
    * **重取这一帖的媒体地址**（devlog/320）：图床签名过期、本地又没有固化副本时的备选路径。

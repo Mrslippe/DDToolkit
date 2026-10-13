@@ -1,6 +1,7 @@
-"""表情解析端点（2026-10-13，用户第 5 条）。
+"""表情解析端点（2026-10-13，用户第 5 条；两类大小 **2026-10-14**，`devlog/485`）。
 
-`GET /emoji/resolve?names=<token,token,…>` → `{"items": {"UPOWER_1_贴贴": "https://…"}, "count": 1}`
+`GET /emoji/resolve?names=<token,token,…>` →
+`{"items": {"UPOWER_1_贴贴": {"url": "https://…", "size": 2}}, "count": 1, "origin": …, "why": null}`
 
 ## 口径
 
@@ -8,6 +9,11 @@
   `rich_text_nodes[*].emoji.icon_url`，离线、实测覆盖 99%）→ **第二源 = 上游整表**
   （全局动态包 + 本机账号面板，实测 28%，且**账号相关**）。
   两级都没有 ⇒ 前端渲染**名字 chip**（"这是表情，只是本机没有它"）。
+- **`size` 是 B站 自己的字段**（2026-10-14 用户问"原 json 里有没有说明表情大小的字段"）：
+  `1` = 小表情（与文字同大小，425 个，全在 `/bfs/emote/` + 官方表情包 id）、
+  `2` = 大表情/贴纸（5,574 个，含 garb 与**装扮/收藏集的 emote**）。
+  ⚠️ 判别不能按"官方还是自定义"，只有这个字段分得开（`devlog/485` 有实测表）。
+  第二源的脸在 `meta.size` 里给同一件事。
 - **第一源在启动期建好索引**（`warm_raw_index`）⇒ 读路径**不写库、不扫表**（`devlog/473`）。
 - **第二源按需拉**（`resolve_all_async`）：只有第一源漏项时才出网一次，之后 30 分钟吃缓存，
   拉失败后 60s 内不重试。⚠️ 别把它挪去启动期预取：离线时会挂在 15s 超时上，
@@ -37,7 +43,14 @@ async def resolve_emojis(names: str = Query(..., description="逗号分隔的表
     # `origin` 是诊断（哪个 token 由哪一级给的）：前端不用，但排查"为什么这枚没画出来"时
     # 一眼能看出"是载荷没扫到"还是"两级都没有"。
     # `why`：第二源最近一次拉取失败的原因（**只有真去拉过才会有值** —— 载荷全中时按设计不出网）。
-    return {"items": items, "count": len(items), "origin": origin, "why": bili_emote.panel_why()}
+    # `items` 的值是**对象**（`{url, size}`，2026-10-14 起）：`size` 是 B站 自己的口径
+    # （1 = 小表情 / 2 = 大表情，见 `devlog/485`），前端据此画两种尺寸。
+    return {
+        "items": {tok: {"url": url, "size": size} for tok, (url, size) in items.items()},
+        "count": len(items),
+        "origin": origin,
+        "why": bili_emote.panel_why(),
+    }
 
 
 @router.get("/emoji/packages")

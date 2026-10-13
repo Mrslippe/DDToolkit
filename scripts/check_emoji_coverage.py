@@ -68,8 +68,7 @@ finally:
 
 # ① 建索引：**走生产函数**（这样解析规则一改，探针量的就是改后的）
 index = bili_emote.scan_payloads([rj for (rj,) in rows])
-flat = {name: url for name, (url, _pkg) in index.items()}
-pkgs = {p for _u, p in index.values() if p}
+pkgs = {p for _u, p, _s in index.values() if p}
 
 
 def cut(text: str | None) -> Counter:
@@ -91,7 +90,7 @@ for bj, bt in body_rows:
 if not tokens:
     raise SystemExit("正文里一个表情 token 都没有 —— 要么库是空的，要么切词规则和前端不一致了。")
 
-hits = bili_emote.resolve(list(tokens), flat)
+hits = bili_emote.resolve(list(tokens), index)
 miss = [(t, n) for t, n in tokens.most_common() if t not in hits]
 hit_n = sum(n for t, n in tokens.items() if t in hits)
 total_n = sum(tokens.values())
@@ -99,14 +98,19 @@ ok_rate = len(hits) / len(tokens) * 100
 occ_rate = hit_n / total_n * 100
 # 兜底规则的依据：两级都解析不出来的那些，**是不是真表情**（带下划线只可能是表情）
 miss_emote_like = [(t, n) for t, n in miss if "_" in t]
+# 两类大小（B站 自己的 `size` 字段）：命中里各占多少 —— 这个分布决定"按 18px 一律画"错得多远
+small_occ = sum(n for t, n in tokens.items() if hits.get(t, (None, None))[1] == 1)
+large_occ = sum(n for t, n in tokens.items() if hits.get(t, (None, None))[1] == 2)
 
 print(f"载荷行数     {len(rows)}")
-print(f"索引名字     {len(flat)}（包 {len(pkgs)} 个）")
+print(f"索引名字     {len(index)}（包 {len(pkgs)} 个）")
 print(f"正文 token   {len(tokens)} 种 / {total_n} 次   ← `body_json.text`（前端渲染的那个字段）")
 print(f"  参照       {len(ref_text)} 种 / {sum(ref_text.values())} 次   ← `body_text`"
       f"（口径不同：多出 {sorted(set(ref_text) - set(tokens))[:8]} 这类分P 标记，别混着比）")
 print(f"覆盖率       种类 {len(hits)}/{len(tokens)} = {ok_rate:.1f}%   "
       f"次数 {hit_n}/{total_n} = {occ_rate:.1f}%")
+print(f"两类大小     小（size=1）{small_occ} 次 / 大（size=2）{large_occ} 次"
+      f"   ⇒ 大表情占 {large_occ / max(small_occ + large_occ, 1) * 100:.0f}% 的出现次数")
 print(f"\n没解析出来的（最多列 {args.show} 个，按出现次数）：")
 for t, n in miss[:args.show]:
     print(f"  {n:5d}×  [{t}]")

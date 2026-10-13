@@ -67,6 +67,9 @@ logs/
 # Node / 前端
 node_modules/
 .npm-cache/
+# vitest 的报告目录（2026-10-14）：`npx vitest` 在**哪个工作目录**跑就会在那生成 `.vite/vitest/`
+# —— 仓库根跑一次就多一个未跟踪目录，而提交时用 `git add -A` 会顺手带进去。**缓存，不进库**。
+.vite/
 
 # 本地缓存（图片代理磁盘缓存，可随时重建）
 static/img-cache/

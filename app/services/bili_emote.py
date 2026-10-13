@@ -67,6 +67,26 @@ modules.module_dynamic.desc.rich_text_nodes[1].emoji = {
 ⇒ 两个来源都解析不出来的，前端渲染成**名字 chip**（`[包名_名]` 那样一枚小标签），
 而不是原样留着方括号："这是一枚表情，只是本机没有它"比"一串看不懂的方括号"清楚。
 
+## 表情分**两类大小**，而且 B站 的载荷里就有这个字段（2026-10-14，`devlog/485`）
+
+用户口径：「表情分成两类，一类是图文共同大小的表情，一类是大于文字的表情，原 json 中有说明
+表情大小的字段吗，如果有就直接取那个」——**有**，就是 emoji 节点的 `size`：
+
+| `size` | 是什么 | 实测（真机 5,999 个节点） | 地址形态 |
+|---|---|---|---|
+| `1` | **小表情**（图文同大小） | 425 个 / 84 种 token | **全部**在 `/bfs/emote/`，`package_id` 是官方表情包（1 / 2 / 0） |
+| `2` | **大表情**（贴纸） | 5,574 个 / 409 种 token | garb 4,724 + emote 812 + 其他 38 |
+
+⚠️ **判别不能按"官方 vs 自定义"**：`/bfs/emote/`（看着像官方小表情那条路）里也有
+**812 个 `size=2`**（`[明前奶绿_灰头土脸]`、`[菜菜子_开心]`、`[罗小黑_来了]` 这些装扮/收藏集）。
+只有 `size` 分得开。⚠️ `size=1` 里也有 27/85 种**带包名**（`[doge_金箍]`）⇒ 也不能按形状判。
+
+⚠️ 第二源（上游整表）同样带这个字段：脸的 `meta.size`（与载荷的 `size` 同义）。
+⇒ 两级解析都能给出大小，前端据此画两种尺寸（小 = 与正文同大小，大 = 明显大于文字）。
+
+（顺带一个量级：本机正文里**命中的表情有 83% 是 `size=2`**（4,983 / 5,979 次出现）——
+即"一律按 18px 画"等于把绝大多数表情都画小了。这也是用户提这条的由来。）
+
 ## 索引的键用**原样名**（含 `UPOWER_<uid>_` 前缀）—— 2026-10-13 实测定的
 
 归一化（把 `UPOWER_<uid>_` 去掉，让"同一个名字"跨 UP 通用）看着更划算，真机数据说**不划算**：
@@ -153,29 +173,47 @@ def normalize_candidates(token: str) -> list[str]:
     return [c for c in out if c and not (c in seen or seen.add(c))]
 
 
-def build_index(packages: list[dict]) -> dict[str, str]:
-    """`[{emote: [{text, url}]}]` → `{名: url}`（纯函数，便于用假数据验证）。
+def _norm_size(v) -> int | None:
+    """`size` 归一到 `1`/`2`/`None`。
+
+    ⚠️ 载荷里是 **int**，而上游整表的脸在 `meta.size` 里给的可能是**字符串**（本仓在
+    `type` 字段上实测过同一现象）⇒ 两种都收，认不出就是 `None`（调用方按"小"渲染）。
+    """
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return None
+    return n if n in (1, 2) else None
+
+
+def build_index(packages: list[dict]) -> dict[str, tuple[str, None, int | None]]:
+    """`[{emote: [{text, url, meta}]}]` → `{名: (url, None, size)}`（纯函数，便于用假数据验证）。
 
     表里的 `text` 形如 `[doge_金箍]`（**带方括号**），我们的 token 不含方括号 ⇒ 两边都剥掉。
+    值和第一源同形（三元组），中间那格（包 id）这里没有 ⇒ `None`。
+    `meta.size` 与载荷的 `size` 同义（1 = 小表情 / 2 = 大表情）。
     """
-    index: dict[str, str] = {}
+    index: dict[str, tuple[str, None, int | None]] = {}
     for pkg in packages or []:
         for face in (pkg or {}).get("emote") or []:
             name = str(face.get("text") or "").strip().strip("[]")
             url = face.get("url") or ""
             if name and url:
-                index.setdefault(name, url)
+                size = _norm_size((face.get("meta") or {}).get("size"))
+                index.setdefault(name, (url, None, size))
     return index
 
 
-def resolve(tokens: list[str], index: dict[str, str]) -> dict[str, str]:
-    """token → 图片地址（查不到的**不出现在结果里**，由调用方走 chip 兜底）。"""
-    out: dict[str, str] = {}
+def resolve(tokens: list[str], index: dict[str, tuple[str, object, int | None]]
+            ) -> dict[str, tuple[str, int | None]]:
+    """token → `(图片地址, size)`（查不到的**不出现在结果里**，由调用方走 chip 兜底）。"""
+    out: dict[str, tuple[str, int | None]] = {}
     for tok in tokens:
         for cand in normalize_candidates(tok):
-            url = index.get(cand)
-            if url:
-                out[tok] = url
+            hit = index.get(cand)
+            if hit:
+                url, _pkg, size = hit
+                out[tok] = (url, size)
                 break
     return out
 
@@ -187,12 +225,21 @@ def resolve(tokens: list[str], index: dict[str, str]) -> dict[str, str]:
 # ⚠️ 只扫**载荷**（raw_json），不扫我们自己拼的 body_json —— 后者是提取后的纯文本，
 #    图床地址在那一步就丢了。
 
-def collect_emotes(node, index: dict[str, tuple[str, str | None]], depth: int = 0) -> None:
-    """递归把载荷里所有 `{emoji: {text, icon_url, package_id}}` 收进 `index`（**原地修改**）。
+def collect_emotes(node, index: dict[str, tuple[str, str | None, int | None]],
+                   depth: int = 0) -> None:
+    """递归把载荷里所有 `{emoji: {text, icon_url, package_id, size}}` 收进 `index`（**原地修改**）。
 
-    `index` 的值是 `(url, package_id)`：包 id 现在没用上，但它是**将来要整包**时的种子
-    （官方 `/bapis/…/EmoteService/PackageDetail` 或第三方快照都按包 id 查），
-    而重新扫一遍全库要 0.7s ⇒ 顺手存下来比将来再扫便宜。
+    `index` 的值是 `(url, package_id, size)`：
+
+    - `package_id` 现在没用上，但它是**将来要整包**时的种子（官方
+      `/bapis/…/EmoteService/PackageDetail` 或第三方快照都按包 id 查），
+      而重新扫一遍全库要 0.7s ⇒ 顺手存下来比将来再扫便宜。
+    - **`size` 是 B站 自己的口径，不是我们定的**（2026-10-14 用户问"原 json 里有没有说明
+      表情大小的字段"）：实测真机 5,999 个 emoji 节点**全都有**这个字段，
+      `1` = 小表情（图文同大小，425 个，全在 `/bfs/emote/`，package_id 是官方表情包）、
+      `2` = 大表情/贴纸（5,574 个，含 garb 4,724 + emote 812 的装扮/收藏集 + 其他 38）。
+      ⚠️ 所以"大不大"**不能**按"官方还是自定义"或"garb 还是 emote"判 ——
+      `[明前奶绿_灰头土脸]`、`[菜菜子_开心]` 都走 `/bfs/emote/` 却是 `size=2`（812 个）。
 
     键是 `emoji.text` **原样**（只去方括号）：**不**去掉 `UPOWER_<uid>_` 前缀 ——
     理由与实测在模块 docstring 的"索引的键用原样名"一节（覆盖一样、归一化反而会撞名）。
@@ -206,7 +253,8 @@ def collect_emotes(node, index: dict[str, tuple[str, str | None]], depth: int = 
             url = emo.get("icon_url") or emo.get("gif_url") or emo.get("webp_url") or ""
             if name and url:
                 pkg = emo.get("package_id")
-                index[name] = (str(url), str(pkg) if pkg else None)
+                index[name] = (str(url), str(pkg) if pkg else None,
+                               _norm_size(emo.get("size")))
         for v in node.values():
             collect_emotes(v, index, depth + 1)
     elif isinstance(node, list):
@@ -215,9 +263,9 @@ def collect_emotes(node, index: dict[str, tuple[str, str | None]], depth: int = 
 
 
 def scan_payloads(raws: Iterable[str | None],
-                  index: dict[str, tuple[str, str | None]] | None = None
-                  ) -> dict[str, tuple[str, str | None]]:
-    """一批 `raw_json` 字符串 → `{名字: (url, package_id)}`（纯函数，可用假数据验证）。
+                  index: dict[str, tuple[str, str | None, int | None]] | None = None
+                  ) -> dict[str, tuple[str, str | None, int | None]]:
+    """一批 `raw_json` 字符串 → `{名字: (url, package_id, size)}`（纯函数，可用假数据验证）。
 
     后扫到的**覆盖**先扫到的（同一枚表情被 UP 换过图时，新的那次才是当下有效的地址）；
     调用方按 `id` 升序喂进来即可。
@@ -268,7 +316,7 @@ def warm_raw_index(db, force: bool = False) -> dict:
     from app.repositories.vtuber_repo import AppMetaRepo
 
     repo = AppMetaRepo(db)
-    stored: dict[str, tuple[str, str | None]] = {}
+    stored: dict[str, tuple[str, str | None, int | None]] = {}
     last_id = 0
     if not force:
         try:
@@ -278,8 +326,11 @@ def warm_raw_index(db, force: bool = False) -> dict:
         raw = repo.get(KEY_RAW_INDEX)
         if raw:
             try:
-                stored = {k: (v[0], v[1]) for k, v in json.loads(raw).items()}
-            except (TypeError, ValueError, IndexError):
+                stored = _load_index(raw)
+            except _StaleIndex:
+                stored = {}          # 旧格式（没有 size 那一格）⇒ 全量重扫一次
+                last_id = 0
+            except (TypeError, ValueError, IndexError, KeyError):
                 stored = {}          # 存坏了就当作没存（下面会重建）
                 last_id = 0
 
@@ -288,8 +339,7 @@ def warm_raw_index(db, force: bool = False) -> dict:
         # ⚠️ 这里**必须回填进程内副本**：没有新行是**第二次之后的每次启动**的常态，
         #    只 return 统计就会让第一源在那些启动里静默缺席（退化成只有 28% 的第二源）。
         _raw_cache["index"] = stored
-        return {"scanned": 0, "names": len(stored),
-                "packages": len({p for _u, p in stored.values() if p}), "last_id": last_id}
+        return _stats(0, stored, last_id)
 
     index = dict(stored)
     scan_payloads((r[1] for r in rows), index)
@@ -297,14 +347,51 @@ def warm_raw_index(db, force: bool = False) -> dict:
     # 只在**真变了**的时候写（幂等：`--force` 之外的第二遍调用零写）
     if rows or force:
         repo.set(KEY_RAW_INDEX, json.dumps(
-            {k: [u, p] for k, (u, p) in index.items()}, ensure_ascii=False))
+            {"v": INDEX_VERSION,
+             "items": {k: [u, p, s] for k, (u, p, s) in index.items()}},
+            ensure_ascii=False))
         repo.set(KEY_SCANNED_UPTO, str(new_last))
     _raw_cache["index"] = index
-    return {"scanned": len(rows), "names": len(index),
-            "packages": len({p for _u, p in index.values() if p}), "last_id": new_last}
+    return _stats(len(rows), index, new_last)
 
 
-def raw_index() -> dict[str, tuple[str, str | None]]:
+#: 存进 `app_meta` 的索引格式版本。**改索引的形状就要 +1**：老机器上的 `app_meta` 里
+#: 还躺着上一版的形状，靠版本号判"这是旧的 ⇒ 全量重扫一次"（0.71s，一次性）。
+#: v2 = 值从 `(url, package_id)` 变成 `(url, package_id, size)`（`devlog/485`）。
+INDEX_VERSION = 2
+
+
+class _StaleIndex(Exception):
+    """`app_meta` 里那份索引是**旧格式**（版本号对不上或压根没有）⇒ 调用方全量重扫。"""
+
+
+def _load_index(raw: str) -> dict[str, tuple[str, str | None, int | None]]:
+    """读回存的索引；旧格式抛 `_StaleIndex`。"""
+    data = json.loads(raw)
+    if not isinstance(data, dict) or data.get("v") != INDEX_VERSION:
+        raise _StaleIndex
+    out: dict[str, tuple[str, str | None, int | None]] = {}
+    for k, v in (data.get("items") or {}).items():
+        out[k] = (v[0], v[1], _norm_size(v[2]) if len(v) > 2 else None)
+    return out
+
+
+def _stats(scanned: int, index: dict[str, tuple[str, str | None, int | None]],
+           last_id: int) -> dict:
+    """给日志/端点/用例看的一份统计（含两类的数量 —— 大小口径出事时一眼看得出）"""
+    sizes = [s for _u, _p, s in index.values()]
+    return {
+        "scanned": scanned,
+        "names": len(index),
+        "packages": len({p for _u, p, _s in index.values() if p}),
+        "small": sum(1 for s in sizes if s == 1),
+        "large": sum(1 for s in sizes if s == 2),
+        "size_unknown": sum(1 for s in sizes if s is None),
+        "last_id": last_id,
+    }
+
+
+def raw_index() -> dict[str, tuple[str, str | None, int | None]]:
     """第一源索引（读路径用；没热过就是空的 —— 那时全靠第二源，功能不坏只是少解析）
 
     ⚠️ 它**只**由启动期的 `warm_raw_index` 填：所以 `/emoji/packages` 报
@@ -313,14 +400,13 @@ def raw_index() -> dict[str, tuple[str, str | None]]:
     return _raw_cache["index"]  # type: ignore[return-value]
 
 
-def resolve_all(tokens: list[str]) -> tuple[dict[str, str], dict[str, str]]:
+def resolve_all(tokens: list[str]) -> tuple[dict[str, tuple[str, int | None]], dict[str, str]]:
     """**两级解析**（同步：只读内存里的两份索引）：第一源（离线载荷）→ 第二源（上游整表缓存）。
 
-    返回 `(命中, 来源)`；`来源` 只是给诊断/用例看的（哪个 token 是哪一级给的）。
-    第二源失败**不抛错** —— 表情解析失败不该让正文渲染失败。
+    返回 `(命中, 来源)`：命中值是 `(url, size)`；`来源` 只是给诊断/用例看的
+    （哪个 token 是哪一级给的）。第二源失败**不抛错** —— 表情解析失败不该让正文渲染失败。
     """
-    raw = {k: url for k, (url, _pkg) in raw_index().items()}
-    hit = resolve(tokens, raw)
+    hit = resolve(tokens, raw_index())
     origin = {t: "payload" for t in hit}
     rest = [t for t in tokens if t not in hit]
     if rest:
@@ -331,7 +417,8 @@ def resolve_all(tokens: list[str]) -> tuple[dict[str, str], dict[str, str]]:
     return hit, origin
 
 
-async def resolve_all_async(tokens: list[str]) -> tuple[dict[str, str], dict[str, str]]:
+async def resolve_all_async(tokens: list[str]) -> tuple[dict[str, tuple[str, int | None]],
+                                                       dict[str, str]]:
     """端点用的两级解析：**第一源没盖住时才去拉第二源**（拉回来的那份带 30 分钟缓存）。
 
     ⚠️ 为什么必须有这个 async 版本（而不是让端点只调同步的 `resolve_all`）：
@@ -386,7 +473,8 @@ def _panel_needs_fetch() -> bool:
     return now - float(_cache["last_try"]) >= RETRY_AFTER
 
 
-async def emote_index(force: bool = False) -> tuple[dict[str, str], str | None]:
+async def emote_index(force: bool = False) -> tuple[dict[str, tuple[str, None, int | None]],
+                                                    str | None]:
     """整表索引（带缓存）。返回 `(索引, 失败原因或 None)` —— **从不抛错**。
 
     为什么要两条路合起来：全局动态包匿名就有（225 个），但**本机账号收藏的那些包**
@@ -425,7 +513,7 @@ def panel_why() -> str | None:
     return _cache["why"]  # type: ignore[return-value]
 
 
-def _sync_panel_index() -> dict[str, str]:
+def _sync_panel_index() -> dict[str, tuple[str, None, int | None]]:
     """第二源的**同步**取用（读路径用）：有缓存就给缓存，没有就给空。
 
     ⚠️ 为什么不在读路径上现拉：`resolve_all` 是**同步**函数，而 `emote_index` 是 async 的
@@ -450,13 +538,16 @@ async def prefetch_panel_index() -> str | None:
 
 
 def index_stats() -> dict:
-    """诊断：两级索引各自有多少名字、见过多少个包（`GET /emoji/packages` 用）。"""
+    """诊断：两级索引各自有多少名字、见过多少个包、**两类大小各多少**（`GET /emoji/packages`）"""
     raw = raw_index()
-    pkgs = sorted({p for _u, p in raw.values() if p})
+    pkgs = sorted({p for _u, p, _s in raw.values() if p})
     return {
         "payload_names": len(raw),
         "payload_packages": len(pkgs),
         "payload_package_ids": pkgs[:50],
+        "payload_small": sum(1 for _u, _p, s in raw.values() if s == 1),
+        "payload_large": sum(1 for _u, _p, s in raw.values() if s == 2),
+        "payload_size_unknown": sum(1 for _u, _p, s in raw.values() if s is None),
         "panel_names": len(_cache["index"] or {}),
         "panel_at": float(_cache["at"]) or None,
         "panel_why": panel_why(),

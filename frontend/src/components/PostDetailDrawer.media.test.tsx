@@ -512,13 +512,17 @@ describe('正文里的表情', () => {
 
   it('解析得出来 ⇒ 画 `<img>`（表情图，而不是 chip）', async () => {
     resolveEmojis.mockResolvedValue({
-      items: { UPOWER_1_贴贴: 'https://cdn/tietie.png' }, count: 1, why: null,
+      // ⚠️ 值从 2026-10-14 起是对象 `{url, size}`（`size` = B站 的大小字段，`devlog/485`）
+      items: { UPOWER_1_贴贴: { url: 'https://cdn/tietie.png', size: 2 } },
+      count: 1, why: null,
     })
     act(() => root.render(
       <PostDetailDrawer post={emojiPost('好耶[UPOWER_1_贴贴]')} open onClose={() => {}} />))
     await settle()
-    expect(document.body.querySelector<HTMLImageElement>('img.post-emoji')?.src)
-      .toBe('https://cdn/tietie.png')
+    const img = document.body.querySelector<HTMLImageElement>('img.post-emoji')
+    expect(img?.src).toBe('https://cdn/tietie.png')
+    // 接线到底：`size=2` 得真的变成大表情那一档（不然后端算了也不用）
+    expect(img?.className).toContain('post-emoji--big')
   })
 
   it('不像表情的方括号（`[1P]`）保持原样 —— 正文不许变成一串胶囊', async () => {
