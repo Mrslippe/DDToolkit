@@ -22,7 +22,7 @@ import { useEffect, useState } from 'react'
 
 import { api } from '../../api/api'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog'
-import { pinBodyScroll } from './dialogScroll'
+import { freezeBodyScroll, noScrollAutoFocus } from './dialogScroll'
 
 interface Props {
   open: boolean
@@ -50,8 +50,8 @@ export default function ReservationDialog({
     setDate(dayKey)
     setError(null)
     setBusy(false)
-    // 弹窗开着期间不许页面跳（用户报的"把页面挤上去"就是这一条，见 `dialogScroll.ts`）
-    return pinBodyScroll()
+    // 临时让 body 不可滚：焦点滚进视口那一下就不会把页面顶走（`dialogScroll.ts` 记了两次修错）
+    return freezeBodyScroll()
   }, [open, dayKey])
 
   const canSave = title.trim().length > 0 && !busy && vtuberId != null
@@ -77,7 +77,9 @@ export default function ReservationDialog({
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
       <DialogContent className="lc-ms p-0 gap-0" overlayClassName="lc-dlg-backdrop"
-                     showCloseButton={false}>
+                     showCloseButton={false}
+                     /* 接管自动聚焦：默认那个会把页面滚 486px（`dialogScroll.ts` 记了两次修错） */
+                     onOpenAutoFocus={noScrollAutoFocus}>
         <div className="lc-ms-head">
           <DialogTitle className="lc-ms-title">记录直播预约</DialogTitle>
           <DialogDescription className="lc-ms-sub">

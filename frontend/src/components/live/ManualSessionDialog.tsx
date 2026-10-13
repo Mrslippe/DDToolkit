@@ -30,7 +30,7 @@ import {
   type ManualFormValues, buildManualPatch, canSubmitNew, defaultManualRange,
   defaultRangeForDay, formFromSession, hasChanges,
 } from './manualSessionForm'
-import { pinBodyScroll } from './dialogScroll'
+import { freezeBodyScroll, noScrollAutoFocus } from './dialogScroll'
 
 interface Props {
   open: boolean
@@ -75,8 +75,8 @@ export default function ManualSessionDialog({
     setError(null)
     setBusy(false)
     setConfirmDel(false)
-    // 同一个收口：弹窗开着期间不许页面跳（`devlog/476`，见 `dialogScroll.ts`）
-    return pinBodyScroll()
+    // 同一个收口：临时让 body 不可滚 ⇒ 焦点滚进视口那一下不会把页面顶走（`devlog/476`）
+    return freezeBodyScroll()
   }, [open, session, newDay])
 
   const set = (k: keyof ManualFormValues) => (e: React.ChangeEvent<HTMLInputElement>) =>
@@ -129,7 +129,9 @@ export default function ManualSessionDialog({
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
       <DialogContent className="lc-ms p-0 gap-0" overlayClassName="lc-dlg-backdrop"
-                     showCloseButton={false}>
+                     showCloseButton={false}
+                     /* 接管自动聚焦：默认那个会把页面滚出去（`dialogScroll.ts` 记了两次修错） */
+                     onOpenAutoFocus={noScrollAutoFocus}>
         <div className="lc-ms-head">
           <DialogTitle className="lc-ms-title">
             {editing ? '编辑场次' : '手动记录一场直播'}

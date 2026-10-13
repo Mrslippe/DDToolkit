@@ -4802,9 +4802,18 @@ img.hero-avatar {
   position: fixed;
   inset: 0;
   z-index: 60;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: grid;
+  place-items: center;
+  /* ⚠️ 弹窗的位置必须只由**视口**决定（2026-10-13，`devlog/476`）：
+     原来只有 `inset: 0` + flex 居中 —— 而 `fixed` 元素的包含块在滚动盒里，
+     于是 body 一旦被滚（Radix 自动聚焦会把焦点滚进视口 ⇒ body.scrollTop 跑到 762），
+     居中就算在那个滚动盒上、把弹窗摆到视口外。用户看到的正是"只有灰色遮罩、没有小窗"。
+     `height: 100dvh` + 自身 `overflow: hidden` 之后，遮罩就是一个**视口大小的盒子**，
+     弹窗在它内部居中 ⇒ 与 body 滚没滚无关。 */
+  height: 100dvh;
+  overflow: hidden;
+  /* 兜底：即使 body 被滚，遮罩自己的内容也不跟着跑 */
+  overscroll-behavior: contain;
   background: rgba(15, 23, 42, 0.32);
   animation: lc-dlg-fade 0.18s ease-out;
 }

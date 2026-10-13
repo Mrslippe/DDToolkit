@@ -2295,25 +2295,68 @@ export async function runUiProbe(): Promise<void> {
       ?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     await sleep(500)
-    const geomBefore = geomNow()
-    if (emptyFuture) {
-      emptyFuture.click()
-      await sleep(400)
-      resvProbe = {
-        // 两个弹窗都有可能：过去 ⇒ 记录场次（`.lc-ms` 但没有 `[data-rv-date]`）；
-        // 未来 ⇒ 记录预约（有 `[data-rv-date]`）。只认后者会把前一半判成"没反应"。
+
+    /** 弹窗的**可见性**读数（2026-10-13）：用户报"有灰色遮罩但是没看见小窗"。
+     *  只判 `.lc-ms` 在不在 DOM 是不够的 —— 它在，只是**没长出来/在视口外**也一样是坏的。
+     *  所以量盒 + 计算样式的 opacity/visibility + 它相对视口的位置。 */
+    const dlgNow = () => {
+      const d = document.querySelector<HTMLElement>('.lc-ms')
+      if (!d) return null
+      const r = d.getBoundingClientRect()
+      const cs = getComputedStyle(d)
+      return {
+        x: Math.round(r.left), y: Math.round(r.top),
+        w: Math.round(r.width), h: Math.round(r.height),
+        opacity: cs.opacity, visibility: cs.visibility, display: cs.display,
+        inViewport: r.bottom > 0 && r.top < window.innerHeight
+          && r.right > 0 && r.left < window.innerWidth,
+        title: (d.querySelector('.lc-ms-title')?.textContent || '').trim(),
+      }
+    }
+    const clickAndMeasure = async (cell: HTMLElement) => {
+      const before = geomNow()
+      cell.click()
+      // 分帧采样：滚动到底是**哪一拍**发生的（打开动画里？聚焦时？）
+      const frames: unknown[] = []
+      for (const wait of [0, 16, 50, 120, 250, 500]) {
+        await sleep(wait === 0 ? 0 : wait)
+        const ae = document.activeElement as HTMLElement | null
+        frames.push({
+          t: wait,
+          body: Math.round(document.body.scrollTop),
+          de: Math.round(document.documentElement.scrollTop),
+          card: Math.round(
+            document.querySelector('.live-calendar')?.getBoundingClientRect().top ?? 0),
+          focus: ae ? `${ae.tagName}.${(ae.className || '').toString().slice(0, 18)}` : null,
+          dlgY: Math.round(
+            document.querySelector('.lc-ms')?.getBoundingClientRect().top ?? 0),
+        })
+      }
+      const out = {
         opened: !!document.querySelector('.lc-ms'),
         isReservation: !!document.querySelector('[data-rv-date]'),
-        before: geomBefore,
+        dialog: dlgNow(),
+        before,
         after: geomNow(),
-        inMonth: inMonth.length,
-        candidates: inMonth.filter(
-          (c) => !c.getAttribute('data-lc-has-session') && !c.getAttribute('data-resv-count'),
-        ).length,
+        frames,
       }
-      // 关掉，别污染后面的判据
       document.querySelector<HTMLElement>('.lc-ms-actions .lc-ms-btn')?.click()
-      await sleep(300)
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      await sleep(400)
+      return out
+    }
+    const emptyPast = [...inMonth].reverse().find(
+      (c) => !c.getAttribute('data-lc-has-session') && !c.getAttribute('data-resv-count'),
+    ) ?? null
+    if (emptyFuture) resvProbe = await clickAndMeasure(emptyFuture)
+    // 过去那一格 ⇒ **记录场次**窗（同一次也量它的可见性与页面稳定性）
+    let manualProbe: Record<string, unknown> | null = null
+    if (emptyPast) manualProbe = await clickAndMeasure(emptyPast)
+    if (resvProbe) {
+      resvProbe.inMonth = inMonth.length
+      resvProbe.candidates = inMonth.filter(
+        (c) => !c.getAttribute('data-lc-has-session') && !c.getAttribute('data-resv-count'),
+      ).length
     }
 
     const pre = document.createElement('pre')
@@ -2331,6 +2374,7 @@ export async function runUiProbe(): Promise<void> {
         settledSample,
         filter: filterProbe,
         reservation: resvProbe,
+        manual: manualProbe,
         cellPop,
       },
       thirdparty,

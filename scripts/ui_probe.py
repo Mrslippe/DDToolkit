@@ -4075,6 +4075,27 @@ def main() -> int:
                       f"卡片高 {b.get('cardH')}→{a.get('cardH')}")
             if rv_bad:
                 bad.extend(rv_bad)
+            # 记录**场次**窗（点过去那一格）：同一套"看得见 + 不许挤页面"的判据
+            # ⚠️ 2026-10-13 用户报"有灰色遮罩但没看见小窗" → 只判 `.lc-ms` 在不在 DOM
+            # 是不够的：它在，却没长出来/落在视口外，也一样是坏的。所以这里连**盒**一起判。
+            mp = (cal or {}).get("manual")
+            mp_bad = _reservation_dialog_failures(mp, f"{w} 过去格")
+            md = (mp or {}).get("dialog") or {}
+            if mp:
+                print(f"  点过去空格 → 记录场次窗：{'打开了' if mp.get('opened') else '没打开'}"
+                      f" · 标题 {md.get('title')!r} · 盒 {md.get('w')}×{md.get('h')} @"
+                      f"({md.get('x')},{md.get('y')}) · opacity={md.get('opacity')}"
+                      f" · 在视口内={md.get('inViewport')}")
+                for fr in (mp.get("frames") or [])[:6]:
+                    print(f"      +{fr.get('t')}ms：body={fr.get('body')} de={fr.get('de')}"
+                          f" 卡片={fr.get('card')} dlgY={fr.get('dlgY')} 焦点={fr.get('focus')}")
+            if md and not (md.get("w") and md.get("h") and md.get("inViewport")):
+                mp_bad.append(
+                    f"@{w} 记录场次窗在 DOM 里但**看不见**：盒 {md.get('w')}×{md.get('h')} @"
+                    f"({md.get('x')},{md.get('y')}) · opacity={md.get('opacity')} · "
+                    f"在视口内={md.get('inViewport')} —— 用户看到的是'只有灰色遮罩'")
+            if mp_bad:
+                bad.extend(mp_bad)
             if tf_bad:
                 bad.extend(tf_bad)
             elif tf:
