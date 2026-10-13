@@ -4802,12 +4802,14 @@ img.hero-avatar {
   position: fixed;
   inset: 0;
   z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   background: rgba(15, 23, 42, 0.32);
   animation: lc-dlg-fade 0.18s ease-out;
-  /* ⚠️ 遮罩**只负责调光**，不负责居中（2026-10-13，`devlog/476`）。
-     它当 flex/grid 容器时，那个容器的盒子是**内容高**（探针实测 1080）而不是视口高（621）
-     ⇒ 居中落在 772，弹窗跑到视口外（用户看到的"只有灰色遮罩、没有小窗"）。
-     居中改由 `.lc-ms` 自己 `fixed + translate(-50%,-50%)` 负责 —— 它的包含块是视口。 */
+  /* ⚠️ 这里**必须**保留 flex 居中：`.lc-dlg`（场次详情窗）就靠它定位，
+     而它是正常的 —— 用户口径「不能让这个窗口和详情窗一样吗」。
+     我先前把它降级成纯调光层、让面板自己 fixed 居中，那一套已全部撤回。 */
 }
 
 /* 退场（Q2 批次 14，devlog/217）：迁移到 Radix 之后，关闭时面板**留在 DOM 里**播这段，
@@ -5552,13 +5554,13 @@ img.hero-avatar {
 }
 
 @keyframes lc-dlg-pop {
-  from { transform: translate(-50%, -50%) translateY(8px) scale(0.98); opacity: 0; }
-  to { transform: translate(-50%, -50%) translateY(0) scale(1); opacity: 1; }
+  from { transform: translateY(8px) scale(0.98); opacity: 0; }
+  to { transform: translateY(0) scale(1); opacity: 1; }
 }
 
 @keyframes lc-dlg-pop-out {
-  from { transform: translate(-50%, -50%) translateY(0) scale(1); opacity: 1; }
-  to { transform: translate(-50%, -50%) translateY(6px) scale(0.985); opacity: 0; }
+  from { transform: translateY(0) scale(1); opacity: 1; }
+  to { transform: translateY(6px) scale(0.985); opacity: 0; }
 }
 
 /* reduced-motion：退场也压到一帧（与 .image-viewer-closing 同款口径） */
@@ -7128,35 +7130,22 @@ img.hero-avatar {
    body 滚不滚都不影响它落在屏幕正中。（`inset`/`margin` 居中同理，但这两个属性
    `.lc-ms` 上别处没用到，显式写出来最不容易被后来的改动破坏。） */
 .lc-ms {
-  /* ⚠️ 弹窗位置**只由视口决定**（2026-10-13，`devlog/476`）。
-     遮罩是 flex 居中的（`.lc-dlg-backdrop`），但那个容器的盒子**比视口高 486px**
-     （探针实测 `overlayH=1080 / 视口 621`）⇒ 居中落在 772，弹窗整个跑到视口外，
-     用户看到的就是"只有灰色遮罩、没有小窗"。所以这里自己钉在视口正中：
-     `fixed` 的包含块是视口，`translate(-50%,-50%)` 与入场动画的 keyframe 已经对齐
-     （`lc-dlg-pop` 的 from/to 都带着同样的 -50%/-50% 平移，别只改一处）。
-     `margin: 0` 是必需的兜底：Radix 的弹窗默认带 margin，会把居中推歪。 */
-  position: fixed;
-  top: 50%;
-  left: 50%;
-  margin: 0;
-  transform: translate(-50%, -50%);
+  /* ⚠️ 与 `.lc-dlg`（场次详情窗，**能正常显示**）保持同一套做法（2026-10-13，`devlog/476`）：
+     面板自己**不定位**，居中完全交给遮罩的 flex —— 用户口径：「不能让这个窗口和正常的
+     直播场次详情窗口的层级一样吗」。我先前给 `.lc-ms` 加的 `position:fixed` +
+     `translate(-50%,-50%)` + 改动画 keyframe 是一整套自己发明的 hack，已全部撤掉。
+     两者的差别只在宽度与 `max-height`（详情窗 720×680，这个表单窗 420 自适应）。 */
+  position: relative;
   z-index: 61;
   width: 420px;
   max-width: calc(100vw - 32px);
-  max-height: calc(100dvh - 32px);
   display: flex;
   flex-direction: column;
   border-radius: 12px;
   background: var(--c-bg-card);
   border: 1px solid var(--c-border);
   box-shadow: var(--shadow-dialog);
-  /* ⚠️ 入场动画暂时停用（2026-10-13，`devlog/476`）：探针量到 `.lc-ms` 的 `opacity`
-     稳定停在 **0**、位置停在 `from` 帧的 `translateY(8px)` 上 —— 即这条动画**没跑完过**，
-     而那正好等于用户报的"只有遮罩、看不见小窗"。
-     去掉之后几何立刻正确（盒 407×331 @(334,145) = 视口正中），所以**动画就是那一环**；
-     但 `opacity` 仍是 0 ⇒ 还有第二个来源没找到（见 devlog/476 的"还没查完"一节）。
-     先不加回来：不能拿"看不见"换 200ms 的顺手。 */
-  /* animation: lc-dlg-pop 0.2s cubic-bezier(0.22, 0.61, 0.36, 1); */
+  animation: lc-dlg-pop 0.2s cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
 /* ⚠️ 每个块都不许比面板宽（2026-10-08，`devlog/456`）：flex/grid 子项的 `min-width:auto`

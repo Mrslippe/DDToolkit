@@ -4085,7 +4085,8 @@ def main() -> int:
                 print(f"  点过去空格 → 记录场次窗：{'打开了' if mp.get('opened') else '没打开'}"
                       f" · 标题 {md.get('title')!r} · 盒 {md.get('w')}×{md.get('h')} @"
                       f"({md.get('x')},{md.get('y')}) · opacity={md.get('opacity')}"
-                      f" · 在视口内={md.get('inViewport')}")
+                      f" · anim={md.get('animationName')} · 在视口内={md.get('inViewport')}")
+                print(f"      对照：遮罩 {md.get('overlay')} · 详情窗(.lc-dlg) {md.get('refDialog')}")
                 for fr in (mp.get("frames") or [])[:6]:
                     print(f"      +{fr.get('t')}ms：body={fr.get('body')} de={fr.get('de')}"
                           f" 卡片={fr.get('card')} dlgY={fr.get('dlgY')} 焦点={fr.get('focus')}")

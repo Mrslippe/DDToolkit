@@ -2301,6 +2301,11 @@ export async function runUiProbe(): Promise<void> {
      *  所以量盒 + 计算样式的 opacity/visibility + 它相对视口的位置。 */
     const dlgNow = () => {
       const d = document.querySelector<HTMLElement>('.lc-ms')
+      // 对照组：**场次详情窗**（`.lc-dlg`）—— 用户口径「不能让这个窗口和详情窗一样吗」。
+      // 它在本仓是"能正常显示"的那一个，所以它的读数就是"正常"的基准：
+      // 同一次运行里两者对比，才知道 `.lc-ms` 的异常是它自己的还是探针环境的。
+      const ref = document.querySelector<HTMLElement>('.lc-dlg')
+      const ro = ref?.getBoundingClientRect()
       if (!d) return null
       const r = d.getBoundingClientRect()
       const cs = getComputedStyle(d)
@@ -2308,9 +2313,24 @@ export async function runUiProbe(): Promise<void> {
         x: Math.round(r.left), y: Math.round(r.top),
         w: Math.round(r.width), h: Math.round(r.height),
         opacity: cs.opacity, visibility: cs.visibility, display: cs.display,
+        animationName: cs.animationName, animationPlayState: cs.animationPlayState,
         inViewport: r.bottom > 0 && r.top < window.innerHeight
           && r.right > 0 && r.left < window.innerWidth,
         title: (d.querySelector('.lc-ms-title')?.textContent || '').trim(),
+        refDialog: ref ? {
+          y: Math.round(ro!.top), h: Math.round(ro!.height),
+          opacity: getComputedStyle(ref).opacity,
+          animationName: getComputedStyle(ref).animationName,
+        } : null,
+        overlay: (() => {
+          const o = document.querySelector<HTMLElement>('.lc-dlg-backdrop')
+          if (!o) return null
+          const b = o.getBoundingClientRect()
+          return {
+            h: Math.round(b.height), y: Math.round(b.top),
+            display: getComputedStyle(o).display,
+          }
+        })(),
       }
     }
     const clickAndMeasure = async (cell: HTMLElement) => {
