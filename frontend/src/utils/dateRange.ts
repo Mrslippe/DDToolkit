@@ -104,3 +104,46 @@ export function monthGrid(month: Date): Date[] {
   const start = new Date(first.getFullYear(), first.getMonth(), 1 - startWeekday)
   return Array.from({ length: 42 }, (_, i) => new Date(start.getFullYear(), start.getMonth(), start.getDate() + i))
 }
+
+/* ── 墙上时间值 `YYYY-MM-DDTHH:mm` 的拆装（日期+时刻选择器共用，2026-10-13）──────
+ *
+ * 这个格式就是 `<input type="datetime-local">` 的 value，也是**发给服务端的原样字符串**
+ * （后端 `to_utc_naive` 按本机时区换算，见 `components/live/manualSessionForm.ts`）。
+ * 自己画的日期+时刻控件要能把它**拆成两段**（日历用日期段、滚轮列用时刻段）再拼回去 ——
+ * 拆装错一位，用户看到的就是"我选的 20:00 存成了 08:00"，所以放这里由
+ * `scripts/check_date_range.mjs` 钉住，不给组件层留自己拼字符串的机会。
+ */
+
+/** 小时档位：`00`–`23` */
+export const HOURS: string[] = Array.from({ length: 24 }, (_, i) => pad2(i))
+
+/** 分钟档位：`00`–`59`（**1 分钟一档**）—— 档位少了就填不了 20:07 这种开场时刻 */
+export const MINUTES: string[] = Array.from({ length: 60 }, (_, i) => pad2(i))
+
+/** `YYYY-MM-DDTHH:mm` → `{date, time}`；**只有日期**时时刻段补 `00:00`；空/认不出 → null */
+export function splitLocal(s: string): { date: string; time: string } | null {
+  const m = /^(\d{4}-\d{2}-\d{2})(?:[T ](\d{1,2}):(\d{2}))?$/.exec((s || '').trim())
+  if (!m) return null
+  const h = Number(m[2] ?? 0)
+  const mi = Number(m[3] ?? 0)
+  if (h > 23 || mi > 59) return null
+  return { date: m[1], time: `${pad2(h)}:${pad2(mi)}` }
+}
+
+/** 两段拼回 `YYYY-MM-DDTHH:mm`（日期段认不出 → 空串；时刻段缺/越界 → `00:00`） */
+export function joinLocal(date: string, time: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return ''
+  const [h, mi] = (time || '').split(':')
+  const ok = (v: string | undefined, max: number) => {
+    const n = Number(v)
+    return Number.isFinite(n) && n >= 0 && n <= max ? pad2(Math.trunc(n)) : '00'
+  }
+  return `${date}T${ok(h, 23)}:${ok(mi, 59)}`
+}
+
+/** 显示文案：`2026/10/07 20:00`（空/认不出 → 空串，调用方自己去显示占位） */
+export function fmtLocalHuman(s: string): string {
+  const sp = splitLocal(s)
+  return sp ? `${sp.date.replace(/-/g, '/')} ${sp.time}` : ''
+}
+

@@ -7223,6 +7223,158 @@ img.hero-avatar {
 
 .lc-ms-hint { flex: 1 1 100%; padding-left: 54px; font-size: 11px; color: var(--c-text-sub); opacity: .85; }
 
+/* ── 日期 + 时刻选择器（`common/DateTimePicker`，2026-10-13）───────────────────
+   用户口径：原先那个原生 `datetime-local` 的弹层是浏览器自己画的（蓝灰、直角、与全站
+   零关系），「参照 list 视图日期筛选的日历样式改一下，以保证符合项目的整体美术风格」。
+   ⇒ **日历那一半一个新像素都没写**：`.drp-panel/.drp-head/.drp-nav/.drp-wd/.drp-grid/
+   .drp-day` 全是既有类（选区间那颗双月历的同一套），这里只写「字段」与「时/分滚轮列」。 */
+.dtp {
+  position: relative;
+  flex: 1 1 180px;
+  min-width: 0;
+}
+
+/* 字段：与 `.lc-ms-input` 同形（同高同边同圆角），只是它是按钮、里面是"值 + 日历图标" */
+.dtp-field {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  text-align: left;
+  font-family: inherit;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+
+.dtp-field:disabled { cursor: default; }
+.dtp-ph { color: var(--c-text-sub); opacity: .8; }
+.dtp-field svg { flex: none; color: var(--c-text-sub); }
+/* 开着的时候描主色边（与 `.lc-ms-input:focus-visible` 的焦点环同族，但它是"展开态"不是焦点） */
+.dtp-field[aria-expanded='true'] { border-color: var(--c-primary-deep); }
+
+.dtp-pop {
+  position: absolute;
+  z-index: 20;
+  left: 0;
+  width: 336px;
+  max-width: calc(100vw - 32px);
+  padding: 10px 12px 8px;
+  border: 1px solid var(--c-border);
+  border-radius: 12px;
+  background: var(--c-bg-card);
+  box-shadow: var(--shadow-dialog);
+  animation: lc-dlg-pop 0.16s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+/* 日历在左、时/分滚轮在右（与原生那颗弹层的版式一致） */
+.dtp-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.dtp-main .drp { flex: 1 1 auto; min-width: 0; }
+
+/* 滚轮列：**中线选中**。几何是一组必须一起成立的约束，改一个就要重算全部：
+     ① `.dtp-cols` 的 `--dtp-win` = 可视窗高（= 5 格 × 一格）；
+     ② `.dtp-col` 用 `height: var(--dtp-win)`（**border-box**，全站默认）+ 上下内边距
+        `(win − 一格) / 2` ⇒ 首项与末项都能停到中线；
+     ③ 于是"第 i 项居中" = `scrollTop = i × 一格`（`DateTimePicker` 的 Column 按这个算）。
+   ⚠️ **别给 `.dtp-col` 加 `box-sizing: content-box`**（我加过，是错的）：那样 `height` 变成
+   内容高、滚动窗变成 `内容 + 内边距`，而可滚高度只有 `N×格 − 内容高` ⇒ **末尾几档永远到不了
+   中线**（实测小时列 `maxScroll=440=20 格`，于是 21/22/23 点只能滚到 20，滚上去又弹回 20）。
+   探针那条"滚到底 = 最后一档"就是为它写的（`_dtp_failures`）。 */
+.dtp-cols {
+  --dtp-item-h: 22px;
+  --dtp-win: 110px;                     /* 5 格 */
+  position: relative;
+  flex: none;
+  display: flex;
+  gap: 2px;
+}
+
+/* 中线底色带：**跨两列一条**（原生那颗弹层也是整条），且必须在滚动盒子**外面** ——
+   绝对定位的子元素会跟着滚动体一起滚，放进去就成了一条会跑的线。 */
+.dtp-mark {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: var(--dtp-item-h);
+  transform: translateY(-50%);
+  border-radius: 7px;
+  background: var(--sel-bg);
+  pointer-events: none;
+}
+
+.dtp-col {
+  position: relative;
+  z-index: 1;
+  width: 34px;
+  height: var(--dtp-win);
+  padding: calc((var(--dtp-win) - var(--dtp-item-h)) / 2) 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;          /* 滚到头不许把弹窗/页面接着滚 */
+  scroll-snap-type: y mandatory;
+  scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(#0000, #000 22%, #000 78%, #0000);
+  mask-image: linear-gradient(#0000, #000 22%, #000 78%, #0000);
+}
+
+.dtp-col::-webkit-scrollbar { width: 0; height: 0; }
+
+.dtp-col:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+  border-radius: 8px;
+}
+
+.dtp-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: var(--dtp-item-h);
+  padding: 0;
+  border: none;
+  background: none;
+  scroll-snap-align: center;
+  font-family: inherit;
+  font-size: 12.5px;
+  color: var(--c-text-sub);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.dtp-item:hover { color: var(--c-text-main); }
+.dtp-item.on { color: var(--c-primary-deep); font-weight: 600; }
+
+.dtp-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--c-border);
+}
+
+.dtp-spacer { flex: 1; }
+
+.dtp-lnk {
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--c-text-main);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.dtp-lnk:hover { background: var(--pill-bg-hover); }
+
 /* 自动抓取场次的说明 + 服务端 409/422 的中文原因：两者都是"要用户读一句话"，
    同一档视觉（不抢焦点、但看得见） */
 .lc-ms-note { margin: 0; font-size: 11.5px; line-height: 16px; color: var(--c-text-sub); }

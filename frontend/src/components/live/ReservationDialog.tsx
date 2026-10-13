@@ -21,6 +21,7 @@
 import { useEffect, useState } from 'react'
 
 import { api } from '../../api/api'
+import DateTimePicker from '../common/DateTimePicker'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog'
 import { noScrollAutoFocus } from './dialogScroll'
 
@@ -42,6 +43,8 @@ export default function ReservationDialog({
   const [date, setDate] = useState(dayKey)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  /** 日期选择器的弹层开关 —— Esc 时先关它（理由见 `ManualSessionDialog` 里那段注释） */
+  const [picker, setPicker] = useState(false)
 
   // 每次打开都从**被点的那一格**重新起算，并清掉上一次的失败原因
   useEffect(() => {
@@ -50,6 +53,7 @@ export default function ReservationDialog({
     setDate(dayKey)
     setError(null)
     setBusy(false)
+    setPicker(false)
   }, [open, dayKey])
 
   // ⚠️ 这里曾经挂着 `useFreezeBodyScroll(open)`（钉住 body 的补丁）—— 病根在
@@ -81,7 +85,14 @@ export default function ReservationDialog({
       <DialogContent className="lc-ms p-0 gap-0" overlayClassName="lc-dlg-backdrop"
                      showCloseButton={false}
                      /* 接管自动聚焦：默认那个会把页面滚 486px（`dialogScroll.ts` 记了两次修错） */
-                     onOpenAutoFocus={noScrollAutoFocus}>
+                     onOpenAutoFocus={noScrollAutoFocus}
+                     /* Esc 先关日期弹层（Radix 挂在 document 捕获段，面板里拦不住 —— 见
+                        `ManualSessionDialog` 同名字段上的那段说明） */
+                     onEscapeKeyDown={(e) => {
+                       if (!picker) return
+                       e.preventDefault()
+                       setPicker(false)
+                     }}>
         <div className="lc-ms-head">
           <DialogTitle className="lc-ms-title">记录直播预约</DialogTitle>
           <DialogDescription className="lc-ms-sub">
@@ -90,10 +101,15 @@ export default function ReservationDialog({
         </div>
 
         <div className="lc-ms-body">
-          <div className="lc-ms-row">
+          {/* ⚠️ `data-rv-date` 是**身份钩子**（探针按它判断"这是预约窗"）——
+              原先是挂在那个 `<input type="date">` 上的，换成自绘画的日期选择器之后
+              挂在这一行上：查询口径（`panel.querySelector('[data-rv-date]')`）不变。 */}
+          <div className="lc-ms-row" data-rv-date="1">
             <label className="lc-ms-label" htmlFor="lc-rv-date">日期</label>
-            <input id="lc-rv-date" className="lc-ms-input" type="date" value={date}
-                   data-rv-date="1" onChange={(e) => setDate(e.target.value)} />
+            <DateTimePicker
+              id="lc-rv-date" value={date} dateOnly placeholder="选择日期"
+              open={picker} onOpenChange={setPicker} onChange={setDate}
+            />
           </div>
           <div className="lc-ms-row">
             <label className="lc-ms-label" htmlFor="lc-rv-title">标题</label>

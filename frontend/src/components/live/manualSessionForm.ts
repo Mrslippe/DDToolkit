@@ -44,6 +44,17 @@ export function fromLocalInput(v: string): string | null {
 }
 
 /**
+ * 默认开始 / 结束**时刻**（`HH:mm`）—— 单一来源。
+ *
+ * 两个消费者：下面那两个"新建默认时段"，以及日期+时刻选择器
+ * （`components/common/DateTimePicker.tsx`）—— 字段**为空**时它要有个起算点
+ * （用户清掉结束时间又想填回来时，起算点是"这个字段平时的默认值"最不意外）。
+ * 两处必须是同一个数，所以是常量，不是两处各写一遍的字符串。
+ */
+export const DEFAULT_START_TIME = '20:00'
+export const DEFAULT_END_TIME = '22:00'
+
+/**
  * 新建时的默认时段：**今天 20:00–22:00**（本地）。
  *
  * 为什么是晚八点而不是"现在"或"当前选中那格"：这个入口要补的多半是**已经播过**的场次，
@@ -53,7 +64,7 @@ export function fromLocalInput(v: string): string | null {
  */
 export function defaultManualRange(now: Date): { start: string; end: string } {
   const day = toLocalInput(now.toISOString()).slice(0, 10)
-  return { start: `${day}T20:00`, end: `${day}T22:00` }
+  return { start: `${day}T${DEFAULT_START_TIME}`, end: `${day}T${DEFAULT_END_TIME}` }
 }
 
 /**
@@ -68,7 +79,7 @@ export function defaultManualRange(now: Date): { start: string; end: string } {
 export function defaultRangeForDay(dayKey: string): { start: string; end: string } {
   const day = (dayKey || '').trim().slice(0, 10)
   if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return defaultManualRange(new Date())
-  return { start: `${day}T20:00`, end: `${day}T22:00` }
+  return { start: `${day}T${DEFAULT_START_TIME}`, end: `${day}T${DEFAULT_END_TIME}` }
 }
 
 /** 场次 → 表单初值（编辑模式；字段缺失就是空串，不做任何猜测） */

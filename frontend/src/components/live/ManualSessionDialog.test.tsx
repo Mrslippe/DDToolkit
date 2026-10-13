@@ -10,6 +10,11 @@
  * ⑤ 409/422 的中文原因**显示在表单里**（不许吞成"保存失败"）；
  * ⑥ 删除要两步确认（没有 `window.confirm`：它在 WebView 里被壳挡住时是静默失败）。
  *
+ * ⚠️ 2026-10-13 起时间字段是**自己画的**日期+时刻选择器（`common/DateTimePicker`，
+ * 用户口径：原生那颗弹层长得不像本项目）—— 所以下面设值一律走**用户那条路**
+ * （点字段 → 翻月 → 点日 → 点时刻列），而不是直接改状态：值格式也一并被验。
+ * 控件本身的行为判据在 `components/common/DateTimePicker.test.tsx`（19 条）。
+ *
  * 组件用例的写法沿用 `LiveSessionDialog.test.tsx`（jsdom + `react-dom/client` + `act`，零新依赖）。
  */
 import { readFileSync } from 'node:fs'
@@ -83,6 +88,10 @@ function render(session: LiveSession | null) {
 }
 
 const input = (id: string) => document.getElementById(id) as HTMLInputElement
+/** 时间字段现在是**自己画的**日期+时刻选择器（`common/DateTimePicker`）：
+ *  它不是 `<input>`，值挂在 `data-dtp-value` 上（探针读的是同一个钩子）。 */
+const timeField = (id: string) => document.getElementById(id) as HTMLButtonElement
+const timeValue = (id: string) => timeField(id).getAttribute('data-dtp-value')
 const saveBtn = () => document.querySelector<HTMLButtonElement>('.lc-ms-btn.primary')!
 const delBtn = () => document.querySelector<HTMLButtonElement>('.lc-ms-btn.danger')
 const errorText = () => document.querySelector('.lc-ms-error')?.textContent ?? ''
@@ -94,6 +103,40 @@ function type(el: HTMLInputElement, v: string) {
     setter.call(el, v)
     el.dispatchEvent(new Event('input', { bubbles: true }))
   })
+}
+
+const pop = () => document.querySelector<HTMLElement>('.dtp-pop')
+
+/** 把弹出层的日历翻到指定年月（点年月箭头 —— 与用户的操作路径一致，不直接塞状态） */
+async function gotoMonth(y: number, mo: number) {
+  for (let i = 0; i < 40; i++) {
+    const m = /^(\d{4})年(\d{1,2})月$/.exec(document.querySelector('.dtp-pop .drp-title')!.textContent!)
+    if (!m) throw new Error('日历标题读不出来')
+    const cur = Number(m[1]) * 12 + Number(m[2])
+    const want = y * 12 + mo
+    if (cur === want) return
+    await click(document.querySelector<HTMLButtonElement>(
+      `.dtp-pop [title="${cur > want ? '上个月' : '下个月'}"]`)!)
+  }
+  throw new Error(`翻不到 ${y}-${mo}`)
+}
+
+/** 用选择器把某个时间字段设成指定值：开 → 翻月 → 点日 → 点时刻两列 → 完成。
+ *  ⚠️ 走的是**用户那条路**（不是为了用例方便直接改状态）—— 值格式也就一并被验了。 */
+async function setDateTime(id: string, v: string) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(v)!
+  await click(timeField(id))
+  await gotoMonth(Number(m[1]), Number(m[2]))
+  await click(document.querySelector<HTMLButtonElement>(`[data-dtp-day="${m[1]}-${m[2]}-${m[3]}"]`)!)
+  await click(document.querySelector<HTMLButtonElement>(`#${id}-h-${m[4]}`)!)
+  await click(document.querySelector<HTMLButtonElement>(`#${id}-m-${m[5]}`)!)
+  await click(document.querySelector<HTMLButtonElement>('[data-dtp-done]')!)
+}
+
+/** 清空（结束时间 = 进行中）：真实路径是弹层里的「清除」 */
+async function clearTime(id: string) {
+  await click(timeField(id))
+  await click(document.querySelector<HTMLButtonElement>('[data-dtp-clear]')!)
 }
 
 async function click(el: HTMLButtonElement) {
@@ -129,15 +172,15 @@ describe('新建', () => {
     const today = new Date()
     const p = (n: number) => String(n).padStart(2, '0')
     const localToday = `${today.getFullYear()}-${p(today.getMonth() + 1)}-${p(today.getDate())}`
-    expect(input('lc-ms-start').value).toBe(`${localToday}T20:00`)
-    expect(input('lc-ms-end').value.endsWith('T22:00')).toBe(true)
+    expect(timeValue('lc-ms-start')).toBe(`${localToday}T20:00`)
+    expect(timeValue('lc-ms-end')).toBe(`${localToday}T22:00`)
 
     await click(saveBtn())
     expect(createMock).toHaveBeenCalledTimes(1)
     const [aid, body] = createMock.mock.calls[0]
     expect(aid).toBe(1)
     expect(body).toEqual({
-      start_at: input('lc-ms-start').value, end_at: input('lc-ms-end').value,
+      start_at: timeValue('lc-ms-start'), end_at: timeValue('lc-ms-end'),
     })
     expect('title' in body).toBe(false)
     expect('vod_url' in body).toBe(false)
@@ -146,8 +189,8 @@ describe('新建', () => {
 
   it('② 时间原样提交（不做 toISOString 折算）；标题/录播去空白后带上', async () => {
     render(null)
-    type(input('lc-ms-start'), '2026-10-08T19:30')
-    type(input('lc-ms-end'), '2026-10-08T21:30')
+    await setDateTime('lc-ms-start', '2026-10-08T19:30')
+    await setDateTime('lc-ms-end', '2026-10-08T21:30')
     type(input('lc-ms-title'), ' 深夜歌回 ')
     type(input('lc-ms-vod'), ' BV1xx411c7mD ')
 
@@ -158,10 +201,11 @@ describe('新建', () => {
     })
   })
 
-  it('清空开始时间 → 保存不可点（服务端要的就是这个字段）', () => {
+  it('★ 开始时间**没有「清除」入口**（必填；守卫在 `canSubmitNew`，见纯函数用例）', async () => {
     render(null)
-    type(input('lc-ms-start'), '')
-    expect(saveBtn().disabled).toBe(true)
+    await click(timeField('lc-ms-start'))
+    expect(pop()).not.toBeNull()
+    expect(document.querySelector('[data-dtp-clear]')).toBeNull()
   })
 })
 
@@ -178,21 +222,33 @@ describe('编辑', () => {
     expect(updateMock).toHaveBeenCalledWith(1, 'manual-abc', { title: '深夜歌回' })
   })
 
-  it('清空结束时间 → end_at: null（"改回进行中"，与"没传"不是一回事）', async () => {
+  it('清空结束时间（弹层里的「清除」）→ end_at: null（"改回进行中"，与"没传"不是一回事）', async () => {
     render(MANUAL)
-    type(input('lc-ms-end'), '')
+    await clearTime('lc-ms-end')
     await click(saveBtn())
     expect(updateMock.mock.calls[0][2]).toEqual({ end_at: null })
   })
 
+  it('★ 结束时间的起算日 = 开始那一刻那天（清空之后又填回来时不用再猜哪一天）', async () => {
+    render(MANUAL)                       // 开始 = 2026-10-08 20:00
+    await clearTime('lc-ms-end')
+    await click(timeField('lc-ms-end'))
+    // 清空之后日历仍停在开始那一天所在月 ⇒ 直接点 09 就是 10-09
+    await click(document.querySelector<HTMLButtonElement>('[data-dtp-day="2026-10-09"]')!)
+    expect(timeValue('lc-ms-end')).toBe('2026-10-09T22:00')
+  })
+
   it('④ 自动抓来的场次：时间/标题不可改 + 说明；录播可改；没有删除按钮', async () => {
     render(AUTO)
-    expect(input('lc-ms-start').disabled).toBe(true)
-    expect(input('lc-ms-end').disabled).toBe(true)
+    expect(timeField('lc-ms-start').disabled).toBe(true)
+    expect(timeField('lc-ms-end').disabled).toBe(true)
     expect(input('lc-ms-title').disabled).toBe(true)
     expect(input('lc-ms-vod').disabled).toBe(false)
     expect(document.querySelector('.lc-ms-note')?.textContent).toContain('只能补录播地址')
     expect(delBtn()).toBeNull()
+    // 禁用的字段点不开弹层（不是"开出来但改不动"）
+    await click(timeField('lc-ms-start'))
+    expect(pop()).toBeNull()
 
     type(input('lc-ms-vod'), 'BV1xx411c7mD')
     await click(saveBtn())

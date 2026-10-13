@@ -18,6 +18,11 @@ const {
   monthGrid,
   EMPTY_RANGE,
   RANGE_PRESETS,
+  HOURS,
+  MINUTES,
+  splitLocal,
+  joinLocal,
+  fmtLocalHuman,
 } = await import(new URL('../frontend/src/utils/dateRange.ts', import.meta.url))
 
 let failed = 0
@@ -81,6 +86,33 @@ eq('含当月末日', g.some((d) => fmtDate(d) === '2026-09-30'), true)
 const gFeb = monthGrid(T('2026-02-01'))
 eq('2 月也在 6 行内', gFeb.length, 42)
 eq('2 月末日在内', gFeb.some((d) => fmtDate(d) === '2026-02-28'), true)
+
+// ── 墙上时间值的拆装（`YYYY-MM-DDTHH:mm`，日期+时刻选择器共用）──────────────
+// 这条链路上错一位，用户看到的是"我选的 20:00 存成了 08:00"（后端按原样字符串解释）。
+eq('小时档位数', HOURS.length, 24)
+eq('分钟档位数（1 分钟一档，20:07 也要能填）', MINUTES.length, 60)
+eq('首/末小时', [HOURS[0], HOURS[23]], ['00', '23'])
+eq('首/末分钟', [MINUTES[0], MINUTES[59]], ['00', '59'])
+eq('拆 日期+时刻', splitLocal('2026-10-07T20:00'), { date: '2026-10-07', time: '20:00' })
+eq('拆 只给日期 → 补 00:00', splitLocal('2026-10-07'), { date: '2026-10-07', time: '00:00' })
+eq('拆 单位数小时也认', splitLocal('2026-10-07T9:05'), { date: '2026-10-07', time: '09:05' })
+eq('拆 空串', splitLocal(''), null)
+eq('拆 越界小时', splitLocal('2026-10-07T24:00'), null)
+eq('拆 越界分钟', splitLocal('2026-10-07T20:60'), null)
+eq('拆 非本格式', splitLocal('2026/10/07 20:00'), null)
+eq('拼 两段', joinLocal('2026-10-07', '20:00'), '2026-10-07T20:00')
+eq('拼 单位数补零', joinLocal('2026-10-07', '9:5'), '2026-10-07T09:05')
+eq('拼 时刻缺 → 00:00', joinLocal('2026-10-07', ''), '2026-10-07T00:00')
+eq('拼 时刻越界 → 00:00（不产生非法值）', joinLocal('2026-10-07', '99:99'), '2026-10-07T00:00')
+eq('拼 日期认不出 → 空串', joinLocal('', '20:00'), '')
+// ★ 往返恒等：选择器的两条写路径（点日历 / 滚轮列）都必须落在同一个值上
+for (const v of ['2026-10-07T20:00', '2026-01-01T00:00', '2026-12-31T23:59']) {
+  const sp = splitLocal(v)
+  eq(`往返 ${v}`, joinLocal(sp.date, sp.time), v)
+}
+eq('显示文案', fmtLocalHuman('2026-10-07T20:00'), '2026/10/07 20:00')
+eq('显示文案（空）', fmtLocalHuman(''), '')
+eq('显示文案（认不出）', fmtLocalHuman('乱写的'), '')
 
 console.log(failed ? `\n${failed} 项失败` : '\n全部通过')
 process.exit(failed ? 1 : 0)

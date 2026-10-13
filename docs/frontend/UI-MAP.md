@@ -1018,24 +1018,47 @@ reduced-motion 禁用）。图片加载同一混合策略（直连→代理→**
 ### B4. 手动记录 / 编辑场次弹窗（`components/live/ManualSessionDialog.tsx`，2026-10-08 B2 `devlog/454`）
 
 两处入口共用**同一个实例**：日历工具栏的「+」（`新建`，默认今天 20:00–22:00）与详情弹窗的铅笔（`编辑`）。
-DOM 与类名：`ManualSessionDialog.test.tsx` 钉住「只提交改过的字段」「时间原样提交」「自动行只可改录播」等 9 条。
+DOM 与类名：`ManualSessionDialog.test.tsx` 钉住「只提交改过的字段」「时间原样提交」「自动行只可改录播」等；
+时间字段的设值在用例里走**用户那条路**（点字段 → 翻月 → 点日 → 点时刻列），值格式也一并被验。
 
 | 区域 | 类名 | 说明 |
 |---|---|---|
 | 面板根 | `.lc-ms`（Radix `DialogContent`） | **420px 定宽**（`max-width calc(100vw-32px)`）、r12、白底 + 发丝边 + `--shadow-dialog`、**z-61**；复用详情弹窗的遮罩类 `.lc-dlg-backdrop`（同为 z-60）；入场 `lc-dlg-pop` 0.2s / 退场 `lc-dlg-pop-out` 0.16s（`[data-state='closed']`，与 `.lc-dlg` **分两条写** —— 合并选择器会让 `LiveSessionDialog.test.tsx` 的 CSS 正则假红） |
 | 定位 | **不写 `position`**（2026-10-13，`devlog/476`） | 面板的 `fixed` 来自 `DialogContent` 基础类；`.lc-ms` 一写 `position` 就会**压掉它**（posts.css 无层级胜 `@layer utilities`）⇒ 面板掉进 portal 的普通流、落在满视口 `#root` 之后（用户报的「有遮罩没小窗」＋ Chrome 滚 `body` 去够聚焦框 = 「弹窗把页面挤上去」）。契约由 `ManualSessionDialog.test.tsx` ⑧ + 探针 `_reservation_dialog_failures` 双守 |
 | 头部 | `.lc-ms-head` / `.lc-ms-title` / `.lc-ms-sub` | 标题 15px/600（「手动记录一场直播」/「编辑场次」）+ 副行 11.5px；`DialogTitle`/`DialogDescription` 关联 |
-| 表单 | `.lc-ms-body` / `.lc-ms-row` / `.lc-ms-label` / `.lc-ms-input` / `.lc-ms-hint` | 四行：开始 / 结束 / 标题 / 录播；标签定宽 44px（四个输入框左缘对齐）；时间用 `datetime-local`（**原样提交**，服务端按本机时区解释）；结束留空 = 进行中；标题 `maxLength=80`（与服务端 422 同口径）；提示行在输入框下方占满一行 |
-| 可编辑性 | `autoOnly` | 服务端 `manual===false`（自动抓来的）⇒ 开始/结束/标题 `disabled` + `.lc-ms-note` 说明「只能补录播地址，时间和标题来自平台」；**不渲染删除钮** |
+| 表单 | `.lc-ms-body` / `.lc-ms-row` / `.lc-ms-label` / `.lc-ms-input` / `.lc-ms-hint` | 四行：开始 / 结束 / 标题 / 录播；标签定宽 44px（四个输入框左缘对齐）；**时间用自己画的日期+时刻选择器**（见下面「B4b」；值仍是 `YYYY-MM-DDTHH:mm` **原样提交**，服务端按本机时区解释）；结束留空 = 进行中；标题 `maxLength=80`（与服务端 422 同口径）；提示行在输入框下方占满一行 |
+| 可编辑性 | `autoOnly` | 服务端 `manual===false`（自动抓来的）⇒ 开始/结束/标题 `disabled` + `.lc-ms-note` 说明「只能补录播地址，时间和标题来自平台」；**不渲染删除钮**。禁用的时间字段**点不开弹层**（不是"开出来但改不动"） |
 | 焦点 | `.lc-ms-input:focus-visible` | `outline: var(--focus-ring)`（`tests/test_focus_contract.py` 会红在散落色 / `outline: none`） |
 | 失败提示 | `.lc-ms-error`（`role=alert`） | 409/422 的 `detail` **原文照显**（点名撞上哪一场的中文），不换成「保存失败」 |
 | 动作行 | `.lc-ms-actions` / `.lc-ms-btn`（`.primary` / `.danger`） | 左=删除（仅手动场次，**两步确认**：`.lc-ms-del-confirm`，不用 `window.confirm`）· 右=取消 / 保存（无改动时 `disabled`） |
 
+### B4b. 日期 + 时刻选择器 `components/common/DateTimePicker.tsx`（2026-10-13，`devlog/477`）
+
+用户口径：「手动记录直播里打开的下拉日历样式参照 list 视图日期筛选的日历样式改一下，
+以保证符合项目的整体美术风格」⇒ 换掉原生 `<input type="datetime-local">`（它的弹层是
+**浏览器自己画的**：蓝灰、直角、与全站零关系）。方案由用户在四个候选里定的 **B（滚轮列）**。
+
+| 区域 | 类名 | 说明 |
+|---|---|---|
+| 字段 | `.lc-ms-input.dtp-field` | 与 `.lc-ms-input` **同形**（同高同边同圆角），但是一枚 `<button>`：左边是整值文案 `2026/10/07 20:00`（空值走 `.dtp-ph` 占位），右边是日历图标；`aria-haspopup="dialog"` + `aria-expanded`，展开时描主色边。**规范值挂 `data-dtp-value`**（`YYYY-MM-DDTHH:mm`）—— 用例与探针读它 |
+| 弹层 | `.dtp-pop` | 字段的**绝对定位**浮层（不是 portal）：`z-index: 20`、336px、r12、`--shadow-dialog`、`lc-dlg-pop 0.16s`；贴着视口底部时**朝上翻**（`useLayoutEffect` 量真实几何再定，不猜高度） |
+| 日历 | `.drp` / `.drp-panel` / `.drp-head` / `.drp-nav` / `.drp-wd` / `.drp-grid` / `.drp-day` | **复用 list 视图那颗区间日历的同一套类**（单面板：一次只选一天）—— 这条就是用户要的"同一个美术风格"，所以**一个新像素都没写** |
+| 时刻列 | `.dtp-cols` / `.dtp-col` / `.dtp-item` / `.dtp-mark` | 时（24 档）/ 分（60 档，**1 分钟一档**）两列；`scroll-snap` 吸附 + 中线色带 `.dtp-mark` 标出选中行。⚠️ 几何是一组约束（见 posts.css 那段注释）：`--dtp-win` = 可视窗高、`padding = (win − 一格)/2`、「第 i 项居中」= `scrollTop = i × 一格`；**`height` 不许被 `box-sizing` 吃掉内边距**，否则末尾几档永远到不了中线（探针 `_dtp_failures` 有专门一条盯它） |
+| 底部 | `.dtp-foot` / `.dtp-lnk` | 「今天」（跳今天 + 保留时刻）·「清除」（仅 `clearable`：结束时间 = 进行中）·「完成」（只关弹层） |
+| 键盘 | 列上 `role="listbox"` + `tabIndex=0` | ↑↓ 一格 · PgUp/PgDn 五格 · Home/End 到头，两端不越界；`aria-activedescendant` 指到选中项 |
+| **Esc 的归属** | `DialogContent` 的 `onEscapeKeyDown` | ⚠️ Radix 把 `keydown` 挂在 `document` 的**捕获段**（`react-dismissable-layer`），弹层里的 `onKeyDown` **拦不住** ⇒ 必须由弹窗持有 `picker` 状态并在 `onEscapeKeyDown` 里 `preventDefault()`：**第一下 Esc 只关弹层，第二下才关弹窗**。探针两条判据盯着（弹层没了 / 窗还在） |
+
+值只有一种格式：`YYYY-MM-DDTHH:mm`（拆装走 `utils/dateRange.ts` 的 `splitLocal`/`joinLocal`，
+由 `scripts/check_date_range.mjs` 钉住）。判据分布：控件行为 19 条在
+`DateTimePicker.test.tsx`（jsdom）、**布局/滚动/Esc 三类只有 `ui_probe --archive` 量得到**。
+
 **同族的第二个窗**：`components/live/ReservationDialog.tsx`（2026-10-13，点**未来**空日期格进来）
 复用 `.lc-ms` / `.lc-ms-*` 全套类与上面那条定位契约（同一种弹窗不该有两套外观），字段只有
-**日期 + 标题** —— 预约只到日、写 `vtuber_events`，摆一个"填了也会被忽略"的时刻框比不摆更糟。
-入口分岔口径在 `LiveCalendar.onCellClick`（`c.key < todayKey` ⇒ 记录场次窗，否则预约窗），
-探针按**同一口径**点两格，并把"开的是哪个窗"作为断言前置项（`devlog/476`）。
+**日期 + 标题** —— 预约只到日、写 `vtuber_events`，摆一个"填了也会被忽略"的时刻框比不摆更糟
+（所以它用同一个选择器的 `dateOnly`：只有日历，没有时刻列）。身份钩子 `data-rv-date` 现在挂在
+**那一行**上（原先是那个 `<input type="date">`）。入口分岔口径在 `LiveCalendar.onCellClick`
+（`c.key < todayKey` ⇒ 记录场次窗，否则预约窗），探针按**同一口径**点两格，并把"开的是哪个窗"
+作为断言前置项（`devlog/476`）。
 
 ### B5. 粉丝趋势卡 `<FanTrendChart>`（components/FanTrendChart.tsx）
 

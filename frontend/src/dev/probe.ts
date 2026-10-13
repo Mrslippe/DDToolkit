@@ -2547,20 +2547,35 @@ export async function runUiProbe(): Promise<void> {
       const n = dayOf(c)
       return Number.isFinite(n) && n < today
     }) ?? null
-    // 视觉存档（`--shot-resv`）：让记录窗**开着**截一张 —— 用户报的是"看不见小窗"，
+    // 视觉存档（`--shot-resv` / `--shot-dtp`）：让记录窗**开着**截一张 ——
     // 这类毛病只有看图才算验过（探针能报"在视口内"，但报不了"长得对不对"）。
-    if (new URLSearchParams(window.location.search).get('keep') === 'resv' && emptyPast) {
+    // `keep=dtp` 再多走一步：把**日期选择器的弹层也打开**（滚轮列那版式只有这样才看得到）。
+    const keep = new URLSearchParams(window.location.search).get('keep')
+    if (keep && emptyPast) {
       const before = geomNow()
       emptyPast.click()
       await sleep(600)
+      if (keep === 'dtp') {
+        document.getElementById('lc-ms-start')?.click()
+        await sleep(320)
+      }
       const pre0 = document.createElement('pre')
       pre0.id = 'ui-probe'
       pre0.textContent = JSON.stringify({
         mode: 'archive', views: [], degraded: null,
-        calendar: { title: '（keep=resv 存档）', cells: [], detail: null,
+        calendar: { title: `（keep=${keep} 存档）`, cells: [], detail: null,
                     pendingSample: null, settledSample: null, filter: null,
                     reservation: null, manual: null, cellPop: null,
-                    keep: { before, after: geomNow(), dialog: dlgNow() } },
+                    keep: { before, after: geomNow(), dialog: dlgNow(),
+                            picker: document.querySelector<HTMLElement>('.dtp-pop')
+                              ? { rect: (() => {
+                                  const b = document.querySelector<HTMLElement>('.dtp-pop')!
+                                    .getBoundingClientRect()
+                                  return { x: Math.round(b.left), y: Math.round(b.top),
+                                           w: Math.round(b.width), h: Math.round(b.height) }
+                                })(),
+                                  cols: document.querySelectorAll('.dtp-col').length }
+                              : null } },
         thirdparty: null,
       })
       document.body.appendChild(pre0)
@@ -2578,6 +2593,188 @@ export async function runUiProbe(): Promise<void> {
       ).length
     }
 
+    /** 日期+时刻选择器（`common/DateTimePicker`）在**真浏览器**里的读数（2026-10-13）。
+     *
+     * 为什么非要这里量：控件自己的判据跑在 jsdom 上，而 jsdom **没有布局、没有滚动**
+     *  —— "弹层有没有被切掉""滚轮列真的能吸附到整格""Esc 只关弹层不关弹窗"这三件
+     *  在那里**恒真或恒假**，一条都验不出来。⛔ 别把这三条搬进 vitest 就以为覆盖了。
+     *
+     * 最后那条（Esc 的归属）尤其值得一条判据：Radix 把 keydown 挂在 `document` 的
+     * **捕获段**，面板里的 `onKeyDown` 拦不住它 ⇒ 写错了就是"按 Esc 想关日期弹层，
+     * 结果整个弹窗没了"，而屏幕上看不出是谁干的。 */
+    const probePicker = async (cell: HTMLElement) => {
+      const before = geomNow()
+      cell.click()
+      await sleep(500)
+      const field = document.getElementById('lc-ms-start') as HTMLButtonElement | null
+      if (!field) return { opened: false }
+      /** ⚠️ 一律**从字段往上找到它所在的那个面板**再往下查（2026-10-13）：
+       *  `.lc-ms` 是两个窗共用的类名，而 Radix 的 Presence 会让"已关闭"的面板在
+       *  退场动画期间**留在 DOM 里**（虚拟时间下动画不跑完就一直在）—— 用
+       *  `document.querySelector` 会量到那个**尸首**，报出来的却是"这个窗"的毛病。
+       *  这一批已经在 `.lc-ms` 的挑选上栽过两次，这里直接把作用域钉死在字段所在的树上。 */
+      const panel = field.closest<HTMLElement>('.lc-ms')
+      const inPanel = <T extends Element>(sel: string) => panel?.querySelector<T>(sel) ?? null
+      const panelState = () => panel?.getAttribute('data-state') ?? null
+      const value0 = field.getAttribute('data-dtp-value')
+      field.click()
+      await sleep(220)
+
+      const pop = inPanel<HTMLElement>('.dtp-pop')
+      const pr = pop?.getBoundingClientRect()
+      const panelR = panel?.getBoundingClientRect()
+      const days = panel?.querySelectorAll('.dtp-pop .drp-day').length ?? 0
+      /** ⚠️ 所有这些都在**弹层还开着的时候**当场取（`getComputedStyle` 拿到的是活对象：
+       *  等到 return 那个对象字面量时才读，节点早被 Esc 卸载了 ⇒ 读出来全是空串）。
+       *  这是本批第二次踩"读数取晚了"，第一次是 `position: ''`。 */
+      const popInfo = pr && pop ? {
+        x: Math.round(pr.left), y: Math.round(pr.top),
+        w: Math.round(pr.width), h: Math.round(pr.height),
+        position: getComputedStyle(pop).position,
+        inViewport: pr.bottom > 0 && pr.top < window.innerHeight
+          && pr.right > 0 && pr.left < window.innerWidth,
+        rightOfPanel: panelR ? Math.round(pr.right - panelR.right) : null,
+        belowViewport: Math.round(pr.bottom - window.innerHeight),
+        popCount: panel?.querySelectorAll('.dtp-pop').length ?? 0,
+      } : null
+      const colInfo = (() => {
+        const cs = [...(panel?.querySelectorAll<HTMLElement>('.dtp-col') ?? [])]
+        return {
+          count: cs.length,
+          labels: cs.map((c) => c.getAttribute('data-dtp-col')),
+          items: cs.map((c) => c.querySelectorAll('.dtp-item').length),
+          selected: cs.map((c) => c.querySelector('.dtp-item.on')?.textContent ?? null),
+        }
+      })()
+      /** 中线色带：**必须与选中项同一行**（滚轮的几何一变就会错开，而肉眼看不出）。
+       *  `bg` 也要报 —— 色带若被写成透明/被别的规则盖掉，读数里看得见。 */
+      const markInfo = (() => {
+        const mark = inPanel<HTMLElement>('.dtp-mark')
+        const sel = inPanel<HTMLElement>('.dtp-col .dtp-item.on')
+        if (!mark) return null
+        const m = mark.getBoundingClientRect()
+        const s = sel?.getBoundingClientRect()
+        return {
+          w: Math.round(m.width), h: Math.round(m.height),
+          bg: getComputedStyle(mark).backgroundColor,
+          centerOff: s ? Math.round((m.top + m.height / 2) - (s.top + s.height / 2)) : null,
+        }
+      })()
+      const snap = (label: string) => ({
+        at: label,
+        popAlive: !!inPanel('.dtp-pop'),
+        sameNode: inPanel('.dtp-pop') === pop,
+        popConnected: pop?.isConnected ?? null,
+        dialogState: panelState(),
+      })
+      const steps: unknown[] = [snap('opened')]
+
+      // ① 点日历上**另一天** ⇒ 值应当只换日期（时刻原样）
+      const other = [...(panel?.querySelectorAll<HTMLElement>('.dtp-pop .drp-day') ?? [])]
+        .find((d) => !d.classList.contains('pad') && !d.classList.contains('sel'))
+      other?.click()
+      await sleep(120)
+      const valueDay = field.getAttribute('data-dtp-value')
+      steps.push(snap('after-day'))
+
+      // ② 滚轮列：**真的滚一下**，看它吸附到整格并改值。
+      //    先点中间那一档（12 时）—— 起始值是默认的 20:00，而它**已经贴着可滚上限**，
+      //    从那里再往下滚等于滚不动（第一次跑就是这么红的：`from=to=440=maxScroll`）。
+      //    ⚠️ 每一步都**重新查节点**（`PROBE.md` §2「采集要每次重查节点」），
+      //    并且都从 `panel` 往下查（别让尸首冒充这个窗）。
+      //    ⚠️ `scroll` 事件要**自己派**：虚拟时间下不产生帧，程序性改 `scrollTop`
+      //    不会等来浏览器的 scroll 事件（本仓 `PROBE.md` 的老坑）。
+      inPanel<HTMLElement>('#lc-ms-start-h-12')?.click()
+      await sleep(140)
+      const hourCol = inPanel<HTMLElement>('.dtp-col')
+      let valueScroll: string | null = null
+      let scrollInfo: unknown = null
+      let valueBottom: string | null = null
+      let bottomInfo: unknown = null
+      if (hourCol) {
+        const itemH = hourCol.querySelector<HTMLElement>('.dtp-item')?.offsetHeight || 22
+        const from = Number(hourCol.scrollTop)
+        const metrics = {
+          itemH, from: Math.round(from),
+          scrollHeight: hourCol.scrollHeight, clientHeight: hourCol.clientHeight,
+          maxScroll: hourCol.scrollHeight - hourCol.clientHeight,
+        }
+        hourCol.scrollTop = from + itemH * 3
+        hourCol.dispatchEvent(new Event('scroll', { bubbles: true }))   // 虚拟时间下得自己派
+        const rightAfter = Math.round(Number(hourCol.scrollTop))     // 赋值后**同步**读一次
+        await sleep(320)
+        const after = inPanel<HTMLElement>('.dtp-col')
+        valueScroll = field.getAttribute('data-dtp-value')
+        scrollInfo = {
+          ...metrics, rightAfter, to: Math.round(Number(after?.scrollTop ?? -1)),
+          snapped: Math.abs(Number(after?.scrollTop ?? 0) % itemH) < 1.5,
+          sameNode: after === hourCol,
+          selectedNow: after?.querySelector('.dtp-item.on')?.textContent ?? null,
+        }
+        steps.push(snap('after-scroll'))
+
+        /** ★ 滚到**最底**：最后一档必须能停到中线。
+         *  这条是为一个实测到的几何错写的 —— `.dtp-col` 上多写一句 `box-sizing: content-box`
+         *  会让可滚高度只剩 `(N−4)×格`，于是**末尾几档永远到不了中线**（小时 21/22/23
+         *  滚上去又弹回 20，用户根本选不到）。屏幕上完全看不出来，只有量它才会现形。 */
+        const box2 = inPanel<HTMLElement>('.dtp-col')
+        if (box2) {
+          box2.scrollTop = box2.scrollHeight
+          box2.dispatchEvent(new Event('scroll', { bubbles: true }))
+          await sleep(320)
+          const items = [...box2.querySelectorAll<HTMLElement>('.dtp-item')]
+          valueBottom = field.getAttribute('data-dtp-value')
+          bottomInfo = {
+            scrollTop: Math.round(box2.scrollTop),
+            maxScroll: box2.scrollHeight - box2.clientHeight,
+            lastItem: items[items.length - 1]?.textContent ?? null,
+            selectedNow: inPanel('.dtp-col .dtp-item.on')?.textContent ?? null,
+          }
+          steps.push(snap('after-scroll-bottom'))
+        }
+      }
+
+      // ③ Esc 的归属：只关弹层，弹窗还在。
+      //    ⚠️ `defaultPrevented` **不能**单独当证据：Radix 在"照常关窗"那条分支里同样会
+      //    `preventDefault()`（`react-dismissable-layer` 的两条分支都调它）。真正的判据是
+      //    **窗还在不在**（下面的 `dialogAfterEsc`），`prevented` 只作旁证。
+      const popBeforeEsc = !!inPanel('.dtp-pop')
+      const ev = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+      document.dispatchEvent(ev)
+      const prevented = ev.defaultPrevented
+      await sleep(200)
+      const popAfterEsc = !!inPanel('.dtp-pop')
+      const dialogAfterEsc = panelState()
+
+      const out = {
+        opened: true,
+        value0,
+        valueDay,
+        valueHour: field.getAttribute('data-dtp-value'),
+        valueScroll,
+        scrollInfo,
+        valueBottom,
+        bottomInfo,
+        steps,
+        popBeforeEsc,
+        dayCount: days,
+        colCount: colInfo.count,
+        colItems: colInfo.items,
+        colLabels: colInfo.labels,
+        colSelected: colInfo.selected,
+        mark: markInfo,
+        pop: popInfo,
+        esc: { popAfterEsc, dialogAfterEsc, prevented },
+        page: { before, after: geomNow() },
+      }
+      // 收尾：把弹窗关掉，别影响后面的段落（Esc 已经被弹层吃掉一次了）
+      document.querySelector<HTMLElement>('.lc-ms-actions .lc-ms-btn')?.click()
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      await sleep(300)
+      return out
+    }
+    const dtpProbe = emptyPast ? await probePicker(emptyPast) : null
+
     const pre = document.createElement('pre')
     pre.id = 'ui-probe'
     pre.textContent = JSON.stringify({
@@ -2594,6 +2791,7 @@ export async function runUiProbe(): Promise<void> {
         filter: filterProbe,
         reservation: resvProbe,
         manual: manualProbe,
+        dtp: dtpProbe,
         cellPop,
       },
       thirdparty,

@@ -592,6 +592,9 @@ def _run_probe(edge: str, url: str, width: int, height: int, out_dir: Path, tag:
             # R45-E4：日历格子 hover 悬浮窗那一段（`?probe=cell-pop`）——
             # ⚠️ 白名单不登记=静默丢掉，页面明明写了脚本侧只拿到 None（本文件已踩过一次）
             "cellPop": data.get("cellPop"),
+            # 日期+时刻选择器的真浏览器读数（`?probe=archive` 里顺带采，2026-10-13）
+            # ⚠️ 白名单不登记 = 静默丢掉（本文件已踩过三次，见上面那几条注释）
+            "dtp": data.get("dtp"),
             "appSettings": data.get("appSettings"),
             # 对话框横向溢出（2026-10-08）：`first-run` 与 `capabilities` 两档都采
             # ⚠️ 白名单不登记 = 静默丢掉（本文件已踩过两次，见上面那两条注释）
@@ -2429,6 +2432,107 @@ _WHICH_LABEL = {"login": "登录浮窗", "legal": "协议闸门",
                 "cap-limits": "受限说明窗", "other": "其它弹窗"}
 
 
+def _dtp_failures(dtp: object, where: str) -> list[str]:
+    """日期+时刻选择器的**真浏览器**判据（2026-10-13，用户定的 B 方案：滚轮列）。
+
+    控件自己的 19 条判据跑在 jsdom 上 —— 而 jsdom 没有布局、没有滚动，下面这三类
+    在那里**恒真或恒假**，一条都验不出来，所以必须在这里各来一条：
+
+    1. **弹层有没有被切掉**：`.dtp-pop` 要在视口内、且右缘不许越出弹窗面板
+       （它是弹窗里的绝对定位浮层，面板只有 420px 宽）；
+    2. **滚轮列真的吸附到整格并改值**：jsdom 里 `scrollTop` 是个纯数字属性，
+       写进去不触发任何东西 ⇒ "滚动 → 节流取值"这条接线只有真浏览器能验；
+    3. **Esc 的归属**：Radix 把 keydown 挂在 `document` 的**捕获段**（面板里的
+       `onKeyDown` 拦不住）⇒ 写错了就是"按 Esc 想关日期弹层，整个弹窗没了"。
+       这条判据就是那一句：**弹层没了、弹窗还在**。
+    """
+    if not isinstance(dtp, dict) or not dtp:
+        return []
+    bad: list[str] = []
+    if not dtp.get("opened"):
+        return [f"@{where} 记录场次窗里找不到开始时间的字段（`#lc-ms-start`）"]
+    v0 = dtp.get("value0")
+    if not isinstance(v0, str) or not re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$", v0):
+        bad.append(f"@{where} 开始时间字段的初值不是 `YYYY-MM-DDTHH:mm`：{v0!r}")
+    pop = dtp.get("pop") or {}
+    if not pop:
+        bad.append(f"@{where} 点了字段但日期弹层没开（用户点了个没反应的框）")
+        return bad
+    if pop.get("position") != "absolute":
+        bad.append(f"@{where} 日期弹层不是 `absolute`（实得 {pop.get('position')!r}）——"
+                   f" 它必须挂在字段上，而不是自成一层")
+    if not pop.get("inViewport"):
+        bad.append(f"@{where} 日期弹层落在视口外：{pop}")
+    if (pop.get("rightOfPanel") or 0) > 0:
+        bad.append(
+            f"@{where} 日期弹层右缘越出弹窗面板 {pop.get('rightOfPanel')}px（{pop.get('w')}px 宽）"
+            f" —— 弹层被面板切掉就看不清整颗日历")
+    if (pop.get("belowViewport") or 0) > 0:
+        bad.append(f"@{where} 日期弹层下缘越出视口 {pop.get('belowViewport')}px（该朝上翻）")
+    if dtp.get("dayCount") != 42:
+        bad.append(f"@{where} 日期弹层里的日历不是 6×7：采到 {dtp.get('dayCount')} 格"
+                   f"（要与 list 视图那颗日历同款 ⇒ 复用 `.drp-day`）")
+    if dtp.get("colCount") != 2:
+        bad.append(f"@{where} 时刻列不是两列（实得 {dtp.get('colCount')}）")
+    if dtp.get("colItems") != [24, 60]:
+        bad.append(f"@{where} 时/分档位不是 24/60：{dtp.get('colItems')}"
+                   f"（分钟必须 1 分钟一档，否则 20:07 这种开场时刻填不出来）")
+    # 中线色带：在、有底色、且**与选中项同一行**（几何一变就错开，肉眼看不出来）
+    mk = dtp.get("mark")
+    if not mk:
+        bad.append(f"@{where} 时刻列没有中线色带（`.dtp-mark` 不在）——"
+                   f" 滚轮没有「哪一档被选中」的视觉锚点")
+    else:
+        if mk.get("bg") in (None, "", "rgba(0, 0, 0, 0)", "transparent"):
+            bad.append(f"@{where} 中线色带是透明的（bg={mk.get('bg')!r}）")
+        if mk.get("centerOff") is None or abs(mk["centerOff"]) > 1:
+            bad.append(f"@{where} 中线色带与选中项**不在同一行**：错开 {mk.get('centerOff')}px"
+                       f"（色带 {mk.get('w')}×{mk.get('h')}）—— 滚轮的几何被改坏了")
+    # ① 点日历只换日期、时刻保留
+    if dtp.get("valueDay") == v0:
+        bad.append(f"@{where} 点了日历上另一天，值没变（{v0!r}）—— 日历没接到值上")
+    elif (dtp.get("valueDay") or "")[11:] != (v0 or "")[11:]:
+        bad.append(f"@{where} 点日期把**时刻**改了：{v0!r} → {dtp.get('valueDay')!r}"
+                   f"（用户改的是哪一天，不是把 20:00 抹成 00:00）")
+    # ② 滚动列：吸附 + 改值
+    info = dtp.get("scrollInfo") or {}
+    if not info:
+        bad.append(f"@{where} 时刻列一个都没采到（`.dtp-col` 不在？）")
+    else:
+        if not info.get("snapped"):
+            bad.append(f"@{where} 时刻列滚完没吸附到整格：scrollTop={info.get('to')}"
+                       f" 不是 {info.get('itemH')} 的整数倍（`scroll-snap` 没生效）")
+        if dtp.get("valueScroll") == dtp.get("valueHour"):
+            bad.append(f"@{where} 滚了时刻列但值没变（{dtp.get('valueScroll')!r}）——"
+                       f" 滚动 → 取值这条接线断了（用户滚了滚轮，存进去的还是老时间）")
+        # ★ 滚到底 = 最后一档（几何错了就会卡在倒数第 4 档，用户选不到最后几档）
+        bo = dtp.get("bottomInfo") or {}
+        last = bo.get("lastItem")
+        sel = bo.get("selectedNow")
+        if bo and sel != last:
+            bad.append(
+                f"@{where} 时刻列滚到底时选中的是 {sel!r} 而不是最后一档 {last!r}"
+                f"（scrollTop={bo.get('scrollTop')} / 上限 {bo.get('maxScroll')}）——"
+                f" 可滚高度不够 ⇒ 末尾几档永远到不了中线（成因见 `.dtp-col` 那段几何注释："
+                f"`height` 一旦被 `content-box` 吃掉内边距就会这样）")
+    # ③ Esc 的归属
+    esc = dtp.get("esc") or {}
+    if esc.get("popAfterEsc"):
+        bad.append(f"@{where} 按 Esc 没关掉日期弹层（它还开着）")
+    if esc.get("dialogAfterEsc") != "open":
+        bad.append(f"@{where} 按 Esc 把**整个弹窗**也关了（data-state="
+                   f"{esc.get('dialogAfterEsc')!r}）—— Esc 该先关日期弹层；"
+                   f"成因：Radix 把 keydown 挂在 document 捕获段，面板里拦不住，"
+                   f"要用 `DialogContent` 的 `onEscapeKeyDown` + preventDefault")
+    # 弹层开合不许推动页面（与记录窗那条同一口径）
+    page = dtp.get("page") or {}
+    b, a = page.get("before") or {}, page.get("after") or {}
+    if b.get("cardTop") != a.get("cardTop") or b.get("scrollY") != a.get("scrollY"):
+        bad.append(f"@{where} 打开日期弹层把页面推走了：卡片上缘 {b.get('cardTop')} → "
+                   f"{a.get('cardTop')}、scrollY {b.get('scrollY')} → {a.get('scrollY')}")
+    return bad
+
+
 def _print_dialog_vis(rv: dict, pad: str) -> None:
     """把"这个弹窗到底长得怎么样"一次打全（2026-10-13，`devlog/476`）。
 
@@ -2969,6 +3073,12 @@ def main() -> int:
         action="store_true",
         help="额外存图：`--archive` 那一档把**记录场次窗开着**截一张"
              "（_ui_probe_tmp/resv-<宽>.png）—— 「有遮罩没小窗」这类毛病只有看图才算验过。",
+    )
+    ap.add_argument(
+        "--shot-dtp",
+        action="store_true",
+        help="额外存图：`--archive` 那一档把**日期+时刻选择器的弹层也打开**截一张"
+             "（_ui_probe_tmp/dtp-<宽>.png）—— 滚轮列那版式只有看图才算验过。",
     )
     ap.add_argument(
         "--messages",
@@ -3927,6 +4037,10 @@ def main() -> int:
                 shot = WORK / f"resv-{w}.png"
                 _run_shot(edge, f"{arch_url}&keep=resv", w, args.height, shot)
                 print(f"  截图（记录场次窗开着）→ {shot}")
+            if args.shot_dtp:
+                shot = WORK / f"dtp-{w}.png"
+                _run_shot(edge, f"{arch_url}&keep=dtp", w, args.height, shot)
+                print(f"  截图（日期+时刻弹层开着）→ {shot}")
             cal = (res or {}).get("calendar") or {}
             print(f"\n=== 直播日历实渲染（@{w}）{cal.get('title')!r} note={cal.get('note')!r} ===")
             for c in cal.get("cells") or []:
@@ -4188,6 +4302,26 @@ def main() -> int:
                 print(f"      marks={mp.get('marks')}")
             if mp_bad:
                 bad.extend(mp_bad)
+            # ── 日期+时刻选择器（2026-10-13）─────────────────────────────────
+            # 原生 `datetime-local` 换成自己画的那颗（用户口径：原生弹层不像本项目）。
+            # jsdom 验不了"被切掉/滚动吸附/Esc 归属"，这一档是它们唯一的判据。
+            dp = (cal or {}).get("dtp")
+            dp_bad = _dtp_failures(dp, f"{w} 记录场次窗")
+            if dp:
+                print(f"  日期+时刻选择器：{'打开了' if dp.get('opened') else '没打开'}"
+                      f" · 值 {dp.get('value0')!r} → 点日后 {dp.get('valueDay')!r}"
+                      f" → 滚时列后 {dp.get('valueScroll')!r}")
+                print(f"      弹层 {dp.get('pop')}")
+                print(f"      日历格={dp.get('dayCount')} · 列={dp.get('colLabels')}"
+                      f"（每列 {dp.get('colItems')} 档 · 选中 {dp.get('colSelected')}）"
+                      f" · 中线色带={dp.get('mark')}")
+                print(f"      滚动吸附：{dp.get('scrollInfo')} · Esc：{dp.get('esc')}"
+                      f" · Esc 前弹层在={dp.get('popBeforeEsc')}")
+                print(f"      滚到底：{dp.get('bottomInfo')} → 值 {dp.get('valueBottom')!r}")
+                for st in (dp.get("steps") or []):
+                    print(f"      节点存活：{st}")
+            if dp_bad:
+                bad.extend(dp_bad)
             if tf_bad:
                 bad.extend(tf_bad)
             elif tf:
@@ -6621,7 +6755,7 @@ def main() -> int:
         # 只留一行「截图 → …」日志指向一个不存在的路径（用户要看的产物不能删）。
         if (not failures and not args.shot and not args.shot_board
                 and not args.shot_toolbar and not args.shot_cell_pop
-                and not args.shot_resv):
+                and not args.shot_resv and not args.shot_dtp):
             shutil.rmtree(WORK, ignore_errors=True)
 
 

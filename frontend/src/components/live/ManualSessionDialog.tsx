@@ -25,12 +25,14 @@ import { useEffect, useRef, useState } from 'react'
 
 import type { LiveSession, LiveSessionDetail } from '../../api/types'
 import { api } from '../../api/api'
+import DateTimePicker from '../common/DateTimePicker'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '../ui/dialog'
 import {
-  type ManualFormValues, buildManualPatch, canSubmitNew, defaultManualRange,
-  defaultRangeForDay, formFromSession, hasChanges,
+  type ManualFormValues, DEFAULT_END_TIME, DEFAULT_START_TIME, buildManualPatch, canSubmitNew,
+  defaultManualRange, defaultRangeForDay, formFromSession, hasChanges,
 } from './manualSessionForm'
 import { noScrollAutoFocus } from './dialogScroll'
+import { splitLocal } from '../../utils/dateRange'
 
 interface Props {
   open: boolean
@@ -65,6 +67,8 @@ export default function ManualSessionDialog({
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [confirmDel, setConfirmDel] = useState(false)
+  /** 哪一个日期选择器的弹层开着（一次只允许一个）—— 也是 Esc 归属的判据，见下面 `onEscapeKeyDown` */
+  const [picker, setPicker] = useState<'start' | 'end' | null>(null)
 
   // 每次打开（或换一个目标场次/换一天）都从**服务端那份数据**重新起算，并清掉上一次的失败原因
   useEffect(() => {
@@ -75,6 +79,7 @@ export default function ManualSessionDialog({
     setError(null)
     setBusy(false)
     setConfirmDel(false)
+    setPicker(null)
   }, [open, session, newDay])
 
   // ⚠️ 这里曾经挂着 `useFreezeBodyScroll(open)`（钉住 body 的补丁）—— 病根在
@@ -83,6 +88,10 @@ export default function ManualSessionDialog({
 
   const set = (k: keyof ManualFormValues) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setValues((v) => ({ ...v, [k]: e.target.value }))
+
+  /** 结束时间字段的**起算日**：开始那一刻所在的那一天（一场直播不跨天）。
+   *  用户把结束清空（= 进行中）之后又想填回来时，"哪一天"不用再猜一次。 */
+  const startDate = splitLocal(values.start)?.date ?? undefined
 
   const changed = editing ? hasChanges(orig.current, values) : canSubmitNew(values)
   const canSave = changed && !busy
@@ -133,7 +142,16 @@ export default function ManualSessionDialog({
       <DialogContent className="lc-ms p-0 gap-0" overlayClassName="lc-dlg-backdrop"
                      showCloseButton={false}
                      /* 接管自动聚焦：默认那个会把页面滚出去（`dialogScroll.ts` 记了两次修错） */
-                     onOpenAutoFocus={noScrollAutoFocus}>
+                     onOpenAutoFocus={noScrollAutoFocus}
+                     /* ⚠️ Esc 的**归属**（2026-10-13）：Radix 把 keydown 挂在 document 的
+                        **捕获段**（`react-dismissable-layer`），面板里的 onKeyDown 拦不住它 ——
+                        于是"按 Esc 想关日期弹层"会变成"整个弹窗没了"。这里让弹层先吃掉那一下：
+                        弹层开着 ⇒ preventDefault + 关弹层；否则照常关弹窗（Radix 自己的路径）。 */
+                     onEscapeKeyDown={(e) => {
+                       if (!picker) return
+                       e.preventDefault()
+                       setPicker(null)
+                     }}>
         <div className="lc-ms-head">
           <DialogTitle className="lc-ms-title">
             {editing ? '编辑场次' : '手动记录一场直播'}
@@ -148,13 +166,22 @@ export default function ManualSessionDialog({
         <div className="lc-ms-body">
           <div className="lc-ms-row">
             <label className="lc-ms-label" htmlFor="lc-ms-start">开始</label>
-            <input id="lc-ms-start" className="lc-ms-input" type="datetime-local"
-                   value={values.start} onChange={set('start')} disabled={autoOnly} />
+            <DateTimePicker
+              id="lc-ms-start" value={values.start} disabled={autoOnly}
+              defaultTime={DEFAULT_START_TIME}
+              open={picker === 'start'} onOpenChange={(o) => setPicker(o ? 'start' : null)}
+              onChange={(v) => setValues((s) => ({ ...s, start: v }))}
+            />
           </div>
           <div className="lc-ms-row">
             <label className="lc-ms-label" htmlFor="lc-ms-end">结束</label>
-            <input id="lc-ms-end" className="lc-ms-input" type="datetime-local"
-                   value={values.end} onChange={set('end')} disabled={autoOnly} />
+            <DateTimePicker
+              id="lc-ms-end" value={values.end} disabled={autoOnly}
+              defaultTime={DEFAULT_END_TIME} seedDate={startDate} clearable
+              placeholder="进行中（留空）"
+              open={picker === 'end'} onOpenChange={(o) => setPicker(o ? 'end' : null)}
+              onChange={(v) => setValues((s) => ({ ...s, end: v }))}
+            />
             <span className="lc-ms-hint">留空 = 进行中（没记结束时间）</span>
           </div>
           <div className="lc-ms-row">

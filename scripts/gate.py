@@ -239,6 +239,18 @@ def steps(tier: str) -> list[tuple[str, list[str], str]]:
                                   "--width", "1440"],
          "首启登录浮窗（四平台 Tab / 凭据说明 / 浏览器扩展栏，实测 ~15s）"),
     )
+    # ⚠️ **`--archive` 也进门禁**（2026-10-13，`devlog/476`/`477`）：日历弹窗的那两组判据
+    #    （`_reservation_dialog_failures`：弹窗看得见 + 不许挤页面；`_dtp_failures`：
+    #    日期+时刻选择器的弹层没被切 / 滚轮真改值 / **滚到底能选到最后一档** / Esc 的归属）
+    #    **只在这个模式里**。它此前只在人手跑 ⇒ 那两组判据**从来没在门禁里跑过**，
+    #    而它们守的正是用户反复报的那两个窗。同一课在本仓已上过四次
+    #    （`--app-settings` 红一整天 / `--notice-lab` / `--first-run` / `--toolbar`）：
+    #    **门禁没覆盖的模式等于没有门禁**。单档 ~35s，三档不划算（成本全在启动）。
+    s.append(
+        ("ui_probe --archive", [PY, "scripts/ui_probe.py", "--archive",
+                                "--width", "1100"],
+         "日历两窗的判据（看得见 / 不挤页面 / 选择器弹层与滚轮 / Esc 归属，实测 ~35s）"),
+    )
     if tier == "a":
         # ⚠️ **`--toolbar` 也进 A 档门禁**（2026-10-06，devlog/367）：它此前**只在人手跑**，
         #    而本批顺手一跑就发现它**红了很久**（滚动的靶子挑到了 `.posts-panel` 外面 ——
