@@ -8,6 +8,11 @@ type Stage = 'direct' | 'proxy' | 'local' | 'failed'
 interface Props {
   src?: string | null
   alt?: string
+  /**
+   * 原生 `title`（hover 提示）。2026-10-14 加：正文表情图要用它显示**表情原名**
+   * （`alt` 只给读屏，鼠标悬停看不到；表情是一张小图，用户想知道"这是哪一枚"只能靠它）。
+   */
+  title?: string
   className?: string
   style?: React.CSSProperties
   /** 图片宽度（px），同时作为无 src 占位块尺寸 */
@@ -62,6 +67,7 @@ interface Props {
 export default function ProxyImage({
   src,
   alt,
+  title,
   className,
   style,
   width,
@@ -142,6 +148,7 @@ export default function ProxyImage({
     <img
       src={current}
       alt={alt}
+      title={title}
       className={className}
       data-render-src={renderSrc}
       /**

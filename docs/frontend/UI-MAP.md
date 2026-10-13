@@ -942,18 +942,24 @@ P6-2 起为**居中 Dialog**（原 Sheet 右侧抽屉）`sm:max-w-[720px]`（⚠
 > `<img src="//i0.hdslb.com/…">` / `width` / `<br/>` 保留 ⇒ 排版不损坏。
 > ⚠️ 本机库里目前**没有** `body_json.content` 的数据（两条 article 分别是 Delta 与纯文本）⇒ 这条路径当前看不到效果。
 >
-> **正文里的表情**（2026-10-13，用户第 5 条，`devlog/482`）：纯文本那一态走
+> **正文里的表情**（2026-10-13，用户第 5 条，`devlog/482`；**图改走 `ProxyImage`**，`devlog/484`）：
+> 纯文本那一态走
 > `components/common/PostText.tsx`（**转发原文**那一处也走它），把 `[UPOWER_<uid>_贴贴]` /
 > `[明前奶绿收藏集表情包_石化]` 这类 token 切成片段：
-> 解析得出来 ⇒ `.post-emoji`（18×18 行内图，`alt`/`title` 带原名、`loading="lazy"`）；
+> 解析得出来 ⇒ `.post-emoji`（18×18 行内图，`alt`/`title` 带原名）；
 > 解析不出来且**形状像表情**（带下划线）⇒ `.post-emoji-chip`（名字胶囊，只显示最后一段：
 > `明前奶绿收藏集表情包_石化` → `石化`）；**不带下划线的（`[1P]`、`[▓▓]`）原样保留文字** ——
 > 兜底规则只作用在"两级都没解析出来"的残余上，而那个残余**全是非表情**
 > （探针实测：缺的 5 个全是 `1P`/`▓▓`/`nP`，带下划线的一个都没有，`devlog/483`）。
 > `[话题]` 是微博话题标记（`#xxx[话题]#`），**不是表情**，必须原样留着。
+> ⚠️ **图走 `ProxyImage`，不是裸 `<img>`**（`devlog/484`）：图床 `i0.hdslb.com` 对**应用自身来源**
+> 一律 403，而 `http://` 那种还会被当混合内容挡掉 —— 裸 `<img>` 的症状是"正文表情全是破图，
+> 还弹一份错误报告"。走 `ProxyImage` ⇒ https 化 + `no-referrer` + 直连失败转 `/img-proxy`；
+> 四级全失败时落回 **chip / 原样文字**（给了 `fallback`，否则会画出 120×120 的灰块把正文撑变形）。
+> 全站"裸 `<img>` 只许出现在 4 个非远程图的文件里"已进门禁（`utils/avatarRender.test.ts`）。
 > ⚠️ 渲染走 **React 节点**，不是 `dangerouslySetInnerHTML` —— 正文是外部数据，拼 HTML 等于
 > 把转义与白名单的活重做一遍（专栏那条路已经有一份 `sanitizePlatformHtml`）。
-> 地址来自 `GET /emoji/resolve`（`app/services/bili_emote.py`）—— **前端这一侧一行没动**：
+> 地址来自 `GET /emoji/resolve`（`app/services/bili_emote.py`）—— **取数这一侧一行没动**：
 > 命中就画图，没命中就 chip / 原样文字，所以解析率从 28% 涨到 99% 是**后端换源**的结果
 > （`devlog/483`：第一源 = 我们自己载荷里的 `rich_text_nodes[*].emoji.icon_url`，离线；
 > 第二源 = 上游整表，出网、账号相关、只当兜底）。前端按 100 一批**按需取**，
@@ -1329,7 +1335,7 @@ DOM 与类名：`ManualSessionDialog.test.tsx` 钉住「只提交改过的字段
   ⚠️ **重取失败要说一句**（devlog/321）：详情页回一行 `[data-media-hint]`「<图/视频>没能加载，重取也没成功：<后端原文>」——403 的原文本身就是"去哪儿配 Cookie"（小红书没配 Cookie 时点开详情就是这个情形）。只写 `clientLog` 会让用户对着灰块猜；提示与帖同生命周期（换帖即消失）。⚠️ **主语要按谁失败来写**（`devlog/363`）：过期的是播放地址却写"图片"，用户就会去翻图（`onMediaDead(kind)`，图片那条缺省 `'image'`）。
   ⚠️ **"一帖只试一次"必须留两条出口**（`devlog/366`，真机现场）：那条纪律是防 N 张坏图打出 N 个请求，但**失败了也记成"试过"**会让这一帖永久没救（真机：第一次重取撞上我们自己的抖音令牌桶 ⇒ 关掉再打开也不再试，视频废掉）。所以 ① **关掉抽屉就清掉 `refreshedRef`**（`useEffect(..., [open])`，下次点开还能再试）；② 提示那行挂一颗 `[data-media-retry]`「再试一次」（`retryMedia()` 先 `delete` 再重来）；③ 重取在飞时另给一行 `[data-media-refreshing]`「正在重取…（有时要等几秒：抓取有自己的节奏，额度得排队）」—— 后端会为**我们自己的限速**排队（`REFRESH_MEDIA_WAIT_MAX` ≤12s），没有这行用户会以为又坏了。
   ⚠️ **L1（devlog/257）**：`avatar_local` 的**来源**换成轻资产索引（`local_assets` 按**稳定键**命中 ⇒ 盘上那份；账本行/账号路径降为兜底）——**渲染链与字段名都没变**，所以本条只多了一个来源顺序。
-  ⚠️ **R46（devlog/249）：同源有两条，取值同源 ≠ 渲染同源。** 渲染也只剩一条路 —— 图片一律 `common/ProxyImage`，代理主机规则只在 `utils/imageHost.ts`（结构判据 `utils/avatarRender.test.ts`）。此前 hero 走 `ProxyImage`、左栏还是 radix `Avatar` 的裸 `<img>` ⇒ 微博头像在右栏正常、左栏被防盗链 403 打成灰底首字。
+  ⚠️ **R46（devlog/249）：同源有两条，取值同源 ≠ 渲染同源。** 渲染也只剩一条路 —— 图片一律 `common/ProxyImage`，代理主机规则只在 `utils/imageHost.ts`（结构判据 `utils/avatarRender.test.ts`）。此前 hero 走 `ProxyImage`、左栏还是 radix `Avatar` 的裸 `<img>` ⇒ 微博头像在右栏正常、左栏被防盗链 403 打成灰底首字。⚠️ **2026-10-14 第三次复发**（正文表情图，`devlog/484`）⇒ 判据已从"头像"扩到**全站远程图**：`<img>` 只许出现在白名单那 4 个文件（都不是远程图），扫描器也改成**真剥注释**（JSX 注释 `{/* … */}` 里正写着"不许用裸 `<img>`"，不剥就是假红）。
   ⚠️ **为可测性挂的两个属性别删**：`.vtuber-item[data-src]` / `.hero[data-avatar-src]` = **解析出来的源 URL**（口径）；`ProxyImage` 输出节点上的 `data-render-src` = **首帧决定用的 src**（接线，回落到占位也在）。探针 `--profile-sync` 比的是后者 —— 只比 `data-src` 量不出 R46（出事时两边一模一样）。
 - 详情窗口动效（posts.css 末段）：居中 Dialog（P6-2 起）对齐全局运动语言——进场 260ms 淡入+scale(0.97) 缩入、退场 200ms 淡出+scale(0.97)（fall-out 同款 ease-in），遮罩与面板时长严格同步；覆盖 `[data-slot=dialog-content/overlay]` 的 animation-name/duration，radix animationend 卸载机制不受影响；reduced-motion 下 0.01ms 瞌时关闭
 - **直播日历增补**（2026-09-07）：月份切换 = keyed 网格重放 `.lc-grid-anim`（前进右滑入 20px / 后退左滑入，0.26s cubic-bezier）；场次详情弹窗 = `.lc-dlg-pop`（translateY 8 + scale .98，0.2s）；月份浮窗 = 同款 pop；均带 reduced-motion 守卫

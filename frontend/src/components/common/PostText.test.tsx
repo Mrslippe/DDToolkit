@@ -10,6 +10,7 @@
  * | 带下划线 + 解析不出来 ⇒ chip | 正文里留一串 `[明前奶绿收藏集表情包_石化]` 原样方括号 |
  * | 不带下划线 + 解析不出来 ⇒ **原样文字** | `[1P]`、`[▓▓]` 被做成 chip，正文变一串胶囊 |
  * | 解析出来 ⇒ `<img>`（alt/title 带原名） | 表情不显示（或显示成空图） |
+ * | 图**走 ProxyImage**（no-referrer + https 化） | 图床对应用自身来源 403 ⇒ 全是破图（2026-10-14 实报） |
  * | 只问一次（缓存 + 去重） | 同一枚表情在正文里出现 20 次就发 20 次请求 |
  */
 import { act } from 'react'
@@ -19,6 +20,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const resolveEmojis = vi.fn()
 vi.mock('../../api/api', () => ({
   api: { resolveEmojis: (...a: unknown[]) => resolveEmojis(...a) },
+  // ⚠️ 表情图现在走 `ProxyImage`（`devlog/484`），而它经 `utils/imageHost` 调这个函数
+  //    —— mock 里少一个导出会在**渲染时**抛 "No imgProxyUrl export is defined"，
+  //    症状是全组用例红，看着像组件坏了。
+  imgProxyUrl: (src: string) => `/api/img-proxy?url=${encodeURIComponent(src)}`,
 }))
 
 import PostText, { resetEmojiCache, useEmojiImages } from './PostText'
@@ -105,7 +110,36 @@ describe('渲染', () => {
     const img = host.querySelector<HTMLImageElement>('img.post-emoji')!
     expect(img.src).toBe('https://cdn/tietie.png')
     expect(img.getAttribute('alt')).toBe('[UPOWER_1_贴贴]')
+    expect(img.getAttribute('title')).toBe('[UPOWER_1_贴贴]')
     expect(host.querySelector('.post-emoji-chip')).toBeNull()
+  })
+
+  it('★ 表情图走 ProxyImage：`no-referrer` + `http→https`（2026-10-14 破图的根因）', async () => {
+    // 真机地址（用户报错报告里的那两条）：图床对**应用自身来源**一律 403，
+    // 只有"不带 Referer"才拿得到 —— 所以这两个属性是这条路径的**功能判据**，不是样式细节。
+    resolveEmojis.mockResolvedValue({
+      items: { 'UPOWER_1_贴贴': 'http://i0.hdslb.com/bfs/emote/abc.png' },
+      count: 1, why: null,
+    })
+    render('[UPOWER_1_贴贴]')
+    await settle()
+    const img = host.querySelector<HTMLImageElement>('img.post-emoji')!
+    expect(img.getAttribute('referrerpolicy')).toBe('no-referrer')
+    expect(img.src).toBe('https://i0.hdslb.com/bfs/emote/abc.png')   // http 必须被 https 化
+  })
+
+  it('★ 图四级全失败 ⇒ 落回名字 chip（不留破图，也不出 120×120 灰块）', async () => {
+    render('[UPOWER_1_贴贴]')
+    await settle()
+    const img = host.querySelector<HTMLImageElement>('img.post-emoji')!
+    // 直连失败 ⇒ 转 /img-proxy；代理也失败 ⇒ 才轮到我们给的 fallback
+    act(() => { img.dispatchEvent(new Event('error')) })
+    const img2 = host.querySelector<HTMLImageElement>('img.post-emoji')!
+    expect(img2.src, '第二级该是后端图片代理').toContain('/api/img-proxy?url=')
+    act(() => { img2.dispatchEvent(new Event('error')) })
+    expect(host.querySelector('img.post-emoji')).toBeNull()
+    expect(host.querySelector('.post-emoji-chip')?.textContent).toBe('贴贴')
+    expect(host.textContent).not.toContain('[UPOWER_1_贴贴]')
   })
 
   it('★ 解析不出来 + 像表情 ⇒ 名字 chip（不是原样方括号）', async () => {

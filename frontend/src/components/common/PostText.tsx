@@ -1,13 +1,21 @@
 /**
- * 正文里的表情渲染（2026-10-13，用户第 5 条）。
+ * 正文里的表情渲染（2026-10-13，用户第 5 条；2026-10-14 修图床防盗链，`devlog/484`）。
  *
  * ## 三件事
  *
  * 1. **切分**：`splitEmojiText()`（纯函数，规则与实测数据都在 `utils/emojiText.ts` 的文件头）；
- * 2. **按需取**：能解析的画 `<img>`（地址来自后端 `/emoji/resolve`，整表索引 + 30 分钟缓存）；
+ * 2. **按需取**：能解析的画图（地址来自后端 `/emoji/resolve`，两级索引，见 `devlog/483`）；
  *    解析不出来的、且形状像表情的 ⇒ **名字 chip**；不像表情的（`[1P]` 那种）⇒ 原样文字；
  * 3. **缓存**：模块级 `Map`（名字 → 地址或 `null`）+ **已问过的名字集合** ——
- *    同一枚表情在列表里出现几十次，不该问几十次；问过但上游没有的也不再问（`null`）。
+ *    同一枚表情在列表里出现几十次，不该问几十次；问过但两级都没有的也不再问（`null`）。
+ *
+ * ## ⚠️ 图**必须**走 `ProxyImage`，不许裸 `<img>`（这条是本文件唯一踩过的线上坑）
+ *
+ * 第一版这里写的是裸 `<img src={url}>` ⇒ 用户 2026-10-14 报「表情全是破图，还弹了错误报告」：
+ * 图床 `i0.hdslb.com` 对**应用自身来源**（`http://tauri.localhost/`）一律 **403**，
+ * 而 `ProxyImage` 会 https 化 + 带 `referrerPolicy="no-referrer"`（实测：不带 Referer → 200，
+ * 带我们的 origin → 403）⇒ 全站其它图都好、只有表情是破图。它还会在直连失败时转
+ * `/img-proxy`（后端带 bilibili Referer）、再失败才落到我们给的 `fallback`（这里给的是 chip）。
  *
  * ⚠️ 用 React 节点渲染，**不是** `dangerouslySetInnerHTML`：正文是外部数据，
  * 拼 HTML 等于把转义与白名单的活重新做一遍（专栏那条路已经有一份白名单实现，
@@ -17,6 +25,7 @@ import { useEffect, useMemo, useState } from 'react'
 
 import { api } from '../../api/api'
 import { emojiChipLabel, emojiTokens, splitEmojiText } from '../../utils/emojiText'
+import ProxyImage from './ProxyImage'
 
 /** 名字 → 图片地址；`null` = **问过了，上游没有这个表情**（别再问） */
 const cache = new Map<string, string | null>()
@@ -112,10 +121,20 @@ export default function PostText({ text, className }: Props) {
         if (seg.kind === 'text') return <span key={i}>{seg.text}</span>
         const url = images.get(seg.token)
         if (url) {
+          // ⚠️ 走 ProxyImage（https 化 + no-referrer + /img-proxy 兜底），不许裸 `<img>`：
+          //    裸 `<img>` 带的是应用自身来源，图床 `i0.hdslb.com` 一律 403（用户 2026-10-14 报的破图）。
+          //    四级都失败时**落到 chip / 原样文字**（与"两级都没解析出来"同一个样子）——
+          //    不给 `fallback` 的话 ProxyImage 会渲染 120×120 的灰块，正文会被撑变形。
           return (
-            <img
-              key={i} className="post-emoji" src={url} alt={`[${seg.token}]`}
-              title={`[${seg.token}]`} loading="lazy" draggable={false}
+            <ProxyImage
+              key={i}
+              src={url}
+              className="post-emoji"
+              alt={`[${seg.token}]`}
+              title={`[${seg.token}]`}
+              draggable={false}
+              fallback={seg.chippable ? emojiChipLabel(seg.token) : `[${seg.token}]`}
+              fallbackClassName={seg.chippable ? 'post-emoji-chip' : ''}
             />
           )
         }
